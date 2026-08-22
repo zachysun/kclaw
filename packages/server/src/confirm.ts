@@ -1,0 +1,126 @@
+import type { ConfirmationRequestedPayload, ToolCallBlock } from "@kclaw/core"
+
+/** Verdict value carried between the loop and its human resolver. */
+export type ConfirmationResolution = { approved: boolean; by: "cli" | "web" | "timeout" }
+
+/** Who answered a confirmation (v1 is single-user CLI; "web" is retained for the UI). */
+export type ConfirmationActor = "cli" | "web"
+
+interface PendingEntry {
+  confirmationId: string
+  toolCall: ToolCallBlock
+  risk: "safe" | "sensitive"
+  expiresAt: string
+  sessionId?: string
+  /** settles the promise returned by create()/wait(); removal from the map is the settled flag */
+  settle: (r: ConfirmationResolution) => void
+  resolution: Promise<ConfirmationResolution>
+}
+
+/**
+ * ConfirmationBroker — the human side of the confirm gate (P3 Task 6).
+ *
+ * Responsibilities, deliberately narrow:
+ * - `create` registers a pending entry keyed by the confirmationId the
+ *   PERMISSION GATE issued (core ConfigPermissionGate mints `conf_*` ids and
+ *   the loop echoes them in its confirmation.requested event); the entry
+ *   carries the toolCall, risk and an expiresAt for a future HTTP list
+ *   endpoint. Returns the promise only `resolve` can settle.
+ * - `resolve` applies a human verdict arriving over the gateway (WS/CLI) and
+ *   reports whether it settled a still-pending entry.
+ * - `wait` is the resolver side RunManager hands to the loop.
+ *
+ * What it deliberately does NOT do:
+ * - It never emits confirmation.requested / confirmation.resolved: the LOOP
+ *   emits both (core agent/loop.ts, right around its resolver await) and
+ *   RunManager fans them onto the bus — a broker-side emission would be a
+ *   duplicate on every wire.
+ * - It runs NO internal timeout: the loop races the confirm timeout itself
+ *   (and RunManager races the same one). When that outer
+ *   race settles without a human verdict, RunManager calls `expire` so the
+ *   entry goes stale and a LATE resolve returns false silently instead of
+ *   acking a verdict nothing will act on. `pending()` additionally prunes
+ *   entries whose expiresAt passed.
+ */
+export class ConfirmationBroker {
+  readonly #entries = new Map<string, PendingEntry>()
+
+  /**
+   * Register a pending confirmation. `timeoutMs` only stamps the entry's
+   * informational expiresAt — the surrounding loop owns the actual timeout.
+   */
+  create(
+    confirmationId: string,
+    toolCall: ToolCallBlock,
+    risk: "safe" | "sensitive",
+    timeoutMs: number,
+    sessionId?: string,
+  ): Promise<ConfirmationResolution> {
+    let settle!: (r: ConfirmationResolution) => void
+    const resolution = new Promise<ConfirmationResolution>((res) => {
+      settle = res
+    })
+    this.#entries.set(confirmationId, {
+      confirmationId,
+      toolCall,
+      risk,
+      expiresAt: new Date(Date.now() + timeoutMs).toISOString(),
+      sessionId,
+      settle,
+      resolution,
+    })
+    return resolution
+  }
+
+  /**
+   * The resolver side: the promise behind `create` for a registered id.
+   * Unknown ids never settle — the loop's own timeout race owns the denial.
+   */
+  wait(confirmationId: string): Promise<ConfirmationResolution> {
+    const entry = this.#entries.get(confirmationId)
+    return entry?.resolution ?? new Promise<ConfirmationResolution>(() => {})
+  }
+
+  /**
+   * Apply a human verdict. True when a pending entry existed and settled NOW;
+   * false for unknown ids, already-resolved entries, and stale (expired)
+   * ones. `by` defaults to "cli" (v1 single-user; the field is retained for
+   * the web UI).
+   */
+  resolve(confirmationId: string, approved: boolean, by: ConfirmationActor = "cli"): boolean {
+    this.#prune()
+    const entry = this.#entries.get(confirmationId)
+    if (entry === undefined) return false
+    this.#entries.delete(confirmationId)
+    entry.settle({ approved, by })
+    return true
+  }
+
+  /**
+   * Mark an entry stale without a verdict: RunManager calls this once its
+   * race settled on timeout or abort, so a late gateway resolve can
+   * only ever observe "unknown confirmation".
+   */
+  expire(confirmationId: string): void {
+    this.#entries.delete(confirmationId)
+  }
+
+  /** Current pending entries as the wire payloads (for a future HTTP list endpoint). */
+  pending(): ConfirmationRequestedPayload[] {
+    this.#prune()
+    return [...this.#entries.values()].map(({ confirmationId, toolCall, risk, expiresAt }) => ({
+      confirmationId,
+      toolCall,
+      risk,
+      expiresAt,
+    }))
+  }
+
+  /** Drop entries whose informational expiry passed (their promise stays pending forever). */
+  #prune(): void {
+    const now = Date.now()
+    for (const [id, entry] of this.#entries) {
+      if (Date.parse(entry.expiresAt) <= now) this.#entries.delete(id)
+    }
+  }
+}

@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+.claude
+docs/superpowers/
+.superpowers/
+
+# runtime artifacts that must never live in the source tree
+packages/core/attachments/
+packages/core/logs/
+packages/core/memory/
+packages/core/sessions/
+
+# build output of the aggregate npm package
+packages/kclaw/app/

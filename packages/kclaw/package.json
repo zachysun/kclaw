@@ -1,0 +1,37 @@
+{
+  "name": "kclaw",
+  "version": "0.1.0",
+  "description": "Local resident personal agent: one daemon owns all state; CLI and WebUI are its clients.",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "bin": { "kclaw": "app/cli/cli.js" },
+  "files": ["app", "README.md"],
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.7.0",
+    "@fastify/static": "^9.3.0",
+    "@fastify/websocket": "^11.3.0",
+    "@mozilla/readability": "^0.6.0",
+    "better-sqlite3": "^13.0.3",
+    "commander": "^12.1.0",
+    "cron-parser": "^4.9.0",
+    "fastify": "^5.0.0",
+    "linkedom": "^0.18.13",
+    "ulidx": "^2.4.0",
+    "ws": "^8.21.3",
+    "yaml": "^2.5.0"
+  },
+  "devDependencies": {
+    "@kclaw/cli": "workspace:*",
+    "@kclaw/core": "workspace:*",
+    "@kclaw/server": "workspace:*",
+    "@kclaw/web": "workspace:*",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.5.0"
+  }
+}

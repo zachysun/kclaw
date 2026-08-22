@@ -1,0 +1,86 @@
+import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs"
+import { homedir, tmpdir } from "node:os"
+import { join } from "node:path"
+import { resolvePaths } from "../../src/storage/paths.js"
+import { loadConfig, saveConfig, defaultConfig } from "../../src/storage/config.js"
+
+let home: string
+beforeEach(() => { home = mkdtempSync(join(tmpdir(), "kclaw-test-")) })
+afterEach(() => { rmSync(home, { recursive: true, force: true }) })
+
+describe("resolvePaths", () => {
+  it("creates directory tree and exposes spec layout", () => {
+    const p = resolvePaths(home)
+    expect(p.config).toBe(join(home, "config.yaml"))
+    expect(p.memoryNotesDir).toBe(join(home, "memory", "notes"))
+    expect(p.sessionsDir).toBe(join(home, "sessions"))
+    expect(p.jobsDb).toBe(join(home, "jobs.db"))
+    for (const d of [p.memoryNotesDir, p.sessionsDir, p.logsDir]) {
+      expect(() => readFileSync(d)).toThrow() // 是目录不是文件
+    }
+  })
+  it("treats an empty/blank KCLAW_HOME env as unset (falls back to ~/.kclaw)", () => {
+    const prev = process.env.KCLAW_HOME
+    try {
+      for (const blank of ["", "   "]) {
+        process.env.KCLAW_HOME = blank
+        // 空串若被采纳，所有路径会以 "" 为根落到 cwd 相对路径上
+        expect(resolvePaths().home).toBe(join(homedir(), ".kclaw"))
+      }
+    } finally {
+      if (prev === undefined) delete process.env.KCLAW_HOME
+      else process.env.KCLAW_HOME = prev
+    }
+  })
+})
+
+describe("loadConfig / saveConfig", () => {
+  it("returns defaults when file missing", () => {
+    expect(loadConfig(resolvePaths(home))).toEqual(defaultConfig)
+  })
+  it("deep-merges file over defaults", () => {
+    const paths = resolvePaths(home)
+    writeFileSync(paths.config, [
+      "permissions:",
+      "  allow:",
+      "    - 'exec:git status'",
+      "exec:",
+      "  timeoutMs: 5000",
+    ].join("\n"))
+    const cfg = loadConfig(paths)
+    expect(cfg.permissions.allow).toEqual(["exec:git status"])
+    expect(cfg.permissions.deny).toEqual(defaultConfig.permissions.deny) // 未覆盖保留默认
+    expect(cfg.exec.timeoutMs).toBe(5000)
+    expect(cfg.exec.maxOutputBytes).toBe(defaultConfig.exec.maxOutputBytes)
+  })
+  it("roundtrips through saveConfig", () => {
+    const paths = resolvePaths(home)
+    const cfg = structuredClone(defaultConfig)
+    cfg.exec.timeoutMs = 1234
+    saveConfig(paths, cfg)
+    expect(loadConfig(paths).exec.timeoutMs).toBe(1234)
+  })
+  it("defaults providers.timeoutMs to 120s and deep-merges overrides", () => {
+    const paths = resolvePaths(home)
+    expect(defaultConfig.providers.timeoutMs).toBe(120_000)
+    expect(loadConfig(paths).providers.timeoutMs).toBe(120_000) // absent in file → default
+    writeFileSync(paths.config, ["providers:", "  timeoutMs: 5000"].join("\n"))
+    expect(loadConfig(paths).providers.timeoutMs).toBe(5000) // 覆盖保留其余默认
+    expect(loadConfig(paths).providers.default).toBe("")
+  })
+  it("does not share nested references with defaultConfig", () => {
+    const pristine = structuredClone(defaultConfig)
+    const paths = resolvePaths(home)
+    writeFileSync(paths.config, ["exec:", "  timeoutMs: 5000"].join("\n"))
+    const cfg = loadConfig(paths)
+    cfg.permissions.allow.push("x")
+    expect(cfg.permissions).not.toBe(defaultConfig.permissions) // 覆盖段外不共享嵌套引用
+    expect(defaultConfig).toEqual(pristine) // 原地修改不污染 defaultConfig
+    rmSync(paths.config)
+    const fresh = loadConfig(paths)
+    expect(fresh.permissions.allow).toEqual([])
+    expect(fresh.permissions.allow).not.toContain("x")
+    expect(fresh).toEqual(pristine)
+  })
+})

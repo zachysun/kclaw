@@ -1,0 +1,406 @@
+/**
+ * RunManager — the daemon-side assembly of one runAgent invocation (P3 Task 5).
+ *
+ * `enqueue` is the send_message pipeline: per-session serialization, memory
+ * note injection onto a caller-persisted user message, AGENTS.md system
+ * prompt, builtin tools, a permission gate, event bus fan-out and JSONL
+ * persistence — the composition the P2 smoke test proved out, now owned by
+ * the server.
+ *
+ * Composition choices pinned here:
+ * - History is read BEFORE the user message is appended: runAgent places its
+ *   user message after `history` (`[...input.history, userMsg]`), so it must
+ *   not already contain it (would double-send the text to the provider).
+ * - The user message is built here as a text-only skeleton and passed via
+ *   `RunInput.userMessage`; runAgent uses it verbatim and does NOT re-persist
+ *   it. Its note blocks (job provenance + memory notes) are appended — and
+ *   the finished message appended to the session log — inside the run's
+ *   `onUserMessage` hook (P4 Task 1), landing between the loop's
+ *   message.created and message.completed so the bus carries the spec §5.4
+ *   order run.started → message.created → note.emitted ×N → message.completed.
+ */
+import { readFileSync } from "node:fs"
+import {
+  ConfigPermissionGate,
+  createBuiltinTools,
+  makeEvent,
+  newBlockId,
+  newMessage,
+  runAgent,
+} from "@kclaw/core"
+import type {
+  AgentEvent,
+  KclawConfig,
+  KclawPaths,
+  LlmClient,
+  MemoryStore,
+  NoteBlock,
+  PermissionGate,
+  RunOutcome,
+  SessionStore,
+  ToolCallBlock,
+  ToolExecutor,
+} from "@kclaw/core"
+import type { EventBus } from "./bus.js"
+import { ConfirmationBroker, type ConfirmationResolution } from "./confirm.js"
+import { scheduleAutoname } from "./autoname.js"
+
+/** System prompt fallback when ~/.kclaw/AGENTS.md is missing or empty. */
+const DEFAULT_SYSTEM_PROMPT = "你是 kclaw，一个务实的个人助理。"
+
+/** How many chars of the user text feed the memory lookup (ruling 7). */
+const MEMORY_QUERY_CHARS = 200
+/** Top-N memory notes injected onto the user message. */
+const MEMORY_LIMIT = 5
+
+export interface RunManagerDeps {
+  config: KclawConfig
+  paths: KclawPaths
+  sessions: SessionStore
+  memory: MemoryStore
+  bus: EventBus
+  llm: LlmClient
+  workspace: string
+  /**
+   * Model string sent to the provider (Task 9): the daemon resolves it once
+   * — provider entry, KCLAW_LLM_MODEL env fallback — because an env-only
+   * provider would otherwise leave the config-derived model empty. Optional
+   * for backwards compatibility: when omitted, the default provider's
+   * config model is used as before (empty string when unconfigured).
+   */
+  model?: string
+  /**
+   * Confirmation gateway (Task 6): pending confirmations register here when
+   * the gate issues them, and WS/CLI verdicts settle through it. Missing → a
+   * fresh internal broker, exposed as `manager.broker` (the daemon hands the
+   * RunManager to createApp via its `run` option, which routes
+   * confirmation.resolve frames to this broker).
+   */
+  broker?: ConfirmationBroker
+  /**
+   * Direct resolver override for tests. Takes precedence over the broker when
+   * set — the daemon path relies on the broker alone.
+   */
+  resolveConfirmation?: (confirmationId: string) => Promise<{ approved: boolean; by: "cli" | "web" | "timeout" }>
+  /**
+   * Retry-visible llm per run (spec §11, final-review I1): when set, EVERY
+   * run builds its own client through this factory, receiving that run's
+   * retry sink as `onRetry` — provider-level retries (the daemon's default
+   * withRetry composition) then surface as `llm.failed {willRetry:true}`
+   * events carrying THIS run's sessionId/runId, even while other sessions
+   * run concurrently against the same endpoint. Takes precedence over `llm`.
+   * The daemon sets it for its default composition; injected test factories
+   * (plain script clients) leave it unset and use `llm` as before.
+   */
+  llmForRun?: (onRetry: LlmRetrySink) => LlmClient
+  /**
+   * Per-name executor overrides for tests/adapters (final-review M-b seam):
+   * merged OVER the builtin tools after construction (defs stay the
+   * builtins'), so a test can swap one executor — e.g. for one that throws —
+   * without rebuilding the toolset.
+   */
+  tools?: Map<string, ToolExecutor>
+}
+
+/** One queued run request. */
+export interface EnqueueInput {
+  userText: string
+  trigger: "user" | "job"
+  /**
+   * Job provenance note (Task 8): when the scheduler fires a job, the tick
+   * passes the 「本会话由定时任务…」 line here and it lands as a kind:"job"
+   * note block right after the text block on the user message.
+   */
+  note?: string
+}
+
+/** withRetry's per-attempt notification shape (core provider/retry.ts onRetry). */
+export type LlmRetrySink = (info: { attempt: number; error: unknown }) => void
+
+/**
+ * Mirror of the loop's raceConfirmation (core agent/loop.ts): a human
+ * resolver raced against the same confirmTimeoutMs timer and the run's abort
+ * signal. On a timeout the LOOP synthesizes `{approved: false, by:
+ * "timeout"}` itself and never settles the human promise, so the resolver
+ * alone would never fire the broker-expire that marks the entry stale.
+ * Racing here keeps this adapter's view of the resolution semantically
+ * identical to the one the loop acted on (same timeout on both sides yields
+ * the same value; a human verdict that wins here also wins there), and a
+ * losing late verdict is discarded by the settled race.
+ */
+function raceResolution(
+  p: Promise<ConfirmationResolution>,
+  ms: number,
+  signal: AbortSignal,
+): Promise<ConfirmationResolution | "aborted"> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const sleep = new Promise<ConfirmationResolution>((resolve) => {
+    timer = setTimeout(() => resolve({ approved: false, by: "timeout" }), ms)
+  })
+  let onAbort = () => {}
+  const abort = new Promise<"aborted">((resolve) => {
+    if (signal.aborted) resolve("aborted")
+    else {
+      onAbort = () => resolve("aborted")
+      signal.addEventListener("abort", onAbort, { once: true })
+    }
+  })
+  return Promise.race([p, sleep, abort]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer)
+    signal.removeEventListener("abort", onAbort)
+  })
+}
+
+export class RunManager {
+  readonly #deps: RunManagerDeps
+  /** Tail of each session's run chain: same session serializes, sessions run concurrently. */
+  readonly #chains = new Map<string, Promise<void>>()
+  /** Abort controller of the session's ACTIVE run; absent while idle or queued. */
+  readonly #active = new Map<string, AbortController>()
+  /** Confirmation gateway shared by every run; injected or internally constructed. */
+  readonly #broker: ConfirmationBroker
+
+  constructor(deps: RunManagerDeps) {
+    this.#deps = deps
+    this.#broker = deps.broker ?? new ConfirmationBroker()
+  }
+
+  /** The confirmation gateway this manager's runs answer through (WS/CLI verdicts land here). */
+  get broker(): ConfirmationBroker {
+    return this.#broker
+  }
+
+  /**
+   * Queue one run on the session. The returned promise settles with the
+   * runAgent outcome once every earlier enqueue on the SAME session has
+   * settled; enqueues on different sessions proceed concurrently.
+   */
+  enqueue(sessionId: string, input: EnqueueInput): Promise<RunOutcome> {
+    const prev = this.#chains.get(sessionId) ?? Promise.resolve()
+    const run = prev.then(() => this.#execute(sessionId, input))
+    // The chain tail swallows failures: one failed run must not poison the
+    // session's queue for the next enqueue.
+    const tail = run.then(() => undefined, () => undefined)
+    this.#chains.set(sessionId, tail)
+    void tail.then(() => {
+      if (this.#chains.get(sessionId) === tail) this.#chains.delete(sessionId)
+    })
+    return run
+  }
+
+  /**
+   * Abort the session's active run (it stops at the next checkpoint with
+   * stopReason "aborted"). False when nothing is executing right now — a run
+   * still QUEUED behind another keeps its own fresh controller.
+   */
+  cancel(sessionId: string): boolean {
+    const controller = this.#active.get(sessionId)
+    if (controller === undefined) return false
+    controller.abort()
+    return true
+  }
+
+  async #execute(sessionId: string, input: EnqueueInput): Promise<RunOutcome> {
+    const { config, paths, sessions, memory, bus, llm } = this.#deps
+    const sessionMeta = sessions.meta(sessionId)
+    const workspace = sessionMeta?.workdir ?? this.#deps.workspace
+
+    // Memory injection (ruling 7): the leading 200 chars of the user text
+    // look up the top-5 notes. Memory is an accelerator — a failing search
+    // must never block the run, so misses/errors just mean no notes.
+    const notes: NoteBlock[] = []
+    try {
+      for (const hit of await memory.search(input.userText.slice(0, MEMORY_QUERY_CHARS), MEMORY_LIMIT)) {
+        notes.push({ id: newBlockId(), type: "note", kind: "memory", text: `相关记忆: ${hit.text}` })
+      }
+    } catch {
+      // ignore: run without memory context
+    }
+
+    // History BEFORE the append (runAgent appends the user message itself).
+    // The user message starts as a text-only SKELETON: its note blocks (job
+    // provenance first, memory notes after — P4 Task 1) are appended inside
+    // the run's onUserMessage hook, right after the loop announced the
+    // skeleton via message.created, so the bus carries the spec §5.4 order
+    // run.started → message.created → note.emitted ×N → message.completed,
+    // with the note events (inside the hook) trailing the JSONL append —
+    // the persist happens first, then the notes are announced.
+    const history = sessions.readMessages(sessionId)
+    const jobNote: NoteBlock[] =
+      input.note === undefined
+        ? []
+        : [{ id: newBlockId(), type: "note", kind: "job", text: input.note }]
+    const userMessage = newMessage(sessionId, "user", [
+      { id: newBlockId(), type: "text", text: input.userText },
+    ])
+
+    const { tools, toolDefs } = createBuiltinTools({
+      workspace,
+      memory,
+      tavilyApiKey: config.web.tavilyApiKey,
+      exec: { timeoutMs: config.exec.timeoutMs, maxOutputBytes: config.exec.maxOutputBytes },
+    })
+    // test/adapter seam (M-b): per-name executor overrides on top of the
+    // builtins; toolDefs stay the builtins' — an override replaces behavior,
+    // not the schema the model sees.
+    if (this.#deps.tools !== undefined) {
+      for (const [name, executor] of this.#deps.tools) tools.set(name, executor)
+    }
+
+    // --- permission wiring (config gate + confirmation gateway) ---
+    const pendingConfirmations = new Map<string, ToolCallBlock>()
+
+    const baseGate = new ConfigPermissionGate(config.permissions, {
+      workspace,
+      safeTools: new Set([...tools].filter(([, t]) => t.risk === "safe").map(([name]) => name)),
+    })
+    const confirmTimeoutMs = config.permissions.confirmTimeoutMs
+    const broker = this.#broker
+    const gate: PermissionGate = {
+      async check(toolCall) {
+        const decision = await baseGate.check(toolCall)
+        if (decision.type === "confirm") {
+          pendingConfirmations.set(decision.confirmationId, toolCall)
+          // Gateway registration under the gate-issued id (the loop echoes it
+          // in its confirmation.requested event, which is what a WS client
+          // resolves against). Purely registration — the loop emits the event
+          // itself; the broker never emits.
+          broker.create(
+            decision.confirmationId,
+            toolCall,
+            tools.get(toolCall.name)?.risk ?? "sensitive",
+            confirmTimeoutMs,
+            sessionId,
+          )
+        }
+        return decision
+      },
+    }
+
+    const controller = new AbortController()
+    this.#active.set(sessionId, controller)
+
+    // Confirmation answering: deps' direct resolver when wired (test seam),
+    // else the broker's pending promise (the daemon path: WS/CLI verdicts
+    // settle it). The resolver is raced against the SAME timeout the loop
+    // races against (raceResolution above). Whenever the race settles WITHOUT
+    // a human verdict (timeout/abort), the broker entry goes stale so a late
+    // gateway resolve reports "unknown confirmation" instead of acking a
+    // verdict nothing will act on.
+    const baseResolver =
+      this.#deps.resolveConfirmation ?? ((confirmationId: string) => broker.wait(confirmationId))
+    const resolveConfirmation = async (confirmationId: string): Promise<ConfirmationResolution> => {
+      const raced = await raceResolution(baseResolver(confirmationId), confirmTimeoutMs, controller.signal)
+      if (raced === "aborted") {
+        pendingConfirmations.delete(confirmationId)
+        broker.expire(confirmationId)
+        // the value is never used: the loop's own race resolved "aborted" and
+        // denies without consulting the resolver
+        return { approved: false, by: "timeout" }
+      }
+      pendingConfirmations.delete(confirmationId)
+      if (raced.by === "timeout") broker.expire(confirmationId)
+      return raced
+    }
+
+    // --- retry visibility (spec §11, final-review I1) ------------------------
+    // Provider-level retries live inside the llm wrapper (withRetry), where
+    // the loop cannot see them. When deps.llmForRun is set, the wrapper's
+    // onRetry lands in THIS closure: each notification becomes an
+    // `llm.failed {willRetry:true}` event on the bus (so clients can tell a
+    // hung call from a backoff), and advances the attempt counter the loop's
+    // llm.started reads via AgentDeps.llmAttempt. The counter is per llm
+    // call — a completed/failed call resets it, so the next iteration's
+    // llm.started reports a fresh attempt 1. The runId is learned from the
+    // loop's own run.started (always a run's first event, emitted before any
+    // stream — and therefore before any retry — can start).
+    let runId: string | undefined
+    let llmAttempt = 1
+    const busEmit = (e: AgentEvent): void => {
+      try {
+        bus.emit(e)
+      } catch {
+        // one broken subscriber must not kill the run (T4 emit guard; bus.emit
+        // also guards each socket individually since M-a — this guards the
+        // remaining synchronous work in emit, e.g. JSON.stringify)
+      }
+    }
+    const onLlmRetry: LlmRetrySink = (info) => {
+      llmAttempt = info.attempt + 1
+      busEmit(makeEvent("llm.failed", {
+        error: {
+          code: "llm_retry",
+          message: String((info.error as { message?: string } | null | undefined)?.message ?? info.error),
+        },
+        willRetry: true,
+      }, runId === undefined ? { sessionId } : { sessionId, runId }))
+    }
+    const runLlm = this.#deps.llmForRun?.(onLlmRetry) ?? llm
+
+    try {
+      return await runAgent(
+        {
+          sessionId,
+          history,
+          system: this.#systemPrompt(paths.agentsMd),
+          userText: input.userText, // ignored by the loop when userMessage is set
+          trigger: input.trigger,
+          userMessage,
+        },
+        {
+          llm: runLlm,
+          model: this.#deps.model ?? config.providers.entries[config.providers.default]?.model ?? "",
+          tools,
+          toolDefs,
+          permissions: gate,
+          resolveConfirmation,
+          confirmTimeoutMs,
+          signal: controller.signal,
+          llmAttempt: () => llmAttempt,
+          onUserMessage: (m) => {
+            // P4 Task 1: the notes become part of the message BEFORE it is
+            // persisted and completed. Persist first (events trail persisted
+            // state), then announce each note — the loop's message.completed
+            // follows, so the wire order stays
+            // created → note.emitted ×N → completed. runId is known by now
+            // (run.started is always a run's first event and precedes this
+            // hook); the sessionId-only fallback is defensive only.
+            m.blocks.push(...jobNote, ...notes)
+            sessions.appendMessage(sessionId, m)
+            if (input.trigger !== "job") {
+              const firstText = m.blocks.find((b) => b.type === "text")?.text ?? ""
+              void scheduleAutoname(
+                { sessions, llm: runLlm, model: this.#deps.model ?? config.providers.entries[config.providers.default]?.model ?? "" },
+                sessionId, firstText,
+              )
+            }
+            const noteCtx = runId === undefined ? { sessionId } : { sessionId, runId }
+            for (const block of [...jobNote, ...notes]) {
+              busEmit(makeEvent("note.emitted", { messageId: m.id, block }, noteCtx))
+            }
+            return m
+          },
+          onEvent: (e) => {
+            if (e.type === "run.started" && e.runId !== undefined) runId = e.runId
+            else if (e.type === "llm.completed" || e.type === "llm.failed") llmAttempt = 1
+            busEmit(e)
+          },
+          onMessage: (m) => sessions.appendMessage(m.sessionId, m),
+        },
+      )
+    } finally {
+      if (this.#active.get(sessionId) === controller) this.#active.delete(sessionId)
+    }
+  }
+
+  /** AGENTS.md persona when the file exists and is non-empty; default otherwise. */
+  #systemPrompt(agentsMd: string): string {
+    try {
+      const md = readFileSync(agentsMd, "utf8")
+      if (md.trim() !== "") return md
+    } catch {
+      // missing/unreadable AGENTS.md → default persona
+    }
+    return DEFAULT_SYSTEM_PROMPT
+  }
+}

@@ -1,0 +1,251 @@
+import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { mkdtemp, rm, readdir } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { SessionStore, newMessage } from "@kclaw/core"
+import type { SessionMeta } from "@kclaw/core"
+import { createApp } from "../../src/index.js"
+import type { FastifyInstance } from "fastify"
+
+const AUTH = { authorization: "Bearer t1" }
+
+describe("sessions routes", () => {
+  let home: string
+  let store: SessionStore
+  let app: FastifyInstance
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "kclaw-sessions-test-"))
+    store = new SessionStore(join(home, "sessions"))
+    app = await createApp({ home, token: "t1", stores: { sessions: store } })
+  })
+
+  afterEach(async () => {
+    await app.close()
+    await rm(home, { recursive: true, force: true })
+  })
+
+  it("POST /sessions without a body returns 201 with the SessionMeta shape", async () => {
+    const res = await app.inject({ method: "POST", url: "/sessions", headers: AUTH })
+    expect(res.statusCode).toBe(201)
+    const meta = res.json() as SessionMeta
+    expect(meta.id).toMatch(/^ses_/)
+    expect(typeof meta.title).toBe("string")
+    expect(meta.title.length).toBeGreaterThan(0)
+    expect(meta.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    expect(typeof meta.updatedAt).toBe("string")
+  })
+
+  it("POST /sessions with a title returns 201 with that title", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      headers: AUTH,
+      payload: { title: "debugging kclaw" },
+    })
+    expect(res.statusCode).toBe(201)
+    expect((res.json() as SessionMeta).title).toBe("debugging kclaw")
+  })
+
+  it("POST /sessions 带 workdir 写回 meta", async () => {
+    const res = await app.inject({
+      method: "POST", url: "/sessions", headers: AUTH, payload: { workdir: "/tmp/x" },
+    })
+    expect(res.statusCode).toBe(201)
+    expect((res.json() as SessionMeta).workdir).toBe("/tmp/x")
+  })
+
+  it("POST /sessions with an empty workdir string returns 400", async () => {
+    const res = await app.inject({
+      method: "POST", url: "/sessions", headers: AUTH, payload: { workdir: "" },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(typeof (res.json() as { error: string }).error).toBe("string")
+  })
+
+  it("GET /sessions lists created sessions", async () => {
+    const a = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
+    const b = (await app.inject({
+      method: "POST", url: "/sessions", headers: AUTH, payload: { title: "second" },
+    })).json() as SessionMeta
+    const res = await app.inject({ method: "GET", url: "/sessions", headers: AUTH })
+    expect(res.statusCode).toBe(200)
+    const metas = res.json() as SessionMeta[]
+    expect(metas.map((m) => m.id).sort()).toEqual([a.id, b.id].sort())
+  })
+
+  it("GET /sessions/:id/messages returns messages appended via the injected store", async () => {
+    const created = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
+    const m1 = newMessage(created.id, "user", [{ id: "blk_1", type: "text", text: "hello" }])
+    const m2 = newMessage(created.id, "assistant", [{ id: "blk_2", type: "text", text: "hi there" }])
+    store.appendMessage(created.id, m1)
+    store.appendMessage(created.id, m2)
+
+    const res = await app.inject({ method: "GET", url: `/sessions/${created.id}/messages`, headers: AUTH })
+    expect(res.statusCode).toBe(200)
+    const messages = res.json() as Array<{ id: string }>
+    expect(messages.map((m) => m.id)).toEqual([m1.id, m2.id])
+  })
+
+  it("GET /sessions/:id/messages returns [] for an existing session with no messages", async () => {
+    const created = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
+    const res = await app.inject({ method: "GET", url: `/sessions/${created.id}/messages`, headers: AUTH })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual([])
+  })
+
+  it("PATCH /sessions/:id renames the session and returns the updated meta", async () => {
+    const created = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/sessions/${created.id}`,
+      headers: AUTH,
+      payload: { title: "renamed" },
+    })
+    expect(res.statusCode).toBe(200)
+    const meta = res.json() as SessionMeta
+    expect(meta.id).toBe(created.id)
+    expect(meta.title).toBe("renamed")
+
+    const list = (await app.inject({ method: "GET", url: "/sessions", headers: AUTH })).json() as SessionMeta[]
+    expect(list.find((m) => m.id === created.id)?.title).toBe("renamed")
+  })
+
+  it("GET /sessions/:id/messages for an unknown id returns 404", async () => {
+    const res = await app.inject({ method: "GET", url: "/sessions/ses_doesnotexist/messages", headers: AUTH })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toEqual({ error: "session not found" })
+  })
+
+  it("PATCH /sessions/:id for an unknown id returns 404", async () => {
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/sessions/ses_doesnotexist",
+      headers: AUTH,
+      payload: { title: "x" },
+    })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toEqual({ error: "session not found" })
+  })
+
+  it("GET /sessions without an auth header returns 401 (auth covers the new routes)", async () => {
+    const res = await app.inject({ method: "GET", url: "/sessions" })
+    expect(res.statusCode).toBe(401)
+    expect(res.json()).toEqual({ error: "unauthorized" })
+  })
+
+  it("POST /sessions with malformed JSON returns 400 {error}", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      headers: { ...AUTH, "content-type": "application/json" },
+      payload: "{not json",
+    })
+    expect(res.statusCode).toBe(400)
+    const body = res.json() as { error: string }
+    expect(typeof body.error).toBe("string")
+    expect(body.error.length).toBeGreaterThan(0)
+  })
+
+  it("POST /sessions with an empty title string returns 400", async () => {
+    const res = await app.inject({
+      method: "POST", url: "/sessions", headers: AUTH, payload: { title: "" },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(typeof (res.json() as { error: string }).error).toBe("string")
+  })
+
+  it("PATCH /sessions/:id with an empty title string returns 400", async () => {
+    const created = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
+    const res = await app.inject({
+      method: "PATCH", url: `/sessions/${created.id}`, headers: AUTH, payload: { title: "" },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(typeof (res.json() as { error: string }).error).toBe("string")
+  })
+
+  it("POST /sessions with a non-string title returns 400", async () => {
+    const res = await app.inject({
+      method: "POST", url: "/sessions", headers: AUTH, payload: { title: 42 },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(typeof (res.json() as { error: string }).error).toBe("string")
+  })
+
+  it("an explicitly injected store is the one serving the routes (pre-seeded session is listed)", async () => {
+    const seeded = store.create("pre-seeded")
+    const res = await app.inject({ method: "GET", url: "/sessions", headers: AUTH })
+    expect(res.statusCode).toBe(200)
+    expect((res.json() as SessionMeta[]).some((m) => m.id === seeded.id && m.title === "pre-seeded")).toBe(true)
+  })
+
+  it("without the stores option, a SessionStore is created under <home>/sessions", async () => {
+    const appNoStores = await createApp({ home, token: "t1" })
+    try {
+      const res = await appNoStores.inject({ method: "POST", url: "/sessions", headers: AUTH })
+      expect(res.statusCode).toBe(201)
+      const meta = res.json() as SessionMeta
+      const entries = await readdir(join(home, "sessions"))
+      expect(entries).toContain(meta.id)
+    } finally {
+      await appNoStores.close()
+    }
+  })
+
+  it("DELETE /sessions/:id soft-deletes; hidden from default list, visible in deleted list", async () => {
+    const created = (await app.inject({
+      method: "POST", url: "/sessions", headers: AUTH, payload: { title: "t" },
+    })).json() as SessionMeta
+    const del = await app.inject({ method: "DELETE", url: `/sessions/${created.id}`, headers: AUTH })
+    expect(del.statusCode).toBe(200)
+    expect((del.json() as SessionMeta).deleted).toBe(true)
+
+    const list = (await app.inject({ method: "GET", url: "/sessions", headers: AUTH })).json() as SessionMeta[]
+    expect(list.some((s) => s.id === created.id)).toBe(false)
+
+    const deleted = (await app.inject({
+      method: "GET", url: "/sessions?deleted=true", headers: AUTH,
+    })).json() as SessionMeta[]
+    expect(deleted.some((s) => s.id === created.id)).toBe(true)
+  })
+
+  it("POST /sessions/:id/restore restores a soft-deleted session", async () => {
+    const created = (await app.inject({
+      method: "POST", url: "/sessions", headers: AUTH, payload: {},
+    })).json() as SessionMeta
+    await app.inject({ method: "DELETE", url: `/sessions/${created.id}`, headers: AUTH })
+    const restore = await app.inject({ method: "POST", url: `/sessions/${created.id}/restore`, headers: AUTH })
+    expect(restore.statusCode).toBe(200)
+
+    const list = (await app.inject({ method: "GET", url: "/sessions", headers: AUTH })).json() as SessionMeta[]
+    expect(list.some((s) => s.id === created.id)).toBe(true)
+  })
+
+  it("POST /sessions/:id/purge permanently deletes a session", async () => {
+    const created = (await app.inject({
+      method: "POST", url: "/sessions", headers: AUTH, payload: { title: "to purge" },
+    })).json() as SessionMeta
+    const purge = await app.inject({ method: "POST", url: `/sessions/${created.id}/purge`, headers: AUTH })
+    expect(purge.statusCode).toBe(200)
+    expect(purge.json()).toEqual({ ok: true })
+    expect(store.meta(created.id)).toBeUndefined()
+  })
+
+  it("DELETE /sessions/:id for an unknown id returns 404", async () => {
+    const res = await app.inject({ method: "DELETE", url: "/sessions/ses_doesnotexist", headers: AUTH })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toEqual({ error: "session not found" })
+  })
+
+  it("POST /sessions/:id/restore for an unknown id returns 404", async () => {
+    const res = await app.inject({ method: "POST", url: "/sessions/ses_doesnotexist/restore", headers: AUTH })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toEqual({ error: "session not found" })
+  })
+
+  it("POST /sessions/:id/purge for an unknown id returns 404", async () => {
+    const res = await app.inject({ method: "POST", url: "/sessions/ses_doesnotexist/purge", headers: AUTH })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toEqual({ error: "session not found" })
+  })
+})

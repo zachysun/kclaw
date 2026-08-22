@@ -1,0 +1,116 @@
+import { describe, it, expect } from "vitest"
+import { homedir } from "node:os"
+import { join } from "node:path"
+import { compileRule, globMatch, ConfigPermissionGate, SessionGrants } from "../../src/permissions/engine.js"
+import type { ToolCallBlock } from "../../src/protocol/blocks.js"
+
+const tc = (name: string, args: unknown): ToolCallBlock => ({
+  id: "blk_1", type: "tool_call", callId: "call_1", name, args, argsJson: JSON.stringify(args ?? {}),
+})
+
+const CFG = { allow: ["exec:git status", "exec:git diff*"], deny: ["exec:sudo*", "fs_write:~/.ssh/**"], confirmTimeoutMs: 1000, sessionGrants: true }
+
+describe("compileRule/globMatch", () => {
+  it("parses tool-scoped and bare rules", () => {
+    expect(compileRule("exec:git diff*")).toEqual({ tool: "exec", argGlob: "git diff*" })
+    expect(compileRule("memory_search")).toEqual({ tool: "memory_search" })
+  })
+  it("globs * across segments", () => {
+    expect(globMatch("git diff*", "git diff HEAD~1")).toBe(true)
+    expect(globMatch("git diff*", "git status")).toBe(false)
+    expect(globMatch("~/.ssh/**", "~/.ssh/authorized_keys")).toBe(true)
+  })
+})
+
+describe("ConfigPermissionGate", () => {
+  it("deny short-circuits without confirmation", async () => {
+    const g = new ConfigPermissionGate(CFG, { safeTools: new Set(["fs_read"]) })
+    const d = await g.check(tc("exec", { command: "sudo rm x" }))
+    expect(d).toMatchObject({ type: "deny", reason: "blacklist" })
+  })
+  it("allow whitelist / safe tool / session grant ordered correctly", async () => {
+    const grants = new SessionGrants()
+    const g = new ConfigPermissionGate(CFG, { safeTools: new Set(["fs_read"]), grants })
+    expect(await g.check(tc("exec", { command: "git status" }))).toMatchObject({ type: "allow", reason: "whitelist" })
+    expect(await g.check(tc("fs_read", { path: "/tmp/x" }))).toMatchObject({ type: "allow", reason: "safe" })
+    grants.grant("exec:npm test")
+    expect(await g.check(tc("exec", { command: "npm test" }))).toMatchObject({ type: "allow", reason: "session_grant" })
+  })
+  it("falls through to confirm with fresh confirmationId", async () => {
+    const g = new ConfigPermissionGate(CFG, { safeTools: new Set() })
+    const d = await g.check(tc("exec", { command: "curl example.com" }))
+    expect(d.type).toBe("confirm")
+    expect((d as { confirmationId: string }).confirmationId).toMatch(/^conf_/)
+  })
+  it("fs_write deny matches globbed path from args.path", async () => {
+    const g = new ConfigPermissionGate(CFG, { safeTools: new Set() })
+    const d = await g.check(tc("fs_write", { path: "~/.ssh/authorized_keys", content: "x" }))
+    expect(d).toMatchObject({ type: "deny" })
+  })
+  it("fs_write deny cannot be bypassed by spelling the same path differently", async () => {
+    // workspace == homedir: ".ssh/x"、绝对路径和 "~/./.ssh/x" 都指向被
+    // fs_write:~/.ssh/** 拒绝的同一个文件，规则必须对每种形态都命中。
+    const g = new ConfigPermissionGate(CFG, { safeTools: new Set(), workspace: homedir() })
+    for (const p of ["~/.ssh/authorized_keys", ".ssh/authorized_keys", join(homedir(), ".ssh", "authorized_keys"), "~/./.ssh/authorized_keys"]) {
+      const d = await g.check(tc("fs_write", { path: p, content: "x" }))
+      expect(d, `path ${p}`).toMatchObject({ type: "deny", reason: "blacklist" })
+    }
+  })
+  it("fs_write deny still short-circuits a bare-tool allow rule for path-shape variants", async () => {
+    // 裸 fs_write 放行 + 目标目录拒绝：绝对路径形态也不得被 allow 吞掉。
+    const cfg = { ...CFG, allow: ["fs_write"] }
+    const g = new ConfigPermissionGate(cfg, { safeTools: new Set(), workspace: homedir() })
+    const d = await g.check(tc("fs_write", { path: join(homedir(), ".ssh", "authorized_keys"), content: "x" }))
+    expect(d).toMatchObject({ type: "deny", reason: "blacklist" })
+  })
+  it("scoped fs rules also match relative paths via the normalized form", async () => {
+    const cfg = { ...CFG, allow: [`fs_write:${join(homedir(), "notes")}/**`], deny: [] }
+    const g = new ConfigPermissionGate(cfg, { safeTools: new Set(), workspace: homedir() })
+    const d = await g.check(tc("fs_write", { path: "notes/a.md", content: "x" }))
+    expect(d).toMatchObject({ type: "allow", reason: "whitelist" })
+  })
+  it("session grants for fs tools match the normalized path form too", async () => {
+    const grants = new SessionGrants()
+    grants.grant(`fs_edit:${join(homedir(), "notes")}/**`)
+    const g = new ConfigPermissionGate({ ...CFG, allow: [], deny: [] }, { safeTools: new Set(), grants, workspace: homedir() })
+    const d = await g.check(tc("fs_edit", { path: "notes/a.md", old: "x", new: "y" }))
+    expect(d).toMatchObject({ type: "allow", reason: "session_grant" })
+  })
+  it("fs_read 越出 workdir 需确认而非 safe 放行", async () => {
+    const gate = new ConfigPermissionGate({ allow: [], deny: [], sessionGrants: false } as never, {
+      workspace: "/projects/x",
+      safeTools: new Set(["fs_read"]),
+      newConfirmationId: () => "conf_1",
+    })
+    const d = await gate.check(tc("fs_read", { path: "/etc/passwd" }))
+    expect(d.type).toBe("confirm")
+  })
+  it("四类文件工具越出 workdir 都需确认而非 safe 放行", async () => {
+    const gate = new ConfigPermissionGate({ allow: [], deny: [], sessionGrants: false } as never, {
+      workspace: "/projects/x",
+      safeTools: new Set(["fs_read", "fs_list", "fs_write", "fs_edit"]),
+      newConfirmationId: () => "conf_1",
+    })
+    for (const name of ["fs_read", "fs_list", "fs_write", "fs_edit"]) {
+      const d = await gate.check(tc(name, { path: "/etc/passwd" }))
+      expect(d.type, name).toBe("confirm")
+    }
+  })
+  it("fs_read 在 workdir 内仍 safe 放行", async () => {
+    const gate = new ConfigPermissionGate({ allow: [], deny: [], sessionGrants: false } as never, {
+      workspace: "/projects/x",
+      safeTools: new Set(["fs_read"]),
+      newConfirmationId: () => "conf_1",
+    })
+    const d = await gate.check(tc("fs_read", { path: "/projects/x/notes/a.md" }))
+    expect(d).toMatchObject({ type: "allow", reason: "safe" })
+  })
+  it("workspace 未设时跳过越界检查（保持旧行为）", async () => {
+    const gate = new ConfigPermissionGate({ allow: [], deny: [], sessionGrants: false } as never, {
+      safeTools: new Set(["fs_read"]),
+      newConfirmationId: () => "conf_1",
+    })
+    const d = await gate.check(tc("fs_read", { path: "/etc/passwd" }))
+    expect(d).toMatchObject({ type: "allow", reason: "safe" })
+  })
+})

@@ -1,0 +1,157 @@
+/**
+ * Slash-command registry (v2 Phase 2, Task 2.1): the REPL's typed command
+ * table. `dispatch` splits a line into `{ command, args }` (or null for plain
+ * input); the chat loop consults the registry instead of hard-coding each
+ * command. `/exit` is intentionally NOT registered here — it stays loop
+ * control in chat.ts (see the ruling: `parsed.command === "exit"` breaks).
+ */
+import { isCancel, select } from "@clack/prompts"
+import type { KclawClient } from "./client.js"
+
+/** Everything a registered command may reach at run time (a view over the chat loop's live state). */
+export interface SlashCtx {
+  client: KclawClient
+  sessionId: string
+  switchSession(id: string): Promise<void>
+  exit(): void
+  print(text: string): void
+  /** Pause the readline interface so @clack owns the terminal (sessions select). */
+  pauseInput(): void
+  /** Resume the readline interface after an @clack prompt. */
+  resumeInput(): void
+}
+
+export interface SlashCommand {
+  name: string
+  usage: string
+  description: string
+  run(args: string, ctx: SlashCtx): Promise<void>
+}
+
+/**
+ * Parse a `/command args` line into its parts. Non-`/` input (plain messages)
+ * returns null; the leading slash is dropped and args are trimmed. The
+ * registry is accepted for API symmetry with the loop but is not consulted
+ * here — parsing never needs to know which commands exist.
+ */
+export function dispatch(input: string, _registry: Map<string, SlashCommand>): { command: string; args: string } | null {
+  if (!input.startsWith("/")) return null
+  const rest = input.slice(1)
+  const space = rest.indexOf(" ")
+  if (space === -1) return { command: rest, args: "" }
+  return { command: rest.slice(0, space), args: rest.slice(space + 1).trim() }
+}
+
+/**
+ * Run a parsed command against the registry, or print the unknown-command
+ * hint when it is not registered. Returns true when a command ran (a hit),
+ * false when the command was unknown (a miss) — kept here, not inline in
+ * chat.ts, so the miss path is unit-testable.
+ */
+export async function runOrHint(
+  parsed: { command: string; args: string },
+  registry: Map<string, SlashCommand>,
+  ctx: SlashCtx,
+): Promise<boolean> {
+  const cmd = registry.get(parsed.command)
+  if (cmd !== undefined) {
+    await cmd.run(parsed.args, ctx)
+    return true
+  }
+  ctx.print("没有这个命令，/help 看看")
+  return false
+}
+
+/** One session row as served by GET /sessions (SessionStore meta shape). */
+interface SessionRow {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+}
+
+/**
+ * Build the command registry. `ctx` is threaded through so the loop can pass
+ * the SAME live context to `run` at dispatch time (commands receive it as the
+ * `run(args, ctx)` argument — see chat.ts).
+ */
+export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
+  const registry = new Map<string, SlashCommand>()
+
+  /**
+   * Shared "create a session → switch to it" step for `/new` and `/clear`:
+   * POST /sessions (with a title when one is given), then `switchSession`
+   * (which unsubscribes the old session and subscribes the new one — see
+   * chat.ts) and confirm. The body always carries `workdir` (the REPL's
+   * process cwd), binding the session to the terminal's working directory;
+   * `/new [标题]` additionally supplies the title.
+   */
+  async function createSessionAndSwitch(ctx: SlashCtx, title?: string): Promise<void> {
+    const meta = (await ctx.client.request(
+      "POST",
+      "/sessions",
+      title === undefined ? { workdir: process.cwd() } : { title, workdir: process.cwd() },
+    )) as SessionRow
+    await ctx.switchSession(meta.id)
+    ctx.print(`已切换到新会话 ${ctx.sessionId}`)
+  }
+
+  registry.set("new", {
+    name: "new",
+    usage: "/new [标题]",
+    description: "新建会话并切换过去",
+    async run(args, ctx) {
+      const title = args.trim()
+      await createSessionAndSwitch(ctx, title === "" ? undefined : title)
+    },
+  })
+
+  registry.set("clear", {
+    name: "clear",
+    usage: "/clear",
+    description: "新建会话（不带标题）",
+    async run(_args, ctx) {
+      await createSessionAndSwitch(ctx)
+    },
+  })
+
+  registry.set("sessions", {
+    name: "sessions",
+    usage: "/sessions",
+    description: "选择会话并切换",
+    async run(_args, ctx) {
+      const list = await ctx.client.request("GET", "/sessions")
+      const rows = Array.isArray(list) ? (list as SessionRow[]) : []
+      if (rows.length === 0) {
+        ctx.print("（还没有会话）")
+        return
+      }
+      // @clack owns the terminal while the select is up; the readline
+      // interface sits paused underneath (same pattern as chat.ts confirmation).
+      ctx.pauseInput()
+      try {
+        const chosen = await select({
+          message: "选择会话",
+          options: rows.map((s) => ({ value: s.id, label: s.title })),
+        })
+        if (isCancel(chosen)) return
+        await ctx.switchSession(chosen as string)
+      } finally {
+        ctx.resumeInput()
+      }
+    },
+  })
+
+  registry.set("help", {
+    name: "help",
+    usage: "/help",
+    description: "列出所有命令",
+    async run(_args, ctx) {
+      for (const cmd of registry.values()) {
+        ctx.print(`${cmd.name} ${cmd.usage} — ${cmd.description}`)
+      }
+    },
+  })
+
+  return registry
+}
