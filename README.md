@@ -1,5 +1,7 @@
 # kclaw
 
+[English](./README.en.md) | 中文
+
 本地常驻的个人 agent：一个 daemon 掌管全部状态，CLI 与 WebUI 都只是它的客户端。
 
 ```
@@ -22,7 +24,7 @@
    ~/.kclaw/  config.yaml · AGENTS.md · token · daemon.json
               sessions/<id>/messages.jsonl（对话真相）
               memory/（markdown 笔记 + SQLite FTS5 索引）
-              jobs.db · audit/ · attachments/
+              jobs.db · attachments/ · logs/
 ```
 
 ## 安装
@@ -36,13 +38,13 @@ kclaw chat    # 第一次跑会进入配置向导：选 provider → 贴 key →
 kclaw web     # 浏览器打开 WebUI（带 token，自动登录）
 ```
 
-向导内置 DeepSeek / OpenAI / Ollama / 自定义模板，key 输入不回显，测通后写入 `~/.kclaw/config.yaml`（权限 0600）。不想走向导也可以手改配置或用环境变量，见「配置要点」。daemon 不用单独起：`kclaw chat` / `kclaw web` 发现它不在会自动拉起。
+向导内置 DeepSeek / OpenAI / Ollama / 自定义模板，key 输入不回显，测通后写入 `~/.kclaw/config.yaml`（权限 0600）。不想走向导也可以手改配置或用环境变量，见「配置要点」。daemon 不用单独起：`kclaw chat` / `kclaw web` 发现它不在会自动启动。
 
 ## 功能一览
 
 - **流式对话**：CLI REPL 与 WebUI 同款体验，回复流式渲染，支持多轮与新建会话（试玩：问「`~/Downloads` 里最大的文件是哪个」会触发 exec 工具）。
 - **确认卡片**：高危工具（exec、fs_edit 等）执行前弹确认（允许 / 拒绝），决策全部落审计日志。
-- **会话**：对话逐条落盘 `sessions/<id>/messages.jsonl`，可随时恢复历史会话。
+- **会话**：对话逐条写入 `sessions/<id>/messages.jsonl`，可随时恢复历史会话。
 - **记忆**：说「记住我住在上海」→ 存为 markdown 笔记（带 SQLite FTS5 索引）；再问「我住哪？」直接命中。
 - **任务**：cron 定时任务（如 `0 9 * * *` 每日早报），到点 daemon 自动开新会话执行，结果落审计。
 - **审计**：权限决策全程留痕，WebUI「审计」页可查。
@@ -53,7 +55,7 @@ kclaw web     # 浏览器打开 WebUI（带 token，自动登录）
 |------|-----------|
 | `command not found: kclaw` | npm 全局 bin 目录不在 PATH（`npm config get prefix` 看装到哪了） |
 | `no llm provider configured` | 模型未配置：跑一次 `kclaw chat` 走配置向导，或按「配置要点」手写 config / 环境变量 |
-| 页面打不开 / 401 | daemon 重启后端口与 token 会变：`kclaw web` 一步到位（自动带新 token 打开浏览器） |
+| 页面打不开 / 401 | daemon 重启后端口可能变化（用 `kclaw daemon status` 查当前端口，或直接 `kclaw web`）；token 不变，无需重新获取 |
 | 高危操作没有确认弹框 | 命令命中了 `permissions.allow` 白名单（配置要点见下） |
 | 数据在哪 | 全部在 `~/.kclaw/`：config.yaml · token · daemon.json · sessions/ · memory/ · jobs.db · logs/ |
 
@@ -64,7 +66,7 @@ kclaw web     # 浏览器打开 WebUI（带 token，自动登录）
 | `kclaw` / `kclaw chat` | 进入对话 REPL（默认动作） |
 | `kclaw chat --session <id>` | 恢复指定会话 |
 | `kclaw chat --think` | 显示 thinking 流（默认隐藏） |
-| `kclaw web` | 浏览器打开 WebUI（自动带 token；daemon 不在会自动拉起） |
+| `kclaw web` | 浏览器打开 WebUI（自动带 token；daemon 不在会自动启动） |
 | `kclaw daemon start \| stop \| status` | daemon 生命周期（start 幂等，写 `~/.kclaw/daemon.json`；stop 发 SIGTERM） |
 | `kclaw status` | `daemon status` 别名 |
 | `kclaw jobs list` | 列出定时任务（name/cron/enabled/nextRunAt/lastStatus） |
@@ -78,7 +80,7 @@ REPL 内：`/exit` 退出、`/sessions` 列会话、`/new <title>` 开新会话�
 日常入口就一条命令：
 
 ```bash
-kclaw web    # 自动拉起 daemon（如需要），带 token 打开浏览器
+kclaw web    # 自动启动 daemon（如需要），带 token 打开浏览器
 ```
 
 备选（手动 token）：端口见 daemon 启动输出或 `kclaw daemon status`，token 即 `~/.kclaw/token` 的内容。二选一：
@@ -125,13 +127,29 @@ monorepo（pnpm workspace）：
 pnpm install
 pnpm build
 pnpm typecheck   # 全部包 tsc --noEmit
-pnpm test        # 全部包 vitest（cli/server 冒烟需先 pnpm build）
+pnpm test        # 全部包 vitest（cli/server 快速验证需先 pnpm build）
 ```
 
 文档：
 
-- [核心原理：agent 引擎](docs/core-internals.md)
-- [核心原理：持久化与工具](docs/persistence-and-tools.md)
-- [核心原理：daemon 与 CLI](docs/daemon-and-cli.md)
-- [核心原理：WebUI 与全系统收束](docs/webui-and-system.md)
-- [扩展指南：加一个新功能要动哪里](docs/extending.md)
+- [architecture — 全局总纲](docs/architecture.md)：模块地图、进程模型、数据流，其余各篇的入口
+- core/（agent 引擎，纯库）
+  - [agent-loop](docs/core/agent-loop.md) — run 的运行循环
+  - [protocol](docs/core/protocol.md) — 消息 / 内容块 / 事件三层协议
+  - [provider](docs/core/provider.md) — OpenAI 兼容的 LLM 接入层
+  - [tools](docs/core/tools.md) — 内置工具体系与注册
+  - [permissions](docs/core/permissions.md) — 权限网关
+  - [jobs](docs/core/jobs.md) — 定时任务调度
+  - [memory](docs/core/memory.md) — 记忆存储（SQLite FTS5）
+  - [storage](docs/core/storage.md) — 路径、配置与会话持久化
+- server/（daemon）
+  - [daemon](docs/server/daemon.md) — 生命周期与鉴权
+  - [http-api](docs/server/http-api.md) — HTTP 路由
+  - [realtime](docs/server/realtime.md) — WS 协议与事件总线
+  - [run-manager](docs/server/run-manager.md) — 会话串行 run 与确认网关
+- cli/（终端客户端）
+  - [cli](docs/cli/cli.md) — 命令、REPL 与 slash 命令
+  - [onboarding](docs/cli/onboarding.md) — 首跑体验（provider 判定 / 向导 / web 命令）
+- web/（浏览器客户端）
+  - [webui](docs/web/webui.md) — 视图、token 引导、WS 客户端
+- [extending — 扩展指南](docs/extending.md)：加一个新功能要动哪里

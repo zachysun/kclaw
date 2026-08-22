@@ -1,0 +1,121 @@
+# tools — 内置工具体系与注册
+
+## 职责
+
+`packages/core/src/tools/` 实现全部 9 个内置工具，并把它们装配成两份对齐的产物：`tools`（名字 → 执行器，给循环调用）与 `toolDefs`（JSON Schema 定义，传给模型看）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
+
+## 设计决策
+
+- **一个接口通吃**：内置工具与未来的 MCP 适配器实现同一个 `ToolExecutor`——循环不区分工具来源。`risk` 与 `concurrency` 是声明性元数据：前者驱动权限检查（safe 的工具集可自动放行），后者驱动同批调用的调度。
+- **注册表与定义同源**：`createBuiltinTools` 把执行器和 ToolDefinition 放在同一条 entries 列表里，`tools` 的键集合与 `toolDefs` 的名字集合天然一致（`registry.test.ts` 双向断言这一点），不会出现"模型看得见但循环执行不了"的名字。
+- **schema 是给模型看的，校验是手写的**：parameters 字段是 JSON Schema（描述 JSON 参数结构的规范格式），随请求传给模型引导其生成参数；运行时不加载 schema 校验库，而是用 `shared.ts` 里的手写校验函数（`requireString` / `optInt` / `optStringArray`）逐个字段检查——失败抛 `ToolError`，由 `makeTool` 统一转成 `{status:"error"}` 结果，异常永远不逃出执行器。
+- **fs 工具不做工作目录越界拦截**：路径只经 `path.resolve(workspace, p)` 解析，越界与否交给权限网关判定（越界会变成一次可由人批准的确认）——如果工具层先拒绝，人工批准后的调用仍会失败，确认就失去意义。
+- **output 与 data 分离**：`output` 是给模型看的纯文本（进下一轮请求的上下文）；`data` 是给前端渲染用的原始结构化数据（只持久化在块上，从不传给模型）。两者职责不同，避免"为渲染保留结构"污染模型上下文。
+- **argsJson 原文保留**：工具调用参数的原始 JSON 字符串原样存在 `ToolCallBlock.argsJson` 上——即使解析失败，审计时也能看到模型到底输出了什么。
+
+## 接口
+
+```ts
+// packages/core/src/agent/tools.ts
+export interface ToolExecutor {
+  risk: "safe" | "sensitive"          // sensitive 默认需要人工确认
+  concurrency: "parallel" | "serial"  // serial 在一批调用中最后逐个执行，不与任何工具重叠
+  execute(args: unknown, ctx: {
+    signal?: AbortSignal
+    onOutput(delta: string): void     // 执行中流式回传部分输出
+  }): Promise<{ status: "ok" | "error"; output: string; data?: unknown }>
+}
+
+// packages/core/src/tools/index.ts
+export function createBuiltinTools(opts: {
+  workspace: string
+  memory: MemoryStore
+  tavilyApiKey: string
+  exec?: Partial<{ timeoutMs: number; maxOutputBytes: number }>
+  fetchImpl?: typeof fetch
+}): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] }
+
+// packages/core/src/tools/shared.ts
+export class ToolError extends Error {}
+export function makeTool<N extends string>(
+  name: N, risk: "safe" | "sensitive", concurrency: "parallel" | "serial",
+  fn: (args: unknown) => ToolResult | Promise<ToolResult>,
+): ToolExecutor & { name: N }
+```
+
+`makeTool` 包装行为：`fn` 抛出的 `ToolError` → `{status:"error", output: "<name>: <message>"}`；其它异常同样转为 error 结果（消息去掉了 ToolError 前缀逻辑，统一带工具名）。
+
+## 9 个内置工具
+
+| 名称 | 职责 | risk / concurrency |
+|------|------|--------------------|
+| `exec` | 在工作目录跑 shell 命令 | sensitive / serial |
+| `fs_read` | 读工作目录内 UTF-8 文本文件（≤1 MiB） | safe / parallel |
+| `fs_list` | 列目录 | safe / parallel |
+| `fs_write` | 新建/覆写文件（自动建父目录） | sensitive / serial |
+| `fs_edit` | 字面替换文件中恰好一处文本 | sensitive / serial |
+| `web_search` | Tavily 搜索 | safe / parallel |
+| `web_fetch` | 抓取网页正文 | safe / parallel |
+| `memory_save` | 写入长期记忆 | safe / parallel |
+| `memory_search` | 全文检索记忆 | safe / parallel |
+
+### exec（`tools/exec.ts`）
+
+`spawn(command, {shell: true, cwd: workspace, detached: POSIX 下为 true})`——cwd 固定在工作目录；`detached` 让子进程成为进程组（一组一起调度/发信号的进程）组长。关键约束：
+
+- **超时**：默认 `timeoutMs = 60_000`（`config.yaml` 的 `exec.timeoutMs` 同为 60s 默认值）。超时先 `process.kill(-pid, "SIGKILL")` 终止整个进程组（连带 shell 的子进程，如 `sleep`；Windows 无进程组，退回只终止直接子进程），然后返回 `{status:"error", output: "command timed out after 60000ms\n<部分输出>"}`——已产生的输出仍然返回。
+- **输出截断**：超过 `maxOutputBytes`（默认 100 KiB，即 `100 * 1024`）时 `truncateMiddle` 保留首尾各一半，中间插 `\n...[truncated N bytes]...\n` 标记；按 UTF-8 字节计数，多字节字符在切点被拆开会解码成 U+FFFD 替换字符，属可接受损失。
+- **退出码**：0 → ok；非 0 → error，输出带 `exit code N` 首行；stdout 与 stderr 合并，边到边经 `ctx.onOutput` 流式回传。
+- 空/非字符串 `command` 直接返回 error（`args.command must be a non-empty string`）。
+
+### fs 工具（`tools/fs.ts`）
+
+统一边界：`sandboxed(p) = path.resolve(workspace, p)`，无越界拒绝（见设计决策）。
+
+- **fs_read**：先 `statSync`——目录报 `not a file`，超过 `maxReadBytes`（默认 1 MiB，`1024 * 1024`）报 `file too large: <p> is <size> bytes (max 1048576)`；然后整体以 UTF-8 读出。
+- **fs_list**：子目录带尾部 `/`；文件显示字节数（对符号链接 stat 目标，指向目录的也按目录列出；stat 失败标 `broken symlink`）；空目录输出 `(empty directory)`。
+- **fs_write**：`content` 允许空串；`mkdirSync(recursive)` 补齐父目录；成功输出 `wrote <N> bytes to <解析后绝对路径>`。
+- **fs_edit**：`old` 必须在文件中**恰好出现一次**（0 次或多次都报错并给出实际次数）；替换是纯字面匹配（非正则），写回用函数式 replacer（`content.replace(old, () => new)`）——字符串 replacer 会解释 `$&`、`$1` 等 $ 模式，悄悄改坏文件。**拒绝二进制编辑**：解码后含 U+FFFD 替换字符或 NUL 字节的文件直接报 `fs_edit only supports text files (binary content detected)`——把二进制当文本写回会用乱码覆盖原始字节。
+
+### web 工具（tools/web.ts）
+
+- **web_search**：POST `https://api.tavily.com/search`，体为 `{api_key, query, max_results}`；`maxResults` 默认 5、钳制在 [1, 10]。`output` 是给模型的 markdown 列表（`- [title](url)：content`），无结果输出 `(no results)`；`data` 携带原始三元组 `{results: [{title, url, content}]}` 供渲染。
+- **web_fetch**：只接受 http(s) URL；GET 且跟随重定向；非 2xx 报 `HTTP <status> <statusText> for <url>`。HTML 经 linkedom 解析 + Readability（Mozilla 的正文提取库）取文章正文；提取为空时退回移除 `script/style/noscript/template/svg` 后的 body 文本（对原始 HTML 重新解析，避免污染）；非 HTML 内容按纯文本返回。响应体**先截断后解析**：超过 `maxFetchBytes`（默认 512 KiB，`512 * 1024`）按字节截断并附 `...[truncated, dropped N bytes]...` 标记——先截断是为了超大页面不会在 DOM 解析阶段撑爆内存。
+
+### memory 工具（`tools/memory.ts`）
+
+是 `MemoryStore` 的薄封装（markdown 文件为准、SQLite FTS5 为派生索引，见 [memory](./memory.md)）。
+
+- **memory_save** `{text, tags?}`：`store.save({text, tags, source: "model"})`——`source:"model"` 标记这是模型写入的（自动记忆管线与人类走别的入口）；存储层做相似笔记的就地合并，不产生重复条目；输出 `saved memory <id>`。
+- **memory_search** `{query, limit?}`：`limit` 默认 5、最大 20；每个命中一行 `- <text>`，按相关度排序；无命中输出 `(no memories)`。
+
+两个工具 safe + parallel：只碰笔记目录与索引，不动工作目录本身（better-sqlite3 是同步接口，"parallel" 只表示调度器不强制排序）。
+
+## callId 配对生命周期
+
+工具调用与结果靠 `callId`（provider 给的调用 id，如 OpenAI 的 `tool_calls[].id`）配对，全程四个节点（块定义在 `packages/core/src/protocol/blocks.ts`）：
+
+1. **创建**：流中 `tool_call_started` 帧到达 → 循环建 `ToolCallBlock {callId, name, args: undefined, argsJson: ""}`；`argsJson` 随 `tool_call_delta` 逐段拼接——**流没结束参数就不完整**，所以解析必须等流结束。
+2. **定稿**：流结束后 `JSON.parse(argsJson || "{}")`（无参数流的调用按空对象处理）；解析失败 → 该调用得到 error result（`invalid tool args json`），**永不执行**，但原文块照常持久化。provider 请求回传时用的也是 `argsJson` 原文（`function.arguments`），不重新序列化。
+3. **配对**：执行产出 `ToolResultBlock {callId, status, output, data?, durationMs}`，与调用块的 `callId` 一一对应。
+4. **不变量**：历史中每个 assistant 的 `tool_call` 块之后必须存在同 `callId` 的 `tool_result`——OpenAI 兼容 API 对无配对调用的下一轮请求回 400。流中途断掉（abort/错误）时循环为悬空调用合成 error result；组装 provider 视图时（`packages/core/src/agent/context.ts` 的 `toProviderMessages`）无配对的 `tool_call` 与孤儿 tool 消息都会被剔除。
+
+## output 与 data 的分流
+
+- **进模型上下文的只有 `output`**：`toProviderMessages` 把 `tool_result` 转成 `{role:"tool", toolCallId, content: output}`（error 结果加 `[error] ` 前缀）；`data` 字段在这个转换里不存在。
+- **`data` 只随块持久化、只给渲染**：循环在结果完成时 `block.data = res.data`（`packages/core/src/agent/loop.ts`），JSONL 会话日志与事件流携带它，前端（如 web_search 的结果卡片）按结构渲染。这使模型上下文保持纯文本、可控大小，渲染信息又不丢失。
+
+## 边界与出错
+
+- **执行器永不抛异常**：`makeTool` 把一切异常转为 `{status:"error"}`；循环对 settle 失败也统一转为 error result（保底处理）。
+- **参数校验失败/未知工具名**：在权限检查**之前**就被拦截为 error result，不会进权限判定，也不会执行。
+- **fs_read/fs_list 只认 UTF-8 文本**：二进制文件读出来是替换字符，判断交给上层（fs_edit 有显式二进制拦截）。
+- **网络工具的失败即结果**：web_search/web_fetch 的网络错误、非 2xx、JSON 解析失败都是 error result 文本，模型可以看到并决定下一步；不带自动重试。
+- **exec 的输出上限与超时都可配**：daemon 从 `config.yaml` 的 `exec.timeoutMs` / `exec.maxOutputBytes` 传入（`packages/server/src/run.ts` 的装配），两处默认值与工具内默认一致（60s / 100 KiB）。
+
+## 关联
+
+- [agent-loop](./agent-loop.md)：调用时机、并发调度与 callId 配对的执行侧
+- [permissions](./permissions.md)：`risk` 如何变成 allow/confirm 判定
+- [provider](./provider.md)：`ToolDefinition` 如何进入请求体
+- [memory](./memory.md)：memory 工具背后的存储与检索
