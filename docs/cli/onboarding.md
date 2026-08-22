@@ -1,17 +1,17 @@
-# onboarding — 首跑体验
+# onboarding — 首次运行体验
 
 ## 职责
 
-`packages/cli` 的首跑三件套：`src/provider-check.ts` 的 `detectProviderStatus` 判定模型配置从哪来（决定要不要走向导）；`src/wizard.ts` 的 `runWizard` 是 30 秒配置向导（选模板 → 输 key → 连通测试 → 写 config.yaml）；`src/web-cmd.ts` 的 `webAction` 实现 `kclaw web`（确保 daemon 在运行、带 token 打开浏览器）。加上 `src/index.ts` 入口的 Node >= 22 版本检查，共同构成"第一次敲 kclaw 能顺利用起来"的全部路径。
+`packages/cli` 的首次运行链路包含三个模块：`src/provider-check.ts` 的 `detectProviderStatus` 判定模型配置的来源（决定是否进入向导）；`src/wizard.ts` 的 `runWizard` 是 30 秒配置向导（选模板 → 输入 key → 连通测试 → 写 config.yaml）；`src/web-cmd.ts` 的 `webAction` 实现 `kclaw web`（确保 daemon 在运行、携带 token 打开浏览器）。加上 `src/index.ts` 入口的 Node >= 22 版本检查，共同构成首次执行 `kclaw` 能顺利使用的全部路径。
 
 ## 设计决策
 
-- **判定优先级：config > env > missing**：`config.yaml` 里 `providers.default` 指向一个存在的条目就算已配置；否则任一非空的 `KCLAW_LLM_*` 环境变量算已配置；两者都没有才是 "missing"（触发向导）。与 daemon 侧 `resolveProviderEndpoint` 的解析规则同向：config 优先、env 补缺。
-- **路径解析复用 core**：`detectProviderStatus` 与向导都用 `@kclaw/core` 的 `resolvePaths`/`loadConfig`/`saveConfig`（真实的 `KclawPaths` 形状），不手搓替代品，CLI 侧的路径解析永远不会和 daemon 的漂移（其 mkdir 副作用只是提前建好 home 目录树，任何 kclaw 调用本来也会建）。
-- **向导是验证环节不是必经之路**：只在 "missing" 且 stdout 是 TTY 时接手；取消（Ctrl+C 等）或"重试？→否"都直接静默退出，**文件系统零改动**——绝不写半截 config.yaml。
-- **连通测试用最小请求**：一次 `max_tokens: 1` 的补全请求，验证的是"key + model + baseUrl 三件套能用"，不浪费 token。
+- **判定优先级：config > env > missing**：`config.yaml` 里 `providers.default` 指向一个存在的条目即视为已配置；否则任一非空的 `KCLAW_LLM_*` 环境变量视为已配置；两者都缺失才判定为 "missing"（触发向导）。与 daemon 侧 `resolveProviderEndpoint` 的解析规则同向：config 优先、env 补缺。
+- **路径解析复用 core**：`detectProviderStatus` 与向导都用 `@kclaw/core` 的 `resolvePaths`/`loadConfig`/`saveConfig`（真实的 `KclawPaths` 形状），不自建替代实现，CLI 侧的路径解析永远不会与 daemon 发生漂移（其 mkdir 副作用只是提前创建 home 目录树，任何 kclaw 调用本来也会创建）。
+- **向导是验证环节不是必经之路**：只在 "missing" 且 stdout 是 TTY 时启动；取消（Ctrl+C 等）或"重试？→否"都直接静默退出，**文件系统零改动**——绝不写入不完整的 config.yaml。
+- **连通测试用最小请求**：一次 `max_tokens: 1` 的补全请求，验证 key、model、baseUrl 三项组合可用，不浪费 token。
 - **key 文件权限 0600**：`saveConfig` 用普通 `writeFileSync`（不能设 mode），向导在保存后立刻 `chmodSync(paths.config, 0o600)`——API key 持久化在这个文件里，仅属主可读写。
-- **`kclaw web` 不让用户看见 token**：URL 带 token 只用于浏览器一次交接，终端打印的地址刻意去掉 `?token=` 部分（用户能看见/分享的是干净 URL）。
+- **`kclaw web` 不向用户展示 token**：URL 带 token 只用于浏览器一次交接，终端打印的地址刻意去掉 `?token=` 部分（用户能看见/分享的是不带 token 的 URL）。
 
 ## provider 判定（packages/cli/src/provider-check.ts）
 
@@ -28,8 +28,8 @@ export function detectProviderStatus(home: string): ProviderStatus
 `chatAction`（`src/index.ts`）按结果分流：
 
 - `"config"` / `"env"` → 直接 `runChat`。
-- `"missing"` + TTY → `runWizard(home)`；返回 `"aborted"` 时静默返回（什么都不写），`"configured"` 时继续进入 chat。
-- `"missing"` + 非 TTY（管道/CI）→ 打一行指引退出：`no llm provider configured — run 'kclaw chat' in a terminal to run the setup wizard, see README`。
+- `"missing"` + TTY → `runWizard(home)`；返回 `"aborted"` 时静默返回（不写入任何文件），`"configured"` 时继续进入 chat。
+- `"missing"` + 非 TTY（管道/CI）→ 打印一行指引并退出：`no llm provider configured — run 'kclaw chat' in a terminal to run the setup wizard, see README`。
 
 ## 向导流程（packages/cli/src/wizard.ts）
 
@@ -44,13 +44,13 @@ export function detectProviderStatus(home: string): ProviderStatus
 
 步骤机（`step: "template" | "baseurl" | "key" | "model"`）：
 
-1. **template**：@clack 单选四模板；custom（无 baseUrl）进 baseurl 步，ollama（skipKey）跳过 key 直达 model，其余进 key。
-2. **baseurl**（仅 custom）：文本输入，末尾斜杠裁掉，空值报错重输。
+1. **template**：@clack 单选四模板；custom（无 baseUrl）进入 baseurl 步，ollama（skipKey）跳过 key 直达 model，其余进入 key。
+2. **baseurl**（仅 custom）：文本输入，裁掉末尾斜杠，空值报错并重新输入。
 3. **key**：`p.password` 隐藏输入（不回显）；ollama 不经过这步。
 4. **model**：文本输入，空则用模板默认；然后构造 `buildProviderEntry(t, apiKey, model)` → `{ baseUrl, apiKey, model }` → 连通测试。
-5. **连通测试**（`probe`）：`POST {baseUrl}/chat/completions`，body `{ model, messages: [{role:"user", content:"hi"}], max_tokens: 1, stream: false }`，`AbortSignal.timeout(20_000)`。成功（HTTP < 400）→ 写配置收尾；失败 → 人话报错 + 重试确认。
+5. **连通测试**（`probe`）：`POST {baseUrl}/chat/completions`，body `{ model, messages: [{role:"user", content:"hi"}], max_tokens: 1, stream: false }`，`AbortSignal.timeout(20_000)`。成功（HTTP < 400）→ 写配置收尾；失败 → 分类报错 + 重试确认。
 
-**失败三类人话报错**（`classifyProbeError` → `REASON`）：
+**失败按三类报错**（`classifyProbeError` → `REASON`）：
 
 | 判定 | 条件 | 文案 | 重试回到的步骤（`retryStepFor`） |
 |------|------|------|------|
@@ -79,7 +79,7 @@ export async function webAction(home: string): Promise<void>
 
 1. `ensureDaemon(home)` 确保 daemon 在运行（不在则启动，打印 `daemon started`）。
 2. 读 `<home>/token`。
-3. `buildWebUrl(info.port, token)` 拼 URL（token 经 URL 编码，含保留字符也能完整穿过查询参数）。
+3. `buildWebUrl(info.port, token)` 构造 URL（token 经 URL 编码，含保留字符也能完整保留于查询参数）。
 4. 有浏览器命令（macOS/Linux）→ `spawn(cmd, [url], {detached: true, stdio: "ignore"}).unref()` 脱离启动（CLI 不等浏览器、浏览器寿命独立于 CLI），打印 `opening <不带 token 的 URL> in your browser`；没有命令 → 直接打印 `open <完整 URL>` 让用户手动打开。
 
 浏览器侧的接收：WebUI 启动时把 `?token=` 存进 localStorage 并从地址栏清除（`bootstrapToken`，见 [webui](../web/webui.md)）。
@@ -100,8 +100,8 @@ if (major < 22) {
 
 ## 边界与出错
 
-- **向导不触碰除 config.yaml 外的任何东西**：中途任何取消点都返回 `"aborted"` 且无文件写入。
-- **非交互终端没有向导**：只打印一行指引，面向脚本/CI 场景（那里也不该有交互式提问）。
+- **向导不修改 config.yaml 之外的任何文件**：中途任何取消点都返回 `"aborted"` 且无文件写入。
+- **非交互终端没有向导**：只打印一行指引，面向脚本/CI 场景（脚本/CI 场景不应出现交互式提问）。
 - **连通测试超时 20s**：`AbortSignal.timeout` 中止请求，status 记为 null → 按 network 类报错。
 - **`kclaw web` 无浏览器命令的平台**：Windows 等 `openCommandFor` 返回 null 的平台退化为打印 URL（token 完整可见，用户自行打开）。
 - **token 文件缺失**：`ensureDaemon` 启动的 launch 会创建 `<home>/token`，所以 `webAction` 读它时必然存在；daemon 已在运行时该文件同样存在（token 跨重启复用，见 [daemon](../server/daemon.md)）。

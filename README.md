@@ -27,6 +27,8 @@ A locally resident personal agent: a single daemon owns all state; the CLI and W
               jobs.db · attachments/ · logs/
 ```
 
+---
+
 ## Installation
 
 Requirements: Node >= 22 (checked at CLI startup; exits if unmet).
@@ -38,28 +40,38 @@ kclaw chat    # first run enters the setup wizard: pick provider → paste key �
 kclaw web     # open the WebUI in your browser (carries the token, auto sign-in)
 ```
 
-> First time here? Follow the step-by-step tutorial (in Chinese): [中文上手教程](./docs/tutorial.md) — from install to jobs and the WebUI.
+The wizard ships DeepSeek / OpenAI / Ollama / custom templates; key input is hidden; after a successful probe it writes `~/.kclaw/config.yaml` (mode 0600). You can also skip the wizard and edit the config by hand or use environment variables — see "Configuration".
 
-The wizard ships DeepSeek / OpenAI / Ollama / custom templates; key input is hidden; after a successful probe it writes `~/.kclaw/config.yaml` (mode 0600). You can also skip the wizard and edit the config by hand or use environment variables — see "Configuration". No need to start the daemon separately: `kclaw chat` / `kclaw web` start it automatically when they find it missing.
+> [!TIP]
+> New to kclaw? Follow the step-by-step tutorial (in Chinese): [中文上手教程](./docs/tutorial.md) — from installation through jobs to the WebUI.
+
+> [!NOTE]
+> The daemon does not need to be started separately: `kclaw chat` / `kclaw web` start it automatically when they find it missing.
+
+---
 
 ## Features
 
-- **Streaming chat**: the CLI REPL and the WebUI share the same experience — replies render as a stream, multi-turn and new sessions supported (try asking "what is the largest file in `~/Downloads`" to trigger the exec tool).
+- **Streaming chat**: the CLI REPL and the WebUI share the same experience — replies render as a stream, multi-turn and new sessions supported (example: asking "what is the largest file in `~/Downloads`" triggers the exec tool).
 - **Confirmation cards**: risky tools (exec, fs_edit, …) ask before executing (allow / deny); every decision is written to the audit log.
 - **Sessions**: every message is persisted to `sessions/<id>/messages.jsonl`; history can be resumed at any time.
-- **Memory**: say "remember I live in Shanghai" → stored as a markdown note (with a SQLite FTS5 index); ask "where do I live?" later and it hits.
+- **Memory**: entering "remember I live in Shanghai" stores a markdown note (with a SQLite FTS5 index); a later "where do I live?" hits the note.
 - **Jobs**: cron-scheduled jobs (e.g. `0 9 * * *` for a daily briefing); the daemon opens a new session on schedule and logs results to audit.
 - **Audit**: permission decisions leave a full trail, viewable in the WebUI "audit" tab.
+
+---
 
 ## FAQ
 
 | Symptom | Cause & fix |
 |---------|-------------|
-| `command not found: kclaw` | npm's global bin directory is not on PATH (`npm config get prefix` shows where it installed) |
+| `command not found: kclaw` | npm's global bin directory is not on PATH (`npm config get prefix` shows the install location) |
 | `no llm provider configured` | No model configured: run `kclaw chat` once for the setup wizard, or write config / env vars by hand per "Configuration" |
-| Page won't open / 401 | The port may change on each daemon start (check the current port with `kclaw daemon status`, or just run `kclaw web`); the token stays the same across restarts, no need to re-fetch it |
+| Page won't open / 401 | The port may change on each daemon start (check the current port with `kclaw daemon status`, or run `kclaw web` directly); the token stays the same across restarts, no need to re-fetch it |
 | No confirmation prompt on a risky action | The command matched the `permissions.allow` whitelist (see "Configuration" below) |
 | Where is my data | All under `~/.kclaw/`: config.yaml · token · daemon.json · sessions/ · memory/ · jobs.db · logs/ |
+
+---
 
 ## Common Commands
 
@@ -75,11 +87,13 @@ The wizard ships DeepSeek / OpenAI / Ollama / custom templates; key input is hid
 
 Inside the REPL: `/exit` to quit, `/sessions` to list sessions, `/new <title>` for a new session; Ctrl+C cancels the current run.
 
+---
+
 ## WebUI
 
-`packages/web` (React + Vite) is the daemon's official frontend; its build output is statically hosted by the daemon — open it in a browser and go. Feature parity with the CLI (the same HTTP + WS API): streaming chat, confirmation cards, sessions, jobs, audit.
+`packages/web` (React + Vite) is the daemon's official frontend; its build output is statically hosted by the daemon. Feature parity with the CLI (the same HTTP + WS API): streaming chat, confirmation cards, sessions, jobs, audit.
 
-One command for the daily entry point:
+The daily entry point is a single command:
 
 ```bash
 kclaw web    # starts the daemon if needed, opens the browser with the token
@@ -90,9 +104,11 @@ Alternative (manual token): the port is in the daemon startup output or `kclaw d
 1. **Token in the URL**: `http://127.0.0.1:<port>/?token=<token>`
 2. **Type it in**: open `http://127.0.0.1:<port>/` without a token, paste it into the token input once; it is stored in localStorage and not needed again.
 
+---
+
 ## Configuration (`~/.kclaw/config.yaml`)
 
-The setup wizard writes exactly this file; handwritten it looks like:
+The setup wizard writes exactly this file; a handwritten example looks like:
 
 ```yaml
 providers:
@@ -104,26 +120,33 @@ providers:
       model: some-model
 ```
 
-- `providers`: as above; when absent, the `KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY / KCLAW_LLM_MODEL` environment variables also work (config wins over env). Local Ollama works: `baseUrl: http://127.0.0.1:11434/v1`, `apiKey: ollama`.
-- `workspace`: the sandbox root for file tools (fs_read/fs_edit, …); access outside it is denied.
-- `permissions.allow / deny`: prefix-matching rules (e.g. `exec:git *`); allow skips confirmation, deny rejects outright, everything else asks.
-- `exec.timeoutMs / maxOutputBytes`: timeout and output truncation for the exec tool.
-- `web.tavilyApiKey`: optional, enables web_search.
-- `~/.kclaw/AGENTS.md`: agent persona, injected into the system prompt.
+| Field | Description |
+|-------|-------------|
+| `providers` | As above. When absent, the `KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY / KCLAW_LLM_MODEL` environment variables also work (config wins over env). Local Ollama works: `baseUrl: http://127.0.0.1:11434/v1`, `apiKey: ollama`. |
+| `workspace` | Sandbox root for file tools (fs_read/fs_edit, …); access outside it is denied. |
+| `permissions.allow / deny` | Prefix-matching rules (e.g. `exec:git *`): allow skips confirmation, deny rejects outright, everything else asks. |
+| `exec.timeoutMs / maxOutputBytes` | Timeout and output truncation for the exec tool. |
+| `web.tavilyApiKey` | Optional; enables web_search. |
+| `~/.kclaw/AGENTS.md` | Agent persona, injected into the system prompt. |
 
-The data directory can be redirected with `KCLAW_HOME` or `--home <dir>` (test friendly).
+> [!NOTE]
+> The data directory can be redirected with `KCLAW_HOME` or `--home <dir>` (test friendly).
+
+---
 
 ## Development
 
-Building from source (regular users just `npm i -g kclaw` above; skip this). Platforms: macOS and Linux; Windows is not a supported target.
+Building from source. Regular users only need `npm i -g kclaw` above; skip this section. Platforms: macOS and Linux; Windows is not a supported target.
 
 monorepo (pnpm workspace):
 
-- `packages/core`: the agent engine, a pure library (loop / tools / memory / permissions)
-- `packages/server`: the daemon (HTTP + WS + scheduling + audit)
-- `packages/cli`: the CLI client (source form)
-- `packages/web`: the WebUI frontend (React + Vite)
-- `packages/kclaw`: the npm release package (aggregates the other packages' build output; `npm i -g kclaw` installs this one)
+| Package | Role |
+|---------|------|
+| `packages/core` | The agent engine, a pure library (loop / tools / memory / permissions) |
+| `packages/server` | The daemon (HTTP + WS + scheduling + audit) |
+| `packages/cli` | The CLI client (source form) |
+| `packages/web` | The WebUI frontend (React + Vite) |
+| `packages/kclaw` | The npm release package (aggregates the other packages' build output; `npm i -g kclaw` installs this one) |
 
 ```bash
 pnpm install
@@ -154,5 +177,5 @@ Docs:
   - [onboarding](docs/cli/onboarding.md) — first-run experience (provider detection / wizard / web command)
 - web/ (browser client)
   - [webui](docs/web/webui.md) — views, token bootstrap, the WS client
-- [extending — extension guide](docs/extending.md): where to touch when adding a new feature
+- [extending — extension guide](docs/extending.md): which files to change when adding a new feature
 - [tutorial](docs/tutorial.md): hands-on walkthrough for first-time users (in Chinese, 中文上手教程)

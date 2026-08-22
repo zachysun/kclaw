@@ -2,16 +2,16 @@
 
 ## 职责
 
-`packages/server/src/daemon.ts` 的 `launchDaemon` 是 daemon 进程的唯一装配入口：把路径、配置、token、各存储、LLM 客户端、RunManager、HTTP/WS 应用、调度心跳按固定顺序组装起来并开始监听；返回的 `Daemon` 句柄提供有界的 `stop()`。配套的 `packages/server/src/auth.ts` 负责 token 的生成与校验。CLI 侧的探测/重启/停止逻辑（pid 校验、健康轮询）在 `packages/cli/src/daemon-ctl.ts`，本文一并讲清两侧的契约。
+`packages/server/src/daemon.ts` 的 `launchDaemon` 是 daemon 进程的唯一装配入口：把路径、配置、token、各存储、LLM 客户端、RunManager、HTTP/WS 应用、调度心跳按固定顺序组装起来并开始监听；返回的 `Daemon` 句柄提供有界的 `stop()`。配套的 `packages/server/src/auth.ts` 负责 token 的生成与校验。CLI 侧的探测/重启/停止逻辑（pid 校验、健康轮询）在 `packages/cli/src/daemon-ctl.ts`，本文同时说明两侧的契约。
 
 ## 设计决策
 
-- **只绑回环地址**：`HOST = "127.0.0.1"`（本机回环地址，外部网络访问不到）。daemon 不做网络隔离，安全完全交给 token；绑回环保证别的机器连不上。
-- **默认临时端口**：`port: 0`（让操作系统分配一个空闲端口），真实端口 listen 成功后从 `app.server.address()` 读出并写入 `daemon.json`。客户端靠文件发现端口，不靠约定端口。
-- **daemon.json 是就绪信号，不是启动前置**：文件在 listen 成功**之后**写入 `{port, pid, startedAt}`；`launchDaemon` resolve 时 daemon 已在服务并在调度。CLI 侧轮询"文件出现且 `/health` 通"作为就绪判据。
-- **token 是 daemon 的稳定身份**：`<home>/token` 首次启动时生成（UUID，文件权限 0600，仅属主可读写），重启复用、stop 不删。删的只有 daemon.json。这样 CLI/WebUI 存的 token 在 daemon 重启后仍然有效。
-- **鉴权是"每路由必带 Bearer"加白名单豁免**：一个 `preHandler` 钩子拦全部路由，只有三处豁免——`/health`、`/ws`、静态 WebUI 外壳（见下）。豁免列表是封闭集合，新增路由默认受保护。
-- **有界停止**：`stop()` 的每一步（停调度、关服务器）有独立超时（默认 60s）。超时则 `stop()` reject、daemon.json **保留**——进程还活着，指向它的文件必须诚实；谎报"已停止"会诱发双 daemon、job 双触发。
+- **只绑回环地址**：`HOST = "127.0.0.1"`（本机回环地址，外部网络访问不到）。daemon 不做网络隔离，安全完全交给 token；绑回环保证其他机器无法连接。
+- **默认临时端口**：`port: 0`（让操作系统分配一个空闲端口），真实端口 listen 成功后从 `app.server.address()` 读出并写入 `daemon.json`。客户端通过文件发现端口，不依赖约定端口。
+- **daemon.json 是就绪信号，不是启动前置**：文件在 listen 成功**之后**写入 `{port, pid, startedAt}`；`launchDaemon` resolve 时 daemon 已在服务并在调度。CLI 侧以"文件出现且 `/health` 可访问"作为就绪判据。
+- **token 是 daemon 的稳定身份**：`<home>/token` 首次启动时生成（UUID，文件权限 0600，仅属主可读写），重启复用，stop 不删除；仅 daemon.json 会被删除。因此 CLI/WebUI 保存的 token 在 daemon 重启后仍然有效。
+- **鉴权是"每路由必带 Bearer"加白名单豁免**：一个 `preHandler` 钩子拦截全部路由，只有三处豁免——`/health`、`/ws`、静态 WebUI 外壳（见下）。豁免列表是封闭集合，新增路由默认受保护。
+- **有界停止**：`stop()` 的每一步（停调度、关服务器）有独立超时（默认 60s）。超时则 `stop()` reject、daemon.json **保留**——进程仍在运行，指向它的文件必须与事实一致；虚报"已停止"会诱发双 daemon、job 双触发。
 - **provider 缺失是硬错误**：装配期就抛错终止，不启动一个"半配置"的 daemon。
 
 ## 接口
@@ -57,7 +57,7 @@ export function bearerMatches(header: string | undefined, token: string): boolea
 
 ## 启动流程
 
-入口链：`packages/server/bin/kclaw-server.mjs`（package.json 的 `bin` 入口）→ `import { launchDaemon } from "../dist/index.js"` → `launchDaemon({ home })`。home 解析：`--home <dir>`（或 `--home=<dir>`）优先，否则 `resolvePaths` 内部走 `KCLAW_HOME` env ?? `~/.kclaw`。bin 脚本就绪后向 stdout 打一行 `{"port":<port>}`——CLI 与测试等的就是这一行。
+入口链：`packages/server/bin/kclaw-server.mjs`（package.json 的 `bin` 入口）→ `import { launchDaemon } from "../dist/index.js"` → `launchDaemon({ home })`。home 解析：`--home <dir>`（或 `--home=<dir>`）优先，否则 `resolvePaths` 内部使用 `KCLAW_HOME` env ?? `~/.kclaw`。bin 脚本就绪后向 stdout 输出一行 `{"port":<port>}`，CLI 与测试以此行为就绪信号。
 
 `launchDaemon` 的装配序（每步失败都让整个启动 reject，daemon 不会半启动）：
 
@@ -107,20 +107,20 @@ app.addHook("preHandler", async (request, reply) => {
 
 三处豁免及理由：
 
-- **`/health`**：CLI 的存活探测（`probeHealth`，单次 1s 超时）不带 token——探测的目的就是"daemon 活着吗"，此时客户端可能还没有 token。
-- **`/ws`**：WebSocket 升级请求带不了自定义 header 的场景常见，鉴权移到连接内部做——首帧 `{type:"auth", token}` 或 `?token=` 查询参数，失败发 error 帧并以 4001 关闭（见 [realtime](./realtime.md)）。豁免的是升级路由，不是连接本身。
-- **静态 WebUI 外壳**（仅 `webDist` 已配置时）：浏览器加载页面前拿不到 token，`GET /`、`GET /index.html`、`GET /assets/*` 必须先放行，页面加载后由 JS 带着 token 调 API。
+- **`/health`**：CLI 的存活探测（`probeHealth`，单次 1s 超时）不带 token——探测只回答 daemon 是否存活，此时客户端可能还没有 token。
+- **`/ws`**：WebSocket 升级请求常无法携带自定义 header，鉴权移到连接内部进行——首帧 `{type:"auth", token}` 或 `?token=` 查询参数，失败发 error 帧并以 4001 关闭（见 [realtime](./realtime.md)）。豁免的是升级路由，不是连接本身。
+- **静态 WebUI 外壳**（仅 `webDist` 已配置时）：浏览器加载页面前无法获得 token，`GET /`、`GET /index.html`、`GET /assets/*` 必须先放行；页面加载后由 JS 携带 token 调用 API。
 
-**外壳豁免怎么避免被绕过**（`isWebShellExempt`）：
+**外壳豁免的防绕过措施**（`isWebShellExempt`）：
 
 - 只放行 `GET`；其他方法一律走鉴权。
-- 匹配的是**原始请求路径**（`request.url.split("?")[0]`，去掉查询串），不是 `request.routeOptions.url`——`@fastify/static` 用一条 `/*` catch-all 路由服务一切文件，matched-route url 不含路径信息，靠它判断等于什么都放行。
+- 匹配的是**原始请求路径**（`request.url.split("?")[0]`，去掉查询串），不是 `request.routeOptions.url`——`@fastify/static` 用一条 `/*` catch-all 路由服务一切文件，匹配到的路由 url 不含路径信息，依据它判断等于全部放行。
 - 路径白名单是精确的三种：`/`、`/index.html`、`/assets/` 前缀。`/sessions`、`/jobs`、`/config` 等 API 路由先注册、各自有真实 route url，不落在静态 catch-all 的放行逻辑里。
-- 反向防线：`resolveWebDist` 在目录不存在时返回 `undefined`（不注册任何静态路由，`GET /` 保持 404），而不是注册一个半配置的静态服务器让外壳豁免空转在鉴权前面。
+- 反向防线：`resolveWebDist` 在目录不存在时返回 `undefined`（不注册任何静态路由，`GET /` 保持 404），而不是注册一个半配置的静态服务器，使外壳豁免空设在鉴权之前。
 
 ## 停止流程
 
-bin 脚本注册信号处理：SIGTERM/SIGINT → `shutdown()`（`stopping` 标志防重入）→ `daemon.stop()` → 干净停止 exit 0；`stop()` 抛错（某步超时）则 stderr 记录、exit 1。
+bin 脚本注册信号处理：SIGTERM/SIGINT → `shutdown()`（`stopping` 标志防重入）→ `daemon.stop()` → 正常停止，exit 0；`stop()` 抛错（某步超时）则记录 stderr，exit 1。
 
 `stop()` 的拆除序与启动相反，每步有界：
 
@@ -130,21 +130,21 @@ withStopTimeout(app.close(), 60s)   // 关服务器；app.close 会 await 所有
 rmSync(<home>/daemon.json)          // 只有全部成功才删
 ```
 
-`withStopTimeout(p, timeoutMs, step)` 用 `Promise.race([p, deadline])` 给每步设限。输掉的一步**不会被取消**（它可能稍后自行完成，迟到的失败被吞掉——超时已经报告过失败，不能再以未处理 rejection 的形式炸出来）。为什么要设限：一个挂死的 provider 流会停住 tracked job run，一个卡住的客户端会停住 `app.close`，没有超时的 `stop()` 会永远不返回——一个停不下来的 daemon。
+`withStopTimeout(p, timeoutMs, step)` 用 `Promise.race([p, deadline])` 给每步设限。超时的一步**不会被取消**（它可能稍后自行完成，迟到的失败被丢弃——超时已经报告过失败，不能再以未处理 rejection 的形式抛出）。设限的原因：挂死的 provider 流会阻塞 tracked job run，卡住的客户端会阻塞 `app.close`，没有超时上限的 `stop()` 会永远不返回。
 
-**超时路径**：`stop()` reject → bin exit 1 → **daemon.json 保留**（进程还活着）。进行中的 job run 按 §11 崩溃容忍语义放弃：JSONL 容忍尾部残缺行，防重入记录在内存里，从未完成 stop 的 daemon 重启后到期 job 重新触发。
+**超时路径**：`stop()` reject → bin exit 1 → **daemon.json 保留**（进程仍在运行）。进行中的 job run 按 §11 崩溃容忍语义放弃：JSONL 容忍尾部残缺行，防重入记录在内存里，未完成 stop 的 daemon 重启后到期 job 重新触发。
 
 ### CLI 侧的 pid 校验与 stop（daemon-ctl.ts）
 
 - `readDaemonJson(home)`：解析 `{port, pid, startedAt}`；pid 必须是**正整数**（pid 0 会让 `process.kill(0,…)` 信号整个进程组）——不合法视同文件不存在。
-- `ensureDaemon`（探测/重启）：daemon.json 健康（`GET /health` 通）→ 直接用；文件在、health 不通、pid 已死（`process.kill(pid, 0)` 抛 ESRCH）→ 判定失效，stderr 提示 "stale daemon.json, respawning" 后 `spawnDaemon` 分叉启动（detached、stdio ignore、unref，目标 `resolveServerBin()` 解析到 `packages/server/bin/kclaw-server.mjs`）；pid 活着但不健康 → 只在 5s 预算内轮询等待（250ms 间隔），**绝不对着活 pid 再启动一个**（会孤儿化第一个）。
-- `stopDaemon`：对 daemon.json 的 pid 发 SIGTERM（ESRCH 视为已死，继续清理）→ 轮询直到端口拒绝连接（预算 5s）→ 预算耗尽而 `/health` 仍应答 → 抛 `stop failed: daemon still responding…` 且**不删 daemon.json**；否则删除文件、返回 "stopped"。
+- `ensureDaemon`（探测/重启）：daemon.json 健康（`GET /health` 可访问）→ 直接使用；文件在、health 不可访问、pid 已终止（`process.kill(pid, 0)` 抛 ESRCH）→ 判定失效，stderr 提示 "stale daemon.json, respawning" 后 `spawnDaemon` 分叉启动（detached、stdio ignore、unref，目标 `resolveServerBin()` 解析到 `packages/server/bin/kclaw-server.mjs`）；pid 存活但不健康 → 仅在 5s 预算内轮询等待（250ms 间隔），**绝不在 pid 存活时再次启动**（否则第一个进程会被孤儿化）。
+- `stopDaemon`：对 daemon.json 的 pid 发 SIGTERM（ESRCH 视为已死，继续清理）→ 轮询直到端口拒绝连接（预算 5s）→ 预算耗尽而 `/health` 仍应答 → 抛 `stop failed: daemon still responding…` 且**不删除 daemon.json**；否则删除文件并返回 "stopped"。
 
 ## 边界与出错
 
 - **stop 后 token 仍在**：`<home>/token` 是 daemon 的身份，不是某次运行的临时凭证；重装/换 token 需手动删文件。
-- **stale daemon.json 无法自愈于服务端**：daemon 不清理别人的残留文件，发现与处理都在 CLI 侧（上面的 ensureDaemon/stopDaemon）。
-- **`/health` 没有鉴权也就没有信息泄露控制**：它只返回 `{ok:true}`，不暴露版本/端口/pid；`/status`（version、uptimeSec）受鉴权保护。
+- **stale daemon.json 无法在服务端自愈**：daemon 不清理其他进程的残留文件，发现与处理都在 CLI 侧（见上文 ensureDaemon/stopDaemon）。
+- **`/health` 无鉴权，因此也没有信息泄露控制**：它只返回 `{ok:true}`，不暴露版本/端口/pid；`/status`（version、uptimeSec）受鉴权保护。
 - **配置文件损坏即启动失败**：`loadConfig` 对无法解析的 YAML 直接抛错（静默退回默认值会丢掉用户的权限规则），daemon 不启动。
 - **bin 假定构建产物存在**：`kclaw-server.mjs` import 的是 `../dist/index.js`，packages/server 未构建时启动直接失败（CLI 的错误信息里提示 `pnpm -C packages/server build`）。
 

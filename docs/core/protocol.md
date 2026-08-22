@@ -10,13 +10,17 @@ Event（瞬时，不持久化）──沉淀为──▶ Message（持久化单�
 
 server 与 CLI/WebUI 之间传输的就是这些类型：JSONL（每行一条 JSON 的文本文件）里每行一条 `Message`，WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）事件流里每帧一个 `AgentEvent`，daemon 不翻译、不改写。
 
+---
+
 ## 设计决策
 
-- **事件名 = 块名 + 生命周期后缀**：客户端想知道要处理哪些块，看事件前缀即可；简单客户端可只监听 `*.completed` 做非流式渲染。
+- **事件名 = 块名 + 生命周期后缀**：客户端通过事件前缀即可识别需要处理的块类型；简单客户端可只监听 `*.completed` 做非流式渲染。
 - **delta 统一为纯字符串增量**：文本增量与 tool args 的 JSON 片段本质相同，拼接逻辑一套。
 - **`llm.*` 事件暴露每次真实模型调用**（attempt/usage/latency）——个人 agent 控成本与调试的基础。
 - **`role:"tool"` 独立消息**而非塞回 user：JSONL 逐行读出即完整对话史，发给 provider 只需一层薄转换（`toProviderMessages`）。
 - **工具调用跨消息用 `callId` 配对**（OpenAI 风格）；`ToolCallBlock` 同时保留 `args`（解析后，给执行器）与 `argsJson`（原始串，给审计与 provider 回放）。
+
+---
 
 ## Message（`messages.ts`）
 
@@ -54,7 +58,15 @@ export interface ToolMessage extends Message {
 
 构造函数：`newMessage(sessionId, role, blocks)`、`newToolMessage(sessionId, blocks, grantedBy?)`、`newAssistantMessage(sessionId, model, blocks, usage?, stopReason?)`。
 
-role 与块的事实约定（由 agent 循环维护，非类型强制）：user ← text/note/attachment；assistant ← thinking/text/tool_call；tool ← tool_result/note。
+role 与块的事实约定（由 agent 循环维护，非类型强制）：
+
+| role | 块类型 |
+|------|--------|
+| user | text / note / attachment |
+| assistant | thinking / text / tool_call |
+| tool | tool_result / note |
+
+---
 
 ## Block（`blocks.ts`）
 
@@ -95,7 +107,9 @@ export interface AttachmentBlock {
 }
 ```
 
-note 是"系统写入对话的话"（记忆注入、job 触发、权限拒绝/超时），属于对话内容、模型可读。类型守卫 `isBlockType(t, v)` 与 `newBlockId()` 也在此文件。
+note 是"系统写入对话的信息"（记忆注入、job 触发、权限拒绝/超时），属于对话内容、模型可读。类型守卫 `isBlockType(t, v)` 与 `newBlockId()` 也在此文件。
+
+---
 
 ## Event（`events.ts`）
 
@@ -158,7 +172,15 @@ export interface ConfirmationResolvedPayload {
 export interface NoteEmittedPayload { messageId: string; block: NoteBlock }
 ```
 
-发射方分布：core 的 agent 循环发 run/message/流式/llm/confirmation/note（`agent/loop.ts`），`job.*` 由 server 的 `scheduler-tick.ts` 发；`attachment.*` 目前**已定义无发射方**——attachment 块在协议中保留，尚无产生它的路径。
+发射方分布：
+
+| 事件 | 发射方 |
+|------|--------|
+| run / message / 流式 / llm / confirmation / note | core 的 agent 循环（`agent/loop.ts`） |
+| `job.*` | server 的 `scheduler-tick.ts` |
+| `attachment.*` | 目前**已定义无发射方**——attachment 块在协议中保留，尚无产生它的路径 |
+
+---
 
 ## ID 体系（`ids.ts`）
 
@@ -173,21 +195,40 @@ export function newId(prefix: IdPrefix): string {
 }
 ```
 
-9 个前缀的生成点：`msg`（`messages.ts` 的 newMessage）、`ses`（`session/store.ts` 的 create）、`blk`（`blocks.ts` 的 newBlockId）、`evt`（`events.ts` 的 makeEvent）、`run`（`agent/loop.ts` 的 runAgent）、`conf`（`permissions/engine.ts` 的确认 id 工厂）、`mem`（`memory/store.ts`）、`job`（`jobs/scheduler.ts`）。`call` 前缀已声明但当前无生成点——`callId` 由 provider 原样传入（OpenAI 的 tool_call id，缺失时 provider 合成 `call_idx_<index>`，见 `provider/openai-compat.ts`）。单调 ULID 保证同进程内 ID 按时间排序，日志/JSONL 天然有序。
+9 个前缀的生成点：
+
+| 前缀 | 生成点 |
+|------|--------|
+| `msg` | `messages.ts` 的 newMessage |
+| `ses` | `session/store.ts` 的 create |
+| `blk` | `blocks.ts` 的 newBlockId |
+| `evt` | `events.ts` 的 makeEvent |
+| `run` | `agent/loop.ts` 的 runAgent |
+| `conf` | `permissions/engine.ts` 的确认 id 工厂 |
+| `mem` | `memory/store.ts` |
+| `job` | `jobs/scheduler.ts` |
+
+`call` 前缀已声明但当前无生成点——`callId` 由 provider 原样传入（OpenAI 的 tool_call id，缺失时 provider 合成 `call_idx_<index>`，见 `provider/openai-compat.ts`）。单调 ULID 保证同进程内 ID 按时间排序，日志/JSONL 天然有序。
+
+---
 
 ## 持久化规则
 
 - **事件不持久化、不回放**。断线恢复 = HTTP `GET /sessions/:id/messages` 拉全量消息 + 只订阅新事件（WS `subscribe`）。单 WS 连接天然有序，事件不带序号——有意的简化。
-- **持久化的块永远是完整的**："写到一半的块"只存在于事件流中；`onMessage` 收到的消息是终稿快照。因此 JSONL 每行读出来自洽，免校验。
+- **持久化的块永远是完整的**："写到一半的块"只存在于事件流中；`onMessage` 收到的消息是终稿快照。因此 JSONL 每行读取后自洽，无需校验。
 - **持久化格式**：`sessions/<id>/messages.jsonl`，一行一条 `JSON.stringify(message)`；meta（标题/时间戳）在单独的 `meta.json` 里。崩溃容忍：读到尾部残缺行（只写了一半的行）时丢弃、写前字节级修复（`storage/jsonl.ts` 的 `readJsonl` / `repairTornTail`）。
 - **先持久化后广播**：`message.completed` 永远跟在 `onMessage` 之后，事件流反映的是已持久化状态。
 
+---
+
 ## 边界与出错
 
-- 事件无 ack、无重发：客户端错过就是错过，靠"拉全量 + 订阅新事件"对账，而非回放。
+- 事件无 ack、无重发：客户端错过的事件不补发，通过"拉全量 + 订阅新事件"对账，而非回放。
 - `message.created` 之后消息可能永远不 `completed`（空 assistant 被丢弃、宿主钩子抛错）——客户端不能假设 created 必有 completed 配对。
 - `AgentEvent.sessionId` 缺失即广播语义（`EventBus.emit` 发给全部已连接 socket），客户端不应把它当异常。
 - `attachment` 的 `file` source 指向 `<home>/attachments/<session-id>/`（`resolvePaths` 预建目录），大附件不进 JSONL；转存逻辑当前未实现，路径已预留。
+
+---
 
 ## 关联
 
