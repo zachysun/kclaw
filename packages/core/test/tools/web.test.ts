@@ -61,6 +61,25 @@ describe("web tools", () => {
     expect(r.status).toBe("error")
     expect(r.output).toMatch(/timeout|aborted/i)
   })
+  it("web_fetch stops reading once maxFetchBytes is reached", async () => {
+    const CHUNK = 1024
+    let pulls = 0
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) {
+        pulls += 1
+        c.enqueue(new TextEncoder().encode("a".repeat(CHUNK)))
+      },
+    })
+    const fetchImpl = (async () => new Response(body, { status: 200, headers: { "content-type": "text/plain" } })) as typeof fetch
+    const t = createWebTools({
+      tavilyApiKey: "k", fetchImpl, maxFetchBytes: 4 * CHUNK,
+      lookupImpl: (async () => ["93.184.216.34"]) as (host: string) => Promise<string[]>,
+    })
+    const r = await call(t.web_fetch, { url: "https://example.com/big" })
+    expect(r.status).toBe("ok")
+    expect(r.output).toMatch(/truncated, dropped/)
+    expect(pulls).toBeLessThanOrEqual(7) // 4KB cap + small slack; an unbounded reader would keep pulling
+  })
   it("passes an AbortSignal to web_search too", async () => {
     let sawSignal = false
     const fetchImpl = (async (_i: RequestInfo | URL, init?: RequestInit) => {

@@ -18,9 +18,10 @@
  *   Readability for article text (scripts/styles never survive); if
  *   extraction comes up empty it falls back to body text with script/style
  *   nodes removed. Non-HTML content-types are returned as plain text. Bodies
- *   larger than `maxFetchBytes` (default 512KB) are byte-capped with a
- *   truncation marker; the cap is applied to the raw body BEFORE parsing so
- *   an oversized page can't blow up memory in the DOM stage.
+ *   are read through a stream that is cancelled once `maxFetchBytes`
+ *   (default 512KB) is passed, ending in a truncation marker; the cap is
+ *   applied to the raw body BEFORE parsing so an oversized page can't blow
+ *   up memory in the DOM stage.
  *
  * `web_search` targets the fixed public Tavily domain and skips this check.
  *
@@ -69,6 +70,34 @@ function capBytes(s: string, maxBytes: number): { text: string; dropped: number 
   if (buf.length <= maxBytes) return { text: s, dropped: 0 }
   // A multibyte char torn at the boundary decodes to U+FFFD, acceptable here.
   return { text: buf.subarray(0, maxBytes).toString("utf8"), dropped: buf.length - maxBytes }
+}
+
+/**
+ * Read a response body as text, stopping at `maxBytes`: once the cap is
+ * passed the reader is cancelled, so an infinite/huge stream can neither
+ * grow memory without bound nor keep the connection busy. `dropped` is the
+ * byte count beyond the cap (estimated from what was consumed).
+ */
+async function readBodyCapped(res: Response, maxBytes: number): Promise<{ text: string; dropped: number }> {
+  if (res.body === null) return capBytes(await res.text(), maxBytes)
+  const reader = res.body.getReader()
+  const chunks: Uint8Array[] = []
+  let received = 0
+  let capped = false
+  while (!capped) {
+    const { done, value } = await reader.read()
+    if (done === true) break
+    chunks.push(value)
+    received += value.byteLength
+    if (received > maxBytes) {
+      capped = true
+      await reader.cancel().catch(() => undefined)
+    }
+  }
+  const buf = Buffer.concat(chunks.map((c) => Buffer.from(c)))
+  if (!capped) return capBytes(buf.toString("utf8"), maxBytes)
+  const head = buf.subarray(0, maxBytes).toString("utf8")
+  return { text: head, dropped: received - maxBytes }
 }
 
 /**
@@ -207,16 +236,15 @@ export function createWebTools(opts: {
       throw new ToolError(`HTTP ${res.status} ${res.statusText} for ${url}`.replace(/\s+$/, ""))
     }
 
-    let raw: string
+    let raw: { text: string; dropped: number }
     try {
-      raw = await res.text()
+      raw = await readBodyCapped(res, maxFetchBytes)
     } catch (e) {
       throw new ToolError(`reading body failed: ${errMsg(e)}`)
     }
-
-    const { text, dropped } = capBytes(raw, maxFetchBytes)
+    const { text: body_, dropped } = raw
     const contentType = res.headers?.get("content-type") ?? ""
-    const body = /html/i.test(contentType) ? extractReadableText(text) : text
+    const body = /html/i.test(contentType) ? extractReadableText(body_) : body_
     const marker = dropped > 0 ? `\n...[truncated, dropped ${dropped} bytes]...` : ""
     return { status: "ok", output: body + marker }
   })
