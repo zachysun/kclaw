@@ -2,8 +2,9 @@
  * exec tool: run a shell command inside the workspace.
  *
  * - cwd is pinned to the workspace so commands can't wander the filesystem.
- * - stdout/stderr chunks are streamed via `ctx.onOutput` as they arrive and
- *   accumulated for the final result.
+ * - stdout/stderr chunks are streamed via `ctx.onOutput` until
+ *   `maxOutputBytes` is reached — beyond that the head is kept, the drop is
+ *   counted, and the final output carries a `...[dropped N bytes]...` marker.
  * - On timeout the whole process group gets SIGKILL (`detached: true` makes
  *   the child a group leader, so `kill(-pid)` also reaps shell descendants
  *   like `sleep`); partial output is still returned.
@@ -57,6 +58,9 @@ export function createExecTool(opts: {
 
       return new Promise((resolve) => {
         let output = ""
+        let outputBytes = 0
+        let droppedBytes = 0
+        let truncationNoted = false
         let settled = false
         let timedOut = false
         let timer: ReturnType<typeof setTimeout> | undefined
@@ -94,11 +98,33 @@ export function createExecTool(opts: {
           }
         }
 
+        // Final output for both finish paths: always byte-truncated, plus a
+        // drop marker when streaming hit the cap.
+        const capped = (): string =>
+          droppedBytes > 0
+            ? `${truncateMiddle(output, maxOutputBytes)}\n...[dropped ${droppedBytes} bytes]...`
+            : truncateMiddle(output, maxOutputBytes)
+
         for (const stream of [child.stdout, child.stderr]) {
           if (!stream) continue
           stream.setEncoding("utf8")
           stream.on("data", (chunk: string) => {
+            if (droppedBytes > 0) {
+              // already capped: keep counting, forward nothing
+              droppedBytes += Buffer.byteLength(chunk)
+              return
+            }
             output += chunk
+            outputBytes += Buffer.byteLength(chunk)
+            if (outputBytes > maxOutputBytes) {
+              droppedBytes = outputBytes - maxOutputBytes
+              // keep the head as accumulated
+              if (!truncationNoted) {
+                truncationNoted = true
+                ctx.onOutput(`\n...[output truncated, further output dropped]...`)
+              }
+              return
+            }
             ctx.onOutput(chunk)
           })
         }
@@ -108,7 +134,7 @@ export function createExecTool(opts: {
           killAll()
           finish({
             status: "error",
-            output: `command timed out after ${timeoutMs}ms\n${truncateMiddle(output, maxOutputBytes)}`,
+            output: `command timed out after ${timeoutMs}ms\n${capped()}`,
           })
         }, timeoutMs)
 
@@ -118,7 +144,7 @@ export function createExecTool(opts: {
 
         child.on("close", (code) => {
           if (timedOut) return // timeout path already resolved with partial output
-          const merged = truncateMiddle(output, maxOutputBytes)
+          const merged = capped()
           if (code === 0) finish({ status: "ok", output: merged })
           else finish({ status: "error", output: `exit code ${code}\n${merged}` })
         })

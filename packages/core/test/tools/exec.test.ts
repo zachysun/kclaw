@@ -40,11 +40,22 @@ describe("exec tool", () => {
     expect(r.output).toContain("timed out")
     expect(r.output).toContain("started")
   }, 10_000)
-  it("truncates oversized output head+tail", async () => {
+  it("caps oversized output: head kept, dropped tail counted in bytes", async () => {
     const tool = createExecTool({ workspace: ws, maxOutputBytes: 10 * 1024 })
     const r = await run(tool, "seq 1 100000") // ~588KB
+    expect(r.status).toBe("ok")
     expect(r.output.length).toBeLessThan(15 * 1024)
-    expect(r.output).toContain("[truncated")
-    expect(r.output.trim().endsWith("100000")).toBe(true)
+    expect(r.output.startsWith("1\n2\n")).toBe(true) // head kept
+    expect(r.output).toMatch(/\[dropped \d+ bytes\]/) // tail dropped, not buffered
+  }, 10_000)
+  it("caps streaming output: an endless producer cannot grow memory or deltas", async () => {
+    const tool = createExecTool({ workspace: ws, timeoutMs: 300, maxOutputBytes: 2048 })
+    const deltas: string[] = []
+    const r = await run(tool, "while true; do echo 0123456789; done", (d) => deltas.push(d))
+    expect(r.status).toBe("error") // timeout
+    expect(r.output).toMatch(/dropped \d+ bytes/)
+    expect(r.output.length).toBeLessThan(2048 + 200) // head + marker only
+    const totalDelta = deltas.join("").length
+    expect(totalDelta).toBeLessThan(2048 + 200)
   }, 10_000)
 })
