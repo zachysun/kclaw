@@ -8,20 +8,29 @@
  *   to Tavily. `output` is a markdown list for the model
  *   (`- [title](url)：content`); `data` carries the raw triples
  *   `{results: [{title, url, content}]}` for the renderer.
- * - `web_fetch {url}` GETs a page (redirects followed). Non-2xx → error with
- *   the status code. HTML goes through linkedom's parseHTML + Readability for
- *   article text (scripts/styles never survive); if extraction comes up empty
- *   it falls back to body text with script/style nodes removed. Non-HTML
- *   content-types are returned as plain text. Bodies larger than
- *   `maxFetchBytes` (default 512KB) are byte-capped with a truncation marker;
- *   the cap is applied to the raw body BEFORE parsing so an oversized page
- *   can't blow up memory in the DOM stage.
+ * - `web_fetch {url}` GETs a page. Redirects are followed manually (at most
+ *   5 hops) so EVERY hop's target — the initial URL and each Location — is
+ *   checked against the private-network deny list before the request is
+ *   made: loopback/unspecified/link-local/private addresses (127/8, 0.0.0.0,
+ *   ::1, ::ffff: mappings, 10/8, 172.16/12, 192.168/16, 169.254/16) are
+ *   refused unless `allowPrivateNetworks` opts in (SSRF guard). Non-2xx →
+ *   error with the status code. HTML goes through linkedom's parseHTML +
+ *   Readability for article text (scripts/styles never survive); if
+ *   extraction comes up empty it falls back to body text with script/style
+ *   nodes removed. Non-HTML content-types are returned as plain text. Bodies
+ *   larger than `maxFetchBytes` (default 512KB) are byte-capped with a
+ *   truncation marker; the cap is applied to the raw body BEFORE parsing so
+ *   an oversized page can't blow up memory in the DOM stage.
  *
- * `fetchImpl` is injectable; tests pass a stub so no network is touched.
+ * `web_search` targets the fixed public Tavily domain and skips this check.
+ *
+ * `fetchImpl` and `lookupImpl` are injectable; tests pass stubs so no
+ * network is touched (the default lookupImpl resolves via node:dns).
  *
  * Every fetch carries an AbortSignal.timeout (default 20s, `timeoutMs`) so a
  * hung host can never park a run forever.
  */
+import { lookup as dnsLookup } from "node:dns/promises"
 import { Readability } from "@mozilla/readability"
 import { parseHTML } from "linkedom"
 import type { ToolExecutor } from "../agent/tools.js"
@@ -31,6 +40,18 @@ const TAVILY_URL = "https://api.tavily.com/search"
 const DEFAULT_MAX_RESULTS = 5
 const DEFAULT_MAX_FETCH_BYTES = 512 * 1024
 const DEFAULT_TIMEOUT_MS = 20_000
+const DEFAULT_MAX_REDIRECTS = 5
+
+/** True for loopback/unspecified/link-local/private v4/v6 addresses (SSRF boundary). */
+function isBlockedIp(addr: string): boolean {
+  const a = addr.startsWith("::ffff:") ? addr.slice(7) : addr
+  if (a === "::1" || a === "0.0.0.0" || a.startsWith("127.")) return true
+  if (/^10\./.test(a) || /^192\.168\./.test(a) || /^169\.254\./.test(a)) return true
+  const m = /^172\.(\d+)\./.exec(a)
+  return m !== null && Number(m[1]) >= 16 && Number(m[1]) <= 31
+}
+
+const isLiteralIp = (h: string): boolean => /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.includes(":")
 
 /** Tidy HTML-derived text: squash trailing spaces and 3+ blank lines. */
 function normalizeText(text: string): string {
@@ -89,11 +110,29 @@ export function createWebTools(opts: {
   fetchImpl?: typeof fetch
   maxFetchBytes?: number
   timeoutMs?: number
+  /** Opt out of the private/loopback target denial (e.g. a local Ollama endpoint). */
+  allowPrivateNetworks?: boolean
+  /** Hostname resolver used by the private-network check; tests inject a stub. */
+  lookupImpl?: (host: string) => Promise<string[]>
 }): { "web_search": ToolExecutor; "web_fetch": ToolExecutor } {
   const doFetch = opts.fetchImpl ?? globalThis.fetch
   const maxFetchBytes = opts.maxFetchBytes ?? DEFAULT_MAX_FETCH_BYTES
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const allowPrivateNetworks = opts.allowPrivateNetworks ?? false
   const signal = () => AbortSignal.timeout(timeoutMs)
+
+  const lookup = opts.lookupImpl ?? (async (host: string) => {
+    const r = await dnsLookup(host, { all: true })
+    return r.map((x) => x.address)
+  })
+  const assertPublicUrl = async (url: string): Promise<void> => {
+    if (allowPrivateNetworks) return
+    const { hostname } = new URL(url)
+    const addrs = isLiteralIp(hostname) ? [hostname.replace(/^\[|\]$/g, "")] : await lookup(hostname)
+    if (addrs.some(isBlockedIp)) {
+      throw new ToolError(`refused: ${hostname} resolves to a private/loopback address (set web.allowPrivateNetworks to allow private network access)`)
+    }
+  }
 
   const web_search = makeTool("web_search", "safe", "parallel", async (args) => {
     const query = requireString(args, "query")
@@ -145,14 +184,23 @@ export function createWebTools(opts: {
 
     let res: Response
     try {
-      // redirect: "follow" is the default; stated explicitly for clarity.
-      res = await doFetch(url, {
-        method: "GET",
-        redirect: "follow",
-        headers: { accept: "text/html, text/plain, */*" },
-        signal: signal(),
-      })
+      // Manual redirect loop: every hop (initial URL + each Location) passes
+      // assertPublicUrl before the request, so a redirect cannot dodge the
+      // private-network deny. Bounded at DEFAULT_MAX_REDIRECTS hops.
+      let current = url
+      for (let hop = 0; ; hop++) {
+        await assertPublicUrl(current)
+        res = await doFetch(current, { method: "GET", redirect: "manual", headers: { accept: "text/html, text/plain, */*" }, signal: signal() })
+        const status = res.status
+        if (status < 300 || status >= 400) break
+        const location = res.headers.get("location")
+        if (location === null || hop >= DEFAULT_MAX_REDIRECTS) {
+          throw new ToolError(`too many redirects or missing location for ${url}`)
+        }
+        current = new URL(location, current).href
+      }
     } catch (e) {
+      if (e instanceof ToolError) throw e
       throw new ToolError(`fetch failed: ${errMsg(e)}`)
     }
     if (!res.ok) {

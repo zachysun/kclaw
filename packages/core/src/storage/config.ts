@@ -26,6 +26,13 @@ export interface KclawConfig {
      * (defaultConfig).
      */
     timeoutMs?: number
+    /**
+     * Opt out of web_fetch's private/loopback target denial (SSRF guard):
+     * true allows fetching e.g. http://127.0.0.1:11434 (a local Ollama
+     * endpoint). Optional only because older config.yaml files predate it;
+     * defaults to false (defaultConfig).
+     */
+    allowPrivateNetworks?: boolean
   }
   exec: { timeoutMs: number; maxOutputBytes: number }
   sessions: { recycleBinTtlMs: number }
@@ -36,7 +43,7 @@ export const defaultConfig: KclawConfig = {
   providers: { default: "", entries: {}, timeoutMs: DEFAULT_LLM_TIMEOUT_MS },
   permissions: { allow: [], deny: ["exec:sudo*", "exec:rm -rf*"], confirmTimeoutMs: 120_000, sessionGrants: true },
   memory: { autoExtract: false, extractModel: "" },
-  web: { tavilyApiKey: "", timeoutMs: 20_000 },
+  web: { tavilyApiKey: "", timeoutMs: 20_000, allowPrivateNetworks: false },
   exec: { timeoutMs: 60_000, maxOutputBytes: 100 * 1024 },
   sessions: { recycleBinTtlMs: 30 * 24 * 60 * 60 * 1000 },
   workspace: process.cwd(),

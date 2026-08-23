@@ -239,7 +239,7 @@ export class RunManager {
       memory,
       tavilyApiKey: config.web.tavilyApiKey,
       exec: { timeoutMs: config.exec.timeoutMs, maxOutputBytes: config.exec.maxOutputBytes },
-      web: { timeoutMs: config.web.timeoutMs },
+      web: { timeoutMs: config.web.timeoutMs, allowPrivateNetworks: config.web.allowPrivateNetworks },
     })
     // test/adapter seam: per-name executor overrides on top of the
     // builtins; toolDefs stay the builtins' — an override replaces behavior,

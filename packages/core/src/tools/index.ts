@@ -40,7 +40,7 @@ export function createBuiltinTools(opts: {
   memory: MemoryStore
   tavilyApiKey: string
   exec?: Partial<{ timeoutMs: number; maxOutputBytes: number }>
-  web?: Partial<{ timeoutMs: number }>
+  web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean }>
   fetchImpl?: typeof fetch
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] } {
   const exec = createExecTool({
@@ -53,6 +53,7 @@ export function createBuiltinTools(opts: {
     tavilyApiKey: opts.tavilyApiKey,
     fetchImpl: opts.fetchImpl,
     timeoutMs: opts.web?.timeoutMs,
+    allowPrivateNetworks: opts.web?.allowPrivateNetworks,
   })
   const memory = createMemoryTools(opts.memory)
 
