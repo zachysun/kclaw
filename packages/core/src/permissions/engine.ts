@@ -119,20 +119,30 @@ function normalizePathArg(raw: string, workspace: string | undefined): string {
  * ancestor is realpath'd and the missing tail appended verbatim, so a
  * not-yet-created target keeps its lexical (planned) form. A broken symlink
  * resolves through its readlink target — writing through it lands at the
- * target, so the boundary must see the target.
+ * target, so the boundary must see the target; relative targets resolve
+ * against the link's own directory, and a symlink cycle falls back to the
+ * lexical form (fail-safe, matches pre-change behavior).
  */
 export function realpathWithin(p: string): string {
+  return realpathWithinInner(p, new Set())
+}
+
+function realpathWithinInner(p: string, seen: Set<string>): string {
   try {
     return realpathSync(p)
   } catch {
-    // Distinguish a broken symlink (readlink succeeds) from a plain
-    // nonexistent path before falling back to the ancestor walk.
     try {
-      return realpathWithin(readlinkSync(p))
+      const target = readlinkSync(p)
+      // A relative readlink target resolves against the symlink's own
+      // directory, not the process cwd (the `ln -s` default form).
+      const resolvedTarget = path.resolve(path.dirname(p), target)
+      if (seen.has(resolvedTarget)) return p // symlink cycle: lexical fallback is fail-safe
+      seen.add(resolvedTarget)
+      return realpathWithinInner(resolvedTarget, seen)
     } catch {
       const parent = path.dirname(p)
       if (parent === p) return p
-      return path.join(realpathWithin(parent), path.basename(p))
+      return path.join(realpathWithinInner(parent, seen), path.basename(p))
     }
   }
 }
@@ -142,7 +152,9 @@ export function realpathWithin(p: string): string {
  * then resolved against the workspace exactly the way fs.ts resolves before
  * reading/writing (`path.resolve(root, p)` must equal or sit beneath `root`).
  * The resolved form is the REAL path (symlinks followed), so an in-workspace
- * symlink pointing outside still escapes.
+ * symlink pointing outside still escapes; the workspace root is realpath'd
+ * the same way, so a workspace that itself sits behind a symlink does not
+ * over-confirm its own files.
  * Only meaningful when workspace is set; otherwise the workspace boundary
  * is not enforced at the permission layer and this returns false (legacy
  * behavior).
@@ -150,7 +162,7 @@ export function realpathWithin(p: string): string {
 function escapesWorkspace(tool: string, args: unknown, workspace: string | undefined): boolean {
   if (workspace === undefined || !FILE_TOOLS.has(tool)) return false
   const a = args as { path?: unknown } | null | undefined
-  const root = path.resolve(workspace)
+  const root = realpathWithin(path.resolve(workspace))
   const resolved = realpathWithin(path.resolve(root, expandTilde(String(a?.path ?? ""))))
   return resolved !== root && !resolved.startsWith(root + path.sep)
 }

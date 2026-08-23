@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
 import { homedir, tmpdir } from "node:os"
-import { join } from "node:path"
-import { mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs"
+import { basename, join } from "node:path"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { compileRule, globMatch, ConfigPermissionGate, SessionGrants, realpathWithin } from "../../src/permissions/engine.js"
 import type { ToolCallBlock } from "../../src/protocol/blocks.js"
 
@@ -140,6 +140,49 @@ describe("ConfigPermissionGate", () => {
       const outside = mkdtempSync(join(tmp, "kclaw-out-"))
       symlinkSync(join(outside, "gone"), join(ws, "broken")) // target does not exist
       expect(realpathWithin(join(ws, "broken"))).toBe(join(outside, "gone"))
+    })
+    it("realpathWithin survives a symlink cycle without throwing", () => {
+      const ws = mkdtempSync(join(tmp, "kclaw-ws-"))
+      const a = join(ws, "a")
+      const b = join(ws, "b")
+      symlinkSync(b, a)
+      symlinkSync(a, b)
+      expect(() => realpathWithin(a)).not.toThrow()
+      expect(typeof realpathWithin(a)).toBe("string")
+    })
+    it("a relative symlink target resolves against the link's directory, not cwd", async () => {
+      const ws = mkdtempSync(join(tmp, "kclaw-ws-"))
+      const outside = mkdtempSync(join(tmp, "kclaw-out-"))
+      mkdirSync(join(ws, "sub"))
+      // Link target spelled relatively: the correct base (the link's own dir,
+      // ws) lands OUTSIDE the workspace; the wrong base (cwd = ws/sub) would
+      // land back inside ws — so a cwd-resolving implementation returns allow.
+      symlinkSync(join("..", basename(outside), "gone"), join(ws, "rel"))
+      const g = new ConfigPermissionGate(
+        { allow: [], deny: [], confirmTimeoutMs: 1000, sessionGrants: true },
+        { safeTools: new Set(["fs_write"]), workspace: ws },
+      )
+      const old = process.cwd()
+      try {
+        process.chdir(join(ws, "sub"))
+        const d = await g.check(tc("fs_write", { path: "rel/x", content: "y" }))
+        expect(d.type).toBe("confirm") // NOT {type:"allow",reason:"safe"}
+      } finally {
+        process.chdir(old)
+      }
+    })
+    it("an in-workspace file still allows when the workspace itself sits behind a symlink", async () => {
+      const real = mkdtempSync(join(tmp, "kclaw-real-"))
+      writeFileSync(join(real, "file.txt"), "x")
+      const alias = mkdtempSync(join(tmp, "kclaw-alias-"))
+      rmSync(alias, { recursive: true })
+      symlinkSync(real, alias)
+      const g = new ConfigPermissionGate(
+        { allow: [], deny: [], confirmTimeoutMs: 1000, sessionGrants: true },
+        { safeTools: new Set(["fs_read"]), workspace: alias },
+      )
+      const d = await g.check(tc("fs_read", { path: "file.txt" }))
+      expect(d).toMatchObject({ type: "allow", reason: "safe" })
     })
   })
 })
