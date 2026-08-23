@@ -19,6 +19,17 @@ describe("SessionStore", () => {
     expect(s.meta(m.id)!.title).toBe("早报会话")
   })
 
+  it("listByJob returns one job's non-deleted sessions newest-updated first", async () => {
+    const s = new SessionStore(dir)
+    const older = s.create("旧", "job_a")
+    await new Promise((r) => setTimeout(r, 5)) // distinct updatedAt for the order check
+    const newer = s.create("新", "job_a")
+    s.create("别的", "job_b") // different job: excluded
+    expect(s.listByJob("job_a").map((m) => m.id)).toEqual([newer.id, older.id])
+    s.delete(older.id) // deleted: excluded (recycle-bin territory)
+    expect(s.listByJob("job_a").map((m) => m.id)).toEqual([newer.id])
+  })
+
   it("appendMessage writes one JSONL line per message and updates updatedAt", async () => {
     const s = new SessionStore(dir)
     const m = s.create()

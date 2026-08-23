@@ -82,6 +82,11 @@ export class SessionStore {
     return metas.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))
   }
 
+  /** Non-deleted sessions of one job, newest-updated first (job-history queries). */
+  listByJob(jobId: string): SessionMeta[] {
+    return this.list().filter((m) => m.jobId === jobId)
+  }
+
   /** Read one session's meta; undefined when the session or its meta.json is missing/unreadable. */
   meta(id: string): SessionMeta | undefined {
     try {

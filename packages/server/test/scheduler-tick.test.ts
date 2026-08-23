@@ -4,8 +4,11 @@
  * mock LlmClient, with job.* frames observed on a fake socket CONNECTED to
  * the bus (job events carry no sessionId → broadcast, not subscribe).
  *
- * Covers: the happy fire (session/note/markRun/events/no re-run), in-flight
- * re-entry protection while a run is still executing, the error path
+ * Covers: the happy fire (session/note/markRun/events/no re-run), the
+ * claim-then-execute semantics (claimDue advances nextRunAt the moment a
+ * tick takes the job — no double-fire on overlapping ticks), in-flight
+ * re-entry protection while a run is still executing, pruning a job's
+ * session history after each fire, the error path
  * (llm throws → stopReason "error" → job.failed + lastStatus "error"),
  * disabled jobs never firing, and stop() idempotence + interval shutdown.
  */
@@ -69,12 +72,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-/** JobScheduler that counts due() calls — the only way to see a tick happen. */
+/** JobScheduler that counts claimDue() calls — the only way to see a tick happen. */
 class CountingScheduler extends JobScheduler {
-  dueCalls = 0
-  override due(now: Date): Job[] {
-    this.dueCalls += 1
-    return super.due(now)
+  claimCalls = 0
+  override claimDue(now: Date): Job[] {
+    this.claimCalls += 1
+    return super.claimDue(now)
   }
 }
 
@@ -204,6 +207,61 @@ describe("startSchedulerTick", () => {
     expect(env.sessions.list()).toHaveLength(1)
   })
 
+  it("fires due jobs through claimDue (no double-fire on overlapping ticks)", async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const llm: LlmClient = {
+      async *stream(): AsyncIterable<LlmStreamEvent> {
+        await gate // the run hangs until released: the fire never settles
+        yield { type: "text_delta", delta: "好" }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+      },
+    }
+    const env = makeEnv(llm)
+    const job = env.scheduler.create({ name: "认领", cron: "* * * * *", prompt: "跑" })
+    const backdated = new Date(Date.now() - 60_000).toISOString()
+    env.scheduler.update(job.id, { nextRunAt: backdated })
+
+    startTick(env, 20)
+    await waitForEvent(env.socket, "job.started")
+
+    // claim-then-execute: claiming advanced nextRunAt while the run is still
+    // hanging, so a later tick cannot claim (let alone fire) the job again
+    expect(Date.parse(env.scheduler.get(job.id)!.nextRunAt)).toBeGreaterThan(Date.parse(backdated))
+
+    await sleep(120) // several ticks pass while the fire is unsettled
+    expect(received(env.socket).filter((e) => e.type === "job.started")).toHaveLength(1)
+    expect(env.sessions.list()).toHaveLength(1)
+
+    release()
+    await waitForEvent(env.socket, "job.completed")
+    expect(received(env.socket).filter((e) => e.type === "job.started")).toHaveLength(1)
+  })
+
+  it("prunes a job's old sessions down to JOB_SESSION_KEEP after firing", async () => {
+    const env = makeEnv(scriptClient([textTurn("好")]))
+    const job = env.scheduler.create({ name: "清理", cron: "* * * * *", prompt: "跑" })
+    // 22 historical sessions of the same job; the fire adds a 23rd
+    const oldIds = new Set<string>()
+    for (let i = 0; i < 22; i++) {
+      oldIds.add(env.sessions.create(`第${i}次`, job.id).id)
+    }
+    backdate(env.scheduler, job.id)
+
+    startTick(env, 25)
+    await waitForEvent(env.socket, "job.completed")
+
+    // the fresh fire + the newest 19 old sessions survive (20 total)
+    const kept = env.sessions.list().filter((m) => m.jobId === job.id)
+    expect(kept).toHaveLength(20)
+    // the oldest 3 land in the recycle bin (soft-deleted, purgeable later)
+    const deleted = env.sessions.list({ deleted: true })
+    expect(deleted).toHaveLength(3)
+    for (const m of deleted) expect(oldIds.has(m.id)).toBe(true)
+  })
+
   it("skips a job that is still running when the next tick fires", async () => {
     let release!: () => void
     const gate = new Promise<void>((r) => {
@@ -322,18 +380,18 @@ describe("startSchedulerTick", () => {
     const tick = startTick(env, 30)
     await waitForEvent(env.socket, "job.completed")
     await sleep(80) // several interval ticks fire while idle (no re-run)
-    expect(env.scheduler.dueCalls).toBeGreaterThanOrEqual(3)
+    expect(env.scheduler.claimCalls).toBeGreaterThanOrEqual(3)
     expect(received(env.socket).filter((e) => e.type === "job.started")).toHaveLength(1)
 
     await tick.stop()
     await tick.stop() // idempotent
 
     // make the job due again AFTER stop: nothing may fire anymore
-    const dueCalls = env.scheduler.dueCalls
+    const claimCalls = env.scheduler.claimCalls
     const frames = received(env.socket).length
     backdate(env.scheduler, job.id)
     await sleep(120) // > 2 intervals
-    expect(env.scheduler.dueCalls).toBe(dueCalls)
+    expect(env.scheduler.claimCalls).toBe(claimCalls)
     expect(received(env.socket)).toHaveLength(frames)
   })
 })

@@ -11,11 +11,14 @@
  *   connections alike, so any client sees scheduler activity.
  * - The per-job user message is built by RunManager; the tick only passes the
  *   provenance line as `note` (it lands as a kind:"job" block after the text).
- * - An in-flight set guards re-entry: a job still executing when the next
- *   tick fires is skipped (markRun — which advances nextRunAt — only happens
- *   once its run settles, so the row stays "due" until then).
- * - A tick that throws (scheduler.due, or the guards around one job) is
- *   logged and dropped: the interval must survive its own failures (v1).
+ * - Due rows are claimed atomically: claimDue advances nextRunAt the moment
+ *   a tick takes the job, so a later tick (or a second handle on the same
+ *   db) cannot re-fire it. The in-flight set is the second, in-process
+ *   guard: a run still executing when the next scheduled point arrives is
+ *   skipped — that fire is dropped rather than run concurrently with the
+ *   still-settling one.
+ * - A tick that throws (scheduler.claimDue, or the guards around one job)
+ *   is logged and dropped: the interval must survive its own failures (v1).
  */
 import { makeEvent } from "@kclaw/core"
 import type { Job, JobScheduler, SessionStore } from "@kclaw/core"
@@ -24,6 +27,9 @@ import type { RunManager } from "./run.js"
 
 /** Default cadence (30s polling). */
 const DEFAULT_INTERVAL_MS = 30_000
+
+/** Job session history cap: soft-delete a job's older sessions beyond this. */
+const JOB_SESSION_KEEP = 20
 
 /** Default recycle-bin retention (30 days) when config omits it. */
 const DEFAULT_RECYCLE_BIN_TTL_MS = 30 * 24 * 60 * 60 * 1000
@@ -84,6 +90,12 @@ export function startSchedulerTick(deps: SchedulerTickDeps): SchedulerTickHandle
     inFlight.add(job.id)
     try {
       const session = sessions.create(job.name, job.id)
+      // Keep the job's history bounded: soft-delete older sessions beyond
+      // JOB_SESSION_KEEP (newest first). They land in the recycle bin and are
+      // purged by the existing retention sweep.
+      for (const old of sessions.listByJob(job.id).slice(JOB_SESSION_KEEP)) {
+        sessions.delete(old.id)
+      }
       bus.emit(makeEvent("job.started", { jobId: job.id })) // no sessionId → broadcast
       const outcome = await run.enqueue(session.id, {
         userText: job.prompt,
@@ -106,11 +118,11 @@ export function startSchedulerTick(deps: SchedulerTickDeps): SchedulerTickHandle
     }
   }
 
-  /** One pass: collect due jobs, fire each not already in flight, sequentially. */
+  /** One pass: claim due jobs (claiming advances nextRunAt), fire each not already in flight, sequentially. */
   async function tick(): Promise<void> {
     let due: Job[]
     try {
-      due = scheduler.due(now())
+      due = scheduler.claimDue(now())
     } catch (err) {
       // v1: log and carry on — a broken tick must not kill the interval
       console.error("kclaw scheduler tick failed:", err instanceof Error ? err.message : err)
