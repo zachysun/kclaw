@@ -104,6 +104,19 @@ export function normalizeCommand(cmd: string): string {
   return path.basename(head) + rest
 }
 
+/**
+ * Split a shell command line into sub-commands at ; && || | and newlines.
+ * NOT quote-aware: `echo "a;b"` splits into two segments. Both error
+ * directions are safe (deny may over-match, allow/grant stops applying),
+ * documented in the README's configuration section.
+ */
+export function splitSubcommands(cmd: string): string[] {
+  return cmd
+    .split(/&&|\|\||;|\||\n/)
+    .map((s) => s.trim())
+    .filter((s) => s !== "")
+}
+
 /** File-writing tools whose path arg gets a normalized twin for rule matching. */
 const PATH_TOOLS = new Set(["fs_write", "fs_edit"])
 
@@ -200,6 +213,11 @@ export class SessionGrants {
     return this.#rules.some((r) => scopedMatch(r, tool, arg, workspace))
   }
 
+  /** Snapshot of granted rules (for the exec branch's per-rule matching). */
+  rules(): readonly CompiledRule[] {
+    return this.#rules
+  }
+
   size(): number {
     return this.#rules.length
   }
@@ -228,6 +246,9 @@ interface DenyRule extends CompiledRule {
  * Config-driven PermissionGate. Decision order, short-circuiting:
  * deny blacklist → allow whitelist → safeTools → session grants → confirm
  * with a fresh `conf_` id the surrounding loop routes to a human.
+ * exec takes a dedicated branch (safeTools never lists it): deny matches
+ * every normalized sub-command of a concatenated line, while allow/grant
+ * only ever cover a single, concatenation-free command.
  */
 export class ConfigPermissionGate implements PermissionGate {
   readonly #allow: CompiledRule[]
@@ -251,13 +272,37 @@ export class ConfigPermissionGate implements PermissionGate {
   async check(toolCall: ToolCallBlock): Promise<PermissionDecision> {
     const tool = toolCall.name
     const arg = extractArg(tool, toolCall.args)
-    // Exec rules match the normalized command (whitespace collapsed, command
-    // token reduced to its basename); path tools match their raw arg here and
-    // get a normalized twin inside scopedMatch.
-    const matchArg = tool === "exec" ? normalizeCommand(arg) : arg
+
+    // exec: deny matches every sub-command (normalized); allow and session
+    // grants only ever apply to a single, concatenation-free command — a
+    // rule like `exec:git status*` must not wave through `git status; …`.
+    if (tool === "exec") {
+      const subs = splitSubcommands(arg).map(normalizeCommand)
+      const execRuleMatches = (r: CompiledRule, s: string): boolean => {
+        if (r.tool !== "exec") return false // other tools' rules never cover exec
+        return r.argGlob === undefined ? true : globMatch(normalizeCommand(r.argGlob), s)
+      }
+      for (const rule of this.#deny) {
+        if (subs.some((s) => execRuleMatches(rule, s))) {
+          return { type: "deny", reason: "blacklist", noteText: `规则命中黑名单: ${rule.source}` }
+        }
+      }
+      if (subs.length === 1) {
+        if (this.#allow.some((r) => execRuleMatches(r, subs[0]))) {
+          return { type: "allow", reason: "whitelist" }
+        }
+        if (this.#sessionGrantsEnabled && this.#grants !== undefined) {
+          const grantHit = this.#grants.rules().some((r) => execRuleMatches(r, subs[0]))
+          if (grantHit) return { type: "allow", reason: "session_grant" }
+        }
+      }
+      return { type: "confirm", confirmationId: this.#newConfirmationId() }
+    }
+
+    // --- non-exec tools: unchanged decision order ---
     // Path-aware matching: for file tools rules also match the arg's
     // resolved form, closing path-shape bypasses of deny rules.
-    const matches = (r: CompiledRule) => scopedMatch(r, tool, matchArg, this.#workspace)
+    const matches = (r: CompiledRule) => scopedMatch(r, tool, arg, this.#workspace)
     for (const rule of this.#deny) {
       if (matches(rule)) {
         return { type: "deny", reason: "blacklist", noteText: `规则命中黑名单: ${rule.source}` }
@@ -275,7 +320,7 @@ export class ConfigPermissionGate implements PermissionGate {
     if (this.#safeTools.has(tool)) {
       return { type: "allow", reason: "safe" }
     }
-    if (this.#sessionGrantsEnabled && this.#grants?.hasMatch(tool, matchArg, this.#workspace)) {
+    if (this.#sessionGrantsEnabled && this.#grants?.hasMatch(tool, arg, this.#workspace)) {
       return { type: "allow", reason: "session_grant" }
     }
     return { type: "confirm", confirmationId: this.#newConfirmationId() }
