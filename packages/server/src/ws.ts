@@ -24,10 +24,43 @@ export interface WsOptions {
    * frame ("run manager not available").
    */
   run?: RunManager
+  /**
+   * Pre-auth timeout in ms: a connection that has not authenticated when it
+   * fires is closed with 4002. Test-injection seam — the daemon runs on the
+   * default (10s).
+   */
+  authTimeoutMs?: number
+  /**
+   * Heartbeat interval in ms: after auth, pings the client and terminates the
+   * connection after two consecutive missed pongs. Test-injection seam — the
+   * daemon runs on the default (30s).
+   */
+  heartbeatMs?: number
 }
 
 /** Close code for WS authentication failures. */
 const CLOSE_UNAUTHORIZED = 4001
+/** Close code for a connection that never authenticated in time. */
+const CLOSE_AUTH_TIMEOUT = 4002
+/** Close code for an upgrade from a disallowed browser Origin. */
+const CLOSE_ORIGIN_NOT_ALLOWED = 1008
+
+const DEFAULT_AUTH_TIMEOUT_MS = 10_000
+const DEFAULT_HEARTBEAT_MS = 30_000
+
+/** Allowed Origin hosts: the daemon is loopback-only, so browser clients come from itself. */
+const ALLOWED_ORIGIN_HOSTS = new Set(["localhost", "127.0.0.1", "::1"])
+
+/** Non-browser clients (no Origin header) pass; a browser Origin must be a loopback host. */
+function originAllowed(origin: string | undefined): boolean {
+  if (origin === undefined) return true
+  try {
+    const host = new URL(origin).hostname.replace(/^\[/, "").replace(/\]$/, "")
+    return ALLOWED_ORIGIN_HOSTS.has(host)
+  } catch {
+    return false
+  }
+}
 
 /**
  * Structural subset of a ws WebSocket that the /ws handler needs — keeps the
@@ -37,8 +70,13 @@ const CLOSE_UNAUTHORIZED = 4001
 interface WsConnection {
   send(data: string): void
   close(code?: number, reason?: string): void
+  /** Ping the client (liveness probe); absent on non-ws implementations. */
+  ping?(): void
+  /** Abruptly destroy the connection (dead-link reaping); absent on fakes. */
+  terminate?(): void
   on(event: "message", listener: (data: unknown) => void): unknown
   on(event: "close", listener: () => void): unknown
+  on(event: "pong", listener: () => void): unknown
 }
 
 declare module "fastify" {
@@ -72,7 +110,11 @@ declare module "fastify" {
  * or an error frame "no active run"). The run commands require the app's
  * RunManager and answer "run manager not available" without it. Unknown
  * commands and malformed JSON get an `{type:"error"}` frame and the
- * connection stays open. There is no auth timeout in v1.
+ * connection stays open. Connections that never authenticate are reaped by a
+ * pre-auth timeout (close 4002); after auth a heartbeat pings the client and
+ * a connection missing two consecutive pongs is terminated and unsubscribed;
+ * upgrades carrying a non-loopback browser Origin are refused with close
+ * 1008 (no Origin header passes — the CLI and other non-browser clients).
  */
 export async function registerWsRoutes(app: FastifyInstance, opts: WsOptions): Promise<void> {
   await app.register(fastifyWebsocket)
@@ -82,7 +124,38 @@ export async function registerWsRoutes(app: FastifyInstance, opts: WsOptions): P
 }
 
 function handleConnection(socket: WsConnection, request: FastifyRequest, opts: WsOptions): void {
+  if (!originAllowed(request.headers.origin)) {
+    socket.close(CLOSE_ORIGIN_NOT_ALLOWED, "origin not allowed")
+    return
+  }
   let authenticated = false
+  let ponged = true
+  let misses = 0
+  const heartbeatTimer = setInterval(() => {
+    if (!authenticated || typeof socket.ping !== "function") return
+    if (ponged) {
+      ponged = false
+      misses = 0
+    } else if (++misses >= 2) {
+      // Dead link (TCP up, peer gone silent): abrupt close + bus cleanup.
+      socket.terminate?.()
+      opts.bus.unsubscribe(socket)
+      clearTimers()
+      return
+    }
+    socket.ping()
+  }, opts.heartbeatMs ?? DEFAULT_HEARTBEAT_MS)
+  const authTimer = setTimeout(() => {
+    if (!authenticated) socket.close(CLOSE_AUTH_TIMEOUT, "auth timeout")
+  }, opts.authTimeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS)
+  const clearTimers = (): void => {
+    clearTimeout(authTimer)
+    clearInterval(heartbeatTimer)
+  }
+  socket.on("pong", () => {
+    ponged = true
+    misses = 0
+  })
 
   const reject = (): void => {
     send(socket, { type: "error", message: "unauthorized" })
@@ -93,6 +166,7 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
   const queryToken = (request.query as Record<string, unknown>).token
   if (typeof queryToken === "string" && tokenEquals(queryToken, opts.token)) {
     authenticated = true
+    clearTimeout(authTimer)
     opts.bus.connect(socket)
   }
 
@@ -122,6 +196,7 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
       if (msg.type !== "auth") return reject()
       if (typeof msg.token !== "string" || !tokenEquals(msg.token, opts.token)) return reject()
       authenticated = true
+      clearTimeout(authTimer)
       opts.bus.connect(socket)
       return
     }
@@ -229,6 +304,7 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
   })
 
   socket.on("close", () => {
+    clearTimers()
     opts.bus.unsubscribe(socket)
   })
 }

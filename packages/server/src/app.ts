@@ -43,6 +43,16 @@ export interface AppOptions {
    * commands answer error frames instead.
    */
   run?: RunManager
+  /**
+   * Test-injection seam for the /ws pre-auth timeout (maps to WsOptions
+   * `authTimeoutMs`); production defaults live in ws.ts.
+   */
+  wsAuthTimeoutMs?: number
+  /**
+   * Test-injection seam for the /ws heartbeat interval (maps to WsOptions
+   * `heartbeatMs`); production defaults live in ws.ts.
+   */
+  wsHeartbeatMs?: number
 }
 
 /**
@@ -117,7 +127,14 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
 
   const bus = opts.bus ?? new EventBus()
   app.decorate("bus", bus)
-  await registerWsRoutes(app, { bus, token: opts.token, sessions, run: opts.run })
+  await registerWsRoutes(app, {
+    bus,
+    token: opts.token,
+    sessions,
+    run: opts.run,
+    authTimeoutMs: opts.wsAuthTimeoutMs,
+    heartbeatMs: opts.wsHeartbeatMs,
+  })
 
   if (opts.webDist !== undefined) {
     await app.register(fastifyStatic, { root: opts.webDist })

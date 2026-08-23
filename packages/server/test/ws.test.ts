@@ -465,6 +465,117 @@ describe("GET /ws send guard on a dead socket", () => {
   }
 })
 
+describe("GET /ws pre-auth timeout, heartbeat, origin guard", () => {
+  // Real stack, real (small) timers: each test starts its own app with the
+  // wsAuthTimeoutMs/wsHeartbeatMs test seams injected, mirroring the "GET /ws"
+  // describe's helpers but per-test so the time parameters can vary.
+  let home: string
+  let bus: EventBus
+  let app: FastifyInstance | undefined
+  let url: string
+  let port: number
+  const clients: WebSocket[] = []
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "kclaw-ws-liveness-"))
+    bus = new EventBus()
+  })
+
+  afterEach(async () => {
+    for (const ws of clients.splice(0)) await closeClient(ws)
+    if (app !== undefined) await app.close()
+    await rm(home, { recursive: true, force: true })
+  })
+
+  it("an unauthenticated connection is closed with 4002 after wsAuthTimeoutMs", async () => {
+    await startApp({ wsAuthTimeoutMs: 60 })
+    const ws = await connect()
+    // No auth frame ever arrives — the pre-auth timeout must reap the socket.
+    const closed = await nextClose(ws)
+    expect(closed.code).toBe(4002)
+  })
+
+  it("authenticating before the timeout keeps the connection open", async () => {
+    await startApp({ wsAuthTimeoutMs: 80 })
+    const ws = await openAuthed()
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: "ses_alive" }))
+    expect(await nextMessage(ws)).toEqual({ type: "subscribed", sessionId: "ses_alive" })
+
+    // Well past the 80ms window: the auth success must have cancelled the timer.
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: "ses_alive" }))
+    expect(await nextMessage(ws)).toEqual({ type: "subscribed", sessionId: "ses_alive" })
+  })
+
+  it("an Origin header from a non-loopback host is refused with 1008", async () => {
+    await startApp()
+    const ws = await connect("", { origin: "https://evil.example" })
+    const closed = await nextClose(ws)
+    expect(closed.code).toBe(1008)
+
+    // Reverse: a loopback Origin passes and the full auth + subscribe flow works.
+    const ws2 = await openAuthed("", { origin: `http://localhost:${port}` })
+    ws2.send(JSON.stringify({ type: "subscribe", sessionId: "ses_origin" }))
+    expect(await nextMessage(ws2)).toEqual({ type: "subscribed", sessionId: "ses_origin" })
+  })
+
+  it("a silent client (autoPong: false) is terminated after two missed heartbeats and unsubscribed", async () => {
+    await startApp({ wsHeartbeatMs: 30 })
+    const ws = await openAuthed("", { autoPong: false })
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: "ses_dead" }))
+    expect(await nextMessage(ws)).toEqual({ type: "subscribed", sessionId: "ses_dead" })
+    expect(bus.subscriberCount("ses_dead")).toBe(1)
+
+    // terminate() is an abrupt close: the client's close event still fires.
+    await new Promise<void>((resolve) => ws.once("close", () => resolve()))
+    await waitUntil(() => bus.subscriberCount("ses_dead") === 0)
+  })
+
+  it("a ponging client survives heartbeat periods", async () => {
+    await startApp({ wsHeartbeatMs: 40 })
+    const ws = await openAuthed() // default autoPong: replies to every server ping
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: "ses_beat" }))
+    expect(await nextMessage(ws)).toEqual({ type: "subscribed", sessionId: "ses_beat" })
+
+    // >=3 heartbeat periods: healthy liveness must never trip the terminator.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: "ses_beat" }))
+    expect(await nextMessage(ws)).toEqual({ type: "subscribed", sessionId: "ses_beat" })
+  })
+
+  /** Start this test's app (per-test, so the injected time params can vary) and listen. */
+  async function startApp(opts: { wsAuthTimeoutMs?: number; wsHeartbeatMs?: number } = {}): Promise<void> {
+    app = await createApp({ home, token: TOKEN, bus, ...opts })
+    await app.listen({ host: "127.0.0.1", port: 0 })
+    const addr = app.server.address()
+    if (addr === null || typeof addr === "string") throw new Error("expected an AddressInfo")
+    port = (addr as AddressInfo).port
+    url = `ws://127.0.0.1:${port}/ws`
+  }
+
+  function connect(query = "", wsOpts: WebSocket.ClientOptions = {}): Promise<WebSocket> {
+    const ws = new WebSocket(`${url}${query}`, wsOpts)
+    clients.push(ws)
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("ws connect timeout")), 2000)
+      ws.once("open", () => {
+        clearTimeout(timer)
+        resolve(ws)
+      })
+      ws.once("error", (err: Error) => {
+        clearTimeout(timer)
+        reject(err)
+      })
+    })
+  }
+
+  async function openAuthed(query = "", wsOpts: WebSocket.ClientOptions = {}): Promise<WebSocket> {
+    const ws = await connect(query, wsOpts)
+    ws.send(JSON.stringify({ type: "auth", token: TOKEN }))
+    return ws
+  }
+})
+
 function nextMessage(ws: WebSocket, timeoutMs = 1000): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const listener = (data: unknown): void => {
