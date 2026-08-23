@@ -105,13 +105,15 @@ function expandTilde(p: string): string {
 /**
  * Normalized form of a file tool's path arg: `~`/`~/` expanded, then resolved
  * against the workspace (cwd when unknown) exactly the way fs.ts resolves the
- * path before writing. Rules are tested against BOTH the raw arg and this
- * form, so a deny like `fs_write:~/.ssh/**` cannot be bypassed by spelling
- * the same file as `.ssh/x` (workspace=home), `/Users/u/.ssh/x`, or
- * `~/./.ssh/x` — all resolve to the same target the rule meant to protect.
+ * path before writing. The real path (symlinks followed), so a rule on the
+ * true location cannot be dodged by entering it through a symlink. Rules are
+ * tested against BOTH the raw arg and this form, so a deny like
+ * `fs_write:~/.ssh/**` cannot be bypassed by spelling the same file as
+ * `.ssh/x` (workspace=home), `/Users/u/.ssh/x`, or `~/./.ssh/x` — all resolve
+ * to the same target the rule meant to protect.
  */
 function normalizePathArg(raw: string, workspace: string | undefined): string {
-  return path.resolve(workspace ?? process.cwd(), expandTilde(raw))
+  return realpathWithin(path.resolve(workspace ?? process.cwd(), expandTilde(raw)))
 }
 
 /**

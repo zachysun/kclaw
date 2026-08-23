@@ -184,5 +184,16 @@ describe("ConfigPermissionGate", () => {
       const d = await g.check(tc("fs_read", { path: "file.txt" }))
       expect(d).toMatchObject({ type: "allow", reason: "safe" })
     })
+    it("a deny rule on the real location hits through a workspace symlink", async () => {
+      const ws = mkdtempSync(join(tmpdir(), "kclaw-ws-"))
+      const outside = mkdtempSync(join(tmpdir(), "kclaw-out-"))
+      symlinkSync(outside, join(ws, "link"))
+      const g = new ConfigPermissionGate(
+        { allow: [], deny: [`fs_write:${outside}/**`], confirmTimeoutMs: 1000, sessionGrants: true },
+        { safeTools: new Set(), workspace: ws },
+      )
+      const d = await g.check(tc("fs_write", { path: "link/x.txt", content: "x" }))
+      expect(d).toMatchObject({ type: "deny", reason: "blacklist" })
+    })
   })
 })
