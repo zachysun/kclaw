@@ -1,5 +1,5 @@
 /**
- * Daemon lifecycle tests (P3 Task 9): launchDaemon assembling the whole
+ * Daemon lifecycle tests: launchDaemon assembling the whole
  * daemon — token, stores (+ memory startup reconcile), app, listener,
  * daemon.json pidfile, scheduler tick — and stop() tearing it back down.
  *
@@ -231,7 +231,7 @@ describe("default llmFactory", () => {
     })
   })
 
-  it("threads onRetry into the retry wrapper: transient 503s surface before the stream succeeds (I1)", async () => {
+  it("threads onRetry into the retry wrapper: transient 503s surface before the stream succeeds", async () => {
     // local OpenAI-compat endpoint: 503 twice, then one minimal SSE turn
     let hits = 0
     const server = createServer((_req, res) => {
@@ -277,9 +277,9 @@ describe("default llmFactory", () => {
   }, 10_000)
 })
 
-// --- bounded stop (P4 Task 2) ---------------------------------------------------
+// --- bounded stop ----------------------------------------------------------------
 
-describe("bounded stop (P4 Task 2)", () => {
+describe("bounded stop", () => {
   it("withStopTimeout passes a step through when it settles in time", async () => {
     await expect(withStopTimeout(Promise.resolve("ok"), 60_000, "test step")).resolves.toBe("ok")
     const late = new Promise<string>((resolve) => setTimeout(() => resolve("slow"), 30))
@@ -318,7 +318,7 @@ describe("bounded stop (P4 Task 2)", () => {
     expect(existsSync(join(home, "daemon.json"))).toBe(true)
 
     // Hold one ACTIVE connection: a half-sent request never completes, so
-    // server.close() inside app.close() waits forever — the P3 "unstoppable
+    // server.close() inside app.close() waits forever — an "unstoppable
     // daemon" shape, reproduced without needing a hung provider stream.
     // (The settle wait matters: a socket whose bytes the server has not yet
     // parsed counts as idle, and Node's close() destroys idle connections.)

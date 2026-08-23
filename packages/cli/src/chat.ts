@@ -1,5 +1,5 @@
 /**
- * Interactive chat REPL (P3 Task 11) — the terminal product surface: connect
+ * Interactive chat REPL — the terminal product surface: connect
  * (auto-starting) the daemon, create or resume a session, subscribe over WS
  * and render one run's events as plain text on stdout, per line of input.
  *
@@ -16,10 +16,10 @@
  * idle prints the exit hint; a second SIGINT always exits immediately
  * (code 130, socket closed first so the daemon sees a clean disconnect).
  *
- * Reconnect (spec §5.3 rule 3, basic version): when the socket drops
+ * Reconnect (basic version): when the socket drops
  * unexpectedly, re-resolve the daemon (KclawClient.connect respawns one when
  * it died), resubscribe, pull the full message list (拉全量消息，只订阅新事件，
- * 不回放 — nothing is replay-rendered in v1) and print "[reconnected]"; frames
+ * 不回放 — nothing is replay-rendered) and print "[reconnected]"; frames
  * observed after a reconnect carry a 120s inactivity timeout so a dead run
  * cannot hang the REPL forever.
  *
@@ -226,13 +226,14 @@ async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean> {
       return false
     }
     // tool_result.delta: deliberately nothing live — the completed line
-    // carries the (truncated) output; buffering live chunks is v2 work.
+    // carries the (truncated) output; live chunk buffering is deliberately
+    // left out.
     case "confirmation.requested":
       await handleConfirmation(ev.payload, ctx)
       return false
     // message.created/completed (any role): deliberately nothing. The USER
-    // message events (P4 Task 1: the daemon now announces the user message
-    // lifecycle on the wire) must not render — readline already showed the
+    // message events (the daemon announces the user message lifecycle on the
+    // wire) must not render — readline already showed the
     // typed line, so a render here would double-echo the user's text.
     // Assistant/tool messages are equally non-visual here: their content
     // streams through the text.*/tool_*/thinking.* events above.
@@ -283,7 +284,7 @@ async function nextFrame(
 
 /**
  * Re-resolve the daemon (spawning one when it died), resubscribe, and pull
- * the full message list per spec §5.3 rule 3 (拉全量消息 + 只订阅新事件；不回放).
+ * the full message list per the reconnect protocol (拉全量消息 + 只订阅新事件；不回放).
  * True when waiting may continue on the new socket.
  */
 async function reconnect(ctx: ChatCtx): Promise<boolean> {
@@ -292,7 +293,7 @@ async function reconnect(ctx: ChatCtx): Promise<boolean> {
     ctx.ws = await openSubscribed(ctx.client, ctx.sessionId)
     await ctx.client
       .request("GET", `/sessions/${encodeURIComponent(ctx.sessionId)}/messages`)
-      .catch(() => undefined) // resync per spec; v1 renders nothing from it
+      .catch(() => undefined) // resync per the reconnect protocol; nothing is rendered from it
     line(dim("[reconnected]"), ctx)
     return true
   } catch {

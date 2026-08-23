@@ -14,7 +14,7 @@
 - **`next()` 严格排他**：cron-parser 的 `next()` 对 `currentDate` 是排他的（恰好相等也不算），所以 `nextIsoAfter` 的语义是"严格晚于给定时刻的第一次触发"。无效 cron 表达式原样抛出 cron-parser 自身的错误消息，不做包装。
 - **id 即创建序**：id 用 `newId("job")` 生成（ULID，一种按时间有序的唯一 id），`list()` 按 `ORDER BY id` 排序，天然就是创建顺序。
 - **job 事件广播不带会话**：`job.started` / `job.completed` / `job.failed` 事件用不带上下文的 `makeEvent` 构造（无 sessionId/runId），EventBus 会把它们广播给每一个连接的客户端——任何界面都能看到调度活动，而不只是订阅了某个会话的客户端。
-- **tick 失败不中断轮询**：一次 tick 抛错（`scheduler.due` 失败、单个 job 的记录步骤失败）只记日志并丢弃这一轮，`setInterval` 不中断——轮询循环必须能在自身失败后继续运行（v1 决策）。
+- **tick 失败不中断轮询**：一次 tick 抛错（`scheduler.due` 失败、单个 job 的记录步骤失败）只记日志并丢弃这一轮，`setInterval` 不中断——轮询循环必须能在自身失败后继续运行。
 
 ---
 

@@ -1,5 +1,5 @@
 /**
- * TrashView — the session recycle bin (spec §10 WebUI). Pulls the soft-deleted
+ * TrashView — the session recycle bin (the WebUI). Pulls the soft-deleted
  * sessions (GET /sessions?deleted=true) and offers, per row, 恢复
  * (POST /sessions/:id/restore) and 彻底删除 (POST /sessions/:id/purge). After
  * either mutation it re-pulls the list so the row disappears. No selection

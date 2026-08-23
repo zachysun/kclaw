@@ -14,8 +14,8 @@
  * of those references is STABLE across re-renders (api via useMemo on the
  * token, createWs via useCallback, ws via useMemo per selection, and the
  * initial message array via the per-session cache) — otherwise a tab switch or
- * a status ping would re-fire the subscription or reset the live view (T5
- * review: double-subscribe and initialMessages-reference-reinit pitfalls).
+ * a status ping would re-fire the subscription or reset the live view (the
+ * double-subscribe and initialMessages-reference-reinit pitfalls).
  */
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react"
 import { bootstrapToken, clearToken, saveToken } from "./token.js"
@@ -41,7 +41,7 @@ function wsUrlFor(): string {
 export function App() {
   const [token, setToken] = useState<string | null>(() => bootstrapToken())
 
-  // 401 re-entry (P4 final-review T4): any API 401 — the mount-time status
+  // 401 re-entry: any API 401 — the mount-time status
   // ping or any later call — clears the stale token and re-renders the token
   // form. Without this a reload would re-bootstrap the SAME stale token and
   // loop the auth notice forever.

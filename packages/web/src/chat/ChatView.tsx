@@ -1,5 +1,5 @@
 /**
- * ChatView — pure presentational conversation surface (spec §10 WebUI, §5.2
+ * ChatView — pure presentational conversation surface for the WebUI (block
  * block rendering). No I/O: everything arrives through props and every action
  * escapes through a callback. Only local UI state lives here (the composer
  * draft); expansion/collapse uses native <details> elements, so thinking folds

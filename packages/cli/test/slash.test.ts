@@ -1,5 +1,5 @@
 /**
- * Slash-command registry unit tests (v2 Phase 2, Task 2.1). Covers `dispatch`
+ * Slash-command registry unit tests. Covers `dispatch`
  * parsing, the ACTUAL `run()` behaviour of the `new` / `sessions` commands,
  * and the unknown-command hint (`runOrHint`) — all with a fake `KclawClient`
  * (stubbed `request`) plus a recording `SlashCtx`; no daemon, no real

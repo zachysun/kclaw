@@ -18,7 +18,7 @@ interface PendingEntry {
 }
 
 /**
- * ConfirmationBroker — the human side of the confirm gate (P3 Task 6).
+ * ConfirmationBroker — the human side of the confirm gate.
  *
  * Responsibilities, deliberately narrow:
  * - `create` registers a pending entry keyed by the confirmationId the

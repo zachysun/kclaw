@@ -37,10 +37,10 @@ export interface AppOptions {
    */
   bus?: EventBus
   /**
-   * The daemon's RunManager (Task 6 seam): when provided, its confirmation
-   * broker answers `confirmation.resolve` frames on /ws. Task 7 extends this
-   * same handle with `send_message` (run.enqueue) and `run.cancel` — the
-   * opt is plumbed here so the seam exists even before those commands do.
+   * The daemon's RunManager: when provided, its confirmation broker answers
+   * `confirmation.resolve` frames on /ws, while `send_message` rides
+   * `run.enqueue` and `run.cancel` rides `run.cancel`. Without it those
+   * commands answer error frames instead.
    */
   run?: RunManager
 }

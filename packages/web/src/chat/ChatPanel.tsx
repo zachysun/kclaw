@@ -1,14 +1,14 @@
 /**
  * ChatPanel — the chat assembly: owns the ws subscription + event loop, feeds
  * every frame through the model reducer, and renders the ChatView. Reconnect
- * follows spec §5.3 rule 3 (拉全量消息 + 只订阅新事件，不回放): on an unexpected
+ * follows the shared reconnect protocol (拉全量消息 + 只订阅新事件，不回放): on an unexpected
  * close the panel builds a fresh client via `createWs`, re-pulls the full
  * message list (merged into the live view, see model.mergeMessages), and
  * re-subscribes — the merged state then streams only NEW events.
  *
  * Auth: a close with the daemon's auth-failure code (4001) or an API 401 shows
  * a notice and stops (the App drops back to the token form on API 401; the ws
- * path has no token-refresh flow in v1, so it asks for a reload).
+ * path has no token-refresh flow, so it asks for a reload).
  */
 import { useCallback, useEffect, useRef, useState } from "react"
 import { ApiError, type ApiClient } from "../api.js"

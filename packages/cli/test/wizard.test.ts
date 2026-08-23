@@ -1,5 +1,5 @@
 /**
- * Wizard pure functions (P4 Task 8): the template table the first-run
+ * Wizard pure functions: the template table the first-run
  * provider wizard offers, the config-entry builder that stamps template
  * defaults (ollama needs no real key — a placeholder is written so the
  * daemon's provider client can always send a Bearer header), and the

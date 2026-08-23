@@ -23,7 +23,7 @@ export function loadToken(): string | null {
 /**
  * Drop the persisted token. Called on an API 401 so the App re-renders the
  * token form — without it a reload would re-bootstrap the same stale token and
- * loop the auth notice forever (P4 final-review T4).
+ * loop the auth notice forever.
  */
 export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY)

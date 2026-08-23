@@ -1,5 +1,5 @@
 /**
- * exec tool (spec §7): run a shell command inside the workspace.
+ * exec tool: run a shell command inside the workspace.
  *
  * - cwd is pinned to the workspace so commands can't wander the filesystem.
  * - stdout/stderr chunks are streamed via `ctx.onOutput` as they arrive and

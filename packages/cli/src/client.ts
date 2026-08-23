@@ -1,5 +1,5 @@
 /**
- * KclawClient (P3 Task 10): the CLI's typed-ish handle on the daemon's HTTP
+ * KclawClient: the CLI's typed-ish handle on the daemon's HTTP
  * + WS API. Plain fetch with the home's Bearer token for HTTP; a `ws`
  * WebSocket to `ws://127.0.0.1:<port>/ws` whose first frame is
  * `{type:"auth", token}` (the server's per-connection auth) for events.
@@ -14,7 +14,7 @@ import { join } from "node:path"
 import WebSocket from "ws"
 import { defaultHome, ensureDaemon, probeHealth, readDaemonJson } from "./daemon-ctl.js"
 
-/** The daemon only ever binds loopback (spec §4: 127.0.0.1). */
+/** The daemon only ever binds loopback (127.0.0.1). */
 const HOST = "127.0.0.1"
 
 /** Budget for the post-ensure health retry (belt and braces; ensureDaemon already polled). */

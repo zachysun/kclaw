@@ -1,5 +1,5 @@
 /**
- * detectProviderStatus (P4 Task 7): the triage the first-run wizard (Task 8)
+ * detectProviderStatus: the triage the first-run wizard
  * and the chat entry will branch on — "config" when config.yaml carries a
  * resolvable providers.default entry, "env" when any KCLAW_LLM_* env var is
  * set, "missing" otherwise. Goes through the public path only: config.yaml

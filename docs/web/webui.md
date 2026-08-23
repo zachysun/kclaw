@@ -83,7 +83,7 @@ export class WsAuthError extends Error { readonly code: number }  // 默认 4001
 
 - 事件循环结束（意外关闭/迭代器抛错）→ 重连：`createWs()` 建新客户端 → subscribe → `refreshMessages()` 全量重新拉取并 `mergeMessages` 合并（新拉取列表是权威：已持久化的覆盖本地流式版本；本地有而新拉取列表没有的——仍在执行、未持久化的消息——原样保留）。
 - **重连上限**：连续失败 `MAX_RECONNECT_ATTEMPTS = 3` 次后放弃，提示"重连失败，请刷新页面"；成功一次即清零预算。上限防止 daemon 已终止时无限循环重建连接。
-- **auth 结局不重连**：4001 关闭或刷新时 API 401 → 提示"认证已失效，请刷新页面重新输入 token"并停止（v1 的 ws 路径没有刷新 token 的流程，交给 401 重入输入页）。
+- **auth 结局不重连**：4001 关闭或刷新时 API 401 → 提示"认证已失效，请刷新页面重新输入 token"并停止（ws 路径没有刷新 token 的流程，交给 401 重入输入页）。
 - **确认卡片交互**：`confirmation.requested` 事件加入卡片（工具名/args/risk/过期时间），用户点允许/拒绝 → `send({type:"confirmation.resolve", confirmationId, approved, client:"web"})`——`client:"web"` 标记来源，daemon 在决策与审计里记录 web 出处（CLI 不带此字段 → 记 "cli"）。
 
 ## 边界与出错

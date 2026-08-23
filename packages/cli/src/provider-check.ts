@@ -1,7 +1,7 @@
 /**
- * Provider configuration triage (P4 Task 7): decides how provider settings
- * will be sourced, the branch point for the first-run wizard (Task 8) and
- * the chat entry. Priority: a config.yaml whose providers.default names an
+ * Provider configuration triage: decides how provider settings will be
+ * sourced, the branch point for the first-run wizard and the chat entry.
+ * Priority: a config.yaml whose providers.default names an
  * existing entry wins; otherwise any non-empty KCLAW_LLM_* env var; else
  * nothing is configured. Paths come from core's own resolvePaths (the real
  * KclawPaths shape, home et al.) so the resolution can never drift from the

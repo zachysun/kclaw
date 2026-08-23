@@ -1,5 +1,5 @@
 /**
- * Builtin tool registry (spec §7): instantiates every built-in tool factory
+ * Builtin tool registry: instantiates every built-in tool factory
  * and pairs each executor with its provider-facing JSON-Schema definition.
  *
  * Tool and def sit side by side in one entry list, so the `tools` Map keys

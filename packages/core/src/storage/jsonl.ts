@@ -1,6 +1,6 @@
 /**
- * Shared JSONL append/read mechanics with torn-tail crash tolerance
- * (spec §11), extracted from SessionStore.
+ * Shared JSONL append/read mechanics with torn-tail crash tolerance,
+ * used by SessionStore for its append-only message log.
  *
  * Invariant every writer here relies on: one JSON.stringify(value) per line,
  * and every complete append terminated with "\n".
@@ -15,7 +15,7 @@ import {
  * append ends with "\n", so a non-newline last byte marks a fragment).
  * The fragment is truncated away: left in place, the next append would
  * concatenate onto it and lose both records on read. With the repair,
- * only the torn record is lost (spec §11) and the appended line stays a
+ * only the torn record is lost and the appended line stays a
  * standalone, parseable line. A missing file has nothing torn, so it is
  * a no-op.
  */

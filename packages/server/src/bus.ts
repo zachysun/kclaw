@@ -96,7 +96,7 @@ export class EventBus {
   }
 
   /**
-   * One recipient, guarded (final-review M-a): a socket whose `send` throws
+   * One recipient, guarded: a socket whose `send` throws
    * synchronously (e.g. a ws that already died) must neither abort the
    * remaining deliveries nor propagate into the emitter — scheduler-tick's
    * job.* broadcasts and RunManager's run events share this path, and a

@@ -1,9 +1,9 @@
 /**
- * Slash-command registry (v2 Phase 2, Task 2.1): the REPL's typed command
+ * Slash-command registry: the REPL's typed command
  * table. `dispatch` splits a line into `{ command, args }` (or null for plain
  * input); the chat loop consults the registry instead of hard-coding each
  * command. `/exit` is intentionally NOT registered here — it stays loop
- * control in chat.ts (see the ruling: `parsed.command === "exit"` breaks).
+ * control in chat.ts (`parsed.command === "exit"` breaks the input loop).
  */
 import { isCancel, select } from "@clack/prompts"
 import type { KclawClient } from "./client.js"

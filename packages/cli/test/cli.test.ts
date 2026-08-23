@@ -1,5 +1,5 @@
 /**
- * CLI smoke tests (P3 Task 10): drive the BUILT `dist/index.js` as a real
+ * CLI smoke tests: drive the BUILT `dist/index.js` as a real
  * child process (execa) against temp homes, exactly like a user invoking the
  * `kclaw` bin. The daemon it spawns is the real server bin — the KCLAW_LLM_*
  * env holds dummies so launch never needs a reachable provider (client
@@ -88,7 +88,7 @@ afterAll(async () => {
   for (const home of homes.splice(0)) {
     if (existsSync(join(home, "daemon.json"))) {
       const { pid } = daemonJson(home)
-      // pid guard (I4, same rule as readDaemonJson): never kill(0) — that
+      // pid guard (same rule as readDaemonJson): never kill(0) — that
       // would signal this worker's whole process group.
       if (Number.isInteger(pid) && pid > 0) {
         try {
@@ -311,9 +311,9 @@ describe("stale daemon.json", () => {
   )
 })
 
-// --- invalid pid guard (I4) -------------------------------------------------------
+// --- invalid pid guard ----------------------------------------------------------
 
-describe("non-positive pid in daemon.json (I4)", () => {
+describe("non-positive pid in daemon.json", () => {
   it("readDaemonJson treats pid 0 as invalid (stale), not as a daemon record", async () => {
     const home = makeHome()
     writeFileSync(
@@ -348,9 +348,9 @@ describe("non-positive pid in daemon.json (I4)", () => {
   )
 })
 
-// --- stop failure against a stubborn daemon (I4) ----------------------------------
+// --- stop failure against a stubborn daemon ---------------------------------------
 
-describe("stop failure: daemon still responding (I4)", () => {
+describe("stop failure: daemon still responding", () => {
   it(
     "exit 1, stderr 'stop failed: daemon still responding on port N (pid M)', daemon.json kept",
     async () => {

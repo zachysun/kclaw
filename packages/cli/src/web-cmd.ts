@@ -1,9 +1,9 @@
 /**
- * The `kclaw web` command (v3 Phase 4 Task 9): ensure the daemon, read the
+ * The `kclaw web` command: ensure the daemon, read the
  * bearer token from `<home>/token`, and hand it to the web shell via the
  * `?token=` query — the SPA's bootstrapToken() saves it to localStorage and
  * strips the query, so the user lands in the WebUI with no token left in the
- * address bar (the "token gate" fix this task exists for).
+ * address bar (the "token gate" problem this command solves).
  *
  * Pure helpers (buildWebUrl / openCommandFor) are unit-tested in
  * test/web-cmd.test.ts; webAction is exercised by the manual smoke because it
@@ -16,7 +16,7 @@ import { ensureDaemon } from "./daemon-ctl.js"
 
 /**
  * Build the WebUI URL with the token handshake query. The port is the
- * daemon.json port (loopback-only per spec §4); the token is URL-encoded so a
+ * daemon.json port (loopback-only); the token is URL-encoded so a
  * token with reserved characters still round-trips through URLSearchParams.
  */
 export function buildWebUrl(port: number, token: string): string {

@@ -1,5 +1,5 @@
 /**
- * web tools (spec §7): Tavily-backed search + plain page fetch.
+ * web tools: Tavily-backed search + plain page fetch.
  *
  * Both are safe + parallel: neither mutates workspace state, so the loop may
  * run them concurrently with anything else.

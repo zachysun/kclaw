@@ -7,7 +7,7 @@ import { newId } from "../protocol/ids.js"
 /** Where a note came from: model extraction, auto pipeline, or human editing. */
 export type MemorySource = "model" | "auto" | "human"
 
-/** One memory note; `path` points at the authoritative markdown file (spec §8). */
+/** One memory note; `path` points at the authoritative markdown file. */
 export interface MemoryNote {
   id: string
   path: string
@@ -84,7 +84,7 @@ function similarity(a: string[], b: string[]): number {
   return union === 0 ? 1 : intersection / union
 }
 
-/** Notes this similar to an incoming save are treated as the same memory (v1 merge threshold). */
+/** Notes this similar to an incoming save are treated as the same memory (merge threshold). */
 const MERGE_SIMILARITY = 0.5
 
 /** How much of `text` feeds the similarity lookup on save. */
@@ -100,7 +100,7 @@ function toSource(value: unknown): MemorySource {
   return SOURCES.includes(value as MemorySource) ? (value as MemorySource) : "human"
 }
 
-/** Serialize a note as frontmatter (yaml) + blank line + body (spec §8). */
+/** Serialize a note as frontmatter (yaml) + blank line + body. */
 function renderMarkdown(note: MemoryNote): string {
   const frontmatter = stringify({
     id: note.id,
@@ -155,7 +155,7 @@ function parseNoteFile(path: string): MemoryNote | undefined {
 }
 
 /**
- * Markdown-truth memory store (spec §8): humans read/write notes/*.md, machines
+ * Markdown-truth memory store: humans read/write notes/*.md, machines
  * query a derived SQLite FTS5 index. The file is authoritative — `reconcile()`
  * syncs the index to whatever is on disk, and `search()` returns note bodies
  * re-read from the files, so hand edits and deletions always win.
@@ -213,7 +213,7 @@ export class MemoryStore {
    * Merge-aware write: look for an existing note similar to `text` (first
    * ${MERGE_QUERY_CHARS} chars, FTS OR over tokens, best Jaccard similarity
    * >= ${MERGE_SIMILARITY}); on a hit update that note's text/tags/updated in
-   * place (v1: replace, never duplicate), otherwise create `<id>.md`.
+   * place (replace, never duplicate), otherwise create `<id>.md`.
    */
   async save(input: SaveNoteInput): Promise<MemoryNote> {
     const existing = this.findSimilar(input.text)

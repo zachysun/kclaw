@@ -231,7 +231,7 @@ describe("runAgent tool turn", () => {
     const asstFinal = messages[3]
 
     // 1) every message.created precedes its message's first block event
-    //    (P4 T1: the user message's created now leads the whole stream)
+    //    (the user message's created now leads the whole stream)
     const createdEvents = eventsOf(events, "message.created")
     expect(createdEvents.map((e) => e.payload.message.id))
       .toEqual([messages[0]!.id, asstToolTurn.id, toolMsg.id, asstFinal.id])

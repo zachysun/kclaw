@@ -18,7 +18,7 @@ export interface WsOptions {
    */
   sessions: SessionStore
   /**
-   * The app's RunManager (Task 6 seam): its confirmation broker answers the
+   * The app's RunManager: its confirmation broker answers the
    * `confirmation.resolve` command, `send_message` rides `run.enqueue` and
    * `run.cancel` rides `run.cancel`. Absent → these commands answer an error
    * frame ("run manager not available").

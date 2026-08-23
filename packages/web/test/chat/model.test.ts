@@ -1,6 +1,6 @@
 /**
  * Reducer unit tests — the event→view-model core of the streaming chat view
- * (spec §5.3 UI-relevant subset, §5.4 wire order, out-of-order tolerance).
+ * (the UI-relevant event subset, the wire order, out-of-order tolerance).
  * The reducer is a pure function: every applyEvent returns a NEW state and
  * never mutates its inputs.
  */

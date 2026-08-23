@@ -1,5 +1,5 @@
 /**
- * SessionList — pure presentational sidebar list (spec §10 WebUI). No I/O:
+ * SessionList — pure presentational sidebar list (the WebUI). No I/O:
  * sessions arrive through props, selection escapes through onSelect, creation
  * through onCreate, and rename/delete escape through onRename/onDelete — the
  * owner (App) owns the HTTP calls. The empty state ("新建一个会话开始") shows once
@@ -19,7 +19,7 @@ export interface SessionListProps {
   /** True while the initial list is still being fetched (suppresses the empty state). */
   loading: boolean
   onSelect: (id: string) => void
-  /** Escape a create request with the chosen working directory (spec §5.1). */
+  /** Escape a create-session request with the chosen working directory. */
   onCreate: (workdir: string) => void
   /** Escape the inline-edit commit (id + trimmed new title) to the owner. */
   onRename: (id: string, title: string) => void

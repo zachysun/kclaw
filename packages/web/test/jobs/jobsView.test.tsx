@@ -1,5 +1,5 @@
 /**
- * JobsView — jobs CRUD surface (spec §4/调度, GET /jobs, POST /jobs,
+ * JobsView — jobs CRUD surface (scheduled jobs, GET /jobs, POST /jobs,
  * PATCH /jobs/:id, DELETE /jobs/:id). Covers list rendering, create/edit form
  * submit (including the 400 error from an invalid cron), delete confirmation,
  * and the enabled toggle.

@@ -1,5 +1,5 @@
 /**
- * Scheduler tick (P3 Task 8) — the daemon's heartbeat that turns due Job
+ * Scheduler tick — the daemon's heartbeat that turns due Job
  * rows into runs: every `intervalMs` (default 30s, plus one immediate check
  * on start) it asks the scheduler what is due and, per job, creates a fresh
  * session, broadcasts job.started, enqueues a job-triggered run on the
@@ -22,7 +22,7 @@ import type { Job, JobScheduler, SessionStore } from "@kclaw/core"
 import type { EventBus } from "./bus.js"
 import type { RunManager } from "./run.js"
 
-/** Default cadence (spec: 30s 轮询). */
+/** Default cadence (30s polling). */
 const DEFAULT_INTERVAL_MS = 30_000
 
 /** Default recycle-bin retention (30 days) when config omits it. */
@@ -129,7 +129,7 @@ export function startSchedulerTick(deps: SchedulerTickDeps): SchedulerTickHandle
       })
     }
 
-    // Recycle bin (final-review #4): drop soft-deleted sessions past retention
+    // Recycle bin: drop soft-deleted sessions past retention
     // on the same heartbeat. A purge failure must not kill the interval.
     try {
       sessions.purgeExpired(purgeTtlMs)

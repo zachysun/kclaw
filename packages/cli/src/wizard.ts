@@ -1,5 +1,5 @@
 /**
- * First-run provider wizard (P4 Task 8): when detectProviderStatus reports
+ * First-run provider wizard: when detectProviderStatus reports
  * "missing" and stdout is a TTY, `kclaw chat` hands over to runWizard — a
  * 30-second select→key→model flow that probes the endpoint with a 1-token
  * completion and, only on success, writes config.yaml. Every cancel or

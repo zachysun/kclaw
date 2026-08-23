@@ -7,8 +7,8 @@
  * seam here by design.
  *
  * On readiness prints `{"port":<port>}` (one JSON line, stdout) — the CLI
- * (Task 10) and tests wait for exactly that. SIGTERM/SIGINT run daemon.stop():
- * exit 0 on a clean stop, or (bounded stop, P4 Task 2) log to stderr and exit
+ * and tests wait for exactly that. SIGTERM/SIGINT run daemon.stop():
+ * exit 0 on a clean stop, or (bounded stop) log to stderr and exit
  * 1 when a stop step misses its deadline — daemon.json is kept behind by the
  * daemon, since the process is still alive.
  */
@@ -35,7 +35,7 @@ async function shutdown() {
     await daemon.stop()
     process.exit(0)
   } catch (err) {
-    // Bounded stop (P4 Task 2): a teardown step missed its deadline. Fail
+    // Bounded stop: a teardown step missed its deadline. Fail
     // loudly instead of exit 0 — a "successfully stopped" exit code would
     // lie about a daemon that is still running.
     process.stderr.write(`kclaw-server stop failed: ${err instanceof Error ? err.message : String(err)}\n`)

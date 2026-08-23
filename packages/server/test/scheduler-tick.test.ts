@@ -1,5 +1,5 @@
 /**
- * Scheduler tick tests (P3 Task 8): startSchedulerTick turning due Job rows
+ * Scheduler tick tests: startSchedulerTick turning due Job rows
  * of a REAL JobScheduler (temp SQLite) into runs of a REAL RunManager under a
  * mock LlmClient, with job.* frames observed on a fake socket CONNECTED to
  * the bus (job events carry no sessionId → broadcast, not subscribe).
@@ -274,7 +274,7 @@ describe("startSchedulerTick", () => {
     expect(env.scheduler.get(job.id)!.lastStatus).toBeUndefined()
   })
 
-  it("a socket whose send throws neither fails the job nor starves other subscribers (M-a)", async () => {
+  it("a socket whose send throws neither fails the job nor starves other subscribers", async () => {
     const env = makeEnv(scriptClient([textTurn("好")]))
     const job = env.scheduler.create({ name: "抗炸", cron: "* * * * *", prompt: "跑" })
     backdate(env.scheduler, job.id)
@@ -294,7 +294,7 @@ describe("startSchedulerTick", () => {
     expect(received(env.socket).some((e) => e.type === "job.failed")).toBe(false)
   })
 
-  it("purges soft-deleted sessions past retention each tick (final-review #4)", async () => {
+  it("purges soft-deleted sessions past retention each tick", async () => {
     const env = makeEnv(scriptClient([textTurn("好")]))
     const old = env.sessions.create("旧会话")
     const fresh = env.sessions.create("新会话")

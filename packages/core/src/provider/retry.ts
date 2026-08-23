@@ -14,7 +14,7 @@ export interface RetryOpts {
  * Message contract (openai-compat.ts classifies, this regex consumes): HTTP
  * failures throw `llm http <status>: ...` and timeouts throw
  * `llm http timeout after <n>ms` — the timeout arm was added with the
- * provider stream timeout (P4 Task 2) so an aborted hung stream retries with
+ * provider stream timeout so an aborted hung stream retries with
  * backoff like any other transient failure. Keep both patterns in sync when
  * touching either side.
  */

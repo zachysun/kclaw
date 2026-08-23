@@ -1,5 +1,5 @@
 /**
- * Daemon lifecycle (P3 Task 9) — `launchDaemon` is the one-call assembly of
+ * Daemon lifecycle — `launchDaemon` is the one-call assembly of
  * the whole daemon process:
  *
  *   resolvePaths → loadConfig → loadOrCreateToken → stores (SessionStore,
@@ -10,11 +10,12 @@
  * `stop()` reverses it: tick.stop → app.close → delete daemon.json (the token
  * file is kept — it is the daemon's stable identity across restarts). All of
  * it idempotent: a second stop() resolves immediately. Each step is bounded
- * by a deadline (P4 Task 2, default 60s): a step that misses it makes stop()
- * REJECT, daemon.json is kept (the process is still alive), and in-flight
- * job runs are abandoned per §11 crash-tolerance semantics.
+ * by a deadline (default 60s): a step that misses it makes stop() REJECT,
+ * daemon.json is kept (the process is still alive), and in-flight job runs
+ * are abandoned — JSONL tolerates partial runs, and the jobs re-fire on the
+ * next daemon start.
  *
- * Provider resolution (controller ruling 5): the config's default provider
+ * Provider resolution: the config's default provider
  * entry wins; KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY / KCLAW_LLM_MODEL env
  * vars fill whatever the entry leaves empty; still-missing endpoint or model
  * is a hard launch error.
@@ -38,17 +39,17 @@ import { RunManager } from "./run.js"
 import { startSchedulerTick } from "./scheduler-tick.js"
 import { createApp } from "./app.js"
 
-/** The daemon only ever binds loopback (spec §4: 127.0.0.1). */
+/** The daemon only ever binds loopback (127.0.0.1). */
 const HOST = "127.0.0.1"
 
-/** Default scheduler tick cadence (spec: 30s 轮询). */
+/** Default scheduler tick cadence (30s polling). */
 export const DEFAULT_SCHEDULER_INTERVAL_MS = 30_000
 
-/** Default deadline for each `stop()` teardown step (P4 Task 2). */
+/** Default deadline for each `stop()` teardown step. */
 export const DEFAULT_STOP_TIMEOUT_MS = 60_000
 
 /**
- * Race one daemon-stop step against a deadline (P4 Task 2): `tick.stop()`
+ * Race one daemon-stop step against a deadline: `tick.stop()`
  * awaits every tracked job run and `app.close()` awaits every connection, so
  * a hung provider stream (or a stuck client) could park `stop()` forever —
  * an unstoppable daemon that the CLI would then double-spawn. The losing
@@ -84,7 +85,7 @@ export interface LaunchDaemonOptions {
   home?: string
   /** Config override; default: loadConfig(resolvePaths(home)). */
   config?: KclawConfig
-  /** LlmClient factory; default resolves the provider per ruling 5. */
+  /** LlmClient factory; default resolves the config default provider (env fallback). */
   llmFactory?: (cfg: KclawConfig) => LlmClient
   /** Port to bind; default 0 (ephemeral). */
   port?: number
@@ -107,7 +108,7 @@ export function defaultWebDistPath(): string {
 }
 
 /**
- * Resolve the web dist the daemon should host (P4 Task 7): an explicit
+ * Resolve the web dist the daemon should host: an explicit
  * `opts.webDist` wins (tests inject temp dirs); when omitted, the default
  * `<repo>/packages/web/dist` from {@link defaultWebDistPath} is used. A path
  * that does not exist — a fresh clone without a web build, or a stray
@@ -163,7 +164,7 @@ export function resolveModel(cfg: KclawConfig): string {
  * error retry (3 attempts), built from the resolved provider endpoint. The
  * model is resolved separately by the caller — see {@link resolveModel}.
  *
- * `onRetry` (final-review I1) is the injectable retry sink: launchDaemon's
+ * `onRetry` is the injectable retry sink: launchDaemon's
  * default composition passes each run's sink here, so provider retries
  * surface as `llm.failed {willRetry:true}` events with that run's context.
  */
@@ -190,7 +191,8 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   const jobs = new JobScheduler(paths.jobsDb)
 
   // resolveConfirmation stays undefined: WS/CLI verdicts reach the RunManager's
-  // internal ConfirmationBroker exactly as Task 6 wired it.
+  // internal ConfirmationBroker (createApp routes confirmation.resolve frames
+  // from /ws to it).
   const llm = (opts.llmFactory ?? defaultLlmFactory)(config)
   const model = resolveModel(config)
   const bus = new EventBus()
@@ -203,7 +205,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     llm,
     workspace: config.workspace,
     model,
-    // Retry visibility (spec §11, final-review I1): with the DEFAULT
+    // Retry visibility: with the DEFAULT
     // composition every run builds its own retry-wrapped client carrying
     // that run's onRetry sink — retry events then carry the run's own
     // sessionId/runId even while sessions run concurrently on the shared
@@ -241,15 +243,15 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     async stop(): Promise<void> {
       if (stopped) return
       stopped = true
-      // Bounded stop (P4 Task 2): each teardown step gets a deadline, or a
+      // Bounded stop: each teardown step gets a deadline, or a
       // hung tracked run (tick.stop awaits them) / stuck connection
       // (app.close awaits them) could park stop() forever. On a timeout the
       // error propagates to the caller (bin logs to stderr and exits 1) and
       // daemon.json is KEPT: the process is still alive, so an honest pidfile
-      // beats a cleaned one. In-flight job runs are abandoned per §11
-      // crash-tolerance semantics — JSONL tolerates partial runs, and since
-      // the in-flight guard is in-memory, a daemon that never returns from
-      // stop() leaves its jobs "due" and they re-fire on the next start.
+      // beats a cleaned one. In-flight job runs are abandoned — JSONL
+      // tolerates partial runs, and since the in-flight guard is in-memory,
+      // a daemon that never returns from stop() leaves its jobs "due" and
+      // they re-fire on the next start.
       await withStopTimeout(tick.stop(), stopTimeoutMs, "scheduler tick")
       await withStopTimeout(app.close(), stopTimeoutMs, "app close")
       rmSync(daemonJson, { force: true })

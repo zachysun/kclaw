@@ -132,7 +132,7 @@ enqueue(sessionId, input)
 ## 边界与出错
 
 - **enqueue 的 promise 对 provider 错误不 reject**（`runAgent` 内部消化为 `run.failed` + `RunOutcome.stopReason:"error"`）；但存储层失败（如磁盘写入失败）会 reject——`ws.ts` 在 ack 之后把错误作为 error 帧发给发起消息的那条 socket。
-- **cancel 只作用于活跃 run**：排队中的消息无法撤销（v1 没有"从队列移除"命令），它会在前一个结束后照常执行。
+- **cancel 只作用于活跃 run**：排队中的消息无法撤销（没有"从队列移除"命令），它会在前一个结束后照常执行。
 - **确认裁决不落任何队列**：`broker.resolve` 对已 settle/过期条目返回 false 并回 `unknown confirmation`，不记录"迟到的意见"。
 - **自动命名没有去重锁**：同一会话两次快速 enqueue 理论上可能并发两次命名，写回前的重读校验保证只有第一次生效（后到的发现标题已不是默认值即放弃）。
 - **`resolveConfirmation` 测试缝优先于 broker**：设置了它 broker 就只剩登记职责——生产路径不设置。

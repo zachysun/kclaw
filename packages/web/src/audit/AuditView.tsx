@@ -4,7 +4,7 @@
  * GET /sessions/:id/messages (the message list). Each message is flattened into
  * one row per block, ordered by message createdAt descending; each row shows a
  * type label plus a one-line summary, and expands on click to the full block
- * payload. No mutation, no /audit — the old audit tail route is gone (Task 4.2).
+ * payload. No mutation, no /audit — the old audit tail route is gone.
  */
 import { useEffect, useState } from "react"
 import { type ApiClient } from "../api.js"

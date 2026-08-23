@@ -1,5 +1,5 @@
 /**
- * JobsView — jobs CRUD surface (spec §4/调度). GET /jobs renders the table
+ * JobsView — jobs CRUD surface (scheduled jobs). GET /jobs renders the table
  * (name/cron/enabled/nextRunAt/lastStatus/lastRunAt); one form both creates
  * (POST /jobs, enabled checkbox defaults true) and edits (PATCH /jobs/:id);
  * a delete button with a native confirm, and a per-row enable/disable toggle

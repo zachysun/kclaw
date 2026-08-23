@@ -7,7 +7,7 @@ import { newId } from "../protocol/ids.js"
 /** Outcome of the last run of a job, recorded by `markRun`. */
 export type JobStatus = "ok" | "error"
 
-/** A scheduled prompt (spec §4/调度): cron + prompt, persisted in SQLite. */
+/** A scheduled prompt: cron + prompt, persisted in SQLite. */
 export interface Job {
   id: string
   name: string
@@ -76,9 +76,9 @@ function toJob(row: JobRow): Job {
 }
 
 /**
- * Persistent cron scheduler (spec §4/调度). All state lives in one SQLite
+ * Persistent cron scheduler. All state lives in one SQLite
  * `jobs` table; every instance opens the same file and sees the same rows,
- * so the P3 daemon can tick with a fresh handle. Times are ISO strings
+ * so the daemon can tick with a fresh handle. Times are ISO strings
  * (lexicographic = chronological, so `due` compares them in SQL).
  */
 export class JobScheduler {

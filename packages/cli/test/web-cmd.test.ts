@@ -1,5 +1,5 @@
 /**
- * Pure-function unit tests for the `kclaw web` command (v3 Phase 4 Task 9):
+ * Pure-function unit tests for the `kclaw web` command:
  * `buildWebUrl` (loopback URL with the token as a query param — the web
  * shell's bootstrapToken handoff) and `openCommandFor` (platform → browser
  * opener). webAction itself is covered by the manual smoke (it spawns a

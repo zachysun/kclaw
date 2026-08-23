@@ -1,5 +1,5 @@
 /**
- * memory tools (spec §7/§8): thin arg-validation + formatting wrappers around
+ * memory tools: thin arg-validation + formatting wrappers around
  * MemoryStore (markdown files are the truth, SQLite FTS5 is the derived index).
  *
  * Both safe + parallel: they only touch the notes dir / index, never the

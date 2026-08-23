@@ -122,7 +122,7 @@ describe("EventBus", () => {
     expect(bus.subscriberCount("ses_unknown")).toBe(0)
   })
 
-  it("a subscriber whose send throws neither breaks emit nor starves the others (M-a)", () => {
+  it("a subscriber whose send throws neither breaks emit nor starves the others", () => {
     const bus = new EventBus()
     const broken = { send(): void { throw new Error("send boom") } }
     const healthy = new FakeSocket()

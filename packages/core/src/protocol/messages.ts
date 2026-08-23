@@ -24,7 +24,7 @@ export interface AssistantMessage extends Message {
   stopReason: StopReason
 }
 
-/** Why a tool call was allowed to run (spec §9). */
+/** Why a tool call was allowed to run. */
 export type GrantedBy = "safe" | "whitelist" | "session_grant" | "confirmed"
 
 export interface ToolMessage extends Message {

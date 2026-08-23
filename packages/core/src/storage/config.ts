@@ -8,8 +8,8 @@ export interface KclawConfig {
     default: string
     entries: Record<string, { baseUrl: string; apiKey: string; model: string }>
     /**
-     * Per-request llm timeout the daemon passes to the provider client
-     * (P4 Task 2): bounds the fetch AND the SSE body so a hung provider
+     * Per-request llm timeout the daemon passes to the provider client:
+     * bounds the fetch AND the SSE body so a hung provider
      * stream can never park a run forever. Optional only because older
      * config.yaml files predate it; defaults to 120s (defaultConfig).
      */

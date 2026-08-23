@@ -1,5 +1,5 @@
 /**
- * WS run-command tests (P3 Task 7): `send_message` and `run.cancel` over the
+ * WS run-command tests: `send_message` and `run.cancel` over the
  * REAL /ws route on an ephemeral port — real app, real RunManager on real
  * stores, mock LlmClient — plus the error-event plumb-through these commands
  * rely on (run.failed on a provider throw, run.completed aborted after cancel).

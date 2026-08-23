@@ -64,8 +64,8 @@ function label(e: AgentEvent): string {
   return e.type
 }
 
-describe("runAgent user message lifecycle events (P4 T1)", () => {
-  it("default path: created → persist → completed → llm.started in §5.4 order", async () => {
+describe("runAgent user message lifecycle events", () => {
+  it("default path: created → persist → completed → llm.started in wire order", async () => {
     const events: AgentEvent[] = []
     const messages: Message[] = []
     const timeline: string[] = []
@@ -79,7 +79,7 @@ describe("runAgent user message lifecycle events (P4 T1)", () => {
       },
     )
 
-    // wire order (spec §5.4): run.started → user created → user completed → llm.*
+    // wire order: run.started → user created → user completed → llm.*
     expect(events.map(label).slice(0, 4)).toEqual([
       "run.started", "message.created:user", "message.completed:user", "llm.started",
     ])
@@ -176,7 +176,7 @@ describe("runAgent user message lifecycle events (P4 T1)", () => {
   })
 })
 
-describe("user message handling failures terminate the run (fix 1)", () => {
+describe("user message handling failures terminate the run", () => {
   it("a throwing onUserMessage hook ends with run.failed and an error outcome", async () => {
     const events: AgentEvent[] = []
     const outcome = await runAgent(
@@ -192,7 +192,7 @@ describe("user message handling failures terminate the run (fix 1)", () => {
     // resolved — never rejected — with the error stopReason
     expect(outcome.stopReason).toBe("error")
     expect(outcome.messages.map((m) => m.role)).toEqual(["user"])
-    // spec §11 invariant: run.started is always followed by a terminal event
+    // invariant: run.started is always followed by a terminal event
     expect(events.map(label)).toEqual(["run.started", "message.created:user", "run.failed"])
     expect(events.at(-1)!.payload).toEqual({
       error: { code: "user_message_failed", message: "disk full" },
@@ -229,7 +229,7 @@ describe("user message handling failures terminate the run (fix 1)", () => {
 
 describe("runAgent with a caller-supplied user message", () => {
   it("uses the provided message verbatim and does not re-persist it", async () => {
-    // P3 daemon shape: the caller built the user message (to attach memory
+    // Daemon-side shape: the caller built the user message (to attach memory
     // notes) and already appended it to the session log.
     const userMessage = newMessage("ses_1", "user", [
       { id: newBlockId(), type: "text", text: "hi" },

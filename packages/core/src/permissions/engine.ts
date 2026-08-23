@@ -13,7 +13,7 @@ export interface CompiledRule {
 }
 
 /**
- * Parse one rule string (spec §9): "tool:argGlob" scopes the rule to calls
+ * Parse one permission rule string: "tool:argGlob" scopes the rule to calls
  * whose extracted arg matches the glob; a bare string is tool-level.
  * Splits at the FIRST colon so arg globs may themselves contain colons.
  */
@@ -61,7 +61,7 @@ function ruleMatches(rule: CompiledRule, tool: string, arg: string): boolean {
 }
 
 /**
- * Path-aware rule matching (I1): the raw arg always matches literally first
+ * Path-aware rule matching: the raw arg always matches literally first
  * (exec commands, JSON dumps); for file tools the rule is additionally tested
  * with BOTH the arg and the glob in normalized form (`~` expanded, resolved
  * against the workspace), so a rule written `~/.ssh/**` still hits the same
@@ -117,8 +117,9 @@ function normalizePathArg(raw: string, workspace: string | undefined): string {
  * True when a file tool's path arg escapes the workspace: `~`/`~/` expanded,
  * then resolved against the workspace exactly the way fs.ts resolves before
  * reading/writing (`path.resolve(root, p)` must equal or sit beneath `root`).
- * Only meaningful when workspace is set; otherwise the v1 boundary is not
- * enforced at the permission layer and this returns false (legacy behavior).
+ * Only meaningful when workspace is set; otherwise the workspace boundary
+ * is not enforced at the permission layer and this returns false (legacy
+ * behavior).
  */
 function escapesWorkspace(tool: string, args: unknown, workspace: string | undefined): boolean {
   if (workspace === undefined || !FILE_TOOLS.has(tool)) return false
@@ -130,7 +131,7 @@ function escapesWorkspace(tool: string, args: unknown, workspace: string | undef
 
 /**
  * In-memory, process-lifetime grant store: rules a human approved during
- * this session so the same call stops re-prompting (spec §9).
+ * this session so the same call stops re-prompting.
  */
 export class SessionGrants {
   #rules: CompiledRule[] = []
@@ -169,7 +170,7 @@ interface DenyRule extends CompiledRule {
 }
 
 /**
- * Config-driven PermissionGate (spec §9). Decision order, short-circuiting:
+ * Config-driven PermissionGate. Decision order, short-circuiting:
  * deny blacklist → allow whitelist → safeTools → session grants → confirm
  * with a fresh `conf_` id the surrounding loop routes to a human.
  */
@@ -195,7 +196,7 @@ export class ConfigPermissionGate implements PermissionGate {
   async check(toolCall: ToolCallBlock): Promise<PermissionDecision> {
     const tool = toolCall.name
     const arg = extractArg(tool, toolCall.args)
-    // Path-aware matching (I1): for file tools rules also match the arg's
+    // Path-aware matching: for file tools rules also match the arg's
     // resolved form, closing path-shape bypasses of deny rules.
     const matches = (r: CompiledRule) => scopedMatch(r, tool, arg, this.#workspace)
     for (const rule of this.#deny) {

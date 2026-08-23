@@ -1,5 +1,6 @@
 /**
- * Event → view-model reducer for the streaming chat view (spec §5.3/§5.4).
+ * Event → view-model reducer for the streaming chat view (the daemon's event
+ * catalog and wire order).
  *
  * The web package is intentionally self-contained (no runtime dependency on
  * @kclaw/core): the structural protocol shapes below mirror the daemon's wire
@@ -18,7 +19,7 @@
  *   replaces the message wholesale (full calibration). The view skips nothing
  *   but renders a streaming placeholder for a pending message with no blocks.
  * - Out-of-order tolerance is purely "drop unknown / replace later": events on
- *   a single WS connection arrive in order (spec §5.3 rule 3), so the dropped
+ *   a single WS connection arrive in order (the wire order), so the dropped
  *   deltas only matter across reconnects, where a full pull + merge resyncs.
  * - The reducer is a pure function: every transition returns a NEW state.
  */
@@ -73,7 +74,7 @@ export interface ConfirmationRequestedPayload {
   expiresAt: string
 }
 
-/** The daemon's full event catalog (spec §5.3), used to split handled/unhandled. */
+/** The daemon's full event catalog, used to split handled/unhandled. */
 export type EventType =
   | "run.started" | "run.completed" | "run.failed"
   | "message.created" | "message.completed"

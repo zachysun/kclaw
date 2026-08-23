@@ -20,11 +20,11 @@ const META_FILE = "meta.json"
 const MESSAGES_FILE = "messages.jsonl"
 
 /**
- * Append-only JSONL session persistence (spec §4):
+ * Append-only JSONL session persistence:
  * each session lives in <sessionsDir>/<id>/ holding meta.json plus
  * messages.jsonl with one JSON.stringify(message) per line.
  *
- * Crash tolerance (spec §11): a torn trailing line (crash mid-append) is
+ * Crash tolerance: a torn trailing line (crash mid-append) is
  * dropped on read, and the append repairs it first (storage/jsonl.ts) so the
  * next message survives; a corrupt line anywhere earlier is corruption,
  * not a crash artifact, so readMessages throws.

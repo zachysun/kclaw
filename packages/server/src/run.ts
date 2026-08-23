@@ -1,11 +1,11 @@
 /**
- * RunManager — the daemon-side assembly of one runAgent invocation (P3 Task 5).
+ * RunManager — the daemon-side assembly of one runAgent invocation.
  *
  * `enqueue` is the send_message pipeline: per-session serialization, memory
  * note injection onto a caller-persisted user message, AGENTS.md system
  * prompt, builtin tools, a permission gate, event bus fan-out and JSONL
- * persistence — the composition the P2 smoke test proved out, now owned by
- * the server.
+ * persistence — the composition proven by the integration smoke test, now
+ * owned by the server.
  *
  * Composition choices pinned here:
  * - History is read BEFORE the user message is appended: runAgent places its
@@ -15,9 +15,9 @@
  *   `RunInput.userMessage`; runAgent uses it verbatim and does NOT re-persist
  *   it. Its note blocks (job provenance + memory notes) are appended — and
  *   the finished message appended to the session log — inside the run's
- *   `onUserMessage` hook (P4 Task 1), landing between the loop's
- *   message.created and message.completed so the bus carries the spec §5.4
- *   order run.started → message.created → note.emitted ×N → message.completed.
+ *   `onUserMessage` hook, landing between the loop's
+ *   message.created and message.completed so the bus carries the wire order
+ *   run.started → message.created → note.emitted ×N → message.completed.
  */
 import { readFileSync } from "node:fs"
 import {
@@ -48,7 +48,7 @@ import { scheduleAutoname } from "./autoname.js"
 /** System prompt fallback when ~/.kclaw/AGENTS.md is missing or empty. */
 const DEFAULT_SYSTEM_PROMPT = "你是 kclaw，一个务实的个人助理。"
 
-/** How many chars of the user text feed the memory lookup (ruling 7). */
+/** How many chars of the user text feed the memory lookup. */
 const MEMORY_QUERY_CHARS = 200
 /** Top-N memory notes injected onto the user message. */
 const MEMORY_LIMIT = 5
@@ -62,7 +62,7 @@ export interface RunManagerDeps {
   llm: LlmClient
   workspace: string
   /**
-   * Model string sent to the provider (Task 9): the daemon resolves it once
+   * Model string sent to the provider: the daemon resolves it once
    * — provider entry, KCLAW_LLM_MODEL env fallback — because an env-only
    * provider would otherwise leave the config-derived model empty. Optional
    * for backwards compatibility: when omitted, the default provider's
@@ -70,7 +70,7 @@ export interface RunManagerDeps {
    */
   model?: string
   /**
-   * Confirmation gateway (Task 6): pending confirmations register here when
+   * Confirmation gateway: pending confirmations register here when
    * the gate issues them, and WS/CLI verdicts settle through it. Missing → a
    * fresh internal broker, exposed as `manager.broker` (the daemon hands the
    * RunManager to createApp via its `run` option, which routes
@@ -83,7 +83,7 @@ export interface RunManagerDeps {
    */
   resolveConfirmation?: (confirmationId: string) => Promise<{ approved: boolean; by: "cli" | "web" | "timeout" }>
   /**
-   * Retry-visible llm per run (spec §11, final-review I1): when set, EVERY
+   * Retry-visible llm per run: when set, EVERY
    * run builds its own client through this factory, receiving that run's
    * retry sink as `onRetry` — provider-level retries (the daemon's default
    * withRetry composition) then surface as `llm.failed {willRetry:true}`
@@ -94,7 +94,7 @@ export interface RunManagerDeps {
    */
   llmForRun?: (onRetry: LlmRetrySink) => LlmClient
   /**
-   * Per-name executor overrides for tests/adapters (final-review M-b seam):
+   * Per-name executor overrides for tests/adapters:
    * merged OVER the builtin tools after construction (defs stay the
    * builtins'), so a test can swap one executor — e.g. for one that throws —
    * without rebuilding the toolset.
@@ -107,7 +107,7 @@ export interface EnqueueInput {
   userText: string
   trigger: "user" | "job"
   /**
-   * Job provenance note (Task 8): when the scheduler fires a job, the tick
+   * Job provenance note: when the scheduler fires a job, the tick
    * passes the 「本会话由定时任务…」 line here and it lands as a kind:"job"
    * note block right after the text block on the user message.
    */
@@ -205,7 +205,7 @@ export class RunManager {
     const sessionMeta = sessions.meta(sessionId)
     const workspace = sessionMeta?.workdir ?? this.#deps.workspace
 
-    // Memory injection (ruling 7): the leading 200 chars of the user text
+    // Memory injection: the leading 200 chars of the user text
     // look up the top-5 notes. Memory is an accelerator — a failing search
     // must never block the run, so misses/errors just mean no notes.
     const notes: NoteBlock[] = []
@@ -219,9 +219,9 @@ export class RunManager {
 
     // History BEFORE the append (runAgent appends the user message itself).
     // The user message starts as a text-only SKELETON: its note blocks (job
-    // provenance first, memory notes after — P4 Task 1) are appended inside
+    // provenance first, memory notes after) are appended inside
     // the run's onUserMessage hook, right after the loop announced the
-    // skeleton via message.created, so the bus carries the spec §5.4 order
+    // skeleton via message.created, so the bus carries the wire order
     // run.started → message.created → note.emitted ×N → message.completed,
     // with the note events (inside the hook) trailing the JSONL append —
     // the persist happens first, then the notes are announced.
@@ -240,7 +240,7 @@ export class RunManager {
       tavilyApiKey: config.web.tavilyApiKey,
       exec: { timeoutMs: config.exec.timeoutMs, maxOutputBytes: config.exec.maxOutputBytes },
     })
-    // test/adapter seam (M-b): per-name executor overrides on top of the
+    // test/adapter seam: per-name executor overrides on top of the
     // builtins; toolDefs stay the builtins' — an override replaces behavior,
     // not the schema the model sees.
     if (this.#deps.tools !== undefined) {
@@ -303,7 +303,7 @@ export class RunManager {
       return raced
     }
 
-    // --- retry visibility (spec §11, final-review I1) ------------------------
+    // --- retry visibility --------------------------------------------------------
     // Provider-level retries live inside the llm wrapper (withRetry), where
     // the loop cannot see them. When deps.llmForRun is set, the wrapper's
     // onRetry lands in THIS closure: each notification becomes an
@@ -320,9 +320,9 @@ export class RunManager {
       try {
         bus.emit(e)
       } catch {
-        // one broken subscriber must not kill the run (T4 emit guard; bus.emit
-        // also guards each socket individually since M-a — this guards the
-        // remaining synchronous work in emit, e.g. JSON.stringify)
+        // one broken subscriber must not kill the run — bus.emit already
+        // guards each socket individually; this guard covers the remaining
+        // synchronous work in emit, e.g. JSON.stringify
       }
     }
     const onLlmRetry: LlmRetrySink = (info) => {
@@ -358,7 +358,7 @@ export class RunManager {
           signal: controller.signal,
           llmAttempt: () => llmAttempt,
           onUserMessage: (m) => {
-            // P4 Task 1: the notes become part of the message BEFORE it is
+            // The notes become part of the message BEFORE it is
             // persisted and completed. Persist first (events trail persisted
             // state), then announce each note — the loop's message.completed
             // follows, so the wire order stays

@@ -1,7 +1,7 @@
 /**
- * fs tools (spec §7): read / list / write / edit files.
+ * fs tools: read / list / write / edit files.
  *
- * v2 boundary: every path is resolved with `path.resolve(workspace, p)` only —
+ * Boundary: every path is resolved with `path.resolve(workspace, p)` only —
  * no hard "path escapes workspace" rejection here. Whether an out-of-workspace
  * target may actually be read/written is enforced by the permission gate
  * (packages/core/src/permissions/engine.ts), which turns an escaping path into
@@ -32,7 +32,7 @@ export function createFsTools(opts: {
   const maxReadBytes = opts.maxReadBytes ?? DEFAULT_MAX_READ_BYTES
 
   /**
-   * Resolve `p` against the workspace. No escape check lives here (v2): the
+   * Resolve `p` against the workspace. No escape check lives here: the
    * permission gate decides whether an out-of-workspace target is allowed.
    */
   const sandboxed = (p: string): string => path.resolve(root, p)

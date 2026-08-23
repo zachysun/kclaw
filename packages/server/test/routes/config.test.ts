@@ -110,7 +110,7 @@ describe("static hosting of packages/web dist", () => {
       expect(res.body).toContain("kclaw-web-placeholder")
       expect(res.headers["content-type"]).toContain("text/html")
 
-      // The static shell loads before the client holds a token (P4 Task 3):
+      // The static shell loads before the client holds a token:
       // GET / is exempt from bearer auth once webDist is configured.
       const noAuth = await app.inject({ method: "GET", url: "/" })
       expect(noAuth.statusCode).toBe(200)

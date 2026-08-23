@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * kclaw CLI entry (P3 Task 10+11). The shebang above is preserved verbatim by
+ * kclaw CLI entry. The shebang above is preserved verbatim by
  * tsc (verified: it is emitted as line 1 of dist/index.js), so the compiled
  * `bin` target is directly executable — no post-build step.
  *
@@ -121,7 +121,7 @@ async function jobsListAction(home: string): Promise<void> {
 
 /** Shared by the default (bare `kclaw`) action and the explicit `chat` subcommand. */
 async function chatAction(home: string, options: Record<string, unknown>): Promise<void> {
-  // First-run gate (P4 Task 8): no provider configured anywhere → run the
+  // First-run gate: no provider configured anywhere → run the
   // setup wizard in a TTY (abort = leave silently, nothing written), or
   // print one line of guidance when stdin/stdout is not interactive.
   const status = detectProviderStatus(home)
@@ -197,7 +197,7 @@ const invokedAsMain =
   })()
 
 if (invokedAsMain) {
-  // Node version gate (spec error-handling table, "低版本 Node" row): the CLI
+  // Node version gate (the "低版本 Node" failure mode): the CLI
   // needs the runtime features of Node >= 22 — bail before parsing so a stale
   // runtime never gets as far as a confusing syntax/API error.
   const [major] = process.versions.node.split(".").map(Number)

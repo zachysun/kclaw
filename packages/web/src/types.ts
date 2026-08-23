@@ -18,7 +18,7 @@ export interface SessionMeta {
   deletedAt?: string
 }
 
-/** A scheduled prompt (mirrors @kclaw/core Job, spec §4/调度). */
+/** A scheduled prompt (mirrors @kclaw/core Job). */
 export interface Job {
   id: string
   name: string

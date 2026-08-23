@@ -33,7 +33,7 @@
 | `{"type":"send_message","sessionId","text"}` | 两者非空字符串 | `{"type":"send_message_ack","sessionId"}`——**立即**返回，不等 run | `session not found`；`run manager not available`；字段不合法提示。ack 之后 enqueue 才失败（存储错误）时，error 帧只发到这条 socket |
 | `{"type":"run.cancel","sessionId"}` | sessionId 非空字符串 | `{"type":"run_cancel_ack","sessionId"}` | `no active run`（该会话当前无正在执行的 run）；`run manager not available` |
 
-收到未知 `type` 返回 `{"type":"error","message":"unknown command: <type>"}`，连接保持打开；非法 JSON / 非 JSON 对象返回 error 帧（`frame is not valid JSON` / `frame must be a JSON object`），连接同样保持。**认证之前**发来的任何帧（含坏 JSON）都按未授权处理：error 帧 + 关闭码 4001。重复 auth 回 `already authenticated`。v1 没有认证超时——连接保持未认证状态也不会被主动断开。
+收到未知 `type` 返回 `{"type":"error","message":"unknown command: <type>"}`，连接保持打开；非法 JSON / 非 JSON 对象返回 error 帧（`frame is not valid JSON` / `frame must be a JSON object`），连接同样保持。**认证之前**发来的任何帧（含坏 JSON）都按未授权处理：error 帧 + 关闭码 4001。重复 auth 回 `already authenticated`。没有认证超时——连接保持未认证状态也不会被主动断开。
 
 ### 服务端 → 客户端
 
@@ -99,14 +99,14 @@ export class EventBus {
 
 ## 断线恢复：拉取全量 + 只订阅新事件，无回放
 
-事件不持久化，服务端没有任何回放机制。恢复协议（两个客户端实现一致，策略在 spec §5.3 rule 3 固定）：
+事件不持久化，服务端没有任何回放机制。恢复协议（两个客户端实现一致的恢复策略）：
 
 ```
 意外断线（非 4001）
   → 建新连接（web: createWs()；CLI: KclawClient.connect，daemon 已终止时重新启动一个）
   → 重新 auth + subscribe（CLI 等 subscribed ack，预算 5s：SUBSCRIBE_ACK_MS）
   → GET /sessions/:id/messages 拉取全量消息
-  → 客户端把全量消息与已有视图合并（web: mergeMessages；CLI v1 不重新渲染）
+  → 客户端把全量消息与已有视图合并（web: mergeMessages；CLI 不重新渲染）
   → 此后只处理新到达的事件帧
 ```
 
@@ -120,7 +120,7 @@ export class EventBus {
 - **错过的 confirmation.requested 不可恢复**：确认等待有时限（120s 默认），断线期间超时的确认按拒绝处理；重连拉取全量只能看到结果（note 块），不能补答。
 - **广播事件可能漏**：只 `connect` 未 `subscribe` 的连接收得到 `job.*`，但连接尚在认证前时收不到任何事件。
 - **同 token 多连接无互斥**：两个连接订阅同一会话各自收到全部分片事件；`send_message` 会各自入队（会话内仍串行，见 [run-manager](./run-manager.md)）。
-- **帧大小无限制**：v1 不校验单帧长度，依赖 ws 库默认行为。
+- **帧大小无限制**：不校验单帧长度，依赖 ws 库默认行为。
 
 ## 关联
 

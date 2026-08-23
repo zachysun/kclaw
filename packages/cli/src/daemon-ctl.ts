@@ -1,5 +1,5 @@
 /**
- * Daemon control (P3 Task 10): the CLI's side of the daemon lifecycle —
+ * Daemon control: the CLI's side of the daemon lifecycle —
  * `ensureDaemon` (probe, stale-pidfile liveness, detached respawn, health
  * poll), `stopDaemon` (SIGTERM + refused-poll + pidfile sweep) and
  * `daemonStatus` (health + daemon.json facts).
@@ -16,7 +16,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
-/** The daemon only ever binds loopback (spec §4: 127.0.0.1). */
+/** The daemon only ever binds loopback (127.0.0.1). */
 const HOST = "127.0.0.1"
 
 /** Budget for a respawned/stopping daemon to change observable state. */
@@ -50,7 +50,7 @@ export function defaultHome(): string {
 function isDaemonInfo(value: unknown): value is DaemonInfo {
   if (typeof value !== "object" || value === null) return false
   const v = value as Record<string, unknown>
-  // pid must be a POSITIVE integer (final-review I4): pid 0 would make
+  // pid must be a POSITIVE integer: pid 0 would make
   // process.kill(0, …) signal the CLI's whole process group. A non-positive
   // pid is treated like a malformed file — stale, respawn/stop-safe.
   return Number.isInteger(v.port) && Number.isInteger(v.pid) && (v.pid as number) > 0 && typeof v.startedAt === "string"
@@ -193,10 +193,10 @@ export type StopResult = "stopped" | "daemon not running"
  * Stop the daemon in `home`: SIGTERM the pid from daemon.json (the bin's
  * handler runs daemon.stop()), poll until the port refuses connections, then
  * remove daemon.json if the process died without doing so (SIGKILL path).
- * No daemon.json (or an invalid/non-positive pid in it — I4) → "daemon not
+ * No daemon.json (or an invalid/non-positive pid in it) → "daemon not
  * running" (still exit 0).
  *
- * Final probe (I4): when the poll budget is exhausted and /health STILL
+ * Final probe: when the poll budget is exhausted and /health STILL
  * answers, the daemon ignored or outlived the SIGTERM — stop() throws (the
  * CLI prints the message on stderr and exits 1) and daemon.json is KEPT as
  * the pointer to the still-live process. Deleting it would orphan a

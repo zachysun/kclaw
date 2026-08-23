@@ -1,7 +1,7 @@
 /**
  * RunManager integration tests: the daemon-side send_message → runAgent
  * assembly on REAL stores under a temp KCLAW_HOME, driven by a scripted
- * LlmClient (local twin of the P1/P2 script-client helpers).
+ * LlmClient (local twin of the scripted-client helpers).
  *
  * Covers: happy text turn (outcome + JSONL + bus fan-out), memory note
  * injection onto the user message, per-session serialization vs cross-session
@@ -199,7 +199,7 @@ describe("RunManager.enqueue", () => {
     ])
   })
 
-  it("emits user message lifecycle + note.emitted on the bus in §5.4 order (P4 T1)", async () => {
+  it("emits user message lifecycle + note.emitted on the bus in wire order", async () => {
     const { env, manager } = makeEnv(scriptClient([textTurn("好的")]))
     await env.memory.save({ text: "用户在上海" })
     const session = env.sessions.create("补发会话")
@@ -302,7 +302,7 @@ describe("RunManager.enqueue", () => {
     const outcome = await manager.enqueue(session.id, { userText: "写不进去", trigger: "user" })
     expect(outcome.stopReason).toBe("error")
 
-    // spec §11 invariant on the bus: run.started … run.failed (terminal),
+    // Bus invariant: run.started … run.failed (terminal),
     // the user message announced but never completed, no llm call
     const events = received(socket)
     expect(events[0]!.type).toBe("run.started")
@@ -629,7 +629,7 @@ describe("RunManager.enqueue", () => {
     expect(env.sessions.readMessages(session.id).map((m) => m.role)).toEqual(["user"])
   })
 
-  it("surfaces provider retries as llm.failed {willRetry:true} events with run context (I1)", async () => {
+  it("surfaces provider retries as llm.failed {willRetry:true} events with run context", async () => {
     // raw client: "llm http 503" twice, then a normal text turn. The retry
     // wrapper is the daemon's default composition: built per run through
     // llmForRun, so its onRetry lands in the run's own visibility closure.
@@ -672,7 +672,7 @@ describe("RunManager.enqueue", () => {
     expect(env.sessions.readMessages(session.id).at(-1)!.blocks[0]).toMatchObject({ text: "恢复" })
   })
 
-  it("resets the attempt counter between llm calls: every llm.started reports its own attempt (I1)", async () => {
+  it("resets the attempt counter between llm calls: every llm.started reports its own attempt", async () => {
     // invocation 1-2: 503 (retried); 3: tool_use; 4: final text turn — so the
     // FIRST llm call retries twice before succeeding, and the run continues
     // into a second llm call.
@@ -701,7 +701,7 @@ describe("RunManager.enqueue", () => {
     expect(started.map((e) => e.payload.attempt)).toEqual([1, 1])
   })
 
-  it("records a throwing executor's error tool_result (M-b)", async () => {
+  it("records a throwing executor's error tool_result", async () => {
     const boom = new Map<string, ToolExecutor>([
       ["exec", {
         risk: "sensitive",

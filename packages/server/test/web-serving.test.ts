@@ -1,5 +1,5 @@
 /**
- * Daemon web hosting + build chain (P4 Task 7): launchDaemon auto-detects the
+ * Daemon web hosting + build chain: launchDaemon auto-detects the
  * built web UI at `<repo>/packages/web/dist` and serves it — the shell
  * document and `/assets/*` bundles load before the client holds a token, while
  * every API route stays bearer-protected — and an explicit-but-nonexistent
@@ -77,7 +77,7 @@ function makeConfig(home: string): KclawConfig {
 
 // --- smoke tests -------------------------------------------------------------
 
-describe("launchDaemon web hosting (P4 Task 7)", () => {
+describe("launchDaemon web hosting", () => {
   it(
     "serves the built web UI by default: shell + /assets/* need no token, API routes stay protected",
     async () => {

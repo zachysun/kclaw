@@ -22,7 +22,7 @@ describe("fs tools", () => {
     expect((await call(t.fs_read, { path: "a.txt" })).output).toContain("hello world")
     expect((await call(t.fs_read, { path: join(ws, "a.txt") })).output).toContain("hello again")
   })
-  it("fs_read resolves out-of-workspace paths (v2: boundary is the permission gate)", async () => {
+  it("fs_read resolves out-of-workspace paths (boundary is the permission gate)", async () => {
     const outside = mkdtempSync(join(tmpdir(), "kclaw-fs-outside-"))
     try {
       writeFileSync(join(outside, "secret.txt"), "outside secret")

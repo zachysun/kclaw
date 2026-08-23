@@ -1,5 +1,5 @@
 /**
- * Confirmation gateway tests (P3 Task 6): the ConfirmationBroker bridging
+ * Confirmation gateway tests: the ConfirmationBroker bridging
  * websocket verdicts onto the loop's resolver, driven through a REAL app on
  * an ephemeral port (real /ws route, real RunManager on real stores, mock
  * LlmClient). Config keeps `permissions.allow` EMPTY so an exec call falls

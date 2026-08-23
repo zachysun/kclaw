@@ -12,7 +12,7 @@ import type { LlmClient, LlmStreamEvent, ToolDefinition } from "../provider/type
 import { toProviderMessages } from "./context.js"
 import type { ToolExecutor } from "./tools.js"
 
-/** Gate verdict for one tool call (spec §9): run it, refuse it, or ask a human. */
+/** Gate verdict for one tool call: run it, refuse it, or ask a human. */
 export type PermissionDecision =
   | { type: "allow"; reason: "safe" | "whitelist" | "session_grant" }
   | { type: "deny"; reason: "blacklist" | "user_denied" | "timeout"; noteText: string }
@@ -30,13 +30,13 @@ export interface RunInput {
   userText: string
   trigger?: "user" | "job"
   /**
-   * Pre-built user message for this run (P3 daemon composition): when set,
+   * Pre-built user message for this run (daemon-side composition): when set,
    * the loop uses it verbatim instead of synthesizing one from `userText`
    * (which is then ignored) — and does NOT persist it via onMessage. The
-   * caller owns this message's persistence (either before calling, or — the
-   * P4 shape — inside `AgentDeps.onUserMessage`, where RunManager appends
-   * memory/job note blocks and appends the finished message to the session
-   * log); re-persisting via onMessage would write the same line twice.
+   * caller owns this message's persistence (either before calling, or inside
+   * `AgentDeps.onUserMessage`, where RunManager appends memory/job note blocks
+   * and appends the finished message to the session log); re-persisting via
+   * onMessage would write the same line twice.
    * Lifecycle events fire either way: `message.created` (the skeleton,
    * before use) and `message.completed` (after any `onUserMessage`
    * augmentation). `history` must not already contain this message.
@@ -53,7 +53,7 @@ export interface AgentDeps {
   tools?: Map<string, ToolExecutor>
   /** tool schemas forwarded to the model so it can actually emit tool_calls */
   toolDefs?: ToolDefinition[]
-  /** permission gate consulted before every tool execution (spec §9) */
+  /** permission gate consulted before every tool execution */
   permissions?: PermissionGate
   /** answers confirmation.requested; missing resolver denies immediately by timeout */
   resolveConfirmation?(confirmationId: string): Promise<{ approved: boolean; by: "cli" | "web" | "timeout" }>
@@ -62,7 +62,7 @@ export interface AgentDeps {
   /** abort guardrail: the run stops at the next checkpoint with stopReason "aborted" */
   signal?: AbortSignal
   /**
-   * Retry visibility (spec §11): notified for each failed LLM attempt that
+   * Retry visibility: notified for each failed LLM attempt that
    * will be retried with backoff. The retrying itself lives in the provider
    * wrapper — the loop never calls this itself (withRetry owns retries inside
    * `stream()`; a loop-level retry would double-retry). Daemon-side
@@ -72,16 +72,16 @@ export interface AgentDeps {
    */
   onLlmRetry?(info: { attempt: number; error: unknown }): void
   /**
-   * The attempt number `llm.started` reports (spec §5.3). Defaults to 1 — a
+   * The attempt number `llm.started` reports. Defaults to 1 — a
    * fresh call — because wrapper-level retries happen INSIDE `deps.llm.stream()`
    * after `llm.started` was already emitted; the composition that owns those
-   * retries (P3 daemon) passes a counter here so the number reflects its
-   * retry state for any `llm.started` it can still influence. Additive P3
+   * retries (the daemon) passes a counter here so the number reflects its
+   * retry state for any `llm.started` it can still influence. Additive
    * seam; unset behaves exactly like before.
    */
   llmAttempt?(): number
   /**
-   * User-message augmentation hook (P4 Task 1): called once with the user
+   * User-message augmentation hook: called once with the user
    * message skeleton right after its `message.created` went out and BEFORE
    * the loop persists (internal path) and completes it. Lets the composition
    * that owns note injection (RunManager's memory/job notes) append note
@@ -112,7 +112,7 @@ interface ToolEntry {
   result?: ToolResultBlock
   /** set when the permission gate refused the call; attached to the tool message */
   note?: NoteBlock
-  /** why the call was allowed to run (spec §9); attached to the tool message */
+  /** why the call was allowed to run; attached to the tool message */
   grantedBy?: GrantedBy
   /** true once the executor actually ran (streaming events already emitted) */
   executed: boolean
@@ -197,7 +197,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
 
   emit(makeEvent("run.started", { trigger: input.trigger ?? "user" }, ctx))
 
-  // User message lifecycle (P4 Task 1, spec §5.4): created carries the
+  // User message lifecycle: created carries the
   // SKELETON before the message is used; the optional augmentation hook then
   // appends note blocks (memory/job — the augmenter announces each on its own
   // sink as note.emitted, between created and completed); the loop persists
@@ -210,7 +210,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
   ])
   emit(makeEvent("message.created", { message: userMsg }, ctx))
   // A throwing hook or persistence sink must not leave run.started dangling
-  // (spec §11 invariant: a started run always reaches a terminal event —
+  // (invariant: a started run always reaches a terminal event —
   // same pattern as the provider-failure path). Unlike a failed assistant
   // message there is nothing to complete first — the user message carries no
   // stopReason — so the terminal event is run.failed directly, and runAgent
@@ -244,7 +244,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
     // Abort checkpoint: never start another LLM call after an abort.
     if (deps.signal?.aborted) return finishAborted()
 
-    // llm.started attempt (spec §5.3): 1 for a fresh call. Wrapper-level
+    // llm.started attempt: 1 for a fresh call. Wrapper-level
     // retries happen inside deps.llm.stream() (withRetry) and surface
     // through the composition's own onRetry sink — when that composition
     // tracks the attempt number, it feeds it back via deps.llmAttempt.
@@ -267,7 +267,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
     let usage: Usage = { inputTokens: 0, outputTokens: 0 }
     // Set when deps.llm.stream() threw for good (the retry wrapper gave up):
     // the run then terminates through the error lifecycle below instead of
-    // rejecting — spec §11, "只有 provider 彻底失败才终止 run".
+    // rejecting — 只有 provider 彻底失败才终止 run.
     let streamError: unknown
 
     try {
@@ -353,12 +353,12 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       }
       try {
         // A tool call with no arguments stream at all leaves argsJson "" —
-        // treat it as an empty object (I5: no-args calls must not fail).
+        // treat it as an empty object (no-args calls must not fail).
         call.args = JSON.parse(call.argsJson || "{}")
         emit(makeEvent("tool_call.completed", { messageId: assistant.id, block: call }, ctx))
       } catch {
         entry.result = errorResult(call.callId, "invalid tool args json")
-        // Spec §5.3 created→delta→completed: completed fires on the
+        // The created→delta→completed lifecycle: completed fires on the
         // parse-failure path too, carrying the raw (unparseable) block.
         emit(makeEvent("tool_call.completed", { messageId: assistant.id, block: call }, ctx))
       }
@@ -374,7 +374,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
     // loop is about to continue into a tool turn it will never take, explain
     // on THIS assistant message why the run stopped without a final answer —
     // the note must be attached BEFORE onMessage so an eagerly-serializing
-    // sink (P2's JSONL) persists it as part of the message.
+    // sink (the session store's JSONL) persists it as part of the message.
     let truncationNote: NoteBlock | undefined
     if (iter === maxIterations - 1 && stopReason === "tool_use" && entries.length > 0) {
       truncationNote = {
@@ -399,7 +399,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
         emit(makeEvent("note.emitted", { messageId: assistant.id, block: truncationNote }, ctx))
       }
       // Persist before announcing: events must reflect persisted state, and an
-      // eagerly-serializing onMessage (P2's JSONL) stores exactly this message.
+      // eagerly-serializing onMessage (the session store's JSONL) stores exactly this message.
       deps.onMessage(assistant)
       emit(makeEvent("message.completed", { message: assistant }, ctx))
       all.push(assistant)
@@ -426,7 +426,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       return { stopReason, totalUsage, messages: all }
     }
 
-    // Provider failure (spec §11): the stream died for good — bad key,
+    // Provider failure: the stream died for good — bad key,
     // prolonged 5xx, network; anything the retry wrapper exhausted itself on.
     // Partial content was persisted above with stopReason "error"; terminate
     // the run. runAgent resolves — it never rejects for provider errors.
@@ -474,7 +474,7 @@ async function runToolTurn(
   const toolMsg = newToolMessage(input.sessionId, [])
   emit(makeEvent("message.created", { message: toolMsg }, ctx))
 
-  // Permission gate (spec §9): every executable call is checked before it
+  // Permission gate: every executable call is checked before it
   // runs, in model order (confirmations reach the human one at a time).
   // Refused calls become error results + a note block on this tool message;
   // the loop itself continues so the model can react to the refusal.
@@ -565,7 +565,7 @@ async function runToolTurn(
     return block
   }
 
-  // Scheduling (spec §7): parallel tools run concurrently; serial tools run
+  // Scheduling: parallel tools run concurrently; serial tools run
   // one-by-one after every other tool has settled, so they never overlap
   // anything. Results are written back in model order either way.
   const execEntries = entries.filter((e) => !e.result)

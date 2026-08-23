@@ -75,7 +75,7 @@ export function createApi(
         // Non-JSON error body: keep the HTTP fallback.
       }
       const err = new ApiError(res.status, message)
-      // The App drops back to the token form on any 401 (T4 re-entry path).
+      // The App drops back to the token form on any 401 (the re-entry path).
       if (err.status === 401) options.onUnauthorized?.()
       throw err
     }

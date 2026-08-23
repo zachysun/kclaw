@@ -1,5 +1,5 @@
 /**
- * TrashView — the recycle bin (GET /sessions?deleted=true, spec §10 WebUI).
+ * TrashView — the recycle bin (GET /sessions?deleted=true, the WebUI).
  * Covers list rendering (deleted session titles + 恢复/彻底删除 buttons),
  * restore (POST /sessions/:id/restore), purge (POST /sessions/:id/purge),
  * and the empty state.

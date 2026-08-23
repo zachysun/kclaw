@@ -1,5 +1,5 @@
 /**
- * Chat REPL integration tests (P3 Task 11): execa drives the BUILT
+ * Chat REPL integration tests: execa drives the BUILT
  * `dist/index.js` as a child process against a REAL daemon (auto-started by
  * the CLI itself), whose LLM provider is a local mock OpenAI SSE server — a
  * tiny node:http listener answering POST /chat/completions with
@@ -209,7 +209,7 @@ describe("kclaw chat (built CLI + real daemon + mock SSE provider)", () => {
       expect(res.stderr).toBe("")
       expect(res.stdout).toContain("你好，世界")
       expect(SESSION_ID_RE.test(res.stdout)).toBe(true) // the header carries the session id
-      // P4 T1: the daemon now announces the user message lifecycle
+      // The daemon now announces the user message lifecycle
       // (message.created/completed) on the wire; the REPL must render NONE of
       // it — readline already owns the typed line, and piped stdin echoes
       // nothing, so the user's text must appear exactly zero times.
@@ -323,7 +323,7 @@ describe("kclaw chat (built CLI + real daemon + mock SSE provider)", () => {
   )
 
   it(
-    "scenario E: injected memory notes render once; user message events never double-echo (P4 T1)",
+    "scenario E: injected memory notes render once; user message events never double-echo",
     async () => {
       // Line 1 asks the model to save a memory (safe tool, auto-allowed);
       // line 2's user message then gets that memory injected as a note

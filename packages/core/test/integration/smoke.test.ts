@@ -1,13 +1,13 @@
 /**
- * P2 integration smoke: the whole persistence/permission/tool stack wired
- * the way the daemon will wire it (P3), on a real temp KCLAW_HOME.
+ * Integration smoke: the whole persistence/permission/tool stack wired
+ * the way the daemon wires it, on a real temp KCLAW_HOME.
  *
  * SessionStore + MemoryStore + ConfigPermissionGate + createBuiltinTools
  * drive one runAgent turn with a scripted LlmClient that emits a tool_call
  * for `exec {command:"echo hi"}` then a final end_turn. Two scenarios: the
  * whitelist path (allow rule → no confirmation) and the confirmation path
  * (empty allow → confirm → auto-approve). Both assert the granted reason
- * landed on the tool message (Task 4.1).
+ * landed on the tool message.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { mkdtempSync, rmSync, readdirSync } from "node:fs"
@@ -36,7 +36,7 @@ afterEach(() => {
   rmSync(workspace, { recursive: true, force: true })
 })
 
-// --- scripted LlmClient (P1 test pattern, test/agent/loop-tools.test.ts) ---
+// --- scripted LlmClient (the scripted-client pattern from test/agent/loop-tools.test.ts) ---
 
 function scriptClient(script: LlmStreamEvent[][]): LlmClient {
   let i = 0
@@ -60,7 +60,7 @@ const FINAL: LlmStreamEvent[] = [
   { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } },
 ]
 
-describe("P2 integration smoke", () => {
+describe("integration smoke", () => {
   it("runs a full agent turn over the real storage/permission/tool stack", async () => {
     const paths = resolvePaths(home)
 
@@ -188,7 +188,7 @@ describe("P2 integration smoke", () => {
     expect(events[events.length - 1]!.type).toBe("run.completed")
   })
 
-  it("exposes the P2 surface from the package barrel", () => {
+  it("exposes the public surface from the package barrel", () => {
     for (const name of [
       "SessionStore", "MemoryStore", "JobScheduler",
       "ConfigPermissionGate", "createBuiltinTools", "createExecTool",

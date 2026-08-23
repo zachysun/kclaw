@@ -41,7 +41,7 @@ function harness(llm: LlmClient, extra: Record<string, unknown> = {}) {
 
 const DONE: LlmStreamEvent = { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 0, outputTokens: 0 } }
 
-describe("provider failure lifecycle (spec §11)", () => {
+describe("provider failure lifecycle", () => {
   it("resolves with the error lifecycle when the llm stream fails for good", async () => {
     const llm: LlmClient = {
       async *stream(): AsyncIterable<LlmStreamEvent> { throw new Error("llm http 401: bad key") },
@@ -79,7 +79,7 @@ describe("provider failure lifecycle (spec §11)", () => {
     expect(assistant.blocks).toEqual([expect.objectContaining({ type: "text", text: "partial " })])
     // events reflect persisted state: persist → (assistant) message.completed
     // → llm.failed → run.failed. The timeline's FIRST message.completed is the
-    // user message's (P4 T1), so the assistant one is the LAST entry.
+    // user message's, so the assistant one is the LAST entry.
     expect(timeline.indexOf("persist:assistant")).toBeLessThan(timeline.lastIndexOf("event:message.completed"))
     expect(timeline.lastIndexOf("event:message.completed")).toBeLessThan(timeline.indexOf("event:llm.failed"))
     expect(timeline.indexOf("event:llm.failed")).toBeLessThan(timeline.indexOf("event:run.failed"))
@@ -117,7 +117,7 @@ describe("provider failure lifecycle (spec §11)", () => {
       },
     }
     const onLlmRetry = vi.fn()
-    // daemon-side composition (P3): withRetry's onRetry is also passed to the
+    // Daemon-side composition: withRetry's onRetry is also passed to the
     // loop as AgentDeps.onLlmRetry so retries become visible as events.
     const llm = withRetry(raw, { baseDelayMs: 1, jitter: () => 0, onRetry: (info) => onLlmRetry(info) })
     const { run, events } = harness(llm, { onLlmRetry })

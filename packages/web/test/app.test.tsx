@@ -100,7 +100,7 @@ describe("App", () => {
     unmount(root, container)
   })
 
-  it("clears the stale token and returns to the token form on an API 401 (T4 re-entry)", async () => {
+    it("clears the stale token and returns to the token form on an API 401 (re-entry)", async () => {
     localStorage.setItem("kclaw_token", "stale-tok")
     mockUnauthorized(fetchMock)
     const { container, root } = mount()
