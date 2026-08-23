@@ -17,7 +17,16 @@ export interface KclawConfig {
   }
   permissions: { allow: string[]; deny: string[]; confirmTimeoutMs: number; sessionGrants: boolean }
   memory: { autoExtract: boolean; extractModel: string }
-  web: { tavilyApiKey: string }
+  web: {
+    tavilyApiKey: string
+    /**
+     * AbortSignal timeout applied to every web tool fetch (search + page
+     * fetch), so a hung host can never park a run forever. Optional only
+     * because older config.yaml files predate it; defaults to 20s
+     * (defaultConfig).
+     */
+    timeoutMs?: number
+  }
   exec: { timeoutMs: number; maxOutputBytes: number }
   sessions: { recycleBinTtlMs: number }
   workspace: string
@@ -27,7 +36,7 @@ export const defaultConfig: KclawConfig = {
   providers: { default: "", entries: {}, timeoutMs: DEFAULT_LLM_TIMEOUT_MS },
   permissions: { allow: [], deny: ["exec:sudo*", "exec:rm -rf*"], confirmTimeoutMs: 120_000, sessionGrants: true },
   memory: { autoExtract: false, extractModel: "" },
-  web: { tavilyApiKey: "" },
+  web: { tavilyApiKey: "", timeoutMs: 20_000 },
   exec: { timeoutMs: 60_000, maxOutputBytes: 100 * 1024 },
   sessions: { recycleBinTtlMs: 30 * 24 * 60 * 60 * 1000 },
   workspace: process.cwd(),

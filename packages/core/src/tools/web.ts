@@ -18,6 +18,9 @@
  *   can't blow up memory in the DOM stage.
  *
  * `fetchImpl` is injectable; tests pass a stub so no network is touched.
+ *
+ * Every fetch carries an AbortSignal.timeout (default 20s, `timeoutMs`) so a
+ * hung host can never park a run forever.
  */
 import { Readability } from "@mozilla/readability"
 import { parseHTML } from "linkedom"
@@ -27,6 +30,7 @@ import { errMsg, makeTool, optInt, requireString, ToolError } from "./shared.js"
 const TAVILY_URL = "https://api.tavily.com/search"
 const DEFAULT_MAX_RESULTS = 5
 const DEFAULT_MAX_FETCH_BYTES = 512 * 1024
+const DEFAULT_TIMEOUT_MS = 20_000
 
 /** Tidy HTML-derived text: squash trailing spaces and 3+ blank lines. */
 function normalizeText(text: string): string {
@@ -84,9 +88,12 @@ export function createWebTools(opts: {
   tavilyApiKey: string
   fetchImpl?: typeof fetch
   maxFetchBytes?: number
+  timeoutMs?: number
 }): { "web_search": ToolExecutor; "web_fetch": ToolExecutor } {
   const doFetch = opts.fetchImpl ?? globalThis.fetch
   const maxFetchBytes = opts.maxFetchBytes ?? DEFAULT_MAX_FETCH_BYTES
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const signal = () => AbortSignal.timeout(timeoutMs)
 
   const web_search = makeTool("web_search", "safe", "parallel", async (args) => {
     const query = requireString(args, "query")
@@ -98,6 +105,7 @@ export function createWebTools(opts: {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ api_key: opts.tavilyApiKey, query, max_results: maxResults }),
+        signal: signal(),
       })
     } catch (e) {
       throw new ToolError(`search request failed: ${errMsg(e)}`)
@@ -142,6 +150,7 @@ export function createWebTools(opts: {
         method: "GET",
         redirect: "follow",
         headers: { accept: "text/html, text/plain, */*" },
+        signal: signal(),
       })
     } catch (e) {
       throw new ToolError(`fetch failed: ${errMsg(e)}`)

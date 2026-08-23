@@ -40,6 +40,7 @@ export function createBuiltinTools(opts: {
   memory: MemoryStore
   tavilyApiKey: string
   exec?: Partial<{ timeoutMs: number; maxOutputBytes: number }>
+  web?: Partial<{ timeoutMs: number }>
   fetchImpl?: typeof fetch
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] } {
   const exec = createExecTool({
@@ -48,7 +49,11 @@ export function createBuiltinTools(opts: {
     maxOutputBytes: opts.exec?.maxOutputBytes,
   })
   const fs = createFsTools({ workspace: opts.workspace })
-  const web = createWebTools({ tavilyApiKey: opts.tavilyApiKey, fetchImpl: opts.fetchImpl })
+  const web = createWebTools({
+    tavilyApiKey: opts.tavilyApiKey,
+    fetchImpl: opts.fetchImpl,
+    timeoutMs: opts.web?.timeoutMs,
+  })
   const memory = createMemoryTools(opts.memory)
 
   const entries: Array<{ name: string; tool: ToolExecutor; def: ToolDefinition }> = [
