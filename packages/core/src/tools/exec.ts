@@ -8,8 +8,9 @@
  * - On timeout the whole process group gets SIGKILL (`detached: true` makes
  *   the child a group leader, so `kill(-pid)` also reaps shell descendants
  *   like `sleep`); partial output is still returned.
- * - Output larger than `maxOutputBytes` keeps head + tail with a truncation
- *   marker (see truncateMiddle).
+ * - Output larger than `maxOutputBytes` keeps the accumulated head and drops
+ *   the tail, finishing with a byte-counted `...[dropped N bytes]...` marker
+ *   (truncateMiddle only micro-trims the head's <=1-chunk overshoot).
  * - Exit 0 → ok; anything else → error with an `exit code N` prefix line.
  */
 import { spawn } from "node:child_process"
