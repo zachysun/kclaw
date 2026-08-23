@@ -1,3 +1,4 @@
+import { readlinkSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import { newId } from "../protocol/ids.js"
@@ -114,9 +115,34 @@ function normalizePathArg(raw: string, workspace: string | undefined): string {
 }
 
 /**
+ * Real path of `p`, tolerating a nonexistent leaf: the deepest existing
+ * ancestor is realpath'd and the missing tail appended verbatim, so a
+ * not-yet-created target keeps its lexical (planned) form. A broken symlink
+ * resolves through its readlink target — writing through it lands at the
+ * target, so the boundary must see the target.
+ */
+export function realpathWithin(p: string): string {
+  try {
+    return realpathSync(p)
+  } catch {
+    // Distinguish a broken symlink (readlink succeeds) from a plain
+    // nonexistent path before falling back to the ancestor walk.
+    try {
+      return realpathWithin(readlinkSync(p))
+    } catch {
+      const parent = path.dirname(p)
+      if (parent === p) return p
+      return path.join(realpathWithin(parent), path.basename(p))
+    }
+  }
+}
+
+/**
  * True when a file tool's path arg escapes the workspace: `~`/`~/` expanded,
  * then resolved against the workspace exactly the way fs.ts resolves before
  * reading/writing (`path.resolve(root, p)` must equal or sit beneath `root`).
+ * The resolved form is the REAL path (symlinks followed), so an in-workspace
+ * symlink pointing outside still escapes.
  * Only meaningful when workspace is set; otherwise the workspace boundary
  * is not enforced at the permission layer and this returns false (legacy
  * behavior).
@@ -125,7 +151,7 @@ function escapesWorkspace(tool: string, args: unknown, workspace: string | undef
   if (workspace === undefined || !FILE_TOOLS.has(tool)) return false
   const a = args as { path?: unknown } | null | undefined
   const root = path.resolve(workspace)
-  const resolved = path.resolve(root, expandTilde(String(a?.path ?? "")))
+  const resolved = realpathWithin(path.resolve(root, expandTilde(String(a?.path ?? ""))))
   return resolved !== root && !resolved.startsWith(root + path.sep)
 }
 

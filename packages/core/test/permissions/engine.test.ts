@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest"
-import { homedir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
-import { compileRule, globMatch, ConfigPermissionGate, SessionGrants } from "../../src/permissions/engine.js"
+import { mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs"
+import { compileRule, globMatch, ConfigPermissionGate, SessionGrants, realpathWithin } from "../../src/permissions/engine.js"
 import type { ToolCallBlock } from "../../src/protocol/blocks.js"
 
 const tc = (name: string, args: unknown): ToolCallBlock => ({
@@ -112,5 +113,33 @@ describe("ConfigPermissionGate", () => {
     })
     const d = await gate.check(tc("fs_read", { path: "/etc/passwd" }))
     expect(d).toMatchObject({ type: "allow", reason: "safe" })
+  })
+  describe("realpath boundary (symlink escape)", () => {
+    // tmpdir() on macOS (/var/folders/...) sits behind the /var → /private/var
+    // symlink; realpath it so the fixtures' lexical form has no symlinked
+    // ancestor and the assertions below compare like for like.
+    const tmp = realpathSync(tmpdir())
+    it("a workspace symlink pointing outside goes to confirm even for a safe tool", async () => {
+      const ws = mkdtempSync(join(tmp, "kclaw-ws-"))
+      const outside = mkdtempSync(join(tmp, "kclaw-out-"))
+      writeFileSync(join(outside, "secret.txt"), "s3cret")
+      symlinkSync(outside, join(ws, "link"))
+      const g = new ConfigPermissionGate(
+        { allow: [], deny: [], confirmTimeoutMs: 1000, sessionGrants: true },
+        { safeTools: new Set(["fs_read"]), workspace: ws },
+      )
+      const d = await g.check(tc("fs_read", { path: "link/secret.txt" }))
+      expect(d.type).toBe("confirm") // NOT {type:"allow",reason:"safe"}
+    })
+    it("realpathWithin keeps the lexical path for a nonexistent target", () => {
+      const ws = mkdtempSync(join(tmp, "kclaw-ws-"))
+      expect(realpathWithin(join(ws, "no", "such", "file.txt"))).toBe(join(ws, "no", "such", "file.txt"))
+    })
+    it("realpathWithin resolves a broken symlink's readlink target", () => {
+      const ws = mkdtempSync(join(tmp, "kclaw-ws-"))
+      const outside = mkdtempSync(join(tmp, "kclaw-out-"))
+      symlinkSync(join(outside, "gone"), join(ws, "broken")) // target does not exist
+      expect(realpathWithin(join(ws, "broken"))).toBe(join(outside, "gone"))
+    })
   })
 })
