@@ -2,10 +2,13 @@
  * Daemon lifecycle — `launchDaemon` is the one-call assembly of
  * the whole daemon process:
  *
- *   resolvePaths → loadConfig → loadOrCreateToken → stores (SessionStore,
+ *   resolvePaths → acquireDaemonSlot (exclusive `wx` claim of
+ *   `<home>/daemon.json` with a placeholder {port: 0, pid, startedAt,
+ *   starting}) → loadConfig → loadOrCreateToken → stores (SessionStore,
  *   MemoryStore + startup `reconcile()`, JobScheduler) → llm client
  *   → RunManager → createApp (auth + routes + ws) → listen 127.0.0.1 →
- *   `<home>/daemon.json` {port, pid, startedAt} → scheduler tick → Daemon.
+ *   backfill daemon.json with the real {port, pid, startedAt}
+ *   → scheduler tick → Daemon.
  *
  * `stop()` reverses it: tick.stop → app.close → delete daemon.json (the token
  * file is kept — it is the daemon's stable identity across restarts). All of
@@ -20,7 +23,7 @@
  * vars fill whatever the entry leaves empty; still-missing endpoint or model
  * is a hard launch error.
  */
-import { existsSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
@@ -179,9 +182,56 @@ export function defaultLlmFactory(
   )
 }
 
+/** True when `pid` is a live process (signal 0 probe). */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH"
+  }
+}
+
+/**
+ * Exclusive claim of the home's daemon slot, BEFORE any resource is built:
+ * `wx` creation of daemon.json wins the race atomically — a concurrent
+ * second launcher gets EEXIST, sees our live pid, and refuses instead of
+ * silently overwriting the pidfile and orphaning the first daemon (which
+ * also double-runs the scheduler against the same jobs.db and races the
+ * token file). A stale slot (dead pid) is reclaimed. Returns the startedAt
+ * timestamp for the post-listen backfill.
+ */
+function acquireDaemonSlot(daemonJson: string, pid: number): string {
+  try {
+    const existing = JSON.parse(readFileSync(daemonJson, "utf8")) as { pid?: unknown }
+    if (typeof existing.pid === "number" && existing.pid > 0 && pidAlive(existing.pid)) {
+      throw new Error(`daemon already running (pid ${existing.pid}) — connect to it or stop it first`)
+    }
+    rmSync(daemonJson, { force: true })
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("daemon already running")) throw error
+    // missing/unreadable daemon.json → fall through to the wx claim
+  }
+  const startedAt = new Date().toISOString()
+  const placeholder = `${JSON.stringify({ port: 0, pid, startedAt, starting: true }, null, 2)}\n`
+  try {
+    writeFileSync(daemonJson, placeholder, { flag: "wx" })
+  } catch {
+    // Lost the race: re-read and verify the winner is alive before refusing.
+    const winner = (() => { try { return JSON.parse(readFileSync(daemonJson, "utf8")) as { pid?: unknown } } catch { return undefined } })()
+    if (winner !== undefined && typeof winner.pid === "number" && pidAlive(winner.pid)) {
+      throw new Error(`daemon already running (pid ${winner.pid}) — connect to it or stop it first`)
+    }
+    rmSync(daemonJson, { force: true })
+    writeFileSync(daemonJson, placeholder, { flag: "wx" })
+  }
+  return startedAt
+}
+
 /** Assemble and launch the daemon; resolves once it serves and ticks. */
 export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daemon> {
   const paths = resolvePaths(opts.home)
+  const startedAt = acquireDaemonSlot(join(paths.home, "daemon.json"), process.pid)
   const config = opts.config ?? loadConfig(paths)
   const token = loadOrCreateToken(paths.home)
 
@@ -230,7 +280,9 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   const port = typeof address === "object" && address !== null ? address.port : (opts.port ?? 0)
 
   const daemonJson = join(paths.home, "daemon.json")
-  writeFileSync(daemonJson, `${JSON.stringify({ port, pid: process.pid, startedAt: new Date().toISOString() }, null, 2)}\n`, "utf8")
+  // Backfill the placeholder claimed at the top with the real port; the same
+  // startedAt keeps the claim's timestamp (no `starting` flag once serving).
+  writeFileSync(daemonJson, `${JSON.stringify({ port, pid: process.pid, startedAt }, null, 2)}\n`, "utf8")
 
   const tick = startSchedulerTick({ scheduler: jobs, run, bus, sessions, intervalMs: opts.schedulerIntervalMs ?? DEFAULT_SCHEDULER_INTERVAL_MS, purgeTtlMs: config.sessions.recycleBinTtlMs })
   const stopTimeoutMs = opts.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS

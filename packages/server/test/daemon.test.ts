@@ -176,6 +176,42 @@ describe("launchDaemon", () => {
   })
 })
 
+// --- daemon slot exclusivity ---------------------------------------------------
+
+describe("daemon slot exclusivity", () => {
+  it("a second launch on a live daemon's home is refused", async () => {
+    const home = makeHome()
+    const d1 = await launchMock(home, makeConfig(home))
+
+    // same home while d1 is alive: the second launcher must refuse instead
+    // of silently overwriting the pidfile and orphaning d1
+    await expect(launchMock(home, makeConfig(home))).rejects.toThrow(/already running/)
+
+    await d1.stop()
+  })
+
+  it("after a clean stop the home is launchable again", async () => {
+    const home = makeHome()
+    const d1 = await launchMock(home, makeConfig(home))
+    await d1.stop()
+
+    const d2 = await launchMock(home, makeConfig(home))
+    expect(d2.port).toBeGreaterThan(0)
+    await d2.stop()
+  })
+
+  it("a stale daemon.json (dead pid) is reclaimed, not fatal", async () => {
+    const home = makeHome()
+    writeFileSync(
+      join(home, "daemon.json"),
+      JSON.stringify({ port: 1, pid: 999_999_999, startedAt: new Date().toISOString() }),
+    )
+
+    const daemon = await launchMock(home, makeConfig(home))
+    await daemon.stop()
+  })
+})
+
 // --- default llmFactory resolution --------------------------------------------
 
 describe("default llmFactory", () => {
