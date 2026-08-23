@@ -171,17 +171,41 @@ export class JobScheduler {
   }
 
   /**
-   * Record a run at `now` (lastRunAt/lastStatus/lastError; `lastError` cleared
-   * on "ok") and advance `nextRunAt` to the next occurrence strictly after
-   * `now`, skipping any backlog of missed fire times. No-op if the job is gone.
+   * Atomically claim every enabled job whose next_run_at has passed:
+   * each row's next_run_at is advanced (skipping any backlog of missed
+   * fire times) inside one transaction, and only rows whose CAS update
+   * affected exactly one row are returned. Claim-then-execute means a
+   * crash mid-run cannot re-fire the job on restart, and a second handle
+   * on the same db can never double-claim.
+   */
+  claimDue(now: Date): Job[] {
+    const claim = this.db.transaction((rows: JobRow[]): Job[] => {
+      const claimed: Job[] = []
+      for (const row of rows) {
+        const next = nextIsoAfter(row.cron, now)
+        const res = this.db
+          .prepare(
+            "UPDATE jobs SET next_run_at = ? WHERE id = ? AND enabled = 1 AND next_run_at <= ?",
+          )
+          .run(next, row.id, now.toISOString())
+        if (res.changes === 1) claimed.push(toJob({ ...row, next_run_at: next }))
+      }
+      return claimed
+    })
+    const rows = this.db
+      .prepare("SELECT * FROM jobs WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at")
+      .all(now.toISOString()) as JobRow[]
+    return claim(rows)
+  }
+
+  /**
+   * Record a run's outcome (lastRunAt/lastStatus/lastError; `lastError`
+   * cleared on "ok"). next_run_at is NOT touched — claimDue advanced it
+   * when the run was claimed. No-op if the job is gone.
    */
   markRun(id: string, status: JobStatus, now: Date, error?: string): void {
-    const row = this.getRow(id)
-    if (row === undefined) return
     this.db
-      .prepare(
-        `UPDATE jobs SET next_run_at = ?, last_run_at = ?, last_status = ?, last_error = ? WHERE id = ?`,
-      )
-      .run(nextIsoAfter(row.cron, now), now.toISOString(), status, error ?? null, id)
+      .prepare(`UPDATE jobs SET last_run_at = ?, last_status = ?, last_error = ? WHERE id = ?`)
+      .run(now.toISOString(), status, error ?? null, id)
   }
 }
