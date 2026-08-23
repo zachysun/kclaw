@@ -8,7 +8,7 @@
 
 - **只绑回环地址**：`HOST = "127.0.0.1"`（本机回环地址，外部网络访问不到）。daemon 不做网络隔离，安全完全交给 token；绑回环保证其他机器无法连接。
 - **默认临时端口**：`port: 0`（让操作系统分配一个空闲端口），真实端口 listen 成功后从 `app.server.address()` 读出并写入 `daemon.json`。客户端通过文件发现端口，不依赖约定端口。
-- **daemon.json 是就绪信号，不是启动前置**：文件在 listen 成功**之后**写入 `{port, pid, startedAt}`；`launchDaemon` resolve 时 daemon 已在服务并在调度。CLI 侧以"文件出现且 `/health` 可访问"作为就绪判据。
+- **daemon.json 是独占 slot，启动第一步就认领**：装配开始即以 `wx` 原子创建占位 `{port: 0, pid, startedAt, starting: true}`（并发第二个启动者拿到 EEXIST，看到存活 pid 即拒绝"daemon already running"；死 pid 的残留被回收重认领）；listen 成功后回填真实 `{port, pid, startedAt}`（同一 startedAt，`starting` 移除），此时文件才指向可用端口。`launchDaemon` resolve 时 daemon 已在服务并在调度。CLI 侧以"文件出现且 `/health` 可访问"作为就绪判据。
 - **token 是 daemon 的稳定身份**：`<home>/token` 首次启动时生成（UUID，文件权限 0600，仅属主可读写），重启复用，stop 不删除；仅 daemon.json 会被删除。因此 CLI/WebUI 保存的 token 在 daemon 重启后仍然有效。
 - **鉴权是"每路由必带 Bearer"加白名单豁免**：一个 `preHandler` 钩子拦截全部路由，只有三处豁免——`/health`、`/ws`、静态 WebUI 外壳（见下）。豁免列表是封闭集合，新增路由默认受保护。
 - **有界停止**：`stop()` 的每一步（停调度、关服务器）有独立超时（默认 60s）。超时则 `stop()` reject、daemon.json **保留**——进程仍在运行，指向它的文件必须与事实一致；虚报"已停止"会诱发双 daemon、job 双触发。
@@ -63,6 +63,7 @@ export function bearerMatches(header: string | undefined, token: string): boolea
 
 ```
 resolvePaths(home)                  建目录树（core/storage/paths.ts）
+acquireDaemonSlot                   wx 独占认领 <home>/daemon.json：占位 {port:0, pid, startedAt, starting:true}
 loadConfig(paths)                   config.yaml 深合并默认值
 loadOrCreateToken(paths.home)       读/生成 <home>/token
 new SessionStore / MemoryStore      MemoryStore 构造后立即 reconcile()：
@@ -75,7 +76,7 @@ new RunManager({...})               会话串行 run 执行器（见 run-manager
 createApp({home, token, stores, bus, run, webDist})  Fastify 应用（见 http-api）
 await app.listen({ port: 0, host: "127.0.0.1" })
 port = app.server.address().port
-writeFileSync(<home>/daemon.json, {port, pid, startedAt})   ← listen 之后、tick 之前
+writeFileSync(<home>/daemon.json, {port, pid, startedAt})   ← 回填占位（同 startedAt、starting 移除）；listen 之后、tick 之前
 startSchedulerTick({...})           立即一次检查 + 每 30s 一次
 return { port, token, pid, stop }
 ```
@@ -88,7 +89,7 @@ return { port, token, pid, stop }
 2. 条目留空的字段由环境变量补：`KCLAW_LLM_BASE_URL`、`KCLAW_LLM_API_KEY`、`KCLAW_LLM_MODEL`（`valueOrEnv`：配置值非空则用配置，否则用环境变量，再否则空串）；
 3. `baseUrl` 或 `apiKey` 仍为空 → 抛 `no llm provider configured: set providers in config.yaml or KCLAW_LLM_* env`；`model` 为空 → 抛 `no llm model configured: …`。
 
-抛错发生在 `launchDaemon` 内部，daemon 从未 listen、daemon.json 从未写入——CLI 的 `ensureDaemon` 轮询 5s 后报"daemon did not become healthy"。`defaultLlmFactory` 用解析出的端点构造 `createOpenAiCompatClient({baseUrl, apiKey, timeoutMs: cfg.providers.timeoutMs})`（单请求超时默认 120s）再包一层 `withRetry`（瞬时错误重试，最多 3 次尝试）。
+抛错发生在 `launchDaemon` 内部，daemon 从未 listen；第一步认领的占位 daemon.json 留在原处（pid 存活时挡住后续启动，pid 退出后被回收重认领）——CLI 的 `ensureDaemon` 轮询 5s 后报"daemon did not become healthy"。`defaultLlmFactory` 用解析出的端点构造 `createOpenAiCompatClient({baseUrl, apiKey, timeoutMs: cfg.providers.timeoutMs})`（单请求超时默认 120s）再包一层 `withRetry`（瞬时错误重试，最多 3 次尝试）。
 
 ## 鉴权设计
 
@@ -132,7 +133,7 @@ rmSync(<home>/daemon.json)          // 只有全部成功才删
 
 `withStopTimeout(p, timeoutMs, step)` 用 `Promise.race([p, deadline])` 给每步设限。超时的一步**不会被取消**（它可能稍后自行完成，迟到的失败被丢弃——超时已经报告过失败，不能再以未处理 rejection 的形式抛出）。设限的原因：挂死的 provider 流会阻塞 tracked job run，卡住的客户端会阻塞 `app.close`，没有超时上限的 `stop()` 会永远不返回。
 
-**超时路径**：`stop()` reject → bin exit 1 → **daemon.json 保留**（进程仍在运行）。进行中的 job run 按 §11 崩溃容忍语义放弃：JSONL 容忍尾部残缺行，防重入记录在内存里，未完成 stop 的 daemon 重启后到期 job 重新触发。
+**超时路径**：`stop()` reject → bin exit 1 → **daemon.json 保留**（进程仍在运行）。进行中的 job run 按 §11 崩溃容忍语义放弃：JSONL 容忍尾部残缺行；该次触发认领时已推进 `next_run_at`，重启后不会重放，job 在下个调度点照常触发。
 
 ### CLI 侧的 pid 校验与 stop（daemon-ctl.ts）
 
@@ -143,7 +144,7 @@ rmSync(<home>/daemon.json)          // 只有全部成功才删
 ## 边界与出错
 
 - **stop 后 token 仍在**：`<home>/token` 是 daemon 的身份，不是某次运行的临时凭证；重装/换 token 需手动删文件。
-- **stale daemon.json 无法在服务端自愈**：daemon 不清理其他进程的残留文件，发现与处理都在 CLI 侧（见上文 ensureDaemon/stopDaemon）。
+- **stale daemon.json 在启动时自愈**：`acquireDaemonSlot` 见到死 pid 的残留文件即删除并重新 `wx` 认领；存活 pid 则拒绝启动。运行中失效的发现（health 探测、respawn 决策）仍在 CLI 侧（见上文 ensureDaemon/stopDaemon）。
 - **`/health` 无鉴权，因此也没有信息泄露控制**：它只返回 `{ok:true}`，不暴露版本/端口/pid；`/status`（version、uptimeSec）受鉴权保护。
 - **配置文件损坏即启动失败**：`loadConfig` 对无法解析的 YAML 直接抛错（静默退回默认值会丢掉用户的权限规则），daemon 不启动。
 - **bin 假定构建产物存在**：`kclaw-server.mjs` import 的是 `../dist/index.js`，packages/server 未构建时启动直接失败（CLI 的错误信息里提示 `pnpm -C packages/server build`）。

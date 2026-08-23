@@ -114,7 +114,7 @@ export function readJsonl(file: string): unknown[]
 
 ## daemon.json 与 token（`packages/server/src/daemon.ts` / `auth.ts`）
 
-- **`<home>/daemon.json`**：daemon 开始监听后写入 `{ port, pid, startedAt }`，是"该 home 下存在一个运行中的 daemon 及其端口"的存活标识。`stop()` 正常结束时删除；若某个停机步骤超时（默认 `DEFAULT_STOP_TIMEOUT_MS = 60000`），`stop()` 抛错且 daemon.json **保留**——进程仍在运行，一条如实的记录比干净的目录更有用（CLI 靠它判断 daemon 状态，见 [daemon](../server/daemon.md)）。
+- **`<home>/daemon.json`**：启动第一步以 `wx` 独占认领（占位 `{ port: 0, pid, startedAt, starting: true }`；存活 pid 拒绝二次启动，死 pid 回收重认领），listen 成功后回填真实 `{ port, pid, startedAt }`（同一 startedAt，`starting` 移除），是"该 home 下存在一个运行中的 daemon 及其端口"的存活标识。`stop()` 正常结束时删除；若某个停机步骤超时（默认 `DEFAULT_STOP_TIMEOUT_MS = 60000`），`stop()` 抛错且 daemon.json **保留**——进程仍在运行，一条如实的记录比干净的目录更有用（CLI 靠它判断 daemon 状态，见 [daemon](../server/daemon.md)）。
 - **`<home>/token`**：daemon 的 Bearer token（HTTP/WS 鉴权，Bearer token 是放在请求头 `Authorization: Bearer <值>` 里的令牌）。`loadOrCreateToken` 读它，不存在则生成一个新 UUID 写入，**文件权限 0600（仅属主可读写）**。跨重启复用同一个 token——它是 daemon 的稳定身份，重启后已登录的客户端无需重新执行引导流程。校验用 `timingSafeEqual` 常数时间比较（`bearerMatches`），不泄露比较耗时信息。
 
 ---

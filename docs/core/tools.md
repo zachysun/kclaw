@@ -70,7 +70,7 @@ export function makeTool<N extends string>(
 `spawn(command, {shell: true, cwd: workspace, detached: POSIX 下为 true})`——cwd 固定在工作目录；`detached` 让子进程成为进程组（一组一起调度/发信号的进程）组长。关键约束：
 
 - **超时**：默认 `timeoutMs = 60_000`（`config.yaml` 的 `exec.timeoutMs` 同为 60s 默认值）。超时先 `process.kill(-pid, "SIGKILL")` 终止整个进程组（连带 shell 的子进程，如 `sleep`；Windows 无进程组，退回只终止直接子进程），然后返回 `{status:"error", output: "command timed out after 60000ms\n<部分输出>"}`——已产生的输出仍然返回。
-- **输出截断**：超过 `maxOutputBytes`（默认 100 KiB，即 `100 * 1024`）时 `truncateMiddle` 保留首尾各一半，中间插 `\n...[truncated N bytes]...\n` 标记；按 UTF-8 字节计数，多字节字符在切点被拆开会解码成 U+FFFD 替换字符，属可接受损失。
+- **输出截断**：流式累计到 `maxOutputBytes`（默认 100 KiB，即 `100 * 1024`）即停止积累——头部保留，之后的 chunk 只计字节数不再转发；到达上限那一刻发一条截断提示 delta（`...[output truncated, further output dropped]...`），结束时在尾部附 `...[dropped N bytes]...` 字节数标记。`truncateMiddle` 只对头部超出上限 ≤1 chunk 的部分微裁剪（插 `\n...[truncated N bytes]...\n` 标记）。按 UTF-8 字节计数，多字节字符在切点被拆开会解码成 U+FFFD 替换字符，属可接受损失。
 - **退出码**：0 → ok；非 0 → error，输出带 `exit code N` 首行；stdout 与 stderr 合并，到达即经 `ctx.onOutput` 流式回传。
 - 空/非字符串 `command` 直接返回 error（`args.command must be a non-empty string`）。
 

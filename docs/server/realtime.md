@@ -33,7 +33,7 @@
 | `{"type":"send_message","sessionId","text"}` | 两者非空字符串 | `{"type":"send_message_ack","sessionId"}`——**立即**返回，不等 run | `session not found`；`run manager not available`；字段不合法提示。ack 之后 enqueue 才失败（存储错误）时，error 帧只发到这条 socket |
 | `{"type":"run.cancel","sessionId"}` | sessionId 非空字符串 | `{"type":"run_cancel_ack","sessionId"}` | `no active run`（该会话当前无正在执行的 run）；`run manager not available` |
 
-收到未知 `type` 返回 `{"type":"error","message":"unknown command: <type>"}`，连接保持打开；非法 JSON / 非 JSON 对象返回 error 帧（`frame is not valid JSON` / `frame must be a JSON object`），连接同样保持。**认证之前**发来的任何帧（含坏 JSON）都按未授权处理：error 帧 + 关闭码 4001。重复 auth 回 `already authenticated`。没有认证超时——连接保持未认证状态也不会被主动断开。
+收到未知 `type` 返回 `{"type":"error","message":"unknown command: <type>"}`，连接保持打开；非法 JSON / 非 JSON 对象返回 error 帧（`frame is not valid JSON` / `frame must be a JSON object`），连接同样保持。**认证之前**发来的任何帧（含坏 JSON）都按未授权处理：error 帧 + 关闭码 4001。重复 auth 回 `already authenticated`。认证超时：连接后 `authTimeoutMs`（默认 10s）内未认证即以 4002 关闭。认证通过后有心跳：每 `heartbeatMs`（默认 30s）ping 一次，连续两个周期未收到 pong 即 `terminate` 硬断开（无关闭码）。
 
 ### 服务端 → 客户端
 
@@ -95,7 +95,7 @@ export class EventBus {
   │── close ────────────────────────────▶ socket.on("close") → bus.unsubscribe(socket)
 ```
 
-关闭码只有一个自定义值：`CLOSE_UNAUTHORIZED = 4001`。客户端将其作为"token 失效"专门处理（见下），其余关闭码一律视为意外断线并重连。
+自定义关闭码三个：`CLOSE_UNAUTHORIZED = 4001`（认证失败）、`CLOSE_AUTH_TIMEOUT = 4002`（认证超时）、`CLOSE_ORIGIN_NOT_ALLOWED = 1008`（带非回环浏览器 Origin 的升级被拒；无 Origin 头放行——CLI 等非浏览器客户端）。客户端仅将 4001 作为"token 失效"专门处理（见下），其余一律视为意外断线并重连——心跳 `terminate` 是无关闭码的硬断开，同样走意外断线路径。
 
 ## 断线恢复：拉取全量 + 只订阅新事件，无回放
 
@@ -116,7 +116,7 @@ export class EventBus {
 
 ## 边界与出错
 
-- **无认证超时**：连接后不认证也持续保持（占用一个 EventBus 注册表条目，能接收广播事件）。
+- **认证超时**：连接后 `authTimeoutMs`（默认 10s）内未认证即以 4002 关闭，未认证连接不再无限期挂着。
 - **错过的 confirmation.requested 不可恢复**：确认等待有时限（120s 默认），断线期间超时的确认按拒绝处理；重连拉取全量只能看到结果（note 块），不能补答。
 - **广播事件可能漏**：只 `connect` 未 `subscribe` 的连接收得到 `job.*`，但连接尚在认证前时收不到任何事件。
 - **同 token 多连接无互斥**：两个连接订阅同一会话各自收到全部分片事件；`send_message` 会各自入队（会话内仍串行，见 [run-manager](./run-manager.md)）。
