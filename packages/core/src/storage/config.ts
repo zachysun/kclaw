@@ -1,5 +1,6 @@
-import { readFileSync, writeFileSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import { parse, stringify } from "yaml"
+import { writeFileAtomic } from "./atomic.js"
 import { DEFAULT_LLM_TIMEOUT_MS } from "../provider/openai-compat.js"
 import type { KclawPaths } from "./paths.js"
 
@@ -97,7 +98,7 @@ export function loadConfig(paths: KclawPaths): KclawConfig {
   return deepMerge(structuredClone(defaultConfig), file)
 }
 
-/** Serialize config to config.yaml (whole-file rewrite). */
+/** Serialize config to config.yaml (atomic whole-file rewrite; 0600 — holds apiKey plaintext). */
 export function saveConfig(paths: KclawPaths, config: KclawConfig): void {
-  writeFileSync(paths.config, stringify(config), "utf8")
+  writeFileAtomic(paths.config, stringify(config), 0o600)
 }

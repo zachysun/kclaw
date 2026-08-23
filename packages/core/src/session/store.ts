@@ -1,7 +1,8 @@
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { newId } from "../protocol/ids.js"
 import type { Message } from "../protocol/messages.js"
+import { writeFileAtomic } from "../storage/atomic.js"
 import { appendJsonlLine, readJsonl } from "../storage/jsonl.js"
 
 /** Per-session metadata persisted at <sessionsDir>/<id>/meta.json. */
@@ -50,7 +51,7 @@ export class SessionStore {
   }
 
   private writeMeta(meta: SessionMeta): void {
-    writeFileSync(this.metaPath(meta.id), JSON.stringify(meta), "utf8")
+    writeFileAtomic(this.metaPath(meta.id), JSON.stringify(meta))
   }
 
   /** Create a new session directory with initial meta.json. */

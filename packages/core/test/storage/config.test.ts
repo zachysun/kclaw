@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync, existsSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { resolvePaths } from "../../src/storage/paths.js"
 import { loadConfig, saveConfig, defaultConfig } from "../../src/storage/config.js"
+import { writeFileAtomic } from "../../src/storage/atomic.js"
 
 let home: string
 beforeEach(() => { home = mkdtempSync(join(tmpdir(), "kclaw-test-")) })
@@ -82,5 +83,20 @@ describe("loadConfig / saveConfig", () => {
     expect(fresh.permissions.allow).toEqual([])
     expect(fresh.permissions.allow).not.toContain("x")
     expect(fresh).toEqual(pristine)
+  })
+})
+
+describe("writeFileAtomic", () => {
+  it("replaces the target atomically and leaves no tmp behind", () => {
+    const file = join(home, "atomic.json")
+    writeFileSync(file, "old", "utf8")
+    writeFileAtomic(file, "new-content")
+    expect(readFileSync(file, "utf8")).toBe("new-content")
+    expect(existsSync(`${file}.tmp`)).toBe(false)
+  })
+  it("saveConfig writes config.yaml with mode 0600", () => {
+    const paths = resolvePaths(home)
+    saveConfig(paths, loadConfig(paths))
+    expect(statSync(paths.config).mode & 0o777).toBe(0o600)
   })
 })
