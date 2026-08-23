@@ -157,6 +157,8 @@ export class RunManager {
   readonly #chains = new Map<string, Promise<void>>()
   /** Abort controller of the session's ACTIVE run; absent while idle or queued. */
   readonly #active = new Map<string, AbortController>()
+  /** Sessions whose QUEUED run was cancelled before it could start. */
+  readonly #cancelQueued = new Set<string>()
   /** Confirmation gateway shared by every run; injected or internally constructed. */
   readonly #broker: ConfirmationBroker
 
@@ -182,25 +184,43 @@ export class RunManager {
     // session's queue for the next enqueue.
     const tail = run.then(() => undefined, () => undefined)
     this.#chains.set(sessionId, tail)
-    void tail.then(() => {
+    // Drop the chain entry the moment the run itself settles — not one
+    // tail-hop later: a cancel() issued from that run's awaiter continuation
+    // must already see "nothing queued", and the tail-attached cleanup ran one
+    // microtask behind it, leaving #chains.has stale-true after the last run.
+    const dropChain = () => {
       if (this.#chains.get(sessionId) === tail) this.#chains.delete(sessionId)
-    })
+    }
+    void run.then(dropChain, dropChain)
     return run
   }
 
   /**
    * Abort the session's active run (it stops at the next checkpoint with
-   * stopReason "aborted"). False when nothing is executing right now — a run
-   * still QUEUED behind another keeps its own fresh controller.
+   * stopReason "aborted"). True — and a cancelled-at-dequeue mark — when the
+   * session has no ACTIVE run but a QUEUED one: that run aborts the moment it
+   * leaves the queue, before any work. False when the session has neither.
    */
   cancel(sessionId: string): boolean {
     const controller = this.#active.get(sessionId)
-    if (controller === undefined) return false
-    controller.abort()
-    return true
+    if (controller !== undefined) {
+      controller.abort()
+      return true
+    }
+    if (this.#chains.has(sessionId)) {
+      this.#cancelQueued.add(sessionId)
+      return true
+    }
+    return false
   }
 
   async #execute(sessionId: string, input: EnqueueInput): Promise<RunOutcome> {
+    // Register the controller BEFORE any await: the window between dequeue
+    // and the old registration point (after memory search / history read)
+    // made cancel answer "no active run" for a run that then ran to completion.
+    const controller = new AbortController()
+    this.#active.set(sessionId, controller)
+    if (this.#cancelQueued.delete(sessionId)) controller.abort()
     const { config, paths, sessions, memory, bus, llm } = this.#deps
     const sessionMeta = sessions.meta(sessionId)
     const workspace = sessionMeta?.workdir ?? this.#deps.workspace
@@ -277,9 +297,6 @@ export class RunManager {
         return decision
       },
     }
-
-    const controller = new AbortController()
-    this.#active.set(sessionId, controller)
 
     // Confirmation answering: deps' direct resolver when wired (test seam),
     // else the broker's pending promise (the daemon path: WS/CLI verdicts

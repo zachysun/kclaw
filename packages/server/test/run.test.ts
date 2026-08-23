@@ -629,6 +629,37 @@ describe("RunManager.enqueue", () => {
     expect(env.sessions.readMessages(session.id).map((m) => m.role)).toEqual(["user"])
   })
 
+  it("cancel immediately after enqueue aborts the run (no registration window)", async () => {
+    // enqueue returns before #execute's first await; a synchronous cancel must
+    // find the controller (or the queued-cancel mark) — the old code answered
+    // false here because #active.set ran after several awaits.
+    const { env, manager } = makeEnv(scriptClient([textTurn("不该跑到这")]))
+    const session = env.sessions.create("窗口会话")
+
+    const outcomePromise = manager.enqueue(session.id, { userText: "hi", trigger: "user" })
+    const cancelled = manager.cancel(session.id)
+    const outcome = await outcomePromise
+    expect(cancelled).toBe(true)
+    expect(outcome.stopReason).toBe("aborted")
+  })
+
+  it("cancel with nothing active but a queued run marks it cancelled-at-dequeue", async () => {
+    const { env, manager } = makeEnv(scriptClient([textTurn("one"), textTurn("two")]))
+    const session = env.sessions.create("排队会话")
+
+    // run1 has not started yet at the first cancel (enqueue only chains a
+    // microtask), run2 waits behind run1: the first cancel kills run1, the
+    // second must MARK run2 (still queued) rather than answer false.
+    const p1 = manager.enqueue(session.id, { userText: "one", trigger: "user" })
+    const p2 = manager.enqueue(session.id, { userText: "two", trigger: "user" })
+    expect(manager.cancel(session.id)).toBe(true) // run1 not started / active → cancelled
+    await p1
+    expect(manager.cancel(session.id)).toBe(true) // run2 still queued → marked
+    const o2 = await p2
+    expect(o2.stopReason).toBe("aborted")
+    expect(manager.cancel(session.id)).toBe(false) // nothing left
+  })
+
   it("surfaces provider retries as llm.failed {willRetry:true} events with run context", async () => {
     // raw client: "llm http 503" twice, then a normal text turn. The retry
     // wrapper is the daemon's default composition: built per run through
