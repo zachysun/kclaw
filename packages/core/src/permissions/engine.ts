@@ -89,6 +89,21 @@ export function extractArg(name: string, args: unknown): string {
   return JSON.stringify(args ?? {})
 }
 
+/**
+ * Canonical form an exec rule matches against: whitespace collapsed to
+ * single spaces and the command token reduced to its basename, so a deny
+ * like `exec:rm -rf*` cannot be dodged with double spaces or /bin/rm.
+ * Flag reordering (-r -f vs -rf) is deliberately NOT normalized.
+ */
+export function normalizeCommand(cmd: string): string {
+  const collapsed = cmd.replace(/\s+/g, " ").trim()
+  if (collapsed === "") return ""
+  const space = collapsed.indexOf(" ")
+  const head = space === -1 ? collapsed : collapsed.slice(0, space)
+  const rest = space === -1 ? "" : collapsed.slice(space)
+  return path.basename(head) + rest
+}
+
 /** File-writing tools whose path arg gets a normalized twin for rule matching. */
 const PATH_TOOLS = new Set(["fs_write", "fs_edit"])
 
@@ -236,9 +251,13 @@ export class ConfigPermissionGate implements PermissionGate {
   async check(toolCall: ToolCallBlock): Promise<PermissionDecision> {
     const tool = toolCall.name
     const arg = extractArg(tool, toolCall.args)
+    // Exec rules match the normalized command (whitespace collapsed, command
+    // token reduced to its basename); path tools match their raw arg here and
+    // get a normalized twin inside scopedMatch.
+    const matchArg = tool === "exec" ? normalizeCommand(arg) : arg
     // Path-aware matching: for file tools rules also match the arg's
     // resolved form, closing path-shape bypasses of deny rules.
-    const matches = (r: CompiledRule) => scopedMatch(r, tool, arg, this.#workspace)
+    const matches = (r: CompiledRule) => scopedMatch(r, tool, matchArg, this.#workspace)
     for (const rule of this.#deny) {
       if (matches(rule)) {
         return { type: "deny", reason: "blacklist", noteText: `规则命中黑名单: ${rule.source}` }
@@ -256,7 +275,7 @@ export class ConfigPermissionGate implements PermissionGate {
     if (this.#safeTools.has(tool)) {
       return { type: "allow", reason: "safe" }
     }
-    if (this.#sessionGrantsEnabled && this.#grants?.hasMatch(tool, arg, this.#workspace)) {
+    if (this.#sessionGrantsEnabled && this.#grants?.hasMatch(tool, matchArg, this.#workspace)) {
       return { type: "allow", reason: "session_grant" }
     }
     return { type: "confirm", confirmationId: this.#newConfirmationId() }

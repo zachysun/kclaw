@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest"
 import { homedir, tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
-import { compileRule, globMatch, ConfigPermissionGate, SessionGrants, realpathWithin } from "../../src/permissions/engine.js"
+import { compileRule, globMatch, ConfigPermissionGate, SessionGrants, realpathWithin, normalizeCommand } from "../../src/permissions/engine.js"
 import type { ToolCallBlock } from "../../src/protocol/blocks.js"
 
 const tc = (name: string, args: unknown): ToolCallBlock => ({
@@ -195,5 +195,27 @@ describe("ConfigPermissionGate", () => {
       const d = await g.check(tc("fs_write", { path: "link/x.txt", content: "x" }))
       expect(d).toMatchObject({ type: "deny", reason: "blacklist" })
     })
+  })
+})
+
+describe("exec command normalization", () => {
+  it("collapses whitespace and basenames the command token", () => {
+    expect(normalizeCommand("rm  -rf   /tmp/x")).toBe("rm -rf /tmp/x")
+    expect(normalizeCommand("/bin/rm -rf x")).toBe("rm -rf x")
+    expect(normalizeCommand("/usr/bin/sudo apt update")).toBe("sudo apt update")
+    expect(normalizeCommand("  git\tstatus  ")).toBe("git status")
+    expect(normalizeCommand("")).toBe("")
+  })
+  it("deny variants that only differ by spacing or command path hit the blacklist", async () => {
+    // `rm -r -f /` (flag split) is deliberately not listed: flag reordering
+    // is an optional spec enhancement this plan does not implement.
+    const g = new ConfigPermissionGate(
+      { allow: [], deny: ["exec:sudo*", "exec:rm -rf*"], confirmTimeoutMs: 1000, sessionGrants: true },
+      { safeTools: new Set() },
+    )
+    for (const command of ["rm  -rf /", "/bin/rm -rf /", "/usr/bin/sudo rm x"]) {
+      const d = await g.check(tc("exec", { command }))
+      expect(d, command).toMatchObject({ type: "deny", reason: "blacklist" })
+    }
   })
 })
