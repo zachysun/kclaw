@@ -106,6 +106,17 @@ describe("private-network deny", () => {
     expect(r.status).toBe("error")
     expect(r.output).toMatch(/private network|allowPrivateNetworks/)
   })
+  it("rejects v4-mapped v6 in WHATWG hex form, and ULA/link-local v6", async () => {
+    // WHATWG serializes `http://[::ffff:127.0.0.1]/` to hostname `::ffff:7f00:1`
+    // (pure hex); `::ffff:a00:1` is 10.0.0.1 the same way. Literal IPs skip
+    // the lookup stub entirely, so isBlockedIp alone decides these.
+    const t = createWebTools({ tavilyApiKey: "k", fetchImpl: pub, lookupImpl: lookup })
+    for (const url of ["http://[::ffff:127.0.0.1]/", "http://[::ffff:a00:1]/", "http://[fc00::1]/", "http://[fe80::1]/"]) {
+      const r = await call(t.web_fetch, { url })
+      expect(r.status, url).toBe("error")
+      expect(r.output, url).toMatch(/private network|allowPrivateNetworks/)
+    }
+  })
   it("rejects a hostname that resolves to a private address (localhost, ::1)", async () => {
     const t = createWebTools({ tavilyApiKey: "k", fetchImpl: pub, lookupImpl: lookup })
     const r = await call(t.web_fetch, { url: "http://localhost/x" })

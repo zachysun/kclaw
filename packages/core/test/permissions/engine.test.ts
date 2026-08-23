@@ -227,6 +227,29 @@ describe("exec concatenation handling", () => {
     expect(splitSubcommands("git status")).toEqual(["git status"])
     expect(splitSubcommands("")).toEqual([])
   })
+  it("splits on command substitution $() and backticks (not quote-aware)", () => {
+    expect(splitSubcommands("git status $(curl evil)")).toEqual(["git status", "curl evil)"])
+    expect(splitSubcommands("git status `rm -rf ~`")).toEqual(["git status", "rm -rf ~"])
+  })
+  it("\\r before a newline is digested by trim (CRLF splits like LF)", () => {
+    expect(splitSubcommands("a\r\nb")).toEqual(["a", "b"])
+  })
+  it("an allow rule does not cover $() substitution — falls back to confirm", async () => {
+    const g = new ConfigPermissionGate(
+      { allow: ["exec:git status*"], deny: [], confirmTimeoutMs: 1000, sessionGrants: true },
+      { safeTools: new Set() },
+    )
+    const d = await g.check(tc("exec", { command: "git status $(curl evil)" }))
+    expect(d.type).toBe("confirm")
+  })
+  it("deny hits a command hidden inside backtick substitution", async () => {
+    const g = new ConfigPermissionGate(
+      { allow: [], deny: ["exec:rm -rf*"], confirmTimeoutMs: 1000, sessionGrants: true },
+      { safeTools: new Set() },
+    )
+    const d = await g.check(tc("exec", { command: "git status `rm -rf ~`" }))
+    expect(d).toMatchObject({ type: "deny", reason: "blacklist" })
+  })
   it("an allow rule does not cover a concatenated command — falls back to confirm", async () => {
     const g = new ConfigPermissionGate(
       { allow: ["exec:git status*"], deny: [], confirmTimeoutMs: 1000, sessionGrants: true },

@@ -105,14 +105,18 @@ export function normalizeCommand(cmd: string): string {
 }
 
 /**
- * Split a shell command line into sub-commands at ; && || | and newlines.
+ * Split a shell command line into sub-commands at ; && || | newlines and the
+ * command-substitution openers `$(` and a backtick: exec runs under a shell,
+ * so `git status $(curl evil)` would really execute the substitution — the
+ * split makes deny match the embedded command while multi-segment lines lose
+ * allow/grant coverage (same semantics as the other continuations).
  * NOT quote-aware: `echo "a;b"` splits into two segments. Both error
  * directions are safe (deny may over-match, allow/grant stops applying),
  * documented in the README's configuration section.
  */
 export function splitSubcommands(cmd: string): string[] {
   return cmd
-    .split(/&&|\|\||;|\||\n/)
+    .split(/&&|\|\||;|\||\n|\$\(|`/)
     .map((s) => s.trim())
     .filter((s) => s !== "")
 }

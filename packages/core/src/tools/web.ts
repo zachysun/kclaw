@@ -12,7 +12,8 @@
  *   5 hops) so EVERY hop's target — the initial URL and each Location — is
  *   checked against the private-network deny list before the request is
  *   made: loopback/unspecified/link-local/private addresses (127/8, 0.0.0.0,
- *   ::1, ::ffff: mappings, 10/8, 172.16/12, 192.168/16, 169.254/16) are
+ *   ::1, ::ffff: mappings, 10/8, 172.16/12, 192.168/16, 169.254/16,
+ *   fc00::/7, fe80::/10) are
  *   refused unless `allowPrivateNetworks` opts in (SSRF guard). Non-2xx →
  *   error with the status code. HTML goes through linkedom's parseHTML +
  *   Readability for article text (scripts/styles never survive); if
@@ -45,8 +46,24 @@ const DEFAULT_MAX_REDIRECTS = 5
 
 /** True for loopback/unspecified/link-local/private v4/v6 addresses (SSRF boundary). */
 function isBlockedIp(addr: string): boolean {
-  const a = addr.startsWith("::ffff:") ? addr.slice(7) : addr
+  let a = addr
+  if (a.startsWith("::ffff:")) {
+    // WHATWG serializes `::ffff:127.0.0.1` as pure hex `::ffff:7f00:1`; unmap
+    // both spellings to dotted v4 so the rules below see the real address.
+    const mapped = a.slice(7)
+    if (mapped.includes(".")) {
+      a = mapped
+    } else {
+      const segs = mapped.split(":")
+      if (segs.length === 2) {
+        const hi = parseInt(segs[0], 16)
+        const lo = parseInt(segs[1], 16)
+        if (!Number.isNaN(hi) && !Number.isNaN(lo)) a = `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`
+      }
+    } // malformed mapped form: keep as-is and fall through to the v6 checks
+  }
   if (a === "::1" || a === "0.0.0.0" || a.startsWith("127.")) return true
+  if (/^f[cd]/.test(a) || /^fe[89ab]/.test(a)) return true // fc00::/7 ULA, fe80::/10 link-local
   if (/^10\./.test(a) || /^192\.168\./.test(a) || /^169\.254\./.test(a)) return true
   const m = /^172\.(\d+)\./.exec(a)
   return m !== null && Number(m[1]) >= 16 && Number(m[1]) <= 31
