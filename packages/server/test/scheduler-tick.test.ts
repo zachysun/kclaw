@@ -281,7 +281,9 @@ describe("startSchedulerTick", () => {
     startTick(env, 20)
     await waitForEvent(env.socket, "job.started")
 
-    // ~6 ticks pass while the run is in flight and the row is still due
+    // ~6 ticks pass while the run is in flight; the claim already advanced
+    // nextRunAt, so later ticks claim nothing (an in-flight overlap would be
+    // skipped, never queued)
     await sleep(120)
     expect(received(env.socket).filter((e) => e.type === "job.started")).toHaveLength(1)
     expect(env.sessions.list()).toHaveLength(1)

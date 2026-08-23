@@ -15,8 +15,9 @@
  * it idempotent: a second stop() resolves immediately. Each step is bounded
  * by a deadline (default 60s): a step that misses it makes stop() REJECT,
  * daemon.json is kept (the process is still alive), and in-flight job runs
- * are abandoned — JSONL tolerates partial runs, and the jobs re-fire on the
- * next daemon start.
+ * are abandoned — JSONL tolerates partial runs; a claimed run's occurrence
+ * already advanced next_run_at (at claim time), so it does not re-fire: the
+ * job fires again at its next scheduled time.
  *
  * Provider resolution: the config's default provider
  * entry wins; KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY / KCLAW_LLM_MODEL env
@@ -301,9 +302,9 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       // error propagates to the caller (bin logs to stderr and exits 1) and
       // daemon.json is KEPT: the process is still alive, so an honest pidfile
       // beats a cleaned one. In-flight job runs are abandoned — JSONL
-      // tolerates partial runs, and since the in-flight guard is in-memory,
-      // a daemon that never returns from stop() leaves its jobs "due" and
-      // they re-fire on the next start.
+      // tolerates partial runs; each claimed occurrence already had
+      // next_run_at advanced at claim time, so the killed run does not
+      // re-fire: the job fires again at its next scheduled time.
       await withStopTimeout(tick.stop(), stopTimeoutMs, "scheduler tick")
       await withStopTimeout(app.close(), stopTimeoutMs, "app close")
       rmSync(daemonJson, { force: true })
