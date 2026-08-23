@@ -121,7 +121,7 @@ export function readJsonl(file: string): unknown[]
 
 ## 边界与出错
 
-- **meta.json 重写非原子**：写一半崩溃会留下截断的 meta.json，`meta()` 解析失败返回 undefined，该会话从列表消失（消息仍在 messages.jsonl 里，目录还在）——可接受的降级，未做临时文件替换。
+- **meta.json 原子写**：`writeMeta` 经 `writeFileAtomic`（临时文件 + rename）落盘，meta.json 本身不会被截断；崩溃最坏残留 `<meta.json>.tmp` 孤儿文件，不影响读取。
 - **config 无结构校验**：见上；写错类型（如 `confirmTimeoutMs: "30s"`）在运行时才以意外方式失败。
 - **SQLite 未开 WAL**：jobs.db 与 memory/index.db 都是默认日志模式。单 daemon 进程同步访问（better-sqlite3）下安全；多进程并发写同一 home 是明确不支持的用法。
 - **KCLAW_HOME 只在 `resolvePaths` 读取一次**：核心层不缓存，但调用方各自持有解析结果；daemon 启动后改环境变量不影响已创建的路径。
