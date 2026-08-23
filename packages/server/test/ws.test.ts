@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
+import { writeFileSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AddressInfo } from "node:net"
 import WebSocket from "ws"
-import { makeEvent } from "@kclaw/core"
-import type { AgentEvent } from "@kclaw/core"
+import { MemoryStore, SessionStore, loadConfig, makeEvent, resolvePaths } from "@kclaw/core"
+import type { AgentEvent, KclawPaths, LlmClient, LlmStreamEvent } from "@kclaw/core"
 import type { FastifyInstance } from "fastify"
-import { createApp, EventBus } from "../src/index.js"
+import { createApp, EventBus, RunManager } from "../src/index.js"
 
 const TOKEN = "t1"
 
@@ -335,6 +336,132 @@ describe("GET /ws", () => {
     const ws = await connect(query)
     ws.send(JSON.stringify({ type: "auth", token: TOKEN }))
     return ws
+  }
+})
+
+describe("GET /ws send guard on a dead socket", () => {
+  // Real stores + a real RunManager (the ws-run.test.ts wiring): send_message
+  // rides run.enqueue, whose history read throws on a corrupt messages.jsonl.
+  // Per-session serialization lets the test ORDER the failure after the
+  // client is gone: #1 hangs in a gated llm, #2 queues behind it, the client
+  // disconnects, the log is corrupted, and only then is the gate released —
+  // #2's store read (and the .catch reply it triggers) cannot race the close.
+  let home: string
+  let workspace: string
+  let paths: KclawPaths
+  let sessions: SessionStore
+  let bus: EventBus
+  let release!: () => void
+  let app: FastifyInstance
+  let url: string
+  const clients: WebSocket[] = []
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "kclaw-wsguard-home-"))
+    workspace = await mkdtemp(join(tmpdir(), "kclaw-wsguard-ws-"))
+    paths = resolvePaths(home)
+    const config = loadConfig(paths)
+    config.workspace = workspace
+    config.providers = {
+      default: "mock",
+      entries: { mock: { baseUrl: "http://127.0.0.1:1", apiKey: "test-key", model: "mock-model" } },
+    }
+    sessions = new SessionStore(paths.sessionsDir)
+    const memory = new MemoryStore({ notesDir: paths.memoryNotesDir, indexDb: paths.memoryIndexDb })
+    bus = new EventBus()
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const llm: LlmClient = {
+      async *stream(): AsyncIterable<LlmStreamEvent> {
+        await gate
+        yield { type: "text_delta", delta: "回复" }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+      },
+    }
+    const manager = new RunManager({ config, paths, sessions, memory, bus, llm, workspace })
+    app = await createApp({ home, token: TOKEN, stores: { sessions, config, paths }, bus, run: manager })
+    await app.listen({ host: "127.0.0.1", port: 0 })
+    const addr = app.server.address()
+    if (addr === null || typeof addr === "string") throw new Error("expected an AddressInfo")
+    url = `ws://127.0.0.1:${(addr as AddressInfo).port}/ws`
+  })
+
+  afterEach(async () => {
+    for (const ws of clients.splice(0)) await closeClient(ws)
+    await app.close()
+    await rm(home, { recursive: true, force: true })
+    await rm(workspace, { recursive: true, force: true })
+  })
+
+  it("a dead socket during the late enqueue-error path cannot crash the process", async () => {
+    // send_message on a session whose log becomes unreadable while the run
+    // is queued, with the client already gone: the .catch handler send()s the
+    // failure frame on a closed socket. The guard makes that a dropped frame
+    // (bus.deliver's contract) — nothing may escape as an unhandled
+    // rejection, which under Node >= 15 kills the process by default. Trap
+    // rejections to prove the path stays silent and the process survives.
+    const rejections: unknown[] = []
+    const onRejection = (err: unknown): void => {
+      rejections.push(err)
+    }
+    process.on("unhandledRejection", onRejection)
+    try {
+      const session = sessions.create("死连接会话")
+      // Probe subscriber (FakeSocket, the bus unit-test stand-in): observes
+      // the run events on the bus without a second ws client — llm.started
+      // proves run #1 is past its own history read.
+      const probe = new FakeSocket()
+      bus.subscribe(session.id, probe)
+      const sawEvent = (type: string): boolean =>
+        probe.sent.some((s) => (JSON.parse(s) as { type?: string }).type === type)
+
+      const ws = await connectAuthed()
+      // #1 starts and hangs inside the gated llm stream; #2 queues behind it
+      // (same session serializes) and both ack on the still-open socket.
+      ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "第一句" }))
+      expect(await nextMessage(ws)).toEqual({ type: "send_message_ack", sessionId: session.id })
+      await waitUntil(() => sawEvent("llm.started"))
+      ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "第二句" }))
+      expect(await nextMessage(ws)).toEqual({ type: "send_message_ack", sessionId: session.id })
+
+      // The client vanishes while #2 is still queued; the close handshake
+      // completes BEFORE anything below runs.
+      ws.close()
+      await new Promise<void>((resolve) => ws.once("close", () => resolve()))
+
+      // Corrupt the log (a bad FIRST line — a torn trailing line alone would
+      // be dropped as a crash artifact) and release the gate: #1 appends and
+      // completes (appending never re-parses the file), #2 dequeues, its
+      // history read throws, and the .catch reply lands on the dead socket.
+      const log = join(paths.sessionsDir, session.id, "messages.jsonl")
+      writeFileSync(log, `{not json\n${readFileSync(log, "utf8")}`, "utf8")
+      release()
+      await waitUntil(() => sawEvent("run.completed"))
+
+      await new Promise((r) => setTimeout(r, 100)) // let any rejection surface
+      expect(rejections).toEqual([])
+    } finally {
+      process.off("unhandledRejection", onRejection)
+    }
+  })
+
+  /** Connect and complete the first-frame auth handshake (silent on success). */
+  function connectAuthed(): Promise<WebSocket> {
+    const ws = new WebSocket(url)
+    clients.push(ws)
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("ws connect timeout")), 2000)
+      ws.once("open", () => {
+        clearTimeout(timer)
+        ws.send(JSON.stringify({ type: "auth", token: TOKEN }))
+        resolve(ws)
+      })
+      ws.once("error", (err: Error) => {
+        clearTimeout(timer)
+        reject(err)
+      })
+    })
   }
 })
 

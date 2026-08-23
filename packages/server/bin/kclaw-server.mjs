@@ -42,5 +42,11 @@ async function shutdown() {
     process.exit(1)
   }
 }
+// Last-resort net: a stray rejection (a late reply to a dead socket, a
+// crashed promise nobody awaited) must not take the resident daemon down —
+// Node's default on unhandledRejection is process exit. Log and live.
+process.on("unhandledRejection", (err) => {
+  process.stderr.write(`kclaw-server unhandled rejection: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`)
+})
 process.on("SIGTERM", () => void shutdown())
 process.on("SIGINT", () => void shutdown())

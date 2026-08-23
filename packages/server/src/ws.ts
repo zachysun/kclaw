@@ -234,7 +234,14 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
 }
 
 function send(socket: WsConnection, frame: unknown): void {
-  socket.send(JSON.stringify(frame))
+  // A socket that died between the action and this reply must not turn the
+  // reply into an unhandled rejection (ws throws synchronously on a closed
+  // socket) — same contract as bus.deliver: dead socket, dropped frame.
+  try {
+    socket.send(JSON.stringify(frame))
+  } catch {
+    // already closed — nothing to deliver to
+  }
 }
 
 /** Decode a ws message payload (Buffer, ArrayBuffer or Buffer[]) to UTF-8 text. */
