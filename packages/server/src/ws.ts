@@ -234,9 +234,11 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
 }
 
 function send(socket: WsConnection, frame: unknown): void {
-  // A socket that died between the action and this reply must not turn the
-  // reply into an unhandled rejection (ws throws synchronously on a closed
-  // socket) — same contract as bus.deliver: dead socket, dropped frame.
+  // A socket that died between the action and this reply gets a dropped
+  // frame, never a throw — same contract as bus.deliver. WsConnection is
+  // structural: send() on a dead socket may throw depending on the
+  // implementation (ws 8.x drops silently, reporting only via its optional
+  // callback, which we never pass), so guard regardless.
   try {
     socket.send(JSON.stringify(frame))
   } catch {

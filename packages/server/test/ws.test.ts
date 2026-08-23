@@ -397,8 +397,8 @@ describe("GET /ws send guard on a dead socket", () => {
   it("a dead socket during the late enqueue-error path cannot crash the process", async () => {
     // send_message on a session whose log becomes unreadable while the run
     // is queued, with the client already gone: the .catch handler send()s the
-    // failure frame on a closed socket. The guard makes that a dropped frame
-    // (bus.deliver's contract) — nothing may escape as an unhandled
+    // failure frame on a closed socket. That reply must remain a dropped
+    // frame (bus.deliver's contract) — nothing may escape as an unhandled
     // rejection, which under Node >= 15 kills the process by default. Trap
     // rejections to prove the path stays silent and the process survives.
     const rejections: unknown[] = []
