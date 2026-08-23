@@ -127,7 +127,11 @@ providers:
 | `permissions.allow / deny` | Prefix-matching rules (e.g. `exec:git *`): allow skips confirmation, deny rejects outright, everything else asks. |
 | `exec.timeoutMs / maxOutputBytes` | Timeout and output truncation for the exec tool. |
 | `web.tavilyApiKey` | Optional; enables web_search. |
+| `web.timeoutMs` | Timeout for web tool requests (default 20000ms; both `web_search` and `web_fetch` are bound by it — a hung site no longer stalls the whole run). |
+| `web.allowPrivateNetworks` | Default `false`: `web_fetch` refuses addresses that resolve to private/loopback networks (checked on every redirect hop). Set `true` to allow them — e.g. fetching from local services such as an on-host Ollama. |
 | `~/.kclaw/AGENTS.md` | Agent persona, injected into the system prompt. |
+
+`exec:` rules match a normalized command — whitespace collapsed to single spaces, command token reduced to its basename (`/bin/rm` ≡ `rm`). A command containing continuations (`;` `&&` `||` `|`, newlines) never matches `allow` or a session grant — it falls back to confirmation — while `deny` is matched against each sub-command separately. Exec rules are a best-effort fence, not a sandbox.
 
 > [!NOTE]
 > The data directory can be redirected with `KCLAW_HOME` or `--home <dir>` (test friendly).

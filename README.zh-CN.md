@@ -127,7 +127,11 @@ providers:
 | `permissions.allow / deny` | 规则前缀匹配（如 `exec:git *`）：allow 免确认、deny 直接拒绝、其余弹确认。 |
 | `exec.timeoutMs / maxOutputBytes` | exec 工具的超时与输出截断。 |
 | `web.tavilyApiKey` | 可选，启用 web_search。 |
+| `web.timeoutMs` | web 工具请求超时（默认 20000ms；`web_search`/`web_fetch` 均受约束，挂死的站点不再卡住整个 run）。 |
+| `web.allowPrivateNetworks` | 默认 false：`web_fetch` 拒绝解析到私网/loopback 的地址（redirect 每一跳都会检查）；需要抓本机服务（如本机 Ollama）时设 true 放行。 |
 | `~/.kclaw/AGENTS.md` | agent 人设，注入系统提示词。 |
+
+`exec:` 规则按归一化命令匹配——空白折叠为单空格、命令取 basename（`/bin/rm` ≡ `rm`）；含接续符（`;` `&&` `||` `|`、换行）的命令不会命中 allow/会话授权（回退确认），deny 则对每个子命令分别匹配。exec 规则是尽力而为的防线，不是沙箱。
 
 > [!NOTE]
 > 数据目录可用 `KCLAW_HOME` 或 `--home <dir>` 重定向（测试友好）。
