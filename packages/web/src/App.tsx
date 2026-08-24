@@ -17,7 +17,7 @@
  * a status ping would re-fire the subscription or reset the live view (the
  * double-subscribe and initialMessages-reference-reinit pitfalls).
  */
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react"
 import { bootstrapToken, clearToken, saveToken } from "./token.js"
 import { createApi } from "./api.js"
 import { createWsClient, type WsClient } from "./ws.js"
@@ -107,6 +107,9 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [messagesCache, setMessagesCache] = useState<Record<string, Message[]>>({})
   const [sessionNotice, setSessionNotice] = useState<string | null>(null)
+  // One-shot ?session=<id> deep link (notification targets): consumed exactly
+  // once, after the session list loads, then stripped from the URL.
+  const deepLinkConsumed = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -130,6 +133,16 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
       .get<SessionMeta[]>("/sessions")
       .then((metas) => {
         if (!cancelled) setSessions(metas)
+        if (!cancelled && !deepLinkConsumed.current) {
+          deepLinkConsumed.current = true
+          const target = new URLSearchParams(window.location.search).get("session")
+          // Consume the param either way (hit or miss) so a refresh or later
+          // navigation never re-triggers the jump.
+          window.history.replaceState({}, "", "/")
+          if (target !== null && metas.some((meta) => meta.id === target)) {
+            setSelectedId(target)
+          }
+        }
       })
       .catch(() => {
         if (!cancelled) {

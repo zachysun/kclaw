@@ -9,6 +9,7 @@
 - **零 workspace 依赖**：`@kclaw/web` 不依赖 core/server/cli，协议形状（`src/chat/model.ts` 里的 `Message`/`Block`/`AgentEvent`）是对 daemon 线上格式的手工镜像——只包含 UI 关心的子集，类型检查与运行不需要 core 的构建产物。
 - **同源托管、同源请求**：daemon 自己服务这份产物，`api` 的 base 是空串（路径即相对路径），`wsUrlFor()` 从 `window.location` 推导 `ws(s)://<host>/ws`——不需要配置任何地址。
 - **token 不落 URL**：`?token=` 只是 CLI → 浏览器的一次交接，`bootstrapToken` 存进 localStorage（浏览器提供的按站点隔离的本地键值存储）后立刻用 `history.replaceState` 把查询串从地址栏清除。
+- **`?session=` 深链**：任务通知里的会话链接（`/?session=<id>`）在会话列表加载完成后一次性消费——命中列表则自动选中该会话（与点击列表项同一状态路径），未命中保持默认行为；无论命中与否都立即 `history.replaceState` 清掉参数，刷新不会重复跳转。
 - **401 全局重入**：任何一次 API 401（挂载时的 `/status` 探测或之后的任何调用）都触发 `onUnauthorized` → 清除存储的 token → 返回 token 输入页；否则刷新页面会重新引导同一个过期 token，形成死循环。
 - **连接由 App 创建、面板只消费**：`ws`（当前会话的客户端）与 `createWs`（重连时重建的工厂）都由 `MainShell` 用 `useMemo`/`useCallback` 保持引用稳定——`ChatPanel` 的两个 effect 以 `[sessionId, api, ws, createWs]` 和 `[sessionId, initialMessages]` 为依赖，引用不稳定会导致切换 tab/状态探测时重复订阅或重置实时视图。
 - **对话面板跨 tab 保活**：`ChatPanel` 切到任务/审计/回收站 tab 时只是 `hidden`，不卸载——直播流和输入框草稿在导航中存活。

@@ -184,6 +184,50 @@ describe("App (sessions + tabs)", () => {
     container.remove()
   })
 
+  it("preselects the session named by ?session= once the list loads", async () => {
+    mockFetch(fetchMock, {
+      "GET /status": { body: { ok: true } },
+      "GET /sessions": { body: [session("s1", "第一会话"), session("s2", "第二会话")] },
+      "GET /sessions/s2/messages": { body: [] },
+    })
+    localStorage.setItem("kclaw_token", "tok-1")
+    history.replaceState({}, "", "/?session=s2")
+    const { container, root } = mountApp()
+    await act(async () => {
+      root.render(<App />)
+    })
+    await flush()
+    await flush()
+    // The deep-linked session is selected and its messages are pulled.
+    expect(container.querySelector('[data-testid="session-item-s2"]')?.getAttribute("data-selected")).toBe("true")
+    expect(fetchMock).toHaveBeenCalledWith("/sessions/s2/messages", expect.anything())
+    // The consumed query param is stripped from the URL.
+    expect(window.location.search).toBe("")
+    root.unmount()
+    container.remove()
+  })
+
+  it("falls back to normal selection when ?session= is unknown", async () => {
+    mockFetch(fetchMock, {
+      "GET /status": { body: { ok: true } },
+      "GET /sessions": { body: [session("s1", "第一会话")] },
+    })
+    localStorage.setItem("kclaw_token", "tok-1")
+    history.replaceState({}, "", "/?session=nonexistent")
+    const { container, root } = mountApp()
+    await act(async () => {
+      root.render(<App />)
+    })
+    await flush()
+    await flush()
+    // Default behavior: nothing selected, no error, query still cleared.
+    expect(container.querySelector('[data-testid="chat-empty"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="session-notice"]')).toBeNull()
+    expect(window.location.search).toBe("")
+    root.unmount()
+    container.remove()
+  })
+
   it("keeps the selected session when switching tabs and back", async () => {
     mockFetch(fetchMock, {
       "GET /status": { body: { ok: true } },
