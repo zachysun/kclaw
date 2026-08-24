@@ -52,11 +52,11 @@ export function resolvePaths(home?: string): KclawPaths
 | `permissions.allow` / `deny` | `[]` / `["exec:sudo*", "exec:rm -rf*"]` | 权限规则，见 [permissions](./permissions.md) |
 | `permissions.confirmTimeoutMs` | `120000` | 人工确认等待上限，超时按拒绝处理 |
 | `permissions.sessionGrants` | `true` | 会话内"本次允许"记忆是否生效 |
-| `memory.autoExtract` / `extractModel` | `false` / `""` | 预留：当前无消费方（见 [memory](./memory.md)） |
+| `memory.autoExtract` / `extractModel` | `false` / `""` | 自动记忆抽取开关与抽取用模型，由 server RunManager 消费（见 [memory](./memory.md)） |
 | `web.tavilyApiKey` | `""` | web_search 的 Tavily 密钥 |
 | `exec.timeoutMs` / `maxOutputBytes` | `60000` / `102400`（100 KiB） | exec 工具超时与输出截断上限 |
 | `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 清理用（见 [jobs](./jobs.md)） |
-| `sessions.compactThreshold` / `compactKeep` | `60` / `25` | 会话压缩：active history 达到 `compactThreshold` 条触发压缩，压缩后保留最近 `compactKeep` 条原文；缺省由 server RunManager 兜底 |
+| `sessions.compactThreshold` / `compactKeep` | `40` / `25` | 会话压缩：active history 达到 `compactThreshold` 条触发压缩（与循环 window 同为 40，消除静默截断盲区），压缩后保留最近 `compactKeep` 条原文；缺省由 server RunManager 兜底 |
 | `notify.channels` | `[]` | job 终态通知渠道列表；为空即关闭（零开销）。条目 `{ name?, type, url, template? }`，`type` 三种：`bark`（POST JSON `{title, body}`）、`serverchan`（POST 表单 `title`+`desp`）、`webhook`（POST JSON，正文含 title/body 及全部 job 字段）。`template` 占位符：`{{job}}` `{{statusText}}` `{{status}}` `{{summary}}` `{{sessionId}}` `{{sessionUrl}}`，未知占位符渲染为空串 |
 | `notify.timeoutMs` | `10000` | 单次推送请求超时；推送失败仅记日志、不重试 |
 | `workspace` | `process.cwd()` | 工具的工作目录；daemon 由启动方决定 cwd，会话可经 `meta.workdir` 覆盖 |

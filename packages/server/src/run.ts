@@ -403,7 +403,7 @@ export class RunManager {
       const compaction = await this.#compact(
         sessionId,
         history,
-        config.sessions.compactThreshold ?? 60,
+        config.sessions.compactThreshold ?? 40,
         config.sessions.compactKeep ?? 25,
         runLlm,
         model,
