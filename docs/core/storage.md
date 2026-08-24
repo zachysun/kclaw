@@ -56,6 +56,8 @@ export function resolvePaths(home?: string): KclawPaths
 | `web.tavilyApiKey` | `""` | web_search 的 Tavily 密钥 |
 | `exec.timeoutMs` / `maxOutputBytes` | `60000` / `102400`（100 KiB） | exec 工具超时与输出截断上限 |
 | `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 清理用（见 [jobs](./jobs.md)） |
+| `notify.channels` | `[]` | job 终态通知渠道列表；为空即关闭（零开销）。条目 `{ name?, type, url, template? }`，`type` 三种：`bark`（POST JSON `{title, body}`）、`serverchan`（POST 表单 `title`+`desp`）、`webhook`（POST JSON，正文含 title/body 及全部 job 字段）。`template` 占位符：`{{job}}` `{{statusText}}` `{{status}}` `{{summary}}` `{{sessionId}}` `{{sessionUrl}}`，未知占位符渲染为空串 |
+| `notify.timeoutMs` | `10000` | 单次推送请求超时；推送失败仅记日志、不重试 |
 | `workspace` | `process.cwd()` | 工具的工作目录；daemon 由启动方决定 cwd，会话可经 `meta.workdir` 覆盖 |
 
 读（`loadConfig(paths)`）：缺失/空文件 → 默认值的克隆；YAML 语法错误或非映射结构 → 抛错；其余 → `deepMerge(defaults 克隆, 文件内容)`。**没有结构校验**：多余字段原样保留，字段类型错误在消费方才暴露。

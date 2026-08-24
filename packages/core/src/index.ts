@@ -9,4 +9,5 @@ export * from "./permissions/index.js"
 export * from "./memory/index.js"
 export * from "./tools/index.js"
 export * from "./jobs/index.js"
+export * from "./notify/notify.js"
 

@@ -3,6 +3,7 @@ import { parse, stringify } from "yaml"
 import { writeFileAtomic } from "./atomic.js"
 import { DEFAULT_LLM_TIMEOUT_MS } from "../provider/openai-compat.js"
 import type { KclawPaths } from "./paths.js"
+import type { NotifyChannel } from "../notify/notify.js"
 
 export interface KclawConfig {
   providers: {
@@ -37,6 +38,12 @@ export interface KclawConfig {
   }
   exec: { timeoutMs: number; maxOutputBytes: number }
   sessions: { recycleBinTtlMs: number }
+  /**
+   * Job-finish notifications. Delivery failures are only logged (onError),
+   * never retried and never thrown. An empty channels list disables
+   * notifications entirely (zero cost).
+   */
+  notify: { channels: NotifyChannel[]; timeoutMs?: number }
   workspace: string
 }
 
@@ -47,6 +54,7 @@ export const defaultConfig: KclawConfig = {
   web: { tavilyApiKey: "", timeoutMs: 20_000, allowPrivateNetworks: false },
   exec: { timeoutMs: 60_000, maxOutputBytes: 100 * 1024 },
   sessions: { recycleBinTtlMs: 30 * 24 * 60 * 60 * 1000 },
+  notify: { channels: [], timeoutMs: 10_000 },
   workspace: process.cwd(),
 }
 
