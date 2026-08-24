@@ -37,7 +37,13 @@ export interface KclawConfig {
     allowPrivateNetworks?: boolean
   }
   exec: { timeoutMs: number; maxOutputBytes: number }
-  sessions: { recycleBinTtlMs: number }
+  sessions: {
+    recycleBinTtlMs: number
+    /** Compaction trigger: compact when active history reaches this many messages. Default 60. */
+    compactThreshold?: number
+    /** Compaction retention: newest messages kept verbatim after compaction. Default 25. */
+    compactKeep?: number
+  }
   /**
    * Job-finish notifications. Delivery failures are only logged (onError),
    * never retried and never thrown. An empty channels list disables

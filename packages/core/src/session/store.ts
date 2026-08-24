@@ -15,6 +15,10 @@ export interface SessionMeta {
   workdir?: string
   deleted?: boolean
   deletedAt?: string
+  /** Rolling compaction summary of messages before `compactedUpto` (context compaction). */
+  compactedSummary?: string
+  /** Last message id covered by `compactedSummary`; history after it is the active window. */
+  compactedUpto?: string
 }
 
 const META_FILE = "meta.json"

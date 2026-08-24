@@ -122,6 +122,20 @@ describe("SessionStore", () => {
     expect(store.list().map((m) => m.id)).toContain(meta.id)
   })
 
+  it("updateMeta persists compaction fields and clearing with undefined removes them", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("t")
+    store.updateMeta(meta.id, { compactedSummary: "sum of history", compactedUpto: "msg_1" })
+    const back = store.meta(meta.id)!
+    expect(back.compactedSummary).toBe("sum of history")
+    expect(back.compactedUpto).toBe("msg_1")
+    store.updateMeta(meta.id, { compactedSummary: undefined })
+    const cleared = store.meta(meta.id)!
+    expect(cleared.compactedSummary).toBeUndefined()
+    expect("compactedSummary" in cleared).toBe(false)
+    expect(cleared.compactedUpto).toBe("msg_1") // untouched field survives
+  })
+
   it("purge 永久删除会话目录", () => {
     const store = new SessionStore(dir)
     const meta = store.create("标题")

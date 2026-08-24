@@ -56,6 +56,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `web.tavilyApiKey` | `""` | web_search 的 Tavily 密钥 |
 | `exec.timeoutMs` / `maxOutputBytes` | `60000` / `102400`（100 KiB） | exec 工具超时与输出截断上限 |
 | `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 清理用（见 [jobs](./jobs.md)） |
+| `sessions.compactThreshold` / `compactKeep` | `60` / `25` | 会话压缩：active history 达到 `compactThreshold` 条触发压缩，压缩后保留最近 `compactKeep` 条原文；缺省由 server RunManager 兜底 |
 | `notify.channels` | `[]` | job 终态通知渠道列表；为空即关闭（零开销）。条目 `{ name?, type, url, template? }`，`type` 三种：`bark`（POST JSON `{title, body}`）、`serverchan`（POST 表单 `title`+`desp`）、`webhook`（POST JSON，正文含 title/body 及全部 job 字段）。`template` 占位符：`{{job}}` `{{statusText}}` `{{status}}` `{{summary}}` `{{sessionId}}` `{{sessionUrl}}`，未知占位符渲染为空串 |
 | `notify.timeoutMs` | `10000` | 单次推送请求超时；推送失败仅记日志、不重试 |
 | `workspace` | `process.cwd()` | 工具的工作目录；daemon 由启动方决定 cwd，会话可经 `meta.workdir` 覆盖 |
@@ -94,7 +95,7 @@ export function readJsonl(file: string): unknown[]
 
 每个会话一个目录 `<sessionsDir>/<id>/`，两个文件（`SessionStore`）：
 
-- `meta.json`：`SessionMeta { id, title, createdAt, updatedAt, jobId?, workdir?, deleted?, deletedAt? }`，整文件重写更新（`updateMeta` 合并 patch、`undefined` 键删除、总是刷新 `updatedAt`）。
+- `meta.json`：`SessionMeta { id, title, createdAt, updatedAt, jobId?, workdir?, deleted?, deletedAt?, compactedSummary?, compactedUpto? }`，其中 `compactedSummary` 为滚动压缩摘要、`compactedUpto` 为摘要覆盖到的最后一条消息 id，其后为 active window，整文件重写更新（`updateMeta` 合并 patch、`undefined` 键删除、总是刷新 `updatedAt`）。
 - `messages.jsonl`：一行一条 `Message`，append-only。追加消息时顺带重写 meta.json 刷 `updatedAt`。
 
 `Message`（`packages/core/src/protocol/messages.ts`）基础字段 `{ id, sessionId, role: "user" | "assistant" | "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因）。id 前缀 `msg_` / `ses_`，ULID。
