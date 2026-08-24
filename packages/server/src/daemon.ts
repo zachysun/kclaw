@@ -33,6 +33,7 @@ import {
   SessionStore,
   createOpenAiCompatClient,
   loadConfig,
+  createNotifier,
   resolvePaths,
   withRetry,
 } from "@kclaw/core"
@@ -285,7 +286,17 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // startedAt keeps the claim's timestamp (no `starting` flag once serving).
   writeFileSync(daemonJson, `${JSON.stringify({ port, pid: process.pid, startedAt }, null, 2)}\n`, "utf8")
 
-  const tick = startSchedulerTick({ scheduler: jobs, run, bus, sessions, intervalMs: opts.schedulerIntervalMs ?? DEFAULT_SCHEDULER_INTERVAL_MS, purgeTtlMs: config.sessions.recycleBinTtlMs })
+  // Job terminal-state notifier: assembled only when channels are configured
+  // (none → undefined, the tick skips pushes entirely). Failures are reported
+  // here and never propagate — sending never throws inside the notifier.
+  const notifier = config.notify.channels.length > 0
+    ? createNotifier(config.notify.channels, {
+        timeoutMs: config.notify.timeoutMs,
+        onError: (c, e) => console.error(`kclaw notify ${c.name ?? c.type} failed: ${e}`),
+      })
+    : undefined
+
+  const tick = startSchedulerTick({ scheduler: jobs, run, bus, sessions, intervalMs: opts.schedulerIntervalMs ?? DEFAULT_SCHEDULER_INTERVAL_MS, purgeTtlMs: config.sessions.recycleBinTtlMs, notifier, webBase: `http://${HOST}:${port}` })
   const stopTimeoutMs = opts.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS
 
   let stopped = false

@@ -21,7 +21,7 @@
  *   is logged and dropped: the interval must survive its own failures (v1).
  */
 import { makeEvent } from "@kclaw/core"
-import type { Job, JobScheduler, SessionStore } from "@kclaw/core"
+import type { Job, JobScheduler, Message, Notifier, SessionMeta, SessionStore, TextBlock } from "@kclaw/core"
 import type { EventBus } from "./bus.js"
 import type { RunManager } from "./run.js"
 
@@ -45,6 +45,10 @@ export interface SchedulerTickDeps {
   purgeTtlMs?: number
   /** Clock seam, defaults to `() => new Date()`; tests inject a fake. */
   now?: () => Date
+  /** Terminal-state job notifier; absent → no pushes (zero overhead). */
+  notifier?: Notifier
+  /** Web UI base (e.g. http://127.0.0.1:<port>) for session links in pushes. */
+  webBase?: string
 }
 
 /** Handle over a running tick loop. */
@@ -53,8 +57,29 @@ export interface SchedulerTickHandle {
   stop(): Promise<void>
 }
 
+/** Summary cap for ok pushes; longer last-assistant text is truncated. */
+const SUMMARY_MAX_CHARS = 500
+
+/**
+ * The text of the LAST assistant message, its text blocks joined. This is
+ * the "what did the job say" summary pushed on the ok path; "" when the run
+ * produced no assistant message.
+ */
+function lastAssistantText(messages: Message[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!
+    if (m.role !== "assistant") continue
+    const text = m.blocks
+      .filter((b): b is TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("")
+    return text.length > SUMMARY_MAX_CHARS ? `${text.slice(0, SUMMARY_MAX_CHARS)}…` : text
+  }
+  return ""
+}
+
 export function startSchedulerTick(deps: SchedulerTickDeps): SchedulerTickHandle {
-  const { scheduler, run, bus, sessions } = deps
+  const { scheduler, run, bus, sessions, notifier, webBase } = deps
   const intervalMs = deps.intervalMs ?? DEFAULT_INTERVAL_MS
   const purgeTtlMs = deps.purgeTtlMs ?? DEFAULT_RECYCLE_BIN_TTL_MS
   const now = deps.now ?? (() => new Date())
@@ -79,17 +104,38 @@ export function startSchedulerTick(deps: SchedulerTickDeps): SchedulerTickHandle
     }
   }
 
+  /**
+   * Push the terminal-state payload through the injected notifier. Fire and
+   * forget under track(): notifyJobFinished never rejects, and stop() awaits
+   * pending pushes alongside the job runs. No notifier dep → no push at all.
+   */
+  function push(job: Job, status: "ok" | "error", summary: string, session: SessionMeta | undefined): void {
+    if (notifier === undefined) return
+    track(
+      notifier.notifyJobFinished({
+        jobId: job.id,
+        jobName: job.name,
+        status,
+        summary,
+        sessionId: session?.id ?? "",
+        sessionUrl: webBase !== undefined && session !== undefined ? `${webBase}/?session=${session.id}` : "",
+      }),
+    )
+  }
+
   /** Record a failed fire and broadcast job.failed. */
-  function fail(job: Job, message: string): void {
+  function fail(job: Job, message: string, session: SessionMeta | undefined): void {
     scheduler.markRun(job.id, "error", now(), message)
     bus.emit(makeEvent("job.failed", { jobId: job.id, error: { code: "job_failed", message } }))
+    push(job, "error", message, session)
   }
 
   /** Fire one due job: session → job.started → run → markRun + job.completed/failed. */
   async function fireJob(job: Job): Promise<void> {
     inFlight.add(job.id)
+    let session: SessionMeta | undefined // hoisted: fail() pushes its handle
     try {
-      const session = sessions.create(job.name, job.id)
+      session = sessions.create(job.name, job.id)
       // Keep the job's history bounded: soft-delete older sessions beyond
       // JOB_SESSION_KEEP (newest first). They land in the recycle bin and are
       // purged by the existing retention sweep.
@@ -105,14 +151,15 @@ export function startSchedulerTick(deps: SchedulerTickDeps): SchedulerTickHandle
       if (outcome.stopReason !== "error") {
         scheduler.markRun(job.id, "ok", now())
         bus.emit(makeEvent("job.completed", { jobId: job.id, summary: outcome.stopReason }))
+        push(job, "ok", lastAssistantText(outcome.messages), session)
       } else {
         // the loop surfaced the provider failure as stopReason "error"; the
         // outcome carries no message of its own, so the reason is the record
-        fail(job, outcome.stopReason)
+        fail(job, outcome.stopReason, session)
       }
     } catch (err) {
       // enqueue throwing before/inside the run: same recording, the error's own message
-      fail(job, err instanceof Error ? err.message : String(err))
+      fail(job, err instanceof Error ? err.message : String(err), session)
     } finally {
       inFlight.delete(job.id) // ALWAYS: a settled (or never-started) run frees the slot
     }

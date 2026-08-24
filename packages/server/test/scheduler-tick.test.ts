@@ -27,6 +27,7 @@ import {
 import type {
   AgentEvent,
   Job,
+  JobFinishedPayload,
   KclawConfig,
   LlmClient,
   LlmStreamEvent,
@@ -372,6 +373,111 @@ describe("startSchedulerTick", () => {
       await sleep(5)
     }
     expect(env.sessions.meta(fresh.id)).toBeDefined() // 未过期保留
+  })
+
+  it("notifies the job's terminal state with the last assistant text as summary", async () => {
+    const env = makeEnv(scriptClient([textTurn("早报摘要：今日无事")]))
+    const job = env.scheduler.create({ name: "早报", cron: "* * * * *", prompt: "给我今日早报" })
+    backdate(env.scheduler, job.id)
+
+    const calls: JobFinishedPayload[] = []
+    const notifier = {
+      notifyJobFinished: async (p: JobFinishedPayload): Promise<void> => {
+        calls.push(p)
+      },
+    }
+    const tick = startSchedulerTick({
+      scheduler: env.scheduler,
+      run: env.manager,
+      bus: env.bus,
+      sessions: env.sessions,
+      intervalMs: 25,
+      notifier,
+      webBase: "http://127.0.0.1:9",
+    })
+    tickers.push(tick)
+
+    await waitForEvent(env.socket, "job.completed")
+
+    // the push is async but issued before job.completed settles downstream;
+    // poll briefly so the fake recorder has run
+    const deadline = Date.now() + 2000
+    while (calls.length === 0) {
+      if (Date.now() > deadline) throw new Error("job.finished notification never arrived")
+      await sleep(5)
+    }
+
+    const [p] = calls
+    expect(p.jobId).toBe(job.id)
+    expect(p.jobName).toBe("早报")
+    expect(p.status).toBe("ok")
+    expect(p.summary).toContain("早报摘要：今日无事")
+    const [session] = env.sessions.list()
+    expect(p.sessionId).toBe(session.id)
+    expect(p.sessionUrl).toBe(`http://127.0.0.1:9/?session=${session.id}`)
+  })
+
+  it("notifies with status error and the failure message when the run fails", async () => {
+    const env = makeEnv(scriptClient([textTurn("不该到达")]))
+    const job = env.scheduler.create({ name: "坏任务", cron: "* * * * *", prompt: "跑" })
+    backdate(env.scheduler, job.id)
+
+    // enqueue itself throws: the tick's catch records the failure with the
+    // error's own message, which must also become the push summary
+    const failingRun = {
+      enqueue: async (): Promise<never> => {
+        throw new Error("enqueue exploded")
+      },
+    } as unknown as RunManager
+
+    const calls: JobFinishedPayload[] = []
+    const notifier = {
+      notifyJobFinished: async (p: JobFinishedPayload): Promise<void> => {
+        calls.push(p)
+      },
+    }
+    const tick = startSchedulerTick({
+      scheduler: env.scheduler,
+      run: failingRun,
+      bus: env.bus,
+      sessions: env.sessions,
+      intervalMs: 25,
+      notifier,
+      webBase: "http://127.0.0.1:9",
+    })
+    tickers.push(tick)
+
+    await waitForEvent(env.socket, "job.failed")
+
+    const deadline = Date.now() + 2000
+    while (calls.length === 0) {
+      if (Date.now() > deadline) throw new Error("job.finished notification never arrived")
+      await sleep(5)
+    }
+    await sleep(50) // no second push may sneak in
+
+    expect(calls).toHaveLength(1)
+    const [p] = calls
+    expect(p.jobId).toBe(job.id)
+    expect(p.status).toBe("error")
+    expect(p.summary).toContain("enqueue exploded")
+    // the session was created before enqueue threw, so the link is complete
+    const [session] = env.sessions.list()
+    expect(p.sessionId).toBe(session.id)
+    expect(p.sessionUrl).toBe(`http://127.0.0.1:9/?session=${session.id}`)
+  })
+
+  it("a tick without a notifier dep changes nothing", async () => {
+    const env = makeEnv(scriptClient([textTurn("好")]))
+    const job = env.scheduler.create({ name: "无通知", cron: "* * * * *", prompt: "跑" })
+    backdate(env.scheduler, job.id)
+
+    startTick(env, 25) // no notifier in deps
+
+    await waitForEvent(env.socket, "job.completed")
+    const after = env.scheduler.get(job.id)
+    expect(after!.lastStatus).toBe("ok")
+    expect(after!.lastError).toBeUndefined()
   })
 
   it("stop() is idempotent and the interval stops firing", async () => {

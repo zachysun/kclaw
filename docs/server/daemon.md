@@ -77,7 +77,8 @@ createApp({home, token, stores, bus, run, webDist})  Fastify 应用（见 http-a
 await app.listen({ port: 0, host: "127.0.0.1" })
 port = app.server.address().port
 writeFileSync(<home>/daemon.json, {port, pid, startedAt})   ← 回填占位（同 startedAt、starting 移除）；listen 之后、tick 之前
-startSchedulerTick({...})           立即一次检查 + 每 30s 一次
+createNotifier(notify.channels)     ← 仅当 notify.channels 非空时创建；空则 undefined，tick 完全不推送
+startSchedulerTick({...})           立即一次检查 + 每 30s 一次（deps 携带 notifier 与 webBase=`http://127.0.0.1:<port>`，用于推送中的 `?session=` 链接）
 return { port, token, pid, stop }
 ```
 
