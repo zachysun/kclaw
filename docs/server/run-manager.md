@@ -13,6 +13,7 @@
 - **broker 只做桥接，不发事件、不管理超时**：`confirmation.requested`/`confirmation.resolved` 由 agent 循环发（`packages/core/src/agent/loop.ts`），broker 若再发即造成线上重复；超时裁决也由循环的 `raceConfirmation` 完成。broker 的 `expiresAt` 只是登记信息。
 - **双重竞速镜像**：RunManager 侧的 `raceResolution` 与循环侧的 `raceConfirmation` 用**同一个** `confirmTimeoutMs` 竞速同一个人工 promise——两侧结论一致；迟到的人工裁决被已 settle 的 race 丢弃，服务端再 `expire` 掉条目，晚到的 resolve 只能得到 `unknown confirmation`。
 - **自动命名静默且不覆盖手动改名**：失败静默处理、两次校验默认标题（生成前、写回前），用户已手动改名则不再修改。
+- **上下文压缩（滚动摘要）**：每轮 run 开始前，`#compact` 先按 `SessionMeta.compactedUpto` 标记切出 active 窗口（标记失效视为无标记）；active 长度 ≥ `sessions.compactThreshold`（默认 60）时，把最老一段（`active.slice(0, -compactKeep)`，默认保留最近 25 条原文）经一次无 tools 的 `collectStreamText` 调用（复用本轮 `runLlm`，发生在 runAgent 之前）压成中文摘要并 `updateMeta` 落盘 `compactedSummary`/`compactedUpto`；已有旧摘要时以「旧摘要 + 需并入的最新被压缩对话（`renderConversation` 渲染，每条一行、单条截断 2000 字符）」滚动合并。压缩成功后 runAgent 收到切片后的 history，摘要以 kind `"compact"` note（文案 `早期对话已压缩（保留最近 N 条原文）。摘要：…`，note 顺序 job → compact → memory，每轮持续注入）挂在用户消息上经 `onUserMessage` 管线广播。压缩调用或落盘抛错则一行 `console.error` 回退现状：不切片、不注 note，循环内 window(40) 截断继续兜底。
 
 ## 接口
 

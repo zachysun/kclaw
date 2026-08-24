@@ -21,6 +21,7 @@
  */
 import { readFileSync } from "node:fs"
 import {
+  collectStreamText,
   ConfigPermissionGate,
   createBuiltinTools,
   makeEvent,
@@ -34,6 +35,7 @@ import type {
   KclawPaths,
   LlmClient,
   MemoryStore,
+  Message,
   NoteBlock,
   PermissionGate,
   RunOutcome,
@@ -52,6 +54,35 @@ const DEFAULT_SYSTEM_PROMPT = "你是 kclaw，一个务实的个人助理。"
 const MEMORY_QUERY_CHARS = 200
 /** Top-N memory notes injected onto the user message. */
 const MEMORY_LIMIT = 5
+
+/** Verbatim compaction summarizer system prompt (spec-pinned). */
+const COMPACT_SYSTEM_PROMPT =
+  "你是对话摘要器。把给定对话（可能包含此前的旧摘要）压缩为不超过500字的中文摘要，保留：关键事实、用户偏好与约定、已做的决定、未完成事项。直接输出摘要正文，不要任何前后缀。"
+
+/** Per-message line cap in the compaction conversation rendering. */
+const RENDER_LINE_MAX_CHARS = 2000
+
+/**
+ * Render a message list as one line per message (`user: <text>` /
+ * `assistant: <text>`): text and note block contents joined by spaces;
+ * tool_call/tool_result blocks are skipped; a message without text renders
+ * as `<tool use>`; each line truncated at 2000 chars. Shared with the
+ * auto-memory pipeline (T3).
+ */
+function renderConversation(messages: Message[]): string {
+  const lines: string[] = []
+  for (const m of messages) {
+    const parts: string[] = []
+    for (const b of m.blocks) {
+      if (b.type === "text" || b.type === "note") parts.push(b.text)
+    }
+    const body = parts.join(" ").trim()
+    let line = `${m.role}: ${body === "" ? "<tool use>" : body}`
+    if (line.length > RENDER_LINE_MAX_CHARS) line = line.slice(0, RENDER_LINE_MAX_CHARS)
+    lines.push(line)
+  }
+  return lines.join("\n")
+}
 
 export interface RunManagerDeps {
   config: KclawConfig
@@ -354,12 +385,43 @@ export class RunManager {
       }, runId === undefined ? { sessionId } : { sessionId, runId }))
     }
     const runLlm = this.#deps.llmForRun?.(onLlmRetry) ?? llm
+    const model = this.#deps.model ?? config.providers.entries[config.providers.default]?.model ?? ""
+
+    // --- pre-run context compaction -------------------------------------------
+    // Slice the history at the session's compaction marker (when valid) and,
+    // when the ACTIVE window has grown past the threshold, roll the oldest
+    // segment into a summary first. Any failure (LLM throw, updateMeta throw)
+    // falls back to the status quo: full history, no note — the loop's own
+    // window truncation remains the safety net.
+    let activeHistory = history
+    let compactNote: NoteBlock[] = []
+    try {
+      const compaction = await this.#compact(
+        sessionId,
+        history,
+        config.sessions.compactThreshold ?? 60,
+        config.sessions.compactKeep ?? 25,
+        runLlm,
+        model,
+      )
+      activeHistory = compaction.active
+      if (compaction.summary !== undefined) {
+        compactNote = [{
+          id: newBlockId(),
+          type: "note",
+          kind: "compact",
+          text: `早期对话已压缩（保留最近 ${compaction.active.length} 条原文）。摘要：${compaction.summary}`,
+        }]
+      }
+    } catch (err) {
+      console.error("kclaw compaction failed:", err)
+    }
 
     try {
       return await runAgent(
         {
           sessionId,
-          history,
+          history: activeHistory,
           system: this.#systemPrompt(paths.agentsMd),
           userText: input.userText, // ignored by the loop when userMessage is set
           trigger: input.trigger,
@@ -367,7 +429,7 @@ export class RunManager {
         },
         {
           llm: runLlm,
-          model: this.#deps.model ?? config.providers.entries[config.providers.default]?.model ?? "",
+          model,
           tools,
           toolDefs,
           permissions: gate,
@@ -383,17 +445,17 @@ export class RunManager {
             // created → note.emitted ×N → completed. runId is known by now
             // (run.started is always a run's first event and precedes this
             // hook); the sessionId-only fallback is defensive only.
-            m.blocks.push(...jobNote, ...notes)
+            m.blocks.push(...jobNote, ...compactNote, ...notes)
             sessions.appendMessage(sessionId, m)
             if (input.trigger !== "job") {
               const firstText = m.blocks.find((b) => b.type === "text")?.text ?? ""
               void scheduleAutoname(
-                { sessions, llm: runLlm, model: this.#deps.model ?? config.providers.entries[config.providers.default]?.model ?? "" },
+                { sessions, llm: runLlm, model },
                 sessionId, firstText,
               )
             }
             const noteCtx = runId === undefined ? { sessionId } : { sessionId, runId }
-            for (const block of [...jobNote, ...notes]) {
+            for (const block of [...jobNote, ...compactNote, ...notes]) {
               busEmit(makeEvent("note.emitted", { messageId: m.id, block }, noteCtx))
             }
             return m
@@ -409,6 +471,51 @@ export class RunManager {
     } finally {
       if (this.#active.get(sessionId) === controller) this.#active.delete(sessionId)
     }
+  }
+
+  /**
+   * Slice `history` at the session's compaction marker and, when the active
+   * window reaches `threshold`, roll its oldest segment (all but the last
+   * `keep` messages) into a summary via one tool-less LLM call, persisting
+   * `{ compactedSummary, compactedUpto }` on the session meta. Returns the
+   * post-marker (post-compaction) active window plus the summary to inject
+   * as a compact note — an absent marker means the full history is active; a
+   * marker whose message id no longer exists (corrupt/hand-edited) is
+   * likewise treated as absent. BELOW threshold the marker slice still
+   * applies and the EXISTING summary (if any) is returned so the note stays
+   * visible every turn. Throws propagate: the caller falls back to the
+   * unsliced status quo.
+   */
+  async #compact(
+    sessionId: string,
+    history: Message[],
+    threshold: number,
+    keep: number,
+    runLlm: LlmClient,
+    model: string,
+  ): Promise<{ summary: string | undefined; active: Message[] }> {
+    const { sessions } = this.#deps
+    const meta = sessions.meta(sessionId)
+    const markerIdx = meta?.compactedUpto === undefined
+      ? -1
+      : history.findIndex((m) => m.id === meta.compactedUpto)
+    const active = markerIdx >= 0 ? history.slice(markerIdx + 1) : history
+    if (active.length >= threshold && keep < active.length) {
+      const seg = active.slice(0, active.length - keep)
+      const prev = meta?.compactedSummary
+      const content = prev === undefined
+        ? renderConversation(seg)
+        : `${prev}\n\n以下是需要并入的最新被压缩对话：\n${renderConversation(seg)}`
+      const summary = await collectStreamText(runLlm, {
+        model,
+        system: COMPACT_SYSTEM_PROMPT,
+        messages: [{ role: "user", content }],
+        tools: [],
+      })
+      sessions.updateMeta(sessionId, { compactedSummary: summary, compactedUpto: seg[seg.length - 1]!.id })
+      return { summary, active: active.slice(-keep) }
+    }
+    return { summary: meta?.compactedSummary, active }
   }
 
   /** AGENTS.md persona when the file exists and is non-empty; default otherwise. */

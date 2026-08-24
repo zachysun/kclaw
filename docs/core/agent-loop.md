@@ -105,7 +105,7 @@ run.started {trigger}
 
 `toProviderMessages(history, window)`（`packages/core/src/agent/context.ts`）是协议消息 → provider 请求的唯一翻译点：
 
-- **滑动窗口**（只保留最近 N 条历史、随新消息整体前移）：`history.slice(-window)`（window 默认 40），system prompt 不占窗口。
+- **滑动窗口**（只保留最近 N 条历史、随新消息整体前移）：`history.slice(-window)`（window 默认 40），system prompt 不占窗口。服务端（RunManager）的长会话会先做滚动压缩——超阈值时把最老一段压成摘要并传入切片后的 history，窗口截断仅作为未压缩/压缩失败时的兜底。
 - **孤儿 tool 消息丢弃**：窗口切在 assistant 与 tool 消息之间时，开头的连续 `role:"tool"` 消息被 `shift` 丢弃——OpenAI 兼容 API 拒收无配对调用的 tool 结果。
 - **无配对的 tool_call 剔除**：assistant 的 `tool_call` 块只有当其后（窗口内）存在配对的 `tool_result` 才转成 `toolCalls` 发送；悬空调用会被 400。
 - **块级转换**：user/assistant 的 text 拼接为 content；note 转 `[system note] <text>` 行（对模型可见、可追溯）；assistant 无 text 时 content 为 null，仅带 toolCalls；tool 消息每个 `tool_result` 一条，error 结果加 `[error] ` 前缀；thinking 与 attachment 不进模型视图。
