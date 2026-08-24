@@ -102,7 +102,11 @@ class MemoryStore {
 1. **运行前自动注入**（`packages/server/src/run.ts` 的 `#execute`）：用户消息的**前 200 个字符**（`MEMORY_QUERY_CHARS = 200`）作为查询调 `memory.search`，取 **top-5**（`MEMORY_LIMIT = 5`）。命中每条变成用户消息上的一个 note 块：`{ type: "note", kind: "memory", text: "相关记忆: <正文>" }`，在 `onUserMessage` 钩子里追加进消息、持久化，并逐个广播 `note.emitted` 事件。检索抛错时静默跳过——记忆是加速手段，检索失败不能阻塞一次运行。
 2. **模型主动检索**：运行中模型随时可调 `memory_search` 按需查，结果作为工具输出进入下一轮上下文；用 `memory_save` 写入新记忆。
 
-`config.yaml` 的 `memory.autoExtract` / `memory.extractModel` 两个字段（默认 `false` / 空）在当前代码里**没有消费方**——自动提取管线尚未接线，这是预留字段，如实记录。
+`config.yaml` 的 `memory.autoExtract` / `memory.extractModel` 两个字段（默认 `false` / 空）控制**写入侧的自动提取管线**（见下节）。
+
+### 自动提取（`memory.autoExtract`）
+
+写入侧还有第三条路——**运行后自动提取**（`packages/server/src/run.ts` 的 `#execute` / `#extractMemory`）：当一次运行以 `end_turn` 正常结束且 `config.memory.autoExtract` 为 `true` 时，服务端 fire-and-forget 地发起一次**不带工具**的 LLM 调用：模型取 `memory.extractModel`（为空回落到主对话模型的同一解析），system prompt 固定要求"只输出 JSON 字符串数组"，user 内容是整轮对话的逐行渲染（`renderConversation`，与压缩摘要共用，每行截 2000 字符）。解析时容忍可选的 ```json 围栏；响应不是合法 JSON、或解析结果非字符串数组（含非 string 元素）→ 整批放弃，只 `console.error`，不部分写入；空数组 → 无写入。每条事实以 `source: "auto"` 调 `save()`（复用 findSimilar 去重替换），单条 save 抛错记日志后继续下一条。提取完全异步——不 await、不影响运行结果；`aborted` / `error` 等非 `end_turn` 结束的运行不触发。
 
 ---
 

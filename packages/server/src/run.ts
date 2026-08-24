@@ -62,6 +62,10 @@ const COMPACT_SYSTEM_PROMPT =
 /** Per-message line cap in the compaction conversation rendering. */
 const RENDER_LINE_MAX_CHARS = 2000
 
+/** Verbatim memory-extraction system prompt (spec-pinned). */
+const EXTRACT_SYSTEM_PROMPT =
+  "从对话中提取值得长期记住的用户个人事实（居住地、偏好、约定、背景等）。只输出 JSON 字符串数组，无值得记的内容输出 []。"
+
 /**
  * Render a message list as one line per message (`user: <text>` /
  * `assistant: <text>`): text and note block contents joined by spaces;
@@ -418,7 +422,7 @@ export class RunManager {
     }
 
     try {
-      return await runAgent(
+      const outcome = await runAgent(
         {
           sessionId,
           history: activeHistory,
@@ -468,8 +472,62 @@ export class RunManager {
           onMessage: (m) => sessions.appendMessage(m.sessionId, m),
         },
       )
+      // Auto memory extraction: fire-and-forget after a clean end_turn —
+      // never awaited, never affects the returned outcome; any failure
+      // inside #extractMemory lands in the .catch below as a log line.
+      if (outcome.stopReason === "end_turn" && config.memory.autoExtract === true) {
+        const extractModel = config.memory.extractModel || model
+        void this.#extractMemory(sessionId, outcome.messages, runLlm, extractModel)
+          .catch((err) => console.error("kclaw memory extraction failed:", err))
+      }
+      return outcome
     } finally {
       if (this.#active.get(sessionId) === controller) this.#active.delete(sessionId)
+    }
+  }
+
+  /**
+   * Extract durable personal facts from a finished run's messages with one
+   * tool-less LLM call and save each as a source-"auto" memory note (save's
+   * own findSimilar dedupes/merges). The response is trimmed, an optional
+   * ```json fence is stripped, then JSON.parsed — a non-array payload or any
+   * non-string element abandons the whole batch (log only, no partial
+   * writes); an empty array writes nothing. A single failing save is logged
+   * and the remaining facts still go in. All throws propagate to the
+   * caller's fire-and-forget .catch.
+   */
+  async #extractMemory(
+    sessionId: string,
+    messages: Message[],
+    runLlm: LlmClient,
+    model: string,
+  ): Promise<void> {
+    const raw = await collectStreamText(runLlm, {
+      model,
+      system: EXTRACT_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: renderConversation(messages) }],
+      tools: [],
+    })
+    let text = raw.trim()
+    const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(text)
+    if (fenced !== null) text = fenced[1]!.trim()
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text)
+    } catch (err) {
+      console.error(`kclaw memory extraction (${sessionId}): unparseable response:`, err)
+      return
+    }
+    if (!Array.isArray(parsed) || parsed.some((x) => typeof x !== "string")) {
+      console.error(`kclaw memory extraction (${sessionId}): response is not a string array, skipping`)
+      return
+    }
+    for (const fact of parsed) {
+      try {
+        await this.#deps.memory.save({ text: fact, source: "auto" })
+      } catch (err) {
+        console.error(`kclaw memory extraction (${sessionId}): save failed:`, err)
+      }
     }
   }
 

@@ -8,7 +8,7 @@
  * concurrency, the whitelisted tool round, and cancel() of a hanging
  * run.
  */
-import { describe, it, expect, afterEach } from "vitest"
+import { describe, it, expect, afterEach, vi } from "vitest"
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -943,5 +943,123 @@ describe("RunManager context compaction", () => {
     expect(meta!.compactedUpto).toBeUndefined()
     const [user] = env.sessions.readMessages(session.id)
     expect(user!.blocks.some((b) => b.type === "note" && b.kind === "compact")).toBe(false)
+  })
+})
+
+// --- auto memory extraction -------------------------------------------------
+
+/** Poll an (async) condition until true or timeout (extraction is fire-and-forget). */
+async function waitUntil(cond: () => boolean | Promise<boolean>, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await cond()) return
+    await new Promise((r) => setTimeout(r, 5))
+  }
+  throw new Error("timed out waiting for condition")
+}
+
+describe("RunManager auto memory extraction", () => {
+  const enableAutoExtract = (c: KclawConfig) => {
+    c.memory.autoExtract = true
+  }
+
+  it("auto-extracts durable facts after a successful run", async () => {
+    const reqs: LlmRequest[] = []
+    const { env, manager } = makeEnv(
+      recordRequests(scriptClient([textTurn("好的"), textTurn('["用户住在上海"]')]), reqs),
+      enableAutoExtract,
+    )
+    const session = env.sessions.create("提取会话")
+
+    const outcome = await manager.enqueue(session.id, { userText: "我搬到上海了", trigger: "user" })
+    expect(outcome.stopReason).toBe("end_turn")
+
+    await waitUntil(async () => (await env.memory.search("上海", 5)).length > 0)
+    const hits = await env.memory.search("上海", 5)
+    expect(hits.map((n) => n.source)).toEqual(["auto"])
+    expect(hits[0]!.text).toBe("用户住在上海")
+
+    // the extraction request: no tools, spec-pinned system prompt, conversation rendering
+    expect(reqs.length).toBe(2)
+    const extractReq = reqs[1]!
+    expect(extractReq.tools).toEqual([])
+    expect(extractReq.model).toBe("mock-model")
+    expect(extractReq.system).toBe(
+      "从对话中提取值得长期记住的用户个人事实（居住地、偏好、约定、背景等）。只输出 JSON 字符串数组，无值得记的内容输出 []。",
+    )
+    expect(JSON.stringify(extractReq.messages)).toContain("我搬到上海了")
+  })
+
+  it("uses memory.extractModel when set", async () => {
+    const reqs: LlmRequest[] = []
+    const { env, manager } = makeEnv(
+      recordRequests(scriptClient([textTurn("好的"), textTurn("[]")]), reqs),
+      (c) => {
+        c.memory.autoExtract = true
+        c.memory.extractModel = "extractor-model"
+      },
+    )
+    const session = env.sessions.create("提取模型会话")
+
+    await manager.enqueue(session.id, { userText: "随便聊聊", trigger: "user" })
+    await waitUntil(() => reqs.length >= 2)
+    expect(reqs[1]!.model).toBe("extractor-model")
+  })
+
+  it("no extraction when autoExtract is off", async () => {
+    const reqs: LlmRequest[] = []
+    const { env, manager } = makeEnv(
+      recordRequests(scriptClient([textTurn("好的")]), reqs),
+      (c) => {
+        c.memory.autoExtract = false
+      },
+    )
+    const session = env.sessions.create("关闭提取会话")
+
+    const outcome = await manager.enqueue(session.id, { userText: "我住上海", trigger: "user" })
+    expect(outcome.stopReason).toBe("end_turn")
+    await new Promise((r) => setTimeout(r, 50))
+    expect(reqs.length).toBe(1) // main conversation only, no extraction call
+    expect(await env.memory.search("上海", 5)).toEqual([])
+  })
+
+  it("a failing extraction never affects the run outcome", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const { env, manager } = makeEnv(
+        scriptClient([textTurn("好的"), textTurn("不是JSON")]),
+        enableAutoExtract,
+      )
+      const session = env.sessions.create("坏响应会话")
+
+      const outcome = await manager.enqueue(session.id, { userText: "我住上海", trigger: "user" })
+      expect(outcome.stopReason).toBe("end_turn")
+
+      await waitUntil(() => errorSpy.mock.calls.length > 0)
+      await new Promise((r) => setTimeout(r, 20))
+      expect(await env.memory.search("上海", 5)).toEqual([])
+      expect(errorSpy).toHaveBeenCalled()
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it("non-end_turn runs skip extraction", async () => {
+    const reqs: LlmRequest[] = []
+    const { env, manager } = makeEnv(
+      recordRequests(hangingClient(), reqs),
+      enableAutoExtract,
+    )
+    const session = env.sessions.create("中止会话")
+
+    const p = manager.enqueue(session.id, { userText: "慢点", trigger: "user" })
+    await new Promise((r) => setTimeout(r, 10)) // let the hanging llm call start
+    expect(manager.cancel(session.id)).toBe(true)
+    const outcome = await p
+    expect(outcome.stopReason).toBe("aborted")
+
+    await new Promise((r) => setTimeout(r, 50))
+    expect(reqs.length).toBe(1) // the aborted main call only — no extraction
+    expect(await env.memory.search("上海", 5)).toEqual([])
   })
 })
