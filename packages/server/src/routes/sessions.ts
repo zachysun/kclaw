@@ -92,6 +92,17 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       return { ok: true }
     })
 
+    // Session-level readonly switch: write/exec tools deny with "readonly".
+    scope.post("/sessions/:id/readonly", async (request, reply) => {
+      const { id } = request.params as { id: string }
+      if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
+      const body = request.body as { readonly?: unknown } | null | undefined
+      if (typeof body?.readonly !== "boolean") {
+        return reply.code(400).send({ error: "readonly must be a boolean" })
+      }
+      return stores.sessions.updateMeta(id, body.readonly ? { readonly: true } : { readonly: undefined })
+    })
+
     scope.get("/sessions/:id", async (request, reply) => {
       const { id } = request.params as { id: string }
       const meta = stores.sessions.meta(id)

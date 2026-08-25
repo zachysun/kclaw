@@ -326,6 +326,22 @@ describe("ConfigPermissionGate readRoots", () => {
     rmSync(att, { recursive: true, force: true })
   })
 
+  it("readonly denies write-class tools even on the whitelist, reads stay allowed", async () => {
+    const ws = mkdtempSync(join(tmpdir(), "kclaw-gate-ro-"))
+    const g = new ConfigPermissionGate(CFG, { safeTools: new Set(["fs_read"]), workspace: ws, readonly: true })
+    // allow rule for fs_write exists in CFG? no — grant one then check the mode wins
+    const grants = new SessionGrants()
+    grants.grant("fs_write:~/.ssh/**")
+    const g2 = new ConfigPermissionGate(CFG, { safeTools: new Set(["fs_read"]), workspace: ws, grants, readonly: true })
+    expect(await g2.check(tc("fs_write", { path: "~/x" }))).toMatchObject({ type: "deny", reason: "readonly" })
+    expect(await g2.check(tc("exec", { command: "git status" }))).toMatchObject({ type: "deny", reason: "readonly" })
+    expect(await g2.check(tc("fs_read", { path: join(ws, "a.txt") }))).toMatchObject({ type: "allow" })
+    // read-class tools are untouched by readonly (memory_search is not in
+    // safeTools here, so it falls through to confirm rather than deny)
+    expect(await g2.check(tc("memory_search", { query: "x" }))).not.toMatchObject({ type: "deny" })
+    rmSync(ws, { recursive: true, force: true })
+  })
+
   it("without readRoots, read escapes still confirm", async () => {
     const ws = mkdtempSync(join(tmpdir(), "kclaw-gate-ws2-"))
     const g = new ConfigPermissionGate(CFG, { safeTools: new Set(["fs_read"]), workspace: ws })

@@ -15,6 +15,8 @@ export interface SessionMeta {
   workdir?: string
   /** Per-session model override (empty/absent → daemon default). */
   model?: string
+  /** Per-session readonly mode (write/exec denied, reads fine). */
+  readonly?: boolean
   deleted?: boolean
   deletedAt?: string
   /** Rolling compaction summary of messages before `compactedUpto` (context compaction). */

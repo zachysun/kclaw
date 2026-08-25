@@ -195,6 +195,8 @@ function realpathWithinInner(p: string, seen: Set<string>): string {
  */
 /** Read-only file tools: only these enjoy the readRoots exemption. */
 const READ_FILE_TOOLS = new Set(["fs_read", "fs_list"])
+/** Write-class tools: denied wholesale in readonly mode. */
+const WRITE_TOOLS = new Set(["fs_write", "fs_edit", "exec"])
 
 function escapesWorkspace(tool: string, args: unknown, workspace: string | undefined, readRoots: string[] = []): boolean {
   if (workspace === undefined || !FILE_TOOLS.has(tool)) return false
@@ -260,6 +262,11 @@ export interface ConfigPermissionGateOptions {
    * Write tools are never exempted.
    */
   readRoots?: string[]
+  /**
+   * Readonly mode: fs_write/fs_edit/exec are denied unconditionally
+   * (reads, web and memory keep working). Reasons surface as "readonly".
+   */
+  readonly?: boolean
 }
 
 /** A compiled rule that remembers its source string for deny notes. */
@@ -284,6 +291,7 @@ export class ConfigPermissionGate implements PermissionGate {
   readonly #newConfirmationId: () => string
   readonly #workspace: string | undefined
   readonly #readRoots: string[]
+  readonly #readonly: boolean
 
   constructor(cfg: KclawConfig["permissions"], opts: ConfigPermissionGateOptions = {}) {
     this.#allow = cfg.allow.map(compileRule)
@@ -294,11 +302,17 @@ export class ConfigPermissionGate implements PermissionGate {
     this.#newConfirmationId = opts.newConfirmationId ?? (() => newId("conf"))
     this.#workspace = opts.workspace
     this.#readRoots = opts.readRoots ?? []
+    this.#readonly = opts.readonly ?? false
   }
 
   async check(toolCall: ToolCallBlock): Promise<PermissionDecision> {
     const tool = toolCall.name
     const arg = extractArg(tool, toolCall.args)
+    // Readonly short-circuits EVERYTHING for write-class tools (even a
+    // whitelisted allow rule): the mode promises zero mutation risk.
+    if (this.#readonly && WRITE_TOOLS.has(tool)) {
+      return { type: "deny", reason: "readonly", noteText: "只读模式（readonly）" }
+    }
 
     // exec: deny matches every sub-command (normalized); allow and session
     // grants only ever apply to a single, concatenation-free command — a

@@ -1234,3 +1234,26 @@ describe("RunManager model resolution + usage recording", () => {
     rmSync(dir, { recursive: true, force: true })
   })
 })
+
+describe("RunManager readonly mode", () => {
+  it("denies write-class tool calls with a readonly note when the session is readonly", async () => {
+    const { env, manager } = makeEnv(scriptClient([
+      [
+        { type: "tool_call_started", index: 0, callId: "c1", name: "fs_write" },
+        { type: "tool_call_delta", index: 0, delta: "{}" },
+        { type: "message_done", stopReason: "tool_use" as const, usage: { inputTokens: 10, outputTokens: 1 } },
+      ],
+      [textTurn("完成")],
+    ]))
+    const session = env.sessions.create("ro-session")
+    env.sessions.updateMeta(session.id, { readonly: true })
+    const outcome = await manager.enqueue(session.id, { userText: "写个文件", trigger: "user" })
+    expect(outcome.stopReason).toBe("end_turn")
+    // The denied tool call produced a note instead of running.
+    const messages = env.sessions.readMessages(session.id)
+    const toolNote = messages.some((m) =>
+      m.blocks.some((b) => b.type === "note" && "kind" in b && (b as { kind?: string }).kind === "denied"),
+    )
+    expect(toolNote).toBe(true)
+  })
+})

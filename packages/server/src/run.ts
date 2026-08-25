@@ -190,6 +190,8 @@ export interface RunManagerDeps {
   extraTools?: () => { executors: Map<string, ToolExecutor>; defs: ToolDefinition[] }
   /** Per-run token ledger (optional; recording failures are swallowed). */
   usageStore?: UsageStore
+  /** Daemon-level readonly flag (`--readonly`): all sessions start read-only. */
+  readonly?: boolean
 }
 
 /** One queued run request. */
@@ -398,6 +400,8 @@ export class RunManager {
       // Attachment reads: files under <home>/attachments are the daemon's own
       // uploaded inputs — fs_read/fs_list reach them without a confirmation.
       readRoots: [paths.attachmentsDir],
+      // Readonly: the daemon-level flag OR this session's own toggle.
+      readonly: this.#deps.readonly === true || sessionMeta?.readonly === true,
     })
     const confirmTimeoutMs = config.permissions.confirmTimeoutMs
     const broker = this.#broker
