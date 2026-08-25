@@ -134,7 +134,10 @@ describe("kclaw daemon lifecycle (built CLI)", () => {
 
       const alias = await runCli(["status"], home)
       expect(alias.exitCode).toBe(0)
-      expect(alias.stdout).toBe(res.stdout)
+      // Uptime is inherently non-deterministic (the two runs may straddle a
+      // second boundary) — compare with it normalized.
+      const norm = (out: string) => out.replace(/uptime \d+s/, "uptime Ns")
+      expect(norm(alias.stdout)).toBe(norm(res.stdout))
     },
     30_000,
   )
