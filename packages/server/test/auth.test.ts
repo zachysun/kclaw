@@ -51,6 +51,46 @@ describe("createApp auth + endpoints", () => {
     expect(Number.isInteger(body.uptimeSec)).toBe(true)
     expect(body.uptimeSec).toBeGreaterThanOrEqual(0)
   })
+
+  it("GET /mcp without the mcp seam returns an empty server list", async () => {
+    app = await createApp({ home: tmpdir(), token: "t1" })
+    const res = await app.inject({
+      method: "GET",
+      url: "/mcp",
+      headers: { authorization: "Bearer t1" },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ servers: [] })
+  })
+
+  it("GET /mcp surfaces the injected status snapshot", async () => {
+    app = await createApp({
+      home: tmpdir(),
+      token: "t1",
+      mcp: {
+        status: () => [
+          { name: "files", state: "connected", tools: [{ name: "mcp__files__read" }] },
+          { name: "broken", state: "failed", tools: [], lastError: "boom" },
+        ],
+      },
+    })
+    const res = await app.inject({
+      method: "GET",
+      url: "/mcp",
+      headers: { authorization: "Bearer t1" },
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { servers: Array<{ name: string; state: string }> }
+    expect(body.servers).toHaveLength(2)
+    expect(body.servers[0]).toMatchObject({ name: "files", state: "connected" })
+    expect(body.servers[1]).toMatchObject({ name: "broken", state: "failed", lastError: "boom" })
+  })
+
+  it("GET /mcp requires the bearer token", async () => {
+    app = await createApp({ home: tmpdir(), token: "t1" })
+    const res = await app.inject({ method: "GET", url: "/mcp" })
+    expect(res.statusCode).toBe(401)
+  })
 })
 
 describe("loadOrCreateToken", () => {

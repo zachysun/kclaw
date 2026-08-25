@@ -66,6 +66,13 @@ interface ServerState {
   reconnectTimer?: NodeJS.Timeout
   /** Exponential backoff attempt counter (reset on successful connect). */
   attempts: number
+  /**
+   * True once this server ever connected. Reconnect churn only makes sense
+   * for a server that WAS serving — a server that never connected (e.g.
+   * spawn ENOENT at startup) settles in "failed" instead of retrying
+   * forever.
+   */
+  hadSession: boolean
   stopped: boolean
 }
 
@@ -93,6 +100,7 @@ export class McpManager {
         tools: [],
         toolSchemas: new Map(),
         attempts: 0,
+        hadSession: false,
         stopped: false,
       })
     }
@@ -220,6 +228,7 @@ export class McpManager {
       s.toolSchemas = toolSchemas
       s.state = "connected"
       s.attempts = 0
+      s.hadSession = true
       s.lastError = undefined
     } catch (err) {
       // Tear down whatever half-connected client we may hold.
@@ -240,7 +249,11 @@ export class McpManager {
   }
 
   private handleTransportClose(s: ServerState): void {
-    if (s.stopped) return
+    // A close from a server that never connected (spawn/connect failure)
+    // means "initial failure", not "disconnect": the failed connect's catch
+    // already recorded "failed", and retrying would churn forever on a
+    // permanently-broken server.
+    if (s.stopped || !s.hadSession) return
     s.state = "connecting"
     s.tools = []
     s.toolSchemas = new Map()

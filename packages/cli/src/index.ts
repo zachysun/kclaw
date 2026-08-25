@@ -119,6 +119,21 @@ async function jobsListAction(home: string): Promise<void> {
   process.stdout.write(`${renderJobsTable(jobs)}\n`)
 }
 
+/** `kclaw mcp [list]`: one line per configured MCP server (state + tool count). */
+async function mcpAction(home: string): Promise<void> {
+  const client = await KclawClient.connect(home)
+  const body = (await client.request("GET", "/mcp")) as { servers?: Array<{ name: string; state: string; tools: { name: string }[]; lastError?: string }> }
+  const servers = body.servers ?? []
+  if (servers.length === 0) {
+    process.stdout.write("未配置 MCP server（config.yaml 的 mcp.servers 为空）\n")
+    return
+  }
+  for (const s of servers) {
+    const error = s.lastError === undefined ? "" : ` 错误: ${s.lastError}`
+    process.stdout.write(`${s.name}  ${s.state}  ${s.tools.length} 个工具${error}\n`)
+  }
+}
+
 /** Shared by the default (bare `kclaw`) action and the explicit `chat` subcommand. */
 async function chatAction(home: string, options: Record<string, unknown>): Promise<void> {
   // First-run gate: no provider configured anywhere → run the
@@ -169,6 +184,12 @@ daemon.command("stop").description("stop the daemon (SIGTERM, then clean the pid
 daemon.command("status").description("report whether the daemon is running, and where").action(run(statusAction))
 
 program.command("status").description("alias of 'daemon status'").action(run(statusAction))
+
+program
+  .command("mcp")
+  .description("list configured MCP servers and their tool counts (alias: kclaw mcp list)")
+  .argument("[list]", "print the server list (the only subcommand)")
+  .action(run(mcpAction))
 
 program
   .command("web")

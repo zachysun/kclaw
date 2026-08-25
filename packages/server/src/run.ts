@@ -42,6 +42,7 @@ import type {
   SessionStore,
   ToolCallBlock,
   ToolExecutor,
+  ToolDefinition,
 } from "@kclaw/core"
 import type { EventBus } from "./bus.js"
 import { ConfirmationBroker, type ConfirmationResolution } from "./confirm.js"
@@ -135,6 +136,14 @@ export interface RunManagerDeps {
    * without rebuilding the toolset.
    */
   tools?: Map<string, ToolExecutor>
+  /**
+   * Live adapter tools (e.g. the MCP manager): a FUNCTION evaluated per run,
+   * so connections that come up or drop between runs (or mid-reconnect)
+   * are reflected in the next LLM request. Defs are appended to the
+   * builtin defs; a name collision with a builtin logs once and the
+   * adapter's executor wins (schema follows the executor).
+   */
+  extraTools?: () => { executors: Map<string, ToolExecutor>; defs: ToolDefinition[] }
 }
 
 /** One queued run request. */
@@ -301,6 +310,16 @@ export class RunManager {
     // not the schema the model sees.
     if (this.#deps.tools !== undefined) {
       for (const [name, executor] of this.#deps.tools) tools.set(name, executor)
+    }
+    // Live adapter tools (MCP manager): defs appended, executor wins on a
+    // name collision with a log line (schema follows the executor).
+    if (this.#deps.extraTools !== undefined) {
+      const extra = this.#deps.extraTools()
+      for (const [name, executor] of extra.executors) {
+        if (tools.has(name)) console.error(`kclaw tool name collision: ${name} (adapter overrides builtin)`)
+        tools.set(name, executor)
+      }
+      toolDefs.push(...extra.defs)
     }
 
     // --- permission wiring (config gate + confirmation gateway) ---

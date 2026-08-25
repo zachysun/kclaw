@@ -34,6 +34,7 @@ import {
   createOpenAiCompatClient,
   loadConfig,
   createNotifier,
+  McpManager,
   resolvePaths,
   withRetry,
 } from "@kclaw/core"
@@ -248,6 +249,16 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   const llm = (opts.llmFactory ?? defaultLlmFactory)(config)
   const model = resolveModel(config)
   const bus = new EventBus()
+  // MCP servers: a manager is built only when the config lists any; the
+  // per-run tools() read is live (reconnect recovery included). Connection
+  // failures are logged and never fatal — a broken server just yields no tools.
+  const mcpManager =
+    config.mcp !== undefined && Object.keys(config.mcp.servers ?? {}).length > 0
+      ? new McpManager({
+          servers: config.mcp.servers ?? {},
+          onError: (name, error) => console.error(`kclaw mcp ${name} error: ${error}`),
+        })
+      : undefined
   const run = new RunManager({
     config,
     paths,
@@ -257,6 +268,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     llm,
     workspace: config.workspace,
     model,
+    ...(mcpManager !== undefined && { extraTools: () => mcpManager.tools() }),
     // Retry visibility: with the DEFAULT
     // composition every run builds its own retry-wrapped client carrying
     // that run's onRetry sink — retry events then carry the run's own
@@ -275,6 +287,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     stores: { sessions, jobs, config, paths },
     bus,
     run,
+    mcp: mcpManager !== undefined ? { status: () => mcpManager.status() } : undefined,
     webDist: resolveWebDist(opts.webDist),
   })
   await app.listen({ port: opts.port ?? 0, host: HOST })
@@ -295,6 +308,10 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
         onError: (c, e) => console.error(`kclaw notify ${c.name ?? c.type} failed: ${e}`),
       })
     : undefined
+
+  // Connect MCP servers without blocking readiness: tools appear per-run as
+  // connections come up (a late-connecting server still contributes).
+  if (mcpManager !== undefined) void mcpManager.start()
 
   const tick = startSchedulerTick({ scheduler: jobs, run, bus, sessions, intervalMs: opts.schedulerIntervalMs ?? DEFAULT_SCHEDULER_INTERVAL_MS, purgeTtlMs: config.sessions.recycleBinTtlMs, notifier, webBase: `http://${HOST}:${port}` })
   const stopTimeoutMs = opts.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS
@@ -317,6 +334,9 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       // next_run_at advanced at claim time, so the killed run does not
       // re-fire: the job fires again at its next scheduled time.
       await withStopTimeout(tick.stop(), stopTimeoutMs, "scheduler tick")
+      if (mcpManager !== undefined) {
+        await withStopTimeout(mcpManager.stop(), stopTimeoutMs, "mcp stop")
+      }
       await withStopTimeout(app.close(), stopTimeoutMs, "app close")
       rmSync(daemonJson, { force: true })
     },

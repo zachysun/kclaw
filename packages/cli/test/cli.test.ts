@@ -399,3 +399,45 @@ describe("stop failure: daemon still responding", () => {
     30_000,
   )
 })
+
+describe("kclaw mcp", () => {
+  it("reports an empty server list when no mcp section is configured", async () => {
+    const h = makeHome()
+    await runCli(["daemon", "start"], h)
+    const res = await runCli(["mcp"], h)
+    expect(res.exitCode).toBe(0)
+    expect(res.stdout).toContain("未配置 MCP server")
+    await runCli(["daemon", "stop"], h)
+  })
+
+  it("lists a failing configured server with its error", async () => {
+    const h = makeHome()
+    writeFileSync(
+      join(h, "config.yaml"),
+      [
+        'mcp:',
+        '  servers:',
+        '    broken:',
+        '      type: stdio',
+        '      command: "/nonexistent/kclaw-mcp-nowhere"',
+        '',
+      ].join("\n"),
+    )
+    await runCli(["daemon", "start"], h)
+    // The manager may still be "connecting" a beat after readiness: poll
+    // until the spawn failure settles into "failed".
+    await new Promise((r) => setTimeout(r, 500))
+    let out = ""
+    for (let i = 0; i < 10; i++) {
+      const res = await runCli(["mcp"], h)
+      expect(res.exitCode).toBe(0)
+      out = res.stdout
+      if (out.includes("failed")) break
+      await new Promise((r) => setTimeout(r, 300))
+    }
+    expect(out).toContain("broken")
+    expect(out).toContain("failed")
+    expect(out).toContain("0 个工具")
+    await runCli(["daemon", "stop"], h)
+  }, 20_000)
+})

@@ -1063,3 +1063,73 @@ describe("RunManager auto memory extraction", () => {
     expect(await env.memory.search("上海", 5)).toEqual([])
   })
 })
+
+describe("RunManager extraTools (MCP adapter seam)", () => {
+  it("appends adapter defs to the LLM request tools and keeps the executors callable", async () => {
+    const reqs: LlmRequest[] = []
+    const { env, manager } = makeEnv(
+      recordRequests(scriptClient([textTurn("收到")]), reqs),
+      undefined,
+      undefined,
+      {
+        extraTools: () => ({
+          executors: new Map<string, ToolExecutor>([
+            [
+              "mcp__files__read",
+              {
+                risk: "sensitive",
+                concurrency: "serial",
+                execute: async () => ({ status: "ok", output: "file content" }),
+              },
+            ],
+          ]),
+          defs: [
+            {
+              name: "mcp__files__read",
+              description: "Read a file via the files MCP server",
+              parameters: { type: "object", properties: { path: { type: "string" } } },
+            },
+          ],
+        }),
+      },
+    )
+
+    const session = env.sessions.create("extra-tools-test")
+    await manager.enqueue(session.id, { userText: "看看文件", trigger: "user" })
+
+    expect(reqs.length).toBeGreaterThan(0)
+    const def = reqs[0]!.tools.find((t) => t.name === "mcp__files__read")
+    expect(def).toBeDefined()
+    expect(def?.description).toBe("Read a file via the files MCP server")
+    expect(def?.parameters).toMatchObject({ type: "object" })
+    // Builtin defs still present alongside the adapter's.
+    expect(reqs[0]!.tools.some((t) => t.name === "fs_read")).toBe(true)
+  })
+
+  it("re-evaluates extraTools per run (reconnect recovery reflected)", async () => {
+    const reqs: LlmRequest[] = []
+    let connected = false
+    const { env, manager } = makeEnv(
+      recordRequests(scriptClient([textTurn("收到")]), reqs),
+      undefined,
+      undefined,
+      {
+        extraTools: () => ({
+          executors: connected
+            ? new Map([["mcp__x__t", { risk: "safe", concurrency: "parallel", execute: async () => ({ status: "ok", output: "" }) }]])
+            : new Map(),
+          defs: connected
+            ? [{ name: "mcp__x__t", description: "later-connected tool", parameters: { type: "object" } }]
+            : [],
+        }),
+      },
+    )
+    const session = env.sessions.create("extra-tools-live")
+    await manager.enqueue(session.id, { userText: "第一轮", trigger: "user" })
+    expect(reqs[0]!.tools.some((t) => t.name === "mcp__x__t")).toBe(false)
+
+    connected = true // server came up between runs
+    await manager.enqueue(session.id, { userText: "第二轮", trigger: "user" })
+    expect(reqs.at(-1)!.tools.some((t) => t.name === "mcp__x__t")).toBe(true)
+  })
+})

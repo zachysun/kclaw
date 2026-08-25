@@ -44,6 +44,12 @@ export interface AppOptions {
    */
   run?: RunManager
   /**
+   * MCP server status snapshot, exposed at `GET /mcp` (bearer-protected,
+   * consumed by `kclaw mcp list`). Absent → the route returns an empty
+   * server list.
+   */
+  mcp?: { status(): { name: string; state: string; tools: { name: string }[]; lastError?: string }[] }
+  /**
    * Test-injection seam for the /ws pre-auth timeout (maps to WsOptions
    * `authTimeoutMs`); production defaults live in ws.ts.
    */
@@ -124,6 +130,8 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
 
   const config = opts.stores?.config ?? loadConfig(paths)
   registerConfigRoutes(app, { config })
+
+  app.get("/mcp", async () => ({ servers: opts.mcp?.status() ?? [] }))
 
   const bus = opts.bus ?? new EventBus()
   app.decorate("bus", bus)
