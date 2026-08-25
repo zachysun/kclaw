@@ -20,6 +20,7 @@
  *   run.started → message.created → note.emitted ×N → message.completed.
  */
 import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import {
   collectStreamText,
   ConfigPermissionGate,
@@ -27,10 +28,12 @@ import {
   makeEvent,
   newBlockId,
   newMessage,
+  realpathWithin,
   runAgent,
 } from "@kclaw/core"
 import type {
   AgentEvent,
+  AttachmentBlock,
   KclawConfig,
   KclawPaths,
   LlmClient,
@@ -87,6 +90,46 @@ function renderConversation(messages: Message[]): string {
     lines.push(line)
   }
   return lines.join("\n")
+}
+
+/** Text-like MIME/exif: inlined into context when small enough. */
+const TEXT_MIME = /^text\//
+const TEXT_EXT = /\.(md|txt|json|csv|yaml|yml|xml|log|ts|js|tsx|jsx|py|go|rs|sh|toml|ini|env)$/i
+/** Cap for inlining a text attachment into the prompt (chars). */
+const TEXT_INLINE_MAX_CHARS = 8 * 1024
+/** Cap for reading a text attachment off disk (bytes). */
+const TEXT_INLINE_MAX_BYTES = 64 * 1024
+/** Cap for embedding an image as base64 (bytes). */
+const IMAGE_INLINE_MAX_BYTES = 5 * 1024 * 1024
+
+/**
+ * Turn attachment references into attachment blocks on the user message.
+ * Decision per file: text-like and small → inline text (capped); image and
+ * small → base64 source (multimodal parts); anything else → metadata only,
+ * the agent reads it on demand via fs_read. Any path outside the session's
+ * attachments dir is rejected (defense in depth — the caller validates too).
+ */
+function mountAttachments(refs: AttachmentRef[], attachmentsDir: string, sessionId: string): AttachmentBlock[] {
+  const blocks: AttachmentBlock[] = []
+  for (const ref of refs) {
+    const root = realpathWithin(join(attachmentsDir, sessionId))
+    const resolved = realpathWithin(ref.path)
+    if (resolved !== root && !resolved.startsWith(root + "/")) {
+      throw new Error(`attachment outside the session's attachments dir: ${ref.path}`)
+    }
+    const isText = TEXT_MIME.test(ref.mimeType) || TEXT_EXT.test(ref.name)
+    const isImage = ref.mimeType.startsWith("image/")
+    if (isText && ref.size <= TEXT_INLINE_MAX_BYTES) {
+      let text = readFileSync(resolved, "utf8")
+      if (text.length > TEXT_INLINE_MAX_CHARS) text = `${text.slice(0, TEXT_INLINE_MAX_CHARS)}\n…[已截断]`
+      blocks.push({ id: newBlockId(), type: "attachment", mimeType: ref.mimeType, name: ref.name, text, source: { type: "file", path: resolved } })
+    } else if (isImage && ref.size <= IMAGE_INLINE_MAX_BYTES) {
+      blocks.push({ id: newBlockId(), type: "attachment", mimeType: ref.mimeType, name: ref.name, source: { type: "base64", data: readFileSync(resolved).toString("base64") } })
+    } else {
+      blocks.push({ id: newBlockId(), type: "attachment", mimeType: ref.mimeType, name: ref.name, source: { type: "file", path: resolved } })
+    }
+  }
+  return blocks
 }
 
 export interface RunManagerDeps {
@@ -151,11 +194,25 @@ export interface EnqueueInput {
   userText: string
   trigger: "user" | "job"
   /**
+   * Attachments to mount onto the user message: references to files
+   * already uploaded under `<home>/attachments/<sessionId>/` (validated
+   * by the caller and defensively re-checked here).
+   */
+  attachments?: AttachmentRef[]
+  /**
    * Job provenance note: when the scheduler fires a job, the tick
    * passes the 「本会话由定时任务…」 line here and it lands as a kind:"job"
    * note block right after the text block on the user message.
    */
   note?: string
+}
+
+/** A reference to an uploaded attachment file (mounted as an attachment block). */
+export interface AttachmentRef {
+  path: string
+  name: string
+  size: number
+  mimeType: string
 }
 
 /** withRetry's per-attempt notification shape (core provider/retry.ts onRetry). */
@@ -296,6 +353,7 @@ export class RunManager {
         : [{ id: newBlockId(), type: "note", kind: "job", text: input.note }]
     const userMessage = newMessage(sessionId, "user", [
       { id: newBlockId(), type: "text", text: input.userText },
+      ...mountAttachments(input.attachments ?? [], paths.attachmentsDir, sessionId),
     ])
 
     const { tools, toolDefs } = createBuiltinTools({
@@ -328,6 +386,9 @@ export class RunManager {
     const baseGate = new ConfigPermissionGate(config.permissions, {
       workspace,
       safeTools: new Set([...tools].filter(([, t]) => t.risk === "safe").map(([name]) => name)),
+      // Attachment reads: files under <home>/attachments are the daemon's own
+      // uploaded inputs — fs_read/fs_list reach them without a confirmation.
+      readRoots: [paths.attachmentsDir],
     })
     const confirmTimeoutMs = config.permissions.confirmTimeoutMs
     const broker = this.#broker

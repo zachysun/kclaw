@@ -9,6 +9,7 @@ import { EventBus } from "./bus.js"
 import type { RunManager } from "./run.js"
 import { registerWsRoutes } from "./ws.js"
 import { registerSessionRoutes } from "./routes/sessions.js"
+import { registerAttachmentRoutes } from "./routes/attachments.js"
 import { registerJobRoutes } from "./routes/jobs.js"
 import { registerConfigRoutes } from "./routes/config.js"
 
@@ -49,6 +50,12 @@ export interface AppOptions {
    * server list.
    */
   mcp?: { status(): { name: string; state: string; tools: { name: string }[]; lastError?: string }[] }
+  /**
+   * The daemon's attachments dir (`<home>/attachments`): when set, the
+   * session attachment routes are registered and the /ws send_message
+   * command accepts attachment references under it.
+   */
+  attachmentsDir?: string
   /**
    * Test-injection seam for the /ws pre-auth timeout (maps to WsOptions
    * `authTimeoutMs`); production defaults live in ws.ts.
@@ -124,6 +131,9 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   const paths = opts.stores?.paths ?? resolvePaths(opts.home)
   const sessions = opts.stores?.sessions ?? new SessionStore(paths.sessionsDir)
   registerSessionRoutes(app, { sessions })
+  if (opts.attachmentsDir !== undefined) {
+    registerAttachmentRoutes(app, { sessions, attachmentsDir: opts.attachmentsDir })
+  }
 
   const jobs = opts.stores?.jobs ?? new JobScheduler(paths.jobsDb)
   registerJobRoutes(app, { jobs })
@@ -140,6 +150,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
     token: opts.token,
     sessions,
     run: opts.run,
+    attachmentsDir: opts.attachmentsDir,
     authTimeoutMs: opts.wsAuthTimeoutMs,
     heartbeatMs: opts.wsHeartbeatMs,
   })

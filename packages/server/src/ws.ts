@@ -1,8 +1,10 @@
 import fastifyWebsocket from "@fastify/websocket"
 import type { FastifyInstance, FastifyRequest } from "fastify"
+import { join } from "node:path"
+import { realpathWithin } from "@kclaw/core"
 import type { SessionStore } from "@kclaw/core"
 import type { EventBus } from "./bus.js"
-import type { RunManager } from "./run.js"
+import type { RunManager, AttachmentRef } from "./run.js"
 import { tokenEquals } from "./auth.js"
 import type { ConfirmationActor } from "./confirm.js"
 
@@ -17,6 +19,12 @@ export interface WsOptions {
    * (queueing one would silently create an orphan JSONL directory).
    */
   sessions: SessionStore
+  /**
+   * The daemon's attachments dir (`<home>/attachments`): when set,
+   * `send_message` accepts attachment references whose path sits under
+   * `<attachmentsDir>/<sessionId>/` (realpath-verified).
+   */
+  attachmentsDir?: string
   /**
    * The app's RunManager: its confirmation broker answers the
    * `confirmation.resolve` command, `send_message` rides `run.enqueue` and
@@ -190,6 +198,7 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
       approved?: unknown
       client?: unknown
       text?: unknown
+      attachments?: unknown
     }
 
     if (!authenticated) {
@@ -251,7 +260,7 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
         if (run === undefined) {
           return send(socket, { type: "error", message: "run manager not available" })
         }
-        const { sessionId, text } = msg
+        const { sessionId, text, attachments } = msg
         if (typeof sessionId !== "string" || sessionId.length === 0
           || typeof text !== "string" || text.length === 0) {
           return send(socket, {
@@ -262,13 +271,21 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
         if (opts.sessions.meta(sessionId) === undefined) {
           return send(socket, { type: "error", message: "session not found" })
         }
+        // Optional attachments: [{path,name,size,mimeType}] with the path
+        // realpath-verified to live under this session's attachments dir —
+        // arbitrary paths would let any token holder read any file the daemon
+        // can reach (the run mounts the file and the model echoes it).
+        const refs = parseAttachmentRefs(attachments, opts.attachmentsDir, sessionId)
+        if (refs === undefined) {
+          return send(socket, { type: "error", message: "send_message attachments are invalid" })
+        }
         // Queue the run but NEVER await it before acking: the outcome streams
         // to subscribers as run.* events, so a long run must not block this
         // command channel. The enqueue promise settles with the outcome and
         // does not reject for provider errors (runAgent resolves those), but
         // a store failure rejects — surface that on THIS socket only, after
         // the ack.
-        run.enqueue(sessionId, { userText: text, trigger: "user" }).catch((err: unknown) => {
+        run.enqueue(sessionId, { userText: text, trigger: "user", ...(refs.length > 0 ? { attachments: refs } : {}) }).catch((err: unknown) => {
           send(socket, {
             type: "error",
             message: `send_message failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -309,6 +326,35 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
   })
 }
 
+/**
+ * Validate and normalize `send_message` attachments. Returns undefined when
+ * the array (or any entry) is malformed, or when a path escapes the session's
+ * attachments dir — undefined means "reject the whole message".
+ */
+function parseAttachmentRefs(
+  attachments: unknown,
+  attachmentsDir: string | undefined,
+  sessionId: string,
+): AttachmentRef[] | undefined {
+  if (attachments === undefined) return []
+  if (!Array.isArray(attachments)) return undefined
+  if (attachmentsDir === undefined) return undefined // no uploads configured
+  const refs: AttachmentRef[] = []
+  for (const raw of attachments) {
+    if (typeof raw !== "object" || raw === null) return undefined
+    const { path, name, size, mimeType } = raw as Record<string, unknown>
+    if (typeof path !== "string" || typeof name !== "string" || name.length === 0
+      || typeof size !== "number" || typeof mimeType !== "string") {
+      return undefined
+    }
+    const root = realpathWithin(join(attachmentsDir, sessionId))
+    const resolved = realpathWithin(path)
+    if (resolved !== root && !resolved.startsWith(root + "/")) return undefined
+    refs.push({ path: resolved, name, size, mimeType })
+  }
+  return refs
+}
+
 function send(socket: WsConnection, frame: unknown): void {
   // A socket that died between the action and this reply gets a dropped
   // frame, never a throw — same contract as bus.deliver. WsConnection is
@@ -321,7 +367,6 @@ function send(socket: WsConnection, frame: unknown): void {
     // already closed — nothing to deliver to
   }
 }
-
 /** Decode a ws message payload (Buffer, ArrayBuffer or Buffer[]) to UTF-8 text. */
 function frameText(raw: unknown): string {
   if (Buffer.isBuffer(raw)) return raw.toString("utf8")

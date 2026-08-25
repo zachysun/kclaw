@@ -9,7 +9,7 @@
  * run.
  */
 import { describe, it, expect, afterEach, vi } from "vitest"
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -1131,5 +1131,71 @@ describe("RunManager extraTools (MCP adapter seam)", () => {
     connected = true // server came up between runs
     await manager.enqueue(session.id, { userText: "第二轮", trigger: "user" })
     expect(reqs.at(-1)!.tools.some((t) => t.name === "mcp__x__t")).toBe(true)
+  })
+})
+
+describe("RunManager attachment mounting", () => {
+  it("mounts a text attachment inline and an image as multimodal parts", async () => {
+    const reqs: LlmRequest[] = []
+    const { env, manager } = makeEnv(recordRequests(scriptClient([textTurn("收到")]), reqs))
+    const session = env.sessions.create("att-mount")
+    const attDir = join(env.paths.attachmentsDir, session.id)
+    mkdirSync(attDir, { recursive: true })
+    const textPath = join(attDir, "note.md")
+    writeFileSync(textPath, "# 备忘\n买牛奶")
+    const imgPath = join(attDir, "shot.png")
+    writeFileSync(imgPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+
+    await manager.enqueue(session.id, {
+      userText: "看附件",
+      trigger: "user",
+      attachments: [
+        { path: textPath, name: "note.md", size: 12, mimeType: "text/markdown" },
+        { path: imgPath, name: "shot.png", size: 4, mimeType: "image/png" },
+      ],
+    })
+
+    const userMsg = reqs[0]!.messages.find((m) => m.role === "user")
+    expect(userMsg).toBeDefined()
+    const content = userMsg!.content
+    expect(Array.isArray(content)).toBe(true)
+    const parts = content as Array<{ type: string; text?: string; image_url?: { url: string } }>
+    expect(parts[0]).toMatchObject({ type: "text", text: expect.stringContaining("[附件 note.md]") })
+    expect(parts.some((p) => p.type === "image_url" && p.image_url?.url.startsWith("data:image/png;base64,"))).toBe(true)
+  })
+
+  it("leaves large non-text attachments as metadata only", async () => {
+    const reqs: LlmRequest[] = []
+    const { env, manager } = makeEnv(recordRequests(scriptClient([textTurn("收到")]), reqs))
+    const session = env.sessions.create("att-meta")
+    const attDir = join(env.paths.attachmentsDir, session.id)
+    mkdirSync(attDir, { recursive: true })
+    const pdfPath = join(attDir, "big.pdf")
+    writeFileSync(pdfPath, "PDF!")
+
+    await manager.enqueue(session.id, {
+      userText: "看看",
+      trigger: "user",
+      attachments: [{ path: pdfPath, name: "big.pdf", size: 999_999, mimeType: "application/pdf" }],
+    })
+    const userMsg = reqs[0]!.messages.find((m) => m.role === "user")
+    expect(typeof userMsg!.content).toBe("string")
+    expect(userMsg!.content).toContain("仅元数据")
+    expect(userMsg!.content).toContain("fs_read")
+  })
+
+  it("rejects an attachment outside the session dir", async () => {
+    const { env, manager } = makeEnv(scriptClient([textTurn("收到")]))
+    const session = env.sessions.create("att-bad")
+    const outside = join(env.paths.attachmentsDir, "other-session", "x.txt")
+    mkdirSync(join(env.paths.attachmentsDir, "other-session"), { recursive: true })
+    writeFileSync(outside, "x")
+    await expect(
+      manager.enqueue(session.id, {
+        userText: "hi",
+        trigger: "user",
+        attachments: [{ path: outside, name: "x.txt", size: 1, mimeType: "text/plain" }],
+      }),
+    ).rejects.toThrow(/outside the session/)
   })
 })

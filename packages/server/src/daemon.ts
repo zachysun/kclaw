@@ -288,6 +288,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     bus,
     run,
     mcp: mcpManager !== undefined ? { status: () => mcpManager.status() } : undefined,
+    attachmentsDir: paths.attachmentsDir,
     webDist: resolveWebDist(opts.webDist),
   })
   await app.listen({ port: opts.port ?? 0, host: HOST })

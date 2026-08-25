@@ -630,3 +630,46 @@ async function waitUntil(cond: () => boolean, timeoutMs = 2000): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
 }
+
+describe("GET /ws send_message attachments", () => {
+  it("rejects attachments when no attachments dir is configured", async () => {
+    const home = await mkdtemp(join(tmpdir(), "kclaw-ws-att-home-"))
+    const sessions = new SessionStore(join(home, "sessions"))
+    const app = await createApp({
+      home,
+      token: TOKEN,
+      stores: { sessions },
+      // A stub run manager: attachment validation runs after the run-manager
+      // and session checks, so only those need to pass.
+      run: {
+        enqueue: async () => ({ stopReason: "end_turn", totalUsage: { inputTokens: 0, outputTokens: 0 }, messages: [] }),
+        cancel: () => false,
+        broker: undefined,
+      } as unknown as RunManager,
+    })
+    try {
+      await app.listen({ host: "127.0.0.1", port: 0 })
+      const addr = app.server.address()
+      if (addr === null || typeof addr === "string") throw new Error("expected an AddressInfo")
+      const url = `ws://127.0.0.1:${(addr as AddressInfo).port}/ws`
+      const ws = new WebSocket(url)
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", () => resolve())
+        ws.once("error", (err: Error) => reject(err))
+      })
+      const sessionId = sessions.create("att-ws").id
+      ws.send(JSON.stringify({ type: "auth", token: TOKEN }))
+      ws.send(JSON.stringify({
+        type: "send_message",
+        sessionId,
+        text: "看附件",
+        attachments: [{ path: "/tmp/x.txt", name: "x.txt", size: 1, mimeType: "text/plain" }],
+      }))
+      expect(await nextMessage(ws)).toMatchObject({ type: "error", message: "send_message attachments are invalid" })
+      await closeClient(ws)
+    } finally {
+      await app.close()
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+})
