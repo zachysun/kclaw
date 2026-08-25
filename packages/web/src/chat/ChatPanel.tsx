@@ -21,7 +21,7 @@ import {
   type ChatState,
   type Message,
 } from "./model.js"
-import { ChatView } from "./ChatView.js"
+import { ChatView, type PendingAttachment } from "./ChatView.js"
 
 export interface ChatPanelProps {
   sessionId: string
@@ -173,13 +173,39 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages }: Cha
     }
   }, [sessionId, api, ws, createWs])
 
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
+
   const handleSend = useCallback((text: string) => {
     try {
-      clientRef.current.send({ type: "send_message", sessionId, text })
+      const attachments = [...pendingAttachments]
+      clientRef.current.send({
+        type: "send_message",
+        sessionId,
+        text,
+        ...(attachments.length > 0 ? { attachments } : {}),
+      })
+      setPendingAttachments([])
     } catch {
       setNotice("连接不可用，请稍后重试")
     }
-  }, [sessionId])
+  }, [sessionId, pendingAttachments])
+
+  /** Upload dropped files and queue them for the next message. */
+  const handleDrop = useCallback((event: React.DragEvent) => {
+    event.preventDefault()
+    if (event.dataTransfer === null) return
+    const files = Array.from(event.dataTransfer.files)
+    if (files.length === 0) return
+    for (const file of files) {
+      api.upload(sessionId, file)
+        .then((f) => setPendingAttachments((prev) => [...prev, { path: f.path, name: f.name, size: f.size, mimeType: file.type || "application/octet-stream" }]))
+        .catch((err: unknown) => setNotice(`附件上传失败: ${err instanceof Error ? err.message : String(err)}`))
+    }
+  }, [api, sessionId])
+
+  const handleRemoveAttachment = useCallback((index: number) => {
+    setPendingAttachments((prev) => prev.filter((_, i) => i !== index))
+  }, [])
 
   const handleResolveConfirmation = useCallback((confirmationId: string, approved: boolean) => {
     try {
@@ -198,7 +224,15 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages }: Cha
           {notice}
         </div>
       )}
-      <ChatView view={view} onSend={handleSend} onResolveConfirmation={handleResolveConfirmation} />
+      <div className="chat-panel-inner" data-testid="chat-panel" onDragOver={(e) => e.preventDefault()} onDrop={handleDrop}>
+        <ChatView
+          view={view}
+          onSend={handleSend}
+          onResolveConfirmation={handleResolveConfirmation}
+          pendingAttachments={pendingAttachments}
+          onRemoveAttachment={handleRemoveAttachment}
+        />
+      </div>
     </div>
   )
 }

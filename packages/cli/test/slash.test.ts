@@ -12,6 +12,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { isCancel, select } from "@clack/prompts"
 import { createRegistry, dispatch, runOrHint, type SlashCtx } from "../src/slash.js"
+import { basename, join } from "node:path"
+import { rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import type { KclawClient } from "../src/client.js"
 
 vi.mock("@clack/prompts", () => ({
@@ -227,5 +230,39 @@ describe("runOrHint", () => {
 
     expect(result).toBe(true)
     expect(fake.request).toHaveBeenCalledWith("GET", "/sessions")
+  })
+})
+
+describe("slash /attach", () => {
+  it("uploads the file and queues it for the next message", async () => {
+    const file = join(tmpdir(), `kclaw-att-${Date.now()}.md`)
+    writeFileSync(file, "# 备忘\n买牛奶")
+    const uploaded: unknown[] = []
+    const { ctx } = makeFakeCtx(() => ({}))
+    ctx.client = {
+      uploadAttachment: async (_s: string, name: string, body: Buffer, mime: string) => {
+        uploaded.push({ name, mime, bytes: body.length })
+        return { file: { path: "/att/" + name, name, size: body.length } }
+      },
+    } as unknown as KclawClient
+    ctx.pendingAttachments = []
+
+    const registry = createRegistry(ctx)
+    const ok = await runOrHint(dispatch("/attach " + file, registry), registry, ctx)
+    expect(ok).toBe(true)
+    expect(uploaded).toHaveLength(1)
+    expect(ctx.pendingAttachments).toHaveLength(1)
+    expect(ctx.pendingAttachments[0]!.name).toBe(basename(file))
+    expect(ctx.pendingAttachments[0]!.mimeType).toBe("text/markdown")
+    rmSync(file, { force: true })
+  })
+
+  it("reports a missing file without crashing", async () => {
+    const { ctx } = makeFakeCtx(() => ({}))
+    ctx.pendingAttachments = []
+    const registry = createRegistry(ctx)
+    await runOrHint(dispatch("/attach /nonexistent/x.txt", registry), registry, ctx)
+    expect(ctx.pendingAttachments).toHaveLength(0)
+    expect(ctx.print).toHaveBeenCalledWith(expect.stringContaining("附件上传失败"))
   })
 })

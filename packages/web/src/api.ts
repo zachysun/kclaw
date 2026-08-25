@@ -20,6 +20,8 @@ export interface ApiClient {
   post<T = unknown>(path: string, body?: unknown): Promise<T>
   patch<T = unknown>(path: string, body?: unknown): Promise<T>
   del<T = unknown>(path: string): Promise<T>
+  /** Upload a raw file to a session's attachments dir (drag-and-drop). */
+  upload(sessionId: string, file: File): Promise<{ path: string; name: string; size: number }>
 }
 
 /**
@@ -85,10 +87,41 @@ export function createApi(
     return (text === "" ? undefined : (JSON.parse(text) as T)) as T
   }
 
+  const upload = async (sessionId: string, file: File): Promise<{ path: string; name: string; size: number }> => {
+    const token = getToken()
+    const res = await fetch(
+      resolveUrl(base, `/sessions/${encodeURIComponent(sessionId)}/attachments?filename=${encodeURIComponent(file.name)}`),
+      {
+        method: "POST",
+        headers: {
+          ...(token !== null ? { authorization: `Bearer ${token}` } : {}),
+          "content-type": file.type || "application/octet-stream",
+        },
+        body: file,
+      },
+    )
+    if (res.status === 401) options.onUnauthorized?.()
+    if (!res.ok) {
+      let message = `HTTP ${res.status}`
+      try {
+        const data: unknown = await res.json()
+        if (typeof data === "object" && data !== null && typeof (data as Record<string, unknown>).error === "string") {
+          message = (data as { error: string }).error
+        }
+      } catch {
+        // keep HTTP fallback
+      }
+      throw new ApiError(res.status, message)
+    }
+    const body = (await res.json()) as { file: { path: string; name: string; size: number } }
+    return body.file
+  }
+
   return {
     get: (path) => request("GET", path),
     post: (path, body) => request("POST", path, body),
     patch: (path, body) => request("PATCH", path, body),
     del: (path) => request("DELETE", path),
+    upload,
   }
 }

@@ -194,4 +194,30 @@ export class KclawClient {
       frames: queue.iterator,
     }
   }
+
+  /**
+   * Upload a raw attachment body to a session's attachments dir. Returns the
+   * stored file info; the returned path/name feed the send_message
+   * `attachments` array.
+   */
+  async uploadAttachment(sessionId: string, filename: string, body: Buffer, mimeType: string): Promise<{ file: { path: string; name: string; size: number } }> {
+    const res = await fetch(`${this.base}/sessions/${encodeURIComponent(sessionId)}/attachments?filename=${encodeURIComponent(filename)}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.token}`, "content-type": mimeType },
+      body: body as unknown as BodyInit,
+    })
+    if (!res.ok) {
+      let message = `HTTP ${res.status}`
+      try {
+        const data: unknown = await res.json()
+        if (typeof data === "object" && data !== null && typeof (data as Record<string, unknown>).error === "string") {
+          message = (data as { error: string }).error
+        }
+      } catch {
+        // keep HTTP fallback
+      }
+      throw new Error(message)
+    }
+    return (await res.json()) as { file: { path: string; name: string; size: number } }
+  }
 }

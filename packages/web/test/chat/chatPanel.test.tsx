@@ -52,7 +52,7 @@ function makeApi(getMessages: Message[]): ApiClient & { get: ReturnType<typeof v
     get: vi.fn(async () => getMessages),
     post: vi.fn(),
     patch: vi.fn(),
-    del: vi.fn(),
+    del: vi.fn(), upload: vi.fn(),
   } as unknown as ApiClient & { get: ReturnType<typeof vi.fn> }
 }
 
@@ -391,3 +391,66 @@ describe("ChatPanel", () => {
     h.unmount()
   })
 })
+
+describe("ChatPanel drag-and-drop attachments", () => {
+  it("uploads a dropped file, shows a chip, and carries it on send_message", async () => {
+    const { sockets, api, root } = setupWithApi(0)
+    const upload = api.upload as ReturnType<typeof vi.fn>
+    upload.mockResolvedValue({ path: "/att/x.md", name: "x.md", size: 7 })
+    act(() => {
+      sockets[0]!.open()
+    })
+    // jsdom Event cannot carry dataTransfer; drive the handler through React's
+    // synthetic drop with a custom event.
+    const file = new File(["# 备忘"], "x.md", { type: "text/markdown" })
+    const dataTransfer = { files: [file] } as unknown as DataTransfer
+    const custom = new Event("drop", { bubbles: true, cancelable: true })
+    Object.defineProperty(custom, "dataTransfer", { value: dataTransfer })
+    const panel = document.querySelector('[data-testid="chat-panel"]')!
+    await act(async () => {
+      panel.dispatchEvent(custom)
+      await new Promise((resolve) => setTimeout(resolve, 0)) // upload .then
+    })
+    expect(upload).toHaveBeenCalledWith("ses_1", file)
+    expect(document.querySelectorAll('[data-testid="attachment-chip"]').length).toBe(1)
+
+    const input = document.querySelector('[data-testid="chat-input"]') as HTMLInputElement
+    const sendBtn = document.querySelector('[data-testid="send-button"]') as HTMLButtonElement
+    typeInto(input, "看附件")
+    await act(async () => {
+      sendBtn.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    const lastSend = sockets[0]!.sent.at(-1)!
+    const frame = JSON.parse(lastSend) as { type: string; text: string; attachments?: unknown[] }
+    expect(frame.type).toBe("send_message")
+    expect(frame.attachments).toHaveLength(1)
+    expect((frame.attachments as Array<{ name: string }>)[0]!.name).toBe("x.md")
+    expect(document.querySelectorAll('[data-testid="attachment-chip"]').length).toBe(0)
+    root.unmount()
+  })
+})
+
+function setupWithApi(messageCount: number) {
+  const sockets: FakeSocket[] = []
+  const socketFactory = vi.fn(() => {
+    const fake = makeFakeSocket()
+    sockets.push(fake)
+    return fake
+  })
+  const messages: Message[] = []
+  for (let i = 0; i < messageCount; i++) {
+    messages.push({ id: `m${i}`, role: "assistant", blocks: [{ id: `b${i}`, type: "text", text: "hi" }], createdAt: new Date().toISOString() })
+  }
+  const api = makeApi(messages)
+  const createWs = (): WsClient =>
+    createWsClient(WS_URL, "tok", socketFactory as unknown as (url: string) => WsLikeSocket)
+  const ws = createWs()
+  const root = createRoot(document.body.appendChild(document.createElement("div")))
+  act(() => {
+    root.render(
+      <ChatPanel sessionId="ses_1" api={api} ws={ws} createWs={createWs} initialMessages={messages} />,
+    )
+  })
+  return { sockets, api, root }
+}

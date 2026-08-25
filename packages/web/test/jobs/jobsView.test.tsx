@@ -35,7 +35,7 @@ function makeApi(): ApiClient & {
     get: vi.fn(),
     post: vi.fn(),
     patch: vi.fn(),
-    del: vi.fn(),
+    del: vi.fn(), upload: vi.fn(),
   }
 }
 

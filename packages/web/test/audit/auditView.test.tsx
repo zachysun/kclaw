@@ -35,7 +35,7 @@ function makeApi(): ApiClient & {
   patch: ReturnType<typeof vi.fn>
   del: ReturnType<typeof vi.fn>
 } {
-  return { get: vi.fn(), post: vi.fn(), patch: vi.fn(), del: vi.fn() }
+  return { get: vi.fn(), post: vi.fn(), patch: vi.fn(), del: vi.fn(), upload: vi.fn() }
 }
 
 async function mount(api: ApiClient): Promise<{ container: HTMLElement; root: Root }> {

@@ -38,7 +38,7 @@ import type { AgentEvent, ConfirmationRequestedPayload } from "@kclaw/core"
 import { createInterface, type Interface as RlInterface } from "node:readline"
 import { KclawClient } from "./client.js"
 import type { WsFrame, WsHandle } from "./client.js"
-import { createRegistry, dispatch, runOrHint, type SlashCtx } from "./slash.js"
+import { createRegistry, dispatch, runOrHint, type AttachmentRef, type SlashCtx } from "./slash.js"
 
 /** AgentEvent distributed over its event types, so `switch (ev.type)` narrows `ev.payload`. */
 type AnyAgentEvent = { [K in AgentEvent["type"]]: AgentEvent<K> }[AgentEvent["type"]]
@@ -85,6 +85,8 @@ interface ChatCtx {
   auto: "yes" | "no" | "ask"
   /** Tracks whether stdout sits at column 0, so line-oriented renders can newline first. */
   io: { atLineStart: boolean }
+  /** Attachments uploaded via /attach, carried on the next send_message. */
+  pendingAttachments: AttachmentRef[]
 }
 
 /** A bus event frame has `payload`; command acks and error frames do not. */
@@ -323,7 +325,14 @@ async function renderRun(ctx: ChatCtx, text: string): Promise<void> {
     if (pendingSend) {
       pendingSend = false
       try {
-        ctx.ws.send({ type: "send_message", sessionId: ctx.sessionId, text })
+        const attachments = [...ctx.pendingAttachments]
+        ctx.ws.send({
+          type: "send_message",
+          sessionId: ctx.sessionId,
+          text,
+          ...(attachments.length > 0 ? { attachments } : {}),
+        })
+        ctx.pendingAttachments.length = 0
       } catch {
         // ws throws synchronously only while CONNECTING; a CLOSED socket
         // drops the frame silently instead. Either way nothing was
@@ -369,6 +378,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
   process.stdout.write(dim(`输入消息，/exit 退出，/new 新会话，/sessions 列表，Ctrl+C 取消当前 run\n`))
 
   const ctx: ChatCtx = {
+    pendingAttachments: [],
     home: opts.home,
     client,
     ws: await openSubscribed(client, sessionId),
@@ -395,6 +405,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
       ctx.ws.send({ type: "unsubscribe", sessionId: ctx.sessionId })
       ctx.sessionId = id
       ctx.ws.send({ type: "subscribe", sessionId: ctx.sessionId })
+      ctx.pendingAttachments.length = 0 // attachments are session-scoped
     },
     exit() {
       // handled by the input loop (parsed.command === "exit" → break)
@@ -407,6 +418,9 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
     },
     resumeInput() {
       ctx.rl.resume()
+    },
+    get pendingAttachments() {
+      return ctx.pendingAttachments
     },
   }
   const registry = createRegistry(slashCtx)

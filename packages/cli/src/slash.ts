@@ -19,6 +19,19 @@ export interface SlashCtx {
   pauseInput(): void
   /** Resume the readline interface after an @clack prompt. */
   resumeInput(): void
+  /**
+   * Attachments uploaded for the NEXT message: send_message carries them
+   * (as `attachments`) and the send path clears the array.
+   */
+  pendingAttachments: AttachmentRef[]
+}
+
+/** A reference to an uploaded attachment (mirrors the daemon's shape). */
+export interface AttachmentRef {
+  path: string
+  name: string
+  size: number
+  mimeType: string
 }
 
 export interface SlashCommand {
@@ -60,6 +73,19 @@ export async function runOrHint(
   }
   ctx.print("没有这个命令，/help 看看")
   return false
+}
+
+import { readFileSync } from "node:fs"
+import { basename, extname } from "node:path"
+
+/** Guess a content type from a filename for the upload (coarse but enough). */
+function mimeForFile(name: string): string {
+  const ext = extname(name).toLowerCase()
+  if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].includes(ext)) return "image/" + ext.slice(1)
+  if (ext === ".pdf") return "application/pdf"
+  if (ext === ".md" || ext === ".markdown") return "text/markdown"
+  if ([".txt", ".json", ".csv", ".yaml", ".yml", ".log", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".sh"].includes(ext)) return "text/plain"
+  return "application/octet-stream"
 }
 
 /** One session row as served by GET /sessions (SessionStore meta shape). */
@@ -138,6 +164,33 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
         await ctx.switchSession(chosen as string)
       } finally {
         ctx.resumeInput()
+      }
+    },
+  })
+
+  registry.set("attach", {
+    name: "attach",
+    usage: "/attach <path>",
+    description: "上传附件，随下一条消息发送（无参数时列出待发附件）",
+    async run(args, ctx) {
+      if (args.trim() === "") {
+        if (ctx.pendingAttachments.length === 0) {
+          ctx.print("没有待发附件。/attach <path> 上传一个文件，它会随下一条消息发送。")
+          return
+        }
+        for (const a of ctx.pendingAttachments) {
+          ctx.print(`待发附件: ${a.name}（${a.size} 字节）`)
+        }
+        return
+      }
+      try {
+        const body = readFileSync(args)
+        const name = basename(args)
+        const { file } = await ctx.client.uploadAttachment(ctx.sessionId, name, body, mimeForFile(name))
+        ctx.pendingAttachments.push({ path: file.path, name: file.name, size: file.size, mimeType: mimeForFile(name) })
+        ctx.print(`已添加附件: ${file.name}（${file.size} 字节），将随下一条消息发送`)
+      } catch (err) {
+        ctx.print(`附件上传失败: ${err instanceof Error ? err.message : String(err)}`)
       }
     },
   })

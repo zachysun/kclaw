@@ -8,15 +8,27 @@
 import { useState, type FormEvent } from "react"
 import type { ChatState, ConfirmationCard, RenderedBlock, RenderedMessage } from "./model.js"
 
+/** An uploaded attachment pending on the next message (mirrors the daemon shape). */
+export interface PendingAttachment {
+  path: string
+  name: string
+  size: number
+  mimeType: string
+}
+
 export interface ChatViewProps {
   view: ChatState
   /** Send one user message (queued server-side; runs serialize like the CLI). */
   onSend: (text: string) => void
   /** Answer an inline confirmation card. */
   onResolveConfirmation: (confirmationId: string, approved: boolean) => void
+  /** Attachments queued for the next message (drag-and-drop). */
+  pendingAttachments: PendingAttachment[]
+  /** Drop one queued attachment. */
+  onRemoveAttachment: (index: number) => void
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment }: ChatViewProps) {
   const [draft, setDraft] = useState("")
 
   const submit = (event: FormEvent): void => {
@@ -50,6 +62,16 @@ export function ChatView({ view, onSend, onResolveConfirmation }: ChatViewProps)
       {view.pendingConfirmations.map((card) => (
         <ConfirmationCardView key={card.confirmationId} card={card} onResolve={onResolveConfirmation} />
       ))}
+      {pendingAttachments.length > 0 && (
+        <div className="attachment-chips" data-testid="attachment-chips">
+          {pendingAttachments.map((a, i) => (
+            <span key={i} className="attachment-chip" data-testid="attachment-chip">
+              {a.name}（{a.size} 字节）
+              <button type="button" onClick={() => onRemoveAttachment(i)} aria-label={`移除 ${a.name}`}>×</button>
+            </span>
+          ))}
+        </div>
+      )}
       <form className="chat-composer" onSubmit={submit}>
         <input
           className="chat-input"

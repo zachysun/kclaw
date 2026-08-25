@@ -25,7 +25,7 @@ function session(id: string, title: string): SessionMeta {
 }
 
 function makeApi(): ApiClient & { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn> } {
-  return { get: vi.fn(), post: vi.fn(), patch: vi.fn(), del: vi.fn() }
+  return { get: vi.fn(), post: vi.fn(), patch: vi.fn(), del: vi.fn(), upload: vi.fn() }
 }
 
 async function mount(api: ApiClient): Promise<{ container: HTMLElement; root: Root }> {

@@ -607,3 +607,11 @@ code {
   font-size: 11px;
   color: #8b949e;
 }
+
+.attachment-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 10px 0; }
+.attachment-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--surface-2, #eef1f5); border-radius: 4px;
+  padding: 2px 8px; font-size: 12px;
+}
+.attachment-chip button { border: none; background: none; cursor: pointer; font-size: 14px; line-height: 1; }
