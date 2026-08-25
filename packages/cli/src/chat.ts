@@ -485,8 +485,15 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
       if (parsed === null) {
         // Plain message: send and render the run it triggers.
         if (text !== "") {
-          // Expand @path file references against the session's workdir.
-          const workdir = ((await ctx.client.request("GET", `/sessions/${ctx.sessionId}`)) as { workdir?: string }).workdir ?? process.cwd()
+          // Expand @path file references against the session's workdir. A
+          // dead daemon here must not kill the input loop: renderRun's
+          // reconnect path resends after the daemon comes back.
+          let workdir = process.cwd()
+          try {
+            workdir = ((await ctx.client.request("GET", `/sessions/${ctx.sessionId}`)) as { workdir?: string }).workdir ?? process.cwd()
+          } catch {
+            // daemon unreachable — proceed with the cwd fallback
+          }
           const refs = expandFileRefs(text, process.cwd(), workdir)
           if ("error" in refs) {
             line(`引用失败: ${refs.error}`, ctx)
