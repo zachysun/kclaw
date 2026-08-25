@@ -13,7 +13,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 import { isCancel, select } from "@clack/prompts"
 import { createRegistry, dispatch, runOrHint, type SlashCtx } from "../src/slash.js"
 import { basename, join } from "node:path"
-import { rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import type { KclawClient } from "../src/client.js"
 
@@ -45,6 +45,8 @@ function makeFakeCtx(requestImpl: (method: string, path: string, body?: unknown)
     print,
     pauseInput,
     resumeInput,
+    send: vi.fn(),
+    commandsDir: undefined,
   }
   return { ctx, request, switchSession, print, pauseInput, resumeInput }
 }
@@ -293,5 +295,41 @@ describe("slash /model", () => {
     expect(posts[0]).toEqual({ model: "b" })
     await runOrHint(dispatch("/model default", registry), registry, ctx)
     expect(posts[1]).toEqual({ model: "" })
+  })
+})
+
+describe("custom slash commands + readonly", () => {
+  it("loads <commandsDir>/*.md as commands with {{args}} expansion", async () => {
+    const dir = join(tmpdir(), `kclaw-cmd-${Date.now()}`)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, "tldr.md"), "请用三句话总结：{{args}}")
+    writeFileSync(join(dir, "help.md"), "不该加载（与内置重名）")
+    const { ctx } = makeFakeCtx(() => ({}))
+    ctx.pendingAttachments = []
+    ctx.commandsDir = dir
+    const registry = createRegistry(ctx)
+    expect(registry.has("tldr")).toBe(true)
+    // builtin wins: the custom help.md was skipped, the builtin kept its description
+    expect(registry.get("help")!.description).toBe("列出所有命令")
+    await runOrHint(dispatch("/tldr 项目管理", registry), registry, ctx)
+    expect(ctx.send).toHaveBeenCalledWith("请用三句话总结：项目管理")
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it("/readonly toggles the session flag", async () => {
+    let current = {}
+    const posts: Array<{ readonly: boolean }> = []
+    const { ctx } = makeFakeCtx((method, path, body) => {
+      if (method === "GET") return current
+      posts.push(body as { readonly: boolean })
+      return {}
+    })
+    ctx.pendingAttachments = []
+    const registry = createRegistry(ctx)
+    await runOrHint(dispatch("/readonly on", registry), registry, ctx)
+    expect(posts[0]).toEqual({ readonly: true })
+    current = { readonly: true }
+    await runOrHint(dispatch("/readonly", registry), registry, ctx)
+    expect(posts[1]).toEqual({ readonly: false })
   })
 })

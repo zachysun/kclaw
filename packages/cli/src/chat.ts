@@ -35,10 +35,12 @@
  */
 import { confirm, isCancel } from "@clack/prompts"
 import type { AgentEvent, ConfirmationRequestedPayload } from "@kclaw/core"
+import { join } from "node:path"
 import { createInterface, type Interface as RlInterface } from "node:readline"
 import { KclawClient } from "./client.js"
 import type { WsFrame, WsHandle } from "./client.js"
 import { createRegistry, dispatch, runOrHint, type AttachmentRef, type SlashCtx } from "./slash.js"
+import { expandFileRefs } from "./file-refs.js"
 
 /** AgentEvent distributed over its event types, so `switch (ev.type)` narrows `ev.payload`. */
 type AnyAgentEvent = { [K in AgentEvent["type"]]: AgentEvent<K> }[AgentEvent["type"]]
@@ -422,6 +424,19 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
     get pendingAttachments() {
       return ctx.pendingAttachments
     },
+    send(text: string) {
+      // Custom commands expand into a plain message through the same path as
+      // typed input (async fire-and-forget inside a slash run).
+      void (async () => {
+        runActive = true
+        try {
+          await renderRun(ctx, text)
+        } finally {
+          runActive = false
+        }
+      })()
+    },
+    commandsDir: ctx.home !== undefined ? join(ctx.home, "commands") : undefined,
   }
   const registry = createRegistry(slashCtx)
 
@@ -470,8 +485,16 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
       if (parsed === null) {
         // Plain message: send and render the run it triggers.
         if (text !== "") {
+          // Expand @path file references against the session's workdir.
+          const workdir = ((await ctx.client.request("GET", `/sessions/${ctx.sessionId}`)) as { workdir?: string }).workdir ?? process.cwd()
+          const refs = expandFileRefs(text, process.cwd(), workdir)
+          if ("error" in refs) {
+            line(`引用失败: ${refs.error}`, ctx)
+            prompt()
+            continue
+          }
           runActive = true
-          await renderRun(ctx, text) // sends, renders, and (if needed) resends after reconnect
+          await renderRun(ctx, refs.text) // sends, renders, and (if needed) resends after reconnect
           runActive = false
         }
       } else if (parsed.command === "exit") {

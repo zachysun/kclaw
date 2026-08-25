@@ -24,6 +24,10 @@ export interface SlashCtx {
    * (as `attachments`) and the send path clears the array.
    */
   pendingAttachments: AttachmentRef[]
+  /** Send a plain user message (custom slash commands expand templates into this). */
+  send(text: string): void
+  /** Directory of custom slash commands (`<home>/commands`, *.md). */
+  commandsDir?: string
 }
 
 /** A reference to an uploaded attachment (mirrors the daemon's shape). */
@@ -75,8 +79,8 @@ export async function runOrHint(
   return false
 }
 
-import { readFileSync } from "node:fs"
-import { basename, extname } from "node:path"
+import { readFileSync, readdirSync } from "node:fs"
+import { basename, extname, join } from "node:path"
 
 /** Guess a content type from a filename for the upload (coarse but enough). */
 function mimeForFile(name: string): string {
@@ -192,6 +196,19 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
     },
   })
 
+  registry.set("readonly", {
+    name: "readonly",
+    usage: "/readonly [on|off]",
+    description: "切换本会话只读模式（写与 exec 将被拒绝）",
+    async run(args, ctx) {
+      const arg = args.trim()
+      const current = (await ctx.client.request("GET", `/sessions/${ctx.sessionId}`)) as { readonly?: boolean }
+      const target = arg === "on" ? true : arg === "off" ? false : !(current.readonly === true)
+      await ctx.client.request("POST", `/sessions/${ctx.sessionId}/readonly`, { readonly: target })
+      ctx.print(target ? "已开启只读模式（写与 exec 将被拒绝）" : "已关闭只读模式")
+    },
+  })
+
   registry.set("attach", {
     name: "attach",
     usage: "/attach <path>",
@@ -229,6 +246,34 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
       }
     },
   })
+
+  // Custom commands: <commandsDir>/*.md — filename = command name, body is a
+  // prompt template with {{args}} expanded at dispatch. Builtin names win:
+  // a collision logs a warning and the file is skipped.
+  if (ctx.commandsDir !== undefined) {
+    let files: string[] = []
+    try {
+      files = readdirSync(ctx.commandsDir).filter((f) => f.endsWith(".md"))
+    } catch {
+      // no commands dir — nothing to load
+    }
+    for (const f of files) {
+      const name = f.slice(0, -3)
+      if (registry.has(name)) {
+        ctx.print(`自定义命令 ${name} 与内置命令重名，已忽略`)
+        continue
+      }
+      const template = readFileSync(join(ctx.commandsDir, f), "utf8").trim()
+      registry.set(name, {
+        name,
+        usage: `/${name} [参数]`,
+        description: "自定义命令",
+        async run(args, c) {
+          c.send(template.replace(/\{\{args\}\}/g, args).trim())
+        },
+      })
+    }
+  }
 
   return registry
 }
