@@ -308,3 +308,28 @@ describe("exec concatenation handling", () => {
     expect((await g.check(tc("exec", { command: "curl example.com" }))).type).toBe("confirm")
   })
 })
+
+describe("ConfigPermissionGate readRoots", () => {
+  it("exempts fs_read/fs_list targets inside a read root from the escape check", async () => {
+    const ws = mkdtempSync(join(tmpdir(), "kclaw-gate-ws-"))
+    const att = mkdtempSync(join(tmpdir(), "kclaw-gate-att-"))
+    writeFileSync(join(att, "f.txt"), "x")
+    const g = new ConfigPermissionGate(CFG, { safeTools: new Set(["fs_read", "fs_list"]), workspace: ws, readRoots: [att] })
+    // inside the read root → not an escape → safe allow
+    expect(await g.check(tc("fs_read", { path: join(att, "f.txt") }))).toMatchObject({ type: "allow", reason: "safe" })
+    expect(await g.check(tc("fs_list", { path: att }))).toMatchObject({ type: "allow", reason: "safe" })
+    // outside both workspace and readRoot → still an escape → confirm
+    expect(await g.check(tc("fs_read", { path: "/etc/hosts" }))).toMatchObject({ type: "confirm" })
+    // write tools are never exempted
+    expect(await g.check(tc("fs_write", { path: join(att, "f2.txt") }))).toMatchObject({ type: "confirm" })
+    rmSync(ws, { recursive: true, force: true })
+    rmSync(att, { recursive: true, force: true })
+  })
+
+  it("without readRoots, read escapes still confirm", async () => {
+    const ws = mkdtempSync(join(tmpdir(), "kclaw-gate-ws2-"))
+    const g = new ConfigPermissionGate(CFG, { safeTools: new Set(["fs_read"]), workspace: ws })
+    expect(await g.check(tc("fs_read", { path: "/etc/hosts" }))).toMatchObject({ type: "confirm" })
+    rmSync(ws, { recursive: true, force: true })
+  })
+})

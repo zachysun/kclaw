@@ -193,12 +193,26 @@ function realpathWithinInner(p: string, seen: Set<string>): string {
  * is not enforced at the permission layer and this returns false (legacy
  * behavior).
  */
-function escapesWorkspace(tool: string, args: unknown, workspace: string | undefined): boolean {
+/** Read-only file tools: only these enjoy the readRoots exemption. */
+const READ_FILE_TOOLS = new Set(["fs_read", "fs_list"])
+
+function escapesWorkspace(tool: string, args: unknown, workspace: string | undefined, readRoots: string[] = []): boolean {
   if (workspace === undefined || !FILE_TOOLS.has(tool)) return false
   const a = args as { path?: unknown } | null | undefined
   const root = realpathWithin(path.resolve(workspace))
   const resolved = realpathWithin(path.resolve(root, expandTilde(String(a?.path ?? ""))))
-  return resolved !== root && !resolved.startsWith(root + path.sep)
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+    // A read tool reaching an allowed read root (daemon attachments dir)
+    // is not an escape: it is the workspace for reading purposes.
+    if (READ_FILE_TOOLS.has(tool)) {
+      for (const extra of readRoots) {
+        const extraRoot = realpathWithin(path.resolve(extra))
+        if (resolved === extraRoot || resolved.startsWith(extraRoot + path.sep)) return false
+      }
+    }
+    return true
+  }
+  return false
 }
 
 /**
@@ -239,6 +253,13 @@ export interface ConfigPermissionGateOptions {
    * matched in normalized form (see normalizePathArg). Defaults to cwd.
    */
   workspace?: string
+  /**
+   * Extra roots whose READ access (fs_read/fs_list only) is treated like
+   * the workspace — the daemon passes its attachments dir here so an
+   * uploaded attachment is readable without a per-file confirmation.
+   * Write tools are never exempted.
+   */
+  readRoots?: string[]
 }
 
 /** A compiled rule that remembers its source string for deny notes. */
@@ -262,6 +283,7 @@ export class ConfigPermissionGate implements PermissionGate {
   readonly #sessionGrantsEnabled: boolean
   readonly #newConfirmationId: () => string
   readonly #workspace: string | undefined
+  readonly #readRoots: string[]
 
   constructor(cfg: KclawConfig["permissions"], opts: ConfigPermissionGateOptions = {}) {
     this.#allow = cfg.allow.map(compileRule)
@@ -271,6 +293,7 @@ export class ConfigPermissionGate implements PermissionGate {
     this.#sessionGrantsEnabled = cfg.sessionGrants === true
     this.#newConfirmationId = opts.newConfirmationId ?? (() => newId("conf"))
     this.#workspace = opts.workspace
+    this.#readRoots = opts.readRoots ?? []
   }
 
   async check(toolCall: ToolCallBlock): Promise<PermissionDecision> {
@@ -318,7 +341,7 @@ export class ConfigPermissionGate implements PermissionGate {
     // Out-of-workspace file access is not auto-approved: even a "safe" tool
     // (fs_read/fs_list) must go to a human when its target escapes the
     // workspace. Runs after deny/allow so those still take precedence.
-    if (escapesWorkspace(tool, toolCall.args, this.#workspace)) {
+    if (escapesWorkspace(tool, toolCall.args, this.#workspace, this.#readRoots)) {
       return { type: "confirm", confirmationId: this.#newConfirmationId() }
     }
     if (this.#safeTools.has(tool)) {

@@ -1,6 +1,6 @@
 import type { Message } from "../protocol/messages.js"
 import { isBlockType } from "../protocol/blocks.js"
-import type { ProviderMessage, ProviderToolCall } from "../provider/types.js"
+import type { ContentPart, ProviderMessage, ProviderToolCall } from "../provider/types.js"
 
 export function toProviderMessages(history: Message[], window: number): ProviderMessage[] {
   const recent = history.slice(-window)
@@ -12,6 +12,7 @@ export function toProviderMessages(history: Message[], window: number): Provider
     const m = recent[i]!
     if (m.role === "user" || m.role === "assistant") {
       const parts: string[] = []
+      const images: ContentPart[] = []
       const toolCalls: ProviderToolCall[] = []
       // Defense in depth: an assistant tool_call whose tool message is NOT in
       // the window (e.g. dangling from an aborted stream) must not reach the
@@ -25,12 +26,28 @@ export function toProviderMessages(history: Message[], window: number): Provider
       for (const b of m.blocks) {
         if (isBlockType("text", b)) parts.push(b.text)
         else if (isBlockType("note", b)) parts.push(`[system note] ${b.text}`)
+        else if (isBlockType("attachment", b)) {
+          const label = b.name ?? "附件"
+          if (b.source.type === "base64" && b.mimeType.startsWith("image/")) {
+            images.push({ type: "image_url", image_url: { url: `data:${b.mimeType};base64,${b.source.data}` } })
+          } else if (b.text !== undefined) {
+            parts.push(`[附件 ${label}]\n${b.text}`)
+          } else {
+            parts.push(`[附件 ${label}（${b.mimeType}，仅元数据）已保存，路径 ${"path" in b.source ? b.source.path : ""}，可用 fs_read 读取]`)
+          }
+        }
         else if (isBlockType("tool_call", b) && m.role === "assistant" && answered.has(b.callId)) {
           toolCalls.push({ callId: b.callId, name: b.name, argsJson: b.argsJson })
         }
       }
-      if (m.role === "user") out.push({ role: "user", content: parts.join("\n") })
-      else {
+      if (m.role === "user") {
+        if (images.length > 0) {
+          const content: ContentPart[] = [{ type: "text", text: parts.join("\n") }, ...images]
+          out.push({ role: "user", content })
+        } else {
+          out.push({ role: "user", content: parts.join("\n") })
+        }
+      } else {
         const content = parts.length ? parts.join("\n") : null
         // an assistant with neither content nor toolCalls has nothing usable
         if (content !== null || toolCalls.length > 0) {

@@ -89,3 +89,49 @@ describe("toProviderMessages", () => {
     ])
   })
 })
+
+describe("toProviderMessages attachment rendering", () => {
+  it("renders a base64 image attachment as multimodal content parts", () => {
+    const m = newMessage("s", "user", [
+      { id: "blk_1", type: "text", text: "看看这张图" },
+      { id: "blk_2", type: "attachment", mimeType: "image/png", name: "shot.png", source: { type: "base64", data: "aGVsbG8=" } },
+    ])
+    const out = toProviderMessages([m], 10)
+    expect(out).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "看看这张图" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,aGVsbG8=" } },
+        ],
+      },
+    ])
+  })
+
+  it("renders an inline-text attachment as a labelled text block", () => {
+    const m = newMessage("s", "user", [
+      { id: "blk_1", type: "attachment", mimeType: "text/markdown", name: "todo.md", text: "- 买菜\n- 健身", source: { type: "file", path: "/home/x/attachments/s1/todo.md" } },
+    ])
+    const out = toProviderMessages([m], 10)
+    expect(out).toEqual([{ role: "user", content: "[附件 todo.md]\n- 买菜\n- 健身" }])
+  })
+
+  it("renders a large/other attachment as metadata for on-demand fs_read", () => {
+    const m = newMessage("s", "user", [
+      { id: "blk_1", type: "attachment", mimeType: "application/pdf", name: "report.pdf", source: { type: "file", path: "/home/x/attachments/s1/report.pdf" } },
+    ])
+    const out = toProviderMessages([m], 10)
+    expect(out).toEqual([
+      { role: "user", content: "[附件 report.pdf（application/pdf，仅元数据）已保存，路径 /home/x/attachments/s1/report.pdf，可用 fs_read 读取]" },
+    ])
+  })
+
+  it("keeps string content for messages without images", () => {
+    const m = newMessage("s", "user", [
+      { id: "blk_1", type: "text", text: "纯文本" },
+      { id: "blk_2", type: "attachment", mimeType: "text/plain", name: "a.txt", text: "hi", source: { type: "file", path: "/p/a.txt" } },
+    ])
+    const out = toProviderMessages([m], 10)
+    expect(out).toEqual([{ role: "user", content: "纯文本\n[附件 a.txt]\nhi" }])
+  })
+})

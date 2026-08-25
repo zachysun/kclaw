@@ -40,6 +40,9 @@ export interface AttachmentBlock {
   id: BlockId
   type: "attachment"
   mimeType: string
+  /** Original filename (display labels). */
+  name?: string
+  /** Inline text for text attachments (mounted, capped) — see context.ts. */
   text?: string
   source: AttachmentSource
 }
