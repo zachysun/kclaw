@@ -13,6 +13,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@mozilla/readability": "^0.6.0",
     "better-sqlite3": "^13.0.3",
     "cron-parser": "^4.9.0",
@@ -24,6 +25,7 @@
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^20.14.0",
     "typescript": "^5.5.0",
-    "vitest": "^2.1.0"
+    "vitest": "^2.1.0",
+    "zod": "^4.4.3"
   }
 }

@@ -4,6 +4,7 @@ import { writeFileAtomic } from "./atomic.js"
 import { DEFAULT_LLM_TIMEOUT_MS } from "../provider/openai-compat.js"
 import type { KclawPaths } from "./paths.js"
 import type { NotifyChannel } from "../notify/notify.js"
+import type { McpServerConfig } from "../mcp/manager.js"
 
 export interface KclawConfig {
   providers: {
@@ -50,6 +51,11 @@ export interface KclawConfig {
    * notifications entirely (zero cost).
    */
   notify: { channels: NotifyChannel[]; timeoutMs?: number }
+  /**
+   * External MCP servers. Optional only because older config.yaml files
+   * predate it; defaults to an empty server map (defaultConfig).
+   */
+  mcp?: { servers?: Record<string, McpServerConfig> }
   workspace: string
 }
 
@@ -61,6 +67,7 @@ export const defaultConfig: KclawConfig = {
   exec: { timeoutMs: 60_000, maxOutputBytes: 100 * 1024 },
   sessions: { recycleBinTtlMs: 30 * 24 * 60 * 60 * 1000 },
   notify: { channels: [], timeoutMs: 10_000 },
+  mcp: { servers: {} },
   workspace: process.cwd(),
 }
 
