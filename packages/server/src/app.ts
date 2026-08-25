@@ -3,7 +3,7 @@ import Fastify from "fastify"
 import fastifyStatic from "@fastify/static"
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import { JobScheduler, SessionStore, loadConfig, resolvePaths } from "@kclaw/core"
-import type { KclawConfig, KclawPaths } from "@kclaw/core"
+import type { KclawConfig, KclawPaths, UsageStore } from "@kclaw/core"
 import { bearerMatches } from "./auth.js"
 import { EventBus } from "./bus.js"
 import type { RunManager } from "./run.js"
@@ -12,6 +12,7 @@ import { registerSessionRoutes } from "./routes/sessions.js"
 import { registerAttachmentRoutes } from "./routes/attachments.js"
 import { registerJobRoutes } from "./routes/jobs.js"
 import { registerConfigRoutes } from "./routes/config.js"
+import { registerUsageRoutes } from "./routes/usage.js"
 
 export interface AppOptions {
   /** kclaw home directory; the default SessionStore lives at <home>/sessions. */
@@ -56,6 +57,8 @@ export interface AppOptions {
    * command accepts attachment references under it.
    */
   attachmentsDir?: string
+  /** Token ledger for `GET /usage`; absent → the route returns empty buckets. */
+  usage?: UsageStore
   /**
    * Test-injection seam for the /ws pre-auth timeout (maps to WsOptions
    * `authTimeoutMs`); production defaults live in ws.ts.
@@ -130,7 +133,8 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
 
   const paths = opts.stores?.paths ?? resolvePaths(opts.home)
   const sessions = opts.stores?.sessions ?? new SessionStore(paths.sessionsDir)
-  registerSessionRoutes(app, { sessions })
+  const config = opts.stores?.config ?? loadConfig(paths)
+  registerSessionRoutes(app, { sessions, config })
   if (opts.attachmentsDir !== undefined) {
     registerAttachmentRoutes(app, { sessions, attachmentsDir: opts.attachmentsDir })
   }
@@ -138,8 +142,11 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   const jobs = opts.stores?.jobs ?? new JobScheduler(paths.jobsDb)
   registerJobRoutes(app, { jobs })
 
-  const config = opts.stores?.config ?? loadConfig(paths)
   registerConfigRoutes(app, { config })
+
+  if (opts.usage !== undefined) {
+    registerUsageRoutes(app, { usage: opts.usage, config })
+  }
 
   app.get("/mcp", async () => ({ servers: opts.mcp?.status() ?? [] }))
 

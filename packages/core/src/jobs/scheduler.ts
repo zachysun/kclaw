@@ -18,12 +18,15 @@ export interface Job {
   lastRunAt?: string // ISO-8601
   lastStatus?: JobStatus
   lastError?: string
+  /** Optional per-job model override (empty/absent → daemon default). */
+  model?: string
 }
 
 export interface CreateJobInput {
   name: string
   cron: string
   prompt: string
+  model?: string
 }
 
 const SCHEMA = `
@@ -36,7 +39,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   next_run_at TEXT NOT NULL,
   last_run_at TEXT,
   last_status TEXT,
-  last_error TEXT
+  last_error TEXT,
+  model TEXT
 );
 `
 
@@ -50,6 +54,7 @@ interface JobRow {
   last_run_at: string | null
   last_status: string | null
   last_error: string | null
+  model: string | null
 }
 
 /**
@@ -71,6 +76,7 @@ function toJob(row: JobRow): Job {
     nextRunAt: row.next_run_at,
     lastRunAt: row.last_run_at ?? undefined,
     lastStatus: (row.last_status as JobStatus | null) ?? undefined,
+    model: row.model ?? undefined,
     lastError: row.last_error ?? undefined,
   }
 }
@@ -88,6 +94,11 @@ export class JobScheduler {
     mkdirSync(dirname(dbPath), { recursive: true })
     this.db = new Database(dbPath)
     this.db.exec(SCHEMA)
+    // Pre-existing DBs (created before the model column) get it via ALTER.
+    const cols = this.db.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>
+    if (!cols.some((c) => c.name === "model")) {
+      this.db.exec("ALTER TABLE jobs ADD COLUMN model TEXT")
+    }
   }
 
   private getRow(id: string): JobRow | undefined {
@@ -103,12 +114,13 @@ export class JobScheduler {
       prompt: input.prompt,
       enabled: true,
       nextRunAt: nextIsoAfter(input.cron, new Date()),
+      ...(input.model !== undefined ? { model: input.model } : {}),
     }
     this.db
       .prepare(
-        `INSERT INTO jobs (id, name, cron, prompt, enabled, next_run_at) VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO jobs (id, name, cron, prompt, enabled, next_run_at, model) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(job.id, job.name, job.cron, job.prompt, 1, job.nextRunAt)
+      .run(job.id, job.name, job.cron, job.prompt, 1, job.nextRunAt, job.model ?? null)
     return job
   }
 
@@ -141,7 +153,7 @@ export class JobScheduler {
     this.db
       .prepare(
         `UPDATE jobs SET name = ?, cron = ?, prompt = ?, enabled = ?, next_run_at = ?,
-           last_run_at = ?, last_status = ?, last_error = ? WHERE id = ?`,
+           last_run_at = ?, last_status = ?, last_error = ?, model = ? WHERE id = ?`,
       )
       .run(
         next.name,
@@ -152,6 +164,7 @@ export class JobScheduler {
         next.lastRunAt ?? null,
         next.lastStatus ?? null,
         next.lastError ?? null,
+        next.model ?? null,
         id,
       )
     return next

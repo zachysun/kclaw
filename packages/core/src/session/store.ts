@@ -13,6 +13,8 @@ export interface SessionMeta {
   updatedAt: string // ISO-8601
   jobId?: string
   workdir?: string
+  /** Per-session model override (empty/absent → daemon default). */
+  model?: string
   deleted?: boolean
   deletedAt?: string
   /** Rolling compaction summary of messages before `compactedUpto` (context compaction). */

@@ -146,6 +146,7 @@ export function startSchedulerTick(deps: SchedulerTickDeps): SchedulerTickHandle
       const outcome = await run.enqueue(session.id, {
         userText: job.prompt,
         trigger: "job",
+        ...(job.model !== undefined && job.model !== "" ? { model: job.model } : {}),
         note: `本会话由定时任务「${job.name}」触发`,
       })
       if (outcome.stopReason !== "error") {

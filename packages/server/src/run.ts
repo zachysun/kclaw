@@ -46,6 +46,7 @@ import type {
   ToolCallBlock,
   ToolExecutor,
   ToolDefinition,
+  UsageStore,
 } from "@kclaw/core"
 import type { EventBus } from "./bus.js"
 import { ConfirmationBroker, type ConfirmationResolution } from "./confirm.js"
@@ -187,12 +188,20 @@ export interface RunManagerDeps {
    * adapter's executor wins (schema follows the executor).
    */
   extraTools?: () => { executors: Map<string, ToolExecutor>; defs: ToolDefinition[] }
+  /** Per-run token ledger (optional; recording failures are swallowed). */
+  usageStore?: UsageStore
 }
 
 /** One queued run request. */
 export interface EnqueueInput {
   userText: string
   trigger: "user" | "job"
+  /**
+   * Per-run model override (a job's configured model, or a client-forced
+   * one). Priority per run: input.model > session meta model > daemon
+   * default. Absent → the daemon default applies.
+   */
+  model?: string
   /**
    * Attachments to mount onto the user message: references to files
    * already uploaded under `<home>/attachments/<sessionId>/` (validated
@@ -469,7 +478,8 @@ export class RunManager {
       }, runId === undefined ? { sessionId } : { sessionId, runId }))
     }
     const runLlm = this.#deps.llmForRun?.(onLlmRetry) ?? llm
-    const model = this.#deps.model ?? config.providers.entries[config.providers.default]?.model ?? ""
+    const defaultModel = this.#deps.model ?? config.providers.entries[config.providers.default]?.model ?? ""
+    const model = input.model ?? sessionMeta?.model ?? defaultModel
 
     // --- pre-run context compaction -------------------------------------------
     // Slice the history at the session's compaction marker (when valid) and,
@@ -559,6 +569,21 @@ export class RunManager {
         const extractModel = config.memory.extractModel || model
         void this.#extractMemory(sessionId, outcome.messages, runLlm, extractModel)
           .catch((err) => console.error("kclaw memory extraction failed:", err))
+      }
+      // Token usage ledger: a failing record must never affect the run.
+      if (this.#deps.usageStore !== undefined) {
+        try {
+          this.#deps.usageStore.record({
+            sessionId,
+            runId: runId ?? "",
+            model,
+            inputTokens: outcome.totalUsage.inputTokens,
+            outputTokens: outcome.totalUsage.outputTokens,
+            at: new Date().toISOString(),
+          })
+        } catch (err) {
+          console.error("kclaw usage record failed:", err)
+        }
       }
       return outcome
     } finally {

@@ -36,6 +36,7 @@ import {
   createNotifier,
   McpManager,
   resolvePaths,
+  UsageStore,
   withRetry,
 } from "@kclaw/core"
 import type { KclawConfig, LlmClient } from "@kclaw/core"
@@ -242,6 +243,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   const memory = new MemoryStore({ notesDir: paths.memoryNotesDir, indexDb: paths.memoryIndexDb })
   memory.reconcile() // startup reconciliation: notes/*.md are the truth, the index is derived
   const jobs = new JobScheduler(paths.jobsDb)
+  const usage = new UsageStore(paths.usageDb)
 
   // resolveConfirmation stays undefined: WS/CLI verdicts reach the RunManager's
   // internal ConfirmationBroker (createApp routes confirmation.resolve frames
@@ -268,6 +270,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     llm,
     workspace: config.workspace,
     model,
+    usageStore: usage,
     ...(mcpManager !== undefined && { extraTools: () => mcpManager.tools() }),
     // Retry visibility: with the DEFAULT
     // composition every run builds its own retry-wrapped client carrying
@@ -289,6 +292,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     run,
     mcp: mcpManager !== undefined ? { status: () => mcpManager.status() } : undefined,
     attachmentsDir: paths.attachmentsDir,
+    usage,
     webDist: resolveWebDist(opts.webDist),
   })
   await app.listen({ port: opts.port ?? 0, host: HOST })
@@ -339,6 +343,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
         await withStopTimeout(mcpManager.stop(), stopTimeoutMs, "mcp stop")
       }
       await withStopTimeout(app.close(), stopTimeoutMs, "app close")
+      usage.close()
       rmSync(daemonJson, { force: true })
     },
   }

@@ -1,9 +1,11 @@
 import type { FastifyError, FastifyInstance } from "fastify"
-import type { SessionStore } from "@kclaw/core"
+import type { KclawConfig, SessionStore } from "@kclaw/core"
 
 /** Store dependencies for the session routes (injected by createApp). */
 export interface SessionStores {
   sessions: SessionStore
+  /** Providers entries for model-name validation on the model switch route. */
+  config?: KclawConfig
 }
 
 const NOT_FOUND = { error: "session not found" } as const
@@ -49,6 +51,26 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
     scope.get("/sessions", async (request) => {
       const q = (request.query as { deleted?: unknown } | undefined)?.deleted
       return stores.sessions.list({ deleted: q === "true" })
+    })
+
+    // Runtime model switch: only affects this session's LATER runs (history
+    // untouched). Empty string clears back to the daemon default.
+    scope.post("/sessions/:id/model", async (request, reply) => {
+      const { id } = request.params as { id: string }
+      if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
+      const body = request.body as { model?: unknown } | null | undefined
+      const model = body?.model
+      if (model !== undefined && typeof model !== "string") {
+        return reply.code(400).send({ error: "model must be a string" })
+      }
+      const name = model ?? ""
+      if (name !== "") {
+        const entries = stores.config?.providers.entries ?? {}
+        if (entries[name] === undefined) {
+          return reply.code(400).send({ error: `model not found: ${name}` })
+        }
+      }
+      return stores.sessions.updateMeta(id, name === "" ? { model: undefined } : { model: name })
     })
 
     scope.delete("/sessions/:id", async (request, reply) => {

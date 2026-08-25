@@ -39,7 +39,9 @@ function createInputFromBody(
   if (name.value === undefined) return { ok: false, error: "name is required" }
   if (cron.value === undefined) return { ok: false, error: "cron is required" }
   if (prompt.value === undefined) return { ok: false, error: "prompt is required" }
-  return { ok: true, input: { name: name.value, cron: cron.value, prompt: prompt.value } }
+  const model = stringField(body, "model")
+  if (!model.ok) return model
+  return { ok: true, input: { name: name.value, cron: cron.value, prompt: prompt.value, ...(model.value !== undefined ? { model: model.value } : {}) } }
 }
 
 /**
@@ -49,7 +51,7 @@ function createInputFromBody(
 function patchFromBody(body: unknown): { ok: true; patch: Partial<Job> } | { ok: false; error: string } {
   if (!isBodyObject(body)) return { ok: false, error: "body must be a JSON object" }
   const patch: Partial<Job> = {}
-  for (const key of ["name", "prompt", "cron"] as const) {
+  for (const key of ["name", "prompt", "cron", "model"] as const) {
     const field = stringField(body, key)
     if (!field.ok) return field
     if (field.value !== undefined) patch[key] = field.value

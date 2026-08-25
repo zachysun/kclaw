@@ -13,7 +13,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { MemoryStore, SessionStore, loadConfig, newMessage, resolvePaths, withRetry } from "@kclaw/core"
+import { MemoryStore, SessionStore, UsageStore, loadConfig, newMessage, resolvePaths, withRetry } from "@kclaw/core"
 import type {
   AgentEvent, AssistantMessage, KclawConfig, KclawPaths, LlmClient, LlmRequest, LlmStreamEvent, Message, ToolExecutor, ToolMessage, ToolResultBlock,
 } from "@kclaw/core"
@@ -1197,5 +1197,40 @@ describe("RunManager attachment mounting", () => {
         attachments: [{ path: outside, name: "x.txt", size: 1, mimeType: "text/plain" }],
       }),
     ).rejects.toThrow(/outside the session/)
+  })
+})
+
+describe("RunManager model resolution + usage recording", () => {
+  it("resolves session meta model over the daemon default", async () => {
+    const reqs: LlmRequest[] = []
+    const { env, manager } = makeEnv(recordRequests(scriptClient([textTurn("收到")]), reqs))
+    const session = env.sessions.create("model-session")
+    env.sessions.updateMeta(session.id, { model: "glm-4" })
+    await manager.enqueue(session.id, { userText: "hi", trigger: "user" })
+    expect(reqs[0]!.model).toBe("glm-4")
+  })
+
+  it("input.model wins over the session meta model", async () => {
+    const reqs: LlmRequest[] = []
+    const { env, manager } = makeEnv(recordRequests(scriptClient([textTurn("收到")]), reqs))
+    const session = env.sessions.create("model-session2")
+    env.sessions.updateMeta(session.id, { model: "glm-4" })
+    await manager.enqueue(session.id, { userText: "hi", trigger: "user", model: "deep-1" })
+    expect(reqs[0]!.model).toBe("deep-1")
+  })
+
+  it("records per-run usage into the ledger with the resolved model", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kclaw-usage-run-"))
+    const usage = new UsageStore(join(dir, "usage.db"))
+    const { env, manager } = makeEnv(scriptClient([textTurn("收到")]), undefined, undefined, { usageStore: usage })
+    const session = env.sessions.create("usage-session")
+    await manager.enqueue(session.id, { userText: "hi", trigger: "user" })
+    const t = usage.total({})
+    expect(t.inputTokens).toBeGreaterThan(0) // script textTurn carries usage
+    expect(t.outputTokens).toBeGreaterThan(0)
+    const bySession = usage.aggregate("session", {})
+    expect(bySession[0]!.key).toBe(session.id)
+    usage.close()
+    rmSync(dir, { recursive: true, force: true })
   })
 })
