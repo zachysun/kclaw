@@ -14,6 +14,7 @@ export interface SessionMeta {
   updatedAt: string // ISO-8601
   jobId?: string
   workdir?: string
+  model?: string
   deleted?: boolean
   deletedAt?: string
 }

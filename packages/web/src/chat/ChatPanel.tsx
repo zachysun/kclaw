@@ -32,6 +32,8 @@ export interface ChatPanelProps {
   createWs: () => WsClient
   /** Full message list for the session (the App fetches it on session select). */
   initialMessages: Message[]
+  /** Session meta model override (undefined → daemon default). */
+  sessionModel?: string
 }
 
 /** Max consecutive failed reconnects before giving up with a notice. */
@@ -51,7 +53,7 @@ function errorFrameMessage(frame: unknown): string | null {
   return typeof message === "string" ? message : null
 }
 
-export function ChatPanel({ sessionId, api, ws, createWs, initialMessages }: ChatPanelProps) {
+export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel }: ChatPanelProps) {
   const [view, setViewState] = useState<ChatState>(() => initChat(initialMessages))
   const [notice, setNotice] = useState<string | null>(null)
   const clientRef = useRef<WsClient>(ws)
@@ -174,6 +176,30 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages }: Cha
   }, [sessionId, api, ws, createWs])
 
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
+  const [models, setModels] = useState<string[]>([])
+  const [currentModel, setCurrentModel] = useState<string | undefined>(sessionModel)
+
+  useEffect(() => {
+    let cancelled = false
+    api
+      .get<{ providers?: { entries?: Record<string, unknown> } }>("/config")
+      .then((cfg) => {
+        if (!cancelled) setModels(Object.keys(cfg.providers?.entries ?? {}))
+      })
+      .catch(() => {
+        // selector just stays empty on failure
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api])
+
+  const handleSwitchModel = useCallback((name: string) => {
+    api
+      .post(`/sessions/${encodeURIComponent(sessionId)}/model`, { model: name })
+      .then(() => setCurrentModel(name === "" ? undefined : name))
+      .catch((err: unknown) => setNotice(`模型切换失败: ${err instanceof Error ? err.message : String(err)}`))
+  }, [api, sessionId])
 
   const handleSend = useCallback((text: string) => {
     try {
@@ -231,6 +257,9 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages }: Cha
           onResolveConfirmation={handleResolveConfirmation}
           pendingAttachments={pendingAttachments}
           onRemoveAttachment={handleRemoveAttachment}
+          models={models}
+          sessionModel={currentModel}
+          onSwitchModel={handleSwitchModel}
         />
       </div>
     </div>

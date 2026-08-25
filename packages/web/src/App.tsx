@@ -22,6 +22,7 @@ import { bootstrapToken, clearToken, saveToken } from "./token.js"
 import { createApi } from "./api.js"
 import { createWsClient, type WsClient } from "./ws.js"
 import { ChatPanel } from "./chat/ChatPanel.js"
+import { UsageView } from "./usage/UsageView.js"
 import type { Message } from "./chat/model.js"
 import { SessionList } from "./sessions/SessionList.js"
 import { TrashView } from "./sessions/TrashView.js"
@@ -30,7 +31,7 @@ import { AuditView } from "./audit/AuditView.js"
 import type { SessionMeta } from "./types.js"
 
 type DaemonStatus = "connecting" | "connected" | "error"
-type Tab = "chat" | "jobs" | "audit" | "trash"
+type Tab = "chat" | "jobs" | "audit" | "usage" | "trash"
 
 /** Same-origin ws endpoint (the daemon serves the SPA itself). */
 function wsUrlFor(): string {
@@ -177,6 +178,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
 
   const readyMessages: Message[] | null =
     selectedId === null ? null : (messagesCache[selectedId] ?? null)
+  const selectedMeta = sessions?.find((x) => x.id === selectedId) ?? null
 
   const createWs = useCallback(() => createWsClient(wsUrl, token), [wsUrl, token])
   // A fresh authenticated client per selection — created only when the chat
@@ -264,6 +266,14 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
           </button>
           <button
             type="button"
+            className={tab === "usage" ? "tab active" : "tab"}
+            data-testid="tab-usage"
+            onClick={() => setTab("usage")}
+          >
+            用量
+          </button>
+          <button
+            type="button"
             className={tab === "trash" ? "tab active" : "tab"}
             data-testid="tab-trash"
             onClick={() => setTab("trash")}
@@ -305,6 +315,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
                 ws={ws}
                 createWs={createWs}
                 initialMessages={readyMessages}
+                sessionModel={selectedMeta?.model}
               />
             </div>
           )}
@@ -315,6 +326,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
           )}
           {tab === "jobs" && <JobsView api={api} />}
           {tab === "audit" && <AuditView api={api} />}
+          {tab === "usage" && <UsageView api={api} />}
           {tab === "trash" && <TrashView api={api} />}
         </main>
       </div>

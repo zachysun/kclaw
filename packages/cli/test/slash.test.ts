@@ -266,3 +266,32 @@ describe("slash /attach", () => {
     expect(ctx.print).toHaveBeenCalledWith(expect.stringContaining("附件上传失败"))
   })
 })
+
+describe("slash /model", () => {
+  it("lists available models and the current session model", async () => {
+    const { ctx } = makeFakeCtx((method, path) => {
+      if (method === "GET" && path === "/config") return { providers: { entries: { a: {}, b: {} }, default: "a" } }
+      if (method === "GET" && path.startsWith("/sessions/")) return { model: "b" }
+      return {}
+    })
+    ctx.pendingAttachments = []
+    const registry = createRegistry(ctx)
+    await runOrHint(dispatch("/model", registry), registry, ctx)
+    expect(ctx.print).toHaveBeenCalledWith(expect.stringContaining("a, b"))
+    expect(ctx.print).toHaveBeenCalledWith(expect.stringContaining("当前模型: b"))
+  })
+
+  it("switches the session model and clears with default", async () => {
+    const posts: Array<{ model: string }> = []
+    const { ctx } = makeFakeCtx((method, path, body) => {
+      if (method === "POST") posts.push(body as { model: string })
+      return {}
+    })
+    ctx.pendingAttachments = []
+    const registry = createRegistry(ctx)
+    await runOrHint(dispatch("/model b", registry), registry, ctx)
+    expect(posts[0]).toEqual({ model: "b" })
+    await runOrHint(dispatch("/model default", registry), registry, ctx)
+    expect(posts[1]).toEqual({ model: "" })
+  })
+})

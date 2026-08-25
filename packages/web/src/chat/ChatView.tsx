@@ -26,9 +26,15 @@ export interface ChatViewProps {
   pendingAttachments: PendingAttachment[]
   /** Drop one queued attachment. */
   onRemoveAttachment: (index: number) => void
+  /** Available provider model names (empty → no selector rendered). */
+  models?: string[]
+  /** Current session model override (undefined → daemon default). */
+  sessionModel?: string
+  /** Switch the session model ("" clears to default). */
+  onSwitchModel?: (name: string) => void
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel }: ChatViewProps) {
   const [draft, setDraft] = useState("")
 
   const submit = (event: FormEvent): void => {
@@ -62,6 +68,20 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
       {view.pendingConfirmations.map((card) => (
         <ConfirmationCardView key={card.confirmationId} card={card} onResolve={onResolveConfirmation} />
       ))}
+      {(models !== undefined && models.length > 0 && onSwitchModel !== undefined) && (
+        <div className="composer-row" data-testid="model-selector-row">
+          <label>模型</label>
+          <select
+            className="model-select"
+            data-testid="model-select"
+            value={sessionModel ?? ""}
+            onChange={(e) => onSwitchModel(e.target.value)}
+          >
+            <option value="">默认</option>
+            {models.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </div>
+      )}
       {pendingAttachments.length > 0 && (
         <div className="attachment-chips" data-testid="attachment-chips">
           {pendingAttachments.map((a, i) => (

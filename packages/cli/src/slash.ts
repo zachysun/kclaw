@@ -168,6 +168,30 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
     },
   })
 
+  registry.set("model", {
+    name: "model",
+    usage: "/model [名字]",
+    description: "切换本会话的模型（无参数列出可用模型与当前值；/model default 恢复默认）",
+    async run(args, ctx) {
+      const config = (await ctx.client.request("GET", "/config")) as { providers?: { entries?: Record<string, unknown>; default?: string } }
+      const entries = Object.keys(config.providers?.entries ?? {})
+      const meta = (await ctx.client.request("GET", `/sessions/${ctx.sessionId}`)) as { model?: string }
+      const name = args.trim()
+      if (name === "") {
+        ctx.print(`可用模型: ${entries.length === 0 ? "(无)" : entries.join(", ")}`)
+        ctx.print(`当前模型: ${meta.model ?? config.providers?.default ?? "(默认)"}`)
+        return
+      }
+      const target = name === "default" ? "" : name
+      try {
+        await ctx.client.request("POST", `/sessions/${ctx.sessionId}/model`, { model: target })
+        ctx.print(target === "" ? "已恢复默认模型" : `已切换模型: ${target}`)
+      } catch (err) {
+        ctx.print(`切换失败: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    },
+  })
+
   registry.set("attach", {
     name: "attach",
     usage: "/attach <path>",

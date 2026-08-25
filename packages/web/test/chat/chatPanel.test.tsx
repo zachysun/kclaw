@@ -273,7 +273,8 @@ describe("ChatPanel", () => {
 
   it("reconnects on an unexpected close: re-pulls messages and re-subscribes", async () => {
     const h = await mount({ initialMessages: [msg("m1", "user", [{ id: "b1", type: "text", text: "hi" }])] })
-    expect(h.api.get).toHaveBeenCalledTimes(0) // initial messages come from props
+    // Only the /config model fetch may have happened — no message pulls yet.
+    expect(h.api.get.mock.calls.filter(([path]) => String(path) !== "/config")).toHaveLength(0)
     await drive(() => {
       h.sockets[0]!.onclose?.({ code: 1006 })
     })
@@ -357,7 +358,7 @@ describe("ChatPanel", () => {
       h.sockets[0]!.onclose?.({ code: 4001 })
     })
     expect(h.sockets).toHaveLength(1)
-    expect(h.api.get).not.toHaveBeenCalled()
+    expect(h.api.get.mock.calls.filter(([path]) => String(path) !== "/config")).toHaveLength(0)
     expect(h.container.textContent).toContain("认证")
     h.unmount()
   })
@@ -394,7 +395,7 @@ describe("ChatPanel", () => {
 
 describe("ChatPanel drag-and-drop attachments", () => {
   it("uploads a dropped file, shows a chip, and carries it on send_message", async () => {
-    const { sockets, api, root } = setupWithApi(0)
+    const { sockets, api, root } = await setupWithApi(0)
     const upload = api.upload as ReturnType<typeof vi.fn>
     upload.mockResolvedValue({ path: "/att/x.md", name: "x.md", size: 7 })
     act(() => {
@@ -431,7 +432,7 @@ describe("ChatPanel drag-and-drop attachments", () => {
   })
 })
 
-function setupWithApi(messageCount: number) {
+async function setupWithApi(messageCount: number, getImpl?: (path: string) => unknown) {
   const sockets: FakeSocket[] = []
   const socketFactory = vi.fn(() => {
     const fake = makeFakeSocket()
@@ -440,9 +441,12 @@ function setupWithApi(messageCount: number) {
   })
   const messages: Message[] = []
   for (let i = 0; i < messageCount; i++) {
-    messages.push({ id: `m${i}`, role: "assistant", blocks: [{ id: `b${i}`, type: "text", text: "hi" }], createdAt: new Date().toISOString() })
+    messages.push({ id: `m${i}`, role: "assistant", blocks: [{ id: `b${i}`, type: "text", text: "hi" }], createdAt: new Date().toISOString(), sessionId: "ses_1" })
   }
   const api = makeApi(messages)
+  if (getImpl !== undefined) {
+    ;(api.get as ReturnType<typeof vi.fn>).mockImplementation(async (path: string) => getImpl(path))
+  }
   const createWs = (): WsClient =>
     createWsClient(WS_URL, "tok", socketFactory as unknown as (url: string) => WsLikeSocket)
   const ws = createWs()
@@ -452,5 +456,36 @@ function setupWithApi(messageCount: number) {
       <ChatPanel sessionId="ses_1" api={api} ws={ws} createWs={createWs} initialMessages={messages} />,
     )
   })
+  // Settle the /config model fetch inside act so its state update cannot
+  // leak into a later test (it fires on mount, keyed on [api]).
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
   return { sockets, api, root }
 }
+
+describe("ChatPanel model selector", () => {
+  it("renders provider models and posts the switch on change", async () => {
+    const { sockets, api, root } = await setupWithApi(0, (path) =>
+      path === "/config" ? { providers: { entries: { a: {}, b: {} } } } : [],
+    )
+    const post = api.post as ReturnType<typeof vi.fn>
+    post.mockResolvedValue({ model: "b" })
+    act(() => {
+      sockets[0]!.open()
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    const select = document.querySelector('[data-testid="model-select"]') as HTMLSelectElement
+    expect(select).not.toBeNull()
+    expect(select.options.length).toBe(3) // 默认 + a + b
+    await act(async () => {
+      select.value = "b"
+      select.dispatchEvent(new Event("change", { bubbles: true }))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(post).toHaveBeenCalledWith("/sessions/ses_1/model", { model: "b" })
+    root.unmount()
+  })
+})
