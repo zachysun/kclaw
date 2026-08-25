@@ -20,6 +20,8 @@ export interface KclawPaths {
   sessionsDir: string
   /** ~/.kclaw/jobs.db — scheduled job state */
   jobsDb: string
+  /** Per-run token usage ledger (<home>/usage.db). */
+  usageDb: string
   /** ~/.kclaw/attachments/<session-id>/ — large attachment spillover */
   attachmentsDir: string
   /** ~/.kclaw/logs */
@@ -52,6 +54,7 @@ export function resolvePaths(home?: string): KclawPaths {
     memoryIndexDb: join(root, "memory", "index.db"),
     sessionsDir: join(root, "sessions"),
     jobsDb: join(root, "jobs.db"),
+    usageDb: join(root, "usage.db"),
     attachmentsDir: join(root, "attachments"),
     logsDir: join(root, "logs"),
   }

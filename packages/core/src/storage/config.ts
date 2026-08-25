@@ -52,6 +52,12 @@ export interface KclawConfig {
    */
   notify: { channels: NotifyChannel[]; timeoutMs?: number }
   /**
+   * Token cost pricing (USD per 1M tokens per model) for the usage view.
+   * Optional only because older config.yaml files predate it; empty map =
+   * tokens shown, cost 0.
+   */
+  usage?: { prices?: Record<string, { inputPerM?: number; outputPerM?: number }> }
+  /**
    * External MCP servers. Optional only because older config.yaml files
    * predate it; defaults to an empty server map (defaultConfig).
    */
@@ -67,6 +73,7 @@ export const defaultConfig: KclawConfig = {
   exec: { timeoutMs: 60_000, maxOutputBytes: 100 * 1024 },
   sessions: { recycleBinTtlMs: 30 * 24 * 60 * 60 * 1000 },
   notify: { channels: [], timeoutMs: 10_000 },
+  usage: { prices: {} },
   mcp: { servers: {} },
   workspace: process.cwd(),
 }
