@@ -93,6 +93,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
         </div>
       )}
       <form className="chat-composer" onSubmit={submit}>
+        <span className="composer-prompt" aria-hidden="true">❯</span>
         <input
           className="chat-input"
           data-testid="chat-input"

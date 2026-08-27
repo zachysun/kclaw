@@ -108,6 +108,9 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [messagesCache, setMessagesCache] = useState<Record<string, Message[]>>({})
   const [sessionNotice, setSessionNotice] = useState<string | null>(null)
+  // Mobile-only: the sidebar slides in as a drawer behind this flag (desktop
+  // keeps it permanently visible).
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   // One-shot ?session=<id> deep link (notification targets): consumed exactly
   // once, after the session list loads, then stripped from the URL.
   const deepLinkConsumed = useRef(false)
@@ -192,6 +195,12 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
     setSelectedId(id)
   }, [])
 
+  // A tab click on mobile should also dismiss the sidebar drawer.
+  const switchTab = useCallback((next: Tab) => {
+    setSidebarOpen(false)
+    setTab(next)
+  }, [])
+
   const handleCreateSession = useCallback(async (workdir: string): Promise<void> => {
     setSessionNotice(null)
     try {
@@ -248,13 +257,22 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
   return (
     <div className="shell">
       <header className="topbar">
+        <button
+          type="button"
+          className="sidebar-toggle"
+          data-testid="sidebar-toggle"
+          aria-label="打开会话列表"
+          onClick={() => setSidebarOpen(true)}
+        >
+          ☰
+        </button>
         <span className="brand">kclaw</span>
         <nav className="tabs" data-testid="tabs">
           <button
             type="button"
             className={tab === "chat" ? "tab active" : "tab"}
             data-testid="tab-chat"
-            onClick={() => setTab("chat")}
+            onClick={() => switchTab("chat")}
           >
             对话
           </button>
@@ -262,7 +280,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
             type="button"
             className={tab === "jobs" ? "tab active" : "tab"}
             data-testid="tab-jobs"
-            onClick={() => setTab("jobs")}
+            onClick={() => switchTab("jobs")}
           >
             任务
           </button>
@@ -270,7 +288,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
             type="button"
             className={tab === "audit" ? "tab active" : "tab"}
             data-testid="tab-audit"
-            onClick={() => setTab("audit")}
+            onClick={() => switchTab("audit")}
           >
             审计
           </button>
@@ -278,7 +296,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
             type="button"
             className={tab === "usage" ? "tab active" : "tab"}
             data-testid="tab-usage"
-            onClick={() => setTab("usage")}
+            onClick={() => switchTab("usage")}
           >
             用量
           </button>
@@ -286,7 +304,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
             type="button"
             className={tab === "trash" ? "tab active" : "tab"}
             data-testid="tab-trash"
-            onClick={() => setTab("trash")}
+            onClick={() => switchTab("trash")}
           >
             回收站
           </button>
@@ -298,12 +316,15 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
         />
       </header>
       <div className="body">
-        <aside className="sidebar">
+        <aside className={`sidebar${sidebarOpen ? " open" : ""}`}>
           <SessionList
             sessions={sessions ?? []}
             selectedId={selectedId}
             loading={sessions === null}
-            onSelect={selectSession}
+            onSelect={(id) => {
+              setSidebarOpen(false)
+              selectSession(id)
+            }}
             onCreate={(workdir) => void handleCreateSession(workdir)}
             onRename={(id, title) => void handleRenameSession(id, title)}
             onDelete={(id) => void handleDeleteSession(id)}
@@ -315,6 +336,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
             </p>
           )}
         </aside>
+        {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
         <main className="main">
           {selectedId !== null && readyMessages !== null && ws !== null && (
             // Kept mounted across tab switches (hidden elsewhere) so the live
