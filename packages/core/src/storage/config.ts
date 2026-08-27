@@ -40,10 +40,18 @@ export interface KclawConfig {
   exec: { timeoutMs: number; maxOutputBytes: number }
   sessions: {
     recycleBinTtlMs: number
-    /** Compaction trigger: compact when active history reaches this many messages. Default 40. */
+    /** DEPRECATED (v1 compaction, inert): compact at N messages. */
     compactThreshold?: number
-    /** Compaction retention: newest messages kept verbatim after compaction. Default 25. */
+    /** DEPRECATED (v1 compaction, inert): keep newest N messages verbatim. */
     compactKeep?: number
+    /** v2: context token budget. Default 128000 (read site applies ?? default). */
+    contextTokens?: number
+    /** v2: compact when the estimate exceeds budget × ratio. Default 0.66. */
+    compactAtRatio?: number
+    /** v2: post-compaction target for the verbatim window (× budget). Default 0.33. */
+    compactTargetRatio?: number
+    /** v2: tool results kept verbatim in the provider view. Default 8. */
+    toolResultKeep?: number
   }
   /**
    * Job-finish notifications. Delivery failures are only logged (onError),

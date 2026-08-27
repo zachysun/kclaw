@@ -136,6 +136,16 @@ describe("SessionStore", () => {
     expect(cleared.compactedUpto).toBe("msg_1") // untouched field survives
   })
 
+  it("persists and clears the compaction state via updateMeta", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("压缩会话")
+    const state = { segments: [{ upto: "m3", summary: "摘要" }], top: "总摘要", upto: "m3" }
+    const updated = store.updateMeta(meta.id, { compaction: state })
+    expect(updated.compaction).toEqual(state)
+    const cleared = store.updateMeta(meta.id, { compaction: undefined })
+    expect(cleared.compaction).toBeUndefined()
+  })
+
   it("purge 永久删除会话目录", () => {
     const store = new SessionStore(dir)
     const meta = store.create("标题")

@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { newId } from "../protocol/ids.js"
 import type { Message } from "../protocol/messages.js"
+import type { CompactionState } from "./compaction.js"
 import { writeFileAtomic } from "../storage/atomic.js"
 import { appendJsonlLine, readJsonl } from "../storage/jsonl.js"
 
@@ -23,6 +24,8 @@ export interface SessionMeta {
   compactedSummary?: string
   /** Last message id covered by `compactedSummary`; history after it is the active window. */
   compactedUpto?: string
+  /** v2 layered compaction state (spec 5.1); absent on fresh/legacy sessions. */
+  compaction?: CompactionState
 }
 
 const META_FILE = "meta.json"

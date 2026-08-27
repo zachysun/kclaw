@@ -70,6 +70,19 @@ describe("loadConfig / saveConfig", () => {
     expect(loadConfig(paths).providers.timeoutMs).toBe(5000) // 覆盖保留其余默认
     expect(loadConfig(paths).providers.default).toBe("")
   })
+  it("keeps v2 compaction fields optional; legacy fields still parse without error", () => {
+    const paths = resolvePaths(home)
+    writeFileSync(paths.config, [
+      "sessions:",
+      "  compactThreshold: 99",
+      "  compactKeep: 9",
+      "  contextTokens: 200000",
+    ].join("\n"))
+    const cfg = loadConfig(paths)
+    expect(cfg.sessions.contextTokens).toBe(200_000)
+    expect(cfg.sessions.compactAtRatio).toBeUndefined()
+    expect(cfg.sessions.compactThreshold).toBe(99) // tolerated, inert
+  })
   it("does not share nested references with defaultConfig", () => {
     const pristine = structuredClone(defaultConfig)
     const paths = resolvePaths(home)
