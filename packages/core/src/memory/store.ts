@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import { basename, dirname, join } from "node:path"
 import { parse, stringify } from "yaml"
 import { newId } from "../protocol/ids.js"
+import { ftsQuery, similarity, tokenize } from "../text/fts.js"
 
 /** Where a note came from: model extraction, auto pipeline, or human editing. */
 export type MemorySource = "model" | "auto" | "human"
@@ -41,48 +42,6 @@ CREATE TABLE IF NOT EXISTS notes (
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(text);
 `
-
-/**
- * CJK-aware tokenizer shared by the index and the query side.
- *
- * FTS5's default unicode61 tokenizer treats a contiguous CJK run ("用户在上海工作")
- * as one opaque token, so a query for "上海" would never match. Strategy:
- * ASCII letter/digit runs pass through as whole (lowercased) words — "oolong tea"
- * matches via whole words — while every CJK run is emitted as its adjacent character
- * bigrams (用户 户在 在上 上海 海工 工作). A one- or two-character CJK query is itself a
- * bigram, so it MATCHes directly; longer CJK queries hit as an AND of their bigrams.
- * Tokens never contain FTS operators (punctuation is dropped), so quoting each
- * token keeps the assembled MATCH string injection-free.
- */
-const WORD_RUN = /[A-Za-z0-9]+|[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]+/g
-
-function tokenize(text: string): string[] {
-  const tokens: string[] = []
-  for (const run of text.match(WORD_RUN) ?? []) {
-    if (/^[A-Za-z0-9]+$/.test(run)) {
-      tokens.push(run.toLowerCase())
-      continue
-    }
-    const chars = Array.from(run)
-    if (chars.length === 1) tokens.push(chars[0])
-    else for (let i = 0; i + 1 < chars.length; i++) tokens.push(chars[i] + chars[i + 1])
-  }
-  return tokens
-}
-
-/** Quote tokens and join them: " " = FTS AND, " OR " = FTS OR. */
-function ftsQuery(tokens: string[], joiner: " " | " OR "): string {
-  return tokens.map((token) => `"${token}"`).join(joiner)
-}
-
-/** Jaccard similarity of two texts' token sets, in [0, 1]. */
-function similarity(a: string[], b: string[]): number {
-  const setB = new Set(b)
-  let intersection = 0
-  for (const token of new Set(a)) if (setB.has(token)) intersection++
-  const union = new Set([...a, ...b]).size
-  return union === 0 ? 1 : intersection / union
-}
 
 /** Notes this similar to an incoming save are treated as the same memory (merge threshold). */
 const MERGE_SIMILARITY = 0.5
