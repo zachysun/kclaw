@@ -1219,6 +1219,22 @@ describe("RunManager model resolution + usage recording", () => {
     expect(reqs[0]!.model).toBe("deep-1")
   })
 
+  it("resolves a provider ENTRY key to its wire model", async () => {
+    const reqs: LlmRequest[] = []
+    const { env, manager } = makeEnv(
+      recordRequests(scriptClient([textTurn("收到")]), reqs),
+      (c) => {
+        c.providers.entries.deepseek = { baseUrl: "http://127.0.0.1:1", apiKey: "k", model: "deepseek-v4-flash" }
+      },
+    )
+    const session = env.sessions.create("model-session3")
+    // The WebUI/CLI store the entry KEY ("deepseek"); the wire model must be
+    // the entry's `.model` ("deepseek-v4-flash"), not the key itself.
+    env.sessions.updateMeta(session.id, { model: "deepseek" })
+    await manager.enqueue(session.id, { userText: "hi", trigger: "user" })
+    expect(reqs[0]!.model).toBe("deepseek-v4-flash")
+  })
+
   it("records per-run usage into the ledger with the resolved model", async () => {
     const dir = mkdtempSync(join(tmpdir(), "kclaw-usage-run-"))
     const usage = new UsageStore(join(dir, "usage.db"))

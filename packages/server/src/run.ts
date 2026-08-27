@@ -483,7 +483,11 @@ export class RunManager {
     }
     const runLlm = this.#deps.llmForRun?.(onLlmRetry) ?? llm
     const defaultModel = this.#deps.model ?? config.providers.entries[config.providers.default]?.model ?? ""
-    const model = input.model ?? sessionMeta?.model ?? defaultModel
+    // A session/job model may name a provider ENTRY ("deepseek") whose wire
+    // model is the entry's `.model` ("deepseek-v4-flash"); resolve keys to that
+    // model, leaving already-raw API model names untouched.
+    const resolveEntry = (m: string): string => config.providers.entries[m]?.model ?? m
+    const model = resolveEntry(input.model ?? sessionMeta?.model ?? defaultModel)
 
     // --- pre-run context compaction -------------------------------------------
     // Slice the history at the session's compaction marker (when valid) and,
