@@ -22,9 +22,11 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import {
+  chooseBoundary,
   collectStreamText,
   ConfigPermissionGate,
   createBuiltinTools,
+  estimateContextTokens,
   makeEvent,
   newBlockId,
   newMessage,
@@ -37,6 +39,7 @@ import {
 import type {
   AgentEvent,
   AttachmentBlock,
+  CompactionState,
   KclawConfig,
   KclawPaths,
   LlmClient,
@@ -64,9 +67,13 @@ const MEMORY_QUERY_CHARS = 200
 /** Top-N memory notes injected onto the user message. */
 const MEMORY_LIMIT = 5
 
-/** Verbatim compaction summarizer system prompt (spec-pinned). */
-const COMPACT_SYSTEM_PROMPT =
-  "你是对话摘要器。把给定对话（可能包含此前的旧摘要）压缩为不超过500字的中文摘要，保留：关键事实、用户偏好与约定、已做的决定、未完成事项。直接输出摘要正文，不要任何前后缀。"
+/** Segment summarizer prompt (spec 6.2.2, verbatim-pinned). */
+const SEGMENT_SUMMARY_PROMPT =
+  "你是对话摘要器。把给定的一段对话（可能包含工具调用与结果）压缩为不超过800字的中文摘要，使用以下固定五个二级标题的 markdown 结构：## 关键事实、## 用户偏好与约定、## 已做决定、## 未完成事项、## 文件与命令。\"文件与命令\"一栏只记路径或命令加一句话要点，不要复制文件内容。同一栏目内每条一行。直接输出摘要正文，不要任何前后缀。"
+
+/** Top-summary merge prompt (spec 6.2.3, verbatim-pinned). */
+const MERGE_SUMMARY_PROMPT =
+  "你是对话摘要归并器。输入是旧的总摘要和一个新的段摘要，两者都是同样五栏结构的 markdown。把它们归并为一份新的总摘要：保持同样的五个二级标题；同一栏目内合并去重；同一事项有先后版本时保留新版本，并注明被推翻的旧版本；总长不超过800字。直接输出摘要正文，不要任何前后缀。"
 
 /** Verbatim memory-extraction system prompt (spec-pinned). */
 const EXTRACT_SYSTEM_PROMPT =
@@ -469,30 +476,20 @@ export class RunManager {
     const resolveEntry = (m: string): string => config.providers.entries[m]?.model ?? m
     const model = resolveEntry(input.model ?? sessionMeta?.model ?? defaultModel)
 
-    // --- pre-run context compaction -------------------------------------------
-    // Slice the history at the session's compaction marker (when valid) and,
-    // when the ACTIVE window has grown past the threshold, roll the oldest
-    // segment into a summary first. Any failure (LLM throw, updateMeta throw)
-    // falls back to the status quo: full history, no note — the loop's own
-    // window truncation remains the safety net.
+    // --- pre-run context compaction v2 (spec 6) ------------------------------
+    // Any failure (LLM throw, updateMeta throw) falls back to the full
+    // history — the loop's own window remains the safety net.
     let activeHistory = history
     let compactNote: NoteBlock[] = []
     try {
-      const compaction = await this.#compact(
-        sessionId,
-        history,
-        config.sessions.compactThreshold ?? 40,
-        config.sessions.compactKeep ?? 25,
-        runLlm,
-        model,
-      )
+      const compaction = await this.#compactV2(sessionId, history, input.userText, config, runLlm, model)
       activeHistory = compaction.active
       if (compaction.summary !== undefined) {
         compactNote = [{
           id: newBlockId(),
           type: "note",
           kind: "compact",
-          text: `早期对话已压缩（保留最近 ${compaction.active.length} 条原文）。摘要：${compaction.summary}`,
+          text: `早期对话已压缩为 ${compaction.segments} 段（保留最近 ${compaction.active.length} 条原文；可用 session_search 检索早期细节）。摘要：\n${compaction.summary}`,
         }]
       }
     } catch (err) {
@@ -519,6 +516,7 @@ export class RunManager {
           confirmTimeoutMs,
           signal: controller.signal,
           llmAttempt: () => llmAttempt,
+          toolResultKeep: config.sessions.toolResultKeep ?? 8,
           onUserMessage: (m) => {
             // The notes become part of the message BEFORE it is
             // persisted and completed. Persist first (events trail persisted
@@ -625,48 +623,74 @@ export class RunManager {
   }
 
   /**
-   * Slice `history` at the session's compaction marker and, when the active
-   * window reaches `threshold`, roll its oldest segment (all but the last
-   * `keep` messages) into a summary via one tool-less LLM call, persisting
-   * `{ compactedSummary, compactedUpto }` on the session meta. Returns the
-   * post-marker (post-compaction) active window plus the summary to inject
-   * as a compact note — an absent marker means the full history is active; a
-   * marker whose message id no longer exists (corrupt/hand-edited) is
-   * likewise treated as absent. BELOW threshold the marker slice still
-   * applies and the EXISTING summary (if any) is returned so the note stays
-   * visible every turn. Throws propagate: the caller falls back to the
-   * unsliced status quo.
+   * v2 layered compaction (spec 6). Trigger: estimate ≥ budget×ratio, or a
+   * manual focus. Two tool-less LLM calls (segment summary, top merge),
+   * then ONE meta write — no state lands unless both calls succeed, so a
+   * throw anywhere equals "compaction did not happen" and the caller falls
+   * back to the full history. The segment index write is best-effort
+   * (logged, never fatal).
    */
-  async #compact(
+  async #compactV2(
     sessionId: string,
     history: Message[],
-    threshold: number,
-    keep: number,
+    userText: string,
+    config: KclawConfig,
     runLlm: LlmClient,
     model: string,
-  ): Promise<{ summary: string | undefined; active: Message[] }> {
+    opts: { focus?: string; manual?: boolean } = {},
+  ): Promise<{ summary?: string; segments: number; active: Message[]; compacted: boolean }> {
     const { sessions } = this.#deps
     const meta = sessions.meta(sessionId)
-    const markerIdx = meta?.compactedUpto === undefined
-      ? -1
-      : history.findIndex((m) => m.id === meta.compactedUpto)
-    const active = markerIdx >= 0 ? history.slice(markerIdx + 1) : history
-    if (active.length >= threshold && keep < active.length) {
-      const seg = active.slice(0, active.length - keep)
-      const prev = meta?.compactedSummary
-      const content = prev === undefined
-        ? renderSegment(seg)
-        : `${prev}\n\n以下是需要并入的最新被压缩对话：\n${renderSegment(seg)}`
-      const summary = await collectStreamText(runLlm, {
-        model,
-        system: COMPACT_SYSTEM_PROMPT,
-        messages: [{ role: "user", content }],
-        tools: [],
-      })
-      sessions.updateMeta(sessionId, { compactedSummary: summary, compactedUpto: seg[seg.length - 1]!.id })
-      return { summary, active: active.slice(-keep) }
+    const prev: CompactionState | undefined = meta?.compaction ??
+      (meta?.compactedSummary !== undefined && meta.compactedUpto !== undefined
+        ? { segments: [], top: meta.compactedSummary, upto: meta.compactedUpto }
+        : undefined)
+    const prevIdx = prev === undefined ? -1 : history.findIndex((m) => m.id === prev.upto)
+    const active = prevIdx >= 0 ? history.slice(prevIdx + 1) : history
+
+    const budget = config.sessions.contextTokens ?? 128_000
+    const atRatio = config.sessions.compactAtRatio ?? 0.66
+    const targetRatio = config.sessions.compactTargetRatio ?? 0.33
+    const manual = opts.manual === true
+    if (!manual && estimateContextTokens(active, userText) < budget * atRatio) {
+      return { summary: prev?.top, segments: prev?.segments.length ?? 0, active, compacted: false }
     }
-    return { summary: meta?.compactedSummary, active }
+
+    const boundary = chooseBoundary(active, { budget, targetRatio })
+    if (boundary === undefined) {
+      return { summary: prev?.top, segments: prev?.segments.length ?? 0, active, compacted: false }
+    }
+
+    const seg = active.slice(0, boundary.keepFrom)
+    const body = renderSegment(seg)
+    const focusLine = opts.focus === undefined ? "" : `\n\n用户特别要求重点保留：${opts.focus}`
+    const segmentSummary = await collectStreamText(runLlm, {
+      model,
+      system: SEGMENT_SUMMARY_PROMPT,
+      messages: [{ role: "user", content: body + focusLine }],
+      tools: [],
+    })
+    const mergeInput = prev === undefined ? segmentSummary : `${prev.top}\n\n新的段摘要：\n${segmentSummary}`
+    const top = await collectStreamText(runLlm, {
+      model,
+      system: MERGE_SUMMARY_PROMPT,
+      messages: [{ role: "user", content: mergeInput + focusLine }],
+      tools: [],
+    })
+
+    const upto = seg[seg.length - 1]!.id
+    const nextSegments = [...(prev?.segments ?? []), { upto, summary: segmentSummary }]
+    sessions.updateMeta(sessionId, {
+      compaction: { segments: nextSegments, top, upto },
+      compactedSummary: undefined,
+      compactedUpto: undefined,
+    })
+    try {
+      SegmentIndex.open(join(this.#deps.paths.sessionsDir, sessionId, "index.db")).addSegment(upto, body, segmentSummary)
+    } catch (err) {
+      console.error(`kclaw segment index (${sessionId}) write failed:`, err)
+    }
+    return { summary: top, segments: nextSegments.length, active: active.slice(boundary.keepFrom), compacted: true }
   }
 
   /**

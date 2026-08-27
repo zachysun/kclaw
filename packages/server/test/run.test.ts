@@ -9,11 +9,11 @@
  * run.
  */
 import { describe, it, expect, afterEach, vi } from "vitest"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { MemoryStore, SessionStore, UsageStore, loadConfig, newMessage, resolvePaths, withRetry } from "@kclaw/core"
+import { MemoryStore, SessionStore, UsageStore, loadConfig, newAssistantMessage, newMessage, resolvePaths, withRetry } from "@kclaw/core"
 import type {
   AgentEvent, AssistantMessage, KclawConfig, KclawPaths, LlmClient, LlmRequest, LlmStreamEvent, Message, ToolExecutor, ToolMessage, ToolResultBlock,
 } from "@kclaw/core"
@@ -791,12 +791,20 @@ function failFirstClient(message: string, then: LlmStreamEvent[]): LlmClient {
   }
 }
 
-/** Seed n user/assistant history pairs (old1a, old1b, old2a, ...). */
+/**
+ * Seed n user/assistant history pairs (old1a, old1b, old2a, ...). Assistant
+ * messages carry a real usage anchor (inputTokens 10_000): the v2 trigger
+ * estimates context from the last assistant's usage, so seeding without it
+ * would make every fixture trivially under-budget instead of over-budget.
+ */
 function seedHistory(sessions: SessionStore, sessionId: string, pairs: number): Message[] {
   const seeded: Message[] = []
   for (let i = 1; i <= pairs; i++) {
     const u = newMessage(sessionId, "user", [{ id: `seed-u-${i}`, type: "text", text: `历史问题${i}` }])
-    const a = newMessage(sessionId, "assistant", [{ id: `seed-a-${i}`, type: "text", text: `历史回答${i}` }])
+    const a = newAssistantMessage(
+      sessionId, "mock-model", [{ id: `seed-a-${i}`, type: "text", text: `历史回答${i}` }],
+      { inputTokens: 10_000, outputTokens: 0 },
+    )
     sessions.appendMessage(sessionId, u)
     sessions.appendMessage(sessionId, a)
     seeded.push(u, a)
@@ -804,145 +812,130 @@ function seedHistory(sessions: SessionStore, sessionId: string, pairs: number): 
   return seeded
 }
 
-describe("RunManager context compaction", () => {
-  it("compacts an over-threshold history into a rolling summary note", async () => {
+/** textTurn whose message_done carries a custom usage.inputTokens (drives the NEXT run's trigger anchor). */
+function textTurnWithUsage(text: string, inputTokens: number): LlmStreamEvent[] {
+  return [
+    { type: "text_delta", delta: text },
+    { type: "message_done", stopReason: "end_turn", usage: { inputTokens, outputTokens: 2 } },
+  ]
+}
+
+describe("RunManager context compaction v2", () => {
+  it("compacts over-budget history: two summarizer calls, segment index, compact note", async () => {
     const reqs: LlmRequest[] = []
     const { env, manager } = makeEnv(
-      recordRequests(scriptClient([textTurn("压缩摘要A"), textTurn("主回复")]), reqs),
-      (c) => {
-        c.sessions.compactThreshold = 4
-        c.sessions.compactKeep = 2
-      },
+      recordRequests(scriptClient([textTurn("段摘要A"), textTurn("总摘要A"), textTurn("主回复")]), reqs),
+      (c) => { c.sessions.contextTokens = 10 }, // tiny budget: force the trigger
     )
     const session = env.sessions.create("压缩会话")
-    const seeded = seedHistory(env.sessions, session.id, 2)
+    const seeded = seedHistory(env.sessions, session.id, 2) // 4 messages
     const socket = new FakeSocket()
     env.bus.subscribe(session.id, socket)
 
     await manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
 
-    // two LLM calls: compaction first, then the main conversation
-    expect(reqs.length).toBe(2)
-    const [compactionReq, mainReq] = reqs
-    expect(compactionReq!.tools).toEqual([])
-    expect(compactionReq!.system).toContain("对话摘要器")
-    expect(compactionReq!.messages).toEqual([
-      { role: "user", content: expect.stringContaining("历史问题1") },
-    ])
-    // the main request sees ONLY the kept tail + the new user text
-    const contents = JSON.stringify(mainReq!.messages)
-    expect(contents).not.toContain("历史问题1")
-    expect(contents).not.toContain("历史回答1")
-    expect(contents).toContain("历史问题2")
-    expect(contents).toContain("新问题")
+    // three LLM calls: segment summary, top merge, then the main conversation
+    expect(reqs.length).toBe(3)
+    const [segReq, mergeReq, mainReq] = reqs
+    expect(segReq!.tools).toEqual([])
+    expect(segReq!.system).toContain("对话摘要器")
+    expect(segReq!.messages[0]!.content).toContain("历史问题1")
+    expect(mergeReq!.system).toContain("对话摘要归并器")
+    // first compaction has no previous top: the merge input IS the segment summary
+    expect(mergeReq!.messages[0]!.content).toContain("段摘要A")
 
-    // meta carries the rolling summary + the compaction marker
+    // meta carries the v2 state
     const meta = env.sessions.meta(session.id)
-    expect(meta!.compactedSummary).toBe("压缩摘要A")
-    expect(meta!.compactedUpto).toBe(seeded[1]!.id)
-
-    // the persisted user message carries the visible compact note
+    expect(meta!.compaction).toMatchObject({ top: "总摘要A", upto: seeded[1]!.id })
+    expect(meta!.compaction!.segments).toHaveLength(1)
+    // the persisted user message carries the compact note
     const msgs = env.sessions.readMessages(session.id)
     const user = msgs.find((m) => m.role === "user" && m.blocks.some((b) => b.type === "text" && b.text === "新问题"))!
-    expect(user.blocks).toEqual([
-      { id: expect.any(String), type: "text", text: "新问题" },
-      {
-        id: expect.any(String), type: "note", kind: "compact",
-        text: "早期对话已压缩（保留最近 2 条原文）。摘要：压缩摘要A",
-      },
-    ])
-
+    const note = user.blocks.find((b) => b.type === "note" && b.kind === "compact")
+    expect((note as { text?: string }).text).toContain("已压缩为 1 段")
+    expect((note as { text?: string }).text).toContain("session_search")
     // the compact note was broadcast on the bus
     expect(received(socket).some((e) =>
       e.type === "note.emitted" && (e.payload as { block: { kind?: string } }).block?.kind === "compact",
     )).toBe(true)
+    // the main request sees only the kept tail + the new user text
+    expect(JSON.stringify(mainReq!.messages)).not.toContain("历史问题1")
+    // the segment index was written under the session dir
+    expect(existsSync(join(env.paths.sessionsDir, session.id, "index.db"))).toBe(true)
   })
 
-  it("rolls the previous summary into the next compaction", async () => {
+  it("second compaction merges the previous top into the new one", async () => {
     const reqs: LlmRequest[] = []
     const { env, manager } = makeEnv(
       recordRequests(scriptClient([
-        textTurn("压缩摘要A"), textTurn("回复一"),
-        textTurn("压缩摘要B"), textTurn("回复二"),
+        textTurn("段摘要A"), textTurn("总摘要A"), textTurnWithUsage("主回复", 10_000),
+        textTurn("段摘要B"), textTurn("总摘要B"), textTurnWithUsage("主回复2", 10_000),
       ]), reqs),
-      (c) => {
-        c.sessions.compactThreshold = 4
-        c.sessions.compactKeep = 2
-      },
+      (c) => { c.sessions.contextTokens = 10 },
     )
-    const session = env.sessions.create("滚动会话")
+    const session = env.sessions.create("两次压缩")
     seedHistory(env.sessions, session.id, 2)
-
-    await manager.enqueue(session.id, { userText: "第一轮", trigger: "user" })
-    // after run 1 the active window is kept(2) + new user/assistant = 4 → run 2 compacts again
-    await manager.enqueue(session.id, { userText: "第二轮", trigger: "user" })
-
-    expect(reqs.length).toBe(4)
-    const secondCompaction = reqs[2]!
-    expect(secondCompaction.messages.length).toBe(1)
-    expect(secondCompaction.messages[0]).toMatchObject({ role: "user" })
-    const content = (secondCompaction.messages[0] as { content: string }).content
-    expect(content).toContain("压缩摘要A")
-    expect(content).toContain("以下是需要并入的最新被压缩对话：")
-    expect(content).toContain("历史问题2")
+    await manager.enqueue(session.id, { userText: "一", trigger: "user" })
+    await manager.enqueue(session.id, { userText: "二", trigger: "user" })
 
     const meta = env.sessions.meta(session.id)
-    expect(meta!.compactedSummary).toBe("压缩摘要B")
+    expect(meta!.compaction!.segments).toHaveLength(2)
+    expect(meta!.compaction!.top).toBe("总摘要B")
+    // the second merge's input carries the old top and the new segment summary
+    const mergeInput = reqs[4]!.messages[0]!.content as string
+    expect(mergeInput).toContain("总摘要A")
+    expect(mergeInput).toContain("段摘要B")
   })
 
-  it("falls back to window truncation when the compaction call fails", async () => {
+  it("upgrades a legacy compactedSummary session: old summary seeds the top", async () => {
     const reqs: LlmRequest[] = []
     const { env, manager } = makeEnv(
-      recordRequests(failFirstClient("provider timeout", textTurn("主回复")), reqs),
-      (c) => {
-        c.sessions.compactThreshold = 4
-        c.sessions.compactKeep = 2
-      },
+      recordRequests(scriptClient([textTurn("段摘要N"), textTurn("总摘要N"), textTurn("主回复")]), reqs),
+      (c) => { c.sessions.contextTokens = 10 },
     )
-    const session = env.sessions.create("回退会话")
-    seedHistory(env.sessions, session.id, 2)
+    const session = env.sessions.create("旧格式")
+    const seeded = seedHistory(env.sessions, session.id, 2)
+    env.sessions.updateMeta(session.id, { compactedSummary: "旧总摘要", compactedUpto: seeded[0]!.id })
 
-    const outcome = await manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
+    await manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
 
-    // the run itself completed normally
-    expect(outcome.stopReason).toBe("end_turn")
-    expect(reqs.length).toBe(2)
-    // no meta update, no slicing: the main request carries the FULL history
-    const contents = JSON.stringify(reqs[1]!.messages)
-    expect(contents).toContain("历史问题1")
-    expect(contents).toContain("新问题")
     const meta = env.sessions.meta(session.id)
+    expect(meta!.compaction!.top).toBe("总摘要N")
+    // legacy fields cleared
     expect(meta!.compactedSummary).toBeUndefined()
     expect(meta!.compactedUpto).toBeUndefined()
+    // the merge input seeded from the legacy top
+    expect((reqs[1]!.messages[0]!.content as string)).toContain("旧总摘要")
+  })
+
+  it("falls back to full history when the summarizer call fails", async () => {
+    const reqs: LlmRequest[] = []
+    const { env, manager } = makeEnv(
+      recordRequests(failFirstClient("摘要挂了", textTurn("主回复")), reqs),
+      (c) => { c.sessions.contextTokens = 10 },
+    )
+    const session = env.sessions.create("回退")
+    seedHistory(env.sessions, session.id, 2)
+    await manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
+    const meta = env.sessions.meta(session.id)
+    expect(meta?.compaction).toBeUndefined()
+    expect(JSON.stringify(reqs.at(-1)!.messages)).toContain("历史问题1") // full history sent
+  })
+
+  it("below threshold with existing state: no new calls, note still injected", async () => {
+    const reqs: LlmRequest[] = []
+    const { env, manager } = makeEnv(recordRequests(scriptClient([textTurn("主回复")]), reqs))
+    const session = env.sessions.create("未触发")
+    const seeded = seedHistory(env.sessions, session.id, 2)
+    env.sessions.updateMeta(session.id, {
+      compaction: { segments: [{ upto: seeded[1]!.id, summary: "段摘要A" }], top: "总摘要A", upto: seeded[1]!.id },
+    })
+    await manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
+    expect(reqs.length).toBe(1) // the main conversation only
     const msgs = env.sessions.readMessages(session.id)
-    expect(msgs.some((m) => m.blocks.some((b) => b.type === "note" && b.kind === "compact"))).toBe(false)
-  })
-
-  it("below threshold no compaction happens", async () => {
-    const reqs: LlmRequest[] = []
-    const { env, manager } = makeEnv(
-      recordRequests(scriptClient([textTurn("好的")]), reqs),
-      (c) => {
-        c.sessions.compactThreshold = 4
-        c.sessions.compactKeep = 2
-      },
-    )
-    const session = env.sessions.create("短历史会话")
-    seedHistory(env.sessions, session.id, 1) // 2 messages < threshold 4
-
-    const outcome = await manager.enqueue(session.id, { userText: "继续", trigger: "user" })
-
-    expect(outcome.stopReason).toBe("end_turn")
-    // exactly ONE llm call — the main conversation; no compaction request
-    expect(reqs.length).toBe(1)
-    const contents = JSON.stringify(reqs[0]!.messages)
-    expect(contents).toContain("历史问题1")
-    expect(contents).toContain("继续")
-    const meta = env.sessions.meta(session.id)
-    expect(meta!.compactedSummary).toBeUndefined()
-    expect(meta!.compactedUpto).toBeUndefined()
-    const [user] = env.sessions.readMessages(session.id)
-    expect(user!.blocks.some((b) => b.type === "note" && b.kind === "compact")).toBe(false)
+    const user = msgs.find((m) => m.role === "user" && m.blocks.some((b) => b.type === "text" && b.text === "新问题"))!
+    const note = user.blocks.find((b) => b.type === "note" && b.kind === "compact")
+    expect((note as { text?: string }).text).toContain("总摘要A")
   })
 })
 
