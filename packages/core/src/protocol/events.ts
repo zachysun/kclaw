@@ -7,6 +7,8 @@ export type EventType =
   | "run.started" | "run.completed" | "run.failed"
   | "message.created" | "message.completed"
   | "job.started" | "job.completed" | "job.failed"
+  // 会话元数据
+  | "session.renamed"
   // 流式
   | "text.created" | "text.delta" | "text.completed"
   | "thinking.created" | "thinking.delta" | "thinking.completed"
@@ -28,6 +30,7 @@ export interface MessageCompletedPayload { message: Message }
 export interface JobStartedPayload { jobId: string }
 export interface JobCompletedPayload { jobId: string; summary: string }
 export interface JobFailedPayload { jobId: string; error: { code: string; message: string } }
+export interface SessionRenamedPayload { title: string }
 
 export interface BlockPayload { messageId: string; block: Block }
 export interface BlockDeltaPayload { messageId: string; blockId: string; delta: string }
@@ -60,6 +63,7 @@ export type EventPayloadMap = {
   "job.started": JobStartedPayload
   "job.completed": JobCompletedPayload
   "job.failed": JobFailedPayload
+  "session.renamed": SessionRenamedPayload
   "text.created": BlockPayload
   "text.delta": BlockDeltaPayload
   "text.completed": BlockPayload

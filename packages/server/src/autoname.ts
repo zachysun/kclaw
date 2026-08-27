@@ -1,11 +1,13 @@
-import type { SessionStore } from "@kclaw/core"
-import type { LlmClient } from "@kclaw/core"
+import type { AgentEvent, LlmClient, SessionStore } from "@kclaw/core"
+import { makeEvent } from "@kclaw/core"
 
 export interface AutonameDeps {
   sessions: SessionStore
   llm: LlmClient
   model: string
   titleFor?: (firstText: string) => Promise<string>
+  /** Optional event sink: a successful rename is announced as session.renamed. */
+  emit?: (e: AgentEvent) => void
 }
 
 export function scheduleAutoname(deps: AutonameDeps, sessionId: string, firstText: string): Promise<void> {
@@ -21,6 +23,7 @@ export function scheduleAutoname(deps: AutonameDeps, sessionId: string, firstTex
       const current = deps.sessions.meta(sessionId)
       if (current === undefined || current.title !== "新会话") return
       deps.sessions.updateMeta(sessionId, { title: t })
+      deps.emit?.(makeEvent("session.renamed", { title: t }, { sessionId }))
     } catch {
       // 失败静默，保持无标题
     }

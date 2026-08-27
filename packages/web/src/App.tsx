@@ -195,6 +195,12 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
     setSelectedId(id)
   }, [])
 
+  // The daemon renamed a session (autoname after the first message); patch the
+  // list so the sidebar shows the new title without a reload.
+  const handleSessionRenamed = useCallback((sessionId: string, title: string): void => {
+    setSessions((prev) => (prev ?? []).map((s) => (s.id === sessionId ? { ...s, title } : s)))
+  }, [])
+
   // A tab click on mobile should also dismiss the sidebar drawer.
   const switchTab = useCallback((next: Tab) => {
     setSidebarOpen(false)
@@ -349,6 +355,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
                 createWs={createWs}
                 initialMessages={readyMessages}
                 sessionModel={selectedMeta?.model}
+                onSessionRenamed={handleSessionRenamed}
               />
             </div>
           )}

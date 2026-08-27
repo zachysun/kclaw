@@ -32,6 +32,40 @@ describe("scheduleAutoname", () => {
     expect(sessions.meta(meta.id)?.title).toBe("生成的标题")
   })
 
+  it("写回成功后发出 session.renamed 事件", async () => {
+    const sessions = tempSessions()
+    const meta = sessions.create()
+    const emitted: Array<{ type: string; sessionId?: string; title?: string }> = []
+    await scheduleAutoname(
+      {
+        sessions,
+        llm: {} as never,
+        model: "m",
+        titleFor: async () => "生成的标题",
+        emit: (e) => emitted.push({ type: e.type, sessionId: e.sessionId, title: (e.payload as { title: string }).title }),
+      },
+      meta.id, "你好",
+    )
+    expect(emitted).toEqual([{ type: "session.renamed", sessionId: meta.id, title: "生成的标题" }])
+  })
+
+  it("跳过命名（手动改名）时不发事件", async () => {
+    const sessions = tempSessions()
+    const meta = sessions.create("手动标题")
+    const emitted: unknown[] = []
+    await scheduleAutoname(
+      {
+        sessions,
+        llm: {} as never,
+        model: "m",
+        titleFor: async () => "不该覆盖",
+        emit: (e) => emitted.push(e),
+      },
+      meta.id, "你好",
+    )
+    expect(emitted).toEqual([])
+  })
+
   it("手动改过的标题不被覆盖", async () => {
     const sessions = tempSessions()
     const meta = sessions.create("手动标题")

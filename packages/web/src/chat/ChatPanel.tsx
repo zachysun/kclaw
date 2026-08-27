@@ -34,6 +34,12 @@ export interface ChatPanelProps {
   initialMessages: Message[]
   /** Session meta model override (undefined → daemon default). */
   sessionModel?: string
+  /**
+   * The daemon renamed this session (autoname); escapes to the owner so the
+   * sidebar list shows the new title without a reload. Reference must be
+   * stable across renders (it keys the ws effect like ws/createWs).
+   */
+  onSessionRenamed?: (sessionId: string, title: string) => void
 }
 
 /** Max consecutive failed reconnects before giving up with a notice. */
@@ -53,7 +59,7 @@ function errorFrameMessage(frame: unknown): string | null {
   return typeof message === "string" ? message : null
 }
 
-export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel }: ChatPanelProps) {
+export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed }: ChatPanelProps) {
   const [view, setViewState] = useState<ChatState>(() => initChat(initialMessages))
   const [notice, setNotice] = useState<string | null>(null)
   const clientRef = useRef<WsClient>(ws)
@@ -107,6 +113,12 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           if (cancelled) return "closed"
           try {
             if (isAgentEvent(frame)) {
+              // session.renamed is list-level metadata, not chat content: it
+              // bypasses the reducer and escapes to the owner directly.
+              if (frame.type === "session.renamed") {
+                const title = (frame.payload as { title?: unknown }).title
+                if (typeof title === "string") onSessionRenamed?.(sessionId, title)
+              }
               updateView((v) => applyEvent(v, frame))
             } else {
               const message = errorFrameMessage(frame)
@@ -173,7 +185,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       cancelled = true
       client.close()
     }
-  }, [sessionId, api, ws, createWs])
+  }, [sessionId, api, ws, createWs, onSessionRenamed])
 
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
   const [models, setModels] = useState<string[]>([])

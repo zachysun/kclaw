@@ -105,7 +105,11 @@ interface Harness {
 }
 
 async function mount(
-  opts: { sessionId?: string; initialMessages?: Message[] } = {},
+  opts: {
+    sessionId?: string
+    initialMessages?: Message[]
+    onSessionRenamed?: (sessionId: string, title: string) => void
+  } = {},
 ): Promise<Harness> {
   const sessionId = opts.sessionId ?? "s1"
   const api = makeApi(opts.initialMessages ?? [])
@@ -115,7 +119,16 @@ async function mount(
   document.body.appendChild(container)
   const root = createRoot(container)
   await act(async () => {
-    root.render(<ChatPanel sessionId={sessionId} api={api} ws={ws} createWs={createWs} initialMessages={opts.initialMessages ?? []} />)
+    root.render(
+      <ChatPanel
+        sessionId={sessionId}
+        api={api}
+        ws={ws}
+        createWs={createWs}
+        initialMessages={opts.initialMessages ?? []}
+        onSessionRenamed={opts.onSessionRenamed}
+      />,
+    )
   })
   // Open the first socket so the buffered subscribe is flushed (auth then subscribe).
   await act(async () => {
@@ -160,6 +173,18 @@ describe("ChatPanel", () => {
   it("subscribes to the session over the ws on connect", async () => {
     const h = await mount()
     expect(h.sockets[0]!.sent).toContain(JSON.stringify({ type: "subscribe", sessionId: "s1" }))
+    h.unmount()
+  })
+
+  it("escapes session.renamed to the owner (autoname reaches the sidebar)", async () => {
+    const onSessionRenamed = vi.fn()
+    const h = await mount({ onSessionRenamed })
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("session.renamed", { title: "自动生成的标题" }))
+    })
+    expect(onSessionRenamed).toHaveBeenCalledWith("s1", "自动生成的标题")
+    // List-level metadata never touches the chat view.
+    expect(h.container.textContent).not.toContain("自动生成的标题")
     h.unmount()
   })
 

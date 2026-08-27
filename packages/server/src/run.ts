@@ -552,7 +552,7 @@ export class RunManager {
             if (input.trigger !== "job") {
               const firstText = m.blocks.find((b) => b.type === "text")?.text ?? ""
               void scheduleAutoname(
-                { sessions, llm: runLlm, model },
+                { sessions, llm: runLlm, model, emit: busEmit },
                 sessionId, firstText,
               )
             }

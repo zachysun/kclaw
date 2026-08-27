@@ -79,6 +79,7 @@ export type EventType =
   | "run.started" | "run.completed" | "run.failed"
   | "message.created" | "message.completed"
   | "job.started" | "job.completed" | "job.failed"
+  | "session.renamed"
   | "text.created" | "text.delta" | "text.completed"
   | "thinking.created" | "thinking.delta" | "thinking.completed"
   | "tool_call.created" | "tool_call.delta" | "tool_call.completed"
