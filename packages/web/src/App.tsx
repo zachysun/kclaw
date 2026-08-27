@@ -39,6 +39,17 @@ function wsUrlFor(): string {
   return `${protocol}://${window.location.host}/ws`
 }
 
+/**
+ * Union two raw message lists by id, chronological (a cache snapshot can be
+ * BEHIND the server list but never ahead of it — unknown ids from the fresh
+ * fetch append at the end).
+ */
+function unionById(prev: Message[], fresh: Message[]): Message[] {
+  if (prev.length === 0) return fresh
+  const known = new Set(prev.map((m) => m.id))
+  return [...prev, ...fresh.filter((m) => !known.has(m.id))]
+}
+
 export function App() {
   const [token, setToken] = useState<string | null>(() => bootstrapToken())
 
@@ -159,25 +170,34 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
     }
   }, [api])
 
-  // Pull (and cache) the selected session's messages. The cache is keyed by
-  // session id, so the array reference handed to the ChatPanel stays stable
-  // for the session's whole lifetime — re-renders never reset its live view.
+  // Pull the selected session's messages — on EVERY selection, not just the
+  // first visit: the cache snapshot goes stale once a session's live stream
+  // has grown it (switch away → back would show the outdated base). The fetch
+  // result is UNIONED into the cache; the ChatPanel's same-session path then
+  // merges the refreshed base into its live view instead of resetting it.
   useEffect(() => {
-    if (selectedId === null || messagesCache[selectedId] !== undefined) return
+    if (selectedId === null) return
     let cancelled = false
     api
       .get<Message[]>(`/sessions/${encodeURIComponent(selectedId)}/messages`)
       .then((messages) => {
-        if (!cancelled) setMessagesCache((cache) => ({ ...cache, [selectedId]: messages }))
+        if (!cancelled) {
+          setMessagesCache((cache) => ({ ...cache, [selectedId]: unionById(cache[selectedId] ?? [], messages) }))
+        }
       })
       .catch(() => {
-        // An empty conversation is a valid fallback; the live view self-heals.
-        if (!cancelled) setMessagesCache((cache) => ({ ...cache, [selectedId]: [] }))
+        // An empty conversation is a valid fallback (first visit only — an
+        // existing cached list stays); the live view self-heals.
+        if (!cancelled) {
+          setMessagesCache((cache) =>
+            cache[selectedId] !== undefined ? cache : { ...cache, [selectedId]: [] },
+          )
+        }
       })
     return () => {
       cancelled = true
     }
-  }, [api, selectedId, messagesCache])
+  }, [api, selectedId])
 
   const readyMessages: Message[] | null =
     selectedId === null ? null : (messagesCache[selectedId] ?? null)

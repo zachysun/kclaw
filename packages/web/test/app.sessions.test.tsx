@@ -277,4 +277,71 @@ describe("App (sessions + tabs)", () => {
     root.unmount()
     container.remove()
   })
+
+  it("re-pulls messages when revisiting a session so live-streamed bubbles survive", async () => {
+    // The regression: a session's live stream grows only inside the mounted
+    // ChatPanel; switching away unmounts it and the stale (empty) snapshot was
+    // shown on return until a manual refresh.
+    let s1Pulls = 0
+    const streamed = {
+      id: "m1", sessionId: "s1", role: "assistant" as const,
+      blocks: [{ id: "b1", type: "text" as const, text: "直播生成的回答" }],
+      createdAt: "2026-08-15T00:00:01.000Z",
+    }
+    mockFetch(fetchMock, {
+      "GET /status": { body: { ok: true } },
+      "GET /sessions": { body: [session("s1", "第一会话"), session("s2", "第二会话")] },
+      "GET /sessions/s1/messages": () => {
+        s1Pulls += 1
+        return { body: s1Pulls === 1 ? [] : [streamed] }
+      },
+      "GET /sessions/s2/messages": { body: [] },
+      "GET /jobs": { body: [] },
+    })
+    localStorage.setItem("kclaw_token", "tok-1")
+    const { container, root } = mountApp()
+    await act(async () => {
+      root.render(<App />)
+    })
+    await flush()
+
+    // Select s1 (first pull — empty), stream a live assistant bubble into it.
+    await act(async () => {
+      ;(container.querySelector('[data-testid="session-item-s1"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    await act(async () => {
+      FakeWebSocket.instances[0]!.open()
+    })
+    await flush()
+    const event = {
+      id: "evt-1", ts: "2026-08-15T00:00:01.000Z", type: "message.completed",
+      sessionId: "s1", payload: { message: streamed },
+    }
+    await act(async () => {
+      FakeWebSocket.instances[0]!.onmessage?.({ data: JSON.stringify(event) })
+    })
+    await flush()
+    expect(container.textContent).toContain("直播生成的回答")
+
+    // Switch to s2 and back to s1.
+    await act(async () => {
+      ;(container.querySelector('[data-testid="session-item-s2"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    await flush()
+    await act(async () => {
+      ;(container.querySelector('[data-testid="session-item-s1"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    await flush()
+
+    // The revisit re-pulled from the server instead of trusting the stale
+    // empty snapshot, and the bubble is back without any manual reload.
+    expect(s1Pulls).toBe(2)
+    expect(container.querySelector('[data-testid="session-item-s1"]')?.getAttribute("data-selected")).toBe("true")
+    expect(container.textContent).toContain("直播生成的回答")
+    root.unmount()
+    container.remove()
+  })
 })

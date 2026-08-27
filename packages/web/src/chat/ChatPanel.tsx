@@ -76,9 +76,18 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     setViewState(next)
   }, [])
 
-  // Re-init when the session (or its message list) changes — T6 swaps both.
+  // Re-init when the session changes; a REFRESHED message base for the SAME
+  // session (App re-pulls on every selection) merges into the live view instead
+  // of resetting it — the live stream may already be ahead of the fetch, and
+  // reset would drop those bubbles.
+  const sessionRef = useRef(sessionId)
   useEffect(() => {
-    updateView(() => initChat(initialMessages))
+    if (sessionRef.current === sessionId) {
+      updateView((v) => ({ ...v, messages: mergeMessages(v.messages, initialMessages) }))
+    } else {
+      sessionRef.current = sessionId
+      updateView(() => initChat(initialMessages))
+    }
   }, [sessionId, initialMessages, updateView])
 
   useEffect(() => {

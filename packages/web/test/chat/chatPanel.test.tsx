@@ -101,6 +101,10 @@ interface Harness {
   sockets: FakeSocket[]
   socketFactory: ReturnType<typeof vi.fn>
   api: ApiClient & { get: ReturnType<typeof vi.fn> }
+  /** The original props handed to the panel — rerenders reuse them. */
+  apiProp: ApiClient
+  ws: WsClient
+  createWs: () => WsClient
   unmount: () => void
 }
 
@@ -141,6 +145,9 @@ async function mount(
     sockets,
     socketFactory,
     api,
+    apiProp: api,
+    ws,
+    createWs,
     unmount: () => {
       root.unmount()
       container.remove()
@@ -185,6 +192,36 @@ describe("ChatPanel", () => {
     expect(onSessionRenamed).toHaveBeenCalledWith("s1", "自动生成的标题")
     // List-level metadata never touches the chat view.
     expect(h.container.textContent).not.toContain("自动生成的标题")
+    h.unmount()
+  })
+
+  it("merges a refreshed message base into the live view (same session)", async () => {
+    const h = await mount({
+      initialMessages: [msg("m0", "user", [{ id: "b0", type: "text", text: "旧消息" }])],
+    })
+    // Live stream a bubble that exists only in this panel's state.
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("message.created", { message: msg("m1", "assistant", []) }))
+      pushFrame(h.sockets[0]!, ev("text.created", { messageId: "m1", block: { id: "b1", type: "text", text: "" } }))
+      pushFrame(h.sockets[0]!, ev("text.delta", { messageId: "m1", blockId: "b1", delta: "直播" }))
+    })
+    expect(h.container.textContent).toContain("直播")
+
+    // The App hands down a refreshed base for the SAME session (its
+    // re-pull-on-select union): merge must keep the live bubble.
+    const refreshed = [
+      msg("m0", "user", [{ id: "b0", type: "text", text: "旧消息" }]),
+      msg("m2", "assistant", [{ id: "b2", type: "text", text: "服务器上的新消息" }]),
+    ]
+    await act(async () => {
+      h.root.render(
+        <ChatPanel sessionId="s1" api={h.apiProp} ws={h.ws} createWs={h.createWs} initialMessages={refreshed} />,
+      )
+    })
+    await flush()
+    expect(h.container.textContent).toContain("直播") // live view survived
+    expect(h.container.textContent).toContain("服务器上的新消息")
+    expect(h.container.textContent).toContain("旧消息")
     h.unmount()
   })
 
