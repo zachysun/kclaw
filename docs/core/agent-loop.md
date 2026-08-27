@@ -58,7 +58,7 @@ export interface RunOutcome { stopReason: StopReason; totalUsage: Usage; message
 ```ts
 export type PermissionDecision =
   | { type: "allow"; reason: "safe" | "whitelist" | "session_grant" }
-  | { type: "deny"; reason: "blacklist" | "user_denied" | "timeout"; noteText: string }
+  | { type: "deny"; reason: "blacklist" | "user_denied" | "timeout" | "readonly"; noteText: string }
   | { type: "confirm"; confirmationId: string }
 ```
 
@@ -108,7 +108,7 @@ run.started {trigger}
 - **滑动窗口**（只保留最近 N 条历史、随新消息整体前移）：`history.slice(-window)`（window 默认 40），system prompt 不占窗口。服务端（RunManager）的长会话会先做滚动压缩——超阈值时把最老一段压成摘要并传入切片后的 history，窗口截断仅作为未压缩/压缩失败时的兜底。
 - **孤儿 tool 消息丢弃**：窗口切在 assistant 与 tool 消息之间时，开头的连续 `role:"tool"` 消息被 `shift` 丢弃——OpenAI 兼容 API 拒收无配对调用的 tool 结果。
 - **无配对的 tool_call 剔除**：assistant 的 `tool_call` 块只有当其后（窗口内）存在配对的 `tool_result` 才转成 `toolCalls` 发送；悬空调用会被 400。
-- **块级转换**：user/assistant 的 text 拼接为 content；note 转 `[system note] <text>` 行（对模型可见、可追溯）；assistant 无 text 时 content 为 null，仅带 toolCalls；tool 消息每个 `tool_result` 一条，error 结果加 `[error] ` 前缀；thinking 与 attachment 不进模型视图。
+- **块级转换**：user/assistant 的 text 拼接为 content；note 转 `[system note] <text>` 行（对模型可见、可追溯）；tool 消息的每个 `tool_result` 转成一条消息，error 结果加 `[error] ` 前缀；assistant 没有 text 时 content 置 null、只带 toolCalls；thinking 不转换，模型看不到自己之前的思考内容。attachment 块按携带的内容分三种转法：带 `base64` 数据且 MIME 是 `image/*` 的转成一个多模态 `image_url` 内容段（data: URL 形式，与文本段并列为 content 数组的元素）；带内联 `text` 正文的转成 `[附件 <名称>]` 加正文；两者都不满足的只转一行元数据提示（`[附件 <名称>（<mime>，仅元数据）已保存，路径 <path>，可用 fs_read 读取]`），需要内容时由模型自己调 fs_read。
 - 下一轮的 history：`[...input.history, userMsg, assistant?, toolMsg?, …]`，由循环内逐步 `all.push` 累积。
 
 ---

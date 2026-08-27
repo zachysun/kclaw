@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/web` 是 daemon 的浏览器前端：React 单页应用（SPA：单个 HTML 页面内完成全部交互，按需向服务器请求数据），vite 构建、产物由 daemon 静态托管。`src/App.tsx` 是根组件与顶层状态（tab、会话列表、选中会话）；`src/token.ts` 负责 token 引导（`?token=` 握手 → localStorage → 地址栏清除）；`src/ws.ts` 是 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）客户端；`src/api.ts` 是 HTTP 客户端。功能与 CLI 对等（同一套 HTTP + WS API）：流式对话、确认卡片、会话、任务、审计。
+`packages/web` 是 daemon 的浏览器前端：React 单页应用（SPA：单个 HTML 页面内完成全部交互，按需向服务器请求数据），vite 构建、产物由 daemon 静态托管，并按 PWA（渐进 Web 应用：可安装到主屏、带离线外壳）方式布置了 Service Worker 与清单文件。`src/App.tsx` 是根组件与顶层状态（tab、会话列表、选中会话）；`src/token.ts` 负责 token 引导（`?token=` 握手 → localStorage → 地址栏清除）；`src/ws.ts` 是 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）客户端；`src/api.ts` 是 HTTP 客户端（含附件上传）。功能与 CLI 对等并多出图形化部分（同一套 HTTP + WS API）：流式对话、确认卡片、会话（按工作目录分组）、任务、审计、用量台账、回收站。
 
 ## 设计决策
 
@@ -12,8 +12,10 @@
 - **`?session=` 深链**：任务通知里的会话链接（`/?session=<id>`）在会话列表加载完成后一次性消费——命中列表则自动选中该会话（与点击列表项同一状态路径），未命中保持默认行为；无论命中与否都立即 `history.replaceState` 清掉参数，刷新不会重复跳转。
 - **401 全局重入**：任何一次 API 401（挂载时的 `/status` 探测或之后的任何调用）都触发 `onUnauthorized` → 清除存储的 token → 返回 token 输入页；否则刷新页面会重新引导同一个过期 token，形成死循环。
 - **连接由 App 创建、面板只消费**：`ws`（当前会话的客户端）与 `createWs`（重连时重建的工厂）都由 `MainShell` 用 `useMemo`/`useCallback` 保持引用稳定——`ChatPanel` 的两个 effect 以 `[sessionId, api, ws, createWs]` 和 `[sessionId, initialMessages]` 为依赖，引用不稳定会导致切换 tab/状态探测时重复订阅或重置实时视图。
-- **对话面板跨 tab 保活**：`ChatPanel` 切到任务/审计/回收站 tab 时只是 `hidden`，不卸载——直播流和输入框草稿在导航中存活。
+- **对话面板跨 tab 保活**：`ChatPanel` 切到任务/审计/用量/回收站 tab 时只是 `hidden`，不卸载——直播流和输入框草稿在导航中存活。
+- **选中会话时每次都重新拉取，缓存只追加不覆盖**：每次选中一个会话（包括重新选回刚才那个）都会 `GET /sessions/:id/messages` 拉一遍全量消息。拉到的结果用 `unionById` 按 id 合并进按会话缓存的列表：已见过的消息以缓存里的为准，新出现的 id 追加到尾部——因为缓存的快照可能落后于服务端（别的连接在往里写），但不会超前。合并进来的底稿再由 `ChatPanel` 用 `mergeMessages` 融进当前正在直播的视图，而不是整个重置视图，这样切走再切回不会丢掉正在流式输出的气泡。
 - **reducer 是纯函数**：`model.ts` 的 `applyEvent(state, event) → 新 state`，每次转换返回新对象；单个畸形帧只记日志，不中断事件循环（否则表现为断线，诱发无谓的重连）。
+- **响应式外壳**：桌面端侧栏常驻；窄屏侧栏收成抽屉，点顶栏 ☰ 打开、点背板或切换 tab 关闭。视觉设计集中在 CSS 变量里（design tokens）：整体是暖色近黑画布，唯一的强调色是琥珀色（amber），专门用来表示"agent 正在活动"——daemon 连接中的状态点、回复进行时的脉冲光标行、输入框提示符都是它。
 
 ## 构建与托管
 
@@ -21,6 +23,17 @@
 - **路径解析**（`packages/server/src/daemon.ts`）：`resolveWebDist(opts.webDist)`——显式传入优先（测试注入临时目录）；缺省用 `defaultWebDistPath()`，即从模块 URL 推导的 `<repo>/packages/web/dist`（src/ 与 dist/ 都在 packages 下两层，`../../web/dist` 两者指向同一目录）。**路径不存在解析为 `undefined`**：新 clone 没构建过 web、或传了错误路径时，daemon 保持纯 API 模式（不注册半配置的静态服务），`GET /` 是 404。
 - **静态服务**（`packages/server/src/app.ts`）：`webDist` 存在时 `app.register(fastifyStatic, { root: webDist })`，`index.html` 服务于 `GET /`。
 - **鉴权豁免**（`isWebShellExempt`）：只有 GET 的 `/`、`/index.html`、`/assets/*` 免 Bearer——外壳与资源必须在浏览器获得 token 之前能加载；其余一切（sessions/jobs/config/ws）照常受保护。判断使用去除查询串的原始路径（`@fastify/static` 使用 `/*` 通配路由，匹配到的路由 URL 不含路径信息）。
+
+## PWA 与离线外壳（public/）
+
+kclaw 的网页版按 PWA（Progressive Web App，渐进 Web 应用：浏览器里可以"安装到主屏"、离线也能打开外壳）方式布置，涉及三个文件和一个入口挂载。
+
+- **manifest.webmanifest**：声明应用名、`standalone` 显示模式、主题色 `#111827` 和 192/512 两枚图标——满足浏览器"可安装"判定的最低要求。
+- **sw.js**（Service Worker：浏览器在页面之外后台运行的一段脚本，可以拦截网络请求）：只为一个目标服务——断网时页面外壳打得开。
+  - `install` 阶段把三个外壳文件 `SHELL = ["/", "/index.html", "/manifest.webmanifest"]` 预存进缓存（缓存名 `kclaw-shell-v1`）；`activate` 阶段清掉其他名字的旧缓存。
+  - 拦截到 `fetch` 请求时走"缓存优先"：命中缓存直接返回；但 `/ws`、`/api` 开头的路径和一切非 GET 请求照常发往网络，不查缓存——对话数据永远以 daemon 为准。
+  - 除预缓存外**没有任何运行时写入缓存**的代码（没有 `cache.put`）：消息和 API 响应一律不被 Service Worker 缓存。
+- **offlineBanner.ts**：页面入口 `main.tsx` 调用 `registerServiceWorker()` 完成注册，并渲染 `<OfflineBanner />`；后者通过 `navigator.onLine` 与 online/offline 事件监测连接状态，断网时在页首显示横幅提示。
 
 ## token 引导（packages/web/src/token.ts）
 
@@ -43,17 +56,22 @@ export function bootstrapToken(): string | null
 
 ## 视图（App.tsx 布局）
 
-顶栏（品牌 + tab + daemon 状态点，挂载时 GET `/status` 探测，`connecting/connected/error` 三态）、左侧会话栏、右侧 tab 内容：
+顶栏（品牌 + ☰ 抽屉按钮〔窄屏〕+ 五个 tab：对话/任务/审计/用量/回收站 + daemon 状态点，挂载时 GET `/status` 探测，`connecting/connected/error` 三态）、左侧会话栏、右侧 tab 内容：
 
 | 视图 | 组件 | 职责 |
 |------|------|------|
-| 会话列表（侧栏） | `sessions/SessionList.tsx` | 纯展示组件：列表/选中/新建（workdir 输入）/行内重命名/软删除都通过 props 回调交由上层处理，HTTP 全在 App 层 |
-| 对话（tab） | `chat/ChatPanel.tsx` + `ChatView.tsx` | 订阅 + 事件循环 + reducer；ChatView 纯渲染（thinking/tool_result 用原生 `<details>` 折叠）；确认卡片在输入区上方逐张渲染 |
+| 会话列表（侧栏） | `sessions/SessionList.tsx` | 按 workdir 分组的会话列表：工作目录相同的会话排在同一个组头下面，组名默认就是目录路径，可以内联改名（改名存进 localStorage 键 `kclaw_workdir_names`，刷新页面后仍在）。每个组头带一个 ＋ 按钮，点击即在该目录新建会话；列表顶部的"＋ 选择工作目录新建会话"则打开 DirectoryPicker 浏览本机目录，选中哪个目录就在那里创建新会话——选中目录这个动作本身就是创建。单个会话的行内重命名与删除经 props 回调交上层处理。没有 workdir 的旧会话和任务会话归入"未指定工作目录"组 |
+| 对话（tab） | `chat/ChatPanel.tsx` + `ChatView.tsx` | 订阅 + 事件循环 + reducer；ChatView 只做渲染（thinking/tool_result 用原生 `<details>` 折叠）；确认卡片在输入区上方逐张渲染；输入区上方有模型选择器，选项来自 `GET /config` 返回的 provider 条目名，切换时调 `POST /sessions/:id/model`；文件可以直接拖进聊天区上传，上传后的附件列成一条待发条带，随下一条消息一起发出 |
 | 任务（tab） | `jobs/JobsView.tsx` | GET `/jobs` 表格（name/cron/enabled/nextRunAt/lastStatus/lastRunAt）；一张表单兼顾新建（POST）与编辑（PATCH），行内启用开关（PATCH `{enabled}`）、删除带原生 confirm；服务端 400 的 `{error}` 文案直接显示于错误提示条 |
-| 审计（tab） | `audit/AuditView.tsx` | 会话下拉 + `GET /sessions/:id/messages`，把消息摊平成"每块一行"（createdAt 降序），点击展开完整块内容；工具行按 callId 关联 tool 消息的 `grantedBy` 显示放行原因；纯只读 |
+| 审计（tab） | `audit/AuditView.tsx` | 会话下拉 + `GET /sessions/:id/messages`，把消息摊平成"每块一行"、按 createdAt **升序**排列（最新在底部，像日志），点击展开完整块内容；工具行按 callId 关联 tool 消息的 `grantedBy` 显示放行原因；纯只读 |
+| 用量（tab） | `usage/UsageView.tsx` | 并发拉 `GET /usage?by=day` 与 `?by=session` 两份聚合：顶部总计行（输入/输出 token 与费用）+ "导出 JSON" 按钮（再拉一份 by=session 存为 `kclaw-usage.json` 下载）；两张表分别按天、按会话列 token 与费用，未配置价格的模型费用显示"—" |
 | 回收站（tab） | `sessions/TrashView.tsx` | `GET /sessions?deleted=true` 软删除列表，行内恢复（POST `/:id/restore`）与彻底删除（POST `/:id/purge`），操作后重新拉取 |
 
-会话数据流：挂载时 `GET /sessions`（服务端按 updatedAt 降序）；选中会话后 `GET /sessions/:id/messages` 全量拉取并按会话 id 缓存（`messagesCache`）——缓存保证传给 ChatPanel 的数组引用在整个会话生命周期内稳定。
+会话数据流：挂载时 `GET /sessions`（服务端按 updatedAt 降序）；**每次**选中会话都 `GET /sessions/:id/messages` 全量拉取并经 `unionById` 按会话 id 并入缓存（`messagesCache`）——只追加未知 id，不覆盖已有条目；缓存保证传给 ChatPanel 的数组引用稳定。
+
+### 自动命名的即时反馈
+
+会话发出首条消息后，daemon 会自动生成标题并广播 `session.renamed {title}` 事件（发射方见 [run-manager](../server/run-manager.md) 的 autoname）。ChatPanel 在事件循环里把这个事件单独挑出来、不送进消息 reducer——它描述的是会话本身而不是某条消息，进 reducer 反而会污染对话状态。事件携带的标题经回调 `onSessionRenamed` 直接更新 App 里的会话列表，侧栏不用刷新页面就显示新名字。
 
 ### 事件 → 视图（chat/model.ts）
 
@@ -93,12 +111,14 @@ export class WsAuthError extends Error { readonly code: number }  // 默认 4001
 - **ws 认证失败没有 token 刷新**：只能刷新页面重新进入输入页；API 侧的 401 重入不覆盖 ws 路径。
 - **错过的 confirmation.requested 不可恢复**：确认有时限（默认 120s），断线期间超时按拒绝处理；重连全量拉取只能看到结果（note 块），不能补答。
 - **审计页无独立 /audit 路由**：轨迹的唯一事实来源是 `messages.jsonl`（经 sessions 路由读取），没有单独的审计接口。
+- **Service Worker 缓存只覆盖外壳三文件**：消息与 API 响应永远不经过 Service Worker 缓存。要更新外壳时需要更换缓存名（把 `kclaw-shell-v1` 换成新名字），旧缓存会在 `activate` 阶段被清掉；只改 SHELL 里的文件内容而不换缓存名，老外壳可能一直留在用户浏览器里。
 - **无路由库**：tab 是普通 `useState`，刷新回到对话 tab；会话列表无分页、全量返回。
 
 ## 关联
 
 - [realtime](../server/realtime.md)：/ws 帧协议、订阅语义、断线恢复规则（CLI 与 WebUI 的共同契约）
-- [http-api](../server/http-api.md)：各视图消费的 REST 路由
+- [http-api](../server/http-api.md)：各视图消费的 REST 路由（含 /fs/browse、/usage、附件上传）
+- [run-manager](../server/run-manager.md)：`session.renamed` 的发射方、附件随 send_message 的服务端挂载
 - [daemon](../server/daemon.md)：webDist 解析与静态托管、鉴权豁免的服务端侧
 - [onboarding](../cli/onboarding.md)：`kclaw web` 命令与 `?token=` 的发送侧
 - [protocol](../core/protocol.md)：事件目录与持久化块结构（model.ts 镜像的源头）

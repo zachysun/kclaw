@@ -8,7 +8,7 @@
 
 ## 设计决策
 
-- **统一执行接口**：内置工具与未来的 MCP 适配器实现同一个 `ToolExecutor`——循环不区分工具来源。`risk` 与 `concurrency` 是声明性元数据：前者驱动权限检查（safe 的工具集可自动放行），后者驱动同批调用的调度。
+- **统一执行接口**：内置工具、MCP 适配器（`mcp__<server>__<tool>`，见 [mcp](./mcp.md)）实现同一个 `ToolExecutor`——循环不区分工具来源。`risk` 与 `concurrency` 是声明性元数据：前者驱动权限检查（safe 的工具集可自动放行），后者驱动同批调用的调度。
 - **注册表与定义同源**：`createBuiltinTools` 把执行器和 ToolDefinition 放在同一条 entries 列表里，`tools` 的键集合与 `toolDefs` 的名字集合天然一致（`registry.test.ts` 双向断言这一点），不会出现"模型可见但循环无法执行"的名字。
 - **schema 面向模型，校验为手写实现**：parameters 字段是 JSON Schema（描述 JSON 参数结构的规范格式），随请求传给模型引导其生成参数；运行时不加载 schema 校验库，而是用 `shared.ts` 里的手写校验函数（`requireString` / `optInt` / `optStringArray`）逐个字段检查——失败抛 `ToolError`，由 `makeTool` 统一转成 `{status:"error"}` 结果，异常永远不逃出执行器。
 - **fs 工具不做工作目录越界拦截**：路径只经 `path.resolve(workspace, p)` 解析，越界与否交给权限网关判定（越界会变成一次可由人批准的确认）——如果工具层先拒绝，人工批准后的调用仍会失败，确认就失去意义。
@@ -36,6 +36,7 @@ export function createBuiltinTools(opts: {
   memory: MemoryStore
   tavilyApiKey: string
   exec?: Partial<{ timeoutMs: number; maxOutputBytes: number }>
+  web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean }>
   fetchImpl?: typeof fetch
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] }
 
@@ -85,8 +86,10 @@ export function makeTool<N extends string>(
 
 ### web 工具（tools/web.ts）
 
-- **web_search**：POST `https://api.tavily.com/search`，体为 `{api_key, query, max_results}`；`maxResults` 默认 5、钳制在 [1, 10]。`output` 是给模型的 markdown 列表（`- [title](url)：content`），无结果输出 `(no results)`；`data` 携带原始三元组 `{results: [{title, url, content}]}` 供渲染。
-- **web_fetch**：只接受 http(s) URL；GET 且跟随重定向；非 2xx 报 `HTTP <status> <statusText> for <url>`。HTML 经 linkedom 解析 + Readability（Mozilla 的正文提取库）取文章正文；提取为空时回退为移除 `script/style/noscript/template/svg` 后的 body 文本（对原始 HTML 重新解析，避免污染）；非 HTML 内容按纯文本返回。响应体**先截断后解析**：超过 `maxFetchBytes`（默认 512 KiB，`512 * 1024`）按字节截断并附 `...[truncated, dropped N bytes]...` 标记——先截断是为了避免超大页面在 DOM 解析阶段占用过多内存。
+两个工具的每次请求都带 `AbortSignal.timeout(timeoutMs)`（默认 20 秒，`config.yaml` 的 `web.timeoutMs`）——卡死的远端主机不能拖住一个 run。
+
+- **web_search**：POST `https://api.tavily.com/search`，体为 `{api_key, query, max_results}`；`maxResults` 默认 5、钳制在 [1, 10]。目标是固定的公网 Tavily 域名，**不走私网检查**。`output` 是给模型的 markdown 列表（`- [title](url)：content`），无结果输出 `(no results)`；`data` 携带原始三元组 `{results: [{title, url, content}]}` 供渲染。
+- **web_fetch**：只接受 http(s) URL。内置一层 SSRF（Server-Side Request Forgery，服务端请求伪造——诱导服务器自己去访问内网地址的攻击）防护：不使用 fetch 的自动跟随重定向，而是手工循环（至多 `DEFAULT_MAX_REDIRECTS = 5` 跳），每一跳的目标——初始 URL 与每个 `Location`——都在真正请求前经 DNS 解析（字面 IP 直接判定）并按拒绝名单核查：loopback/未指定/链路本地/私网地址（127/8、0.0.0.0、::1、`::ffff:` 映射、10/8、172.16–31、192.168/16、169.254/16、fc00::/7、fe80::/10）一律拒绝，除非 config 里 `web.allowPrivateNetworks: true` 显式豁免（如允许抓本机 Ollama 端点）。非 2xx 报 `HTTP <status> <statusText> for <url>`。HTML 经 linkedom 解析 + Readability（Mozilla 的正文提取库）取文章正文，失败回退为移除 `script/style/noscript/template/svg` 后的 body 文本（对原始 HTML 重新解析，避免污染），仍为空则 `(no extractable text content)`；非 HTML 内容按纯文本返回。响应体经流式读取、**越过 `maxFetchBytes`（默认 512 KiB）即 cancel 连接**——上限施加于 DOM 解析之前，超大页面无法在解析阶段吃内存；截断附 `...[truncated, dropped N bytes]...` 标记。
 
 ### memory 工具（`tools/memory.ts`）
 
@@ -123,7 +126,8 @@ export function makeTool<N extends string>(
 - **参数校验失败/未知工具名**：在权限检查**之前**就被拦截为 error result，不会进权限判定，也不会执行。
 - **fs_read/fs_list 仅支持 UTF-8 文本**：二进制文件的读取结果为替换字符，判断交给上层（fs_edit 有显式二进制拦截）。
 - **网络工具的失败即结果**：web_search/web_fetch 的网络错误、非 2xx、JSON 解析失败都是 error result 文本，模型可以看到并决定下一步；不带自动重试。
-- **exec 的输出上限与超时都可配**：daemon 从 `config.yaml` 的 `exec.timeoutMs` / `exec.maxOutputBytes` 传入（`packages/server/src/run.ts` 的装配），两处默认值与工具内默认一致（60s / 100 KiB）。
+- **exec 与 web 的限制都可配**：daemon 从 `config.yaml` 传入 `exec.timeoutMs` / `exec.maxOutputBytes` 与 `web.timeoutMs` / `web.allowPrivateNetworks`（`packages/server/src/run.ts` 的装配），两处默认值与工具内默认一致（60s / 100 KiB；20s / false）。
+- **私网目标默认拒绝**：web_fetch 的 SSRF 防护意味着默认抓不到 `http://127.0.0.1:*` 这类本机服务；需要时在 config 显式 `web.allowPrivateNetworks: true`——这是有意的双门设计，不是缺陷。
 
 ---
 
@@ -133,3 +137,4 @@ export function makeTool<N extends string>(
 - [permissions](./permissions.md)：`risk` 如何变成 allow/confirm 判定
 - [provider](./provider.md)：`ToolDefinition` 如何进入请求体
 - [memory](./memory.md)：memory 工具背后的存储与检索
+- [mcp](./mcp.md)：同一 ToolExecutor 契约的另一种工具来源

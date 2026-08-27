@@ -31,12 +31,13 @@ export function resolvePaths(home?: string): KclawPaths
 | `<home>/memory/index.db` | 记忆 FTS5 索引，派生物 | MemoryStore |
 | `<home>/sessions/<id>/` | 每会话一目录（meta.json + messages.jsonl） | SessionStore |
 | `<home>/jobs.db` | 定时任务表 | JobScheduler |
-| `<home>/attachments/<id>/` | 大附件外存目录 | 预留：目录会创建，当前代码无写入方 |
-| `<home>/logs/` | 日志目录 | 预留：同上 |
+| `<home>/usage.db` | 每次 LLM 运行的 token 用量台账 | UsageStore |
+| `<home>/attachments/<id>/` | 附件外存目录（每会话一个子目录） | server 上传路由 `routes/attachments.ts`；运行时只读挂载 |
+| `<home>/logs/` | 日志目录 | 预留：目录会创建，当前代码无写入方 |
 | `<home>/daemon.json` | daemon 存活标识（server 侧） | `launchDaemon` |
 | `<home>/token` | daemon 鉴权 token（server 侧） | `loadOrCreateToken` |
 
-`attachments` 与 `logs` 两个目录在当前源码中只有路径创建、没有写入方——如实记录为预留。
+`logs` 目录在当前源码中只有路径创建、没有写入方——如实记录为预留；`attachments` 由上传路由写入、由权限引擎的 readRoots 与附件挂载读取，见 [run-manager](../server/run-manager.md)。
 
 ---
 
@@ -54,6 +55,10 @@ export function resolvePaths(home?: string): KclawPaths
 | `permissions.sessionGrants` | `true` | 会话内"本次允许"记忆是否生效 |
 | `memory.autoExtract` / `extractModel` | `false` / `""` | 自动记忆抽取开关与抽取用模型，由 server RunManager 消费（见 [memory](./memory.md)） |
 | `web.tavilyApiKey` | `""` | web_search 的 Tavily 密钥 |
+| `web.timeoutMs` | `20000` | 每次网络抓取（搜索与网页）的 AbortSignal 超时，卡死的主机不能拖住一个 run |
+| `web.allowPrivateNetworks` | `false` | `true` 时豁免 web_fetch 的私网/回环目标拒绝（SSRF 防护，如允许抓本机 Ollama 端点），由 run 装配传入工具 |
+| `usage.prices` | `{}` | 模型 → `{inputPerM?, outputPerM?}`：每百万 token 的美元单价，用量台账算成本用；缺条目的模型成本按 0 |
+| `mcp.servers` | `{}` | 外部 MCP server 配置表（stdio/http 两种形态），daemon 启动时据此装配 McpManager（见 [mcp](./mcp.md)） |
 | `exec.timeoutMs` / `maxOutputBytes` | `60000` / `102400`（100 KiB） | exec 工具超时与输出截断上限 |
 | `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 清理用（见 [jobs](./jobs.md)） |
 | `sessions.compactThreshold` / `compactKeep` | `40` / `25` | 会话压缩：active history 达到 `compactThreshold` 条触发压缩（与循环 window 同为 40，消除静默截断盲区），压缩后保留最近 `compactKeep` 条原文；缺省由 server RunManager 兜底 |
@@ -63,7 +68,7 @@ export function resolvePaths(home?: string): KclawPaths
 
 读（`loadConfig(paths)`）：缺失/空文件 → 默认值的克隆；YAML 语法错误或非映射结构 → 抛错；其余 → `deepMerge(defaults 克隆, 文件内容)`。**没有结构校验**：多余字段原样保留，字段类型错误在消费方才暴露。
 
-写（`saveConfig(paths, config)`）：把 config 整个序列化成 YAML **整文件重写**（不是增量修改）。权限现状如实记录：`saveConfig` 不设置文件 mode（跟随系统默认，通常 0644 可被同机其他用户读取）；而 config.yaml 含 API key，所以 CLI 向导在 `saveConfig` 之后显式 `chmodSync(paths.config, 0o600)`（`packages/cli/src/wizard.ts`）——直接调用 `saveConfig` 的代码需要自行处理这一点。
+写（`saveConfig(paths, config)`）：把 config 整个序列化成 YAML **整文件原子重写**——`writeFileAtomic(paths.config, stringify(config), 0o600)`（`storage/atomic.ts`：先写 `<path>.tmp` 再 rename，POSIX 同目录 rename 原子；mode 0600，因文件含明文 API key）。CLI 向导保存后仍保留一次显式 `chmodSync(0o600)`（双保险，见 [onboarding](../cli/onboarding.md)）。
 
 ---
 
@@ -74,7 +79,8 @@ export function resolvePaths(home?: string): KclawPaths
 export interface KclawPaths {
   home: string; config: string; agentsMd: string
   memoryDir: string; memoryNotesDir: string; memoryIndexDb: string
-  sessionsDir: string; jobsDb: string; attachmentsDir: string; logsDir: string
+  sessionsDir: string; jobsDb: string; usageDb: string
+  attachmentsDir: string; logsDir: string
 }
 
 // packages/core/src/storage/config.ts
@@ -95,7 +101,7 @@ export function readJsonl(file: string): unknown[]
 
 每个会话一个目录 `<sessionsDir>/<id>/`，两个文件（`SessionStore`）：
 
-- `meta.json`：`SessionMeta { id, title, createdAt, updatedAt, jobId?, workdir?, deleted?, deletedAt?, compactedSummary?, compactedUpto? }`，其中 `compactedSummary` 为滚动压缩摘要、`compactedUpto` 为摘要覆盖到的最后一条消息 id，其后为 active window，整文件重写更新（`updateMeta` 合并 patch、`undefined` 键删除、总是刷新 `updatedAt`）。
+- `meta.json`：`SessionMeta { id, title, createdAt, updatedAt, jobId?, workdir?, model?, readonly?, deleted?, deletedAt?, compactedSummary?, compactedUpto? }`，其中 `model` 为会话级模型覆盖（空/缺省回落 daemon 默认）、`readonly` 为会话级只读开关（写/exec 工具被拒，见 [permissions](./permissions.md)），`compactedSummary` 为滚动压缩摘要、`compactedUpto` 为摘要覆盖到的最后一条消息 id，其后为 active window，整文件重写更新（`updateMeta` 合并 patch、`undefined` 键删除、总是刷新 `updatedAt`）。
 - `messages.jsonl`：一行一条 `Message`，append-only。追加消息时顺带重写 meta.json 刷 `updatedAt`。
 
 `Message`（`packages/core/src/protocol/messages.ts`）基础字段 `{ id, sessionId, role: "user" | "assistant" | "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因）。id 前缀 `msg_` / `ses_`，ULID。
@@ -115,6 +121,28 @@ export function readJsonl(file: string): unknown[]
 
 ---
 
+## 用量台账（`storage/usage.ts`）
+
+`UsageStore` 是一张只追加、不修改的 SQLite 台账（`<home>/usage.db`，表 `usage` + `at` 列索引）：daemon 每结束一个 run 就记一行 `{sessionId, runId, model, inputTokens, outputTokens, at}`，行主键为 `u_<sessionId>_<runId>`。记账发出后不等结果：RunManager 调用它时包了 try/catch，记录失败只打一行日志，用量统计永远不影响 run 本身。
+
+```ts
+export interface UsageAgg { key: string; inputTokens: number; outputTokens: number; costUsd: number }
+
+class UsageStore {
+  record(row: Omit<UsageRow, "id">): void
+  aggregate(by: "day" | "session" | "model", prices, from?, to?): UsageAgg[]
+  total(prices, from?, to?): { inputTokens; outputTokens; costUsd }
+  close(): void
+}
+```
+
+- **三种聚合桶**：`day`（`at` 的本地日历日 `YYYY-MM-DD`）、`session`（sessionId）、`model`；区间 `[from, to)` 对 ISO `at` 字符串做比较，结果按 key 升序。
+- **成本公式**（`costUsd(row, model, prices)`）：`(input/1e6)·inputPerM + (output/1e6)·outputPerM`，价格表来自 `config.usage.prices`（美元 / 百万 token）；**模型无价格条目时成本恒为 0**（token 照常显示）。桶内成本逐行累加——每行用自己模型的价格，即便桶键是日期或会话。
+
+HTTP 出口与展示见 [http-api](../server/http-api.md) 的 `GET /usage` 与 [webui](../web/webui.md) 的用量页。
+
+---
+
 ## daemon.json 与 token（`packages/server/src/daemon.ts` / `auth.ts`）
 
 - **`<home>/daemon.json`**：启动第一步以 `wx` 独占认领（占位 `{ port: 0, pid, startedAt, starting: true }`；存活 pid 拒绝二次启动，死 pid 回收重认领），listen 成功后回填真实 `{ port, pid, startedAt }`（同一 startedAt，`starting` 移除），是"该 home 下存在一个运行中的 daemon 及其端口"的存活标识。`stop()` 正常结束时删除；若某个停机步骤超时（默认 `DEFAULT_STOP_TIMEOUT_MS = 60000`），`stop()` 抛错且 daemon.json **保留**——进程仍在运行，一条如实的记录比干净的目录更有用（CLI 靠它判断 daemon 状态，见 [daemon](../server/daemon.md)）。
@@ -126,7 +154,7 @@ export function readJsonl(file: string): unknown[]
 
 - **meta.json 原子写**：`writeMeta` 经 `writeFileAtomic`（临时文件 + rename）落盘，meta.json 本身不会被截断；崩溃最坏残留 `<meta.json>.tmp` 孤儿文件，不影响读取。
 - **config 无结构校验**：见上；写错类型（如 `confirmTimeoutMs: "30s"`）在运行时才以意外方式失败。
-- **SQLite 未开 WAL**：jobs.db 与 memory/index.db 都是默认日志模式。单 daemon 进程同步访问（better-sqlite3）下安全；多进程并发写同一 home 是明确不支持的用法。
+- **SQLite 未开 WAL**：jobs.db、memory/index.db 与 usage.db 都是默认日志模式。单 daemon 进程同步访问（better-sqlite3）下安全；多进程并发写同一 home 是明确不支持的用法。
 - **KCLAW_HOME 只在 `resolvePaths` 读取一次**：核心层不缓存，但调用方各自持有解析结果；daemon 启动后改环境变量不影响已创建的路径。
 
 ---

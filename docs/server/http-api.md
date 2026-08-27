@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 15 个业务路由（健康/状态 2 个、会话 7 个、任务 4 个、配置 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`jobs.ts`、`config.ts`）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 24 个业务路由（健康/状态 2 个、会话 10 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 1 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
@@ -11,6 +11,7 @@
 - **404 显式可判别**：会话/任务路由先查存在性（`sessions.meta(id)` / `jobs.get(id)`），不存在返回 `404 {error:"session not found"|"job not found"}`，不依赖异常路径。
 - **配置接口只读且脱敏**：API key 永远掩码返回，没有写回路由——修改配置通过文件（config.yaml）进行，daemon 重启后生效。
 - **审计轨迹没有专门路由**：轨迹页（web 的 `AuditView`）就是 `GET /sessions`（会话下拉）+ `GET /sessions/:id/messages`（按会话读取消息列表）两个只读接口组合而成；不存在 `/audit` 路由。
+- **可选能力按注入条件注册**：附件路由只在传入 `attachmentsDir` 时注册、用量路由只在传入 `UsageStore` 时注册——能力未装配就没有这些路径，而不是"注册了但报错"；`GET /mcp` 则始终存在，daemon 未装配 McpManager 时返回空 server 列表。
 
 ## 路由清单
 
@@ -27,12 +28,15 @@
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
-| POST | `/sessions` | 创建会话 | `{title?, workdir?}`（均可缺省；传入时必须是非空字符串） | 201，`SessionMeta`（title 缺省为 `"新会话"`） |
+| POST | `/sessions` | 创建会话 | `{title?, workdir?}`（均可缺省；传入时必须是非空字符串）；**workdir 缺省落 `config.workspace` 的值**，保证每条会话都带具体工作目录 | 201，`SessionMeta`（title 缺省为 `"新会话"`） |
 | GET | `/sessions` | 会话列表（updatedAt 新的在前） | 查询参数 `deleted=true` 返回回收站会话；缺省只返回未删除会话 | `SessionMeta[]` |
+| GET | `/sessions/:id` | 读单个会话元数据 | — | `SessionMeta` |
 | PATCH | `/sessions/:id` | 改名 | `{title?}`（非空字符串；body 里的 `workdir` 被解析但**不生效**，只有 title 传给 `updateMeta`） | `SessionMeta` |
 | DELETE | `/sessions/:id` | 软删除（移入回收站，标记 `deleted`/`deletedAt`） | — | `SessionMeta` |
 | POST | `/sessions/:id/restore` | 从回收站恢复（清除 `deleted`/`deletedAt`） | — | `SessionMeta` |
 | POST | `/sessions/:id/purge` | 永久删除（整个会话目录删除） | — | `{ok: true}` |
+| POST | `/sessions/:id/model` | 会话级模型切换（只影响此会话**之后**的 run，历史不动） | `{model?}`：provider 条目名（entry key，见 [run-manager](./run-manager.md) 的模型解析）或裸模型名；`""`/缺省清空回落默认；类型不对 400 `model must be a string`，条目不存在 400 `model not found: <name>` | `SessionMeta` |
+| POST | `/sessions/:id/readonly` | 会话级只读开关（write/exec 类工具被拒，见 [permissions](../core/permissions.md)） | `{readonly: boolean}` 必填；`false` 清除标记 | `SessionMeta` |
 | GET | `/sessions/:id/messages` | 读全部消息（轨迹/断线恢复的数据源） | — | `Message[]`（JSONL 逐行读出的完整对话史） |
 
 `:id` 不存在时上述全部返回 `404 {error:"session not found"}`；body 校验失败返回 400（如 `title must be a non-empty string`）。
@@ -47,6 +51,8 @@ interface SessionMeta {
   updatedAt: string     // appendMessage/updateMeta 都会刷新
   jobId?: string        // 由定时任务创建的会话带此字段
   workdir?: string      // 会话级工作目录（run 以它覆盖全局 workspace）
+  model?: string        // 会话级模型覆盖（缺省 → 守护进程默认模型）
+  readonly?: boolean    // 会话级只读模式（write/exec 工具被拒，读取不受限）
   deleted?: boolean
   deletedAt?: string
 }
@@ -56,9 +62,9 @@ interface SessionMeta {
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
-| POST | `/jobs` | 创建定时任务 | `{name, cron, prompt}` 三者都必填、非空字符串（cron 是 cron 表达式：`分 时 日 月 周` 五段的时间表写法） | 201，`Job`；cron 解析失败 400（cron-parser 的原始报文透传） |
+| POST | `/jobs` | 创建定时任务 | `{name, cron, prompt}` 三者都必填、非空字符串（cron 是 cron 表达式：`分 时 日 月 周` 五段的时间表写法）；可选 `{model}`（该任务的模型覆盖，非空字符串） | 201，`Job`；cron 解析失败 400（cron-parser 的原始报文透传） |
 | GET | `/jobs` | 任务列表 | — | `Job[]` |
-| PATCH | `/jobs/:id` | 修改 | `{name?, prompt?, cron?, enabled?}`（enabled 必须是布尔；未知字段忽略） | `Job`；cron 解析失败 400 |
+| PATCH | `/jobs/:id` | 修改 | `{name?, prompt?, cron?, model?, enabled?}`（字符串字段必须非空、enabled 必须是布尔；未知字段忽略） | `Job`；cron 解析失败 400 |
 | DELETE | `/jobs/:id` | 删除 | — | 204 无 body；不存在 404 `{error:"job not found"}` |
 
 `Job` 字段（`packages/core/src/jobs/scheduler.ts`）：
@@ -74,6 +80,7 @@ interface Job {
   lastRunAt?: string
   lastStatus?: "ok" | "error"
   lastError?: string
+  model?: string             // 任务级模型覆盖（缺省 → 回落会话/默认解析链）
 }
 ```
 
@@ -84,6 +91,33 @@ interface Job {
 | GET | `/config` | 读当前配置（脱敏副本） | `KclawConfig`，所有 provider 条目的 `apiKey` 与 `web.tavilyApiKey` 掩码 |
 
 脱敏规则（`sanitizeConfig` + `maskSecret`）：先 `structuredClone` 深拷贝再改（原对象保持不变），掩码为 `"***" + 末 4 字符`（不足 4 字符则纯 `"***"`，空串同）。其余字段原样返回。没有对应的写路由。
+
+### 附件（routes/attachments.ts，仅当注入 `attachmentsDir` 时注册）
+
+| 方法 | 路径 | 用途 | 请求 | 响应 |
+|------|------|------|------|------|
+| POST | `/sessions/:id/attachments?filename=<名>` | 上传附件 | body 是**原始字节流**（Content-Type 任意的 Buffer），文件名走 query；上传即落盘到 `<attachmentsDir>/<sessionId>/<att_<ULID>>__<净化后文件名>` | `{file: {path, name, size}}` |
+| GET | `/sessions/:id/attachments` | 附件清单 | — | `{name, size}[]`，mtime 新的在前；尚无附件目录时返回 `[]` |
+| GET | `/sessions/:id/attachments/:file` | 下载附件 | — | 文件字节流 |
+
+出错形状：缺 `filename` 或空 body → 400；超过上限 **20MB** → 413 `attachment too large (max 20MB)`；下载路径解析后逃出会话附件目录 → 400 `invalid attachment path`（遍历防护）；目标不是文件 → 404 `attachment not found`。文件名经净化处理——剥掉路径分隔符与控制字符等，剥空回落 `"file"`。为接收任意类型的原始 body，该组路由注册了一个通配 content-type 解析器（Buffer 原样收下；JSON parser 仍优先匹配 application/json）。
+
+### 目录浏览与用量
+
+| 方法 | 路径 | 用途 | 请求 | 响应 |
+|------|------|------|------|------|
+| GET | `/fs/browse` | 列出某目录的子目录（WebUI 工作目录选择器的数据源） | query `path`：绝对路径或 `~` 开头（与权限引擎同样的展开规则）；缺省列 `config.workspace` | `{path, parent, dirs}`——path 为符号链接解析后的规范绝对路径；parent 为父目录，文件系统根处为 null；dirs 只含子目录名、大小写不敏感排序。符号链接跟随解析（坏链跳过），macOS 的 `/tmp → private/tmp` 一类仍可导航 |
+| GET | `/usage?by=day\|session\|model` | token/费用台账聚合 | `by` 三选一；无效值静默回落 `day` | `{by, buckets[], total}`——bucket/total 形状同为 `{key, inputTokens, outputTokens, costUsd}`，费用按 `config.usage.prices` 计价，未配置价格的模型计 0 |
+
+`/fs/browse` 的出错是三态 400：`path does not exist: <path>`、`not a directory: <path>`、`cannot read directory: <path>`。这个端点能列出本机任意目录——选择器的设计目的就是允许把工作目录设在任何地方，防线只有与其他 API 相同的 Bearer 鉴权。台账的数据来源见 [storage](../core/storage.md) 的用量台账一节。
+
+### MCP 状态
+
+| 方法 | 路径 | 用途 | 响应 |
+|------|------|------|------|
+| GET | `/mcp` | MCP server 连接状态快照 | `{servers: [{name, state, tools: {name}[], lastError?}]}` |
+
+路由始终注册；daemon 未装配 McpManager（`mcp.servers` 为空）时 `servers` 为空数组。消费方是 CLI 的 `kclaw mcp [list]` 命令；连接状态机见 [mcp](../core/mcp.md)。
 
 ### WS 与静态托管
 
@@ -127,10 +161,13 @@ app.addHook("preHandler", async (request, reply) => {
 - **PATCH `/sessions/:id` 的 workdir 是解析但未生效的字段**（源码只把 title 传给 `updateMeta`）——API 消费者不应依赖它。
 - **`POST /jobs` 的 cron 校验依赖 cron-parser 的报错文本**，客户端展示的是原始英文错误。
 - **并发写无版本控制**：两个客户端同时 PATCH 同一资源是"后写赢"，没有乐观锁（加版本号防并发覆盖的机制）。
+- **上传 ≠ 挂载**：附件这三个路由只负责把字节写到磁盘、列举和下载。附件要真正进入对话，还需要客户端在下一条 send_message 帧里带上这些文件的路径，由 run 的挂载步骤转成模型能读的内容——见 [realtime](./realtime.md) 与 [run-manager](./run-manager.md)。
 
 ## 关联
 
 - [daemon](./daemon.md)：鉴权豁免的设计理由、静态托管的配置来源
 - [realtime](./realtime.md)：`/ws` 端点的帧协议
-- [storage](../core/storage.md)：SessionStore/JobScheduler 的持久化实现
+- [run-manager](./run-manager.md)：send_message 背后的入队与附件挂载
+- [storage](../core/storage.md)：SessionStore/JobScheduler/UsageStore 的持久化实现
+- [mcp](../core/mcp.md)：`GET /mcp` 快照背后的连接管理器
 - [jobs](../core/jobs.md)：cron 语义与 nextRunAt 推进规则

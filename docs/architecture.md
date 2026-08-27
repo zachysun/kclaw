@@ -33,10 +33,10 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 | 包 | 入口 | 内容 |
 |----|------|------|
-| core | `packages/core/src/index.ts` | 入口统一导出 9 个子目录：`protocol/`（消息/块/事件/ID）、`provider/`（OpenAI 兼容客户端+重试）、`agent/`（循环+上下文组装+工具契约）、`storage/`（路径/配置/JSONL，即每行一条 JSON 的文本文件）、`session/`（SessionStore）、`permissions/`（ConfigPermissionGate）、`memory/`（MemoryStore）、`tools/`（9 个内置工具）、`jobs/`（JobScheduler） |
-| server | `packages/server/src/index.ts` | `app.ts`（createApp 装配）、`daemon.ts`（launchDaemon）、`auth.ts`（token）、`bus.ts`（EventBus）、`run.ts`（RunManager）、`confirm.ts`（ConfirmationBroker）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`、`routes/`（sessions/jobs/config）、`autoname.ts` |
-| cli | `packages/cli/src/index.ts` | commander 命令树（默认进 chat）；`chat.ts`（REPL+渲染）、`client.ts`（KclawClient）、`daemon-ctl.ts`（探测/启动/停止）、`slash.ts`、`wizard.ts`、`provider-check.ts`、`web-cmd.ts` |
-| web | `packages/web/src/main.tsx` | 视图（chat/sessions/jobs/audit/trash）、`ws.ts`（WS 客户端）、`token.ts`（token 引导） |
+| core | `packages/core/src/index.ts` | 入口统一导出 11 个子目录：`protocol/`（消息/块/事件/ID）、`provider/`（OpenAI 兼容客户端+重试）、`agent/`（循环+上下文组装+工具契约）、`storage/`（路径/配置/JSONL，即每行一条 JSON 的文本文件；含用量台账 `usage.ts`）、`session/`（SessionStore）、`permissions/`（ConfigPermissionGate）、`memory/`（MemoryStore）、`tools/`（9 个内置工具）、`jobs/`（JobScheduler）、`mcp/`（MCP 客户端管理器）、`notify/`（任务完成通知） |
+| server | `packages/server/src/index.ts` | `app.ts`（createApp 装配）、`daemon.ts`（launchDaemon）、`auth.ts`（token）、`bus.ts`（EventBus）、`run.ts`（RunManager）、`confirm.ts`（ConfirmationBroker）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`、`routes/`（sessions/attachments/jobs/config/fs/usage）、`autoname.ts` |
+| cli | `packages/cli/src/index.ts` | commander 命令树（默认进 chat）；`chat.ts`（REPL+渲染+@引用展开）、`client.ts`（KclawClient）、`daemon-ctl.ts`（探测/启动/停止）、`slash.ts`、`file-refs.ts`、`wizard.ts`、`provider-check.ts`、`web-cmd.ts` |
+| web | `packages/web/src/main.tsx` | 视图（chat/sessions/jobs/audit/usage/trash + DirectoryPicker）、离线外壳（`sw.js`/manifest/OfflineBanner）、`ws.ts`（WS 客户端）、`token.ts`（token 引导） |
 
 ---
 
@@ -45,9 +45,11 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 ```
 ┌─ kclaw daemon（常驻进程，唯一状态权威）───────────────────────┐
 │  127.0.0.1:<port>  （port 写入 <home>/daemon.json）            │
-│  HTTP: /health /status /sessions* /jobs* /config （Bearer）     │
+│  HTTP: /health /status /sessions* /attachments* /jobs*         │
+│        /config /fs/browse /usage /mcp （Bearer）               │
 │  WS:   /ws（首帧 auth 或 ?token=；subscribe + 命令 + 事件流）   │
 │  常驻: RunManager（会话串行 run）· scheduler tick（默认 30s）   │
+│        · McpManager（仅当 mcp.servers 非空时装配，异步连接）    │
 └────────────┬────────────────────────┬────────────────────────┘
              │ HTTP+WS                │ HTTP+WS
       ┌──────┴──────┐          ┌──────┴──────┐
@@ -62,7 +64,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
   - pid 仍在运行但不健康 → 只等待、不重复启动（防孤儿 daemon）。
 - **daemon 就绪信号**：`launchDaemon` 第一步即以 `wx` 独占认领 `<home>/daemon.json`（占位 `{port: 0, pid, startedAt, starting: true}`；存活 pid 拒绝二次启动，死 pid 回收重认领），listen 成功后回填 `{port, pid, startedAt}`；bin 脚本向 stdout 打一行 `{"port":<port>}`。
 - **停止**：SIGTERM/SIGINT 走有界 stop（每步默认 60s 超时），stop 失败保留 daemon.json（进程仍在运行，pidfile 必须如实反映）。
-- **状态全部在 `<home>`**（`KCLAW_HOME` ?? `~/.kclaw`，`resolvePaths` in `packages/core/src/storage/paths.ts`）：`config.yaml`、`AGENTS.md`、`token`、`daemon.json`、`sessions/`、`memory/`（`notes/` + `index.db`）、`jobs.db`、`attachments/`、`logs/`。
+- **状态全部在 `<home>`**（`KCLAW_HOME` ?? `~/.kclaw`，`resolvePaths` in `packages/core/src/storage/paths.ts`）：`config.yaml`、`AGENTS.md`、`token`、`daemon.json`、`sessions/`、`memory/`（`notes/` + `index.db`）、`jobs.db`、`usage.db`、`attachments/`、`commands/`、`logs/`。
 
 ---
 
@@ -72,11 +74,14 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 ```
 用户输入（CLI readline / WebUI 输入框）
-  → WS 帧 {type:"send_message", sessionId, text}          packages/server/src/ws.ts
-  → 校验 session 存在 → 立即回 send_message_ack（不等 run）
-  → RunManager.enqueue（同会话 promise 链排队；跨会话并发） packages/server/src/run.ts
+  → WS 帧 {type:"send_message", sessionId, text, attachments?}   packages/server/src/ws.ts
+  → 校验 session 存在与附件引用 → 立即回 send_message_ack（不等 run）
+  → RunManager.enqueue（同会话 promise 链排队；跨会话并发；排队取消） packages/server/src/run.ts
+      ├─ 附件引用挂载为 attachment 块（多模态/内联文本/fs_read 提示三态）
+      ├─ 模型三级解析 input.model → session meta → 默认（条目名→线上模型名）
       ├─ memory.search(用户文本前 200 字符, top 5) → note 块注入用户消息
-      ├─ 读 history（在追加用户消息之前）→ createBuiltinTools → ConfigPermissionGate
+      ├─ 读 history（在追加用户消息之前）→ createBuiltinTools + extraTools(MCP)
+      │    → ConfigPermissionGate（readRoots=附件目录、readonly 短路）
       └─ runAgent(...)                                     packages/core/src/agent/loop.ts
            ├─ llm.stream(toProviderMessages(history, window=40))   ← 上下文组装 agent/context.ts
            ├─ 流式事件 text/thinking/tool_call created→delta→…
@@ -89,6 +94,8 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
   ├─ deps.onMessage → SessionStore.appendMessage → sessions/<id>/messages.jsonl
   └─ deps.onEvent  → bus.emit → JSON.stringify → 只发订阅了该 sessionId 的 socket
                                                           packages/server/src/bus.ts
+  → run 收尾：usage.db 记一行用量（失败仅日志）；干净 end_turn 且开启 autoExtract
+    时异步提取记忆；非 job 首条消息触发 autoname（成功更名广播 session.renamed）
   → 客户端渲染（CLI 写 stdout；WebUI 更新 React 状态）→ run.completed 终态
 ```
 
@@ -118,7 +125,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 - **daemon 崩溃**：JSONL 容忍尾部残缺行（只写了一半的行；`repairTornTail`/`readJsonl`，`packages/core/src/storage/jsonl.ts`）；在途 job 的该次触发已在认领（`claimDue`）时推进 `next_run_at`，被杀死的这一次不会重放，job 在下个调度点照常触发——"认领即推进到 now 之后下一次"的语义保证不重放积压。
 - **provider 彻底失败**：`runAgent` 不 reject——部分内容以 `stopReason:"error"` 持久化，`llm.failed {willRetry:false}` + `run.failed` 收尾；瞬时错误由 provider 层 `withRetry`（3 次尝试）内部消化并以 `llm.failed {willRetry:true}` 事件可见。
-- **取消**：WS `run.cancel` → `RunManager.cancel` → `AbortController.abort()` → 循环在下一个检查点以 `stopReason:"aborted"` 终止；确认等待中的 abort 不是"超时拒绝"（不发 `confirmation.resolved`）。
+- **取消**：WS `run.cancel` → `RunManager.cancel`：活跃 run 直接 `abort()`；只有排队的 run 则记入取消集合、出队瞬间即中止——两者都返回 true → 循环在下一个检查点以 `stopReason:"aborted"` 终止；确认等待中的 abort 不是"超时拒绝"（不发 `confirmation.resolved`）。
 - **已知限制**：exec 规则按归一化命令匹配（空白折叠、命令取 basename，`/bin/rm` ≡ `rm`），含接续符（`;` `&&` `||` `|`、换行、命令替换 `$(...)`/反引号）的命令不再命中 allow/会话授权（回退 confirm），deny 对每个子命令分别匹配——但 flag 重排（`-r -f` 与 `-rf`）与引号内分隔符仍不识别，规则是尽力而为的防线、不是沙箱；fs 边界与路径规则已按 realpath 解析（symlink 逃逸落到 confirm，deny 无法经 symlink 绕过）；CLI 的 respawn 目标解析假定 repo checkout（`packages/cli` 与 `packages/server` 相邻）——独立分发包由 `kclaw` 包的 esbuild 产物解决。
 
 ---
@@ -129,4 +136,8 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 - [agent-loop](./core/agent-loop.md)：run 生命周期状态机与工具回合
 - [daemon](./server/daemon.md)：daemon 装配序、有界 stop、pidfile 语义
 - [run-manager](./server/run-manager.md)：服务端侧的会话串行与确认网关
+- [http-api](./server/http-api.md)：24 条业务路由清单（含附件/用量/目录浏览/MCP 状态）
+- [mcp](./core/mcp.md)：条件装配的 MCP 工具适配器
+- [storage](./core/storage.md)：`<home>` 布局、config 与 usage.db 台账
+- [webui](./web/webui.md)：WebUI 视图、token 引导与 PWA 外壳
 - [cli](./cli/cli.md)：REPL 渲染契约与断线重连

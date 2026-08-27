@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/daemon.ts` 的 `launchDaemon` 是 daemon 进程的唯一装配入口：把路径、配置、token、各存储、LLM 客户端、RunManager、HTTP/WS 应用、调度心跳按固定顺序组装起来并开始监听；返回的 `Daemon` 句柄提供有界的 `stop()`。配套的 `packages/server/src/auth.ts` 负责 token 的生成与校验。CLI 侧的探测/重启/停止逻辑（pid 校验、健康轮询）在 `packages/cli/src/daemon-ctl.ts`，本文同时说明两侧的契约。
+`packages/server/src/daemon.ts` 的 `launchDaemon` 是 daemon 进程的唯一装配入口：把路径、配置、token、各存储、LLM 客户端、MCP 管理器、RunManager、HTTP/WS 应用、调度心跳按固定顺序组装起来并开始监听；返回的 `Daemon` 句柄提供有界的 `stop()`。配套的 `packages/server/src/auth.ts` 负责 token 的生成与校验。CLI 侧的探测/重启/停止逻辑（pid 校验、健康轮询）在 `packages/cli/src/daemon-ctl.ts`，本文同时说明两侧的契约。
 
 ## 设计决策
 
@@ -13,6 +13,7 @@
 - **鉴权是"每路由必带 Bearer"加白名单豁免**：一个 `preHandler` 钩子拦截全部路由，只有三处豁免——`/health`、`/ws`、静态 WebUI 外壳（见下）。豁免列表是封闭集合，新增路由默认受保护。
 - **有界停止**：`stop()` 的每一步（停调度、关服务器）有独立超时（默认 60s）。超时则 `stop()` reject、daemon.json **保留**——进程仍在运行，指向它的文件必须与事实一致；虚报"已停止"会诱发双 daemon、job 双触发。
 - **provider 缺失是硬错误**：装配期就抛错终止，不启动一个"半配置"的 daemon。
+- **MCP 是可选装配，且连接不阻塞启动**：`mcp.servers` 配了条目才构建 `McpManager`，没配则整个管理器（连同 `/mcp` 的数据和交给 RunManager 的 extraTools）都不存在。配了的情况下，`mcpManager.start()` 也是在监听开始之后才调用、并且不等它完成——daemon 照常宣布就绪对外服务，各 server 在后台陆续连上，连上多少就从下一轮 run 起贡献多少工具。连接失败只打一行日志，永远不会拖垮 daemon。
 
 ## 接口
 
@@ -25,7 +26,7 @@ export interface Daemon {
   port: number        // 实际绑定的端口（0 启动时为临时端口）
   token: string       // app 要求的 Bearer token（<home>/token）
   pid: number         // 本进程 pid，即 daemon.json 里记录的
-  stop(): Promise<void>   // 有界拆除：tick → app → 删 daemon.json；幂等（重复调用立即 resolve）
+  stop(): Promise<void>   // 有界拆除：tick → mcp → app → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
 }
 
 export interface LaunchDaemonOptions {
@@ -36,6 +37,7 @@ export interface LaunchDaemonOptions {
   schedulerIntervalMs?: number     // 默认 30s
   stopTimeoutMs?: number           // 默认 60s；测试注入 50ms
   webDist?: string                 // 静态托管的 WebUI 目录
+  readonly?: boolean               // 只读模式：所有会话起步即只读（fs_write/fs_edit/exec 被拒）
 }
 
 export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daemon>
@@ -70,14 +72,20 @@ new SessionStore / MemoryStore      MemoryStore 构造后立即 reconcile()：
                                     notes/*.md 是事实来源，SQLite 索引是派生物，
                                     启动时对账（手改/删除的笔记在启动时被感知）
 new JobScheduler(paths.jobsDb)
+new UsageStore(paths.usageDb)       token 台账（SQLite，stop 时 close）
 defaultLlmFactory(config) + resolveModel(config)   见"provider 解析"
 new EventBus()
-new RunManager({...})               会话串行 run 执行器（见 run-manager）
-createApp({home, token, stores, bus, run, webDist})  Fastify 应用（见 http-api）
+new McpManager({servers})           仅当 config.mcp.servers 非空；否则 undefined（不装配）
+new RunManager({...})               注入 usageStore、readonly（opts.readonly 时）、
+                                    extraTools: () => mcpManager.tools()（有管理器时）；见 run-manager
+createApp({home, token, stores, bus, run, mcp, attachmentsDir, usage, webDist})
+                                    Fastify 应用（见 http-api）；attachmentsDir/usage 传入时
+                                    对应的附件与用量路由才注册，mcp 提供 /mcp 的快照
 await app.listen({ port: 0, host: "127.0.0.1" })
 port = app.server.address().port
 writeFileSync(<home>/daemon.json, {port, pid, startedAt})   ← 回填占位（同 startedAt、starting 移除）；listen 之后、tick 之前
 createNotifier(notify.channels)     ← 仅当 notify.channels 非空时创建；空则 undefined，tick 完全不推送
+void mcpManager.start()             ← 有管理器才执行；不阻塞就绪，连接随后陆续建立
 startSchedulerTick({...})           立即一次检查 + 每 30s 一次（deps 携带 notifier 与 webBase=`http://127.0.0.1:<port>`，用于推送中的 `?session=` 链接）
 return { port, token, pid, stop }
 ```
@@ -128,7 +136,10 @@ bin 脚本注册信号处理：SIGTERM/SIGINT → `shutdown()`（`stopping` 标�
 
 ```
 withStopTimeout(tick.stop(), 60s)   // 停心跳；tick.stop 会 await 所有进行中的 job run
+withStopTimeout(mcpManager.stop(), 60s)
+                                    // 有管理器才有此步：断开全部 MCP server（幂等）
 withStopTimeout(app.close(), 60s)   // 关服务器；app.close 会 await 所有连接
+usage.close()                       // 关台账数据库
 rmSync(<home>/daemon.json)          // 只有全部成功才删
 ```
 
@@ -149,11 +160,13 @@ rmSync(<home>/daemon.json)          // 只有全部成功才删
 - **`/health` 无鉴权，因此也没有信息泄露控制**：它只返回 `{ok:true}`，不暴露版本/端口/pid；`/status`（version、uptimeSec）受鉴权保护。
 - **配置文件损坏即启动失败**：`loadConfig` 对无法解析的 YAML 直接抛错（静默退回默认值会丢掉用户的权限规则），daemon 不启动。
 - **bin 假定构建产物存在**：`kclaw-server.mjs` import 的是 `../dist/index.js`，packages/server 未构建时启动直接失败（CLI 的错误信息里提示 `pnpm -C packages/server build`）。
+- **MCP server 挂了不牵连 daemon**：连接/调用失败只进状态与日志（`kclaw mcp <name> error: …`），该 server 的工具从下一次 run 起消失，其余功能不受影响（见 [mcp](../core/mcp.md)）。
 
 ## 关联
 
 - [http-api](./http-api.md)：鉴权钩子之下的全部路由
 - [realtime](./realtime.md)：/ws 的连接鉴权与事件广播
 - [run-manager](./run-manager.md)：launchDaemon 装配出的 RunManager 与调度心跳
-- [storage](../core/storage.md)：`<home>` 目录布局与 config 加载
+- [mcp](../core/mcp.md)：条件装配的 McpManager 与 `/mcp` 快照的数据源
+- [storage](../core/storage.md)：`<home>` 目录布局、config 加载与 usage.db
 - [architecture](../architecture.md)：daemon 在进程模型中的位置

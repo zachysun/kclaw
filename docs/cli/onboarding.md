@@ -10,7 +10,7 @@
 - **路径解析复用 core**：`detectProviderStatus` 与向导都用 `@kclaw/core` 的 `resolvePaths`/`loadConfig`/`saveConfig`（真实的 `KclawPaths` 形状），不自建替代实现，CLI 侧的路径解析永远不会与 daemon 发生漂移（其 mkdir 副作用只是提前创建 home 目录树，任何 kclaw 调用本来也会创建）。
 - **向导是验证环节不是必经之路**：只在 "missing" 且 stdout 是 TTY 时启动；取消（Ctrl+C 等）或"重试？→否"都直接静默退出，**文件系统零改动**——绝不写入不完整的 config.yaml。
 - **连通测试用最小请求**：一次 `max_tokens: 1` 的补全请求，验证 key、model、baseUrl 三项组合可用，不浪费 token。
-- **key 文件权限 0600**：`saveConfig` 用普通 `writeFileSync`（不能设 mode），向导在保存后立刻 `chmodSync(paths.config, 0o600)`——API key 持久化在这个文件里，仅属主可读写。
+- **key 文件权限 0600**：`saveConfig` 本身就是原子写（`writeFileAtomic`：临时文件落盘后 rename，mode 直接 0600）；向导保存后再 `chmodSync(paths.config, 0o600)` 是双保险——若该文件此前以更宽权限存在也一并收紧。API key 持久化在这个文件里，仅属主可读写。
 - **`kclaw web` 不向用户展示 token**：URL 带 token 只用于浏览器一次交接，终端打印的地址刻意去掉 `?token=` 部分（用户能看见/分享的是不带 token 的 URL）。
 
 ## provider 判定（packages/cli/src/provider-check.ts）
@@ -61,7 +61,7 @@ export function detectProviderStatus(home: string): ProviderStatus
 
 "重试？→ 是"回到上表对应的步骤，"否"或取消 → `已退出，未做任何修改`，返回 `"aborted"`。
 
-**成功收尾**：`loadConfig` 读旧配置 → `saveConfig` 合并写入 `{providers: {default: tpl.id, entries: {...旧, [tpl.id]: entry}}}`（其余配置原样保留）→ `chmodSync(paths.config, 0o600)` → `已写入 config.yaml，开始对话`，返回 `"configured"`，`chatAction` 继续进入 REPL。
+**成功收尾**：`loadConfig` 读旧配置 → `saveConfig` 合并写入 `{providers: {default: tpl.id, entries: {...旧, [tpl.id]: entry}}}`（其余配置原样保留；原子写、mode 0600）→ `chmodSync(paths.config, 0o600)`（双保险）→ `已写入 config.yaml，开始对话`，返回 `"configured"`，`chatAction` 继续进入 REPL。
 
 ## kclaw web（packages/cli/src/web-cmd.ts）
 

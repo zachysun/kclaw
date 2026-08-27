@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/ws.ts` 的 `registerWsRoutes` 提供 `GET /ws` 端点（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送），定义连接认证、5 种客户端命令帧与各自应答（ack）。`packages/server/src/bus.ts` 的 `EventBus` 是进程内的事件分发器：把 agent 循环产生的 28 种事件按会话投递给订阅了它的连接。两者共同构成 daemon 的实时通信层。
+`packages/server/src/ws.ts` 的 `registerWsRoutes` 提供 `GET /ws` 端点（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送），定义连接认证、5 种客户端命令帧与各自应答（ack）。`packages/server/src/bus.ts` 的 `EventBus` 是进程内的事件分发器：把 agent 循环与服务端流程产生的 29 种事件按会话投递给订阅了它的连接。两者共同构成 daemon 的实时通信层。
 
 ## 设计决策
 
@@ -30,7 +30,7 @@
 | `{"type":"subscribe","sessionId"}` | sessionId 非空字符串 | `{"type":"subscribed","sessionId"}` | `subscribe requires a non-empty string sessionId` |
 | `{"type":"unsubscribe","sessionId"}` | 同上 | `{"type":"unsubscribed","sessionId"}` | 同上（unsubscribe 版） |
 | `{"type":"confirmation.resolve","confirmationId","approved","client"?}` | confirmationId 非空字符串、approved 布尔、client 可选 `"cli"|"web"`（缺省按 cli） | `{"type":"confirmation.resolved_ack","confirmationId","ok":true}` | `unknown confirmation`（未知/已裁决/已过期）；`confirmation gateway unavailable`（app 未接 RunManager）；字段不合法的具体提示 |
-| `{"type":"send_message","sessionId","text"}` | 两者非空字符串 | `{"type":"send_message_ack","sessionId"}`——**立即**返回，不等 run | `session not found`；`run manager not available`；字段不合法提示。ack 之后 enqueue 才失败（存储错误）时，error 帧只发到这条 socket |
+| `{"type":"send_message","sessionId","text","attachments"?}` | sessionId/text 非空字符串；`attachments` 可选，为 `[{path,name,size,mimeType}]` 数组——path 经 realpath 校验必须位于本会话的附件目录（`<attachmentsDir>/<sessionId>/`）内，否则整条拒绝（任意路径会让持 token 者读到 daemon 可达的任意文件） | `{"type":"send_message_ack","sessionId"}`——**立即**返回，不等 run | `session not found`；`run manager not available`；`send_message attachments are invalid`；字段不合法提示。ack 之后 enqueue 才失败（存储错误）时，error 帧只发到这条 socket |
 | `{"type":"run.cancel","sessionId"}` | sessionId 非空字符串 | `{"type":"run_cancel_ack","sessionId"}` | `no active run`（该会话当前无正在执行的 run）；`run manager not available` |
 
 收到未知 `type` 返回 `{"type":"error","message":"unknown command: <type>"}`，连接保持打开；非法 JSON / 非 JSON 对象返回 error 帧（`frame is not valid JSON` / `frame must be a JSON object`），连接同样保持。**认证之前**发来的任何帧（含坏 JSON）都按未授权处理：error 帧 + 关闭码 4001。重复 auth 回 `already authenticated`。认证超时：连接后 `authTimeoutMs`（默认 10s）内未认证即以 4002 关闭。认证通过后有心跳：每 `heartbeatMs`（默认 30s）ping 一次，连续两个周期未收到 pong 即 `terminate` 硬断开（无关闭码）。
@@ -52,14 +52,14 @@
 }
 ```
 
-`EventType` 共 **28 种**（`packages/core/src/protocol/events.ts`），按投递方式分两组：
+`EventType` 共 **29 种**（`packages/core/src/protocol/events.ts`；六个语义分组的完整表见 [protocol](../core/protocol.md)），按投递方式分两组：
 
 | 分组 | 事件 | 投递 |
 |------|------|------|
-| 会话事件（带 sessionId，发订阅者） | `run.started` `run.completed` `run.failed`；`message.created` `message.completed`；`text/thinking/tool_call/tool_result` 的 `created/delta/completed`（12 个）；`attachment.created` `attachment.completed`；`llm.started` `llm.completed` `llm.failed`；`confirmation.requested` `confirmation.resolved`；`note.emitted` | `EventBus.emit` 查 `sessions.get(sessionId)`，发给该集合内的 socket |
+| 会话事件（带 sessionId，发订阅者） | `run.started` `run.completed` `run.failed`；`message.created` `message.completed`；`text/thinking/tool_call/tool_result` 的 `created/delta/completed`（12 个）；`attachment.created` `attachment.completed`；`llm.started` `llm.completed` `llm.failed`；`confirmation.requested` `confirmation.resolved`；`note.emitted`；`session.renamed` | `EventBus.emit` 查 `sessions.get(sessionId)`，发给该集合内的 socket |
 | 广播事件（无 sessionId，发全体连接） | `job.started` `job.completed` `job.failed` | `EventBus.emit` 遍历全部已 connect 的 socket |
 
-发射方分布：25 种会话事件由 agent 循环产生、经 `RunManager` 的 `onEvent` 钩子发送到总线（见 [run-manager](./run-manager.md)）；3 种 `job.*` 由 `scheduler-tick.ts` 的 `makeEvent(...)` **不带 ctx** 调用产生（`makeEvent` 只在传了 `ctx.sessionId` 时才写字段）。`attachment.*` 已定义但当前无发射方。
+发射方分布：25 种会话事件由 agent 循环产生、经 `RunManager` 的 `onEvent` 钩子发送到总线。`session.renamed` 不经过 agent 循环：run 入队用户消息后，服务端会异步调度 `autoname.ts` 的 `scheduleAutoname` 生成会话标题，新标题成功写回 meta 后才经注入的 emit 钩子（`busEmit`）发出这个事件；生成失败则静默放弃（流程细节见 [run-manager](./run-manager.md)）。3 种 `job.*` 由 `scheduler-tick.ts` 的 `makeEvent(...)` **不带 ctx** 调用产生（`makeEvent` 只在传了 `ctx.sessionId` 时才写字段）。`attachment.*` 已定义但当前无发射方。
 
 ## 订阅模型（EventBus）
 
@@ -124,7 +124,7 @@ export class EventBus {
 
 ## 关联
 
-- [protocol](../core/protocol.md)：28 种事件与 payload 全表、信封字段
+- [protocol](../core/protocol.md)：29 种事件与 payload 全表、信封字段
 - [run-manager](./run-manager.md)：命令帧在服务端的后续（入队/取消/确认网关）
 - [http-api](./http-api.md)：断线恢复依赖的 `GET /sessions/:id/messages`
 - [daemon](./daemon.md)：/ws 为何豁免 HTTP 鉴权

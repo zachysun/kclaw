@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/cli` 是 daemon 的终端客户端。`src/index.ts` 用 commander 组命令树并做入口分发；`src/chat.ts` 的 `runChat` 是交互式对话 REPL（REPL：read-eval-print loop，逐行读取输入、处理、打印结果、再等待下一行的交互循环）；`src/slash.ts` 是 REPL 内 `/` 命令的注册表机制；`src/client.ts` 的 `KclawClient` 封装对 daemon 的 HTTP 与 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）两种调用。首次运行判定、配置向导与 `kclaw web` 见 [onboarding](./onboarding.md)。CLI 不持有业务状态，随时退出，daemon 不受影响。
+`packages/cli` 是 daemon 的终端客户端。`src/index.ts` 用 commander 组命令树并做入口分发；`src/chat.ts` 的 `runChat` 是交互式对话 REPL（REPL：read-eval-print loop，逐行读取输入、处理、打印结果、再等待下一行的交互循环）；`src/slash.ts` 是 REPL 内 `/` 命令的注册表机制（含 `<home>/commands/*.md` 的自定义命令加载）；`src/file-refs.ts` 把消息里的 `@路径` 引用展开成内联文本或按需读取提示；`src/client.ts` 的 `KclawClient` 封装对 daemon 的 HTTP 与 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）两种调用。首次运行判定、配置向导与 `kclaw web` 见 [onboarding](./onboarding.md)。CLI 不持有业务状态，随时退出，daemon 不受影响。
 
 ## 设计决策
 
@@ -26,6 +26,7 @@
 | `kclaw daemon stop` | 发 SIGTERM 终止 daemon，轮询至 `/health` 不可访问后删除 `daemon.json`；返回 "stopped" 或 "daemon not running" |
 | `kclaw daemon status` / `kclaw status` | 报告状态：`not running`，或 `running (pid <pid>, port <port>, uptime <n>s)` |
 | `kclaw jobs list` | 列定时任务（连接过程中自动启动 daemon），五列表格：name/cron/enabled/nextRunAt/lastStatus |
+| `kclaw mcp [list]` | 经 `GET /mcp` 逐行打印 MCP server：`<名字>  <状态>  <N> 个工具[ 错误: <lastError>]`；空列表打印 "未配置 MCP server（config.yaml 的 mcp.servers 为空）" |
 | `kclaw web` | 浏览器打开 WebUI（见 [onboarding](./onboarding.md)） |
 
 程序级选项：`--home <dir>`（默认 `KCLAW_HOME ?? ~/.kclaw`）；`--version` 从 `packages/cli/package.json` 运行时读取。
@@ -41,6 +42,8 @@ export class KclawClient {
   // 连接（必要时先启动）daemon；失败重探 5s（CONNECT_RETRY_MS，250ms 间隔）
   request(method: string, path: string, body?: unknown): Promise<unknown>
   // HTTP 请求；非 2xx 抛服务端 body.error（无则 "HTTP <status>"）；204/空响应返回 undefined
+  uploadAttachment(sessionId, filename, body, mimeType): Promise<{file: {path, name, size}}>
+  // 原始字节流 POST /sessions/:id/attachments?filename=…（附件上传，见 /attach 与下文 REPL 流程）
   ws(): Promise<WsHandle>
   // 打开已认证 WS：首帧发送 {type:"auth", token}；frames 是解析好的异步帧迭代器
 }
@@ -66,6 +69,10 @@ export interface SlashCtx {
   print(text: string): void
   pauseInput(): void                // 暂停 readline，让 @clack 接管终端
   resumeInput(): void
+  pendingAttachments: AttachmentRef[]  // 待发附件队列：随下一条 send_message 发出后清空；
+                                       // 切会话时也清空（附件是会话级的）
+  send(text: string): void          // 发送普通消息（自定义命令把模板展开成文本走这里）
+  commandsDir?: string              // 自定义命令目录（<home>/commands，*.md）；缺省不加载
 }
 export interface SlashCommand {
   name: string
@@ -83,8 +90,8 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 一行输入的生命周期：
 
 1. **建连**：`KclawClient.connect` → `resolveSessionId`（无 `--session` 时 `POST /sessions {workdir: cwd}` 新建，否则在 `GET /sessions` 里校验存在）→ `openSubscribed`：开 WS、发 `{type:"subscribe", sessionId}`、等 `subscribed` 确认（5s 内没等到，或收到 error 帧，直接报错关闭）。
-2. **读行**：`node:readline` 逐行读（刻意不用 @clack 的文本框：增量需直接 `process.stdout.write`，管道 stdin 也需逐行工作）。每行先过 `dispatch`：`/` 开头是命令，其余是普通消息。
-3. **发送与渲染**（`renderRun`）：发 `{type:"send_message", sessionId, text}`，然后按帧渲染直到 run 终态：
+2. **读行**：`node:readline` 逐行读（刻意不用 @clack 的文本框：增量需直接 `process.stdout.write`，管道 stdin 也需逐行工作）。每行先过 `dispatch`：`/` 开头的按命令处理；普通消息发送前先做一遍 **`@路径` 引用展开**。展开流程：先调 `GET /sessions/:id` 拿到会话的工作目录（daemon 一时连不上就退回用进程 cwd，别让一次网络失败卡死输入循环）；然后 `expandFileRefs` 找出消息里每个 `@token`，相对 cwd 解析路径并经 realpath 校验，要求必须落在这个工作目录之内。对每个通过检查的文件按大小分两种处理：小的文本文件把正文直接内联进消息（格式为 `[来自 @路径]` + 正文，超过 8000 字符截断并加 `\n…[已截断]`）；大文件或非文本文件则在消息末尾加一行提示 `[文件 @路径（N 字节）已引用，可用 fs_read 读取 <绝对路径>]`，内容由模型之后自己读。任何一个 token 越界、不存在或不是文件，整条消息就不发送，只打印一行 `引用失败: <原因>`。
+3. **发送与渲染**（`renderRun`）：发 `{type:"send_message", sessionId, text, attachments?}`——之前用 `/attach` 上传累积的待发附件随这条帧一起发出，发完立即清空附件队列；然后按帧渲染直到 run 终态：
    - `text.delta` 原样写出（自带换行控制：`ensureLineStart` 保证块之间换行）；`thinking.delta` 仅 `--think` 时暗色输出。
    - `tool_call.completed` → `⚡ <name> <args>`，args 是紧凑 JSON、截断到 60 字符。
    - `tool_result.completed` → `↳ <status> (<n>ms) <output>`，输出压空白后取前 80 字符；`tool_result.delta` 不做实时渲染（completed 行已带摘要）。
@@ -111,8 +118,12 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 | `/new [标题]` | `POST /sessions`（带可选 title，body 总带 workdir=当前 cwd）→ `switchSession` → 打印确认 |
 | `/clear` | 同 `/new` 但不带标题（快速新建一个空白会话） |
 | `/sessions` | `GET /sessions` 列表；空则"（还没有会话）"；否则暂停 readline、@clack 单选列表、切换会话 |
+| `/model [名字]` | 不带参数时列出可用模型（读 `GET /config` 的 provider 条目名）和当前用的模型；带上名字则调 `POST /sessions/:id/model` 切换本会话模型，只影响之后的回复；`/model default` 恢复默认；名字不存在时打印服务端 400 的原文（如 `model not found: …`） |
+| `/readonly [on\|off]` | 先读当前会话的开关状态，无参数时直接取反，也可以明确指定 on/off；通过 `POST /sessions/:id/readonly` 生效——开启后写文件与执行命令类工具会被拒绝 |
+| `/attach <路径>` | 读入本地文件、按扩展名粗判 MIME 类型，经 `client.uploadAttachment` 上传并把返回的引用放进待发队列，随你的下一条消息一起发送；不带参数时列出当前待发的附件；失败打印 `附件上传失败: …` |
 
-- `switchSession` 在**同一 socket** 上发 `unsubscribe`（旧会话）+ `subscribe`（新会话）；`SlashCtx` 的 `client`/`sessionId` 是 getter，命令执行时看到的总是重连/切换后的当前值。
+- 自定义命令：`ctx.commandsDir`（daemon 装配为 `<home>/commands`）目录下的每个 `*.md` 文件注册成一个命令——文件名就是命令名，文件内容是一段提示词模板；执行命令时，模板里的 `{{args}}` 替换成命令参数，然后经 `ctx.send(text)` 作为普通消息发出。与内置命令重名的文件不生效，打印一行警告。
+- `switchSession` 在**同一 socket** 上发 `unsubscribe`（旧会话）+ `subscribe`（新会话），同时清空待发附件（附件是会话级的，换会话不带走）；`SlashCtx` 的 `client`/`sessionId` 是 getter，命令执行时看到的总是重连/切换后的当前值。
 
 ## 边界与出错
 
@@ -121,6 +132,8 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 - **管道 stdin 的 EOF**：stdin 关闭时 readline 触发 close，循环自然退出；`rlClosed` 标志让迟到的 `prompt()` 变成空操作而不是抛 "readline was closed"（缓冲行仍会经异步迭代器到达）。
 - **重连后不回放**：重连只拉取全量对齐数据但不渲染，错过的事件不再补偿；持久化消息自洽，下次进入 REPL 重新拉取全量即可（协议规则见 [protocol](../core/protocol.md)）。
 - **jobs 表格无分页**：`GET /jobs` 全量返回，任务多时表格整体打印。
+- **文件引用宁可整条失败也不靠猜**：`@token` 越界、不存在或不是文件时消息不发出——发出去模型要么读不到要么读到不该读的。文本与二进制的区分只按扩展名和 MIME 粗判，识别不了的类型一律当"非文本"处理，只留一条 fs_read 提示。
+- **自定义命令是提示词模板，不是脚本**：它只做一件事——把模板里的 `{{args}}` 替换成命令参数后作为普通消息发送，没有任何 shell 执行面；与内置命令重名的文件直接忽略。
 
 ## 关联
 
@@ -128,3 +141,5 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 - [daemon](../server/daemon.md)：daemon 探测/启动/停止的另一侧契约（`daemon-ctl.ts` 详解）
 - [realtime](../server/realtime.md)：`/ws` 帧协议与订阅语义、断线恢复规则总述
 - [run-manager](../server/run-manager.md)：`send_message`/`run.cancel`/确认在服务端的后续
+- [http-api](../server/http-api.md)：slash 命令、`jobs list`、`mcp list` 背后的 REST 端点
+- [mcp](../core/mcp.md)：`kclaw mcp [list]` 展示的状态快照与 `mcp__<server>__<tool>` 命名

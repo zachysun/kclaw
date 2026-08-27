@@ -93,7 +93,7 @@ export interface ToolResultBlock {
   durationMs: number
 }
 
-export type NoteKind = "system" | "job" | "memory" | "timeout" | "denied"
+export type NoteKind = "system" | "job" | "memory" | "timeout" | "denied" | "compact"
 export interface NoteBlock { id: BlockId; type: "note"; kind: NoteKind; text: string }
 
 export type AttachmentSource =
@@ -102,12 +102,13 @@ export type AttachmentSource =
   | { type: "file"; path: string }
 export interface AttachmentBlock {
   id: BlockId; type: "attachment"; mimeType: string
-  text?: string
+  name?: string           // 原始文件名，给展示层做标签
+  text?: string           // 文本类附件的内联正文（挂载时截断封顶）
   source: AttachmentSource
 }
 ```
 
-note 是"系统写入对话的信息"（记忆注入、job 触发、权限拒绝/超时），属于对话内容、模型可读。类型守卫 `isBlockType(t, v)` 与 `newBlockId()` 也在此文件。
+note 是"系统写入对话的信息"（记忆注入、job 触发、压缩摘要、权限拒绝/超时），属于对话内容、模型可读。类型守卫 `isBlockType(t, v)` 与 `newBlockId()` 也在此文件。
 
 ---
 
@@ -131,11 +132,12 @@ export function makeEvent<T extends EventType>(
 ): AgentEvent<T>
 ```
 
-`EventType` 共 **28 种**，五个分组：
+`EventType` 共 **29 种**，六个分组：
 
 | 分组 | 事件 | 数量 |
 |------|------|------|
 | 生命周期 | `run.started` `run.completed` `run.failed` `message.created` `message.completed` `job.started` `job.completed` `job.failed` | 8 |
+| 会话元数据 | `session.renamed` | 1 |
 | 流式 | `text.created/delta/completed` `thinking.created/delta/completed` `tool_call.created/delta/completed` `tool_result.created/delta/completed` `attachment.created` `attachment.completed` | 14 |
 | 模型调用 | `llm.started` `llm.completed` `llm.failed` | 3 |
 | 人工确认 | `confirmation.requested` `confirmation.resolved` | 2 |
@@ -148,6 +150,7 @@ export interface RunStartedPayload   { trigger: "user" | "job" }
 export interface RunCompletedPayload { stopReason: StopReason; usage: Usage }
 export interface RunFailedPayload    { error: { code: string; message: string } }
 export interface JobCompletedPayload { jobId: string; summary: string }
+export interface SessionRenamedPayload { title: string }
 
 export interface BlockPayload         { messageId: string; block: Block }
 export interface BlockDeltaPayload    { messageId: string; blockId: string; delta: string }
@@ -178,7 +181,8 @@ export interface NoteEmittedPayload { messageId: string; block: NoteBlock }
 |------|--------|
 | run / message / 流式 / llm / confirmation / note | core 的 agent 循环（`agent/loop.ts`） |
 | `job.*` | server 的 `scheduler-tick.ts` |
-| `attachment.*` | 目前**已定义无发射方**——attachment 块在协议中保留，尚无产生它的路径 |
+| `session.renamed` | server 的自动命名（`autoname.ts`：新标题写回 meta 后发出） |
+| `attachment.*` | 目前**已定义无发射方**——附件以 attachment 块随用户消息整体持久化与广播（`message.completed` 携带全量消息），不需要单独的块级事件流 |
 
 ---
 
@@ -188,14 +192,14 @@ export interface NoteEmittedPayload { messageId: string; block: NoteBlock }
 import { monotonicFactory } from "ulidx"
 const ulid = monotonicFactory()
 
-export type IdPrefix = "msg" | "ses" | "blk" | "call" | "evt" | "run" | "conf" | "mem" | "job"
+export type IdPrefix = "msg" | "ses" | "blk" | "call" | "evt" | "run" | "conf" | "mem" | "job" | "att"
 
 export function newId(prefix: IdPrefix): string {
   return `${prefix}_${ulid()}`     // 例: run_01J…，前缀 + 单调 ULID（按时间递增、可排序的唯一 ID）
 }
 ```
 
-9 个前缀的生成点：
+10 个前缀的生成点：
 
 | 前缀 | 生成点 |
 |------|--------|
@@ -207,6 +211,7 @@ export function newId(prefix: IdPrefix): string {
 | `conf` | `permissions/engine.ts` 的确认 id 工厂 |
 | `mem` | `memory/store.ts` |
 | `job` | `jobs/scheduler.ts` |
+| `att` | server 的上传路由（`routes/attachments.ts`，落盘文件名 `<att_…>__<原名>`） |
 
 `call` 前缀已声明但当前无生成点——`callId` 由 provider 原样传入（OpenAI 的 tool_call id，缺失时 provider 合成 `call_idx_<index>`，见 `provider/openai-compat.ts`）。单调 ULID 保证同进程内 ID 按时间排序，日志/JSONL 天然有序。
 
@@ -226,7 +231,7 @@ export function newId(prefix: IdPrefix): string {
 - 事件无 ack、无重发：客户端错过的事件不补发，通过"拉全量 + 订阅新事件"对账，而非回放。
 - `message.created` 之后消息可能永远不 `completed`（空 assistant 被丢弃、宿主钩子抛错）——客户端不能假设 created 必有 completed 配对。
 - `AgentEvent.sessionId` 缺失即广播语义（`EventBus.emit` 发给全部已连接 socket），客户端不应把它当异常。
-- `attachment` 的 `file` source 指向 `<home>/attachments/<session-id>/`（`resolvePaths` 预建目录），大附件不进 JSONL；转存逻辑当前未实现，路径已预留。
+- `attachment` 的 `file` source 指向 `<home>/attachments/<session-id>/`：客户端先把文件传到该目录（HTTP `POST /sessions/:id/attachments`），发起消息时引用路径、由服务端挂载为块（见 [run-manager](../server/run-manager.md)）；大文件不进 JSONL，JSONL 里只有指向磁盘的元数据。
 
 ---
 

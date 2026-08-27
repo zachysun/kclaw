@@ -22,6 +22,7 @@
 - **重试封装在 client 内部，不在循环层**：`runAgent` 调一次 `stream()` 就是完整的一次"可能含内部重试"的调用；循环层再重试会形成双重重试。循环通过 `onRetry` 钩子感知重试（转成 `llm.failed {willRetry:true}` 事件）。
 - **已产出事件绝不重试**：流已产出过事件即说明消费方可能已收到，重试会造成输出重复——此时错误直接抛出。
 - **参数原文不动**：工具调用的参数以原始 JSON 字符串（`argsJson`）透传，不在 provider 层解析；解析失败的处理属于循环层。
+- **多模态只透传不解释**：user 消息的 `content` 允许是 OpenAI 多模态数组（文本段 + `image_url` 图片段），provider 原样放进请求体——是否真能"看懂"图片由模型决定，协议层不感知。
 
 ---
 
@@ -29,6 +30,11 @@
 
 ```ts
 // packages/core/src/provider/types.ts
+// user 消息的多模态内容段：图片以 data: URL 内联（见 agent/context.ts 的附件挂载）
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } }
+
 export interface LlmClient {
   stream(req: LlmRequest): AsyncIterable<LlmStreamEvent>
 }
@@ -36,7 +42,11 @@ export interface LlmClient {
 export interface LlmRequest {
   model: string
   system: string
-  messages: ProviderMessage[]   // user / assistant(带 toolCalls?) / tool 三种
+  messages: ProviderMessage[]
+  // ProviderMessage 三种：
+  //   user       → { role:"user", content: string | ContentPart[] }
+  //   assistant  → { role:"assistant", content: string|null, toolCalls? }
+  //   tool       → { role:"tool", toolCallId, content }
   tools: ToolDefinition[]       // {name, description, parameters(JSON Schema)}
   maxTokens?: number
 }
@@ -86,6 +96,7 @@ export function defaultLlmFactory(cfg: KclawConfig, onRetry?): LlmClient
 内部消息转成 OpenAI 格式，规则：
 
 - `system` 提示词放第一条 `{role:"system", content}`；maxTokens 有值时才带 `max_tokens`。
+- user 的 `content` 原样透传：字符串就是纯文本，`ContentPart[]` 数组（文本段 + `image_url` 图片段）即 OpenAI 多模态格式——provider 不重排、不校验。
 - assistant 的 `content === null` 时字段整个省略；`toolCalls` 转成 `tool_calls: [{id: callId, type:"function", function:{name, arguments: argsJson}}]`——`argsJson` 原样作为 `arguments` 传回。
 - tool 消息转成 `{role:"tool", tool_call_id: callId, content}`。
 - 请求体固定 `stream: true` 与 `stream_options: {include_usage: true}`（最后一个 chunk 会带 token 用量）；URL 为 `baseUrl` 去掉一个尾部 `/` 后拼 `/chat/completions`；鉴权用 `Authorization: Bearer <apiKey>` 头（Bearer 是 HTTP 标准认证方案，格式为令牌置于 Bearer 关键字之后）。
