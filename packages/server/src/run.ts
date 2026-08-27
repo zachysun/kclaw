@@ -312,6 +312,28 @@ export class RunManager {
     return false
   }
 
+  /**
+   * Manual compaction (spec 6.5): runs #compactV2 with a focus, ignoring
+   * the trigger line. Refused while the session has an active or queued
+   * run — compaction reads full history and writes meta, which a
+   * concurrent run would corrupt.
+   */
+  async compactSession(sessionId: string, focus?: string): Promise<{ message: string }> {
+    if (this.#active.has(sessionId) || this.#chains.has(sessionId)) throw new Error("会话正在运行")
+    const { config, sessions, llm } = this.#deps
+    const meta = sessions.meta(sessionId)
+    if (meta === undefined) throw new Error("session not found")
+    const history = sessions.readMessages(sessionId)
+    const defaultModel = this.#deps.model ?? config.providers.entries[config.providers.default]?.model ?? ""
+    const model = config.providers.entries[meta.model ?? ""]?.model ?? meta.model ?? defaultModel
+    const out = await this.#compactV2(sessionId, history, "", config, llm, model, { focus, manual: true })
+    return {
+      message: out.compacted
+        ? `压缩了 ${out.segments} 段，剩 ${out.active.length} 条原文消息`
+        : "无可压缩内容",
+    }
+  }
+
   async #execute(sessionId: string, input: EnqueueInput): Promise<RunOutcome> {
     // Register the controller BEFORE any await: the window between dequeue
     // and the old registration point (after memory search / history read)

@@ -135,7 +135,9 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   const paths = opts.stores?.paths ?? resolvePaths(opts.home)
   const sessions = opts.stores?.sessions ?? new SessionStore(paths.sessionsDir)
   const config = opts.stores?.config ?? loadConfig(paths)
-  registerSessionRoutes(app, { sessions, config })
+  // opts.run is the daemon's RunManager (same instance the ws routes use);
+  // the session routes only need it for POST /sessions/:id/compact.
+  registerSessionRoutes(app, { sessions, config, run: opts.run })
   if (opts.attachmentsDir !== undefined) {
     registerAttachmentRoutes(app, { sessions, attachmentsDir: opts.attachmentsDir })
   }

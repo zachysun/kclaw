@@ -937,6 +937,44 @@ describe("RunManager context compaction v2", () => {
     const note = user.blocks.find((b) => b.type === "note" && b.kind === "compact")
     expect((note as { text?: string }).text).toContain("总摘要A")
   })
+
+  it("compactSession refuses while a run is active or queued", async () => {
+    // a never-ending llm keeps the run hanging: the session counts as busy
+    const { env, manager } = makeEnv(hangingClient())
+    const session = env.sessions.create("忙会话")
+    const p = manager.enqueue(session.id, { userText: "长任务", trigger: "user" })
+    await expect(manager.compactSession(session.id)).rejects.toThrow("会话正在运行")
+    expect(manager.cancel(session.id)).toBe(true)
+    await p
+    // the gate lifts once the run settled: nothing to compact → the
+    // nothing-to-do message, not a busy error
+    await expect(manager.compactSession(session.id)).resolves.toEqual({ message: "无可压缩内容" })
+  })
+
+  it("compactSession throws session not found for a missing session", async () => {
+    const { manager } = makeEnv(scriptClient([textTurn("不该被调用")]))
+    await expect(manager.compactSession("ses_missing")).rejects.toThrow("session not found")
+  })
+
+  it("compactSession compacts immediately with focus and reports the result", async () => {
+    const reqs: LlmRequest[] = []
+    const { env, manager } = makeEnv(
+      recordRequests(scriptClient([textTurn("段摘要F"), textTurn("总摘要F")]), reqs),
+      (c) => { c.sessions.contextTokens = 10 }, // tiny target so a manual boundary exists
+    )
+    const session = env.sessions.create("手动会话")
+    seedHistory(env.sessions, session.id, 2)
+
+    const out = await manager.compactSession(session.id, "重点保留登录模块")
+
+    expect(out.message).toContain("压缩了 1 段")
+    expect(reqs.length).toBe(2) // segment summary + merge only — no main run
+    // the focus line reached BOTH summarizer prompts
+    expect(reqs[0]!.messages[0]!.content).toContain("用户特别要求重点保留：重点保留登录模块")
+    expect(reqs[1]!.messages[0]!.content).toContain("用户特别要求重点保留：重点保留登录模块")
+    // the fresh v2 state landed in meta
+    expect(env.sessions.meta(session.id)!.compaction).toMatchObject({ top: "总摘要F" })
+  })
 })
 
 // --- auto memory extraction -------------------------------------------------

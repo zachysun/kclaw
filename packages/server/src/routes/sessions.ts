@@ -1,11 +1,14 @@
 import type { FastifyError, FastifyInstance } from "fastify"
 import type { KclawConfig, SessionStore } from "@kclaw/core"
+import type { RunManager } from "../run.js"
 
 /** Store dependencies for the session routes (injected by createApp). */
 export interface SessionStores {
   sessions: SessionStore
   /** Providers entries for model-name validation on the model switch route. */
   config?: KclawConfig
+  /** RunManager for compaction (injected by createApp). Missing → the compact route answers 503. */
+  run?: RunManager
 }
 
 const NOT_FOUND = { error: "session not found" } as const
@@ -127,6 +130,27 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
       stores.sessions.updateMeta(id, parsed.title === undefined ? {} : { title: parsed.title })
       return stores.sessions.meta(id)
+    })
+
+    // Manual compaction (spec 6.5): optional { focus } body. compactSession's
+    // busy refusal ("会话正在运行") maps to 409, its missing-session error to
+    // 404; anything else is a 500 with the error message.
+    scope.post("/sessions/:id/compact", async (request, reply) => {
+      const { id } = request.params as { id: string }
+      if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
+      const body = request.body as { focus?: unknown } | null | undefined
+      if (body?.focus !== undefined && (typeof body.focus !== "string" || body.focus.trim() === "")) {
+        return reply.code(400).send({ error: "focus must be a non-empty string" })
+      }
+      if (stores.run === undefined) return reply.code(503).send({ error: "run manager unavailable" })
+      const focus = typeof body?.focus === "string" ? body.focus : undefined
+      try {
+        return await stores.run.compactSession(id, focus)
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e)
+        const status = message === "会话正在运行" ? 409 : message === "session not found" ? 404 : 500
+        return reply.code(status).send({ error: message })
+      }
     })
   })
 }
