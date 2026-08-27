@@ -45,7 +45,11 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
     scope.post("/sessions", async (request, reply) => {
       const parsed = parseSessionBody(request.body)
       if (!parsed.ok) return reply.code(400).send({ error: parsed.error })
-      return reply.code(201).send(stores.sessions.create(parsed.title, undefined, parsed.workdir))
+      // An absent workdir means "the daemon's configured workspace": store the
+      // resolved path so every WebUI-created session carries a concrete
+      // workdir (the sidebar groups by it).
+      const workdir = parsed.workdir ?? stores.config?.workspace
+      return reply.code(201).send(stores.sessions.create(parsed.title, undefined, workdir))
     })
 
     scope.get("/sessions", async (request) => {

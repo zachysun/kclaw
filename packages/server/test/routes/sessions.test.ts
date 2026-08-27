@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { mkdtemp, rm, readdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { SessionStore, newMessage } from "@kclaw/core"
-import type { SessionMeta } from "@kclaw/core"
+import { SessionStore, newMessage, defaultConfig } from "@kclaw/core"
+import type { SessionMeta, KclawConfig } from "@kclaw/core"
 import { createApp } from "../../src/index.js"
 import type { FastifyInstance } from "fastify"
 
@@ -12,12 +12,15 @@ const AUTH = { authorization: "Bearer t1" }
 describe("sessions routes", () => {
   let home: string
   let store: SessionStore
+  let config: KclawConfig
   let app: FastifyInstance
 
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), "kclaw-sessions-test-"))
     store = new SessionStore(join(home, "sessions"))
-    app = await createApp({ home, token: "t1", stores: { sessions: store } })
+    config = structuredClone(defaultConfig)
+    config.workspace = "/ws/root"
+    app = await createApp({ home, token: "t1", stores: { sessions: store, config } })
   })
 
   afterEach(async () => {
@@ -53,6 +56,12 @@ describe("sessions routes", () => {
     })
     expect(res.statusCode).toBe(201)
     expect((res.json() as SessionMeta).workdir).toBe("/tmp/x")
+  })
+
+  it("POST /sessions without workdir stores the configured workspace", async () => {
+    const res = await app.inject({ method: "POST", url: "/sessions", headers: AUTH })
+    expect(res.statusCode).toBe(201)
+    expect((res.json() as SessionMeta).workdir).toBe("/ws/root")
   })
 
   it("POST /sessions with an empty workdir string returns 400", async () => {

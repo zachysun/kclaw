@@ -160,7 +160,9 @@ describe("App (sessions + tabs)", () => {
     await flush()
     expect(fetchMock).toHaveBeenCalledWith(
       "/sessions",
-      expect.objectContaining({ method: "POST", body: JSON.stringify({ workdir: "home" }) }),
+      // The workdir box starts empty: an empty field means "the daemon's
+      // configured workspace", so the POST carries no workdir at all.
+      expect.objectContaining({ method: "POST", body: JSON.stringify({}) }),
     )
     // The new session is selected in the sidebar.
     const item = container.querySelector('[data-testid="session-item-ses_new"]')

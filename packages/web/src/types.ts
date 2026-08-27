@@ -19,6 +19,16 @@ export interface SessionMeta {
   deletedAt?: string
 }
 
+/** Wire shape of `GET /fs/browse` (the workdir picker's directory listing). */
+export interface FsBrowseResult {
+  /** Canonical (symlink-resolved) absolute path that was listed. */
+  path: string
+  /** Parent directory, or null at the filesystem root. */
+  parent: string | null
+  /** Subdirectory names only (files excluded), sorted case-insensitively. */
+  dirs: string[]
+}
+
 /** A scheduled prompt (mirrors @kclaw/core Job). */
 export interface Job {
   id: string

@@ -28,7 +28,7 @@ import { SessionList } from "./sessions/SessionList.js"
 import { TrashView } from "./sessions/TrashView.js"
 import { JobsView } from "./jobs/JobsView.js"
 import { AuditView } from "./audit/AuditView.js"
-import type { SessionMeta } from "./types.js"
+import type { FsBrowseResult, SessionMeta } from "./types.js"
 
 type DaemonStatus = "connecting" | "connected" | "error"
 type Tab = "chat" | "jobs" | "audit" | "usage" | "trash"
@@ -195,7 +195,9 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
   const handleCreateSession = useCallback(async (workdir: string): Promise<void> => {
     setSessionNotice(null)
     try {
-      const meta = await api.post<SessionMeta>("/sessions", { workdir })
+      // An empty box means "the daemon's configured workspace": drop the
+      // field so the session carries no workdir and runs fall back to it.
+      const meta = await api.post<SessionMeta>("/sessions", workdir === "" ? {} : { workdir })
       setSessions((prev) => [meta, ...(prev ?? [])])
       // Selecting the fresh session triggers the message pull (empty) and the
       // ws subscribe below — the new empty conversation becomes the active one.
@@ -204,6 +206,14 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
       setSessionNotice(err instanceof Error ? err.message : "创建会话失败")
     }
   }, [api])
+
+  // Directory listings for the workdir picker (no path = the picker root,
+  // i.e. the daemon's configured workspace).
+  const browseDirs = useCallback(
+    (path?: string): Promise<FsBrowseResult> =>
+      api.get<FsBrowseResult>(path === undefined ? "/fs/browse" : `/fs/browse?path=${encodeURIComponent(path)}`),
+    [api],
+  )
 
   const handleRenameSession = useCallback(
     async (id: string, title: string): Promise<void> => {
@@ -297,6 +307,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
             onCreate={(workdir) => void handleCreateSession(workdir)}
             onRename={(id, title) => void handleRenameSession(id, title)}
             onDelete={(id) => void handleDeleteSession(id)}
+            onBrowse={browseDirs}
           />
           {sessionNotice !== null && (
             <p className="sidebar-notice" data-testid="session-notice" role="alert">

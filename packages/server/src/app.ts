@@ -12,6 +12,7 @@ import { registerSessionRoutes } from "./routes/sessions.js"
 import { registerAttachmentRoutes } from "./routes/attachments.js"
 import { registerJobRoutes } from "./routes/jobs.js"
 import { registerConfigRoutes } from "./routes/config.js"
+import { registerFsRoutes } from "./routes/fs.js"
 import { registerUsageRoutes } from "./routes/usage.js"
 
 export interface AppOptions {
@@ -143,6 +144,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   registerJobRoutes(app, { jobs })
 
   registerConfigRoutes(app, { config })
+  registerFsRoutes(app, { workspace: config.workspace })
 
   if (opts.usage !== undefined) {
     registerUsageRoutes(app, { usage: opts.usage, config })
