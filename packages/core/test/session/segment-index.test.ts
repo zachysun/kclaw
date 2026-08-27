@@ -1,5 +1,5 @@
 // packages/core/test/session/segment-index.test.ts
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, describe, expect, it } from "vitest"
@@ -34,8 +34,18 @@ describe("SegmentIndex", () => {
       { upto: "gone", body: "", summary: "失效段" },
     ])
     expect(rebuilt.search("上海", 5).length).toBe(1)
-    // existing file: ensure must NOT re-add (no duplicates)
-    const again = SegmentIndex.ensure(path, [{ upto: "m2", body: "用户在上海工作", summary: "上海段" }])
-    expect(again.search("上海", 5).length).toBe(1)
+    // empty-body entries are invalidated segments: skipped, never searchable
+    expect(rebuilt.search("失效段", 5)).toEqual([])
+    // existing file: ensure must NOT re-add (the upsert would otherwise
+    // overwrite the summary with "被忽略的新摘要")
+    const again = SegmentIndex.ensure(path, [{ upto: "m2", body: "用户在上海工作", summary: "被忽略的新摘要" }])
+    expect(again.search("上海", 5)[0]!.summary).toBe("上海段")
+  })
+
+  it("ensure() recovers from a corrupt db file by deleting and rebuilding it", () => {
+    const path = join(dir, "d.db")
+    writeFileSync(path, "not a sqlite database at all ".repeat(40))
+    const idx = SegmentIndex.ensure(path, [{ upto: "m9", body: "损坏后重建的正文", summary: "重建段" }])
+    expect(idx.search("重建", 5).length).toBe(1)
   })
 })

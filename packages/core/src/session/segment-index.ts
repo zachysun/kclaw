@@ -1,6 +1,6 @@
 // packages/core/src/session/segment-index.ts
 import Database from "better-sqlite3"
-import { existsSync, mkdirSync } from "node:fs"
+import { existsSync, mkdirSync, unlinkSync } from "node:fs"
 import { dirname } from "node:path"
 import { ftsQuery, tokenize } from "../text/fts.js"
 
@@ -43,11 +43,24 @@ export class SegmentIndex {
     return new SegmentIndex(db)
   }
 
-  /** Open the index, rebuilding from `entries` only when the file is absent. */
+  /** Open the index, rebuilding from `entries` when the file is absent or corrupt. */
   static ensure(dbPath: string, entries: SegmentEntry[]): SegmentIndex {
     const existed = existsSync(dbPath)
-    const index = SegmentIndex.open(dbPath)
-    if (!existed) for (const e of entries) if (e.body !== "") index.addSegment(e.upto, e.body, e.summary)
+    let needRebuild = !existed
+    let index: SegmentIndex
+    try {
+      index = SegmentIndex.open(dbPath)
+    } catch (err) {
+      if (!existed) throw err
+      // The index is pure derived state (see class doc): a corrupt db file
+      // would make every later search error until a human deletes it, so
+      // drop the file and rebuild from `entries` exactly as the missing-file
+      // path does. `open()` stays strict for direct callers.
+      unlinkSync(dbPath)
+      index = SegmentIndex.open(dbPath)
+      needRebuild = true
+    }
+    if (needRebuild) for (const e of entries) if (e.body !== "") index.addSegment(e.upto, e.body, e.summary)
     return index
   }
 
