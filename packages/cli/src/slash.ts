@@ -236,6 +236,24 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
     },
   })
 
+  registry.set("compact", {
+    name: "compact",
+    usage: "/compact [重点说明]",
+    description: "手动压缩当前会话的早期对话（可指定摘要重点保留什么）",
+    async run(args, ctx) {
+      try {
+        const res = (await ctx.client.request(
+          "POST",
+          `/sessions/${ctx.sessionId}/compact`,
+          args === "" ? {} : { focus: args },
+        )) as { message?: string }
+        ctx.print(res.message ?? "已压缩")
+      } catch (e) {
+        ctx.print(`压缩失败: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    },
+  })
+
   registry.set("help", {
     name: "help",
     usage: "/help",
