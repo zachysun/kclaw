@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest"
 import { newAssistantMessage, newMessage } from "../../src/protocol/messages.js"
 import { estimateContextTokens, estimateTokens } from "../../src/session/compaction.js"
+import { chooseBoundary, segmentRanges } from "../../src/session/compaction.js"
+
+function hist(...roles: Array<"user" | "assistant">): Array<ReturnType<typeof newMessage>> {
+  return roles.map((r, i) =>
+    newMessage("s", r, [{ id: `b${i}`, type: "text", text: r === "user" ? "问题".repeat(100) : "回答".repeat(100) }]),
+  )
+}
 
 describe("estimateTokens", () => {
   it("charges CJK 0.75/char and ASCII 0.25/char, ceil", () => {
@@ -26,5 +33,64 @@ describe("estimateContextTokens", () => {
   it("estimates everything when no assistant message exists", () => {
     const u = newMessage("s", "user", [{ id: "b1", type: "text", text: "你好" }])
     expect(estimateContextTokens([u])).toBeGreaterThanOrEqual(2)
+  })
+})
+
+describe("chooseBoundary", () => {
+  it("returns undefined when the whole history is under target (nothing to compact)", () => {
+    const active = hist("user", "assistant")
+    expect(chooseBoundary(active, { budget: 100_000, targetRatio: 0.33 })).toBeUndefined()
+  })
+
+  it("keeps the newest tail up to target, aligned back to a user message", () => {
+    // u1 a1 u2 a2 u3 a3: make target cover only the last pair
+    const active = hist("user", "assistant", "user", "assistant", "user", "assistant")
+    const perMsg = estimateTokens("问题".repeat(100)) // ≈ 150
+    const budget = perMsg * 6 / 0.9 // total ≈ 6*150; target = 0.33*budget ≈ 2 messages → aligns to u3? no: keeps newest ≥ target
+    // simpler: directly assert the invariant instead of exact arithmetic
+    const b = chooseBoundary(active, { budget: perMsg * 3 / 0.33, targetRatio: 0.33 })
+    if (b !== undefined) {
+      expect(active[b.keepFrom]!.role).toBe("user")
+      expect(b.keepFrom).toBeGreaterThan(0) // something was compacted
+    } else {
+      // Unreachable for this fixture (target ≈ 450 < total 900): if this fires,
+      // the budget arithmetic above failed to cross the target — fail loudly.
+      throw new Error("fallback hit: chooseBoundary returned undefined for the 6-message fixture")
+    }
+  })
+
+  it("never returns keepFrom 0 (would compact nothing)", () => {
+    const active = hist("user", "assistant")
+    // tiny budget forces the accumulator past target at the first message
+    const b = chooseBoundary(active, { budget: 10, targetRatio: 0.5 })
+    expect(b).toBeUndefined()
+  })
+
+  it("returns undefined for history without user messages", () => {
+    const a = newMessage("s", "assistant", [{ id: "b0", type: "text", text: "x".repeat(5000) }])
+    expect(chooseBoundary([a], { budget: 10, targetRatio: 0.5 })).toBeUndefined()
+  })
+})
+
+describe("segmentRanges", () => {
+  it("slices each segment between adjacent upto markers", () => {
+    const msgs = hist("user", "assistant", "user", "assistant", "user")
+    const upto = (i: number) => msgs[i]!.id
+    const ranges = segmentRanges(msgs, [{ upto: upto(1) }, { upto: upto(3) }])
+    expect(ranges[0]!.messages.map((m) => m.id)).toEqual([upto(0), upto(1)])
+    expect(ranges[1]!.messages.map((m) => m.id)).toEqual([upto(2), upto(3)])
+  })
+
+  it("yields an empty range for a segment whose upto id is missing (stale marker)", () => {
+    const msgs = hist("user", "assistant")
+    const ranges = segmentRanges(msgs, [{ upto: "gone" }])
+    expect(ranges[0]!.messages).toEqual([])
+  })
+
+  it("honors firstFromExclusive for legacy-upgrade sessions", () => {
+    const msgs = hist("user", "assistant", "user", "assistant")
+    const legacyUpto = msgs[1]!.id
+    const ranges = segmentRanges(msgs, [{ upto: msgs[3]!.id }], legacyUpto)
+    expect(ranges[0]!.messages.map((m) => m.id)).toEqual([msgs[2]!.id, msgs[3]!.id])
   })
 })
