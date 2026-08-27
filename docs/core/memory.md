@@ -10,7 +10,7 @@
 
 - **文件是真相，索引是派生物**：`memory/notes/*.md` 是唯一权威数据；`memory/index.db` 任何时候删除都无损失——daemon 启动时 `reconcile()` 扫描目录重建（`packages/server/src/daemon.ts`）。检索命中后也是重新读文件返回正文，因此手动修改、删除文件始终生效，索引最多短暂滞后。
 - **为什么 markdown 而不是只存 SQLite**：记忆的价值一半在于人工可维护——用户可以直接用编辑器修改、git 可以版本化、grep 可以检索。双轨的成本（维护对账）换来的是"人工写入与机器写入是同一份数据"。
-- **中文分词必须自己做**：FTS5 默认的 unicode61 分词器把连续中文当成一个不可拆的 token，查"上海"永远无法命中"用户在上海工作"。索引和查询共用一个自写分词器 `tokenize`：ASCII 字母数字串按整词（转小写），CJK 连续串拆成相邻两字组合（bigram）——"用户在上海工作" 拆成 `用户 户在 在上 上海 海工 工作`。一到两个字的中文查询本身就是合法 bigram，直接命中；更长的查询按 bigram 逐个 AND。每个 token 用引号包裹后拼进 MATCH 串，token 内不含 FTS 运算符（标点被丢弃），杜绝把用户输入当成检索语法注入。
+- **中文分词必须自己做**：FTS5 默认的 unicode61 分词器把连续中文当成一个不可拆的 token，查"上海"永远无法命中"用户在上海工作"。索引和查询共用一个自写分词器 `tokenize`（`packages/core/src/text/fts.ts`，与压缩的会话检索索引共享，见 [compaction](./compaction.md)）：ASCII 字母数字串按整词（转小写），CJK 连续串拆成相邻两字组合（bigram）——"用户在上海工作" 拆成 `用户 户在 在上 上海 海工 工作`。一到两个字的中文查询本身就是合法 bigram，直接命中；更长的查询按 bigram 逐个 AND。每个 token 用引号包裹后拼进 MATCH 串（`ftsQuery`），token 内不含 FTS 运算符（标点被丢弃），杜绝把用户输入当成检索语法注入。
 - **先查后写（merge-aware）**：`save` 前先用新文本找相似笔记（取前 `MERGE_QUERY_CHARS = 100` 个字符做 OR 检索取前 10 条，逐条算 token 集合的 Jaccard 相似度——两个集合交集除以并集，越接近 1 越相似——最高分 ≥ `MERGE_SIMILARITY = 0.5` 即视为同一条），命中则原位更新，否则同一事实会被反复存储、检索 top-5 全是重复条目。更新保留 `created`、刷新 `updated`，不产生新文件。
 - **来源三分类**：`MemorySource = "model" | "auto" | "human"`——模型工具保存 / 自动提取管线 / 人工手写，写进 frontmatter，检索与合并均可识别来源。
 
@@ -106,7 +106,7 @@ class MemoryStore {
 
 ### 自动提取（`memory.autoExtract`）
 
-写入侧还有第三条路——**运行后自动提取**（`packages/server/src/run.ts` 的 `#execute` / `#extractMemory`）：当一次运行以 `end_turn` 正常结束且 `config.memory.autoExtract` 为 `true` 时，服务端 fire-and-forget 地发起一次**不带工具**的 LLM 调用：模型取 `memory.extractModel`（为空回落到主对话模型的同一解析），system prompt 固定要求"只输出 JSON 字符串数组"，user 内容是整轮对话的逐行渲染（`renderConversation`，与压缩摘要共用，每行截 2000 字符）。解析时容忍可选的 ```json 围栏；响应不是合法 JSON、或解析结果非字符串数组（含非 string 元素）→ 整批放弃，只 `console.error`，不部分写入；空数组 → 无写入。每条事实以 `source: "auto"` 调 `save()`（复用 findSimilar 去重替换），单条 save 抛错记日志后继续下一条。提取完全异步——不 await、不影响运行结果；`aborted` / `error` 等非 `end_turn` 结束的运行不触发。
+写入侧还有第三条路——**运行后自动提取**（`packages/server/src/run.ts` 的 `#execute` / `#extractMemory`）：当一次运行以 `end_turn` 正常结束且 `config.memory.autoExtract` 为 `true` 时，服务端 fire-and-forget 地发起一次**不带工具**的 LLM 调用：模型取 `memory.extractModel`（为空回落到主对话模型的同一解析），system prompt 固定要求"只输出 JSON 字符串数组"，user 内容是整轮对话的逐行渲染（`renderSegment`，`packages/core/src/session/compaction.ts`，与压缩摘要输入共用同一构造，每行截 2000 字符）。解析时容忍可选的 ```json 围栏；响应不是合法 JSON、或解析结果非字符串数组（含非 string 元素）→ 整批放弃，只 `console.error`，不部分写入；空数组 → 无写入。每条事实以 `source: "auto"` 调 `save()`（复用 findSimilar 去重替换），单条 save 抛错记日志后继续下一条。提取完全异步——不 await、不影响运行结果；`aborted` / `error` 等非 `end_turn` 结束的运行不触发。
 
 ---
 
@@ -125,4 +125,5 @@ class MemoryStore {
 - [tools](./tools.md)：memory 工具在工具体系中的位置（safe/parallel 的含义）
 - [storage](./storage.md)：memory 目录在 `KclawPaths` 中的位置与 `autoExtract` 字段定义
 - [agent-loop](./agent-loop.md)：note 块如何随消息持久化并发出 `note.emitted`
+- [compaction](./compaction.md)：共享的分词器与消息渲染的另一方（会话段索引、压缩摘要输入）
 - [run-manager](../server/run-manager.md)：注入查询的 200 字符 / top-5 常量所在的服务端组装

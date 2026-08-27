@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/tools/` 实现全部 9 个内置工具，并把它们装配成两份对齐的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
+`packages/core/src/tools/` 实现全部 10 个内置工具，并把它们装配成两份对齐的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
 
 ---
 
@@ -37,6 +37,7 @@ export function createBuiltinTools(opts: {
   tavilyApiKey: string
   exec?: Partial<{ timeoutMs: number; maxOutputBytes: number }>
   web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean }>
+  sessionSearch?: SessionSearchFn    // session_search 的检索后端（server 每 run 注入）；缺席时工具仍注册、返回"(无可检索内容)"
   fetchImpl?: typeof fetch
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] }
 
@@ -52,7 +53,7 @@ export function makeTool<N extends string>(
 
 ---
 
-## 9 个内置工具
+## 10 个内置工具
 
 | 名称 | 职责 | risk / concurrency |
 |------|------|--------------------|
@@ -65,6 +66,7 @@ export function makeTool<N extends string>(
 | `web_fetch` | 抓取网页正文 | safe / parallel |
 | `memory_save` | 写入长期记忆 | safe / parallel |
 | `memory_search` | 全文检索记忆 | safe / parallel |
+| `session_search` | 全文检索当前会话已压缩的早期对话 | safe / parallel |
 
 ### exec（`tools/exec.ts`）
 
@@ -99,6 +101,12 @@ export function makeTool<N extends string>(
 - **memory_search** `{query, limit?}`：`limit` 默认 5、最大 20；每个命中一行 `- <text>`，按相关度排序；无命中输出 `(no memories)`。
 
 两个工具 safe + parallel：只访问笔记目录与索引，不修改工作目录本身（better-sqlite3 是同步接口，"parallel" 只表示调度器不强制排序）。
+
+### session 工具（`tools/session.ts`）
+
+**session_search** `{query, limit?}`：检索**当前会话**已压缩段的全文索引（`limit` 默认 5、最大 20；索引与重建机制见 [compaction](./compaction.md)）。每个命中输出两行——`- <段摘要>` 加缩进的匹配位置文本片段；会话没有压缩段（或 server 未注入检索后端）时输出 `(无可检索内容)`。safe + parallel，与 memory 工具同类：只读访问会话目录下的 index.db。
+
+工具**始终注册**（工具列表不随会话状态变化）：`createSessionTools(search?)` 的 search 参数缺席时工具仍在，只是查询一律返回"(无可检索内容)"——模型看到的工具集合稳定，不会因会话有没有压缩历史而变。
 
 ---
 
@@ -137,4 +145,5 @@ export function makeTool<N extends string>(
 - [permissions](./permissions.md)：`risk` 如何变成 allow/confirm 判定
 - [provider](./provider.md)：`ToolDefinition` 如何进入请求体
 - [memory](./memory.md)：memory 工具背后的存储与检索
+- [compaction](./compaction.md)：session_search 检索的索引来源（压缩段）与工具输出省略
 - [mcp](./mcp.md)：同一 ToolExecutor 契约的另一种工具来源

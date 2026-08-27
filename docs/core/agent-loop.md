@@ -35,11 +35,12 @@ export interface RunInput {
 export interface AgentDeps {
   llm: LlmClient
   model: string
-  window?: number             // 默认 40（条消息）
+  window?: number             // 默认 200（条消息；极端保险，见 compaction.md）
   maxIterations?: number      // 默认 25
   tools?: Map<string, ToolExecutor>
   toolDefs?: ToolDefinition[]
   permissions?: PermissionGate          // 缺失 == 全放行
+  toolResultKeep?: number               // 发送时保留最近 N 个工具结果原文（缺省全保留），见 compaction.md
   resolveConfirmation?(confirmationId: string): Promise<{ approved: boolean; by: "cli" | "web" | "timeout" }>
   confirmTimeoutMs?: number             // 默认 120_000
   signal?: AbortSignal                  // 取消信号，见"取消路径"
@@ -103,9 +104,10 @@ run.started {trigger}
 
 ## 消息编排（上下文组装）
 
-`toProviderMessages(history, window)`（`packages/core/src/agent/context.ts`）是协议消息 → provider 请求的唯一翻译点：
+`toProviderMessages(history, window, opts?)`（`packages/core/src/agent/context.ts`）是协议消息 → provider 请求的唯一翻译点：
 
-- **滑动窗口**（只保留最近 N 条历史、随新消息整体前移）：`history.slice(-window)`（window 默认 40），system prompt 不占窗口。服务端（RunManager）的长会话会先做滚动压缩——超阈值时把最老一段压成摘要并传入切片后的 history，窗口截断仅作为未压缩/压缩失败时的兜底。
+- **滑动窗口**（只保留最近 N 条历史、随新消息整体前移）：`history.slice(-window)`（window 默认 200），system prompt 不占窗口。服务端（RunManager）的长会话会在 run 开始前先做 token 触发的分层压缩——把较老的历史压成摘要并传入切片后的 history（见 [compaction](./compaction.md)），窗口截断仅作为未压缩/压缩失败时的极端保险。
+- **工具输出省略**（`opts.toolResultKeep`，server 从 `config.sessions.toolResultKeep` 传入，默认 8）：从最新消息往前数，最近 N 个工具结果原样保留，更早的把输出文本替换成一行占位符 `[此工具输出已省略：<工具名> <参数摘要>，可重新调用获取]`（调用失败加"（该次调用失败）"）。只影响发出的请求，JSONL 存储不动；配对关系不变，不产生无效请求。不传参数时行为完全不变（全部保留）。详见 [compaction](./compaction.md) 机制三。
 - **孤儿 tool 消息丢弃**：窗口切在 assistant 与 tool 消息之间时，开头的连续 `role:"tool"` 消息被 `shift` 丢弃——OpenAI 兼容 API 拒收无配对调用的 tool 结果。
 - **无配对的 tool_call 剔除**：assistant 的 `tool_call` 块只有当其后（窗口内）存在配对的 `tool_result` 才转成 `toolCalls` 发送；悬空调用会被 400。
 - **块级转换**：user/assistant 的 text 拼接为 content；note 转 `[system note] <text>` 行（对模型可见、可追溯）；tool 消息的每个 `tool_result` 转成一条消息，error 结果加 `[error] ` 前缀；assistant 没有 text 时 content 置 null、只带 toolCalls；thinking 不转换，模型看不到自己之前的思考内容。attachment 块按携带的内容分三种转法：带 `base64` 数据且 MIME 是 `image/*` 的转成一个多模态 `image_url` 内容段（data: URL 形式，与文本段并列为 content 数组的元素）；带内联 `text` 正文的转成 `[附件 <名称>]` 加正文；两者都不满足的只转一行元数据提示（`[附件 <名称>（<mime>，仅元数据）已保存，路径 <path>，可用 fs_read 读取]`），需要内容时由模型自己调 fs_read。
@@ -167,6 +169,7 @@ daemon 侧 `RunManager.cancel(sessionId)` 调 `AbortController.abort()`，循环
 ## 关联
 
 - [protocol](./protocol.md)：Message/Block/Event 的字段与事件全表
+- [compaction](./compaction.md)：token 触发的分层压缩、工具输出省略与 window 200 的分工
 - [provider](./provider.md)：OpenAI 兼容流解析与 withRetry
 - [permissions](./permissions.md)：判定链与规则语法（allow/deny 的来源）
 - [run-manager](../server/run-manager.md)：daemon 侧如何装配这些依赖

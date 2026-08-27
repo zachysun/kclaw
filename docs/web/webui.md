@@ -61,9 +61,9 @@ export function bootstrapToken(): string | null
 | 视图 | 组件 | 职责 |
 |------|------|------|
 | 会话列表（侧栏） | `sessions/SessionList.tsx` | 按 workdir 分组的会话列表：工作目录相同的会话排在同一个组头下面，组名默认就是目录路径，可以内联改名（改名存进 localStorage 键 `kclaw_workdir_names`，刷新页面后仍在）。每个组头带一个 ＋ 按钮，点击即在该目录新建会话；列表顶部的"＋ 选择工作目录新建会话"则打开 DirectoryPicker 浏览本机目录，选中哪个目录就在那里创建新会话——选中目录这个动作本身就是创建。单个会话的行内重命名与删除经 props 回调交上层处理。没有 workdir 的旧会话和任务会话归入"未指定工作目录"组 |
-| 对话（tab） | `chat/ChatPanel.tsx` + `ChatView.tsx` | 订阅 + 事件循环 + reducer；ChatView 只做渲染（thinking/tool_result 用原生 `<details>` 折叠）；确认卡片在输入区上方逐张渲染；输入区上方有模型选择器，选项来自 `GET /config` 返回的 provider 条目名，切换时调 `POST /sessions/:id/model`；文件可以直接拖进聊天区上传，上传后的附件列成一条待发条带，随下一条消息一起发出 |
+| 对话（tab） | `chat/ChatPanel.tsx` + `ChatView.tsx` | 订阅 + 事件循环 + reducer；ChatView 只做渲染（thinking/tool_result 用原生 `<details>` 折叠）；确认卡片在输入区上方逐张渲染；输入区上方有模型选择器，选项来自 `GET /config` 返回的 provider 条目名，切换时调 `POST /sessions/:id/model`；选择器旁有"压缩"按钮，调 `POST /sessions/:id/compact` 手动压缩当前会话，daemon 返回的一句话（`压缩了 N 段…` / `无可压缩内容` / 运行中拒绝）显示在通知条（见 [compaction](../core/compaction.md)）；文件可以直接拖进聊天区上传，上传后的附件列成一条待发条带，随下一条消息一起发出 |
 | 任务（tab） | `jobs/JobsView.tsx` | GET `/jobs` 表格（name/cron/enabled/nextRunAt/lastStatus/lastRunAt）；一张表单兼顾新建（POST）与编辑（PATCH），行内启用开关（PATCH `{enabled}`）、删除带原生 confirm；服务端 400 的 `{error}` 文案直接显示于错误提示条 |
-| 审计（tab） | `audit/AuditView.tsx` | 会话下拉 + `GET /sessions/:id/messages`，把消息摊平成"每块一行"、按 createdAt **升序**排列（最新在底部，像日志），点击展开完整块内容；工具行按 callId 关联 tool 消息的 `grantedBy` 显示放行原因；纯只读 |
+| 审计（tab） | `audit/AuditView.tsx` | 会话下拉 + `GET /sessions/:id/messages`，把消息摊平成"每块一行"、按 createdAt **升序**排列（最新在底部，像日志），点击展开完整块内容；工具行按 callId 关联 tool 消息的 `grantedBy` 显示放行原因；选中会话后追加拉取 `GET /sessions/:id/compactions`，在轨迹上方渲染"压缩记录"区块（每条一行：时间、自动/手动〔手动附 focus〕、被压范围 `from–upto`、条数，点击展开段摘要与总摘要全文）；纯只读 |
 | 用量（tab） | `usage/UsageView.tsx` | 并发拉 `GET /usage?by=day` 与 `?by=session` 两份聚合：顶部总计行（输入/输出 token 与费用）+ "导出 JSON" 按钮（再拉一份 by=session 存为 `kclaw-usage.json` 下载）；两张表分别按天、按会话列 token 与费用，未配置价格的模型费用显示"—" |
 | 回收站（tab） | `sessions/TrashView.tsx` | `GET /sessions?deleted=true` 软删除列表，行内恢复（POST `/:id/restore`）与彻底删除（POST `/:id/purge`），操作后重新拉取 |
 
@@ -110,7 +110,7 @@ export class WsAuthError extends Error { readonly code: number }  // 默认 4001
 - **`GET /` 404 = 没构建 web**：`resolveWebDist` 找不到目录时 daemon 纯 API 模式；先 `pnpm build`（web 包）再启动 daemon。
 - **ws 认证失败没有 token 刷新**：只能刷新页面重新进入输入页；API 侧的 401 重入不覆盖 ws 路径。
 - **错过的 confirmation.requested 不可恢复**：确认有时限（默认 120s），断线期间超时按拒绝处理；重连全量拉取只能看到结果（note 块），不能补答。
-- **审计页无独立 /audit 路由**：轨迹的唯一事实来源是 `messages.jsonl`（经 sessions 路由读取），没有单独的审计接口。
+- **消息轨迹没有独立 /audit 路由**：轨迹的唯一事实来源是 `messages.jsonl`（经 sessions 路由读取）；压缩记录有只读接口 `GET /sessions/:id/compactions`，在审计页选中会话后渲染为轨迹上方的"压缩记录"区块，无记录时不显示。
 - **Service Worker 缓存只覆盖外壳三文件**：消息与 API 响应永远不经过 Service Worker 缓存。要更新外壳时需要更换缓存名（把 `kclaw-shell-v1` 换成新名字），旧缓存会在 `activate` 阶段被清掉；只改 SHELL 里的文件内容而不换缓存名，老外壳可能一直留在用户浏览器里。
 - **无路由库**：tab 是普通 `useState`，刷新回到对话 tab；会话列表无分页、全量返回。
 
@@ -119,6 +119,7 @@ export class WsAuthError extends Error { readonly code: number }  // 默认 4001
 - [realtime](../server/realtime.md)：/ws 帧协议、订阅语义、断线恢复规则（CLI 与 WebUI 的共同契约）
 - [http-api](../server/http-api.md)：各视图消费的 REST 路由（含 /fs/browse、/usage、附件上传）
 - [run-manager](../server/run-manager.md)：`session.renamed` 的发射方、附件随 send_message 的服务端挂载
+- [compaction](../core/compaction.md)："压缩"按钮与审计页"压缩记录"区块背后的机制
 - [daemon](../server/daemon.md)：webDist 解析与静态托管、鉴权豁免的服务端侧
 - [onboarding](../cli/onboarding.md)：`kclaw web` 命令与 `?token=` 的发送侧
 - [protocol](../core/protocol.md)：事件目录与持久化块结构（model.ts 镜像的源头）

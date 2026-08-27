@@ -29,7 +29,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `<home>/AGENTS.md` | agent 人格，非空则作为系统提示 | 用户手编；daemon 启动时读 |
 | `<home>/memory/notes/` | 记忆 markdown，真相 | MemoryStore / 用户手编 |
 | `<home>/memory/index.db` | 记忆 FTS5 索引，派生物 | MemoryStore |
-| `<home>/sessions/<id>/` | 每会话一目录（meta.json + messages.jsonl） | SessionStore |
+| `<home>/sessions/<id>/` | 每会话一目录（meta.json + messages.jsonl + compactions.jsonl + index.db） | SessionStore（compactions.jsonl 与 index.db 由压缩机制写入，见 [compaction](./compaction.md)） |
 | `<home>/jobs.db` | 定时任务表 | JobScheduler |
 | `<home>/usage.db` | 每次 LLM 运行的 token 用量台账 | UsageStore |
 | `<home>/attachments/<id>/` | 附件外存目录（每会话一个子目录） | server 上传路由 `routes/attachments.ts`；运行时只读挂载 |
@@ -61,7 +61,8 @@ export function resolvePaths(home?: string): KclawPaths
 | `mcp.servers` | `{}` | 外部 MCP server 配置表（stdio/http 两种形态），daemon 启动时据此装配 McpManager（见 [mcp](./mcp.md)） |
 | `exec.timeoutMs` / `maxOutputBytes` | `60000` / `102400`（100 KiB） | exec 工具超时与输出截断上限 |
 | `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 清理用（见 [jobs](./jobs.md)） |
-| `sessions.compactThreshold` / `compactKeep` | `40` / `25` | 会话压缩：active history 达到 `compactThreshold` 条触发压缩（与循环 window 同为 40，消除静默截断盲区），压缩后保留最近 `compactKeep` 条原文；缺省由 server RunManager 兜底 |
+| `sessions.contextTokens` / `compactAtRatio` / `compactTargetRatio` / `toolResultKeep` | `128000` / `0.66` / `0.33` / `8` | 上下文压缩 v2（见 [compaction](./compaction.md)）：token 预算、触发线（估算发送量达预算 × 0.66 即压缩）、压缩后保留部分目标（预算 × 0.33）、发送时保留最近几个工具结果原文。四个字段均可选，缺省值在 server 读取处兜底（`packages/server/src/run.ts`） |
+| `sessions.compactThreshold` / `compactKeep` | 无（废弃） | v1 压缩（40 条触发、保留 25 条）的字段，已废弃不生效：配置文件里存在时不报错，但没有任何消费方 |
 | `notify.channels` | `[]` | job 终态通知渠道列表；为空即关闭（零开销）。条目 `{ name?, type, url, template? }`，`type` 三种：`bark`（POST JSON `{title, body}`）、`serverchan`（POST 表单 `title`+`desp`）、`webhook`（POST JSON，正文含 title/body 及全部 job 字段）。`template` 占位符：`{{job}}` `{{statusText}}` `{{status}}` `{{summary}}` `{{sessionId}}` `{{sessionUrl}}`，未知占位符渲染为空串 |
 | `notify.timeoutMs` | `10000` | 单次推送请求超时；推送失败仅记日志、不重试 |
 | `workspace` | `process.cwd()` | 工具的工作目录；daemon 由启动方决定 cwd，会话可经 `meta.workdir` 覆盖 |
@@ -99,9 +100,9 @@ export function readJsonl(file: string): unknown[]
 
 ## 会话目录与 messages.jsonl
 
-每个会话一个目录 `<sessionsDir>/<id>/`，两个文件（`SessionStore`）：
+每个会话一个目录 `<sessionsDir>/<id>/`，四个文件：`meta.json` 与 `messages.jsonl` 由 `SessionStore` 直接负责；`compactions.jsonl`（压缩审计）与 `index.db`（段检索索引，纯派生物可删）见 [compaction](./compaction.md)。
 
-- `meta.json`：`SessionMeta { id, title, createdAt, updatedAt, jobId?, workdir?, model?, readonly?, deleted?, deletedAt?, compactedSummary?, compactedUpto? }`，其中 `model` 为会话级模型覆盖（空/缺省回落 daemon 默认）、`readonly` 为会话级只读开关（写/exec 工具被拒，见 [permissions](./permissions.md)），`compactedSummary` 为滚动压缩摘要、`compactedUpto` 为摘要覆盖到的最后一条消息 id，其后为 active window，整文件重写更新（`updateMeta` 合并 patch、`undefined` 键删除、总是刷新 `updatedAt`）。
+- `meta.json`：`SessionMeta { id, title, createdAt, updatedAt, jobId?, workdir?, model?, readonly?, deleted?, deletedAt?, compactedSummary?, compactedUpto?, compaction? }`，其中 `model` 为会话级模型覆盖（空/缺省回落 daemon 默认）、`readonly` 为会话级只读开关（写/exec 工具被拒，见 [permissions](./permissions.md)）；`compactedSummary`/`compactedUpto` 是 v1 压缩的遗留字段（读取时兼容，下一次压缩写入新格式时删除），`compaction` 是 v2 分层压缩状态 `{ segments, top, upto }`（语义见 [compaction](./compaction.md)）。整文件重写更新（`updateMeta` 合并 patch、`undefined` 键删除、总是刷新 `updatedAt`）。
 - `messages.jsonl`：一行一条 `Message`，append-only。追加消息时顺带重写 meta.json 刷 `updatedAt`。
 
 `Message`（`packages/core/src/protocol/messages.ts`）基础字段 `{ id, sessionId, role: "user" | "assistant" | "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因）。id 前缀 `msg_` / `ses_`，ULID。
@@ -162,6 +163,7 @@ HTTP 出口与展示见 [http-api](../server/http-api.md) 的 `GET /usage` 与 [
 ## 关联
 
 - [jobs](./jobs.md)：jobs.db 的表结构与轮询
+- [compaction](./compaction.md)：压缩状态的三个落点（meta 字段、compactions.jsonl、index.db）与 v2 配置字段
 - [memory](./memory.md)：memory 目录双轨与索引重建
 - [protocol](./protocol.md)：Message / Block 的完整定义（messages.jsonl 每行即一个 Message）
 - [daemon](../server/daemon.md)：daemon.json 的写入时机与停机流程、token 的鉴权链路

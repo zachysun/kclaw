@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 24 个业务路由（健康/状态 2 个、会话 10 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 1 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 26 个业务路由（健康/状态 2 个、会话 12 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 1 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
@@ -10,7 +10,7 @@
 - **错误形状统一为 `{error: string}`**：每个路由分组（scope）注册 `setErrorHandler`，把 Fastify 的 body 解析错误（非法 JSON、空 body）也归一成这个形状，客户端只需一种解析逻辑。
 - **404 显式可判别**：会话/任务路由先查存在性（`sessions.meta(id)` / `jobs.get(id)`），不存在返回 `404 {error:"session not found"|"job not found"}`，不依赖异常路径。
 - **配置接口只读且脱敏**：API key 永远掩码返回，没有写回路由——修改配置通过文件（config.yaml）进行，daemon 重启后生效。
-- **审计轨迹没有专门路由**：轨迹页（web 的 `AuditView`）就是 `GET /sessions`（会话下拉）+ `GET /sessions/:id/messages`（按会话读取消息列表）两个只读接口组合而成；不存在 `/audit` 路由。
+- **消息审计没有专门路由，压缩审计有只读接口**：消息轨迹页（web 的 `AuditView`）就是 `GET /sessions`（会话下拉）+ `GET /sessions/:id/messages`（按会话读取消息列表）两个只读接口组合而成，不存在 `/audit` 路由。压缩审计不同——手动压缩刻意不产生消息，纯靠消息流看不到它的痕迹，因此有专门的只读接口 `GET /sessions/:id/compactions`（会话目录下 `compactions.jsonl` 的读取窗口，见 [compaction](../core/compaction.md)）。
 - **可选能力按注入条件注册**：附件路由只在传入 `attachmentsDir` 时注册、用量路由只在传入 `UsageStore` 时注册——能力未装配就没有这些路径，而不是"注册了但报错"；`GET /mcp` 则始终存在，daemon 未装配 McpManager 时返回空 server 列表。
 
 ## 路由清单
@@ -38,8 +38,10 @@
 | POST | `/sessions/:id/model` | 会话级模型切换（只影响此会话**之后**的 run，历史不动） | `{model?}`：provider 条目名（entry key，见 [run-manager](./run-manager.md) 的模型解析）或裸模型名；`""`/缺省清空回落默认；类型不对 400 `model must be a string`，条目不存在 400 `model not found: <name>` | `SessionMeta` |
 | POST | `/sessions/:id/readonly` | 会话级只读开关（write/exec 类工具被拒，见 [permissions](../core/permissions.md)） | `{readonly: boolean}` 必填；`false` 清除标记 | `SessionMeta` |
 | GET | `/sessions/:id/messages` | 读全部消息（轨迹/断线恢复的数据源） | — | `Message[]`（JSONL 逐行读出的完整对话史） |
+| GET | `/sessions/:id/compactions` | 压缩审计记录（审计页"压缩记录"区块的数据源） | — | `CompactionRecord[]`（compactions.jsonl 逐行读出，按行序；文件缺失返回 `[]`） |
+| POST | `/sessions/:id/compact` | 手动压缩：跳过触发线立即压缩一次（机制见 [compaction](../core/compaction.md)） | `{focus?}`：可选非空字符串，作为重点说明进入两次摘要调用；空串/非字符串 400 `focus must be a non-empty string` | `{message: string}`：成功 `压缩了 N 段，剩 X 条原文消息`；无可压缩内容 `无可压缩内容` |
 
-`:id` 不存在时上述全部返回 `404 {error:"session not found"}`；body 校验失败返回 400（如 `title must be a non-empty string`）。
+`:id` 不存在时上述全部返回 `404 {error:"session not found"}`；body 校验失败返回 400（如 `title must be a non-empty string`）。compact 的额外拒绝路径：会话有活跃或排队 run 时 409 `会话正在运行`；RunManager 未装配时 503。
 
 `SessionMeta` 字段（`packages/core/src/session/store.ts`）：
 
@@ -55,6 +57,10 @@ interface SessionMeta {
   readonly?: boolean    // 会话级只读模式（write/exec 工具被拒，读取不受限）
   deleted?: boolean
   deletedAt?: string
+  compactedSummary?: string   // v1 压缩遗留：读取兼容，下一次压缩写入新格式时删除
+  compactedUpto?: string
+  compaction?: { segments: { upto: string; summary: string }[]; top: string; upto: string }
+                              // v2 分层压缩状态，字段语义见 compaction.md
 }
 ```
 
@@ -126,7 +132,7 @@ interface Job {
 | GET | `/ws` | WebSocket（建立后可双向收发消息的长连接）升级端点；HTTP 鉴权豁免，连接内首帧认证，协议见 [realtime](./realtime.md) |
 | GET | `/`、`/assets/*` | 仅当 `webDist` 已配置时由 `@fastify/static` 托管构建产物；外壳三路径免鉴权，其余静态文件仍需 Bearer |
 
-## 审计轨迹的读取方式
+## 审计的读取方式
 
 web 的轨迹页（`packages/web/src/audit/AuditView.tsx`）演示了标准用法：
 
@@ -134,7 +140,9 @@ web 的轨迹页（`packages/web/src/audit/AuditView.tsx`）演示了标准用�
 2. `GET /sessions/:id/messages` 获取该会话全部 `Message[]`；
 3. 客户端把每条消息按块（block）摊平为逐行轨迹（role + 类型标签 + 摘要，点击展开完整块）。
 
-只读、无 mutation、无独立 `/audit` 路由——`messages.jsonl`（每行一条 JSON 的消息文件）是唯一事实来源，HTTP 只是它的读取窗口。tool 消息上的 `grantedBy`（每个工具调用的放行原因）随 `Message` 一起返回，是"谁批准了这个操作"的审计依据。
+只读、无 mutation、无独立 `/audit` 路由——`messages.jsonl`（每行一条 JSON 的消息文件）是消息轨迹的唯一事实来源，HTTP 只是它的读取窗口。tool 消息上的 `grantedBy`（每个工具调用的放行原因）随 `Message` 一起返回，是"谁批准了这个操作"的审计依据。
+
+消息轨迹之外，选中会话后轨迹页还追加拉取 `GET /sessions/:id/compactions`，在轨迹上方渲染"压缩记录"区块——压缩审计的事实来源是 `compactions.jsonl`，同样只读（记录格式见 [compaction](../core/compaction.md)）。
 
 ## 鉴权中间件行为
 
@@ -169,5 +177,6 @@ app.addHook("preHandler", async (request, reply) => {
 - [realtime](./realtime.md)：`/ws` 端点的帧协议
 - [run-manager](./run-manager.md)：send_message 背后的入队与附件挂载
 - [storage](../core/storage.md)：SessionStore/JobScheduler/UsageStore 的持久化实现
+- [compaction](../core/compaction.md)：compact/compactions 两个路由背后的机制与记录格式
 - [mcp](../core/mcp.md)：`GET /mcp` 快照背后的连接管理器
 - [jobs](../core/jobs.md)：cron 语义与 nextRunAt 推进规则
