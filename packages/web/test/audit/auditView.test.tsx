@@ -1,7 +1,8 @@
 /**
  * AuditView — the trail page (轨迹页, reads messages.jsonl via
  * GET /sessions + GET /sessions/:id/messages). Covers the session dropdown,
- * flattening each message's blocks into one row per block (createdAt desc),
+ * flattening each message's blocks into one row per block (createdAt asc —
+ * newest at the bottom),
  * the one-line summary per block type, click-to-expand full content, and the
  * "暂无轨迹" empty state.
  */
@@ -107,7 +108,7 @@ describe("AuditView (trail)", () => {
     unmount(root, container)
   })
 
-  it("orders blocks by message createdAt descending", async () => {
+  it("orders blocks by message createdAt ascending (newest at the bottom)", async () => {
     const api = makeApi()
     api.get.mockImplementation(async (path: string) => {
       if (path === "/sessions") return [session("s1", "会话1")]
@@ -126,8 +127,8 @@ describe("AuditView (trail)", () => {
 
     const rows = Array.from(container.querySelectorAll('[data-testid^="trail-row-"]'))
     const texts = rows.map((r) => r.textContent ?? "")
-    expect(texts[0]).toContain("晚的")
-    expect(texts[1]).toContain("早的")
+    expect(texts[0]).toContain("早的")
+    expect(texts[1]).toContain("晚的")
     unmount(root, container)
   })
 

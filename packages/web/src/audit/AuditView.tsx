@@ -2,8 +2,9 @@
  * AuditView — the trail page (轨迹页). Single source of truth is the session's
  * messages.jsonl, read through GET /sessions (the session dropdown) and
  * GET /sessions/:id/messages (the message list). Each message is flattened into
- * one row per block, ordered by message createdAt descending; each row shows a
- * type label plus a one-line summary, and expands on click to the full block
+ * one row per block, ordered by message createdAt ascending — newest at the
+ * bottom, like a log; each row shows a type label plus a one-line summary, and
+ * expands on click to the full block
  * payload. No mutation, no /audit — the old audit tail route is gone.
  */
 import { useEffect, useState } from "react"
@@ -141,7 +142,8 @@ export function AuditView({ api }: { api: ApiClient }) {
 }
 
 /**
- * Flatten messages (createdAt descending) into one row per block; blocks within
+ * Flatten messages (createdAt ascending — newest at the bottom) into one row
+ * per block; blocks within
  * a message keep their authored order. Tool rows (tool_call/tool_result) carry
  * the grant reason for their callId, resolved from the tool messages' message-
  * level `grantedBy` maps (a tool_call lives on an assistant message, its
@@ -149,7 +151,7 @@ export function AuditView({ api }: { api: ApiClient }) {
  */
 function flattenTrail(messages: Message[] | null): TrailRow[] {
   if (messages === null) return []
-  const sorted = [...messages].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+  const sorted = [...messages].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0))
 
   // callId → grant reason, gathered from every tool message's grantedBy map.
   const grantByCallId = new Map<string, ToolGrantReason>()
