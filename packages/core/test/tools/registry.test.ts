@@ -21,6 +21,7 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 const ALL_TOOLS = [
   "exec", "fs_read", "fs_list", "fs_write", "fs_edit",
   "web_search", "web_fetch", "memory_save", "memory_search",
+  "session_search",
 ]
 
 /** required arrays per tool (task brief); checked as sets. */
@@ -34,6 +35,7 @@ const REQUIRED: Record<string, string[]> = {
   web_fetch: ["url"],
   memory_save: ["text"],
   memory_search: ["query"],
+  session_search: ["query"],
 }
 
 describe("builtin tool registry", () => {
@@ -66,7 +68,7 @@ describe("builtin tool registry", () => {
       type: "array", items: { type: "string" }, description: expect.any(String),
     })
     expect(prop("memory_search", "limit")).toEqual({ type: "integer", minimum: 1, maximum: 20 })
-    for (const tool of ["exec", "fs_read", "fs_list", "fs_write", "fs_edit", "web_fetch", "memory_save", "memory_search"]) {
+    for (const tool of ["exec", "fs_read", "fs_list", "fs_write", "fs_edit", "web_fetch", "memory_save", "memory_search", "session_search"]) {
       expect(prop(tool, REQUIRED[tool][0])).toEqual({ type: "string", description: expect.any(String) })
     }
   })

@@ -12,11 +12,13 @@ import type { ToolDefinition } from "../provider/types.js"
 import { createExecTool } from "./exec.js"
 import { createFsTools } from "./fs.js"
 import { createMemoryTools } from "./memory.js"
+import { createSessionTools, type SessionSearchFn } from "./session.js"
 import { createWebTools } from "./web.js"
 
 export { createExecTool, truncateMiddle } from "./exec.js"
 export { createFsTools } from "./fs.js"
 export { createMemoryTools } from "./memory.js"
+export { createSessionTools, type SessionSearchFn } from "./session.js"
 export { createWebTools } from "./web.js"
 
 /** A string property with a model-facing description. */
@@ -41,6 +43,7 @@ export function createBuiltinTools(opts: {
   tavilyApiKey: string
   exec?: Partial<{ timeoutMs: number; maxOutputBytes: number }>
   web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean }>
+  sessionSearch?: SessionSearchFn
   fetchImpl?: typeof fetch
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] } {
   const exec = createExecTool({
@@ -56,6 +59,7 @@ export function createBuiltinTools(opts: {
     allowPrivateNetworks: opts.web?.allowPrivateNetworks,
   })
   const memory = createMemoryTools(opts.memory)
+  const session = createSessionTools(opts.sessionSearch)
 
   const entries: Array<{ name: string; tool: ToolExecutor; def: ToolDefinition }> = [
     {
@@ -155,6 +159,16 @@ export function createBuiltinTools(opts: {
         "memory_search",
         "Full-text search (CJK-aware) over saved memories; returns one `- <text>` line per hit, ranked by relevance.",
         { query: str("What to look for in stored memories"), limit: int(1, 20) },
+        ["query"],
+      ),
+    },
+    {
+      name: "session_search",
+      tool: session.session_search,
+      def: def(
+        "session_search",
+        "全文检索本会话早期已被压缩的对话内容（中文友好）。每个命中返回段摘要和匹配位置的原文片段。",
+        { query: str("要在早期对话里找什么"), limit: int(1, 20) },
         ["query"],
       ),
     },

@@ -31,6 +31,8 @@ import {
   realpathWithin,
   renderSegment,
   runAgent,
+  segmentRanges,
+  SegmentIndex,
 } from "@kclaw/core"
 import type {
   AgentEvent,
@@ -43,6 +45,7 @@ import type {
   NoteBlock,
   PermissionGate,
   RunOutcome,
+  SessionSearchFn,
   SessionStore,
   ToolCallBlock,
   ToolExecutor,
@@ -349,6 +352,7 @@ export class RunManager {
       tavilyApiKey: config.web.tavilyApiKey,
       exec: { timeoutMs: config.exec.timeoutMs, maxOutputBytes: config.exec.maxOutputBytes },
       web: { timeoutMs: config.web.timeoutMs, allowPrivateNetworks: config.web.allowPrivateNetworks },
+      sessionSearch: this.#buildSessionSearch(sessionId, history),
     })
     // test/adapter seam: per-name executor overrides on top of the
     // builtins; toolDefs stay the builtins' — an override replaces behavior,
@@ -663,6 +667,32 @@ export class RunManager {
       return { summary, active: active.slice(-keep) }
     }
     return { summary: meta?.compactedSummary, active }
+  }
+
+  /**
+   * Lazy per-run session_search backing (spec 6.4): opens (or rebuilds)
+   * the segment index on first call. Legacy-upgrade sessions have no
+   * segments yet → always "(无可检索内容)" until the first v2 compaction.
+   */
+  #buildSessionSearch(sessionId: string, history: Message[]): SessionSearchFn {
+    let index: SegmentIndex | undefined
+    return async (query, limit) => {
+      const meta = this.#deps.sessions.meta(sessionId)
+      const state = meta?.compaction
+      if (state === undefined || state.segments.length === 0) return []
+      if (index === undefined) {
+        const legacyUpto = meta?.compactedUpto
+        const entries = segmentRanges(history, state.segments, legacyUpto)
+          .map((r) => ({
+            upto: r.upto,
+            body: renderSegment(r.messages),
+            summary: state.segments.find((s) => s.upto === r.upto)?.summary ?? "",
+          }))
+          .filter((e) => e.body !== "")
+        index = SegmentIndex.ensure(join(this.#deps.paths.sessionsDir, sessionId, "index.db"), entries)
+      }
+      return index.search(query, limit)
+    }
   }
 
   /** AGENTS.md persona when the file exists and is non-empty; default otherwise. */
