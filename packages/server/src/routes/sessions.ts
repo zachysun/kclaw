@@ -123,6 +123,13 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       return stores.sessions.readMessages(id)
     })
 
+    // Compaction audit log (spec 6A.2): read-only view over compactions.jsonl.
+    scope.get("/sessions/:id/compactions", async (request, reply) => {
+      const { id } = request.params as { id: string }
+      if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
+      return stores.sessions.readCompactions(id)
+    })
+
     scope.patch("/sessions/:id", async (request, reply) => {
       const parsed = parseSessionBody(request.body)
       if (!parsed.ok) return reply.code(400).send({ error: parsed.error })

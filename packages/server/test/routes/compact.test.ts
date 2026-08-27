@@ -116,4 +116,24 @@ describe("POST /sessions/:id/compact", () => {
       await bare.close()
     }
   })
+
+  it("GET /sessions/:id/compactions returns 404 / [] / records", async () => {
+    expect((await app.inject({ method: "GET", url: "/sessions/ses_missing/compactions", headers: AUTH })).statusCode).toBe(404)
+    const s = sessions.create("c")
+    const empty = await app.inject({ method: "GET", url: `/sessions/${s.id}/compactions`, headers: AUTH })
+    expect(empty.statusCode).toBe(200)
+    expect(empty.json()).toEqual([])
+    // records: oldest append first (file order)
+    sessions.appendCompaction(s.id, {
+      at: "2026-08-27T00:00:00.000Z", trigger: "auto", from: "m1", upto: "m3",
+      messages: 3, segmentSummary: "段摘要", top: "总摘要",
+    })
+    sessions.appendCompaction(s.id, {
+      at: "2026-08-27T00:00:01.000Z", trigger: "manual", focus: "登录模块", from: "m1", upto: "m3",
+      messages: 3, segmentSummary: "段摘要", top: "总摘要",
+    })
+    const filled = await app.inject({ method: "GET", url: `/sessions/${s.id}/compactions`, headers: AUTH })
+    expect(filled.statusCode).toBe(200)
+    expect((filled.json() as Array<{ trigger: string }>).map((r) => r.trigger)).toEqual(["auto", "manual"])
+  })
 })

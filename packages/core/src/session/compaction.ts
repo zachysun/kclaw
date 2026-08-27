@@ -52,6 +52,18 @@ export interface CompactionSegment { upto: string; summary: string }
 /** v2 compaction state persisted on SessionMeta (spec 5.1). */
 export interface CompactionState { segments: CompactionSegment[]; top: string; upto: string }
 
+/** One audit line in a session's compactions.jsonl (spec 6A.1). */
+export interface CompactionRecord {
+  at: string // ISO-8601
+  trigger: "auto" | "manual"
+  focus?: string
+  from: string | null // first message id of the compacted span; null = session start
+  upto: string
+  messages: number
+  segmentSummary: string
+  top: string
+}
+
 /**
  * Decide the retention boundary (spec 6.1.2). Walks NEWEST→oldest until the
  * accumulated estimate reaches budget×targetRatio — the walk marks the kept

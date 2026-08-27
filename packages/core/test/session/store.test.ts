@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SessionStore } from "../../src/session/store.js"
 import { newMessage } from "../../src/protocol/messages.js"
+import type { CompactionRecord } from "../../src/session/compaction.js"
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "kclaw-sess-")) })
@@ -165,5 +166,24 @@ describe("SessionStore", () => {
     expect(purged).toContain(old.id)
     expect(purged).not.toContain(fresh.id)
     expect(store.meta(fresh.id)).toBeDefined()
+  })
+
+  it("appends and reads compaction audit records", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("审计")
+    const rec: CompactionRecord = {
+      at: "2026-08-27T00:00:00.000Z", trigger: "auto", from: "m1", upto: "m3",
+      messages: 3, segmentSummary: "段摘要", top: "总摘要",
+    }
+    store.appendCompaction(meta.id, rec)
+    store.appendCompaction(meta.id, { ...rec, trigger: "manual" as const, focus: "登录模块" })
+    expect(store.readCompactions(meta.id)).toHaveLength(2)
+    expect(store.readCompactions(meta.id)[1]).toMatchObject({ trigger: "manual", focus: "登录模块" })
+  })
+
+  it("returns [] when no compactions file exists", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("无记录")
+    expect(store.readCompactions(meta.id)).toEqual([])
   })
 })

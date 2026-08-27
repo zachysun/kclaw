@@ -975,6 +975,48 @@ describe("RunManager context compaction v2", () => {
     // the fresh v2 state landed in meta
     expect(env.sessions.meta(session.id)!.compaction).toMatchObject({ top: "总摘要F" })
   })
+
+  it("audit-logs auto compaction with the covered range", async () => {
+    const { env, manager } = makeEnv(
+      scriptClient([textTurn("段摘要A"), textTurn("总摘要A"), textTurn("主回复")]),
+      (c) => { c.sessions.contextTokens = 10 },
+    )
+    const session = env.sessions.create("审计")
+    const seeded = seedHistory(env.sessions, session.id, 2)
+    await manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
+    const records = env.sessions.readCompactions(session.id)
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({
+      trigger: "auto", from: seeded[0]!.id, upto: seeded[1]!.id,
+      messages: 2, segmentSummary: "段摘要A", top: "总摘要A",
+    })
+    expect(records[0]!.focus).toBeUndefined()
+  })
+
+  it("audit-logs manual compaction with trigger manual (focus optional)", async () => {
+    const { env, manager } = makeEnv(
+      scriptClient([textTurn("段摘要F"), textTurn("总摘要F")]),
+      (c) => { c.sessions.contextTokens = 10 }, // tiny target so a manual boundary exists
+    )
+    const session = env.sessions.create("手动审计")
+    seedHistory(env.sessions, session.id, 2)
+    await manager.compactSession(session.id) // 不带 focus
+    const records = env.sessions.readCompactions(session.id)
+    expect(records).toHaveLength(1)
+    expect(records[0]!.trigger).toBe("manual")
+    expect(records[0]!.focus).toBeUndefined()
+  })
+
+  it("writes no audit record when the summarizer fails", async () => {
+    const { env, manager } = makeEnv(
+      failFirstClient("摘要挂了", textTurn("主回复")),
+      (c) => { c.sessions.contextTokens = 10 },
+    )
+    const session = env.sessions.create("失败审计")
+    seedHistory(env.sessions, session.id, 2)
+    await manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
+    expect(env.sessions.readCompactions(session.id)).toEqual([])
+  })
 })
 
 // --- auto memory extraction -------------------------------------------------

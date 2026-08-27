@@ -649,8 +649,8 @@ export class RunManager {
    * manual focus. Two tool-less LLM calls (segment summary, top merge),
    * then ONE meta write — no state lands unless both calls succeed, so a
    * throw anywhere equals "compaction did not happen" and the caller falls
-   * back to the full history. The segment index write is best-effort
-   * (logged, never fatal).
+   * back to the full history. The segment index write and the audit append
+   * are best-effort (logged, never fatal).
    */
   async #compactV2(
     sessionId: string,
@@ -711,6 +711,20 @@ export class RunManager {
       SegmentIndex.open(join(this.#deps.paths.sessionsDir, sessionId, "index.db")).addSegment(upto, body, segmentSummary)
     } catch (err) {
       console.error(`kclaw segment index (${sessionId}) write failed:`, err)
+    }
+    try {
+      sessions.appendCompaction(sessionId, {
+        at: new Date().toISOString(),
+        trigger: opts.manual === true ? "manual" : "auto",
+        ...(opts.focus === undefined ? {} : { focus: opts.focus }),
+        from: seg[0]?.id ?? null,
+        upto,
+        messages: seg.length,
+        segmentSummary,
+        top,
+      })
+    } catch (err) {
+      console.error(`kclaw compaction audit (${sessionId}) append failed:`, err)
     }
     return { summary: top, segments: nextSegments.length, active: active.slice(boundary.keepFrom), compacted: true }
   }

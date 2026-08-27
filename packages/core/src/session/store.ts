@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { newId } from "../protocol/ids.js"
 import type { Message } from "../protocol/messages.js"
-import type { CompactionState } from "./compaction.js"
+import type { CompactionRecord, CompactionState } from "./compaction.js"
 import { writeFileAtomic } from "../storage/atomic.js"
 import { appendJsonlLine, readJsonl } from "../storage/jsonl.js"
 
@@ -30,6 +30,7 @@ export interface SessionMeta {
 
 const META_FILE = "meta.json"
 const MESSAGES_FILE = "messages.jsonl"
+const COMPACTIONS_FILE = "compactions.jsonl"
 
 /**
  * Append-only JSONL session persistence:
@@ -119,6 +120,21 @@ export class SessionStore {
   /** Load a session's messages; missing file yields []. */
   readMessages(id: string): Message[] {
     return readJsonl(this.messagesPath(id)) as Message[]
+  }
+
+  /** Append one compaction audit record (spec 6A.1). */
+  appendCompaction(id: string, record: CompactionRecord): void {
+    mkdirSync(this.sessionDir(id), { recursive: true })
+    appendJsonlLine(join(this.sessionDir(id), COMPACTIONS_FILE), record)
+  }
+
+  /** Read the compaction audit log; missing file yields []. */
+  readCompactions(id: string): CompactionRecord[] {
+    try {
+      return readJsonl(join(this.sessionDir(id), COMPACTIONS_FILE)) as CompactionRecord[]
+    } catch {
+      return []
+    }
   }
 
   /** Merge `patch` into meta.json and bump updatedAt. `undefined` keys in the patch are removed. */
