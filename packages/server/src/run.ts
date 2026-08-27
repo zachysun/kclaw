@@ -29,6 +29,7 @@ import {
   newBlockId,
   newMessage,
   realpathWithin,
+  renderSegment,
   runAgent,
 } from "@kclaw/core"
 import type {
@@ -64,34 +65,9 @@ const MEMORY_LIMIT = 5
 const COMPACT_SYSTEM_PROMPT =
   "你是对话摘要器。把给定对话（可能包含此前的旧摘要）压缩为不超过500字的中文摘要，保留：关键事实、用户偏好与约定、已做的决定、未完成事项。直接输出摘要正文，不要任何前后缀。"
 
-/** Per-message line cap in the compaction conversation rendering. */
-const RENDER_LINE_MAX_CHARS = 2000
-
 /** Verbatim memory-extraction system prompt (spec-pinned). */
 const EXTRACT_SYSTEM_PROMPT =
   "从对话中提取值得长期记住的用户个人事实（居住地、偏好、约定、背景等）。只输出 JSON 字符串数组，无值得记的内容输出 []。"
-
-/**
- * Render a message list as one line per message (`user: <text>` /
- * `assistant: <text>`): text and note block contents joined by spaces;
- * tool_call/tool_result blocks are skipped; a message without text renders
- * as `<tool use>`; each line truncated at 2000 chars. Shared with the
- * auto-memory pipeline (T3).
- */
-function renderConversation(messages: Message[]): string {
-  const lines: string[] = []
-  for (const m of messages) {
-    const parts: string[] = []
-    for (const b of m.blocks) {
-      if (b.type === "text" || b.type === "note") parts.push(b.text)
-    }
-    const body = parts.join(" ").trim()
-    let line = `${m.role}: ${body === "" ? "<tool use>" : body}`
-    if (line.length > RENDER_LINE_MAX_CHARS) line = line.slice(0, RENDER_LINE_MAX_CHARS)
-    lines.push(line)
-  }
-  return lines.join("\n")
-}
 
 /** Text-like MIME/exif: inlined into context when small enough. */
 const TEXT_MIME = /^text\//
@@ -618,7 +594,7 @@ export class RunManager {
     const raw = await collectStreamText(runLlm, {
       model,
       system: EXTRACT_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: renderConversation(messages) }],
+      messages: [{ role: "user", content: renderSegment(messages) }],
       tools: [],
     })
     let text = raw.trim()
@@ -675,8 +651,8 @@ export class RunManager {
       const seg = active.slice(0, active.length - keep)
       const prev = meta?.compactedSummary
       const content = prev === undefined
-        ? renderConversation(seg)
-        : `${prev}\n\n以下是需要并入的最新被压缩对话：\n${renderConversation(seg)}`
+        ? renderSegment(seg)
+        : `${prev}\n\n以下是需要并入的最新被压缩对话：\n${renderSegment(seg)}`
       const summary = await collectStreamText(runLlm, {
         model,
         system: COMPACT_SYSTEM_PROMPT,

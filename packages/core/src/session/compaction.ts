@@ -1,4 +1,5 @@
 import type { AssistantMessage, Message } from "../protocol/messages.js"
+import { isBlockType } from "../protocol/blocks.js"
 
 const CJK = /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/
 
@@ -101,4 +102,36 @@ export function segmentRanges(
     startExclusive = seg.upto
   }
   return out
+}
+
+const SEGMENT_LINE_MAX = 2_000
+const TOOL_ARGS_MAX = 120
+const TOOL_RESULT_MAX = 300
+
+/**
+ * Compaction/extraction input rendering (spec 6.2.1): one line per
+ * message; tool activity condensed (call `→ name(args)`, result `⇐ head`),
+ * compact-kind notes excluded (the top summary already lives in meta).
+ */
+export function renderSegment(messages: Message[]): string {
+  const lines: string[] = []
+  for (const m of messages) {
+    const parts: string[] = []
+    for (const b of m.blocks) {
+      if (isBlockType("text", b)) parts.push(b.text)
+      else if (isBlockType("note", b) && b.kind !== "compact") parts.push(b.text)
+      else if (isBlockType("tool_call", b)) {
+        const args = b.argsJson.length > TOOL_ARGS_MAX ? `${b.argsJson.slice(0, TOOL_ARGS_MAX)}…` : b.argsJson
+        parts.push(`→ ${b.name}(${args})`)
+      } else if (isBlockType("tool_result", b)) {
+        const prefix = b.status === "error" ? "[错误] " : ""
+        parts.push(`⇐ ${prefix}${b.output.slice(0, TOOL_RESULT_MAX)}`)
+      }
+    }
+    const body = parts.join(" ").trim()
+    let line = `${m.role}: ${body === "" ? "<tool use>" : body}`
+    if (line.length > SEGMENT_LINE_MAX) line = line.slice(0, SEGMENT_LINE_MAX)
+    lines.push(line)
+  }
+  return lines.join("\n")
 }

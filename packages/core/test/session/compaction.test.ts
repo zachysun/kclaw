@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { newAssistantMessage, newMessage } from "../../src/protocol/messages.js"
 import { estimateContextTokens, estimateTokens } from "../../src/session/compaction.js"
-import { chooseBoundary, segmentRanges } from "../../src/session/compaction.js"
+import { chooseBoundary, renderSegment, segmentRanges } from "../../src/session/compaction.js"
 
 function hist(...roles: Array<"user" | "assistant">): Array<ReturnType<typeof newMessage>> {
   return roles.map((r, i) =>
@@ -92,5 +92,53 @@ describe("segmentRanges", () => {
     const legacyUpto = msgs[1]!.id
     const ranges = segmentRanges(msgs, [{ upto: msgs[3]!.id }], legacyUpto)
     expect(ranges[0]!.messages.map((m) => m.id)).toEqual([msgs[2]!.id, msgs[3]!.id])
+  })
+})
+
+describe("renderSegment", () => {
+  it("renders one line per message with tool call/result condensed", () => {
+    const u = newMessage("s", "user", [{ id: "b1", type: "text", text: "看一下配置" }])
+    const a = newAssistantMessage("s", "m", [
+      { id: "b2", type: "text", text: "我来读" },
+      { id: "b3", type: "tool_call", callId: "c1", name: "fs_read", args: { path: "cfg.yaml" }, argsJson: '{"path":"cfg.yaml"}' },
+    ])
+    a.stopReason = "tool_use"
+    const t = newMessage("s", "tool", [
+      { id: "b4", type: "tool_result", callId: "c1", status: "ok", output: "port: 8080", durationMs: 3 },
+    ])
+    const lines = renderSegment([u, a, t]).split("\n")
+    expect(lines[0]).toBe("user: 看一下配置")
+    expect(lines[1]).toContain("assistant: 我来读")
+    expect(lines[1]).toContain('→ fs_read({"path":"cfg.yaml"})')
+    expect(lines[2]).toContain("⇐ port: 8080")
+  })
+
+  it("marks errored tool results and truncates long outputs to 300 chars", () => {
+    const t = newMessage("s", "tool", [
+      { id: "b1", type: "tool_result", callId: "c1", status: "error", output: "炸".repeat(1000), durationMs: 1 },
+    ])
+    const line = renderSegment([t])
+    expect(line).toContain("[错误]")
+    expect(line.length).toBeLessThan(2000)
+    expect(line).not.toContain("炸".repeat(301))
+  })
+
+  it("excludes compact-kind notes (already persisted as the top summary)", () => {
+    const u = newMessage("s", "user", [
+      { id: "b1", type: "text", text: "问题" },
+      { id: "b2", type: "note", kind: "compact", text: "早期对话已压缩…" },
+      { id: "b3", type: "note", kind: "memory", text: "相关记忆: 用户在上海" },
+    ])
+    const line = renderSegment([u])
+    expect(line).toContain("问题")
+    expect(line).toContain("相关记忆: 用户在上海")
+    expect(line).not.toContain("早期对话已压缩")
+  })
+
+  it("renders tool-only messages without text as <tool use>", () => {
+    const a = newAssistantMessage("s", "m", [
+      { id: "b1", type: "tool_call", callId: "c1", name: "exec", args: { command: "ls" }, argsJson: '{"command":"ls"}' },
+    ])
+    expect(renderSegment([a])).toContain("→ exec(")
   })
 })
