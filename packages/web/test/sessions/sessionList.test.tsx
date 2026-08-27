@@ -1,8 +1,9 @@
 /**
- * SessionList — pure presentational sidebar list. No I/O: sessions arrive
+ * SessionList — the sidebar's session list. No HTTP: sessions arrive
  * through props, selection/create/browse escape through callbacks. Covers
- * list rendering, click-to-select, the new-session button, the workdir
- * directory picker, the per-row workdir label, and the empty state.
+ * list rendering, click-to-select, the per-workdir-group ＋ button, the
+ * 选择工作目录 picker flow, the workdir display-name rename, and the
+ * empty state.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { createRoot, type Root } from "react-dom/client"
@@ -122,6 +123,61 @@ describe("SessionList", () => {
     unmount(root, container)
   })
 
+  it("creates a session directly in a workdir from the group ＋ button; the unassigned group has none", () => {
+    const onCreate = vi.fn()
+    const s1 = { ...session("s1", "会话一", "t"), workdir: "/ws/project" }
+    const s2 = session("s2", "无目录会话", "t")
+    const { container, root } = mount({ sessions: [s1, s2], onCreate })
+    act(() => click(container, "group-new-/ws/project"))
+    expect(onCreate).toHaveBeenCalledWith("/ws/project")
+    // The unassigned group (empty workdir) offers no direct create button.
+    expect(container.querySelector('[data-testid="group-new-"]')).toBeNull()
+    unmount(root, container)
+  })
+
+  it("opens the picker from the daemon root, navigates, and creates a session in the picked directory", async () => {
+    const onBrowse = vi.fn((path?: string) =>
+      Promise.resolve(
+        path === undefined
+          ? { path: "/Users/x", parent: "/", dirs: ["coding"] }
+          : { path: "/Users/x/coding", parent: "/Users/x", dirs: [] },
+      ),
+    )
+    const onCreate = vi.fn()
+    const { container, root } = mount({ onBrowse, onCreate })
+    await act(async () => click(container, "pick-workdir"))
+    expect(onBrowse).toHaveBeenCalledWith(undefined) // starts at the daemon workspace
+    expect(container.querySelector('[data-testid="picker-item-coding"]')).not.toBeNull()
+
+    await act(async () => click(container, "picker-item-coding"))
+    expect(onBrowse).toHaveBeenCalledWith("/Users/x/coding")
+    expect(container.querySelector('[data-testid="picker-current"]')?.textContent).toBe("/Users/x/coding")
+
+    act(() => click(container, "picker-confirm"))
+    expect(container.querySelector('[data-testid="picker-overlay"]')).toBeNull()
+    expect(onCreate).toHaveBeenCalledWith("/Users/x/coding")
+    unmount(root, container)
+  })
+
+  it("closes the picker on cancel without creating anything", async () => {
+    const onBrowse = vi.fn(() => Promise.resolve({ path: "/a", parent: null, dirs: [] }))
+    const onCreate = vi.fn()
+    const { container, root } = mount({ onBrowse, onCreate })
+    await act(async () => click(container, "pick-workdir"))
+    act(() => click(container, "picker-cancel"))
+    expect(container.querySelector('[data-testid="picker-overlay"]')).toBeNull()
+    expect(onCreate).not.toHaveBeenCalled()
+    unmount(root, container)
+  })
+
+  it("shows the error inside the picker when browsing fails", async () => {
+    const onBrowse = vi.fn(() => Promise.reject(new Error("目录读取失败: boom")))
+    const { container, root } = mount({ onBrowse })
+    await act(async () => click(container, "pick-workdir"))
+    expect(container.querySelector('[data-testid="picker-error"]')?.textContent).toContain("boom")
+    unmount(root, container)
+  })
+
   it("renames a workdir group inline and keeps the per-row workdir text", () => {
     const s1 = { ...session("s1", "会话一", "t"), workdir: "/ws/project" }
     const { container, root } = mount({ sessions: [s1] })
@@ -137,89 +193,6 @@ describe("SessionList", () => {
     expect(JSON.parse(localStorage.getItem("kclaw_workdir_names")!)).toEqual({ "/ws/project": "项目 Alpha" })
     // The small workdir line under the session title is untouched.
     expect(container.querySelector('[data-testid="session-workdir-s1"]')?.textContent).toBe("/ws/project")
-    unmount(root, container)
-  })
-
-  it("persists the typed workdir input across remounts", () => {
-    const first = mount({})
-    typeInto(first.container.querySelector('[data-testid="session-workdir-input"]') as HTMLInputElement, "/persist/me")
-    expect(localStorage.getItem("kclaw_last_workdir")).toBe("/persist/me")
-    unmount(first.root, first.container)
-
-    const second = mount({})
-    expect((second.container.querySelector('[data-testid="session-workdir-input"]') as HTMLInputElement).value).toBe("/persist/me")
-    unmount(second.root, second.container)
-  })
-
-  it("calls onCreate with an empty workdir (the daemon default) when nothing is typed", () => {
-    const onCreate = vi.fn()
-    const { container, root } = mount({ onCreate })
-    const input = container.querySelector('[data-testid="session-workdir-input"]') as HTMLInputElement
-    expect(input.value).toBe("") // no hardcoded default anymore
-    act(() => click(container, "new-session"))
-    expect(onCreate).toHaveBeenCalledTimes(1)
-    expect(onCreate).toHaveBeenCalledWith("")
-    unmount(root, container)
-  })
-
-  it("calls onCreate with the typed workdir from the new-session button", () => {
-    const onCreate = vi.fn()
-    const { container, root } = mount({ onCreate })
-    const input = container.querySelector('[data-testid="session-workdir-input"]') as HTMLInputElement
-    typeInto(input, "/tmp/工作目录")
-    act(() => click(container, "new-session"))
-    expect(onCreate).toHaveBeenCalledWith("/tmp/工作目录")
-    unmount(root, container)
-  })
-
-  it("opens the picker, navigates into a directory, and picks it into the input", async () => {
-    const onBrowse = vi.fn((path?: string) =>
-      Promise.resolve(
-        path === undefined
-          ? { path: "/Users/x", parent: "/", dirs: ["coding"] }
-          : { path: "/Users/x/coding", parent: "/Users/x", dirs: [] },
-      ),
-    )
-    const { container, root } = mount({ onBrowse })
-    await act(async () => click(container, "browse-workdir"))
-    expect(onBrowse).toHaveBeenCalledWith(undefined) // empty input = picker root
-    expect(container.querySelector('[data-testid="picker-item-coding"]')).not.toBeNull()
-
-    await act(async () => click(container, "picker-item-coding"))
-    expect(onBrowse).toHaveBeenCalledWith("/Users/x/coding")
-    expect(container.querySelector('[data-testid="picker-current"]')?.textContent).toBe("/Users/x/coding")
-
-    act(() => click(container, "picker-confirm"))
-    expect(container.querySelector('[data-testid="picker-overlay"]')).toBeNull()
-    expect((container.querySelector('[data-testid="session-workdir-input"]') as HTMLInputElement).value).toBe("/Users/x/coding")
-    unmount(root, container)
-  })
-
-  it("starts the picker at the typed path when the input has one", async () => {
-    const onBrowse = vi.fn(() => Promise.resolve({ path: "/tmp", parent: "/", dirs: [] }))
-    const { container, root } = mount({ onBrowse })
-    const input = container.querySelector('[data-testid="session-workdir-input"]') as HTMLInputElement
-    typeInto(input, "/tmp")
-    await act(async () => click(container, "browse-workdir"))
-    expect(onBrowse).toHaveBeenCalledWith("/tmp")
-    unmount(root, container)
-  })
-
-  it("closes the picker on cancel without touching the input", async () => {
-    const onBrowse = vi.fn(() => Promise.resolve({ path: "/a", parent: null, dirs: [] }))
-    const { container, root } = mount({ onBrowse })
-    await act(async () => click(container, "browse-workdir"))
-    act(() => click(container, "picker-cancel"))
-    expect(container.querySelector('[data-testid="picker-overlay"]')).toBeNull()
-    expect((container.querySelector('[data-testid="session-workdir-input"]') as HTMLInputElement).value).toBe("")
-    unmount(root, container)
-  })
-
-  it("shows the error inside the picker when browsing fails", async () => {
-    const onBrowse = vi.fn(() => Promise.reject(new Error("目录读取失败: boom")))
-    const { container, root } = mount({ onBrowse })
-    await act(async () => click(container, "browse-workdir"))
-    expect(container.querySelector('[data-testid="picker-error"]')?.textContent).toContain("boom")
     unmount(root, container)
   })
 

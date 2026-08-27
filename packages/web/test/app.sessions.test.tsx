@@ -136,11 +136,12 @@ describe("App (sessions + tabs)", () => {
     container.remove()
   })
 
-  it("creates a session: POST then selects and subscribes the empty session", async () => {
+  it("creates a session: pick a workdir then POST selects and subscribes the empty session", async () => {
     const newMeta = session("ses_new", "新会话")
     mockFetch(fetchMock, {
       "GET /status": { body: { ok: true } },
       "GET /sessions": { body: [] },
+      "GET /fs/browse": { body: { path: "/ws/picked", parent: "/", dirs: [] } },
       "GET /sessions/ses_new/messages": { body: [] },
       "POST /sessions": { body: newMeta },
     })
@@ -153,16 +154,21 @@ describe("App (sessions + tabs)", () => {
     await flush()
     expect(container.querySelector('[data-testid="session-empty"]')).not.toBeNull()
 
+    // The only create entry left: 选择工作目录 → picker loads the daemon root
+    // → confirming picks that directory and POSTs a session there.
     await act(async () => {
-      ;(container.querySelector('button[data-testid="new-session"]') as HTMLButtonElement).click()
+      ;(container.querySelector('button[data-testid="pick-workdir"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(container.querySelector('[data-testid="picker-overlay"]')).not.toBeNull()
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="picker-confirm"]') as HTMLButtonElement).click()
     })
     await flush()
     await flush()
     expect(fetchMock).toHaveBeenCalledWith(
       "/sessions",
-      // The workdir box starts empty: an empty field means "the daemon's
-      // configured workspace", so the POST carries no workdir at all.
-      expect.objectContaining({ method: "POST", body: JSON.stringify({}) }),
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ workdir: "/ws/picked" }) }),
     )
     // The new session is selected in the sidebar.
     const item = container.querySelector('[data-testid="session-item-ses_new"]')

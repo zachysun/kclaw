@@ -331,23 +331,12 @@ select:focus {
 
 .new-session-controls {
   display: flex;
-  gap: 6px;
   margin-bottom: var(--space-3);
 }
 
-.workdir-input {
-  flex: 1;
-  min-width: 0;
-}
-
-.browse-workdir {
-  flex-shrink: 0;
-  padding: 6px 10px;
-}
-
 .new-session {
-  flex-shrink: 0;
-  padding: 6px 12px;
+  width: 100%;
+  padding: 7px 12px;
   border-color: var(--accent);
   color: var(--accent-strong);
   background: var(--accent-dim);
@@ -406,6 +395,25 @@ select:focus {
 
 .workdir-group-name.muted::before {
   content: "";
+}
+
+.group-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.group-new {
+  font-size: 12px;
+  padding: 1px 8px;
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: var(--accent-dim);
+}
+
+.group-new:hover:not(:disabled) {
+  background: rgba(224, 164, 78, 0.22);
 }
 
 .group-rename-trigger {
@@ -1331,14 +1339,6 @@ select:focus {
   .tab {
     padding: 5px 8px;
     font-size: 12px;
-  }
-
-  .new-session-controls {
-    flex-wrap: wrap;
-  }
-
-  .workdir-input {
-    min-width: 100%;
   }
 
   .form-grid {

@@ -1,17 +1,19 @@
 /**
  * SessionList — the sidebar's session list (WebUI). No HTTP: sessions arrive
  * through props and every daemon call escapes through a callback (onSelect,
- * onCreate, onRename, onDelete, onBrowse) to the owner (App). Two pieces of
- * browser-local state live here in localStorage — the last new-session
- * workdir (so a refresh keeps the input) and per-workdir display-name
- * overrides (so renames survive reloads); both degrade to their defaults when
- * storage is unavailable.
+ * onCreate, onRename, onDelete, onBrowse) to the owner (App). One piece of
+ * browser-local state lives here in localStorage — the per-workdir
+ * display-name overrides (so group renames survive reloads); it degrades to
+ * defaults when storage is unavailable.
  *
  * Sessions are grouped by workdir: rows sharing a directory sit under one
  * header whose label defaults to the path itself and can be renamed inline
- * (改名 → input + 保存/取消). Sessions without a workdir (old rows, job
- * sessions) land in a muted "未指定工作目录" group. Each row still shows its
- * own workdir under the title.
+ * (改名 → input + 保存/取消). Each group header carries a ＋ button that
+ * creates a session directly in that directory; the top-level 选择工作目录
+ * button opens the DirectoryPicker for a directory not in the list yet —
+ * picking a path creates the session there. Sessions without a workdir (old
+ * rows, job sessions) land in a muted "未指定工作目录" group and still show
+ * their workdir line when they have one.
  */
 import { useMemo, useState, type ChangeEvent } from "react"
 import type { FsBrowseResult, SessionMeta } from "../types.js"
@@ -24,7 +26,7 @@ export interface SessionListProps {
   /** True while the initial list is still being fetched (suppresses the empty state). */
   loading: boolean
   onSelect: (id: string) => void
-  /** Escape a create-session request with the chosen working directory ("" = daemon default). */
+  /** Escape a create-session request with the chosen working directory. */
   onCreate: (workdir: string) => void
   /** Escape the inline-edit commit (id + trimmed new title) to the owner. */
   onRename: (id: string, title: string) => void
@@ -34,24 +36,7 @@ export interface SessionListProps {
   onBrowse: (path?: string) => Promise<FsBrowseResult>
 }
 
-const LAST_WORKDIR_KEY = "kclaw_last_workdir"
 const WORKDIR_NAMES_KEY = "kclaw_workdir_names"
-
-function loadLastWorkdir(): string {
-  try {
-    return localStorage.getItem(LAST_WORKDIR_KEY) ?? ""
-  } catch {
-    return ""
-  }
-}
-
-function saveLastWorkdir(value: string): void {
-  try {
-    localStorage.setItem(LAST_WORKDIR_KEY, value)
-  } catch {
-    // storage unavailable (private mode etc.) — the input still works this session
-  }
-}
 
 function loadWorkdirNames(): Record<string, string> {
   try {
@@ -84,7 +69,6 @@ export function SessionList({
 }: SessionListProps) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState("")
-  const [workdir, setWorkdir] = useState(loadLastWorkdir)
   const [workdirNames, setWorkdirNames] = useState<Record<string, string>>(loadWorkdirNames)
   const [renamingGroup, setRenamingGroup] = useState<string | null>(null)
   const [groupDraft, setGroupDraft] = useState("")
@@ -92,11 +76,6 @@ export function SessionList({
   const [pickerListing, setPickerListing] = useState<FsBrowseResult | null>(null)
   const [pickerLoading, setPickerLoading] = useState(false)
   const [pickerError, setPickerError] = useState<string | null>(null)
-
-  const setWorkdirPersisted = (value: string): void => {
-    setWorkdir(value)
-    saveLastWorkdir(value)
-  }
 
   const startRename = (meta: SessionMeta) => {
     setEditingId(meta.id)
@@ -144,14 +123,15 @@ export function SessionList({
   const openPicker = () => {
     setPickerOpen(true)
     setPickerListing(null)
-    const typed = workdir.trim()
-    void loadPicker(typed === "" ? undefined : typed)
+    // The picker starts at the daemon's configured workspace.
+    void loadPicker(undefined)
   }
 
   const pickCurrent = () => {
     if (pickerListing === null) return
-    setWorkdirPersisted(pickerListing.path)
     setPickerOpen(false)
+    // Picking a directory IS the create gesture: a new session goes there.
+    onCreate(pickerListing.path)
   }
 
   // Groups preserve the server's updatedAt-desc order: first appearance of a
@@ -177,25 +157,13 @@ export function SessionList({
     <div className="session-list" data-testid="session-list">
       <div className="sidebar-title">Sessions</div>
       <div className="new-session-controls">
-        <input
-          type="text"
-          className="workdir-input"
-          data-testid="session-workdir-input"
-          value={workdir}
-          onChange={(event: ChangeEvent<HTMLInputElement>) => setWorkdirPersisted(event.target.value)}
-          placeholder="工作目录（留空用默认）"
-          title="新会话的工作目录；留空使用 daemon 配置的工作区"
-        />
-        <button type="button" className="browse-workdir" data-testid="browse-workdir" onClick={openPicker}>
-          浏览
-        </button>
         <button
           type="button"
           className="new-session"
-          data-testid="new-session"
-          onClick={() => onCreate(workdir.trim())}
+          data-testid="pick-workdir"
+          onClick={openPicker}
         >
-          + 新建会话
+          ＋ 选择工作目录新建会话
         </button>
       </div>
       {!loading && sessions.length === 0 && (
@@ -210,24 +178,17 @@ export function SessionList({
               <span className={`workdir-group-name${key === "" ? " muted" : ""}`} data-testid={`workdir-group-name-${key}`} title={key === "" ? undefined : key}>
                 {groupLabel(key)}
               </span>
-              {key !== "" &&
-                (renamingGroup === key ? (
-                  <span className="group-rename">
-                    <input
-                      type="text"
-                      data-testid="group-rename-input"
-                      value={groupDraft}
-                      onChange={(event: ChangeEvent<HTMLInputElement>) => setGroupDraft(event.target.value)}
-                      autoFocus
-                    />
-                    <button type="button" data-testid="group-rename-confirm" onClick={commitGroupRename}>
-                      保存
-                    </button>
-                    <button type="button" data-testid="group-rename-cancel" onClick={() => setRenamingGroup(null)}>
-                      取消
-                    </button>
-                  </span>
-                ) : (
+              {key !== "" && renamingGroup !== key && (
+                <span className="group-actions">
+                  <button
+                    type="button"
+                    className="group-new"
+                    data-testid={`group-new-${key}`}
+                    title="在此目录新建会话"
+                    onClick={() => onCreate(key)}
+                  >
+                    ＋
+                  </button>
                   <button
                     type="button"
                     className="group-rename-trigger"
@@ -236,8 +197,26 @@ export function SessionList({
                   >
                     改名
                   </button>
-                ))}
+                </span>
+              )}
             </div>
+            {renamingGroup === key && (
+              <span className="group-rename">
+                <input
+                  type="text"
+                  data-testid="group-rename-input"
+                  value={groupDraft}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => setGroupDraft(event.target.value)}
+                  autoFocus
+                />
+                <button type="button" data-testid="group-rename-confirm" onClick={commitGroupRename}>
+                  保存
+                </button>
+                <button type="button" data-testid="group-rename-cancel" onClick={() => setRenamingGroup(null)}>
+                  取消
+                </button>
+              </span>
+            )}
             <ul className="group-sessions">
               {groupSessions.map((meta) => (
                 <li key={meta.id} className="session-row">
