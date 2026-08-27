@@ -143,7 +143,7 @@ export function AuditView({ api }: { api: ApiClient }) {
                     type="button"
                     className="trail-row"
                     data-testid={`compaction-row-${key}`}
-                    onClick={() => setExpandedKey((k) => (k === key ? null : k))}
+                    onClick={() => setExpandedKey((k) => (k === key ? null : key))}
                   >
                     <span className="trail-meta muted">{new Date(record.at).toLocaleString()}</span>
                     <span className="trail-type">

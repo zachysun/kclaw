@@ -860,6 +860,8 @@ describe("RunManager context compaction v2", () => {
     )).toBe(true)
     // the main request sees only the kept tail + the new user text
     expect(JSON.stringify(mainReq!.messages)).not.toContain("历史问题1")
+    expect(JSON.stringify(mainReq!.messages)).toContain("历史问题2")
+    expect(JSON.stringify(mainReq!.messages)).toContain("新问题")
     // the segment index was written under the session dir
     expect(existsSync(join(env.paths.sessionsDir, session.id, "index.db"))).toBe(true)
   })
@@ -987,7 +989,8 @@ describe("RunManager context compaction v2", () => {
     const records = env.sessions.readCompactions(session.id)
     expect(records).toHaveLength(1)
     expect(records[0]).toMatchObject({
-      trigger: "auto", from: seeded[0]!.id, upto: seeded[1]!.id,
+      // first compaction (no prior state) → the span starts at session start
+      trigger: "auto", from: null, upto: seeded[1]!.id,
       messages: 2, segmentSummary: "段摘要A", top: "总摘要A",
     })
     expect(records[0]!.focus).toBeUndefined()

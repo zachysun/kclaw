@@ -717,7 +717,9 @@ export class RunManager {
         at: new Date().toISOString(),
         trigger: opts.manual === true ? "manual" : "auto",
         ...(opts.focus === undefined ? {} : { focus: opts.focus }),
-        from: seg[0]?.id ?? null,
+        // null = the span starts at session start (or the legacy upgrade
+        // point) — only a continuation compaction has a real first id.
+        from: prevIdx >= 0 ? seg[0]!.id : null,
         upto,
         messages: seg.length,
         segmentSummary,
