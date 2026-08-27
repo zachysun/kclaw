@@ -222,6 +222,14 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       .catch((err: unknown) => setNotice(`模型切换失败: ${err instanceof Error ? err.message : String(err)}`))
   }, [api, sessionId])
 
+  /** Manual context compaction (POST /sessions/:id/compact); the daemon's message lands in the notice. */
+  const handleCompact = useCallback(() => {
+    api
+      .post<{ message?: string }>(`/sessions/${encodeURIComponent(sessionId)}/compact`, {})
+      .then((res) => setNotice(res.message ?? "已压缩"))
+      .catch((err: unknown) => setNotice(`压缩失败: ${err instanceof Error ? err.message : String(err)}`))
+  }, [api, sessionId])
+
   const handleSend = useCallback((text: string) => {
     try {
       const attachments = [...pendingAttachments]
@@ -271,6 +279,11 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           {notice}
         </div>
       )}
+      <div className="composer-row" data-testid="compact-row">
+        <button type="button" data-testid="compact-button" onClick={handleCompact}>
+          压缩
+        </button>
+      </div>
       <div className="chat-panel-inner" data-testid="chat-panel" onDragOver={(e) => e.preventDefault()} onDrop={handleDrop}>
         <ChatView
           view={view}

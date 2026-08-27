@@ -5,11 +5,13 @@
  * one row per block, ordered by message createdAt ascending — newest at the
  * bottom, like a log; each row shows a type label plus a one-line summary, and
  * expands on click to the full block
- * payload. No mutation, no /audit — the old audit tail route is gone.
+ * payload. No mutation, no /audit — the old audit tail route is gone. A
+ * selected session additionally pulls its compaction log
+ * (GET /sessions/:id/compactions) into the "压缩记录" section above the trail.
  */
 import { useEffect, useState } from "react"
 import { type ApiClient } from "../api.js"
-import type { Block, Message, Role, SessionMeta, ToolGrantReason, ToolMessage } from "../types.js"
+import type { Block, CompactionRecord, Message, Role, SessionMeta, ToolGrantReason, ToolMessage } from "../types.js"
 
 /** One flattened block, carrying the owning message's role + timestamp and (for tool rows) the grant reason. */
 interface TrailRow {
@@ -24,6 +26,7 @@ export function AuditView({ api }: { api: ApiClient }) {
   const [sessions, setSessions] = useState<SessionMeta[] | null>(null)
   const [selectedId, setSelectedId] = useState<string>("")
   const [messages, setMessages] = useState<Message[] | null>(null)
+  const [compactions, setCompactions] = useState<CompactionRecord[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
 
@@ -72,6 +75,31 @@ export function AuditView({ api }: { api: ApiClient }) {
     }
   }, [api, selectedId])
 
+  // Pull the selected session's compaction audit log alongside the messages
+  // (same cancellation pattern). A failure here is auxiliary — the section
+  // just stays hidden (mirrors the ChatPanel /config fetch's silent catch).
+  useEffect(() => {
+    if (selectedId === "") {
+      setCompactions(null)
+      return
+    }
+    let cancelled = false
+    setCompactions(null)
+    api
+      .get<CompactionRecord[]>(`/sessions/${encodeURIComponent(selectedId)}/compactions`)
+      .then((records) => {
+        if (cancelled) return
+        setCompactions(records)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setCompactions([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api, selectedId])
+
   const rows = flattenTrail(messages)
 
   return (
@@ -102,6 +130,38 @@ export function AuditView({ api }: { api: ApiClient }) {
         <div className="form-error" role="alert" data-testid="trail-error">
           {error}
         </div>
+      )}
+      {compactions !== null && compactions.length > 0 && (
+        <section className="compactions" data-testid="compactions-section">
+          <h3 className="form-title">压缩记录</h3>
+          <ul className="trail-list" data-testid="compactions-list">
+            {compactions.map((record, i) => {
+              const key = `cp-${i}`
+              return (
+                <li key={key} className="trail-row-item">
+                  <button
+                    type="button"
+                    className="trail-row"
+                    data-testid={`compaction-row-${key}`}
+                    onClick={() => setExpandedKey((k) => (k === key ? null : k))}
+                  >
+                    <span className="trail-meta muted">{new Date(record.at).toLocaleString()}</span>
+                    <span className="trail-type">
+                      {record.trigger === "manual" ? `手动${record.focus ? `（${record.focus}）` : ""}` : "自动"}
+                    </span>
+                    <span className="trail-summary">{`${record.from ?? "会话开头"} – ${record.upto}`}</span>
+                    <span className="trail-meta muted">{`${record.messages} 条`}</span>
+                  </button>
+                  {expandedKey === key && (
+                    <pre className="trail-full" data-testid={`compaction-full-${key}`}>
+                      {`段摘要：\n${record.segmentSummary}\n\n总摘要：\n${record.top}`}
+                    </pre>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        </section>
       )}
       {rows.length === 0 ? (
         <p className="muted table-empty" data-testid="trail-empty">

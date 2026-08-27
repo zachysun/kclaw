@@ -117,3 +117,15 @@ export interface ToolMessage extends Message {
   role: "tool"
   grantedBy?: Record<string, ToolGrantReason>
 }
+
+/** One line of a session's compactions.jsonl audit log (GET /sessions/:id/compactions). */
+export interface CompactionRecord {
+  at: string
+  trigger: "auto" | "manual"
+  focus?: string
+  from: string | null
+  upto: string
+  messages: number
+  segmentSummary: string
+  top: string
+}
