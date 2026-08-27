@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 import { toProviderMessages } from "../../src/agent/context.js"
 import { newAssistantMessage, newMessage } from "../../src/protocol/messages.js"
+import { newMessage as nm, newAssistantMessage as na } from "../../src/protocol/messages.js"
 
 describe("toProviderMessages", () => {
   it("maps user text and note blocks", () => {
@@ -133,5 +134,52 @@ describe("toProviderMessages attachment rendering", () => {
     ])
     const out = toProviderMessages([m], 10)
     expect(out).toEqual([{ role: "user", content: "纯文本\n[附件 a.txt]\nhi" }])
+  })
+})
+
+describe("toProviderMessages tool-result eviction", () => {
+  const big = (id: string, callId: string, name: string) => {
+    const a = na("s", "m", [
+      { id: `t-${id}`, type: "text", text: `第${id}步` },
+      { id: `c-${id}`, type: "tool_call", callId, name, args: {}, argsJson: "{}" },
+    ])
+    a.stopReason = "tool_use"
+    const t = nm("s", "tool", [
+      { id: `r-${id}`, type: "tool_result", callId, status: "ok", output: `${id}的完整输出`.repeat(200), durationMs: 1 },
+    ])
+    return [a, t]
+  }
+
+  it("replaces tool results older than toolResultKeep with a placeholder", () => {
+    const msgs = [...big("一", "c1", "fs_read"), ...big("二", "c2", "exec"), ...big("三", "c3", "fs_read")]
+    const out = toProviderMessages(msgs, 50, { toolResultKeep: 1 })
+    const tools = out.filter((m) => m.role === "tool")
+    expect(tools.length).toBe(3)
+    expect(tools[0]!.content).toContain("此工具输出已省略")
+    expect(tools[0]!.content).toContain("fs_read")
+    expect(tools[1]!.content).toContain("此工具输出已省略")
+    expect(tools[2]!.content).toContain("三的完整输出") // newest kept verbatim
+    // pairing intact: every tool message still follows its assistant tool_call
+    expect(out.filter((m) => m.role === "assistant").length).toBe(3)
+  })
+
+  it("marks evicted failed calls as failed", () => {
+    const a = na("s", "m", [
+      { id: "c1", type: "tool_call", callId: "x", name: "exec", args: {}, argsJson: "{}" },
+    ])
+    a.stopReason = "tool_use"
+    const t = nm("s", "tool", [
+      { id: "r1", type: "tool_result", callId: "x", status: "error", output: "boom", durationMs: 1 },
+    ])
+    const newer = big("新", "y", "exec")
+    const out = toProviderMessages([a, t, ...newer], 50, { toolResultKeep: 1 })
+    const evicted = out.find((m) => m.role === "tool" && m.content.includes("已省略"))
+    expect(evicted!.content).toContain("该次调用失败")
+  })
+
+  it("keeps everything when results are fewer than toolResultKeep", () => {
+    const msgs = big("一", "c1", "fs_read")
+    const out = toProviderMessages(msgs, 50, { toolResultKeep: 8 })
+    expect(out.find((m) => m.role === "tool")!.content).toContain("一的完整输出")
   })
 })

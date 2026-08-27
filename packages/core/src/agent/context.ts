@@ -2,11 +2,38 @@ import type { Message } from "../protocol/messages.js"
 import { isBlockType } from "../protocol/blocks.js"
 import type { ContentPart, ProviderMessage, ProviderToolCall } from "../provider/types.js"
 
-export function toProviderMessages(history: Message[], window: number): ProviderMessage[] {
+export function toProviderMessages(
+  history: Message[],
+  window: number,
+  opts?: { toolResultKeep?: number },
+): ProviderMessage[] {
   const recent = history.slice(-window)
   // A tool message whose paired assistant message fell outside the window is
   // unusable for OpenAI-compatible APIs — drop leading orphans.
   while (recent.length > 0 && recent[0].role === "tool") recent.shift()
+  // Tool-result eviction (spec 6.3): the newest `toolResultKeep` tool
+  // results are sent verbatim; older ones are replaced by a one-line
+  // placeholder naming the call. Storage is never touched — this is the
+  // outgoing request only. Absent opts = current behavior (keep all).
+  const keep = opts?.toolResultKeep
+  const evict = new Set<string>()
+  if (keep !== undefined) {
+    let seen = 0
+    for (let i = recent.length - 1; i >= 0; i--) {
+      for (const b of recent[i]!.blocks) {
+        if (!isBlockType("tool_result", b)) continue
+        if (seen++ >= keep) evict.add(b.callId)
+      }
+    }
+  }
+  // callId → tool name/args for placeholder text
+  const callMeta = new Map<string, { name: string; args: string }>()
+  for (const m of recent) {
+    if (m.role !== "assistant") continue
+    for (const b of m.blocks) {
+      if (isBlockType("tool_call", b)) callMeta.set(b.callId, { name: b.name, args: b.argsJson.slice(0, 60) })
+    }
+  }
   const out: ProviderMessage[] = []
   for (let i = 0; i < recent.length; i++) {
     const m = recent[i]!
@@ -57,7 +84,10 @@ export function toProviderMessages(history: Message[], window: number): Provider
     } else {
       for (const b of m.blocks) {
         if (isBlockType("tool_result", b)) {
-          out.push({ role: "tool", toolCallId: b.callId, content: b.status === "error" ? `[error] ${b.output}` : b.output })
+          const content = evict.has(b.callId)
+            ? `[此工具输出已省略：${callMeta.get(b.callId)?.name ?? b.callId} ${callMeta.get(b.callId)?.args ?? ""}，可重新调用获取]${b.status === "error" ? "（该次调用失败）" : ""}`
+            : b.status === "error" ? `[error] ${b.output}` : b.output
+          out.push({ role: "tool", toolCallId: b.callId, content })
         }
       }
     }

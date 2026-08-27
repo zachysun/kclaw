@@ -48,6 +48,8 @@ export interface AgentDeps {
   llm: LlmClient
   model: string
   window?: number
+  /** Tool results kept verbatim in the provider view (spec 6.3); undefined = keep all. */
+  toolResultKeep?: number
   maxIterations?: number
   /** executors keyed by tool name; calls to unknown names come back as error results */
   tools?: Map<string, ToolExecutor>
@@ -192,7 +194,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
   const runId = newId("run")
   const ctx = { sessionId: input.sessionId, runId }
   const maxIterations = deps.maxIterations ?? 25
-  const window = deps.window ?? 40
+  const window = deps.window ?? 200
   const emit = (e: AgentEvent) => deps.onEvent(e)
 
   emit(makeEvent("run.started", { trigger: input.trigger ?? "user" }, ctx))
@@ -274,7 +276,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       for await (const ev of streamWithAbort(deps.llm.stream({
         model: deps.model,
         system: input.system,
-        messages: toProviderMessages(all, window),
+        messages: toProviderMessages(all, window, deps.toolResultKeep === undefined ? undefined : { toolResultKeep: deps.toolResultKeep }),
         tools: deps.toolDefs ?? [],
       }), deps.signal)) {
         // Abort checkpoint: stop consuming the stream the moment the signal fires.

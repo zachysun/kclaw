@@ -3,7 +3,7 @@ import { runAgent } from "../../src/agent/loop.js"
 import type { PermissionGate } from "../../src/agent/loop.js"
 import type { ToolExecutor } from "../../src/agent/tools.js"
 import type { LlmClient, LlmStreamEvent } from "../../src/provider/types.js"
-import type { Message } from "../../src/protocol/messages.js"
+import { newMessage, type Message } from "../../src/protocol/messages.js"
 
 /** First stream call asks for the tool, every later call finishes the run. */
 function scriptClient(script: LlmStreamEvent[][]): LlmClient {
@@ -68,5 +68,26 @@ describe("runAgent tool message grantedBy", () => {
     })
     const toolMsg = messages.find((m) => m.role === "tool") as Message & { grantedBy?: Record<string, string> }
     expect(toolMsg?.grantedBy).toEqual({ call_1: "confirmed" })
+  })
+})
+
+describe("runAgent default window", () => {
+  it("default window is 200: a 100-message history is sent whole", async () => {
+    const history = Array.from({ length: 100 }, (_, i) =>
+      newMessage("s", i % 2 === 0 ? "user" : "assistant", [{ id: `b${i}`, type: "text", text: `m${i}` }]),
+    )
+    let msgCount = 0
+    const rec: LlmClient = {
+      async *stream(req) {
+        msgCount = req.messages.length
+        yield { type: "text_delta", delta: "ok" }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+      },
+    }
+    await runAgent(
+      { sessionId: "s", history, system: "", userText: "继续" },
+      { llm: rec, model: "m", onEvent: () => {}, onMessage: () => {} },
+    )
+    expect(msgCount).toBe(101) // 100 history + the new user message — nothing truncated
   })
 })
