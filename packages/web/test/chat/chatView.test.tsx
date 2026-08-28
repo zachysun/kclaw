@@ -8,7 +8,7 @@
 import { describe, it, expect, vi } from "vitest"
 import { createRoot, type Root } from "react-dom/client"
 import { act } from "react"
-import { ChatView } from "../../src/chat/ChatView.js"
+import { ChatView, availableSlashMenuMaxHeight } from "../../src/chat/ChatView.js"
 import { initChat } from "../../src/chat/model.js"
 
 function mountView() {
@@ -157,5 +157,30 @@ describe("ChatView slash suggestions", () => {
     expect(h.onSend).toHaveBeenCalledWith("hello")
     expect(h.input().value).toBe("")
     h.unmount()
+  })
+})
+
+describe("availableSlashMenuMaxHeight", () => {
+  it("keeps the full 280px cap when the composer has plenty of room above", () => {
+    expect(availableSlashMenuMaxHeight(600)).toBe(280)
+  })
+
+  it("clamps to the room above the composer when it sits high in the viewport", () => {
+    expect(availableSlashMenuMaxHeight(200)).toBe(200 - 6 - 8)
+  })
+
+  it("stays uncapped exactly at the boundary of 280px + gap + margin", () => {
+    expect(availableSlashMenuMaxHeight(294)).toBe(280)
+  })
+
+  it("never collapses below a floor so a couple options stay reachable", () => {
+    expect(availableSlashMenuMaxHeight(10)).toBe(48)
+    expect(availableSlashMenuMaxHeight(0)).toBe(48)
+  })
+
+  it("accounts for a fixed top bar so the menu never slides under it", () => {
+    // topBoundary = topbar bottom; menu must stay below it, not just above 0.
+    expect(availableSlashMenuMaxHeight(161, 47.5)).toBe(161 - 47.5 - 6 - 8)
+    expect(availableSlashMenuMaxHeight(200, 47.5)).toBe(200 - 47.5 - 6 - 8)
   })
 })

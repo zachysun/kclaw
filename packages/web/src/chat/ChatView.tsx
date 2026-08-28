@@ -5,7 +5,7 @@
  * draft); expansion/collapse uses native <details> elements, so thinking folds
  * by default and tool_result cards expand to their full output without JS.
  */
-import { useState, type FormEvent, type KeyboardEvent } from "react"
+import { useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { parseSlashInput, slashCompletions, SLASH_COMMANDS } from "@kclaw/core/commands"
 import type { ChatState, ConfirmationCard, RenderedBlock, RenderedMessage } from "./model.js"
 
@@ -15,6 +15,25 @@ export interface PendingAttachment {
   name: string
   size: number
   mimeType: string
+}
+
+/** Slash-menu geometry constants — must stay in sync with `.slash-menu` in index.css. */
+export const SLASH_MENU_MAX_HEIGHT = 280
+const SLASH_MENU_GAP = 6 // CSS: bottom: calc(100% + 6px)
+const SLASH_MENU_MARGIN = 8 // breathing room to the viewport top
+const SLASH_MENU_MIN_HEIGHT = 48
+
+/**
+ * The menu floats above the composer (absolute, bottom: calc(100% + 6px)); when
+ * the composer sits high in the viewport (fresh session, few messages) it would
+ * overflow the top edge and put the first option out of reach. Cap its height
+ * to the room actually available above the composer (from the fixed top bar
+ * down, when one is present), with a floor so a couple of options always stay
+ * visible/clickable.
+ */
+export function availableSlashMenuMaxHeight(composerTop: number, topBoundary = 0): number {
+  const available = composerTop - topBoundary - SLASH_MENU_GAP - SLASH_MENU_MARGIN
+  return Math.max(SLASH_MENU_MIN_HEIGHT, Math.min(SLASH_MENU_MAX_HEIGHT, available))
 }
 
 export interface ChatViewProps {
@@ -45,6 +64,25 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
 
   const completions = dismissed ? [] : slashCompletions(draft, "web")
   const active = Math.min(sel, Math.max(0, completions.length - 1))
+
+  // Keep the suggestion menu inside the viewport: measure how much room sits
+  // above the composer and cap the menu height to it (fresh sessions leave
+  // little room; the absolute menu would otherwise overflow the top edge).
+  const composerRef = useRef<HTMLFormElement>(null)
+  const [menuMaxHeight, setMenuMaxHeight] = useState<number | undefined>(undefined)
+  useLayoutEffect(() => {
+    const composer = composerRef.current
+    if (completions.length === 0 || composer === null) {
+      return
+    }
+    const update = (): void => {
+      const topBoundary = document.querySelector("header.topbar")?.getBoundingClientRect().bottom ?? 0
+      setMenuMaxHeight(availableSlashMenuMaxHeight(composer.getBoundingClientRect().top, topBoundary))
+    }
+    update()
+    window.addEventListener("resize", update)
+    return () => window.removeEventListener("resize", update)
+  }, [completions.length])
 
   const submit = (event: FormEvent): void => {
     event.preventDefault()
@@ -151,9 +189,15 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
           ))}
         </div>
       )}
-      <form className="chat-composer" onSubmit={submit}>
+      <form className="chat-composer" ref={composerRef} onSubmit={submit}>
         {completions.length > 0 && (
-          <ul className="slash-menu" data-testid="slash-menu" role="listbox" aria-label="斜杠命令联想">
+          <ul
+            className="slash-menu"
+            data-testid="slash-menu"
+            role="listbox"
+            aria-label="斜杠命令联想"
+            style={menuMaxHeight !== undefined ? { maxHeight: menuMaxHeight } : undefined}
+          >
             {completions.map((c, i) => (
               <li key={c.name} role="option" aria-selected={i === active} className={i === active ? "slash-option active" : "slash-option"}>
                 <button
