@@ -110,6 +110,28 @@ describe("launchDaemon web hosting", () => {
     30_000,
   )
 
+  it("serves PWA static files without a token: manifest, service worker, icons", async () => {
+    const home = makeHome()
+    const daemon = await launchDaemon({ home, config: makeConfig(home), llmFactory: scriptClient })
+    daemons.push(daemon)
+
+    // The PWA needs these files before the client holds a token: the manifest
+    // (install info), the service worker (offline shell) and its icons.
+    for (const path of ["/manifest.webmanifest", "/sw.js", "/icon-192.png", "/icon-512.png"]) {
+      const res = await fetch(`http://127.0.0.1:${daemon.port}${path}`)
+      expect(res.status).toBe(200)
+      expect((await res.text()).length).toBeGreaterThan(0)
+    }
+
+    // /favicon.ico has no file on disk (the browser requests it by default);
+    // it must not be 401 — reaching the static handler proves the auth gate
+    // let it through (a 404 from the static server is fine).
+    const favicon = await fetch(`http://127.0.0.1:${daemon.port}/favicon.ico`)
+    expect(favicon.status).not.toBe(401)
+
+    await daemon.stop()
+  })
+
   it("an explicit webDist that does not exist disables hosting: GET / is 401 (no token)", async () => {
     const home = makeHome()
     const daemon = await launchDaemon({

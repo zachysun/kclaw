@@ -84,8 +84,11 @@ function readVersion(): string {
 
 /**
  * True when the request targets the static web shell and must load BEFORE the
- * client holds a token: the shell document (`GET /`, `GET /index.html`) and
- * the `/assets/*` bundle tree. Only GET is exempt; every other method and path
+ * client holds a token: the shell document (`GET /`, `GET /index.html`), the
+ * `/assets/*` bundle tree, and the PWA static files that live in the dist root
+ * (manifest, service worker, icons; `/favicon.ico` too — the browser requests
+ * it by default and there is no file on disk, so it should 404 from the static
+ * handler rather than 401). Only GET is exempt; every other method and path
  * (sessions/jobs/config/ws included) stays bearer-protected.
  *
  * The check runs on the raw request path with the query string stripped, NOT
@@ -94,10 +97,12 @@ function readVersion(): string {
  * (Note `GET /assets/x.js?token=…` must still be exempt — the query is the
  * client's concern, not the auth gate's.)
  */
+const PWA_STATIC_PATHS = new Set(["/manifest.webmanifest", "/sw.js", "/icon-192.png", "/icon-512.png", "/favicon.ico"])
+
 function isWebShellExempt(request: FastifyRequest): boolean {
   if (request.method !== "GET") return false
   const path = request.url.split("?")[0]
-  return path === "/" || path === "/index.html" || path.startsWith("/assets/")
+  return path === "/" || path === "/index.html" || path.startsWith("/assets/") || PWA_STATIC_PATHS.has(path)
 }
 
 /**
