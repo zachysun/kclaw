@@ -921,6 +921,7 @@ select:focus {
 
 /* composer — the prompt line: amber ❯ then the input */
 .chat-composer {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -959,6 +960,106 @@ select:focus {
 .chat-composer button[type="submit"]:hover:not(:disabled) {
   background: var(--accent-strong);
   border-color: var(--accent-strong);
+}
+
+/* Slash-command suggestions float above the composer (which is the
+   positioning context); highlighted option tracks the keyboard selection. */
+.slash-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  list-style: none;
+  margin: 0;
+  padding: var(--space-1);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.slash-option button {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  color: var(--text-dim);
+}
+
+.slash-option button:hover:not(:disabled) {
+  background: var(--surface-3);
+  border: 0;
+}
+
+.slash-option.active button {
+  background: var(--accent-dim);
+}
+
+.slash-option button code {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.slash-option button span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* /help command panel — same card language as .chat-notice. */
+.slash-help {
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.slash-help-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.slash-help-head button {
+  padding: 0 8px;
+  line-height: 1.4;
+}
+
+.slash-help ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.slash-help li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.slash-help li code {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.slash-help li span {
+  color: var(--text-dim);
+  font-size: 12px;
 }
 
 /* ---- Views: jobs / audit / usage / trash ---- */

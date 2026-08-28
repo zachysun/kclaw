@@ -47,13 +47,13 @@ function makeFakeSocket(): FakeSocket {
 
 const WS_URL = "ws://daemon.local/ws"
 
-function makeApi(getMessages: Message[]): ApiClient & { get: ReturnType<typeof vi.fn> } {
+function makeApi(getMessages: Message[]): ApiClient & { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn> } {
   return {
     get: vi.fn(async () => getMessages),
     post: vi.fn(),
     patch: vi.fn(),
     del: vi.fn(), upload: vi.fn(),
-  } as unknown as ApiClient & { get: ReturnType<typeof vi.fn> }
+  } as unknown as ApiClient & { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn> }
 }
 
 function setup() {
@@ -100,7 +100,7 @@ interface Harness {
   root: Root
   sockets: FakeSocket[]
   socketFactory: ReturnType<typeof vi.fn>
-  api: ApiClient & { get: ReturnType<typeof vi.fn> }
+  api: ApiClient & { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn> }
   /** The original props handed to the panel — rerenders reuse them. */
   apiProp: ApiClient
   ws: WsClient
@@ -113,6 +113,8 @@ async function mount(
     sessionId?: string
     initialMessages?: Message[]
     onSessionRenamed?: (sessionId: string, title: string) => void
+    onCreateSession?: (title?: string) => Promise<void>
+    onOpenSessions?: () => void
   } = {},
 ): Promise<Harness> {
   const sessionId = opts.sessionId ?? "s1"
@@ -131,6 +133,8 @@ async function mount(
         createWs={createWs}
         initialMessages={opts.initialMessages ?? []}
         onSessionRenamed={opts.onSessionRenamed}
+        onCreateSession={opts.onCreateSession ?? (async () => {})}
+        onOpenSessions={opts.onOpenSessions ?? (() => {})}
       />,
     )
   })
@@ -215,7 +219,7 @@ describe("ChatPanel", () => {
     ]
     await act(async () => {
       h.root.render(
-        <ChatPanel sessionId="s1" api={h.apiProp} ws={h.ws} createWs={h.createWs} initialMessages={refreshed} />,
+        <ChatPanel sessionId="s1" api={h.apiProp} ws={h.ws} createWs={h.createWs} initialMessages={refreshed} onCreateSession={async () => {}} onOpenSessions={() => {}} />,
       )
     })
     await flush()
@@ -262,6 +266,48 @@ describe("ChatPanel", () => {
     )
     // Input clears after send; input stays enabled during a run (queued input).
     expect(input.value).toBe("")
+    h.unmount()
+  })
+
+  it("runs a slash command instead of sending it to the model (/new)", async () => {
+    const onCreateSession = vi.fn(async () => {})
+    const h = await mount({ onCreateSession })
+    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    typeInto(input, "/new 重构讨论")
+    await act(async () => {
+      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
+    })
+    expect(onCreateSession).toHaveBeenCalledWith("重构讨论")
+    expect(h.sockets[0]!.sent.some((frame) => frame.includes("send_message"))).toBe(false)
+    expect(input.value).toBe("")
+    h.unmount()
+  })
+
+  it("compacts through the slash command with a focus argument", async () => {
+    const h = await mount()
+    h.api.post.mockResolvedValueOnce({ message: "压缩了 3 段" })
+    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    typeInto(input, "/compact 保留工具调用")
+    await act(async () => {
+      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
+    })
+    expect(h.api.post).toHaveBeenCalledWith("/sessions/s1/compact", { focus: "保留工具调用" })
+    await flush()
+    expect(h.container.querySelector('[data-testid="chat-notice"]')!.textContent).toContain("压缩了 3 段")
+    expect(h.sockets[0]!.sent.some((frame) => frame.includes("send_message"))).toBe(false)
+    h.unmount()
+  })
+
+  it("hints on an unknown command without sending anything", async () => {
+    const h = await mount()
+    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    typeInto(input, "/zzz")
+    await act(async () => {
+      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(h.container.querySelector('[data-testid="chat-notice"]')!.textContent).toContain("没有这个命令，/help 看看")
+    expect(h.sockets[0]!.sent.some((frame) => frame.includes("send_message"))).toBe(false)
     h.unmount()
   })
 
@@ -515,7 +561,7 @@ async function setupWithApi(messageCount: number, getImpl?: (path: string) => un
   const root = createRoot(document.body.appendChild(document.createElement("div")))
   act(() => {
     root.render(
-      <ChatPanel sessionId="ses_1" api={api} ws={ws} createWs={createWs} initialMessages={messages} />,
+      <ChatPanel sessionId="ses_1" api={api} ws={ws} createWs={createWs} initialMessages={messages} onCreateSession={async () => {}} onOpenSessions={() => {}} />,
     )
   })
   // Settle the /config model fetch inside act so its state update cannot

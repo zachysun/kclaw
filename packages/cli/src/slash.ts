@@ -2,10 +2,13 @@
  * Slash-command registry: the REPL's typed command
  * table. `dispatch` splits a line into `{ command, args }` (or null for plain
  * input); the chat loop consults the registry instead of hard-coding each
- * command. `/exit` is intentionally NOT registered here — it stays loop
- * control in chat.ts (`parsed.command === "exit"` breaks the input loop).
+ * command. Names/usages/descriptions come from the shared core table so the
+ * WebUI stays in sync. `/exit` is intentionally NOT registered here — it
+ * stays loop control in chat.ts (`parsed.command === "exit"` breaks the input
+ * loop).
  */
 import { isCancel, select } from "@clack/prompts"
+import { parseSlashInput, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
 import type { KclawClient } from "./client.js"
 
 /** Everything a registered command may reach at run time (a view over the chat loop's live state). */
@@ -38,25 +41,37 @@ export interface AttachmentRef {
   mimeType: string
 }
 
-export interface SlashCommand {
-  name: string
-  usage: string
-  description: string
+export interface SlashCommand extends SlashCommandMeta {
   run(args: string, ctx: SlashCtx): Promise<void>
 }
 
+/** Look up a builtin's shared metadata (names/usages/descriptions live in core). */
+function meta(name: string): SlashCommandMeta {
+  const found = SLASH_COMMANDS.find((c) => c.name === name)
+  if (found === undefined) throw new Error(`unknown builtin slash command: ${name}`)
+  return found
+}
+
 /**
- * Parse a `/command args` line into its parts. Non-`/` input (plain messages)
- * returns null; the leading slash is dropped and args are trimmed. The
- * registry is accepted for API symmetry with the loop but is not consulted
- * here — parsing never needs to know which commands exist.
+ * Parse a `/command args` line into its parts, delegating to the shared core
+ * parser (identical semantics since the table moved there). Non-`/` input
+ * (plain messages) returns null. The registry is accepted for API symmetry
+ * with the loop but is not consulted here — parsing never needs to know
+ * which commands exist.
  */
 export function dispatch(input: string, _registry: Map<string, SlashCommand>): { command: string; args: string } | null {
-  if (!input.startsWith("/")) return null
-  const rest = input.slice(1)
-  const space = rest.indexOf(" ")
-  if (space === -1) return { command: rest, args: "" }
-  return { command: rest.slice(0, space), args: rest.slice(space + 1).trim() }
+  return parseSlashInput(input)
+}
+
+/**
+ * readline completer for Tab: complete the command word (before the first
+ * space) from the shared builtin table. Returns full-line candidates plus the
+ * original line, readline's expected shape — a unique hit completes the line,
+ * several hits complete their common prefix and list them. Custom
+ * `~/commands/*.md` commands are not suggested; /help remains their index.
+ */
+export function slashCompleter(line: string): [string[], string] {
+  return [slashCompletions(line, "cli").map((c) => `/${c.name}`), line]
 }
 
 /**
@@ -127,9 +142,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
   }
 
   registry.set("new", {
-    name: "new",
-    usage: "/new [标题]",
-    description: "新建会话并切换过去",
+    ...meta("new"),
     async run(args, ctx) {
       const title = args.trim()
       await createSessionAndSwitch(ctx, title === "" ? undefined : title)
@@ -137,18 +150,14 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
   })
 
   registry.set("clear", {
-    name: "clear",
-    usage: "/clear",
-    description: "新建会话（不带标题）",
+    ...meta("clear"),
     async run(_args, ctx) {
       await createSessionAndSwitch(ctx)
     },
   })
 
   registry.set("sessions", {
-    name: "sessions",
-    usage: "/sessions",
-    description: "选择会话并切换",
+    ...meta("sessions"),
     async run(_args, ctx) {
       const list = await ctx.client.request("GET", "/sessions")
       const rows = Array.isArray(list) ? (list as SessionRow[]) : []
@@ -173,9 +182,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
   })
 
   registry.set("model", {
-    name: "model",
-    usage: "/model [名字]",
-    description: "切换本会话的模型（无参数列出可用模型与当前值；/model default 恢复默认）",
+    ...meta("model"),
     async run(args, ctx) {
       const config = (await ctx.client.request("GET", "/config")) as { providers?: { entries?: Record<string, unknown>; default?: string } }
       const entries = Object.keys(config.providers?.entries ?? {})
@@ -197,9 +204,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
   })
 
   registry.set("readonly", {
-    name: "readonly",
-    usage: "/readonly [on|off]",
-    description: "切换本会话只读模式（写与 exec 将被拒绝）",
+    ...meta("readonly"),
     async run(args, ctx) {
       const arg = args.trim()
       const current = (await ctx.client.request("GET", `/sessions/${ctx.sessionId}`)) as { readonly?: boolean }
@@ -210,9 +215,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
   })
 
   registry.set("attach", {
-    name: "attach",
-    usage: "/attach <path>",
-    description: "上传附件，随下一条消息发送（无参数时列出待发附件）",
+    ...meta("attach"),
     async run(args, ctx) {
       if (args.trim() === "") {
         if (ctx.pendingAttachments.length === 0) {
@@ -237,9 +240,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
   })
 
   registry.set("compact", {
-    name: "compact",
-    usage: "/compact [重点说明]",
-    description: "手动压缩当前会话的早期对话（可指定摘要重点保留什么）",
+    ...meta("compact"),
     async run(args, ctx) {
       try {
         const res = (await ctx.client.request(
@@ -255,9 +256,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
   })
 
   registry.set("help", {
-    name: "help",
-    usage: "/help",
-    description: "列出所有命令",
+    ...meta("help"),
     async run(_args, ctx) {
       for (const cmd of registry.values()) {
         ctx.print(`${cmd.name} ${cmd.usage} — ${cmd.description}`)
@@ -286,6 +285,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
         name,
         usage: `/${name} [参数]`,
         description: "自定义命令",
+        surfaces: ["cli"],
         async run(args, c) {
           c.send(template.replace(/\{\{args\}\}/g, args).trim())
         },

@@ -227,20 +227,44 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
     setTab(next)
   }, [])
 
-  const handleCreateSession = useCallback(async (workdir: string): Promise<void> => {
-    setSessionNotice(null)
-    try {
+  // Shared "create a session → prepend to the list → select it" step behind
+  // both the sidebar picker (workdir) and the slash commands (/new title,
+  // /clear). Selecting the fresh session triggers the message pull (empty)
+  // and the ws subscribe — the new empty conversation becomes the active one.
+  const createAndSelectSession = useCallback(
+    async (body: Record<string, unknown>): Promise<void> => {
+      setSessionNotice(null)
+      try {
+        const meta = await api.post<SessionMeta>("/sessions", body)
+        setSessions((prev) => [meta, ...(prev ?? [])])
+        setSelectedId(meta.id)
+      } catch (err) {
+        setSessionNotice(err instanceof Error ? err.message : "创建会话失败")
+      }
+    },
+    [api],
+  )
+
+  const handleCreateSession = useCallback(
+    (workdir: string): Promise<void> =>
       // An empty box means "the daemon's configured workspace": drop the
       // field so the session carries no workdir and runs fall back to it.
-      const meta = await api.post<SessionMeta>("/sessions", workdir === "" ? {} : { workdir })
-      setSessions((prev) => [meta, ...(prev ?? [])])
-      // Selecting the fresh session triggers the message pull (empty) and the
-      // ws subscribe below — the new empty conversation becomes the active one.
-      setSelectedId(meta.id)
-    } catch (err) {
-      setSessionNotice(err instanceof Error ? err.message : "创建会话失败")
-    }
-  }, [api])
+      createAndSelectSession(workdir === "" ? {} : { workdir }),
+    [createAndSelectSession],
+  )
+
+  // Slash-command creation always lands in the daemon's default workspace —
+  // the web has no meaningful cwd to pin a workdir to.
+  const handleSlashCreateSession = useCallback(
+    (title?: string): Promise<void> => createAndSelectSession(title === undefined ? {} : { title }),
+    [createAndSelectSession],
+  )
+
+  // The /sessions command: reveal the list (no-op visually on desktop, where
+  // the sidebar is permanent; opens the drawer on mobile).
+  const handleOpenSessions = useCallback((): void => {
+    setSidebarOpen(true)
+  }, [])
 
   // Directory listings for the workdir picker (no path = the picker root,
   // i.e. the daemon's configured workspace).
@@ -376,6 +400,8 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
                 initialMessages={readyMessages}
                 sessionModel={selectedMeta?.model}
                 onSessionRenamed={handleSessionRenamed}
+                onCreateSession={handleSlashCreateSession}
+                onOpenSessions={handleOpenSessions}
               />
             </div>
           )}

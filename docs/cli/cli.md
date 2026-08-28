@@ -108,7 +108,8 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 
 ## slash 命令机制（packages/cli/src/slash.ts）
 
-- 注册表是 `createRegistry(ctx)` 返回的 `Map<string, SlashCommand>`；解析（`dispatch`）与查表执行（`runOrHint`）分离，未注册的命令打印一行 `没有这个命令，/help 看看`（miss 路径可单测）。
+- 注册表是 `createRegistry(ctx)` 返回的 `Map<string, SlashCommand>`；命令的名称/用法/描述读自 `@kclaw/core/commands` 的共享清单 `SLASH_COMMANDS`（WebUI 读同一份，保证两端文案不漂移，见 [webui](../web/webui.md)）；解析（`dispatch`，委托 core 的 `parseSlashInput`）与查表执行（`runOrHint`）分离，未注册的命令打印一行 `没有这个命令，/help 看看`（miss 路径可单测）。
+- **Tab 补全**：readline 的 completer 挂在 `slashCompleter`（`slash.ts`）上——输入以 `/` 开头且还没打空格时按 Tab，按共享清单给出前缀候选：唯一命中直接补全命令名，多个命中补全公共前缀并列出清单；普通文本、带参数的输入、未知前缀都不动作。自定义命令不参与联想，仍靠 `/help` 发现。
 - `/exit` **刻意不注册**：它是 `chat.ts` 输入循环的控制流（`parsed.command === "exit"` 直接 break），不经过注册表。
 - 内置命令：
 

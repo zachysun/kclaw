@@ -5,7 +5,8 @@
  * draft); expansion/collapse uses native <details> elements, so thinking folds
  * by default and tool_result cards expand to their full output without JS.
  */
-import { useState, type FormEvent } from "react"
+import { useState, type FormEvent, type KeyboardEvent } from "react"
+import { parseSlashInput, slashCompletions, SLASH_COMMANDS } from "@kclaw/core/commands"
 import type { ChatState, ConfirmationCard, RenderedBlock, RenderedMessage } from "./model.js"
 
 /** An uploaded attachment pending on the next message (mirrors the daemon shape). */
@@ -36,13 +37,53 @@ export interface ChatViewProps {
 
 export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel }: ChatViewProps) {
   const [draft, setDraft] = useState("")
+  // Slash-suggestion state: Escape dismisses the menu until the draft changes;
+  // sel is the highlighted option, clamped whenever the candidate list shrinks.
+  const [dismissed, setDismissed] = useState(false)
+  const [sel, setSel] = useState(0)
+  const [helpOpen, setHelpOpen] = useState(false)
+
+  const completions = dismissed ? [] : slashCompletions(draft, "web")
+  const active = Math.min(sel, Math.max(0, completions.length - 1))
 
   const submit = (event: FormEvent): void => {
     event.preventDefault()
     const text = draft.trim()
     if (text === "") return
+    // /help renders the command panel right here — it is a view concern, so
+    // it never escapes through onSend (the dispatcher treats it as a no-op).
+    if (parseSlashInput(text)?.command === "help") {
+      setHelpOpen(true)
+      setDraft("")
+      return
+    }
     onSend(text)
     setDraft("")
+  }
+
+  /** Replace the draft with the chosen command plus a trailing space (ready for args); the space closes the menu. */
+  const complete = (name: string): void => {
+    setDraft(`/${name} `)
+    setDismissed(true)
+  }
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (completions.length > 0) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault()
+        setSel((active + 1) % completions.length)
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault()
+        setSel((active - 1 + completions.length) % completions.length)
+      } else if (event.key === "Tab") {
+        event.preventDefault()
+        complete(completions[active]!.name)
+      } else if (event.key === "Escape") {
+        setDismissed(true)
+      }
+    } else if (event.key === "Escape" && helpOpen) {
+      setHelpOpen(false)
+    }
   }
 
   return (
@@ -50,6 +91,24 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
       {view.error !== undefined && (
         <div className="chat-error" data-testid="chat-error" role="alert">
           {view.error}
+        </div>
+      )}
+      {helpOpen && (
+        <div className="slash-help" data-testid="slash-help">
+          <div className="slash-help-head">
+            <span>斜杠命令</span>
+            <button type="button" data-testid="slash-help-close" aria-label="关闭命令列表" onClick={() => setHelpOpen(false)}>
+              ×
+            </button>
+          </div>
+          <ul>
+            {SLASH_COMMANDS.filter((c) => c.surfaces.includes("web")).map((c) => (
+              <li key={c.name}>
+                <code>{c.usage}</code>
+                <span>{c.description}</span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
       <div className="chat-log" data-testid="chat-log">
@@ -93,12 +152,37 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
         </div>
       )}
       <form className="chat-composer" onSubmit={submit}>
+        {completions.length > 0 && (
+          <ul className="slash-menu" data-testid="slash-menu" role="listbox" aria-label="斜杠命令联想">
+            {completions.map((c, i) => (
+              <li key={c.name} role="option" aria-selected={i === active} className={i === active ? "slash-option active" : "slash-option"}>
+                <button
+                  type="button"
+                  data-testid="slash-option"
+                  // mousedown so the input keeps focus (a click would blur it)
+                  onMouseDown={(event) => {
+                    event.preventDefault()
+                    complete(c.name)
+                  }}
+                >
+                  <code>{c.usage}</code>
+                  <span>{c.description}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         <span className="composer-prompt" aria-hidden="true">❯</span>
         <input
           className="chat-input"
           data-testid="chat-input"
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => {
+            setDraft(event.target.value)
+            setDismissed(false)
+            setSel(0)
+          }}
+          onKeyDown={handleKeyDown}
           placeholder="Type a message…"
           autoFocus
         />

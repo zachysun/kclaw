@@ -11,6 +11,7 @@
  * path has no token-refresh flow, so it asks for a reload).
  */
 import { useCallback, useEffect, useRef, useState } from "react"
+import { parseSlashInput } from "@kclaw/core/commands"
 import { ApiError, type ApiClient } from "../api.js"
 import { WsAuthError, type WsClient } from "../ws.js"
 import {
@@ -21,6 +22,7 @@ import {
   type ChatState,
   type Message,
 } from "./model.js"
+import { runWebCommand } from "./commands.js"
 import { ChatView, type PendingAttachment } from "./ChatView.js"
 
 export interface ChatPanelProps {
@@ -40,6 +42,10 @@ export interface ChatPanelProps {
    * stable across renders (it keys the ws effect like ws/createWs).
    */
   onSessionRenamed?: (sessionId: string, title: string) => void
+  /** Create a session (title optional) and switch to it — the /new and /clear commands. */
+  onCreateSession: (title?: string) => Promise<void>
+  /** Reveal the session list — the /sessions command (the drawer on mobile). */
+  onOpenSessions: () => void
 }
 
 /** Max consecutive failed reconnects before giving up with a notice. */
@@ -59,7 +65,7 @@ function errorFrameMessage(frame: unknown): string | null {
   return typeof message === "string" ? message : null
 }
 
-export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed }: ChatPanelProps) {
+export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions }: ChatPanelProps) {
   const [view, setViewState] = useState<ChatState>(() => initChat(initialMessages))
   const [notice, setNotice] = useState<string | null>(null)
   const clientRef = useRef<WsClient>(ws)
@@ -231,6 +237,22 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   }, [api, sessionId])
 
   const handleSend = useCallback((text: string) => {
+    // Slash commands intercept before the ws send path (the same point where
+    // the CLI chat loop intercepts) — they never reach the model.
+    const parsed = parseSlashInput(text)
+    if (parsed !== null) {
+      void runWebCommand(parsed, {
+        api,
+        sessionId,
+        notify: setNotice,
+        createSession: onCreateSession,
+        openSessions: onOpenSessions,
+        switchModel: handleSwitchModel,
+        models,
+        currentModel,
+      })
+      return
+    }
     try {
       const attachments = [...pendingAttachments]
       clientRef.current.send({
@@ -243,7 +265,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     } catch {
       setNotice("连接不可用，请稍后重试")
     }
-  }, [sessionId, pendingAttachments])
+  }, [sessionId, pendingAttachments, api, onCreateSession, onOpenSessions, handleSwitchModel, models, currentModel])
 
   /** Upload dropped files and queue them for the next message. */
   const handleDrop = useCallback((event: React.DragEvent) => {

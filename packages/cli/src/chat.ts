@@ -39,7 +39,7 @@ import { join } from "node:path"
 import { createInterface, type Interface as RlInterface } from "node:readline"
 import { KclawClient } from "./client.js"
 import type { WsFrame, WsHandle } from "./client.js"
-import { createRegistry, dispatch, runOrHint, type AttachmentRef, type SlashCtx } from "./slash.js"
+import { createRegistry, dispatch, runOrHint, slashCompleter, type AttachmentRef, type SlashCtx } from "./slash.js"
 import { expandFileRefs } from "./file-refs.js"
 
 /** AgentEvent distributed over its event types, so `switch (ev.type)` narrows `ev.payload`. */
@@ -377,7 +377,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
   const sessionId = await resolveSessionId(client, opts.session)
 
   process.stdout.write(`kclaw · session ${sessionId}\n`)
-  process.stdout.write(dim(`输入消息，/exit 退出，/new 新会话，/sessions 列表，Ctrl+C 取消当前 run\n`))
+  process.stdout.write(dim(`输入消息，/ 命令可用（Tab 补全），/exit 退出，Ctrl+C 取消当前 run\n`))
 
   const ctx: ChatCtx = {
     pendingAttachments: [],
@@ -385,7 +385,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
     client,
     ws: await openSubscribed(client, sessionId),
     sessionId,
-    rl: createInterface({ input: process.stdin, output: process.stdout, prompt: "> " }),
+    rl: createInterface({ input: process.stdin, output: process.stdout, prompt: "> ", completer: slashCompleter }),
     showThinking: opts.showThinking === true,
     auto,
     io: { atLineStart: true },
