@@ -7,7 +7,17 @@
  */
 import { Fragment, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { parseSlashInput, slashCompletions, SLASH_COMMANDS } from "@kclaw/core/commands"
-import type { ChatState, ConfirmationCard, NoteRender, RenderedBlock, RenderedMessage } from "./model.js"
+import type { ChatState, ConfirmationCard, NoteRender, QueueEntryView, RenderedBlock, RenderedMessage } from "./model.js"
+
+/**
+ * How a message enters a busy session (spec §6): steer injects into the live
+ * run, wait queues behind it, interrupt preempts with a new run. The trio's
+ * current selection; also carried explicitly on every send_message frame.
+ */
+export type Disposition = "steer" | "wait" | "interrupt"
+
+/** The trio's order — also the arrow-key rotation order (spec §7.1: 方向键+回车). */
+const DISPOSITIONS = ["steer", "wait", "interrupt"] as const
 
 /** An uploaded attachment pending on the next message (mirrors the daemon shape). */
 export interface PendingAttachment {
@@ -64,9 +74,17 @@ export interface ChatViewProps {
    * draft changes (suggestion completion) do not fire this.
    */
   onDraftChange?: () => void
+  /** The current send disposition (the trio's selection; the owner resolves it from meta/config). */
+  disposition?: Disposition
+  /** Select the trio — the owner writes the sticky override (spec §6) and carries it on sends. */
+  onSetDisposition?: (d: Disposition) => void
+  /** Cancel one queued message (its bubble's cancel button). */
+  onCancelQueued?: (messageId: string) => void
+  /** Cancel every still-queued message (the banner's 全部取消). */
+  onCancelAllQueued?: () => void
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, notice, onDraftChange }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, notice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Slash-suggestion state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -76,6 +94,22 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
 
   const completions = dismissed ? [] : slashCompletions(draft, "web")
   const active = Math.min(sel, Math.max(0, completions.length - 1))
+
+  // 排队提示条计数（spec §7.1）：只数仍在排队的条目（injected 的已注入，不再占位）。
+  // 独立于一次性 notice——它是状态，不随输入清除。
+  const queuedCount = view.queue.filter((q) => q.state === "queued").length
+
+  /** 三选的方向键旋转（spec §7.1：方向键+回车与点击皆可；回车/空格是按钮原生行为）。 */
+  const handleTrioKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (onSetDisposition === undefined || disposition === undefined) return
+    const idx = DISPOSITIONS.indexOf(disposition)
+    const delta =
+      event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 :
+      event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0
+    if (delta === 0) return
+    event.preventDefault()
+    onSetDisposition(DISPOSITIONS[(idx + delta + DISPOSITIONS.length) % DISPOSITIONS.length]!)
+  }
 
   // Keep the suggestion menu inside the viewport: measure how much room sits
   // above the composer and cap the menu height to it (fresh sessions leave
@@ -173,10 +207,12 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
       <div className="chat-log" data-testid="chat-log">
         {view.messages.map((message, idx) => {
           const context = contextBarFor(view.messages, idx)
+          // 排队中的消息按 id 命中队列条目——气泡据此显示角标/取消按钮（spec §7.1）。
+          const queueEntry = view.queue.find((q) => q.messageId === message.id)
           return (
             <Fragment key={message.id}>
               {context !== null && <CompactContextNote context={context} />}
-              <MessageBubble message={message} />
+              <MessageBubble message={message} queueEntry={queueEntry} onCancelQueued={onCancelQueued} />
             </Fragment>
           )
         })}
@@ -228,6 +264,12 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
           {notice}
         </div>
       )}
+      {queuedCount > 0 && (
+        <div className="queue-banner" data-testid="queue-banner" role="status">
+          {queuedCount} 条排队中
+          <button type="button" data-testid="queue-cancel-all" onClick={() => onCancelAllQueued?.()}>全部取消</button>
+        </div>
+      )}
       <form className="chat-composer" ref={composerRef} onSubmit={submit}>
         {completions.length > 0 && (
           <ul
@@ -270,6 +312,17 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
           placeholder="Type a message…"
           autoFocus
         />
+        {view.runState === "running" && (
+          <div className="disposition-trio" data-testid="disposition-trio" role="radiogroup" aria-label="发送处置" onKeyDown={handleTrioKeyDown}>
+            {DISPOSITIONS.map((d) => (
+              <button
+                key={d} type="button" role="radio" aria-checked={disposition === d}
+                data-testid={`disposition-${d}`}
+                onClick={() => onSetDisposition?.(d)}
+              >{d === "steer" ? "引导" : d === "wait" ? "等待" : "中断"}</button>
+            ))}
+          </div>
+        )}
         <button type="submit" data-testid="send-button">Send</button>
       </form>
     </div>
@@ -344,12 +397,38 @@ function CompactContextNote({ context }: { context: CompactContextInfo }) {
   )
 }
 
-function MessageBubble({ message }: { message: RenderedMessage }) {
+function MessageBubble({ message, queueEntry, onCancelQueued }: {
+  message: RenderedMessage
+  /** This message's send-queue entry, when it is queued/injected (looked up by id). */
+  queueEntry?: QueueEntryView
+  onCancelQueued?: (messageId: string) => void
+}) {
   const streaming = message.pending && message.blocks.length === 0
+  const queued = queueEntry !== undefined && queueEntry.state === "queued"
+  // wait 排队 → 半透明（.queued）；steer/interrupt 排队保持正常样式，取消按钮承载状态
+  // （spec §7.1）。角标：排队中的 wait 显"排队中"，已注入的显"已注入"。
+  const queuedWait = queued && queueEntry.disposition === "wait"
+  const badge = queueEntry === undefined
+    ? null
+    : queueEntry.state === "injected"
+      ? "已注入"
+      : queuedWait
+        ? "排队中"
+        : null
   return (
-    <div className={`message message-${message.role}`} data-testid={`msg-${message.role}`}>
+    <div className={`message message-${message.role}${queuedWait ? " queued" : ""}`} data-testid={`msg-${message.role}`}>
       {streaming && <div className="msg-pending" data-testid="msg-pending">…</div>}
+      {badge !== null && <span className="queue-badge" data-testid="queue-badge">{badge}</span>}
       {message.blocks.map((block) => <BlockView key={block.blockId} block={block} />)}
+      {queued && (
+        <button
+          type="button"
+          className="queue-cancel"
+          data-testid="queue-cancel"
+          aria-label="取消这条排队消息"
+          onClick={() => onCancelQueued?.(message.id)}
+        >取消</button>
+      )}
     </div>
   )
 }

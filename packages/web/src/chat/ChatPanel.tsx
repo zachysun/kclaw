@@ -3,7 +3,8 @@
  * every frame through the model reducer, and renders the ChatView. Reconnect
  * follows the shared reconnect protocol (拉全量消息 + 只订阅新事件，不回放): on an unexpected
  * close the panel builds a fresh client via `createWs`, re-pulls the full
- * message list (merged into the live view, see model.mergeMessages), and
+ * message list (merged into the live view, see model.mergeMessages) plus the
+ * send-queue snapshot (merged via model.mergeQueue — 重建排队气泡), and
  * re-subscribes — the merged state then streams only NEW events.
  *
  * Auth: a close with the daemon's auth-failure code (4001) or an API 401 shows
@@ -15,16 +16,18 @@ import { parseSlashInput } from "@kclaw/core/commands"
 import { ApiError, type ApiClient } from "../api.js"
 import { WsAuthError, type WsClient } from "../ws.js"
 import {
+  adoptQueuedId,
   applyEvent,
   appendOptimisticUser,
   initChat,
   mergeMessages,
+  mergeQueue,
   type AgentEvent,
   type ChatState,
   type Message,
 } from "./model.js"
 import { runWebCommand } from "./commands.js"
-import { ChatView, type PendingAttachment } from "./ChatView.js"
+import { ChatView, type Disposition, type PendingAttachment } from "./ChatView.js"
 
 export interface ChatPanelProps {
   sessionId: string
@@ -69,6 +72,8 @@ function errorFrameMessage(frame: unknown): string | null {
 export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions }: ChatPanelProps) {
   const [view, setViewState] = useState<ChatState>(() => initChat(initialMessages))
   const [notice, setNotice] = useState<string | null>(null)
+  // 发送处置（spec §6）：三选的当前选择，显式带在每条 send_message 上。
+  const [disposition, setDisposition] = useState<Disposition>("steer")
   const clientRef = useRef<WsClient>(ws)
   clientRef.current = ws
   // The authoritative view for event-loop transforms. updateView computes the
@@ -111,15 +116,27 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
 
     const refreshMessages = async (): Promise<boolean> => {
-      try {
-        const messages = await api.get<Message[]>(`/sessions/${encodeURIComponent(sessionId)}/messages`)
-        if (cancelled) return false
-        updateView((v) => ({ ...v, messages: mergeMessages(v.messages, messages) }))
-        return true
-      } catch (err) {
-        if (!cancelled) setNotice(authNotice(err, "无法同步消息"))
-        return false
+      // 全量消息 + 队列快照并行拉取（spec §7.1 重连纠偏），两个方向彼此独立：
+      // 队列拉取失败不阻塞消息合并（事件流会继续纠偏）；消息拉取失败照样合并
+      // 队列——排队气泡的重建不依赖消息基线。
+      const [messagesResult, queueResult] = await Promise.allSettled([
+        api.get<Message[]>(`/sessions/${encodeURIComponent(sessionId)}/messages`),
+        api.get<Array<{ messageId: string; disposition: string; text: string }>>(
+          `/sessions/${encodeURIComponent(sessionId)}/queue`,
+        ),
+      ])
+      if (cancelled) return false
+      let ok = false
+      if (messagesResult.status === "fulfilled") {
+        updateView((v) => ({ ...v, messages: mergeMessages(v.messages, messagesResult.value) }))
+        ok = true
+      } else {
+        setNotice(authNotice(messagesResult.reason, "无法同步消息"))
       }
+      if (queueResult.status === "fulfilled") {
+        updateView((v) => mergeQueue(v, queueResult.value))
+      }
+      return ok
     }
 
     /** Consume frames until the socket closes; resolves with why it ended. */
@@ -136,6 +153,10 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
                 if (typeof title === "string") onSessionRenamed?.(sessionId, title)
               }
               updateView((v) => applyEvent(v, frame))
+            } else if ((frame as { type?: string }).type === "send_message_ack"
+              && (frame as { queued?: unknown }).queued === true) {
+              const messageId = (frame as { messageId?: unknown }).messageId
+              if (typeof messageId === "string") updateView((v) => adoptQueuedId(v, messageId))
             } else {
               const message = errorFrameMessage(frame)
               if (message !== null) {
@@ -229,6 +250,33 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       .catch((err: unknown) => setNotice(`模型切换失败: ${err instanceof Error ? err.message : String(err)}`))
   }, [api, sessionId])
 
+  // 初始发送处置（spec §6，与 CLI chat 同源）：会话 meta 的 dispositionOverride
+  // 优先，其次配置默认，最后 steer。刚连上的 daemon 不可达（旧版本无该路由/字段）
+  // 时静默维持 steer。
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([
+      api.get<{ dispositionOverride?: unknown }>(`/sessions/${encodeURIComponent(sessionId)}`),
+      api.get<{ sessions?: { defaultDisposition?: unknown } }>("/config"),
+    ])
+      .then(([meta, cfg]) => {
+        if (cancelled) return
+        const override = meta.dispositionOverride
+        if (override === "steer" || override === "wait" || override === "interrupt") {
+          setDisposition(override)
+          return
+        }
+        const fallback = cfg.sessions?.defaultDisposition
+        setDisposition(fallback === "wait" || fallback === "interrupt" ? fallback : "steer")
+      })
+      .catch(() => {
+        // 已是 steer —— 失败容忍（spec §7.1 默认选中回退）。
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api, sessionId])
+
   const handleSend = useCallback((text: string) => {
     // Slash commands intercept before the ws send path (the same point where
     // the CLI chat loop intercepts) — they never reach the model.
@@ -252,6 +300,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
         type: "send_message",
         sessionId,
         text,
+        disposition,
         ...(attachments.length > 0 ? { attachments } : {}),
       })
       setPendingAttachments([])
@@ -259,15 +308,12 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       // the composer — the server echo can lag seconds behind a pre-run
       // compaction. message.created later replaces the local twin by text.
       updateView((v) => appendOptimisticUser(v, text))
-      // Queue visibility: a run (or its pre-run compaction) still holds the
-      // session — this message waits for it server-side.
-      if (viewRef.current.runState === "running" || viewRef.current.compacting === true) {
-        setNotice("已排队，将在当前任务后发送")
-      }
+      // 排队可见性由事件驱动（spec §7.1）：ack{queued:true} 收养服务端 id，
+      // message.queued 打上排队角标，banner 数排队条目——不再用本地启发式提示。
     } catch {
       setNotice("连接不可用，请稍后重试")
     }
-  }, [sessionId, pendingAttachments, api, onCreateSession, onOpenSessions, handleSwitchModel, models, currentModel, updateView])
+  }, [sessionId, pendingAttachments, api, onCreateSession, onOpenSessions, handleSwitchModel, models, currentModel, updateView, disposition])
 
   /** Upload dropped files and queue them for the next message. */
   const handleDrop = useCallback((event: React.DragEvent) => {
@@ -296,6 +342,28 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
   }, [])
 
+  /** Cancel queued messages (spec §5.6): one id, or all still-queued when omitted. */
+  const handleCancelQueued = useCallback((messageId?: string) => {
+    try {
+      clientRef.current.send({
+        type: "queue.cancel",
+        sessionId,
+        // 不带 messageId = 清空全部可取消条目——帧上不能出现该键。
+        ...(messageId !== undefined ? { messageId } : {}),
+      })
+    } catch {
+      setNotice("连接不可用，请稍后重试")
+    }
+  }, [sessionId])
+
+  /** 三选切换（spec §6）：本地立即生效（后续发送显式带上），同时写会话级覆盖（与 CLI /steer 同一存储）。 */
+  const handleSetDisposition = useCallback((d: Disposition) => {
+    setDisposition(d)
+    api
+      .post(`/sessions/${encodeURIComponent(sessionId)}/disposition`, { disposition: d })
+      .catch((err: unknown) => setNotice(`处置切换失败: ${err instanceof Error ? err.message : String(err)}`))
+  }, [api, sessionId])
+
   const clearNotice = useCallback((): void => setNotice(null), [])
 
   return (
@@ -312,6 +380,10 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           onSwitchModel={handleSwitchModel}
           notice={notice}
           onDraftChange={clearNotice}
+          disposition={disposition}
+          onSetDisposition={handleSetDisposition}
+          onCancelQueued={handleCancelQueued}
+          onCancelAllQueued={() => handleCancelQueued()}
         />
       </div>
     </div>

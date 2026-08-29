@@ -669,6 +669,85 @@ select:focus {
   margin-bottom: var(--space-2);
 }
 
+/* ---- send-message queue (message-queue spec §7.1) ---- */
+
+/* 排队提示条：N 条排队中 · 全部取消。它是状态不是一次性提示——独立于
+   .chat-notice 渲染，不随输入清除。 */
+.queue-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  color: var(--text-dim);
+  margin-bottom: var(--space-2);
+}
+
+.queue-banner button {
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+/* 气泡上的排队/注入角标 */
+.queue-badge {
+  display: inline-block;
+  margin-bottom: var(--space-1);
+  padding: 1px 6px;
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid rgba(224, 164, 78, 0.28);
+  border-radius: var(--radius-sm);
+}
+
+/* 排队气泡的单条取消按钮 */
+.queue-cancel {
+  margin-top: var(--space-1);
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--danger);
+  background: none;
+  border-color: var(--border);
+}
+
+.queue-cancel:hover:not(:disabled) {
+  border-color: var(--danger);
+  background: var(--danger-dim);
+}
+
+/* wait 条目排队中：等待出队的半透明示意（steer 排队保持正常样式） */
+.message.queued {
+  opacity: 0.6;
+}
+
+/* 发送处置三选：运行中出现在 Send 键旁的 radio 组，选中项用 agent 信号色 */
+.disposition-trio {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.disposition-trio button {
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--muted);
+  background: none;
+  border-color: var(--border);
+}
+
+.disposition-trio button:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.disposition-trio button[aria-checked="true"] {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
 .chat-log {
   flex: 1;
   min-height: 0;

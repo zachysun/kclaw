@@ -47,10 +47,26 @@ function makeFakeSocket(): FakeSocket {
 
 const WS_URL = "ws://daemon.local/ws"
 
-function makeApi(getMessages: Message[]): ApiClient & { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn> } {
+/** Path-routed GET fixtures for the fake API client. */
+interface ApiRoutes {
+  /** GET /sessions/:id/queue — the daemon's queue snapshot (default: empty). */
+  queue?: Array<{ messageId: string; disposition: string; text: string }>
+  /** GET /sessions/:id — the session meta, the initial-disposition source (default: {}). */
+  meta?: unknown
+  /** GET /config — daemon config (default: {}). */
+  config?: unknown
+}
+
+function makeApi(getMessages: Message[], routes: ApiRoutes = {}): ApiClient & { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn> } {
   return {
-    get: vi.fn(async () => getMessages),
-    post: vi.fn(),
+    get: vi.fn(async (path: string) => {
+      if (path.endsWith("/queue")) return routes.queue ?? []
+      if (path === "/config") return routes.config ?? {}
+      if (path.endsWith("/messages")) return getMessages
+      // GET /sessions/:id — session meta (initial-disposition resolution).
+      return routes.meta ?? {}
+    }),
+    post: vi.fn(async () => ({})),
     patch: vi.fn(),
     del: vi.fn(), upload: vi.fn(),
   } as unknown as ApiClient & { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn> }
@@ -95,6 +111,29 @@ async function drive(fn: () => void): Promise<void> {
   })
 }
 
+/** Type into the composer and click Send (the full send path). */
+async function sendText(h: Harness, text: string): Promise<void> {
+  const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+  typeInto(input, text)
+  await act(async () => {
+    ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
+  })
+}
+
+/** The user bubble carrying `text` (queued/optimistic lookups), null when absent. */
+function findUserBubble(container: HTMLElement, text: string): HTMLElement | null {
+  return (
+    ([...container.querySelectorAll('[data-testid="msg-user"]')] as HTMLElement[])
+      .find((b) => b.textContent?.includes(text)) ?? null
+  )
+}
+
+/** The reconnect resync pulls (messages + queue) — the mount-time disposition fetch is /sessions/:id itself. */
+function isDataPull(call: unknown[]): boolean {
+  const path = String(call[0])
+  return path.endsWith("/messages") || path.endsWith("/queue")
+}
+
 interface Harness {
   container: HTMLElement
   root: Root
@@ -115,10 +154,16 @@ async function mount(
     onSessionRenamed?: (sessionId: string, title: string) => void
     onCreateSession?: (title?: string) => Promise<void>
     onOpenSessions?: () => void
+    /** GET /sessions/:id/queue fixture. */
+    queue?: Array<{ messageId: string; disposition: string; text: string }>
+    /** GET /sessions/:id (meta) fixture. */
+    meta?: unknown
+    /** GET /config fixture. */
+    config?: unknown
   } = {},
 ): Promise<Harness> {
   const sessionId = opts.sessionId ?? "s1"
-  const api = makeApi(opts.initialMessages ?? [])
+  const api = makeApi(opts.initialMessages ?? [], { queue: opts.queue, meta: opts.meta, config: opts.config })
   const { sockets, socketFactory, createWs } = setup()
   const ws = createWs()
   const container = document.createElement("div")
@@ -262,7 +307,7 @@ describe("ChatPanel", () => {
       ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
     })
     expect(h.sockets[0]!.sent).toContain(
-      JSON.stringify({ type: "send_message", sessionId: "s1", text: "hello world" }),
+      JSON.stringify({ type: "send_message", sessionId: "s1", text: "hello world", disposition: "steer" }),
     )
     // Input clears after send; input stays enabled during a run (queued input).
     expect(input.value).toBe("")
@@ -388,7 +433,7 @@ describe("ChatPanel", () => {
     h.unmount()
   })
 
-  it("queues visibly: sending while compacting announces the queued message", async () => {
+  it("queues visibly without a notice: the badge and banner replace the old heuristic", async () => {
     const h = await mount()
     await drive(() => {
       pushFrame(h.sockets[0]!, ev("compaction.started", {}))
@@ -399,7 +444,9 @@ describe("ChatPanel", () => {
       ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
     })
     await flush()
-    expect(h.container.querySelector('[data-testid="chat-notice"]')!.textContent).toContain("已排队")
+    // The old "已排队，将在当前任务后发送" heuristic is gone — queued visibility is
+    // event-driven now (the queued badge and the queue banner below).
+    expect(h.container.querySelector('[data-testid="chat-notice"]')).toBeNull()
     // the optimistic echo still appeared
     expect(h.container.querySelector('[data-testid="msg-user"]')!.textContent).toContain("排队消息")
     h.unmount()
@@ -487,8 +534,9 @@ describe("ChatPanel", () => {
 
   it("reconnects on an unexpected close: re-pulls messages and re-subscribes", async () => {
     const h = await mount({ initialMessages: [msg("m1", "user", [{ id: "b1", type: "text", text: "hi" }])] })
-    // Only the /config model fetch may have happened — no message pulls yet.
-    expect(h.api.get.mock.calls.filter(([path]) => String(path) !== "/config")).toHaveLength(0)
+    // Only the /config + /sessions/:id disposition fetches may have happened —
+    // no message/queue pulls yet.
+    expect(h.api.get.mock.calls.filter(isDataPull)).toHaveLength(0)
     await drive(() => {
       h.sockets[0]!.onclose?.({ code: 1006 })
     })
@@ -572,7 +620,7 @@ describe("ChatPanel", () => {
       h.sockets[0]!.onclose?.({ code: 4001 })
     })
     expect(h.sockets).toHaveLength(1)
-    expect(h.api.get.mock.calls.filter(([path]) => String(path) !== "/config")).toHaveLength(0)
+    expect(h.api.get.mock.calls.filter(isDataPull)).toHaveLength(0)
     expect(h.container.textContent).toContain("认证")
     h.unmount()
   })
@@ -603,6 +651,124 @@ describe("ChatPanel", () => {
       pushFrame(h.sockets[0]!, ev("llm.completed", { usage: {}, stopReason: "end_turn" }))
     })
     expect(h.container.querySelector('[data-testid="run-retry"]')).toBeNull()
+    h.unmount()
+  })
+
+  it("send while running carries the selected disposition and writes the sticky override", async () => {
+    // 初始 meta 无覆盖、config defaultDisposition "steer"
+    const h = await mount({ meta: {}, config: { sessions: { defaultDisposition: "steer" } } })
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("run.started", { trigger: "user" }))
+    })
+    // 运行中 → 三选可见，默认选中 = 解析出的当前处置（config 默认 steer）
+    const steerBtn = h.container.querySelector('[data-testid="disposition-steer"]') as HTMLButtonElement
+    expect(steerBtn).not.toBeNull()
+    expect(steerBtn.getAttribute("aria-checked")).toBe("true")
+    // 运行中发送 → send_message 帧带 disposition:"steer"
+    await sendText(h, "第一条")
+    const sent = h.sockets[0]!.sent.filter((f) => f.includes("send_message"))
+    expect(JSON.parse(sent.at(-1)!)).toMatchObject({ type: "send_message", text: "第一条", disposition: "steer" })
+    // 点三选"等待" → POST /sessions/:id/disposition {disposition:"wait"}
+    await act(async () => {
+      ;(h.container.querySelector('[data-testid="disposition-wait"]') as HTMLButtonElement).click()
+    })
+    expect(h.api.post).toHaveBeenCalledWith("/sessions/s1/disposition", { disposition: "wait" })
+    expect((h.container.querySelector('[data-testid="disposition-wait"]') as HTMLButtonElement).getAttribute("aria-checked")).toBe("true")
+    // 再发送 → 帧带 disposition:"wait"（sticky）
+    await sendText(h, "第二条")
+    const sentAfter = h.sockets[0]!.sent.filter((f) => f.includes("send_message"))
+    expect(JSON.parse(sentAfter.at(-1)!)).toMatchObject({ type: "send_message", text: "第二条", disposition: "wait" })
+    h.unmount()
+  })
+
+  it("ack adopts the optimistic id; message.queued renders the badge; cancel hits queue.cancel", async () => {
+    const h = await mount()
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("run.started", { trigger: "user" }))
+    })
+    await sendText(h, "帮我看看")
+    // fake ws 回 send_message_ack{messageId:"msg_1", queued:true} + message.queued 事件
+    await drive(() => {
+      pushFrame(h.sockets[0]!, { type: "send_message_ack", sessionId: "s1", messageId: "msg_1", queued: true })
+      pushFrame(h.sockets[0]!, ev("message.queued", { messageId: "msg_1", disposition: "wait", position: 1 }))
+    })
+    const bubble = findUserBubble(h.container, "帮我看看")
+    expect(bubble).not.toBeNull()
+    // 气泡带排队角标（wait → 半透明 + 排队中 + 取消按钮）
+    expect(bubble!.className).toContain("queued")
+    expect(bubble!.querySelector('[data-testid="queue-badge"]')!.textContent).toContain("排队中")
+    // 点单条取消 → ws 收到 {type:"queue.cancel", sessionId, messageId:"msg_1"}
+    await act(async () => {
+      ;(bubble!.querySelector('[data-testid="queue-cancel"]') as HTMLButtonElement).click()
+    })
+    expect(h.sockets[0]!.sent).toContain(
+      JSON.stringify({ type: "queue.cancel", sessionId: "s1", messageId: "msg_1" }),
+    )
+    h.unmount()
+  })
+
+  it("reconnect pulls GET /queue and rebuilds the queued bubble", async () => {
+    // api 的 GET /queue 返回一条 wait 条目
+    const h = await mount({
+      queue: [{ messageId: "q1", disposition: "wait", text: "断线前排队的话" }],
+    })
+    // 触发既有断线路径重连
+    await drive(() => {
+      h.sockets[0]!.onclose?.({ code: 1006 })
+    })
+    expect(h.api.get).toHaveBeenCalledWith("/sessions/s1/queue")
+    // 出现对应 pending 气泡与角标
+    const bubble = findUserBubble(h.container, "断线前排队的话")
+    expect(bubble).not.toBeNull()
+    expect(bubble!.className).toContain("queued")
+    expect(bubble!.querySelector('[data-testid="queue-badge"]')!.textContent).toContain("排队中")
+    expect(h.container.querySelector('[data-testid="queue-banner"]')!.textContent).toContain("1 条排队中")
+    h.unmount()
+  })
+
+  it("queue banner shows the count and all-cancel; typing does NOT clear it", async () => {
+    const h = await mount()
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("run.started", { trigger: "user" }))
+    })
+    // 两条排队（各自 ack 收养 + message.queued）
+    for (const [text, id] of [["甲", "qa"], ["乙", "qb"]] as const) {
+      await sendText(h, text)
+      await drive(() => {
+        pushFrame(h.sockets[0]!, { type: "send_message_ack", sessionId: "s1", messageId: id, queued: true })
+        pushFrame(h.sockets[0]!, ev("message.queued", { messageId: id, disposition: "wait" }))
+      })
+    }
+    expect(h.container.querySelector('[data-testid="queue-banner"]')!.textContent).toContain("2 条排队中")
+    // 排队计数是状态：打字不清除（一次性 notice 才随输入清除）
+    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    typeInto(input, "继续输入")
+    expect(h.container.querySelector('[data-testid="queue-banner"]')).not.toBeNull()
+    // 点"全部取消" → ws 收到不带 messageId 的 queue.cancel
+    await act(async () => {
+      ;(h.container.querySelector('[data-testid="queue-cancel-all"]') as HTMLButtonElement).click()
+    })
+    const cancelFrame = JSON.parse(h.sockets[0]!.sent.at(-1)!) as { type?: string; sessionId?: string; messageId?: unknown }
+    expect(cancelFrame.type).toBe("queue.cancel")
+    expect(cancelFrame.sessionId).toBe("s1")
+    expect("messageId" in cancelFrame).toBe(false)
+    h.unmount()
+  })
+
+  it("resyncs the queue even when the message pull fails (independent directions)", async () => {
+    const queueFixture = [{ messageId: "q1", disposition: "wait", text: "排队的话" }]
+    const h = await mount({ queue: queueFixture })
+    // 消息拉取失败、队列拉取成功：排队气泡仍要重建（两个方向互不阻塞）。
+    ;(h.api.get as ReturnType<typeof vi.fn>).mockImplementation(async (path: string) => {
+      if (path.endsWith("/queue")) return queueFixture
+      if (path.endsWith("/messages")) throw new Error("pull failed")
+      return {}
+    })
+    await drive(() => {
+      h.sockets[0]!.onclose?.({ code: 1006 })
+    })
+    expect(h.container.textContent).toContain("无法同步消息")
+    expect(findUserBubble(h.container, "排队的话")).not.toBeNull()
     h.unmount()
   })
 })

@@ -8,10 +8,20 @@
 import { describe, it, expect, vi } from "vitest"
 import { createRoot, type Root } from "react-dom/client"
 import { act } from "react"
-import { ChatView, availableSlashMenuMaxHeight } from "../../src/chat/ChatView.js"
-import { initChat, type Block, type Message } from "../../src/chat/model.js"
+import { ChatView, availableSlashMenuMaxHeight, type Disposition } from "../../src/chat/ChatView.js"
+import { initChat, type Block, type ChatState, type Message } from "../../src/chat/model.js"
 
-function mountView(messages: Message[] = []) {
+/** Optional props/view overrides for the new disposition/queue scenarios. */
+interface ViewOpts {
+  /** Merged over initChat(messages) — runState, queue, … */
+  view?: Partial<ChatState>
+  disposition?: Disposition
+  onSetDisposition?: (d: Disposition) => void
+  onCancelQueued?: (messageId: string) => void
+  onCancelAllQueued?: () => void
+}
+
+function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
   const onSend = vi.fn()
   const container = document.createElement("div")
   document.body.appendChild(container)
@@ -19,11 +29,15 @@ function mountView(messages: Message[] = []) {
   act(() => {
     root.render(
       <ChatView
-        view={initChat(messages)}
+        view={{ ...initChat(messages), ...opts.view }}
         onSend={onSend}
         onResolveConfirmation={vi.fn()}
         pendingAttachments={[]}
         onRemoveAttachment={vi.fn()}
+        disposition={opts.disposition}
+        onSetDisposition={opts.onSetDisposition}
+        onCancelQueued={opts.onCancelQueued}
+        onCancelAllQueued={opts.onCancelAllQueued}
       />,
     )
   })
@@ -285,5 +299,74 @@ describe("compact context block", () => {
     const bars = [...h.container.querySelectorAll('[data-testid="ctx-note"]')]
     expect(bars[1]!.textContent).toContain("已压缩为 3 段")
     h.unmount()
+  })
+})
+
+describe("disposition trio and queued bubbles (spec §7.1)", () => {
+  const userMsg = (id: string, text: string): Message => ({
+    id,
+    sessionId: "s1",
+    role: "user",
+    blocks: [{ id: `${id}-b`, type: "text", text }],
+    createdAt: "2026-08-29T00:00:00.000Z",
+  })
+
+  it("renders the disposition trio only while running; initial selection follows props", () => {
+    const onSetDisposition = vi.fn()
+    const h = mountView([], { view: { runState: "running" }, disposition: "wait", onSetDisposition })
+    const trio = h.container.querySelector('[data-testid="disposition-trio"]')
+    expect(trio).not.toBeNull()
+    expect(trio!.getAttribute("role")).toBe("radiogroup")
+    const checked = (d: Disposition): string | null =>
+      trio!.querySelector(`[data-testid="disposition-${d}"]`)?.getAttribute("aria-checked") ?? null
+    // props.disposition="wait" → wait 选中，其余未选
+    expect(checked("wait")).toBe("true")
+    expect(checked("steer")).toBe("false")
+    expect(checked("interrupt")).toBe("false")
+    // 点击可选
+    act(() => {
+      ;(trio!.querySelector('[data-testid="disposition-steer"]') as HTMLButtonElement).click()
+    })
+    expect(onSetDisposition).toHaveBeenCalledWith("steer")
+    // 方向键也可（wait → 下一个是 interrupt）
+    act(() => {
+      trio!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }))
+    })
+    expect(onSetDisposition).toHaveBeenCalledWith("interrupt")
+    h.unmount()
+
+    // view.runState "idle" → trio 不渲染
+    const idle = mountView([], { disposition: "wait", onSetDisposition })
+    expect(idle.container.querySelector('[data-testid="disposition-trio"]')).toBeNull()
+    idle.unmount()
+  })
+
+  it("steer bubble: delete button while queued, badge after injected", () => {
+    // queue 含 {messageId:"m1", state:"queued", disposition:"steer"} → 气泡有取消按钮、无"已注入"
+    const queued = mountView([userMsg("m1", "引导一下")], {
+      view: { queue: [{ messageId: "m1", disposition: "steer", state: "queued", text: "引导一下" }] },
+      onCancelQueued: vi.fn(),
+    })
+    const bubble = [...queued.container.querySelectorAll('[data-testid="msg-user"]')]
+      .find((b) => b.textContent?.includes("引导一下"))
+    expect(bubble).not.toBeNull()
+    expect(bubble!.querySelector('[data-testid="queue-cancel"]')).not.toBeNull()
+    expect(bubble!.textContent).not.toContain("已注入")
+    // steer 排队保持正常样式：无半透明、无排队角标（取消按钮本身承载状态）
+    expect(bubble!.className).not.toContain("queued")
+    expect(bubble!.querySelector('[data-testid="queue-badge"]')).toBeNull()
+    queued.unmount()
+
+    // state:"injected" → 反之：角标"已注入"、无按钮
+    const injected = mountView([userMsg("m1", "引导一下")], {
+      view: { queue: [{ messageId: "m1", disposition: "steer", state: "injected", text: "引导一下" }] },
+      onCancelQueued: vi.fn(),
+    })
+    const after = [...injected.container.querySelectorAll('[data-testid="msg-user"]')]
+      .find((b) => b.textContent?.includes("引导一下"))
+    expect(after).not.toBeNull()
+    expect(after!.querySelector('[data-testid="queue-cancel"]')).toBeNull()
+    expect(after!.querySelector('[data-testid="queue-badge"]')!.textContent).toContain("已注入")
+    injected.unmount()
   })
 })
