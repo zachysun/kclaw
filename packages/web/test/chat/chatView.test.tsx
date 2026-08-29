@@ -369,4 +369,28 @@ describe("disposition trio and queued bubbles (spec §7.1)", () => {
     expect(after!.querySelector('[data-testid="queue-badge"]')!.textContent).toContain("已注入")
     injected.unmount()
   })
+
+  it("queued interrupt bubble has no cancel button; wait/steer keep theirs (spec §5.6)", () => {
+    const h = mountView([userMsg("m1", "插队消息"), userMsg("m2", "排队消息"), userMsg("m3", "引导消息")], {
+      view: {
+        queue: [
+          { messageId: "m1", disposition: "interrupt", state: "queued", text: "插队消息" },
+          { messageId: "m2", disposition: "wait", state: "queued", text: "排队消息" },
+          { messageId: "m3", disposition: "steer", state: "queued", text: "引导消息" },
+        ],
+      },
+      onCancelQueued: vi.fn(),
+    })
+    const bubble = (text: string): HTMLElement | undefined =>
+      ([...h.container.querySelectorAll('[data-testid="msg-user"]')] as HTMLElement[]).find((b) => b.textContent?.includes(text))
+    // interrupt：入队即伴随 abort、紧接着出队执行（spec §5.6）——无可取消窗口，
+    // 走正常执行态呈现：无取消按钮、无角标、不半透明（随即被自己的 run 接管）。
+    expect(bubble("插队消息")!.querySelector('[data-testid="queue-cancel"]')).toBeNull()
+    expect(bubble("插队消息")!.querySelector('[data-testid="queue-badge"]')).toBeNull()
+    expect(bubble("插队消息")!.className).not.toContain("queued")
+    // wait / steer：取消按钮不受影响（防回归）。
+    expect(bubble("排队消息")!.querySelector('[data-testid="queue-cancel"]')).not.toBeNull()
+    expect(bubble("引导消息")!.querySelector('[data-testid="queue-cancel"]')).not.toBeNull()
+    h.unmount()
+  })
 })

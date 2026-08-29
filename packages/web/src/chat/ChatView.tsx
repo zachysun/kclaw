@@ -405,9 +405,13 @@ function MessageBubble({ message, queueEntry, onCancelQueued }: {
 }) {
   const streaming = message.pending && message.blocks.length === 0
   const queued = queueEntry !== undefined && queueEntry.state === "queued"
-  // wait 排队 → 半透明（.queued）；steer/interrupt 排队保持正常样式，取消按钮承载状态
+  // wait 排队 → 半透明（.queued）；steer 排队保持正常样式，取消按钮承载状态
   // （spec §7.1）。角标：排队中的 wait 显"排队中"，已注入的显"已注入"。
   const queuedWait = queued && queueEntry.disposition === "wait"
+  // 可取消窗口（spec §5.6）：wait 随时可取消、steer 注入前可取消；interrupt 入队即
+  // 伴随 abort、紧接着出队执行，无可取消窗口——不渲染取消按钮（点击只能换来
+  // not_found 错误帧）。interrupt 气泡走正常执行态呈现，随即被自己的 run 接管。
+  const cancellable = queued && queueEntry.disposition !== "interrupt"
   const badge = queueEntry === undefined
     ? null
     : queueEntry.state === "injected"
@@ -420,7 +424,7 @@ function MessageBubble({ message, queueEntry, onCancelQueued }: {
       {streaming && <div className="msg-pending" data-testid="msg-pending">…</div>}
       {badge !== null && <span className="queue-badge" data-testid="queue-badge">{badge}</span>}
       {message.blocks.map((block) => <BlockView key={block.blockId} block={block} />)}
-      {queued && (
+      {cancellable && (
         <button
           type="button"
           className="queue-cancel"
