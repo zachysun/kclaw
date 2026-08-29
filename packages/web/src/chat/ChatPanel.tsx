@@ -304,13 +304,10 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
   }, [])
 
+  const clearNotice = useCallback((): void => setNotice(null), [])
+
   return (
     <div className="chat-panel">
-      {notice !== null && (
-        <div className="chat-notice" data-testid="chat-notice" role="status">
-          {notice}
-        </div>
-      )}
       <div className="composer-row" data-testid="compact-row">
         <button type="button" data-testid="compact-button" onClick={handleCompact}>
           压缩
@@ -326,6 +323,8 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           models={models}
           sessionModel={currentModel}
           onSwitchModel={handleSwitchModel}
+          notice={notice}
+          onDraftChange={clearNotice}
         />
       </div>
     </div>

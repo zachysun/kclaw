@@ -52,9 +52,21 @@ export interface ChatViewProps {
   sessionModel?: string
   /** Switch the session model ("" clears to default). */
   onSwitchModel?: (name: string) => void
+  /**
+   * Transient status line (command results, reconnect/auth/upload/model
+   * messages) — rendered directly above the composer, next to the input that
+   * triggered it. Null/undefined hides it.
+   */
+  notice?: string | null
+  /**
+   * The user typed into the composer — the owner clears the stale notice so
+   * old feedback does not sit over the new message being written. Programmatic
+   * draft changes (suggestion completion) do not fire this.
+   */
+  onDraftChange?: () => void
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, notice, onDraftChange }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Slash-suggestion state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -194,6 +206,11 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
           ))}
         </div>
       )}
+      {notice !== undefined && notice !== null && notice !== "" && (
+        <div className="chat-notice" data-testid="chat-notice" role="status">
+          {notice}
+        </div>
+      )}
       <form className="chat-composer" ref={composerRef} onSubmit={submit}>
         {completions.length > 0 && (
           <ul
@@ -230,6 +247,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
             setDraft(event.target.value)
             setDismissed(false)
             setSel(0)
+            onDraftChange?.()
           }}
           onKeyDown={handleKeyDown}
           placeholder="Type a message…"

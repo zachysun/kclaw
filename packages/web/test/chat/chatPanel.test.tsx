@@ -668,4 +668,38 @@ describe("ChatPanel model selector", () => {
     expect(h.container.querySelectorAll('[data-testid="msg-user"]')).toHaveLength(1)
     h.unmount()
   })
+
+  it("renders the notice just above the composer, not at the panel top", async () => {
+    const h = await mount()
+    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    typeInto(input, "/zzz")
+    await act(async () => {
+      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    const notice = h.container.querySelector('[data-testid="chat-notice"]')!
+    const composer = h.container.querySelector("form.chat-composer")!
+    const log = h.container.querySelector('[data-testid="chat-log"]')!
+    // Document order: the notice sits AFTER the conversation log (feedback
+    // lives next to the input that triggered it) and directly BEFORE the
+    // composer. compareDocumentPosition: FOLLOWING = the argument comes after
+    // the receiver.
+    expect(notice.compareDocumentPosition(log) & Node.DOCUMENT_POSITION_FOLLOWING).toBeFalsy()
+    expect(notice.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    h.unmount()
+  })
+
+  it("clears a stale notice once the user starts typing a new message", async () => {
+    const h = await mount()
+    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    typeInto(input, "/zzz")
+    await act(async () => {
+      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(h.container.querySelector('[data-testid="chat-notice"]')).not.toBeNull()
+    typeInto(input, "新的消息")
+    expect(h.container.querySelector('[data-testid="chat-notice"]')).toBeNull()
+    h.unmount()
+  })
 })
