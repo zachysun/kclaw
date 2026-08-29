@@ -321,6 +321,12 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // connections come up (a late-connecting server still contributes).
   if (mcpManager !== undefined) void mcpManager.start()
 
+  // Crash recovery (spec §5.5): re-enqueue persisted queues (steer/interrupt
+  // demoted to wait) before the scheduler starts. The app is already
+  // listening, so the message.queued broadcasts reach connected clients;
+  // reconnecting clients are corrected wholesale by GET /queue.
+  run.recoverQueues()
+
   const tick = startSchedulerTick({ scheduler: jobs, run, bus, sessions, intervalMs: opts.schedulerIntervalMs ?? DEFAULT_SCHEDULER_INTERVAL_MS, purgeTtlMs: config.sessions.recycleBinTtlMs, notifier, webBase: `http://${HOST}:${port}` })
   const stopTimeoutMs = opts.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS
 

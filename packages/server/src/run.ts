@@ -467,17 +467,16 @@ export class RunManager {
 
   /**
    * Manual compaction (spec 6.5): runs #compactV2 with a focus, ignoring
-   * the trigger line. Refused while the session has an active or queued
-   * run — compaction reads full history and writes meta, which a
-   * concurrent run would corrupt.
+   * the trigger line. Both refusals (spec §5.7) are checked before any
+   * compaction work, queue first: when an active run AND a backed-up queue
+   * coexist, the queued-count message is the actionable one — "wait it out"
+   * alone never unblocks a backed-up queue. Compaction reads full history
+   * and writes meta, which a concurrent run would corrupt.
    */
   async compactSession(sessionId: string, focus?: string): Promise<{ message: string }> {
-    // 机械替换旧 #chains 检查（忙即拒，语义不变）；文案细分属 Task 6（spec §5.7）。
-    if (
-      this.#active.has(sessionId) ||
-      (this.#queues.get(sessionId)?.length ?? 0) > 0 ||
-      (this.#steerBuf.get(sessionId)?.length ?? 0) > 0
-    ) throw new Error("会话正在运行")
+    const pending = this.queue(sessionId).length
+    if (pending > 0) throw new Error(`还有 ${pending} 条排队消息，先处理或取消`)
+    if (this.#active.has(sessionId)) throw new Error("会话正在运行，等它结束")
     const { config, sessions, llm } = this.#deps
     const meta = sessions.meta(sessionId)
     if (meta === undefined) throw new Error("session not found")
@@ -489,6 +488,23 @@ export class RunManager {
       message: out.compacted
         ? `压缩了 ${out.segments} 段，剩 ${out.active.length} 条原文消息`
         : "无可压缩内容",
+    }
+  }
+
+  /** daemon 启动恢复（spec §5.5）：持久化队列整体重排，steer/interrupt 一律降级 wait。 */
+  recoverQueues(): void {
+    for (const meta of this.#deps.sessions.list()) {
+      const entries = meta.queue
+      if (entries === undefined || entries.length === 0) continue
+      const demoted: QueueEntry[] = entries.map((e) => ({ ...e, disposition: "wait" }))
+      this.#deps.sessions.updateMeta(meta.id, { queue: demoted })
+      const queue = this.#queues.get(meta.id) ?? []
+      demoted.forEach((entry, i) => {
+        queue.push(makeNode(entry))
+        this.#deps.bus.emit(makeEvent("message.queued", { messageId: entry.messageId, disposition: "wait", position: i }, { sessionId: meta.id }))
+      })
+      this.#queues.set(meta.id, queue)
+      this.#drive(meta.id)
     }
   }
 

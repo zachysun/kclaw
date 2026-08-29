@@ -140,8 +140,9 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
     })
 
     // Manual compaction (spec 6.5): optional { focus } body. compactSession's
-    // busy refusal ("会话正在运行") maps to 409, its missing-session error to
-    // 404; anything else is a 500 with the error message.
+    // two busy refusals (running / non-empty queue, spec §5.7) both map to
+    // 409, its missing-session error to 404; anything else is a 500 with the
+    // error message.
     scope.post("/sessions/:id/compact", async (request, reply) => {
       const { id } = request.params as { id: string }
       if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
@@ -155,7 +156,9 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
         return await stores.run.compactSession(id, focus)
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e)
-        const status = message === "会话正在运行" ? 409 : message === "session not found" ? 404 : 500
+        const isBusy = message === "会话正在运行，等它结束"
+        const isQueued = message.startsWith("还有 ") && message.includes("排队消息")
+        const status = isBusy || isQueued ? 409 : message === "session not found" ? 404 : 500
         return reply.code(status).send({ error: message })
       }
     })

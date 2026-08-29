@@ -365,3 +365,67 @@ describe("queueCancel", () => {
     expect(manager.queueCancel(meta.id, "msg_nope")).toEqual({ ok: false, reason: "not_found" })
   })
 })
+
+describe("compactSession refusal", () => {
+  it("refuses while running with the running message", async () => {
+    const gate = makeGate()
+    const mgr = managerWith({ llm: gateLlm(gate, false), tools: new Map([["gate", gateTool(gate)]]) })
+    const meta = sessions.create("t", undefined, "/w")
+    const run = mgr.submit(meta.id, { userText: "x", trigger: "user" })
+    await gate.toolEntered
+    await expect(mgr.compactSession(meta.id)).rejects.toThrow("会话正在运行，等它结束")
+    mgr.cancel(meta.id)
+    gate.releaseTool()
+    await run.outcome // 不留仍在跑的 run（afterEach rmSync 竞争）
+  })
+
+  it("refuses with the queued-count message when only the queue is non-empty", async () => {
+    const meta = sessions.create("t", undefined, "/w")
+    const first = manager.submit(meta.id, { userText: "first", trigger: "user" })
+    const q = manager.submit(meta.id, { userText: "q", trigger: "user", disposition: "wait" })
+    await first.outcome
+    // 同步连续再排两条占住队列（此刻 q 可能已被驱动器执行掉），保证非空
+    const q2 = manager.submit(meta.id, { userText: "q2", trigger: "user", disposition: "wait" })
+    const q3 = manager.submit(meta.id, { userText: "q3", trigger: "user", disposition: "wait" })
+    await expect(manager.compactSession(meta.id)).rejects.toThrow(/还有 \d+ 条排队消息，先处理或取消/)
+    // 断言后排空：测试结束时不得有仍在写的 run（Ruling B）
+    await Promise.all([first.outcome, q.outcome, q2.outcome, q3.outcome])
+    for (let i = 0; i < 50; i++) {
+      if ((sessions.meta(meta.id)!.queue ?? []).length === 0) return
+      await new Promise((r) => setTimeout(r, 20))
+    }
+    expect(sessions.meta(meta.id)!.queue ?? []).toHaveLength(0)
+  })
+})
+
+describe("recoverQueues", () => {
+  it("re-enqueues persisted entries as wait (steer/interrupt demoted) and drives them in order", async () => {
+    const meta = sessions.create("t", undefined, "/w")
+    sessions.updateMeta(meta.id, { queue: [
+      { messageId: "msg_s", disposition: "steer", text: "s", trigger: "user", enqueuedAt: new Date().toISOString() },
+      { messageId: "msg_w", disposition: "wait", text: "w", trigger: "user", enqueuedAt: new Date().toISOString() },
+      { messageId: "msg_i", disposition: "interrupt", text: "i", trigger: "user", enqueuedAt: new Date().toISOString() },
+    ] })
+    manager.recoverQueues()
+    const jsonl = join(home, "sessions", meta.id, "messages.jsonl")
+    // 轮询到全部 3 条 user 行 + 各自 assistant 回复落盘（3 run × 2 行 = 6 行）：
+    // 只数 user 行会在 run 仍在写盘时放行，与 afterEach 的 rmSync 竞争。
+    // 上限 50×20ms：回归时以明确断言失败，而非静默超时。
+    for (let i = 0; i < 50; i++) {
+      try {
+        const parsed = readFileSync(jsonl, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l))
+        if (parsed.filter((m: { role: string }) => m.role === "user").length >= 3 && parsed.length >= 6) break
+      } catch { /* 尚未建文件 */ }
+      await new Promise((r) => setTimeout(r, 20))
+    }
+    expect(sessions.meta(meta.id)!.queue ?? []).toHaveLength(0)
+    const lines = readFileSync(jsonl, "utf8").trim().split("\n").map((l) => JSON.parse(l))
+    const texts = lines.filter((m: { role: string }) => m.role === "user").map((m: { blocks: Array<{ text?: string }> }) => m.blocks[0]!.text)
+    expect(texts).toEqual(["s", "w", "i"])
+  })
+
+  it("is a no-op for sessions without a queue", () => {
+    sessions.create("t2", undefined, "/w")
+    expect(() => manager.recoverQueues()).not.toThrow()
+  })
+})
