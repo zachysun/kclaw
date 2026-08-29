@@ -27,6 +27,7 @@ import type {
   KclawPaths,
   LlmClient,
   LlmStreamEvent,
+  MessageQueuedPayload,
   RunCompletedPayload,
   RunFailedPayload,
 } from "@kclaw/core"
@@ -94,7 +95,7 @@ afterEach(async () => {
 /** Real stores + RunManager + app (ephemeral port); `wireRun: false` omits the app↔run seam. */
 async function makeWsRun(
   llm: LlmClient,
-  opts: { wireRun?: boolean } = {},
+  opts: { wireRun?: boolean; defaultDisposition?: "steer" | "wait" | "interrupt" } = {},
 ): Promise<{ env: Env; url: string }> {
   const home = mkdtempSync(join(tmpdir(), "kclaw-wsr-home-"))
   const workspace = mkdtempSync(join(tmpdir(), "kclaw-wsr-ws-"))
@@ -107,6 +108,9 @@ async function makeWsRun(
     default: "mock",
     entries: { mock: { baseUrl: "http://127.0.0.1:1", apiKey: "test-key", model: "mock-model" } },
   }
+  // Test-injection seam: the disposition a no-disposition send_message
+  // resolves to (spec §6 chain: explicit > session override > config default).
+  if (opts.defaultDisposition !== undefined) config.sessions.defaultDisposition = opts.defaultDisposition
 
   const sessions = new SessionStore(paths.sessionsDir)
   const memory = new MemoryStore({ notesDir: paths.memoryNotesDir, indexDb: paths.memoryIndexDb })
@@ -158,6 +162,28 @@ async function waitUntilFrames(frames: Frame[], pred: (fs: Frame[]) => boolean, 
   }
 }
 
+/** The nth (1-based, default first) frame of `type` on the ordered command channel. */
+async function frameOf(frames: Frame[], type: string, nth = 1, timeoutMs = 3000): Promise<Frame> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const found = frames.filter((f) => f.type === type)[nth - 1]
+    if (found !== undefined) return found
+    if (Date.now() > deadline) throw new Error(`frame "${type}" #${nth} not observed within ${timeoutMs}ms`)
+    await sleep(5)
+  }
+}
+
+/** The nth (1-based) bus event of `type` (AgentEvent envelope with id/payload). */
+async function eventOf(frames: Frame[], type: string, nth = 1, timeoutMs = 3000): Promise<Frame & AgentEvent> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const found = frames.filter((f): f is Frame & AgentEvent => isAgentEvent(f) && f.type === type)[nth - 1]
+    if (found !== undefined) return found
+    if (Date.now() > deadline) throw new Error(`event "${type}" #${nth} not observed within ${timeoutMs}ms`)
+    await sleep(5)
+  }
+}
+
 function connect(url: string): Promise<WebSocket> {
   const ws = new WebSocket(url)
   clients.push(ws)
@@ -201,10 +227,13 @@ describe("ws run commands (send_message / run.cancel)", () => {
 
     ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "打个招呼" }))
 
-    // the ack is PROMPT (1s budget) and lands before the run produced anything
-    expect(await waitFor(frames, (f) => f.type === "send_message_ack", 1000)).toEqual({
-      type: "send_message_ack", sessionId: session.id,
-    })
+    // the ack is PROMPT (1s budget) and lands before the run produced anything,
+    // and carries the server-side message identity (idle direct-run → queued:false)
+    const ack = await waitFor(frames, (f) => f.type === "send_message_ack", 1000)
+    expect(ack.type).toBe("send_message_ack")
+    expect(ack.sessionId).toBe(session.id)
+    expect(String(ack.messageId)).toMatch(/^msg_/)
+    expect(ack.queued).toBe(false)
 
     // the run is now live but cannot finish (the llm is manually gated): the
     // ack demonstrably arrived while the run was still pending
@@ -399,5 +428,103 @@ describe("ws run commands (send_message / run.cancel)", () => {
     // the connection still serves other commands
     ws.send(JSON.stringify({ type: "subscribe", sessionId: "ses_probe" }))
     await waitFor(frames, (f) => f.type === "subscribed")
+  })
+})
+
+describe("ws queue steering (disposition / queue.cancel)", () => {
+  it("send_message while busy enqueues as wait (config default), ack carries messageId+queued", async () => {
+    const { llm, release } = gatedTextClient("慢回答")
+    // 锁定「配置默认」这一环：本测试把缺省处置置为 wait（出厂默认是 steer）
+    const { env, url } = await makeWsRun(llm, { defaultDisposition: "wait" })
+    const session = env.sessions.create("排队默认会话")
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await frameOf(frames, "subscribed")
+
+    // 先让第一条消息占住会话（llm 闸门挂起），再发第二条（不带 disposition → 配置默认 wait）
+    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "first" }))
+    await frameOf(frames, "send_message_ack")
+    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "second" }))
+    const ack = await frameOf(frames, "send_message_ack", 2)
+    expect(ack.messageId).toMatch(/^msg_/)
+    expect(ack.queued).toBe(true)
+    const payload = (await eventOf(frames, "message.queued")).payload as MessageQueuedPayload
+    expect(payload.disposition).toBe("wait")
+    expect(payload.position).toBe(0)
+
+    release()
+    await frameOf(frames, "run.completed", 2) // 两条都跑完，干净收尾
+  })
+
+  it("disposition=steer while busy buffers; queue.cancel withdraws before injection", async () => {
+    const { llm, release } = gatedTextClient("被转向前的对话")
+    const { env, url } = await makeWsRun(llm)
+    const session = env.sessions.create("steer 取消会话")
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await frameOf(frames, "subscribed")
+
+    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "first" }))
+    await frameOf(frames, "send_message_ack")
+    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "turn", disposition: "steer" }))
+    const payload = (await eventOf(frames, "message.queued")).payload as MessageQueuedPayload
+    expect(payload.disposition).toBe("steer")
+
+    // 注入前取消：ack 携带被撤条目，并广播 message.queue_cancelled
+    ws.send(JSON.stringify({ type: "queue.cancel", sessionId: session.id, messageId: payload.messageId }))
+    const cancelAck = await frameOf(frames, "queue.cancel_ack")
+    expect(cancelAck.sessionId).toBe(session.id)
+    expect(cancelAck.cancelled).toEqual([payload.messageId])
+    await eventOf(frames, "message.queue_cancelled")
+
+    release()
+    await frameOf(frames, "run.completed") // 仅第一条跑完
+  })
+
+  it("queue full answers an error frame with the spec message", async () => {
+    const { llm, release } = gatedTextClient("堵住会话")
+    const { env, url } = await makeWsRun(llm)
+    const session = env.sessions.create("挤满会话")
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await frameOf(frames, "subscribed")
+
+    // 占住 run 后连发 10 条 wait（上限 10）：1 占位 + 10 排队 = 11 个 ack
+    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "占位" }))
+    for (let i = 0; i < 10; i++) {
+      ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: `排${i}`, disposition: "wait" }))
+    }
+    await waitUntilFrames(frames, (fs) => fs.filter((f) => f.type === "send_message_ack").length === 11, 1000)
+
+    // 第 11 条 wait（总第 12 条）→ error frame「队列已满（10 条）」、无 ack
+    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "超限", disposition: "wait" }))
+    const err = await frameOf(frames, "error")
+    expect(err.message).toBe("队列已满（10 条）")
+    await sleep(50) // 无 ack：错误帧之后 ack 计数不再增长
+    expect(frames.filter((f) => f.type === "send_message_ack")).toHaveLength(11)
+
+    release()
+    await frameOf(frames, "run.completed", 11, 10_000) // 释放后排空队列，干净收尾
+  })
+
+  it("invalid disposition is an error frame", async () => {
+    const { url } = await makeWsRun(gatedTextClient("不该执行").llm)
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+
+    // 校验先于会话存在性：不存在的会话也能先拿到 disposition 错误
+    ws.send(JSON.stringify({ type: "send_message", sessionId: "ses_nope", text: "x", disposition: "asap" }))
+    const err = await frameOf(frames, "error")
+    expect(String(err.message)).toContain("disposition")
+
+    // 连接保持可用
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: "ses_probe" }))
+    await frameOf(frames, "subscribed")
   })
 })

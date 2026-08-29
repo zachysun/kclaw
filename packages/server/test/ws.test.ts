@@ -341,11 +341,11 @@ describe("GET /ws", () => {
 
 describe("GET /ws send guard on a dead socket", () => {
   // Real stores + a real RunManager (the ws-run.test.ts wiring): send_message
-  // rides run.enqueue, whose history read throws on a corrupt messages.jsonl.
-  // Per-session serialization lets the test ORDER the failure after the
-  // client is gone: #1 hangs in a gated llm, #2 queues behind it, the client
-  // disconnects, the log is corrupted, and only then is the gate released —
-  // #2's store read (and the .catch reply it triggers) cannot race the close.
+  // rides run.submit, whose dequeued-entry history read throws on a corrupt
+  // messages.jsonl. Per-session serialization lets the test ORDER the failure
+  // after the client is gone: #1 hangs in a gated llm, #2 queues behind it,
+  // the client disconnects, the log is corrupted, and only then is the gate
+  // released — #2's store read fails with the client already gone.
   let home: string
   let workspace: string
   let paths: KclawPaths
@@ -396,11 +396,11 @@ describe("GET /ws send guard on a dead socket", () => {
 
   it("a dead socket during the late enqueue-error path cannot crash the process", async () => {
     // send_message on a session whose log becomes unreadable while the run
-    // is queued, with the client already gone: the .catch handler send()s the
-    // failure frame on a closed socket. That reply must remain a dropped
-    // frame (bus.deliver's contract) — nothing may escape as an unhandled
-    // rejection, which under Node >= 15 kills the process by default. Trap
-    // rejections to prove the path stays silent and the process survives.
+    // is queued, with the client already gone: the late failure settles the
+    // queued entry's outcome promise (it is never sent anywhere). Nothing may
+    // escape as an unhandled rejection, which under Node >= 15 kills the
+    // process by default. Trap rejections to prove the path stays silent and
+    // the process survives.
     const rejections: unknown[] = []
     const onRejection = (err: unknown): void => {
       rejections.push(err)
@@ -420,10 +420,10 @@ describe("GET /ws send guard on a dead socket", () => {
       // #1 starts and hangs inside the gated llm stream; #2 queues behind it
       // (same session serializes) and both ack on the still-open socket.
       ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "第一句" }))
-      expect(await nextMessage(ws)).toEqual({ type: "send_message_ack", sessionId: session.id })
+      expect(await nextMessage(ws)).toMatchObject({ type: "send_message_ack", sessionId: session.id })
       await waitUntil(() => sawEvent("llm.started"))
       ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "第二句" }))
-      expect(await nextMessage(ws)).toEqual({ type: "send_message_ack", sessionId: session.id })
+      expect(await nextMessage(ws)).toMatchObject({ type: "send_message_ack", sessionId: session.id })
 
       // The client vanishes while #2 is still queued; the close handshake
       // completes BEFORE anything below runs.
@@ -433,7 +433,8 @@ describe("GET /ws send guard on a dead socket", () => {
       // Corrupt the log (a bad FIRST line — a torn trailing line alone would
       // be dropped as a crash artifact) and release the gate: #1 appends and
       // completes (appending never re-parses the file), #2 dequeues, its
-      // history read throws, and the .catch reply lands on the dead socket.
+      // history read throws, and the failure settles its outcome promise
+      // silently (no reply — the socket is already gone).
       const log = join(paths.sessionsDir, session.id, "messages.jsonl")
       writeFileSync(log, `{not json\n${readFileSync(log, "utf8")}`, "utf8")
       release()

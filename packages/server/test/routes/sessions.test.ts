@@ -257,4 +257,55 @@ describe("sessions routes", () => {
     expect(res.statusCode).toBe(404)
     expect(res.json()).toEqual({ error: "session not found" })
   })
+
+  it("GET /sessions/:id/queue returns persisted entries; empty array for none; 404 unknown", async () => {
+    const created = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
+    store.updateMeta(created.id, {
+      queue: [{ messageId: "msg_1", disposition: "wait", text: "q", trigger: "user", enqueuedAt: "2026-08-29T00:00:00Z" }],
+    })
+    const res = await app.inject({ method: "GET", url: `/sessions/${created.id}/queue`, headers: AUTH })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual([
+      { messageId: "msg_1", disposition: "wait", text: "q", trigger: "user", enqueuedAt: "2026-08-29T00:00:00Z" },
+    ])
+
+    // 无排队条目的会话：空数组（不是 undefined/null）
+    const other = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
+    const none = await app.inject({ method: "GET", url: `/sessions/${other.id}/queue`, headers: AUTH })
+    expect(none.statusCode).toBe(200)
+    expect(none.json()).toEqual([])
+
+    const missing = await app.inject({ method: "GET", url: "/sessions/ses_nope/queue", headers: AUTH })
+    expect(missing.statusCode).toBe(404)
+    expect(missing.json()).toEqual({ error: "session not found" })
+  })
+
+  it("POST /sessions/:id/disposition writes the override; invalid value is 400", async () => {
+    const created = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
+    const ok = await app.inject({
+      method: "POST",
+      url: `/sessions/${created.id}/disposition`,
+      headers: { ...AUTH, "content-type": "application/json" },
+      payload: { disposition: "wait" },
+    })
+    expect(ok.statusCode).toBe(200)
+    expect(store.meta(created.id)?.dispositionOverride).toBe("wait")
+
+    const bad = await app.inject({
+      method: "POST",
+      url: `/sessions/${created.id}/disposition`,
+      headers: { ...AUTH, "content-type": "application/json" },
+      payload: { disposition: "nope" },
+    })
+    expect(bad.statusCode).toBe(400)
+
+    const missing = await app.inject({
+      method: "POST",
+      url: "/sessions/ses_nope/disposition",
+      headers: { ...AUTH, "content-type": "application/json" },
+      payload: { disposition: "wait" },
+    })
+    expect(missing.statusCode).toBe(404)
+    expect(missing.json()).toEqual({ error: "session not found" })
+  })
 })

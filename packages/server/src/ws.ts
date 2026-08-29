@@ -27,9 +27,10 @@ export interface WsOptions {
   attachmentsDir?: string
   /**
    * The app's RunManager: its confirmation broker answers the
-   * `confirmation.resolve` command, `send_message` rides `run.enqueue` and
-   * `run.cancel` rides `run.cancel`. Absent → these commands answer an error
-   * frame ("run manager not available").
+   * `confirmation.resolve` command, `send_message` rides `run.submit`,
+   * `queue.cancel` rides `run.queueCancel` and `run.cancel` rides
+   * `run.cancel`. Absent → these commands answer an error frame
+   * ("run manager not available").
    */
   run?: RunManager
   /**
@@ -110,10 +111,17 @@ declare module "fastify" {
  * broker's resolution (acked `{type:"confirmation.resolved_ack",
  * confirmationId, ok:true}`, or an error frame for an unknown/settled id —
  * the confirmation.resolved EVENT on the bus is emitted by the loop, never
- * here), `{type:"send_message", sessionId, text}` to queue an agent run on
- * the session (acked `{type:"send_message_ack", sessionId}` immediately —
- * the run's progress streams as run.* events over the bus, so a long run
- * never blocks the command channel), and `{type:"run.cancel", sessionId}` to
+ * here), `{type:"send_message", sessionId, text, disposition?, attachments?}`
+ * to submit an agent run on the session (acked
+ * `{type:"send_message_ack", sessionId, messageId, queued}` immediately —
+ * submit decides synchronously, and the run's progress streams as run.* events
+ * over the bus, so a long run never blocks the command channel; a submit
+ * throw (queue full / session gone) answers an error frame instead of an ack),
+ * `{type:"queue.cancel", sessionId, messageId?}` to withdraw queued messages
+ * before they execute (acked
+ * `{type:"queue.cancel_ack", sessionId, cancelled}`, or an error frame
+ * "已注入" for an already-injected id / "not found"), and
+ * `{type:"run.cancel", sessionId}` to
  * abort the session's active run (acked `{type:"run_cancel_ack", sessionId}`,
  * or an error frame "no active run"). The run commands require the app's
  * RunManager and answer "run manager not available" without it. Unknown
@@ -199,6 +207,8 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
       client?: unknown
       text?: unknown
       attachments?: unknown
+      disposition?: "steer" | "wait" | "interrupt"
+      messageId?: unknown
     }
 
     if (!authenticated) {
@@ -260,38 +270,51 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
         if (run === undefined) {
           return send(socket, { type: "error", message: "run manager not available" })
         }
-        const { sessionId, text, attachments } = msg
+        const { sessionId, text, attachments, disposition } = msg
         if (typeof sessionId !== "string" || sessionId.length === 0
           || typeof text !== "string" || text.length === 0) {
-          return send(socket, {
-            type: "error",
-            message: "send_message requires a non-empty string sessionId and a non-empty string text",
-          })
+          return send(socket, { type: "error", message: "send_message requires a non-empty string sessionId and a non-empty string text" })
+        }
+        if (disposition !== undefined && disposition !== "steer" && disposition !== "wait" && disposition !== "interrupt") {
+          return send(socket, { type: "error", message: 'send_message disposition must be "steer", "wait" or "interrupt"' })
         }
         if (opts.sessions.meta(sessionId) === undefined) {
           return send(socket, { type: "error", message: "session not found" })
         }
-        // Optional attachments: [{path,name,size,mimeType}] with the path
-        // realpath-verified to live under this session's attachments dir —
-        // arbitrary paths would let any token holder read any file the daemon
-        // can reach (the run mounts the file and the model echoes it).
         const refs = parseAttachmentRefs(attachments, opts.attachmentsDir, sessionId)
         if (refs === undefined) {
           return send(socket, { type: "error", message: "send_message attachments are invalid" })
         }
-        // Queue the run but NEVER await it before acking: the outcome streams
-        // to subscribers as run.* events, so a long run must not block this
-        // command channel. The enqueue promise settles with the outcome and
-        // does not reject for provider errors (runAgent resolves those), but
-        // a store failure rejects — surface that on THIS socket only, after
-        // the ack.
-        run.enqueue(sessionId, { userText: text, trigger: "user", ...(refs.length > 0 ? { attachments: refs } : {}) }).catch((err: unknown) => {
-          send(socket, {
-            type: "error",
-            message: `send_message failed: ${err instanceof Error ? err.message : String(err)}`,
+        // submit 同步决策：成功立即 ack（携带 messageId/queued），失败 error frame（无 ack）。
+        // run 本身由驱动器异步执行，进度走 bus。
+        try {
+          const r = run.submit(sessionId, {
+            userText: text, trigger: "user",
+            ...(disposition !== undefined ? { disposition } : {}),
+            ...(refs.length > 0 ? { attachments: refs } : {}),
           })
-        })
-        return send(socket, { type: "send_message_ack", sessionId })
+          return send(socket, { type: "send_message_ack", sessionId, messageId: r.messageId, queued: r.queued })
+        } catch (err) {
+          return send(socket, { type: "error", message: err instanceof Error ? err.message : String(err) })
+        }
+      }
+      case "queue.cancel": {
+        const run = opts.run
+        if (run === undefined) {
+          return send(socket, { type: "error", message: "run manager not available" })
+        }
+        const { sessionId, messageId } = msg
+        if (typeof sessionId !== "string" || sessionId.length === 0) {
+          return send(socket, { type: "error", message: "queue.cancel requires a non-empty string sessionId" })
+        }
+        if (messageId !== undefined && typeof messageId !== "string") {
+          return send(socket, { type: "error", message: "queue.cancel messageId must be a string" })
+        }
+        const res = run.queueCancel(sessionId, messageId)
+        if (!res.ok) {
+          return send(socket, { type: "error", message: res.reason === "injected" ? "已注入" : "not found" })
+        }
+        return send(socket, { type: "queue.cancel_ack", sessionId, cancelled: res.cancelled })
       }
       case "run.cancel": {
         const run = opts.run
