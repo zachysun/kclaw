@@ -209,12 +209,57 @@ export function initChat(messages: Message[]): ChatState {
  */
 export function mergeMessages(existing: RenderedMessage[], fresh: Message[]): RenderedMessage[] {
   const freshById = new Map(fresh.map((m) => [m.id, renderMessage(m, false)]))
-  const merged = existing.map((m) => freshById.get(m.id) ?? m)
-  const known = new Set(existing.map((m) => m.id))
+  // An optimistic twin whose text the server pull now carries has been
+  // persisted — keep the server copy only (the twin never got message.created
+  // here: reconnect does not replay it).
+  const persistedTexts = new Set(
+    fresh.filter((m) => m.role === "user").map((m) => firstUserText(m)),
+  )
+  const existing0 = existing.filter((m) =>
+    !(m.id.startsWith("local-") && m.pending && persistedTexts.has(firstRenderedUserText(m))),
+  )
+  const merged = existing0.map((m) => freshById.get(m.id) ?? m)
+  const known = new Set(existing0.map((m) => m.id))
   for (const [id, rm] of freshById) {
     if (!known.has(id)) merged.push(rm)
   }
   return merged
+}
+
+/** First text block's text of a wire user message ("" when absent). */
+function firstUserText(m: Message): string {
+  return m.blocks.find((b) => b.type === "text")?.text ?? ""
+}
+
+/** First text render's text of a rendered user message ("" when absent). */
+function firstRenderedUserText(m: RenderedMessage): string {
+  const first = m.blocks.find((b) => b.kind === "text")
+  return first !== undefined && first.kind === "text" ? first.text : ""
+}
+
+/**
+ * Insert the optimistic echo for a just-sent user message: a pending bubble
+ * with a `local-` id, replaced by the server's message.created twin later.
+ * Sends the "message visible the instant it leaves the composer" feel even
+ * while a pre-run compaction delays the server echo by seconds.
+ */
+export function appendOptimisticUser(state: ChatState, text: string): ChatState {
+  const optimistic: RenderedMessage = {
+    id: `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    role: "user",
+    pending: true,
+    blocks: [{ kind: "text", blockId: "local", text }],
+  }
+  return { ...state, messages: [...state.messages, optimistic] }
+}
+
+/** Index of the optimistic twin of a server message (pending local- user bubble, same text); -1 when none. */
+function findOptimisticTwinIdx(state: ChatState, server: Message): number {
+  if (server.role !== "user") return -1
+  const text = firstUserText(server)
+  return state.messages.findIndex(
+    (m) => m.id.startsWith("local-") && m.pending && firstRenderedUserText(m) === text,
+  )
 }
 
 /** Apply one wire event to the view, returning a NEW state. */
@@ -243,8 +288,17 @@ export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
           attempt: typeof event.payload.attempt === "number" ? event.payload.attempt : undefined,
         },
       }
-    case "message.created":
-      return upsertMessage(state, renderMessage(event.payload.message, true))
+    case "message.created": {
+      // Optimistic-echo merge: the server skeleton replaces the local twin AT
+      // ITS POSITION — appending would hoist later queued optimistic bubbles
+      // (sent after this one) above it until their own echoes land.
+      const twinIdx = findOptimisticTwinIdx(state, event.payload.message)
+      const rendered = renderMessage(event.payload.message, true)
+      if (twinIdx === -1) return upsertMessage(state, rendered)
+      const messages = state.messages.slice()
+      messages[twinIdx] = rendered
+      return { ...state, messages }
+    }
     case "message.completed":
       return upsertMessage(state, renderMessage(event.payload.message, false))
     case "text.created":

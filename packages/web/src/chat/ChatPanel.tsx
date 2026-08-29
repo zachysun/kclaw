@@ -16,6 +16,7 @@ import { ApiError, type ApiClient } from "../api.js"
 import { WsAuthError, type WsClient } from "../ws.js"
 import {
   applyEvent,
+  appendOptimisticUser,
   initChat,
   mergeMessages,
   type AgentEvent,
@@ -262,6 +263,10 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
         ...(attachments.length > 0 ? { attachments } : {}),
       })
       setPendingAttachments([])
+      // Optimistic echo: the bubble is visible the instant the message leaves
+      // the composer — the server echo can lag seconds behind a pre-run
+      // compaction. message.created later replaces the local twin by text.
+      updateView((v) => appendOptimisticUser(v, text))
       // Queue visibility: a run (or its pre-run compaction) still holds the
       // session — this message waits for it server-side.
       if (viewRef.current.runState === "running" || viewRef.current.compacting === true) {
@@ -270,7 +275,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     } catch {
       setNotice("连接不可用，请稍后重试")
     }
-  }, [sessionId, pendingAttachments, api, onCreateSession, onOpenSessions, handleSwitchModel, models, currentModel])
+  }, [sessionId, pendingAttachments, api, onCreateSession, onOpenSessions, handleSwitchModel, models, currentModel, updateView])
 
   /** Upload dropped files and queue them for the next message. */
   const handleDrop = useCallback((event: React.DragEvent) => {

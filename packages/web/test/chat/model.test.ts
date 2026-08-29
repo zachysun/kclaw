@@ -350,3 +350,53 @@ describe("llm retry hint", () => {
       .toBeNull()
   })
 })
+describe("optimistic user echo", () => {
+  it("appendOptimisticUser adds a pending user bubble with a local- id", () => {
+    const next = appendOptimisticUser(initChat([]), "在吗")
+    expect(next.messages).toHaveLength(1)
+    expect(next.messages[0]!.role).toBe("user")
+    expect(next.messages[0]!.pending).toBe(true)
+    expect(next.messages[0]!.id.startsWith("local-")).toBe(true)
+    expect(next.messages[0]!.blocks).toEqual([{ kind: "text", blockId: "local", text: "在吗" }])
+  })
+
+  it("message.created replaces the optimistic twin (same text) instead of duplicating", () => {
+    const optimistic = appendOptimisticUser(initChat([]), "在吗")
+    const created = applyEvent(optimistic, ev("message.created", { message: msg("m9", "user", [text("b9", "在吗")]) }))
+    expect(created.messages).toHaveLength(1)
+    expect(created.messages[0]!.id).toBe("m9")
+    expect(created.messages[0]!.pending).toBe(true) // server skeleton is still pending until message.completed
+  })
+
+  it("message.created for a different message keeps the optimistic twin", () => {
+    const optimistic = appendOptimisticUser(initChat([]), "在吗")
+    const created = applyEvent(optimistic, ev("message.created", { message: msg("m1", "assistant", [text("b1", "hi")]) }))
+    expect(created.messages.map((m) => m.id)).toEqual([optimistic.messages[0]!.id, "m1"])
+  })
+
+  it("replaces the twin IN PLACE so later queued optimistic messages keep their order", () => {
+    // Master's report: send "a" (compaction starts), then "b" (queued). The
+    // server echo for "a" must take the twin's position — appending it would
+    // hoard "b" above "a" until b's own echo lands.
+    let state = appendOptimisticUser(initChat([]), "a")
+    state = appendOptimisticUser(state, "b")
+    const localB = state.messages[1]!.id
+    state = applyEvent(state, ev("message.created", { message: msg("m1", "user", [text("b1", "a")]) }))
+    expect(state.messages.map((m) => m.id)).toEqual(["m1", localB])
+    expect(firstTextOf(state.messages[0]!)).toBe("a")
+    expect(firstTextOf(state.messages[1]!)).toBe("b")
+    // b's own echo completes the swap in place: [m1, m2] in send order.
+    state = applyEvent(state, ev("message.created", { message: msg("m2", "user", [text("b2", "b")]) }))
+    expect(state.messages.map((m) => m.id)).toEqual(["m1", "m2"])
+  })
+
+  it("mergeMessages drops an optimistic twin once the server pull knows the text", () => {
+    const optimistic = appendOptimisticUser(initChat([]), "在吗")
+    const merged = mergeMessages(optimistic.messages, [msg("m9", "user", [text("b9", "在吗")])])
+    expect(merged.map((m) => m.id)).toEqual(["m9"])
+    // still-unpersisted optimistic bubbles survive the merge
+    const other = appendOptimisticUser(initChat([]), "还没落盘")
+    const merged2 = mergeMessages(other.messages, [msg("m9", "user", [text("b9", "在吗")])])
+    expect(merged2.map((m) => m.id)).toEqual([other.messages[0]!.id, "m9"])
+  })
+})

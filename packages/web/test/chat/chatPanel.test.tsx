@@ -630,6 +630,8 @@ describe("ChatPanel model selector", () => {
     })
     await flush()
     expect(h.container.querySelector('[data-testid="chat-notice"]')!.textContent).toContain("已排队")
+    // the optimistic echo still appeared
+    expect(h.container.querySelector('[data-testid="msg-user"]')!.textContent).toContain("排队消息")
     h.unmount()
   })
 
@@ -642,6 +644,28 @@ describe("ChatPanel model selector", () => {
     })
     await flush()
     expect(h.container.querySelector('[data-testid="chat-notice"]')).toBeNull()
+    h.unmount()
+  })
+
+  it("echoes a sent message optimistically, then replaces it with the server twin", async () => {
+    const h = await mount()
+    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    typeInto(input, "在吗")
+    await act(async () => {
+      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
+    })
+    // The bubble is visible IMMEDIATELY — no frame needed (the pre-run
+    // compaction may delay the server echo by seconds).
+    const bubbles = h.container.querySelectorAll('[data-testid="msg-user"]')
+    expect(bubbles).toHaveLength(1)
+    expect(bubbles[0]!.textContent).toContain("在吗")
+    // The server twin replaces the local one instead of duplicating.
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("message.created", {
+        message: { id: "m1", sessionId: "s1", role: "user", blocks: [{ id: "b1", type: "text", text: "在吗" }], createdAt: "2026-08-15T00:00:00.000Z" },
+      }))
+    })
+    expect(h.container.querySelectorAll('[data-testid="msg-user"]')).toHaveLength(1)
     h.unmount()
   })
 })
