@@ -148,7 +148,7 @@ submit(sessionId, input)
         → 出队队首（meta.queue 同步删除，原子重写）→ #executeEntry 执行 → 继续
 ```
 
-出队执行的条目在 `#executeEntry` 里登记活动 controller（在任何 await 之前——消除旧实现"已出队未注册"的取消窗口）并把本 run 的 outcome 记为 `#activeOutcomes`（steer 的参考 outcome 与降级时序依赖它）。出队阶段的意外失败（meta 写盘炸掉，如会话被删、盘满）不允许重演两种死法：会话永久停转（僵尸驱动器让后续 submit 全部幂等返回、队列无人消费），或循环 promise 裸拒绝。处理：已出队条目以该错误落定、其余条目原地保留（meta.queue 未动，重启后由恢复兜底）、`#drivers` 同步删除（下一次 submit 重新起转，自愈）、错误日志一次（`kclaw run queue driver … crashed:`）。
+出队执行的条目在 `#executeEntry` 里登记活动 controller（在任何 await 之前——消除旧实现"已出队未注册"的取消窗口）并把本 run 的 outcome 记为 `#activeOutcomes`（steer 的参考 outcome 与降级时序依赖它）。出队阶段的意外失败（meta 写盘炸掉，如会话被删、盘满）不允许重演两种死法：会话永久停转（僵尸驱动器让后续 submit 全部幂等返回、队列无人消费），或循环 promise 裸拒绝。处理：已出队条目以该错误落定并**塞回队首**——persist 抛错意味着 meta.queue 也没写成，塞回后内存与盘上重新一致，条目留在队列等待下一次出队重试，不会被此后任何一次成功的持久化无声抹掉；同时补发条目级失败事件 `run.failed {error.code:"queue_entry_failed"}`（见"边界与出错"）；`#drivers` 同步删除（下一次 submit 重新起转，自愈）、错误日志一次（`kclaw run queue driver … crashed:`）。
 
 ### #executeEntry → #execute：一次 run 的装配
 
@@ -234,10 +234,11 @@ daemon 启动时对每个 meta.queue 非空的会话调用：整体重排为内�
 
 ## 边界与出错
 
-- **enqueue 的 promise 对 provider 错误不 reject**（`runAgent` 内部消化为 `run.failed` + `RunOutcome.stopReason:"error"`）；但存储层失败（如磁盘写入失败）会 reject——`ws.ts` 在 ack 之后把错误作为 error 帧发给发起消息的那条 socket。
+- **enqueue 的 promise 对 provider 错误不 reject**（`runAgent` 内部消化为 `run.failed` + `RunOutcome.stopReason:"error"`）。**错误帧只回给同步失败**：`submit` 抛错（队列满 / 会话不存在 / 处置字段非法）发生在 ack 之前，ws 层当场回 error 帧、无 ack。ack 之后 ws 层对 `submit().outcome` 是 fire-and-forget——run 级与持久化级的**迟到失败不再发迟到帧**，改经总线事件到达订阅客户端：run 级失败走循环的 `run.failed`；出队持久化失败与条目执行失败（循环的 `run.failed` 兜不住的两类）走 RunManager 补发的 `run.failed {error:{code:"queue_entry_failed", message 含 messageId 与原因}}`。
 - **队列已满是同步拒绝**：`submit` 在入队前检查上限（排队 + steer 缓冲合计 10），超限直接抛 `队列已满（10 条）`，ws 层回 error 帧、无 ack——消息不会半入队。上限不分池：steer 与 wait 挤同一个池子，挤压风险由"steer 注入前可单条删除"化解（排队气泡可见、可删）。
 - **排队取消是三态的**：命中删除 / `injected`（近期已注入，进了 JSONL 机器不删历史）/ `not_found`（无此条目，或已被当前会话队列淘汰）。判定依赖 `#injectedIds`——有界集合（容量 `QUEUE_LIMIT×2`，够覆盖一个满队列加直发余量），注入时登记；重启后集合清空，恢复条目尚未注入前取消仍是合法的。
-- **附件路径的第二道检查会终止整条 run**：正常情况下 ws 帧层已经把越界的附件引用拦在入队之前；如果有越界路径绕过了帧层到达 `mountAttachments`（比如直接调用 enqueue 的代码没做检查），这里的抛错会让本次 enqueue 以异常收场，错误经 ack 之后的 error 帧送达发起方。steer 注入时的同一检查失败不终止整条 run 的历史注入批次——`#drainSteer` 先构建后变更，任一条构建失败即整体留在缓冲区（异常走 `run.failed "steering_failed"`），条目仍可取消、可重试注入。
+- **附件路径的第二道检查会终止整条 run**：正常情况下 ws 帧层已经把越界的附件引用拦在入队之前；如果有越界路径绕过了帧层到达 `mountAttachments`（比如直接调用 enqueue 的代码没做检查），这里的抛错让本次 run 以异常收场——await 该 outcome 的调用方看到 reject，订阅客户端经 `queue_entry_failed` 事件看到失败（见下一条）。steer 注入时的同一检查失败不终止整条 run 的历史注入批次——`#drainSteer` 先构建后变更，任一条构建失败即整体留在缓冲区（异常走 `run.failed "steering_failed"`），条目仍可取消、可重试注入；注入前 run 先结束的，残余条目降级入队后走到同一出队执行路径，装配段同步抛出同样补 `queue_entry_failed`。
+- **条目级失败有可见性事件（`queue_entry_failed`）**：两类失败发生时循环的 `run.failed` 兜不住——出队持久化失败（run 还没起）与条目执行在装配段的同步抛出（如降级坏附件，`mountAttachments`/读历史在 `runAgent` 之前就炸）。驱动器在这两条路径上补发 `run.failed {error:{code:"queue_entry_failed", message}}`（message 含 `messageId` 与原因，sessionId 级事件），已 ack `queued:true` 的消息不会无声消失；出队持久化失败还伴随条目退回队首（内存与 meta.queue 保持一致，等待重试）。
 - **确认裁决不落任何队列**：`broker.resolve` 对已 settle/过期条目返回 false 并回 `unknown confirmation`，不记录"迟到的意见"。确认卡挂起期间 steer 照常入缓冲区；run 在等确认期间不迭代，注入发生在确认解决后的下一个迭代边界——无特殊路径。
 - **自动命名没有去重锁**：同一会话两次快速入队理论上可能并发两次命名，写回前的重读校验保证只有第一次生效（后到的发现标题已不是默认值即放弃）。
 - **`resolveConfirmation` 测试缝优先于 broker**：设置了它 broker 就只剩登记职责——生产路径不设置。
