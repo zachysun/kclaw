@@ -27,14 +27,17 @@ import type {
   KclawPaths,
   LlmClient,
   LlmStreamEvent,
+  MessageCreatedPayload,
   MessageQueuedPayload,
   RunCompletedPayload,
   RunFailedPayload,
+  ToolExecutor,
 } from "@kclaw/core"
 import type { FastifyInstance } from "fastify"
 import { EventBus } from "../src/bus.js"
 import { RunManager } from "../src/run.js"
 import { createApp } from "../src/app.js"
+import { gateLlm, gateTool, makeGate } from "./helpers/gate.js"
 
 const TOKEN = "t1"
 
@@ -95,7 +98,12 @@ afterEach(async () => {
 /** Real stores + RunManager + app (ephemeral port); `wireRun: false` omits the app↔run seam. */
 async function makeWsRun(
   llm: LlmClient,
-  opts: { wireRun?: boolean; defaultDisposition?: "steer" | "wait" | "interrupt" } = {},
+  opts: {
+    wireRun?: boolean
+    defaultDisposition?: "steer" | "wait" | "interrupt"
+    /** Per-name executor overrides handed straight to the RunManager (test seam). */
+    tools?: Map<string, ToolExecutor>
+  } = {},
 ): Promise<{ env: Env; url: string }> {
   const home = mkdtempSync(join(tmpdir(), "kclaw-wsr-home-"))
   const workspace = mkdtempSync(join(tmpdir(), "kclaw-wsr-ws-"))
@@ -115,7 +123,10 @@ async function makeWsRun(
   const sessions = new SessionStore(paths.sessionsDir)
   const memory = new MemoryStore({ notesDir: paths.memoryNotesDir, indexDb: paths.memoryIndexDb })
   const bus = new EventBus()
-  const manager = new RunManager({ config, paths, sessions, memory, bus, llm, workspace })
+  const manager = new RunManager({
+    config, paths, sessions, memory, bus, llm, workspace,
+    ...(opts.tools !== undefined ? { tools: opts.tools } : {}),
+  })
 
   const app = await createApp({
     home,
@@ -526,5 +537,160 @@ describe("ws queue steering (disposition / queue.cancel)", () => {
     // 连接保持可用
     ws.send(JSON.stringify({ type: "subscribe", sessionId: "ses_probe" }))
     await frameOf(frames, "subscribed")
+  })
+})
+
+/**
+ * Spec §8 end-to-end event sequences: each disposition's full wire story on a
+ * REAL app + RunManager, from send_message through the ack, the message.queued
+ * broadcast and the eventual arrival of the SAME messageId in message.created
+ * (steer: injected at an iteration boundary with message.steered; wait: the
+ * next run after the current completes; interrupt: after the current run ends
+ * aborted). Ordering is asserted only where the wire guarantees it — the ack
+ * and the bus broadcast travel independently, so queued/ack may interleave.
+ */
+describe("ws spec §8 event sequences (steer / wait / interrupt end-to-end)", () => {
+  /** The message.created event carrying `id`, if it has arrived. */
+  const createdFor = (frames: Frame[], id: unknown): Frame | undefined =>
+    frames.find((f) =>
+      isAgentEvent(f) && f.type === "message.created"
+      && (f.payload as MessageCreatedPayload).message.id === id
+    )
+
+  it("steer: ack+queued(steer) → injected at the boundary as created+steered → the SAME run completes", async () => {
+    // The gate pins the injection window: call 1 emits a tool_use whose
+    // executor hangs until released; the steering drain then runs at the
+    // iteration boundary (after the tool batch, before the next llm.stream)
+    // and call 2 ends the run.
+    const gate = makeGate()
+    const tools = new Map([["gate", gateTool(gate)]])
+    const { env, url } = await makeWsRun(gateLlm(gate, false), { tools })
+    const session = env.sessions.create("引导时序会话")
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await frameOf(frames, "subscribed")
+
+    // Occupy the session: the first run parks INSIDE the tool batch.
+    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "先跑着" }))
+    await frameOf(frames, "send_message_ack")
+    await gate.toolEntered
+
+    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "转向", disposition: "steer" }))
+    const ack = await frameOf(frames, "send_message_ack", 2)
+    expect(ack.messageId).toMatch(/^msg_/)
+    expect(ack.queued).toBe(true)
+    const queuedPayload = (await eventOf(frames, "message.queued")).payload as MessageQueuedPayload
+    expect(queuedPayload.messageId).toBe(ack.messageId)
+    expect(queuedPayload.disposition).toBe("steer")
+    expect(queuedPayload.position).toBeUndefined() // steer 不适用 position（spec §4.2）
+
+    // Release the tool batch → the boundary injects the buffered message:
+    // message.created {同一 id} … message.steered {messageId, runId=当前 run}
+    gate.releaseTool()
+    const created = await waitFor(frames, (f) => createdFor(frames, ack.messageId) === f)
+    const steered = await eventOf(frames, "message.steered")
+    expect(steered.payload).toEqual({ messageId: ack.messageId })
+    const started = await eventOf(frames, "run.started")
+    expect(started.runId).toMatch(/^run_/)
+    expect(steered.runId).toBe(started.runId) // 注入的是当前 run，不产生新 run
+    expect(frames.indexOf(steered)).toBeGreaterThan(frames.indexOf(created))
+
+    // The same run carries on to completion: exactly ONE started/completed pair.
+    const completed = await eventOf(frames, "run.completed")
+    expect((completed.payload as RunCompletedPayload).stopReason).toBe("end_turn")
+    expect(frames.filter((f) => f.type === "run.started")).toHaveLength(1)
+    expect(frames.filter((f) => f.type === "run.completed")).toHaveLength(1)
+
+    // The injected message landed in the JSONL history under its queued id.
+    expect(env.sessions.readMessages(session.id).some((m) => m.id === ack.messageId)).toBe(true)
+  })
+
+  it("wait: ack+queued(wait,position) → after the current run completes, the next run starts with the SAME id", async () => {
+    const { llm, release } = gatedTextClient("慢回答")
+    const { env, url } = await makeWsRun(llm)
+    const session = env.sessions.create("等待时序会话")
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await frameOf(frames, "subscribed")
+
+    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "first" }))
+    await frameOf(frames, "send_message_ack")
+    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "second", disposition: "wait" }))
+    const ack = await frameOf(frames, "send_message_ack", 2)
+    expect(ack.messageId).toMatch(/^msg_/)
+    expect(ack.queued).toBe(true)
+    const queuedPayload = (await eventOf(frames, "message.queued")).payload as MessageQueuedPayload
+    expect(queuedPayload.messageId).toBe(ack.messageId)
+    expect(queuedPayload.disposition).toBe("wait")
+    expect(queuedPayload.position).toBe(0) // 队列里唯一条目 → 序位 0
+
+    // The current run is still going: exactly one run.started, no completed yet.
+    const firstStarted = await eventOf(frames, "run.started")
+    await waitUntilFrames(frames, (fs) => fs.filter((f) => f.type === "run.started").length === 1)
+    expect(frames.filter((f) => f.type === "run.completed")).toHaveLength(0)
+
+    release()
+    const firstCompleted = await eventOf(frames, "run.completed")
+    expect((firstCompleted.payload as RunCompletedPayload).stopReason).toBe("end_turn")
+    // The driver dequeues the wait entry: run.started #2 trails the first completed.
+    const secondStarted = await eventOf(frames, "run.started", 2)
+    expect(frames.indexOf(secondStarted)).toBeGreaterThan(frames.indexOf(firstCompleted))
+    expect(secondStarted.runId).not.toBe(firstStarted.runId) // 确是新 run
+    expect(secondStarted.payload).toEqual({ trigger: "user" })
+
+    // message.created arrives under the PRE-ALLOCATED queued id (原地升级，无新 id).
+    await waitFor(frames, (f) => createdFor(frames, ack.messageId) === f)
+    expect(env.sessions.readMessages(session.id).some((m) => m.id === ack.messageId)).toBe(true)
+    await frameOf(frames, "run.completed", 2) // 干净收尾
+  })
+
+  it("interrupt: queued(interrupt,position:0) → current run completes aborted → new run starts with the SAME id", async () => {
+    // Call 1 hangs forever INSIDE llm.stream (only an abort frees it — the
+    // loop's guardedStream races the signal); call 2 finishes immediately.
+    let calls = 0
+    const llm: LlmClient = {
+      async *stream(): AsyncIterable<LlmStreamEvent> {
+        calls += 1
+        if (calls === 1) await new Promise<never>(() => {})
+        yield { type: "text_delta", delta: "新方向" }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+      },
+    }
+    const { env, url } = await makeWsRun(llm)
+    const session = env.sessions.create("中断时序会话")
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await frameOf(frames, "subscribed")
+
+    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "被掐的" }))
+    await frameOf(frames, "send_message_ack")
+    await frameOf(frames, "llm.started") // 第一个 run 已进入 stream
+
+    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "换方向", disposition: "interrupt" }))
+    const ack = await frameOf(frames, "send_message_ack", 2)
+    expect(ack.messageId).toMatch(/^msg_/)
+    expect(ack.queued).toBe(true)
+    const queuedPayload = (await eventOf(frames, "message.queued")).payload as MessageQueuedPayload
+    expect(queuedPayload.messageId).toBe(ack.messageId)
+    expect(queuedPayload.disposition).toBe("interrupt")
+    expect(queuedPayload.position).toBe(0) // 插队首（spec §5.3）
+
+    // The abort lands: the current run terminates aborted (not failed).
+    const aborted = await eventOf(frames, "run.completed")
+    expect((aborted.payload as RunCompletedPayload).stopReason).toBe("aborted")
+
+    // The driver dequeues the interrupt entry into a NEW run that announces
+    // message.created under the pre-allocated id.
+    const secondStarted = await eventOf(frames, "run.started", 2)
+    expect(frames.indexOf(secondStarted)).toBeGreaterThan(frames.indexOf(aborted))
+    await waitFor(frames, (f) => createdFor(frames, ack.messageId) === f)
+    expect(env.sessions.readMessages(session.id).some((m) => m.id === ack.messageId)).toBe(true)
+    await frameOf(frames, "run.completed", 2) // 新 run 正常收尾
   })
 })

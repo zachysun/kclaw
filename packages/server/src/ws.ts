@@ -281,6 +281,11 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
         if (opts.sessions.meta(sessionId) === undefined) {
           return send(socket, { type: "error", message: "session not found" })
         }
+        // Attachment refs are the one client-controlled path that reaches disk
+        // reads: the realpath check below confines every ref to the session's
+        // own attachments dir, so a token holder cannot read arbitrary files
+        // on this machine through the daemon (run.ts re-checks as defense in
+        // depth; this gate keeps hostile refs out of the queue entirely).
         const refs = parseAttachmentRefs(attachments, opts.attachmentsDir, sessionId)
         if (refs === undefined) {
           return send(socket, { type: "error", message: "send_message attachments are invalid" })

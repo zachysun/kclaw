@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 26 个业务路由（健康/状态 2 个、会话 12 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 1 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 28 个业务路由（健康/状态 2 个、会话 14 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 1 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
@@ -37,11 +37,13 @@
 | POST | `/sessions/:id/purge` | 永久删除（整个会话目录删除） | — | `{ok: true}` |
 | POST | `/sessions/:id/model` | 会话级模型切换（只影响此会话**之后**的 run，历史不动） | `{model?}`：provider 条目名（entry key，见 [run-manager](./run-manager.md) 的模型解析）或裸模型名；`""`/缺省清空回落默认；类型不对 400 `model must be a string`，条目不存在 400 `model not found: <name>` | `SessionMeta` |
 | POST | `/sessions/:id/readonly` | 会话级只读开关（write/exec 类工具被拒，见 [permissions](../core/permissions.md)） | `{readonly: boolean}` 必填；`false` 清除标记 | `SessionMeta` |
-| GET | `/sessions/:id/messages` | 读全部消息（轨迹/断线恢复的数据源） | — | `Message[]`（JSONL 逐行读出的完整对话史） |
+| GET | `/sessions/:id/messages` | 读全部消息（轨迹/断线恢复的数据源） | — | `Message[]`（JSONL 逐行读出的完整对话史；**排队未执行的消息不在其中**，见 `/queue`） |
+| GET | `/sessions/:id/queue` | 排队消息快照（message-queue spec §4.3）：重连/刷新的全量纠偏兜底 | — | `QueueEntry[]`（`meta.queue`，数组顺序即执行顺序；steer 条目排在可执行条目之后；空队列返回 `[]`） |
+| POST | `/sessions/:id/disposition` | 会话级发送处置覆盖（CLI `/steer`、`/wait` 与 Web 三选的 sticky 存储，spec §6） | `{disposition: "steer"\|"wait"\|"interrupt"}` 必填；非法值 400 `disposition must be "steer", "wait" or "interrupt"` | `SessionMeta`（写入 `dispositionOverride`，优先于配置默认） |
 | GET | `/sessions/:id/compactions` | 压缩审计记录（审计页"压缩记录"区块的数据源） | — | `CompactionRecord[]`（compactions.jsonl 逐行读出，按行序；文件缺失返回 `[]`） |
 | POST | `/sessions/:id/compact` | 手动压缩：跳过触发线立即压缩一次（机制见 [compaction](../core/compaction.md)） | `{focus?}`：可选非空字符串，作为重点说明进入两次摘要调用；空串/非字符串 400 `focus must be a non-empty string` | `{message: string}`：成功 `压缩了 N 段，剩 X 条原文消息`；无可压缩内容 `无可压缩内容` |
 
-`:id` 不存在时上述全部返回 `404 {error:"session not found"}`；body 校验失败返回 400（如 `title must be a non-empty string`）。compact 的额外拒绝路径：会话有活跃或排队 run 时 409 `会话正在运行`；RunManager 未装配时 503。
+`:id` 不存在时上述全部返回 `404 {error:"session not found"}`；body 校验失败返回 400（如 `title must be a non-empty string`）。compact 的额外拒绝路径（双条件、两条文案，队列优先——正在跑的 run 与积压队列并存时"先处理排队"才是可行动建议）：队列非空 409 `还有 N 条排队消息，先处理或取消`；会话活跃 409 `会话正在运行，等它结束`；RunManager 未装配时 503。
 
 `SessionMeta` 字段（`packages/core/src/session/store.ts`）：
 
@@ -61,6 +63,24 @@ interface SessionMeta {
   compactedUpto?: string
   compaction?: { segments: { upto: string; summary: string }[]; top: string; upto: string }
                               // v2 分层压缩状态，字段语义见 compaction.md
+  queue?: QueueEntry[]        // 排队未执行的消息（message-queue spec §3.1/§3.2）：meta.json 原子重写，
+                              // 顺序即执行顺序；不进 JSONL，故 /messages 不含、/queue 专读
+  dispositionOverride?: "steer" | "wait" | "interrupt"
+                              // 会话级发送处置覆盖（POST /disposition 写入；优先于 sessions.defaultDisposition）
+}
+```
+
+`QueueEntry`（`packages/core/src/session/store.ts`）：
+
+```ts
+interface QueueEntry {
+  messageId: string                       // 分配即固定；出队执行/steer 注入用同一 id 构建 Message
+  disposition: "steer" | "wait" | "interrupt"
+  text: string
+  trigger: "user" | "job"                 // 还原触发源（job 的 note/触发语义在出队执行时需要）
+  attachments?: QueueAttachment[]         // 与 EnqueueInput 的 AttachmentRef 同构，路径已校验
+  note?: string                           // job 来源说明
+  enqueuedAt: string                      // ISO-8601
 }
 ```
 
@@ -132,6 +152,12 @@ interface Job {
 | GET | `/ws` | WebSocket（建立后可双向收发消息的长连接）升级端点；HTTP 鉴权豁免，连接内首帧认证，协议见 [realtime](./realtime.md) |
 | GET | `/`、`/assets/*` | 仅当 `webDist` 已配置时由 `@fastify/static` 托管构建产物；外壳三路径免鉴权，其余静态文件仍需 Bearer |
 
+**队列相关的 WS 命令与事件**（message-queue spec §4，完整帧语义见 [realtime](./realtime.md) 与 [run-manager](./run-manager.md)）：
+
+- `send_message` 增加可选 `disposition` 字段（`"steer"|"wait"|"interrupt"`；非法值 error 帧 `send_message disposition must be "steer", "wait" or "interrupt"`）。不带字段取会话覆盖 ?? 配置默认（**默认引导**——有意的行为变更，旧版为自动等待）。回包 `send_message_ack` 增加 `messageId` 与 `queued`（会话空闲直发 `queued:false`、不广播 `message.queued`；运行中按处置分流 `queued:true`）。会话忙时超限的 error 帧文案：`队列已满（10 条）`。
+- `queue.cancel`：`{sessionId, messageId?}`——带 id 取消该条（wait 随时、steer 注入前），不带则清空全部可取消条目。回 `queue.cancel_ack {sessionId, cancelled}`；失败为 error 帧：已注入 `已注入`（机器不删历史）、无此条目 `not found`。
+- 三个新事件：`message.queued {messageId, disposition, position?}`（消息入队/入缓冲区时；position 是 wait/interrupt 的队列序位，steer 不适用；降级按实际处置报告）、`message.steered {messageId}`（steer 注入当前 run 的时刻，事件级 `runId` 标识注入的 run）、`message.queue_cancelled {messageId}` 或 `{all:true}`（单条取消/清空）。出队执行与注入仍用既有 `run.started` + `message.created` 表达，消息 id 与排队时相同——前端气泡原地升级，无需替换。
+
 ## 审计的读取方式
 
 web 的轨迹页（`packages/web/src/audit/AuditView.tsx`）演示了标准用法：
@@ -175,7 +201,7 @@ app.addHook("preHandler", async (request, reply) => {
 
 - [daemon](./daemon.md)：鉴权豁免的设计理由、静态托管的配置来源
 - [realtime](./realtime.md)：`/ws` 端点的帧协议
-- [run-manager](./run-manager.md)：send_message 背后的入队与附件挂载
+- [run-manager](./run-manager.md)：send_message 背后的三处置决策、队列驱动器与附件挂载（`/queue` 快照与 compact 409 的服务端语义）
 - [storage](../core/storage.md)：SessionStore/JobScheduler/UsageStore 的持久化实现
 - [compaction](../core/compaction.md)：compact/compactions 两个路由背后的机制与记录格式
 - [mcp](../core/mcp.md)：`GET /mcp` 快照背后的连接管理器
