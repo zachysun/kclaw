@@ -91,6 +91,14 @@ const MEMORY_SAVE_TURN = [
 const mockRequests: Array<{ messages: Array<Record<string, unknown>> }> = []
 
 /**
+ * The LLM gate: when a turn's user message contains 挂起 the mock holds the
+ * SSE open (no chunks, no [DONE]) until the daemon aborts the request — a
+ * deterministic "busy run" for the Ctrl+C escalation scenario. `open` flips
+ * true when the held request arrives, false when the daemon aborts it.
+ */
+const gate = { open: false }
+
+/**
  * Script the response from the request body: a history containing a tool
  * message is the post-tool round (final text); a user message asking to 执行
  * triggers the tool call; anything else is plain text.
@@ -118,6 +126,22 @@ function startMockLlm(): Promise<{ server: Server; url: string }> {
         // unparseable body → empty history → plain text turn
       }
       mockRequests.push({ messages: body.messages ?? [] })
+      // Gate turn: hold the SSE open until the daemon aborts the request.
+      // (The abort is observed on the RESPONSE stream: req's own "close"
+      // fires as soon as the request body is consumed, not on abort.) Title
+      // generation is exempt from the gate: it fires while the message is
+      // still being created — the RUN's own LLM call is what must be held so
+      // the session has an active run when the test submits queued messages.
+      const lastUser = [...(body.messages ?? [])].reverse().find((m) => m.role === "user")
+      const content = typeof lastUser?.content === "string" ? lastUser.content : ""
+      if (content.includes("挂起") && !content.includes("30字")) {
+        gate.open = true
+        res.on("close", () => {
+          gate.open = false
+        })
+        res.writeHead(200, { "content-type": "text/event-stream" })
+        return
+      }
       res.writeHead(200, { "content-type": "text/event-stream" })
       for (const c of turnFor(body)) res.write(`data: ${JSON.stringify(c)}\n\n`)
       res.write("data: [DONE]\n\n")
@@ -161,6 +185,16 @@ function clientForHome(): KclawClient {
   const info = JSON.parse(readFileSync(join(home, "daemon.json"), "utf8")) as { port: number }
   const token = readFileSync(join(home, "token"), "utf8").trim()
   return new KclawClient(`http://127.0.0.1:${info.port}`, token)
+}
+
+/** Poll a condition to truth within `ms` (interactive scenarios, like the header wait below). */
+async function until(what: string, ms: number, cond: () => boolean | Promise<boolean>): Promise<void> {
+  const deadline = Date.now() + ms
+  for (;;) {
+    if (await cond()) return
+    if (Date.now() > deadline) throw new Error(`timeout waiting for ${what}`)
+    await new Promise((r) => setTimeout(r, 100))
+  }
 }
 
 beforeAll(async () => {
@@ -359,6 +393,113 @@ describe("kclaw chat (built CLI + real daemon + mock SSE provider)", () => {
       expect(res.stderr).toContain("session not found")
     },
     15_000,
+  )
+
+  it(
+    "Ctrl+C escalates: cancel run → clear queue → exit 130",
+    async () => {
+      // Own home so the shared daemon (other scenarios) is untouched.
+      const dHome = mkdtempSync(join(tmpdir(), "kclaw-chat-home-sigint-"))
+      homes.push(dHome)
+      gate.open = false
+
+      const subprocess = execa(process.execPath, [CLI, "--home", dHome], {
+        env: {
+          ...process.env,
+          KCLAW_LLM_BASE_URL: mockUrl,
+          KCLAW_LLM_API_KEY: "chat-test-key",
+          KCLAW_LLM_MODEL: "chat-test-model",
+        },
+        reject: false,
+        timeout: 30_000,
+      })
+      let seen = ""
+      subprocess.stdout!.on("data", (d: Buffer) => {
+        seen += d.toString("utf8")
+      })
+
+      // Wait for the header: daemon spawned, session created, ws subscribed.
+      const headerDeadline = Date.now() + 15_000
+      while (!/session ses_/.test(seen)) {
+        if (Date.now() > headerDeadline) throw new Error(`chat never printed its header: ${seen}`)
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      const sid = SESSION_ID_RE.exec(seen)![0]!
+
+      // An observer/driver ws on the same daemon: sends the queued messages
+      // and records the wire-level effects of the three SIGINT stages.
+      const info = JSON.parse(readFileSync(join(dHome, "daemon.json"), "utf8")) as { port: number }
+      const token = readFileSync(join(dHome, "token"), "utf8").trim()
+      const client = new KclawClient(`http://127.0.0.1:${info.port}`, token)
+      const ws = await client.ws()
+      ws.send({ type: "subscribe", sessionId: sid })
+      const events: Array<Record<string, unknown>> = []
+      const pump = (async () => {
+        for await (const f of ws.frames) events.push(f)
+      })()
+      await until("subscribed ack", 5_000, () => events.some((f) => f.type === "subscribed"))
+
+      // Stage 0: a busy run — the gate holds the LLM turn open.
+      subprocess.stdin!.write("请挂起\n")
+      await until("gate-held run to start", 10_000, () => gate.open)
+
+      // Two wait-disposition messages queue behind the busy run (acked queued).
+      ws.send({ type: "send_message", sessionId: sid, text: "排队一请挂起", disposition: "wait" })
+      ws.send({ type: "send_message", sessionId: sid, text: "排队二请挂起", disposition: "wait" })
+      await until(
+        "two queued send_message_acks",
+        10_000,
+        () => events.filter((f) => f.type === "send_message_ack" && f.queued === true).length === 2,
+      )
+
+      // SIGINT #1 → run.cancel; the CLI hints at the queued backlog.
+      subprocess.kill("SIGINT")
+      await until("run-cancel hint", 10_000, () => seen.includes("已请求取消当前 run"))
+      await until("queued-count hint", 10_000, () => seen.includes("条排队消息，再按一次 Ctrl+C 清空"))
+
+      // Let the daemon's driver dequeue entry 1 (its run gates again), leaving
+      // exactly entry 2 queued — SIGINT #2 then deterministically clears it.
+      const queueLen = async (): Promise<number> => {
+        const list = (await client.request("GET", `/sessions/${sid}/queue`)) as unknown[]
+        return Array.isArray(list) ? list.length : -1
+      }
+      await until("dequeued entry 1 (gate re-held, queue = 1)", 10_000, async () => gate.open && (await queueLen()) === 1)
+
+      // SIGINT #2 → queue.cancel (no messageId); the backlog clears.
+      subprocess.kill("SIGINT")
+      await until("queue-cleared hint", 10_000, () => seen.includes("队列已清空，再按一次 Ctrl+C 退出"))
+      await until("queue drained daemon-side", 10_000, async () => (await queueLen()) === 0)
+
+      // SIGINT #3 → close and exit 130.
+      subprocess.kill("SIGINT")
+      const res = await subprocess
+      expect(res.exitCode).toBe(130)
+
+      // Wire-level effects, in order: the busy run ended aborted (run.cancel),
+      // THEN the whole queue was cancelled (queue.cancel without messageId).
+      const abortedIdx = events.findIndex(
+        (f) => f.type === "run.completed" && (f.payload as { stopReason?: string } | undefined)?.stopReason === "aborted",
+      )
+      const cancelledIdx = events.findIndex((f) => f.type === "message.queue_cancelled" && (f.payload as { all?: boolean } | undefined)?.all === true)
+      expect(abortedIdx).toBeGreaterThanOrEqual(0)
+      expect(cancelledIdx).toBeGreaterThan(abortedIdx)
+      // both stdin-era sends queued with the wait disposition (meta mirror)
+      const queued = events.filter((f) => f.type === "message.queued")
+      expect(queued).toHaveLength(2)
+      expect(queued.every((f) => (f.payload as { disposition?: string } | undefined)?.disposition === "wait")).toBe(true)
+
+      // Cleanup: this home's daemon still holds the second queued run's LLM
+      // request open against the mock (its gate never releases). Kill it here
+      // so the mock connection drops and afterAll's server.close() can drain —
+      // the afterAll sweep still removes the home (its kill becomes a no-op).
+      const { pid } = JSON.parse(readFileSync(join(dHome, "daemon.json"), "utf8")) as { pid: number }
+      process.kill(pid, "SIGKILL")
+      await until("held gate released", 5_000, () => !gate.open)
+
+      ws.close()
+      await pump.catch(() => {})
+    },
+    30_000,
   )
 })
 

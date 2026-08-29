@@ -34,6 +34,15 @@ describe("SLASH_COMMANDS", () => {
       expect(c?.surfaces).toContain("web")
     }
   })
+
+  it("steer/wait/interrupt/queue are cli-only", () => {
+    for (const name of ["steer", "wait", "interrupt", "queue"]) {
+      const cmd = SLASH_COMMANDS.find((c) => c.name === name)!
+      expect(cmd.surfaces).toEqual(["cli"])
+    }
+    expect(slashCompletions("/st", "web")).toHaveLength(0)
+    expect(slashCompletions("/st", "cli").map((c) => c.name)).toEqual(["steer"])
+  })
 })
 
 describe("parseSlashInput", () => {
@@ -68,7 +77,7 @@ describe("slashCompletions", () => {
 
   it("prefix-matches a partially typed command", () => {
     expect(slashCompletions("/co", "web").map((c) => c.name)).toEqual(["compact"])
-    expect(slashCompletions("/s", "cli").map((c) => c.name)).toEqual(["sessions"])
+    expect(slashCompletions("/s", "cli").map((c) => c.name)).toEqual(["sessions", "steer"])
   })
 
   it("hides surface-exclusive commands on the other surface", () => {

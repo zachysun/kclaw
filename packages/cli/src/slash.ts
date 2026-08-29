@@ -29,6 +29,21 @@ export interface SlashCtx {
   pendingAttachments: AttachmentRef[]
   /** Send a plain user message (custom slash commands expand templates into this). */
   send(text: string): void
+  /** Switch the session's send-disposition mode (kept as chat-loop state). */
+  setDisposition?(d: "steer" | "wait"): void
+  /**
+   * Send a ws `queue.cancel`: a messageId withdraws that queued entry, "all"
+   * sends the frame WITHOUT messageId (clear every queued message).
+   */
+  queueCancel(target: string | "all"): Promise<void>
+  /**
+   * Interrupt-send a message: one `send_message` carrying the `interrupt`
+   * disposition (the daemon drops the active run and queues this at the
+   * head). The `/interrupt` command (Task 9) expands into this.
+   */
+  sendInterrupt(text: string): void
+  /** Convenience read of GET /queue (numbered listing / queued-count checks). */
+  queueSnapshot?(): Promise<Array<{ messageId: string; disposition: string; text: string }>>
   /** Directory of custom slash commands (`<home>/commands`, *.md). */
   commandsDir?: string
 }
@@ -252,6 +267,47 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
       } catch (e) {
         ctx.print(`压缩失败: ${e instanceof Error ? e.message : String(e)}`)
       }
+    },
+  })
+
+  // 本会话发送处置的模式行（/steer /wait 切换后打印的说明文字）。
+  const dispositionLine = {
+    steer: "引导（steer）：运行中发送的消息会注入当前 run",
+    wait: "等待（wait）：运行中发送的消息排队，当前 run 结束后执行",
+  } as const
+  registry.set("steer", {
+    ...meta("steer"),
+    async run(_args, ctx) {
+      await ctx.client.request("POST", `/sessions/${encodeURIComponent(ctx.sessionId)}/disposition`, { disposition: "steer" })
+      ctx.setDisposition?.("steer")
+      ctx.print(`本会话处置模式：${dispositionLine.steer}`)
+    },
+  })
+  registry.set("wait", {
+    ...meta("wait"),
+    async run(_args, ctx) {
+      await ctx.client.request("POST", `/sessions/${encodeURIComponent(ctx.sessionId)}/disposition`, { disposition: "wait" })
+      ctx.setDisposition?.("wait")
+      ctx.print(`本会话处置模式：${dispositionLine.wait}`)
+    },
+  })
+
+  registry.set("queue", {
+    ...meta("queue"),
+    async run(args, ctx) {
+      const list = (await ctx.client.request("GET", `/sessions/${encodeURIComponent(ctx.sessionId)}/queue`)) as Array<{ messageId: string; disposition: string; text: string }>
+      const cancelMatch = /^cancel\s+(\d+|all)$/.exec(args.trim())
+      if (cancelMatch !== null) {
+        const target = cancelMatch[1]!
+        if (target === "all") { await ctx.queueCancel("all"); ctx.print("已请求清空队列"); return }
+        const entry = list[Number(target) - 1]
+        if (entry === undefined) { ctx.print("没有这个序号"); return }
+        await ctx.queueCancel(entry.messageId)
+        ctx.print("已取消")
+        return
+      }
+      if (list.length === 0) { ctx.print("（队列为空）"); return }
+      ctx.print(list.map((e, i) => `${i + 1}. ${e.disposition} ${e.text}`).join("\n"))
     },
   })
 

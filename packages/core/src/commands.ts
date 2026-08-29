@@ -22,7 +22,10 @@ export interface SlashCommandMeta {
  * loop (chat.ts breaks on it — it is NOT a registry command), but it is still
  * listed here so Tab completion can suggest it. `attach` stays terminal-only:
  * it uploads a file from the local filesystem, which has no meaning in the
- * browser (the WebUI attaches via drag-and-drop instead).
+ * browser (the WebUI attaches via drag-and-drop instead). The disposition
+ * commands (`steer`/`wait`/`interrupt`/`queue`) are equally cli-only: the Web
+ * frontend drives the send disposition through its three-way button and the
+ * queue panel instead of typed commands.
  */
 export const SLASH_COMMANDS: readonly SlashCommandMeta[] = [
   { name: "new", usage: "/new [标题]", description: "新建会话并切换过去", surfaces: ["cli", "web"] },
@@ -32,6 +35,10 @@ export const SLASH_COMMANDS: readonly SlashCommandMeta[] = [
   { name: "readonly", usage: "/readonly [on|off]", description: "切换本会话只读模式（写与 exec 将被拒绝）", surfaces: ["cli", "web"] },
   { name: "attach", usage: "/attach <path>", description: "上传附件，随下一条消息发送（无参数时列出待发附件）", surfaces: ["cli"] },
   { name: "compact", usage: "/compact [重点说明]", description: "手动压缩当前会话的早期对话（可指定摘要重点保留什么）", surfaces: ["cli", "web"] },
+  { name: "steer", usage: "/steer", description: "本会话发送处置切换为引导（steer）：运行中发送的消息注入当前 run", surfaces: ["cli"] },
+  { name: "wait", usage: "/wait", description: "本会话发送处置切换为等待（wait）：运行中发送的消息排队，当前 run 结束后执行", surfaces: ["cli"] },
+  { name: "interrupt", usage: "/interrupt <消息>", description: "掐掉当前 run，并把这条消息插到队列最前（一次性动作，不是模式）", surfaces: ["cli"] },
+  { name: "queue", usage: "/queue [cancel <n|all>]", description: "查看当前会话的排队消息；cancel 按序号或 all 取消", surfaces: ["cli"] },
   { name: "help", usage: "/help", description: "列出所有命令", surfaces: ["cli", "web"] },
   { name: "exit", usage: "/exit", description: "退出终端程序", surfaces: ["cli"] },
 ]

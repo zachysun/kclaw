@@ -10,11 +10,17 @@
  * readline interface is paused while the prompt owns the terminal.
  *
  * SIGINT approach: readline emits "SIGINT" on Ctrl+C when the pending line is
- * empty (a non-empty line just clears — node's default). First SIGINT during
- * an active run sends `run.cancel` (the run then ends through the normal
- * render path with run.completed {stopReason:"aborted"}); first SIGINT while
- * idle prints the exit hint; a second SIGINT always exits immediately
- * (code 130, socket closed first so the daemon sees a clean disconnect).
+ * empty (a non-empty line just clears — node's default), and the process
+ * receives the OS signal when stdin is not a TTY — the same handler is
+ * registered on both so piped runs (tests, scripting) escalate identically.
+ * Three stages, `sigints` only ever growing (spec §7.2): the first press
+ * cancels the active run (`run.cancel`; the run then ends through the normal
+ * render path with run.completed {stopReason:"aborted"}) or, while idle,
+ * prints the exit hint — with a queued-count warning ("还有 N 条…") whenever
+ * the session holds queued messages. The second press clears the queue
+ * (`queue.cancel` without messageId) when one exists, otherwise exits. The
+ * third press always exits immediately (code 130, socket closed first so the
+ * daemon sees a clean disconnect).
  *
  * Reconnect (basic version): when the socket drops
  * unexpectedly, re-resolve the daemon (KclawClient.connect respawns one when
@@ -89,6 +95,14 @@ interface ChatCtx {
   io: { atLineStart: boolean }
   /** Attachments uploaded via /attach, carried on the next send_message. */
   pendingAttachments: AttachmentRef[]
+  /**
+   * The session's send-disposition mode: every Enter-send carries it so the
+   * daemon injects (steer) or queues (wait) mid-run messages accordingly.
+   * Resolved at startup (meta.dispositionOverride > config default > steer)
+   * and flipped by /steer //wait; `interrupt` only ever arrives as a session
+   * meta override (it is a one-shot action, not a mode the CLI sets).
+   */
+  disposition: "steer" | "wait" | "interrupt"
 }
 
 /** A bus event frame has `payload`; command acks and error frames do not. */
@@ -353,6 +367,7 @@ async function renderRun(ctx: ChatCtx, text: string): Promise<void> {
           type: "send_message",
           sessionId: ctx.sessionId,
           text,
+          disposition: ctx.disposition,
           ...(attachments.length > 0 ? { attachments } : {}),
         })
         ctx.pendingAttachments.length = 0
@@ -400,6 +415,25 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
   process.stdout.write(`kclaw · session ${sessionId}\n`)
   process.stdout.write(dim(`输入消息，/ 命令可用（Tab 补全），/exit 退出，Ctrl+C 取消当前 run\n`))
 
+  // 初始发送处置（spec §6）：会话 meta 的 dispositionOverride 优先，其次配置
+  // 默认，最后 steer。interrupt 覆盖原样带在本地状态里（回车直发会带上它，
+  // 服务端按一次性动作入队）；刚连上的 daemon 不可达时回落 steer。
+  const resolveInitialDisposition = async (): Promise<"steer" | "wait" | "interrupt"> => {
+    try {
+      const [meta, cfg] = await Promise.all([
+        client.request("GET", `/sessions/${sessionId}`) as Promise<{ dispositionOverride?: string }>,
+        client.request("GET", "/config") as Promise<{ sessions?: { defaultDisposition?: string } }>,
+      ])
+      if (meta.dispositionOverride === "interrupt") return "interrupt"
+      if (meta.dispositionOverride === "steer" || meta.dispositionOverride === "wait") return meta.dispositionOverride
+      const fallback = cfg.sessions?.defaultDisposition
+      return fallback === "wait" || fallback === "interrupt" ? fallback : "steer"
+    } catch {
+      return "steer"
+    }
+  }
+  const disposition = await resolveInitialDisposition()
+
   const ctx: ChatCtx = {
     pendingAttachments: [],
     home: opts.home,
@@ -410,6 +444,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
     showThinking: opts.showThinking === true,
     auto,
     io: { atLineStart: true },
+    disposition,
   }
 
   // The slash-command view over the chat loop's live state. `client` and
@@ -457,33 +492,92 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
         }
       })()
     },
+    setDisposition(d: "steer" | "wait") {
+      // /steer //wait flip the local mode AFTER the sticky override POST
+      // succeeded; the next Enter-send carries the new disposition.
+      ctx.disposition = d
+    },
+    async queueCancel(target: string | "all") {
+      try {
+        ctx.ws.send(
+          target === "all"
+            ? { type: "queue.cancel", sessionId: ctx.sessionId }
+            : { type: "queue.cancel", sessionId: ctx.sessionId, messageId: target },
+        )
+      } catch {
+        // socket dropping — the reconnect path takes over
+      }
+    },
+    sendInterrupt(text: string) {
+      // One-shot interrupt-send: the daemon drops the active run and queues
+      // this message at the head. The /interrupt command (Task 9) calls it.
+      try {
+        ctx.ws.send({ type: "send_message", sessionId: ctx.sessionId, text, disposition: "interrupt" })
+      } catch {
+        // socket dropping — the reconnect path takes over
+      }
+    },
+    async queueSnapshot() {
+      try {
+        const list = (await ctx.client.request("GET", `/sessions/${encodeURIComponent(ctx.sessionId)}/queue`)) as unknown
+        return Array.isArray(list) ? (list as Array<{ messageId: string; disposition: string; text: string }>) : []
+      } catch {
+        return []
+      }
+    },
     commandsDir: ctx.home !== undefined ? join(ctx.home, "commands") : undefined,
   }
   const registry = createRegistry(slashCtx)
 
-  // Ctrl+C: cancel the active run first; a second press always exits. See
-  // the module comment for why the handler lives on the readline interface.
+  // Ctrl+C escalates in three stages (spec §7.2): ① cancel the active run
+  // (or, while idle, print the exit hint — always warning about a backed-up
+  // queue), ② clear the queue (`queue.cancel` without messageId), ③ exit 130.
+  // `sigints` only ever grows. The handler lives on the readline interface
+  // (the TTY Ctrl+C path — see the module comment) AND on `process` (the OS
+  // signal piped stdin delivers): a raw-mode TTY fires exactly one of the
+  // two, so piped runs escalate identically instead of default-dying.
   let runActive = false
   let sigints = 0
-  ctx.rl.on("SIGINT", () => {
-    sigints += 1
-    if (sigints === 1) {
-      if (runActive) {
-        line(dim("^C 已请求取消当前 run（再按一次 Ctrl+C 退出）"), ctx)
-        try {
-          ctx.ws.send({ type: "run.cancel", sessionId: ctx.sessionId })
-        } catch {
-          // socket already closing — the run dies with the daemon anyway
-        }
-      } else {
-        line(dim("^C 再按一次 Ctrl+C 退出"), ctx)
-      }
-      return
+  const queueCount = async (): Promise<number> => {
+    try {
+      const list = (await ctx.client.request("GET", `/sessions/${encodeURIComponent(ctx.sessionId)}/queue`)) as unknown[]
+      return Array.isArray(list) ? list.length : 0
+    } catch {
+      return 0
     }
+  }
+  const exitNow = (): void => {
     ctx.ws.close()
     ctx.rl.close()
     process.exit(130)
-  })
+  }
+  const onSigint = (): void => {
+    sigints += 1
+    if (sigints === 1) {
+      if (runActive) {
+        line(dim("^C 已请求取消当前 run"), ctx)
+        try { ctx.ws.send({ type: "run.cancel", sessionId: ctx.sessionId }) } catch { /* closing */ }
+        void queueCount().then((n) => { if (n > 0) line(dim(`还有 ${n} 条排队消息，再按一次 Ctrl+C 清空`), ctx) })
+        return
+      }
+      void queueCount().then((n) => {
+        line(dim(n > 0 ? `还有 ${n} 条排队消息，再按一次 Ctrl+C 清空` : "^C 再按一次 Ctrl+C 退出"), ctx)
+      })
+      return
+    }
+    if (sigints === 2) {
+      void queueCount().then((n) => {
+        if (n > 0) {
+          try { ctx.ws.send({ type: "queue.cancel", sessionId: ctx.sessionId }) } catch { /* closing */ }
+          line(dim("队列已清空，再按一次 Ctrl+C 退出"), ctx)
+        } else exitNow()
+      })
+      return
+    }
+    exitNow()
+  }
+  ctx.rl.on("SIGINT", onSigint)
+  process.on("SIGINT", onSigint)
 
   try {
     // A piped stdin reaches EOF (and closes the interface) while the FIRST

@@ -35,6 +35,8 @@ function makeFakeCtx(requestImpl: (method: string, path: string, body?: unknown)
   const print = vi.fn((_text: string) => {})
   const pauseInput = vi.fn(() => {})
   const resumeInput = vi.fn(() => {})
+  /** ws 帧收集器：queueCancel 按真实实现的帧形状写入（all 不带 messageId）。 */
+  const sent: unknown[] = []
   const ctx: SlashCtx = {
     client: { request } as unknown as KclawClient,
     get sessionId() {
@@ -47,8 +49,18 @@ function makeFakeCtx(requestImpl: (method: string, path: string, body?: unknown)
     resumeInput,
     send: vi.fn(),
     commandsDir: undefined,
+    setDisposition: vi.fn((_d: "steer" | "wait") => {}),
+    queueCancel: vi.fn(async (target: string | "all") => {
+      // mirrors chat.ts 的实现：ws queue.cancel 帧，all = 不带 messageId
+      sent.push(
+        target === "all"
+          ? { type: "queue.cancel", sessionId }
+          : { type: "queue.cancel", sessionId, messageId: target },
+      )
+    }),
+    sendInterrupt: vi.fn(),
   }
-  return { ctx, request, switchSession, print, pauseInput, resumeInput }
+  return { ctx, request, switchSession, print, pauseInput, resumeInput, sent }
 }
 
 beforeEach(() => {
@@ -331,5 +343,56 @@ describe("custom slash commands + readonly", () => {
     current = { readonly: true }
     await runOrHint(dispatch("/readonly", registry), registry, ctx)
     expect(posts[1]).toEqual({ readonly: false })
+  })
+})
+
+describe("/steer /wait", () => {
+  it("POSTs the session override and prints the mode line", async () => {
+    const posts: Array<[string, unknown]> = []
+    const fake = makeFakeCtx((method, path, body) => {
+      if (method === "POST") posts.push([path, body])
+      return {}
+    })
+    const registry = createRegistry(fake.ctx)
+    await runOrHint({ command: "steer", args: "" }, registry, fake.ctx)
+    await runOrHint({ command: "wait", args: "" }, registry, fake.ctx)
+    expect(posts).toEqual([
+      [`/sessions/${fake.ctx.sessionId}/disposition`, { disposition: "steer" }],
+      [`/sessions/${fake.ctx.sessionId}/disposition`, { disposition: "wait" }],
+    ])
+    const printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.some((t) => t.includes("引导"))).toBe(true)
+    expect(printed.some((t) => t.includes("等待"))).toBe(true)
+  })
+})
+
+describe("/queue", () => {
+  it("lists numbered entries; cancel <n> and cancel all hit queue.cancel", async () => {
+    const entries = [
+      { messageId: "msg_1", disposition: "wait", text: "排队一", trigger: "user", enqueuedAt: "t" },
+      { messageId: "msg_2", disposition: "steer", text: "排队二", trigger: "user", enqueuedAt: "t" },
+    ]
+    const fake = makeFakeCtx((_method, path) => (path.endsWith("/queue") ? entries : []))
+    const registry = createRegistry(fake.ctx)
+    await runOrHint({ command: "queue", args: "" }, registry, fake.ctx)
+    const printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.some((t) => t.includes("1. wait 排队一"))).toBe(true)
+    await runOrHint({ command: "queue", args: "cancel 2" }, registry, fake.ctx)
+    expect(fake.sent).toEqual([{ type: "queue.cancel", sessionId: fake.ctx.sessionId, messageId: "msg_2" }])
+    await runOrHint({ command: "queue", args: "cancel all" }, registry, fake.ctx)
+    expect(fake.sent).toEqual([
+      { type: "queue.cancel", sessionId: fake.ctx.sessionId, messageId: "msg_2" },
+      { type: "queue.cancel", sessionId: fake.ctx.sessionId },
+    ])
+  })
+
+  it("empty queue prints the placeholder; an unknown index cancels nothing", async () => {
+    const fake = makeFakeCtx((_method, path) => (path.endsWith("/queue") ? [] : []))
+    const registry = createRegistry(fake.ctx)
+    await runOrHint({ command: "queue", args: "" }, registry, fake.ctx)
+    expect(fake.print).toHaveBeenCalledWith("（队列为空）")
+    await runOrHint({ command: "queue", args: "cancel 5" }, registry, fake.ctx)
+    expect(fake.print).toHaveBeenCalledWith("没有这个序号")
+    expect(fake.sent).toEqual([])
   })
 })

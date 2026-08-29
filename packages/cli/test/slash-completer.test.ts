@@ -26,6 +26,10 @@ describe("slashCompleter", () => {
       "/readonly",
       "/attach",
       "/compact",
+      "/steer",
+      "/wait",
+      "/interrupt",
+      "/queue",
       "/help",
       "/exit",
     ])
