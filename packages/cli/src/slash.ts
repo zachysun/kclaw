@@ -278,7 +278,14 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
   registry.set("steer", {
     ...meta("steer"),
     async run(_args, ctx) {
-      await ctx.client.request("POST", `/sessions/${encodeURIComponent(ctx.sessionId)}/disposition`, { disposition: "steer" })
+      try {
+        await ctx.client.request("POST", `/sessions/${encodeURIComponent(ctx.sessionId)}/disposition`, { disposition: "steer" })
+      } catch (e) {
+        // 防护（/compact 先例）：daemon 短暂不可达不让一次命令杀死 REPL；
+        // 失败时不切本地模式（setDisposition 不可达），回车直发维持旧处置。
+        ctx.print(`切换处置失败: ${e instanceof Error ? e.message : String(e)}`)
+        return
+      }
       ctx.setDisposition?.("steer")
       ctx.print(`本会话处置模式：${dispositionLine.steer}`)
     },
@@ -286,7 +293,12 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
   registry.set("wait", {
     ...meta("wait"),
     async run(_args, ctx) {
-      await ctx.client.request("POST", `/sessions/${encodeURIComponent(ctx.sessionId)}/disposition`, { disposition: "wait" })
+      try {
+        await ctx.client.request("POST", `/sessions/${encodeURIComponent(ctx.sessionId)}/disposition`, { disposition: "wait" })
+      } catch (e) {
+        ctx.print(`切换处置失败: ${e instanceof Error ? e.message : String(e)}`)
+        return
+      }
       ctx.setDisposition?.("wait")
       ctx.print(`本会话处置模式：${dispositionLine.wait}`)
     },
@@ -295,7 +307,15 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
   registry.set("queue", {
     ...meta("queue"),
     async run(args, ctx) {
-      const list = (await ctx.client.request("GET", `/sessions/${encodeURIComponent(ctx.sessionId)}/queue`)) as Array<{ messageId: string; disposition: string; text: string }>
+      // 防护（/compact 先例）：列出与取消都先读快照，读取失败打印失败行即返回
+      // （cancel 走 ws queueCancel，自带 ack/错误帧处理，无需在此兜底）。
+      let list: Array<{ messageId: string; disposition: string; text: string }>
+      try {
+        list = (await ctx.client.request("GET", `/sessions/${encodeURIComponent(ctx.sessionId)}/queue`)) as Array<{ messageId: string; disposition: string; text: string }>
+      } catch (e) {
+        ctx.print(`读取队列失败: ${e instanceof Error ? e.message : String(e)}`)
+        return
+      }
       const cancelMatch = /^cancel\s+(\d+|all)$/.exec(args.trim())
       if (cancelMatch !== null) {
         const target = cancelMatch[1]!

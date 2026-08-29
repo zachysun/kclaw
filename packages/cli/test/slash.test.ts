@@ -364,6 +364,24 @@ describe("/steer /wait", () => {
     expect(printed.some((t) => t.includes("引导"))).toBe(true)
     expect(printed.some((t) => t.includes("等待"))).toBe(true)
   })
+
+  it("request 失败：打印失败行、不切本地模式、命令正常 resolve（REPL 不被一次失败杀死）", async () => {
+    const fake = makeFakeCtx(async () => {
+      throw new Error("daemon down")
+    })
+    const registry = createRegistry(fake.ctx)
+    await expect(runOrHint({ command: "steer", args: "" }, registry, fake.ctx)).resolves.toBe(true)
+    let printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.some((t) => t.includes("切换处置失败") && t.includes("daemon down"))).toBe(true)
+    expect(vi.mocked(fake.ctx.setDisposition!)).not.toHaveBeenCalled()
+    expect(printed.some((t) => t.includes("本会话处置模式"))).toBe(false)
+
+    await expect(runOrHint({ command: "wait", args: "" }, registry, fake.ctx)).resolves.toBe(true)
+    printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.filter((t) => t.includes("切换处置失败"))).toHaveLength(2)
+    expect(vi.mocked(fake.ctx.setDisposition!)).not.toHaveBeenCalled()
+    expect(printed.some((t) => t.includes("本会话处置模式"))).toBe(false)
+  })
 })
 
 describe("/queue", () => {
@@ -393,6 +411,22 @@ describe("/queue", () => {
     expect(fake.print).toHaveBeenCalledWith("（队列为空）")
     await runOrHint({ command: "queue", args: "cancel 5" }, registry, fake.ctx)
     expect(fake.print).toHaveBeenCalledWith("没有这个序号")
+    expect(fake.sent).toEqual([])
+  })
+
+  it("GET 失败：打印失败行、命令正常 resolve（不列出也不取消）", async () => {
+    const fake = makeFakeCtx(async () => {
+      throw new Error("boom")
+    })
+    const registry = createRegistry(fake.ctx)
+    await expect(runOrHint({ command: "queue", args: "" }, registry, fake.ctx)).resolves.toBe(true)
+    let printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.some((t) => t.includes("读取队列失败") && t.includes("boom"))).toBe(true)
+
+    // cancel 路径同样先读快照——读取失败即失败行，不发出任何 queue.cancel
+    await expect(runOrHint({ command: "queue", args: "cancel all" }, registry, fake.ctx)).resolves.toBe(true)
+    printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.filter((t) => t.includes("读取队列失败"))).toHaveLength(2)
     expect(fake.sent).toEqual([])
   })
 })
