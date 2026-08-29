@@ -512,6 +512,9 @@ export class RunManager {
           type: "note",
           kind: "compact",
           text: `早期对话已压缩为 ${compaction.segments} 段（保留最近 ${compaction.active.length} 条原文；可用 session_search 检索早期细节）。摘要：\n${compaction.summary}`,
+          // UI-only meta: lets the webui collapse the context and show it
+          // once per compaction (segments growing = a new compaction happened).
+          compact: { segments: compaction.segments, kept: compaction.active.length },
         }]
       }
     } catch (err) {
@@ -683,6 +686,12 @@ export class RunManager {
       return { summary: prev?.top, segments: prev?.segments.length ?? 0, active, compacted: false }
     }
 
+    // The compaction will really run (two LLM calls ahead): announce it so
+    // subscribed clients can show a "正在压缩…" state. This fires BEFORE
+    // run.started — the pre-run compaction is otherwise a silent multi-second
+    // gap between send and the first run event.
+    this.#deps.bus.emit(makeEvent("compaction.started", {}, { sessionId }))
+
     const seg = active.slice(0, boundary.keepFrom)
     const body = renderSegment(seg)
     const focusLine = opts.focus === undefined ? "" : `\n\n用户特别要求重点保留：${opts.focus}`
@@ -728,6 +737,9 @@ export class RunManager {
     } catch (err) {
       console.error(`kclaw compaction audit (${sessionId}) append failed:`, err)
     }
+    this.#deps.bus.emit(
+      makeEvent("compaction.completed", { segments: nextSegments.length, kept: active.length - boundary.keepFrom }, { sessionId }),
+    )
     return { summary: top, segments: nextSegments.length, active: active.slice(boundary.keepFrom), compacted: true }
   }
 

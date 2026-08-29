@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/ws.ts` 的 `registerWsRoutes` 提供 `GET /ws` 端点（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送），定义连接认证、5 种客户端命令帧与各自应答（ack）。`packages/server/src/bus.ts` 的 `EventBus` 是进程内的事件分发器：把 agent 循环与服务端流程产生的 29 种事件按会话投递给订阅了它的连接。两者共同构成 daemon 的实时通信层。
+`packages/server/src/ws.ts` 的 `registerWsRoutes` 提供 `GET /ws` 端点（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送），定义连接认证、5 种客户端命令帧与各自应答（ack）。`packages/server/src/bus.ts` 的 `EventBus` 是进程内的事件分发器：把 agent 循环与服务端流程产生的 31 种事件按会话投递给订阅了它的连接。两者共同构成 daemon 的实时通信层。
 
 ## 设计决策
 
@@ -52,11 +52,11 @@
 }
 ```
 
-`EventType` 共 **29 种**（`packages/core/src/protocol/events.ts`；六个语义分组的完整表见 [protocol](../core/protocol.md)），按投递方式分两组：
+`EventType` 共 **31 种**（`packages/core/src/protocol/events.ts`；七个语义分组的完整表见 [protocol](../core/protocol.md)），按投递方式分两组：
 
 | 分组 | 事件 | 投递 |
 |------|------|------|
-| 会话事件（带 sessionId，发订阅者） | `run.started` `run.completed` `run.failed`；`message.created` `message.completed`；`text/thinking/tool_call/tool_result` 的 `created/delta/completed`（12 个）；`attachment.created` `attachment.completed`；`llm.started` `llm.completed` `llm.failed`；`confirmation.requested` `confirmation.resolved`；`note.emitted`；`session.renamed` | `EventBus.emit` 查 `sessions.get(sessionId)`，发给该集合内的 socket |
+| 会话事件（带 sessionId，发订阅者） | `run.started` `run.completed` `run.failed`；`message.created` `message.completed`；`text/thinking/tool_call/tool_result` 的 `created/delta/completed`（12 个）；`attachment.created` `attachment.completed`；`llm.started` `llm.completed` `llm.failed`；`confirmation.requested` `confirmation.resolved`；`note.emitted`；`compaction.started` `compaction.completed`（运行前预压缩的开始/结束，早于 `run.started`——没有它们，摘要调用的数秒是发送后的静默空窗）；`session.renamed` | `EventBus.emit` 查 `sessions.get(sessionId)`，发给该集合内的 socket |
 | 广播事件（无 sessionId，发全体连接） | `job.started` `job.completed` `job.failed` | `EventBus.emit` 遍历全部已 connect 的 socket |
 
 发射方分布：25 种会话事件由 agent 循环产生、经 `RunManager` 的 `onEvent` 钩子发送到总线。`session.renamed` 不经过 agent 循环：run 入队用户消息后，服务端会异步调度 `autoname.ts` 的 `scheduleAutoname` 生成会话标题，新标题成功写回 meta 后才经注入的 emit 钩子（`busEmit`）发出这个事件；生成失败则静默放弃（流程细节见 [run-manager](./run-manager.md)）。3 种 `job.*` 由 `scheduler-tick.ts` 的 `makeEvent(...)` **不带 ctx** 调用产生（`makeEvent` 只在传了 `ctx.sessionId` 时才写字段）。`attachment.*` 已定义但当前无发射方。

@@ -14,4 +14,10 @@ describe("makeEvent", () => {
     expect(e).not.toHaveProperty("sessionId")
     expect(e).not.toHaveProperty("runId")
   })
+  it("builds compaction lifecycle events", () => {
+    const started = makeEvent("compaction.started", {}, { sessionId: "ses_1" })
+    expect(started.type).toBe("compaction.started")
+    const completed = makeEvent("compaction.completed", { segments: 2, kept: 5 }, { sessionId: "ses_1" })
+    expect(completed.payload).toEqual({ segments: 2, kept: 5 })
+  })
 })

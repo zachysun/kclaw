@@ -21,6 +21,8 @@ export type EventType =
   | "confirmation.requested" | "confirmation.resolved"
   // note 单发
   | "note.emitted"
+  // 上下文压缩（运行前的预压缩过程，早于 run.started）
+  | "compaction.started" | "compaction.completed"
 
 export interface RunStartedPayload { trigger: "user" | "job" }
 export interface RunCompletedPayload { stopReason: StopReason; usage: Usage }
@@ -54,6 +56,11 @@ export interface ConfirmationResolvedPayload {
 
 export interface NoteEmittedPayload { messageId: string; block: NoteBlock }
 
+/** 压缩实际开始（预算过线且边界已定，即将调用摘要器）。 */
+export interface CompactionStartedPayload {}
+/** 压缩成功结束：新累计段数与压缩后保留的原文消息条数。 */
+export interface CompactionCompletedPayload { segments: number; kept: number }
+
 export type EventPayloadMap = {
   "run.started": RunStartedPayload
   "run.completed": RunCompletedPayload
@@ -84,6 +91,8 @@ export type EventPayloadMap = {
   "confirmation.requested": ConfirmationRequestedPayload
   "confirmation.resolved": ConfirmationResolvedPayload
   "note.emitted": NoteEmittedPayload
+  "compaction.started": CompactionStartedPayload
+  "compaction.completed": CompactionCompletedPayload
 }
 
 export type AgentEvent<T extends EventType = EventType> = {

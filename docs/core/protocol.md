@@ -132,7 +132,7 @@ export function makeEvent<T extends EventType>(
 ): AgentEvent<T>
 ```
 
-`EventType` 共 **29 种**，六个分组：
+`EventType` 共 **31 种**，七个分组：
 
 | 分组 | 事件 | 数量 |
 |------|------|------|
@@ -142,6 +142,7 @@ export function makeEvent<T extends EventType>(
 | 模型调用 | `llm.started` `llm.completed` `llm.failed` | 3 |
 | 人工确认 | `confirmation.requested` `confirmation.resolved` | 2 |
 | note 单发 | `note.emitted` | 1 |
+| 上下文压缩 | `compaction.started` `compaction.completed` | 2 |
 
 关键 payload：
 
@@ -159,6 +160,7 @@ export interface ToolResultDeltaPayload { messageId: string; callId: string; del
 export interface LlmStartedPayload   { model: string; attempt: number }
 export interface LlmCompletedPayload { usage: Usage; stopReason: StopReason; latencyMs: number }
 export interface LlmFailedPayload    { error: { code: string; message: string }; willRetry: boolean }
+export interface CompactionCompletedPayload { segments: number; kept: number }
 
 export interface ConfirmationRequestedPayload {
   confirmationId: string

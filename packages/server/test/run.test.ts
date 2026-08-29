@@ -854,6 +854,8 @@ describe("RunManager context compaction v2", () => {
     const note = user.blocks.find((b) => b.type === "note" && b.kind === "compact")
     expect((note as { text?: string }).text).toContain("已压缩为 1 段")
     expect((note as { text?: string }).text).toContain("session_search")
+    // structured meta for the UI (segment count + kept tail size), invisible to the model
+    expect(note).toMatchObject({ compact: { segments: 1, kept: 2 } })
     // the compact note was broadcast on the bus
     expect(received(socket).some((e) =>
       e.type === "note.emitted" && (e.payload as { block: { kind?: string } }).block?.kind === "compact",
@@ -889,6 +891,95 @@ describe("RunManager context compaction v2", () => {
     expect(mergeInput).toContain("段摘要B")
   })
 
+  /**
+   * Master's 2026-08-28 report (tiny test budget, real network latency):
+   * send "a" → total silence (no echo, no "compacting" hint) while the
+   * pre-run compaction's two LLM calls run; send "b" meanwhile → b waits,
+   * then triggers a SECOND compaction that swallows a's exchange, so "a"
+   * renders late with a 1-segment note and "b" later still with a 2-segment
+   * note. FIXED EXPECTATIONS: the compaction announces itself on the bus
+   * (compaction.started while the summarizer runs, compaction.completed
+   * after the meta write), so the silence window is gone.
+   */
+  it("during rapid input: compaction announces itself, queued second message re-compacts", async () => {
+    const calls: LlmRequest[] = []
+    let firstCallStarted!: () => void
+    const firstCall = new Promise<void>((r) => { firstCallStarted = r })
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const script = [
+      textTurn("段摘要A"), textTurn("总摘要A"), textTurnWithUsage("回答A", 10_000),
+      textTurn("段摘要B"), textTurn("总摘要B"), textTurn("回答B"),
+    ]
+    let i = 0
+    const client: LlmClient = {
+      async *stream(req) {
+        calls.push(req)
+        if (i === 0) {
+          firstCallStarted()
+          await gate // stand in for the seconds-long real summarizer call
+        }
+        yield* script[Math.min(i++, script.length - 1)]!
+      },
+    }
+
+    const { env, manager } = makeEnv(client, (c) => { c.sessions.contextTokens = 10 })
+    const session = env.sessions.create("压缩观察")
+    seedHistory(env.sessions, session.id, 2)
+    const socket = new FakeSocket()
+    env.bus.subscribe(session.id, socket)
+
+    // Master sends "a"; the pre-run compaction's first summarizer call is
+    // in flight. FIXED: the bus already announced the compaction — the
+    // silence window (no events at all) is gone.
+    const aP = manager.enqueue(session.id, { userText: "a", trigger: "user" })
+    await firstCall
+    expect(calls.length).toBe(1)
+    expect(received(socket).map((e) => e.type)).toEqual(["compaction.started"])
+
+    // Seeing no reaction, Master types "b" while the compaction is running.
+    const bP = manager.enqueue(session.id, { userText: "b", trigger: "user" })
+    release()
+    await aP
+    await bP
+
+    // The completed event follows the meta write, before the run's own events.
+    const events = received(socket)
+    const types = events.map((e) => e.type)
+    expect(types.indexOf("compaction.completed")).toBeGreaterThanOrEqual(0)
+    expect(types.indexOf("compaction.completed")).toBeLessThan(types.indexOf("run.started"))
+    const completedEv = events.find((e) => e.type === "compaction.completed") as { payload: { segments: number; kept: number } }
+    expect(completedEv.payload.segments).toBe(1)
+
+    // SYMPTOM 2 (per-session queue works, but nothing announced it): b's run
+    // only starts after a's run completed — its message echo arrives late.
+    const idx = (pred: (e: AgentEvent) => boolean): number =>
+      events.findIndex((e) => pred(e))
+    const aCompleted = idx((e) => e.type === "run.completed")
+    const bCreated = idx((e) =>
+      e.type === "message.created" &&
+      JSON.stringify(e.payload).includes("\"b\""))
+    expect(aCompleted).toBeGreaterThanOrEqual(0)
+    expect(bCreated).toBeGreaterThan(aCompleted)
+
+    // SYMPTOM 3: b's run re-compacted — six LLM calls (2× summary pair + 2×
+    // main). The second segment summary swallows the PREVIOUS retention
+    // window; a's own exchange ("a"/"回答A" is tiny here) falls inside the new
+    // one — with real long replies it would be swallowed too (same boundary
+    // walk, just more mass above the target line).
+    expect(calls.length).toBe(6)
+    expect(calls[3]!.messages[0]!.content as string).toContain("历史问题2")
+    expect(calls[3]!.messages[0]!.content as string).not.toContain("回答A")
+    const meta = env.sessions.meta(session.id)
+    expect(meta!.compaction!.segments).toHaveLength(2)
+    const msgs = env.sessions.readMessages(session.id)
+    const notes = msgs
+      .filter((m) => m.role === "user" && ["a", "b"].includes(String(m.blocks.find((b) => b.type === "text")?.text ?? "")))
+      .map((m) => (m.blocks.find((b) => b.type === "note" && b.kind === "compact") as { text?: string } | undefined)?.text ?? "")
+    expect(notes[0]).toContain("已压缩为 1 段")
+    expect(notes[1]).toContain("已压缩为 2 段")
+  })
+
   it("upgrades a legacy compactedSummary session: old summary seeds the top", async () => {
     const reqs: LlmRequest[] = []
     const { env, manager } = makeEnv(
@@ -918,13 +1009,20 @@ describe("RunManager context compaction v2", () => {
     )
     const session = env.sessions.create("回退")
     seedHistory(env.sessions, session.id, 2)
+    const socket = new FakeSocket()
+    env.bus.subscribe(session.id, socket)
     await manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
     const meta = env.sessions.meta(session.id)
     expect(meta?.compaction).toBeUndefined()
     expect(JSON.stringify(reqs.at(-1)!.messages)).toContain("历史问题1") // full history sent
+    // Failure semantics: started was announced, completed never is — clients
+    // clear the compacting state from the run's own lifecycle events instead.
+    const types = received(socket).map((e) => e.type)
+    expect(types).toContain("compaction.started")
+    expect(types).not.toContain("compaction.completed")
   })
 
-  it("below threshold with existing state: no new calls, note still injected", async () => {
+  it("below threshold with existing state: no new calls, no compaction events, note still injected", async () => {
     const reqs: LlmRequest[] = []
     const { env, manager } = makeEnv(recordRequests(scriptClient([textTurn("主回复")]), reqs))
     const session = env.sessions.create("未触发")
@@ -932,12 +1030,19 @@ describe("RunManager context compaction v2", () => {
     env.sessions.updateMeta(session.id, {
       compaction: { segments: [{ upto: seeded[1]!.id, summary: "段摘要A" }], top: "总摘要A", upto: seeded[1]!.id },
     })
+    const socket = new FakeSocket()
+    env.bus.subscribe(session.id, socket)
     await manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
     expect(reqs.length).toBe(1) // the main conversation only
+    const types = received(socket).map((e) => e.type)
+    expect(types).not.toContain("compaction.started")
+    expect(types).not.toContain("compaction.completed")
     const msgs = env.sessions.readMessages(session.id)
     const user = msgs.find((m) => m.role === "user" && m.blocks.some((b) => b.type === "text" && b.text === "新问题"))!
     const note = user.blocks.find((b) => b.type === "note" && b.kind === "compact")
     expect((note as { text?: string }).text).toContain("总摘要A")
+    // carried-over note (no new compaction): meta still present, same segment count
+    expect(note).toMatchObject({ compact: { segments: 1, kept: 2 } })
   })
 
   it("compactSession refuses while a run is active or queued", async () => {
