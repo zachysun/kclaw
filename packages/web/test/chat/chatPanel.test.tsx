@@ -596,4 +596,52 @@ describe("ChatPanel model selector", () => {
     expect(post).toHaveBeenCalledWith("/sessions/ses_1/model", { model: "b" })
     root.unmount()
   })
+
+  it("shows a compacting indicator on compaction.started and clears it on completed/run.started", async () => {
+    const h = await mount()
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("compaction.started", {}))
+    })
+    expect(h.container.querySelector('[data-testid="compacting-indicator"]')!.textContent).toContain("正在压缩")
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("compaction.completed", { segments: 1, kept: 4 }))
+    })
+    expect(h.container.querySelector('[data-testid="compacting-indicator"]')).toBeNull()
+    // backstop: a run lifecycle event clears a stuck compacting state
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("compaction.started", {}))
+    })
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("run.started", { trigger: "user" }))
+    })
+    expect(h.container.querySelector('[data-testid="compacting-indicator"]')).toBeNull()
+    h.unmount()
+  })
+
+  it("queues visibly: sending while compacting announces the queued message", async () => {
+    const h = await mount()
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("compaction.started", {}))
+    })
+    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    typeInto(input, "排队消息")
+    await act(async () => {
+      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(h.container.querySelector('[data-testid="chat-notice"]')!.textContent).toContain("已排队")
+    h.unmount()
+  })
+
+  it("no queued hint when the session is idle", async () => {
+    const h = await mount()
+    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    typeInto(input, "普通消息")
+    await act(async () => {
+      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(h.container.querySelector('[data-testid="chat-notice"]')).toBeNull()
+    h.unmount()
+  })
 })

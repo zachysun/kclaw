@@ -157,6 +157,11 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
           running…
         </div>
       )}
+      {view.compacting === true && (
+        <div className="run-indicator compacting" data-testid="compacting-indicator" aria-live="polite">
+          正在压缩早期对话…
+        </div>
+      )}
       {view.runState === "running" && view.retryHint !== undefined && view.retryHint !== null && (
         <div className="run-retry" data-testid="run-retry" aria-live="polite">
           重试中…

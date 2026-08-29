@@ -803,6 +803,16 @@ select:focus {
   color: var(--accent-strong);
 }
 
+/* Compaction runs BEFORE run.started — same indicator language, dimmer so a
+   running stream and a compaction never look identical. */
+.run-indicator.compacting {
+  color: var(--text-dim);
+}
+
+.run-indicator.compacting::after {
+  color: var(--muted);
+}
+
 @keyframes blink {
   50% {
     opacity: 0;

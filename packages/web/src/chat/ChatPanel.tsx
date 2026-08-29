@@ -262,6 +262,11 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
         ...(attachments.length > 0 ? { attachments } : {}),
       })
       setPendingAttachments([])
+      // Queue visibility: a run (or its pre-run compaction) still holds the
+      // session — this message waits for it server-side.
+      if (viewRef.current.runState === "running" || viewRef.current.compacting === true) {
+        setNotice("已排队，将在当前任务后发送")
+      }
     } catch {
       setNotice("连接不可用，请稍后重试")
     }

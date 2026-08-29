@@ -88,6 +88,7 @@ export type EventType =
   | "llm.started" | "llm.completed" | "llm.failed"
   | "confirmation.requested" | "confirmation.resolved"
   | "note.emitted"
+  | "compaction.started" | "compaction.completed"
 
 type EventKind =
   | { type: "run.started"; payload: { trigger: string } }
@@ -109,6 +110,8 @@ type EventKind =
   | { type: "llm.failed"; payload: { error?: unknown; willRetry?: boolean; attempt?: number } }
   | { type: "confirmation.requested"; payload: ConfirmationRequestedPayload }
   | { type: "confirmation.resolved"; payload: { confirmationId: string; approved: boolean; by: string } }
+  | { type: "compaction.started"; payload: Record<string, never> }
+  | { type: "compaction.completed"; payload: { segments?: number; kept?: number } }
   // The rest of the catalog flows through the reducer unchanged (default case).
   | { type: Exclude<EventType, HandledEventType>; payload: unknown }
 
@@ -122,6 +125,7 @@ type HandledEventType =
   | "tool_result.created" | "tool_result.delta" | "tool_result.completed"
   | "confirmation.requested" | "confirmation.resolved"
   | "note.emitted" | "llm.completed" | "llm.failed"
+  | "compaction.started" | "compaction.completed"
 
 export type AgentEvent = Envelope & EventKind
 
@@ -180,6 +184,13 @@ export interface ChatState {
    * `llm.completed` and on run terminal events.
    */
   retryHint?: { attempt?: number } | null
+  /**
+   * A pre-run context compaction is running (compaction.started …
+   * compaction.completed). The run lifecycle events also clear it: a FAILED
+   * compaction never emits completed — it falls back to full history and the
+   * run starts anyway, so run.started is the reliable backstop.
+   */
+  compacting?: boolean
 }
 
 /** Build the initial view from the persisted message list (no event replay). */
@@ -210,11 +221,15 @@ export function mergeMessages(existing: RenderedMessage[], fresh: Message[]): Re
 export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
   switch (event.type) {
     case "run.started":
-      return { ...state, runState: "running", error: undefined }
+      return { ...state, runState: "running", error: undefined, compacting: false }
     case "run.completed":
-      return { ...state, runState: "idle", retryHint: null }
+      return { ...state, runState: "idle", retryHint: null, compacting: false }
     case "run.failed":
-      return { ...state, runState: "idle", error: event.payload.error?.message ?? "run failed", retryHint: null }
+      return { ...state, runState: "idle", error: event.payload.error?.message ?? "run failed", retryHint: null, compacting: false }
+    case "compaction.started":
+      return { ...state, compacting: true }
+    case "compaction.completed":
+      return { ...state, compacting: false }
     case "llm.completed":
       return { ...state, retryHint: null }
     case "llm.failed":
