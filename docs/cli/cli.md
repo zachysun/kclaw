@@ -96,7 +96,8 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
    - `tool_call.completed` → `⚡ <name> <args>`，args 是紧凑 JSON、截断到 60 字符。
    - `tool_result.completed` → `↳ <status> (<n>ms) <output>`，输出压空白后取前 80 字符；`tool_result.delta` 不做实时渲染（completed 行已带摘要）。
    - `confirmation.requested` → `⚠ <name> <argsJson> · 风险 <risk> · 过期 <expiresAt>`，按 yes/no/ask 三种模式收决定（ask 时暂停 readline、@clack 出确认框、恢复 readline），回发 `{type:"confirmation.resolve", confirmationId, approved}`。
-   - `note.emitted` → 暗色 `[note] <text>`；`message.created/completed` 刻意不渲染（readline 已回显用户输入，再渲染会重复）。
+   - `note.emitted` → 暗色 `[note] <text>`；kind 为 `compact` 且带结构化 meta（`compact:{segments,kept}`）的例外——它每轮都会被 daemon 重挂（模型上下文需要），打全文会逐轮重复，所以静默，压缩的告知由下面的 completed 行承担；无 meta 的旧格式 compact note 仍照常打全文；`message.created/completed` 刻意不渲染（readline 已回显用户输入，再渲染会重复）。
+   - `compaction.started` → 暗色 `[正在压缩早期对话…]` 一行（预压缩发生在 `run.started` 之前，没有这行的话摘要调用的数秒是回车后的静默空窗）；`compaction.completed` → 暗色 `✱ 早期对话已压缩为 N 段，保留最近 M 条原文（早期细节可用 session_search 检索）`——该事件只在真正发生压缩时发一次，天然是"每次压缩一条"的告知，与 WebUI 的折叠块同一去重语义（见 [compaction](../core/compaction.md)）。
    - `run.completed`/`run.failed`/error 帧 → 结束本轮等待。
 4. **Ctrl+C**（readline 在待输行为空时把 Ctrl+C 转成 `"SIGINT"` 事件）：第一次在 run 进行中 → 发 `{type:"run.cancel"}`（run 随后经正常渲染路径以 `stopReason:"aborted"` 结束）；第一次空闲 → 只打印退出提示；第二次 → 关闭 socket、关闭 readline、`process.exit(130)`。
 

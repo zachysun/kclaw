@@ -194,9 +194,10 @@ async function handleConfirmation(p: ConfirmationRequestedPayload, ctx: ChatCtx)
 /**
  * Render one frame; resolves true when the run reached a terminal state
  * (run.completed / run.failed) or a command error frame arrived — anything
- * that means the caller should stop waiting for events.
+ * that means the caller should stop waiting for events. Exported for unit
+ * tests (the runOrHint precedent).
  */
-async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean> {
+export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean> {
   if (!isAgentEvent(frame)) {
     if (frame.type === "error") {
       line(red(`错误: ${String(frame.message ?? "unknown error")}`), ctx)
@@ -246,9 +247,29 @@ async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean> {
       return false
     // note.emitted: one dim line per note block — including the memory/job
     // notes the daemon injects onto the user message (each is announced
-    // exactly once, between that message's created and completed).
-    case "note.emitted":
-      line(dim(`[note] ${ev.payload.block.text}`), ctx)
+    // exactly once, between that message's created and completed). Compact
+    // notes with the structured meta are the exception: the daemon re-
+    // attaches them EVERY run (the model needs the summary), so printing the
+    // full text here would repeat it every turn — the compaction.completed
+    // line below announces a compaction once instead. Legacy daemons send
+    // compact notes without the meta — keep the old full print for those.
+    case "note.emitted": {
+      const block = ev.payload.block
+      if (block.type === "note" && block.kind === "compact" && block.compact !== undefined) return false
+      line(dim(`[note] ${block.text}`), ctx)
+      return false
+    }
+    // Pre-run compaction lifecycle: started prints one hint (the compaction
+    // runs BEFORE run.started — without it the seconds-long summarizer calls
+    // are a silent gap after Enter). Completed prints the one-line summary:
+    // this event only fires when a compaction actually ran, so it is a
+    // natural once-per-compaction announcement (the per-turn note re-attach
+    // above stays silent).
+    case "compaction.started":
+      line(dim("[正在压缩早期对话…]"), ctx)
+      return false
+    case "compaction.completed":
+      line(dim(`✱ 早期对话已压缩为 ${ev.payload.segments} 段，保留最近 ${ev.payload.kept} 条原文（早期细节可用 session_search 检索）`), ctx)
       return false
     case "run.failed":
       line(red(`✖ 运行失败: ${ev.payload.error.message}`), ctx)

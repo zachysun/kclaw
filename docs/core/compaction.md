@@ -203,6 +203,10 @@ m1  m2  m3 │ m4  m5  m6  m7 │ m8 … m12
 
 两次调用都使用主对话模型、不带工具、用 `collectStreamText` 收集结果。**两次调用全部成功之后才写任何数据**——meta 写入是摘要结果的唯一落盘动作，失败等于压缩没发生。手动压缩传入的重点说明以一行 `用户特别要求重点保留：{focus}` 追加到两次调用的用户消息末尾。
 
+### 过程可见性
+
+预压缩发生在 `run.started` 之前，摘要调用的数秒里若不发事件，客户端就是发送后的静默空窗。因此确定要压缩时（预算过线且边界已定）向总线发 `compaction.started`，meta 与审计落盘后发 `compaction.completed`（payload 为累计段数与保留条数）；预算未过线不压缩则两个事件都不发。压缩失败（摘要调用抛错）只发过 `started`、永远没有 `completed`——客户端把 `run.started`/`run.completed`/`run.failed` 也当作压缩状态的清除条件兜底。两个客户端都以 `completed` 为"每次压缩一条"的告知：CLI 打一行灰字 `✱ 早期对话已压缩为 N 段…`（started 只打 `[正在压缩早期对话…]`；带 meta 的 compact note 静默，无 meta 的旧格式仍打全文）；WebUI 压缩进行中显示"正在压缩早期对话…"指示行，折叠上下文条挂在消息上方，逐轮重挂的 note 靠段数去重。
+
 ### 注入
 
 总摘要附在本轮用户消息上（沿用 note 注入路径和 `note.emitted` 事件，note 顺序 job → compact → memory），note 的 kind 为 `"compact"`，文本模板固定为：

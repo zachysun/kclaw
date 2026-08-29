@@ -1,0 +1,102 @@
+/**
+ * renderFrame unit tests — the per-frame CLI renderer, driven with synthetic
+ * ChatCtx (a recording `line` stand-in; no readline, no daemon). Covers the
+ * compaction lifecycle events: started prints one dim hint line (the pre-run
+ * compaction is otherwise a silent multi-second gap between send and
+ * run.started), completed prints the one-line "compacted to N segments"
+ * summary, and the per-turn re-attached compact note (it carries the
+ * structured meta) stays silent — printing its full text every turn would
+ * repeat the whole summary each round.
+ */
+import { describe, it, expect, vi } from "vitest"
+import { renderFrame, type ChatCtx } from "../src/chat.js"
+import type { AgentEvent, NoteBlock } from "@kclaw/core"
+
+function makeCtx(): { ctx: ChatCtx; lines: string[] } {
+  const lines: string[] = []
+  const ctx = {
+    home: undefined,
+    client: {} as never,
+    ws: {} as never,
+    sessionId: "s1",
+    rl: {} as never,
+    showThinking: false,
+    auto: "ask",
+    io: { atLineStart: true },
+    pendingAttachments: [],
+  } as unknown as ChatCtx
+  // line() routes through the module's io bookkeeping; simplest recording
+  // seam: patch the module-level writer via the ctx adapter used by line().
+  // Instead of reaching into internals, call renderFrame and capture through
+  // process.stdout writes.
+  return { ctx, lines }
+}
+
+function ev(type: AgentEvent["type"], payload: unknown): AgentEvent {
+  return { id: `evt-${type}`, ts: "2026-08-28T00:00:00.000Z", type, payload, sessionId: "s1" } as AgentEvent
+}
+
+describe("renderFrame compaction events", () => {
+  it("prints one dim hint on compaction.started and stays quiet on completed", async () => {
+    const writes: string[] = []
+    const origWrite = process.stdout.write.bind(process.stdout)
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString())
+      return true
+    })
+    try {
+      const { ctx } = makeCtx()
+      const done1 = await renderFrame(ev("compaction.started", {}), ctx)
+      expect(done1).toBe(false)
+      const done2 = await renderFrame(ev("compaction.completed", { segments: 1, kept: 4 }), ctx)
+      expect(done2).toBe(false)
+      const out = writes.join("")
+      expect(out).toContain("正在压缩")
+      expect(out).toContain("已压缩为 1 段")
+      expect(out).toContain("保留最近 4 条")
+      expect(spy).toHaveBeenCalled()
+      void origWrite
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})
+
+describe("renderFrame compact note dedup", () => {
+  async function capture(render: (ctx: ChatCtx) => Promise<unknown>): Promise<string> {
+    const writes: string[] = []
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString())
+      return true
+    })
+    try {
+      const { ctx } = makeCtx()
+      await render(ctx)
+    } finally {
+      spy.mockRestore()
+    }
+    return writes.join("")
+  }
+
+  it("silently drops the re-attached compact note (it carries the structured meta)", async () => {
+    const block: NoteBlock = {
+      id: "b1", type: "note", kind: "compact",
+      text: "早期对话已压缩为 1 段（保留最近 4 条原文…）。摘要：\n很长的摘要全文",
+      compact: { segments: 1, kept: 4 },
+    }
+    const out = await capture((ctx) => renderFrame(ev("note.emitted", { messageId: "m1", block }), ctx))
+    expect(out).toBe("")
+  })
+
+  it("keeps printing legacy compact notes without the meta (older daemons)", async () => {
+    const block: NoteBlock = { id: "b1", type: "note", kind: "compact", text: "旧格式的压缩说明全文" }
+    const out = await capture((ctx) => renderFrame(ev("note.emitted", { messageId: "m1", block }), ctx))
+    expect(out).toContain("[note] 旧格式的压缩说明全文")
+  })
+
+  it("keeps printing memory and job notes as before", async () => {
+    const block: NoteBlock = { id: "b1", type: "note", kind: "memory", text: "记住的要点" }
+    const out = await capture((ctx) => renderFrame(ev("note.emitted", { messageId: "m1", block }), ctx))
+    expect(out).toContain("[note] 记住的要点")
+  })
+})
