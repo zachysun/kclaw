@@ -512,12 +512,15 @@ export class RunManager {
    * 每会话驱动循环（spec §5.4）：run settle → 残余 steer 降级并入队尾 →
    * 队列非空？出队执行 → 循环。已在转则幂等返回。
    *
-   * 出队阶段的意外失败（#demoteSteer / #persistQueue 的 meta 写盘炸掉，如
+   * 出队阶段的意外失败（#demoteSteer / 出队后的 #persistQueue 的 meta 写盘炸掉，如
    * 会话被删、盘满）不允许重演两种死法：会话永久停转（僵尸驱动器让后续
    * submit 全部幂等返回、队列无人消费），或循环 promise 裸拒绝（unhandled
    * rejection）。处理：手头已出队的 node 以该错误落定（等待方看见失败而非
-   * 永久悬挂）；其余条目原地保留（meta.queue 同样未动，重启后由恢复兜底）；
-   * #drivers 同步删除——下一次 submit 重新起转（自愈）；错误日志一次。
+   * 永久悬挂）并**塞回队首**——persist 抛错意味着 meta.queue 也没写成，塞回后
+   * 内存与盘上重新一致，条目留在队列等待下一次出队重试，而不是被此后任何一次
+   * 成功的持久化按内存视图无声抹掉；#drivers 同步删除——下一次 submit 重新起转
+   * （自愈）；错误日志一次。两条失败路径（出队持久化、条目执行）都补发条目级
+   * 可见性事件（#emitEntryFailed）：已 ack 的消息不允许无声消失。
    */
   #drive(sessionId: string): void {
     if (this.#drivers.has(sessionId)) return
@@ -537,6 +540,13 @@ export class RunManager {
             node = queue.shift()!
             this.#persistQueue(sessionId) // 出队即从 meta.queue 删除（原子重写）
           } catch (err) {
+            if (node !== undefined) {
+              // persist 失败 = meta.queue 未动：塞回队首恢复两边一致，条目等待重试
+              const queue = this.#queues.get(sessionId) ?? []
+              queue.unshift(node)
+              this.#queues.set(sessionId, queue)
+              this.#emitEntryFailed(sessionId, node, "出队持久化失败（条目已退回队列）", err)
+            }
             node?.reject(err)
             this.#drivers.delete(sessionId)
             throw err
@@ -544,6 +554,8 @@ export class RunManager {
           try {
             node.resolve(await this.#executeEntry(sessionId, node))
           } catch (err) {
+            // 循环自己的 run.failed 兜不到的条目级失败（如降级坏附件在装配段同步抛）
+            this.#emitEntryFailed(sessionId, node, "执行失败", err)
             node.reject(err)
           }
         }
@@ -568,6 +580,23 @@ export class RunManager {
     for (const e of buf) queue.push(makeNode({ ...e, disposition: "wait" }))
     this.#queues.set(sessionId, queue)
     this.#persistQueue(sessionId)
+  }
+
+  /**
+   * 条目级失败可见性：出队持久化 / 条目执行的失败发生时循环的 run.failed
+   * 兜不住（run 还没起，或同步抛在装配段）——已 ack `queued:true` 的消息
+   * 不允许无声消失。以 run.failed 形状补一条 code "queue_entry_failed" 的
+   * 事件（message 含 messageId 与原因），订阅客户端据此可见；总线发送
+   * 本身不再包裹（与 submit/queueCancel 的直接 emit 一致，逐 socket 投递
+   * 已由 EventBus 自守）。
+   */
+  #emitEntryFailed(sessionId: string, node: QueueNode, why: string, err: unknown): void {
+    this.#deps.bus.emit(makeEvent("run.failed", {
+      error: {
+        code: "queue_entry_failed",
+        message: `排队消息 ${node.entry.messageId} ${why}：${err instanceof Error ? err.message : String(err)}`,
+      },
+    }, { sessionId }))
   }
 
   /** meta.queue = 可执行条目 + steer 缓冲，数组顺序即执行顺序（spec §3.2）；空则删除字段。 */

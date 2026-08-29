@@ -1,7 +1,8 @@
 /**
  * RunManager 显式队列语义测试（spec §3.2/§3.4/§4.1/§5.2-§5.5）：空闲直发、
  * wait FIFO 与预分配消息 id、meta.queue 镜像、上限拒绝、enqueue 兼容、
- * cancel 语义收窄（仅中止活动 run）与 interrupt 插队不吞消息。
+ * cancel 语义收窄（仅中止活动 run）、interrupt 插队不吞消息、出队失败自愈
+ * （条目退回重试不无声消失）与条目级失败可见性（queue_entry_failed）。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { mkdtempSync, rmSync, readFileSync } from "node:fs"
@@ -162,16 +163,19 @@ describe("submit / driver", () => {
     expect(texts).toEqual(["first", "cutter", "waiter"]) // 不吞已排队消息，只插队
   })
 
-  it("driver survives a dequeue-phase persist crash: node rejects, no zombie, no unhandled rejection", async () => {
+  it("driver survives a dequeue-phase persist crash: node rejects, entry returns to the queue (no silent drop), no zombie", async () => {
     // #drive 的出队阶段（#demoteSteer / 出队后的 #persistQueue）在 try 之外：
     // meta.json 写盘炸掉（会话被删、盘满）时，不允许会话永久停转（僵尸驱动器）
-    // 也不允许循环 promise 裸拒绝——手头 node 以错误落定、残余条目原地保留、
-    // 下一次 submit 重新起转（自愈）。
+    // 也不允许循环 promise 裸拒绝。手头 node 以错误落定并塞回队首——persist 抛错
+    // 意味着 meta.queue 也没写成，塞回后内存与盘上重新一致；此后任何一次成功的
+    // 持久化都不得把崩溃条目从 meta.queue 无声抹掉，条目由重启的驱动器重试执行。
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {}) // 崩溃日志静音
     const rejections: unknown[] = []
     const onRejection = (err: unknown): void => { rejections.push(err) }
     process.on("unhandledRejection", onRejection)
     const meta = sessions.create("t", undefined, "/w")
+    const events: Array<{ type: string; payload: { error?: { code?: string; message?: string } } }> = []
+    bus.subscribe(meta.id, { send: (d: string) => { const e = JSON.parse(d); if (e.sessionId === meta.id) events.push(e) } })
     // 只在 w1 的出队持久化（shift 后 meta.queue 恰为 [w2]）这一次炸掉 updateMeta
     const originalUpdate = sessions.updateMeta.bind(sessions)
     sessions.updateMeta = (id: string, patch: Partial<SessionMeta>): SessionMeta => {
@@ -190,14 +194,27 @@ describe("submit / driver", () => {
       await expect(w1.outcome).rejects.toThrow("meta 写盘失败")
       expect((await first.outcome).stopReason).toBe("end_turn")
 
-      // 崩溃后无僵尸：恢复 updateMeta，下一次 submit 重新起转并消费残余队列
+      // 失败可见性（fix A）：bus 上出现条目级失败事件，message 带 messageId
+      const failed = events.find((e) => e.type === "run.failed" && e.payload.error?.code === "queue_entry_failed")
+      expect(failed).toBeDefined()
+      expect(failed!.payload.error?.message).toContain(w1.messageId)
+
+      // 崩溃后 meta.queue 仍含崩溃条目（persist 没写成，盘上未动）
+      expect(sessions.meta(meta.id)!.queue!.map((e) => e.text)).toEqual(["w1", "w2"])
+
+      // 恢复 updateMeta，下一次 submit 重新起转：驱动器同步首拍立即重新出队 w1
+      // 重试（这次 persist 成功）——崩溃条目被"重试处理"而不是被无声抹掉
       sessions.updateMeta = originalUpdate
       const w3 = manager.submit(meta.id, { userText: "w3", trigger: "user", disposition: "wait" })
-      expect((await w2.outcome).stopReason).toBe("end_turn") // 残余条目仍被执行
+      expect(sessions.meta(meta.id)!.queue!.map((e) => e.text)).toEqual(["w2", "w3"]) // w1 已重新出队重试
+
+      // 塞回队首的 w1 由重启的驱动器重试执行（等待方已见过拒绝，事件流照常）
+      expect((await w2.outcome).stopReason).toBe("end_turn")
       expect((await w3.outcome).stopReason).toBe("end_turn")
       const lines = readFileSync(join(home, "sessions", meta.id, "messages.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l))
       const texts = lines.filter((m: { role: string }) => m.role === "user").map((m: { blocks: Array<{ text?: string }> }) => m.blocks[0]!.text)
-      expect(texts).toEqual(["first", "w2", "w3"]) // w1 出队即失败，从未执行
+      expect(texts).toEqual(["first", "w1", "w2", "w3"])
+      expect(sessions.meta(meta.id)!.queue ?? []).toHaveLength(0)
 
       await new Promise((r) => setTimeout(r, 50)) // 让任何未处理拒绝浮出
       expect(rejections).toEqual([])
@@ -205,6 +222,27 @@ describe("submit / driver", () => {
       process.off("unhandledRejection", onRejection)
       errorSpy.mockRestore()
     }
+  })
+
+  it("execution failure of a dequeued entry (bad attachment) emits queue_entry_failed visibility", async () => {
+    // 同族统一（fix A ③）：降级/排队的坏附件条目在 #execute 装配段同步抛出，
+    // 走 node.reject——循环自己的 run.failed 兜不住，补发条目级失败事件；
+    // 驱动器不停转，后续队列照常消化。
+    const meta = sessions.create("t", undefined, "/w")
+    const events: Array<{ type: string; payload: { error?: { code?: string; message?: string } } }> = []
+    bus.subscribe(meta.id, { send: (d: string) => { const e = JSON.parse(d); if (e.sessionId === meta.id) events.push(e) } })
+    const first = manager.submit(meta.id, { userText: "first", trigger: "user" })
+    const bad = manager.submit(meta.id, {
+      userText: "坏附件", trigger: "user", disposition: "wait",
+      attachments: [{ path: "/etc/hosts", name: "hosts", size: 1, mimeType: "text/plain" }],
+    })
+    await first.outcome
+    await expect(bad.outcome).rejects.toThrow(/attachment outside/)
+    const failed = events.find((e) => e.type === "run.failed" && e.payload.error?.code === "queue_entry_failed")
+    expect(failed).toBeDefined()
+    expect(failed!.payload.error?.message).toContain(bad.messageId)
+    // 驱动器没有停转：坏条目失败后队列清空、字段删除
+    expect(sessions.meta(meta.id)!.queue ?? []).toHaveLength(0)
   })
 })
 
