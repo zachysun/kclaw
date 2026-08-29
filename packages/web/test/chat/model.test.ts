@@ -497,6 +497,29 @@ describe("queue reducer", () => {
     expect(s.queue.map((e) => e.text)).toEqual(["第一条", "第二条"])
   })
 
+  it("message.queued for an already-tracked id skips adoption (no bubble steal, no double)", () => {
+    // 恢复重播恰逢在途乐观气泡：queue 已含 msg_x（早先收养了"旧排队"气泡），
+    // 再收一条 message.queued{msg_x}。收养必须先查重——否则最早 pending 的
+    // local- 气泡（"新来的"）会被改名成 msg_x：队列文本张冠李戴、同 id 双气泡，
+    // 随后真 ack 的 adoptQueuedId 找不到 local- 气泡而 no-op。
+    let s = appendOptimisticUser(base(), "旧排队")
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_x", disposition: "steer" }))
+    s = appendOptimisticUser(s, "新来的")
+    const localId = s.messages[1]!.id
+    expect(localId.startsWith("local-")).toBe(true)
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_x", disposition: "wait" }))
+    // 现有气泡不被改名：msg_x 只有一个（先前收养的），local- 气泡原样保留
+    expect(s.messages.filter((m) => m.id === "msg_x")).toHaveLength(1)
+    expect(s.messages[1]!.id).toBe(localId)
+    expect(firstTextOf(s.messages[1]!)).toBe("新来的")
+    // 条目保留且按事件刷新处置（恢复重播会把 steer/interrupt 降级报为 wait）
+    expect(s.queue).toEqual([{ messageId: "msg_x", disposition: "wait", state: "queued", text: "旧排队" }])
+    // 真 ack 到达时仍有 local- 气泡可收养（无双气泡的死局）
+    s = adoptQueuedId(s, "msg_y")
+    expect(s.messages[1]!.id).toBe("msg_y")
+    expect(firstTextOf(s.messages[1]!)).toBe("新来的")
+  })
+
   it("message.queue_cancelled {all:true} clears queued entries+bubbles but keeps injected ones", () => {
     let s = appendOptimisticUser(base(), "已注入的引导")
     s = applyEvent(s, ev("message.queued", { messageId: "msg_i", disposition: "steer" }))

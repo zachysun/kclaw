@@ -410,6 +410,18 @@ export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
     case "message.completed":
       return upsertMessage(state, renderMessage(event.payload.message, false))
     case "message.queued": {
+      // Dedupe BEFORE adoption: an id we already track (recoverQueues replay
+      // racing an in-flight optimistic bubble, or a cross-client variant) must
+      // not steal the earliest pending local- bubble — renaming it would
+      // mis-caption the queue text and leave the real ack's adoptQueuedId a
+      // no-op, ending in a double bubble. The tracked entry just refreshes its
+      // disposition (recoverQueues re-broadcasts demoted "wait"), its bubble
+      // and text stay.
+      if (state.queue.some((e) => e.messageId === event.payload.messageId)) {
+        const queue = state.queue.map((e) =>
+          e.messageId === event.payload.messageId ? { ...e, disposition: event.payload.disposition } : e)
+        return { ...state, queue }
+      }
       // The earliest still-pending optimistic bubble adopts the server id IN
       // PLACE and the queue tracks the entry with the bubble's text (the
       // payload carries no text). No local bubble (replay/refresh edge) → the
@@ -425,7 +437,8 @@ export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
         state: "queued",
         text: adopted === null ? "" : firstRenderedUserText(adopted),
       }
-      // A re-broadcast for an id we already track replaces the entry (no dupes).
+      // A re-broadcast for an id we already track never reaches here (the
+      // dedupe above ran first); the filter stays as belt-and-braces.
       const queue = [...state.queue.filter((e) => e.messageId !== entry.messageId), entry]
       return { ...state, queue, messages }
     }
