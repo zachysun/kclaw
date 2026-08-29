@@ -9,9 +9,9 @@ import { describe, it, expect, vi } from "vitest"
 import { createRoot, type Root } from "react-dom/client"
 import { act } from "react"
 import { ChatView, availableSlashMenuMaxHeight } from "../../src/chat/ChatView.js"
-import { initChat } from "../../src/chat/model.js"
+import { initChat, type Block, type Message } from "../../src/chat/model.js"
 
-function mountView() {
+function mountView(messages: Message[] = []) {
   const onSend = vi.fn()
   const container = document.createElement("div")
   document.body.appendChild(container)
@@ -19,7 +19,7 @@ function mountView() {
   act(() => {
     root.render(
       <ChatView
-        view={initChat([])}
+        view={initChat(messages)}
         onSend={onSend}
         onResolveConfirmation={vi.fn()}
         pendingAttachments={[]}
@@ -131,6 +131,39 @@ describe("ChatView slash suggestions", () => {
     h.unmount()
   })
 
+  it("accepts the highlighted suggestion on Enter instead of submitting a half-typed word", () => {
+    const h = mountView()
+    type(h.input(), "/co")
+    pressKey(h.input(), "Enter")
+    expect(h.input().value).toBe("/compact ")
+    expect(h.container.querySelector('[data-testid="slash-menu"]')).toBeNull()
+    expect(h.onSend).not.toHaveBeenCalled()
+    h.unmount()
+  })
+
+  it("Enter accepts the arrow-selected candidate, not the raw draft", () => {
+    const h = mountView()
+    type(h.input(), "/")
+    pressKey(h.input(), "ArrowDown")
+    pressKey(h.input(), "Enter")
+    expect(h.input().value).toBe("/clear ")
+    expect(h.onSend).not.toHaveBeenCalled()
+    h.unmount()
+  })
+
+  it("submits on Enter when the draft is already the complete command word", async () => {
+    const h = mountView()
+    type(h.input(), "/compact")
+    pressKey(h.input(), "Enter")
+    // Exact match must NOT be rewritten (no trailing space appended) — the
+    // native form submit then runs it (jsdom does not submit on Enter, so the
+    // send button stands in for the submission here).
+    expect(h.input().value).toBe("/compact")
+    await h.send()
+    expect(h.onSend).toHaveBeenCalledWith("/compact")
+    h.unmount()
+  })
+
   it("opens the help panel for /help instead of sending", async () => {
     const h = mountView()
     type(h.input(), "/help")
@@ -182,39 +215,6 @@ describe("availableSlashMenuMaxHeight", () => {
     // topBoundary = topbar bottom; menu must stay below it, not just above 0.
     expect(availableSlashMenuMaxHeight(161, 47.5)).toBe(161 - 47.5 - 6 - 8)
     expect(availableSlashMenuMaxHeight(200, 47.5)).toBe(200 - 47.5 - 6 - 8)
-  })
-
-  it("accepts the highlighted suggestion on Enter instead of submitting a half-typed word", () => {
-    const h = mountView()
-    type(h.input(), "/co")
-    pressKey(h.input(), "Enter")
-    expect(h.input().value).toBe("/compact ")
-    expect(h.container.querySelector('[data-testid="slash-menu"]')).toBeNull()
-    expect(h.onSend).not.toHaveBeenCalled()
-    h.unmount()
-  })
-
-  it("Enter accepts the arrow-selected candidate, not the raw draft", () => {
-    const h = mountView()
-    type(h.input(), "/")
-    pressKey(h.input(), "ArrowDown")
-    pressKey(h.input(), "Enter")
-    expect(h.input().value).toBe("/clear ")
-    expect(h.onSend).not.toHaveBeenCalled()
-    h.unmount()
-  })
-
-  it("submits on Enter when the draft is already the complete command word", async () => {
-    const h = mountView()
-    type(h.input(), "/compact")
-    pressKey(h.input(), "Enter")
-    // Exact match must NOT be rewritten (no trailing space appended) — the
-    // native form submit then runs it (jsdom does not submit on Enter, so the
-    // send button stands in for the submission here).
-    expect(h.input().value).toBe("/compact")
-    await h.send()
-    expect(h.onSend).toHaveBeenCalledWith("/compact")
-    h.unmount()
   })
 })
 

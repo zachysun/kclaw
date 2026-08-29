@@ -13,6 +13,7 @@ import {
   type Block,
   type ChatState,
   type Message,
+  appendOptimisticUser,
 } from "../../src/chat/model.js"
 
 function msg(id: string, role: "user" | "assistant" | "tool", blocks: Block[]): Message {
@@ -30,6 +31,8 @@ const toolCall = (id: string, callId: string, name: string, argsJson: string) =>
   ({ id, type: "tool_call" as const, callId, name, args: {}, argsJson })
 const toolResult = (id: string, callId: string, output: string, durationMs = 0, status: "ok" | "error" = "ok") =>
   ({ id, type: "tool_result" as const, callId, status, output, durationMs })
+const firstTextOf = (m: { blocks: Array<{ kind: string; text?: string }> }): string =>
+  m.blocks.find((b) => b.kind === "text")?.text ?? ""
 
 describe("initChat", () => {
   it("maps persisted messages by role/block structure without replaying events", () => {
@@ -182,6 +185,16 @@ describe("block created/completed calibration", () => {
       { kind: "text", blockId: "b1", text: "hi" },
       { kind: "note", blockId: "b2", noteKind: "job", text: "job note" },
     ])
+  })
+
+  it("carries the compact meta on compact notes (persisted and via note.emitted)", () => {
+    const compact = { ...note("b2", "compact", "早期对话已压缩为 2 段"), compact: { segments: 2, kept: 4 } }
+    const view = initChat([msg("m1", "user", [text("b1", "hi"), compact as Block])])
+    expect(view.messages[0]!.blocks[1]).toEqual({
+      kind: "note", blockId: "b2", noteKind: "compact", text: "早期对话已压缩为 2 段", compact: { segments: 2, kept: 4 },
+    })
+    const live = applyEvent(initChat([msg("m9", "user", [text("b1", "hi")])]), ev("note.emitted", { messageId: "m9", block: compact }))
+    expect((live.messages[0]!.blocks[1] as { compact?: unknown }).compact).toEqual({ segments: 2, kept: 4 })
   })
 
   it("drops block events for an unknown message", () => {
@@ -350,6 +363,25 @@ describe("llm retry hint", () => {
       .toBeNull()
   })
 })
+
+describe("compaction state", () => {
+  it("compaction.started marks compacting; completed clears it", () => {
+    const state = initChat([])
+    const started = applyEvent(state, ev("compaction.started", {}))
+    expect(started.compacting).toBe(true)
+    const done = applyEvent(started, ev("compaction.completed", { segments: 1, kept: 4 }))
+    expect(done.compacting).toBe(false)
+  })
+
+  it("run lifecycle events clear a stuck compacting state (failed compaction emits no completed)", () => {
+    const started = applyEvent(initChat([]), ev("compaction.started", {}))
+    expect(applyEvent(started, ev("run.started", { trigger: "user" })).compacting).toBe(false)
+    const again = applyEvent(initChat([]), ev("compaction.started", {}))
+    expect(applyEvent(again, ev("run.completed", { stopReason: "end_turn" })).compacting).toBe(false)
+    expect(applyEvent(again, ev("run.failed", { error: { code: "x", message: "y" } })).compacting).toBe(false)
+  })
+})
+
 describe("optimistic user echo", () => {
   it("appendOptimisticUser adds a pending user bubble with a local- id", () => {
     const next = appendOptimisticUser(initChat([]), "在吗")
@@ -400,30 +432,3 @@ describe("optimistic user echo", () => {
     expect(merged2.map((m) => m.id)).toEqual([other.messages[0]!.id, "m9"])
   })
 })
-describe("compaction state", () => {
-  it("compaction.started marks compacting; completed clears it", () => {
-    const state = initChat([])
-    const started = applyEvent(state, ev("compaction.started", {}))
-    expect(started.compacting).toBe(true)
-    const done = applyEvent(started, ev("compaction.completed", { segments: 1, kept: 4 }))
-    expect(done.compacting).toBe(false)
-  })
-
-  it("run lifecycle events clear a stuck compacting state (failed compaction emits no completed)", () => {
-    const started = applyEvent(initChat([]), ev("compaction.started", {}))
-    expect(applyEvent(started, ev("run.started", { trigger: "user" })).compacting).toBe(false)
-    const again = applyEvent(initChat([]), ev("compaction.started", {}))
-    expect(applyEvent(again, ev("run.completed", { stopReason: "end_turn" })).compacting).toBe(false)
-    expect(applyEvent(again, ev("run.failed", { error: { code: "x", message: "y" } })).compacting).toBe(false)
-  })
-})
-
-  it("carries the compact meta on compact notes (persisted and via note.emitted)", () => {
-    const compact = { ...note("b2", "compact", "早期对话已压缩为 2 段"), compact: { segments: 2, kept: 4 } }
-    const view = initChat([msg("m1", "user", [text("b1", "hi"), compact as Block])])
-    expect(view.messages[0]!.blocks[1]).toEqual({
-      kind: "note", blockId: "b2", noteKind: "compact", text: "早期对话已压缩为 2 段", compact: { segments: 2, kept: 4 },
-    })
-    const live = applyEvent(initChat([msg("m9", "user", [text("b1", "hi")])]), ev("note.emitted", { messageId: "m9", block: compact }))
-    expect((live.messages[0]!.blocks[1] as { compact?: unknown }).compact).toEqual({ segments: 2, kept: 4 })
-  })

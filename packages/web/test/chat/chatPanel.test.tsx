@@ -311,6 +311,112 @@ describe("ChatPanel", () => {
     h.unmount()
   })
 
+  it("renders the notice just above the composer, not at the panel top", async () => {
+    const h = await mount()
+    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    typeInto(input, "/zzz")
+    await act(async () => {
+      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    const notice = h.container.querySelector('[data-testid="chat-notice"]')!
+    const composer = h.container.querySelector("form.chat-composer")!
+    const log = h.container.querySelector('[data-testid="chat-log"]')!
+    // Document order: the notice sits AFTER the conversation log (feedback
+    // lives next to the input that triggered it) and directly BEFORE the
+    // composer. compareDocumentPosition: FOLLOWING = the argument comes after
+    // the receiver.
+    expect(notice.compareDocumentPosition(log) & Node.DOCUMENT_POSITION_FOLLOWING).toBeFalsy()
+    expect(notice.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    h.unmount()
+  })
+
+  it("clears a stale notice once the user starts typing a new message", async () => {
+    const h = await mount()
+    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    typeInto(input, "/zzz")
+    await act(async () => {
+      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(h.container.querySelector('[data-testid="chat-notice"]')).not.toBeNull()
+    typeInto(input, "新的消息")
+    expect(h.container.querySelector('[data-testid="chat-notice"]')).toBeNull()
+    h.unmount()
+  })
+
+  it("shows a compacting indicator on compaction.started and clears it on completed/run.started", async () => {
+    const h = await mount()
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("compaction.started", {}))
+    })
+    expect(h.container.querySelector('[data-testid="compacting-indicator"]')!.textContent).toContain("正在压缩")
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("compaction.completed", { segments: 1, kept: 4 }))
+    })
+    expect(h.container.querySelector('[data-testid="compacting-indicator"]')).toBeNull()
+    // backstop: a run lifecycle event clears a stuck compacting state
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("compaction.started", {}))
+    })
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("run.started", { trigger: "user" }))
+    })
+    expect(h.container.querySelector('[data-testid="compacting-indicator"]')).toBeNull()
+    h.unmount()
+  })
+
+  it("echoes a sent message optimistically, then replaces it with the server twin", async () => {
+    const h = await mount()
+    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    typeInto(input, "在吗")
+    await act(async () => {
+      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
+    })
+    // The bubble is visible IMMEDIATELY — no frame needed (the pre-run
+    // compaction may delay the server echo by seconds).
+    const bubbles = h.container.querySelectorAll('[data-testid="msg-user"]')
+    expect(bubbles).toHaveLength(1)
+    expect(bubbles[0]!.textContent).toContain("在吗")
+    // The server twin replaces the local one instead of duplicating.
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("message.created", {
+        message: { id: "m1", sessionId: "s1", role: "user", blocks: [{ id: "b1", type: "text", text: "在吗" }], createdAt: "2026-08-15T00:00:00.000Z" },
+      }))
+    })
+    expect(h.container.querySelectorAll('[data-testid="msg-user"]')).toHaveLength(1)
+    h.unmount()
+  })
+
+  it("queues visibly: sending while compacting announces the queued message", async () => {
+    const h = await mount()
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("compaction.started", {}))
+    })
+    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    typeInto(input, "排队消息")
+    await act(async () => {
+      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(h.container.querySelector('[data-testid="chat-notice"]')!.textContent).toContain("已排队")
+    // the optimistic echo still appeared
+    expect(h.container.querySelector('[data-testid="msg-user"]')!.textContent).toContain("排队消息")
+    h.unmount()
+  })
+
+  it("no queued hint when the session is idle", async () => {
+    const h = await mount()
+    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    typeInto(input, "普通消息")
+    await act(async () => {
+      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(h.container.querySelector('[data-testid="chat-notice"]')).toBeNull()
+    h.unmount()
+  })
+
   it("renders a confirmation card and resolves it inline", async () => {
     const h = await mount()
     await drive(() => {
@@ -595,111 +701,5 @@ describe("ChatPanel model selector", () => {
     })
     expect(post).toHaveBeenCalledWith("/sessions/ses_1/model", { model: "b" })
     root.unmount()
-  })
-
-  it("shows a compacting indicator on compaction.started and clears it on completed/run.started", async () => {
-    const h = await mount()
-    await drive(() => {
-      pushFrame(h.sockets[0]!, ev("compaction.started", {}))
-    })
-    expect(h.container.querySelector('[data-testid="compacting-indicator"]')!.textContent).toContain("正在压缩")
-    await drive(() => {
-      pushFrame(h.sockets[0]!, ev("compaction.completed", { segments: 1, kept: 4 }))
-    })
-    expect(h.container.querySelector('[data-testid="compacting-indicator"]')).toBeNull()
-    // backstop: a run lifecycle event clears a stuck compacting state
-    await drive(() => {
-      pushFrame(h.sockets[0]!, ev("compaction.started", {}))
-    })
-    await drive(() => {
-      pushFrame(h.sockets[0]!, ev("run.started", { trigger: "user" }))
-    })
-    expect(h.container.querySelector('[data-testid="compacting-indicator"]')).toBeNull()
-    h.unmount()
-  })
-
-  it("queues visibly: sending while compacting announces the queued message", async () => {
-    const h = await mount()
-    await drive(() => {
-      pushFrame(h.sockets[0]!, ev("compaction.started", {}))
-    })
-    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
-    typeInto(input, "排队消息")
-    await act(async () => {
-      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
-    })
-    await flush()
-    expect(h.container.querySelector('[data-testid="chat-notice"]')!.textContent).toContain("已排队")
-    // the optimistic echo still appeared
-    expect(h.container.querySelector('[data-testid="msg-user"]')!.textContent).toContain("排队消息")
-    h.unmount()
-  })
-
-  it("no queued hint when the session is idle", async () => {
-    const h = await mount()
-    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
-    typeInto(input, "普通消息")
-    await act(async () => {
-      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
-    })
-    await flush()
-    expect(h.container.querySelector('[data-testid="chat-notice"]')).toBeNull()
-    h.unmount()
-  })
-
-  it("echoes a sent message optimistically, then replaces it with the server twin", async () => {
-    const h = await mount()
-    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
-    typeInto(input, "在吗")
-    await act(async () => {
-      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
-    })
-    // The bubble is visible IMMEDIATELY — no frame needed (the pre-run
-    // compaction may delay the server echo by seconds).
-    const bubbles = h.container.querySelectorAll('[data-testid="msg-user"]')
-    expect(bubbles).toHaveLength(1)
-    expect(bubbles[0]!.textContent).toContain("在吗")
-    // The server twin replaces the local one instead of duplicating.
-    await drive(() => {
-      pushFrame(h.sockets[0]!, ev("message.created", {
-        message: { id: "m1", sessionId: "s1", role: "user", blocks: [{ id: "b1", type: "text", text: "在吗" }], createdAt: "2026-08-15T00:00:00.000Z" },
-      }))
-    })
-    expect(h.container.querySelectorAll('[data-testid="msg-user"]')).toHaveLength(1)
-    h.unmount()
-  })
-
-  it("renders the notice just above the composer, not at the panel top", async () => {
-    const h = await mount()
-    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
-    typeInto(input, "/zzz")
-    await act(async () => {
-      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
-    })
-    await flush()
-    const notice = h.container.querySelector('[data-testid="chat-notice"]')!
-    const composer = h.container.querySelector("form.chat-composer")!
-    const log = h.container.querySelector('[data-testid="chat-log"]')!
-    // Document order: the notice sits AFTER the conversation log (feedback
-    // lives next to the input that triggered it) and directly BEFORE the
-    // composer. compareDocumentPosition: FOLLOWING = the argument comes after
-    // the receiver.
-    expect(notice.compareDocumentPosition(log) & Node.DOCUMENT_POSITION_FOLLOWING).toBeFalsy()
-    expect(notice.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    h.unmount()
-  })
-
-  it("clears a stale notice once the user starts typing a new message", async () => {
-    const h = await mount()
-    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
-    typeInto(input, "/zzz")
-    await act(async () => {
-      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
-    })
-    await flush()
-    expect(h.container.querySelector('[data-testid="chat-notice"]')).not.toBeNull()
-    typeInto(input, "新的消息")
-    expect(h.container.querySelector('[data-testid="chat-notice"]')).toBeNull()
-    h.unmount()
   })
 })
