@@ -5,9 +5,9 @@
  * draft); expansion/collapse uses native <details> elements, so thinking folds
  * by default and tool_result cards expand to their full output without JS.
  */
-import { useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
+import { Fragment, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { parseSlashInput, slashCompletions, SLASH_COMMANDS } from "@kclaw/core/commands"
-import type { ChatState, ConfirmationCard, RenderedBlock, RenderedMessage } from "./model.js"
+import type { ChatState, ConfirmationCard, NoteRender, RenderedBlock, RenderedMessage } from "./model.js"
 
 /** An uploaded attachment pending on the next message (mirrors the daemon shape). */
 export interface PendingAttachment {
@@ -171,7 +171,15 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
         </div>
       )}
       <div className="chat-log" data-testid="chat-log">
-        {view.messages.map((message) => <MessageBubble key={message.id} message={message} />)}
+        {view.messages.map((message, idx) => {
+          const context = contextBarFor(view.messages, idx)
+          return (
+            <Fragment key={message.id}>
+              {context !== null && <CompactContextNote context={context} />}
+              <MessageBubble message={message} />
+            </Fragment>
+          )
+        })}
       </div>
       {view.runState === "running" && (
         <div className="run-indicator" data-testid="run-indicator" aria-live="polite">
@@ -268,6 +276,74 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
   )
 }
 
+/** Everything the collapsed context bar shows for one compaction. */
+export interface CompactContextInfo {
+  segments: number
+  kept: number
+  /** The compact note's full text (summary + retrieval hint). */
+  summary: string
+  /** The kept verbatim messages preceding this user message, in order. */
+  keptMessages: { role: string; text: string }[]
+}
+
+/**
+ * Compaction context for the user message at `idx`, or null when it shows no
+ * bar. The server re-attaches the compact note EVERY turn (the model needs the
+ * summary each request), and `kept` counts the user's own message — so a bar
+ * renders only when the segment count changes (a real new compaction), and the
+ * kept-message preview excludes the message itself.
+ */
+export function contextBarFor(messages: RenderedMessage[], idx: number): CompactContextInfo | null {
+  const message = messages[idx]!
+  if (message.role !== "user") return null
+  const note = message.blocks.find(
+    (b): b is NoteRender => b.kind === "note" && b.noteKind === "compact" && b.compact !== undefined,
+  )
+  if (note === undefined || note.compact === undefined) return null
+  let seen: number | null = null
+  for (let i = 0; i < idx; i++) {
+    for (const b of messages[i]!.blocks) {
+      if (b.kind === "note" && b.noteKind === "compact" && b.compact !== undefined) seen = b.compact.segments
+    }
+  }
+  if (seen === note.compact.segments) return null
+  const precedingKept = Math.max(0, note.compact.kept - 1)
+  const keptMessages = messages
+    .slice(Math.max(0, idx - precedingKept), idx)
+    .map((m) => ({ role: m.role, text: flattenText(m.blocks) }))
+  return { segments: note.compact.segments, kept: note.compact.kept, summary: note.text, keptMessages }
+}
+
+/** First text block, whitespace-collapsed, capped for the preview line. */
+function flattenText(blocks: RenderedBlock[]): string {
+  const first = blocks.find((b) => b.kind === "text")
+  const text = first !== undefined && first.kind === "text" ? first.text : ""
+  const collapsed = text.replace(/\s+/g, " ").trim()
+  return collapsed.length > 120 ? `${collapsed.slice(0, 120)}…` : collapsed
+}
+
+/** Collapsed-by-default <details> listing what the model sees for early context. */
+function CompactContextNote({ context }: { context: CompactContextInfo }) {
+  return (
+    <details className="ctx-note" data-testid="ctx-note">
+      <summary>模型上下文：早期对话已压缩为 {context.segments} 段（点击展开）</summary>
+      <div className="ctx-note-body">
+        <p className="ctx-note-summary">{context.summary}</p>
+        {context.keptMessages.length > 0 && (
+          <div className="ctx-note-kept" data-testid="ctx-note-kept">
+            <div className="ctx-note-kept-head">保留的原文（最近 {context.keptMessages.length} 条）：</div>
+            {context.keptMessages.map((m, i) => (
+              <div key={i} className="ctx-note-kept-line">
+                {m.role === "user" ? "用户" : "助手"}：{m.text}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </details>
+  )
+}
+
 function MessageBubble({ message }: { message: RenderedMessage }) {
   const streaming = message.pending && message.blocks.length === 0
   return (
@@ -290,6 +366,9 @@ function BlockView({ block }: { block: RenderedBlock }) {
         </details>
       )
     case "note":
+      // Compact notes render as the collapsed context bar above their message
+      // (contextBarFor); a legacy one without meta falls through to inline.
+      if (block.noteKind === "compact" && block.compact !== undefined) return null
       return <span className="blk-note" data-testid="blk-note">[note] {block.text}</span>
     case "tool_call":
       return (

@@ -217,3 +217,73 @@ describe("availableSlashMenuMaxHeight", () => {
     h.unmount()
   })
 })
+
+describe("compact context block", () => {
+  const ctxNote = (segments: number, kept: number): Block => ({
+    id: `note-${segments}-${kept}-${Math.random().toString(36).slice(2, 6)}`,
+    type: "note",
+    kind: "compact",
+    text: `早期对话已压缩为 ${segments} 段（保留最近 ${kept} 条原文；可用 session_search 检索早期细节）。摘要：\n总摘要${segments}`,
+    compact: { segments, kept },
+  })
+  const u = (id: string, t: string, blocks: Block[] = []) =>
+    ({ id, sessionId: "s1", role: "user" as const, blocks: [{ id: `${id}-b`, type: "text" as const, text: t }, ...blocks], createdAt: "2026-08-28T00:00:00.000Z" })
+  const a = (id: string, t: string) =>
+    ({ id, sessionId: "s1", role: "assistant" as const, blocks: [{ id: `${id}-b`, type: "text" as const, text: t }], createdAt: "2026-08-28T00:00:00.000Z" })
+
+  it("renders the compact note as a collapsed block ABOVE the user message, not inline below", () => {
+    const h = mountView([
+      u("m0", "早期问题"), a("m1", "早期回答"),
+      u("m2", "1 + 1 =?", [ctxNote(2, 2)]),
+    ])
+    const bar = h.container.querySelector('[data-testid="ctx-note"]')
+    expect(bar).not.toBeNull()
+    expect(bar!.textContent).toContain("已压缩为 2 段")
+    expect(bar!.textContent).toContain("保留最近 2 条")
+    // the summary lives inside the expandable block
+    expect(bar!.textContent).toContain("总摘要2")
+    // the note is not ALSO rendered inline below the message
+    expect(h.container.querySelectorAll('[data-testid="blk-note"]')).toHaveLength(0)
+    // the bar sits before its message bubble in document order
+    const bubble = h.container.querySelector('[data-testid="msg-user"]:last-of-type')!
+    expect(bar!.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    h.unmount()
+  })
+
+  it("lists the kept verbatim messages inside the expanded block", () => {
+    // kept counts the user's own message (server: active.length), so two
+    // preceding verbatim messages + this one = kept 3.
+    const h = mountView([
+      u("m0", "早期问题"), a("m1", "早期回答"),
+      u("m2", "1 + 1 =?", [ctxNote(2, 3)]),
+    ])
+    const kept = h.container.querySelector('[data-testid="ctx-note-kept"]')
+    expect(kept).not.toBeNull()
+    expect(kept!.textContent).toContain("早期问题")
+    expect(kept!.textContent).toContain("早期回答")
+    h.unmount()
+  })
+
+  it("shows the bar once per compaction: carried notes on later messages do not repeat it", () => {
+    const h = mountView([
+      u("m0", "早期问题"), a("m1", "早期回答"),
+      u("m2", "第一条", [ctxNote(2, 2)]), a("m3", "答一"),
+      u("m4", "第二条", [ctxNote(2, 4)]), a("m5", "答二"),
+    ])
+    // same segment count = no new compaction → the bar appears exactly once
+    expect(h.container.querySelectorAll('[data-testid="ctx-note"]')).toHaveLength(1)
+    h.unmount()
+  })
+
+  it("shows a new bar when a new compaction raises the segment count", () => {
+    const h = mountView([
+      u("m0", "早期问题"), a("m1", "早期回答"),
+      u("m2", "第一条", [ctxNote(2, 2)]), a("m3", "答一"),
+      u("m4", "第二条", [ctxNote(3, 4)]), a("m5", "答二"),
+    ])
+    expect(h.container.querySelectorAll('[data-testid="ctx-note"]')).toHaveLength(2)
+    const bars = [...h.container.querySelectorAll('[data-testid="ctx-note"]')]
+    expect(bars[1]!.textContent).toContain("已压缩为 3 段")
+    h.unmount()
+  })
+})
