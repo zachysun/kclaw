@@ -98,6 +98,15 @@ export interface AgentDeps {
    * "user_message_failed", and runAgent resolves with stopReason "error".
    */
   onUserMessage?(message: Message): Message
+  /**
+   * Steering drain: polled at every iteration boundary (after a tool batch
+   * completes, before the next llm.stream). Returns the messages to inject
+   * this round (empty array when none); the loop appends each to history
+   * (`all`), persists via onMessage, and announces created → completed →
+   * steered. A throw terminates the run: run.failed "steering_failed",
+   * runAgent resolves stopReason "error" (same semantics as onUserMessage).
+   */
+  steering?: () => Message[]
   onEvent(e: AgentEvent): void
   onMessage(m: Message): void
 }
@@ -441,6 +450,30 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
 
     if (stopReason === "tool_use" && entries.length > 0) {
       await runToolTurn(entries, { input, deps, emit, ctx, all })
+      // Steering drain（spec §5.1）：工具批次后、下一次 llm.stream 前。取到的消息按序
+      // 注入：created → persist(onMessage) → completed → steered。抛错按 onUserMessage
+      // 同语义终止 run（run.failed "steering_failed"，resolve stopReason "error"）。
+      if (deps.steering !== undefined) {
+        let steerMsgs: Message[]
+        try {
+          steerMsgs = deps.steering()
+        } catch (err) {
+          emit(makeEvent("run.failed", { error: { code: "steering_failed", message: errorMessage(err) } }, ctx))
+          return { stopReason: "error", totalUsage, messages: all }
+        }
+        for (const m of steerMsgs) {
+          emit(makeEvent("message.created", { message: m }, ctx))
+          try {
+            deps.onMessage(m)
+          } catch (err) {
+            emit(makeEvent("run.failed", { error: { code: "steering_failed", message: errorMessage(err) } }, ctx))
+            return { stopReason: "error", totalUsage, messages: all }
+          }
+          emit(makeEvent("message.completed", { message: m }, ctx))
+          emit(makeEvent("message.steered", { messageId: m.id }, ctx))
+          all.push(m)
+        }
+      }
       continue
     }
 
