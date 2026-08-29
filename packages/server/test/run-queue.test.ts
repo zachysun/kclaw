@@ -8,10 +8,11 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SessionStore, defaultConfig, resolvePaths } from "@kclaw/core"
-import type { LlmStreamEvent, RunOutcome, SessionMeta } from "@kclaw/core"
+import type { LlmClient, LlmStreamEvent, RunOutcome, SessionMeta, ToolExecutor } from "@kclaw/core"
 import { RunManager } from "../src/run.js"
 import { EventBus } from "../src/bus.js"
 import { endTurnLlm } from "./helpers/scripted-llm.js"
+import { gateLlm, gateTool, makeGate } from "./helpers/gate.js"
 
 let home: string
 let sessions: SessionStore
@@ -34,6 +35,16 @@ const eventsOf = (bus: EventBus, sessionId: string): string[] => {
   bus.subscribe(sessionId, { send: (d: string) => { const e = JSON.parse(d); if (e.sessionId === sessionId) out.push(e.type) } })
   return out
 }
+
+/** 基于 beforeEach 的装配重建 RunManager，仅覆盖 llm/tools（steer 相关用例统一用它）。 */
+const managerWith = (over: { llm?: LlmClient; tools?: Map<string, ToolExecutor> }): RunManager =>
+  new RunManager({
+    config: structuredClone(defaultConfig), paths: resolvePaths(home), sessions,
+    memory: { search: async () => [] } as never, bus,
+    llm: over.llm ?? endTurnLlm("ok"),
+    ...(over.tools !== undefined ? { tools: over.tools } : {}),
+    workspace: "/w",
+  })
 
 describe("submit / driver", () => {
   it("idle session runs immediately: queued=false, no message.queued, standard wire order", async () => {
@@ -194,5 +205,106 @@ describe("submit / driver", () => {
       process.off("unhandledRejection", onRejection)
       errorSpy.mockRestore()
     }
+  })
+})
+
+describe("steer", () => {
+  it("injects at the iteration boundary with created+steered and the same id", async () => {
+    const gate = makeGate()
+    const mgr = managerWith({ llm: gateLlm(gate, true), tools: new Map([["gate", gateTool(gate)]]) })
+    const meta = sessions.create("t", undefined, "/w")
+    const run = mgr.submit(meta.id, { userText: "start", trigger: "user" })
+    await gate.toolEntered
+    const s = mgr.submit(meta.id, { userText: "转向：改用方案 B", trigger: "user", disposition: "steer" })
+    expect(s.queued).toBe(true)
+    expect(s.disposition).toBe("steer")
+    gate.releaseTool()
+    gate.releaseLlm()
+    expect((await run.outcome).stopReason).toBe("end_turn")
+    const lines = readFileSync(join(home, "sessions", meta.id, "messages.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l))
+    const injected = lines.find((m: { id: string }) => m.id === s.messageId)
+    expect(injected.blocks[0].text).toBe("转向：改用方案 B")
+  })
+
+  it("residual steer demotes to wait at run end (original order, executes after)", async () => {
+    const gate = makeGate()
+    const mgr = managerWith({ llm: gateLlm(gate, false), tools: new Map([["gate", gateTool(gate)]]) })
+    const meta = sessions.create("t", undefined, "/w")
+    const run = mgr.submit(meta.id, { userText: "start", trigger: "user" })
+    await gate.toolEntered
+    const s1 = mgr.submit(meta.id, { userText: "s1", trigger: "user", disposition: "steer" })
+    const s2 = mgr.submit(meta.id, { userText: "s2", trigger: "user", disposition: "steer" })
+    // run 在取走缓冲区之前结束：abort → 残余降级 wait、按原顺序并入队尾（spec §3.4）
+    mgr.cancel(meta.id)
+    gate.releaseTool()
+    await run.outcome
+    await s1.outcome
+    await s2.outcome
+    const lines = readFileSync(join(home, "sessions", meta.id, "messages.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l))
+    const texts = lines.filter((m: { role: string }) => m.role === "user").flatMap((m: { blocks: Array<{ type: string; text?: string }> }) => m.blocks.filter((b) => b.type === "text").map((b) => b.text!))
+    expect(texts).toEqual(["start", "s1", "s2"])
+  })
+})
+
+describe("queueCancel", () => {
+  it("cancels a wait entry before dequeue (no JSONL residue, event broadcast)", async () => {
+    const meta = sessions.create("t", undefined, "/w")
+    const first = manager.submit(meta.id, { userText: "first", trigger: "user" })
+    const q = manager.submit(meta.id, { userText: "q", trigger: "user", disposition: "wait" })
+    const seen: unknown[] = []
+    bus.subscribe(meta.id, { send: (d: string) => seen.push(JSON.parse(d)) })
+    expect(manager.queueCancel(meta.id, q.messageId)).toEqual({ ok: true, cancelled: [q.messageId] })
+    await first.outcome
+    expect(sessions.meta(meta.id)!.queue ?? []).toHaveLength(0)
+    expect(seen.some((e) => (e as { type: string }).type === "message.queue_cancelled")).toBe(true)
+  })
+
+  it("cancels a steer entry before injection; after injection answers injected", async () => {
+    const gate = makeGate()
+    let mgr = managerWith({ llm: gateLlm(gate, true), tools: new Map([["gate", gateTool(gate)]]) })
+    const meta = sessions.create("t", undefined, "/w")
+    const run = mgr.submit(meta.id, { userText: "start", trigger: "user" })
+    await gate.toolEntered
+    const s = mgr.submit(meta.id, { userText: "s", trigger: "user", disposition: "steer" })
+    expect(mgr.queueCancel(meta.id, s.messageId)).toEqual({ ok: true, cancelled: [s.messageId] })
+    gate.releaseTool()
+    gate.releaseLlm()
+    await run.outcome
+    const all = readFileSync(join(home, "sessions", meta.id, "messages.jsonl"), "utf8")
+    expect(all.includes(`"id":"${s.messageId}"`)).toBe(false) // 注入前撤回：不进 JSONL
+    // 已注入场景：前半段已耗尽脚本客户端的调用计数（第 3 次调用直接 end_turn、
+    // 不再有工具批次，边界 drain 无从发生），换一套新门闩让 run2 真正走一轮
+    // 工具批次，drain 才会取走 s2 并登记 #injectedIds（登记随实例，须同一 mgr 应答）。
+    const gate2 = makeGate()
+    mgr = managerWith({ llm: gateLlm(gate2, true), tools: new Map([["gate", gateTool(gate2)]]) })
+    const run2 = mgr.submit(meta.id, { userText: "start2", trigger: "user" })
+    await gate2.toolEntered
+    const s2 = mgr.submit(meta.id, { userText: "s2", trigger: "user", disposition: "steer" })
+    gate2.releaseTool()
+    gate2.releaseLlm()
+    await run2.outcome
+    expect(mgr.queueCancel(meta.id, s2.messageId)).toEqual({ ok: false, reason: "injected" })
+  })
+
+  it("cancel-all clears wait + pending steer, broadcasts all:true", async () => {
+    const gate = makeGate()
+    const mgr = managerWith({ llm: gateLlm(gate, false), tools: new Map([["gate", gateTool(gate)]]) })
+    const meta = sessions.create("t", undefined, "/w")
+    const run = mgr.submit(meta.id, { userText: "start", trigger: "user" })
+    await gate.toolEntered
+    const s = mgr.submit(meta.id, { userText: "s", trigger: "user", disposition: "steer" })
+    const w = mgr.submit(meta.id, { userText: "w", trigger: "user", disposition: "wait" })
+    const res = mgr.queueCancel(meta.id)
+    expect(res.ok).toBe(true)
+    if (res.ok) expect(res.cancelled).toEqual(expect.arrayContaining([s.messageId, w.messageId]))
+    mgr.cancel(meta.id)
+    gate.releaseTool()
+    await run.outcome
+    expect(sessions.meta(meta.id)!.queue ?? []).toHaveLength(0)
+  })
+
+  it("unknown id answers not_found", () => {
+    const meta = sessions.create("t", undefined, "/w")
+    expect(manager.queueCancel(meta.id, "msg_nope")).toEqual({ ok: false, reason: "not_found" })
   })
 })

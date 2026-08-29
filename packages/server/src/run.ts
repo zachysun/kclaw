@@ -422,6 +422,50 @@ export class RunManager {
   }
 
   /**
+   * 排队取消（spec §5.6）：wait 随时、steer 注入前；已注入的不删（机器不删历史）。
+   * 带 id：单条取消（先查可执行队列，再查 steer 缓冲；都不在且近期已注入 →
+   * injected，进了 JSONL 机器不删）；不带 id：清空全部 wait + 未注入 steer，
+   * 广播 message.queue_cancelled {all:true}。
+   */
+  queueCancel(sessionId: string, messageId?: string): { ok: true; cancelled: string[] } | { ok: false; reason: "not_found" | "injected" } {
+    const cancelIds: string[] = []
+    if (messageId !== undefined) {
+      const queue = this.#queues.get(sessionId) ?? []
+      const qIdx = queue.findIndex((n) => n.entry.messageId === messageId)
+      if (qIdx >= 0) {
+        queue.splice(qIdx, 1)
+        this.#queues.set(sessionId, queue)
+        cancelIds.push(messageId)
+      } else {
+        const buf = this.#steerBuf.get(sessionId) ?? []
+        const bIdx = buf.findIndex((e) => e.messageId === messageId)
+        if (bIdx >= 0) {
+          buf.splice(bIdx, 1)
+          this.#steerBuf.set(sessionId, buf)
+          cancelIds.push(messageId)
+        }
+      }
+      if (cancelIds.length === 0) {
+        return this.#injectedIds.has(messageId)
+          ? { ok: false, reason: "injected" }
+          : { ok: false, reason: "not_found" }
+      }
+    } else {
+      for (const n of this.#queues.get(sessionId) ?? []) cancelIds.push(n.entry.messageId)
+      this.#queues.delete(sessionId)
+      for (const e of this.#steerBuf.get(sessionId) ?? []) cancelIds.push(e.messageId)
+      this.#steerBuf.delete(sessionId)
+    }
+    this.#persistQueue(sessionId)
+    this.#deps.bus.emit(makeEvent(
+      "message.queue_cancelled",
+      messageId !== undefined ? { messageId } : { all: true },
+      { sessionId },
+    ))
+    return { ok: true, cancelled: cancelIds }
+  }
+
+  /**
    * Manual compaction (spec 6.5): runs #compactV2 with a focus, ignoring
    * the trigger line. Refused while the session has an active or queued
    * run — compaction reads full history and writes meta, which a
@@ -810,12 +854,38 @@ export class RunManager {
   }
 
   /**
-   * Steering drain（spec §5.1）：活动 run 在迭代边界取走 steer 缓冲区里的
-   * 全部消息注入对话。Task 5 实装（从 #steerBuf 构造 Message 并清空）；
-   * 本任务恒为空数组——挂上钩子即可钉住接线与错误语义。
+   * Steering drain（spec §5.1/§5.6）：活动 run 在迭代边界取走 steer 缓冲区里的
+   * 全部消息注入对话。同步取走（先到先得，与 queueCancel 在同一线程内天然
+   * 互斥），从 meta.queue 移除对应条目并登记 #injectedIds；返回按发送顺序
+   * 构建的 user Message（id=entry.messageId；blocks = text + attachments +
+   * note(job provenance)）。
    */
-  #drainSteer(_sessionId: string): Message[] {
-    return []
+  #drainSteer(sessionId: string): Message[] {
+    const buf = this.#steerBuf.get(sessionId)
+    if (buf === undefined || buf.length === 0) return []
+    this.#steerBuf.set(sessionId, [])
+    this.#persistQueue(sessionId) // 从 meta.queue 移除这些条目
+    for (const e of buf) this.#markInjected(e.messageId)
+    return buf.map((e) => {
+      const m = newMessage(sessionId, "user", [
+        { id: newBlockId(), type: "text", text: e.text },
+        ...(e.attachments ? mountAttachments(e.attachments, this.#deps.paths.attachmentsDir, sessionId) : []),
+        ...(e.note !== undefined ? [{ id: newBlockId(), type: "note", kind: "job", text: e.note } satisfies NoteBlock] : []),
+      ])
+      m.id = e.messageId
+      return m
+    })
+  }
+
+  /** 已注入 id 的近期记录（有界），区分 injected 与 not_found（spec §5.6）。 */
+  readonly #injectedIds = new Set<string>()
+
+  #markInjected(id: string): void {
+    this.#injectedIds.add(id)
+    if (this.#injectedIds.size > RunManager.QUEUE_LIMIT * 2) {
+      const oldest = this.#injectedIds.values().next().value
+      if (oldest !== undefined) this.#injectedIds.delete(oldest)
+    }
   }
 
   /**
