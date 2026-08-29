@@ -29,6 +29,7 @@ import {
   estimateContextTokens,
   makeEvent,
   newBlockId,
+  newId,
   newMessage,
   realpathWithin,
   renderSegment,
@@ -47,6 +48,7 @@ import type {
   Message,
   NoteBlock,
   PermissionGate,
+  QueueEntry,
   RunOutcome,
   SessionSearchFn,
   SessionStore,
@@ -202,6 +204,24 @@ export interface EnqueueInput {
    * note block right after the text block on the user message.
    */
   note?: string
+  /** 单次显式处置（spec §6 层级最高）；缺省 = 会话覆盖 ?? 配置默认；job 触发强制 wait。 */
+  disposition?: "steer" | "wait" | "interrupt"
+  /** 内部：出队执行时传入的预分配消息 id（ws 层不传）。 */
+  messageId?: string
+}
+
+/** submit 的同步决策结果：消息身份、是否入队与实际生效处置（降级后）。 */
+export interface SubmitResult {
+  messageId: string
+  /** false = 空闲直发（现状行为：不广播 message.queued）。 */
+  queued: boolean
+  /** 实际生效处置：steer 无活动 run 时降级为 wait（spec §4.2）。 */
+  disposition: "steer" | "wait" | "interrupt"
+  /**
+   * wait/interrupt：本条 run 的 outcome；steer：随当前 run settle
+   * （参考值，ws 层 fire-and-forget，spec §3.3）。
+   */
+  outcome: Promise<RunOutcome>
 }
 
 /** A reference to an uploaded attachment file (mounted as an attachment block). */
@@ -214,6 +234,34 @@ export interface AttachmentRef {
 
 /** withRetry's per-attempt notification shape (core provider/retry.ts onRetry). */
 export type LlmRetrySink = (info: { attempt: number; error: unknown }) => void
+
+/**
+ * One in-memory queue node: the persisted entry plus its settle plumbing.
+ * `entry` is what lands in meta.queue (spec §3.1)；outcome 在本条 run 结束时
+ * 以其 RunOutcome settle（wait/interrupt 为本条 run，steer 不建 node）。
+ * `model` 是仅存于内存的入队时 per-run 覆盖（QueueEntry 不含 model，出队时
+ * 在此还原——现状行为：job 的配置模型与调用方强制模型不因排队而丢失；
+ * steer 降级路径无此附加，因旧实现本无 steer，无从保留）。
+ */
+interface QueueNode {
+  entry: QueueEntry
+  model?: string
+  resolve(o: RunOutcome): void
+  reject(e: unknown): void
+  outcome: Promise<RunOutcome>
+}
+
+/** Build a queue node: the entry plus a deferred outcome promise. */
+function makeNode(entry: QueueEntry): QueueNode {
+  let resolve!: QueueNode["resolve"]
+  let reject!: QueueNode["reject"]
+  const outcome = new Promise<RunOutcome>((res, rej) => { resolve = res; reject = rej })
+  // 哑 handler：标记"拒绝已处理"，防止无人观察的 node（ws fire-and-forget 的
+  // steer 降级条目）在 run 抛错时演成 unhandled rejection；真实消费者
+  // （wait 条目的 enqueue 调用方）仍通过自己的 .catch/await 收到原拒绝。
+  outcome.catch(() => undefined)
+  return { entry, resolve, reject, outcome }
+}
 
 /**
  * Mirror of the loop's raceConfirmation (core agent/loop.ts): a human
@@ -250,13 +298,20 @@ function raceResolution(
 }
 
 export class RunManager {
+  /** 每会话排队 + steer 缓冲合计上限（spec §5.5）；先写死，不做配置项。 */
+  static readonly QUEUE_LIMIT = 10
+
   readonly #deps: RunManagerDeps
-  /** Tail of each session's run chain: same session serializes, sessions run concurrently. */
-  readonly #chains = new Map<string, Promise<void>>()
+  /** 每会话可执行条目（wait/interrupt），数组顺序即执行顺序（spec §3.2）。 */
+  readonly #queues = new Map<string, QueueNode[]>()
+  /** steer 缓冲（spec §3.4）：活动 run 在迭代边界取走（Task 5）；settle 后残余降级入队尾。 */
+  readonly #steerBuf = new Map<string, QueueEntry[]>()
+  /** 每会话驱动循环（spec §5.4）；存在即该会话的队列由驱动器托管。 */
+  readonly #drivers = new Map<string, Promise<void>>()
   /** Abort controller of the session's ACTIVE run; absent while idle or queued. */
   readonly #active = new Map<string, AbortController>()
-  /** Sessions whose QUEUED run was cancelled before it could start. */
-  readonly #cancelQueued = new Set<string>()
+  /** 活动 run 的 outcome：steer 的参考 outcome / 降级时序。 */
+  readonly #activeOutcomes = new Map<string, Promise<RunOutcome>>()
   /** Confirmation gateway shared by every run; injected or internally constructed. */
   readonly #broker: ConfirmationBroker
 
@@ -271,45 +326,99 @@ export class RunManager {
   }
 
   /**
-   * Queue one run on the session. The returned promise settles with the
-   * runAgent outcome once every earlier enqueue on the SAME session has
-   * settled; enqueues on different sessions proceed concurrently.
+   * 同步决策一条消息的去向（spec §4.1）：空闲直发；steer 且有活动 run →
+   * 入缓冲区；其余（wait/interrupt，以及无活动 run 的 steer 降级 wait）入队，
+   * interrupt 伴随对活动 run 的 abort。立即返回消息身份与实际生效处置。
    */
-  enqueue(sessionId: string, input: EnqueueInput): Promise<RunOutcome> {
-    const prev = this.#chains.get(sessionId) ?? Promise.resolve()
-    const run = prev.then(() => this.#execute(sessionId, input))
-    // The chain tail swallows failures: one failed run must not poison the
-    // session's queue for the next enqueue.
-    const tail = run.then(() => undefined, () => undefined)
-    this.#chains.set(sessionId, tail)
-    // Drop the chain entry the moment the run itself settles — not one
-    // tail-hop later: a cancel() issued from that run's awaiter continuation
-    // must already see "nothing queued", and the tail-attached cleanup ran one
-    // microtask behind it, leaving #chains.has stale-true after the last run.
-    const dropChain = () => {
-      if (this.#chains.get(sessionId) === tail) this.#chains.delete(sessionId)
+  submit(sessionId: string, input: EnqueueInput): SubmitResult {
+    const { config, sessions, bus } = this.#deps
+    const meta = sessions.meta(sessionId)
+    if (meta === undefined) throw new Error("session not found")
+    // 处置解析链（spec §6）：显式 > 会话覆盖 > 配置默认；job 触发固定 wait（不读默认）
+    const disposition = input.trigger === "job"
+      ? "wait"
+      : input.disposition ?? meta.dispositionOverride ?? config.sessions.defaultDisposition ?? "steer"
+    const queue = this.#queues.get(sessionId) ?? []
+    const steer = this.#steerBuf.get(sessionId) ?? []
+    if (queue.length + steer.length >= RunManager.QUEUE_LIMIT) {
+      throw new Error(`队列已满（${RunManager.QUEUE_LIMIT} 条）`)
     }
-    void run.then(dropChain, dropChain)
-    return run
+    const entry: QueueEntry = {
+      messageId: input.messageId ?? newId("msg"),
+      disposition,
+      text: input.userText,
+      trigger: input.trigger,
+      ...(input.attachments !== undefined && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
+      ...(input.note !== undefined ? { note: input.note } : {}),
+      enqueuedAt: new Date().toISOString(),
+    }
+    // 空闲 = 无活动 run、无可执行条目、无驱动器 → 直发开跑（spec §4.1：不广播 message.queued）
+    const idle = !this.#active.has(sessionId) && queue.length === 0 && !this.#drivers.has(sessionId)
+    if (idle) {
+      const node = makeNode(entry)
+      if (input.model !== undefined) node.model = input.model // 内存还原用（现状行为）
+      this.#queues.set(sessionId, [node]) // 直发条目也由驱动器托管（settle 后的 steer 降级才有人接）
+      this.#drive(sessionId)
+      return { messageId: entry.messageId, queued: false, disposition, outcome: node.outcome }
+    }
+    if (disposition === "steer" && this.#active.has(sessionId)) {
+      steer.push(entry)
+      this.#steerBuf.set(sessionId, steer)
+      this.#persistQueue(sessionId)
+      bus.emit(makeEvent("message.queued", { messageId: entry.messageId, disposition: "steer" }, { sessionId }))
+      // outcome：随当前 run settle（参考值；ws 层 fire-and-forget，spec §3.3）
+      const active = this.#activeOutcomes.get(sessionId)
+        ?? Promise.resolve({ stopReason: "aborted", totalUsage: { inputTokens: 0, outputTokens: 0 }, messages: [] })
+      return { messageId: entry.messageId, queued: true, disposition: "steer", outcome: active }
+    }
+    // steer 但无活动 run（队列在转）：降级 wait 入队并报 wait（spec §4.2）
+    const effective = disposition === "steer" ? ("wait" as const) : disposition
+    const atHead = effective === "interrupt"
+    const node = makeNode({ ...entry, disposition: effective })
+    if (input.model !== undefined) node.model = input.model // 内存还原用（现状行为）
+    if (atHead) {
+      queue.unshift(node)
+      if (this.#active.has(sessionId)) this.#active.get(sessionId)!.abort() // spec §5.3：中断伴随 abort
+    } else {
+      queue.push(node)
+    }
+    this.#queues.set(sessionId, queue)
+    this.#persistQueue(sessionId)
+    bus.emit(makeEvent("message.queued", { messageId: node.entry.messageId, disposition: effective, position: atHead ? 0 : queue.length - 1 }, { sessionId }))
+    this.#drive(sessionId)
+    return { messageId: node.entry.messageId, queued: true, disposition: effective, outcome: node.outcome }
   }
 
   /**
-   * Abort the session's active run (it stops at the next checkpoint with
-   * stopReason "aborted"). True — and a cancelled-at-dequeue mark — when the
-   * session has no ACTIVE run but a QUEUED one: that run aborts the moment it
-   * leaves the queue, before any work. False when the session has neither.
+   * Queue one run on the session. 兼容包装 = submit().outcome（spec §3.3）：
+   * Promise 仍是 ws 层 fire-and-forget 的返回值，但不再是排队载体——
+   * wait/interrupt 随本条 run settle；steer 随当前 run settle（参考值）。
+   */
+  enqueue(sessionId: string, input: EnqueueInput): Promise<RunOutcome> {
+    return this.submit(sessionId, input).outcome
+  }
+
+  /**
+   * 内存队列镜像（spec §3.2）：可执行条目 + steer 缓冲，数组顺序即执行
+   * 顺序。与 meta.queue 同构，供队列查询/恢复使用。
+   */
+  queue(sessionId: string): QueueEntry[] {
+    return [
+      ...(this.#queues.get(sessionId) ?? []).map((n) => n.entry),
+      ...(this.#steerBuf.get(sessionId) ?? []),
+    ]
+  }
+
+  /**
+   * 仅中止会话的活动 run（语义收窄，spec §5.4/§9）：它停在下一个检查点并
+   * 以 stopReason "aborted" 结束。排队消息不受影响——排队取消一律走
+   * queue.cancel（Task 5）。无活动 run 时返回 false。
    */
   cancel(sessionId: string): boolean {
     const controller = this.#active.get(sessionId)
-    if (controller !== undefined) {
-      controller.abort()
-      return true
-    }
-    if (this.#chains.has(sessionId)) {
-      this.#cancelQueued.add(sessionId)
-      return true
-    }
-    return false
+    if (controller === undefined) return false
+    controller.abort()
+    return true
   }
 
   /**
@@ -319,7 +428,12 @@ export class RunManager {
    * concurrent run would corrupt.
    */
   async compactSession(sessionId: string, focus?: string): Promise<{ message: string }> {
-    if (this.#active.has(sessionId) || this.#chains.has(sessionId)) throw new Error("会话正在运行")
+    // 机械替换旧 #chains 检查（忙即拒，语义不变）；文案细分属 Task 6（spec §5.7）。
+    if (
+      this.#active.has(sessionId) ||
+      (this.#queues.get(sessionId)?.length ?? 0) > 0 ||
+      (this.#steerBuf.get(sessionId)?.length ?? 0) > 0
+    ) throw new Error("会话正在运行")
     const { config, sessions, llm } = this.#deps
     const meta = sessions.meta(sessionId)
     if (meta === undefined) throw new Error("session not found")
@@ -334,13 +448,83 @@ export class RunManager {
     }
   }
 
-  async #execute(sessionId: string, input: EnqueueInput): Promise<RunOutcome> {
-    // Register the controller BEFORE any await: the window between dequeue
-    // and the old registration point (after memory search / history read)
-    // made cancel answer "no active run" for a run that then ran to completion.
+  /**
+   * 每会话驱动循环（spec §5.4）：run settle → 残余 steer 降级并入队尾 →
+   * 队列非空？出队执行 → 循环。已在转则幂等返回。
+   */
+  #drive(sessionId: string): void {
+    if (this.#drivers.has(sessionId)) return
+    const loop = (async (): Promise<void> => {
+      for (;;) {
+        this.#demoteSteer(sessionId) // settle 后（以及驱动器启动时）先降级残余 steer
+        const queue = this.#queues.get(sessionId)
+        if (queue === undefined || queue.length === 0) {
+          this.#queues.delete(sessionId)
+          this.#drivers.delete(sessionId)
+          return
+        }
+        const node = queue.shift()!
+        this.#persistQueue(sessionId) // 出队即从 meta.queue 删除（原子重写）
+        try {
+          node.resolve(await this.#executeEntry(sessionId, node))
+        } catch (err) {
+          node.reject(err)
+        }
+      }
+    })()
+    this.#drivers.set(sessionId, loop)
+  }
+
+  /** 残余 steer → wait 并入队尾（spec §3.4/§5.4），原顺序保持。 */
+  #demoteSteer(sessionId: string): void {
+    const buf = this.#steerBuf.get(sessionId)
+    if (buf === undefined || buf.length === 0) return
+    this.#steerBuf.set(sessionId, [])
+    const queue = this.#queues.get(sessionId) ?? []
+    for (const e of buf) queue.push(makeNode({ ...e, disposition: "wait" }))
+    this.#queues.set(sessionId, queue)
+    this.#persistQueue(sessionId)
+  }
+
+  /** meta.queue = 可执行条目 + steer 缓冲，数组顺序即执行顺序（spec §3.2）；空则删除字段。 */
+  #persistQueue(sessionId: string): void {
+    const entries = [
+      ...(this.#queues.get(sessionId) ?? []).map((n) => n.entry),
+      ...(this.#steerBuf.get(sessionId) ?? []),
+    ]
+    this.#deps.sessions.updateMeta(sessionId, entries.length === 0 ? { queue: undefined } : { queue: entries })
+  }
+
+  /**
+   * 执行一条出队条目（spec §5.2）：登记活动 controller（在任何 await 之前，
+   * 消除旧实现的取消注册窗口）、记录活动 outcome 供 steer 参考，结束后清理。
+   * 入队时的 per-run model 覆盖从 node 还原（内存附加，见 QueueNode）。
+   */
+  async #executeEntry(sessionId: string, node: QueueNode): Promise<RunOutcome> {
     const controller = new AbortController()
     this.#active.set(sessionId, controller)
-    if (this.#cancelQueued.delete(sessionId)) controller.abort()
+    const entry = node.entry
+    const input: EnqueueInput = {
+      userText: entry.text,
+      trigger: entry.trigger,
+      ...(node.model !== undefined ? { model: node.model } : {}),
+      ...(entry.attachments !== undefined && entry.attachments.length > 0 ? { attachments: entry.attachments } : {}),
+      ...(entry.note !== undefined ? { note: entry.note } : {}),
+      messageId: entry.messageId,
+    }
+    const execution = this.#execute(sessionId, input, controller)
+    this.#activeOutcomes.set(sessionId, execution)
+    try {
+      return await execution
+    } finally {
+      if (this.#active.get(sessionId) === controller) this.#active.delete(sessionId)
+      this.#activeOutcomes.delete(sessionId)
+    }
+  }
+
+  async #execute(sessionId: string, input: EnqueueInput, controller: AbortController): Promise<RunOutcome> {
+    // controller 由 #executeEntry 在任何 await 之前创建并登记（spec §5.2）：
+    // 出队执行的取消窗口与活动清理都在那里，这里只消费它的 signal。
     const { config, paths, sessions, memory, bus, llm } = this.#deps
     const sessionMeta = sessions.meta(sessionId)
     const workspace = sessionMeta?.workdir ?? this.#deps.workspace
@@ -374,6 +558,7 @@ export class RunManager {
       { id: newBlockId(), type: "text", text: input.userText },
       ...mountAttachments(input.attachments ?? [], paths.attachmentsDir, sessionId),
     ])
+    if (input.messageId !== undefined) userMessage.id = input.messageId // 气泡原地升级（spec §3.1）
 
     const { tools, toolDefs } = createBuiltinTools({
       workspace,
@@ -521,85 +706,92 @@ export class RunManager {
       console.error("kclaw compaction failed:", err)
     }
 
-    try {
-      const outcome = await runAgent(
-        {
-          sessionId,
-          history: activeHistory,
-          system: this.#systemPrompt(paths.agentsMd),
-          userText: input.userText, // ignored by the loop when userMessage is set
-          trigger: input.trigger,
-          userMessage,
+    const outcome = await runAgent(
+      {
+        sessionId,
+        history: activeHistory,
+        system: this.#systemPrompt(paths.agentsMd),
+        userText: input.userText, // ignored by the loop when userMessage is set
+        trigger: input.trigger,
+        userMessage,
+      },
+      {
+        llm: runLlm,
+        model,
+        tools,
+        toolDefs,
+        permissions: gate,
+        resolveConfirmation,
+        confirmTimeoutMs,
+        signal: controller.signal,
+        llmAttempt: () => llmAttempt,
+        toolResultKeep: config.sessions.toolResultKeep ?? 8,
+        // steer 注入口（spec §5.1）：迭代边界取走缓冲区；Task 5 实装，本任务恒为空。
+        steering: () => this.#drainSteer(sessionId),
+        onUserMessage: (m) => {
+          // The notes become part of the message BEFORE it is
+          // persisted and completed. Persist first (events trail persisted
+          // state), then announce each note — the loop's message.completed
+          // follows, so the wire order stays
+          // created → note.emitted ×N → completed. runId is known by now
+          // (run.started is always a run's first event and precedes this
+          // hook); the sessionId-only fallback is defensive only.
+          m.blocks.push(...jobNote, ...compactNote, ...notes)
+          sessions.appendMessage(sessionId, m)
+          if (input.trigger !== "job") {
+            const firstText = m.blocks.find((b) => b.type === "text")?.text ?? ""
+            void scheduleAutoname(
+              { sessions, llm: runLlm, model, emit: busEmit },
+              sessionId, firstText,
+            )
+          }
+          const noteCtx = runId === undefined ? { sessionId } : { sessionId, runId }
+          for (const block of [...jobNote, ...compactNote, ...notes]) {
+            busEmit(makeEvent("note.emitted", { messageId: m.id, block }, noteCtx))
+          }
+          return m
         },
-        {
-          llm: runLlm,
-          model,
-          tools,
-          toolDefs,
-          permissions: gate,
-          resolveConfirmation,
-          confirmTimeoutMs,
-          signal: controller.signal,
-          llmAttempt: () => llmAttempt,
-          toolResultKeep: config.sessions.toolResultKeep ?? 8,
-          onUserMessage: (m) => {
-            // The notes become part of the message BEFORE it is
-            // persisted and completed. Persist first (events trail persisted
-            // state), then announce each note — the loop's message.completed
-            // follows, so the wire order stays
-            // created → note.emitted ×N → completed. runId is known by now
-            // (run.started is always a run's first event and precedes this
-            // hook); the sessionId-only fallback is defensive only.
-            m.blocks.push(...jobNote, ...compactNote, ...notes)
-            sessions.appendMessage(sessionId, m)
-            if (input.trigger !== "job") {
-              const firstText = m.blocks.find((b) => b.type === "text")?.text ?? ""
-              void scheduleAutoname(
-                { sessions, llm: runLlm, model, emit: busEmit },
-                sessionId, firstText,
-              )
-            }
-            const noteCtx = runId === undefined ? { sessionId } : { sessionId, runId }
-            for (const block of [...jobNote, ...compactNote, ...notes]) {
-              busEmit(makeEvent("note.emitted", { messageId: m.id, block }, noteCtx))
-            }
-            return m
-          },
-          onEvent: (e) => {
-            if (e.type === "run.started" && e.runId !== undefined) runId = e.runId
-            else if (e.type === "llm.completed" || e.type === "llm.failed") llmAttempt = 1
-            busEmit(e)
-          },
-          onMessage: (m) => sessions.appendMessage(m.sessionId, m),
+        onEvent: (e) => {
+          if (e.type === "run.started" && e.runId !== undefined) runId = e.runId
+          else if (e.type === "llm.completed" || e.type === "llm.failed") llmAttempt = 1
+          busEmit(e)
         },
-      )
-      // Auto memory extraction: fire-and-forget after a clean end_turn —
-      // never awaited, never affects the returned outcome; any failure
-      // inside #extractMemory lands in the .catch below as a log line.
-      if (outcome.stopReason === "end_turn" && config.memory.autoExtract === true) {
-        const extractModel = config.memory.extractModel || model
-        void this.#extractMemory(sessionId, outcome.messages, runLlm, extractModel)
-          .catch((err) => console.error("kclaw memory extraction failed:", err))
-      }
-      // Token usage ledger: a failing record must never affect the run.
-      if (this.#deps.usageStore !== undefined) {
-        try {
-          this.#deps.usageStore.record({
-            sessionId,
-            runId: runId ?? "",
-            model,
-            inputTokens: outcome.totalUsage.inputTokens,
-            outputTokens: outcome.totalUsage.outputTokens,
-            at: new Date().toISOString(),
-          })
-        } catch (err) {
-          console.error("kclaw usage record failed:", err)
-        }
-      }
-      return outcome
-    } finally {
-      if (this.#active.get(sessionId) === controller) this.#active.delete(sessionId)
+        onMessage: (m) => sessions.appendMessage(m.sessionId, m),
+      },
+    )
+    // Auto memory extraction: fire-and-forget after a clean end_turn —
+    // never awaited, never affects the returned outcome; any failure
+    // inside #extractMemory lands in the .catch below as a log line.
+    if (outcome.stopReason === "end_turn" && config.memory.autoExtract === true) {
+      const extractModel = config.memory.extractModel || model
+      void this.#extractMemory(sessionId, outcome.messages, runLlm, extractModel)
+        .catch((err) => console.error("kclaw memory extraction failed:", err))
     }
+    // Token usage ledger: a failing record must never affect the run.
+    if (this.#deps.usageStore !== undefined) {
+      try {
+        this.#deps.usageStore.record({
+          sessionId,
+          runId: runId ?? "",
+          model,
+          inputTokens: outcome.totalUsage.inputTokens,
+          outputTokens: outcome.totalUsage.outputTokens,
+          at: new Date().toISOString(),
+        })
+      } catch (err) {
+        console.error("kclaw usage record failed:", err)
+      }
+    }
+    return outcome
+  }
+
+  /**
+   * Steering drain（spec §5.1）：活动 run 在迭代边界取走 steer 缓冲区里的
+   * 全部消息注入对话。Task 5 实装（从 #steerBuf 构造 Message 并清空）；
+   * 本任务恒为空数组——挂上钩子即可钉住接线与错误语义。
+   */
+  #drainSteer(_sessionId: string): Message[] {
+    return []
   }
 
   /**

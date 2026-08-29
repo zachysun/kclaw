@@ -342,7 +342,8 @@ describe("RunManager.enqueue", () => {
     const session = env.sessions.create("串行会话")
 
     const first = manager.enqueue(session.id, { userText: "第一句", trigger: "user" })
-    const second = manager.enqueue(session.id, { userText: "第二句", trigger: "user" })
+    // 排队在新队列模型里是显式处置（默认 steer 进引导缓冲）：测串行化需显式 wait
+    const second = manager.enqueue(session.id, { userText: "第二句", trigger: "user", disposition: "wait" })
 
     // the first run reached its hang; the second has not started at all —
     // not even its user message was appended
@@ -643,21 +644,26 @@ describe("RunManager.enqueue", () => {
     expect(outcome.stopReason).toBe("aborted")
   })
 
-  it("cancel with nothing active but a queued run marks it cancelled-at-dequeue", async () => {
+  it("cancel only aborts the ACTIVE run; a queued run survives and still executes (narrowed semantics)", async () => {
+    // spec §9: run.cancel 不再连带取消排队消息（旧 #cancelQueued 行为删除）——
+    // 第一个 cancel 中止活动 run；排队的 run 照常出队执行到 end_turn。
     const { env, manager } = makeEnv(scriptClient([textTurn("one"), textTurn("two")]))
     const session = env.sessions.create("排队会话")
 
-    // run1 has not started yet at the first cancel (enqueue only chains a
-    // microtask), run2 waits behind run1: the first cancel kills run1, the
-    // second must MARK run2 (still queued) rather than answer false.
     const p1 = manager.enqueue(session.id, { userText: "one", trigger: "user" })
-    const p2 = manager.enqueue(session.id, { userText: "two", trigger: "user" })
-    expect(manager.cancel(session.id)).toBe(true) // run1 not started / active → cancelled
-    await p1
-    expect(manager.cancel(session.id)).toBe(true) // run2 still queued → marked
-    const o2 = await p2
-    expect(o2.stopReason).toBe("aborted")
-    expect(manager.cancel(session.id)).toBe(false) // nothing left
+    const p2 = manager.enqueue(session.id, { userText: "two", trigger: "user", disposition: "wait" })
+    expect(manager.cancel(session.id)).toBe(true) // run1 active → aborted
+    const o1 = await p1
+    expect(o1.stopReason).toBe("aborted")
+    const o2 = await p2 // 排队条目幸存，仍被执行
+    expect(o2.stopReason).toBe("end_turn")
+    expect(manager.cancel(session.id)).toBe(false) // 全部落定：无活动 run
+
+    // 排队消息确实执行了：run1 被中止（仅 user 落盘，中止不产 assistant 消息），
+    // two 的问答齐全 —— 排队条目幸存并完成
+    const msgs = env.sessions.readMessages(session.id)
+    expect(msgs.map((m) => m.role)).toEqual(["user", "user", "assistant"])
+    expect(msgs[1]!.blocks[0]).toMatchObject({ text: "two" })
   })
 
   it("surfaces provider retries as llm.failed {willRetry:true} events with run context", async () => {
@@ -938,7 +944,8 @@ describe("RunManager context compaction v2", () => {
     expect(received(socket).map((e) => e.type)).toEqual(["compaction.started"])
 
     // Seeing no reaction, Master types "b" while the compaction is running.
-    const bP = manager.enqueue(session.id, { userText: "b", trigger: "user" })
+    // 排队是显式处置：b 要测"排队后 re-compact"，须显式 wait（默认 steer 进引导缓冲）
+    const bP = manager.enqueue(session.id, { userText: "b", trigger: "user", disposition: "wait" })
     release()
     await aP
     await bP
