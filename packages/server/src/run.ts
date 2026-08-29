@@ -451,28 +451,52 @@ export class RunManager {
   /**
    * 每会话驱动循环（spec §5.4）：run settle → 残余 steer 降级并入队尾 →
    * 队列非空？出队执行 → 循环。已在转则幂等返回。
+   *
+   * 出队阶段的意外失败（#demoteSteer / #persistQueue 的 meta 写盘炸掉，如
+   * 会话被删、盘满）不允许重演两种死法：会话永久停转（僵尸驱动器让后续
+   * submit 全部幂等返回、队列无人消费），或循环 promise 裸拒绝（unhandled
+   * rejection）。处理：手头已出队的 node 以该错误落定（等待方看见失败而非
+   * 永久悬挂）；其余条目原地保留（meta.queue 同样未动，重启后由恢复兜底）；
+   * #drivers 同步删除——下一次 submit 重新起转（自愈）；错误日志一次。
    */
   #drive(sessionId: string): void {
     if (this.#drivers.has(sessionId)) return
+    let stopped = false // 循环在同步首拍内已退出（空队列返回 / 出队失败崩溃）
     const loop = (async (): Promise<void> => {
-      for (;;) {
-        this.#demoteSteer(sessionId) // settle 后（以及驱动器启动时）先降级残余 steer
-        const queue = this.#queues.get(sessionId)
-        if (queue === undefined || queue.length === 0) {
-          this.#queues.delete(sessionId)
-          this.#drivers.delete(sessionId)
-          return
+      try {
+        for (;;) {
+          let node: QueueNode | undefined
+          try {
+            this.#demoteSteer(sessionId) // settle 后（以及驱动器启动时）先降级残余 steer
+            const queue = this.#queues.get(sessionId)
+            if (queue === undefined || queue.length === 0) {
+              this.#queues.delete(sessionId)
+              this.#drivers.delete(sessionId)
+              return
+            }
+            node = queue.shift()!
+            this.#persistQueue(sessionId) // 出队即从 meta.queue 删除（原子重写）
+          } catch (err) {
+            node?.reject(err)
+            this.#drivers.delete(sessionId)
+            throw err
+          }
+          try {
+            node.resolve(await this.#executeEntry(sessionId, node))
+          } catch (err) {
+            node.reject(err)
+          }
         }
-        const node = queue.shift()!
-        this.#persistQueue(sessionId) // 出队即从 meta.queue 删除（原子重写）
-        try {
-          node.resolve(await this.#executeEntry(sessionId, node))
-        } catch (err) {
-          node.reject(err)
-        }
+      } finally {
+        stopped = true
       }
     })()
-    this.#drivers.set(sessionId, loop)
+    // 循环自身的意外错误只日志一次；循环 promise 绝不裸拒绝（unhandled rejection）。
+    void loop.catch((err) => {
+      console.error(`kclaw run queue driver (${sessionId}) crashed:`, err)
+    })
+    // 同步首拍即崩溃时循环已自行删除 #drivers：不得把死循环复登记成僵尸。
+    if (!stopped) this.#drivers.set(sessionId, loop)
   }
 
   /** 残余 steer → wait 并入队尾（spec §3.4/§5.4），原顺序保持。 */

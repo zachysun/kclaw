@@ -3,12 +3,12 @@
  * wait FIFO 与预分配消息 id、meta.queue 镜像、上限拒绝、enqueue 兼容、
  * cancel 语义收窄（仅中止活动 run）与 interrupt 插队不吞消息。
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { mkdtempSync, rmSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SessionStore, defaultConfig, resolvePaths } from "@kclaw/core"
-import type { LlmStreamEvent, RunOutcome } from "@kclaw/core"
+import type { LlmStreamEvent, RunOutcome, SessionMeta } from "@kclaw/core"
 import { RunManager } from "../src/run.js"
 import { EventBus } from "../src/bus.js"
 import { endTurnLlm } from "./helpers/scripted-llm.js"
@@ -149,5 +149,50 @@ describe("submit / driver", () => {
     const lines = readFileSync(join(home, "sessions", meta.id, "messages.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l))
     const texts = lines.filter((m: { role: string }) => m.role === "user").map((m: { blocks: Array<{ text?: string }> }) => m.blocks[0]!.text)
     expect(texts).toEqual(["first", "cutter", "waiter"]) // 不吞已排队消息，只插队
+  })
+
+  it("driver survives a dequeue-phase persist crash: node rejects, no zombie, no unhandled rejection", async () => {
+    // #drive 的出队阶段（#demoteSteer / 出队后的 #persistQueue）在 try 之外：
+    // meta.json 写盘炸掉（会话被删、盘满）时，不允许会话永久停转（僵尸驱动器）
+    // 也不允许循环 promise 裸拒绝——手头 node 以错误落定、残余条目原地保留、
+    // 下一次 submit 重新起转（自愈）。
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {}) // 崩溃日志静音
+    const rejections: unknown[] = []
+    const onRejection = (err: unknown): void => { rejections.push(err) }
+    process.on("unhandledRejection", onRejection)
+    const meta = sessions.create("t", undefined, "/w")
+    // 只在 w1 的出队持久化（shift 后 meta.queue 恰为 [w2]）这一次炸掉 updateMeta
+    const originalUpdate = sessions.updateMeta.bind(sessions)
+    sessions.updateMeta = (id: string, patch: Partial<SessionMeta>): SessionMeta => {
+      if (id === meta.id && patch.queue?.length === 1 && patch.queue[0]!.text === "w2") {
+        throw new Error("meta 写盘失败")
+      }
+      return originalUpdate(id, patch)
+    }
+
+    try {
+      const first = manager.submit(meta.id, { userText: "first", trigger: "user" })
+      const w1 = manager.submit(meta.id, { userText: "w1", trigger: "user", disposition: "wait" })
+      const w2 = manager.submit(meta.id, { userText: "w2", trigger: "user", disposition: "wait" })
+
+      // first 落定触发驱动器出队 w1 → 出队持久化炸掉：w1 的 outcome 以该错误拒绝
+      await expect(w1.outcome).rejects.toThrow("meta 写盘失败")
+      expect((await first.outcome).stopReason).toBe("end_turn")
+
+      // 崩溃后无僵尸：恢复 updateMeta，下一次 submit 重新起转并消费残余队列
+      sessions.updateMeta = originalUpdate
+      const w3 = manager.submit(meta.id, { userText: "w3", trigger: "user", disposition: "wait" })
+      expect((await w2.outcome).stopReason).toBe("end_turn") // 残余条目仍被执行
+      expect((await w3.outcome).stopReason).toBe("end_turn")
+      const lines = readFileSync(join(home, "sessions", meta.id, "messages.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l))
+      const texts = lines.filter((m: { role: string }) => m.role === "user").map((m: { blocks: Array<{ text?: string }> }) => m.blocks[0]!.text)
+      expect(texts).toEqual(["first", "w2", "w3"]) // w1 出队即失败，从未执行
+
+      await new Promise((r) => setTimeout(r, 50)) // 让任何未处理拒绝浮出
+      expect(rejections).toEqual([])
+    } finally {
+      process.off("unhandledRejection", onRejection)
+      errorSpy.mockRestore()
+    }
   })
 })
