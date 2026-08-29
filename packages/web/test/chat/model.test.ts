@@ -520,4 +520,45 @@ describe("queue reducer", () => {
     s = applyEvent(s, ev("run.failed", { error: { code: "x", message: "boom" } }))
     expect(s.queue).toHaveLength(1)
   })
+
+  it("message.queued with no pending local- bubble still records the entry (empty text)", () => {
+    // Replay/refresh edge: the event arrives with no optimistic bubble to adopt.
+    const s = applyEvent(base(), ev("message.queued", { messageId: "msg_r", disposition: "wait" }))
+    expect(s.queue).toEqual([{ messageId: "msg_r", disposition: "wait", state: "queued", text: "" }])
+  })
+
+  it("mergeQueue keeps a persisted bubble the reconnect pull already knows (executed while away)", () => {
+    // Offline window: message.queued(msg_x) arrived → the daemon dequeued msg_x,
+    // executed and persisted it → reconnect. mergeMessages pulls the persisted
+    // (non-pending) msg_x in; GET /queue no longer lists it. The bubble is in
+    // history now and must survive the queue resync.
+    let s = appendOptimisticUser(base(), "排队后断线")
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_x", disposition: "wait" }))
+    s = { ...s, messages: mergeMessages(s.messages, [wireMsg("msg_x", "排队后断线")]) }
+    expect(s.messages.some((m) => m.id === "msg_x" && !m.pending)).toBe(true)
+    s = mergeQueue(s, [])
+    expect(s.queue).toHaveLength(0)
+    expect(s.messages.some((m) => m.id === "msg_x")).toBe(true) // persisted bubble stays
+  })
+
+  it("mergeQueue drops a still-pending bubble whose entry left the server queue (cancel residue)", () => {
+    // The daemon cancelled the message while this view was away: GET /queue no
+    // longer lists it, the pull never persisted it → the pending bubble and the
+    // entry go without residue.
+    let s = appendOptimisticUser(base(), "被取消")
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_c", disposition: "wait" }))
+    s = mergeQueue(s, [])
+    expect(s.queue).toHaveLength(0)
+    expect(s.messages.some((m) => m.id === "msg_c")).toBe(false)
+  })
+
+  it("mergeQueue keeps a locally-known injected state for an entry the server still lists", () => {
+    let s = appendOptimisticUser(base(), "已注入")
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_i", disposition: "steer" }))
+    s = applyEvent(s, ev("message.steered", { messageId: "msg_i" }))
+    s = mergeQueue(s, [{ messageId: "msg_i", disposition: "steer", text: "已注入" }])
+    expect(s.queue[0]!.state).toBe("injected") // not reset to "queued" by the resync
+    // The bubble already exists → no duplicate appended.
+    expect(s.messages.filter((m) => m.id === "msg_i")).toHaveLength(1)
+  })
 })

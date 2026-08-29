@@ -261,8 +261,10 @@ export function mergeMessages(existing: RenderedMessage[], fresh: Message[]): Re
  * Reconnect merge for the send-message queue (GET /queue full resync): the
  * server's list is authoritative — it upserts the queue by messageId (a local
  * `injected` state is newer knowledge than the pull and is kept), entries it
- * no longer knows were cancelled or dequeued while this view was away.
- * Queued entries the local view has no bubble for (never entered the persisted
+ * no longer knows were cancelled or dequeued while this view was away. A
+ * dropped entry's bubble only goes while still pending (never persisted);
+ * a non-pending bubble is history the reconnect pull just carried in. Queued
+ * entries the local view has no bubble for (never entered the persisted
  * history) re-materialize as pending user bubbles at the end of the thread.
  */
 export function mergeQueue(
@@ -281,9 +283,14 @@ export function mergeQueue(
     state: prevById.get(e.messageId)?.state ?? "queued",
     text: e.text,
   }))
+  // Only STILL-PENDING bubbles go: they never entered the persisted history
+  // (cancel residue). A non-pending bubble with a dropped entry's id was
+  // dequeued, executed and persisted while this view was away — the reconnect
+  // message pull just carried it in, and nothing re-delivers it later, so it
+  // must survive the queue resync.
   const messages = droppedIds.size === 0
     ? state.messages
-    : state.messages.filter((m) => !droppedIds.has(m.id))
+    : state.messages.filter((m) => !(m.pending && droppedIds.has(m.id)))
   const known = new Set(messages.map((m) => m.id))
   const bubbles: RenderedMessage[] = queue
     .filter((e) => !known.has(e.messageId))
