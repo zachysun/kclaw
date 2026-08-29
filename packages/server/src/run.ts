@@ -856,17 +856,19 @@ export class RunManager {
   /**
    * Steering drain（spec §5.1/§5.6）：活动 run 在迭代边界取走 steer 缓冲区里的
    * 全部消息注入对话。同步取走（先到先得，与 queueCancel 在同一线程内天然
-   * 互斥），从 meta.queue 移除对应条目并登记 #injectedIds；返回按发送顺序
-   * 构建的 user Message（id=entry.messageId；blocks = text + attachments +
-   * note(job provenance)）。
+   * 互斥）；返回按发送顺序构建的 user Message（id=entry.messageId；
+   * blocks = text + attachments + note(job provenance)）。
+   *
+   * 先构建后变更（spec §5.6 不变量：登记 injected = 确已进 JSONL，机器不删）：
+   * mountAttachments 可失败（附件越界、steer 等待期间文件被删），故全部 Message
+   * 先在局部构建，全部成功后才清空缓冲、移除 meta.queue 并登记 #injectedIds——
+   * 任一构建失败即整体不动：条目留在缓冲区（可取消、可重试注入），异常抛给
+   * loop 走 run.failed "steering_failed"，同批其余消息不被连带丢掉。
    */
   #drainSteer(sessionId: string): Message[] {
     const buf = this.#steerBuf.get(sessionId)
     if (buf === undefined || buf.length === 0) return []
-    this.#steerBuf.set(sessionId, [])
-    this.#persistQueue(sessionId) // 从 meta.queue 移除这些条目
-    for (const e of buf) this.#markInjected(e.messageId)
-    return buf.map((e) => {
+    const msgs = buf.map((e) => {
       const m = newMessage(sessionId, "user", [
         { id: newBlockId(), type: "text", text: e.text },
         ...(e.attachments ? mountAttachments(e.attachments, this.#deps.paths.attachmentsDir, sessionId) : []),
@@ -875,6 +877,10 @@ export class RunManager {
       m.id = e.messageId
       return m
     })
+    this.#steerBuf.set(sessionId, [])
+    this.#persistQueue(sessionId) // 从 meta.queue 移除这些条目
+    for (const e of buf) this.#markInjected(e.messageId)
+    return msgs
   }
 
   /** 已注入 id 的近期记录（有界），区分 injected 与 not_found（spec §5.6）。 */

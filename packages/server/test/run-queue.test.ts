@@ -226,20 +226,77 @@ describe("steer", () => {
     expect(injected.blocks[0].text).toBe("转向：改用方案 B")
   })
 
-  it("residual steer demotes to wait at run end (original order, executes after)", async () => {
+  it("a failing steer mount fails the run (steering_failed) and keeps the rest of the buffer for demotion", async () => {
     const gate = makeGate()
-    const mgr = managerWith({ llm: gateLlm(gate, false), tools: new Map([["gate", gateTool(gate)]]) })
+    const mgr = managerWith({ llm: gateLlm(gate, true), tools: new Map([["gate", gateTool(gate)]]) })
     const meta = sessions.create("t", undefined, "/w")
+    const events: Array<{ type: string; payload: { error?: { code?: string } } }> = []
+    bus.subscribe(meta.id, { send: (d: string) => { const e = JSON.parse(d); if (e.sessionId === meta.id) events.push(e) } })
     const run = mgr.submit(meta.id, { userText: "start", trigger: "user" })
     await gate.toolEntered
+    // 附件在会话附件目录之外 → drain 构建 Message 时 mountAttachments 抛
+    const bad = mgr.submit(meta.id, {
+      userText: "坏附件", trigger: "user", disposition: "steer",
+      attachments: [{ path: "/etc/hosts", name: "hosts", size: 1, mimeType: "text/plain" }],
+    })
+    const good = mgr.submit(meta.id, { userText: "后到的 steer", trigger: "user", disposition: "steer" })
+    gate.releaseTool()
+    expect((await run.outcome).stopReason).toBe("error")
+    gate.releaseLlm() // good 降级执行的 final stream 等这扇门
+    // 先构建后变更（spec §5.6）：bad 构建失败 → 整批不动、不登记 injected；
+    // good 不被连带丢掉，随 #demoteSteer 降级仍被执行并进 JSONL
+    const settleGood = async (): Promise<void> => {
+      for (;;) {
+        const all = readFileSync(join(home, "sessions", meta.id, "messages.jsonl"), "utf8")
+        if (all.includes(`"id":"${good.messageId}"`)) return
+        await new Promise((r) => setTimeout(r, 10))
+      }
+    }
+    await settleGood()
+    await new Promise((r) => setTimeout(r, 20)) // 等 good 的 run 收尾，避免 afterEach 竞争
+    expect(events.some((e) => e.type === "run.failed" && e.payload.error?.code === "steering_failed")).toBe(true)
+    expect(events.some((e) => e.type === "message.steered")).toBe(false)
+    // 未被登记 injected（旧实现会谎报 injected）
+    expect(mgr.queueCancel(meta.id, bad.messageId)).toEqual({ ok: false, reason: "not_found" })
+    const all = readFileSync(join(home, "sessions", meta.id, "messages.jsonl"), "utf8")
+    expect(all.includes(`"id":"${bad.messageId}"`)).toBe(false) // bad 从未注入
+  })
+
+  it("steer buffered across an abort demotes via #demoteSteer (original order, executes after, no steered events)", async () => {
+    const gate = makeGate()
+    const mgr = managerWith({ llm: gateLlm(gate, true), tools: new Map([["gate", gateTool(gate)]]) })
+    const meta = sessions.create("t", undefined, "/w")
+    const events: Array<{ type: string; payload: { messageId?: string } }> = []
+    let llmStarts = 0
+    let secondStart!: () => void
+    const secondStarted = new Promise<void>((r) => { secondStart = r })
+    bus.subscribe(meta.id, { send: (d: string) => {
+      const e = JSON.parse(d)
+      if (e.sessionId !== meta.id) return
+      events.push(e)
+      if (e.type === "llm.started" && ++llmStarts === 2) secondStart()
+    } })
+    const run = mgr.submit(meta.id, { userText: "start", trigger: "user" })
+    await gate.toolEntered
+    gate.releaseTool() // 边界 drain 空跑（此刻缓冲为空），final stream 停在 releaseLlm 门上
+    await secondStarted // llm.started #2 与 stream 挂门之间无 await：此后提交必落在门后
     const s1 = mgr.submit(meta.id, { userText: "s1", trigger: "user", disposition: "steer" })
     const s2 = mgr.submit(meta.id, { userText: "s2", trigger: "user", disposition: "steer" })
-    // run 在取走缓冲区之前结束：abort → 残余降级 wait、按原顺序并入队尾（spec §3.4）
+    // run 在 abort 处结束、从未取走缓冲：结算后 #demoteSteer 是 s1/s2 的唯一执行
+    // 通道——按原顺序降级并入队尾执行（spec §3.4），而非边界注入（无 steered 事件）
     mgr.cancel(meta.id)
-    gate.releaseTool()
-    await run.outcome
+    gate.releaseLlm() // 丢弃的 call-2 生成器与降级 run 的流都等这扇门
+    expect((await run.outcome).stopReason).toBe("aborted")
     await s1.outcome
     await s2.outcome
+    const settle = async (): Promise<void> => {
+      for (;;) {
+        if ((sessions.meta(meta.id)!.queue ?? []).length === 0) return
+        await new Promise((r) => setTimeout(r, 10))
+      }
+    }
+    await settle()
+    expect(events.some((e) => e.type === "message.steered" && (e.payload.messageId === s1.messageId || e.payload.messageId === s2.messageId))).toBe(false)
     const lines = readFileSync(join(home, "sessions", meta.id, "messages.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l))
     const texts = lines.filter((m: { role: string }) => m.role === "user").flatMap((m: { blocks: Array<{ type: string; text?: string }> }) => m.blocks.filter((b) => b.type === "text").map((b) => b.text!))
     expect(texts).toEqual(["start", "s1", "s2"])
