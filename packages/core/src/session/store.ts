@@ -6,6 +6,20 @@ import type { CompactionRecord, CompactionState } from "./compaction.js"
 import { writeFileAtomic } from "../storage/atomic.js"
 import { appendJsonlLine, readJsonl } from "../storage/jsonl.js"
 
+/** 排队条目的附件形状（与 server 的 AttachmentRef 结构一致，结构类型互通）。 */
+export interface QueueAttachment { path: string; name: string; size: number; mimeType: string }
+
+/** One persisted queue entry in SessionMeta.queue (spec §3.1)。 */
+export interface QueueEntry {
+  messageId: string                       // 分配即固定；出队执行时用同一 id 构建 Message
+  disposition: "steer" | "wait" | "interrupt"
+  text: string
+  trigger: "user" | "job"                 // 还原触发源（job 的 note/触发语义在出队执行时需要）
+  attachments?: QueueAttachment[]
+  note?: string                           // job 来源说明
+  enqueuedAt: string                      // ISO-8601
+}
+
 /** Per-session metadata persisted at <sessionsDir>/<id>/meta.json. */
 export interface SessionMeta {
   id: string
@@ -26,6 +40,10 @@ export interface SessionMeta {
   compactedUpto?: string
   /** v2 layered compaction state (spec 5.1); absent on fresh/legacy sessions. */
   compaction?: CompactionState
+  /** 排队未执行的消息（message-queue spec §3.2）：meta.json 原子重写，顺序即执行顺序；不进 JSONL。 */
+  queue?: QueueEntry[]
+  /** 会话级处置覆盖（/steer /wait、Web 三选；spec §6）：优先于 sessions.defaultDisposition。 */
+  dispositionOverride?: "steer" | "wait" | "interrupt"
 }
 
 const META_FILE = "meta.json"

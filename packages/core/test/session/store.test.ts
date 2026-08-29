@@ -187,3 +187,28 @@ describe("SessionStore", () => {
     expect(store.readCompactions(meta.id)).toEqual([])
   })
 })
+
+describe("queue persistence", () => {
+  it("updateMeta round-trips queue entries and dispositionOverride; undefined clears", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("q")
+    const entry = { messageId: "msg_1", disposition: "wait" as const, text: "hi", trigger: "user" as const, enqueuedAt: new Date().toISOString() }
+    store.updateMeta(meta.id, { queue: [entry], dispositionOverride: "steer" })
+    const saved = store.meta(meta.id)!
+    expect(saved.queue).toEqual([entry])
+    expect(saved.dispositionOverride).toBe("steer")
+    store.updateMeta(meta.id, { queue: undefined, dispositionOverride: undefined })
+    const cleared = store.meta(meta.id)!
+    expect(cleared.queue).toBeUndefined()
+    expect(cleared.dispositionOverride).toBeUndefined()
+  })
+  it("legacy meta without the fields loads unchanged", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("legacy")
+    const raw = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
+    delete raw.queue
+    delete raw.dispositionOverride
+    writeFileSync(join(dir, meta.id, "meta.json"), JSON.stringify(raw))
+    expect(store.meta(meta.id)!.queue).toBeUndefined()
+  })
+})

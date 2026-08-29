@@ -97,6 +97,12 @@ describe("loadConfig / saveConfig", () => {
     expect(fresh.permissions.allow).not.toContain("x")
     expect(fresh).toEqual(pristine)
   })
+  it("sessions.defaultDisposition defaults to steer and merges from yaml", () => {
+    expect(defaultConfig.sessions.defaultDisposition).toBe("steer")
+    const home = mkdtempSync(join(tmpdir(), "kclaw-cfg-"))
+    writeFileSync(join(home, "config.yaml"), "sessions:\n  defaultDisposition: wait\n")
+    expect(loadConfig(resolvePaths(home)).sessions.defaultDisposition).toBe("wait")
+  })
 })
 
 describe("writeFileAtomic", () => {

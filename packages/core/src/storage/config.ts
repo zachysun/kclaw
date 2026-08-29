@@ -52,6 +52,8 @@ export interface KclawConfig {
     compactTargetRatio?: number
     /** v2: tool results kept verbatim in the provider view. Default 8. */
     toolResultKeep?: number
+    /** 不带 disposition 的 send_message 取"会话覆盖 ?? 此默认"。缺省 "steer"。 */
+    defaultDisposition?: "steer" | "wait" | "interrupt"
   }
   /**
    * Job-finish notifications. Delivery failures are only logged (onError),
@@ -79,7 +81,7 @@ export const defaultConfig: KclawConfig = {
   memory: { autoExtract: false, extractModel: "" },
   web: { tavilyApiKey: "", timeoutMs: 20_000, allowPrivateNetworks: false },
   exec: { timeoutMs: 60_000, maxOutputBytes: 100 * 1024 },
-  sessions: { recycleBinTtlMs: 30 * 24 * 60 * 60 * 1000 },
+  sessions: { recycleBinTtlMs: 30 * 24 * 60 * 60 * 1000, defaultDisposition: "steer" as const },
   notify: { channels: [], timeoutMs: 10_000 },
   usage: { prices: {} },
   mcp: { servers: {} },
