@@ -21,7 +21,7 @@
  * note rendering across two sequential invocations, plus the queued-wait,
  * /interrupt, unknown-session and Ctrl+C escalation scenarios.
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest"
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest"
 import { execa } from "execa"
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
@@ -31,7 +31,8 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { KclawClient } from "../src/client.js"
-import { resolveSessionId } from "../src/chat.js"
+import type { WsFrame } from "../src/client.js"
+import { renderRun, resolveSessionId } from "../src/chat.js"
 
 const CLI_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const SERVER_ROOT = join(CLI_ROOT, "..", "server")
@@ -54,6 +55,19 @@ function chunk(delta: Record<string, unknown>, finish?: string, usage?: Record<s
 const TEXT_TURN = [
   chunk({ content: "你好，" }),
   chunk({ content: "世界" }),
+  chunk({}, "stop", { prompt_tokens: 3, completion_tokens: 2 }),
+]
+
+/**
+ * The queued follow-up turn: DISTINCT output ("第二棒已接棒"), so a test can
+ * assert the QUEUED message's own run was rendered. With both turns answering
+ * identically, a renderRun-terminal regression (any run.completed resolving)
+ * would still pass: the busy run's streamed text satisfies the assertion
+ * before the queued run even starts.
+ */
+const SECOND_TURN = [
+  chunk({ content: "第二棒" }),
+  chunk({ content: "已接棒" }),
   chunk({}, "stop", { prompt_tokens: 3, completion_tokens: 2 }),
 ]
 
@@ -116,6 +130,7 @@ function turnFor(body: { messages?: Array<Record<string, unknown>> }): Array<Rec
   if (messages.some((m) => m.role === "tool")) return FINAL_TURN
   const lastUser = [...messages].reverse().find((m) => m.role === "user")
   const content = typeof lastUser?.content === "string" ? lastUser.content : ""
+  if (content.includes("第二棒")) return SECOND_TURN
   if (content.includes("记住")) return MEMORY_SAVE_TURN
   if (content.includes("执行")) return TOOL_TURN
   return TEXT_TURN
@@ -588,7 +603,10 @@ describe("kclaw chat (built CLI + real daemon + mock SSE provider)", () => {
 
       // /wait flips the mode; the plain line then queues behind the busy run;
       // /exit lets the REPL wait for the follow-up render before exiting.
-      subprocess.stdin!.write("/wait\n排队二好\n/exit\n")
+      // The queued text carries the 第二棒 marker → SECOND_TURN's DISTINCT
+      // output, so the final assertion can only be satisfied by the QUEUED
+      // message's own run being rendered.
+      subprocess.stdin!.write("/wait\n第二棒交给你\n/exit\n")
       subprocess.stdin!.end()
 
       // The plain send was answered with ack{queued:true} + message.queued.
@@ -622,7 +640,13 @@ describe("kclaw chat (built CLI + real daemon + mock SSE provider)", () => {
       expect(res.exitCode).toBe(0)
       expect(res.stderr).toBe("")
       expect(seen).toContain("已排队（第 1 位）") // the dim queued hint (position 0)
-      expect(seen).toContain("你好，世界") // the queued message's OWN run rendered to completion
+      expect(seen).toContain("你好，世界") // the busy run's output rendered through the takeover
+      // THE regression assertion: the QUEUED message's own run rendered — its
+      // output is unique to SECOND_TURN, so it can only appear if renderRun
+      // rode out the busy run's run.completed (targetSeen gating) and kept
+      // rendering until the queued run finished. If any run.completed
+      // resolved the render, this text would never be printed by anyone.
+      expect(seen).toContain("第二棒已接棒")
 
       ws.close()
       await pump.catch(() => {})
@@ -749,5 +773,62 @@ describe("resolveSessionId (unit)", () => {
     } as never
     await resolveSessionId(client, undefined)
     expect(body).toEqual({ workdir: process.cwd() })
+  })
+})
+
+describe("renderRun (unit)", () => {
+  /** Synthetic ChatCtx over a fake ws：泵"活着"、帧全部预置进 pendingFrames——renderRun 的 armNextFrame 会逐个同步取走。 */
+  function unitCtx(pending: WsFrame[]): { ctx: Parameters<typeof renderRun>[0]; sent: WsFrame[] } {
+    const sent: WsFrame[] = []
+    const ctx = {
+      home: undefined,
+      client: {} as never,
+      ws: { send: (f: WsFrame) => sent.push(f) } as never,
+      sessionId: "ses_unit",
+      rl: {} as never,
+      showThinking: false,
+      auto: "yes" as const,
+      io: { atLineStart: true },
+      pendingAttachments: [],
+      disposition: "steer" as const,
+      frameWaiters: [],
+      pendingFrames: pending,
+      renderEpoch: 1,
+      pumpAlive: true,
+      reconnecting: undefined,
+    } as unknown as Parameters<typeof renderRun>[0]
+    return { ctx, sent }
+  }
+
+  it("a stale buffered error frame never consumes a fresh render", async () => {
+    // 空闲期间到达的命令错误帧（当时没有任何渲染在等帧）会被泵缓冲在
+    // pendingFrames 里。随后一条消息的 renderRun 不得把它当作自己的第一帧——
+    // 否则打印陈旧错误并直接返回：消息已发出，而它的 run 从未被渲染。
+    // （集成层无法确定性构造此场景：daemon 只回 CLI 自己命令的错误帧，而
+    // CLI 空闲期可错的命令都会被客户端守卫拦下——故在 renderRun 单元层钉住。）
+    const staleError: WsFrame = { type: "error", message: "not found" }
+    const runFrames: WsFrame[] = [
+      { type: "send_message_ack", sessionId: "ses_unit", messageId: "msg_unit", queued: false },
+      { id: "e1", ts: "t", type: "message.created", payload: { message: { id: "msg_unit" } } },
+      { id: "e2", ts: "t", type: "text.delta", payload: { messageId: "msg_unit", blockId: "b1", delta: "新鲜输出" } },
+      { id: "e3", ts: "t", type: "run.completed", payload: { stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } } },
+    ]
+    const writes: string[] = []
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString())
+      return true
+    })
+    try {
+      const { ctx, sent } = unitCtx([staleError, ...runFrames])
+      await renderRun(ctx, "新消息")
+      const out = writes.join("")
+      expect(out).not.toContain("错误") // 不打印先于本渲染的陈旧错误
+      expect(out).not.toContain("not found")
+      expect(out).toContain("新鲜输出") // 本渲染正常渲染了自己的 run（不因旧帧提前终止）
+      expect(sent).toHaveLength(1) // 消息发出且只发一次
+      expect((sent[0] as { type?: string }).type).toBe("send_message")
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

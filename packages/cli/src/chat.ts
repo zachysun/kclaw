@@ -472,20 +472,31 @@ async function reconnect(ctx: ChatCtx): Promise<boolean> {
  * predecessor (its pending frame resolves "superseded" and it returns
  * silently), so at most one renderRun renders at a time and a mid-run line
  * (/interrupt, a plain send while busy) seamlessly continues the output.
+ * A render's first frame can never be a command error frame that predates
+ * it: those are purged from the pump's buffer at takeover (an error reply to
+ * THIS render's own send arrives through its waiter and still prints).
  *
  * The send itself lives here so the resend rule spans it: a send onto a dead
  * socket (silent drop, or the CONNECTING throw) is caught by the frames loop
  * seeing a closed socket with ZERO observed frames — the message never
  * reached a live daemon, so it is re-sent on the fresh socket. Any observed
  * frame (the ack counts — it proves the server queued the message) marks it
- * delivered; a later close never re-sends.
+ * delivered; a later close never re-sends. Exported for unit tests (the
+ * renderFrame precedent).
  */
-async function renderRun(ctx: ChatCtx, text: string, opts: { disposition?: "steer" | "wait" | "interrupt" } = {}): Promise<void> {
+export async function renderRun(ctx: ChatCtx, text: string, opts: { disposition?: "steer" | "wait" | "interrupt" } = {}): Promise<void> {
   const disposition = opts.disposition ?? ctx.disposition
   const myEpoch = ctx.renderEpoch // startRender bumps before calling; a later bump supersedes THIS render
   // 接管渲染：唤醒并摘除仍在前一次渲染里等帧的 waiter——旧渲染以 "superseded"
   // 静默收场，本渲染从这一刻起独占帧流。
   for (const waiter of ctx.frameWaiters.splice(0)) waiter("superseded")
+  // 丢弃先于本渲染缓冲的命令错误帧：空闲期间到达的 error 帧（当时没有渲染
+  // 在等帧）会留在 pendingFrames 里，若被本渲染当作第一帧消费，会打印陈旧
+  // 错误并直接终止渲染——消息已发出而它的 run 无人渲染。此刻缓冲里的一切
+  // 都早于本渲染（本渲染自己的帧只会经 waiter 到达），事件帧与 ack 保留：
+  // 它们是当前 run 的渲染输入。本渲染自己 send 的错误帧不经过这里（发送前
+  // waiter 已注册），照常打印。
+  ctx.pendingFrames = ctx.pendingFrames.filter((f) => f.type !== "error")
   let pendingSend = true // message not yet confirmed onto a live socket
   let observedAny = false // any frame seen since entering (ack or run)
   let reconnected = false
