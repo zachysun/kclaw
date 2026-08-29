@@ -21,6 +21,8 @@ export type EventType =
   | "confirmation.requested" | "confirmation.resolved"
   // note 单发
   | "note.emitted"
+  // 消息排队与引导（message-queue spec §4.2）
+  | "message.queued" | "message.steered" | "message.queue_cancelled"
   // 上下文压缩（运行前的预压缩过程，早于 run.started）
   | "compaction.started" | "compaction.completed"
 
@@ -55,6 +57,14 @@ export interface ConfirmationResolvedPayload {
 }
 
 export interface NoteEmittedPayload { messageId: string; block: NoteBlock }
+
+export interface MessageQueuedPayload {
+  messageId: string
+  disposition: "steer" | "wait" | "interrupt"  // 按实际处置报告：空闲降级入队后报 wait（spec §4.2）
+  position?: number                            // wait/interrupt 在队列中的序位；steer 不适用
+}
+export interface MessageSteeredPayload { messageId: string } // 事件级 runId 标识注入的 run
+export interface MessageQueueCancelledPayload { messageId?: string; all?: boolean }
 
 /** 压缩实际开始（预算过线且边界已定，即将调用摘要器）。 */
 export interface CompactionStartedPayload {}
@@ -91,6 +101,9 @@ export type EventPayloadMap = {
   "confirmation.requested": ConfirmationRequestedPayload
   "confirmation.resolved": ConfirmationResolvedPayload
   "note.emitted": NoteEmittedPayload
+  "message.queued": MessageQueuedPayload
+  "message.steered": MessageSteeredPayload
+  "message.queue_cancelled": MessageQueueCancelledPayload
   "compaction.started": CompactionStartedPayload
   "compaction.completed": CompactionCompletedPayload
 }

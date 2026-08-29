@@ -89,6 +89,7 @@ export type EventType =
   | "confirmation.requested" | "confirmation.resolved"
   | "note.emitted"
   | "compaction.started" | "compaction.completed"
+  | "message.queued" | "message.steered" | "message.queue_cancelled"
 
 type EventKind =
   | { type: "run.started"; payload: { trigger: string } }

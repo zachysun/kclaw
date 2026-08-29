@@ -21,3 +21,15 @@ describe("makeEvent", () => {
     expect(completed.payload).toEqual({ segments: 2, kept: 5 })
   })
 })
+
+describe("queue events", () => {
+  it("makeEvent carries the three new payloads with session context", () => {
+    const q = makeEvent("message.queued", { messageId: "msg_1", disposition: "wait", position: 2 }, { sessionId: "ses_1" })
+    expect(q.type).toBe("message.queued")
+    expect(q.payload).toEqual({ messageId: "msg_1", disposition: "wait", position: 2 })
+    const s = makeEvent("message.steered", { messageId: "msg_1" }, { sessionId: "ses_1", runId: "run_1" })
+    expect(s.runId).toBe("run_1")
+    const c = makeEvent("message.queue_cancelled", { all: true }, { sessionId: "ses_1" })
+    expect(c.payload.all).toBe(true)
+  })
+})
