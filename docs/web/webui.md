@@ -111,7 +111,7 @@ export class WsAuthError extends Error { readonly code: number }  // 默认 4001
 - **ws 认证失败没有 token 刷新**：只能刷新页面重新进入输入页；API 侧的 401 重入不覆盖 ws 路径。
 - **错过的 confirmation.requested 不可恢复**：确认有时限（默认 120s），断线期间超时按拒绝处理；重连全量拉取只能看到结果（note 块），不能补答。
 - **消息轨迹没有独立 /audit 路由**：轨迹的唯一事实来源是 `messages.jsonl`（经 sessions 路由读取）；压缩记录有只读接口 `GET /sessions/:id/compactions`，在审计页选中会话后渲染为轨迹上方的"压缩记录"区块，无记录时不显示。
-- **Service Worker 缓存只覆盖外壳三文件**：消息与 API 响应永远不经过 Service Worker 缓存。要更新外壳时需要更换缓存名（把 `kclaw-shell-v1` 换成新名字），旧缓存会在 `activate` 阶段被清掉；只改 SHELL 里的文件内容而不换缓存名，老外壳可能一直留在用户浏览器里。
+- **Service Worker 缓存只覆盖外壳三文件**：消息与 API 响应永远不经过 Service Worker 缓存。缓存名带构建指纹：`public/sw.js` 里的 `kclaw-shell-__BUILD_ID__` 占位符在每次构建时被 `scripts/inject-sw-hash.mjs` 替换为 `dist/index.html` 内容的 sha256 前 10 位——前端任何改动都会改变 index.html（它引用带内容 hash 的 bundle）→ 指纹变 → sw.js 字节变 → 浏览器重装 SW、换新缓存名并在 `activate` 阶段清掉旧缓存。因此**发布新版外壳后用户浏览器自动换新，无需手动清缓存**；同源码重复构建指纹稳定，缓存名不会无意义抖动。
 - **无路由库**：tab 是普通 `useState`，刷新回到对话 tab；会话列表无分页、全量返回。
 
 ## 关联
