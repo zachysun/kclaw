@@ -128,6 +128,15 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
       } else if (event.key === "Tab") {
         event.preventDefault()
         complete(completions[active]!.name)
+      } else if (event.key === "Enter") {
+        // While the menu is open, Enter ACCEPTS the highlighted suggestion —
+        // submitting the raw draft would run a half-typed word ("没有这个命
+        // 令"). Only a draft that already IS the complete command falls
+        // through to the native form submit.
+        if (draft.trim() !== `/${completions[active]!.name}`) {
+          event.preventDefault()
+          complete(completions[active]!.name)
+        }
       } else if (event.key === "Escape") {
         setDismissed(true)
       }

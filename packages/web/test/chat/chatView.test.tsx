@@ -183,4 +183,37 @@ describe("availableSlashMenuMaxHeight", () => {
     expect(availableSlashMenuMaxHeight(161, 47.5)).toBe(161 - 47.5 - 6 - 8)
     expect(availableSlashMenuMaxHeight(200, 47.5)).toBe(200 - 47.5 - 6 - 8)
   })
+
+  it("accepts the highlighted suggestion on Enter instead of submitting a half-typed word", () => {
+    const h = mountView()
+    type(h.input(), "/co")
+    pressKey(h.input(), "Enter")
+    expect(h.input().value).toBe("/compact ")
+    expect(h.container.querySelector('[data-testid="slash-menu"]')).toBeNull()
+    expect(h.onSend).not.toHaveBeenCalled()
+    h.unmount()
+  })
+
+  it("Enter accepts the arrow-selected candidate, not the raw draft", () => {
+    const h = mountView()
+    type(h.input(), "/")
+    pressKey(h.input(), "ArrowDown")
+    pressKey(h.input(), "Enter")
+    expect(h.input().value).toBe("/clear ")
+    expect(h.onSend).not.toHaveBeenCalled()
+    h.unmount()
+  })
+
+  it("submits on Enter when the draft is already the complete command word", async () => {
+    const h = mountView()
+    type(h.input(), "/compact")
+    pressKey(h.input(), "Enter")
+    // Exact match must NOT be rewritten (no trailing space appended) — the
+    // native form submit then runs it (jsdom does not submit on Enter, so the
+    // send button stands in for the submission here).
+    expect(h.input().value).toBe("/compact")
+    await h.send()
+    expect(h.onSend).toHaveBeenCalledWith("/compact")
+    h.unmount()
+  })
 })
