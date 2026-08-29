@@ -47,6 +47,8 @@ export interface AgentDeps {
   onLlmRetry?(info: { attempt: number; error: unknown }): void
   llmAttempt?(): number
   onUserMessage?(message: Message): Message   // 用户消息增强（note 注入）；抛错 → run.failed
+  steering?(): Message[]              // 引导注入口：每轮工具批次后、下一次 llm.stream 前调用，
+                                      // 返回本轮要注入的消息（空数组 = 无）；抛错 → run.failed "steering_failed"
   onEvent(e: AgentEvent): void
   onMessage(m: Message): void
 }
@@ -83,12 +85,12 @@ run.started {trigger}
       ⑧ stopReason 分派：
          end_turn          → run.completed，返回
          error             → 悬空 tool_call（无配对结果的调用）合成 error result 配对持久化 → llm.failed{willRetry:false} → run.failed，返回
-         tool_use 且有调用 → 工具回合（见下）→ continue
+         tool_use 且有调用 → 工具回合（见下）→ steering drain（见下）→ continue
          其余（max_tokens/stop_sequence/content_filter/aborted/空 tool_use）→ run.completed，返回
   → 循环耗尽：截断 note 已随最后一条 assistant 持久化 → run.failed {code:"max_iterations"}，返回 stopReason "error"
 ```
 
-`run.failed` 的三个错误码：`user_message_failed`（onUserMessage/持久化钩子抛错）、`llm_error`（provider 彻底失败）、`max_iterations`。
+`run.failed` 的四个错误码：`user_message_failed`（onUserMessage/持久化钩子抛错）、`llm_error`（provider 彻底失败）、`max_iterations`、`steering_failed`（引导注入或落盘抛错）。
 
 用户消息路径有两条：默认由 `userText` 合成（循环自行 `onMessage` 持久化）；宿主传入 `RunInput.userMessage` 时循环原样使用、**不重复持久化**（持久化责任在宿主，daemon 在 `onUserMessage` 钩子里做）。两条路径都会发 `message.created`/`message.completed`，钩子都执行。
 
@@ -99,6 +101,14 @@ run.started {trigger}
 3. **调度**：`concurrency:"parallel"` 的调用 `Promise.allSettled` 并发；`"serial"` 的在并行组全部 settle 后逐个 `await`——串行排他是结构保证（屏障 + 顺序 await：先等并行组全部结束，再逐个顺序执行），不是测试约束。
 4. **结果**：每个执行中的结果发 `tool_result.created → tool_result.delta（executor 的 onOutput）→ tool_result.completed`；未执行（参数解析失败/未知工具/abort 拦截）的结果只补 created+completed。结果块一律按模型给定顺序写入；拒绝 note 排在结果之后；`grantedBy` 记为 `Record<callId, GrantedBy>` 挂在 tool 消息上。
 5. `onMessage` 持久化 → `message.completed` → 回到循环顶部。
+
+### 引导注入口（steering drain）
+
+`AgentDeps.steering` 是给宿主（RunManager）留的运行中注入点。循环在**每轮工具批次执行完之后、下一次 `llm.stream` 之前**调用它——即 `stopReason === "tool_use"` 且确有工具调用的分支末尾、`continue` 回循环顶部之前。一轮直接以 `end_turn` 收尾（没有工具调用）时不存在这个边界，steering 不会被取走，残余消息由宿主的队列驱动器降级处理（见 [run-manager](../server/run-manager.md)）。
+
+注入流程（对 `deps.steering()` 返回的每条消息按序执行）：`message.created` → `deps.onMessage` 持久化 → `message.completed` → `message.steered {messageId}`（事件级 `runId` 标识注入的 run）→ 消息追加进 history（`all`），模型在下一轮自然看到它。流式输出不打断、不产生新 run，`stopReason` 语义不变。
+
+错误语义与 `onUserMessage` 一致：`steering()` 本身抛错，或注入途中 `onMessage` 持久化抛错，都发 `run.failed {code:"steering_failed"}`、run 以 `stopReason:"error"` 收场（不 reject）。未设置 `steering` 钩子时整段跳过，行为与旧版逐字节一致。
 
 ---
 

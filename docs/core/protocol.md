@@ -132,7 +132,7 @@ export function makeEvent<T extends EventType>(
 ): AgentEvent<T>
 ```
 
-`EventType` 共 **31 种**，七个分组：
+`EventType` 共 **34 种**，八个分组：
 
 | 分组 | 事件 | 数量 |
 |------|------|------|
@@ -142,6 +142,7 @@ export function makeEvent<T extends EventType>(
 | 模型调用 | `llm.started` `llm.completed` `llm.failed` | 3 |
 | 人工确认 | `confirmation.requested` `confirmation.resolved` | 2 |
 | note 单发 | `note.emitted` | 1 |
+| 消息排队与引导 | `message.queued` `message.steered` `message.queue_cancelled` | 3 |
 | 上下文压缩 | `compaction.started` `compaction.completed` | 2 |
 
 关键 payload：
@@ -175,13 +176,22 @@ export interface ConfirmationResolvedPayload {
 }
 
 export interface NoteEmittedPayload { messageId: string; block: NoteBlock }
+
+export interface MessageQueuedPayload {
+  messageId: string
+  disposition: "steer" | "wait" | "interrupt"   // 按实际生效处置报告：空闲会话上发 steer 降级入队后报 wait
+  position?: number                            // wait/interrupt 在队列中的序位（0 起）；steer 在缓冲区、不带
+}
+export interface MessageSteeredPayload { messageId: string }
+export interface MessageQueueCancelledPayload { messageId?: string; all?: boolean }
 ```
 
 发射方分布：
 
 | 事件 | 发射方 |
 |------|--------|
-| run / message / 流式 / llm / confirmation / note | core 的 agent 循环（`agent/loop.ts`） |
+| run / message / 流式 / llm / confirmation / note / `message.steered` | core 的 agent 循环（`agent/loop.ts`；`message.steered` 在 steering 注入时逐条发出，事件级 `runId` 标识注入的 run） |
+| `message.queued` `message.queue_cancelled` | server 的 `RunManager`（`run.ts`：submit / recoverQueues / queueCancel） |
 | `job.*` | server 的 `scheduler-tick.ts` |
 | `session.renamed` | server 的自动命名（`autoname.ts`：新标题写回 meta 后发出） |
 | `attachment.*` | 目前**已定义无发射方**——附件以 attachment 块随用户消息整体持久化与广播（`message.completed` 携带全量消息），不需要单独的块级事件流 |
