@@ -119,7 +119,7 @@ export class WsAuthError extends Error { readonly code: number }  // 默认 4001
 - [realtime](../server/realtime.md)：/ws 帧协议、订阅语义、断线恢复规则（CLI 与 WebUI 的共同契约）
 - [http-api](../server/http-api.md)：各视图消费的 REST 路由（含 /fs/browse、/usage、附件上传）
 - [run-manager](../server/run-manager.md)：`session.renamed` 的发射方、附件随 send_message 的服务端挂载
-- [compaction](../core/compaction.md)："压缩"按钮与审计页"压缩记录"区块背后的机制
+- [compaction](../core/compaction.md)：`/compact` 命令与审计页"压缩记录"区块背后的机制
 - [daemon](../server/daemon.md)：webDist 解析与静态托管、鉴权豁免的服务端侧
 - [onboarding](../cli/onboarding.md)：`kclaw web` 命令与 `?token=` 的发送侧
 - [protocol](../core/protocol.md)：事件目录与持久化块结构（model.ts 镜像的源头）

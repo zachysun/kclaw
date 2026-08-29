@@ -183,7 +183,6 @@ m1  m2  m3 │ m4  m5  m6  m7 │ m8 … m12
 - 分界必须落在用户消息上
 
 ## 未完成事项
-- /compact 的 web 按钮还没做
 - docs/core 有四篇文档要更新
 
 ## 文件与命令
@@ -274,7 +273,7 @@ note 块还带一个**仅供 UI 使用**的可选字段 `compact: { segments, ke
 
 - **HTTP**：`POST /sessions/:id/compact`，请求体可选 `{ "focus": "重点保留什么的一段说明" }`（见 [http-api](../server/http-api.md)）。
 - **CLI**：`/compact [重点说明]`，转发到上述接口（`packages/cli/src/slash.ts`）。
-- **web**：会话输入区上方的"压缩"按钮，调同一接口（`packages/web/src/chat/ChatPanel.tsx`）。
+- **web**：`/compact [重点说明]` 命令，调同一接口（`packages/web/src/chat/commands.ts`）。
 
 完成后返回一句话：`压缩了 N 段，剩 X 条原文消息`；历史太短没有可压缩内容时返回 `无可压缩内容`，不产生任何状态变化。两条约束：
 
@@ -329,4 +328,4 @@ note 块还带一个**仅供 UI 使用**的可选字段 `compact: { segments, ke
 - [tools](./tools.md)：session_search 在工具体系中的注册与 safe/parallel 语义
 - [run-manager](../server/run-manager.md)：`#compactV2` 编排、`compactSession` 与 note 注入的服务端装配
 - [http-api](../server/http-api.md)：`POST /sessions/:id/compact` 与 `GET /sessions/:id/compactions`
-- [webui](../web/webui.md)："压缩"按钮与审计页"压缩记录"区块
+- [webui](../web/webui.md)：`/compact` 命令与审计页"压缩记录"区块
