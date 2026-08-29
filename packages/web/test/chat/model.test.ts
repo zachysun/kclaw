@@ -9,6 +9,8 @@ import {
   applyEvent,
   initChat,
   mergeMessages,
+  mergeQueue,
+  adoptQueuedId,
   type AgentEvent,
   type Block,
   type ChatState,
@@ -430,5 +432,92 @@ describe("optimistic user echo", () => {
     const other = appendOptimisticUser(initChat([]), "还没落盘")
     const merged2 = mergeMessages(other.messages, [msg("m9", "user", [text("b9", "在吗")])])
     expect(merged2.map((m) => m.id)).toEqual([other.messages[0]!.id, "m9"])
+  })
+})
+
+describe("queue reducer", () => {
+  const base = (): ChatState => initChat([])
+  const wireMsg = (id: string, text: string): Message => ({
+    id, sessionId: "s", role: "user",
+    blocks: [{ id: "b", type: "text", text }], createdAt: "t",
+  })
+
+  it("message.queued adopts the optimistic bubble id and tracks the entry", () => {
+    let s = appendOptimisticUser(base(), "排队消息")
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_9", disposition: "wait", position: 0 }))
+    expect(s.queue).toEqual([{ messageId: "msg_9", disposition: "wait", state: "queued", text: "排队消息" }])
+    expect(s.messages.some((m) => m.id === "msg_9")).toBe(true)
+    expect(s.messages.some((m) => m.id.startsWith("local-"))).toBe(false)
+  })
+
+  it("message.steered flips state to injected", () => {
+    let s = appendOptimisticUser(base(), "引导")
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_1", disposition: "steer" }))
+    s = applyEvent(s, ev("message.steered", { messageId: "msg_1" }))
+    expect(s.queue[0]!.state).toBe("injected")
+  })
+
+  it("message.queue_cancelled removes the bubble and the entry", () => {
+    let s = appendOptimisticUser(base(), "取消我")
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_2", disposition: "wait" }))
+    s = applyEvent(s, ev("message.queue_cancelled", { messageId: "msg_2" }))
+    expect(s.queue).toHaveLength(0)
+    expect(s.messages.some((m) => m.id === "msg_2")).toBe(false)
+  })
+
+  it("dequeue execution: message.created with a queued id removes the queue entry", () => {
+    let s = appendOptimisticUser(base(), "执行我")
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_3", disposition: "wait", position: 0 }))
+    s = applyEvent(s, ev("message.created", { message: wireMsg("msg_3", "执行我") }))
+    expect(s.queue).toHaveLength(0)
+    expect(s.messages.some((m) => m.id === "msg_3")).toBe(true)
+  })
+
+  it("mergeQueue rebuilds bubbles after reconnect", () => {
+    let s = base()
+    s = mergeQueue(s, [{ messageId: "msg_5", disposition: "wait", text: "断线期间的排队" }])
+    expect(s.queue[0]!.messageId).toBe("msg_5")
+    expect(s.messages.some((m) => m.id === "msg_5" && m.blocks[0]!.kind === "text")).toBe(true)
+  })
+
+  it("adoptQueuedId swaps the oldest local- pending bubble (ack path)", () => {
+    let s = appendOptimisticUser(base(), "via ack")
+    s = adoptQueuedId(s, "msg_7")
+    expect(s.messages.some((m) => m.id === "msg_7")).toBe(true)
+    expect(s.messages.some((m) => m.id.startsWith("local-"))).toBe(false)
+  })
+
+  it("message.queued swaps ids IN PLACE so bubbles keep their send order (FIFO adoption)", () => {
+    let s = appendOptimisticUser(base(), "第一条")
+    s = appendOptimisticUser(s, "第二条")
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_a", disposition: "wait" }))
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_b", disposition: "wait" }))
+    expect(s.messages.map((m) => m.id)).toEqual(["msg_a", "msg_b"])
+    expect(s.queue.map((e) => e.messageId)).toEqual(["msg_a", "msg_b"])
+    expect(s.queue.map((e) => e.text)).toEqual(["第一条", "第二条"])
+  })
+
+  it("message.queue_cancelled {all:true} clears queued entries+bubbles but keeps injected ones", () => {
+    let s = appendOptimisticUser(base(), "已注入的引导")
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_i", disposition: "steer" }))
+    s = applyEvent(s, ev("message.steered", { messageId: "msg_i" }))
+    s = appendOptimisticUser(s, "还在排队")
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_q", disposition: "wait" }))
+    s = applyEvent(s, ev("message.queue_cancelled", { all: true }))
+    // injected entry and its bubble stay (the message is already in history)
+    expect(s.queue.map((e) => e.messageId)).toEqual(["msg_i"])
+    expect(s.queue[0]!.state).toBe("injected")
+    expect(s.messages.some((m) => m.id === "msg_i")).toBe(true)
+    // queued entry and its never-persisted bubble are gone
+    expect(s.messages.some((m) => m.id === "msg_q")).toBe(false)
+  })
+
+  it("run lifecycle events leave the queue untouched", () => {
+    let s = appendOptimisticUser(base(), "排队中")
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_q", disposition: "wait" }))
+    s = applyEvent(s, ev("run.completed", { stopReason: "end_turn" }))
+    expect(s.queue).toHaveLength(1)
+    s = applyEvent(s, ev("run.failed", { error: { code: "x", message: "boom" } }))
+    expect(s.queue).toHaveLength(1)
   })
 })

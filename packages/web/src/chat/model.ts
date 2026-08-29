@@ -113,6 +113,11 @@ type EventKind =
   | { type: "confirmation.resolved"; payload: { confirmationId: string; approved: boolean; by: string } }
   | { type: "compaction.started"; payload: Record<string, never> }
   | { type: "compaction.completed"; payload: { segments?: number; kept?: number } }
+  // The send-message queue trio (mirrors @kclaw/core MessageQueuedPayload /
+  // MessageSteeredPayload / MessageQueueCancelledPayload).
+  | { type: "message.queued"; payload: { messageId: string; disposition: "steer" | "wait" | "interrupt"; position?: number } }
+  | { type: "message.steered"; payload: { messageId: string } }
+  | { type: "message.queue_cancelled"; payload: { messageId?: string; all?: boolean } }
   // The rest of the catalog flows through the reducer unchanged (default case).
   | { type: Exclude<EventType, HandledEventType>; payload: unknown }
 
@@ -127,6 +132,7 @@ type HandledEventType =
   | "confirmation.requested" | "confirmation.resolved"
   | "note.emitted" | "llm.completed" | "llm.failed"
   | "compaction.started" | "compaction.completed"
+  | "message.queued" | "message.steered" | "message.queue_cancelled"
 
 export type AgentEvent = Envelope & EventKind
 
@@ -179,8 +185,24 @@ export interface ConfirmationCard {
   expiresAt: string
 }
 
+/** One waiting message of the daemon's send-message queue (view mirror). */
+export interface QueueEntryView {
+  messageId: string
+  disposition: "steer" | "wait" | "interrupt"
+  /** "queued" until the steer buffer injects it (`message.steered`), then "injected". */
+  state: "queued" | "injected"
+  text: string
+}
+
 export interface ChatState {
   messages: RenderedMessage[]
+  /**
+   * Messages waiting to enter a run, in queue order. A `queued` entry renders
+   * as a waiting bubble; `message.steered` flips it to `injected` (badge);
+   * `message.created` for its id dequeues it (the bubble goes on through the
+   * normal upsert path). Injected entries linger only until that created event.
+   */
+  queue: QueueEntryView[]
   runState: RunState
   pendingConfirmations: ConfirmationCard[]
   error?: string
@@ -205,6 +227,7 @@ export interface ChatState {
 export function initChat(messages: Message[]): ChatState {
   return {
     messages: messages.map((m) => renderMessage(m, false)),
+    queue: [],
     runState: "idle",
     pendingConfirmations: [],
   }
@@ -232,6 +255,50 @@ export function mergeMessages(existing: RenderedMessage[], fresh: Message[]): Re
     if (!known.has(id)) merged.push(rm)
   }
   return merged
+}
+
+/**
+ * Reconnect merge for the send-message queue (GET /queue full resync): the
+ * server's list is authoritative — it upserts the queue by messageId (a local
+ * `injected` state is newer knowledge than the pull and is kept), entries it
+ * no longer knows were cancelled or dequeued while this view was away.
+ * Queued entries the local view has no bubble for (never entered the persisted
+ * history) re-materialize as pending user bubbles at the end of the thread.
+ */
+export function mergeQueue(
+  state: ChatState,
+  entries: Array<{ messageId: string; disposition: string; text: string }>,
+): ChatState {
+  if (entries.length === 0 && state.queue.length === 0) return state
+  const prevById = new Map(state.queue.map((e) => [e.messageId, e]))
+  const serverIds = new Set(entries.map((e) => e.messageId))
+  const droppedIds = new Set(
+    state.queue.filter((e) => !serverIds.has(e.messageId) && e.state === "queued").map((e) => e.messageId),
+  )
+  const queue: QueueEntryView[] = entries.map((e) => ({
+    messageId: e.messageId,
+    disposition: asDisposition(e.disposition),
+    state: prevById.get(e.messageId)?.state ?? "queued",
+    text: e.text,
+  }))
+  const messages = droppedIds.size === 0
+    ? state.messages
+    : state.messages.filter((m) => !droppedIds.has(m.id))
+  const known = new Set(messages.map((m) => m.id))
+  const bubbles: RenderedMessage[] = queue
+    .filter((e) => !known.has(e.messageId))
+    .map((e) => ({
+      id: e.messageId,
+      role: "user",
+      pending: true,
+      blocks: [{ kind: "text", blockId: `queued-${e.messageId}`, text: e.text }],
+    }))
+  return { ...state, queue, messages: bubbles.length === 0 ? messages : [...messages, ...bubbles] }
+}
+
+/** Narrow a wire disposition string to the view union ("wait" as the fallback). */
+function asDisposition(d: string): QueueEntryView["disposition"] {
+  return d === "steer" || d === "wait" || d === "interrupt" ? d : "wait"
 }
 
 /** First text block's text of a wire user message ("" when absent). */
@@ -270,6 +337,24 @@ function findOptimisticTwinIdx(state: ChatState, server: Message): number {
   )
 }
 
+/** Index of the earliest still-pending optimistic (local-) user bubble; -1 when none. */
+function earliestPendingLocalIdx(messages: RenderedMessage[]): number {
+  return messages.findIndex((m) => m.id.startsWith("local-") && m.pending && m.role === "user")
+}
+
+/**
+ * Ack path: the earliest still-pending optimistic bubble adopts the server id
+ * IN PLACE (its position is its queue slot) — the safe channel for the first
+ * hop of the optimistic chain when the ack already carries the messageId.
+ */
+export function adoptQueuedId(state: ChatState, messageId: string): ChatState {
+  const idx = earliestPendingLocalIdx(state.messages)
+  if (idx === -1) return state
+  const messages = state.messages.slice()
+  messages[idx] = { ...messages[idx]!, id: messageId }
+  return { ...state, messages }
+}
+
 /** Apply one wire event to the view, returning a NEW state. */
 export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
   switch (event.type) {
@@ -297,18 +382,75 @@ export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
         },
       }
     case "message.created": {
+      // Queue dequeue: a created event for a queued id promotes the adopted
+      // bubble to normal execution state — the entry leaves the queue and the
+      // EXISTING twin/upsert path below takes the message from here (the
+      // adopted bubble already carries the server id, so it upserts in place).
+      const queued = state.queue.some((e) => e.messageId === event.payload.message.id)
+      const base = queued
+        ? { ...state, queue: state.queue.filter((e) => e.messageId !== event.payload.message.id) }
+        : state
       // Optimistic-echo merge: the server skeleton replaces the local twin AT
       // ITS POSITION — appending would hoist later queued optimistic bubbles
       // (sent after this one) above it until their own echoes land.
-      const twinIdx = findOptimisticTwinIdx(state, event.payload.message)
+      const twinIdx = findOptimisticTwinIdx(base, event.payload.message)
       const rendered = renderMessage(event.payload.message, true)
-      if (twinIdx === -1) return upsertMessage(state, rendered)
-      const messages = state.messages.slice()
+      if (twinIdx === -1) return upsertMessage(base, rendered)
+      const messages = base.messages.slice()
       messages[twinIdx] = rendered
-      return { ...state, messages }
+      return { ...base, messages }
     }
     case "message.completed":
       return upsertMessage(state, renderMessage(event.payload.message, false))
+    case "message.queued": {
+      // The earliest still-pending optimistic bubble adopts the server id IN
+      // PLACE and the queue tracks the entry with the bubble's text (the
+      // payload carries no text). No local bubble (replay/refresh edge) → the
+      // entry still lands; its bubble is mergeQueue's or a later event's job.
+      const localIdx = earliestPendingLocalIdx(state.messages)
+      const adopted = localIdx === -1 ? null : state.messages[localIdx]!
+      const messages = adopted === null
+        ? state.messages
+        : state.messages.map((m, i) => (i === localIdx ? { ...m, id: event.payload.messageId } : m))
+      const entry: QueueEntryView = {
+        messageId: event.payload.messageId,
+        disposition: event.payload.disposition,
+        state: "queued",
+        text: adopted === null ? "" : firstRenderedUserText(adopted),
+      }
+      // A re-broadcast for an id we already track replaces the entry (no dupes).
+      const queue = [...state.queue.filter((e) => e.messageId !== entry.messageId), entry]
+      return { ...state, queue, messages }
+    }
+    case "message.steered": {
+      const idx = state.queue.findIndex((e) => e.messageId === event.payload.messageId)
+      if (idx === -1) return state
+      const queue = state.queue.slice()
+      queue[idx] = { ...queue[idx]!, state: "injected" }
+      return { ...state, queue }
+    }
+    case "message.queue_cancelled": {
+      if (event.payload.all === true) {
+        // Cancel-all clears QUEUED entries and their never-persisted bubbles;
+        // injected entries and bubbles stay (those messages are in history).
+        const droppedIds = new Set(
+          state.queue.filter((e) => e.state === "queued").map((e) => e.messageId),
+        )
+        if (droppedIds.size === 0) return state
+        return {
+          ...state,
+          queue: state.queue.filter((e) => e.state !== "queued"),
+          messages: state.messages.filter((m) => !droppedIds.has(m.id)),
+        }
+      }
+      if (event.payload.messageId === undefined) return state
+      // Single cancel: the message never entered the persisted history, so
+      // both the entry and its bubble go without residue.
+      const queue = state.queue.filter((e) => e.messageId !== event.payload.messageId)
+      const messages = state.messages.filter((m) => m.id !== event.payload.messageId)
+      if (queue.length === state.queue.length && messages.length === state.messages.length) return state
+      return { ...state, queue, messages }
+    }
     case "text.created":
     case "thinking.created":
     case "tool_call.created":
