@@ -400,3 +400,21 @@ describe("optimistic user echo", () => {
     expect(merged2.map((m) => m.id)).toEqual([other.messages[0]!.id, "m9"])
   })
 })
+describe("compaction state", () => {
+  it("compaction.started marks compacting; completed clears it", () => {
+    const state = initChat([])
+    const started = applyEvent(state, ev("compaction.started", {}))
+    expect(started.compacting).toBe(true)
+    const done = applyEvent(started, ev("compaction.completed", { segments: 1, kept: 4 }))
+    expect(done.compacting).toBe(false)
+  })
+
+  it("run lifecycle events clear a stuck compacting state (failed compaction emits no completed)", () => {
+    const started = applyEvent(initChat([]), ev("compaction.started", {}))
+    expect(applyEvent(started, ev("run.started", { trigger: "user" })).compacting).toBe(false)
+    const again = applyEvent(initChat([]), ev("compaction.started", {}))
+    expect(applyEvent(again, ev("run.completed", { stopReason: "end_turn" })).compacting).toBe(false)
+    expect(applyEvent(again, ev("run.failed", { error: { code: "x", message: "y" } })).compacting).toBe(false)
+  })
+})
+
