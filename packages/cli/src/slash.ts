@@ -304,6 +304,19 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
     },
   })
 
+  registry.set("interrupt", {
+    ...meta("interrupt"),
+    async run(args, ctx) {
+      const text = args.trim()
+      if (text === "") {
+        // 无参形式不需要：纯中断有 Ctrl+C（spec §7.2，一次性动作不是模式）。
+        ctx.print("用法：/interrupt <消息> —— 掐掉当前 run，这条消息下一个执行（纯中断用 Ctrl+C）")
+        return
+      }
+      ctx.sendInterrupt(text)
+    },
+  })
+
   registry.set("queue", {
     ...meta("queue"),
     async run(args, ctx) {

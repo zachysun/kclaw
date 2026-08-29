@@ -58,7 +58,10 @@ function makeFakeCtx(requestImpl: (method: string, path: string, body?: unknown)
           : { type: "queue.cancel", sessionId, messageId: target },
       )
     }),
-    sendInterrupt: vi.fn(),
+    sendInterrupt: vi.fn((text: string) => {
+      // mirrors chat.ts 的实现：renderRun 发出的 send_message（disposition interrupt）
+      sent.push({ type: "send_message", sessionId, text, disposition: "interrupt" })
+    }),
   }
   return { ctx, request, switchSession, print, pauseInput, resumeInput, sent }
 }
@@ -381,6 +384,19 @@ describe("/steer /wait", () => {
     expect(printed.filter((t) => t.includes("切换处置失败"))).toHaveLength(2)
     expect(vi.mocked(fake.ctx.setDisposition!)).not.toHaveBeenCalled()
     expect(printed.some((t) => t.includes("本会话处置模式"))).toBe(false)
+  })
+})
+
+describe("/interrupt", () => {
+  it("requires args and sends via ws with disposition interrupt", async () => {
+    const fake = makeFakeCtx(() => ({}))
+    const registry = createRegistry(fake.ctx)
+    await runOrHint({ command: "interrupt", args: "" }, registry, fake.ctx)
+    expect(fake.sent).toEqual([])
+    const printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.some((t) => t.includes("用法"))).toBe(true)
+    await runOrHint({ command: "interrupt", args: "换方向" }, registry, fake.ctx)
+    expect(fake.sent).toEqual([{ type: "send_message", sessionId: fake.ctx.sessionId, text: "换方向", disposition: "interrupt" }])
   })
 })
 

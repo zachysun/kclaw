@@ -27,7 +27,23 @@
  * it died), resubscribe, pull the full message list (拉全量消息，只订阅新事件，
  * 不回放 — nothing is replay-rendered) and print "[reconnected]"; frames
  * observed after a reconnect carry a 120s inactivity timeout so a dead run
- * cannot hang the REPL forever.
+ * cannot hang the REPL forever. The frame pump dies with the old socket's
+ * iterator (flushing its waiters with "closed" so the render loop drives the
+ * reconnect) and restarts on the new socket.
+ *
+ * Frame pump and render takeover: ONE resident consumer reads the socket's
+ * frames (`startPump`) and hands each frame to exactly one registered one-shot
+ * waiter — renderRun never owns the frames iterator, so nothing stalls while
+ * the input loop keeps dispatching typed lines mid-run (that is what makes
+ * /interrupt usable at all). Every send starts its render through
+ * `startRender`, which bumps `renderEpoch`: the new render TAKES OVER the
+ * frame stream — older renderRuns are woken with "superseded" and return
+ * without rendering further — and each renderRun tracks its OWN message
+ * (send_message_ack records `mine`; message.created{id===mine} or
+ * message.steered{messageId===mine} sets targetSeen) so its terminal is the
+ * first run.completed AFTER targetSeen. A previous run's run.completed never
+ * ends someone else's render, and a queued send renders the run it waited
+ * behind instead of losing it.
  *
  * Resend rule: an in-flight message is re-sent after a reconnect ONLY when
  * not a single frame was observed for it — no `send_message_ack`, no run
@@ -40,7 +56,7 @@
  * watchdog bounds that wait instead.
  */
 import { confirm, isCancel } from "@clack/prompts"
-import type { AgentEvent, ConfirmationRequestedPayload } from "@kclaw/core"
+import type { AgentEvent, ConfirmationRequestedPayload, MessageQueuedPayload } from "@kclaw/core"
 import { join } from "node:path"
 import { createInterface, type Interface as RlInterface } from "node:readline"
 import { KclawClient } from "./client.js"
@@ -103,6 +119,44 @@ interface ChatCtx {
    * meta override (it is a one-shot action, not a mode the CLI sets).
    */
   disposition: "steer" | "wait" | "interrupt"
+  /**
+   * The frame pump's one-shot waiters: each renderRun registers one waiter for
+   * its next frame and the pump hands every arriving frame to exactly one of
+   * them (FIFO). Cleared when the pump's iterator ends (socket closed) and on
+   * reconnect.
+   */
+  frameWaiters: FrameWaiter[]
+  /**
+   * Frames that arrived with no waiter registered: the consumer sits
+   * waiter-less for a few microtask ticks between two takes, and a busy
+   * daemon's event burst lands exactly there — the pump holds such frames
+ * (in arrival order) and armNextFrame drains them before registering.
+   */
+  pendingFrames: WsFrame[]
+  /**
+   * Render generation: startRender increments it per started render. A newer
+   * renderRun takes over the frame stream; older ones see the bump and quit
+   * without clobbering runActive (Ctrl+C stays aimed at the newest run).
+   */
+  renderEpoch: number
+  /** The frame pump consumes ctx.ws.frames only while this is true. */
+  pumpAlive: boolean
+  /** In-flight reconnect, shared so concurrent renderRuns run one attempt. */
+  reconnecting: Promise<boolean> | undefined
+}
+
+/**
+ * One-shot frame waiter: the pump resolves it with the next frame, or with a
+ * control sentinel — "closed" when the socket's iterator ended (the pump
+ * flushes every waiter on its way out), "superseded" when a newer renderRun
+ * took over the frame stream.
+ */
+type FrameWaiter = (frame: WsFrame | "closed" | "superseded") => void
+
+/** A waiter registered into ctx.frameWaiters but not yet awaited to settlement. */
+interface ArmedFrame {
+  promise: Promise<WsFrame | "closed" | "superseded">
+  waiter: FrameWaiter
 }
 
 /** A bus event frame has `payload`; command acks and error frames do not. */
@@ -297,55 +351,127 @@ export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean
 }
 
 /**
- * frames.next() raced against an inactivity timeout ("timeout") or socket end
- * ("closed"). A non-finite timeoutMs skips the race entirely — node clamps
- * `setTimeout(fn, Infinity)` down to 1ms, which would truncate live runs.
+ * The resident frame pump: one consumer reads ctx.ws.frames for the lifetime
+ * of a socket and hands every arriving frame to exactly one registered one-shot
+ * waiter. A frame arriving while NO waiter is registered is held in
+ * ctx.pendingFrames (the consumer is only ever waiter-less for the few
+ * microtask ticks it takes to process the previous frame and re-arm — a busy
+ * daemon's event burst lands exactly there, so dropping would lose real
+ * render input mid-run). When the iterator ends (socket closed) every pending
+ * waiter is flushed with "closed" so its renderRun drives the reconnect;
+ * reconnect() restarts the pump on the new socket. This replaces the old
+ * "each renderRun exclusively iterating frames" shape, which stalled every
+ * frame while no render happened and dropped events during multi-run handoff.
+ */
+function startPump(ctx: ChatCtx): void {
+  ctx.pumpAlive = true
+  void (async () => {
+    for await (const frame of ctx.ws.frames) {
+      const waiter = ctx.frameWaiters.shift()
+      if (waiter !== undefined) waiter(frame)
+      else ctx.pendingFrames.push(frame)
+    }
+    ctx.pumpAlive = false
+    ctx.pendingFrames.length = 0 // socket 已死，暂存帧随旧连接作废
+    for (const waiter of ctx.frameWaiters.splice(0)) waiter("closed")
+  })()
+}
+
+/**
+ * Take the next frame for a renderRun: any pump-buffered frame first
+ * (synchronously — the burst that arrived while we processed the previous
+ * one), otherwise a fresh one-shot waiter registered into the pump.
+ * Synchronous by design: renderRun arms BEFORE sending so its ack can never
+ * fall into an unregistered gap. A dead pump (socket closed, reconnect not
+ * yet driven) resolves "closed" immediately so the caller walks the
+ * reconnect path instead of hanging.
+ */
+function armNextFrame(ctx: ChatCtx): ArmedFrame {
+  if (!ctx.pumpAlive) {
+    return { promise: Promise.resolve("closed"), waiter: () => {} }
+  }
+  const buffered = ctx.pendingFrames.shift()
+  if (buffered !== undefined) {
+    return { promise: Promise.resolve(buffered), waiter: () => {} }
+  }
+  let waiter!: FrameWaiter
+  const promise = new Promise<WsFrame | "closed" | "superseded">((resolve) => {
+    waiter = resolve
+  })
+  ctx.frameWaiters.push(waiter)
+  return { promise, waiter }
+}
+
+/**
+ * Await an armed waiter, raced against an inactivity timeout ("timeout") —
+ * the post-reconnect watchdog shape. A non-finite timeoutMs skips the race
+ * entirely — node clamps `setTimeout(fn, Infinity)` down to 1ms, which would
+ * truncate live runs. On timeout the waiter is withdrawn so a late frame is
+ * never delivered to a render that already gave up.
  */
 async function nextFrame(
-  frames: AsyncIterator<WsFrame>,
+  ctx: ChatCtx,
+  armed: ArmedFrame,
   timeoutMs: number,
-): Promise<WsFrame | "timeout" | "closed"> {
-  if (!Number.isFinite(timeoutMs)) {
-    const untimed = await frames.next()
-    return untimed.done ? "closed" : untimed.value
-  }
+): Promise<WsFrame | "timeout" | "closed" | "superseded"> {
+  if (!Number.isFinite(timeoutMs)) return armed.promise
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<"timeout">((resolve) => {
     timer = setTimeout(() => resolve("timeout"), timeoutMs)
   })
-  const result = await Promise.race([
-    frames.next().then((n) => (n.done ? ("closed" as const) : n.value)),
-    timeout,
-  ])
+  const result = await Promise.race([armed.promise, timeout])
   if (timer !== undefined) clearTimeout(timer)
+  if (result === "timeout") {
+    const idx = ctx.frameWaiters.indexOf(armed.waiter)
+    if (idx >= 0) ctx.frameWaiters.splice(idx, 1)
+  }
   return result
 }
 
 /**
  * Re-resolve the daemon (spawning one when it died), resubscribe, and pull
  * the full message list per the reconnect protocol (拉全量消息 + 只订阅新事件；不回放).
- * True when waiting may continue on the new socket.
+ * True when waiting may continue on the new socket. Concurrent callers share
+ * one attempt (a single renderRun sees "closed" — this keeps even a future
+ * second one from opening rival sockets); success clears the frame waiters
+ * and restarts the pump on the new socket.
  */
 async function reconnect(ctx: ChatCtx): Promise<boolean> {
-  try {
-    ctx.client = await KclawClient.connect(ctx.home)
-    ctx.ws = await openSubscribed(ctx.client, ctx.sessionId)
-    await ctx.client
-      .request("GET", `/sessions/${encodeURIComponent(ctx.sessionId)}/messages`)
-      .catch(() => undefined) // resync per the reconnect protocol; nothing is rendered from it
-    line(dim("[reconnected]"), ctx)
-    return true
-  } catch {
-    line(red("[连接断开，重连失败 — 输入 /exit 退出]"), ctx)
-    return false
-  }
+  if (ctx.reconnecting !== undefined) return ctx.reconnecting
+  ctx.reconnecting = (async () => {
+    try {
+      ctx.client = await KclawClient.connect(ctx.home)
+      ctx.ws = await openSubscribed(ctx.client, ctx.sessionId)
+      await ctx.client
+        .request("GET", `/sessions/${encodeURIComponent(ctx.sessionId)}/messages`)
+        .catch(() => undefined) // resync per the reconnect protocol; nothing is rendered from it
+      ctx.frameWaiters.length = 0 // 泵已随旧迭代器退出并 flush；这里兜底清空
+      startPump(ctx)
+      line(dim("[reconnected]"), ctx)
+      return true
+    } catch {
+      line(red("[连接断开，重连失败 — 输入 /exit 退出]"), ctx)
+      return false
+    } finally {
+      ctx.reconnecting = undefined
+    }
+  })()
+  return ctx.reconnecting
 }
 
 /**
- * Send `text` and consume + render the run it triggers until its terminal
- * event. An unexpected socket close triggers {@link reconnect}; frames
- * observed after a reconnect are watchdogged (a dead daemon's run will never
- * complete, and the REPL must not hang forever waiting for it).
+ * Send `text` and consume + render the run it triggers until ITS terminal
+ * event. Terminal logic is unified across the four send paths (plain /
+ * steer / wait / interrupt): the `send_message_ack` records `mine`; once the
+ * stream shows `message.created{id===mine}` or `message.steered{messageId===mine}`
+ * (`targetSeen`), the FIRST `run.completed` resolves the render — a completed
+ * belonging to the run this message waited behind never ends someone else's
+ * render. An error frame prints and returns (no run will start).
+ *
+ * Renders take over the frame stream: entering supersedes any still-rendering
+ * predecessor (its pending frame resolves "superseded" and it returns
+ * silently), so at most one renderRun renders at a time and a mid-run line
+ * (/interrupt, a plain send while busy) seamlessly continues the output.
  *
  * The send itself lives here so the resend rule spans it: a send onto a dead
  * socket (silent drop, or the CONNECTING throw) is caught by the frames loop
@@ -354,11 +480,20 @@ async function reconnect(ctx: ChatCtx): Promise<boolean> {
  * frame (the ack counts — it proves the server queued the message) marks it
  * delivered; a later close never re-sends.
  */
-async function renderRun(ctx: ChatCtx, text: string): Promise<void> {
+async function renderRun(ctx: ChatCtx, text: string, opts: { disposition?: "steer" | "wait" | "interrupt" } = {}): Promise<void> {
+  const disposition = opts.disposition ?? ctx.disposition
+  const myEpoch = ctx.renderEpoch // startRender bumps before calling; a later bump supersedes THIS render
+  // 接管渲染：唤醒并摘除仍在前一次渲染里等帧的 waiter——旧渲染以 "superseded"
+  // 静默收场，本渲染从这一刻起独占帧流。
+  for (const waiter of ctx.frameWaiters.splice(0)) waiter("superseded")
   let pendingSend = true // message not yet confirmed onto a live socket
   let observedAny = false // any frame seen since entering (ack or run)
   let reconnected = false
+  let mine: string | undefined // MY message id, learned from send_message_ack
+  let targetSeen = false // message.created/steered for mine observed
+  let queuedBeforeAck: MessageQueuedPayload | undefined
   for (;;) {
+    const armed = armNextFrame(ctx) // 先注册 waiter，再发送——ack 不会落在空窗
     if (pendingSend) {
       pendingSend = false
       try {
@@ -367,7 +502,7 @@ async function renderRun(ctx: ChatCtx, text: string): Promise<void> {
           type: "send_message",
           sessionId: ctx.sessionId,
           text,
-          disposition: ctx.disposition,
+          disposition,
           ...(attachments.length > 0 ? { attachments } : {}),
         })
         ctx.pendingAttachments.length = 0
@@ -377,29 +512,67 @@ async function renderRun(ctx: ChatCtx, text: string): Promise<void> {
         // delivered — the closed frames loop below resends after reconnect.
       }
     }
-    const frames = ctx.ws.frames[Symbol.asyncIterator]()
-    for (;;) {
-      const frame = reconnected
-        ? await nextFrame(frames, POST_RECONNECT_SILENCE_MS)
-        : await nextFrame(frames, Number.POSITIVE_INFINITY) // no artificial cap on a live run
+    const frame = reconnected
+      ? await nextFrame(ctx, armed, POST_RECONNECT_SILENCE_MS)
+      : await nextFrame(ctx, armed, Number.POSITIVE_INFINITY) // no artificial cap on a live run
 
-      if (frame === "closed") {
-        if (!(await reconnect(ctx))) return
-        reconnected = true
-        // Zero frames observed → the message never reached a live daemon →
-        // safe (and required) to resend on the fresh socket. Otherwise the
-        // run may already be queued server-side: never resend, just resume.
-        if (!observedAny) pendingSend = true
-        break // continue waiting on the new socket
-      }
-      if (frame === "timeout") {
-        line(red("[等待运行事件超时 — 回到提示符]"), ctx)
-        return
-      }
-      observedAny = true
-      if (await renderFrame(frame, ctx)) return
+    if (frame === "superseded") return // 更新的渲染接管帧流，本渲染静默退出
+    if (frame === "closed") {
+      if (!(await reconnect(ctx))) return
+      reconnected = true
+      // Zero frames observed → the message never reached a live daemon →
+      // safe (and required) to resend on the fresh socket. Otherwise the
+      // run may already be queued server-side: never resend, just resume.
+      if (!observedAny) pendingSend = true
+      if (ctx.renderEpoch !== myEpoch) return // 重连期间被更新的渲染接管
+      continue // continue waiting on the new socket
     }
+    if (frame === "timeout") {
+      line(red("[等待运行事件超时 — 回到提示符]"), ctx)
+      return
+    }
+    observedAny = true
+
+    // —— 本消息的目标追踪（四路径统一终点判定）——
+    if (frame.type === "send_message_ack" && mine === undefined && typeof frame.messageId === "string") {
+      mine = frame.messageId
+      // 帧序补偿：message.queued 由总线在 submit 内同步扇出，先于 ws 层的
+      // send_message_ack 写出——我的 queued 事件可能先到而 mine 未知，此刻补上。
+      if (queuedBeforeAck !== undefined) {
+        if (queuedBeforeAck.messageId === mine) printQueuedHint(ctx, queuedBeforeAck)
+        queuedBeforeAck = undefined
+      }
+    }
+    if (isAgentEvent(frame)) {
+      if (frame.type === "message.queued") {
+        const p = frame.payload
+        if (mine === undefined) {
+          if (queuedBeforeAck === undefined) queuedBeforeAck = p // ack 未到，先缓存再核对
+        } else if (p.messageId === mine) {
+          printQueuedHint(ctx, p)
+        }
+      } else if (frame.type === "message.steered") {
+        if (frame.payload.messageId === mine) {
+          line(dim("已注入"), ctx)
+          targetSeen = true
+        }
+      } else if (frame.type === "message.queue_cancelled") {
+        line(dim("已取消排队"), ctx)
+      } else if (frame.type === "message.created") {
+        if (frame.payload.message.id === mine) targetSeen = true
+      }
+    }
+    const done = await renderFrame(frame, ctx)
+    // 终点门控：targetSeen 之前的 run 终点（completed/failed）属于前一个 run
+    // 的收尾——渲染继续，等「我的」run 的终点。error 帧（无 run 可启动）与
+    // targetSeen 之后的终点照旧结束渲染。
+    if (done && !(isAgentEvent(frame) && (frame.type === "run.completed" || frame.type === "run.failed") && !targetSeen)) return
   }
+}
+
+/** message.queued（mine）的一次性 dim 提示：有序位报位次，steer 报引导缓冲。 */
+function printQueuedHint(ctx: ChatCtx, p: MessageQueuedPayload): void {
+  line(dim(p.position !== undefined ? `已排队（第 ${p.position + 1} 位）` : "已进入引导缓冲"), ctx)
 }
 
 /**
@@ -445,6 +618,27 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
     auto,
     io: { atLineStart: true },
     disposition,
+    frameWaiters: [],
+    pendingFrames: [],
+    renderEpoch: 0,
+    pumpAlive: false,
+    reconnecting: undefined,
+  }
+  startPump(ctx) // 常驻帧泵：从这一刻起所有帧都经它分发（openSubscribed 已消费订阅回执）
+
+  // 渲染启动器：发送与渲染不再阻塞输入行（/interrupt 因此能在 run 中途派发）。
+  // 每次启动递增 renderEpoch —— 新渲染接管帧流，旧渲染以 "superseded" 静默收场，
+  // 且结束时只在 epoch 仍是自己时才清 runActive（Ctrl+C 始终瞄准最新的 run）。
+  let runActive = false
+  const inFlight = new Set<Promise<void>>()
+  const startRender = (text: string, renderOpts: { disposition?: "steer" | "wait" | "interrupt" } = {}): void => {
+    const myEpoch = ++ctx.renderEpoch
+    runActive = true
+    const pending = renderRun(ctx, text, renderOpts).finally(() => {
+      inFlight.delete(pending)
+      if (ctx.renderEpoch === myEpoch) runActive = false
+    })
+    inFlight.add(pending)
   }
 
   // The slash-command view over the chat loop's live state. `client` and
@@ -481,16 +675,10 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
       return ctx.pendingAttachments
     },
     send(text: string) {
-      // Custom commands expand into a plain message through the same path as
-      // typed input (async fire-and-forget inside a slash run).
-      void (async () => {
-        runActive = true
-        try {
-          await renderRun(ctx, text)
-        } finally {
-          runActive = false
-        }
-      })()
+      // Custom commands expand into a plain message through the same frame-
+      // pump path as typed input (fire-and-forget inside a slash run): the
+      // render starts immediately and takes over the frame stream.
+      startRender(text, { disposition: ctx.disposition })
     },
     setDisposition(d: "steer" | "wait") {
       // /steer //wait flip the local mode AFTER the sticky override POST
@@ -509,13 +697,12 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
       }
     },
     sendInterrupt(text: string) {
-      // One-shot interrupt-send: the daemon drops the active run and queues
-      // this message at the head. The /interrupt command (Task 9) calls it.
-      try {
-        ctx.ws.send({ type: "send_message", sessionId: ctx.sessionId, text, disposition: "interrupt" })
-      } catch {
-        // socket dropping — the reconnect path takes over
-      }
+      // One-shot interrupt-send: bump the render epoch, then start a renderRun
+      // with the interrupt disposition — the daemon drops the active run and
+      // queues this message at the head, and the new render takes over the
+      // frame stream from whatever was rendering before. The /interrupt
+      // command expands into this.
+      startRender(text, { disposition: "interrupt" })
     },
     async queueSnapshot() {
       try {
@@ -536,7 +723,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
   // (the TTY Ctrl+C path — see the module comment) AND on `process` (the OS
   // signal piped stdin delivers): a raw-mode TTY fires exactly one of the
   // two, so piped runs escalate identically instead of default-dying.
-  let runActive = false
+  // runActive is owned by startRender (see above).
   let sigints = 0
   const queueCount = async (): Promise<number> => {
     try {
@@ -598,7 +785,10 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
       const text = raw.trim()
       const parsed = dispatch(text, registry)
       if (parsed === null) {
-        // Plain message: send and render the run it triggers.
+        // Plain message: send and render the run it triggers — without
+        // blocking the input line (a mid-run line is what makes /interrupt
+        // and busy-run sends possible). /exit and EOF drain in-flight
+        // renders, so output still completes before the process ends.
         if (text !== "") {
           // Expand @path file references against the session's workdir. A
           // dead daemon here must not kill the input loop: renderRun's
@@ -615,17 +805,19 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
             prompt()
             continue
           }
-          runActive = true
-          await renderRun(ctx, refs.text) // sends, renders, and (if needed) resends after reconnect
-          runActive = false
+          startRender(refs.text) // sends, renders, and (if needed) resends after reconnect
         }
       } else if (parsed.command === "exit") {
+        await Promise.allSettled([...inFlight]) // 等在途渲染收尾，输出完整再退
         break
       } else {
         await runOrHint(parsed, registry, slashCtx)
       }
       prompt()
     }
+    // stdin 已到 EOF：与旧的内联 await renderRun 等价——等在途渲染收尾后再关
+    // socket，已缓冲的行不会打断正在输出的 run。
+    await Promise.allSettled([...inFlight])
   } finally {
     ctx.ws.close()
     ctx.rl.close()

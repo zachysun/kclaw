@@ -7,21 +7,25 @@
  * (daemon-ctl passes the CLI's env through to the spawned daemon).
  *
  * stdin choreography is kept deterministic: execa's `input` pre-writes every
- * line (message then `/exit`) — the REPL consumes lines strictly in order,
- * one run at a time, so buffered input can never overtake a rendering run.
- * Confirmations never touch stdin: hidden `--yes`/`--no` flags auto-answer
- * them (the scripting seam the CLI ships, not a test hack).
+ * line (message then `/exit`) — since the frame pump landed, typed lines are
+ * dispatched WHILE a run renders (that is what makes /interrupt usable), so a
+ * scenario that needs its lines to run as SEQUENTIAL turns either waits one
+ * run out before writing the next line or uses two invocations on the same
+ * session (scenario C's pattern). Confirmations never touch stdin: hidden
+ * `--yes`/`--no` flags auto-answer them (the scripting seam the CLI ships,
+ * not a test hack).
  *
  * Scenarios: A plain text (bare `kclaw`, the default command), B tool call +
  * auto-approved confirmation, B-deny auto-denied confirmation, C resume via
- * `--session` with JSONL verification over HTTP, plus the unknown-session
- * error exit.
+ * `--session` with JSONL verification over HTTP, D reconnect-resend, E memory
+ * note rendering across two sequential invocations, plus the queued-wait,
+ * /interrupt, unknown-session and Ctrl+C escalation scenarios.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest"
 import { execa } from "execa"
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
-import { createServer, type Server } from "node:http"
+import { createServer, type Server, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -95,8 +99,12 @@ const mockRequests: Array<{ messages: Array<Record<string, unknown>> }> = []
  * SSE open (no chunks, no [DONE]) until the daemon aborts the request — a
  * deterministic "busy run" for the Ctrl+C escalation scenario. `open` flips
  * true when the held request arrives, false when the daemon aborts it.
+ * POST /release completes every currently-held SSE with the plain TEXT_TURN —
+ * the out-of-band "放行第一条" the queued/interrupt scenarios need (a queued
+ * follow-up message cannot release the run it waits behind).
  */
 const gate = { open: false }
+const held: ServerResponse[] = []
 
 /**
  * Script the response from the request body: a history containing a tool
@@ -116,6 +124,21 @@ function turnFor(body: { messages?: Array<Record<string, unknown>> }): Array<Rec
 /** Start the mock provider on an ephemeral loopback port. */
 function startMockLlm(): Promise<{ server: Server; url: string }> {
   const server = createServer((req, res) => {
+    // Test control channel: complete every held SSE with TEXT_TURN (放行).
+    if (req.method === "POST" && req.url === "/release") {
+      req.on("data", () => {})
+      req.on("end", () => {
+        const releasing = held.splice(0)
+        for (const heldRes of releasing) {
+          for (const c of TEXT_TURN) heldRes.write(`data: ${JSON.stringify(c)}\n\n`)
+          heldRes.write("data: [DONE]\n\n")
+          heldRes.end()
+        }
+        res.writeHead(200, { "content-type": "application/json" })
+        res.end(JSON.stringify({ released: releasing.length }))
+      })
+      return
+    }
     const chunks: Buffer[] = []
     req.on("data", (c: Buffer) => chunks.push(c))
     req.on("end", () => {
@@ -136,8 +159,11 @@ function startMockLlm(): Promise<{ server: Server; url: string }> {
       const content = typeof lastUser?.content === "string" ? lastUser.content : ""
       if (content.includes("挂起") && !content.includes("30字")) {
         gate.open = true
+        held.push(res)
         res.on("close", () => {
           gate.open = false
+          const idx = held.indexOf(res)
+          if (idx >= 0) held.splice(idx, 1)
         })
         res.writeHead(200, { "content-type": "text/event-stream" })
         return
@@ -359,28 +385,38 @@ describe("kclaw chat (built CLI + real daemon + mock SSE provider)", () => {
   it(
     "scenario E: injected memory notes render once; user message events never double-echo",
     async () => {
-      // Line 1 asks the model to save a memory (safe tool, auto-allowed);
-      // line 2's user message then gets that memory injected as a note
-      // block — the daemon announces it as note.emitted between the user
-      // message's created/completed, and the CLI renders it exactly once.
-      // (A job note is unreachable from the CLI: send_message never carries
-      // one — the memory note is the reachable user-note path.)
-      const res = await runChatCli(["chat"], "记住用户住在上海\n上海\n/exit\n")
-      expect(res.exitCode).toBe(0)
-      expect(res.stderr).toBe("")
-      expect(res.stdout).toContain("⚡ memory_save") // the save round ran
+      // Invocation 1 asks the model to save a memory (safe tool, auto-allowed).
+      // Invocation 2 (same session, scenario C's sequential-turn pattern) then
+      // sends a message whose run gets that memory injected as a note block —
+      // the daemon announces it as note.emitted between the message's
+      // created/completed, and the CLI renders it exactly once. Two
+      // invocations keep the second message in its OWN run: one input stream
+      // would dispatch the second line while the first run still renders
+      // (frame-pump behaviour) and the daemon would steer-inject it instead —
+      // an injected message deliberately skips the memory hook.
+      const first = await runChatCli(["chat"], "记住用户住在上海\n/exit\n")
+      expect(first.exitCode).toBe(0)
+      expect(first.stderr).toBe("")
+      expect(first.stdout).toContain("⚡ memory_save") // the save round ran
+
+      const sid = SESSION_ID_RE.exec(first.stdout)?.[0]
+      expect(sid, `no session id in header: ${first.stdout}`).toBeTruthy()
+      const second = await runChatCli(["chat", "--session", sid!], "上海\n/exit\n")
+      expect(second.exitCode).toBe(0)
+      expect(second.stderr).toBe("")
 
       // the note is announced ONCE on the wire and rendered ONCE
-      expect(res.stdout.split("[note] 相关记忆").length - 1).toBe(1)
-      expect(res.stdout).toContain("[note] 相关记忆: 用户住在上海")
+      const stdout = first.stdout + second.stdout
+      expect(stdout.split("[note] 相关记忆").length - 1).toBe(1)
+      expect(stdout).toContain("[note] 相关记忆: 用户住在上海")
 
       // no double echo of either typed line: the FULL first line never
       // appears (the tool args carry the model's argument text
       // "用户住在上海", not the typed sentence), and "上海" exactly twice
       // (tool args + note line) — a rendered user message event would add
       // another bare occurrence of the second line.
-      expect(res.stdout.split("记住用户住在上海").length - 1).toBe(0)
-      expect(res.stdout.split("上海").length - 1).toBe(2)
+      expect(stdout.split("记住用户住在上海").length - 1).toBe(0)
+      expect(stdout.split("上海").length - 1).toBe(2)
     },
     15_000,
   )
@@ -492,6 +528,204 @@ describe("kclaw chat (built CLI + real daemon + mock SSE provider)", () => {
       // request open against the mock (its gate never releases). Kill it here
       // so the mock connection drops and afterAll's server.close() can drain —
       // the afterAll sweep still removes the home (its kill becomes a no-op).
+      const { pid } = JSON.parse(readFileSync(join(dHome, "daemon.json"), "utf8")) as { pid: number }
+      process.kill(pid, "SIGKILL")
+      await until("held gate released", 5_000, () => !gate.open)
+
+      ws.close()
+      await pump.catch(() => {})
+    },
+    30_000,
+  )
+
+  it(
+    "plain send while busy queues as wait; renderRun waits for MY run to complete",
+    async () => {
+      // Own home so the shared daemon (other scenarios) is untouched.
+      const dHome = mkdtempSync(join(tmpdir(), "kclaw-chat-home-queued-"))
+      homes.push(dHome)
+      gate.open = false
+
+      const subprocess = execa(process.execPath, [CLI, "--home", dHome], {
+        env: {
+          ...process.env,
+          KCLAW_LLM_BASE_URL: mockUrl,
+          KCLAW_LLM_API_KEY: "chat-test-key",
+          KCLAW_LLM_MODEL: "chat-test-model",
+        },
+        reject: false,
+        timeout: 30_000,
+      })
+      let seen = ""
+      subprocess.stdout!.on("data", (d: Buffer) => {
+        seen += d.toString("utf8")
+      })
+
+      // Wait for the header: daemon spawned, session created, ws subscribed.
+      const headerDeadline = Date.now() + 15_000
+      while (!/session ses_/.test(seen)) {
+        if (Date.now() > headerDeadline) throw new Error(`chat never printed its header: ${seen}`)
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      const sid = SESSION_ID_RE.exec(seen)![0]!
+
+      // An observer ws on the same daemon watches the wire: the queued message
+      // must ride out run.completed of the BUSY run and render its OWN run.
+      const info = JSON.parse(readFileSync(join(dHome, "daemon.json"), "utf8")) as { port: number }
+      const token = readFileSync(join(dHome, "token"), "utf8").trim()
+      const client = new KclawClient(`http://127.0.0.1:${info.port}`, token)
+      const ws = await client.ws()
+      ws.send({ type: "subscribe", sessionId: sid })
+      const events: Array<Record<string, unknown>> = []
+      const pump = (async () => {
+        for await (const f of ws.frames) events.push(f)
+      })()
+      await until("subscribed ack", 5_000, () => events.some((f) => f.type === "subscribed"))
+
+      // Message 1: a busy run — the gate holds its LLM turn open.
+      subprocess.stdin!.write("请挂起\n")
+      await until("gate-held run to start", 10_000, () => gate.open)
+
+      // /wait flips the mode; the plain line then queues behind the busy run;
+      // /exit lets the REPL wait for the follow-up render before exiting.
+      subprocess.stdin!.write("/wait\n排队二好\n/exit\n")
+      subprocess.stdin!.end()
+
+      // The plain send was answered with ack{queued:true} + message.queued.
+      let queuedId = ""
+      await until("message.queued (wait, position 0)", 10_000, () => {
+        const q = events.find(
+          (f) => f.type === "message.queued" && (f.payload as { disposition?: string } | undefined)?.disposition === "wait",
+        )
+        if (q === undefined) return false
+        queuedId = (q.payload as { messageId: string }).messageId
+        expect((q.payload as { position?: number }).position).toBe(0)
+        return true
+      })
+
+      // 放行第一条：the busy run completes; the driver dequeues the queued
+      // message and ITS OWN run starts with the SAME message id, then completes.
+      const response = await fetch(`${mockUrl}/release`, { method: "POST" })
+      expect(response.status).toBe(200)
+      await until("queued → run.completed → run.started → created{queuedId} → run.completed", 20_000, () => {
+        const idxQueued = events.findIndex((f) => f.type === "message.queued")
+        const firstCompleted = events.findIndex((f, i) => i > idxQueued && f.type === "run.completed")
+        const idxStarted = events.findIndex((f, i) => i > firstCompleted && f.type === "run.started")
+        const idxCreated = events.findIndex(
+          (f) => f.type === "message.created" && (f.payload as { message?: { id?: string } } | undefined)?.message?.id === queuedId,
+        )
+        const secondCompleted = events.findIndex((f, i) => i > Math.max(idxCreated, idxStarted) && f.type === "run.completed")
+        return firstCompleted >= 0 && idxStarted > firstCompleted && idxCreated > idxStarted && secondCompleted > idxCreated
+      })
+
+      const res = await subprocess
+      expect(res.exitCode).toBe(0)
+      expect(res.stderr).toBe("")
+      expect(seen).toContain("已排队（第 1 位）") // the dim queued hint (position 0)
+      expect(seen).toContain("你好，世界") // the queued message's OWN run rendered to completion
+
+      ws.close()
+      await pump.catch(() => {})
+    },
+    30_000,
+  )
+
+  it(
+    "/interrupt aborts the active run and the message's own run renders to completion",
+    async () => {
+      // Own home so the shared daemon (other scenarios) is untouched.
+      const dHome = mkdtempSync(join(tmpdir(), "kclaw-chat-home-interrupt-"))
+      homes.push(dHome)
+      gate.open = false
+
+      const subprocess = execa(process.execPath, [CLI, "--home", dHome], {
+        env: {
+          ...process.env,
+          KCLAW_LLM_BASE_URL: mockUrl,
+          KCLAW_LLM_API_KEY: "chat-test-key",
+          KCLAW_LLM_MODEL: "chat-test-model",
+        },
+        reject: false,
+        timeout: 30_000,
+      })
+      let seen = ""
+      subprocess.stdout!.on("data", (d: Buffer) => {
+        seen += d.toString("utf8")
+      })
+
+      // Wait for the header: daemon spawned, session created, ws subscribed.
+      const headerDeadline = Date.now() + 15_000
+      while (!/session ses_/.test(seen)) {
+        if (Date.now() > headerDeadline) throw new Error(`chat never printed its header: ${seen}`)
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      const sid = SESSION_ID_RE.exec(seen)![0]!
+
+      // An observer ws records the wire-level interrupt sequence.
+      const info = JSON.parse(readFileSync(join(dHome, "daemon.json"), "utf8")) as { port: number }
+      const token = readFileSync(join(dHome, "token"), "utf8").trim()
+      const client = new KclawClient(`http://127.0.0.1:${info.port}`, token)
+      const ws = await client.ws()
+      ws.send({ type: "subscribe", sessionId: sid })
+      const events: Array<Record<string, unknown>> = []
+      const pump = (async () => {
+        for await (const f of ws.frames) events.push(f)
+      })()
+      await until("subscribed ack", 5_000, () => events.some((f) => f.type === "subscribed"))
+
+      // Busy run first (the gate holds its LLM turn), then /interrupt mid-run.
+      subprocess.stdin!.write("请挂起\n")
+      await until("gate-held run to start", 10_000, () => gate.open)
+      subprocess.stdin!.write("/interrupt 换方向\n/exit\n")
+      subprocess.stdin!.end()
+
+      // The interrupt submit: ack + message.queued{disposition interrupt, position 0}.
+      let interruptId = ""
+      await until("message.queued (interrupt, position 0)", 10_000, () => {
+        const q = events.find(
+          (f) => f.type === "message.queued" && (f.payload as { disposition?: string } | undefined)?.disposition === "interrupt",
+        )
+        if (q === undefined) return false
+        interruptId = (q.payload as { messageId: string }).messageId
+        expect((q.payload as { position?: number }).position).toBe(0)
+        return true
+      })
+
+      // The busy run ends aborted AFTER the interrupt submit landed...
+      await until("busy run aborted", 10_000, () => {
+        const idxQueued = events.findIndex(
+          (f) => f.type === "message.queued" && (f.payload as { disposition?: string } | undefined)?.disposition === "interrupt",
+        )
+        return (
+          events.findIndex(
+            (f, i) => i > idxQueued && f.type === "run.completed" && (f.payload as { stopReason?: string } | undefined)?.stopReason === "aborted",
+          ) > 0
+        )
+      })
+      // ...and the interrupted message's OWN run renders to completion:
+      // run.started → message.created{same id} → text → run.completed.
+      await until("interrupt message's own run completed", 20_000, () => {
+        const idxAborted = events.findIndex(
+          (f) => f.type === "run.completed" && (f.payload as { stopReason?: string } | undefined)?.stopReason === "aborted",
+        )
+        const idxCreated = events.findIndex(
+          (f) => f.type === "message.created" && (f.payload as { message?: { id?: string } } | undefined)?.message?.id === interruptId,
+        )
+        const idxCompleted = events.findIndex((f, i) => i > Math.max(idxAborted, idxCreated) && f.type === "run.completed")
+        return idxAborted >= 0 && idxCreated > idxAborted && idxCompleted > idxCreated
+      })
+
+      const res = await subprocess
+      expect(res.exitCode).toBe(0)
+      expect(res.stderr).toBe("")
+      expect(seen).toContain("已排队（第 1 位）") // the interrupt's dim queued hint (head of the queue)
+      expect(seen).toContain("你好，世界") // the NEW run's output rendered by the REPL
+
+      // Cleanup: the abort can leave the daemon's LLM retry request open
+      // against the mock (the withRetry re-issue fires before the abort is
+      // observed; its gate never releases on its own). Kill the daemon so the
+      // mock connection drops and afterAll's server.close() can drain — the
+      // afterAll sweep still removes the home (its kill becomes a no-op).
       const { pid } = JSON.parse(readFileSync(join(dHome, "daemon.json"), "utf8")) as { pid: number }
       process.kill(pid, "SIGKILL")
       await until("held gate released", 5_000, () => !gate.open)
