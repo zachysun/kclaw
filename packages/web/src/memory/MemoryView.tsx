@@ -5,7 +5,7 @@
  * 纯 REST 拉取 + 本地筛选；编辑是整文件 textarea + 保存 PATCH / 删除 DELETE。
  * 服务端 503（记忆未装配）时相应 GET 走 catch → notice 提示。
  */
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import type { ApiClient } from "../api.js"
 
 interface ProjectRow { id: string; workdir: string; threads: number; lastActivity: string }
@@ -13,6 +13,14 @@ interface ThreadRow { topic: string; title: string; status: string; updated: str
 interface CogRow { kind: "persona" | "wiki" | "rule"; name: string; path: string; scope: string; updated: string }
 
 export function MemoryView({ api, notice }: { api: ApiClient; notice: (text: string) => void }) {
+  // notice 走 ref：reloadProjects 只依赖 api（稳定），effect 不会因父组件每次
+  // 重渲染新建的内联 notice identity 而重复触发（审查 Important：App 传内联箭头，
+  // 若 reloadProjects 依赖 notice，删除/停留记忆 tab 会反复拉 projects + global）。
+  const noticeRef = useRef(notice)
+  useEffect(() => {
+    noticeRef.current = notice
+  })
+
   const [projects, setProjects] = useState<ProjectRow[] | null>(null)
   const [projectId, setProjectId] = useState<string | null>(null)
   const [threads, setThreads] = useState<ThreadRow[] | null>(null)
@@ -23,9 +31,9 @@ export function MemoryView({ api, notice }: { api: ApiClient; notice: (text: str
   const [dirtyPath, setDirtyPath] = useState<string | null>(null) // 保存目标（thread 或 cognition 的 PATCH 路径）
 
   const reloadProjects = useCallback(() => {
-    api.get<ProjectRow[]>("/memory/projects").then(setProjects).catch((e) => notice(`加载项目失败: ${String(e)}`))
-    api.get<CogRow[]>("/memory/global").then(setCogs).catch((e) => notice(`加载全局认知失败: ${String(e)}`))
-  }, [api, notice])
+    api.get<ProjectRow[]>("/memory/projects").then(setProjects).catch((e) => noticeRef.current(`加载项目失败: ${String(e)}`))
+    api.get<CogRow[]>("/memory/global").then(setCogs).catch((e) => noticeRef.current(`加载全局认知失败: ${String(e)}`))
+  }, [api])
 
   useEffect(() => { reloadProjects() }, [reloadProjects])
 
@@ -50,6 +58,17 @@ export function MemoryView({ api, notice }: { api: ApiClient; notice: (text: str
     try {
       await api.patch(dirtyPath, { content: draft })
       notice("已保存")
+      // 保存后刷新所属列表，让 updated 时间戳跟上（reloadProjects 稳定后 effect
+      // 不会自动补拉——这里显式刷新，不叠加重复 GET）。
+      if (threadTopic !== null && projectId !== null) {
+        api.get<{ threads: ThreadRow[] }>(`/memory/projects/${encodeURIComponent(projectId)}`)
+          .then((r) => setThreads(r.threads))
+          .catch((e) => notice(`加载线程失败: ${String(e)}`))
+      } else if (cogTarget !== null) {
+        api.get<CogRow[]>("/memory/global")
+          .then(setCogs)
+          .catch((e) => notice(`加载全局认知失败: ${String(e)}`))
+      }
     } catch (e) { notice(`保存失败: ${String(e)}`) }
   }
 
@@ -61,7 +80,9 @@ export function MemoryView({ api, notice }: { api: ApiClient; notice: (text: str
       setThreadTopic(null); setCogTarget(null); setDraft(""); setDirtyPath(null)
       reloadProjects()
       if (projectId !== null) {
-        api.get<{ threads: ThreadRow[] }>(`/memory/projects/${encodeURIComponent(projectId)}`).then((r) => setThreads(r.threads)).catch(() => setThreads([]))
+        api.get<{ threads: ThreadRow[] }>(`/memory/projects/${encodeURIComponent(projectId)}`)
+          .then((r) => setThreads(r.threads))
+          .catch((e) => { setThreads([]); notice(`加载线程失败: ${String(e)}`) })
       }
     } catch (e) { notice(`删除失败: ${String(e)}`) }
   }
@@ -79,7 +100,7 @@ export function MemoryView({ api, notice }: { api: ApiClient; notice: (text: str
                   <button type="button" onClick={async () => {
                     setProjectId(p.id); setThreadTopic(null)
                     try { setThreads((await api.get<{ threads: ThreadRow[] }>(`/memory/projects/${encodeURIComponent(p.id)}`)).threads) }
-                    catch { setThreads([]) }
+                    catch (e) { setThreads([]); notice(`加载线程失败: ${String(e)}`) }
                   }}>{p.id}（{p.threads} 线）</button>
                 </li>
               ))}
@@ -89,20 +110,22 @@ export function MemoryView({ api, notice }: { api: ApiClient; notice: (text: str
         {threads !== null && (
           <section>
             <h3>主题线</h3>
-            <ul data-testid="memory-threads">
-              {threads.map((t) => (
-                <li key={t.topic}>
-                  <button type="button" onClick={() => { if (projectId !== null) void openThread(projectId, t.topic) }}>
-                    {t.title} · {t.status} · {t.updated}
-                  </button>
-                </li>
-              ))}
-            </ul>
+            {threads.length === 0 ? <p className="muted">该主题无线程</p> : (
+              <ul data-testid="memory-threads">
+                {threads.map((t) => (
+                  <li key={t.topic}>
+                    <button type="button" onClick={() => { if (projectId !== null) void openThread(projectId, t.topic) }}>
+                      {t.title} · {t.status} · {t.updated}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
         )}
         <section>
           <h3>全局认知</h3>
-          {cogs === null ? <p className="muted">加载中…</p> : (
+          {cogs === null ? <p className="muted">加载中…</p> : cogs.length === 0 ? <p className="muted">还没有全局认知</p> : (
             <ul data-testid="memory-cognitions">
               {cogs.map((c) => (
                 <li key={c.path}>

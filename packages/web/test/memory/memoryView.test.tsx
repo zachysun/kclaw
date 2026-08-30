@@ -125,6 +125,8 @@ describe("MemoryView", () => {
       await flush()
       expect(api.patch).toHaveBeenCalledWith("/memory/threads/kclaw-a3f2c9/ws-reconnect", { content: "改后的内容" })
       expect(notices).toContain("已保存")
+      // Minor 3：保存后显式刷新所属项目线程列表（updated 时间戳跟上）
+      expect(api.get.mock.calls.filter((c) => c[0] === "/memory/projects/kclaw-a3f2c9")).toHaveLength(2)
     } finally {
       root.unmount()
       container.remove()
@@ -156,6 +158,61 @@ describe("MemoryView", () => {
       expect(api.del).toHaveBeenCalledWith("/memory/global/persona/persona")
       expect(notices).toContain("已删除")
       expect(container.querySelector('[data-testid="memory-editor"]')).toBeNull()
+    } finally {
+      root.unmount()
+      container.remove()
+    }
+  })
+
+  it("does not re-fetch the lists when the notice callback identity changes", async () => {
+    // 回归（审查 Important）：App 传的是内联箭头，父重渲染每次新建 notice
+    // identity。reloadProjects 的 effect 不得跟着 notice 变——否则停在记忆
+    // tab 时每个父重渲染都重复拉 projects + global。
+    const api = fakeApi()
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(<MemoryView api={api} notice={() => {}} />)
+      })
+      await flush()
+      expect(api.get).toHaveBeenCalledTimes(2) // projects + global 各一次
+      // 父重渲染 → 新 identity 的 notice → 组件重渲染，但不许再拉取
+      await act(async () => {
+        root.render(<MemoryView api={api} notice={() => {}} />)
+      })
+      await flush()
+      expect(api.get.mock.calls.filter((c) => c[0] === "/memory/projects")).toHaveLength(1)
+      expect(api.get.mock.calls.filter((c) => c[0] === "/memory/global")).toHaveLength(1)
+    } finally {
+      root.unmount()
+      container.remove()
+    }
+  })
+
+  it("shows a notice when loading threads fails and renders the empty states", async () => {
+    const notices: string[] = []
+    const api = fakeApi({
+      get: vi.fn(async (path: string) => {
+        if (path === "/memory/projects") return [{ id: "kclaw-a3f2c9", workdir: "/w/kclaw", threads: 2, lastActivity: "2026-08-28" }]
+        if (path === "/memory/projects/kclaw-a3f2c9") throw new Error("memory unavailable")
+        if (path === "/memory/global") return []
+        throw new Error(`unexpected ${path}`)
+      }),
+    })
+    const { container, root } = await mount(api, (t) => { notices.push(t) })
+    try {
+      // 全局认知为空 → 空态文案（而不是空 <ul>）
+      expect(container.querySelector('[data-testid="memory-cognitions"]')).toBeNull()
+      expect(container.textContent).toContain("还没有全局认知")
+      // 线程加载失败 → notice + 空态文案（而不是静默）
+      await act(async () => {
+        buttonByText(container, "kclaw-a3f2c9").click()
+      })
+      await flush()
+      expect(notices.some((n) => n.includes("加载线程失败"))).toBe(true)
+      expect(container.textContent).toContain("该主题无线程")
     } finally {
       root.unmount()
       container.remove()
