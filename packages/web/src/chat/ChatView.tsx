@@ -7,7 +7,7 @@
  */
 import { Fragment, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { parseSlashInput, slashCompletions, SLASH_COMMANDS } from "@kclaw/core/commands"
-import type { ChatState, ConfirmationCard, NoteRender, QueueEntryView, RenderedBlock, RenderedMessage } from "./model.js"
+import type { ChatState, ConfirmationCard, NoteRender, RenderedBlock, RenderedMessage } from "./model.js"
 
 /**
  * How a message enters a busy session (spec §6): steer injects into the live
@@ -95,9 +95,10 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
   const completions = dismissed ? [] : slashCompletions(draft, "web")
   const active = Math.min(sel, Math.max(0, completions.length - 1))
 
-  // 排队提示条计数（spec §7.1）：只数仍在排队的条目（injected 的已注入，不再占位）。
+  // 排队列表数据（spec §7.1，Master 2026-08-30 改版）：view.queue 本身就是
+  // FIFO 行序（先排队的在下标 0），直接渲染即"先排队在上面"。
   // 独立于一次性 notice——它是状态，不随输入清除。
-  const queuedCount = view.queue.filter((q) => q.state === "queued").length
+  const queuedRows = view.queue
 
   /** 三选的方向键旋转（spec §7.1：方向键+回车与点击皆可；回车/空格是按钮原生行为）。 */
   const handleTrioKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
@@ -207,12 +208,10 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
       <div className="chat-log" data-testid="chat-log">
         {view.messages.map((message, idx) => {
           const context = contextBarFor(view.messages, idx)
-          // 排队中的消息按 id 命中队列条目——气泡据此显示角标/取消按钮（spec §7.1）。
-          const queueEntry = view.queue.find((q) => q.messageId === message.id)
           return (
             <Fragment key={message.id}>
               {context !== null && <CompactContextNote context={context} />}
-              <MessageBubble message={message} queueEntry={queueEntry} onCancelQueued={onCancelQueued} />
+              <MessageBubble message={message} />
             </Fragment>
           )
         })}
@@ -264,10 +263,31 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
           {notice}
         </div>
       )}
-      {queuedCount > 0 && (
-        <div className="queue-banner" data-testid="queue-banner" role="status">
-          {queuedCount} 条排队中
-          <button type="button" data-testid="queue-cancel-all" onClick={() => onCancelAllQueued?.()}>全部取消</button>
+      {queuedRows.length > 0 && (
+        <div className="queue-list" data-testid="queue-list" role="status">
+          <div className="queue-list-head">
+            <span>{queuedRows.length} 条排队中</span>
+            <button type="button" data-testid="queue-cancel-all" onClick={() => onCancelAllQueued?.()}>全部取消</button>
+          </div>
+          {queuedRows.map((e) => (
+            <div className="queue-row" data-testid="queue-row" key={e.messageId}>
+              <span className="queue-disp" data-testid="queue-disp">
+                {e.disposition === "steer" ? "引导" : e.disposition === "wait" ? "等待" : "中断"}
+              </span>
+              <span className="queue-text" title={e.text}>{e.text}</span>
+              {/* 可取消窗口（spec §5.6）：wait 随时、steer 注入前；interrupt 入队即
+                  伴随 abort 紧接着出队执行，无可取消窗口——不渲染取消按钮。 */}
+              {e.disposition !== "interrupt" && (
+                <button
+                  type="button"
+                  className="queue-cancel"
+                  data-testid="queue-cancel"
+                  aria-label="取消这条排队消息"
+                  onClick={() => onCancelQueued?.(e.messageId)}
+                >取消</button>
+              )}
+            </div>
+          ))}
         </div>
       )}
       <form className="chat-composer" ref={composerRef} onSubmit={submit}>
@@ -397,42 +417,12 @@ function CompactContextNote({ context }: { context: CompactContextInfo }) {
   )
 }
 
-function MessageBubble({ message, queueEntry, onCancelQueued }: {
-  message: RenderedMessage
-  /** This message's send-queue entry, when it is queued/injected (looked up by id). */
-  queueEntry?: QueueEntryView
-  onCancelQueued?: (messageId: string) => void
-}) {
+function MessageBubble({ message }: { message: RenderedMessage }) {
   const streaming = message.pending && message.blocks.length === 0
-  const queued = queueEntry !== undefined && queueEntry.state === "queued"
-  // wait 排队 → 半透明（.queued）；steer 排队保持正常样式，取消按钮承载状态
-  // （spec §7.1）。角标：排队中的 wait 显"排队中"，已注入的显"已注入"。
-  const queuedWait = queued && queueEntry.disposition === "wait"
-  // 可取消窗口（spec §5.6）：wait 随时可取消、steer 注入前可取消；interrupt 入队即
-  // 伴随 abort、紧接着出队执行，无可取消窗口——不渲染取消按钮（点击只能换来
-  // not_found 错误帧）。interrupt 气泡走正常执行态呈现，随即被自己的 run 接管。
-  const cancellable = queued && queueEntry.disposition !== "interrupt"
-  const badge = queueEntry === undefined
-    ? null
-    : queueEntry.state === "injected"
-      ? "已注入"
-      : queuedWait
-        ? "排队中"
-        : null
   return (
-    <div className={`message message-${message.role}${queuedWait ? " queued" : ""}`} data-testid={`msg-${message.role}`}>
+    <div className={`message message-${message.role}`} data-testid={`msg-${message.role}`}>
       {streaming && <div className="msg-pending" data-testid="msg-pending">…</div>}
-      {badge !== null && <span className="queue-badge" data-testid="queue-badge">{badge}</span>}
       {message.blocks.map((block) => <BlockView key={block.blockId} block={block} />)}
-      {cancellable && (
-        <button
-          type="button"
-          className="queue-cancel"
-          data-testid="queue-cancel"
-          aria-label="取消这条排队消息"
-          onClick={() => onCancelQueued?.(message.id)}
-        >取消</button>
-      )}
     </div>
   )
 }

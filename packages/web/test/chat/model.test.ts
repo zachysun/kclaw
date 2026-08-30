@@ -10,6 +10,7 @@ import {
   initChat,
   mergeMessages,
   mergeQueue,
+  appendPendingQueueRow,
   adoptQueuedId,
   type AgentEvent,
   type Block,
@@ -442,97 +443,160 @@ describe("queue reducer", () => {
     blocks: [{ id: "b", type: "text", text }], createdAt: "t",
   })
 
-  it("message.queued adopts the optimistic bubble id and tracks the entry", () => {
-    let s = appendOptimisticUser(base(), "排队消息")
-    s = applyEvent(s, ev("message.queued", { messageId: "msg_9", disposition: "wait", position: 0 }))
-    expect(s.queue).toEqual([{ messageId: "msg_9", disposition: "wait", state: "queued", text: "排队消息" }])
-    expect(s.messages.some((m) => m.id === "msg_9")).toBe(true)
-    expect(s.messages.some((m) => m.id.startsWith("local-"))).toBe(false)
+  it("appendPendingQueueRow: a busy-session send starts as a local row, never a bubble", () => {
+    // Master 2026-08-30 第二轮：忙会话（running/compacting）发送的消息从第一
+    // 帧起就不进消息流——乐观回显搬到列表行（local- 前缀待确认 id）。
+    let s = appendPendingQueueRow(base(), "排队消息", "wait")
+    expect(s.messages).toHaveLength(0)
+    expect(s.queue).toHaveLength(1)
+    expect(s.queue[0]!.messageId.startsWith("local-")).toBe(true)
+    expect(s.queue[0]!.text).toBe("排队消息")
+    // FIFO：后发的排下面
+    s = appendPendingQueueRow(s, "第二条", "steer")
+    expect(s.queue.map((e) => e.text)).toEqual(["排队消息", "第二条"])
   })
 
-  it("message.steered flips state to injected", () => {
+  it("busy-send full chain: local row → ack rename → message.queued refresh → created lands the bubble", () => {
+    let s = appendPendingQueueRow(base(), "排队消息", "wait")
+    const localId = s.queue[0]!.messageId
+    // ack 先到：改名本地行（收养）
+    s = adoptQueuedId(s, "msg_9")
+    expect(s.queue[0]!.messageId).toBe("msg_9")
+    expect(s.queue[0]!.text).toBe("排队消息")
+    expect(s.messages).toHaveLength(0)
+    // message.queued 后到：id 已跟踪 → 只刷新处置，文本不丢
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_9", disposition: "wait", position: 0 }))
+    expect(s.queue).toEqual([{ messageId: "msg_9", disposition: "wait", text: "排队消息" }])
+    // 轮到它执行：created 删行、气泡落进消息流
+    s = applyEvent(s, ev("message.created", { message: wireMsg("msg_9", "排队消息") }))
+    expect(s.queue).toHaveLength(0)
+    expect(s.messages.map((m) => m.id)).toEqual(["msg_9"])
+    expect(localId.startsWith("local-")).toBe(true) // (id was never a bubble id)
+  })
+
+  it("message.queued first (before ack): adopts the local ROW (rename), not just bubbles", () => {
+    let s = appendPendingQueueRow(base(), "排队消息", "wait")
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_8", disposition: "wait" }))
+    // 本地行被收养改名——不是落地一条空文本的新行（双行）
+    expect(s.queue).toEqual([{ messageId: "msg_8", disposition: "wait", text: "排队消息" }])
+    // 随后真 ack 到达：id 已跟踪 → no-op（不得偷走下一条的 local- 行）
+    s = appendPendingQueueRow(s, "第二条", "wait")
+    s = adoptQueuedId(s, "msg_8")
+    expect(s.queue.map((e) => e.messageId)).toEqual(["msg_8", s.queue[1]!.messageId])
+    expect(s.queue[0]!.text).toBe("排队消息")
+    expect(s.queue[1]!.text).toBe("第二条")
+  })
+
+  it("cancel removes a still-local row (message never confirmed by the server)", () => {
+    let s = appendPendingQueueRow(base(), "还没确认", "wait")
+    s = applyEvent(s, ev("message.queue_cancelled", { all: true }))
+    expect(s.queue).toHaveLength(0)
+  })
+
+  it("mergeQueue drops an unconfirmed local row (resync is authoritative)", () => {
+    // 重连快照整体替换：本地未确认行被服务端真相取代——消息送达则服务端行
+    // 重现（服务器 id），没送达则行消失（用户需重发），无幽灵行。
+    let s = appendPendingQueueRow(base(), "断线前发送", "wait")
+    s = mergeQueue(s, [{ messageId: "srv_1", disposition: "wait", text: "断线前发送" }])
+    expect(s.queue).toEqual([{ messageId: "srv_1", disposition: "wait", text: "断线前发送" }])
+  })
+
+  it("message.queued moves the optimistic bubble into a queue row (idle→busy race bubble)", () => {
+    // 空闲瞬间直发渲染了乐观气泡、run 随即开始：入队确认时气泡收走（文本带
+    // 走），列表行是排队的唯一视图。
+    let s = appendOptimisticUser(base(), "排队消息")
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_9", disposition: "wait", position: 0 }))
+    expect(s.queue).toEqual([{ messageId: "msg_9", disposition: "wait", text: "排队消息" }])
+    expect(s.messages).toHaveLength(0)
+  })
+
+  it("message.steered removes the entry (injection → the bubble lands via message.created)", () => {
     let s = appendOptimisticUser(base(), "引导")
     s = applyEvent(s, ev("message.queued", { messageId: "msg_1", disposition: "steer" }))
     s = applyEvent(s, ev("message.steered", { messageId: "msg_1" }))
-    expect(s.queue[0]!.state).toBe("injected")
+    expect(s.queue).toHaveLength(0)
+    // 注入的消息本体随后经 created 进消息流（历史消息，正常气泡）。
+    s = applyEvent(s, ev("message.created", { message: wireMsg("msg_1", "引导") }))
+    expect(s.messages.map((m) => m.id)).toEqual(["msg_1"])
   })
 
-  it("message.queue_cancelled removes the bubble and the entry", () => {
+  it("message.queue_cancelled removes the entry (its bubble was never kept)", () => {
     let s = appendOptimisticUser(base(), "取消我")
     s = applyEvent(s, ev("message.queued", { messageId: "msg_2", disposition: "wait" }))
     s = applyEvent(s, ev("message.queue_cancelled", { messageId: "msg_2" }))
     expect(s.queue).toHaveLength(0)
-    expect(s.messages.some((m) => m.id === "msg_2")).toBe(false)
+    expect(s.messages).toHaveLength(0)
   })
 
-  it("dequeue execution: message.created with a queued id removes the queue entry", () => {
+  it("dequeue execution: message.created with a queued id removes the entry, the bubble lands at the end", () => {
     let s = appendOptimisticUser(base(), "执行我")
     s = applyEvent(s, ev("message.queued", { messageId: "msg_3", disposition: "wait", position: 0 }))
     s = applyEvent(s, ev("message.created", { message: wireMsg("msg_3", "执行我") }))
     expect(s.queue).toHaveLength(0)
-    expect(s.messages.some((m) => m.id === "msg_3")).toBe(true)
+    expect(s.messages.map((m) => m.id)).toEqual(["msg_3"])
   })
 
-  it("mergeQueue rebuilds bubbles after reconnect", () => {
-    let s = base()
-    s = mergeQueue(s, [{ messageId: "msg_5", disposition: "wait", text: "断线期间的排队" }])
-    expect(s.queue[0]!.messageId).toBe("msg_5")
-    expect(s.messages.some((m) => m.id === "msg_5" && m.blocks[0]!.kind === "text")).toBe(true)
+  it("mergeQueue rebuilds the rows after reconnect (server order, no bubble materialization)", () => {
+    const s = mergeQueue(base(), [
+      { messageId: "msg_5", disposition: "wait", text: "断线期间的排队" },
+      { messageId: "msg_6", disposition: "steer", text: "第二条" },
+    ])
+    expect(s.queue.map((e) => e.messageId)).toEqual(["msg_5", "msg_6"])
+    expect(s.messages).toHaveLength(0)
   })
 
-  it("adoptQueuedId swaps the oldest local- pending bubble (ack path)", () => {
+  it("adoptQueuedId swaps the oldest local- pending bubble (ack-first path)", () => {
     let s = appendOptimisticUser(base(), "via ack")
     s = adoptQueuedId(s, "msg_7")
     expect(s.messages.some((m) => m.id === "msg_7")).toBe(true)
-    expect(s.messages.some((m) => m.id.startsWith("local-"))).toBe(false)
+    // ack 先到改名后，message.queued 仍能按 id 找到气泡收走并建行。
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_7", disposition: "wait" }))
+    expect(s.queue).toEqual([{ messageId: "msg_7", disposition: "wait", text: "via ack" }])
+    expect(s.messages).toHaveLength(0)
   })
 
-  it("message.queued swaps ids IN PLACE so bubbles keep their send order (FIFO adoption)", () => {
+  it("adoptQueuedId is a no-op for an already-tracked id (must not steal the NEXT bubble)", () => {
+    // 常见序是 message.queued 先于 ack：气泡已被收走、行已存在。此时 ack 若
+    // 盲目把"最早的 local- 气泡"改名，会偷走用户随后新发的那条。
+    let s = appendOptimisticUser(base(), "已入队的那条")
+    s = applyEvent(s, ev("message.queued", { messageId: "msg_a", disposition: "wait" }))
+    s = appendOptimisticUser(s, "新来的")
+    s = adoptQueuedId(s, "msg_a")
+    expect(s.queue).toHaveLength(1)
+    expect(s.messages.map((m) => m.id).every((id) => id.startsWith("local-"))).toBe(true)
+  })
+
+  it("queued rows keep their send order (FIFO)", () => {
     let s = appendOptimisticUser(base(), "第一条")
     s = appendOptimisticUser(s, "第二条")
     s = applyEvent(s, ev("message.queued", { messageId: "msg_a", disposition: "wait" }))
     s = applyEvent(s, ev("message.queued", { messageId: "msg_b", disposition: "wait" }))
-    expect(s.messages.map((m) => m.id)).toEqual(["msg_a", "msg_b"])
+    expect(s.messages).toHaveLength(0)
     expect(s.queue.map((e) => e.messageId)).toEqual(["msg_a", "msg_b"])
     expect(s.queue.map((e) => e.text)).toEqual(["第一条", "第二条"])
   })
 
-  it("message.queued for an already-tracked id skips adoption (no bubble steal, no double)", () => {
-    // 恢复重播恰逢在途乐观气泡：queue 已含 msg_x（早先收养了"旧排队"气泡），
-    // 再收一条 message.queued{msg_x}。收养必须先查重——否则最早 pending 的
-    // local- 气泡（"新来的"）会被改名成 msg_x：队列文本张冠李戴、同 id 双气泡，
-    // 随后真 ack 的 adoptQueuedId 找不到 local- 气泡而 no-op。
+  it("message.queued for an already-tracked id skips adoption (no row-text steal, no double)", () => {
+    // 恢复重播恰逢在途乐观气泡：queue 已含 msg_x（行文本"旧排队"），再收一条
+    // message.queued{msg_x}。必须先查重——否则最早的 pending local- 气泡（"新来
+    // 的"）会被收走、行文本被张冠李戴。
     let s = appendOptimisticUser(base(), "旧排队")
     s = applyEvent(s, ev("message.queued", { messageId: "msg_x", disposition: "steer" }))
     s = appendOptimisticUser(s, "新来的")
-    const localId = s.messages[1]!.id
-    expect(localId.startsWith("local-")).toBe(true)
     s = applyEvent(s, ev("message.queued", { messageId: "msg_x", disposition: "wait" }))
-    // 现有气泡不被改名：msg_x 只有一个（先前收养的），local- 气泡原样保留
-    expect(s.messages.filter((m) => m.id === "msg_x")).toHaveLength(1)
-    expect(s.messages[1]!.id).toBe(localId)
-    expect(firstTextOf(s.messages[1]!)).toBe("新来的")
-    // 条目保留且按事件刷新处置（恢复重播会把 steer/interrupt 降级报为 wait）
-    expect(s.queue).toEqual([{ messageId: "msg_x", disposition: "wait", state: "queued", text: "旧排队" }])
-    // 真 ack 到达时仍有 local- 气泡可收养（无双气泡的死局）
-    s = adoptQueuedId(s, "msg_y")
-    expect(s.messages[1]!.id).toBe("msg_y")
-    expect(firstTextOf(s.messages[1]!)).toBe("新来的")
+    // 行保留并按事件刷新处置（恢复重播把 steer/interrupt 降级报为 wait），文本不换
+    expect(s.queue).toEqual([{ messageId: "msg_x", disposition: "wait", text: "旧排队" }])
+    // "新来的"气泡原样保留（它属于尚未确认的下一条消息）
+    expect(s.messages).toHaveLength(1)
+    expect(firstTextOf(s.messages[0]!)).toBe("新来的")
   })
 
-  it("message.queue_cancelled {all:true} clears queued entries+bubbles but keeps injected ones", () => {
-    let s = appendOptimisticUser(base(), "已注入的引导")
-    s = applyEvent(s, ev("message.queued", { messageId: "msg_i", disposition: "steer" }))
-    s = applyEvent(s, ev("message.steered", { messageId: "msg_i" }))
-    s = appendOptimisticUser(s, "还在排队")
+  it("message.queue_cancelled {all:true} clears every entry", () => {
+    let s = appendOptimisticUser(base(), "还在排队")
     s = applyEvent(s, ev("message.queued", { messageId: "msg_q", disposition: "wait" }))
     s = applyEvent(s, ev("message.queue_cancelled", { all: true }))
-    // injected entry and its bubble stay (the message is already in history)
-    expect(s.queue.map((e) => e.messageId)).toEqual(["msg_i"])
-    expect(s.queue[0]!.state).toBe("injected")
-    expect(s.messages.some((m) => m.id === "msg_i")).toBe(true)
-    // queued entry and its never-persisted bubble are gone
-    expect(s.messages.some((m) => m.id === "msg_q")).toBe(false)
+    expect(s.queue).toHaveLength(0)
+    expect(s.messages).toHaveLength(0)
   })
 
   it("run lifecycle events leave the queue untouched", () => {
@@ -544,44 +608,9 @@ describe("queue reducer", () => {
     expect(s.queue).toHaveLength(1)
   })
 
-  it("message.queued with no pending local- bubble still records the entry (empty text)", () => {
+  it("message.queued with no pending local- bubble still records the row (empty text)", () => {
     // Replay/refresh edge: the event arrives with no optimistic bubble to adopt.
     const s = applyEvent(base(), ev("message.queued", { messageId: "msg_r", disposition: "wait" }))
-    expect(s.queue).toEqual([{ messageId: "msg_r", disposition: "wait", state: "queued", text: "" }])
-  })
-
-  it("mergeQueue keeps a persisted bubble the reconnect pull already knows (executed while away)", () => {
-    // Offline window: message.queued(msg_x) arrived → the daemon dequeued msg_x,
-    // executed and persisted it → reconnect. mergeMessages pulls the persisted
-    // (non-pending) msg_x in; GET /queue no longer lists it. The bubble is in
-    // history now and must survive the queue resync.
-    let s = appendOptimisticUser(base(), "排队后断线")
-    s = applyEvent(s, ev("message.queued", { messageId: "msg_x", disposition: "wait" }))
-    s = { ...s, messages: mergeMessages(s.messages, [wireMsg("msg_x", "排队后断线")]) }
-    expect(s.messages.some((m) => m.id === "msg_x" && !m.pending)).toBe(true)
-    s = mergeQueue(s, [])
-    expect(s.queue).toHaveLength(0)
-    expect(s.messages.some((m) => m.id === "msg_x")).toBe(true) // persisted bubble stays
-  })
-
-  it("mergeQueue drops a still-pending bubble whose entry left the server queue (cancel residue)", () => {
-    // The daemon cancelled the message while this view was away: GET /queue no
-    // longer lists it, the pull never persisted it → the pending bubble and the
-    // entry go without residue.
-    let s = appendOptimisticUser(base(), "被取消")
-    s = applyEvent(s, ev("message.queued", { messageId: "msg_c", disposition: "wait" }))
-    s = mergeQueue(s, [])
-    expect(s.queue).toHaveLength(0)
-    expect(s.messages.some((m) => m.id === "msg_c")).toBe(false)
-  })
-
-  it("mergeQueue keeps a locally-known injected state for an entry the server still lists", () => {
-    let s = appendOptimisticUser(base(), "已注入")
-    s = applyEvent(s, ev("message.queued", { messageId: "msg_i", disposition: "steer" }))
-    s = applyEvent(s, ev("message.steered", { messageId: "msg_i" }))
-    s = mergeQueue(s, [{ messageId: "msg_i", disposition: "steer", text: "已注入" }])
-    expect(s.queue[0]!.state).toBe("injected") // not reset to "queued" by the resync
-    // The bubble already exists → no duplicate appended.
-    expect(s.messages.filter((m) => m.id === "msg_i")).toHaveLength(1)
+    expect(s.queue).toEqual([{ messageId: "msg_r", disposition: "wait", text: "" }])
   })
 })

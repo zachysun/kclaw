@@ -189,18 +189,18 @@ export interface ConfirmationCard {
 export interface QueueEntryView {
   messageId: string
   disposition: "steer" | "wait" | "interrupt"
-  /** "queued" until the steer buffer injects it (`message.steered`), then "injected". */
-  state: "queued" | "injected"
   text: string
 }
 
 export interface ChatState {
   messages: RenderedMessage[]
   /**
-   * Messages waiting to enter a run, in queue order. A `queued` entry renders
-   * as a waiting bubble; `message.steered` flips it to `injected` (badge);
-   * `message.created` for its id dequeues it (the bubble goes on through the
-   * normal upsert path). Injected entries linger only until that created event.
+   * Messages waiting to enter a run, in queue order (FIFO — the first row is
+   * the first sent). The queue LIST is the only view of a waiting message
+   * (Master 2026-08-30: 排队消息不以气泡形式进消息流): `message.queued`
+   * retracts the optimistic bubble (taking its text into the row);
+   * `message.created` / `message.steered` dequeue the row — the message then
+   * enters the thread as a normal persisted bubble.
    */
   queue: QueueEntryView[]
   runState: RunState
@@ -259,48 +259,23 @@ export function mergeMessages(existing: RenderedMessage[], fresh: Message[]): Re
 
 /**
  * Reconnect merge for the send-message queue (GET /queue full resync): the
- * server's list is authoritative — it upserts the queue by messageId (a local
- * `injected` state is newer knowledge than the pull and is kept), entries it
- * no longer knows were cancelled or dequeued while this view was away. A
- * dropped entry's bubble only goes while still pending (never persisted);
- * a non-pending bubble is history the reconnect pull just carried in. Queued
- * entries the local view has no bubble for (never entered the persisted
- * history) re-materialize as pending user bubbles at the end of the thread.
+ * server's list is authoritative and rebuilds the rows wholesale, in server
+ * (= send) order. Rows it no longer lists were cancelled, dequeued or injected
+ * while this view was away — a dequeued/injected message arrives through the
+ * reconnect message pull as a normal persisted bubble, so dropping the row
+ * leaves no residue.
  */
 export function mergeQueue(
   state: ChatState,
   entries: Array<{ messageId: string; disposition: string; text: string }>,
 ): ChatState {
   if (entries.length === 0 && state.queue.length === 0) return state
-  const prevById = new Map(state.queue.map((e) => [e.messageId, e]))
-  const serverIds = new Set(entries.map((e) => e.messageId))
-  const droppedIds = new Set(
-    state.queue.filter((e) => !serverIds.has(e.messageId) && e.state === "queued").map((e) => e.messageId),
-  )
   const queue: QueueEntryView[] = entries.map((e) => ({
     messageId: e.messageId,
     disposition: asDisposition(e.disposition),
-    state: prevById.get(e.messageId)?.state ?? "queued",
     text: e.text,
   }))
-  // Only STILL-PENDING bubbles go: they never entered the persisted history
-  // (cancel residue). A non-pending bubble with a dropped entry's id was
-  // dequeued, executed and persisted while this view was away — the reconnect
-  // message pull just carried it in, and nothing re-delivers it later, so it
-  // must survive the queue resync.
-  const messages = droppedIds.size === 0
-    ? state.messages
-    : state.messages.filter((m) => !(m.pending && droppedIds.has(m.id)))
-  const known = new Set(messages.map((m) => m.id))
-  const bubbles: RenderedMessage[] = queue
-    .filter((e) => !known.has(e.messageId))
-    .map((e) => ({
-      id: e.messageId,
-      role: "user",
-      pending: true,
-      blocks: [{ kind: "text", blockId: `queued-${e.messageId}`, text: e.text }],
-    }))
-  return { ...state, queue, messages: bubbles.length === 0 ? messages : [...messages, ...bubbles] }
+  return { ...state, queue }
 }
 
 /** Narrow a wire disposition string to the view union ("wait" as the fallback). */
@@ -350,11 +325,43 @@ function earliestPendingLocalIdx(messages: RenderedMessage[]): number {
 }
 
 /**
- * Ack path: the earliest still-pending optimistic bubble adopts the server id
- * IN PLACE (its position is its queue slot) — the safe channel for the first
- * hop of the optimistic chain when the ack already carries the messageId.
+ * Busy-session send (Master 2026-08-30, second round): a message sent while a
+ * run is active (or a compaction is running) will QUEUE — so it never renders
+ * as a bubble. The optimistic echo moves INTO the queue list: a local row with
+ * a `local-` id, renamed by the ack / `message.queued` and later replaced by
+ * the real bubble when the message's turn comes (`message.created`).
+ */
+export function appendPendingQueueRow(state: ChatState, text: string, disposition: QueueEntryView["disposition"]): ChatState {
+  return {
+    ...state,
+    queue: [
+      ...state.queue,
+      { messageId: `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, disposition, text },
+    ],
+  }
+}
+
+/** Index of the earliest unconfirmed local- row in the queue; -1 when none. */
+function earliestPendingLocalRowIdx(queue: QueueEntryView[]): number {
+  return queue.findIndex((e) => e.messageId.startsWith("local-"))
+}
+
+/**
+ * Ack path: an id the queue already tracks means `message.queued` won the race
+ * — nothing to do, and touching the earliest local row/bubble here would STEAL
+ * the next not-yet-acked message. Otherwise (ack first) the earliest unconfirmed
+ * local- ROW adopts the server id in place; failing that, the earliest
+ * still-pending local- bubble does (the idle→busy race sent a bubble before
+ * run.started landed). The later `message.queued` finds whichever survived.
  */
 export function adoptQueuedId(state: ChatState, messageId: string): ChatState {
+  if (state.queue.some((e) => e.messageId === messageId)) return state
+  const rowIdx = earliestPendingLocalRowIdx(state.queue)
+  if (rowIdx !== -1) {
+    const queue = state.queue.slice()
+    queue[rowIdx] = { ...queue[rowIdx]!, messageId }
+    return { ...state, queue }
+  }
   const idx = earliestPendingLocalIdx(state.messages)
   if (idx === -1) return state
   const messages = state.messages.slice()
@@ -389,10 +396,11 @@ export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
         },
       }
     case "message.created": {
-      // Queue dequeue: a created event for a queued id promotes the adopted
-      // bubble to normal execution state — the entry leaves the queue and the
-      // EXISTING twin/upsert path below takes the message from here (the
-      // adopted bubble already carries the server id, so it upserts in place).
+      // Queue dequeue: a created event for a queued id drops the row — the
+      // message enters the thread below as a normal (persisted) bubble. Its
+      // optimistic twin was retracted at message.queued time, so there is no
+      // twin to merge for queued ids; a FREE-SEND message still has one, and
+      // the twin path replaces it in place to keep send order.
       const queued = state.queue.some((e) => e.messageId === event.payload.message.id)
       const base = queued
         ? { ...state, queue: state.queue.filter((e) => e.messageId !== event.payload.message.id) }
@@ -410,66 +418,61 @@ export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
     case "message.completed":
       return upsertMessage(state, renderMessage(event.payload.message, false))
     case "message.queued": {
-      // Dedupe BEFORE adoption: an id we already track (recoverQueues replay
-      // racing an in-flight optimistic bubble, or a cross-client variant) must
-      // not steal the earliest pending local- bubble — renaming it would
-      // mis-caption the queue text and leave the real ack's adoptQueuedId a
-      // no-op, ending in a double bubble. The tracked entry just refreshes its
-      // disposition (recoverQueues re-broadcasts demoted "wait"), its bubble
-      // and text stay.
+      // Dedupe BEFORE adoption: an id we already track (ack renamed the local
+      // row, or a recoverQueues replay racing an in-flight send) must not
+      // steal the next message's local row/bubble — the tracked row just
+      // refreshes its disposition (recoverQueues re-broadcasts demoted "wait").
       if (state.queue.some((e) => e.messageId === event.payload.messageId)) {
         const queue = state.queue.map((e) =>
           e.messageId === event.payload.messageId ? { ...e, disposition: event.payload.disposition } : e)
         return { ...state, queue }
       }
-      // The earliest still-pending optimistic bubble adopts the server id IN
-      // PLACE and the queue tracks the entry with the bubble's text (the
-      // payload carries no text). No local bubble (replay/refresh edge) → the
-      // entry still lands; its bubble is mergeQueue's or a later event's job.
-      const localIdx = earliestPendingLocalIdx(state.messages)
+      // The waiting message's only view is the queue LIST (Master 2026-08-30):
+      // a busy-session send created a local ROW — adopt it (rename, keep the
+      // text). An idle→busy race instead created a local BUBBLE — retract it
+      // (its text moves into the new row). Neither exists (cross-client /
+      // replay edge) → the row lands with empty text; the panel's queue-text
+      // resync fills it from GET /queue.
+      const rowIdx = earliestPendingLocalRowIdx(state.queue)
+      if (rowIdx !== -1) {
+        const queue = state.queue.slice()
+        queue[rowIdx] = { messageId: event.payload.messageId, disposition: event.payload.disposition, text: queue[rowIdx]!.text }
+        return { ...state, queue }
+      }
+      const byId = state.messages.findIndex(
+        (m) => m.id === event.payload.messageId && m.pending && m.role === "user",
+      )
+      const localIdx = byId !== -1 ? byId : earliestPendingLocalIdx(state.messages)
       const adopted = localIdx === -1 ? null : state.messages[localIdx]!
-      const messages = adopted === null
-        ? state.messages
-        : state.messages.map((m, i) => (i === localIdx ? { ...m, id: event.payload.messageId } : m))
       const entry: QueueEntryView = {
         messageId: event.payload.messageId,
         disposition: event.payload.disposition,
-        state: "queued",
         text: adopted === null ? "" : firstRenderedUserText(adopted),
       }
-      // A re-broadcast for an id we already track never reaches here (the
-      // dedupe above ran first); the filter stays as belt-and-braces.
-      const queue = [...state.queue.filter((e) => e.messageId !== entry.messageId), entry]
-      return { ...state, queue, messages }
+      const messages = adopted === null
+        ? state.messages
+        : state.messages.filter((_, i) => i !== localIdx)
+      return { ...state, queue: [...state.queue, entry], messages }
     }
     case "message.steered": {
-      const idx = state.queue.findIndex((e) => e.messageId === event.payload.messageId)
-      if (idx === -1) return state
-      const queue = state.queue.slice()
-      queue[idx] = { ...queue[idx]!, state: "injected" }
+      // Injection: the message is in the run now — its row goes, and the
+      // message itself lands as a normal bubble via message.created (the wire
+      // emits created before steered; this also covers the reordered edge).
+      const queue = state.queue.filter((e) => e.messageId !== event.payload.messageId)
+      if (queue.length === state.queue.length) return state
       return { ...state, queue }
     }
     case "message.queue_cancelled": {
+      // A cancelled message was never persisted — its row simply goes (the
+      // optimistic bubble was already retracted at message.queued time).
       if (event.payload.all === true) {
-        // Cancel-all clears QUEUED entries and their never-persisted bubbles;
-        // injected entries and bubbles stay (those messages are in history).
-        const droppedIds = new Set(
-          state.queue.filter((e) => e.state === "queued").map((e) => e.messageId),
-        )
-        if (droppedIds.size === 0) return state
-        return {
-          ...state,
-          queue: state.queue.filter((e) => e.state !== "queued"),
-          messages: state.messages.filter((m) => !droppedIds.has(m.id)),
-        }
+        if (state.queue.length === 0) return state
+        return { ...state, queue: [] }
       }
       if (event.payload.messageId === undefined) return state
-      // Single cancel: the message never entered the persisted history, so
-      // both the entry and its bubble go without residue.
       const queue = state.queue.filter((e) => e.messageId !== event.payload.messageId)
-      const messages = state.messages.filter((m) => m.id !== event.payload.messageId)
-      if (queue.length === state.queue.length && messages.length === state.messages.length) return state
-      return { ...state, queue, messages }
+      if (queue.length === state.queue.length) return state
+      return { ...state, queue }
     }
     case "text.created":
     case "thinking.created":

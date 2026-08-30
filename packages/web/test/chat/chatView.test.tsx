@@ -341,56 +341,59 @@ describe("disposition trio and queued bubbles (spec §7.1)", () => {
     idle.unmount()
   })
 
-  it("steer bubble: delete button while queued, badge after injected", () => {
-    // queue 含 {messageId:"m1", state:"queued", disposition:"steer"} → 气泡有取消按钮、无"已注入"
-    const queued = mountView([userMsg("m1", "引导一下")], {
-      view: { queue: [{ messageId: "m1", disposition: "steer", state: "queued", text: "引导一下" }] },
-      onCancelQueued: vi.fn(),
-    })
-    const bubble = [...queued.container.querySelectorAll('[data-testid="msg-user"]')]
-      .find((b) => b.textContent?.includes("引导一下"))
-    expect(bubble).not.toBeNull()
-    expect(bubble!.querySelector('[data-testid="queue-cancel"]')).not.toBeNull()
-    expect(bubble!.textContent).not.toContain("已注入")
-    // steer 排队保持正常样式：无半透明、无排队角标（取消按钮本身承载状态）
-    expect(bubble!.className).not.toContain("queued")
-    expect(bubble!.querySelector('[data-testid="queue-badge"]')).toBeNull()
-    queued.unmount()
-
-    // state:"injected" → 反之：角标"已注入"、无按钮
-    const injected = mountView([userMsg("m1", "引导一下")], {
-      view: { queue: [{ messageId: "m1", disposition: "steer", state: "injected", text: "引导一下" }] },
-      onCancelQueued: vi.fn(),
-    })
-    const after = [...injected.container.querySelectorAll('[data-testid="msg-user"]')]
-      .find((b) => b.textContent?.includes("引导一下"))
-    expect(after).not.toBeNull()
-    expect(after!.querySelector('[data-testid="queue-cancel"]')).toBeNull()
-    expect(after!.querySelector('[data-testid="queue-badge"]')!.textContent).toContain("已注入")
-    injected.unmount()
-  })
-
-  it("queued interrupt bubble has no cancel button; wait/steer keep theirs (spec §5.6)", () => {
-    const h = mountView([userMsg("m1", "插队消息"), userMsg("m2", "排队消息"), userMsg("m3", "引导消息")], {
+  it("queued messages render as list rows at the notice spot, not bubbles (Master 2026-08-30)", () => {
+    // 队列 FIFO：下标序 = 发送序，先排队的渲染在上面；每行有处置标签 + 单条取消。
+    const onCancelQueued = vi.fn()
+    const h = mountView([], {
       view: {
         queue: [
-          { messageId: "m1", disposition: "interrupt", state: "queued", text: "插队消息" },
-          { messageId: "m2", disposition: "wait", state: "queued", text: "排队消息" },
-          { messageId: "m3", disposition: "steer", state: "queued", text: "引导消息" },
+          { messageId: "m2", disposition: "wait", text: "排队消息" },
+          { messageId: "m3", disposition: "steer", text: "引导消息" },
+        ],
+      },
+      onCancelQueued,
+    })
+    const rows = [...h.container.querySelectorAll('[data-testid="queue-row"]')]
+    expect(rows.map((r) => r.textContent)).toEqual(["等待排队消息取消", "引导引导消息取消"])
+    // 排队消息不进消息流：气泡区没有任何用户气泡。
+    expect(h.container.querySelectorAll('[data-testid="msg-user"]')).toHaveLength(0)
+    // 头部计数 + 全部取消
+    expect(h.container.querySelector('[data-testid="queue-list"]')!.textContent).toContain("2 条排队中")
+    expect(h.container.querySelector('[data-testid="queue-cancel-all"]')).not.toBeNull()
+    // 单条取消带 messageId
+    act(() => {
+      ;(rows[0]!.querySelector('[data-testid="queue-cancel"]') as HTMLButtonElement).click()
+    })
+    expect(onCancelQueued).toHaveBeenCalledWith("m2")
+    h.unmount()
+  })
+
+  it("interrupt row has no cancel button; wait/steer keep theirs (spec §5.6)", () => {
+    const h = mountView([], {
+      view: {
+        queue: [
+          { messageId: "m1", disposition: "interrupt", text: "插队消息" },
+          { messageId: "m2", disposition: "wait", text: "排队消息" },
+          { messageId: "m3", disposition: "steer", text: "引导消息" },
         ],
       },
       onCancelQueued: vi.fn(),
     })
-    const bubble = (text: string): HTMLElement | undefined =>
-      ([...h.container.querySelectorAll('[data-testid="msg-user"]')] as HTMLElement[]).find((b) => b.textContent?.includes(text))
-    // interrupt：入队即伴随 abort、紧接着出队执行（spec §5.6）——无可取消窗口，
-    // 走正常执行态呈现：无取消按钮、无角标、不半透明（随即被自己的 run 接管）。
-    expect(bubble("插队消息")!.querySelector('[data-testid="queue-cancel"]')).toBeNull()
-    expect(bubble("插队消息")!.querySelector('[data-testid="queue-badge"]')).toBeNull()
-    expect(bubble("插队消息")!.className).not.toContain("queued")
-    // wait / steer：取消按钮不受影响（防回归）。
-    expect(bubble("排队消息")!.querySelector('[data-testid="queue-cancel"]')).not.toBeNull()
-    expect(bubble("引导消息")!.querySelector('[data-testid="queue-cancel"]')).not.toBeNull()
+    const row = (text: string): HTMLElement | undefined =>
+      ([...h.container.querySelectorAll('[data-testid="queue-row"]')] as HTMLElement[]).find((r) => r.textContent?.includes(text))
+    // interrupt：入队即伴随 abort、紧接着出队执行（spec §5.6）——无可取消窗口。
+    expect(row("插队消息")!.querySelector('[data-testid="queue-cancel"]')).toBeNull()
+    expect(row("插队消息")!.textContent).toContain("中断")
+    // wait / steer：取消按钮在。
+    expect(row("排队消息")!.querySelector('[data-testid="queue-cancel"]')).not.toBeNull()
+    expect(row("引导消息")!.querySelector('[data-testid="queue-cancel"]')).not.toBeNull()
+    h.unmount()
+  })
+
+  it("no queue list when the queue is empty", () => {
+    const h = mountView([userMsg("m1", "正常消息")], {})
+    expect(h.container.querySelector('[data-testid="queue-list"]')).toBeNull()
+    expect(h.container.querySelectorAll('[data-testid="msg-user"]')).toHaveLength(1)
     h.unmount()
   })
 })

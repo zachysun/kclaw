@@ -433,7 +433,7 @@ describe("ChatPanel", () => {
     h.unmount()
   })
 
-  it("queues visibly without a notice: the badge and banner replace the old heuristic", async () => {
+  it("a busy-session send never renders a bubble: it goes straight to the queue list", async () => {
     const h = await mount()
     await drive(() => {
       pushFrame(h.sockets[0]!, ev("compaction.started", {}))
@@ -444,11 +444,26 @@ describe("ChatPanel", () => {
       ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
     })
     await flush()
-    // The old "已排队，将在当前任务后发送" heuristic is gone — queued visibility is
-    // event-driven now (the queued badge and the queue banner below).
+    // 压缩中（忙会话）发送：无一次性 notice、无乐观气泡——消息从第一帧起就
+    // 是本地列表行（Master 2026-08-30 第二轮），ack/queued 到达后原地转正。
     expect(h.container.querySelector('[data-testid="chat-notice"]')).toBeNull()
-    // the optimistic echo still appeared
-    expect(h.container.querySelector('[data-testid="msg-user"]')!.textContent).toContain("排队消息")
+    expect(h.container.querySelectorAll('[data-testid="msg-user"]')).toHaveLength(0)
+    const row = h.container.querySelector('[data-testid="queue-row"]')
+    expect(row?.textContent).toContain("排队消息")
+    h.unmount()
+  })
+
+  it("an idle send still echoes optimistically as a bubble (free-send path untouched)", async () => {
+    const h = await mount()
+    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    typeInto(input, "普通消息")
+    await act(async () => {
+      ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(h.container.querySelector('[data-testid="chat-notice"]')).toBeNull()
+    expect(h.container.querySelector('[data-testid="msg-user"]')!.textContent).toContain("普通消息")
+    expect(h.container.querySelector('[data-testid="queue-list"]')).toBeNull()
     h.unmount()
   })
 
@@ -681,7 +696,7 @@ describe("ChatPanel", () => {
     h.unmount()
   })
 
-  it("ack adopts the optimistic id; message.queued renders the badge; cancel hits queue.cancel", async () => {
+  it("ack + message.queued moves the bubble into a list row; cancel hits queue.cancel", async () => {
     const h = await mount()
     await drive(() => {
       pushFrame(h.sockets[0]!, ev("run.started", { trigger: "user" }))
@@ -692,14 +707,14 @@ describe("ChatPanel", () => {
       pushFrame(h.sockets[0]!, { type: "send_message_ack", sessionId: "s1", messageId: "msg_1", queued: true })
       pushFrame(h.sockets[0]!, ev("message.queued", { messageId: "msg_1", disposition: "wait", position: 1 }))
     })
-    const bubble = findUserBubble(h.container, "帮我看看")
-    expect(bubble).not.toBeNull()
-    // 气泡带排队角标（wait → 半透明 + 排队中 + 取消按钮）
-    expect(bubble!.className).toContain("queued")
-    expect(bubble!.querySelector('[data-testid="queue-badge"]')!.textContent).toContain("排队中")
+    // 排队消息不进消息流（气泡被收走），列表行是唯一视图（Master 2026-08-30）
+    expect(findUserBubble(h.container, "帮我看看")).toBeNull()
+    const row = h.container.querySelector('[data-testid="queue-row"]')!
+    expect(row.textContent).toContain("帮我看看")
+    expect(row.textContent).toContain("等待")
     // 点单条取消 → ws 收到 {type:"queue.cancel", sessionId, messageId:"msg_1"}
     await act(async () => {
-      ;(bubble!.querySelector('[data-testid="queue-cancel"]') as HTMLButtonElement).click()
+      ;(row.querySelector('[data-testid="queue-cancel"]') as HTMLButtonElement).click()
     })
     expect(h.sockets[0]!.sent).toContain(
       JSON.stringify({ type: "queue.cancel", sessionId: "s1", messageId: "msg_1" }),
@@ -707,7 +722,7 @@ describe("ChatPanel", () => {
     h.unmount()
   })
 
-  it("reconnect pulls GET /queue and rebuilds the queued bubble", async () => {
+  it("reconnect pulls GET /queue and rebuilds the queued rows", async () => {
     // api 的 GET /queue 返回一条 wait 条目
     const h = await mount({
       queue: [{ messageId: "q1", disposition: "wait", text: "断线前排队的话" }],
@@ -717,16 +732,15 @@ describe("ChatPanel", () => {
       h.sockets[0]!.onclose?.({ code: 1006 })
     })
     expect(h.api.get).toHaveBeenCalledWith("/sessions/s1/queue")
-    // 出现对应 pending 气泡与角标
-    const bubble = findUserBubble(h.container, "断线前排队的话")
-    expect(bubble).not.toBeNull()
-    expect(bubble!.className).toContain("queued")
-    expect(bubble!.querySelector('[data-testid="queue-badge"]')!.textContent).toContain("排队中")
-    expect(h.container.querySelector('[data-testid="queue-banner"]')!.textContent).toContain("1 条排队中")
+    // 重连后列表行恢复（消息流里没有排队消息）
+    expect(findUserBubble(h.container, "断线前排队的话")).toBeNull()
+    const list = h.container.querySelector('[data-testid="queue-list"]')!
+    expect(list.textContent).toContain("1 条排队中")
+    expect(list.querySelector('[data-testid="queue-row"]')!.textContent).toContain("断线前排队的话")
     h.unmount()
   })
 
-  it("queue banner shows the count and all-cancel; typing does NOT clear it", async () => {
+  it("queue list shows rows in send order and all-cancel; typing does NOT clear it", async () => {
     const h = await mount()
     await drive(() => {
       pushFrame(h.sockets[0]!, ev("run.started", { trigger: "user" }))
@@ -739,11 +753,14 @@ describe("ChatPanel", () => {
         pushFrame(h.sockets[0]!, ev("message.queued", { messageId: id, disposition: "wait" }))
       })
     }
-    expect(h.container.querySelector('[data-testid="queue-banner"]')!.textContent).toContain("2 条排队中")
-    // 排队计数是状态：打字不清除（一次性 notice 才随输入清除）
+    expect(h.container.querySelector('[data-testid="queue-list"]')!.textContent).toContain("2 条排队中")
+    // FIFO：先发的"甲"渲染在上面
+    const rows = [...h.container.querySelectorAll('[data-testid="queue-row"]')]
+    expect(rows.map((r) => r.textContent)).toEqual(["等待甲取消", "等待乙取消"])
+    // 排队列表是状态：打字不清除（一次性 notice 才随输入清除）
     const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
     typeInto(input, "继续输入")
-    expect(h.container.querySelector('[data-testid="queue-banner"]')).not.toBeNull()
+    expect(h.container.querySelector('[data-testid="queue-list"]')).not.toBeNull()
     // 点"全部取消" → ws 收到不带 messageId 的 queue.cancel
     await act(async () => {
       ;(h.container.querySelector('[data-testid="queue-cancel-all"]') as HTMLButtonElement).click()
@@ -758,7 +775,7 @@ describe("ChatPanel", () => {
   it("resyncs the queue even when the message pull fails (independent directions)", async () => {
     const queueFixture = [{ messageId: "q1", disposition: "wait", text: "排队的话" }]
     const h = await mount({ queue: queueFixture })
-    // 消息拉取失败、队列拉取成功：排队气泡仍要重建（两个方向互不阻塞）。
+    // 消息拉取失败、队列拉取成功：列表行仍要重建（两个方向互不阻塞）。
     ;(h.api.get as ReturnType<typeof vi.fn>).mockImplementation(async (path: string) => {
       if (path.endsWith("/queue")) return queueFixture
       if (path.endsWith("/messages")) throw new Error("pull failed")
@@ -768,7 +785,24 @@ describe("ChatPanel", () => {
       h.sockets[0]!.onclose?.({ code: 1006 })
     })
     expect(h.container.textContent).toContain("无法同步消息")
-    expect(findUserBubble(h.container, "排队的话")).not.toBeNull()
+    expect(h.container.querySelector('[data-testid="queue-row"]')?.textContent).toContain("排队的话")
+    h.unmount()
+  })
+
+  it("fills a cross-client empty-text row by resyncing GET /queue", async () => {
+    // 别的客户端（CLI/另一浏览器）排队的消息：message.queued 载荷不带文本，
+    // 本端落地空文本行 → 自动拉一次队列快照把文本补上。
+    const h = await mount()
+    ;(h.api.get as ReturnType<typeof vi.fn>).mockImplementation(async (path: string) => {
+      if (path.endsWith("/queue")) return [{ messageId: "q9", disposition: "wait", text: "CLI 发的排队消息" }]
+      return {}
+    })
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("message.queued", { messageId: "q9", disposition: "wait" }))
+    })
+    await flush()
+    const row = h.container.querySelector('[data-testid="queue-row"]')
+    expect(row?.textContent).toContain("CLI 发的排队消息")
     h.unmount()
   })
 })

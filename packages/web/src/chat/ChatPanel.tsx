@@ -19,6 +19,7 @@ import {
   adoptQueuedId,
   applyEvent,
   appendOptimisticUser,
+  appendPendingQueueRow,
   initChat,
   mergeMessages,
   mergeQueue,
@@ -139,6 +140,25 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       return ok
     }
 
+    // 跨客户端行补文本：message.queued 载荷不带文本——别的客户端（CLI、另一
+    // 浏览器）排队的消息在本端落地为空文本行，拉一次队列快照把 text 补上。
+    // in-flight 防抖；失败静默（下次纠偏路径再补）。
+    let resyncingQueue = false
+    const refreshQueueText = async (): Promise<void> => {
+      if (resyncingQueue) return
+      resyncingQueue = true
+      try {
+        const entries = await api.get<Array<{ messageId: string; disposition: string; text: string }>>(
+          `/sessions/${encodeURIComponent(sessionId)}/queue`,
+        )
+        if (!cancelled) updateView((v) => mergeQueue(v, entries))
+      } catch {
+        // 事件流与下次重连纠偏兜底
+      } finally {
+        resyncingQueue = false
+      }
+    }
+
     /** Consume frames until the socket closes; resolves with why it ended. */
     const eventLoop = async (c: WsClient): Promise<"closed" | "auth" | "error"> => {
       try {
@@ -153,6 +173,8 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
                 if (typeof title === "string") onSessionRenamed?.(sessionId, title)
               }
               updateView((v) => applyEvent(v, frame))
+              // 空文本行 = 跨客户端排队的消息（本端无发送上下文）→ 拉快照补文本
+              if (viewRef.current.queue.some((e) => e.text === "")) void refreshQueueText()
             } else if ((frame as { type?: string }).type === "send_message_ack"
               && (frame as { queued?: unknown }).queued === true) {
               const messageId = (frame as { messageId?: unknown }).messageId
@@ -304,12 +326,13 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
         ...(attachments.length > 0 ? { attachments } : {}),
       })
       setPendingAttachments([])
-      // Optimistic echo: the bubble is visible the instant the message leaves
-      // the composer — the server echo can lag seconds behind a pre-run
-      // compaction. message.created later replaces the local twin by text.
-      updateView((v) => appendOptimisticUser(v, text))
-      // 排队可见性由事件驱动（spec §7.1）：ack{queued:true} 收养服务端 id，
-      // message.queued 打上排队角标，banner 数排队条目——不再用本地启发式提示。
+      // 乐观回显的分路（Master 2026-08-30）：忙会话（run 进行中或压缩中）发
+      // 送必然排队——消息从第一帧起就不进消息流，乐观回显直接落到列表行
+      // （local- 待确认 id，ack/queued 转正）；空闲直发才立即回显气泡。
+      updateView((v) =>
+        v.runState === "running" || v.compacting === true
+          ? appendPendingQueueRow(v, text, disposition)
+          : appendOptimisticUser(v, text))
     } catch {
       setNotice("连接不可用，请稍后重试")
     }
