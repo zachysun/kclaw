@@ -1027,7 +1027,7 @@ export class RunManager {
     // subscribed clients can show a "正在压缩…" state. This fires BEFORE
     // run.started — the pre-run compaction is otherwise a silent multi-second
     // gap between send and the first run event.
-    this.#deps.bus.emit(makeEvent("compaction.started", {}, { sessionId }))
+    this.#deps.bus.emit(makeEvent("compaction.started", { phase: "post-run" }, { sessionId }))
 
     const seg = active.slice(0, boundary.keepFrom)
     const body = renderSegment(seg)
@@ -1075,7 +1075,7 @@ export class RunManager {
       console.error(`kclaw compaction audit (${sessionId}) append failed:`, err)
     }
     this.#deps.bus.emit(
-      makeEvent("compaction.completed", { segments: nextSegments.length, kept: active.length - boundary.keepFrom }, { sessionId }),
+      makeEvent("compaction.completed", { segments: nextSegments.length, kept: active.length - boundary.keepFrom, phase: "post-run", result: "ok" }, { sessionId }),
     )
     return { summary: top, segments: nextSegments.length, active: active.slice(boundary.keepFrom), compacted: true }
   }

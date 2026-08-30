@@ -66,10 +66,12 @@ export interface MessageQueuedPayload {
 export interface MessageSteeredPayload { messageId: string } // 事件级 runId 标识注入的 run
 export interface MessageQueueCancelledPayload { messageId?: string; all?: boolean }
 
+/** v3: 压缩触发阶段——post-run = run 前预压缩，in-run = 迭代边界中途压缩，manual = 手动。 */
+export type CompactionPhase = "in-run" | "post-run" | "manual"
 /** 压缩实际开始（预算过线且边界已定，即将调用摘要器）。 */
-export interface CompactionStartedPayload {}
-/** 压缩成功结束：新累计段数与压缩后保留的原文消息条数。 */
-export interface CompactionCompletedPayload { segments: number; kept: number }
+export interface CompactionStartedPayload { phase: CompactionPhase }
+/** 压缩结束（每次 started 必有配对 completed）：新累计段数与压缩后保留的原文消息条数；非 ok 时 segments/kept 为 0。 */
+export interface CompactionCompletedPayload { segments: number; kept: number; phase: CompactionPhase; result: "ok" | "failed" | "cancelled" }
 
 export type EventPayloadMap = {
   "run.started": RunStartedPayload

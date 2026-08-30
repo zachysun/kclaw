@@ -15,10 +15,16 @@ describe("makeEvent", () => {
     expect(e).not.toHaveProperty("runId")
   })
   it("builds compaction lifecycle events", () => {
-    const started = makeEvent("compaction.started", {}, { sessionId: "ses_1" })
+    const started = makeEvent("compaction.started", { phase: "post-run" }, { sessionId: "ses_1" })
     expect(started.type).toBe("compaction.started")
-    const completed = makeEvent("compaction.completed", { segments: 2, kept: 5 }, { sessionId: "ses_1" })
-    expect(completed.payload).toEqual({ segments: 2, kept: 5 })
+    const completed = makeEvent("compaction.completed", { segments: 2, kept: 5, phase: "post-run", result: "ok" }, { sessionId: "ses_1" })
+    expect(completed.payload).toEqual({ segments: 2, kept: 5, phase: "post-run", result: "ok" })
+  })
+  it("compaction.started 携带 phase，completed 携带 phase 与 result", () => {
+    const started = makeEvent("compaction.started", { phase: "in-run" }, { sessionId: "s1" })
+    const done = makeEvent("compaction.completed", { segments: 2, kept: 5, phase: "in-run", result: "ok" }, { sessionId: "s1" })
+    expect(started.payload.phase).toBe("in-run")
+    expect(done.payload.result).toBe("ok")
   })
 })
 
