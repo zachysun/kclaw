@@ -96,16 +96,15 @@ export class MemorySystem {
     this.#now = opts.now ?? (() => new Date())
     this.#globalIndex = new VectorIndex(join(this.#layout.globalDir, "vectors.db"))
     this.#pipeline = new MemoryPipeline(opts.memoryDir, opts.sessions, {
-      resolveLlm: () => ({ llm: this.#resolveLlm().llm, model: this.#extractModel() }),
+      resolveLlm: () => {
+        // extractModel 回落主模型的解析集中在这里，resolveLlm 只调一次（spec 4.3）
+        const { llm, model } = this.#resolveLlm()
+        return { llm, model: this.#config.memory.extractModel || model }
+      },
       embed: opts.embed, emit: opts.emit, log: this.#log, now: this.#now,
       threadInactiveDays: opts.config.memory.threadInactiveDays,
       consolidateEnabled: opts.config.memory.consolidate,
     })
-  }
-
-  /** 提取/内化模型：config.memory.extractModel 为空回落主模型（spec 4.3）。 */
-  #extractModel(): string {
-    return this.#config.memory.extractModel || this.#resolveLlm().model
   }
 
   #projectIndex(projectId: string): VectorIndex {
@@ -332,7 +331,10 @@ export class MemorySystem {
     }
     for (const f of files) {
       const note = parseV1Note(readFileSafe(join(notesDir, f)) ?? "")
-      if (note === undefined) continue
+      if (note === undefined) {
+        this.#log(`memory v1 migration: skipped unparseable note ${f}`)
+        continue
+      }
       if (/偏好|喜欢|希望/.test(note.text)) appendTo("persona", "persona", note.text)
       else if (/必须|不要|决定/.test(note.text)) appendTo("rule", "general", note.text)
       else appendTo("wiki", "misc", note.text)

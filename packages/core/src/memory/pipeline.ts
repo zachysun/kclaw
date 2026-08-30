@@ -353,12 +353,24 @@ export class MemoryPipeline {
     return entries
   }
 
+  /**
+   * upsert 时保留已补算的向量（spec 7.2）：正文没变 → 向量原样保留（检索/对账的
+   * 重索引不再抹掉向量，双路融合不退化）；正文变了或新条目 → 弃掉旧向量，留待
+   * reconcile 的 backfill 按新正文重 embed。注意 upsert 无 vector 参数会无条件
+   * 清空该 key 的向量行，所以这里必须在有向量可留时才传回。
+   */
+  #upsertPreserve(idx: VectorIndex, entry: IndexEntry): void {
+    const before = idx.metaOf(entry.key)
+    const vec = before !== undefined && before.text === entry.text ? idx.vectorOf(entry.key) : undefined
+    idx.upsert(entry, vec)
+  }
+
   #reindexProject(projectId: string): void {
     const idx = this.#indexFor(projectId)
     const onDisk = new Set<string>()
     for (const entry of this.#projectEntries(projectId)) {
       onDisk.add(entry.key)
-      idx.upsert(entry)
+      this.#upsertPreserve(idx, entry)
     }
     for (const key of idx.keys()) if (!onDisk.has(key)) idx.remove(key)
     // 向量补算在 reconcile（MemorySystem）统一做（embed 可用时批量）
@@ -507,7 +519,7 @@ export class MemoryPipeline {
       onDisk.add(key)
       const entry: IndexEntry = { key, text: `${cf.title}\n${cf.body}`, title: cf.title, updatedAt: cf.updated }
       entries.push(entry)
-      idx.upsert(entry)
+      this.#upsertPreserve(idx, entry)
     }
     addFile(join(dir, "persona.md"), "persona", "persona")
     for (const f of readDirSafe(join(dir, "wiki"))) if (f.endsWith(".md")) addFile(join(dir, "wiki", f), "wiki", f.replace(/\.md$/, ""))

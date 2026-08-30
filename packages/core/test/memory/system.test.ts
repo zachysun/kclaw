@@ -6,6 +6,7 @@ import { MemorySystem } from "../../src/memory/system.js"
 import { SessionStore } from "../../src/session/store.js"
 import { defaultConfig } from "../../src/storage/config.js"
 import { projectIdFor } from "../../src/memory/layout.js"
+import { VectorIndex } from "../../src/memory/indexer.js"
 import { scriptedLlm } from "./helpers.js"
 
 let root: string
@@ -81,6 +82,33 @@ describe("migrateV1Notes", () => {
     expect(existsSync(notesDir)).toBe(false)
     // 幂等：notes 不存在再跑无事可做
     expect(() => sys.migrateV1Notes(notesDir)).not.toThrow()
+  })
+})
+
+describe("search preserves reconciled vectors (spec 7.2)", () => {
+  it("reindex during search does not wipe project vectors (dual-path fusion intact)", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    sessions.appendMessage(meta.id, { id: "m1", sessionId: meta.id, role: "user", blocks: [{ id: "b", type: "text", text: "重连风暴修好了" }], createdAt: new Date().toISOString() })
+    // 确定性 embed mock：任何文本都返回同一向量，便于断言向量路参与
+    const embed = { embed: async (texts: string[]): Promise<Float32Array[]> => texts.map(() => new Float32Array([1, 0, 0])) }
+    const sys = makeSystem({
+      embed,
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "ws", op: "new-thread", thread: "ws", title: "重连线", content: "指数退避消灭了重连风暴" }] })]), model: "m" }),
+    })
+    await sys.triggerManual(WORKDIR)
+    sys.reconcile() // 补算向量（fire-and-forget：等一拍让补算落盘）
+    await new Promise((r) => setTimeout(r, 0))
+    const dbPath = join(root, "memory", "projects", projectIdFor(WORKDIR), "vectors.db")
+    const before = new VectorIndex(dbPath)
+    const key = [...before.keys()][0]!
+    expect(before.vectorOf(key)).toBeDefined() // reconcile 已补算向量
+    const hits = await sys.searchEpisodes(WORKDIR, "重连风暴", 5)
+    expect(hits.length).toBeGreaterThan(0)
+    // 检索内部也会 reindexProject：已补算的向量不能被抹掉（否则 fusedScore 退化成纯关键词）
+    const after = new VectorIndex(dbPath)
+    const vec = after.vectorOf(key)
+    expect(vec).toBeDefined()
+    expect(Array.from(vec!)).toEqual([1, 0, 0])
   })
 })
 
