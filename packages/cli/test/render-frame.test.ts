@@ -102,6 +102,24 @@ describe("renderFrame compact note dedup", () => {
   })
 })
 
+describe("renderFrame memory.written", () => {
+  it("prints a dim notice line and stays non-terminating (done === false)", async () => {
+    const writes: string[] = []
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString())
+      return true
+    })
+    try {
+      const { ctx } = makeCtx()
+      const done = await renderFrame(ev("memory.written", { path: "/m/global/persona.md", kind: "cognition" }), ctx)
+      expect(done).toBe(false)
+      expect(writes.join("")).toContain("已写入记忆: /m/global/persona.md")
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})
+
 describe("renderFrame compaction.completed result branches", () => {
   it("prints the failure hint when result is failed", async () => {
     const out = await capture((ctx) =>

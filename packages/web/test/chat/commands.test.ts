@@ -112,4 +112,10 @@ describe("runWebCommand", () => {
     expect(await runWebCommand({ command: "help", args: "" }, ctx)).toBe(true)
     expect(ctx.notify).not.toHaveBeenCalled()
   })
+
+  it("points /memory at the memory page", async () => {
+    const ctx = makeCtx()
+    expect(await runWebCommand({ command: "memory", args: "" }, ctx)).toBe(true)
+    expect(ctx.notify).toHaveBeenCalledWith("记忆管理请用顶部的「记忆」页")
+  })
 })

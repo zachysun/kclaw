@@ -2,7 +2,7 @@
  * Integration smoke: the whole persistence/permission/tool stack wired
  * the way the daemon wires it, on a real temp KCLAW_HOME.
  *
- * SessionStore + MemoryStore + ConfigPermissionGate + createBuiltinTools
+ * SessionStore + MemorySystem + ConfigPermissionGate + createBuiltinTools
  * drive one runAgent turn with a scripted LlmClient that emits a tool_call
  * for `exec {command:"echo hi"}` then a final end_turn. Two scenarios: the
  * whitelist path (allow rule → no confirmation) and the confirmation path
@@ -21,7 +21,7 @@ import type { AgentEvent } from "../../src/protocol/events.js"
 import type { Message, ToolMessage } from "../../src/protocol/messages.js"
 import { ConfigPermissionGate } from "../../src/permissions/engine.js"
 import { SessionStore } from "../../src/session/store.js"
-import { MemoryStore } from "../../src/memory/store.js"
+import { MemorySystem } from "../../src/memory/system.js"
 import { createBuiltinTools } from "../../src/tools/index.js"
 import { loadConfig, saveConfig, resolvePaths } from "../../src/storage/index.js"
 
@@ -73,8 +73,17 @@ describe("integration smoke", () => {
     expect(loaded.permissions.allow).toEqual(["exec:echo*"])
 
     const sessionStore = new SessionStore(paths.sessionsDir)
-    const memory = new MemoryStore({ notesDir: paths.memoryNotesDir, indexDb: paths.memoryIndexDb })
-    const { tools, toolDefs } = createBuiltinTools({ workspace, memory, tavilyApiKey: "test-key" })
+    const memory = new MemorySystem({
+      memoryDir: paths.memoryDir,
+      sessions: sessionStore,
+      config: loaded,
+      resolveLlm: () => ({ llm: scriptClient([]), model: "test-model" }),
+    })
+    const { tools, toolDefs } = createBuiltinTools({
+      workspace,
+      memoryCtx: { system: memory, sessionId: "ses_1", workdir: workspace, immediateEnabled: false },
+      tavilyApiKey: "test-key",
+    })
 
     const session = sessionStore.create("冒烟会话")
     const gate = new ConfigPermissionGate(loaded.permissions)
@@ -131,8 +140,17 @@ describe("integration smoke", () => {
     expect(loaded.permissions.allow).toEqual([])
 
     const sessionStore = new SessionStore(paths.sessionsDir)
-    const memory = new MemoryStore({ notesDir: paths.memoryNotesDir, indexDb: paths.memoryIndexDb })
-    const { tools, toolDefs } = createBuiltinTools({ workspace, memory, tavilyApiKey: "test-key" })
+    const memory = new MemorySystem({
+      memoryDir: paths.memoryDir,
+      sessions: sessionStore,
+      config: loaded,
+      resolveLlm: () => ({ llm: scriptClient([]), model: "test-model" }),
+    })
+    const { tools, toolDefs } = createBuiltinTools({
+      workspace,
+      memoryCtx: { system: memory, sessionId: "ses_1", workdir: workspace, immediateEnabled: false },
+      tavilyApiKey: "test-key",
+    })
 
     const session = sessionStore.create("确认会话")
     const gate = new ConfigPermissionGate(loaded.permissions)
@@ -190,7 +208,7 @@ describe("integration smoke", () => {
 
   it("exposes the public surface from the package barrel", () => {
     for (const name of [
-      "SessionStore", "MemoryStore", "JobScheduler",
+      "SessionStore", "MemorySystem", "JobScheduler",
       "ConfigPermissionGate", "createBuiltinTools", "createExecTool",
       "createFsTools", "createWebTools", "createMemoryTools",
       "resolvePaths", "loadConfig", "saveConfig", "runAgent",

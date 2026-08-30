@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 28 个业务路由（健康/状态 2 个、会话 14 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 1 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 37 个业务路由（健康/状态 2 个、会话 14 个、记忆 9 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 1 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`、`memory.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未装配时降级 503。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
@@ -118,6 +118,24 @@ interface Job {
 
 脱敏规则（`sanitizeConfig` + `maskSecret`）：先 `structuredClone` 深拷贝再改（原对象保持不变），掩码为 `"***" + 末 4 字符`（不足 4 字符则纯 `"***"`，空串同）。其余字段原样返回。没有对应的写路由。
 
+### 记忆（routes/memory.ts，底座 `MemorySystem`）
+
+记忆 v2 的 `/memory` 管理路由族（spec 9.2）：读取与整文件覆写/删除记忆塔里的项目主题线（L1）与全局认知文件（L2）。机制与文件格式见 [memory](../core/memory.md)。与附件/用量"仅注入时注册"不同，这组**始终注册**——`createApp` 未装配 `MemorySystem`（`opts.memory` 缺失，常见于测试）时，命中任何一条都返回 `503 {error:"memory system unavailable"}`，而不是 404。
+
+| 方法 | 路径 | 用途 | 请求 | 响应 |
+|------|------|------|------|------|
+| GET | `/memory/projects` | 项目列表 | — | `{id, workdir, threads, lastActivity}[]`（id = `<目录名>-<sha1前6位>`；threads 为线数、lastActivity 为最近线活动日期） |
+| GET | `/memory/projects/:id` | 某项目的主题线清单 | — | `{id, threads}`，threads 为 `{topic, title, status, updated}[]`（按 MEMORY.md 生成）；项目不存在 404 `{error:"not found"}` |
+| GET | `/memory/threads/:project/:topic` | 读线文件原文 | — | `{content}`（线文件完整 markdown）；项目或线不存在 404 |
+| PATCH | `/memory/threads/:project/:topic` | 整文件覆写线文件（写后重索引 + 重建 MEMORY.md） | `{content}` 必填、非空字符串，否则 400 `content must be a non-empty string` | `{ok:true}`；目标不存在 404 |
+| DELETE | `/memory/threads/:project/:topic` | 删线文件 + 重建索引与 MEMORY.md | — | `{ok:true}`；目标不存在 404 |
+| GET | `/memory/global` | 全局认知文件列表 | — | `{kind, name, path, scope, updated}[]`（kind ∈ persona/wiki/rule） |
+| GET | `/memory/global/:kind/:file` | 读认知文件原文 | — | `{content}`；kind 非 persona/wiki/rule 或文件不存在 404 |
+| PATCH | `/memory/global/:kind/:file` | 整文件覆写认知文件（写后重建全局索引） | `{content}` 必填、非空字符串，否则 400 `content must be a non-empty string` | `{ok:true}`；kind 非法或文件不存在 404 |
+| DELETE | `/memory/global/:kind/:file` | 删认知文件 + 重建全局索引 | — | `{ok:true}`；kind 非法或文件不存在 404；**persona 是全局画像，不可删除，返回 400 `persona 不可删除（可清空正文）`** |
+
+`:id`/`:project`/`:topic`/`:file` 的路径段都按原样传给 `MemorySystem`，不做额外净化——读侧宽容（找不到就 404），写侧是"人即是真相"的整文件覆写。`GET /memory/projects/:id` 的响应包裹成 `{id, threads}` 是为前端取数方便（实现与 spec 的差异点，见 [memory](../core/memory.md) 的管理界面一节）。删除类的机器语义：删的是文件，`vectors.db` 里的对应条目由随后的 reindex 清除。
+
 ### 附件（routes/attachments.ts，仅当注入 `attachmentsDir` 时注册）
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
@@ -157,6 +175,8 @@ interface Job {
 - `send_message` 增加可选 `disposition` 字段（`"steer"|"wait"|"interrupt"`；非法值 error 帧 `send_message disposition must be "steer", "wait" or "interrupt"`）。不带字段取会话覆盖 ?? 配置默认（**默认引导**——有意的行为变更，旧版为自动等待）。回包 `send_message_ack` 增加 `messageId` 与 `queued`（会话空闲直发 `queued:false`、不广播 `message.queued`；运行中按处置分流 `queued:true`）。会话忙时超限的 error 帧文案：`队列已满（10 条）`。
 - `queue.cancel`：`{sessionId, messageId?}`——带 id 取消该条（wait 随时、steer 注入前），不带则清空全部可取消条目。回 `queue.cancel_ack {sessionId, cancelled}`；失败为 error 帧：已注入 `已注入`（机器不删历史）、无此条目 `not found`。
 - 三个新事件：`message.queued {messageId, disposition, position?}`（消息入队/入缓冲区时；position 是 wait/interrupt 的队列序位，steer 不适用；降级按实际处置报告）、`message.steered {messageId}`（steer 注入当前 run 的时刻，事件级 `runId` 标识注入的 run）、`message.queue_cancelled {messageId}` 或 `{all:true}`（单条取消/清空）。出队执行与注入仍用既有 `run.started` + `message.created` 表达，消息 id 与排队时相同——前端气泡原地升级，无需替换。
+
+**记忆写入事件 `memory.written`**（spec 9.3）：记忆写入管线每次实际落盘时经总线广播，帧为 `memory.written {path, kind, topic?, scope?}`——`kind` 是 `"episode"`（项目情节，带 `topic` 线名）或 `"cognition"`（全局认知，带 `scope`），`path` 是落盘文件的绝对路径；不带 `sessionId`（项目级事务）。它只作"已落盘"的轻提示：CLI dim 一行 `已写入记忆: <path>`，web 在通知条显示同文案，都不驱动任何状态机。事件不带"记忆内容"，要看内容走上面的 `/memory` 路由。payload 定义见 [protocol](../core/protocol.md)。
 
 ## 审计的读取方式
 
@@ -204,5 +224,6 @@ app.addHook("preHandler", async (request, reply) => {
 - [run-manager](./run-manager.md)：send_message 背后的三处置决策、队列驱动器与附件挂载（`/queue` 快照与 compact 409 的服务端语义）
 - [storage](../core/storage.md)：SessionStore/JobScheduler/UsageStore 的持久化实现
 - [compaction](../core/compaction.md)：compact/compactions 两个路由背后的机制与记录格式
+- [memory](../core/memory.md)：`/memory` 路由族背后的记忆塔存储与 `memory.written` 事件
 - [mcp](../core/mcp.md)：`GET /mcp` 快照背后的连接管理器
 - [jobs](../core/jobs.md)：cron 语义与 nextRunAt 推进规则

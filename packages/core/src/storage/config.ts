@@ -19,7 +19,21 @@ export interface KclawConfig {
     timeoutMs?: number
   }
   permissions: { allow: string[]; deny: string[]; confirmTimeoutMs: number; sessionGrants: boolean }
-  memory: { autoExtract: boolean; extractModel: string }
+  memory: {
+    write: { immediate: boolean; manual: boolean; intervalMinutes: number; idleMinutes: number }
+    /** 提取与内化用的模型；空 = 回落主对话模型。 */
+    extractModel: string
+    /** 线多少天无新情节转 inactive。 */
+    threadInactiveDays: number
+    /** 内化开关。 */
+    consolidate: boolean
+    /** embedding 判定链见 spec 7.2：model 为空 = 向量路整体不启用。 */
+    embedding: { provider: string; model: string }
+    /** 每轮注入（认知常驻 + 情节检索）token 上限。 */
+    injectTokenBudget: number
+    /** @deprecated v1 字段（被四触发取代），仅容忍存在，读处一律忽略。 */
+    autoExtract?: boolean
+  }
   web: {
     tavilyApiKey: string
     /**
@@ -80,7 +94,14 @@ export interface KclawConfig {
 export const defaultConfig: KclawConfig = {
   providers: { default: "", entries: {}, timeoutMs: DEFAULT_LLM_TIMEOUT_MS },
   permissions: { allow: [], deny: ["exec:sudo*", "exec:rm -rf*"], confirmTimeoutMs: 120_000, sessionGrants: true },
-  memory: { autoExtract: false, extractModel: "" },
+  memory: {
+    write: { immediate: true, manual: true, intervalMinutes: 30, idleMinutes: 10 },
+    extractModel: "",
+    threadInactiveDays: 14,
+    consolidate: true,
+    embedding: { provider: "", model: "" },
+    injectTokenBudget: 1000,
+  },
   web: { tavilyApiKey: "", timeoutMs: 20_000, allowPrivateNetworks: false },
   exec: { timeoutMs: 60_000, maxOutputBytes: 100 * 1024 },
   sessions: { recycleBinTtlMs: 30 * 24 * 60 * 60 * 1000, defaultDisposition: "steer" as const },
@@ -134,6 +155,11 @@ export function loadConfig(paths: KclawPaths): KclawConfig {
   if (file === null || file === undefined) return structuredClone(defaultConfig)
   if (!isPlainObject(file)) {
     throw new Error(`invalid config in ${paths.config}: expected a yaml mapping`)
+  }
+  // spec 10：首次读到 v1 遗留字段记日志说明已忽略（不改字段、不改行为，只提示）。
+  const legacyAutoExtract = (file as { memory?: { autoExtract?: unknown } }).memory?.autoExtract
+  if (legacyAutoExtract !== undefined) {
+    console.warn("kclaw config: memory.autoExtract is deprecated (v1) and ignored; use memory.write.* instead")
   }
   return deepMerge(structuredClone(defaultConfig), file)
 }

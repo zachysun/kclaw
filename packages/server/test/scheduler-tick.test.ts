@@ -19,7 +19,6 @@ import { join } from "node:path"
 
 import {
   JobScheduler,
-  MemoryStore,
   SessionStore,
   loadConfig,
   resolvePaths,
@@ -31,6 +30,7 @@ import type {
   KclawConfig,
   LlmClient,
   LlmStreamEvent,
+  MemorySystem,
 } from "@kclaw/core"
 import { EventBus } from "../src/bus.js"
 import { RunManager } from "../src/run.js"
@@ -115,6 +115,15 @@ interface TickEnv {
   socket: FakeSocket
 }
 
+/** Minimal MemorySystem stand-in: tick tests never touch memory, so the
+ *  injection seams return nothing (a full fake would mask nothing here). */
+function makeMemoryFake(): MemorySystem {
+  return {
+    searchEpisodes: async () => [],
+    cognitionPrompt: () => "",
+  } as unknown as MemorySystem
+}
+
 /** Real stores + scheduler + RunManager under fresh temp dirs; connected socket on the bus. */
 function makeEnv(llm: LlmClient): TickEnv {
   const home = mkdtempSync(join(tmpdir(), "kclaw-tick-home-"))
@@ -130,7 +139,7 @@ function makeEnv(llm: LlmClient): TickEnv {
   }
 
   const sessions = new SessionStore(paths.sessionsDir)
-  const memory = new MemoryStore({ notesDir: paths.memoryNotesDir, indexDb: paths.memoryIndexDb })
+  const memory = makeMemoryFake()
   const bus = new EventBus()
   const manager = new RunManager({
     config, paths, sessions, memory, bus, llm, workspace,

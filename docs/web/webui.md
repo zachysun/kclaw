@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/web` 是 daemon 的浏览器前端：React 单页应用（SPA：单个 HTML 页面内完成全部交互，按需向服务器请求数据），vite 构建、产物由 daemon 静态托管，并按 PWA（渐进 Web 应用：可安装到主屏、带离线外壳）方式布置了 Service Worker 与清单文件。`src/App.tsx` 是根组件与顶层状态（tab、会话列表、选中会话）；`src/token.ts` 负责 token 引导（`?token=` 握手 → localStorage → 地址栏清除）；`src/ws.ts` 是 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）客户端；`src/api.ts` 是 HTTP 客户端（含附件上传）。功能与 CLI 对等并多出图形化部分（同一套 HTTP + WS API）：流式对话、确认卡片、会话（按工作目录分组）、任务、审计、用量台账、回收站。
+`packages/web` 是 daemon 的浏览器前端：React 单页应用（SPA：单个 HTML 页面内完成全部交互，按需向服务器请求数据），vite 构建、产物由 daemon 静态托管，并按 PWA（渐进 Web 应用：可安装到主屏、带离线外壳）方式布置了 Service Worker 与清单文件。`src/App.tsx` 是根组件与顶层状态（tab、会话列表、选中会话）；`src/token.ts` 负责 token 引导（`?token=` 握手 → localStorage → 地址栏清除）；`src/ws.ts` 是 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）客户端；`src/api.ts` 是 HTTP 客户端（含附件上传）。功能与 CLI 对等并多出图形化部分（同一套 HTTP + WS API）：流式对话、确认卡片、会话（按工作目录分组）、任务、审计、用量台账、回收站、记忆管理。
 
 ## 设计决策
 
@@ -56,7 +56,7 @@ export function bootstrapToken(): string | null
 
 ## 视图（App.tsx 布局）
 
-顶栏（品牌 + ☰ 抽屉按钮〔窄屏〕+ 五个 tab：对话/任务/审计/用量/回收站 + daemon 状态点，挂载时 GET `/status` 探测，`connecting/connected/error` 三态）、左侧会话栏、右侧 tab 内容：
+顶栏（品牌 + ☰ 抽屉按钮〔窄屏〕+ 六个 tab：对话/任务/审计/用量/回收站/记忆 + daemon 状态点，挂载时 GET `/status` 探测，`connecting/connected/error` 三态）、左侧会话栏、右侧 tab 内容：
 
 | 视图 | 组件 | 职责 |
 |------|------|------|
@@ -66,6 +66,7 @@ export function bootstrapToken(): string | null
 | 审计（tab） | `audit/AuditView.tsx` | 会话下拉 + `GET /sessions/:id/messages`，把消息摊平成"每块一行"、按 createdAt **升序**排列（最新在底部，像日志），点击展开完整块内容；工具行按 callId 关联 tool 消息的 `grantedBy` 显示放行原因；选中会话后追加拉取 `GET /sessions/:id/compactions`，在轨迹上方渲染"压缩记录"区块（每条一行：时间、触发方式〔自动（收尾）/自动（运行中）/手动，手动附 focus；`emergency` 急救加"·超限急救"标注〕、被压范围 `from–upto`、条数，点击展开段摘要与总摘要全文）；纯只读 |
 | 用量（tab） | `usage/UsageView.tsx` | 并发拉 `GET /usage?by=day` 与 `?by=session` 两份聚合：顶部总计行（输入/输出 token 与费用）+ "导出 JSON" 按钮（再拉一份 by=session 存为 `kclaw-usage.json` 下载）；两张表分别按天、按会话列 token 与费用，未配置价格的模型费用显示"—" |
 | 回收站（tab） | `sessions/TrashView.tsx` | `GET /sessions?deleted=true` 软删除列表，行内恢复（POST `/:id/restore`）与彻底删除（POST `/:id/purge`），操作后重新拉取 |
+| 记忆（tab） | `memory/MemoryView.tsx` | 记忆管理页：左侧三个区块——**项目**（`GET /memory/projects`，每个项目一行 `id（N 线）`）、**主题线**（点项目后 `GET /memory/projects/:id`，每行 `一句话 · 状态 · 最近活动`）、**全局认知**（`GET /memory/global`，每行 `kind/name · 更新时间`）；点开一条主题线或一个认知文件，右侧出现**整文件编辑器**（textarea 全文，保存 = `PATCH /memory/threads/:project/:topic` 或 `PATCH /memory/global/:kind/:file`，删除 = 对应 `DELETE`；编辑与删除后的列表刷新见下）。三个 GET 全部在挂载时并行拉取，任一失败（含 daemon 未装配记忆时的 503）走通知条提示。删除认知文件的 persona 会吃 400（persona 不可删除，见 [http-api](../server/http-api.md)）。编辑是"人即是真相"的整文件覆写，不校验 frontmatter |
 
 会话数据流：挂载时 `GET /sessions`（服务端按 updatedAt 降序）；**每次**选中会话都 `GET /sessions/:id/messages` 全量拉取并经 `unionById` 按会话 id 并入缓存（`messagesCache`）——只追加未知 id，不覆盖已有条目；缓存保证传给 ChatPanel 的数组引用稳定。
 
@@ -87,6 +88,7 @@ export function bootstrapToken(): string | null
 - **排队三事件**：`message.queued {messageId, disposition, position?}` 的落地次序——先认领本地待确认的列表行（忙会话发送建的 `local-` 行，改名并保留文本）；没有行则收走待确认的乐观气泡（闲转忙竞态，文本带走建行）；都没有（跨客户端/重放边缘）落地空文本行，由面板的快照补全。已跟踪的 id 只刷新处置（恢复重播把 steer/interrupt 降级报为 wait），不重复收养。`message.steered {messageId}` 直接删除对应行（注入完成，消息本体随后/已经由 `message.created` 落进消息流）；`message.queue_cancelled` 按 `messageId` 或 `all:true` 删除对应/全部行（取消的消息从未落盘，无气泡残留）。
 - `run.started/completed/failed` 驱动 `runState` 与 "running…" 指示；`llm.failed {willRetry:true}` 显示"重试中…"提示（`llm.completed` 或 run 终态清除）。
 - `confirmation.requested`/`confirmation.resolved` 增删 `pendingConfirmations` 卡片。
+- `memory.written`（记忆落盘反馈，spec 9.3）单独挑出来、不进 reducer：读 `payload.path` 在通知条显示 `已写入记忆: <path>`（与 CLI 同文案）；它描述的是记忆库而不是某条消息，进 reducer 反而会污染对话状态。事件本身不带记忆内容，要看内容切到「记忆」tab。
 
 ## WS 客户端（packages/web/src/ws.ts）
 
@@ -129,6 +131,7 @@ export class WsAuthError extends Error { readonly code: number }  // 默认 4001
 - [http-api](../server/http-api.md)：各视图消费的 REST 路由（含 /fs/browse、/usage、附件上传）
 - [run-manager](../server/run-manager.md)：`session.renamed` 的发射方、附件随 send_message 的服务端挂载
 - [compaction](../core/compaction.md)：`/compact` 命令与审计页"压缩记录"区块背后的机制
+- [memory](../core/memory.md)：记忆管理页背后的记忆塔存储、`memory.written` 事件与 `/memory` 命令的语义（web 端 `/memory` 是提示跳转记忆页的占位，命令元数据在 `@kclaw/core/commands`）
 - [daemon](../server/daemon.md)：webDist 解析与静态托管、鉴权豁免的服务端侧
 - [onboarding](../cli/onboarding.md)：`kclaw web` 命令与 `?token=` 的发送侧
 - [protocol](../core/protocol.md)：事件目录与持久化块结构（model.ts 镜像的源头）

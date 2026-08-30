@@ -10,14 +10,14 @@
 import { describe, it, expect, afterEach, beforeAll } from "vitest"
 import { spawn, execFileSync } from "node:child_process"
 import type { ChildProcess } from "node:child_process"
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 import { createConnection } from "node:net"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { MemoryStore, loadConfig, resolvePaths } from "@kclaw/core"
+import { loadConfig, resolvePaths } from "@kclaw/core"
 import type { KclawConfig, LlmClient, LlmStreamEvent } from "@kclaw/core"
 import { DEFAULT_STOP_TIMEOUT_MS, defaultLlmFactory, launchDaemon, withStopTimeout } from "../src/daemon.js"
 import type { Daemon } from "../src/daemon.js"
@@ -145,21 +145,29 @@ describe("launchDaemon", () => {
     expect(existsSync(join(home, "token"))).toBe(true)
   })
 
-  it("reconciles memory at startup: a hand-written note file is searchable post-launch", async () => {
+  it("assembles the v2 memory system at startup", async () => {
     const home = makeHome()
     const paths = resolvePaths(home)
-    writeFileSync(
-      join(paths.memoryNotesDir, "seeded.md"),
-      "---\nid: seeded\ntags: []\n---\n\n用户在上海工作，喜欢喝乌龙茶。\n",
-      "utf8",
-    )
     const daemon = await launchMock(home, makeConfig(home))
+    // v1 的 startup reconcile（notes/* → index.db）已随 Task 11 的 MemorySystem
+    // 装配退役（v1 迁移在 Task 13）；MemorySystem 构造即建 v2 布局目录。
+    expect(existsSync(join(paths.memoryDir, "global"))).toBe(true)
+    expect(existsSync(join(paths.memoryDir, "projects"))).toBe(true)
+    expect(existsSync(join(paths.memoryDir, "global", "vectors.db"))).toBe(true)
+  })
 
-    // a FRESH store over the same paths (no reconcile call of its own): the
-    // only way the note is findable is the daemon's startup reconciliation
-    const memory = new MemoryStore({ notesDir: paths.memoryNotesDir, indexDb: paths.memoryIndexDb })
-    const hits = await memory.search("上海")
-    expect(hits.map((hit) => hit.id)).toContain("seeded")
+  it("migrates v1 notes to v2 cognition, deletes notes/ and the v1 index.db", async () => {
+    const home = makeHome()
+    const paths = resolvePaths(home)
+    const notesDir = join(paths.memoryDir, "notes")
+    mkdirSync(notesDir, { recursive: true })
+    writeFileSync(join(notesDir, "a.md"), `---\nid: a\n---\n\n用户偏好深色主题\n`)
+    const daemon = await launchMock(home, makeConfig(home))
+    // 偏好类 note → persona；notes/ 删除；v1 派生物 index.db 不存在；v2 projects 已建。
+    expect(readFileSync(join(paths.memoryDir, "global", "persona.md"), "utf8")).toContain("深色主题")
+    expect(existsSync(notesDir)).toBe(false)
+    expect(existsSync(join(paths.memoryDir, "index.db"))).toBe(false)
+    expect(existsSync(join(paths.memoryDir, "projects"))).toBe(true)
   })
 
   it("stop() removes daemon.json, is idempotent, and the port refuses connections", async () => {

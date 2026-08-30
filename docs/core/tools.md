@@ -33,7 +33,8 @@ export interface ToolExecutor {
 // packages/core/src/tools/index.ts
 export function createBuiltinTools(opts: {
   workspace: string
-  memory: MemoryStore
+  memoryCtx: { system: MemorySystem; sessionId: string; workdir: string; immediateEnabled: boolean }
+  // 记忆系统 v2 门面 + 当前会话上下文；immediateEnabled 决定 memory_save 是否当场触发写入
   tavilyApiKey: string
   exec?: Partial<{ timeoutMs: number; maxOutputBytes: number }>
   web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean }>
@@ -95,12 +96,12 @@ export function makeTool<N extends string>(
 
 ### memory 工具（`tools/memory.ts`）
 
-是 `MemoryStore` 的薄封装（markdown 文件为准、SQLite FTS5 为派生索引，见 [memory](./memory.md)）。
+是 `MemorySystem` 门面的薄封装（v2：主题线 markdown 为准、FTS5 + 向量为派生索引，见 [memory](./memory.md)）。
 
-- **memory_save** `{text, tags?}`：`store.save({text, tags, source: "model"})`——`source:"model"` 标记这是模型写入的（自动记忆管线与人工写入使用其他入口）；存储层做相似笔记的就地合并，不产生重复条目；输出 `saved memory <id>`。
-- **memory_search** `{query, limit?}`：`limit` 默认 5、最大 20；每个命中一行 `- <text>`，按相关度排序；无命中输出 `(no memories)`。
+- **memory_save** `{text}`：text 是"要记内容的提示"（v1 的 `tags` 已删，多余字段忽略）；当场触发 `system.triggerImmediate` 处理当前这轮对话，成功输出 `已触发记忆写入（处理当前这轮对话）`；`memory.write.immediate=false` 时返回 `立即写入已关闭（memory.write.immediate=false），该内容将在后台定时/跟随触发时沉淀`——此时不落盘，内容留给后台兜底。
+- **memory_search** `{query, limit?}`：`system.searchAll` 跨**全部**项目库 + 全局库的混合检索（关键词 + 向量，打分见 [memory](./memory.md)），`limit` 默认 5、最大 20；每个命中一行 `- [经历|认知] [scope] 正文`（scope 如 `project:<id>` / `global`），无命中输出 `（没有相关记忆）`。
 
-两个工具 safe + parallel：只访问笔记目录与索引，不修改工作目录本身（better-sqlite3 是同步接口，"parallel" 只表示调度器不强制排序）。
+两个工具 safe + parallel：只访问记忆目录与索引，不修改工作目录本身（"parallel" 只表示调度器不强制排序）。
 
 ### session 工具（`tools/session.ts`）
 

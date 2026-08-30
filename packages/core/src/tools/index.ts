@@ -7,7 +7,7 @@
  * asserts it stays that way in both directions).
  */
 import type { ToolExecutor } from "../agent/tools.js"
-import type { MemoryStore } from "../memory/store.js"
+import type { MemorySystem } from "../memory/system.js"
 import type { ToolDefinition } from "../provider/types.js"
 import { createExecTool } from "./exec.js"
 import { createFsTools } from "./fs.js"
@@ -39,7 +39,7 @@ function def(
 
 export function createBuiltinTools(opts: {
   workspace: string
-  memory: MemoryStore
+  memoryCtx: { system: MemorySystem; sessionId: string; workdir: string; immediateEnabled: boolean }
   tavilyApiKey: string
   exec?: Partial<{ timeoutMs: number; maxOutputBytes: number }>
   web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean }>
@@ -58,7 +58,7 @@ export function createBuiltinTools(opts: {
     timeoutMs: opts.web?.timeoutMs,
     allowPrivateNetworks: opts.web?.allowPrivateNetworks,
   })
-  const memory = createMemoryTools(opts.memory)
+  const memory = createMemoryTools(opts.memoryCtx)
   const session = createSessionTools(opts.sessionSearch)
 
   const entries: Array<{ name: string; tool: ToolExecutor; def: ToolDefinition }> = [
@@ -144,11 +144,8 @@ export function createBuiltinTools(opts: {
       tool: memory.memory_save,
       def: def(
         "memory_save",
-        "Persist a durable note to long-term memory (markdown files + full-text index). A very similar existing note is updated in place instead of duplicated.",
-        {
-          text: str("The memory to store, phrased as a standalone fact or preference"),
-          tags: { type: "array", items: { type: "string" }, description: "Optional categorization tags" },
-        },
+        "立即把当前这轮对话沉淀进长期记忆（触发记忆写入管线，处理当前轮）。判断权在你：用户明确要求记住时调用；对话里刚敲定重要决定、暴露稳定偏好、得出关键结论时也应自主调用。text 用一句话说明要记什么。",
+        { text: str("要记内容的提示（说明这轮什么内容值得沉淀）") },
         ["text"],
       ),
     },
@@ -157,8 +154,8 @@ export function createBuiltinTools(opts: {
       tool: memory.memory_search,
       def: def(
         "memory_search",
-        "Full-text search (CJK-aware) over saved memories; returns one `- <text>` line per hit, ranked by relevance.",
-        { query: str("What to look for in stored memories"), limit: int(1, 20) },
+        "跨项目经历与全局认知的混合检索（关键词+向量）。每个命中带 [经历]/[认知] 与 [project:<id>]/[global] 标注。",
+        { query: str("要在长期记忆里找什么"), limit: int(1, 20) },
         ["query"],
       ),
     },

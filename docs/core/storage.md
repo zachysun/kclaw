@@ -27,8 +27,9 @@ export function resolvePaths(home?: string): KclawPaths
 |------|------|--------|
 | `<home>/config.yaml` | 全部配置（见下节） | CLI 向导 `saveConfig`；用户手编 |
 | `<home>/AGENTS.md` | agent 人格，非空则作为系统提示 | 用户手编；daemon 启动时读 |
-| `<home>/memory/notes/` | 记忆 markdown，真相 | MemoryStore / 用户手编 |
-| `<home>/memory/index.db` | 记忆 FTS5 索引，派生物 | MemoryStore |
+| `<home>/memory/global/` | L2 全局认知（persona.md、wiki/、rule/ 的 markdown，真相） | MemorySystem / 用户手编 |
+| `<home>/memory/projects/<id>/` | L1 项目情节（`<topic>.md` 主题线、workdir.txt、MEMORY.md、state.json、vectors.db） | MemorySystem / 用户手编 |
+| `<home>/memory/notes/`、`<home>/memory/index.db` | v1 遗留：前者是迁移输入（daemon 启动读后删除）、后者是被删除的 v1 派生物索引 | 仅 daemon 启动迁移（见 [memory](./memory.md)） |
 | `<home>/sessions/<id>/` | 每会话一目录（meta.json + messages.jsonl + compactions.jsonl + index.db） | SessionStore（compactions.jsonl 与 index.db 由压缩机制写入，见 [compaction](./compaction.md)） |
 | `<home>/jobs.db` | 定时任务表 | JobScheduler |
 | `<home>/usage.db` | 每次 LLM 运行的 token 用量台账 | UsageStore |
@@ -53,7 +54,11 @@ export function resolvePaths(home?: string): KclawPaths
 | `permissions.allow` / `deny` | `[]` / `["exec:sudo*", "exec:rm -rf*"]` | 权限规则，见 [permissions](./permissions.md) |
 | `permissions.confirmTimeoutMs` | `120000` | 人工确认等待上限，超时按拒绝处理 |
 | `permissions.sessionGrants` | `true` | 会话内"本次允许"记忆是否生效 |
-| `memory.autoExtract` / `extractModel` | `false` / `""` | 自动记忆抽取开关与抽取用模型，由 server RunManager 消费（见 [memory](./memory.md)） |
+| `memory.write.{immediate, manual, intervalMinutes, idleMinutes}` | `true` / `true` / `30` / `10` | 记忆写入四触发：immediate = `memory_save` 工具当场触发；manual = 预留开关、当前无读取处；intervalMinutes = 定时兜底间隔（0 关闭）；idleMinutes = 跟随门禁空闲分钟（0 关闭）。完整语义见 [memory](./memory.md) |
+| `memory.extractModel` / `threadInactiveDays` / `consolidate` | `""` / `14` / `true` | 提取/内化用的模型（空回落主对话模型）、线闲置多少天自动转 inactive、内化开关 |
+| `memory.embedding.{provider, model}` | `""` / `""` | 向量检索判定链：`model` 空则向量路整体关闭（纯 BM25）；provider 空回落 default 条目 |
+| `memory.injectTokenBudget` | `1000` | 每轮 L2 认知常驻注入的 token 上限（只约束常驻注入，L1 情节 top-5 全量注入不受此限） |
+| `memory.autoExtract` | 无（废弃） | v1 字段，被四触发取代，已废弃不生效：配置文件里存在时不报错，但读处一律忽略 |
 | `web.tavilyApiKey` | `""` | web_search 的 Tavily 密钥 |
 | `web.timeoutMs` | `20000` | 每次网络抓取（搜索与网页）的 AbortSignal 超时，卡死的主机不能拖住一个 run |
 | `web.allowPrivateNetworks` | `false` | `true` 时豁免 web_fetch 的私网/回环目标拒绝（SSRF 防护，如允许抓本机 Ollama 端点），由 run 装配传入工具 |
@@ -94,7 +99,7 @@ export function appendJsonlLine(file: string, value: unknown): void
 export function readJsonl(file: string): unknown[]
 ```
 
-`KclawPaths` 每个字段的用途见上节目录树；`memoryDir` 本身无直接写入方（`memoryNotesDir` / `memoryIndexDb` 才是实际路径）。
+`KclawPaths` 每个字段的用途见上节目录树；`memoryDir` 是 v2 记忆塔的根（MemorySystem 在它下面建 `global/` 与 `projects/`，见 [memory](./memory.md)）；`memoryNotesDir` / `memoryIndexDb` 是 v1 遗留路径——daemon 启动时把 `notes/` 当作迁移输入读取后删除、`index.db` 直接删除，不再有写入方。
 
 ---
 
@@ -155,7 +160,7 @@ HTTP 出口与展示见 [http-api](../server/http-api.md) 的 `GET /usage` 与 [
 
 - **meta.json 原子写**：`writeMeta` 经 `writeFileAtomic`（临时文件 + rename）落盘，meta.json 本身不会被截断；崩溃最坏残留 `<meta.json>.tmp` 孤儿文件，不影响读取。
 - **config 无结构校验**：见上；写错类型（如 `confirmTimeoutMs: "30s"`）在运行时才以意外方式失败。
-- **SQLite 未开 WAL**：jobs.db、memory/index.db 与 usage.db 都是默认日志模式。单 daemon 进程同步访问（better-sqlite3）下安全；多进程并发写同一 home 是明确不支持的用法。
+- **SQLite 未开 WAL**：jobs.db、memory 的 `vectors.db`（每项目 + 全局各一个）与 usage.db 都是默认日志模式。单 daemon 进程同步访问（better-sqlite3）下安全；多进程并发写同一 home 是明确不支持的用法。
 - **KCLAW_HOME 只在 `resolvePaths` 读取一次**：核心层不缓存，但调用方各自持有解析结果；daemon 启动后改环境变量不影响已创建的路径。
 
 ---
@@ -164,6 +169,6 @@ HTTP 出口与展示见 [http-api](../server/http-api.md) 的 `GET /usage` 与 [
 
 - [jobs](./jobs.md)：jobs.db 的表结构与轮询
 - [compaction](./compaction.md)：压缩状态的三个落点（meta 字段、compactions.jsonl、index.db）与 v2 配置字段
-- [memory](./memory.md)：memory 目录双轨与索引重建
+- [memory](./memory.md)：memory 目录的三层塔布局（文件是真相、vectors.db 是派生物）与 v1 迁移
 - [protocol](./protocol.md)：Message / Block 的完整定义（messages.jsonl 每行即一个 Message）
 - [daemon](../server/daemon.md)：daemon.json 的写入时机与停机流程、token 的鉴权链路

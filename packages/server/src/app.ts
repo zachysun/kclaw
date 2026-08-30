@@ -3,12 +3,13 @@ import Fastify from "fastify"
 import fastifyStatic from "@fastify/static"
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import { JobScheduler, SessionStore, loadConfig, resolvePaths } from "@kclaw/core"
-import type { KclawConfig, KclawPaths, UsageStore } from "@kclaw/core"
+import type { KclawConfig, KclawPaths, MemorySystem, UsageStore } from "@kclaw/core"
 import { bearerMatches } from "./auth.js"
 import { EventBus } from "./bus.js"
 import type { RunManager } from "./run.js"
 import { registerWsRoutes } from "./ws.js"
 import { registerSessionRoutes } from "./routes/sessions.js"
+import { registerMemoryRoutes } from "./routes/memory.js"
 import { registerAttachmentRoutes } from "./routes/attachments.js"
 import { registerJobRoutes } from "./routes/jobs.js"
 import { registerConfigRoutes } from "./routes/config.js"
@@ -60,6 +61,12 @@ export interface AppOptions {
   attachmentsDir?: string
   /** Token ledger for `GET /usage`; absent → the route returns empty buckets. */
   usage?: UsageStore
+  /**
+   * The daemon's MemorySystem facade, injected for the memory management
+   * routes (Task 14 consumes it). Task 13 only leaves the seam — no routes
+   * are registered against it here yet.
+   */
+  memory?: MemorySystem
   /**
    * Test-injection seam for the /ws pre-auth timeout (maps to WsOptions
    * `authTimeoutMs`); production defaults live in ws.ts.
@@ -143,6 +150,8 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   // opts.run is the daemon's RunManager (same instance the ws routes use);
   // the session routes only need it for POST /sessions/:id/compact.
   registerSessionRoutes(app, { sessions, config, run: opts.run })
+  // spec 9.2 的 /memory 路由族：无 memory 装配时全部 503，不影响既有路由。
+  registerMemoryRoutes(app, { memory: opts.memory })
   if (opts.attachmentsDir !== undefined) {
     registerAttachmentRoutes(app, { sessions, attachmentsDir: opts.attachmentsDir })
   }

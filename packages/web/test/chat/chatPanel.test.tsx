@@ -256,6 +256,16 @@ describe("ChatPanel", () => {
     h.unmount()
   })
 
+  it("shows a notice when the daemon writes memory (memory.written)", async () => {
+    const h = await mount()
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("memory.written", { path: "persona.md", kind: "persona", scope: "global" }))
+    })
+    // 落盘反馈走 ChatView 的一次性 notice（spec 9.3 写入通知）。
+    expect(h.container.querySelector('[data-testid="chat-notice"]')!.textContent).toContain("已写入记忆: persona.md")
+    h.unmount()
+  })
+
   it("merges a refreshed message base into the live view (same session)", async () => {
     const h = await mount({
       initialMessages: [msg("m0", "user", [{ id: "b0", type: "text", text: "旧消息" }])],

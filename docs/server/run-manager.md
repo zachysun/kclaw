@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/run.ts` 的 `RunManager` 负责 `send_message` 之后服务端的全部处理：消息去向的三处置决策（引导/等待/中断，见下文 submit）、每会话一条显式排队队列与其驱动循环、入队执行、附件挂载、模型解析、记忆注入、系统提示、工具与权限装配、事件发送到总线、消息持久化、token 台账记录、run 取消与排队取消。`packages/server/src/confirm.ts` 的 `ConfirmationBroker` 是确认网关的服务端半边：挂起的人工裁决经 WS/CLI 的 `confirmation.resolve` 命令在此完成裁决。`packages/server/src/autoname.ts` 的 `scheduleAutoname` 在首条用户消息后异步生成会话标题并把更名广播为 `session.renamed` 事件。调度心跳（`scheduler-tick.ts`）触发的 job run 也使用同一个入口。
+`packages/server/src/run.ts` 的 `RunManager` 负责 `send_message` 之后服务端的全部处理：消息去向的三处置决策（引导/等待/中断，见下文 submit）、每会话一条显式排队队列与其驱动循环、入队执行、附件挂载、模型解析、记忆注入（L2 认知常驻系统提示 + L1 情节 note，见 `#execute` 装配第 2 步）、系统提示、工具与权限装配、事件发送到总线、消息持久化、token 台账记录、run 取消与排队取消。`packages/server/src/confirm.ts` 的 `ConfirmationBroker` 是确认网关的服务端半边：挂起的人工裁决经 WS/CLI 的 `confirmation.resolve` 命令在此完成裁决。`packages/server/src/autoname.ts` 的 `scheduleAutoname` 在首条用户消息后异步生成会话标题并把更名广播为 `session.renamed` 事件。调度心跳（`scheduler-tick.ts`）触发的 job run 也使用同一个入口。
 
 ## 设计决策
 
@@ -18,9 +18,9 @@
 - **双重竞速镜像**：RunManager 侧的 `raceResolution` 与循环侧的 `raceConfirmation` 用**同一个** `confirmTimeoutMs` 竞速同一个人工 promise——两侧结论一致；迟到的人工裁决被已 settle 的 race 丢弃，服务端再 `expire` 掉条目，晚到的 resolve 只能得到 `unknown confirmation`。
 - **自动命名静默且不覆盖手动改名**：失败静默处理、两次校验默认标题（生成前、写回前），用户已手动改名则不再修改。更名成功写回 meta 后，经注入的 emit 钩子（`busEmit`）广播 `session.renamed {title}`——订阅者立即收到通知。
 - **模型解析：每 run 一次，三级优先级**：本轮用哪个模型，按 `input.model`（job 配置的模型或客户端指定的）→ 会话 meta 的 `model`（POST `/sessions/:id/model` 写入的那个）→ daemon 默认模型的顺序取第一个非空的。取到的值再经 `resolveEntry` 做一次翻译：如果它是 config 里 provider 条目的名字（比如 `deepseek`），就换成该条目配置的线上模型名（比如 `deepseek-chat`）；如果本来就是一个直接的 API 模型名则原样通过。解析发生在每个 run 开始时，所以改完会话模型后下一次 run 即生效。
-- **附件挂载：按文件类型分三种处理**：`mountAttachments` 把用户上传的文件转成用户消息上的 attachment 块。文本类文件（MIME 为 `text/*` 或扩展名是常见文本类型）且不超过 64KiB 时，读出正文内联进消息（超过 8000 字符截断并加 `\n…[已截断]`）；图片且不超过 5MiB 时转成 base64 内嵌（作为多模态内容段发给模型）；其余文件只在块里放 `{type:"file", path}` 路径信息，模型需要内容时自己用 fs_read 读。安全上有两道检查：ws 层在校验 send_message 帧时查过一次路径，这里再用 `realpathWithin` 复核一遍——引用越出本会话附件目录就直接抛错、终止整条 run。
+- **附件挂载：按文件类型分三种处理**：`mountAttachments` 把用户上传的文件转成用户消息上的 attachment 块。文本类文件（MIME 为 `text/*` 或扩展名是常见文本类型）且不超过 64KiB 时，读出正文内联进消息（超过 8192 字符截断并加 `\n…[已截断]`）；图片且不超过 5MiB 时转成 base64 内嵌（作为多模态内容段发给模型）；其余文件只在块里放 `{type:"file", path}` 路径信息，模型需要内容时自己用 fs_read 读。安全上有两道检查：ws 层在校验 send_message 帧时查过一次路径，这里再用 `realpathWithin` 复核一遍——引用越出本会话附件目录就直接抛错、终止整条 run。
 - **用量记录失败不影响 run**：run 正常结束后向 `usageStore.record` 记一行（会话 id/run id/模型/输入输出 token/时刻）。这行代码包在 try/catch 里，失败只打 `kclaw usage record failed:` 日志；daemon 没注入 usageStore 时整个步骤跳过。
-- **自动记忆提取：发出请求后不等结果**：run 以 `end_turn` 干净收场且 `config.memory.autoExtract === true` 时，调度 `#extractMemory` 后不 await 它——这是一次不带工具的 LLM 调用，从整轮对话里提取"值得长期记住的用户个人事实"（要求返回 JSON 字符串数组），逐条调 `memory.save({source:"auto"})` 存入记忆库。响应解析失败就整批放弃、只打日志；某一条保存失败不影响其余条目。记忆注入那一侧的机制不变。
+- **记忆写入在 core 侧，run 路径只留注入与挂起**（v2）：v1 的"run 结束后服务端 fire-and-forget 自动提取"（`config.memory.autoExtract`）已移除——写入管线整体移入 core 的 `MemoryPipeline`（`packages/core/src/memory/pipeline.ts`），由四触发驱动（`memory_save` 工具的 immediate、定时 interval、跟随 follow、预留的 manual，机制见 [memory](../core/memory.md)）。RunManager 只承担三件事：每次 run 的两级注入（L2 认知常驻系统提示 + L1 情节 note，见 `#execute` 装配第 2 步）；给 `createBuiltinTools` 传入 `memoryCtx.immediateEnabled = config.memory.write.immediate`（决定 `memory_save` 工具是否当场触发写入）；run 收尾时挂起跟随检查（`idleMinutes > 0` 时 `memory.scheduleFollowCheck`，落 `<projectDir>/state.json`，daemon 重启后由记忆调度器补查，见下文 `#execute` 第 10 步）。
 - **上下文压缩 v3（token 触发的分层摘要，四个触发点）**：压缩不再发生在发送路径上——`#execute` 直接以全量 `history` 起 run，用户发消息永远零压缩等待。四个触发点由服务端编排（机制细节与数据格式见 [compaction](../core/compaction.md)）：
   - **收尾压缩**（主路径）：`runAgent` 返回且 stopReason 非 `aborted`/`error` 时，用 `estimateContextTokens(readMessages(sessionId))` 估算水位（锚定最后一条助手消息记录的真实 `usage.inputTokens`，锚之前的内容天然不计入——它们不在上一次请求里，所以直接对全量历史读数即可），水位 ≥ `budget × (compactAtRatio ?? 0.66)` 就 `#runAutoCompaction({phase:"post-run", signal})`。它在 `#execute` 内 await、位于 token 台账记录之后——会话驱动器的串行化保证压缩期间新到的消息排队等待、不会并发写会话元数据（这也让手动 /compact 在收尾压缩期间被"会话活跃"条件自然拒绝）。
   - **中途压缩**：经 `AgentDeps.midRunCompaction` 钩子（见 [agent-loop](../core/agent-loop.md)）在每轮迭代边界触发。钩子内先查取消标记与 run 的中止信号（任一命中返回 null 不压），再算水位，≥ `budget × (compactPanicRatio ?? 0.85)` 才压；压缩成功返回新的压缩视图 `{ upto, top }`，循环从下一次请求起应用（`upto` 之前原文不再发、脉络项垫在 `messages[0]`）；失败返回 null、运行不补救继续。
@@ -37,7 +37,7 @@ export interface RunManagerDeps {
   config: KclawConfig
   paths: KclawPaths
   sessions: SessionStore
-  memory: MemoryStore
+  memory: MemorySystem                 // 记忆系统 v2 门面：两级注入 + 跟随挂起（见 #execute 装配）
   bus: EventBus
   llm: LlmClient                       // 无 llmForRun 时的共享客户端
   workspace: string
@@ -127,7 +127,7 @@ export class ConfirmationBroker {
 }
 ```
 
-关键常量（`run.ts`）：`MEMORY_QUERY_CHARS = 200`（用户文本前 200 字符做记忆检索）、`MEMORY_LIMIT = 5`（最多注入 5 条）、`DEFAULT_SYSTEM_PROMPT = "你是 kclaw，一个务实的个人助理。"`；附件挂载的 `TEXT_INLINE_MAX_BYTES = 64KiB`、`TEXT_INLINE_MAX_CHARS = 8000`、`IMAGE_INLINE_MAX_BYTES = 5MiB`。三个固化系统提示词：`SEGMENT_SUMMARY_PROMPT`（段摘要：固定五栏 markdown、不超过 800 字）、`MERGE_SUMMARY_PROMPT`（总摘要归并：同样五栏、保留新版本并注明被推翻的旧版本）、`EXTRACT_SYSTEM_PROMPT`（记忆提取：只输出 JSON 字符串数组）。压缩触发的四个比例不在 defaultConfig 里（`sessions` 段的 `contextTokens`/`compactAtRatio`/`compactPanicRatio`/`compactTargetRatio`/`toolResultKeep` 均可选），缺省值在读取处兜底（128000 / 0.66 / 0.85 / 0.33 / 8）。确认超时来自 `config.permissions.confirmTimeoutMs`，默认 `120_000`（120 秒，`packages/core/src/storage/config.ts` 的 defaultConfig）。
+关键常量（`run.ts`）：`MEMORY_QUERY_CHARS = 200`（用户文本前 200 字符做 L1 情节检索）、`MEMORY_LIMIT = 5`（最多注入 5 条情节 note）、`DEFAULT_SYSTEM_PROMPT = "你是 kclaw，一个务实的个人助理。"`（AGENTS.md 缺失/为空时的回退提示）；附件挂载的 `TEXT_INLINE_MAX_BYTES = 64KiB`、`TEXT_INLINE_MAX_CHARS = 8192`、`IMAGE_INLINE_MAX_BYTES = 5MiB`。两个固化系统提示词（压缩用）：`SEGMENT_SUMMARY_PROMPT`（段摘要：固定五栏 markdown、不超过 800 字）、`MERGE_SUMMARY_PROMPT`（总摘要归并：同样五栏、保留新版本并注明被推翻的旧版本）；记忆提取/内化的提示词已随写入管线移入 core（见 [memory](../core/memory.md)）。压缩触发的四个比例不在 defaultConfig 里（`sessions` 段的 `contextTokens`/`compactAtRatio`/`compactPanicRatio`/`compactTargetRatio`/`toolResultKeep` 均可选），缺省值在读取处兜底（128000 / 0.66 / 0.85 / 0.33 / 8）。确认超时来自 `config.permissions.confirmTimeoutMs`，默认 `120_000`（120 秒，`packages/core/src/storage/config.ts` 的 defaultConfig）。
 
 ## 核心流程
 
@@ -164,18 +164,20 @@ submit(sessionId, input)
 ### #executeEntry → #execute：一次 run 的装配
 
 1. **工作目录**：`sessionMeta.workdir ?? deps.workspace`——会话级覆盖全局。
-2. **记忆注入**：`memory.search(userText.slice(0, 200), 5)`，每条命中变成 `kind:"memory"` note 块（文本 `相关记忆: <hit>`）；检索抛错则不带记忆继续（记忆是加速器，不得阻塞 run）。
+2. **记忆注入**（两级，机制见 [memory](../core/memory.md)）：
+   - **L2 常驻（系统提示）**：装配系统提示用 `#systemWithCognition(paths.agentsMd, workspace)`——基础提示（AGENTS.md，缺省回退 `DEFAULT_SYSTEM_PROMPT`）之后拼 `memory.cognitionPrompt(workspace)` 返回的认知块（scope 过滤 + `injectTokenBudget` 预算取舍，详见 memory.md）；认知为空或抛错时回落到纯基础提示，run 照常进行。
+   - **L1 情节（用户消息 note）**：`memory.searchEpisodes(workspace, userText.slice(0, MEMORY_QUERY_CHARS), MEMORY_LIMIT)` 取 top-5，每条命中变成一个 `kind:"memory"` note 块，文本 `相关经历（<线的一句话标题>）: <情节正文>`；检索抛错则不带记忆继续（记忆是加速器，不得阻塞 run）。
 3. **读 history**（此刻用户消息尚未追加），构造纯 text 骨架 `userMessage`，`input.attachments` 经 `mountAttachments` 挂成 attachment 块放进同一消息。**消息 id 采用排队时预分配的 `input.messageId`**（出队执行时由 `#executeEntry` 从条目还原传入）——前端气泡从"排队态"原地升级、id 不变；空闲直发没有这个附加，id 为构建时现生成。
 4. **工具**：`createBuiltinTools({workspace, memory, tavilyApiKey, exec 超时/输出上限, web 超时/私网开关})`；`deps.tools` 的执行器按名覆盖；`extraTools()` 每 run 求值一次，defs 追加、撞名打 `kclaw tool name collision: <name> (adapter overrides builtin)` 且适配器执行器胜出。
 5. **权限**：在 `ConfigPermissionGate` 外再包一层负责登记确认的 gate。装配 gate 时有三处值得注意：`readRoots` 传入附件目录 `paths.attachmentsDir`——上传目录里的文件是 daemon 自己收下的用户输入，fs_read/fs_list 读它们不需要人工确认；`readonly` 取 daemon 级旗标与会话开关的逻辑或，任一为真本 run 就是只读；safeTools 仍按内置工具里标 safe 的集合计算。gate 判出 `confirm` 时，用 gate 签发的 id 调 `broker.create(confirmationId, toolCall, risk ?? "sensitive", confirmTimeoutMs, sessionId)` 登记——这一步只做登记，`confirmation.requested` 事件仍由循环发，全链路用的是同一个 id。
 6. **resolveConfirmation**：`broker.wait(confirmationId)` 经 `raceResolution(同 confirmTimeoutMs, controller.signal)` 竞速——人工裁决 / 超时 / abort 三方。非人工胜出（超时或 abort）即 `broker.expire`，晚到的人工 resolve 只会得到 `unknown confirmation`。
 7. **模型解析与 LLM 客户端**：`llmForRun(onLlmRetry)` 为本 run 构造带重试可见性的客户端，provider 层每次重试变成 `llm.failed {willRetry:true}` 事件；`runId` 从循环的第一个事件 `run.started` 捕获，`llmAttempt` 计数在 `llm.completed/failed` 后复位。随后三级解析模型：`resolveEntry(input.model ?? sessionMeta?.model ?? defaultModel)`。
 8. **压缩视图**：`RunInput.compaction` 传入会话 meta 里的压缩状态 `{ upto, top }`（无则 undefined）——循环据此在请求里垫脉络项、跳过已压缩部分。**不再有发送前预压缩**。`session_search` 的检索后端在此懒构造（`#buildSessionSearch`：返回一个首次调用才打开/重建 `index.db` 的闭包，交给 `createBuiltinTools`）。
-9. **runAgent**：`system` 取 `paths.agentsMd`（`~/.kclaw/AGENTS.md`）非空内容，否则默认提示词；`signal` 接本 run 的 controller；`toolResultKeep` 从 `config.sessions.toolResultKeep`（默认 8）传入、`tokenBudget` 传 `预算 × compactAtRatio`，共同驱动请求构造时的预算驱动工具输出省略。`steering` 钩子接 `#drainSteer(sessionId)`——循环在每轮工具批次结束后、下一次调用模型前取走 steer 缓冲区全部消息注入（见下文引导注入口）。两个压缩钩子也在此装配：`midRunCompaction` 接中途压缩（水位≥红线才压，失败/取消返回 null）、`onContextOverflow` 接超限紧急急救（emergency 标记），两者都经 `#runAutoCompaction` 执行（见设计决策）。其余钩子：
+9. **runAgent**：`system` 取 `#systemWithCognition(paths.agentsMd, workspace)`（AGENTS.md 基础提示 + L2 认知常驻块，见第 2 步；`paths.agentsMd` 即 `~/.kclaw/AGENTS.md`）；`signal` 接本 run 的 controller；`toolResultKeep` 从 `config.sessions.toolResultKeep`（默认 8）传入、`tokenBudget` 传 `预算 × compactAtRatio`，共同驱动请求构造时的预算驱动工具输出省略。`steering` 钩子接 `#drainSteer(sessionId)`——循环在每轮工具批次结束后、下一次调用模型前取走 steer 缓冲区全部消息注入（见下文引导注入口）。两个压缩钩子也在此装配：`midRunCompaction` 接中途压缩（水位≥红线才压，失败/取消返回 null）、`onContextOverflow` 接超限紧急急救（emergency 标记），两者都经 `#runAutoCompaction` 执行（见设计决策）。其余钩子：
     - `onUserMessage`：追加 job note + 记忆 note 块（compact note 已随 v3 移除）→ `appendMessage` 持久化 → （`trigger !== "job"` 时）异步 `scheduleAutoname` → 逐块发 `note.emitted`。
     - `onEvent`：捕获 runId / 复位 attempt → `bus.emit`（再包一层 try/catch，单个异常订阅者不会中断 run）。
     - `onMessage`：assistant/tool 消息持久化。
-10. **收尾记账**：run 结束后做三件不影响结果的事——干净 `end_turn` 且配置开启了 autoExtract 时调度自动记忆提取（不等它完成）；有 usageStore 就在 try/catch 里记一行用量；**收尾压缩**：stopReason 非 `aborted`/`error` 且水位 ≥ `预算 × compactAtRatio` 时 `#runAutoCompaction({phase:"post-run", signal})`（await 它，发生在活动登记清除前——驱动器串行化让压缩期间新消息排队，手动 /compact 此时也被"会话活跃"拒绝）。最后在 finally 里清理 `#active`/`#activeOutcomes` 中属于本 run 的登记（仍是自己才删，防止误删后继 run 的）。
+10. **收尾记账**：run 结束后做三件不影响结果的事——`config.memory.write.idleMinutes > 0` 时挂起一个**跟随检查**（`memory.scheduleFollowCheck(sessionId, now)`，落该项目 `state.json`，daemon 重启后由记忆调度器补查；挂起失败静默，不影响 run 收尾）；有 usageStore 就在 try/catch 里记一行用量；**收尾压缩**：stopReason 非 `aborted`/`error` 且水位 ≥ `预算 × compactAtRatio` 时 `#runAutoCompaction({phase:"post-run", signal})`（await 它，发生在活动登记清除前——驱动器串行化让压缩期间新消息排队，手动 /compact 此时也被"会话活跃"拒绝）。最后在 finally 里清理 `#active`/`#activeOutcomes` 中属于本 run 的登记（仍是自己才删，防止误删后继 run 的）。
 
 调度心跳的 job run 使用同一入口：`run.enqueue(session.id, {userText: job.prompt, trigger: "job", note: "本会话由定时任务「<name>」触发"})`（`packages/server/src/scheduler-tick.ts`），job 触发的 run 跳过自动命名。
 
@@ -253,7 +255,7 @@ daemon 启动时对每个 meta.queue 非空的会话调用：整体重排为内�
 - **确认裁决不落任何队列**：`broker.resolve` 对已 settle/过期条目返回 false 并回 `unknown confirmation`，不记录"迟到的意见"。确认卡挂起期间 steer 照常入缓冲区；run 在等确认期间不迭代，注入发生在确认解决后的下一个迭代边界——无特殊路径。
 - **自动命名没有去重锁**：同一会话两次快速入队理论上可能并发两次命名，写回前的重读校验保证只有第一次生效（后到的发现标题已不是默认值即放弃）。
 - **`resolveConfirmation` 测试缝优先于 broker**：设置了它 broker 就只剩登记职责——生产路径不设置。
-- **压缩与记账失败都不影响 run 的结果**：自动压缩的模型调用或 meta 写入失败时 `#runAutoCompaction` 消化为 null、运行照常继续（事件 `completed {result:"failed"}`；`kclaw compaction failed:` / `kclaw compaction (phase) failed:` 日志）；段索引写入与审计追加失败只留一行日志、压缩照常生效；用量记录和自动记忆提取失败只留一行日志（`kclaw usage record failed:` / `kclaw memory extraction failed:`）。以上任何一种失败 run 都照常返回 outcome。
+- **压缩与记账失败都不影响 run 的结果**：自动压缩的模型调用或 meta 写入失败时 `#runAutoCompaction` 消化为 null、运行照常继续（事件 `completed {result:"failed"}`；`kclaw compaction failed:` / `kclaw compaction (phase) failed:` 日志）；段索引写入与审计追加失败只留一行日志、压缩照常生效；用量记录失败只留一行日志（`kclaw usage record failed:`）；跟随检查挂起失败静默（不打印、不阻塞）。以上任何一种失败 run 都照常返回 outcome。
 
 ## 有意的行为变更（message-queue spec §9）
 
@@ -269,7 +271,7 @@ daemon 启动时对每个 meta.queue 非空的会话调用：整体重排为内�
 - [agent-loop](../core/agent-loop.md)：runAgent 状态机、确认的循环侧竞速、6 个 abort 检查点、attachment 块进模型视图的转换
 - [permissions](../core/permissions.md)：ConfigPermissionGate 的判定链与 `conf_*` id 的签发；readRoots/readonly 两处装配
 - [realtime](./realtime.md)：send_message/confirmation.resolve/run.cancel/queue.cancel 的帧协议与 ack
-- [memory](../core/memory.md)：search 的实现（SQLite FTS5）
+- [memory](../core/memory.md)：两级注入（L2 认知常驻 + L1 情节 note）、写入管线与跟随门禁背后的实现
 - [compaction](../core/compaction.md)：`#compactV2` 背后的触发/分界/摘要机制、审计记录格式与配置字段
 - [mcp](../core/mcp.md)：`extraTools` 的来源（MCP 工具适配器）
 - [storage](../core/storage.md)：UsageStore 的台账实现（`usageStore.record` 背后）

@@ -28,10 +28,11 @@ import { SessionList } from "./sessions/SessionList.js"
 import { TrashView } from "./sessions/TrashView.js"
 import { JobsView } from "./jobs/JobsView.js"
 import { AuditView } from "./audit/AuditView.js"
+import { MemoryView } from "./memory/MemoryView.js"
 import type { FsBrowseResult, SessionMeta } from "./types.js"
 
 type DaemonStatus = "connecting" | "connected" | "error"
-type Tab = "chat" | "jobs" | "audit" | "usage" | "trash"
+type Tab = "chat" | "jobs" | "audit" | "usage" | "trash" | "memory"
 
 /** Same-origin ws endpoint (the daemon serves the SPA itself). */
 function wsUrlFor(): string {
@@ -358,6 +359,14 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
           >
             回收站
           </button>
+          <button
+            type="button"
+            className={tab === "memory" ? "tab active" : "tab"}
+            data-testid="tab-memory"
+            onClick={() => switchTab("memory")}
+          >
+            记忆
+          </button>
         </nav>
         <span
           className={`status-dot ${status}`}
@@ -414,6 +423,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
           {tab === "audit" && <AuditView api={api} />}
           {tab === "usage" && <UsageView api={api} />}
           {tab === "trash" && <TrashView api={api} />}
+          {tab === "memory" && <MemoryView api={api} notice={(t) => setSessionNotice(t)} />}
         </main>
       </div>
     </div>

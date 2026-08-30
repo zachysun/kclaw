@@ -344,6 +344,30 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
     },
   })
 
+  registry.set("memory", {
+    ...meta("memory"),
+    async run(args, ctx) {
+      const parts = args.trim().split(/\s+/).filter(Boolean)
+      try {
+        if (parts.length === 0) {
+          const projects = (await ctx.client.request("GET", "/memory/projects")) as Array<{ id: string; threads: number; lastActivity: string }>
+          ctx.print(projects.length === 0 ? "（还没有项目记忆）" : projects.map((p) => `${p.id} · ${p.threads} 线 · 最近 ${p.lastActivity}`).join("\n"))
+          return
+        }
+        const [projectId, topic] = parts
+        if (topic === undefined) {
+          const res = (await ctx.client.request("GET", `/memory/projects/${encodeURIComponent(projectId!)}`)) as { threads: Array<{ topic: string; title: string; status: string; updated: string }> }
+          ctx.print(res.threads.length === 0 ? "（该项目还没有主题线）" : res.threads.map((t) => `${t.topic} · ${t.title} · ${t.status} · ${t.updated}`).join("\n"))
+          return
+        }
+        const res = (await ctx.client.request("GET", `/memory/threads/${encodeURIComponent(projectId!)}/${encodeURIComponent(topic)}`)) as { content: string }
+        ctx.print(res.content)
+      } catch (err) {
+        ctx.print(`查看记忆失败: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    },
+  })
+
   registry.set("help", {
     ...meta("help"),
     async run(_args, ctx) {

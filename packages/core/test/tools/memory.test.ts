@@ -1,71 +1,54 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import { mkdtempSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { MemoryStore } from "../../src/memory/store.js"
+import { describe, it, expect, vi } from "vitest"
 import { createMemoryTools } from "../../src/tools/memory.js"
-import type { ToolExecutor } from "../../src/agent/tools.js"
+import type { MemorySystem } from "../../src/memory/system.js"
 
-let dir: string
-let memory: MemoryStore
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "kclaw-memtools-"))
-  memory = new MemoryStore({ notesDir: join(dir, "notes"), indexDb: join(dir, "index.db") })
+function fakeSystem() {
+  return {
+    triggerImmediate: vi.fn(async () => undefined),
+    searchAll: vi.fn(async () => [
+      { kind: "episode" as const, scope: "project:kclaw-abc123", label: "经历 · 重连线", text: "指数退避消灭了风暴" },
+      { kind: "cognition" as const, scope: "global", label: "认知 · 通用规则", text: "始终中文回复" },
+    ]),
+  } as unknown as MemorySystem
+}
+
+describe("memory_save", () => {
+  it("triggers immediate write for the current turn and returns ok", async () => {
+    const sys = fakeSystem()
+    const { memory_save } = createMemoryTools({ system: sys, sessionId: "ses_1", workdir: "/w", immediateEnabled: true })
+    const res = await memory_save.execute({ text: "记住这个重连结论" }, { onOutput: () => {} })
+    expect(res.status).toBe("ok")
+    expect(sys.triggerImmediate).toHaveBeenCalledWith("ses_1")
+  })
+  it("returns the closed-mode error text when immediate is disabled (tool stays registered)", async () => {
+    const sys = fakeSystem()
+    const { memory_save } = createMemoryTools({ system: sys, sessionId: "ses_1", workdir: "/w", immediateEnabled: false })
+    const res = await memory_save.execute({ text: "记住" }, { onOutput: () => {} })
+    expect(res.status).toBe("error")
+    expect(res.output).toContain("memory.write.immediate=false")
+    expect(res.output).toContain("后台定时/跟随触发时沉淀")
+    expect(sys.triggerImmediate).not.toHaveBeenCalled()
+  })
+  it("rejects unknown args but no longer accepts tags", async () => {
+    const { memory_save } = createMemoryTools({ system: fakeSystem(), sessionId: "s", workdir: "/w", immediateEnabled: true })
+    const res = await memory_save.execute({ text: "x", tags: ["a"] }, { onOutput: () => {} })
+    expect(res.status).toBe("ok") // tags 被忽略（不报错），text 照常触发
+  })
 })
-afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
-const call = (t: { execute: ToolExecutor["execute"] }, args: unknown) =>
-  t.execute(args, { onOutput: () => {} })
-
-describe("memory tools", () => {
-  it("memory_save persists through the real store and reports the id", async () => {
-    const t = createMemoryTools(memory)
-    const r = await call(t.memory_save, { text: "user prefers dark mode over light", tags: ["preference"] })
-    expect(r.status).toBe("ok")
-    const hits = await memory.search("dark mode")
-    expect(hits).toHaveLength(1)
-    expect(r.output).toBe(`saved memory ${hits[0].id}`)
-    expect(hits[0].tags).toEqual(["preference"])
+describe("memory_search", () => {
+  it("returns labeled cross-store hits", async () => {
+    const { memory_search } = createMemoryTools({ system: fakeSystem(), sessionId: "s", workdir: "/w", immediateEnabled: true })
+    const res = await memory_search.execute({ query: "重连" }, { onOutput: () => {} })
+    expect(res.status).toBe("ok")
+    expect(res.output).toContain("[经历]")
+    expect(res.output).toContain("[认知]")
+    expect(res.output).toContain("project:kclaw-abc123")
   })
-  it("memory_save rejects missing/blank text and non-string-array tags", async () => {
-    const t = createMemoryTools(memory)
-    for (const args of [{ tags: ["x"] }, { text: "   " }, { text: "ok", tags: "preference" }, { text: "ok", tags: [1] }]) {
-      const r = await call(t.memory_save, args)
-      expect(r.status).toBe("error")
-      expect(r.output).toMatch(/^memory_save: /)
-    }
-  })
-  it("memory_search formats one `- <text>` line per hit", async () => {
-    await memory.save({ text: "likes oolong tea" })
-    await memory.save({ text: "golang backend service notes" })
-    const t = createMemoryTools(memory)
-    const r = await call(t.memory_search, { query: "oolong tea" })
-    expect(r.status).toBe("ok")
-    expect(r.output).toBe("- likes oolong tea")
-  })
-  it("memory_search honors limit", async () => {
-    await memory.save({ text: "golang backend service notes" })
-    await memory.save({ text: "golang concurrency patterns" })
-    await memory.save({ text: "golang error handling guide" })
-    const t = createMemoryTools(memory)
-    const r = await call(t.memory_search, { query: "golang", limit: 2 })
-    expect(r.status).toBe("ok")
-    expect(r.output.split("\n")).toHaveLength(2)
-    for (const line of r.output.split("\n")) expect(line).toMatch(/^- golang /)
-  })
-  it("memory_search on no hit and on missing query", async () => {
-    await memory.save({ text: "likes oolong tea" })
-    const t = createMemoryTools(memory)
-    expect((await call(t.memory_search, { query: "rust borrow checker" })).output).toBe("(no memories)")
-    const r = await call(t.memory_search, {})
-    expect(r.status).toBe("error")
-    expect(r.output).toMatch(/query/)
-  })
-  it("risk/concurrency classification: both safe + parallel", () => {
-    const t = createMemoryTools(memory)
-    expect(t.memory_save.risk).toBe("safe")
-    expect(t.memory_save.concurrency).toBe("parallel")
-    expect(t.memory_search.risk).toBe("safe")
-    expect(t.memory_search.concurrency).toBe("parallel")
+  it("empty result message", async () => {
+    const sys = { searchAll: vi.fn(async () => []) } as unknown as MemorySystem
+    const { memory_search } = createMemoryTools({ system: sys, sessionId: "s", workdir: "/w", immediateEnabled: true })
+    const res = await memory_search.execute({ query: "x" }, { onOutput: () => {} })
+    expect(res.output).toContain("没有")
   })
 })

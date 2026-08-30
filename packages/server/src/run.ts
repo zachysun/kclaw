@@ -47,7 +47,7 @@ import type {
   KclawConfig,
   KclawPaths,
   LlmClient,
-  MemoryStore,
+  MemorySystem,
   Message,
   NoteBlock,
   PermissionGate,
@@ -79,10 +79,6 @@ const SEGMENT_SUMMARY_PROMPT =
 /** Top-summary merge prompt (spec 6.2.3, verbatim-pinned). */
 const MERGE_SUMMARY_PROMPT =
   "你是对话摘要归并器。输入是旧的总摘要和一个新的段摘要，两者都是同样五栏结构的 markdown。把它们归并为一份新的总摘要：保持同样的五个二级标题；同一栏目内合并去重；同一事项有先后版本时保留新版本，并注明被推翻的旧版本；总长不超过800字。直接输出摘要正文，不要任何前后缀。"
-
-/** Verbatim memory-extraction system prompt (spec-pinned). */
-const EXTRACT_SYSTEM_PROMPT =
-  "从对话中提取值得长期记住的用户个人事实（居住地、偏好、约定、背景等）。只输出 JSON 字符串数组，无值得记的内容输出 []。"
 
 /** Text-like MIME/exif: inlined into context when small enough. */
 const TEXT_MIME = /^text\//
@@ -128,7 +124,7 @@ export interface RunManagerDeps {
   config: KclawConfig
   paths: KclawPaths
   sessions: SessionStore
-  memory: MemoryStore
+  memory: MemorySystem
   bus: EventBus
   llm: LlmClient
   workspace: string
@@ -671,13 +667,14 @@ export class RunManager {
     const sessionMeta = sessions.meta(sessionId)
     const workspace = sessionMeta?.workdir ?? this.#deps.workspace
 
-    // Memory injection: the leading 200 chars of the user text
-    // look up the top-5 notes. Memory is an accelerator — a failing search
+    // Memory injection: the leading 200 chars of the user text look up the
+    // top-5 episodes via the v2 MemorySystem facade and land as kind:"memory"
+    // notes on the user message. Memory is an accelerator — a failing search
     // must never block the run, so misses/errors just mean no notes.
     const notes: NoteBlock[] = []
     try {
-      for (const hit of await memory.search(input.userText.slice(0, MEMORY_QUERY_CHARS), MEMORY_LIMIT)) {
-        notes.push({ id: newBlockId(), type: "note", kind: "memory", text: `相关记忆: ${hit.text}` })
+      for (const hit of await memory.searchEpisodes(workspace, input.userText.slice(0, MEMORY_QUERY_CHARS), MEMORY_LIMIT)) {
+        notes.push({ id: newBlockId(), type: "note", kind: "memory", text: `相关经历（${hit.title}）: ${hit.text}` })
       }
     } catch {
       // ignore: run without memory context
@@ -704,7 +701,12 @@ export class RunManager {
 
     const { tools, toolDefs } = createBuiltinTools({
       workspace,
-      memory,
+      memoryCtx: {
+        system: memory,
+        sessionId,
+        workdir: workspace,
+        immediateEnabled: config.memory.write.immediate,
+      },
       tavilyApiKey: config.web.tavilyApiKey,
       exec: { timeoutMs: config.exec.timeoutMs, maxOutputBytes: config.exec.maxOutputBytes },
       web: { timeoutMs: config.web.timeoutMs, allowPrivateNetworks: config.web.allowPrivateNetworks },
@@ -838,7 +840,7 @@ export class RunManager {
       {
         sessionId,
         history,
-        system: this.#systemPrompt(paths.agentsMd),
+        system: this.#systemWithCognition(paths.agentsMd, workspace),
         userText: input.userText, // ignored by the loop when userMessage is set
         trigger: input.trigger,
         userMessage,
@@ -916,14 +918,6 @@ export class RunManager {
         onMessage: (m) => sessions.appendMessage(m.sessionId, m),
       },
     )
-    // Auto memory extraction: fire-and-forget after a clean end_turn —
-    // never awaited, never affects the returned outcome; any failure
-    // inside #extractMemory lands in the .catch below as a log line.
-    if (outcome.stopReason === "end_turn" && config.memory.autoExtract === true) {
-      const extractModel = config.memory.extractModel || model
-      void this.#extractMemory(sessionId, outcome.messages, runLlm, extractModel)
-        .catch((err) => console.error("kclaw memory extraction failed:", err))
-    }
     // Token usage ledger: a failing record must never affect the run.
     if (this.#deps.usageStore !== undefined) {
       try {
@@ -954,6 +948,16 @@ export class RunManager {
           phase: "post-run",
           signal: controller.signal,
         })
+      }
+    }
+    // 跟随门禁（spec 4.2）：run 收尾（任何 stopReason）挂起一个 follow 检查；经
+    // MemorySystem 落盘 <projectDir>/state.json（spec 11），daemon 重启后由 memory
+    // scheduler 补查。idleMinutes=0 关闭。挂起失败静默（不影响 run 收尾）。
+    if (config.memory.write.idleMinutes > 0) {
+      try {
+        memory.scheduleFollowCheck?.(sessionId, new Date().toISOString())
+      } catch {
+        // follow 挂起失败不影响 run
       }
     }
     return outcome
@@ -997,51 +1001,6 @@ export class RunManager {
     if (this.#injectedIds.size > RunManager.QUEUE_LIMIT * 2) {
       const oldest = this.#injectedIds.values().next().value
       if (oldest !== undefined) this.#injectedIds.delete(oldest)
-    }
-  }
-
-  /**
-   * Extract durable personal facts from a finished run's messages with one
-   * tool-less LLM call and save each as a source-"auto" memory note (save's
-   * own findSimilar dedupes/merges). The response is trimmed, an optional
-   * ```json fence is stripped, then JSON.parsed — a non-array payload or any
-   * non-string element abandons the whole batch (log only, no partial
-   * writes); an empty array writes nothing. A single failing save is logged
-   * and the remaining facts still go in. All throws propagate to the
-   * caller's fire-and-forget .catch.
-   */
-  async #extractMemory(
-    sessionId: string,
-    messages: Message[],
-    runLlm: LlmClient,
-    model: string,
-  ): Promise<void> {
-    const raw = await collectStreamText(runLlm, {
-      model,
-      system: EXTRACT_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: renderSegment(messages) }],
-      tools: [],
-    })
-    let text = raw.trim()
-    const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(text)
-    if (fenced !== null) text = fenced[1]!.trim()
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(text)
-    } catch (err) {
-      console.error(`kclaw memory extraction (${sessionId}): unparseable response:`, err)
-      return
-    }
-    if (!Array.isArray(parsed) || parsed.some((x) => typeof x !== "string")) {
-      console.error(`kclaw memory extraction (${sessionId}): response is not a string array, skipping`)
-      return
-    }
-    for (const fact of parsed) {
-      try {
-        await this.#deps.memory.save({ text: fact, source: "auto" })
-      } catch (err) {
-        console.error(`kclaw memory extraction (${sessionId}): save failed:`, err)
-      }
     }
   }
 
@@ -1259,5 +1218,20 @@ export class RunManager {
       // missing/unreadable AGENTS.md → default persona
     }
     return DEFAULT_SYSTEM_PROMPT
+  }
+
+  /**
+   * System prompt = AGENTS.md base + L2 cognition（spec 7.1）：cognitionPrompt
+   * 为空或抛错时不追加，回落到纯 base —— 认知注入失败静默跳过，run 照常进行。
+   */
+  #systemWithCognition(agentsMd: string, workspace: string): string {
+    const base = this.#systemPrompt(agentsMd)
+    let cognition = ""
+    try {
+      cognition = this.#deps.memory.cognitionPrompt(workspace)
+    } catch {
+      // 认知注入失败静默跳过（spec 7.1）
+    }
+    return cognition === "" ? base : `${base}\n\n${cognition}`
   }
 }
