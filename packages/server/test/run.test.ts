@@ -13,9 +13,9 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { MemoryStore, SessionStore, UsageStore, loadConfig, newAssistantMessage, newMessage, resolvePaths, withRetry } from "@kclaw/core"
+import { SessionStore, UsageStore, loadConfig, newAssistantMessage, newMessage, resolvePaths, withRetry } from "@kclaw/core"
 import type {
-  AgentEvent, AssistantMessage, KclawConfig, KclawPaths, LlmClient, LlmRequest, LlmStreamEvent, Message, ToolExecutor, ToolMessage, ToolResultBlock,
+  AgentEvent, AssistantMessage, KclawConfig, KclawPaths, LlmClient, LlmRequest, LlmStreamEvent, MemorySystem, Message, ToolExecutor, ToolMessage, ToolResultBlock,
 } from "@kclaw/core"
 import { EventBus } from "../src/bus.js"
 import { ConfirmationBroker } from "../src/confirm.js"
@@ -102,8 +102,18 @@ interface Env {
   paths: KclawPaths
   config: KclawConfig
   sessions: SessionStore
-  memory: MemoryStore
+  memory: MemorySystem
   bus: EventBus
+}
+
+/** A MemorySystem stand-in: injection/tool seams are vi.fn stubs the tests drive. */
+function makeMemoryFake(): MemorySystem {
+  return {
+    searchEpisodes: vi.fn(async () => []),
+    searchAll: vi.fn(async () => []),
+    triggerImmediate: vi.fn(async () => undefined),
+    cognitionPrompt: () => "",
+  } as unknown as MemorySystem
 }
 
 /** Real stores under a fresh temp home; config defaults + a mock provider entry. */
@@ -127,7 +137,7 @@ function makeEnv(
   patchConfig?.(config)
 
   const sessions = new SessionStore(paths.sessionsDir)
-  const memory = new MemoryStore({ notesDir: paths.memoryNotesDir, indexDb: paths.memoryIndexDb })
+  const memory = makeMemoryFake()
   const bus = new EventBus()
 
   const manager = new RunManager({
@@ -169,7 +179,9 @@ describe("RunManager.enqueue", () => {
 
   it("injects matching memory notes onto the user message", async () => {
     const { env, manager } = makeEnv(scriptClient([textTurn("好的")]))
-    await env.memory.save({ text: "用户在上海，喜欢本帮菜" })
+    vi.mocked(env.memory.searchEpisodes).mockResolvedValue([
+      { topic: "shanghai", title: "用户在上海", date: "2026-08-01", text: "用户在上海，喜欢本帮菜", score: 1 },
+    ])
     const session = env.sessions.create("记忆会话")
 
     await manager.enqueue(session.id, { userText: "上海 本帮菜", trigger: "user" })
@@ -179,7 +191,7 @@ describe("RunManager.enqueue", () => {
       { id: expect.any(String), type: "text", text: "上海 本帮菜" },
       {
         id: expect.any(String), type: "note", kind: "memory",
-        text: "相关记忆: 用户在上海，喜欢本帮菜",
+        text: "相关经历（用户在上海）: 用户在上海，喜欢本帮菜",
       },
     ])
   })
@@ -206,7 +218,9 @@ describe("RunManager.enqueue", () => {
 
   it("emits user message lifecycle + note.emitted on the bus in wire order", async () => {
     const { env, manager } = makeEnv(scriptClient([textTurn("好的")]))
-    await env.memory.save({ text: "用户在上海" })
+    vi.mocked(env.memory.searchEpisodes).mockResolvedValue([
+      { topic: "sh", title: "用户在上海", date: "2026-08-01", text: "用户在上海", score: 1 },
+    ])
     const session = env.sessions.create("补发会话")
     const socket = new FakeSocket()
     env.bus.subscribe(session.id, socket)
@@ -239,7 +253,7 @@ describe("RunManager.enqueue", () => {
     })
     expect(memNote!.payload).toEqual({
       messageId: createdMsg.id,
-      block: { id: expect.any(String), type: "note", kind: "memory", text: "相关记忆: 用户在上海" },
+      block: { id: expect.any(String), type: "note", kind: "memory", text: "相关经历（用户在上海）: 用户在上海" },
     })
     // note events carry the run context — run.started is always a run's first
     // event and precedes the hook, so runId is already known here
@@ -254,7 +268,7 @@ describe("RunManager.enqueue", () => {
     expect(completedMsg.blocks).toEqual([
       { id: expect.any(String), type: "text", text: "上海" },
       { id: expect.any(String), type: "note", kind: "job", text: "本会话由定时任务「早报」触发" },
-      { id: expect.any(String), type: "note", kind: "memory", text: "相关记忆: 用户在上海" },
+      { id: expect.any(String), type: "note", kind: "memory", text: "相关经历（用户在上海）: 用户在上海" },
     ])
 
     // persisted exactly once, notes included (no skeleton line in the JSONL)
@@ -1460,123 +1474,11 @@ describe("RunManager context compaction v3", () => {
   })
 })
 
-// --- auto memory extraction -------------------------------------------------
-
-/** Poll an (async) condition until true or timeout (extraction is fire-and-forget). */
-async function waitUntil(cond: () => boolean | Promise<boolean>, timeoutMs = 2000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (await cond()) return
-    await new Promise((r) => setTimeout(r, 5))
-  }
-  throw new Error("timed out waiting for condition")
-}
-
-describe("RunManager auto memory extraction", () => {
-  const enableAutoExtract = (c: KclawConfig) => {
-    c.memory.autoExtract = true
-  }
-
-  it("auto-extracts durable facts after a successful run", async () => {
-    const reqs: LlmRequest[] = []
-    const { env, manager } = makeEnv(
-      recordRequests(scriptClient([textTurn("好的"), textTurn('["用户住在上海"]')]), reqs),
-      enableAutoExtract,
-    )
-    const session = env.sessions.create("提取会话")
-
-    const outcome = await manager.enqueue(session.id, { userText: "我搬到上海了", trigger: "user" })
-    expect(outcome.stopReason).toBe("end_turn")
-
-    await waitUntil(async () => (await env.memory.search("上海", 5)).length > 0)
-    const hits = await env.memory.search("上海", 5)
-    expect(hits.map((n) => n.source)).toEqual(["auto"])
-    expect(hits[0]!.text).toBe("用户住在上海")
-
-    // the extraction request: no tools, spec-pinned system prompt, conversation rendering
-    expect(reqs.length).toBe(2)
-    const extractReq = reqs[1]!
-    expect(extractReq.tools).toEqual([])
-    expect(extractReq.model).toBe("mock-model")
-    expect(extractReq.system).toBe(
-      "从对话中提取值得长期记住的用户个人事实（居住地、偏好、约定、背景等）。只输出 JSON 字符串数组，无值得记的内容输出 []。",
-    )
-    expect(JSON.stringify(extractReq.messages)).toContain("我搬到上海了")
-  })
-
-  it("uses memory.extractModel when set", async () => {
-    const reqs: LlmRequest[] = []
-    const { env, manager } = makeEnv(
-      recordRequests(scriptClient([textTurn("好的"), textTurn("[]")]), reqs),
-      (c) => {
-        c.memory.autoExtract = true
-        c.memory.extractModel = "extractor-model"
-      },
-    )
-    const session = env.sessions.create("提取模型会话")
-
-    await manager.enqueue(session.id, { userText: "随便聊聊", trigger: "user" })
-    await waitUntil(() => reqs.length >= 2)
-    expect(reqs[1]!.model).toBe("extractor-model")
-  })
-
-  it("no extraction when autoExtract is off", async () => {
-    const reqs: LlmRequest[] = []
-    const { env, manager } = makeEnv(
-      recordRequests(scriptClient([textTurn("好的")]), reqs),
-      (c) => {
-        c.memory.autoExtract = false
-      },
-    )
-    const session = env.sessions.create("关闭提取会话")
-
-    const outcome = await manager.enqueue(session.id, { userText: "我住上海", trigger: "user" })
-    expect(outcome.stopReason).toBe("end_turn")
-    await new Promise((r) => setTimeout(r, 50))
-    expect(reqs.length).toBe(1) // main conversation only, no extraction call
-    expect(await env.memory.search("上海", 5)).toEqual([])
-  })
-
-  it("a failing extraction never affects the run outcome", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
-    try {
-      const { env, manager } = makeEnv(
-        scriptClient([textTurn("好的"), textTurn("不是JSON")]),
-        enableAutoExtract,
-      )
-      const session = env.sessions.create("坏响应会话")
-
-      const outcome = await manager.enqueue(session.id, { userText: "我住上海", trigger: "user" })
-      expect(outcome.stopReason).toBe("end_turn")
-
-      await waitUntil(() => errorSpy.mock.calls.length > 0)
-      await new Promise((r) => setTimeout(r, 20))
-      expect(await env.memory.search("上海", 5)).toEqual([])
-      expect(errorSpy).toHaveBeenCalled()
-    } finally {
-      errorSpy.mockRestore()
-    }
-  })
-
-  it("non-end_turn runs skip extraction", async () => {
-    const reqs: LlmRequest[] = []
-    const { env, manager } = makeEnv(
-      recordRequests(hangingClient(), reqs),
-      enableAutoExtract,
-    )
-    const session = env.sessions.create("中止会话")
-
-    const p = manager.enqueue(session.id, { userText: "慢点", trigger: "user" })
-    await new Promise((r) => setTimeout(r, 10)) // let the hanging llm call start
-    expect(manager.cancel(session.id)).toBe(true)
-    const outcome = await p
-    expect(outcome.stopReason).toBe("aborted")
-
-    await new Promise((r) => setTimeout(r, 50))
-    expect(reqs.length).toBe(1) // the aborted main call only — no extraction
-    expect(await env.memory.search("上海", 5)).toEqual([])
-  })
-})
+// --- auto memory extraction（v1 退役）-----------------------------------------
+// Task 11 起 RunManagerDeps.memory 已是 v2 MemorySystem（无 v1 save/search），
+// 旧用例测的 v1 `#extractMemory` 行为已无从注入；该块随代码在 Task 12 删除，
+// 提取触发改由四触发管线接管（Task 13 装配的 memory-scheduler）。此段测试删除，
+// Task 12 会补新的注入用例。
 
 describe("RunManager extraTools (MCP adapter seam)", () => {
   it("appends adapter defs to the LLM request tools and keeps the executors callable", async () => {

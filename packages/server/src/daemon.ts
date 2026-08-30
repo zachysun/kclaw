@@ -5,7 +5,7 @@
  *   resolvePaths → acquireDaemonSlot (exclusive `wx` claim of
  *   `<home>/daemon.json` with a placeholder {port: 0, pid, startedAt,
  *   starting}) → loadConfig → loadOrCreateToken → stores (SessionStore,
- *   MemoryStore + startup `reconcile()`, JobScheduler) → llm client
+ *   MemorySystem（记忆 v2 门面；迁移/对账在 Task 13）, JobScheduler) → llm client
  *   → RunManager → createApp (auth + routes + ws) → listen 127.0.0.1 →
  *   backfill daemon.json with the real {port, pid, startedAt}
  *   → scheduler tick → Daemon.
@@ -29,7 +29,7 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
   JobScheduler,
-  MemoryStore,
+  MemorySystem,
   SessionStore,
   createOpenAiCompatClient,
   loadConfig,
@@ -242,8 +242,14 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   const token = loadOrCreateToken(paths.home)
 
   const sessions = new SessionStore(paths.sessionsDir)
-  const memory = new MemoryStore({ notesDir: paths.memoryNotesDir, indexDb: paths.memoryIndexDb })
-  memory.reconcile() // startup reconciliation: notes/*.md are the truth, the index is derived
+  // 记忆系统 v2 唯一门面（Task 11 装配；Task 13 会替换此段为带 embed/emit/迁移/reconcile 的完整版）。
+  // resolveLlm 惰性引用下方 llm/model（触发发生在 launch 后，TDZ 无碍）。
+  const memory = new MemorySystem({
+    memoryDir: paths.memoryDir,
+    sessions,
+    config,
+    resolveLlm: () => ({ llm, model }),
+  })
   const jobs = new JobScheduler(paths.jobsDb)
   const usage = new UsageStore(paths.usageDb)
 

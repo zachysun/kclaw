@@ -105,6 +105,18 @@ const MEMORY_SAVE_TURN = [
   chunk({}, "tool_calls", { prompt_tokens: 3, completion_tokens: 1 }),
 ]
 
+/**
+ * The memory v2 extraction call (fired by memory_save's immediate trigger):
+ * the pipeline asks for a JSON actions array. A scripted action persists an
+ * episode ("用户住在上海"), which the SECOND run then injects as a
+ * `相关经历（<title>）: <text>` note — without this the memory_save tool would
+ * have nothing to write and scenario E's note-rendering assertion would fail.
+ */
+const EXTRACT_TURN = [
+  chunk({ content: '{"actions":[{"op":"new-thread","file":"shanghai","title":"用户在上海","content":"用户住在上海"}]}' }),
+  chunk({}, "stop", { prompt_tokens: 2, completion_tokens: 3 }),
+]
+
 /** Bodies the mock saw, for request-level assertions. */
 const mockRequests: Array<{ messages: Array<Record<string, unknown>> }> = []
 
@@ -127,6 +139,12 @@ const held: ServerResponse[] = []
  */
 function turnFor(body: { messages?: Array<Record<string, unknown>> }): Array<Record<string, unknown>> {
   const messages = body.messages ?? []
+  // memory v2 提取请求（memory_save 即时触发）：system 落在 messages[0]（toApiMessages
+  // 把 req.system 放最前），内容是管线的提取提示（只输出 JSON actions）。先于内容匹配
+  // 判定——该请求的 user content 是 renderSegment 的整段对话，按旧规则会误命中
+  // "记住" 分支而返回工具调用流。
+  const systemContent = messages[0]?.role === "system" && typeof messages[0]?.content === "string" ? messages[0].content : ""
+  if (systemContent.includes("只输出 JSON")) return EXTRACT_TURN
   if (messages.some((m) => m.role === "tool")) return FINAL_TURN
   const lastUser = [...messages].reverse().find((m) => m.role === "user")
   const content = typeof lastUser?.content === "string" ? lastUser.content : ""
@@ -422,16 +440,17 @@ describe("kclaw chat (built CLI + real daemon + mock SSE provider)", () => {
 
       // the note is announced ONCE on the wire and rendered ONCE
       const stdout = first.stdout + second.stdout
-      expect(stdout.split("[note] 相关记忆").length - 1).toBe(1)
-      expect(stdout).toContain("[note] 相关记忆: 用户住在上海")
+      expect(stdout.split("[note] 相关经历").length - 1).toBe(1)
+      expect(stdout).toContain("[note] 相关经历（用户在上海）: 用户住在上海")
 
       // no double echo of either typed line: the FULL first line never
       // appears (the tool args carry the model's argument text
-      // "用户住在上海", not the typed sentence), and "上海" exactly twice
-      // (tool args + note line) — a rendered user message event would add
-      // another bare occurrence of the second line.
+      // "用户住在上海", not the typed sentence), and "上海" exactly three
+      // times (tool args + note title "用户在上海" + note text "用户住在上海")
+      // — a rendered user message event would add another bare occurrence
+      // of the second line.
       expect(stdout.split("记住用户住在上海").length - 1).toBe(0)
-      expect(stdout.split("上海").length - 1).toBe(2)
+      expect(stdout.split("上海").length - 1).toBe(3)
     },
     15_000,
   )

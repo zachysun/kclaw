@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { MemoryStore } from "../../src/memory/store.js"
 import { createBuiltinTools } from "../../src/tools/index.js"
+import type { MemorySystem } from "../../src/memory/system.js"
 import type { ToolDefinition } from "../../src/provider/types.js"
 
 let dir: string
@@ -12,7 +12,15 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "kclaw-registry-"))
   registry = createBuiltinTools({
     workspace: dir,
-    memory: new MemoryStore({ notesDir: join(dir, "notes"), indexDb: join(dir, "index.db") }),
+    memoryCtx: {
+      system: {
+        triggerImmediate: vi.fn(async () => undefined),
+        searchAll: vi.fn(async () => []),
+      } as unknown as MemorySystem,
+      sessionId: "ses_1",
+      workdir: dir,
+      immediateEnabled: false,
+    },
     tavilyApiKey: "tvly-test",
   })
 })
@@ -64,9 +72,8 @@ describe("builtin tool registry", () => {
     const prop = (tool: string, key: string) =>
       ((byName.get(tool)!.parameters as Record<string, { properties: Record<string, unknown> }>).properties)[key]
     expect(prop("web_search", "maxResults")).toEqual({ type: "integer", minimum: 1, maximum: 10 })
-    expect(prop("memory_save", "tags")).toEqual({
-      type: "array", items: { type: "string" }, description: expect.any(String),
-    })
+    // memory_save 只收 text（spec 7.3：v1 tags 删除）
+    expect(prop("memory_save", "text")).toEqual({ type: "string", description: expect.any(String) })
     expect(prop("memory_search", "limit")).toEqual({ type: "integer", minimum: 1, maximum: 20 })
     for (const tool of ["exec", "fs_read", "fs_list", "fs_write", "fs_edit", "web_fetch", "memory_save", "memory_search", "session_search"]) {
       expect(prop(tool, REQUIRED[tool][0])).toEqual({ type: "string", description: expect.any(String) })

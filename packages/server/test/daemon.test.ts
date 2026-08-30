@@ -17,7 +17,7 @@ import { createConnection } from "node:net"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { MemoryStore, loadConfig, resolvePaths } from "@kclaw/core"
+import { loadConfig, resolvePaths } from "@kclaw/core"
 import type { KclawConfig, LlmClient, LlmStreamEvent } from "@kclaw/core"
 import { DEFAULT_STOP_TIMEOUT_MS, defaultLlmFactory, launchDaemon, withStopTimeout } from "../src/daemon.js"
 import type { Daemon } from "../src/daemon.js"
@@ -145,21 +145,15 @@ describe("launchDaemon", () => {
     expect(existsSync(join(home, "token"))).toBe(true)
   })
 
-  it("reconciles memory at startup: a hand-written note file is searchable post-launch", async () => {
+  it("assembles the v2 memory system at startup", async () => {
     const home = makeHome()
     const paths = resolvePaths(home)
-    writeFileSync(
-      join(paths.memoryNotesDir, "seeded.md"),
-      "---\nid: seeded\ntags: []\n---\n\n用户在上海工作，喜欢喝乌龙茶。\n",
-      "utf8",
-    )
     const daemon = await launchMock(home, makeConfig(home))
-
-    // a FRESH store over the same paths (no reconcile call of its own): the
-    // only way the note is findable is the daemon's startup reconciliation
-    const memory = new MemoryStore({ notesDir: paths.memoryNotesDir, indexDb: paths.memoryIndexDb })
-    const hits = await memory.search("上海")
-    expect(hits.map((hit) => hit.id)).toContain("seeded")
+    // v1 的 startup reconcile（notes/* → index.db）已随 Task 11 的 MemorySystem
+    // 装配退役（v1 迁移在 Task 13）；MemorySystem 构造即建 v2 布局目录。
+    expect(existsSync(join(paths.memoryDir, "global"))).toBe(true)
+    expect(existsSync(join(paths.memoryDir, "projects"))).toBe(true)
+    expect(existsSync(join(paths.memoryDir, "global", "vectors.db"))).toBe(true)
   })
 
   it("stop() removes daemon.json, is idempotent, and the port refuses connections", async () => {

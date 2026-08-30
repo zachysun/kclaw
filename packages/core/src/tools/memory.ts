@@ -1,36 +1,38 @@
 /**
- * memory tools: thin arg-validation + formatting wrappers around
- * MemoryStore (markdown files are the truth, SQLite FTS5 is the derived index).
+ * memory tools: thin arg-validation + formatting wrappers around MemorySystem
+ * (v2 facade — episodes in project thread files, cognitions in global files;
+ * markdown is the truth, SQLite FTS5 + vectors the derived index).
  *
- * Both safe + parallel: they only touch the notes dir / index, never the
- * workspace itself, so calls need no confirmation and may run concurrently
- * with other tools. (better-sqlite3 is synchronous, so "parallel" only means
- * the scheduler isn't forced to serialize them.)
+ * Both safe + parallel: they only touch the memory system, never the workspace
+ * itself, so calls need no confirmation and may run concurrently with other
+ * tools.
  *
- * - `memory_save {text, tags?}` → store.save(...), ok output `saved memory <id>`.
- *   Store-side merging applies: a very similar existing note is updated in
- *   place instead of duplicated. Saved with source "model" (this is the
- *   model-facing tool; the auto pipeline and humans write through other paths).
- * - `memory_search {query, limit?}` → store.search(...), one `- <text>` line
- *   per hit, ranked by relevance; no hit → "(no memories)".
+ * - `memory_save {text}` → 当场触发当前会话的写入管线（system.triggerImmediate，
+ *   spec 7.3）。text 是"要记内容的提示"；v1 的 tags 已删（spec 7.3），多余字段忽略。
+ *   immediateEnabled=false 时返回固定错误文本（写入走后台定时/跟随触发）。
+ * - `memory_search {query, limit?}` → system.searchAll(query, limit)，跨项目
+ *   经历 + 全局认知，每行 `- [经历|认知] [scope] text`；无命中 → "（没有相关记忆）"。
  */
 import type { ToolExecutor } from "../agent/tools.js"
-import type { MemoryStore } from "../memory/store.js"
-import { errMsg, makeTool, optInt, optStringArray, requireString, ToolError } from "./shared.js"
+import type { MemorySystem } from "../memory/system.js"
+import { errMsg, makeTool, optInt, requireString, ToolError } from "./shared.js"
 
 const DEFAULT_SEARCH_LIMIT = 5
 const MAX_SEARCH_LIMIT = 20
+const IMMEDIATE_CLOSED_MSG = "立即写入已关闭（memory.write.immediate=false），该内容将在后台定时/跟随触发时沉淀"
 
-export function createMemoryTools(memory: MemoryStore): {
-  "memory_save": ToolExecutor & { name: "memory_save" }
-  "memory_search": ToolExecutor & { name: "memory_search" }
-} {
+export function createMemoryTools(ctx: {
+  system: MemorySystem
+  sessionId: string
+  workdir: string
+  immediateEnabled: boolean
+}): { "memory_save": ToolExecutor & { name: "memory_save" }; "memory_search": ToolExecutor & { name: "memory_search" } } {
   const memory_save = makeTool("memory_save", "safe", "parallel", async (args) => {
-    const text = requireString(args, "text")
-    const tags = optStringArray(args, "tags")
+    requireString(args, "text") // tags 已删（spec 7.3）：多余字段忽略
+    if (!ctx.immediateEnabled) return { status: "error", output: IMMEDIATE_CLOSED_MSG }
     try {
-      const note = await memory.save({ text, tags, source: "model" })
-      return { status: "ok", output: `saved memory ${note.id}` }
+      await ctx.system.triggerImmediate(ctx.sessionId)
+      return { status: "ok", output: "已触发记忆写入（处理当前这轮对话）" }
     } catch (e) {
       throw new ToolError(`save failed: ${errMsg(e)}`)
     }
@@ -40,10 +42,10 @@ export function createMemoryTools(memory: MemoryStore): {
     const query = requireString(args, "query")
     const limit = optInt(args, "limit", DEFAULT_SEARCH_LIMIT, 1, MAX_SEARCH_LIMIT)
     try {
-      const notes = await memory.search(query, limit)
-      const output = notes.length > 0
-        ? notes.map((n) => `- ${n.text}`).join("\n")
-        : "(no memories)"
+      const hits = await ctx.system.searchAll(query, limit)
+      const output = hits.length > 0
+        ? hits.map((h) => `- [${h.kind === "episode" ? "经历" : "认知"}] [${h.scope}] ${h.text}`).join("\n")
+        : "（没有相关记忆）"
       return { status: "ok", output }
     } catch (e) {
       throw new ToolError(`search failed: ${errMsg(e)}`)

@@ -21,6 +21,8 @@ export type EventType =
   | "confirmation.requested" | "confirmation.resolved"
   // note 单发
   | "note.emitted"
+  // 记忆写入（项目级事务，广播，不带 sessionId）
+  | "memory.written"
   // 消息排队与引导（message-queue spec §4.2）
   | "message.queued" | "message.steered" | "message.queue_cancelled"
   // 上下文压缩（运行前的预压缩过程，早于 run.started）
@@ -57,6 +59,9 @@ export interface ConfirmationResolvedPayload {
 }
 
 export interface NoteEmittedPayload { messageId: string; block: NoteBlock }
+
+/** 记忆 v2 写入广播（spec 9.2）：项目级事务，不携带 sessionId（跨项目/定时路径无会话归属）。 */
+export interface MemoryWrittenPayload { path: string; kind: "episode" | "cognition"; topic?: string; scope?: string }
 
 export interface MessageQueuedPayload {
   messageId: string
@@ -103,6 +108,7 @@ export type EventPayloadMap = {
   "confirmation.requested": ConfirmationRequestedPayload
   "confirmation.resolved": ConfirmationResolvedPayload
   "note.emitted": NoteEmittedPayload
+  "memory.written": MemoryWrittenPayload
   "message.queued": MessageQueuedPayload
   "message.steered": MessageSteeredPayload
   "message.queue_cancelled": MessageQueueCancelledPayload

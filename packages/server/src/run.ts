@@ -48,6 +48,7 @@ import type {
   KclawPaths,
   LlmClient,
   MemoryStore,
+  MemorySystem,
   Message,
   NoteBlock,
   PermissionGate,
@@ -128,7 +129,7 @@ export interface RunManagerDeps {
   config: KclawConfig
   paths: KclawPaths
   sessions: SessionStore
-  memory: MemoryStore
+  memory: MemorySystem
   bus: EventBus
   llm: LlmClient
   workspace: string
@@ -671,13 +672,15 @@ export class RunManager {
     const sessionMeta = sessions.meta(sessionId)
     const workspace = sessionMeta?.workdir ?? this.#deps.workspace
 
-    // Memory injection: the leading 200 chars of the user text
-    // look up the top-5 notes. Memory is an accelerator — a failing search
+    // Memory injection: the leading 200 chars of the user text look up the
+    // top-5 episodes via the v2 MemorySystem facade. Task 11 暂以直连适配器过渡
+    // （`memory.searchEpisodes(workspace, q, n)`，v1 的 memory.search 已退役）——
+    // Task 12 会把整段注入替换掉。Memory is an accelerator — a failing search
     // must never block the run, so misses/errors just mean no notes.
     const notes: NoteBlock[] = []
     try {
-      for (const hit of await memory.search(input.userText.slice(0, MEMORY_QUERY_CHARS), MEMORY_LIMIT)) {
-        notes.push({ id: newBlockId(), type: "note", kind: "memory", text: `相关记忆: ${hit.text}` })
+      for (const hit of await memory.searchEpisodes(workspace, input.userText.slice(0, MEMORY_QUERY_CHARS), MEMORY_LIMIT)) {
+        notes.push({ id: newBlockId(), type: "note", kind: "memory", text: `相关经历（${hit.title}）: ${hit.text}` })
       }
     } catch {
       // ignore: run without memory context
@@ -704,7 +707,12 @@ export class RunManager {
 
     const { tools, toolDefs } = createBuiltinTools({
       workspace,
-      memory,
+      memoryCtx: {
+        system: memory,
+        sessionId,
+        workdir: workspace,
+        immediateEnabled: config.memory.write.immediate,
+      },
       tavilyApiKey: config.web.tavilyApiKey,
       exec: { timeoutMs: config.exec.timeoutMs, maxOutputBytes: config.exec.maxOutputBytes },
       web: { timeoutMs: config.web.timeoutMs, allowPrivateNetworks: config.web.allowPrivateNetworks },
@@ -1038,7 +1046,11 @@ export class RunManager {
     }
     for (const fact of parsed) {
       try {
-        await this.#deps.memory.save({ text: fact, source: "auto" })
+        // 临时桥（Task 12 删除本方法）：v1 的 memory.save 已从 MemorySystem 退役，
+        // 类型层回退到 v1 存储形状；运行时 daemon 装配的已是 MemorySystem，deprecated
+        // autoExtract（默认关）下此调用不达，纵达也在逐条 try/catch 内记日志降级。
+        const saveV1 = (this.#deps.memory as unknown as MemoryStore).save
+        await saveV1.call(this.#deps.memory, { text: fact, source: "auto" })
       } catch (err) {
         console.error(`kclaw memory extraction (${sessionId}): save failed:`, err)
       }
