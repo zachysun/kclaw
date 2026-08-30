@@ -105,6 +105,38 @@ describe("loadConfig / saveConfig", () => {
   })
 })
 
+describe("memory v2 config", () => {
+  it("defaults match the spec", () => {
+    const m = defaultConfig.memory
+    expect(m).toEqual({
+      write: { immediate: true, manual: true, intervalMinutes: 30, idleMinutes: 10 },
+      extractModel: "",
+      threadInactiveDays: 14,
+      consolidate: true,
+      embedding: { provider: "", model: "" },
+      injectTokenBudget: 1000,
+    })
+  })
+
+  it("deep-merges user values over defaults and ignores legacy autoExtract", () => {
+    const home = mkdtempSync(join(tmpdir(), "kclaw-cfg-"))
+    writeFileSync(join(home, "config.yaml"), [
+      "memory:",
+      "  autoExtract: true",
+      "  write:",
+      "    intervalMinutes: 15",
+      "  embedding:",
+      "    model: text-embedding-3-small",
+      "",
+    ].join("\n"))
+    const cfg = loadConfig(resolvePaths(home))
+    expect(cfg.memory.write.intervalMinutes).toBe(15)
+    expect(cfg.memory.write.immediate).toBe(true) // untouched default
+    expect(cfg.memory.embedding.model).toBe("text-embedding-3-small")
+    expect((cfg.memory as Record<string, unknown>).autoExtract).toBe(true) // 读处兜底忽略，字段不进类型
+  })
+})
+
 describe("writeFileAtomic", () => {
   it("replaces the target atomically and leaves no tmp behind", () => {
     const file = join(home, "atomic.json")
