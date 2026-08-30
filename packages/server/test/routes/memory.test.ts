@@ -40,6 +40,21 @@ describe("GET /memory/projects", () => {
   })
 })
 
+describe("GET /memory/projects/:id", () => {
+  it("returns threads for a known project", async () => {
+    const res = await app.inject({ method: "GET", url: "/memory/projects/kclaw-x", headers: auth })
+    expect(res.statusCode).toBe(200)
+    const body = res.json()
+    expect(body.id).toBe("kclaw-x")
+    expect(Array.isArray(body.threads)).toBe(true)
+    expect(body.threads.some((t: { topic: string }) => t.topic === "ws")).toBe(true)
+  })
+  it("404 for an unknown project", async () => {
+    const res = await app.inject({ method: "GET", url: "/memory/projects/nope", headers: auth })
+    expect(res.statusCode).toBe(404)
+  })
+})
+
 describe("thread routes", () => {
   it("GET/PATCH/DELETE the thread lifecycle", async () => {
     const get = await app.inject({ method: "GET", url: "/memory/threads/kclaw-x/ws", headers: auth })
@@ -67,5 +82,44 @@ describe("global routes", () => {
     expect(patched.statusCode).toBe(200)
     expect((await app.inject({ method: "DELETE", url: "/memory/global/persona/persona", headers: auth })).statusCode).toBe(400)
     expect((await app.inject({ method: "DELETE", url: "/memory/global/wiki/none", headers: auth })).statusCode).toBe(404)
+  })
+})
+
+describe("PATCH validation and unknown kind", () => {
+  it("PATCH thread with missing content → 400", async () => {
+    const res = await app.inject({ method: "PATCH", url: "/memory/threads/kclaw-x/ws", headers: { ...auth, "content-type": "application/json" }, payload: {} })
+    expect(res.statusCode).toBe(400)
+  })
+  it("PATCH thread with empty content → 400", async () => {
+    const res = await app.inject({ method: "PATCH", url: "/memory/threads/kclaw-x/ws", headers: { ...auth, "content-type": "application/json" }, payload: { content: "" } })
+    expect(res.statusCode).toBe(400)
+  })
+  it("PATCH global with empty content → 400", async () => {
+    const res = await app.inject({ method: "PATCH", url: "/memory/global/wiki/foo", headers: { ...auth, "content-type": "application/json" }, payload: { content: "" } })
+    expect(res.statusCode).toBe(400)
+  })
+  it("GET global with unknown kind → 404", async () => {
+    const res = await app.inject({ method: "GET", url: "/memory/global/bogus/persona", headers: auth })
+    expect(res.statusCode).toBe(404)
+  })
+})
+
+describe("503 fallback (no memory)", () => {
+  let noMemoryHome: string
+  let noMemoryApp: Awaited<ReturnType<typeof createApp>>
+  beforeEach(async () => {
+    noMemoryHome = mkdtempSync(join(tmpdir(), "kclaw-memroute-none-"))
+    const sessions = new SessionStore(join(noMemoryHome, "sessions"))
+    noMemoryApp = await createApp({ home: noMemoryHome, token: "t", stores: { sessions } })
+  })
+  afterEach(async () => { await noMemoryApp.close(); rmSync(noMemoryHome, { recursive: true, force: true }) })
+  it("GET /memory/projects → 503 with the unavailable payload", async () => {
+    const res = await noMemoryApp.inject({ method: "GET", url: "/memory/projects", headers: auth })
+    expect(res.statusCode).toBe(503)
+    expect(res.json()).toEqual({ error: "memory system unavailable" })
+  })
+  it("GET /memory/global → 503 too", async () => {
+    const res = await noMemoryApp.inject({ method: "GET", url: "/memory/global", headers: auth })
+    expect(res.statusCode).toBe(503)
   })
 })
