@@ -103,11 +103,20 @@ describe("renderFrame compact note dedup", () => {
 })
 
 describe("renderFrame memory.written", () => {
-  it("prints a dim notice line", async () => {
-    const out = await capture((ctx) =>
-      renderFrame(ev("memory.written", { path: "/m/global/persona.md", kind: "cognition" }), ctx),
-    )
-    expect(out).toContain("已写入记忆: /m/global/persona.md")
+  it("prints a dim notice line and stays non-terminating (done === false)", async () => {
+    const writes: string[] = []
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString())
+      return true
+    })
+    try {
+      const { ctx } = makeCtx()
+      const done = await renderFrame(ev("memory.written", { path: "/m/global/persona.md", kind: "cognition" }), ctx)
+      expect(done).toBe(false)
+      expect(writes.join("")).toContain("已写入记忆: /m/global/persona.md")
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
 

@@ -433,6 +433,19 @@ describe("/memory", () => {
     printed = fake.print.mock.calls.map((c) => c[0] as string)
     expect(printed.some((t) => t.includes("topic: ws"))).toBe(true)
   })
+
+  it("request 失败（404/503 同路径）：打印失败行、命令正常 resolve（REPL 不被一次失败杀死）", async () => {
+    // 真实 KclawClient 对非 2xx（含 404/503）抛 Error（body.error 或 HTTP <status>），
+    // 与 /steer、/queue 的失败路径同构：打印失败行即返回，命令不抛未捕获异常。
+    const fake = makeFakeCtx(async () => {
+      throw new Error("HTTP 503")
+    })
+    const registry = createRegistry(fake.ctx)
+    await expect(runOrHint({ command: "memory", args: "" }, registry, fake.ctx)).resolves.toBe(true)
+    await expect(runOrHint({ command: "memory", args: "kclaw-a3f2c9" }, registry, fake.ctx)).resolves.toBe(true)
+    const printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.filter((t) => t.includes("查看记忆失败") && t.includes("HTTP 503"))).toHaveLength(2)
+  })
 })
 
 describe("/queue", () => {
