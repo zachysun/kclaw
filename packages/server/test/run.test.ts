@@ -1474,11 +1474,53 @@ describe("RunManager context compaction v3", () => {
   })
 })
 
-// --- auto memory extraction（v1 退役）-----------------------------------------
-// Task 11 起 RunManagerDeps.memory 已是 v2 MemorySystem（无 v1 save/search），
-// 旧用例测的 v1 `#extractMemory` 行为已无从注入；该块随代码在 Task 12 删除，
-// 提取触发改由四触发管线接管（Task 13 装配的 memory-scheduler）。此段测试删除，
-// Task 12 会补新的注入用例。
+// --- v2 memory injection（Task 12）------------------------------------------
+// RunManagerDeps.memory 是 v2 MemorySystem：L2 cognition 拼进 system prompt
+// （cognitionPrompt 为空/抛错则回落到纯 AGENTS.md），L1 情节以 memory note 注入
+// 用户消息（searchEpisodes 失败静默跳过）。四触发提取管线由 Task 13 装配，
+// end_turn 后不再有任何 v1 autoExtract。
+
+describe("RunManager v2 memory injection", () => {
+  it("injects L2 cognition into the system prompt and L1 episodes as memory notes", async () => {
+    const fakeMemory = {
+      cognitionPrompt: (wd: string) => "[关于用户]\nMaster 偏好中文。",
+      searchEpisodes: async (_wd: string, q: string, n: number) => [
+        { topic: "ws", title: "重连线", date: "2026-08-28", text: `匹配 ${q.slice(0, 8)} 的情节`, score: 1 },
+      ],
+    } as unknown as MemorySystem
+    const requests: Parameters<LlmClient["stream"]>[0][] = []
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        requests.push(req)
+        yield* textTurn("好的")
+      },
+    }
+    const { env, manager } = makeEnv(llm, undefined, undefined, { memory: fakeMemory })
+    const session = env.sessions.create("记忆注入会话", undefined, "/w/proj")
+
+    await manager.enqueue(session.id, { userText: "重连怎么样了", trigger: "user" })
+
+    // the system prompt carries the L2 cognition block after the AGENTS.md base
+    expect(requests[0]!.system).toContain("Master 偏好中文。")
+    // the user message carries the L1 episode as a memory note
+    const [user] = env.sessions.readMessages(session.id)
+    const note = user!.blocks.find((b) => b.type === "note")
+    expect(note).toEqual({ id: expect.any(String), type: "note", kind: "memory", text: "相关经历（重连线）: 匹配 重连怎么样了 的情节" })
+  })
+
+  it("tolerates a throwing memory system (run proceeds without memory context)", async () => {
+    const boom = {
+      cognitionPrompt: () => { throw new Error("x") },
+      searchEpisodes: async () => { throw new Error("y") },
+    } as unknown as MemorySystem
+    const { env, manager } = makeEnv(scriptClient([textTurn("hi")]), undefined, undefined, { memory: boom })
+    const session = env.sessions.create("炸记忆会话")
+
+    const outcome = await manager.enqueue(session.id, { userText: "hi", trigger: "user" })
+
+    expect(outcome.stopReason).toBe("end_turn")
+  })
+})
 
 describe("RunManager extraTools (MCP adapter seam)", () => {
   it("appends adapter defs to the LLM request tools and keeps the executors callable", async () => {

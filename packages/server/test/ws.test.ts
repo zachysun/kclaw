@@ -5,8 +5,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AddressInfo } from "node:net"
 import WebSocket from "ws"
-import { MemoryStore, SessionStore, loadConfig, makeEvent, resolvePaths } from "@kclaw/core"
-import type { AgentEvent, KclawPaths, LlmClient, LlmStreamEvent } from "@kclaw/core"
+import { SessionStore, loadConfig, makeEvent, resolvePaths } from "@kclaw/core"
+import type { AgentEvent, KclawPaths, LlmClient, LlmStreamEvent, MemorySystem } from "@kclaw/core"
 import type { FastifyInstance } from "fastify"
 import { createApp, EventBus, RunManager } from "../src/index.js"
 
@@ -367,7 +367,10 @@ describe("GET /ws send guard on a dead socket", () => {
       entries: { mock: { baseUrl: "http://127.0.0.1:1", apiKey: "test-key", model: "mock-model" } },
     }
     sessions = new SessionStore(paths.sessionsDir)
-    const memory = new MemoryStore({ notesDir: paths.memoryNotesDir, indexDb: paths.memoryIndexDb })
+    const memory = {
+      searchEpisodes: async () => [],
+      cognitionPrompt: () => "",
+    } as unknown as MemorySystem
     bus = new EventBus()
     const gate = new Promise<void>((resolve) => {
       release = resolve

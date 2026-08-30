@@ -2,7 +2,7 @@
  * Integration smoke: the whole persistence/permission/tool stack wired
  * the way the daemon wires it, on a real temp KCLAW_HOME.
  *
- * SessionStore + MemoryStore + ConfigPermissionGate + createBuiltinTools
+ * SessionStore + MemorySystem + ConfigPermissionGate + createBuiltinTools
  * drive one runAgent turn with a scripted LlmClient that emits a tool_call
  * for `exec {command:"echo hi"}` then a final end_turn. Two scenarios: the
  * whitelist path (allow rule → no confirmation) and the confirmation path
@@ -208,7 +208,7 @@ describe("integration smoke", () => {
 
   it("exposes the public surface from the package barrel", () => {
     for (const name of [
-      "SessionStore", "MemoryStore", "JobScheduler",
+      "SessionStore", "MemorySystem", "JobScheduler",
       "ConfigPermissionGate", "createBuiltinTools", "createExecTool",
       "createFsTools", "createWebTools", "createMemoryTools",
       "resolvePaths", "loadConfig", "saveConfig", "runAgent",

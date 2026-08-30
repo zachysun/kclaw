@@ -17,7 +17,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AddressInfo } from "node:net"
 import WebSocket from "ws"
-import { MemoryStore, SessionStore, loadConfig, resolvePaths } from "@kclaw/core"
+import { SessionStore, loadConfig, resolvePaths } from "@kclaw/core"
 import type {
   AgentEvent,
   ConfirmationRequestedPayload,
@@ -25,6 +25,7 @@ import type {
   KclawPaths,
   LlmClient,
   LlmStreamEvent,
+  MemorySystem,
   ToolCallBlock,
   ToolMessage,
   ToolResultBlock,
@@ -163,7 +164,7 @@ interface GwEnv {
   paths: KclawPaths
   config: KclawConfig
   sessions: SessionStore
-  memory: MemoryStore
+  memory: MemorySystem
   bus: EventBus
   manager: RunManager
 }
@@ -177,6 +178,15 @@ afterEach(async () => {
   for (const app of apps.splice(0)) await app.close()
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
+
+/** Minimal MemorySystem stand-in: the gateway tests never touch memory, so
+ *  injection seams return nothing (a full fake would mask nothing here). */
+function makeMemoryFake(): MemorySystem {
+  return {
+    searchEpisodes: async () => [],
+    cognitionPrompt: () => "",
+  } as unknown as MemorySystem
+}
 
 /** Real stores + RunManager + app (ephemeral port); `wireRun: false` omits the app↔run seam. */
 async function makeGateway(
@@ -197,7 +207,7 @@ async function makeGateway(
   // permissions.allow stays EMPTY (the config default) → exec requires a confirmation
 
   const sessions = new SessionStore(paths.sessionsDir)
-  const memory = new MemoryStore({ notesDir: paths.memoryNotesDir, indexDb: paths.memoryIndexDb })
+  const memory = makeMemoryFake()
   const bus = new EventBus()
   const manager = new RunManager({ config, paths, sessions, memory, bus, llm, workspace })
 
