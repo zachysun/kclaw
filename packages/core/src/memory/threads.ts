@@ -51,7 +51,8 @@ export function renderThreadFile(tf: ThreadFile): string {
 
 /**
  * 防覆盖写（spec 2.5）：永远读最新磁盘内容做基准 —— 人工改动因此先被重解析
- * 再合并，永不静默丢失。文件不存在（或已变得不可解析）时用 create() 起稿。
+ * 再合并，永不静默丢失。文件不存在时用 create() 起稿；存在但不可解析（如
+ * 人工手写无 frontmatter）时抛错、绝不覆盖，宁可不写也不丢数据。
  */
 export function writeThreadFile(
   path: string,
@@ -59,7 +60,14 @@ export function writeThreadFile(
   create: () => ThreadFile,
 ): ThreadFile {
   let base: ThreadFile | undefined
-  if (existsSync(path)) base = parseThreadFile(readFileSync(path, "utf8"))
+  const exists = existsSync(path)
+  if (exists) {
+    const parsed = parseThreadFile(readFileSync(path, "utf8"))
+    if (parsed === undefined) {
+      throw new Error(`memory thread file exists but is unparseable (won't overwrite): ${path}`)
+    }
+    base = parsed
+  }
   const next = mutate(base ?? create())
   writeFileAtomic(path, renderThreadFile(next))
   return next

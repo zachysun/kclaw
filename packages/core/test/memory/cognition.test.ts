@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, dirname } from "node:path"
 import { parseCognitionFile, renderCognitionFile, writeCognitionFile, cognitionPath } from "../../src/memory/cognition.js"
 
 const RULE = `---
@@ -54,6 +54,20 @@ describe("writeCognitionFile merges human edits", () => {
       const merged = parseCognitionFile(readFileSync(path, "utf8"), "rule", "general")!
       expect(merged.scope).toBe("project:other-123456")
       expect(merged.body).toBe("新认知")
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+  it("refuses to overwrite an existing unparseable file (spec 2.5)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kclaw-cog-"))
+    try {
+      const path = join(dir, "rule", "general.md")
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, "人工手写，没有 frontmatter\n")
+      expect(() => writeCognitionFile(
+        path, "rule", "general",
+        (cf) => ({ ...cf, body: "不该覆盖" }),
+        () => ({ kind: "rule", name: "general", title: "t", scope: "global", created: "2026-08-01", updated: "2026-08-01", body: "不该覆盖" }),
+      )).toThrow()
+      expect(readFileSync(path, "utf8")).toBe("人工手写，没有 frontmatter\n")
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 })

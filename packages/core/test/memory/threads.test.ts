@@ -62,6 +62,19 @@ describe("writeThreadFile guards human edits", () => {
       expect(merged.sections).toHaveLength(2)
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
+  it("refuses to overwrite an existing unparseable file (spec 2.5)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kclaw-thr-"))
+    try {
+      const path = join(dir, "ws-reconnect.md")
+      writeFileSync(path, "人工手写，没有 frontmatter\n")
+      expect(() => writeThreadFile(
+        path,
+        (tf) => appendSection(tf, { date: "2026-08-29", heading: "不该覆盖", body: "- x\n" }),
+        () => parseThreadFile(SAMPLE)!,
+      )).toThrow()
+      expect(readFileSync(path, "utf8")).toBe("人工手写，没有 frontmatter\n")
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
 })
 
 describe("MEMORY.md", () => {

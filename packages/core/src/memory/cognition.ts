@@ -48,7 +48,14 @@ export function writeCognitionFile(
   create: () => CognitionFile,
 ): CognitionFile {
   let base: CognitionFile | undefined
-  if (existsSync(path)) base = parseCognitionFile(readFileSync(path, "utf8"), kind, name)
+  const exists = existsSync(path)
+  if (exists) {
+    const parsed = parseCognitionFile(readFileSync(path, "utf8"), kind, name)
+    if (parsed === undefined) {
+      throw new Error(`memory cognition file exists but is unparseable (won't overwrite): ${path}`)
+    }
+    base = parsed
+  }
   const next = mutate(base ?? create())
   mkdirSync(dirname(path), { recursive: true })
   writeFileAtomic(path, renderCognitionFile(next))
