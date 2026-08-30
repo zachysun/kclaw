@@ -254,6 +254,11 @@ export class MemoryPipeline {
     if (touched.size > 0) {
       this.#reindexProject(projectId)
       this.#rebuildMemoryMd(projectId)
+      // 写路径即时向量补算（spec 7.2）：embed 可用时本次写入的线立即有向量，
+      // 不必等下次重启 reconcile —— 否则运行期新经历的双路融合会结构性退化为纯关键词。
+      if (this.#deps.embed !== undefined) {
+        await this.#backfillVectors(this.#indexFor(projectId), this.#projectEntries(projectId))
+      }
     }
     // 顺带内化检查（spec 4.2/6）：本次涉及的线若已 inactive 则总结一次。
     await this.#maybeConsolidateTouched(projectId, touched)

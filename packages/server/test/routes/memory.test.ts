@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createApp } from "../../src/app.js"
@@ -82,6 +82,33 @@ describe("global routes", () => {
     expect(patched.statusCode).toBe(200)
     expect((await app.inject({ method: "DELETE", url: "/memory/global/persona/persona", headers: auth })).statusCode).toBe(400)
     expect((await app.inject({ method: "DELETE", url: "/memory/global/wiki/none", headers: auth })).statusCode).toBe(404)
+  })
+})
+
+describe("segment validation (path traversal defense)", () => {
+  // 裸 ".." 段会被 Fastify 路由层在到达 handler 前规范化并拒绝（404）；这是路由层第一道闸。
+  // 真正能穿透到 handler 的是编码后的穿越段（如 %2e%2e%2f 解码成 "../"），
+  // isSafeSegment 负责兜住这第二道闸 → 400。
+  it("GET /memory/projects/../x → blocked by router (404, no escape)", async () => {
+    const res = await app.inject({ method: "GET", url: "/memory/projects/../x", headers: auth })
+    expect(res.statusCode).toBe(404)
+  })
+  it("GET /memory/threads/kclaw-x/../x → blocked by router (404, no escape)", async () => {
+    const res = await app.inject({ method: "GET", url: "/memory/threads/kclaw-x/../x", headers: auth })
+    expect(res.statusCode).toBe(404)
+  })
+  it("GET /memory/threads/kclaw-x/..%2Fx (encoded ../) → 400 invalid segment", async () => {
+    const res = await app.inject({ method: "GET", url: "/memory/threads/kclaw-x/..%2Fx", headers: auth })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toEqual({ error: "invalid segment" })
+  })
+  it("PATCH traversal into parent dirs is rejected; no file escapes the memory dir", async () => {
+    // topic 解码为 "../../evil"：修复前会 join 到 memory 目录之外写 evil.md；修复后 400。
+    const res = await app.inject({ method: "PATCH", url: "/memory/threads/kclaw-x/..%2F..%2Fevil", headers: { ...auth, "content-type": "application/json" }, payload: { content: "---\ntopic: evil\n---\n\nescaped\n" } })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toEqual({ error: "invalid segment" })
+    expect(existsSync(join(home, "evil.md"))).toBe(false)        // 未逃逸到 home
+    expect(existsSync(join(home, "memory", "evil.md"))).toBe(false) // 未逃逸到 memory 根
   })
 })
 

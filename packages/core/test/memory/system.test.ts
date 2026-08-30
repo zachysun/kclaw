@@ -83,6 +83,20 @@ describe("migrateV1Notes", () => {
     // 幂等：notes 不存在再跑无事可做
     expect(() => sys.migrateV1Notes(notesDir)).not.toThrow()
   })
+  it("logs non-md leftovers before deleting notes dir", () => {
+    const notesDir = join(root, "notes")
+    mkdirSync(notesDir, { recursive: true })
+    writeFileSync(join(notesDir, "mem_1.md"), `---\nid: mem_1\n---\n\n偏好深色\n`)
+    writeFileSync(join(notesDir, "random.txt"), "not a note")
+    mkdirSync(join(notesDir, "subdir"))
+    const logs: string[] = []
+    const sys = makeSystem({ log: (m) => logs.push(m) })
+    sys.migrateV1Notes(notesDir)
+    // 非 .md 对象随目录一并删除前要有警告日志，不无痕消失
+    expect(logs.some((l) => l.includes("non-md random.txt"))).toBe(true)
+    expect(logs.some((l) => l.includes("non-md subdir"))).toBe(true)
+    expect(existsSync(notesDir)).toBe(false)
+  })
 })
 
 describe("search preserves reconciled vectors (spec 7.2)", () => {
@@ -109,6 +123,28 @@ describe("search preserves reconciled vectors (spec 7.2)", () => {
     const vec = after.vectorOf(key)
     expect(vec).toBeDefined()
     expect(Array.from(vec!)).toEqual([1, 0, 0])
+  })
+})
+
+describe("interval write backfills project vectors immediately (spec 7.2)", () => {
+  it("new episode written via triggerInterval has a vector without waiting for reconcile", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    sessions.appendMessage(meta.id, { id: "m1", sessionId: meta.id, role: "user", blocks: [{ id: "b", type: "text", text: "重连风暴修好了" }], createdAt: new Date().toISOString() })
+    const embed = { embed: async (texts: string[]): Promise<Float32Array[]> => texts.map(() => new Float32Array([1, 0, 0])) }
+    const sys = makeSystem({
+      embed,
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "ws", op: "new-thread", thread: "ws", title: "重连线", content: "指数退避消灭了重连风暴" }] })]), model: "m" }),
+    })
+    // 只跑一次 interval 触发写入，绝不调用 reconcile
+    await sys.triggerInterval(WORKDIR)
+    const dbPath = join(root, "memory", "projects", projectIdFor(WORKDIR), "vectors.db")
+    const idx = new VectorIndex(dbPath)
+    const keys = [...idx.keys()]
+    expect(keys.length).toBe(1)                       // 恰好一条新情节
+    expect(keys[0]!.startsWith("ws#")).toBe(true)     // 索引里确有该线
+    expect(idx.vectorOf(keys[0]!)).toBeDefined()      // 写路径已补算向量（不再依赖 reconcile）
+    expect(Array.from(idx.vectorOf(keys[0]!)!)).toEqual([1, 0, 0])
+    idx.close()
   })
 })
 

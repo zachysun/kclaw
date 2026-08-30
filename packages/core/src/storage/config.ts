@@ -156,6 +156,11 @@ export function loadConfig(paths: KclawPaths): KclawConfig {
   if (!isPlainObject(file)) {
     throw new Error(`invalid config in ${paths.config}: expected a yaml mapping`)
   }
+  // spec 10：首次读到 v1 遗留字段记日志说明已忽略（不改字段、不改行为，只提示）。
+  const legacyAutoExtract = (file as { memory?: { autoExtract?: unknown } }).memory?.autoExtract
+  if (legacyAutoExtract !== undefined) {
+    console.warn("kclaw config: memory.autoExtract is deprecated (v1) and ignored; use memory.write.* instead")
+  }
   return deepMerge(structuredClone(defaultConfig), file)
 }
 

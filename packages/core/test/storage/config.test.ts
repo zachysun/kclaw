@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync, existsSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
@@ -134,6 +134,25 @@ describe("memory v2 config", () => {
     expect(cfg.memory.write.immediate).toBe(true) // untouched default
     expect(cfg.memory.embedding.model).toBe("text-embedding-3-small")
     expect((cfg.memory as Record<string, unknown>).autoExtract).toBe(true) // 读处兜底忽略，字段不进类型
+  })
+
+  it("logs a warning when legacy memory.autoExtract is present, silent when absent", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const withLegacy = mkdtempSync(join(tmpdir(), "kclaw-cfg-"))
+      writeFileSync(join(withLegacy, "config.yaml"), "memory:\n  autoExtract: true\n")
+      loadConfig(resolvePaths(withLegacy))
+      expect(warn).toHaveBeenCalled()
+      expect(warn.mock.calls.some((c) => String(c[0]).includes("autoExtract"))).toBe(true)
+
+      warn.mockClear()
+      const clean = mkdtempSync(join(tmpdir(), "kclaw-cfg-"))
+      writeFileSync(join(clean, "config.yaml"), "memory:\n  write:\n    intervalMinutes: 7\n")
+      loadConfig(resolvePaths(clean))
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
   })
 })
 

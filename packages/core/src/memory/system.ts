@@ -415,6 +415,11 @@ export class MemorySystem {
       else if (/必须|不要|决定/.test(note.text)) appendTo("rule", "general", note.text)
       else appendTo("wiki", "misc", note.text)
     }
+    // v1 只写 .md，但目录里若有其它对象会随 rmSync 一并删除——补一条警告，不无痕消失（M-5）。
+    for (const e of readdirSync(notesDir, { withFileTypes: true })) {
+      if (e.isFile() && e.name.endsWith(".md")) continue
+      this.#log(`memory v1 migration: skipping non-md ${e.name}`)
+    }
     rmSync(notesDir, { recursive: true, force: true })
   }
 
