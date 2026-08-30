@@ -233,6 +233,21 @@ describe("consolidate", () => {
     await pipe.runTrigger(WORKDIR, "interval")
     expect(calls).toBe(1) // 只有提取调用，没有内化调用
   })
+
+  it("append to a new cognition file does not duplicate the entry", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    seedMessages(meta.id, ["内容"])
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      llm: scriptedLlm([
+        JSON.stringify({ actions: [{ file: "t1", op: "new-thread", thread: "t1", title: "T1", content: "情节", status: "inactive" }] }),
+        JSON.stringify({ actions: [{ target: "rule", name: "nd", op: "append", content: "一条规范", source: "t1#2026-08-28" }] }),
+      ]),
+      model: "m",
+    })
+    await pipe.runTrigger(WORKDIR, "interval")
+    const raw = readFileSync(join(root, "memory", "global", "rule", "nd.md"), "utf8")
+    expect(raw.match(/一条规范/g)?.length).toBe(1)
+  })
 })
 
 function dirnameOf(p: string): string { return p.slice(0, p.lastIndexOf("/")) }

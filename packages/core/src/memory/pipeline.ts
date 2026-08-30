@@ -450,12 +450,13 @@ export class MemoryPipeline {
     const name = kind === "persona" ? "persona" : (action.name ?? "misc")
     const path = cognitionPath(this.#layout.globalDir, kind, name)
     const withSource = `${action.content}\n<!-- 来源：${action.source || source} -->`
+    const isAppend = action.op === "append"
     const result = writeCognitionFile(path, kind, name,
       (cf) => {
-        if (action.op === "append") return { ...cf, body: `${cf.body}\n\n${withSource}`, updated: todayOf(this.#now()) }
+        if (action.op === "append") return { ...cf, body: `${cf.body}${cf.body === "" ? "" : "\n\n"}${withSource}`, updated: todayOf(this.#now()) }
         return { ...cf, body: action.content, updated: todayOf(this.#now()) } // rewrite：就地改写不保留旧版（spec 2.3）
       },
-      () => ({ kind, name, title: name, scope: "global", created: todayOf(this.#now()), updated: todayOf(this.#now()), body: withSource }))
+      () => ({ kind, name, title: name, scope: "global", created: todayOf(this.#now()), updated: todayOf(this.#now()), body: isAppend ? "" : withSource }))
     this.#deps.emit?.({ type: "memory.written", path, kind: "cognition", scope: result.scope })
     await this.#reindexGlobal()
   }
