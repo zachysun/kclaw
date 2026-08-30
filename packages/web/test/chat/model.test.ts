@@ -370,16 +370,46 @@ describe("llm retry hint", () => {
 describe("compaction state", () => {
   it("compaction.started marks compacting; completed clears it", () => {
     const state = initChat([])
-    const started = applyEvent(state, ev("compaction.started", {}))
+    const started = applyEvent(state, ev("compaction.started", { phase: "post-run" }))
     expect(started.compacting).toBe(true)
-    const done = applyEvent(started, ev("compaction.completed", { segments: 1, kept: 4 }))
+    const done = applyEvent(started, ev("compaction.completed", { segments: 1, kept: 4, phase: "post-run", result: "ok" }))
     expect(done.compacting).toBe(false)
   })
 
-  it("run lifecycle events clear a stuck compacting state (failed compaction emits no completed)", () => {
-    const started = applyEvent(initChat([]), ev("compaction.started", {}))
+  it("v3 wire shape: started carries phase, completed carries phase/result (typed, not cast)", () => {
+    // 直接以 AgentEvent 类型内联构造（不经 ev 的 cast）：payload 形状错了就编
+    // 译不过——这是协议适配的编译期守护。
+    const started = (phase: string): AgentEvent => ({
+      id: "e0", ts: "t", sessionId: "s1", type: "compaction.started", payload: { phase },
+    })
+    const finished = (result: "ok" | "failed" | "cancelled"): AgentEvent => ({
+      id: "e1", ts: "t", sessionId: "s1", type: "compaction.completed",
+      payload: { segments: 2, kept: 3, phase: "in-run", result },
+    })
+    expect(applyEvent(initChat([]), started("in-run")).compacting).toBe(true)
+    expect(applyEvent(initChat([]), finished("failed")).compacting).toBe(false)
+  })
+
+  it("completed is always delivered: ANY result (ok/failed/cancelled) clears compacting", () => {
+    // v3 协议：started 后 completed 必达——失败/被取消的压缩同样有配对的
+    // completed，所以任意 result 都清 compacting，不能只认 ok。
+    const finish = (result: "ok" | "failed" | "cancelled") =>
+      ev("compaction.completed", { segments: 2, kept: 3, phase: "in-run", result })
+    for (const result of ["ok", "failed", "cancelled"] as const) {
+      const started = applyEvent(initChat([]), ev("compaction.started", { phase: "in-run" }))
+      expect(applyEvent(started, finish(result)).compacting).toBe(false)
+    }
+    // ok 收尾不重复报条目：没有 error 横幅、没有落入消息流的条目。
+    const started = applyEvent(initChat([]), ev("compaction.started", { phase: "in-run" }))
+    const ok = applyEvent(started, finish("ok"))
+    expect(ok.error).toBeUndefined()
+    expect(ok.messages).toHaveLength(0)
+  })
+
+  it("run lifecycle events clear a stuck compacting state (dropped-frame backstop)", () => {
+    const started = applyEvent(initChat([]), ev("compaction.started", { phase: "post-run" }))
     expect(applyEvent(started, ev("run.started", { trigger: "user" })).compacting).toBe(false)
-    const again = applyEvent(initChat([]), ev("compaction.started", {}))
+    const again = applyEvent(initChat([]), ev("compaction.started", { phase: "post-run" }))
     expect(applyEvent(again, ev("run.completed", { stopReason: "end_turn" })).compacting).toBe(false)
     expect(applyEvent(again, ev("run.failed", { error: { code: "x", message: "y" } })).compacting).toBe(false)
   })

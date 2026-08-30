@@ -111,8 +111,11 @@ type EventKind =
   | { type: "llm.failed"; payload: { error?: unknown; willRetry?: boolean; attempt?: number } }
   | { type: "confirmation.requested"; payload: ConfirmationRequestedPayload }
   | { type: "confirmation.resolved"; payload: { confirmationId: string; approved: boolean; by: string } }
-  | { type: "compaction.started"; payload: Record<string, never> }
-  | { type: "compaction.completed"; payload: { segments?: number; kept?: number } }
+  // v3 compaction protocol: started reports its phase ("in-run"|"post-run"|
+  // "manual"); completed is ALWAYS delivered after started and reports the
+  // outcome — segments/kept carry the new totals on result "ok" (0 otherwise).
+  | { type: "compaction.started"; payload: { phase?: string } }
+  | { type: "compaction.completed"; payload: { segments?: number; kept?: number; phase?: string; result?: "ok" | "failed" | "cancelled" } }
   // The send-message queue trio (mirrors @kclaw/core MessageQueuedPayload /
   // MessageSteeredPayload / MessageQueueCancelledPayload).
   | { type: "message.queued"; payload: { messageId: string; disposition: "steer" | "wait" | "interrupt"; position?: number } }
@@ -215,10 +218,10 @@ export interface ChatState {
    */
   retryHint?: { attempt?: number } | null
   /**
-   * A pre-run context compaction is running (compaction.started …
-   * compaction.completed). The run lifecycle events also clear it: a FAILED
-   * compaction never emits completed — it falls back to full history and the
-   * run starts anyway, so run.started is the reliable backstop.
+   * A context compaction is running (compaction.started …
+   * compaction.completed). v3 protocol: completed is ALWAYS delivered after
+   * started — ANY result (ok/failed/cancelled) clears the flag. The run
+   * lifecycle events also clear it as a dropped-frame backstop.
    */
   compacting?: boolean
 }
@@ -381,6 +384,8 @@ export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
     case "compaction.started":
       return { ...state, compacting: true }
     case "compaction.completed":
+      // v3: completed is guaranteed after started — ANY result (ok/failed/
+      // cancelled) ends the compaction, so the flag clears unconditionally.
       return { ...state, compacting: false }
     case "llm.completed":
       return { ...state, retryHint: null }
