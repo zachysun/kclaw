@@ -379,6 +379,15 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
   }, [sessionId])
 
+  /** 取消在飞的自动压缩（v3 compaction.cancel 帧）：服务端中止摘要器并以 result:"cancelled" 的 completed 收尾。 */
+  const handleCancelCompaction = useCallback(() => {
+    try {
+      clientRef.current.send({ type: "compaction.cancel", sessionId })
+    } catch {
+      setNotice("连接不可用，请稍后重试")
+    }
+  }, [sessionId])
+
   /** 三选切换（spec §6）：本地立即生效（后续发送显式带上），同时写会话级覆盖（与 CLI /steer 同一存储）。 */
   const handleSetDisposition = useCallback((d: Disposition) => {
     setDisposition(d)
@@ -407,6 +416,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           onSetDisposition={handleSetDisposition}
           onCancelQueued={handleCancelQueued}
           onCancelAllQueued={() => handleCancelQueued()}
+          onCancelCompaction={handleCancelCompaction}
         />
       </div>
     </div>

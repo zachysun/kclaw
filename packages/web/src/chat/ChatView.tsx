@@ -82,9 +82,11 @@ export interface ChatViewProps {
   onCancelQueued?: (messageId: string) => void
   /** Cancel every still-queued message (the banner's 全部取消). */
   onCancelAllQueued?: () => void
+  /** Cancel the in-flight automatic compaction (the indicator's 取消, v3 compaction.cancel). */
+  onCancelCompaction?: () => void
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, notice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, notice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onCancelCompaction }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Slash-suggestion state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -224,6 +226,14 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
       {view.compacting === true && (
         <div className="run-indicator compacting" data-testid="compacting-indicator" aria-live="polite">
           正在压缩早期对话…
+          {/* 取消按钮只在压缩进行中渲染（指示行本身就在 compacting 条件内）；
+              completed（任意 result）清掉 compacting 后按钮随行消失。 */}
+          <button
+            type="button"
+            className="compaction-cancel"
+            data-testid="compaction-cancel"
+            onClick={() => onCancelCompaction?.()}
+          >取消</button>
         </div>
       )}
       {view.runState === "running" && view.retryHint !== undefined && view.retryHint !== null && (

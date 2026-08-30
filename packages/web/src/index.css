@@ -957,6 +957,22 @@ select:focus {
   color: var(--muted);
 }
 
+/* 压缩指示行的取消按钮（v3 compaction.cancel）：中止在飞的自动压缩 */
+.compaction-cancel {
+  flex: none;
+  margin-left: 4px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--danger);
+  background: none;
+  border-color: var(--border);
+}
+
+.compaction-cancel:hover:not(:disabled) {
+  border-color: var(--danger);
+  background: var(--danger-dim);
+}
+
 @keyframes blink {
   50% {
     opacity: 0;

@@ -411,6 +411,33 @@ describe("ChatPanel", () => {
     h.unmount()
   })
 
+  it("compacting indicator offers a cancel button that sends compaction.cancel over the ws", async () => {
+    const h = await mount()
+    try {
+      await drive(() => {
+        pushFrame(h.sockets[0]!, ev("compaction.started", { phase: "post-run" }))
+      })
+      const btn = h.container.querySelector('[data-testid="compaction-cancel"]') as HTMLButtonElement | null
+      expect(btn).not.toBeNull()
+      await act(async () => {
+        btn!.click()
+      })
+      // T8 协议：取消在飞的自动压缩 → ws 帧 {type:"compaction.cancel", sessionId}。
+      expect(h.sockets[0]!.sent).toContain(
+        JSON.stringify({ type: "compaction.cancel", sessionId: "s1" }),
+      )
+      // completed（任意 result）到达后指示行连同按钮一起消失。
+      await drive(() => {
+        pushFrame(h.sockets[0]!, ev("compaction.completed", { segments: 0, kept: 0, phase: "post-run", result: "cancelled" }))
+      })
+      expect(h.container.querySelector('[data-testid="compacting-indicator"]')).toBeNull()
+      expect(h.container.querySelector('[data-testid="compaction-cancel"]')).toBeNull()
+    } finally {
+      // 失败也要卸载：残留的 panel 会串到后面 document.querySelector 的用例。
+      h.unmount()
+    }
+  })
+
   it("echoes a sent message optimistically, then replaces it with the server twin", async () => {
     const h = await mount()
     const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement

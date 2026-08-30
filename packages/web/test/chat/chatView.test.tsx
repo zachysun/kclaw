@@ -19,6 +19,7 @@ interface ViewOpts {
   onSetDisposition?: (d: Disposition) => void
   onCancelQueued?: (messageId: string) => void
   onCancelAllQueued?: () => void
+  onCancelCompaction?: () => void
 }
 
 function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
@@ -38,6 +39,7 @@ function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
         onSetDisposition={opts.onSetDisposition}
         onCancelQueued={opts.onCancelQueued}
         onCancelAllQueued={opts.onCancelAllQueued}
+        onCancelCompaction={opts.onCancelCompaction}
       />,
     )
   })
@@ -229,6 +231,31 @@ describe("availableSlashMenuMaxHeight", () => {
     // topBoundary = topbar bottom; menu must stay below it, not just above 0.
     expect(availableSlashMenuMaxHeight(161, 47.5)).toBe(161 - 47.5 - 6 - 8)
     expect(availableSlashMenuMaxHeight(200, 47.5)).toBe(200 - 47.5 - 6 - 8)
+  })
+})
+
+describe("compacting indicator cancel button (v3 compaction.cancel)", () => {
+  it("renders the cancel button inside the compacting indicator and fires onCancelCompaction on click", () => {
+    const onCancelCompaction = vi.fn()
+    const h = mountView([], { view: { compacting: true }, onCancelCompaction })
+    const indicator = h.container.querySelector('[data-testid="compacting-indicator"]')
+    expect(indicator).not.toBeNull()
+    // 按钮只在指示行内渲染（指示行本身就在 compacting 条件内）。
+    const btn = indicator!.querySelector('[data-testid="compaction-cancel"]') as HTMLButtonElement | null
+    expect(btn).not.toBeNull()
+    expect(btn!.textContent).toContain("取消")
+    act(() => {
+      btn!.click()
+    })
+    expect(onCancelCompaction).toHaveBeenCalledTimes(1)
+    h.unmount()
+  })
+
+  it("no cancel button when not compacting (idle view)", () => {
+    const h = mountView([], { onCancelCompaction: vi.fn() })
+    expect(h.container.querySelector('[data-testid="compacting-indicator"]')).toBeNull()
+    expect(h.container.querySelector('[data-testid="compaction-cancel"]')).toBeNull()
+    h.unmount()
   })
 })
 
