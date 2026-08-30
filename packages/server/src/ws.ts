@@ -123,7 +123,11 @@ declare module "fastify" {
  * "已注入" for an already-injected id / "not found"), and
  * `{type:"run.cancel", sessionId}` to
  * abort the session's active run (acked `{type:"run_cancel_ack", sessionId}`,
- * or an error frame "no active run"). The run commands require the app's
+ * or an error frame "no active run"), and `{type:"compaction.cancel",
+ * sessionId}` to cut the session's in-flight auto compaction (acked
+ * `{type:"compaction_cancel_ack", sessionId, active}` — `active` mirrors
+ * whether a compaction was really in flight; none in flight is a normal
+ * no-op ack, not an error). The run commands require the app's
  * RunManager and answer "run manager not available" without it. Unknown
  * commands and malformed JSON get an `{type:"error"}` frame and the
  * connection stays open. Connections that never authenticate are reaped by a
@@ -339,6 +343,16 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
         // The aborted outcome arrives as run.completed {stopReason:"aborted"}
         // on the bus, once the loop reaches its next abort checkpoint.
         return send(socket, { type: "run_cancel_ack", sessionId })
+      }
+      case "compaction.cancel": {
+        const run = opts.run
+        if (run === undefined) return send(socket, { type: "error", message: "run manager not available" })
+        const { sessionId } = msg
+        if (typeof sessionId !== "string" || sessionId.length === 0) {
+          return send(socket, { type: "error", message: "compaction.cancel requires a non-empty string sessionId" })
+        }
+        const active = run.cancelCompaction(sessionId)
+        return send(socket, { type: "compaction_cancel_ack", sessionId, active })
       }
       default:
         return send(socket, {

@@ -19,7 +19,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AddressInfo } from "node:net"
 import WebSocket from "ws"
-import { MemoryStore, SessionStore, loadConfig, resolvePaths } from "@kclaw/core"
+import { MemoryStore, SessionStore, loadConfig, newAssistantMessage, newMessage, resolvePaths } from "@kclaw/core"
 import type {
   AgentEvent,
   AssistantMessage,
@@ -27,6 +27,7 @@ import type {
   KclawPaths,
   LlmClient,
   LlmStreamEvent,
+  Message,
   MessageCreatedPayload,
   MessageQueuedPayload,
   RunCompletedPayload,
@@ -76,6 +77,46 @@ function hangingClient(): LlmClient {
   }
 }
 
+/** Plain end_turn text turn (usage far below any line). */
+function textTurn(text: string): LlmStreamEvent[] {
+  return [
+    { type: "text_delta", delta: text },
+    { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 2 } },
+  ]
+}
+
+/**
+ * tool_use round whose usage anchors the NEXT waterline check — inputTokens is
+ * picked to push the estimate over the red line (the in-run compaction trigger).
+ */
+function execToolTurnWithUsage(callId: string, command: string, inputTokens: number): LlmStreamEvent[] {
+  return [
+    { type: "tool_call_started", index: 0, callId, name: "exec" },
+    { type: "tool_call_delta", index: 0, delta: JSON.stringify({ command }) },
+    { type: "message_done", stopReason: "tool_use", usage: { inputTokens, outputTokens: 2 } },
+  ]
+}
+
+/**
+ * Seed n user/assistant history pairs (历史问题i / 历史回答i). Assistant
+ * messages carry a real usage anchor (inputTokens 10_000) so the waterline
+ * estimate reads the seeded history as over-budget, not trivially empty.
+ */
+function seedHistory(sessions: SessionStore, sessionId: string, pairs: number): Message[] {
+  const seeded: Message[] = []
+  for (let i = 1; i <= pairs; i++) {
+    const u = newMessage(sessionId, "user", [{ id: `seed-u-${i}`, type: "text", text: `历史问题${i}` }])
+    const a = newAssistantMessage(
+      sessionId, "mock-model", [{ id: `seed-a-${i}`, type: "text", text: `历史回答${i}` }],
+      { inputTokens: 10_000, outputTokens: 0 },
+    )
+    sessions.appendMessage(sessionId, u)
+    sessions.appendMessage(sessionId, a)
+    seeded.push(u, a)
+  }
+  return seeded
+}
+
 interface Env {
   paths: KclawPaths
   config: KclawConfig
@@ -103,6 +144,8 @@ async function makeWsRun(
     defaultDisposition?: "steer" | "wait" | "interrupt"
     /** Per-name executor overrides handed straight to the RunManager (test seam). */
     tools?: Map<string, ToolExecutor>
+    /** Config patch applied before the RunManager is built (run.test.ts patchConfig twin). */
+    configure?: (c: KclawConfig) => void
   } = {},
 ): Promise<{ env: Env; url: string }> {
   const home = mkdtempSync(join(tmpdir(), "kclaw-wsr-home-"))
@@ -119,6 +162,9 @@ async function makeWsRun(
   // Test-injection seam: the disposition a no-disposition send_message
   // resolves to (spec §6 chain: explicit > session override > config default).
   if (opts.defaultDisposition !== undefined) config.sessions.defaultDisposition = opts.defaultDisposition
+  // Test-injection seam: config patch before the manager locks it in (e.g.
+  // tiny contextTokens to drive the compaction waterlines deterministically).
+  opts.configure?.(config)
 
   const sessions = new SessionStore(paths.sessionsDir)
   const memory = new MemoryStore({ notesDir: paths.memoryNotesDir, indexDb: paths.memoryIndexDb })
@@ -692,5 +738,95 @@ describe("ws spec §8 event sequences (steer / wait / interrupt end-to-end)", ()
     await waitFor(frames, (f) => createdFor(frames, ack.messageId) === f)
     expect(env.sessions.readMessages(session.id).some((m) => m.id === ack.messageId)).toBe(true)
     await frameOf(frames, "run.completed", 2) // 新 run 正常收尾
+  })
+})
+
+/**
+ * `compaction.cancel` over the wire (Task 8): rides RunManager.cancelCompaction.
+ * Pinned semantics:
+ * - ack `compaction_cancel_ack {sessionId, active}` — active mirrors whether an
+ *   auto compaction was REALLY in flight at cancel time;
+ * - no in-flight compaction is a normal no-op ack (active:false), never an
+ *   error frame — the UI button races the compaction's own completion;
+ * - the cancel takes effect on the bus: the parked in-run compaction ends as
+ *   compaction.completed {result:"cancelled"} and the run itself carries on.
+ */
+describe("ws compaction.cancel", () => {
+  it("acks active:true and cuts an in-flight in-run compaction; the run itself carries on", async () => {
+    // 水位顶线手法（T7 run.test.ts 同款）：contextTokens=10 → 红线 8.5；
+    // 第一轮 exec 轮 usage 9 顶过红线 → 迭代边界发起中途压缩，压缩自己的
+    // 摘要请求（第 2 次调用）挂在 gate 上，compaction.cancel 从 ws 掐它。
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    let n = 0
+    const llm: LlmClient = {
+      async *stream(): AsyncIterable<LlmStreamEvent> {
+        n += 1
+        if (n === 1) {
+          yield* execToolTurnWithUsage("c1", "echo hi", 9) // anchors over the red line (8.5)
+          return
+        }
+        if (n === 2) {
+          // the in-run compaction's segment summary parks here; cancel lands meanwhile
+          yield { type: "text_delta", delta: "段摘要（半截）" }
+          await gate
+          yield { type: "text_delta", delta: "（后半）" }
+          return
+        }
+        yield* textTurn("完成") // the run continues past the cancelled compaction
+      },
+    }
+    const { env, url } = await makeWsRun(llm, {
+      configure: (c) => {
+        c.sessions.contextTokens = 10
+        c.permissions.allow = ["exec:echo*"]
+      },
+    })
+    const session = env.sessions.create("ws 取消压缩会话")
+    seedHistory(env.sessions, session.id, 2)
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await frameOf(frames, "subscribed")
+
+    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "执行一下" }))
+    await frameOf(frames, "send_message_ack")
+    const started = await eventOf(frames, "compaction.started") // the compaction is parked on the gate
+    expect(started.payload).toEqual({ phase: "in-run" })
+
+    ws.send(JSON.stringify({ type: "compaction.cancel", sessionId: session.id }))
+    expect(await frameOf(frames, "compaction_cancel_ack")).toEqual({
+      type: "compaction_cancel_ack", sessionId: session.id, active: true,
+    })
+    release()
+
+    // the cut is visible on the bus: cancelled compaction, then the run ends normally
+    const completed = await eventOf(frames, "compaction.completed")
+    expect(completed.payload).toEqual({ segments: 0, kept: 0, phase: "in-run", result: "cancelled" })
+    const done = await eventOf(frames, "run.completed")
+    expect((done.payload as RunCompletedPayload).stopReason).toBe("end_turn")
+  })
+
+  it("acks active:false as a plain no-op when nothing is in flight (button race, not an error)", async () => {
+    const { env, url } = await makeWsRun(gatedTextClient("不该执行").llm)
+    const session = env.sessions.create("ws 空取消会话")
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+
+    ws.send(JSON.stringify({ type: "compaction.cancel", sessionId: session.id }))
+    expect(await frameOf(frames, "compaction_cancel_ack")).toEqual({
+      type: "compaction_cancel_ack", sessionId: session.id, active: false,
+    })
+    await sleep(50)
+    expect(frames.filter((f) => f.type === "error")).toEqual([]) // 前端按钮竞态下不报错
+
+    // the command channel still works afterwards
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: "ses_probe" }))
+    await frameOf(frames, "subscribed")
+    expect(env.sessions.readMessages(session.id)).toEqual([]) // nothing ran
   })
 })
