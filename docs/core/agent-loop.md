@@ -49,6 +49,13 @@ export interface AgentDeps {
   onUserMessage?(message: Message): Message   // 用户消息增强（note 注入）；抛错 → run.failed
   steering?(): Message[]              // 引导注入口：每轮工具批次后、下一次 llm.stream 前调用，
                                       // 返回本轮要注入的消息（空数组 = 无）；抛错 → run.failed "steering_failed"
+  midRunCompaction?(): Promise<ActiveSummary | null>
+                                      // 运行中压缩（中断）注入口：同样在迭代边界调用，非空则把本轮
+                                      // 已累积的对话压成摘要、后续请求只带摘要 + 新内容（见 compaction.md 触发点二）
+  onContextOverflow?(err: unknown): Promise<ActiveSummary | null>
+                                      // 溢出急救：llm 抛上下文超限错误且本轮尚无任何事件时，重试恰好一次，
+                                      // 钩子返回的摘要用于重试请求；返回 null 则不重试（见 compaction.md 触发点三）
+  tokenBudget?: number                // 请求预算（token 数）：驱动工具输出省略/历史逐出（见 compaction.md 机制二）
   onEvent(e: AgentEvent): void
   onMessage(m: Message): void
 }
@@ -116,8 +123,9 @@ run.started {trigger}
 
 `toProviderMessages(history, window, opts?)`（`packages/core/src/agent/context.ts`）是协议消息 → provider 请求的唯一翻译点：
 
-- **滑动窗口**（只保留最近 N 条历史、随新消息整体前移）：`history.slice(-window)`（window 默认 200），system prompt 不占窗口。服务端（RunManager）的长会话会在 run 开始前先做 token 触发的分层压缩——把较老的历史压成摘要并传入切片后的 history（见 [compaction](./compaction.md)），窗口截断仅作为未压缩/压缩失败时的极端保险。
-- **工具输出省略**（`opts.toolResultKeep`，server 从 `config.sessions.toolResultKeep` 传入，默认 8）：从最新消息往前数，最近 N 个工具结果原样保留，更早的把输出文本替换成一行占位符 `[此工具输出已省略：<工具名> <参数摘要>，可重新调用获取]`（调用失败加"（该次调用失败）"）。只影响发出的请求，JSONL 存储不动；配对关系不变，不产生无效请求。不传参数时行为完全不变（全部保留）。详见 [compaction](./compaction.md) 机制三。
+- **滑动窗口**（只保留最近 N 条历史、随新消息整体前移）：`history.slice(-window)`（window 默认 200），system prompt 不占窗口。窗口截断仅作为未压缩/压缩失败时的极端保险；长会话的正常收敛靠压缩（见 [compaction](./compaction.md)）：压缩后 `history` 里较老的段落被替换为一条"早期对话脉络"摘要 system 消息（由宿主在调用 `runAgent` 前先跑 `compactSession`/自动压缩拿到 `ActiveSummary`，再经 `buildMessages` 拼进待发送的数组——详见下一节 `toProviderMessages` 与 [run-manager](../server/run-manager.md) 的装配），循环本身不感知也不改动 JSONL 里的原始消息。
+- **工具输出省略**（`opts.toolResultKeep`，server 从 `config.sessions.toolResultKeep` 传入，默认 8）：从最新消息往前数，最多保留最近 N 个工具结果原文（条数上限，之前是固定截断数），更早的把输出文本替换成一行占位符 `[此工具输出已省略：<工具名> <参数摘要>，可重新调用获取]`（调用失败加"（该次调用失败）"）。传了 `opts.tokenBudget` 时在条数上限内再做预算驱动逐出：以"非工具结果内容的估算 token + 被上限挤掉结果的占位行"为基线，从最新到最旧逐条装填工具结果，装不下（含其之后全部）一并省略。两者都只影响发出的请求，JSONL 存储不动；配对关系不变，不产生无效请求。不传任何 opts 时行为完全不变（全部保留）。详见 [compaction](./compaction.md) 机制二/三。
+- **脉络摘要注入**（`opts.summary`，类型 `ActiveSummary { upto, top }`）：非空时在结果数组**最前面**注入一条 `{ role: "system", content: "早期对话脉络：<top>" }`。它排在切片后的对话之前；provider 适配层再在它前面加真正的 system 提示（persona），所以模型看到的最终顺序是 **persona → 脉络 → 对话**。原始 `req.system` 不被覆盖，JSONL 里也没有这条注入（只在发送的请求里）。
 - **孤儿 tool 消息丢弃**：窗口切在 assistant 与 tool 消息之间时，开头的连续 `role:"tool"` 消息被 `shift` 丢弃——OpenAI 兼容 API 拒收无配对调用的 tool 结果。
 - **无配对的 tool_call 剔除**：assistant 的 `tool_call` 块只有当其后（窗口内）存在配对的 `tool_result` 才转成 `toolCalls` 发送；悬空调用会被 400。
 - **块级转换**：user/assistant 的 text 拼接为 content；note 转 `[system note] <text>` 行（对模型可见、可追溯）；tool 消息的每个 `tool_result` 转成一条消息，error 结果加 `[error] ` 前缀；assistant 没有 text 时 content 置 null、只带 toolCalls；thinking 不转换，模型看不到自己之前的思考内容。attachment 块按携带的内容分三种转法：带 `base64` 数据且 MIME 是 `image/*` 的转成一个多模态 `image_url` 内容段（data: URL 形式，与文本段并列为 content 数组的元素）；带内联 `text` 正文的转成 `[附件 <名称>]` 加正文；两者都不满足的只转一行元数据提示（`[附件 <名称>（<mime>，仅元数据）已保存，路径 <path>，可用 fs_read 读取]`），需要内容时由模型自己调 fs_read。
@@ -179,7 +187,7 @@ daemon 侧 `RunManager.cancel(sessionId)` 调 `AbortController.abort()`，循环
 ## 关联
 
 - [protocol](./protocol.md)：Message/Block/Event 的字段与事件全表
-- [compaction](./compaction.md)：token 触发的分层压缩、工具输出省略与 window 200 的分工
+- [compaction](./compaction.md)：水位与双档触发线、四个触发点（收尾/中断/溢出急救/手动）、预算驱动省略与 window 200 的分工
 - [provider](./provider.md)：OpenAI 兼容流解析与 withRetry
 - [permissions](./permissions.md)：判定链与规则语法（allow/deny 的来源）
 - [run-manager](../server/run-manager.md)：daemon 侧如何装配这些依赖

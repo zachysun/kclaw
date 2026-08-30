@@ -161,7 +161,14 @@ export interface ToolResultDeltaPayload { messageId: string; callId: string; del
 export interface LlmStartedPayload   { model: string; attempt: number }
 export interface LlmCompletedPayload { usage: Usage; stopReason: StopReason; latencyMs: number }
 export interface LlmFailedPayload    { error: { code: string; message: string }; willRetry: boolean }
-export interface CompactionCompletedPayload { segments: number; kept: number }
+// phase: 压缩发生在哪个时机——收尾（post-run）/ 运行中（in-run）/ 手动（manual）
+export type CompactionPhase = "in-run" | "post-run" | "manual"
+export interface CompactionStartedPayload { phase: CompactionPhase }
+// result 必达：started 一旦发出，completed 必然随之而来（ok/failed/cancelled）；
+// 非 ok 时 segments/kept 为 0。预算未过线、压缩没开始则两个事件都不发。
+export interface CompactionCompletedPayload {
+  segments: number; kept: number; phase: CompactionPhase; result: "ok" | "failed" | "cancelled"
+}
 
 export interface ConfirmationRequestedPayload {
   confirmationId: string
