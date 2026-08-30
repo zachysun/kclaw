@@ -143,6 +143,30 @@ describe("runTrigger", () => {
     expect(memoryMd).toContain("| old | 旧线 | inactive | 2026-08-13 |")
   })
 
+  it("empty-batch sweep consolidates the inactivated thread into global cognitions", async () => {
+    // 静止项目：空批次收束到期线后同样触发内化（spec 4.2/6）——否则该线的认知
+    // 永远不会被总结（线不复活、收束只扫 active，之后再无新情节触发内化）。
+    const projectDir = join(root, "memory", "projects", projectIdFor(WORKDIR))
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(join(projectDir, "old.md"), [
+      "---", "topic: old", "title: 旧线", "status: active", "created: 2026-08-01", "updated: 2026-08-13", "---", "",
+      "## 2026-08-13 · 旧情节", "", "- 做了什么：旧内容", "",
+    ].join("\n"), "utf8")
+    const written: Array<{ path: string; kind: string }> = []
+    const llm = scriptedLlm([
+      JSON.stringify({ actions: [{ target: "rule", name: "general", op: "append", content: "旧线教训：静止项目也要定期收束" }] }),
+    ])
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      resolveLlm: () => ({ llm, model: "m" }),
+      now: () => new Date("2026-08-28T00:00:00Z"), // 距线 updated（8-13）15 天 ≥ 14
+      emit: (e) => { written.push({ path: e.path, kind: e.kind }) },
+    })
+    await pipe.runTrigger(WORKDIR, "interval") // 空批次：范围空，只有收束 + 内化走 LLM
+    const rulePath = join(root, "memory", "global", "rule", "general.md")
+    expect(written.some((w) => w.path === rulePath && w.kind === "cognition")).toBe(true)
+    expect(readFileSync(rulePath, "utf8")).toContain("静止项目也要定期收束")
+  })
+
   it("revives an inactive thread on a new episode (spec 5)", async () => {
     const meta = sessions.create("s", undefined, WORKDIR)
     seedMessages(meta.id, ["线复活内容"])

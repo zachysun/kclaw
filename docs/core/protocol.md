@@ -239,11 +239,11 @@ export function newId(prefix: IdPrefix): string {
 | `evt` | `events.ts` 的 makeEvent |
 | `run` | `agent/loop.ts` 的 runAgent |
 | `conf` | `permissions/engine.ts` 的确认 id 工厂 |
-| `mem` | `memory/system.ts` |
+| `mem` | 已声明、当前无生成点（v1 note id 前缀，v2 线/认知文件不用前缀 id，见下） |
 | `job` | `jobs/scheduler.ts` |
 | `att` | server 的上传路由（`routes/attachments.ts`，落盘文件名 `<att_…>__<原名>`） |
 
-`call` 前缀已声明但当前无生成点——`callId` 由 provider 原样传入（OpenAI 的 tool_call id，缺失时 provider 合成 `call_idx_<index>`，见 `provider/openai-compat.ts`）。单调 ULID 保证同进程内 ID 按时间排序，日志/JSONL 天然有序。
+`call` 前缀已声明但当前无生成点——`callId` 由 provider 原样传入（OpenAI 的 tool_call id，缺失时 provider 合成 `call_idx_<index>`，见 `provider/openai-compat.ts`）。`mem` 前缀同 `call`：v2 中 `newId("mem")` 全仓无调用处（线/认知文件按 `topic`/`kind-name` 命名，不生成 mem_* id），保留声明仅为兼容阅读 v1 的 note id（`mem_<ULID>`）。单调 ULID 保证同进程内 ID 按时间排序，日志/JSONL 天然有序。
 
 ---
 

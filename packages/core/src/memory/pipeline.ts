@@ -234,6 +234,10 @@ export class MemoryPipeline {
       if (inactivated.length > 0) {
         this.#reindexProject(projectId)
         this.#rebuildMemoryMd(projectId)
+        // 顺带内化检查（spec 4.2/6）：本次收束的线同样要总结——否则静止项目的
+        // 到期线收束为 inactive 后，认知永远不会被内化（线不复活、收束只扫
+        // active，之后再无新情节触发）。
+        await this.#maybeConsolidateTouched(projectId, new Set(inactivated))
       }
       return
     }
