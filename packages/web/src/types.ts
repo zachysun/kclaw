@@ -121,7 +121,9 @@ export interface ToolMessage extends Message {
 /** One line of a session's compactions.jsonl audit log (GET /sessions/:id/compactions). */
 export interface CompactionRecord {
   at: string
-  trigger: "auto" | "manual"
+  trigger: "auto" | "in-run" | "manual"
+  /** 超限紧急压缩的审计标记（仅自动压缩可能携带）。 */
+  emergency?: true
   focus?: string
   from: string | null
   upto: string

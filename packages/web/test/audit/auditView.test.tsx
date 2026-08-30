@@ -291,6 +291,47 @@ describe("AuditView (trail)", () => {
     unmount(root, container)
   })
 
+  it("labels compaction rows by trigger (收尾/运行中/手动) and appends 超限急救", async () => {
+    const api = makeApi()
+    const record = (overrides: Record<string, unknown>) => ({
+      at: "2026-08-19T10:01:30.000Z",
+      trigger: "auto",
+      from: null,
+      upto: "m2",
+      messages: 2,
+      segmentSummary: "段摘要内容",
+      top: "总摘要内容",
+      ...overrides,
+    })
+    api.get.mockImplementation(async (path: string) => {
+      if (path === "/sessions") return [session("s1", "会话1")]
+      if (path === "/sessions/s1/messages") return []
+      if (path === "/sessions/s1/compactions") {
+        return [
+          record({ trigger: "auto" }),
+          record({ trigger: "in-run", at: "2026-08-19T10:02:30.000Z" }),
+          record({ trigger: "manual", focus: "api 设计", at: "2026-08-19T10:03:30.000Z" }),
+          record({ trigger: "auto", emergency: true, at: "2026-08-19T10:04:30.000Z" }),
+        ]
+      }
+      throw new Error(`unexpected path: ${path}`)
+    })
+
+    const { container, root } = await mount(api)
+    selectValue(container.querySelector('[data-testid="trail-session-select"]') as HTMLSelectElement, "s1")
+    await flush()
+
+    const summary = (i: number): string =>
+      container.querySelector(`[data-testid="compaction-row-cp-${i}"]`)?.textContent ?? ""
+    // auto → 收尾, in-run → 运行中, manual → 手动（focus）现状不变。
+    expect(summary(0)).toContain("自动（收尾）")
+    expect(summary(1)).toContain("自动（运行中）")
+    expect(summary(2)).toContain("手动（api 设计）")
+    // emergency 追加在 trigger 标签之后。
+    expect(summary(3)).toContain("自动（收尾）·超限急救")
+    unmount(root, container)
+  })
+
   it("shows the empty state when the selected session has no messages", async () => {
     const api = makeApi()
     api.get.mockImplementation(async (path: string) => {

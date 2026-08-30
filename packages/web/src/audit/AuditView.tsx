@@ -152,7 +152,10 @@ export function AuditView({ api }: { api: ApiClient }) {
                   <span className="trail-summary">
                     {row.record.trigger === "manual"
                       ? `手动${row.record.focus ? `（${row.record.focus}）` : ""}`
-                      : "自动"}
+                      : row.record.trigger === "in-run"
+                        ? "自动（运行中）"
+                        : "自动（收尾）"}
+                    {row.record.emergency === true ? "·超限急救" : ""}
                     {` · ${row.record.from ?? "会话开头"} – ${row.record.upto} · ${row.record.messages} 条`}
                   </span>
                   <span className="trail-meta muted">{new Date(row.at).toLocaleString()}</span>
