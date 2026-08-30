@@ -9,6 +9,7 @@ import { EventBus } from "./bus.js"
 import type { RunManager } from "./run.js"
 import { registerWsRoutes } from "./ws.js"
 import { registerSessionRoutes } from "./routes/sessions.js"
+import { registerMemoryRoutes } from "./routes/memory.js"
 import { registerAttachmentRoutes } from "./routes/attachments.js"
 import { registerJobRoutes } from "./routes/jobs.js"
 import { registerConfigRoutes } from "./routes/config.js"
@@ -149,6 +150,8 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   // opts.run is the daemon's RunManager (same instance the ws routes use);
   // the session routes only need it for POST /sessions/:id/compact.
   registerSessionRoutes(app, { sessions, config, run: opts.run })
+  // spec 9.2 的 /memory 路由族：无 memory 装配时全部 503，不影响既有路由。
+  registerMemoryRoutes(app, { memory: opts.memory })
   if (opts.attachmentsDir !== undefined) {
     registerAttachmentRoutes(app, { sessions, attachmentsDir: opts.attachmentsDir })
   }

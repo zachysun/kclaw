@@ -326,7 +326,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     attachmentsDir: paths.attachmentsDir,
     usage,
     webDist: resolveWebDist(opts.webDist),
-    memory, // Task 14 的 /memory 路由消费（本期只留接口，不实现路由）
+    memory, // Task 14 的 /memory 路由消费（spec 9.2 管理界面）
   })
   await app.listen({ port: opts.port ?? 0, host: HOST })
   const address = app.server.address()
