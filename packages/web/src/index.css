@@ -1530,6 +1530,114 @@ select:focus {
   padding: 3px 10px;
 }
 
+/* memory — 记忆管理页（spec 9.3）：左列清单 + 右列整文件编辑器 */
+.memory-view {
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-start;
+}
+
+.memory-view h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 13px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.memory-list {
+  flex: 0 0 300px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 40%;
+}
+
+.memory-list section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface);
+}
+
+.memory-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.memory-list li button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 4px 8px;
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.memory-list li button:hover:not(:disabled) {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.memory-editor {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface);
+}
+
+.memory-editor textarea {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  resize: vertical;
+}
+
+.memory-editor-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.memory-editor-actions button:first-child {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.memory-editor-actions button:last-child {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-dim);
+}
+
+.memory-editor-actions button:last-child:hover:not(:disabled) {
+  background: var(--danger);
+  color: #1a0d0b;
+}
+
+@media (max-width: 700px) {
+  .memory-view {
+    flex-direction: column;
+  }
+
+  .memory-list {
+    flex: none;
+    max-width: none;
+  }
+}
+
 /* ---- PWA / offline ---- */
 .offline-banner {
   position: sticky;

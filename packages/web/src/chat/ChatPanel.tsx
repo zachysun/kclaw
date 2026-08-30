@@ -172,6 +172,12 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
                 const title = (frame.payload as { title?: unknown }).title
                 if (typeof title === "string") onSessionRenamed?.(sessionId, title)
               }
+              // memory.written 是跨视图的落盘反馈（spec 9.3 写入通知）：不进
+              // reducer，走 ChatView 的一次性 notice（输入即清，见 onDraftChange）。
+              if (frame.type === "memory.written") {
+                const p = (frame.payload as { path?: unknown }).path
+                if (typeof p === "string") setNotice(`已写入记忆: ${p}`)
+              }
               updateView((v) => applyEvent(v, frame))
               // 空文本行 = 跨客户端排队的消息（本端无发送上下文）→ 拉快照补文本
               if (viewRef.current.queue.some((e) => e.text === "")) void refreshQueueText()

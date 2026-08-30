@@ -90,6 +90,7 @@ export type EventType =
   | "note.emitted"
   | "compaction.started" | "compaction.completed"
   | "message.queued" | "message.steered" | "message.queue_cancelled"
+  | "memory.written"
 
 type EventKind =
   | { type: "run.started"; payload: { trigger: string } }
