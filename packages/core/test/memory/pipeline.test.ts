@@ -157,6 +157,84 @@ describe("runTrigger", () => {
   })
 })
 
+describe("consolidate", () => {
+  it("turning a thread inactive via extraction triggers consolidation into global rule file", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    seedMessages(meta.id, ["修完了重连问题，决定以后重连改动必须带注释，此事完结"])
+    const written: Array<{ path: string; kind: string }> = []
+    const reply = JSON.stringify({
+      actions: [
+        { file: "ws-reconnect", op: "new-thread", thread: "ws-reconnect", title: "重连排查", content: "- 做了什么：修复\n- 结果：通过", status: "inactive" },
+      ],
+    })
+    const consolidateReply = JSON.stringify({
+      actions: [{ target: "rule", name: "general", op: "append", content: "## 重连改动规范\n\n重连相关改动必须带注释说明原因。", source: "ws-reconnect#2026-08-28" }],
+    })
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      llm: scriptedLlm([reply, consolidateReply]), model: "m",
+      emit: (e) => { written.push({ path: e.path, kind: e.kind }) },
+    })
+    await pipe.runTrigger(WORKDIR, "interval")
+    const rulePath = join(root, "memory", "global", "rule", "general.md")
+    expect(written.some((w) => w.path === rulePath && w.kind === "cognition")).toBe(true)
+    expect(readFileSync(rulePath, "utf8")).toContain("重连相关改动必须带注释")
+    expect(readFileSync(rulePath, "utf8")).toContain("<!-- 来源：ws-reconnect#2026-08-28 -->")
+  })
+
+  it("manual consolidate of an explicit topic", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    seedMessages(meta.id, ["内容"])
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      llm: scriptedLlm([
+        JSON.stringify({ actions: [{ file: "t1", op: "new-thread", thread: "t1", title: "T1", content: "情节" }] }),
+        JSON.stringify({ actions: [{ target: "persona", op: "append", content: "用户偏好简洁回复", source: "t1#2026-08-28" }] }),
+      ]),
+      model: "m",
+    })
+    await pipe.runTrigger(WORKDIR, "interval")
+    await pipe.consolidate(WORKDIR, "t1")
+    expect(readFileSync(join(root, "memory", "global", "persona.md"), "utf8")).toContain("用户偏好简洁回复")
+  })
+
+  it("skill target is skipped with a log, others still land", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    seedMessages(meta.id, ["内容"])
+    const logs: string[] = []
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      llm: scriptedLlm([
+        JSON.stringify({ actions: [{ file: "t1", op: "new-thread", thread: "t1", title: "T1", content: "情节", status: "inactive" }] }),
+        JSON.stringify({ actions: [
+          { target: "skill", name: "reconnect", op: "create", content: "SKILL.md" },
+          { target: "wiki", name: "kclaw", op: "create", content: "kclaw 是个人助理" },
+        ] }),
+      ]),
+      model: "m", log: (m) => logs.push(m),
+    })
+    await pipe.runTrigger(WORKDIR, "interval")
+    expect(readFileSync(join(root, "memory", "global", "wiki", "kclaw.md"), "utf8")).toContain("个人助理")
+    expect(logs.some((l) => l.includes("skill"))).toBe(true)
+    expect(existsSync(join(root, "memory", "global", "skill"))).toBe(false)
+  })
+
+  it("consolidate disabled via deps skips the LLM consolidate call", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    seedMessages(meta.id, ["内容"])
+    let calls = 0
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      llm: {
+        async *stream(): AsyncIterable<LlmStreamEvent> {
+          calls += 1
+          yield { type: "text_delta", delta: JSON.stringify({ actions: [{ file: "t1", op: "new-thread", thread: "t1", title: "T1", content: "x", status: "inactive" }] }) }
+          yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 0, outputTokens: 0 } }
+        },
+      },
+      model: "m", consolidateEnabled: false,
+    })
+    await pipe.runTrigger(WORKDIR, "interval")
+    expect(calls).toBe(1) // 只有提取调用，没有内化调用
+  })
+})
+
 function dirnameOf(p: string): string { return p.slice(0, p.lastIndexOf("/")) }
 function readDirDeep(dir: string): string[] {
   const out: string[] = []
