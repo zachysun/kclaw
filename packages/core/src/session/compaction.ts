@@ -52,10 +52,15 @@ export interface CompactionSegment { upto: string; summary: string }
 /** v2 compaction state persisted on SessionMeta (spec 5.1). */
 export interface CompactionState { segments: CompactionSegment[]; top: string; upto: string }
 
+/** 当前生效的压缩视图：upto 之前的原文不再发送，top 是总摘要（脉络项内容）。 */
+export interface ActiveSummary { upto: string; top: string }
+
 /** One audit line in a session's compactions.jsonl (spec 6A.1). */
 export interface CompactionRecord {
   at: string // ISO-8601
-  trigger: "auto" | "manual"
+  trigger: "auto" | "in-run" | "manual"
+  /** 超限紧急压缩（spec 5.6 的审计标记）；仅自动压缩可能携带。 */
+  emergency?: true
   focus?: string
   from: string | null // first message id of the compacted span; null = session start
   upto: string

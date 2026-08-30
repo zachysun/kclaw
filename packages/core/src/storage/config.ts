@@ -50,6 +50,8 @@ export interface KclawConfig {
     compactAtRatio?: number
     /** v2: post-compaction target for the verbatim window (× budget). Default 0.33. */
     compactTargetRatio?: number
+    /** v3: 运行中途检查线（红）。估算水位超过 budget × 此比例即在迭代边界触发中途压缩。缺省 0.85。 */
+    compactPanicRatio?: number
     /** v2: tool results kept verbatim in the provider view. Default 8. */
     toolResultKeep?: number
     /** 不带 disposition 的 send_message 取"会话覆盖 ?? 此默认"。缺省 "steer"。 */

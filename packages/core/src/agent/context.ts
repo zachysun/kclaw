@@ -2,11 +2,12 @@ import type { Message } from "../protocol/messages.js"
 import { isBlockType } from "../protocol/blocks.js"
 import type { ContentPart, ProviderMessage, ProviderToolCall } from "../provider/types.js"
 import { estimateTokens } from "../session/compaction.js"
+import type { ActiveSummary } from "../session/compaction.js"
 
 export function toProviderMessages(
   history: Message[],
   window: number,
-  opts?: { toolResultKeep?: number; tokenBudget?: number; summary?: { upto: string; top: string } },
+  opts?: { toolResultKeep?: number; tokenBudget?: number; summary?: ActiveSummary },
 ): ProviderMessage[] {
   const recent = history.slice(-window)
   // A tool message whose paired assistant message fell outside the window is
