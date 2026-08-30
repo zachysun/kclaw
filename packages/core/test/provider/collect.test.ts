@@ -11,6 +11,16 @@ function fakeLlm(events: LlmStreamEvent[] | Error): LlmClient {
   }
 }
 
+function fakeLlmStreamingForever(): LlmClient {
+  return {
+    async *stream(_req: LlmRequest): AsyncIterable<LlmStreamEvent> {
+      for (;;) {
+        yield { type: "text_delta", delta: "x" }
+      }
+    },
+  }
+}
+
 const req: LlmRequest = { model: "m", system: "s", messages: [], tools: [] }
 
 describe("collectStreamText", () => {
@@ -34,5 +44,13 @@ describe("collectStreamText", () => {
   it("propagates stream errors to the caller", async () => {
     const llm = fakeLlm(new Error("boom"))
     await expect(collectStreamText(llm, req)).rejects.toThrow("boom")
+  })
+
+  it("signal 中止时抛错且不返回部分文本", async () => {
+    const controller = new AbortController()
+    const llm = fakeLlmStreamingForever()
+    const p = collectStreamText(llm, { model: "m", system: "", messages: [], tools: [] }, { signal: controller.signal })
+    controller.abort()
+    await expect(p).rejects.toThrow()
   })
 })
