@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs"
 import { basename, join, resolve } from "node:path"
 import { writeFileAtomic } from "../storage/atomic.js"
 
@@ -38,7 +38,7 @@ export class MemoryLayout {
   }
 
   resolveProject(workdir: string): { id: string; dir: string } {
-    const { id } = this.ensureProject(workdir) // 读侧也统一走 ensure：目录无记忆时创建空目录无害且幂等
+    const id = projectIdFor(workdir)
     return { id, dir: this.projectDir(id) }
   }
 
