@@ -38,6 +38,7 @@ import {
   SegmentIndex,
 } from "@kclaw/core"
 import type {
+  ActiveSummary,
   AgentEvent,
   AttachmentBlock,
   CompactionPhase,
@@ -313,6 +314,14 @@ export class RunManager {
   readonly #active = new Map<string, AbortController>()
   /** 活动 run 的 outcome：steer 的参考 outcome / 降级时序。 */
   readonly #activeOutcomes = new Map<string, Promise<RunOutcome>>()
+  /**
+   * 每会话压缩取消标记（spec 5.3 第 6 条）：cancelCompaction 写入，压制本次
+   * 运行内的全部自动压缩（中途/收尾）；每次 #execute 开头清除——取消只作用于
+   * 当时那次运行，新运行从干净状态恢复。
+   */
+  readonly #compactionCancelled = new Set<string>()
+  /** 每会话在飞的自动压缩 controller：cancelCompaction 掐它；finally 清理。 */
+  readonly #compactionCtrl = new Map<string, AbortController>()
   /** Confirmation gateway shared by every run; injected or internally constructed. */
   readonly #broker: ConfirmationBroker
 
@@ -423,6 +432,22 @@ export class RunManager {
   }
 
   /**
+   * 取消自动压缩（spec 5.3 第 6 条，Task 8 的 ws 层调用）：abort 在飞的压缩
+   * controller（#compactV2 的取消分支吞掉中止，发 completed result:"cancelled"），
+   * 同时写 #compactionCancelled 标记——本次 #execute 内后续的中途/收尾压缩
+   * 钩子据此直接跳过；标记在下一次 #execute 开头清除，新运行恢复正常压缩。
+   * 返回：调用时刻是否存在在飞的压缩（false = 没什么可掐，但标记仍写入，
+   * 压制本次运行内尚未发生的自动压缩）。
+   */
+  cancelCompaction(sessionId: string): boolean {
+    this.#compactionCancelled.add(sessionId)
+    const ctrl = this.#compactionCtrl.get(sessionId)
+    if (ctrl === undefined) return false
+    ctrl.abort()
+    return true
+  }
+
+  /**
    * 排队取消（spec §5.6）：wait 随时、steer 注入前；已注入的不删（机器不删历史）。
    * 带 id：单条取消（先查可执行队列，再查 steer 缓冲；都不在且近期已注入 →
    * injected，进了 JSONL 机器不删）；不带 id：清空全部 wait + 未注入 steer，
@@ -484,7 +509,7 @@ export class RunManager {
     const history = sessions.readMessages(sessionId)
     const defaultModel = this.#deps.model ?? config.providers.entries[config.providers.default]?.model ?? ""
     const model = config.providers.entries[meta.model ?? ""]?.model ?? meta.model ?? defaultModel
-    const out = await this.compactV2(sessionId, history, "", config, llm, model, { focus, manual: true, phase: "manual" })
+    const out = await this.#compactV2(sessionId, history, "", config, llm, model, { focus, manual: true, phase: "manual" })
     return {
       message: out.compacted
         ? `压缩了 ${out.segments} 段，剩 ${out.active.length} 条原文消息`
@@ -639,6 +664,8 @@ export class RunManager {
   async #execute(sessionId: string, input: EnqueueInput, controller: AbortController): Promise<RunOutcome> {
     // controller 由 #executeEntry 在任何 await 之前创建并登记（spec §5.2）：
     // 出队执行的取消窗口与活动清理都在那里，这里只消费它的 signal。
+    // 压缩取消标记只压制一次运行（spec 5.3 第 6 条）：新运行从干净状态开始。
+    this.#compactionCancelled.delete(sessionId)
     const { config, paths, sessions, memory, bus, llm } = this.#deps
     const sessionMeta = sessions.meta(sessionId)
     const workspace = sessionMeta?.workdir ?? this.#deps.workspace
@@ -797,41 +824,28 @@ export class RunManager {
     const resolveEntry = (m: string): string => config.providers.entries[m]?.model ?? m
     const model = resolveEntry(input.model ?? sessionMeta?.model ?? defaultModel)
 
-    // --- pre-run context compaction v2 (spec 6) ------------------------------
-    // Any failure (LLM throw, updateMeta throw) falls back to the full
-    // history — the loop's own window remains the safety net. Failure logging
-    // and the completed(result:"failed") event happen INSIDE compactV2; this
-    // catch only applies the fallback. The run's abort signal rides along:
-    // cancelling the run mid-summarizer cancels the compaction too (the
-    // cancelled branch returns without throwing, so the fallback is the same).
-    let activeHistory = history
-    let compactNote: NoteBlock[] = []
-    try {
-      const compaction = await this.compactV2(sessionId, history, input.userText, config, runLlm, model, { phase: "post-run", signal: controller.signal })
-      activeHistory = compaction.active
-      if (compaction.summary !== undefined) {
-        compactNote = [{
-          id: newBlockId(),
-          type: "note",
-          kind: "compact",
-          text: `早期对话已压缩为 ${compaction.segments} 段（保留最近 ${compaction.active.length} 条原文；可用 session_search 检索早期细节）。摘要：\n${compaction.summary}`,
-          // UI-only meta: lets the webui collapse the context and show it
-          // once per compaction (segments growing = a new compaction happened).
-          compact: { segments: compaction.segments, kept: compaction.active.length },
-        }]
-      }
-    } catch {
-      // logged + announced inside compactV2 — fall back to the full history
-    }
+    // --- v3 compaction triggers (spec 5.1-5.3, 5.8) -------------------------
+    // 发消息零压缩（开场预压缩已删除）。三条触发路径全部由 server 注入：
+    // 中途（迭代边界水位 ≥ 红线，经循环钩子）、超限（onContextOverflow 急救）、
+    // 收尾（runAgent 返回后水位 ≥ 黄线）。水位锚定最后一条 assistant 的真实
+    // usage，黄/红两线的读点集中在此。
+    const budget = config.sessions.contextTokens ?? 128_000
+    const atRatio = config.sessions.compactAtRatio ?? 0.66
+    const panicRatio = config.sessions.compactPanicRatio ?? 0.85
 
     const outcome = await runAgent(
       {
         sessionId,
-        history: activeHistory,
+        history,
         system: this.#systemPrompt(paths.agentsMd),
         userText: input.userText, // ignored by the loop when userMessage is set
         trigger: input.trigger,
         userMessage,
+        // 运行起点的压缩视图（来自会话 meta）：upto（含）之前的原文不再发送，
+        // 脉络项由打包台垫在 messages[0]。
+        ...(sessionMeta?.compaction !== undefined
+          ? { compaction: { upto: sessionMeta.compaction.upto, top: sessionMeta.compaction.top } }
+          : {}),
       },
       {
         llm: runLlm,
@@ -844,8 +858,32 @@ export class RunManager {
         signal: controller.signal,
         llmAttempt: () => llmAttempt,
         toolResultKeep: config.sessions.toolResultKeep ?? 8,
+        // 省略预算（黄线值）透传给打包台：预算装不下的工具输出以省略占位符发送
+        tokenBudget: budget * atRatio,
         // steer 注入口（spec §5.1）：迭代边界取走缓冲区；Task 5 实装，本任务恒为空。
         steering: () => this.#drainSteer(sessionId),
+        // 中途压缩钩子（spec 5.3 第 5 条）：取消标记或 run 已中止 → 不压；
+        // 水位 < 红线 → 不压；否则独立可取消地压缩，返回新视图（下一次请求生效）。
+        midRunCompaction: () => {
+          if (this.#compactionCancelled.has(sessionId) || controller.signal.aborted) return Promise.resolve(null)
+          const boundaryHistory = sessions.readMessages(sessionId)
+          if (estimateContextTokens(boundaryHistory) < budget * panicRatio) return Promise.resolve(null)
+          return this.#runAutoCompaction(sessionId, boundaryHistory, config, runLlm, model, {
+            phase: "in-run",
+            signal: controller.signal,
+          })
+        },
+        // 超限急救钩子（spec 5.6）：不看水位线——"已经爆了"就是事实；emergency
+        // 压缩成功返回新视图由循环整次重发。await 归来时 run 已中止则返回 null
+        // （窄窗口：重发注定立刻被拆，不再多此一举）。
+        onContextOverflow: async () => {
+          const next = await this.#runAutoCompaction(sessionId, sessions.readMessages(sessionId), config, runLlm, model, {
+            phase: "in-run",
+            emergency: true,
+            signal: controller.signal,
+          })
+          return controller.signal.aborted ? null : next
+        },
         onUserMessage: (m) => {
           // The notes become part of the message BEFORE it is
           // persisted and completed. Persist first (events trail persisted
@@ -854,7 +892,7 @@ export class RunManager {
           // created → note.emitted ×N → completed. runId is known by now
           // (run.started is always a run's first event and precedes this
           // hook); the sessionId-only fallback is defensive only.
-          m.blocks.push(...jobNote, ...compactNote, ...notes)
+          m.blocks.push(...jobNote, ...notes)
           sessions.appendMessage(sessionId, m)
           if (input.trigger !== "job") {
             const firstText = m.blocks.find((b) => b.type === "text")?.text ?? ""
@@ -864,7 +902,7 @@ export class RunManager {
             )
           }
           const noteCtx = runId === undefined ? { sessionId } : { sessionId, runId }
-          for (const block of [...jobNote, ...compactNote, ...notes]) {
+          for (const block of [...jobNote, ...notes]) {
             busEmit(makeEvent("note.emitted", { messageId: m.id, block }, noteCtx))
           }
           return m
@@ -898,6 +936,23 @@ export class RunManager {
         })
       } catch (err) {
         console.error("kclaw usage record failed:", err)
+      }
+    }
+    // --- 收尾压缩（v3 触发三路之一，spec 5.1/5.4）-----------------------------
+    // run 正常结束且水位 ≥ 黄线：压缩一次。它在 #execute 内 await，驱动器的
+    // 串行化自动保证"压缩期间新消息排队"（spec 5.4），无需额外忙碌标记；
+    // aborted/error 的 run 不收尾（前者正在被拆，后者刚失败）。取消标记压制
+    // 本次运行内已被用户取消的压缩（spec 5.3 第 6 条）。
+    if (
+      outcome.stopReason !== "aborted" && outcome.stopReason !== "error"
+      && !this.#compactionCancelled.has(sessionId)
+    ) {
+      const postRunHistory = sessions.readMessages(sessionId)
+      if (estimateContextTokens(postRunHistory) >= budget * atRatio) {
+        await this.#runAutoCompaction(sessionId, postRunHistory, config, runLlm, model, {
+          phase: "post-run",
+          signal: controller.signal,
+        })
       }
     }
     return outcome
@@ -990,6 +1045,47 @@ export class RunManager {
   }
 
   /**
+   * 自动压缩装配（v3,spec 5.3/5.6/5.8）:中途钩子、超限钩子与收尾压缩共用。
+   * 独立 AbortController 登记 #compactionCtrl（cancelCompaction 掐它），并监听
+   * run 的 signal——run 中止顺带掐压缩;finally 清理。取消标记或 run signal 已
+   * 中止时不开工（三路统一入口,manual 路径不经此——emergency 因此永远不会与
+   * manual 组合)。任何异常打一行 `kclaw compaction (phase) failed:` 后返回
+   * null（钩子侧"压缩失败不补救",真失败的 started/completed 与第一行日志
+   * 已由 #compactV2 发出/记录）。压缩成功返回新视图 { upto, top },水位不够
+   * 或无可压缩边界时 #compactV2 返回 compacted:false → null。
+   */
+  async #runAutoCompaction(
+    sessionId: string,
+    history: Message[],
+    config: KclawConfig,
+    llm: LlmClient,
+    model: string,
+    opts: { phase: CompactionPhase; signal?: AbortSignal; emergency?: boolean },
+  ): Promise<ActiveSummary | null> {
+    if (this.#compactionCancelled.has(sessionId) || opts.signal?.aborted === true) return null
+    const ctrl = new AbortController()
+    this.#compactionCtrl.set(sessionId, ctrl)
+    const onAbort = (): void => { ctrl.abort() }
+    opts.signal?.addEventListener("abort", onAbort, { once: true })
+    try {
+      const out = await this.#compactV2(sessionId, history, "", config, llm, model, {
+        phase: opts.phase,
+        signal: ctrl.signal,
+        ...(opts.emergency === true ? { emergency: true } : {}),
+      })
+      return out.compacted && out.upto !== undefined
+        ? { upto: out.upto, top: out.summary ?? "" }
+        : null
+    } catch (err) {
+      console.error(`kclaw compaction (${opts.phase}) failed:`, err)
+      return null
+    } finally {
+      opts.signal?.removeEventListener("abort", onAbort)
+      if (this.#compactionCtrl.get(sessionId) === ctrl) this.#compactionCtrl.delete(sessionId)
+    }
+  }
+
+  /**
    * v2 layered compaction (spec 6). Trigger: estimate ≥ budget×ratio, or a
    * manual focus. Two tool-less LLM calls (segment summary, top merge), then
    * ONE meta write — no state lands unless both calls succeed, so a throw
@@ -1006,12 +1102,8 @@ export class RunManager {
    * happen" — and logged here exactly once), "cancelled" when the signal
    * aborted (swallowed — the run is being torn down, not failing). Below the
    * water mark or without a boundary, NEITHER event fires (nothing began).
-   *
-   * Declared with the TS `private` keyword (not `#`): the overflow/in-run
-   * caller lands in Task 7, and the audit-mapping tests reach the method
-   * directly until then. Compile-time visibility is unchanged.
    */
-  private async compactV2(
+  async #compactV2(
     sessionId: string,
     history: Message[],
     userText: string,

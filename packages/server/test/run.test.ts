@@ -15,7 +15,7 @@ import { join } from "node:path"
 
 import { MemoryStore, SessionStore, UsageStore, loadConfig, newAssistantMessage, newMessage, resolvePaths, withRetry } from "@kclaw/core"
 import type {
-  AgentEvent, AssistantMessage, CompactionPhase, KclawConfig, KclawPaths, LlmClient, LlmRequest, LlmStreamEvent, Message, ToolExecutor, ToolMessage, ToolResultBlock,
+  AgentEvent, AssistantMessage, KclawConfig, KclawPaths, LlmClient, LlmRequest, LlmStreamEvent, Message, ToolExecutor, ToolMessage, ToolResultBlock,
 } from "@kclaw/core"
 import { EventBus } from "../src/bus.js"
 import { ConfirmationBroker } from "../src/confirm.js"
@@ -69,10 +69,15 @@ function textTurn(text: string): LlmStreamEvent[] {
 }
 
 function execToolTurn(callId: string, command: string): LlmStreamEvent[] {
+  return execToolTurnWithUsage(callId, command, 1)
+}
+
+/** tool_use round whose usage anchors the NEXT waterline check (drives the red line). */
+function execToolTurnWithUsage(callId: string, command: string, inputTokens: number): LlmStreamEvent[] {
   return [
     { type: "tool_call_started", index: 0, callId, name: "exec" },
     { type: "tool_call_delta", index: 0, delta: JSON.stringify({ command }) },
-    { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 1, outputTokens: 2 } },
+    { type: "message_done", stopReason: "tool_use", usage: { inputTokens, outputTokens: 2 } },
   ]
 }
 
@@ -797,6 +802,33 @@ function failFirstClient(message: string, then: LlmStreamEvent[]): LlmClient {
   }
 }
 
+/** First call plays `ok`, every later call throws `message` (a failing post-run summarizer). */
+function firstOkThenFailClient(ok: LlmStreamEvent[], message: string): LlmClient {
+  let n = 0
+  return {
+    async *stream() {
+      n += 1
+      if (n === 1) {
+        yield* ok
+        return
+      }
+      throw new Error(message)
+    },
+  }
+}
+
+/** First call throws `message` (zero events), later calls play `script` in order (last repeats). */
+function throwFirstClient(message: string, script: LlmStreamEvent[][]): LlmClient {
+  let n = 0
+  return {
+    async *stream() {
+      n += 1
+      if (n === 1) throw new Error(message)
+      yield* script[Math.min(n - 2, script.length - 1)]!
+    },
+  }
+}
+
 /**
  * Seed n user/assistant history pairs (old1a, old1b, old2a, ...). Assistant
  * messages carry a real usage anchor (inputTokens 10_000): the v2 trigger
@@ -826,65 +858,80 @@ function textTurnWithUsage(text: string, inputTokens: number): LlmStreamEvent[] 
   ]
 }
 
-describe("RunManager context compaction v2", () => {
-  it("compacts over-budget history: two summarizer calls, segment index, compact note", async () => {
+describe("RunManager context compaction v3", () => {
+  it("sends over the yellow line with zero wait: run starts first, no compaction before run.started, full history", async () => {
     const reqs: LlmRequest[] = []
     const { env, manager } = makeEnv(
-      recordRequests(scriptClient([textTurn("段摘要A"), textTurn("总摘要A"), textTurn("主回复")]), reqs),
-      (c) => { c.sessions.contextTokens = 10 }, // tiny budget: force the trigger
+      recordRequests(scriptClient([textTurnWithUsage("主回复", 10_000), textTurn("段摘要A"), textTurn("总摘要A")]), reqs),
+      (c) => { c.sessions.contextTokens = 10 }, // tiny budget: the waterline is over the line
     )
-    const session = env.sessions.create("压缩会话")
-    const seeded = seedHistory(env.sessions, session.id, 2) // 4 messages
+    const session = env.sessions.create("零等待会话")
+    seedHistory(env.sessions, session.id, 2) // 4 messages, anchored at 10_000 tokens
     const socket = new FakeSocket()
     env.bus.subscribe(session.id, socket)
 
     await manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
 
-    // three LLM calls: segment summary, top merge, then the main conversation
-    expect(reqs.length).toBe(3)
-    const [segReq, mergeReq, mainReq] = reqs
-    expect(segReq!.tools).toEqual([])
-    expect(segReq!.system).toContain("对话摘要器")
-    expect(segReq!.messages[0]!.content).toContain("历史问题1")
-    expect(mergeReq!.system).toContain("对话摘要归并器")
-    // first compaction has no previous top: the merge input IS the segment summary
-    expect(mergeReq!.messages[0]!.content).toContain("段摘要A")
+    // v3: 发消息零压缩——run.started 是第一事件,用户消息紧随,run 完成前
+    // 没有任何 compaction 事件(v2 的开场预压缩已删除)。
+    const events = received(socket)
+    expect(events[0]!.type).toBe("run.started")
+    expect(events[1]!.type).toBe("message.created")
+    const runDoneAt = events.findIndex((e) => e.type === "run.completed")
+    expect(runDoneAt).toBeGreaterThan(0)
+    expect(events.slice(0, runDoneAt).filter((e) => e.type.startsWith("compaction."))).toHaveLength(0)
+    // the FIRST llm request carried the FULL history: no context thread item,
+    // the early verbatim text still in
+    const mainReq = reqs[0]!
+    expect(mainReq.messages[0]!.role).not.toBe("system")
+    expect(JSON.stringify(mainReq.messages)).toContain("历史问题1")
+  })
 
-    // meta carries the v2 state
-    const meta = env.sessions.meta(session.id)
-    expect(meta!.compaction).toMatchObject({ top: "总摘要A", upto: seeded[1]!.id })
-    expect(meta!.compaction!.segments).toHaveLength(1)
-    // the persisted user message carries the compact note
-    const msgs = env.sessions.readMessages(session.id)
-    const user = msgs.find((m) => m.role === "user" && m.blocks.some((b) => b.type === "text" && b.text === "新问题"))!
-    const note = user.blocks.find((b) => b.type === "note" && b.kind === "compact")
-    expect((note as { text?: string }).text).toContain("已压缩为 1 段")
-    expect((note as { text?: string }).text).toContain("session_search")
-    // structured meta for the UI (segment count + kept tail size), invisible to the model
-    expect(note).toMatchObject({ compact: { segments: 1, kept: 2 } })
-    // the compact note was broadcast on the bus
-    expect(received(socket).some((e) =>
-      e.type === "note.emitted" && (e.payload as { block: { kind?: string } }).block?.kind === "compact",
-    )).toBe(true)
-    // v3 completed payload: phase from the call site (the pre-run block
-    // reports "post-run" until Task 7 replaces it), ok result, real counts
-    const okCompleted = received(socket).find((e) => e.type === "compaction.completed")
-    expect(okCompleted).toBeDefined()
-    expect(okCompleted!.payload).toEqual({ segments: 1, kept: 2, phase: "post-run", result: "ok" })
-    // the main request sees only the kept tail + the new user text
-    expect(JSON.stringify(mainReq!.messages)).not.toContain("历史问题1")
-    expect(JSON.stringify(mainReq!.messages)).toContain("历史问题2")
-    expect(JSON.stringify(mainReq!.messages)).toContain("新问题")
-    // the segment index was written under the session dir
+  it("compacts after the run when the waterline crosses the yellow line: phase post-run, meta persisted", async () => {
+    const reqs: LlmRequest[] = []
+    const { env, manager } = makeEnv(
+      recordRequests(scriptClient([textTurnWithUsage("主回复", 10_000), textTurn("段摘要A"), textTurn("总摘要A")]), reqs),
+      (c) => { c.sessions.contextTokens = 10 },
+    )
+    const session = env.sessions.create("收尾压缩会话")
+    const seeded = seedHistory(env.sessions, session.id, 2)
+    const socket = new FakeSocket()
+    env.bus.subscribe(session.id, socket)
+
+    await manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
+
+    // the run's own turn anchored this round's real usage over the line →
+    // the compaction runs AFTER run.completed
+    const events = received(socket)
+    const types = events.map((e) => e.type)
+    const startedIdx = types.indexOf("compaction.started")
+    expect(startedIdx).toBeGreaterThanOrEqual(0)
+    expect(startedIdx).toBeGreaterThan(types.indexOf("run.completed"))
+    expect(events[startedIdx]!.payload).toEqual({ phase: "post-run" })
+    // both summarizer calls follow the main request
+    expect(reqs[1]!.tools).toEqual([])
+    expect(reqs[1]!.system).toContain("对话摘要器")
+    expect(reqs[1]!.messages[0]!.content).toContain("历史问题1")
+    expect(reqs[2]!.system).toContain("对话摘要归并器")
+    // first compaction has no previous top: the merge input IS the segment summary
+    expect(reqs[2]!.messages[0]!.content).toContain("段摘要A")
+    // v2 state persisted; the segment index written under the session dir
+    expect(env.sessions.meta(session.id)!.compaction).toMatchObject({ top: "总摘要A", upto: seeded[3]!.id })
+    expect(env.sessions.meta(session.id)!.compaction!.segments).toHaveLength(1)
     expect(existsSync(join(env.paths.sessionsDir, session.id, "index.db"))).toBe(true)
+    // completed: ok result, real counts (4 seeded messages compacted, the turn kept)
+    const okCompleted = events.find((e) => e.type === "compaction.completed")
+    expect(okCompleted!.payload).toEqual({ segments: 1, kept: 2, phase: "post-run", result: "ok" })
   })
 
   it("second compaction merges the previous top into the new one", async () => {
     const reqs: LlmRequest[] = []
     const { env, manager } = makeEnv(
       recordRequests(scriptClient([
-        textTurn("段摘要A"), textTurn("总摘要A"), textTurnWithUsage("主回复", 10_000),
-        textTurn("段摘要B"), textTurn("总摘要B"), textTurnWithUsage("主回复2", 10_000),
+        textTurnWithUsage("主回复", 10_000),
+        textTurn("段摘要A"), textTurn("总摘要A"),
+        textTurnWithUsage("主回复2", 10_000),
+        textTurn("段摘要B"), textTurn("总摘要B"),
       ]), reqs),
       (c) => { c.sessions.contextTokens = 10 },
     )
@@ -896,106 +943,85 @@ describe("RunManager context compaction v2", () => {
     const meta = env.sessions.meta(session.id)
     expect(meta!.compaction!.segments).toHaveLength(2)
     expect(meta!.compaction!.top).toBe("总摘要B")
+    // the second run's main request already saw the first compaction's view
+    expect(reqs[3]!.messages[0]!.role).toBe("system")
+    expect(reqs[3]!.messages[0]!.content).toContain("早期对话脉络：总摘要A")
     // the second merge's input carries the old top and the new segment summary
-    const mergeInput = reqs[4]!.messages[0]!.content as string
+    const mergeInput = reqs[5]!.messages[0]!.content as string
     expect(mergeInput).toContain("总摘要A")
     expect(mergeInput).toContain("段摘要B")
   })
 
   /**
-   * Master's 2026-08-28 report (tiny test budget, real network latency):
-   * send "a" → total silence (no echo, no "compacting" hint) while the
-   * pre-run compaction's two LLM calls run; send "b" meanwhile → b waits,
-   * then triggers a SECOND compaction that swallows a's exchange, so "a"
-   * renders late with a 1-segment note and "b" later still with a 2-segment
-   * note. FIXED EXPECTATIONS: the compaction announces itself on the bus
-   * (compaction.started while the summarizer runs, compaction.completed
-   * after the meta write), so the silence window is gone.
+   * spec 5.4(v3):收尾压缩进行中 submit 第二条消息 → 进入队列,压缩完成后
+   * 才开跑。驱动器的串行化天然保证这一点——#execute 在收尾压缩上 await,
+   * 驱动循环不会出队下一条,无需额外忙碌标记。
    */
-  it("during rapid input: compaction announces itself, queued second message re-compacts", async () => {
-    const calls: LlmRequest[] = []
-    let firstCallStarted!: () => void
-    const firstCall = new Promise<void>((r) => { firstCallStarted = r })
+  it("a second message submitted during a post-run compaction queues until the compaction completes", async () => {
     let release!: () => void
     const gate = new Promise<void>((r) => { release = r })
-    const script = [
-      textTurn("段摘要A"), textTurn("总摘要A"), textTurnWithUsage("回答A", 10_000),
-      textTurn("段摘要B"), textTurn("总摘要B"), textTurn("回答B"),
-    ]
-    let i = 0
+    let n = 0
     const client: LlmClient = {
-      async *stream(req) {
-        calls.push(req)
-        if (i === 0) {
-          firstCallStarted()
-          await gate // stand in for the seconds-long real summarizer call
+      async *stream() {
+        n += 1
+        if (n === 1) {
+          yield* textTurnWithUsage("回答a", 10_000) // the run's usage anchors over the line
+          return
         }
-        yield* script[Math.min(i++, script.length - 1)]!
+        if (n === 2) {
+          yield { type: "text_delta", delta: "段摘要A（进行中）" }
+          await gate // stand in for the seconds-long real summarizer call
+          return
+        }
+        if (n === 3) {
+          yield* textTurn("总摘要A")
+          return
+        }
+        yield* textTurn("回答b")
       },
     }
 
     const { env, manager } = makeEnv(client, (c) => { c.sessions.contextTokens = 10 })
-    const session = env.sessions.create("压缩观察")
+    const session = env.sessions.create("压缩排队")
     seedHistory(env.sessions, session.id, 2)
     const socket = new FakeSocket()
     env.bus.subscribe(session.id, socket)
 
-    // Master sends "a"; the pre-run compaction's first summarizer call is
-    // in flight. FIXED: the bus already announced the compaction — the
-    // silence window (no events at all) is gone.
     const aP = manager.enqueue(session.id, { userText: "a", trigger: "user" })
-    await firstCall
-    expect(calls.length).toBe(1)
-    expect(received(socket).map((e) => e.type)).toEqual(["compaction.started"])
+    await waitForEvent(socket, "compaction.started") // the post-run compaction is in flight
+    expect(n).toBe(2) // run done + the parked segment summarizer
 
-    // Seeing no reaction, Master types "b" while the compaction is running.
-    // 排队是显式处置：b 要测"排队后 re-compact"，须显式 wait（默认 steer 进引导缓冲）
+    // Seeing no further reaction, Master types "b" while the compaction runs:
+    // it queues (explicit wait), it does NOT start its run.
     const bP = manager.enqueue(session.id, { userText: "b", trigger: "user", disposition: "wait" })
+    await new Promise((r) => setTimeout(r, 30))
+    const eventsBefore = received(socket)
+    expect(eventsBefore.some((e) => e.type === "message.queued")).toBe(true)
+    expect(eventsBefore.filter((e) => e.type === "run.started")).toHaveLength(1)
+
     release()
     await aP
     await bP
 
-    // The completed event follows the meta write, before the run's own events.
+    // b's run.started arrives only AFTER the compaction completed
     const events = received(socket)
     const types = events.map((e) => e.type)
-    expect(types.indexOf("compaction.completed")).toBeGreaterThanOrEqual(0)
-    expect(types.indexOf("compaction.completed")).toBeLessThan(types.indexOf("run.started"))
-    const completedEv = events.find((e) => e.type === "compaction.completed") as { payload: { segments: number; kept: number } }
-    expect(completedEv.payload.segments).toBe(1)
-
-    // SYMPTOM 2 (per-session queue works, but nothing announced it): b's run
-    // only starts after a's run completed — its message echo arrives late.
-    const idx = (pred: (e: AgentEvent) => boolean): number =>
-      events.findIndex((e) => pred(e))
-    const aCompleted = idx((e) => e.type === "run.completed")
-    const bCreated = idx((e) =>
-      e.type === "message.created" &&
-      JSON.stringify(e.payload).includes("\"b\""))
-    expect(aCompleted).toBeGreaterThanOrEqual(0)
-    expect(bCreated).toBeGreaterThan(aCompleted)
-
-    // SYMPTOM 3: b's run re-compacted — six LLM calls (2× summary pair + 2×
-    // main). The second segment summary swallows the PREVIOUS retention
-    // window; a's own exchange ("a"/"回答A" is tiny here) falls inside the new
-    // one — with real long replies it would be swallowed too (same boundary
-    // walk, just more mass above the target line).
-    expect(calls.length).toBe(6)
-    expect(calls[3]!.messages[0]!.content as string).toContain("历史问题2")
-    expect(calls[3]!.messages[0]!.content as string).not.toContain("回答A")
-    const meta = env.sessions.meta(session.id)
-    expect(meta!.compaction!.segments).toHaveLength(2)
+    const compactionDoneAt = types.indexOf("compaction.completed")
+    const bStartedAt = types.indexOf("run.started", types.indexOf("run.started") + 1) // second run.started
+    expect(bStartedAt).toBeGreaterThan(compactionDoneAt)
+    // both runs settled clean; b's own usage (1) stays under the line → no second compaction
+    expect(types.filter((t) => t === "compaction.started")).toHaveLength(1)
     const msgs = env.sessions.readMessages(session.id)
-    const notes = msgs
-      .filter((m) => m.role === "user" && ["a", "b"].includes(String(m.blocks.find((b) => b.type === "text")?.text ?? "")))
-      .map((m) => (m.blocks.find((b) => b.type === "note" && b.kind === "compact") as { text?: string } | undefined)?.text ?? "")
-    expect(notes[0]).toContain("已压缩为 1 段")
-    expect(notes[1]).toContain("已压缩为 2 段")
+    const assistantTexts = msgs
+      .filter((m) => m.role === "assistant")
+      .map((m) => (m.blocks[0] as { text?: string }).text)
+    expect(assistantTexts.slice(-2)).toEqual(["回答a", "回答b"])
   })
 
-  it("upgrades a legacy compactedSummary session: old summary seeds the top", async () => {
+  it("upgrades a legacy compactedSummary session: old summary seeds the top (post-run)", async () => {
     const reqs: LlmRequest[] = []
     const { env, manager } = makeEnv(
-      recordRequests(scriptClient([textTurn("段摘要N"), textTurn("总摘要N"), textTurn("主回复")]), reqs),
+      recordRequests(scriptClient([textTurnWithUsage("主回复", 10_000), textTurn("段摘要N"), textTurn("总摘要N")]), reqs),
       (c) => { c.sessions.contextTokens = 10 },
     )
     const session = env.sessions.create("旧格式")
@@ -1009,16 +1035,16 @@ describe("RunManager context compaction v2", () => {
     // legacy fields cleared
     expect(meta!.compactedSummary).toBeUndefined()
     expect(meta!.compactedUpto).toBeUndefined()
-    // the merge input seeded from the legacy top
-    expect((reqs[1]!.messages[0]!.content as string)).toContain("旧总摘要")
+    // the merge input seeded from the legacy top (the third call: main → seg → merge)
+    expect((reqs[2]!.messages[0]!.content as string)).toContain("旧总摘要")
   })
 
-  it("falls back to full history when the summarizer call fails", async () => {
+  it("a failing post-run summarizer: full history was already sent, completed(result:failed), no meta", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     try {
       const reqs: LlmRequest[] = []
       const { env, manager } = makeEnv(
-        recordRequests(failFirstClient("摘要挂了", textTurn("主回复")), reqs),
+        recordRequests(firstOkThenFailClient(textTurnWithUsage("主回复", 10_000), "摘要挂了"), reqs),
         (c) => { c.sessions.contextTokens = 10 },
       )
       const session = env.sessions.create("回退")
@@ -1028,23 +1054,28 @@ describe("RunManager context compaction v2", () => {
       await manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
       const meta = env.sessions.meta(session.id)
       expect(meta?.compaction).toBeUndefined()
-      expect(JSON.stringify(reqs.at(-1)!.messages)).toContain("历史问题1") // full history sent
+      // v3: the run already went out over the FULL history (nothing to fall
+      // back to — the compaction simply did not happen); the failed summarizer
+      // call is the second request.
+      expect(JSON.stringify(reqs[0]!.messages)).toContain("历史问题1")
+      expect(reqs[1]!.system).toContain("对话摘要器")
       // Completed-must-arrive protocol (v3): a started is ALWAYS paired with a
-      // completed — failure reports result "failed" with zeroed counters, and
-      // the failure logs exactly ONCE (inside #compactV2; the caller's catch
-      // only falls back, it no longer logs again).
+      // completed — failure reports result "failed" with zeroed counters. The
+      // failure logs once inside #compactV2 and once more in #runAutoCompaction
+      // (which swallows the throw: the hook path gets null, spec 5.8 no fallback).
       const events = received(socket)
       expect(events.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "post-run" }])
       const completed = events.find((e) => e.type === "compaction.completed")
       expect(completed).toBeDefined()
       expect(completed!.payload).toEqual({ segments: 0, kept: 0, phase: "post-run", result: "failed" })
       expect(errorSpy.mock.calls.filter((c) => String(c[0]).startsWith("kclaw compaction failed"))).toHaveLength(1)
+      expect(errorSpy.mock.calls.filter((c) => String(c[0]).startsWith("kclaw compaction (post-run) failed"))).toHaveLength(1)
     } finally {
       errorSpy.mockRestore()
     }
   })
 
-  it("below threshold with existing state: no new calls, no compaction events, note still injected", async () => {
+  it("below threshold with existing state: no new calls, no compaction events, the meta view still applies", async () => {
     const reqs: LlmRequest[] = []
     const { env, manager } = makeEnv(recordRequests(scriptClient([textTurn("主回复")]), reqs))
     const session = env.sessions.create("未触发")
@@ -1059,12 +1090,14 @@ describe("RunManager context compaction v2", () => {
     const types = received(socket).map((e) => e.type)
     expect(types).not.toContain("compaction.started")
     expect(types).not.toContain("compaction.completed")
-    const msgs = env.sessions.readMessages(session.id)
-    const user = msgs.find((m) => m.role === "user" && m.blocks.some((b) => b.type === "text" && b.text === "新问题"))!
-    const note = user.blocks.find((b) => b.type === "note" && b.kind === "compact")
-    expect((note as { text?: string }).text).toContain("总摘要A")
-    // carried-over note (no new compaction): meta still present, same segment count
-    expect(note).toMatchObject({ compact: { segments: 1, kept: 2 } })
+    // the persisted view drives THIS run's provider messages: the context
+    // thread item first, the verbatim text before upto gone
+    expect(reqs[0]!.messages[0]!.role).toBe("system")
+    expect(reqs[0]!.messages[0]!.content).toContain("早期对话脉络：总摘要A")
+    expect(JSON.stringify(reqs[0]!.messages)).not.toContain("历史问题1")
+    // no compact note on the user message anymore (v3 removed the injection)
+    const user = env.sessions.readMessages(session.id).find((m) => m.role === "user" && m.blocks.some((b) => b.type === "text" && b.text === "新问题"))!
+    expect(user.blocks.some((b) => b.type === "note" && b.kind === "compact")).toBe(false)
   })
 
   it("compactSession refuses while a run is active or queued", async () => {
@@ -1107,7 +1140,7 @@ describe("RunManager context compaction v2", () => {
 
   it("audit-logs auto compaction with the covered range", async () => {
     const { env, manager } = makeEnv(
-      scriptClient([textTurn("段摘要A"), textTurn("总摘要A"), textTurn("主回复")]),
+      scriptClient([textTurnWithUsage("主回复", 10_000), textTurn("段摘要A"), textTurn("总摘要A")]),
       (c) => { c.sessions.contextTokens = 10 },
     )
     const session = env.sessions.create("审计")
@@ -1116,9 +1149,10 @@ describe("RunManager context compaction v2", () => {
     const records = env.sessions.readCompactions(session.id)
     expect(records).toHaveLength(1)
     expect(records[0]).toMatchObject({
-      // first compaction (no prior state) → the span starts at session start
-      trigger: "auto", from: null, upto: seeded[1]!.id,
-      messages: 2, segmentSummary: "段摘要A", top: "总摘要A",
+      // first compaction (no prior state) → the span starts at session start;
+      // post-run: the whole seeded history fell under the boundary
+      trigger: "auto", from: null, upto: seeded[3]!.id,
+      messages: 4, segmentSummary: "段摘要A", top: "总摘要A",
     })
     expect(records[0]!.focus).toBeUndefined()
   })
@@ -1139,7 +1173,7 @@ describe("RunManager context compaction v2", () => {
 
   it("writes no audit record when the summarizer fails", async () => {
     const { env, manager } = makeEnv(
-      failFirstClient("摘要挂了", textTurn("主回复")),
+      firstOkThenFailClient(textTurnWithUsage("主回复", 10_000), "摘要挂了"),
       (c) => { c.sessions.contextTokens = 10 },
     )
     const session = env.sessions.create("失败审计")
@@ -1177,17 +1211,22 @@ describe("RunManager context compaction v2", () => {
     }
   })
 
-  it("cancelling the run mid-summarizer: completed(result:cancelled), nothing persisted", async () => {
+  it("cancelling the run mid-post-run-summarizer: completed(result:cancelled), nothing persisted", async () => {
     let release!: () => void
     const gate = new Promise<void>((r) => { release = r })
-    let first = true
+    let n = 0
     const llm: LlmClient = {
       async *stream() {
-        if (first) {
-          first = false
+        n += 1
+        if (n === 1) {
+          yield* textTurnWithUsage("主回复", 10_000) // over the line → post-run compaction
+          return
+        }
+        if (n === 2) {
           yield { type: "text_delta", delta: "段摘要（半截）" }
           await gate // the summarizer call parks; the run is cancelled meanwhile
-          yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+          yield { type: "text_delta", delta: "（后半）" }
+          return
         }
         yield* textTurn("不该到这")
       },
@@ -1200,11 +1239,14 @@ describe("RunManager context compaction v2", () => {
 
     const run = manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
     await waitForEvent(socket, "compaction.started")
+    // The run's own turn is done but #execute still awaits the compaction —
+    // the controller is still registered, so cancel() reaches it and the
+    // signal linkage cuts the in-flight summarizer.
     expect(manager.cancel(session.id)).toBe(true)
     release() // the parked stream settles only AFTER the abort
 
     const outcome = await run
-    expect(outcome.stopReason).toBe("aborted") // the run itself aborted, no llm round
+    expect(outcome.stopReason).toBe("end_turn") // the run itself had already finished
     const events = received(socket)
     expect(events.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "post-run" }])
     const completed = events.find((e) => e.type === "compaction.completed")
@@ -1214,39 +1256,157 @@ describe("RunManager context compaction v2", () => {
     expect(env.sessions.readCompactions(session.id)).toEqual([])
   })
 
-  it("emergency in-run compaction audits trigger in-run with the emergency flag", async () => {
-    // #compactV2's real in-run caller (the overflow hook) arrives in Task 7;
-    // until then the audit mapping is proven through a direct call to the
-    // compile-private method (TS `private` — not part of the public API).
-    const llm = scriptClient([textTurn("段摘要E"), textTurn("总摘要E")])
-    const { env, manager } = makeEnv(llm, (c) => { c.sessions.contextTokens = 10 })
+  it("emergency in-run compaction via the overflow hook audits trigger in-run with the emergency flag", async () => {
+    // The provider rejects the FIRST request with a context-overflow error
+    // (zero events streamed) → the loop consults onContextOverflow → the
+    // server runs an emergency compaction → the request is retried once over
+    // the compacted view. No direct-call reach into the private method — the
+    // real hook path is the only way this audit record gets written.
+    const reqs: LlmRequest[] = []
+    const { env, manager } = makeEnv(
+      recordRequests(throwFirstClient("context length exceeded", [
+        textTurn("段摘要E"), textTurn("总摘要E"), textTurn("恢复"),
+      ]), reqs),
+      (c) => { c.sessions.contextTokens = 10 },
+    )
     const session = env.sessions.create("急救会话")
     const seeded = seedHistory(env.sessions, session.id, 2)
     const socket = new FakeSocket()
     env.bus.subscribe(session.id, socket)
 
-    const direct = manager as unknown as {
-      compactV2: (
-        sessionId: string, history: Message[], userText: string, config: KclawConfig,
-        runLlm: LlmClient, model: string,
-        opts?: { focus?: string; manual?: boolean; phase?: CompactionPhase; signal?: AbortSignal; emergency?: boolean },
-      ) => Promise<{ summary?: string; upto?: string; segments: number; active: Message[]; compacted: boolean }>
-    }
-    const out = await direct.compactV2(
-      session.id, env.sessions.readMessages(session.id), "", env.config, llm, "mock-model",
-      { phase: "in-run", emergency: true },
-    )
+    const outcome = await manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
+    expect(outcome.stopReason).toBe("end_turn") // the retried request completed the run
 
-    expect(out.compacted).toBe(true)
-    expect(out.upto).toBe(seeded[1]!.id)
     const records = env.sessions.readCompactions(session.id)
     expect(records).toHaveLength(1)
     expect(records[0]).toMatchObject({ trigger: "in-run", emergency: true, upto: seeded[1]!.id, top: "总摘要E" })
     const events = received(socket)
     expect(events.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "in-run" }])
     expect(events.find((e) => e.type === "compaction.completed")!.payload).toEqual({
-      segments: 1, kept: 2, phase: "in-run", result: "ok",
+      segments: 1, kept: 3, phase: "in-run", result: "ok",
     })
+    // the retry went out over the swapped view: thread item first, early
+    // verbatim text before upto gone, and the retry was silent (one llm.started)
+    expect(reqs.length).toBe(4)
+    const retry = reqs[3]!
+    expect(retry.messages[0]!.role).toBe("system")
+    expect(retry.messages[0]!.content).toContain("早期对话脉络：总摘要E")
+    expect(JSON.stringify(retry.messages)).not.toContain("历史问题1")
+    expect(events.filter((e) => e.type === "llm.started")).toHaveLength(1)
+  })
+
+  it("mid-run compaction at the red line: phase in-run, the next request leads with the thread item", async () => {
+    const reqs: LlmRequest[] = []
+    const { env, manager } = makeEnv(
+      recordRequests(scriptClient([
+        execToolTurnWithUsage("call_m", "echo hi", 9), // the tool turn anchors over the RED line
+        textTurn("段摘要I"), textTurn("总摘要I"), textTurn("完成"),
+      ]), reqs),
+      (c) => {
+        c.sessions.contextTokens = 10 // red line: 10 × 0.85 = 8.5
+        c.permissions.allow = ["exec:echo*"]
+      },
+    )
+    const session = env.sessions.create("中途压缩会话")
+    const seeded = seedHistory(env.sessions, session.id, 2)
+    const socket = new FakeSocket()
+    env.bus.subscribe(session.id, socket)
+
+    const outcome = await manager.enqueue(session.id, { userText: "执行一下", trigger: "user" })
+
+    expect(outcome.stopReason).toBe("end_turn")
+    const events = received(socket)
+    const types = events.map((e) => e.type)
+    // the compaction fired MID-run: after the tool batch, before run.completed
+    const startedIdx = types.indexOf("compaction.started")
+    expect(startedIdx).toBeGreaterThanOrEqual(0)
+    expect(startedIdx).toBeLessThan(types.indexOf("run.completed"))
+    expect(events[startedIdx]!.payload).toEqual({ phase: "in-run" })
+    expect(events.find((e) => e.type === "compaction.completed")!.payload).toEqual({
+      segments: 1, kept: 3, phase: "in-run", result: "ok",
+    })
+    // the request BEFORE the compaction carried the full verbatim history…
+    expect(reqs[0]!.messages[0]!.role).not.toBe("system")
+    expect(JSON.stringify(reqs[0]!.messages)).toContain("历史问题1")
+    // …the request AFTER it leads with the context thread item
+    expect(reqs[3]!.messages[0]!.role).toBe("system")
+    expect(reqs[3]!.messages[0]!.content).toContain("早期对话脉络：总摘要I")
+    expect(JSON.stringify(reqs[3]!.messages)).not.toContain("历史问题1")
+    // the run's own tail stayed verbatim
+    expect(JSON.stringify(reqs[3]!.messages)).toContain("执行一下")
+    expect(env.sessions.meta(session.id)!.compaction).toMatchObject({ top: "总摘要I", upto: seeded[3]!.id })
+    // the final turn's usage (1) stays under the yellow line → no post-run compaction
+    expect(types.filter((t) => t === "compaction.started")).toHaveLength(1)
+  })
+
+  it("cancelCompaction cuts the in-flight compaction and suppresses the rest of THIS run; a new run recovers", async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    let n = 0
+    const client: LlmClient = {
+      async *stream() {
+        n += 1
+        if (n === 1 || n === 3) {
+          yield* execToolTurnWithUsage(`c${n}`, "echo hi", 9) // two tool rounds, both over the red line
+          return
+        }
+        if (n === 2) {
+          yield { type: "text_delta", delta: "段摘要（半截）" }
+          await gate // the in-run compaction parks here; cancel lands meanwhile
+          yield { type: "text_delta", delta: "（后半）" }
+          return
+        }
+        if (n === 4) {
+          yield* textTurnWithUsage("完成", 10_000) // over the yellow line — suppressed by the cancel mark
+          return
+        }
+        if (n === 5) {
+          yield* textTurnWithUsage("回复2", 10_000) // the fresh run's usage anchors over the line
+          return
+        }
+        if (n === 6) {
+          yield* textTurn("段摘要Z")
+          return
+        }
+        yield* textTurn("总摘要Z")
+      },
+    }
+    const { env, manager } = makeEnv(client, (c) => {
+      c.sessions.contextTokens = 10
+      c.permissions.allow = ["exec:echo*"]
+    })
+    const session = env.sessions.create("取消防循环")
+    seedHistory(env.sessions, session.id, 2)
+    const socket = new FakeSocket()
+    env.bus.subscribe(session.id, socket)
+
+    const run1 = manager.enqueue(session.id, { userText: "执行一下", trigger: "user" })
+    await waitForEvent(socket, "compaction.started") // the in-run compaction is parked on the gate
+    expect(manager.cancelCompaction(session.id)).toBe(true) // an in-flight compaction existed
+    release()
+
+    expect((await run1).stopReason).toBe("end_turn")
+    const events1 = received(socket)
+    expect(events1.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "in-run" }])
+    expect(events1.find((e) => e.type === "compaction.completed")!.payload).toEqual({
+      segments: 0, kept: 0, phase: "in-run", result: "cancelled",
+    })
+    // the SECOND tool round crossed the red line again but the cancel mark
+    // suppressed it — and so did the post-run check (usage 10_000 > line)
+    expect(events1.filter((e) => e.type === "compaction.started")).toHaveLength(1)
+    expect(env.sessions.meta(session.id)?.compaction).toBeUndefined()
+    expect(env.sessions.readCompactions(session.id)).toEqual([])
+
+    // a NEW run starts clean: the mark is cleared, auto compaction recovers
+    const run2 = manager.enqueue(session.id, { userText: "再来一轮", trigger: "user" })
+    expect((await run2).stopReason).toBe("end_turn")
+    const events2 = received(socket)
+    const started = events2.filter((e) => e.type === "compaction.started")
+    expect(started.map((e) => e.payload)).toEqual([{ phase: "in-run" }, { phase: "post-run" }])
+    expect(events2.filter((e) => e.type === "compaction.completed").at(-1)!.payload).toMatchObject({
+      phase: "post-run", result: "ok",
+    })
+    expect(env.sessions.meta(session.id)!.compaction).toMatchObject({ top: "总摘要Z" })
   })
 })
 
