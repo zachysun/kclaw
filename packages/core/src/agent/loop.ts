@@ -8,7 +8,9 @@ import {
   type Message, type StopReason, type Usage, type GrantedBy,
 } from "../protocol/messages.js"
 import { makeEvent, type AgentEvent } from "../protocol/events.js"
-import type { LlmClient, LlmStreamEvent, ToolDefinition } from "../provider/types.js"
+import type { LlmClient, LlmStreamEvent, ProviderMessage, ToolDefinition } from "../provider/types.js"
+import { isContextOverflowError } from "../provider/overflow.js"
+import type { ActiveSummary } from "../session/compaction.js"
 import { toProviderMessages } from "./context.js"
 import type { ToolExecutor } from "./tools.js"
 
@@ -42,6 +44,11 @@ export interface RunInput {
    * augmentation). `history` must not already contain this message.
    */
   userMessage?: Message
+  /**
+   * 运行起点的压缩视图（来自会话 meta）：生效时 upto（含）之前的原文
+   * 不再发给模型，脉络项由 toProviderMessages 垫在 messages[0]。
+   */
+  compaction?: ActiveSummary
 }
 
 export interface AgentDeps {
@@ -107,6 +114,26 @@ export interface AgentDeps {
    * runAgent resolves stopReason "error" (same semantics as onUserMessage).
    */
   steering?: () => Message[]
+  /**
+   * Mid-run compaction hook (spec 5.3 #5): called at every iteration
+   * boundary AFTER the tool batch completes and BEFORE the steering drain.
+   * Returns the new active summary to apply to subsequent requests, or null
+   * (nothing to compact / declined / already cancelled — the run continues
+   * either way). A THROWING hook also just continues: a failed compaction is
+   * never remediated here (spec 5.8, no fallback).
+   */
+  midRunCompaction?: () => Promise<ActiveSummary | null>
+  /**
+   * Context-overflow rescue (spec 5.6): consulted when a stream dies having
+   * produced NOTHING and isContextOverflowError matches. A non-null return
+   * retries the whole request exactly once with that summary swapped in;
+   * null (or a throw) gives up and the original error path takes over. The
+   * retry is silent — no extra llm.started / llm.failed — internal
+   * self-healing must not disturb the event stream.
+   */
+  onContextOverflow?(err: unknown): Promise<ActiveSummary | null>
+  /** 省略预算（黄线值）透传给打包台：预算装不下的工具输出以省略占位符发送。 */
+  tokenBudget?: number
   onEvent(e: AgentEvent): void
   onMessage(m: Message): void
 }
@@ -239,6 +266,23 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
 
   const all: Message[] = [...input.history, userMsg]
   const totalUsage: Usage = { inputTokens: 0, outputTokens: 0 }
+  // 压缩视图（运行起点来自 input.compaction，之后可被 midRunCompaction /
+  // onContextOverflow 钩子替换）：生效时 upto（含）之前的原文不再发送，
+  // 脉络项由 toProviderMessages 垫在 messages[0]。all 里的原文不动——
+  // 压缩只改“发什么给模型”，不改历史与持久化。
+  let compacted = input.compaction
+  const buildMessages = (): ProviderMessage[] => {
+    let msgs = all
+    if (compacted !== undefined) {
+      const base = all.findIndex((m) => m.id === compacted!.upto)
+      if (base >= 0) msgs = all.slice(base + 1)
+    }
+    return toProviderMessages(msgs, window, {
+      ...(deps.toolResultKeep === undefined ? {} : { toolResultKeep: deps.toolResultKeep }),
+      ...(deps.tokenBudget === undefined ? {} : { tokenBudget: deps.tokenBudget }),
+      ...(compacted === undefined ? {} : { summary: compacted }),
+    })
+  }
 
   // Abort guardrail for a signal that fires when no message from the current
   // iteration exists (e.g. between iterations, or before the run started):
@@ -280,51 +324,76 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
     // the run then terminates through the error lifecycle below instead of
     // rejecting — 只有 provider 彻底失败才终止 run.
     let streamError: unknown
-
-    try {
-      for await (const ev of streamWithAbort(deps.llm.stream({
-        model: deps.model,
-        system: input.system,
-        messages: toProviderMessages(all, window, deps.toolResultKeep === undefined ? undefined : { toolResultKeep: deps.toolResultKeep }),
-        tools: deps.toolDefs ?? [],
-      }), deps.signal)) {
-        // Abort checkpoint: stop consuming the stream the moment the signal fires.
-        if (deps.signal?.aborted) break
-        if (ev.type === "text_delta") {
-          if (!curText) {
-            curText = { id: newBlockId(), type: "text", text: "" }
-            emit(makeEvent("text.created", { messageId: assistant.id, block: curText }, ctx))
+    // 超限自愈（spec 5.6）：流失败且一个事件都没收到（零输出）且判定为上下文
+    // 超限时，经 onContextOverflow 换压缩视图整次重发——恰好一次。已收到过任何
+    // 事件的流失败不重试（半截输出无法干净重来）。重试静默进行：不额外发
+    // llm.started / llm.failed；失败尝试也从未发过任何 *.created（没收到事件才
+    // 允许重试），故重置累积器即可无痕重来。
+    let streamed = false
+    for (let tryIdx = 0; ; tryIdx++) {
+      texts.length = 0
+      thinkings.length = 0
+      toolCalls.clear()
+      curText = null
+      curThinking = null
+      streamed = false
+      streamError = undefined
+      stopReason = "end_turn"
+      usage = { inputTokens: 0, outputTokens: 0 }
+      try {
+        for await (const ev of streamWithAbort(deps.llm.stream({
+          model: deps.model,
+          system: input.system,
+          messages: buildMessages(),
+          tools: deps.toolDefs ?? [],
+        }), deps.signal)) {
+          // Abort checkpoint: stop consuming the stream the moment the signal fires.
+          if (deps.signal?.aborted) break
+          streamed = true
+          if (ev.type === "text_delta") {
+            if (!curText) {
+              curText = { id: newBlockId(), type: "text", text: "" }
+              emit(makeEvent("text.created", { messageId: assistant.id, block: curText }, ctx))
+            }
+            curText.text += ev.delta
+            emit(makeEvent("text.delta", { messageId: assistant.id, blockId: curText.id, delta: ev.delta }, ctx))
+          } else if (ev.type === "thinking_delta") {
+            if (!curThinking) {
+              curThinking = { id: newBlockId(), type: "thinking", text: "" }
+              emit(makeEvent("thinking.created", { messageId: assistant.id, block: curThinking }, ctx))
+            }
+            curThinking.text += ev.delta
+            emit(makeEvent("thinking.delta", { messageId: assistant.id, blockId: curThinking.id, delta: ev.delta }, ctx))
+          } else if (ev.type === "tool_call_started") {
+            const block: ToolCallBlock = {
+              id: newBlockId(), type: "tool_call",
+              callId: ev.callId, name: ev.name, args: undefined, argsJson: "",
+            }
+            toolCalls.set(ev.index, block)
+            emit(makeEvent("tool_call.created", { messageId: assistant.id, block }, ctx))
+          } else if (ev.type === "tool_call_delta") {
+            const block = toolCalls.get(ev.index)
+            if (block) {
+              block.argsJson += ev.delta
+              emit(makeEvent("tool_call.delta", { messageId: assistant.id, blockId: block.id, delta: ev.delta }, ctx))
+            }
+          } else if (ev.type === "message_done") {
+            stopReason = ev.stopReason
+            usage = ev.usage
           }
-          curText.text += ev.delta
-          emit(makeEvent("text.delta", { messageId: assistant.id, blockId: curText.id, delta: ev.delta }, ctx))
-        } else if (ev.type === "thinking_delta") {
-          if (!curThinking) {
-            curThinking = { id: newBlockId(), type: "thinking", text: "" }
-            emit(makeEvent("thinking.created", { messageId: assistant.id, block: curThinking }, ctx))
-          }
-          curThinking.text += ev.delta
-          emit(makeEvent("thinking.delta", { messageId: assistant.id, blockId: curThinking.id, delta: ev.delta }, ctx))
-        } else if (ev.type === "tool_call_started") {
-          const block: ToolCallBlock = {
-            id: newBlockId(), type: "tool_call",
-            callId: ev.callId, name: ev.name, args: undefined, argsJson: "",
-          }
-          toolCalls.set(ev.index, block)
-          emit(makeEvent("tool_call.created", { messageId: assistant.id, block }, ctx))
-        } else if (ev.type === "tool_call_delta") {
-          const block = toolCalls.get(ev.index)
-          if (block) {
-            block.argsJson += ev.delta
-            emit(makeEvent("tool_call.delta", { messageId: assistant.id, blockId: block.id, delta: ev.delta }, ctx))
-          }
-        } else if (ev.type === "message_done") {
-          stopReason = ev.stopReason
-          usage = ev.usage
         }
+      } catch (err) {
+        streamError = err
+        stopReason = "error"
       }
-    } catch (err) {
-      streamError = err
-      stopReason = "error"
+      const overflowRetry = tryIdx === 0 && streamError !== undefined && !streamed
+        && deps.signal?.aborted !== true
+        && isContextOverflowError(streamError) && deps.onContextOverflow !== undefined
+      if (!overflowRetry) break
+      let next: ActiveSummary | null = null
+      try { next = await deps.onContextOverflow!(streamError) } catch { next = null }
+      if (next === null) break
+      compacted = next // 换压缩视图，整次重发一次
     }
     if (curText) texts.push(curText)
     if (curThinking) thinkings.push(curThinking)
@@ -450,6 +519,15 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
 
     if (stopReason === "tool_use" && entries.length > 0) {
       await runToolTurn(entries, { input, deps, emit, ctx, all })
+      // 迭代边界中途压缩（spec 5.3 第 5 条）：工具批次完成后、steering drain 之前。
+      // 返回 null = 不压/已取消，照常继续；抛错同样照常继续（压缩失败不补救，
+      // 省略兜底，spec 5.8）。非 null 视图从下一次请求起生效（buildMessages）。
+      if (deps.midRunCompaction !== undefined) {
+        try {
+          const next = await deps.midRunCompaction()
+          if (next !== null) compacted = next
+        } catch { /* 压缩失败不补救：省略兜底，spec 5.8 */ }
+      }
       // Steering drain（spec §5.1）：工具批次后、下一次 llm.stream 前。取到的消息按序
       // 注入：created → persist(onMessage) → completed → steered。抛错按 onUserMessage
       // 同语义终止 run（run.failed "steering_failed"，resolve stopReason "error"）。
