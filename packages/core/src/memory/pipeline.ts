@@ -311,7 +311,7 @@ export class MemoryPipeline {
     if (action.op === "new-thread") {
       const tf = writeThreadFile(path, (tf) => tf, () => ({
         topic: action.thread ?? action.file, title: action.title ?? action.file,
-        status: "active", created: date, updated: date, sections: [],
+        status: action.status ?? "active", created: date, updated: date, sections: [],
       }))
       writeThreadFile(path, (t) => appendSection({ ...t, title: t.title || (action.title ?? t.topic) }, { date, heading: action.title ?? action.file, body: action.content }), () => tf)
       this.#deps.emit?.({ type: "memory.written", path, kind: "episode", topic: action.file })
