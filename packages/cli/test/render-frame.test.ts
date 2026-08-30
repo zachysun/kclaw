@@ -36,6 +36,22 @@ function ev(type: AgentEvent["type"], payload: unknown): AgentEvent {
   return { id: `evt-${type}`, ts: "2026-08-28T00:00:00.000Z", type, payload, sessionId: "s1" } as AgentEvent
 }
 
+/** Run one render through a synthetic ctx, capturing stdout as a string. */
+async function capture(render: (ctx: ChatCtx) => Promise<unknown>): Promise<string> {
+  const writes: string[] = []
+  const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+    writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString())
+    return true
+  })
+  try {
+    const { ctx } = makeCtx()
+    await render(ctx)
+  } finally {
+    spy.mockRestore()
+  }
+  return writes.join("")
+}
+
 describe("renderFrame compaction events", () => {
   it("prints one dim hint on compaction.started and stays quiet on completed", async () => {
     const writes: string[] = []
@@ -63,21 +79,6 @@ describe("renderFrame compaction events", () => {
 })
 
 describe("renderFrame compact note dedup", () => {
-  async function capture(render: (ctx: ChatCtx) => Promise<unknown>): Promise<string> {
-    const writes: string[] = []
-    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
-      writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString())
-      return true
-    })
-    try {
-      const { ctx } = makeCtx()
-      await render(ctx)
-    } finally {
-      spy.mockRestore()
-    }
-    return writes.join("")
-  }
-
   it("silently drops the re-attached compact note (it carries the structured meta)", async () => {
     const block: NoteBlock = {
       id: "b1", type: "note", kind: "compact",
@@ -98,5 +99,34 @@ describe("renderFrame compact note dedup", () => {
     const block: NoteBlock = { id: "b1", type: "note", kind: "memory", text: "记住的要点" }
     const out = await capture((ctx) => renderFrame(ev("note.emitted", { messageId: "m1", block }), ctx))
     expect(out).toContain("[note] 记住的要点")
+  })
+})
+
+describe("renderFrame compaction.completed result branches", () => {
+  it("prints the failure hint when result is failed", async () => {
+    const out = await capture((ctx) =>
+      renderFrame(ev("compaction.completed", { segments: 0, kept: 0, result: "failed" }), ctx),
+    )
+    expect(out).toContain("✱ 压缩失败，本轮继续（稍后自动重试）")
+    expect(out).not.toContain("已压缩为")
+  })
+
+  it("prints the cancelled hint when result is cancelled", async () => {
+    const out = await capture((ctx) =>
+      renderFrame(ev("compaction.completed", { segments: 0, kept: 0, result: "cancelled" }), ctx),
+    )
+    expect(out).toContain("✱ 压缩已取消")
+    expect(out).not.toContain("已压缩为")
+  })
+
+  it("keeps the success summary when result is ok (and for legacy payloads without result)", async () => {
+    const ok = await capture((ctx) =>
+      renderFrame(ev("compaction.completed", { segments: 2, kept: 5, result: "ok" }), ctx),
+    )
+    expect(ok).toContain("✱ 早期对话已压缩为 2 段，保留最近 5 条原文（早期细节可用 session_search 检索）")
+
+    const legacy = await capture((ctx) => renderFrame(ev("compaction.completed", { segments: 1, kept: 4 }), ctx))
+    expect(legacy).toContain("已压缩为 1 段")
+    expect(legacy).toContain("保留最近 4 条")
   })
 })

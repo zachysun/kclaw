@@ -336,9 +336,13 @@ export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean
     case "compaction.started":
       line(dim("[正在压缩早期对话…]"), ctx)
       return false
-    case "compaction.completed":
-      line(dim(`✱ 早期对话已压缩为 ${ev.payload.segments} 段，保留最近 ${ev.payload.kept} 条原文（早期细节可用 session_search 检索）`), ctx)
+    case "compaction.completed": {
+      const p = ev.payload as { segments?: number; kept?: number; result?: string }
+      if (p.result === "failed") line(dim("✱ 压缩失败，本轮继续（稍后自动重试）"), ctx)
+      else if (p.result === "cancelled") line(dim("✱ 压缩已取消"), ctx)
+      else line(dim(`✱ 早期对话已压缩为 ${p.segments} 段，保留最近 ${p.kept} 条原文（早期细节可用 session_search 检索）`), ctx)
       return false
+    }
     case "run.failed":
       line(red(`✖ 运行失败: ${ev.payload.error.message}`), ctx)
       return true
