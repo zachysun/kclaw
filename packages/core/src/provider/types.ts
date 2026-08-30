@@ -18,6 +18,7 @@ export type ContentPart =
   | { type: "image_url"; image_url: { url: string } }
 
 export type ProviderMessage =
+  | { role: "system"; content: string }
   | { role: "user"; content: string | ContentPart[] }
   | { role: "assistant"; content: string | null; toolCalls?: ProviderToolCall[] }
   | { role: "tool"; toolCallId: string; content: string }

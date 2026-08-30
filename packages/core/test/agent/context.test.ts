@@ -183,3 +183,49 @@ describe("toProviderMessages tool-result eviction", () => {
     expect(out.find((m) => m.role === "tool")!.content).toContain("一的完整输出")
   })
 })
+
+describe("toProviderMessages — v3", () => {
+  const userMsg = (text: string) =>
+    newMessage("s", "user", [{ id: "blk_u", type: "text", text }])
+  const assistantMsg = (text: string) =>
+    newAssistantMessage("s", "glm", [{ id: "blk_a", type: "text", text }])
+  // 一轮工具调用 = assistant tool_call + 配对的 tool 结果（沿用本文件 big 的构造方式）
+  let seq = 0
+  const toolMsg = (output: string) => {
+    const callId = `call_${++seq}`
+    const a = newAssistantMessage("s", "glm", [
+      { id: `c-${callId}`, type: "tool_call", callId, name: "exec", args: {}, argsJson: "{}" },
+    ])
+    a.stopReason = "tool_use"
+    const t = newMessage("s", "tool", [
+      { id: `r-${callId}`, type: "tool_result", callId, status: "ok", output, durationMs: 1 },
+    ])
+    return [a, t]
+  }
+
+  it("summary 存在时在第 0 项注入 system 角色脉络项", () => {
+    const history = [userMsg("你好"), assistantMsg(" hi")]
+    const out = toProviderMessages(history, 200, { summary: { upto: "m1", top: "早前聊过压缩" } })
+    expect(out[0]).toEqual({ role: "system", content: "早期对话脉络：早前聊过压缩" })
+  })
+
+  it("summary 未传时不注入脉络项（行为不变）", () => {
+    const out = toProviderMessages([userMsg("你好")], 200, {})
+    expect(out[0]!.role).not.toBe("system")
+  })
+
+  it("tokenBudget：大工具结果被预算挤掉，只保留装得下的最近几条", () => {
+    // 3 条工具结果各 100 字（estimateTokens ≈ 25），预算只装得下 2 条
+    const history = [...toolMsg("a".repeat(100)), ...toolMsg("b".repeat(100)), ...toolMsg("c".repeat(100))]
+    const out = toProviderMessages(history, 200, { tokenBudget: 60 })
+    const contents = out.filter((m) => m.role === "tool").map((m) => (m as { content: string }).content)
+    const evicted = contents.filter((c) => c.startsWith("[此工具输出已省略"))
+    expect(evicted.length).toBe(1) // 最旧的一条被挤掉
+  })
+
+  it("tokenBudget 装得下时不省略", () => {
+    const history = [...toolMsg("x".repeat(50))]
+    const out = toProviderMessages(history, 200, { tokenBudget: 10_000 })
+    expect(out.some((m) => m.role === "tool" && !(m as { content: string }).content.startsWith("["))).toBe(true)
+  })
+})

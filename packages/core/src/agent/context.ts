@@ -1,31 +1,52 @@
 import type { Message } from "../protocol/messages.js"
 import { isBlockType } from "../protocol/blocks.js"
 import type { ContentPart, ProviderMessage, ProviderToolCall } from "../provider/types.js"
+import { estimateTokens } from "../session/compaction.js"
 
 export function toProviderMessages(
   history: Message[],
   window: number,
-  opts?: { toolResultKeep?: number },
+  opts?: { toolResultKeep?: number; tokenBudget?: number; summary?: { upto: string; top: string } },
 ): ProviderMessage[] {
   const recent = history.slice(-window)
   // A tool message whose paired assistant message fell outside the window is
   // unusable for OpenAI-compatible APIs — drop leading orphans.
   while (recent.length > 0 && recent[0].role === "tool") recent.shift()
-  // Tool-result eviction (spec 6.3): the newest `toolResultKeep` tool
-  // results are sent verbatim; older ones are replaced by a one-line
-  // placeholder naming the call. Storage is never touched — this is the
-  // outgoing request only. Absent opts = current behavior (keep all).
-  const keep = opts?.toolResultKeep
-  const evict = new Set<string>()
-  if (keep !== undefined) {
-    let seen = 0
-    for (let i = recent.length - 1; i >= 0; i--) {
-      for (const b of recent[i]!.blocks) {
-        if (!isBlockType("tool_result", b)) continue
-        if (seen++ >= keep) evict.add(b.callId)
-      }
+
+  // ---- 工具结果收集（最新→最旧）----
+  const results: Array<{ callId: string; output: string }> = []
+  for (let i = recent.length - 1; i >= 0; i--) {
+    for (const b of recent[i]!.blocks) {
+      if (isBlockType("tool_result", b)) results.push({ callId: b.callId, output: b.output })
     }
   }
+  // 循环从最新消息扫到最旧，收集结果天然已是最新在前（无需再 reverse）
+
+  const evict = new Set<string>()
+  const keep = opts?.toolResultKeep
+  const capped = keep !== undefined ? results.slice(0, keep) : results
+  for (const r of results.slice(capped.length)) evict.add(r.callId) // 条数上限（原语义，现为上限而非固定数）
+
+  if (opts?.tokenBudget !== undefined && capped.length > 0) {
+    // 基线 = 非工具结果内容的估算 + 每个被条数上限挤掉结果的占位行（约 30 token）
+    // （system 提示与工具定义的固定开销不含在内：触发线本身已为其留了余量）
+    let acc = 0
+    for (const m of recent) {
+      for (const b of m.blocks) {
+        if (isBlockType("text", b) || isBlockType("thinking", b) || isBlockType("note", b)) acc += estimateTokens(b.text)
+        else if (isBlockType("tool_call", b)) acc += estimateTokens(b.argsJson)
+        else if (isBlockType("attachment", b) && b.text !== undefined) acc += estimateTokens(b.text)
+      }
+    }
+    acc += results.slice(capped.length).length * 30
+    // 最新→最旧逐条装：装得下保留，装不下（含它之后全部）省略
+    for (const r of capped) {
+      const t = estimateTokens(r.output)
+      if (acc + t > opts.tokenBudget) evict.add(r.callId)
+      else acc += t
+    }
+  }
+
   // callId → tool name/args for placeholder text
   const callMeta = new Map<string, { name: string; args: string }>()
   for (const m of recent) {
@@ -35,6 +56,9 @@ export function toProviderMessages(
     }
   }
   const out: ProviderMessage[] = []
+  if (opts?.summary !== undefined) {
+    out.push({ role: "system", content: `早期对话脉络：${opts.summary.top}` })
+  }
   for (let i = 0; i < recent.length; i++) {
     const m = recent[i]!
     if (m.role === "user" || m.role === "assistant") {

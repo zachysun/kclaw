@@ -20,6 +20,7 @@ interface ChatChunk {
 function toApiMessages(req: LlmRequest): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [{ role: "system", content: req.system }]
   for (const m of req.messages) {
+    if (m.role === "system") { out.push({ role: "system", content: m.content }); continue }
     if (m.role === "user") out.push({ role: "user", content: m.content })
     else if (m.role === "assistant") {
       out.push({

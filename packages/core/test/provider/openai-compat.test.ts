@@ -80,6 +80,26 @@ describe("openai-compat client", () => {
     expect(captured!.headers.get("authorization")).toBe("Bearer k")
   })
 
+  it("messages 里的 system 项按顺序透传（人格 system 之后）", async () => {
+    let captured: Request | undefined
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      captured = new Request(input, init)
+      return sseResponse([{ choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 0, completion_tokens: 0 } }])
+    }) as unknown as typeof fetch
+    await collect(createOpenAiCompatClient({ baseUrl: "https://x/v1", apiKey: "k", fetchImpl }), {
+      model: "m", system: "be brief",
+      messages: [
+        { role: "system", content: "早期对话脉络：早前聊过压缩" },
+        { role: "user", content: "hi" },
+      ],
+      tools: [],
+    })
+    const body = await captured!.json()
+    expect(body.messages[0]).toEqual({ role: "system", content: "be brief" }) // 人格在前
+    expect(body.messages[1].role).toBe("system")
+    expect(body.messages[1].content.startsWith("早期对话脉络：")).toBe(true)
+  })
+
   it("throws the classified `llm http <status>` message on non-2xx", async () => {
     // the exact prefix is the classification contract withRetry's
     // isTransient regex depends on (/llm http (429|5\d\d|timeout)/)
