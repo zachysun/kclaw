@@ -260,6 +260,24 @@ describe("compacting indicator cancel button (v3 compaction.cancel)", () => {
     expect(h.container.querySelector('[data-testid="compaction-cancel"]')).toBeNull()
     h.unmount()
   })
+
+  it("hides the cancel button for a manual compaction (user-initiated, not cancellable)", () => {
+    // Important-2: cancelCompaction 不作用于 manual 压缩——manual 阶段不渲染按钮。
+    // 指示行本身仍显示（"正在压缩早期对话…"对 manual 同样成立）。
+    const h = mountView([], { view: { compacting: true, compactingPhase: "manual" }, onCancelCompaction: vi.fn() })
+    const indicator = h.container.querySelector('[data-testid="compacting-indicator"]')
+    expect(indicator).not.toBeNull()
+    expect(indicator!.querySelector('[data-testid="compaction-cancel"]')).toBeNull()
+    h.unmount()
+  })
+
+  it("shows the cancel button for automatic compaction phases (in-run / post-run)", () => {
+    for (const phase of ["in-run", "post-run"]) {
+      const h = mountView([], { view: { compacting: true, compactingPhase: phase }, onCancelCompaction: vi.fn() })
+      expect(h.container.querySelector('[data-testid="compaction-cancel"]')).not.toBeNull()
+      h.unmount()
+    }
+  })
 })
 
 describe("compact context block", () => {

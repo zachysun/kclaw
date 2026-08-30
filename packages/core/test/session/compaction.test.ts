@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { newAssistantMessage, newMessage } from "../../src/protocol/messages.js"
 import { estimateContextTokens, estimateTokens } from "../../src/session/compaction.js"
-import { chooseBoundary, renderSegment, segmentRanges } from "../../src/session/compaction.js"
+import { chooseBoundary, emergencyBoundary, renderSegment, segmentRanges } from "../../src/session/compaction.js"
 
 function hist(...roles: Array<"user" | "assistant">): Array<ReturnType<typeof newMessage>> {
   return roles.map((r, i) =>
@@ -69,6 +69,23 @@ describe("chooseBoundary", () => {
   it("returns undefined for history without user messages", () => {
     const a = newMessage("s", "assistant", [{ id: "b0", type: "text", text: "x".repeat(5000) }])
     expect(chooseBoundary([a], { budget: 10, targetRatio: 0.5 })).toBeUndefined()
+  })
+})
+
+describe("emergencyBoundary", () => {
+  it("keeps only the last user turn: keepFrom = the last user message index", () => {
+    const active = hist("user", "assistant", "user", "assistant")
+    // last user is at index 2 → keep active[2..], compact everything before it
+    expect(emergencyBoundary(active)).toBe(2)
+  })
+
+  it("returns undefined when the whole active is a single turn (nothing to compress)", () => {
+    expect(emergencyBoundary(hist("user", "assistant"))).toBeUndefined()
+  })
+
+  it("returns undefined for history without user messages", () => {
+    const a = newMessage("s", "assistant", [{ id: "b0", type: "text", text: "x".repeat(500) }])
+    expect(emergencyBoundary([a])).toBeUndefined()
   })
 })
 

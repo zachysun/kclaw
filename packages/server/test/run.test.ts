@@ -1295,6 +1295,56 @@ describe("RunManager context compaction v3", () => {
     expect(events.filter((e) => e.type === "llm.started")).toHaveLength(1)
   })
 
+  it("emergency bypasses the yellow-line gate when the anchor is missing; the forced boundary still rescues", async () => {
+    // Important-1 regression: the rescue is consulted when the FIRST request of a
+    // run overflows, but `active` may hold no assistant message yet (a post-run
+    // compaction just finished, the retained part has no reply) → the estimate
+    // anchors to 0, misses system/tool-def overhead and sits BELOW the yellow
+    // line while the real request genuinely overflows. Before the fix the
+    // yellow-line check silently dropped the rescue and the run died with the
+    // error; now emergency skips the gate and, when chooseBoundary can't find a
+    // boundary (the only user message is at index 0), falls back to
+    // emergencyBoundary — keep the last user turn, compress everything before it.
+    const reqs: LlmRequest[] = []
+    const { env, manager } = makeEnv(
+      recordRequests(throwFirstClient("context length exceeded", [
+        textTurn("段摘要E"), textTurn("总摘要E"), textTurn("恢复"),
+      ]), reqs),
+      (c) => { c.sessions.contextTokens = 10 }, // yellow = 6.6, target = 3.3
+    )
+    const session = env.sessions.create("急救豁免黄线")
+    // a low-anchor history: the assistant message carries tiny inputTokens, so
+    // the estimate (anchor + fresh user text) is far below the line while the
+    // provider still reports an overflow on the first request
+    const u1 = newMessage(session.id, "user", [{ id: "seed-u-1", type: "text", text: "历史问题1" }])
+    const a1 = newAssistantMessage(session.id, "mock-model", [{ id: "seed-a-1", type: "text", text: "历史回答1" }], { inputTokens: 2, outputTokens: 0 })
+    env.sessions.appendMessage(session.id, u1)
+    env.sessions.appendMessage(session.id, a1)
+    const socket = new FakeSocket()
+    env.bus.subscribe(session.id, socket)
+
+    const outcome = await manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
+    // the rescue ran and the retried request completed the run — not an error
+    expect(outcome.stopReason).toBe("end_turn")
+
+    const records = env.sessions.readCompactions(session.id)
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({ trigger: "in-run", emergency: true, from: null, upto: a1.id, messages: 2 })
+    const events = received(socket)
+    expect(events.find((e) => e.type === "compaction.completed")!.payload).toEqual({
+      segments: 1, kept: 1, phase: "in-run", result: "ok",
+    })
+    // the retry went out over the compacted view: thread item first, seeded
+    // verbatim text gone, only the fresh user turn remains
+    expect(reqs.length).toBe(4)
+    const retry = reqs[3]!
+    expect(retry.messages[0]!.role).toBe("system")
+    expect(retry.messages[0]!.content).toContain("早期对话脉络：总摘要E")
+    expect(JSON.stringify(retry.messages)).not.toContain("历史问题1")
+    expect(JSON.stringify(retry.messages)).not.toContain("历史回答1")
+    expect(JSON.stringify(retry.messages)).toContain("新问题")
+  })
+
   it("mid-run compaction at the red line: phase in-run, the next request leads with the thread item", async () => {
     const reqs: LlmRequest[] = []
     const { env, manager } = makeEnv(

@@ -413,6 +413,19 @@ describe("compaction state", () => {
     expect(applyEvent(again, ev("run.completed", { stopReason: "end_turn" })).compacting).toBe(false)
     expect(applyEvent(again, ev("run.failed", { error: { code: "x", message: "y" } })).compacting).toBe(false)
   })
+
+  it("compactingPhase mirrors the started phase and clears together with compacting", () => {
+    // Important-2: the phase decides whether the cancel button renders — manual
+    // must be distinguishable from in-run/post-run until the compaction ends.
+    const started = applyEvent(initChat([]), ev("compaction.started", { phase: "manual" }))
+    expect(started.compactingPhase).toBe("manual")
+    const done = applyEvent(started, ev("compaction.completed", { segments: 1, kept: 2, phase: "manual", result: "ok" }))
+    expect(done.compactingPhase).toBeUndefined()
+    // run lifecycle also clears the phase (dropped-frame backstop)
+    const again = applyEvent(initChat([]), ev("compaction.started", { phase: "post-run" }))
+    expect(again.compactingPhase).toBe("post-run")
+    expect(applyEvent(again, ev("run.started", { trigger: "user" })).compactingPhase).toBeUndefined()
+  })
 })
 
 describe("optimistic user echo", () => {

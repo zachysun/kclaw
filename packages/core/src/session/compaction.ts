@@ -98,6 +98,22 @@ export function chooseBoundary(
 }
 
 /**
+ * 超限急救的强制分界（spec 5.6）：预算细判在锚点缺失时不可信——急救通常发生
+ * 在压缩后的首请求或单轮工具输出暴涨时，active 里可能没有 assistant 锚点，
+ * system 与工具定义的固定开销全漏计，估算会明显偏低，chooseBoundary 据此可能
+ * 找不到边界。急救不看预算，直接退守最小可行上下文：只保留最近一轮用户轮次
+ * （最后一条 user 消息及其之后的整轮），更早的全部压掉。返回 keepFrom；整个
+ * active 只有一轮（无早于最后一条 user 消息的内容）时返回 undefined。
+ */
+export function emergencyBoundary(active: Message[]): number | undefined {
+  for (let i = active.length - 1; i >= 0; i--) {
+    if (active[i]!.role !== "user") continue
+    return i === 0 ? undefined : i
+  }
+  return undefined
+}
+
+/**
  * Map persisted segments back to their original messages (spec 5.1/6.4.1).
  * Segment i spans (previous upto | firstFromExclusive | history start) to
  * its own upto. A stale upto yields an empty message list — callers skip it.

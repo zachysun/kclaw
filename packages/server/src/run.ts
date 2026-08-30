@@ -26,6 +26,7 @@ import {
   collectStreamText,
   ConfigPermissionGate,
   createBuiltinTools,
+  emergencyBoundary,
   estimateContextTokens,
   makeEvent,
   newBlockId,
@@ -1125,11 +1126,22 @@ export class RunManager {
     const atRatio = config.sessions.compactAtRatio ?? 0.66
     const targetRatio = config.sessions.compactTargetRatio ?? 0.33
     const manual = opts.manual === true
-    if (!manual && estimateContextTokens(active, userText) < budget * atRatio) {
+    const emergency = opts.emergency === true
+    // 急救豁免黄线细判（spec 5.6）：溢出发生时"已经爆了"就是事实——尤其压缩后
+    // 首请求里 active 没有 assistant 锚点，system/工具定义开销全漏计，估算会明显
+    // 偏低，按黄线拦截会静默放弃急救、run 直接以 error 收场。急救只跳过触发判断，
+    // 后续流程（两次摘要调用、meta 写入、审计、事件）与普通压缩完全一致。
+    if (!manual && !emergency && estimateContextTokens(active, userText) < budget * atRatio) {
       return { summary: prev?.top, upto: prev?.upto, segments: prev?.segments.length ?? 0, active, compacted: false }
     }
 
-    const boundary = chooseBoundary(active, { budget, targetRatio })
+    let boundary = chooseBoundary(active, { budget, targetRatio })
+    if (boundary === undefined && emergency) {
+      // 预算细判不可信时 chooseBoundary 可能切不出边界——强制退守最小可行
+      // 上下文：只保留最近一轮用户轮次（emergencyBoundary）。
+      const forced = emergencyBoundary(active)
+      if (forced !== undefined) boundary = { keepFrom: forced }
+    }
     if (boundary === undefined) {
       return { summary: prev?.top, upto: prev?.upto, segments: prev?.segments.length ?? 0, active, compacted: false }
     }

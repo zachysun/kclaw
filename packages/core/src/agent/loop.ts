@@ -393,6 +393,10 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       let next: ActiveSummary | null = null
       try { next = await deps.onContextOverflow!(streamError) } catch { next = null }
       if (next === null) break
+      // 钩子 await 期间的 abort 窄窗口：急救压缩可能正好在信号触发后归并完、
+      // 返回了有效视图——此刻信号已中止，重发注定立刻被拆（下一轮迭代的
+      // abort 检查点兜底），但主动检查能省下一次注定无用的模型调用。
+      if (deps.signal?.aborted) break
       compacted = next // 换压缩视图，整次重发一次
     }
     if (curText) texts.push(curText)

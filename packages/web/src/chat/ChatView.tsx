@@ -243,14 +243,16 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
       {view.compacting === true && (
         <div className="run-indicator compacting" data-testid="compacting-indicator" aria-live="polite">
           正在压缩早期对话…
-          {/* 取消按钮只在压缩进行中渲染（指示行本身就在 compacting 条件内）；
-              completed（任意 result）清掉 compacting 后按钮随行消失。 */}
-          <button
-            type="button"
-            className="compaction-cancel"
-            data-testid="compaction-cancel"
-            onClick={() => onCancelCompaction?.()}
-          >取消</button>
+          {/* 取消按钮只在自动压缩（in-run/post-run）渲染：manual 是用户自己发起的
+              压缩，服务端 cancelCompaction 也不作用于它，渲染了点了也没用。 */}
+          {view.compactingPhase !== "manual" && (
+            <button
+              type="button"
+              className="compaction-cancel"
+              data-testid="compaction-cancel"
+              onClick={() => onCancelCompaction?.()}
+            >取消</button>
+          )}
         </div>
       )}
       {view.runState === "running" && view.retryHint !== undefined && view.retryHint !== null && (

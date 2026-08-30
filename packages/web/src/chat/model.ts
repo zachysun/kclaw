@@ -224,6 +224,11 @@ export interface ChatState {
    * lifecycle events also clear it as a dropped-frame backstop.
    */
   compacting?: boolean
+  /**
+   * 在飞压缩的阶段（compaction.started 的 payload.phase）。manual 时取消按钮
+   * 不渲染（用户自己发起的压缩，取消语义不存在）；与 compacting 同生共死。
+   */
+  compactingPhase?: string
 }
 
 /** Build the initial view from the persisted message list (no event replay). */
@@ -376,17 +381,17 @@ export function adoptQueuedId(state: ChatState, messageId: string): ChatState {
 export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
   switch (event.type) {
     case "run.started":
-      return { ...state, runState: "running", error: undefined, compacting: false }
+      return { ...state, runState: "running", error: undefined, compacting: false, compactingPhase: undefined }
     case "run.completed":
-      return { ...state, runState: "idle", retryHint: null, compacting: false }
+      return { ...state, runState: "idle", retryHint: null, compacting: false, compactingPhase: undefined }
     case "run.failed":
-      return { ...state, runState: "idle", error: event.payload.error?.message ?? "run failed", retryHint: null, compacting: false }
+      return { ...state, runState: "idle", error: event.payload.error?.message ?? "run failed", retryHint: null, compacting: false, compactingPhase: undefined }
     case "compaction.started":
-      return { ...state, compacting: true }
+      return { ...state, compacting: true, compactingPhase: event.payload.phase ?? undefined }
     case "compaction.completed":
       // v3: completed is guaranteed after started — ANY result (ok/failed/
       // cancelled) ends the compaction, so the flag clears unconditionally.
-      return { ...state, compacting: false }
+      return { ...state, compacting: false, compactingPhase: undefined }
     case "llm.completed":
       return { ...state, retryHint: null }
     case "llm.failed":

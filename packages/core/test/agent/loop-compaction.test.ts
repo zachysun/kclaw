@@ -133,4 +133,30 @@ describe("compaction hooks in the agent loop", () => {
     expect(outcome.stopReason).toBe("error")
     expect(onContextOverflow).not.toHaveBeenCalled()
   })
+
+  it("信号在急救钩子 await 期间中止：不再做注定无用的重试，run 以 aborted 收场", async () => {
+    // 窄窗口（T5 minor）：溢出发生后、急救压缩归并完成的那一刻用户取消——
+    // 钩子返回了有效视图但信号已中止。修复前循环会带着已中止的信号再发起一次
+    // 请求（streamWithAbort 立即短路，但那仍是一次多余的模型调用，calls 到 2）；
+    // 修复后 await 归来先查信号，直接放弃重试（calls 停在 1）。
+    const events: AgentEvent[] = []
+    let calls = 0
+    const ctrl = new AbortController()
+    const llm: LlmClient = {
+      async *stream(): AsyncIterable<LlmStreamEvent> {
+        calls += 1
+        if (calls === 1) throw new Error("maximum context length exceeded")
+        yield { type: "text_delta", delta: "recovered" }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+      },
+    }
+    const deps: AgentDeps = {
+      ...baseDeps(llm, events),
+      signal: ctrl.signal,
+      onContextOverflow: async () => { ctrl.abort(); return { upto: "u1", top: "S" } },
+    }
+    const outcome = await runAgent(baseInput(), deps)
+    expect(calls).toBe(1)
+    expect(outcome.stopReason).toBe("aborted")
+  })
 })
