@@ -80,6 +80,9 @@ export async function runWebCommand(parsed: ParsedSlash, ctx: WebCommandCtx): Pr
       }
       return true
     }
+    case "memory":
+      ctx.notify("记忆管理请用顶部的「记忆」页")
+      return true
     case "help":
       return true
     default:

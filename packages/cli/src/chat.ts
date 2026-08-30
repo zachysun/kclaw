@@ -343,6 +343,11 @@ export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean
       else line(dim(`✱ 早期对话已压缩为 ${p.segments} 段，保留最近 ${p.kept} 条原文（早期细节可用 session_search 检索）`), ctx)
       return false
     }
+    // memory.written（项目级事务，广播不带 sessionId）：记忆已落盘，dim 一行
+    // 提示路径（spec 9.1 CLI 行为），不是 run 终止事件。
+    case "memory.written":
+      line(dim(`已写入记忆: ${ev.payload.path}`), ctx)
+      return false
     case "run.failed":
       line(red(`✖ 运行失败: ${ev.payload.error.message}`), ctx)
       return true

@@ -400,6 +400,41 @@ describe("/interrupt", () => {
   })
 })
 
+describe("/memory", () => {
+  it("lists projects with no args", async () => {
+    const calls: string[] = []
+    const fake = makeFakeCtx(async (_m: string, path: string) => {
+      calls.push(path)
+      if (path === "/memory/projects") {
+        return [{ id: "kclaw-a3f2c9", workdir: "/w/kclaw", threads: 3, lastActivity: "2026-08-28" }]
+      }
+      throw new Error(`unexpected ${path}`)
+    })
+    const registry = createRegistry(fake.ctx)
+    await runOrHint({ command: "memory", args: "" }, registry, fake.ctx)
+    expect(calls).toEqual(["/memory/projects"])
+    const printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.some((t) => t.includes("kclaw-a3f2c9"))).toBe(true)
+  })
+
+  it("project arg lists threads; topic arg prints the thread file", async () => {
+    const fake = makeFakeCtx(async (_m: string, path: string) => {
+      if (path === "/memory/projects/kclaw-a3f2c9") {
+        return { id: "kclaw-a3f2c9", threads: [{ topic: "ws", title: "重连", status: "active", updated: "2026-08-28" }] }
+      }
+      if (path === "/memory/threads/kclaw-a3f2c9/ws") return { content: "---\ntopic: ws\n---" }
+      throw new Error(`unexpected ${path}`)
+    })
+    const registry = createRegistry(fake.ctx)
+    await runOrHint({ command: "memory", args: "kclaw-a3f2c9" }, registry, fake.ctx)
+    let printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.some((t) => t.includes("重连"))).toBe(true)
+    await runOrHint({ command: "memory", args: "kclaw-a3f2c9 ws" }, registry, fake.ctx)
+    printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.some((t) => t.includes("topic: ws"))).toBe(true)
+  })
+})
+
 describe("/queue", () => {
   it("lists numbered entries; cancel <n> and cancel all hit queue.cancel", async () => {
     const entries = [

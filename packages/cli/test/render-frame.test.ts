@@ -102,6 +102,15 @@ describe("renderFrame compact note dedup", () => {
   })
 })
 
+describe("renderFrame memory.written", () => {
+  it("prints a dim notice line", async () => {
+    const out = await capture((ctx) =>
+      renderFrame(ev("memory.written", { path: "/m/global/persona.md", kind: "cognition" }), ctx),
+    )
+    expect(out).toContain("已写入记忆: /m/global/persona.md")
+  })
+})
+
 describe("renderFrame compaction.completed result branches", () => {
   it("prints the failure hint when result is failed", async () => {
     const out = await capture((ctx) =>
