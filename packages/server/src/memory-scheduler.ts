@@ -30,6 +30,10 @@ export interface MemorySchedulerHandle { stop(): Promise<void> }
 
 export function startMemoryScheduler(deps: {
   system: MemorySystem
+  /**
+   * SessionStore（M-4：当前调度器不直接读会话——项目维度活动时间经
+   * system.lastActivity 取；保留该字段与 brief 的宿主接口契约一致，供宿主/后续任务扩展）。
+   */
   sessions: SessionStore
   config: KclawConfig
   /** 项目 workdir 集合：每个有记忆（或已有会话）的项目；由 daemon 维护的去重集合。 */
@@ -56,6 +60,9 @@ export function startMemoryScheduler(deps: {
         if (last === undefined || now().getTime() - Date.parse(last) >= cfg.write.intervalMinutes * 60_000) {
           const p = deps.system.triggerInterval(workdir).catch((e) => log(`kclaw memory interval failed: ${String(e)}`))
           inFlight.add(p); void p.finally(() => inFlight.delete(p))
+          // markIntervalRun 在触发发起后立即推进（即便失败也推进，M-2 取舍）：interval
+          // 语义是"至少每 intervalMinutes 兜底扫一次"，失败后下个整周期再试，避免同项目
+          // 每次扫描都重试同一失败批次；防重入优先于失败重试。
           deps.system.markIntervalRun(workdir, now().toISOString())
         }
       }
@@ -67,6 +74,12 @@ export function startMemoryScheduler(deps: {
             deps.system.clearFollowCheck(workdir, check.sessionId)
             const p = deps.system.triggerFollow(workdir).catch((e) => log(`kclaw memory follow failed: ${String(e)}`))
             inFlight.add(p); void p.finally(() => inFlight.delete(p))
+          } else if (activity !== "" && Date.parse(activity) > Date.parse(check.endTurnAt)) {
+            // I-1：门禁不过但 end_turn 之后已有更新活动（用户切到别的会话继续对话、
+            // 或该项目又跑了一轮）——该检查的锚点已被新活动取代，语义上旧检查让位
+            // （spec 4.2 "门禁不过则等下一个 end_turn 再判定"），直接清掉，防止
+            // state.json 里 followChecks 无界增长。
+            deps.system.clearFollowCheck(workdir, check.sessionId)
           }
         }
       }

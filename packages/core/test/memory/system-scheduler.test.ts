@@ -60,7 +60,7 @@ describe("trigger interval/follow (直通 pipeline)", () => {
     expect(state.watermarks.interval).toEqual({ sessionId: meta.id, messageId: "m1" })
   })
 
-  it("follow trigger advances the follow watermark so interval does not re-extract", async () => {
+  it("follow trigger advances the follow watermark", async () => {
     const sys = makeSystem()
     const meta = sessions.create("s", undefined, WORKDIR)
     sessions.appendMessage(meta.id, { id: "m1", sessionId: meta.id, role: "user", blocks: [{ id: "b", type: "text", text: "重连风暴修好了" }], createdAt: new Date().toISOString() })

@@ -393,6 +393,8 @@ export class MemorySystem {
   migrateV1Notes(notesDir: string): void {
     if (!existsSync(notesDir)) return
     const files = readDirSafe(notesDir).filter((f) => f.endsWith(".md"))
+    // M-1：空 notes 目录（resolvePaths 恒建）不产生迁移日志噪音，直接返回。
+    if (files.length === 0) return
     this.#log(`memory v1 migration: ${files.length} notes`)
     const globalDir = this.#layout.globalDir
     const today = todayOf(this.#now())

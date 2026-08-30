@@ -1,10 +1,11 @@
 /**
- * Memory scheduler tests (Task 13): 定时触发 + 跟随门禁（挂起检查补查）+ 重启恢复。
+ * Memory scheduler tests (Task 13 + 审查补测)：定时触发 + 跟随门禁（挂起检查补查）+ 重启恢复。
  *
  * startMemoryScheduler 的宿主行为用 fake MemorySystem 驱动（调度器只消费
  * MemorySystem 的公开方法：triggerInterval/triggerFollow/markIntervalRun/
  * intervalLastRun/pendingFollowChecks/clearFollowCheck/lastActivity）；
- * 跟随门禁的判定逻辑以纯函数 followGateDue 单测。
+ * 跟随门禁的判定逻辑以纯函数 followGateDue 单测，调度器消费路径（due→clear+trigger、
+ * 新活动超越→clear 不 trigger、interval 未到期→不触发、idleMinutes=0→不消费）各有集成用例。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -23,8 +24,10 @@ beforeEach(() => {
 })
 afterEach(() => { rmSync(root, { recursive: true, force: true }) })
 
-/** 调度器消费的全部 MemorySystem 公开方法，fake 对齐真实名字。 */
-function fakeSystem() {
+const viFnAsync = () => vi.fn(async () => undefined)
+
+/** 调度器消费的全部 MemorySystem 公开方法，fake 对齐真实名字；可按用例覆盖。 */
+function fakeSystem(over: Record<string, unknown> = {}) {
   return {
     triggerInterval: vi.fn(async () => undefined),
     triggerFollow: viFnAsync(),
@@ -33,9 +36,9 @@ function fakeSystem() {
     pendingFollowChecks: vi.fn(() => []),
     clearFollowCheck: vi.fn(),
     lastActivity: vi.fn(() => ""),
+    ...over,
   }
 }
-const viFnAsync = () => vi.fn(async () => undefined)
 
 describe("startMemoryScheduler", () => {
   it("runs the interval trigger when intervalMinutes has elapsed since the last run", async () => {
@@ -53,6 +56,57 @@ describe("startMemoryScheduler", () => {
     expect(sys.markIntervalRun).toHaveBeenCalledWith("/w/kclaw", now.toISOString())
   })
 
+  it("interval: an unexpired intervalLastRun skips triggerInterval (非首跑)", async () => {
+    const sys = fakeSystem({ intervalLastRun: vi.fn(() => "2026-08-29T11:59:00Z") })
+    const now = new Date("2026-08-29T12:00:00Z") // 距上次 1 分钟 < intervalMinutes=30
+    const handle = startMemoryScheduler({
+      system: sys as unknown as MemorySystem, sessions,
+      config: structuredClone(defaultConfig),
+      workdirs: () => ["/w/kclaw"],
+      intervalMs: 10, now: () => now,
+    })
+    await new Promise((r) => setTimeout(r, 30))
+    await handle.stop()
+    expect(sys.triggerInterval).not.toHaveBeenCalled()
+  })
+
+  it("follow gate: a due check is cleared and triggers triggerFollow", async () => {
+    const sys = fakeSystem({
+      pendingFollowChecks: vi.fn(() => [{ sessionId: "ses_a", endTurnAt: "2026-08-29T10:00:00Z" }]),
+      lastActivity: vi.fn(() => "2026-08-29T09:59:00Z"), // 早于 endTurnAt：无新活动
+    })
+    const now = new Date("2026-08-29T10:11:00Z") // idle 窗口（10 分钟）已过
+    const handle = startMemoryScheduler({
+      system: sys as unknown as MemorySystem, sessions,
+      config: structuredClone(defaultConfig), // idleMinutes=10
+      workdirs: () => ["/w/kclaw"],
+      intervalMs: 10, now: () => now,
+    })
+    await new Promise((r) => setTimeout(r, 30))
+    await handle.stop()
+    expect(sys.clearFollowCheck).toHaveBeenCalledWith("/w/kclaw", "ses_a")
+    expect(sys.triggerFollow).toHaveBeenCalledWith("/w/kclaw")
+  })
+
+  it("follow gate: newer activity supersedes the check — cleared but NOT triggered (I-1)", async () => {
+    const sys = fakeSystem({
+      pendingFollowChecks: vi.fn(() => [{ sessionId: "ses_a", endTurnAt: "2026-08-29T10:00:00Z" }]),
+      lastActivity: vi.fn(() => "2026-08-29T10:30:00Z"), // 晚于 endTurnAt：新活动超越锚点
+    })
+    const now = new Date("2026-08-29T10:11:00Z")
+    const handle = startMemoryScheduler({
+      system: sys as unknown as MemorySystem, sessions,
+      config: structuredClone(defaultConfig),
+      workdirs: () => ["/w/kclaw"],
+      intervalMs: 10, now: () => now,
+    })
+    await new Promise((r) => setTimeout(r, 30))
+    await handle.stop()
+    // I-1：旧检查让位 → clear；但被超越的锚点不触发 follow 提取
+    expect(sys.clearFollowCheck).toHaveBeenCalledWith("/w/kclaw", "ses_a")
+    expect(sys.triggerFollow).not.toHaveBeenCalled()
+  })
+
   it("follow gate: end_turn schedules a check; new activity before idleMinutes cancels it", async () => {
     // 集成级：跟随门禁逻辑做成纯函数 followGateDue 导出单测（见实现），这里测判定函数
     const { followGateDue } = await import("../src/memory-scheduler.js")
@@ -61,6 +115,8 @@ describe("startMemoryScheduler", () => {
     expect(followGateDue(endTurnAt, "2026-08-29T10:05:00Z", { idleMinutes: 10, lastActivityAt: "2026-08-29T10:04:00Z" })).toBe(false)
     // idle 窗口已过且 end_turn 之后无新活动 → due
     expect(followGateDue(endTurnAt, "2026-08-29T10:11:00Z", { idleMinutes: 10, lastActivityAt: "2026-08-29T09:59:30Z" })).toBe(true)
+    // 边界（M-6）：end_turn 时刻的活动不取消（activity == end → 判 due）
+    expect(followGateDue(endTurnAt, "2026-08-29T10:11:00Z", { idleMinutes: 10, lastActivityAt: endTurnAt })).toBe(true)
   })
 
   it("intervalMinutes=0 disables the interval trigger", async () => {
@@ -71,5 +127,18 @@ describe("startMemoryScheduler", () => {
     await new Promise((r) => setTimeout(r, 30))
     await handle.stop()
     expect(sys.triggerInterval).not.toHaveBeenCalled()
+  })
+
+  it("idleMinutes=0 disables the follow branch entirely (no check consumption)", async () => {
+    const sys = fakeSystem({
+      pendingFollowChecks: vi.fn(() => [{ sessionId: "ses_a", endTurnAt: "2026-08-29T10:00:00Z" }]),
+    })
+    const cfg = structuredClone(defaultConfig)
+    cfg.memory.write.idleMinutes = 0
+    const handle = startMemoryScheduler({ system: sys as unknown as MemorySystem, sessions, config: cfg, workdirs: () => ["/w/kclaw"], intervalMs: 10 })
+    await new Promise((r) => setTimeout(r, 30))
+    await handle.stop()
+    expect(sys.triggerFollow).not.toHaveBeenCalled()
+    expect(sys.clearFollowCheck).not.toHaveBeenCalled()
   })
 })
