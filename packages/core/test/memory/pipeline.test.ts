@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, readdirSync } from "node:fs"
+import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, readdirSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { MemoryPipeline, type PipelineDeps } from "../../src/memory/pipeline.js"
+import { projectIdFor } from "../../src/memory/layout.js"
 import { SessionStore } from "../../src/session/store.js"
 import type { LlmClient, LlmStreamEvent } from "../../src/provider/types.js"
 import { newMessage } from "../../src/protocol/messages.js"
@@ -117,7 +118,7 @@ describe("runTrigger", () => {
   it("auto-inactivates threads idle beyond threadInactiveDays", async () => {
     const meta = sessions.create("s", undefined, WORKDIR)
     seedMessages(meta.id, ["旧内容"])
-    const now = new Date("2026-09-30T00:00:00Z")
+    const now = new Date(Date.now() + 20 * 86_400_000) // 相对真实时钟 +20 天，任何运行日期都稳定（appendSection 写 updated 用真实日期）
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
       llm: scriptedLlm([JSON.stringify({ actions: [{ file: "old", op: "new-thread", thread: "old", title: "旧线", content: "c" }] })]),
       model: "m",
@@ -135,6 +136,24 @@ describe("runTrigger", () => {
     const files = readDirDeep(join(root, "memory", "projects"))
     const oldThread = files.find((f) => f.endsWith("old.md"))!
     expect(readFileSync(oldThread, "utf8")).toContain("status: inactive")
+  })
+
+  it("revives an inactive thread on a new episode (spec 5)", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    seedMessages(meta.id, ["线复活内容"])
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      llm: scriptedLlm([JSON.stringify({ actions: [{ file: "old", op: "append", content: "- 做了什么：又有新情节\n- 结果：线复活" }] })]),
+      model: "m",
+    })
+    // 预置一条 inactive 线（模拟时间自动收束后的状态）
+    const projectDir = join(root, "memory", "projects", projectIdFor(WORKDIR))
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(join(projectDir, "old.md"), [
+      "---", "topic: old", "title: 旧线", "status: inactive", "created: 2026-08-01", "updated: 2026-08-01", "---", "",
+      "## 2026-08-01 · 旧情节", "", "- 做了什么：旧内容", "",
+    ].join("\n"), "utf8")
+    await pipe.runTrigger(WORKDIR, "interval")
+    expect(readFileSync(join(projectDir, "old.md"), "utf8")).toContain("status: active")
   })
 })
 

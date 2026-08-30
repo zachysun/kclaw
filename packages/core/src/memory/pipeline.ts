@@ -318,20 +318,22 @@ export class MemoryPipeline {
       return
     }
     // append / update：目标线不存在 → 按 new-thread 处理并记日志（spec 11）
-    const exists = readFileSyncSafe(path) !== undefined
-    if (!exists) {
+    const raw = readFileSyncSafe(path)
+    if (raw === undefined) {
       this.#log(`kclaw memory action targets missing thread ${action.file}: treating as new-thread`)
       this.#applyThreadAction(projectId, { ...action, op: "new-thread", thread: action.thread ?? action.file })
       return
     }
+    const currentIsInactive = parseThreadFile(raw)?.status === "inactive"
     if (action.op === "append") {
       writeThreadFile(path, (tf) => appendSection(tf, { date, heading: firstLineTitle(action.content), body: action.content }), () => { throw new Error("unreachable") })
     } else {
       writeThreadFile(path, (tf) => updateSection(tf, action.section ?? "", action.content), () => { throw new Error("unreachable") })
     }
+    // 复活：inactive 线又有新情节 → active（spec 5）；显式 status 覆盖
     if (action.status === "inactive") {
       writeThreadFile(path, (tf) => ({ ...tf, status: "inactive" }), () => { throw new Error("unreachable") })
-    } else if (action.status === "active") {
+    } else if (action.status === "active" || currentIsInactive) {
       writeThreadFile(path, (tf) => ({ ...tf, status: "active" }), () => { throw new Error("unreachable") }) // inactive → active 复活（spec 5）
     }
     this.#deps.emit?.({ type: "memory.written", path, kind: "episode", topic: action.file })
