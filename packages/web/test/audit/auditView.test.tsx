@@ -240,6 +240,57 @@ describe("AuditView (trail)", () => {
     unmount(root, container)
   })
 
+  it("inserts compaction rows into the trail at the time they happened", async () => {
+    const api = makeApi()
+    api.get.mockImplementation(async (path: string) => {
+      if (path === "/sessions") return [session("s1", "会话1")]
+      if (path === "/sessions/s1/messages") {
+        return [
+          message({ id: "m1", blocks: [{ id: "b1", type: "text", text: "第一条" }], createdAt: "2026-08-19T10:00:00.000Z" }),
+          message({ id: "m2", blocks: [{ id: "b2", type: "text", text: "第二条" }], createdAt: "2026-08-19T10:01:00.000Z" }),
+          message({ id: "m3", blocks: [{ id: "b3", type: "text", text: "第三条" }], createdAt: "2026-08-19T10:02:00.000Z" }),
+        ]
+      }
+      if (path === "/sessions/s1/compactions") {
+        return [
+          {
+            at: "2026-08-19T10:01:30.000Z",
+            trigger: "auto",
+            from: "m1",
+            upto: "m2",
+            messages: 2,
+            segmentSummary: "段摘要内容",
+            top: "总摘要内容",
+          },
+        ]
+      }
+      throw new Error(`unexpected path: ${path}`)
+    })
+
+    const { container, root } = await mount(api)
+    selectValue(container.querySelector('[data-testid="trail-session-select"]') as HTMLSelectElement, "s1")
+    await flush()
+
+    // No standalone "压缩记录" section above the trail anymore.
+    expect(container.querySelector('[data-testid="compactions-section"]')).toBeNull()
+
+    // The compaction (at 10:01:30) sits between m2 (10:01) and m3 (10:02),
+    // inside the single trail list, not pinned to the top.
+    const list = container.querySelector('[data-testid="trail-list"]')!
+    const rowIds = Array.from(list.querySelectorAll("button[data-testid]")).map((el) => el.getAttribute("data-testid"))
+    expect(rowIds).toEqual(["trail-row-m1-0", "trail-row-m2-0", "compaction-row-cp-0", "trail-row-m3-0"])
+
+    // Click-to-expand still shows the segment + top summaries.
+    await act(async () => {
+      ;(list.querySelector('button[data-testid="compaction-row-cp-0"]') as HTMLButtonElement).click()
+    })
+    const full = container.querySelector('[data-testid="compaction-full-cp-0"]')
+    expect(full).not.toBeNull()
+    expect(full!.textContent).toContain("段摘要内容")
+    expect(full!.textContent).toContain("总摘要内容")
+    unmount(root, container)
+  })
+
   it("shows the empty state when the selected session has no messages", async () => {
     const api = makeApi()
     api.get.mockImplementation(async (path: string) => {

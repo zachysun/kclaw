@@ -7,20 +7,22 @@
  * expands on click to the full block
  * payload. No mutation, no /audit — the old audit tail route is gone. A
  * selected session additionally pulls its compaction log
- * (GET /sessions/:id/compactions) into the "压缩记录" section above the trail.
+ * (GET /sessions/:id/compactions) and merges each record into the trail as a
+ * "压缩" row placed at the time the compaction happened (record.at), i.e.
+ * right after the last message it covered.
  */
 import { useEffect, useState } from "react"
 import { type ApiClient } from "../api.js"
 import type { Block, CompactionRecord, Message, Role, SessionMeta, ToolGrantReason, ToolMessage } from "../types.js"
 
-/** One flattened block, carrying the owning message's role + timestamp and (for tool rows) the grant reason. */
-interface TrailRow {
-  key: string
-  role: Role
-  block: Block
-  createdAt: string
-  grantedBy?: ToolGrantReason
-}
+/**
+ * One flattened trail row: either a message block (carrying the owning
+ * message's role + timestamp, and for tool rows the grant reason) or a
+ * compaction audit record (carrying its own `at` timestamp).
+ */
+type TrailRow =
+  | { kind: "block"; key: string; role: Role; block: Block; createdAt: string; grantedBy?: ToolGrantReason }
+  | { kind: "compaction"; key: string; record: CompactionRecord; at: string }
 
 export function AuditView({ api }: { api: ApiClient }) {
   const [sessions, setSessions] = useState<SessionMeta[] | null>(null)
@@ -100,7 +102,7 @@ export function AuditView({ api }: { api: ApiClient }) {
     }
   }, [api, selectedId])
 
-  const rows = flattenTrail(messages)
+  const rows = flattenTrail(messages, compactions)
 
   return (
     <div className="audit-view" data-testid="audit-view">
@@ -131,70 +133,63 @@ export function AuditView({ api }: { api: ApiClient }) {
           {error}
         </div>
       )}
-      {compactions !== null && compactions.length > 0 && (
-        <section className="compactions" data-testid="compactions-section">
-          <h3 className="form-title">压缩记录</h3>
-          <ul className="trail-list" data-testid="compactions-list">
-            {compactions.map((record, i) => {
-              const key = `cp-${i}`
-              return (
-                <li key={key} className="trail-row-item">
-                  <button
-                    type="button"
-                    className="trail-row"
-                    data-testid={`compaction-row-${key}`}
-                    onClick={() => setExpandedKey((k) => (k === key ? null : key))}
-                  >
-                    <span className="trail-meta muted">{new Date(record.at).toLocaleString()}</span>
-                    <span className="trail-type">
-                      {record.trigger === "manual" ? `手动${record.focus ? `（${record.focus}）` : ""}` : "自动"}
-                    </span>
-                    <span className="trail-summary">{`${record.from ?? "会话开头"} – ${record.upto}`}</span>
-                    <span className="trail-meta muted">{`${record.messages} 条`}</span>
-                  </button>
-                  {expandedKey === key && (
-                    <pre className="trail-full" data-testid={`compaction-full-${key}`}>
-                      {`段摘要：\n${record.segmentSummary}\n\n总摘要：\n${record.top}`}
-                    </pre>
-                  )}
-                </li>
-              )
-            })}
-          </ul>
-        </section>
-      )}
       {rows.length === 0 ? (
         <p className="muted table-empty" data-testid="trail-empty">
           暂无轨迹
         </p>
       ) : (
         <ul className="trail-list" data-testid="trail-list">
-          {rows.map((row) => (
-            <li key={row.key} className="trail-row-item">
-              <button
-                type="button"
-                className="trail-row"
-                data-testid={`trail-row-${row.key}`}
-                onClick={() => setExpandedKey((key) => (key === row.key ? null : row.key))}
-              >
-                <span className="trail-type">{blockTypeLabel(row.block)}</span>
-                <span className="trail-summary">{blockSummary(row.block)}</span>
-                <span className="trail-meta muted">
-                  {row.role} · {row.createdAt}
-                </span>
-                {row.grantedBy !== undefined && (
-                  <span className="trail-grant" data-testid={`trail-grant-${row.key}`}>
-                    放行: {row.grantedBy}
+          {rows.map((row) =>
+            row.kind === "compaction" ? (
+              <li key={row.key} className="trail-row-item">
+                <button
+                  type="button"
+                  className="trail-row"
+                  data-testid={`compaction-row-${row.key}`}
+                  onClick={() => setExpandedKey((key) => (key === row.key ? null : row.key))}
+                >
+                  <span className="trail-type">压缩</span>
+                  <span className="trail-summary">
+                    {row.record.trigger === "manual"
+                      ? `手动${row.record.focus ? `（${row.record.focus}）` : ""}`
+                      : "自动"}
+                    {` · ${row.record.from ?? "会话开头"} – ${row.record.upto} · ${row.record.messages} 条`}
                   </span>
+                  <span className="trail-meta muted">{new Date(row.at).toLocaleString()}</span>
+                </button>
+                {expandedKey === row.key && (
+                  <pre className="trail-full" data-testid={`compaction-full-${row.key}`}>
+                    {`段摘要：\n${row.record.segmentSummary}\n\n总摘要：\n${row.record.top}`}
+                  </pre>
                 )}
-              </button>
-              {expandedKey === row.key && (
-                <pre className="trail-full" data-testid={`trail-full-${row.key}`}>
-                  {blockFullContent(row.block)}
-                </pre>
-              )}
-            </li>
-          ))}
+              </li>
+            ) : (
+              <li key={row.key} className="trail-row-item">
+                <button
+                  type="button"
+                  className="trail-row"
+                  data-testid={`trail-row-${row.key}`}
+                  onClick={() => setExpandedKey((key) => (key === row.key ? null : row.key))}
+                >
+                  <span className="trail-type">{blockTypeLabel(row.block)}</span>
+                  <span className="trail-summary">{blockSummary(row.block)}</span>
+                  <span className="trail-meta muted">
+                    {row.role} · {row.createdAt}
+                  </span>
+                  {row.grantedBy !== undefined && (
+                    <span className="trail-grant" data-testid={`trail-grant-${row.key}`}>
+                      放行: {row.grantedBy}
+                    </span>
+                  )}
+                </button>
+                {expandedKey === row.key && (
+                  <pre className="trail-full" data-testid={`trail-full-${row.key}`}>
+                    {blockFullContent(row.block)}
+                  </pre>
+                )}
+              </li>
+            ),
+          )}
         </ul>
       )}
     </div>
@@ -208,32 +203,56 @@ export function AuditView({ api }: { api: ApiClient }) {
  * the grant reason for their callId, resolved from the tool messages' message-
  * level `grantedBy` maps (a tool_call lives on an assistant message, its
  * tool_result + grantedBy on the matching tool message — so we join by callId).
+ * Compaction records become rows of their own; the combined list is sorted by
+ * timestamp ascending, so each compaction sits where it happened — after the
+ * last message it covered, before everything that came later. Timestamp ties
+ * keep insertion order (stable sort; blocks first), which places a compaction
+ * after a message recorded at the exact same instant — compaction always
+ * happens after the message it follows.
  */
-function flattenTrail(messages: Message[] | null): TrailRow[] {
-  if (messages === null) return []
-  const sorted = [...messages].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0))
-
-  // callId → grant reason, gathered from every tool message's grantedBy map.
-  const grantByCallId = new Map<string, ToolGrantReason>()
-  for (const message of sorted) {
-    if (message.role !== "tool") continue
-    const grants = (message as ToolMessage).grantedBy
-    if (grants === undefined) continue
-    for (const [callId, reason] of Object.entries(grants)) grantByCallId.set(callId, reason)
-  }
-
+function flattenTrail(messages: Message[] | null, compactions: CompactionRecord[] | null): TrailRow[] {
   const rows: TrailRow[] = []
-  for (const message of sorted) {
-    message.blocks.forEach((block, i) => {
-      const row: TrailRow = { key: `${message.id}-${i}`, role: message.role, block, createdAt: message.createdAt }
-      if (block.type === "tool_call" || block.type === "tool_result") {
-        const reason = grantByCallId.get(block.callId)
-        if (reason !== undefined) row.grantedBy = reason
-      }
-      rows.push(row)
-    })
+
+  if (messages !== null) {
+    const sorted = [...messages].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0))
+
+    // callId → grant reason, gathered from every tool message's grantedBy map.
+    const grantByCallId = new Map<string, ToolGrantReason>()
+    for (const message of sorted) {
+      if (message.role !== "tool") continue
+      const grants = (message as ToolMessage).grantedBy
+      if (grants === undefined) continue
+      for (const [callId, reason] of Object.entries(grants)) grantByCallId.set(callId, reason)
+    }
+
+    for (const message of sorted) {
+      message.blocks.forEach((block, i) => {
+        const row: TrailRow = {
+          kind: "block",
+          key: `${message.id}-${i}`,
+          role: message.role,
+          block,
+          createdAt: message.createdAt,
+        }
+        if (block.type === "tool_call" || block.type === "tool_result") {
+          const reason = grantByCallId.get(block.callId)
+          if (reason !== undefined) row.grantedBy = reason
+        }
+        rows.push(row)
+      })
+    }
   }
-  return rows
+
+  if (compactions !== null) {
+    compactions.forEach((record, i) => rows.push({ kind: "compaction", key: `cp-${i}`, record, at: record.at }))
+  }
+
+  const rowTime = (row: TrailRow): string => (row.kind === "compaction" ? row.at : row.createdAt)
+  return rows.sort((a, b) => {
+    const at = rowTime(a)
+    const bt = rowTime(b)
+    return at < bt ? -1 : at > bt ? 1 : 0
+  })
 }
 
 /** Whitespace-collapsed, first-80-chars summary. */
