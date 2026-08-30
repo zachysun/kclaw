@@ -28,7 +28,7 @@ import {
   type Message,
 } from "./model.js"
 import { runWebCommand } from "./commands.js"
-import { ChatView, type Disposition, type PendingAttachment } from "./ChatView.js"
+import { ChatView, type CompactionRecordView, type Disposition, type PendingAttachment } from "./ChatView.js"
 
 export interface ChatPanelProps {
   sessionId: string
@@ -299,6 +299,28 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
   }, [api, sessionId])
 
+  // v3 压缩审计（Task 11）：会话选中时与消息并行拉一次 GET
+  // /sessions/:id/compactions（参考 AuditView 的 api 用法）。失败静默——
+  // 折叠条只是增强显示，compactions 保持 null 就不渲染审计条（旧 note
+  // 会话的 contextBarFor 路径不受影响）。
+  const [compactions, setCompactions] = useState<CompactionRecordView[] | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    setCompactions(null)
+    api
+      .get<unknown>(`/sessions/${encodeURIComponent(sessionId)}/compactions`)
+      .then((raw) => {
+        if (cancelled) return
+        setCompactions(Array.isArray(raw) ? raw.flatMap(toCompactionRecordView) : [])
+      })
+      .catch(() => {
+        // 静默：下次会话选中/刷新再试。
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api, sessionId])
+
   const handleSend = useCallback((text: string) => {
     // Slash commands intercept before the ws send path (the same point where
     // the CLI chat loop intercepts) — they never reach the model.
@@ -417,6 +439,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           onCancelQueued={handleCancelQueued}
           onCancelAllQueued={() => handleCancelQueued()}
           onCancelCompaction={handleCancelCompaction}
+          compactions={compactions}
         />
       </div>
     </div>
@@ -428,4 +451,15 @@ function authNotice(err: unknown, fallback: string): string {
   if (err instanceof ApiError && err.status === 401) return "认证已失效，请刷新页面重新输入 token"
   if (err instanceof WsAuthError) return "认证已失效，请刷新页面重新输入 token"
   return fallback
+}
+
+/**
+ * 挑出一条审计记录的 UI 字段（CompactionRecordView 轻量镜像）。非对象或
+ * 字段不全的行直接丢弃（返回空数组供 flatMap）。
+ */
+function toCompactionRecordView(entry: unknown): CompactionRecordView[] {
+  if (typeof entry !== "object" || entry === null) return []
+  const { upto, segmentSummary, trigger, emergency } = entry as Record<string, unknown>
+  if (typeof upto !== "string" || typeof segmentSummary !== "string" || typeof trigger !== "string") return []
+  return [{ upto, segmentSummary, trigger, ...(emergency === true ? { emergency: true } : {}) }]
 }

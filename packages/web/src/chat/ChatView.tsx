@@ -84,9 +84,15 @@ export interface ChatViewProps {
   onCancelAllQueued?: () => void
   /** Cancel the in-flight automatic compaction (the indicator's 取消, v3 compaction.cancel). */
   onCancelCompaction?: () => void
+  /**
+   * v3 压缩审计记录（GET /sessions/:id/compactions 的 UI 镜像，ChatPanel
+   * 在会话选中时并行拉取）。null/undefined（未加载或拉取失败）→ 不渲染
+   * 审计折叠条；旧会话的 compact note 路径（contextBarFor）不受影响。
+   */
+  compactions?: CompactionRecordView[] | null
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, notice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onCancelCompaction }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, notice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onCancelCompaction, compactions }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Slash-suggestion state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -101,6 +107,10 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
   // FIFO 行序（先排队的在下标 0），直接渲染即"先排队在上面"。
   // 独立于一次性 notice——它是状态，不随输入清除。
   const queuedRows = view.queue
+
+  // v3 审计折叠条（压缩不再挂 compact note 后的唯一新来源）；未加载/失败
+  // （null）→ 空数组，消息流与旧版完全一致。
+  const auditBars = compactions == null ? [] : compactionBars(view.messages, compactions)
 
   /** 三选的方向键旋转（spec §7.1：方向键+回车与点击皆可；回车/空格是按钮原生行为）。 */
   const handleTrioKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
@@ -212,11 +222,18 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
           const context = contextBarFor(view.messages, idx)
           return (
             <Fragment key={message.id}>
+              {auditBars.filter((b) => b.insertIdx === idx).map((b) => (
+                <AuditContextNote key={b.key} bar={b} />
+              ))}
               {context !== null && <CompactContextNote context={context} />}
               <MessageBubble message={message} />
             </Fragment>
           )
         })}
+        {/* upto 是最后一条消息（收尾压缩后没有新消息）→ 折叠条挂在消息流末尾。 */}
+        {auditBars.filter((b) => b.insertIdx >= view.messages.length).map((b) => (
+          <AuditContextNote key={b.key} bar={b} />
+        ))}
       </div>
       {view.runState === "running" && (
         <div className="run-indicator" data-testid="run-indicator" aria-live="polite">
@@ -403,6 +420,77 @@ function flattenText(blocks: RenderedBlock[]): string {
   const text = first !== undefined && first.kind === "text" ? first.text : ""
   const collapsed = text.replace(/\s+/g, " ").trim()
   return collapsed.length > 120 ? `${collapsed.slice(0, 120)}…` : collapsed
+}
+
+/**
+ * v3 压缩审计记录的 web 侧轻量镜像（GET /sessions/:id/compactions 的 UI
+ * 子集，刻意不引 @kclaw/core——web 包自包含，见 model.ts 的协议镜像决策）。
+ */
+export interface CompactionRecordView {
+  /** 本次压缩覆盖到的最后一条消息 id（折叠条插在它后面）。 */
+  upto: string
+  /** 本段摘要（折叠条展开后的正文）。 */
+  segmentSummary: string
+  /** "auto" | "in-run" | "manual"（审计用途，暂不参与渲染）。 */
+  trigger: string
+  /** 超限紧急压缩标记（审计用途，暂不参与渲染）。 */
+  emergency?: boolean
+}
+
+/** One audit-driven collapsed context bar to render. */
+export interface CompactionAuditBar {
+  key: string
+  /** 折叠条插在 messages[insertIdx] 之前（= upto 气泡之后）。 */
+  insertIdx: number
+  /** 第 N 次压缩（记录序号 + 1）——与旧 note 的 compact.segments 同源。 */
+  segments: number
+  summary: string
+}
+
+/**
+ * Derive the audit-driven collapsed context bars (v3): one per compaction
+ * record, inserted right AFTER the record's `upto` message. Records whose
+ * upto no longer exists (deleted messages) are dropped.
+ *
+ * 去重（旧 v2 会话兼容）：v2 的同一次压缩还会在"压缩后新一轮的用户消息"
+ * 上挂 compact note（note.compact.segments === 记录序号+1，且该消息必然在
+ * upto 之后——中间隔着保留窗口）。这样一条 note 存在时，contextBarFor 已经
+ * 为该压缩渲染了折叠条，审计条必须跳过（同一压缩不显示两个折叠条）；note
+ * 缺失（消息被删/未持久化）时 note 条本来也不渲染，审计条照常补位。
+ */
+export function compactionBars(
+  messages: RenderedMessage[],
+  records: CompactionRecordView[],
+): CompactionAuditBar[] {
+  const bars: CompactionAuditBar[] = []
+  records.forEach((record, ordinal) => {
+    const segments = ordinal + 1
+    const uptoIdx = messages.findIndex((m) => m.id === record.upto)
+    if (uptoIdx === -1) return
+    const supersededByNote = messages.some(
+      (m, i) =>
+        i > uptoIdx &&
+        m.role === "user" &&
+        m.blocks.some(
+          (b) => b.kind === "note" && b.noteKind === "compact" && b.compact !== undefined && b.compact.segments === segments,
+        ),
+    )
+    if (supersededByNote) return
+    bars.push({ key: `compaction-${ordinal}-${record.upto}`, insertIdx: uptoIdx + 1, segments, summary: record.segmentSummary })
+  })
+  return bars
+}
+
+/** Audit-driven collapsed <details> — same shape/style as the note bar, summary-only body (审计记录无 kept 数据). */
+function AuditContextNote({ bar }: { bar: CompactionAuditBar }) {
+  return (
+    <details className="ctx-note" data-testid="ctx-note-audit">
+      <summary>模型上下文：早期对话已压缩为 {bar.segments} 段（点击展开）</summary>
+      <div className="ctx-note-body">
+        <p className="ctx-note-summary">{bar.summary}</p>
+      </div>
+    </details>
+  )
 }
 
 /** Collapsed-by-default <details> listing what the model sees for early context. */

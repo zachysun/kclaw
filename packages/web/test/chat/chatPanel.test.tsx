@@ -55,6 +55,10 @@ interface ApiRoutes {
   meta?: unknown
   /** GET /config — daemon config (default: {}). */
   config?: unknown
+  /** GET /sessions/:id/compactions — the compaction audit log (default: []). */
+  compactions?: unknown
+  /** Make GET /sessions/:id/compactions reject (the silent-failure path). */
+  compactionsFail?: boolean
 }
 
 function makeApi(getMessages: Message[], routes: ApiRoutes = {}): ApiClient & { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn> } {
@@ -63,6 +67,10 @@ function makeApi(getMessages: Message[], routes: ApiRoutes = {}): ApiClient & { 
       if (path.endsWith("/queue")) return routes.queue ?? []
       if (path === "/config") return routes.config ?? {}
       if (path.endsWith("/messages")) return getMessages
+      if (path.endsWith("/compactions")) {
+        if (routes.compactionsFail === true) throw new Error("compactions down")
+        return routes.compactions ?? []
+      }
       // GET /sessions/:id — session meta (initial-disposition resolution).
       return routes.meta ?? {}
     }),
@@ -160,10 +168,14 @@ async function mount(
     meta?: unknown
     /** GET /config fixture. */
     config?: unknown
+    /** GET /sessions/:id/compactions fixture (the compaction audit log). */
+    compactions?: unknown
+    /** Make the compactions pull reject (silent-failure path). */
+    compactionsFail?: boolean
   } = {},
 ): Promise<Harness> {
   const sessionId = opts.sessionId ?? "s1"
-  const api = makeApi(opts.initialMessages ?? [], { queue: opts.queue, meta: opts.meta, config: opts.config })
+  const api = makeApi(opts.initialMessages ?? [], { queue: opts.queue, meta: opts.meta, config: opts.config, compactions: opts.compactions, compactionsFail: opts.compactionsFail })
   const { sockets, socketFactory, createWs } = setup()
   const ws = createWs()
   const container = document.createElement("div")
@@ -281,6 +293,51 @@ describe("ChatPanel", () => {
     expect(h.container.textContent).toContain("hi")
     expect(h.container.querySelector('[data-testid="msg-user"]')).not.toBeNull()
     h.unmount()
+  })
+
+  it("pulls the compaction audit log on session select and renders audit bars", async () => {
+    const h = await mount({
+      initialMessages: [
+        msg("m0", "user", [{ id: "b0", type: "text", text: "问题一" }]),
+        msg("m1", "assistant", [{ id: "b1", type: "text", text: "回答一" }]),
+        msg("m2", "user", [{ id: "b2", type: "text", text: "问题二" }]),
+      ],
+      // 服务端原样记录（含 UI 不用的字段）——面板只挑 UI 字段。
+      compactions: [{
+        at: "2026-08-30T00:00:01.000Z",
+        trigger: "auto",
+        from: "m0",
+        upto: "m1",
+        messages: 2,
+        segmentSummary: "第一段：聊了环境搭建",
+        top: "总摘要",
+      }],
+    })
+    try {
+      expect(h.api.get).toHaveBeenCalledWith("/sessions/s1/compactions")
+      const bars = h.container.querySelectorAll('[data-testid="ctx-note-audit"]')
+      expect(bars).toHaveLength(1)
+      expect(bars[0]!.textContent).toContain("已压缩为 1 段")
+      expect(bars[0]!.textContent).toContain("第一段：聊了环境搭建")
+    } finally {
+      // 失败也要卸载：残留的 panel 会串到后面 document.querySelector 的用例。
+      h.unmount()
+    }
+  })
+
+  it("a failed compactions pull stays silent: no audit bars, no notice, no error", async () => {
+    const h = await mount({
+      initialMessages: [msg("m1", "user", [{ id: "b1", type: "text", text: "hi" }])],
+      compactionsFail: true,
+    })
+    try {
+      expect(h.api.get).toHaveBeenCalledWith("/sessions/s1/compactions")
+      expect(h.container.querySelectorAll('[data-testid="ctx-note-audit"]')).toHaveLength(0)
+      expect(h.container.querySelector('[data-testid="chat-notice"]')).toBeNull()
+      expect(h.container.querySelector('[data-testid="chat-error"]')).toBeNull()
+    } finally {
+      h.unmount()
+    }
   })
 
   it("renders streamed events live (skeleton → block → delta)", async () => {
