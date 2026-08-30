@@ -37,8 +37,9 @@ export interface MemoryWrittenEvent {
 }
 
 export interface PipelineDeps {
-  llm: LlmClient
-  model: string                                  // 提取模型（已回落解析后的值）
+  /** 每次触发时现取提取/内化用的 llm 与 model（model 为已回落解析后的提取模型）。
+   *  由装配方（MemorySystem）在闭包里做 extractModel 回落主模型解析（spec 4.3）。 */
+  resolveLlm: () => { llm: LlmClient; model: string }
   embed?: EmbeddingClient                        // 判定链通过时才传入；缺省 = 纯关键词
   emit?: (e: MemoryWrittenEvent) => void
   log?: (msg: string) => void                    // 缺省 console.error
@@ -273,8 +274,9 @@ export class MemoryPipeline {
     try { threadsTable = readFileSync(memoryMdPath, "utf8") } catch { /* 尚无索引表 */ }
     let raw: string
     try {
-      raw = await collectStreamText(this.#deps.llm, {
-        model: this.#deps.model,
+      const { llm, model } = this.#deps.resolveLlm()
+      raw = await collectStreamText(llm, {
+        model,
         system: EXTRACT_SYSTEM_PROMPT,
         messages: [{ role: "user", content: `${renderSegment(range)}\n\n--- 已有主题线 ---\n${threadsTable || "（暂无）"}` }],
         tools: [],
@@ -339,18 +341,24 @@ export class MemoryPipeline {
     this.#deps.emit?.({ type: "memory.written", path, kind: "episode", topic: action.file })
   }
 
-  #reindexProject(projectId: string): void {
+  /** 项目库全部情节条目（从线文件读：文件是真相，索引是派生物）。 */
+  #projectEntries(projectId: string): IndexEntry[] {
     const dir = this.#layout.projectDir(projectId)
-    const idx = this.#indexFor(projectId)
-    const onDisk = new Set<string>()
+    const entries: IndexEntry[] = []
     for (const f of readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith(".md") && e.name !== "MEMORY.md")) {
       const tf = parseThreadFile(readFileSync(join(dir, f.name), "utf8"))
       if (tf === undefined) continue
-      for (const s of tf.sections) {
-        const key = `${tf.topic}#${s.date}#${s.heading}`
-        onDisk.add(key)
-        idx.upsert({ key, text: s.body, topic: tf.topic, title: tf.title, date: s.date, updatedAt: tf.updated })
-      }
+      for (const s of tf.sections) entries.push({ key: `${tf.topic}#${s.date}#${s.heading}`, text: s.body, topic: tf.topic, title: tf.title, date: s.date, updatedAt: tf.updated })
+    }
+    return entries
+  }
+
+  #reindexProject(projectId: string): void {
+    const idx = this.#indexFor(projectId)
+    const onDisk = new Set<string>()
+    for (const entry of this.#projectEntries(projectId)) {
+      onDisk.add(entry.key)
+      idx.upsert(entry)
     }
     for (const key of idx.keys()) if (!onDisk.has(key)) idx.remove(key)
     // 向量补算在 reconcile（MemorySystem）统一做（embed 可用时批量）
@@ -402,6 +410,28 @@ export class MemoryPipeline {
     })
   }
 
+  // ---- reconcile / 管理接口（Task 10 MemorySystem 消费） ----
+
+  /** 项目库全量重建索引（FTS，派生物对齐磁盘；spec 2.5）。 */
+  reindexProject(projectId: string): void {
+    this.#reindexProject(projectId)
+  }
+
+  /** 项目库向量补算（spec 7.2）：embed 可用时对缺向量或正文变化的条目批量补。 */
+  async backfillProjectVectors(projectId: string): Promise<void> {
+    await this.#backfillVectors(this.#indexFor(projectId), this.#projectEntries(projectId))
+  }
+
+  /** 全局认知库全量重建索引（含 embed 可用时的向量补算）。 */
+  reindexGlobal(): Promise<void> {
+    return this.#reindexGlobal()
+  }
+
+  /** 重建项目 MEMORY.md 线索引表（派生物，spec 2.4）。 */
+  rebuildMemoryMd(projectId: string): void {
+    this.#rebuildMemoryMd(projectId)
+  }
+
   /** 内化实现（spec 6）；写 global 文件加全局 L2 锁。 */
   async #consolidateLocked(projectId: string, tf: ThreadFile): Promise<void> {
     if (!this.#consolidateEnabled) return
@@ -409,8 +439,9 @@ export class MemoryPipeline {
       const existing = this.#readExistingCognitions()
       let raw: string
       try {
-        raw = await collectStreamText(this.#deps.llm, {
-          model: this.#deps.model,
+        const { llm, model } = this.#deps.resolveLlm()
+        raw = await collectStreamText(llm, {
+          model,
           system: CONSOLIDATE_SYSTEM_PROMPT,
           messages: [{ role: "user", content: `主题线 ${tf.topic}（${tf.title}）的情节：\n\n${renderThreadBody(tf)}\n\n--- 现有认知 ---\n${existing}` }],
           tools: [],

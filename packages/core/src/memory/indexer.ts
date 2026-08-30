@@ -64,13 +64,17 @@ export class VectorIndex {
     return new Set(rows.map((r) => r.key))
   }
 
+  /**
+   * FTS5 召回（spec 7.2）：token 间 OR —— 任一 bigram 命中即召回，bm25 自然把
+   * 命中更多 token 的条目排更前。检索是召回优先（模型侧二次判断），不是 AND 精确。
+   */
   searchFts(query: string, limit: number): Array<{ key: string; rank: number }> {
     const tokens = tokenize(query)
     if (tokens.length === 0) return []
     return (this.#db
       .prepare(`SELECT rowid, bm25(entries_fts) AS rank FROM entries_fts
                 WHERE entries_fts MATCH ? ORDER BY rank LIMIT ?`)
-      .all(ftsQuery(tokens, " "), limit) as { rowid: number; rank: number }[])
+      .all(ftsQuery(tokens, " OR "), limit) as { rowid: number; rank: number }[])
       .map((r) => {
         const e = this.#db.prepare("SELECT key FROM entries WHERE rowid = ?").get(r.rowid) as { key: string } | undefined
         return e === undefined ? null : { key: e.key, rank: r.rank }

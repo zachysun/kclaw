@@ -7,18 +7,7 @@ import { projectIdFor } from "../../src/memory/layout.js"
 import { SessionStore } from "../../src/session/store.js"
 import type { LlmClient, LlmStreamEvent } from "../../src/provider/types.js"
 import { newMessage } from "../../src/protocol/messages.js"
-
-/** 把一次回复编排成 LlmStreamEvent 流的脚本客户端。 */
-function scriptedLlm(replies: string[]): LlmClient {
-  let call = 0
-  return {
-    async *stream(): AsyncIterable<LlmStreamEvent> {
-      const text = replies[Math.min(call++, replies.length - 1)]!
-      yield { type: "text_delta", delta: text }
-      yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
-    },
-  }
-}
+import { scriptedLlm } from "./helpers.js"
 
 let root: string
 let sessions: SessionStore
@@ -40,8 +29,7 @@ describe("runTrigger", () => {
     seedMessages(meta.id, ["我们修好了 WebSocket 重连风暴，加了指数退避，测试通过，这事完结了"])
     const written: string[] = []
     const deps: PipelineDeps = {
-      llm: scriptedLlm([JSON.stringify({ actions: [{ file: "ws-reconnect", op: "new-thread", thread: "ws-reconnect", title: "WebSocket 重连风暴排查", content: "- 做了什么：加指数退避\n- 结果：测试通过" }] })]),
-      model: "test",
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "ws-reconnect", op: "new-thread", thread: "ws-reconnect", title: "WebSocket 重连风暴排查", content: "- 做了什么：加指数退避\n- 结果：测试通过" }] })]), model: "test" }),
       emit: (e) => { if (e.kind === "episode") written.push(e.path) },
     }
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, deps)
@@ -59,8 +47,7 @@ describe("runTrigger", () => {
     seedMessages(meta.id, ["一次性内容"])
     let calls = 0
     const deps: PipelineDeps = {
-      llm: scriptedLlm([JSON.stringify({ actions: [{ file: "x", op: "new-thread", thread: "x", title: "X", content: "c" }] })]),
-      model: "test",
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "x", op: "new-thread", thread: "x", title: "X", content: "c" }] })]), model: "test" }),
       emit: () => { calls += 1 },
     }
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, deps)
@@ -74,7 +61,7 @@ describe("runTrigger", () => {
     seedMessages(meta.id, ["内容"])
     let calls = 0
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
-      llm: scriptedLlm([JSON.stringify({ actions: [] })]), model: "test",
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [] })]), model: "test" }),
       emit: () => { calls += 1 },
     })
     await pipe.runTrigger(WORKDIR, "immediate")
@@ -88,8 +75,7 @@ describe("runTrigger", () => {
     const meta = sessions.create("s", undefined, WORKDIR)
     seedMessages(meta.id, ["内容"])
     const deps: PipelineDeps = {
-      llm: scriptedLlm(["```json\n" + JSON.stringify({ actions: [{ op: "append" }, { file: "ok", op: "new-thread", thread: "ok", title: "OK", content: "正文" }] }) + "\n```"]),
-      model: "test",
+      resolveLlm: () => ({ llm: scriptedLlm(["```json\n" + JSON.stringify({ actions: [{ op: "append" }, { file: "ok", op: "new-thread", thread: "ok", title: "OK", content: "正文" }] }) + "\n```"]), model: "test" }),
     }
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, deps)
     await expect(pipe.runTrigger(WORKDIR, "interval")).resolves.toBeUndefined()
@@ -110,7 +96,7 @@ describe("runTrigger", () => {
         yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 0, outputTokens: 0 } }
       },
     }
-    const pipe = new MemoryPipeline(join(root, "memory"), sessions, { llm: slow, model: "m" })
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, { resolveLlm: () => ({ llm: slow, model: "m" }) })
     await Promise.all([pipe.runTrigger(WORKDIR, "interval"), pipe.runTrigger(WORKDIR, "follow")])
     expect(calls).toBe(1) // 后到者按最新水位重选范围：空，直接返回
   })
@@ -120,8 +106,7 @@ describe("runTrigger", () => {
     seedMessages(meta.id, ["旧内容"])
     const now = new Date(Date.now() + 20 * 86_400_000) // 相对真实时钟 +20 天，任何运行日期都稳定（appendSection 写 updated 用真实日期）
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
-      llm: scriptedLlm([JSON.stringify({ actions: [{ file: "old", op: "new-thread", thread: "old", title: "旧线", content: "c" }] })]),
-      model: "m",
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "old", op: "new-thread", thread: "old", title: "旧线", content: "c" }] })]), model: "m" }),
       now: () => new Date("2026-08-28T00:00:00Z"), // 写入发生在 8-28
     })
     await pipe.runTrigger(WORKDIR, "interval")
@@ -129,7 +114,8 @@ describe("runTrigger", () => {
     // 见实现 #maybeAutoInactivate —— 单测直接对写好的线文件断言由 consolidate 触发链完成，
     // 这里通过第二次 runTrigger 传新 now 验证顺带检查
     const pipe2 = new MemoryPipeline(join(root, "memory"), sessions, {
-      llm: scriptedLlm([JSON.stringify({ actions: [] })]), model: "m", now: () => now,
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [] })]), model: "m" }),
+      now: () => now,
     })
     seedMessages(meta.id, ["新内容让范围非空"]) // 让管线真的跑，顺带检查涉及的线
     await pipe2.runTrigger(WORKDIR, "interval")
@@ -142,8 +128,7 @@ describe("runTrigger", () => {
     const meta = sessions.create("s", undefined, WORKDIR)
     seedMessages(meta.id, ["线复活内容"])
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
-      llm: scriptedLlm([JSON.stringify({ actions: [{ file: "old", op: "append", content: "- 做了什么：又有新情节\n- 结果：线复活" }] })]),
-      model: "m",
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "old", op: "append", content: "- 做了什么：又有新情节\n- 结果：线复活" }] })]), model: "m" }),
     })
     // 预置一条 inactive 线（模拟时间自动收束后的状态）
     const projectDir = join(root, "memory", "projects", projectIdFor(WORKDIR))
@@ -170,8 +155,10 @@ describe("consolidate", () => {
     const consolidateReply = JSON.stringify({
       actions: [{ target: "rule", name: "general", op: "append", content: "## 重连改动规范\n\n重连相关改动必须带注释说明原因。", source: "ws-reconnect#2026-08-28" }],
     })
+    // resolveLlm 每次触发现取：多次 LLM 调用必须共享同一脚本客户端，序号才连续
+    const llm = scriptedLlm([reply, consolidateReply])
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
-      llm: scriptedLlm([reply, consolidateReply]), model: "m",
+      resolveLlm: () => ({ llm, model: "m" }),
       emit: (e) => { written.push({ path: e.path, kind: e.kind }) },
     })
     await pipe.runTrigger(WORKDIR, "interval")
@@ -184,12 +171,12 @@ describe("consolidate", () => {
   it("manual consolidate of an explicit topic", async () => {
     const meta = sessions.create("s", undefined, WORKDIR)
     seedMessages(meta.id, ["内容"])
+    const llm = scriptedLlm([
+      JSON.stringify({ actions: [{ file: "t1", op: "new-thread", thread: "t1", title: "T1", content: "情节" }] }),
+      JSON.stringify({ actions: [{ target: "persona", op: "append", content: "用户偏好简洁回复", source: "t1#2026-08-28" }] }),
+    ])
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
-      llm: scriptedLlm([
-        JSON.stringify({ actions: [{ file: "t1", op: "new-thread", thread: "t1", title: "T1", content: "情节" }] }),
-        JSON.stringify({ actions: [{ target: "persona", op: "append", content: "用户偏好简洁回复", source: "t1#2026-08-28" }] }),
-      ]),
-      model: "m",
+      resolveLlm: () => ({ llm, model: "m" }),
     })
     await pipe.runTrigger(WORKDIR, "interval")
     await pipe.consolidate(WORKDIR, "t1")
@@ -200,15 +187,16 @@ describe("consolidate", () => {
     const meta = sessions.create("s", undefined, WORKDIR)
     seedMessages(meta.id, ["内容"])
     const logs: string[] = []
+    const llm = scriptedLlm([
+      JSON.stringify({ actions: [{ file: "t1", op: "new-thread", thread: "t1", title: "T1", content: "情节", status: "inactive" }] }),
+      JSON.stringify({ actions: [
+        { target: "skill", name: "reconnect", op: "create", content: "SKILL.md" },
+        { target: "wiki", name: "kclaw", op: "create", content: "kclaw 是个人助理" },
+      ] }),
+    ])
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
-      llm: scriptedLlm([
-        JSON.stringify({ actions: [{ file: "t1", op: "new-thread", thread: "t1", title: "T1", content: "情节", status: "inactive" }] }),
-        JSON.stringify({ actions: [
-          { target: "skill", name: "reconnect", op: "create", content: "SKILL.md" },
-          { target: "wiki", name: "kclaw", op: "create", content: "kclaw 是个人助理" },
-        ] }),
-      ]),
-      model: "m", log: (m) => logs.push(m),
+      resolveLlm: () => ({ llm, model: "m" }),
+      log: (m) => logs.push(m),
     })
     await pipe.runTrigger(WORKDIR, "interval")
     expect(readFileSync(join(root, "memory", "global", "wiki", "kclaw.md"), "utf8")).toContain("个人助理")
@@ -221,14 +209,17 @@ describe("consolidate", () => {
     seedMessages(meta.id, ["内容"])
     let calls = 0
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
-      llm: {
-        async *stream(): AsyncIterable<LlmStreamEvent> {
-          calls += 1
-          yield { type: "text_delta", delta: JSON.stringify({ actions: [{ file: "t1", op: "new-thread", thread: "t1", title: "T1", content: "x", status: "inactive" }] }) }
-          yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 0, outputTokens: 0 } }
+      resolveLlm: () => ({
+        llm: {
+          async *stream(): AsyncIterable<LlmStreamEvent> {
+            calls += 1
+            yield { type: "text_delta", delta: JSON.stringify({ actions: [{ file: "t1", op: "new-thread", thread: "t1", title: "T1", content: "x", status: "inactive" }] }) }
+            yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 0, outputTokens: 0 } }
+          },
         },
-      },
-      model: "m", consolidateEnabled: false,
+        model: "m",
+      }),
+      consolidateEnabled: false,
     })
     await pipe.runTrigger(WORKDIR, "interval")
     expect(calls).toBe(1) // 只有提取调用，没有内化调用
@@ -237,12 +228,12 @@ describe("consolidate", () => {
   it("append to a new cognition file does not duplicate the entry", async () => {
     const meta = sessions.create("s", undefined, WORKDIR)
     seedMessages(meta.id, ["内容"])
+    const llm = scriptedLlm([
+      JSON.stringify({ actions: [{ file: "t1", op: "new-thread", thread: "t1", title: "T1", content: "情节", status: "inactive" }] }),
+      JSON.stringify({ actions: [{ target: "rule", name: "nd", op: "append", content: "一条规范", source: "t1#2026-08-28" }] }),
+    ])
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
-      llm: scriptedLlm([
-        JSON.stringify({ actions: [{ file: "t1", op: "new-thread", thread: "t1", title: "T1", content: "情节", status: "inactive" }] }),
-        JSON.stringify({ actions: [{ target: "rule", name: "nd", op: "append", content: "一条规范", source: "t1#2026-08-28" }] }),
-      ]),
-      model: "m",
+      resolveLlm: () => ({ llm, model: "m" }),
     })
     await pipe.runTrigger(WORKDIR, "interval")
     const raw = readFileSync(join(root, "memory", "global", "rule", "nd.md"), "utf8")
