@@ -98,7 +98,7 @@ updated: 2026-08-30
 （正文）
 ```
 
-`scope` 只有两种取值：`global`（所有项目可见）与 `project:<id>`（仅注入到该项目）。`title` 缺省用文件名；`kind`（persona/wiki/rule）由所在位置决定——`persona.md` 是固定文件，`wiki/`、`rule/` 下每个 `.md` 一个认知。
+`scope` 是自由字符串（缺省 `global`）；只有 `global` 与 `project:<id>` 两种取值会参与常驻注入（`cognitionPrompt` 按此过滤），其它取值解析后仍保留在文件里、但不参与注入。`title` 缺省用文件名；`kind`（persona/wiki/rule）由所在位置决定——`persona.md` 是固定文件，`wiki/`、`rule/` 下每个 `.md` 一个认知。
 
 ## 写入管线（MemoryPipeline）
 
@@ -159,7 +159,7 @@ updated: 2026-08-30
 `MemorySystem.cognitionPrompt(workdir)`（`packages/core/src/memory/system.ts`）在每次 run 装配系统提示时调用，返回的认知块拼在 AGENTS.md 基础提示之后（`run.ts` 的 `#systemWithCognition`）。规则：
 
 1. **scope 过滤**：只收 `scope: "global"` 与 `scope: "project:<当前项目id>"` 的认知文件；
-2. **token 预算**：`memory.injectTokenBudget`（默认 1000）按 `estimateTokens(title + body)` 记账；
+2. **token 预算**：`memory.injectTokenBudget`（默认 1000）按 `estimateTokens(title + body)` 记账——**只约束 L2 认知常驻注入**，L1 情节检索的 top-5 是全量注入、不受此限；
 3. **整文件取舍**：按 `rule > persona > wiki` 的优先级逐文件放入，**放不下的整文件跳过**（打一行 `kclaw memory cognition skipped (over inject budget)` 日志），绝不截断；
 4. **块序**固定：`[关于用户]`（persona）→ `[项目认知]`（scope 为 `project:` 的文件）→ `[通用规则]`（全局的 rule/wiki）。
 
@@ -192,7 +192,7 @@ score = fused × 1/(1 + 距今天数/30)      // 时效因子：30 天衰减一�
 
 1. `memory.embedding.model` 为空 → 不构造 embedding 客户端（向量路关闭）；
 2. model 非空 → provider 取 `memory.embedding.provider`；为空回落 `config.providers.default` 条目；
-3. provider 条目存在 → 用该条目的 `baseUrl`/`apiKey` + 配置的 `model` 构造 OpenAI 兼容客户端（`POST /v1/embeddings`，30s 超时，`packages/core/src/memory/embeddings.ts`）；
+3. provider 条目存在 → 用该条目的 `baseUrl`/`apiKey` + 配置的 `model` 构造 OpenAI 兼容客户端（`POST /v1/embeddings`，**超时随 `config.providers.timeoutMs`**——daemon 装配时显式传入，默认 120s；客户端代码在 `packages/core/src/memory/embeddings.ts`）；
 4. 条目不存在 → 打一行 `embedding provider not found, vector path disabled`，向量路关闭（不致命）。
 
 向量路打开时：写入侧在 `reconcile()` 里对缺向量或正文变化的条目批量补算（`backfillVectors`），正文没变的条目**保留旧向量**（双路不退化）；embed 调用失败只打日志、该批降级为纯 FTS。
@@ -220,7 +220,7 @@ score = fused × 1/(1 + 距今天数/30)      // 时效因子：30 天衰减一�
 | 字段 | 默认 | 说明 |
 |------|------|------|
 | `memory.write.immediate` | `true` | `memory_save` 工具立即触发写入 |
-| `memory.write.manual` | `true` | 手动触发开关（当前无用户入口，core 预留 `triggerManual`） |
+| `memory.write.manual` | `true` | 手动触发开关——**预留字段、当前无读取处**：core 的 `triggerManual` 尚未经路由/工具暴露，无用户入口 |
 | `memory.write.intervalMinutes` | `30` | 定时兜底触发的间隔分钟数（`0` = 关闭） |
 | `memory.write.idleMinutes` | `10` | 跟随门禁的空闲分钟数（`0` = 关闭） |
 | `memory.extractModel` | `""` | 提取/内化用的模型，空 = 回落主对话模型 |
@@ -228,7 +228,7 @@ score = fused × 1/(1 + 距今天数/30)      // 时效因子：30 天衰减一�
 | `memory.consolidate` | `true` | 内化开关 |
 | `memory.embedding.provider` | `""` | embedding 的 provider 条目名，空 = 回落 default 条目 |
 | `memory.embedding.model` | `""` | embedding 模型名，空 = 向量路整体关闭（纯 BM25） |
-| `memory.injectTokenBudget` | `1000` | 每轮注入（认知常驻 + 情节检索）的 token 上限 |
+| `memory.injectTokenBudget` | `1000` | L2 认知常驻注入的 token 上限（只约束常驻注入；L1 情节 top-5 全量注入不受此限） |
 | `memory.autoExtract` | （v1 遗留） | 已废弃，被四触发取代；仅容忍存在，读处一律忽略 |
 
 ## 迁移说明（spec 2.6）

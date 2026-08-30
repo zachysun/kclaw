@@ -132,7 +132,7 @@ export function makeEvent<T extends EventType>(
 ): AgentEvent<T>
 ```
 
-`EventType` 共 **34 种**，八个分组：
+`EventType` 共 **35 种**，九个分组：
 
 | 分组 | 事件 | 数量 |
 |------|------|------|
@@ -144,6 +144,7 @@ export function makeEvent<T extends EventType>(
 | note 单发 | `note.emitted` | 1 |
 | 消息排队与引导 | `message.queued` `message.steered` `message.queue_cancelled` | 3 |
 | 上下文压缩 | `compaction.started` `compaction.completed` | 2 |
+| 记忆落盘 | `memory.written` | 1 |
 
 关键 payload：
 
@@ -191,6 +192,15 @@ export interface MessageQueuedPayload {
 }
 export interface MessageSteeredPayload { messageId: string }
 export interface MessageQueueCancelledPayload { messageId?: string; all?: boolean }
+
+// 记忆写入管线每次实际落盘时发出（spec 9.3）：episode 带 topic（线名）、cognition 带 scope；
+// 事件不带 sessionId（项目级事务），只作"已落盘"的轻提示，订阅端不驱动状态机。
+export interface MemoryWrittenPayload {
+  path: string
+  kind: "episode" | "cognition"
+  topic?: string
+  scope?: string
+}
 ```
 
 发射方分布：
@@ -199,6 +209,7 @@ export interface MessageQueueCancelledPayload { messageId?: string; all?: boolea
 |------|--------|
 | run / message / 流式 / llm / confirmation / note / `message.steered` | core 的 agent 循环（`agent/loop.ts`；`message.steered` 在 steering 注入时逐条发出，事件级 `runId` 标识注入的 run） |
 | `message.queued` `message.queue_cancelled` | server 的 `RunManager`（`run.ts`：submit / recoverQueues / queueCancel） |
+| `memory.written` | core 的 `MemoryPipeline`（`memory/pipeline.ts`，每次落盘经装配的 emit 钩子广播；daemon 侧接钩子的点在 `server/daemon.ts`） |
 | `job.*` | server 的 `scheduler-tick.ts` |
 | `session.renamed` | server 的自动命名（`autoname.ts`：新标题写回 meta 后发出） |
 | `attachment.*` | 目前**已定义无发射方**——附件以 attachment 块随用户消息整体持久化与广播（`message.completed` 携带全量消息），不需要单独的块级事件流 |
@@ -228,7 +239,7 @@ export function newId(prefix: IdPrefix): string {
 | `evt` | `events.ts` 的 makeEvent |
 | `run` | `agent/loop.ts` 的 runAgent |
 | `conf` | `permissions/engine.ts` 的确认 id 工厂 |
-| `mem` | `memory/store.ts` |
+| `mem` | `memory/system.ts` |
 | `job` | `jobs/scheduler.ts` |
 | `att` | server 的上传路由（`routes/attachments.ts`，落盘文件名 `<att_…>__<原名>`） |
 
