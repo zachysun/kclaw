@@ -113,6 +113,16 @@ describe("search preserves reconciled vectors (spec 7.2)", () => {
 })
 
 describe("searchAll", () => {
+  it("writeCognition keeps the global index in sync immediately (no reconcile needed)", async () => {
+    const sys = makeSystem()
+    sys.writeCognition("rule", "general", "改版必须回归全量测试")
+    // 直接读全局库索引（绕过 searchAll 内部的自动对账），确认 writeCognition 已重建索引
+    const idx = new VectorIndex(join(root, "memory", "global", "vectors.db"))
+    const hits = idx.searchFts("回归", 5)
+    expect(hits.length).toBeGreaterThan(0)
+    idx.close()
+  })
+
   it("searches project episodes and global cognitions with labels", async () => {
     const sys = makeSystem()
     sys.writeCognition("rule", "general", "重连改动必须带注释说明原因")

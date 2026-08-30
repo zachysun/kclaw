@@ -228,7 +228,15 @@ export class MemoryPipeline {
       ? laterWatermark(rows, ledger.get("interval"), ledger.get("follow"))
       : undefined
     const range = this.#messagesSince(rows, watermark)
-    if (range.length === 0) return
+    if (range.length === 0) {
+      // 空批次也扫（spec 5）：项目静止（无新消息）时仍要收束到期的 active 线。
+      const inactivated = await this.#maybeAutoInactivate(projectId)
+      if (inactivated.length > 0) {
+        this.#reindexProject(projectId)
+        this.#rebuildMemoryMd(projectId)
+      }
+      return
+    }
     const actions = await this.#extract(projectId, range)
     const touched = new Set<string>()
     for (const action of actions) {

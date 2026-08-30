@@ -493,6 +493,8 @@ export class MemorySystem {
     writeCognitionFile(cognitionPath(this.#layout.globalDir, kind, name), kind, name,
       (cf) => ({ ...cf, body: content, updated: today }),
       () => ({ kind, name, title: name, scope: "global", created: today, updated: today, body: content }))
+    // 与 writeThread 对齐：写后立即重建全局索引，检索无需等下次对账（spec 2.5）。
+    void this.#pipeline.reindexGlobal().catch((err) => this.#log(`kclaw memory writeCognition reindex failed: ${String(err)}`))
   }
 
   deleteCognition(kind: CogKind, name: string): void {

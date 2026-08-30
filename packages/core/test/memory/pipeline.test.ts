@@ -124,6 +124,25 @@ describe("runTrigger", () => {
     expect(readFileSync(oldThread, "utf8")).toContain("status: inactive")
   })
 
+  it("auto-inactivates idle threads even on an empty batch (no new messages)", async () => {
+    // 项目静止（无任何会话消息）：一次 interval 触发也应收束到期的 active 线。
+    const projectDir = join(root, "memory", "projects", projectIdFor(WORKDIR))
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(join(projectDir, "old.md"), [
+      "---", "topic: old", "title: 旧线", "status: active", "created: 2026-08-01", "updated: 2026-08-13", "---", "",
+      "## 2026-08-13 · 旧情节", "", "- 做了什么：旧内容", "",
+    ].join("\n"), "utf8")
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [] })]), model: "m" }),
+      now: () => new Date("2026-08-28T00:00:00Z"), // 距线 updated（8-13）15 天 ≥ 14
+    })
+    // sessions 无消息 → 范围为空；仍应收束并重建 MEMORY.md
+    await pipe.runTrigger(WORKDIR, "interval")
+    expect(readFileSync(join(projectDir, "old.md"), "utf8")).toContain("status: inactive")
+    const memoryMd = readFileSync(join(projectDir, "MEMORY.md"), "utf8")
+    expect(memoryMd).toContain("| old | 旧线 | inactive | 2026-08-13 |")
+  })
+
   it("revives an inactive thread on a new episode (spec 5)", async () => {
     const meta = sessions.create("s", undefined, WORKDIR)
     seedMessages(meta.id, ["线复活内容"])
