@@ -25,6 +25,7 @@ await build({
     "cron-parser",
     "yaml",
     "ulidx",
+    "@modelcontextprotocol/sdk",
     "@mozilla/readability",
     "linkedom",
   ],
@@ -53,6 +54,7 @@ await build({
     "cron-parser",
     "yaml",
     "ulidx",
+    "@modelcontextprotocol/sdk",
     "@mozilla/readability",
     "linkedom",
   ],
@@ -76,4 +78,18 @@ writeFileSync("app/server/package.json", stub)
 
 chmodSync("app/cli/cli.js", 0o755)
 chmodSync("app/server/bin/kclaw-server.mjs", 0o755)
+
+// Regression guard: @modelcontextprotocol/sdk must stay externalized (it is
+// inlined above only if someone removes it from the external lists) — inlining
+// it drags cross-spawn in, whose runtime require("child_process") throws inside
+// an ESM bundle and kills every command. Fail the build the moment either
+// bundle re-inlines it.
+for (const out of ["app/cli/cli.js", "app/server/bin/kclaw-server.mjs"]) {
+  const text = readFileSync(new URL(out, import.meta.url), "utf8")
+  if (text.includes("cross-spawn")) {
+    console.error(`kclaw: ${out} inlined cross-spawn — keep @modelcontextprotocol/sdk externalized`)
+    process.exit(1)
+  }
+}
+
 console.log("kclaw: app/ assembled")

@@ -16,6 +16,7 @@
     "@clack/prompts": "^1.7.0",
     "@fastify/static": "^9.3.0",
     "@fastify/websocket": "^11.3.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@mozilla/readability": "^0.6.0",
     "better-sqlite3": "^13.0.3",
     "commander": "^12.1.0",
