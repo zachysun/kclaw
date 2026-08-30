@@ -15,7 +15,7 @@ import { join } from "node:path"
 
 import { MemoryStore, SessionStore, UsageStore, loadConfig, newAssistantMessage, newMessage, resolvePaths, withRetry } from "@kclaw/core"
 import type {
-  AgentEvent, AssistantMessage, KclawConfig, KclawPaths, LlmClient, LlmRequest, LlmStreamEvent, Message, ToolExecutor, ToolMessage, ToolResultBlock,
+  AgentEvent, AssistantMessage, CompactionPhase, KclawConfig, KclawPaths, LlmClient, LlmRequest, LlmStreamEvent, Message, ToolExecutor, ToolMessage, ToolResultBlock,
 } from "@kclaw/core"
 import { EventBus } from "../src/bus.js"
 import { ConfirmationBroker } from "../src/confirm.js"
@@ -866,6 +866,11 @@ describe("RunManager context compaction v2", () => {
     expect(received(socket).some((e) =>
       e.type === "note.emitted" && (e.payload as { block: { kind?: string } }).block?.kind === "compact",
     )).toBe(true)
+    // v3 completed payload: phase from the call site (the pre-run block
+    // reports "post-run" until Task 7 replaces it), ok result, real counts
+    const okCompleted = received(socket).find((e) => e.type === "compaction.completed")
+    expect(okCompleted).toBeDefined()
+    expect(okCompleted!.payload).toEqual({ segments: 1, kept: 2, phase: "post-run", result: "ok" })
     // the main request sees only the kept tail + the new user text
     expect(JSON.stringify(mainReq!.messages)).not.toContain("历史问题1")
     expect(JSON.stringify(mainReq!.messages)).toContain("历史问题2")
@@ -1009,24 +1014,34 @@ describe("RunManager context compaction v2", () => {
   })
 
   it("falls back to full history when the summarizer call fails", async () => {
-    const reqs: LlmRequest[] = []
-    const { env, manager } = makeEnv(
-      recordRequests(failFirstClient("摘要挂了", textTurn("主回复")), reqs),
-      (c) => { c.sessions.contextTokens = 10 },
-    )
-    const session = env.sessions.create("回退")
-    seedHistory(env.sessions, session.id, 2)
-    const socket = new FakeSocket()
-    env.bus.subscribe(session.id, socket)
-    await manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
-    const meta = env.sessions.meta(session.id)
-    expect(meta?.compaction).toBeUndefined()
-    expect(JSON.stringify(reqs.at(-1)!.messages)).toContain("历史问题1") // full history sent
-    // Failure semantics: started was announced, completed never is — clients
-    // clear the compacting state from the run's own lifecycle events instead.
-    const types = received(socket).map((e) => e.type)
-    expect(types).toContain("compaction.started")
-    expect(types).not.toContain("compaction.completed")
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const reqs: LlmRequest[] = []
+      const { env, manager } = makeEnv(
+        recordRequests(failFirstClient("摘要挂了", textTurn("主回复")), reqs),
+        (c) => { c.sessions.contextTokens = 10 },
+      )
+      const session = env.sessions.create("回退")
+      seedHistory(env.sessions, session.id, 2)
+      const socket = new FakeSocket()
+      env.bus.subscribe(session.id, socket)
+      await manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
+      const meta = env.sessions.meta(session.id)
+      expect(meta?.compaction).toBeUndefined()
+      expect(JSON.stringify(reqs.at(-1)!.messages)).toContain("历史问题1") // full history sent
+      // Completed-must-arrive protocol (v3): a started is ALWAYS paired with a
+      // completed — failure reports result "failed" with zeroed counters, and
+      // the failure logs exactly ONCE (inside #compactV2; the caller's catch
+      // only falls back, it no longer logs again).
+      const events = received(socket)
+      expect(events.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "post-run" }])
+      const completed = events.find((e) => e.type === "compaction.completed")
+      expect(completed).toBeDefined()
+      expect(completed!.payload).toEqual({ segments: 0, kept: 0, phase: "post-run", result: "failed" })
+      expect(errorSpy.mock.calls.filter((c) => String(c[0]).startsWith("kclaw compaction failed"))).toHaveLength(1)
+    } finally {
+      errorSpy.mockRestore()
+    }
   })
 
   it("below threshold with existing state: no new calls, no compaction events, note still injected", async () => {
@@ -1131,6 +1146,107 @@ describe("RunManager context compaction v2", () => {
     seedHistory(env.sessions, session.id, 2)
     await manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
     expect(env.sessions.readCompactions(session.id)).toEqual([])
+  })
+
+  it("failed MANUAL compaction: completed(result:failed) on the bus, the throw reaches the caller", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const { env, manager } = makeEnv(
+        failFirstClient("手动摘要挂了", textTurn("不会到这")),
+        (c) => { c.sessions.contextTokens = 10 },
+      )
+      const session = env.sessions.create("手动失败")
+      seedHistory(env.sessions, session.id, 2)
+      const socket = new FakeSocket()
+      env.bus.subscribe(session.id, socket)
+
+      // compactSession keeps propagating #compactV2's throw: the HTTP route
+      // maps it to a 500 carrying the message (routes/compact.test.ts).
+      await expect(manager.compactSession(session.id)).rejects.toThrow("手动摘要挂了")
+
+      const events = received(socket)
+      expect(events.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "manual" }])
+      const completed = events.find((e) => e.type === "compaction.completed")
+      expect(completed).toBeDefined()
+      expect(completed!.payload).toEqual({ segments: 0, kept: 0, phase: "manual", result: "failed" })
+      expect(env.sessions.meta(session.id)?.compaction).toBeUndefined()
+      expect(env.sessions.readCompactions(session.id)).toEqual([])
+      expect(errorSpy.mock.calls.filter((c) => String(c[0]).startsWith("kclaw compaction failed"))).toHaveLength(1)
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it("cancelling the run mid-summarizer: completed(result:cancelled), nothing persisted", async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    let first = true
+    const llm: LlmClient = {
+      async *stream() {
+        if (first) {
+          first = false
+          yield { type: "text_delta", delta: "段摘要（半截）" }
+          await gate // the summarizer call parks; the run is cancelled meanwhile
+          yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+        }
+        yield* textTurn("不该到这")
+      },
+    }
+    const { env, manager } = makeEnv(llm, (c) => { c.sessions.contextTokens = 10 })
+    const session = env.sessions.create("取消压缩")
+    seedHistory(env.sessions, session.id, 2)
+    const socket = new FakeSocket()
+    env.bus.subscribe(session.id, socket)
+
+    const run = manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
+    await waitForEvent(socket, "compaction.started")
+    expect(manager.cancel(session.id)).toBe(true)
+    release() // the parked stream settles only AFTER the abort
+
+    const outcome = await run
+    expect(outcome.stopReason).toBe("aborted") // the run itself aborted, no llm round
+    const events = received(socket)
+    expect(events.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "post-run" }])
+    const completed = events.find((e) => e.type === "compaction.completed")
+    expect(completed).toBeDefined()
+    expect(completed!.payload).toEqual({ segments: 0, kept: 0, phase: "post-run", result: "cancelled" })
+    expect(env.sessions.meta(session.id)?.compaction).toBeUndefined()
+    expect(env.sessions.readCompactions(session.id)).toEqual([])
+  })
+
+  it("emergency in-run compaction audits trigger in-run with the emergency flag", async () => {
+    // #compactV2's real in-run caller (the overflow hook) arrives in Task 7;
+    // until then the audit mapping is proven through a direct call to the
+    // compile-private method (TS `private` — not part of the public API).
+    const llm = scriptClient([textTurn("段摘要E"), textTurn("总摘要E")])
+    const { env, manager } = makeEnv(llm, (c) => { c.sessions.contextTokens = 10 })
+    const session = env.sessions.create("急救会话")
+    const seeded = seedHistory(env.sessions, session.id, 2)
+    const socket = new FakeSocket()
+    env.bus.subscribe(session.id, socket)
+
+    const direct = manager as unknown as {
+      compactV2: (
+        sessionId: string, history: Message[], userText: string, config: KclawConfig,
+        runLlm: LlmClient, model: string,
+        opts?: { focus?: string; manual?: boolean; phase?: CompactionPhase; signal?: AbortSignal; emergency?: boolean },
+      ) => Promise<{ summary?: string; upto?: string; segments: number; active: Message[]; compacted: boolean }>
+    }
+    const out = await direct.compactV2(
+      session.id, env.sessions.readMessages(session.id), "", env.config, llm, "mock-model",
+      { phase: "in-run", emergency: true },
+    )
+
+    expect(out.compacted).toBe(true)
+    expect(out.upto).toBe(seeded[1]!.id)
+    const records = env.sessions.readCompactions(session.id)
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({ trigger: "in-run", emergency: true, upto: seeded[1]!.id, top: "总摘要E" })
+    const events = received(socket)
+    expect(events.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "in-run" }])
+    expect(events.find((e) => e.type === "compaction.completed")!.payload).toEqual({
+      segments: 1, kept: 2, phase: "in-run", result: "ok",
+    })
   })
 })
 

@@ -40,6 +40,7 @@ import {
 import type {
   AgentEvent,
   AttachmentBlock,
+  CompactionPhase,
   CompactionState,
   KclawConfig,
   KclawPaths,
@@ -483,7 +484,7 @@ export class RunManager {
     const history = sessions.readMessages(sessionId)
     const defaultModel = this.#deps.model ?? config.providers.entries[config.providers.default]?.model ?? ""
     const model = config.providers.entries[meta.model ?? ""]?.model ?? meta.model ?? defaultModel
-    const out = await this.#compactV2(sessionId, history, "", config, llm, model, { focus, manual: true })
+    const out = await this.compactV2(sessionId, history, "", config, llm, model, { focus, manual: true, phase: "manual" })
     return {
       message: out.compacted
         ? `压缩了 ${out.segments} 段，剩 ${out.active.length} 条原文消息`
@@ -798,11 +799,15 @@ export class RunManager {
 
     // --- pre-run context compaction v2 (spec 6) ------------------------------
     // Any failure (LLM throw, updateMeta throw) falls back to the full
-    // history — the loop's own window remains the safety net.
+    // history — the loop's own window remains the safety net. Failure logging
+    // and the completed(result:"failed") event happen INSIDE compactV2; this
+    // catch only applies the fallback. The run's abort signal rides along:
+    // cancelling the run mid-summarizer cancels the compaction too (the
+    // cancelled branch returns without throwing, so the fallback is the same).
     let activeHistory = history
     let compactNote: NoteBlock[] = []
     try {
-      const compaction = await this.#compactV2(sessionId, history, input.userText, config, runLlm, model)
+      const compaction = await this.compactV2(sessionId, history, input.userText, config, runLlm, model, { phase: "post-run", signal: controller.signal })
       activeHistory = compaction.active
       if (compaction.summary !== undefined) {
         compactNote = [{
@@ -815,8 +820,8 @@ export class RunManager {
           compact: { segments: compaction.segments, kept: compaction.active.length },
         }]
       }
-    } catch (err) {
-      console.error("kclaw compaction failed:", err)
+    } catch {
+      // logged + announced inside compactV2 — fall back to the full history
     }
 
     const outcome = await runAgent(
@@ -986,21 +991,35 @@ export class RunManager {
 
   /**
    * v2 layered compaction (spec 6). Trigger: estimate ≥ budget×ratio, or a
-   * manual focus. Two tool-less LLM calls (segment summary, top merge),
-   * then ONE meta write — no state lands unless both calls succeed, so a
-   * throw anywhere equals "compaction did not happen" and the caller falls
-   * back to the full history. The segment index write and the audit append
-   * are best-effort (logged, never fatal).
+   * manual focus. Two tool-less LLM calls (segment summary, top merge), then
+   * ONE meta write — no state lands unless both calls succeed, so a throw
+   * anywhere equals "compaction did not happen" and the caller falls back to
+   * the full history. The segment index write and the audit append are
+   * best-effort (logged, never fatal).
+   *
+   * v3 additions: `phase` names the trigger stage (started/completed events
+   * carry it; the audit trigger maps manual → "manual", phase "in-run" →
+   * "in-run", else "auto"), `emergency` flags the over-limit rescue in the
+   * audit record, and `signal` makes both summarizer calls abortable.
+   * completed is GUARANTEED once started has fired: ok on success, "failed"
+   * on a throw (rethrown to the caller — "throw = compaction did not
+   * happen" — and logged here exactly once), "cancelled" when the signal
+   * aborted (swallowed — the run is being torn down, not failing). Below the
+   * water mark or without a boundary, NEITHER event fires (nothing began).
+   *
+   * Declared with the TS `private` keyword (not `#`): the overflow/in-run
+   * caller lands in Task 7, and the audit-mapping tests reach the method
+   * directly until then. Compile-time visibility is unchanged.
    */
-  async #compactV2(
+  private async compactV2(
     sessionId: string,
     history: Message[],
     userText: string,
     config: KclawConfig,
     runLlm: LlmClient,
     model: string,
-    opts: { focus?: string; manual?: boolean } = {},
-  ): Promise<{ summary?: string; segments: number; active: Message[]; compacted: boolean }> {
+    opts: { focus?: string; manual?: boolean; phase?: CompactionPhase; signal?: AbortSignal; emergency?: boolean } = {},
+  ): Promise<{ summary?: string; upto?: string; segments: number; active: Message[]; compacted: boolean }> {
     const { sessions } = this.#deps
     const meta = sessions.meta(sessionId)
     const prev: CompactionState | undefined = meta?.compaction ??
@@ -1015,69 +1034,90 @@ export class RunManager {
     const targetRatio = config.sessions.compactTargetRatio ?? 0.33
     const manual = opts.manual === true
     if (!manual && estimateContextTokens(active, userText) < budget * atRatio) {
-      return { summary: prev?.top, segments: prev?.segments.length ?? 0, active, compacted: false }
+      return { summary: prev?.top, upto: prev?.upto, segments: prev?.segments.length ?? 0, active, compacted: false }
     }
 
     const boundary = chooseBoundary(active, { budget, targetRatio })
     if (boundary === undefined) {
-      return { summary: prev?.top, segments: prev?.segments.length ?? 0, active, compacted: false }
+      return { summary: prev?.top, upto: prev?.upto, segments: prev?.segments.length ?? 0, active, compacted: false }
     }
+
+    const phase = opts.phase ?? (manual ? "manual" : "post-run")
 
     // The compaction will really run (two LLM calls ahead): announce it so
     // subscribed clients can show a "正在压缩…" state. This fires BEFORE
     // run.started — the pre-run compaction is otherwise a silent multi-second
-    // gap between send and the first run event.
-    this.#deps.bus.emit(makeEvent("compaction.started", { phase: "post-run" }, { sessionId }))
+    // gap between send and the first run event. From here on a paired
+    // completed is guaranteed, whatever happens next.
+    this.#deps.bus.emit(makeEvent("compaction.started", { phase }, { sessionId }))
 
-    const seg = active.slice(0, boundary.keepFrom)
-    const body = renderSegment(seg)
-    const focusLine = opts.focus === undefined ? "" : `\n\n用户特别要求重点保留：${opts.focus}`
-    const segmentSummary = await collectStreamText(runLlm, {
-      model,
-      system: SEGMENT_SUMMARY_PROMPT,
-      messages: [{ role: "user", content: body + focusLine }],
-      tools: [],
-    })
-    const mergeInput = prev === undefined ? segmentSummary : `${prev.top}\n\n新的段摘要：\n${segmentSummary}`
-    const top = await collectStreamText(runLlm, {
-      model,
-      system: MERGE_SUMMARY_PROMPT,
-      messages: [{ role: "user", content: mergeInput + focusLine }],
-      tools: [],
-    })
+    try {
+      const seg = active.slice(0, boundary.keepFrom)
+      const body = renderSegment(seg)
+      const focusLine = opts.focus === undefined ? "" : `\n\n用户特别要求重点保留：${opts.focus}`
+      const segmentSummary = await collectStreamText(runLlm, {
+        model,
+        system: SEGMENT_SUMMARY_PROMPT,
+        messages: [{ role: "user", content: body + focusLine }],
+        tools: [],
+      }, { signal: opts.signal })
+      const mergeInput = prev === undefined ? segmentSummary : `${prev.top}\n\n新的段摘要：\n${segmentSummary}`
+      const top = await collectStreamText(runLlm, {
+        model,
+        system: MERGE_SUMMARY_PROMPT,
+        messages: [{ role: "user", content: mergeInput + focusLine }],
+        tools: [],
+      }, { signal: opts.signal })
 
-    const upto = seg[seg.length - 1]!.id
-    const nextSegments = [...(prev?.segments ?? []), { upto, summary: segmentSummary }]
-    sessions.updateMeta(sessionId, {
-      compaction: { segments: nextSegments, top, upto },
-      compactedSummary: undefined,
-      compactedUpto: undefined,
-    })
-    try {
-      SegmentIndex.open(join(this.#deps.paths.sessionsDir, sessionId, "index.db")).addSegment(upto, body, segmentSummary)
-    } catch (err) {
-      console.error(`kclaw segment index (${sessionId}) write failed:`, err)
-    }
-    try {
-      sessions.appendCompaction(sessionId, {
-        at: new Date().toISOString(),
-        trigger: opts.manual === true ? "manual" : "auto",
-        ...(opts.focus === undefined ? {} : { focus: opts.focus }),
-        // null = the span starts at session start (or the legacy upgrade
-        // point) — only a continuation compaction has a real first id.
-        from: prevIdx >= 0 ? seg[0]!.id : null,
-        upto,
-        messages: seg.length,
-        segmentSummary,
-        top,
+      const upto = seg[seg.length - 1]!.id
+      const nextSegments = [...(prev?.segments ?? []), { upto, summary: segmentSummary }]
+      sessions.updateMeta(sessionId, {
+        compaction: { segments: nextSegments, top, upto },
+        compactedSummary: undefined,
+        compactedUpto: undefined,
       })
+      try {
+        SegmentIndex.open(join(this.#deps.paths.sessionsDir, sessionId, "index.db")).addSegment(upto, body, segmentSummary)
+      } catch (err) {
+        console.error(`kclaw segment index (${sessionId}) write failed:`, err)
+      }
+      try {
+        sessions.appendCompaction(sessionId, {
+          at: new Date().toISOString(),
+          trigger: manual ? "manual" : phase === "in-run" ? "in-run" : "auto",
+          ...(opts.emergency === true ? { emergency: true } : {}),
+          ...(opts.focus === undefined ? {} : { focus: opts.focus }),
+          // null = the span starts at session start (or the legacy upgrade
+          // point) — only a continuation compaction has a real first id.
+          from: prevIdx >= 0 ? seg[0]!.id : null,
+          upto,
+          messages: seg.length,
+          segmentSummary,
+          top,
+        })
+      } catch (err) {
+        console.error(`kclaw compaction audit (${sessionId}) append failed:`, err)
+      }
+      this.#deps.bus.emit(
+        makeEvent("compaction.completed", { segments: nextSegments.length, kept: active.length - boundary.keepFrom, phase, result: "ok" }, { sessionId }),
+      )
+      return { summary: top, upto, segments: nextSegments.length, active: active.slice(boundary.keepFrom), compacted: true }
     } catch (err) {
-      console.error(`kclaw compaction audit (${sessionId}) append failed:`, err)
+      // An aborted signal turns any throw into "cancelled": the run is being
+      // torn down, the summarizer call was cut mid-flight — report that (and
+      // swallow: cancellation is not a failure). Everything else is a real
+      // failure: announce it, log it ONCE here, and rethrow — the caller's
+      // "throw = compaction did not happen" contract is unchanged.
+      const cancelled = opts.signal?.aborted === true
+      this.#deps.bus.emit(
+        makeEvent("compaction.completed", { segments: 0, kept: 0, phase, result: cancelled ? "cancelled" : "failed" }, { sessionId }),
+      )
+      if (cancelled) {
+        return { summary: prev?.top, upto: prev?.upto, segments: prev?.segments.length ?? 0, active, compacted: false }
+      }
+      console.error("kclaw compaction failed:", err)
+      throw err
     }
-    this.#deps.bus.emit(
-      makeEvent("compaction.completed", { segments: nextSegments.length, kept: active.length - boundary.keepFrom, phase: "post-run", result: "ok" }, { sessionId }),
-    )
-    return { summary: top, segments: nextSegments.length, active: active.slice(boundary.keepFrom), compacted: true }
   }
 
   /**
