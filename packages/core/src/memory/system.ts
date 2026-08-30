@@ -7,6 +7,7 @@ import { writeFileAtomic } from "../storage/atomic.js"
 import type { LlmClient } from "../provider/types.js"
 import type { SessionStore } from "../session/store.js"
 import { MemoryLayout, projectIdFor } from "./layout.js"
+import { WriteLedger } from "./ledger.js"
 import { MemoryPipeline } from "./pipeline.js"
 import type { MemoryWrittenEvent } from "./pipeline.js"
 import { parseThreadFile, parseMemoryMd } from "./threads.js"
@@ -294,6 +295,79 @@ export class MemorySystem {
   /** 手动内化。 */
   async consolidate(workdir: string, topic: string): Promise<void> {
     await this.#pipeline.consolidate(workdir, topic)
+  }
+
+  // ---- 定时/跟随触发与跟随门禁（Task 13 scheduler / run.ts 消费） ----
+
+  /** 定时触发（scheduler interval 兜底，spec 4.2）：直通 pipeline 增量提取。 */
+  async triggerInterval(workdir: string): Promise<void> {
+    await this.#pipeline.runTrigger(workdir, "interval")
+  }
+
+  /** 跟随触发（scheduler 对挂起检查补查，spec 4.2/11）。 */
+  async triggerFollow(workdir: string): Promise<void> {
+    await this.#pipeline.runTrigger(workdir, "follow")
+  }
+
+  /** 记录最近一次定时触发的墙钟时间（落 <projectDir>/state.json，scheduler 判节拍）。 */
+  markIntervalRun(workdir: string, iso: string): void {
+    const { dir } = this.#layout.ensureProject(workdir)
+    new WriteLedger(join(dir, "state.json")).setIntervalLastRun(iso)
+  }
+
+  /** 最近一次定时触发的墙钟时间；从未触发过 → undefined（scheduler 据此立刻首跑）。 */
+  intervalLastRun(workdir: string): string | undefined {
+    const { id } = this.#layout.resolveProject(workdir)
+    return new WriteLedger(join(this.#layout.projectDir(id), "state.json")).getIntervalLastRun()
+  }
+
+  /**
+   * 跟随门禁挂起检查（spec 4.2）：run 收尾（任何 stopReason）时经 WriteLedger
+   * 落盘 <projectDir>/state.json（spec 11），daemon 重启后 scheduler 补查。
+   */
+  scheduleFollowCheck(sessionId: string, endTurnAt: string): void {
+    const meta = this.#sessions.meta(sessionId)
+    const workdir = meta?.workdir ?? this.#config.workspace
+    const { dir } = this.#layout.ensureProject(workdir)
+    new WriteLedger(join(dir, "state.json")).scheduleFollowCheck(sessionId, endTurnAt)
+  }
+
+  /** 清除某项目的挂起检查（幂等：无账本/无该检查则无事可做）。 */
+  clearFollowCheck(workdir: string, sessionId: string): void {
+    const { id } = this.#layout.resolveProject(workdir)
+    const path = join(this.#layout.projectDir(id), "state.json")
+    if (!existsSync(path)) return
+    new WriteLedger(path).clearFollowCheck(sessionId)
+  }
+
+  /** 某项目的全部挂起检查（含 daemon 重启恢复，spec 11）。 */
+  pendingFollowChecks(workdir: string): Array<{ sessionId: string; endTurnAt: string }> {
+    const { id } = this.#layout.resolveProject(workdir)
+    const path = join(this.#layout.projectDir(id), "state.json")
+    if (!existsSync(path)) return []
+    return new WriteLedger(path).pendingFollowChecks()
+  }
+
+  /** 项目全部会话 meta 的最大 updatedAt（scheduler 判跟随门禁的"新活动"，spec 4.2）。 */
+  lastActivity(workdir: string): string {
+    let max = ""
+    for (const m of this.#sessions.list()) {
+      if ((m.workdir ?? "") === workdir && m.updatedAt > max) max = m.updatedAt
+    }
+    return max
+  }
+
+  /**
+   * 关闭全局 + 全部项目 VectorIndex 句柄（daemon stop 序列调用，Task 13）：
+   * 防 better-sqlite3 句柄/内存泄漏。已关闭/损坏的索引逐个容错。
+   */
+  async stop(): Promise<void> {
+    for (const idx of this.#projectIndexes.values()) {
+      try { idx.close() } catch { /* 已关闭/损坏：忽略 */ }
+    }
+    this.#projectIndexes.clear()
+    try { this.#globalIndex.close() } catch { /* 已关闭/损坏：忽略 */ }
+    this.#pipeline.close()
   }
 
   // ---- 对账与迁移（daemon 消费） ----

@@ -950,6 +950,16 @@ export class RunManager {
         })
       }
     }
+    // 跟随门禁（spec 4.2）：run 收尾（任何 stopReason）挂起一个 follow 检查；经
+    // MemorySystem 落盘 <projectDir>/state.json（spec 11），daemon 重启后由 memory
+    // scheduler 补查。idleMinutes=0 关闭。挂起失败静默（不影响 run 收尾）。
+    if (config.memory.write.idleMinutes > 0) {
+      try {
+        memory.scheduleFollowCheck?.(sessionId, new Date().toISOString())
+      } catch {
+        // follow 挂起失败不影响 run
+      }
+    }
     return outcome
   }
 

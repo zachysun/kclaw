@@ -444,6 +444,17 @@ export class MemoryPipeline {
     this.#rebuildMemoryMd(projectId)
   }
 
+  /**
+   * 关闭本管线打开的全部项目 + 全局 VectorIndex（daemon stop 序列调用，
+   * Task 13）：防 better-sqlite3 句柄泄漏。已关闭/损坏的索引逐个容错。
+   */
+  close(): void {
+    for (const idx of this.#indexes.values()) {
+      try { idx.close() } catch { /* 已关闭/损坏：忽略 */ }
+    }
+    this.#indexes.clear()
+  }
+
   /** 内化实现（spec 6）；写 global 文件加全局 L2 锁。 */
   async #consolidateLocked(projectId: string, tf: ThreadFile): Promise<void> {
     if (!this.#consolidateEnabled) return

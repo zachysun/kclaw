@@ -8,6 +8,8 @@ export interface FollowCheck { sessionId: string; endTurnAt: string }
 interface LedgerState {
   watermarks: { interval?: Watermark; follow?: Watermark }
   followChecks: FollowCheck[]
+  /** 最近一次定时触发的墙钟时间（ISO；Task 13 scheduler 判节拍用）。 */
+  intervalLastRun?: string
 }
 
 /** 每项目一本（<projectDir>/state.json，spec 4.1）：防重复提取与漏提取。 */
@@ -21,7 +23,7 @@ export class WriteLedger {
     if (existsSync(statePath)) {
       try {
         const raw = JSON.parse(readFileSync(statePath, "utf8")) as Partial<LedgerState>
-        this.#state = { watermarks: raw.watermarks ?? {}, followChecks: raw.followChecks ?? [] }
+        this.#state = { watermarks: raw.watermarks ?? {}, followChecks: raw.followChecks ?? [], intervalLastRun: raw.intervalLastRun }
       } catch {
         // 损坏的账本视作空账本：全量重扫（重复提取由合并写兜底）
       }
@@ -60,6 +62,16 @@ export class WriteLedger {
 
   clearFollowCheck(sessionId: string): void {
     this.#state.followChecks = this.#state.followChecks.filter((c) => c.sessionId !== sessionId)
+    this.#flush()
+  }
+
+  /** 最近一次定时触发的墙钟时间（ISO）；从未触发过 → undefined（scheduler 据此立刻首跑）。 */
+  getIntervalLastRun(): string | undefined {
+    return this.#state.intervalLastRun
+  }
+
+  setIntervalLastRun(iso: string): void {
+    this.#state.intervalLastRun = iso
     this.#flush()
   }
 

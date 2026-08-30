@@ -10,7 +10,7 @@
 import { describe, it, expect, afterEach, beforeAll } from "vitest"
 import { spawn, execFileSync } from "node:child_process"
 import type { ChildProcess } from "node:child_process"
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 import { createConnection } from "node:net"
@@ -154,6 +154,20 @@ describe("launchDaemon", () => {
     expect(existsSync(join(paths.memoryDir, "global"))).toBe(true)
     expect(existsSync(join(paths.memoryDir, "projects"))).toBe(true)
     expect(existsSync(join(paths.memoryDir, "global", "vectors.db"))).toBe(true)
+  })
+
+  it("migrates v1 notes to v2 cognition, deletes notes/ and the v1 index.db", async () => {
+    const home = makeHome()
+    const paths = resolvePaths(home)
+    const notesDir = join(paths.memoryDir, "notes")
+    mkdirSync(notesDir, { recursive: true })
+    writeFileSync(join(notesDir, "a.md"), `---\nid: a\n---\n\n用户偏好深色主题\n`)
+    const daemon = await launchMock(home, makeConfig(home))
+    // 偏好类 note → persona；notes/ 删除；v1 派生物 index.db 不存在；v2 projects 已建。
+    expect(readFileSync(join(paths.memoryDir, "global", "persona.md"), "utf8")).toContain("深色主题")
+    expect(existsSync(notesDir)).toBe(false)
+    expect(existsSync(join(paths.memoryDir, "index.db"))).toBe(false)
+    expect(existsSync(join(paths.memoryDir, "projects"))).toBe(true)
   })
 
   it("stop() removes daemon.json, is idempotent, and the port refuses connections", async () => {

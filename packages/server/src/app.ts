@@ -3,7 +3,7 @@ import Fastify from "fastify"
 import fastifyStatic from "@fastify/static"
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import { JobScheduler, SessionStore, loadConfig, resolvePaths } from "@kclaw/core"
-import type { KclawConfig, KclawPaths, UsageStore } from "@kclaw/core"
+import type { KclawConfig, KclawPaths, MemorySystem, UsageStore } from "@kclaw/core"
 import { bearerMatches } from "./auth.js"
 import { EventBus } from "./bus.js"
 import type { RunManager } from "./run.js"
@@ -60,6 +60,12 @@ export interface AppOptions {
   attachmentsDir?: string
   /** Token ledger for `GET /usage`; absent → the route returns empty buckets. */
   usage?: UsageStore
+  /**
+   * The daemon's MemorySystem facade, injected for the memory management
+   * routes (Task 14 consumes it). Task 13 only leaves the seam — no routes
+   * are registered against it here yet.
+   */
+  memory?: MemorySystem
   /**
    * Test-injection seam for the /ws pre-auth timeout (maps to WsOptions
    * `authTimeoutMs`); production defaults live in ws.ts.
