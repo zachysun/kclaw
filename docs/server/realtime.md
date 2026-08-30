@@ -2,14 +2,14 @@
 
 ## 职责
 
-`packages/server/src/ws.ts` 的 `registerWsRoutes` 提供 `GET /ws` 端点（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送），定义连接认证、7 种客户端命令帧与各自应答（ack）。`packages/server/src/bus.ts` 的 `EventBus` 是进程内的事件分发器：把 agent 循环与服务端流程产生的 34 种事件按会话投递给订阅了它的连接。两者共同构成 daemon 的实时通信层。
+`packages/server/src/ws.ts` 的 `registerWsRoutes` 提供 `GET /ws` 端点（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送），定义连接认证、7 种客户端命令帧与各自应答（ack）。`packages/server/src/bus.ts` 的 `EventBus` 是进程内的事件分发器：把 agent 循环与服务端流程产生的 35 种事件按会话投递给订阅了它的连接。两者共同构成 daemon 的实时通信层。
 
 ## 设计决策
 
 - **事件与命令一条连接、两种帧**：客户端发的命令帧（subscribe/send_message/…）有 ack 无 `payload`；服务端推的事件帧有 `id/ts/type/payload`。客户端以 `"payload" in frame` 区分两类帧，无需状态机。
 - **信封零变形**：`AgentEvent` 对象从 agent 循环的 `onEvent` 一路 `JSON.stringify` 到线上，daemon 不翻译、不改写、不新增事件——协议只有一份定义（`packages/core/src/protocol/events.ts`）。
 - **鉴权在连接内，不在升级请求上**：浏览器场景常无法携带自定义 header，认证放首帧 `{type:"auth", token}`（或 `?token=` 查询参数），失败时以关闭码 4001 关闭连接。HTTP 层的 Bearer 钩子因此豁免 `/ws` 路由本身。
-- **订阅制而非广播制**：带 `sessionId` 的事件只发给订阅了该会话的连接（客户端打开多个标签页时，各标签页订阅各自的会话，互不串流）；无 `sessionId` 的事件（`job.*`）广播给全体已认证连接——任何客户端都应看到调度活动。
+- **订阅制而非广播制**：带 `sessionId` 的事件只发给订阅了该会话的连接（客户端打开多个标签页时，各标签页订阅各自的会话，互不串流）；无 `sessionId` 的事件（`job.*`、`memory.written`）广播给全体已认证连接——任何客户端都应看到调度与记忆落盘活动。
 - **单连接天然有序，事件不带序号**：一条 WS 连接内帧顺序即发送顺序，客户端无需对账序号。跨连接/断线不保证——用"拉取全量消息 + 只订阅新事件"恢复，不做事件回放（有意简化：事件不持久化）。
 - **投递异常不回传发射方**：单个 socket 的 `send` 抛错（连接刚断开）被 try/catch 捕获忽略，不阻断其他订阅者，也不把异常传回正在执行 run 的代码。
 
@@ -65,14 +65,14 @@
 }
 ```
 
-`EventType` 共 **34 种**（`packages/core/src/protocol/events.ts`；七个语义分组的完整表见 [protocol](../core/protocol.md)），按投递方式分两组：
+`EventType` 共 **35 种**（`packages/core/src/protocol/events.ts`；七个语义分组的完整表见 [protocol](../core/protocol.md)），按投递方式分两组：
 
 | 分组 | 事件 | 投递 |
 |------|------|------|
 | 会话事件（带 sessionId，发订阅者） | `run.started` `run.completed` `run.failed`；`message.created` `message.completed`；`text/thinking/tool_call/tool_result` 的 `created/delta/completed`（12 个）；`attachment.created` `attachment.completed`；`llm.started` `llm.completed` `llm.failed`；`confirmation.requested` `confirmation.resolved`；`note.emitted`；`message.queued` `message.steered` `message.queue_cancelled`（见上文"消息排队与引导"）；`compaction.started` `compaction.completed`（payload 见 [protocol](../core/protocol.md)：started 带 phase，completed 带 phase/result——`started` 一旦发出 `completed` 必达，成功/失败/取消分别报 `ok`/`failed`/`cancelled`，让客户端可靠地清除"正在压缩"状态）；`session.renamed` | `EventBus.emit` 查 `sessions.get(sessionId)`，发给该集合内的 socket |
-| 广播事件（无 sessionId，发全体连接） | `job.started` `job.completed` `job.failed` | `EventBus.emit` 遍历全部已 connect 的 socket |
+| 广播事件（无 sessionId，发全体连接） | `job.started` `job.completed` `job.failed`；`memory.written`（记忆落盘，项目级事务不带 sessionId——见下） | `EventBus.emit` 遍历全部已 connect 的 socket |
 
-发射方分布：24 种会话事件由 agent 循环产生、经 `RunManager` 的 `onEvent` 钩子发送到总线（含 `run.failed {code:"steering_failed"}` 等循环内合成的终态，以及 steering 注入时逐条发出的 `message.steered`）。不经 agent 循环的会话事件由服务端流程直接发送：`message.queued`/`message.queue_cancelled` 与条目级失败的 `run.failed {code:"queue_entry_failed"}` 由 `RunManager`（submit / queueCancel / recoverQueues / 驱动器）发出；`compaction.started`/`completed` 由 `RunManager` 的压缩编排（`#runAutoCompaction`，收尾/中途/超限三路共用）发出；`session.renamed` 不经过 agent 循环：run 入队用户消息后，服务端会异步调度 `autoname.ts` 的 `scheduleAutoname` 生成会话标题，新标题成功写回 meta 后才经注入的 emit 钩子（`busEmit`）发出这个事件；生成失败则静默放弃（流程细节见 [run-manager](./run-manager.md)）。3 种 `job.*` 由 `scheduler-tick.ts` 的 `makeEvent(...)` **不带 ctx** 调用产生（`makeEvent` 只在传了 `ctx.sessionId` 时才写字段）。`attachment.*` 已定义但当前无发射方。
+发射方分布：24 种会话事件由 agent 循环产生、经 `RunManager` 的 `onEvent` 钩子发送到总线（含 `run.failed {code:"steering_failed"}` 等循环内合成的终态，以及 steering 注入时逐条发出的 `message.steered`）。不经 agent 循环的会话事件由服务端流程直接发送：`message.queued`/`message.queue_cancelled` 与条目级失败的 `run.failed {code:"queue_entry_failed"}` 由 `RunManager`（submit / queueCancel / recoverQueues / 驱动器）发出；`compaction.started`/`completed` 由 `RunManager` 的压缩编排（`#runAutoCompaction`，收尾/中途/超限三路共用）发出；`session.renamed` 不经过 agent 循环：run 入队用户消息后，服务端会异步调度 `autoname.ts` 的 `scheduleAutoname` 生成会话标题，新标题成功写回 meta 后才经注入的 emit 钩子（`busEmit`）发出这个事件；生成失败则静默放弃（流程细节见 [run-manager](./run-manager.md)）。3 种 `job.*` 由 `scheduler-tick.ts` 的 `makeEvent(...)` **不带 ctx** 调用产生（`makeEvent` 只在传了 `ctx.sessionId` 时才写字段）。`memory.written` 由 core 的 `MemoryPipeline` 在每次落盘时发出，经 daemon 装配的 emit 钩子（`daemon.ts`）广播——不带 sessionId（项目级事务），订阅端只当"已落盘"的轻提示。`attachment.*` 已定义但当前无发射方。
 
 ## 订阅模型（EventBus）
 
@@ -137,7 +137,7 @@ export class EventBus {
 
 ## 关联
 
-- [protocol](../core/protocol.md)：34 种事件与 payload 全表、信封字段
+- [protocol](../core/protocol.md)：35 种事件与 payload 全表、信封字段
 - [run-manager](./run-manager.md)：命令帧在服务端的后续（入队/取消/确认网关）
 - [http-api](./http-api.md)：断线恢复依赖的 `GET /sessions/:id/messages`
 - [daemon](./daemon.md)：/ws 为何豁免 HTTP 鉴权

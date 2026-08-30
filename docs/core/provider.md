@@ -19,7 +19,7 @@
 - **core 与传输解耦**：`agent/loop.ts` 只依赖 `LlmClient` 这个 async iterable 接口，不知道 fetch、SSE（Server-Sent Events：服务器通过 HTTP 持续推送文本行的流式格式）的存在；测试注入假 client 即可完整运行整个循环。
 - **超时覆盖整个请求**：`AbortSignal.timeout` 同时约束"等响应头"和"读流式响应体"两个阶段——停滞的 provider 流（无响应头、或响应体中途停止）不可能使一个 run 永久停滞。
 - **超时与 HTTP 错误共用一套消息格式**：失败统一抛成 `llm http <status>` 或 `llm http timeout after <n>ms` 字符串，`retry.ts` 用正则识别——分类方（openai-compat）与消费方（retry）靠这个消息约定耦合，改任何一侧都要保持同步。
-- **重试封装在 client 内部，不在循环层**：`runAgent` 调一次 `stream()` 就是完整的一次"可能含内部重试"的调用；循环层再重试会形成双重重试。循环通过 `onRetry` 钩子感知重试（转成 `llm.failed {willRetry:true}` 事件）。
+- **重试封装在 client 内部，不在循环层**：`runAgent` 调一次 `stream()` 就是完整的一次"可能含内部重试"的调用；循环层再重试会形成双重重试。重试经 `withRetry` 的 `onRetry` 回调对外可见——daemon 把它接到循环的 `onLlmRetry` 钩子，转成 `llm.failed {willRetry:true}` 事件（见 [agent-loop](./agent-loop.md)）。
 - **已产出事件绝不重试**：流已产出过事件即说明消费方可能已收到，重试会造成输出重复——此时错误直接抛出。
 - **参数原文不动**：工具调用的参数以原始 JSON 字符串（`argsJson`）透传，不在 provider 层解析；解析失败的处理属于循环层。
 - **多模态只透传不解释**：user 消息的 `content` 允许是 OpenAI 多模态数组（文本段 + `image_url` 图片段），provider 原样放进请求体——是否真能"看懂"图片由模型决定，协议层不感知。

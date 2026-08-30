@@ -7,7 +7,7 @@
 3. **新增一个 HTTP API**：`packages/server/src/routes/` 新建 `registerXxxRoutes`，在 `server/src/app.ts` 注册。
 4. **新增一个 WebUI 视图**：`packages/web/src/<name>/` 新建目录，在 `App.tsx` 视图切换处接入。
 5. **新增一个 CLI 命令**：`packages/cli/src/index.ts` 用 commander 注册 action。
-6. **新增一个 slash 命令**：`packages/cli/src/slash.ts` 命令表注册一条；提示词模板类的自定义命令则无需改代码，放 `~/.kclaw/commands/*.md` 即可。
+6. **新增一个 slash 命令**：先在 `packages/core/src/commands.ts` 的 `SLASH_COMMANDS` 共享清单里登记元数据（name/usage/description——CLI 与 WebUI 读同一份，保证两端文案不漂移，见 [webui](./web/webui.md) 与 [cli](./cli/cli.md)），再在 `packages/cli/src/slash.ts` 的 `createRegistry` 注册 run 实现；提示词模板类的自定义命令则无需改代码，放 `~/.kclaw/commands/*.md` 即可。
 7. **新增一种事件**：`packages/core/src/protocol` 事件类型定义，`server/src/bus.ts` 广播，客户端订阅处理。
 
 > [!NOTE]

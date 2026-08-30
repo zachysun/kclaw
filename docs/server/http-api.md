@@ -7,7 +7,7 @@
 ## 设计决策
 
 - **鉴权由一个钩子统一处理**：`preHandler` 比对 `Authorization: Bearer <token>`（恒时比较），失败统一 `401 {error:"unauthorized"}`。豁免只有 `/health`、`/ws`、静态外壳三种（设计理由见 [daemon](./daemon.md) 的鉴权设计一节）。
-- **错误形状统一为 `{error: string}`**：每个路由分组（scope）注册 `setErrorHandler`，把 Fastify 的 body 解析错误（非法 JSON、空 body）也归一成这个形状，客户端只需一种解析逻辑。
+- **错误形状统一为 `{error: string}`**：会话/任务两个路由分组（scope）注册了 `setErrorHandler`，把 Fastify 的 body 解析错误（非法 JSON、空 body）也归一成这个形状；其余分组未注册（body 解析错误走 Fastify 默认形状 `{statusCode, error, message}`），客户端需兼容两种。
 - **404 显式可判别**：会话/任务路由先查存在性（`sessions.meta(id)` / `jobs.get(id)`），不存在返回 `404 {error:"session not found"|"job not found"}`，不依赖异常路径。
 - **配置接口只读且脱敏**：API key 永远掩码返回，没有写回路由——修改配置通过文件（config.yaml）进行，daemon 重启后生效。
 - **消息审计没有专门路由，压缩审计有只读接口**：消息轨迹页（web 的 `AuditView`）就是 `GET /sessions`（会话下拉）+ `GET /sessions/:id/messages`（按会话读取消息列表）两个只读接口组合而成，不存在 `/audit` 路由。压缩审计不同——手动压缩刻意不产生消息，纯靠消息流看不到它的痕迹，因此有专门的只读接口 `GET /sessions/:id/compactions`（会话目录下 `compactions.jsonl` 的读取窗口，见 [compaction](../core/compaction.md)）。
@@ -134,7 +134,7 @@ interface Job {
 | PATCH | `/memory/global/:kind/:file` | 整文件覆写认知文件（写后重建全局索引） | `{content}` 必填、非空字符串，否则 400 `content must be a non-empty string` | `{ok:true}`；kind 非法或文件不存在 404 |
 | DELETE | `/memory/global/:kind/:file` | 删认知文件 + 重建全局索引 | — | `{ok:true}`；kind 非法或文件不存在 404；**persona 是全局画像，不可删除，返回 400 `persona 不可删除（可清空正文）`** |
 
-`:id`/`:project`/`:topic`/`:file` 的路径段都按原样传给 `MemorySystem`，不做额外净化——读侧宽容（找不到就 404），写侧是"人即是真相"的整文件覆写。`GET /memory/projects/:id` 的响应包裹成 `{id, threads}` 是为前端取数方便（实现与 spec 的差异点，见 [memory](../core/memory.md) 的管理界面一节）。删除类的机器语义：删的是文件，`vectors.db` 里的对应条目由随后的 reindex 清除。
+`:id`/`:project`/`:topic`/`:file` 的路径段先过白名单校验（`isSafeSegment`：段非空、非 `.`、非 `..`、不含 `/`，拦目录穿越段；允许 CJK/空格，URL 里已 encodeURIComponent）——非法段返回 400 `invalid segment`；合法段按原样传给 `MemorySystem`，读侧宽容（找不到就 404），写侧是"人即是真相"的整文件覆写。`GET /memory/projects/:id` 的响应包裹成 `{id, threads}` 是为前端取数方便（实现与 spec 的差异点，见 [memory](../core/memory.md) 的管理界面一节）。删除类的机器语义：删的是文件，`vectors.db` 里的对应条目由随后的 reindex 清除。
 
 ### 附件（routes/attachments.ts，仅当注入 `attachmentsDir` 时注册）
 
@@ -159,7 +159,7 @@ interface Job {
 
 | 方法 | 路径 | 用途 | 响应 |
 |------|------|------|------|
-| GET | `/mcp` | MCP server 连接状态快照 | `{servers: [{name, state, tools: {name}[], lastError?}]}` |
+| GET | `/mcp` | MCP server 连接状态快照 | `{servers: [{name, state, tools: {name}[], config, lastError?}]}`（`config` 为该 server 的 `McpServerConfig`，含地址等） |
 
 路由始终注册；daemon 未装配 McpManager（`mcp.servers` 为空）时 `servers` 为空数组。消费方是 CLI 的 `kclaw mcp [list]` 命令；连接状态机见 [mcp](../core/mcp.md)。
 
@@ -168,7 +168,7 @@ interface Job {
 | 方法 | 路径 | 用途 |
 |------|------|------|
 | GET | `/ws` | WebSocket（建立后可双向收发消息的长连接）升级端点；HTTP 鉴权豁免，连接内首帧认证，协议见 [realtime](./realtime.md) |
-| GET | `/`、`/assets/*` | 仅当 `webDist` 已配置时由 `@fastify/static` 托管构建产物；外壳三路径免鉴权，其余静态文件仍需 Bearer |
+| GET | `/`、`/assets/*` | 仅当 `webDist` 已配置时由 `@fastify/static` 托管构建产物；外壳三路径加 PWA 静态文件（`/manifest.webmanifest`、`/sw.js`、`/icon-192.png`、`/icon-512.png`、`/favicon.ico`）免鉴权，其余静态文件仍需 Bearer |
 
 **队列相关的 WS 命令与事件**（message-queue spec §4，完整帧语义见 [realtime](./realtime.md) 与 [run-manager](./run-manager.md)）：
 
@@ -206,7 +206,7 @@ app.addHook("preHandler", async (request, reply) => {
 
 - 判定用的 route url 取 `request.routeOptions.url`（匹配到的路由模板，如 `/sessions/:id`），静态 catch-all 场景退回原始路径。
 - token 错误/缺失一律 `401 {error:"unauthorized"}`，不区分"未携带"与"携带错误"（不向探测者提供信息）。
-- 路由分组各自注册的 `setErrorHandler` 只兜 body 解析类错误（`error.statusCode ?? 500`），不影响鉴权钩子——钩子先于 handler 运行。
+- 会话/任务两个分组注册的 `setErrorHandler` 只兜 body 解析类错误（`error.statusCode ?? 500`），不影响鉴权钩子——钩子先于 handler 运行。
 
 ## 边界与出错
 

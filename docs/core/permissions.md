@@ -152,7 +152,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
   - 裁决：CLI/Web 经 WS `confirmation.resolve` 帧调 `broker.resolve(id, approved, by)`（`by` 默认 `"cli"`）。
   - broker **不发事件、不设内部超时**——事件归循环，计时归循环与 RunManager 的同一竞速机制；两处用同一超时值竞速保证视图一致。
   - 超时/取消后 RunManager 调 `expire` 把条目标记失效，迟到的裁决只会收到 unknown confirmation，不会确认一个已无人等待的动作。
-- deny 的 `user_denied` / `timeout` 两个 reason 不是 gate 产出的：gate 只产生 `blacklist` 拒绝，前两者是循环把人工拒绝/超时转成 error result 时的语义标记（note 块的 `kind`）。
+- deny 的 `user_denied` / `timeout` 两个 reason 不是 gate 产出的：gate 只产生 `blacklist` / `readonly` 两种拒绝（规则命中或只读会话禁写/exec），前两者是循环把人工拒绝/超时转成 error result 时的语义标记（note 块的 `kind`）。
 
 ### 8. grantedBy 记录
 

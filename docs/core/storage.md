@@ -66,7 +66,8 @@ export function resolvePaths(home?: string): KclawPaths
 | `mcp.servers` | `{}` | 外部 MCP server 配置表（stdio/http 两种形态），daemon 启动时据此装配 McpManager（见 [mcp](./mcp.md)） |
 | `exec.timeoutMs` / `maxOutputBytes` | `60000` / `102400`（100 KiB） | exec 工具超时与输出截断上限 |
 | `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 清理用（见 [jobs](./jobs.md)） |
-| `sessions.contextTokens` / `compactAtRatio` / `compactTargetRatio` / `toolResultKeep` | `128000` / `0.66` / `0.33` / `8` | 上下文压缩 v2（见 [compaction](./compaction.md)）：token 预算、触发线（估算发送量达预算 × 0.66 即压缩）、压缩后保留部分目标（预算 × 0.33）、发送时保留最近几个工具结果原文。四个字段均可选，缺省值在 server 读取处兜底（`packages/server/src/run.ts`） |
+| `sessions.contextTokens` / `compactAtRatio` / `compactPanicRatio` / `compactTargetRatio` / `toolResultKeep` | `128000` / `0.66` / `0.85` / `0.33` / `8` | 上下文压缩 v2/v3（见 [compaction](./compaction.md)）：token 预算、触发线（估算发送量达预算 × 0.66 即压缩）、红线（运行中水位达预算 × 0.85 时在迭代边界触发中途压缩）、压缩后保留部分目标（预算 × 0.33）、发送时保留最近几个工具结果原文。五个字段均可选，缺省值在 server 读取处兜底（`packages/server/src/run.ts`） |
+| `sessions.defaultDisposition` | `"steer"` | 不带 disposition 的 send_message 的默认处置（见 [run-manager](../server/run-manager.md)）；会话可经 `meta.dispositionOverride` 覆盖 |
 | `sessions.compactThreshold` / `compactKeep` | 无（废弃） | v1 压缩（40 条触发、保留 25 条）的字段，已废弃不生效：配置文件里存在时不报错，但没有任何消费方 |
 | `notify.channels` | `[]` | job 终态通知渠道列表；为空即关闭（零开销）。条目 `{ name?, type, url, template? }`，`type` 三种：`bark`（POST JSON `{title, body}`）、`serverchan`（POST 表单 `title`+`desp`）、`webhook`（POST JSON，正文含 title/body 及全部 job 字段）。`template` 占位符：`{{job}}` `{{statusText}}` `{{status}}` `{{summary}}` `{{sessionId}}` `{{sessionUrl}}`，未知占位符渲染为空串 |
 | `notify.timeoutMs` | `10000` | 单次推送请求超时；推送失败仅记日志、不重试 |
@@ -107,7 +108,7 @@ export function readJsonl(file: string): unknown[]
 
 每个会话一个目录 `<sessionsDir>/<id>/`，四个文件：`meta.json` 与 `messages.jsonl` 由 `SessionStore` 直接负责；`compactions.jsonl`（压缩审计）与 `index.db`（段检索索引，纯派生物可删）见 [compaction](./compaction.md)。
 
-- `meta.json`：`SessionMeta { id, title, createdAt, updatedAt, jobId?, workdir?, model?, readonly?, deleted?, deletedAt?, compactedSummary?, compactedUpto?, compaction? }`，其中 `model` 为会话级模型覆盖（空/缺省回落 daemon 默认）、`readonly` 为会话级只读开关（写/exec 工具被拒，见 [permissions](./permissions.md)）；`compactedSummary`/`compactedUpto` 是 v1 压缩的遗留字段（读取时兼容，下一次压缩写入新格式时删除），`compaction` 是 v2 分层压缩状态 `{ segments, top, upto }`（语义见 [compaction](./compaction.md)）。整文件重写更新（`updateMeta` 合并 patch、`undefined` 键删除、总是刷新 `updatedAt`）。
+- `meta.json`：`SessionMeta { id, title, createdAt, updatedAt, jobId?, workdir?, model?, readonly?, deleted?, deletedAt?, compactedSummary?, compactedUpto?, compaction?, queue?, dispositionOverride? }`，其中 `model` 为会话级模型覆盖（空/缺省回落 daemon 默认）、`readonly` 为会话级只读开关（写/exec 工具被拒，见 [permissions](./permissions.md)）；`compactedSummary`/`compactedUpto` 是 v1 压缩的遗留字段（读取时兼容，下一次压缩写入新格式时删除），`compaction` 是 v2 分层压缩状态 `{ segments, top, upto }`（语义见 [compaction](./compaction.md)）；`queue` 是排队未执行的消息数组（`{ messageId, disposition, text, trigger, attachments?, note?, enqueuedAt }`，顺序即执行顺序，只存在 meta.json、不进 JSONL，见 [run-manager](../server/run-manager.md) 的消息队列）；`dispositionOverride` 是会话级处置覆盖（`"steer" | "wait" | "interrupt"`，优先于 `sessions.defaultDisposition`）。整文件重写更新（`updateMeta` 合并 patch、`undefined` 键删除、总是刷新 `updatedAt`）。
 - `messages.jsonl`：一行一条 `Message`，append-only。追加消息时顺带重写 meta.json 刷 `updatedAt`。
 
 `Message`（`packages/core/src/protocol/messages.ts`）基础字段 `{ id, sessionId, role: "user" | "assistant" | "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因）。id 前缀 `msg_` / `ses_`，ULID。

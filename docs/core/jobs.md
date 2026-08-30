@@ -29,6 +29,7 @@ export interface Job {
   name: string
   cron: string        // 标准 5 段 cron 表达式（分 时 日 月 周）
   prompt: string      // 到点后作为用户消息发给 agent 的文本
+  model?: string      // 可选：该 job 的模型覆盖（空/缺省 = daemon 默认模型）
   enabled: boolean
   nextRunAt: string   // ISO-8601，下一次触发时间
   lastRunAt?: string  // ISO-8601，上次实际触发时间
@@ -37,7 +38,7 @@ export interface Job {
 }
 ```
 
-SQLite 表结构与之一一对应（`enabled` 存 0/1，驼峰字段转下划线列名 `next_run_at` 等）。
+SQLite 表结构与之一一对应（`enabled` 存 0/1，驼峰字段转下划线列名 `next_run_at` 等）；老库在启动时自动 `ALTER TABLE jobs ADD COLUMN model` 补上新列。
 
 `JobScheduler` 的方法语义：
 
@@ -84,8 +85,8 @@ job 会话的标题在创建时就定为 `job.name`，而自动命名（`schedul
 
 HTTP 接口（`packages/server/src/routes/jobs.ts`，均需 Bearer token）：
 
-- `POST /jobs`：`{name, cron, prompt}` 三者必填且非空；cron 解析失败返回 400（cron-parser 的原始错误消息）。
-- `PATCH /jobs/:id`：只接受 `name` / `prompt` / `cron` / `enabled` 四个字段，其余忽略；`enabled: false` 即停用——`due()` 只取 `enabled = 1` 的行，停用的 job 不触发但记录保留；`enabled: true` 重新启用。
+- `POST /jobs`：`{name, cron, prompt}` 三者必填且非空，可带 `model`（该 job 的模型覆盖）；cron 解析失败返回 400（cron-parser 的原始错误消息）。
+- `PATCH /jobs/:id`：只接受 `name` / `prompt` / `cron` / `enabled` / `model` 五个字段，其余忽略；`enabled: false` 即停用——`due()` 只取 `enabled = 1` 的行，停用的 job 不触发但记录保留；`enabled: true` 重新启用。
 - `DELETE /jobs/:id`：立即物理删除该行，没有软删除、没有回收站（这是 job 与会话在删除语义上的差别）。
 
 `update` 的一个细节：patch 里带 `cron` 且不带 `nextRunAt` 时，`nextRunAt` 自动从 now 重算（修改周期后按新周期计算）；显式传 `nextRunAt` 则按传入值写入（测试用它回填时间）。

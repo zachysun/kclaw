@@ -26,7 +26,7 @@ export interface Daemon {
   port: number        // 实际绑定的端口（0 启动时为临时端口）
   token: string       // app 要求的 Bearer token（<home>/token）
   pid: number         // 本进程 pid，即 daemon.json 里记录的
-  stop(): Promise<void>   // 有界拆除：tick → mcp → app → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
+  stop(): Promise<void>   // 有界拆除：tick → 记忆调度器 → mcp → app → memory → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
 }
 
 export interface LaunchDaemonOptions {
@@ -68,25 +68,32 @@ resolvePaths(home)                  建目录树（core/storage/paths.ts）
 acquireDaemonSlot                   wx 独占认领 <home>/daemon.json：占位 {port:0, pid, startedAt, starting:true}
 loadConfig(paths)                   config.yaml 深合并默认值
 loadOrCreateToken(paths.home)       读/生成 <home>/token
-new SessionStore / MemoryStore      MemoryStore 构造后立即 reconcile()：
-                                    notes/*.md 是事实来源，SQLite 索引是派生物，
-                                    启动时对账（手改/删除的笔记在启动时被感知）
+new SessionStore(paths.sessionsDir)
+embedding 判定链（memory.embedding） model 非空才构造 embedding 客户端（见 memory.md 判定链）；
+                                    构造在 EventBus 之后、MemorySystem 之前，赋给下方 memory
+new EventBus()
+new MemorySystem({memoryDir, sessions, config, resolveLlm, embed, emit})
+                                    记忆 v2 门面（见 memory.md）；装配后立即三件事：
+                                    migrateV1Notes（notes/*.md 三路分流并入 persona/rule/wiki，删 notes/）
+                                    rmSync index.db（v1 派生物直接删）
+                                    reconcile()（全部项目库 + 全局库对账，向量后台补算）
 new JobScheduler(paths.jobsDb)
 new UsageStore(paths.usageDb)       token 台账（SQLite，stop 时 close）
 defaultLlmFactory(config) + resolveModel(config)   见"provider 解析"
-new EventBus()
 new McpManager({servers})           仅当 config.mcp.servers 非空；否则 undefined（不装配）
-new RunManager({...})               注入 usageStore、readonly（opts.readonly 时）、
+new RunManager({...})               注入 usageStore、memory、readonly（opts.readonly 时）、
                                     extraTools: () => mcpManager.tools()（有管理器时）；见 run-manager
-createApp({home, token, stores, bus, run, mcp, attachmentsDir, usage, webDist})
+createApp({home, token, stores, bus, run, mcp, attachmentsDir, usage, webDist, memory})
                                     Fastify 应用（见 http-api）；attachmentsDir/usage 传入时
-                                    对应的附件与用量路由才注册，mcp 提供 /mcp 的快照
+                                    对应的附件与用量路由才注册，mcp 提供 /mcp 的快照，memory 供 /memory 路由族
 await app.listen({ port: 0, host: "127.0.0.1" })
 port = app.server.address().port
 writeFileSync(<home>/daemon.json, {port, pid, startedAt})   ← 回填占位（同 startedAt、starting 移除）；listen 之后、tick 之前
 createNotifier(notify.channels)     ← 仅当 notify.channels 非空时创建；空则 undefined，tick 完全不推送
 void mcpManager.start()             ← 有管理器才执行；不阻塞就绪，连接随后陆续建立
+run.recoverQueues()                 崩溃恢复：meta.queue 整体重排，steer/interrupt 降级 wait（见 run-manager）
 startSchedulerTick({...})           立即一次检查 + 每 30s 一次（deps 携带 notifier 与 webBase=`http://127.0.0.1:<port>`，用于推送中的 `?session=` 链接）
+startMemoryScheduler({...})         记忆调度器：定时 + 跟随兜底触发（默认 60s 扫一次，见 memory.md）
 return { port, token, pid, stop }
 ```
 
@@ -119,13 +126,13 @@ app.addHook("preHandler", async (request, reply) => {
 
 - **`/health`**：CLI 的存活探测（`probeHealth`，单次 1s 超时）不带 token——探测只回答 daemon 是否存活，此时客户端可能还没有 token。
 - **`/ws`**：WebSocket 升级请求常无法携带自定义 header，鉴权移到连接内部进行——首帧 `{type:"auth", token}` 或 `?token=` 查询参数，失败发 error 帧并以 4001 关闭（见 [realtime](./realtime.md)）。豁免的是升级路由，不是连接本身。
-- **静态 WebUI 外壳**（仅 `webDist` 已配置时）：浏览器加载页面前无法获得 token，`GET /`、`GET /index.html`、`GET /assets/*` 必须先放行；页面加载后由 JS 携带 token 调用 API。
+- **静态 WebUI 外壳**（仅 `webDist` 已配置时）：浏览器加载页面前无法获得 token，`GET /`、`GET /index.html`、`GET /assets/*` 必须先放行，PWA 静态文件（`/manifest.webmanifest`、`/sw.js`、`/icon-192.png`、`/icon-512.png`、`/favicon.ico`）同样放行（浏览器默认请求 favicon，磁盘上没有对应文件，让它从静态处理器 404 而不是 401）；页面加载后由 JS 携带 token 调用 API。
 
 **外壳豁免的防绕过措施**（`isWebShellExempt`）：
 
 - 只放行 `GET`；其他方法一律走鉴权。
 - 匹配的是**原始请求路径**（`request.url.split("?")[0]`，去掉查询串），不是 `request.routeOptions.url`——`@fastify/static` 用一条 `/*` catch-all 路由服务一切文件，匹配到的路由 url 不含路径信息，依据它判断等于全部放行。
-- 路径白名单是精确的三种：`/`、`/index.html`、`/assets/` 前缀。`/sessions`、`/jobs`、`/config` 等 API 路由先注册、各自有真实 route url，不落在静态 catch-all 的放行逻辑里。
+- 路径白名单是"三种模式 + 五个精确路径"的封闭集合：模式为 `/`、`/index.html`、`/assets/` 前缀，精确路径为上文那五个 PWA 文件。`/sessions`、`/jobs`、`/config` 等 API 路由先注册、各自有真实 route url，不落在静态 catch-all 的放行逻辑里。
 - 反向防线：`resolveWebDist` 在目录不存在时返回 `undefined`（不注册任何静态路由，`GET /` 保持 404），而不是注册一个半配置的静态服务器，使外壳豁免空设在鉴权之前。
 
 ## 停止流程
@@ -136,9 +143,12 @@ bin 脚本注册信号处理：SIGTERM/SIGINT → `shutdown()`（`stopping` 标�
 
 ```
 withStopTimeout(tick.stop(), 60s)   // 停心跳；tick.stop 会 await 所有进行中的 job run
+withStopTimeout(memoryTick.stop(), 60s)
+                                    // 停记忆调度器（定时 + 跟随兜底）
 withStopTimeout(mcpManager.stop(), 60s)
                                     // 有管理器才有此步：断开全部 MCP server（幂等）
 withStopTimeout(app.close(), 60s)   // 关服务器；app.close 会 await 所有连接
+withStopTimeout(memory.stop(), 60s) // 关闭全部 VectorIndex 的 sqlite 连接（防句柄/内存泄漏）
 usage.close()                       // 关台账数据库
 rmSync(<home>/daemon.json)          // 只有全部成功才删
 ```

@@ -96,7 +96,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 一行输入的生命周期：
 
 1. **建连**：`KclawClient.connect` → `resolveSessionId`（无 `--session` 时 `POST /sessions {workdir: cwd}` 新建，否则在 `GET /sessions` 里校验存在）→ `openSubscribed`：开 WS、发 `{type:"subscribe", sessionId}`、等 `subscribed` 确认（5s 内没等到，或收到 error 帧，直接报错关闭）。
-2. **读行**：`node:readline` 逐行读（刻意不用 @clack 的文本框：增量需直接 `process.stdout.write`，管道 stdin 也需逐行工作）。每行先过 `dispatch`：`/` 开头的按命令处理；普通消息发送前先做一遍 **`@路径` 引用展开**。展开流程：先调 `GET /sessions/:id` 拿到会话的工作目录（daemon 一时连不上就退回用进程 cwd，别让一次网络失败卡死输入循环）；然后 `expandFileRefs` 找出消息里每个 `@token`，相对 cwd 解析路径并经 realpath 校验，要求必须落在这个工作目录之内。对每个通过检查的文件按大小分两种处理：小的文本文件把正文直接内联进消息（格式为 `[来自 @路径]` + 正文，超过 8000 字符截断并加 `\n…[已截断]`）；大文件或非文本文件则在消息末尾加一行提示 `[文件 @路径（N 字节）已引用，可用 fs_read 读取 <绝对路径>]`，内容由模型之后自己读。任何一个 token 越界、不存在或不是文件，整条消息就不发送，只打印一行 `引用失败: <原因>`。
+2. **读行**：`node:readline` 逐行读（刻意不用 @clack 的文本框：增量需直接 `process.stdout.write`，管道 stdin 也需逐行工作）。每行先过 `dispatch`：`/` 开头的按命令处理；普通消息发送前先做一遍 **`@路径` 引用展开**。展开流程：先调 `GET /sessions/:id` 拿到会话的工作目录（daemon 一时连不上就退回用进程 cwd，别让一次网络失败卡死输入循环）；然后 `expandFileRefs` 找出消息里每个 `@token`，相对 cwd 解析路径并经 realpath 校验，要求必须落在这个工作目录之内。对每个通过检查的文件按大小分两种处理：小的文本文件把正文直接内联进消息（格式为 `[来自 @路径]` + 正文，超过 8192 字符（8 KiB）截断并加 `\n…[已截断]`）；大文件或非文本文件则在消息末尾加一行提示 `[文件 @路径（N 字节）已引用，可用 fs_read 读取 <绝对路径>]`，内容由模型之后自己读。任何一个 token 越界、不存在或不是文件，整条消息就不发送，只打印一行 `引用失败: <原因>`。
 3. **发送与渲染**（`renderRun`）：发 `{type:"send_message", sessionId, text, disposition, attachments?}`——`disposition` 必带，取当前会话处置模式（`/steer`/`/wait` 切换，或 `/interrupt` 一次性注入；初始值 = 会话覆盖 `dispositionOverride` > 配置 `sessions.defaultDisposition` > steer）。之前用 `/attach` 上传累积的待发附件随这条帧一起发出，发完立即清空附件队列。发送与渲染**不阻塞输入行**：常驻帧泵（`startPump`）读取 socket 帧并分发给当前渲染，每次发送经 `startRender` 递增 `renderEpoch` 接管帧流，旧渲染静默退场——所以 run 中途还能继续输入（`/interrupt` 和忙时发送都依赖它）。按帧渲染直到 run 终态：
    - `text.delta` 原样写出（自带换行控制：`ensureLineStart` 保证块之间换行）；`thinking.delta` 仅 `--think` 时暗色输出。
    - `tool_call.completed` → `⚡ <name> <args>`，args 是紧凑 JSON、截断到 60 字符。
@@ -104,7 +104,8 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
    - `message.queued`（我的消息）→ 暗色 `已排队（第 N 位）`（`position+1`）或 `已进入引导缓冲`（steer 无 position）；`message.steered`（我的消息）→ 暗色 `已注入`——我的消息身份从 `send_message_ack` 的 `messageId` 学到，终点以"我的消息被看到（`message.created`/`message.steered`）之后的第一个 `run.completed`"判定，前一个 run 的终态不会错收我的渲染。
    - `confirmation.requested` → `⚠ <name> <argsJson> · 风险 <risk> · 过期 <expiresAt>`，按 yes/no/ask 三种模式收决定（ask 时暂停 readline、@clack 出确认框、恢复 readline），回发 `{type:"confirmation.resolve", confirmationId, approved}`。
    - `note.emitted` → 暗色 `[note] <text>`；kind 为 `compact` 且带结构化 meta（`compact:{segments,kept}`）的例外——它每轮都会被 daemon 重挂（模型上下文需要），打全文会逐轮重复，所以静默，压缩的告知由下面的 completed 行承担；无 meta 的旧格式 compact note 仍照常打全文；`message.created/completed` 刻意不渲染（readline 已回显用户输入，再渲染会重复）。
-   - `compaction.started` → 暗色 `[正在压缩早期对话…]` 一行（收尾压缩发生在 `run.completed` 之后、中途/急救压缩发生在运行中的迭代边界——都有这行提示，摘要调用的数秒不是静默空窗）；`compaction.completed` → 按 `result` 三分支：`ok` 打暗色 `✱ 早期对话已压缩为 N 段，保留最近 M 条原文（早期细节可用 session_search 检索）`、`failed` 打暗色 `✱ 压缩失败（继续运行）`、`cancelled` 打暗色 `✱ 压缩已取消`（`phase` 为 `in-run` 时行首加 `（运行中）`、`manual` 加 `（手动）`）——事件只在真正发生压缩时发一次，天然是"每次压缩一条"的告知，与 WebUI 的折叠块同一去重语义（见 [compaction](../core/compaction.md)）。
+   - `compaction.started` → 暗色 `[正在压缩早期对话…]` 一行（收尾压缩发生在 `run.completed` 之后、中途/急救压缩发生在运行中的迭代边界——都有这行提示，摘要调用的数秒不是静默空窗）；`compaction.completed` → 按 `result` 三分支：`ok` 打暗色 `✱ 早期对话已压缩为 N 段，保留最近 M 条原文（早期细节可用 session_search 检索）`、`failed` 打暗色 `✱ 压缩失败，本轮继续（稍后自动重试）`、`cancelled` 打暗色 `✱ 压缩已取消`——事件只在真正发生压缩时发一次，天然是"每次压缩一条"的告知，与 WebUI 的折叠块同一去重语义（见 [compaction](../core/compaction.md)）。
+   - `memory.written`（广播，不带 sessionId）→ 暗色一行 `已写入记忆: <path>`，提示记忆已落盘；它与 run 生命周期无关，只是轻提示（见 [memory](../core/memory.md)）。
    - `run.completed`/`run.failed`/error 帧 → 结束本轮等待。
 4. **Ctrl+C 逐级升级**（readline 在待输行为空时把 Ctrl+C 转成 `"SIGINT"` 事件，`sigints` 计数只增不减）：第一次在 run 进行中 → 发 `{type:"run.cancel"}`（run 随后经正常渲染路径以 `stopReason:"aborted"` 结束），并查排队数，非空则提示"还有 N 条排队消息，再按一次 Ctrl+C 清空"；第一次空闲 → 同样查排队数，非空提示清空、为空提示"再按一次 Ctrl+C 退出"；第二次 → 队列非空则发 `{type:"queue.cancel"}` 清空全部可取消条目并提示"队列已清空，再按一次 Ctrl+C 退出"，队列为空直接退出；第三次 → 关闭 socket、关闭 readline、`process.exit(130)`。
 
@@ -135,6 +136,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 | `/wait` | 同 `/steer`，处置为 wait：运行中发送的消息排队，当前 run 结束后执行 |
 | `/interrupt <消息>` | 一次性动作（不是模式）：带 interrupt 处置发送这条消息——服务端立即中止当前 run 并把消息插到队首执行；无参数时打印用法提示（纯中断用 Ctrl+C） |
 | `/queue [cancel <n\|all>]` | 不带参数时 `GET /sessions/:id/queue` 列出排队消息（`序号. 处置 文本`），空则"（队列为空）"；`cancel <n>` 按序号取消该条（发 `queue.cancel` 帧），`cancel all` 清空全部；读取失败打印 `读取队列失败: …` |
+| `/memory [项目 [线]]` | 只读查看记忆塔（见 [memory](../core/memory.md)）：无参列项目（`GET /memory/projects`）；指定项目列该项目的主题线（`GET /memory/projects/:id`）；再指定一条线打印线文件原文（`GET /memory/threads/:project/:topic`）；各级读取失败打印对应错误 |
 
 - 自定义命令：`ctx.commandsDir`（daemon 装配为 `<home>/commands`）目录下的每个 `*.md` 文件注册成一个命令——文件名就是命令名，文件内容是一段提示词模板；执行命令时，模板里的 `{{args}}` 替换成命令参数，然后经 `ctx.send(text)` 作为普通消息发出。与内置命令重名的文件不生效，打印一行警告。
 - `switchSession` 在**同一 socket** 上发 `unsubscribe`（旧会话）+ `subscribe`（新会话），同时清空待发附件（附件是会话级的，换会话不带走）；`SlashCtx` 的 `client`/`sessionId` 是 getter，命令执行时看到的总是重连/切换后的当前值。

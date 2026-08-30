@@ -94,7 +94,9 @@ export interface ToolResultBlock {
 }
 
 export type NoteKind = "system" | "job" | "memory" | "timeout" | "denied" | "compact"
-export interface NoteBlock { id: BlockId; type: "note"; kind: NoteKind; text: string }
+export interface NoteBlock { id: BlockId; type: "note"; kind: NoteKind; text: string
+  compact?: { segments: number; kept: number }   // 仅 kind==="compact" 时携带：本次压缩的段数与会话保留原文条数；UI 专用，provider 渲染不读它
+}
 
 export type AttachmentSource =
   | { type: "base64"; data: string }
@@ -209,6 +211,7 @@ export interface MemoryWrittenPayload {
 |------|--------|
 | run / message / 流式 / llm / confirmation / note / `message.steered` | core 的 agent 循环（`agent/loop.ts`；`message.steered` 在 steering 注入时逐条发出，事件级 `runId` 标识注入的 run） |
 | `message.queued` `message.queue_cancelled` | server 的 `RunManager`（`run.ts`：submit / recoverQueues / queueCancel） |
+| `compaction.started` `compaction.completed` | server 的 `RunManager`（`run.ts` 的 `#compactV2` / `#runAutoCompaction`，覆盖收尾 post-run / 运行中 in-run / 手动 manual 三路） |
 | `memory.written` | core 的 `MemoryPipeline`（`memory/pipeline.ts`，每次落盘经装配的 emit 钩子广播；daemon 侧接钩子的点在 `server/daemon.ts`） |
 | `job.*` | server 的 `scheduler-tick.ts` |
 | `session.renamed` | server 的自动命名（`autoname.ts`：新标题写回 meta 后发出） |
@@ -233,7 +236,7 @@ export function newId(prefix: IdPrefix): string {
 
 | 前缀 | 生成点 |
 |------|--------|
-| `msg` | `messages.ts` 的 newMessage |
+| `msg` | `messages.ts` 的 newMessage；另在 `server/run.ts` submit 入队时为消息条目预分配 messageId（`input.messageId ?? newId("msg")`） |
 | `ses` | `session/store.ts` 的 create |
 | `blk` | `blocks.ts` 的 newBlockId |
 | `evt` | `events.ts` 的 makeEvent |

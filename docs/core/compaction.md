@@ -136,9 +136,11 @@ export interface CompactionRecord {
 
 水位是 `estimateContextTokens(会话历史)`：锚定最后一条助手消息记录的真实 `usage.inputTokens`（上一次实际发出的请求大小），锚之后的新消息按字符粗算。锚定使已被压缩的旧内容天然不计入——它们根本不在上一次请求里——所以直接对全量历史读数即可，不需要先切出未压缩部分。收尾压缩在运行的收尾路径里 await 完成，会话驱动器的串行化保证压缩期间新到的消息排队等待、不会并发写会话元数据；中途压缩经 agent 循环的 `midRunCompaction` 钩子触发（见 [agent-loop](./agent-loop.md)），成功后的新压缩视图从下一次请求开始生效；超限急救经 `onContextOverflow` 钩子触发，成功后整次请求静默重发一次。
 
+急救有独立的强制分界兜底（`emergencyBoundary`，`session/compaction.ts`）：急救通常发生在压缩后的首请求或单轮工具输出暴涨时，`active` 里可能没有助手锚点、固定开销全漏计，`chooseBoundary` 据此可能找不到边界——此时不看预算，直接退守最小可行上下文：只保留最近一轮用户轮次（最后一条 user 消息及其之后的整轮），更早的全部压掉；整个 `active` 只有一轮时返回无可压缩。
+
 两道线的分工：黄线（`compactAtRatio`，默认 0.66）只配收尾压缩——一次压缩就把保留部分压到预算的三分之一（`compactTargetRatio` 默认 0.33），余量已够；红线（`compactPanicRatio`，默认 0.85）配中途压缩，防的是一次运行内部工具输出累积把水位继续推向预算。压完留 33%，意味着之后要再积累一倍的新对话才会再次触发（压缩要花两次模型调用，不能太频繁）；默认预算 128000 的三分之一（约 42,000 token）的原文量也足够模型记住当前任务的来龙去脉。运行内更细粒度的膨胀由机制三在每次构造请求时按预算自动省略，红线是它之上的保险。
 
-自动压缩可以取消：WebUI 压缩指示行的"取消"按钮发 WS 帧 `compaction.cancel`，服务端中止在飞的摘要调用，并写一个会话级取消标记——本次运行内后续的中途与收尾压缩都被这个标记压制，下一次运行开始时标记清除、恢复正常压缩（服务端细节见 [run-manager](../server/run-manager.md) 的 `cancelCompaction`）。手动 /compact 不检查取消标记，与自动压缩互不干涉。
+自动压缩可以取消：WebUI 压缩指示行的"取消"按钮发 WS 帧 `compaction.cancel`，服务端中止在飞的摘要调用，并写一个会话级取消标记——本次运行内后续的中途与收尾压缩都被这个标记压制，下一次运行开始时标记清除、恢复正常压缩（服务端细节见 [run-manager](../server/run-manager.md) 的 `cancelCompaction`）。手动 /compact 不检查取消标记、与自动压缩互不干涉，WebUI 对手动阶段也不渲染取消按钮（`cancelCompaction` 不作用于手动压缩）。
 
 ### 分界怎么选
 
@@ -201,7 +203,7 @@ m1  m2  m3 │ m4  m5  m6  m7 │ m8 … m12
 - docs/core 有四篇文档要更新
 
 ## 文件与命令
-- packages/server/src/run.ts — 现有压缩实现 #compact
+- packages/server/src/run.ts — 现有压缩实现 #compactV2
 - packages/core/src/agent/context.ts — 请求构造函数 toProviderMessages
 ```
 
