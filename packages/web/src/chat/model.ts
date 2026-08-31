@@ -92,6 +92,9 @@ export type EventType =
   | "message.queued" | "message.steered" | "message.queue_cancelled"
   | "memory.written"
 
+/** memory.written 的 payload（web 侧视图投影，字段与 core 协议一致）——通知条点击跳转目标。 */
+export interface MemoryWrittenInfo { path: string; kind: "episode" | "cognition"; topic?: string; scope?: string }
+
 type EventKind =
   | { type: "run.started"; payload: { trigger: string } }
   | { type: "run.completed"; payload: { stopReason: string } }

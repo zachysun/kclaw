@@ -21,6 +21,7 @@ function makeCtx(): WebCommandCtx & {
       post: vi.fn(async () => ({ message: "压缩了 3 段，剩 4 条原文消息" })),
     },
     sessionId: "s1",
+    workdir: "",
     notify: vi.fn(),
     createSession: vi.fn(async () => {}),
     openSessions: vi.fn(),
@@ -117,5 +118,13 @@ describe("runWebCommand", () => {
     const ctx = makeCtx()
     expect(await runWebCommand({ command: "memory", args: "" }, ctx)).toBe(true)
     expect(ctx.notify).toHaveBeenCalledWith("记忆管理请用顶部的「记忆」页")
+  })
+
+  it("/memory save triggers a manual write with the session workdir", async () => {
+    const ctx = makeCtx()
+    ctx.workdir = "/w/kclaw"
+    expect(await runWebCommand({ command: "memory", args: "save" }, ctx)).toBe(true)
+    expect(ctx.api.post).toHaveBeenCalledWith("/memory/trigger-manual", { workdir: "/w/kclaw" })
+    expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("已触发手动写入"))
   })
 })

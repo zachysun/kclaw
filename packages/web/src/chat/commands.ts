@@ -26,6 +26,8 @@ export interface WebCommandCtx {
   switchModel(name: string): void
   models: string[]
   currentModel?: string
+  /** 当前会话的工作目录（/memory save 触发手动写入的目标项目）。 */
+  workdir: string
 }
 
 /** Execute a parsed `/command`; false means the command is unknown. */
@@ -80,9 +82,21 @@ export async function runWebCommand(parsed: ParsedSlash, ctx: WebCommandCtx): Pr
       }
       return true
     }
-    case "memory":
+    case "memory": {
+      // /memory save — 手动触发当前项目的手动写入（spec 4.2 手动行）；无参提示记忆页。
+      const arg = parsed.args.trim()
+      if (arg === "save") {
+        try {
+          await ctx.api.post("/memory/trigger-manual", { workdir: ctx.workdir })
+          ctx.notify("已触发手动写入（当前会话工作目录，处理自上次以来的新消息）")
+        } catch (err) {
+          ctx.notify(`触发手动写入失败: ${err instanceof Error ? err.message : String(err)}`)
+        }
+        return true
+      }
       ctx.notify("记忆管理请用顶部的「记忆」页")
       return true
+    }
     case "help":
       return true
     default:

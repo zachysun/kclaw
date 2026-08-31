@@ -10,7 +10,7 @@ import { act } from "react"
 import { createWsClient, type WsClient, type WsLikeSocket } from "../../src/ws.js"
 import type { ApiClient } from "../../src/api.js"
 import { ChatPanel } from "../../src/chat/ChatPanel.js"
-import type { AgentEvent, Message } from "../../src/chat/model.js"
+import type { AgentEvent, MemoryWrittenInfo, Message } from "../../src/chat/model.js"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -172,6 +172,8 @@ async function mount(
     compactions?: unknown
     /** Make the compactions pull reject (silent-failure path). */
     compactionsFail?: boolean
+    /** memory.written 通知条点击的回调（spec 9.1 跳转）。 */
+    onOpenMemoryWritten?: (info: MemoryWrittenInfo) => void
   } = {},
 ): Promise<Harness> {
   const sessionId = opts.sessionId ?? "s1"
@@ -192,6 +194,7 @@ async function mount(
         onSessionRenamed={opts.onSessionRenamed}
         onCreateSession={opts.onCreateSession ?? (async () => {})}
         onOpenSessions={opts.onOpenSessions ?? (() => {})}
+        onOpenMemoryWritten={opts.onOpenMemoryWritten}
       />,
     )
   })
@@ -263,6 +266,22 @@ describe("ChatPanel", () => {
     })
     // 落盘反馈走 ChatView 的一次性 notice（spec 9.3 写入通知）。
     expect(h.container.querySelector('[data-testid="chat-notice"]')!.textContent).toContain("已写入记忆: persona.md")
+    h.unmount()
+  })
+
+  it("clicks the memory.written notice to open the written memory (spec 9.1 跳转)", async () => {
+    const onOpenMemoryWritten = vi.fn()
+    const h = await mount({ onOpenMemoryWritten })
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("memory.written", { path: "/global/persona/persona.md", kind: "cognition", scope: "global" }))
+    })
+    // 有回调 → 通知渲染为按钮。
+    const btn = h.container.querySelector('[data-testid="chat-notice-action"]') as HTMLButtonElement
+    expect(btn).not.toBeNull()
+    expect(btn.textContent).toContain("已写入记忆: /global/persona/persona.md")
+    await act(async () => { btn.click() })
+    expect(onOpenMemoryWritten).toHaveBeenCalledTimes(1)
+    expect(onOpenMemoryWritten).toHaveBeenCalledWith({ path: "/global/persona/persona.md", kind: "cognition", scope: "global" })
     h.unmount()
   })
 

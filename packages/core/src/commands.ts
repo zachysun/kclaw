@@ -40,7 +40,7 @@ export const SLASH_COMMANDS: readonly SlashCommandMeta[] = [
   { name: "interrupt", usage: "/interrupt <消息>", description: "掐掉当前 run，并把这条消息插到队列最前（一次性动作，不是模式）", surfaces: ["cli"] },
   { name: "queue", usage: "/queue [cancel <n|all>]", description: "查看当前会话的排队消息；cancel 按序号或 all 取消", surfaces: ["cli"] },
   { name: "help", usage: "/help", description: "列出所有命令", surfaces: ["cli", "web"] },
-  { name: "memory", usage: "/memory [项目 [线]]", description: "查看长期记忆：列出项目；指定项目列出主题线；再指定线查看原文", surfaces: ["cli", "web"] },
+  { name: "memory", usage: "/memory [save|项目 [线]]", description: "记忆：save 手动触发当前项目写入；列项目/主题线/线原文", surfaces: ["cli", "web"] },
   { name: "exit", usage: "/exit", description: "退出终端程序", surfaces: ["cli"] },
 ]
 

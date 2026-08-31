@@ -25,6 +25,7 @@ import {
   mergeQueue,
   type AgentEvent,
   type ChatState,
+  type MemoryWrittenInfo,
   type Message,
 } from "./model.js"
 import { runWebCommand } from "./commands.js"
@@ -51,6 +52,10 @@ export interface ChatPanelProps {
   onCreateSession: (title?: string) => Promise<void>
   /** Reveal the session list — the /sessions command (the drawer on mobile). */
   onOpenSessions: () => void
+  /** 当前会话的工作目录（/memory save 手动写入的目标项目；缺省由 daemon 回退 config.workspace）。 */
+  workdir?: string
+  /** memory.written 通知条点击 → 跳转记忆页对应文件（spec 9.1）；不传则通知条保持纯文本。 */
+  onOpenMemoryWritten?: (info: MemoryWrittenInfo) => void
 }
 
 /** Max consecutive failed reconnects before giving up with a notice. */
@@ -70,9 +75,11 @@ function errorFrameMessage(frame: unknown): string | null {
   return typeof message === "string" ? message : null
 }
 
-export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions }: ChatPanelProps) {
+export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten }: ChatPanelProps) {
   const [view, setViewState] = useState<ChatState>(() => initChat(initialMessages))
   const [notice, setNotice] = useState<string | null>(null)
+  // 通知条的可点击动作（spec 9.1 memory.written 跳转）：与 notice 同生命周期，输入即清。
+  const [noticeAction, setNoticeAction] = useState<(() => void) | null>(null)
   // 发送处置（spec §6）：三选的当前选择，显式带在每条 send_message 上。
   const [disposition, setDisposition] = useState<Disposition>("steer")
   const clientRef = useRef<WsClient>(ws)
@@ -172,11 +179,17 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
                 const title = (frame.payload as { title?: unknown }).title
                 if (typeof title === "string") onSessionRenamed?.(sessionId, title)
               }
-              // memory.written 是跨视图的落盘反馈（spec 9.3 写入通知）：不进
-              // reducer，走 ChatView 的一次性 notice（输入即清，见 onDraftChange）。
+              // memory.written 是跨视图的落盘反馈（spec 9.1/9.3 写入通知）：不进
+              // reducer，走 ChatView 的一次性 notice（输入即清，见 onDraftChange）；
+              // 通知条可点击跳转记忆页对应文件（spec 9.1），点击动作由 owner 提供。
               if (frame.type === "memory.written") {
-                const p = (frame.payload as { path?: unknown }).path
-                if (typeof p === "string") setNotice(`已写入记忆: ${p}`)
+                const info = frame.payload as MemoryWrittenInfo
+                if (typeof info.path === "string") {
+                  setNotice(`已写入记忆: ${info.path}`)
+                  // 注意：setState 把函数当 updater 执行，这里必须返回函数而非直接
+                  // 传 `() => onOpenMemoryWritten(info)`（那样 state 会被算成返回值 undefined）。
+                  setNoticeAction(onOpenMemoryWritten === undefined ? null : () => () => onOpenMemoryWritten(info))
+                }
               }
               updateView((v) => applyEvent(v, frame))
               // 空文本行 = 跨客户端排队的消息（本端无发送上下文）→ 拉快照补文本
@@ -335,6 +348,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       void runWebCommand(parsed, {
         api,
         sessionId,
+        workdir: workdir ?? "",
         notify: setNotice,
         createSession: onCreateSession,
         openSessions: onOpenSessions,
@@ -424,7 +438,10 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       .catch((err: unknown) => setNotice(`处置切换失败: ${err instanceof Error ? err.message : String(err)}`))
   }, [api, sessionId])
 
-  const clearNotice = useCallback((): void => setNotice(null), [])
+  const clearNotice = useCallback((): void => {
+    setNotice(null)
+    setNoticeAction(null)
+  }, [])
 
   return (
     <div className="chat-panel">
@@ -439,6 +456,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           sessionModel={currentModel}
           onSwitchModel={handleSwitchModel}
           notice={notice}
+          noticeAction={noticeAction}
           onDraftChange={clearNotice}
           disposition={disposition}
           onSetDisposition={handleSetDisposition}

@@ -349,6 +349,13 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
     async run(args, ctx) {
       const parts = args.trim().split(/\s+/).filter(Boolean)
       try {
+        // /memory save — 手动触发当前项目的手动写入（spec 4.2 手动行）。
+        // 当前项目 = CLI 启动目录（会话建在该目录，workdir 与 cwd 一致）。
+        if (parts[0] === "save") {
+          await ctx.client.request("POST", "/memory/trigger-manual", { workdir: process.cwd() })
+          ctx.print("已触发手动写入（当前项目，处理自上次以来的新消息）")
+          return
+        }
         if (parts.length === 0) {
           const projects = (await ctx.client.request("GET", "/memory/projects")) as Array<{ id: string; threads: number; lastActivity: string }>
           ctx.print(projects.length === 0 ? "（还没有项目记忆）" : projects.map((p) => `${p.id} · ${p.threads} 线 · 最近 ${p.lastActivity}`).join("\n"))

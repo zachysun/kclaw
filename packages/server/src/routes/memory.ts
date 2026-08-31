@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
-import type { MemorySystem } from "@kclaw/core"
+import type { KclawConfig, MemorySystem } from "@kclaw/core"
 
 const NOT_FOUND = { error: "not found" } as const
 /** spec 9.2：global 认知文件只认这 3 个 kind；其它一律 404。 */
@@ -18,7 +18,7 @@ function requireContent(body: unknown): string | undefined {
 }
 
 /** spec 9.2 的 /memory 路由族：管理记忆塔（项目线文件 + global 认知文件）。 */
-export function registerMemoryRoutes(app: FastifyInstance, opts: { memory?: MemorySystem }): void {
+export function registerMemoryRoutes(app: FastifyInstance, opts: { memory?: MemorySystem; config?: KclawConfig }): void {
   // 无 memory 装配（createApp 未传 system）时全部 503，不注册会崩的调用。
   const unavailable = (reply: FastifyReply) => reply.code(503).send({ error: "memory system unavailable" })
   const memory = opts.memory
@@ -105,5 +105,26 @@ export function registerMemoryRoutes(app: FastifyInstance, opts: { memory?: Memo
     if (memory.cognitionContent(kind, file) === undefined) return reply.code(404).send(NOT_FOUND)
     memory.deleteCognition(kind, file)
     return { ok: true }
+  })
+
+  // 手动写入入口（spec 4.2 手动行）：/memory save（CLI/Web）触发当前项目的
+  // L0→L1 提取，范围 = 该项目自上次水位以来的新消息（与定时/跟随同一条管线）。
+  app.post("/memory/trigger-manual", async (req, reply) => {
+    if (memory === undefined) return unavailable(reply)
+    // write.manual 是开关（默认开）：关闭时明确拒绝，同 immediate 的"工具在、执行时拒绝"。
+    if (opts.config !== undefined && opts.config.memory.write.manual === false) {
+      return reply.code(400).send({ error: "手动写入已关闭（memory.write.manual=false），可依赖定时/跟随触发" })
+    }
+    const body = req.body as { workdir?: unknown } | null
+    const workdir =
+      typeof body === "object" && body !== null && typeof body.workdir === "string" && body.workdir !== ""
+        ? body.workdir
+        : undefined
+    try {
+      await memory.triggerManual(workdir ?? opts.config?.workspace ?? process.cwd())
+      return { ok: true }
+    } catch (err) {
+      return reply.code(500).send({ error: `manual trigger failed: ${err instanceof Error ? err.message : String(err)}` })
+    }
   })
 }

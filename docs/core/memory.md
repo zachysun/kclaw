@@ -116,7 +116,7 @@ updated: 2026-08-30
 | 触发 | 入口 | 范围 | 说明 |
 |------|------|------|------|
 | **immediate**（立即） | `memory_save` 工具 → `system.triggerImmediate(sessionId)` | 覆盖到当前时刻 | 模型在对话中主动要求"记下来"，当场处理当前这轮对话；`memory.write.immediate=false` 时工具返回固定提示、内容留给后台触发沉淀 |
-| **manual**（手动） | `MemorySystem.triggerManual(workdir)` | 覆盖到当前时刻 | 目前**没有用户入口**——CLI `/memory` 只做只读查看、web 记忆页只做文件编辑，`triggerManual` 在 core 层预留、尚未被任何路由/工具暴露（见"已知取舍"） |
+| **manual**（手动） | `MemorySystem.triggerManual(workdir)` | 覆盖到当前时刻 | 用户通过 **`/memory save` 斜杠命令**（CLI 与 web 均有）触发当前项目的手动写入；CLI 取启动目录、web 取当前会话工作目录。开关 `memory.write.manual`（默认 true）关闭时路由返回 400 |
 | **interval**（定时） | `memory-scheduler`（默认每 60s 扫一次） | 两个水位中较靠后的增量 | 距上次定时触发满 `memory.write.intervalMinutes` 分钟就触发一次（0 关闭）；上次时间落在 `state.json` 的 `intervalLastRun`，未触发过则立刻首跑 |
 | **follow**（跟随） | run 收尾挂起检查 + 门禁判定 | 两个水位中较靠后的增量 | 每个 run 结束（任何 stopReason）由 RunManager 挂一个跟随检查；`end_turn` 之后满 `memory.write.idleMinutes` 分钟无新活动才真正触发（0 关闭），见下 |
 
@@ -220,7 +220,7 @@ score = fused × 1/(1 + 距今天数/30)      // 时效因子：30 天衰减一�
 | 字段 | 默认 | 说明 |
 |------|------|------|
 | `memory.write.immediate` | `true` | `memory_save` 工具立即触发写入 |
-| `memory.write.manual` | `true` | 手动触发开关——**预留字段、当前无读取处**：core 的 `triggerManual` 尚未经路由/工具暴露，无用户入口 |
+| `memory.write.manual` | `true` | 手动触发开关：`/memory save`（CLI/web）走 `POST /memory/trigger-manual` 触发写入；`false` 时该路由返回 400 |
 | `memory.write.intervalMinutes` | `30` | 定时兜底触发的间隔分钟数（`0` = 关闭） |
 | `memory.write.idleMinutes` | `10` | 跟随门禁的空闲分钟数（`0` = 关闭） |
 | `memory.extractModel` | `""` | 提取/内化用的模型，空 = 回落主对话模型 |
@@ -257,7 +257,7 @@ v2 提供三套人工管理面，全部落在既有文档：
 ```
 
 - `episode` 事件带 `topic`（线名），`cognition` 事件带 `scope`（新认知的 scope）；
-- 事件不带 `sessionId`（项目级事务）；订阅端（CLI / web）把它当成"已落盘"的轻提示，不驱动任何状态机——CLI dim 一行 `已写入记忆: <path>`，web 在通知条显示同文案。
+- 事件不带 `sessionId`（项目级事务）；订阅端（CLI / web）把它当成"已落盘"的轻提示，不驱动任何状态机——CLI dim 一行 `已写入记忆: <path>`，web 通知条显示同文案；web 的通知条**可点击**，跳转记忆页并自动打开对应文件（`episode` 按 `scope+topic` 打开线、`cognition` 按 path 打开认知文件，spec 9.1）。
 
 ## 边界与出错
 

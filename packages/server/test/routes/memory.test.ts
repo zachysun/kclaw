@@ -27,6 +27,47 @@ afterEach(async () => { await app.close(); rmSync(home, { recursive: true, force
 
 const auth = { authorization: "Bearer t" }
 
+describe("POST /memory/trigger-manual", () => {
+  it("triggers a manual write for the given workdir", async () => {
+    // /w/none 无会话消息 → 手动提取安全空转（不调 LLM），端点应 200。
+    const res = await app.inject({
+      method: "POST", url: "/memory/trigger-manual", headers: { ...auth, "content-type": "application/json" },
+      payload: { workdir: "/w/none" },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ ok: true })
+  })
+  it("defaults workdir to config.workspace when omitted", async () => {
+    const res = await app.inject({ method: "POST", url: "/memory/trigger-manual", headers: auth })
+    expect(res.statusCode).toBe(200)
+  })
+  it("rejects with a clear error when memory.write.manual is disabled", async () => {
+    const cfg = structuredClone(defaultConfig)
+    cfg.memory.write.manual = false
+    const app2 = await createApp({
+      home, token: "t", stores: { sessions: new SessionStore(join(home, "sessions-off")), config: cfg },
+      memory: system,
+    })
+    try {
+      const res = await app2.inject({ method: "POST", url: "/memory/trigger-manual", headers: auth, payload: { workdir: "/w/none" } })
+      expect(res.statusCode).toBe(400)
+      expect(String(res.json().error)).toContain("manual")
+    } finally { await app2.close() }
+  })
+  it("surfaces a failing trigger as 500", async () => {
+    const boom = { triggerManual: async () => { throw new Error("extract failed") } } as unknown as MemorySystem
+    const app2 = await createApp({
+      home, token: "t", stores: { sessions: new SessionStore(join(home, "sessions-boom")) },
+      memory: boom, config: structuredClone(defaultConfig),
+    })
+    try {
+      const res = await app2.inject({ method: "POST", url: "/memory/trigger-manual", headers: auth, payload: { workdir: "/w" } })
+      expect(res.statusCode).toBe(500)
+    } finally { await app2.close() }
+  })
+})
+
+
 describe("GET /memory/projects", () => {
   it("lists projects with thread counts", async () => {
     const res = await app.inject({ method: "GET", url: "/memory/projects", headers: auth })

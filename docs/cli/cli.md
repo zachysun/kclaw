@@ -136,7 +136,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 | `/wait` | 同 `/steer`，处置为 wait：运行中发送的消息排队，当前 run 结束后执行 |
 | `/interrupt <消息>` | 一次性动作（不是模式）：带 interrupt 处置发送这条消息——服务端立即中止当前 run 并把消息插到队首执行；无参数时打印用法提示（纯中断用 Ctrl+C） |
 | `/queue [cancel <n\|all>]` | 不带参数时 `GET /sessions/:id/queue` 列出排队消息（`序号. 处置 文本`），空则"（队列为空）"；`cancel <n>` 按序号取消该条（发 `queue.cancel` 帧），`cancel all` 清空全部；读取失败打印 `读取队列失败: …` |
-| `/memory [项目 [线]]` | 只读查看记忆塔（见 [memory](../core/memory.md)）：无参列项目（`GET /memory/projects`）；指定项目列该项目的主题线（`GET /memory/projects/:id`）；再指定一条线打印线文件原文（`GET /memory/threads/:project/:topic`）；各级读取失败打印对应错误 |
+| `/memory [save\|项目 [线]]` | 记忆命令（见 [memory](../core/memory.md)）：`save` 手动触发当前项目的手动写入（`POST /memory/trigger-manual`，工作目录取 CLI 启动目录，处理自上次水位以来的新消息，成功打印 `已触发手动写入…`）；无 save 参数时是只读查看——无参列项目（`GET /memory/projects`）；指定项目列该项目的主题线（`GET /memory/projects/:id`）；再指定一条线打印线文件原文（`GET /memory/threads/:project/:topic`）；各级读取失败打印对应错误 |
 
 - 自定义命令：`ctx.commandsDir`（daemon 装配为 `<home>/commands`）目录下的每个 `*.md` 文件注册成一个命令——文件名就是命令名，文件内容是一段提示词模板；执行命令时，模板里的 `{{args}}` 替换成命令参数，然后经 `ctx.send(text)` 作为普通消息发出。与内置命令重名的文件不生效，打印一行警告。
 - `switchSession` 在**同一 socket** 上发 `unsubscribe`（旧会话）+ `subscribe`（新会话），同时清空待发附件（附件是会话级的，换会话不带走）；`SlashCtx` 的 `client`/`sessionId` 是 getter，命令执行时看到的总是重连/切换后的当前值。

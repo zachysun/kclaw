@@ -23,7 +23,7 @@ import { createApi } from "./api.js"
 import { createWsClient, type WsClient } from "./ws.js"
 import { ChatPanel } from "./chat/ChatPanel.js"
 import { UsageView } from "./usage/UsageView.js"
-import type { Message } from "./chat/model.js"
+import type { MemoryWrittenInfo, Message } from "./chat/model.js"
 import { SessionList } from "./sessions/SessionList.js"
 import { TrashView } from "./sessions/TrashView.js"
 import { JobsView } from "./jobs/JobsView.js"
@@ -120,6 +120,8 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [messagesCache, setMessagesCache] = useState<Record<string, Message[]>>({})
   const [sessionNotice, setSessionNotice] = useState<string | null>(null)
+  // memory.written 通知条点击后的跳转目标（spec 9.1）：切到记忆页并自动打开对应文件。
+  const [memoryTarget, setMemoryTarget] = useState<MemoryWrittenInfo | null>(null)
   // Mobile-only: the sidebar slides in as a drawer behind this flag (desktop
   // keeps it permanently visible).
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -226,6 +228,12 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
   const switchTab = useCallback((next: Tab) => {
     setSidebarOpen(false)
     setTab(next)
+  }, [])
+
+  // memory.written 通知条点击：切到记忆页并把目标交给 MemoryView 自动打开（spec 9.1）。
+  const handleOpenMemoryWritten = useCallback((info: MemoryWrittenInfo): void => {
+    setMemoryTarget(info)
+    setTab("memory")
   }, [])
 
   // Shared "create a session → prepend to the list → select it" step behind
@@ -411,6 +419,8 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
                 onSessionRenamed={handleSessionRenamed}
                 onCreateSession={handleSlashCreateSession}
                 onOpenSessions={handleOpenSessions}
+                workdir={selectedMeta?.workdir}
+                onOpenMemoryWritten={handleOpenMemoryWritten}
               />
             </div>
           )}
@@ -423,7 +433,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
           {tab === "audit" && <AuditView api={api} />}
           {tab === "usage" && <UsageView api={api} />}
           {tab === "trash" && <TrashView api={api} />}
-          {tab === "memory" && <MemoryView api={api} notice={(t) => setSessionNotice(t)} />}
+          {tab === "memory" && <MemoryView api={api} notice={(t) => setSessionNotice(t)} openTarget={memoryTarget} onOpenConsumed={() => setMemoryTarget(null)} />}
         </main>
       </div>
     </div>

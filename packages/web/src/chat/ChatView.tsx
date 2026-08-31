@@ -74,6 +74,11 @@ export interface ChatViewProps {
    * draft changes (suggestion completion) do not fire this.
    */
   onDraftChange?: () => void
+  /**
+   * Optional click action for the notice (spec 9.1 memory.written 跳转)。
+   * Present → the notice renders as a button; absent → plain text.
+   */
+  noticeAction?: (() => void) | null
   /** The current send disposition (the trio's selection; the owner resolves it from meta/config). */
   disposition?: Disposition
   /** Select the trio — the owner writes the sticky override (spec §6) and carries it on sends. */
@@ -92,7 +97,7 @@ export interface ChatViewProps {
   compactions?: CompactionRecordView[] | null
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, notice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onCancelCompaction, compactions }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onCancelCompaction, compactions }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Slash-suggestion state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -289,7 +294,14 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
       )}
       {notice !== undefined && notice !== null && notice !== "" && (
         <div className="chat-notice" data-testid="chat-notice" role="status">
-          {notice}
+          {noticeAction !== undefined && noticeAction !== null ? (
+            // 可点击通知（spec 9.1 写入通知）：点击执行跳转动作，其余通知保持纯文本。
+            <button type="button" data-testid="chat-notice-action" className="chat-notice-link" onClick={() => noticeAction()}>
+              {notice}
+            </button>
+          ) : (
+            notice
+          )}
         </div>
       )}
       {queuedRows.length > 0 && (

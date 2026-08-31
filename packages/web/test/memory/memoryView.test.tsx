@@ -9,6 +9,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { act } from "react"
 import type { ApiClient } from "../../src/api.js"
 import { MemoryView } from "../../src/memory/MemoryView.js"
+import type { MemoryWrittenInfo } from "../../src/chat/model.js"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -47,12 +48,21 @@ async function flush(): Promise<void> {
 async function mount(
   api: ApiClient,
   notice?: (text: string) => void,
+  openTarget?: MemoryWrittenInfo | null,
+  onOpenConsumed?: () => void,
 ): Promise<{ container: HTMLElement; root: Root }> {
   const container = document.createElement("div")
   document.body.appendChild(container)
   const root = createRoot(container)
   await act(async () => {
-    root.render(<MemoryView api={api} notice={notice ?? (() => {})} />)
+    root.render(
+      <MemoryView
+        api={api}
+        notice={notice ?? (() => {})}
+        openTarget={openTarget}
+        onOpenConsumed={onOpenConsumed}
+      />,
+    )
   })
   await flush() // 初始两个 GET（projects + global）落定
   return { container, root }
@@ -213,6 +223,46 @@ describe("MemoryView", () => {
       await flush()
       expect(notices.some((n) => n.includes("加载线程失败"))).toBe(true)
       expect(container.textContent).toContain("该主题无线程")
+    } finally {
+      root.unmount()
+      container.remove()
+    }
+  })
+
+  it("openTarget: opens an episode thread from scope+topic and consumes the target", async () => {
+    const api = fakeApi()
+    const consumed = vi.fn()
+    const { container, root } = await mount(
+      api, () => {},
+      { kind: "episode", path: "/m/projects/kclaw-a3f2c9/ws-reconnect.md", topic: "ws-reconnect", scope: "project:kclaw-a3f2c9" },
+      consumed,
+    )
+    try {
+      await flush()
+      expect(api.get).toHaveBeenCalledWith("/memory/threads/kclaw-a3f2c9/ws-reconnect")
+      const editor = container.querySelector('[data-testid="memory-editor"]') as HTMLTextAreaElement
+      expect(editor.value).toContain("topic: ws-reconnect")
+      expect(consumed).toHaveBeenCalled()
+    } finally {
+      root.unmount()
+      container.remove()
+    }
+  })
+
+  it("openTarget: opens a cognition file parsed from its path and consumes the target", async () => {
+    const api = fakeApi()
+    const consumed = vi.fn()
+    const { container, root } = await mount(
+      api, () => {},
+      { kind: "cognition", path: "/m/global/persona/persona.md" },
+      consumed,
+    )
+    try {
+      await flush()
+      expect(api.get).toHaveBeenCalledWith("/memory/global/persona/persona")
+      const editor = container.querySelector('[data-testid="memory-editor"]') as HTMLTextAreaElement
+      expect(editor.value).toContain("画像正文")
+      expect(consumed).toHaveBeenCalled()
     } finally {
       root.unmount()
       container.remove()

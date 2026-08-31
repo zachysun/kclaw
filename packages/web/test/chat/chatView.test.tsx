@@ -22,6 +22,9 @@ interface ViewOpts {
   onCancelCompaction?: () => void
   /** v3 压缩审计记录（GET /sessions/:id/compactions 的 UI 镜像）。 */
   compactions?: CompactionRecordView[] | null
+  /** 通知条与可点击动作（spec 9.1 memory.written 跳转）。 */
+  notice?: string | null
+  noticeAction?: (() => void) | null
 }
 
 function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
@@ -43,6 +46,8 @@ function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
         onCancelAllQueued={opts.onCancelAllQueued}
         onCancelCompaction={opts.onCancelCompaction}
         compactions={opts.compactions}
+        notice={opts.notice}
+        noticeAction={opts.noticeAction}
       />,
     )
   })
@@ -443,6 +448,25 @@ describe("disposition trio and queued bubbles (spec §7.1)", () => {
     const h = mountView([userMsg("m1", "正常消息")], {})
     expect(h.container.querySelector('[data-testid="queue-list"]')).toBeNull()
     expect(h.container.querySelectorAll('[data-testid="msg-user"]')).toHaveLength(1)
+    h.unmount()
+  })
+})
+
+describe("clickable notice (spec 9.1 memory.written 跳转)", () => {
+  it("renders a plain notice without an action", () => {
+    const h = mountView([], { notice: "已写入记忆: /m/p.md" })
+    const bar = h.container.querySelector('[data-testid="chat-notice"]')
+    expect(bar?.textContent).toContain("已写入记忆")
+    expect(h.container.querySelector('[data-testid="chat-notice-action"]')).toBeNull()
+    h.unmount()
+  })
+  it("renders the notice as a button that fires the action on click", () => {
+    const action = vi.fn()
+    const h = mountView([], { notice: "已写入记忆: /m/p.md", noticeAction: action })
+    const btn = h.container.querySelector('[data-testid="chat-notice-action"]') as HTMLButtonElement
+    expect(btn).not.toBeNull()
+    act(() => { btn.click() })
+    expect(action).toHaveBeenCalledTimes(1)
     h.unmount()
   })
 })

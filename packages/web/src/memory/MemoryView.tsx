@@ -7,12 +7,19 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { ApiClient } from "../api.js"
+import type { MemoryWrittenInfo } from "../chat/model.js"
 
 interface ProjectRow { id: string; workdir: string; threads: number; lastActivity: string }
 interface ThreadRow { topic: string; title: string; status: string; updated: string }
 interface CogRow { kind: "persona" | "wiki" | "rule"; name: string; path: string; scope: string; updated: string }
 
-export function MemoryView({ api, notice }: { api: ApiClient; notice: (text: string) => void }) {
+export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
+  api: ApiClient
+  notice: (text: string) => void
+  /** 写入通知的跳转目标（spec 9.1）：切换到记忆页后自动打开对应线/认知文件，消费后置空。 */
+  openTarget?: MemoryWrittenInfo | null
+  onOpenConsumed?: () => void
+}) {
   // notice 走 ref：reloadProjects 只依赖 api（稳定），effect 不会因父组件每次
   // 重渲染新建的内联 notice identity 而重复触发（审查 Important：App 传内联箭头，
   // 若 reloadProjects 依赖 notice，删除/停留记忆 tab 会反复拉 projects + global）。
@@ -36,6 +43,29 @@ export function MemoryView({ api, notice }: { api: ApiClient; notice: (text: str
   }, [api])
 
   useEffect(() => { reloadProjects() }, [reloadProjects])
+
+  // 写入通知跳转（spec 9.1）：切换到本页时 openTarget 带一次目标，打开对应文件后消费。
+  useEffect(() => {
+    if (openTarget === undefined || openTarget === null) return
+    const t = openTarget
+    void (async () => {
+      try {
+        if (t.kind === "episode" && t.scope !== undefined && t.topic !== undefined) {
+          // scope 形如 "project:<id>"（当前项目线），取 id 打开该线。
+          const pid = t.scope.startsWith("project:") ? t.scope.slice("project:".length) : t.scope
+          await openThread(pid, t.topic)
+        } else if (t.kind === "cognition") {
+          // path 形如 …/global/<kind>/<name>.md；从路径反推 kind/name 打开。
+          const m = /\/global\/(persona|wiki|rule)\/([^/]+)\.md$/.exec(t.path)
+          if (m !== null) await openCog(m[1] as CogRow["kind"], m[2])
+        }
+      } finally {
+        onOpenConsumed?.()
+      }
+    })()
+    // openTarget 是单次跳转意图，每次变化消费一次即可。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openTarget])
 
   const openThread = async (pid: string, topic: string): Promise<void> => {
     try {

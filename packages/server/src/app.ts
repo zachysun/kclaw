@@ -151,7 +151,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   // the session routes only need it for POST /sessions/:id/compact.
   registerSessionRoutes(app, { sessions, config, run: opts.run })
   // spec 9.2 的 /memory 路由族：无 memory 装配时全部 503，不影响既有路由。
-  registerMemoryRoutes(app, { memory: opts.memory })
+  registerMemoryRoutes(app, { memory: opts.memory, config })
   if (opts.attachmentsDir !== undefined) {
     registerAttachmentRoutes(app, { sessions, attachmentsDir: opts.attachmentsDir })
   }

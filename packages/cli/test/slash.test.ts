@@ -446,6 +446,23 @@ describe("/memory", () => {
     const printed = fake.print.mock.calls.map((c) => c[0] as string)
     expect(printed.filter((t) => t.includes("查看记忆失败") && t.includes("HTTP 503"))).toHaveLength(2)
   })
+
+  it("/memory save triggers a manual write for the current workdir", async () => {
+    const calls: string[] = []
+    const bodies: unknown[] = []
+    const fake = makeFakeCtx(async (_m: string, path: string, body?: unknown) => {
+      calls.push(path)
+      bodies.push(body)
+      return { ok: true }
+    })
+    const registry = createRegistry(fake.ctx)
+    await runOrHint({ command: "memory", args: "save" }, registry, fake.ctx)
+    expect(calls).toEqual(["/memory/trigger-manual"])
+    // CLI 会话建在启动目录，当前项目 = process.cwd()（chat.ts 传 cwd 建会话）。
+    expect(bodies[0]).toEqual({ workdir: process.cwd() })
+    const printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.some((t) => t.includes("已触发手动写入"))).toBe(true)
+  })
 })
 
 describe("/queue", () => {
