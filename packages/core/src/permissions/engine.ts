@@ -349,7 +349,11 @@ export class ConfigPermissionGate implements PermissionGate {
         return { type: "deny", reason: "blacklist", noteText: `规则命中黑名单: ${rule.source}` }
       }
     }
-    if (this.#allow.some(matches)) {
+    // A whitelisted rule only takes precedence over the workspace boundary
+    // while the target stays inside it (realpath form). An allow rule whose
+    // lexical path is waved through by a symlink pointing outside falls
+    // through to the escape check below and goes to confirm, not allow.
+    if (this.#allow.some(matches) && !escapesWorkspace(tool, toolCall.args, this.#workspace, this.#readRoots)) {
       return { type: "allow", reason: "whitelist" }
     }
     // Out-of-workspace file access is not auto-approved: even a "safe" tool

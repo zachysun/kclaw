@@ -131,6 +131,21 @@ describe("ConfigPermissionGate", () => {
       const d = await g.check(tc("fs_read", { path: "link/secret.txt" }))
       expect(d.type).toBe("confirm") // NOT {type:"allow",reason:"safe"}
     })
+    it("an allow rule over a symlink pointing outside falls to confirm, not whitelist", async () => {
+      const ws = mkdtempSync(join(tmp, "kclaw-ws-"))
+      const outside = mkdtempSync(join(tmp, "kclaw-out-"))
+      writeFileSync(join(outside, "secret.txt"), "s3cret")
+      symlinkSync(outside, join(ws, "link"))
+      const mk = (allow: string[]) =>
+        new ConfigPermissionGate({ allow, deny: [], confirmTimeoutMs: 1000, sessionGrants: true }, { safeTools: new Set(), workspace: ws })
+      // Control: the same kind of allow rule still auto-approves an in-workspace target.
+      mkdirSync(join(ws, "in"))
+      const ctl = await mk(["fs_write:in/**"]).check(tc("fs_write", { path: "in/a.txt", content: "x" }))
+      expect(ctl.type).toBe("allow")
+      // The rule hits the symlink's lexical path, but the real path escapes.
+      const d = await mk(["fs_write:link/**"]).check(tc("fs_write", { path: "link/secret.txt", content: "x" }))
+      expect(d.type).toBe("confirm") // NOT {type:"allow",reason:"whitelist"}
+    })
     it("realpathWithin keeps the lexical path for a nonexistent target", () => {
       const ws = mkdtempSync(join(tmp, "kclaw-ws-"))
       expect(realpathWithin(join(ws, "no", "such", "file.txt"))).toBe(join(ws, "no", "such", "file.txt"))
