@@ -8,7 +8,7 @@
 
 ## 设计决策
 
-- **三档输出、顺序短路**：判定链每一步都可能直接返回，后续不再看。只读模式最优先——`fs_write`/`fs_edit`/`exec` 在 readonly 下无条件拒绝，连白名单都不到达；其余顺序为 deny 黑名单 → allow 白名单 → 工作目录越界检查 → safeTools → 会话级授权 → confirm。deny 永远先于放行：一条命中黑名单的调用无论白名单如何配置都不会执行。
+- **三档输出、顺序短路**：判定链每一步都可能直接返回，后续不再看。只读模式最优先——`fs_write`/`fs_edit`/`exec` 在 readonly 下无条件拒绝，连白名单都不到达；其余顺序为 deny 黑名单 → allow 白名单（命中且目标不逃逸工作区）→ 工作目录越界检查 → safeTools → 会话级授权 → confirm。deny 永远先于放行：一条命中黑名单的调用无论白名单如何配置都不会执行；白名单也只在目标仍位于工作区内（按 realpath 判定，见第 4 节）时才优先于越界检查——经符号链接逃逸出工作区的目标回落 confirm，不因 allow 规则放行。
 - **规则是扁平字符串，不是结构化对象**：`"exec:git *"` 这类前缀通配规则写在 `config.yaml` 里，人和模型都可读可写；编译只做一次切分，匹配用无正则的回溯算法。
 - **匹配对象按工具提取**：exec 匹配命令字符串、写文件工具匹配路径、其余工具匹配整个参数的 JSON 文本——规则作用于"该调用要执行的动作"，而不是原始参数对象。
 - **路径规则双向匹配**：规则同时按原始形态和规范化形态（`~` 展开 + 相对工作目录解析）测试，同一文件以不同写法（`~/.ssh/x` / `.ssh/x` / `/Users/u/.ssh/x`）均不能绕过 deny。
@@ -89,7 +89,7 @@ permissions:
 ⓪ readonly 且工具 ∈ {fs_write, fs_edit, exec}
                         → deny {reason:"readonly", noteText:"只读模式（readonly）"}
 ① deny 规则命中        → deny {reason:"blacklist", noteText:"规则命中黑名单: <原规则>"}
-② allow 规则命中       → allow {reason:"whitelist"}
+② allow 规则命中且目标不逃逸工作区 → allow {reason:"whitelist"}（命中但经符号链接逃逸出工作区 → 落到 ③）
 ③ 越界检查（文件工具）  → confirm（见下，即使工具是 safe）
 ④ safeTools 含该工具    → allow {reason:"safe"}
 ⑤ sessionGrants 开启且授权命中 → allow {reason:"session_grant"}
@@ -112,7 +112,8 @@ exec 走专属分支：deny 对**每个归一化子命令**分别匹配；allow 
 
 `FILE_TOOLS = {fs_read, fs_list, fs_write, fs_edit}` 的 `path` 参数做越界判定：按上面的方式展开解析后，`resolved` 既不等于工作目录根、也不以 `根 + 路径分隔符` 开头，即视为越界 → **直接 confirm**。要点：
 
-- 位置在 deny/allow **之后**：黑名单与白名单的优先级更高，先判完才轮到边界。
+- 位置在 deny/allow **之后**：黑名单与白名单的优先级更高，先判完才轮到边界——但白名单的"放行"只覆盖不逃逸的目标（见下条）。
+- **allow 命中不豁免逃逸**：白名单规则命中（词面路径匹配）但目标经符号链接（symlink）逃逸出工作区（realpath 形式）时，**不再直接放行**，回落到本步的越界确认——一条 `fs_write:link/**` 规则不会放行 `link/secret.txt`（若 `link` 指向工作区外的目录），越界目标对 allow 规则一律不生效，只能走确认或人工在会话中授权。这是有意收紧：allow 的授权范围不超出工作区边界。
 - safe 工具不豁免：fs_read/fs_list 越界同样要人确认——唯一例外是 `readRoots`（见下节）。
 - 工作目录本身允许（`resolved === root`，如对根目录 fs_list）。
 - 工作目录未设置时不做该检查（legacy 行为）；daemon 侧的取值是会话元数据的 `workdir`，缺省回退 `config.workspace`（`packages/server/src/run.ts`）。
