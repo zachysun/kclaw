@@ -809,6 +809,34 @@ describe("ChatPanel", () => {
     h.unmount()
   })
 
+  it("interrupt is one-shot: no sticky override, sends with interrupt, then the trio resets", async () => {
+    // 初始 meta 无覆盖、config defaultDisposition "steer"（spec §7.1 改版，
+    // Master 2026-08-31：中断不再 sticky，发完切回基础处置）。
+    const h = await mount({ meta: {}, config: { sessions: { defaultDisposition: "steer" } } })
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("run.started", { trigger: "user" }))
+    })
+    // 点三选「中断」→ 本地高亮，但不写会话级覆盖（无 POST /disposition）
+    await act(async () => {
+      ;(h.container.querySelector('[data-testid="disposition-interrupt"]') as HTMLButtonElement).click()
+    })
+    expect(h.api.post).not.toHaveBeenCalledWith("/sessions/s1/disposition", { disposition: "interrupt" })
+    expect((h.container.querySelector('[data-testid="disposition-interrupt"]') as HTMLButtonElement).getAttribute("aria-checked")).toBe("true")
+    // 发送 → send_message 帧带 disposition:"interrupt"
+    await sendText(h, "中断这条")
+    const sent = h.sockets[0]!.sent.filter((f) => f.includes("send_message"))
+    expect(JSON.parse(sent.at(-1)!)).toMatchObject({ type: "send_message", text: "中断这条", disposition: "interrupt" })
+    // 发送后三选切回基础处置（steer），且全程无 sticky 覆盖写入
+    expect(h.api.post).not.toHaveBeenCalledWith("/sessions/s1/disposition", { disposition: "interrupt" })
+    expect((h.container.querySelector('[data-testid="disposition-steer"]') as HTMLButtonElement).getAttribute("aria-checked")).toBe("true")
+    expect((h.container.querySelector('[data-testid="disposition-interrupt"]') as HTMLButtonElement).getAttribute("aria-checked")).toBe("false")
+    // 再发一条普通消息 → 帧回到 steer（一次性语义，不会继续掐 run）
+    await sendText(h, "下一条")
+    const sentAgain = h.sockets[0]!.sent.filter((f) => f.includes("send_message"))
+    expect(JSON.parse(sentAgain.at(-1)!)).toMatchObject({ type: "send_message", text: "下一条", disposition: "steer" })
+    h.unmount()
+  })
+
   it("ack + message.queued moves the bubble into a list row; cancel hits queue.cancel", async () => {
     const h = await mount()
     await drive(() => {

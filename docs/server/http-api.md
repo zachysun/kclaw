@@ -39,7 +39,7 @@
 | POST | `/sessions/:id/readonly` | 会话级只读开关（write/exec 类工具被拒，见 [permissions](../core/permissions.md)） | `{readonly: boolean}` 必填；`false` 清除标记 | `SessionMeta` |
 | GET | `/sessions/:id/messages` | 读全部消息（轨迹/断线恢复的数据源） | — | `Message[]`（JSONL 逐行读出的完整对话史；**排队未执行的消息不在其中**，见 `/queue`） |
 | GET | `/sessions/:id/queue` | 排队消息快照（message-queue spec §4.3）：重连/刷新的全量纠偏兜底 | — | `QueueEntry[]`（`meta.queue`，数组顺序即执行顺序；steer 条目排在可执行条目之后；空队列返回 `[]`） |
-| POST | `/sessions/:id/disposition` | 会话级发送处置覆盖（CLI `/steer`、`/wait` 与 Web 三选的 sticky 存储，spec §6） | `{disposition: "steer"\|"wait"\|"interrupt"}` 必填；非法值 400 `disposition must be "steer", "wait" or "interrupt"` | `SessionMeta`（写入 `dispositionOverride`，优先于配置默认） |
+| POST | `/sessions/:id/disposition` | 会话级发送处置覆盖（CLI `/steer`、`/wait` 与 Web 三选的 steer/wait 的 sticky 存储；interrupt 在 Web 为一次性、CLI 为 `/interrupt` 一次性动作，均不落覆盖，spec §6/§7.1） | `{disposition: "steer"\|"wait"\|"interrupt"}` 必填；非法值 400 `disposition must be "steer", "wait" or "interrupt"` | `SessionMeta`（写入 `dispositionOverride`，优先于配置默认） |
 | GET | `/sessions/:id/compactions` | 压缩审计记录（审计页"压缩记录"区块的数据源） | — | `CompactionRecord[]`（compactions.jsonl 逐行读出，按行序；文件缺失返回 `[]`） |
 | POST | `/sessions/:id/compact` | 手动压缩：跳过触发线立即压缩一次（机制见 [compaction](../core/compaction.md)） | `{focus?}`：可选非空字符串，作为重点说明进入两次摘要调用；空串/非字符串 400 `focus must be a non-empty string` | `{message: string}`：成功 `压缩了 N 段，剩 X 条原文消息`；无可压缩内容 `无可压缩内容` |
 

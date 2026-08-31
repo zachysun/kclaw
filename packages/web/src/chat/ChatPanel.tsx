@@ -82,6 +82,10 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   const [noticeAction, setNoticeAction] = useState<(() => void) | null>(null)
   // 发送处置（spec §6）：三选的当前选择，显式带在每条 send_message 上。
   const [disposition, setDisposition] = useState<Disposition>("steer")
+  // 一次性 interrupt 的复位基准（spec §7.1 改版，Master 2026-08-31）：点「中断」
+  // 不写会话级覆盖，这条发完切回该档——中断是瞬时意图，不做成模式（与 CLI
+  // /interrupt 对齐，避免跨客户端"来一条、断一条"）。
+  const baseDispositionRef = useRef<Disposition>("steer")
   const clientRef = useRef<WsClient>(ws)
   clientRef.current = ws
   // The authoritative view for event-loop transforms. updateView computes the
@@ -302,13 +306,18 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     ])
       .then(([meta, cfg]) => {
         if (cancelled) return
+        // 会话级覆盖只可能是 steer/wait（interrupt 已不再写 sticky，见
+        // handleSetDisposition；历史遗留的 "interrupt" 覆盖按 steer 回退）。
         const override = meta.dispositionOverride
-        if (override === "steer" || override === "wait" || override === "interrupt") {
+        if (override === "steer" || override === "wait") {
+          baseDispositionRef.current = override
           setDisposition(override)
           return
         }
         const fallback = cfg.sessions?.defaultDisposition
-        setDisposition(fallback === "wait" || fallback === "interrupt" ? fallback : "steer")
+        const base = fallback === "wait" ? "wait" : "steer"
+        baseDispositionRef.current = base
+        setDisposition(base)
       })
       .catch(() => {
         // 已是 steer —— 失败容忍（spec §7.1 默认选中回退）。
@@ -375,6 +384,12 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
         v.runState === "running" || v.compacting === true
           ? appendPendingQueueRow(v, text, disposition)
           : appendOptimisticUser(v, text))
+      // 一次性 interrupt（spec §7.1 改版，Master 2026-08-31）：这条带 interrupt
+      // 发出后即切回基础处置，三选不停在「中断」档——否则 sticky 到所有客户端，
+      // 后续任何普通消息都会先掐 run（"来一条、断一条"）。
+      if (disposition === "interrupt") {
+        setDisposition(baseDispositionRef.current)
+      }
     } catch {
       setNotice("连接不可用，请稍后重试")
     }
@@ -430,8 +445,15 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
   }, [sessionId])
 
-  /** 三选切换（spec §6）：本地立即生效（后续发送显式带上），同时写会话级覆盖（与 CLI /steer 同一存储）。 */
+  /** 三选切换（spec §6）：steer/wait 本地立即生效并写会话级覆盖（与 CLI /steer
+   *  同一存储）；interrupt 是一次性——本地选中仅用于这一次发送、不写覆盖，
+   *  发出后由 handleSend 切回基础处置（spec §7.1 改版，Master 2026-08-31）。 */
   const handleSetDisposition = useCallback((d: Disposition) => {
+    if (d === "interrupt") {
+      setDisposition("interrupt")
+      return
+    }
+    baseDispositionRef.current = d
     setDisposition(d)
     api
       .post(`/sessions/${encodeURIComponent(sessionId)}/disposition`, { disposition: d })
