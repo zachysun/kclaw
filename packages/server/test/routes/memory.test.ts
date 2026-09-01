@@ -62,6 +62,16 @@ describe("POST /memory/trigger-manual", () => {
       expect(spy).toHaveBeenCalledWith("/w/none", undefined)
     } finally { spy.mockRestore() }
   })
+  it("treats a whitespace-only sessionId as absent (trim, falls back to undefined)", async () => {
+    const spy = vi.spyOn(system, "triggerManual").mockResolvedValue(undefined)
+    try {
+      await app.inject({
+        method: "POST", url: "/memory/trigger-manual", headers: { ...auth, "content-type": "application/json" },
+        payload: { workdir: "/w/none", sessionId: "   " },
+      })
+      expect(spy).toHaveBeenCalledWith("/w/none", undefined)
+    } finally { spy.mockRestore() }
+  })
   it("rejects with a clear error when memory.write.manual is disabled", async () => {
     const cfg = structuredClone(defaultConfig)
     cfg.memory.write.manual = false

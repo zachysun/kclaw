@@ -109,6 +109,22 @@ describe("SessionStore", () => {
     expect(s2.list().map((x) => x.id)).toEqual([m.id])
   })
 
+  it("list 跳过 meta 与事件流都损坏的会话，而不是让整个列表抛错", () => {
+    const store = new SessionStore(dir)
+    const good = store.create("好会话")
+    const bad = store.create("坏会话")
+    store.appendMessage(bad.id, { id: "m1", sessionId: bad.id, role: "user", blocks: [], createdAt: new Date().toISOString() })
+    // 同时损坏坏会话的 meta.json 与事件流第一行（其后仍有合法行 → 中部损坏而非撕裂尾行）：
+    // meta() 会尝试 rebuildMeta，但事件流也损坏 → 修复前 rebuildMeta 的异常会从 list() 抛出去。
+    writeFileSync(join(dir, bad.id, "meta.json"), "{broken")
+    const f = join(dir, bad.id, "events.jsonl")
+    const lines = readFileSync(f, "utf8").trim().split("\n")
+    expect(lines.length).toBeGreaterThan(1) // 确保损坏行不是最后一行（否则被当作撕裂尾行丢弃）
+    writeFileSync(f, ["{broken-middle", ...lines.slice(1)].join("\n"))
+    expect(() => store.list()).not.toThrow()
+    expect(store.list().map((m) => m.id)).toEqual([good.id])
+  })
+
   it("软删后不在默认列表、可在回收站列表、可恢复", () => {
     const store = new SessionStore(dir)
     const meta = store.create("标题")
@@ -192,6 +208,16 @@ describe("SessionStore", () => {
   it("returns [] when no compactions file exists", () => {
     const store = new SessionStore(dir)
     const meta = store.create("无记录")
+    expect(store.readCompactions(meta.id)).toEqual([])
+  })
+
+  it("readCompactions 在事件流中部损坏时返回 [] 而不是抛错", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("审计")
+    store.appendCompaction(meta.id, { at: "2026-08-27T00:00:00.000Z", trigger: "auto", from: "m1", upto: "m3", messages: 3, segmentSummary: "段摘要", top: "总摘要" })
+    const f = join(dir, meta.id, "events.jsonl")
+    const lines = readFileSync(f, "utf8").trim().split("\n")
+    writeFileSync(f, ["{broken-middle", ...lines.slice(1)].join("\n"))
     expect(store.readCompactions(meta.id)).toEqual([])
   })
 })

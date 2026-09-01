@@ -121,10 +121,10 @@ export function registerMemoryRoutes(app: FastifyInstance, opts: { memory?: Memo
         ? body.workdir
         : undefined
     // 可选归属会话（Task 7）：触发方（CLI/Web）可指定本次手动写入挂到哪个会话；
-    // 缺省回落由 core #recentSessionId 决定。仅接受非空字符串。
+    // 缺省回落由 core #recentSessionId 决定。trim 后为空视为缺省（纯空白不会生成幻影会话）。
     const sessionId =
-      typeof body === "object" && body !== null && typeof body.sessionId === "string" && body.sessionId !== ""
-        ? body.sessionId
+      typeof body === "object" && body !== null && typeof body.sessionId === "string" && body.sessionId.trim() !== ""
+        ? body.sessionId.trim()
         : undefined
     try {
       await memory.triggerManual(workdir ?? opts.config?.workspace ?? process.cwd(), sessionId)

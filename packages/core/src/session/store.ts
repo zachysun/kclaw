@@ -147,7 +147,14 @@ export class SessionStore {
     const metas: SessionMeta[] = []
     for (const entry of entries) {
       if (!entry.isDirectory()) continue
-      const meta = this.meta(entry.name)
+      // 单个会话的 meta 重建失败（meta.json 损坏且事件流也损坏）时跳过该会话，
+      // 不能让它拖垮整个列表（旧行为：损坏的 meta 即被 list 跳过）。
+      let meta: SessionMeta | undefined
+      try {
+        meta = this.meta(entry.name)
+      } catch {
+        continue
+      }
       if (meta === undefined) continue
       const wantDeleted = opts.deleted === true
       if (wantDeleted !== (meta.deleted === true)) continue
@@ -185,9 +192,13 @@ export class SessionStore {
     this.appendEvent(id, { type: "compaction", ...record })
   }
 
-  /** Read the compaction audit events; missing stream yields []. */
+  /** Read the compaction audit events; missing or corrupt stream yields []. */
   readCompactions(id: string): CompactionRecord[] {
-    return this.readEvents(id).filter(isCompactionEvent).map(({ type, ...c }) => c as CompactionRecord)
+    try {
+      return this.readEvents(id).filter(isCompactionEvent).map(({ type, ...c }) => c as CompactionRecord)
+    } catch {
+      return []
+    }
   }
 
   /**
