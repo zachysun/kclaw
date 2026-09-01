@@ -1133,11 +1133,6 @@ export class RunManager {
 
       const upto = seg[seg.length - 1]!.id
       const nextSegments = [...(prev?.segments ?? []), { upto, summary: segmentSummary }]
-      sessions.updateMeta(sessionId, {
-        compaction: { segments: nextSegments, top, upto },
-        compactedSummary: undefined,
-        compactedUpto: undefined,
-      })
       try {
         sessions.appendCompaction(sessionId, {
           at: new Date().toISOString(),

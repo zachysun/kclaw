@@ -1047,9 +1047,12 @@ describe("RunManager context compaction v3", () => {
 
     const meta = env.sessions.meta(session.id)
     expect(meta!.compaction!.top).toBe("总摘要N")
-    // legacy fields cleared
-    expect(meta!.compactedSummary).toBeUndefined()
-    expect(meta!.compactedUpto).toBeUndefined()
+    // legacy fields are no longer cleared by compaction (Task 5 removed the
+    // direct updateMeta write): they linger in meta but stay shadowed —
+    // prev reads meta.compaction first, so the next compaction seeds from
+    // the compaction event, not these stale keys.
+    expect(meta!.compactedSummary).toBe("旧总摘要")
+    expect(meta!.compactedUpto).toBe(seeded[0]!.id)
     // the merge input seeded from the legacy top (the third call: main → seg → merge)
     expect((reqs[2]!.messages[0]!.content as string)).toContain("旧总摘要")
   })
