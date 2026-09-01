@@ -35,8 +35,7 @@ import {
   realpathWithin,
   renderSegment,
   runAgent,
-  segmentRanges,
-  SegmentIndex,
+  searchSessionEvents,
 } from "@kclaw/core"
 import type {
   ActiveSummary,
@@ -1140,11 +1139,6 @@ export class RunManager {
         compactedUpto: undefined,
       })
       try {
-        SegmentIndex.open(join(this.#deps.paths.sessionsDir, sessionId, "index.db")).addSegment(upto, body, segmentSummary)
-      } catch (err) {
-        console.error(`kclaw segment index (${sessionId}) write failed:`, err)
-      }
-      try {
         sessions.appendCompaction(sessionId, {
           at: new Date().toISOString(),
           trigger: manual ? "manual" : phase === "in-run" ? "in-run" : "auto",
@@ -1184,28 +1178,15 @@ export class RunManager {
   }
 
   /**
-   * Lazy per-run session_search backing (spec 6.4): opens (or rebuilds)
-   * the segment index on first call. Legacy-upgrade sessions have no
-   * segments yet → always "(无可检索内容)" until the first v2 compaction.
+   * Lazy per-run session_search backing (spec 6.4): reads the session's
+   * event stream on each call and scans its compacted segments via the pure
+   * searchSessionEvents. Legacy-upgrade sessions have no compaction events
+   * yet → always "(无可检索内容)" until the first v2 compaction.
    */
   #buildSessionSearch(sessionId: string, history: Message[]): SessionSearchFn {
-    let index: SegmentIndex | undefined
     return async (query, limit) => {
-      const meta = this.#deps.sessions.meta(sessionId)
-      const state = meta?.compaction
-      if (state === undefined || state.segments.length === 0) return []
-      if (index === undefined) {
-        const legacyUpto = meta?.compactedUpto
-        const entries = segmentRanges(history, state.segments, legacyUpto)
-          .map((r) => ({
-            upto: r.upto,
-            body: renderSegment(r.messages),
-            summary: state.segments.find((s) => s.upto === r.upto)?.summary ?? "",
-          }))
-          .filter((e) => e.body !== "")
-        index = SegmentIndex.ensure(join(this.#deps.paths.sessionsDir, sessionId, "index.db"), entries)
-      }
-      return index.search(query, limit)
+      const events = this.#deps.sessions.readEvents(sessionId)
+      return searchSessionEvents(events, query, limit)
     }
   }
 

@@ -2,8 +2,8 @@
 /**
  * session_search: search the CURRENT session's compacted segments (spec
  * 6.4.2). Same risk/concurrency class as memory tools — read-only over the
- * session index, safe + parallel. The search fn is injected by the server
- * per run (lazy index open/rebuild); absent fn → "(无可检索内容)" so the
+ * session event stream, safe + parallel. The search fn is injected by the
+ * server per run (lazy event-stream read); absent fn → "(无可检索内容)" so the
  * tool list stays stable across session states.
  */
 import type { ToolExecutor } from "../agent/tools.js"

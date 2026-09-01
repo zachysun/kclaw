@@ -9,7 +9,7 @@
  * run.
  */
 import { describe, it, expect, afterEach, vi } from "vitest"
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -929,10 +929,11 @@ describe("RunManager context compaction v3", () => {
     expect(reqs[2]!.system).toContain("对话摘要归并器")
     // first compaction has no previous top: the merge input IS the segment summary
     expect(reqs[2]!.messages[0]!.content).toContain("段摘要A")
-    // v2 state persisted; the segment index written under the session dir
+    // v2 state persisted; the compaction audit event (the stream session_search
+    // now reads) carries the segment summary
     expect(env.sessions.meta(session.id)!.compaction).toMatchObject({ top: "总摘要A", upto: seeded[3]!.id })
     expect(env.sessions.meta(session.id)!.compaction!.segments).toHaveLength(1)
-    expect(existsSync(join(env.paths.sessionsDir, session.id, "index.db"))).toBe(true)
+    expect(env.sessions.readCompactions(session.id)).toHaveLength(1)
     // completed: ok result, real counts (4 seeded messages compacted, the turn kept)
     const okCompleted = events.find((e) => e.type === "compaction.completed")
     expect(okCompleted!.payload).toEqual({ segments: 1, kept: 2, phase: "post-run", result: "ok" })

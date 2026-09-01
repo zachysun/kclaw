@@ -19,6 +19,7 @@ export { createExecTool, truncateMiddle } from "./exec.js"
 export { createFsTools } from "./fs.js"
 export { createMemoryTools } from "./memory.js"
 export { createSessionTools, type SessionSearchFn } from "./session.js"
+export { searchSessionEvents, type SessionHit } from "./session-search.js"
 export { createWebTools } from "./web.js"
 
 /** A string property with a model-facing description. */
