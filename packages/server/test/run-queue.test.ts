@@ -1,6 +1,6 @@
 /**
  * RunManager 显式队列语义测试（spec §3.2/§3.4/§4.1/§5.2-§5.5）：空闲直发、
- * wait FIFO 与预分配消息 id、meta.queue 镜像、上限拒绝、enqueue 兼容、
+ * wait FIFO 与预分配消息 id、queue.jsonl 镜像、上限拒绝、enqueue 兼容、
  * cancel 语义收窄（仅中止活动 run）、interrupt 插队不吞消息、出队失败自愈
  * （条目退回重试不无声消失）与条目级失败可见性（queue_entry_failed）。
  */
@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SessionStore, defaultConfig, resolvePaths } from "@kclaw/core"
-import type { LlmClient, LlmStreamEvent, RunOutcome, SessionMeta, ToolExecutor } from "@kclaw/core"
+import type { LlmClient, LlmStreamEvent, QueueEntry, RunOutcome, ToolExecutor } from "@kclaw/core"
 import { RunManager } from "../src/run.js"
 import { EventBus } from "../src/bus.js"
 import { endTurnLlm } from "./helpers/scripted-llm.js"
@@ -77,24 +77,24 @@ describe("submit / driver", () => {
     expect(users[2]!.id).toBe(b.messageId)
   })
 
-  it("meta.queue mirrors the in-memory queue (persist on enqueue & dequeue)", async () => {
+  it("queue.jsonl mirrors the in-memory queue (persist on enqueue & dequeue)", async () => {
     const meta = sessions.create("t", undefined, "/w")
     const first = manager.submit(meta.id, { userText: "first", trigger: "user" })
     manager.submit(meta.id, { userText: "q1", trigger: "user", disposition: "wait" })
-    expect(sessions.meta(meta.id)!.queue).toHaveLength(1)
+    expect(sessions.readQueue(meta.id)).toHaveLength(1)
     await first.outcome
     // first 结束后 q1 立即被驱动器接管执行；再排两条验证持久化镜像与排空
     manager.submit(meta.id, { userText: "q2", trigger: "user", disposition: "wait" })
     manager.submit(meta.id, { userText: "q3", trigger: "user", disposition: "wait" })
-    expect(sessions.meta(meta.id)!.queue!.map((e) => e.text)).toEqual(["q2", "q3"])
+    expect(sessions.readQueue(meta.id).map((e) => e.text)).toEqual(["q2", "q3"])
     const settle = async (): Promise<void> => {
       for (;;) {
-        if ((sessions.meta(meta.id)!.queue ?? []).length === 0) return
+        if (sessions.readQueue(meta.id).length === 0) return
         await new Promise((r) => setTimeout(r, 20))
       }
     }
     await settle()
-    expect(sessions.meta(meta.id)!.queue ?? []).toHaveLength(0)
+    expect(sessions.readQueue(meta.id)).toHaveLength(0)
   })
 
   it("queue cap 10 rejects with the spec message", async () => {
@@ -167,8 +167,8 @@ describe("submit / driver", () => {
     // #drive 的出队阶段（#demoteSteer / 出队后的 #persistQueue）在 try 之外：
     // meta.json 写盘炸掉（会话被删、盘满）时，不允许会话永久停转（僵尸驱动器）
     // 也不允许循环 promise 裸拒绝。手头 node 以错误落定并塞回队首——persist 抛错
-    // 意味着 meta.queue 也没写成，塞回后内存与盘上重新一致；此后任何一次成功的
-    // 持久化都不得把崩溃条目从 meta.queue 无声抹掉，条目由重启的驱动器重试执行。
+    // 意味着 queue.jsonl 也没写成，塞回后内存与盘上重新一致；此后任何一次成功的
+    // 持久化都不得把崩溃条目从 queue.jsonl 无声抹掉，条目由重启的驱动器重试执行。
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {}) // 崩溃日志静音
     const rejections: unknown[] = []
     const onRejection = (err: unknown): void => { rejections.push(err) }
@@ -176,13 +176,13 @@ describe("submit / driver", () => {
     const meta = sessions.create("t", undefined, "/w")
     const events: Array<{ type: string; payload: { error?: { code?: string; message?: string } } }> = []
     bus.subscribe(meta.id, { send: (d: string) => { const e = JSON.parse(d); if (e.sessionId === meta.id) events.push(e) } })
-    // 只在 w1 的出队持久化（shift 后 meta.queue 恰为 [w2]）这一次炸掉 updateMeta
-    const originalUpdate = sessions.updateMeta.bind(sessions)
-    sessions.updateMeta = (id: string, patch: Partial<SessionMeta>): SessionMeta => {
-      if (id === meta.id && patch.queue?.length === 1 && patch.queue[0]!.text === "w2") {
-        throw new Error("meta 写盘失败")
+    // 只在 w1 的出队持久化（shift 后 queue 恰为 [w2]）这一次炸掉 replaceQueue
+    const originalReplace = sessions.replaceQueue.bind(sessions)
+    sessions.replaceQueue = (id: string, entries: QueueEntry[]): void => {
+      if (id === meta.id && entries.length === 1 && entries[0]!.text === "w2") {
+        throw new Error("queue 写盘失败")
       }
-      return originalUpdate(id, patch)
+      return originalReplace(id, entries)
     }
 
     try {
@@ -191,7 +191,7 @@ describe("submit / driver", () => {
       const w2 = manager.submit(meta.id, { userText: "w2", trigger: "user", disposition: "wait" })
 
       // first 落定触发驱动器出队 w1 → 出队持久化炸掉：w1 的 outcome 以该错误拒绝
-      await expect(w1.outcome).rejects.toThrow("meta 写盘失败")
+      await expect(w1.outcome).rejects.toThrow("queue 写盘失败")
       expect((await first.outcome).stopReason).toBe("end_turn")
 
       // 失败可见性（fix A）：bus 上出现条目级失败事件，message 带 messageId
@@ -199,14 +199,14 @@ describe("submit / driver", () => {
       expect(failed).toBeDefined()
       expect(failed!.payload.error?.message).toContain(w1.messageId)
 
-      // 崩溃后 meta.queue 仍含崩溃条目（persist 没写成，盘上未动）
-      expect(sessions.meta(meta.id)!.queue!.map((e) => e.text)).toEqual(["w1", "w2"])
+      // 崩溃后 queue.jsonl 仍含崩溃条目（persist 没写成，盘上未动）
+      expect(sessions.readQueue(meta.id).map((e) => e.text)).toEqual(["w1", "w2"])
 
-      // 恢复 updateMeta，下一次 submit 重新起转：驱动器同步首拍立即重新出队 w1
+      // 恢复 replaceQueue，下一次 submit 重新起转：驱动器同步首拍立即重新出队 w1
       // 重试（这次 persist 成功）——崩溃条目被"重试处理"而不是被无声抹掉
-      sessions.updateMeta = originalUpdate
+      sessions.replaceQueue = originalReplace
       const w3 = manager.submit(meta.id, { userText: "w3", trigger: "user", disposition: "wait" })
-      expect(sessions.meta(meta.id)!.queue!.map((e) => e.text)).toEqual(["w2", "w3"]) // w1 已重新出队重试
+      expect(sessions.readQueue(meta.id).map((e) => e.text)).toEqual(["w2", "w3"]) // w1 已重新出队重试
 
       // 塞回队首的 w1 由重启的驱动器重试执行（等待方已见过拒绝，事件流照常）
       expect((await w2.outcome).stopReason).toBe("end_turn")
@@ -214,7 +214,7 @@ describe("submit / driver", () => {
       const lines = sessions.readMessages(meta.id)
       const texts = lines.filter((m: { role: string }) => m.role === "user").map((m: { blocks: Array<{ text?: string }> }) => m.blocks[0]!.text)
       expect(texts).toEqual(["first", "w1", "w2", "w3"])
-      expect(sessions.meta(meta.id)!.queue ?? []).toHaveLength(0)
+      expect(sessions.readQueue(meta.id)).toHaveLength(0)
 
       await new Promise((r) => setTimeout(r, 50)) // 让任何未处理拒绝浮出
       expect(rejections).toEqual([])
@@ -242,7 +242,7 @@ describe("submit / driver", () => {
     expect(failed).toBeDefined()
     expect(failed!.payload.error?.message).toContain(bad.messageId)
     // 驱动器没有停转：坏条目失败后队列清空、字段删除
-    expect(sessions.meta(meta.id)!.queue ?? []).toHaveLength(0)
+    expect(sessions.readQueue(meta.id)).toHaveLength(0)
   })
 })
 
@@ -327,7 +327,7 @@ describe("steer", () => {
     await s2.outcome
     const settle = async (): Promise<void> => {
       for (;;) {
-        if ((sessions.meta(meta.id)!.queue ?? []).length === 0) return
+        if (sessions.readQueue(meta.id).length === 0) return
         await new Promise((r) => setTimeout(r, 10))
       }
     }
@@ -348,7 +348,7 @@ describe("queueCancel", () => {
     bus.subscribe(meta.id, { send: (d: string) => seen.push(JSON.parse(d)) })
     expect(manager.queueCancel(meta.id, q.messageId)).toEqual({ ok: true, cancelled: [q.messageId] })
     await first.outcome
-    expect(sessions.meta(meta.id)!.queue ?? []).toHaveLength(0)
+    expect(sessions.readQueue(meta.id)).toHaveLength(0)
     expect(seen.some((e) => (e as { type: string }).type === "message.queue_cancelled")).toBe(true)
   })
 
@@ -392,7 +392,7 @@ describe("queueCancel", () => {
     mgr.cancel(meta.id)
     gate.releaseTool()
     await run.outcome
-    expect(sessions.meta(meta.id)!.queue ?? []).toHaveLength(0)
+    expect(sessions.readQueue(meta.id)).toHaveLength(0)
   })
 
   it("unknown id answers not_found", () => {
@@ -426,21 +426,21 @@ describe("compactSession refusal", () => {
     // 断言后排空：测试结束时不得有仍在写的 run（Ruling B）
     await Promise.all([first.outcome, q.outcome, q2.outcome, q3.outcome])
     for (let i = 0; i < 50; i++) {
-      if ((sessions.meta(meta.id)!.queue ?? []).length === 0) return
+      if (sessions.readQueue(meta.id).length === 0) return
       await new Promise((r) => setTimeout(r, 20))
     }
-    expect(sessions.meta(meta.id)!.queue ?? []).toHaveLength(0)
+    expect(sessions.readQueue(meta.id)).toHaveLength(0)
   })
 })
 
 describe("recoverQueues", () => {
   it("re-enqueues persisted entries as wait (steer/interrupt demoted) and drives them in order", async () => {
     const meta = sessions.create("t", undefined, "/w")
-    sessions.updateMeta(meta.id, { queue: [
+    sessions.replaceQueue(meta.id, [
       { messageId: "msg_s", disposition: "steer", text: "s", trigger: "user", enqueuedAt: new Date().toISOString() },
       { messageId: "msg_w", disposition: "wait", text: "w", trigger: "user", enqueuedAt: new Date().toISOString() },
       { messageId: "msg_i", disposition: "interrupt", text: "i", trigger: "user", enqueuedAt: new Date().toISOString() },
-    ] })
+    ])
     manager.recoverQueues()
     // 轮询到全部 3 条 user 消息 + 各自 assistant 回复落盘（3 run × 2 条 = 6 条）：
     // 只数 user 消息会在 run 仍在写盘时放行，与 afterEach 的 rmSync 竞争。
@@ -450,7 +450,7 @@ describe("recoverQueues", () => {
       if (messages.filter((m) => m.role === "user").length >= 3 && messages.length >= 6) break
       await new Promise((r) => setTimeout(r, 20))
     }
-    expect(sessions.meta(meta.id)!.queue ?? []).toHaveLength(0)
+    expect(sessions.readQueue(meta.id)).toHaveLength(0)
     const texts = sessions.readMessages(meta.id).filter((m) => m.role === "user").map((m: { blocks: Array<{ text?: string }> }) => m.blocks[0]!.text)
     expect(texts).toEqual(["s", "w", "i"])
   })

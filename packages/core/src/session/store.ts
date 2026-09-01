@@ -11,7 +11,7 @@ import type { SessionCreatedEvent, SessionEvent } from "./events.js"
 /** 排队条目的附件形状（与 server 的 AttachmentRef 结构一致，结构类型互通）。 */
 export interface QueueAttachment { path: string; name: string; size: number; mimeType: string }
 
-/** One persisted queue entry in SessionMeta.queue (spec §3.1)。 */
+/** One persisted queue entry in queue.jsonl (spec §3.1)。 */
 export interface QueueEntry {
   messageId: string                       // 分配即固定；出队执行时用同一 id 构建 Message
   disposition: "steer" | "wait" | "interrupt"
@@ -42,14 +42,13 @@ export interface SessionMeta {
   compactedUpto?: string
   /** v2 layered compaction state (spec 5.1); absent on fresh/legacy sessions. */
   compaction?: CompactionState
-  /** 排队未执行的消息（message-queue spec §3.2）：meta.json 原子重写，顺序即执行顺序；不进 JSONL。 */
-  queue?: QueueEntry[]
   /** 会话级处置覆盖（/steer /wait、Web 三选；spec §6）：优先于 sessions.defaultDisposition。 */
   dispositionOverride?: "steer" | "wait" | "interrupt"
 }
 
 const META_FILE = "meta.json"
 const EVENTS_FILE = "events.jsonl"
+const QUEUE_FILE = "queue.jsonl"
 
 /**
  * Event-sourced append-only JSONL session persistence: each session lives in
@@ -83,6 +82,10 @@ export class SessionStore {
 
   private eventsPath(id: string): string {
     return join(this.sessionDir(id), EVENTS_FILE)
+  }
+
+  private queuePath(id: string): string {
+    return join(this.sessionDir(id), QUEUE_FILE)
   }
 
   private writeMeta(meta: SessionMeta): void {
@@ -188,10 +191,27 @@ export class SessionStore {
   }
 
   /**
+   * Read a session's persisted message queue (queue.jsonl), oldest-first;
+   * a missing/empty file yields [].
+   */
+  readQueue(id: string): QueueEntry[] {
+    return readJsonl(this.queuePath(id)) as QueueEntry[]
+  }
+
+  /**
+   * Atomically rewrite a session's whole message queue (queue.jsonl): one
+   * JSON.stringify(QueueEntry) per line, order = execution order. Empty
+   * array writes an empty file (so readQueue stays a plain readJsonl call).
+   */
+  replaceQueue(id: string, entries: QueueEntry[]): void {
+    writeFileAtomic(this.queuePath(id), entries.map((e) => JSON.stringify(e)).join("\n") + "\n")
+  }
+
+  /**
    * Merge `patch` into the session. Metadata fields (title/model/readonly/
    * dispositionOverride/deleted/deletedAt) become session.* events, appended
    * to the stream before the projection is rewritten; run-state fields
-   * (queue/compaction/compactedSummary/compactedUpto) and metadata cleared
+   * (compaction/compactedSummary/compactedUpto) and metadata cleared
    * with an explicit `undefined` (no clearing event exists) are merged
    * straight into the projection. Returns the newest projection.
    */
@@ -226,7 +246,7 @@ export class SessionStore {
     // 注意：compaction 由 compaction 事件投影（applyEvent）维护，updateMeta 不再
     // 直接合并——run.ts 对同一压缩既 updateMeta({compaction}) 又 appendCompaction，
     // 两者都写会重复计段（1 段变 2 段）。Task 5 彻底移除这里的运行态合并。
-    for (const k of ["model", "readonly", "dispositionOverride", "queue", "compactedSummary", "compactedUpto"] as const) {
+    for (const k of ["model", "readonly", "dispositionOverride", "compactedSummary", "compactedUpto"] as const) {
       if (!(k in patch)) continue
       const value = patch[k]
       if (value === undefined) delete (projection as unknown as Record<string, unknown>)[k]

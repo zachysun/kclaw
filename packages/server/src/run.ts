@@ -236,7 +236,7 @@ export type LlmRetrySink = (info: { attempt: number; error: unknown }) => void
 
 /**
  * One in-memory queue node: the persisted entry plus its settle plumbing.
- * `entry` is what lands in meta.queue (spec §3.1)；outcome 在本条 run 结束时
+ * `entry` is what lands in queue.jsonl (spec §3.1)；outcome 在本条 run 结束时
  * 以其 RunOutcome settle（wait/interrupt 为本条 run，steer 不建 node）。
  * `model` 是仅存于内存的入队时 per-run 覆盖（QueueEntry 不含 model，出队时
  * 在此还原——现状行为：job 的配置模型与调用方强制模型不因排队而丢失；
@@ -407,7 +407,7 @@ export class RunManager {
 
   /**
    * 内存队列镜像（spec §3.2）：可执行条目 + steer 缓冲，数组顺序即执行
-   * 顺序。与 meta.queue 同构，供队列查询/恢复使用。
+   * 顺序。与 queue.jsonl 同构，供队列查询/恢复使用。
    */
   queue(sessionId: string): QueueEntry[] {
     return [
@@ -517,10 +517,10 @@ export class RunManager {
   /** daemon 启动恢复（spec §5.5）：持久化队列整体重排，steer/interrupt 一律降级 wait。 */
   recoverQueues(): void {
     for (const meta of this.#deps.sessions.list()) {
-      const entries = meta.queue
-      if (entries === undefined || entries.length === 0) continue
+      const entries = this.#deps.sessions.readQueue(meta.id)
+      if (entries.length === 0) continue
       const demoted: QueueEntry[] = entries.map((e) => ({ ...e, disposition: "wait" }))
-      this.#deps.sessions.updateMeta(meta.id, { queue: demoted })
+      this.#deps.sessions.replaceQueue(meta.id, demoted)
       const queue = this.#queues.get(meta.id) ?? []
       demoted.forEach((entry, i) => {
         queue.push(makeNode(entry))
@@ -539,7 +539,7 @@ export class RunManager {
    * 会话被删、盘满）不允许重演两种死法：会话永久停转（僵尸驱动器让后续
    * submit 全部幂等返回、队列无人消费），或循环 promise 裸拒绝（unhandled
    * rejection）。处理：手头已出队的 node 以该错误落定（等待方看见失败而非
-   * 永久悬挂）并**塞回队首**——persist 抛错意味着 meta.queue 也没写成，塞回后
+   * 永久悬挂）并**塞回队首**——persist 抛错意味着 queue.jsonl 也没写成，塞回后
    * 内存与盘上重新一致，条目留在队列等待下一次出队重试，而不是被此后任何一次
    * 成功的持久化按内存视图无声抹掉；#drivers 同步删除——下一次 submit 重新起转
    * （自愈）；错误日志一次。两条失败路径（出队持久化、条目执行）都补发条目级
@@ -561,10 +561,10 @@ export class RunManager {
               return
             }
             node = queue.shift()!
-            this.#persistQueue(sessionId) // 出队即从 meta.queue 删除（原子重写）
+            this.#persistQueue(sessionId) // 出队即从 queue.jsonl 删除（原子重写）
           } catch (err) {
             if (node !== undefined) {
-              // persist 失败 = meta.queue 未动：塞回队首恢复两边一致，条目等待重试
+              // persist 失败 = queue.jsonl 未动：塞回队首恢复两边一致，条目等待重试
               const queue = this.#queues.get(sessionId) ?? []
               queue.unshift(node)
               this.#queues.set(sessionId, queue)
@@ -622,13 +622,13 @@ export class RunManager {
     }, { sessionId }))
   }
 
-  /** meta.queue = 可执行条目 + steer 缓冲，数组顺序即执行顺序（spec §3.2）；空则删除字段。 */
+  /** queue.jsonl = 可执行条目 + steer 缓冲，数组顺序即执行顺序（spec §3.2）；空数组写空文件。 */
   #persistQueue(sessionId: string): void {
     const entries = [
       ...(this.#queues.get(sessionId) ?? []).map((n) => n.entry),
       ...(this.#steerBuf.get(sessionId) ?? []),
     ]
-    this.#deps.sessions.updateMeta(sessionId, entries.length === 0 ? { queue: undefined } : { queue: entries })
+    this.#deps.sessions.replaceQueue(sessionId, entries)
   }
 
   /**
@@ -971,7 +971,7 @@ export class RunManager {
    *
    * 先构建后变更（spec §5.6 不变量：登记 injected = 确已进 JSONL，机器不删）：
    * mountAttachments 可失败（附件越界、steer 等待期间文件被删），故全部 Message
-   * 先在局部构建，全部成功后才清空缓冲、移除 meta.queue 并登记 #injectedIds——
+   * 先在局部构建，全部成功后才清空缓冲、移除 queue.jsonl 并登记 #injectedIds——
    * 任一构建失败即整体不动：条目留在缓冲区（可取消、可重试注入），异常抛给
    * loop 走 run.failed "steering_failed"，同批其余消息不被连带丢掉。
    */
@@ -988,7 +988,7 @@ export class RunManager {
       return m
     })
     this.#steerBuf.set(sessionId, [])
-    this.#persistQueue(sessionId) // 从 meta.queue 移除这些条目
+    this.#persistQueue(sessionId) // 从 queue.jsonl 移除这些条目
     for (const e of buf) this.#markInjected(e.messageId)
     return msgs
   }

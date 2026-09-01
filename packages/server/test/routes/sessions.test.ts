@@ -260,9 +260,9 @@ describe("sessions routes", () => {
 
   it("GET /sessions/:id/queue returns persisted entries; empty array for none; 404 unknown", async () => {
     const created = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
-    store.updateMeta(created.id, {
-      queue: [{ messageId: "msg_1", disposition: "wait", text: "q", trigger: "user", enqueuedAt: "2026-08-29T00:00:00Z" }],
-    })
+    store.replaceQueue(created.id, [
+      { messageId: "msg_1", disposition: "wait", text: "q", trigger: "user", enqueuedAt: "2026-08-29T00:00:00Z" },
+    ])
     const res = await app.inject({ method: "GET", url: `/sessions/${created.id}/queue`, headers: AUTH })
     expect(res.statusCode).toBe(200)
     expect(res.json()).toEqual([

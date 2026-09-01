@@ -197,18 +197,35 @@ describe("SessionStore", () => {
 })
 
 describe("queue persistence", () => {
-  it("updateMeta round-trips queue entries and dispositionOverride; undefined clears", () => {
+  it("replaceQueue/readQueue round-trips entries; empty array clears", () => {
     const store = new SessionStore(dir)
     const meta = store.create("q")
     const entry = { messageId: "msg_1", disposition: "wait" as const, text: "hi", trigger: "user" as const, enqueuedAt: new Date().toISOString() }
-    store.updateMeta(meta.id, { queue: [entry], dispositionOverride: "steer" })
-    const saved = store.meta(meta.id)!
-    expect(saved.queue).toEqual([entry])
-    expect(saved.dispositionOverride).toBe("steer")
-    store.updateMeta(meta.id, { queue: undefined, dispositionOverride: undefined })
-    const cleared = store.meta(meta.id)!
-    expect(cleared.queue).toBeUndefined()
-    expect(cleared.dispositionOverride).toBeUndefined()
+    store.replaceQueue(meta.id, [entry])
+    expect(store.readQueue(meta.id)).toEqual([entry])
+    store.replaceQueue(meta.id, [])
+    expect(store.readQueue(meta.id)).toEqual([])
+  })
+  it("queue 不经过 updateMeta：写 dispositionOverride 不影响 queue.jsonl", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("q")
+    const entry = { messageId: "msg_1", disposition: "wait" as const, text: "hi", trigger: "user" as const, enqueuedAt: new Date().toISOString() }
+    store.replaceQueue(meta.id, [entry])
+    store.updateMeta(meta.id, { dispositionOverride: "steer" })
+    expect(store.meta(meta.id)!.dispositionOverride).toBe("steer")
+    expect(store.readQueue(meta.id)).toEqual([entry])
+    store.updateMeta(meta.id, { dispositionOverride: undefined })
+    expect(store.meta(meta.id)!.dispositionOverride).toBeUndefined()
+    expect(store.readQueue(meta.id)).toEqual([entry])
+  })
+  it("queue 独立文件：queue.jsonl 与 meta.json 分开，写入 queue 不进投影", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("q")
+    const entry = { messageId: "msg_1", disposition: "wait" as const, text: "hi", trigger: "user" as const, enqueuedAt: new Date().toISOString() }
+    store.replaceQueue(meta.id, [entry])
+    expect(store.readQueue(meta.id)).toHaveLength(1)
+    const metaRaw = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
+    expect("queue" in metaRaw).toBe(false) // 投影不再含 queue 字段
   })
   it("legacy meta without the fields loads unchanged", () => {
     const store = new SessionStore(dir)
@@ -217,7 +234,18 @@ describe("queue persistence", () => {
     delete raw.queue
     delete raw.dispositionOverride
     writeFileSync(join(dir, meta.id, "meta.json"), JSON.stringify(raw))
-    expect(store.meta(meta.id)!.queue).toBeUndefined()
+    expect(store.meta(meta.id)!.title).toBe("legacy")
+    expect(store.readQueue(meta.id)).toEqual([])
+  })
+  it("queue 独立文件：append 排队 + replaceQueue 出队", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create()
+    store.replaceQueue(meta.id, [{ messageId: "q1", disposition: "steer", text: "hi", trigger: "user", enqueuedAt: "2026-01-01T00:00:00.000Z" }])
+    expect(store.readQueue(meta.id)).toHaveLength(1)
+    store.replaceQueue(meta.id, [])
+    expect(store.readQueue(meta.id)).toHaveLength(0)
+    // queue 不影响 meta 投影的其它字段
+    expect(store.meta(meta.id)!.title).toBe("新会话")
   })
 })
 

@@ -166,9 +166,8 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
     // 排队消息快照（message-queue spec §4.3）：重连/刷新的全量纠偏兜底。
     scope.get("/sessions/:id/queue", async (request, reply) => {
       const { id } = request.params as { id: string }
-      const meta = stores.sessions.meta(id)
-      if (meta === undefined) return reply.code(404).send(NOT_FOUND)
-      return meta.queue ?? []
+      if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
+      return stores.sessions.readQueue(id)
     })
 
     // 会话级处置覆盖（/steer /wait 与 Web 三选的 sticky 存储，spec §6）。
