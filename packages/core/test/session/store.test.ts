@@ -308,4 +308,56 @@ describe("SessionStore event sourcing", () => {
     const rebuilt = store.rebuildMeta(meta.id)!
     expect(rebuilt.title).toBe("新")
   })
+
+  it("clearing model via updateMeta emits session.set {model:null}; rebuildMeta does NOT resurrect it", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("t")
+    store.updateMeta(meta.id, { model: "gpt-4" })
+    expect(store.meta(meta.id)!.model).toBe("gpt-4")
+    // 清除 = 一个真实的 session.set {model:null} 事件
+    store.updateMeta(meta.id, { model: undefined })
+    expect(store.meta(meta.id)!.model).toBeUndefined()
+    expect("model" in store.meta(meta.id)!).toBe(false)
+    const setEvents = store.readEvents(meta.id).filter((e) => e.type === "session.set")
+    expect(setEvents).toHaveLength(2)
+    expect((setEvents[1] as { model: string | null }).model).toBeNull()
+    // 回归：清空已事件化 → 重建投影不复活已清除的覆盖
+    const rebuilt = store.rebuildMeta(meta.id)!
+    expect(rebuilt.model).toBeUndefined()
+    expect("model" in rebuilt).toBe(false)
+  })
+
+  it("clearing readonly via updateMeta emits session.set {readonly:null}; rebuildMeta does NOT resurrect it", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("t")
+    store.updateMeta(meta.id, { readonly: true })
+    store.updateMeta(meta.id, { readonly: undefined })
+    expect(store.meta(meta.id)!.readonly).toBeUndefined()
+    expect("readonly" in store.meta(meta.id)!).toBe(false)
+    const setEvents = store.readEvents(meta.id).filter((e) => e.type === "session.set")
+    expect(setEvents).toHaveLength(2)
+    expect((setEvents[1] as { readonly: boolean | null }).readonly).toBeNull()
+    const rebuilt = store.rebuildMeta(meta.id)!
+    expect(rebuilt.readonly).toBeUndefined()
+    expect("readonly" in rebuilt).toBe(false)
+  })
+
+  it("setting model works and does not touch unrelated overrides (set is per-present-key)", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("t")
+    store.updateMeta(meta.id, { readonly: true })
+    store.updateMeta(meta.id, { model: "gpt-4" }) // 只含 model 的 patch 不应清掉 readonly
+    expect(store.meta(meta.id)!.model).toBe("gpt-4")
+    expect(store.meta(meta.id)!.readonly).toBe(true)
+  })
+
+  it("a session.set event with absent fields leaves the field untouched ({} semantics)", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("t")
+    store.updateMeta(meta.id, { model: "gpt-4" })
+    // 手动写入一个缺 model 字段的 session.set 事件（等价于 {} 语义）：不清除、不覆盖
+    const now = new Date().toISOString()
+    store.appendEvent(meta.id, { type: "session.set", at: now, model: undefined })
+    expect(store.meta(meta.id)!.model).toBe("gpt-4")
+  })
 })

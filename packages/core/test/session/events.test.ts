@@ -33,4 +33,34 @@ describe("applyEvent", () => {
     expect(twice.compaction!.segments).toEqual([{ upto: "m10", summary: "s1" }, { upto: "m20", summary: "s2" }])
     expect(twice.compaction!.top).toBe("t2")
   })
+
+  it("session.set 设置 model/readonly/disposition", () => {
+    const meta = applyEvent(base, { type: "session.set", at: "2026-01-02T00:00:00.000Z", model: "gpt-4", readonly: true, disposition: "wait" })
+    expect(meta.model).toBe("gpt-4")
+    expect(meta.readonly).toBe(true)
+    expect(meta.dispositionOverride).toBe("wait")
+    expect(meta.updatedAt).toBe("2026-01-02T00:00:00.000Z")
+  })
+
+  it("session.set 值为 null 删除对应键（清除）", () => {
+    const withAll = applyEvent(base, { type: "session.set", at: "a", model: "gpt-4", readonly: true, disposition: "steer" })
+    const cleared = applyEvent(withAll, { type: "session.set", at: "b", model: null, readonly: null, disposition: null })
+    expect(cleared.model).toBeUndefined()
+    expect("model" in cleared).toBe(false)
+    expect(cleared.readonly).toBeUndefined()
+    expect("readonly" in cleared).toBe(false)
+    expect(cleared.dispositionOverride).toBeUndefined()
+    expect("dispositionOverride" in cleared).toBe(false)
+  })
+
+  it("session.set 字段为 undefined 时不动该键（{} 语义，向后兼容旧事件）", () => {
+    const withModel = applyEvent(base, { type: "session.set", at: "a", model: "gpt-4" })
+    // 旧事件不含 null：只带 readonly，不应清除已存在的 model
+    const partial = applyEvent(withModel, { type: "session.set", at: "b", readonly: true })
+    expect(partial.model).toBe("gpt-4")
+    expect(partial.readonly).toBe(true)
+    const withReadonly = applyEvent(base, { type: "session.set", at: "a", readonly: true })
+    const untouched = applyEvent(withReadonly, { type: "session.set", at: "b", model: undefined })
+    expect(untouched.readonly).toBe(true)
+  })
 })

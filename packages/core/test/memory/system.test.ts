@@ -235,4 +235,20 @@ describe("memory events in session stream (Task 6)", () => {
     const memoryEvents = sessions.readEvents(meta.id).filter(isMemoryEvent)
     expect(memoryEvents.some((e) => e.trigger === "admin" && e.op === "delete" && e.kind === "cognition" && e.file === "rule/general")).toBe(true)
   })
+
+  it("triggerManual with a nonexistent sessionId skips (no event, no phantom session); valid id still appends", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    sessions.appendMessage(meta.id, { id: "m1", sessionId: meta.id, role: "user", blocks: [{ id: "b", type: "text", text: "重连风暴修好了" }], createdAt: new Date().toISOString() })
+    const sys = makeSystem({
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "ws", op: "new-thread", thread: "ws", title: "重连线", content: "指数退避消灭了重连风暴" }] })]), model: "m" }),
+    })
+    // 不存在的归属会话 → 跳过（不落事件、不建幻影会话目录）
+    await sys.triggerManual(WORKDIR, "ses_nope")
+    expect(sessions.meta("ses_nope")).toBeUndefined()
+    expect(existsSync(join(root, "sessions", "ses_nope"))).toBe(false)
+    // 真实存在的归属会话 → 照常落 memory 事件
+    await sys.triggerManual(WORKDIR, meta.id)
+    const memoryEvents = sessions.readEvents(meta.id).filter(isMemoryEvent)
+    expect(memoryEvents.some((e) => e.trigger === "manual" && e.kind === "episode")).toBe(true)
+  })
 })

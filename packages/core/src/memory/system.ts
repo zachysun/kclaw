@@ -101,6 +101,7 @@ export class MemorySystem {
     this.#audit = (e) => {
       const id = e.sessionId
       if (id === undefined) return // 无归属会话：跳过（admin/手动内化在无会话项目上不落事件）
+      if (this.#sessions.meta(id) === undefined) return // 归属会话不存在：跳过（不落事件、不建幻影会话）
       const { sessionId: _sid, at, ...rest } = e
       // 事件体不携带 sessionId（Ruling 5：由所在会话目录决定）
       this.#sessions.appendEvent(id, { type: "memory", at: at ?? this.#now().toISOString(), ...rest } as MemoryEvent)

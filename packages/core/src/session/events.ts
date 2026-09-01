@@ -5,7 +5,7 @@ export interface SessionCreatedEvent { type: "session.created"; at: string; titl
 export interface SessionRenamedEvent { type: "session.renamed"; at: string; title: string }
 export interface SessionDeletedEvent { type: "session.deleted"; at: string }
 export interface SessionRestoredEvent { type: "session.restored"; at: string }
-export interface SessionSetEvent { type: "session.set"; at: string; model?: string; readonly?: boolean; disposition?: "steer" | "wait" | "interrupt" }
+export interface SessionSetEvent { type: "session.set"; at: string; model?: string | null; readonly?: boolean | null; disposition?: "steer" | "wait" | "interrupt" | null }
 export type MessageEvent = { type: "message" } & Message
 export interface CompactionEvent { type: "compaction"; at: string; trigger: "manual" | "in-run" | "auto"; emergency?: true; focus?: string; from: string | null; upto: string; messages: number; segmentSummary: string; top: string }
 export interface MemoryEvent {
@@ -37,9 +37,19 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
     case "session.deleted": next.deleted = true; next.deletedAt = event.at; next.updatedAt = event.at; break
     case "session.restored": next.deleted = false; delete next.deletedAt; next.updatedAt = event.at; break
     case "session.set": {
-      if (event.model !== undefined) next.model = event.model
-      if (event.readonly !== undefined) next.readonly = event.readonly
-      if (event.disposition !== undefined) next.dispositionOverride = event.disposition
+      // undefined = 该字段不在本事件中（不动）；null = 显式清除（删键）。
+      if (event.model !== undefined) {
+        if (event.model === null) delete next.model
+        else next.model = event.model
+      }
+      if (event.readonly !== undefined) {
+        if (event.readonly === null) delete next.readonly
+        else next.readonly = event.readonly
+      }
+      if (event.disposition !== undefined) {
+        if (event.disposition === null) delete next.dispositionOverride
+        else next.dispositionOverride = event.disposition
+      }
       next.updatedAt = event.at
       break
     }

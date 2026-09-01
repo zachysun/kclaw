@@ -131,7 +131,7 @@ export interface SessionCreatedEvent { type: "session.created"; at: string; titl
 export interface SessionRenamedEvent { type: "session.renamed"; at: string; title: string }
 export interface SessionDeletedEvent { type: "session.deleted"; at: string }
 export interface SessionRestoredEvent { type: "session.restored"; at: string }
-export interface SessionSetEvent { type: "session.set"; at: string; model?: string; readonly?: boolean; disposition?: "steer" | "wait" | "interrupt" }
+export interface SessionSetEvent { type: "session.set"; at: string; model?: string | null; readonly?: boolean | null; disposition?: "steer" | "wait" | "interrupt" | null }
 
 /** A message event: `{ type: "message" } & Message`. */
 export type MessageEvent = { type: "message" } & Message

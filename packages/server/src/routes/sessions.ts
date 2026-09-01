@@ -131,7 +131,7 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       return stores.sessions.readEvents(id)
     })
 
-    // Compaction audit log (spec 6A.2): read-only view over compactions.jsonl.
+    // Compaction audit log (spec 6A.2): read-only view over compaction events.
     scope.get("/sessions/:id/compactions", async (request, reply) => {
       const { id } = request.params as { id: string }
       if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)

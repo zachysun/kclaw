@@ -55,7 +55,7 @@ export interface CompactionState { segments: CompactionSegment[]; top: string; u
 /** 当前生效的压缩视图：upto 之前的原文不再发送，top 是总摘要（脉络项内容）。 */
 export interface ActiveSummary { upto: string; top: string }
 
-/** One audit line in a session's compactions.jsonl (spec 6A.1). */
+/** One compaction event in a session's event stream (spec 6A.1). */
 export interface CompactionRecord {
   at: string // ISO-8601
   trigger: "auto" | "in-run" | "manual"

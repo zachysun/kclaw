@@ -6,7 +6,7 @@ import type { CompactionRecord, CompactionState } from "./compaction.js"
 import { writeFileAtomic } from "../storage/atomic.js"
 import { appendJsonlLine, readJsonl } from "../storage/jsonl.js"
 import { applyEvent, isCompactionEvent, isMessageEvent } from "./events.js"
-import type { SessionCreatedEvent, SessionEvent } from "./events.js"
+import type { SessionCreatedEvent, SessionEvent, SessionSetEvent } from "./events.js"
 
 /** 排队条目的附件形状（与 server 的 AttachmentRef 结构一致，结构类型互通）。 */
 export interface QueueAttachment { path: string; name: string; size: number; mimeType: string }
@@ -221,10 +221,13 @@ export class SessionStore {
   /**
    * Merge `patch` into the session. Metadata fields (title/model/readonly/
    * dispositionOverride/deleted/deletedAt) become session.* events, appended
-   * to the stream before the projection is rewritten; run-state fields
-   * (compaction/compactedSummary/compactedUpto) and metadata cleared
-   * with an explicit `undefined` (no clearing event exists) are merged
-   * straight into the projection. Returns the newest projection.
+   * to the stream before the projection is rewritten — model/readonly/
+   * dispositionOverride are fully event-driven: setting OR clearing emits a
+   * `session.set` event (patch 值 undefined → 事件里 null = 清除)。Only
+   * run-state fields (compactedSummary/compactedUpto) are merged straight
+   * into the projection (undefined clears; no clearing event exists for
+   * them). compaction is projection-maintained by the compaction event,
+   * never merged here. Returns the newest projection.
    */
   updateMeta(id: string, patch: Partial<SessionMeta>): SessionMeta {
     const current = this.meta(id)
@@ -236,8 +239,14 @@ export class SessionStore {
     if (patch.title !== undefined && patch.title !== current.title) {
       events.push({ type: "session.renamed", at: now, title: patch.title })
     }
-    if (patch.model !== undefined || patch.readonly !== undefined || patch.dispositionOverride !== undefined) {
-      events.push({ type: "session.set", at: now, model: patch.model, readonly: patch.readonly, disposition: patch.dispositionOverride })
+    // model/readonly/dispositionOverride：键出现在 patch 即发 session.set 事件，
+    // 值 undefined 映射为 null（= 清除）。投影只由事件推进，重建时不复活已清除的覆盖。
+    if ("model" in patch || "readonly" in patch || "dispositionOverride" in patch) {
+      const set: SessionSetEvent = { type: "session.set", at: now }
+      if ("model" in patch) set.model = patch.model ?? null
+      if ("readonly" in patch) set.readonly = patch.readonly ?? null
+      if ("dispositionOverride" in patch) set.disposition = patch.dispositionOverride ?? null
+      events.push(set)
     }
     if (patch.deleted === true || (patch.deletedAt !== undefined && patch.deletedAt !== current.deletedAt)) {
       events.push({ type: "session.deleted", at: patch.deletedAt ?? now })
@@ -253,11 +262,11 @@ export class SessionStore {
       projection = applyEvent(projection, event)
     }
 
-    // 运行态字段 + 无对应清除事件的元数据字段 → 直接合并投影（undefined 即清除）。
-    // 注意：compaction 由 compaction 事件投影（applyEvent）维护，updateMeta 不再
-    // 直接合并——run.ts 对同一压缩既 updateMeta({compaction}) 又 appendCompaction，
-    // 两者都写会重复计段（1 段变 2 段）。Task 5 彻底移除这里的运行态合并。
-    for (const k of ["model", "readonly", "dispositionOverride", "compactedSummary", "compactedUpto"] as const) {
+    // 仅剩运行态字段（compactedSummary/compactedUpto）直接合并投影（undefined 即清除）；
+    // 它们没有对应的清除事件，属 legacy 行为。model/readonly/dispositionOverride 已完全
+    // 事件化（session.set，含 null 清除），不再走这里。compaction 由 compaction 事件
+    // 投影（applyEvent）维护，updateMeta 不直接合并（run.ts 只 appendCompaction）。
+    for (const k of ["compactedSummary", "compactedUpto"] as const) {
       if (!(k in patch)) continue
       const value = patch[k]
       if (value === undefined) delete (projection as unknown as Record<string, unknown>)[k]
