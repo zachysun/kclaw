@@ -12,25 +12,31 @@ export interface SessionHit { summary: string; excerpt: string }
 
 /**
  * Naive text match inside compacted segments: for each compaction event,
- * scan the message events it covers (up to and including its `upto`) and
- * collect matches, attributed to the compaction's segmentSummary. No
- * compaction events → []. An empty query → [] (matches the old
- * tokenize("") → no-tokens behavior).
+ * scan the message events that segment covers — the incremental span
+ * (prev segment's `upto`, own `upto`], the same per-message-once attribution
+ * the old segment index had — and collect matches attributed to that
+ * compaction's segmentSummary. A compaction whose `upto` is not in the
+ * stream is skipped (its span is unknowable). No compaction events → [].
+ * An empty query or limit <= 0 → [] (matches old tokenize("")/LIMIT 0).
  */
 export async function searchSessionEvents(events: SessionEvent[], query: string, limit: number): Promise<SessionHit[]> {
-  if (query.trim() === "") return []
+  if (query.trim() === "" || limit <= 0) return []
   const compactions = events.filter(isCompactionEvent)
   const messages = events.filter(isMessageEvent)
   const hits: SessionHit[] = []
+  let prevUptoIdx = -1
   for (const c of compactions) {
     const uptoIdx = messages.findIndex((m) => m.id === c.upto)
-    const span = uptoIdx === -1 ? messages : messages.slice(0, uptoIdx + 1)
-    for (const m of span) {
-      const text = JSON.stringify(m.blocks)
+    if (uptoIdx === -1) continue // 未找到覆盖范围：跳过该压缩段，不误扫整条流
+    for (const m of messages.slice(prevUptoIdx + 1, uptoIdx + 1)) {
+      const blocks = m.blocks
+      if (blocks === undefined) continue
+      const text = JSON.stringify(blocks)
       if (!text.includes(query)) continue
       hits.push({ summary: c.segmentSummary, excerpt: text.slice(0, 200) })
       if (hits.length >= limit) return hits
     }
+    prevUptoIdx = uptoIdx
   }
   return hits
 }
