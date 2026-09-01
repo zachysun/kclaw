@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -40,6 +40,27 @@ describe("POST /memory/trigger-manual", () => {
   it("defaults workdir to config.workspace when omitted", async () => {
     const res = await app.inject({ method: "POST", url: "/memory/trigger-manual", headers: auth })
     expect(res.statusCode).toBe(200)
+  })
+  it("threads the given sessionId through to triggerManual (Task 7)", async () => {
+    const spy = vi.spyOn(system, "triggerManual").mockResolvedValue(undefined)
+    try {
+      const res = await app.inject({
+        method: "POST", url: "/memory/trigger-manual", headers: { ...auth, "content-type": "application/json" },
+        payload: { workdir: "/w/none", sessionId: "ses_abc" },
+      })
+      expect(res.statusCode).toBe(200)
+      expect(spy).toHaveBeenCalledWith("/w/none", "ses_abc")
+    } finally { spy.mockRestore() }
+  })
+  it("treats an empty sessionId as absent (falls back to undefined, Task 7 validation)", async () => {
+    const spy = vi.spyOn(system, "triggerManual").mockResolvedValue(undefined)
+    try {
+      await app.inject({
+        method: "POST", url: "/memory/trigger-manual", headers: { ...auth, "content-type": "application/json" },
+        payload: { workdir: "/w/none", sessionId: "" },
+      })
+      expect(spy).toHaveBeenCalledWith("/w/none", undefined)
+    } finally { spy.mockRestore() }
   })
   it("rejects with a clear error when memory.write.manual is disabled", async () => {
     const cfg = structuredClone(defaultConfig)

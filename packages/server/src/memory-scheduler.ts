@@ -58,7 +58,11 @@ export function startMemoryScheduler(deps: {
       if (cfg.write.intervalMinutes > 0) {
         const last = deps.system.intervalLastRun(workdir)
         if (last === undefined || now().getTime() - Date.parse(last) >= cfg.write.intervalMinutes * 60_000) {
-          const p = deps.system.triggerInterval(workdir).catch((e) => log(`kclaw memory interval failed: ${String(e)}`))
+          // 定时触发无显式归属会话：取该工作区最近活动的会话（与 core #recentSessionId 同判据），
+          // 让 interval 落盘事件挂到它名下（Task 6/7 会话事件流归属）。
+          const recent = deps.sessions.list().filter((m) => (m.workdir ?? "") === workdir)
+            .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))[0]?.id
+          const p = deps.system.triggerInterval(workdir, recent).catch((e) => log(`kclaw memory interval failed: ${String(e)}`))
           inFlight.add(p); void p.finally(() => inFlight.delete(p))
           // markIntervalRun 在触发发起后立即推进（即便失败也推进，M-2 取舍）：interval
           // 语义是"至少每 intervalMinutes 兜底扫一次"，失败后下个整周期再试，避免同项目
@@ -72,7 +76,8 @@ export function startMemoryScheduler(deps: {
           const activity = deps.system.lastActivity(workdir)
           if (followGateDue(check.endTurnAt, now().toISOString(), { idleMinutes: cfg.write.idleMinutes, lastActivityAt: activity })) {
             deps.system.clearFollowCheck(workdir, check.sessionId)
-            const p = deps.system.triggerFollow(workdir).catch((e) => log(`kclaw memory follow failed: ${String(e)}`))
+            // 跟随触发的归属会话 = 发起该检查的会话（check.sessionId，Task 6/7 会话事件流归属）。
+            const p = deps.system.triggerFollow(workdir, check.sessionId).catch((e) => log(`kclaw memory follow failed: ${String(e)}`))
             inFlight.add(p); void p.finally(() => inFlight.delete(p))
           } else if (activity !== "" && Date.parse(activity) > Date.parse(check.endTurnAt)) {
             // I-1：门禁不过但 end_turn 之后已有更新活动（用户切到别的会话继续对话、

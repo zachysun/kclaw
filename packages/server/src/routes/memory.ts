@@ -115,13 +115,19 @@ export function registerMemoryRoutes(app: FastifyInstance, opts: { memory?: Memo
     if (opts.config !== undefined && opts.config.memory.write.manual === false) {
       return reply.code(400).send({ error: "手动写入已关闭（memory.write.manual=false），可依赖定时/跟随触发" })
     }
-    const body = req.body as { workdir?: unknown } | null
+    const body = req.body as { workdir?: unknown; sessionId?: unknown } | null
     const workdir =
       typeof body === "object" && body !== null && typeof body.workdir === "string" && body.workdir !== ""
         ? body.workdir
         : undefined
+    // 可选归属会话（Task 7）：触发方（CLI/Web）可指定本次手动写入挂到哪个会话；
+    // 缺省回落由 core #recentSessionId 决定。仅接受非空字符串。
+    const sessionId =
+      typeof body === "object" && body !== null && typeof body.sessionId === "string" && body.sessionId !== ""
+        ? body.sessionId
+        : undefined
     try {
-      await memory.triggerManual(workdir ?? opts.config?.workspace ?? process.cwd())
+      await memory.triggerManual(workdir ?? opts.config?.workspace ?? process.cwd(), sessionId)
       return { ok: true }
     } catch (err) {
       return reply.code(500).send({ error: `manual trigger failed: ${err instanceof Error ? err.message : String(err)}` })
