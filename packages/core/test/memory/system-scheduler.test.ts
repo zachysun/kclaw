@@ -94,7 +94,7 @@ describe("lastActivity", () => {
     const sys = makeSystem()
     expect(sys.lastActivity(WORKDIR)).toBe("")
     const meta = sessions.create("s", undefined, WORKDIR)
-    sessions.appendMessage(meta.id, { id: "m1", sessionId: meta.id, role: "user", blocks: [{ id: "b", type: "text", text: "hi" }], createdAt: "2026-08-29T10:00:00Z" })
+    sessions.appendMessage(meta.id, { id: "m1", sessionId: meta.id, role: "user", blocks: [{ id: "b", type: "text", text: "hi" }], createdAt: new Date().toISOString() })
     const activity = sys.lastActivity(WORKDIR)
     expect(activity).not.toBe("")
     expect(activity >= meta.createdAt).toBe(true)
