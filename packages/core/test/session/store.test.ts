@@ -139,14 +139,20 @@ describe("SessionStore", () => {
     expect(cleared.compactedUpto).toBe("msg_1") // untouched field survives
   })
 
-  it("persists and clears the compaction state via updateMeta", () => {
+  it("compaction state is event-sourced via appendCompaction, not via updateMeta", () => {
     const store = new SessionStore(dir)
     const meta = store.create("压缩会话")
     const state = { segments: [{ upto: "m3", summary: "摘要" }], top: "总摘要", upto: "m3" }
-    const updated = store.updateMeta(meta.id, { compaction: state })
-    expect(updated.compaction).toEqual(state)
-    const cleared = store.updateMeta(meta.id, { compaction: undefined })
-    expect(cleared.compaction).toBeUndefined()
+    // updateMeta 不直接写 compaction：run.ts 对同一压缩会同时调用
+    // updateMeta({compaction}) 与 appendCompaction，若都写会重复计段。
+    store.updateMeta(meta.id, { compaction: state })
+    expect(store.meta(meta.id)!.compaction).toBeUndefined()
+    // compaction 事件是 meta.compaction 的唯一来源
+    store.appendCompaction(meta.id, { at: "2026-01-02T00:00:00.000Z", trigger: "auto", from: null, upto: "m3", messages: 1, segmentSummary: "摘要", top: "总摘要" })
+    expect(store.meta(meta.id)!.compaction).toEqual(state)
+    // 清空：事件流没有新的 compaction 事件可清，updateMeta({compaction: undefined}) 亦不应产生字段
+    store.updateMeta(meta.id, { compaction: undefined })
+    expect(store.meta(meta.id)!.compaction).toEqual(state)
   })
 
   it("purge 永久删除会话目录", () => {

@@ -222,8 +222,11 @@ export class SessionStore {
       projection = applyEvent(projection, event)
     }
 
-    // 运行态字段 + 无对应清除事件的元数据字段 → 直接合并投影（undefined 即清除）
-    for (const k of ["model", "readonly", "dispositionOverride", "queue", "compaction", "compactedSummary", "compactedUpto"] as const) {
+    // 运行态字段 + 无对应清除事件的元数据字段 → 直接合并投影（undefined 即清除）。
+    // 注意：compaction 由 compaction 事件投影（applyEvent）维护，updateMeta 不再
+    // 直接合并——run.ts 对同一压缩既 updateMeta({compaction}) 又 appendCompaction，
+    // 两者都写会重复计段（1 段变 2 段）。Task 5 彻底移除这里的运行态合并。
+    for (const k of ["model", "readonly", "dispositionOverride", "queue", "compactedSummary", "compactedUpto"] as const) {
       if (!(k in patch)) continue
       const value = patch[k]
       if (value === undefined) delete (projection as unknown as Record<string, unknown>)[k]
