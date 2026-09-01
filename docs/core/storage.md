@@ -54,7 +54,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `permissions.allow` / `deny` | `[]` / `["exec:sudo*", "exec:rm -rf*"]` | 权限规则，见 [permissions](./permissions.md) |
 | `permissions.confirmTimeoutMs` | `120000` | 人工确认等待上限，超时按拒绝处理 |
 | `permissions.sessionGrants` | `true` | 会话内"本次允许"记忆是否生效 |
-| `memory.write.{immediate, manual, intervalMinutes, idleMinutes}` | `true` / `true` / `30` / `10` | 记忆写入四触发：immediate = `memory_save` 工具当场触发；manual = 预留开关、当前无读取处；intervalMinutes = 定时兜底间隔（0 关闭）；idleMinutes = 跟随门禁空闲分钟（0 关闭）。完整语义见 [memory](./memory.md) |
+| `memory.write.{immediate, manual, intervalMinutes, idleMinutes}` | `true` / `true` / `30` / `10` | 记忆写入四触发：immediate = `memory_save` 工具当场触发；manual = 手动触发开关（`/memory save`（CLI/web）走 `POST /memory/trigger-manual`，`false` 时该路由返回 400）；intervalMinutes = 定时兜底间隔（0 关闭）；idleMinutes = 跟随门禁空闲分钟（0 关闭）。完整语义见 [memory](./memory.md) |
 | `memory.extractModel` / `threadInactiveDays` / `consolidate` | `""` / `14` / `true` | 提取/内化用的模型（空回落主对话模型）、线闲置多少天自动转 inactive、内化开关 |
 | `memory.embedding.{provider, model}` | `""` / `""` | 向量检索判定链：`model` 空则向量路整体关闭（纯 BM25）；provider 空回落 default 条目 |
 | `memory.injectTokenBudget` | `1000` | 每轮 L2 认知常驻注入的 token 上限（只约束常驻注入，L1 情节 top-5 全量注入不受此限） |

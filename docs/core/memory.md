@@ -243,7 +243,7 @@ daemon 启动时按固定顺序做一次 v1 → v2 迁移与对账（`daemon.ts`
 
 v2 提供三套人工管理面，全部落在既有文档：
 
-- **HTTP `/memory` 路由族**（9 个，`packages/server/src/routes/memory.ts`）：项目/线/全局认知的读取、整文件覆写（PATCH）、删除（DELETE）；persona 不可删除（400）；未装配记忆系统时全部 503。路由表见 [http-api](../server/http-api.md)。
+- **HTTP `/memory` 路由族**（10 个，`packages/server/src/routes/memory.ts`）：项目/线/全局认知的读取、整文件覆写（PATCH）、删除（DELETE），外加手动触发 `POST /memory/trigger-manual`；persona 不可删除（400）；未装配记忆系统时全部 503。路由表见 [http-api](../server/http-api.md)。
 - **CLI `/memory`**（`packages/cli/src/slash.ts`）：`/memory`（无参列项目）、`/memory <项目>`（列该项目的主题线）、`/memory <项目> <线>`（打印线文件原文）。只读。
 - **Web 记忆页**（tab「记忆」，`packages/web/src/memory/MemoryView.tsx`）：全局认知常驻（顶部）+ 项目记忆按需选择（项目 → 主题线）+ 整文件编辑器；不存在会话级记忆，会话只通过 `memory_search` 检索记忆。见 [webui](../web/webui.md)。
 

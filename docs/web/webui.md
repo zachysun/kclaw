@@ -30,7 +30,7 @@ kclaw 的网页版按 PWA（Progressive Web App，渐进 Web 应用：浏览器�
 
 - **manifest.webmanifest**：声明应用名、`standalone` 显示模式、主题色 `#111827` 和 192/512 两枚图标——满足浏览器"可安装"判定的最低要求。
 - **sw.js**（Service Worker：浏览器在页面之外后台运行的一段脚本，可以拦截网络请求）：只为一个目标服务——断网时页面外壳打得开。
-  - `install` 阶段把三个外壳文件 `SHELL = ["/", "/index.html", "/manifest.webmanifest"]` 预存进缓存（缓存名 `kclaw-shell-v1`）；`activate` 阶段清掉其他名字的旧缓存。
+  - `install` 阶段把三个外壳文件 `SHELL = ["/", "/index.html", "/manifest.webmanifest"]` 预存进缓存（缓存名 `kclaw-shell-<构建指纹>`，见下文"边界与出错"的缓存名说明）；`activate` 阶段清掉其他名字的旧缓存。
   - 拦截到 `fetch` 请求时走"缓存优先"：命中缓存直接返回；但 `/ws`、`/api` 开头的路径和一切非 GET 请求照常发往网络，不查缓存——对话数据永远以 daemon 为准。
   - 除预缓存外**没有任何运行时写入缓存**的代码（没有 `cache.put`）：消息和 API 响应一律不被 Service Worker 缓存。
 - **offlineBanner.ts**：页面入口 `main.tsx` 调用 `registerServiceWorker()` 完成注册，并渲染 `<OfflineBanner />`；后者通过 `navigator.onLine` 与 online/offline 事件监测连接状态，断网时在页首显示横幅提示。

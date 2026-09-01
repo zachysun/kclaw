@@ -10,7 +10,7 @@
 - **信封零变形**：`AgentEvent` 对象从 agent 循环的 `onEvent` 一路 `JSON.stringify` 到线上，daemon 不翻译、不改写、不新增事件——协议只有一份定义（`packages/core/src/protocol/events.ts`）。
 - **鉴权在连接内，不在升级请求上**：浏览器场景常无法携带自定义 header，认证放首帧 `{type:"auth", token}`（或 `?token=` 查询参数），失败时以关闭码 4001 关闭连接。HTTP 层的 Bearer 钩子因此豁免 `/ws` 路由本身。
 - **订阅制而非广播制**：带 `sessionId` 的事件只发给订阅了该会话的连接（客户端打开多个标签页时，各标签页订阅各自的会话，互不串流）；无 `sessionId` 的事件（`job.*`、`memory.written`）广播给全体已认证连接——任何客户端都应看到调度与记忆落盘活动。
-- **单连接天然有序，事件不带序号**：一条 WS 连接内帧顺序即发送顺序，客户端无需对账序号。跨连接/断线不保证——用"拉取全量消息 + 只订阅新事件"恢复，不做事件回放（有意简化：事件不持久化）。
+- **单连接天然有序，事件不带序号**：一条 WS 连接内帧顺序即发送顺序，客户端无需对账序号。跨连接/断线不保证——用"拉取全量消息 + 只订阅新事件"恢复，不做实时事件回放（有意简化：实时增量事件不持久化，会话历史以 events.jsonl 事件流为唯一真相，见 [storage](../core/storage.md)）。
 - **投递异常不回传发射方**：单个 socket 的 `send` 抛错（连接刚断开）被 try/catch 捕获忽略，不阻断其他订阅者，也不把异常传回正在执行 run 的代码。
 
 ## 帧格式
@@ -65,7 +65,7 @@
 }
 ```
 
-`EventType` 共 **35 种**（`packages/core/src/protocol/events.ts`；七个语义分组的完整表见 [protocol](../core/protocol.md)），按投递方式分两组：
+`EventType` 共 **35 种**（`packages/core/src/protocol/events.ts`；九个语义分组的完整表见 [protocol](../core/protocol.md)），按投递方式分两组：
 
 | 分组 | 事件 | 投递 |
 |------|------|------|
@@ -110,9 +110,9 @@ export class EventBus {
 
 自定义关闭码三个：`CLOSE_UNAUTHORIZED = 4001`（认证失败）、`CLOSE_AUTH_TIMEOUT = 4002`（认证超时）、`CLOSE_ORIGIN_NOT_ALLOWED = 1008`（带非回环浏览器 Origin 的升级被拒；无 Origin 头放行——CLI 等非浏览器客户端）。客户端仅将 4001 作为"token 失效"专门处理（见下），其余一律视为意外断线并重连——心跳 `terminate` 是无关闭码的硬断开，同样走意外断线路径。
 
-## 断线恢复：拉取全量 + 只订阅新事件，无回放
+## 断线恢复：拉取全量 + 只订阅新事件，无实时事件回放
 
-事件不持久化，服务端没有任何回放机制。恢复协议（两个客户端实现一致的恢复策略）：
+实时增量事件不持久化，服务端不做实时事件回放。会话的权威历史在 events.jsonl（唯一真相，见 [storage](../core/storage.md)），恢复协议（两个客户端实现一致的恢复策略）：
 
 ```
 意外断线（非 4001）
@@ -125,7 +125,7 @@ export class EventBus {
 
 - **web**（`packages/web/src/chat/ChatPanel.tsx`）：连续失败重连上限 `MAX_RECONNECT_ATTEMPTS = 3`（成功一次即重置预算），超过则提示"重连失败，请刷新页面"停止；4001 关闭不重连，提示重新输入 token。合并语义在 `packages/web/src/chat/model.ts` 的 `mergeMessages`：新拉的消息列表是权威状态，覆盖本地流式中的未完成版本。
 - **CLI**（`packages/cli/src/chat.ts`）：重连后观察到的事件带 120s 静默超时（`POST_RECONNECT_SILENCE_MS = 120_000`，超时内一帧未到就认定 run 已终止、放弃等待）——daemon 已终止的 run 永远不会完成，REPL 不可无限等待。**重发规则**：发送中的消息仅当观察到**零帧**（连 `send_message_ack` 都没有）才重发——零帧证明消息从未到达存活的 daemon；一旦观察到任何帧（ack 即证明服务端已入队）就绝不重发，宁可等待静默超时，避免同一消息被执行两次。
-- **为什么无回放可行**：持久化的块永远是完整终稿（见 [protocol](../core/protocol.md)），`GET /sessions/:id/messages` 拉取到的每条消息自洽；事件流只是"正在发生"的增量视图，丢失即丢弃，下一次全量拉取自然对齐。
+- **为什么无回放可行**：持久化的块永远是完整终稿（见 [protocol](../core/protocol.md)），`GET /sessions/:id/messages` 拉取到的每条消息自洽；实时事件流只是"正在发生"的增量视图，丢失即丢弃，下一次全量拉取自然对齐（权威历史在 events.jsonl，需要回查可走 `GET /sessions/:id/events`）。
 
 ## 边界与出错
 

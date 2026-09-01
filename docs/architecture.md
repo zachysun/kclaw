@@ -11,7 +11,7 @@ kclaw 是一个本地常驻的个人 agent：一个 daemon 进程独占全部状
 - **单 daemon 多客户端**：CLI 可以随时退出，daemon 不受影响；定时任务在无客户端时照常执行。daemon 是唯一状态权威，客户端不持久化（写入磁盘长期保存）任何业务状态。
 - **core 是纯库**：`@kclaw/core` 不依赖 fastify/ws/commander，不感知 HTTP/WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）的存在。LLM（`deps.llm`）、工具执行、事件出口（`deps.onEvent`）、持久化（`deps.onMessage`）全部注入，整个 agent 循环可用 mock 离线测试。
 - **daemon 只绑 loopback（本机回环地址，外部网络访问不到）**：`HOST = "127.0.0.1"`（`packages/server/src/daemon.ts` 与 `packages/cli/src/daemon-ctl.ts` 各自硬编码），默认绑临时端口（`port: 0`），端口与 pid 写入 `<home>/daemon.json`，鉴权靠 `<home>/token` 里的 Bearer token（放在 HTTP `Authorization` 请求头里的访问令牌）。
-- **事件不持久化、消息才持久化**：客户端断线恢复 = HTTP 拉全量消息 + 只订阅新事件（详见 [protocol](./core/protocol.md)）。
+- **实时事件不持久化、消息才持久化**：WS 上推送的增量事件（text.delta、message.created 等）不落盘、不重发、不回放；会话的持久化形式是 events.jsonl 事件流（唯一真相）与 meta.json 投影（见 [storage](./core/storage.md)）。客户端断线恢复 = HTTP 拉全量消息 + 只订阅新事件（详见 [protocol](./core/protocol.md)）。
 - **WebUI 是独立产物**：`@kclaw/web` 除 react/react-dom 外仅依赖 `@kclaw/core` 的 `commands` 共享表（纯数据：slash 命令的 name/usage 元数据，见 [extending](./extending.md)），构建为静态文件后由 daemon 托管（`resolveWebDist` → `packages/web/dist`）。
 
 ---
@@ -33,7 +33,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 | 包 | 入口 | 内容 |
 |----|------|------|
-| core | `packages/core/src/index.ts` | 入口统一导出 12 个子目录：`protocol/`（消息/块/事件/ID）、`provider/`（OpenAI 兼容客户端+重试）、`agent/`（循环+上下文组装+工具契约）、`storage/`（路径/配置/JSONL，即每行一条 JSON 的文本文件；含用量台账 `usage.ts`）、`session/`（SessionStore 与上下文压缩：估算/分界/渲染纯函数、会话段检索索引）、`permissions/`（ConfigPermissionGate）、`memory/`（MemorySystem：L1 项目情节 + L2 全局认知 + FTS5/向量索引，见 [memory](./core/memory.md)）、`text/`（共享中文分词器与 FTS 辅助）、`tools/`（10 个内置工具）、`jobs/`（JobScheduler）、`mcp/`（MCP 客户端管理器）、`notify/`（任务完成通知） |
+| core | `packages/core/src/index.ts` | 入口统一导出 12 个子目录：`protocol/`（消息/块/事件/ID）、`provider/`（OpenAI 兼容客户端+重试）、`agent/`（循环+上下文组装+工具契约）、`storage/`（路径/配置/JSONL，即每行一条 JSON 的文本文件；含用量台账 `usage.ts`）、`session/`（SessionStore 与上下文压缩：估算/分界/渲染纯函数、事件溯源存储；`session_search` 直接扫事件流）、`permissions/`（ConfigPermissionGate）、`memory/`（MemorySystem：L1 项目情节 + L2 全局认知 + FTS5/向量索引，见 [memory](./core/memory.md)）、`text/`（共享中文分词器与 FTS 辅助）、`tools/`（10 个内置工具）、`jobs/`（JobScheduler）、`mcp/`（MCP 客户端管理器）、`notify/`（任务完成通知） |
 | server | `packages/server/src/index.ts` | `app.ts`（createApp 装配）、`daemon.ts`（launchDaemon）、`auth.ts`（token）、`bus.ts`（EventBus）、`run.ts`（RunManager）、`confirm.ts`（ConfirmationBroker）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`、`memory-scheduler.ts`（记忆定时/跟随兜底调度）、`routes/`（sessions/attachments/jobs/config/fs/usage/memory）、`autoname.ts` |
 | cli | `packages/cli/src/index.ts` | commander 命令树（默认进 chat）；`chat.ts`（REPL+渲染+@引用展开）、`client.ts`（KclawClient）、`daemon-ctl.ts`（探测/启动/停止）、`slash.ts`、`file-refs.ts`、`wizard.ts`、`provider-check.ts`、`web-cmd.ts` |
 | web | `packages/web/src/main.tsx` | 视图（chat/sessions/jobs/audit/usage/trash/memory + DirectoryPicker）、离线外壳（`sw.js`/manifest/OfflineBanner）、`ws.ts`（WS 客户端）、`token.ts`（token 引导） |
@@ -146,7 +146,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 - [agent-loop](./core/agent-loop.md)：run 生命周期状态机与工具回合
 - [daemon](./server/daemon.md)：daemon 装配序、有界 stop、pidfile 语义
 - [run-manager](./server/run-manager.md)：服务端侧的会话串行与确认网关
-- [http-api](./server/http-api.md)：37 条业务路由清单（含附件/用量/目录浏览/MCP 状态/记忆管理）
+- [http-api](./server/http-api.md)：39 条业务路由清单（含附件/用量/目录浏览/MCP 状态/记忆管理）
 - [mcp](./core/mcp.md)：条件装配的 MCP 工具适配器
 - [storage](./core/storage.md)：`<home>` 布局、config 与 usage.db 台账
 - [webui](./web/webui.md)：WebUI 视图、token 引导与 PWA 外壳
