@@ -5,6 +5,8 @@ import type { Message } from "../protocol/messages.js"
 import type { CompactionRecord, CompactionState } from "./compaction.js"
 import { writeFileAtomic } from "../storage/atomic.js"
 import { appendJsonlLine, readJsonl } from "../storage/jsonl.js"
+import { applyEvent, isCompactionEvent, isMessageEvent } from "./events.js"
+import type { SessionCreatedEvent, SessionEvent } from "./events.js"
 
 /** 排队条目的附件形状（与 server 的 AttachmentRef 结构一致，结构类型互通）。 */
 export interface QueueAttachment { path: string; name: string; size: number; mimeType: string }
@@ -47,18 +49,21 @@ export interface SessionMeta {
 }
 
 const META_FILE = "meta.json"
-const MESSAGES_FILE = "messages.jsonl"
-const COMPACTIONS_FILE = "compactions.jsonl"
+const EVENTS_FILE = "events.jsonl"
 
 /**
- * Append-only JSONL session persistence:
- * each session lives in <sessionsDir>/<id>/ holding meta.json plus
- * messages.jsonl with one JSON.stringify(message) per line.
+ * Event-sourced append-only JSONL session persistence: each session lives in
+ * <sessionsDir>/<id>/ holding an immutable events.jsonl event stream (one
+ * JSON.stringify(SessionEvent) per line) plus meta.json — a derived projection
+ * of that stream via applyEvent. All writes go through events.jsonl first and
+ * the projection second; the projection is rebuildable from the stream
+ * (rebuildMeta) when it goes missing or corrupt.
  *
- * Crash tolerance: a torn trailing line (crash mid-append) is
- * dropped on read, and the append repairs it first (storage/jsonl.ts) so the
- * next message survives; a corrupt line anywhere earlier is corruption,
- * not a crash artifact, so readMessages throws.
+ * Crash tolerance: a torn trailing line (crash mid-append) is dropped on read,
+ * and the append repairs it first (storage/jsonl.ts) so the next event
+ * survives; a corrupt line anywhere earlier is corruption, not a crash
+ * artifact, so readEvents throws. meta.json is written atomically
+ * (writeFileAtomic), so it is always either the pre- or post-event projection.
  */
 export class SessionStore {
   private readonly sessionsDir: string
@@ -76,27 +81,63 @@ export class SessionStore {
     return join(this.sessionDir(id), META_FILE)
   }
 
-  private messagesPath(id: string): string {
-    return join(this.sessionDir(id), MESSAGES_FILE)
+  private eventsPath(id: string): string {
+    return join(this.sessionDir(id), EVENTS_FILE)
   }
 
   private writeMeta(meta: SessionMeta): void {
     writeFileAtomic(this.metaPath(meta.id), JSON.stringify(meta))
   }
 
-  /** Create a new session directory with initial meta.json. */
-  create(title?: string, jobId?: string, workdir?: string): SessionMeta {
-    const id = newId("ses")
-    const now = new Date().toISOString()
-    const meta: SessionMeta = { id, title: title ?? "新会话", createdAt: now, updatedAt: now }
-    if (jobId !== undefined) meta.jobId = jobId
-    if (workdir !== undefined) meta.workdir = workdir
+  /** 事件的时间字段：message 事件用 createdAt，其余事件用 at。 */
+  private eventAt(event: SessionEvent): string {
+    return event.type === "message" ? event.createdAt : event.at
+  }
+
+  /**
+   * Append one event to events.jsonl (event first), then fold it into the meta
+   * projection (projection second). The pre-append projection is read before
+   * the append so a rebuild triggered by a missing/corrupt meta.json never
+   * re-applies the just-appended event (its result already includes it).
+   */
+  appendEvent(id: string, event: SessionEvent): void {
     mkdirSync(this.sessionDir(id), { recursive: true })
+    const current = this.meta(id)
+    appendJsonlLine(this.eventsPath(id), event)
+    const at = this.eventAt(event)
+    const base: SessionMeta = current ?? { id, title: "", createdAt: at, updatedAt: at }
+    this.writeMeta(applyEvent(base, event))
+  }
+
+  /** Load a session's event stream oldest-first; missing file yields []. */
+  readEvents(id: string): SessionEvent[] {
+    return readJsonl(this.eventsPath(id)) as SessionEvent[]
+  }
+
+  /** Rebuild the meta projection from the full event stream and write it back;
+   *  undefined when the session has no events (does not exist). */
+  rebuildMeta(id: string): SessionMeta | undefined {
+    const events = this.readEvents(id)
+    if (events.length === 0) return undefined
+    const first = events[0]!
+    const at = first.type === "message" ? first.createdAt : first.at
+    const meta = events.reduce(applyEvent, { id, title: "", createdAt: at, updatedAt: at })
     this.writeMeta(meta)
     return meta
   }
 
-  /** Sessions with readable meta, newest-updated first; corrupt/missing meta is skipped.
+  /** Create a new session directory: append a session.created event, return its projected meta. */
+  create(title?: string, jobId?: string, workdir?: string): SessionMeta {
+    const id = newId("ses")
+    const now = new Date().toISOString()
+    const event: SessionCreatedEvent = { type: "session.created", at: now, title: title ?? "新会话" }
+    if (jobId !== undefined) event.jobId = jobId
+    if (workdir !== undefined) event.workdir = workdir
+    this.appendEvent(id, event)
+    return this.meta(id)!
+  }
+
+  /** Sessions with a readable projection, newest-updated first; a missing/corrupt meta.json is rebuilt from its event stream. A session directory with no events at all is skipped.
    *  By default only non-deleted sessions are returned; pass `{ deleted: true }` for the recycle bin. */
   list(opts: { deleted?: boolean } = {}): SessionMeta[] {
     const entries = readdirSync(this.sessionsDir, { withFileTypes: true })
@@ -117,63 +158,95 @@ export class SessionStore {
     return this.list().filter((m) => m.jobId === jobId)
   }
 
-  /** Read one session's meta; undefined when the session or its meta.json is missing/unreadable. */
+  /** Read one session's projection (meta.json); when missing/corrupt, rebuild it from the event stream. */
   meta(id: string): SessionMeta | undefined {
     try {
       return JSON.parse(readFileSync(this.metaPath(id), "utf8")) as SessionMeta
     } catch {
-      return undefined
+      return this.rebuildMeta(id)
     }
   }
 
-  /** Append one message as a JSONL line and bump updatedAt (meta.json rewrite). */
+  /** Append one message event; the projection's updatedAt follows the message createdAt. */
   appendMessage(id: string, message: Message): void {
-    mkdirSync(this.sessionDir(id), { recursive: true })
-    appendJsonlLine(this.messagesPath(id), message)
-    const current = this.meta(id)
-    if (current === undefined) return // orphan append: no meta to bump
-    this.writeMeta({ ...current, updatedAt: new Date().toISOString() })
+    this.appendEvent(id, { type: "message", ...message })
   }
 
-  /** Load a session's messages; missing file yields []. */
+  /** Load a session's messages (message events, oldest-first); missing stream yields []. */
   readMessages(id: string): Message[] {
-    return readJsonl(this.messagesPath(id)) as Message[]
+    return this.readEvents(id).filter(isMessageEvent).map(({ type, ...m }) => m as Message)
   }
 
-  /** Append one compaction audit record (spec 6A.1). */
+  /** Append one compaction audit event (spec 6A.1). */
   appendCompaction(id: string, record: CompactionRecord): void {
-    mkdirSync(this.sessionDir(id), { recursive: true })
-    appendJsonlLine(join(this.sessionDir(id), COMPACTIONS_FILE), record)
+    this.appendEvent(id, { type: "compaction", ...record })
   }
 
-  /** Read the compaction audit log; missing file yields []. */
+  /** Read the compaction audit events; missing stream yields []. */
   readCompactions(id: string): CompactionRecord[] {
-    try {
-      return readJsonl(join(this.sessionDir(id), COMPACTIONS_FILE)) as CompactionRecord[]
-    } catch {
-      return []
-    }
+    return this.readEvents(id).filter(isCompactionEvent).map(({ type, ...c }) => c as CompactionRecord)
   }
 
-  /** Merge `patch` into meta.json and bump updatedAt. `undefined` keys in the patch are removed. */
+  /**
+   * Merge `patch` into the session. Metadata fields (title/model/readonly/
+   * dispositionOverride/deleted/deletedAt) become session.* events, appended
+   * to the stream before the projection is rewritten; run-state fields
+   * (queue/compaction/compactedSummary/compactedUpto) and metadata cleared
+   * with an explicit `undefined` (no clearing event exists) are merged
+   * straight into the projection. Returns the newest projection.
+   */
   updateMeta(id: string, patch: Partial<SessionMeta>): SessionMeta {
     const current = this.meta(id)
     if (current === undefined) throw new Error(`session not found: ${id}`)
-    const merged: SessionMeta = { ...current, ...patch, id: current.id, updatedAt: new Date().toISOString() }
-    for (const k of Object.keys(merged) as (keyof SessionMeta)[]) {
-      if (merged[k] === undefined) delete merged[k]
+    const now = new Date().toISOString()
+
+    // 元数据字段 → 事件（仅当有确定的新值且确实发生变化）
+    const events: SessionEvent[] = []
+    if (patch.title !== undefined && patch.title !== current.title) {
+      events.push({ type: "session.renamed", at: now, title: patch.title })
     }
-    this.writeMeta(merged)
-    return merged
+    if (patch.model !== undefined || patch.readonly !== undefined || patch.dispositionOverride !== undefined) {
+      events.push({ type: "session.set", at: now, model: patch.model, readonly: patch.readonly, disposition: patch.dispositionOverride })
+    }
+    if (patch.deleted === true || (patch.deletedAt !== undefined && patch.deletedAt !== current.deletedAt)) {
+      events.push({ type: "session.deleted", at: patch.deletedAt ?? now })
+    }
+    if ("deleted" in patch && patch.deleted !== true) {
+      events.push({ type: "session.restored", at: now })
+    }
+
+    // 事件优先：逐条落盘事件并折进投影
+    let projection = current
+    for (const event of events) {
+      this.appendEvent(id, event)
+      projection = applyEvent(projection, event)
+    }
+
+    // 运行态字段 + 无对应清除事件的元数据字段 → 直接合并投影（undefined 即清除）
+    for (const k of ["model", "readonly", "dispositionOverride", "queue", "compaction", "compactedSummary", "compactedUpto"] as const) {
+      if (!(k in patch)) continue
+      const value = patch[k]
+      if (value === undefined) delete (projection as unknown as Record<string, unknown>)[k]
+      else (projection as unknown as Record<string, unknown>)[k] = value
+    }
+
+    // 显式清除 deleted 时投影不保留 deleted/deletedAt 键（与旧版 meta 形状一致）
+    if ("deleted" in patch && patch.deleted !== true) {
+      delete projection.deleted
+      delete projection.deletedAt
+    }
+
+    this.writeMeta(projection)
+    return projection
   }
 
-  /** Soft-delete a session: mark it deleted so it leaves the default list. */
+  /** Soft-delete a session: append a session.deleted event. */
   delete(id: string): SessionMeta {
     const now = new Date().toISOString()
     return this.updateMeta(id, { deleted: true, deletedAt: now })
   }
 
-  /** Restore a soft-deleted session back to the default list. */
+  /** Restore a soft-deleted session: append a session.restored event. */
   restore(id: string): SessionMeta {
     return this.updateMeta(id, { deleted: undefined, deletedAt: undefined })
   }

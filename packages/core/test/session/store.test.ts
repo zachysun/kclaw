@@ -38,19 +38,21 @@ describe("SessionStore", () => {
     await new Promise((r) => setTimeout(r, 5))
     s.appendMessage(m.id, newMessage(m.id, "user", [{ id: "blk_1", type: "text", text: "hi" }]))
     s.appendMessage(m.id, newMessage(m.id, "assistant", [{ id: "blk_2", type: "text", text: "hello" }]))
-    const raw = readFileSync(join(dir, m.id, "messages.jsonl"), "utf8").trim().split("\n")
-    expect(raw).toHaveLength(2)
-    expect(JSON.parse(raw[0]).blocks[0].text).toBe("hi")
+    const events = s.readEvents(m.id)
+    expect(events.filter((e) => e.type === "message")).toHaveLength(2)
+    const raw = readFileSync(join(dir, m.id, "events.jsonl"), "utf8").trim().split("\n")
+    expect(raw).toHaveLength(3) // session.created + 2 message 事件
     expect(s.meta(m.id)!.updatedAt > before).toBe(true)
     expect(s.readMessages(m.id)).toHaveLength(2)
+    expect(s.readMessages(m.id)[0].blocks[0].text).toBe("hi")
   })
 
   it("truncates corrupt trailing line, throws on corrupt middle line", () => {
     const s = new SessionStore(dir)
     const m = s.create()
     s.appendMessage(m.id, newMessage(m.id, "user", [{ id: "blk_1", type: "text", text: "ok" }]))
-    const f = join(dir, m.id, "messages.jsonl")
-    writeFileSync(f, readFileSync(f, "utf8") + '{"id":"msg_x","role":"user","blocks":[{broken')
+    const f = join(dir, m.id, "events.jsonl")
+    writeFileSync(f, readFileSync(f, "utf8") + '{"type":"message","id":"msg_x","role":"user","blocks":[{broken')
     expect(s.readMessages(m.id)).toHaveLength(1) // 尾行损坏被丢弃
     const lines = readFileSync(f, "utf8").trim().split("\n")
     writeFileSync(f, ["{broken-middle", ...lines.slice(1)].join("\n"))
@@ -60,8 +62,8 @@ describe("SessionStore", () => {
   it("newline-separates appends after a torn crash line so only the torn message is lost", () => {
     const s = new SessionStore(dir)
     const m = s.create()
-    const f = join(dir, m.id, "messages.jsonl")
-    writeFileSync(f, '{"id":"msg_torn","role":"user","blocks":[{broken') // 崩溃残留：无结尾换行
+    const f = join(dir, m.id, "events.jsonl")
+    writeFileSync(f, '{"type":"message","id":"msg_torn","role":"user","blocks":[{broken') // 崩溃残留：无结尾换行
     const msg = newMessage(m.id, "user", [{ id: "blk_1", type: "text", text: "ok" }])
     s.appendMessage(m.id, msg)
     const out = s.readMessages(m.id)
@@ -74,9 +76,9 @@ describe("SessionStore", () => {
   it("truncates torn tail at a byte offset so multibyte lines survive the repair", () => {
     const s = new SessionStore(dir)
     const m = s.create()
-    const f = join(dir, m.id, "messages.jsonl")
+    const f = join(dir, m.id, "events.jsonl")
     const chinese = newMessage(m.id, "user", [{ id: "blk_0", type: "text", text: "你好世界" }])
-    writeFileSync(f, JSON.stringify(chinese) + "\n" + '{"id":"msg_torn","role":"user","blocks":[{broken') // 有效中文行 + 撕裂尾行
+    writeFileSync(f, JSON.stringify({ type: "message", ...chinese }) + "\n" + '{"type":"message","id":"msg_torn","role":"user","blocks":[{broken') // 有效中文行 + 撕裂尾行
     const msg = newMessage(m.id, "user", [{ id: "blk_1", type: "text", text: "ok" }])
     s.appendMessage(m.id, msg)
     const out = s.readMessages(m.id)
@@ -210,5 +212,40 @@ describe("queue persistence", () => {
     delete raw.dispositionOverride
     writeFileSync(join(dir, meta.id, "meta.json"), JSON.stringify(raw))
     expect(store.meta(meta.id)!.queue).toBeUndefined()
+  })
+})
+
+describe("SessionStore event sourcing", () => {
+  it("create 产生 session.created 事件与投影 meta", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("标题", undefined, "/w")
+    const events = store.readEvents(meta.id)
+    expect(events[0]).toMatchObject({ type: "session.created", title: "标题", workdir: "/w" })
+    expect(store.meta(meta.id)!.title).toBe("标题")
+  })
+
+  it("appendMessage 写 message 事件，readMessages 还原", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create()
+    store.appendMessage(meta.id, { id: "m1", sessionId: meta.id, role: "user", blocks: [{ type: "text", text: "hi" }], createdAt: "2026-01-02T00:00:00.000Z" } as never)
+    expect(store.readMessages(meta.id)).toHaveLength(1)
+    expect(store.meta(meta.id)!.updatedAt).toBe("2026-01-02T00:00:00.000Z")
+  })
+
+  it("appendCompaction 写 compaction 事件并投影出 meta.compaction", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create()
+    store.appendCompaction(meta.id, { at: "2026-01-02T00:00:00.000Z", trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
+    expect(store.readCompactions(meta.id)).toHaveLength(1)
+    expect(store.meta(meta.id)!.compaction).toEqual({ segments: [{ upto: "m1", summary: "s" }], top: "t", upto: "m1" })
+  })
+
+  it("rebuildMeta 从事件流全量重建投影", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("旧")
+    store.updateMeta(meta.id, { title: "新" })
+    rmSync(join(dir, meta.id, "meta.json")) // 模拟投影丢失
+    const rebuilt = store.rebuildMeta(meta.id)!
+    expect(rebuilt.title).toBe("新")
   })
 })
