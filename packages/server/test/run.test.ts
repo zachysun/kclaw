@@ -1094,8 +1094,11 @@ describe("RunManager context compaction v3", () => {
     const { env, manager } = makeEnv(recordRequests(scriptClient([textTurn("主回复")]), reqs))
     const session = env.sessions.create("未触发")
     const seeded = seedHistory(env.sessions, session.id, 2)
-    env.sessions.updateMeta(session.id, {
-      compaction: { segments: [{ upto: seeded[1]!.id, summary: "段摘要A" }], top: "总摘要A", upto: seeded[1]!.id },
+    // 事件源下 meta.compaction 由 compaction 事件投影而来：用 appendCompaction 播种
+    // 既有压缩状态（updateMeta 不再直接写 compaction，避免与事件重复计段）。
+    env.sessions.appendCompaction(session.id, {
+      at: new Date().toISOString(), trigger: "manual", from: null, upto: seeded[1]!.id,
+      messages: 2, segmentSummary: "段摘要A", top: "总摘要A",
     })
     const socket = new FakeSocket()
     env.bus.subscribe(session.id, socket)

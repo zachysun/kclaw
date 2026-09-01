@@ -5,7 +5,7 @@
  * （条目退回重试不无声消失）与条目级失败可见性（queue_entry_failed）。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
-import { mkdtempSync, rmSync, readFileSync } from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SessionStore, defaultConfig, resolvePaths } from "@kclaw/core"
@@ -68,7 +68,7 @@ describe("submit / driver", () => {
     await first.outcome
     await a.outcome
     await b.outcome
-    const lines = readFileSync(join(home, "sessions", meta.id, "messages.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l))
+    const lines = sessions.readMessages(meta.id)
     const users = lines
       .filter((m: { role: string }) => m.role === "user")
       .map((m: { id: string; blocks: Array<{ type: string; text?: string }> }) => ({ id: m.id, text: m.blocks.find((x) => x.type === "text")!.text }))
@@ -158,7 +158,7 @@ describe("submit / driver", () => {
     await it.outcome
     await w.outcome
     release() // 中断已解除流等待；放行门上的挂起生成器，避免悬挂
-    const lines = readFileSync(join(home, "sessions", meta.id, "messages.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l))
+    const lines = sessions.readMessages(meta.id)
     const texts = lines.filter((m: { role: string }) => m.role === "user").map((m: { blocks: Array<{ text?: string }> }) => m.blocks[0]!.text)
     expect(texts).toEqual(["first", "cutter", "waiter"]) // 不吞已排队消息，只插队
   })
@@ -211,7 +211,7 @@ describe("submit / driver", () => {
       // 塞回队首的 w1 由重启的驱动器重试执行（等待方已见过拒绝，事件流照常）
       expect((await w2.outcome).stopReason).toBe("end_turn")
       expect((await w3.outcome).stopReason).toBe("end_turn")
-      const lines = readFileSync(join(home, "sessions", meta.id, "messages.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l))
+      const lines = sessions.readMessages(meta.id)
       const texts = lines.filter((m: { role: string }) => m.role === "user").map((m: { blocks: Array<{ text?: string }> }) => m.blocks[0]!.text)
       expect(texts).toEqual(["first", "w1", "w2", "w3"])
       expect(sessions.meta(meta.id)!.queue ?? []).toHaveLength(0)
@@ -259,7 +259,7 @@ describe("steer", () => {
     gate.releaseTool()
     gate.releaseLlm()
     expect((await run.outcome).stopReason).toBe("end_turn")
-    const lines = readFileSync(join(home, "sessions", meta.id, "messages.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l))
+    const lines = sessions.readMessages(meta.id)
     const injected = lines.find((m: { id: string }) => m.id === s.messageId)
     expect(injected.blocks[0].text).toBe("转向：改用方案 B")
   })
@@ -285,8 +285,7 @@ describe("steer", () => {
     // good 不被连带丢掉，随 #demoteSteer 降级仍被执行并进 JSONL
     const settleGood = async (): Promise<void> => {
       for (;;) {
-        const all = readFileSync(join(home, "sessions", meta.id, "messages.jsonl"), "utf8")
-        if (all.includes(`"id":"${good.messageId}"`)) return
+        if (sessions.readMessages(meta.id).some((m) => m.id === good.messageId)) return
         await new Promise((r) => setTimeout(r, 10))
       }
     }
@@ -296,8 +295,7 @@ describe("steer", () => {
     expect(events.some((e) => e.type === "message.steered")).toBe(false)
     // 未被登记 injected（旧实现会谎报 injected）
     expect(mgr.queueCancel(meta.id, bad.messageId)).toEqual({ ok: false, reason: "not_found" })
-    const all = readFileSync(join(home, "sessions", meta.id, "messages.jsonl"), "utf8")
-    expect(all.includes(`"id":"${bad.messageId}"`)).toBe(false) // bad 从未注入
+    expect(sessions.readMessages(meta.id).some((m) => m.id === bad.messageId)).toBe(false) // bad 从未注入
   })
 
   it("steer buffered across an abort demotes via #demoteSteer (original order, executes after, no steered events)", async () => {
@@ -335,7 +333,7 @@ describe("steer", () => {
     }
     await settle()
     expect(events.some((e) => e.type === "message.steered" && (e.payload.messageId === s1.messageId || e.payload.messageId === s2.messageId))).toBe(false)
-    const lines = readFileSync(join(home, "sessions", meta.id, "messages.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l))
+    const lines = sessions.readMessages(meta.id)
     const texts = lines.filter((m: { role: string }) => m.role === "user").flatMap((m: { blocks: Array<{ type: string; text?: string }> }) => m.blocks.filter((b) => b.type === "text").map((b) => b.text!))
     expect(texts).toEqual(["start", "s1", "s2"])
   })
@@ -365,8 +363,7 @@ describe("queueCancel", () => {
     gate.releaseTool()
     gate.releaseLlm()
     await run.outcome
-    const all = readFileSync(join(home, "sessions", meta.id, "messages.jsonl"), "utf8")
-    expect(all.includes(`"id":"${s.messageId}"`)).toBe(false) // 注入前撤回：不进 JSONL
+    expect(sessions.readMessages(meta.id).some((m) => m.id === s.messageId)).toBe(false) // 注入前撤回：不进 JSONL
     // 已注入场景：前半段已耗尽脚本客户端的调用计数（第 3 次调用直接 end_turn、
     // 不再有工具批次，边界 drain 无从发生），换一套新门闩让 run2 真正走一轮
     // 工具批次，drain 才会取走 s2 并登记 #injectedIds（登记随实例，须同一 mgr 应答）。
@@ -445,20 +442,16 @@ describe("recoverQueues", () => {
       { messageId: "msg_i", disposition: "interrupt", text: "i", trigger: "user", enqueuedAt: new Date().toISOString() },
     ] })
     manager.recoverQueues()
-    const jsonl = join(home, "sessions", meta.id, "messages.jsonl")
-    // 轮询到全部 3 条 user 行 + 各自 assistant 回复落盘（3 run × 2 行 = 6 行）：
-    // 只数 user 行会在 run 仍在写盘时放行，与 afterEach 的 rmSync 竞争。
+    // 轮询到全部 3 条 user 消息 + 各自 assistant 回复落盘（3 run × 2 条 = 6 条）：
+    // 只数 user 消息会在 run 仍在写盘时放行，与 afterEach 的 rmSync 竞争。
     // 上限 50×20ms：回归时以明确断言失败，而非静默超时。
     for (let i = 0; i < 50; i++) {
-      try {
-        const parsed = readFileSync(jsonl, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l))
-        if (parsed.filter((m: { role: string }) => m.role === "user").length >= 3 && parsed.length >= 6) break
-      } catch { /* 尚未建文件 */ }
+      const messages = sessions.readMessages(meta.id)
+      if (messages.filter((m) => m.role === "user").length >= 3 && messages.length >= 6) break
       await new Promise((r) => setTimeout(r, 20))
     }
     expect(sessions.meta(meta.id)!.queue ?? []).toHaveLength(0)
-    const lines = readFileSync(jsonl, "utf8").trim().split("\n").map((l) => JSON.parse(l))
-    const texts = lines.filter((m: { role: string }) => m.role === "user").map((m: { blocks: Array<{ text?: string }> }) => m.blocks[0]!.text)
+    const texts = sessions.readMessages(meta.id).filter((m) => m.role === "user").map((m: { blocks: Array<{ text?: string }> }) => m.blocks[0]!.text)
     expect(texts).toEqual(["s", "w", "i"])
   })
 

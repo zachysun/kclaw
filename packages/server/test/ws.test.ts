@@ -342,7 +342,7 @@ describe("GET /ws", () => {
 describe("GET /ws send guard on a dead socket", () => {
   // Real stores + a real RunManager (the ws-run.test.ts wiring): send_message
   // rides run.submit, whose dequeued-entry history read throws on a corrupt
-  // messages.jsonl. Per-session serialization lets the test ORDER the failure
+  // events.jsonl. Per-session serialization lets the test ORDER the failure
   // after the client is gone: #1 hangs in a gated llm, #2 queues behind it,
   // the client disconnects, the log is corrupted, and only then is the gate
   // released — #2's store read fails with the client already gone.
@@ -437,8 +437,10 @@ describe("GET /ws send guard on a dead socket", () => {
       // be dropped as a crash artifact) and release the gate: #1 appends and
       // completes (appending never re-parses the file), #2 dequeues, its
       // history read throws, and the failure settles its outcome promise
-      // silently (no reply — the socket is already gone).
-      const log = join(paths.sessionsDir, session.id, "messages.jsonl")
+      // silently (no reply — the socket is already gone). The first line is
+      // session.created; once the run appended its message it is a middle
+      // line, so readEvents throws on it.
+      const log = join(paths.sessionsDir, session.id, "events.jsonl")
       writeFileSync(log, `{not json\n${readFileSync(log, "utf8")}`, "utf8")
       release()
       await waitUntil(() => sawEvent("run.completed"))
