@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { MemoryPipeline, type PipelineDeps } from "../../src/memory/pipeline.js"
 import { projectIdFor } from "../../src/memory/layout.js"
 import { SessionStore } from "../../src/session/store.js"
+import type { MemoryEvent } from "../../src/session/events.js"
 import type { LlmClient, LlmStreamEvent } from "../../src/provider/types.js"
 import { newMessage } from "../../src/protocol/messages.js"
 import { scriptedLlm } from "./helpers.js"
@@ -182,6 +183,41 @@ describe("runTrigger", () => {
     ].join("\n"), "utf8")
     await pipe.runTrigger(WORKDIR, "interval")
     expect(readFileSync(join(projectDir, "old.md"), "utf8")).toContain("status: active")
+  })
+
+  it("memory 事件带 trigger 与归属 sessionId 发出", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    seedMessages(meta.id, ["内容"])
+    // 预置已有线让 append 命中（目标线缺失会降级为 new-thread）
+    const projectDir = join(root, "memory", "projects", projectIdFor(WORKDIR))
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(join(projectDir, "x.md"), [
+      "---", "topic: x", "title: X", "status: active", "created: 2026-08-01", "updated: 2026-08-01", "---", "",
+      "## 2026-08-01 · 旧", "", "- 做了什么：旧", "",
+    ].join("\n"), "utf8")
+    const audits: MemoryEvent[] = []
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "x", op: "append", content: "- 做了什么：新情节" }] })]), model: "m" }),
+      audit: (e) => audits.push({ type: "memory", at: e.at!, ...e } as MemoryEvent),
+    })
+    await pipe.runTrigger(WORKDIR, "manual", "ses_A")
+    expect(audits.some((a) => a.trigger === "manual" && a.kind === "episode" && a.op === "append" && a.sessionId === "ses_A")).toBe(true)
+  })
+
+  it("cognition 内化事件带 trigger 与归属 sessionId", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    seedMessages(meta.id, ["内容"])
+    const llm = scriptedLlm([
+      JSON.stringify({ actions: [{ file: "t1", op: "new-thread", thread: "t1", title: "T1", content: "情节", status: "inactive" }] }),
+      JSON.stringify({ actions: [{ target: "rule", name: "general", op: "append", content: "内化规则", source: "t1#2026-08-28" }] }),
+    ])
+    const audits: MemoryEvent[] = []
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      resolveLlm: () => ({ llm, model: "m" }),
+      audit: (e) => audits.push({ type: "memory", at: e.at!, ...e } as MemoryEvent),
+    })
+    await pipe.runTrigger(WORKDIR, "follow", "ses_B")
+    expect(audits.some((a) => a.trigger === "follow" && a.kind === "cognition" && a.op === "append" && a.file === "rule/general" && a.sessionId === "ses_B")).toBe(true)
   })
 })
 

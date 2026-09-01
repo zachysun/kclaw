@@ -5,6 +5,7 @@ import { collectStreamText } from "../provider/collect.js"
 import { renderSegment } from "../session/compaction.js"
 import type { Message } from "../protocol/messages.js"
 import type { SessionStore } from "../session/store.js"
+import type { MemoryEvent } from "../session/events.js"
 import { MemoryLayout } from "./layout.js"
 import { WriteLedger, type Watermark } from "./ledger.js"
 import {
@@ -36,12 +37,18 @@ export interface MemoryWrittenEvent {
   scope?: string
 }
 
+/** 记忆落盘通知（Task 6）：pipeline 在每次写入后回调，at 由 pipeline 补；
+ *  sessionId 是触发该次写入的会话（interval 由 MemorySystem 回落为项目最近活动会话）。 */
+export type MemoryAudit = Omit<MemoryEvent, "type" | "at"> & { at?: string; sessionId?: string }
+
 export interface PipelineDeps {
   /** 每次触发时现取提取/内化用的 llm 与 model（model 为已回落解析后的提取模型）。
    *  由装配方（MemorySystem）在闭包里做 extractModel 回落主模型解析（spec 4.3）。 */
   resolveLlm: () => { llm: LlmClient; model: string }
   embed?: EmbeddingClient                        // 判定链通过时才传入；缺省 = 纯关键词
   emit?: (e: MemoryWrittenEvent) => void
+  /** 记忆落盘通知（Task 6）：由装配方接成会话事件流 appendEvent。 */
+  audit?: (e: MemoryAudit) => void
   log?: (msg: string) => void                    // 缺省 console.error
   now?: () => Date
   /** 自动收束阈值（spec 5）：线最近活动距今超过该天数 → inactive；缺省 14。 */
@@ -188,6 +195,11 @@ export class MemoryPipeline {
   #now(): Date { return this.#deps.now?.() ?? new Date() }
   #log(msg: string): void { (this.#deps.log ?? ((m) => console.error(m)))(msg) }
 
+  /** 记忆落盘通知（Task 6）：缺省 no-op；at 由 pipeline 统一补（now 时刻）。 */
+  #audit(e: MemoryAudit): void {
+    this.#deps.audit?.({ ...e, at: e.at ?? this.#now().toISOString() })
+  }
+
   #lock<T>(projectId: string, fn: () => Promise<T>): Promise<T> {
     const prev = this.#locks.get(projectId) ?? Promise.resolve()
     const run = prev.then(fn)
@@ -214,12 +226,12 @@ export class MemoryPipeline {
     return idx
   }
 
-  async runTrigger(workdir: string, trigger: PipelineTrigger): Promise<void> {
+  async runTrigger(workdir: string, trigger: PipelineTrigger, sessionId?: string): Promise<void> {
     const { id } = this.#layout.ensureProject(workdir)
-    return this.#lock(id, () => this.#runLocked(id, workdir, trigger))
+    return this.#lock(id, () => this.#runLocked(id, workdir, trigger, sessionId))
   }
 
-  async #runLocked(projectId: string, workdir: string, trigger: PipelineTrigger): Promise<void> {
+  async #runLocked(projectId: string, workdir: string, trigger: PipelineTrigger, sessionId?: string): Promise<void> {
     const ledger = new WriteLedger(join(this.#layout.projectDir(projectId), "state.json"))
     // 选范围（项目维度，spec 4.1）：该项目全部会话的新消息。manual/immediate 覆盖到
     // 当前时刻（全量重扫）；interval/follow 按两个水位中最靠后的那个取增量，后到者不重复提取。
@@ -230,26 +242,26 @@ export class MemoryPipeline {
     const range = this.#messagesSince(rows, watermark)
     if (range.length === 0) {
       // 空批次也扫（spec 5）：项目静止（无新消息）时仍要收束到期的 active 线。
-      const inactivated = await this.#maybeAutoInactivate(projectId)
+      const inactivated = await this.#maybeAutoInactivate(projectId, trigger, sessionId)
       if (inactivated.length > 0) {
         this.#reindexProject(projectId)
         this.#rebuildMemoryMd(projectId)
         // 顺带内化检查（spec 4.2/6）：本次收束的线同样要总结——否则静止项目的
         // 到期线收束为 inactive 后，认知永远不会被内化（线不复活、收束只扫
         // active，之后再无新情节触发）。
-        await this.#maybeConsolidateTouched(projectId, new Set(inactivated))
+        await this.#maybeConsolidateTouched(projectId, new Set(inactivated), trigger, sessionId)
       }
       return
     }
     const actions = await this.#extract(projectId, range)
     const touched = new Set<string>()
     for (const action of actions) {
-      try { this.#applyThreadAction(projectId, action); touched.add(action.file) }
+      try { this.#applyThreadAction(projectId, action, trigger, sessionId); touched.add(action.file) }
       catch (err) { this.#log(`kclaw memory action skipped: ${String(err)}`) }
     }
     this.#advance(ledger, trigger, range)
     // 时间自动（spec 5）：每次管线跑完顺带扫描全部 active 线收束；空批次也扫。
-    const inactivated = await this.#maybeAutoInactivate(projectId)
+    const inactivated = await this.#maybeAutoInactivate(projectId, trigger, sessionId)
     for (const t of inactivated) touched.add(t)
     if (touched.size > 0) {
       this.#reindexProject(projectId)
@@ -261,7 +273,7 @@ export class MemoryPipeline {
       }
     }
     // 顺带内化检查（spec 4.2/6）：本次涉及的线若已 inactive 则总结一次。
-    await this.#maybeConsolidateTouched(projectId, touched)
+    await this.#maybeConsolidateTouched(projectId, touched, trigger, sessionId)
   }
 
   #sessionRows(projectId: string): Array<{ id: string; createdAt: string; messages: Message[] }> {
@@ -323,7 +335,7 @@ export class MemoryPipeline {
     })
   }
 
-  #applyThreadAction(projectId: string, action: ExtractAction): void {
+  #applyThreadAction(projectId: string, action: ExtractAction, trigger: PipelineTrigger, sessionId?: string): void {
     const dir = this.#layout.projectDir(projectId)
     const path = join(dir, `${action.file}.md`)
     const date = todayOf(this.#now())
@@ -334,13 +346,14 @@ export class MemoryPipeline {
       }))
       writeThreadFile(path, (t) => appendSection({ ...t, title: t.title || (action.title ?? t.topic) }, { date, heading: action.title ?? action.file, body: action.content }), () => tf)
       this.#deps.emit?.({ type: "memory.written", path, kind: "episode", topic: action.file })
+      this.#audit({ trigger, kind: "episode", op: action.op, topic: action.file, sessionId })
       return
     }
     // append / update：目标线不存在 → 按 new-thread 处理并记日志（spec 11）
     const raw = readFileSyncSafe(path)
     if (raw === undefined) {
       this.#log(`kclaw memory action targets missing thread ${action.file}: treating as new-thread`)
-      this.#applyThreadAction(projectId, { ...action, op: "new-thread", thread: action.thread ?? action.file })
+      this.#applyThreadAction(projectId, { ...action, op: "new-thread", thread: action.thread ?? action.file }, trigger, sessionId)
       return
     }
     const currentIsInactive = parseThreadFile(raw)?.status === "inactive"
@@ -356,6 +369,7 @@ export class MemoryPipeline {
       writeThreadFile(path, (tf) => ({ ...tf, status: "active" }), () => { throw new Error("unreachable") }) // inactive → active 复活（spec 5）
     }
     this.#deps.emit?.({ type: "memory.written", path, kind: "episode", topic: action.file })
+    this.#audit({ trigger, kind: "episode", op: action.op, topic: action.file, sessionId })
   }
 
   /** 项目库全部情节条目（从线文件读：文件是真相，索引是派生物）。 */
@@ -404,7 +418,7 @@ export class MemoryPipeline {
   }
 
   /** 时间自动 inactive（spec 5）：扫描全部 active 线，闲置超阈值则收束；返回本次收束的线。 */
-  async #maybeAutoInactivate(projectId: string): Promise<string[]> {
+  async #maybeAutoInactivate(projectId: string, trigger: PipelineTrigger, sessionId?: string): Promise<string[]> {
     const dir = this.#layout.projectDir(projectId)
     const limitDays = this.#inactiveDays
     const inactivated: string[] = []
@@ -416,17 +430,18 @@ export class MemoryPipeline {
       if (idleDays >= limitDays) {
         writeThreadFile(join(dir, f.name), (t) => ({ ...t, status: "inactive" }), () => { throw new Error("unreachable") })
         inactivated.push(topic)
+        this.#audit({ trigger, kind: "episode", op: "inactivate", topic, sessionId })
       }
     }
     return inactivated
   }
 
   /** 顺带内化检查（spec 4.2/6）：本次涉及的线若已 inactive 则总结一次。 */
-  async #maybeConsolidateTouched(projectId: string, touched: Set<string>): Promise<void> {
+  async #maybeConsolidateTouched(projectId: string, touched: Set<string>, trigger: PipelineTrigger, sessionId?: string): Promise<void> {
     const dir = this.#layout.projectDir(projectId)
     for (const topic of touched) {
       const tf = parseThreadFile(readFileSyncSafe(join(dir, `${topic}.md`)) ?? "")
-      if (tf !== undefined && tf.status === "inactive") await this.#consolidateLocked(projectId, tf)
+      if (tf !== undefined && tf.status === "inactive") await this.#consolidateLocked(projectId, tf, trigger, sessionId)
     }
   }
 
@@ -435,7 +450,8 @@ export class MemoryPipeline {
     return this.#lock(id, async () => {
       const tf = parseThreadFile(readFileSyncSafe(join(this.#layout.projectDir(id), `${topic}.md`)) ?? "")
       if (tf === undefined) throw new Error(`thread not found: ${topic}`)
-      await this.#consolidateLocked(id, tf)
+      // 手动内化：无触发会话归属（调用方未提供 sessionId），attached 会话交给 MemorySystem 回落
+      await this.#consolidateLocked(id, tf, "manual")
     })
   }
 
@@ -473,7 +489,7 @@ export class MemoryPipeline {
   }
 
   /** 内化实现（spec 6）；写 global 文件加全局 L2 锁。 */
-  async #consolidateLocked(projectId: string, tf: ThreadFile): Promise<void> {
+  async #consolidateLocked(projectId: string, tf: ThreadFile, trigger: PipelineTrigger, sessionId?: string): Promise<void> {
     if (!this.#consolidateEnabled) return
     await withL2Lock(async () => {
       const existing = this.#readExistingCognitions()
@@ -492,7 +508,7 @@ export class MemoryPipeline {
       }
       const actions = parseCognitionActions(raw, this.#log.bind(this))
       const source = `${tf.topic}#${tf.sections[tf.sections.length - 1]?.date ?? ""}`
-      for (const action of actions) await this.#applyCognitionAction(action, source)
+      for (const action of actions) await this.#applyCognitionAction(action, source, trigger, sessionId)
     })
   }
 
@@ -512,7 +528,7 @@ export class MemoryPipeline {
     return out.join("\n\n")
   }
 
-  async #applyCognitionAction(action: CognitionAction, source: string): Promise<void> {
+  async #applyCognitionAction(action: CognitionAction, source: string, trigger: PipelineTrigger, sessionId?: string): Promise<void> {
     if (action.target === "skill") {
       this.#log(`kclaw memory consolidate: skill target reserved, skipped (spec 2.3)`)
       return
@@ -529,6 +545,7 @@ export class MemoryPipeline {
       },
       () => ({ kind, name, title: name, scope: "global", created: todayOf(this.#now()), updated: todayOf(this.#now()), body: isAppend ? "" : withSource }))
     this.#deps.emit?.({ type: "memory.written", path, kind: "cognition", scope: result.scope })
+    this.#audit({ trigger, kind: "cognition", op: action.op, file: `${kind}/${name}`, scope: result.scope, source: action.source || source, sessionId })
     await this.#reindexGlobal()
   }
 

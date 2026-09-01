@@ -8,6 +8,7 @@ import { defaultConfig } from "../../src/storage/config.js"
 import { projectIdFor } from "../../src/memory/layout.js"
 import { VectorIndex } from "../../src/memory/indexer.js"
 import { scriptedLlm } from "./helpers.js"
+import { isMemoryEvent } from "../../src/session/events.js"
 
 let root: string
 let sessions: SessionStore
@@ -177,5 +178,61 @@ describe("searchAll", () => {
     expect(episode?.label).toContain("经历")
     expect(cognition?.text).toContain("注释说明原因")
     expect(cognition?.scope).toBe("global")
+  })
+})
+
+describe("memory events in session stream (Task 6)", () => {
+  it("triggerManual writes a memory event into the triggering session's stream", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    sessions.appendMessage(meta.id, { id: "m1", sessionId: meta.id, role: "user", blocks: [{ id: "b", type: "text", text: "重连风暴修好了" }], createdAt: new Date().toISOString() })
+    const before = sessions.meta(meta.id)!.updatedAt
+    const sys = makeSystem({
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "ws", op: "new-thread", thread: "ws", title: "重连线", content: "指数退避消灭了重连风暴" }] })]), model: "m" }),
+    })
+    await sys.triggerManual(WORKDIR)
+    const memoryEvents = sessions.readEvents(meta.id).filter(isMemoryEvent)
+    expect(memoryEvents.length).toBeGreaterThan(0)
+    const first = memoryEvents[0]!
+    expect(first.trigger).toBe("manual")
+    expect(first.kind).toBe("episode")
+    expect(first.op).toBe("new-thread")
+    expect(first.topic).toBe("ws")
+    // Ruling 5：事件体不携带 sessionId（由所在会话目录决定）
+    expect(first.sessionId).toBeUndefined()
+    // Ruling（projection）：memory 事件不推进投影 updatedAt
+    expect(sessions.meta(meta.id)!.updatedAt).toBe(before)
+  })
+
+  it("interval trigger without sessionId falls back to the project's recent session", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    sessions.appendMessage(meta.id, { id: "m1", sessionId: meta.id, role: "user", blocks: [{ id: "b", type: "text", text: "重连风暴修好了" }], createdAt: new Date().toISOString() })
+    const sys = makeSystem({
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "ws", op: "new-thread", thread: "ws", title: "重连线", content: "指数退避消灭了重连风暴" }] })]), model: "m" }),
+    })
+    await sys.triggerInterval(WORKDIR) // 不带 sessionId → 回落项目最近活动会话
+    const memoryEvents = sessions.readEvents(meta.id).filter(isMemoryEvent)
+    expect(memoryEvents.some((e) => e.trigger === "interval" && e.kind === "episode" && e.op === "new-thread")).toBe(true)
+  })
+
+  it("writeThread admin event attaches to the project's recent session", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    // 模拟真实项目：workdir.txt 标记（MemoryLayout.ensureProject 写入）+ 已有线文件
+    const projectDir = join(root, "memory", "projects", projectIdFor(WORKDIR))
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(join(projectDir, "workdir.txt"), WORKDIR, "utf8")
+    writeFileSync(join(projectDir, "line.md"), "---\ntopic: line\ntitle: 线\nstatus: active\n---\n\n正文\n", "utf8")
+    const sys = makeSystem()
+    sys.writeThread(projectIdFor(WORKDIR), "line", "改写后的正文")
+    const memoryEvents = sessions.readEvents(meta.id).filter(isMemoryEvent)
+    expect(memoryEvents.some((e) => e.trigger === "admin" && e.op === "overwrite" && e.kind === "episode" && e.topic === "line")).toBe(true)
+  })
+
+  it("deleteCognition admin event attaches to the globally most-recent session", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    const sys = makeSystem()
+    sys.writeCognition("rule", "general", "规则内容")
+    sys.deleteCognition("rule", "general")
+    const memoryEvents = sessions.readEvents(meta.id).filter(isMemoryEvent)
+    expect(memoryEvents.some((e) => e.trigger === "admin" && e.op === "delete" && e.kind === "cognition" && e.file === "rule/general")).toBe(true)
   })
 })

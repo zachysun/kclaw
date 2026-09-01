@@ -8,8 +8,9 @@ import type { LlmClient } from "../provider/types.js"
 import type { SessionStore } from "../session/store.js"
 import { MemoryLayout, projectIdFor } from "./layout.js"
 import { WriteLedger } from "./ledger.js"
-import { MemoryPipeline } from "./pipeline.js"
+import { MemoryPipeline, type MemoryAudit } from "./pipeline.js"
 import type { MemoryWrittenEvent } from "./pipeline.js"
+import type { MemoryEvent } from "../session/events.js"
 import { parseThreadFile, parseMemoryMd } from "./threads.js"
 import { parseCognitionFile, cognitionPath, writeCognitionFile } from "./cognition.js"
 import type { CogKind } from "./cognition.js"
@@ -70,6 +71,8 @@ export class MemorySystem {
   readonly #emit?: (e: MemoryWrittenEvent) => void
   readonly #log: (m: string) => void
   readonly #now: () => Date
+  /** 记忆落盘通知（Task 6）：接成会话事件流 appendEvent；sessionId 缺失时跳过（无处可挂）。 */
+  readonly #audit: (e: MemoryAudit) => void
   readonly #pipeline: MemoryPipeline
   /** 检索用全局认知索引（写入侧重建在 pipeline；检索前先对账保证"文件是真相"）。 */
   readonly #globalIndex: VectorIndex
@@ -95,6 +98,13 @@ export class MemorySystem {
     this.#emit = opts.emit
     this.#log = opts.log ?? ((m) => console.error(m))
     this.#now = opts.now ?? (() => new Date())
+    this.#audit = (e) => {
+      const id = e.sessionId
+      if (id === undefined) return // 无归属会话：跳过（admin/手动内化在无会话项目上不落事件）
+      const { sessionId: _sid, at, ...rest } = e
+      // 事件体不携带 sessionId（Ruling 5：由所在会话目录决定）
+      this.#sessions.appendEvent(id, { type: "memory", at: at ?? this.#now().toISOString(), ...rest } as MemoryEvent)
+    }
     this.#globalIndex = new VectorIndex(join(this.#layout.globalDir, "vectors.db"))
     this.#pipeline = new MemoryPipeline(opts.memoryDir, opts.sessions, {
       resolveLlm: () => {
@@ -102,7 +112,7 @@ export class MemorySystem {
         const { llm, model } = this.#resolveLlm()
         return { llm, model: this.#config.memory.extractModel || model }
       },
-      embed: opts.embed, emit: opts.emit, log: this.#log, now: this.#now,
+      embed: opts.embed, emit: opts.emit, audit: this.#audit, log: this.#log, now: this.#now,
       threadInactiveDays: opts.config.memory.threadInactiveDays,
       consolidateEnabled: opts.config.memory.consolidate,
     })
@@ -280,16 +290,27 @@ export class MemorySystem {
 
   // ---- 触发入口（工具/调度器消费） ----
 
+  /** 项目最近活动会话（interval/admin-threads 无显式归属时的回落目标，Task 6）。 */
+  #recentSessionId(workdir: string): string | undefined {
+    return this.#sessions.list().filter((m) => (m.workdir ?? "") === workdir)
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))[0]?.id
+  }
+
+  /** 全局最近活动会话（global 认知 admin 事件归属，Task 6）。 */
+  #recentGlobalSessionId(): string | undefined {
+    return this.#sessions.list()[0]?.id
+  }
+
   /** 立刻写入（memory_save 工具，spec 7.3）：处理当前轮（水位推进两路）。 */
   async triggerImmediate(sessionId: string): Promise<void> {
     const meta = this.#sessions.meta(sessionId)
     const workdir = meta?.workdir ?? this.#config.workspace
-    await this.#pipeline.runTrigger(workdir, "immediate")
+    await this.#pipeline.runTrigger(workdir, "immediate", sessionId)
   }
 
   /** 手动写入（/memory save，spec 4.2 手动行）：默认当前项目。 */
-  async triggerManual(workdir: string): Promise<void> {
-    await this.#pipeline.runTrigger(workdir, "manual")
+  async triggerManual(workdir: string, sessionId?: string): Promise<void> {
+    await this.#pipeline.runTrigger(workdir, "manual", sessionId ?? this.#recentSessionId(workdir))
   }
 
   /** 手动内化。 */
@@ -300,13 +321,13 @@ export class MemorySystem {
   // ---- 定时/跟随触发与跟随门禁（Task 13 scheduler / run.ts 消费） ----
 
   /** 定时触发（scheduler interval 兜底，spec 4.2）：直通 pipeline 增量提取。 */
-  async triggerInterval(workdir: string): Promise<void> {
-    await this.#pipeline.runTrigger(workdir, "interval")
+  async triggerInterval(workdir: string, sessionId?: string): Promise<void> {
+    await this.#pipeline.runTrigger(workdir, "interval", sessionId ?? this.#recentSessionId(workdir))
   }
 
   /** 跟随触发（scheduler 对挂起检查补查，spec 4.2/11）。 */
-  async triggerFollow(workdir: string): Promise<void> {
-    await this.#pipeline.runTrigger(workdir, "follow")
+  async triggerFollow(workdir: string, sessionId?: string): Promise<void> {
+    await this.#pipeline.runTrigger(workdir, "follow", sessionId ?? this.#recentSessionId(workdir))
   }
 
   /** 记录最近一次定时触发的墙钟时间（落 <projectDir>/state.json，scheduler 判节拍）。 */
@@ -462,6 +483,7 @@ export class MemorySystem {
     writeFileAtomic(join(this.#layout.projectDir(projectId), `${topic}.md`), content)
     this.#pipeline.reindexProject(projectId)
     this.#pipeline.rebuildMemoryMd(projectId)
+    this.#audit({ trigger: "admin", kind: "episode", op: "overwrite", topic, sessionId: this.#recentSessionId(this.#layout.workdirOf(projectId) ?? "") })
   }
 
   /** 删线文件 + 重建索引与 MEMORY.md。 */
@@ -469,6 +491,7 @@ export class MemorySystem {
     rmSync(join(this.#layout.projectDir(projectId), `${topic}.md`), { force: true })
     this.#pipeline.reindexProject(projectId)
     this.#pipeline.rebuildMemoryMd(projectId)
+    this.#audit({ trigger: "admin", kind: "episode", op: "delete", topic, sessionId: this.#recentSessionId(this.#layout.workdirOf(projectId) ?? "") })
   }
 
   globalFiles(): CognitionFileInfo[] {
@@ -500,10 +523,12 @@ export class MemorySystem {
       () => ({ kind, name, title: name, scope: "global", created: today, updated: today, body: content }))
     // 与 writeThread 对齐：写后立即重建全局索引，检索无需等下次对账（spec 2.5）。
     void this.#pipeline.reindexGlobal().catch((err) => this.#log(`kclaw memory writeCognition reindex failed: ${String(err)}`))
+    this.#audit({ trigger: "admin", kind: "cognition", op: "overwrite", file: `${kind}/${name}`, sessionId: this.#recentGlobalSessionId() })
   }
 
   deleteCognition(kind: CogKind, name: string): void {
     rmSync(cognitionPath(this.#layout.globalDir, kind, name), { force: true })
     void this.#pipeline.reindexGlobal().catch((err) => this.#log(`kclaw memory deleteCognition reindex failed: ${String(err)}`))
+    this.#audit({ trigger: "admin", kind: "cognition", op: "delete", file: `${kind}/${name}`, sessionId: this.#recentGlobalSessionId() })
   }
 }
