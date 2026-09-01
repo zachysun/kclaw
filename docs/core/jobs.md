@@ -75,7 +75,7 @@ SQLite 表结构与之一一对应（`enabled` 存 0/1，驼峰字段转下划�
 5. 运行结束：`outcome.stopReason !== "error"` → `markRun(id, "ok", now)` + 广播 `job.completed {jobId, summary: stopReason}`；否则 `markRun(id, "error", ...)` + 广播 `job.failed {jobId, error}`（enqueue 本身抛错也走同一条失败记录路径）。到达终态时若 daemon 配置了 `notify.channels`，会经 notifier 异步推送一条终态通知（含 job 名、摘要与 `?session=` 会话链接；失败仅记日志，不重试、不阻塞 job 记录；channels 为空则完全不推送）。
 6. `finally` 里将 job.id 移出 `inFlight`——无论成败都移除该条目。
 
-**审计信息的位置**：没有独立的审计文件；一次触发的全部痕迹 = job 行上的 `lastRunAt/lastStatus/lastError` + 对应会话目录里完整的 `messages.jsonl`（job 会话与普通会话使用同一条持久化路径），以及广播的三个 `job.*` 事件。
+**审计信息的位置**：没有独立的审计文件；一次触发的全部痕迹 = job 行上的 `lastRunAt/lastStatus/lastError` + 对应会话目录里完整的 `events.jsonl` 事件流（job 会话与普通会话使用同一条持久化路径，消息即 `message` 事件），以及广播的三个 `job.*` 事件。
 
 ### 会话命名
 

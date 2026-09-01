@@ -105,7 +105,7 @@ export function makeTool<N extends string>(
 
 ### session 工具（`tools/session.ts`）
 
-**session_search** `{query, limit?}`：检索**当前会话**已压缩段的全文索引（`limit` 默认 5、最大 20；索引与重建机制见 [compaction](./compaction.md)）。每个命中输出两行——`- <段摘要>` 加缩进的匹配位置文本片段；会话没有压缩段（或 server 未注入检索后端）时输出 `(无可检索内容)`。safe + parallel，与 memory 工具同类：只读访问会话目录下的 index.db。
+**session_search** `{query, limit?}`：检索**当前会话**已压缩段的内容（`limit` 默认 5、最大 20；检索机制见 [compaction](./compaction.md)——每次调用现读会话事件流，按压缩段的 `upto` 取增量段区间做朴素文本匹配）。每个命中输出两行——`- <段摘要>` 加缩进的匹配位置文本片段；会话没有压缩段（或 server 未注入检索后端）时输出 `(无可检索内容)`。safe + parallel，与 memory 工具同类：只读访问会话目录下的事件流。
 
 工具**始终注册**（工具列表不随会话状态变化）：`createSessionTools(search?)` 的 search 参数缺席时工具仍在，只是查询一律返回"(无可检索内容)"——模型看到的工具集合稳定，不会因会话有没有压缩历史而变。
 

@@ -254,7 +254,7 @@ export function newId(prefix: IdPrefix): string {
 
 - **事件不持久化、不回放**。断线恢复 = HTTP `GET /sessions/:id/messages` 拉全量消息 + 只订阅新事件（WS `subscribe`）。单 WS 连接天然有序，事件不带序号——有意的简化。
 - **持久化的块永远是完整的**："写到一半的块"只存在于事件流中；`onMessage` 收到的消息是终稿快照。因此 JSONL 每行读取后自洽，无需校验。
-- **持久化格式**：`sessions/<id>/messages.jsonl`，一行一条 `JSON.stringify(message)`；meta（标题/时间戳）在单独的 `meta.json` 里。崩溃容忍：读到尾部残缺行（只写了一半的行）时丢弃、写前字节级修复（`storage/jsonl.ts` 的 `readJsonl` / `repairTornTail`）。
+- **持久化格式**：会话目录是事件溯源结构（见 [storage](./storage.md)）——`sessions/<id>/events.jsonl` 是唯一真相，一行一条 `JSON.stringify(event)`（消息即 `{type:"message"}` 事件，携带完整 Message）；`meta.json` 是投影快照（标题/时间戳等当前值，可由事件流重建）；`queue.jsonl` 存运行态排队。崩溃容忍：读到尾部残缺行（只写了一半的行）时丢弃、写前字节级修复（`storage/jsonl.ts` 的 `readJsonl` / `repairTornTail`）。
 - **先持久化后广播**：`message.completed` 永远跟在 `onMessage` 之后，事件流反映的是已持久化状态。
 
 ---

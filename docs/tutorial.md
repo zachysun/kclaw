@@ -95,7 +95,7 @@ REPL 里用 `/` 开头的命令管理会话：
 
 不手动指定标题也可以：新会话默认名为「新会话」，发出第一条消息后，kclaw 根据消息内容自动生成标题（不超过 30 字）；手动修改过的标题不会被覆盖。
 
-历史不会丢失：每条消息都写入 `~/.kclaw/sessions/<会话id>/messages.jsonl`。要继续上次的对话，可用 `kclaw chat --session <id>` 恢复指定会话，或进入 REPL 后用 `/sessions` 选择一个。
+历史不会丢失：每条消息都作为 `message` 事件写入 `~/.kclaw/sessions/<会话id>/events.jsonl`（会话目录采用事件溯源结构，见 [storage](./core/storage.md)）。要继续上次的对话，可用 `kclaw chat --session <id>` 恢复指定会话，或进入 REPL 后用 `/sessions` 选择一个。
 
 ## 5. 记忆
 
@@ -170,7 +170,7 @@ token 的处理：页面获取 token 后存入浏览器本地存储并从地址�
 ├── AGENTS.md        # agent 人设，会注入系统提示词
 ├── token            # 访问凭证
 ├── daemon.json      # daemon 运行信息（端口、pid）
-├── sessions/        # 每个会话一个目录，messages.jsonl 是完整对话
+├── sessions/        # 每个会话一个目录：events.jsonl 完整事件流（真相）+ meta.json 投影 + queue.jsonl 排队
 ├── memory/          # 记忆塔：global/（全局认知）+ projects/<项目id>/（项目情节），含 vectors.db 检索索引
 ├── jobs.db          # 定时任务
 ├── usage.db         # token 用量台账

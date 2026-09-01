@@ -91,7 +91,7 @@ port = app.server.address().port
 writeFileSync(<home>/daemon.json, {port, pid, startedAt})   ← 回填占位（同 startedAt、starting 移除）；listen 之后、tick 之前
 createNotifier(notify.channels)     ← 仅当 notify.channels 非空时创建；空则 undefined，tick 完全不推送
 void mcpManager.start()             ← 有管理器才执行；不阻塞就绪，连接随后陆续建立
-run.recoverQueues()                 崩溃恢复：meta.queue 整体重排，steer/interrupt 降级 wait（见 run-manager）
+run.recoverQueues()                 崩溃恢复：queue.jsonl 整体重排，steer/interrupt 降级 wait（见 run-manager）
 startSchedulerTick({...})           立即一次检查 + 每 30s 一次（deps 携带 notifier 与 webBase=`http://127.0.0.1:<port>`，用于推送中的 `?session=` 链接）
 startMemoryScheduler({...})         记忆调度器：定时 + 跟随兜底触发（默认 60s 扫一次，见 memory.md）
 return { port, token, pid, stop }

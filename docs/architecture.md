@@ -100,7 +100,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
            ├─ steering drain：steering() 取走引导缓冲消息逐条注入
            │    message.created → onMessage 持久化 → message.completed → message.steered
            └─ 回到下一轮 LLM 调用，直到 end_turn
-  ├─ deps.onMessage → SessionStore.appendMessage → sessions/<id>/messages.jsonl
+  ├─ deps.onMessage → SessionStore.appendMessage → sessions/<id>/events.jsonl（追加 message 事件 + 折进 meta.json 投影）
   └─ deps.onEvent  → bus.emit → JSON.stringify → 只发订阅了该 sessionId 的 socket
                                                           packages/server/src/bus.ts
   → run 收尾：usage.db 记一行用量（失败仅日志）；memory.write.idleMinutes>0 时挂一个
