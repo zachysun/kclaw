@@ -2,13 +2,13 @@
 
 ## 职责
 
-会话聊得越长，每次发给模型的上下文就越大，大到超出模型窗口后请求会直接失败。压缩机制把较早的对话转换成摘要、之后不再按原文发送，让每轮发送量回到预算以内；被压掉的细节仍然留在硬盘上，并可通过全文检索找回来。整套机制分三层，互相独立：
+会话聊得越长，每次发给模型的上下文就越大，大到超出模型窗口后请求会直接失败。压缩机制把较早的对话转换成摘要、之后不再按原文发送，让每轮发送量回到预算以内；被压掉的细节仍然留在硬盘上，并可通过 `session_search` 检索回来。整套机制分三层，互相独立：
 
 1. **触发与分界**（`packages/core/src/session/compaction.ts` 的 `estimateContextTokens` / `chooseBoundary`）：按 token 估算判断何时压缩、压到哪里。触发点有四个——收尾压缩、中途压缩、超限紧急急救、手动 `/compact`——都不在"用户发送消息"的路径上，发送永不等待压缩。
 2. **分层摘要**（同一模块的 `renderSegment` 加 `packages/server/src/run.ts` 的 `#compactV2` 编排）：两次不带工具的模型调用，先给新压掉的段生成"段摘要"，再归并进"总摘要"。
 3. **工具输出省略**（`packages/core/src/agent/context.ts` 的 `toProviderMessages`）：每次构造请求时在省略预算内从最新往回保留工具结果，装不下的换成一行占位文字，防止一次运行内的多次工具调用把上下文撑爆。
 
-外围还有三件配套物：会话级检索索引（`packages/core/src/session/segment-index.ts`）与 `session_search` 工具（`packages/core/src/tools/session.ts`）负责"找得回来"；手动压缩（`RunManager.compactSession` + HTTP/CLI/web 三个入口）负责"人能主动压"；压缩审计（会话目录下的 `compactions.jsonl`）负责"压过之后查得到"。调模型与写盘的编排全部在 server 侧，core 只提供可独立测试的纯函数。
+外围还有三件配套物：`session_search` 工具（检索函数 `packages/core/src/tools/session-search.ts`，直接扫会话事件流）负责"找得回来"；手动压缩（`RunManager.compactSession` + HTTP/CLI/web 三个入口）负责"人能主动压"；压缩审计（事件流里的 `compaction` 事件）负责"压过之后查得到"。调模型与写盘的编排全部在 server 侧，core 只提供可独立测试的纯函数。
 
 ---
 
@@ -17,8 +17,8 @@
 - **按 token 触发，不按消息条数**：一条消息可能是 10 个字也可能是一次返回 100KB 的工具输出，条数说明不了上下文大小。触发判断用估算：基准取最近一次真实请求的大小（最后一条助手消息记录的 `usage.inputTokens`，模型供应商返回的真实数字，天然含系统提示与工具定义的固定开销），基准之后的新消息按字符粗算（`estimateTokens`：CJK 字符每个记 0.75 个 token，其余字符四个记 1 个，结果向上取整）。估算整体偏大而非偏小——偏大只会让压缩提前发生，方向安全。
 - **细节只损失一次**：旧机制每次压缩都把旧摘要重新压一遍，细节一轮轮丢失。v2 把摘要拆成两层——**段摘要**针对一段对话生成之后永不修改，**总摘要**只做"旧总摘要 + 新段摘要"的归并。细节只在新段摘要素成时损失一次，总摘要随时可以从全部段摘要重跑归并重新生成（段摘要是不变的底稿，不依赖对话原文）。
 - **保留部分对齐用户消息**：分界起点固定落在一条用户消息上，保证压掉的段和保留的部分都是从"用户提问"开始的完整轮次，工具调用和它的结果永远在同一侧——OpenAI 兼容接口要求两者配对出现，拆开会直接报错。
-- **压缩不挡发送，失败不挡运行**：四个触发点全部不在发送路径上——发送消息后立即开始运行，压缩要么发生在运行结束后的收尾、要么在运行中途的迭代边界、要么是对超限错误的急救重试。摘要调用或 meta 写入抛错时只记日志并发出 `result:"failed"` 的结束事件，运行照常继续，下一次过线重新触发。最坏情况等于"没有压缩"，不会比现状差。
-- **索引与审计是外围，不是前提**：检索索引删了可以随时从会话原文重建；审计追加失败只记日志，不让已成功的压缩回退。
+- **压缩不挡发送，失败不挡运行**：四个触发点全部不在发送路径上——发送消息后立即开始运行，压缩要么发生在运行结束后的收尾、要么在运行中途的迭代边界、要么是对超限错误的急救重试。摘要调用抛错时发出 `result:"failed"` 的结束事件并记日志，运行照常继续，下一次过线重新触发；压缩事件（含投影）追加失败只记日志，不发失败事件（见"边界与出错"）。最坏情况等于"没有压缩"，不会比现状差。
+- **检索与审计是外围，不是前提**：`session_search` 每次调用现读事件流，没有需要维护或重建的持久索引；审计是事件流里的一条 `compaction` 事件，追加失败只记日志，不让已成功的压缩回退。
 - **循环窗口退居保险**：agent 循环"最多取最近 N 条消息"的硬上限从 40 放宽到 200（`packages/core/src/agent/loop.ts`），角色从主要控制手段退化为防止估算彻底失准的极端保险。
 
 ---
@@ -44,11 +44,11 @@
 
 ## 数据模型
 
-压缩状态分布在会话目录的三个文件里（目录结构见 [storage](./storage.md)）：
+压缩状态有两处体现（目录结构见 [storage](./storage.md)）：`meta.json` 的 `compaction` 字段（由 `compaction` 事件投影）与事件流里 append-only 的 `compaction` 事件（压缩审计本身）。
 
 ### meta.json 的 `compaction` 字段
 
-`SessionMeta`（`packages/core/src/session/store.ts`）上的可选字段，类型定义在 `packages/core/src/session/compaction.ts`：
+`SessionMeta`（`packages/core/src/session/store.ts`）上的可选字段，类型定义在 `packages/core/src/session/compaction.ts`；它由 `compaction` 事件**投影**而来（`applyEvent` 每次把新段折进 `segments`、更新 `top`/`upto`），`updateMeta` 不再直接合并它：
 
 ```ts
 export interface CompactionSegment { upto: string; summary: string }
@@ -62,13 +62,13 @@ export interface CompactionState { segments: CompactionSegment[]; top: string; u
 | `top` | 总摘要 |
 | `upto` | 总分界：这条消息之前（含它）都已压缩，之后的是保留部分（等于末段的 `upto`） |
 
-段的消息范围由相邻两个 `upto` 界定：第一段从会话开头（或旧格式升级点）到 `segments[0].upto`，其后每段从前一段的 `upto` 之后到本段 `upto`（`segmentRanges` 负责映射）。分界必须用消息 id，不得用序号——存储里消息没有序号，只有全局唯一 id。分界 id 在历史里找不到时（JSONL 被手动改过、消息被删），该分界及更早的段作废：作废点之后全部按原文处理，索引重建跳过作废段。
+段的消息范围由相邻两个 `upto` 界定：第一段从会话开头（或旧格式升级点）到 `segments[0].upto`，其后每段从前一段的 `upto` 之后到本段 `upto`（`segmentRanges` 负责映射）。分界必须用消息 id，不得用序号——存储里消息没有序号，只有全局唯一 id。分界 id 在历史里找不到时（事件流被手动改过、消息被删），该分界及更早的段作废：作废点之后全部按原文处理，`session_search` 对找不到 `upto` 的压缩段直接跳过（不误扫整条流）。
 
-**旧格式兼容**：meta 没有 `compaction` 但有旧字段 `compactedSummary`/`compactedUpto` 的会话，读取时把旧摘要当作总摘要的起点（`top` = 旧摘要，`segments` 为空），保留部分仍按旧 `compactedUpto` 分界；下一次压缩发生时结果写入新格式，同时删除旧字段（`updateMeta` 传 `undefined` patch）。不写迁移脚本；升级之前的内容没有分段记录，进不了检索索引——只影响老会话。
+**旧格式兼容**：meta 没有 `compaction` 但有旧字段 `compactedSummary`/`compactedUpto` 的会话，读取时把旧摘要当作总摘要的起点（`top` = 旧摘要，`segments` 为空），保留部分仍按旧 `compactedUpto` 分界。`compactedSummary`/`compactedUpto` 不再被清除（Task 5 删了唯一的清除调用），但运行侧读压缩视图时 `compaction` 优先（run.ts 的 `prev` 先读 `compaction`，见 [storage](./storage.md)），两者并存无功能影响。不写迁移脚本；升级之前的会话没有 `compaction` 事件，`session_search` 返回"无可检索内容"——直到第一次 v2 压缩（只影响老会话）。
 
-### compactions.jsonl（压缩审计）
+### 压缩审计（compaction 事件）
 
-每次压缩成功后追加一行 JSON（`SessionStore.appendCompaction`，经 core 的 `appendJsonlLine`，与消息写入同一套断尾修复机制）：
+每次压缩成功后往会话事件流追加一条 `compaction` 事件（`SessionStore.appendCompaction` → `appendEvent`，经 core 的 `appendJsonlLine`，与消息写入同一套断尾修复机制），payload 即压缩审计字段：
 
 ```ts
 export interface CompactionRecord {
@@ -84,11 +84,11 @@ export interface CompactionRecord {
 }
 ```
 
-压缩失败不记录（失败等于压缩没发生，无审计对象）。读取走 `readCompactions` / `GET /sessions/:id/compactions`，文件缺失返回 `[]`。
+压缩失败不记录（失败等于压缩没发生，无审计对象）。读取走 `readCompactions` / `GET /sessions/:id/compactions`（从事件流过滤 `compaction` 事件的只读投影视图），无事件返回 `[]`。
 
-### index.db（会话检索索引）
+### 会话检索（session_search）
 
-`~/.kclaw/sessions/<id>/index.db`，SQLite FTS5 全文索引（FTS5 是 SQLite 的全文检索扩展），两张表：`segments`（upto 主键，存段摘要与段全文）与 `segments_fts`（分词后的 token 串，靠 rowid 对应）。和会话同生共死，删除会话时随目录一起删；它只是可再生的缓存，任何时候删除都不丢数据。
+压缩段没有独立的检索索引（旧 `index.db` / `SegmentIndex` 已删除）——`session_search` 每次调用现读事件流、按相邻压缩段的 `upto` 取增量段区间做朴素文本匹配，详见下文"会话检索（session_search）"一节。
 
 ---
 
@@ -176,7 +176,7 @@ m1  m2  m3 │ m4  m5  m6  m7 │ m8 … m12
 - 没有任何可渲染内容的消息显示为 `<tool use>`。
 - 每行超过 2000 字符截断。
 
-这样"模型读过什么、改过什么、得到了什么"以缩写形式进入摘要输入。记忆自动提取管线与压缩**共用这个构造函数**（提取质量同步受益），分词器同理抽在 `packages/core/src/text/fts.ts` 供记忆索引与本模块的检索索引共用。
+这样"模型读过什么、改过什么、得到了什么"以缩写形式进入摘要输入。记忆自动提取管线与压缩**共用这个构造函数**（提取质量同步受益）。
 
 ### 第一次调用：段摘要
 
@@ -215,9 +215,9 @@ m1  m2  m3 │ m4  m5  m6  m7 │ m8 … m12
 
 归并是链式的：每次只合并两份输入，旧总摘要本来就浓缩了之前全部段落，链式结果等价于所有段的归并，且每次调用的输入大小恒定，不随会话长度增长。冲突的处理示例：段摘要 1 记着"已做决定：分界按条数保留 25 条"，段摘要 2 记着"分界改为按 token 目标 33%"，归并后是"分界按 token 目标 33%（早期版本按条数，已被推翻）"。
 
-800 字上限是有意的取舍：段落多了之后要点装不下是常态，装不下的细节只留在段摘要里（meta 和检索索引都存着），总摘要只负责脉络；模型要具体内容用 `session_search` 查段全文（见下文）。
+800 字上限是有意的取舍：段落多了之后要点装不下是常态，装不下的细节只留在段摘要里（段摘要以 `compaction` 事件持久化在事件流里，`session_search` 可检索），总摘要只负责脉络；模型要具体内容用 `session_search` 查段原文（见下文）。
 
-两次调用都使用主对话模型、不带工具、用 `collectStreamText` 收集结果；自动路径传入取消信号（`collectStreamText` 支持中止，信号触发时抛出、已收集的部分作废）。**两次调用全部成功之后才写任何数据**——meta 写入是摘要结果的唯一落盘动作，失败等于压缩没发生。手动压缩传入的重点说明以一行 `用户特别要求重点保留：{focus}` 追加到两次调用的用户消息末尾。
+两次调用都使用主对话模型、不带工具、用 `collectStreamText` 收集结果；自动路径传入取消信号（`collectStreamText` 支持中止，信号触发时抛出、已收集的部分作废）。**两次调用全部成功之后才写任何数据**——落盘动作是追加一条 `compaction` 事件（同时投影 `meta.compaction`）：摘要调用抛错则本次压缩作废（"throw = 压缩没发生"，回退按全量历史继续）；事件追加失败只记日志、不回退已成功的压缩（见"边界与出错"）。手动压缩传入的重点说明以一行 `用户特别要求重点保留：{focus}` 追加到两次调用的用户消息末尾。
 
 ### 过程可见性
 
@@ -280,19 +280,18 @@ llm.stream({ system: <人格>, messages: [
 
 ## 会话检索（session_search）
 
-- **索引**：每次压缩成功后，把新段的输入文本（给摘要模型看的那份 `renderSegment` 产物）和段摘要写进 `index.db`（`SegmentIndex.addSegment`，按 upto upsert）。检索时发现索引文件不存在而 meta 里有压缩段记录，就从会话 JSONL 按各段分界重新构造文本、重建索引（`SegmentIndex.ensure`；索引文件损坏同样删掉重建）。
-- **中文分词**：与记忆系统共用 `packages/core/src/text/fts.ts` 的 `tokenize`——ASCII 字母数字串按整词（转小写），CJK 连续串拆成相邻两字组合（bigram），解决 FTS5 默认分词查不到中文的问题。
-- **工具**（`packages/core/src/tools/session.ts`）：
+- **检索函数**（`packages/core/src/tools/session-search.ts` 的 `searchSessionEvents`，纯函数）：每次调用现读会话完整事件流（server 侧 `#buildSessionSearch` 经 `SessionStore.readEvents` 读入），只对压缩段做匹配——对每条 `compaction` 事件，取它覆盖的段区间（`(上一段 upto, 本段 upto]` 内的 `message` 事件，按相邻 `upto` 划分、每条消息只归属一段），把 query 对该段消息块做**朴素包含匹配**（`JSON.stringify(blocks)` 的子串判断，不切词、不建索引），命中归到该压缩事件的段摘要；`compaction` 事件的 `upto` 在流里找不到则跳过该段（不误扫整条流）；没有 `compaction` 事件或没有命中返回空。
+- **工具**（`packages/core/src/tools/session.ts` 的 `createSessionTools`）：
 
 | 项 | 值 |
 |----|----|
 | 参数 | `{ query: string（必填）, limit?: number }`，limit 默认 5、上限 20 |
 | 权限分类 | 与 `memory_search` 相同：safe + parallel（免确认、可并发） |
-| 检索范围 | 只检索当前会话的索引 |
-| 输出 | 每个命中一行 `- <段摘要>` 加缩进的匹配位置文本片段（命中 token 前后各约 150 字符） |
-| 无内容 | 会话没有压缩段时返回 `(无可检索内容)` |
+| 检索范围 | 只检索当前会话的压缩段（扫该会话事件流） |
+| 输出 | 每个命中一行 `- <段摘要>` 加缩进的文本片段（该段消息块序列化文本的前 200 字符） |
+| 无内容 | 会话没有压缩段、或没有命中时返回 `(无可检索内容)` |
 
-工具始终注册（工具列表不随会话状态变化）；检索函数由 server 每个 run 懒构造（`#buildSessionSearch`，首次调用才打开/重建索引）。
+工具始终注册（工具列表不随会话状态变化，未注入检索函数时同样返回 `(无可检索内容)`）；检索函数由 server 每个 run 懒构造（`#buildSessionSearch`），每次调用现读该会话事件流，没有需要维护或重建的持久索引。
 
 ---
 
@@ -313,7 +312,7 @@ llm.stream({ system: <人格>, messages: [
 
 ## 压缩审计
 
-`compactions.jsonl` 是自动与手动压缩共同的记录载体（手动压缩刻意不产生消息，纯靠消息流看不到它的痕迹）。审计页（`packages/web/src/audit/AuditView.tsx`）选中会话后额外拉取 `GET /sessions/:id/compactions`，把每条记录按发生时间混进消息轨迹渲染成一行：时间、触发方式（`自动（收尾）` / `自动（运行中）` / `手动`，带 `emergency` 标记的追加"·超限急救"，手动显示 focus）、被压范围（`from`–`upto`，首条为 null 显示"会话开头"）、消息条数；点击展开该次的段摘要与总摘要全文。无记录时不显示。消息轨迹本身仍然没有专门的审计接口（见 [http-api](../server/http-api.md)）。
+`compaction` 事件是自动与手动压缩共同的记录载体（手动压缩刻意不产生消息，纯靠消息流看不到它的痕迹），作为 append-only 事件流里的一条追加在会话目录 `events.jsonl` 中；`GET /sessions/:id/compactions` 是它的只读投影视图（从事件流过滤 `compaction` 事件）。审计页（`packages/web/src/audit/AuditView.tsx`）改拉 `GET /sessions/:id/events` 单源，按事件流序把 `compaction` 事件渲染成一行"压缩"行：触发方式（`自动（收尾）` / `自动（运行中）` / `手动`，带 `emergency` 标记的追加"·超限急救"，手动显示 focus）、被压范围（`from`–`upto`，首条为 null 显示"会话开头"）、消息条数；点击展开该次的段摘要与总摘要全文。无记录时不显示。消息轨迹本身仍然没有专门的审计接口（见 [http-api](../server/http-api.md)）。
 
 ---
 
@@ -335,31 +334,28 @@ llm.stream({ system: <人格>, messages: [
 
 ## 边界与出错
 
-原则：检索和索引相关的一切失败只记日志；摘要生成和 meta 写入失败则放弃本次压缩，运行照常继续。
+原则：检索与审计相关的一切失败只记日志；摘要生成失败则放弃本次压缩，运行照常继续。
 
 | 失败点 | 行为 |
 |--------|------|
 | 收尾压缩的摘要调用失败 | 记日志 + 发 `completed {result:"failed"}`，不写审计记录；下一次收尾或中途过线重新触发 |
 | 中途压缩的摘要调用失败 | 同上；运行不补救继续，靠工具输出省略兜底 |
-| 中途压缩被用户取消 | 发 `completed {result:"cancelled"}`，meta 无写入；本次运行内不再自动触发（取消标记），下次运行恢复正常 |
+| 中途压缩被用户取消 | 发 `completed {result:"cancelled"}`，不写压缩事件/投影；本次运行内不再自动触发（取消标记），下次运行恢复正常 |
 | 中途压缩被中止信号打断 | 同取消；运行本身走中止路径 |
-| meta 写入失败 | 同上（记日志 + failed）；meta 写入是摘要结果的唯一落盘动作，失败等于压缩没发生 |
-| 段索引写入失败 | 压缩照常生效，只记 `kclaw segment index … write failed:` 日志；检索时靠重建兜底 |
-| 审计记录追加失败 | 压缩照常生效，只记 `kclaw compaction audit … append failed:` 日志；不得因审计失败回退已成功的压缩 |
-| 分界消息 id 在历史里找不到 | 压缩状态作废，作废点之后全部按原文处理；索引重建跳过作废段 |
+| 压缩审计（compaction 事件）追加失败 | 压缩照常生效，只记 `kclaw compaction audit … append failed:` 日志；不得因审计失败回退已成功的压缩（事件追加即投影写入，下次写入自动补平投影） |
+| 分界消息 id 在历史里找不到 | 压缩状态作废，作废点之后全部按原文处理；`session_search` 对找不到 `upto` 的压缩段直接跳过 |
 | 请求真超限（前面所有手段失守） | 识别上下文超限错误 → 紧急压缩 → 整次请求静默重发一次；重发仍超限才把错误报给用户 |
 | 收尾压缩期间用户发消息 | 会话保持忙碌，新消息走既有排队路径，压缩完成后自动开跑 |
 | 会话运行中调 /compact | 拒绝，返回"会话正在运行" |
-| 索引文件损坏 | 下次检索时删除重建（`ensure`），段数据以 meta 与会话原文为准 |
 
 ---
 
 ## 关联
 
-- [memory](./memory.md)：共用的中文分词器与 FTS 检索模式；记忆提取与压缩共用的消息渲染
-- [storage](./storage.md)：会话目录布局、meta.json 与 JSONL 的追加/断尾修复、config 字段定义
+- [memory](./memory.md)：记忆提取与压缩共用的消息渲染（`renderSegment`）
+- [storage](./storage.md)：会话目录布局、events.jsonl 事件流与 meta 投影、JSONL 的追加/断尾修复、config 字段定义
 - [agent-loop](./agent-loop.md)：`toProviderMessages` 的窗口与预算驱动省略、循环的压缩视图与两个压缩钩子、超限重试、window 200 的兜底位置
 - [tools](./tools.md)：session_search 在工具体系中的注册与 safe/parallel 语义
 - [run-manager](../server/run-manager.md)：`#compactV2` 编排、四触发点的服务端装配、`cancelCompaction`、收尾压缩的串行化
-- [http-api](../server/http-api.md)：`POST /sessions/:id/compact` 与 `GET /sessions/:id/compactions`
-- [webui](../web/webui.md)：压缩指示行与取消按钮、折叠上下文条、审计页"压缩记录"轨迹行
+- [http-api](../server/http-api.md)：`POST /sessions/:id/compact`、`GET /sessions/:id/compactions` 与 `GET /sessions/:id/events`
+- [webui](../web/webui.md)：压缩指示行与取消按钮、折叠上下文条、审计页事件流里的"压缩"行

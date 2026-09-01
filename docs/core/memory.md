@@ -18,7 +18,7 @@
          ├──────────────────────────────────┤
    L1    │  项目情节 projects/<id>/（<topic>.md）│  ← 按项目分目录，检索 top-N 以 note 注入
          ├──────────────────────────────────┤
-   L0    │  原始对话（会话目录 messages.jsonl）  │  ← 不在这里，见 [compaction](./compaction.md)
+   L0    │  原始对话（会话目录 events.jsonl 里的 message 事件）│  ← 不在这里，见 [compaction](./compaction.md)
          └──────────────────────────────────┘
 ```
 
@@ -259,6 +259,23 @@ v2 提供三套人工管理面，全部落在既有文档：
 - `episode` 事件带 `topic`（线名），`cognition` 事件带 `scope`（新认知的 scope）；
 - 事件不带 `sessionId`（项目级事务）；订阅端（CLI / web）把它当成"已落盘"的轻提示，不驱动任何状态机——CLI dim 一行 `已写入记忆: <path>`，web 通知条显示同文案；web 的通知条**可点击**，跳转记忆页并自动打开对应文件（`episode` 按 `scope+topic` 打开线、`cognition` 按 path 打开认知文件，spec 9.1）。
 
+### 事件流里的 memory 事件（审计）
+
+除了上面"已落盘"的实时提示，每次记忆落盘还会在**触发会话**的事件流里追加一条 `memory` 事件（`MemorySystem` 的审计钩子接 `SessionStore.appendEvent`，`packages/core/src/memory/system.ts`）——它是可回查的审计记录，与 `memory.written`（总线实时事件、项目级轻提示、带 path）是**两回事**，别混淆。事件形状：
+
+```ts
+{ type: "memory", at: string,
+  trigger: "immediate" | "manual" | "interval" | "follow" | "admin",
+  kind: "episode" | "cognition",
+  op: "append" | "update" | "new-thread" | "rewrite" | "create" | "overwrite" | "delete" | "inactivate",
+  topic?: string, file?: string, scope?: string, source?: string }
+```
+
+- **归属规则**：memory 事件挂在**触发会话**的目录里——immediate（`memory_save` 工具）显式带会话；manual（`/memory save`，CLI/web 可指定会话）与 interval 缺省**回落该项目最近活动会话**（`recentSessionId`）；follow 挂**发起该检查的会话**（check.sessionId）；admin（记忆页的覆写/删除）挂"最近活动会话"——线文件操作挂该项目最近活动会话、全局认知操作挂**全局**最近活动会话。找不到归属会话时跳过（不落事件）。
+- **事件体不带 `sessionId` 字段**：会话由所在目录决定（Ruling 5），payload 里没有它。
+- **不推进投影 `updatedAt`**：`applyEvent` 对 `memory` 事件不更新任何投影字段（见 [storage](./storage.md) 的 events.jsonl 一节）。
+- 可通过 `GET /sessions/:id/events` 查询某会话的完整事件流（含 memory 事件），web 审计页把它们渲染成"记忆"行（见 [http-api](../server/http-api.md) 与 [webui](../web/webui.md)）。
+
 ## 边界与出错
 
 - **工作目录移动后项目记忆不跟随**：项目 id 依赖绝对路径的 SHA-1 前缀，`mv` 目录后 id 变化、旧项目记忆不再被检索（旧文件仍躺在 `projects/<旧id>/`）。这是确定性 id 的固有代价。
@@ -274,7 +291,7 @@ v2 提供三套人工管理面，全部落在既有文档：
 - [tools](./tools.md)：memory 工具在工具体系中的位置（safe/parallel 的含义）
 - [storage](./storage.md)：`KclawPaths.memoryDir` 的位置与迁移前的 v1 目录（`memory/notes/`、`memory/index.db` 现为迁移输入/被删除对象）
 - [agent-loop](./agent-loop.md)：note 块如何随消息持久化并发出 `note.emitted`
-- [compaction](./compaction.md)：共享的分词器与消息渲染的另一方（会话段索引、压缩摘要输入）
+- [compaction](./compaction.md)：共享的消息渲染与压缩摘要输入、会话检索（session_search）
 - [protocol](./protocol.md)：`memory.written` 事件的 payload 形状
 - [run-manager](../server/run-manager.md)：L2 常驻注入与 L1 note 注入的服务端组装、跟随门禁的挂起侧
 - [http-api](../server/http-api.md)：`/memory` 管理路由族

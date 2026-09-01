@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 37 个业务路由（健康/状态 2 个、会话 14 个、记忆 9 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 1 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`、`memory.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未装配时降级 503。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 39 个业务路由（健康/状态 2 个、会话 15 个、记忆 10 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 1 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`、`memory.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未装配时降级 503。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
@@ -10,7 +10,7 @@
 - **错误形状统一为 `{error: string}`**：会话/任务两个路由分组（scope）注册了 `setErrorHandler`，把 Fastify 的 body 解析错误（非法 JSON、空 body）也归一成这个形状；其余分组未注册（body 解析错误走 Fastify 默认形状 `{statusCode, error, message}`），客户端需兼容两种。
 - **404 显式可判别**：会话/任务路由先查存在性（`sessions.meta(id)` / `jobs.get(id)`），不存在返回 `404 {error:"session not found"|"job not found"}`，不依赖异常路径。
 - **配置接口只读且脱敏**：API key 永远掩码返回，没有写回路由——修改配置通过文件（config.yaml）进行，daemon 重启后生效。
-- **消息审计没有专门路由，压缩审计有只读接口**：消息轨迹页（web 的 `AuditView`）就是 `GET /sessions`（会话下拉）+ `GET /sessions/:id/messages`（按会话读取消息列表）两个只读接口组合而成，不存在 `/audit` 路由。压缩审计不同——手动压缩刻意不产生消息，纯靠消息流看不到它的痕迹，因此有专门的只读接口 `GET /sessions/:id/compactions`（会话目录下 `compactions.jsonl` 的读取窗口，见 [compaction](../core/compaction.md)）。
+- **消息审计没有专门路由，压缩审计有只读视图**：轨迹页（web 的 `AuditView`）就是 `GET /sessions`（会话下拉）+ `GET /sessions/:id/events`（该会话完整事件流）两个只读接口组合而成，不存在 `/audit` 路由。压缩审计不同——手动压缩刻意不产生消息，纯靠消息流看不到它的痕迹，因此 `GET /sessions/:id/compactions` 作为事件流里 `compaction` 事件的只读视图存在（见 [compaction](../core/compaction.md)）。
 - **可选能力按注入条件注册**：附件路由只在传入 `attachmentsDir` 时注册、用量路由只在传入 `UsageStore` 时注册——能力未装配就没有这些路径，而不是"注册了但报错"；`GET /mcp` 则始终存在，daemon 未装配 McpManager 时返回空 server 列表。
 
 ## 路由清单
@@ -37,10 +37,11 @@
 | POST | `/sessions/:id/purge` | 永久删除（整个会话目录删除） | — | `{ok: true}` |
 | POST | `/sessions/:id/model` | 会话级模型切换（只影响此会话**之后**的 run，历史不动） | `{model?}`：provider 条目名（entry key，见 [run-manager](./run-manager.md) 的模型解析）或裸模型名；`""`/缺省清空回落默认；类型不对 400 `model must be a string`，条目不存在 400 `model not found: <name>` | `SessionMeta` |
 | POST | `/sessions/:id/readonly` | 会话级只读开关（write/exec 类工具被拒，见 [permissions](../core/permissions.md)） | `{readonly: boolean}` 必填；`false` 清除标记 | `SessionMeta` |
-| GET | `/sessions/:id/messages` | 读全部消息（轨迹/断线恢复的数据源） | — | `Message[]`（JSONL 逐行读出的完整对话史；**排队未执行的消息不在其中**，见 `/queue`） |
-| GET | `/sessions/:id/queue` | 排队消息快照（message-queue spec §4.3）：重连/刷新的全量纠偏兜底 | — | `QueueEntry[]`（`meta.queue`，数组顺序即执行顺序；steer 条目排在可执行条目之后；空队列返回 `[]`） |
+| GET | `/sessions/:id/messages` | 读全部消息（对话/断线恢复的数据源，ChatPanel 用） | — | `Message[]`（事件流投影视图——`readMessages` 从 events.jsonl 过滤 `message` 事件按事件序返回；**排队未执行的消息不在其中**，见 `/queue`） |
+| GET | `/sessions/:id/events` | 完整事件流（事件溯源的唯一真相；轨迹页的单源数据） | — | `SessionEvent[]`（append-only，按事件序；含 session.created / message / compaction / memory 等全部事件，见 [storage](../core/storage.md)） |
+| GET | `/sessions/:id/queue` | 排队消息快照（message-queue spec §4.3）：重连/刷新的全量纠偏兜底 | — | `QueueEntry[]`（`queue.jsonl` 整文件读出，数组顺序即执行顺序；steer 条目排在可执行条目之后；空队列返回 `[]`） |
 | POST | `/sessions/:id/disposition` | 会话级发送处置覆盖（CLI `/steer`、`/wait` 与 Web 三选的 steer/wait 的 sticky 存储；interrupt 在 Web 为一次性、CLI 为 `/interrupt` 一次性动作，均不落覆盖，spec §6/§7.1） | `{disposition: "steer"\|"wait"\|"interrupt"}` 必填；非法值 400 `disposition must be "steer", "wait" or "interrupt"` | `SessionMeta`（写入 `dispositionOverride`，优先于配置默认） |
-| GET | `/sessions/:id/compactions` | 压缩审计记录（审计页"压缩记录"区块的数据源） | — | `CompactionRecord[]`（compactions.jsonl 逐行读出，按行序；文件缺失返回 `[]`） |
+| GET | `/sessions/:id/compactions` | 压缩审计记录（事件流里 `compaction` 事件的只读视图） | — | `CompactionRecord[]`（从 events.jsonl 过滤 `compaction` 事件按事件序返回；无事件返回 `[]`） |
 | POST | `/sessions/:id/compact` | 手动压缩：跳过触发线立即压缩一次（机制见 [compaction](../core/compaction.md)） | `{focus?}`：可选非空字符串，作为重点说明进入两次摘要调用；空串/非字符串 400 `focus must be a non-empty string` | `{message: string}`：成功 `压缩了 N 段，剩 X 条原文消息`；无可压缩内容 `无可压缩内容` |
 
 `:id` 不存在时上述全部返回 `404 {error:"session not found"}`；body 校验失败返回 400（如 `title must be a non-empty string`）。compact 的额外拒绝路径（双条件、两条文案，队列优先——正在跑的 run 与积压队列并存时"先处理排队"才是可行动建议）：队列非空 409 `还有 N 条排队消息，先处理或取消`；会话活跃 409 `会话正在运行，等它结束`；RunManager 未装配时 503。
@@ -52,19 +53,17 @@ interface SessionMeta {
   id: string            // ses_<ULID>
   title: string
   createdAt: string     // ISO-8601
-  updatedAt: string     // appendMessage/updateMeta 都会刷新
+  updatedAt: string     // message / compaction 等事件会刷新；memory 事件不推进
   jobId?: string        // 由定时任务创建的会话带此字段
   workdir?: string      // 会话级工作目录（run 以它覆盖全局 workspace）
   model?: string        // 会话级模型覆盖（缺省 → 守护进程默认模型）
   readonly?: boolean    // 会话级只读模式（write/exec 工具被拒，读取不受限）
   deleted?: boolean
   deletedAt?: string
-  compactedSummary?: string   // v1 压缩遗留：读取兼容，下一次压缩写入新格式时删除
+  compactedSummary?: string   // v1 压缩遗留：不再清除，被 compaction 遮蔽（见 compaction.md）
   compactedUpto?: string
   compaction?: { segments: { upto: string; summary: string }[]; top: string; upto: string }
-                              // v2 分层压缩状态，字段语义见 compaction.md
-  queue?: QueueEntry[]        // 排队未执行的消息（message-queue spec §3.1/§3.2）：meta.json 原子重写，
-                              // 顺序即执行顺序；不进 JSONL，故 /messages 不含、/queue 专读
+                              // v2 分层压缩状态（由 compaction 事件投影），字段语义见 compaction.md
   dispositionOverride?: "steer" | "wait" | "interrupt"
                               // 会话级发送处置覆盖（POST /disposition 写入；优先于 sessions.defaultDisposition）
 }
@@ -184,12 +183,12 @@ interface Job {
 web 的轨迹页（`packages/web/src/audit/AuditView.tsx`）演示了标准用法：
 
 1. `GET /sessions` 获取全部会话（下拉选择"按会话筛选"即选择 `:id`）；
-2. `GET /sessions/:id/messages` 获取该会话全部 `Message[]`；
-3. 客户端把每条消息按块（block）摊平为逐行轨迹（role + 类型标签 + 摘要，点击展开完整块）。
+2. `GET /sessions/:id/events` 获取该会话**完整事件流**（`SessionEvent[]`，append-only、按事件序）；
+3. 客户端按流序摊平成逐行轨迹：`message` 事件每条消息按块（block）摊平（role + 类型标签 + 摘要，点击展开完整块），`compaction` 事件渲染成"压缩"行、`memory` 事件渲染成"记忆"行，会话元数据事件（session.created/renamed/…）跳过。
 
-只读、无 mutation、无独立 `/audit` 路由——`messages.jsonl`（每行一条 JSON 的消息文件）是消息轨迹的唯一事实来源，HTTP 只是它的读取窗口。tool 消息上的 `grantedBy`（每个工具调用的放行原因）随 `Message` 一起返回，是"谁批准了这个操作"的审计依据。
+只读、无 mutation、无独立 `/audit` 路由——事件流（`events.jsonl`，一行一个事件的 append-only 文件）是轨迹的唯一事实来源，HTTP 只是它的读取窗口。tool 消息上的 `grantedBy`（每个工具调用的放行原因）随 `message` 事件一起返回，是"谁批准了这个操作"的审计依据。
 
-消息轨迹之外，选中会话后轨迹页还追加拉取 `GET /sessions/:id/compactions`，在轨迹上方渲染"压缩记录"区块——压缩审计的事实来源是 `compactions.jsonl`，同样只读（记录格式见 [compaction](../core/compaction.md)）。
+压缩审计不再单独拉取：`compaction` 事件就在同一事件流里，轨迹页随事件流一并渲染（`GET /sessions/:id/compactions` 仍存在，是它的只读投影视图，见 [compaction](../core/compaction.md)）。
 
 ## 鉴权中间件行为
 
@@ -211,7 +210,7 @@ app.addHook("preHandler", async (request, reply) => {
 
 ## 边界与出错
 
-- **无分页**：`GET /sessions` 与 `GET /sessions/:id/messages` 都是全量返回；个人使用规模下接受，超大会话的截断在客户端渲染层完成。
+- **无分页**：`GET /sessions`、`GET /sessions/:id/messages` 与 `GET /sessions/:id/events` 都是全量返回；个人使用规模下接受，超大会话的截断在客户端渲染层完成。
 - **软删除的会话不在默认列表**：`GET /sessions` 缺省过滤 `deleted:true`；要操作回收站必须显式 `?deleted=true`（恢复/永久删除路由不区分列表，直接按 id 操作）。
 - **PATCH `/sessions/:id` 的 workdir 是解析但未生效的字段**（源码只把 title 传给 `updateMeta`）——API 消费者不应依赖它。
 - **`POST /jobs` 的 cron 校验依赖 cron-parser 的报错文本**，客户端展示的是原始英文错误。
@@ -224,7 +223,7 @@ app.addHook("preHandler", async (request, reply) => {
 - [realtime](./realtime.md)：`/ws` 端点的帧协议
 - [run-manager](./run-manager.md)：send_message 背后的三处置决策、队列驱动器与附件挂载（`/queue` 快照与 compact 409 的服务端语义）
 - [storage](../core/storage.md)：SessionStore/JobScheduler/UsageStore 的持久化实现
-- [compaction](../core/compaction.md)：compact/compactions 两个路由背后的机制与记录格式
+- [compaction](../core/compaction.md)：compact/compactions 两个路由背后的机制与事件流里的记录格式
 - [memory](../core/memory.md)：`/memory` 路由族背后的记忆塔存储与 `memory.written` 事件
 - [mcp](../core/mcp.md)：`GET /mcp` 快照背后的连接管理器
 - [jobs](../core/jobs.md)：cron 语义与 nextRunAt 推进规则

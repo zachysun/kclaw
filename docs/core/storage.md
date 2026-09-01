@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/storage/` 是所有持久化的基础：`paths.ts` 解析 kclaw 的根目录与目录树（`KCLAW_HOME` 可整体重定向）；`config.ts` 读写 `config.yaml`（默认值深合并）；`jsonl.ts` 提供 append-only JSONL 文件（JSONL：一行一个 JSON 对象的文本格式）的追加/读取与崩溃修复，是会话日志 `messages.jsonl` 的底层机制。会话目录结构与 `meta.json` 由 `SessionStore`（`packages/core/src/session/store.ts`）负责，daemon.json / token 两个文件由 server 侧产生，本文一并说明它们的用途。
+`packages/core/src/storage/` 是所有持久化的基础：`paths.ts` 解析 kclaw 的根目录与目录树（`KCLAW_HOME` 可整体重定向）；`config.ts` 读写 `config.yaml`（默认值深合并）；`jsonl.ts` 提供 append-only JSONL 文件（JSONL：一行一个 JSON 对象的文本格式）的追加/读取与崩溃修复，是会话事件流 `events.jsonl`（唯一真相）与运行态队列 `queue.jsonl` 的底层机制。会话目录结构与 `meta.json` 由 `SessionStore`（`packages/core/src/session/store.ts`）负责，daemon.json / token 两个文件由 server 侧产生，本文一并说明它们的用途。
 
 ---
 
@@ -12,7 +12,7 @@
 - **只建目录，不建文件**：`resolvePaths` 用 `mkdirSync(recursive)` 创建目录树，但 `config.yaml`、`jobs.db` 等文件只是路径字符串，不在这里创建——文件由各自的所有者在首次写入时产生（`SessionStore`/`MemoryStore`/`JobScheduler` 构造函数建目录并初始化自己的数据库）。
 - **配置深合并、默认值永不污染**：`loadConfig` 把文件内容深合并到默认值上，且两个分支都从 `structuredClone(defaultConfig)` 开始——否则返回值与导出的 `defaultConfig` 共享嵌套引用，调用方任意一处 `cfg.permissions.allow.push()` 都会污染进程级默认值。合并规则（`deepMerge`）：普通对象按键递归，数组与标量整体替换，`undefined` 跳过，两个输入都不被修改。
 - **配置无效时报错而非静默回退**：`config.yaml` 解析失败直接抛错（`invalid yaml in <path>: ...`），文件不是对象映射也抛错；**不做静默回退**——静默使用默认值意味着用户配置的权限规则在不提示的情况下失效，比启动失败更危险。文件缺失或内容为空则返回默认值（首次使用的正常路径）。
-- **会话日志 append-only + 崩溃容忍**：消息只追加、从不改写历史行。崩溃窗口在"最后一行写到一半"（torn line，断尾行）：读取时丢弃断尾行（崩溃产物，最多丢失一条消息）；写新行之前先修复断尾，否则新行会拼接在半行之后，读取时**两条会一起被丢弃**。
+- **会话事件流 append-only + 崩溃容忍**：事件只追加、从不改写历史行（运行态队列 `queue.jsonl` 例外——整文件重写，见下节）。崩溃窗口在"最后一行写到一半"（torn line，断尾行）：读取时丢弃断尾行（崩溃产物，最多丢失一条事件）；写新行之前先修复断尾，否则新行会拼接在半行之后，读取时**两条会一起被丢弃**。
 
 ---
 
@@ -30,7 +30,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `<home>/memory/global/` | L2 全局认知（persona.md、wiki/、rule/ 的 markdown，真相） | MemorySystem / 用户手编 |
 | `<home>/memory/projects/<id>/` | L1 项目情节（`<topic>.md` 主题线、workdir.txt、MEMORY.md、state.json、vectors.db） | MemorySystem / 用户手编 |
 | `<home>/memory/notes/`、`<home>/memory/index.db` | v1 遗留：前者是迁移输入（daemon 启动读后删除）、后者是被删除的 v1 派生物索引 | 仅 daemon 启动迁移（见 [memory](./memory.md)） |
-| `<home>/sessions/<id>/` | 每会话一目录（meta.json + messages.jsonl + compactions.jsonl + index.db） | SessionStore（compactions.jsonl 与 index.db 由压缩机制写入，见 [compaction](./compaction.md)） |
+| `<home>/sessions/<id>/` | 每会话一目录（events.jsonl + meta.json + queue.jsonl，分工见下节） | SessionStore（events.jsonl 为唯一真相、meta.json 为派生投影、queue.jsonl 为运行态整文件重写） |
 | `<home>/jobs.db` | 定时任务表 | JobScheduler |
 | `<home>/usage.db` | 每次 LLM 运行的 token 用量台账 | UsageStore |
 | `<home>/attachments/<id>/` | 附件外存目录（每会话一个子目录） | server 上传路由 `routes/attachments.ts`；运行时只读挂载 |
@@ -104,27 +104,30 @@ export function readJsonl(file: string): unknown[]
 
 ---
 
-## 会话目录与 messages.jsonl
+## 会话目录与 events.jsonl
 
-每个会话一个目录 `<sessionsDir>/<id>/`，四个文件：`meta.json` 与 `messages.jsonl` 由 `SessionStore` 直接负责；`compactions.jsonl`（压缩审计）与 `index.db`（段检索索引，纯派生物可删）见 [compaction](./compaction.md)。
+每个会话一个目录 `<sessionsDir>/<id>/`，三个文件，由 `SessionStore`（`packages/core/src/session/store.ts`）统一管理：
 
-- `meta.json`：`SessionMeta { id, title, createdAt, updatedAt, jobId?, workdir?, model?, readonly?, deleted?, deletedAt?, compactedSummary?, compactedUpto?, compaction?, queue?, dispositionOverride? }`，其中 `model` 为会话级模型覆盖（空/缺省回落 daemon 默认）、`readonly` 为会话级只读开关（写/exec 工具被拒，见 [permissions](./permissions.md)）；`compactedSummary`/`compactedUpto` 是 v1 压缩的遗留字段（读取时兼容，下一次压缩写入新格式时删除），`compaction` 是 v2 分层压缩状态 `{ segments, top, upto }`（语义见 [compaction](./compaction.md)）；`queue` 是排队未执行的消息数组（`{ messageId, disposition, text, trigger, attachments?, note?, enqueuedAt }`，顺序即执行顺序，只存在 meta.json、不进 JSONL，见 [run-manager](../server/run-manager.md) 的消息队列）；`dispositionOverride` 是会话级处置覆盖（`"steer" | "wait" | "interrupt"`，优先于 `sessions.defaultDisposition`；服务端路由仍接受三值写入，但客户端当前只写 steer/wait——interrupt 在 Web 与 CLI 都是一次性动作、不落覆盖，`"interrupt"` 值只会来自历史遗留，见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)）。整文件重写更新（`updateMeta` 合并 patch、`undefined` 键删除、总是刷新 `updatedAt`）。
-- `messages.jsonl`：一行一条 `Message`，append-only。追加消息时顺带重写 meta.json 刷 `updatedAt`。
+- `events.jsonl`：**唯一真相**，append-only 事件流，一行一个 `SessionEvent`（JSON 序列化）。共 8 种事件：会话生命周期 `session.created` / `session.renamed` / `session.deleted` / `session.restored` / `session.set`（model / readonly / disposition 的会话级设置），外加内容类 `message`（一条消息）、`compaction`（一次压缩审计）、`memory`（一次记忆落盘审计）。所有写入都先落事件，再把事件折进 meta.json 投影（见下）。
+- `meta.json`：**派生投影**（`SessionMeta`），由事件流经 `applyEvent` 逐条折叠得出；meta.json 缺失或损坏时 `meta()` 自动从事件流重建（`rebuildMeta`），任何时候删掉它也能重建。崩溃恢复时允许它滞后于事件流（meta 只是投影、非真相，不会丢数据），下次写入自然补平。整文件原子重写（`updateMeta` 合并 patch、`undefined` 键删除；`message` / `compaction` 事件会推进投影的 `updatedAt`，`memory` 事件不推进）。
+- `queue.jsonl`：**运行态**排队消息（`{ messageId, disposition, text, trigger, attachments?, note?, enqueuedAt }`，顺序即执行顺序，见 [run-manager](../server/run-manager.md) 的消息队列）。与事件流不同——`replaceQueue` 每次**整文件重写**，不是 append-only；不参与 meta.json。
 
-`Message`（`packages/core/src/protocol/messages.ts`）基础字段 `{ id, sessionId, role: "user" | "assistant" | "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因）。id 前缀 `msg_` / `ses_`，ULID。
+`meta.json` 字段：`SessionMeta { id, title, createdAt, updatedAt, jobId?, workdir?, model?, readonly?, deleted?, deletedAt?, compactedSummary?, compactedUpto?, compaction?, dispositionOverride? }`，其中 `model` 为会话级模型覆盖（空/缺省回落 daemon 默认）、`readonly` 为会话级只读开关（写/exec 工具被拒，见 [permissions](./permissions.md)）；`compaction` 是 v2 分层压缩状态 `{ segments, top, upto }`（语义见 [compaction](./compaction.md)），由 `compaction` 事件投影（每次压缩把新段折进 `segments`，`updateMeta` 不再直接合并它）；`compactedSummary`/`compactedUpto` 是 v1 压缩的遗留字段——不再被清除（Task 5 删了唯一的清除调用），但运行侧读压缩视图时 `compaction` 优先（run.ts 的 `prev` 先读 `compaction`，见 [compaction](./compaction.md)），两者并存无功能影响；`dispositionOverride` 是会话级处置覆盖（`"steer" | "wait" | "interrupt"`，优先于 `sessions.defaultDisposition`；服务端路由仍接受三值写入，但客户端当前只写 steer/wait——interrupt 在 Web 与 CLI 都是一次性动作、不落覆盖，`"interrupt"` 值只会来自历史遗留，见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)）。
 
-崩溃容忍的两个策略函数（`packages/core/src/storage/jsonl.ts`）：
+`Message`（`packages/core/src/protocol/messages.ts`）基础字段 `{ id, sessionId, role: "user" | "assistant" | "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因）。id 前缀 `msg_` / `ses_`，ULID。`messages` / `compactions` 现在是事件流的**只读投影视图**：`readMessages` 从事件流过滤出 `message` 事件、`readCompactions` 过滤出 `compaction` 事件，`readQueue` 读 `queue.jsonl`。
+
+崩溃容忍的两个策略函数（`packages/core/src/storage/jsonl.ts`），事件流与队列共用：
 
 - `readJsonl(file)`：缺失文件返回 `[]`；去掉完整追加留下的末尾空行后逐行 `JSON.parse`；**最后一行**解析失败视为断尾崩溃产物，丢弃并停止；**中间任何一行**解析失败则抛错——崩溃不可能制造中间坏行，那是 bug 或外部破坏，静默跳过等于掩盖问题。
 - `repairTornTail(file)` + `appendJsonlLine(file, value)`：每次追加前检查最后一个字节，是 `\n` 说明上次干净结束；否则**先截断到上一个换行再追加**。截断点是**字节偏移**（`Buffer.lastIndexOf(0x0a)`）：UTF-8 的多字节序列内部不会出现 0x0a（续字节都 ≥ 0x80），所以单字节探测可靠；若用解码字符串的 indexOf 得到的是 UTF-16 码元下标，切点可能落在多字节字符中间，恰好破坏上一行。文件不存在时修复是 no-op。
 
-会话的删除语义在 `SessionStore`：`delete()` 软删除（`deleted: true, deletedAt`），`restore()` 恢复，`purge()` 物理删除整个目录，`purgeExpired(ttlMs)` 清理过期软删除会话（由 scheduler tick 周期调用）。
+会话的删除语义在 `SessionStore`：`delete()` 软删除（追加 `session.deleted` 事件，投影置 `deleted: true, deletedAt`），`restore()` 恢复（追加 `session.restored` 事件），`purge()` 物理删除整个目录，`purgeExpired(ttlMs)` 清理过期软删除会话（由 scheduler tick 周期调用）。
 
 一条消息的持久化路径（每条消息都经过这一流程）：
 
 1. agent 循环产出消息 → `RunManager` 的 `onMessage` 调 `sessions.appendMessage(sessionId, m)`（`packages/server/src/run.ts`）。
-2. `appendMessage` 经 `appendJsonlLine`：先 `repairTornTail`（末字节非 `\n` 则字节级截断到上一换行），再 `appendFileSync(JSON.stringify(message) + "\n")`。
-3. 回读时 `readMessages` → `readJsonl`：丢弃断尾行，逐行解析成 `Message` 数组，作为下次运行的历史（`packages/server/src/run.ts` 的 `#execute` 在追加用户消息**之前**读历史，避免重复发送）。
+2. `appendMessage` 经 `appendEvent` 落一条 `message` 事件到 events.jsonl：先 `repairTornTail`（末字节非 `\n` 则字节级截断到上一换行），再 `appendFileSync(JSON.stringify(event) + "\n")`，随后把事件折进 meta.json 投影（`applyEvent`）。
+3. 回读时 `readMessages` → `readEvents` 后过滤 `message` 事件：丢弃断尾行，逐行解析成 `Message` 数组，作为下次运行的历史（`packages/server/src/run.ts` 的 `#execute` 在追加用户消息**之前**读历史，避免重复发送）。
 
 ---
 
@@ -169,7 +172,7 @@ HTTP 出口与展示见 [http-api](../server/http-api.md) 的 `GET /usage` 与 [
 ## 关联
 
 - [jobs](./jobs.md)：jobs.db 的表结构与轮询
-- [compaction](./compaction.md)：压缩状态的三个落点（meta 字段、compactions.jsonl、index.db）与 v2 配置字段
+- [compaction](./compaction.md)：压缩状态的落点（meta.compaction 投影 + 事件流里的 compaction 事件）与 v2 配置字段
 - [memory](./memory.md)：memory 目录的三层塔布局（文件是真相、vectors.db 是派生物）与 v1 迁移
-- [protocol](./protocol.md)：Message / Block 的完整定义（messages.jsonl 每行即一个 Message）
+- [protocol](./protocol.md)：Message / Block 的完整定义（message 事件即一个 Message）
 - [daemon](../server/daemon.md)：daemon.json 的写入时机与停机流程、token 的鉴权链路
