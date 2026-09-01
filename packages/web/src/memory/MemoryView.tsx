@@ -1,9 +1,10 @@
 /**
- * MemoryView — 记忆管理页（spec 9.3）：三个区块 = 项目线列表（选项目 → 线清单 →
- * 点开线详情可编辑保存/删除）、全局认知（persona/wiki/rule 文件列表 → 查看/编辑/
- * 删除）、写入通知（由 ChatPanel 的 notice + 跳转按钮承接，不在本组件内重复）。
- * 纯 REST 拉取 + 本地筛选；编辑是整文件 textarea + 保存 PATCH / 删除 DELETE。
- * 服务端 503（记忆未装配）时相应 GET 走 catch → notice 提示。
+ * MemoryView — 记忆管理页（spec 9.3）：全局记忆常驻（左栏顶部，persona/wiki/rule
+ * 文件列表 → 查看/编辑/删除），项目记忆按需选择查看（项目清单 → 点开项目取主题线）。
+ * 不存在会话级记忆——会话只是通过 memory_search 检索记忆，不是记忆的归属维度。
+ * 右侧整文件编辑器（保存 PATCH / 删除 DELETE）。写入通知由 ChatPanel 的 notice +
+ * 跳转按钮承接，不在本组件内重复。纯 REST 拉取 + 本地筛选；服务端 503（记忆未装配）
+ * 时相应 GET 走 catch → notice 提示。
  */
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { ApiClient } from "../api.js"
@@ -117,10 +118,22 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
     } catch (e) { notice(`删除失败: ${String(e)}`) }
   }
 
-  // 结构：左列（项目/线/全局认知两棵清单）+ 右列（编辑器）。
+  // 结构：左列 = 全局认知常驻（顶部）+ 项目/主题线按需（下方）；右列 = 编辑器。
   return (
     <div className="memory-view" data-testid="memory-view">
       <div className="memory-list">
+        <section>
+          <h3>全局认知</h3>
+          {cogs === null ? <p className="muted">加载中…</p> : cogs.length === 0 ? <p className="muted">还没有全局认知</p> : (
+            <ul data-testid="memory-cognitions">
+              {cogs.map((c) => (
+                <li key={c.path}>
+                  <button type="button" onClick={() => void openCog(c.kind, c.name)}>{c.kind}/{c.name} · {c.updated}</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
         <section>
           <h3>项目</h3>
           {projects === null ? <p className="muted">加载中…</p> : projects.length === 0 ? <p className="muted">还没有项目记忆</p> : (
@@ -153,18 +166,6 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
             )}
           </section>
         )}
-        <section>
-          <h3>全局认知</h3>
-          {cogs === null ? <p className="muted">加载中…</p> : cogs.length === 0 ? <p className="muted">还没有全局认知</p> : (
-            <ul data-testid="memory-cognitions">
-              {cogs.map((c) => (
-                <li key={c.path}>
-                  <button type="button" onClick={() => void openCog(c.kind, c.name)}>{c.kind}/{c.name} · {c.updated}</button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
       </div>
       <div className="memory-editor">
         {(threadTopic !== null || cogTarget !== null) ? (
