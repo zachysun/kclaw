@@ -105,11 +105,11 @@ updated: 2026-08-30
 管线位于 `packages/core/src/memory/pipeline.ts`，对外只暴露一个入口 `runTrigger(workdir, trigger)`。一次触发做四件事：
 
 1. **选范围**：取该项目全部会话在"水位"之后的新消息（见下节"水位账本"）；
-2. **提取**：无工具 LLM 调用，把范围渲染成逐行文本 + 现有主题线清单（MEMORY.md 表格），交给固定 system 提示的提取器（`EXTRACT_SYSTEM_PROMPT`），要求只输出 JSON `{"actions":[...]}`——动作三选一：`append`（接到已有线）、`update`（修正已有线某小节）、`new-thread`（开新线），并允许显式 `status:"inactive"`（明确的完成结论）；噪音直接跳过，无值得记的内容输出 `{"actions":[]}`；
+2. **提取**：无工具 LLM 调用，把范围渲染成逐行文本 + 现有主题线清单（MEMORY.md 表格），交给固定 system 提示的提取器（`EXTRACT_SYSTEM_PROMPT`），要求只输出 JSON `{"actions":[...]}`。每个动作的字段名固定：判别字段 `op` 取 `append`（接到已有线）/`update`（修正已有线某小节）/`new-thread`（开新线）三值；**每个动作必填非空 `file`**（线文件名，kebab-case，`new-thread` 也不例外）与 `content`；`update` 额外带 `section`，`new-thread` 额外带 `thread`/`title`；允许显式 `status:"inactive"`（明确的完成结论）；噪音直接跳过，无值得记的内容输出 `{"actions":[]}`。prompt 内含完整 JSON 示例；
 3. **落盘**：逐条应用动作（追加/改写/开线），期间不阻塞地广播 `memory.written` 事件（见"事件"）；
 4. **收尾**：推进水位、扫描时间自动收束（见"生命周期"）、顺带内化检查、重建项目索引与 MEMORY.md。
 
-提取用的模型取 `memory.extractModel`，为空回落主对话模型；响应不是合法 JSON 或解析结果非 `actions` 数组时**整批放弃**、只打日志，不做部分写入。**提取失败水位不推进**——下一次触发会重试同一范围（spec 11）。
+提取用的模型取 `memory.extractModel`，为空回落主对话模型。校验与提示词的分工：**模型只从 `EXTRACT_SYSTEM_PROMPT` 认识 JSON 结构，字段名必须与落盘校验逐字一致**（2026-09-01 回归：旧 prompt 未点名 `op`/`file`，真实模型交回 `type` 判别 + 缺 `file`，动作全被丢弃）。响应不是合法 JSON 或解析结果非 `actions` 数组时**整批放弃**、只打日志，不做部分写入；单个动作字段不合法（缺 `file`/`content`、`op` 非三值）则**只丢该条**、其余照常落盘。水位语义要区分两种情况：**LLM 调用抛错（提取失败）水位不推进**，下一次触发重试同一范围（spec 11）；而**调用成功但动作被丢光（格式不合法）水位照常推进**——这段消息不会自动重试，属已知取舍（丢弃的来源是模型输出不合规，重试大概率同样不合规）。
 
 ### 四触发
 
@@ -142,13 +142,13 @@ updated: 2026-08-30
 
 ### 内化（consolidate）
 
-一条主题线被收束为 `inactive` 后，管线顺带对它做一次**内化总结**（spec 6）：无工具 LLM 调用，把线文件全部情节 + 现有认知文件内容交给固定 system 提示的内化器（`CONSOLIDATE_SYSTEM_PROMPT`），回答"从这条线的经历里理解到了什么"，输出 JSON `{"actions":[...]}`，动作目标三选一：
+一条主题线被收束为 `inactive` 后，管线顺带对它做一次**内化总结**（spec 6）：无工具 LLM 调用，把线文件全部情节 + 现有认知文件内容交给固定 system 提示的内化器（`CONSOLIDATE_SYSTEM_PROMPT`），回答"从这条线的经历里理解到了什么"，输出 JSON `{"actions":[...]}`，动作按 `target` 三选一（目标名放 `name` 字段、**不拼进 target**）：
 
-- `persona`：用户画像，连贯正文片段；
-- `wiki`（`target:"wiki"` + `name`）：领域知识，一个资源一个文件；
-- `rule`（`target:"rule"` + `name`）：用户规则，清单式，每条规则一个小节。
+- `target:"persona"`：用户画像，连贯正文片段（`name` 省略）；
+- `target:"wiki"` + `name`：领域知识，一个资源一个文件；
+- `target:"rule"` + `name`：用户规则，清单式，每条规则一个小节。
 
-新增用 `op:"append"`/`op:"create"`，已有认知被新经历印证的不动、被推翻的就地改写（`op:"rewrite"`，不保留旧版）；每条新认知附来源注释 `<!-- 来源：<topic>#<date> -->`。`target:"skill"` 预留、本期不实现（命中时打日志跳过，spec 2.3）。拿不准落 `global` 还是项目时**倾向 global、宁小勿大**。内化受 `memory.consolidate` 开关（默认 true）控制；LLM 调用失败只打日志、不影响 run。除"inactive 顺带内化"外，`MemorySystem.consolidate(workdir, topic)` 也暴露了手动内化入口（目前同样无路由/工具暴露）。
+新增用 `op:"append"`/`op:"create"`，已有认知被新经历印证的不动、被推翻的就地改写（`op:"rewrite"`，不保留旧版）；每条新认知附来源注释 `<!-- 来源：<topic>#<date> -->`。解析校验：`target` 必须是三值之一、`wiki`/`rule` 必带非空 `name`，不合法的动作在解析层丢弃并记日志（`dropping malformed cognition action (target=…)`）——`#applyCognitionAction` 拿 `target` 拼目录路径，放行任意字符串会写出索引读不到的垃圾文件（2026-09-01 回归：旧 prompt 的 `wiki:<name>` 记法诱导模型把名字嵌进 target）。`target:"skill"` 预留、本期不实现（解析层即丢弃，`#applyCognitionAction` 内保留防御分支，spec 2.3）。拿不准落 `global` 还是项目时**倾向 global、宁小勿大**。内化受 `memory.consolidate` 开关（默认 true）控制；LLM 调用失败只打日志、不影响 run。除"inactive 顺带内化"外，`MemorySystem.consolidate(workdir, topic)` 也暴露了手动内化入口（目前同样无路由/工具暴露）。
 
 ## 检索与注入
 

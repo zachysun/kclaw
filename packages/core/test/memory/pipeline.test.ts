@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, readdirSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { MemoryPipeline, type PipelineDeps } from "../../src/memory/pipeline.js"
+import { MemoryPipeline, EXTRACT_SYSTEM_PROMPT, CONSOLIDATE_SYSTEM_PROMPT, type PipelineDeps } from "../../src/memory/pipeline.js"
 import { projectIdFor } from "../../src/memory/layout.js"
 import { SessionStore } from "../../src/session/store.js"
 import type { MemoryEvent } from "../../src/session/events.js"
@@ -317,6 +317,85 @@ describe("consolidate", () => {
     await pipe.runTrigger(WORKDIR, "interval")
     const raw = readFileSync(join(root, "memory", "global", "rule", "nd.md"), "utf8")
     expect(raw.match(/一条规范/g)?.length).toBe(1)
+  })
+
+  it("drops cognition actions whose target is not persona/wiki/rule — no stray files in global", async () => {
+    // 回归（2026-09-01）：prompt 的 "wiki:<name>" 记法诱导模型把名字嵌进 target
+    //（如 "wiki:用户偏好"），旧校验只查"是字符串"，#applyCognitionAction 会把它
+    // 当目录类别写出永远不被索引/读取的垃圾文件。
+    const meta = sessions.create("s", undefined, WORKDIR)
+    seedMessages(meta.id, ["内容"])
+    const logs: string[] = []
+    const llm = scriptedLlm([
+      JSON.stringify({ actions: [{ file: "t1", op: "new-thread", thread: "t1", title: "T1", content: "情节", status: "inactive" }] }),
+      JSON.stringify({ actions: [
+        { target: "wiki:用户偏好", op: "append", content: "嵌名 target", source: "t1#2026-08-28" },
+        { target: "认知", op: "append", content: "非法类别", source: "t1#2026-08-28" },
+        { target: "wiki", op: "append", content: "wiki 缺 name", source: "t1#2026-08-28" },
+      ] }),
+    ])
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      resolveLlm: () => ({ llm, model: "m" }),
+      log: (m) => logs.push(m),
+    })
+    await pipe.runTrigger(WORKDIR, "interval")
+    const globalDir = join(root, "memory", "global")
+    const entries = existsSync(globalDir) ? readdirSync(globalDir) : []
+    expect(entries.filter((e) => e.includes(":") || e === "认知" || e === "skill")).toHaveLength(0)
+    expect(existsSync(join(globalDir, "wiki", "misc.md"))).toBe(false) // 缺 name 的 wiki 不落到 misc
+    expect(logs.some((l) => l.includes("dropping malformed cognition action"))).toBe(true)
+  })
+
+  it("legal cognition actions (persona / wiki+name / rule+name) still land after the tightened check", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    seedMessages(meta.id, ["内容"])
+    const llm = scriptedLlm([
+      JSON.stringify({ actions: [{ file: "t1", op: "new-thread", thread: "t1", title: "T1", content: "情节", status: "inactive" }] }),
+      JSON.stringify({ actions: [
+        { target: "persona", op: "append", content: "用户画像正文", source: "t1#2026-08-28" },
+        { target: "wiki", name: "kclaw", op: "create", content: "kclaw 是个人助理" },
+        { target: "rule", name: "general", op: "append", content: "一条规范" },
+      ] }),
+    ])
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      resolveLlm: () => ({ llm, model: "m" }),
+    })
+    await pipe.runTrigger(WORKDIR, "interval")
+    expect(readFileSync(join(root, "memory", "global", "persona.md"), "utf8")).toContain("用户画像正文")
+    expect(readFileSync(join(root, "memory", "global", "wiki", "kclaw.md"), "utf8")).toContain("个人助理")
+    expect(readFileSync(join(root, "memory", "global", "rule", "general.md"), "utf8")).toContain("一条规范")
+  })
+})
+
+describe("提取/内化的接口约定（prompt ↔ 校验对齐，回归 2026-09-01）", () => {
+  it("EXTRACT_SYSTEM_PROMPT pins the field names: op discriminator, mandatory file, full JSON example", () => {
+    // 提示词必须与 #extract 校验（file 非空 + op 三值）说同一套字段名——
+    // 真实模型按 prompt 写 JSON，字段名只在这里教。示例必须同时含 op 与 file。
+    expect(EXTRACT_SYSTEM_PROMPT).toContain('"op"')
+    expect(EXTRACT_SYSTEM_PROMPT).toContain('"file"')
+    expect(EXTRACT_SYSTEM_PROMPT).toMatch(/\{"op":"new-thread","file":"[^"]+"/)
+  })
+
+  it("CONSOLIDATE_SYSTEM_PROMPT pins target 三值与 name 必填，清除 wiki:<name> 歧义记法", () => {
+    expect(CONSOLIDATE_SYSTEM_PROMPT).toContain('"persona"')
+    expect(CONSOLIDATE_SYSTEM_PROMPT).toContain('"wiki"')
+    expect(CONSOLIDATE_SYSTEM_PROMPT).toContain('"rule"')
+    expect(CONSOLIDATE_SYSTEM_PROMPT).not.toContain("wiki:<name>")
+    expect(CONSOLIDATE_SYSTEM_PROMPT).not.toContain('target:"wiki"+name')
+  })
+
+  it("real-model-shaped extract actions (type discriminator, no file) are dropped; no thread file written", async () => {
+    // 锁既有语义：deepseek 真实返回 {"type":"new-thread",...}（无 file）——校验丢弃，
+    // 且不因丢弃而阻塞 watermark 推进（丢弃 ≠ 失败）。见 docs/core/memory.md 提取节。
+    const meta = sessions.create("s", undefined, WORKDIR)
+    seedMessages(meta.id, ["记住，我是小白，请说人话"])
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ type: "new-thread", thread: "user-pref", title: "用户偏好", content: "内容" }] })]), model: "m" }),
+    })
+    await pipe.runTrigger(WORKDIR, "immediate", meta.id)
+    const projectDir = join(root, "memory", "projects", projectIdFor(WORKDIR))
+    const threads = existsSync(projectDir) ? readdirSync(projectDir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md") : []
+    expect(threads).toHaveLength(0)
   })
 })
 

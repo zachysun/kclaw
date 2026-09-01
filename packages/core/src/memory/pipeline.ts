@@ -57,22 +57,34 @@ export interface PipelineDeps {
   consolidateEnabled?: boolean
 }
 
-/** 提取器固定文案（spec 4.3，verbatim-pinned）。 */
-const EXTRACT_SYSTEM_PROMPT = [
+/** 提取器固定文案（spec 4.3）。字段名必须与 #extract 的校验逐字一致——模型
+ *  只从这里认识 JSON 结构（2026-09-01 回归：旧文案未点名 op/file，真实模型
+ *  交回 type 判别 + 缺 file，动作全被丢弃且不重试）。 */
+export const EXTRACT_SYSTEM_PROMPT = [
   "你是长期记忆的情节提取器。输入是一段会话消息（每行一条）与该项目已有的主题线清单（MEMORY.md 表格）。",
-  "只输出 JSON：{\"actions\":[{...}]}，动作三选一：",
-  "append（接到已有线：file=线名，content=情节正文）、update（修正已有线某小节：file=线名，section=小节短标题，content=修正后正文）、new-thread（开新线：thread=kebab-case 短名，title=人可读标题，content=首段情节）。",
-  "情节要有叙事要素（做了什么/结果/说了什么/有何要求），不要孤立的一句话事实；能接上已有线就给该 topic，接不上才开新线。",
-  "噪音（寒暄、与长期记忆无关的过程性内容）直接跳过；判断某条线这段对话之后再无下文迹象（如明确的完成结论）时在该线的动作上加 status:\"inactive\"。",
-  "无值得记的内容输出 {\"actions\":[]}。",
+  "只输出一个 JSON 对象：{\"actions\":[…]}，actions 里每个动作都是 JSON 对象，字段名固定如下：",
+  "- op：动作类型，只能取 \"append\"、\"update\"、\"new-thread\" 之一（判别字段名是 op，不是 type）。",
+  "- file：目标线文件名（kebab-case、不含 .md），每个动作必填；new-thread 时它就是新线的文件名。",
+  "- content：情节正文，每个动作必填。",
+  "- update 动作额外带 section（要修正的小节短标题）；new-thread 动作额外带 thread（kebab-case 短名）与 title（人可读标题）。",
+  "- 判断某条线这段对话之后再无下文迹象（如明确的完成结论）时，给该动作加 status:\"inactive\"。",
+  "完整示例：{\"actions\":[{\"op\":\"new-thread\",\"file\":\"user-pref-plain-language\",\"thread\":\"user-pref-plain-language\",\"title\":\"用户偏好通俗语言\",\"content\":\"用户自称小白，要求所有解释都用通俗语言。\"}]}",
+  "情节要有叙事要素（做了什么/结果/说了什么/有何要求），不要孤立的一句话事实；能接上已有线就对该线的 file 做 append/update，接不上才 new-thread。",
+  "噪音（寒暄、与长期记忆无关的过程性内容）直接跳过。无值得记的内容输出 {\"actions\":[]}。只输出 JSON，不要输出任何其他文字。",
 ].join("\n")
 
-/** 内化器固定文案（spec 6，verbatim-pinned）。 */
-const CONSOLIDATE_SYSTEM_PROMPT = [
+/** 内化器固定文案（spec 6）。字段名必须与 parseCognitionActions 的校验逐字一致
+ *  （2026-09-01 回归：旧文案 "wiki:<name>" 记法诱导模型把名字嵌进 target）。 */
+export const CONSOLIDATE_SYSTEM_PROMPT = [
   "你是认知内化器。输入是一条已完结主题线的全部情节，与现有的全局认知文件内容。",
-  "回答\"从这条线的经历里理解到了什么\"：只输出 JSON {\"actions\":[...]}，动作目标三选一：persona（用户画像，连贯正文片段）、wiki:<name> 用 target:\"wiki\"+name（一个资源一个文件）、rule:<域> 用 target:\"rule\"+name（清单式，每条规则一个小节）。",
-  "target:\"skill\" 本期不可用。每条新认知附 source 字段（格式 topic#日期）；已有认知被新经历印证的不动，被推翻的就地改写（op:\"rewrite\"，content 为改写后的完整小节/段落）；新增用 op:\"append\" 或 op:\"create\"。",
-  "拿不准落 global 还是项目时倾向 global 谨慎、宁小勿大。无新认知输出 {\"actions\":[]}。",
+  "回答\"从这条线的经历里理解到了什么\"：只输出一个 JSON 对象 {\"actions\":[…]}，每个动作的字段名固定如下：",
+  "- target：认知目标，只能取 \"persona\"（用户画像，连贯正文片段）、\"wiki\"（一个资源一个文件）、\"rule\"（清单式，每条规则一个小节）之一；目标名不要拼进 target。",
+  "- name：目标名，target 为 \"wiki\" 或 \"rule\" 时必填，为 \"persona\" 时省略。",
+  "- op：\"append\"（新增条目）、\"create\"（新建文件）或 \"rewrite\"（就地改写，content 为改写后的完整小节/段落）。",
+  "- content：认知正文。",
+  "- source：来源，格式 topic#日期。",
+  "target:\"skill\" 本期不可用。已有认知被新经历印证的不动，被推翻的就地改写（op:\"rewrite\"）；新增用 op:\"append\" 或 op:\"create\"。",
+  "拿不准落 global 还是项目时倾向 global 谨慎、宁小勿大。无新认知输出 {\"actions\":[]}。只输出 JSON，不要输出任何其他文字。",
 ].join("\n")
 
 interface CognitionAction {
@@ -158,7 +170,13 @@ function parseCognitionActions(raw: string, log: (m: string) => void): Cognition
   return actions.filter((a): a is CognitionAction => {
     if (typeof a !== "object" || a === null) return false
     const x = a as Record<string, unknown>
-    return typeof x.content === "string" && x.content !== "" && typeof x.target === "string"
+    // target 限三值 + wiki/rule 必带 name：#applyCognitionAction 会拿 target 拼目录
+    // 路径，放行任意字符串会写出索引读不到的垃圾文件（2026-09-01 回归）。
+    const targetOk = x.target === "persona" || x.target === "wiki" || x.target === "rule"
+    const nameOk = x.target === "persona" || (typeof x.name === "string" && x.name !== "")
+    const ok = targetOk && nameOk && typeof x.content === "string" && x.content !== ""
+    if (!ok) log(`kclaw memory consolidate: dropping malformed cognition action (target=${String(x.target)})`)
+    return ok
   }).map((a) => {
     const x = a as unknown as Record<string, unknown>
     return {
