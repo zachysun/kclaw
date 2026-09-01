@@ -118,10 +118,29 @@ export interface ToolMessage extends Message {
   grantedBy?: Record<string, ToolGrantReason>
 }
 
-/** One line of a session's compactions.jsonl audit log (GET /sessions/:id/compactions). */
-export interface CompactionRecord {
+/**
+ * Session event-stream shapes (mirrors @kclaw/core session/events). These
+ * back the trail view's single source of truth: GET /sessions/:id/events
+ * returns the append-only, time-ordered stream (session.created → message →
+ * compaction → memory …). A message event carries the full message payload,
+ * so block flattening applies to it directly.
+ */
+
+/** 会话元数据事件（轨迹页不渲染，仅参与事件流推进）。 */
+export interface SessionCreatedEvent { type: "session.created"; at: string; title: string; workdir?: string; jobId?: string }
+export interface SessionRenamedEvent { type: "session.renamed"; at: string; title: string }
+export interface SessionDeletedEvent { type: "session.deleted"; at: string }
+export interface SessionRestoredEvent { type: "session.restored"; at: string }
+export interface SessionSetEvent { type: "session.set"; at: string; model?: string; readonly?: boolean; disposition?: "steer" | "wait" | "interrupt" }
+
+/** A message event: `{ type: "message" } & Message`. */
+export type MessageEvent = { type: "message" } & Message
+
+/** 一次压缩（对齐 core CompactionEvent；替代旧的 CompactionRecord 双源合并）。 */
+export interface CompactionEvent {
+  type: "compaction"
   at: string
-  trigger: "auto" | "in-run" | "manual"
+  trigger: "manual" | "in-run" | "auto"
   /** 超限紧急压缩的审计标记（仅自动压缩可能携带）。 */
   emergency?: true
   focus?: string
@@ -131,3 +150,26 @@ export interface CompactionRecord {
   segmentSummary: string
   top: string
 }
+
+/** 一次记忆写入（对齐 core MemoryEvent）。 */
+export interface MemoryEvent {
+  type: "memory"
+  at: string
+  trigger: "immediate" | "manual" | "interval" | "follow" | "admin"
+  kind: "episode" | "cognition"
+  op: "append" | "update" | "new-thread" | "rewrite" | "create" | "overwrite" | "delete" | "inactivate"
+  topic?: string
+  file?: string
+  scope?: string
+  source?: string
+}
+
+export type SessionEvent =
+  | SessionCreatedEvent
+  | SessionRenamedEvent
+  | SessionDeletedEvent
+  | SessionRestoredEvent
+  | SessionSetEvent
+  | MessageEvent
+  | CompactionEvent
+  | MemoryEvent
