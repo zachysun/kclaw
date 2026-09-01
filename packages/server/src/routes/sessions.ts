@@ -123,6 +123,14 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       return stores.sessions.readMessages(id)
     })
 
+    // Full event stream (event-sourcing truth): oldest-first, includes
+    // session.created, message, and compaction events.
+    scope.get("/sessions/:id/events", async (request, reply) => {
+      const { id } = request.params as { id: string }
+      if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
+      return stores.sessions.readEvents(id)
+    })
+
     // Compaction audit log (spec 6A.2): read-only view over compactions.jsonl.
     scope.get("/sessions/:id/compactions", async (request, reply) => {
       const { id } = request.params as { id: string }

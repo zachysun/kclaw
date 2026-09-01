@@ -126,6 +126,32 @@ describe("sessions routes", () => {
     expect(res.json()).toEqual({ error: "session not found" })
   })
 
+  it("GET /sessions/:id/events 返回全部事件（created + message + compaction）", async () => {
+    const created = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
+    store.appendMessage(created.id, newMessage(created.id, "user", [{ id: "blk_1", type: "text", text: "hello" }]))
+    store.appendCompaction(created.id, {
+      at: "2026-08-30T00:00:00Z",
+      trigger: "manual",
+      from: null,
+      upto: created.id,
+      messages: 1,
+      segmentSummary: "summary",
+      top: "top",
+    })
+
+    const res = await app.inject({ method: "GET", url: `/sessions/${created.id}/events`, headers: AUTH })
+    expect(res.statusCode).toBe(200)
+    const events = res.json() as Array<{ type: string }>
+    expect(events.length).toBeGreaterThanOrEqual(3)
+    expect(events.map((e) => e.type)).toEqual(["session.created", "message", "compaction"])
+  })
+
+  it("GET /sessions/:id/events 会话不存在返回 404", async () => {
+    const res = await app.inject({ method: "GET", url: "/sessions/ses_nope/events", headers: AUTH })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toEqual({ error: "session not found" })
+  })
+
   it("PATCH /sessions/:id for an unknown id returns 404", async () => {
     const res = await app.inject({
       method: "PATCH",
