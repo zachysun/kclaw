@@ -26,7 +26,7 @@ export function resolvePaths(home?: string): KclawPaths
 | 路径 | 用途 | 写入方 |
 |------|------|--------|
 | `<home>/config.yaml` | 全部配置（见下节） | CLI 向导 `saveConfig`；用户手编 |
-| `<home>/AGENTS.md` | agent 人格，非空则作为系统提示 | 用户手编；daemon 启动时读 |
+| `<home>/AGENTS.md` | agent 人格，非空则作为系统提示；每次运行拼装的完整系统提示以 `system` 事件全量留痕 | 用户手编；daemon 启动时读 |
 | `<home>/memory/global/` | L2 全局认知（persona.md、wiki/、rule/ 的 markdown，真相） | MemorySystem / 用户手编 |
 | `<home>/memory/projects/<id>/` | L1 项目情节（`<topic>.md` 主题线、workdir.txt、MEMORY.md、state.json、vectors.db） | MemorySystem / 用户手编 |
 | `<home>/memory/notes/`、`<home>/memory/index.db` | v1 遗留：前者是迁移输入（daemon 启动读后删除）、后者是被删除的 v1 派生物索引 | 仅 daemon 启动迁移（见 [memory](./memory.md)） |
@@ -108,8 +108,8 @@ export function readJsonl(file: string): unknown[]
 
 每个会话一个目录 `<sessionsDir>/<id>/`，三个文件，由 `SessionStore`（`packages/core/src/session/store.ts`）统一管理：
 
-- `events.jsonl`：**唯一真相**，append-only 事件流，一行一个 `SessionEvent`（JSON 序列化）。共 8 种事件：会话生命周期 `session.created` / `session.renamed` / `session.deleted` / `session.restored` / `session.set`（model / readonly / disposition 的会话级设置），外加内容类 `message`（一条消息）、`compaction`（一次压缩审计）、`memory`（一次记忆落盘审计）。所有写入都先落事件，再把事件折进 meta.json 投影（见下）。
-- `meta.json`：**派生投影**（`SessionMeta`），由事件流经 `applyEvent` 逐条折叠得出；meta.json 缺失或损坏时 `meta()` 自动从事件流重建（`rebuildMeta`），任何时候删掉它也能重建。崩溃恢复时允许它滞后于事件流（meta 只是投影、非真相，不会丢数据）；滞后不会被后续写入自动追平——`appendEvent` 先读当前投影、只折入新事件——仅在 meta.json 缺失或损坏时经 `rebuildMeta` 重放整条事件流整流。整文件原子重写（`updateMeta` 合并 patch、`undefined` 键删除；`message` / `compaction` 事件会推进投影的 `updatedAt`，`memory` 事件不推进）。
+- `events.jsonl`：**唯一真相**，append-only 事件流，一行一个 `SessionEvent`（JSON 序列化）。共 9 种事件：会话生命周期 `session.created` / `session.renamed` / `session.deleted` / `session.restored` / `session.set`（model / readonly / disposition 的会话级设置），外加内容类 `message`（一条消息）、`compaction`（一次压缩审计）、`memory`（一次记忆落盘审计）、`system`（一条系统提示词审计，每次对话运行落一条拼装完成的全文）。所有写入都先落事件，再把事件折进 meta.json 投影（见下）。
+- `meta.json`：**派生投影**（`SessionMeta`），由事件流经 `applyEvent` 逐条折叠得出；meta.json 缺失或损坏时 `meta()` 自动从事件流重建（`rebuildMeta`），任何时候删掉它也能重建。崩溃恢复时允许它滞后于事件流（meta 只是投影、非真相，不会丢数据）；滞后不会被后续写入自动追平——`appendEvent` 先读当前投影、只折入新事件——仅在 meta.json 缺失或损坏时经 `rebuildMeta` 重放整条事件流整流。整文件原子重写（`updateMeta` 合并 patch、`undefined` 键删除；`message` / `compaction` 事件会推进投影的 `updatedAt`，`memory` / `system` 事件不推进）。
 - `queue.jsonl`：**运行态**排队消息（`{ messageId, disposition, text, trigger, attachments?, note?, enqueuedAt }`，顺序即执行顺序，见 [run-manager](../server/run-manager.md) 的消息队列）。与事件流不同——`replaceQueue` 每次**整文件重写**，不是 append-only；不参与 meta.json。
 
 `meta.json` 字段：`SessionMeta { id, title, createdAt, updatedAt, jobId?, workdir?, model?, readonly?, deleted?, deletedAt?, compactedSummary?, compactedUpto?, compaction?, dispositionOverride? }`，其中 `model` 为会话级模型覆盖（空/缺省回落 daemon 默认）、`readonly` 为会话级只读开关（写/exec 工具被拒，见 [permissions](./permissions.md)）；`compaction` 是 v2 分层压缩状态 `{ segments, top, upto }`（语义见 [compaction](./compaction.md)），由 `compaction` 事件投影（每次压缩把新段折进 `segments`，`updateMeta` 不再直接合并它）；`compactedSummary`/`compactedUpto` 是 v1 压缩的遗留字段——不再被清除（Task 5 删了唯一的清除调用），但运行侧读压缩视图时 `compaction` 优先（run.ts 的 `prev` 先读 `compaction`，见 [compaction](./compaction.md)），两者并存无功能影响；`dispositionOverride` 是会话级处置覆盖（`"steer" | "wait" | "interrupt"`，优先于 `sessions.defaultDisposition`；服务端路由仍接受三值写入，但客户端当前只写 steer/wait——interrupt 在 Web 与 CLI 都是一次性动作、不落覆盖，`"interrupt"` 值只会来自历史遗留，见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)）。
