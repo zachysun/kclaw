@@ -6,12 +6,21 @@
  * - 跟随：RunManager 在每个 run 结束（任何 stopReason）时调 system.scheduleFollowCheck
  *   （daemon 装配钩子，见 run.ts）；scheduler 扫到 due 的检查执行 triggerFollow 并 clear。
  *   挂起检查经 WriteLedger 落盘（spec 11），daemon 重启后由首次 sweep 补查。
+ * - 夜间内化：本地时间过了 consolidateHour（默认凌晨 3 点）且该项目今天（本地日期）
+ *   未跑过则触发 triggerNightly；daemon 凌晨未开时开机后首个 sweep 补跑。触发发起后
+ *   立即记日期（即便失败也推进，与 interval 的 M-2 取舍一致）：防重入优先，失败次日再试。
  *
  * 手动/立刻不入此调度器（memory_save 工具与 /memory save 直接触发）。
  */
 import type { KclawConfig, MemorySystem, SessionStore } from "@kclaw/core"
 
 const DEFAULT_SCAN_MS = 60_000
+
+/** 本地日期 YYYY-MM-DD（夜间内化防同日重跑的判重键；与触发判定同用本地时间）。 */
+function localDate(d: Date): string {
+  const p = (n: number): string => String(n).padStart(2, "0")
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
 
 /**
  * 跟随门禁判定（纯函数，spec 4.2）：end_turn 之后 idleMinutes 内无新活动 → due。
@@ -52,6 +61,11 @@ export function startMemoryScheduler(deps: {
 
   async function sweep(): Promise<void> {
     const cfg = deps.config.memory
+    // 该项目最近活动的会话（与 core #recentSessionId 同判据）：interval / 夜间内化
+    // 无显式归属会话时，memory 事件落到它名下（Task 6/7 会话事件流归属）。
+    const recentSession = (workdir: string): string | undefined =>
+      deps.sessions.list().filter((m) => (m.workdir ?? "") === workdir)
+        .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))[0]?.id
     for (const workdir of deps.workdirs()) {
       if (stopped) return
       // 定时（intervalMinutes=0 关闭）
@@ -60,9 +74,7 @@ export function startMemoryScheduler(deps: {
         if (last === undefined || now().getTime() - Date.parse(last) >= cfg.write.intervalMinutes * 60_000) {
           // 定时触发无显式归属会话：取该工作区最近活动的会话（与 core #recentSessionId 同判据），
           // 让 interval 落盘事件挂到它名下（Task 6/7 会话事件流归属）。
-          const recent = deps.sessions.list().filter((m) => (m.workdir ?? "") === workdir)
-            .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))[0]?.id
-          const p = deps.system.triggerInterval(workdir, recent).catch((e) => log(`kclaw memory interval failed: ${String(e)}`))
+          const p = deps.system.triggerInterval(workdir, recentSession(workdir)).catch((e) => log(`kclaw memory interval failed: ${String(e)}`))
           inFlight.add(p); void p.finally(() => inFlight.delete(p))
           // markIntervalRun 在触发发起后立即推进（即便失败也推进，M-2 取舍）：interval
           // 语义是"至少每 intervalMinutes 兜底扫一次"，失败后下个整周期再试，避免同项目
@@ -86,6 +98,18 @@ export function startMemoryScheduler(deps: {
             // state.json 里 followChecks 无界增长。
             deps.system.clearFollowCheck(workdir, check.sessionId)
           }
+        }
+      }
+      // 夜间内化（consolidateHour 负值关闭；pipeline 内部再受 memory.consolidate 总开关管）：
+      // 本地时间过了 consolidateHour 且该项目今天（本地日期）未跑则触发——daemon 凌晨
+      // 未开时，开机后首个 sweep 补跑。日期由 markNightlyRun 记本地日期（防同日重跑），
+      // 内化判据基线由 pipeline 记 UTC 日期（与线文件 updated 同源），两个时区各管各的。
+      if (cfg.consolidateHour >= 0) {
+        const t = now()
+        if (t.getHours() >= cfg.consolidateHour && deps.system.nightlyLastRun(workdir) !== localDate(t)) {
+          const p = deps.system.triggerNightly(workdir, recentSession(workdir)).catch((e) => log(`kclaw memory nightly failed: ${String(e)}`))
+          inFlight.add(p); void p.finally(() => inFlight.delete(p))
+          deps.system.markNightlyRun(workdir, localDate(t))
         }
       }
     }

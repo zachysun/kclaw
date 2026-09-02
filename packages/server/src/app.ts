@@ -149,9 +149,11 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   const config = opts.stores?.config ?? loadConfig(paths)
   // opts.run is the daemon's RunManager (same instance the ws routes use);
   // the session routes only need it for POST /sessions/:id/compact.
-  registerSessionRoutes(app, { sessions, config, run: opts.run })
   // spec 9.2 的 /memory 路由族：无 memory 装配时全部 503，不影响既有路由。
   registerMemoryRoutes(app, { memory: opts.memory, config })
+  // 切会话写入：POST /sessions 是 CLI /clear、/new 与 web 新建会话的共同底层，
+  // 记忆系统在装配时才挂 clear 触发（缺省不触发，行为与未装配记忆时一致）。
+  registerSessionRoutes(app, { sessions, config, run: opts.run, memory: opts.memory })
   if (opts.attachmentsDir !== undefined) {
     registerAttachmentRoutes(app, { sessions, attachmentsDir: opts.attachmentsDir })
   }

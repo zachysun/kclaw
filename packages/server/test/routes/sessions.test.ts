@@ -335,3 +335,48 @@ describe("sessions routes", () => {
     expect(missing.json()).toEqual({ error: "session not found" })
   })
 })
+
+describe("POST /sessions 切会话记忆写入（/clear、/new、新建会话共用）", () => {
+  let home: string
+  let store: SessionStore
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "kclaw-clearmem-"))
+    store = new SessionStore(join(home, "sessions"))
+  })
+
+  afterEach(async () => { await rm(home, { recursive: true, force: true }) })
+
+  const waitClear = async (calls: unknown[]): Promise<void> => {
+    for (let i = 0; i < 50 && calls.length === 0; i++) await new Promise((r) => setTimeout(r, 10))
+  }
+
+  it("triggers a clear write for the OLD session of the same project", async () => {
+    // 旧会话先建（用户刚聊完的那个）；新会话创建后异步触发 clear，归属指向旧会话
+    const oldSession = store.create("旧会话", undefined, "/tmp/x")
+    const calls: Array<{ workdir: string; sessionId?: string }> = []
+    const memory = {
+      recentSessionId: () => oldSession.id, // 创建前该项目最近活动者 = 旧会话
+      triggerClear: async (workdir: string, sessionId?: string) => { calls.push({ workdir, sessionId }) },
+    } as unknown as import("@kclaw/core").MemorySystem
+    const app = await createApp({ home, token: "t1", stores: { sessions: store }, memory })
+    try {
+      const res = await app.inject({ method: "POST", url: "/sessions", headers: AUTH, payload: { workdir: "/tmp/x" } })
+      expect(res.statusCode).toBe(201)
+      await waitClear(calls)
+      expect(calls).toEqual([{ workdir: "/tmp/x", sessionId: oldSession.id }])
+    } finally { await app.close() }
+  })
+
+  it("a failing clear write does not break the 201 response", async () => {
+    const memory = {
+      recentSessionId: () => undefined,
+      triggerClear: async () => { throw new Error("extract boom") },
+    } as unknown as import("@kclaw/core").MemorySystem
+    const app = await createApp({ home, token: "t1", stores: { sessions: store }, memory })
+    try {
+      const res = await app.inject({ method: "POST", url: "/sessions", headers: AUTH, payload: { workdir: "/tmp/x" } })
+      expect(res.statusCode).toBe(201)
+    } finally { await app.close() }
+  })
+})

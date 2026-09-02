@@ -31,8 +31,11 @@ function fakeSystem(over: Record<string, unknown> = {}) {
   return {
     triggerInterval: vi.fn(async () => undefined),
     triggerFollow: viFnAsync(),
+    triggerNightly: viFnAsync(),
     markIntervalRun: vi.fn(),
+    markNightlyRun: vi.fn(),
     intervalLastRun: vi.fn(() => undefined),
+    nightlyLastRun: vi.fn(() => undefined),
     pendingFollowChecks: vi.fn(() => []),
     clearFollowCheck: vi.fn(),
     lastActivity: vi.fn(() => ""),
@@ -129,6 +132,53 @@ describe("startMemoryScheduler", () => {
     await new Promise((r) => setTimeout(r, 30))
     await handle.stop()
     expect(sys.triggerInterval).not.toHaveBeenCalled()
+  })
+
+  it("nightly: triggers after consolidateHour when not yet run today; records the LOCAL date", async () => {
+    const sys = fakeSystem()
+    const now = new Date("2026-08-29T12:00:00Z") // 本地小时在常见时区（东八 = 20 点）≥ 3
+    const meta = sessions.create("t", undefined, "/w/kclaw")
+    const handle = startMemoryScheduler({
+      system: sys as unknown as MemorySystem, sessions,
+      config: structuredClone(defaultConfig),
+      workdirs: () => ["/w/kclaw"],
+      intervalMs: 10, now: () => now,
+    })
+    await new Promise((r) => setTimeout(r, 30))
+    await handle.stop()
+    expect(sys.triggerNightly).toHaveBeenCalledWith("/w/kclaw", meta.id)
+    // 期望日期按本机时区现算，断言在任何时区都成立
+    const p = (n: number): string => String(n).padStart(2, "0")
+    const today = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`
+    expect(sys.markNightlyRun).toHaveBeenCalledWith("/w/kclaw", today)
+  })
+
+  it("nightly: already run today (local date) skips the trigger", async () => {
+    const now = new Date("2026-08-29T12:00:00Z")
+    const p = (n: number): string => String(n).padStart(2, "0")
+    const today = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`
+    const sys = fakeSystem({ nightlyLastRun: vi.fn(() => today) })
+    const handle = startMemoryScheduler({
+      system: sys as unknown as MemorySystem, sessions,
+      config: structuredClone(defaultConfig),
+      workdirs: () => ["/w/kclaw"],
+      intervalMs: 10, now: () => now,
+    })
+    await new Promise((r) => setTimeout(r, 30))
+    await handle.stop()
+    expect(sys.triggerNightly).not.toHaveBeenCalled()
+    expect(sys.markNightlyRun).not.toHaveBeenCalled()
+  })
+
+  it("nightly: negative consolidateHour disables the branch", async () => {
+    const sys = fakeSystem()
+    const cfg = structuredClone(defaultConfig)
+    cfg.memory.consolidateHour = -1
+    const handle = startMemoryScheduler({ system: sys as unknown as MemorySystem, sessions, config: cfg, workdirs: () => ["/w/kclaw"], intervalMs: 10 })
+    await new Promise((r) => setTimeout(r, 30))
+    await handle.stop()
+    expect(sys.triggerNightly).not.toHaveBeenCalled()
+    expect(sys.markNightlyRun).not.toHaveBeenCalled()
   })
 
   it("idleMinutes=0 disables the follow branch entirely (no check consumption)", async () => {

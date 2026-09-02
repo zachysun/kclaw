@@ -1,5 +1,5 @@
 import type { FastifyError, FastifyInstance } from "fastify"
-import type { KclawConfig, SessionStore } from "@kclaw/core"
+import type { KclawConfig, MemorySystem, SessionStore } from "@kclaw/core"
 import type { RunManager } from "../run.js"
 
 /** Store dependencies for the session routes (injected by createApp). */
@@ -9,6 +9,12 @@ export interface SessionStores {
   config?: KclawConfig
   /** RunManager for compaction (injected by createApp). Missing → the compact route answers 503. */
   run?: RunManager
+  /**
+   * MemorySystem for the session-switch memory write (injected by createApp).
+   * Missing → POST /sessions creates sessions without triggering a memory write
+   * (same behavior as a project without memory assembled).
+   */
+  memory?: MemorySystem
 }
 
 const NOT_FOUND = { error: "session not found" } as const
@@ -52,7 +58,20 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       // resolved path so every WebUI-created session carries a concrete
       // workdir (the sidebar groups by it).
       const workdir = parsed.workdir ?? stores.config?.workspace
-      return reply.code(201).send(stores.sessions.create(parsed.title, undefined, workdir))
+      // 切会话写入（/clear、/new、web 新建会话共用此路由）：创建前取"项目最近活动
+      // 会话"作归属——此刻新会话尚未建立，最近活动者必然是用户刚离开的旧会话；
+      // 创建后异步触发 clear 提取（范围覆盖到当前时刻），不阻塞建会话响应。失败只
+      // 打日志：提取由水位防重复，下次任一触发补上。
+      const fromSession = stores.memory !== undefined && workdir !== undefined
+        ? stores.memory.recentSessionId(workdir)
+        : undefined
+      const created = stores.sessions.create(parsed.title, undefined, workdir)
+      if (stores.memory !== undefined && workdir !== undefined) {
+        void stores.memory.triggerClear(workdir, fromSession).catch((err) => {
+          console.error(`kclaw memory clear failed: ${String(err)}`)
+        })
+      }
+      return reply.code(201).send(created)
     })
 
     scope.get("/sessions", async (request) => {
