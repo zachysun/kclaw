@@ -835,11 +835,18 @@ export class RunManager {
     const atRatio = config.sessions.compactAtRatio ?? 0.66
     const panicRatio = config.sessions.compactPanicRatio ?? 0.85
 
+    // 系统提示词审计事件（第 9 种持久化事件）：拼装完成后、进入模型循环前把
+    // 全量文本落盘一条 system 事件。每 run 恰好一条——steer 注入与 run 内多次
+    // 模型调用复用同一份提示词，不重复记录；不加幻影会话守卫（与消息写入一致），
+    // 也不吞错：写入失败即本次 run 失败，由驱动器的条目级失败兜底。
+    const system = this.#systemWithCognition(paths.agentsMd, workspace)
+    sessions.appendSystem(sessionId, { at: new Date().toISOString(), text: system })
+
     const outcome = await runAgent(
       {
         sessionId,
         history,
-        system: this.#systemWithCognition(paths.agentsMd, workspace),
+        system,
         userText: input.userText, // ignored by the loop when userMessage is set
         trigger: input.trigger,
         userMessage,

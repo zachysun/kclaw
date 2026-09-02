@@ -262,6 +262,8 @@ describe("steer", () => {
     const lines = sessions.readMessages(meta.id)
     const injected = lines.find((m: { id: string }) => m.id === s.messageId)
     expect(injected.blocks[0].text).toBe("转向：改用方案 B")
+    // steer 注入复用同一份系统提示词：整轮（两次模型调用 + 边界注入）恰好一条审计
+    expect(sessions.readEvents(meta.id).filter((e) => e.type === "system")).toHaveLength(1)
   })
 
   it("a failing steer mount fails the run (steering_failed) and keeps the rest of the buffer for demotion", async () => {

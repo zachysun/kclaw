@@ -11,7 +11,7 @@ kclaw 是一个本地常驻的个人 agent：一个 daemon 进程独占全部状
 - **单 daemon 多客户端**：CLI 可以随时退出，daemon 不受影响；定时任务在无客户端时照常执行。daemon 是唯一状态权威，客户端不持久化（写入磁盘长期保存）任何业务状态。
 - **core 是纯库**：`@kclaw/core` 不依赖 fastify/ws/commander，不感知 HTTP/WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）的存在。LLM（`deps.llm`）、工具执行、事件出口（`deps.onEvent`）、持久化（`deps.onMessage`）全部注入，整个 agent 循环可用 mock 离线测试。
 - **daemon 只绑 loopback（本机回环地址，外部网络访问不到）**：`HOST = "127.0.0.1"`（`packages/server/src/daemon.ts` 与 `packages/cli/src/daemon-ctl.ts` 各自硬编码），默认绑临时端口（`port: 0`），端口与 pid 写入 `<home>/daemon.json`，鉴权靠 `<home>/token` 里的 Bearer token（放在 HTTP `Authorization` 请求头里的访问令牌）。
-- **实时事件不持久化、消息才持久化**：WS 上推送的增量事件（text.delta、message.created 等）不落盘、不重发、不回放；会话的持久化形式是 events.jsonl 事件流（唯一真相）与 meta.json 投影（见 [storage](./core/storage.md)）。客户端断线恢复 = HTTP 拉全量消息 + 只订阅新事件（详见 [protocol](./core/protocol.md)）。
+- **实时事件不持久化，持久化的是 events.jsonl 事件流**：WS 上推送的增量事件（text.delta、message.created 等）不落盘、不重发、不回放；会话的持久化形式是 events.jsonl 事件流（唯一真相，message / compaction / memory / system 等业务事件都在这里）与 meta.json 投影（见 [storage](./core/storage.md)）。客户端断线恢复 = HTTP 拉全量消息 + 只订阅新事件（详见 [protocol](./core/protocol.md)）。
 - **WebUI 是独立产物**：`@kclaw/web` 除 react/react-dom 外仅依赖 `@kclaw/core` 的 `commands` 共享表（纯数据：slash 命令的 name/usage 元数据，见 [extending](./extending.md)），构建为静态文件后由 daemon 托管（`resolveWebDist` → `packages/web/dist`）。
 
 ---
@@ -100,6 +100,8 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
            ├─ steering drain：steering() 取走引导缓冲消息逐条注入
            │    message.created → onMessage 持久化 → message.completed → message.steered
            └─ 回到下一轮 LLM 调用，直到 end_turn
+  ├─ RunManager 拼装系统提示词后（进入模型循环前）→ SessionStore.appendSystem → sessions/<id>/events.jsonl
+  │    （追加 system 事件全量留痕，每 run 恰好一条；不折进投影、不上总线，写入失败即本次 run 失败）
   ├─ deps.onMessage → SessionStore.appendMessage → sessions/<id>/events.jsonl（追加 message 事件 + 折进 meta.json 投影）
   └─ deps.onEvent  → bus.emit → JSON.stringify → 只发订阅了该 sessionId 的 socket
                                                           packages/server/src/bus.ts

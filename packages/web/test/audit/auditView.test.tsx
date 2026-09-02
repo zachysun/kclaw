@@ -4,7 +4,9 @@
  * flattening message events' blocks into one row per block (event array order
  * — the stream is append-only, oldest first, so array order is time order),
  * the one-line summary per block type, click-to-expand full content, the
- * "压缩" compaction rows, the "记忆" memory rows, and the "暂无轨迹" empty
+ * "压缩" compaction rows, the "记忆" memory rows, the "系统提示词" system
+ * rows (snippet + char count, click-to-expand full text, "已变化" badge when
+ * the text differs from the previous system row), and the "暂无轨迹" empty
  * state.
  */
 import { describe, it, expect, vi } from "vitest"
@@ -61,6 +63,16 @@ function memoryEvent(overrides: Record<string, unknown> = {}): SessionEvent {
     op: "append",
     topic: "kclaw 会话持久化",
     file: "memory/episodes.md",
+    ...overrides,
+  } as unknown as SessionEvent
+}
+
+/** A system event (defaults mirror core SystemEvent). */
+function systemEvent(overrides: Record<string, unknown> = {}): SessionEvent {
+  return {
+    type: "system",
+    at: "2026-08-19T10:06:00.000Z",
+    text: "你是 kclaw 助手。",
     ...overrides,
   } as unknown as SessionEvent
 }
@@ -407,6 +419,188 @@ describe("AuditView (trail)", () => {
     expect(summary(2)).toContain("手动（api 设计）")
     // emergency 追加在 trigger 标签之后。
     expect(summary(3)).toContain("自动（收尾）·超限急救")
+    unmount(root, container)
+  })
+
+  it("renders system events as 系统提示词 rows with a truncated snippet and char count", async () => {
+    const longText = "系统提示词全文".repeat(30) // 210 chars, no whitespace runs
+    const api = makeApi()
+    api.get.mockImplementation(async (path: string) => {
+      if (path === "/sessions") return [session("s1", "会话1")]
+      if (path === "/sessions/s1/events") return [systemEvent({ text: longText })]
+      throw new Error(`unexpected path: ${path}`)
+    })
+
+    const { container, root } = await mount(api)
+    selectValue(container.querySelector('[data-testid="trail-session-select"]') as HTMLSelectElement, "s1")
+    await flush()
+
+    const row = container.querySelector('[data-testid="system-row-sys-0"]')
+    expect(row).not.toBeNull()
+    expect(row!.textContent).toContain("系统提示词")
+    // Collapsed summary: first ~60 chars + ellipsis + total char count.
+    expect(row!.textContent).toContain(longText.slice(0, 60))
+    expect(row!.textContent).toContain("…")
+    expect(row!.textContent).not.toContain(longText)
+    expect(row!.textContent).toContain(`· ${longText.length} 字`)
+    // Collapsed: the full text is not rendered yet.
+    expect(container.querySelector('[data-testid="system-full-sys-0"]')).toBeNull()
+    unmount(root, container)
+  })
+
+  it("shows short system text (≤60 chars) in full without ellipsis", async () => {
+    const shortText = "你是 kclaw 助手，遵守仓库规则。"
+    const api = makeApi()
+    api.get.mockImplementation(async (path: string) => {
+      if (path === "/sessions") return [session("s1", "会话1")]
+      if (path === "/sessions/s1/events") return [systemEvent({ text: shortText })]
+      throw new Error(`unexpected path: ${path}`)
+    })
+
+    const { container, root } = await mount(api)
+    selectValue(container.querySelector('[data-testid="trail-session-select"]') as HTMLSelectElement, "s1")
+    await flush()
+
+    const row = container.querySelector('[data-testid="system-row-sys-0"]')
+    expect(row).not.toBeNull()
+    expect(row!.textContent).toContain(shortText)
+    expect(row!.textContent).not.toContain("…")
+    unmount(root, container)
+  })
+
+  it("does not badge the first system row of a session", async () => {
+    const api = makeApi()
+    api.get.mockImplementation(async (path: string) => {
+      if (path === "/sessions") return [session("s1", "会话1")]
+      if (path === "/sessions/s1/events") return [systemEvent()]
+      throw new Error(`unexpected path: ${path}`)
+    })
+
+    const { container, root } = await mount(api)
+    selectValue(container.querySelector('[data-testid="trail-session-select"]') as HTMLSelectElement, "s1")
+    await flush()
+
+    expect(container.querySelector('[data-testid="system-changed-sys-0"]')).toBeNull()
+    expect(container.querySelectorAll('[data-testid^="system-changed-"]')).toHaveLength(0)
+    unmount(root, container)
+  })
+
+  it("shows no 已变化 badge when consecutive system rows carry identical text", async () => {
+    const api = makeApi()
+    api.get.mockImplementation(async (path: string) => {
+      if (path === "/sessions") return [session("s1", "会话1")]
+      if (path === "/sessions/s1/events") {
+        return [
+          systemEvent({ at: "2026-08-19T10:06:00.000Z" }),
+          systemEvent({ at: "2026-08-19T11:06:00.000Z" }),
+        ]
+      }
+      throw new Error(`unexpected path: ${path}`)
+    })
+
+    const { container, root } = await mount(api)
+    selectValue(container.querySelector('[data-testid="trail-session-select"]') as HTMLSelectElement, "s1")
+    await flush()
+
+    expect(container.querySelectorAll('[data-testid^="system-changed-"]')).toHaveLength(0)
+    unmount(root, container)
+  })
+
+  it("badges a system row 已变化 when its text differs from the previous system row", async () => {
+    const api = makeApi()
+    api.get.mockImplementation(async (path: string) => {
+      if (path === "/sessions") return [session("s1", "会话1")]
+      if (path === "/sessions/s1/events") {
+        return [
+          systemEvent({ text: "第一版系统提示词", at: "2026-08-19T10:06:00.000Z" }),
+          systemEvent({ text: "第二版系统提示词", at: "2026-08-19T11:06:00.000Z" }),
+        ]
+      }
+      throw new Error(`unexpected path: ${path}`)
+    })
+
+    const { container, root } = await mount(api)
+    selectValue(container.querySelector('[data-testid="trail-session-select"]') as HTMLSelectElement, "s1")
+    await flush()
+
+    expect(container.querySelector('[data-testid="system-changed-sys-0"]')).toBeNull()
+    const badge = container.querySelector('[data-testid="system-changed-sys-1"]')
+    expect(badge).not.toBeNull()
+    expect(badge!.textContent).toContain("已变化")
+    unmount(root, container)
+  })
+
+  it("compares adjacent system rows across interleaved message rows", async () => {
+    const api = makeApi()
+    api.get.mockImplementation(async (path: string) => {
+      if (path === "/sessions") return [session("s1", "会话1")]
+      if (path === "/sessions/s1/events") {
+        return [
+          systemEvent({ text: "第一版系统提示词", at: "2026-08-19T10:06:00.000Z" }),
+          messageEvent({ id: "m1", blocks: [{ id: "b1", type: "text", text: "中间的对话" }], createdAt: "2026-08-19T10:07:00.000Z" }),
+          systemEvent({ text: "第二版系统提示词", at: "2026-08-19T11:06:00.000Z" }),
+        ]
+      }
+      throw new Error(`unexpected path: ${path}`)
+    })
+
+    const { container, root } = await mount(api)
+    selectValue(container.querySelector('[data-testid="trail-session-select"]') as HTMLSelectElement, "s1")
+    await flush()
+
+    expect(container.querySelector('[data-testid="system-changed-sys-0"]')).toBeNull()
+    expect(container.querySelector('[data-testid="system-changed-sys-1"]')).not.toBeNull()
+    unmount(root, container)
+  })
+
+  it("keeps session metadata events skipped while rendering the system row", async () => {
+    const api = makeApi()
+    api.get.mockImplementation(async (path: string) => {
+      if (path === "/sessions") return [session("s1", "会话1")]
+      if (path === "/sessions/s1/events") {
+        // Stream order: session.created → system → session.renamed/set/deleted/restored.
+        return [
+          { type: "session.created", at: "2026-08-19T09:00:00.000Z", title: "会话1" },
+          systemEvent(),
+          { type: "session.renamed", at: "2026-08-19T10:10:00.000Z", title: "改名" },
+          { type: "session.set", at: "2026-08-19T10:11:00.000Z", model: "m" },
+          { type: "session.deleted", at: "2026-08-19T10:12:00.000Z" },
+          { type: "session.restored", at: "2026-08-19T10:13:00.000Z" },
+        ] as SessionEvent[]
+      }
+      throw new Error(`unexpected path: ${path}`)
+    })
+
+    const { container, root } = await mount(api)
+    selectValue(container.querySelector('[data-testid="trail-session-select"]') as HTMLSelectElement, "s1")
+    await flush()
+
+    const list = container.querySelector('[data-testid="trail-list"]')!
+    const rowIds = Array.from(list.querySelectorAll("button[data-testid]")).map((el) => el.getAttribute("data-testid"))
+    expect(rowIds).toEqual(["system-row-sys-0"])
+    unmount(root, container)
+  })
+
+  it("expands a system row on click to reveal the full prompt text", async () => {
+    const longText = "系统提示词全文".repeat(30)
+    const api = makeApi()
+    api.get.mockImplementation(async (path: string) => {
+      if (path === "/sessions") return [session("s1", "会话1")]
+      if (path === "/sessions/s1/events") return [systemEvent({ text: longText })]
+      throw new Error(`unexpected path: ${path}`)
+    })
+
+    const { container, root } = await mount(api)
+    selectValue(container.querySelector('[data-testid="trail-session-select"]') as HTMLSelectElement, "s1")
+    await flush()
+
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="system-row-sys-0"]') as HTMLButtonElement).click()
+    })
+
+    const full = container.querySelector('[data-testid="system-full-sys-0"]')
+    expect(full).not.toBeNull()
+    expect(full!.textContent).toContain(longText)
     unmount(root, container)
   })
 

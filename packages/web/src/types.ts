@@ -164,6 +164,13 @@ export interface MemoryEvent {
   source?: string
 }
 
+/** 一次对话运行的系统提示词全量留痕（对齐 core SystemEvent）。 */
+export interface SystemEvent {
+  type: "system"
+  at: string
+  text: string
+}
+
 export type SessionEvent =
   | SessionCreatedEvent
   | SessionRenamedEvent
@@ -173,3 +180,4 @@ export type SessionEvent =
   | MessageEvent
   | CompactionEvent
   | MemoryEvent
+  | SystemEvent

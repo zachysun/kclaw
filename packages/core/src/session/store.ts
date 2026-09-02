@@ -6,7 +6,7 @@ import type { CompactionRecord, CompactionState } from "./compaction.js"
 import { writeFileAtomic } from "../storage/atomic.js"
 import { appendJsonlLine, readJsonl } from "../storage/jsonl.js"
 import { applyEvent, isCompactionEvent, isMessageEvent } from "./events.js"
-import type { SessionCreatedEvent, SessionEvent, SessionSetEvent } from "./events.js"
+import type { SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent } from "./events.js"
 
 /** 排队条目的附件形状（与 server 的 AttachmentRef 结构一致，结构类型互通）。 */
 export interface QueueAttachment { path: string; name: string; size: number; mimeType: string }
@@ -199,6 +199,11 @@ export class SessionStore {
     } catch {
       return []
     }
+  }
+
+  /** Append one system audit event (每次对话运行的系统提示词全量留痕); the projection stays untouched (不推进 updatedAt)。 */
+  appendSystem(id: string, event: Omit<SystemEvent, "type">): void {
+    this.appendEvent(id, { type: "system", ...event })
   }
 
   /**

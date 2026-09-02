@@ -6,24 +6,30 @@
  * rendered in array order — oldest at the top, newest at the bottom, like a
  * log. Message events carry the full Message payload and flatten into one row
  * per block; compaction events become "压缩" rows; memory events become "记忆"
- * rows; the session metadata events (session.created/renamed/…) are skipped.
+ * rows; system events become "系统提示词" rows (snippet + char count collapsed,
+ * full prompt on expand, "已变化" badge when the text differs from the
+ * previous system row); the session metadata events (session.created/renamed/…)
+ * are skipped.
  * Each row shows a type label plus a one-line summary, and expands on click
  * to the full payload. No mutation, no /audit — the old audit tail route is
  * gone.
  */
 import { useEffect, useState } from "react"
 import { type ApiClient } from "../api.js"
-import type { Block, CompactionEvent, MemoryEvent, MessageEvent, Role, SessionEvent, SessionMeta, ToolGrantReason } from "../types.js"
+import type { Block, CompactionEvent, MemoryEvent, MessageEvent, Role, SessionEvent, SessionMeta, SystemEvent, ToolGrantReason } from "../types.js"
 
 /**
  * One flattened trail row: either a message block (carrying the owning
  * message's role + timestamp, and for tool rows the grant reason), a
- * compaction event (carrying its own `at` timestamp), or a memory event.
+ * compaction event (carrying its own `at` timestamp), a memory event, or a
+ * system event (carrying whether its text differs from the previous system
+ * row in stream order).
  */
 type TrailRow =
   | { kind: "block"; key: string; role: Role; block: Block; createdAt: string; grantedBy?: ToolGrantReason }
   | { kind: "compaction"; key: string; record: CompactionEvent; at: string }
   | { kind: "memory"; key: string; event: MemoryEvent }
+  | { kind: "system"; key: string; event: SystemEvent; changed: boolean }
 
 export function AuditView({ api }: { api: ApiClient }) {
   const [sessions, setSessions] = useState<SessionMeta[] | null>(null)
@@ -168,6 +174,33 @@ export function AuditView({ api }: { api: ApiClient }) {
                     )}
                   </li>
                 )
+              case "system":
+                return (
+                  <li key={row.key} className="trail-row-item">
+                    <button
+                      type="button"
+                      className="trail-row"
+                      data-testid={`system-row-${row.key}`}
+                      onClick={toggle}
+                    >
+                      <span className="trail-type">系统提示词</span>
+                      <span className="trail-summary">
+                        {`${summarize(row.event.text, 60)} · ${row.event.text.length} 字`}
+                      </span>
+                      <span className="trail-meta muted">{new Date(row.event.at).toLocaleString()}</span>
+                      {row.changed && (
+                        <span className="trail-grant" data-testid={`system-changed-${row.key}`}>
+                          已变化
+                        </span>
+                      )}
+                    </button>
+                    {isExpanded && (
+                      <pre className="trail-full" data-testid={`system-full-${row.key}`}>
+                        {row.event.text}
+                      </pre>
+                    )}
+                  </li>
+                )
               default:
                 return (
                   <li key={row.key} className="trail-row-item">
@@ -210,7 +243,11 @@ export function AuditView({ api }: { api: ApiClient }) {
  * callId, resolved from the tool message events' message-level `grantedBy`
  * maps (a tool_call lives on an assistant message, its tool_result + grantedBy
  * on the matching tool message — so we join by callId). Compaction and memory
- * events become rows of their own. The stream is append-only and time-ordered,
+ * events become rows of their own. System events become "系统提示词" rows of
+ * their own; each carries `changed` — whether its text differs from the
+ * previous system row in stream order (adjacent system rows compare directly,
+ * ignoring the rows in between; the first system row of a session never
+ * changes). The stream is append-only and time-ordered,
  * so rows are emitted in event-array order — no timestamp re-sort needed.
  * Session metadata events (session.created/renamed/deleted/restored/set) are
  * intentionally skipped: the trail is about conversation + maintenance
@@ -232,6 +269,8 @@ function flattenTrail(events: SessionEvent[] | null): TrailRow[] {
 
   let cp = 0
   let mem = 0
+  let sys = 0
+  let lastSystemText: string | null = null
   for (const event of events) {
     switch (event.type) {
       case "message":
@@ -255,6 +294,15 @@ function flattenTrail(events: SessionEvent[] | null): TrailRow[] {
         break
       case "memory":
         rows.push({ kind: "memory", key: `mem-${mem++}`, event })
+        break
+      case "system":
+        rows.push({
+          kind: "system",
+          key: `sys-${sys++}`,
+          event,
+          changed: lastSystemText !== null && lastSystemText !== event.text,
+        })
+        lastSystemText = event.text
         break
       default:
         // session.created / renamed / deleted / restored / set — not rendered.
@@ -282,10 +330,10 @@ function memoryFullContent(event: MemoryEvent): string {
   return lines.join("\n")
 }
 
-/** Whitespace-collapsed, first-80-chars summary. */
-function summarize(text: string): string {
+/** Whitespace-collapsed, first-N-chars summary. */
+function summarize(text: string, max = 80): string {
   const t = text.replace(/\s+/g, " ").trim()
-  return t.length > 80 ? `${t.slice(0, 80)}…` : t
+  return t.length > max ? `${t.slice(0, max)}…` : t
 }
 
 function blockTypeLabel(block: Block): string {
