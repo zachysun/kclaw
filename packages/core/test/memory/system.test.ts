@@ -246,7 +246,9 @@ describe("memory events in session stream (Task 6)", () => {
     await sys.triggerManual(WORKDIR, "ses_nope")
     expect(sessions.meta("ses_nope")).toBeUndefined()
     expect(existsSync(join(root, "sessions", "ses_nope"))).toBe(false)
-    // 真实存在的归属会话 → 照常落 memory 事件
+    // 真实存在的归属会话 → 照常落 memory 事件（补一条新消息，增量提取才有范围；
+    // 2026-09-02 前第二次触发靠全量重扫重复提取旧消息才落事件）
+    sessions.appendMessage(meta.id, { id: "m2", sessionId: meta.id, role: "user", blocks: [{ id: "b2", type: "text", text: "晚上又去跑了五公里" }], createdAt: new Date().toISOString() })
     await sys.triggerManual(WORKDIR, meta.id)
     const memoryEvents = sessions.readEvents(meta.id).filter(isMemoryEvent)
     expect(memoryEvents.some((e) => e.trigger === "manual" && e.kind === "episode")).toBe(true)

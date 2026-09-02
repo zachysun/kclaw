@@ -6,9 +6,10 @@ import { MemoryPipeline, EXTRACT_SYSTEM_PROMPT, CONSOLIDATE_SYSTEM_PROMPT, type 
 import { projectIdFor } from "../../src/memory/layout.js"
 import { SessionStore } from "../../src/session/store.js"
 import type { MemoryEvent } from "../../src/session/events.js"
-import type { LlmClient, LlmStreamEvent } from "../../src/provider/types.js"
+import type { LlmClient, LlmRequest, LlmStreamEvent } from "../../src/provider/types.js"
 import { newMessage } from "../../src/protocol/messages.js"
 import { scriptedLlm } from "./helpers.js"
+import { parseThreadFile } from "../../src/memory/threads.js"
 
 let root: string
 let sessions: SessionStore
@@ -72,7 +73,7 @@ describe("runTrigger", () => {
     expect(calls).toBe(0)
   })
 
-  it("clear advances BOTH watermarks (session-switch covers up to now)", async () => {
+  it("clear advances BOTH watermarks (incremental — no full rescan, 回归 2026-09-02)", async () => {
     const meta = sessions.create("s", undefined, WORKDIR)
     seedMessages(meta.id, ["内容"])
     let calls = 0
@@ -85,6 +86,107 @@ describe("runTrigger", () => {
     await pipe.runTrigger(WORKDIR, "follow")
     // 只有 clear 那次落盘；后续增量触发不重复提取同一段消息
     expect(calls).toBe(1)
+  })
+
+  it("clear 不把已提取过的旧消息再喂给提取器（重复内化回归 2026-09-02）", async () => {
+    // 真实时间线复刻：会话 A 里用户强调偏好，memory_save 工具触发 immediate 提取落线；
+    // 之后新开会话只发了一句寒暄，POST /sessions 触发 clear——此时提取器不应再见到旧消息。
+    const a = sessions.create("a", undefined, WORKDIR)
+    sessions.appendMessage(a.id, newMessage(a.id, "user", [{ id: "blk_u1", type: "text", text: "记住，我只听得懂人话" }]))
+    sessions.appendMessage(a.id, newMessage(a.id, "assistant", [{ id: "blk_a1", type: "text", text: "记住了，以后直来直去。" }]))
+    const inputs: string[] = []
+    let call = 0
+    const replies = [
+      JSON.stringify({ actions: [{ file: "user-pref", op: "new-thread", thread: "user-pref", title: "用户偏好通俗语言", content: "用户明确表示只听得懂人话，要求直白朴素。" }] }),
+      JSON.stringify({ actions: [] }), // 寒暄是噪音：修复后提取器只见这一句，按现有规则跳过
+    ]
+    const deps: PipelineDeps = {
+      resolveLlm: () => ({
+        llm: {
+          async *stream(req: LlmRequest): AsyncIterable<LlmStreamEvent> {
+            inputs.push(String(req.messages[0]?.content ?? ""))
+            yield { type: "text_delta", delta: replies[Math.min(call++, replies.length - 1)]! }
+            yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+          },
+        },
+        model: "test",
+      }),
+    }
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, deps)
+    await pipe.runTrigger(WORKDIR, "immediate")
+    // 次日：新会话只发寒暄，切会话触发 clear
+    const b = sessions.create("b", undefined, WORKDIR)
+    sessions.appendMessage(b.id, newMessage(b.id, "user", [{ id: "blk_u2", type: "text", text: "在吗" }]))
+    await pipe.runTrigger(WORKDIR, "clear")
+
+    // 提取器调两次（immediate 全量首提 + clear 只处理新到的寒暄）
+    expect(inputs).toHaveLength(2)
+    // 关键断言：clear 那次的提取输入里不得再出现已提取过的旧消息
+    expect(inputs[1]).not.toContain("只听得懂人话")
+    expect(inputs[1]).toContain("在吗")
+    const threadPath = join(root, "memory", "projects", projectIdFor(WORKDIR), "user-pref.md")
+    const tf = parseThreadFile(readFileSync(threadPath, "utf8"))
+    // 同一情节不因切会话被重复转述落线
+    expect(tf?.sections).toHaveLength(1)
+    expect(tf?.sections[0]?.body).toBe("用户明确表示只听得懂人话，要求直白朴素。")
+  })
+
+  it("模拟跨会话：A 会话说 a 记 a，B 会话说 b 只记 b——a 不重记、b 正常落线（回归 2026-09-02）", async () => {
+    // 会话 A：说 a → immediate 提取，记 a
+    const a = sessions.create("a", undefined, WORKDIR)
+    sessions.appendMessage(a.id, newMessage(a.id, "user", [{ id: "blk_u1", type: "text", text: "记住，我只听得懂人话" }]))
+    const inputs: string[] = []
+    let call = 0
+    const replies = [
+      JSON.stringify({ actions: [{ file: "user-pref", op: "new-thread", thread: "user-pref", title: "用户偏好通俗语言", content: "用户明确表示只听得懂人话，要求直白朴素。" }] }),
+      JSON.stringify({ actions: [{ file: "running", op: "new-thread", thread: "running", title: "跑步记录", content: "用户昨晚跑了五公里，配速六分半。" }] }),
+    ]
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      resolveLlm: () => ({
+        llm: {
+          async *stream(req: LlmRequest): AsyncIterable<LlmStreamEvent> {
+            inputs.push(String(req.messages[0]?.content ?? ""))
+            yield { type: "text_delta", delta: replies[Math.min(call++, replies.length - 1)]! }
+            yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+          },
+        },
+        model: "test",
+      }),
+    })
+    // 会话 A 进行中：memory_save 工具触发 immediate，此时只有 a
+    await pipe.runTrigger(WORKDIR, "immediate")
+    // 之后才开 B 会话说 b，切会话触发 clear
+    const b = sessions.create("b", undefined, WORKDIR)
+    sessions.appendMessage(b.id, newMessage(b.id, "user", [{ id: "blk_u2", type: "text", text: "我昨晚跑了五公里，配速六分半" }]))
+    await pipe.runTrigger(WORKDIR, "clear")
+
+    const projectDir = join(root, "memory", "projects", projectIdFor(WORKDIR))
+    // a 只有一条，没被 B 会话的提取重记
+    const tfA = parseThreadFile(readFileSync(join(projectDir, "user-pref.md"), "utf8"))
+    expect(tfA?.sections).toHaveLength(1)
+    // b 正常落线；这次提取输入里有 b、没有 a
+    const tfB = parseThreadFile(readFileSync(join(projectDir, "running.md"), "utf8"))
+    expect(tfB?.sections).toHaveLength(1)
+    expect(tfB?.sections[0]?.body).toContain("五公里")
+    expect(inputs[1]).toContain("五公里")
+    expect(inputs[1]).not.toContain("只听得懂人话")
+  })
+
+  it("new-thread 身份以 file 为准：thread 字段不一致时 topic 跟随 file（读取线 404 回归 2026-09-02）", async () => {
+    // 真实案例：模型交回 file:"user-abcd-profile" + thread:"user-name-abcd"，落盘后
+    // 文件名与内部 topic 分裂——MEMORY.md 行按 topic 显示，点击按文件名找，404。
+    const meta = sessions.create("s", undefined, WORKDIR)
+    seedMessages(meta.id, ["记住，我叫abcd"])
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "user-abcd-profile", op: "new-thread", thread: "user-name-abcd", title: "用户姓名 abcd", content: "用户要求记住自己的名字叫 abcd。" }] })]), model: "test" }),
+    })
+    await pipe.runTrigger(WORKDIR, "immediate")
+    const projectDir = join(root, "memory", "projects", projectIdFor(WORKDIR))
+    const tf = parseThreadFile(readFileSync(join(projectDir, "user-abcd-profile.md"), "utf8"))
+    expect(tf?.topic).toBe("user-abcd-profile")
+    const memoryMd = readFileSync(join(projectDir, "MEMORY.md"), "utf8")
+    expect(memoryMd).toContain("user-abcd-profile")
+    expect(memoryMd).not.toContain("user-name-abcd")
   })
 
   it("tolerates fenced json and drops single malformed actions", async () => {

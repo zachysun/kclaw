@@ -70,6 +70,8 @@ export const EXTRACT_SYSTEM_PROMPT = [
   "- 判断某条线这段对话之后再无下文迹象（如明确的完成结论）时，给该动作加 status:\"inactive\"。",
   "完整示例：{\"actions\":[{\"op\":\"new-thread\",\"file\":\"user-pref-plain-language\",\"thread\":\"user-pref-plain-language\",\"title\":\"用户偏好通俗语言\",\"content\":\"用户自称小白，要求所有解释都用通俗语言。\"}]}",
   "情节要有叙事要素（做了什么/结果/说了什么/有何要求），不要孤立的一句话事实；能接上已有线就对该线的 file 做 append/update，接不上才 new-thread。",
+  "已有主题线里已记录过的内容不要重复记录；append/update 只落这段消息里出现的新信息，同一经历的转述不算新信息。",
+  "区分说话人：只有用户消息里的话才算用户的表态；助手自己的复述、确认，以及记忆检索结果里的内容，都不算用户的新经历或新要求。",
   "噪音（寒暄、与长期记忆无关的过程性内容）直接跳过。无值得记的内容输出 {\"actions\":[]}。只输出 JSON，不要输出任何其他文字。",
 ].join("\n")
 
@@ -251,12 +253,13 @@ export class MemoryPipeline {
 
   async #runLocked(projectId: string, workdir: string, trigger: PipelineTrigger, sessionId?: string): Promise<void> {
     const ledger = new WriteLedger(join(this.#layout.projectDir(projectId), "state.json"))
-    // 选范围（项目维度，spec 4.1）：该项目全部会话的新消息。manual/immediate 覆盖到
-    // 当前时刻（全量重扫）；interval/follow 按两个水位中最靠后的那个取增量，后到者不重复提取。
+    // 选范围（项目维度，spec 4.1）：该项目全部会话的新消息。五个触发器统一走水位取
+    // 增量（后到者按最新水位重选范围，谁先跑到都不重复提取）——重复内化回归
+    // 2026-09-02：clear/manual/immediate 原先全量重扫，切一次会话就把已提取过的旧
+    // 消息重新送审一遍，提取器照着已有主题线再转述一条（同一偏好被反复落线）。
+    // 首跑水位为空 → 全量，属首次提取；提取失败水位不推进（spec 11），下次触发补上。
     const rows = this.#sessionRows(projectId)
-    const watermark = trigger === "interval" || trigger === "follow"
-      ? laterWatermark(rows, ledger.get("interval"), ledger.get("follow"))
-      : undefined
+    const watermark = laterWatermark(rows, ledger.get("interval"), ledger.get("follow"))
     const range = this.#messagesSince(rows, watermark)
     if (range.length === 0) {
       // 空批次也扫（spec 5）：项目静止（无新消息）时仍要收束到期的 active 线。
@@ -358,8 +361,12 @@ export class MemoryPipeline {
     const path = join(dir, `${action.file}.md`)
     const date = todayOf(this.#now())
     if (action.op === "new-thread") {
+      // 身份唯一性（读取线 404 回归 2026-09-02）：topic 必须等于 file——MEMORY.md
+      // 行与检索键都取文件内部 topic，而读/改/删路由按文件名（=topic）定位；
+      // 模型交回的 thread 字段与 file 不一致时曾把两者写劈，清单点开即 404。
+      // thread 字段仅作兼容保留，不再参与身份。
       const tf = writeThreadFile(path, (tf) => tf, () => ({
-        topic: action.thread ?? action.file, title: action.title ?? action.file,
+        topic: action.file, title: action.title ?? action.file,
         status: action.status ?? "active", created: date, updated: date, sections: [],
       }))
       writeThreadFile(path, (t) => appendSection({ ...t, title: t.title || (action.title ?? t.topic) }, { date, heading: action.title ?? action.file, body: action.content }), () => tf)
@@ -371,7 +378,7 @@ export class MemoryPipeline {
     const raw = readFileSyncSafe(path)
     if (raw === undefined) {
       this.#log(`kclaw memory action targets missing thread ${action.file}: treating as new-thread`)
-      this.#applyThreadAction(projectId, { ...action, op: "new-thread", thread: action.thread ?? action.file }, trigger, sessionId)
+      this.#applyThreadAction(projectId, { ...action, op: "new-thread" }, trigger, sessionId)
       return
     }
     const currentIsInactive = parseThreadFile(raw)?.status === "inactive"

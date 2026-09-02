@@ -302,7 +302,7 @@ export class MemorySystem {
     return this.#sessions.list()[0]?.id
   }
 
-  /** 立刻写入（memory_save 工具，spec 7.3）：处理当前轮（水位推进两路）。 */
+  /** 立刻写入（memory_save 工具，spec 7.3）：增量提取自最近水位的消息（水位推进两路）。 */
   async triggerImmediate(sessionId: string): Promise<void> {
     const meta = this.#sessions.meta(sessionId)
     const workdir = meta?.workdir ?? this.#config.workspace
@@ -314,7 +314,7 @@ export class MemorySystem {
     await this.#pipeline.runTrigger(workdir, "manual", sessionId ?? this.#recentSessionId(workdir))
   }
 
-  /** 切会话写入（/clear、/new 与新建会话入口共用 POST /sessions 时触发）：范围覆盖到当前时刻。 */
+  /** 切会话写入（/clear、/new 与新建会话入口共用 POST /sessions 时触发）：增量提取自最近水位的消息。 */
   async triggerClear(workdir: string, sessionId?: string): Promise<void> {
     await this.#pipeline.runTrigger(workdir, "clear", sessionId ?? this.#recentSessionId(workdir))
   }
