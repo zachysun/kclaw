@@ -111,16 +111,17 @@ updated: 2026-08-30
 
 提取用的模型取 `memory.extractModel`，为空回落主对话模型。校验与提示词的分工：**模型只从 `EXTRACT_SYSTEM_PROMPT` 认识 JSON 结构，字段名必须与落盘校验逐字一致**（2026-09-01 回归：旧 prompt 未点名 `op`/`file`，真实模型交回 `type` 判别 + 缺 `file`，动作全被丢弃）。响应不是合法 JSON 或解析结果非 `actions` 数组时**整批放弃**、只打日志，不做部分写入；单个动作字段不合法（缺 `file`/`content`、`op` 非三值）则**只丢该条**、其余照常落盘。水位语义要区分两种情况：**LLM 调用抛错（提取失败）水位不推进**，下一次触发重试同一范围（spec 11）；而**调用成功但动作被丢光（格式不合法）水位照常推进**——这段消息不会自动重试，属已知取舍（丢弃的来源是模型输出不合规，重试大概率同样不合规）。
 
-### 四触发
+### 五触发
 
 | 触发 | 入口 | 范围 | 说明 |
 |------|------|------|------|
 | **immediate**（立即） | `memory_save` 工具 → `system.triggerImmediate(sessionId)` | 覆盖到当前时刻 | 模型在对话中主动要求"记下来"，当场处理当前这轮对话；`memory.write.immediate=false` 时工具返回固定提示、内容留给后台触发沉淀 |
 | **manual**（手动） | `MemorySystem.triggerManual(workdir)` | 覆盖到当前时刻 | 用户通过 **`/memory save` 斜杠命令**（CLI 与 web 均有）触发当前项目的手动写入；CLI 取启动目录、web 取当前会话工作目录。开关 `memory.write.manual`（默认 true）关闭时路由返回 400 |
+| **clear**（切会话） | `POST /sessions` 创建新会话时 → `system.triggerClear(workdir, 旧会话)` | 覆盖到当前时刻 | CLI `/clear`、`/new` 与 web 新建会话共用该路由，创建成功后**异步**触发对旧会话所在项目的提取（不阻塞建会话响应；失败只打日志，由水位防重复、下次触发补上）。归属会话取创建前的项目最近活动会话——此刻它必然是用户刚离开的旧会话；未装配记忆系统时不触发 |
 | **interval**（定时） | `memory-scheduler`（默认每 60s 扫一次） | 两个水位中较靠后的增量 | 距上次定时触发满 `memory.write.intervalMinutes` 分钟就触发一次（0 关闭）；上次时间落在 `state.json` 的 `intervalLastRun`，未触发过则立刻首跑 |
 | **follow**（跟随） | run 收尾挂起检查 + 门禁判定 | 两个水位中较靠后的增量 | 每个 run 结束（任何 stopReason）由 RunManager 挂一个跟随检查；`end_turn` 之后满 `memory.write.idleMinutes` 分钟无新活动才真正触发（0 关闭），见下 |
 
-**手动/立即覆盖到当前时刻**（`advanceAll` 把两个水位一并推进），定时/跟随只取增量——任何一个先跑到，另一个都不会重复提取同一段消息（spec 4.1）。
+**手动/立即/切会话覆盖到当前时刻**（`advanceAll` 把两个水位一并推进），定时/跟随只取增量——任何一个先跑到，另一个都不会重复提取同一段消息（spec 4.1）。
 
 **跟随门禁**（spec 4.2）：run 收尾时 `scheduleFollowCheck` 把 `{sessionId, endTurnAt}` 写进该项目的 `state.json`（挂起检查落盘，spec 11——daemon 重启后由调度器首次 sweep 补查）。调度器每次扫描时对每个挂起检查判门禁：`now − endTurnAt ≥ idleMinutes` **且** `endTurnAt 之后项目无新活动`才算 due，due 才真正触发 follow 并清除检查；门禁不过但 `endTurnAt` 之后已有更新活动（用户切到别的会话继续对话、或该项目又跑了一轮）时，旧检查的锚点已被新活动取代，直接清掉，防止 `state.json` 的 followChecks 无界增长。这里的"项目最后活动时间"取**该项目全部会话 meta 的最大 `updatedAt`**（spec 允许 daemon 记最后活动时间，本实现选会话级聚合，无需新表）；空活动记录视作"end_turn 即最后活动"，保证重启后可补查。
 
@@ -133,22 +134,30 @@ updated: 2026-08-30
   "watermarks": { "interval": { "sessionId": "…", "messageId": "…" },
                   "follow":   { "sessionId": "…", "messageId": "…" } },
   "followChecks": [ { "sessionId": "…", "endTurnAt": "…" } ],
-  "intervalLastRun": "2026-08-30T00:00:00.000Z"
+  "intervalLastRun": "2026-08-30T00:00:00.000Z",
+  "nightlyBaseline": "2026-08-30",
+  "nightlyLastRun": "2026-08-31"
 }
 ```
 
 - **水位（watermark）**是 `{sessionId, messageId}` 游标：定时/跟随触发从两个水位中较靠后的那个取增量（`laterWatermark`），任一触发先跑到，另一个都不再重复提取；水位所在的会话或消息已被删除时按"更旧"处理——`messagesSince` 对删掉的会话退化为全量，**宁可重提取不可漏提取**。
+- `nightlyBaseline`（UTC 日期）是夜间内化的判据基线（管线读写）；`nightlyLastRun`（本地日期）是夜间内化的防同日重跑标记（调度器读写）——两个时区各管各的，见"内化"节。
 - **串行锁**：项目级——`MemoryPipeline` 对同一项目维护一个 promise 链（`#locks`），同项目的触发（含内化）排队执行，避免两个触发并发读写同一批线文件；全局级——写 L2 认知文件时再套一层模块级全局锁（`withL2Lock`），跨项目并发内化撞同一认知文件也串行化。调度器的每次扫描本身不等待触发完成（fire-and-forget + 防重入）。
 
 ### 内化（consolidate）
 
-一条主题线被收束为 `inactive` 后，管线顺带对它做一次**内化总结**（spec 6）：无工具 LLM 调用，把线文件全部情节 + 现有认知文件内容交给固定 system 提示的内化器（`CONSOLIDATE_SYSTEM_PROMPT`），回答"从这条线的经历里理解到了什么"，输出 JSON `{"actions":[...]}`，动作按 `target` 三选一（目标名放 `name` 字段、**不拼进 target**）：
+内化有两条路，落到同一个实现（`#consolidateLocked`）：
+
+- **收束顺带内化**：一条主题线被收束为 `inactive` 后，管线顺带对它做一次内化总结（spec 6）；
+- **夜间闲时内化**：调度器每天本地时间过了 `memory.consolidateHour`（默认凌晨 3 点）后对该项目触发一次（`MemorySystem.triggerNightly` → `pipeline.runNightly`）——对象是**自上次夜间内化以来有新情节的全部线（含 active）**，判据 `updated ≥ nightlyBaseline`（UTC 日期，与线文件 `updated` 同源，记在该项目 `state.json`）。活跃线的认知不再等 14 天收束，每晚沉淀一次；daemon 凌晨未开时开机后首个 sweep 补跑（防同日重跑记本地日期，与内化判据的 UTC 日期各管各的）。首跑只内化当天更新的线，历史线不补（已由顺带内化覆盖）。
+
+收束顺带内化的输入输出（spec 6）：无工具 LLM 调用，把线文件全部情节 + 现有认知文件内容交给固定 system 提示的内化器（`CONSOLIDATE_SYSTEM_PROMPT`），回答"从这条线的经历里理解到了什么"，输出 JSON `{"actions":[...]}`，动作按 `target` 三选一（目标名放 `name` 字段、**不拼进 target**）：
 
 - `target:"persona"`：用户画像，连贯正文片段（`name` 省略）；
 - `target:"wiki"` + `name`：领域知识，一个资源一个文件；
 - `target:"rule"` + `name`：用户规则，清单式，每条规则一个小节。
 
-新增用 `op:"append"`/`op:"create"`，已有认知被新经历印证的不动、被推翻的就地改写（`op:"rewrite"`，不保留旧版）；每条新认知附来源注释 `<!-- 来源：<topic>#<date> -->`。解析校验：`target` 必须是三值之一、`wiki`/`rule` 必带非空 `name`，不合法的动作在解析层丢弃并记日志（`dropping malformed cognition action (target=…)`）——`#applyCognitionAction` 拿 `target` 拼目录路径，放行任意字符串会写出索引读不到的垃圾文件（2026-09-01 回归：旧 prompt 的 `wiki:<name>` 记法诱导模型把名字嵌进 target）。`target:"skill"` 预留、本期不实现（解析层即丢弃，`#applyCognitionAction` 内保留防御分支，spec 2.3）。拿不准落 `global` 还是项目时**倾向 global、宁小勿大**。内化受 `memory.consolidate` 开关（默认 true）控制；LLM 调用失败只打日志、不影响 run。除"inactive 顺带内化"外，`MemorySystem.consolidate(workdir, topic)` 也暴露了手动内化入口（目前同样无路由/工具暴露）。
+新增用 `op:"append"`/`op:"create"`，已有认知被新经历印证的不动、被推翻的就地改写（`op:"rewrite"`，不保留旧版）；每条新认知附来源注释 `<!-- 来源：<topic>#<date> -->`。解析校验：`target` 必须是三值之一、`wiki`/`rule` 必带非空 `name`，不合法的动作在解析层丢弃并记日志（`dropping malformed cognition action (target=…)`）——`#applyCognitionAction` 拿 `target` 拼目录路径，放行任意字符串会写出索引读不到的垃圾文件（2026-09-01 回归：旧 prompt 的 `wiki:<name>` 记法诱导模型把名字嵌进 target）。`target:"skill"` 预留、本期不实现（解析层即丢弃，`#applyCognitionAction` 内保留防御分支，spec 2.3）。拿不准落 `global` 还是项目时**倾向 global、宁小勿大**。内化受 `memory.consolidate` 开关（默认 true）控制（收束顺带与夜间闲时两路共用）；LLM 调用失败只打日志、不影响 run。除这两条自动路径外，`MemorySystem.consolidate(workdir, topic)` 也暴露了手动内化入口（目前同样无路由/工具暴露）。
 
 ## 检索与注入
 
@@ -225,11 +234,12 @@ score = fused × 1/(1 + 距今天数/30)      // 时效因子：30 天衰减一�
 | `memory.write.idleMinutes` | `10` | 跟随门禁的空闲分钟数（`0` = 关闭） |
 | `memory.extractModel` | `""` | 提取/内化用的模型，空 = 回落主对话模型 |
 | `memory.threadInactiveDays` | `14` | 线多少天无新情节自动转 inactive |
-| `memory.consolidate` | `true` | 内化开关 |
+| `memory.consolidate` | `true` | 内化开关（收束顺带与夜间闲时共用） |
+| `memory.consolidateHour` | `3` | 夜间闲时内化的本地小时（0-23；负值关闭） |
 | `memory.embedding.provider` | `""` | embedding 的 provider 条目名，空 = 回落 default 条目 |
 | `memory.embedding.model` | `""` | embedding 模型名，空 = 向量路整体关闭（纯 BM25） |
 | `memory.injectTokenBudget` | `1000` | L2 认知常驻注入的 token 上限（只约束常驻注入；L1 情节 top-5 全量注入不受此限） |
-| `memory.autoExtract` | （v1 遗留） | 已废弃，被四触发取代；仅容忍存在，读处一律忽略 |
+| `memory.autoExtract` | （v1 遗留） | 已废弃，被五触发取代；仅容忍存在，读处一律忽略 |
 
 ## 迁移说明（spec 2.6）
 
@@ -265,13 +275,13 @@ v2 提供三套人工管理面，全部落在既有文档：
 
 ```ts
 { type: "memory", at: string,
-  trigger: "immediate" | "manual" | "interval" | "follow" | "admin",
+  trigger: "immediate" | "manual" | "interval" | "follow" | "clear" | "nightly" | "admin",
   kind: "episode" | "cognition",
   op: "append" | "update" | "new-thread" | "rewrite" | "create" | "overwrite" | "delete" | "inactivate",
   topic?: string, file?: string, scope?: string, source?: string }
 ```
 
-- **归属规则**：memory 事件挂在**触发会话**的目录里——immediate（`memory_save` 工具）显式带会话；manual（`/memory save`，CLI/web 可指定会话）与 interval 缺省**回落该项目最近活动会话**（`recentSessionId`）；follow 挂**发起该检查的会话**（check.sessionId）；admin（记忆页的覆写/删除）挂"最近活动会话"——线文件操作挂该项目最近活动会话、全局认知操作挂**全局**最近活动会话。找不到归属会话时跳过（不落事件）。
+- **归属规则**：memory 事件挂在**触发会话**的目录里——immediate（`memory_save` 工具）显式带会话；manual（`/memory save`，CLI/web 可指定会话）与 interval、nightly 缺省**回落该项目最近活动会话**（`recentSessionId`）；clear 挂**创建新会话前的项目最近活动会话**（即用户刚离开的旧会话，`POST /sessions` 路由在创建前取好传入）；follow 挂**发起该检查的会话**（check.sessionId）；admin（记忆页的覆写/删除）挂"最近活动会话"——线文件操作挂该项目最近活动会话、全局认知操作挂**全局**最近活动会话。找不到归属会话时跳过（不落事件）。
 - **事件体不带 `sessionId` 字段**：会话由所在目录决定（Ruling 5），payload 里没有它。
 - **不推进投影 `updatedAt`**：`applyEvent` 对 `memory` 事件不更新任何投影字段（见 [storage](./storage.md) 的 events.jsonl 一节）。
 - 可通过 `GET /sessions/:id/events` 查询某会话的完整事件流（含 memory 事件），web 审计页把它们渲染成"记忆"行（见 [http-api](../server/http-api.md) 与 [webui](../web/webui.md)）。

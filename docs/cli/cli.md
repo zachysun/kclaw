@@ -126,7 +126,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 |------|------|
 | `/help` | 遍历注册表，逐条打印 `name usage — description` |
 | `/new [标题]` | `POST /sessions`（带可选 title，body 总带 workdir=当前 cwd）→ `switchSession` → 打印确认 |
-| `/clear` | 同 `/new` 但不带标题（快速新建一个空白会话） |
+| `/clear` | 同 `/new` 但不带标题（快速新建一个空白会话）；服务端在创建新会话后异步触发一次切会话记忆写入（clear 触发，沉淀旧会话的对话，不阻塞切换） |
 | `/sessions` | `GET /sessions` 列表；空则"（还没有会话）"；否则暂停 readline、@clack 单选列表、切换会话 |
 | `/model [名字]` | 不带参数时列出可用模型（读 `GET /config` 的 provider 条目名）和当前用的模型；带上名字则调 `POST /sessions/:id/model` 切换本会话模型，只影响之后的回复；`/model default` 恢复默认；名字不存在时打印服务端 400 的原文（如 `model not found: …`） |
 | `/readonly [on\|off]` | 先读当前会话的开关状态，无参数时直接取反，也可以明确指定 on/off；通过 `POST /sessions/:id/readonly` 生效——开启后写文件与执行命令类工具会被拒绝 |

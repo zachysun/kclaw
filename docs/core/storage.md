@@ -54,11 +54,11 @@ export function resolvePaths(home?: string): KclawPaths
 | `permissions.allow` / `deny` | `[]` / `["exec:sudo*", "exec:rm -rf*"]` | 权限规则，见 [permissions](./permissions.md) |
 | `permissions.confirmTimeoutMs` | `120000` | 人工确认等待上限，超时按拒绝处理 |
 | `permissions.sessionGrants` | `true` | 会话内"本次允许"记忆是否生效 |
-| `memory.write.{immediate, manual, intervalMinutes, idleMinutes}` | `true` / `true` / `30` / `10` | 记忆写入四触发：immediate = `memory_save` 工具当场触发；manual = 手动触发开关（`/memory save`（CLI/web）走 `POST /memory/trigger-manual`，`false` 时该路由返回 400）；intervalMinutes = 定时兜底间隔（0 关闭）；idleMinutes = 跟随门禁空闲分钟（0 关闭）。完整语义见 [memory](./memory.md) |
-| `memory.extractModel` / `threadInactiveDays` / `consolidate` | `""` / `14` / `true` | 提取/内化用的模型（空回落主对话模型）、线闲置多少天自动转 inactive、内化开关 |
+| `memory.write.{immediate, manual, intervalMinutes, idleMinutes}` | `true` / `true` / `30` / `10` | 记忆写入触发开关（immediate/manual/clear/interval/follow 五触发，clear 挂在 `POST /sessions` 无独立开关）：immediate = `memory_save` 工具当场触发；manual = 手动触发开关（`/memory save`（CLI/web）走 `POST /memory/trigger-manual`，`false` 时该路由返回 400）；intervalMinutes = 定时兜底间隔（0 关闭）；idleMinutes = 跟随门禁空闲分钟（0 关闭）。完整语义见 [memory](./memory.md) |
+| `memory.extractModel` / `threadInactiveDays` / `consolidate` / `consolidateHour` | `""` / `14` / `true` / `3` | 提取/内化用的模型（空回落主对话模型）、线闲置多少天自动转 inactive、内化开关、夜间闲时内化的本地小时（负值关闭） |
 | `memory.embedding.{provider, model}` | `""` / `""` | 向量检索判定链：`model` 空则向量路整体关闭（纯 BM25）；provider 空回落 default 条目 |
 | `memory.injectTokenBudget` | `1000` | 每轮 L2 认知常驻注入的 token 上限（只约束常驻注入，L1 情节 top-5 全量注入不受此限） |
-| `memory.autoExtract` | 无（废弃） | v1 字段，被四触发取代，已废弃不生效：配置文件里存在时不报错，但读处一律忽略 |
+| `memory.autoExtract` | 无（废弃） | v1 字段，被五触发取代，已废弃不生效：配置文件里存在时不报错，但读处一律忽略 |
 | `web.tavilyApiKey` | `""` | web_search 的 Tavily 密钥 |
 | `web.timeoutMs` | `20000` | 每次网络抓取（搜索与网页）的 AbortSignal 超时，卡死的主机不能拖住一个 run |
 | `web.allowPrivateNetworks` | `false` | `true` 时豁免 web_fetch 的私网/回环目标拒绝（SSRF 防护，如允许抓本机 Ollama 端点），由 run 装配传入工具 |
