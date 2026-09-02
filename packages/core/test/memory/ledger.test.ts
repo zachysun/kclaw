@@ -58,3 +58,17 @@ describe("follow checks", () => {
     expect(l.pendingFollowChecks()).toEqual([])
   })
 })
+
+describe("nightly fields", () => {
+  it("persists the nightly baseline and last-run date across reopen", () => {
+    const p = join(dir, "state.json")
+    const l = new WriteLedger(p)
+    expect(new WriteLedger(p).getNightlyBaseline()).toBeUndefined()
+    expect(new WriteLedger(p).getNightlyLastRun()).toBeUndefined()
+    l.setNightlyBaseline("2026-09-01")
+    l.setNightlyLastRun("2026-09-02")
+    const reopened = new WriteLedger(p)
+    expect(reopened.getNightlyBaseline()).toBe("2026-09-01")
+    expect(reopened.getNightlyLastRun()).toBe("2026-09-02")
+  })
+})

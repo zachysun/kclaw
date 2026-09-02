@@ -10,6 +10,10 @@ interface LedgerState {
   followChecks: FollowCheck[]
   /** 最近一次定时触发的墙钟时间（ISO；Task 13 scheduler 判节拍用）。 */
   intervalLastRun?: string
+  /** 夜间内化判据基线（UTC YYYY-MM-DD，与线文件 updated 同源；pipeline 读写）。 */
+  nightlyBaseline?: string
+  /** 最近一次夜间内化触发的本地日期（YYYY-MM-DD；scheduler 防同日重跑用）。 */
+  nightlyLastRun?: string
 }
 
 /** 每项目一本（<projectDir>/state.json，spec 4.1）：防重复提取与漏提取。 */
@@ -23,7 +27,7 @@ export class WriteLedger {
     if (existsSync(statePath)) {
       try {
         const raw = JSON.parse(readFileSync(statePath, "utf8")) as Partial<LedgerState>
-        this.#state = { watermarks: raw.watermarks ?? {}, followChecks: raw.followChecks ?? [], intervalLastRun: raw.intervalLastRun }
+        this.#state = { watermarks: raw.watermarks ?? {}, followChecks: raw.followChecks ?? [], intervalLastRun: raw.intervalLastRun, nightlyBaseline: raw.nightlyBaseline, nightlyLastRun: raw.nightlyLastRun }
       } catch {
         // 损坏的账本视作空账本：全量重扫（重复提取由合并写兜底）
       }
@@ -72,6 +76,26 @@ export class WriteLedger {
 
   setIntervalLastRun(iso: string): void {
     this.#state.intervalLastRun = iso
+    this.#flush()
+  }
+
+  /** 夜间内化判据基线（UTC 日期）；从未跑过 → undefined（首跑只内化当天线）。 */
+  getNightlyBaseline(): string | undefined {
+    return this.#state.nightlyBaseline
+  }
+
+  setNightlyBaseline(date: string): void {
+    this.#state.nightlyBaseline = date
+    this.#flush()
+  }
+
+  /** 最近一次夜间内化触发的本地日期；从未触发过 → undefined（scheduler 防同日重跑）。 */
+  getNightlyLastRun(): string | undefined {
+    return this.#state.nightlyLastRun
+  }
+
+  setNightlyLastRun(date: string): void {
+    this.#state.nightlyLastRun = date
     this.#flush()
   }
 

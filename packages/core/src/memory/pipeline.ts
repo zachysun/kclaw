@@ -17,7 +17,7 @@ import type { EmbeddingClient } from "./embeddings.js"
 import { writeCognitionFile, parseCognitionFile, cognitionPath, type CogKind } from "./cognition.js"
 import { writeFileAtomic } from "../storage/atomic.js"
 
-export type PipelineTrigger = "immediate" | "manual" | "interval" | "follow"
+export type PipelineTrigger = "immediate" | "manual" | "interval" | "follow" | "clear"
 
 export interface ExtractAction {
   file: string                                   // 线文件名（不含 .md）
@@ -473,6 +473,35 @@ export class MemoryPipeline {
     })
   }
 
+  /**
+   * 夜间闲时内化（每日兜底，scheduler 按 memory.consolidateHour 调度）：对本项目
+   * 自上次夜间内化以来有新情节的线逐条内化——判据 `updated >= #nightlyBaseline`
+   * （UTC 日期，与线文件 updated 同源），**含 active 线**：活跃线的认知不再等
+   * 14 天收束，每晚沉淀一次（收束时的顺带内化仍保留，二者幂等）。不提取、不动
+   * 提取水位。返回本次内化的线数。
+   *
+   * 首跑（无 baseline）只内化当天更新的线——历史线已由顺带内化覆盖，不补跑。
+   * 判据含等号：上次跑之后同日（UTC）新增的情节不能漏，宁可用一次幂等的重复
+   * 内化去换。
+   */
+  async runNightly(workdir: string, sessionId?: string): Promise<number> {
+    const { id } = this.#layout.ensureProject(workdir)
+    return this.#lock(id, async () => {
+      const dir = this.#layout.projectDir(id)
+      const ledger = new WriteLedger(join(dir, "state.json"))
+      const today = todayOf(this.#now())
+      const baseline = ledger.getNightlyBaseline() ?? today
+      const due: ThreadFile[] = []
+      for (const f of readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith(".md") && e.name !== "MEMORY.md")) {
+        const tf = parseThreadFile(readFileSync(join(dir, f.name), "utf8"))
+        if (tf !== undefined && tf.updated >= baseline) due.push(tf)
+      }
+      for (const tf of due) await this.#consolidateLocked(id, tf, "nightly", sessionId)
+      ledger.setNightlyBaseline(today)
+      return due.length
+    })
+  }
+
   // ---- reconcile / 管理接口（Task 10 MemorySystem 消费） ----
 
   /** 项目库全量重建索引（FTS，派生物对齐磁盘；spec 2.5）。 */
@@ -506,8 +535,9 @@ export class MemoryPipeline {
     this.#indexes.clear()
   }
 
-  /** 内化实现（spec 6）；写 global 文件加全局 L2 锁。 */
-  async #consolidateLocked(projectId: string, tf: ThreadFile, trigger: PipelineTrigger, sessionId?: string): Promise<void> {
+  /** 内化实现（spec 6）；写 global 文件加全局 L2 锁。trigger 放宽为审计枚举
+   *  （"nightly"/"manual" 不是提取触发，仅用于 memory 事件归属）。 */
+  async #consolidateLocked(projectId: string, tf: ThreadFile, trigger: MemoryAudit["trigger"], sessionId?: string): Promise<void> {
     if (!this.#consolidateEnabled) return
     await withL2Lock(async () => {
       const existing = this.#readExistingCognitions()
@@ -546,7 +576,7 @@ export class MemoryPipeline {
     return out.join("\n\n")
   }
 
-  async #applyCognitionAction(action: CognitionAction, source: string, trigger: PipelineTrigger, sessionId?: string): Promise<void> {
+  async #applyCognitionAction(action: CognitionAction, source: string, trigger: MemoryAudit["trigger"], sessionId?: string): Promise<void> {
     if (action.target === "skill") {
       this.#log(`kclaw memory consolidate: skill target reserved, skipped (spec 2.3)`)
       return

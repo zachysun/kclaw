@@ -113,6 +113,7 @@ describe("memory v2 config", () => {
       extractModel: "",
       threadInactiveDays: 14,
       consolidate: true,
+      consolidateHour: 3,
       embedding: { provider: "", model: "" },
       injectTokenBudget: 1000,
     })

@@ -10,7 +10,7 @@ export type MessageEvent = { type: "message" } & Message
 export interface CompactionEvent { type: "compaction"; at: string; trigger: "manual" | "in-run" | "auto"; emergency?: true; focus?: string; from: string | null; upto: string; messages: number; segmentSummary: string; top: string }
 export interface MemoryEvent {
   type: "memory"; at: string
-  trigger: "immediate" | "manual" | "interval" | "follow" | "admin"
+  trigger: "immediate" | "manual" | "interval" | "follow" | "clear" | "nightly" | "admin"
   kind: "episode" | "cognition"
   op: "append" | "update" | "new-thread" | "rewrite" | "create" | "overwrite" | "delete" | "inactivate"
   topic?: string; file?: string; scope?: string; source?: string

@@ -27,6 +27,12 @@ export interface KclawConfig {
     threadInactiveDays: number
     /** 内化开关。 */
     consolidate: boolean
+    /**
+     * 夜间闲时内化的本地小时（0-23；负值 = 关闭）。调度器在本地时间过了该点后
+     * 对每个项目做一次夜间内化（daemon 凌晨未开则开机后补跑）；仍受 consolidate
+     * 总开关管。默认 3（凌晨 3 点）。
+     */
+    consolidateHour: number
     /** embedding 判定链见 spec 7.2：model 为空 = 向量路整体不启用。 */
     embedding: { provider: string; model: string }
     /** 每轮注入（认知常驻 + 情节检索）token 上限。 */
@@ -99,6 +105,7 @@ export const defaultConfig: KclawConfig = {
     extractModel: "",
     threadInactiveDays: 14,
     consolidate: true,
+    consolidateHour: 3,
     embedding: { provider: "", model: "" },
     injectTokenBudget: 1000,
   },

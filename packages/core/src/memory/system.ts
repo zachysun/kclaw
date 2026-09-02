@@ -314,6 +314,16 @@ export class MemorySystem {
     await this.#pipeline.runTrigger(workdir, "manual", sessionId ?? this.#recentSessionId(workdir))
   }
 
+  /** 切会话写入（/clear、/new 与新建会话入口共用 POST /sessions 时触发）：范围覆盖到当前时刻。 */
+  async triggerClear(workdir: string, sessionId?: string): Promise<void> {
+    await this.#pipeline.runTrigger(workdir, "clear", sessionId ?? this.#recentSessionId(workdir))
+  }
+
+  /** 项目维度最近活动会话（POST /sessions 建 new 会话前取旧会话作归属用）。 */
+  recentSessionId(workdir: string): string | undefined {
+    return this.#recentSessionId(workdir)
+  }
+
   /** 手动内化。 */
   async consolidate(workdir: string, topic: string): Promise<void> {
     await this.#pipeline.consolidate(workdir, topic)
@@ -331,6 +341,11 @@ export class MemorySystem {
     await this.#pipeline.runTrigger(workdir, "follow", sessionId ?? this.#recentSessionId(workdir))
   }
 
+  /** 夜间闲时内化（scheduler 每日 consolidateHour 触发）：对有新情节的线（含 active）逐条内化。 */
+  async triggerNightly(workdir: string, sessionId?: string): Promise<void> {
+    await this.#pipeline.runNightly(workdir, sessionId ?? this.#recentSessionId(workdir))
+  }
+
   /** 记录最近一次定时触发的墙钟时间（落 <projectDir>/state.json，scheduler 判节拍）。 */
   markIntervalRun(workdir: string, iso: string): void {
     const { dir } = this.#layout.ensureProject(workdir)
@@ -341,6 +356,18 @@ export class MemorySystem {
   intervalLastRun(workdir: string): string | undefined {
     const { id } = this.#layout.resolveProject(workdir)
     return new WriteLedger(join(this.#layout.projectDir(id), "state.json")).getIntervalLastRun()
+  }
+
+  /** 记录最近一次夜间内化触发的本地日期（落 <projectDir>/state.json，scheduler 防同日重跑）。 */
+  markNightlyRun(workdir: string, localDate: string): void {
+    const { dir } = this.#layout.ensureProject(workdir)
+    new WriteLedger(join(dir, "state.json")).setNightlyLastRun(localDate)
+  }
+
+  /** 最近一次夜间内化触发的本地日期；从未触发过 → undefined。 */
+  nightlyLastRun(workdir: string): string | undefined {
+    const { id } = this.#layout.resolveProject(workdir)
+    return new WriteLedger(join(this.#layout.projectDir(id), "state.json")).getNightlyLastRun()
   }
 
   /**

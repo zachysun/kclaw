@@ -72,6 +72,21 @@ describe("runTrigger", () => {
     expect(calls).toBe(0)
   })
 
+  it("clear advances BOTH watermarks (session-switch covers up to now)", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    seedMessages(meta.id, ["内容"])
+    let calls = 0
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "x", op: "new-thread", thread: "x", title: "X", content: "c" }] })]), model: "test" }),
+      emit: () => { calls += 1 },
+    })
+    await pipe.runTrigger(WORKDIR, "clear")
+    await pipe.runTrigger(WORKDIR, "interval") // 水位已推进：无范围
+    await pipe.runTrigger(WORKDIR, "follow")
+    // 只有 clear 那次落盘；后续增量触发不重复提取同一段消息
+    expect(calls).toBe(1)
+  })
+
   it("tolerates fenced json and drops single malformed actions", async () => {
     const meta = sessions.create("s", undefined, WORKDIR)
     seedMessages(meta.id, ["内容"])
@@ -396,6 +411,53 @@ describe("提取/内化的接口约定（prompt ↔ 校验对齐，回归 2026-0
     const projectDir = join(root, "memory", "projects", projectIdFor(WORKDIR))
     const threads = existsSync(projectDir) ? readdirSync(projectDir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md") : []
     expect(threads).toHaveLength(0)
+  })
+})
+
+describe("runNightly（夜间闲时内化）", () => {
+  const writeThread = (projectDir: string, updated: string): void => {
+    writeFileSync(join(projectDir, "deploy.md"), [
+      "---", "topic: deploy", "title: 部署", "status: active", "created: 2026-08-01", `updated: ${updated}`, "---", "",
+      `## ${updated} · 情节`, "", "- 做了什么：部署上线", "",
+    ].join("\n"), "utf8")
+  }
+
+  it("consolidates an active thread updated today (first run, baseline = today); thread stays active", async () => {
+    const projectDir = join(root, "memory", "projects", projectIdFor(WORKDIR))
+    mkdirSync(projectDir, { recursive: true })
+    writeThread(projectDir, "2026-09-01")
+    const audits: MemoryEvent[] = []
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ target: "rule", name: "ops", op: "append", content: "部署经验：先灰度" }] })]), model: "m" }),
+      now: () => new Date("2026-09-01T20:00:00Z"),
+      audit: (e) => audits.push({ type: "memory", at: e.at!, ...e } as MemoryEvent),
+    })
+    const n = await pipe.runNightly(WORKDIR, "ses_A")
+    expect(n).toBe(1)
+    const rulePath = join(root, "memory", "global", "rule", "ops.md")
+    expect(readFileSync(rulePath, "utf8")).toContain("先灰度")
+    expect(audits.some((a) => a.trigger === "nightly" && a.kind === "cognition" && a.sessionId === "ses_A")).toBe(true)
+    // 夜间内化不动线状态：活跃线保持 active（收束仍由四触发顺带做）
+    expect(readFileSync(join(projectDir, "deploy.md"), "utf8")).toContain("status: active")
+  })
+
+  it("skips threads older than the baseline; a newly updated thread is picked up next night", async () => {
+    const projectDir = join(root, "memory", "projects", projectIdFor(WORKDIR))
+    mkdirSync(projectDir, { recursive: true })
+    writeThread(projectDir, "2026-08-01")
+    let consolidateCalls = 0
+    const makePipe = (nowISO: string): MemoryPipeline => new MemoryPipeline(join(root, "memory"), sessions, {
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ target: "rule", name: "ops", op: "append", content: "x" }] })]), model: "m" }),
+      now: () => new Date(nowISO),
+      audit: () => { consolidateCalls += 1 },
+    })
+    // 首跑（baseline = 9-01）：updated 8-01 的旧线不内化——历史线由顺带内化覆盖，不补跑
+    expect(await makePipe("2026-09-01T20:00:00Z").runNightly(WORKDIR)).toBe(0)
+    expect(consolidateCalls).toBe(0)
+    // 线有了新情节（updated 推进到 9-01）→ 次日夜间内化（baseline 9-01，updated >= baseline）
+    writeThread(projectDir, "2026-09-01")
+    expect(await makePipe("2026-09-02T20:00:00Z").runNightly(WORKDIR)).toBe(1)
+    expect(consolidateCalls).toBe(1)
   })
 })
 
