@@ -155,7 +155,7 @@ export interface CompactionEvent {
 export interface MemoryEvent {
   type: "memory"
   at: string
-  trigger: "immediate" | "manual" | "interval" | "follow" | "admin"
+  trigger: "immediate" | "manual" | "interval" | "follow" | "clear" | "nightly" | "admin"
   kind: "episode" | "cognition"
   op: "append" | "update" | "new-thread" | "rewrite" | "create" | "overwrite" | "delete" | "inactivate"
   topic?: string
