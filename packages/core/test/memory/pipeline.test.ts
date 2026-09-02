@@ -113,11 +113,11 @@ describe("runTrigger", () => {
       }),
     }
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, deps)
-    await pipe.runTrigger(WORKDIR, "immediate")
+    await pipe.runTrigger(WORKDIR, "immediate", a.id)
     // 次日：新会话只发寒暄，切会话触发 clear
     const b = sessions.create("b", undefined, WORKDIR)
     sessions.appendMessage(b.id, newMessage(b.id, "user", [{ id: "blk_u2", type: "text", text: "在吗" }]))
-    await pipe.runTrigger(WORKDIR, "clear")
+    await pipe.runTrigger(WORKDIR, "clear", b.id)
 
     // 提取器调两次（immediate 全量首提 + clear 只处理新到的寒暄）
     expect(inputs).toHaveLength(2)
@@ -129,6 +129,44 @@ describe("runTrigger", () => {
     // 同一情节不因切会话被重复转述落线
     expect(tf?.sections).toHaveLength(1)
     expect(tf?.sections[0]?.body).toBe("用户明确表示只听得懂人话，要求直白朴素。")
+  })
+
+  it("rename in an older session is not skipped after a younger session advanced the watermark (regression 2026-09-02)", async () => {
+    // Line incident: user said "改名 master" in a session created EARLIER than the
+    // session an interval trigger had advanced the project-wide watermark to.
+    // The old messagesSince ordered sessions by createdAt and skipped everything
+    // before the watermark session, so the immediate trigger saw an empty range
+    // (5ms no-op) and the rename was never extracted. Session-scoped watermarks
+    // make this impossible: each session advances only against its own messages.
+    const a = sessions.create("a", undefined, WORKDIR) // created first
+    const b = sessions.create("b", undefined, WORKDIR) // created later
+    seedMessages(b.id, ["b 的背景内容"])
+    const inputs: string[] = []
+    let call = 0
+    const replies = [
+      JSON.stringify({ actions: [] }),
+      JSON.stringify({ actions: [{ file: "user-name", op: "new-thread", thread: "user-name", title: "用户姓名", content: "用户改名为 master，之后用 master 称呼。" }] }),
+    ]
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      resolveLlm: () => ({
+        llm: {
+          async *stream(req: LlmRequest): AsyncIterable<LlmStreamEvent> {
+            inputs.push(String(req.messages[0]?.content ?? ""))
+            yield { type: "text_delta", delta: replies[Math.min(call++, replies.length - 1)]! }
+            yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+          },
+        },
+        model: "test",
+      }),
+    })
+    await pipe.runTrigger(WORKDIR, "interval") // interval consumed b's messages
+    sessions.appendMessage(a.id, newMessage(a.id, "user", [{ id: "blk_rename", type: "text", text: "改名，我叫 master" }]))
+    await pipe.runTrigger(WORKDIR, "immediate", a.id) // memory_save fired in the OLD session
+
+    expect(inputs).toHaveLength(2)
+    expect(inputs[1]).toContain("master")
+    const tf = parseThreadFile(readFileSync(join(root, "memory", "projects", projectIdFor(WORKDIR), "user-name.md"), "utf8"))
+    expect(tf?.sections).toHaveLength(1)
   })
 
   it("模拟跨会话：A 会话说 a 记 a，B 会话说 b 只记 b——a 不重记、b 正常落线（回归 2026-09-02）", async () => {
@@ -154,11 +192,11 @@ describe("runTrigger", () => {
       }),
     })
     // 会话 A 进行中：memory_save 工具触发 immediate，此时只有 a
-    await pipe.runTrigger(WORKDIR, "immediate")
+    await pipe.runTrigger(WORKDIR, "immediate", a.id)
     // 之后才开 B 会话说 b，切会话触发 clear
     const b = sessions.create("b", undefined, WORKDIR)
     sessions.appendMessage(b.id, newMessage(b.id, "user", [{ id: "blk_u2", type: "text", text: "我昨晚跑了五公里，配速六分半" }]))
-    await pipe.runTrigger(WORKDIR, "clear")
+    await pipe.runTrigger(WORKDIR, "clear", b.id)
 
     const projectDir = join(root, "memory", "projects", projectIdFor(WORKDIR))
     // a 只有一条，没被 B 会话的提取重记
@@ -180,7 +218,7 @@ describe("runTrigger", () => {
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
       resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "user-abcd-profile", op: "new-thread", thread: "user-name-abcd", title: "用户姓名 abcd", content: "用户要求记住自己的名字叫 abcd。" }] })]), model: "test" }),
     })
-    await pipe.runTrigger(WORKDIR, "immediate")
+    await pipe.runTrigger(WORKDIR, "immediate", meta.id)
     const projectDir = join(root, "memory", "projects", projectIdFor(WORKDIR))
     const tf = parseThreadFile(readFileSync(join(projectDir, "user-abcd-profile.md"), "utf8"))
     expect(tf?.topic).toBe("user-abcd-profile")
@@ -317,8 +355,8 @@ describe("runTrigger", () => {
       resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "x", op: "append", content: "- 做了什么：新情节" }] })]), model: "m" }),
       audit: (e) => audits.push({ type: "memory", at: e.at!, ...e } as MemoryEvent),
     })
-    await pipe.runTrigger(WORKDIR, "manual", "ses_A")
-    expect(audits.some((a) => a.trigger === "manual" && a.kind === "episode" && a.op === "append" && a.sessionId === "ses_A")).toBe(true)
+    await pipe.runTrigger(WORKDIR, "manual", meta.id)
+    expect(audits.some((a) => a.trigger === "manual" && a.kind === "episode" && a.op === "append" && a.sessionId === meta.id)).toBe(true)
   })
 
   it("cognition 内化事件带 trigger 与归属 sessionId", async () => {
@@ -333,8 +371,8 @@ describe("runTrigger", () => {
       resolveLlm: () => ({ llm, model: "m" }),
       audit: (e) => audits.push({ type: "memory", at: e.at!, ...e } as MemoryEvent),
     })
-    await pipe.runTrigger(WORKDIR, "follow", "ses_B")
-    expect(audits.some((a) => a.trigger === "follow" && a.kind === "cognition" && a.op === "append" && a.file === "rule/general" && a.sessionId === "ses_B")).toBe(true)
+    await pipe.runTrigger(WORKDIR, "follow", meta.id)
+    expect(audits.some((a) => a.trigger === "follow" && a.kind === "cognition" && a.op === "append" && a.file === "rule/general" && a.sessionId === meta.id)).toBe(true)
   })
 })
 

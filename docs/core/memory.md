@@ -23,7 +23,7 @@
 ```
 
 - **L0 原始对话**：每轮对话的消息历史，留在会话目录，不属于记忆系统（记忆塔只记"提取后的沉淀"；压缩/检索它的机制见 [compaction](./compaction.md)）。
-- **L1 项目情节**：一次 run 收尾后，管线从该项目全部会话的新消息里**提取**出值得长期记住的"情节"，按主题（topic）追加到该项目的主题线文件里。项目即工作目录（workdir），项目 id 由目录名与绝对路径决定（见下节）。
+- **L1 项目情节**：一次 run 收尾后，管线从**触发会话**的新消息里**提取**出值得长期记住的"情节"（定时兜底则对该项目每个会话逐个补），按主题（topic）追加到该项目的主题线文件里。项目即工作目录（workdir），项目 id 由目录名与绝对路径决定（见下节）。
 - **L2 全局认知**：一条主题线被判定"已收束"（inactive）后，管线把它的全部情节**内化**成跨项目的认知——用户画像（persona）、领域知识（wiki）、用户规则（rule）三类文件。全局认知按 `scope` 字段区分"全项目可见"与"仅某项目可见"。
 
 ## 设计决策
@@ -102,9 +102,9 @@ updated: 2026-08-30
 
 ## 写入管线（MemoryPipeline）
 
-管线位于 `packages/core/src/memory/pipeline.ts`，对外只暴露一个入口 `runTrigger(workdir, trigger)`。一次触发做四件事：
+管线位于 `packages/core/src/memory/pipeline.ts`，对外只暴露一个入口 `runTrigger(workdir, trigger, sessionId?)`。一次触发做四件事：
 
-1. **选范围**：取该项目全部会话在"水位"之后的新消息（见下节"水位账本"）；
+1. **选范围**：提取是**会话级**的——只看触发会话自己的增量窗口（该项目每个会话各一本水位；定时触发无显式归属，对该项目全部会话逐个补），见下节"水位账本"；
 2. **提取**：无工具 LLM 调用，把范围渲染成逐行文本 + 现有主题线清单（MEMORY.md 表格），交给固定 system 提示的提取器（`EXTRACT_SYSTEM_PROMPT`），要求只输出 JSON `{"actions":[...]}`。每个动作的字段名固定：判别字段 `op` 取 `append`（接到已有线）/`update`（修正已有线某小节）/`new-thread`（开新线）三值；**每个动作必填非空 `file`**（线文件名，kebab-case，`new-thread` 也不例外）与 `content`；`update` 额外带 `section`，`new-thread` 额外带 `thread`/`title`；允许显式 `status:"inactive"`（明确的完成结论）；噪音直接跳过，无值得记的内容输出 `{"actions":[]}`。prompt 内含完整 JSON 示例。**线的身份唯一以 `file` 为准**：落盘时 frontmatter `topic` 一律取 `file`，模型交回的 `thread` 字段仅兼容保留、不参与身份——否则文件名与内部 topic 分裂，MEMORY.md 行按 topic 显示、读/改/删按文件名定位，清单点开即 404（读取线 404 回归 2026-09-02）；
 3. **落盘**：逐条应用动作（追加/改写/开线），期间不阻塞地广播 `memory.written` 事件（见"事件"）；
 4. **收尾**：推进水位、扫描时间自动收束（见"生命周期"）、顺带内化检查、重建项目索引与 MEMORY.md。
@@ -115,13 +115,13 @@ updated: 2026-08-30
 
 | 触发 | 入口 | 范围 | 说明 |
 |------|------|------|------|
-| **immediate**（立即） | `memory_save` 工具 → `system.triggerImmediate(sessionId)` | 自最近水位的增量 | 模型在对话中主动要求"记下来"，当场处理；`memory.write.immediate=false` 时工具返回固定提示、内容留给后台触发沉淀 |
-| **manual**（手动） | `MemorySystem.triggerManual(workdir)` | 自最近水位的增量 | 用户通过 **`/memory save` 斜杠命令**（CLI 与 web 均有）触发当前项目的手动写入；CLI 取启动目录、web 取当前会话工作目录。开关 `memory.write.manual`（默认 true）关闭时路由返回 400 |
-| **clear**（切会话） | `POST /sessions` 创建新会话时 → `system.triggerClear(workdir, 旧会话)` | 自最近水位的增量 | CLI `/clear`、`/new` 与 web 新建会话共用该路由，创建成功后**异步**触发对旧会话所在项目的提取（不阻塞建会话响应；失败只打日志，由水位防重复、下次触发补上）。归属会话取创建前的项目最近活动会话——此刻它必然是用户刚离开的旧会话；未装配记忆系统时不触发 |
-| **interval**（定时） | `memory-scheduler`（默认每 60s 扫一次） | 两个水位中较靠后的增量 | 距上次定时触发满 `memory.write.intervalMinutes` 分钟就触发一次（0 关闭）；上次时间落在 `state.json` 的 `intervalLastRun`，未触发过则立刻首跑 |
-| **follow**（跟随） | run 收尾挂起检查 + 门禁判定 | 两个水位中较靠后的增量 | 每个 run 结束（任何 stopReason）由 RunManager 挂一个跟随检查；`end_turn` 之后满 `memory.write.idleMinutes` 分钟无新活动才真正触发（0 关闭），见下 |
+| **immediate**（立即） | `memory_save` 工具 → `system.triggerImmediate(sessionId)` | 该会话自水位起的增量 | 模型在对话中主动要求"记下来"，当场处理；`memory.write.immediate=false` 时工具返回固定提示、内容留给后台触发沉淀 |
+| **manual**（手动） | `MemorySystem.triggerManual(workdir)` | 回落会话自水位起的增量 | 用户通过 **`/memory save` 斜杠命令**（CLI 与 web 均有）触发当前项目的手动写入；CLI 取启动目录、web 取当前会话工作目录。归属会话缺省回落"项目最近活动会话"。开关 `memory.write.manual`（默认 true）关闭时路由返回 400 |
+| **clear**（切会话） | `POST /sessions` 创建新会话时 → `system.triggerClear(workdir, 旧会话)` | 该会话自水位起的增量 | CLI `/clear`、`/new` 与 web 新建会话共用该路由，创建成功后**异步**触发对旧会话所在项目的提取（不阻塞建会话响应；失败只打日志，由水位防重复、下次触发补上）。归属会话取创建前的项目最近活动会话——此刻它必然是用户刚离开的旧会话；未装配记忆系统时不触发 |
+| **interval**（定时） | `memory-scheduler`（默认每 60s 扫一次） | 该项目**全部会话**逐个补各自增量 | 距上次定时触发满 `memory.write.intervalMinutes` 分钟就触发一次（0 关闭）；上次时间落在 `state.json` 的 `intervalLastRun`，未触发过则立刻首跑。无显式归属会话，对每个水位落后的会话各跑一批提取，单会话失败不阻塞其他会话 |
+| **follow**（跟随） | run 收尾挂起检查 + 门禁判定 | 该会话自水位起的增量 | 每个 run 结束（任何 stopReason）由 RunManager 挂一个跟随检查；`end_turn` 之后满 `memory.write.idleMinutes` 分钟无新活动才真正触发（0 关闭），见下 |
 
-**五触发统一增量**：范围一律取"两个水位中较靠后的那一条"之后的新消息（`advanceAll` 把两个水位一并推进的只有 manual/immediate/clear，interval/follow 只推自己的）——任何一个先跑到，其余触发都不会重复提取同一段消息（spec 4.1）。首跑无水位时全量提取一次，此后只增不重。2026-09-02 回归：此前 manual/immediate/clear 不看水位、每次全量重扫，切一次会话就把已提取过的旧消息重新送审，提取器照着已有主题线再转述一条，同一情节被反复落线；改为统一增量后，已提取过的内容不再进入提取输入。会话被删导致水位失配时按"宁可重提取不可漏提取"退化为全量（见 `WriteLedger.messagesSince`）。
+**会话级增量**：水位**每会话各一本**（interval/follow 两游标），范围一律取"该会话两个水位中较靠后的那一条"之后的新消息（`advanceAll` 把该会话两个水位一并推进的只有 manual/immediate/clear，interval/follow 只推自己的）——任何一个先跑到，其余触发都不会重复提取同一段消息（spec 4.1）。首跑无水位时该会话全量提取一次，此后只增不重。2026-09-02 回归（一）：此前 manual/immediate/clear 不看水位、每次全量重扫，切一次会话就把已提取过的旧消息重新送审，同一情节被反复落线；改为统一增量后已提取过的内容不再进入提取输入。2026-09-02 回归（二）：统一增量最初做成**项目级**水位——跨会话按会话创建序划界，晚创建会话推进过水位后，老会话的新消息被整段跳过（用户在老会话里改名，`memory_save` 当场空转、内容永久漏提取）；水位改为**会话级**后，提取窗口只在自己会话的消息序列里推进，跨会话比较不复存在。会话内水位消息被删导致失配时按"宁可重提取不可漏提取"退化为该会话全量（见 `WriteLedger.since`）。
 
 **跟随门禁**（spec 4.2）：run 收尾时 `scheduleFollowCheck` 把 `{sessionId, endTurnAt}` 写进该项目的 `state.json`（挂起检查落盘，spec 11——daemon 重启后由调度器首次 sweep 补查）。调度器每次扫描时对每个挂起检查判门禁：`now − endTurnAt ≥ idleMinutes` **且** `endTurnAt 之后项目无新活动`才算 due，due 才真正触发 follow 并清除检查；门禁不过但 `endTurnAt` 之后已有更新活动（用户切到别的会话继续对话、或该项目又跑了一轮）时，旧检查的锚点已被新活动取代，直接清掉，防止 `state.json` 的 followChecks 无界增长。这里的"项目最后活动时间"取**该项目全部会话 meta 的最大 `updatedAt`**（spec 允许 daemon 记最后活动时间，本实现选会话级聚合，无需新表）；空活动记录视作"end_turn 即最后活动"，保证重启后可补查。
 
@@ -131,8 +131,8 @@ updated: 2026-08-30
 
 ```json
 {
-  "watermarks": { "interval": { "sessionId": "…", "messageId": "…" },
-                  "follow":   { "sessionId": "…", "messageId": "…" } },
+  "watermarks": { "ses_01…": { "interval": "msg_01…", "follow": "msg_01…" },
+                  "ses_02…": { "interval": "msg_02…" } },
   "followChecks": [ { "sessionId": "…", "endTurnAt": "…" } ],
   "intervalLastRun": "2026-08-30T00:00:00.000Z",
   "nightlyBaseline": "2026-08-30",
@@ -140,7 +140,7 @@ updated: 2026-08-30
 }
 ```
 
-- **水位（watermark）**是 `{sessionId, messageId}` 游标：定时/跟随触发从两个水位中较靠后的那个取增量（`laterWatermark`），任一触发先跑到，另一个都不再重复提取；水位所在的会话或消息已被删除时按"更旧"处理——`messagesSince` 对删掉的会话退化为全量，**宁可重提取不可漏提取**。
+- **水位（watermark）每会话各一本**：`{sessionId → {interval, follow}}`，值是该会话内最后一条已提取消息的 id；定时/跟随触发从该会话两个水位中较靠后的那个取增量（`WriteLedger.later`），任一触发先跑到，另一个都不再重复提取；水位消息已被删除（会话截断等）时按"更旧"处理——`since` 退化为该会话全量，**宁可重提取不可漏提取**。旧版项目级水位（顶层 `interval`/`follow` 两个 `{sessionId, messageId}`）**不迁移**（历史数据不迁移先例）：读到即视作空账本，首次触发对老会话全量重扫一遍，重复由提取去重 + 合并写兜底。
 - `nightlyBaseline`（UTC 日期）是夜间内化的判据基线（管线读写）；`nightlyLastRun`（本地日期）是夜间内化的防同日重跑标记（调度器读写）——两个时区各管各的，见"内化"节。
 - **串行锁**：项目级——`MemoryPipeline` 对同一项目维护一个 promise 链（`#locks`），同项目的触发（含内化）排队执行，避免两个触发并发读写同一批线文件；全局级——写 L2 认知文件时再套一层模块级全局锁（`withL2Lock`），跨项目并发内化撞同一认知文件也串行化。调度器的每次扫描本身不等待触发完成（fire-and-forget + 防重入）。
 

@@ -47,8 +47,8 @@ describe("startMemoryScheduler", () => {
   it("runs the interval trigger when intervalMinutes has elapsed since the last run", async () => {
     const sys = fakeSystem()
     const now = new Date("2026-08-29T12:00:00Z")
-    // 该工作区建一个会话：interval 触发应归属该最近活动会话（Task 7 事件流归属）
-    const meta = sessions.create("t", undefined, "/w/kclaw")
+    // 定时触发无显式归属会话：pipeline 内部对全部会话逐个补增量，调度器只传 workdir
+    sessions.create("t", undefined, "/w/kclaw")
     const handle = startMemoryScheduler({
       system: sys as unknown as MemorySystem, sessions,
       config: structuredClone(defaultConfig),
@@ -57,7 +57,7 @@ describe("startMemoryScheduler", () => {
     })
     await new Promise((r) => setTimeout(r, 30))
     await handle.stop()
-    expect(sys.triggerInterval).toHaveBeenCalledWith("/w/kclaw", meta.id)
+    expect(sys.triggerInterval).toHaveBeenCalledWith("/w/kclaw")
     expect(sys.markIntervalRun).toHaveBeenCalledWith("/w/kclaw", now.toISOString())
   })
 

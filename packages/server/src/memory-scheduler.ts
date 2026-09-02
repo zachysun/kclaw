@@ -61,8 +61,8 @@ export function startMemoryScheduler(deps: {
 
   async function sweep(): Promise<void> {
     const cfg = deps.config.memory
-    // 该项目最近活动的会话（与 core #recentSessionId 同判据）：interval / 夜间内化
-    // 无显式归属会话时，memory 事件落到它名下（Task 6/7 会话事件流归属）。
+    // 该项目最近活动的会话（与 core #recentSessionId 同判据）：夜间内化无显式归属
+    // 会话时，memory 事件落到它名下（Task 6/7 会话事件流归属）。
     const recentSession = (workdir: string): string | undefined =>
       deps.sessions.list().filter((m) => (m.workdir ?? "") === workdir)
         .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))[0]?.id
@@ -72,9 +72,9 @@ export function startMemoryScheduler(deps: {
       if (cfg.write.intervalMinutes > 0) {
         const last = deps.system.intervalLastRun(workdir)
         if (last === undefined || now().getTime() - Date.parse(last) >= cfg.write.intervalMinutes * 60_000) {
-          // 定时触发无显式归属会话：取该工作区最近活动的会话（与 core #recentSessionId 同判据），
-          // 让 interval 落盘事件挂到它名下（Task 6/7 会话事件流归属）。
-          const p = deps.system.triggerInterval(workdir, recentSession(workdir)).catch((e) => log(`kclaw memory interval failed: ${String(e)}`))
+          // 定时触发无显式归属会话：pipeline 对该项目全部会话逐个补增量，
+          // 各批次的落盘事件挂各自的来源会话（Task 6/7 会话事件流归属）。
+          const p = deps.system.triggerInterval(workdir).catch((e) => log(`kclaw memory interval failed: ${String(e)}`))
           inFlight.add(p); void p.finally(() => inFlight.delete(p))
           // markIntervalRun 在触发发起后立即推进（即便失败也推进，M-2 取舍）：interval
           // 语义是"至少每 intervalMinutes 兜底扫一次"，失败后下个整周期再试，避免同项目

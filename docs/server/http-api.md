@@ -132,7 +132,7 @@ interface Job {
 | GET | `/memory/global/:kind/:file` | 读认知文件原文 | — | `{content}`；kind 非 persona/wiki/rule 或文件不存在 404 |
 | PATCH | `/memory/global/:kind/:file` | 整文件覆写认知文件（写后重建全局索引） | `{content}` 必填、非空字符串，否则 400 `content must be a non-empty string` | `{ok:true}`；kind 非法或文件不存在 404 |
 | DELETE | `/memory/global/:kind/:file` | 删认知文件 + 重建全局索引 | — | `{ok:true}`；kind 非法或文件不存在 404；**persona 是全局画像，不可删除，返回 400 `persona 不可删除（可清空正文）`** |
-| POST | `/memory/trigger-manual` | 手动触发当前项目的手动写入（spec 4.2 手动行）：与定时/跟随同一条管线，范围 = 该项目自上次水位以来的新消息 | `{workdir?}`：可选，缺省回落 `config.workspace` | `{ok:true}`；`memory.write.manual=false` 时 400 `手动写入已关闭（memory.write.manual=false），可依赖定时/跟随触发`；管线异常 500 |
+| POST | `/memory/trigger-manual` | 手动触发当前项目的手动写入（spec 4.2 手动行）：与定时/跟随同一条管线，范围 = 归属会话自上次水位以来的新消息（会话缺省回落项目最近活动会话） | `{workdir?, sessionId?}`：均可选，workdir 缺省回落 `config.workspace`，sessionId 缺省回落项目最近活动会话 | `{ok:true}`；`memory.write.manual=false` 时 400 `手动写入已关闭（memory.write.manual=false），可依赖定时/跟随触发`；管线异常 500 |
 
 `:id`/`:project`/`:topic`/`:file` 的路径段先过白名单校验（`isSafeSegment`：段非空、非 `.`、非 `..`、不含 `/`，拦目录穿越段；允许 CJK/空格，URL 里已 encodeURIComponent）——非法段返回 400 `invalid segment`；合法段按原样传给 `MemorySystem`，读侧宽容（找不到就 404），写侧是"人即是真相"的整文件覆写。`GET /memory/projects/:id` 的响应包裹成 `{id, threads}` 是为前端取数方便（实现与 spec 的差异点，见 [memory](../core/memory.md) 的管理界面一节）。删除类的机器语义：删的是文件，`vectors.db` 里的对应条目由随后的 reindex 清除。
 

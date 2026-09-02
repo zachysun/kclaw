@@ -331,9 +331,10 @@ export class MemorySystem {
 
   // ---- 定时/跟随触发与跟随门禁（Task 13 scheduler / run.ts 消费） ----
 
-  /** 定时触发（scheduler interval 兜底，spec 4.2）：直通 pipeline 增量提取。 */
-  async triggerInterval(workdir: string, sessionId?: string): Promise<void> {
-    await this.#pipeline.runTrigger(workdir, "interval", sessionId ?? this.#recentSessionId(workdir))
+  /** 定时触发（scheduler interval 兜底，spec 4.2）：无显式归属会话，pipeline 对
+   *  该项目全部会话逐个补增量（每会话各一本水位，谁的增量归谁的批次）。 */
+  async triggerInterval(workdir: string): Promise<void> {
+    await this.#pipeline.runTrigger(workdir, "interval")
   }
 
   /** 跟随触发（scheduler 对挂起检查补查，spec 4.2/11）。 */

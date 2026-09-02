@@ -55,9 +55,9 @@ describe("trigger interval/follow (直通 pipeline)", () => {
     const proj = join(root, "memory", "projects", projectIdFor(WORKDIR))
     expect(existsSync(join(proj, "ws.md"))).toBe(true)
     const state = JSON.parse(readFileSync(join(proj, "state.json"), "utf8")) as {
-      watermarks: { interval?: { sessionId: string; messageId: string } }
+      watermarks: Record<string, { interval?: string }>
     }
-    expect(state.watermarks.interval).toEqual({ sessionId: meta.id, messageId: "m1" })
+    expect(state.watermarks[meta.id]?.interval).toBe("m1")
   })
 
   it("follow trigger advances the follow watermark", async () => {
@@ -67,9 +67,9 @@ describe("trigger interval/follow (直通 pipeline)", () => {
     await sys.triggerFollow(WORKDIR)
     const proj = join(root, "memory", "projects", projectIdFor(WORKDIR))
     const state = JSON.parse(readFileSync(join(proj, "state.json"), "utf8")) as {
-      watermarks: { follow?: { sessionId: string; messageId: string } }
+      watermarks: Record<string, { follow?: string }>
     }
-    expect(state.watermarks.follow).toEqual({ sessionId: meta.id, messageId: "m1" })
+    expect(state.watermarks[meta.id]?.follow).toBe("m1")
   })
 })
 

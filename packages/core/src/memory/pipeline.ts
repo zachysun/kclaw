@@ -7,7 +7,7 @@ import type { Message } from "../protocol/messages.js"
 import type { SessionStore } from "../session/store.js"
 import type { MemoryEvent } from "../session/events.js"
 import { MemoryLayout } from "./layout.js"
-import { WriteLedger, type Watermark } from "./ledger.js"
+import { WriteLedger } from "./ledger.js"
 import {
   parseThreadFile, renderMemoryMd, writeThreadFile, appendSection, updateSection,
   type ThreadFile,
@@ -131,35 +131,6 @@ function todayOf(date: Date): string {
   return date.toISOString().slice(0, 10)
 }
 
-/**
- * 两个水位谁更靠后（spec 4.1）：范围选取一律用最靠后的那个，任一触发先跑到哪，
- * 另一个触发都不再重复提取（后到者按最新水位重选范围）。水位所在会话/消息已
- * 不存在（被删）时按"更旧"处理 —— messagesSince 对删掉的会话退化为全量。
- */
-function messagePosition(rows: Array<{ id: string; messages: Array<{ id: string }> }>, wm: Watermark): number {
-  let pos = 0
-  for (const s of rows) {
-    const i = s.messages.findIndex((m) => m.id === wm.messageId)
-    if (s.id === wm.sessionId && i !== -1) return pos + i
-    pos += s.messages.length
-  }
-  return -1
-}
-
-function laterWatermark(
-  rows: Array<{ id: string; messages: Array<{ id: string }> }>,
-  a: Watermark | undefined,
-  b: Watermark | undefined,
-): Watermark | undefined {
-  if (a === undefined) return b
-  if (b === undefined) return a
-  const ia = messagePosition(rows, a)
-  const ib = messagePosition(rows, b)
-  if (ia === -1) return b
-  if (ib === -1) return a
-  return ia >= ib ? a : b
-}
-
 /** 内化 JSON 解析（宽容原则，同 #extract）。 */
 function parseCognitionActions(raw: string, log: (m: string) => void): CognitionAction[] {
   let text = raw.trim()
@@ -248,39 +219,36 @@ export class MemoryPipeline {
 
   async runTrigger(workdir: string, trigger: PipelineTrigger, sessionId?: string): Promise<void> {
     const { id } = this.#layout.ensureProject(workdir)
-    return this.#lock(id, () => this.#runLocked(id, workdir, trigger, sessionId))
+    return this.#lock(id, () => this.#runLocked(id, trigger, sessionId))
   }
 
-  async #runLocked(projectId: string, workdir: string, trigger: PipelineTrigger, sessionId?: string): Promise<void> {
+  async #runLocked(projectId: string, trigger: PipelineTrigger, sessionId?: string): Promise<void> {
     const ledger = new WriteLedger(join(this.#layout.projectDir(projectId), "state.json"))
-    // 选范围（项目维度，spec 4.1）：该项目全部会话的新消息。五个触发器统一走水位取
-    // 增量（后到者按最新水位重选范围，谁先跑到都不重复提取）——重复内化回归
-    // 2026-09-02：clear/manual/immediate 原先全量重扫，切一次会话就把已提取过的旧
-    // 消息重新送审一遍，提取器照着已有主题线再转述一条（同一偏好被反复落线）。
-    // 首跑水位为空 → 全量，属首次提取；提取失败水位不推进（spec 11），下次触发补上。
+    // 选范围（会话维度，spec 4.1）：提取只看触发会话自己的增量窗口——水位每会话
+    // 各一本，互不比较（旧项目级水位按会话创建序划界，晚创建会话推进过水位后，
+    // 老会话的新消息会被永久跳过：2026-09-02 改名事故）。interval 定时兜底无显式
+    // 归属，对全部会话逐个补增量，单会话失败不阻塞其他会话。首跑水位为空 → 该
+    // 会话全量，属首次提取；提取失败水位不推进（spec 11），下次触发补上。
     const rows = this.#sessionRows(projectId)
-    const watermark = laterWatermark(rows, ledger.get("interval"), ledger.get("follow"))
-    const range = this.#messagesSince(rows, watermark)
-    if (range.length === 0) {
-      // 空批次也扫（spec 5）：项目静止（无新消息）时仍要收束到期的 active 线。
-      const inactivated = await this.#maybeAutoInactivate(projectId, trigger, sessionId)
-      if (inactivated.length > 0) {
-        this.#reindexProject(projectId)
-        this.#rebuildMemoryMd(projectId)
-        // 顺带内化检查（spec 4.2/6）：本次收束的线同样要总结——否则静止项目的
-        // 到期线收束为 inactive 后，认知永远不会被内化（线不复活、收束只扫
-        // active，之后再无新情节触发）。
-        await this.#maybeConsolidateTouched(projectId, new Set(inactivated), trigger, sessionId)
-      }
-      return
-    }
-    const actions = await this.#extract(projectId, range)
+    const targets = trigger === "interval" ? rows : rows.filter((r) => r.id === sessionId)
     const touched = new Set<string>()
-    for (const action of actions) {
-      try { this.#applyThreadAction(projectId, action, trigger, sessionId); touched.add(action.file) }
-      catch (err) { this.#log(`kclaw memory action skipped: ${String(err)}`) }
+    for (const row of targets) {
+      const watermark = WriteLedger.later(row.messages, ledger.get(row.id, "interval"), ledger.get(row.id, "follow"))
+      const range = WriteLedger.since(watermark, row.messages)
+      if (range.length === 0) continue
+      let actions: ExtractAction[]
+      try {
+        actions = await this.#extract(projectId, range)
+      } catch (err) {
+        this.#log(`kclaw memory extract failed for ${row.id} (watermark not advanced): ${String(err)}`)
+        continue
+      }
+      for (const action of actions) {
+        try { this.#applyThreadAction(projectId, action, trigger, row.id); touched.add(action.file) }
+        catch (err) { this.#log(`kclaw memory action skipped: ${String(err)}`) }
+      }
+      this.#advance(ledger, trigger, row.id, range)
     }
-    this.#advance(ledger, trigger, range)
     // 时间自动（spec 5）：每次管线跑完顺带扫描全部 active 线收束；空批次也扫。
     const inactivated = await this.#maybeAutoInactivate(projectId, trigger, sessionId)
     for (const t of inactivated) touched.add(t)
@@ -305,17 +273,10 @@ export class MemoryPipeline {
       .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0))
   }
 
-  #messagesSince(rows: Array<{ id: string; createdAt: string; messages: Message[] }>, watermark: Watermark | undefined): Message[] {
-    const pairs = WriteLedger.messagesSince(watermark, rows)
-    const byId = new Map<string, Message>()
-    for (const s of rows) for (const msg of s.messages) byId.set(msg.id, msg)
-    return pairs.map((p) => byId.get(p.messageId)).filter((m): m is Message => m !== undefined)
-  }
-
-  #advance(ledger: WriteLedger, trigger: PipelineTrigger, range: Message[]): void {
+  #advance(ledger: WriteLedger, trigger: PipelineTrigger, sessionId: string, range: Message[]): void {
     const last = range[range.length - 1]!
-    if (trigger === "interval" || trigger === "follow") ledger.advance(trigger, { sessionId: last.sessionId, messageId: last.id })
-    else ledger.advanceAll({ sessionId: last.sessionId, messageId: last.id })
+    if (trigger === "interval" || trigger === "follow") ledger.advance(sessionId, trigger, last.id)
+    else ledger.advanceAll(sessionId, last.id)
   }
 
   async #extract(projectId: string, range: Message[]): Promise<ExtractAction[]> {
