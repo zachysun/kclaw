@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SessionStore } from "../../src/session/store.js"
+import { isSystemEvent } from "../../src/session/events.js"
 import { newMessage } from "../../src/protocol/messages.js"
 import type { CompactionRecord } from "../../src/session/compaction.js"
 
@@ -298,6 +299,50 @@ describe("SessionStore event sourcing", () => {
     store.appendCompaction(meta.id, { at: "2026-01-02T00:00:00.000Z", trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
     expect(store.readCompactions(meta.id)).toHaveLength(1)
     expect(store.meta(meta.id)!.compaction).toEqual({ segments: [{ upto: "m1", summary: "s" }], top: "t", upto: "m1" })
+  })
+
+  it("appendSystem 写 system 事件：恰好一条、文本与 at 完整，其他事件类型读回不受影响", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("审计会话")
+    store.appendMessage(meta.id, newMessage(meta.id, "user", [{ id: "blk_1", type: "text", text: "hi" }]))
+    store.appendSystem(meta.id, "底座人设 + 认知注入的拼装全文")
+    store.appendCompaction(meta.id, { at: "2026-01-03T00:00:00.000Z", trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
+    const systemEvents = store.readEvents(meta.id).filter(isSystemEvent)
+    expect(systemEvents).toHaveLength(1)
+    expect(systemEvents[0].text).toBe("底座人设 + 认知注入的拼装全文")
+    expect(Number.isNaN(Date.parse(systemEvents[0].at))).toBe(false)
+    // 其他事件类型不受影响
+    expect(store.readMessages(meta.id)).toHaveLength(1)
+    expect(store.readCompactions(meta.id)).toHaveLength(1)
+  })
+
+  it("appendSystem 投影穿透：meta.json 全字段不变；仅 system 事件流 rebuildMeta 不崩", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("t")
+    store.updateMeta(meta.id, { model: "gpt-4", readonly: true })
+    const before = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
+    store.appendSystem(meta.id, "系统提示词全文")
+    const after = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
+    expect(after).toEqual(before) // 含 updatedAt 在内的所有投影字段逐字段一致
+    // 事件流仅一条 system 事件（无 session.created）：rebuildMeta 从 at 取时间，不崩
+    const only = "ses_sys_only"
+    store.appendSystem(only, "唯一一条 system 事件")
+    const rebuilt = store.rebuildMeta(only)!
+    expect(rebuilt.id).toBe(only)
+    expect(Number.isNaN(Date.parse(rebuilt.createdAt))).toBe(false)
+    expect(Number.isNaN(Date.parse(rebuilt.updatedAt))).toBe(false)
+  })
+
+  it("system 事件按追加顺序穿插在 message/compaction 之间", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create()
+    store.appendSystem(meta.id, "run-1 的系统提示词")
+    store.appendMessage(meta.id, newMessage(meta.id, "user", [{ id: "blk_1", type: "text", text: "hi" }]))
+    store.appendSystem(meta.id, "run-2 的系统提示词（内容已变化）")
+    store.appendCompaction(meta.id, { at: "2026-01-03T00:00:00.000Z", trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
+    expect(store.readEvents(meta.id).map((e) => e.type)).toEqual([
+      "session.created", "system", "message", "system", "compaction",
+    ])
   })
 
   it("rebuildMeta 从事件流全量重建投影", () => {

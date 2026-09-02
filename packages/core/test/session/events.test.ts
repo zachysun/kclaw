@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { applyEvent, type SessionEvent } from "../../src/session/events.js"
+import { applyEvent, isSystemEvent, type SessionEvent } from "../../src/session/events.js"
 import type { SessionMeta } from "../../src/session/store.js"
 
 const base: SessionMeta = { id: "ses_1", title: "t", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }
@@ -62,5 +62,26 @@ describe("applyEvent", () => {
     const withReadonly = applyEvent(base, { type: "session.set", at: "a", readonly: true })
     const untouched = applyEvent(withReadonly, { type: "session.set", at: "b", model: undefined })
     expect(untouched.readonly).toBe(true)
+  })
+
+  it("system 不刷 updatedAt 且不改任何投影字段", () => {
+    const meta = applyEvent(base, { type: "system", at: "2026-01-04T00:00:00.000Z", text: "系统提示词全文" })
+    expect(meta.updatedAt).toBe("2026-01-01T00:00:00.000Z")
+    expect(meta).toEqual(base)
+  })
+})
+
+describe("isSystemEvent", () => {
+  it("接受 system 事件", () => {
+    expect(isSystemEvent({ type: "system", at: "2026-01-04T00:00:00.000Z", text: "系统提示词全文" })).toBe(true)
+  })
+
+  it("拒绝其他事件类型", () => {
+    const events: SessionEvent[] = [
+      { type: "message", id: "m1", sessionId: "ses_1", role: "user", blocks: [], createdAt: "2026-01-02T00:00:00.000Z" },
+      { type: "compaction", at: "a", trigger: "auto", from: null, upto: "m10", messages: 10, segmentSummary: "s", top: "t" },
+      { type: "memory", at: "a", trigger: "follow", kind: "episode", op: "append", topic: "kclaw" },
+    ]
+    for (const e of events) expect(isSystemEvent(e)).toBe(false)
   })
 })

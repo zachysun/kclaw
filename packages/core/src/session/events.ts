@@ -15,12 +15,14 @@ export interface MemoryEvent {
   op: "append" | "update" | "new-thread" | "rewrite" | "create" | "overwrite" | "delete" | "inactivate"
   topic?: string; file?: string; scope?: string; source?: string
 }
+export interface SystemEvent { type: "system"; at: string; text: string }
 
-export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent | MessageEvent | CompactionEvent | MemoryEvent
+export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent | MessageEvent | CompactionEvent | MemoryEvent | SystemEvent
 
 export function isMessageEvent(e: SessionEvent): e is MessageEvent { return e.type === "message" }
 export function isCompactionEvent(e: SessionEvent): e is CompactionEvent { return e.type === "compaction" }
 export function isMemoryEvent(e: SessionEvent): e is MemoryEvent { return e.type === "memory" }
+export function isSystemEvent(e: SessionEvent): e is SystemEvent { return e.type === "system" }
 
 export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta {
   const next = { ...meta }
