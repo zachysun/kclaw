@@ -185,7 +185,7 @@ export function AuditView({ api }: { api: ApiClient }) {
                     >
                       <span className="trail-type">系统提示词</span>
                       <span className="trail-summary">
-                        {`${systemSummary(row.event.text)} · ${row.event.text.length} 字`}
+                        {`${summarize(row.event.text, 60)} · ${row.event.text.length} 字`}
                       </span>
                       <span className="trail-meta muted">{new Date(row.event.at).toLocaleString()}</span>
                       {row.changed && (
@@ -330,16 +330,10 @@ function memoryFullContent(event: MemoryEvent): string {
   return lines.join("\n")
 }
 
-/** Whitespace-collapsed, first-80-chars summary. */
-function summarize(text: string): string {
+/** Whitespace-collapsed, first-N-chars summary. */
+function summarize(text: string, max = 80): string {
   const t = text.replace(/\s+/g, " ").trim()
-  return t.length > 80 ? `${t.slice(0, 80)}…` : t
-}
-
-/** Whitespace-collapsed, first-60-chars summary for 系统提示词 rows. */
-function systemSummary(text: string): string {
-  const t = text.replace(/\s+/g, " ").trim()
-  return t.length > 60 ? `${t.slice(0, 60)}…` : t
+  return t.length > max ? `${t.slice(0, max)}…` : t
 }
 
 function blockTypeLabel(block: Block): string {

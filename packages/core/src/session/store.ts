@@ -202,8 +202,8 @@ export class SessionStore {
   }
 
   /** Append one system audit event (每次对话运行的系统提示词全量留痕); the projection stays untouched (不推进 updatedAt)。 */
-  appendSystem(id: string, text: string): void {
-    this.appendEvent(id, { type: "system", at: new Date().toISOString(), text })
+  appendSystem(id: string, event: { at: string; text: string }): void {
+    this.appendEvent(id, { type: "system", ...event })
   }
 
   /**

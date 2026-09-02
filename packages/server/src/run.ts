@@ -840,7 +840,7 @@ export class RunManager {
     // 模型调用复用同一份提示词，不重复记录；不加幻影会话守卫（与消息写入一致），
     // 也不吞错：写入失败即本次 run 失败，由驱动器的条目级失败兜底。
     const system = this.#systemWithCognition(paths.agentsMd, workspace)
-    sessions.appendSystem(sessionId, system)
+    sessions.appendSystem(sessionId, { at: new Date().toISOString(), text: system })
 
     const outcome = await runAgent(
       {

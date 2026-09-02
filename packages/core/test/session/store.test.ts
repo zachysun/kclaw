@@ -305,7 +305,7 @@ describe("SessionStore event sourcing", () => {
     const store = new SessionStore(dir)
     const meta = store.create("审计会话")
     store.appendMessage(meta.id, newMessage(meta.id, "user", [{ id: "blk_1", type: "text", text: "hi" }]))
-    store.appendSystem(meta.id, "底座人设 + 认知注入的拼装全文")
+    store.appendSystem(meta.id, { at: new Date().toISOString(), text: "底座人设 + 认知注入的拼装全文" })
     store.appendCompaction(meta.id, { at: "2026-01-03T00:00:00.000Z", trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
     const systemEvents = store.readEvents(meta.id).filter(isSystemEvent)
     expect(systemEvents).toHaveLength(1)
@@ -321,12 +321,12 @@ describe("SessionStore event sourcing", () => {
     const meta = store.create("t")
     store.updateMeta(meta.id, { model: "gpt-4", readonly: true })
     const before = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
-    store.appendSystem(meta.id, "系统提示词全文")
+    store.appendSystem(meta.id, { at: new Date().toISOString(), text: "系统提示词全文" })
     const after = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
     expect(after).toEqual(before) // 含 updatedAt 在内的所有投影字段逐字段一致
     // 事件流仅一条 system 事件（无 session.created）：rebuildMeta 从 at 取时间，不崩
     const only = "ses_sys_only"
-    store.appendSystem(only, "唯一一条 system 事件")
+    store.appendSystem(only, { at: new Date().toISOString(), text: "唯一一条 system 事件" })
     const rebuilt = store.rebuildMeta(only)!
     expect(rebuilt.id).toBe(only)
     expect(Number.isNaN(Date.parse(rebuilt.createdAt))).toBe(false)
@@ -336,9 +336,9 @@ describe("SessionStore event sourcing", () => {
   it("system 事件按追加顺序穿插在 message/compaction 之间", () => {
     const store = new SessionStore(dir)
     const meta = store.create()
-    store.appendSystem(meta.id, "run-1 的系统提示词")
+    store.appendSystem(meta.id, { at: new Date().toISOString(), text: "run-1 的系统提示词" })
     store.appendMessage(meta.id, newMessage(meta.id, "user", [{ id: "blk_1", type: "text", text: "hi" }]))
-    store.appendSystem(meta.id, "run-2 的系统提示词（内容已变化）")
+    store.appendSystem(meta.id, { at: new Date().toISOString(), text: "run-2 的系统提示词（内容已变化）" })
     store.appendCompaction(meta.id, { at: "2026-01-03T00:00:00.000Z", trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
     expect(store.readEvents(meta.id).map((e) => e.type)).toEqual([
       "session.created", "system", "message", "system", "compaction",
