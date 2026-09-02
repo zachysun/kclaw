@@ -1529,6 +1529,104 @@ describe("RunManager v2 memory injection", () => {
   })
 })
 
+// --- system 事件审计（第 9 种持久化事件）--------------------------------------
+// 每次 run 在系统提示词拼装完成后、进入模型循环前，把全量文本作为一条 system
+// 事件追加进该会话的事件流（只落盘，不上总线）。语义拍板：写入失败即本次 run
+// 失败（与消息写入失败同待遇）；不加幻影会话守卫；steer 注入与 run 内多次模型
+// 调用复用同一份提示词，每 run 恰好一条。
+
+describe("RunManager system 事件审计", () => {
+  // 批 1 的 isSystemEvent 守卫未导出到 @kclaw/core 公共入口：测试内行内收窄
+  type StreamEvent = ReturnType<SessionStore["readEvents"]>[number]
+  const isSystem = (e: StreamEvent): e is StreamEvent & { type: "system"; at: string; text: string } =>
+    e.type === "system"
+
+  it("一次 run 落恰好一条 system 事件：文本为 AGENTS.md 原文，先于本 run 的 user 消息", async () => {
+    const { env, manager } = makeEnv(scriptClient([textTurn("收到")]))
+    writeFileSync(env.paths.agentsMd, "# 人设\n你是测试助理。", "utf8")
+    const session = env.sessions.create("审计会话")
+
+    await manager.enqueue(session.id, { userText: "你好", trigger: "user" })
+
+    const events = env.sessions.readEvents(session.id)
+    const systemEvents = events.filter(isSystem)
+    expect(systemEvents).toHaveLength(1)
+    expect(systemEvents[0]!.text).toBe("# 人设\n你是测试助理。")
+    expect(Number.isNaN(Date.parse(systemEvents[0]!.at))).toBe(false)
+    // 流序：system 事件先于本 run 的 user 消息事件
+    const systemIdx = events.findIndex(isSystem)
+    const userMsgIdx = events.findIndex((e) => e.type === "message" && e.role === "user")
+    expect(systemIdx).toBeGreaterThan(-1)
+    expect(userMsgIdx).toBeGreaterThan(systemIdx)
+  })
+
+  it("无 AGENTS.md 且认知为空时，system 事件文本等于默认人设", async () => {
+    // makeEnv 的临时 home 不写 AGENTS.md；makeMemoryFake 的 cognitionPrompt 恒为空串
+    const { env, manager } = makeEnv(scriptClient([textTurn("收到")]))
+    const session = env.sessions.create("默认人设会话")
+
+    await manager.enqueue(session.id, { userText: "你好", trigger: "user" })
+
+    const [systemEvent] = env.sessions.readEvents(session.id).filter(isSystem)
+    expect(systemEvent!.text).toBe("你是 kclaw，一个务实的个人助理。")
+  })
+
+  it("认知非空时 system 事件文本 = AGENTS.md + 空行 + 认知", async () => {
+    const fakeMemory = {
+      cognitionPrompt: () => "[关于用户]\nMaster 偏好中文。",
+      searchEpisodes: async () => [],
+    } as unknown as MemorySystem
+    const { env, manager } = makeEnv(scriptClient([textTurn("收到")]), undefined, undefined, { memory: fakeMemory })
+    writeFileSync(env.paths.agentsMd, "# 人设\n你是测试助理。", "utf8")
+    const session = env.sessions.create("认知审计会话")
+
+    await manager.enqueue(session.id, { userText: "你好", trigger: "user" })
+
+    const [systemEvent] = env.sessions.readEvents(session.id).filter(isSystem)
+    expect(systemEvent!.text).toBe("# 人设\n你是测试助理。\n\n[关于用户]\nMaster 偏好中文。")
+  })
+
+  it("appendSystem 写入失败即本次 run 失败：outcome 拒绝 + queue_entry_failed 可见性，驱动器不停转", async () => {
+    const { env, manager } = makeEnv(scriptClient([textTurn("收到")]))
+    const session = env.sessions.create("炸审计会话")
+    const socket = new FakeSocket()
+    env.bus.subscribe(session.id, socket)
+
+    // 只炸 appendSystem 的 store 视图（其余方法走原型委托）："跑了但没记录"
+    // 的静默缺口不允许——写入失败必须让本次 run 失败
+    const failingStore = Object.create(env.sessions) as SessionStore
+    Object.defineProperty(failingStore, "appendSystem", {
+      value(): void {
+        throw new Error("disk full: cannot append system")
+      },
+    })
+    const failingManager = new RunManager({
+      config: env.config, paths: env.paths, sessions: failingStore,
+      memory: env.memory, bus: env.bus,
+      llm: scriptClient([textTurn("收到")]), workspace: env.config.workspace,
+    })
+
+    // 装配段（runAgent 之前）同步抛 → 驱动器条目级失败兜底：outcome 以该错误拒绝
+    await expect(failingManager.enqueue(session.id, { userText: "写不进去", trigger: "user" }))
+      .rejects.toThrow("disk full: cannot append system")
+
+    // 可见性：bus 上补发 run.failed {code:"queue_entry_failed"}，message 带 messageId 与原因
+    const failed = received(socket).find((e) => e.type === "run.failed")
+    expect(failed).toBeDefined()
+    expect(failed!.payload).toMatchObject({ error: { code: "queue_entry_failed" } })
+    expect((failed!.payload as { error: { message: string } }).error.message).toContain("disk full")
+
+    // 没有任何 run 痕迹：无 system 审计事件、无消息落盘（装配段即失败，模型未被调用）
+    expect(env.sessions.readEvents(session.id).filter((e) => e.type === "system")).toHaveLength(0)
+    expect(env.sessions.readMessages(session.id)).toEqual([])
+
+    // 驱动器没有停转：随后一次正常 enqueue 照常完成并补上审计
+    const outcome = await manager.enqueue(session.id, { userText: "再来一次", trigger: "user" })
+    expect(outcome.stopReason).toBe("end_turn")
+    expect(env.sessions.readEvents(session.id).filter((e) => e.type === "system")).toHaveLength(1)
+  })
+})
+
 describe("RunManager extraTools (MCP adapter seam)", () => {
   it("appends adapter defs to the LLM request tools and keeps the executors callable", async () => {
     const reqs: LlmRequest[] = []
