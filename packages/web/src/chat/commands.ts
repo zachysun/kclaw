@@ -98,9 +98,23 @@ export async function runWebCommand(parsed: ParsedSlash, ctx: WebCommandCtx): Pr
       return true
     }
     case "skill": {
-      // 技能浏览归技能页（与 /memory 同款引导）；对话内点名用自然语言即可，
-      // 模型会经 skill_read 加载正文。
-      ctx.notify("技能浏览请用顶部的「技能」页；对话中直接点名技能即可让模型加载执行")
+      // 无参直接在通知区列清单（贴触发点）；看正文引导到只读技能页。
+      // 技能的"运行"没有命令也没有按钮：在对话里自然语言点名即可，
+      // 模型经 skill_read 加载正文后照做——提示里带例子把这件事说明白。
+      try {
+        const q = ctx.workdir !== "" ? `?workdir=${encodeURIComponent(ctx.workdir)}` : ""
+        const rows = await ctx.api.get<Array<{ name: string; description: string; origin: string; visibility: string }>>(`/skills${q}`)
+        if (rows.length === 0) {
+          ctx.notify("还没有技能。把技能目录放进 ~/.kclaw/skills/（全局）或工作区 .kclaw/skills/（项目）")
+          return true
+        }
+        const list = rows
+          .map((r) => `${r.name}（${r.origin === "project" ? "项目" : "全局"}${r.visibility === "user-only" ? " · 仅用户" : ""}）`)
+          .join("、")
+        ctx.notify(`已装技能：${list}。使用方式：在对话里直接说，例如「跑一下 ${rows[0]!.name}」，模型会加载该技能再执行；正文看顶部「技能」页`)
+      } catch (err) {
+        ctx.notify(`查看技能失败: ${err instanceof Error ? err.message : String(err)}`)
+      }
       return true
     }
     case "help":
