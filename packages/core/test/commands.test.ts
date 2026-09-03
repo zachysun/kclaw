@@ -72,12 +72,12 @@ describe("slashCompletions", () => {
 
   it("suggests every surface command for a bare slash, in display order", () => {
     const names = slashCompletions("/", "web").map((c) => c.name)
-    expect(names).toEqual(["new", "clear", "sessions", "model", "readonly", "compact", "help", "memory"])
+    expect(names).toEqual(["new", "clear", "sessions", "model", "readonly", "compact", "help", "memory", "skill"])
   })
 
   it("prefix-matches a partially typed command", () => {
     expect(slashCompletions("/co", "web").map((c) => c.name)).toEqual(["compact"])
-    expect(slashCompletions("/s", "cli").map((c) => c.name)).toEqual(["sessions", "steer"])
+    expect(slashCompletions("/s", "cli").map((c) => c.name)).toEqual(["sessions", "steer", "skill"])
   })
 
   it("hides surface-exclusive commands on the other surface", () => {

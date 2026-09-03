@@ -29,7 +29,7 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 const ALL_TOOLS = [
   "exec", "fs_read", "fs_list", "fs_write", "fs_edit",
   "web_search", "web_fetch", "memory_save", "memory_search",
-  "session_search",
+  "session_search", "skill_read",
 ]
 
 /** required arrays per tool (task brief); checked as sets. */
@@ -44,6 +44,7 @@ const REQUIRED: Record<string, string[]> = {
   memory_save: ["text"],
   memory_search: ["query"],
   session_search: ["query"],
+  skill_read: ["name"],
 }
 
 describe("builtin tool registry", () => {
@@ -75,7 +76,7 @@ describe("builtin tool registry", () => {
     // memory_save 只收 text（spec 7.3：v1 tags 删除）
     expect(prop("memory_save", "text")).toEqual({ type: "string", description: expect.any(String) })
     expect(prop("memory_search", "limit")).toEqual({ type: "integer", minimum: 1, maximum: 20 })
-    for (const tool of ["exec", "fs_read", "fs_list", "fs_write", "fs_edit", "web_fetch", "memory_save", "memory_search", "session_search"]) {
+    for (const tool of ["exec", "fs_read", "fs_list", "fs_write", "fs_edit", "web_fetch", "memory_save", "memory_search", "session_search", "skill_read"]) {
       expect(prop(tool, REQUIRED[tool][0])).toEqual({ type: "string", description: expect.any(String) })
     }
   })

@@ -8,11 +8,13 @@
  */
 import type { ToolExecutor } from "../agent/tools.js"
 import type { MemorySystem } from "../memory/system.js"
+import type { SkillRecord } from "../skills/index.js"
 import type { ToolDefinition } from "../provider/types.js"
 import { createExecTool } from "./exec.js"
 import { createFsTools } from "./fs.js"
 import { createMemoryTools } from "./memory.js"
 import { createSessionTools, type SessionSearchFn } from "./session.js"
+import { createSkillTools, SKILL_READ_DESCRIPTION } from "./skills.js"
 import { createWebTools } from "./web.js"
 
 export { createExecTool, truncateMiddle } from "./exec.js"
@@ -20,6 +22,7 @@ export { createFsTools } from "./fs.js"
 export { createMemoryTools } from "./memory.js"
 export { createSessionTools, type SessionSearchFn } from "./session.js"
 export { searchSessionEvents, type SessionHit } from "./session-search.js"
+export { createSkillTools, SKILL_READ_DESCRIPTION } from "./skills.js"
 export { createWebTools } from "./web.js"
 
 /** A string property with a model-facing description. */
@@ -45,6 +48,8 @@ export function createBuiltinTools(opts: {
   exec?: Partial<{ timeoutMs: number; maxOutputBytes: number }>
   web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean }>
   sessionSearch?: SessionSearchFn
+  /** Skills scanned for this run (progressive disclosure's on-demand half). */
+  skills?: SkillRecord[]
   fetchImpl?: typeof fetch
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] } {
   const exec = createExecTool({
@@ -61,6 +66,7 @@ export function createBuiltinTools(opts: {
   })
   const memory = createMemoryTools(opts.memoryCtx)
   const session = createSessionTools(opts.sessionSearch)
+  const skill = createSkillTools(opts.skills ?? [])
 
   const entries: Array<{ name: string; tool: ToolExecutor; def: ToolDefinition }> = [
     {
@@ -169,6 +175,11 @@ export function createBuiltinTools(opts: {
         { query: str("要在早期对话里找什么"), limit: int(1, 20) },
         ["query"],
       ),
+    },
+    {
+      name: "skill_read",
+      tool: skill.skill_read,
+      def: def("skill_read", SKILL_READ_DESCRIPTION, { name: str("要加载哪个技能（目录名，见系统提示词的可用技能列表）") }, ["name"]),
     },
   ]
 

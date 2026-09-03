@@ -10,6 +10,8 @@ export interface KclawPaths {
   config: string
   /** ~/.kclaw/AGENTS.md — agent persona injected into the system prompt */
   agentsMd: string
+  /** ~/.kclaw/skills/<skill-name>/SKILL.md — global skill packages */
+  skillsDir: string
   /** ~/.kclaw/memory */
   memoryDir: string
   /** ~/.kclaw/memory/notes — one markdown file per memory note */
@@ -49,6 +51,7 @@ export function resolvePaths(home?: string): KclawPaths {
     home: root,
     config: join(root, "config.yaml"),
     agentsMd: join(root, "AGENTS.md"),
+    skillsDir: join(root, "skills"),
     memoryDir: join(root, "memory"),
     memoryNotesDir: join(root, "memory", "notes"),
     memoryIndexDb: join(root, "memory", "index.db"),
