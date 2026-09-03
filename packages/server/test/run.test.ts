@@ -1944,3 +1944,79 @@ describe("RunManager skill injection", () => {
     expect(result.output).not.toContain("全局部署正文")
   })
 })
+
+// --- 技能点名的隐式包装（mapLlmMessages 钩子，Master 2026-09-03）----------
+// 气泡/持久化/事件流保持用户原文；只有发给模型的 provider 请求在钩子里被
+// 追加一行“先 skill_read 读规程再执行”的调用指示。
+
+describe("RunManager skill invocation wrap", () => {
+  const seenUserText = (req: LlmRequest): string => {
+    const users = req.messages.filter((m) => m.role === "user") as { content: string }[]
+    return users.at(-1)!.content
+  }
+
+  it("wraps an in-text /skill mention for the model; persistence and events stay raw", async () => {
+    const requests: LlmRequest[] = []
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        requests.push(req)
+        yield* textTurn("好的")
+      },
+    }
+    const { env, manager } = makeEnv(llm)
+    writeSkill(join(env.paths.home, "skills"), "test", "---\ndescription: 验收技能。\n---\n\n正文\n")
+    const session = env.sessions.create("包装会话")
+
+    await manager.enqueue(session.id, { userText: "帮我 /test 跑一下", trigger: "user" })
+
+    // 模型视图：原文打底 + 一行技能调用指示
+    const seen = seenUserText(requests[0]!)
+    expect(seen.startsWith("帮我 /test 跑一下")).toBe(true)
+    expect(seen).toContain("「/test」是在调用技能 test")
+    expect(seen).toContain("skill_read")
+    // 持久化（events.jsonl 的 message 事件）：原文
+    const msgs = env.sessions.readMessages(session.id)
+    expect((msgs[0]!.blocks[0] as { type: string; text: string }).text).toBe("帮我 /test 跑一下")
+    // 事件流（轨迹页/气泡的数据源）：原文
+    const messageEvent = env.sessions.readEvents(session.id).find((e) => e.type === "message") as
+      | { blocks: { type: string; text: string }[] }
+      | undefined
+    expect(messageEvent!.blocks[0]!.text).toBe("帮我 /test 跑一下")
+  })
+
+  it("skips the wrap for user-invocable:false skills and unknown tokens", async () => {
+    const requests: LlmRequest[] = []
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        requests.push(req)
+        yield* textTurn("好的")
+      },
+    }
+    const { env, manager } = makeEnv(llm)
+    writeSkill(join(env.paths.home, "skills"), "inner", "---\ndescription: 仅模型。\nuser-invocable: false\n---\n\n正文\n")
+    const session = env.sessions.create("不包装会话")
+
+    await manager.enqueue(session.id, { userText: "看 /inner 和 /nope", trigger: "user" })
+
+    expect(seenUserText(requests[0]!)).toBe("看 /inner 和 /nope")
+  })
+
+  it("still wraps a leading /skill command (regression of the client-era entry)", async () => {
+    const requests: LlmRequest[] = []
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        requests.push(req)
+        yield* textTurn("好的")
+      },
+    }
+    const { env, manager } = makeEnv(llm)
+    writeSkill(join(env.paths.home, "skills"), "deploy", "---\ndescription: 部署。\n---\n\n正文\n")
+    const session = env.sessions.create("行首点名会话")
+
+    await manager.enqueue(session.id, { userText: "/deploy 上线", trigger: "user" })
+
+    const seen = seenUserText(requests[0]!)
+    expect(seen.startsWith("/deploy 上线")).toBe(true)
+    expect(seen).toContain("「/deploy」是在调用技能 deploy")
+  })
+})

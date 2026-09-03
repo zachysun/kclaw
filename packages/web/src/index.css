@@ -1093,7 +1093,7 @@ select:focus {
 .chat-composer {
   position: relative;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: var(--space-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
@@ -1118,6 +1118,10 @@ select:focus {
   background: transparent;
   padding: 4px 0;
   box-shadow: none !important;
+  /* textarea：多行由 Shift+Enter 换行驱动（高度脚本跟随内容，160px 封顶），
+     关掉手工拉伸与默认外框。 */
+  resize: none;
+  line-height: 1.4;
 }
 
 .chat-composer button[type="submit"] {

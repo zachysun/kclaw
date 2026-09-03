@@ -124,7 +124,7 @@ async function drive(fn: () => void): Promise<void> {
 
 /** Type into the composer and click Send (the full send path). */
 async function sendText(h: Harness, text: string): Promise<void> {
-  const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+  const input = h.container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
   typeInto(input, text)
   await act(async () => {
     ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
@@ -228,8 +228,8 @@ function pushFrame(socket: FakeSocket, frame: unknown): void {
   socket.onmessage?.({ data: JSON.stringify(frame) })
 }
 
-function typeInto(input: HTMLInputElement, text: string): void {
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!
+function typeInto(input: HTMLTextAreaElement, text: string): void {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!
   act(() => {
     setter.call(input, text)
     input.dispatchEvent(new Event("input", { bubbles: true }))
@@ -392,7 +392,7 @@ describe("ChatPanel", () => {
 
   it("sends send_message over the ws from the composer", async () => {
     const h = await mount()
-    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    const input = h.container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
     typeInto(input, "hello world")
     await act(async () => {
       ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
@@ -408,7 +408,7 @@ describe("ChatPanel", () => {
   it("runs a slash command instead of sending it to the model (/new)", async () => {
     const onCreateSession = vi.fn(async () => {})
     const h = await mount({ onCreateSession })
-    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    const input = h.container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
     typeInto(input, "/new 重构讨论")
     await act(async () => {
       ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
@@ -422,7 +422,7 @@ describe("ChatPanel", () => {
   it("compacts through the slash command with a focus argument", async () => {
     const h = await mount()
     h.api.post.mockResolvedValueOnce({ message: "压缩了 3 段" })
-    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    const input = h.container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
     typeInto(input, "/compact 保留工具调用")
     await act(async () => {
       ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
@@ -436,7 +436,7 @@ describe("ChatPanel", () => {
 
   it("hints on an unknown command without sending anything", async () => {
     const h = await mount()
-    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    const input = h.container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
     typeInto(input, "/zzz")
     await act(async () => {
       ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
@@ -449,7 +449,7 @@ describe("ChatPanel", () => {
 
   it("renders the notice just above the composer, not at the panel top", async () => {
     const h = await mount()
-    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    const input = h.container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
     typeInto(input, "/zzz")
     await act(async () => {
       ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
@@ -469,7 +469,7 @@ describe("ChatPanel", () => {
 
   it("clears a stale notice once the user starts typing a new message", async () => {
     const h = await mount()
-    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    const input = h.container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
     typeInto(input, "/zzz")
     await act(async () => {
       ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
@@ -531,7 +531,7 @@ describe("ChatPanel", () => {
 
   it("echoes a sent message optimistically, then replaces it with the server twin", async () => {
     const h = await mount()
-    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    const input = h.container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
     typeInto(input, "在吗")
     await act(async () => {
       ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
@@ -556,7 +556,7 @@ describe("ChatPanel", () => {
     await drive(() => {
       pushFrame(h.sockets[0]!, ev("compaction.started", {}))
     })
-    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    const input = h.container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
     typeInto(input, "排队消息")
     await act(async () => {
       ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
@@ -573,7 +573,7 @@ describe("ChatPanel", () => {
 
   it("an idle send still echoes optimistically as a bubble (free-send path untouched)", async () => {
     const h = await mount()
-    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    const input = h.container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
     typeInto(input, "普通消息")
     await act(async () => {
       ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
@@ -587,7 +587,7 @@ describe("ChatPanel", () => {
 
   it("no queued hint when the session is idle", async () => {
     const h = await mount()
-    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    const input = h.container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
     typeInto(input, "普通消息")
     await act(async () => {
       ;(h.container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
@@ -904,7 +904,7 @@ describe("ChatPanel", () => {
     const rows = [...h.container.querySelectorAll('[data-testid="queue-row"]')]
     expect(rows.map((r) => r.textContent)).toEqual(["等待甲取消", "等待乙取消"])
     // 排队列表是状态：打字不清除（一次性 notice 才随输入清除）
-    const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+    const input = h.container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
     typeInto(input, "继续输入")
     expect(h.container.querySelector('[data-testid="queue-list"]')).not.toBeNull()
     // 点"全部取消" → ws 收到不带 messageId 的 queue.cancel
@@ -975,7 +975,7 @@ describe("ChatPanel drag-and-drop attachments", () => {
     expect(upload).toHaveBeenCalledWith("ses_1", file)
     expect(document.querySelectorAll('[data-testid="attachment-chip"]').length).toBe(1)
 
-    const input = document.querySelector('[data-testid="chat-input"]') as HTMLInputElement
+    const input = document.querySelector('[data-testid="chat-input"]') as HTMLTextAreaElement
     const sendBtn = document.querySelector('[data-testid="send-button"]') as HTMLButtonElement
     typeInto(input, "看附件")
     await act(async () => {
@@ -1051,7 +1051,7 @@ describe("ChatPanel model selector", () => {
 })
 
 describe("ChatPanel skill slash commands", () => {
-  it("registered skills appear in the slash menu and /name sends the invocation message", async () => {
+  it("registered skills appear in the slash menu and /name sends the RAW text (daemon wraps)", async () => {
     const h = await mount({
       skills: [
         { name: "test", description: "验收技能", visibility: "all", origin: "global" },
@@ -1061,18 +1061,19 @@ describe("ChatPanel skill slash commands", () => {
     try {
       await h.sockets[0]!.open()
       // 打开 socket 后已拉到 /skills 清单；输入前缀，动态命令进建议菜单
-      const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+      const input = h.container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
       typeInto(input, "/tes")
       await flush()
       const menu = h.container.querySelector('[data-testid="slash-menu"]')
       expect(menu?.textContent).toContain("/test")
 
-      // 提交 /test <要求>：发出的 send_message 是点名消息（正文仍走 skill_read）
+      // 提交 /test <要求>：send_message 帧原文直发——隐式包装在 daemon 侧，
+      // 气泡/轨迹所见即所发（Master 2026-09-03）
       await sendText(h, "/test 把 README 翻译成英文")
       const frame = JSON.parse(h.sockets[0]!.sent.at(-1)!) as { type?: string; text?: string }
       expect(frame).toMatchObject({
         type: "send_message",
-        text: "请按技能「test」的规程处理以下请求：\n\n把 README 翻译成英文",
+        text: "/test 把 README 翻译成英文",
       })
     } finally {
       h.unmount()

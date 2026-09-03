@@ -29,6 +29,7 @@ import {
   emergencyBoundary,
   estimateContextTokens,
   makeEvent,
+  matchSkillInvocations,
   newBlockId,
   newId,
   newMessage,
@@ -38,6 +39,8 @@ import {
   scanSkillDirs,
   searchSessionEvents,
   skillListPrompt,
+  withLastUserText,
+  wrapSkillInvocations,
 } from "@kclaw/core"
 import type {
   ActiveSummary,
@@ -52,6 +55,7 @@ import type {
   Message,
   NoteBlock,
   PermissionGate,
+  ProviderMessage,
   QueueEntry,
   RunOutcome,
   SessionSearchFn,
@@ -708,6 +712,15 @@ export class RunManager {
       project: join(workspace, ".kclaw", "skills"),
     })
 
+    // 技能点名的隐式包装（Master 2026-09-03）：用户消息里任意位置的 /技能名
+    // 记号精确命中已装且用户可调用的技能时，只在发给模型的那份输入上追加
+    // 一行调用指示——持久化、事件流与气泡保持原始文本（所见即所发）。
+    // 仅 trigger:user 生效：job 提示是 daemon 生成的内部指令，不参与点名。
+    const llmUserText =
+      input.trigger === "user"
+        ? wrapSkillInvocations(input.userText, matchSkillInvocations(input.userText, skills))
+        : undefined
+
     const { tools, toolDefs } = createBuiltinTools({
       workspace,
       memoryCtx: {
@@ -877,6 +890,12 @@ export class RunManager {
         confirmTimeoutMs,
         signal: controller.signal,
         llmAttempt: () => llmAttempt,
+        // 模型视图改写钩子（LLM 执行前）：技能点名的隐式包装在这里生效——
+        // 只改发给模型的消息，持久化/事件流/气泡保持用户原文；未命中为
+        // undefined，行为与从前完全一致。
+        ...(llmUserText === undefined
+          ? {}
+          : { mapLlmMessages: (msgs: ProviderMessage[]) => withLastUserText(msgs, llmUserText) }),
         toolResultKeep: config.sessions.toolResultKeep ?? 8,
         // 省略预算（黄线值）透传给打包台：预算装不下的工具输出以省略占位符发送
         tokenBudget: budget * atRatio,

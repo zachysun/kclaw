@@ -119,3 +119,37 @@ export function toProviderMessages(
   }
   return out
 }
+
+/**
+ * Provider 视图的定向改写（供 AgentDeps.mapLlmMessages 钩子使用）：把消息
+ * 列表中最后一条 user 消息（当前轮次的用户输入）的文本换成 `text`——
+ * string 内容整体替换；ContentPart[] 只换第一个 text part，图片等其余部分
+ * 原样保留。从尾部向前找：工具循环第二轮起列表末条是 tool 消息，锚定
+ * “最后一条 user”才能让改写在每一轮都生效。列表里没有 user 消息时原样
+ * 返回。这是“只改模型看到的输入”的现成实现：调用方的持久化与事件流
+ * 不受影响。
+ */
+export function withLastUserText(messages: ProviderMessage[], text: string): ProviderMessage[] {
+  let idx = -1
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]!.role === "user") {
+      idx = i
+      break
+    }
+  }
+  if (idx === -1) return messages
+  const target = messages[idx]!
+  if (target.role !== "user") return messages
+  if (typeof target.content === "string") {
+    return [...messages.slice(0, idx), { ...target, content: text }, ...messages.slice(idx + 1)]
+  }
+  let replaced = false
+  const content = target.content.map((part: ContentPart): ContentPart => {
+    if (!replaced && part.type === "text") {
+      replaced = true
+      return { ...part, text }
+    }
+    return part
+  })
+  return [...messages.slice(0, idx), { ...target, content }, ...messages.slice(idx + 1)]
+}

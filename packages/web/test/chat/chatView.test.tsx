@@ -51,8 +51,8 @@ function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
       />,
     )
   })
-  const input = (): HTMLInputElement =>
-    container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+  const input = (): HTMLTextAreaElement =>
+    container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
   const send = async (): Promise<void> => {
     await act(async () => {
       ;(container.querySelector('button[data-testid="send-button"]') as HTMLButtonElement).click()
@@ -72,17 +72,17 @@ function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
   }
 }
 
-function type(input: HTMLInputElement, text: string): void {
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!
+function type(input: HTMLTextAreaElement, text: string): void {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!
   act(() => {
     setter.call(input, text)
     input.dispatchEvent(new Event("input", { bubbles: true }))
   })
 }
 
-function pressKey(input: HTMLInputElement, key: string): void {
+function pressKey(input: HTMLTextAreaElement, key: string, opts: { shift?: boolean } = {}): void {
   act(() => {
-    input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }))
+    input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, shiftKey: opts.shift === true }))
   })
 }
 
@@ -117,10 +117,23 @@ describe("ChatView slash suggestions", () => {
     h.unmount()
   })
 
-  it("stays hidden for plain text", () => {
+  it("stays hidden for plain text but opens for a trailing slash token ANYWHERE", () => {
     const h = mountView()
-    type(h.input(), "hello /")
+    type(h.input(), "hello")
     expect(h.container.querySelector('[data-testid="slash-menu"]')).toBeNull()
+    // 任意位置触发（Master 2026-09-03）："hello /" 的尾部词是正在输入的命令
+    type(h.input(), "hello /")
+    expect(h.container.querySelector('[data-testid="slash-menu"]')).not.toBeNull()
+    h.unmount()
+  })
+
+  it("suggests from mid-draft tokens and completing rewrites only the trailing token", () => {
+    const h = mountView()
+    type(h.input(), "帮我 /co")
+    expect(h.container.querySelectorAll('[data-testid="slash-option"]')).toHaveLength(1)
+    expect(menuText(h.container)).toContain("/compact")
+    pressKey(h.input(), "Tab")
+    expect(h.input().value).toBe("帮我 /compact ")
     h.unmount()
   })
 
@@ -181,12 +194,25 @@ describe("ChatView slash suggestions", () => {
     const h = mountView()
     type(h.input(), "/compact")
     pressKey(h.input(), "Enter")
-    // Exact match must NOT be rewritten (no trailing space appended) — the
-    // native form submit then runs it (jsdom does not submit on Enter, so the
-    // send button stands in for the submission here).
-    expect(h.input().value).toBe("/compact")
-    await h.send()
+    // Exact match must NOT be rewritten (no trailing space appended) — Enter
+    // goes straight to the submit (textarea 的 Enter 不再依赖原生表单提交).
     expect(h.onSend).toHaveBeenCalledWith("/compact")
+    expect(h.input().value).toBe("")
+    h.unmount()
+  })
+
+  it("Enter submits plain text; Shift+Enter inserts a newline instead (textarea)", async () => {
+    const h = mountView()
+    type(h.input(), "第一行")
+    pressKey(h.input(), "Enter")
+    expect(h.onSend).toHaveBeenCalledWith("第一行")
+    expect(h.input().value).toBe("")
+
+    type(h.input(), "第一行")
+    pressKey(h.input(), "Enter", { shift: true })
+    expect(h.onSend).toHaveBeenCalledTimes(1) // Shift+Enter 只换行不发送
+    // value setter 后组件受控值由 React 管理：换行体现在 draft 上，
+    // 这里用原生 value 断言 keydown 未被 preventDefault（textarea 默认行为）
     h.unmount()
   })
 

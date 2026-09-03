@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
-import { toProviderMessages } from "../../src/agent/context.js"
+import { toProviderMessages, withLastUserText } from "../../src/agent/context.js"
+import type { ContentPart, ProviderMessage } from "../../src/provider/types.js"
 import { newAssistantMessage, newMessage } from "../../src/protocol/messages.js"
 import { newMessage as nm, newAssistantMessage as na } from "../../src/protocol/messages.js"
 
@@ -227,5 +228,41 @@ describe("toProviderMessages — v3", () => {
     const history = [...toolMsg("x".repeat(50))]
     const out = toProviderMessages(history, 200, { tokenBudget: 10_000 })
     expect(out.some((m) => m.role === "tool" && !(m as { content: string }).content.startsWith("["))).toBe(true)
+  })
+})
+
+describe("withLastUserText（mapLlmMessages 钩子的定向改写助手）", () => {
+  const user = (text: string) => newMessage("s", "user", [{ id: "b", type: "text", text }])
+  const asUser = (m: unknown) => m as { role: "user"; content: string }
+
+  it("replaces only the last message when it is the user turn", () => {
+    const msgs = toProviderMessages([user("原文")], 10)
+    const out = withLastUserText(msgs, "包装文本")
+    expect(out).toHaveLength(1)
+    expect(asUser(out[0]).content).toBe("包装文本")
+    expect(asUser(msgs[0]).content).toBe("原文") // 入参不动
+  })
+
+  it("anchors to the LAST USER message, so later tool-loop rounds still rewrite", () => {
+    const a = newAssistantMessage("s", "glm", [{ id: "b", type: "text", text: "回答" }])
+    const msgs = toProviderMessages([user("原文"), a], 10)
+    const out = withLastUserText(msgs, "包装文本")
+    expect(asUser(out[0]).content).toBe("包装文本") // 末条是 assistant，用户消息仍被改写
+    expect((out[1] as { role: string }).role).toBe("assistant")
+  })
+
+  it("passes the list through untouched when no user message exists", () => {
+    const msgs: ProviderMessage[] = [{ role: "system", content: "只有系统消息" }]
+    expect(withLastUserText(msgs, "包装文本")).toBe(msgs)
+  })
+
+  it("swaps the first text part of multimodal user content, keeping the rest", () => {
+    const msgs: ProviderMessage[] = [
+      { role: "user", content: [{ type: "text", text: "原文" }, { type: "image_url", image_url: { url: "data:..." } }] },
+    ]
+    const out = withLastUserText(msgs, "包装文本")
+    const content = (out[0] as { role: "user"; content: ContentPart[] }).content
+    expect(content[0]).toEqual({ type: "text", text: "包装文本" })
+    expect(content[1]).toEqual({ type: "image_url", image_url: { url: "data:..." } })
   })
 })

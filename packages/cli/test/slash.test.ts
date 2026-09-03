@@ -522,7 +522,7 @@ describe("skill slash commands (dynamic registration)", () => {
     return { fake, send }
   }
 
-  it("registers each installed skill as a command that sends the invocation message", async () => {
+  it("registers each installed skill as a command that sends the raw text (daemon wraps)", async () => {
     const { fake, send } = skillCtx([
       { name: "test", description: "验收技能", visibility: "all", origin: "global" },
       { name: "deploy", description: "部署", visibility: "user-only", origin: "project" },
@@ -531,9 +531,9 @@ describe("skill slash commands (dynamic registration)", () => {
     const metas = await refreshSkillCommands(registry, fake.ctx)
     expect(metas.map((m) => m.name)).toEqual(["test", "deploy"])
     await runOrHint({ command: "test", args: "把 README 翻译成英文" }, registry, fake.ctx)
-    expect(send).toHaveBeenCalledWith("请按技能「test」的规程处理以下请求：\n\n把 README 翻译成英文")
+    expect(send).toHaveBeenCalledWith("/test 把 README 翻译成英文")
     await runOrHint({ command: "deploy", args: "" }, registry, fake.ctx)
-    expect(send).toHaveBeenLastCalledWith("请按技能「deploy」的规程执行")
+    expect(send).toHaveBeenLastCalledWith("/deploy")
   })
 
   it("builtin names win: a skill named help is skipped", async () => {

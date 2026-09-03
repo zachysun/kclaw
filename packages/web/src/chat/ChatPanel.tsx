@@ -12,7 +12,7 @@
  * path has no token-refresh flow, so it asks for a reload).
  */
 import { useCallback, useEffect, useRef, useState } from "react"
-import { parseSlashInput, skillCommandMeta, skillInvocationMessage } from "@kclaw/core/commands"
+import { parseSlashInput, skillCommandMeta } from "@kclaw/core/commands"
 import { ApiError, type ApiClient } from "../api.js"
 import { WsAuthError, type WsClient } from "../ws.js"
 import {
@@ -371,16 +371,12 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
 
   const handleSend = useCallback((text: string) => {
     // Slash commands intercept before the ws send path (the same point where
-    // the CLI chat loop intercepts) — they never reach the model.
+    // the CLI chat loop intercepts) — they never reach the model. 动态技能
+    // 命令（/技能名）除外：原样进入发送路径——daemon 检测到点名后做隐式
+    // 包装（Master 2026-09-03），气泡与轨迹保持用户输入的原文。
     const parsed = parseSlashInput(text)
-    if (parsed !== null) {
-      // 动态技能命令（/技能名）：不在内置 switch 里——命中已装技能清单时
-      // 把点名消息交给下面的正常发送路径（含排队/乐观回显语义）。
-      const skillNames = new Set(skillRows.map((r) => r.name))
-      if (skillNames.has(parsed.command)) {
-        handleSendRef.current(skillInvocationMessage(parsed.command, parsed.args))
-        return
-      }
+    const skillNames = new Set(skillRows.map((r) => r.name))
+    if (parsed !== null && !skillNames.has(parsed.command)) {
       void runWebCommand(parsed, {
         api,
         sessionId,
@@ -421,10 +417,6 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       setNotice("连接不可用，请稍后重试")
     }
   }, [sessionId, pendingAttachments, api, onCreateSession, onOpenSessions, handleSwitchModel, models, currentModel, updateView, disposition, skillRows])
-  // Ref 转发：技能命令在 handleSend 内部要把点名消息递回正常发送路径
-  // （消息不以 / 开头 → 直走发送分支），而 useCallback 定义内引用不了自身。
-  const handleSendRef = useRef(handleSend)
-  handleSendRef.current = handleSend
 
   /** Upload dropped files and queue them for the next message. */
   const handleDrop = useCallback((event: React.DragEvent) => {

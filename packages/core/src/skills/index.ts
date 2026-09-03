@@ -158,6 +158,42 @@ export function isModelVisible(s: SkillRecord): boolean {
   return !s.disableModelInvocation
 }
 
+/**
+ * Slash-style skill mentions in a user message, at ANY position: every
+ * `/<name>` token whose preceding character is not ASCII alphanumeric (this
+ * keeps `com/test` URL fragments out while letting unspaced Chinese text
+ * like "帮我/test" through) matches an installed, user-invocable skill by
+ * exact directory name. Duplicates collapse; scan order is preserved.
+ */
+export function matchSkillInvocations(text: string, skills: readonly SkillRecord[]): SkillRecord[] {
+  const invocable = new Map(skills.filter(isUserVisible).map((s) => [s.name, s]))
+  const matched: SkillRecord[] = []
+  for (const m of text.matchAll(/(?<![A-Za-z0-9])\/([a-z0-9]+(?:-[a-z0-9]+)*)/g)) {
+    const skill = invocable.get(m[1]!)
+    if (skill !== undefined && !matched.includes(skill)) matched.push(skill)
+  }
+  return matched
+}
+
+/**
+ * The model-facing copy for invoked skills: the user's message VERBATIM plus
+ * one trailing line telling the model to load each named skill via skill_read
+ * before following it. This is the implicit wrap applied at the daemon
+ boundary — persistence, the event stream and the chat bubble all keep the
+ * raw input; only the provider request sees this text. undefined = nothing
+ * matched, send the message as-is.
+ */
+export function wrapSkillInvocations(text: string, matched: readonly SkillRecord[]): string | undefined {
+  if (matched.length === 0) return undefined
+  if (matched.length === 1) {
+    const name = matched[0]!.name
+    return `${text}\n\n（本条消息中的「/${name}」是在调用技能 ${name}：请先用 skill_read 工具读取该技能的完整规程，再按该规程处理本条消息。）`
+  }
+  const refs = matched.map((s) => `「/${s.name}」`).join("")
+  const names = matched.map((s) => `技能 ${s.name}`).join("、")
+  return `${text}\n\n（本条消息中的${refs}是在调用技能：请先用 skill_read 工具依次读取${names} 的完整规程，再按这些规程处理本条消息。）`
+}
+
 /** User-facing discovery: everything not hidden by user-invocable: false. */
 export function isUserVisible(s: SkillRecord): boolean {
   return s.userInvocable

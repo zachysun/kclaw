@@ -6,7 +6,7 @@
  * by default and tool_result cards expand to their full output without JS.
  */
 import { Fragment, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
-import { parseSlashInput, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
+import { parseSlashInput, replaceTrailingSlashToken, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
 import type { ChatState, ConfirmationCard, NoteRender, RenderedBlock, RenderedMessage } from "./model.js"
 
 /**
@@ -150,8 +150,17 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
     return () => window.removeEventListener("resize", update)
   }, [completions.length])
 
-  const submit = (event: FormEvent): void => {
-    event.preventDefault()
+  // Auto-grow composer (textarea): track the content up to a ~5-line cap,
+  // then scroll internally instead of pushing the log away.
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  useLayoutEffect(() => {
+    const el = inputRef.current
+    if (el === null) return
+    el.style.height = "auto"
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+  }, [draft])
+
+  const submitDraft = (): void => {
     const text = draft.trim()
     if (text === "") return
     // /help renders the command panel right here — it is a view concern, so
@@ -165,13 +174,33 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
     setDraft("")
   }
 
-  /** Replace the draft with the chosen command plus a trailing space (ready for args); the space closes the menu. */
+  const submit = (event: FormEvent): void => {
+    event.preventDefault()
+    submitDraft()
+  }
+
+  /** Replace the trailing in-progress command word with the chosen command plus a trailing space; the space closes the menu. */
   const complete = (name: string): void => {
-    setDraft(`/${name} `)
+    setDraft(replaceTrailingSlashToken(draft, name))
     setDismissed(true)
   }
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    // Enter=发送，Shift+Enter=换行（Master 2026-09-03）：textarea 的 Enter
+    // 默认插换行符，一律拦下改走发送；带 Shift 时不拦，落到原生换行。
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault()
+      // While the menu is open, Enter ACCEPTS the highlighted suggestion —
+      // submitting the raw draft would run a half-typed word ("没有这个命
+      // 令"). Only a draft whose trailing token already IS the complete
+      // command goes straight to the submit.
+      if (completions.length > 0 && draft.trim() !== `/${completions[active]!.name}`) {
+        complete(completions[active]!.name)
+      } else {
+        submitDraft()
+      }
+      return
+    }
     if (completions.length > 0) {
       if (event.key === "ArrowDown") {
         event.preventDefault()
@@ -182,15 +211,6 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
       } else if (event.key === "Tab") {
         event.preventDefault()
         complete(completions[active]!.name)
-      } else if (event.key === "Enter") {
-        // While the menu is open, Enter ACCEPTS the highlighted suggestion —
-        // submitting the raw draft would run a half-typed word ("没有这个命
-        // 令"). Only a draft that already IS the complete command falls
-        // through to the native form submit.
-        if (draft.trim() !== `/${completions[active]!.name}`) {
-          event.preventDefault()
-          complete(completions[active]!.name)
-        }
       } else if (event.key === "Escape") {
         setDismissed(true)
       }
@@ -367,9 +387,11 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
           </ul>
         )}
         <span className="composer-prompt" aria-hidden="true">❯</span>
-        <input
+        <textarea
           className="chat-input"
           data-testid="chat-input"
+          ref={inputRef}
+          rows={1}
           value={draft}
           onChange={(event) => {
             setDraft(event.target.value)

@@ -69,28 +69,20 @@ export function skillCommandMeta(name: string, description: string, surface: Sla
 }
 
 /**
- * The user message a `/skill-name [要求]` command sends: a literal naming of
- * the skill — the same "user names it in conversation" entry point the model
- * already knows from the skill_read tool description, so skills hidden from
- * the model-facing listing (disable-model-invocation) load legitimately.
- */
-export function skillInvocationMessage(name: string, args: string): string {
-  const request = args.trim()
-  return request === "" ? `请按技能「${name}」的规程执行` : `请按技能「${name}」的规程处理以下请求：\n\n${request}`
-}
-
-/**
- * Prefix candidates for the composer: the whole input must still be a command
- * word (`/` + a prefix with no space typed yet), matched against the surface's
- * commands in display order — builtins first, then `extra` (dynamically
- * registered skill commands; a name that shadows any builtin is dropped so
- * builtin names stay reserved on every surface). Anything else — plain text,
- * a command with args already started — returns an empty list.
+ * Prefix candidates for the composer: the LAST whitespace-delimited chunk of
+ * the input must be an in-progress command word (`/` + a prefix with no space
+ * typed yet), so a draft like "帮我 /te" suggests right where the user is
+ * typing — a command with args already started ("/new 标题") or plain text
+ * returns an empty list. Matched against the surface's commands in display
+ * order — builtins first, then `extra` (dynamically registered skill
+ * commands; a name that shadows any builtin is dropped so builtin names stay
+ * reserved on every surface).
  */
 export function slashCompletions(input: string, surface: SlashSurface, extra: readonly SlashCommandMeta[] = []): SlashCommandMeta[] {
-  if (!input.startsWith("/")) return []
-  const word = input.slice(1)
-  if (word.includes(" ")) return []
+  const chunk = input.split(/\s/).pop() ?? ""
+  if (!chunk.startsWith("/")) return []
+  const word = chunk.slice(1)
+  if (word.includes("/")) return []
   const builtinNames = new Set(SLASH_COMMANDS.map((c) => c.name))
   const dynamic = extra.filter(
     (c) => !builtinNames.has(c.name) && c.surfaces.includes(surface) && c.name.startsWith(word),
@@ -99,4 +91,15 @@ export function slashCompletions(input: string, surface: SlashSurface, extra: re
     ...SLASH_COMMANDS.filter((c) => c.surfaces.includes(surface) && c.name.startsWith(word)),
     ...dynamic,
   ]
+}
+
+/**
+ * Completion applied to the draft: replaces the trailing in-progress command
+ * word (the chunk slashCompletions matched — callers use this only while the
+ * menu is open, so the draft ends with it by construction) with the chosen
+ * command plus a trailing space. Completing "帮我 /te" with `test` yields
+ * "帮我 /test " instead of clobbering the sentence.
+ */
+export function replaceTrailingSlashToken(draft: string, name: string): string {
+  return draft.replace(/\/[^\s/]*$/, `/${name} `)
 }

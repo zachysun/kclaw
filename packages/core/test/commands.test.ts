@@ -6,7 +6,7 @@
  * suggestion menu.
  */
 import { describe, it, expect } from "vitest"
-import { SLASH_COMMANDS, parseSlashInput, slashCompletions, skillCommandMeta, skillInvocationMessage, type SlashCommandMeta } from "../src/commands.js"
+import { SLASH_COMMANDS, parseSlashInput, replaceTrailingSlashToken, slashCompletions, skillCommandMeta, type SlashCommandMeta } from "../src/commands.js"
 
 describe("SLASH_COMMANDS", () => {
   it("has unique names", () => {
@@ -80,6 +80,14 @@ describe("slashCompletions", () => {
     expect(slashCompletions("/s", "cli").map((c) => c.name)).toEqual(["sessions", "steer", "skill"])
   })
 
+  it("triggers from the trailing token at ANY position of the draft", () => {
+    expect(slashCompletions("帮我 /co", "web").map((c) => c.name)).toEqual(["compact"])
+    expect(slashCompletions("a\nb /", "cli")).toHaveLength(SLASH_COMMANDS.filter((c) => c.surfaces.includes("cli")).length)
+    // 多词草稿里只有最后一个词是“正在输入的命令”；已开始写参数就收起。
+    expect(slashCompletions("/new 标题", "web")).toEqual([])
+    expect(slashCompletions("帮我 /co mm", "web")).toEqual([])
+  })
+
   it("hides surface-exclusive commands on the other surface", () => {
     expect(slashCompletions("/a", "web")).toEqual([])
     expect(slashCompletions("/a", "cli").map((c) => c.name)).toEqual(["attach"])
@@ -110,12 +118,10 @@ describe("slashCompletions with extra (dynamic skill) commands", () => {
     expect(slashCompletions("/te", "web", [webOnly]).map((c) => c.name)).toEqual(["test"])
   })
 
-  it("skillInvocationMessage carries args and stays identical across surfaces", () => {
-    expect(skillInvocationMessage("test", "")).toBe("请按技能「test」的规程执行")
-    expect(skillInvocationMessage("test", "把 README 翻译成英文")).toBe(
-      "请按技能「test」的规程处理以下请求：\n\n把 README 翻译成英文",
-    )
-    expect(skillInvocationMessage("test", "   ")).toBe("请按技能「test」的规程执行")
+  it("replaceTrailingSlashToken rewrites only the in-progress command word", () => {
+    expect(replaceTrailingSlashToken("/co", "compact")).toBe("/compact ")
+    expect(replaceTrailingSlashToken("帮我 /te", "test")).toBe("帮我 /test ")
+    expect(replaceTrailingSlashToken("/", "clear")).toBe("/clear ")
   })
 
   it("suggests nothing for unknown prefixes", () => {

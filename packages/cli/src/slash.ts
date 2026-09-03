@@ -8,7 +8,7 @@
  * loop).
  */
 import { isCancel, select } from "@clack/prompts"
-import { parseSlashInput, slashCompletions, skillInvocationMessage, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
+import { parseSlashInput, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
 import type { KclawClient } from "./client.js"
 
 /** Everything a registered command may reach at run time (a view over the chat loop's live state). */
@@ -106,11 +106,12 @@ export interface SkillCommandRow {
 
 /**
  * Register every installed, user-visible skill as a first-class slash command:
- * `/skill-name [要求]` sends the shared invocation message (a literal naming
- * of the skill — the model then loads the body via skill_read and follows it).
- * Builtin names win and nothing already in the registry is overwritten, so
- * builtins keep precedence over skills and custom `commands/*.md` (which are
- * registered first inside createRegistry) keep precedence over skills.
+ * `/skill-name [要求]` sends the RAW text — the daemon detects the /name token
+ * in the user message and wraps the model-facing copy itself (the wrap is
+ * implicit; the transcript keeps what the user typed). Builtin names win and
+ * nothing already in the registry is overwritten, so builtins keep precedence
+ * over skills and custom `commands/*.md` (which are registered first inside
+ * createRegistry) keep precedence over skills.
  * Returns the metas actually registered — the Tab completer's extra list.
  * Failures (daemon down) throw; the caller decides whether that is fatal.
  */
@@ -127,7 +128,7 @@ export async function refreshSkillCommands(registry: Map<string, SlashCommand>, 
       description,
       surfaces: ["cli"],
       async run(args, c) {
-        c.send(skillInvocationMessage(name, args))
+        c.send(args.trim() === "" ? `/${name}` : `/${name} ${args}`)
       },
     })
     registered.push({ name, usage: `/${name} [要求]`, description, surfaces: ["cli"] })

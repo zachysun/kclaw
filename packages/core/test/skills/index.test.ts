@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest"
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { parseSkillFile, scanSkillDirs, skillListPrompt } from "../../src/skills/index.js"
+import { matchSkillInvocations, parseSkillFile, scanSkillDirs, skillListPrompt, wrapSkillInvocations } from "../../src/skills/index.js"
 
 const FULL = `---
 name: commit-helper
@@ -150,5 +150,52 @@ describe("skillListPrompt", () => {
     expect(text.length).toBeLessThanOrEqual(1200)
     expect(text).toContain("部分技能未列出")
     expect(text).not.toContain("skill-49")
+  })
+})
+
+describe("matchSkillInvocations / wrapSkillInvocations（点名检测与隐式包装）", () => {
+  const mk = (name: string, opts: { userInvocable?: boolean } = {}): ReturnType<typeof parseSkillFile> & object =>
+    ({ ...parseSkillFile(`---\ndescription: ${name} 的说明\n---\n\n正文\n`, name, "/d", "global")!, ...opts })
+
+  it("matches /name tokens at ANY position by exact name, collapsing duplicates", () => {
+    const test = mk("test")
+    const deploy = mk("deploy")
+    expect(matchSkillInvocations("帮我 /test 处理", [test, deploy])).toEqual([test])
+    expect(matchSkillInvocations("/test 开跑", [test, deploy])).toEqual([test])
+    expect(matchSkillInvocations("先 /deploy 再 /test，最后又提 /deploy", [test, deploy])).toEqual([deploy, test])
+  })
+
+  it("reads unspaced Chinese around the token but keeps URL-ish fragments out", () => {
+    const test = mk("test")
+    expect(matchSkillInvocations("帮我/test 跑一下", [test])).toEqual([test])
+    expect(matchSkillInvocations("文档在 https://example.com/test 下", [test])).toEqual([])
+    expect(matchSkillInvocations("路径 a/b/test 别误判", [test])).toEqual([])
+  })
+
+  it("requires an exact skill name and user-invocable visibility", () => {
+    const test = mk("test")
+    const modelOnly = mk("inner", { userInvocable: false })
+    expect(matchSkillInvocations("/testing 一下", [test])).toEqual([])
+    expect(matchSkillInvocations("看 /inner", [modelOnly])).toEqual([])
+    expect(matchSkillInvocations("没有技能", [test])).toEqual([])
+  })
+
+  it("wrap keeps the message verbatim and appends one load-then-follow line", () => {
+    const test = mk("test")
+    const wrapped = wrapSkillInvocations("帮我 /test 把 README 翻译成英文", [test])!
+    expect(wrapped.startsWith("帮我 /test 把 README 翻译成英文")).toBe(true)
+    expect(wrapped).toContain("「/test」")
+    expect(wrapped).toContain("skill_read")
+    expect(wrapped).toContain("是在调用技能 test")
+    expect(wrapped.match(/\n/g)?.length).toBe(2) // 原文 + 空行 + 一行指示
+  })
+
+  it("wrap lists every matched skill in one line; no match returns undefined", () => {
+    const test = mk("test")
+    const deploy = mk("deploy")
+    const wrapped = wrapSkillInvocations("/test 完再看 /deploy", [test, deploy])!
+    expect(wrapped).toContain("「/test」「/deploy」")
+    expect(wrapped).toContain("技能 test、技能 deploy")
+    expect(wrapSkillInvocations("普通消息", [])).toBeUndefined() // 无匹配（空数组）即原样
   })
 })

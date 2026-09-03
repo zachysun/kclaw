@@ -134,6 +134,15 @@ export interface AgentDeps {
   onContextOverflow?(err: unknown): Promise<ActiveSummary | null>
   /** 省略预算（黄线值）透传给打包台：预算装不下的工具输出以省略占位符发送。 */
   tokenBudget?: number
+  /**
+   * 模型视图改写钩子（LLM 执行前）：每次 llm.stream 之前，loop 把
+   * toProviderMessages 的产物——即将发送的消息列表（已完成窗口裁剪、工具
+   * 结果打包、压缩脉络垫底）——交给它，返回什么发什么。持久化、事件流与
+   * outcome 一概不动：这是“只改模型看到的输入”的唯一口子（技能点名的
+   * 隐式包装是第一个使用者）。同一 run 的工具循环每轮调用一次；实现应
+   * 保持纯函数（同输入同输出），抛出按流失败路径处理。
+   */
+  mapLlmMessages?(messages: ProviderMessage[]): ProviderMessage[]
   onEvent(e: AgentEvent): void
   onMessage(m: Message): void
 }
@@ -277,11 +286,12 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       const base = all.findIndex((m) => m.id === compacted!.upto)
       if (base >= 0) msgs = all.slice(base + 1)
     }
-    return toProviderMessages(msgs, window, {
+    const provider = toProviderMessages(msgs, window, {
       ...(deps.toolResultKeep === undefined ? {} : { toolResultKeep: deps.toolResultKeep }),
       ...(deps.tokenBudget === undefined ? {} : { tokenBudget: deps.tokenBudget }),
       ...(compacted === undefined ? {} : { summary: compacted }),
     })
+    return deps.mapLlmMessages !== undefined ? deps.mapLlmMessages(provider) : provider
   }
 
   // Abort guardrail for a signal that fires when no message from the current
