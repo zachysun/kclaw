@@ -60,14 +60,43 @@ export function parseSlashInput(input: string): ParsedSlash | null {
 }
 
 /**
+ * Metadata for a dynamically registered skill command (`/<skill-name>`):
+ * installed, user-visible skills surface as first-class slash commands on
+ * both frontends. `name` is the skill's directory name.
+ */
+export function skillCommandMeta(name: string, description: string, surface: SlashSurface): SlashCommandMeta {
+  return { name, usage: `/${name} [要求]`, description, surfaces: [surface] }
+}
+
+/**
+ * The user message a `/skill-name [要求]` command sends: a literal naming of
+ * the skill — the same "user names it in conversation" entry point the model
+ * already knows from the skill_read tool description, so skills hidden from
+ * the model-facing listing (disable-model-invocation) load legitimately.
+ */
+export function skillInvocationMessage(name: string, args: string): string {
+  const request = args.trim()
+  return request === "" ? `请按技能「${name}」的规程执行` : `请按技能「${name}」的规程处理以下请求：\n\n${request}`
+}
+
+/**
  * Prefix candidates for the composer: the whole input must still be a command
  * word (`/` + a prefix with no space typed yet), matched against the surface's
- * commands in display order. Anything else — plain text, a command with args
- * already started — returns an empty list.
+ * commands in display order — builtins first, then `extra` (dynamically
+ * registered skill commands; a name that shadows any builtin is dropped so
+ * builtin names stay reserved on every surface). Anything else — plain text,
+ * a command with args already started — returns an empty list.
  */
-export function slashCompletions(input: string, surface: SlashSurface): SlashCommandMeta[] {
+export function slashCompletions(input: string, surface: SlashSurface, extra: readonly SlashCommandMeta[] = []): SlashCommandMeta[] {
   if (!input.startsWith("/")) return []
   const word = input.slice(1)
   if (word.includes(" ")) return []
-  return SLASH_COMMANDS.filter((c) => c.surfaces.includes(surface) && c.name.startsWith(word))
+  const builtinNames = new Set(SLASH_COMMANDS.map((c) => c.name))
+  const dynamic = extra.filter(
+    (c) => !builtinNames.has(c.name) && c.surfaces.includes(surface) && c.name.startsWith(word),
+  )
+  return [
+    ...SLASH_COMMANDS.filter((c) => c.surfaces.includes(surface) && c.name.startsWith(word)),
+    ...dynamic,
+  ]
 }

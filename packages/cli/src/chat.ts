@@ -61,7 +61,8 @@ import { join } from "node:path"
 import { createInterface, type Interface as RlInterface } from "node:readline"
 import { KclawClient } from "./client.js"
 import type { WsFrame, WsHandle } from "./client.js"
-import { createRegistry, dispatch, runOrHint, slashCompleter, type AttachmentRef, type SlashCtx } from "./slash.js"
+import { createRegistry, createSlashCompleter, dispatch, refreshSkillCommands as refreshSkillCommandsOp, runOrHint, slashCompleter, type AttachmentRef, type SlashCtx } from "./slash.js"
+import type { SlashCommandMeta } from "@kclaw/core/commands"
 import { expandFileRefs } from "./file-refs.js"
 
 /** AgentEvent distributed over its event types, so `switch (ev.type)` narrows `ev.payload`. */
@@ -633,7 +634,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
     client,
     ws: await openSubscribed(client, sessionId),
     sessionId,
-    rl: createInterface({ input: process.stdin, output: process.stdout, prompt: "> ", completer: slashCompleter }),
+    rl: createInterface({ input: process.stdin, output: process.stdout, prompt: "> ", completer: createSlashCompleter(() => skillCommandMetas) }),
     showThinking: opts.showThinking === true,
     auto,
     io: { atLineStart: true },
@@ -678,6 +679,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
       ctx.sessionId = id
       ctx.ws.send({ type: "subscribe", sessionId: ctx.sessionId })
       ctx.pendingAttachments.length = 0 // attachments are session-scoped
+      refreshSkillCommands() // 项目级技能跟会话工作目录：切会话后重拉
     },
     exit() {
       // handled by the input loop (parsed.command === "exit" → break)
@@ -735,6 +737,18 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
     commandsDir: ctx.home !== undefined ? join(ctx.home, "commands") : undefined,
   }
   const registry = createRegistry(slashCtx)
+
+  // Installed user-visible skills become first-class slash commands. The
+  // fetch is async and best-effort: daemon unreachable → no skill commands,
+  // the builtins (including /skill) still work. Re-checked per session
+  // switch, since the project scope follows the session's workdir.
+  let skillCommandMetas: SlashCommandMeta[] = []
+  const refreshSkillCommands = (): void => {
+    void refreshSkillCommandsOp(registry, slashCtx)
+      .then((metas) => { skillCommandMetas = metas })
+      .catch(() => {})
+  }
+  refreshSkillCommands()
 
   // Ctrl+C escalates in three stages (spec §7.2): ① cancel the active run
   // (or, while idle, print the exit hint — always warning about a backed-up

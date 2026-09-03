@@ -6,7 +6,7 @@
  * by default and tool_result cards expand to their full output without JS.
  */
 import { Fragment, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
-import { parseSlashInput, slashCompletions, SLASH_COMMANDS } from "@kclaw/core/commands"
+import { parseSlashInput, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
 import type { ChatState, ConfirmationCard, NoteRender, RenderedBlock, RenderedMessage } from "./model.js"
 
 /**
@@ -95,9 +95,11 @@ export interface ChatViewProps {
    * 审计折叠条；旧会话的 compact note 路径（contextBarFor）不受影响。
    */
   compactions?: CompactionRecordView[] | null
+  /** 已装用户可见技能的动态命令（/技能名）：合并进建议菜单与 /help 面板（内置优先）。 */
+  extraCommands?: SlashCommandMeta[]
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onCancelCompaction, compactions }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onCancelCompaction, compactions, extraCommands }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Slash-suggestion state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -105,7 +107,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
   const [sel, setSel] = useState(0)
   const [helpOpen, setHelpOpen] = useState(false)
 
-  const completions = dismissed ? [] : slashCompletions(draft, "web")
+  const completions = dismissed ? [] : slashCompletions(draft, "web", extraCommands)
   const active = Math.min(sel, Math.max(0, completions.length - 1))
 
   // 排队列表数据（spec §7.1，Master 2026-08-30 改版）：view.queue 本身就是
@@ -214,6 +216,12 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
           </div>
           <ul>
             {SLASH_COMMANDS.filter((c) => c.surfaces.includes("web")).map((c) => (
+              <li key={c.name}>
+                <code>{c.usage}</code>
+                <span>{c.description}</span>
+              </li>
+            ))}
+            {(extraCommands ?? []).map((c) => (
               <li key={c.name}>
                 <code>{c.usage}</code>
                 <span>{c.description}</span>

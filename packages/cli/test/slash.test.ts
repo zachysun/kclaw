@@ -11,7 +11,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { isCancel, select } from "@clack/prompts"
-import { createRegistry, dispatch, runOrHint, type SlashCtx } from "../src/slash.js"
+import { createRegistry, createSlashCompleter, dispatch, refreshSkillCommands, runOrHint, type SlashCtx } from "../src/slash.js"
 import { basename, join } from "node:path"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -509,6 +509,50 @@ describe("/queue", () => {
     printed = fake.print.mock.calls.map((c) => c[0] as string)
     expect(printed.filter((t) => t.includes("读取队列失败"))).toHaveLength(2)
     expect(fake.sent).toEqual([])
+  })
+})
+
+describe("skill slash commands (dynamic registration)", () => {
+  const skillCtx = (rows: unknown, send = vi.fn()) => {
+    const fake = makeFakeCtx((_m: string, path: string) => {
+      if (path === "/skills") return rows
+      throw new Error(`unexpected ${path}`)
+    })
+    fake.ctx.send = send
+    return { fake, send }
+  }
+
+  it("registers each installed skill as a command that sends the invocation message", async () => {
+    const { fake, send } = skillCtx([
+      { name: "test", description: "验收技能", visibility: "all", origin: "global" },
+      { name: "deploy", description: "部署", visibility: "user-only", origin: "project" },
+    ])
+    const registry = createRegistry(fake.ctx)
+    const metas = await refreshSkillCommands(registry, fake.ctx)
+    expect(metas.map((m) => m.name)).toEqual(["test", "deploy"])
+    await runOrHint({ command: "test", args: "把 README 翻译成英文" }, registry, fake.ctx)
+    expect(send).toHaveBeenCalledWith("请按技能「test」的规程处理以下请求：\n\n把 README 翻译成英文")
+    await runOrHint({ command: "deploy", args: "" }, registry, fake.ctx)
+    expect(send).toHaveBeenLastCalledWith("请按技能「deploy」的规程执行")
+  })
+
+  it("builtin names win: a skill named help is skipped", async () => {
+    const { fake } = skillCtx([{ name: "help", description: "撞内置名" }])
+    const registry = createRegistry(fake.ctx)
+    const metas = await refreshSkillCommands(registry, fake.ctx)
+    expect(metas).toEqual([])
+    expect(registry.get("help")!.description).not.toBe("撞内置名")
+  })
+
+  it("createSlashCompleter suggests dynamic commands after builtins", () => {
+    const completer = createSlashCompleter(() => [
+      { name: "test", usage: "/test [要求]", description: "验收技能", surfaces: ["cli"] },
+    ])
+    const [hits] = completer("/te")
+    expect(hits).toEqual(["/test"])
+    const [bare] = completer("/")
+    expect(bare.at(-1)).toBe("/test")
+    expect(bare).not.toContain("/skill-test")
   })
 })
 

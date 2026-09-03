@@ -8,7 +8,7 @@
  * loop).
  */
 import { isCancel, select } from "@clack/prompts"
-import { parseSlashInput, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
+import { parseSlashInput, slashCompletions, skillInvocationMessage, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
 import type { KclawClient } from "./client.js"
 
 /** Everything a registered command may reach at run time (a view over the chat loop's live state). */
@@ -87,6 +87,52 @@ export function dispatch(input: string, _registry: Map<string, SlashCommand>): {
  */
 export function slashCompleter(line: string): [string[], string] {
   return [slashCompletions(line, "cli").map((c) => `/${c.name}`), line]
+}
+
+/**
+ * Tab completer that also suggests the dynamically registered skill commands
+ * (see refreshSkillCommands) — builtins stay first, reserved names excluded
+ * by the shared completion helper.
+ */
+export function createSlashCompleter(getExtra: () => SlashCommandMeta[]): (line: string) => [string[], string] {
+  return (line: string) => [slashCompletions(line, "cli", getExtra()).map((c) => `/${c.name}`), line]
+}
+
+/** One row of GET /skills (only the fields the CLI needs). */
+export interface SkillCommandRow {
+  name: string
+  description: string
+}
+
+/**
+ * Register every installed, user-visible skill as a first-class slash command:
+ * `/skill-name [要求]` sends the shared invocation message (a literal naming
+ * of the skill — the model then loads the body via skill_read and follows it).
+ * Builtin names win and nothing already in the registry is overwritten, so
+ * builtins keep precedence over skills and custom `commands/*.md` (which are
+ * registered first inside createRegistry) keep precedence over skills.
+ * Returns the metas actually registered — the Tab completer's extra list.
+ * Failures (daemon down) throw; the caller decides whether that is fatal.
+ */
+export async function refreshSkillCommands(registry: Map<string, SlashCommand>, ctx: SlashCtx): Promise<SlashCommandMeta[]> {
+  const rows = (await ctx.client.request("GET", "/skills")) as SkillCommandRow[]
+  const registered: SlashCommandMeta[] = []
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const name = typeof row?.name === "string" ? row.name : ""
+    if (name === "" || registry.has(name)) continue
+    const description = typeof row?.description === "string" ? row.description : ""
+    registry.set(name, {
+      name,
+      usage: `/${name} [要求]`,
+      description,
+      surfaces: ["cli"],
+      async run(args, c) {
+        c.send(skillInvocationMessage(name, args))
+      },
+    })
+    registered.push({ name, usage: `/${name} [要求]`, description, surfaces: ["cli"] })
+  }
+  return registered
 }
 
 /**

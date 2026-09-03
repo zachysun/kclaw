@@ -59,11 +59,14 @@ interface ApiRoutes {
   compactions?: unknown
   /** Make GET /sessions/:id/compactions reject (the silent-failure path). */
   compactionsFail?: boolean
+  /** GET /skills fixture — the dynamic slash-command source (default: []). */
+  skills?: Array<{ name: string; description: string; origin: string; visibility: string }>
 }
 
 function makeApi(getMessages: Message[], routes: ApiRoutes = {}): ApiClient & { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn> } {
   return {
     get: vi.fn(async (path: string) => {
+      if (path === "/skills") return routes.skills ?? []
       if (path.endsWith("/queue")) return routes.queue ?? []
       if (path === "/config") return routes.config ?? {}
       if (path.endsWith("/messages")) return getMessages
@@ -172,12 +175,14 @@ async function mount(
     compactions?: unknown
     /** Make the compactions pull reject (silent-failure path). */
     compactionsFail?: boolean
+    /** GET /skills fixture (dynamic slash commands). */
+    skills?: Array<{ name: string; description: string; origin: string; visibility: string }>
     /** memory.written 通知条点击的回调（spec 9.1 跳转）。 */
     onOpenMemoryWritten?: (info: MemoryWrittenInfo) => void
   } = {},
 ): Promise<Harness> {
   const sessionId = opts.sessionId ?? "s1"
-  const api = makeApi(opts.initialMessages ?? [], { queue: opts.queue, meta: opts.meta, config: opts.config, compactions: opts.compactions, compactionsFail: opts.compactionsFail })
+  const api = makeApi(opts.initialMessages ?? [], { queue: opts.queue, meta: opts.meta, config: opts.config, compactions: opts.compactions, compactionsFail: opts.compactionsFail, skills: opts.skills })
   const { sockets, socketFactory, createWs } = setup()
   const ws = createWs()
   const container = document.createElement("div")
@@ -1042,5 +1047,47 @@ describe("ChatPanel model selector", () => {
     })
     expect(post).toHaveBeenCalledWith("/sessions/ses_1/model", { model: "b" })
     root.unmount()
+  })
+})
+
+describe("ChatPanel skill slash commands", () => {
+  it("registered skills appear in the slash menu and /name sends the invocation message", async () => {
+    const h = await mount({
+      skills: [
+        { name: "test", description: "验收技能", visibility: "all", origin: "global" },
+        { name: "deploy", description: "部署", visibility: "user-only", origin: "project" },
+      ],
+    })
+    try {
+      await h.sockets[0]!.open()
+      // 打开 socket 后已拉到 /skills 清单；输入前缀，动态命令进建议菜单
+      const input = h.container.querySelector('input[data-testid="chat-input"]') as HTMLInputElement
+      typeInto(input, "/tes")
+      await flush()
+      const menu = h.container.querySelector('[data-testid="slash-menu"]')
+      expect(menu?.textContent).toContain("/test")
+
+      // 提交 /test <要求>：发出的 send_message 是点名消息（正文仍走 skill_read）
+      await sendText(h, "/test 把 README 翻译成英文")
+      const frame = JSON.parse(h.sockets[0]!.sent.at(-1)!) as { type?: string; text?: string }
+      expect(frame).toMatchObject({
+        type: "send_message",
+        text: "请按技能「test」的规程处理以下请求：\n\n把 README 翻译成英文",
+      })
+    } finally {
+      h.unmount()
+    }
+  })
+
+  it("a skill named like a builtin does not shadow the builtin", async () => {
+    const h = await mount({ skills: [{ name: "help", description: "撞内置名", visibility: "all", origin: "global" }] })
+    try {
+      // /help 在 ChatView 是本地视图拦截（打开命令面板），不会作为消息发出
+      await sendText(h, "/help")
+      const sends = h.sockets[0]!.sent.map((f) => JSON.parse(f) as { type?: string }).filter((f) => f.type === "send_message")
+      expect(sends).toEqual([])
+    } finally {
+      h.unmount()
+    }
   })
 })

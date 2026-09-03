@@ -6,7 +6,7 @@
  * suggestion menu.
  */
 import { describe, it, expect } from "vitest"
-import { SLASH_COMMANDS, parseSlashInput, slashCompletions } from "../src/commands.js"
+import { SLASH_COMMANDS, parseSlashInput, slashCompletions, skillCommandMeta, skillInvocationMessage, type SlashCommandMeta } from "../src/commands.js"
 
 describe("SLASH_COMMANDS", () => {
   it("has unique names", () => {
@@ -85,6 +85,37 @@ describe("slashCompletions", () => {
     expect(slashCompletions("/a", "cli").map((c) => c.name)).toEqual(["attach"])
     expect(slashCompletions("/e", "web")).toEqual([])
     expect(slashCompletions("/e", "cli").map((c) => c.name)).toEqual(["exit"])
+  })
+})
+
+describe("slashCompletions with extra (dynamic skill) commands", () => {
+  const skillMeta = (name: string): SlashCommandMeta => skillCommandMeta(name, "技能描述", "cli")
+
+  it("merges extra commands after the builtins, matching by prefix", () => {
+    const extra = [skillMeta("test"), skillMeta("deploy")]
+    expect(slashCompletions("/", "cli", extra).map((c) => c.name).slice(-2)).toEqual(["test", "deploy"])
+    expect(slashCompletions("/te", "cli", extra).map((c) => c.name)).toEqual(["test"])
+  })
+
+  it("builtin names win: an extra command shadowing a builtin is dropped", () => {
+    const extra = [skillMeta("help"), skillMeta("test")]
+    const names = slashCompletions("/", "cli", extra).map((c) => c.name)
+    expect(names.filter((n) => n === "help")).toHaveLength(1)
+    expect(names).toContain("test")
+  })
+
+  it("respects the surface filter for extra commands too", () => {
+    const webOnly = skillCommandMeta("test", "技能描述", "web")
+    expect(slashCompletions("/te", "cli", [webOnly])).toEqual([])
+    expect(slashCompletions("/te", "web", [webOnly]).map((c) => c.name)).toEqual(["test"])
+  })
+
+  it("skillInvocationMessage carries args and stays identical across surfaces", () => {
+    expect(skillInvocationMessage("test", "")).toBe("请按技能「test」的规程执行")
+    expect(skillInvocationMessage("test", "把 README 翻译成英文")).toBe(
+      "请按技能「test」的规程处理以下请求：\n\n把 README 翻译成英文",
+    )
+    expect(skillInvocationMessage("test", "   ")).toBe("请按技能「test」的规程执行")
   })
 
   it("suggests nothing for unknown prefixes", () => {

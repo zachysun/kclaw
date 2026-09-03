@@ -12,7 +12,7 @@
  * path has no token-refresh flow, so it asks for a reload).
  */
 import { useCallback, useEffect, useRef, useState } from "react"
-import { parseSlashInput } from "@kclaw/core/commands"
+import { parseSlashInput, skillCommandMeta, skillInvocationMessage } from "@kclaw/core/commands"
 import { ApiError, type ApiClient } from "../api.js"
 import { WsAuthError, type WsClient } from "../ws.js"
 import {
@@ -78,6 +78,9 @@ function errorFrameMessage(frame: unknown): string | null {
 export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten }: ChatPanelProps) {
   const [view, setViewState] = useState<ChatState>(() => initChat(initialMessages))
   const [notice, setNotice] = useState<string | null>(null)
+  // 已装用户可见技能：出现在斜杠菜单的动态命令（/技能名），会话切换重拉
+  // （项目级技能跟会话工作目录）。拉取失败静默——菜单少几条不碍聊天。
+  const [skillRows, setSkillRows] = useState<Array<{ name: string; description: string; origin: string; visibility: string }>>([])
   // 通知条的可点击动作（spec 9.1 memory.written 跳转）：与 notice 同生命周期，输入即清。
   const [noticeAction, setNoticeAction] = useState<(() => void) | null>(null)
   // 发送处置（spec §6）：三选的当前选择，显式带在每条 send_message 上。
@@ -349,11 +352,35 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
   }, [api, sessionId])
 
+  // 已装用户可见技能清单：斜杠菜单的动态命令数据源（会话切换重拉，失败静默）。
+  useEffect(() => {
+    let cancelled = false
+    const q = workdir ? `?workdir=${encodeURIComponent(workdir)}` : ""
+    api
+      .get<Array<{ name: string; description: string; origin: string; visibility: string }>>(`/skills${q}`)
+      .then((rows) => {
+        if (!cancelled && Array.isArray(rows)) setSkillRows(rows)
+      })
+      .catch(() => {
+        // 静默：技能命令缺席不碍聊天，/skill 仍可查看。
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api, workdir])
+
   const handleSend = useCallback((text: string) => {
     // Slash commands intercept before the ws send path (the same point where
     // the CLI chat loop intercepts) — they never reach the model.
     const parsed = parseSlashInput(text)
     if (parsed !== null) {
+      // 动态技能命令（/技能名）：不在内置 switch 里——命中已装技能清单时
+      // 把点名消息交给下面的正常发送路径（含排队/乐观回显语义）。
+      const skillNames = new Set(skillRows.map((r) => r.name))
+      if (skillNames.has(parsed.command)) {
+        handleSendRef.current(skillInvocationMessage(parsed.command, parsed.args))
+        return
+      }
       void runWebCommand(parsed, {
         api,
         sessionId,
@@ -393,7 +420,11 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     } catch {
       setNotice("连接不可用，请稍后重试")
     }
-  }, [sessionId, pendingAttachments, api, onCreateSession, onOpenSessions, handleSwitchModel, models, currentModel, updateView, disposition])
+  }, [sessionId, pendingAttachments, api, onCreateSession, onOpenSessions, handleSwitchModel, models, currentModel, updateView, disposition, skillRows])
+  // Ref 转发：技能命令在 handleSend 内部要把点名消息递回正常发送路径
+  // （消息不以 / 开头 → 直走发送分支），而 useCallback 定义内引用不了自身。
+  const handleSendRef = useRef(handleSend)
+  handleSendRef.current = handleSend
 
   /** Upload dropped files and queue them for the next message. */
   const handleDrop = useCallback((event: React.DragEvent) => {
@@ -486,6 +517,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           onCancelAllQueued={() => handleCancelQueued()}
           onCancelCompaction={handleCancelCompaction}
           compactions={compactions}
+          extraCommands={skillRows.map((r) => skillCommandMeta(r.name, r.description, "web"))}
         />
       </div>
     </div>
