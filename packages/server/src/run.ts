@@ -35,7 +35,9 @@ import {
   realpathWithin,
   renderSegment,
   runAgent,
+  scanSkillDirs,
   searchSessionEvents,
+  skillListPrompt,
 } from "@kclaw/core"
 import type {
   ActiveSummary,
@@ -698,6 +700,14 @@ export class RunManager {
     ])
     if (input.messageId !== undefined) userMessage.id = input.messageId // 气泡原地升级（spec §3.1）
 
+    // 技能目录每 run 重扫（渐进披露第一层）：全局 + 会话工作目录的项目级，
+    // 项目同名整目录覆盖。列表段追加进系统提示词，与 system 审计事件同文；
+    // skill_read 工具持有同一份扫描结果（第二层，按需取正文）。
+    const skills = scanSkillDirs({
+      global: paths.skillsDir,
+      project: join(workspace, ".kclaw", "skills"),
+    })
+
     const { tools, toolDefs } = createBuiltinTools({
       workspace,
       memoryCtx: {
@@ -710,6 +720,7 @@ export class RunManager {
       exec: { timeoutMs: config.exec.timeoutMs, maxOutputBytes: config.exec.maxOutputBytes },
       web: { timeoutMs: config.web.timeoutMs, allowPrivateNetworks: config.web.allowPrivateNetworks },
       sessionSearch: this.#buildSessionSearch(sessionId, history),
+      skills,
     })
     // test/adapter seam: per-name executor overrides on top of the
     // builtins; toolDefs stay the builtins' — an override replaces behavior,
@@ -839,7 +850,7 @@ export class RunManager {
     // 全量文本落盘一条 system 事件。每 run 恰好一条——steer 注入与 run 内多次
     // 模型调用复用同一份提示词，不重复记录；不加幻影会话守卫（与消息写入一致），
     // 也不吞错：写入失败即本次 run 失败，由驱动器的条目级失败兜底。
-    const system = this.#systemWithCognition(paths.agentsMd, workspace)
+    const system = this.#systemWithCognition(paths.agentsMd, workspace, skillListPrompt(skills))
     sessions.appendSystem(sessionId, { at: new Date().toISOString(), text: system })
 
     const outcome = await runAgent(
@@ -1204,10 +1215,11 @@ export class RunManager {
   }
 
   /**
-   * System prompt = AGENTS.md base + L2 cognition（spec 7.1）：cognitionPrompt
-   * 为空或抛错时不追加，回落到纯 base —— 认知注入失败静默跳过，run 照常进行。
+   * System prompt = AGENTS.md base + L2 cognition + skills listing（spec 7.1）：
+   * cognitionPrompt 为空或抛错时不追加，回落到纯 base —— 认知注入失败静默跳过，
+   * run 照常进行。extraSection（技能列表）为空串时同样不追加。
    */
-  #systemWithCognition(agentsMd: string, workspace: string): string {
+  #systemWithCognition(agentsMd: string, workspace: string, extraSection = ""): string {
     const base = this.#systemPrompt(agentsMd)
     let cognition = ""
     try {
@@ -1215,6 +1227,6 @@ export class RunManager {
     } catch {
       // 认知注入失败静默跳过（spec 7.1）
     }
-    return cognition === "" ? base : `${base}\n\n${cognition}`
+    return [base, cognition, extraSection].filter((s) => s !== "").join("\n\n")
   }
 }

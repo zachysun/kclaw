@@ -1836,3 +1836,111 @@ describe("RunManager readonly mode", () => {
     expect(toolNote).toBe(true)
   })
 })
+
+// --- skill 注入（渐进披露：列表常驻 + skill_read 按需取正文）------------------
+// 技能目录每 run 重扫：全局 <home>/skills + 项目 <workdir>/.kclaw/skills，
+// 项目级整目录覆盖全局。模型可见段追加进系统提示词（persona + 认知之后），
+// 与 system 审计事件同文；disable-model-invocation 的技能不进列表。
+
+function writeSkill(root: string, name: string, md: string): void {
+  mkdirSync(join(root, name), { recursive: true })
+  writeFileSync(join(root, name, "SKILL.md"), md)
+}
+
+function skillReadToolTurn(callId: string, name: string): LlmStreamEvent[] {
+  return [
+    { type: "tool_call_started", index: 0, callId, name: "skill_read" },
+    { type: "tool_call_delta", index: 0, delta: JSON.stringify({ name }) },
+    { type: "message_done", stopReason: "tool_use" as const, usage: { inputTokens: 1, outputTokens: 2 } },
+  ]
+}
+
+describe("RunManager skill injection", () => {
+  type StreamEvent = ReturnType<SessionStore["readEvents"]>[number]
+  const isSystem = (e: StreamEvent): e is StreamEvent & { type: "system"; text: string } => e.type === "system"
+
+  it("model-visible skill lands in the prompt and the system audit event; disable-model-invocation does not", async () => {
+    const requests: LlmRequest[] = []
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        requests.push(req)
+        yield* textTurn("好的")
+      },
+    }
+    const { env, manager } = makeEnv(llm)
+    writeSkill(join(env.paths.home, "skills"), "commit-helper", "---\ndescription: 按仓库规范写提交说明。\n---\n\n# 提交规范\n\n一行标题。\n")
+    writeSkill(join(env.paths.home, "skills"), "heavy-flow", "---\ndescription: 重流程。\ndisable-model-invocation: true\n---\n\n正文\n")
+    const session = env.sessions.create("技能会话")
+
+    await manager.enqueue(session.id, { userText: "帮我提交", trigger: "user" })
+
+    const system = requests[0]!.system ?? ""
+    expect(system).toContain("## 可用技能")
+    expect(system).toContain("commit-helper")
+    expect(system).toContain("按仓库规范写提交说明")
+    expect(system).not.toContain("heavy-flow")
+    // system 审计事件与发给模型的提示词同文
+    const [systemEvent] = env.sessions.readEvents(session.id).filter(isSystem)
+    expect(systemEvent!.text).toBe(system)
+  })
+
+  it("project skill overrides the same-named global one for sessions in that workdir", async () => {
+    const requests: LlmRequest[] = []
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        requests.push(req)
+        yield* textTurn("好的")
+      },
+    }
+    const { env, manager } = makeEnv(llm)
+    writeSkill(join(env.paths.home, "skills"), "deploy", "---\ndescription: 全局部署版。\n---\n\n全局正文\n")
+    // makeEnv 把 config.workspace 设为临时目录；项目技能放它的 .kclaw/skills
+    writeSkill(join(env.config.workspace, ".kclaw", "skills"), "deploy", "---\ndescription: 项目部署版。\n---\n\n项目正文\n")
+    const session = env.sessions.create("项目技能会话")
+
+    await manager.enqueue(session.id, { userText: "部署", trigger: "user" })
+
+    const system = requests[0]!.system ?? ""
+    expect(system).toContain("项目部署版")
+    expect(system).not.toContain("全局部署版")
+  })
+
+  it("rescans both scopes every run: a skill written between runs shows up in the next", async () => {
+    const requests: LlmRequest[] = []
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        requests.push(req)
+        yield* textTurn("好的")
+      },
+    }
+    const { env, manager } = makeEnv(llm)
+    const session = env.sessions.create("重扫会话")
+
+    await manager.enqueue(session.id, { userText: "第一轮", trigger: "user" })
+    expect(requests[0]!.system ?? "").not.toContain("## 可用技能")
+
+    writeSkill(join(env.config.workspace, ".kclaw", "skills"), "fresh", "---\ndescription: 新放的技能。\n---\n\n正文\n")
+    await manager.enqueue(session.id, { userText: "第二轮", trigger: "user" })
+    expect(requests[1]!.system ?? "").toContain("fresh")
+  })
+
+  it("skill_read loads the body as a tool result (project copy wins on name)", async () => {
+    const { env, manager } = makeEnv(scriptClient([
+      skillReadToolTurn("call_skill", "deploy"),
+      textTurn("照规程部署完成"),
+    ]))
+    writeSkill(join(env.paths.home, "skills"), "deploy", "---\ndescription: 部署。\n---\n\n# 全局部署正文\n\n1. 拉取镜像\n")
+    writeSkill(join(env.config.workspace, ".kclaw", "skills"), "deploy", "---\ndescription: 部署。\n---\n\n# 项目部署正文\n\n1. 先切流量\n")
+
+    const session = env.sessions.create("取文会话")
+    const outcome = await manager.enqueue(session.id, { userText: "按 deploy 技能部署", trigger: "user" })
+
+    expect(outcome.stopReason).toBe("end_turn")
+    const msgs = env.sessions.readMessages(session.id)
+    expect(msgs.map((m) => m.role)).toEqual(["user", "assistant", "tool", "assistant"])
+    const result = msgs[2]!.blocks[0] as ToolResultBlock
+    expect(result.status).toBe("ok")
+    expect(result.output).toContain("# 项目部署正文")
+    expect(result.output).not.toContain("全局部署正文")
+  })
+})
