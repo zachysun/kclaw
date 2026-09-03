@@ -32,6 +32,7 @@ describe("slashCompleter", () => {
       "/queue",
       "/help",
       "/memory",
+      "/skill",
       "/exit",
     ])
   })

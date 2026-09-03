@@ -375,6 +375,48 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
     },
   })
 
+  registry.set("skill", {
+    ...meta("skill"),
+    async run(args, ctx) {
+      const name = args.trim()
+      try {
+        // 项目级技能的生效范围跟会话工作目录：先取本会话 meta 的 workdir，
+        // 再让 /skills 路由按"全局 + 项目"同源规则扫描。
+        const session = (await ctx.client.request("GET", `/sessions/${ctx.sessionId}`)) as { workdir?: string }
+        const workdir =
+          typeof session.workdir === "string" && session.workdir !== ""
+            ? `?workdir=${encodeURIComponent(session.workdir)}`
+            : ""
+        if (name === "") {
+          const rows = (await ctx.client.request("GET", `/skills${workdir}`)) as Array<{
+            name: string
+            description: string
+            visibility: string
+            origin: string
+          }>
+          if (rows.length === 0) {
+            ctx.print("（还没有技能。把技能目录放进 ~/.kclaw/skills/ 或工作区 .kclaw/skills/）")
+            return
+          }
+          ctx.print(
+            rows
+              .map((r) => {
+                const origin = r.origin === "project" ? "项目" : "全局"
+                const vis = r.visibility === "user-only" ? " · 仅用户" : ""
+                return `${r.name} · ${origin}${vis} · ${r.description}`
+              })
+              .join("\n"),
+          )
+          return
+        }
+        const res = (await ctx.client.request("GET", `/skills/${encodeURIComponent(name)}${workdir}`)) as { content: string }
+        ctx.print(res.content)
+      } catch (err) {
+        ctx.print(`查看技能失败: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    },
+  })
+
   registry.set("help", {
     ...meta("help"),
     async run(_args, ctx) {

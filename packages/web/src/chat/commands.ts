@@ -97,6 +97,12 @@ export async function runWebCommand(parsed: ParsedSlash, ctx: WebCommandCtx): Pr
       ctx.notify("记忆管理请用顶部的「记忆」页")
       return true
     }
+    case "skill": {
+      // 技能浏览归技能页（与 /memory 同款引导）；对话内点名用自然语言即可，
+      // 模型会经 skill_read 加载正文。
+      ctx.notify("技能浏览请用顶部的「技能」页；对话中直接点名技能即可让模型加载执行")
+      return true
+    }
     case "help":
       return true
     default:

@@ -511,3 +511,65 @@ describe("/queue", () => {
     expect(fake.sent).toEqual([])
   })
 })
+
+describe("/skill", () => {
+  const makeSkillCtx = (requestImpl: (method: string, path: string, body?: unknown) => unknown) =>
+    makeFakeCtx(async (method, path, body) => {
+      // makeFakeCtx 的默认会话是 ses_start：/skill 先取会话 meta 拿 workdir
+      if (path === "/sessions/ses_start") return { id: "ses_start", workdir: "/w/proj" }
+      return requestImpl(method, path, body)
+    })
+
+  it("lists user-visible skills scoped to the session workdir, marking origin and user-only", async () => {
+    const calls: string[] = []
+    const fake = makeSkillCtx((_m, path) => {
+      calls.push(path)
+      if (path === "/skills?workdir=%2Fw%2Fproj") {
+        return [
+          { name: "commit-helper", displayName: "commit-helper", description: "提交规范。", visibility: "all", origin: "global" },
+          { name: "heavy-flow", displayName: "heavy-flow", description: "重流程。", visibility: "user-only", origin: "project" },
+        ]
+      }
+      throw new Error(`unexpected ${path}`)
+    })
+    const registry = createRegistry(fake.ctx)
+    await runOrHint({ command: "skill", args: "" }, registry, fake.ctx)
+    expect(calls).toEqual(["/skills?workdir=%2Fw%2Fproj"])
+    const printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.some((t) => t.includes("commit-helper") && t.includes("全局") && t.includes("提交规范。"))).toBe(true)
+    expect(printed.some((t) => t.includes("heavy-flow") && t.includes("项目") && t.includes("仅用户"))).toBe(true)
+  })
+
+  it("empty listing prints where to put skills", async () => {
+    const fake = makeSkillCtx((_m, path) => {
+      if (path === "/skills?workdir=%2Fw%2Fproj") return []
+      throw new Error(`unexpected ${path}`)
+    })
+    const registry = createRegistry(fake.ctx)
+    await runOrHint({ command: "skill", args: "" }, registry, fake.ctx)
+    const printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.some((t) => t.includes("还没有技能") && t.includes(".kclaw/skills"))).toBe(true)
+  })
+
+  it("skill arg prints the full body", async () => {
+    const fake = makeSkillCtx((_m, path) => {
+      if (path === "/skills/commit-helper?workdir=%2Fw%2Fproj") return { name: "commit-helper", content: "# 提交规程\n\n一行标题。" }
+      throw new Error(`unexpected ${path}`)
+    })
+    const registry = createRegistry(fake.ctx)
+    await runOrHint({ command: "skill", args: "commit-helper" }, registry, fake.ctx)
+    const printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.some((t) => t.includes("# 提交规程"))).toBe(true)
+  })
+
+  it("request 失败：打印失败行、命令正常 resolve（REPL 不被一次失败杀死）", async () => {
+    const fake = makeSkillCtx(async () => {
+      throw new Error("HTTP 503")
+    })
+    const registry = createRegistry(fake.ctx)
+    await expect(runOrHint({ command: "skill", args: "" }, registry, fake.ctx)).resolves.toBe(true)
+    await expect(runOrHint({ command: "skill", args: "nope" }, registry, fake.ctx)).resolves.toBe(true)
+    const printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.filter((t) => t.includes("查看技能失败") && t.includes("HTTP 503"))).toHaveLength(2)
+  })
+})

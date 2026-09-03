@@ -1724,3 +1724,90 @@ select:focus {
     grid-template-columns: 1fr;
   }
 }
+
+/* --- skills view（只读技能页，布局对齐 memory-view） ------------------------- */
+
+.skills-view {
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-start;
+}
+
+.skills-view h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 13px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.skills-list {
+  flex: 0 0 300px;
+  max-width: 40%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface);
+}
+
+.skills-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.skills-list .skill-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: var(--space-2);
+  cursor: pointer;
+  font: inherit;
+}
+
+.skills-list .skill-item:hover {
+  border-color: var(--border);
+}
+
+.skills-list .skill-item.active {
+  border-color: var(--border);
+  background: var(--surface-2, var(--surface));
+}
+
+.skills-list .skill-name {
+  font-weight: 600;
+}
+
+.skills-list .skill-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.skills-list .skill-desc {
+  font-size: 12px;
+}
+
+.skills-body {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface);
+}
+
+.skills-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+}
