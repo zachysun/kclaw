@@ -10,6 +10,7 @@ import type { RunManager } from "./run.js"
 import { registerWsRoutes } from "./ws.js"
 import { registerSessionRoutes } from "./routes/sessions.js"
 import { registerMemoryRoutes } from "./routes/memory.js"
+import { registerSkillRoutes } from "./routes/skills.js"
 import { registerAttachmentRoutes } from "./routes/attachments.js"
 import { registerJobRoutes } from "./routes/jobs.js"
 import { registerConfigRoutes } from "./routes/config.js"
@@ -151,6 +152,8 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   // the session routes only need it for POST /sessions/:id/compact.
   // spec 9.2 的 /memory 路由族：无 memory 装配时全部 503，不影响既有路由。
   registerMemoryRoutes(app, { memory: opts.memory, config })
+  // /skills 路由族：只读技能管理面（CLI /skill 与 Web 技能页共用），无装配依赖。
+  registerSkillRoutes(app, { paths })
   // 切会话写入：POST /sessions 是 CLI /clear、/new 与 web 新建会话的共同底层，
   // 记忆系统在装配时才挂 clear 触发（缺省不触发，行为与未装配记忆时一致）。
   registerSessionRoutes(app, { sessions, config, run: opts.run, memory: opts.memory })
