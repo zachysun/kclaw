@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/tools/` 实现全部 10 个内置工具，并把它们装配成两份对齐的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
+`packages/core/src/tools/` 实现全部 11 个内置工具，并把它们装配成两份对齐的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
 
 ---
 
@@ -39,6 +39,7 @@ export function createBuiltinTools(opts: {
   exec?: Partial<{ timeoutMs: number; maxOutputBytes: number }>
   web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean }>
   sessionSearch?: SessionSearchFn    // session_search 的检索后端（server 每 run 注入）；缺席时工具仍注册、返回"(无可检索内容)"
+  skills?: SkillRecord[]             // 技能目录扫描结果：skill_read 按名加载正文（见 skills.md）
   fetchImpl?: typeof fetch
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] }
 
@@ -54,7 +55,7 @@ export function makeTool<N extends string>(
 
 ---
 
-## 10 个内置工具
+## 11 个内置工具
 
 | 名称 | 职责 | risk / concurrency |
 |------|------|--------------------|
@@ -68,6 +69,7 @@ export function makeTool<N extends string>(
 | `memory_save` | 写入长期记忆 | safe / parallel |
 | `memory_search` | 全文检索记忆 | safe / parallel |
 | `session_search` | 全文检索当前会话已压缩的早期对话 | safe / parallel |
+| `skill_read` | 按名字加载一个技能（skill）的完整规程正文 | safe / parallel |
 
 ### exec（`tools/exec.ts`）
 
@@ -98,7 +100,7 @@ export function makeTool<N extends string>(
 
 是 `MemorySystem` 门面的薄封装（v2：主题线 markdown 为准、FTS5 + 向量为派生索引，见 [memory](./memory.md)）。
 
-- **memory_save** `{text}`：text 是"要记内容的提示"（v1 的 `tags` 已删，多余字段忽略）；当场触发 `system.triggerImmediate` 处理当前这轮对话，成功输出 `已触发记忆写入（处理当前这轮对话）`；`memory.write.immediate=false` 时返回 `立即写入已关闭（memory.write.immediate=false），该内容将在后台定时/跟随触发时沉淀`——此时不落盘，内容留给后台兜底。
+- **memory_save** `{text}`：text 是"要记内容的提示"（v1 的 `tags` 已删，多余字段忽略）；当场触发 `system.triggerImmediate` 处理当前这轮对话——真有提取批次（该会话自水位起有未处理的新消息）时输出 `已触发记忆写入（处理当前这轮对话）`，没有增量时如实输出 `该轮没有需要沉淀的新内容`（不谎报写入，v2 改名事故的教训）；`memory.write.immediate=false` 时返回 `立即写入已关闭（memory.write.immediate=false），该内容将在后台定时/跟随触发时沉淀`——此时不落盘，内容留给后台兜底。
 - **memory_search** `{query, limit?}`：`system.searchAll` 跨**全部**项目库 + 全局库的混合检索（关键词 + 向量，打分见 [memory](./memory.md)），`limit` 默认 5、最大 20；每个命中一行 `- [经历|认知] [scope] 正文`（scope 如 `project:<id>` / `global`），无命中输出 `（没有相关记忆）`。
 
 两个工具 safe + parallel：只访问记忆目录与索引，不修改工作目录本身（"parallel" 只表示调度器不强制排序）。
@@ -108,6 +110,16 @@ export function makeTool<N extends string>(
 **session_search** `{query, limit?}`：检索**当前会话**已压缩段的内容（`limit` 默认 5、最大 20；检索机制见 [compaction](./compaction.md)——每次调用现读会话事件流，按压缩段的 `upto` 取增量段区间做朴素文本匹配）。每个命中输出两行——`- <段摘要>` 加缩进的匹配位置文本片段；会话没有压缩段（或 server 未注入检索后端）时输出 `(无可检索内容)`。safe + parallel，与 memory 工具同类：只读访问会话目录下的事件流。
 
 工具**始终注册**（工具列表不随会话状态变化）：`createSessionTools(search?)` 的 search 参数缺席时工具仍在，只是查询一律返回"(无可检索内容)"——模型看到的工具集合稳定，不会因会话有没有压缩历史而变。
+
+### skill 工具（`tools/skills.ts`）
+
+**skill_read** `{name}`：按名字加载一个技能（skill）的完整规程正文（`SKILL.md` 的 Markdown 正文，机制与字段见 [skills](./skills.md)）。safe + parallel——只读 daemon 每次 run 扫描过的技能目录，不碰工作目录本身；同名技能的项目级副本胜出（与 `scanSkillDirs` 的覆盖规则一致）。技能不在已扫描集合时报 `没有叫 <name> 的技能（可用技能见系统提示词列表，或 /skill 查看）`；正文为空报错不加载。
+
+工具描述里带一句软性指引：优先用系统提示词"可用技能"列表里的技能，不在列表中的（`disable-model-invocation`）只有用户明确点名时才应加载——可见性规则骑在描述上、不是硬门禁，用户点名是隐藏档位的合法入口。
+
+### 与 skill 机制的衔接
+
+skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每 run 现扫技能目录后传入同一份结果（渐进披露第二层），系统提示词里的技能清单用同一份扫描结果（第一层）。点名包装等其余机制见 [skills](./skills.md)。
 
 ---
 
@@ -147,4 +159,5 @@ export function makeTool<N extends string>(
 - [provider](./provider.md)：`ToolDefinition` 如何进入请求体
 - [memory](./memory.md)：memory 工具背后的存储与检索
 - [compaction](./compaction.md)：session_search 检索的索引来源（压缩段）与工具输出省略
+- [skills](./skills.md)：skill_read 背后的技能包机制（渐进披露、双作用域、点名包装）
 - [mcp](./mcp.md)：同一 ToolExecutor 契约的另一种工具来源

@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/run.ts` 的 `RunManager` 负责 `send_message` 之后服务端的全部处理：消息去向的三处置决策（引导/等待/中断，见下文 submit）、每会话一条显式排队队列与其驱动循环、入队执行、附件挂载、模型解析、记忆注入（L2 认知常驻系统提示 + L1 情节 note，见 `#execute` 装配第 2 步）、系统提示（拼装完成后追加一条 `system` 事件全量留痕，见 `#execute` 装配第 9 步）、工具与权限装配、事件发送到总线、消息持久化、token 台账记录、run 取消与排队取消。`packages/server/src/confirm.ts` 的 `ConfirmationBroker` 是确认网关的服务端半边：挂起的人工裁决经 WS/CLI 的 `confirmation.resolve` 命令在此完成裁决。`packages/server/src/autoname.ts` 的 `scheduleAutoname` 在首条用户消息后异步生成会话标题并把更名广播为 `session.renamed` 事件。调度心跳（`scheduler-tick.ts`）触发的 job run 也使用同一个入口。
+`packages/server/src/run.ts` 的 `RunManager` 负责 `send_message` 之后服务端的全部处理：消息去向的三处置决策（引导/等待/中断，见下文 submit）、每会话一条显式排队队列与其驱动循环、入队执行、附件挂载、模型解析、记忆注入（L2 认知常驻系统提示 + L1 情节 note，见 `#execute` 装配第 2 步）、技能目录扫描与点名包装（见 `#execute` 装配第 4 步）、系统提示（拼装完成后追加一条 `system` 事件全量留痕，见 `#execute` 装配第 9 步）、工具与权限装配、事件发送到总线、消息持久化、token 台账记录、run 取消与排队取消。`packages/server/src/confirm.ts` 的 `ConfirmationBroker` 是确认网关的服务端半边：挂起的人工裁决经 WS/CLI 的 `confirmation.resolve` 命令在此完成裁决。`packages/server/src/autoname.ts` 的 `scheduleAutoname` 在首条用户消息后异步生成会话标题并把更名广播为 `session.renamed` 事件。调度心跳（`scheduler-tick.ts`）触发的 job run 也使用同一个入口。
 
 ## 设计决策
 
@@ -165,15 +165,15 @@ submit(sessionId, input)
 
 1. **工作目录**：`sessionMeta.workdir ?? deps.workspace`——会话级覆盖全局。
 2. **记忆注入**（两级，机制见 [memory](../core/memory.md)）：
-   - **L2 常驻（系统提示）**：装配系统提示用 `#systemWithCognition(paths.agentsMd, workspace)`——基础提示（AGENTS.md，缺省回退 `DEFAULT_SYSTEM_PROMPT`）之后拼 `memory.cognitionPrompt(workspace)` 返回的认知块（scope 过滤 + `injectTokenBudget` 预算取舍，详见 memory.md）；认知为空或抛错时回落到纯基础提示，run 照常进行。拼装结果即本 run 的完整系统提示词——进入模型循环前会把它作为一条 `system` 事件全量落盘（见第 9 步）。
+   - **L2 常驻（系统提示）**：装配系统提示用 `#systemWithCognition(paths.agentsMd, workspace, skillListPrompt(skills))`——基础提示（AGENTS.md，缺省回退 `DEFAULT_SYSTEM_PROMPT`）之后拼 `memory.cognitionPrompt(workspace)` 返回的认知块（scope 过滤 + `injectTokenBudget` 预算取舍，详见 memory.md），最后追加技能清单（`skillListPrompt(skills)`：模型可见技能的"可用技能"列表，为空串时不追加，机制见 [skills](../core/skills.md)）；认知为空或抛错时回落到纯基础提示 + 技能清单，run 照常进行。拼装结果即本 run 的完整系统提示词——进入模型循环前会把它作为一条 `system` 事件全量落盘（见第 9 步）。
    - **L1 情节（用户消息 note）**：`memory.searchEpisodes(workspace, userText.slice(0, MEMORY_QUERY_CHARS), MEMORY_LIMIT)` 取 top-5，每条命中变成一个 `kind:"memory"` note 块，文本 `相关经历（<线的一句话标题>）: <情节正文>`；检索抛错则不带记忆继续（记忆是加速器，不得阻塞 run）。
 3. **读 history**（此刻用户消息尚未追加），构造纯 text 骨架 `userMessage`，`input.attachments` 经 `mountAttachments` 挂成 attachment 块放进同一消息。**消息 id 采用排队时预分配的 `input.messageId`**（出队执行时由 `#executeEntry` 从条目还原传入）——前端气泡从"排队态"原地升级、id 不变；空闲直发没有这个附加，id 为构建时现生成。
-4. **工具**：`createBuiltinTools({workspace, memory, tavilyApiKey, exec 超时/输出上限, web 超时/私网开关})`；`deps.tools` 的执行器按名覆盖；`extraTools()` 每 run 求值一次，defs 追加、撞名打 `kclaw tool name collision: <name> (adapter overrides builtin)` 且适配器执行器胜出。
+4. **技能扫描与工具**：先 `scanSkillDirs({global: paths.skillsDir, project: join(workspace, ".kclaw", "skills")})` 现扫技能目录（全局 `<home>/skills` + 会话工作目录的项目级 `.kclaw/skills`，项目同名整目录覆盖；渐进披露第一层的数据源，机制见 [skills](../core/skills.md)）；同时算好技能点名的隐式包装——`trigger: "user"` 时对用户原文做点名检测（`matchSkillInvocations`）并生成模型视图改写文本 `llmUserText`，`job` 触发不参与点名。随后 `createBuiltinTools({workspace, memory, tavilyApiKey, exec 超时/输出上限, web 超时/私网开关, skills})`——把同一份扫描结果传给 `skill_read` 工具（渐进披露第二层，按需取正文）；`deps.tools` 的执行器按名覆盖；`extraTools()` 每 run 求值一次，defs 追加、撞名打 `kclaw tool name collision: <name> (adapter overrides builtin)` 且适配器执行器胜出。
 5. **权限**：在 `ConfigPermissionGate` 外再包一层负责登记确认的 gate。装配 gate 时有三处值得注意：`readRoots` 传入附件目录 `paths.attachmentsDir`——上传目录里的文件是 daemon 自己收下的用户输入，fs_read/fs_list 读它们不需要人工确认；`readonly` 取 daemon 级旗标与会话开关的逻辑或，任一为真本 run 就是只读；safeTools 仍按内置工具里标 safe 的集合计算。gate 判出 `confirm` 时，用 gate 签发的 id 调 `broker.create(confirmationId, toolCall, risk ?? "sensitive", confirmTimeoutMs, sessionId)` 登记——这一步只做登记，`confirmation.requested` 事件仍由循环发，全链路用的是同一个 id。
 6. **resolveConfirmation**：`broker.wait(confirmationId)` 经 `raceResolution(同 confirmTimeoutMs, controller.signal)` 竞速——人工裁决 / 超时 / abort 三方。非人工胜出（超时或 abort）即 `broker.expire`，晚到的人工 resolve 只会得到 `unknown confirmation`。
 7. **模型解析与 LLM 客户端**：`llmForRun(onLlmRetry)` 为本 run 构造带重试可见性的客户端，provider 层每次重试变成 `llm.failed {willRetry:true}` 事件；`runId` 从循环的第一个事件 `run.started` 捕获，`llmAttempt` 计数在 `llm.completed/failed` 后复位。随后三级解析模型：`resolveEntry(input.model ?? sessionMeta?.model ?? defaultModel)`。
 8. **压缩视图**：`RunInput.compaction` 传入会话 meta 里的压缩状态 `{ upto, top }`（无则 undefined）——循环据此在请求里垫脉络项、跳过已压缩部分。**不再有发送前预压缩**。`session_search` 的检索后端在此懒构造（`#buildSessionSearch`：返回一个首次调用才现读该会话事件流的闭包，交给 `createBuiltinTools`）。
-9. **runAgent**：`system` 取 `#systemWithCognition(paths.agentsMd, workspace)`（AGENTS.md 基础提示 + L2 认知常驻块，见第 2 步；`paths.agentsMd` 即 `~/.kclaw/AGENTS.md`）——**进入模型循环前**，这份拼装完成的全文先经 `sessions.appendSystem` 落一条 `system` 事件进该会话的事件流（每 run 恰好一条：steer 注入与 run 内多次模型调用复用同一份提示词，不重复记；事件序上先于本 run 的 user 消息）；`signal` 接本 run 的 controller；`toolResultKeep` 从 `config.sessions.toolResultKeep`（默认 8）传入、`tokenBudget` 传 `预算 × compactAtRatio`，共同驱动请求构造时的预算驱动工具输出省略。`steering` 钩子接 `#drainSteer(sessionId)`——循环在每轮工具批次结束后、下一次调用模型前取走 steer 缓冲区全部消息注入（见下文引导注入口）。两个压缩钩子也在此装配：`midRunCompaction` 接中途压缩（水位≥红线才压，失败/取消返回 null）、`onContextOverflow` 接超限紧急急救（emergency 标记），两者都经 `#runAutoCompaction` 执行（见设计决策）。其余钩子：
+9. **runAgent**：`system` 取 `#systemWithCognition(paths.agentsMd, workspace, skillListPrompt(skills))`（AGENTS.md 基础提示 + L2 认知常驻块 + 技能清单，见第 2/4 步；`paths.agentsMd` 即 `~/.kclaw/AGENTS.md`）——**进入模型循环前**，这份拼装完成的全文先经 `sessions.appendSystem` 落一条 `system` 事件进该会话的事件流（每 run 恰好一条：steer 注入与 run 内多次模型调用复用同一份提示词，不重复记；事件序上先于本 run 的 user 消息）；`signal` 接本 run 的 controller；**模型视图改写钩子** `mapLlmMessages`：第 4 步算出的点名包装文本非空时接 `(msgs) => withLastUserText(msgs, llmUserText)`——只在发给模型的最后一条 user 消息上追加技能调用指示，持久化/事件流/气泡保持用户原文，未命中不设置该钩子、行为与从前完全一致（机制见 [skills](../core/skills.md)）；`toolResultKeep` 从 `config.sessions.toolResultKeep`（默认 8）传入、`tokenBudget` 传 `预算 × compactAtRatio`，共同驱动请求构造时的预算驱动工具输出省略。`steering` 钩子接 `#drainSteer(sessionId)`——循环在每轮工具批次结束后、下一次调用模型前取走 steer 缓冲区全部消息注入（见下文引导注入口）。两个压缩钩子也在此装配：`midRunCompaction` 接中途压缩（水位≥红线才压，失败/取消返回 null）、`onContextOverflow` 接超限紧急急救（emergency 标记），两者都经 `#runAutoCompaction` 执行（见设计决策）。其余钩子：
     - `onUserMessage`：追加 job note + 记忆 note 块（compact note 已随 v3 移除）→ `appendMessage` 持久化 → （`trigger !== "job"` 时）异步 `scheduleAutoname` → 逐块发 `note.emitted`。
     - `onEvent`：捕获 runId / 复位 attempt → `bus.emit`（再包一层 try/catch，单个异常订阅者不会中断 run）。
     - `onMessage`：assistant/tool 消息持久化。
@@ -273,6 +273,7 @@ daemon 启动时对每个 queue.jsonl 非空的会话调用：整体重排为内
 - [realtime](./realtime.md)：send_message/confirmation.resolve/run.cancel/queue.cancel 的帧协议与 ack
 - [memory](../core/memory.md)：两级注入（L2 认知常驻 + L1 情节 note）、写入管线与跟随门禁背后的实现
 - [compaction](../core/compaction.md)：`#compactV2` 背后的触发/分界/摘要机制、审计记录格式与配置字段
+- [skills](../core/skills.md)：技能目录每 run 扫描、技能清单注入系统提示、点名隐式包装（mapLlmMessages）
 - [mcp](../core/mcp.md)：`extraTools` 的来源（MCP 工具适配器）
 - [storage](../core/storage.md)：UsageStore 的台账实现（`usageStore.record` 背后）
 - [http-api](./http-api.md)：GET /sessions/:id/queue、POST /sessions/:id/disposition 两个队列路由与写入 session meta model/readonly 的既有路由

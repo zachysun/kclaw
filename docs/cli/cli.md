@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/cli` 是 daemon 的终端客户端。`src/index.ts` 用 commander 组命令树并做入口分发；`src/chat.ts` 的 `runChat` 是交互式对话 REPL（REPL：read-eval-print loop，逐行读取输入、处理、打印结果、再等待下一行的交互循环）；`src/slash.ts` 是 REPL 内 `/` 命令的注册表机制（含 `<home>/commands/*.md` 的自定义命令加载）；`src/file-refs.ts` 把消息里的 `@路径` 引用展开成内联文本或按需读取提示；`src/client.ts` 的 `KclawClient` 封装对 daemon 的 HTTP 与 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）两种调用。首次运行判定、配置向导与 `kclaw web` 见 [onboarding](./onboarding.md)。CLI 不持有业务状态，随时退出，daemon 不受影响。
+`packages/cli` 是 daemon 的终端客户端。`src/index.ts` 用 commander 组命令树并做入口分发；`src/chat.ts` 的 `runChat` 是交互式对话 REPL（REPL：read-eval-print loop，逐行读取输入、处理、打印结果、再等待下一行的交互循环）；`src/slash.ts` 是 REPL 内 `/` 命令的注册表机制（含 `<home>/commands/*.md` 的自定义命令加载与"已装技能即斜杠命令"的动态注册）；`src/file-refs.ts` 把消息里的 `@路径` 引用展开成内联文本或按需读取提示；`src/client.ts` 的 `KclawClient` 封装对 daemon 的 HTTP 与 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）两种调用。首次运行判定、配置向导与 `kclaw web` 见 [onboarding](./onboarding.md)。CLI 不持有业务状态，随时退出，daemon 不受影响。
 
 ## 设计决策
 
@@ -118,7 +118,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 ## slash 命令机制（packages/cli/src/slash.ts）
 
 - 注册表是 `createRegistry(ctx)` 返回的 `Map<string, SlashCommand>`；命令的名称/用法/描述读自 `@kclaw/core/commands` 的共享清单 `SLASH_COMMANDS`（WebUI 读同一份，保证两端文案不漂移，见 [webui](../web/webui.md)）；解析（`dispatch`，委托 core 的 `parseSlashInput`）与查表执行（`runOrHint`）分离，未注册的命令打印一行 `没有这个命令，/help 看看`（miss 路径可单测）。
-- **Tab 补全**：readline 的 completer 挂在 `slashCompleter`（`slash.ts`）上——输入以 `/` 开头且还没打空格时按 Tab，按共享清单给出前缀候选：唯一命中直接补全命令名，多个命中补全公共前缀并列出清单；普通文本、带参数的输入、未知前缀都不动作。自定义命令不参与联想，仍靠 `/help` 发现。
+- **Tab 补全**：readline 的 completer 挂在 `createSlashCompleter(() => skillCommandMetas)`（`slash.ts`）上——**输入的最后一段空白分隔块**是以 `/` 开头且还没打空格时按 Tab，按共享清单给出前缀候选：内置命令在前、动态注册的技能命令在后（与内置重名的技能命令被共享补全器排除），唯一命中直接补全命令名，多个命中补全公共前缀并列出清单；普通文本、带参数的输入（`/new 标题` 这种已打空格的）、未知前缀都不动作。自定义命令不参与联想，仍靠 `/help` 发现。
 - `/exit` **刻意不注册**：它是 `chat.ts` 输入循环的控制流（`parsed.command === "exit"` 直接 break），不经过注册表。
 - 内置命令：
 
@@ -137,7 +137,9 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 | `/interrupt <消息>` | 一次性动作（不是模式）：带 interrupt 处置发送这条消息——服务端立即中止当前 run 并把消息插到队首执行；无参数时打印用法提示（纯中断用 Ctrl+C） |
 | `/queue [cancel <n\|all>]` | 不带参数时 `GET /sessions/:id/queue` 列出排队消息（`序号. 处置 文本`），空则"（队列为空）"；`cancel <n>` 按序号取消该条（发 `queue.cancel` 帧），`cancel all` 清空全部；读取失败打印 `读取队列失败: …` |
 | `/memory [save\|项目 [线]]` | 记忆命令（见 [memory](../core/memory.md)）：`save` 手动触发当前项目的手动写入（`POST /memory/trigger-manual`，工作目录取 CLI 启动目录，处理归属会话（缺省回落项目最近活动会话）自上次水位以来的新消息，成功打印 `已触发手动写入…`）；无 save 参数时是只读查看——无参列项目（`GET /memory/projects`）；指定项目列该项目的主题线（`GET /memory/projects/:id`）；再指定一条线打印线文件原文（`GET /memory/threads/:project/:topic`）；各级读取失败打印对应错误 |
+| `/skill [名字]` | 技能命令（机制见 [skills](../core/skills.md)）：无参列出已装技能（`名字 · 全局\|项目 · [仅用户] · 描述`，作用域跟会话工作目录，经 `GET /skills?workdir=`）；带名字打印该技能的 `SKILL.md` 完整正文（`GET /skills/:name?workdir=`）；没有技能时提示 `（还没有技能。把技能目录放进 ~/.kclaw/skills/ 或工作区 .kclaw/skills/）`；失败打印 `查看技能失败: …` |
 
+- **技能即斜杠命令**：每个已装且用户可见的技能自动注册成 `/<技能名> [要求]` 命令（`refreshSkillCommands`，启动时与每次切会话后各重拉一次，best-effort：daemon 不可达则没有技能命令，内置命令——含 `/skill`——照常可用）。命令发送**用户原文**（要求写在命令后面时原样拼接进消息），点名交给 daemon 检测、正文仍经 `skill_read` 加载——`disable-model-invocation` 的技能由此获得手动入口。内置名优先：与内置命令重名的技能命令被丢弃；自定义 `commands/*.md`（先注册）同样优先于技能。命令名不出现在注册表里时 Tab 补全也能提示（见上文 Tab 补全）。
 - 自定义命令：`ctx.commandsDir`（daemon 装配为 `<home>/commands`）目录下的每个 `*.md` 文件注册成一个命令——文件名就是命令名，文件内容是一段提示词模板；执行命令时，模板里的 `{{args}}` 替换成命令参数，然后经 `ctx.send(text)` 作为普通消息发出。与内置命令重名的文件不生效，打印一行警告。
 - `switchSession` 在**同一 socket** 上发 `unsubscribe`（旧会话）+ `subscribe`（新会话），同时清空待发附件（附件是会话级的，换会话不带走）；`SlashCtx` 的 `client`/`sessionId` 是 getter，命令执行时看到的总是重连/切换后的当前值。
 
@@ -159,3 +161,4 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 - [run-manager](../server/run-manager.md)：`send_message`/`run.cancel`/确认在服务端的后续
 - [http-api](../server/http-api.md)：slash 命令、`jobs list`、`mcp list` 背后的 REST 端点
 - [mcp](../core/mcp.md)：`kclaw mcp [list]` 展示的状态快照与 `mcp__<server>__<tool>` 命名
+- [skills](../core/skills.md)：`/skill` 命令与技能即斜杠命令背后的技能包机制

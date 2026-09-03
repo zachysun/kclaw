@@ -30,6 +30,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `<home>/memory/global/` | L2 全局认知（persona.md、wiki/、rule/ 的 markdown，真相） | MemorySystem / 用户手编 |
 | `<home>/memory/projects/<id>/` | L1 项目情节（`<topic>.md` 主题线、workdir.txt、MEMORY.md、state.json、vectors.db） | MemorySystem / 用户手编 |
 | `<home>/memory/notes/`、`<home>/memory/index.db` | v1 遗留：前者是迁移输入（daemon 启动读后删除）、后者是被删除的 v1 派生物索引 | 仅 daemon 启动迁移（见 [memory](./memory.md)） |
+| `<home>/skills/` | 全局技能包目录（每个子目录是一个技能，含 `SKILL.md`；项目级技能在工作区 `.kclaw/skills/`，见 [skills](./skills.md)） | 用户手编；每次 run 现扫读取 |
 | `<home>/sessions/<id>/` | 每会话一目录（events.jsonl + meta.json + queue.jsonl，分工见下节） | SessionStore（events.jsonl 为唯一真相、meta.json 为派生投影、queue.jsonl 为运行态整文件重写） |
 | `<home>/jobs.db` | 定时任务表 | JobScheduler |
 | `<home>/usage.db` | 每次 LLM 运行的 token 用量台账 | UsageStore |
@@ -85,6 +86,7 @@ export function resolvePaths(home?: string): KclawPaths
 // packages/core/src/storage/paths.ts
 export interface KclawPaths {
   home: string; config: string; agentsMd: string
+  skillsDir: string               // <home>/skills —— 全局技能包目录（见 skills.md）
   memoryDir: string; memoryNotesDir: string; memoryIndexDb: string
   sessionsDir: string; jobsDb: string; usageDb: string
   attachmentsDir: string; logsDir: string

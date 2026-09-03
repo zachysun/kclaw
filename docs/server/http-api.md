@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 39 个业务路由（健康/状态 2 个、会话 15 个、记忆 10 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 1 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`、`memory.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未装配时降级 503。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 41 个业务路由（健康/状态 2 个、会话 15 个、记忆 10 个、技能 2 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 1 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未装配时降级 503，技能组始终注册（无装配依赖）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
@@ -11,7 +11,7 @@
 - **404 显式可判别**：会话/任务路由先查存在性（`sessions.meta(id)` / `jobs.get(id)`），不存在返回 `404 {error:"session not found"|"job not found"}`，不依赖异常路径。
 - **配置接口只读且脱敏**：API key 永远掩码返回，没有写回路由——修改配置通过文件（config.yaml）进行，daemon 重启后生效。
 - **消息审计没有专门路由，压缩审计有只读视图**：轨迹页（web 的 `AuditView`）就是 `GET /sessions`（会话下拉）+ `GET /sessions/:id/events`（该会话完整事件流）两个只读接口组合而成，不存在 `/audit` 路由。压缩审计不同——手动压缩刻意不产生消息，纯靠消息流看不到它的痕迹，因此 `GET /sessions/:id/compactions` 作为事件流里 `compaction` 事件的只读视图存在（见 [compaction](../core/compaction.md)）。
-- **可选能力按注入条件注册**：附件路由只在传入 `attachmentsDir` 时注册、用量路由只在传入 `UsageStore` 时注册——能力未装配就没有这些路径，而不是"注册了但报错"；`GET /mcp` 则始终存在，daemon 未装配 McpManager 时返回空 server 列表。
+- **可选能力按注入条件注册**：附件路由只在传入 `attachmentsDir` 时注册、用量路由只在传入 `UsageStore` 时注册——能力未装配就没有这些路径，而不是"注册了但报错"；`GET /mcp` 则始终存在，daemon 未装配 McpManager 时返回空 server 列表。技能组与记忆组同为始终注册，但语义不同：记忆组未装配 `MemorySystem` 时降级 503，技能组没有装配依赖（技能是文件即真相，每次请求现扫），始终正常工作。
 
 ## 路由清单
 
@@ -136,6 +136,17 @@ interface Job {
 
 `:id`/`:project`/`:topic`/`:file` 的路径段先过白名单校验（`isSafeSegment`：段非空、非 `.`、非 `..`、不含 `/`，拦目录穿越段；允许 CJK/空格，URL 里已 encodeURIComponent）——非法段返回 400 `invalid segment`；合法段按原样传给 `MemorySystem`，读侧宽容（找不到就 404），写侧是"人即是真相"的整文件覆写。`GET /memory/projects/:id` 的响应包裹成 `{id, threads}` 是为前端取数方便（实现与 spec 的差异点，见 [memory](../core/memory.md) 的管理界面一节）。删除类的机器语义：删的是文件，`vectors.db` 里的对应条目由随后的 reindex 清除。
 
+### 技能（routes/skills.ts，始终注册）
+
+只读技能管理面（CLI `/skill` 与 Web 技能页、技能即斜杠命令的共同后端）。技能是文件即真相——`~/.kclaw/skills/`（全局）与工作区 `.kclaw/skills/`（项目级，覆盖全局）下的每个子目录一份 `SKILL.md`；机制与字段见 [skills](../core/skills.md)。每次请求**现扫**这两个作用域（与 run 时的注入同源同规则），`?workdir=` 指定项目级作用域（缺省无项目级）。
+
+| 方法 | 路径 | 用途 | 请求 | 响应 |
+|------|------|------|------|------|
+| GET | `/skills?workdir=` | 用户可见技能清单 | `workdir` 可选：会话工作目录，决定项目级技能作用域 | `{name, displayName, description, visibility, origin}[]`——`visibility` 为 `all`（模型+用户）或 `user-only`（被 `disable-model-invocation` 隐藏但仍用户可见）；`origin` 为 `global` / `project` |
+| GET | `/skills/:name?workdir=` | 单个技能详情（含正文） | 同上 | `{name, displayName, description, visibility, origin, content}`——`content` 是 `SKILL.md` 正文 |
+
+`:name` 路径段先过白名单校验（同 `/memory` 的 `isSafeSegment`），非法段 400 `invalid segment`。**`user-invocable: false` 的技能对用户面视为不存在**：列表不显示、点名 404——且与未知名字同响应（`{error:"not found"}`，不泄露存在性）。
+
 ### 附件（routes/attachments.ts，仅当注入 `attachmentsDir` 时注册）
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
@@ -226,4 +237,5 @@ app.addHook("preHandler", async (request, reply) => {
 - [compaction](../core/compaction.md)：compact/compactions 两个路由背后的机制与事件流里的记录格式
 - [memory](../core/memory.md)：`/memory` 路由族背后的记忆塔存储与 `memory.written` 事件
 - [mcp](../core/mcp.md)：`GET /mcp` 快照背后的连接管理器
+- [skills](../core/skills.md)：`/skills` 路由族背后的技能包机制（渐进披露、双作用域、可见性档位）
 - [jobs](../core/jobs.md)：cron 语义与 nextRunAt 推进规则

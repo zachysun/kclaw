@@ -57,6 +57,12 @@ export interface AgentDeps {
                                       // 溢出急救：llm 抛上下文超限错误且本轮尚无任何事件时，重试恰好一次，
                                       // 钩子返回的摘要用于重试请求；返回 null 则不重试（见 compaction.md 触发点三）
   tokenBudget?: number                // 请求预算（token 数）：驱动工具输出省略/历史逐出（见 compaction.md 机制二）
+  mapLlmMessages?(messages: ProviderMessage[]): ProviderMessage[]
+                                      // 模型视图改写钩子（LLM 执行前）：每次 llm.stream 之前，循环把
+                                      // toProviderMessages 的产物（已完成窗口裁剪/工具结果打包/压缩脉络垫底）
+                                      // 交给它，返回什么发什么——持久化、事件流与 outcome 一概不动，
+                                      // 是"只改模型看到的输入"的唯一口子（技能点名的隐式包装是第一个
+                                      // 使用者，见 skills.md）；未设置时行为与旧版逐字节一致
   onEvent(e: AgentEvent): void
   onMessage(m: Message): void
 }
@@ -122,11 +128,12 @@ run.started {trigger}
 
 ## 消息编排（上下文组装）
 
-`toProviderMessages(history, window, opts?)`（`packages/core/src/agent/context.ts`）是协议消息 → provider 请求的唯一翻译点：
+`toProviderMessages(history, window, opts?)`（`packages/core/src/agent/context.ts`）是协议消息 → provider 请求的格式翻译点：
 
 - **滑动窗口**（只保留最近 N 条历史、随新消息整体前移）：`history.slice(-window)`（window 默认 200），system prompt 不占窗口。窗口截断仅作为未压缩/压缩失败时的极端保险；长会话的正常收敛靠压缩（见 [compaction](./compaction.md)）：压缩视图（`ActiveSummary { upto, top }`）由宿主从会话 meta 取出放进 `RunInput.compaction`，循环内的 `buildMessages` 据此把 `upto`（含）之前的原文排除在发送窗口外，`toProviderMessages` 再把脉络项垫进待发送数组——循环本身不感知也不改动 JSONL 里的原始消息。运行起点不跑任何压缩（"发送前预压缩"已在 v3 删除，压缩只发生在收尾 / 运行中 / 超限急救，见 [compaction](./compaction.md)）。
 - **工具输出省略**（`opts.toolResultKeep`，server 从 `config.sessions.toolResultKeep` 传入，默认 8）：从最新消息往前数，最多保留最近 N 个工具结果原文（条数上限，之前是固定截断数），更早的把输出文本替换成一行占位符 `[此工具输出已省略：<工具名> <参数摘要>，可重新调用获取]`（调用失败加"（该次调用失败）"）。传了 `opts.tokenBudget` 时在条数上限内再做预算驱动逐出：以"非工具结果内容的估算 token + 被上限挤掉结果的占位行"为基线，从最新到最旧逐条装填工具结果，装不下（含其之后全部）一并省略。两者都只影响发出的请求，JSONL 存储不动；配对关系不变，不产生无效请求。不传任何 opts 时行为完全不变（全部保留）。详见 [compaction](./compaction.md) 机制二/三。
 - **脉络摘要注入**（`opts.summary`，类型 `ActiveSummary { upto, top }`）：非空时在结果数组**最前面**注入一条 `{ role: "system", content: "早期对话脉络：<top>" }`。它排在切片后的对话之前；provider 适配层再在它前面加真正的 system 提示（persona），所以模型看到的最终顺序是 **persona → 脉络 → 对话**。原始 `req.system` 不被覆盖，JSONL 里也没有这条注入（只在发送的请求里）。
+- **模型视图改写钩子**（`deps.mapLlmMessages`）：上述全部组装完成后、`llm.stream` 之前，若钩子已设置，把最终消息列表交给它、返回什么发什么。它是"只改模型看到的输入"的唯一口子——持久化、事件流与 outcome 一概不动。现成实现是 `withLastUserText(messages, text)`（`agent/context.ts`）：把消息列表里**最后一条 user 消息**的文本整体替换成 `text`（string 内容整体替换；ContentPart 数组只换第一个 text 部分，图片等其余部分保留）。从尾部向前找，工具循环的第二轮起列表末条是 tool 消息——锚定"最后一条 user"才能让改写在每一轮都生效；列表里没有 user 消息时原样返回。技能点名的隐式包装就是经这个钩子 + 这个辅助实现的（见 [skills](./skills.md)）。
 - **孤儿 tool 消息丢弃**：窗口切在 assistant 与 tool 消息之间时，开头的连续 `role:"tool"` 消息被 `shift` 丢弃——OpenAI 兼容 API 拒收无配对调用的 tool 结果。
 - **无配对的 tool_call 剔除**：assistant 的 `tool_call` 块只有当其后（窗口内）存在配对的 `tool_result` 才转成 `toolCalls` 发送；悬空调用会被 400。
 - **块级转换**：user/assistant 的 text 拼接为 content；note 转 `[system note] <text>` 行（对模型可见、可追溯）；tool 消息的每个 `tool_result` 转成一条消息，error 结果加 `[error] ` 前缀；assistant 没有 text 时 content 置 null、只带 toolCalls；thinking 不转换，模型看不到自己之前的思考内容。attachment 块按携带的内容分三种转法：带 `base64` 数据且 MIME 是 `image/*` 的转成一个多模态 `image_url` 内容段（data: URL 形式，与文本段并列为 content 数组的元素）；带内联 `text` 正文的转成 `[附件 <名称>]` 加正文；两者都不满足的只转一行元数据提示（`[附件 <名称>（<mime>，仅元数据）已保存，路径 <path>，可用 fs_read 读取]`），需要内容时由模型自己调 fs_read。
@@ -191,4 +198,5 @@ daemon 侧 `RunManager.cancel(sessionId)` 调 `AbortController.abort()`，循环
 - [compaction](./compaction.md)：水位与双档触发线、四个触发点（收尾/中断/溢出急救/手动）、预算驱动省略与 window 200 的分工
 - [provider](./provider.md)：OpenAI 兼容流解析与 withRetry
 - [permissions](./permissions.md)：判定链与规则语法（allow/deny 的来源）
+- [skills](./skills.md)：`mapLlmMessages` 钩子的第一个使用者（技能点名隐式包装）
 - [run-manager](../server/run-manager.md)：daemon 侧如何装配这些依赖

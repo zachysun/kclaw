@@ -210,7 +210,7 @@ score = fused × 1/(1 + 距今天数/30)      // 时效因子：30 天衰减一�
 
 | 工具 | 参数 | 行为 |
 |------|------|------|
-| `memory_save` | `{text 必填}` | text 是"要记内容的提示"（v1 的 `tags` 已删，多余字段忽略）；当场触发 `system.triggerImmediate` 处理当前这轮对话，成功输出 `已触发记忆写入（处理当前这轮对话）`；`memory.write.immediate=false` 时返回 `立即写入已关闭（memory.write.immediate=false），该内容将在后台定时/跟随触发时沉淀` |
+| `memory_save` | `{text 必填}` | text 是"要记内容的提示"（v1 的 `tags` 已删，多余字段忽略）；当场触发 `system.triggerImmediate` 处理当前这轮对话——真有提取批次（该会话自水位起有未处理的新消息）时输出 `已触发记忆写入（处理当前这轮对话）`，没有增量时如实输出 `该轮没有需要沉淀的新内容`（不谎报写入）；`memory.write.immediate=false` 时返回 `立即写入已关闭（memory.write.immediate=false），该内容将在后台定时/跟随触发时沉淀` |
 | `memory_search` | `{query 必填, limit?}` | `system.searchAll` 跨**全部**项目库 + 全局库（每条先对账重索引再打分），默认 5、上限 20（`MAX_SEARCH_LIMIT`）；每个命中输出一行 `- [经历\|认知] [scope] 正文`（scope 如 `project:<id>` / `global`），无命中输出 `（没有相关记忆）` |
 
 两个工具都是 `risk: "safe"` + `concurrency: "parallel"`：只访问记忆目录和索引、不修改工作区，调用免人工确认，也可与其他工具同批并发。

@@ -129,9 +129,9 @@ gate 的两个 daemon 侧开关（都来自 `ConfigPermissionGateOptions`）：
 
 ### 6. 敏感工具清单怎么定
 
-引擎不硬编码清单。daemon 装配（`packages/server/src/run.ts`）把 `createBuiltinTools` 产物里 `risk === "safe"` 的执行器名收集为 `safeTools` 传入 gate。按当前 10 个内置工具的声明（见 [tools](./tools.md)）：
+引擎不硬编码清单。daemon 装配（`packages/server/src/run.ts`）把 `createBuiltinTools` 产物里 `risk === "safe"` 的执行器名收集为 `safeTools` 传入 gate。按当前 11 个内置工具的声明（见 [tools](./tools.md)）：
 
-- **safe（命中即自动放行）**：`fs_read`、`fs_list`、`web_search`、`web_fetch`、`memory_save`、`memory_search`、`session_search`——共 7 个，全是不改工作目录状态的 parallel 工具；
+- **safe（命中即自动放行）**：`fs_read`、`fs_list`、`web_search`、`web_fetch`、`memory_save`、`memory_search`、`session_search`、`skill_read`——共 8 个，全是不改工作目录状态的 parallel 工具；
 - **sensitive（无 allow 规则命中必然 confirm）**：`exec`、`fs_write`、`fs_edit`——共 3 个。注意 fs_read/fs_list 虽是 safe，目标越界且不在 readRoots 内时仍进入 confirm（第 ③ 步）；MCP 适配器工具（见 [mcp](./mcp.md)）一律声明 sensitive。
 
 ### 7. 人工确认流程
