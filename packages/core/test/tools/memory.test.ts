@@ -2,9 +2,9 @@ import { describe, it, expect, vi } from "vitest"
 import { createMemoryTools } from "../../src/tools/memory.js"
 import type { MemorySystem } from "../../src/memory/system.js"
 
-function fakeSystem() {
+function fakeSystem(immediateResult: boolean | undefined = true) {
   return {
-    triggerImmediate: vi.fn(async () => undefined),
+    triggerImmediate: vi.fn(async () => immediateResult),
     searchAll: vi.fn(async () => [
       { kind: "episode" as const, scope: "project:kclaw-abc123", label: "经历 · 重连线", text: "指数退避消灭了风暴" },
       { kind: "cognition" as const, scope: "global", label: "认知 · 通用规则", text: "始终中文回复" },
@@ -14,11 +14,20 @@ function fakeSystem() {
 
 describe("memory_save", () => {
   it("triggers immediate write for the current turn and returns ok", async () => {
-    const sys = fakeSystem()
+    const sys = fakeSystem(true)
     const { memory_save } = createMemoryTools({ system: sys, sessionId: "ses_1", workdir: "/w", immediateEnabled: true })
     const res = await memory_save.execute({ text: "记住这个重连结论" }, { onOutput: () => {} })
     expect(res.status).toBe("ok")
+    expect(res.output).toContain("已触发记忆写入")
     expect(sys.triggerImmediate).toHaveBeenCalledWith("ses_1")
+  })
+  it("does not claim a write when nothing was extracted (empty range)", async () => {
+    const sys = fakeSystem(false)
+    const { memory_save } = createMemoryTools({ system: sys, sessionId: "ses_1", workdir: "/w", immediateEnabled: true })
+    const res = await memory_save.execute({ text: "记住这个重连结论" }, { onOutput: () => {} })
+    expect(res.status).toBe("ok")
+    expect(res.output).not.toContain("已触发")
+    expect(res.output).toContain("没有需要沉淀")
   })
   it("returns the closed-mode error text when immediate is disabled (tool stays registered)", async () => {
     const sys = fakeSystem()

@@ -73,6 +73,16 @@ describe("runTrigger", () => {
     expect(calls).toBe(0)
   })
 
+  it("returns the number of extraction batches run (0 when the range is empty)", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    seedMessages(meta.id, ["内容"])
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [] })]), model: "test" }),
+    })
+    expect(await pipe.runTrigger(WORKDIR, "immediate", meta.id)).toBe(1)
+    expect(await pipe.runTrigger(WORKDIR, "immediate", meta.id)).toBe(0)
+  })
+
   it("clear advances BOTH watermarks (incremental — no full rescan, 回归 2026-09-02)", async () => {
     const meta = sessions.create("s", undefined, WORKDIR)
     seedMessages(meta.id, ["内容"])
@@ -234,7 +244,7 @@ describe("runTrigger", () => {
       resolveLlm: () => ({ llm: scriptedLlm(["```json\n" + JSON.stringify({ actions: [{ op: "append" }, { file: "ok", op: "new-thread", thread: "ok", title: "OK", content: "正文" }] }) + "\n```"]), model: "test" }),
     }
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, deps)
-    await expect(pipe.runTrigger(WORKDIR, "interval")).resolves.toBeUndefined()
+    await pipe.runTrigger(WORKDIR, "interval")
     // 非法单条被丢、合法单条落盘 —— 通过线文件存在断言
     const files = readDirDeep(join(root, "memory", "projects"))
     expect(files.some((f) => f.endsWith("ok.md"))).toBe(true)

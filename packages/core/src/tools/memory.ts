@@ -9,7 +9,8 @@
  *
  * - `memory_save {text}` → 当场触发当前会话的写入管线（system.triggerImmediate，
  *   spec 7.3）。text 是"要记内容的提示"；v1 的 tags 已删（spec 7.3），多余字段忽略。
- *   immediateEnabled=false 时返回固定错误文本（写入走后台定时/跟随触发）。
+ *   immediateEnabled=false 时返回固定错误文本（写入走后台定时/跟随触发）；触发后
+ *   按是否真有提取批次区分回复——无增量时明说"没有需要沉淀的新内容"，不谎报写入。
  * - `memory_search {query, limit?}` → system.searchAll(query, limit)，跨项目
  *   经历 + 全局认知，每行 `- [经历|认知] [scope] text`；无命中 → "（没有相关记忆）"。
  */
@@ -31,8 +32,12 @@ export function createMemoryTools(ctx: {
     requireString(args, "text") // tags 已删（spec 7.3）：多余字段忽略
     if (!ctx.immediateEnabled) return { status: "error", output: IMMEDIATE_CLOSED_MSG }
     try {
-      await ctx.system.triggerImmediate(ctx.sessionId)
-      return { status: "ok", output: "已触发记忆写入（处理当前这轮对话）" }
+      const wrote = await ctx.system.triggerImmediate(ctx.sessionId)
+      // wrote=false = 该会话无增量（本轮消息已处理过）：不谎报"已写入"，
+      // 2026-09-02 改名事故里这条固定文案曾把空转伪装成成功。
+      return wrote
+        ? { status: "ok", output: "已触发记忆写入（处理当前这轮对话）" }
+        : { status: "ok", output: "该轮没有需要沉淀的新内容" }
     } catch (e) {
       throw new ToolError(`save failed: ${errMsg(e)}`)
     }

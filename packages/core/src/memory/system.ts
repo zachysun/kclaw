@@ -302,11 +302,12 @@ export class MemorySystem {
     return this.#sessions.list()[0]?.id
   }
 
-  /** 立刻写入（memory_save 工具，spec 7.3）：增量提取自最近水位的消息（水位推进两路）。 */
-  async triggerImmediate(sessionId: string): Promise<void> {
+  /** 立刻写入（memory_save 工具，spec 7.3）：增量提取自最近水位的消息（水位推进两路）。
+   *  返回是否真的执行了提取（false = 该会话无增量），工具据此给不误导的回复。 */
+  async triggerImmediate(sessionId: string): Promise<boolean> {
     const meta = this.#sessions.meta(sessionId)
     const workdir = meta?.workdir ?? this.#config.workspace
-    await this.#pipeline.runTrigger(workdir, "immediate", sessionId)
+    return (await this.#pipeline.runTrigger(workdir, "immediate", sessionId)) > 0
   }
 
   /** 手动写入（/memory save，spec 4.2 手动行）：默认当前项目。 */

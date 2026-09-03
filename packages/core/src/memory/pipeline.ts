@@ -217,12 +217,13 @@ export class MemoryPipeline {
     return idx
   }
 
-  async runTrigger(workdir: string, trigger: PipelineTrigger, sessionId?: string): Promise<void> {
+  async runTrigger(workdir: string, trigger: PipelineTrigger, sessionId?: string): Promise<number> {
     const { id } = this.#layout.ensureProject(workdir)
     return this.#lock(id, () => this.#runLocked(id, trigger, sessionId))
   }
 
-  async #runLocked(projectId: string, trigger: PipelineTrigger, sessionId?: string): Promise<void> {
+  /** 返回本次实际执行提取的批次数（0 = 无增量，调用方可据此区分"触发即空转"）。 */
+  async #runLocked(projectId: string, trigger: PipelineTrigger, sessionId?: string): Promise<number> {
     const ledger = new WriteLedger(join(this.#layout.projectDir(projectId), "state.json"))
     // 选范围（会话维度，spec 4.1）：提取只看触发会话自己的增量窗口——水位每会话
     // 各一本，互不比较（旧项目级水位按会话创建序划界，晚创建会话推进过水位后，
@@ -232,10 +233,12 @@ export class MemoryPipeline {
     const rows = this.#sessionRows(projectId)
     const targets = trigger === "interval" ? rows : rows.filter((r) => r.id === sessionId)
     const touched = new Set<string>()
+    let batches = 0
     for (const row of targets) {
       const watermark = WriteLedger.later(row.messages, ledger.get(row.id, "interval"), ledger.get(row.id, "follow"))
       const range = WriteLedger.since(watermark, row.messages)
       if (range.length === 0) continue
+      batches += 1
       let actions: ExtractAction[]
       try {
         actions = await this.#extract(projectId, range)
@@ -263,6 +266,7 @@ export class MemoryPipeline {
     }
     // 顺带内化检查（spec 4.2/6）：本次涉及的线若已 inactive 则总结一次。
     await this.#maybeConsolidateTouched(projectId, touched, trigger, sessionId)
+    return batches
   }
 
   #sessionRows(projectId: string): Array<{ id: string; createdAt: string; messages: Message[] }> {
