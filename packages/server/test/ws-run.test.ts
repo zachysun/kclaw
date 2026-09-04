@@ -19,7 +19,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AddressInfo } from "node:net"
 import WebSocket from "ws"
-import { SessionStore, loadConfig, newAssistantMessage, newMessage, resolvePaths } from "@kclaw/core"
+import { EventBus, SessionStore, loadConfig, newAssistantMessage, newMessage, resolvePaths } from "@kclaw/core"
 import type {
   AgentEvent,
   AssistantMessage,
@@ -36,7 +36,6 @@ import type {
   ToolExecutor,
 } from "@kclaw/core"
 import type { FastifyInstance } from "fastify"
-import { EventBus } from "../src/bus.js"
 import { RunManager } from "../src/run.js"
 import { createApp } from "../src/app.js"
 import { gateLlm, gateTool, makeGate } from "./helpers/gate.js"

@@ -17,7 +17,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AddressInfo } from "node:net"
 import WebSocket from "ws"
-import { SessionStore, loadConfig, resolvePaths } from "@kclaw/core"
+import { ConfirmationBroker, EventBus, SessionStore, loadConfig, resolvePaths } from "@kclaw/core"
 import type {
   AgentEvent,
   ConfirmationRequestedPayload,
@@ -31,8 +31,6 @@ import type {
   ToolResultBlock,
 } from "@kclaw/core"
 import type { FastifyInstance } from "fastify"
-import { ConfirmationBroker } from "../src/confirm.js"
-import { EventBus } from "../src/bus.js"
 import { RunManager } from "../src/run.js"
 import { createApp } from "../src/app.js"
 

@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/skills/` 实现技能包（skill）的解析、双作用域扫描与点名匹配；`packages/core/src/tools/skills.ts` 实现 `skill_read` 工具；系统提示词里的技能列表、点名的隐式包装在 `packages/server/src/run.ts` 每 run 装配；只读管理面在 `packages/server/src/routes/skills.ts`（CLI `/skill` 与 Web 技能页共用）。
+`packages/core/src/skills/` 实现技能包（skill）的解析、双作用域扫描与点名匹配；`packages/core/src/tools/skills.ts` 实现 `skill_read` 工具；系统提示词里的技能列表、点名的隐式包装在 run 装配（core `packages/core/src/agent/run-assembly.ts` 的 `executeRun`）每 run 完成；只读管理面在 `packages/server/src/routes/skills.ts`（CLI `/skill` 与 Web 技能页共用）。
 
 技能是一种"把操作规程交给模型"的机制：一个技能是一个目录，里面放一份 `SKILL.md`（YAML 头部 + Markdown 正文），描述"遇到什么情况、照什么规程做"。它不写死在代码里——把目录放进约定位置、下一个会话轮次即生效；模型需要用到时按名字把全文加载进上下文，平时不占用。
 

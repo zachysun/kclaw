@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/permissions/engine.ts` 的 `ConfigPermissionGate` 在每个工具调用执行前给出三档判定之一：`allow`（直接执行）、`deny`（拒绝并把原因回传模型）、`confirm`（交给人工确认）。判定完全由配置规则 + 工具声明的 risk 元数据 + 会话工作目录驱动，**自身不做任何交互**——确认的等待、超时、事件广播在循环层（`packages/core/src/agent/loop.ts`），人工裁决的接收在服务端（`packages/server/src/confirm.ts`）。
+`packages/core/src/permissions/engine.ts` 的 `ConfigPermissionGate` 在每个工具调用执行前给出三档判定之一：`allow`（直接执行）、`deny`（拒绝并把原因回传模型）、`confirm`（交给人工确认）。判定完全由配置规则 + 工具声明的 risk 元数据 + 会话工作目录驱动，**自身不做任何交互**——确认的等待、超时、事件广播在循环层（`packages/core/src/agent/loop.ts`），人工裁决的接收在确认网关（core `packages/core/src/permissions/broker.ts` 的 `ConfirmationBroker`）。
 
 ---
 
@@ -116,7 +116,7 @@ exec 走专属分支：deny 对**每个归一化子命令**分别匹配；allow 
 - **allow 命中不豁免逃逸**：白名单规则命中（词面路径匹配）但目标经符号链接（symlink）逃逸出工作区（realpath 形式）时，**不再直接放行**，回落到本步的越界确认——一条 `fs_write:link/**` 规则不会放行 `link/secret.txt`（若 `link` 指向工作区外的目录），越界目标对 allow 规则一律不生效，只能走确认或人工在会话中授权。这是有意收紧：allow 的授权范围不超出工作区边界。
 - safe 工具不豁免：fs_read/fs_list 越界同样要人确认——唯一例外是 `readRoots`（见下节）。
 - 工作目录本身允许（`resolved === root`，如对根目录 fs_list）。
-- 工作目录未设置时不做该检查（legacy 行为）；daemon 侧的取值是会话元数据的 `workdir`，缺省回退 `config.workspace`（`packages/server/src/run.ts`）。
+- 工作目录未设置时不做该检查（legacy 行为）；daemon 侧的取值是会话元数据的 `workdir`，缺省回退 `config.workspace`（run 装配 core `executeRun`）。
 
 exec 没有可判定的"目标路径"——命令可以以任何方式访问文件系统，所以对 exec **没有越界精确判定**，处理策略是：命中 deny/allow 之外的一律 confirm，由人工审视命令本身。
 
@@ -129,7 +129,7 @@ gate 的两个 daemon 侧开关（都来自 `ConfigPermissionGateOptions`）：
 
 ### 6. 敏感工具清单怎么定
 
-引擎不硬编码清单。daemon 装配（`packages/server/src/run.ts`）把 `createBuiltinTools` 产物里 `risk === "safe"` 的执行器名收集为 `safeTools` 传入 gate。按当前 11 个内置工具的声明（见 [tools](./tools.md)）：
+引擎不硬编码清单。run 装配（core `executeRun`）把 `createBuiltinTools` 产物里 `risk === "safe"` 的执行器名收集为 `safeTools` 传入 gate。按当前 11 个内置工具的声明（见 [tools](./tools.md)）：
 
 - **safe（命中即自动放行）**：`fs_read`、`fs_list`、`web_search`、`web_fetch`、`memory_save`、`memory_search`、`session_search`、`skill_read`——共 8 个，全是不改工作目录状态的 parallel 工具；
 - **sensitive（无 allow 规则命中必然 confirm）**：`exec`、`fs_write`、`fs_edit`——共 3 个。注意 fs_read/fs_list 虽是 safe，目标越界且不在 readRoots 内时仍进入 confirm（第 ③ 步）；MCP 适配器工具（见 [mcp](./mcp.md)）一律声明 sensitive。
@@ -148,10 +148,10 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 ```
 
 - 超时默认 `confirmTimeoutMs = 120_000`（config 默认值与循环的内置默认值一致，均为 120 秒）。
-- 服务端 `ConfirmationBroker`（`packages/server/src/confirm.ts`）：
-  - 登记：RunManager 包装 gate，confirm 判定一出就在 broker 登记（携带 toolCall、risk、会话 id）。
+- 确认网关 `ConfirmationBroker`（core `packages/core/src/permissions/broker.ts`）：
+  - 登记：run 装配（core `executeRun`）的包装 gate，confirm 判定一出就在 broker 登记（携带 toolCall、risk、会话 id）。
   - 裁决：CLI/Web 经 WS `confirmation.resolve` 帧调 `broker.resolve(id, approved, by)`（`by` 默认 `"cli"`）。
-  - broker **不发事件、不设内部超时**——事件归循环，计时归循环与 RunManager 的同一竞速机制；两处用同一超时值竞速保证视图一致。
+  - broker **不发事件、不设内部超时**——事件归循环，计时归循环与装配侧的同一竞速机制；两处用同一超时值竞速保证视图一致。
   - 超时/取消后 RunManager 调 `expire` 把条目标记失效，迟到的裁决只会收到 unknown confirmation，不会确认一个已无人等待的动作。
 - deny 的 `user_denied` / `timeout` 两个 reason 不是 gate 产出的：gate 只产生 `blacklist` / `readonly` 两种拒绝（规则命中或只读会话禁写/exec），前两者是循环把人工拒绝/超时转成 error result 时的语义标记（note 块的 `kind`）。
 

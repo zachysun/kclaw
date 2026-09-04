@@ -67,7 +67,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `mcp.servers` | `{}` | 外部 MCP server 配置表（stdio/http 两种形态），daemon 启动时据此装配 McpManager（见 [mcp](./mcp.md)） |
 | `exec.timeoutMs` / `maxOutputBytes` | `60000` / `102400`（100 KiB） | exec 工具超时与输出截断上限 |
 | `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 清理用（见 [jobs](./jobs.md)） |
-| `sessions.contextTokens` / `compactAtRatio` / `compactPanicRatio` / `compactTargetRatio` / `toolResultKeep` | `128000` / `0.66` / `0.85` / `0.33` / `8` | 上下文压缩 v2/v3（见 [compaction](./compaction.md)）：token 预算、触发线（估算发送量达预算 × 0.66 即压缩）、红线（运行中水位达预算 × 0.85 时在迭代边界触发中途压缩）、压缩后保留部分目标（预算 × 0.33）、发送时保留最近几个工具结果原文。五个字段均可选，缺省值在 server 读取处兜底（`packages/server/src/run.ts`） |
+| `sessions.contextTokens` / `compactAtRatio` / `compactPanicRatio` / `compactTargetRatio` / `toolResultKeep` | `128000` / `0.66` / `0.85` / `0.33` / `8` | 上下文压缩 v2/v3（见 [compaction](./compaction.md)）：token 预算、触发线（估算发送量达预算 × 0.66 即压缩）、红线（运行中水位达预算 × 0.85 时在迭代边界触发中途压缩）、压缩后保留部分目标（预算 × 0.33）、发送时保留最近几个工具结果原文。五个字段均可选，缺省值在读取处兜底（core `executeRun` 的 run 装配，`packages/core/src/agent/run-assembly.ts`） |
 | `sessions.defaultDisposition` | `"steer"` | 不带 disposition 的 send_message 的默认处置（见 [run-manager](../server/run-manager.md)）；会话可经 `meta.dispositionOverride` 覆盖 |
 | `sessions.compactThreshold` / `compactKeep` | 无（废弃） | v1 压缩（40 条触发、保留 25 条）的字段，已废弃不生效：配置文件里存在时不报错，但没有任何消费方 |
 | `notify.channels` | `[]` | job 终态通知渠道列表；为空即关闭（零开销）。条目 `{ name?, type, url, template? }`，`type` 三种：`bark`（POST JSON `{title, body}`）、`serverchan`（POST 表单 `title`+`desp`）、`webhook`（POST JSON，正文含 title/body 及全部 job 字段）。`template` 占位符：`{{job}}` `{{statusText}}` `{{status}}` `{{summary}}` `{{sessionId}}` `{{sessionUrl}}`，未知占位符渲染为空串 |
@@ -127,9 +127,9 @@ export function readJsonl(file: string): unknown[]
 
 一条消息的持久化路径（每条消息都经过这一流程）：
 
-1. agent 循环产出消息 → `RunManager` 的 `onMessage` 调 `sessions.appendMessage(sessionId, m)`（`packages/server/src/run.ts`）。
+1. agent 循环产出消息 → run 装配（core `executeRun`）的 `onMessage` 钩子调 `sessions.appendMessage(sessionId, m)`。
 2. `appendMessage` 经 `appendEvent` 落一条 `message` 事件到 events.jsonl：先 `repairTornTail`（末字节非 `\n` 则字节级截断到上一换行），再 `appendFileSync(JSON.stringify(event) + "\n")`，随后把事件折进 meta.json 投影（`applyEvent`）。
-3. 回读时 `readMessages` → `readEvents` 后过滤 `message` 事件：丢弃断尾行，逐行解析成 `Message` 数组，作为下次运行的历史（`packages/server/src/run.ts` 的 `#execute` 在追加用户消息**之前**读历史，避免重复发送）。
+3. 回读时 `readMessages` → `readEvents` 后过滤 `message` 事件：丢弃断尾行，逐行解析成 `Message` 数组，作为下次运行的历史（run 装配 core `executeRun` 在追加用户消息**之前**读历史，避免重复发送）。
 
 ---
 

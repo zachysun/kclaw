@@ -22,7 +22,7 @@
  */
 import { makeEvent } from "@kclaw/core"
 import type { Job, JobScheduler, Message, Notifier, SessionMeta, SessionStore, TextBlock } from "@kclaw/core"
-import type { EventBus } from "./bus.js"
+import type { EventBus } from "@kclaw/core"
 import type { RunManager } from "./run.js"
 
 /** Default cadence (30s polling). */

@@ -5,7 +5,7 @@
 会话聊得越长，每次发给模型的上下文就越大，大到超出模型窗口后请求会直接失败。压缩机制把较早的对话转换成摘要、之后不再按原文发送，让每轮发送量回到预算以内；被压掉的细节仍然留在硬盘上，并可通过 `session_search` 检索回来。整套机制分三层，互相独立：
 
 1. **触发与分界**（`packages/core/src/session/compaction.ts` 的 `estimateContextTokens` / `chooseBoundary`）：按 token 估算判断何时压缩、压到哪里。触发点有四个——收尾压缩、中途压缩、超限紧急急救、手动 `/compact`——都不在"用户发送消息"的路径上，发送永不等待压缩。
-2. **分层摘要**（同一模块的 `renderSegment` 加 `packages/server/src/run.ts` 的 `#compactV2` 编排）：两次不带工具的模型调用，先给新压掉的段生成"段摘要"，再归并进"总摘要"。
+2. **分层摘要**（同一模块的 `renderSegment` 加压缩引擎的编排——core `packages/core/src/session/compactor.ts` 的 `Compactor.compact`，即原 server 侧 `#compactV2` 迁入）：两次不带工具的模型调用，先给新压掉的段生成"段摘要"，再归并进"总摘要"。
 3. **工具输出省略**（`packages/core/src/agent/context.ts` 的 `toProviderMessages`）：每次构造请求时在省略预算内从最新往回保留工具结果，装不下的换成一行占位文字，防止一次运行内的多次工具调用把上下文撑爆。
 
 外围还有三件配套物：`session_search` 工具（检索函数 `packages/core/src/tools/session-search.ts`，直接扫会话事件流）负责"找得回来"；手动压缩（`RunManager.compactSession` + HTTP/CLI/web 三个入口）负责"人能主动压"；压缩审计（事件流里的 `compaction` 事件）负责"压过之后查得到"。调模型与写盘的编排全部在 server 侧，core 只提供可独立测试的纯函数。
@@ -203,7 +203,7 @@ m1  m2  m3 │ m4  m5  m6  m7 │ m8 … m12
 - docs/core 有四篇文档要更新
 
 ## 文件与命令
-- packages/server/src/run.ts — 现有压缩实现 #compactV2
+- packages/core/src/session/compactor.ts — 压缩引擎 Compactor.compact
 - packages/core/src/agent/context.ts — 请求构造函数 toProviderMessages
 ```
 
@@ -280,7 +280,7 @@ llm.stream({ system: <人格>, messages: [
 
 ## 会话检索（session_search）
 
-- **检索函数**（`packages/core/src/tools/session-search.ts` 的 `searchSessionEvents`，纯函数）：每次调用现读会话完整事件流（server 侧 `#buildSessionSearch` 经 `SessionStore.readEvents` 读入），只对压缩段做匹配——对每条 `compaction` 事件，取它覆盖的段区间（`(上一段 upto, 本段 upto]` 内的 `message` 事件，按相邻 `upto` 划分、每条消息只归属一段），把 query 对该段消息块做**朴素包含匹配**（`JSON.stringify(blocks)` 的子串判断，不切词、不建索引），命中归到该压缩事件的段摘要；`compaction` 事件的 `upto` 在流里找不到则跳过该段（不误扫整条流）；没有 `compaction` 事件或没有命中返回空。
+- **检索函数**（`packages/core/src/tools/session-search.ts` 的 `searchSessionEvents`，纯函数）：每次调用现读会话完整事件流（run 装配侧的 `buildSessionSearch` 经 `SessionStore.readEvents` 读入），只对压缩段做匹配——对每条 `compaction` 事件，取它覆盖的段区间（`(上一段 upto, 本段 upto]` 内的 `message` 事件，按相邻 `upto` 划分、每条消息只归属一段），把 query 对该段消息块做**朴素包含匹配**（`JSON.stringify(blocks)` 的子串判断，不切词、不建索引），命中归到该压缩事件的段摘要；`compaction` 事件的 `upto` 在流里找不到则跳过该段（不误扫整条流）；没有 `compaction` 事件或没有命中返回空。
 - **工具**（`packages/core/src/tools/session.ts` 的 `createSessionTools`）：
 
 | 项 | 值 |
@@ -291,13 +291,13 @@ llm.stream({ system: <人格>, messages: [
 | 输出 | 每个命中一行 `- <段摘要>` 加缩进的文本片段（该段消息块序列化文本的前 200 字符） |
 | 无内容 | 会话没有压缩段、或没有命中时返回 `(无可检索内容)` |
 
-工具始终注册（工具列表不随会话状态变化，未注入检索函数时同样返回 `(无可检索内容)`）；检索函数由 server 每个 run 懒构造（`#buildSessionSearch`），每次调用现读该会话事件流，没有需要维护或重建的持久索引。
+工具始终注册（工具列表不随会话状态变化，未注入检索函数时同样返回 `(无可检索内容)`）；检索函数由 run 装配（core `executeRun`）每个 run 懒构造（`buildSessionSearch`），每次调用现读该会话事件流，没有需要维护或重建的持久索引。
 
 ---
 
 ## 手动压缩（/compact）
 
-不看触发线，立即对当前历史执行一次压缩——与自动压缩走同一条代码路径（`RunManager.compactSession` 内部调 `#compactV2`，`manual: true`）。三个入口：
+不看触发线，立即对当前历史执行一次压缩——与自动压缩走同一条代码路径（`RunManager.compactSession` 内部调 core `Compactor.compact`，`manual: true`）。三个入口：
 
 - **HTTP**：`POST /sessions/:id/compact`，请求体可选 `{ "focus": "重点保留什么的一段说明" }`（见 [http-api](../server/http-api.md)）。
 - **CLI**：`/compact [重点说明]`，转发到上述接口（`packages/cli/src/slash.ts`）。
@@ -356,6 +356,6 @@ llm.stream({ system: <人格>, messages: [
 - [storage](./storage.md)：会话目录布局、events.jsonl 事件流与 meta 投影、JSONL 的追加/断尾修复、config 字段定义
 - [agent-loop](./agent-loop.md)：`toProviderMessages` 的窗口与预算驱动省略、循环的压缩视图与两个压缩钩子、超限重试、window 200 的兜底位置
 - [tools](./tools.md)：session_search 在工具体系中的注册与 safe/parallel 语义
-- [run-manager](../server/run-manager.md)：`#compactV2` 编排、四触发点的服务端装配、`cancelCompaction`、收尾压缩的串行化
+- [run-manager](../server/run-manager.md)：`Compactor` 的四触发点编排（收尾/中途/超限在 run 装配、手动在 compactSession）、`cancelCompaction`、收尾压缩的串行化
 - [http-api](../server/http-api.md)：`POST /sessions/:id/compact`、`GET /sessions/:id/compactions` 与 `GET /sessions/:id/events`
 - [webui](../web/webui.md)：压缩指示行与取消按钮、折叠上下文条、审计页事件流里的"压缩"行

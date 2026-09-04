@@ -1,130 +1,50 @@
 /**
- * RunManager — the daemon-side assembly of one runAgent invocation.
+ * RunManager — the daemon-side QUEUE STATE MACHINE (card ① engine relocation).
  *
- * `enqueue` is the send_message pipeline: per-session serialization, memory
- * note injection onto a caller-persisted user message, AGENTS.md system
- * prompt, builtin tools, a permission gate, event bus fan-out and JSONL
- * persistence — the composition proven by the integration smoke test, now
- * owned by the server.
+ * `submit` is the send_message pipeline's synchronous front door: per-session
+ * ordering (queue + steer buffer), persistence of queue.jsonl, per-session
+ * drive loop. For each dequeued entry it hands off to the ENGINE —
+ * `executeRun` in @kclaw/core (agent/run-assembly.ts) — which owns the
+ * assembly of one runAgent invocation: memory note injection, AGENTS.md
+ * system prompt, builtin tools, a permission gate, event bus fan-out and
+ * JSONL persistence.
  *
- * Composition choices pinned here:
- * - History is read BEFORE the user message is appended: runAgent places its
- *   user message after `history` (`[...input.history, userMsg]`), so it must
- *   not already contain it (would double-send the text to the provider).
- * - The user message is built here as a text-only skeleton and passed via
- *   `RunInput.userMessage`; runAgent uses it verbatim and does NOT re-persist
- *   it. Its note blocks (job provenance + memory notes) are appended — and
- *   the finished message appended to the session log — inside the run's
- *   `onUserMessage` hook, landing between the loop's
- *   message.created and message.completed so the bus carries the wire order
+ * Handoff contract pinned here:
+ * - The AbortController is created and registered in `#executeEntry` BEFORE
+ *   any await (no cancellation window); the engine only consumes its signal.
+ * - The steer buffer is queue state, so the engine drains it through the
+ *   `drainSteer` callback handed over per run.
+ * - History is read BEFORE the user message is appended (inside the engine —
+ *   runAgent places its user message after `history`), and the user message
+ *   is persisted inside the run's `onUserMessage` hook so the bus carries
  *   run.started → message.created → note.emitted ×N → message.completed.
  */
-import { readFileSync } from "node:fs"
-import { join } from "node:path"
 import {
-  chooseBoundary,
-  collectStreamText,
-  ConfigPermissionGate,
-  createBuiltinTools,
-  emergencyBoundary,
-  estimateContextTokens,
+  Compactor,
+  ConfirmationBroker,
+  executeRun,
   makeEvent,
-  matchSkillInvocations,
+  mountAttachments,
   newBlockId,
   newId,
   newMessage,
-  realpathWithin,
-  renderSegment,
-  runAgent,
-  scanSkillDirs,
-  searchSessionEvents,
-  skillListPrompt,
-  withLastUserText,
-  wrapSkillInvocations,
+  type EnqueueInput,
+  type EventBus,
+  type KclawConfig,
+  type KclawPaths,
+  type LlmClient,
+  type LlmRetrySink,
+  type MemorySystem,
+  type Message,
+  type NoteBlock,
+  type QueueEntry,
+  type RunEngine,
+  type RunOutcome,
+  type SessionStore,
+  type ToolDefinition,
+  type ToolExecutor,
+  type UsageStore,
 } from "@kclaw/core"
-import type {
-  ActiveSummary,
-  AgentEvent,
-  AttachmentBlock,
-  AttachmentRef,
-  CompactionPhase,
-  CompactionState,
-  KclawConfig,
-  KclawPaths,
-  LlmClient,
-  MemorySystem,
-  Message,
-  NoteBlock,
-  PermissionGate,
-  ProviderMessage,
-  QueueEntry,
-  RunOutcome,
-  SessionSearchFn,
-  SessionStore,
-  ToolCallBlock,
-  ToolExecutor,
-  ToolDefinition,
-  UsageStore,
-} from "@kclaw/core"
-import type { EventBus } from "./bus.js"
-import { ConfirmationBroker, type ConfirmationResolution } from "./confirm.js"
-import { scheduleAutoname } from "./autoname.js"
-
-/** System prompt fallback when ~/.kclaw/AGENTS.md is missing or empty. */
-const DEFAULT_SYSTEM_PROMPT = "你是 kclaw，一个务实的个人助理。"
-
-/** How many chars of the user text feed the memory lookup. */
-const MEMORY_QUERY_CHARS = 200
-/** Top-N memory notes injected onto the user message. */
-const MEMORY_LIMIT = 5
-
-/** Segment summarizer prompt (spec 6.2.2, verbatim-pinned). */
-const SEGMENT_SUMMARY_PROMPT =
-  "你是对话摘要器。把给定的一段对话（可能包含工具调用与结果）压缩为不超过800字的中文摘要，使用以下固定五个二级标题的 markdown 结构：## 关键事实、## 用户偏好与约定、## 已做决定、## 未完成事项、## 文件与命令。\"文件与命令\"一栏只记路径或命令加一句话要点，不要复制文件内容。同一栏目内每条一行。直接输出摘要正文，不要任何前后缀。"
-
-/** Top-summary merge prompt (spec 6.2.3, verbatim-pinned). */
-const MERGE_SUMMARY_PROMPT =
-  "你是对话摘要归并器。输入是旧的总摘要和一个新的段摘要，两者都是同样五栏结构的 markdown。把它们归并为一份新的总摘要：保持同样的五个二级标题；同一栏目内合并去重；同一事项有先后版本时保留新版本，并注明被推翻的旧版本；总长不超过800字。直接输出摘要正文，不要任何前后缀。"
-
-/** Text-like MIME/exif: inlined into context when small enough. */
-const TEXT_MIME = /^text\//
-const TEXT_EXT = /\.(md|txt|json|csv|yaml|yml|xml|log|ts|js|tsx|jsx|py|go|rs|sh|toml|ini|env)$/i
-/** Cap for inlining a text attachment into the prompt (chars). */
-const TEXT_INLINE_MAX_CHARS = 8 * 1024
-/** Cap for reading a text attachment off disk (bytes). */
-const TEXT_INLINE_MAX_BYTES = 64 * 1024
-/** Cap for embedding an image as base64 (bytes). */
-const IMAGE_INLINE_MAX_BYTES = 5 * 1024 * 1024
-
-/**
- * Turn attachment references into attachment blocks on the user message.
- * Decision per file: text-like and small → inline text (capped); image and
- * small → base64 source (multimodal parts); anything else → metadata only,
- * the agent reads it on demand via fs_read. Any path outside the session's
- * attachments dir is rejected (defense in depth — the caller validates too).
- */
-function mountAttachments(refs: AttachmentRef[], attachmentsDir: string, sessionId: string): AttachmentBlock[] {
-  const blocks: AttachmentBlock[] = []
-  for (const ref of refs) {
-    const root = realpathWithin(join(attachmentsDir, sessionId))
-    const resolved = realpathWithin(ref.path)
-    if (resolved !== root && !resolved.startsWith(root + "/")) {
-      throw new Error(`attachment outside the session's attachments dir: ${ref.path}`)
-    }
-    const isText = TEXT_MIME.test(ref.mimeType) || TEXT_EXT.test(ref.name)
-    const isImage = ref.mimeType.startsWith("image/")
-    if (isText && ref.size <= TEXT_INLINE_MAX_BYTES) {
-      let text = readFileSync(resolved, "utf8")
-      if (text.length > TEXT_INLINE_MAX_CHARS) text = `${text.slice(0, TEXT_INLINE_MAX_CHARS)}\n…[已截断]`
-      blocks.push({ id: newBlockId(), type: "attachment", mimeType: ref.mimeType, name: ref.name, text, source: { type: "file", path: resolved } })
-    } else if (isImage && ref.size <= IMAGE_INLINE_MAX_BYTES) {
-      blocks.push({ id: newBlockId(), type: "attachment", mimeType: ref.mimeType, name: ref.name, source: { type: "base64", data: readFileSync(resolved).toString("base64") } })
-    } else {
-      blocks.push({ id: newBlockId(), type: "attachment", mimeType: ref.mimeType, name: ref.name, source: { type: "file", path: resolved } })
-    }
-  }
-  return blocks
-}
 
 export interface RunManagerDeps {
   config: KclawConfig
@@ -187,33 +107,8 @@ export interface RunManagerDeps {
   readonly?: boolean
 }
 
-/** One queued run request. */
-export interface EnqueueInput {
-  userText: string
-  trigger: "user" | "job"
-  /**
-   * Per-run model override (a job's configured model, or a client-forced
-   * one). Priority per run: input.model > session meta model > daemon
-   * default. Absent → the daemon default applies.
-   */
-  model?: string
-  /**
-   * Attachments to mount onto the user message: references to files
-   * already uploaded under `<home>/attachments/<sessionId>/` (validated
-   * by the caller and defensively re-checked here).
-   */
-  attachments?: AttachmentRef[]
-  /**
-   * Job provenance note: when the scheduler fires a job, the tick
-   * passes the 「本会话由定时任务…」 line here and it lands as a kind:"job"
-   * note block right after the text block on the user message.
-   */
-  note?: string
-  /** 单次显式处置（spec §6 层级最高）；缺省 = 会话覆盖 ?? 配置默认；job 触发强制 wait。 */
-  disposition?: "steer" | "wait" | "interrupt"
-  /** 内部：出队执行时传入的预分配消息 id（ws 层不传）。 */
-  messageId?: string
-}
+/** One queued run request lives in core now (the engine's input shape). */
+export type { EnqueueInput } from "@kclaw/core"
 
 /** submit 的同步决策结果：消息身份、是否入队与实际生效处置（降级后）。 */
 export interface SubmitResult {
@@ -230,7 +125,7 @@ export interface SubmitResult {
 }
 
 /** withRetry's per-attempt notification shape (core provider/retry.ts onRetry). */
-export type LlmRetrySink = (info: { attempt: number; error: unknown }) => void
+export type { LlmRetrySink } from "@kclaw/core"
 
 /**
  * One in-memory queue node: the persisted entry plus its settle plumbing.
@@ -260,40 +155,6 @@ function makeNode(entry: QueueEntry): QueueNode {
   return { entry, resolve, reject, outcome }
 }
 
-/**
- * Mirror of the loop's raceConfirmation (core agent/loop.ts): a human
- * resolver raced against the same confirmTimeoutMs timer and the run's abort
- * signal. On a timeout the LOOP synthesizes `{approved: false, by:
- * "timeout"}` itself and never settles the human promise, so the resolver
- * alone would never fire the broker-expire that marks the entry stale.
- * Racing here keeps this adapter's view of the resolution semantically
- * identical to the one the loop acted on (same timeout on both sides yields
- * the same value; a human verdict that wins here also wins there), and a
- * losing late verdict is discarded by the settled race.
- */
-function raceResolution(
-  p: Promise<ConfirmationResolution>,
-  ms: number,
-  signal: AbortSignal,
-): Promise<ConfirmationResolution | "aborted"> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const sleep = new Promise<ConfirmationResolution>((resolve) => {
-    timer = setTimeout(() => resolve({ approved: false, by: "timeout" }), ms)
-  })
-  let onAbort = () => {}
-  const abort = new Promise<"aborted">((resolve) => {
-    if (signal.aborted) resolve("aborted")
-    else {
-      onAbort = () => resolve("aborted")
-      signal.addEventListener("abort", onAbort, { once: true })
-    }
-  })
-  return Promise.race([p, sleep, abort]).finally(() => {
-    if (timer !== undefined) clearTimeout(timer)
-    signal.removeEventListener("abort", onAbort)
-  })
-}
-
 export class RunManager {
   /** 每会话排队 + steer 缓冲合计上限（spec §5.5）；先写死，不做配置项。 */
   static readonly QUEUE_LIMIT = 10
@@ -310,19 +171,26 @@ export class RunManager {
   /** 活动 run 的 outcome：steer 的参考 outcome / 降级时序。 */
   readonly #activeOutcomes = new Map<string, Promise<RunOutcome>>()
   /**
-   * 每会话压缩取消标记（spec 5.3 第 6 条）：cancelCompaction 写入，压制本次
-   * 运行内的全部自动压缩（中途/收尾）；每次 #execute 开头清除——取消只作用于
-   * 当时那次运行，新运行从干净状态恢复。
+   * 压缩引擎（core Compactor，card ① 迁入）：两段摘要调用、事件对、审计写盘
+   * 与每会话取消状态都在那里；本类只转发 cancelCompaction 并在 run 钩子里调用。
    */
-  readonly #compactionCancelled = new Set<string>()
-  /** 每会话在飞的自动压缩 controller：cancelCompaction 掐它；finally 清理。 */
-  readonly #compactionCtrl = new Map<string, AbortController>()
+  readonly #compactor: Compactor
   /** Confirmation gateway shared by every run; injected or internally constructed. */
   readonly #broker: ConfirmationBroker
+  /** The engine bundle handed to core's executeRun for every dequeued entry. */
+  readonly #engine: RunEngine
 
   constructor(deps: RunManagerDeps) {
     this.#deps = deps
+    this.#compactor = new Compactor({
+      sessions: deps.sessions,
+      emit: (e) => deps.bus.emit(e),
+    })
     this.#broker = deps.broker ?? new ConfirmationBroker()
+    this.#engine = {
+      deps: { ...deps, broker: this.#broker },
+      compactor: this.#compactor,
+    }
   }
 
   /** The confirmation gateway this manager's runs answer through (WS/CLI verdicts land here). */
@@ -408,10 +276,7 @@ export class RunManager {
    * 顺序。与 queue.jsonl 同构，供队列查询/恢复使用。
    */
   queue(sessionId: string): QueueEntry[] {
-    return [
-      ...(this.#queues.get(sessionId) ?? []).map((n) => n.entry),
-      ...(this.#steerBuf.get(sessionId) ?? []),
-    ]
+    return this.#queueEntries(sessionId)
   }
 
   /**
@@ -427,19 +292,13 @@ export class RunManager {
   }
 
   /**
-   * 取消自动压缩（spec 5.3 第 6 条，Task 8 的 ws 层调用）：abort 在飞的压缩
-   * controller（#compactV2 的取消分支吞掉中止，发 completed result:"cancelled"），
-   * 同时写 #compactionCancelled 标记——本次 #execute 内后续的中途/收尾压缩
-   * 钩子据此直接跳过；标记在下一次 #execute 开头清除，新运行恢复正常压缩。
-   * 返回：调用时刻是否存在在飞的压缩（false = 没什么可掐，但标记仍写入，
-   * 压制本次运行内尚未发生的自动压缩）。
+   * 取消自动压缩（spec 5.3 第 6 条，Task 8 的 ws 层调用）：转发给 core 的
+   * Compactor——abort 在飞的压缩 controller，同时写取消标记压制本次 run 内
+   * 后续的中途/收尾压缩；标记在下一次 run 装配（core executeRun）开头清除。返回：调用时刻
+   * 是否存在在飞的压缩（false = 没什么可掐，但标记仍写入）。
    */
   cancelCompaction(sessionId: string): boolean {
-    this.#compactionCancelled.add(sessionId)
-    const ctrl = this.#compactionCtrl.get(sessionId)
-    if (ctrl === undefined) return false
-    ctrl.abort()
-    return true
+    return this.#compactor.cancel(sessionId)
   }
 
   /**
@@ -504,7 +363,7 @@ export class RunManager {
     const history = sessions.readMessages(sessionId)
     const defaultModel = this.#deps.model ?? config.providers.entries[config.providers.default]?.model ?? ""
     const model = config.providers.entries[meta.model ?? ""]?.model ?? meta.model ?? defaultModel
-    const out = await this.#compactV2(sessionId, history, "", config, llm, model, { focus, manual: true, phase: "manual" })
+    const out = await this.#compactor.compact(sessionId, history, "", config, llm, model, { focus, manual: true, phase: "manual" })
     return {
       message: out.compacted
         ? `压缩了 ${out.segments} 段，剩 ${out.active.length} 条原文消息`
@@ -620,13 +479,22 @@ export class RunManager {
     }, { sessionId }))
   }
 
-  /** queue.jsonl = 可执行条目 + steer 缓冲，数组顺序即执行顺序（spec §3.2）；空数组写空文件。 */
-  #persistQueue(sessionId: string): void {
-    const entries = [
+  /**
+   * The queue view (executable entries then steer buffer, in run order) —
+   * the single expression both the in-memory mirror (`queue`) and the
+   * queue.jsonl persistence (`#persistQueue`) derive from, so the two can
+   * never drift (spec §3.2).
+   */
+  #queueEntries(sessionId: string): QueueEntry[] {
+    return [
       ...(this.#queues.get(sessionId) ?? []).map((n) => n.entry),
       ...(this.#steerBuf.get(sessionId) ?? []),
     ]
-    this.#deps.sessions.replaceQueue(sessionId, entries)
+  }
+
+  /** queue.jsonl = 可执行条目 + steer 缓冲，数组顺序即执行顺序（spec §3.2）；空数组写空文件。 */
+  #persistQueue(sessionId: string): void {
+    this.#deps.sessions.replaceQueue(sessionId, this.#queueEntries(sessionId))
   }
 
   /**
@@ -646,7 +514,12 @@ export class RunManager {
       ...(entry.note !== undefined ? { note: entry.note } : {}),
       messageId: entry.messageId,
     }
-    const execution = this.#execute(sessionId, input, controller)
+    const execution = executeRun(this.#engine, {
+      sessionId,
+      input,
+      controller,
+      drainSteer: () => this.#drainSteer(sessionId),
+    })
     this.#activeOutcomes.set(sessionId, execution)
     try {
       return await execution
@@ -654,342 +527,6 @@ export class RunManager {
       if (this.#active.get(sessionId) === controller) this.#active.delete(sessionId)
       this.#activeOutcomes.delete(sessionId)
     }
-  }
-
-  async #execute(sessionId: string, input: EnqueueInput, controller: AbortController): Promise<RunOutcome> {
-    // controller 由 #executeEntry 在任何 await 之前创建并登记（spec §5.2）：
-    // 出队执行的取消窗口与活动清理都在那里，这里只消费它的 signal。
-    // 压缩取消标记只压制一次运行（spec 5.3 第 6 条）：新运行从干净状态开始。
-    this.#compactionCancelled.delete(sessionId)
-    const { config, paths, sessions, memory, bus, llm } = this.#deps
-    const sessionMeta = sessions.meta(sessionId)
-    const workspace = sessionMeta?.workdir ?? this.#deps.workspace
-
-    // Memory injection: the leading 200 chars of the user text look up the
-    // top-5 episodes via the v2 MemorySystem facade and land as kind:"memory"
-    // notes on the user message. Memory is an accelerator — a failing search
-    // must never block the run, so misses/errors just mean no notes.
-    const notes: NoteBlock[] = []
-    try {
-      for (const hit of await memory.searchEpisodes(workspace, input.userText.slice(0, MEMORY_QUERY_CHARS), MEMORY_LIMIT)) {
-        notes.push({ id: newBlockId(), type: "note", kind: "memory", text: `相关经历（${hit.title}）: ${hit.text}` })
-      }
-    } catch {
-      // ignore: run without memory context
-    }
-
-    // History BEFORE the append (runAgent appends the user message itself).
-    // The user message starts as a text-only SKELETON: its note blocks (job
-    // provenance first, memory notes after) are appended inside
-    // the run's onUserMessage hook, right after the loop announced the
-    // skeleton via message.created, so the bus carries the wire order
-    // run.started → message.created → note.emitted ×N → message.completed,
-    // with the note events (inside the hook) trailing the JSONL append —
-    // the persist happens first, then the notes are announced.
-    const history = sessions.readMessages(sessionId)
-    const jobNote: NoteBlock[] =
-      input.note === undefined
-        ? []
-        : [{ id: newBlockId(), type: "note", kind: "job", text: input.note }]
-    const userMessage = newMessage(sessionId, "user", [
-      { id: newBlockId(), type: "text", text: input.userText },
-      ...mountAttachments(input.attachments ?? [], paths.attachmentsDir, sessionId),
-    ])
-    if (input.messageId !== undefined) userMessage.id = input.messageId // 气泡原地升级（spec §3.1）
-
-    // 技能目录每 run 重扫（渐进披露第一层）：全局 + 会话工作目录的项目级，
-    // 项目同名整目录覆盖。列表段追加进系统提示词，与 system 审计事件同文；
-    // skill_read 工具持有同一份扫描结果（第二层，按需取正文）。
-    const skills = scanSkillDirs({
-      global: paths.skillsDir,
-      project: join(workspace, ".kclaw", "skills"),
-    })
-
-    // 技能点名的隐式包装（Master 2026-09-03）：用户消息里任意位置的 /技能名
-    // 记号精确命中已装且用户可调用的技能时，只在发给模型的那份输入上追加
-    // 一行调用指示——持久化、事件流与气泡保持原始文本（所见即所发）。
-    // 仅 trigger:user 生效：job 提示是 daemon 生成的内部指令，不参与点名。
-    const llmUserText =
-      input.trigger === "user"
-        ? wrapSkillInvocations(input.userText, matchSkillInvocations(input.userText, skills))
-        : undefined
-
-    const { tools, toolDefs } = createBuiltinTools({
-      workspace,
-      memoryCtx: {
-        system: memory,
-        sessionId,
-        workdir: workspace,
-        immediateEnabled: config.memory.write.immediate,
-      },
-      tavilyApiKey: config.web.tavilyApiKey,
-      exec: { timeoutMs: config.exec.timeoutMs, maxOutputBytes: config.exec.maxOutputBytes },
-      web: { timeoutMs: config.web.timeoutMs, allowPrivateNetworks: config.web.allowPrivateNetworks },
-      sessionSearch: this.#buildSessionSearch(sessionId, history),
-      skills,
-    })
-    // test/adapter seam: per-name executor overrides on top of the
-    // builtins; toolDefs stay the builtins' — an override replaces behavior,
-    // not the schema the model sees.
-    if (this.#deps.tools !== undefined) {
-      for (const [name, executor] of this.#deps.tools) tools.set(name, executor)
-    }
-    // Live adapter tools (MCP manager): defs appended, executor wins on a
-    // name collision with a log line (schema follows the executor).
-    if (this.#deps.extraTools !== undefined) {
-      const extra = this.#deps.extraTools()
-      for (const [name, executor] of extra.executors) {
-        if (tools.has(name)) console.error(`kclaw tool name collision: ${name} (adapter overrides builtin)`)
-        tools.set(name, executor)
-      }
-      toolDefs.push(...extra.defs)
-    }
-
-    // --- permission wiring (config gate + confirmation gateway) ---
-    const pendingConfirmations = new Map<string, ToolCallBlock>()
-
-    const baseGate = new ConfigPermissionGate(config.permissions, {
-      workspace,
-      safeTools: new Set([...tools].filter(([, t]) => t.risk === "safe").map(([name]) => name)),
-      // Attachment reads: files under <home>/attachments are the daemon's own
-      // uploaded inputs — fs_read/fs_list reach them without a confirmation.
-      readRoots: [paths.attachmentsDir],
-      // Readonly: the daemon-level flag OR this session's own toggle.
-      readonly: this.#deps.readonly === true || sessionMeta?.readonly === true,
-    })
-    const confirmTimeoutMs = config.permissions.confirmTimeoutMs
-    const broker = this.#broker
-    const gate: PermissionGate = {
-      async check(toolCall) {
-        const decision = await baseGate.check(toolCall)
-        if (decision.type === "confirm") {
-          pendingConfirmations.set(decision.confirmationId, toolCall)
-          // Gateway registration under the gate-issued id (the loop echoes it
-          // in its confirmation.requested event, which is what a WS client
-          // resolves against). Purely registration — the loop emits the event
-          // itself; the broker never emits.
-          broker.create(
-            decision.confirmationId,
-            toolCall,
-            tools.get(toolCall.name)?.risk ?? "sensitive",
-            confirmTimeoutMs,
-            sessionId,
-          )
-        }
-        return decision
-      },
-    }
-
-    // Confirmation answering: deps' direct resolver when wired (test seam),
-    // else the broker's pending promise (the daemon path: WS/CLI verdicts
-    // settle it). The resolver is raced against the SAME timeout the loop
-    // races against (raceResolution above). Whenever the race settles WITHOUT
-    // a human verdict (timeout/abort), the broker entry goes stale so a late
-    // gateway resolve reports "unknown confirmation" instead of acking a
-    // verdict nothing will act on.
-    const baseResolver =
-      this.#deps.resolveConfirmation ?? ((confirmationId: string) => broker.wait(confirmationId))
-    const resolveConfirmation = async (confirmationId: string): Promise<ConfirmationResolution> => {
-      const raced = await raceResolution(baseResolver(confirmationId), confirmTimeoutMs, controller.signal)
-      if (raced === "aborted") {
-        pendingConfirmations.delete(confirmationId)
-        broker.expire(confirmationId)
-        // the value is never used: the loop's own race resolved "aborted" and
-        // denies without consulting the resolver
-        return { approved: false, by: "timeout" }
-      }
-      pendingConfirmations.delete(confirmationId)
-      if (raced.by === "timeout") broker.expire(confirmationId)
-      return raced
-    }
-
-    // --- retry visibility --------------------------------------------------------
-    // Provider-level retries live inside the llm wrapper (withRetry), where
-    // the loop cannot see them. When deps.llmForRun is set, the wrapper's
-    // onRetry lands in THIS closure: each notification becomes an
-    // `llm.failed {willRetry:true}` event on the bus (so clients can tell a
-    // hung call from a backoff), and advances the attempt counter the loop's
-    // llm.started reads via AgentDeps.llmAttempt. The counter is per llm
-    // call — a completed/failed call resets it, so the next iteration's
-    // llm.started reports a fresh attempt 1. The runId is learned from the
-    // loop's own run.started (always a run's first event, emitted before any
-    // stream — and therefore before any retry — can start).
-    let runId: string | undefined
-    let llmAttempt = 1
-    const busEmit = (e: AgentEvent): void => {
-      try {
-        bus.emit(e)
-      } catch {
-        // one broken subscriber must not kill the run — bus.emit already
-        // guards each socket individually; this guard covers the remaining
-        // synchronous work in emit, e.g. JSON.stringify
-      }
-    }
-    const onLlmRetry: LlmRetrySink = (info) => {
-      llmAttempt = info.attempt + 1
-      busEmit(makeEvent("llm.failed", {
-        error: {
-          code: "llm_retry",
-          message: String((info.error as { message?: string } | null | undefined)?.message ?? info.error),
-        },
-        willRetry: true,
-      }, runId === undefined ? { sessionId } : { sessionId, runId }))
-    }
-    const runLlm = this.#deps.llmForRun?.(onLlmRetry) ?? llm
-    const defaultModel = this.#deps.model ?? config.providers.entries[config.providers.default]?.model ?? ""
-    // A session/job model may name a provider ENTRY ("deepseek") whose wire
-    // model is the entry's `.model` ("deepseek-v4-flash"); resolve keys to that
-    // model, leaving already-raw API model names untouched.
-    const resolveEntry = (m: string): string => config.providers.entries[m]?.model ?? m
-    const model = resolveEntry(input.model ?? sessionMeta?.model ?? defaultModel)
-
-    // --- v3 compaction triggers (spec 5.1-5.3, 5.8) -------------------------
-    // 发消息零压缩（开场预压缩已删除）。三条触发路径全部由 server 注入：
-    // 中途（迭代边界水位 ≥ 红线，经循环钩子）、超限（onContextOverflow 急救）、
-    // 收尾（runAgent 返回后水位 ≥ 黄线）。水位锚定最后一条 assistant 的真实
-    // usage，黄/红两线的读点集中在此。
-    const budget = config.sessions.contextTokens ?? 128_000
-    const atRatio = config.sessions.compactAtRatio ?? 0.66
-    const panicRatio = config.sessions.compactPanicRatio ?? 0.85
-
-    // 系统提示词审计事件（第 9 种持久化事件）：拼装完成后、进入模型循环前把
-    // 全量文本落盘一条 system 事件。每 run 恰好一条——steer 注入与 run 内多次
-    // 模型调用复用同一份提示词，不重复记录；不加幻影会话守卫（与消息写入一致），
-    // 也不吞错：写入失败即本次 run 失败，由驱动器的条目级失败兜底。
-    const system = this.#systemWithCognition(paths.agentsMd, workspace, skillListPrompt(skills))
-    sessions.appendSystem(sessionId, { at: new Date().toISOString(), text: system })
-
-    const outcome = await runAgent(
-      {
-        sessionId,
-        history,
-        system,
-        userText: input.userText, // ignored by the loop when userMessage is set
-        trigger: input.trigger,
-        userMessage,
-        // 运行起点的压缩视图（来自会话 meta）：upto（含）之前的原文不再发送，
-        // 脉络项由打包台垫在 messages[0]。
-        ...(sessionMeta?.compaction !== undefined
-          ? { compaction: { upto: sessionMeta.compaction.upto, top: sessionMeta.compaction.top } }
-          : {}),
-      },
-      {
-        llm: runLlm,
-        model,
-        tools,
-        toolDefs,
-        permissions: gate,
-        resolveConfirmation,
-        confirmTimeoutMs,
-        signal: controller.signal,
-        llmAttempt: () => llmAttempt,
-        // 模型视图改写钩子（LLM 执行前）：技能点名的隐式包装在这里生效——
-        // 只改发给模型的消息，持久化/事件流/气泡保持用户原文；未命中为
-        // undefined，行为与从前完全一致。
-        ...(llmUserText === undefined
-          ? {}
-          : { mapLlmMessages: (msgs: ProviderMessage[]) => withLastUserText(msgs, llmUserText) }),
-        toolResultKeep: config.sessions.toolResultKeep ?? 8,
-        // 省略预算（黄线值）透传给打包台：预算装不下的工具输出以省略占位符发送
-        tokenBudget: budget * atRatio,
-        // steer 注入口（spec §5.1）：迭代边界取走缓冲区；Task 5 实装，本任务恒为空。
-        steering: () => this.#drainSteer(sessionId),
-        // 中途压缩钩子（spec 5.3 第 5 条）：取消标记或 run 已中止 → 不压；
-        // 水位 < 红线 → 不压；否则独立可取消地压缩，返回新视图（下一次请求生效）。
-        midRunCompaction: () => {
-          if (this.#compactionCancelled.has(sessionId) || controller.signal.aborted) return Promise.resolve(null)
-          const boundaryHistory = sessions.readMessages(sessionId)
-          if (estimateContextTokens(boundaryHistory) < budget * panicRatio) return Promise.resolve(null)
-          return this.#runAutoCompaction(sessionId, boundaryHistory, config, runLlm, model, {
-            phase: "in-run",
-            signal: controller.signal,
-          })
-        },
-        // 超限急救钩子（spec 5.6）：不看水位线——"已经爆了"就是事实；emergency
-        // 压缩成功返回新视图由循环整次重发。await 归来时 run 已中止则返回 null
-        // （窄窗口：重发注定立刻被拆，不再多此一举）。
-        onContextOverflow: async () => {
-          const next = await this.#runAutoCompaction(sessionId, sessions.readMessages(sessionId), config, runLlm, model, {
-            phase: "in-run",
-            emergency: true,
-            signal: controller.signal,
-          })
-          return controller.signal.aborted ? null : next
-        },
-        onUserMessage: (m) => {
-          // The notes become part of the message BEFORE it is
-          // persisted and completed. Persist first (events trail persisted
-          // state), then announce each note — the loop's message.completed
-          // follows, so the wire order stays
-          // created → note.emitted ×N → completed. runId is known by now
-          // (run.started is always a run's first event and precedes this
-          // hook); the sessionId-only fallback is defensive only.
-          m.blocks.push(...jobNote, ...notes)
-          sessions.appendMessage(sessionId, m)
-          if (input.trigger !== "job") {
-            const firstText = m.blocks.find((b) => b.type === "text")?.text ?? ""
-            void scheduleAutoname(
-              { sessions, llm: runLlm, model, emit: busEmit },
-              sessionId, firstText,
-            )
-          }
-          const noteCtx = runId === undefined ? { sessionId } : { sessionId, runId }
-          for (const block of [...jobNote, ...notes]) {
-            busEmit(makeEvent("note.emitted", { messageId: m.id, block }, noteCtx))
-          }
-          return m
-        },
-        onEvent: (e) => {
-          if (e.type === "run.started" && e.runId !== undefined) runId = e.runId
-          else if (e.type === "llm.completed" || e.type === "llm.failed") llmAttempt = 1
-          busEmit(e)
-        },
-        onMessage: (m) => sessions.appendMessage(m.sessionId, m),
-      },
-    )
-    // Token usage ledger: a failing record must never affect the run.
-    if (this.#deps.usageStore !== undefined) {
-      try {
-        this.#deps.usageStore.record({
-          sessionId,
-          runId: runId ?? "",
-          model,
-          inputTokens: outcome.totalUsage.inputTokens,
-          outputTokens: outcome.totalUsage.outputTokens,
-          at: new Date().toISOString(),
-        })
-      } catch (err) {
-        console.error("kclaw usage record failed:", err)
-      }
-    }
-    // --- 收尾压缩（v3 触发三路之一，spec 5.1/5.4）-----------------------------
-    // run 正常结束且水位 ≥ 黄线：压缩一次。它在 #execute 内 await，驱动器的
-    // 串行化自动保证"压缩期间新消息排队"（spec 5.4），无需额外忙碌标记；
-    // aborted/error 的 run 不收尾（前者正在被拆，后者刚失败）。取消标记压制
-    // 本次运行内已被用户取消的压缩（spec 5.3 第 6 条）。
-    if (
-      outcome.stopReason !== "aborted" && outcome.stopReason !== "error"
-      && !this.#compactionCancelled.has(sessionId)
-    ) {
-      const postRunHistory = sessions.readMessages(sessionId)
-      if (estimateContextTokens(postRunHistory) >= budget * atRatio) {
-        await this.#runAutoCompaction(sessionId, postRunHistory, config, runLlm, model, {
-          phase: "post-run",
-          signal: controller.signal,
-        })
-      }
-    }
-    // 跟随门禁（spec 4.2）：run 收尾（任何 stopReason）挂起一个 follow 检查；经
-    // MemorySystem 落盘 <projectDir>/state.json（spec 11），daemon 重启后由 memory
-    // scheduler 补查。idleMinutes=0 关闭。挂起失败静默（不影响 run 收尾）。
-    if (config.memory.write.idleMinutes > 0) {
-      try {
-        memory.scheduleFollowCheck?.(sessionId, new Date().toISOString())
-      } catch {
-        // follow 挂起失败不影响 run
-      }
-    }
-    return outcome
   }
 
   /**
@@ -1031,214 +568,5 @@ export class RunManager {
       const oldest = this.#injectedIds.values().next().value
       if (oldest !== undefined) this.#injectedIds.delete(oldest)
     }
-  }
-
-  /**
-   * 自动压缩装配（v3,spec 5.3/5.6/5.8）:中途钩子、超限钩子与收尾压缩共用。
-   * 独立 AbortController 登记 #compactionCtrl（cancelCompaction 掐它），并监听
-   * run 的 signal——run 中止顺带掐压缩;finally 清理。取消标记或 run signal 已
-   * 中止时不开工（三路统一入口,manual 路径不经此——emergency 因此永远不会与
-   * manual 组合)。任何异常打一行 `kclaw compaction (phase) failed:` 后返回
-   * null（钩子侧"压缩失败不补救",真失败的 started/completed 与第一行日志
-   * 已由 #compactV2 发出/记录）。压缩成功返回新视图 { upto, top },水位不够
-   * 或无可压缩边界时 #compactV2 返回 compacted:false → null。
-   */
-  async #runAutoCompaction(
-    sessionId: string,
-    history: Message[],
-    config: KclawConfig,
-    llm: LlmClient,
-    model: string,
-    opts: { phase: CompactionPhase; signal?: AbortSignal; emergency?: boolean },
-  ): Promise<ActiveSummary | null> {
-    if (this.#compactionCancelled.has(sessionId) || opts.signal?.aborted === true) return null
-    const ctrl = new AbortController()
-    this.#compactionCtrl.set(sessionId, ctrl)
-    const onAbort = (): void => { ctrl.abort() }
-    opts.signal?.addEventListener("abort", onAbort, { once: true })
-    try {
-      const out = await this.#compactV2(sessionId, history, "", config, llm, model, {
-        phase: opts.phase,
-        signal: ctrl.signal,
-        ...(opts.emergency === true ? { emergency: true } : {}),
-      })
-      return out.compacted && out.upto !== undefined
-        ? { upto: out.upto, top: out.summary ?? "" }
-        : null
-    } catch (err) {
-      console.error(`kclaw compaction (${opts.phase}) failed:`, err)
-      return null
-    } finally {
-      opts.signal?.removeEventListener("abort", onAbort)
-      if (this.#compactionCtrl.get(sessionId) === ctrl) this.#compactionCtrl.delete(sessionId)
-    }
-  }
-
-  /**
-   * v2 layered compaction (spec 6). Trigger: estimate ≥ budget×ratio, or a
-   * manual focus. Two tool-less LLM calls (segment summary, top merge), then
-   * ONE meta write — no state lands unless both calls succeed, so a throw
-   * anywhere equals "compaction did not happen" and the caller falls back to
-   * the full history. The segment index write and the audit append are
-   * best-effort (logged, never fatal).
-   *
-   * v3 additions: `phase` names the trigger stage (started/completed events
-   * carry it; the audit trigger maps manual → "manual", phase "in-run" →
-   * "in-run", else "auto"), `emergency` flags the over-limit rescue in the
-   * audit record, and `signal` makes both summarizer calls abortable.
-   * completed is GUARANTEED once started has fired: ok on success, "failed"
-   * on a throw (rethrown to the caller — "throw = compaction did not
-   * happen" — and logged here exactly once), "cancelled" when the signal
-   * aborted (swallowed — the run is being torn down, not failing). Below the
-   * water mark or without a boundary, NEITHER event fires (nothing began).
-   */
-  async #compactV2(
-    sessionId: string,
-    history: Message[],
-    userText: string,
-    config: KclawConfig,
-    runLlm: LlmClient,
-    model: string,
-    opts: { focus?: string; manual?: boolean; phase?: CompactionPhase; signal?: AbortSignal; emergency?: boolean } = {},
-  ): Promise<{ summary?: string; upto?: string; segments: number; active: Message[]; compacted: boolean }> {
-    const { sessions } = this.#deps
-    const meta = sessions.meta(sessionId)
-    const prev: CompactionState | undefined = meta?.compaction ??
-      (meta?.compactedSummary !== undefined && meta.compactedUpto !== undefined
-        ? { segments: [], top: meta.compactedSummary, upto: meta.compactedUpto }
-        : undefined)
-    const prevIdx = prev === undefined ? -1 : history.findIndex((m) => m.id === prev.upto)
-    const active = prevIdx >= 0 ? history.slice(prevIdx + 1) : history
-
-    const budget = config.sessions.contextTokens ?? 128_000
-    const atRatio = config.sessions.compactAtRatio ?? 0.66
-    const targetRatio = config.sessions.compactTargetRatio ?? 0.33
-    const manual = opts.manual === true
-    const emergency = opts.emergency === true
-    // 急救豁免黄线细判（spec 5.6）：溢出发生时"已经爆了"就是事实——尤其压缩后
-    // 首请求里 active 没有 assistant 锚点，system/工具定义开销全漏计，估算会明显
-    // 偏低，按黄线拦截会静默放弃急救、run 直接以 error 收场。急救只跳过触发判断，
-    // 后续流程（两次摘要调用、meta 写入、审计、事件）与普通压缩完全一致。
-    if (!manual && !emergency && estimateContextTokens(active, userText) < budget * atRatio) {
-      return { summary: prev?.top, upto: prev?.upto, segments: prev?.segments.length ?? 0, active, compacted: false }
-    }
-
-    let boundary = chooseBoundary(active, { budget, targetRatio })
-    if (boundary === undefined && emergency) {
-      // 预算细判不可信时 chooseBoundary 可能切不出边界——强制退守最小可行
-      // 上下文：只保留最近一轮用户轮次（emergencyBoundary）。
-      const forced = emergencyBoundary(active)
-      if (forced !== undefined) boundary = { keepFrom: forced }
-    }
-    if (boundary === undefined) {
-      return { summary: prev?.top, upto: prev?.upto, segments: prev?.segments.length ?? 0, active, compacted: false }
-    }
-
-    const phase = opts.phase ?? (manual ? "manual" : "post-run")
-
-    // The compaction will really run (two LLM calls ahead): announce it so
-    // subscribed clients can show a "正在压缩…" state. This fires BEFORE
-    // run.started — the pre-run compaction is otherwise a silent multi-second
-    // gap between send and the first run event. From here on a paired
-    // completed is guaranteed, whatever happens next.
-    this.#deps.bus.emit(makeEvent("compaction.started", { phase }, { sessionId }))
-
-    try {
-      const seg = active.slice(0, boundary.keepFrom)
-      const body = renderSegment(seg)
-      const focusLine = opts.focus === undefined ? "" : `\n\n用户特别要求重点保留：${opts.focus}`
-      const segmentSummary = await collectStreamText(runLlm, {
-        model,
-        system: SEGMENT_SUMMARY_PROMPT,
-        messages: [{ role: "user", content: body + focusLine }],
-        tools: [],
-      }, { signal: opts.signal })
-      const mergeInput = prev === undefined ? segmentSummary : `${prev.top}\n\n新的段摘要：\n${segmentSummary}`
-      const top = await collectStreamText(runLlm, {
-        model,
-        system: MERGE_SUMMARY_PROMPT,
-        messages: [{ role: "user", content: mergeInput + focusLine }],
-        tools: [],
-      }, { signal: opts.signal })
-
-      const upto = seg[seg.length - 1]!.id
-      const nextSegments = [...(prev?.segments ?? []), { upto, summary: segmentSummary }]
-      try {
-        sessions.appendCompaction(sessionId, {
-          at: new Date().toISOString(),
-          trigger: manual ? "manual" : phase === "in-run" ? "in-run" : "auto",
-          ...(opts.emergency === true ? { emergency: true } : {}),
-          ...(opts.focus === undefined ? {} : { focus: opts.focus }),
-          // null = the span starts at session start (or the legacy upgrade
-          // point) — only a continuation compaction has a real first id.
-          from: prevIdx >= 0 ? seg[0]!.id : null,
-          upto,
-          messages: seg.length,
-          segmentSummary,
-          top,
-        })
-      } catch (err) {
-        console.error(`kclaw compaction audit (${sessionId}) append failed:`, err)
-      }
-      this.#deps.bus.emit(
-        makeEvent("compaction.completed", { segments: nextSegments.length, kept: active.length - boundary.keepFrom, phase, result: "ok" }, { sessionId }),
-      )
-      return { summary: top, upto, segments: nextSegments.length, active: active.slice(boundary.keepFrom), compacted: true }
-    } catch (err) {
-      // An aborted signal turns any throw into "cancelled": the run is being
-      // torn down, the summarizer call was cut mid-flight — report that (and
-      // swallow: cancellation is not a failure). Everything else is a real
-      // failure: announce it, log it ONCE here, and rethrow — the caller's
-      // "throw = compaction did not happen" contract is unchanged.
-      const cancelled = opts.signal?.aborted === true
-      this.#deps.bus.emit(
-        makeEvent("compaction.completed", { segments: 0, kept: 0, phase, result: cancelled ? "cancelled" : "failed" }, { sessionId }),
-      )
-      if (cancelled) {
-        return { summary: prev?.top, upto: prev?.upto, segments: prev?.segments.length ?? 0, active, compacted: false }
-      }
-      console.error("kclaw compaction failed:", err)
-      throw err
-    }
-  }
-
-  /**
-   * Lazy per-run session_search backing (spec 6.4): reads the session's
-   * event stream on each call and scans its compacted segments via the pure
-   * searchSessionEvents. Legacy-upgrade sessions have no compaction events
-   * yet → always "(无可检索内容)" until the first v2 compaction.
-   */
-  #buildSessionSearch(sessionId: string, history: Message[]): SessionSearchFn {
-    return async (query, limit) => {
-      const events = this.#deps.sessions.readEvents(sessionId)
-      return searchSessionEvents(events, query, limit)
-    }
-  }
-
-  /** AGENTS.md persona when the file exists and is non-empty; default otherwise. */
-  #systemPrompt(agentsMd: string): string {
-    try {
-      const md = readFileSync(agentsMd, "utf8")
-      if (md.trim() !== "") return md
-    } catch {
-      // missing/unreadable AGENTS.md → default persona
-    }
-    return DEFAULT_SYSTEM_PROMPT
-  }
-
-  /**
-   * System prompt = AGENTS.md base + L2 cognition + skills listing（spec 7.1）：
-   * cognitionPrompt 为空或抛错时不追加，回落到纯 base —— 认知注入失败静默跳过，
-   * run 照常进行。extraSection（技能列表）为空串时同样不追加。
-   */
-  #systemWithCognition(agentsMd: string, workspace: string, extraSection = ""): string {
-    const base = this.#systemPrompt(agentsMd)
-    let cognition = ""
-    try {
-      cognition = this.#deps.memory.cognitionPrompt(workspace)
-    } catch {
-      // 认知注入失败静默跳过（spec 7.1）
-    }
-    return [base, cognition, extraSection].filter((s) => s !== "").join("\n\n")
   }
 }

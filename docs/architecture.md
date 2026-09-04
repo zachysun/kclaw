@@ -21,8 +21,8 @@ kclaw 是一个本地常驻的个人 agent：一个 daemon 进程独占全部状
 ```
 kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js）
  │
- ├── @kclaw/core     纯库，agent 引擎（server 与 cli 都依赖它）
- ├── @kclaw/server   daemon：Fastify app + RunManager + 事件总线（依赖 core）
+ ├── @kclaw/core     纯库，agent 引擎（run 装配/压缩引擎/事件总线/确认网关都在这里；server 与 cli 都依赖它）
+ ├── @kclaw/server   daemon：Fastify app + RunManager 队列状态机（依赖 core）
  ├── @kclaw/cli      客户端：REPL / daemon 控制（依赖 core 的类型、ws、commander）
  └── @kclaw/web      客户端：React SPA（依赖 core 的 commands 共享表，vite 独立构建）
 ```
@@ -33,8 +33,8 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 | 包 | 入口 | 内容 |
 |----|------|------|
-| core | `packages/core/src/index.ts` | 入口统一导出 13 个子目录：`protocol/`（消息/块/事件/WS 指令帧/会话事件/ID——线上形状的类型正本，经 `@kclaw/core/protocol` 子路径出口供三端引用）、`provider/`（OpenAI 兼容客户端+重试）、`agent/`（循环+上下文组装+工具契约）、`storage/`（路径/配置/JSONL，即每行一条 JSON 的文本文件；含用量台账 `usage.ts`）、`session/`（SessionStore 与上下文压缩：估算/分界/渲染纯函数、事件溯源存储；`session_search` 直接扫事件流）、`permissions/`（ConfigPermissionGate）、`memory/`（MemorySystem：L1 项目情节 + L2 全局认知 + FTS5/向量索引，见 [memory](./core/memory.md)）、`text/`（共享中文分词器与 FTS 辅助）、`tools/`（11 个内置工具）、`skills/`（技能包解析/双作用域扫描/点名匹配，见 [skills](./core/skills.md)）、`jobs/`（JobScheduler）、`mcp/`（MCP 客户端管理器）、`notify/`（任务完成通知） |
-| server | `packages/server/src/index.ts` | `app.ts`（createApp 装配）、`daemon.ts`（launchDaemon）、`auth.ts`（token）、`bus.ts`（EventBus）、`run.ts`（RunManager）、`confirm.ts`（ConfirmationBroker）、`command-check.ts`（WS 命令帧的唯一校验点）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`、`memory-scheduler.ts`（记忆定时/跟随兜底调度）、`routes/`（sessions/attachments/jobs/config/fs/usage/memory/skills）、`autoname.ts` |
+| core | `packages/core/src/index.ts` | 入口统一导出 13 个子目录：`protocol/`（消息/块/事件/WS 指令帧/会话事件/ID——线上形状的类型正本，经 `@kclaw/core/protocol` 子路径出口供三端引用）、`provider/`（OpenAI 兼容客户端+重试）、`agent/`（循环+上下文组装+工具契约+单 run 装配 `run-assembly.ts` 的 `executeRun`）、`storage/`（路径/配置/JSONL，即每行一条 JSON 的文本文件；含用量台账 `usage.ts`）、`session/`（SessionStore 与上下文压缩：估算/分界/渲染纯函数、事件溯源存储、压缩引擎 `Compactor`、自动命名；`session_search` 直接扫事件流）、`permissions/`（ConfigPermissionGate + 确认网关 ConfirmationBroker）、`memory/`（MemorySystem：L1 项目情节 + L2 全局认知 + FTS5/向量索引，见 [memory](./core/memory.md)）、`text/`（共享中文分词器与 FTS 辅助）、`tools/`（11 个内置工具）、`skills/`（技能包解析/双作用域扫描/点名匹配，见 [skills](./core/skills.md)）、`jobs/`（JobScheduler）、`mcp/`（MCP 客户端管理器）、`notify/`（任务完成通知）；根级 `bus.ts`（EventBus 进程内事件分发） |
+| server | `packages/server/src/index.ts` | `app.ts`（createApp 装配）、`daemon.ts`（launchDaemon）、`auth.ts`（token）、`run.ts`（RunManager 队列状态机；单 run 装配在 core 的 `executeRun`）、`command-check.ts`（WS 命令帧的唯一校验点）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`、`memory-scheduler.ts`（记忆定时/跟随兜底调度）、`routes/`（sessions/attachments/jobs/config/fs/usage/memory/skills） |
 | cli | `packages/cli/src/index.ts` | commander 命令树（默认进 chat）；`chat.ts`（REPL+渲染+@引用展开）、`client.ts`（KclawClient）、`daemon-ctl.ts`（探测/启动/停止）、`slash.ts`、`file-refs.ts`、`wizard.ts`、`provider-check.ts`、`web-cmd.ts` |
 | web | `packages/web/src/main.tsx` | 视图（chat/sessions/jobs/audit/usage/trash/memory/skills + DirectoryPicker）、离线外壳（`sw.js`/manifest/OfflineBanner）、`ws.ts`（WS 客户端）、`token.ts`（token 引导） |
 
@@ -83,6 +83,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
       ├─ steer（有活动 run）：入引导缓冲，广播 message.queued，迭代边界注入（见下）
       ├─ wait：排队，广播 message.queued，当前 run 结束后出队执行
       └─ interrupt：abort 当前 run + 插队首，广播 message.queued
+      （以下装配在 core 的 executeRun：packages/core/src/agent/run-assembly.ts）
       ├─ 附件引用挂载为 attachment 块（多模态/内联文本/fs_read 提示三态）
       ├─ 模型三级解析 input.model → session meta → 默认（条目名→线上模型名）
       ├─ memory.searchEpisodes(用户文本前 200 字符, top 5) → note 块注入用户消息
@@ -100,16 +101,16 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
            ├─ stopReason=tool_use → 权限检查 check(toolCall)          permissions/engine.ts
            │    confirm → confirmation.requested 事件 → 客户端弹确认
            │            ← WS 帧 {type:"confirmation.resolve", confirmationId, approved}
-           │            → ConfirmationBroker.resolve → 循环继续      server/src/confirm.ts
+           │            → ConfirmationBroker.resolve → 循环继续   core/src/permissions/broker.ts
            ├─ 工具执行（parallel 组并发 + serial 组串行）→ tool_result 块
            ├─ steering drain：steering() 取走引导缓冲消息逐条注入
            │    message.created → onMessage 持久化 → message.completed → message.steered
            └─ 回到下一轮 LLM 调用，直到 end_turn
-  ├─ RunManager 拼装系统提示词后（进入模型循环前）→ SessionStore.appendSystem → sessions/<id>/events.jsonl
+  ├─ 引擎（executeRun）拼装系统提示词后（进入模型循环前）→ SessionStore.appendSystem → sessions/<id>/events.jsonl
   │    （追加 system 事件全量留痕，每 run 恰好一条；不折进投影、不上总线，写入失败即本次 run 失败）
   ├─ deps.onMessage → SessionStore.appendMessage → sessions/<id>/events.jsonl（追加 message 事件 + 折进 meta.json 投影）
   └─ deps.onEvent  → bus.emit → JSON.stringify → 只发订阅了该 sessionId 的 socket
-                                                          packages/server/src/bus.ts
+                                                          packages/core/src/bus.ts
   → run 收尾：usage.db 记一行用量（失败仅日志）；memory.write.idleMinutes>0 时挂一个
     跟随门禁检查（记忆由 memory_save 与定时/跟随调度器沉淀，见 memory.md）；
     非 job 首条消息触发 autoname（成功更名广播 session.renamed）
@@ -128,7 +129,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 设用户在 CLI 输入：`把 src 里的 TODO 改成 FIXME`。会话 `ses_…` 已存在。
 
 1. **入队**：CLI 经已认证 WS 发 `send_message`；`ws.ts` 查 `sessions.meta(sessionId)` 存在 → `run.submit(sessionId, {userText, trigger:"user"})` 同步决策去向（空闲直发 / 入队 / 入引导缓冲）→ 立即回 `send_message_ack {messageId, queued}`（不 await run）。
-2. **装配**（`RunManager.#execute`）：记忆检索命中 0 条 → 读 history → 用户消息以纯 text 骨架（先建空壳消息、块随后补全）传入 `RunInput.userMessage`；`onUserMessage` 钩子里补 note 块并 `appendMessage` 持久化；事件序为 `run.started → message.created → note.emitted ×N → message.completed`。
+2. **装配**（core `executeRun`）：记忆检索命中 0 条 → 读 history → 用户消息以纯 text 骨架（先建空壳消息、块随后补全）传入 `RunInput.userMessage`；`onUserMessage` 钩子里补 note 块并 `appendMessage` 持久化；事件序为 `run.started → message.created → note.emitted ×N → message.completed`。
 3. **第一轮 LLM**：`llm.started {attempt:1}` → assistant 骨架 `message.created` → 模型流式产出 tool_call：`tool_call.created` → 若干 `tool_call.delta` → 流结束 `llm.completed {stopReason:"tool_use"}` → `tool_call.completed`（此刻才 `JSON.parse(argsJson)`）。
 4. **权限检查**：`fs_read` 是 safe 工具直接放行（`grantedBy:"safe"`）；`fs_write` 命中 confirm → 循环发 `confirmation.requested {confirmationId:"conf_…", toolCall, risk:"sensitive", expiresAt}` 并挂起等待，`raceConfirmation` 同时竞速人工裁决、120s 超时、run 的 abort 信号。
 5. **人机回合**：CLI 收到事件弹 @clack 确认框；用户批准 → CLI 回 `confirmation.resolve {confirmationId, approved:true}` → broker settle → 循环发 `confirmation.resolved {approved:true, by:"cli"}`，`grantedBy:"confirmed"`。

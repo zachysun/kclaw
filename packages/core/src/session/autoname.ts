@@ -1,5 +1,7 @@
-import type { AgentEvent, LlmClient, SessionStore } from "@kclaw/core"
-import { makeEvent } from "@kclaw/core"
+import type { AgentEvent } from "../protocol/events.js"
+import { makeEvent } from "../protocol/events.js"
+import type { LlmClient } from "../provider/types.js"
+import type { SessionStore } from "./store.js"
 
 export interface AutonameDeps {
   sessions: SessionStore
