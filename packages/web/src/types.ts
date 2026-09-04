@@ -1,12 +1,20 @@
 /**
- * Structural wire shapes for the daemon's REST API (sessions / jobs /
- * messages). The web package is intentionally self-contained (no runtime
- * dependency on @kclaw/core): these mirror the core protocol types
- * (SessionMeta, Job, Message, Block) exactly — only the
- * UI-relevant subset is modeled here.
+ * Web-facing wire types. Everything the daemon actually defines on the wire
+ * (blocks, messages, agent events, session events) is imported from the typed
+ * canon `@kclaw/core/protocol` — no hand-copied mirrors here. What stays in
+ * THIS file are the REST response shapes the web UI models itself (the
+ * UI-relevant subset of what the HTTP routes return).
  */
+export type {
+  AttachmentBlock, AttachmentSource, Block, Message, NoteBlock, NoteKind, Role,
+  TextBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock, ToolStatus,
+  CompactionEvent, MemoryEvent, MessageEvent, SessionCreatedEvent, SessionDeletedEvent,
+  SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SystemEvent,
+} from "@kclaw/core/protocol"
+// The core canon names this GrantedBy; the web UI's historical name stays.
+export type { GrantedBy as ToolGrantReason } from "@kclaw/core/protocol"
 
-/** Per-session metadata (mirrors @kclaw/core SessionMeta). */
+/** Per-session metadata as GET /sessions returns it (the UI-relevant subset of core's SessionMeta). */
 export interface SessionMeta {
   id: string
   title: string
@@ -29,7 +37,7 @@ export interface FsBrowseResult {
   dirs: string[]
 }
 
-/** A scheduled prompt (mirrors @kclaw/core Job). */
+/** A scheduled prompt as GET /jobs returns it. */
 export interface Job {
   id: string
   name: string
@@ -41,143 +49,3 @@ export interface Job {
   lastStatus?: "ok" | "error"
   lastError?: string
 }
-
-/**
- * Message protocol shapes (mirrors @kclaw/core protocol/messages + blocks).
- * These back the trail view (轨迹页): a message is a role-typed list of blocks,
- * each of which carries its own discriminated-union payload.
- */
-
-/** Who authored a message (mirrors @kclaw/core Role). */
-export type Role = "user" | "assistant" | "tool"
-
-export interface TextBlock { id: string; type: "text"; text: string }
-export interface ThinkingBlock { id: string; type: "thinking"; text: string }
-
-export interface ToolCallBlock {
-  id: string
-  type: "tool_call"
-  callId: string
-  name: string
-  args: unknown
-  argsJson: string
-}
-
-export type ToolStatus = "ok" | "error"
-
-export interface ToolResultBlock {
-  id: string
-  type: "tool_result"
-  callId: string
-  status: ToolStatus
-  output: string
-  data?: unknown
-  durationMs: number
-}
-
-/** Why a note was emitted (mirrors @kclaw/core NoteKind). */
-export type NoteKind = "system" | "job" | "memory" | "timeout" | "denied"
-
-export interface NoteBlock { id: string; type: "note"; kind: NoteKind; text: string }
-
-export type AttachmentSource =
-  | { type: "base64"; data: string }
-  | { type: "url"; url: string }
-  | { type: "file"; path: string }
-
-export interface AttachmentBlock {
-  id: string
-  type: "attachment"
-  mimeType: string
-  text?: string
-  source: AttachmentSource
-}
-
-export type Block =
-  | TextBlock
-  | ThinkingBlock
-  | ToolCallBlock
-  | ToolResultBlock
-  | NoteBlock
-  | AttachmentBlock
-
-export interface Message {
-  id: string
-  sessionId: string
-  role: Role
-  blocks: Block[]
-  createdAt: string // ISO-8601
-}
-
-/** Why a tool call was allowed to run (mirrors @kclaw/core GrantedBy). */
-export type ToolGrantReason = "safe" | "whitelist" | "session_grant" | "confirmed"
-
-/** A tool message carries per-call grant reasons (mirrors @kclaw/core ToolMessage). */
-export interface ToolMessage extends Message {
-  role: "tool"
-  grantedBy?: Record<string, ToolGrantReason>
-}
-
-/**
- * Session event-stream shapes (mirrors @kclaw/core session/events). These
- * back the trail view's single source of truth: GET /sessions/:id/events
- * returns the append-only, time-ordered stream (session.created → message →
- * compaction → memory …). A message event carries the full message payload,
- * so block flattening applies to it directly.
- */
-
-/** 会话元数据事件（轨迹页不渲染，仅参与事件流推进）。 */
-export interface SessionCreatedEvent { type: "session.created"; at: string; title: string; workdir?: string; jobId?: string }
-export interface SessionRenamedEvent { type: "session.renamed"; at: string; title: string }
-export interface SessionDeletedEvent { type: "session.deleted"; at: string }
-export interface SessionRestoredEvent { type: "session.restored"; at: string }
-export interface SessionSetEvent { type: "session.set"; at: string; model?: string | null; readonly?: boolean | null; disposition?: "steer" | "wait" | "interrupt" | null }
-
-/** A message event: `{ type: "message" } & Message`. */
-export type MessageEvent = { type: "message" } & Message
-
-/** 一次压缩（对齐 core CompactionEvent；替代旧的 CompactionRecord 双源合并）。 */
-export interface CompactionEvent {
-  type: "compaction"
-  at: string
-  trigger: "manual" | "in-run" | "auto"
-  /** 超限紧急压缩的审计标记（仅自动压缩可能携带）。 */
-  emergency?: true
-  focus?: string
-  from: string | null
-  upto: string
-  messages: number
-  segmentSummary: string
-  top: string
-}
-
-/** 一次记忆写入（对齐 core MemoryEvent）。 */
-export interface MemoryEvent {
-  type: "memory"
-  at: string
-  trigger: "immediate" | "manual" | "interval" | "follow" | "clear" | "nightly" | "admin"
-  kind: "episode" | "cognition"
-  op: "append" | "update" | "new-thread" | "rewrite" | "create" | "overwrite" | "delete" | "inactivate"
-  topic?: string
-  file?: string
-  scope?: string
-  source?: string
-}
-
-/** 一次对话运行的系统提示词全量留痕（对齐 core SystemEvent）。 */
-export interface SystemEvent {
-  type: "system"
-  at: string
-  text: string
-}
-
-export type SessionEvent =
-  | SessionCreatedEvent
-  | SessionRenamedEvent
-  | SessionDeletedEvent
-  | SessionRestoredEvent
-  | SessionSetEvent
-  | MessageEvent
-  | CompactionEvent
-  | MemoryEvent
-  | SystemEvent

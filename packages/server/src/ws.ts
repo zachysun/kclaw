@@ -1,11 +1,10 @@
 import fastifyWebsocket from "@fastify/websocket"
 import type { FastifyInstance, FastifyRequest } from "fastify"
-import { join } from "node:path"
-import { realpathWithin } from "@kclaw/core"
 import type { SessionStore } from "@kclaw/core"
 import type { EventBus } from "./bus.js"
-import type { RunManager, AttachmentRef } from "./run.js"
+import type { RunManager } from "./run.js"
 import { tokenEquals } from "./auth.js"
+import { checkCommandFrame } from "./command-check.js"
 import type { ConfirmationActor } from "./confirm.js"
 
 /** Dependencies of the /ws route (injected by createApp). */
@@ -97,6 +96,11 @@ declare module "fastify" {
 
 /**
  * Register the `GET /ws` websocket route on the app.
+ *
+ * The command frame shapes are typed in @kclaw/core/protocol (ClientCommand /
+ * ServerFrame — the Protocol 正本); every field rule and error text lives in
+ * command-check.ts, the single validation point. This comment keeps the
+ * behavioral contract (ordering, ack pairing, close codes).
  *
  * Auth is per connection (the HTTP bearer hook must NOT gate the upgrade):
  * the first frame must be `{type:"auth", token}` (primary) or the token may
@@ -202,105 +206,57 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
       if (!authenticated) return reject()
       return send(socket, { type: "error", message: "frame must be a JSON object" })
     }
-    const msg = frame as {
-      type?: unknown
-      token?: unknown
-      sessionId?: unknown
-      confirmationId?: unknown
-      approved?: unknown
-      client?: unknown
-      text?: unknown
-      attachments?: unknown
-      disposition?: "steer" | "wait" | "interrupt"
-      messageId?: unknown
-    }
-
-    if (!authenticated) {
-      if (msg.type !== "auth") return reject()
-      if (typeof msg.token !== "string" || !tokenEquals(msg.token, opts.token)) return reject()
+    // 单一校验点：规则与报错文案全部住在 command-check.ts；下面只做分发。
+    const check = checkCommandFrame(frame, {
+      authenticated,
+      token: opts.token,
+      hasRun: opts.run !== undefined,
+      sessionExists: (sessionId) => opts.sessions.meta(sessionId) !== undefined,
+      attachmentsDir: opts.attachmentsDir,
+    })
+    if (check.kind === "reject") return reject()
+    if (check.kind === "error") return send(socket, { type: "error", message: check.message })
+    if (check.kind === "authenticated") {
       authenticated = true
       clearTimeout(authTimer)
       opts.bus.connect(socket)
       return
     }
 
-    switch (msg.type) {
-      case "auth":
-        return send(socket, { type: "error", message: "already authenticated" })
+    switch (check.command.type) {
       case "subscribe":
-      case "unsubscribe": {
-        const { sessionId } = msg
-        if (typeof sessionId !== "string" || sessionId.length === 0) {
-          return send(socket, {
-            type: "error",
-            message: `${msg.type} requires a non-empty string sessionId`,
-          })
-        }
-        if (msg.type === "subscribe") opts.bus.subscribe(sessionId, socket)
-        else opts.bus.unsubscribe(sessionId, socket)
-        const ack = msg.type === "subscribe" ? "subscribed" : "unsubscribed"
-        return send(socket, { type: ack, sessionId })
-      }
+        opts.bus.subscribe(check.command.sessionId, socket)
+        return send(socket, { type: "subscribed", sessionId: check.command.sessionId })
+      case "unsubscribe":
+        opts.bus.unsubscribe(check.command.sessionId, socket)
+        return send(socket, { type: "unsubscribed", sessionId: check.command.sessionId })
       case "confirmation.resolve": {
         const broker = opts.run?.broker
         if (broker === undefined) {
           return send(socket, { type: "error", message: "confirmation gateway unavailable" })
         }
-        const { confirmationId, approved, client } = msg
-        if (typeof confirmationId !== "string" || confirmationId.length === 0
-          || typeof approved !== "boolean") {
-          return send(socket, {
-            type: "error",
-            message: "confirmation.resolve requires a non-empty string confirmationId and a boolean approved",
-          })
-        }
-        if (client !== undefined && client !== "cli" && client !== "web") {
-          return send(socket, {
-            type: "error",
-            message: 'confirmation.resolve client must be "cli" or "web"',
-          })
-        }
         // Verdict provenance: the web UI names itself (client:"web"); the CLI
         // omits it → "cli". The broker passes it through to the resolution.
         // The resulting confirmation.resolved event comes from the loop, not
         // from here.
-        const actor: ConfirmationActor = client === "web" ? "web" : "cli"
-        const ok = broker.resolve(confirmationId, approved, actor)
+        const actor: ConfirmationActor = check.command.client === "web" ? "web" : "cli"
+        const ok = broker.resolve(check.command.confirmationId, check.command.approved, actor)
         if (!ok) return send(socket, { type: "error", message: "unknown confirmation" })
-        return send(socket, { type: "confirmation.resolved_ack", confirmationId, ok: true })
+        return send(socket, { type: "confirmation.resolved_ack", confirmationId: check.command.confirmationId, ok: true })
       }
       case "send_message": {
         const run = opts.run
         if (run === undefined) {
           return send(socket, { type: "error", message: "run manager not available" })
         }
-        const { sessionId, text, attachments, disposition } = msg
-        if (typeof sessionId !== "string" || sessionId.length === 0
-          || typeof text !== "string" || text.length === 0) {
-          return send(socket, { type: "error", message: "send_message requires a non-empty string sessionId and a non-empty string text" })
-        }
-        if (disposition !== undefined && disposition !== "steer" && disposition !== "wait" && disposition !== "interrupt") {
-          return send(socket, { type: "error", message: 'send_message disposition must be "steer", "wait" or "interrupt"' })
-        }
-        if (opts.sessions.meta(sessionId) === undefined) {
-          return send(socket, { type: "error", message: "session not found" })
-        }
-        // Attachment refs are the one client-controlled path that reaches disk
-        // reads: the realpath check below confines every ref to the session's
-        // own attachments dir, so a token holder cannot read arbitrary files
-        // on this machine through the daemon (run.ts re-checks as defense in
-        // depth; this gate keeps hostile refs out of the queue entirely).
-        const refs = parseAttachmentRefs(attachments, opts.attachmentsDir, sessionId)
-        if (refs === undefined) {
-          return send(socket, { type: "error", message: "send_message attachments are invalid" })
-        }
+        const { sessionId, text, disposition, attachments } = check.command
         // submit 同步决策：成功立即 ack（携带 messageId/queued），失败 error frame（无 ack）。
         // run 本身由驱动器异步执行，进度走 bus。
         try {
           const r = run.submit(sessionId, {
             userText: text, trigger: "user",
             ...(disposition !== undefined ? { disposition } : {}),
-            ...(refs.length > 0 ? { attachments: refs } : {}),
+            ...(attachments !== undefined && attachments.length > 0 ? { attachments } : {}),
           })
           return send(socket, { type: "send_message_ack", sessionId, messageId: r.messageId, queued: r.queued })
         } catch (err) {
@@ -312,13 +268,7 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
         if (run === undefined) {
           return send(socket, { type: "error", message: "run manager not available" })
         }
-        const { sessionId, messageId } = msg
-        if (typeof sessionId !== "string" || sessionId.length === 0) {
-          return send(socket, { type: "error", message: "queue.cancel requires a non-empty string sessionId" })
-        }
-        if (messageId !== undefined && typeof messageId !== "string") {
-          return send(socket, { type: "error", message: "queue.cancel messageId must be a string" })
-        }
+        const { sessionId, messageId } = check.command
         const res = run.queueCancel(sessionId, messageId)
         if (!res.ok) {
           return send(socket, { type: "error", message: res.reason === "injected" ? "已注入" : "not found" })
@@ -330,13 +280,7 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
         if (run === undefined) {
           return send(socket, { type: "error", message: "run manager not available" })
         }
-        const { sessionId } = msg
-        if (typeof sessionId !== "string" || sessionId.length === 0) {
-          return send(socket, {
-            type: "error",
-            message: "run.cancel requires a non-empty string sessionId",
-          })
-        }
+        const { sessionId } = check.command
         if (!run.cancel(sessionId)) {
           return send(socket, { type: "error", message: "no active run" })
         }
@@ -347,18 +291,10 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
       case "compaction.cancel": {
         const run = opts.run
         if (run === undefined) return send(socket, { type: "error", message: "run manager not available" })
-        const { sessionId } = msg
-        if (typeof sessionId !== "string" || sessionId.length === 0) {
-          return send(socket, { type: "error", message: "compaction.cancel requires a non-empty string sessionId" })
-        }
+        const { sessionId } = check.command
         const active = run.cancelCompaction(sessionId)
         return send(socket, { type: "compaction_cancel_ack", sessionId, active })
       }
-      default:
-        return send(socket, {
-          type: "error",
-          message: `unknown command: ${typeof msg.type === "string" ? msg.type : JSON.stringify(msg.type)}`,
-        })
     }
   })
 
@@ -366,35 +302,6 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
     clearTimers()
     opts.bus.unsubscribe(socket)
   })
-}
-
-/**
- * Validate and normalize `send_message` attachments. Returns undefined when
- * the array (or any entry) is malformed, or when a path escapes the session's
- * attachments dir — undefined means "reject the whole message".
- */
-function parseAttachmentRefs(
-  attachments: unknown,
-  attachmentsDir: string | undefined,
-  sessionId: string,
-): AttachmentRef[] | undefined {
-  if (attachments === undefined) return []
-  if (!Array.isArray(attachments)) return undefined
-  if (attachmentsDir === undefined) return undefined // no uploads configured
-  const refs: AttachmentRef[] = []
-  for (const raw of attachments) {
-    if (typeof raw !== "object" || raw === null) return undefined
-    const { path, name, size, mimeType } = raw as Record<string, unknown>
-    if (typeof path !== "string" || typeof name !== "string" || name.length === 0
-      || typeof size !== "number" || typeof mimeType !== "string") {
-      return undefined
-    }
-    const root = realpathWithin(join(attachmentsDir, sessionId))
-    const resolved = realpathWithin(path)
-    if (resolved !== root && !resolved.startsWith(root + "/")) return undefined
-    refs.push({ path: resolved, name, size, mimeType })
-  }
-  return refs
 }
 
 function send(socket: WsConnection, frame: unknown): void {

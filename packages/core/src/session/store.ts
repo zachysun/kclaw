@@ -7,20 +7,11 @@ import { writeFileAtomic } from "../storage/atomic.js"
 import { appendJsonlLine, readJsonl } from "../storage/jsonl.js"
 import { applyEvent, isCompactionEvent, isMessageEvent } from "./events.js"
 import type { SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent } from "./events.js"
+import type { AttachmentRef, QueueEntry } from "../protocol/wire.js"
 
-/** 排队条目的附件形状（与 server 的 AttachmentRef 结构一致，结构类型互通）。 */
-export interface QueueAttachment { path: string; name: string; size: number; mimeType: string }
-
-/** One persisted queue entry in queue.jsonl (spec §3.1)。 */
-export interface QueueEntry {
-  messageId: string                       // 分配即固定；出队执行时用同一 id 构建 Message
-  disposition: "steer" | "wait" | "interrupt"
-  text: string
-  trigger: "user" | "job"                 // 还原触发源（job 的 note/触发语义在出队执行时需要）
-  attachments?: QueueAttachment[]
-  note?: string                           // job 来源说明
-  enqueuedAt: string                      // ISO-8601
-}
+// QueueEntry/AttachmentRef 的正本在 protocol/wire.ts（@kclaw/core/protocol 出口）；
+// 此处 re-export 维持既有从 store 的引用路径。
+export type { AttachmentRef, QueueEntry }
 
 /** Per-session metadata persisted at <sessionsDir>/<id>/meta.json. */
 export interface SessionMeta {

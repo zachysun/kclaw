@@ -18,6 +18,7 @@ import {
   type Message,
   appendOptimisticUser,
 } from "../../src/chat/model.js"
+import type { CompactionPhase, NoteKind } from "@kclaw/core/protocol"
 
 function msg(id: string, role: "user" | "assistant" | "tool", blocks: Block[]): Message {
   return { id, sessionId: "s1", role, blocks, createdAt: "2026-08-15T00:00:00.000Z" }
@@ -29,7 +30,7 @@ function ev(type: AgentEvent["type"], payload: unknown, sessionId = "s1"): Agent
 
 const text = (id: string, text: string) => ({ id, type: "text" as const, text })
 const thinking = (id: string, text: string) => ({ id, type: "thinking" as const, text })
-const note = (id: string, kind: string, text: string) => ({ id, type: "note" as const, kind, text })
+const note = (id: string, kind: NoteKind, text: string) => ({ id, type: "note" as const, kind, text })
 const toolCall = (id: string, callId: string, name: string, argsJson: string) =>
   ({ id, type: "tool_call" as const, callId, name, args: {}, argsJson })
 const toolResult = (id: string, callId: string, output: string, durationMs = 0, status: "ok" | "error" = "ok") =>
@@ -339,17 +340,19 @@ describe("unrelated events", () => {
 describe("llm retry hint", () => {
   it("sets a retry hint on llm.failed {willRetry:true} while the run keeps streaming", () => {
     const state = { ...initChat([]), runState: "running" as const }
-    // attempt carried in the payload → recorded
+    // The wire never carries `attempt` (the daemon's retry wrapper emits
+    // error + willRetry only — see LlmFailedPayload), so the hint is set
+    // with no attempt number; unknown synthetic fields are ignored.
     const next = applyEvent(state, ev("llm.failed", {
       error: { code: "llm_retry", message: "llm http 503: storm" }, willRetry: true, attempt: 2,
     }))
-    expect(next.retryHint).toEqual({ attempt: 2 })
+    expect(next.retryHint).toEqual({})
     expect(next.runState).toBe("running")
-    // no attempt in the payload → "unknown" (attempt undefined) but still set
+    // no attempt in the payload → the same set-but-unknown hint
     const bare = applyEvent(state, ev("llm.failed", {
       error: { code: "llm_retry", message: "llm http 503: storm" }, willRetry: true,
     }))
-    expect(bare.retryHint).toEqual({ attempt: undefined })
+    expect(bare.retryHint).toEqual({})
   })
 
   it("clears the retry hint on llm.completed and run terminal events", () => {
@@ -379,7 +382,7 @@ describe("compaction state", () => {
   it("v3 wire shape: started carries phase, completed carries phase/result (typed, not cast)", () => {
     // 直接以 AgentEvent 类型内联构造（不经 ev 的 cast）：payload 形状错了就编
     // 译不过——这是协议适配的编译期守护。
-    const started = (phase: string): AgentEvent => ({
+    const started = (phase: CompactionPhase): AgentEvent => ({
       id: "e0", ts: "t", sessionId: "s1", type: "compaction.started", payload: { phase },
     })
     const finished = (result: "ok" | "failed" | "cancelled"): AgentEvent => ({

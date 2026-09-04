@@ -1,23 +1,17 @@
-import type { Message } from "../protocol/messages.js"
+import type {
+  CompactionEvent, MemoryEvent, MessageEvent, SessionCreatedEvent, SessionDeletedEvent,
+  SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SessionEvent, SystemEvent,
+} from "../protocol/session-events.js"
 import type { SessionMeta } from "./store.js"
 
-export interface SessionCreatedEvent { type: "session.created"; at: string; title: string; workdir?: string; jobId?: string }
-export interface SessionRenamedEvent { type: "session.renamed"; at: string; title: string }
-export interface SessionDeletedEvent { type: "session.deleted"; at: string }
-export interface SessionRestoredEvent { type: "session.restored"; at: string }
-export interface SessionSetEvent { type: "session.set"; at: string; model?: string | null; readonly?: boolean | null; disposition?: "steer" | "wait" | "interrupt" | null }
-export type MessageEvent = { type: "message" } & Message
-export interface CompactionEvent { type: "compaction"; at: string; trigger: "manual" | "in-run" | "auto"; emergency?: true; focus?: string; from: string | null; upto: string; messages: number; segmentSummary: string; top: string }
-export interface MemoryEvent {
-  type: "memory"; at: string
-  trigger: "immediate" | "manual" | "interval" | "follow" | "clear" | "nightly" | "admin"
-  kind: "episode" | "cognition"
-  op: "append" | "update" | "new-thread" | "rewrite" | "create" | "overwrite" | "delete" | "inactivate"
-  topic?: string; file?: string; scope?: string; source?: string
-}
-export interface SystemEvent { type: "system"; at: string; text: string }
-
-export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent | MessageEvent | CompactionEvent | MemoryEvent | SystemEvent
+// The nine event types live in protocol/session-events.ts (the browser-safe
+// canon the web trail view imports); this module owns the runtime side —
+// guards and the meta projection — and re-exports the types for the Node
+// packages that historically imported them from here.
+export type {
+  CompactionEvent, MemoryEvent, MessageEvent, SessionCreatedEvent, SessionDeletedEvent,
+  SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SystemEvent,
+} from "../protocol/session-events.js"
 
 export function isMessageEvent(e: SessionEvent): e is MessageEvent { return e.type === "message" }
 export function isCompactionEvent(e: SessionEvent): e is CompactionEvent { return e.type === "compaction" }

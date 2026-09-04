@@ -2,11 +2,11 @@
  * Event → view-model reducer for the streaming chat view (the daemon's event
  * catalog and wire order).
  *
- * The web package is intentionally self-contained (no runtime dependency on
- * @kclaw/core): the structural protocol shapes below mirror the daemon's wire
- * format, so this module type-checks and runs without the core package's
- * build artifacts. The wire shapes are stable protocol contracts (see
- * packages/core/src/protocol) — only the UI-relevant subset is modeled here.
+ * The wire shapes come from the typed canon `@kclaw/core/protocol` — no
+ * hand-copied mirrors. Core's AgentEvent is generic; the AnyAgentEvent
+ * distribution below turns it into a discriminated union so switch(event.type)
+ * narrows payload, and the reducer's default-case sentinel turns an unhandled
+ * NEW core event into a compile error instead of a silent no-op.
  *
  * Design decisions (documented for review):
  *
@@ -23,125 +23,27 @@
  *   deltas only matter across reconnects, where a full pull + merge resyncs.
  * - The reducer is a pure function: every transition returns a NEW state.
  */
+import type {
+  AgentEvent as CoreAgentEvent,
+  Block,
+  ConfirmationRequestedPayload,
+  EventType,
+  MemoryWrittenPayload,
+  Message,
+  Role,
+} from "@kclaw/core/protocol"
 
-/** Structural Message (mirrors @kclaw/core Message). */
-export type Role = "user" | "assistant" | "tool"
+export type { Block, ConfirmationRequestedPayload, Message, Role }
 
-export interface TextBlock { id: string; type: "text"; text: string }
-export interface ThinkingBlock { id: string; type: "thinking"; text: string }
-export interface ToolCallBlock {
-  id: string
-  type: "tool_call"
-  callId: string
-  name: string
-  args: unknown
-  argsJson: string
-}
-export interface ToolResultBlock {
-  id: string
-  type: "tool_result"
-  callId: string
-  status: "ok" | "error"
-  output: string
-  data?: unknown
-  durationMs: number
-}
-export interface NoteBlock { id: string; type: "note"; kind: string; text: string; compact?: { segments: number; kept: number } }
-export interface AttachmentBlock {
-  id: string
-  type: "attachment"
-  mimeType: string
-  text?: string
-  source: unknown
-}
-export type Block = TextBlock | ThinkingBlock | ToolCallBlock | ToolResultBlock | NoteBlock | AttachmentBlock
+/**
+ * The daemon's full event catalog as a discriminated union: core's generic
+ * AgentEvent<T> distributed over every EventType, so switch(event.type)
+ * narrows payload per case.
+ */
+export type AgentEvent = { [T in EventType]: CoreAgentEvent<T> }[EventType]
 
-export interface Message {
-  id: string
-  sessionId: string
-  role: Role
-  blocks: Block[]
-  createdAt: string
-}
-
-/** Structural AgentEvent (mirrors @kclaw/core AgentEvent) — UI-relevant subset. */
-interface Envelope { id: string; ts: string; sessionId?: string; runId?: string }
-
-export interface ConfirmationRequestedPayload {
-  confirmationId: string
-  toolCall: ToolCallBlock
-  risk: "safe" | "sensitive"
-  expiresAt: string
-}
-
-/** The daemon's full event catalog, used to split handled/unhandled. */
-export type EventType =
-  | "run.started" | "run.completed" | "run.failed"
-  | "message.created" | "message.completed"
-  | "job.started" | "job.completed" | "job.failed"
-  | "session.renamed"
-  | "text.created" | "text.delta" | "text.completed"
-  | "thinking.created" | "thinking.delta" | "thinking.completed"
-  | "tool_call.created" | "tool_call.delta" | "tool_call.completed"
-  | "tool_result.created" | "tool_result.delta" | "tool_result.completed"
-  | "attachment.created" | "attachment.completed"
-  | "llm.started" | "llm.completed" | "llm.failed"
-  | "confirmation.requested" | "confirmation.resolved"
-  | "note.emitted"
-  | "compaction.started" | "compaction.completed"
-  | "message.queued" | "message.steered" | "message.queue_cancelled"
-  | "memory.written"
-
-/** memory.written 的 payload（web 侧视图投影，字段与 core 协议一致）——通知条点击跳转目标。 */
-export interface MemoryWrittenInfo { path: string; kind: "episode" | "cognition"; topic?: string; scope?: string }
-
-type EventKind =
-  | { type: "run.started"; payload: { trigger: string } }
-  | { type: "run.completed"; payload: { stopReason: string } }
-  | { type: "run.failed"; payload: { error: { code: string; message: string } } }
-  | { type: "message.created" | "message.completed"; payload: { message: Message } }
-  | { type: "text.created"; payload: { messageId: string; block: TextBlock } }
-  | { type: "thinking.created"; payload: { messageId: string; block: ThinkingBlock } }
-  | { type: "tool_call.created"; payload: { messageId: string; block: ToolCallBlock } }
-  | { type: "tool_result.created"; payload: { messageId: string; block: ToolResultBlock } }
-  | { type: "text.delta" | "thinking.delta" | "tool_call.delta"; payload: { messageId: string; blockId: string; delta: string } }
-  | { type: "tool_result.delta"; payload: { messageId: string; callId: string; delta: string } }
-  | { type: "text.completed"; payload: { messageId: string; block: TextBlock } }
-  | { type: "thinking.completed"; payload: { messageId: string; block: ThinkingBlock } }
-  | { type: "tool_call.completed"; payload: { messageId: string; block: ToolCallBlock } }
-  | { type: "tool_result.completed"; payload: { messageId: string; block: ToolResultBlock } }
-  | { type: "note.emitted"; payload: { messageId: string; block: NoteBlock } }
-  | { type: "llm.completed"; payload: { usage?: unknown; stopReason?: string } }
-  | { type: "llm.failed"; payload: { error?: unknown; willRetry?: boolean; attempt?: number } }
-  | { type: "confirmation.requested"; payload: ConfirmationRequestedPayload }
-  | { type: "confirmation.resolved"; payload: { confirmationId: string; approved: boolean; by: string } }
-  // v3 compaction protocol: started reports its phase ("in-run"|"post-run"|
-  // "manual"); completed is ALWAYS delivered after started and reports the
-  // outcome — segments/kept carry the new totals on result "ok" (0 otherwise).
-  | { type: "compaction.started"; payload: { phase?: string } }
-  | { type: "compaction.completed"; payload: { segments?: number; kept?: number; phase?: string; result?: "ok" | "failed" | "cancelled" } }
-  // The send-message queue trio (mirrors @kclaw/core MessageQueuedPayload /
-  // MessageSteeredPayload / MessageQueueCancelledPayload).
-  | { type: "message.queued"; payload: { messageId: string; disposition: "steer" | "wait" | "interrupt"; position?: number } }
-  | { type: "message.steered"; payload: { messageId: string } }
-  | { type: "message.queue_cancelled"; payload: { messageId?: string; all?: boolean } }
-  // The rest of the catalog flows through the reducer unchanged (default case).
-  | { type: Exclude<EventType, HandledEventType>; payload: unknown }
-
-/** The event types the reducer acts on (the discriminated union above). */
-type HandledEventType =
-  | "run.started" | "run.completed" | "run.failed"
-  | "message.created" | "message.completed"
-  | "text.created" | "text.delta" | "text.completed"
-  | "thinking.created" | "thinking.delta" | "thinking.completed"
-  | "tool_call.created" | "tool_call.delta" | "tool_call.completed"
-  | "tool_result.created" | "tool_result.delta" | "tool_result.completed"
-  | "confirmation.requested" | "confirmation.resolved"
-  | "note.emitted" | "llm.completed" | "llm.failed"
-  | "compaction.started" | "compaction.completed"
-  | "message.queued" | "message.steered" | "message.queue_cancelled"
-
-export type AgentEvent = Envelope & EventKind
+/** memory.written 的 payload（点击通知条跳转记忆页所需字段）——正本形状。 */
+export type MemoryWrittenInfo = MemoryWrittenPayload
 
 /** View-model — the reducer's output. */
 export type RunState = "idle" | "running"
@@ -403,12 +305,7 @@ export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
       // llm.failed {willRetry:false} is a plain terminal llm error, which
       // run.failed surfaces — leave the view untouched.
       if (event.payload.willRetry !== true) return state
-      return {
-        ...state,
-        retryHint: {
-          attempt: typeof event.payload.attempt === "number" ? event.payload.attempt : undefined,
-        },
-      }
+      return { ...state, retryHint: {} }
     case "message.created": {
       // Queue dequeue: a created event for a queued id drops the row — the
       // message enters the thread below as a normal (persisted) bubble. Its
@@ -510,8 +407,29 @@ export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
       return pushConfirmation(state, event.payload)
     case "confirmation.resolved":
       return removeConfirmation(state, event.payload.confirmationId)
-    default:
+    // The catalog's pass-through events (no view state to change): job
+    // lifecycle and session renames are other views' business, attachment
+    // blocks are calibrated wholesale by message.completed, llm.started is
+    // bookkeeping, and memory.written escapes to the panel before the
+    // reducer. They are listed so a NEW core event type trips the sentinel
+    // below instead of silently no-opping.
+    case "job.started":
+    case "job.completed":
+    case "job.failed":
+    case "session.renamed":
+    case "attachment.created":
+    case "attachment.completed":
+    case "llm.started":
+    case "memory.written":
       return state
+    default: {
+      // Compile-time exhaustiveness sentinel: adding an EventType to core
+      // without deciding it here makes `event` non-never and fails this
+      // assignment — the new event must be handled or explicitly ignored.
+      const unhandled: never = event
+      void unhandled
+      return state
+    }
   }
 }
 

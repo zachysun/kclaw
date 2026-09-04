@@ -338,7 +338,7 @@ export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean
       line(dim("[正在压缩早期对话…]"), ctx)
       return false
     case "compaction.completed": {
-      const p = ev.payload as { segments?: number; kept?: number; result?: string }
+      const p = ev.payload
       if (p.result === "failed") line(dim("✱ 压缩失败，本轮继续（稍后自动重试）"), ctx)
       else if (p.result === "cancelled") line(dim("✱ 压缩已取消"), ctx)
       else line(dim(`✱ 早期对话已压缩为 ${p.segments} 段，保留最近 ${p.kept} 条原文（早期细节可用 session_search 检索）`), ctx)
@@ -355,8 +355,50 @@ export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean
     case "run.completed":
       ensureLineStart(ctx) // the "prompt newline": end the streamed line
       return true
-    default:
+    // run.started: no line — the run's first visible output is the model's
+    // first delta; printing a banner here would only add noise.
+    case "run.started":
+    // job.* / session.renamed: the chat loop does not act on job lifecycle
+    // or list-level renames (other surfaces own those).
+    case "job.started":
+    case "job.completed":
+    case "job.failed":
+    case "session.renamed":
+    // Block-open events: nothing live — the completed lines below carry the
+    // full blocks (deltas stream between them; tool_result.delta's chunks are
+    // deliberately not buffered, the completed line truncates the output).
+    case "text.created":
+    case "thinking.created":
+    case "thinking.completed":
+    case "tool_call.created":
+    case "tool_call.delta":
+    case "tool_result.created":
+    case "tool_result.delta":
+    case "attachment.created":
+    case "attachment.completed":
+    // llm.*: raw provider-call bookkeeping — the retry hint is not rendered
+    // in the CLI (a retried call keeps streaming; the final failure surfaces
+    // via run.failed / run.completed).
+    case "llm.started":
+    case "llm.completed":
+    case "llm.failed":
+    // confirmation.resolved: the pending confirm already printed its verdict
+    // line when handled above; the broadcast needs nothing.
+    case "confirmation.resolved":
+    // Queue trio: the daemon's queue state is visible via /queue on demand;
+    // the queued/steered/cancelled broadcasts render nothing in the CLI.
+    case "message.queued":
+    case "message.steered":
+    case "message.queue_cancelled":
       return false
+    default: {
+      // Compile-time exhaustiveness sentinel: a new core event type lands
+      // here as a non-never `ev` and fails this assignment — it must be
+      // rendered or explicitly ignored above.
+      const unhandled: never = ev
+      void unhandled
+      return false
+    }
   }
 }
 

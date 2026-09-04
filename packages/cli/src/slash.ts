@@ -9,6 +9,7 @@
  */
 import { isCancel, select } from "@clack/prompts"
 import { parseSlashInput, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
+import type { AttachmentRef } from "@kclaw/core"
 import type { KclawClient } from "./client.js"
 
 /** Everything a registered command may reach at run time (a view over the chat loop's live state). */
@@ -48,13 +49,8 @@ export interface SlashCtx {
   commandsDir?: string
 }
 
-/** A reference to an uploaded attachment (mirrors the daemon's shape). */
-export interface AttachmentRef {
-  path: string
-  name: string
-  size: number
-  mimeType: string
-}
+/** A reference to an uploaded attachment — the protocol canon shape (re-exported). */
+export type { AttachmentRef } from "@kclaw/core"
 
 export interface SlashCommand extends SlashCommandMeta {
   run(args: string, ctx: SlashCtx): Promise<void>

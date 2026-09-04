@@ -304,9 +304,23 @@ function flattenTrail(events: SessionEvent[] | null): TrailRow[] {
         })
         lastSystemText = event.text
         break
-      default:
-        // session.created / renamed / deleted / restored / set — not rendered.
+      // session.created / renamed / deleted / restored / set — not rendered
+      // (already reflected in the session dropdown). Listed explicitly so a
+      // NEW core session-event type trips the sentinel below instead of
+      // silently vanishing from the trail.
+      case "session.created":
+      case "session.renamed":
+      case "session.deleted":
+      case "session.restored":
+      case "session.set":
         break
+      default: {
+        // Compile-time exhaustiveness sentinel: a new SessionEvent member
+        // lands here as a non-never `event` and fails this assignment.
+        const unhandled: never = event
+        void unhandled
+        break
+      }
     }
   }
   return rows

@@ -10,8 +10,12 @@
  * auth frame, in arrival order — so a caller can subscribe immediately after
  * creating the client.
  *
+ * Outbound shapes are the typed canon ClientCommand (@kclaw/core/protocol);
+ * inbound frames stay unknown (the panel guards their structure).
+ *
  * Reconnect is intentionally NOT included here — the App layer owns it.
  */
+import type { ClientCommand } from "@kclaw/core/protocol"
 
 /** Structural slice of WebSocket the client drives (browser or test fake). */
 export interface WsLikeSocket {
@@ -38,8 +42,8 @@ export class WsAuthError extends Error {
 }
 
 export interface WsClient {
-  /** Send one object as a JSON frame (connection is already authenticated). */
-  send(obj: Record<string, unknown>): void
+  /** Send one typed command as a JSON frame (connection is already authenticated). */
+  send(frame: ClientCommand): void
   /** Close the connection. */
   close(): void
   /**
@@ -154,8 +158,8 @@ export function createWsClient(
   }
 
   return {
-    send(obj) {
-      const data = JSON.stringify(obj)
+    send(frame) {
+      const data = JSON.stringify(frame)
       if (opened) socket.send(data)
       else pendingOut.push(data)
     },

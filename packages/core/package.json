@@ -6,7 +6,8 @@
   "type": "module",
   "exports": {
     ".": "./dist/index.js",
-    "./commands": "./dist/commands.js"
+    "./commands": "./dist/commands.js",
+    "./protocol": "./dist/protocol/index.js"
   },
   "scripts": {
     "test": "vitest run",

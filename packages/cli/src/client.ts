@@ -12,6 +12,7 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import WebSocket from "ws"
+import type { ClientCommand } from "@kclaw/core"
 import { defaultHome, ensureDaemon, probeHealth, readDaemonJson } from "./daemon-ctl.js"
 
 /** The daemon only ever binds loopback (127.0.0.1). */
@@ -25,8 +26,8 @@ export type WsFrame = Record<string, unknown>
 
 /** Handle over one authenticated websocket connection to the daemon. */
 export interface WsHandle {
-  /** Send one JSON object as a frame (already-authenticated connection). */
-  send(frame: WsFrame): void
+  /** Send one typed command frame (@kclaw/core ClientCommand) on the authenticated connection. */
+  send(frame: ClientCommand): void
   /** Close the connection (server keeps its own state cleanup). */
   close(): void
   /**

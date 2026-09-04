@@ -21,3 +21,9 @@ _Avoid_: 人设文件、知识库
 **Persona（人设）**:
 `~/.kclaw/AGENTS.md`，整份常驻系统提示词的全局身份与规则。
 _Avoid_: 系统配置
+
+### 架构约定
+
+**Protocol（线上形状）**:
+消息、事件、指令帧、排队条目的唯一类型出处：`@kclaw/core/protocol` 纯类型出口。server / web / cli 三端一律引用，不手抄镜像。
+_Avoid_: mirrors 注释、各端自定义 wire 类型
