@@ -46,6 +46,7 @@ import type {
   ActiveSummary,
   AgentEvent,
   AttachmentBlock,
+  AttachmentRef,
   CompactionPhase,
   CompactionState,
   KclawConfig,
@@ -226,14 +227,6 @@ export interface SubmitResult {
    * （参考值，ws 层 fire-and-forget，spec §3.3）。
    */
   outcome: Promise<RunOutcome>
-}
-
-/** A reference to an uploaded attachment file (mounted as an attachment block). */
-export interface AttachmentRef {
-  path: string
-  name: string
-  size: number
-  mimeType: string
 }
 
 /** withRetry's per-attempt notification shape (core provider/retry.ts onRetry). */

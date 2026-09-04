@@ -69,7 +69,7 @@ interface SessionMeta {
 }
 ```
 
-`QueueEntry`（`packages/core/src/session/store.ts`）：
+`QueueEntry`（类型正本在 `packages/core/src/protocol/wire.ts`，`session/store.ts` re-export）：
 
 ```ts
 interface QueueEntry {
@@ -77,7 +77,7 @@ interface QueueEntry {
   disposition: "steer" | "wait" | "interrupt"
   text: string
   trigger: "user" | "job"                 // 还原触发源（job 的 note/触发语义在出队执行时需要）
-  attachments?: QueueAttachment[]         // 与 EnqueueInput 的 AttachmentRef 同构，路径已校验
+  attachments?: AttachmentRef[]           // {path,name,size,mimeType}，路径已校验（与 send_message 帧同一形状）
   note?: string                           // job 来源说明
   enqueuedAt: string                      // ISO-8601
 }

@@ -7,6 +7,7 @@
  */
 import { Fragment, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { parseSlashInput, replaceTrailingSlashToken, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
+import type { AttachmentRef } from "@kclaw/core/protocol"
 import type { ChatState, ConfirmationCard, NoteRender, RenderedBlock, RenderedMessage } from "./model.js"
 
 /**
@@ -19,13 +20,8 @@ export type Disposition = "steer" | "wait" | "interrupt"
 /** The trio's order — also the arrow-key rotation order (spec §7.1: 方向键+回车). */
 const DISPOSITIONS = ["steer", "wait", "interrupt"] as const
 
-/** An uploaded attachment pending on the next message (mirrors the daemon shape). */
-export interface PendingAttachment {
-  path: string
-  name: string
-  size: number
-  mimeType: string
-}
+/** An uploaded attachment pending on the next message (the protocol's AttachmentRef). */
+export type PendingAttachment = AttachmentRef
 
 /** Slash-menu geometry constants — must stay in sync with `.slash-menu` in index.css. */
 export const SLASH_MENU_MAX_HEIGHT = 280

@@ -70,6 +70,14 @@ function isAgentEvent(frame: unknown): frame is AgentEvent {
   )
 }
 
+/** The daemon's queued-send ack (send_message with queued:true). */
+function isQueuedSendAck(frame: unknown): frame is { type: "send_message_ack"; messageId: unknown; queued: unknown } {
+  return (
+    typeof frame === "object" && frame !== null &&
+    (frame as { type?: unknown }).type === "send_message_ack"
+  )
+}
+
 function errorFrameMessage(frame: unknown): string | null {
   const message = (frame as { message?: unknown }).message
   return typeof message === "string" ? message : null
@@ -183,14 +191,14 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
               // session.renamed is list-level metadata, not chat content: it
               // bypasses the reducer and escapes to the owner directly.
               if (frame.type === "session.renamed") {
-                const title = (frame.payload as { title?: unknown }).title
+                const title = frame.payload.title
                 if (typeof title === "string") onSessionRenamed?.(sessionId, title)
               }
               // memory.written 是跨视图的落盘反馈（spec 9.1/9.3 写入通知）：不进
               // reducer，走 ChatView 的一次性 notice（输入即清，见 onDraftChange）；
               // 通知条可点击跳转记忆页对应文件（spec 9.1），点击动作由 owner 提供。
               if (frame.type === "memory.written") {
-                const info = frame.payload as MemoryWrittenInfo
+                const info = frame.payload
                 if (typeof info.path === "string") {
                   setNotice(`已写入记忆: ${info.path}`)
                   // 注意：setState 把函数当 updater 执行，这里必须返回函数而非直接
@@ -201,9 +209,8 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
               updateView((v) => applyEvent(v, frame))
               // 空文本行 = 跨客户端排队的消息（本端无发送上下文）→ 拉快照补文本
               if (viewRef.current.queue.some((e) => e.text === "")) void refreshQueueText()
-            } else if ((frame as { type?: string }).type === "send_message_ack"
-              && (frame as { queued?: unknown }).queued === true) {
-              const messageId = (frame as { messageId?: unknown }).messageId
+            } else if (isQueuedSendAck(frame) && frame.queued === true) {
+              const messageId = frame.messageId
               if (typeof messageId === "string") updateView((v) => adoptQueuedId(v, messageId))
             } else {
               const message = errorFrameMessage(frame)

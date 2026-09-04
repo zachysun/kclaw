@@ -6,7 +6,7 @@
 
 ## 设计决策
 
-- **仅依赖 core 的共享命令表**：`@kclaw/web` 除 react/react-dom 外只依赖 `@kclaw/core` 的 `commands` 共享表（纯数据：slash 命令的 name/usage 元数据，CLI 与 WebUI 同源，见 [extending](../extending.md)）；其余协议形状（`src/chat/model.ts` 里的 `Message`/`Block`/`AgentEvent`）是对 daemon 线上格式的手工镜像——只包含 UI 关心的子集，类型检查与运行不需要 core 的其余构建产物。
+- **协议类型引用正本、不发帧不走样**：`@kclaw/web` 除 react/react-dom 外只依赖 `@kclaw/core`——`commands` 共享表（纯数据：slash 命令的 name/usage 元数据，CLI 与 WebUI 同源，见 [extending](../extending.md)）与 `protocol` 子路径出口（`Message`/`Block`/`AgentEvent`/`SessionEvent` 等全部线上形状的类型正本，纯类型不含 Node API，浏览器构建可直接引用）。`src/chat/model.ts` 把 core 的泛型 `AgentEvent` 分布成可判别联合供 switch 收窄，reducer 的 default 分支以 `never` 哨兵收尾——core 新增事件类型而本端未表态时编译失败；`src/ws.ts` 的发送口收窄为 `ClientCommand`。仅 `src/types.ts` 里的 REST 响应形状（`SessionMeta`/`FsBrowseResult`/`Job`，各路由返回的 UI 相关子集）是 web 本地定义。
 - **同源托管、同源请求**：daemon 自己服务这份产物，`api` 的 base 是空串（路径即相对路径），`wsUrlFor()` 从 `window.location` 推导 `ws(s)://<host>/ws`——不需要配置任何地址。
 - **token 不落 URL**：`?token=` 只是 CLI → 浏览器的一次交接，`bootstrapToken` 存进 localStorage（浏览器提供的按站点隔离的本地键值存储）后立刻用 `history.replaceState` 把查询串从地址栏清除。
 - **`?session=` 深链**：任务通知里的会话链接（`/?session=<id>`）在会话列表加载完成后一次性消费——命中列表则自动选中该会话（与点击列表项同一状态路径），未命中保持默认行为；无论命中与否都立即 `history.replaceState` 清掉参数，刷新不会重复跳转。
@@ -136,4 +136,4 @@ export class WsAuthError extends Error { readonly code: number }  // 默认 4001
 - [daemon](../server/daemon.md)：webDist 解析与静态托管、鉴权豁免的服务端侧
 - [onboarding](../cli/onboarding.md)：`kclaw web` 命令与 `?token=` 的发送侧
 - [skills](../core/skills.md)：技能页、`/skill` 引导与技能即斜杠命令背后的技能包机制
-- [protocol](../core/protocol.md)：事件目录与持久化块结构（model.ts 镜像的源头）
+- [protocol](../core/protocol.md)：事件目录、持久化块结构与 WS 指令帧（model.ts 引用的类型正本）
