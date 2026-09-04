@@ -4,7 +4,7 @@
 
 `MemorySystem`（`packages/core/src/memory/system.ts`）是记忆系统 v2 的唯一服务端门面，它把三类文件级能力装配在一起：**L1 项目情节**（按项目分目录的主题线文件）、**L2 全局认知**（跨项目的画像/知识/规则文件）、以及两套**派生检索索引**（SQLite FTS5 全文索引 + 可选的向量索引）。一条记忆就是一份 markdown 文件，用户可以直接打开查看、修改、删除；索引永远只是派生物，删掉可以重建。
 
-模型通过 `memory_save` / `memory_search` 两个工具读写（`packages/core/src/tools/memory.ts`）；daemon 在每次 run 时做两级注入——L2 认知常驻系统提示、L1 情节作为 note 挂到用户消息上（见下文"检索与注入"）。daemon 的 `MemorySystem` 装配、v1 迁移、embedding 判定链都在 `packages/server/src/daemon.ts`。
+模型通过 `memory_save` / `memory_search` 两个工具读写（`packages/core/src/tools/memory.ts`）；run 装配（core `executeRun`）在每次 run 时做两级注入——L2 认知常驻系统提示、L1 情节作为 note 挂到用户消息上（见下文"检索与注入"）。daemon 的 `MemorySystem` 装配、v1 迁移、embedding 判定链都在 `packages/server/src/daemon.ts`。
 
 本页是 v2 的完整说明。v1（`memory/notes/*.md` + 单库 `memory/index.db`、`memory_save` 直接存正文、注入用前 200 字符检索 top-5）已被取代；旧数据的迁移路径见文末"迁移说明"。
 
@@ -119,7 +119,7 @@ updated: 2026-08-30
 | **manual**（手动） | `MemorySystem.triggerManual(workdir)` | 回落会话自水位起的增量 | 用户通过 **`/memory save` 斜杠命令**（CLI 与 web 均有）触发当前项目的手动写入；CLI 取启动目录、web 取当前会话工作目录。归属会话缺省回落"项目最近活动会话"。开关 `memory.write.manual`（默认 true）关闭时路由返回 400 |
 | **clear**（切会话） | `POST /sessions` 创建新会话时 → `system.triggerClear(workdir, 旧会话)` | 该会话自水位起的增量 | CLI `/clear`、`/new` 与 web 新建会话共用该路由，创建成功后**异步**触发对旧会话所在项目的提取（不阻塞建会话响应；失败只打日志，由水位防重复、下次触发补上）。归属会话取创建前的项目最近活动会话——此刻它必然是用户刚离开的旧会话；未装配记忆系统时不触发 |
 | **interval**（定时） | `memory-scheduler`（默认每 60s 扫一次） | 该项目**全部会话**逐个补各自增量 | 距上次定时触发满 `memory.write.intervalMinutes` 分钟就触发一次（0 关闭）；上次时间落在 `state.json` 的 `intervalLastRun`，未触发过则立刻首跑。无显式归属会话，对每个水位落后的会话各跑一批提取，单会话失败不阻塞其他会话 |
-| **follow**（跟随） | run 收尾挂起检查 + 门禁判定 | 该会话自水位起的增量 | 每个 run 结束（任何 stopReason）由 RunManager 挂一个跟随检查；`end_turn` 之后满 `memory.write.idleMinutes` 分钟无新活动才真正触发（0 关闭），见下 |
+| **follow**（跟随） | run 收尾挂起检查 + 门禁判定 | 该会话自水位起的增量 | 每个 run 结束（任何 stopReason）由 run 装配（core `executeRun`）挂一个跟随检查；`end_turn` 之后满 `memory.write.idleMinutes` 分钟无新活动才真正触发（0 关闭），见下 |
 
 **会话级增量**：水位**每会话各一本**（interval/follow 两游标），范围一律取"该会话两个水位中较靠后的那一条"之后的新消息（`advanceAll` 把该会话两个水位一并推进的只有 manual/immediate/clear，interval/follow 只推自己的）——任何一个先跑到，其余触发都不会重复提取同一段消息（spec 4.1）。首跑无水位时该会话全量提取一次，此后只增不重。2026-09-02 回归（一）：此前 manual/immediate/clear 不看水位、每次全量重扫，切一次会话就把已提取过的旧消息重新送审，同一情节被反复落线；改为统一增量后已提取过的内容不再进入提取输入。2026-09-02 回归（二）：统一增量最初做成**项目级**水位——跨会话按会话创建序划界，晚创建会话推进过水位后，老会话的新消息被整段跳过（用户在老会话里改名，`memory_save` 当场空转、内容永久漏提取）；水位改为**会话级**后，提取窗口只在自己会话的消息序列里推进，跨会话比较不复存在。会话内水位消息被删导致失配时按"宁可重提取不可漏提取"退化为该会话全量（见 `WriteLedger.since`）。
 
@@ -303,6 +303,6 @@ v2 提供三套人工管理面，全部落在既有文档：
 - [agent-loop](./agent-loop.md)：note 块如何随消息持久化并发出 `note.emitted`
 - [compaction](./compaction.md)：共享的消息渲染与压缩摘要输入、会话检索（session_search）
 - [protocol](./protocol.md)：`memory.written` 事件的 payload 形状
-- [run-manager](../server/run-manager.md)：L2 常驻注入与 L1 note 注入的服务端组装、跟随门禁的挂起侧
+- [run-manager](../server/run-manager.md)：L2 常驻注入与 L1 note 注入的 run 装配（core `executeRun`）、跟随门禁的挂起侧
 - [http-api](../server/http-api.md)：`/memory` 管理路由族
 - [webui](../web/webui.md)：记忆管理页三区块

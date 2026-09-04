@@ -99,7 +99,7 @@ MCP 协议要求客户端报告自己的名字和版本，这里固定为 `{name
 
 ### daemon 与 CLI 在哪里用到它
 
-- daemon（`packages/server/src/daemon.ts`）：`mcp.servers` 非空才构建管理器；启动监听之后用 `void mcpManager.start()` 触发连接、不等它完成就开始对外服务，晚连上的 server 从下一轮 run 起可用；停止序列中有一站负责关闭管理器。RunManager 通过上面提到的 `extraTools` 函数在每个 run 注入这些工具（见 [run-manager](../server/run-manager.md)）。
+- daemon（`packages/server/src/daemon.ts`）：`mcp.servers` 非空才构建管理器；启动监听之后用 `void mcpManager.start()` 触发连接、不等它完成就开始对外服务，晚连上的 server 从下一轮 run 起可用；停止序列中有一站负责关闭管理器。RunManager 把上面提到的 `extraTools` 函数作为依赖传给 core `executeRun`，由后者在每个 run 求值并注入这些工具（见 [run-manager](../server/run-manager.md)）。
 - HTTP 接口 `GET /mcp` 返回 `{servers: status()}`（没装配管理器时是空列表）；CLI 命令 `kclaw mcp [list]` 把快照逐行打印成 `<名字> <状态> <N> 个工具[ 错误: …]`（见 [cli](../cli/cli.md)）。
 
 ---

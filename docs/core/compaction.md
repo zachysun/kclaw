@@ -8,7 +8,7 @@
 2. **分层摘要**（同一模块的 `renderSegment` 加压缩引擎的编排——core `packages/core/src/session/compactor.ts` 的 `Compactor.compact`，即原 server 侧 `#compactV2` 迁入）：两次不带工具的模型调用，先给新压掉的段生成"段摘要"，再归并进"总摘要"。
 3. **工具输出省略**（`packages/core/src/agent/context.ts` 的 `toProviderMessages`）：每次构造请求时在省略预算内从最新往回保留工具结果，装不下的换成一行占位文字，防止一次运行内的多次工具调用把上下文撑爆。
 
-外围还有三件配套物：`session_search` 工具（检索函数 `packages/core/src/tools/session-search.ts`，直接扫会话事件流）负责"找得回来"；手动压缩（`RunManager.compactSession` + HTTP/CLI/web 三个入口）负责"人能主动压"；压缩审计（事件流里的 `compaction` 事件）负责"压过之后查得到"。调模型与写盘的编排全部在 server 侧，core 只提供可独立测试的纯函数。
+外围还有三件配套物：`session_search` 工具（检索函数 `packages/core/src/tools/session-search.ts`，直接扫会话事件流）负责"找得回来"；手动压缩（`RunManager.compactSession` + HTTP/CLI/web 三个入口）负责"人能主动压"；压缩审计（事件流里的 `compaction` 事件）负责"压过之后查得到"。调模型与写盘的编排在 core 的压缩引擎 `Compactor`（见上文第 2 层）完成，`RunManager` 只保留手动压缩入口。
 
 ---
 

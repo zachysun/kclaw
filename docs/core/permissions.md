@@ -152,7 +152,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
   - 登记：run 装配（core `executeRun`）的包装 gate，confirm 判定一出就在 broker 登记（携带 toolCall、risk、会话 id）。
   - 裁决：CLI/Web 经 WS `confirmation.resolve` 帧调 `broker.resolve(id, approved, by)`（`by` 默认 `"cli"`）。
   - broker **不发事件、不设内部超时**——事件归循环，计时归循环与装配侧的同一竞速机制；两处用同一超时值竞速保证视图一致。
-  - 超时/取消后 RunManager 调 `expire` 把条目标记失效，迟到的裁决只会收到 unknown confirmation，不会确认一个已无人等待的动作。
+  - 超时/取消后 run 装配（core `executeRun`）的 `resolveConfirmation` 调 `expire` 把条目标记失效，迟到的裁决只会收到 unknown confirmation，不会确认一个已无人等待的动作。
 - deny 的 `user_denied` / `timeout` 两个 reason 不是 gate 产出的：gate 只产生 `blacklist` / `readonly` 两种拒绝（规则命中或只读会话禁写/exec），前两者是循环把人工拒绝/超时转成 error result 时的语义标记（note 块的 `kind`）。
 
 ### 8. grantedBy 记录
@@ -179,6 +179,6 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 ## 关联
 
 - [agent-loop](./agent-loop.md)：确认的竞速等待、note 块与 grantedBy 的写入现场
-- [tools](./tools.md)：risk/concurrency 元数据的来源与 10 个工具清单
+- [tools](./tools.md)：risk/concurrency 元数据的来源与 11 个工具清单
 - [../server/run-manager.md](../server/run-manager.md)：gate + broker 的 daemon 侧装配
 - [../server/realtime.md](../server/realtime.md)：confirmation.resolve 帧的 WS 入口
