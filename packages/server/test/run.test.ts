@@ -13,12 +13,10 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { SessionStore, UsageStore, loadConfig, newAssistantMessage, newMessage, resolvePaths, withRetry } from "@kclaw/core"
+import { ConfirmationBroker, EventBus, SessionStore, UsageStore, loadConfig, newAssistantMessage, newMessage, resolvePaths, withRetry } from "@kclaw/core"
 import type {
   AgentEvent, AssistantMessage, KclawConfig, KclawPaths, LlmClient, LlmRequest, LlmStreamEvent, MemorySystem, Message, ToolExecutor, ToolMessage, ToolResultBlock,
 } from "@kclaw/core"
-import { EventBus } from "../src/bus.js"
-import { ConfirmationBroker } from "../src/confirm.js"
 import { RunManager, type RunManagerDeps } from "../src/run.js"
 
 // --- fixtures ---------------------------------------------------------------

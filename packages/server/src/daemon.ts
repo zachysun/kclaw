@@ -43,7 +43,7 @@ import {
 } from "@kclaw/core"
 import type { KclawConfig, LlmClient } from "@kclaw/core"
 import { loadOrCreateToken } from "./auth.js"
-import { EventBus } from "./bus.js"
+import { EventBus } from "@kclaw/core"
 import { RunManager } from "./run.js"
 import { startSchedulerTick } from "./scheduler-tick.js"
 import { startMemoryScheduler } from "./memory-scheduler.js"

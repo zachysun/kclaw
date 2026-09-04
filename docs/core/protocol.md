@@ -213,7 +213,7 @@ export interface MemoryWrittenPayload {
 |------|--------|
 | run / message / 流式 / llm / confirmation / note / `message.steered` | core 的 agent 循环（`agent/loop.ts`；`message.steered` 在 steering 注入时逐条发出，事件级 `runId` 标识注入的 run） |
 | `message.queued` `message.queue_cancelled` | server 的 `RunManager`（`run.ts`：submit / recoverQueues / queueCancel） |
-| `compaction.started` `compaction.completed` | server 的 `RunManager`（`run.ts` 的 `#compactV2` / `#runAutoCompaction`，覆盖收尾 post-run / 运行中 in-run / 手动 manual 三路） |
+| `compaction.started` `compaction.completed` | core 压缩引擎 `Compactor`（`packages/core/src/session/compactor.ts` 的 `compact` / `auto`，覆盖收尾 post-run / 运行中 in-run / 手动 manual 三路） |
 | `memory.written` | core 的 `MemoryPipeline`（`memory/pipeline.ts`，每次落盘经装配的 emit 钩子广播；daemon 侧接钩子的点在 `server/daemon.ts`） |
 | `job.*` | server 的 `scheduler-tick.ts` |
 | `session.renamed` | server 的自动命名（`autoname.ts`：新标题写回 meta 后发出） |

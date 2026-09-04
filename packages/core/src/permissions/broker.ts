@@ -1,4 +1,4 @@
-import type { ConfirmationRequestedPayload, ToolCallBlock } from "@kclaw/core"
+import type { ConfirmationRequestedPayload, ToolCallBlock } from "../protocol/index.js"
 
 /** Verdict value carried between the loop and its human resolver. */
 export type ConfirmationResolution = { approved: boolean; by: "cli" | "web" | "timeout" }
@@ -28,19 +28,21 @@ interface PendingEntry {
  *   endpoint. Returns the promise only `resolve` can settle.
  * - `resolve` applies a human verdict arriving over the gateway (WS/CLI) and
  *   reports whether it settled a still-pending entry.
- * - `wait` is the resolver side RunManager hands to the loop.
+ * - `wait` is the resolver side the run assembly hands to the loop.
  *
  * What it deliberately does NOT do:
  * - It never emits confirmation.requested / confirmation.resolved: the LOOP
- *   emits both (core agent/loop.ts, right around its resolver await) and
- *   RunManager fans them onto the bus — a broker-side emission would be a
+ *   emits both (core agent/loop.ts, right around its resolver await) and the
+ *   assembly fans them onto the bus — a broker-side emission would be a
  *   duplicate on every wire.
  * - It runs NO internal timeout: the loop races the confirm timeout itself
- *   (and RunManager races the same one). When that outer
- *   race settles without a human verdict, RunManager calls `expire` so the
- *   entry goes stale and a LATE resolve returns false silently instead of
- *   acking a verdict nothing will act on. `pending()` additionally prunes
- *   entries whose expiresAt passed.
+ *   (and the assembly races the same one). When that outer race settles
+ *   without a human verdict, the assembly calls `expire` so the entry goes
+ *   stale and a LATE resolve returns false silently instead of acking a
+ *   verdict nothing will act on. `pending()` additionally prunes entries
+ *   whose expiresAt passed.
+ *
+ * Relocated verbatim from server/src/confirm.ts (card ① engine relocation).
  */
 export class ConfirmationBroker {
   readonly #entries = new Map<string, PendingEntry>()
@@ -97,7 +99,7 @@ export class ConfirmationBroker {
   }
 
   /**
-   * Mark an entry stale without a verdict: RunManager calls this once its
+   * Mark an entry stale without a verdict: the assembly calls this once its
    * race settled on timeout or abort, so a late gateway resolve can
    * only ever observe "unknown confirmation".
    */

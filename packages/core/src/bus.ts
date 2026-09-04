@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@kclaw/core"
+import type { AgentEvent } from "./protocol/events.js"
 
 /**
  * Structural stand-in for a connected client socket. Only `send` is required,
@@ -23,6 +23,8 @@ export interface BusSocket {
  *   allowed to starve the other subscribers or the emitter.
  * - `unsubscribe(socket)`: removes ALL state of that socket (used on
  *   disconnect); `unsubscribe(sessionId, socket)` drops one filter.
+ *
+ * Relocated verbatim from server/src/bus.ts (card ① engine relocation).
  */
 export class EventBus {
   /** socket -> the set of sessionIds it subscribes to (may be empty). */

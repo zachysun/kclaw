@@ -18,6 +18,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import {
+  EventBus,
   JobScheduler,
   SessionStore,
   loadConfig,
@@ -32,7 +33,6 @@ import type {
   LlmStreamEvent,
   MemorySystem,
 } from "@kclaw/core"
-import { EventBus } from "../src/bus.js"
 import { RunManager } from "../src/run.js"
 import { startSchedulerTick } from "../src/scheduler-tick.js"
 

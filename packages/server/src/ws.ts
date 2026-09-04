@@ -1,11 +1,11 @@
 import fastifyWebsocket from "@fastify/websocket"
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import type { SessionStore } from "@kclaw/core"
-import type { EventBus } from "./bus.js"
+import type { EventBus } from "@kclaw/core"
 import type { RunManager } from "./run.js"
 import { tokenEquals } from "./auth.js"
 import { checkCommandFrame } from "./command-check.js"
-import type { ConfirmationActor } from "./confirm.js"
+import type { ConfirmationActor } from "@kclaw/core"
 
 /** Dependencies of the /ws route (injected by createApp). */
 export interface WsOptions {

@@ -3,9 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { SessionStore } from "@kclaw/core"
-
-import { defaultTitle, scheduleAutoname } from "../src/autoname.js"
+import { SessionStore, defaultTitle, scheduleAutoname } from "@kclaw/core"
 
 // --- fixtures ---------------------------------------------------------------
 

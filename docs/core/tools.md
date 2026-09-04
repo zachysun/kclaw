@@ -147,7 +147,7 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 - **参数校验失败/未知工具名**：在权限检查**之前**就被拦截为 error result，不会进权限判定，也不会执行。
 - **fs_read/fs_list 仅支持 UTF-8 文本**：二进制文件的读取结果为替换字符，判断交给上层（fs_edit 有显式二进制拦截）。
 - **网络工具的失败即结果**：web_search/web_fetch 的网络错误、非 2xx、JSON 解析失败都是 error result 文本，模型可以看到并决定下一步；不带自动重试。
-- **exec 与 web 的限制都可配**：daemon 从 `config.yaml` 传入 `exec.timeoutMs` / `exec.maxOutputBytes` 与 `web.timeoutMs` / `web.allowPrivateNetworks`（`packages/server/src/run.ts` 的装配），两处默认值与工具内默认一致（60s / 100 KiB；20s / false）。
+- **exec 与 web 的限制都可配**：daemon 从 `config.yaml` 传入 `exec.timeoutMs` / `exec.maxOutputBytes` 与 `web.timeoutMs` / `web.allowPrivateNetworks`（run 装配 core `executeRun` 传入），两处默认值与工具内默认一致（60s / 100 KiB；20s / false）。
 - **私网目标默认拒绝**：web_fetch 的 SSRF 防护意味着默认抓不到 `http://127.0.0.1:*` 这类本机服务；需要时在 config 显式 `web.allowPrivateNetworks: true`——这是有意的双门设计，不是缺陷。
 
 ---

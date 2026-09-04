@@ -165,7 +165,7 @@ updated: 2026-08-30
 
 ### L2 常驻注入（系统提示，spec 7.1）
 
-`MemorySystem.cognitionPrompt(workdir)`（`packages/core/src/memory/system.ts`）在每次 run 装配系统提示时调用，返回的认知块拼在 AGENTS.md 基础提示之后（`run.ts` 的 `#systemWithCognition`）。规则：
+`MemorySystem.cognitionPrompt(workdir)`（`packages/core/src/memory/system.ts`）在每次 run 装配系统提示时调用，返回的认知块拼在 AGENTS.md 基础提示之后（run 装配 core `executeRun` 的 `systemWithCognition`）。规则：
 
 1. **scope 过滤**：只收 `scope: "global"` 与 `scope: "project:<当前项目id>"` 的认知文件；
 2. **token 预算**：`memory.injectTokenBudget`（默认 1000）按 `estimateTokens(title + body)` 记账——**只约束 L2 认知常驻注入**，L1 情节检索的 top-5 是全量注入、不受此限；
@@ -176,7 +176,7 @@ updated: 2026-08-30
 
 ### L1 情节检索（用户消息 note，spec 7.2）
 
-`RunManager.#execute` 在构造用户消息骨架时调 `memory.searchEpisodes(workspace, userText.slice(0, 200), 5)`——用户消息**前 200 个字符**（`MEMORY_QUERY_CHARS`）作查询、取 **top-5**（`MEMORY_LIMIT`）。每条命中变成一个挂在用户消息上的 note 块：
+run 装配（core `executeRun`）在构造用户消息骨架时调 `memory.searchEpisodes(workspace, userText.slice(0, 200), 5)`——用户消息**前 200 个字符**（`MEMORY_QUERY_CHARS`）作查询、取 **top-5**（`MEMORY_LIMIT`）。每条命中变成一个挂在用户消息上的 note 块：
 
 ```
 相关经历（<线的一句话标题>）: <该小节情节正文>
