@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest"
 import { runAgent, type AgentDeps, type RunInput } from "../../src/agent/index.js"
 import { newMessage } from "../../src/protocol/messages.js"
 import type { AgentEvent, LlmClient, LlmStreamEvent, Message, ProviderMessage, ToolDefinition } from "../../src/index.js"
+import { chainOf, hook } from "./hook-utils.js"
 
 const noopTool = { name: "noop", risk: "safe" as const, concurrency: "parallel" as const, async execute() { return { status: "ok" as const, output: "" } } }
 const noopDef: ToolDefinition = { name: "noop", description: "", parameters: { type: "object", properties: {} } }
@@ -36,29 +37,32 @@ function baseInput(history: Message[] = []): RunInput {
   return { sessionId: "ses_1", history, system: "s", userText: "go" }
 }
 
-function baseDeps(llm: LlmClient, events: AgentEvent[]): Pick<AgentDeps, "llm" | "model" | "tools" | "toolDefs" | "onEvent" | "onMessage"> {
+function baseDeps(llm: LlmClient, events: AgentEvent[]): AgentDeps {
   return {
     llm, model: "m",
     tools: new Map([["noop", noopTool]]),
     toolDefs: [noopDef],
+    hooks: chainOf(),
     onEvent: (e) => events.push(e),
     onMessage: () => {},
   }
 }
 
 describe("compaction hooks in the agent loop", () => {
-  it("边界钩子先于 steering 注入，返回的视图应用于下一次请求", async () => {
+  it("compaction-check 先于 turn-boundary 注入，返回的视图应用于下一次请求", async () => {
     const order: string[] = []
     const views: ProviderMessage[][] = []
     const events: AgentEvent[] = []
     const deps: AgentDeps = {
       ...baseDeps(toolThenEndRecording(views), events),
-      midRunCompaction: async () => { order.push("compact"); return { upto: "u1", top: "S" } },
-      steering: () => { order.push("steer"); return [] },
+      hooks: chainOf(
+        hook("compact", "compaction-check", () => { order.push("compact"); return { upto: "u1", top: "S" } }),
+        hook("steer", "turn-boundary", () => { order.push("steer"); return [] }),
+      ),
     }
     const outcome = await runAgent(baseInput([userMsg("u0", "很早的话题"), userMsg("u1", "upto 消息")]), deps)
     expect(outcome.stopReason).toBe("end_turn")
-    // 顺序：工具批次完成 → midRunCompaction → steering drain
+    // 顺序：工具批次完成 → compaction-check → turn-boundary
     expect(order).toEqual(["compact", "steer"])
     // 下一次请求：messages[0] 是脉络项
     expect(views[1]![0]!.role).toBe("system")
@@ -71,12 +75,12 @@ describe("compaction hooks in the agent loop", () => {
     expect(views[0]!.map((m) => JSON.stringify(m)).join("\n")).toContain("很早的话题")
   })
 
-  it("钩子抛错时运行照常继续", async () => {
+  it("skip 失败的判定钩子抛错时运行照常继续", async () => {
     const events: AgentEvent[] = []
     const views: ProviderMessage[][] = []
     const deps: AgentDeps = {
       ...baseDeps(toolThenEndRecording(views), events),
-      midRunCompaction: async () => { throw new Error("boom") },
+      hooks: chainOf(hook("compact", "compaction-check", () => { throw new Error("boom") }, { failure: "skip" })),
     }
     const outcome = await runAgent(baseInput(), deps)
     expect(outcome.stopReason).toBe("end_turn")
@@ -100,7 +104,7 @@ describe("compaction hooks in the agent loop", () => {
     }
     const deps: AgentDeps = {
       ...baseDeps(llm, events),
-      onContextOverflow: async () => ({ upto: "u1", top: "S" }),
+      hooks: chainOf(hook("rescue", "overflow-rescue", () => ({ upto: "u1", top: "S" }))),
     }
     const outcome = await runAgent(baseInput([userMsg("u0", "很早的话题"), userMsg("u1", "upto 消息")]), deps)
     expect(calls).toBe(2)
@@ -123,15 +127,15 @@ describe("compaction hooks in the agent loop", () => {
         throw new Error("maximum context length exceeded")
       },
     }
-    const onContextOverflow = vi.fn(async () => ({ upto: "u1", top: "S" }))
+    const rescue = vi.fn(() => ({ upto: "u1", top: "S" }))
     const deps: AgentDeps = {
       ...baseDeps(llm, events),
-      onContextOverflow,
+      hooks: chainOf(hook("rescue", "overflow-rescue", rescue)),
     }
     const outcome = await runAgent(baseInput(), deps)
     expect(calls).toBe(1)
     expect(outcome.stopReason).toBe("error")
-    expect(onContextOverflow).not.toHaveBeenCalled()
+    expect(rescue).not.toHaveBeenCalled()
   })
 
   it("信号在急救钩子 await 期间中止：不再做注定无用的重试，run 以 aborted 收场", async () => {
@@ -153,7 +157,10 @@ describe("compaction hooks in the agent loop", () => {
     const deps: AgentDeps = {
       ...baseDeps(llm, events),
       signal: ctrl.signal,
-      onContextOverflow: async () => { ctrl.abort(); return { upto: "u1", top: "S" } },
+      hooks: chainOf(hook("rescue", "overflow-rescue", async () => {
+        ctrl.abort()
+        return { upto: "u1", top: "S" }
+      })),
     }
     const outcome = await runAgent(baseInput(), deps)
     expect(calls).toBe(1)

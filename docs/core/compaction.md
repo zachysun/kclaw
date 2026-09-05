@@ -134,7 +134,7 @@ export interface CompactionRecord {
 | 超限紧急急救 | 一次流式调用抛出上下文超限错误且零输出：不看水位线，"已经爆了"就是事实 | `in-run` | `in-run` 加 `emergency: true` |
 | 手动 /compact | 用户主动调用，跳过一切触发线 | `manual` | `manual` |
 
-水位是 `estimateContextTokens(会话历史)`：锚定最后一条助手消息记录的真实 `usage.inputTokens`（上一次实际发出的请求大小），锚之后的新消息按字符粗算。锚定使已被压缩的旧内容天然不计入——它们根本不在上一次请求里——所以直接对全量历史读数即可，不需要先切出未压缩部分。收尾压缩在运行的收尾路径里 await 完成，会话驱动器的串行化保证压缩期间新到的消息排队等待、不会并发写会话元数据；中途压缩经 agent 循环的 `midRunCompaction` 钩子触发（见 [agent-loop](./agent-loop.md)），成功后的新压缩视图从下一次请求开始生效；超限急救经 `onContextOverflow` 钩子触发，成功后整次请求静默重发一次。
+水位是 `estimateContextTokens(会话历史)`：锚定最后一条助手消息记录的真实 `usage.inputTokens`（上一次实际发出的请求大小），锚之后的新消息按字符粗算。锚定使已被压缩的旧内容天然不计入——它们根本不在上一次请求里——所以直接对全量历史读数即可，不需要先切出未压缩部分。收尾压缩在运行的收尾路径里 await 完成，会话驱动器的串行化保证压缩期间新到的消息排队等待、不会并发写会话元数据；中途压缩是 `compaction-check` 位置的内置钩子 `mid-run-panic`（见 [hooks](./hooks.md)），成功后的新压缩视图从下一次请求开始生效；超限急救是 `overflow-rescue` 位置的内置钩子 `overflow-emergency`，成功后整次请求静默重发一次。
 
 急救有独立的强制分界兜底（`emergencyBoundary`，`session/compaction.ts`）：急救通常发生在压缩后的首请求或单轮工具输出暴涨时，`active` 里可能没有助手锚点、固定开销全漏计，`chooseBoundary` 据此可能找不到边界——此时不看预算，直接退守最小可行上下文：只保留最近一轮用户轮次（最后一条 user 消息及其之后的整轮），更早的全部压掉；整个 `active` 只有一轮时返回无可压缩。
 

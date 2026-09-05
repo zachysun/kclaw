@@ -5,6 +5,7 @@ import type { LlmClient, LlmRequest, LlmStreamEvent } from "../../src/provider/t
 import type { Message } from "../../src/protocol/messages.js"
 import type { AgentEvent, EventType } from "../../src/protocol/events.js"
 import type { ToolCallBlock } from "../../src/protocol/blocks.js"
+import { chainOf } from "./hook-utils.js"
 
 function echoTool(body: Partial<ToolExecutor> = {}): ToolExecutor {
   return {
@@ -54,6 +55,7 @@ async function run(deps: Partial<Parameters<typeof runAgent>[1]>) {
     {
       llm: scriptClient([[...toolCallStream(0, "call_1", "search", '{"q":"x"}')], FINAL]),
       model: "m",
+      hooks: chainOf(),
       onEvent: (e) => events.push(e),
       onMessage: (m) => messages.push(m),
       ...deps,
@@ -126,6 +128,7 @@ describe("runAgent tool turn", () => {
       {
         llm: scriptClient([[...toolCallStream(0, "call_bad", "search", "{invalid")], FINAL]),
         model: "m",
+        hooks: chainOf(),
         onEvent: (e) => events.push(e),
         onMessage: (m) => messages.push(m),
         tools: new Map([["search", echoTool()]]),
@@ -154,6 +157,7 @@ describe("runAgent tool turn", () => {
           { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 1, outputTokens: 1 } },
         ], FINAL]),
         model: "m",
+        hooks: chainOf(),
         onEvent: () => {},
         onMessage: (m) => messages.push(m),
         tools: new Map([["search", echoTool()]]),
@@ -188,6 +192,7 @@ describe("runAgent tool turn", () => {
       { sessionId: "s", history: [], system: "", userText: "go" },
       {
         llm: scriptClient(script), model: "m",
+        hooks: chainOf(),
         onEvent: (e) => events.push(e as never),
         onMessage: (m) => messages.push(m),
         tools,
@@ -220,6 +225,7 @@ describe("runAgent tool turn", () => {
           ...toolCallStream(0, "call_1", "search", "{}"),
         ], FINAL]),
         model: "m",
+        hooks: chainOf(),
         onEvent: (e) => events.push(e),
         onMessage: (m) => messages.push(m),
         tools: new Map([["search", streamy]]),

@@ -1,7 +1,5 @@
 /**
- * executeRun — the daemon-proven assembly of ONE agent run (card ① engine
- * relocation, moved verbatim from server/src/run.ts `#execute` and its
- * helpers).
+ * executeRun — the daemon-proven assembly of ONE agent run.
  *
  * This is the engine side of the handoff: the server's RunManager owns the
  * queue (ordering, cancellation bookkeeping, queue.jsonl persistence) and,
@@ -9,61 +7,60 @@
  * a drainSteer callback (the steer buffer is queue state, so it stays with
  * the queue).
  *
- * Composition choices pinned here (unchanged from the run.ts days):
+ * Hook system (spec issue #6): every formerly-hardcoded behavior seam of the
+ * run (memory notes, user-message persistence, autoname, skill wrapping,
+ * retry visibility, steering drain, compaction decisions, the finalize trio,
+ * system-prompt assembly + audit) now registers through the SAME HookChain
+ * the user's file hooks take — the engine is its own first extension. The
+ * chain's builtin entries close over THIS run's resources; user entries come
+ * from the daemon-scoped HookRegistry, refreshed per run ("放文件，下轮生效",
+ * the skills' mental model).
+ *
+ * Composition choices pinned here (unchanged through the migration):
  * - History is read BEFORE the user message is appended: runAgent places its
  *   user message after `history` (`[...input.history, userMsg]`), so it must
  *   not already contain it (would double-send the text to the provider).
  * - The user message is built here as a text-only skeleton and passed via
  *   `RunInput.userMessage`; runAgent uses it verbatim and does NOT re-persist
- *   it. Its note blocks (job provenance + memory notes) are appended — and
- *   the finished message appended to the session log — inside the run's
- *   `onUserMessage` hook, landing between the loop's
- *   message.created and message.completed so the bus carries the wire order
+ *   it — the run-before hook chain lands it (notes + JSONL append) between
+ *   the loop's message.created and message.completed, so the bus carries
  *   run.started → message.created → note.emitted ×N → message.completed.
- * - Memory injection is an accelerator: a failing search never blocks the
- *   run (misses/errors just mean no notes).
  * - A failing usage record never affects the run; a failing follow-gate
-   * schedule never affects the run.
+ *   schedule never affects the run (both are fail-open hooks now, with a
+ *   hook.failed event where the old code was silent).
  */
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import type { AgentEvent } from "../protocol/events.js"
-import { makeEvent } from "../protocol/events.js"
 import type { AttachmentBlock, NoteBlock, ToolCallBlock } from "../protocol/blocks.js"
 import { newBlockId } from "../protocol/blocks.js"
-import { newId } from "../protocol/ids.js"
 import type { Message } from "../protocol/messages.js"
 import { newMessage } from "../protocol/messages.js"
 import type { AttachmentRef } from "../protocol/wire.js"
-import type { LlmClient, ProviderMessage, ToolDefinition } from "../provider/types.js"
-import { collectStreamText } from "../provider/collect.js"
+import type { LlmClient, ToolDefinition } from "../provider/types.js"
 import type { KclawConfig } from "../storage/config.js"
 import type { KclawPaths } from "../storage/paths.js"
 import type { UsageStore } from "../storage/usage.js"
-import { estimateContextTokens } from "../session/compaction.js"
 import type { SessionStore } from "../session/store.js"
-import { scheduleAutoname } from "../session/autoname.js"
 import type { Compactor } from "../session/compactor.js"
 import { ConfigPermissionGate, realpathWithin } from "../permissions/engine.js"
+import { ConfirmationBroker, raceConfirmation, type ConfirmationResolution } from "../permissions/broker.js"
 import type { PermissionGate, RunOutcome } from "./loop.js"
 import { runAgent } from "./loop.js"
 import type { SessionSearchFn } from "../tools/session.js"
 import type { ToolExecutor } from "./tools.js"
-import { withLastUserText } from "./context.js"
 import { createBuiltinTools } from "../tools/index.js"
 import { searchSessionEvents } from "../tools/session-search.js"
 import { matchSkillInvocations, scanSkillDirs, skillListPrompt, wrapSkillInvocations } from "../skills/index.js"
 import type { MemorySystem } from "../memory/system.js"
 import type { EventBus } from "../bus.js"
-import { ConfirmationBroker, type ConfirmationResolution } from "../permissions/broker.js"
+import { HookChain, DEFAULT_HOOK_TIMEOUT_MS } from "../hooks/runner.js"
+import { makeBuiltinHooks } from "../hooks/builtin.js"
+import type { HookRegistry } from "../hooks/registry.js"
+import type { HookEntry } from "../hooks/types.js"
 
 /** System prompt fallback when ~/.kclaw/AGENTS.md is missing or empty. */
 const DEFAULT_SYSTEM_PROMPT = "你是 kclaw，一个务实的个人助理。"
-
-/** How many chars of the user text feed the memory lookup. */
-const MEMORY_QUERY_CHARS = 200
-/** Top-N memory notes injected onto the user message. */
-const MEMORY_LIMIT = 5
 
 /** Text-like MIME/exif: inlined into context when small enough. */
 const TEXT_MIME = /^text\//
@@ -169,6 +166,18 @@ export interface RunEngineDeps {
   usageStore?: UsageStore
   /** Daemon-level readonly flag (`--readonly`): all sessions start read-only. */
   readonly?: boolean
+  /**
+   * User hook registry (spec issue #6): the daemon-scoped bookkeeping for
+   * ~/.kclaw/hooks files. Refreshed per run; its snapshot joins the run's
+   * hook chain. Optional (tests without user hooks omit it).
+   */
+  hooks?: HookRegistry
+  /**
+   * Test seam: entries registered into every run's chain beyond the
+   * builtins and the user registry (hook-level tests inject fakes here
+   * instead of writing files).
+   */
+  extraHooks?: HookEntry[]
 }
 
 /** What the queue hands the engine alongside one dequeued entry. */
@@ -221,44 +230,9 @@ export function mountAttachments(refs: AttachmentRef[], attachmentsDir: string, 
 }
 
 /**
- * Mirror of the loop's raceConfirmation (agent/loop.ts): a human
- * resolver raced against the same confirmTimeoutMs timer and the run's abort
- * signal. On a timeout the LOOP synthesizes `{approved: false, by:
- * "timeout"}` itself and never settles the human promise, so the resolver
- * alone would never fire the broker-expire that marks the entry stale.
- * Racing here keeps this adapter's view of the resolution semantically
- * identical to the one the loop acted on (same timeout on both sides yields
- * the same value; a human verdict that wins here also wins there), and a
- * losing late verdict is discarded by the settled race.
- */
-function raceResolution(
-  p: Promise<ConfirmationResolution>,
-  ms: number,
-  signal: AbortSignal,
-): Promise<ConfirmationResolution | "aborted"> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const sleep = new Promise<ConfirmationResolution>((resolve) => {
-    timer = setTimeout(() => resolve({ approved: false, by: "timeout" }), ms)
-  })
-  let onAbort = () => {}
-  const abort = new Promise<"aborted">((resolve) => {
-    if (signal.aborted) resolve("aborted")
-    else {
-      onAbort = () => resolve("aborted")
-      signal.addEventListener("abort", onAbort, { once: true })
-    }
-  })
-  return Promise.race([p, sleep, abort]).finally(() => {
-    if (timer !== undefined) clearTimeout(timer)
-    signal.removeEventListener("abort", onAbort)
-  })
-}
-
-/**
- * Execute one dequeued entry — the former RunManager `#execute`, verbatim.
- * The controller arrives pre-registered by the queue's #executeEntry (before
- * any await), so cancellation windows and active-cleanup stay with the
- * queue; this function only consumes its signal.
+ * Execute one dequeued entry. The controller arrives pre-registered by the
+ * queue's #executeEntry (before any await), so cancellation windows and
+ * active-cleanup stay with the queue; this function only consumes its signal.
  */
 export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promise<RunOutcome> {
   const { sessionId, input, controller } = handoff
@@ -268,29 +242,38 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   const sessionMeta = sessions.meta(sessionId)
   const workspace = sessionMeta?.workdir ?? engine.deps.workspace
 
-  // Memory injection: the leading 200 chars of the user text look up the
-  // top-5 episodes via the v2 MemorySystem facade and land as kind:"memory"
-  // notes on the user message. Memory is an accelerator — a failing search
-  // must never block the run, so misses/errors just mean no notes.
-  const notes: NoteBlock[] = []
-  try {
-    for (const hit of await memory.searchEpisodes(workspace, input.userText.slice(0, MEMORY_QUERY_CHARS), MEMORY_LIMIT)) {
-      notes.push({ id: newBlockId(), type: "note", kind: "memory", text: `相关经历（${hit.title}）: ${hit.text}` })
+  // 用户 hooks 每 run 现扫：改文件下一轮生效（与技能同心智）。新装载失败经
+  // registry 去重后发一次 hook.failed(load) 事件。
+  await engine.deps.hooks?.refresh()
+
+  // bus fan-out：一个坏订阅者不能弄死 run（bus.emit 已逐 socket 自守；此
+  // 包裹覆盖 emit 里剩余的同步工作，如 JSON.stringify）。
+  const busEmit = (e: AgentEvent): void => {
+    try {
+      bus.emit(e)
+    } catch {
+      // ignore
     }
-  } catch {
-    // ignore: run without memory context
   }
+  let runId: string | undefined
+  const eventCtx = () => (runId === undefined ? { sessionId } : { sessionId, runId })
+
+  // --- the run's hook chain: builtins (closures over run resources) +
+  // user files + test injections, one execution path for all --------------
+  const chain = new HookChain({
+    timeoutMs: () => config.hooks?.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS,
+    onFailure: (e) => busEmit(e),
+    eventCtx,
+  })
 
   // History BEFORE the append (runAgent appends the user message itself).
-  // The user message starts as a text-only SKELETON: its note blocks (job
-  // provenance first, memory notes after) are appended inside
-  // the run's onUserMessage hook, right after the loop announced the
-  // skeleton via message.created, so the bus carries the wire order
-  // run.started → message.created → note.emitted ×N → message.completed,
-  // with the note events (inside the hook) trailing the JSONL append —
-  // the persist happens first, then the notes are announced.
+  // The user message starts as a text-only SKELETON: the run-before hook
+  // chain lands it — memory/job notes appended, JSONL write, note.emitted ×N
+  // — right after the loop announced the skeleton via message.created, so
+  // the wire order stays
+  // run.started → message.created → note.emitted ×N → message.completed.
   const history = sessions.readMessages(sessionId)
-  const jobNote: NoteBlock[] =
+  const jobNotes: NoteBlock[] =
     input.note === undefined
       ? []
       : [{ id: newBlockId(), type: "note", kind: "job", text: input.note }]
@@ -312,6 +295,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // 记号精确命中已装且用户可调用的技能时，只在发给模型的那份输入上追加
   // 一行调用指示——持久化、事件流与气泡保持原始文本（所见即所发）。
   // 仅 trigger:user 生效：job 提示是 daemon 生成的内部指令，不参与点名。
+  // 内置 skill-wrap 钩子捕获这份预计算文本，在 llm-before 位置应用。
   const llmUserText =
     input.trigger === "user"
       ? wrapSkillInvocations(input.userText, matchSkillInvocations(input.userText, skills))
@@ -386,14 +370,14 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // Confirmation answering: deps' direct resolver when wired (test seam),
   // else the broker's pending promise (the daemon path: WS/CLI verdicts
   // settle it). The resolver is raced against the SAME timeout the loop
-  // races against (raceResolution above). Whenever the race settles WITHOUT
-  // a human verdict (timeout/abort), the broker entry goes stale so a late
-  // gateway resolve reports "unknown confirmation" instead of acking a
-  // verdict nothing will act on.
+  // races against — the single shared raceConfirmation (permissions/broker).
+  // Whenever the race settles WITHOUT a human verdict (timeout/abort), the
+  // broker entry goes stale so a late gateway resolve reports "unknown
+  // confirmation" instead of acking a verdict nothing will act on.
   const baseResolver =
     engine.deps.resolveConfirmation ?? ((confirmationId: string) => broker.wait(confirmationId))
   const resolveConfirmation = async (confirmationId: string): Promise<ConfirmationResolution> => {
-    const raced = await raceResolution(baseResolver(confirmationId), confirmTimeoutMs, controller.signal)
+    const raced = await raceConfirmation(baseResolver(confirmationId), confirmTimeoutMs, controller.signal)
     if (raced === "aborted") {
       pendingConfirmations.delete(confirmationId)
       broker.expire(confirmationId)
@@ -409,34 +393,20 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // --- retry visibility --------------------------------------------------------
   // Provider-level retries live inside the llm wrapper (withRetry), where
   // the loop cannot see them. When deps.llmForRun is set, the wrapper's
-  // onRetry lands in THIS closure: each notification becomes an
-  // `llm.failed {willRetry:true}` event on the bus (so clients can tell a
-  // hung call from a backoff), and advances the attempt counter the loop's
-  // llm.started reads via AgentDeps.llmAttempt. The counter is per llm
-  // call — a completed/failed call resets it, so the next iteration's
-  // llm.started reports a fresh attempt 1. The runId is learned from the
-  // loop's own run.started (always a run's first event, emitted before any
-  // stream — and therefore before any retry — can start).
-  let runId: string | undefined
+  // onRetry lands in THIS closure: it advances the attempt counter the
+  // loop's llm.started reads and hands the notification to the llm-retry
+  // hook chain (builtin retry-notify emits `llm.failed {willRetry:true}` on
+  // the bus). The counter is per llm call — a completed/failed call resets
+  // it. The runId is learned from the loop's own run.started.
   let llmAttempt = 1
-  const busEmit = (e: AgentEvent): void => {
-    try {
-      bus.emit(e)
-    } catch {
-      // one broken subscriber must not kill the run — bus.emit already
-      // guards each socket individually; this guard covers the remaining
-      // synchronous work in emit, e.g. JSON.stringify
-    }
-  }
   const onLlmRetry: LlmRetrySink = (info) => {
     llmAttempt = info.attempt + 1
-    busEmit(makeEvent("llm.failed", {
-      error: {
-        code: "llm_retry",
-        message: String((info.error as { message?: string } | null | undefined)?.message ?? info.error),
-      },
-      willRetry: true,
-    }, runId === undefined ? { sessionId } : { sessionId, runId }))
+    void chain
+      .run("llm-retry", {
+        attempt: info.attempt,
+        error: String((info.error as { message?: string } | null | undefined)?.message ?? info.error),
+      })
+      .catch(() => { /* retry visibility must not break the retry itself */ })
   }
   const runLlm = engine.deps.llmForRun?.(onLlmRetry) ?? engine.deps.llm
   const defaultModel = engine.deps.model ?? config.providers.entries[config.providers.default]?.model ?? ""
@@ -446,21 +416,54 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   const resolveEntry = (m: string): string => config.providers.entries[m]?.model ?? m
   const model = resolveEntry(input.model ?? sessionMeta?.model ?? defaultModel)
 
-  // --- v3 compaction triggers (spec 5.1-5.3, 5.8) -------------------------
-  // 发消息零压缩（开场预压缩已删除）。三条触发路径全部由 server 注入：
-  // 中途（迭代边界水位 ≥ 红线，经循环钩子）、超限（onContextOverflow 急救）、
-  // 收尾（runAgent 返回后水位 ≥ 黄线）。水位锚定最后一条 assistant 的真实
-  // usage，黄/红两线的读点集中在此。
+  // v3 compaction thresholds: the loop's packing budget reads them here; the
+  // compaction decision hooks read the same config inside the chain (single
+  // config source, one read per side).
   const budget = config.sessions.contextTokens ?? 128_000
   const atRatio = config.sessions.compactAtRatio ?? 0.66
-  const panicRatio = config.sessions.compactPanicRatio ?? 0.85
 
-  // 系统提示词审计事件（第 9 种持久化事件）：拼装完成后、进入模型循环前把
-  // 全量文本落盘一条 system 事件。每 run 恰好一条——steer 注入与 run 内多次
-  // 模型调用复用同一份提示词，不重复记录；不加幻影会话守卫（与消息写入一致），
-  // 也不吞错：写入失败即本次 run 失败，由驱动器的条目级失败兜底。
-  const system = systemWithCognition(engine.deps, paths.agentsMd, workspace, skillListPrompt(skills))
-  sessions.appendSystem(sessionId, { at: new Date().toISOString(), text: system })
+  // Register the chain: builtins first (per-run closures), then user files,
+  // then test injections. User entries land at default order 1000 — AFTER
+  // the builtins within a position, BEFORE the system-audit (order 9000).
+  chain.registerAll(makeBuiltinHooks({
+    sessionId,
+    sessions,
+    memory,
+    config,
+    workspace,
+    compactor: engine.compactor,
+    signal: controller.signal,
+    runLlm,
+    model,
+    usageStore: engine.deps.usageStore,
+    busEmit,
+    runIdRef: { get current() { return runId } },
+    jobNotes,
+    trigger: input.trigger,
+    llmUserText,
+    drainSteer: handoff.drainSteer,
+    skillList: skillListPrompt(skills),
+    compactionAfter: async (phase, result) => {
+      try {
+        await chain.run("compaction-after", { phase, result })
+      } catch {
+        // observation must not disturb the compaction that just finished
+      }
+    },
+  }))
+  chain.registerAll(engine.deps.hooks?.snapshot() ?? [])
+  if (engine.deps.extraHooks !== undefined) chain.registerAll(engine.deps.extraHooks)
+
+  // 系统提示词（hook 化的组装，spec issue #6）：AGENTS.md 基座 →
+  // system-before 链追加段落（内置 system-materials：认知 + 技能列表）→
+  // system-after 链（用户可改终稿；内置 system-audit fatal 全量留痕，排在其
+  // 后——审计永远记录模型实际看到的那份）。写失败即本次 run 失败，由驱动器
+  // 的条目级失败兜底（与迁移前一致）。
+  const base = systemPrompt(paths.agentsMd)
+  const segments = (await chain.run("system-before", { base })) ?? []
+  let system = [base, ...segments].filter((s) => s !== "").join("\n\n")
+  const rewrittenSystem = await chain.run("system-after", { system })
+  if (rewrittenSystem !== undefined) system = rewrittenSystem
 
   const outcome = await runAgent(
     {
@@ -486,62 +489,10 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       confirmTimeoutMs,
       signal: controller.signal,
       llmAttempt: () => llmAttempt,
-      // 模型视图改写钩子（LLM 执行前）：技能点名的隐式包装在这里生效——
-      // 只改发给模型的消息，持久化/事件流/气泡保持用户原文；未命中为
-      // undefined，行为与从前完全一致。
-      ...(llmUserText === undefined
-        ? {}
-        : { mapLlmMessages: (msgs: ProviderMessage[]) => withLastUserText(msgs, llmUserText) }),
+      hooks: chain,
       toolResultKeep: config.sessions.toolResultKeep ?? 8,
       // 省略预算（黄线值）透传给打包台：预算装不下的工具输出以省略占位符发送
       tokenBudget: budget * atRatio,
-      // steer 注入口（spec §5.1）：迭代边界经 handoff 回调取队列的缓冲区。
-      steering: handoff.drainSteer,
-      // 中途压缩钩子（spec 5.3 第 5 条）：取消标记或 run 已中止 → 不压；
-      // 水位 < 红线 → 不压；否则独立可取消地压缩，返回新视图（下一次请求生效）。
-      midRunCompaction: () => {
-        if (engine.compactor.cancelled(sessionId) || controller.signal.aborted) return Promise.resolve(null)
-        const boundaryHistory = sessions.readMessages(sessionId)
-        if (estimateContextTokens(boundaryHistory) < budget * panicRatio) return Promise.resolve(null)
-        return engine.compactor.auto(sessionId, boundaryHistory, config, runLlm, model, {
-          phase: "in-run",
-          signal: controller.signal,
-        })
-      },
-      // 超限急救钩子（spec 5.6）：不看水位线——"已经爆了"就是事实；emergency
-      // 压缩成功返回新视图由循环整次重发。await 归来时 run 已中止则返回 null
-      // （窄窗口：重发注定立刻被拆，不再多此一举）。
-      onContextOverflow: async () => {
-        const next = await engine.compactor.auto(sessionId, sessions.readMessages(sessionId), config, runLlm, model, {
-          phase: "in-run",
-          emergency: true,
-          signal: controller.signal,
-        })
-        return controller.signal.aborted ? null : next
-      },
-      onUserMessage: (m) => {
-        // The notes become part of the message BEFORE it is
-        // persisted and completed. Persist first (events trail persisted
-        // state), then announce each note — the loop's message.completed
-        // follows, so the wire order stays
-        // created → note.emitted ×N → completed. runId is known by now
-        // (run.started is always a run's first event and precedes this
-        // hook); the sessionId-only fallback is defensive only.
-        m.blocks.push(...jobNote, ...notes)
-        sessions.appendMessage(sessionId, m)
-        if (input.trigger !== "job") {
-          const firstText = m.blocks.find((b) => b.type === "text")?.text ?? ""
-          void scheduleAutoname(
-            { sessions, llm: runLlm, model, emit: busEmit },
-            sessionId, firstText,
-          )
-        }
-        const noteCtx = runId === undefined ? { sessionId } : { sessionId, runId }
-        for (const block of [...jobNote, ...notes]) {
-          busEmit(makeEvent("note.emitted", { messageId: m.id, block }, noteCtx))
-        }
-        return m
-      },
       onEvent: (e) => {
         if (e.type === "run.started" && e.runId !== undefined) runId = e.runId
         else if (e.type === "llm.completed" || e.type === "llm.failed") llmAttempt = 1
@@ -550,48 +501,16 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       onMessage: (m) => sessions.appendMessage(m.sessionId, m),
     },
   )
-  // Token usage ledger: a failing record must never affect the run.
-  if (engine.deps.usageStore !== undefined) {
-    try {
-      engine.deps.usageStore.record({
-        sessionId,
-        runId: runId ?? "",
-        model,
-        inputTokens: outcome.totalUsage.inputTokens,
-        outputTokens: outcome.totalUsage.outputTokens,
-        at: new Date().toISOString(),
-      })
-    } catch (err) {
-      console.error("kclaw usage record failed:", err)
-    }
-  }
-  // --- 收尾压缩（v3 触发三路之一，spec 5.1/5.4）-----------------------------
-  // run 正常结束且水位 ≥ 黄线：压缩一次。它在 executeRun 内 await，驱动器的
-  // 串行化自动保证"压缩期间新消息排队"（spec 5.4），无需额外忙碌标记；
-  // aborted/error 的 run 不收尾（前者正在被拆，后者刚失败）。取消标记压制
-  // 本次运行内已被用户取消的压缩（spec 5.3 第 6 条）。
-  if (
-    outcome.stopReason !== "aborted" && outcome.stopReason !== "error"
-    && !engine.compactor.cancelled(sessionId)
-  ) {
-    const postRunHistory = sessions.readMessages(sessionId)
-    if (estimateContextTokens(postRunHistory) >= budget * atRatio) {
-      await engine.compactor.auto(sessionId, postRunHistory, config, runLlm, model, {
-        phase: "post-run",
-        signal: controller.signal,
-      })
-    }
-  }
-  // 跟随门禁（spec 4.2）：run 收尾（任何 stopReason）挂起一个 follow 检查；经
-  // MemorySystem 落盘 <projectDir>/state.json（spec 11），daemon 重启后由 memory
-  // scheduler 补查。idleMinutes=0 关闭。挂起失败静默（不影响 run 收尾）。
-  if (config.memory.write.idleMinutes > 0) {
-    try {
-      memory.scheduleFollowCheck?.(sessionId, new Date().toISOString())
-    } catch {
-      // follow 挂起失败不影响 run
-    }
-  }
+  // run-after 链：用量台账（skip）→ 收尾压缩（fatal：与迁移前一致，压缩失败
+  // 传播为条目级失败）→ 跟随门禁（skip）。串行化保证收尾压缩期间新消息排队
+  // （spec 5.4），无需额外忙碌标记。
+  await chain.run("run-after", {
+    outcome: {
+      stopReason: outcome.stopReason,
+      totalUsage: { inputTokens: outcome.totalUsage.inputTokens, outputTokens: outcome.totalUsage.outputTokens },
+    },
+    model,
+  })
   return outcome
 }
 
@@ -608,7 +527,7 @@ function buildSessionSearch(deps: RunEngineDeps, sessionId: string): SessionSear
   }
 }
 
-/** AGENTS.md persona when the file exists and is non-empty; default otherwise. */
+/** AGENTS.md persona when the file exists and non-empty; default otherwise. */
 function systemPrompt(agentsMd: string): string {
   try {
     const md = readFileSync(agentsMd, "utf8")
@@ -617,20 +536,4 @@ function systemPrompt(agentsMd: string): string {
     // missing/unreadable AGENTS.md → default persona
   }
   return DEFAULT_SYSTEM_PROMPT
-}
-
-/**
- * System prompt = AGENTS.md base + L2 cognition + skills listing（spec 7.1）：
- * cognitionPrompt 为空或抛错时不追加，回落到纯 base —— 认知注入失败静默跳过，
- * run 照常进行。extraSection（技能列表）为空串时同样不追加。
- */
-function systemWithCognition(deps: RunEngineDeps, agentsMd: string, workspace: string, extraSection = ""): string {
-  const base = systemPrompt(agentsMd)
-  let cognition = ""
-  try {
-    cognition = deps.memory.cognitionPrompt(workspace)
-  } catch {
-    // 认知注入失败静默跳过（spec 7.1）
-  }
-  return [base, cognition, extraSection].filter((s) => s !== "").join("\n\n")
 }

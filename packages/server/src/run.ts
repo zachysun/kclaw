@@ -30,6 +30,7 @@ import {
   newMessage,
   type EnqueueInput,
   type EventBus,
+  type HookRegistry,
   type KclawConfig,
   type KclawPaths,
   type LlmClient,
@@ -105,6 +106,12 @@ export interface RunManagerDeps {
   usageStore?: UsageStore
   /** Daemon-level readonly flag (`--readonly`): all sessions start read-only. */
   readonly?: boolean
+  /**
+   * User-hook registry (spec issue #6): refreshed per run by the engine and
+   * snapshotted into every run's hook chain. Optional (tests without user
+   * hooks omit it).
+   */
+  hooks?: HookRegistry
 }
 
 /** One queued run request lives in core now (the engine's input shape). */

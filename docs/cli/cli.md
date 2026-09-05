@@ -106,6 +106,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
    - `note.emitted` → 暗色 `[note] <text>`；kind 为 `compact` 且带结构化 meta（`compact:{segments,kept}`）的例外——它每轮都会被 daemon 重挂（模型上下文需要），打全文会逐轮重复，所以静默，压缩的告知由下面的 completed 行承担；无 meta 的旧格式 compact note 仍照常打全文；`message.created/completed` 刻意不渲染（readline 已回显用户输入，再渲染会重复）。
    - `compaction.started` → 暗色 `[正在压缩早期对话…]` 一行（收尾压缩发生在 `run.completed` 之后、中途/急救压缩发生在运行中的迭代边界——都有这行提示，摘要调用的数秒不是静默空窗）；`compaction.completed` → 按 `result` 三分支：`ok` 打暗色 `✱ 早期对话已压缩为 N 段，保留最近 M 条原文（早期细节可用 session_search 检索）`、`failed` 打暗色 `✱ 压缩失败，本轮继续（稍后自动重试）`、`cancelled` 打暗色 `✱ 压缩已取消`——事件只在真正发生压缩时发一次，天然是"每次压缩一条"的告知，与 WebUI 的折叠块同一去重语义（见 [compaction](../core/compaction.md)）。
    - `memory.written`（广播，不带 sessionId）→ 暗色一行 `已写入记忆: <path>`，提示记忆已落盘；它与 run 生命周期无关，只是轻提示（见 [memory](../core/memory.md)）。
+   - `hook.failed` → 暗色一行 `⚠ 钩子 <名字> 失败（<位置>[ 装载]）：<原因>`——用户钩子一律 fail-open 不伤 run，但失败必须可见（spec issue #6，机制见 [hooks](../core/hooks.md)）。
    - `run.completed`/`run.failed`/error 帧 → 结束本轮等待。
 4. **Ctrl+C 逐级升级**（readline 在待输行为空时把 Ctrl+C 转成 `"SIGINT"` 事件，`sigints` 计数只增不减）：第一次在 run 进行中 → 发 `{type:"run.cancel"}`（run 随后经正常渲染路径以 `stopReason:"aborted"` 结束），并查排队数，非空则提示"还有 N 条排队消息，再按一次 Ctrl+C 清空"；第一次空闲 → 同样查排队数，非空提示清空、为空提示"再按一次 Ctrl+C 退出"；第二次 → 队列非空则发 `{type:"queue.cancel"}` 清空全部可取消条目并提示"队列已清空，再按一次 Ctrl+C 退出"，队列为空直接退出；第三次 → 关闭 socket、关闭 readline、`process.exit(130)`。
 

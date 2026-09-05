@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest"
 import { runAgent, type AgentDeps, type RunInput } from "../../src/agent/index.js"
 import { newMessage } from "../../src/protocol/messages.js"
 import type { AgentEvent, LlmClient, LlmStreamEvent, Message, ToolDefinition } from "../../src/index.js"
+import { chainOf, hook } from "./hook-utils.js"
 
 /** 第一轮吐一个 tool_use（触发工具批次→边界），此后每轮 end_turn。 */
 function toolThenEndLlm(): LlmClient {
@@ -28,7 +29,7 @@ function baseInput(): RunInput {
   return { sessionId: "ses_1", history: [], system: "s", userText: "go" }
 }
 
-describe("AgentDeps.steering", () => {
+describe("turn-boundary（steering 注入位置）", () => {
   it("drains at the iteration boundary, in order, and the provider view includes the messages", async () => {
     const steer1 = newMessage("ses_1", "user", [{ id: "b1", type: "text", text: "补一句：注意并发" }])
     const steer2 = newMessage("ses_1", "user", [{ id: "b2", type: "text", text: "再补：写测试" }])
@@ -51,7 +52,8 @@ describe("AgentDeps.steering", () => {
       llm, model: "m",
       tools: new Map([["noop", noopTool]]),
       toolDefs: [noopDef],
-      steering: vi.fn(() => (persisted.length >= 2 ? [steer1, steer2] : [])), // 工具消息落盘后的第一个边界吐两条
+      hooks: chainOf(hook("drain", "turn-boundary", () =>
+        persisted.length >= 2 ? [steer1, steer2] : [])), // 工具消息落盘后的第一个边界吐两条
       onEvent: (e) => events.push(e),
       onMessage: (m) => persisted.push(m),
     }
@@ -71,13 +73,13 @@ describe("AgentDeps.steering", () => {
     expect(idxSteered).toBeGreaterThan(idxCompleted)
   })
 
-  it("a throwing steering drain fails the run (steering_failed) and resolves error", async () => {
+  it("a throwing fatal drain fails the run (steering_failed) and resolves error", async () => {
     const events: AgentEvent[] = []
     const deps: AgentDeps = {
       llm: toolThenEndLlm(), model: "m",
       tools: new Map([["noop", noopTool]]),
       toolDefs: [noopDef],
-      steering: () => { throw new Error("boom") },
+      hooks: chainOf(hook("drain", "turn-boundary", () => { throw new Error("boom") })),
       onEvent: (e) => events.push(e),
       onMessage: () => {},
     }
@@ -86,12 +88,13 @@ describe("AgentDeps.steering", () => {
     expect(events.find((e) => e.type === "run.failed")?.payload.error.code).toBe("steering_failed")
   })
 
-  it("without steering, behavior is identical to before (no extra events)", async () => {
+  it("without a drain hook, behavior is identical to before (no extra events)", async () => {
     const events: AgentEvent[] = []
     const deps: AgentDeps = {
       llm: toolThenEndLlm(), model: "m",
       tools: new Map([["noop", noopTool]]),
       toolDefs: [noopDef],
+      hooks: chainOf(),
       onEvent: (e) => events.push(e),
       onMessage: () => {},
     }

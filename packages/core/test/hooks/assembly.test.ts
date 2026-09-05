@@ -1,0 +1,195 @@
+/**
+ * executeRun 与钩子系统的端到端（spec issue #6）：内置链照常工作、extraHooks /
+ * HookRegistry 的用户条目在同一链上生效、fail-open 失败发 hook.failed 且不伤 run。
+ */
+import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
+import { tmpdir } from "node:os"
+import { executeRun, type RunEngine } from "../../src/agent/run-assembly.js"
+import { runAgent } from "../../src/agent/loop.js"
+import { EventBus } from "../../src/bus.js"
+import type { AgentEvent } from "../../src/protocol/events.js"
+import { SessionStore } from "../../src/session/store.js"
+import { Compactor } from "../../src/session/compactor.js"
+import { MemorySystem } from "../../src/memory/system.js"
+import { ConfirmationBroker } from "../../src/permissions/broker.js"
+import { HookRegistry } from "../../src/hooks/registry.js"
+import { loadConfig, resolvePaths } from "../../src/storage/index.js"
+import type { LlmClient, LlmStreamEvent } from "../../src/provider/types.js"
+import type { HookEntry } from "../../src/hooks/types.js"
+import { chainOf, hook } from "../agent/hook-utils.js"
+
+let home: string
+let workspace: string
+
+beforeEach(() => {
+  home = join(tmpdir(), `kclaw-hookrun-home-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  workspace = join(tmpdir(), `kclaw-hookrun-ws-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  mkdirSync(home, { recursive: true })
+  mkdirSync(workspace, { recursive: true })
+})
+afterEach(() => {
+  rmSync(home, { recursive: true, force: true })
+  rmSync(workspace, { recursive: true, force: true })
+})
+
+/** 记录事件的 bus（executeRun 的 busEmit 全走这里）。 */
+class RecordingBus extends EventBus {
+  readonly events: AgentEvent[] = []
+  override emit(e: AgentEvent): void {
+    this.events.push(e)
+    super.emit(e)
+  }
+}
+
+function scriptClient(): LlmClient {
+  const events: LlmStreamEvent[] = [
+    { type: "text_delta", delta: "done" },
+    { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 3, outputTokens: 2 } },
+  ]
+  return { async *stream(req): AsyncIterable<LlmStreamEvent> { lastRequest = req; yield* events } }
+}
+let lastRequest: { messages: Array<{ role: string; content: unknown }> } | undefined
+
+function makeEngine(overrides: Partial<RunEngine["deps"]> = {}, extra: Partial<RunEngine> = {}): {
+  engine: RunEngine
+  bus: RecordingBus
+  sessions: SessionStore
+  sessionId: string
+} {
+  const paths = resolvePaths(home)
+  const config = loadConfig(paths)
+  const sessions = new SessionStore(paths.sessionsDir)
+  const bus = new RecordingBus()
+  const memory = new MemorySystem({
+    memoryDir: paths.memoryDir,
+    sessions,
+    config,
+    resolveLlm: () => ({ llm: scriptClient(), model: "test-model" }),
+  })
+  const sessionId = sessions.create("钩子端到端").id
+  const engine: RunEngine = {
+    deps: {
+      config,
+      paths,
+      sessions,
+      memory,
+      bus,
+      llm: scriptClient(),
+      model: "test-model",
+      workspace,
+      broker: new ConfirmationBroker(),
+      ...overrides,
+    },
+    compactor: new Compactor({ sessions, emit: (e) => bus.emit(e) }),
+    ...extra,
+  }
+  return { engine, bus, sessions, sessionId }
+}
+
+function handoff(sessionId: string, userText = "你好") {
+  return {
+    sessionId,
+    input: { userText, trigger: "user" as const },
+    controller: new AbortController(),
+    drainSteer: () => [],
+  }
+}
+
+describe("executeRun × hook system", () => {
+  it("内置链照常工作：消息落盘、run 完成、系统提示词审计留痕", async () => {
+    const { engine, bus, sessions, sessionId } = makeEngine()
+    const outcome = await executeRun(engine, handoff(sessionId))
+    expect(outcome.stopReason).toBe("end_turn")
+
+    const types = bus.events.map((e) => e.type)
+    expect(types[0]).toBe("run.started")
+    expect(types).toContain("message.created")
+    expect(types).toContain("message.completed")
+    expect(types).toContain("llm.started")
+    expect(types.at(-1)).toBe("run.completed")
+
+    const persisted = sessions.readMessages(sessionId)
+    expect(persisted.map((m) => m.role)).toEqual(["user", "assistant"])
+
+    // system-audit（system-after，fatal）：一份全量系统提示词事件
+    const systemEvents = sessions.readEvents(sessionId).filter((e) => e.type === "system")
+    expect(systemEvents).toHaveLength(1)
+    expect((systemEvents[0] as { text: string }).text.length).toBeGreaterThan(0)
+  })
+
+  it("extraHooks 在链上生效：system-before 段落进系统提示词、llm-before 改写只动模型视图", async () => {
+    const extra: HookEntry[] = [
+      hook("test-segment", "system-before", () => ["【测试段落】"]),
+      hook("test-rewrite", "llm-before", (ctx) => {
+        const last = ctx.messages[ctx.messages.length - 1]!
+        return [...ctx.messages.slice(0, -1), { ...last, content: `${String(last.content)}【已包装】` }]
+      }),
+    ]
+    const { engine, bus, sessions, sessionId } = makeEngine({ extraHooks: extra })
+    const outcome = await executeRun(engine, handoff(sessionId))
+    expect(outcome.stopReason).toBe("end_turn")
+
+    const systemEvents = sessions.readEvents(sessionId).filter((e) => e.type === "system")
+    expect(systemEvents).toHaveLength(1)
+    expect((systemEvents[0] as { text: string }).text).toContain("【测试段落】")
+
+    // 模型视图被改写；持久化的用户消息保持原文
+    expect(String(lastRequest!.messages.at(-1)!.content)).toContain("【已包装】")
+    expect(sessions.readMessages(sessionId)[0]!.blocks[0]).toMatchObject({ type: "text", text: "你好" })
+    expect(bus.events.some((e) => e.type === "hook.failed")).toBe(false)
+  })
+
+  it("skip 钩子抛错：run 照常完成，hook.failed 经 bus 可见（phase run）", async () => {
+    const extra: HookEntry[] = [
+      hook("broken-observer", "run-before", () => { throw new Error("observer boom") }, { failure: "skip", order: 5 }),
+    ]
+    const { engine, bus, sessionId } = makeEngine({ extraHooks: extra })
+    const outcome = await executeRun(engine, handoff(sessionId))
+    expect(outcome.stopReason).toBe("end_turn")
+    const failed = bus.events.find((e) => e.type === "hook.failed")
+    expect(failed).toBeDefined()
+    expect(failed!.payload).toMatchObject({
+      hook: "broken-observer", position: "run-before", error: "observer boom", phase: "run",
+    })
+    expect(failed!.sessionId).toBe(sessionId)
+  })
+
+  it("HookRegistry 的用户文件钩子进入 run 链：refresh 后段落生效", async () => {
+    const userHooksDir = join(home, "hooks")
+    mkdirSync(userHooksDir, { recursive: true })
+    writeFileSync(join(userHooksDir, "my-segment.js"), [
+      'export const hook = { position: "system-before", description: "用户段落" }',
+      'export default () => ["【用户文件段落】"]',
+    ].join("\n"))
+    const registry = new HookRegistry({ userDir: userHooksDir })
+    const { engine, bus, sessions, sessionId } = makeEngine({ hooks: registry })
+    const outcome = await executeRun(engine, handoff(sessionId))
+    expect(outcome.stopReason).toBe("end_turn")
+    const systemEvents = sessions.readEvents(sessionId).filter((e) => e.type === "system")
+    expect((systemEvents[0] as { text: string }).text).toContain("【用户文件段落】")
+    expect(bus.events.some((e) => e.type === "hook.failed")).toBe(false)
+  })
+
+  it("run-after 链在 runAgent 返回后串行执行（内置 + 注入共用）", async () => {
+    const order: string[] = []
+    const extra: HookEntry[] = [
+      hook("after-watcher", "run-after", () => { order.push("watcher") }, { failure: "skip", order: 15 }),
+    ]
+    const { engine, sessionId } = makeEngine({ extraHooks: extra })
+    const outcome = await executeRun(engine, handoff(sessionId))
+    expect(outcome.stopReason).toBe("end_turn")
+    // 内置 usage-ledger(10) → 注入 watcher(15) → post-run-compaction(20)
+    expect(order).toEqual(["watcher"])
+  })
+})
+
+/** 防止 runAgent import 被裁掉的类型引用（loop 语义测试在 agent/ 目录）。 */
+describe("loop re-export sanity", () => {
+  it("runAgent 与 executeRun 同源可用", () => {
+    expect(typeof runAgent).toBe("function")
+    expect(typeof executeRun).toBe("function")
+    expect(typeof chainOf).toBe("function")
+  })
+})

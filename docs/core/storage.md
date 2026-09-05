@@ -31,6 +31,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `<home>/memory/projects/<id>/` | L1 项目情节（`<topic>.md` 主题线、workdir.txt、MEMORY.md、state.json、vectors.db） | MemorySystem / 用户手编 |
 | `<home>/memory/notes/`、`<home>/memory/index.db` | v1 遗留：前者是迁移输入（daemon 启动读后删除）、后者是被删除的 v1 派生物索引 | 仅 daemon 启动迁移（见 [memory](./memory.md)） |
 | `<home>/skills/` | 全局技能包目录（每个子目录是一个技能，含 `SKILL.md`；项目级技能在工作区 `.kclaw/skills/`，见 [skills](./skills.md)） | 用户手编；每次 run 现扫读取 |
+| `<home>/hooks/` | 用户钩子目录（每个文件是一个钩子，`export const hook` + default 函数；见 [hooks](./hooks.md)） | 用户手编；每次 run 现扫读取 |
 | `<home>/sessions/<id>/` | 每会话一目录（events.jsonl + meta.json + queue.jsonl，分工见下节） | SessionStore（events.jsonl 为唯一真相、meta.json 为派生投影、queue.jsonl 为运行态整文件重写） |
 | `<home>/jobs.db` | 定时任务表 | JobScheduler |
 | `<home>/usage.db` | 每次 LLM 运行的 token 用量台账 | UsageStore |
@@ -72,6 +73,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `sessions.compactThreshold` / `compactKeep` | 无（废弃） | v1 压缩（40 条触发、保留 25 条）的字段，已废弃不生效：配置文件里存在时不报错，但没有任何消费方 |
 | `notify.channels` | `[]` | job 终态通知渠道列表；为空即关闭（零开销）。条目 `{ name?, type, url, template? }`，`type` 三种：`bark`（POST JSON `{title, body}`）、`serverchan`（POST 表单 `title`+`desp`）、`webhook`（POST JSON，正文含 title/body 及全部 job 字段）。`template` 占位符：`{{job}}` `{{statusText}}` `{{status}}` `{{summary}}` `{{sessionId}}` `{{sessionUrl}}`，未知占位符渲染为空串 |
 | `notify.timeoutMs` | `10000` | 单次推送请求超时；推送失败仅记日志、不重试 |
+| `hooks.timeoutMs` | `5000` | 单个钩子 handler 的执行预算（毫秒），超时按失败处理（用户钩子 skip、内置 fatal，见 [hooks](./hooks.md)）；可选字段，缺省值在钩子链构建处兜底 |
 | `workspace` | `process.cwd()` | 工具的工作目录；daemon 由启动方决定 cwd，会话可经 `meta.workdir` 覆盖 |
 
 读（`loadConfig(paths)`）：缺失/空文件 → 默认值的克隆；YAML 语法错误或非映射结构 → 抛错；其余 → `deepMerge(defaults 克隆, 文件内容)`。**没有结构校验**：多余字段原样保留，字段类型错误在消费方才暴露。

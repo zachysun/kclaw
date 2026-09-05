@@ -136,7 +136,7 @@ export function makeEvent<T extends EventType>(
 ): AgentEvent<T>
 ```
 
-`EventType` 共 **35 种**，九个分组：
+`EventType` 共 **36 种**，十个分组：
 
 | 分组 | 事件 | 数量 |
 |------|------|------|
@@ -149,6 +149,7 @@ export function makeEvent<T extends EventType>(
 | 消息排队与引导 | `message.queued` `message.steered` `message.queue_cancelled` | 3 |
 | 上下文压缩 | `compaction.started` `compaction.completed` | 2 |
 | 记忆落盘 | `memory.written` | 1 |
+| 扩展 | `hook.failed` | 1 |
 
 关键 payload：
 
@@ -205,6 +206,15 @@ export interface MemoryWrittenPayload {
   topic?: string
   scope?: string
 }
+
+// 钩子失败（spec issue #6）：用户钩子一律 fail-open，run 不受影响，但失败必须可见。
+// phase:"load" 是装载期失败（无 sessionId/runId）；"run" 是执行期失败（带所在 run 的上下文）。
+export interface HookFailedPayload {
+  hook: string
+  position: string
+  error: string
+  phase: "load" | "run"
+}
 ```
 
 发射方分布：
@@ -215,6 +225,7 @@ export interface MemoryWrittenPayload {
 | `message.queued` `message.queue_cancelled` | server 的 `RunManager`（`run.ts`：submit / recoverQueues / queueCancel） |
 | `compaction.started` `compaction.completed` | core 压缩引擎 `Compactor`（`packages/core/src/session/compactor.ts` 的 `compact` / `auto`，覆盖收尾 post-run / 运行中 in-run / 手动 manual 三路） |
 | `memory.written` | core 的 `MemoryPipeline`（`memory/pipeline.ts`，每次落盘经装配的 emit 钩子广播；daemon 侧接钩子的点在 `server/daemon.ts`） |
+| `hook.failed` | core 钩子系统（`hooks/runner.ts` 的 skip 失败报告 + `hooks/registry.ts` 的装载失败去重报告；两处都经 run 装配/daemon 的总线扇出） |
 | `job.*` | server 的 `scheduler-tick.ts` |
 | `session.renamed` | server 的自动命名（`autoname.ts`：新标题写回 meta 后发出） |
 | `attachment.*` | 目前**已定义无发射方**——附件以 attachment 块随用户消息整体持久化与广播（`message.completed` 携带全量消息），不需要单独的块级事件流 |

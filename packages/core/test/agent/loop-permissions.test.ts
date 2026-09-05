@@ -5,6 +5,7 @@ import type { ToolExecutor } from "../../src/agent/tools.js"
 import type { LlmClient, LlmStreamEvent } from "../../src/provider/types.js"
 import type { AssistantMessage, Message } from "../../src/protocol/messages.js"
 import type { AgentEvent } from "../../src/protocol/events.js"
+import { chainOf } from "./hook-utils.js"
 
 const FINAL: LlmStreamEvent[] = [
   { type: "text_delta", delta: "ok" },
@@ -39,6 +40,7 @@ async function runWith(gate: PermissionGate, extra: Record<string, unknown> = {}
     {
       llm: scriptClient([toolTurn(), FINAL]),
       model: "m",
+      hooks: chainOf(),
       onEvent: (e) => events.push(e),
       onMessage: (m) => messages.push(m),
       tools: new Map([["exec", {
@@ -204,6 +206,7 @@ describe("permission gate", () => {
         ], FINAL]),
         model: "m",
         signal: controller.signal,
+        hooks: chainOf(),
         onEvent: (e) => events.push(e),
         onMessage: (m) => messages.push(m),
         tools,

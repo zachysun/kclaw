@@ -24,6 +24,7 @@ import { SessionStore } from "../../src/session/store.js"
 import { MemorySystem } from "../../src/memory/system.js"
 import { createBuiltinTools } from "../../src/tools/index.js"
 import { loadConfig, saveConfig, resolvePaths } from "../../src/storage/index.js"
+import { chainOf } from "../agent/hook-utils.js"
 
 let home: string
 let workspace: string
@@ -104,6 +105,7 @@ describe("integration smoke", () => {
         permissions: gate,
         // auto-approve any confirmation (never reached on the whitelist path)
         resolveConfirmation: async () => ({ approved: true, by: "cli" }),
+        hooks: chainOf(),
         onEvent: (e) => events.push(e),
         onMessage,
       },
@@ -171,6 +173,7 @@ describe("integration smoke", () => {
         permissions: gate,
         // the human says yes: grantedBy "confirmed" lands on the tool message
         resolveConfirmation: async () => ({ approved: true, by: "cli" }),
+        hooks: chainOf(),
         onEvent: (e) => events.push(e),
         onMessage,
       },

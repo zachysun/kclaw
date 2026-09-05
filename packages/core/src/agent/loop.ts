@@ -13,6 +13,8 @@ import { isContextOverflowError } from "../provider/overflow.js"
 import type { ActiveSummary } from "../session/compaction.js"
 import { toProviderMessages } from "./context.js"
 import type { ToolExecutor } from "./tools.js"
+import type { HookRunner } from "../hooks/types.js"
+import { raceConfirmation } from "../permissions/broker.js"
 
 /** Gate verdict for one tool call: run it, refuse it, or ask a human. */
 export type PermissionDecision =
@@ -71,16 +73,6 @@ export interface AgentDeps {
   /** abort guardrail: the run stops at the next checkpoint with stopReason "aborted" */
   signal?: AbortSignal
   /**
-   * Retry visibility: notified for each failed LLM attempt that
-   * will be retried with backoff. The retrying itself lives in the provider
-   * wrapper — the loop never calls this itself (withRetry owns retries inside
-   * `stream()`; a loop-level retry would double-retry). Daemon-side
-   * composition wires withRetry's `onRetry` to its own per-run sink, which
-   * translates each notification to an `llm.failed {willRetry:true}` event
-   * and feeds the attempt counter below.
-   */
-  onLlmRetry?(info: { attempt: number; error: unknown }): void
-  /**
    * The attempt number `llm.started` reports. Defaults to 1 — a
    * fresh call — because wrapper-level retries happen INSIDE `deps.llm.stream()`
    * after `llm.started` was already emitted; the composition that owns those
@@ -90,59 +82,16 @@ export interface AgentDeps {
    */
   llmAttempt?(): number
   /**
-   * User-message augmentation hook: called once with the user
-   * message skeleton right after its `message.created` went out and BEFORE
-   * the loop persists (internal path) and completes it. Lets the composition
-   * that owns note injection (RunManager's memory/job notes) append note
-   * blocks — announcing each on its own sink as `note.emitted` — so the wire
-   * order stays message.created → note.emitted ×N → message.completed with
-   * the notes part of the completed message. The returned message is what
-   * the loop uses everywhere afterwards (history, provider view, outcome).
-   * Additive: unset behaves exactly like before (the built message is used
-   * as-is), and the hook runs on BOTH user-message paths — synthesized from
-   * `userText` and caller-injected `RunInput.userMessage`. A THROWING hook
-   * (or persistence sink) terminates the run: `run.failed` with code
-   * "user_message_failed", and runAgent resolves with stopReason "error".
+   * The hook chain (spec issue #6): the loop's behavior seams as named
+   * positions. The assembly installs the builtin closures (former
+   * onUserMessage / mapLlmMessages / steering / midRunCompaction /
+   * onContextOverflow behaviors) and the user's file hooks here; the loop
+   * only knows positions. Fatal-failure hooks propagate through this call —
+   * each call site's existing catch path keeps its old error code.
    */
-  onUserMessage?(message: Message): Message
-  /**
-   * Steering drain: polled at every iteration boundary (after a tool batch
-   * completes, before the next llm.stream). Returns the messages to inject
-   * this round (empty array when none); the loop appends each to history
-   * (`all`), persists via onMessage, and announces created → completed →
-   * steered. A throw terminates the run: run.failed "steering_failed",
-   * runAgent resolves stopReason "error" (same semantics as onUserMessage).
-   */
-  steering?: () => Message[]
-  /**
-   * Mid-run compaction hook (spec 5.3 #5): called at every iteration
-   * boundary AFTER the tool batch completes and BEFORE the steering drain.
-   * Returns the new active summary to apply to subsequent requests, or null
-   * (nothing to compact / declined / already cancelled — the run continues
-   * either way). A THROWING hook also just continues: a failed compaction is
-   * never remediated here (spec 5.8, no fallback).
-   */
-  midRunCompaction?: () => Promise<ActiveSummary | null>
-  /**
-   * Context-overflow rescue (spec 5.6): consulted when a stream dies having
-   * produced NOTHING and isContextOverflowError matches. A non-null return
-   * retries the whole request exactly once with that summary swapped in;
-   * null (or a throw) gives up and the original error path takes over. The
-   * retry is silent — no extra llm.started / llm.failed — internal
-   * self-healing must not disturb the event stream.
-   */
-  onContextOverflow?(err: unknown): Promise<ActiveSummary | null>
+  hooks: HookRunner
   /** 省略预算（黄线值）透传给打包台：预算装不下的工具输出以省略占位符发送。 */
   tokenBudget?: number
-  /**
-   * 模型视图改写钩子（LLM 执行前）：每次 llm.stream 之前，loop 把
-   * toProviderMessages 的产物——即将发送的消息列表（已完成窗口裁剪、工具
-   * 结果打包、压缩脉络垫底）——交给它，返回什么发什么。持久化、事件流与
-   * outcome 一概不动：这是“只改模型看到的输入”的唯一口子（技能点名的
-   * 隐式包装是第一个使用者）。同一 run 的工具循环每轮调用一次；实现应
-   * 保持纯函数（同输入同输出），抛出按流失败路径处理。
-   */
-  mapLlmMessages?(messages: ProviderMessage[]): ProviderMessage[]
   onEvent(e: AgentEvent): void
   onMessage(m: Message): void
 }
@@ -177,36 +126,6 @@ function errorMessage(err: unknown): string {
 const NOT_RUN_OUTPUT = "run aborted before execution"
 
 type ConfirmationResolution = { approved: boolean; by: "cli" | "web" | "timeout" }
-
-/**
- * `Promise.race` against a timer AND an abort signal; the timer is cleared
- * and the listener removed once the race settles. An abort wins as the
- * sentinel "aborted" — kept distinct from the timeout fallback so an aborted
- * wait is never misreported as a timeout-deny.
- */
-function raceConfirmation(
-  p: Promise<ConfirmationResolution>,
-  ms: number,
-  signal: AbortSignal | undefined,
-): Promise<ConfirmationResolution | "aborted"> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const sleep = new Promise<ConfirmationResolution>((resolve) => {
-    timer = setTimeout(() => resolve({ approved: false, by: "timeout" }), ms)
-  })
-  let onAbort = () => {}
-  const abort = new Promise<"aborted">((resolve) => {
-    if (!signal) return
-    if (signal.aborted) resolve("aborted")
-    else {
-      onAbort = () => resolve("aborted")
-      signal.addEventListener("abort", onAbort, { once: true })
-    }
-  })
-  return Promise.race([p, sleep, abort]).finally(() => {
-    if (timer !== undefined) clearTimeout(timer)
-    signal?.removeEventListener("abort", onAbort)
-  })
-}
 
 /**
  * Guardrail wrapper around an LLM stream: the moment the abort signal fires,
@@ -245,13 +164,11 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
   emit(makeEvent("run.started", { trigger: input.trigger ?? "user" }, ctx))
 
   // User message lifecycle: created carries the
-  // SKELETON before the message is used; the optional augmentation hook then
-  // appends note blocks (memory/job — the augmenter announces each on its own
-  // sink as note.emitted, between created and completed); the loop persists
-  // (internal path only — a caller-injected message is never re-persisted
-  // through onMessage, its caller owns the write) and completes the FULL
-  // message. Wire order: run.started → message.created → note.emitted ×N →
-  // message.completed → llm.*, with events trailing persisted state.
+  // SKELETON before the message is used; the run-before hook chain then runs
+  // (builtin: memory notes + persist + autoname; user hooks may rewrite),
+  // and the loop completes the FULL message. Wire order: run.started →
+  // message.created → note.emitted ×N → message.completed → llm.*, with
+  // events trailing persisted state.
   let userMsg = input.userMessage ?? newMessage(input.sessionId, "user", [
     { id: newBlockId(), type: "text", text: input.userText } satisfies TextBlock,
   ])
@@ -261,9 +178,12 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
   // same pattern as the provider-failure path). Unlike a failed assistant
   // message there is nothing to complete first — the user message carries no
   // stopReason — so the terminal event is run.failed directly, and runAgent
-  // RESOLVES with a stopReason "error" outcome instead of rejecting.
+  // RESOLVES with a stopReason "error" outcome instead of rejecting. Fatal
+  // hooks (the builtin persistence step) propagate through hooks.run and
+  // land here as before.
   try {
-    if (deps.onUserMessage !== undefined) userMsg = deps.onUserMessage(userMsg)
+    const rewritten = await deps.hooks.run("run-before", { message: userMsg })
+    if (rewritten !== undefined) userMsg = rewritten
     if (input.userMessage === undefined) deps.onMessage(userMsg)
     emit(makeEvent("message.completed", { message: userMsg }, ctx))
   } catch (err) {
@@ -275,12 +195,12 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
 
   const all: Message[] = [...input.history, userMsg]
   const totalUsage: Usage = { inputTokens: 0, outputTokens: 0 }
-  // 压缩视图（运行起点来自 input.compaction，之后可被 midRunCompaction /
-  // onContextOverflow 钩子替换）：生效时 upto（含）之前的原文不再发送，
+  // 压缩视图（运行起点来自 input.compaction，之后可被 compaction-check /
+  // overflow-rescue 位置的钩子替换）：生效时 upto（含）之前的原文不再发送，
   // 脉络项由 toProviderMessages 垫在 messages[0]。all 里的原文不动——
   // 压缩只改“发什么给模型”，不改历史与持久化。
   let compacted = input.compaction
-  const buildMessages = (): ProviderMessage[] => {
+  const buildMessages = async (): Promise<ProviderMessage[]> => {
     let msgs = all
     if (compacted !== undefined) {
       const base = all.findIndex((m) => m.id === compacted!.upto)
@@ -291,7 +211,9 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       ...(deps.tokenBudget === undefined ? {} : { tokenBudget: deps.tokenBudget }),
       ...(compacted === undefined ? {} : { summary: compacted }),
     })
-    return deps.mapLlmMessages !== undefined ? deps.mapLlmMessages(provider) : provider
+    // llm-before 改写链（技能点名的隐式包装是内置使用者）：返回什么发什么，
+    // 持久化、事件流与 outcome 一概不动。
+    return (await deps.hooks.run("llm-before", { messages: provider })) ?? provider
   }
 
   // Abort guardrail for a signal that fires when no message from the current
@@ -335,7 +257,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
     // rejecting — 只有 provider 彻底失败才终止 run.
     let streamError: unknown
     // 超限自愈（spec 5.6）：流失败且一个事件都没收到（零输出）且判定为上下文
-    // 超限时，经 onContextOverflow 换压缩视图整次重发——恰好一次。已收到过任何
+    // 超限时，经 overflow-rescue 位置换压缩视图整次重发——恰好一次。已收到过任何
     // 事件的流失败不重试（半截输出无法干净重来）。重试静默进行：不额外发
     // llm.started / llm.failed；失败尝试也从未发过任何 *.created（没收到事件才
     // 允许重试），故重置累积器即可无痕重来。
@@ -354,7 +276,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
         for await (const ev of streamWithAbort(deps.llm.stream({
           model: deps.model,
           system: input.system,
-          messages: buildMessages(),
+          messages: await buildMessages(),
           tools: deps.toolDefs ?? [],
         }), deps.signal)) {
           // Abort checkpoint: stop consuming the stream the moment the signal fires.
@@ -398,10 +320,12 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       }
       const overflowRetry = tryIdx === 0 && streamError !== undefined && !streamed
         && deps.signal?.aborted !== true
-        && isContextOverflowError(streamError) && deps.onContextOverflow !== undefined
+        && isContextOverflowError(streamError) && deps.hooks.has("overflow-rescue")
       if (!overflowRetry) break
       let next: ActiveSummary | null = null
-      try { next = await deps.onContextOverflow!(streamError) } catch { next = null }
+      try {
+        next = (await deps.hooks.run("overflow-rescue", { error: errorMessage(streamError) })) ?? null
+      } catch { next = null }
       if (next === null) break
       // 钩子 await 期间的 abort 窄窗口：急救压缩可能正好在信号触发后归并完、
       // 返回了有效视图——此刻信号已中止，重发注定立刻被拆（下一轮迭代的
@@ -421,6 +345,11 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
     // degenerate created→delta→completed triple only completes what streamed.
     if (streamError === undefined) {
       emit(makeEvent("llm.completed", { usage, stopReason, latencyMs: Date.now() - startedAt }, ctx))
+      void deps.hooks.run("llm-after", {
+        usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens },
+        stopReason,
+        latencyMs: Date.now() - startedAt,
+      }).catch(() => { /* llm-after has no fatal builtins; observation must not disturb the run */ })
     }
 
     // argsJson is only complete after the stream ends — parse now, in model order.
@@ -487,7 +416,10 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       assistant.stopReason = stopReason
       for (const b of blocks) {
         if (b.type === "text") emit(makeEvent("text.completed", { messageId: assistant.id, block: b }, ctx))
-        else if (b.type === "thinking") emit(makeEvent("thinking.completed", { messageId: assistant.id, block: b }, ctx))
+        else if (b.type === "thinking") {
+          emit(makeEvent("thinking.completed", { messageId: assistant.id, block: b }, ctx))
+          void deps.hooks.run("think-after", { block: b }).catch(() => { /* observation only */ })
+        }
       }
       if (truncationNote) {
         emit(makeEvent("note.emitted", { messageId: assistant.id, block: truncationNote }, ctx))
@@ -533,38 +465,37 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
 
     if (stopReason === "tool_use" && entries.length > 0) {
       await runToolTurn(entries, { input, deps, emit, ctx, all })
-      // 迭代边界中途压缩（spec 5.3 第 5 条）：工具批次完成后、steering drain 之前。
-      // 返回 null = 不压/已取消，照常继续；抛错同样照常继续（压缩失败不补救，
+      // 迭代边界中途压缩（spec 5.3 第 5 条，compaction-check 位置）：工具批次
+      // 完成后、引导注入之前。返回 null/undefined = 不压/已取消/失败，照常继续；
+      // 抛错（skip 语义下不会发生，防御保留）同样照常继续（压缩失败不补救，
       // 省略兜底，spec 5.8）。非 null 视图从下一次请求起生效（buildMessages）。
-      if (deps.midRunCompaction !== undefined) {
-        try {
-          const next = await deps.midRunCompaction()
-          if (next !== null) compacted = next
-        } catch { /* 压缩失败不补救：省略兜底，spec 5.8 */ }
+      try {
+        const next = await deps.hooks.run("compaction-check", {})
+        if (next !== null && next !== undefined) compacted = next
+      } catch { /* 压缩失败不补救：省略兜底，spec 5.8 */ }
+      // Steering drain（spec §5.1，turn-boundary 位置）：工具批次后、下一次
+      // llm.stream 前。取到的消息按序注入：created → persist(onMessage) →
+      // completed → steered。fatal 钩子（内置 steering-drain）抛错按原语义终止
+      // run（run.failed "steering_failed"，resolve stopReason "error"）。
+      let steerMsgs: Message[] = []
+      try {
+        const injected = await deps.hooks.run("turn-boundary", {})
+        if (injected !== undefined) steerMsgs = injected
+      } catch (err) {
+        emit(makeEvent("run.failed", { error: { code: "steering_failed", message: errorMessage(err) } }, ctx))
+        return { stopReason: "error", totalUsage, messages: all }
       }
-      // Steering drain（spec §5.1）：工具批次后、下一次 llm.stream 前。取到的消息按序
-      // 注入：created → persist(onMessage) → completed → steered。抛错按 onUserMessage
-      // 同语义终止 run（run.failed "steering_failed"，resolve stopReason "error"）。
-      if (deps.steering !== undefined) {
-        let steerMsgs: Message[]
+      for (const m of steerMsgs) {
+        emit(makeEvent("message.created", { message: m }, ctx))
         try {
-          steerMsgs = deps.steering()
+          deps.onMessage(m)
         } catch (err) {
           emit(makeEvent("run.failed", { error: { code: "steering_failed", message: errorMessage(err) } }, ctx))
           return { stopReason: "error", totalUsage, messages: all }
         }
-        for (const m of steerMsgs) {
-          emit(makeEvent("message.created", { message: m }, ctx))
-          try {
-            deps.onMessage(m)
-          } catch (err) {
-            emit(makeEvent("run.failed", { error: { code: "steering_failed", message: errorMessage(err) } }, ctx))
-            return { stopReason: "error", totalUsage, messages: all }
-          }
-          emit(makeEvent("message.completed", { message: m }, ctx))
-          emit(makeEvent("message.steered", { messageId: m.id }, ctx))
-          all.push(m)
-        }
+        emit(makeEvent("message.completed", { message: m }, ctx))
+        emit(makeEvent("message.steered", { messageId: m.id }, ctx))
+        all.push(m)
       }
       continue
     }
@@ -610,6 +541,9 @@ async function runToolTurn(
     if (entry.result) continue // invalid args / unknown tool never reach the gate
     // Abort checkpoint: stop gating — and thereby executing — anything further.
     if (deps.signal?.aborted) break
+    // tool-before 观察（只读）：裁决（权限网关 + 确认）是引擎控制流，内置独占；
+    // 该位置对 hook 只暴露即将执行的调用，返回值忽略。
+    await deps.hooks.run("tool-before", { toolCall: entry.call })
     const decision = deps.permissions
       ? await deps.permissions.check(entry.call)
       : { type: "allow" as const, reason: "safe" as const }
@@ -689,6 +623,7 @@ async function runToolTurn(
     }
     block.durationMs = performance.now() - startedAt
     emit(makeEvent("tool_result.completed", { messageId: toolMsg.id, block }, ctx))
+    await deps.hooks.run("tool-after", { toolCall: entry.call, result: block })
     return block
   }
 
