@@ -199,6 +199,76 @@ export function mergeQueue(
   return { ...state, queue }
 }
 
+/**
+ * One unconfirmed send snapshot for the reconnect resend (issue #8): the text
+ * plus the disposition it was sent with. Optimistic bubbles don't carry their
+ * disposition, so a resent bubble defaults to "steer" (the panel's default
+ * disposition). Attachments are NOT covered — their refs leave view state the moment
+ * the frame is built — so attachment-only sends (empty text) are skipped
+ * entirely: under-resend beats double-send.
+ */
+export interface PendingSend {
+  text: string
+  disposition: QueueEntryView["disposition"]
+}
+
+/**
+ * Snapshot the unconfirmed sends BEFORE the reconnect resync: `local-` queue
+ * rows (no ack yet) plus pending optimistic bubbles. mergeQueue rebuilds the
+ * rows wholesale from the server list, so this is the last moment an
+ * undelivered send is still visible in state.
+ */
+export function collectPendingSends(state: ChatState): PendingSend[] {
+  const sends: PendingSend[] = []
+  for (const e of state.queue) {
+    if (e.messageId.startsWith("local-")) sends.push({ text: e.text, disposition: e.disposition })
+  }
+  for (const m of state.messages) {
+    if (m.id.startsWith("local-") && m.pending && m.role === "user") {
+      sends.push({ text: firstRenderedUserText(m), disposition: "steer" })
+    }
+  }
+  return sends
+}
+
+/**
+ * Which snapshotted sends never reached the daemon: absent from BOTH the
+ * resynced queue snapshot and the message list. Only server-sourced rows
+ * count as delivery evidence — the queue snapshot is rebuilt wholesale from
+ * the server list, and `local-` optimistic bubbles are the client's own echo,
+ * never proof. Matched by text, so a duplicate that DID arrive marks its twin
+ * as delivered too — the same conservative direction as the CLI resend rule
+ * ("presume delivered"; under-resend beats a double-run). Empty texts cannot
+ * be matched and are skipped.
+ */
+export function undeliveredPendingSends(before: PendingSend[], after: ChatState): PendingSend[] {
+  const known = new Set<string>()
+  for (const e of after.queue) known.add(e.text)
+  for (const m of after.messages) {
+    if (m.role === "user" && !m.id.startsWith("local-")) known.add(firstRenderedUserText(m))
+  }
+  const seen = new Set<string>()
+  const out: PendingSend[] = []
+  for (const s of before) {
+    if (s.text === "" || seen.has(s.text) || known.has(s.text)) continue
+    seen.add(s.text)
+    out.push(s)
+  }
+  return out
+}
+
+/** Remove the stale optimistic rows of the given texts — the resend replaces them. */
+export function dropLocalPending(state: ChatState, texts: string[]): ChatState {
+  const dropped = new Set(texts)
+  return {
+    ...state,
+    messages: state.messages.filter(
+      (m) => !(m.id.startsWith("local-") && m.pending && m.role === "user" && dropped.has(firstRenderedUserText(m))),
+    ),
+    queue: state.queue.filter((e) => !(e.messageId.startsWith("local-") && dropped.has(e.text))),
+  }
+}
+
 /** Narrow a wire disposition string to the view union ("wait" as the fallback). */
 function asDisposition(d: string): QueueEntryView["disposition"] {
   return d === "steer" || d === "wait" || d === "interrupt" ? d : "wait"
