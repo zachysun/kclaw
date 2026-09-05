@@ -123,7 +123,7 @@ export class EventBus {
   → 此后只处理新到达的事件帧
 ```
 
-- **web**（`packages/web/src/chat/ChatPanel.tsx`）：连续失败重连上限 `MAX_RECONNECT_ATTEMPTS = 3`（成功一次即重置预算），超过则提示"重连失败，请刷新页面"停止；4001 关闭不重连，提示重新输入 token。合并语义在 `packages/web/src/chat/model.ts` 的 `mergeMessages`：新拉的消息列表是权威状态，覆盖本地流式中的未完成版本。
+- **web**（`packages/web/src/chat/ChatPanel.tsx`）：连续失败重连上限 `MAX_RECONNECT_ATTEMPTS = 3`（成功一次即重置预算），超过则提示"重连失败，请刷新页面"停止；4001 关闭不重连，提示重新输入 token。合并语义在 `packages/web/src/chat/model.ts` 的 `mergeMessages`：新拉的消息列表是权威状态，覆盖本地流式中的未完成版本。对齐之后还有一个**补发环节**（issue #8）：对齐前快照的未确认发送（`local-` 行/气泡），对齐后在队列快照与消息列表里都找不到同文本的，视为从未送达、按原处置自动补发——判定只认服务端证据（本地乐观回显不算），与 CLI 重发规则同一保守方向（宁漏发不双发）。
 - **CLI**（`packages/cli/src/chat.ts`）：重连后观察到的事件带 120s 静默超时（`POST_RECONNECT_SILENCE_MS = 120_000`，超时内一帧未到就认定 run 已终止、放弃等待）——daemon 已终止的 run 永远不会完成，REPL 不可无限等待。**重发规则**：发送中的消息仅当观察到**零帧**（连 `send_message_ack` 都没有）才重发——零帧证明消息从未到达存活的 daemon；一旦观察到任何帧（ack 即证明服务端已入队）就绝不重发，宁可等待静默超时，避免同一消息被执行两次。
 - **为什么无回放可行**：持久化的块永远是完整终稿（见 [protocol](../core/protocol.md)），`GET /sessions/:id/messages` 拉取到的每条消息自洽；实时事件流只是"正在发生"的增量视图，丢失即丢弃，下一次全量拉取自然对齐（权威历史在 events.jsonl，需要回查可走 `GET /sessions/:id/events`）。
 

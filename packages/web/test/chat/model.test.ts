@@ -12,6 +12,9 @@ import {
   mergeQueue,
   appendPendingQueueRow,
   adoptQueuedId,
+  collectPendingSends,
+  dropLocalPending,
+  undeliveredPendingSends,
   type AgentEvent,
   type Block,
   type ChatState,
@@ -658,5 +661,71 @@ describe("queue reducer", () => {
     // Replay/refresh edge: the event arrives with no optimistic bubble to adopt.
     const s = applyEvent(base(), ev("message.queued", { messageId: "msg_r", disposition: "wait" }))
     expect(s.queue).toEqual([{ messageId: "msg_r", disposition: "wait", text: "" }])
+  })
+})
+
+describe("reconnect resend (issue #8)", () => {
+  const bubble = (text: string): ChatState => appendOptimisticUser(initChat([]), text)
+  const queued = (text: string, disposition: "steer" | "wait" | "interrupt" = "wait"): ChatState => ({
+    ...initChat([]),
+    queue: [{ messageId: "local-abc", disposition, text }],
+  })
+
+  it("collectPendingSends snapshots local- queue rows and pending bubbles, not confirmed state", () => {
+    // 手工构造（不走 message.queued reducer——它会把最早的 local- 行转正）。
+    let s: ChatState = {
+      ...initChat([]),
+      queue: [
+        { messageId: "msg_ok", disposition: "wait", text: "已确认排队" },
+        { messageId: "local-abc", disposition: "interrupt", text: "排队一条" },
+      ],
+    }
+    s = appendOptimisticUser(s, "直发一条")
+    s = { ...s, messages: [...s.messages, { id: "m1", role: "user" as const, pending: false, blocks: [{ kind: "text" as const, blockId: "b", text: "已确认气泡" }] }] }
+
+    const before = collectPendingSends(s)
+    expect(before.map((p) => p.text).sort()).toEqual(["排队一条", "直发一条"])
+    expect(before.find((p) => p.text === "排队一条")!.disposition).toBe("interrupt")
+  })
+
+  it("undeliveredPendingSends keeps only sends absent from both the resynced queue and messages", () => {
+    const before = [
+      { text: "只在队列", disposition: "steer" as const },
+      { "text": "只在消息流", disposition: "wait" as const },
+      { text: "哪儿都没有", disposition: "steer" as const },
+    ]
+    let after = mergeQueue(initChat([]), [{ messageId: "msg_a", disposition: "steer", text: "只在队列" }])
+    after = { ...after, messages: [{ id: "m1", role: "user" as const, pending: false, blocks: [{ kind: "text" as const, blockId: "b", text: "只在消息流" }] }] }
+
+    expect(undeliveredPendingSends(before, after).map((p) => p.text)).toEqual(["哪儿都没有"])
+  })
+
+  it("undeliveredPendingSends: a duplicate that arrived marks its twin delivered too (no double-send)", () => {
+    const before = [
+      { text: "同样的话", disposition: "steer" as const },
+      { text: "同样的话", disposition: "wait" as const },
+    ]
+    const after = mergeQueue(initChat([]), [{ messageId: "msg_a", disposition: "steer", text: "同样的话" }])
+    expect(undeliveredPendingSends(before, after)).toEqual([])
+  })
+
+  it("undeliveredPendingSends skips empty texts (attachment-only sends cannot be matched)", () => {
+    const before = [{ text: "", disposition: "steer" as const }]
+    expect(undeliveredPendingSends(before, initChat([]))).toEqual([])
+  })
+
+  it("dropLocalPending removes the stale optimistic rows for the resent texts and nothing else", () => {
+    const s: ChatState = {
+      ...initChat([]),
+      queue: [
+        { messageId: "local-abc", disposition: "wait", text: "没到" },
+        { messageId: "msg_keep", disposition: "wait", text: "确认过的排队" },
+      ],
+      messages: appendOptimisticUser(initChat([]), "也没到").messages,
+    }
+
+    const dropped = dropLocalPending(s, ["没到", "也没到"])
+    expect(dropped.queue).toEqual([{ messageId: "msg_keep", disposition: "wait", text: "确认过的排队" }])
+    expect(dropped.messages).toHaveLength(0)
   })
 })

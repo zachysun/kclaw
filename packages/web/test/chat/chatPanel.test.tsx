@@ -711,6 +711,42 @@ describe("ChatPanel", () => {
     h.unmount()
   })
 
+  it("resends an undelivered message after a reconnect (issue #8)", async () => {
+    const h = await mount({ initialMessages: [] })
+    await drive(() => { h.sockets[0]!.open() })
+    // Sent while connected, but the daemon never answers (no ack / queued
+    // frame fed) — then the socket dies. The frame went out on a socket that
+    // (from the daemon's point of view) never received it.
+    await sendText(h, "没到")
+    await drive(() => { h.sockets[0]!.onclose?.({ code: 1006 }) })
+    // Reconnect resync finds neither the queue row nor a message with the
+    // text → the send is presumed undelivered and resent.
+    expect(h.container.textContent).toContain("已重连，补发 1 条断线期间未送达的消息")
+    expect(findUserBubble(h.container, "没到")).not.toBeNull()
+    await drive(() => { h.sockets[1]!.open() })
+    const frames = h.sockets[1]!.sent.map((f) => JSON.parse(f) as { type: string; text?: string })
+    expect(frames[0]).toEqual({ type: "auth", token: "tok-1" })
+    const resent = frames.filter((f) => f.type === "send_message")
+    expect(resent).toHaveLength(1)
+    expect(resent[0]!.text).toBe("没到")
+    h.unmount()
+  })
+
+  it("does NOT resend a message the reconnect resync proves delivered", async () => {
+    const h = await mount({ initialMessages: [msg("m1", "user", [{ id: "b1", type: "text", text: "到了" }])] })
+    await drive(() => { h.sockets[0]!.open() })
+    await sendText(h, "到了")
+    await drive(() => { h.sockets[0]!.onclose?.({ code: 1006 }) })
+    // The resync pull returns the same persisted message — the optimistic
+    // twin merges away and the send is presumed delivered: no resend.
+    expect(h.container.textContent).toContain("已重连")
+    expect(h.container.textContent).not.toContain("补发")
+    await drive(() => { h.sockets[1]!.open() })
+    const resent = h.sockets[1]!.sent.map((f) => JSON.parse(f) as { type: string }).filter((f) => f.type === "send_message")
+    expect(resent).toHaveLength(0)
+    h.unmount()
+  })
+
   it("stops reconnecting after repeated failed attempts", async () => {
     const h = await mount()
     // The daemon refuses to rebuild the socket — every reconnect attempt fails.

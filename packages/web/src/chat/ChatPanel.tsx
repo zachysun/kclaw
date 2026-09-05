@@ -20,13 +20,17 @@ import {
   applyEvent,
   appendOptimisticUser,
   appendPendingQueueRow,
+  collectPendingSends,
+  dropLocalPending,
   initChat,
   mergeMessages,
   mergeQueue,
+  undeliveredPendingSends,
   type AgentEvent,
   type ChatState,
   type MemoryWrittenInfo,
   type Message,
+  type PendingSend,
 } from "./model.js"
 import { runWebCommand } from "./commands.js"
 import { ChatView, type CompactionRecordView, type Disposition, type PendingAttachment } from "./ChatView.js"
@@ -138,7 +142,15 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       }
     }
 
-    const refreshMessages = async (): Promise<boolean> => {
+    const refreshMessages = async (): Promise<{ ok: boolean; resent: number }> => {
+      // 断线期间未确认的发送先抓快照（issue #8 补发）：mergeQueue 会按服务端
+      // 快照整体重建队列行——未送达消息的 local- 行不留痕迹，素材必须在重建
+      // 之前抓。
+      let pendingBefore: PendingSend[] = []
+      updateView((v) => {
+        pendingBefore = collectPendingSends(v)
+        return v
+      })
       // 全量消息 + 队列快照并行拉取（spec §7.1 重连纠偏），两个方向彼此独立：
       // 队列拉取失败不阻塞消息合并（事件流会继续纠偏）；消息拉取失败照样合并
       // 队列——排队气泡的重建不依赖消息基线。
@@ -148,7 +160,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           `/sessions/${encodeURIComponent(sessionId)}/queue`,
         ),
       ])
-      if (cancelled) return false
+      if (cancelled) return { ok: false, resent: 0 }
       let ok = false
       if (messagesResult.status === "fulfilled") {
         updateView((v) => ({ ...v, messages: mergeMessages(v.messages, messagesResult.value) }))
@@ -159,7 +171,16 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       if (queueResult.status === "fulfilled") {
         updateView((v) => mergeQueue(v, queueResult.value))
       }
-      return ok
+      if (!ok) return { ok: false, resent: 0 }
+      // 对齐之后仍无踪迹的快照项 = 从未到达 daemon（CLI 重发规则的同一窗口）：
+      // 清掉残留的乐观行，按原处置逐条补发——补发走新 client 的发送缓冲，
+      // 鉴权帧仍然最先。已对上的消息绝不重发（防服务端双跑）。
+      const undelivered = undeliveredPendingSends(pendingBefore, viewRef.current)
+      if (undelivered.length > 0) {
+        updateView((v) => dropLocalPending(v, undelivered.map((s) => s.text)))
+        for (const s of undelivered) sendMessageRaw(s.text, s.disposition, [])
+      }
+      return { ok: true, resent: undelivered.length }
     }
 
     // 跨客户端行补文本：message.queued 载荷不带文本——别的客户端（CLI、另一
@@ -250,24 +271,23 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           return
         }
         setNotice(outcome === "error" ? "连接异常，正在重连…" : "连接已断开，正在重连…")
-        let ok = false
+        let res = { ok: false, resent: 0 }
         try {
           const next = createWs()
           client = next
           clientRef.current = next
           subscribe(next)
-          ok = await refreshMessages()
+          res = await refreshMessages()
         } catch (err) {
           if (cancelled) return
           setNotice(authNotice(err, "重连失败"))
-          ok = false
         }
         if (cancelled) return
         // A failed refresh already surfaced its own notice — only a successful
         // reconnect clears it.
-        if (!ok) continue
+        if (!res.ok) continue
         attempts = 0
-        setNotice("已重连")
+        setNotice(res.resent > 0 ? `已重连，补发 ${res.resent} 条断线期间未送达的消息` : "已重连")
       }
     }
 
@@ -376,6 +396,26 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
   }, [api, workdir])
 
+  /**
+   * The raw send path shared by handleSend and the post-reconnect resend
+   * (issue #8): one send_message frame plus the optimistic echo (queued row
+   * when busy, pending bubble when idle) — and nothing else: no slash
+   * parsing, no attachment/disposition state changes.
+   */
+  const sendMessageRaw = useCallback((text: string, sendDisposition: Disposition, attachments: PendingAttachment[]) => {
+    clientRef.current.send({
+      type: "send_message",
+      sessionId,
+      text,
+      disposition: sendDisposition,
+      ...(attachments.length > 0 ? { attachments } : {}),
+    })
+    updateView((v) =>
+      v.runState === "running" || v.compacting === true
+        ? appendPendingQueueRow(v, text, sendDisposition)
+        : appendOptimisticUser(v, text))
+  }, [sessionId, updateView])
+
   const handleSend = useCallback((text: string) => {
     // Slash commands intercept before the ws send path (the same point where
     // the CLI chat loop intercepts) — they never reach the model. 动态技能
@@ -399,21 +439,8 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
     try {
       const attachments = [...pendingAttachments]
-      clientRef.current.send({
-        type: "send_message",
-        sessionId,
-        text,
-        disposition,
-        ...(attachments.length > 0 ? { attachments } : {}),
-      })
+      sendMessageRaw(text, disposition, attachments)
       setPendingAttachments([])
-      // 乐观回显的分路（Master 2026-08-30）：忙会话（run 进行中或压缩中）发
-      // 送必然排队——消息从第一帧起就不进消息流，乐观回显直接落到列表行
-      // （local- 待确认 id，ack/queued 转正）；空闲直发才立即回显气泡。
-      updateView((v) =>
-        v.runState === "running" || v.compacting === true
-          ? appendPendingQueueRow(v, text, disposition)
-          : appendOptimisticUser(v, text))
       // 一次性 interrupt（spec §7.1 改版，Master 2026-08-31）：这条带 interrupt
       // 发出后即切回基础处置，三选不停在「中断」档——否则 sticky 到所有客户端，
       // 后续任何普通消息都会先掐 run（"来一条、断一条"）。
@@ -423,7 +450,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     } catch {
       setNotice("连接不可用，请稍后重试")
     }
-  }, [sessionId, pendingAttachments, api, onCreateSession, onOpenSessions, handleSwitchModel, models, currentModel, updateView, disposition, skillRows])
+  }, [sessionId, pendingAttachments, api, onCreateSession, onOpenSessions, handleSwitchModel, models, currentModel, updateView, disposition, skillRows, sendMessageRaw])
 
   /** Upload dropped files and queue them for the next message. */
   const handleDrop = useCallback((event: React.DragEvent) => {

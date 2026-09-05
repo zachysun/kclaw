@@ -1,19 +1,12 @@
 /**
- * HTTP client for the kclaw daemon. Wraps fetch with the bearer token and
- * turns non-2xx responses into {@link ApiError} carrying the server's
- * `body.error` message. A 401 propagates as a plain ApiError with status 401
- * so the App can drop back to the token form.
+ * HTTP client for the kclaw daemon. Wraps the shared `httpRequest` base
+ * (@kclaw/core/client-http — bearer token, error-body extraction, 204/empty
+ * handling) with the web's URL resolution (empty base = same-origin: the
+ * daemon serves the SPA itself) and the 401 re-entry hook.
  */
 
-export class ApiError extends Error {
-  readonly status: number
-
-  constructor(status: number, message: string) {
-    super(message)
-    this.name = "ApiError"
-    this.status = status
-  }
-}
+export { HttpRequestError as ApiError } from "@kclaw/core/client-http"
+import { httpRequest } from "@kclaw/core/client-http"
 
 export interface ApiClient {
   get<T = unknown>(path: string): Promise<T>
@@ -51,71 +44,25 @@ export function createApi(
   getToken: () => string | null,
   options: ApiClientOptions = {},
 ): ApiClient {
-  const request = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
-    const token = getToken()
-    const headers: Record<string, string> = {}
-    if (token !== null) headers.authorization = `Bearer ${token}`
-    if (body !== undefined) headers["content-type"] = "application/json"
-
-    const res = await fetch(resolveUrl(base, path), {
+  const request = async <T>(method: string, path: string, body?: unknown): Promise<T> =>
+    httpRequest(resolveUrl(base, path), {
       method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-    })
+      body,
+      getToken,
+      onUnauthorized: options.onUnauthorized,
+    }) as Promise<T>
 
-    if (!res.ok) {
-      let message = `HTTP ${res.status}`
-      try {
-        const data: unknown = await res.json()
-        if (
-          typeof data === "object" && data !== null &&
-          typeof (data as { error?: unknown }).error === "string"
-        ) {
-          message = (data as { error: string }).error
-        }
-      } catch {
-        // Non-JSON error body: keep the HTTP fallback.
-      }
-      const err = new ApiError(res.status, message)
-      // The App drops back to the token form on any 401 (the re-entry path).
-      if (err.status === 401) options.onUnauthorized?.()
-      throw err
-    }
-
-    if (res.status === 204) return undefined as T
-    const text = await res.text()
-    return (text === "" ? undefined : (JSON.parse(text) as T)) as T
-  }
-
-  const upload = async (sessionId: string, file: File): Promise<{ path: string; name: string; size: number }> => {
-    const token = getToken()
-    const res = await fetch(
+  const upload = (sessionId: string, file: File): Promise<{ path: string; name: string; size: number }> =>
+    httpRequest(
       resolveUrl(base, `/sessions/${encodeURIComponent(sessionId)}/attachments?filename=${encodeURIComponent(file.name)}`),
       {
         method: "POST",
-        headers: {
-          ...(token !== null ? { authorization: `Bearer ${token}` } : {}),
-          "content-type": file.type || "application/octet-stream",
-        },
         body: file,
+        contentType: file.type || "application/octet-stream",
+        getToken,
+        onUnauthorized: options.onUnauthorized,
       },
-    )
-    if (res.status === 401) options.onUnauthorized?.()
-    if (!res.ok) {
-      let message = `HTTP ${res.status}`
-      try {
-        const data: unknown = await res.json()
-        if (typeof data === "object" && data !== null && typeof (data as Record<string, unknown>).error === "string") {
-          message = (data as { error: string }).error
-        }
-      } catch {
-        // keep HTTP fallback
-      }
-      throw new ApiError(res.status, message)
-    }
-    const body = (await res.json()) as { file: { path: string; name: string; size: number } }
-    return body.file
-  }
+    ).then((parsed) => (parsed as { file: { path: string; name: string; size: number } }).file)
 
   return {
     get: (path) => request("GET", path),

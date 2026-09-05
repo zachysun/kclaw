@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import WebSocket from "ws"
 import type { ClientCommand } from "@kclaw/core"
+import { httpRequest } from "@kclaw/core/client-http"
 import { defaultHome, ensureDaemon, probeHealth, readDaemonJson } from "./daemon-ctl.js"
 
 /** The daemon only ever binds loopback (127.0.0.1). */
@@ -130,35 +131,15 @@ export class KclawClient {
 
   /**
    * One HTTP request with the Bearer token; JSON in, JSON out. Non-2xx
-   * throws with the server's `body.error` (fallback: `HTTP <status>`).
+   * throws with the server's `body.error` (fallback: `HTTP <status>`) —
+   * the shared `httpRequest` base (@kclaw/core/client-http).
    */
-  async request(method: string, path: string, body?: unknown): Promise<unknown> {
-    const res = await fetch(`${this.base}${path}`, {
+  request(method: string, path: string, body?: unknown): Promise<unknown> {
+    return httpRequest(`${this.base}${path}`, {
       method,
-      headers: {
-        authorization: `Bearer ${this.token}`,
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body,
+      getToken: () => this.token,
     })
-    if (!res.ok) {
-      let message = `HTTP ${res.status}`
-      try {
-        const data: unknown = await res.json()
-        if (
-          typeof data === "object" && data !== null &&
-          typeof (data as Record<string, unknown>).error === "string"
-        ) {
-          message = (data as { error: string }).error
-        }
-      } catch {
-        // Non-JSON error body: keep the HTTP fallback.
-      }
-      throw new Error(message)
-    }
-    if (res.status === 204) return undefined
-    const text = await res.text()
-    return text === "" ? undefined : (JSON.parse(text) as unknown)
   }
 
   /**
@@ -201,24 +182,12 @@ export class KclawClient {
    * stored file info; the returned path/name feed the send_message
    * `attachments` array.
    */
-  async uploadAttachment(sessionId: string, filename: string, body: Buffer, mimeType: string): Promise<{ file: { path: string; name: string; size: number } }> {
-    const res = await fetch(`${this.base}/sessions/${encodeURIComponent(sessionId)}/attachments?filename=${encodeURIComponent(filename)}`, {
+  uploadAttachment(sessionId: string, filename: string, body: Buffer, mimeType: string): Promise<{ file: { path: string; name: string; size: number } }> {
+    return httpRequest(`${this.base}/sessions/${encodeURIComponent(sessionId)}/attachments?filename=${encodeURIComponent(filename)}`, {
       method: "POST",
-      headers: { authorization: `Bearer ${this.token}`, "content-type": mimeType },
-      body: body as unknown as BodyInit,
-    })
-    if (!res.ok) {
-      let message = `HTTP ${res.status}`
-      try {
-        const data: unknown = await res.json()
-        if (typeof data === "object" && data !== null && typeof (data as Record<string, unknown>).error === "string") {
-          message = (data as { error: string }).error
-        }
-      } catch {
-        // keep HTTP fallback
-      }
-      throw new Error(message)
-    }
-    return (await res.json()) as { file: { path: string; name: string; size: number } }
+      body,
+      contentType: mimeType,
+      getToken: () => this.token,
+    }) as Promise<{ file: { path: string; name: string; size: number } }>
   }
 }
