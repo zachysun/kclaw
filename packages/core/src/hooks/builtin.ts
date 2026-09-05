@@ -31,7 +31,7 @@ import { scheduleAutoname } from "../session/autoname.js"
 import type { SessionStore } from "../session/store.js"
 import type { Compactor } from "../session/compactor.js"
 import type { KclawConfig } from "../storage/config.js"
-import type { MemorySystem } from "../memory/system.js"
+import type { MemoryQuery, MemoryScheduleBook } from "../memory/system.js"
 import type { UsageStore } from "../storage/usage.js"
 import { withLastUserText } from "../agent/context.js"
 import type { HookEntry, HookContextMap, HookPosition, HookResultMap } from "./types.js"
@@ -45,7 +45,7 @@ const MEMORY_LIMIT = 5
 export interface BuiltinHookDeps {
   sessionId: string
   sessions: SessionStore
-  memory: MemorySystem
+  memory: MemoryQuery & Pick<MemoryScheduleBook, "scheduleFollowCheck">
   config: KclawConfig
   workspace: string
   compactor: Compactor

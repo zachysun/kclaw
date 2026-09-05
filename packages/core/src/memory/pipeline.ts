@@ -198,7 +198,11 @@ export class MemoryPipeline {
     return run
   }
 
-  #indexFor(projectId: string): VectorIndex {
+  /**
+   * 项目检索索引（唯一所有者，spec 卡⑤）：全库的 VectorIndex 连接只在这里
+   * 打开与缓存——system 的检索路径经此借用，不再自建连接。daemon 生命周期内复用。
+   */
+  indexFor(projectId: string): VectorIndex {
     let idx = this.#indexes.get(projectId)
     if (idx === undefined) {
       idx = new VectorIndex(join(this.#layout.projectDir(projectId), "vectors.db"))
@@ -207,8 +211,8 @@ export class MemoryPipeline {
     return idx
   }
 
-  /** 全局认知库索引：显式落 <memoryDir>/global/vectors.db，不走 projects 目录。 */
-  #globalIndex(): VectorIndex {
+  /** 全局认知库索引借用口：显式落 <memoryDir>/global/vectors.db，不走 projects 目录。 */
+  globalIndex(): VectorIndex {
     let idx = this.#indexes.get("__global__")
     if (idx === undefined) {
       idx = new VectorIndex(join(this.#layout.globalDir, "vectors.db"))
@@ -261,7 +265,7 @@ export class MemoryPipeline {
       // 写路径即时向量补算（spec 7.2）：embed 可用时本次写入的线立即有向量，
       // 不必等下次重启 reconcile —— 否则运行期新经历的双路融合会结构性退化为纯关键词。
       if (this.#deps.embed !== undefined) {
-        await this.#backfillVectors(this.#indexFor(projectId), this.#projectEntries(projectId))
+        await this.#backfillVectors(this.indexFor(projectId), this.#projectEntries(projectId))
       }
     }
     // 顺带内化检查（spec 4.2/6）：本次涉及的线若已 inactive 则总结一次。
@@ -387,7 +391,7 @@ export class MemoryPipeline {
   }
 
   #reindexProject(projectId: string): void {
-    const idx = this.#indexFor(projectId)
+    const idx = this.indexFor(projectId)
     const onDisk = new Set<string>()
     for (const entry of this.#projectEntries(projectId)) {
       onDisk.add(entry.key)
@@ -483,7 +487,7 @@ export class MemoryPipeline {
 
   /** 项目库向量补算（spec 7.2）：embed 可用时对缺向量或正文变化的条目批量补。 */
   async backfillProjectVectors(projectId: string): Promise<void> {
-    await this.#backfillVectors(this.#indexFor(projectId), this.#projectEntries(projectId))
+    await this.#backfillVectors(this.indexFor(projectId), this.#projectEntries(projectId))
   }
 
   /** 全局认知库全量重建索引（含 embed 可用时的向量补算）。 */
@@ -571,7 +575,7 @@ export class MemoryPipeline {
 
   /** 全局认知库重建索引：每文件一个条目，key = <kind>/<name>。 */
   async #reindexGlobal(): Promise<void> {
-    const idx = this.#globalIndex()
+    const idx = this.globalIndex()
     const dir = this.#layout.globalDir
     const entries: IndexEntry[] = []
     const onDisk = new Set<string>()

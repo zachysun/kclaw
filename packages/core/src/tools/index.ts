@@ -7,7 +7,7 @@
  * asserts it stays that way in both directions).
  */
 import type { ToolExecutor } from "../agent/tools.js"
-import type { MemorySystem } from "../memory/system.js"
+import type { MemoryQuery, MemoryTriggers } from "../memory/system.js"
 import type { SkillRecord } from "../skills/index.js"
 import type { ToolDefinition } from "../provider/types.js"
 import { createExecTool } from "./exec.js"
@@ -43,7 +43,7 @@ function def(
 
 export function createBuiltinTools(opts: {
   workspace: string
-  memoryCtx: { system: MemorySystem; sessionId: string; workdir: string; immediateEnabled: boolean }
+  memoryCtx: { system: Pick<MemoryTriggers, "triggerImmediate"> & Pick<MemoryQuery, "searchAll">; sessionId: string; workdir: string; immediateEnabled: boolean }
   tavilyApiKey: string
   exec?: Partial<{ timeoutMs: number; maxOutputBytes: number }>
   web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean }>

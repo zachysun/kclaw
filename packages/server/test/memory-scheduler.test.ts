@@ -32,6 +32,7 @@ function fakeSystem(over: Record<string, unknown> = {}) {
     triggerInterval: vi.fn(async () => undefined),
     triggerFollow: viFnAsync(),
     triggerNightly: viFnAsync(),
+    recentSessionId: vi.fn(() => undefined),
     markIntervalRun: vi.fn(),
     markNightlyRun: vi.fn(),
     intervalLastRun: vi.fn(() => undefined),
@@ -135,9 +136,10 @@ describe("startMemoryScheduler", () => {
   })
 
   it("nightly: triggers after consolidateHour when not yet run today; records the LOCAL date", async () => {
-    const sys = fakeSystem()
     const now = new Date("2026-08-29T12:00:00Z") // 本地小时在常见时区（东八 = 20 点）≥ 3
     const meta = sessions.create("t", undefined, "/w/kclaw")
+    // 判据归 core 后（卡⑤），归属会话由 system.recentSessionId 提供——stub 直接送出刚建的会话
+    const sys = fakeSystem({ recentSessionId: vi.fn(() => meta.id) })
     const handle = startMemoryScheduler({
       system: sys as unknown as MemorySystem, sessions,
       config: structuredClone(defaultConfig),

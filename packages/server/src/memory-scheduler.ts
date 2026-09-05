@@ -12,7 +12,7 @@
  *
  * 手动/立刻不入此调度器（memory_save 工具与 /memory save 直接触发）。
  */
-import type { KclawConfig, MemorySystem, SessionStore } from "@kclaw/core"
+import type { KclawConfig, MemoryScheduleBook, MemoryTriggers, SessionStore } from "@kclaw/core"
 
 const DEFAULT_SCAN_MS = 60_000
 
@@ -38,7 +38,7 @@ export function followGateDue(
 export interface MemorySchedulerHandle { stop(): Promise<void> }
 
 export function startMemoryScheduler(deps: {
-  system: MemorySystem
+  system: MemoryScheduleBook & Pick<MemoryTriggers, "triggerInterval" | "triggerFollow" | "triggerNightly" | "recentSessionId">
   /**
    * SessionStore（M-4：当前调度器不直接读会话——项目维度活动时间经
    * system.lastActivity 取；保留该字段与 brief 的宿主接口契约一致，供宿主/后续任务扩展）。
@@ -61,11 +61,6 @@ export function startMemoryScheduler(deps: {
 
   async function sweep(): Promise<void> {
     const cfg = deps.config.memory
-    // 该项目最近活动的会话（与 core #recentSessionId 同判据）：夜间内化无显式归属
-    // 会话时，memory 事件落到它名下（Task 6/7 会话事件流归属）。
-    const recentSession = (workdir: string): string | undefined =>
-      deps.sessions.list().filter((m) => (m.workdir ?? "") === workdir)
-        .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))[0]?.id
     for (const workdir of deps.workdirs()) {
       if (stopped) return
       // 定时（intervalMinutes=0 关闭）
@@ -107,7 +102,9 @@ export function startMemoryScheduler(deps: {
       if (cfg.consolidateHour >= 0) {
         const t = now()
         if (t.getHours() >= cfg.consolidateHour && deps.system.nightlyLastRun(workdir) !== localDate(t)) {
-          const p = deps.system.triggerNightly(workdir, recentSession(workdir)).catch((e) => log(`kclaw memory nightly failed: ${String(e)}`))
+          // 夜间内化无显式归属会话时，memory 事件落到项目最近活动会话名下
+          // （判据唯一真身在 core：system.recentSessionId，卡⑤）。
+          const p = deps.system.triggerNightly(workdir, deps.system.recentSessionId(workdir)).catch((e) => log(`kclaw memory nightly failed: ${String(e)}`))
           inFlight.add(p); void p.finally(() => inFlight.delete(p))
           deps.system.markNightlyRun(workdir, localDate(t))
         }
