@@ -3,7 +3,7 @@ import Fastify from "fastify"
 import fastifyStatic from "@fastify/static"
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import { JobScheduler, SessionStore, loadConfig, resolvePaths } from "@kclaw/core"
-import type { KclawConfig, KclawPaths, MemorySystem, UsageStore } from "@kclaw/core"
+import type { KclawConfig, KclawPaths, HookRegistry, MemorySystem, UsageStore } from "@kclaw/core"
 import { bearerMatches } from "./auth.js"
 import { EventBus } from "@kclaw/core"
 import type { RunManager } from "./run.js"
@@ -16,6 +16,7 @@ import { registerJobRoutes } from "./routes/jobs.js"
 import { registerConfigRoutes } from "./routes/config.js"
 import { registerFsRoutes } from "./routes/fs.js"
 import { registerUsageRoutes } from "./routes/usage.js"
+import { registerHookRoutes } from "./routes/hooks.js"
 
 export interface AppOptions {
   /** kclaw home directory; the default SessionStore lives at <home>/sessions. */
@@ -68,6 +69,12 @@ export interface AppOptions {
    * are registered against it here yet.
    */
   memory?: MemorySystem
+  /**
+   * The daemon's user-hook registry (spec issue #6): `GET /hooks` reports
+   * its current bookkeeping (healthy/disabled/load-failed user hooks) next
+   * to the static builtin specs. Absent → the user list is empty.
+   */
+  hooks?: HookRegistry
   /**
    * Test-injection seam for the /ws pre-auth timeout (maps to WsOptions
    * `authTimeoutMs`); production defaults live in ws.ts.
@@ -152,6 +159,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   // the session routes only need it for POST /sessions/:id/compact.
   // spec 9.2 的 /memory 路由族：无 memory 装配时全部 503，不影响既有路由。
   registerMemoryRoutes(app, { memory: opts.memory, config })
+  registerHookRoutes(app, { hooks: opts.hooks })
   // /skills 路由族：只读技能管理面（CLI /skill 与 Web 技能页共用），无装配依赖。
   registerSkillRoutes(app, { paths })
   // 切会话写入：POST /sessions 是 CLI /clear、/new 与 web 新建会话的共同底层，

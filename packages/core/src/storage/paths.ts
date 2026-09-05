@@ -12,6 +12,8 @@ export interface KclawPaths {
   agentsMd: string
   /** ~/.kclaw/skills/<skill-name>/SKILL.md — global skill packages */
   skillsDir: string
+  /** ~/.kclaw/hooks/<name>.js|.mjs|.ts — user hook files (flat, self-declared position) */
+  hooksDir: string
   /** ~/.kclaw/memory */
   memoryDir: string
   /** ~/.kclaw/memory/notes — one markdown file per memory note */
@@ -52,6 +54,7 @@ export function resolvePaths(home?: string): KclawPaths {
     config: join(root, "config.yaml"),
     agentsMd: join(root, "AGENTS.md"),
     skillsDir: join(root, "skills"),
+    hooksDir: join(root, "hooks"),
     memoryDir: join(root, "memory"),
     memoryNotesDir: join(root, "memory", "notes"),
     memoryIndexDb: join(root, "memory", "index.db"),

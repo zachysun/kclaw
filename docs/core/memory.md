@@ -165,7 +165,7 @@ updated: 2026-08-30
 
 ### L2 常驻注入（系统提示，spec 7.1）
 
-`MemorySystem.cognitionPrompt(workdir)`（`packages/core/src/memory/system.ts`）在每次 run 装配系统提示时调用，返回的认知块拼在 AGENTS.md 基础提示之后（run 装配 core `executeRun` 的 `systemWithCognition`）。规则：
+`MemorySystem.cognitionPrompt(workdir)`（`packages/core/src/memory/system.ts`）在每次 run 装配系统提示时由 `system-before` 位置的内置 `system-materials` 钩子调用（见 [hooks](./hooks.md)），返回的认知块作为第一个段落追加在 AGENTS.md 基础提示之后。规则：
 
 1. **scope 过滤**：只收 `scope: "global"` 与 `scope: "project:<当前项目id>"` 的认知文件；
 2. **token 预算**：`memory.injectTokenBudget`（默认 1000）按 `estimateTokens(title + body)` 记账——**只约束 L2 认知常驻注入**，L1 情节检索的 top-5 是全量注入、不受此限；
@@ -182,7 +182,7 @@ run 装配（core `executeRun`）在构造用户消息骨架时调 `memory.searc
 相关经历（<线的一句话标题>）: <该小节情节正文>
 ```
 
-note 的 `kind` 是 `"memory"`，与 job 来源 note 一起在 `onUserMessage` 钩子里追加进消息、持久化，并逐个广播 `note.emitted`（事件序：`run.started → message.created → note.emitted ×N → message.completed`）。检索抛错时静默跳过——记忆是加速手段，检索失败不能阻塞一次 run。情节正文从线文件**实时回读**（文件是真相），线文件被删或不可解析时回落索引里的正文。
+note 的 `kind` 是 `"memory"`，与 job 来源 note 一起经 run-before 钩子链（内置 memory-inject 检索收集 → user-message-land 统一追加进消息、持久化，见 [hooks](./hooks.md)）落进用户消息，并逐个广播 `note.emitted`（事件序：`run.started → message.created → note.emitted ×N → message.completed`，job note 在 memory note 之前）。检索抛错时静默跳过——记忆是加速手段，检索失败不能阻塞一次 run。情节正文从线文件**实时回读**（文件是真相），线文件被删或不可解析时回落索引里的正文。
 
 ### 混合打分（spec 7.2）
 

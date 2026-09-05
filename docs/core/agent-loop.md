@@ -13,7 +13,8 @@
 - **持久化的块永远完整**：流式增量只存在于事件里，`onMessage` 收到的 `Message.blocks` 一定是终稿。
 - **历史永不修改**：窗口截断、孤儿清理都发生在组装 provider 视图时（`toProviderMessages`），JSONL（每行一条 JSON 的文本文件）里的原始消息逐字节不变。
 - **确认流不中断循环**：拒绝/超时变成 error result + note 块传回模型，模型可以换方案继续；只有 abort 才真正终止。
-- **重试所有权在 provider 层**：循环自己从不重试 LLM 调用（会与 `withRetry` 双重重试）；重试经 `onLlmRetry` 钩子以 `llm.failed {willRetry:true}` 事件对外可见。
+- **重试所有权在 provider 层**：循环自己从不重试 LLM 调用（会与 `withRetry` 双重重试）；provider 层的重试经 `llm-retry` 位置的钩子链以 `llm.failed {willRetry:true}` 事件对外可见。
+- **循环只认位置，不认行为**（spec issue #6）：用户消息增强、引导注入、压缩判定、模型视图改写……这些原本身份各异的"钩子字段"统一收进 `deps.hooks`（一个 `HookRunner`）的 14 个命名位置；行为以钩子条目在装配时注册（内置闭包与用户文件同一条链，见 [hooks](./hooks.md)）。循环在每个位置调用 `hooks.run(位置, ctx)` 并按该位置的契约消费结果。
 
 ---
 
@@ -45,24 +46,12 @@ export interface AgentDeps {
   resolveConfirmation?(confirmationId: string): Promise<{ approved: boolean; by: "cli" | "web" | "timeout" }>
   confirmTimeoutMs?: number             // 默认 120_000
   signal?: AbortSignal                  // 取消信号，见"取消路径"
-  onLlmRetry?(info: { attempt: number; error: unknown }): void
-  llmAttempt?(): number
-  onUserMessage?(message: Message): Message   // 用户消息增强（note 注入）；抛错 → run.failed
-  steering?(): Message[]              // 引导注入口：每轮工具批次后、下一次 llm.stream 前调用，
-                                      // 返回本轮要注入的消息（空数组 = 无）；抛错 → run.failed "steering_failed"
-  midRunCompaction?(): Promise<ActiveSummary | null>
-                                      // 运行中压缩（中断）注入口：同样在迭代边界调用，非空则把本轮
-                                      // 已累积的对话压成摘要、后续请求只带摘要 + 新内容（见 compaction.md 触发点二）
-  onContextOverflow?(err: unknown): Promise<ActiveSummary | null>
-                                      // 溢出急救：llm 抛上下文超限错误且本轮尚无任何事件时，重试恰好一次，
-                                      // 钩子返回的摘要用于重试请求；返回 null 则不重试（见 compaction.md 触发点三）
+  llmAttempt?(): number                 // llm.started 报告的尝试号；provider 层重试经 withRetry 在
+                                        // stream() 内部完成后，由装配把这个计数反馈进来（默认恒 1）
   tokenBudget?: number                // 请求预算（token 数）：驱动工具输出省略/历史逐出（见 compaction.md 机制二）
-  mapLlmMessages?(messages: ProviderMessage[]): ProviderMessage[]
-                                      // 模型视图改写钩子（LLM 执行前）：每次 llm.stream 之前，循环把
-                                      // toProviderMessages 的产物（已完成窗口裁剪/工具结果打包/压缩脉络垫底）
-                                      // 交给它，返回什么发什么——持久化、事件流与 outcome 一概不动，
-                                      // 是"只改模型看到的输入"的唯一口子（技能点名的隐式包装是第一个
-                                      // 使用者，见 skills.md）；未设置时行为与旧版逐字节一致
+  hooks: HookRunner                   // 钩子链（spec issue #6）：循环的行为接缝全部以此为准（见 hooks.md）。
+                                      // 各位置的 fatal 抛错沿 hooks.run 传播，由循环既有的 catch 路径接管，
+                                      // 错误码与迁移前一致（user_message_failed / steering_failed / …）
   onEvent(e: AgentEvent): void
   onMessage(m: Message): void
 }
@@ -86,12 +75,13 @@ export type PermissionDecision =
 ```
 run.started {trigger}
   → message.created（用户消息骨架：先建空壳，内容随后补全）
-  → [onUserMessage 钩子：注入 note] → onMessage 持久化 → message.completed
+  → [run-before 钩子链：改写/注入 note/持久化/自动命名，见 hooks.md]
+    → onMessage 持久化（非注入路径）→ message.completed
   → for iter = 0 .. maxIterations-1:
       ① abort 检查点（预中止：直接 run.completed{aborted}）
       ② llm.started {model, attempt}
       ③ message.created（assistant 骨架，先于任何块事件，携带真实 messageId）
-      ④ 流式消费 llm.stream（见下）
+      ④ 流式消费 llm.stream（视图经 llm-before 钩子链改写，见下）
       ⑤ llm.completed {usage, stopReason, latencyMs}     ← 流失败则跳过，改发 llm.failed
       ⑥ tool_call.completed ×N（流结束后才 parse argsJson）
       ⑦ assistant 补全：块为空 → 整条丢弃（不持久化、无 completed）
@@ -99,30 +89,31 @@ run.started {trigger}
       ⑧ stopReason 分派：
          end_turn          → run.completed，返回
          error             → 悬空 tool_call（无配对结果的调用）合成 error result 配对持久化 → llm.failed{willRetry:false} → run.failed，返回
-         tool_use 且有调用 → 工具回合（见下）→ steering drain（见下）→ continue
+         tool_use 且有调用 → 工具回合（见下）→ turn-boundary 钩子链（见下）→ continue
          其余（max_tokens/stop_sequence/content_filter/aborted/空 tool_use）→ run.completed，返回
   → 循环耗尽：截断 note 已随最后一条 assistant 持久化 → run.failed {code:"max_iterations"}，返回 stopReason "error"
 ```
 
-`run.failed` 的四个错误码：`user_message_failed`（onUserMessage/持久化钩子抛错）、`llm_error`（provider 彻底失败）、`max_iterations`、`steering_failed`（引导注入或落盘抛错）。
+`run.failed` 的四个错误码：`user_message_failed`（run-before 链的 fatal 抛错或持久化抛错）、`llm_error`（provider 彻底失败）、`max_iterations`、`steering_failed`（turn-boundary 链的 fatal 抛错或注入落盘抛错）。
 
-用户消息路径有两条：默认由 `userText` 合成（循环自行 `onMessage` 持久化）；宿主传入 `RunInput.userMessage` 时循环原样使用、**不重复持久化**（持久化责任在宿主，daemon 在 `onUserMessage` 钩子里做）。两条路径都会发 `message.created`/`message.completed`，钩子都执行。
+用户消息路径有两条：默认由 `userText` 合成（循环自行 `onMessage` 持久化）；宿主传入 `RunInput.userMessage` 时循环原样使用、**不重复持久化**（持久化责任在宿主，daemon 侧由 run-before 链的内置 `user-message-land` 钩子做，见 [hooks](./hooks.md)）。两条路径都会发 `message.created`/`message.completed`，钩子链都执行。
 
 ### 工具回合（`runToolTurn`）
 
 1. 建 `role:"tool"` 消息骨架 → `message.created`（先于执行，使 delta 事件可携带真实 messageId）。
-2. **权限检查**：每个可执行调用按模型顺序过 `check`——`deny` → error result + note 块（`kind:"denied"|"timeout"`）；`allow` → 记 `grantedBy`；`confirm` → 发 `confirmation.requested {confirmationId, toolCall, risk, expiresAt}`，`raceConfirmation` 三方竞速（人工裁决 | confirmTimeoutMs 超时 | abort 信号）。拒绝/超时的文案固定："用户拒绝了该操作" / "确认超时，操作未执行"。
-3. **调度**：`concurrency:"parallel"` 的调用 `Promise.allSettled` 并发；`"serial"` 的在并行组全部 settle 后逐个 `await`——串行排他是结构保证（屏障 + 顺序 await：先等并行组全部结束，再逐个顺序执行），不是测试约束。
-4. **结果**：每个执行中的结果发 `tool_result.created → tool_result.delta（executor 的 onOutput）→ tool_result.completed`；未执行（参数解析失败/未知工具/abort 拦截）的结果只补 created+completed。结果块一律按模型给定顺序写入；拒绝 note 排在结果之后；`grantedBy` 记为 `Record<callId, GrantedBy>` 挂在 tool 消息上。
-5. `onMessage` 持久化 → `message.completed` → 回到循环顶部。
+2. **钩子闸门**：每个可执行调用先过 `hooks.runGate("tool-before", {toolCall})`（观察 + 失败否决权）——声明 `failure:"deny"` 的钩子失败时该调用被拒绝：error result（文案 `钩子 <名> 失败，操作未执行：<原因>`）+ `kind:"denied"` note，不进权限检查、不执行，run 继续；其余失败照旧跳过。
+3. **权限检查**：每个可执行调用按模型顺序过 `check`——`deny` → error result + note 块（`kind:"denied"|"timeout"`）；`allow` → 记 `grantedBy`；`confirm` → 发 `confirmation.requested {confirmationId, toolCall, risk, expiresAt}`，`raceConfirmation` 三方竞速（人工裁决 | confirmTimeoutMs 超时 | abort 信号）。拒绝/超时的文案固定："用户拒绝了该操作" / "确认超时，操作未执行"。
+4. **调度**：`concurrency:"parallel"` 的调用 `Promise.allSettled` 并发；`"serial"` 的在并行组全部 settle 后逐个 `await`——串行排他是结构保证（屏障 + 顺序 await：先等并行组全部结束，再逐个顺序执行），不是测试约束。
+5. **结果**：每个执行中的结果发 `tool_result.created → tool_result.delta（executor 的 onOutput）→ tool_result.completed`；未执行（参数解析失败/未知工具/钩子闸门拒绝/abort 拦截）的结果只补 created+completed。结果块一律按模型给定顺序写入；拒绝 note 排在结果之后；`grantedBy` 记为 `Record<callId, GrantedBy>` 挂在 tool 消息上。
+6. `onMessage` 持久化 → `message.completed` → 回到循环顶部。
 
-### 引导注入口（steering drain）
+### turn-boundary 位置（引导注入）
 
-`AgentDeps.steering` 是给宿主（RunManager）留的运行中注入点。循环在**每轮工具批次执行完之后、下一次 `llm.stream` 之前**调用它——即 `stopReason === "tool_use"` 且确有工具调用的分支末尾、`continue` 回循环顶部之前。一轮直接以 `end_turn` 收尾（没有工具调用）时不存在这个边界，steering 不会被取走，残余消息由宿主的队列驱动器降级处理（见 [run-manager](../server/run-manager.md)）。
+循环在**每轮工具批次执行完之后、下一次 `llm.stream` 之前**运行 `turn-boundary` 位置的钩子链——即 `stopReason === "tool_use"` 且确有工具调用的分支末尾、`continue` 回循环顶部之前。一轮直接以 `end_turn` 收尾（没有工具调用）时不存在这个边界，缓冲不会被取走，残余消息由宿主的队列驱动器降级处理（见 [run-manager](../server/run-manager.md)）。
 
-注入流程（对 `deps.steering()` 返回的每条消息按序执行）：`message.created` → `deps.onMessage` 持久化 → `message.completed` → `message.steered {messageId}`（事件级 `runId` 标识注入的 run）→ 消息追加进 history（`all`），模型在下一轮自然看到它。流式输出不打断、不产生新 run，`stopReason` 语义不变。
+返回的消息数组逐条按序注入：`message.created` → `deps.onMessage` 持久化 → `message.completed` → `message.steered {messageId}`（事件级 `runId` 标识注入的 run）→ 消息追加进 history（`all`），模型在下一轮自然看到它。流式输出不打断、不产生新 run，`stopReason` 语义不变。内置使用者是 `steering-drain`（取走 RunManager 的 steer 缓冲，fatal）。
 
-错误语义与 `onUserMessage` 一致：`steering()` 本身抛错，或注入途中 `onMessage` 持久化抛错，都发 `run.failed {code:"steering_failed"}`、run 以 `stopReason:"error"` 收场（不 reject）。未设置 `steering` 钩子时整段跳过，行为与旧版逐字节一致。
+错误语义与用户消息路径一致：链上 fatal 钩子抛错，或注入途中 `onMessage` 持久化抛错，都发 `run.failed {code:"steering_failed"}`、run 以 `stopReason:"error"` 收场（不 reject）。位置上没有钩子时整段跳过（返回 `undefined` = 无注入）。
 
 ---
 
@@ -133,7 +124,7 @@ run.started {trigger}
 - **滑动窗口**（只保留最近 N 条历史、随新消息整体前移）：`history.slice(-window)`（window 默认 200），system prompt 不占窗口。窗口截断仅作为未压缩/压缩失败时的极端保险；长会话的正常收敛靠压缩（见 [compaction](./compaction.md)）：压缩视图（`ActiveSummary { upto, top }`）由宿主从会话 meta 取出放进 `RunInput.compaction`，循环内的 `buildMessages` 据此把 `upto`（含）之前的原文排除在发送窗口外，`toProviderMessages` 再把脉络项垫进待发送数组——循环本身不感知也不改动 JSONL 里的原始消息。运行起点不跑任何压缩（"发送前预压缩"已在 v3 删除，压缩只发生在收尾 / 运行中 / 超限急救，见 [compaction](./compaction.md)）。
 - **工具输出省略**（`opts.toolResultKeep`，server 从 `config.sessions.toolResultKeep` 传入，默认 8）：从最新消息往前数，最多保留最近 N 个工具结果原文（条数上限，之前是固定截断数），更早的把输出文本替换成一行占位符 `[此工具输出已省略：<工具名> <参数摘要>，可重新调用获取]`（调用失败加"（该次调用失败）"）。传了 `opts.tokenBudget` 时在条数上限内再做预算驱动逐出：以"非工具结果内容的估算 token + 被上限挤掉结果的占位行"为基线，从最新到最旧逐条装填工具结果，装不下（含其之后全部）一并省略。两者都只影响发出的请求，JSONL 存储不动；配对关系不变，不产生无效请求。不传任何 opts 时行为完全不变（全部保留）。详见 [compaction](./compaction.md) 机制二/三。
 - **脉络摘要注入**（`opts.summary`，类型 `ActiveSummary { upto, top }`）：非空时在结果数组**最前面**注入一条 `{ role: "system", content: "早期对话脉络：<top>" }`。它排在切片后的对话之前；provider 适配层再在它前面加真正的 system 提示（persona），所以模型看到的最终顺序是 **persona → 脉络 → 对话**。原始 `req.system` 不被覆盖，JSONL 里也没有这条注入（只在发送的请求里）。
-- **模型视图改写钩子**（`deps.mapLlmMessages`）：上述全部组装完成后、`llm.stream` 之前，若钩子已设置，把最终消息列表交给它、返回什么发什么。它是"只改模型看到的输入"的唯一口子——持久化、事件流与 outcome 一概不动。现成实现是 `withLastUserText(messages, text)`（`agent/context.ts`）：把消息列表里**最后一条 user 消息**的文本整体替换成 `text`（string 内容整体替换；ContentPart 数组只换第一个 text 部分，图片等其余部分保留）。从尾部向前找，工具循环的第二轮起列表末条是 tool 消息——锚定"最后一条 user"才能让改写在每一轮都生效；列表里没有 user 消息时原样返回。技能点名的隐式包装就是经这个钩子 + 这个辅助实现的（见 [skills](./skills.md)）。
+- **模型视图改写（`llm-before` 位置）**：上述全部组装完成后、`llm.stream` 之前，循环把最终消息列表交给 `llm-before` 钩子链，链的最终改写值（`undefined` = 原样）就是要发送的内容。它是"只改模型看到的输入"的唯一口子——持久化、事件流与 outcome 一概不动。现成实现是 `withLastUserText(messages, text)`（`agent/context.ts`）：把消息列表里**最后一条 user 消息**的文本整体替换成 `text`（string 内容整体替换；ContentPart 数组只换第一个 text 部分，图片等其余部分保留）。从尾部向前找，工具循环的第二轮起列表末条是 tool 消息——锚定"最后一条 user"才能让改写在每一轮都生效；列表里没有 user 消息时原样返回。技能点名的隐式包装是内置 `skill-wrap` 钩子 + 这个辅助（见 [skills](./skills.md) 与 [hooks](./hooks.md)）。
 - **孤儿 tool 消息丢弃**：窗口切在 assistant 与 tool 消息之间时，开头的连续 `role:"tool"` 消息被 `shift` 丢弃——OpenAI 兼容 API 拒收无配对调用的 tool 结果。
 - **无配对的 tool_call 剔除**：assistant 的 `tool_call` 块只有当其后（窗口内）存在配对的 `tool_result` 才转成 `toolCalls` 发送；悬空调用会被 400。
 - **块级转换**：user/assistant 的 text 拼接为 content；note 转 `[system note] <text>` 行（对模型可见、可追溯）；tool 消息的每个 `tool_result` 转成一条消息，error 结果加 `[error] ` 前缀；assistant 没有 text 时 content 置 null、只带 toolCalls；thinking 不转换，模型看不到自己之前的思考内容。attachment 块按携带的内容分三种转法：带 `base64` 数据且 MIME 是 `image/*` 的转成一个多模态 `image_url` 内容段（data: URL 形式，与文本段并列为 content 数组的元素）；带内联 `text` 正文的转成 `[附件 <名称>]` 加正文；两者都不满足的只转一行元数据提示（`[附件 <名称>（<mime>，仅元数据）已保存，路径 <path>，可用 fs_read 读取]`），需要内容时由模型自己调 fs_read。
@@ -187,7 +178,7 @@ daemon 侧 `RunManager.cancel(sessionId)` 调 `AbortController.abort()`，循环
 - **provider 彻底失败**：`withRetry` 耗尽后 `stream()` 抛错 → 部分内容以 `stopReason:"error"` 持久化 → 悬空 tool_call 合成 `"llm call failed before execution"` 结果配对持久化（防下轮 400）→ `llm.failed` + `run.failed` → resolve（不 reject）。
 - **参数解析失败 / 未知工具**：不执行、不进入权限检查；error result（`"invalid tool args json"` / `"unknown tool: <name>"`）随 tool 消息持久化，循环继续。
 - **迭代耗尽**：最后一次迭代若仍是 `tool_use`，先在该 assistant 消息上附加 `kind:"system"` 截断 note（"已达最大迭代次数（25）…"）再持久化，然后 `run.failed {code:"max_iterations"}`——用户和下一轮模型均可看到中断原因。
-- **钩子失败**：`onUserMessage` 或持久化抛错 → `run.failed {code:"user_message_failed"}`，resolve `stopReason:"error"`。
+- **钩子失败**：run-before 链的 fatal 抛错或持久化抛错 → `run.failed {code:"user_message_failed"}`，resolve `stopReason:"error"`；用户钩子失败兜底自声明（skip 跳过 / deny 否决所在闸门），失败只发 `hook.failed` 事件不伤 run（见 [hooks](./hooks.md)）。
 - **工具执行器契约**：`ToolExecutor.execute` 应吞掉一切异常返回 `{status:"error", output}`（内置工具由 `shared.ts` 的包装保证）；循环对 settle 失败也统一转为 error result（保证异常也产出结果）。
 
 ---
@@ -198,5 +189,6 @@ daemon 侧 `RunManager.cancel(sessionId)` 调 `AbortController.abort()`，循环
 - [compaction](./compaction.md)：水位与双档触发线、四个触发点（收尾/中断/溢出急救/手动）、预算驱动省略与 window 200 的分工
 - [provider](./provider.md)：OpenAI 兼容流解析与 withRetry
 - [permissions](./permissions.md)：判定链与规则语法（allow/deny 的来源）
-- [skills](./skills.md)：`mapLlmMessages` 钩子的第一个使用者（技能点名隐式包装）
+- [skills](./skills.md)：技能点名隐式包装（`skill-wrap` 内置钩子 + `withLastUserText`）
+- [hooks](./hooks.md)：位置网格、HookChain 语义、用户文件契约与内置钩子清单
 - [run-manager](../server/run-manager.md)：daemon 侧如何装配这些依赖

@@ -88,6 +88,7 @@ export function bootstrapToken(): string | null
 - `message.created` 插入骨架并标记 `pending`（无块时渲染 "…" 占位），`message.completed` 整体替换。若该 id 在排队列表里，这是出队/注入信号：行移出列表、消息本体作为正常气泡追加到消息流末尾（它就是当前最新的消息；排队期间没有气泡在场，也就没有"原地升级"一说——原地替换只服务于空闲直发消息的乐观孪生合并）。
 - **排队三事件**：`message.queued {messageId, disposition, position?}` 的落地次序——先认领本地待确认的列表行（忙会话发送建的 `local-` 行，改名并保留文本）；没有行则收走待确认的乐观气泡（闲转忙竞态，文本带走建行）；都没有（跨客户端/重放边缘）落地空文本行，由面板的快照补全。已跟踪的 id 只刷新处置（恢复重播把 steer/interrupt 降级报为 wait），不重复收养。`message.steered {messageId}` 直接删除对应行（注入完成，消息本体随后/已经由 `message.created` 落进消息流）；`message.queue_cancelled` 按 `messageId` 或 `all:true` 删除对应/全部行（取消的消息从未落盘，无气泡残留）。
 - `run.started/completed/failed` 驱动 `runState` 与 "running…" 指示；`llm.failed {willRetry:true}` 显示"重试中…"提示（`llm.completed` 或 run 终态清除）。
+- `hook.failed` 保留最近一条进 `hookFailure` 状态，ChatView 在消息流下方渲染暗色警示行"钩子 <名字> 失败（<位置>）：<原因>"——用户钩子失败不伤 run，但失败必须可见（spec issue #6，机制见 [hooks](../core/hooks.md)）；`run.started` 清除（与 error 同过期节奏），装载期失败（发生在 run 前）持续显示到下一次 run。
 - `confirmation.requested`/`confirmation.resolved` 增删 `pendingConfirmations` 卡片。
 - `memory.written`（记忆落盘反馈，spec 9.1/9.3）单独挑出来、不进 reducer：读 `payload.path` 在通知条显示 `已写入记忆: <path>`（与 CLI 同文案）；它描述的是记忆库而不是某条消息，进 reducer 反而会污染对话状态。事件本身不带记忆内容，要看内容切到「记忆」tab——通知条**可点击**，点击切换到记忆页并自动打开对应文件（`episode` 按 `scope+topic` 打开线、`cognition` 按 path 打开认知文件）；app 层装配了 `onOpenMemoryWritten` 回调把跳转目标传给 `MemoryView`（见 [memory](../core/memory.md) 的"事件"一节）。
 

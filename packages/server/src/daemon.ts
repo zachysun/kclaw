@@ -40,6 +40,7 @@ import {
   resolvePaths,
   UsageStore,
   withRetry,
+  HookRegistry,
 } from "@kclaw/core"
 import type { KclawConfig, LlmClient } from "@kclaw/core"
 import { loadOrCreateToken } from "./auth.js"
@@ -260,6 +261,18 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     }
   }
   const bus = new EventBus()
+  // 用户 hook 注册表（spec issue #6）：daemon 级账本，run 装配每 run 现扫
+  // ~/.kclaw/hooks；装载失败经 registry 去重后广播一次 hook.failed(load)。
+  const hookRegistry = new HookRegistry({
+    userDir: paths.hooksDir,
+    onEvent: (e) => {
+      try {
+        bus.emit(e)
+      } catch {
+        // one broken subscriber must not kill the daemon
+      }
+    },
+  })
   // 记忆系统 v2 唯一门面：embed/emit/迁移/对账在此一次性装配（Task 13）。
   // resolveLlm 惰性引用下方 llm/model（触发发生在 launch 后，TDZ 无碍）。
   const memory = new MemorySystem({
@@ -302,6 +315,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     workspace: config.workspace,
     model,
     usageStore: usage,
+    hooks: hookRegistry,
     ...(opts.readonly === true && { readonly: true }),
     ...(mcpManager !== undefined && { extraTools: () => mcpManager.tools() }),
     // Retry visibility: with the DEFAULT
@@ -327,6 +341,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     usage,
     webDist: resolveWebDist(opts.webDist),
     memory, // Task 14 的 /memory 路由消费（spec 9.2 管理界面）
+    hooks: hookRegistry, // GET /hooks 管理面（spec issue #6）
   })
   await app.listen({ port: opts.port ?? 0, host: HOST })
   const address = app.server.address()

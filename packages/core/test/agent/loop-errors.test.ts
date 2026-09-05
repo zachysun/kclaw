@@ -5,6 +5,7 @@ import { withRetry } from "../../src/provider/retry.js"
 import type { LlmClient, LlmStreamEvent, ProviderMessage } from "../../src/provider/types.js"
 import type { Message } from "../../src/protocol/messages.js"
 import type { AgentEvent } from "../../src/protocol/events.js"
+import { chainOf } from "./hook-utils.js"
 
 /** Every assistant toolCall in the provider view whose result is missing. */
 function unpairedToolCalls(view: ProviderMessage[]): string[] {
@@ -31,6 +32,7 @@ function harness(llm: LlmClient, extra: Record<string, unknown> = {}) {
     {
       llm,
       model: "m",
+      hooks: chainOf(),
       onEvent: (e) => { events.push(e); timeline.push(`event:${e.type}`) },
       onMessage: (m) => { messages.push(m); timeline.push(`persist:${m.role}`) },
       ...extra,

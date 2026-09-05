@@ -5,6 +5,7 @@ import type { AgentEvent } from "../../src/protocol/events.js"
 import type { Message } from "../../src/protocol/messages.js"
 import { newMessage } from "../../src/protocol/messages.js"
 import { newBlockId } from "../../src/protocol/blocks.js"
+import { chainOf, hook } from "./hook-utils.js"
 
 function textClient(deltas: string[]): LlmClient {
   const events: LlmStreamEvent[] = deltas.map((d) => ({ type: "text_delta", delta: d }))
@@ -20,6 +21,7 @@ async function runText(deps: Partial<Parameters<typeof runAgent>[1]> = {}) {
     {
       llm: textClient(["Hel", "lo"]),
       model: "glm-4.7",
+      hooks: chainOf(),
       onEvent: (e) => events.push(e),
       onMessage: (m) => messages.push(m),
       ...deps,
@@ -74,6 +76,7 @@ describe("runAgent user message lifecycle events", () => {
       {
         llm: textClient(["ok"]),
         model: "m",
+        hooks: chainOf(),
         onEvent: (e) => { events.push(e); timeline.push(`event:${label(e)}`) },
         onMessage: (m) => { messages.push(m); timeline.push(`persist:${m.role}`) },
       },
@@ -95,7 +98,7 @@ describe("runAgent user message lifecycle events", () => {
     expect(idx("event:message.completed:user")).toBeLessThan(idx("event:llm.started"))
   })
 
-  it("onUserMessage hook: augmentation lands between created and persist/completed", async () => {
+  it("run-before hook: augmentation lands between created and persist/completed", async () => {
     const events: AgentEvent[] = []
     const messages: Message[] = []
     const timeline: string[] = []
@@ -106,13 +109,13 @@ describe("runAgent user message lifecycle events", () => {
       {
         llm: textClient(["ok"]),
         model: "m",
-        onUserMessage: (m) => {
+        hooks: chainOf(hook("land", "run-before", (ctx) => {
           timeline.push("hook")
-          received = m
-          skeleton = { ...m, blocks: [...m.blocks] }
-          m.blocks.push({ id: newBlockId(), type: "note", kind: "memory", text: "相关记忆: x" })
-          return m
-        },
+          received = ctx.message
+          skeleton = { ...ctx.message, blocks: [...ctx.message.blocks] }
+          ctx.message.blocks.push({ id: newBlockId(), type: "note", kind: "memory", text: "相关记忆: x" })
+          return ctx.message
+        })),
         onEvent: (e) => { events.push(e); timeline.push(`event:${label(e)}`) },
         onMessage: (m) => { messages.push(m); timeline.push(`persist:${m.role}`) },
       },
@@ -150,11 +153,11 @@ describe("runAgent user message lifecycle events", () => {
       {
         llm: textClient(["ok"]),
         model: "m",
-        onUserMessage: (m) => {
-          hooked = m
-          m.blocks.push({ id: newBlockId(), type: "note", kind: "job", text: "本会话由定时任务触发" })
-          return m
-        },
+        hooks: chainOf(hook("land", "run-before", (ctx) => {
+          hooked = ctx.message
+          ctx.message.blocks.push({ id: newBlockId(), type: "note", kind: "job", text: "本会话由定时任务触发" })
+          return ctx.message
+        })),
         onEvent: (e) => events.push(e),
         onMessage: (m) => messages.push(m),
       },
@@ -177,14 +180,14 @@ describe("runAgent user message lifecycle events", () => {
 })
 
 describe("user message handling failures terminate the run", () => {
-  it("a throwing onUserMessage hook ends with run.failed and an error outcome", async () => {
+  it("a throwing fatal run-before hook ends with run.failed and an error outcome", async () => {
     const events: AgentEvent[] = []
     const outcome = await runAgent(
       { sessionId: "ses_1", history: [], system: "sys", userText: "hi" },
       {
         llm: textClient(["never"]), // must never be called
         model: "m",
-        onUserMessage: () => { throw new Error("disk full") },
+        hooks: chainOf(hook("boom", "run-before", () => { throw new Error("disk full") })),
         onEvent: (e) => events.push(e),
         onMessage: () => { throw new Error("persisted anyway?") },
       },
@@ -214,6 +217,7 @@ describe("user message handling failures terminate the run", () => {
       {
         llm,
         model: "m",
+        hooks: chainOf(),
         onEvent: (e) => events.push(e),
         onMessage: () => { throw new Error("jsonl write failed") },
       },
@@ -248,7 +252,7 @@ describe("runAgent with a caller-supplied user message", () => {
 
     const outcome = await runAgent(
       { sessionId: "ses_1", history: [], system: "sys", userText: "ignored", userMessage },
-      { llm, model: "m", onEvent: (e) => events.push(e), onMessage: (m) => messages.push(m) },
+      { llm, model: "m", hooks: chainOf(), onEvent: (e) => events.push(e), onMessage: (m) => messages.push(m) },
     )
 
     // the run's user message IS the provided one (notes included), and

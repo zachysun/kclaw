@@ -58,6 +58,11 @@ export interface KclawConfig {
     allowPrivateNetworks?: boolean
   }
   exec: { timeoutMs: number; maxOutputBytes: number }
+  /**
+   * Hook 系统（spec issue #6）。可选仅因老 config.yaml 早于它；
+   * 缺省按读点的 ?? 默认值执行。
+   */
+  hooks?: { /** 单个 hook 处理器的时限（毫秒）；超时按失败处理（fail-open）。 */ timeoutMs?: number }
   sessions: {
     recycleBinTtlMs: number
     /** DEPRECATED (v1 compaction, inert): compact at N messages. */

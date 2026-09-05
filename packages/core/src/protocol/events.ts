@@ -27,6 +27,8 @@ export type EventType =
   | "message.queued" | "message.steered" | "message.queue_cancelled"
   // 上下文压缩（运行前的预压缩过程，早于 run.started）
   | "compaction.started" | "compaction.completed"
+  // 扩展（hook 系统）：用户 hook 装载/执行失败，fail-open 不影响 run
+  | "hook.failed"
 
 export interface RunStartedPayload { trigger: "user" | "job" }
 export interface RunCompletedPayload { stopReason: StopReason; usage: Usage }
@@ -78,6 +80,9 @@ export interface CompactionStartedPayload { phase: CompactionPhase }
 /** 压缩结束（每次 started 必有配对 completed）：新累计段数与压缩后保留的原文消息条数；非 ok 时 segments/kept 为 0。 */
 export interface CompactionCompletedPayload { segments: number; kept: number; phase: CompactionPhase; result: "ok" | "failed" | "cancelled" }
 
+/** hook 系统（spec issue #6）：一个用户 hook 的装载或执行失败。 */
+export interface HookFailedPayload { hook: string; position: string; error: string; phase: "load" | "run" }
+
 export type EventPayloadMap = {
   "run.started": RunStartedPayload
   "run.completed": RunCompletedPayload
@@ -114,6 +119,7 @@ export type EventPayloadMap = {
   "message.queue_cancelled": MessageQueueCancelledPayload
   "compaction.started": CompactionStartedPayload
   "compaction.completed": CompactionCompletedPayload
+  "hook.failed": HookFailedPayload
 }
 
 export type AgentEvent<T extends EventType = EventType> = {

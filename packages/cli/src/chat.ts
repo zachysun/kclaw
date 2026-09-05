@@ -349,6 +349,13 @@ export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean
     case "memory.written":
       line(dim(`已写入记忆: ${ev.payload.path}`), ctx)
       return false
+    // hook.failed：用户 hook 一律 fail-open（不伤 run），但失败必须可见——
+    // dim 一行警告，带钩子名与位置；phase load 表示装载期失败。
+    case "hook.failed": {
+      const p = ev.payload
+      line(dim(`⚠ 钩子 ${p.hook} 失败（${p.position}${p.phase === "load" ? " 装载" : ""}）：${p.error}`), ctx)
+      return false
+    }
     case "run.failed":
       line(red(`✖ 运行失败: ${ev.payload.error.message}`), ctx)
       return true

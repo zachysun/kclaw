@@ -135,6 +135,13 @@ export interface ChatState {
    * 不渲染（用户自己发起的压缩，取消语义不存在）；与 compacting 同生共死。
    */
   compactingPhase?: string
+  /**
+   * 最近一次钩子失败（hook.failed）：用户 hook 一律 fail-open，run 不受影响，
+   * 但失败必须可见（spec issue #6）。保留最近一条，下一个 run 开始时清除
+   * （run.started，同 error 的过期节奏）；load 阶段的失败在 run 前到达，
+   * 会一直显示到下一次 run——正是"装载坏了"应有的持续性。
+   */
+  hookFailure?: { hook: string; position: string; error: string } | null
 }
 
 /** Build the initial view from the persisted message list (no event replay). */
@@ -287,7 +294,7 @@ export function adoptQueuedId(state: ChatState, messageId: string): ChatState {
 export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
   switch (event.type) {
     case "run.started":
-      return { ...state, runState: "running", error: undefined, compacting: false, compactingPhase: undefined }
+      return { ...state, runState: "running", error: undefined, hookFailure: null, compacting: false, compactingPhase: undefined }
     case "run.completed":
       return { ...state, runState: "idle", retryHint: null, compacting: false, compactingPhase: undefined }
     case "run.failed":
@@ -306,6 +313,10 @@ export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
       // run.failed surfaces — leave the view untouched.
       if (event.payload.willRetry !== true) return state
       return { ...state, retryHint: {} }
+    case "hook.failed":
+      // 钩子失败不伤 run（fail-open），但必须可见：保留最近一条供 ChatView
+      // 渲染警示行（run.started 清除，见 ChatState.hookFailure 注释）。
+      return { ...state, hookFailure: { hook: event.payload.hook, position: event.payload.position, error: event.payload.error } }
     case "message.created": {
       // Queue dequeue: a created event for a queued id drops the row — the
       // message enters the thread below as a normal (persisted) bubble. Its

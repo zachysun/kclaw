@@ -3,6 +3,42 @@ import type { ConfirmationRequestedPayload, ToolCallBlock } from "../protocol/in
 /** Verdict value carried between the loop and its human resolver. */
 export type ConfirmationResolution = { approved: boolean; by: "cli" | "web" | "timeout" }
 
+/**
+ * `Promise.race` against a timer AND an abort signal; the timer is cleared
+ * and the listener removed once the race settles. An abort wins as the
+ * sentinel "aborted" — kept distinct from the timeout fallback so an aborted
+ * wait is never misreported as a timeout-deny.
+ *
+ * The SINGLE implementation for both racers that must agree on a
+ * confirmation's outcome: the loop (waiting to act on the verdict) and the
+ * run assembly (expiring the broker entry when the race settles without a
+ * human). Formerly two verbatim-identical copies (loop vs assembly) kept in
+ * sync by comments — unified as part of the hook-system migration.
+ */
+export function raceConfirmation(
+  p: Promise<ConfirmationResolution>,
+  ms: number,
+  signal: AbortSignal | undefined,
+): Promise<ConfirmationResolution | "aborted"> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const sleep = new Promise<ConfirmationResolution>((resolve) => {
+    timer = setTimeout(() => resolve({ approved: false, by: "timeout" }), ms)
+  })
+  let onAbort = () => {}
+  const abort = new Promise<"aborted">((resolve) => {
+    if (!signal) return
+    if (signal.aborted) resolve("aborted")
+    else {
+      onAbort = () => resolve("aborted")
+      signal.addEventListener("abort", onAbort, { once: true })
+    }
+  })
+  return Promise.race([p, sleep, abort]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer)
+    signal?.removeEventListener("abort", onAbort)
+  })
+}
+
 /** Who answered a confirmation (v1 is single-user CLI; "web" is retained for the UI). */
 export type ConfirmationActor = "cli" | "web"
 

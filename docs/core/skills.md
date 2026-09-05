@@ -15,7 +15,7 @@
 - **目录名是唯一身份**：技能目录名必须是 Agent Skills 规范允许的形式（小写字母数字加连字符、1–64 字符），也是 `skill_read` 的加载键与斜杠命令名。
 - **项目级整目录覆盖全局**：同名技能在不同作用域并存时，项目那份整体替换全局那份（整目录覆盖，不做字段合并）。
 - **兼容生态技能**：只解释五个字段，其余 frontmatter 字段一律忽略且不报错——Agent Skills 生态里的现成技能可以不改就放进目录。CRLF 换行与文件头 BOM 都容忍。
-- **只改模型看到的输入**：技能点名的隐式包装走通用的 `mapLlmMessages` 钩子（见 [agent-loop](./agent-loop.md)），只改写发给模型的那一份消息——持久化、事件流与聊天气泡保持用户原文（所见即所发）。
+- **只改模型看到的输入**：技能点名的隐式包装是内置 `skill-wrap` 钩子（`llm-before` 位置，见 [hooks](./hooks.md)），只改写发给模型的那一份消息——持久化、事件流与聊天气泡保持用户原文（所见即所发）。
 - **每 run 现扫，文件即真相**：技能目录在每次 run 开始时重新扫描（不存在则跳过、单条损坏只跳过该条，不拖垮整个 run），改动技能文件不用重启 daemon；`/skills` 管理路由同样每次请求现扫，与 run 同源同规则。
 - **用户面隐藏是"不存在"**：`user-invocable: false` 的技能对用户面完全不可见——列表不显示、点名 404，且 404 与"名字不存在"同响应（不向探测者泄露存在性），对齐 Claude Code"从 / 菜单隐藏"。
 
@@ -82,7 +82,7 @@
 
 点名命中后，daemon 在**发给模型的那份输入**末尾追加一行调用指示（原文一字不动地保留，后面加一句）：命中的是技能 `<name>`，请先用 `skill_read` 读取该技能完整规程、再按规程处理本条消息；命中多个时逐个点名。这一行只存在于发给 provider 的消息里——持久化、事件流与聊天气泡保持用户输入的原文（所见即所发）。
 
-包装经通用的模型视图改写钩子 `AgentDeps.mapLlmMessages` 生效（每次 `llm.stream` 之前，见 [agent-loop](./agent-loop.md)），配合 `withLastUserText` 锚定"最后一条 user 消息"——工具循环的第二轮起列表末条是 tool 消息，锚定最后一条 user 才能让改写在每一轮都生效。
+包装经内置 `skill-wrap` 钩子在 `llm-before` 位置生效（每次 `llm.stream` 之前，见 [hooks](./hooks.md)），配合 `withLastUserText` 锚定"最后一条 user 消息"——工具循环的第二轮起列表末条是 tool 消息，锚定最后一条 user 才能让改写在每一轮都生效。
 
 **仅 `trigger: "user"` 生效**：job 提示是 daemon 生成的内部指令，不参与点名。
 
@@ -109,7 +109,8 @@
 ## 关联
 
 - [tools](./tools.md)：`skill_read` 在 11 个内置工具里的位置与注册
-- [agent-loop](./agent-loop.md)：`mapLlmMessages` 模型视图改写钩子与 `withLastUserText`
+- [hooks](./hooks.md)：`skill-wrap` 内置钩子（`llm-before` 位置的点名包装）与 `withLastUserText`
+- [agent-loop](./agent-loop.md)：`llm-before` 位置在循环里的触发时机
 - [run-manager](../server/run-manager.md)：系统提示词装配（基础 + 认知 + 技能清单）、技能目录每 run 扫描
 - [http-api](../server/http-api.md)：`/skills` 路由族的协议细节
 - [cli](../cli/cli.md) / [webui](../web/webui.md)：`/skill` 命令与技能页、技能即斜杠命令

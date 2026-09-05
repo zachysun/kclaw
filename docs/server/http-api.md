@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 41 个业务路由（健康/状态 2 个、会话 15 个、记忆 10 个、技能 2 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 1 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未装配时降级 503，技能组始终注册（无装配依赖）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 42 个业务路由（健康/状态 2 个、会话 15 个、记忆 10 个、技能 2 个、钩子 1 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 1 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未装配时降级 503，技能组始终注册（无装配依赖），钩子组在未注入 `HookRegistry` 时返回空用户侧。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
@@ -147,6 +147,14 @@ interface Job {
 
 `:name` 路径段先过白名单校验（同 `/memory` 的 `isSafeSegment`），非法段 400 `invalid segment`。**`user-invocable: false` 的技能对用户面视为不存在**：列表不显示、点名 404——且与未知名字同响应（`{error:"not found"}`，不泄露存在性）。
 
+### 钩子（routes/hooks.ts，始终注册）
+
+只读钩子管理面（spec issue #6）：内置钩子的静态清单 + 用户钩子文件的当前装载状态，机制见 [hooks](../core/hooks.md)。
+
+| 方法 | 路径 | 用途 | 响应 |
+|------|------|------|------|
+| GET | `/hooks` | 内置 + 用户钩子的只读快照 | `{builtin: [{name, position, description, failure, origin:"builtin"}], user: [{name, position, description?, enabled, order, failure, origin:"user", error?}]}`——`user` 侧含健康、禁用（`enabled:false`）与装载失败（`position:"?"` 且带 `error` 原因）三类条目；未注入 `HookRegistry` 时 `user` 为空数组 |
+
 ### 附件（routes/attachments.ts，仅当注入 `attachmentsDir` 时注册）
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
@@ -238,4 +246,5 @@ app.addHook("preHandler", async (request, reply) => {
 - [memory](../core/memory.md)：`/memory` 路由族背后的记忆塔存储与 `memory.written` 事件
 - [mcp](../core/mcp.md)：`GET /mcp` 快照背后的连接管理器
 - [skills](../core/skills.md)：`/skills` 路由族背后的技能包机制（渐进披露、双作用域、可见性档位）
+- [hooks](../core/hooks.md)：`/hooks` 路由背后的钩子系统（位置网格、内置清单、用户文件契约）
 - [jobs](../core/jobs.md)：cron 语义与 nextRunAt 推进规则

@@ -5,6 +5,7 @@ import { withLastUserText } from "../../src/agent/context.js"
 import type { ToolExecutor } from "../../src/agent/tools.js"
 import type { LlmClient, LlmStreamEvent } from "../../src/provider/types.js"
 import { newMessage, type Message } from "../../src/protocol/messages.js"
+import { chainOf, hook } from "./hook-utils.js"
 
 /** First stream call asks for the tool, every later call finishes the run. */
 function scriptClient(script: LlmStreamEvent[][]): LlmClient {
@@ -37,6 +38,7 @@ async function runWith(extra: Partial<Parameters<typeof runAgent>[1]> = {}) {
     {
       llm: scriptClient([toolTurn(), FINAL]),
       model: "m",
+      hooks: chainOf(),
       onEvent: () => {},
       onMessage: (m) => messages.push(m),
       tools: new Map([["exec", EXEC]]),
@@ -87,13 +89,13 @@ describe("runAgent default window", () => {
     }
     await runAgent(
       { sessionId: "s", history, system: "", userText: "继续" },
-      { llm: rec, model: "m", onEvent: () => {}, onMessage: () => {} },
+      { llm: rec, model: "m", hooks: chainOf(), onEvent: () => {}, onMessage: () => {} },
     )
     expect(msgCount).toBe(101) // 100 history + the new user message — nothing truncated
   })
 })
 
-describe("runAgent mapLlmMessages（LLM 执行前的模型视图改写钩子）", () => {
+describe("runAgent llm-before（LLM 执行前的模型视图改写钩子）", () => {
   const FINAL: LlmStreamEvent[] = [
     { type: "text_delta", delta: "好的" },
     { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 0, outputTokens: 0 } },
@@ -113,9 +115,10 @@ describe("runAgent mapLlmMessages（LLM 执行前的模型视图改写钩子）"
       {
         llm,
         model: "m",
+        hooks: chainOf(hook("wrap", "llm-before", (ctx) =>
+          withLastUserText(ctx.messages, "帮我 /test 跑一下\n\n（技能调用指示）"))),
         onEvent: () => {},
         onMessage: (m) => persisted.push(m),
-        mapLlmMessages: (msgs) => withLastUserText(msgs, "帮我 /test 跑一下\n\n（技能调用指示）"),
       } as Parameters<typeof runAgent>[1],
     )
     // 模型视图：包装文本
@@ -150,10 +153,10 @@ describe("runAgent mapLlmMessages（LLM 执行前的模型视图改写钩子）"
       {
         llm,
         model: "m",
+        hooks: chainOf(hook("wrap", "llm-before", (ctx) => withLastUserText(ctx.messages, "wrapped"))),
         onEvent: () => {},
         onMessage: () => {},
         tools: new Map([["exec", EXEC]]),
-        mapLlmMessages: (msgs) => withLastUserText(msgs, "wrapped"),
       } as Parameters<typeof runAgent>[1],
     )
     expect(requests).toHaveLength(2)
@@ -175,7 +178,7 @@ describe("runAgent mapLlmMessages（LLM 执行前的模型视图改写钩子）"
     }
     await runAgent(
       { sessionId: "s", history: [], system: "", userText: "原文" },
-      { llm, model: "m", onEvent: () => {}, onMessage: () => {} } as Parameters<typeof runAgent>[1],
+      { llm, model: "m", hooks: chainOf(), onEvent: () => {}, onMessage: () => {} } as Parameters<typeof runAgent>[1],
     )
     expect((requests[0]!.messages.at(-1) as { role: string; content: string }).content).toBe("原文")
   })

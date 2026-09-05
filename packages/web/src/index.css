@@ -996,6 +996,12 @@ select:focus {
   font-size: 13px;
 }
 
+/* hook.failed（fail-open 不伤 run，但失败必须可见） */
+.hook-failure {
+  color: var(--warn);
+  font-size: 13px;
+}
+
 /* inline confirmation card */
 .confirm-card {
   border: 1px solid var(--warn);
