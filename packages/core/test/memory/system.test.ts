@@ -179,6 +179,17 @@ describe("searchAll", () => {
     expect(cognition?.text).toContain("注释说明原因")
     expect(cognition?.scope).toBe("global")
   })
+
+  it("stop 只经 pipeline 一条链关闭索引：幂等，且关闭后检索懒重建仍可用（卡⑤）", async () => {
+    const sys = makeSystem()
+    sys.writeCognition("rule", "general", "停机后重开仍要能查到这条规则")
+    const before = await sys.searchAll("停机", 10)
+    expect(before.length).toBeGreaterThan(0)
+    await sys.stop()
+    await sys.stop() // 一条链：重复停机不抛
+    const after = await sys.searchAll("停机", 10) // 关闭清除缓存后懒重建，行为不变
+    expect(after.length).toBeGreaterThan(0)
+  })
 })
 
 describe("memory events in session stream (Task 6)", () => {

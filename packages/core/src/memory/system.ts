@@ -14,7 +14,7 @@ import type { MemoryEvent } from "../session/events.js"
 import { parseThreadFile, parseMemoryMd } from "./threads.js"
 import { parseCognitionFile, cognitionPath, writeCognitionFile } from "./cognition.js"
 import type { CogKind } from "./cognition.js"
-import { VectorIndex } from "./indexer.js"
+import type { VectorIndex } from "./indexer.js"
 import { normalizeFtsRank, fusedScore, recencyFactor } from "./scoring.js"
 import type { EmbeddingClient } from "./embeddings.js"
 import { cosine } from "./embeddings.js"
@@ -23,6 +23,57 @@ export interface EpisodeHit { topic: string; title: string; date: string; text: 
 export interface MemorySearchHit { kind: "episode" | "cognition"; scope: string; label: string; text: string }
 export interface MemoryProjectInfo { id: string; workdir: string; threads: number; lastActivity: string }
 export interface CognitionFileInfo { kind: "persona" | "wiki" | "rule"; name: string; path: string; scope: string; updated: string }
+
+/**
+ * 消费者窄接口（卡⑤）：MemorySystem 的 30 个方法按四拨消费方分面。类不拆、
+ * 公共 API 不删改——接口只是每个消费方该看到的方法子集，调用方按面声明依赖，
+ * 编译器挡住越界使用（如路由碰触发器、调度器碰管理面）。
+ */
+
+/** 检索面：内置钩子（记忆注入 / 系统提示词材料）与 memory_search 工具消费。 */
+export interface MemoryQuery {
+  cognitionPrompt(workdir: string): string
+  searchEpisodes(workdir: string, query: string, limit?: number): Promise<EpisodeHit[]>
+  searchAll(query: string, limit?: number): Promise<MemorySearchHit[]>
+}
+
+/** 触发面：记忆写入触发（memory_save 工具 + 调度器 + 手动内化）。 */
+export interface MemoryTriggers {
+  triggerImmediate(sessionId: string): Promise<boolean>
+  triggerManual(workdir: string, sessionId?: string): Promise<void>
+  triggerClear(workdir: string, sessionId?: string): Promise<void>
+  triggerInterval(workdir: string): Promise<void>
+  triggerFollow(workdir: string, sessionId?: string): Promise<void>
+  triggerNightly(workdir: string, sessionId?: string): Promise<void>
+  consolidate(workdir: string, topic: string): Promise<void>
+  recentSessionId(workdir: string): string | undefined
+}
+
+/** 调度簿记面：memory-scheduler 判节拍、跟随门禁、夜间防重跑。 */
+export interface MemoryScheduleBook {
+  markIntervalRun(workdir: string, iso: string): void
+  intervalLastRun(workdir: string): string | undefined
+  markNightlyRun(workdir: string, localDate: string): void
+  nightlyLastRun(workdir: string): string | undefined
+  scheduleFollowCheck(sessionId: string, endTurnAt: string): void
+  clearFollowCheck(workdir: string, sessionId: string): void
+  pendingFollowChecks(workdir: string): Array<{ sessionId: string; endTurnAt: string }>
+  lastActivity(workdir: string): string
+}
+
+/** 管理面：网页记忆页路由（列表、线程/认知的读与人工覆写、对账）。 */
+export interface MemoryAdmin {
+  reconcile(): void
+  projects(): MemoryProjectInfo[]
+  projectThreads(projectId: string): Array<{ topic: string; title: string; status: string; updated: string }>
+  threadContent(projectId: string, topic: string): string | undefined
+  writeThread(projectId: string, topic: string, content: string): void
+  deleteThread(projectId: string, topic: string): void
+  globalFiles(): CognitionFileInfo[]
+  cognitionContent(kind: CogKind, name: string): string | undefined
+  writeCognition(kind: CogKind, name: string, content: string): void
+  deleteCognition(kind: CogKind, name: string): void
+}
 
 /** 超预算保留优先级（spec 7.1）：规则漏了会出错 > 画像缺一段 > wiki 少一块。 */
 const L2_PRIORITY: Array<CogKind> = ["rule", "persona", "wiki"]
@@ -59,10 +110,10 @@ interface ScoredHit { key: string; topic: string; title: string; date: string; t
 
 /**
  * MemorySystem —— 记忆系统 v2 的唯一 server 侧门面。装配 L1 情节管线 + L2 认知库，
- * 暴露注入（cognitionPrompt / searchEpisodes）、触发（trigger 系列 / consolidate）、
- * 对账迁移（reconcile / migrateV1Notes）与管理（projects / threads / global 文件读写删）四组接口。
+ * 方法面按四拨消费方分面（MemoryQuery / MemoryTriggers / MemoryScheduleBook /
+ * MemoryAdmin，卡⑤）；对账迁移（reconcile / migrateV1Notes）与停机（stop）只归 daemon。
  */
-export class MemorySystem {
+export class MemorySystem implements MemoryQuery, MemoryTriggers, MemoryScheduleBook, MemoryAdmin {
   readonly #layout: MemoryLayout
   readonly #sessions: SessionStore
   readonly #config: KclawConfig
@@ -74,9 +125,6 @@ export class MemorySystem {
   /** 记忆落盘通知（Task 6）：接成会话事件流 appendEvent；sessionId 缺失时跳过（无处可挂）。 */
   readonly #audit: (e: MemoryAudit) => void
   readonly #pipeline: MemoryPipeline
-  /** 检索用全局认知索引（写入侧重建在 pipeline；检索前先对账保证"文件是真相"）。 */
-  readonly #globalIndex: VectorIndex
-  readonly #projectIndexes = new Map<string, VectorIndex>()
 
   constructor(opts: {
     memoryDir: string
@@ -106,7 +154,6 @@ export class MemorySystem {
       // 事件体不携带 sessionId（Ruling 5：由所在会话目录决定）
       this.#sessions.appendEvent(id, { type: "memory", at: at ?? this.#now().toISOString(), ...rest } as MemoryEvent)
     }
-    this.#globalIndex = new VectorIndex(join(this.#layout.globalDir, "vectors.db"))
     this.#pipeline = new MemoryPipeline(opts.memoryDir, opts.sessions, {
       resolveLlm: () => {
         // extractModel 回落主模型的解析集中在这里，resolveLlm 只调一次（spec 4.3）
@@ -117,15 +164,6 @@ export class MemorySystem {
       threadInactiveDays: opts.config.memory.threadInactiveDays,
       consolidateEnabled: opts.config.memory.consolidate,
     })
-  }
-
-  #projectIndex(projectId: string): VectorIndex {
-    let idx = this.#projectIndexes.get(projectId)
-    if (idx === undefined) {
-      idx = new VectorIndex(join(this.#layout.projectDir(projectId), "vectors.db"))
-      this.#projectIndexes.set(projectId, idx)
-    }
-    return idx
   }
 
   // ---- 注入与检索（run.ts 消费） ----
@@ -235,7 +273,7 @@ export class MemorySystem {
     const { id } = this.#layout.resolveProject(workdir)
     if (!existsSync(this.#layout.projectDir(id))) return [] // 项目尚无记忆：不建目录
     try { this.#pipeline.reindexProject(id) } catch (err) { this.#log(`kclaw memory search: project index refresh failed: ${String(err)}`) }
-    const hits = await this.#scoreIndex(this.#projectIndex(id), query, limit, this.#now())
+    const hits = await this.#scoreIndex(this.#pipeline.indexFor(id), query, limit, this.#now())
     return hits.map((h) => ({
       topic: h.topic, title: h.title, date: h.date,
       text: this.#readEpisodeText(id, h.topic, h.date, h.text),
@@ -259,7 +297,7 @@ export class MemorySystem {
     for (const id of this.#layout.listProjectIds()) {
       try {
         this.#pipeline.reindexProject(id)
-        const hits = await this.#scoreIndex(this.#projectIndex(id), query, FTS_RECALL, now)
+        const hits = await this.#scoreIndex(this.#pipeline.indexFor(id), query, FTS_RECALL, now)
         for (const h of hits) {
           scored.push({ score: h.score, hit: {
             kind: "episode", scope: `project:${id}`,
@@ -273,7 +311,7 @@ export class MemorySystem {
     }
     try {
       await this.#pipeline.reindexGlobal()
-      const hits = await this.#scoreIndex(this.#globalIndex, query, FTS_RECALL, now)
+      const hits = await this.#scoreIndex(this.#pipeline.globalIndex(), query, FTS_RECALL, now)
       for (const h of hits) {
         const slash = h.key.indexOf("/")
         if (slash === -1) continue
@@ -348,28 +386,43 @@ export class MemorySystem {
     await this.#pipeline.runNightly(workdir, sessionId ?? this.#recentSessionId(workdir))
   }
 
+  // ---- 调度簿记（scheduler 消费） ----
+
+  /**
+   * 账本唯一入口（卡⑤）：state.json 的全部读写收口到这里，两条通道。
+   * 每次现开现读（WriteLedger 写时整文件原子重写，长命实例会覆盖别人的
+   * 写入）——禁止在调用间缓存实例。
+   */
+  /** 写通道：项目目录不存在则创建（写语义）。 */
+  #ledgerForWrite(workdir: string): WriteLedger {
+    const { dir } = this.#layout.ensureProject(workdir)
+    return new WriteLedger(join(dir, "state.json"))
+  }
+
+  /** 读通道路径：解析项目目录但不创建（读语义）；文件存在性由调用方按各自语义处理。 */
+  #ledgerPath(workdir: string): string {
+    const { id } = this.#layout.resolveProject(workdir)
+    return join(this.#layout.projectDir(id), "state.json")
+  }
+
   /** 记录最近一次定时触发的墙钟时间（落 <projectDir>/state.json，scheduler 判节拍）。 */
   markIntervalRun(workdir: string, iso: string): void {
-    const { dir } = this.#layout.ensureProject(workdir)
-    new WriteLedger(join(dir, "state.json")).setIntervalLastRun(iso)
+    this.#ledgerForWrite(workdir).setIntervalLastRun(iso)
   }
 
   /** 最近一次定时触发的墙钟时间；从未触发过 → undefined（scheduler 据此立刻首跑）。 */
   intervalLastRun(workdir: string): string | undefined {
-    const { id } = this.#layout.resolveProject(workdir)
-    return new WriteLedger(join(this.#layout.projectDir(id), "state.json")).getIntervalLastRun()
+    return new WriteLedger(this.#ledgerPath(workdir)).getIntervalLastRun()
   }
 
   /** 记录最近一次夜间内化触发的本地日期（落 <projectDir>/state.json，scheduler 防同日重跑）。 */
   markNightlyRun(workdir: string, localDate: string): void {
-    const { dir } = this.#layout.ensureProject(workdir)
-    new WriteLedger(join(dir, "state.json")).setNightlyLastRun(localDate)
+    this.#ledgerForWrite(workdir).setNightlyLastRun(localDate)
   }
 
   /** 最近一次夜间内化触发的本地日期；从未触发过 → undefined。 */
   nightlyLastRun(workdir: string): string | undefined {
-    const { id } = this.#layout.resolveProject(workdir)
-    return new WriteLedger(join(this.#layout.projectDir(id), "state.json")).getNightlyLastRun()
+    return new WriteLedger(this.#ledgerPath(workdir)).getNightlyLastRun()
   }
 
   /**
@@ -379,22 +432,19 @@ export class MemorySystem {
   scheduleFollowCheck(sessionId: string, endTurnAt: string): void {
     const meta = this.#sessions.meta(sessionId)
     const workdir = meta?.workdir ?? this.#config.workspace
-    const { dir } = this.#layout.ensureProject(workdir)
-    new WriteLedger(join(dir, "state.json")).scheduleFollowCheck(sessionId, endTurnAt)
+    this.#ledgerForWrite(workdir).scheduleFollowCheck(sessionId, endTurnAt)
   }
 
-  /** 清除某项目的挂起检查（幂等：无账本/无该检查则无事可做）。 */
+  /** 清除某项目的挂起检查（幂等：无账本/无该检查则无事可做——不因清理而建文件）。 */
   clearFollowCheck(workdir: string, sessionId: string): void {
-    const { id } = this.#layout.resolveProject(workdir)
-    const path = join(this.#layout.projectDir(id), "state.json")
+    const path = this.#ledgerPath(workdir)
     if (!existsSync(path)) return
     new WriteLedger(path).clearFollowCheck(sessionId)
   }
 
   /** 某项目的全部挂起检查（含 daemon 重启恢复，spec 11）。 */
   pendingFollowChecks(workdir: string): Array<{ sessionId: string; endTurnAt: string }> {
-    const { id } = this.#layout.resolveProject(workdir)
-    const path = join(this.#layout.projectDir(id), "state.json")
+    const path = this.#ledgerPath(workdir)
     if (!existsSync(path)) return []
     return new WriteLedger(path).pendingFollowChecks()
   }
@@ -409,15 +459,10 @@ export class MemorySystem {
   }
 
   /**
-   * 关闭全局 + 全部项目 VectorIndex 句柄（daemon stop 序列调用，Task 13）：
-   * 防 better-sqlite3 句柄/内存泄漏。已关闭/损坏的索引逐个容错。
+   * 停机（daemon stop 序列调用）：索引连接的唯一所有者是 pipeline，这里只经
+   * 它统一关闭（卡⑤后不再有第二份连接缓存）。
    */
   async stop(): Promise<void> {
-    for (const idx of this.#projectIndexes.values()) {
-      try { idx.close() } catch { /* 已关闭/损坏：忽略 */ }
-    }
-    this.#projectIndexes.clear()
-    try { this.#globalIndex.close() } catch { /* 已关闭/损坏：忽略 */ }
     this.#pipeline.close()
   }
 

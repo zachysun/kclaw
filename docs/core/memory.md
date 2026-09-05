@@ -2,7 +2,7 @@
 
 ## 职责
 
-`MemorySystem`（`packages/core/src/memory/system.ts`）是记忆系统 v2 的唯一服务端门面，它把三类文件级能力装配在一起：**L1 项目情节**（按项目分目录的主题线文件）、**L2 全局认知**（跨项目的画像/知识/规则文件）、以及两套**派生检索索引**（SQLite FTS5 全文索引 + 可选的向量索引）。一条记忆就是一份 markdown 文件，用户可以直接打开查看、修改、删除；索引永远只是派生物，删掉可以重建。
+`MemorySystem`（`packages/core/src/memory/system.ts`）是记忆系统 v2 的唯一服务端门面（单类不拆；30 个方法按四拨消费方分面为窄接口 `MemoryQuery`/`MemoryTriggers`/`MemoryScheduleBook`/`MemoryAdmin`，调用方按面依赖，卡⑤），它把三类文件级能力装配在一起：**L1 项目情节**（按项目分目录的主题线文件）、**L2 全局认知**（跨项目的画像/知识/规则文件）、以及两套**派生检索索引**（SQLite FTS5 全文索引 + 可选的向量索引）。一条记忆就是一份 markdown 文件，用户可以直接打开查看、修改、删除；索引永远只是派生物，删掉可以重建。
 
 模型通过 `memory_save` / `memory_search` 两个工具读写（`packages/core/src/tools/memory.ts`）；run 装配（core `executeRun`）在每次 run 时做两级注入——L2 认知常驻系统提示、L1 情节作为 note 挂到用户消息上（见下文"检索与注入"）。daemon 的 `MemorySystem` 装配、v1 迁移、embedding 判定链都在 `packages/server/src/daemon.ts`。
 
@@ -33,7 +33,7 @@
 - **机器只改不删**：写入管线只有追加、改写、收束三种动作，没有任何删除；删除只发生在人工路径（管理界面或直接删文件）。这一条贯穿生命周期（见下）。
 - **防覆盖写**：任何一次机器写入（追加情节、内化认知）都以"当前磁盘上的最新内容"为基准重解析后合并（`writeThreadFile` / `writeCognitionFile`），人工改动先被重解析再合并、永不静默丢失；文件存在但不可解析（如人工手写无 frontmatter）时**抛错不覆盖**——宁可不写也不丢数据。
 - **中文分词必须自己做**：FTS5 默认的 unicode61 分词器把连续中文当成一个不可拆的 token，查"上海"永远无法命中"用户在上海工作"。索引和查询共用一个自写分词器 `tokenize`（`packages/core/src/text/fts.ts`）：ASCII 字母数字串按整词（转小写），CJK 连续串拆成相邻两字组合（bigram）——"用户在上海工作"拆成 `用户 户在 在上 上海 海工 工作`。一到两个字的中文查询本身就是合法 bigram，直接命中；更长的查询按 bigram 之间 OR 召回（`searchFts` 用 ` OR ` 连接，任一 bigram 命中即召回，bm25 把命中更多 token 的条目排更前）——检索是**召回优先**，模型侧二次判断，不是 AND 精确。每个 token 用引号包裹后拼进 MATCH 串（`ftsQuery`），杜绝把用户输入当成检索语法注入。
-- **两层索引同构**：项目库与全局库共用同一个 `VectorIndex`（`packages/core/src/memory/indexer.ts`）——`entries`（元数据）+ `entries_fts`（分词 token 串）+ `vectors`（可选向量）三张表，只是条目形状不同（情节条目 key = `topic#date#heading`，认知条目 key = `kind/name`）。
+- **两层索引同构**：项目库与全局库共用同一个 `VectorIndex`（`packages/core/src/memory/indexer.ts`）——`entries`（元数据）+ `entries_fts`（分词 token 串）+ `vectors`（可选向量）三张表，只是条目形状不同（情节条目 key = `topic#date#heading`，认知条目 key = `kind/name`）。连接的唯一所有者是 `MemoryPipeline`（卡⑤）：写入路径（reindex/backfill）与检索路径（MemorySystem 的 searchAll/searchEpisodes 向它借句柄）共用同一份连接缓存，全库 `new VectorIndex` 只出现在 pipeline；停机时 `system.stop()` → `pipeline.close()` 一条链统一关闭。
 
 ## 目录布局与文件格式
 
@@ -128,6 +128,10 @@ updated: 2026-08-30
 ### 水位账本与串行锁
 
 `state.json` 每项目一本（`WriteLedger`，`packages/core/src/memory/ledger.ts`），内容：
+
+> 读写收口在 MemorySystem 的账本入口（写通道 `#ledgerForWrite`/读通道 `#ledgerPath`，卡⑤），且**每次调用现开现读**——WriteLedger 写时把内存状态整文件原子重写，跨调用缓存长命实例会把别人刚写入的字段覆盖掉（最后写者胜），禁止。
+
+内容：
 
 ```json
 {

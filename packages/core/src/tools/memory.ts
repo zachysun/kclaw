@@ -15,7 +15,7 @@
  *   经历 + 全局认知，每行 `- [经历|认知] [scope] text`；无命中 → "（没有相关记忆）"。
  */
 import type { ToolExecutor } from "../agent/tools.js"
-import type { MemorySystem } from "../memory/system.js"
+import type { MemoryQuery, MemoryTriggers } from "../memory/system.js"
 import { errMsg, makeTool, optInt, requireString, ToolError } from "./shared.js"
 
 const DEFAULT_SEARCH_LIMIT = 5
@@ -23,7 +23,7 @@ const MAX_SEARCH_LIMIT = 20
 const IMMEDIATE_CLOSED_MSG = "立即写入已关闭（memory.write.immediate=false），该内容将在后台定时/跟随触发时沉淀"
 
 export function createMemoryTools(ctx: {
-  system: MemorySystem
+  system: Pick<MemoryTriggers, "triggerImmediate"> & Pick<MemoryQuery, "searchAll">
   sessionId: string
   workdir: string
   immediateEnabled: boolean

@@ -168,7 +168,7 @@ HTTP 出口与展示见 [http-api](../server/http-api.md) 的 `GET /usage` 与 [
 
 - **meta.json 原子写**：`writeMeta` 经 `writeFileAtomic`（临时文件 + rename）落盘，meta.json 本身不会被截断；崩溃最坏残留 `<meta.json>.tmp` 孤儿文件，不影响读取。
 - **config 无结构校验**：见上；写错类型（如 `confirmTimeoutMs: "30s"`）在运行时才以意外方式失败。
-- **SQLite 未开 WAL**：jobs.db、memory 的 `vectors.db`（每项目 + 全局各一个）与 usage.db 都是默认日志模式。单 daemon 进程同步访问（better-sqlite3）下安全；多进程并发写同一 home 是明确不支持的用法。
+- **SQLite 未开 WAL**：jobs.db、memory 的 `vectors.db`（每项目 + 全局各一个）与 usage.db 都是默认日志模式。单 daemon 进程同步访问（better-sqlite3）下安全；多进程并发写同一 home 是明确不支持的用法。进程内的同一 vectors.db 也只有 MemoryPipeline 一个连接（检索方借句柄，卡⑤归一）。
 - **KCLAW_HOME 只在 `resolvePaths` 读取一次**：核心层不缓存，但调用方各自持有解析结果；daemon 启动后改环境变量不影响已创建的路径。
 
 ---

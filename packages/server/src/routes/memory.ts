@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
-import type { KclawConfig, MemorySystem } from "@kclaw/core"
+import type { KclawConfig, MemoryAdmin, MemoryTriggers } from "@kclaw/core"
 
 const NOT_FOUND = { error: "not found" } as const
 /** spec 9.2：global 认知文件只认这 3 个 kind；其它一律 404。 */
@@ -18,7 +18,7 @@ function requireContent(body: unknown): string | undefined {
 }
 
 /** spec 9.2 的 /memory 路由族：管理记忆塔（项目线文件 + global 认知文件）。 */
-export function registerMemoryRoutes(app: FastifyInstance, opts: { memory?: MemorySystem; config?: KclawConfig }): void {
+export function registerMemoryRoutes(app: FastifyInstance, opts: { memory?: MemoryAdmin & Pick<MemoryTriggers, "triggerManual">; config?: KclawConfig }): void {
   // 无 memory 装配（createApp 未传 system）时全部 503，不注册会崩的调用。
   const unavailable = (reply: FastifyReply) => reply.code(503).send({ error: "memory system unavailable" })
   const memory = opts.memory
