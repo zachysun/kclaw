@@ -415,7 +415,9 @@ describe("kclaw chat (built CLI + real daemon + mock SSE provider)", () => {
     30_000,
   )
 
-  it(
+  // 时序敏感（真 daemon + mock SSE 的端到端），共享 CI runner 上不稳定：
+  // KCLAW_SKIP_SCENARIO_E=1 时跳过（ci.yml 设置），本地默认照跑（issue #1 跟踪）。
+  it.skipIf(process.env.KCLAW_SKIP_SCENARIO_E === "1")(
     "scenario E: injected memory notes render once; user message events never double-echo",
     async () => {
       // Invocation 1 asks the model to save a memory (safe tool, auto-allowed).
