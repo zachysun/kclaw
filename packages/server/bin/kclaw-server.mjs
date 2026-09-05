@@ -25,7 +25,6 @@ function homeFromArgv(argv) {
 }
 
 const daemon = await launchDaemon({ home: homeFromArgv(process.argv) })
-process.stdout.write(`${JSON.stringify({ port: daemon.port })}\n`)
 
 let stopping = false
 async function shutdown() {
@@ -48,5 +47,11 @@ async function shutdown() {
 process.on("unhandledRejection", (err) => {
   process.stderr.write(`kclaw-server unhandled rejection: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`)
 })
+// Register the signal handlers BEFORE the ready line: a client may kill the
+// daemon as soon as it reads readiness, and a SIGTERM landing after launch
+// but before these lines are registered would take the default action
+// (hard-kill, no clean stop, no daemon.json cleanup).
 process.on("SIGTERM", () => void shutdown())
 process.on("SIGINT", () => void shutdown())
+
+process.stdout.write(`${JSON.stringify({ port: daemon.port })}\n`)

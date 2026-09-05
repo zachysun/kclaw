@@ -68,6 +68,10 @@ describe("HookRegistry", () => {
     await registry.refresh()
     expect(registry.snapshot()).toEqual([])
     writeFileSync(path, 'export const hook = { position: "run-before" }\nexport default () => undefined\n')
+    // mtime 前移（同秒内写入 mtimeMs 可能相同，refresh 会判定"没变"而跳过
+    // 重装——隔壁"文件修改后"用例的同一坑，CI 上确实发过）
+    const future = Date.now() / 1000 + 10
+    utimesSync(path, future, future)
     await registry.refresh()
     expect(registry.snapshot()).toHaveLength(1)
     expect(registry.list()[0]).toMatchObject({ name: "heal.js", enabled: true })
