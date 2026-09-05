@@ -42,9 +42,11 @@ export class KclawClient {
   static connect(home?: string): Promise<KclawClient>
   // 连接（必要时先启动）daemon；失败重探 5s（CONNECT_RETRY_MS，250ms 间隔）
   request(method: string, path: string, body?: unknown): Promise<unknown>
-  // HTTP 请求；非 2xx 抛服务端 body.error（无则 "HTTP <status>"）；204/空响应返回 undefined
+  // HTTP 请求（经 @kclaw/core/client-http 共享基座，见 [client-http](../core/client-http.md)）；
+  // 非 2xx 抛服务端 body.error（无则 "HTTP <status>"）；204/空响应返回 undefined
   uploadAttachment(sessionId, filename, body, mimeType): Promise<{file: {path, name, size}}>
-  // 原始字节流 POST /sessions/:id/attachments?filename=…（附件上传，见 /attach 与下文 REPL 流程）
+  // 原始字节流 POST /sessions/:id/attachments?filename=…（附件上传，见 /attach 与下文 REPL 流程；
+  // 同样经 @kclaw/core/client-http 的 contentType 原样透传）
   ws(): Promise<WsHandle>
   // 打开已认证 WS：首帧发送 {type:"auth", token}；frames 是解析好的异步帧迭代器
 }
@@ -159,6 +161,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 - [onboarding](./onboarding.md)：首次运行判定、配置向导、`kclaw web`、Node 版本检查
 - [daemon](../server/daemon.md)：daemon 探测/启动/停止的另一侧契约（`daemon-ctl.ts` 详解）
 - [realtime](../server/realtime.md)：`/ws` 帧协议与订阅语义、断线恢复规则总述
+- [client-http](../core/client-http.md)：`request`/`uploadAttachment` 背后的共享 HTTP 请求基座
 - [run-manager](../server/run-manager.md)：`send_message`/`run.cancel`/确认在服务端的后续
 - [http-api](../server/http-api.md)：slash 命令、`jobs list`、`mcp list` 背后的 REST 端点
 - [mcp](../core/mcp.md)：`kclaw mcp [list]` 展示的状态快照与 `mcp__<server>__<tool>` 命名

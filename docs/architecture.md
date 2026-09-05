@@ -161,3 +161,4 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 - [storage](./core/storage.md)：`<home>` 布局、config 与 usage.db 台账
 - [webui](./web/webui.md)：WebUI 视图、token 引导与 PWA 外壳
 - [cli](./cli/cli.md)：REPL 渲染契约与断线重连
+- [client-http](./core/client-http.md)：CLI/WebUI 共享的 HTTP 请求基座（`@kclaw/core/client-http`）

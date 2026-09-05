@@ -2,12 +2,12 @@
 
 ## 职责
 
-`packages/web` 是 daemon 的浏览器前端：React 单页应用（SPA：单个 HTML 页面内完成全部交互，按需向服务器请求数据），vite 构建、产物由 daemon 静态托管，并按 PWA（渐进 Web 应用：可安装到主屏、带离线外壳）方式布置了 Service Worker 与清单文件。`src/App.tsx` 是根组件与顶层状态（tab、会话列表、选中会话）；`src/token.ts` 负责 token 引导（`?token=` 握手 → localStorage → 地址栏清除）；`src/ws.ts` 是 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）客户端；`src/api.ts` 是 HTTP 客户端（含附件上传）。功能与 CLI 对等并多出图形化部分（同一套 HTTP + WS API）：流式对话、确认卡片、会话（按工作目录分组）、任务、审计、用量台账、回收站、记忆管理、技能浏览。
+`packages/web` 是 daemon 的浏览器前端：React 单页应用（SPA：单个 HTML 页面内完成全部交互，按需向服务器请求数据），vite 构建、产物由 daemon 静态托管，并按 PWA（渐进 Web 应用：可安装到主屏、带离线外壳）方式布置了 Service Worker 与清单文件。`src/App.tsx` 是根组件与顶层状态（tab、会话列表、选中会话）；`src/token.ts` 负责 token 引导（`?token=` 握手 → localStorage → 地址栏清除）；`src/ws.ts` 是 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）客户端；`src/api.ts` 是 HTTP 客户端（含附件上传；请求经 `@kclaw/core/client-http` 共享基座——Bearer 注入、错误提取、204/空响应处理，`ApiError` 即该基座 `HttpRequestError` 的别名，见 [client-http](../core/client-http.md)）。功能与 CLI 对等并多出图形化部分（同一套 HTTP + WS API）：流式对话、确认卡片、会话（按工作目录分组）、任务、审计、用量台账、回收站、记忆管理、技能浏览。
 
 ## 设计决策
 
 - **协议类型引用正本、不发帧不走样**：`@kclaw/web` 除 react/react-dom 外只依赖 `@kclaw/core`——`commands` 共享表（纯数据：slash 命令的 name/usage 元数据，CLI 与 WebUI 同源，见 [extending](../extending.md)）与 `protocol` 子路径出口（`Message`/`Block`/`AgentEvent`/`SessionEvent` 等全部线上形状的类型正本，纯类型不含 Node API，浏览器构建可直接引用）。`src/chat/model.ts` 把 core 的泛型 `AgentEvent` 分布成可判别联合供 switch 收窄，reducer 的 default 分支以 `never` 哨兵收尾——core 新增事件类型而本端未表态时编译失败；`src/ws.ts` 的发送口收窄为 `ClientCommand`。仅 `src/types.ts` 里的 REST 响应形状（`SessionMeta`/`FsBrowseResult`/`Job`，各路由返回的 UI 相关子集）是 web 本地定义。
-- **同源托管、同源请求**：daemon 自己服务这份产物，`api` 的 base 是空串（路径即相对路径），`wsUrlFor()` 从 `window.location` 推导 `ws(s)://<host>/ws`——不需要配置任何地址。
+- **同源托管、同源请求**：daemon 自己服务这份产物，`api` 的 base 是空串（路径即相对路径），`wsUrlFor()` 从 `window.location` 推导 `ws(s)://<host>/ws`——不需要配置任何地址。HTTP 请求经 core 的共享基座（`@kclaw/core/client-http`）发出，URL 解析与 401 重入钩子留在 `api.ts` 本地（见 [client-http](../core/client-http.md)）。
 - **token 不落 URL**：`?token=` 只是 CLI → 浏览器的一次交接，`bootstrapToken` 存进 localStorage（浏览器提供的按站点隔离的本地键值存储）后立刻用 `history.replaceState` 把查询串从地址栏清除。
 - **`?session=` 深链**：任务通知里的会话链接（`/?session=<id>`）在会话列表加载完成后一次性消费——命中列表则自动选中该会话（与点击列表项同一状态路径），未命中保持默认行为；无论命中与否都立即 `history.replaceState` 清掉参数，刷新不会重复跳转。
 - **401 全局重入**：任何一次 API 401（挂载时的 `/status` 探测或之后的任何调用）都触发 `onUnauthorized` → 清除存储的 token → 返回 token 输入页；否则刷新页面会重新引导同一个过期 token，形成死循环。
@@ -138,3 +138,4 @@ export class WsAuthError extends Error { readonly code: number }  // 默认 4001
 - [onboarding](../cli/onboarding.md)：`kclaw web` 命令与 `?token=` 的发送侧
 - [skills](../core/skills.md)：技能页、`/skill` 引导与技能即斜杠命令背后的技能包机制
 - [protocol](../core/protocol.md)：事件目录、持久化块结构与 WS 指令帧（model.ts 引用的类型正本）
+- [client-http](../core/client-http.md)：`api.ts` 背后的共享 HTTP 请求基座（Bearer 注入、错误提取、401 钩子）
