@@ -207,7 +207,7 @@ export interface MemoryWrittenPayload {
   scope?: string
 }
 
-// 钩子失败（spec issue #6）：用户钩子一律 fail-open，run 不受影响，但失败必须可见。
+// 钩子失败（spec issue #6）：失败兜底自声明（skip 跳过 / deny 否决闸门），run 不因钩子失败而崩，但失败必须可见。
 // phase:"load" 是装载期失败（无 sessionId/runId）；"run" 是执行期失败（带所在 run 的上下文）。
 export interface HookFailedPayload {
   hook: string

@@ -11,7 +11,7 @@ export function hook<K extends HookPosition>(
   name: string,
   position: K,
   handler: (ctx: HookContextMap[K]) => unknown,
-  opts: { failure?: "fatal" | "skip"; order?: number; enabled?: boolean } = {},
+  opts: { failure?: "fatal" | "skip" | "deny"; order?: number; enabled?: boolean } = {},
 ): HookEntry {
   return {
     meta: {

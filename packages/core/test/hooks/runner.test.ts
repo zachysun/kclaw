@@ -1,12 +1,13 @@
 import { describe, it, expect, vi } from "vitest"
 import { HookChain } from "../../src/hooks/runner.js"
 import type { HookEntry, HookPosition } from "../../src/hooks/types.js"
+import type { ToolCallBlock } from "../../src/protocol/blocks.js"
 
 function entry(
   name: string,
   position: HookPosition,
   handler: (ctx: never) => unknown,
-  opts: { order?: number; failure?: "fatal" | "skip"; enabled?: boolean } = {},
+  opts: { order?: number; failure?: "fatal" | "skip" | "deny"; enabled?: boolean } = {},
 ): HookEntry {
   return {
     meta: {
@@ -155,5 +156,70 @@ describe("HookChain", () => {
     expect(chain.has("run-before")).toBe(false)
     const out = await chain.run("llm-before", { messages: [{ role: "user", content: "orig" }] })
     expect(out).toEqual([{ role: "user", content: "rewritten" }])
+  })
+})
+
+describe("runGate（deny 否决档）", () => {
+  const call = { callId: "c1", name: "search", args: {} } as unknown as ToolCallBlock
+
+  async function quietChain(onFailure?: (e: unknown) => void): Promise<HookChain> {
+    return new HookChain({ onFailure, timeoutMs: () => Number.POSITIVE_INFINITY })
+  }
+
+  it("空位置 → 放行", async () => {
+    expect(await (await quietChain()).runGate("tool-before", { toolCall: call })).toEqual({ denied: false })
+  })
+
+  it("skip 失败 → 放行但仍报告", async () => {
+    const onFailure = vi.fn()
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const chain = await quietChain(onFailure)
+      chain.register(entry("flaky", "tool-before", () => { throw new Error("boom") }, { failure: "skip" }))
+      expect(await chain.runGate("tool-before", { toolCall: call })).toEqual({ denied: false })
+      expect(onFailure).toHaveBeenCalledTimes(1)
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it("deny 失败 → 否决并携带首个失败者；链仍跑完、每次失败都报告", async () => {
+    const onFailure = vi.fn()
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const log: string[] = []
+      const chain = await quietChain(onFailure)
+      chain.register(entry("guard", "tool-before", () => { throw new Error("disk full") }, { failure: "deny", order: 10 }))
+      chain.register(entry("observer", "tool-before", () => { log.push("observed") }, { failure: "skip", order: 20 }))
+      chain.register(entry("second", "tool-before", () => { throw new Error("second") }, { failure: "deny", order: 30 }))
+      expect(await chain.runGate("tool-before", { toolCall: call })).toEqual({ denied: true, hook: "guard", error: "disk full" })
+      expect(log).toEqual(["observed"]) // 后续观察者不丢
+      expect(onFailure).toHaveBeenCalledTimes(2) // 两个 deny 失败各自报告
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it("deny 钩子健康（不抛）→ 放行", async () => {
+    const chain = await quietChain()
+    chain.register(entry("healthy-guard", "tool-before", () => undefined, { failure: "deny" }))
+    expect(await chain.runGate("tool-before", { toolCall: call })).toEqual({ denied: false })
+  })
+
+  it("fatal 失败时 runGate 同样拒绝（与 run 一致）", async () => {
+    const chain = await quietChain()
+    chain.register(entry("fatal-broken", "tool-before", () => { throw new Error("fatal reason") }))
+    await expect(chain.runGate("tool-before", { toolCall: call })).rejects.toThrow("fatal reason")
+  })
+
+  it("deny 超时也算失败 → 否决", async () => {
+    const chain = new HookChain({ timeoutMs: () => 10 })
+    chain.register(entry("slow-guard", "tool-before", () => new Promise(() => {}), { failure: "deny" }))
+    const out = await chain.runGate("tool-before", { toolCall: call })
+    expect(out.denied).toBe(true)
+    if (out.denied) {
+      expect(out.hook).toBe("slow-guard")
+      expect(out.error).toContain("timed out")
+    }
   })
 })

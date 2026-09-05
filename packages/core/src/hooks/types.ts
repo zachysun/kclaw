@@ -53,7 +53,7 @@ export interface HookContextMap {
   "llm-after": { usage: { inputTokens: number; outputTokens: number }; stopReason: string; latencyMs: number }
   /** provider 层重试（withRetry 回调）。返回值忽略。 */
   "llm-retry": { attempt: number; error: string }
-  /** 工具执行前、权限裁决之前（只读观察）。返回值忽略。 */
+  /** 工具执行前、权限裁决之前。观察位；声明 failure:"deny" 的钩子失败时本次调用被拒绝（fail-closed 自选档）。返回值忽略。 */
   "tool-before": { toolCall: ToolCallBlock }
   /** 单个工具执行完成后。返回值忽略。 */
   "tool-after": { toolCall: ToolCallBlock; result: ToolResultBlock }
@@ -100,8 +100,17 @@ export interface HookMeta {
   enabled: boolean
   /** Ascending execution order within a position; ties break by name. */
   order: number
-  /** fatal: a throw propagates (loop's existing per-position failure paths); skip: fail-open. */
-  failure: "fatal" | "skip"
+  /**
+   * Failure policy, self-declared by the hook:
+   * - "fatal": a throw propagates through run() (builtin-only; the loader
+   *   rejects user declarations) — the loop's existing per-position failure
+   *   paths own the terminal behavior.
+   * - "skip": fail-open — the failure is reported (hook.failed) and the
+   *   chain continues without this hook.
+   * - "deny": fail-closed by choice — the failure is reported AND, at a
+   *   gate position (tool-before), vetoes the gated operation.
+   */
+  failure: "fatal" | "skip" | "deny"
   origin: "builtin" | "user"
   /** Load failure reason (user hooks only); a failed entry never runs. */
   error?: string
@@ -114,7 +123,11 @@ export interface HookModule {
     description?: string
     enabled?: boolean
     order?: number
-    failure?: "fatal" | "skip"
+    /**
+     * "skip" (default) or "deny" are accepted; "fatal" is typed here because
+     * a js file may declare it — the loader rejects it at load time.
+     */
+    failure?: "skip" | "deny" | "fatal"
   }
   default: (ctx: never) => unknown
 }
@@ -128,9 +141,19 @@ export interface HookEntry {
 export interface HookRunner {
   /** Runs the position's enabled chain; resolves with the last rewrite or undefined. */
   run<K extends HookPosition>(position: K, ctx: HookContextMap[K]): Promise<HookResultMap[K] | undefined>
+  /**
+   * Gate positions (tool-before): like run, but a failing hook that declared
+   * `failure: "deny"` vetoes the gated operation instead of being skipped.
+   * The chain still runs to completion (later observers see the failure);
+   * the FIRST denial is reported.
+   */
+  runGate<K extends HookPosition>(position: K, ctx: HookContextMap[K]): Promise<GateOutcome>
   /** True when the position has at least one enabled, successfully-loaded handler. */
   has(position: HookPosition): boolean
 }
+
+/** runGate's verdict: denied carries the first deny-declared failure. */
+export type GateOutcome = { denied: false } | { denied: true; hook: string; error: string }
 
 /** Uniform per-position ctx/result typing for implementors of HookRunner. */
 export type HookHandlerOf<K extends HookPosition> = (

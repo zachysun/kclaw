@@ -20,15 +20,19 @@
  *   terminal behavior (user_message_failed / steering_failed / entry-level
  *   failure), preserving each migrated behavior's old semantics exactly.
  *   `failure: "skip"` reports via `onFailure` and continues with the next
- *   handler (fail-open; user hooks are forced to skip at load time).
+ *   handler (fail-open). `failure: "deny"` reports too and, through runGate,
+ *   vetoes the gated operation (tool-before) — fail-closed by choice. In all
+ *   non-fatal cases the chain keeps running: later observers don't lose their
+ *   turn, and runGate reports the FIRST denial.
  * - Timeout: every handler is raced against `timeoutMs` (config
  *   hooks.timeoutMs, default 5s); a timeout is a failure with the same
- *   fatal/skip split.
+ *   fatal/skip/deny split.
  * - An empty position short-circuits: run() resolves undefined synchronously
  *   (zero cost when no hook is installed) and has() is false.
  */
 import { makeEvent, type AgentEvent } from "../protocol/index.js"
 import type {
+  GateOutcome,
   HookContextMap,
   HookEntry,
   HookPosition,
@@ -98,17 +102,39 @@ export class HookChain implements HookRunner {
   }
 
   async run<K extends HookPosition>(position: K, ctx: HookContextMap[K]): Promise<HookResultMap[K] | undefined> {
+    const { value } = await this.#runChain(position, ctx)
+    return value as HookResultMap[K] | undefined
+  }
+
+  async runGate<K extends HookPosition>(position: K, ctx: HookContextMap[K]): Promise<GateOutcome> {
+    const { denial } = await this.#runChain(position, ctx)
+    return denial ? { denied: true, ...denial } : { denied: false }
+  }
+
+  /**
+   * The single chain loop both exits share. `denial` is set by the first
+   * deny-declared failure (hook name + message) and never clears — later
+   * hooks still run, the verdict is already made.
+   */
+  async #runChain(
+    position: HookPosition,
+    ctx: HookContextMap[HookPosition],
+  ): Promise<{ value: unknown; denial?: { hook: string; error: string } }> {
     const list = this.#byPosition.get(position)
-    if (list === undefined || list.length === 0) return undefined
+    if (list === undefined || list.length === 0) return { value: undefined }
     // A shallow copy: rewrite positions mutate THIS object (not the caller's)
     // as the rewrite chain's carrier.
     const invokeCtx: Record<string, unknown> = { ...ctx }
     let current: unknown = undefined
+    let denial: { hook: string; error: string } | undefined
     for (const { entry } of list) {
       const outcome = await this.#invoke(entry, position, invokeCtx as HookContextMap[HookPosition])
       if (!outcome.ok) {
         if (entry.meta.failure === "fatal") throw outcome.error
-        this.#report(entry, position, outcome.error)
+        const message = this.#report(entry, position, outcome.error)
+        if (entry.meta.failure === "deny" && denial === undefined) {
+          denial = { hook: entry.meta.name, error: message }
+        }
         continue
       }
       if (outcome.value === undefined) continue
@@ -123,7 +149,7 @@ export class HookChain implements HookRunner {
       const field = REWRITE_FIELD[position]
       if (field !== undefined) invokeCtx[field] = outcome.value // 下一个 handler 看到改写值
     }
-    return current as HookResultMap[K] | undefined
+    return { value: current, denial }
   }
 
   /** Invoke one handler under the timeout race; never throws. */
@@ -151,7 +177,8 @@ export class HookChain implements HookRunner {
     }
   }
 
-  #report(entry: HookEntry, position: HookPosition, error: unknown): void {
+  /** Report one failure (console + hook.failed event); returns the message for the caller's verdict. */
+  #report(entry: HookEntry, position: HookPosition, error: unknown): string {
     const message = error instanceof Error ? error.message : String(error)
     console.error(`kclaw hook failed (${position}/${entry.meta.name}):`, message)
     this.#opts.onFailure?.(makeEvent("hook.failed", {
@@ -160,5 +187,6 @@ export class HookChain implements HookRunner {
       error: message,
       phase: "run",
     }, this.#opts.eventCtx?.() ?? {}))
+    return message
   }
 }

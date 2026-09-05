@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest"
 import { runAgent } from "../../src/agent/loop.js"
+import { HookChain } from "../../src/hooks/runner.js"
 import type { ToolExecutor } from "../../src/agent/tools.js"
 import type { LlmClient, LlmRequest, LlmStreamEvent } from "../../src/provider/types.js"
 import type { Message } from "../../src/protocol/messages.js"
 import type { AgentEvent, EventType } from "../../src/protocol/events.js"
 import type { ToolCallBlock } from "../../src/protocol/blocks.js"
-import { chainOf } from "./hook-utils.js"
+import { chainOf, hook } from "./hook-utils.js"
 
 function echoTool(body: Partial<ToolExecutor> = {}): ToolExecutor {
   return {
@@ -93,6 +94,33 @@ describe("runAgent tool turn", () => {
     const result = messages[2].blocks[0] as { status: string; output: string }
     expect(result.status).toBe("error")
     expect(result.output).toContain("boom")
+  })
+
+  it("deny 钩子失败 → 该工具被拒绝（fail-closed），run 继续、hook.failed 可见", async () => {
+    let executed = 0
+    const search: ToolExecutor = {
+      risk: "safe", concurrency: "parallel",
+      async execute() { executed++; return { status: "ok", output: "{}" } },
+    }
+    const guard = hook("guard", "tool-before", () => { throw new Error("非工作时段") }, { failure: "deny", order: 1 })
+    // 直接构造链以接住 onFailure（chainOf 不带回调；真实装配里它接到事件总线）
+    const failures: AgentEvent[] = []
+    const hooks = new HookChain({ timeoutMs: () => Number.POSITIVE_INFINITY, onFailure: (e) => failures.push(e as AgentEvent) })
+    hooks.register(guard)
+    const { messages, outcome } = await run({
+      tools: new Map([["search", search]]),
+      hooks,
+    })
+    expect(executed).toBe(0) // 拒绝在执行前发生
+    expect(messages.map((m) => m.role)).toEqual(["user", "assistant", "tool", "assistant"])
+    const result = messages[2].blocks[0] as { type: string; status: string; output: string }
+    expect(result.status).toBe("error")
+    expect(result.output).toContain("钩子 guard 失败")
+    expect(result.output).toContain("非工作时段")
+    const note = messages[2].blocks.find((b) => b.type === "note") as { kind: string; text: string }
+    expect(note.kind).toBe("denied")
+    expect(failures.map((e) => e.type)).toEqual(["hook.failed"])
+    expect(outcome.stopReason).toBe("end_turn") // run 照常收尾，模型能看到拒绝并反应
   })
 
   it("feeds invalid tool args and unknown tool back as error results", async () => {

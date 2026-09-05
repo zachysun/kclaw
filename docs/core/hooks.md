@@ -12,9 +12,9 @@
 
 - **位置网格是封闭枚举**：`HookPosition` 是 14 个命名位置的联合类型。位置对应"变异真实存在的接缝"——改写用户消息、改写模型视图、注入引导、压缩判定……没有接缝的地方不开位置。加一个位置 = 更新 `HookContextMap`/`HookResultMap` 两张契约表，编译器会走查每一个消费方（spec issue #6 的封闭原则）。
 - **注册接口是唯一挂载入口**：内置闭包、用户文件、测试注入，全部经 `HookChain.register` 进链。引擎不区分"自己人"和"外人"——它自己就是这套机制的第一批用户。
-- **用户钩子一律 fail-open**：用户文件的 `failure` 在装载时强制为 `"skip"`——抛错、超时都只发一条 `hook.failed` 事件，run 照常继续；声明 `failure: "fatal"` 的用户文件直接拒绝装载。引擎内置钩子在原行为抛错传播的地方保留 `fatal`（如用户消息持久化、系统提示词审计），语义与迁移前逐字节一致。
+- **失败兜底自声明，默认 fail-open**：用户文件可声明 `failure: "skip"`（默认，失败即跳过、只发一条 `hook.failed`，run 照常继续）或 `"deny"`（失败时否决所在闸门——`tool-before` 位置上就是该工具不执行，fail-closed 自选档）；声明 `"fatal"` 的用户文件拒绝装载（用户代码没有杀死整个 run 的权力）。引擎内置钩子在原行为抛错传播的地方保留 `fatal`（如用户消息持久化、系统提示词审计），语义与迁移前逐字节一致。
 - **改写权只开在四处**：`run-before`（用户消息）、`llm-before`（模型视图）、`system-before`（系统提示词追加段落）、`system-after`（系统提示词终稿）。其余位置是观察（返回值忽略）或内置独占的决策位（`compaction-check`/`overflow-rescue`：压缩判定闭包着压缩引擎，用户钩子不注册）。
-- **权限与确认不进钩子链**：工具执行前的权限裁决保持循环的控制流（`tool-before` 位置只读观察）。把"允许/拒绝/确认"做成可改写钩子等于把安全边界交给目录里的文件，收益配不上风险。
+- **权限与确认不进钩子链**：工具执行前的权限裁决保持循环的控制流（`tool-before` 位置观察 + deny 否决权，见上）。把"允许/拒绝/确认"做成可改写钩子等于把安全边界交给目录里的文件，收益配不上风险；`deny` 档给的是"钩子失败宁可不放行"的表达力，不是主动裁决权。
 - **每 run 现扫，文件即真相**：用户钩子目录在每次 run 开始时重扫（与技能同心智），改文件下一轮生效、不重启 daemon。装载失败按"文件名+mtime+错误"去重后发一次 `hook.failed {phase:"load"}` 事件——管理面持续显示失败，事件流不被刷屏。
 - **hook 名即文件名**：用户钩子的身份是文件基名，同名文件重复扫描整体替换（后扫的版本胜出）。
 
@@ -29,7 +29,7 @@
 | `llm-before` | 每次模型调用前、provider 视图装配后 | `{ messages }` | `ProviderMessage[]` | 改写模型视图（内置：技能点名包装） |
 | `llm-after` | 一次模型调用完成后 | `{ usage, stopReason, latencyMs }` | 忽略 | 观察调用 |
 | `llm-retry` | provider 层重试时（withRetry 回调） | `{ attempt, error }` | 忽略 | 重试可见性（内置：转 `llm.failed {willRetry:true}`） |
-| `tool-before` | 工具执行前、权限裁决之前 | `{ toolCall }` | 忽略 | 只读观察（权限裁决保持引擎控制流） |
+| `tool-before` | 工具执行前、权限裁决之前 | `{ toolCall }` | 忽略 | 观察 + 闸门：`failure:"deny"` 的钩子失败时该工具被拒绝（权限裁决本身保持引擎控制流） |
 | `tool-after` | 单个工具执行完成后 | `{ toolCall, result }` | 忽略 | 观察结果 |
 | `turn-boundary` | 迭代边界（工具批次后、下一轮调用前） | `{}` | `Message[]` | 注入消息（内置：引导缓冲 drain） |
 | `compaction-check` | 迭代边界的中途压缩判定（内置独占） | `{}` | `ActiveSummary \| null` | 决策位：返回新视图 = 压缩生效 |
@@ -48,8 +48,8 @@
 - **排序**：`meta.order` 升序，同序按名字稳定排序（改写链依赖确定性）。
 - **真链式改写**：改写位置的返回值回填进 ctx 的改写字段（`run-before` 的 `message`、`llm-before` 的 `messages`、`system-after` 的 `system`），下一个 handler 看到的是改写后的值——这保证"用户改写在前、内置持久化在后"时，持久化落的是改写后的消息。调用方传入的 ctx 对象本身不被改动。
 - **追加型位置**：`system-before` 的返回值是段落**数组**，多个钩子的段落累积拼接而不是互相覆盖。
-- **失败分派**：抛错/超时按 `meta.failure` 分派——`fatal` 让整次 `run()` 拒绝（循环既有的各位置 catch 路径接管，错误码与迁移前一致：`user_message_failed`、`steering_failed` 等）；`skip` 发 `hook.failed {phase:"run"}` 后继续下一个 handler。
-- **超时**：每个 handler 与 `config.hooks.timeoutMs`（默认 5000ms）竞速；超时是一次失败，走同样的 fatal/skip 分派。
+- **失败分派**：抛错/超时按 `meta.failure` 分派——`fatal` 让整次 `run()` 拒绝（循环既有的各位置 catch 路径接管，错误码与迁移前一致：`user_message_failed`、`steering_failed` 等）；`skip` 发 `hook.failed {phase:"run"}` 后继续下一个 handler；`deny` 同样发事件并继续跑完链（后面的观察者不丢），但经 `runGate` 出口把首个失败记为**否决**——`tool-before` 位置上循环据此给该工具写拒绝结果（错误结果 + `denied` note，工具不执行，run 继续）。
+- **超时**：每个 handler 与 `config.hooks.timeoutMs`（默认 5000ms）竞速；超时是一次失败，走同样的 fatal/skip/deny 分派。
 - **空位置零开销**：没有注册任何 handler 的位置同步短路返回 `undefined`，`has()` 为 false（循环据此判断要不要走进某个分支，如 overflow-rescue）。
 
 ---
@@ -65,7 +65,7 @@ export const hook = {
   description: "记录每个工具的产出",   // 可选
   enabled: true,            // 可选，默认 true
   order: 1000,              // 可选，默认 1000
-  // failure 字段用户写 fatal 会被拒绝装载（用户钩子一律 skip）
+  failure: "skip",          // 可选："skip"（默认，失败跳过）| "deny"（失败否决闸门，如工具不执行）；"fatal" 仅内置可用，写了拒绝装载
 }
 export default async (ctx) => {
   console.log(ctx.toolCall.name, ctx.result.status)
@@ -76,7 +76,7 @@ export default async (ctx) => {
 
 - 扩展名 `.js` / `.mjs` / `.ts`（`.ts` 依赖 Node 24+ 的原生类型剥离；低版本 Node 会在 import 时得到明确报错）。其余扩展名忽略。
 - 文件用绝对 URL 加 `?t=<mtimeMs>` 动态 import——同一路径改文件后必重新执行（编辑即生效）；不解析裸说明符依赖（第三方包不支持，见 spec Out-of-Scope）。
-- 损坏形态（语法错误、未知 position、缺 `hook` 导出或 default 函数、声明 `failure: "fatal"`）成为**装载失败条目**，不会拖垮目录里其他文件，也不会弄崩 daemon。
+- 损坏形态（语法错误、未知 position、缺 `hook` 导出或 default 函数、声明 `failure: "fatal"` 或非法 failure 值）成为**装载失败条目**，不会拖垮目录里其他文件，也不会弄崩 daemon。
 - `enabled: false` 的文件照常载入元数据（管理面可见）但不进执行链。
 
 ---

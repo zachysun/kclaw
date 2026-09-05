@@ -541,9 +541,17 @@ async function runToolTurn(
     if (entry.result) continue // invalid args / unknown tool never reach the gate
     // Abort checkpoint: stop gating — and thereby executing — anything further.
     if (deps.signal?.aborted) break
-    // tool-before 观察（只读）：裁决（权限网关 + 确认）是引擎控制流，内置独占；
-    // 该位置对 hook 只暴露即将执行的调用，返回值忽略。
-    await deps.hooks.run("tool-before", { toolCall: entry.call })
+    // tool-before：观察位 + 失败否决权。声明 failure:"deny" 的钩子失败时，
+    // 本次工具调用被拒绝（fail-closed 自选档，fail-closed = 失败宁可不放行）；
+    // 其余失败照旧跳过。裁决（权限网关 + 确认）仍是引擎控制流，钩子返回值
+    // 不参与裁决。
+    const gate = await deps.hooks.runGate("tool-before", { toolCall: entry.call })
+    if (gate.denied) {
+      const text = `钩子 ${gate.hook} 失败，操作未执行：${gate.error}`
+      entry.result = errorResult(entry.call.callId, text)
+      entry.note = { id: newBlockId(), type: "note", kind: "denied", text }
+      continue
+    }
     const decision = deps.permissions
       ? await deps.permissions.check(entry.call)
       : { type: "allow" as const, reason: "safe" as const }

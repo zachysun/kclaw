@@ -27,7 +27,7 @@ describe("scanUserHooks", () => {
     expect(result).toEqual({ entries: [], failures: [] })
   })
 
-  it("合法文件载入：name 取文件名、order 默认 1000、failure 强制 skip、origin user", async () => {
+  it("合法文件载入：name 取文件名、order 默认 1000、failure 默认 skip、origin user", async () => {
     writeFileSync(join(dir, "my-hook.js"), validJs())
     const { entries, failures } = await scanUserHooks(dir)
     expect(failures).toEqual([])
@@ -74,6 +74,26 @@ describe("scanUserHooks", () => {
     const { entries, failures } = await scanUserHooks(dir)
     expect(entries).toEqual([])
     expect(failures[0]!.error).toContain("fatal")
+  })
+
+  it("声明 failure deny 采纳（fail-closed 自选档）", async () => {
+    writeFileSync(join(dir, "guard.js"), [
+      'export const hook = { position: "tool-before", failure: "deny" }',
+      "export default () => undefined",
+    ].join("\n"))
+    const { entries, failures } = await scanUserHooks(dir)
+    expect(failures).toEqual([])
+    expect(entries[0]!.meta).toMatchObject({ name: "guard.js", position: "tool-before", failure: "deny", origin: "user" })
+  })
+
+  it("非法 failure 值拒绝（类型校验在 js 文件上靠装载器兜底）", async () => {
+    writeFileSync(join(dir, "weird.js"), [
+      'export const hook = { position: "run-before", failure: "explode" }',
+      "export default () => undefined",
+    ].join("\n"))
+    const { entries, failures } = await scanUserHooks(dir)
+    expect(entries).toEqual([])
+    expect(failures[0]!.error).toContain("unknown failure")
   })
 
   it("语法错误 → 装载失败条目", async () => {

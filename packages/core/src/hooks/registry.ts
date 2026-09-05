@@ -26,7 +26,7 @@ export interface HookView {
   description?: string
   enabled: boolean
   order: number
-  failure: "fatal" | "skip"
+  failure: "fatal" | "skip" | "deny"
   origin: "builtin" | "user"
   error?: string
 }

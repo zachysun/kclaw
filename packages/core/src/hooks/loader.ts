@@ -16,10 +16,11 @@
  * - `?t=<mtimeMs>` cache-buster: dynamic import caches by URL, so the same
  *   path edited between runs must re-execute ("edit file, next run picks it
  *   up" — same mental model as skills' per-run rescan).
- * - User files may NOT declare failure: "fatal" — the loader rejects it
- *   (user code has no power to kill a run). enabled defaults to true,
- *   order defaults to a large number (after explicit orders), name is the
- *   file basename.
+ * - User files may declare failure: "skip" (default) or "deny" (a failing
+ *   handler vetoes the gated operation — fail-closed by choice). "fatal" is
+ *   rejected at load: user code has no power to kill a run. enabled defaults
+ *   to true, order defaults to a large number (after explicit orders), name
+ *   is the file basename.
  * - A broken file (bad syntax, unknown position, non-function default,
  *   illegal failure) becomes a load FAILURE, never a daemon error.
  */
@@ -98,6 +99,10 @@ export async function scanUserHooks(dir: string): Promise<ScanResult> {
         result.failures.push({ name, path, mtimeMs, error: 'user hooks may not declare failure: "fatal"' })
         continue
       }
+      if (declared.failure !== undefined && declared.failure !== "skip" && declared.failure !== "deny") {
+        result.failures.push({ name, path, mtimeMs, error: `unknown failure "${String(declared.failure)}" (valid: skip, deny)` })
+        continue
+      }
       result.entries.push({
         meta: {
           name,
@@ -105,7 +110,7 @@ export async function scanUserHooks(dir: string): Promise<ScanResult> {
           ...(declared.description !== undefined ? { description: declared.description } : {}),
           enabled: declared.enabled ?? true,
           order: declared.order ?? DEFAULT_USER_ORDER,
-          failure: "skip",
+          failure: declared.failure ?? "skip",
           origin: "user",
         },
         handler: mod.default as HookEntry["handler"],
