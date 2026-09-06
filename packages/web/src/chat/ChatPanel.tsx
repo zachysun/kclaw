@@ -32,6 +32,7 @@ import {
   type Message,
   type PendingSend,
 } from "./model.js"
+import { useSilentFetch } from "../daemon-clients.js"
 import { runWebCommand } from "./commands.js"
 import { ChatView, type CompactionRecordView, type Disposition, type PendingAttachment } from "./ChatView.js"
 
@@ -303,20 +304,11 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   const [models, setModels] = useState<string[]>([])
   const [currentModel, setCurrentModel] = useState<string | undefined>(sessionModel)
 
-  useEffect(() => {
-    let cancelled = false
-    api
-      .get<{ providers?: { entries?: Record<string, unknown> } }>("/config")
-      .then((cfg) => {
-        if (!cancelled) setModels(Object.keys(cfg.providers?.entries ?? {}))
-      })
-      .catch(() => {
-        // selector just stays empty on failure
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [api])
+  useSilentFetch(
+    () => api.get<{ providers?: { entries?: Record<string, unknown> } }>("/config"),
+    (cfg) => setModels(Object.keys(cfg.providers?.entries ?? {})),
+    [api],
+  )
 
   const handleSwitchModel = useCallback((name: string) => {
     api
@@ -328,73 +320,54 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   // 初始发送处置（spec §6，与 CLI chat 同源）：会话 meta 的 dispositionOverride
   // 优先，其次配置默认，最后 steer。刚连上的 daemon 不可达（旧版本无该路由/字段）
   // 时静默维持 steer。
-  useEffect(() => {
-    let cancelled = false
-    Promise.all([
-      api.get<{ dispositionOverride?: unknown }>(`/sessions/${encodeURIComponent(sessionId)}`),
-      api.get<{ sessions?: { defaultDisposition?: unknown } }>("/config"),
-    ])
-      .then(([meta, cfg]) => {
-        if (cancelled) return
-        // 会话级覆盖只可能是 steer/wait（interrupt 已不再写 sticky，见
-        // handleSetDisposition；历史遗留的 "interrupt" 覆盖按 steer 回退）。
-        const override = meta.dispositionOverride
-        if (override === "steer" || override === "wait") {
-          baseDispositionRef.current = override
-          setDisposition(override)
-          return
-        }
-        const fallback = cfg.sessions?.defaultDisposition
-        const base = fallback === "wait" ? "wait" : "steer"
-        baseDispositionRef.current = base
-        setDisposition(base)
-      })
-      .catch(() => {
-        // 已是 steer —— 失败容忍（spec §7.1 默认选中回退）。
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [api, sessionId])
+  useSilentFetch(
+    () =>
+      Promise.all([
+        api.get<{ dispositionOverride?: unknown }>(`/sessions/${encodeURIComponent(sessionId)}`),
+        api.get<{ sessions?: { defaultDisposition?: unknown } }>("/config"),
+      ]),
+    ([meta, cfg]) => {
+      // 会话级覆盖只可能是 steer/wait（interrupt 已不再写 sticky，见
+      // handleSetDisposition；历史遗留的 "interrupt" 覆盖按 steer 回退）。
+      const override = meta.dispositionOverride
+      if (override === "steer" || override === "wait") {
+        baseDispositionRef.current = override
+        setDisposition(override)
+        return
+      }
+      const fallback = cfg.sessions?.defaultDisposition
+      const base = fallback === "wait" ? "wait" : "steer"
+      baseDispositionRef.current = base
+      setDisposition(base)
+    },
+    [api, sessionId],
+  )
 
   // v3 压缩审计（Task 11）：会话选中时与消息并行拉一次 GET
   // /sessions/:id/compactions（参考 AuditView 的 api 用法）。失败静默——
   // 折叠条只是增强显示，compactions 保持 null 就不渲染审计条（旧 note
   // 会话的 contextBarFor 路径不受影响）。
   const [compactions, setCompactions] = useState<CompactionRecordView[] | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    setCompactions(null)
-    api
-      .get<unknown>(`/sessions/${encodeURIComponent(sessionId)}/compactions`)
-      .then((raw) => {
-        if (cancelled) return
-        setCompactions(Array.isArray(raw) ? raw.flatMap(toCompactionRecordView) : [])
-      })
-      .catch(() => {
-        // 静默：下次会话选中/刷新再试。
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [api, sessionId])
+  useSilentFetch(
+    () => {
+      setCompactions(null)
+      return api.get<unknown>(`/sessions/${encodeURIComponent(sessionId)}/compactions`)
+    },
+    (raw) => setCompactions(Array.isArray(raw) ? raw.flatMap(toCompactionRecordView) : []),
+    [api, sessionId],
+  )
 
   // 已装用户可见技能清单：斜杠菜单的动态命令数据源（会话切换重拉，失败静默）。
-  useEffect(() => {
-    let cancelled = false
-    const q = workdir ? `?workdir=${encodeURIComponent(workdir)}` : ""
-    api
-      .get<Array<{ name: string; description: string; origin: string; visibility: string }>>(`/skills${q}`)
-      .then((rows) => {
-        if (!cancelled && Array.isArray(rows)) setSkillRows(rows)
-      })
-      .catch(() => {
-        // 静默：技能命令缺席不碍聊天，/skill 仍可查看。
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [api, workdir])
+  useSilentFetch(
+    () => {
+      const q = workdir ? `?workdir=${encodeURIComponent(workdir)}` : ""
+      return api.get<Array<{ name: string; description: string; origin: string; visibility: string }>>(`/skills${q}`)
+    },
+    (rows) => {
+      if (Array.isArray(rows)) setSkillRows(rows)
+    },
+    [api, workdir],
+  )
 
   /**
    * The raw send path shared by handleSend and the post-reconnect resend

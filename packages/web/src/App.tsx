@@ -10,17 +10,18 @@
  * (hidden) on the other tabs so the live stream survives navigation.
  *
  * The ChatPanel's two effects key on `[sessionId, api, ws, createWs]` and
- * `[sessionId, initialMessages]`, so this component takes care that every one
- * of those references is STABLE across re-renders (api via useMemo on the
- * token, createWs via useCallback, ws via useMemo per selection, and the
- * initial message array via the per-session cache) — otherwise a tab switch or
- * a status ping would re-fire the subscription or reset the live view (the
- * double-subscribe and initialMessages-reference-reinit pitfalls).
+ * `[sessionId, initialMessages]`, so every one of those references must be
+ * STABLE across re-renders. api/createWs/wsUrl come from useDaemonClients
+ * (daemon-clients.ts), which owns the memoization structurally — a hook
+ * consumer cannot accidentally inline them into a per-render reference. ws
+ * stays a useMemo here per selection, and the initial message array rides
+ * the per-session cache; a tab switch or status ping therefore never re-fires
+ * the subscription or resets the live view.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react"
 import { bootstrapToken, clearToken, saveToken } from "./token.js"
-import { createApi } from "./api.js"
-import { createWsClient, type WsClient } from "./ws.js"
+import type { WsClient } from "./ws.js"
+import { useDaemonClients } from "./daemon-clients.js"
 import { ChatPanel } from "./chat/ChatPanel.js"
 import { UsageView } from "./usage/UsageView.js"
 import type { MemoryWrittenInfo, Message } from "./chat/model.js"
@@ -34,12 +35,6 @@ import type { FsBrowseResult, SessionMeta } from "./types.js"
 
 type DaemonStatus = "connecting" | "connected" | "error"
 type Tab = "chat" | "jobs" | "audit" | "usage" | "trash" | "memory" | "skills"
-
-/** Same-origin ws endpoint (the daemon serves the SPA itself). */
-function wsUrlFor(): string {
-  const protocol = window.location.protocol === "https:" ? "wss" : "ws"
-  return `${protocol}://${window.location.host}/ws`
-}
 
 /**
  * Union two raw message lists by id, chronological (a cache snapshot can be
@@ -110,11 +105,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
   // onUnauthorized is shared by every call this instance makes (the shell's
   // own pings/pulls plus the tab views) — a 401 anywhere re-enters the token
   // form instead of surfacing a dead "refresh" notice.
-  const api = useMemo(
-    () => createApi("", () => token, { onUnauthorized: onAuthExpired }),
-    [token, onAuthExpired],
-  )
-  const [wsUrl] = useState(() => wsUrlFor())
+  const { api, createWs, wsUrl } = useDaemonClients(token, onAuthExpired)
   const [status, setStatus] = useState<DaemonStatus>("connecting")
   const [tab, setTab] = useState<Tab>("chat")
   const [sessions, setSessions] = useState<SessionMeta[] | null>(null)
@@ -207,12 +198,11 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
     selectedId === null ? null : (messagesCache[selectedId] ?? null)
   const selectedMeta = sessions?.find((x) => x.id === selectedId) ?? null
 
-  const createWs = useCallback(() => createWsClient(wsUrl, token), [wsUrl, token])
   // A fresh authenticated client per selection — created only when the chat
   // can actually mount, so an abandoned click never leaks an open socket.
   const ws: WsClient | null = useMemo(
-    () => (selectedId !== null && readyMessages !== null ? createWsClient(wsUrl, token) : null),
-    [selectedId, readyMessages, wsUrl, token],
+    () => (selectedId !== null && readyMessages !== null ? createWs() : null),
+    [selectedId, readyMessages, createWs],
   )
 
   const selectSession = useCallback((id: string) => {
