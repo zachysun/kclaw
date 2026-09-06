@@ -596,7 +596,7 @@ describe("ws queue steering (disposition / queue.cancel)", () => {
 })
 
 /**
- * Spec §8 end-to-end event sequences: each disposition's full wire story on a
+ * End-to-end event sequences: each disposition's full wire story on a
  * REAL app + RunManager, from send_message through the ack, the message.queued
  * broadcast and the eventual arrival of the SAME messageId in message.created
  * (steer: injected at an iteration boundary with message.steered; wait: the

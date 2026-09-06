@@ -11,7 +11,7 @@
  *   showing the failure, the event stream doesn't drown.
  * - `snapshot()` hands the run assembly the current healthy+enabled entries.
  * - `list()` is the management-plane view (user side); the route merges it
- *   with the static builtin spec list. Builtin hooks are NOT registered here
+ *   with the static builtin list. Builtin hooks are NOT registered here
  *   — they are per-run closures over run resources (hooks/builtin.ts).
  */
 import type { AgentEvent } from "../protocol/index.js"

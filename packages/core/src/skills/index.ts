@@ -2,7 +2,7 @@
  * Skill packages: model-discoverable, on-demand instruction packs.
  *
  * A skill is a directory containing one SKILL.md (YAML frontmatter + Markdown
- * body), compatible with the Agent Skills spec and Claude Code's frontmatter
+ * body), compatible with the Agent Skills format and Claude Code's frontmatter
  * field table. Only five fields are interpreted; every other field is ignored
  * without failing the load (ecosystem skills must drop in unmodified):
  *   name                      display name, defaults to the directory name
@@ -12,7 +12,7 @@
  *   disable-model-invocation  keep it out of the model-facing listing
  *   user-invocable            keep it out of the user-facing listing
  *
- * The directory name is the skill's unique identity (Agent Skills spec
+ * The directory name is the skill's unique identity (Agent Skills format
  * constraint: lowercase alphanumerics and hyphens, 1–64 chars). Visibility is
  * a discovery channel, not access control — all four tiers stay loadable by
  * name through the skill_read tool.
@@ -25,7 +25,7 @@ import { parse } from "yaml"
 /** Combined description + when_to_use cap, aligned with Claude Code's listing. */
 const DESCRIPTION_MAX_CHARS = 1536
 
-/** Directory names the Agent Skills spec allows for a skill. */
+/** Directory names the Agent Skills format allows for a skill. */
 const SKILL_DIR_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/
 
 export interface SkillRecord {

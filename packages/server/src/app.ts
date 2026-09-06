@@ -72,7 +72,7 @@ export interface AppOptions {
   /**
    * The daemon's user-hook registry: `GET /hooks` reports
    * its current bookkeeping (healthy/disabled/load-failed user hooks) next
-   * to the static builtin specs. Absent → the user list is empty.
+   * to the static builtin definitions. Absent → the user list is empty.
    */
   hooks?: HookRegistry
   /**

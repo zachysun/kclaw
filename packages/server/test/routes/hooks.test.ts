@@ -21,7 +21,7 @@ afterEach(async () => {
 })
 
 describe("GET /hooks", () => {
-  it("no registry wired → builtin specs still listed, user side empty", async () => {
+  it("no registry wired → builtin hooks still listed, user side empty", async () => {
     const res = await app.inject({ method: "GET", url: "/hooks", headers: auth })
     expect(res.statusCode).toBe(200)
     const body = res.json() as { builtin: Array<Record<string, unknown>>; user: unknown[] }

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify"
-import { BUILTIN_HOOK_SPECS, type HookRegistry } from "@kclaw/core"
+import { BUILTIN_HOOK_DEFINITIONS, type HookRegistry } from "@kclaw/core"
 
 /**
  * /hooks 路由族：只读 hook 管理面。builtin = 引擎内置钩子
@@ -10,7 +10,7 @@ import { BUILTIN_HOOK_SPECS, type HookRegistry } from "@kclaw/core"
 export function registerHookRoutes(app: FastifyInstance, opts: { hooks?: HookRegistry }): void {
   app.get("/hooks", async () => {
     return {
-      builtin: BUILTIN_HOOK_SPECS.map((s) => ({ ...s, origin: "builtin" as const })),
+      builtin: BUILTIN_HOOK_DEFINITIONS.map((s) => ({ ...s, origin: "builtin" as const })),
       user: opts.hooks?.list() ?? [],
     }
   })

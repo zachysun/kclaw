@@ -70,8 +70,8 @@ export interface BuiltinHookDeps {
   compactionAfter: (phase: "in-run" | "post-run" | "manual", result: "ok" | "failed" | "cancelled") => Promise<void>
 }
 
-/** Static builtin specs for the management plane (positions + copy). */
-export const BUILTIN_HOOK_SPECS: ReadonlyArray<{
+/** Static builtin hook definitions for the management plane (positions + copy). */
+export const BUILTIN_HOOK_DEFINITIONS: ReadonlyArray<{
   name: string
   position: HookPosition
   description: string
@@ -115,7 +115,7 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
   })
 
   return [
-    builtin("memory-inject", "run-before", 10, BUILTIN_HOOK_SPECS[0]!.description, "skip", async ({ message }) => {
+    builtin("memory-inject", "run-before", 10, BUILTIN_HOOK_DEFINITIONS[0]!.description, "skip", async ({ message }) => {
       // Memory is an accelerator: a failing search never blocks the run.
       // Notes are COLLECTED here, not pushed onto the message: the land step
       // (order 20) appends job notes first, then these — preserving the
@@ -129,7 +129,7 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
         // ignore: run without memory context
       }
     }),
-    builtin("user-message-land", "run-before", 20, BUILTIN_HOOK_SPECS[1]!.description, "fatal", ({ message }) => {
+    builtin("user-message-land", "run-before", 20, BUILTIN_HOOK_DEFINITIONS[1]!.description, "fatal", ({ message }) => {
       // Notes become part of the message BEFORE it is persisted and
       // completed; persist first, then announce — wire order stays
       // created → note.emitted ×N → completed, job notes before memory notes.
@@ -141,28 +141,28 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
       }
       return message
     }),
-    builtin("autoname", "run-before", 30, BUILTIN_HOOK_SPECS[2]!.description, "skip", ({ message }) => {
+    builtin("autoname", "run-before", 30, BUILTIN_HOOK_DEFINITIONS[2]!.description, "skip", ({ message }) => {
       if (trigger === "job") return
       void scheduleAutoname(
         { sessions, llm: runLlm, model, emit: busEmit },
         sessionId, textOf(message),
       )
     }),
-    builtin("skill-wrap", "llm-before", 10, BUILTIN_HOOK_SPECS[3]!.description, "skip", ({ messages }) => {
+    builtin("skill-wrap", "llm-before", 10, BUILTIN_HOOK_DEFINITIONS[3]!.description, "skip", ({ messages }) => {
       // Implicit wrap of named skills: only the provider view is rewritten —
       // persistence, events and the chat bubble keep the user's raw text.
       return llmUserText === undefined ? undefined : withLastUserText(messages, llmUserText)
     }),
-    builtin("retry-notify", "llm-retry", 10, BUILTIN_HOOK_SPECS[4]!.description, "skip", ({ attempt, error }) => {
+    builtin("retry-notify", "llm-retry", 10, BUILTIN_HOOK_DEFINITIONS[4]!.description, "skip", ({ attempt, error }) => {
       busEmit(makeEvent("llm.failed", {
         error: { code: "llm_retry", message: error },
         willRetry: true,
       }, runCtx()))
     }),
-    builtin("steering-drain", "turn-boundary", 10, BUILTIN_HOOK_SPECS[5]!.description, "fatal", () => {
+    builtin("steering-drain", "turn-boundary", 10, BUILTIN_HOOK_DEFINITIONS[5]!.description, "fatal", () => {
       return drainSteer()
     }),
-    builtin("mid-run-panic", "compaction-check", 10, BUILTIN_HOOK_SPECS[6]!.description, "skip", async () => {
+    builtin("mid-run-panic", "compaction-check", 10, BUILTIN_HOOK_DEFINITIONS[6]!.description, "skip", async () => {
       // Cancellation marker or an already-aborted run → don't compact; below
       // the red line → don't compact. A throw resolves undefined == decline.
       if (compactor.cancelled(sessionId) || signal.aborted) return null
@@ -175,7 +175,7 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
       void compactionAfter("in-run", "ok")
       return next
     }),
-    builtin("overflow-emergency", "overflow-rescue", 10, BUILTIN_HOOK_SPECS[7]!.description, "skip", async () => {
+    builtin("overflow-emergency", "overflow-rescue", 10, BUILTIN_HOOK_DEFINITIONS[7]!.description, "skip", async () => {
       // No watermark check — "it already overflowed" is a fact. Abort after
       // the await → null (the resend would be torn down at the next
       // checkpoint anyway).
@@ -187,7 +187,7 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
       void compactionAfter("in-run", "ok")
       return signal.aborted ? null : next
     }),
-    builtin("usage-ledger", "run-after", 10, BUILTIN_HOOK_SPECS[8]!.description, "skip", ({ outcome }) => {
+    builtin("usage-ledger", "run-after", 10, BUILTIN_HOOK_DEFINITIONS[8]!.description, "skip", ({ outcome }) => {
       if (usageStore === undefined) return
       try {
         usageStore.record({
@@ -202,7 +202,7 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
         console.error("kclaw usage record failed:", err)
       }
     }),
-    builtin("post-run-compaction", "run-after", 20, BUILTIN_HOOK_SPECS[9]!.description, "fatal", async ({ outcome }) => {
+    builtin("post-run-compaction", "run-after", 20, BUILTIN_HOOK_DEFINITIONS[9]!.description, "fatal", async ({ outcome }) => {
       // aborted/error runs are not finalized (the former is being torn down,
       // the latter just failed); the cancellation marker suppresses a
       // user-cancelled compaction for this run.
@@ -215,7 +215,7 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
       })
       void compactionAfter("post-run", "ok")
     }),
-    builtin("follow-check", "run-after", 30, BUILTIN_HOOK_SPECS[10]!.description, "skip", () => {
+    builtin("follow-check", "run-after", 30, BUILTIN_HOOK_DEFINITIONS[10]!.description, "skip", () => {
       if (config.memory.write.idleMinutes > 0) {
         try {
           memory.scheduleFollowCheck?.(sessionId, new Date().toISOString())
@@ -224,7 +224,7 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
         }
       }
     }),
-    builtin("system-materials", "system-before", 10, BUILTIN_HOOK_SPECS[11]!.description, "skip", () => {
+    builtin("system-materials", "system-before", 10, BUILTIN_HOOK_DEFINITIONS[11]!.description, "skip", () => {
       // Cognition injection failure is silently skipped (run proceeds with
       // base prompt only) — pre-migration parity.
       let cognition = ""
@@ -235,7 +235,7 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
       }
       return [cognition, skillList].filter((s) => s !== "")
     }),
-    builtin("system-audit", "system-after", 9000, BUILTIN_HOOK_SPECS[12]!.description, "fatal", ({ system }) => {
+    builtin("system-audit", "system-after", 9000, BUILTIN_HOOK_DEFINITIONS[12]!.description, "fatal", ({ system }) => {
       // Exactly one full-text audit event per run — steer injections and
       // in-run LLM calls reuse the same prompt. No phantom-session guard
       // (parity with message writes) and no swallowing: a failed write fails
