@@ -415,11 +415,16 @@ describe("kclaw chat (built CLI + real daemon + mock SSE provider)", () => {
     30_000,
   )
 
-  // 时序敏感（真 daemon + mock SSE 的端到端），共享 CI runner 上不稳定：
-  // KCLAW_SKIP_SCENARIO_E=1 时跳过（ci.yml 设置），本地默认照跑（issue #1 跟踪）。
-  it.skipIf(process.env.KCLAW_SKIP_SCENARIO_E === "1")(
+  it(
     "scenario E: injected memory notes render once; user message events never double-echo",
     async () => {
+      // Own home (⇒ own daemon + memory dir): the shared daemon's interval
+      // memory trigger internalizes other scenarios' sessions, and the mock
+      // answers every extraction with the same canned episode — extra notes
+      // would be injected into this scenario's second run.
+      const eHome = mkdtempSync(join(tmpdir(), "kclaw-chat-home-e-"))
+      homes.push(eHome)
+
       // Invocation 1 asks the model to save a memory (safe tool, auto-allowed).
       // Invocation 2 (same session, scenario C's sequential-turn pattern) then
       // sends a message whose run gets that memory injected as a note block —
@@ -429,14 +434,14 @@ describe("kclaw chat (built CLI + real daemon + mock SSE provider)", () => {
       // would dispatch the second line while the first run still renders
       // (frame-pump behaviour) and the daemon would steer-inject it instead —
       // an injected message deliberately skips the memory hook.
-      const first = await runChatCli(["chat"], "记住用户住在上海\n/exit\n")
+      const first = await runChatCli(["chat"], "记住用户住在上海\n/exit\n", eHome)
       expect(first.exitCode).toBe(0)
       expect(first.stderr).toBe("")
       expect(first.stdout).toContain("⚡ memory_save") // the save round ran
 
       const sid = SESSION_ID_RE.exec(first.stdout)?.[0]
       expect(sid, `no session id in header: ${first.stdout}`).toBeTruthy()
-      const second = await runChatCli(["chat", "--session", sid!], "上海\n/exit\n")
+      const second = await runChatCli(["chat", "--session", sid!], "上海\n/exit\n", eHome)
       expect(second.exitCode).toBe(0)
       expect(second.stderr).toBe("")
 
@@ -454,7 +459,7 @@ describe("kclaw chat (built CLI + real daemon + mock SSE provider)", () => {
       expect(stdout.split("记住用户住在上海").length - 1).toBe(0)
       expect(stdout.split("上海").length - 1).toBe(3)
     },
-    15_000,
+    30_000,
   )
 
   it(
