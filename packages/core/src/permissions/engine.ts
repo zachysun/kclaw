@@ -68,9 +68,9 @@ function ruleMatches(rule: CompiledRule, tool: string, arg: string): boolean {
  * against the workspace), so a rule written `~/.ssh/**` still hits the same
  * file spelled `.ssh/x` or `/Users/u/.ssh/x`.
  */
-function scopedMatch(rule: CompiledRule, tool: string, rawArg: string, workspace: string | undefined): boolean {
+function scopedMatch(rule: CompiledRule, tool: string, rawArg: string, workspace: string | undefined, profile: PermissionProfile): boolean {
   if (ruleMatches(rule, tool, rawArg)) return true
-  if (rule.argGlob === undefined || !PATH_TOOLS.has(tool)) return false
+  if (rule.argGlob === undefined || !profile.pathAware) return false
   const normArg = normalizePathArg(rawArg, workspace)
   return (
     globMatch(rule.argGlob, normArg) ||
@@ -79,13 +79,70 @@ function scopedMatch(rule: CompiledRule, tool: string, rawArg: string, workspace
 }
 
 /**
- * Extract the string a scoped rule matches against: the command for exec,
- * the path for file-writing tools, a JSON dump of the whole args otherwise.
+ * The facts a tool already exposes at registration time: its risk class and
+ * the field names of its JSON-Schema parameters. The permission engine
+ * derives EVERY treatment from these two facts — tools carry no permission
+ * metadata of their own.
  */
-export function extractArg(name: string, args: unknown): string {
+export interface ToolFacts {
+  risk: "safe" | "sensitive"
+  argFields: string[]
+}
+
+/**
+ * The five permission treatments, derived from {@link ToolFacts}. The
+ * derivation reproduces the hardcoded rosters it replaced exactly (verified
+ * against the 11 builtins): readonly denies every sensitive tool; the path
+ * twin applies to path-arg tools that are sensitive; the workspace boundary
+ * covers every path-arg tool; only SAFE path tools enjoy the readRoots
+ * exemption; rules match the command field for command tools, the path field
+ * for sensitive path tools, and the JSON dump otherwise.
+ */
+export interface PermissionProfile {
+  /** readonly mode denies this tool wholesale (risk === "sensitive"). */
+  readonlyDenied: boolean
+  /** Path rules additionally match this tool's arg in normalized form. */
+  pathAware: boolean
+  /** The tool's path arg is boundary-checked against the workspace. */
+  boundaryChecked: boolean
+  /** Read-only path tool: the readRoots exemption applies. */
+  readRootExempt: boolean
+  /** Which arg field rules extract: "command" | "path" | null (JSON dump). */
+  argField: "command" | "path" | null
+}
+
+/** The treatment of an UNREGISTERED tool (model hallucination): strictest. */
+const UNREGISTERED_PROFILE: PermissionProfile = {
+  readonlyDenied: false,
+  pathAware: false,
+  boundaryChecked: false,
+  readRootExempt: false,
+  argField: null,
+}
+
+export function permissionProfile(facts: ToolFacts | undefined): PermissionProfile {
+  if (facts === undefined) return UNREGISTERED_PROFILE
+  const hasPath = facts.argFields.includes("path")
+  const hasCommand = facts.argFields.includes("command")
+  const sensitive = facts.risk === "sensitive"
+  return {
+    readonlyDenied: sensitive,
+    pathAware: hasPath && sensitive,
+    boundaryChecked: hasPath,
+    readRootExempt: hasPath && !sensitive,
+    argField: hasCommand ? "command" : hasPath && sensitive ? "path" : null,
+  }
+}
+
+/**
+ * Extract the string a scoped rule matches against, per the tool's profile:
+ * the command for command tools, the path for sensitive path tools, a JSON
+ * dump of the whole args otherwise.
+ */
+export function extractArg(args: unknown, profile: PermissionProfile): string {
   const a = args as { command?: unknown; path?: unknown } | null | undefined
-  if (name === "exec") return String(a?.command ?? "")
-  if (name === "fs_write" || name === "fs_edit") return String(a?.path ?? "")
+  if (profile.argField === "command") return String(a?.command ?? "")
+  if (profile.argField === "path") return String(a?.path ?? "")
   return JSON.stringify(args ?? {})
 }
 
@@ -121,12 +178,6 @@ export function splitSubcommands(cmd: string): string[] {
     .filter((s) => s !== "")
 }
 
-/** File-writing tools whose path arg gets a normalized twin for rule matching. */
-const PATH_TOOLS = new Set(["fs_write", "fs_edit"])
-
-/** File tools whose path arg must stay inside the workspace (boundary check). */
-const FILE_TOOLS = new Set(["fs_read", "fs_list", "fs_write", "fs_edit"])
-
 /** Expand a leading `~` / `~/` to the home directory; other strings pass through. */
 function expandTilde(p: string): string {
   if (p === "~") return homedir()
@@ -139,10 +190,10 @@ function expandTilde(p: string): string {
  * against the workspace (cwd when unknown) exactly the way fs.ts resolves the
  * path before writing. The real path (symlinks followed), so a rule on the
  * true location cannot be dodged by entering it through a symlink. Rules are
- * tested against BOTH the raw arg and this form, so a deny like
- * `fs_write:~/.ssh/**` cannot be bypassed by spelling the same file as
- * `.ssh/x` (workspace=home), `/Users/u/.ssh/x`, or `~/./.ssh/x` — all resolve
- * to the same target the rule meant to protect.
+ * tested against BOTH the raw arg and this form, so a path deny rule cannot
+ * be bypassed by spelling the same file as `.ssh/x` (workspace=home),
+ * `/Users/u/.ssh/x`, or `~/./.ssh/x` — all resolve to the same target the
+ * rule meant to protect.
  */
 function normalizePathArg(raw: string, workspace: string | undefined): string {
   return realpathWithin(path.resolve(workspace ?? process.cwd(), expandTilde(raw)))
@@ -182,7 +233,7 @@ function realpathWithinInner(p: string, seen: Set<string>): string {
 }
 
 /**
- * True when a file tool's path arg escapes the workspace: `~`/`~/` expanded,
+ * True when a path-arg tool's target escapes the workspace: `~`/`~/` expanded,
  * then resolved against the workspace exactly the way fs.ts resolves before
  * reading/writing (`path.resolve(root, p)` must equal or sit beneath `root`).
  * The resolved form is the REAL path (symlinks followed), so an in-workspace
@@ -193,20 +244,15 @@ function realpathWithinInner(p: string, seen: Set<string>): string {
  * is not enforced at the permission layer and this returns false (legacy
  * behavior).
  */
-/** Read-only file tools: only these enjoy the readRoots exemption. */
-const READ_FILE_TOOLS = new Set(["fs_read", "fs_list"])
-/** Write-class tools: denied wholesale in readonly mode. */
-const WRITE_TOOLS = new Set(["fs_write", "fs_edit", "exec"])
-
-function escapesWorkspace(tool: string, args: unknown, workspace: string | undefined, readRoots: string[] = []): boolean {
-  if (workspace === undefined || !FILE_TOOLS.has(tool)) return false
+function escapesWorkspace(profile: PermissionProfile, args: unknown, workspace: string | undefined, readRoots: string[] = []): boolean {
+  if (workspace === undefined || !profile.boundaryChecked) return false
   const a = args as { path?: unknown } | null | undefined
   const root = realpathWithin(path.resolve(workspace))
   const resolved = realpathWithin(path.resolve(root, expandTilde(String(a?.path ?? ""))))
   if (resolved !== root && !resolved.startsWith(root + path.sep)) {
     // A read tool reaching an allowed read root (daemon attachments dir)
     // is not an escape: it is the workspace for reading purposes.
-    if (READ_FILE_TOOLS.has(tool)) {
+    if (profile.readRootExempt) {
       for (const extra of readRoots) {
         const extraRoot = realpathWithin(path.resolve(extra))
         if (resolved === extraRoot || resolved.startsWith(extraRoot + path.sep)) return false
@@ -228,9 +274,9 @@ export class SessionGrants {
     this.#rules.push(compileRule(rule))
   }
 
-  /** True when a granted rule covers this call; workspace enables path-form matching. */
-  hasMatch(tool: string, arg: string, workspace?: string): boolean {
-    return this.#rules.some((r) => scopedMatch(r, tool, arg, workspace))
+  /** True when a granted rule covers this call; workspace+profile enable path-form matching. */
+  hasMatch(tool: string, arg: string, workspace?: string, profile: PermissionProfile = permissionProfile(undefined)): boolean {
+    return this.#rules.some((r) => scopedMatch(r, tool, arg, workspace, profile))
   }
 
   /** Snapshot of granted rules (for the exec branch's per-rule matching). */
@@ -246,6 +292,13 @@ export class SessionGrants {
 export interface ConfigPermissionGateOptions {
   /** tool names allowed unconditionally (e.g. read-only built-ins) */
   safeTools?: Set<string>
+  /**
+   * Registration facts per tool (risk + schema arg field names), derived by
+   * the run assembly from the tool registry. Every treatment beyond the
+   * safeTools allowlist is derived from these via permissionProfile; a tool
+   * missing from the table (model hallucination) gets the strictest default.
+   */
+  toolFacts?: Map<string, ToolFacts>
   /** grant store consulted only when config enables sessionGrants */
   grants?: SessionGrants
   /** id factory for confirm decisions (injectable for tests) */
@@ -256,14 +309,14 @@ export interface ConfigPermissionGateOptions {
    */
   workspace?: string
   /**
-   * Extra roots whose READ access (fs_read/fs_list only) is treated like
+   * Extra roots whose READ access (safe path-arg tools only) is treated like
    * the workspace — the daemon passes its attachments dir here so an
    * uploaded attachment is readable without a per-file confirmation.
    * Write tools are never exempted.
    */
   readRoots?: string[]
   /**
-   * Readonly mode: fs_write/fs_edit/exec are denied unconditionally
+   * Readonly mode: sensitive tools are denied unconditionally
    * (reads, web and memory keep working). Reasons surface as "readonly".
    */
   readonly?: boolean
@@ -278,14 +331,16 @@ interface DenyRule extends CompiledRule {
  * Config-driven PermissionGate. Decision order, short-circuiting:
  * deny blacklist → allow whitelist → safeTools → session grants → confirm
  * with a fresh `conf_` id the surrounding loop routes to a human.
- * exec takes a dedicated branch (safeTools never lists it): deny matches
- * every normalized sub-command of a concatenated line, while allow/grant
- * only ever cover a single, concatenation-free command.
+ * Command-arg tools (sensitive + `command` parameter — exec today) take a
+ * dedicated branch (safeTools never lists them): deny matches every
+ * normalized sub-command of a concatenated line, while allow/grant only ever
+ * cover a single, concatenation-free command.
  */
 export class ConfigPermissionGate implements PermissionGate {
   readonly #allow: CompiledRule[]
   readonly #deny: DenyRule[]
   readonly #safeTools: Set<string>
+  readonly #profiles: Map<string, PermissionProfile>
   readonly #grants: SessionGrants | undefined
   readonly #sessionGrantsEnabled: boolean
   readonly #newConfirmationId: () => string
@@ -297,6 +352,7 @@ export class ConfigPermissionGate implements PermissionGate {
     this.#allow = cfg.allow.map(compileRule)
     this.#deny = cfg.deny.map((s) => ({ ...compileRule(s), source: s }))
     this.#safeTools = opts.safeTools ?? new Set()
+    this.#profiles = new Map([...(opts.toolFacts ?? [])].map(([name, facts]) => [name, permissionProfile(facts)]))
     this.#grants = opts.grants
     this.#sessionGrantsEnabled = cfg.sessionGrants === true
     this.#newConfirmationId = opts.newConfirmationId ?? (() => newId("conf"))
@@ -307,20 +363,22 @@ export class ConfigPermissionGate implements PermissionGate {
 
   async check(toolCall: ToolCallBlock): Promise<PermissionDecision> {
     const tool = toolCall.name
-    const arg = extractArg(tool, toolCall.args)
-    // Readonly short-circuits EVERYTHING for write-class tools (even a
+    const profile = this.#profiles.get(tool) ?? permissionProfile(undefined)
+    const arg = extractArg(toolCall.args, profile)
+    // Readonly short-circuits EVERYTHING for sensitive tools (even a
     // whitelisted allow rule): the mode promises zero mutation risk.
-    if (this.#readonly && WRITE_TOOLS.has(tool)) {
+    if (this.#readonly && profile.readonlyDenied) {
       return { type: "deny", reason: "readonly", noteText: "只读模式（readonly）" }
     }
 
-    // exec: deny matches every sub-command (normalized); allow and session
-    // grants only ever apply to a single, concatenation-free command — a
-    // rule like `exec:git status*` must not wave through `git status; …`.
-    if (tool === "exec") {
+    // Command-arg tools: deny matches every sub-command (normalized); allow
+    // and session grants only ever apply to a single, concatenation-free
+    // command — a rule like `exec:git status*` must not wave through
+    // `git status; …`.
+    if (profile.argField === "command") {
       const subs = splitSubcommands(arg).map(normalizeCommand)
       const execRuleMatches = (r: CompiledRule, s: string): boolean => {
-        if (r.tool !== "exec") return false // other tools' rules never cover exec
+        if (r.tool !== tool) return false // other tools' rules never cover this one
         return r.argGlob === undefined ? true : globMatch(normalizeCommand(r.argGlob), s)
       }
       for (const rule of this.#deny) {
@@ -340,10 +398,10 @@ export class ConfigPermissionGate implements PermissionGate {
       return { type: "confirm", confirmationId: this.#newConfirmationId() }
     }
 
-    // --- non-exec tools: unchanged decision order ---
-    // Path-aware matching: for file tools rules also match the arg's
+    // --- everything else: unchanged decision order ---
+    // Path-aware matching: for path-arg tools rules also match the arg's
     // resolved form, closing path-shape bypasses of deny rules.
-    const matches = (r: CompiledRule) => scopedMatch(r, tool, arg, this.#workspace)
+    const matches = (r: CompiledRule) => scopedMatch(r, tool, arg, this.#workspace, profile)
     for (const rule of this.#deny) {
       if (matches(rule)) {
         return { type: "deny", reason: "blacklist", noteText: `规则命中黑名单: ${rule.source}` }
@@ -353,19 +411,19 @@ export class ConfigPermissionGate implements PermissionGate {
     // while the target stays inside it (realpath form). An allow rule whose
     // lexical path is waved through by a symlink pointing outside falls
     // through to the escape check below and goes to confirm, not allow.
-    if (this.#allow.some(matches) && !escapesWorkspace(tool, toolCall.args, this.#workspace, this.#readRoots)) {
+    if (this.#allow.some(matches) && !escapesWorkspace(profile, toolCall.args, this.#workspace, this.#readRoots)) {
       return { type: "allow", reason: "whitelist" }
     }
-    // Out-of-workspace file access is not auto-approved: even a "safe" tool
-    // (fs_read/fs_list) must go to a human when its target escapes the
-    // workspace. Runs after deny/allow so those still take precedence.
-    if (escapesWorkspace(tool, toolCall.args, this.#workspace, this.#readRoots)) {
+    // Out-of-workspace path access is not auto-approved: even a "safe" tool
+    // must go to a human when its target escapes the workspace. Runs after
+    // deny/allow so those still take precedence.
+    if (escapesWorkspace(profile, toolCall.args, this.#workspace, this.#readRoots)) {
       return { type: "confirm", confirmationId: this.#newConfirmationId() }
     }
     if (this.#safeTools.has(tool)) {
       return { type: "allow", reason: "safe" }
     }
-    if (this.#sessionGrantsEnabled && this.#grants?.hasMatch(tool, arg, this.#workspace)) {
+    if (this.#sessionGrantsEnabled && this.#grants?.hasMatch(tool, arg, this.#workspace, profile)) {
       return { type: "allow", reason: "session_grant" }
     }
     return { type: "confirm", confirmationId: this.#newConfirmationId() }

@@ -22,7 +22,7 @@ import type { Message, ToolMessage } from "../../src/protocol/messages.js"
 import { ConfigPermissionGate } from "../../src/permissions/engine.js"
 import { SessionStore } from "../../src/session/store.js"
 import { MemorySystem } from "../../src/memory/system.js"
-import { createBuiltinTools } from "../../src/tools/index.js"
+import { createBuiltinTools, deriveToolFacts } from "../../src/tools/index.js"
 import { loadConfig, saveConfig, resolvePaths } from "../../src/storage/index.js"
 import { chainOf } from "../agent/hook-utils.js"
 
@@ -87,7 +87,9 @@ describe("integration smoke", () => {
     })
 
     const session = sessionStore.create("冒烟会话")
-    const gate = new ConfigPermissionGate(loaded.permissions)
+    // 生产装配（run-assembly）会传 safeTools 与注册事实表——这里同构地传，
+    // exec 的 echo* 白名单才能按 command 语义命中（issue #9 的事实派生）。
+    const gate = new ConfigPermissionGate(loaded.permissions, { toolFacts: deriveToolFacts(tools, toolDefs) })
 
     const events: AgentEvent[] = []
     const onMessage = (m: Message) => sessionStore.appendMessage(session.id, m)
@@ -155,7 +157,9 @@ describe("integration smoke", () => {
     })
 
     const session = sessionStore.create("确认会话")
-    const gate = new ConfigPermissionGate(loaded.permissions)
+    // 生产装配（run-assembly）会传 safeTools 与注册事实表——这里同构地传，
+    // exec 的 echo* 白名单才能按 command 语义命中（issue #9 的事实派生）。
+    const gate = new ConfigPermissionGate(loaded.permissions, { toolFacts: deriveToolFacts(tools, toolDefs) })
 
     const events: AgentEvent[] = []
     const onMessage = (m: Message) => sessionStore.appendMessage(session.id, m)

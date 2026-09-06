@@ -8,7 +8,7 @@
 
 ## 设计决策
 
-- **统一执行接口**：内置工具、MCP 适配器（`mcp__<server>__<tool>`，见 [mcp](./mcp.md)）实现同一个 `ToolExecutor`——循环不区分工具来源。`risk` 与 `concurrency` 是声明性元数据：前者驱动权限检查（safe 的工具集可自动放行），后者驱动同批调用的调度。
+- **统一执行接口**：内置工具、MCP 适配器（`mcp__<server>__<tool>`，见 [mcp](./mcp.md)）实现同一个 `ToolExecutor`——循环不区分工具来源。`risk` 与 `concurrency` 是声明性元数据：前者驱动权限检查（safe 的工具集可自动放行；sensitive 在只读模式被无条件拒绝），后者驱动同批调用的调度。权限引擎需要的其余待遇（路径归一、工作目录边界、读豁免、规则匹配取哪个参数）不要求工具声明——由引擎从 `risk` 加参数 schema 的字段名派生（见 [permissions](./permissions.md) 的待遇派生节）：写参数按惯例命名 `path`、命令参数命名 `command` 即自动入网。
 - **注册表与定义同源**：`createBuiltinTools` 把执行器和 ToolDefinition 放在同一条 entries 列表里，`tools` 的键集合与 `toolDefs` 的名字集合天然一致（`registry.test.ts` 双向断言这一点），不会出现"模型可见但循环无法执行"的名字。
 - **schema 面向模型，校验为手写实现**：parameters 字段是 JSON Schema（描述 JSON 参数结构的规范格式），随请求传给模型引导其生成参数；运行时不加载 schema 校验库，而是用 `shared.ts` 里的手写校验函数（`requireString` / `optInt` / `optStringArray`）逐个字段检查——失败抛 `ToolError`，由 `makeTool` 统一转成 `{status:"error"}` 结果，异常永远不逃出执行器。
 - **fs 工具不做工作目录越界拦截**：路径只经 `path.resolve(workspace, p)` 解析，越界与否交给权限网关判定（越界会变成一次可由人批准的确认）——如果工具层先拒绝，人工批准后的调用仍会失败，确认就失去意义。
