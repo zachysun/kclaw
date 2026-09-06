@@ -165,6 +165,11 @@ export class KclawClient {
       }
     })
     socket.on("close", () => queue.close())
+    // An unlistened 'error' (e.g. ECONNRESET when the daemon is SIGKILLed
+    // mid-connection) would crash the whole process as an uncaught exception.
+    // 'close' always follows and ends the frames iterator; the reconnect
+    // path takes over from there, so the error itself carries no action.
+    socket.on("error", () => {})
 
     // A close after open only rejects the (already settled) open promise —
     // a no-op — so the pre-open listeners can stay; frames end via queue.close().
