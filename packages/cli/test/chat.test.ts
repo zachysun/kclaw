@@ -395,6 +395,18 @@ describe("kclaw chat (built CLI + real daemon + mock SSE provider)", () => {
         await new Promise((r) => setTimeout(r, 100))
       }
 
+      // Then for the input prompt: startup is still in flight after the
+      // header (initial-disposition HTTP calls, the second ws connection —
+      // which has no reconnect protection). A SIGKILL landing inside that
+      // window makes the CLI exit 1 before its reconnect path exists; on a
+      // slow CI runner the header→prompt gap is wide enough to hit regularly.
+      // The prompt is the deterministic "startup fully done" signal.
+      const promptDeadline = Date.now() + 15_000
+      while (!seen.includes("> ")) {
+        if (Date.now() > promptDeadline) throw new Error(`chat never reached its prompt: ${seen}`)
+        await new Promise((r) => setTimeout(r, 50))
+      }
+
       // Kill the daemon HARD while the REPL sits IDLE. SIGKILL (not SIGTERM)
       // makes "nothing can have processed a message we have not sent yet"
       // deterministic — the CLI's ws dies with the process.
