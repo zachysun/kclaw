@@ -188,3 +188,22 @@ export function createBuiltinTools(opts: {
     toolDefs: entries.map((e) => e.def),
   }
 }
+
+/**
+ * The permission-relevant facts of the registered tools (risk + schema arg
+ * field names), derived in one place from the registry. The permission gate
+ * consumes this table and derives every treatment itself — no tool carries
+ * permission metadata, and the gate holds no tool-name rosters (issue #9).
+ */
+export function deriveToolFacts(
+  tools: Map<string, ToolExecutor>,
+  toolDefs: ToolDefinition[],
+): Map<string, { risk: "safe" | "sensitive"; argFields: string[] }> {
+  return new Map(
+    [...tools].map(([name, t]) => {
+      const def = toolDefs.find((d) => d.name === name)
+      const properties = (def?.parameters as { properties?: Record<string, unknown> } | undefined)?.properties
+      return [name, { risk: t.risk, argFields: Object.keys(properties ?? {})}] as const
+    }),
+  )
+}

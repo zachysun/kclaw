@@ -49,7 +49,7 @@ import type { PermissionGate, RunOutcome } from "./loop.js"
 import { runAgent } from "./loop.js"
 import type { SessionSearchFn } from "../tools/session.js"
 import type { ToolExecutor } from "./tools.js"
-import { createBuiltinTools } from "../tools/index.js"
+import { createBuiltinTools, deriveToolFacts } from "../tools/index.js"
 import { searchSessionEvents } from "../tools/session-search.js"
 import { matchSkillInvocations, scanSkillDirs, skillListPrompt, wrapSkillInvocations } from "../skills/index.js"
 import type { MemorySystem } from "../memory/system.js"
@@ -338,8 +338,12 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   const baseGate = new ConfigPermissionGate(config.permissions, {
     workspace,
     safeTools: new Set([...tools].filter(([, t]) => t.risk === "safe").map(([name]) => name)),
+    // Registration facts (risk + schema arg field names): the gate derives
+    // every treatment beyond safeTools from these — no permission logic in
+    // the tools, no tool-name rosters in the gate (issue #9).
+    toolFacts: deriveToolFacts(tools, toolDefs),
     // Attachment reads: files under <home>/attachments are the daemon's own
-    // uploaded inputs — fs_read/fs_list reach them without a confirmation.
+    // uploaded inputs — safe path-arg tools reach them without a confirmation.
     readRoots: [paths.attachmentsDir],
     // Readonly: the daemon-level flag OR this session's own toggle.
     readonly: engine.deps.readonly === true || sessionMeta?.readonly === true,
