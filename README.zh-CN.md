@@ -11,19 +11,22 @@
    │  kclaw CLI ──────┐          ┌── WebUI（dist 静态托管）      │
    │                  ▼          ▼                               │
    │           @kclaw/server（daemon，唯一状态权威）              │
-   │           ├─ RunManager：send_message → 会话串行 run        │
-   │           ├─ 确认网关：高危工具经 WS 弹出确认，写入审计      │
-   │           ├─ 调度器 tick：cron job 到点自动开新会话执行      │
-   │           └─ 事件总线：28 种 AgentEvent 广播给订阅客户端     │
+   │           ├─ HTTP + WS 路由 · Bearer 鉴权 · 审计            │
+   │           ├─ RunManager：send_message → 会话串行队列        │
+   │           └─ 调度器 tick：cron job 到点开新会话 + 记忆调度   │
    │                          │                                 │
    │                          ▼                                 │
-   │           @kclaw/core（纯库 agent 引擎：循环/工具/记忆/权限）│
+   │           @kclaw/core（纯库 agent 引擎）                    │
+   │           ├─ run 装配：agent 循环、工具、权限               │
+   │           ├─ 确认网关：高危工具先确认再执行                 │
+   │           ├─ 事件总线：36 种 AgentEvent                    │
+   │           └─ 记忆 · 上下文压缩                             │
    │                          │                                 │
    └──────────────────────────┼─────────────────────────────────┘
                               ▼
    ~/.kclaw/  config.yaml · AGENTS.md · token · daemon.json
-              sessions/<id>/messages.jsonl（对话真相）
-              memory/（markdown 笔记 + SQLite FTS5 索引）
+              sessions/<id>/events.jsonl（对话真相，唯一权威）
+              memory/（markdown 主题线 + 派生 FTS5/向量索引）
               jobs.db · attachments/ · logs/
 ```
 
@@ -54,8 +57,8 @@ kclaw web     # 浏览器打开 WebUI（带 token，自动登录）
 
 - **流式对话**：CLI REPL 与 WebUI 体验一致，回复流式渲染，支持多轮与新建会话（示例：询问「`~/Downloads` 里最大的文件是哪个」会触发 exec 工具）。
 - **确认卡片**：高危工具（exec、fs_edit 等）执行前弹确认（允许 / 拒绝），决策全部写入审计日志。
-- **会话**：对话逐条写入 `sessions/<id>/messages.jsonl`，可随时恢复历史会话。
-- **记忆**：输入「记住我住在上海」→ 存为 markdown 笔记（带 SQLite FTS5 索引）；再问「我住哪？」可直接命中。
+- **会话**：对话以事件流写入 `sessions/<id>/events.jsonl`（会话真相），可随时恢复历史会话。
+- **记忆**：每轮结束后自动把新消息提取、按主题沉淀为 markdown 情节线（FTS5 索引为派生物）；之后相关提问命中情节，以 note 形式注入上下文。
 - **任务**：cron 定时任务（如 `0 9 * * *` 每日早报），到点 daemon 自动创建新会话执行，结果写入审计。
 - **审计**：权限决策全程留痕，WebUI「审计」页可查。
 
@@ -91,7 +94,7 @@ REPL 内：`/exit` 退出、`/sessions` 列会话、`/new <title>` 新建会话�
 
 ## WebUI
 
-`packages/web`（React + Vite）是 daemon 的官方前端，构建产物由 daemon 静态托管，功能与 CLI 对等（同一套 HTTP + WS API）：流式对话、确认卡片、会话、任务、审计。
+`packages/web`（React + Vite）是 daemon 的官方前端，构建产物由 daemon 静态托管，功能与 CLI 对等（同一套 HTTP + WS API）：流式对话、确认卡片、会话、任务、审计、记忆、技能。
 
 日常入口只需一条命令：
 
@@ -146,8 +149,8 @@ monorepo（pnpm workspace）：
 
 | 包 | 作用 |
 |----|------|
-| `packages/core` | agent 引擎，纯库（循环 / 工具 / 记忆 / 权限） |
-| `packages/server` | daemon（HTTP + WS + 调度 + 审计） |
+| `packages/core` | agent 引擎，纯库（run 装配 / 循环 / 工具 / 权限 / 记忆） |
+| `packages/server` | daemon（HTTP + WS + run 排队 + 调度 + 审计） |
 | `packages/cli` | CLI 客户端（源码形态） |
 | `packages/web` | WebUI 前端（React + Vite） |
 | `packages/kclaw` | npm 发布包（聚合各包产物，`npm i -g kclaw` 安装的就是该包） |
@@ -164,18 +167,23 @@ pnpm test        # 全部包 vitest（cli/server 快速验证需先 pnpm build�
 - [architecture — 全局总纲](docs/architecture.md)：模块地图、进程模型、数据流，其余各篇的入口
 - core/（agent 引擎，纯库）
   - [agent-loop](docs/core/agent-loop.md) — run 的运行循环
+  - [client-http](docs/core/client-http.md) — 共享 HTTP 请求基座（Bearer 鉴权、JSON、错误信封）
+  - [compaction](docs/core/compaction.md) — 上下文压缩
+  - [hooks](docs/core/hooks.md) — 用户钩子系统
+  - [jobs](docs/core/jobs.md) — 定时任务调度
+  - [mcp](docs/core/mcp.md) — MCP 客户端接入
+  - [memory](docs/core/memory.md) — 记忆系统（markdown 主题线 + FTS5 索引）
+  - [permissions](docs/core/permissions.md) — 权限网关
   - [protocol](docs/core/protocol.md) — 消息 / 内容块 / 事件三层协议
   - [provider](docs/core/provider.md) — OpenAI 兼容的 LLM 接入层
-  - [tools](docs/core/tools.md) — 内置工具体系与注册
-  - [permissions](docs/core/permissions.md) — 权限网关
-  - [jobs](docs/core/jobs.md) — 定时任务调度
-  - [memory](docs/core/memory.md) — 记忆存储（SQLite FTS5）
+  - [skills](docs/core/skills.md) — 技能机制（渐进披露）
   - [storage](docs/core/storage.md) — 路径、配置与会话持久化
+  - [tools](docs/core/tools.md) — 内置工具体系与注册
 - server/（daemon）
   - [daemon](docs/server/daemon.md) — 生命周期与鉴权
   - [http-api](docs/server/http-api.md) — HTTP 路由
   - [realtime](docs/server/realtime.md) — WS 协议与事件总线
-  - [run-manager](docs/server/run-manager.md) — 会话串行 run 与确认网关
+  - [run-manager](docs/server/run-manager.md) — 会话串行 run、消息队列与确认网关
 - cli/（终端客户端）
   - [cli](docs/cli/cli.md) — 命令、REPL 与 slash 命令
   - [onboarding](docs/cli/onboarding.md) — 首次运行体验（provider 判定 / 向导 / web 命令）

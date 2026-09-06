@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/ws.ts` 的 `registerWsRoutes` 提供 `GET /ws` 端点（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送），处理连接认证并分发 7 种客户端命令帧与各自应答（ack）。指令帧/应答帧的**类型正本**在 `@kclaw/core/protocol` 的 `wire.ts`（`ClientCommand` / `ServerFrame`）；每条字段规则与报错文案的**唯一校验实现**在 `packages/server/src/command-check.ts` 的 `checkCommandFrame`（ws.ts 解析 JSON 后调用它，再按返回的合法命令分发——校验顺序与文案集中在一份代码里）。`@kclaw/core` 的 `EventBus`（`packages/core/src/bus.ts`）是进程内的事件分发器：把 agent 循环与服务端流程产生的 35 种事件按会话投递给订阅了它的连接。两者共同构成 daemon 的实时通信层。
+`packages/server/src/ws.ts` 的 `registerWsRoutes` 提供 `GET /ws` 端点（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送），处理连接认证并分发 7 种客户端命令帧与各自应答（ack）。指令帧/应答帧的**类型正本**在 `@kclaw/core/protocol` 的 `wire.ts`（`ClientCommand` / `ServerFrame`）；每条字段规则与报错文案的**唯一校验实现**在 `packages/server/src/command-check.ts` 的 `checkCommandFrame`（ws.ts 解析 JSON 后调用它，再按返回的合法命令分发——校验顺序与文案集中在一份代码里）。`@kclaw/core` 的 `EventBus`（`packages/core/src/bus.ts`）是进程内的事件分发器：把 agent 循环与服务端流程产生的 36 种事件按会话投递给订阅了它的连接。两者共同构成 daemon 的实时通信层。
 
 ## 设计决策
 
@@ -65,7 +65,7 @@
 }
 ```
 
-`EventType` 共 **35 种**（`packages/core/src/protocol/events.ts`；九个语义分组的完整表见 [protocol](../core/protocol.md)），按投递方式分两组：
+`EventType` 共 **36 种**（`packages/core/src/protocol/events.ts`；十个语义分组的完整表见 [protocol](../core/protocol.md)），按投递方式分两组：
 
 | 分组 | 事件 | 投递 |
 |------|------|------|
@@ -137,7 +137,7 @@ export class EventBus {
 
 ## 关联
 
-- [protocol](../core/protocol.md)：35 种事件与 payload 全表、信封字段
+- [protocol](../core/protocol.md)：36 种事件与 payload 全表、信封字段
 - [run-manager](./run-manager.md)：命令帧在服务端的后续（入队/取消/确认网关）
 - [http-api](./http-api.md)：断线恢复依赖的 `GET /sessions/:id/messages`
 - [daemon](./daemon.md)：/ws 为何豁免 HTTP 鉴权

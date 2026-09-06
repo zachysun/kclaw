@@ -11,19 +11,22 @@ A locally resident personal agent: a single daemon owns all state; the CLI and W
    │  kclaw CLI ──────┐          ┌── WebUI (statically hosted dist)
    │                  ▼          ▼                               │
    │           @kclaw/server (daemon, the only state authority) │
-   │           ├─ RunManager: send_message → per-session serial run
-   │           ├─ Confirmation gate: risky tools confirm over WS, logged to audit
-   │           ├─ Scheduler tick: cron jobs open a new session on schedule
-   │           └─ Event bus: 28 AgentEvent kinds broadcast to subscribed clients
+   │           ├─ HTTP + WS routes · Bearer auth · audit        │
+   │           ├─ RunManager: send_message → per-session queue  │
+   │           └─ Scheduler tick: cron jobs + memory schedule   │
    │                          │                                 │
    │                          ▼                                 │
-   │           @kclaw/core (pure-library agent engine: loop/tools/memory/permissions)
+   │           @kclaw/core (pure-library agent engine)          │
+   │           ├─ run assembly: agent loop, tools, permissions  │
+   │           ├─ confirmation broker: risky tools confirm      │
+   │           ├─ Event bus: 36 AgentEvent kinds                │
+   │           └─ memory · compaction                           │
    │                          │                                 │
    └──────────────────────────┼─────────────────────────────────┘
                               ▼
    ~/.kclaw/  config.yaml · AGENTS.md · token · daemon.json
-              sessions/<id>/messages.jsonl (the conversation truth)
-              memory/ (markdown notes + SQLite FTS5 index)
+              sessions/<id>/events.jsonl (the conversation truth)
+              memory/ (markdown threads + derived FTS5/vector index)
               jobs.db · attachments/ · logs/
 ```
 
@@ -54,8 +57,8 @@ The wizard ships DeepSeek / OpenAI / Ollama / custom templates; key input is hid
 
 - **Streaming chat**: the CLI REPL and the WebUI share the same experience — replies render as a stream, multi-turn and new sessions supported (example: asking "what is the largest file in `~/Downloads`" triggers the exec tool).
 - **Confirmation cards**: risky tools (exec, fs_edit, …) ask before executing (allow / deny); every decision is written to the audit log.
-- **Sessions**: every message is persisted to `sessions/<id>/messages.jsonl`; history can be resumed at any time.
-- **Memory**: entering "remember I live in Shanghai" stores a markdown note (with a SQLite FTS5 index); a later "where do I live?" hits the note.
+- **Sessions**: every message is persisted as part of the session's event stream (`sessions/<id>/events.jsonl`); history can be resumed at any time.
+- **Memory**: after each turn, new messages are extracted into per-topic markdown thread files (with a derived FTS5 index); a later related question gets the matching episode injected as a note.
 - **Jobs**: cron-scheduled jobs (e.g. `0 9 * * *` for a daily briefing); the daemon opens a new session on schedule and logs results to audit.
 - **Audit**: permission decisions leave a full trail, viewable in the WebUI "audit" tab.
 
@@ -91,7 +94,7 @@ Inside the REPL: `/exit` to quit, `/sessions` to list sessions, `/new <title>` f
 
 ## WebUI
 
-`packages/web` (React + Vite) is the daemon's official frontend; its build output is statically hosted by the daemon. Feature parity with the CLI (the same HTTP + WS API): streaming chat, confirmation cards, sessions, jobs, audit.
+`packages/web` (React + Vite) is the daemon's official frontend; its build output is statically hosted by the daemon. Feature parity with the CLI (the same HTTP + WS API): streaming chat, confirmation cards, sessions, jobs, audit, memory, skills.
 
 The daily entry point is a single command:
 
@@ -146,8 +149,8 @@ monorepo (pnpm workspace):
 
 | Package | Role |
 |---------|------|
-| `packages/core` | The agent engine, a pure library (loop / tools / memory / permissions) |
-| `packages/server` | The daemon (HTTP + WS + scheduling + audit) |
+| `packages/core` | The agent engine, a pure library (run assembly / agent loop / tools / permissions / memory) |
+| `packages/server` | The daemon (HTTP + WS + run queueing + scheduling + audit) |
 | `packages/cli` | The CLI client (source form) |
 | `packages/web` | The WebUI frontend (React + Vite) |
 | `packages/kclaw` | The npm release package (aggregates the other packages' build output; `npm i -g kclaw` installs this one) |
@@ -164,18 +167,23 @@ Docs:
 - [architecture — the big picture](docs/architecture.md): module map, process model, data flow; the entry point to every other doc
 - core/ (agent engine, pure library)
   - [agent-loop](docs/core/agent-loop.md) — the run loop
+  - [client-http](docs/core/client-http.md) — the shared HTTP request layer (Bearer auth, JSON, error envelope)
+  - [compaction](docs/core/compaction.md) — context compaction
+  - [hooks](docs/core/hooks.md) — the user hook system
+  - [jobs](docs/core/jobs.md) — cron job scheduling
+  - [mcp](docs/core/mcp.md) — MCP client integration
+  - [memory](docs/core/memory.md) — the memory system (markdown threads + FTS5 index)
+  - [permissions](docs/core/permissions.md) — the permission gate
   - [protocol](docs/core/protocol.md) — the message / block / event three-layer protocol
   - [provider](docs/core/provider.md) — the OpenAI-compatible LLM access layer
-  - [tools](docs/core/tools.md) — the built-in tool system and registration
-  - [permissions](docs/core/permissions.md) — the permission gate
-  - [jobs](docs/core/jobs.md) — cron job scheduling
-  - [memory](docs/core/memory.md) — memory storage (SQLite FTS5)
+  - [skills](docs/core/skills.md) — the skill mechanism (progressive disclosure)
   - [storage](docs/core/storage.md) — paths, config, and session persistence
+  - [tools](docs/core/tools.md) — the built-in tool system and registration
 - server/ (the daemon)
   - [daemon](docs/server/daemon.md) — lifecycle and auth
   - [http-api](docs/server/http-api.md) — HTTP routes
   - [realtime](docs/server/realtime.md) — the WS protocol and event bus
-  - [run-manager](docs/server/run-manager.md) — per-session serial runs and the confirmation gate
+  - [run-manager](docs/server/run-manager.md) — per-session serial runs, message queueing, and the confirmation gate
 - cli/ (terminal client)
   - [cli](docs/cli/cli.md) — commands, the REPL, slash commands
   - [onboarding](docs/cli/onboarding.md) — first-run experience (provider detection / wizard / web command)
