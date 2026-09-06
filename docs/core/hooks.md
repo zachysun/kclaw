@@ -10,7 +10,7 @@
 
 ## 设计决策
 
-- **位置网格是封闭枚举**：`HookPosition` 是 14 个命名位置的联合类型。位置对应"变异真实存在的接缝"——改写用户消息、改写模型视图、注入引导、压缩判定……没有接缝的地方不开位置。加一个位置 = 更新 `HookContextMap`/`HookResultMap` 两张契约表，编译器会走查每一个消费方（spec issue #6 的封闭原则）。
+- **位置网格是封闭枚举**：`HookPosition` 是 14 个命名位置的联合类型。位置对应"变异真实存在的接缝"——改写用户消息、改写模型视图、注入引导、压缩判定……没有接缝的地方不开位置。加一个位置 = 更新 `HookContextMap`/`HookResultMap` 两张契约表，编译器会走查每一个消费方（封闭原则）。
 - **注册接口是唯一挂载入口**：内置闭包、用户文件、测试注入，全部经 `HookChain.register` 进链。引擎不区分"自己人"和"外人"——它自己就是这套机制的第一批用户。
 - **失败兜底自声明，默认 fail-open**：用户文件可声明 `failure: "skip"`（默认，失败即跳过、只发一条 `hook.failed`，run 照常继续）或 `"deny"`（失败时否决所在闸门——`tool-before` 位置上就是该工具不执行，fail-closed 自选档）；声明 `"fatal"` 的用户文件拒绝装载（用户代码没有杀死整个 run 的权力）。引擎内置钩子在原行为抛错传播的地方保留 `fatal`（如用户消息持久化、系统提示词审计），语义与迁移前逐字节一致。
 - **改写权只开在四处**：`run-before`（用户消息）、`llm-before`（模型视图）、`system-before`（系统提示词追加段落）、`system-after`（系统提示词终稿）。其余位置是观察（返回值忽略）或内置独占的决策位（`compaction-check`/`overflow-rescue`：压缩判定闭包着压缩引擎，用户钩子不注册）。
@@ -75,7 +75,7 @@ export default async (ctx) => {
 装载规则（`scanUserHooks`）：
 
 - 扩展名 `.js` / `.mjs` / `.ts`（`.ts` 依赖 Node 24+ 的原生类型剥离；低版本 Node 会在 import 时得到明确报错）。其余扩展名忽略。
-- 文件用绝对 URL 加 `?t=<mtimeMs>` 动态 import——同一路径改文件后必重新执行（编辑即生效）；不解析裸说明符依赖（第三方包不支持，见 spec Out-of-Scope）。
+- 文件用绝对 URL 加 `?t=<mtimeMs>` 动态 import——同一路径改文件后必重新执行（编辑即生效）；不解析裸说明符依赖（第三方包不支持）。
 - 损坏形态（语法错误、未知 position、缺 `hook` 导出或 default 函数、声明 `failure: "fatal"` 或非法 failure 值）成为**装载失败条目**，不会拖垮目录里其他文件，也不会弄崩 daemon。
 - `enabled: false` 的文件照常载入元数据（管理面可见）但不进执行链。
 
@@ -107,7 +107,7 @@ export default async (ctx) => {
 
 ## 管理面
 
-`GET /hooks`（`packages/server/src/routes/hooks.ts`，Bearer 保护）返回 `{ builtin, user }`：`builtin` 是 13 条静态 spec（名字/位置/描述/failure，不依赖运行态）；`user` 是 `HookRegistry.list()` 的用户侧视图（健康、禁用、装载失败三类都在，失败条目 `position:"?"` 且带 `error` 原因）。CLI 与 WebUI 的钩子管理页共用这份只读快照。
+`GET /hooks`（`packages/server/src/routes/hooks.ts`，Bearer 保护）返回 `{ builtin, user }`：`builtin` 是 13 条内置钩子定义（名字/位置/描述/failure，不依赖运行态）；`user` 是 `HookRegistry.list()` 的用户侧视图（健康、禁用、装载失败三类都在，失败条目 `position:"?"` 且带 `error` 原因）。CLI 与 WebUI 的钩子管理页共用这份只读快照。
 
 ---
 
