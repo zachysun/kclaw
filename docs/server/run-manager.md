@@ -44,7 +44,7 @@ export interface RunManagerDeps {
   workspace: string
   model?: string                       // daemon 解析一次后传入（provider 条目 ?? KCLAW_LLM_MODEL）
   broker?: ConfirmationBroker          // 缺省内部新建，暴露为 manager.broker
-  resolveConfirmation?: (confirmationId: string) => Promise<{approved: boolean; by: "cli"|"web"|"timeout"}>
+  resolveConfirmation?: (confirmationId: string) => Promise<{decision: "once" | "project" | "global" | "reject" | "timeout"; by: "cli"|"web"|"timeout"}>
                                         // 测试注入点（测试缝：为测试替换内部实现的接口）；daemon 路径只用 broker
   llmForRun?: (onRetry: LlmRetrySink) => LlmClient
                                         // 每个 run 一个带重试可见性的客户端（daemon 默认组合设置）
@@ -54,7 +54,6 @@ export interface RunManagerDeps {
                                         // 连接在两次 run 之间上/下线都反映到下一次请求；defs 追加在内置 defs 之后，
                                         // 与内置撞名时打一行日志且适配器执行器胜出（schema 随执行器走）
   usageStore?: UsageStore              // 每 run token 台账（缺省不记录；记录失败只打日志）
-  readonly?: boolean                   // daemon 级只读旗标（CLI --readonly）：全部会话起步即只读
 }
 
 export interface EnqueueInput {
@@ -121,7 +120,7 @@ export class RunManager {
 // @kclaw/core — packages/core/src/permissions/broker.ts
 export class ConfirmationBroker {
   create(confirmationId, toolCall, risk, timeoutMs, sessionId?): Promise<ConfirmationResolution>
-  resolve(confirmationId, approved, by = "cli"): boolean   // settle 仍挂起的条目；未知/已决/过期 → false
+  resolve(confirmationId, decision, by = "cli"): boolean   // settle 仍挂起的条目；未知/已决/过期 → false
   wait(confirmationId): Promise<ConfirmationResolution>    // 未知的 id 永不 settle（超时归循环管）
   expire(confirmationId): void                             // 标记过期（Race 输给超时/abort 后调用）
   pending(): ConfirmationRequestedPayload[]                 // 当前挂起列表（供未来的 HTTP 列表端点）
@@ -174,7 +173,7 @@ submit(sessionId, input)
    - **L1 情节（用户消息 note）**：由 run-before 位置的内置 `memory-inject` 钩子检索（`memory.searchEpisodes(workspace, 首条文本前 200 字符, 5)`），命中变成 `kind:"memory"` note 块（文本 `相关经历（<线的一句话标题>）: <情节正文>`）；检索抛错则不带记忆继续（记忆是加速器，不得阻塞 run）。
 5. **读 history**（此刻用户消息尚未追加），构造纯 text 骨架 `userMessage`，`input.attachments` 经 `mountAttachments` 挂成 attachment 块放进同一消息。**消息 id 采用排队时预分配的 `input.messageId`**（出队执行时由 `#executeEntry` 从条目还原传入）——前端气泡从"排队态"原地升级、id 不变；空闲直发没有这个附加，id 为构建时现生成。job 触发的提示文案（`input.note`）也在此备成 `kind:"job"` note 块，交由 run-before 链落位。
 6. **技能扫描与工具**：先 `scanSkillDirs({global: paths.skillsDir, project: join(workspace, ".kclaw", "skills")})` 现扫技能目录（全局 `<home>/skills` + 会话工作目录的项目级 `.kclaw/skills`，项目同名整目录覆盖；渐进披露第一层的数据源，机制见 [skills](../core/skills.md)）；同时算好技能点名的隐式包装——`trigger: "user"` 时对用户原文做点名检测（`matchSkillInvocations`）并生成模型视图改写文本 `llmUserText`（交给 `llm-before` 位置的内置 `skill-wrap` 钩子应用），`job` 触发不参与点名。随后 `createBuiltinTools({workspace, memory, tavilyApiKey, exec 超时/输出上限, web 超时/私网开关, skills})`——把同一份扫描结果传给 `skill_read` 工具（渐进披露第二层，按需取正文）；`deps.tools` 的执行器按名覆盖；`extraTools()` 每 run 求值一次，defs 追加、撞名打 `kclaw tool name collision: <name> (adapter overrides builtin)` 且适配器执行器胜出。
-7. **权限**：在 `ConfigPermissionGate` 外再包一层负责登记确认的 gate。装配 gate 时有三处值得注意：`readRoots` 传入附件目录 `paths.attachmentsDir`——上传目录里的文件是 daemon 自己收下的用户输入，fs_read/fs_list 读它们不需要人工确认；`readonly` 取 daemon 级旗标与会话开关的逻辑或，任一为真本 run 就是只读；safeTools 仍按内置工具里标 safe 的集合计算。gate 判出 `confirm` 时，用 gate 签发的 id 调 `broker.create(confirmationId, toolCall, risk ?? "sensitive", confirmTimeoutMs, sessionId)` 登记——这一步只做登记，`confirmation.requested` 事件仍由循环发，全链路用的是同一个 id。
+7. **权限**：在 `ConfigPermissionGate` 外再包一层负责登记确认的 gate。装配 gate 的输入会话与磁盘各占一半、每 run 现取：`mode` 读会话 meta（`sessionMeta.mode`，缺省 `default`——daemon 没有全局模式旗标，会话 meta 是唯一真相）；`decidedRules` 经 `loadDecidedRulesForRun` 每 run 重读沉淀规则文件（全局档恒载；项目档被 git 跟踪则跳过并告警，机制见 [permissions](../core/permissions.md)）；`workspace` 取会话 `workdir`（缺省 `deps.workspace`），越界判定与项目档路径都以此为准；`readRoots` 传入附件目录 `paths.attachmentsDir`——上传目录里的文件是 daemon 自己收下的用户输入，fs_read/fs_list 读它们不需要人工确认；`safeTools`/`toolFacts` 按内置工具注册的 risk 与参数 schema 字段名派生（引擎不持工具名单）。gate 判出 `confirm` 时，用 gate 签发的 id 调 `broker.create(confirmationId, toolCall, risk ?? "sensitive", confirmTimeoutMs, sessionId)` 登记——这一步只做登记，`confirmation.requested` 事件仍由循环发，全链路用的是同一个 id。
 8. **resolveConfirmation**：`broker.wait(confirmationId)` 经共享的 `raceConfirmation(同 confirmTimeoutMs, controller.signal)`（`permissions/broker.ts` 导出，循环与装配用同一个函数）竞速——人工裁决 / 超时 / abort 三方。非人工胜出（超时或 abort）即 `broker.expire`，晚到的人工 resolve 只会得到 `unknown confirmation`。
 9. **模型解析与 LLM 客户端**：`llmForRun(onLlmRetry)` 为本 run 构造带重试可见性的客户端——重试回调把 attempt 计数推进并触发 `llm-retry` 位置的钩子链（内置 `retry-notify` 转 `llm.failed {willRetry:true}` 事件）；`runId` 从循环的第一个事件 `run.started` 捕获，`llmAttempt` 计数在 `llm.completed/failed` 后复位。随后三级解析模型：`resolveEntry(input.model ?? sessionMeta?.model ?? defaultModel)`。
 10. **压缩视图**：`RunInput.compaction` 传入会话 meta 里的压缩状态 `{ upto, top }`（无则 undefined）——循环据此在请求里垫脉络项、跳过已压缩部分。**不再有发送前预压缩**。`session_search` 的检索后端在此懒构造（`buildSessionSearch`：返回一个首次调用才现读该会话事件流的闭包，交给 `createBuiltinTools`）。
@@ -198,14 +197,16 @@ steer 条目被 `submit` 放进 `#steerBuf` 后，目标 run 在**迭代边界**
       broker.create(conf_…, toolCall, risk, 120s, sessionId)
 循环：广播 confirmation.requested {confirmationId, toolCall, risk, expiresAt}
       ↓ 等待 resolveConfirmation —— 三方竞速开始
-      ├─ WS/CLI：confirmation.resolve {confirmationId, approved, client}
-      │    → broker.resolve → settle {approved, by:"cli"|"web"} → true
-      │    → ws.ts 回 confirmation.resolved_ack；循环发 confirmation.resolved
+      ├─ WS/CLI：confirmation.resolve {confirmationId, decision, client}
+      │    → ws.ts 先 broker.lookup(conf_…) 快照 toolCall 与会话（resolve 会移除条目）；
+      │      decision 为 project/global 时按快照收窄规则落盘（项目档/全局档，见
+      │      [permissions](../core/permissions.md) 的沉淀规则一节）；once/reject/未知 id 不写文件
+      │    → broker.resolve → true；ws.ts 回 confirmation.resolved_ack；循环发 confirmation.resolved
       ├─ 120s 超时：循环按拒绝处理（note「确认超时，操作未执行」）；
       │    引擎侧同超时 → broker.expire → 条目作废
       └─ run.cancel 的 abort：循环不发 confirmation.resolved（取消≠超时拒绝），
            引擎侧 expire；tool 结果补 "run aborted before execution"
-批准备（approved:true）→ 循环在 tool 消息上记 grantedBy:"confirmed"
+裁决 once/project/global（非 reject/timeout）→ 循环在 tool 消息上记 grantedBy:"confirmed"
      （`packages/core/src/agent/loop.ts`：entry.grantedBy = "confirmed"，
       最终汇成 ToolMessage.grantedBy: Record<callId, GrantedBy> 持久化）
 ```
@@ -274,7 +275,7 @@ daemon 启动时对每个 queue.jsonl 非空的会话调用：整体重排为内
 ## 关联
 
 - [agent-loop](../core/agent-loop.md)：runAgent 状态机、确认的循环侧竞速、6 个 abort 检查点、attachment 块进模型视图的转换
-- [permissions](../core/permissions.md)：ConfigPermissionGate 的判定链与 `conf_*` id 的签发；readRoots/readonly 两处装配
+- [permissions](../core/permissions.md)：ConfigPermissionGate 的判定链与 `conf_*` id 的签发；mode/decidedRules/readRoots 三处装配输入
 - [realtime](./realtime.md)：send_message/confirmation.resolve/run.cancel/queue.cancel 的帧协议与 ack
 - [memory](../core/memory.md)：两级注入（L2 认知常驻 + L1 情节 note）、写入管线与跟随门禁背后的实现
 - [compaction](../core/compaction.md)：`Compactor.compact` 背后的触发/分界/摘要机制、审计记录格式与配置字段
@@ -282,5 +283,5 @@ daemon 启动时对每个 queue.jsonl 非空的会话调用：整体重排为内
 - [hooks](../core/hooks.md)：位置网格、HookChain 语义、内置钩子清单与用户文件契约
 - [mcp](../core/mcp.md)：`extraTools` 的来源（MCP 工具适配器）
 - [storage](../core/storage.md)：UsageStore 的台账实现（`usageStore.record` 背后）
-- [http-api](./http-api.md)：GET /sessions/:id/queue、POST /sessions/:id/disposition 两个队列路由与写入 session meta model/readonly 的既有路由
+- [http-api](./http-api.md)：GET /sessions/:id/queue、POST /sessions/:id/disposition 两个队列路由与写入 session meta model/mode 的既有路由
 - [webui](../web/webui.md)：发送三选、排队气泡与重连纠偏的消费侧

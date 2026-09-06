@@ -37,7 +37,6 @@ export interface LaunchDaemonOptions {
   schedulerIntervalMs?: number     // 默认 30s
   stopTimeoutMs?: number           // 默认 60s；测试注入 50ms
   webDist?: string                 // 静态托管的 WebUI 目录
-  readonly?: boolean               // 只读模式：所有会话起步即只读（fs_write/fs_edit/exec 被拒）
 }
 
 export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daemon>
@@ -81,8 +80,10 @@ new JobScheduler(paths.jobsDb)
 new UsageStore(paths.usageDb)       token 台账（SQLite，stop 时 close）
 defaultLlmFactory(config) + resolveModel(config)   见"provider 解析"
 new McpManager({servers})           仅当 config.mcp.servers 非空；否则 undefined（不装配）
-new RunManager({...})               注入 usageStore、memory、readonly（opts.readonly 时）、
-                                    extraTools: () => mcpManager.tools()（有管理器时）；见 run-manager
+new RunManager({...})               注入 usageStore、memory、
+                                    extraTools: () => mcpManager.tools()（有管理器时）；见 run-manager。
+                                    权限模式没有 daemon 级旗标——它是会话级事实（meta.mode），
+                                    run 装配每 run 从会话 meta 读出（见 permissions/run-manager）
 createApp({home, token, stores, bus, run, mcp, attachmentsDir, usage, webDist, memory})
                                     Fastify 应用（见 http-api）；attachmentsDir/usage 传入时
                                     对应的附件与用量路由才注册，mcp 提供 /mcp 的快照，memory 供 /memory 路由族

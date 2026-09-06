@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 42 个业务路由（健康/状态 2 个、会话 15 个、记忆 10 个、技能 2 个、钩子 1 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 1 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未装配时降级 503，技能组始终注册（无装配依赖），钩子组在未注入 `HookRegistry` 时返回空用户侧。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 44 个业务路由（健康/状态 2 个、会话 15 个、记忆 10 个、技能 2 个、钩子 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 1 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未装配时降级 503，技能组始终注册（无装配依赖），钩子组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（沉淀规则文件即真相，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
@@ -36,7 +36,7 @@
 | POST | `/sessions/:id/restore` | 从回收站恢复（清除 `deleted`/`deletedAt`） | — | `SessionMeta` |
 | POST | `/sessions/:id/purge` | 永久删除（整个会话目录删除） | — | `{ok: true}` |
 | POST | `/sessions/:id/model` | 会话级模型切换（只影响此会话**之后**的 run，历史不动） | `{model?}`：provider 条目名（entry key，见 [run-manager](./run-manager.md) 的模型解析）或裸模型名；`""`/缺省清空回落默认；类型不对 400 `model must be a string`，条目不存在 400 `model not found: <name>` | `SessionMeta` |
-| POST | `/sessions/:id/readonly` | 会话级只读开关（write/exec 类工具被拒，见 [permissions](../core/permissions.md)） | `{readonly: boolean}` 必填；`false` 清除标记 | `SessionMeta` |
+| POST | `/sessions/:id/mode` | 会话级权限模式切换（只影响此会话**之后**的 run，历史不动；机制见 [permissions](../core/permissions.md)） | `{mode: "readonly"\|"default"\|"acceptEdits"}` 必填；非法值 400 `mode must be one of "readonly" | "default" | "acceptEdits"` | `SessionMeta` |
 | GET | `/sessions/:id/messages` | 读全部消息（对话/断线恢复的数据源，ChatPanel 用） | — | `Message[]`（事件流投影视图——`readMessages` 从 events.jsonl 过滤 `message` 事件按事件序返回；**排队未执行的消息不在其中**，见 `/queue`） |
 | GET | `/sessions/:id/events` | 完整事件流（事件溯源的唯一真相；轨迹页的单源数据） | — | `SessionEvent[]`（append-only，按事件序；含 session.created / message / compaction / memory / system 等全部事件，见 [storage](../core/storage.md)） |
 | GET | `/sessions/:id/queue` | 排队消息快照：重连/刷新的全量纠偏兜底 | — | `QueueEntry[]`（`queue.jsonl` 整文件读出，数组顺序即执行顺序；steer 条目排在可执行条目之后；空队列返回 `[]`） |
@@ -57,7 +57,7 @@ interface SessionMeta {
   jobId?: string        // 由定时任务创建的会话带此字段
   workdir?: string      // 会话级工作目录（run 以它覆盖全局 workspace）
   model?: string        // 会话级模型覆盖（缺省 → 守护进程默认模型）
-  readonly?: boolean    // 会话级只读模式（write/exec 工具被拒，读取不受限）
+  mode?: "readonly" | "default" | "acceptEdits"   // 会话权限模式（缺省 default）；旧 readonly 布尔是 legacy，读取时映射为 mode
   deleted?: boolean
   deletedAt?: string
   compactedSummary?: string   // v1 压缩遗留：不再清除，被 compaction 遮蔽（见 compaction.md）
@@ -154,6 +154,17 @@ interface Job {
 | 方法 | 路径 | 用途 | 响应 |
 |------|------|------|------|
 | GET | `/hooks` | 内置 + 用户钩子的只读快照 | `{builtin: [{name, position, description, failure, origin:"builtin"}], user: [{name, position, description?, enabled, order, failure, origin:"user", error?}]}`——`user` 侧含健康、禁用（`enabled:false`）与装载失败（`position:"?"` 且带 `error` 原因）三类条目；未注入 `HookRegistry` 时 `user` 为空数组 |
+
+### 权限（routes/permissions.ts，始终注册）
+
+沉淀规则（decided rules）的只读管理面：人工在确认里选"总是允许"后落盘的收窄 allow 规则，机制与文件格式见 [permissions](../core/permissions.md)。文件本身仍可手编；本组只提供列表与删除（删除即收回自动放行）。底座是 `packages/core/src/storage/decided-rules.ts`。
+
+| 方法 | 路径 | 用途 | 请求 | 响应 |
+|------|------|------|------|------|
+| GET | `/permissions/rules` | 两档规则清单 | `workspace?` 可选：项目档所在工作区，缺省回退 daemon 配置 `config.workspace` | `{global: {path, rules}, project: {path, tracked, ignored, rules}}`——每档 `rules` 为 `DecidedRuleEntry[]`（`{rule, decidedAt, origin:{tool, argsJson?, sessionId?}}`）；`project.ignored` 恒等于 `tracked`——项目档被 git 跟踪时两者为 `true` 且 `rules` 恒空（被忽略的规则不生效，UI 据此解释） |
+| DELETE | `/permissions/rules` | 删除单条规则 | `{scope: "global"\|"project", index: number, workspace?}`；scope 非法 400 `scope must be "global" or "project"`、index 非非负整数 400 `index must be a non-negative integer`；`workspace` 决定项目档路径，缺省回退 `config.workspace` | `{ok: true, removed}`（removed 为被删条目）；index 越界 404 `{error:"not found"}` |
+
+两档文件路径：全局 `<home>/permissions.yaml`、项目 `<workspace>/.kclaw/permissions.yaml`（首次落盘自动建 `.kclaw` 目录并追加 gitignore 条目）。
 
 ### 附件（routes/attachments.ts，仅当注入 `attachmentsDir` 时注册）
 

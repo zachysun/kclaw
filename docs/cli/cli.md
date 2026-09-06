@@ -76,6 +76,8 @@ export interface SlashCtx {
                                        // 切会话时也清空（附件是会话级的）
   send(text: string): void          // 发送普通消息（自定义命令把模板展开成文本走这里）
   setDisposition?(d: "steer" | "wait"): void   // 切换本会话发送处置模式（/steer、/wait 调；sticky POST 成功后才切）
+  setMode?(m: "readonly" | "default" | "acceptEdits"): void
+                                     // 翻转本地权限模式镜像（/mode 与 Shift+Tab 共用；POST /sessions/:id/mode 成功后才调）
   queueCancel(target: string | "all"): Promise<void>  // 发 queue.cancel 帧：messageId 取消单条，"all" 清空全部
   sendInterrupt(text: string): void  // 一次性中断发送：带 interrupt 处置的 send_message（/interrupt 展开成这个）
   queueSnapshot?(): Promise<Array<{ messageId: string; disposition: string; text: string }>>
@@ -104,7 +106,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
    - `tool_call.completed` → `⚡ <name> <args>`，args 是紧凑 JSON、截断到 60 字符。
    - `tool_result.completed` → `↳ <status> (<n>ms) <output>`，输出压空白后取前 80 字符；`tool_result.delta` 不做实时渲染（completed 行已带摘要）。
    - `message.queued`（我的消息）→ 暗色 `已排队（第 N 位）`（`position+1`）或 `已进入引导缓冲`（steer 无 position）；`message.steered`（我的消息）→ 暗色 `已注入`——我的消息身份从 `send_message_ack` 的 `messageId` 学到，终点以"我的消息被看到（`message.created`/`message.steered`）之后的第一个 `run.completed`"判定，前一个 run 的终态不会错收我的渲染。
-   - `confirmation.requested` → `⚠ <name> <argsJson> · 风险 <risk> · 过期 <expiresAt>`，按 yes/no/ask 三种模式收决定（ask 时暂停 readline、@clack 出确认框、恢复 readline），回发 `{type:"confirmation.resolve", confirmationId, approved}`。
+   - `confirmation.requested` → `⚠ <name> <argsJson> · 风险 <risk> · 过期 <expiresAt>`，按 yes/no/ask 三种模式收决定（ask 时暂停 readline、@clack 出确认框、恢复 readline）；ask 是**四项选择**——`允许（仅本次）` / `总是允许（本项目）` / `总是允许（全局）` / `拒绝`（`--yes`/`--no` 隐藏旗标分别映射 once/reject；取消同样按拒绝），回发 `{type:"confirmation.resolve", confirmationId, decision}`（不带 `client` 字段 → 服务端记 "cli"）。"总是允许"会把一条收窄的放行规则落盘，之后同形操作不再询问（见 [permissions](../core/permissions.md) 的沉淀规则一节）。
    - `note.emitted` → 暗色 `[note] <text>`；kind 为 `compact` 且带结构化 meta（`compact:{segments,kept}`）的例外——它每轮都会被 daemon 重挂（模型上下文需要），打全文会逐轮重复，所以静默，压缩的告知由下面的 completed 行承担；无 meta 的旧格式 compact note 仍照常打全文；`message.created/completed` 刻意不渲染（readline 已回显用户输入，再渲染会重复）。
    - `compaction.started` → 暗色 `[正在压缩早期对话…]` 一行（收尾压缩发生在 `run.completed` 之后、中途/急救压缩发生在运行中的迭代边界——都有这行提示，摘要调用的数秒不是静默空窗）；`compaction.completed` → 按 `result` 三分支：`ok` 打暗色 `✱ 早期对话已压缩为 N 段，保留最近 M 条原文（早期细节可用 session_search 检索）`、`failed` 打暗色 `✱ 压缩失败，本轮继续（稍后自动重试）`、`cancelled` 打暗色 `✱ 压缩已取消`——事件只在真正发生压缩时发一次，天然是"每次压缩一条"的告知，与 WebUI 的折叠块同一去重语义（见 [compaction](../core/compaction.md)）。
    - `memory.written`（广播，不带 sessionId）→ 暗色一行 `已写入记忆: <path>`，提示记忆已落盘；它与 run 生命周期无关，只是轻提示（见 [memory](../core/memory.md)）。
@@ -117,6 +119,10 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 - **重连**（`reconnect`）：socket 意外关闭时重新 `KclawClient.connect`（daemon 已终止时重新启动一个）、重新订阅、`GET /sessions/:id/messages` 全量拉取一次进行对齐（不重放渲染），打印 `[reconnected]`；重连失败打印 `[连接断开，重连失败 — 输入 /exit 退出]` 并放弃。
 - **重发规则**：一条发送中的消息只有当**一帧都没观察到**（连 `send_message_ack` 都没有）才会在重连后重发——零帧说明消息从未到达存活的 daemon（ws 库对已关闭的 socket 静默丢帧、只在连接中才同步抛错，两者都等价于"未送达"）。观察到任何一帧即视为已送达，中途断线绝不重发：run 可能已在服务端排队，重发会导致同一消息被执行两次。
 - **120s 静默看门狗**：重连后观察到的帧带 `POST_RECONNECT_SILENCE_MS = 120_000` 的不活动超时——daemon 已终止的 run 永远不会完成，REPL 不可无限等待；超时打印提示后回到提示符。重连前的等待不加人为上限（`nextFrame` 对非有限超时直接跳过竞速：node 会把 `setTimeout(fn, Infinity)` 钳到 1ms，反而会截断仍在运行的 run）。
+
+### 权限模式：提示符徽章与 Shift+Tab 循环
+
+提示符随会话权限模式变化：`default` 是裸 `> `；非默认模式前缀徽章 `[readonly] > ` / `[acceptEdits] > `（run 进行中按下时徽章保持旧值，从下一次 run 起生效）。Shift+Tab 按 `PERMISSION_MODES` 顺序（readonly → default → acceptEdits，严格在前）循环切换：`POST /sessions/:id/mode {mode}` 成功后更新本地镜像与提示符并打印 `权限模式: <模式>（Shift+Tab 继续切换）`，失败静默（徽章保持）。模式在 run 中切换同样落到下一次 run——daemon 的权限 gate 每 run 从会话 meta 读取。
 
 ## slash 命令机制（packages/cli/src/slash.ts）
 
@@ -132,7 +138,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 | `/clear` | 同 `/new` 但不带标题（快速新建一个空白会话）；服务端在创建新会话后异步触发一次切会话记忆写入（clear 触发，沉淀旧会话的对话，不阻塞切换） |
 | `/sessions` | `GET /sessions` 列表；空则"（还没有会话）"；否则暂停 readline、@clack 单选列表、切换会话 |
 | `/model [名字]` | 不带参数时列出可用模型（读 `GET /config` 的 provider 条目名）和当前用的模型；带上名字则调 `POST /sessions/:id/model` 切换本会话模型，只影响之后的回复；`/model default` 恢复默认；名字不存在时打印服务端 400 的原文（如 `model not found: …`） |
-| `/readonly [on\|off]` | 先读当前会话的开关状态，无参数时直接取反，也可以明确指定 on/off；通过 `POST /sessions/:id/readonly` 生效——开启后写文件与执行命令类工具会被拒绝 |
+| `/mode [readonly\|default\|acceptEdits]` | 切换本会话权限模式（无参数显示当前模式与可选项）；通过 `POST /sessions/:id/mode` 生效、下一次 run 起生效——`readonly` 拒绝写文件与执行命令类工具、`acceptEdits` 工作区内文件写入免逐次确认（见 [permissions](../core/permissions.md)） |
 | `/attach <路径>` | 读入本地文件、按扩展名粗判 MIME 类型，经 `client.uploadAttachment` 上传并把返回的引用放进待发队列，随你的下一条消息一起发送；不带参数时列出当前待发的附件；失败打印 `附件上传失败: …` |
 | `/compact [重点说明]` | 手动压缩当前会话的早期对话（跳过触发线立即执行一次，机制见 [compaction](../core/compaction.md)）：调 `POST /sessions/:id/compact`，参数作为摘要重点说明（focus）进入两次摘要调用；打印 daemon 返回的一句话（`压缩了 N 段…` / `无可压缩内容` / `会话正在运行`）；失败打印 `压缩失败: …` |
 | `/steer` | 无参切换命令：`POST /sessions/:id/disposition {disposition:"steer"}` 写会话级覆盖（sticky，与 Web 三选同一存储），成功后切本地模式并打印"本会话处置模式：引导（steer）…"；失败打印 `切换处置失败: …` 且**不**切本地模式（回车直发维持旧处置） |

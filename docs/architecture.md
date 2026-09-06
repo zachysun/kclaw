@@ -33,7 +33,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 | 包 | 入口 | 内容 |
 |----|------|------|
-| core | `packages/core/src/index.ts` | 入口统一导出 14 个子目录：`protocol/`（消息/块/事件/WS 指令帧/会话事件/ID——线上形状的类型正本，经 `@kclaw/core/protocol` 子路径出口供三端引用）、`provider/`（OpenAI 兼容客户端+重试）、`agent/`（循环+上下文组装+工具契约+单 run 装配 `run-assembly.ts` 的 `executeRun`）、`hooks/`（钩子系统：14 位置网格 + HookChain 注册接口 + 用户文件装载 + 内置钩子，见 [hooks](./core/hooks.md)）、`storage/`（路径/配置/JSONL，即每行一条 JSON 的文本文件；含用量台账 `usage.ts`）、`session/`（SessionStore 与上下文压缩：估算/分界/渲染纯函数、事件溯源存储、压缩引擎 `Compactor`、自动命名；`session_search` 直接扫事件流）、`permissions/`（ConfigPermissionGate + 确认网关 ConfirmationBroker）、`memory/`（MemorySystem：L1 项目情节 + L2 全局认知 + FTS5/向量索引，见 [memory](./core/memory.md)）、`text/`（共享中文分词器与 FTS 辅助）、`tools/`（11 个内置工具）、`skills/`（技能包解析/双作用域扫描/点名匹配，见 [skills](./core/skills.md)）、`jobs/`（JobScheduler）、`mcp/`（MCP 客户端管理器）、`notify/`（任务完成通知）；根级 `bus.ts`（EventBus 进程内事件分发）与 `client-http.ts`（CLI/WebUI 共享的 HTTP 请求基座：Bearer 注入、错误体提取、204/空响应处理，经 `@kclaw/core/client-http` 子路径出口；不 import 任何 Node 专属模块，浏览器可直接打包） |
+| core | `packages/core/src/index.ts` | 入口统一导出 14 个子目录：`protocol/`（消息/块/事件/WS 指令帧/会话事件/ID——线上形状的类型正本，经 `@kclaw/core/protocol` 子路径出口供三端引用）、`provider/`（OpenAI 兼容客户端+重试）、`agent/`（循环+上下文组装+工具契约+单 run 装配 `run-assembly.ts` 的 `executeRun`）、`hooks/`（钩子系统：14 位置网格 + HookChain 注册接口 + 用户文件装载 + 内置钩子，见 [hooks](./core/hooks.md)）、`storage/`（路径/配置/JSONL，即每行一条 JSON 的文本文件；含用量台账 `usage.ts` 与沉淀权限规则文件 `decided-rules.ts`）、`session/`（SessionStore 与上下文压缩：估算/分界/渲染纯函数、事件溯源存储、压缩引擎 `Compactor`、自动命名；`session_search` 直接扫事件流）、`permissions/`（ConfigPermissionGate + 确认网关 ConfirmationBroker）、`memory/`（MemorySystem：L1 项目情节 + L2 全局认知 + FTS5/向量索引，见 [memory](./core/memory.md)）、`text/`（共享中文分词器与 FTS 辅助）、`tools/`（11 个内置工具）、`skills/`（技能包解析/双作用域扫描/点名匹配，见 [skills](./core/skills.md)）、`jobs/`（JobScheduler）、`mcp/`（MCP 客户端管理器）、`notify/`（任务完成通知）；根级 `bus.ts`（EventBus 进程内事件分发）与 `client-http.ts`（CLI/WebUI 共享的 HTTP 请求基座：Bearer 注入、错误体提取、204/空响应处理，经 `@kclaw/core/client-http` 子路径出口；不 import 任何 Node 专属模块，浏览器可直接打包） |
 | server | `packages/server/src/index.ts` | `app.ts`（createApp 装配）、`daemon.ts`（launchDaemon）、`auth.ts`（token）、`run.ts`（RunManager 队列状态机；单 run 装配在 core 的 `executeRun`）、`command-check.ts`（WS 命令帧的唯一校验点）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`、`memory-scheduler.ts`（记忆定时/跟随兜底调度）、`routes/`（sessions/attachments/jobs/config/fs/usage/memory/skills/hooks） |
 | cli | `packages/cli/src/index.ts` | commander 命令树（默认进 chat）；`chat.ts`（REPL+渲染+@引用展开）、`client.ts`（KclawClient）、`daemon-ctl.ts`（探测/启动/停止）、`slash.ts`、`file-refs.ts`、`wizard.ts`、`provider-check.ts`、`web-cmd.ts` |
 | web | `packages/web/src/main.tsx` | 视图（chat/sessions/jobs/audit/usage/trash/memory/skills + DirectoryPicker）、离线外壳（`sw.js`/manifest/OfflineBanner）、`ws.ts`（WS 客户端）、`token.ts`（token 引导） |
@@ -65,7 +65,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
   - pid 仍在运行但不健康 → 只等待、不重复启动（防孤儿 daemon）。
 - **daemon 就绪信号**：`launchDaemon` 第一步即以 `wx` 独占认领 `<home>/daemon.json`（占位 `{port: 0, pid, startedAt, starting: true}`；存活 pid 拒绝二次启动，死 pid 回收重认领），listen 成功后回填 `{port, pid, startedAt}`；bin 脚本向 stdout 打一行 `{"port":<port>}`。
 - **停止**：SIGTERM/SIGINT 走有界 stop（每步默认 60s 超时），stop 失败保留 daemon.json（进程仍在运行，pidfile 必须如实反映）。
-- **状态全部在 `<home>`**（`KCLAW_HOME` ?? `~/.kclaw`，`resolvePaths` in `packages/core/src/storage/paths.ts`）：`config.yaml`、`AGENTS.md`、`token`、`daemon.json`、`sessions/`、`memory/`（记忆塔：`global/`（persona/wiki/rule 认知文件）+ `projects/<id>/`（主题线文件），各带 `vectors.db` 检索索引；见 [memory](./core/memory.md)）、`skills/`（全局技能包目录，项目级技能在工作区 `.kclaw/skills/`，见 [skills](./core/skills.md)）、`hooks/`（用户钩子目录，每 run 现扫，见 [hooks](./core/hooks.md)）、`jobs.db`、`usage.db`、`attachments/`、`commands/`、`logs/`。
+- **状态全部在 `<home>`**（`KCLAW_HOME` ?? `~/.kclaw`，`resolvePaths` in `packages/core/src/storage/paths.ts`）：`config.yaml`、`AGENTS.md`、`token`、`daemon.json`、`permissions.yaml`（全局沉淀权限规则，见 [permissions](./core/permissions.md)）、`sessions/`、`memory/`（记忆塔：`global/`（persona/wiki/rule 认知文件）+ `projects/<id>/`（主题线文件），各带 `vectors.db` 检索索引；见 [memory](./core/memory.md)）、`skills/`（全局技能包目录，项目级技能在工作区 `.kclaw/skills/`，见 [skills](./core/skills.md)）、`hooks/`（用户钩子目录，每 run 现扫，见 [hooks](./core/hooks.md)）、`jobs.db`、`usage.db`、`attachments/`、`commands/`、`logs/`。
 
 ---
 
@@ -92,7 +92,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
       │    系统提示（AGENTS.md + 认知 + 技能列表，见 skills.md）；trigger:user 时对
       │    用户消息做技能点名检测（任意位置 /技能名）→ 生成模型视图改写文本
       ├─ 读 history（在追加用户消息之前）→ createBuiltinTools（含 skill_read）+ extraTools(MCP)
-      │    → ConfigPermissionGate（readRoots=附件目录、readonly 短路）
+      │    → ConfigPermissionGate（readRoots=附件目录；mode 与 decidedRules 逐 run 从会话 meta 与磁盘读入）
       └─ runAgent(...)                                     packages/core/src/agent/loop.ts
            ├─ llm.stream(await buildMessages())：toProviderMessages(history, window=200)
            │     ← 上下文组装 agent/context.ts；llm-before 钩子链只改模型看到的输入
@@ -100,7 +100,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
            ├─ 流式事件 text/thinking/tool_call created→delta→…
            ├─ stopReason=tool_use → 权限检查 check(toolCall)          permissions/engine.ts
            │    confirm → confirmation.requested 事件 → 客户端弹确认
-           │            ← WS 帧 {type:"confirmation.resolve", confirmationId, approved}
+           │            ← WS 帧 {type:"confirmation.resolve", confirmationId, decision}
            │            → ConfirmationBroker.resolve → 循环继续   core/src/permissions/broker.ts
            ├─ 工具执行（parallel 组并发 + serial 组串行）→ tool_result 块
            ├─ turn-boundary 钩子链（内置 steering-drain）取走引导缓冲消息逐条注入
@@ -132,7 +132,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 2. **装配**（core `executeRun`）：记忆检索命中 0 条 → 读 history → 用户消息以纯 text 骨架（先建空壳消息、块随后补全）传入 `RunInput.userMessage`；run-before 钩子链（内置 memory-inject → user-message-land）补 note 块并 `appendMessage` 持久化；事件序为 `run.started → message.created → note.emitted ×N → message.completed`。
 3. **第一轮 LLM**：`llm.started {attempt:1}` → assistant 骨架 `message.created` → 模型流式产出 tool_call：`tool_call.created` → 若干 `tool_call.delta` → 流结束 `llm.completed {stopReason:"tool_use"}` → `tool_call.completed`（此刻才 `JSON.parse(argsJson)`）。
 4. **权限检查**：`fs_read` 是 safe 工具直接放行（`grantedBy:"safe"`）；`fs_write` 命中 confirm → 循环发 `confirmation.requested {confirmationId:"conf_…", toolCall, risk:"sensitive", expiresAt}` 并挂起等待，`raceConfirmation` 同时竞速人工裁决、120s 超时、run 的 abort 信号。
-5. **人机回合**：CLI 收到事件弹 @clack 确认框；用户批准 → CLI 回 `confirmation.resolve {confirmationId, approved:true}` → broker settle → 循环发 `confirmation.resolved {approved:true, by:"cli"}`，`grantedBy:"confirmed"`。
+5. **人机回合**：CLI 收到事件弹 @clack 四项确认框（允许（仅本次）/总是允许（本项目）/总是允许（全局）/拒绝）；用户选「总是允许（本项目）」→ CLI 回 `confirmation.resolve {confirmationId, decision:"project"}` → ws.ts 先把 toolCall 收窄成规则落进项目档 `.kclaw/permissions.yaml`、再 `broker.resolve` → 循环发 `confirmation.resolved {decision:"project", by:"cli"}`，`grantedBy:"confirmed"`（"总是允许"两档的沉淀机制见 [permissions](./core/permissions.md)）。
 6. **执行与结果消息**：`fs_read`（parallel）与 `fs_write`（serial）分组调度——并行组经 `Promise.allSettled` 等待全部完成后，串行组逐个执行；每个结果 `tool_result.created → (delta) → completed`；结果块按模型给定顺序组成一条 `role:"tool"` 消息，`onMessage` 持久化后广播 `message.completed`。
 7. **第二轮 LLM**：带上完整工具结果再次调用；模型输出文本总结 → `end_turn` → assistant 消息持久化、`message.completed` → `run.completed {stopReason:"end_turn", usage:{…累计…}}`。
 8. **渲染收尾**：CLI 渲染完终态事件后回到 readline 提示符；WebUI 同样只依赖这串事件。daemon 继续常驻，等待下一条消息或 30s 一次的调度 tick。
@@ -154,7 +154,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 - [agent-loop](./core/agent-loop.md)：run 生命周期状态机与工具回合
 - [daemon](./server/daemon.md)：daemon 装配序、有界 stop、pidfile 语义
 - [run-manager](./server/run-manager.md)：服务端侧的会话串行与确认网关
-- [http-api](./server/http-api.md)：42 条业务路由清单（含附件/用量/目录浏览/MCP 状态/记忆管理/技能/钩子）
+- [http-api](./server/http-api.md)：44 条业务路由清单（含附件/用量/目录浏览/MCP 状态/记忆管理/技能/钩子/权限）
 - [mcp](./core/mcp.md)：条件装配的 MCP 工具适配器
 - [skills](./core/skills.md)：技能包机制（渐进披露、双作用域、点名隐式包装）
 - [hooks](./core/hooks.md)：钩子系统（14 位置网格、HookChain 注册接口、用户文件装载、内置钩子清单）

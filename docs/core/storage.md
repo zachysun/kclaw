@@ -26,6 +26,7 @@ export function resolvePaths(home?: string): KclawPaths
 | 路径 | 用途 | 写入方 |
 |------|------|--------|
 | `<home>/config.yaml` | 全部配置（见下节） | CLI 向导 `saveConfig`；用户手编 |
+| `<home>/permissions.yaml` | 全局沉淀权限规则（人工确认里选"总是允许"落盘的收窄 allow 规则；项目档在工作区 `.kclaw/permissions.yaml`，见下节） | server 的 WS 确认入口 `ws.ts`；用户手编亦可 |
 | `<home>/AGENTS.md` | agent 人格，非空则作为系统提示；每次运行拼装的完整系统提示以 `system` 事件全量留痕 | 用户手编；daemon 启动时读 |
 | `<home>/memory/global/` | L2 全局认知（persona.md、wiki/、rule/ 的 markdown，真相） | MemorySystem / 用户手编 |
 | `<home>/memory/projects/<id>/` | L1 项目情节（`<topic>.md` 主题线、workdir.txt、MEMORY.md、state.json、vectors.db） | MemorySystem / 用户手编 |
@@ -112,11 +113,11 @@ export function readJsonl(file: string): unknown[]
 
 每个会话一个目录 `<sessionsDir>/<id>/`，三个文件，由 `SessionStore`（`packages/core/src/session/store.ts`）统一管理：
 
-- `events.jsonl`：**唯一真相**，append-only 事件流，一行一个 `SessionEvent`（JSON 序列化）。共 9 种事件：会话生命周期 `session.created` / `session.renamed` / `session.deleted` / `session.restored` / `session.set`（model / readonly / disposition 的会话级设置），外加内容类 `message`（一条消息）、`compaction`（一次压缩审计）、`memory`（一次记忆落盘审计）、`system`（一条系统提示词审计，每次对话运行落一条拼装完成的全文）。所有写入都先落事件，再把事件折进 meta.json 投影（见下）。
+- `events.jsonl`：**唯一真相**，append-only 事件流，一行一个 `SessionEvent`（JSON 序列化）。共 9 种事件：会话生命周期 `session.created` / `session.renamed` / `session.deleted` / `session.restored` / `session.set`（model / mode / disposition 的会话级设置；旧 `readonly` 布尔字段是 legacy，读取时映射为 mode），外加内容类 `message`（一条消息）、`compaction`（一次压缩审计）、`memory`（一次记忆落盘审计）、`system`（一条系统提示词审计，每次对话运行落一条拼装完成的全文）。所有写入都先落事件，再把事件折进 meta.json 投影（见下）。
 - `meta.json`：**派生投影**（`SessionMeta`），由事件流经 `applyEvent` 逐条折叠得出；meta.json 缺失或损坏时 `meta()` 自动从事件流重建（`rebuildMeta`），任何时候删掉它也能重建。崩溃恢复时允许它滞后于事件流（meta 只是投影、非真相，不会丢数据）；滞后不会被后续写入自动追平——`appendEvent` 先读当前投影、只折入新事件——仅在 meta.json 缺失或损坏时经 `rebuildMeta` 重放整条事件流整流。整文件原子重写（`updateMeta` 合并 patch、`undefined` 键删除；`message` / `compaction` 事件会推进投影的 `updatedAt`，`memory` / `system` 事件不推进）。
 - `queue.jsonl`：**运行态**排队消息（`{ messageId, disposition, text, trigger, attachments?, note?, enqueuedAt }`，顺序即执行顺序，见 [run-manager](../server/run-manager.md) 的消息队列）。与事件流不同——`replaceQueue` 每次**整文件重写**，不是 append-only；不参与 meta.json。
 
-`meta.json` 字段：`SessionMeta { id, title, createdAt, updatedAt, jobId?, workdir?, model?, readonly?, deleted?, deletedAt?, compactedSummary?, compactedUpto?, compaction?, dispositionOverride? }`，其中 `model` 为会话级模型覆盖（空/缺省回落 daemon 默认）、`readonly` 为会话级只读开关（写/exec 工具被拒，见 [permissions](./permissions.md)）；`compaction` 是分层压缩状态 `{ segments, top, upto }`（语义见 [compaction](./compaction.md)），由 `compaction` 事件投影（每次压缩把新段折进 `segments`，`updateMeta` 不再直接合并它）；`compactedSummary`/`compactedUpto` 是 v1 压缩的遗留字段——不再被清除，但运行侧读压缩视图时 `compaction` 优先（压缩引擎 `Compactor` 的 `compact` 里 `prev` 先读 `compaction`，见 [compaction](./compaction.md)），两者并存无功能影响；`dispositionOverride` 是会话级处置覆盖（`"steer" | "wait" | "interrupt"`，优先于 `sessions.defaultDisposition`；服务端路由仍接受三值写入，但客户端当前只写 steer/wait——interrupt 在 Web 与 CLI 都是一次性动作、不落覆盖，`"interrupt"` 值只会来自历史遗留，见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)）。
+`meta.json` 字段：`SessionMeta { id, title, createdAt, updatedAt, jobId?, workdir?, model?, mode?, deleted?, deletedAt?, compactedSummary?, compactedUpto?, compaction?, dispositionOverride? }`，其中 `model` 为会话级模型覆盖（空/缺省回落 daemon 默认）、`mode` 为会话权限模式（`"readonly" | "default" | "acceptEdits"`，缺省 default；旧 `readonly` 布尔读出时映射为 `mode:"readonly"` 并删除布尔键，写入端只产 `mode`，见 [permissions](./permissions.md)）；`compaction` 是分层压缩状态 `{ segments, top, upto }`（语义见 [compaction](./compaction.md)），由 `compaction` 事件投影（每次压缩把新段折进 `segments`，`updateMeta` 不再直接合并它）；`compactedSummary`/`compactedUpto` 是 v1 压缩的遗留字段——不再被清除，但运行侧读压缩视图时 `compaction` 优先（压缩引擎 `Compactor` 的 `compact` 里 `prev` 先读 `compaction`，见 [compaction](./compaction.md)），两者并存无功能影响；`dispositionOverride` 是会话级处置覆盖（`"steer" | "wait" | "interrupt"`，优先于 `sessions.defaultDisposition`；服务端路由仍接受三值写入，但客户端当前只写 steer/wait——interrupt 在 Web 与 CLI 都是一次性动作、不落覆盖，`"interrupt"` 值只会来自历史遗留，见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)）。
 
 `Message`（`packages/core/src/protocol/messages.ts`）基础字段 `{ id, sessionId, role: "user" | "assistant" | "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因）。id 前缀 `msg_` / `ses_`，ULID。`messages` / `compactions` 现在是事件流的**只读投影视图**：`readMessages` 从事件流过滤出 `message` 事件、`readCompactions` 过滤出 `compaction` 事件，`readQueue` 读 `queue.jsonl`。
 
@@ -132,6 +133,31 @@ export function readJsonl(file: string): unknown[]
 1. agent 循环产出消息 → run 装配（core `executeRun`）的 `onMessage` 钩子调 `sessions.appendMessage(sessionId, m)`。
 2. `appendMessage` 经 `appendEvent` 落一条 `message` 事件到 events.jsonl：先 `repairTornTail`（末字节非 `\n` 则字节级截断到上一换行），再 `appendFileSync(JSON.stringify(event) + "\n")`，随后把事件折进 meta.json 投影（`applyEvent`）。
 3. 回读时 `readMessages` → `readEvents` 后过滤 `message` 事件：丢弃断尾行，逐行解析成 `Message` 数组，作为下次运行的历史（run 装配 core `executeRun` 在追加用户消息**之前**读历史，避免重复发送）。
+
+---
+
+## 沉淀权限规则文件（decided-rules）
+
+人工在确认里选"总是允许"后落盘的**收窄 allow 规则**（机制见 [permissions](./permissions.md)），**独立于会话容器**，两个 YAML 文件（`packages/core/src/storage/decided-rules.ts`）：
+
+| 文件 | 作用域 | 写入方 |
+|------|--------|--------|
+| `<home>/permissions.yaml` | 全局档，任何工作区生效 | server 的 WS 确认入口（`packages/server/src/ws.ts`，global 裁决） |
+| `<workspace>/.kclaw/permissions.yaml` | 项目档，只对该工作区的会话生效；首次落盘自动建 `.kclaw` 目录、把 `.kclaw/permissions.yaml` 追加进工作区 `.gitignore`（幂等） | 同上（project 裁决） |
+
+格式（每条是一个 `DecidedRuleEntry`）：
+
+```yaml
+rules:
+  - rule: "exec:git push*"        # 收窄后的规则（exec = 首词+子命令前缀；路径工具 = realpath 精确路径；其余 = 工具级）
+    decidedAt: "2026-09-07T08:00:00.000Z"   # ISO-8601
+    origin:                        # 触发裁决的出处
+      tool: "exec"
+      argsJson: '{"command":"git push origin main"}'
+      sessionId: "ses_…"
+```
+
+文件权限 0600、`writeFileAtomic` 原子写入；程序**从不写 config.yaml**（config.yaml 保持纯手写面）。每 run 由 `loadDecidedRulesForRun` 读入合并为规则串数组传给权限 gate：全局档恒载；项目档仅当工作区已定义、文件存在且**未被 git 跟踪**时载入（`isGitTracked` 用 `git ls-files --error-unmatch` 探测，tracked 即整体忽略并在 daemon 日志告警——克隆来的仓库无法夹带一份预授权清单）。删除文件里的条目（或整个文件）即收回授权，对下一个 run 立即生效。管理入口：`GET`/`DELETE /permissions/rules`（见 [http-api](../server/http-api.md)）与 WebUI「权限」页。
 
 ---
 

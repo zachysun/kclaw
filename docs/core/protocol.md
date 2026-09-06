@@ -50,7 +50,7 @@ export interface AssistantMessage extends Message {
   stopReason: StopReason
 }
 
-export type GrantedBy = "safe" | "whitelist" | "session_grant" | "confirmed"
+export type GrantedBy = "safe" | "whitelist" | "session_grant" | "confirmed" | "accept_edits" | "learned"
 
 export interface ToolMessage extends Message {
   role: "tool"
@@ -184,7 +184,9 @@ export interface ConfirmationRequestedPayload {
 }
 export interface ConfirmationResolvedPayload {
   confirmationId: string
-  approved: boolean
+  // 人工四选裁决（once 仅本次 / project 总是·项目 / global 总是·全局 / reject 拒绝），
+  // timeout 是无人裁决的竞速失败结果——循环侧产生，不经确认网关。
+  decision: "once" | "project" | "global" | "reject" | "timeout"
   by: "cli" | "web" | "timeout"
 }
 
@@ -236,7 +238,7 @@ export interface HookFailedPayload {
 
 `wire.ts` 定义 WS 的客户端→daemon 指令帧（`ClientCommand` 联合：auth / subscribe / unsubscribe / confirmation.resolve / send_message / queue.cancel / run.cancel / compaction.cancel）与 daemon→客户端的应答帧（各指令的 ack、`ErrorFrame`），合并为 `ServerFrame`；附件引用 `AttachmentRef{path,name,size,mimeType}` 与排队条目 `QueueEntry` 也在此（`session/store.ts` re-export 保持旧引用路径）。字段规则与报错文案不在类型里——它们的唯一实现是 server 的 `command-check.ts`（见 [realtime](../server/realtime.md)）。
 
-`session-events.ts` 定义会话事件流（`events.jsonl`，`GET /sessions/:id/events` 的返回形状）的九种事件类型：会话元数据五种（created/renamed/deleted/restored/set）+ `message` / `compaction` / `memory` / `system`。只放类型；运行时守卫（`isMessageEvent` 等）与 meta 投影（`applyEvent`）在 `session/events.ts`。
+`session-events.ts` 定义会话事件流（`events.jsonl`，`GET /sessions/:id/events` 的返回形状）的九种事件类型：会话元数据五种（created/renamed/deleted/restored/set）+ `message` / `compaction` / `memory` / `system`。`session.set` 携带元数据的增量补丁（`model` / `mode`（会话权限模式）/ `disposition`，键出现在补丁里才发）；旧会话流里的 `readonly` 布尔字段是 legacy，读取时映射为 `mode`。只放类型；运行时守卫（`isMessageEvent` 等）与 meta 投影（`applyEvent`）在 `session/events.ts`。
 
 ---
 
