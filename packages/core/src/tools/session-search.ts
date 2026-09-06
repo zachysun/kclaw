@@ -1,7 +1,7 @@
 // packages/core/src/tools/session-search.ts
 /**
  * Pure search over a session's event stream (replaces the SQLite
- * SegmentIndex, spec 6.4). The server reads events.jsonl via
+ * SegmentIndex). The server reads events.jsonl via
  * SessionStore.readEvents and hands the stream here; compaction events
  * carry the segment summaries, message events carry the original text.
  */

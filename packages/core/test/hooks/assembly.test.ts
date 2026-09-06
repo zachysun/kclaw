@@ -1,5 +1,5 @@
 /**
- * executeRun 与钩子系统的端到端（spec issue #6）：内置链照常工作、extraHooks /
+ * executeRun 与钩子系统的端到端：内置链照常工作、extraHooks /
  * HookRegistry 的用户条目在同一链上生效、fail-open 失败发 hook.failed 且不伤 run。
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest"

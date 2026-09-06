@@ -662,7 +662,7 @@ describe("RunManager.enqueue", () => {
   })
 
   it("cancel only aborts the ACTIVE run; a queued run survives and still executes (narrowed semantics)", async () => {
-    // spec §9: run.cancel 不再连带取消排队消息（旧 #cancelQueued 行为删除）——
+    // run.cancel 不再连带取消排队消息——
     // 第一个 cancel 中止活动 run；排队的 run 照常出队执行到 end_turn。
     const { env, manager } = makeEnv(scriptClient([textTurn("one"), textTurn("two")]))
     const session = env.sessions.create("排队会话")
@@ -870,7 +870,7 @@ function textTurnWithUsage(text: string, inputTokens: number): LlmStreamEvent[] 
   ]
 }
 
-describe("RunManager context compaction v3", () => {
+describe("RunManager context compaction", () => {
   it("sends over the yellow line with zero wait: run starts first, no compaction before run.started, full history", async () => {
     const reqs: LlmRequest[] = []
     const { env, manager } = makeEnv(
@@ -966,7 +966,7 @@ describe("RunManager context compaction v3", () => {
   })
 
   /**
-   * spec 5.4(v3):收尾压缩进行中 submit 第二条消息 → 进入队列,压缩完成后
+   * 收尾压缩进行中 submit 第二条消息 → 进入队列,压缩完成后
    * 才开跑。驱动器的串行化天然保证这一点——#execute 在收尾压缩上 await,
    * 驱动循环不会出队下一条,无需额外忙碌标记。
    */
@@ -1045,8 +1045,7 @@ describe("RunManager context compaction v3", () => {
 
     const meta = env.sessions.meta(session.id)
     expect(meta!.compaction!.top).toBe("总摘要N")
-    // legacy fields are no longer cleared by compaction (Task 5 removed the
-    // direct updateMeta write): they linger in meta but stay shadowed —
+    // legacy fields are no longer cleared by compaction: they linger in meta but stay shadowed —
     // prev reads meta.compaction first, so the next compaction seeds from
     // the compaction event, not these stale keys.
     expect(meta!.compactedSummary).toBe("旧总摘要")
@@ -1078,7 +1077,7 @@ describe("RunManager context compaction v3", () => {
       // Completed-must-arrive protocol (v3): a started is ALWAYS paired with a
       // completed — failure reports result "failed" with zeroed counters. The
       // failure logs once inside #compactV2 and once more in #runAutoCompaction
-      // (which swallows the throw: the hook path gets null, spec 5.8 no fallback).
+      // (which swallows the throw: the hook path gets null; no fallback).
       const events = received(socket)
       expect(events.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "post-run" }])
       const completed = events.find((e) => e.type === "compaction.completed")
@@ -1479,13 +1478,12 @@ describe("RunManager context compaction v3", () => {
   })
 })
 
-// --- v2 memory injection（Task 12）------------------------------------------
-// RunManagerDeps.memory 是 v2 MemorySystem：L2 cognition 拼进 system prompt
+// --- memory injection------------------------------------------
+// RunManagerDeps.memory 是 MemorySystem：L2 cognition 拼进 system prompt
 // （cognitionPrompt 为空/抛错则回落到纯 AGENTS.md），L1 情节以 memory note 注入
-// 用户消息（searchEpisodes 失败静默跳过）。四触发提取管线由 Task 13 装配，
-// end_turn 后不再有任何 v1 autoExtract。
+// 用户消息（searchEpisodes 失败静默跳过）。四触发提取管线由 daemon 装配。
 
-describe("RunManager v2 memory injection", () => {
+describe("RunManager memory injection", () => {
   it("injects L2 cognition into the system prompt and L1 episodes as memory notes", async () => {
     const fakeMemory = {
       cognitionPrompt: (wd: string) => "[关于用户]\nMaster 偏好中文。",

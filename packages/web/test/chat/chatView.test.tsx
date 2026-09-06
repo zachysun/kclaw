@@ -22,7 +22,7 @@ interface ViewOpts {
   onCancelCompaction?: () => void
   /** v3 压缩审计记录（GET /sessions/:id/compactions 的 UI 镜像）。 */
   compactions?: CompactionRecordView[] | null
-  /** 通知条与可点击动作（spec 9.1 memory.written 跳转）。 */
+  /** 通知条与可点击动作（memory.written 跳转）。 */
   notice?: string | null
   noticeAction?: (() => void) | null
 }
@@ -383,7 +383,7 @@ describe("compact context block", () => {
   })
 })
 
-describe("disposition trio and queued bubbles (spec §7.1)", () => {
+describe("disposition trio and queued bubbles ", () => {
   const userMsg = (id: string, text: string): Message => ({
     id,
     sessionId: "s1",
@@ -449,7 +449,7 @@ describe("disposition trio and queued bubbles (spec §7.1)", () => {
     h.unmount()
   })
 
-  it("interrupt row has no cancel button; wait/steer keep theirs (spec §5.6)", () => {
+  it("interrupt row has no cancel button; wait/steer keep theirs ", () => {
     const h = mountView([], {
       view: {
         queue: [
@@ -462,7 +462,7 @@ describe("disposition trio and queued bubbles (spec §7.1)", () => {
     })
     const row = (text: string): HTMLElement | undefined =>
       ([...h.container.querySelectorAll('[data-testid="queue-row"]')] as HTMLElement[]).find((r) => r.textContent?.includes(text))
-    // interrupt：入队即伴随 abort、紧接着出队执行（spec §5.6）——无可取消窗口。
+    // interrupt：入队即伴随 abort、紧接着出队执行——无可取消窗口。
     expect(row("插队消息")!.querySelector('[data-testid="queue-cancel"]')).toBeNull()
     expect(row("插队消息")!.textContent).toContain("中断")
     // wait / steer：取消按钮在。
@@ -479,7 +479,7 @@ describe("disposition trio and queued bubbles (spec §7.1)", () => {
   })
 })
 
-describe("clickable notice (spec 9.1 memory.written 跳转)", () => {
+describe("clickable notice (memory.written 跳转)", () => {
   it("renders a plain notice without an action", () => {
     const h = mountView([], { notice: "已写入记忆: /m/p.md" })
     const bar = h.container.querySelector('[data-testid="chat-notice"]')

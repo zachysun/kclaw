@@ -32,7 +32,7 @@ function makeSystem(over: Partial<Parameters<typeof MemorySystem.prototype.const
 }
 
 describe("cognitionPrompt (L2 常驻注入)", () => {
-  it("includes global + current-project files only, in the spec block order", () => {
+  it("includes global + current-project files only, in the fixed block order", () => {
     const sys = makeSystem()
     mkdirSync(join(root, "memory"), { recursive: true })
     // 直接用管理写入口布认知（也顺路测了写入口）
@@ -100,7 +100,7 @@ describe("migrateV1Notes", () => {
   })
 })
 
-describe("search preserves reconciled vectors (spec 7.2)", () => {
+describe("search preserves reconciled vectors ", () => {
   it("reindex during search does not wipe project vectors (dual-path fusion intact)", async () => {
     const meta = sessions.create("s", undefined, WORKDIR)
     sessions.appendMessage(meta.id, { id: "m1", sessionId: meta.id, role: "user", blocks: [{ id: "b", type: "text", text: "重连风暴修好了" }], createdAt: new Date().toISOString() })
@@ -127,7 +127,7 @@ describe("search preserves reconciled vectors (spec 7.2)", () => {
   })
 })
 
-describe("interval write backfills project vectors immediately (spec 7.2)", () => {
+describe("interval write backfills project vectors immediately ", () => {
   it("new episode written via triggerInterval has a vector without waiting for reconcile", async () => {
     const meta = sessions.create("s", undefined, WORKDIR)
     sessions.appendMessage(meta.id, { id: "m1", sessionId: meta.id, role: "user", blocks: [{ id: "b", type: "text", text: "重连风暴修好了" }], createdAt: new Date().toISOString() })
@@ -180,7 +180,7 @@ describe("searchAll", () => {
     expect(cognition?.scope).toBe("global")
   })
 
-  it("stop 只经 pipeline 一条链关闭索引：幂等，且关闭后检索懒重建仍可用（卡⑤）", async () => {
+  it("stop 只经 pipeline 一条链关闭索引：幂等，且关闭后检索懒重建仍可用", async () => {
     const sys = makeSystem()
     sys.writeCognition("rule", "general", "停机后重开仍要能查到这条规则")
     const before = await sys.searchAll("停机", 10)
@@ -192,7 +192,7 @@ describe("searchAll", () => {
   })
 })
 
-describe("memory events in session stream (Task 6)", () => {
+describe("memory events in session stream ", () => {
   it("triggerManual writes a memory event into the triggering session's stream", async () => {
     const meta = sessions.create("s", undefined, WORKDIR)
     sessions.appendMessage(meta.id, { id: "m1", sessionId: meta.id, role: "user", blocks: [{ id: "b", type: "text", text: "重连风暴修好了" }], createdAt: new Date().toISOString() })

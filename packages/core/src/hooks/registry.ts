@@ -1,5 +1,5 @@
 /**
- * HookRegistry — the durable user-hook bookkeeping (spec issue #6).
+ * HookRegistry — the durable user-hook bookkeeping.
  *
  * Lives at daemon scope (one per process), refreshed per run by the run
  * assembly ("放文件，下轮生效" — same mental model as the per-run skill

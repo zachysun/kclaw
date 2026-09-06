@@ -1,5 +1,5 @@
 /**
- * MemorySystem 定时/跟随触发 + 跟随门禁 + stop() 句柄释放（Task 13）。
+ * MemorySystem 定时/跟随触发 + 跟随门禁 + stop() 句柄释放。
  * 直通方法：triggerInterval/triggerFollow/markIntervalRun/intervalLastRun/
  * scheduleFollowCheck/clearFollowCheck/pendingFollowChecks/lastActivity/stop。
  */

@@ -1,5 +1,5 @@
 /**
- * RunManager 显式队列语义测试（spec §3.2/§3.4/§4.1/§5.2-§5.5）：空闲直发、
+ * RunManager 显式队列语义测试：空闲直发、
  * wait FIFO 与预分配消息 id、queue.jsonl 镜像、上限拒绝、enqueue 兼容、
  * cancel 语义收窄（仅中止活动 run）、interrupt 插队不吞消息、出队失败自愈
  * （条目退回重试不无声消失）与条目级失败可见性（queue_entry_failed）。
@@ -96,7 +96,7 @@ describe("submit / driver", () => {
     expect(sessions.readQueue(meta.id)).toHaveLength(0)
   })
 
-  it("queue cap 10 rejects with the spec message", async () => {
+  it("queue cap 10 rejects with the fixed error message", async () => {
     const meta = sessions.create("t", undefined, "/w")
     // 收集全部 outcome 并在断言后排空：测试结束时不得有仍在写的 run，
     // 否则与 afterEach 的 rmSync 竞争（updateMeta 抛错 → 驱动循环未处理拒绝）。
@@ -282,7 +282,7 @@ describe("steer", () => {
     gate.releaseTool()
     expect((await run.outcome).stopReason).toBe("error")
     gate.releaseLlm() // good 降级执行的 final stream 等这扇门
-    // 先构建后变更（spec §5.6）：bad 构建失败 → 整批不动、不登记 injected；
+    // 先构建后变更：bad 构建失败 → 整批不动、不登记 injected；
     // good 不被连带丢掉，随 #demoteSteer 降级仍被执行并进 JSONL
     const settleGood = async (): Promise<void> => {
       for (;;) {
@@ -320,7 +320,7 @@ describe("steer", () => {
     const s1 = mgr.submit(meta.id, { userText: "s1", trigger: "user", disposition: "steer" })
     const s2 = mgr.submit(meta.id, { userText: "s2", trigger: "user", disposition: "steer" })
     // run 在 abort 处结束、从未取走缓冲：结算后 #demoteSteer 是 s1/s2 的唯一执行
-    // 通道——按原顺序降级并入队尾执行（spec §3.4），而非边界注入（无 steered 事件）
+    // 通道——按原顺序降级并入队尾执行，而非边界注入（无 steered 事件）
     mgr.cancel(meta.id)
     gate.releaseLlm() // 丢弃的 call-2 生成器与降级 run 的流都等这扇门
     expect((await run.outcome).stopReason).toBe("aborted")

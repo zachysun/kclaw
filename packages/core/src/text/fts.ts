@@ -1,7 +1,7 @@
 // packages/core/src/text/fts.ts
 /**
  * CJK-aware tokenizer + FTS query assembly shared by the memory index and
- * the per-session compaction-segment index (spec 6.4.1).
+ * the per-session compaction-segment index.
  *
  * FTS5's default unicode61 tokenizer treats a contiguous CJK run
  * ("用户在上海工作") as one opaque token, so a query for "上海" would never

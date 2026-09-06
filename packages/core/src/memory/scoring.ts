@@ -4,7 +4,7 @@ export function normalizeFtsRank(rank: number): number {
   return 1 - 1 / (1 - rank)
 }
 
-/** 双路融合（spec 7.2，固定 0.5/0.5）：单边缺失降级为另一边，双边缺失 0。 */
+/** 双路融合（固定 0.5/0.5）：单边缺失降级为另一边，双边缺失 0。 */
 export function fusedScore(fts: number | undefined, vec: number | undefined): number {
   if (fts === undefined && vec === undefined) return 0
   if (fts === undefined) return vec!

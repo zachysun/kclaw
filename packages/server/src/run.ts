@@ -107,7 +107,7 @@ export interface RunManagerDeps {
   /** Daemon-level readonly flag (`--readonly`): all sessions start read-only. */
   readonly?: boolean
   /**
-   * User-hook registry (spec issue #6): refreshed per run by the engine and
+   * User-hook registry: refreshed per run by the engine and
    * snapshotted into every run's hook chain. Optional (tests without user
    * hooks omit it).
    */
@@ -122,11 +122,11 @@ export interface SubmitResult {
   messageId: string
   /** false = 空闲直发（现状行为：不广播 message.queued）。 */
   queued: boolean
-  /** 实际生效处置：steer 无活动 run 时降级为 wait（spec §4.2）。 */
+  /** 实际生效处置：steer 无活动 run 时降级为 wait。 */
   disposition: "steer" | "wait" | "interrupt"
   /**
    * wait/interrupt：本条 run 的 outcome；steer：随当前 run settle
-   * （参考值，ws 层 fire-and-forget，spec §3.3）。
+   * （参考值，ws 层 fire-and-forget）。
    */
   outcome: Promise<RunOutcome>
 }
@@ -136,7 +136,7 @@ export type { LlmRetrySink } from "@kclaw/core"
 
 /**
  * One in-memory queue node: the persisted entry plus its settle plumbing.
- * `entry` is what lands in queue.jsonl (spec §3.1)；outcome 在本条 run 结束时
+ * `entry` is what lands in queue.jsonl ；outcome 在本条 run 结束时
  * 以其 RunOutcome settle（wait/interrupt 为本条 run，steer 不建 node）。
  * `model` 是仅存于内存的入队时 per-run 覆盖（QueueEntry 不含 model，出队时
  * 在此还原——现状行为：job 的配置模型与调用方强制模型不因排队而丢失；
@@ -163,15 +163,15 @@ function makeNode(entry: QueueEntry): QueueNode {
 }
 
 export class RunManager {
-  /** 每会话排队 + steer 缓冲合计上限（spec §5.5）；先写死，不做配置项。 */
+  /** 每会话排队 + steer 缓冲合计上限；先写死，不做配置项。 */
   static readonly QUEUE_LIMIT = 10
 
   readonly #deps: RunManagerDeps
-  /** 每会话可执行条目（wait/interrupt），数组顺序即执行顺序（spec §3.2）。 */
+  /** 每会话可执行条目（wait/interrupt），数组顺序即执行顺序。 */
   readonly #queues = new Map<string, QueueNode[]>()
-  /** steer 缓冲（spec §3.4）：活动 run 在迭代边界取走（Task 5）；settle 后残余降级入队尾。 */
+  /** steer 缓冲：活动 run 在迭代边界取走；settle 后残余降级入队尾。 */
   readonly #steerBuf = new Map<string, QueueEntry[]>()
-  /** 每会话驱动循环（spec §5.4）；存在即该会话的队列由驱动器托管。 */
+  /** 每会话驱动循环；存在即该会话的队列由驱动器托管。 */
   readonly #drivers = new Map<string, Promise<void>>()
   /** Abort controller of the session's ACTIVE run; absent while idle or queued. */
   readonly #active = new Map<string, AbortController>()
@@ -206,7 +206,7 @@ export class RunManager {
   }
 
   /**
-   * 同步决策一条消息的去向（spec §4.1）：空闲直发；steer 且有活动 run →
+   * 同步决策一条消息的去向：空闲直发；steer 且有活动 run →
    * 入缓冲区；其余（wait/interrupt，以及无活动 run 的 steer 降级 wait）入队，
    * interrupt 伴随对活动 run 的 abort。立即返回消息身份与实际生效处置。
    */
@@ -214,7 +214,7 @@ export class RunManager {
     const { config, sessions, bus } = this.#deps
     const meta = sessions.meta(sessionId)
     if (meta === undefined) throw new Error("session not found")
-    // 处置解析链（spec §6）：显式 > 会话覆盖 > 配置默认；job 触发固定 wait（不读默认）
+    // 处置解析链：显式 > 会话覆盖 > 配置默认；job 触发固定 wait（不读默认）
     const disposition = input.trigger === "job"
       ? "wait"
       : input.disposition ?? meta.dispositionOverride ?? config.sessions.defaultDisposition ?? "steer"
@@ -232,7 +232,7 @@ export class RunManager {
       ...(input.note !== undefined ? { note: input.note } : {}),
       enqueuedAt: new Date().toISOString(),
     }
-    // 空闲 = 无活动 run、无可执行条目、无驱动器 → 直发开跑（spec §4.1：不广播 message.queued）
+    // 空闲 = 无活动 run、无可执行条目、无驱动器 → 直发开跑（不广播 message.queued）
     const idle = !this.#active.has(sessionId) && queue.length === 0 && !this.#drivers.has(sessionId)
     if (idle) {
       const node = makeNode(entry)
@@ -246,19 +246,19 @@ export class RunManager {
       this.#steerBuf.set(sessionId, steer)
       this.#persistQueue(sessionId)
       bus.emit(makeEvent("message.queued", { messageId: entry.messageId, disposition: "steer" }, { sessionId }))
-      // outcome：随当前 run settle（参考值；ws 层 fire-and-forget，spec §3.3）
+      // outcome：随当前 run settle（参考值；ws 层 fire-and-forget）
       const active = this.#activeOutcomes.get(sessionId)
         ?? Promise.resolve({ stopReason: "aborted", totalUsage: { inputTokens: 0, outputTokens: 0 }, messages: [] })
       return { messageId: entry.messageId, queued: true, disposition: "steer", outcome: active }
     }
-    // steer 但无活动 run（队列在转）：降级 wait 入队并报 wait（spec §4.2）
+    // steer 但无活动 run（队列在转）：降级 wait 入队并报 wait
     const effective = disposition === "steer" ? ("wait" as const) : disposition
     const atHead = effective === "interrupt"
     const node = makeNode({ ...entry, disposition: effective })
     if (input.model !== undefined) node.model = input.model // 内存还原用（现状行为）
     if (atHead) {
       queue.unshift(node)
-      if (this.#active.has(sessionId)) this.#active.get(sessionId)!.abort() // spec §5.3：中断伴随 abort
+      if (this.#active.has(sessionId)) this.#active.get(sessionId)!.abort() // 中断伴随 abort
     } else {
       queue.push(node)
     }
@@ -270,7 +270,7 @@ export class RunManager {
   }
 
   /**
-   * Queue one run on the session. 兼容包装 = submit().outcome（spec §3.3）：
+   * Queue one run on the session. 兼容包装 = submit().outcome：
    * Promise 仍是 ws 层 fire-and-forget 的返回值，但不再是排队载体——
    * wait/interrupt 随本条 run settle；steer 随当前 run settle（参考值）。
    */
@@ -279,7 +279,7 @@ export class RunManager {
   }
 
   /**
-   * 内存队列镜像（spec §3.2）：可执行条目 + steer 缓冲，数组顺序即执行
+   * 内存队列镜像：可执行条目 + steer 缓冲，数组顺序即执行
    * 顺序。与 queue.jsonl 同构，供队列查询/恢复使用。
    */
   queue(sessionId: string): QueueEntry[] {
@@ -287,9 +287,9 @@ export class RunManager {
   }
 
   /**
-   * 仅中止会话的活动 run（语义收窄，spec §5.4/§9）：它停在下一个检查点并
+   * 仅中止会话的活动 run（语义收窄）：它停在下一个检查点并
    * 以 stopReason "aborted" 结束。排队消息不受影响——排队取消一律走
-   * queue.cancel（Task 5）。无活动 run 时返回 false。
+   * queue.cancel。无活动 run 时返回 false。
    */
   cancel(sessionId: string): boolean {
     const controller = this.#active.get(sessionId)
@@ -299,7 +299,7 @@ export class RunManager {
   }
 
   /**
-   * 取消自动压缩（spec 5.3 第 6 条，Task 8 的 ws 层调用）：转发给 core 的
+   * 取消自动压缩（ws 层调用）：转发给 core 的
    * Compactor——abort 在飞的压缩 controller，同时写取消标记压制本次 run 内
    * 后续的中途/收尾压缩；标记在下一次 run 装配（core executeRun）开头清除。返回：调用时刻
    * 是否存在在飞的压缩（false = 没什么可掐，但标记仍写入）。
@@ -309,7 +309,7 @@ export class RunManager {
   }
 
   /**
-   * 排队取消（spec §5.6）：wait 随时、steer 注入前；已注入的不删（机器不删历史）。
+   * 排队取消：wait 随时、steer 注入前；已注入的不删（机器不删历史）。
    * 带 id：单条取消（先查可执行队列，再查 steer 缓冲；都不在且近期已注入 →
    * injected，进了 JSONL 机器不删）；不带 id：清空全部 wait + 未注入 steer，
    * 广播 message.queue_cancelled {all:true}。
@@ -353,8 +353,8 @@ export class RunManager {
   }
 
   /**
-   * Manual compaction (spec 6.5): runs #compactV2 with a focus, ignoring
-   * the trigger line. Both refusals (spec §5.7) are checked before any
+   * Manual compaction: runs #compactV2 with a focus, ignoring
+   * the trigger line. Both refusals are checked before any
    * compaction work, queue first: when an active run AND a backed-up queue
    * coexist, the queued-count message is the actionable one — "wait it out"
    * alone never unblocks a backed-up queue. Compaction reads full history
@@ -378,7 +378,7 @@ export class RunManager {
     }
   }
 
-  /** daemon 启动恢复（spec §5.5）：持久化队列整体重排，steer/interrupt 一律降级 wait。 */
+  /** daemon 启动恢复：持久化队列整体重排，steer/interrupt 一律降级 wait。 */
   recoverQueues(): void {
     for (const meta of this.#deps.sessions.list()) {
       const entries = this.#deps.sessions.readQueue(meta.id)
@@ -396,7 +396,7 @@ export class RunManager {
   }
 
   /**
-   * 每会话驱动循环（spec §5.4）：run settle → 残余 steer 降级并入队尾 →
+   * 每会话驱动循环：run settle → 残余 steer 降级并入队尾 →
    * 队列非空？出队执行 → 循环。已在转则幂等返回。
    *
    * 出队阶段的意外失败（#demoteSteer / 出队后的 #persistQueue 的 meta 写盘炸掉，如
@@ -458,7 +458,7 @@ export class RunManager {
     if (!stopped) this.#drivers.set(sessionId, loop)
   }
 
-  /** 残余 steer → wait 并入队尾（spec §3.4/§5.4），原顺序保持。 */
+  /** 残余 steer → wait 并入队尾，原顺序保持。 */
   #demoteSteer(sessionId: string): void {
     const buf = this.#steerBuf.get(sessionId)
     if (buf === undefined || buf.length === 0) return
@@ -490,7 +490,7 @@ export class RunManager {
    * The queue view (executable entries then steer buffer, in run order) —
    * the single expression both the in-memory mirror (`queue`) and the
    * queue.jsonl persistence (`#persistQueue`) derive from, so the two can
-   * never drift (spec §3.2).
+   * never drift.
    */
   #queueEntries(sessionId: string): QueueEntry[] {
     return [
@@ -499,13 +499,13 @@ export class RunManager {
     ]
   }
 
-  /** queue.jsonl = 可执行条目 + steer 缓冲，数组顺序即执行顺序（spec §3.2）；空数组写空文件。 */
+  /** queue.jsonl = 可执行条目 + steer 缓冲，数组顺序即执行顺序；空数组写空文件。 */
   #persistQueue(sessionId: string): void {
     this.#deps.sessions.replaceQueue(sessionId, this.#queueEntries(sessionId))
   }
 
   /**
-   * 执行一条出队条目（spec §5.2）：登记活动 controller（在任何 await 之前，
+   * 执行一条出队条目：登记活动 controller（在任何 await 之前，
    * 消除旧实现的取消注册窗口）、记录活动 outcome 供 steer 参考，结束后清理。
    * 入队时的 per-run model 覆盖从 node 还原（内存附加，见 QueueNode）。
    */
@@ -537,12 +537,12 @@ export class RunManager {
   }
 
   /**
-   * Steering drain（spec §5.1/§5.6）：活动 run 在迭代边界取走 steer 缓冲区里的
+   * Steering drain：活动 run 在迭代边界取走 steer 缓冲区里的
    * 全部消息注入对话。同步取走（先到先得，与 queueCancel 在同一线程内天然
    * 互斥）；返回按发送顺序构建的 user Message（id=entry.messageId；
    * blocks = text + attachments + note(job provenance)）。
    *
-   * 先构建后变更（spec §5.6 不变量：登记 injected = 确已进 JSONL，机器不删）：
+   * 先构建后变更（不变量：登记 injected = 确已进 JSONL，机器不删）：
    * mountAttachments 可失败（附件越界、steer 等待期间文件被删），故全部 Message
    * 先在局部构建，全部成功后才清空缓冲、移除 queue.jsonl 并登记 #injectedIds——
    * 任一构建失败即整体不动：条目留在缓冲区（可取消、可重试注入），异常抛给
@@ -566,7 +566,7 @@ export class RunManager {
     return msgs
   }
 
-  /** 已注入 id 的近期记录（有界），区分 injected 与 not_found（spec §5.6）。 */
+  /** 已注入 id 的近期记录（有界），区分 injected 与 not_found。 */
   readonly #injectedIds = new Set<string>()
 
   #markInjected(id: string): void {

@@ -10,7 +10,7 @@ export interface ThreadFile {
 
 const today = (): string => new Date().toISOString().slice(0, 10)
 
-/** 解析线文件（宽容原则，spec 2.2）；非线文件返回 undefined。 */
+/** 解析线文件（宽容原则）；非线文件返回 undefined。 */
 export function parseThreadFile(content: string): ThreadFile | undefined {
   const lines = content.split("\n")
   if (lines[0] !== "---") return undefined
@@ -50,7 +50,7 @@ export function renderThreadFile(tf: ThreadFile): string {
 }
 
 /**
- * 防覆盖写（spec 2.5）：永远读最新磁盘内容做基准 —— 人工改动因此先被重解析
+ * 防覆盖写：永远读最新磁盘内容做基准 —— 人工改动因此先被重解析
  * 再合并，永不静默丢失。文件不存在时用 create() 起稿；存在但不可解析（如
  * 人工手写无 frontmatter）时抛错、绝不覆盖，宁可不写也不丢数据。
  */
@@ -77,7 +77,7 @@ export function appendSection(tf: ThreadFile, section: ThreadSection): ThreadFil
   return { ...tf, sections: [...tf.sections, section], updated: today() }
 }
 
-/** 修正已有情节：就地改写该小节，不另开小节（spec 2.2）；找不到时退化为追加。 */
+/** 修正已有情节：就地改写该小节，不另开小节；找不到时退化为追加。 */
 export function updateSection(tf: ThreadFile, heading: string, newBody: string): ThreadFile {
   const idx = tf.sections.findIndex((s) => s.heading === heading)
   if (idx === -1) return appendSection(tf, { date: today(), heading, body: newBody })

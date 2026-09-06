@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply } from "fastify"
 import type { KclawConfig, MemoryAdmin, MemoryTriggers } from "@kclaw/core"
 
 const NOT_FOUND = { error: "not found" } as const
-/** spec 9.2：global 认知文件只认这 3 个 kind；其它一律 404。 */
+/** global 认知文件只认这 3 个 kind；其它一律 404。 */
 const KINDS = new Set(["persona", "wiki", "rule"])
 type CogKind = "persona" | "wiki" | "rule"
 
@@ -17,7 +17,7 @@ function requireContent(body: unknown): string | undefined {
   return typeof c === "string" && c !== "" ? c : undefined
 }
 
-/** spec 9.2 的 /memory 路由族：管理记忆塔（项目线文件 + global 认知文件）。 */
+/** /memory 路由族：管理记忆塔（项目线文件 + global 认知文件）。 */
 export function registerMemoryRoutes(app: FastifyInstance, opts: { memory?: MemoryAdmin & Pick<MemoryTriggers, "triggerManual">; config?: KclawConfig }): void {
   // 无 memory 装配（createApp 未传 system）时全部 503，不注册会崩的调用。
   const unavailable = (reply: FastifyReply) => reply.code(503).send({ error: "memory system unavailable" })
@@ -100,14 +100,14 @@ export function registerMemoryRoutes(app: FastifyInstance, opts: { memory?: Memo
     const { kind, file } = req.params as { kind: string; file: string }
     if (!isKind(kind)) return reply.code(404).send(NOT_FOUND)
     if (!isSafeSegment(file)) return badSegment(reply)
-    // persona 是全局画像，只能清空正文不能删文件（spec 9.2）。
+    // persona 是全局画像，只能清空正文不能删文件。
     if (kind === "persona") return reply.code(400).send({ error: "persona 不可删除（可清空正文）" })
     if (memory.cognitionContent(kind, file) === undefined) return reply.code(404).send(NOT_FOUND)
     memory.deleteCognition(kind, file)
     return { ok: true }
   })
 
-  // 手动写入入口（spec 4.2 手动行）：/memory save（CLI/Web）触发当前项目的
+  // 手动写入入口：/memory save（CLI/Web）触发当前项目的
   // L0→L1 提取，范围 = 该项目自上次水位以来的新消息（与定时/跟随同一条管线）。
   app.post("/memory/trigger-manual", async (req, reply) => {
     if (memory === undefined) return unavailable(reply)
@@ -120,7 +120,7 @@ export function registerMemoryRoutes(app: FastifyInstance, opts: { memory?: Memo
       typeof body === "object" && body !== null && typeof body.workdir === "string" && body.workdir !== ""
         ? body.workdir
         : undefined
-    // 可选归属会话（Task 7）：触发方（CLI/Web）可指定本次手动写入挂到哪个会话；
+    // 可选归属会话：触发方（CLI/Web）可指定本次手动写入挂到哪个会话；
     // 缺省回落由 core #recentSessionId 决定。trim 后为空视为缺省（纯空白不会生成幻影会话）。
     const sessionId =
       typeof body === "object" && body !== null && typeof body.sessionId === "string" && body.sessionId.trim() !== ""

@@ -177,7 +177,7 @@ async function mount(
     compactionsFail?: boolean
     /** GET /skills fixture (dynamic slash commands). */
     skills?: Array<{ name: string; description: string; origin: string; visibility: string }>
-    /** memory.written 通知条点击的回调（spec 9.1 跳转）。 */
+    /** memory.written 通知条点击的回调。 */
     onOpenMemoryWritten?: (info: MemoryWrittenInfo) => void
   } = {},
 ): Promise<Harness> {
@@ -269,12 +269,12 @@ describe("ChatPanel", () => {
     await drive(() => {
       pushFrame(h.sockets[0]!, ev("memory.written", { path: "persona.md", kind: "persona", scope: "global" }))
     })
-    // 落盘反馈走 ChatView 的一次性 notice（spec 9.3 写入通知）。
+    // 落盘反馈走 ChatView 的一次性 notice（写入通知）。
     expect(h.container.querySelector('[data-testid="chat-notice"]')!.textContent).toContain("已写入记忆: persona.md")
     h.unmount()
   })
 
-  it("clicks the memory.written notice to open the written memory (spec 9.1 跳转)", async () => {
+  it("clicks the memory.written notice to open the written memory", async () => {
     const onOpenMemoryWritten = vi.fn()
     const h = await mount({ onOpenMemoryWritten })
     await drive(() => {
@@ -851,8 +851,7 @@ describe("ChatPanel", () => {
   })
 
   it("interrupt is one-shot: no sticky override, sends with interrupt, then the trio resets", async () => {
-    // 初始 meta 无覆盖、config defaultDisposition "steer"（spec §7.1 改版，
-    // Master 2026-08-31：中断不再 sticky，发完切回基础处置）。
+    // 初始 meta 无覆盖、config defaultDisposition "steer"（中断不再 sticky，发完切回基础处置）。
     const h = await mount({ meta: {}, config: { sessions: { defaultDisposition: "steer" } } })
     await drive(() => {
       pushFrame(h.sockets[0]!, ev("run.started", { trigger: "user" }))

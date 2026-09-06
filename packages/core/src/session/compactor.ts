@@ -1,5 +1,5 @@
 /**
- * Compactor — the v2/v3 layered-compaction orchestration (spec 6, 5.3/5.6/5.8).
+ * Compactor — the v2/v3 layered-compaction orchestration { 5.3/5.6/5.8).
  *
  * The PURE parts live in session/compaction.ts (estimateContextTokens,
  * chooseBoundary, emergencyBoundary, renderSegment); this class owns the line
@@ -23,11 +23,11 @@ import type { ActiveSummary, CompactionState } from "./compaction.js"
 import { chooseBoundary, emergencyBoundary, estimateContextTokens, renderSegment } from "./compaction.js"
 import type { SessionStore } from "./store.js"
 
-/** Segment summarizer prompt (spec 6.2.2, verbatim-pinned). */
+/** Segment summarizer prompt { verbatim-pinned). */
 export const SEGMENT_SUMMARY_PROMPT =
   "你是对话摘要器。把给定的一段对话（可能包含工具调用与结果）压缩为不超过800字的中文摘要，使用以下固定五个二级标题的 markdown 结构：## 关键事实、## 用户偏好与约定、## 已做决定、## 未完成事项、## 文件与命令。\"文件与命令\"一栏只记路径或命令加一句话要点，不要复制文件内容。同一栏目内每条一行。直接输出摘要正文，不要任何前后缀。"
 
-/** Top-summary merge prompt (spec 6.2.3, verbatim-pinned). */
+/** Top-summary merge prompt { verbatim-pinned). */
 export const MERGE_SUMMARY_PROMPT =
   "你是对话摘要归并器。输入是旧的总摘要和一个新的段摘要，两者都是同样五栏结构的 markdown。把它们归并为一份新的总摘要：保持同样的五个二级标题；同一栏目内合并去重；同一事项有先后版本时保留新版本，并注明被推翻的旧版本；总长不超过800字。直接输出摘要正文，不要任何前后缀。"
 
@@ -44,7 +44,7 @@ export interface CompactorDeps {
 export class Compactor {
   readonly #deps: CompactorDeps
   /**
-   * 每会话压缩取消标记（spec 5.3 第 6 条）：cancel() 写入，压制本次运行内的
+   * 每会话压缩取消标记：cancel() 写入，压制本次运行内的
    * 全部自动压缩（中途/收尾）；每次 run 开头 clearCancelled——取消只作用于
    * 当时那次运行，新运行从干净状态恢复。
    */
@@ -57,7 +57,7 @@ export class Compactor {
   }
 
   /**
-   * 取消自动压缩（spec 5.3 第 6 条）：abort 在飞的压缩 controller（compact 的
+   * 取消自动压缩：abort 在飞的压缩 controller（compact 的
    * 取消分支吞掉中止，发 completed result:"cancelled"），同时写取消标记——
    * 本次 run 内后续的中途/收尾压缩钩子据此直接跳过；标记在下一次 run 开头
    * 清除，新运行恢复正常压缩。返回：调用时刻是否存在在飞的压缩（false =
@@ -82,7 +82,7 @@ export class Compactor {
   }
 
   /**
-   * 自动压缩装配（v3,spec 5.3/5.6/5.8）:中途钩子、超限钩子与收尾压缩共用。
+   * 自动压缩装配：中途钩子、超限钩子与收尾压缩共用。
    * 独立 AbortController 登记 #inFlight（cancel 掐它），并监听
    * run 的 signal——run 中止顺带掐压缩;finally 清理。取消标记或 run signal 已
    * 中止时不开工（三路统一入口,manual 路径不经此——emergency 因此永远不会与
@@ -123,7 +123,7 @@ export class Compactor {
   }
 
   /**
-   * v2 layered compaction (spec 6). Trigger: estimate ≥ budget×ratio, or a
+   * layered compaction. Trigger: estimate ≥ budget×ratio, or a
    * manual focus. Two tool-less LLM calls (segment summary, top merge), then
    * ONE meta write — no state lands unless both calls succeed, so a throw
    * anywhere equals "compaction did not happen" and the caller falls back to
@@ -163,7 +163,7 @@ export class Compactor {
     const targetRatio = config.sessions.compactTargetRatio ?? 0.33
     const manual = opts.manual === true
     const emergency = opts.emergency === true
-    // 急救豁免黄线细判（spec 5.6）：溢出发生时"已经爆了"就是事实——尤其压缩后
+    // 急救豁免黄线细判：溢出发生时"已经爆了"就是事实——尤其压缩后
     // 首请求里 active 没有 assistant 锚点，system/工具定义开销全漏计，估算会明显
     // 偏低，按黄线拦截会静默放弃急救、run 直接以 error 收场。急救只跳过触发判断，
     // 后续流程（两次摘要调用、meta 写入、审计、事件）与普通压缩完全一致。

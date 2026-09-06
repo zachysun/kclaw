@@ -25,7 +25,7 @@ export interface MemoryProjectInfo { id: string; workdir: string; threads: numbe
 export interface CognitionFileInfo { kind: "persona" | "wiki" | "rule"; name: string; path: string; scope: string; updated: string }
 
 /**
- * 消费者窄接口（卡⑤）：MemorySystem 的 30 个方法按四拨消费方分面。类不拆、
+ * 消费者窄接口：MemorySystem 的 30 个方法按四拨消费方分面。类不拆、
  * 公共 API 不删改——接口只是每个消费方该看到的方法子集，调用方按面声明依赖，
  * 编译器挡住越界使用（如路由碰触发器、调度器碰管理面）。
  */
@@ -75,7 +75,7 @@ export interface MemoryAdmin {
   deleteCognition(kind: CogKind, name: string): void
 }
 
-/** 超预算保留优先级（spec 7.1）：规则漏了会出错 > 画像缺一段 > wiki 少一块。 */
+/** 超预算保留优先级：规则漏了会出错 > 画像缺一段 > wiki 少一块。 */
 const L2_PRIORITY: Array<CogKind> = ["rule", "persona", "wiki"]
 const FTS_RECALL = 50
 
@@ -109,7 +109,7 @@ interface CogFile { kind: CogKind; name: string; title: string; body: string; sc
 interface ScoredHit { key: string; topic: string; title: string; date: string; text: string; score: number }
 
 /**
- * MemorySystem —— 记忆系统 v2 的唯一 server 侧门面。装配 L1 情节管线 + L2 认知库，
+ * MemorySystem —— 记忆系统的唯一 server 侧门面。装配 L1 情节管线 + L2 认知库，
  * 方法面按四拨消费方分面（MemoryQuery / MemoryTriggers / MemoryScheduleBook /
  * MemoryAdmin，卡⑤）；对账迁移（reconcile / migrateV1Notes）与停机（stop）只归 daemon。
  */
@@ -122,7 +122,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
   readonly #emit?: (e: MemoryWrittenEvent) => void
   readonly #log: (m: string) => void
   readonly #now: () => Date
-  /** 记忆落盘通知（Task 6）：接成会话事件流 appendEvent；sessionId 缺失时跳过（无处可挂）。 */
+  /** 记忆落盘通知：接成会话事件流 appendEvent；sessionId 缺失时跳过（无处可挂）。 */
   readonly #audit: (e: MemoryAudit) => void
   readonly #pipeline: MemoryPipeline
 
@@ -130,7 +130,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     memoryDir: string
     sessions: SessionStore
     config: KclawConfig
-    /** 每次触发时解析提取模型用的 llm 与 model（回落主模型，spec 4.3）。 */
+    /** 每次触发时解析提取模型用的 llm 与 model（回落主模型）。 */
     resolveLlm: () => { llm: LlmClient; model: string }
     /** embedding 客户端（判定链通过时由装配方构造注入；缺省 = 向量路关闭）。 */
     embed?: EmbeddingClient
@@ -156,7 +156,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     }
     this.#pipeline = new MemoryPipeline(opts.memoryDir, opts.sessions, {
       resolveLlm: () => {
-        // extractModel 回落主模型的解析集中在这里，resolveLlm 只调一次（spec 4.3）
+        // extractModel 回落主模型的解析集中在这里，resolveLlm 只调一次
         const { llm, model } = this.#resolveLlm()
         return { llm, model: this.#config.memory.extractModel || model }
       },
@@ -169,7 +169,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
   // ---- 注入与检索（run.ts 消费） ----
 
   /**
-   * L2 常驻注入（spec 7.1）：scope 过滤（global + 当前项目）+ token 预算 +
+   * L2 常驻注入：scope 过滤（global + 当前项目）+ token 预算 +
    * rule>persona>wiki 整文件取舍（装不下整文件跳过并 log，不截断）；空认知/异常返回 ""。
    * 块序：[关于用户] → [项目认知] → [通用规则]。
    */
@@ -192,7 +192,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
       for (const f of readDirSafe(join(globalDir, "rule"))) if (f.endsWith(".md")) addFile(join(globalDir, "rule", f), "rule", f.slice(0, -3))
       if (files.length === 0) return ""
 
-      // 预算取舍（spec 7.1）：按 rule > persona > wiki 优先级逐文件记账，超预算整文件跳过
+      // 预算取舍：按 rule > persona > wiki 优先级逐文件记账，超预算整文件跳过
       const kept: CogFile[] = []
       let used = 0
       for (const kind of L2_PRIORITY) {
@@ -208,7 +208,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
         }
       }
 
-      // 块序按 spec 7.1 的图：[关于用户] → [项目认知] → [通用规则]
+      // 块序固定：[关于用户] → [项目认知] → [通用规则]
       const renderBlock = (block: string, group: CogFile[]): string => {
         if (group.length === 0) return ""
         return `${block}\n\n${group.map((f) => `## ${f.title}\n\n${f.body}`).join("\n\n")}`
@@ -228,7 +228,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
   }
 
   /**
-   * 混合打分（spec 7.2）：FTS 归一化 + 向量余弦（#embed 存在时）融合（0.5/0.5），
+   * 混合打分：FTS 归一化 + 向量余弦（#embed 存在时）融合（0.5/0.5），
    * 乘时效因子，按分降序取 limit；单边缺失降级，全部不抛错。
    */
   async #scoreIndex(idx: VectorIndex, query: string, limit: number, now: Date): Promise<ScoredHit[]> {
@@ -268,7 +268,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     return byDate.find((s) => s.body === fallback)?.body ?? byDate[0]!.body
   }
 
-  /** L1 混合检索（spec 7.2）：当前项目情节 top-N，正文从线文件回读；注入格式由调用方拼。 */
+  /** L1 混合检索：当前项目情节 top-N，正文从线文件回读；注入格式由调用方拼。 */
   async searchEpisodes(workdir: string, query: string, limit = 5): Promise<EpisodeHit[]> {
     const { id } = this.#layout.resolveProject(workdir)
     if (!existsSync(this.#layout.projectDir(id))) return [] // 项目尚无记忆：不建目录
@@ -329,18 +329,18 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
 
   // ---- 触发入口（工具/调度器消费） ----
 
-  /** 项目最近活动会话（interval/admin-threads 无显式归属时的回落目标，Task 6）。 */
+  /** 项目最近活动会话（interval/admin-threads 无显式归属时的回落目标）。 */
   #recentSessionId(workdir: string): string | undefined {
     return this.#sessions.list().filter((m) => (m.workdir ?? "") === workdir)
       .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))[0]?.id
   }
 
-  /** 全局最近活动会话（global 认知 admin 事件归属，Task 6）。 */
+  /** 全局最近活动会话（global 认知 admin 事件归属）。 */
   #recentGlobalSessionId(): string | undefined {
     return this.#sessions.list()[0]?.id
   }
 
-  /** 立刻写入（memory_save 工具，spec 7.3）：增量提取自最近水位的消息（水位推进两路）。
+  /** 立刻写入（memory_save 工具）：增量提取自最近水位的消息（水位推进两路）。
    *  返回是否真的执行了提取（false = 该会话无增量），工具据此给不误导的回复。 */
   async triggerImmediate(sessionId: string): Promise<boolean> {
     const meta = this.#sessions.meta(sessionId)
@@ -348,7 +348,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     return (await this.#pipeline.runTrigger(workdir, "immediate", sessionId)) > 0
   }
 
-  /** 手动写入（/memory save，spec 4.2 手动行）：默认当前项目。 */
+  /** 手动写入（/memory save）：默认当前项目。 */
   async triggerManual(workdir: string, sessionId?: string): Promise<void> {
     await this.#pipeline.runTrigger(workdir, "manual", sessionId ?? this.#recentSessionId(workdir))
   }
@@ -368,15 +368,15 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     await this.#pipeline.consolidate(workdir, topic)
   }
 
-  // ---- 定时/跟随触发与跟随门禁（Task 13 scheduler / run.ts 消费） ----
+  // ---- 定时/跟随触发与跟随门禁（scheduler / run.ts 消费） ----
 
-  /** 定时触发（scheduler interval 兜底，spec 4.2）：无显式归属会话，pipeline 对
+  /** 定时触发（scheduler interval 兜底）：无显式归属会话，pipeline 对
    *  该项目全部会话逐个补增量（每会话各一本水位，谁的增量归谁的批次）。 */
   async triggerInterval(workdir: string): Promise<void> {
     await this.#pipeline.runTrigger(workdir, "interval")
   }
 
-  /** 跟随触发（scheduler 对挂起检查补查，spec 4.2/11）。 */
+  /** 跟随触发（scheduler 对挂起检查补查）。 */
   async triggerFollow(workdir: string, sessionId?: string): Promise<void> {
     await this.#pipeline.runTrigger(workdir, "follow", sessionId ?? this.#recentSessionId(workdir))
   }
@@ -389,7 +389,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
   // ---- 调度簿记（scheduler 消费） ----
 
   /**
-   * 账本唯一入口（卡⑤）：state.json 的全部读写收口到这里，两条通道。
+   * 账本唯一入口：state.json 的全部读写收口到这里，两条通道。
    * 每次现开现读（WriteLedger 写时整文件原子重写，长命实例会覆盖别人的
    * 写入）——禁止在调用间缓存实例。
    */
@@ -426,8 +426,8 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
   }
 
   /**
-   * 跟随门禁挂起检查（spec 4.2）：run 收尾（任何 stopReason）时经 WriteLedger
-   * 落盘 <projectDir>/state.json（spec 11），daemon 重启后 scheduler 补查。
+   * 跟随门禁挂起检查：run 收尾（任何 stopReason）时经 WriteLedger
+   * 落盘 <projectDir>/state.json，daemon 重启后 scheduler 补查。
    */
   scheduleFollowCheck(sessionId: string, endTurnAt: string): void {
     const meta = this.#sessions.meta(sessionId)
@@ -442,14 +442,14 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     new WriteLedger(path).clearFollowCheck(sessionId)
   }
 
-  /** 某项目的全部挂起检查（含 daemon 重启恢复，spec 11）。 */
+  /** 某项目的全部挂起检查（含 daemon 重启恢复）。 */
   pendingFollowChecks(workdir: string): Array<{ sessionId: string; endTurnAt: string }> {
     const path = this.#ledgerPath(workdir)
     if (!existsSync(path)) return []
     return new WriteLedger(path).pendingFollowChecks()
   }
 
-  /** 项目全部会话 meta 的最大 updatedAt（scheduler 判跟随门禁的"新活动"，spec 4.2）。 */
+  /** 项目全部会话 meta 的最大 updatedAt（scheduler 判跟随门禁的"新活动"）。 */
   lastActivity(workdir: string): string {
     let max = ""
     for (const m of this.#sessions.list()) {
@@ -460,7 +460,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
 
   /**
    * 停机（daemon stop 序列调用）：索引连接的唯一所有者是 pipeline，这里只经
-   * 它统一关闭（卡⑤后不再有第二份连接缓存）。
+   * 它统一关闭（不再有第二份连接缓存）。
    */
   async stop(): Promise<void> {
     this.#pipeline.close()
@@ -468,7 +468,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
 
   // ---- 对账与迁移（daemon 消费） ----
 
-  /** 全部项目库 + 全局库对账 + 向量补算（spec 2.5）；异常逐目录 log 跳过。 */
+  /** 全部项目库 + 全局库对账 + 向量补算；异常逐目录 log 跳过。 */
   reconcile(): void {
     for (const id of this.#layout.listProjectIds()) {
       try {
@@ -485,7 +485,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     }
   }
 
-  /** 旧 notes 三路分流（spec 2.6），幂等：偏好→persona、规则→rule/general、其余→wiki/misc；迁移后删 notes/。 */
+  /** 旧 notes 三路分流，幂等：偏好→persona、规则→rule/general、其余→wiki/misc；迁移后删 notes/。 */
   migrateV1Notes(notesDir: string): void {
     if (!existsSync(notesDir)) return
     const files = readDirSafe(notesDir).filter((f) => f.endsWith(".md"))
@@ -496,7 +496,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     const today = todayOf(this.#now())
     const appendTo = (kind: CogKind, name: string, text: string): void => {
       // create 回调返回空 body：writeCognitionFile 对新建文件执行 mutate(create())，
-      // append 分支统一在 mutate 里拼文本，避免首条重复（Task 9 同款修复）
+      // append 分支统一在 mutate 里拼文本，避免首条重复
       writeCognitionFile(cognitionPath(globalDir, kind, name), kind, name,
         (cf) => ({ ...cf, body: `${cf.body}${cf.body === "" ? "" : "\n\n"}${text}`, updated: today }),
         () => ({ kind, name, title: name, scope: "global", created: today, updated: today, body: "" }))
@@ -596,7 +596,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     writeCognitionFile(cognitionPath(this.#layout.globalDir, kind, name), kind, name,
       (cf) => ({ ...cf, body: content, updated: today }),
       () => ({ kind, name, title: name, scope: "global", created: today, updated: today, body: content }))
-    // 与 writeThread 对齐：写后立即重建全局索引，检索无需等下次对账（spec 2.5）。
+    // 与 writeThread 对齐：写后立即重建全局索引，检索无需等下次对账。
     void this.#pipeline.reindexGlobal().catch((err) => this.#log(`kclaw memory writeCognition reindex failed: ${String(err)}`))
     this.#audit({ trigger: "admin", kind: "cognition", op: "overwrite", file: `${kind}/${name}`, sessionId: this.#recentGlobalSessionId() })
   }

@@ -40,7 +40,7 @@ export interface SlashCtx {
   /**
    * Interrupt-send a message: one `send_message` carrying the `interrupt`
    * disposition (the daemon drops the active run and queues this at the
-   * head). The `/interrupt` command (Task 9) expands into this.
+   * head). The `/interrupt` command expands into this.
    */
   sendInterrupt(text: string): void
   /** Convenience read of GET /queue (numbered listing / queued-count checks). */
@@ -352,7 +352,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
     async run(args, ctx) {
       const text = args.trim()
       if (text === "") {
-        // 无参形式不需要：纯中断有 Ctrl+C（spec §7.2，一次性动作不是模式）。
+        // 无参形式不需要：纯中断有 Ctrl+C（一次性动作不是模式）。
         ctx.print("用法：/interrupt <消息> —— 掐掉当前 run，这条消息下一个执行（纯中断用 Ctrl+C）")
         return
       }
@@ -392,7 +392,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
     async run(args, ctx) {
       const parts = args.trim().split(/\s+/).filter(Boolean)
       try {
-        // /memory save — 手动触发当前项目的手动写入（spec 4.2 手动行）。
+        // /memory save — 手动触发当前项目的手动写入。
         // 当前项目 = CLI 启动目录（会话建在该目录，workdir 与 cwd 一致）。
         if (parts[0] === "save") {
           await ctx.client.request("POST", "/memory/trigger-manual", { workdir: process.cwd() })

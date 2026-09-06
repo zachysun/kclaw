@@ -7,7 +7,7 @@
  * a drainSteer callback (the steer buffer is queue state, so it stays with
  * the queue).
  *
- * Hook system (spec issue #6): every formerly-hardcoded behavior seam of the
+ * Hook system: every formerly-hardcoded behavior seam of the
  * run (memory notes, user-message persistence, autoname, skill wrapping,
  * retry visibility, steering drain, compaction decisions, the finalize trio,
  * system-prompt assembly + audit) now registers through the SAME HookChain
@@ -100,7 +100,7 @@ export interface EnqueueInput {
    * note block right after the text block on the user message.
    */
   note?: string
-  /** 单次显式处置（spec §6 层级最高）；缺省 = 会话覆盖 ?? 配置默认；job 触发强制 wait。 */
+  /** 单次显式处置（层级最高）；缺省 = 会话覆盖 ?? 配置默认；job 触发强制 wait。 */
   disposition?: "steer" | "wait" | "interrupt"
   /** 内部：出队执行时传入的预分配消息 id（ws 层不传）。 */
   messageId?: string
@@ -167,7 +167,7 @@ export interface RunEngineDeps {
   /** Daemon-level readonly flag (`--readonly`): all sessions start read-only. */
   readonly?: boolean
   /**
-   * User hook registry (spec issue #6): the daemon-scoped bookkeeping for
+   * User hook registry: the daemon-scoped bookkeeping for
    * ~/.kclaw/hooks files. Refreshed per run; its snapshot joins the run's
    * hook chain. Optional (tests without user hooks omit it).
    */
@@ -187,7 +187,7 @@ export interface RunHandoff {
   /** The run's abort controller, registered by the queue BEFORE any await. */
   controller: AbortController
   /**
-   * Steer injection (spec §5.1): the queue owns the steer buffer; the loop
+   * Steer injection: the queue owns the steer buffer; the loop
    * drains it at iteration boundaries through this callback.
    */
   drainSteer: () => Message[]
@@ -236,7 +236,7 @@ export function mountAttachments(refs: AttachmentRef[], attachmentsDir: string, 
  */
 export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promise<RunOutcome> {
   const { sessionId, input, controller } = handoff
-  // 压缩取消标记只压制一次运行（spec 5.3 第 6 条）：新运行从干净状态开始。
+  // 压缩取消标记只压制一次运行：新运行从干净状态开始。
   engine.compactor.clearCancelled(sessionId)
   const { config, paths, sessions, memory, bus } = engine.deps
   const sessionMeta = sessions.meta(sessionId)
@@ -281,7 +281,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     { id: newBlockId(), type: "text", text: input.userText },
     ...mountAttachments(input.attachments ?? [], paths.attachmentsDir, sessionId),
   ])
-  if (input.messageId !== undefined) userMessage.id = input.messageId // 气泡原地升级（spec §3.1）
+  if (input.messageId !== undefined) userMessage.id = input.messageId // 气泡原地升级
 
   // 技能目录每 run 重扫（渐进披露第一层）：全局 + 会话工作目录的项目级，
   // 项目同名整目录覆盖。列表段追加进系统提示词，与 system 审计事件同文；
@@ -458,7 +458,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   chain.registerAll(engine.deps.hooks?.snapshot() ?? [])
   if (engine.deps.extraHooks !== undefined) chain.registerAll(engine.deps.extraHooks)
 
-  // 系统提示词（hook 化的组装，spec issue #6）：AGENTS.md 基座 →
+  // 系统提示词（hook 化的组装）：AGENTS.md 基座 →
   // system-before 链追加段落（内置 system-materials：认知 + 技能列表）→
   // system-after 链（用户可改终稿；内置 system-audit fatal 全量留痕，排在其
   // 后——审计永远记录模型实际看到的那份）。写失败即本次 run 失败，由驱动器
@@ -507,7 +507,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   )
   // run-after 链：用量台账（skip）→ 收尾压缩（fatal：与迁移前一致，压缩失败
   // 传播为条目级失败）→ 跟随门禁（skip）。串行化保证收尾压缩期间新消息排队
-  // （spec 5.4），无需额外忙碌标记。
+  // 无需额外忙碌标记。
   await chain.run("run-after", {
     outcome: {
       stopReason: outcome.stopReason,
@@ -519,7 +519,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
 }
 
 /**
- * Lazy per-run session_search backing (spec 6.4): reads the session's
+ * Lazy per-run session_search backing: reads the session's
  * event stream on each call and scans its compacted segments via the pure
  * searchSessionEvents. Legacy-upgrade sessions have no compaction events
  * yet → always "(无可检索内容)" until the first v2 compaction.

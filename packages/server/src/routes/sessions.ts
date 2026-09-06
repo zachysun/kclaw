@@ -150,7 +150,7 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       return stores.sessions.readEvents(id)
     })
 
-    // Compaction audit log (spec 6A.2): read-only view over compaction events.
+    // Compaction audit log: read-only view over compaction events.
     scope.get("/sessions/:id/compactions", async (request, reply) => {
       const { id } = request.params as { id: string }
       if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
@@ -166,8 +166,8 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       return stores.sessions.meta(id)
     })
 
-    // Manual compaction (spec 6.5): optional { focus } body. compactSession's
-    // two busy refusals (running / non-empty queue, spec §5.7) both map to
+    // Manual compaction: optional { focus } body. compactSession's
+    // two busy refusals (running / non-empty queue) both map to
     // 409, its missing-session error to 404; anything else is a 500 with the
     // error message.
     scope.post("/sessions/:id/compact", async (request, reply) => {
@@ -190,14 +190,14 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       }
     })
 
-    // 排队消息快照（message-queue spec §4.3）：重连/刷新的全量纠偏兜底。
+    // 排队消息快照：重连/刷新的全量纠偏兜底。
     scope.get("/sessions/:id/queue", async (request, reply) => {
       const { id } = request.params as { id: string }
       if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
       return stores.sessions.readQueue(id)
     })
 
-    // 会话级处置覆盖（/steer /wait 与 Web 三选的 sticky 存储，spec §6）。
+    // 会话级处置覆盖（/steer /wait 与 Web 三选的 sticky 存储）。
     scope.post("/sessions/:id/disposition", async (request, reply) => {
       const { id } = request.params as { id: string }
       if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)

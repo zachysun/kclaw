@@ -105,7 +105,7 @@ describe("POST /sessions/:id/compact", () => {
   })
 
   it("maps both refusal messages to 409", async () => {
-    // fake compactSession 依次 reject 两种拒绝文案（spec §5.7），断言均映射 409 且原文案透传
+    // fake compactSession 依次 reject 两种拒绝文案，断言均映射 409 且原文案透传
     const s = sessions.create("双拒会话")
     for (const message of ["会话正在运行，等它结束", "还有 2 条排队消息，先处理或取消"]) {
       compactResult = new Error(message)

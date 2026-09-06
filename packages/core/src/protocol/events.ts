@@ -23,7 +23,7 @@ export type EventType =
   | "note.emitted"
   // 记忆写入（项目级事务，广播，不带 sessionId）
   | "memory.written"
-  // 消息排队与引导（message-queue spec §4.2）
+  // 消息排队与引导
   | "message.queued" | "message.steered" | "message.queue_cancelled"
   // 上下文压缩（运行前的预压缩过程，早于 run.started）
   | "compaction.started" | "compaction.completed"
@@ -62,12 +62,12 @@ export interface ConfirmationResolvedPayload {
 
 export interface NoteEmittedPayload { messageId: string; block: NoteBlock }
 
-/** 记忆 v2 写入广播（spec 9.2）：项目级事务，不携带 sessionId（跨项目/定时路径无会话归属）。 */
+/** 记忆写入广播：项目级事务，不携带 sessionId（跨项目/定时路径无会话归属）。 */
 export interface MemoryWrittenPayload { path: string; kind: "episode" | "cognition"; topic?: string; scope?: string }
 
 export interface MessageQueuedPayload {
   messageId: string
-  disposition: "steer" | "wait" | "interrupt"  // 按实际处置报告：空闲降级入队后报 wait（spec §4.2）
+  disposition: "steer" | "wait" | "interrupt"  // 按实际处置报告：空闲降级入队后报 wait
   position?: number                            // wait/interrupt 在队列中的序位；steer 不适用
 }
 export interface MessageSteeredPayload { messageId: string } // 事件级 runId 标识注入的 run
@@ -80,7 +80,7 @@ export interface CompactionStartedPayload { phase: CompactionPhase }
 /** 压缩结束（每次 started 必有配对 completed）：新累计段数与压缩后保留的原文消息条数；非 ok 时 segments/kept 为 0。 */
 export interface CompactionCompletedPayload { segments: number; kept: number; phase: CompactionPhase; result: "ok" | "failed" | "cancelled" }
 
-/** hook 系统（spec issue #6）：一个用户 hook 的装载或执行失败。 */
+/** hook 系统：一个用户 hook 的装载或执行失败。 */
 export interface HookFailedPayload { hook: string; position: string; error: string; phase: "load" | "run" }
 
 export type EventPayloadMap = {

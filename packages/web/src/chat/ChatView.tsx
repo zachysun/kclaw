@@ -11,13 +11,13 @@ import type { AttachmentRef } from "@kclaw/core/protocol"
 import type { ChatState, ConfirmationCard, NoteRender, RenderedBlock, RenderedMessage } from "./model.js"
 
 /**
- * How a message enters a busy session (spec §6): steer injects into the live
+ * How a message enters a busy session: steer injects into the live
  * run, wait queues behind it, interrupt preempts with a new run. The trio's
  * current selection; also carried explicitly on every send_message frame.
  */
 export type Disposition = "steer" | "wait" | "interrupt"
 
-/** The trio's order — also the arrow-key rotation order (spec §7.1: 方向键+回车). */
+/** The trio's order — also the arrow-key rotation order. */
 const DISPOSITIONS = ["steer", "wait", "interrupt"] as const
 
 /** An uploaded attachment pending on the next message (the protocol's AttachmentRef). */
@@ -71,13 +71,13 @@ export interface ChatViewProps {
    */
   onDraftChange?: () => void
   /**
-   * Optional click action for the notice (spec 9.1 memory.written 跳转)。
+   * Optional click action for the notice (memory.written 跳转)。
    * Present → the notice renders as a button; absent → plain text.
    */
   noticeAction?: (() => void) | null
   /** The current send disposition (the trio's selection; the owner resolves it from meta/config). */
   disposition?: Disposition
-  /** Select the trio — the owner writes the sticky override (spec §6) and carries it on sends. */
+  /** Select the trio — the owner writes the sticky override and carries it on sends. */
   onSetDisposition?: (d: Disposition) => void
   /** Cancel one queued message (its bubble's cancel button). */
   onCancelQueued?: (messageId: string) => void
@@ -106,7 +106,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
   const completions = dismissed ? [] : slashCompletions(draft, "web", extraCommands)
   const active = Math.min(sel, Math.max(0, completions.length - 1))
 
-  // 排队列表数据（spec §7.1，Master 2026-08-30 改版）：view.queue 本身就是
+  // 排队列表数据（Master 2026-08-30 改版）：view.queue 本身就是
   // FIFO 行序（先排队的在下标 0），直接渲染即"先排队在上面"。
   // 独立于一次性 notice——它是状态，不随输入清除。
   const queuedRows = view.queue
@@ -115,7 +115,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
   // （null）→ 空数组，消息流与旧版完全一致。
   const auditBars = compactions == null ? [] : compactionBars(view.messages, compactions)
 
-  /** 三选的方向键旋转（spec §7.1：方向键+回车与点击皆可；回车/空格是按钮原生行为）。 */
+  /** 三选的方向键旋转（方向键+回车与点击皆可；回车/空格是按钮原生行为）。 */
   const handleTrioKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (onSetDisposition === undefined || disposition === undefined) return
     const idx = DISPOSITIONS.indexOf(disposition)
@@ -324,7 +324,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
       {notice !== undefined && notice !== null && notice !== "" && (
         <div className="chat-notice" data-testid="chat-notice" role="status">
           {noticeAction !== undefined && noticeAction !== null ? (
-            // 可点击通知（spec 9.1 写入通知）：点击执行跳转动作，其余通知保持纯文本。
+            // 可点击通知（写入通知）：点击执行跳转动作，其余通知保持纯文本。
             <button type="button" data-testid="chat-notice-action" className="chat-notice-link" onClick={() => noticeAction()}>
               {notice}
             </button>
@@ -345,7 +345,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
                 {e.disposition === "steer" ? "引导" : e.disposition === "wait" ? "等待" : "中断"}
               </span>
               <span className="queue-text" title={e.text}>{e.text}</span>
-              {/* 可取消窗口（spec §5.6）：wait 随时、steer 注入前；interrupt 入队即
+              {/* 可取消窗口：wait 随时、steer 注入前；interrupt 入队即
                   伴随 abort 紧接着出队执行，无可取消窗口——不渲染取消按钮。 */}
               {e.disposition !== "interrupt" && (
                 <button

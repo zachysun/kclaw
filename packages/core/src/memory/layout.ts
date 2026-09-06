@@ -3,14 +3,14 @@ import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs"
 import { basename, join, resolve } from "node:path"
 import { writeFileAtomic } from "../storage/atomic.js"
 
-/** 项目标识 = <目录名>-<绝对路径 SHA-1 前 6 位>（spec 2.1）：确定性、可读、唯一。 */
+/** 项目标识 = <目录名>-<绝对路径 SHA-1 前 6 位>：确定性、可读、唯一。 */
 export function projectIdFor(workdir: string): string {
   const abs = resolve(workdir)
   const hash = createHash("sha1").update(abs).digest("hex").slice(0, 6)
   return `${basename(abs) || "project"}-${hash}`
 }
 
-/** 记忆塔目录布局：global/（L2）与 projects/<id>/（L1），见 spec 2.1。 */
+/** 记忆塔目录布局：global/（L2）与 projects/<id>/（L1）。 */
 export class MemoryLayout {
   readonly globalDir: string
   readonly projectsDir: string

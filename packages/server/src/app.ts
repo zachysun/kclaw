@@ -65,12 +65,12 @@ export interface AppOptions {
   usage?: UsageStore
   /**
    * The daemon's MemorySystem facade, injected for the memory management
-   * routes (Task 14 consumes it). Task 13 only leaves the seam — no routes
-   * are registered against it here yet.
+   * routes — the /memory route family lives in the daemon assembly,
+   * not here.
    */
   memory?: MemorySystem
   /**
-   * The daemon's user-hook registry (spec issue #6): `GET /hooks` reports
+   * The daemon's user-hook registry: `GET /hooks` reports
    * its current bookkeeping (healthy/disabled/load-failed user hooks) next
    * to the static builtin specs. Absent → the user list is empty.
    */
@@ -157,7 +157,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   const config = opts.stores?.config ?? loadConfig(paths)
   // opts.run is the daemon's RunManager (same instance the ws routes use);
   // the session routes only need it for POST /sessions/:id/compact.
-  // spec 9.2 的 /memory 路由族：无 memory 装配时全部 503，不影响既有路由。
+  // /memory 路由族：无 memory 装配时全部 503，不影响既有路由。
   registerMemoryRoutes(app, { memory: opts.memory, config })
   registerHookRoutes(app, { hooks: opts.hooks })
   // /skills 路由族：只读技能管理面（CLI /skill 与 Web 技能页共用），无装配依赖。

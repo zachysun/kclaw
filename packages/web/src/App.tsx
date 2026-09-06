@@ -112,7 +112,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [messagesCache, setMessagesCache] = useState<Record<string, Message[]>>({})
   const [sessionNotice, setSessionNotice] = useState<string | null>(null)
-  // memory.written 通知条点击后的跳转目标（spec 9.1）：切到记忆页并自动打开对应文件。
+  // memory.written 通知条点击后的跳转目标：切到记忆页并自动打开对应文件。
   const [memoryTarget, setMemoryTarget] = useState<MemoryWrittenInfo | null>(null)
   // Mobile-only: the sidebar slides in as a drawer behind this flag (desktop
   // keeps it permanently visible).
@@ -221,7 +221,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
     setTab(next)
   }, [])
 
-  // memory.written 通知条点击：切到记忆页并把目标交给 MemoryView 自动打开（spec 9.1）。
+  // memory.written 通知条点击：切到记忆页并把目标交给 MemoryView 自动打开。
   const handleOpenMemoryWritten = useCallback((info: MemoryWrittenInfo): void => {
     setMemoryTarget(info)
     setTab("memory")

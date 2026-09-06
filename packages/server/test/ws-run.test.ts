@@ -169,7 +169,7 @@ async function makeWsRun(
     entries: { mock: { baseUrl: "http://127.0.0.1:1", apiKey: "test-key", model: "mock-model" } },
   }
   // Test-injection seam: the disposition a no-disposition send_message
-  // resolves to (spec §6 chain: explicit > session override > config default).
+  // resolves to (chain: explicit > session override > config default).
   if (opts.defaultDisposition !== undefined) config.sessions.defaultDisposition = opts.defaultDisposition
   // Test-injection seam: config patch before the manager locks it in (e.g.
   // tiny contextTokens to drive the compaction waterlines deterministically).
@@ -551,7 +551,7 @@ describe("ws queue steering (disposition / queue.cancel)", () => {
     await frameOf(frames, "run.completed") // 仅第一条跑完
   })
 
-  it("queue full answers an error frame with the spec message", async () => {
+  it("queue full answers an error frame with the fixed message", async () => {
     const { llm, release } = gatedTextClient("堵住会话")
     const { env, url } = await makeWsRun(llm)
     const session = env.sessions.create("挤满会话")
@@ -604,7 +604,7 @@ describe("ws queue steering (disposition / queue.cancel)", () => {
  * aborted). Ordering is asserted only where the wire guarantees it — the ack
  * and the bus broadcast travel independently, so queued/ack may interleave.
  */
-describe("ws spec §8 event sequences (steer / wait / interrupt end-to-end)", () => {
+describe("ws event sequences (steer / wait / interrupt end-to-end)", () => {
   /** The message.created event carrying `id`, if it has arrived. */
   const createdFor = (frames: Frame[], id: unknown): Frame | undefined =>
     frames.find((f) =>
@@ -639,7 +639,7 @@ describe("ws spec §8 event sequences (steer / wait / interrupt end-to-end)", ()
     const queuedPayload = (await eventOf(frames, "message.queued")).payload as MessageQueuedPayload
     expect(queuedPayload.messageId).toBe(ack.messageId)
     expect(queuedPayload.disposition).toBe("steer")
-    expect(queuedPayload.position).toBeUndefined() // steer 不适用 position（spec §4.2）
+    expect(queuedPayload.position).toBeUndefined() // steer 不适用 position
 
     // Release the tool batch → the boundary injects the buffered message:
     // message.created {同一 id} … message.steered {messageId, runId=当前 run}
@@ -734,7 +734,7 @@ describe("ws spec §8 event sequences (steer / wait / interrupt end-to-end)", ()
     const queuedPayload = (await eventOf(frames, "message.queued")).payload as MessageQueuedPayload
     expect(queuedPayload.messageId).toBe(ack.messageId)
     expect(queuedPayload.disposition).toBe("interrupt")
-    expect(queuedPayload.position).toBe(0) // 插队首（spec §5.3）
+    expect(queuedPayload.position).toBe(0) // 插队首
 
     // The abort lands: the current run terminates aborted (not failed).
     const aborted = await eventOf(frames, "run.completed")
@@ -751,7 +751,7 @@ describe("ws spec §8 event sequences (steer / wait / interrupt end-to-end)", ()
 })
 
 /**
- * `compaction.cancel` over the wire (Task 8): rides RunManager.cancelCompaction.
+ * `compaction.cancel` over the wire: rides RunManager.cancelCompaction.
  * Pinned semantics:
  * - ack `compaction_cancel_ack {sessionId, active}` — active mirrors whether an
  *   auto compaction was REALLY in flight at cancel time;

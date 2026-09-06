@@ -59,7 +59,7 @@ export interface ChatPanelProps {
   onOpenSessions: () => void
   /** 当前会话的工作目录（/memory save 手动写入的目标项目；缺省由 daemon 回退 config.workspace）。 */
   workdir?: string
-  /** memory.written 通知条点击 → 跳转记忆页对应文件（spec 9.1）；不传则通知条保持纯文本。 */
+  /** memory.written 通知条点击 → 跳转记忆页对应文件；不传则通知条保持纯文本。 */
   onOpenMemoryWritten?: (info: MemoryWrittenInfo) => void
 }
 
@@ -94,11 +94,11 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   // 已装用户可见技能：出现在斜杠菜单的动态命令（/技能名），会话切换重拉
   // （项目级技能跟会话工作目录）。拉取失败静默——菜单少几条不碍聊天。
   const [skillRows, setSkillRows] = useState<Array<{ name: string; description: string; origin: string; visibility: string }>>([])
-  // 通知条的可点击动作（spec 9.1 memory.written 跳转）：与 notice 同生命周期，输入即清。
+  // 通知条的可点击动作（memory.written 跳转）：与 notice 同生命周期，输入即清。
   const [noticeAction, setNoticeAction] = useState<(() => void) | null>(null)
-  // 发送处置（spec §6）：三选的当前选择，显式带在每条 send_message 上。
+  // 发送处置：三选的当前选择，显式带在每条 send_message 上。
   const [disposition, setDisposition] = useState<Disposition>("steer")
-  // 一次性 interrupt 的复位基准（spec §7.1 改版，Master 2026-08-31）：点「中断」
+  // 一次性 interrupt 的复位基准：点「中断」
   // 不写会话级覆盖，这条发完切回该档——中断是瞬时意图，不做成模式（与 CLI
   // /interrupt 对齐，避免跨客户端"来一条、断一条"）。
   const baseDispositionRef = useRef<Disposition>("steer")
@@ -152,7 +152,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
         pendingBefore = collectPendingSends(v)
         return v
       })
-      // 全量消息 + 队列快照并行拉取（spec §7.1 重连纠偏），两个方向彼此独立：
+      // 全量消息 + 队列快照并行拉取（重连纠偏），两个方向彼此独立：
       // 队列拉取失败不阻塞消息合并（事件流会继续纠偏）；消息拉取失败照样合并
       // 队列——排队气泡的重建不依赖消息基线。
       const [messagesResult, queueResult] = await Promise.allSettled([
@@ -216,9 +216,9 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
                 const title = frame.payload.title
                 if (typeof title === "string") onSessionRenamed?.(sessionId, title)
               }
-              // memory.written 是跨视图的落盘反馈（spec 9.1/9.3 写入通知）：不进
+              // memory.written 是跨视图的落盘反馈（写入通知）：不进
               // reducer，走 ChatView 的一次性 notice（输入即清，见 onDraftChange）；
-              // 通知条可点击跳转记忆页对应文件（spec 9.1），点击动作由 owner 提供。
+              // 通知条可点击跳转记忆页对应文件，点击动作由 owner 提供。
               if (frame.type === "memory.written") {
                 const info = frame.payload
                 if (typeof info.path === "string") {
@@ -317,7 +317,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       .catch((err: unknown) => setNotice(`模型切换失败: ${err instanceof Error ? err.message : String(err)}`))
   }, [api, sessionId])
 
-  // 初始发送处置（spec §6，与 CLI chat 同源）：会话 meta 的 dispositionOverride
+  // 初始发送处置（与 CLI chat 同源）：会话 meta 的 dispositionOverride
   // 优先，其次配置默认，最后 steer。刚连上的 daemon 不可达（旧版本无该路由/字段）
   // 时静默维持 steer。
   useSilentFetch(
@@ -343,7 +343,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     [api, sessionId],
   )
 
-  // v3 压缩审计（Task 11）：会话选中时与消息并行拉一次 GET
+  // v3 压缩审计：会话选中时与消息并行拉一次 GET
   // /sessions/:id/compactions（参考 AuditView 的 api 用法）。失败静默——
   // 折叠条只是增强显示，compactions 保持 null 就不渲染审计条（旧 note
   // 会话的 contextBarFor 路径不受影响）。
@@ -414,7 +414,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       const attachments = [...pendingAttachments]
       sendMessageRaw(text, disposition, attachments)
       setPendingAttachments([])
-      // 一次性 interrupt（spec §7.1 改版，Master 2026-08-31）：这条带 interrupt
+      // 一次性 interrupt：这条带 interrupt
       // 发出后即切回基础处置，三选不停在「中断」档——否则 sticky 到所有客户端，
       // 后续任何普通消息都会先掐 run（"来一条、断一条"）。
       if (disposition === "interrupt") {
@@ -452,7 +452,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
   }, [])
 
-  /** Cancel queued messages (spec §5.6): one id, or all still-queued when omitted. */
+  /** Cancel queued messages: one id, or all still-queued when omitted. */
   const handleCancelQueued = useCallback((messageId?: string) => {
     try {
       clientRef.current.send({
@@ -475,9 +475,9 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
   }, [sessionId])
 
-  /** 三选切换（spec §6）：steer/wait 本地立即生效并写会话级覆盖（与 CLI /steer
+  /** 三选切换：steer/wait 本地立即生效并写会话级覆盖（与 CLI /steer
    *  同一存储）；interrupt 是一次性——本地选中仅用于这一次发送、不写覆盖，
-   *  发出后由 handleSend 切回基础处置（spec §7.1 改版，Master 2026-08-31）。 */
+   *  发出后由 handleSend 切回基础处置。 */
   const handleSetDisposition = useCallback((d: Disposition) => {
     if (d === "interrupt") {
       setDisposition("interrupt")

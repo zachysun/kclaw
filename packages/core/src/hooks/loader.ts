@@ -1,5 +1,5 @@
 /**
- * User hook loader (spec issue #6): scans the flat user hooks directory and
+ * User hook loader: scans the flat user hooks directory and
  * turns conforming files into HookEntries — the "new capability = new file"
  * door.
  *
@@ -12,7 +12,7 @@
  *   a lower Node rejects the import with a clear message instead of magic).
  * - No dependency resolution beyond Node builtins: the file is imported by
  *   absolute URL, so bare-specifier imports fail with Node's own ERR_*
- *   (third-party packages are out of scope, spec Out-of-Scope).
+ *   (third-party packages are out of scope).
  * - `?t=<mtimeMs>` cache-buster: dynamic import caches by URL, so the same
  *   path edited between runs must re-execute ("edit file, next run picks it
  *   up" — same mental model as skills' per-run rescan).

@@ -1,6 +1,6 @@
 /**
  * HookChain — the single execution path every hook (builtin or user file)
- * runs through (spec issue #6).
+ * runs through.
  *
  * Semantics pinned here:
  * - Order: meta.order ascending, ties by meta.name (deterministic — rewrite

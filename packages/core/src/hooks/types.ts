@@ -1,5 +1,5 @@
 /**
- * Hook system types (spec issue #6): the loop's anatomy as a CLOSED set of
+ * Hook system types: the loop's anatomy as a CLOSED set of
  * named positions, one uniform handler signature, and per-position ctx /
  * result contracts.
  *

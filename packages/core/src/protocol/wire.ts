@@ -25,7 +25,7 @@ export interface AttachmentRef {
   mimeType: string
 }
 
-/** One persisted queue entry in queue.jsonl (spec §3.1)。 */
+/** One persisted queue entry in queue.jsonl 。 */
 export interface QueueEntry {
   messageId: string                       // 分配即固定；出队执行时用同一 id 构建 Message
   disposition: SendDisposition

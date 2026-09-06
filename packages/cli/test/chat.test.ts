@@ -106,7 +106,7 @@ const MEMORY_SAVE_TURN = [
 ]
 
 /**
- * The memory v2 extraction call (fired by memory_save's immediate trigger):
+ * The memory extraction call (fired by memory_save's immediate trigger):
  * the pipeline asks for a JSON actions array. A scripted action persists an
  * episode ("用户住在上海"), which the SECOND run then injects as a
  * `相关经历（<title>）: <text>` note — without this the memory_save tool would
@@ -139,7 +139,7 @@ const held: ServerResponse[] = []
  */
 function turnFor(body: { messages?: Array<Record<string, unknown>> }): Array<Record<string, unknown>> {
   const messages = body.messages ?? []
-  // memory v2 提取请求（memory_save 即时触发）：system 落在 messages[0]（toApiMessages
+  // memory 提取请求（memory_save 即时触发）：system 落在 messages[0]（toApiMessages
   // 把 req.system 放最前），内容是管线的提取提示（只输出 JSON actions）。先于内容匹配
   // 判定——该请求的 user content 是 renderSegment 的整段对话，按旧规则会误命中
   // "记住" 分支而返回工具调用流。

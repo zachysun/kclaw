@@ -31,9 +31,9 @@ export interface SessionMeta {
   compactedSummary?: string
   /** Last message id covered by `compactedSummary`; history after it is the active window. */
   compactedUpto?: string
-  /** v2 layered compaction state (spec 5.1); absent on fresh/legacy sessions. */
+  /** layered compaction state; absent on fresh/legacy sessions. */
   compaction?: CompactionState
-  /** 会话级处置覆盖（/steer /wait、Web 三选；spec §6）：优先于 sessions.defaultDisposition。 */
+  /** 会话级处置覆盖（/steer /wait、Web 三选）：优先于 sessions.defaultDisposition。 */
   dispositionOverride?: "steer" | "wait" | "interrupt"
 }
 
@@ -178,7 +178,7 @@ export class SessionStore {
     return this.readEvents(id).filter(isMessageEvent).map(({ type, ...m }) => m as Message)
   }
 
-  /** Append one compaction audit event (spec 6A.1). */
+  /** Append one compaction audit event. */
   appendCompaction(id: string, record: CompactionRecord): void {
     this.appendEvent(id, { type: "compaction", ...record })
   }

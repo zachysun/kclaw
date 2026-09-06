@@ -3,7 +3,7 @@ import { isBlockType } from "../protocol/blocks.js"
 
 const CJK = /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/
 
-/** Rough token estimate: CJK 0.75/char, everything else 0.25/char (spec 6.1.1). */
+/** Rough token estimate: CJK 0.75/char, everything else 0.25/char. */
 export function estimateTokens(text: string): number {
   let units = 0
   for (const ch of text) units += CJK.test(ch) ? 0.75 : 0.25
@@ -13,7 +13,7 @@ export function estimateTokens(text: string): number {
 /**
  * Coarse render of one message for size estimation: every text-bearing
  * block's text plus tool args/results. Precision only needs to be
- * trigger-grade (spec 6.1.3).
+ * trigger-grade.
  */
 function messageText(m: Message): string {
   const parts: string[] = []
@@ -30,7 +30,7 @@ function messageText(m: Message): string {
  * Anchors on the last assistant message's real usage.inputTokens (the last
  * actually-sent request size, system prompt and tool defs included — biased
  * LARGE, which only compacts earlier: the safe direction); messages after
- * it are estimated per message (spec 6.1.1).
+ * it are estimated per message.
  */
 export function estimateContextTokens(active: Message[], extraText?: string): number {
   let anchorIdx = -1
@@ -49,17 +49,17 @@ export function estimateContextTokens(active: Message[], extraText?: string): nu
 /** One compacted segment: covers history up to (including) message `upto`. */
 export interface CompactionSegment { upto: string; summary: string }
 
-/** v2 compaction state persisted on SessionMeta (spec 5.1). */
+/** compaction state persisted on SessionMeta. */
 export interface CompactionState { segments: CompactionSegment[]; top: string; upto: string }
 
 /** 当前生效的压缩视图：upto 之前的原文不再发送，top 是总摘要（脉络项内容）。 */
 export interface ActiveSummary { upto: string; top: string }
 
-/** One compaction event in a session's event stream (spec 6A.1). */
+/** One compaction event in a session's event stream. */
 export interface CompactionRecord {
   at: string // ISO-8601
   trigger: "auto" | "in-run" | "manual"
-  /** 超限紧急压缩（spec 5.6 的审计标记）；仅自动压缩可能携带。 */
+  /** 超限紧急压缩（审计标记）；仅自动压缩可能携带。 */
   emergency?: true
   focus?: string
   from: string | null // first message id of the compacted span; null = session start
@@ -70,7 +70,7 @@ export interface CompactionRecord {
 }
 
 /**
- * Decide the retention boundary (spec 6.1.2). Walks NEWEST→oldest until the
+ * Decide the retention boundary. Walks NEWEST→oldest until the
  * accumulated estimate reaches budget×targetRatio — the walk marks the kept
  * part — then backs the start up to the nearest user message so both sides
  * are whole turns (tool calls never split from their results). `keepFrom` 0
@@ -98,7 +98,7 @@ export function chooseBoundary(
 }
 
 /**
- * 超限急救的强制分界（spec 5.6）：预算细判在锚点缺失时不可信——急救通常发生
+ * 超限急救的强制分界：预算细判在锚点缺失时不可信——急救通常发生
  * 在压缩后的首请求或单轮工具输出暴涨时，active 里可能没有 assistant 锚点，
  * system 与工具定义的固定开销全漏计，估算会明显偏低，chooseBoundary 据此可能
  * 找不到边界。急救不看预算，直接退守最小可行上下文：只保留最近一轮用户轮次
@@ -114,7 +114,7 @@ export function emergencyBoundary(active: Message[]): number | undefined {
 }
 
 /**
- * Map persisted segments back to their original messages (spec 5.1/6.4.1).
+ * Map persisted segments back to their original messages.
  * Segment i spans (previous upto | firstFromExclusive | history start) to
  * its own upto. A stale upto yields an empty message list — callers skip it.
  */
@@ -142,7 +142,7 @@ const TOOL_ARGS_MAX = 120
 const TOOL_RESULT_MAX = 300
 
 /**
- * Compaction/extraction input rendering (spec 6.2.1): one line per
+ * Compaction/extraction input rendering: one line per
  * message; tool activity condensed (call `→ name(args)`, result `⇐ head`),
  * compact-kind notes excluded (the top summary already lives in meta).
  */

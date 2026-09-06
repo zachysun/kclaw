@@ -1,6 +1,6 @@
 /**
- * Lenient context-overflow classification across OpenAI-compatible providers
- * (spec 5.6): a false positive costs one harmless early compaction, so bias
+ * Lenient context-overflow classification across OpenAI-compatible providers:
+ * a false positive costs one harmless early compaction, so bias
  * toward matching. Keyword-based — no provider-specific error codes exist.
  */
 export function isContextOverflowError(err: unknown): boolean {

@@ -73,7 +73,7 @@ describe("builtin tool registry", () => {
     const prop = (tool: string, key: string) =>
       ((byName.get(tool)!.parameters as Record<string, { properties: Record<string, unknown> }>).properties)[key]
     expect(prop("web_search", "maxResults")).toEqual({ type: "integer", minimum: 1, maximum: 10 })
-    // memory_save 只收 text（spec 7.3：v1 tags 删除）
+    // memory_save 只收 text（多余字段忽略）
     expect(prop("memory_save", "text")).toEqual({ type: "string", description: expect.any(String) })
     expect(prop("memory_search", "limit")).toEqual({ type: "integer", minimum: 1, maximum: 20 })
     for (const tool of ["exec", "fs_read", "fs_list", "fs_write", "fs_edit", "web_fetch", "memory_save", "memory_search", "session_search", "skill_read"]) {

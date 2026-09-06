@@ -56,7 +56,7 @@ describe("writeCognitionFile merges human edits", () => {
       expect(merged.body).toBe("新认知")
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
-  it("refuses to overwrite an existing unparseable file (spec 2.5)", () => {
+  it("refuses to overwrite an existing unparseable file ", () => {
     const dir = mkdtempSync(join(tmpdir(), "kclaw-cog-"))
     try {
       const path = join(dir, "rule", "general.md")

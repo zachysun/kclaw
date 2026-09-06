@@ -83,7 +83,7 @@ export async function runWebCommand(parsed: ParsedSlash, ctx: WebCommandCtx): Pr
       return true
     }
     case "memory": {
-      // /memory save — 手动触发当前项目的手动写入（spec 4.2 手动行）；无参提示记忆页。
+      // /memory save — 手动触发当前项目的手动写入；无参提示记忆页。
       const arg = parsed.args.trim()
       if (arg === "save") {
         try {

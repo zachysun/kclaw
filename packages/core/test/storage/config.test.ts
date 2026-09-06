@@ -11,7 +11,7 @@ beforeEach(() => { home = mkdtempSync(join(tmpdir(), "kclaw-test-")) })
 afterEach(() => { rmSync(home, { recursive: true, force: true }) })
 
 describe("resolvePaths", () => {
-  it("creates directory tree and exposes spec layout", () => {
+  it("creates directory tree and exposes the layout", () => {
     const p = resolvePaths(home)
     expect(p.config).toBe(join(home, "config.yaml"))
     expect(p.memoryNotesDir).toBe(join(home, "memory", "notes"))
@@ -105,8 +105,8 @@ describe("loadConfig / saveConfig", () => {
   })
 })
 
-describe("memory v2 config", () => {
-  it("defaults match the spec", () => {
+describe("memory config", () => {
+  it("exposes the expected defaults", () => {
     const m = defaultConfig.memory
     expect(m).toEqual({
       write: { immediate: true, manual: true, intervalMinutes: 30, idleMinutes: 10 },

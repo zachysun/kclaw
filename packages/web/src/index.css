@@ -669,7 +669,7 @@ select:focus {
   margin-bottom: var(--space-2);
 }
 
-/* ---- send-message queue (message-queue spec §7.1) ---- */
+/* ---- send-message queue ---- */
 
 /* 排队列表（Master 2026-08-30）：排队消息不以气泡进消息流，在通知位置一行
    一条列出（FIFO，先排队的在上），每行带取消按钮。它是状态不是一次性提
@@ -1540,7 +1540,7 @@ select:focus {
   padding: 3px 10px;
 }
 
-/* memory — 记忆管理页（spec 9.3）：左列清单 + 右列整文件编辑器 */
+/* memory — 记忆管理页：左列清单 + 右列整文件编辑器 */
 .memory-view {
   display: flex;
   gap: var(--space-4);

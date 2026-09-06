@@ -33,7 +33,7 @@ export interface KclawConfig {
      * 总开关管。默认 3（凌晨 3 点）。
      */
     consolidateHour: number
-    /** embedding 判定链见 spec 7.2：model 为空 = 向量路整体不启用。 */
+    /** embedding 判定链：model 为空 = 向量路整体不启用。 */
     embedding: { provider: string; model: string }
     /** 每轮注入（认知常驻 + 情节检索）token 上限。 */
     injectTokenBudget: number
@@ -59,7 +59,7 @@ export interface KclawConfig {
   }
   exec: { timeoutMs: number; maxOutputBytes: number }
   /**
-   * Hook 系统（spec issue #6）。可选仅因老 config.yaml 早于它；
+   * Hook 系统。可选仅因老 config.yaml 早于它；
    * 缺省按读点的 ?? 默认值执行。
    */
   hooks?: { /** 单个 hook 处理器的时限（毫秒）；超时按失败处理（fail-open）。 */ timeoutMs?: number }
@@ -168,7 +168,7 @@ export function loadConfig(paths: KclawPaths): KclawConfig {
   if (!isPlainObject(file)) {
     throw new Error(`invalid config in ${paths.config}: expected a yaml mapping`)
   }
-  // spec 10：首次读到 v1 遗留字段记日志说明已忽略（不改字段、不改行为，只提示）。
+  // 首次读到 v1 遗留字段记日志说明已忽略（不改字段、不改行为，只提示）。
   const legacyAutoExtract = (file as { memory?: { autoExtract?: unknown } }).memory?.autoExtract
   if (legacyAutoExtract !== undefined) {
     console.warn("kclaw config: memory.autoExtract is deprecated (v1) and ignored; use memory.write.* instead")

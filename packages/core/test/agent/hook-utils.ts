@@ -1,5 +1,5 @@
 /**
- * Shared helpers for loop tests under the hook system (spec issue #6): the
+ * Shared helpers for loop tests under the hook system: the
  * loop only knows positions, so tests install test behaviors by registering
  * entries on a HookChain instead of passing per-behavior deps fields.
  */

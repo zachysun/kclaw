@@ -1,5 +1,5 @@
 /**
- * Memory scheduler tests (Task 13 + 审查补测)：定时触发 + 跟随门禁（挂起检查补查）+ 重启恢复。
+ * Memory scheduler tests：定时触发 + 跟随门禁（挂起检查补查）+ 重启恢复。
  *
  * startMemoryScheduler 的宿主行为用 fake MemorySystem 驱动（调度器只消费
  * MemorySystem 的公开方法：triggerInterval/triggerFollow/markIntervalRun/
@@ -138,7 +138,7 @@ describe("startMemoryScheduler", () => {
   it("nightly: triggers after consolidateHour when not yet run today; records the LOCAL date", async () => {
     const now = new Date("2026-08-29T12:00:00Z") // 本地小时在常见时区（东八 = 20 点）≥ 3
     const meta = sessions.create("t", undefined, "/w/kclaw")
-    // 判据归 core 后（卡⑤），归属会话由 system.recentSessionId 提供——stub 直接送出刚建的会话
+    // 判据归 core 后，归属会话由 system.recentSessionId 提供——stub 直接送出刚建的会话
     const sys = fakeSystem({ recentSessionId: vi.fn(() => meta.id) })
     const handle = startMemoryScheduler({
       system: sys as unknown as MemorySystem, sessions,

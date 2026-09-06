@@ -1,5 +1,5 @@
 /**
- * MemoryView — 记忆管理页（spec 9.3）测试。照 jobsView.test.tsx 的 fake-api
+ * MemoryView — 记忆管理页测试。照 jobsView.test.tsx 的 fake-api
  * 模式：ApiClient 的 get/post/patch/del/upload 全是 vi.fn，真实 ApiClient 的
  * get 是泛型 get<T>(path)（api.ts），fake 直接返回裸数据即可（组件用
  * api.get<...> 解包）。

@@ -1,4 +1,4 @@
-/** 云端 OpenAI 兼容 /v1/embeddings 客户端（spec 7.2）：不内置本地模型。 */
+/** 云端 OpenAI 兼容 /v1/embeddings 客户端：不内置本地模型。 */
 export interface EmbeddingClient {
   embed(texts: string[]): Promise<Float32Array[]>
 }

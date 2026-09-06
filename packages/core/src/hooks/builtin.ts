@@ -1,5 +1,5 @@
 /**
- * Builtin hooks (spec issue #6) — the one-shot migration of the engine's
+ * Builtin hooks — the one-shot migration of the engine's
  * formerly-hardcoded loop behaviors onto the position grid. Every builtin is
  * the same shape as a user hook file (metadata + handler) and registers
  * through the same HookChain; the only difference is that these close over

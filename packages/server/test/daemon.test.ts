@@ -145,12 +145,11 @@ describe("launchDaemon", () => {
     expect(existsSync(join(home, "token"))).toBe(true)
   })
 
-  it("assembles the v2 memory system at startup", async () => {
+  it("assembles the memory system at startup", async () => {
     const home = makeHome()
     const paths = resolvePaths(home)
     const daemon = await launchMock(home, makeConfig(home))
-    // v1 的 startup reconcile（notes/* → index.db）已随 Task 11 的 MemorySystem
-    // 装配退役（v1 迁移在 Task 13）；MemorySystem 构造即建 v2 布局目录。
+    // MemorySystem 构造即建布局目录。
     expect(existsSync(join(paths.memoryDir, "global"))).toBe(true)
     expect(existsSync(join(paths.memoryDir, "projects"))).toBe(true)
     expect(existsSync(join(paths.memoryDir, "global", "vectors.db"))).toBe(true)

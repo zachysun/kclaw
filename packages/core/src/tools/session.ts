@@ -1,7 +1,6 @@
 // packages/core/src/tools/session.ts
 /**
- * session_search: search the CURRENT session's compacted segments (spec
- * 6.4.2). Same risk/concurrency class as memory tools — read-only over the
+ * session_search: search the CURRENT session's compacted segments. Same risk/concurrency class as memory tools — read-only over the
  * session event stream, safe + parallel. The search fn is injected by the
  * server per run (lazy event-stream read); absent fn → "(无可检索内容)" so the
  * tool list stays stable across session states.

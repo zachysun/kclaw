@@ -137,7 +137,7 @@ export interface ChatState {
   compactingPhase?: string
   /**
    * 最近一次钩子失败（hook.failed）：用户 hook 一律 fail-open，run 不受影响，
-   * 但失败必须可见（spec issue #6）。保留最近一条，下一个 run 开始时清除
+   * 但失败必须可见。保留最近一条，下一个 run 开始时清除
    * （run.started，同 error 的过期节奏）；load 阶段的失败在 run 前到达，
    * 会一直显示到下一次 run——正是"装载坏了"应有的持续性。
    */

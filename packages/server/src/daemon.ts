@@ -5,7 +5,7 @@
  *   resolvePaths → acquireDaemonSlot (exclusive `wx` claim of
  *   `<home>/daemon.json` with a placeholder {port: 0, pid, startedAt,
  *   starting}) → loadConfig → loadOrCreateToken → stores (SessionStore,
- *   MemorySystem（记忆 v2 门面；迁移/对账在 Task 13）, JobScheduler) → llm client
+ *   MemorySystem, JobScheduler) → llm client
  *   → RunManager → createApp (auth + routes + ws) → listen 127.0.0.1 →
  *   backfill daemon.json with the real {port, pid, startedAt}
  *   → scheduler tick → Daemon.
@@ -246,7 +246,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   const token = loadOrCreateToken(paths.home)
 
   const sessions = new SessionStore(paths.sessionsDir)
-  // embedding 判定链（spec 7.2）：model 空 → 不构造客户端（向量路关闭）；provider 名
+  // embedding 判定链：model 空 → 不构造客户端（向量路关闭）；provider 名
   // 缺省取 default provider entry；entry 不存在则向量路关闭并告警（不致命）。
   const embedCfg = config.memory.embedding
   let embed: ReturnType<typeof createEmbeddingClient> | undefined
@@ -261,7 +261,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     }
   }
   const bus = new EventBus()
-  // 用户 hook 注册表（spec issue #6）：daemon 级账本，run 装配每 run 现扫
+  // 用户 hook 注册表：daemon 级账本，run 装配每 run 现扫
   // ~/.kclaw/hooks；装载失败经 registry 去重后广播一次 hook.failed(load)。
   const hookRegistry = new HookRegistry({
     userDir: paths.hooksDir,
@@ -273,7 +273,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       }
     },
   })
-  // 记忆系统 v2 唯一门面：embed/emit/迁移/对账在此一次性装配（Task 13）。
+  // 记忆系统唯一门面：embed/emit/迁移/对账在此一次性装配。
   // resolveLlm 惰性引用下方 llm/model（触发发生在 launch 后，TDZ 无碍）。
   const memory = new MemorySystem({
     memoryDir: paths.memoryDir,
@@ -283,7 +283,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     embed,
     emit: (e) => bus.emit(makeEvent("memory.written", { path: e.path, kind: e.kind, ...(e.topic !== undefined ? { topic: e.topic } : {}), ...(e.scope !== undefined ? { scope: e.scope } : {}) })),
   })
-  // v1 一次性迁移（spec 2.6）+ 对账 + v1 派生物 index.db 删除（v2 结构直接重建，spec 11）。
+  // v1 一次性迁移 + 对账 + v1 派生物 index.db 删除（v2 结构直接重建）。
   if (existsSync(paths.memoryNotesDir)) memory.migrateV1Notes(paths.memoryNotesDir)
   rmSync(join(paths.memoryDir, "index.db"), { force: true })
   memory.reconcile()
@@ -340,8 +340,8 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     attachmentsDir: paths.attachmentsDir,
     usage,
     webDist: resolveWebDist(opts.webDist),
-    memory, // Task 14 的 /memory 路由消费（spec 9.2 管理界面）
-    hooks: hookRegistry, // GET /hooks 管理面（spec issue #6）
+    memory, // /memory 路由消费（管理界面）
+    hooks: hookRegistry, // GET /hooks 管理面
   })
   await app.listen({ port: opts.port ?? 0, host: HOST })
   const address = app.server.address()
@@ -366,15 +366,15 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // connections come up (a late-connecting server still contributes).
   if (mcpManager !== undefined) void mcpManager.start()
 
-  // Crash recovery (spec §5.5): re-enqueue persisted queues (steer/interrupt
+  // Crash recovery: re-enqueue persisted queues (steer/interrupt
   // demoted to wait) before the scheduler starts. The app is already
   // listening, so the message.queued broadcasts reach connected clients;
   // reconnecting clients are corrected wholesale by GET /queue.
   run.recoverQueues()
 
   const tick = startSchedulerTick({ scheduler: jobs, run, bus, sessions, intervalMs: opts.schedulerIntervalMs ?? DEFAULT_SCHEDULER_INTERVAL_MS, purgeTtlMs: config.sessions.recycleBinTtlMs, notifier, webBase: `http://${HOST}:${port}` })
-  // 记忆调度器（Task 13，spec 4.2）：定时 + 跟随补查。workdirs = 全部有会话的
-  // 项目（去重）；daemon 重启后首次 sweep 会补查落盘的挂起跟随检查（spec 11）。
+  // 记忆调度器：定时 + 跟随补查。workdirs = 全部有会话的
+  // 项目（去重）；daemon 重启后首次 sweep 会补查落盘的挂起跟随检查。
   const memoryTick = startMemoryScheduler({
     system: memory, sessions, config,
     workdirs: () => Array.from(new Set(sessions.list().map((m) => m.workdir ?? config.workspace))),

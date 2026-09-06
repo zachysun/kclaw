@@ -57,7 +57,7 @@ export interface AgentDeps {
   llm: LlmClient
   model: string
   window?: number
-  /** Tool results kept verbatim in the provider view (spec 6.3); undefined = keep all. */
+  /** Tool results kept verbatim in the provider view; undefined = keep all. */
   toolResultKeep?: number
   maxIterations?: number
   /** executors keyed by tool name; calls to unknown names come back as error results */
@@ -82,7 +82,7 @@ export interface AgentDeps {
    */
   llmAttempt?(): number
   /**
-   * The hook chain (spec issue #6): the loop's behavior seams as named
+   * The hook chain: the loop's behavior seams as named
    * positions. The assembly installs the builtin closures (former
    * onUserMessage / mapLlmMessages / steering / midRunCompaction /
    * onContextOverflow behaviors) and the user's file hooks here; the loop
@@ -256,7 +256,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
     // the run then terminates through the error lifecycle below instead of
     // rejecting — 只有 provider 彻底失败才终止 run.
     let streamError: unknown
-    // 超限自愈（spec 5.6）：流失败且一个事件都没收到（零输出）且判定为上下文
+    // 超限自愈：流失败且一个事件都没收到（零输出）且判定为上下文
     // 超限时，经 overflow-rescue 位置换压缩视图整次重发——恰好一次。已收到过任何
     // 事件的流失败不重试（半截输出无法干净重来）。重试静默进行：不额外发
     // llm.started / llm.failed；失败尝试也从未发过任何 *.created（没收到事件才
@@ -465,15 +465,15 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
 
     if (stopReason === "tool_use" && entries.length > 0) {
       await runToolTurn(entries, { input, deps, emit, ctx, all })
-      // 迭代边界中途压缩（spec 5.3 第 5 条，compaction-check 位置）：工具批次
+      // 迭代边界中途压缩（compaction-check 位置）：工具批次
       // 完成后、引导注入之前。返回 null/undefined = 不压/已取消/失败，照常继续；
       // 抛错（skip 语义下不会发生，防御保留）同样照常继续（压缩失败不补救，
-      // 省略兜底，spec 5.8）。非 null 视图从下一次请求起生效（buildMessages）。
+      // 省略兜底）。非 null 视图从下一次请求起生效（buildMessages）。
       try {
         const next = await deps.hooks.run("compaction-check", {})
         if (next !== null && next !== undefined) compacted = next
-      } catch { /* 压缩失败不补救：省略兜底，spec 5.8 */ }
-      // Steering drain（spec §5.1，turn-boundary 位置）：工具批次后、下一次
+      } catch { /* 压缩失败不补救：省略兜底 */ }
+      // Steering drain（turn-boundary 位置）：工具批次后、下一次
       // llm.stream 前。取到的消息按序注入：created → persist(onMessage) →
       // completed → steered。fatal 钩子（内置 steering-drain）抛错按原语义终止
       // run（run.failed "steering_failed"，resolve stopReason "error"）。

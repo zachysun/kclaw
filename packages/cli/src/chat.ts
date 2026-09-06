@@ -13,7 +13,7 @@
  * empty (a non-empty line just clears — node's default), and the process
  * receives the OS signal when stdin is not a TTY — the same handler is
  * registered on both so piped runs (tests, scripting) escalate identically.
- * Three stages, `sigints` only ever growing (spec §7.2): the first press
+ * Three stages, `sigints` only ever growing: the first press
  * cancels the active run (`run.cancel`; the run then ends through the normal
  * render path with run.completed {stopReason:"aborted"}) or, while idle,
  * prints the exit hint — with a queued-count warning ("还有 N 条…") whenever
@@ -345,7 +345,7 @@ export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean
       return false
     }
     // memory.written（项目级事务，广播不带 sessionId）：记忆已落盘，dim 一行
-    // 提示路径（spec 9.1 CLI 行为），不是 run 终止事件。
+    // 提示路径，不是 run 终止事件。
     case "memory.written":
       line(dim(`已写入记忆: ${ev.payload.path}`), ctx)
       return false
@@ -658,7 +658,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
   process.stdout.write(`kclaw · session ${sessionId}\n`)
   process.stdout.write(dim(`输入消息，/ 命令可用（Tab 补全），/exit 退出，Ctrl+C 取消当前 run\n`))
 
-  // 初始发送处置（spec §6）：会话 meta 的 dispositionOverride 优先，其次配置
+  // 初始发送处置：会话 meta 的 dispositionOverride 优先，其次配置
   // 默认，最后 steer。interrupt 覆盖原样带在本地状态里（回车直发会带上它，
   // 服务端按一次性动作入队）；刚连上的 daemon 不可达时回落 steer。
   const resolveInitialDisposition = async (): Promise<"steer" | "wait" | "interrupt"> => {
@@ -799,7 +799,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
   }
   refreshSkillCommands()
 
-  // Ctrl+C escalates in three stages (spec §7.2): ① cancel the active run
+  // Ctrl+C escalates in three stages: ① cancel the active run
   // (or, while idle, print the exit hint — always warning about a backed-up
   // queue), ② clear the queue (`queue.cancel` without messageId), ③ exit 130.
   // `sigints` only ever grows. The handler lives on the readline interface

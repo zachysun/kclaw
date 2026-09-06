@@ -255,7 +255,7 @@ describe("exec command normalization", () => {
   })
   it("deny variants that only differ by spacing or command path hit the blacklist", async () => {
     // `rm -r -f /` (flag split) is deliberately not listed: flag reordering
-    // is an optional spec enhancement this plan does not implement.
+    // is not handled.
     const g = new ConfigPermissionGate(
       { allow: [], deny: ["exec:sudo*", "exec:rm -rf*"], confirmTimeoutMs: 1000, sessionGrants: true },
       { toolFacts: BUILTIN_FACTS, safeTools: new Set() },

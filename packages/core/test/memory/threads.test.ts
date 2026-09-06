@@ -62,7 +62,7 @@ describe("writeThreadFile guards human edits", () => {
       expect(merged.sections).toHaveLength(2)
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
-  it("refuses to overwrite an existing unparseable file (spec 2.5)", () => {
+  it("refuses to overwrite an existing unparseable file ", () => {
     const dir = mkdtempSync(join(tmpdir(), "kclaw-thr-"))
     try {
       const path = join(dir, "ws-reconnect.md")

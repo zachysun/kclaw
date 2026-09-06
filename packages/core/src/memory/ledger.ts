@@ -8,12 +8,12 @@ export interface FollowCheck { sessionId: string; endTurnAt: string }
 export interface SessionWatermarks { interval?: string; follow?: string }
 
 interface LedgerState {
-  /** 每会话一本水位（spec 4.1）：提取范围 = 触发会话自己的增量窗口，
+  /** 每会话一本水位：提取范围 = 触发会话自己的增量窗口，
    *  不做跨会话比较（项目级水位按会话创建序划界会永久漏掉老会话的新消息，
    *  2026-09-02 改名事故）。 */
   watermarks: Record<string, SessionWatermarks>
   followChecks: FollowCheck[]
-  /** 最近一次定时触发的墙钟时间（ISO；Task 13 scheduler 判节拍用）。 */
+  /** 最近一次定时触发的墙钟时间（ISO；scheduler 判节拍用）。 */
   intervalLastRun?: string
   /** 夜间内化判据基线（UTC YYYY-MM-DD，与线文件 updated 同源；pipeline 读写）。 */
   nightlyBaseline?: string
@@ -21,7 +21,7 @@ interface LedgerState {
   nightlyLastRun?: string
 }
 
-/** 每项目一本（<projectDir>/state.json，spec 4.1）：防重复提取与漏提取。 */
+/** 每项目一本（<projectDir>/state.json）：防重复提取与漏提取。 */
 export class WriteLedger {
   readonly #path: string
   #state: LedgerState
@@ -63,7 +63,7 @@ export class WriteLedger {
     this.#flush()
   }
 
-  /** 手动/立刻的范围覆盖到当前时刻：该会话两种水位一并推进（spec 4.1）。 */
+  /** 手动/立刻的范围覆盖到当前时刻：该会话两种水位一并推进。 */
   advanceAll(sessionId: string, messageId: string): void {
     this.advance(sessionId, "interval", messageId)
     this.advance(sessionId, "follow", messageId)
@@ -115,7 +115,7 @@ export class WriteLedger {
   }
 
   /**
-   * 单会话内两个水位谁更靠后（spec 4.1）：范围选取一律用最靠后的那个，任一触发
+   * 单会话内两个水位谁更靠后：范围选取一律用最靠后的那个，任一触发
    * 先跑到哪，另一个触发都不再重复提取。水位指向的消息已不存在（被删/截断）时
    * 按"更旧"处理 —— since 退化为全量（宁可重提取不可漏提取）。
    */

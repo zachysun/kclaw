@@ -25,7 +25,7 @@ export interface ExtractAction {
   section?: string                               // update 的小节短标题
   content: string                                // 情节正文（四要素列表）
   thread?: string                                // new-thread 的线名（kebab-case）
-  status?: "active" | "inactive"                 // 提取判断的线收束（spec 5）
+  status?: "active" | "inactive"                 // 提取判断的线收束
   title?: string                                 // new-thread 的人可读标题
 }
 
@@ -37,27 +37,27 @@ export interface MemoryWrittenEvent {
   scope?: string
 }
 
-/** 记忆落盘通知（Task 6）：pipeline 在每次写入后回调，at 由 pipeline 补；
+/** 记忆落盘通知：pipeline 在每次写入后回调，at 由 pipeline 补；
  *  sessionId 是触发该次写入的会话（interval 由 MemorySystem 回落为项目最近活动会话）。 */
 export type MemoryAudit = Omit<MemoryEvent, "type" | "at"> & { at?: string; sessionId?: string }
 
 export interface PipelineDeps {
   /** 每次触发时现取提取/内化用的 llm 与 model（model 为已回落解析后的提取模型）。
-   *  由装配方（MemorySystem）在闭包里做 extractModel 回落主模型解析（spec 4.3）。 */
+   *  由装配方（MemorySystem）在闭包里做 extractModel 回落主模型解析。 */
   resolveLlm: () => { llm: LlmClient; model: string }
   embed?: EmbeddingClient                        // 判定链通过时才传入；缺省 = 纯关键词
   emit?: (e: MemoryWrittenEvent) => void
-  /** 记忆落盘通知（Task 6）：由装配方接成会话事件流 appendEvent。 */
+  /** 记忆落盘通知：由装配方接成会话事件流 appendEvent。 */
   audit?: (e: MemoryAudit) => void
   log?: (msg: string) => void                    // 缺省 console.error
   now?: () => Date
-  /** 自动收束阈值（spec 5）：线最近活动距今超过该天数 → inactive；缺省 14。 */
+  /** 自动收束阈值：线最近活动距今超过该天数 → inactive；缺省 14。 */
   threadInactiveDays?: number
-  /** 内化开关（spec 6）：缺省开；由 Task 10 的 system 从 config 传入。 */
+  /** 内化开关：缺省开；由 MemorySystem 从 config 传入。 */
   consolidateEnabled?: boolean
 }
 
-/** 提取器固定文案（spec 4.3）。字段名必须与 #extract 的校验逐字一致——模型
+/** 提取器固定文案。字段名必须与 #extract 的校验逐字一致——模型
  *  只从这里认识 JSON 结构（2026-09-01 回归：旧文案未点名 op/file，真实模型
  *  交回 type 判别 + 缺 file，动作全被丢弃且不重试）。 */
 export const EXTRACT_SYSTEM_PROMPT = [
@@ -75,7 +75,7 @@ export const EXTRACT_SYSTEM_PROMPT = [
   "噪音（寒暄、与长期记忆无关的过程性内容）直接跳过。无值得记的内容输出 {\"actions\":[]}。只输出 JSON，不要输出任何其他文字。",
 ].join("\n")
 
-/** 内化器固定文案（spec 6）。字段名必须与 parseCognitionActions 的校验逐字一致
+/** 内化器固定文案。字段名必须与 parseCognitionActions 的校验逐字一致
  *  （2026-09-01 回归：旧文案 "wiki:<name>" 记法诱导模型把名字嵌进 target）。 */
 export const CONSOLIDATE_SYSTEM_PROMPT = [
   "你是认知内化器。输入是一条已完结主题线的全部情节，与现有的全局认知文件内容。",
@@ -97,7 +97,7 @@ interface CognitionAction {
   source: string
 }
 
-/** 模块级全局 L2 写入锁（spec 4.1）：跨项目并发内化撞同一文件时串行化。 */
+/** 模块级全局 L2 写入锁：跨项目并发内化撞同一文件时串行化。 */
 let l2WriteChain: Promise<void> = Promise.resolve()
 function withL2Lock<T>(fn: () => Promise<T>): Promise<T> {
   const run = l2WriteChain.then(fn)
@@ -166,13 +166,13 @@ export class MemoryPipeline {
   readonly #layout: MemoryLayout
   readonly #sessions: SessionStore
   readonly #deps: PipelineDeps
-  /** 项目级串行锁（spec 4.1）：同项目触发（含内化）排队执行。 */
+  /** 项目级串行锁：同项目触发（含内化）排队执行。 */
   readonly #locks = new Map<string, Promise<void>>()
   /** 每项目打开的 VectorIndex（daemon 生命周期内复用连接）。 */
   readonly #indexes = new Map<string, VectorIndex>()
-  /** 自动收束阈值（spec 5）；缺省 14 天。 */
+  /** 自动收束阈值；缺省 14 天。 */
   readonly #inactiveDays: number
-  /** 内化开关（spec 6）；缺省开。 */
+  /** 内化开关；缺省开。 */
   readonly #consolidateEnabled: boolean
 
   constructor(memoryDir: string, sessions: SessionStore, deps: PipelineDeps) {
@@ -186,7 +186,7 @@ export class MemoryPipeline {
   #now(): Date { return this.#deps.now?.() ?? new Date() }
   #log(msg: string): void { (this.#deps.log ?? ((m) => console.error(m)))(msg) }
 
-  /** 记忆落盘通知（Task 6）：缺省 no-op；at 由 pipeline 统一补（now 时刻）。 */
+  /** 记忆落盘通知：缺省 no-op；at 由 pipeline 统一补（now 时刻）。 */
   #audit(e: MemoryAudit): void {
     this.#deps.audit?.({ ...e, at: e.at ?? this.#now().toISOString() })
   }
@@ -199,7 +199,7 @@ export class MemoryPipeline {
   }
 
   /**
-   * 项目检索索引（唯一所有者，spec 卡⑤）：全库的 VectorIndex 连接只在这里
+   * 项目检索索引（唯一所有者）：全库的 VectorIndex 连接只在这里
    * 打开与缓存——system 的检索路径经此借用，不再自建连接。daemon 生命周期内复用。
    */
   indexFor(projectId: string): VectorIndex {
@@ -229,11 +229,11 @@ export class MemoryPipeline {
   /** 返回本次实际执行提取的批次数（0 = 无增量，调用方可据此区分"触发即空转"）。 */
   async #runLocked(projectId: string, trigger: PipelineTrigger, sessionId?: string): Promise<number> {
     const ledger = new WriteLedger(join(this.#layout.projectDir(projectId), "state.json"))
-    // 选范围（会话维度，spec 4.1）：提取只看触发会话自己的增量窗口——水位每会话
+    // 选范围（会话维度）：提取只看触发会话自己的增量窗口——水位每会话
     // 各一本，互不比较（旧项目级水位按会话创建序划界，晚创建会话推进过水位后，
     // 老会话的新消息会被永久跳过：2026-09-02 改名事故）。interval 定时兜底无显式
     // 归属，对全部会话逐个补增量，单会话失败不阻塞其他会话。首跑水位为空 → 该
-    // 会话全量，属首次提取；提取失败水位不推进（spec 11），下次触发补上。
+    // 会话全量，属首次提取；提取失败水位不推进，下次触发补上。
     const rows = this.#sessionRows(projectId)
     const targets = trigger === "interval" ? rows : rows.filter((r) => r.id === sessionId)
     const touched = new Set<string>()
@@ -256,19 +256,19 @@ export class MemoryPipeline {
       }
       this.#advance(ledger, trigger, row.id, range)
     }
-    // 时间自动（spec 5）：每次管线跑完顺带扫描全部 active 线收束；空批次也扫。
+    // 时间自动：每次管线跑完顺带扫描全部 active 线收束；空批次也扫。
     const inactivated = await this.#maybeAutoInactivate(projectId, trigger, sessionId)
     for (const t of inactivated) touched.add(t)
     if (touched.size > 0) {
       this.#reindexProject(projectId)
       this.#rebuildMemoryMd(projectId)
-      // 写路径即时向量补算（spec 7.2）：embed 可用时本次写入的线立即有向量，
+      // 写路径即时向量补算：embed 可用时本次写入的线立即有向量，
       // 不必等下次重启 reconcile —— 否则运行期新经历的双路融合会结构性退化为纯关键词。
       if (this.#deps.embed !== undefined) {
         await this.#backfillVectors(this.indexFor(projectId), this.#projectEntries(projectId))
       }
     }
-    // 顺带内化检查（spec 4.2/6）：本次涉及的线若已 inactive 则总结一次。
+    // 顺带内化检查：本次涉及的线若已 inactive 则总结一次。
     await this.#maybeConsolidateTouched(projectId, touched, trigger, sessionId)
     return batches
   }
@@ -302,7 +302,7 @@ export class MemoryPipeline {
       })
     } catch (err) {
       this.#log(`kclaw memory extract failed (watermark not advanced): ${String(err)}`)
-      throw err // 抛出走锁内 catch：水位不推进（spec 11），下次触发重试同一范围
+      throw err // 抛出走锁内 catch：水位不推进，下次触发重试同一范围
     }
     let text = raw.trim()
     const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(text)
@@ -343,7 +343,7 @@ export class MemoryPipeline {
       this.#audit({ trigger, kind: "episode", op: action.op, topic: action.file, sessionId })
       return
     }
-    // append / update：目标线不存在 → 按 new-thread 处理并记日志（spec 11）
+    // append / update：目标线不存在 → 按 new-thread 处理并记日志
     const raw = readFileSyncSafe(path)
     if (raw === undefined) {
       this.#log(`kclaw memory action targets missing thread ${action.file}: treating as new-thread`)
@@ -356,11 +356,11 @@ export class MemoryPipeline {
     } else {
       writeThreadFile(path, (tf) => updateSection(tf, action.section ?? "", action.content), () => { throw new Error("unreachable") })
     }
-    // 复活：inactive 线又有新情节 → active（spec 5）；显式 status 覆盖
+    // 复活：inactive 线又有新情节 → active；显式 status 覆盖
     if (action.status === "inactive") {
       writeThreadFile(path, (tf) => ({ ...tf, status: "inactive" }), () => { throw new Error("unreachable") })
     } else if (action.status === "active" || currentIsInactive) {
-      writeThreadFile(path, (tf) => ({ ...tf, status: "active" }), () => { throw new Error("unreachable") }) // inactive → active 复活（spec 5）
+      writeThreadFile(path, (tf) => ({ ...tf, status: "active" }), () => { throw new Error("unreachable") }) // inactive → active 复活
     }
     this.#deps.emit?.({ type: "memory.written", path, kind: "episode", topic: action.file })
     this.#audit({ trigger, kind: "episode", op: action.op, topic: action.file, sessionId })
@@ -379,7 +379,7 @@ export class MemoryPipeline {
   }
 
   /**
-   * upsert 时保留已补算的向量（spec 7.2）：正文没变 → 向量原样保留（检索/对账的
+   * upsert 时保留已补算的向量：正文没变 → 向量原样保留（检索/对账的
    * 重索引不再抹掉向量，双路融合不退化）；正文变了或新条目 → 弃掉旧向量，留待
    * reconcile 的 backfill 按新正文重 embed。注意 upsert 无 vector 参数会无条件
    * 清空该 key 的向量行，所以这里必须在有向量可留时才传回。
@@ -411,7 +411,7 @@ export class MemoryPipeline {
     writeFileAtomic(join(dir, "MEMORY.md"), renderMemoryMd(projectId, threads))
   }
 
-  /** 时间自动 inactive（spec 5）：扫描全部 active 线，闲置超阈值则收束；返回本次收束的线。 */
+  /** 时间自动 inactive：扫描全部 active 线，闲置超阈值则收束；返回本次收束的线。 */
   async #maybeAutoInactivate(projectId: string, trigger: PipelineTrigger, sessionId?: string): Promise<string[]> {
     const dir = this.#layout.projectDir(projectId)
     const limitDays = this.#inactiveDays
@@ -430,7 +430,7 @@ export class MemoryPipeline {
     return inactivated
   }
 
-  /** 顺带内化检查（spec 4.2/6）：本次涉及的线若已 inactive 则总结一次。 */
+  /** 顺带内化检查：本次涉及的线若已 inactive 则总结一次。 */
   async #maybeConsolidateTouched(projectId: string, touched: Set<string>, trigger: PipelineTrigger, sessionId?: string): Promise<void> {
     const dir = this.#layout.projectDir(projectId)
     for (const topic of touched) {
@@ -478,14 +478,14 @@ export class MemoryPipeline {
     })
   }
 
-  // ---- reconcile / 管理接口（Task 10 MemorySystem 消费） ----
+  // ---- reconcile / 管理接口（MemorySystem 消费） ----
 
-  /** 项目库全量重建索引（FTS，派生物对齐磁盘；spec 2.5）。 */
+  /** 项目库全量重建索引（FTS，派生物对齐磁盘）。 */
   reindexProject(projectId: string): void {
     this.#reindexProject(projectId)
   }
 
-  /** 项目库向量补算（spec 7.2）：embed 可用时对缺向量或正文变化的条目批量补。 */
+  /** 项目库向量补算：embed 可用时对缺向量或正文变化的条目批量补。 */
   async backfillProjectVectors(projectId: string): Promise<void> {
     await this.#backfillVectors(this.indexFor(projectId), this.#projectEntries(projectId))
   }
@@ -495,14 +495,14 @@ export class MemoryPipeline {
     return this.#reindexGlobal()
   }
 
-  /** 重建项目 MEMORY.md 线索引表（派生物，spec 2.4）。 */
+  /** 重建项目 MEMORY.md 线索引表（派生物）。 */
   rebuildMemoryMd(projectId: string): void {
     this.#rebuildMemoryMd(projectId)
   }
 
   /**
-   * 关闭本管线打开的全部项目 + 全局 VectorIndex（daemon stop 序列调用，
-   * Task 13）：防 better-sqlite3 句柄泄漏。已关闭/损坏的索引逐个容错。
+   * 关闭本管线打开的全部项目 + 全局 VectorIndex（daemon stop 序列调用）：
+   * 防 better-sqlite3 句柄泄漏。已关闭/损坏的索引逐个容错。
    */
   close(): void {
     for (const idx of this.#indexes.values()) {
@@ -511,7 +511,7 @@ export class MemoryPipeline {
     this.#indexes.clear()
   }
 
-  /** 内化实现（spec 6）；写 global 文件加全局 L2 锁。trigger 放宽为审计枚举
+  /** 内化实现；写 global 文件加全局 L2 锁。trigger 放宽为审计枚举
    *  （"nightly"/"manual" 不是提取触发，仅用于 memory 事件归属）。 */
   async #consolidateLocked(projectId: string, tf: ThreadFile, trigger: MemoryAudit["trigger"], sessionId?: string): Promise<void> {
     if (!this.#consolidateEnabled) return
@@ -554,7 +554,7 @@ export class MemoryPipeline {
 
   async #applyCognitionAction(action: CognitionAction, source: string, trigger: MemoryAudit["trigger"], sessionId?: string): Promise<void> {
     if (action.target === "skill") {
-      this.#log(`kclaw memory consolidate: skill target reserved, skipped (spec 2.3)`)
+      this.#log(`kclaw memory consolidate: skill target reserved, skipped`)
       return
     }
     const kind = action.target // persona | wiki | rule
@@ -565,7 +565,7 @@ export class MemoryPipeline {
     const result = writeCognitionFile(path, kind, name,
       (cf) => {
         if (action.op === "append") return { ...cf, body: `${cf.body}${cf.body === "" ? "" : "\n\n"}${withSource}`, updated: todayOf(this.#now()) }
-        return { ...cf, body: action.content, updated: todayOf(this.#now()) } // rewrite：就地改写不保留旧版（spec 2.3）
+        return { ...cf, body: action.content, updated: todayOf(this.#now()) } // rewrite：就地改写不保留旧版
       },
       () => ({ kind, name, title: name, scope: "global", created: todayOf(this.#now()), updated: todayOf(this.#now()), body: isAppend ? "" : withSource }))
     this.#deps.emit?.({ type: "memory.written", path, kind: "cognition", scope: result.scope })
@@ -594,7 +594,7 @@ export class MemoryPipeline {
     for (const f of readDirSafe(join(dir, "wiki"))) if (f.endsWith(".md")) addFile(join(dir, "wiki", f), "wiki", f.replace(/\.md$/, ""))
     for (const f of readDirSafe(join(dir, "rule"))) if (f.endsWith(".md")) addFile(join(dir, "rule", f), "rule", f.replace(/\.md$/, ""))
     for (const key of idx.keys()) if (!onDisk.has(key)) idx.remove(key)
-    // 向量补算（spec 7.2）：embed 可用时对无向量或正文变化的条目批量补。
+    // 向量补算：embed 可用时对无向量或正文变化的条目批量补。
     await this.#backfillVectors(idx, entries)
   }
 

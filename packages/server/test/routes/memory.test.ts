@@ -17,7 +17,7 @@ beforeEach(async () => {
     resolveLlm: () => ({ llm: {} as never, model: "m" }),
   })
   system.writeCognition("persona", "persona", "画像")
-  // 种子项目线文件：直接落盘（memory 目录结构，spec 2.1）
+  // 种子项目线文件：直接落盘（memory 目录结构）
   mkdirSync(join(home, "memory", "projects", "kclaw-x"), { recursive: true })
   writeFileSync(join(home, "memory", "projects", "kclaw-x", "workdir.txt"), "/w/kclaw")
   writeFileSync(join(home, "memory", "projects", "kclaw-x", "ws.md"), "---\ntopic: ws\ntitle: T\nstatus: active\ncreated: 2026-08-28\nupdated: 2026-08-28\n---\n\n## 2026-08-28 · H\n\n正文\n")
@@ -41,7 +41,7 @@ describe("POST /memory/trigger-manual", () => {
     const res = await app.inject({ method: "POST", url: "/memory/trigger-manual", headers: auth })
     expect(res.statusCode).toBe(200)
   })
-  it("threads the given sessionId through to triggerManual (Task 7)", async () => {
+  it("threads the given sessionId through to triggerManual ", async () => {
     const spy = vi.spyOn(system, "triggerManual").mockResolvedValue(undefined)
     try {
       const res = await app.inject({
@@ -52,7 +52,7 @@ describe("POST /memory/trigger-manual", () => {
       expect(spy).toHaveBeenCalledWith("/w/none", "ses_abc")
     } finally { spy.mockRestore() }
   })
-  it("treats an empty sessionId as absent (falls back to undefined, Task 7 validation)", async () => {
+  it("treats an empty sessionId as absent (falls back to undefined)", async () => {
     const spy = vi.spyOn(system, "triggerManual").mockResolvedValue(undefined)
     try {
       await app.inject({

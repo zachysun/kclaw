@@ -41,7 +41,7 @@ export function renderCognitionFile(cf: CognitionFile): string {
   return `---\n${fm}---\n\n${cf.body}\n`
 }
 
-/** 防覆盖合并写（spec 2.5）：与 writeThreadFile 同语义。 */
+/** 防覆盖合并写：与 writeThreadFile 同语义。 */
 export function writeCognitionFile(
   path: string, kind: CogKind, name: string,
   mutate: (cf: CognitionFile) => CognitionFile,

@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS vectors (
 );
 `
 
-/** markdown 是真相、本库是派生物（spec 2.1）：删除 vectors.db 后可全量重建。 */
+/** markdown 是真相、本库是派生物：删除 vectors.db 后可全量重建。 */
 export class VectorIndex {
   readonly #db: Database.Database
 
@@ -65,7 +65,7 @@ export class VectorIndex {
   }
 
   /**
-   * FTS5 召回（spec 7.2）：token 间 OR —— 任一 bigram 命中即召回，bm25 自然把
+   * FTS5 召回：token 间 OR —— 任一 bigram 命中即召回，bm25 自然把
    * 命中更多 token 的条目排更前。检索是召回优先（模型侧二次判断），不是 AND 精确。
    */
   searchFts(query: string, limit: number): Array<{ key: string; rank: number }> {
