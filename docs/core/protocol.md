@@ -198,7 +198,7 @@ export interface MessageQueuedPayload {
 export interface MessageSteeredPayload { messageId: string }
 export interface MessageQueueCancelledPayload { messageId?: string; all?: boolean }
 
-// 记忆写入管线每次实际落盘时发出（spec 9.3）：episode 带 topic（线名）、cognition 带 scope；
+// 记忆写入管线每次实际落盘时发出：episode 带 topic（线名）、cognition 带 scope；
 // 事件不带 sessionId（项目级事务），只作"已落盘"的轻提示，订阅端不驱动状态机。
 export interface MemoryWrittenPayload {
   path: string
@@ -207,7 +207,7 @@ export interface MemoryWrittenPayload {
   scope?: string
 }
 
-// 钩子失败（spec issue #6）：失败兜底自声明（skip 跳过 / deny 否决闸门），run 不因钩子失败而崩，但失败必须可见。
+// 钩子失败：失败兜底自声明（skip 跳过 / deny 否决闸门），run 不因钩子失败而崩，但失败必须可见。
 // phase:"load" 是装载期失败（无 sessionId/runId）；"run" 是执行期失败（带所在 run 的上下文）。
 export interface HookFailedPayload {
   hook: string

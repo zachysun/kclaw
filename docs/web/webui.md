@@ -76,7 +76,7 @@ export function bootstrapToken(): string | null
 
 会话发出首条消息后，daemon 会自动生成标题并广播 `session.renamed {title}` 事件（发射方见 [run-manager](../server/run-manager.md) 的 autoname）。ChatPanel 在事件循环里把这个事件单独挑出来、不送进消息 reducer——它描述的是会话本身而不是某条消息，进 reducer 反而会污染对话状态。事件携带的标题经回调 `onSessionRenamed` 直接更新 App 里的会话列表，侧栏不用刷新页面就显示新名字。
 
-### 发送三选与排队列表（message-queue spec §7.1）
+### 发送三选与排队列表
 
 - **三选（disposition trio）**：会话运行中时输入框上方出现"引导 / 等待 / 中断"三个按钮（`runState === "running"` 才渲染——空闲时任何处置等价于普通发送）。默认选中来源与会话级覆盖同源：会话 meta 的 `dispositionOverride` > 配置 `sessions.defaultDisposition` > steer（挂载时并行拉 `GET /sessions/:id` 与 `GET /config` 解析，daemon 不可达时静默维持 steer）。点选或方向键旋转（←→↑↓，radio 语义）即生效：选「引导 / 等待」本地立即改当前发送值并 `POST /sessions/:id/disposition` 写会话级覆盖（sticky，与 CLI `/steer`、`/wait` 同一存储，刷新/重进会话后仍生效）；**选「中断」是一次性动作**（Master 2026-08-31 拍板，与 CLI `/interrupt` 对齐）——本地选中仅用于这一次发送、不写会话级覆盖，这条带 interrupt 发出后三选自动切回基础处置（steer/wait），不会停在「中断」档上，因而不存在"来一条、断一条"的跨客户端连掐风险。每条 `send_message` 显式携带当前选择。
 - **排队列表（Master 2026-08-30 改版）**：排队中的消息**不以气泡形式进消息流**，显示在输入框正上方（通知条同一位置带）的排队列表里——一行一条、按发送序排列（先排队的在上面），每行是"处置标签（引导/等待/中断）+ 单行截断的消息文本（悬停可见全文）+ 取消按钮"。列表头部带计数"N 条排队中"与"全部取消"。**忙会话发送的消息从第一帧起就是列表行**（见上文"发送即时回显与排队呈现"的分路），不是先显示气泡再转入。单条取消与全部取消都发 `queue.cancel` 帧；interrupt 行不渲染取消按钮（入队即伴随中止、紧接着出队执行，没有可取消窗口，点了也只能换来 `not found`）。列表**不随输入清除**：它不是一次性提示，是会话状态；一次性 notice（"已重连"、命令结果等）开始输入才清除，列表要等排队真正消化（执行/取消）才消失。
@@ -89,9 +89,9 @@ export function bootstrapToken(): string | null
 - `message.created` 插入骨架并标记 `pending`（无块时渲染 "…" 占位），`message.completed` 整体替换。若该 id 在排队列表里，这是出队/注入信号：行移出列表、消息本体作为正常气泡追加到消息流末尾（它就是当前最新的消息；排队期间没有气泡在场，也就没有"原地升级"一说——原地替换只服务于空闲直发消息的乐观孪生合并）。
 - **排队三事件**：`message.queued {messageId, disposition, position?}` 的落地次序——先认领本地待确认的列表行（忙会话发送建的 `local-` 行，改名并保留文本）；没有行则收走待确认的乐观气泡（闲转忙竞态，文本带走建行）；都没有（跨客户端/重放边缘）落地空文本行，由面板的快照补全。已跟踪的 id 只刷新处置（恢复重播把 steer/interrupt 降级报为 wait），不重复收养。`message.steered {messageId}` 直接删除对应行（注入完成，消息本体随后/已经由 `message.created` 落进消息流）；`message.queue_cancelled` 按 `messageId` 或 `all:true` 删除对应/全部行（取消的消息从未落盘，无气泡残留）。
 - `run.started/completed/failed` 驱动 `runState` 与 "running…" 指示；`llm.failed {willRetry:true}` 显示"重试中…"提示（`llm.completed` 或 run 终态清除）。
-- `hook.failed` 保留最近一条进 `hookFailure` 状态，ChatView 在消息流下方渲染暗色警示行"钩子 <名字> 失败（<位置>）：<原因>"——用户钩子失败不伤 run，但失败必须可见（spec issue #6，机制见 [hooks](../core/hooks.md)）；`run.started` 清除（与 error 同过期节奏），装载期失败（发生在 run 前）持续显示到下一次 run。
+- `hook.failed` 保留最近一条进 `hookFailure` 状态，ChatView 在消息流下方渲染暗色警示行"钩子 <名字> 失败（<位置>）：<原因>"——用户钩子失败不伤 run，但失败必须可见（机制见 [hooks](../core/hooks.md)）；`run.started` 清除（与 error 同过期节奏），装载期失败（发生在 run 前）持续显示到下一次 run。
 - `confirmation.requested`/`confirmation.resolved` 增删 `pendingConfirmations` 卡片。
-- `memory.written`（记忆落盘反馈，spec 9.1/9.3）单独挑出来、不进 reducer：读 `payload.path` 在通知条显示 `已写入记忆: <path>`（与 CLI 同文案）；它描述的是记忆库而不是某条消息，进 reducer 反而会污染对话状态。事件本身不带记忆内容，要看内容切到「记忆」tab——通知条**可点击**，点击切换到记忆页并自动打开对应文件（`episode` 按 `scope+topic` 打开线、`cognition` 按 path 打开认知文件）；app 层装配了 `onOpenMemoryWritten` 回调把跳转目标传给 `MemoryView`（见 [memory](../core/memory.md) 的"事件"一节）。
+- `memory.written`（记忆落盘反馈）单独挑出来、不进 reducer：读 `payload.path` 在通知条显示 `已写入记忆: <path>`（与 CLI 同文案）；它描述的是记忆库而不是某条消息，进 reducer 反而会污染对话状态。事件本身不带记忆内容，要看内容切到「记忆」tab——通知条**可点击**，点击切换到记忆页并自动打开对应文件（`episode` 按 `scope+topic` 打开线、`cognition` 按 path 打开认知文件）；app 层装配了 `onOpenMemoryWritten` 回调把跳转目标传给 `MemoryView`（见 [memory](../core/memory.md) 的"事件"一节）。
 
 ## WS 客户端（packages/web/src/ws.ts）
 

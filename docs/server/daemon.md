@@ -73,7 +73,7 @@ embedding 判定链（memory.embedding） model 非空才构造 embedding 客户
                                     构造在 EventBus 之后、MemorySystem 之前，赋给下方 memory
 new EventBus()
 new MemorySystem({memoryDir, sessions, config, resolveLlm, embed, emit})
-                                    记忆 v2 门面（见 memory.md）；装配后立即三件事：
+                                    记忆系统门面（见 memory.md）；装配后立即三件事：
                                     migrateV1Notes（notes/*.md 三路分流并入 persona/rule/wiki，删 notes/）
                                     rmSync index.db（v1 派生物直接删）
                                     reconcile()（全部项目库 + 全局库对账，向量后台补算）

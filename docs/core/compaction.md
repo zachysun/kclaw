@@ -64,7 +64,7 @@ export interface CompactionState { segments: CompactionSegment[]; top: string; u
 
 段的消息范围由相邻两个 `upto` 界定：第一段从会话开头（或旧格式升级点）到 `segments[0].upto`，其后每段从前一段的 `upto` 之后到本段 `upto`（`segmentRanges` 负责映射）。分界必须用消息 id，不得用序号——存储里消息没有序号，只有全局唯一 id。分界 id 在历史里找不到时（事件流被手动改过、消息被删），该分界及更早的段作废：作废点之后全部按原文处理，`session_search` 对找不到 `upto` 的压缩段直接跳过（不误扫整条流）。
 
-**旧格式兼容**：meta 没有 `compaction` 但有旧字段 `compactedSummary`/`compactedUpto` 的会话，读取时把旧摘要当作总摘要的起点（`top` = 旧摘要，`segments` 为空），保留部分仍按旧 `compactedUpto` 分界。`compactedSummary`/`compactedUpto` 不再被清除（Task 5 删了唯一的清除调用），但运行侧读压缩视图时 `compaction` 优先（run.ts 的 `prev` 先读 `compaction`，见 [storage](./storage.md)），两者并存无功能影响。不写迁移脚本；升级之前的会话没有 `compaction` 事件，`session_search` 返回"无可检索内容"——直到第一次 v2 压缩（只影响老会话）。
+**旧格式兼容**：meta 没有 `compaction` 但有旧字段 `compactedSummary`/`compactedUpto` 的会话，读取时把旧摘要当作总摘要的起点（`top` = 旧摘要，`segments` 为空），保留部分仍按旧 `compactedUpto` 分界。`compactedSummary`/`compactedUpto` 不再被清除，但运行侧读压缩视图时 `compaction` 优先（run.ts 的 `prev` 先读 `compaction`，见 [storage](./storage.md)），两者并存无功能影响。不写迁移脚本；升级之前的会话没有 `compaction` 事件，`session_search` 返回"无可检索内容"——直到第一次压缩（只影响老会话）。
 
 ### 压缩审计（compaction 事件）
 

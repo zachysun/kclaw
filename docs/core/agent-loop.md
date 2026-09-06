@@ -14,7 +14,7 @@
 - **历史永不修改**：窗口截断、孤儿清理都发生在组装 provider 视图时（`toProviderMessages`），JSONL（每行一条 JSON 的文本文件）里的原始消息逐字节不变。
 - **确认流不中断循环**：拒绝/超时变成 error result + note 块传回模型，模型可以换方案继续；只有 abort 才真正终止。
 - **重试所有权在 provider 层**：循环自己从不重试 LLM 调用（会与 `withRetry` 双重重试）；provider 层的重试经 `llm-retry` 位置的钩子链以 `llm.failed {willRetry:true}` 事件对外可见。
-- **循环只认位置，不认行为**（spec issue #6）：用户消息增强、引导注入、压缩判定、模型视图改写……这些原本身份各异的"钩子字段"统一收进 `deps.hooks`（一个 `HookRunner`）的 14 个命名位置；行为以钩子条目在装配时注册（内置闭包与用户文件同一条链，见 [hooks](./hooks.md)）。循环在每个位置调用 `hooks.run(位置, ctx)` 并按该位置的契约消费结果。
+- **循环只认位置，不认行为**：用户消息增强、引导注入、压缩判定、模型视图改写……这些原本身份各异的"钩子字段"统一收进 `deps.hooks`（一个 `HookRunner`）的 14 个命名位置；行为以钩子条目在装配时注册（内置闭包与用户文件同一条链，见 [hooks](./hooks.md)）。循环在每个位置调用 `hooks.run(位置, ctx)` 并按该位置的契约消费结果。
 
 ---
 
@@ -49,7 +49,7 @@ export interface AgentDeps {
   llmAttempt?(): number                 // llm.started 报告的尝试号；provider 层重试经 withRetry 在
                                         // stream() 内部完成后，由装配把这个计数反馈进来（默认恒 1）
   tokenBudget?: number                // 请求预算（token 数）：驱动工具输出省略/历史逐出（见 compaction.md 机制二）
-  hooks: HookRunner                   // 钩子链（spec issue #6）：循环的行为接缝全部以此为准（见 hooks.md）。
+  hooks: HookRunner                   // 钩子链：循环的行为接缝全部以此为准（见 hooks.md）。
                                       // 各位置的 fatal 抛错沿 hooks.run 传播，由循环既有的 catch 路径接管，
                                       // 错误码与迁移前一致（user_message_failed / steering_failed / …）
   onEvent(e: AgentEvent): void

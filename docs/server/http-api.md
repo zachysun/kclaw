@@ -39,8 +39,8 @@
 | POST | `/sessions/:id/readonly` | 会话级只读开关（write/exec 类工具被拒，见 [permissions](../core/permissions.md)） | `{readonly: boolean}` 必填；`false` 清除标记 | `SessionMeta` |
 | GET | `/sessions/:id/messages` | 读全部消息（对话/断线恢复的数据源，ChatPanel 用） | — | `Message[]`（事件流投影视图——`readMessages` 从 events.jsonl 过滤 `message` 事件按事件序返回；**排队未执行的消息不在其中**，见 `/queue`） |
 | GET | `/sessions/:id/events` | 完整事件流（事件溯源的唯一真相；轨迹页的单源数据） | — | `SessionEvent[]`（append-only，按事件序；含 session.created / message / compaction / memory / system 等全部事件，见 [storage](../core/storage.md)） |
-| GET | `/sessions/:id/queue` | 排队消息快照（message-queue spec §4.3）：重连/刷新的全量纠偏兜底 | — | `QueueEntry[]`（`queue.jsonl` 整文件读出，数组顺序即执行顺序；steer 条目排在可执行条目之后；空队列返回 `[]`） |
-| POST | `/sessions/:id/disposition` | 会话级发送处置覆盖（CLI `/steer`、`/wait` 与 Web 三选的 steer/wait 的 sticky 存储；interrupt 在 Web 为一次性、CLI 为 `/interrupt` 一次性动作，均不落覆盖，spec §6/§7.1） | `{disposition: "steer"\|"wait"\|"interrupt"}` 必填；非法值 400 `disposition must be "steer", "wait" or "interrupt"` | `SessionMeta`（写入 `dispositionOverride`，优先于配置默认） |
+| GET | `/sessions/:id/queue` | 排队消息快照：重连/刷新的全量纠偏兜底 | — | `QueueEntry[]`（`queue.jsonl` 整文件读出，数组顺序即执行顺序；steer 条目排在可执行条目之后；空队列返回 `[]`） |
+| POST | `/sessions/:id/disposition` | 会话级发送处置覆盖（CLI `/steer`、`/wait` 与 Web 三选的 steer/wait 的 sticky 存储；interrupt 在 Web 为一次性、CLI 为 `/interrupt` 一次性动作，均不落覆盖） | `{disposition: "steer"\|"wait"\|"interrupt"}` 必填；非法值 400 `disposition must be "steer", "wait" or "interrupt"` | `SessionMeta`（写入 `dispositionOverride`，优先于配置默认） |
 | GET | `/sessions/:id/compactions` | 压缩审计记录（事件流里 `compaction` 事件的只读视图） | — | `CompactionRecord[]`（从 events.jsonl 过滤 `compaction` 事件按事件序返回；无事件返回 `[]`） |
 | POST | `/sessions/:id/compact` | 手动压缩：跳过触发线立即压缩一次（机制见 [compaction](../core/compaction.md)） | `{focus?}`：可选非空字符串，作为重点说明进入两次摘要调用；空串/非字符串 400 `focus must be a non-empty string` | `{message: string}`：成功 `压缩了 N 段，剩 X 条原文消息`；无可压缩内容 `无可压缩内容` |
 
@@ -119,7 +119,7 @@ interface Job {
 
 ### 记忆（routes/memory.ts，底座 `MemorySystem`）
 
-记忆 v2 的 `/memory` 管理路由族（spec 9.2）：读取与整文件覆写/删除记忆塔里的项目主题线（L1）与全局认知文件（L2）。机制与文件格式见 [memory](../core/memory.md)。与附件/用量"仅注入时注册"不同，这组**始终注册**——`createApp` 未装配 `MemorySystem`（`opts.memory` 缺失，常见于测试）时，命中任何一条都返回 `503 {error:"memory system unavailable"}`，而不是 404。
+`/memory` 管理路由族：读取与整文件覆写/删除记忆塔里的项目主题线（L1）与全局认知文件（L2）。机制与文件格式见 [memory](../core/memory.md)。与附件/用量"仅注入时注册"不同，这组**始终注册**——`createApp` 未装配 `MemorySystem`（`opts.memory` 缺失，常见于测试）时，命中任何一条都返回 `503 {error:"memory system unavailable"}`，而不是 404。
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
@@ -132,9 +132,9 @@ interface Job {
 | GET | `/memory/global/:kind/:file` | 读认知文件原文 | — | `{content}`；kind 非 persona/wiki/rule 或文件不存在 404 |
 | PATCH | `/memory/global/:kind/:file` | 整文件覆写认知文件（写后重建全局索引） | `{content}` 必填、非空字符串，否则 400 `content must be a non-empty string` | `{ok:true}`；kind 非法或文件不存在 404 |
 | DELETE | `/memory/global/:kind/:file` | 删认知文件 + 重建全局索引 | — | `{ok:true}`；kind 非法或文件不存在 404；**persona 是全局画像，不可删除，返回 400 `persona 不可删除（可清空正文）`** |
-| POST | `/memory/trigger-manual` | 手动触发当前项目的手动写入（spec 4.2 手动行）：与定时/跟随同一条管线，范围 = 归属会话自上次水位以来的新消息（会话缺省回落项目最近活动会话） | `{workdir?, sessionId?}`：均可选，workdir 缺省回落 `config.workspace`，sessionId 缺省回落项目最近活动会话 | `{ok:true}`；`memory.write.manual=false` 时 400 `手动写入已关闭（memory.write.manual=false），可依赖定时/跟随触发`；管线异常 500 |
+| POST | `/memory/trigger-manual` | 手动触发当前项目的手动写入：与定时/跟随同一条管线，范围 = 归属会话自上次水位以来的新消息（会话缺省回落项目最近活动会话） | `{workdir?, sessionId?}`：均可选，workdir 缺省回落 `config.workspace`，sessionId 缺省回落项目最近活动会话 | `{ok:true}`；`memory.write.manual=false` 时 400 `手动写入已关闭（memory.write.manual=false），可依赖定时/跟随触发`；管线异常 500 |
 
-`:id`/`:project`/`:topic`/`:file` 的路径段先过白名单校验（`isSafeSegment`：段非空、非 `.`、非 `..`、不含 `/`，拦目录穿越段；允许 CJK/空格，URL 里已 encodeURIComponent）——非法段返回 400 `invalid segment`；合法段按原样传给 `MemorySystem`，读侧宽容（找不到就 404），写侧是"人即是真相"的整文件覆写。`GET /memory/projects/:id` 的响应包裹成 `{id, threads}` 是为前端取数方便（实现与 spec 的差异点，见 [memory](../core/memory.md) 的管理界面一节）。删除类的机器语义：删的是文件，`vectors.db` 里的对应条目由随后的 reindex 清除。
+`:id`/`:project`/`:topic`/`:file` 的路径段先过白名单校验（`isSafeSegment`：段非空、非 `.`、非 `..`、不含 `/`，拦目录穿越段；允许 CJK/空格，URL 里已 encodeURIComponent）——非法段返回 400 `invalid segment`；合法段按原样传给 `MemorySystem`，读侧宽容（找不到就 404），写侧是"人即是真相"的整文件覆写。`GET /memory/projects/:id` 的响应包裹成 `{id, threads}` 是为前端取数方便（见 [memory](../core/memory.md) 的管理界面一节）。删除类的机器语义：删的是文件，`vectors.db` 里的对应条目由随后的 reindex 清除。
 
 ### 技能（routes/skills.ts，始终注册）
 
@@ -149,7 +149,7 @@ interface Job {
 
 ### 钩子（routes/hooks.ts，始终注册）
 
-只读钩子管理面（spec issue #6）：内置钩子的静态清单 + 用户钩子文件的当前装载状态，机制见 [hooks](../core/hooks.md)。
+只读钩子管理面：内置钩子的静态清单 + 用户钩子文件的当前装载状态，机制见 [hooks](../core/hooks.md)。
 
 | 方法 | 路径 | 用途 | 响应 |
 |------|------|------|------|
@@ -189,13 +189,13 @@ interface Job {
 | GET | `/ws` | WebSocket（建立后可双向收发消息的长连接）升级端点；HTTP 鉴权豁免，连接内首帧认证，协议见 [realtime](./realtime.md) |
 | GET | `/`、`/assets/*` | 仅当 `webDist` 已配置时由 `@fastify/static` 托管构建产物；外壳三路径加 PWA 静态文件（`/manifest.webmanifest`、`/sw.js`、`/icon-192.png`、`/icon-512.png`、`/favicon.ico`）免鉴权，其余静态文件仍需 Bearer |
 
-**队列相关的 WS 命令与事件**（message-queue spec §4，完整帧语义见 [realtime](./realtime.md) 与 [run-manager](./run-manager.md)）：
+**队列相关的 WS 命令与事件**（完整帧语义见 [realtime](./realtime.md) 与 [run-manager](./run-manager.md)）：
 
 - `send_message` 增加可选 `disposition` 字段（`"steer"|"wait"|"interrupt"`；非法值 error 帧 `send_message disposition must be "steer", "wait" or "interrupt"`）。不带字段取会话覆盖 ?? 配置默认（**默认引导**——有意的行为变更，旧版为自动等待）。回包 `send_message_ack` 增加 `messageId` 与 `queued`（会话空闲直发 `queued:false`、不广播 `message.queued`；运行中按处置分流 `queued:true`）。会话忙时超限的 error 帧文案：`队列已满（10 条）`。
 - `queue.cancel`：`{sessionId, messageId?}`——带 id 取消该条（wait 随时、steer 注入前），不带则清空全部可取消条目。回 `queue.cancel_ack {sessionId, cancelled}`；失败为 error 帧：已注入 `已注入`（机器不删历史）、无此条目 `not found`。
 - 三个新事件：`message.queued {messageId, disposition, position?}`（消息入队/入缓冲区时；position 是 wait/interrupt 的队列序位，steer 不适用；降级按实际处置报告）、`message.steered {messageId}`（steer 注入当前 run 的时刻，事件级 `runId` 标识注入的 run）、`message.queue_cancelled {messageId}` 或 `{all:true}`（单条取消/清空）。出队执行与注入仍用既有 `run.started` + `message.created` 表达，消息 id 与排队时相同——前端气泡原地升级，无需替换。
 
-**记忆写入事件 `memory.written`**（spec 9.3）：记忆写入管线每次实际落盘时经总线广播，帧为 `memory.written {path, kind, topic?, scope?}`——`kind` 是 `"episode"`（项目情节，带 `topic` 线名）或 `"cognition"`（全局认知，带 `scope`），`path` 是落盘文件的绝对路径；不带 `sessionId`（项目级事务）。它只作"已落盘"的轻提示：CLI dim 一行 `已写入记忆: <path>`，web 在通知条显示同文案，都不驱动任何状态机。事件不带"记忆内容"，要看内容走上面的 `/memory` 路由。payload 定义见 [protocol](../core/protocol.md)。
+**记忆写入事件 `memory.written`**：记忆写入管线每次实际落盘时经总线广播，帧为 `memory.written {path, kind, topic?, scope?}`——`kind` 是 `"episode"`（项目情节，带 `topic` 线名）或 `"cognition"`（全局认知，带 `scope`），`path` 是落盘文件的绝对路径；不带 `sessionId`（项目级事务）。它只作"已落盘"的轻提示：CLI dim 一行 `已写入记忆: <path>`，web 在通知条显示同文案，都不驱动任何状态机。事件不带"记忆内容"，要看内容走上面的 `/memory` 路由。payload 定义见 [protocol](../core/protocol.md)。
 
 ## 审计的读取方式
 

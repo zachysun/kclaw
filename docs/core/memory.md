@@ -2,7 +2,7 @@
 
 ## 职责
 
-`MemorySystem`（`packages/core/src/memory/system.ts`）是记忆系统 v2 的唯一服务端门面（单类不拆；30 个方法按四拨消费方分面为窄接口 `MemoryQuery`/`MemoryTriggers`/`MemoryScheduleBook`/`MemoryAdmin`，调用方按面依赖，卡⑤），它把三类文件级能力装配在一起：**L1 项目情节**（按项目分目录的主题线文件）、**L2 全局认知**（跨项目的画像/知识/规则文件）、以及两套**派生检索索引**（SQLite FTS5 全文索引 + 可选的向量索引）。一条记忆就是一份 markdown 文件，用户可以直接打开查看、修改、删除；索引永远只是派生物，删掉可以重建。
+`MemorySystem`（`packages/core/src/memory/system.ts`）是记忆系统的唯一服务端门面（单类不拆；30 个方法按四拨消费方分面为窄接口 `MemoryQuery`/`MemoryTriggers`/`MemoryScheduleBook`/`MemoryAdmin`，调用方按面依赖），它把三类文件级能力装配在一起：**L1 项目情节**（按项目分目录的主题线文件）、**L2 全局认知**（跨项目的画像/知识/规则文件）、以及两套**派生检索索引**（SQLite FTS5 全文索引 + 可选的向量索引）。一条记忆就是一份 markdown 文件，用户可以直接打开查看、修改、删除；索引永远只是派生物，删掉可以重建。
 
 模型通过 `memory_save` / `memory_search` 两个工具读写（`packages/core/src/tools/memory.ts`）；run 装配（core `executeRun`）在每次 run 时做两级注入——L2 认知常驻系统提示、L1 情节作为 note 挂到用户消息上（见下文"检索与注入"）。daemon 的 `MemorySystem` 装配、v1 迁移、embedding 判定链都在 `packages/server/src/daemon.ts`。
 
@@ -10,7 +10,7 @@
 
 ## 三层塔
 
-记忆从"原始对话"到"可注入的长期记忆"分三层沉淀（spec 2.1）：
+记忆从"原始对话"到"可注入的长期记忆"分三层沉淀：
 
 ```
          ┌──────────────────────────────────┐
@@ -33,7 +33,7 @@
 - **机器只改不删**：写入管线只有追加、改写、收束三种动作，没有任何删除；删除只发生在人工路径（管理界面或直接删文件）。这一条贯穿生命周期（见下）。
 - **防覆盖写**：任何一次机器写入（追加情节、内化认知）都以"当前磁盘上的最新内容"为基准重解析后合并（`writeThreadFile` / `writeCognitionFile`），人工改动先被重解析再合并、永不静默丢失；文件存在但不可解析（如人工手写无 frontmatter）时**抛错不覆盖**——宁可不写也不丢数据。
 - **中文分词必须自己做**：FTS5 默认的 unicode61 分词器把连续中文当成一个不可拆的 token，查"上海"永远无法命中"用户在上海工作"。索引和查询共用一个自写分词器 `tokenize`（`packages/core/src/text/fts.ts`）：ASCII 字母数字串按整词（转小写），CJK 连续串拆成相邻两字组合（bigram）——"用户在上海工作"拆成 `用户 户在 在上 上海 海工 工作`。一到两个字的中文查询本身就是合法 bigram，直接命中；更长的查询按 bigram 之间 OR 召回（`searchFts` 用 ` OR ` 连接，任一 bigram 命中即召回，bm25 把命中更多 token 的条目排更前）——检索是**召回优先**，模型侧二次判断，不是 AND 精确。每个 token 用引号包裹后拼进 MATCH 串（`ftsQuery`），杜绝把用户输入当成检索语法注入。
-- **两层索引同构**：项目库与全局库共用同一个 `VectorIndex`（`packages/core/src/memory/indexer.ts`）——`entries`（元数据）+ `entries_fts`（分词 token 串）+ `vectors`（可选向量）三张表，只是条目形状不同（情节条目 key = `topic#date#heading`，认知条目 key = `kind/name`）。连接的唯一所有者是 `MemoryPipeline`（卡⑤）：写入路径（reindex/backfill）与检索路径（MemorySystem 的 searchAll/searchEpisodes 向它借句柄）共用同一份连接缓存，全库 `new VectorIndex` 只出现在 pipeline；停机时 `system.stop()` → `pipeline.close()` 一条链统一关闭。
+- **两层索引同构**：项目库与全局库共用同一个 `VectorIndex`（`packages/core/src/memory/indexer.ts`）——`entries`（元数据）+ `entries_fts`（分词 token 串）+ `vectors`（可选向量）三张表，只是条目形状不同（情节条目 key = `topic#date#heading`，认知条目 key = `kind/name`）。连接的唯一所有者是 `MemoryPipeline`：写入路径（reindex/backfill）与检索路径（MemorySystem 的 searchAll/searchEpisodes 向它借句柄）共用同一份连接缓存，全库 `new VectorIndex` 只出现在 pipeline；停机时 `system.stop()` → `pipeline.close()` 一条链统一关闭。
 
 ## 目录布局与文件格式
 
@@ -47,7 +47,7 @@
 │   │   └── <name>.md
 │   └── vectors.db               # L2 检索索引（FTS5 + 向量，派生物，可删可重建）
 └── projects/
-    └── <id>/                    # 项目 id = <目录名>-<绝对路径 SHA-1 前 6 位>（spec 2.1）
+    └── <id>/                    # 项目 id = <目录名>-<绝对路径 SHA-1 前 6 位>
         ├── workdir.txt          # 人可读的目录映射（项目首次产生记忆时落盘）
         ├── MEMORY.md            # 主题线索引表（派生物，机器重建）
         ├── state.json           # 水位账本 + 跟随检查 + intervalLastRun（见"写入管线"）
@@ -109,7 +109,7 @@ updated: 2026-08-30
 3. **落盘**：逐条应用动作（追加/改写/开线），期间不阻塞地广播 `memory.written` 事件（见"事件"）；
 4. **收尾**：推进水位、扫描时间自动收束（见"生命周期"）、顺带内化检查、重建项目索引与 MEMORY.md。
 
-提取用的模型取 `memory.extractModel`，为空回落主对话模型。校验与提示词的分工：**模型只从 `EXTRACT_SYSTEM_PROMPT` 认识 JSON 结构，字段名必须与落盘校验逐字一致**（2026-09-01 回归：旧 prompt 未点名 `op`/`file`，真实模型交回 `type` 判别 + 缺 `file`，动作全被丢弃）。响应不是合法 JSON 或解析结果非 `actions` 数组时**整批放弃**、只打日志，不做部分写入；单个动作字段不合法（缺 `file`/`content`、`op` 非三值）则**只丢该条**、其余照常落盘。水位语义要区分两种情况：**LLM 调用抛错（提取失败）水位不推进**，下一次触发重试同一范围（spec 11）；而**调用成功但动作被丢光（格式不合法）水位照常推进**——这段消息不会自动重试，属已知取舍（丢弃的来源是模型输出不合规，重试大概率同样不合规）。
+提取用的模型取 `memory.extractModel`，为空回落主对话模型。校验与提示词的分工：**模型只从 `EXTRACT_SYSTEM_PROMPT` 认识 JSON 结构，字段名必须与落盘校验逐字一致**（2026-09-01 回归：旧 prompt 未点名 `op`/`file`，真实模型交回 `type` 判别 + 缺 `file`，动作全被丢弃）。响应不是合法 JSON 或解析结果非 `actions` 数组时**整批放弃**、只打日志，不做部分写入；单个动作字段不合法（缺 `file`/`content`、`op` 非三值）则**只丢该条**、其余照常落盘。水位语义要区分两种情况：**LLM 调用抛错（提取失败）水位不推进**，下一次触发重试同一范围；而**调用成功但动作被丢光（格式不合法）水位照常推进**——这段消息不会自动重试，属已知取舍（丢弃的来源是模型输出不合规，重试大概率同样不合规）。
 
 ### 五触发
 
@@ -121,15 +121,15 @@ updated: 2026-08-30
 | **interval**（定时） | `memory-scheduler`（默认每 60s 扫一次） | 该项目**全部会话**逐个补各自增量 | 距上次定时触发满 `memory.write.intervalMinutes` 分钟就触发一次（0 关闭）；上次时间落在 `state.json` 的 `intervalLastRun`，未触发过则立刻首跑。无显式归属会话，对每个水位落后的会话各跑一批提取，单会话失败不阻塞其他会话 |
 | **follow**（跟随） | run 收尾挂起检查 + 门禁判定 | 该会话自水位起的增量 | 每个 run 结束（任何 stopReason）由 run 装配（core `executeRun`）挂一个跟随检查；`end_turn` 之后满 `memory.write.idleMinutes` 分钟无新活动才真正触发（0 关闭），见下 |
 
-**会话级增量**：水位**每会话各一本**（interval/follow 两游标），范围一律取"该会话两个水位中较靠后的那一条"之后的新消息（`advanceAll` 把该会话两个水位一并推进的只有 manual/immediate/clear，interval/follow 只推自己的）——任何一个先跑到，其余触发都不会重复提取同一段消息（spec 4.1）。首跑无水位时该会话全量提取一次，此后只增不重。2026-09-02 回归（一）：此前 manual/immediate/clear 不看水位、每次全量重扫，切一次会话就把已提取过的旧消息重新送审，同一情节被反复落线；改为统一增量后已提取过的内容不再进入提取输入。2026-09-02 回归（二）：统一增量最初做成**项目级**水位——跨会话按会话创建序划界，晚创建会话推进过水位后，老会话的新消息被整段跳过（用户在老会话里改名，`memory_save` 当场空转、内容永久漏提取）；水位改为**会话级**后，提取窗口只在自己会话的消息序列里推进，跨会话比较不复存在。会话内水位消息被删导致失配时按"宁可重提取不可漏提取"退化为该会话全量（见 `WriteLedger.since`）。
+**会话级增量**：水位**每会话各一本**（interval/follow 两游标），范围一律取"该会话两个水位中较靠后的那一条"之后的新消息（`advanceAll` 把该会话两个水位一并推进的只有 manual/immediate/clear，interval/follow 只推自己的）——任何一个先跑到，其余触发都不会重复提取同一段消息。首跑无水位时该会话全量提取一次，此后只增不重。2026-09-02 回归（一）：此前 manual/immediate/clear 不看水位、每次全量重扫，切一次会话就把已提取过的旧消息重新送审，同一情节被反复落线；改为统一增量后已提取过的内容不再进入提取输入。2026-09-02 回归（二）：统一增量最初做成**项目级**水位——跨会话按会话创建序划界，晚创建会话推进过水位后，老会话的新消息被整段跳过（用户在老会话里改名，`memory_save` 当场空转、内容永久漏提取）；水位改为**会话级**后，提取窗口只在自己会话的消息序列里推进，跨会话比较不复存在。会话内水位消息被删导致失配时按"宁可重提取不可漏提取"退化为该会话全量（见 `WriteLedger.since`）。
 
-**跟随门禁**（spec 4.2）：run 收尾时 `scheduleFollowCheck` 把 `{sessionId, endTurnAt}` 写进该项目的 `state.json`（挂起检查落盘，spec 11——daemon 重启后由调度器首次 sweep 补查）。调度器每次扫描时对每个挂起检查判门禁：`now − endTurnAt ≥ idleMinutes` **且** `endTurnAt 之后项目无新活动`才算 due，due 才真正触发 follow 并清除检查；门禁不过但 `endTurnAt` 之后已有更新活动（用户切到别的会话继续对话、或该项目又跑了一轮）时，旧检查的锚点已被新活动取代，直接清掉，防止 `state.json` 的 followChecks 无界增长。这里的"项目最后活动时间"取**该项目全部会话 meta 的最大 `updatedAt`**（spec 允许 daemon 记最后活动时间，本实现选会话级聚合，无需新表）；空活动记录视作"end_turn 即最后活动"，保证重启后可补查。
+**跟随门禁**：run 收尾时 `scheduleFollowCheck` 把 `{sessionId, endTurnAt}` 写进该项目的 `state.json`（挂起检查落盘，daemon 重启后由调度器首次 sweep 补查）。调度器每次扫描时对每个挂起检查判门禁：`now − endTurnAt ≥ idleMinutes` **且** `endTurnAt 之后项目无新活动`才算 due，due 才真正触发 follow 并清除检查；门禁不过但 `endTurnAt` 之后已有更新活动（用户切到别的会话继续对话、或该项目又跑了一轮）时，旧检查的锚点已被新活动取代，直接清掉，防止 `state.json` 的 followChecks 无界增长。这里的"项目最后活动时间"取**该项目全部会话 meta 的最大 `updatedAt`**（本实现选会话级聚合，无需新表）；空活动记录视作"end_turn 即最后活动"，保证重启后可补查。
 
 ### 水位账本与串行锁
 
 `state.json` 每项目一本（`WriteLedger`，`packages/core/src/memory/ledger.ts`），内容：
 
-> 读写收口在 MemorySystem 的账本入口（写通道 `#ledgerForWrite`/读通道 `#ledgerPath`，卡⑤），且**每次调用现开现读**——WriteLedger 写时把内存状态整文件原子重写，跨调用缓存长命实例会把别人刚写入的字段覆盖掉（最后写者胜），禁止。
+> 读写收口在 MemorySystem 的账本入口（写通道 `#ledgerForWrite`/读通道 `#ledgerPath`），且**每次调用现开现读**——WriteLedger 写时把内存状态整文件原子重写，跨调用缓存长命实例会把别人刚写入的字段覆盖掉（最后写者胜），禁止。
 
 内容：
 
@@ -152,22 +152,22 @@ updated: 2026-08-30
 
 内化有两条路，落到同一个实现（`#consolidateLocked`）：
 
-- **收束顺带内化**：一条主题线被收束为 `inactive` 后，管线顺带对它做一次内化总结（spec 6）；
+- **收束顺带内化**：一条主题线被收束为 `inactive` 后，管线顺带对它做一次内化总结；
 - **夜间闲时内化**：调度器每天本地时间过了 `memory.consolidateHour`（默认凌晨 3 点）后对该项目触发一次（`MemorySystem.triggerNightly` → `pipeline.runNightly`）——对象是**自上次夜间内化以来有新情节的全部线（含 active）**，判据 `updated ≥ nightlyBaseline`（UTC 日期，与线文件 `updated` 同源，记在该项目 `state.json`）。活跃线的认知不再等 14 天收束，每晚沉淀一次；daemon 凌晨未开时开机后首个 sweep 补跑（防同日重跑记本地日期，与内化判据的 UTC 日期各管各的）。首跑只内化当天更新的线，历史线不补（已由顺带内化覆盖）。
 
-收束顺带内化的输入输出（spec 6）：无工具 LLM 调用，把线文件全部情节 + 现有认知文件内容交给固定 system 提示的内化器（`CONSOLIDATE_SYSTEM_PROMPT`），回答"从这条线的经历里理解到了什么"，输出 JSON `{"actions":[...]}`，动作按 `target` 三选一（目标名放 `name` 字段、**不拼进 target**）：
+收束顺带内化的输入输出：无工具 LLM 调用，把线文件全部情节 + 现有认知文件内容交给固定 system 提示的内化器（`CONSOLIDATE_SYSTEM_PROMPT`），回答"从这条线的经历里理解到了什么"，输出 JSON `{"actions":[...]}`，动作按 `target` 三选一（目标名放 `name` 字段、**不拼进 target**）：
 
 - `target:"persona"`：用户画像，连贯正文片段（`name` 省略）；
 - `target:"wiki"` + `name`：领域知识，一个资源一个文件；
 - `target:"rule"` + `name`：用户规则，清单式，每条规则一个小节。
 
-新增用 `op:"append"`/`op:"create"`，已有认知被新经历印证的不动、被推翻的就地改写（`op:"rewrite"`，不保留旧版）；每条新认知附来源注释 `<!-- 来源：<topic>#<date> -->`。解析校验：`target` 必须是三值之一、`wiki`/`rule` 必带非空 `name`，不合法的动作在解析层丢弃并记日志（`dropping malformed cognition action (target=…)`）——`#applyCognitionAction` 拿 `target` 拼目录路径，放行任意字符串会写出索引读不到的垃圾文件（2026-09-01 回归：旧 prompt 的 `wiki:<name>` 记法诱导模型把名字嵌进 target）。`target:"skill"` 预留、本期不实现（解析层即丢弃，`#applyCognitionAction` 内保留防御分支，spec 2.3）。拿不准落 `global` 还是项目时**倾向 global、宁小勿大**。内化受 `memory.consolidate` 开关（默认 true）控制（收束顺带与夜间闲时两路共用）；LLM 调用失败只打日志、不影响 run。除这两条自动路径外，`MemorySystem.consolidate(workdir, topic)` 也暴露了手动内化入口（目前同样无路由/工具暴露）。
+新增用 `op:"append"`/`op:"create"`，已有认知被新经历印证的不动、被推翻的就地改写（`op:"rewrite"`，不保留旧版）；每条新认知附来源注释 `<!-- 来源：<topic>#<date> -->`。解析校验：`target` 必须是三值之一、`wiki`/`rule` 必带非空 `name`，不合法的动作在解析层丢弃并记日志（`dropping malformed cognition action (target=…)`）——`#applyCognitionAction` 拿 `target` 拼目录路径，放行任意字符串会写出索引读不到的垃圾文件（2026-09-01 回归：旧 prompt 的 `wiki:<name>` 记法诱导模型把名字嵌进 target）。`target:"skill"` 预留、本期不实现（解析层即丢弃，`#applyCognitionAction` 内保留防御分支）。拿不准落 `global` 还是项目时**倾向 global、宁小勿大**。内化受 `memory.consolidate` 开关（默认 true）控制（收束顺带与夜间闲时两路共用）；LLM 调用失败只打日志、不影响 run。除这两条自动路径外，`MemorySystem.consolidate(workdir, topic)` 也暴露了手动内化入口（目前同样无路由/工具暴露）。
 
 ## 检索与注入
 
 记忆进入模型上下文有两条路，都是被动的——**模型从不主动遍历记忆目录，记忆也不会整库注入**：
 
-### L2 常驻注入（系统提示，spec 7.1）
+### L2 常驻注入（系统提示）
 
 `MemorySystem.cognitionPrompt(workdir)`（`packages/core/src/memory/system.ts`）在每次 run 装配系统提示时由 `system-before` 位置的内置 `system-materials` 钩子调用（见 [hooks](./hooks.md)），返回的认知块作为第一个段落追加在 AGENTS.md 基础提示之后。规则：
 
@@ -178,7 +178,7 @@ updated: 2026-08-30
 
 没有任何文件、或全部超出预算时返回空字符串，run 回落到纯基础提示；认知注入失败静默跳过，run 照常进行。
 
-### L1 情节检索（用户消息 note，spec 7.2）
+### L1 情节检索（用户消息 note）
 
 run 装配（core `executeRun`）在构造用户消息骨架时调 `memory.searchEpisodes(workspace, userText.slice(0, 200), 5)`——用户消息**前 200 个字符**（`MEMORY_QUERY_CHARS`）作查询、取 **top-5**（`MEMORY_LIMIT`）。每条命中变成一个挂在用户消息上的 note 块：
 
@@ -188,7 +188,7 @@ run 装配（core `executeRun`）在构造用户消息骨架时调 `memory.searc
 
 note 的 `kind` 是 `"memory"`，与 job 来源 note 一起经 run-before 钩子链（内置 memory-inject 检索收集 → user-message-land 统一追加进消息、持久化，见 [hooks](./hooks.md)）落进用户消息，并逐个广播 `note.emitted`（事件序：`run.started → message.created → note.emitted ×N → message.completed`，job note 在 memory note 之前）。检索抛错时静默跳过——记忆是加速手段，检索失败不能阻塞一次 run。情节正文从线文件**实时回读**（文件是真相），线文件被删或不可解析时回落索引里的正文。
 
-### 混合打分（spec 7.2）
+### 混合打分
 
 检索用**双路融合**打分（`packages/core/src/memory/scoring.ts`）：
 
@@ -219,7 +219,7 @@ score = fused × 1/(1 + 距今天数/30)      // 时效因子：30 天衰减一�
 
 两个工具都是 `risk: "safe"` + `concurrency: "parallel"`：只访问记忆目录和索引、不修改工作区，调用免人工确认，也可与其他工具同批并发。
 
-## 生命周期（spec 5）
+## 生命周期
 
 线文件只有 **active / inactive** 两态，两条转换都是机器自动完成：
 
@@ -245,7 +245,7 @@ score = fused × 1/(1 + 距今天数/30)      // 时效因子：30 天衰减一�
 | `memory.injectTokenBudget` | `1000` | L2 认知常驻注入的 token 上限（只约束常驻注入；L1 情节 top-5 全量注入不受此限） |
 | `memory.autoExtract` | （v1 遗留） | 已废弃，被五触发取代；仅容忍存在，读处一律忽略 |
 
-## 迁移说明（spec 2.6）
+## 迁移说明
 
 daemon 启动时按固定顺序做一次 v1 → v2 迁移与对账（`daemon.ts`）：
 
@@ -271,7 +271,7 @@ v2 提供三套人工管理面，全部落在既有文档：
 ```
 
 - `episode` 事件带 `topic`（线名），`cognition` 事件带 `scope`（新认知的 scope）；
-- 事件不带 `sessionId`（项目级事务）；订阅端（CLI / web）把它当成"已落盘"的轻提示，不驱动任何状态机——CLI dim 一行 `已写入记忆: <path>`，web 通知条显示同文案；web 的通知条**可点击**，跳转记忆页并自动打开对应文件（`episode` 按 `scope+topic` 打开线、`cognition` 按 path 打开认知文件，spec 9.1）。
+- 事件不带 `sessionId`（项目级事务）；订阅端（CLI / web）把它当成"已落盘"的轻提示，不驱动任何状态机——CLI dim 一行 `已写入记忆: <path>`，web 通知条显示同文案；web 的通知条**可点击**，跳转记忆页并自动打开对应文件（`episode` 按 `scope+topic` 打开线、`cognition` 按 path 打开认知文件）。
 
 ### 事件流里的 memory 事件（审计）
 

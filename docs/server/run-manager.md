@@ -7,10 +7,10 @@
 ## 设计决策
 
 - **ack 与 run 解耦是结构性保证**：`ws.ts` 收到 `send_message` 后 `run.submit` 同步决策去向并立即回 `send_message_ack`（携带 `messageId` 与 `queued`，不 await run），run 的进展全部以 `run.*` 事件流回订阅者——长任务永远不阻塞命令通道。
-- **队列模型：queue.jsonl 持久化 + 内存镜像 + 每会话驱动器**（message-queue spec §3/§5.4）：排队消息是"当前状态"而非"已执行历史"，因此持久化在独立文件 `queue.jsonl`（`QueueEntry[]`，整文件重写、原子写盘，数组顺序即执行顺序），不进事件流（`events.jsonl`）——`readMessages` 的所有消费方（agent 历史、压缩范围、审计页）天然不含排队消息，崩溃恢复也只需读 queue.jsonl。内存侧 `#queues`（可执行条目 wait/interrupt）与 `#steerBuf`（steer 缓冲）是 queue.jsonl 的镜像；`#drive` 为每会话一个循环：`run settle → 残余 steer 降级并入队尾 → 队列非空？出队执行 → 循环`，run 因任何原因结束都先降级残余 steer 再触发下一轮出队判定。每会话排队 + steering 缓冲合计上限 10 条（`RunManager.QUEUE_LIMIT`，写死不做配置项，spec §5.5），超限 `submit` 抛 `队列已满（10 条）`。
-- **三种处置只决定消息何时被模型看到**（spec §2）：steer 注入正在跑的对话（迭代边界，不产生新 run）；wait 留在队列等当前 run 结束后出队；interrupt 立即中止当前 run 并插队首。三条路径最终都写进 JSONL，消息 id 在入队时预分配（`entry.messageId`）、出队/注入执行时用同一 id 构建消息——前端气泡从"排队态"原地升级。处置生效层级：单次请求显式指定 > 会话级覆盖（`SessionMeta.dispositionOverride`，CLI `/steer`/`/wait` 与 Web 三选的 steer/wait 写入；interrupt 是一次性动作、Web 与 CLI 均不写覆盖）> 配置默认 `sessions.defaultDisposition`（缺省 steer）。
-- **steer 缓冲与降级**（spec §3.4）：steer 消息不进执行队列，进当前 run 的 steering 缓冲区；run 在迭代边界经 `turn-boundary` 位置的钩子链（内置 `steering-drain`）取走全部缓冲消息注入。会话**完全空闲**（无活动 run、无可执行条目、无驱动器）时消息不降级、直接开跑（`queued:false`，不广播 `message.queued`）；只有"队列/驱动器在转但无活动 run"时 steer 才降级为 wait 入队并按 wait 报告（`message.queued {disposition:"wait", position}`）。若 run 在取走缓冲前结束（end_turn/aborted/failed 任何原因），残余条目在驱动器的下一拍自动降级为 wait、按原顺序并入队尾——消息绝不丢，队列里可执行的只有 wait 与 interrupt。
-- **注入的取走是先构建后变更**（spec §5.6 不变量）：`#drainSteer` 先在局部把全部缓冲条目构建成 user Message（附件挂载可能失败——越界、文件被删），全部成功后才清空缓冲、重写 queue.jsonl 并把 id 登记进 `#injectedIds`（有界集合，容量 `QUEUE_LIMIT×2`，用于把排队取消请求区分为 `injected`（已进事件流历史，机器不删历史）与 `not_found`）；任一构建失败即整体不动，异常抛给循环走 `run.failed "steering_failed"`。
+- **队列模型：queue.jsonl 持久化 + 内存镜像 + 每会话驱动器**：排队消息是"当前状态"而非"已执行历史"，因此持久化在独立文件 `queue.jsonl`（`QueueEntry[]`，整文件重写、原子写盘，数组顺序即执行顺序），不进事件流（`events.jsonl`）——`readMessages` 的所有消费方（agent 历史、压缩范围、审计页）天然不含排队消息，崩溃恢复也只需读 queue.jsonl。内存侧 `#queues`（可执行条目 wait/interrupt）与 `#steerBuf`（steer 缓冲）是 queue.jsonl 的镜像；`#drive` 为每会话一个循环：`run settle → 残余 steer 降级并入队尾 → 队列非空？出队执行 → 循环`，run 因任何原因结束都先降级残余 steer 再触发下一轮出队判定。每会话排队 + steering 缓冲合计上限 10 条（`RunManager.QUEUE_LIMIT`，写死不做配置项），超限 `submit` 抛 `队列已满（10 条）`。
+- **三种处置只决定消息何时被模型看到**：steer 注入正在跑的对话（迭代边界，不产生新 run）；wait 留在队列等当前 run 结束后出队；interrupt 立即中止当前 run 并插队首。三条路径最终都写进 JSONL，消息 id 在入队时预分配（`entry.messageId`）、出队/注入执行时用同一 id 构建消息——前端气泡从"排队态"原地升级。处置生效层级：单次请求显式指定 > 会话级覆盖（`SessionMeta.dispositionOverride`，CLI `/steer`/`/wait` 与 Web 三选的 steer/wait 写入；interrupt 是一次性动作、Web 与 CLI 均不写覆盖）> 配置默认 `sessions.defaultDisposition`（缺省 steer）。
+- **steer 缓冲与降级**：steer 消息不进执行队列，进当前 run 的 steering 缓冲区；run 在迭代边界经 `turn-boundary` 位置的钩子链（内置 `steering-drain`）取走全部缓冲消息注入。会话**完全空闲**（无活动 run、无可执行条目、无驱动器）时消息不降级、直接开跑（`queued:false`，不广播 `message.queued`）；只有"队列/驱动器在转但无活动 run"时 steer 才降级为 wait 入队并按 wait 报告（`message.queued {disposition:"wait", position}`）。若 run 在取走缓冲前结束（end_turn/aborted/failed 任何原因），残余条目在驱动器的下一拍自动降级为 wait、按原顺序并入队尾——消息绝不丢，队列里可执行的只有 wait 与 interrupt。
+- **注入的取走是先构建后变更**（不变量）：`#drainSteer` 先在局部把全部缓冲条目构建成 user Message（附件挂载可能失败——越界、文件被删），全部成功后才清空缓冲、重写 queue.jsonl 并把 id 登记进 `#injectedIds`（有界集合，容量 `QUEUE_LIMIT×2`，用于把排队取消请求区分为 `injected`（已进事件流历史，机器不删历史）与 `not_found`）；任一构建失败即整体不动，异常抛给循环走 `run.failed "steering_failed"`。
 - **job 消息固定 wait 且同受上限约束**：服务器内部的入队（job tick 的通知消息）按 wait 处置、不读 `defaultDisposition`——job 的语义是"当前的事忙完后轮到我"，没有"引导正在跑的 run"的诉求。上限对 job 一视同仁：会话排满时 job tick 的消息同样吃 `队列已满` 错误。**这是有意的行为变更**（旧实现忙时无界排队，见文末行为变更清单）。
 - **用户消息由引擎预制**：以纯 text 骨架（先建只含一个文本块的消息，note 块随后补全）经 `RunInput.userMessage` 传入，循环原样使用且不重复持久化；note 块（job 来源 + 记忆）由 run-before 钩子链（内置 `memory-inject` 收集 → `user-message-land` 落位）追加——事件序固定为 `run.started → message.created → note.emitted ×N → message.completed`，且持久化先于 note 事件（事件反映已持久化状态）。附件挂载同样在骨架构建时完成；越界路径在 `mountAttachments` 里抛错终止整条 run。
 - **历史在追加用户消息之前读**：`runAgent` 自己会把用户消息拼在 `history` 之后（`[...input.history, userMsg]`），若 history 已含它会向 provider 重复发送同一段文本。
@@ -89,10 +89,10 @@ export interface AttachmentRef {
 }
 
 export class RunManager {
-  static readonly QUEUE_LIMIT = 10    // 每会话排队 + steer 缓冲合计上限（写死，spec §5.5）
+  static readonly QUEUE_LIMIT = 10    // 每会话排队 + steer 缓冲合计上限（写死）
   get broker(): ConfirmationBroker
   submit(sessionId: string, input: EnqueueInput): SubmitResult
-                        // 同步决策去向（spec §4.1）：空闲直发；steer+活动 run → 入缓冲区；
+                        // 同步决策去向：空闲直发；steer+活动 run → 入缓冲区；
                         // 其余入队（interrupt 伴随对活动 run 的 abort）；队列满抛错
   enqueue(sessionId: string, input: EnqueueInput): Promise<RunOutcome>
                         // 兼容包装 = submit().outcome（job tick 等旧调用方不变）
@@ -102,7 +102,7 @@ export class RunManager {
   queueCancel(sessionId: string, messageId?: string):
     | { ok: true; cancelled: string[] }
     | { ok: false; reason: "not_found" | "injected" }
-                        // 排队取消（spec §5.6）：wait 随时、steer 注入前可取消；
+                        // 排队取消：wait 随时、steer 注入前可取消；
                         // 不带 id = 清空全部可取消条目并广播 {all:true}
   cancel(sessionId: string): boolean   // 仅中止当前 run（语义收窄）；false = 无活跃 run
   recoverQueues(): void                // daemon 启动恢复：queue.jsonl 整体重排，steer/interrupt 降级 wait
@@ -144,7 +144,7 @@ submit(sessionId, input)
     → 入 #steerBuf，写 queue.jsonl，广播 message.queued {disposition:"steer"}（无 position）
     → outcome 随当前 run settle（参考值）
   其余（wait / interrupt / 无活动 run 的 steer 降级 wait）
-    → wait|降级：追加队尾；interrupt：插队首 + 对活动 run abort()（spec §5.3）
+    → wait|降级：追加队尾；interrupt：插队首 + 对活动 run abort()
     → 写 queue.jsonl，广播 message.queued {disposition, position}
     → #drive 起转，返回 {queued:true}
 ```
@@ -220,7 +220,7 @@ steer 条目被 `submit` 放进 `#steerBuf` 后，目标 run 在**迭代边界**
 
 ### queueCancel：排队取消
 
-`queueCancel(sessionId, messageId?)` 的取消范围（spec §5.6）：
+`queueCancel(sessionId, messageId?)` 的取消范围：
 
 - **带 messageId**：先查可执行队列（wait 条目随时可取消），再查 steer 缓冲（注入前可取消——长工具批次期间注入窗口可达数分钟，此间条目占着共享上限的坑位）。命中即从内存与 queue.jsonl 删除、广播 `message.queue_cancelled {messageId}`、回 `{ok:true, cancelled:[id]}`；都不在时按 `#injectedIds` 区分两种失败：近期已注入 → `{ok:false, reason:"injected"}`（已进事件流历史，机器不删历史），否则 `{ok:false, reason:"not_found"}`。ws 层把两者分别映射为错误文案 `已注入` 与 `not found`。
 - **不带 messageId**：清空全部可取消条目（全部 wait + 全部未注入 steer），广播 `message.queue_cancelled {all:true}`。
@@ -233,7 +233,7 @@ daemon 启动时对每个 queue.jsonl 非空的会话调用：整体重排为内
 
 ### compactSession：手动压缩（双条件拒绝）
 
-`compactSession(sessionId, focus?)` 是 `/compact` 的服务端入口（HTTP `POST /sessions/:id/compact`、CLI `/compact`、web "压缩"按钮三者共同调用）。先检查忙，**两个拒绝条件、两条文案**（spec §5.7），队列优先——正在跑的 run 与积压队列并存时，"等它结束"永远解不了围，"先处理或取消排队"才是可行动的建议：
+`compactSession(sessionId, focus?)` 是 `/compact` 的服务端入口（HTTP `POST /sessions/:id/compact`、CLI `/compact`、web "压缩"按钮三者共同调用）。先检查忙，**两个拒绝条件、两条文案**，队列优先——正在跑的 run 与积压队列并存时，"等它结束"永远解不了围，"先处理或取消排队"才是可行动的建议：
 
 - queue.jsonl 非空 → 抛 `还有 N 条排队消息，先处理或取消`；
 - `#active` 有活动 run → 抛 `会话正在运行，等它结束`。
@@ -262,7 +262,7 @@ daemon 启动时对每个 queue.jsonl 非空的会话调用：整体重排为内
 - **`resolveConfirmation` 测试缝优先于 broker**：设置了它 broker 就只剩登记职责——生产路径不设置。
 - **压缩与记账失败都不影响 run 的结果**：自动压缩的模型调用或 meta 写入失败时 `Compactor.auto` 消化为 null、运行照常继续（事件 `completed {result:"failed"}`；`kclaw compaction failed:` / `kclaw compaction (phase) failed:` 日志）；段索引写入与审计追加失败只留一行日志、压缩照常生效；用量记录失败只留一行日志（`kclaw usage record failed:`）；跟随检查挂起失败静默（不打印、不阻塞）。以上任何一种失败 run 都照常返回 outcome。
 
-## 有意的行为变更（message-queue spec §9）
+## 有意的行为变更
 
 本轮队列机制落地时改变了四处既有行为，均为设计决定而非缺陷：
 
