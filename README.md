@@ -36,8 +36,19 @@ A locally resident personal agent: a single daemon owns all state; the CLI and W
 
 Requirements: Node >= 22 (checked at CLI startup; exits if unmet).
 
+kclaw is not published to npm yet, so install it locally from source:
+
 ```bash
-npm i -g kclaw
+# 1. clone the repo
+git clone https://github.com/zachysun/kclaw
+cd kclaw
+
+# 2. install dependencies and build (needs pnpm)
+pnpm install
+pnpm build
+
+# 3. install the aggregate package globally from the local directory
+npm i -g ./packages/kclaw
 
 kclaw chat    # first run enters the setup wizard: pick provider → paste key → automatic connectivity check
 kclaw web     # open the WebUI in your browser (carries the token, auto sign-in)
@@ -69,7 +80,7 @@ The wizard ships DeepSeek / OpenAI / Ollama / custom templates; key input is hid
 
 | Symptom | Cause & fix |
 |---------|-------------|
-| `command not found: kclaw` | npm's global bin directory is not on PATH (`npm config get prefix` shows the install location) |
+| `command not found: kclaw` | The local install step was skipped, or npm's global bin directory is not on PATH — from the repo run `npm i -g ./packages/kclaw` and check the install location with `npm config get prefix` |
 | `no llm provider configured` | No model configured: run `kclaw chat` once for the setup wizard, or write config / env vars by hand per "Configuration" |
 | Page won't open / 401 | The port may change on each daemon start (check the current port with `kclaw daemon status`, or run `kclaw web` directly); the token stays the same across restarts, no need to re-fetch it |
 | No confirmation prompt on a risky action | The command matched the `permissions.allow` whitelist (see "Configuration" below) |
@@ -144,7 +155,7 @@ providers:
 
 ## Development
 
-Building from source. Regular users only need `npm i -g kclaw` above; skip this section. Platforms: macOS and Linux; Windows is not a supported target.
+The Installation section above already builds from source (the only installation path for now); this section is for running the tests or hacking on the code directly. Platforms: macOS and Linux; Windows is not a supported target.
 
 monorepo (pnpm workspace):
 
@@ -154,7 +165,7 @@ monorepo (pnpm workspace):
 | `packages/server` | The daemon (HTTP + WS + run queueing + scheduling + audit) |
 | `packages/cli` | The CLI client (source form) |
 | `packages/web` | The WebUI frontend (React + Vite) |
-| `packages/kclaw` | The npm release package (aggregates the other packages' build output; `npm i -g kclaw` installs this one) |
+| `packages/kclaw` | The aggregate package (bundles the other packages' build output; the local install in the Installation section installs this one) |
 
 ```bash
 pnpm install

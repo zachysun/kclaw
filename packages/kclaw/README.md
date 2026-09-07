@@ -8,8 +8,14 @@
 
 要求 Node >= 22（CLI 启动时会检查，不满足直接退出）。
 
+kclaw 尚未发布 npm 包，从仓库源码构建并本地安装：
+
 ```bash
-npm i -g kclaw
+git clone https://github.com/zachysun/kclaw
+cd kclaw
+pnpm install
+pnpm build
+npm i -g ./packages/kclaw
 ```
 
 ---

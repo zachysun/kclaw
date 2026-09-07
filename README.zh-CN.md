@@ -36,8 +36,19 @@
 
 要求：Node >= 22（CLI 启动时会检查，不满足直接退出）。
 
+kclaw 尚未发布 npm 包，需要从源码构建安装（本地部署）：
+
 ```bash
-npm i -g kclaw
+# 1. 克隆仓库
+git clone https://github.com/zachysun/kclaw
+cd kclaw
+
+# 2. 安装依赖并构建（需要 pnpm）
+pnpm install
+pnpm build
+
+# 3. 把聚合包从本地目录安装为全局命令
+npm i -g ./packages/kclaw
 
 kclaw chat    # 首次运行进入配置向导：选 provider → 粘贴 key → 自动测连通
 kclaw web     # 浏览器打开 WebUI（带 token，自动登录）
@@ -69,7 +80,7 @@ kclaw web     # 浏览器打开 WebUI（带 token，自动登录）
 
 | 现象 | 原因与处理 |
 |------|-----------|
-| `command not found: kclaw` | npm 全局 bin 目录不在 PATH（`npm config get prefix` 查看安装位置） |
+| `command not found: kclaw` | 本地安装那步没做，或 npm 全局 bin 目录不在 PATH——在仓库里执行 `npm i -g ./packages/kclaw`，再用 `npm config get prefix` 查看安装位置 |
 | `no llm provider configured` | 模型未配置：执行一次 `kclaw chat` 进入配置向导，或按「配置要点」手动编写 config / 环境变量 |
 | 页面打不开 / 401 | daemon 重启后端口可能变化（用 `kclaw daemon status` 查当前端口，或直接 `kclaw web`）；token 不变，无需重新获取 |
 | 高危操作没有确认弹框 | 命令命中了 `permissions.allow` 白名单（配置要点见下） |
@@ -144,7 +155,7 @@ providers:
 
 ## 开发
 
-从源码构建。普通用户执行上面的 `npm i -g kclaw` 即可，可跳过本节。平台：macOS 与 Linux；Windows 未承诺支持。
+上面的「安装」一节已是源码构建（目前唯一的安装路径）；本节面向想直接跑测试或改代码的人。平台：macOS 与 Linux；Windows 未承诺支持。
 
 monorepo（pnpm workspace）：
 
@@ -154,7 +165,7 @@ monorepo（pnpm workspace）：
 | `packages/server` | daemon（HTTP + WS + run 排队 + 调度 + 审计） |
 | `packages/cli` | CLI 客户端（源码形态） |
 | `packages/web` | WebUI 前端（React + Vite） |
-| `packages/kclaw` | npm 发布包（聚合各包产物，`npm i -g kclaw` 安装的就是该包） |
+| `packages/kclaw` | 聚合包（打包各包产物，「安装」一节本地安装的就是该包） |
 
 ```bash
 pnpm install

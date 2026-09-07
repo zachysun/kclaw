@@ -14,8 +14,14 @@
 
 ## 2. 安装与第一次启动
 
+kclaw 尚未发布 npm 包，需要从源码构建安装（本地部署）：
+
 ```bash
-npm i -g kclaw
+git clone https://github.com/zachysun/kclaw
+cd kclaw
+pnpm install     # 安装依赖（需要 Node >= 22 与 pnpm）
+pnpm build       # 构建全部包，生成聚合包产物
+npm i -g ./packages/kclaw   # 把聚合包安装为全局 kclaw 命令
 kclaw chat
 ```
 
