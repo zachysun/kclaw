@@ -188,6 +188,7 @@ Docs:
   - [permissions](docs/core/permissions.md) — the permission gate
   - [protocol](docs/core/protocol.md) — the message / block / event three-layer protocol
   - [provider](docs/core/provider.md) — the OpenAI-compatible LLM access layer
+  - [sandbox](docs/core/sandbox.md) — the exec OS sandbox (Seatbelt / bubblewrap)
   - [skills](docs/core/skills.md) — the skill mechanism (progressive disclosure)
   - [storage](docs/core/storage.md) — paths, config, and session persistence
   - [tools](docs/core/tools.md) — the built-in tool system and registration

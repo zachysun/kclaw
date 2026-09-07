@@ -23,7 +23,7 @@
 ```ts
 // 判定结果（定义在 packages/core/src/agent/loop.ts，gate 实现它）
 export type PermissionDecision =
-  | { type: "allow"; reason: "safe" | "whitelist" | "session_grant" | "learned" | "accept_edits" }
+  | { type: "allow"; reason: "safe" | "whitelist" | "session_grant" | "learned" | "accept_edits" | "sandboxed" }
   | { type: "deny"; reason: "blacklist" | "user_denied" | "timeout" | "readonly"; noteText: string }
   | { type: "confirm"; confirmationId: string }
 
@@ -59,6 +59,9 @@ export class ConfigPermissionGate implements PermissionGate {
     readRoots?: string[]           // 额外可读根：safe 的路径参数工具视同工作区（daemon 传附件目录）
     mode?: PermissionMode          // 会话权限模式，缺省 default（daemon 按会话 meta 逐 run 传入）
     decidedRules?: string[]        // 沉淀规则（"总是允许"产生的 allow 规则，每 run 从文件加载）
+    sandboxAvailable?: boolean     // exec 沙箱可用性（daemon 由沙箱 provider 探测传入，
+                                   // 与 exec 工具实际套的沙箱同源）：命令类工具无规则命中时，
+                                   // 可用则 allow {reason:"sandboxed"}，否则 confirm
   })
   check(toolCall: ToolCallBlock): Promise<PermissionDecision>
 }
@@ -107,7 +110,7 @@ permissions:
 ⑥ 以上全不中            → confirm，签发新 conf_ id
 ```
 
-命令类工具（sensitive 且带 `command` 参数，exec 今天是唯一成员）走专属分支：deny 对**每个归一化子命令**分别匹配；allow、沉淀规则与会话授权只在命令**恰好一段**（无接续符）时参与——`exec:git status*` 不可能放行 `git status; …`。两分支都未命中即 confirm。沉淀规则的 exec 形态在落盘时即收窄为"首词 + 子命令前缀"（`exec:git push*`，见沉淀规则一节），匹配语义与 allow 一致。
+命令类工具（sensitive 且带 `command` 参数，exec 今天是唯一成员）走专属分支：deny 对**每个归一化子命令**分别匹配；allow、沉淀规则与会话授权只在命令**恰好一段**（无接续符）时参与——`exec:git status*` 不可能放行 `git status; …`。两分支都未命中时：**若 exec 沙箱可用（`sandboxAvailable`）→ `allow {reason:"sandboxed"}`**——沙箱（而非人工）是这次放行的批准方，整个 shell 调用都在沙箱内运行（含多段命令）；沙箱不可用才 confirm。sandboxed 永远不覆盖 deny 与规则命中，readonly 的 ⓪ 步短路依旧最优先。沉淀规则的 exec 形态在落盘时即收窄为"首词 + 子命令前缀"（`exec:git push*`，见沉淀规则一节），匹配语义与 allow 一致。
 
 ### 3. 路径规范化匹配（防拼写绕过）
 
@@ -129,7 +132,7 @@ permissions:
 - 工作目录本身允许（`resolved === root`，如对根目录 fs_list）。
 - 工作目录未设置时不做该检查（legacy 行为）；daemon 侧的取值是会话元数据的 `workdir`，缺省回退 `config.workspace`（run 装配 core `executeRun`）。
 
-exec 没有可判定的"目标路径"——命令可以以任何方式访问文件系统，所以对 exec **没有越界精确判定**，处理策略是：命中 deny/allow 之外的一律 confirm，由人工审视命令本身。
+exec 没有可判定的"目标路径"——命令可以以任何方式访问文件系统，所以对 exec **没有越界精确判定**，处理策略是：命中 deny/allow 之外，若 exec 沙箱可用则整条命令在沙箱内自动放行（见第 7 节），否则 confirm，由人工审视命令本身。
 
 ### 5. 会话权限模式与附件读豁免
 
@@ -162,7 +165,24 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
 - **safe（命中即自动放行）**：`fs_read`、`fs_list`、`web_search`、`web_fetch`、`memory_save`、`memory_search`、`session_search`、`skill_read`——共 8 个，全是不改工作目录状态的 parallel 工具；
 - **sensitive（无 allow 规则命中必然 confirm）**：`exec`、`fs_write`、`fs_edit`——共 3 个。注意 fs_read/fs_list 虽是 safe，目标越界且不在 readRoots 内时仍进入 confirm（第 ③ 步）；MCP 适配器工具（见 [mcp](./mcp.md)）一律声明 sensitive。
 
-### 7. 人工确认流程
+### 7. exec 沙箱（OS 层，批次 A）
+
+`exec` 的工具执行被一层操作系统沙箱包裹，作为权限确认之下的**纵深防御**：命令即使获准运行，也被限制在受控范围内（模型被注入时，确认挡不住命令内部的动作，沙箱兜底）。这是权限机制里唯一的新模块，其余都是既有入口的参数扩展。
+
+- **模块**：`packages/core/src/sandbox/provider.ts` 的 `createExecSandbox`（探测 + 包装，不做业务判定）。平台布局：
+  - macOS `sandbox-exec` + SBPL profile——工作区与系统临时目录可写，家目录只读且 `~/.kclaw` 读拒绝（凭据隔离），网络默认允许（SBPL 规则按先匹配生效：`~/.kclaw` 读拒绝在宽放行之前、写白名单在兜底 deny 之前；路径一律 realpath 形态，`/tmp` 写作 `/private/tmp`）。
+  - Linux bubblewrap（无特权 user namespaces）——整个根只读挂载、`~/.kclaw` 用 tmpfs 遮蔽（读不到凭据）、`/tmp` 与工作区可写、`--die-with-parent --new-session` 保证 exec 超时进程组 kill 能波及整棵进程树；**v1 不加 `--unshare-net`**（网络默认允许是拍板决策）。
+  - 降级链：bwrap → **不可用**（回落人工确认，fail-closed——绝不让命令裸跑）。Landlock 兜底是后续项：纯 Node 无法发起 `landlock_create_ruleset` syscall，也没有成熟 CLI 包装。
+- **判定联动（`sandboxAvailable`）**：run 装配探测一次沙箱可用性，同源喂给两个消费方——exec 工具的实际包装器（可用的才注入）与 gate 的 `sandboxAvailable` 输入。因此 "sandboxed" 放行的命令必然真被沙箱包住；反之沙箱不可用时 exec 维持 confirm，不会出现"放了行却裸跑"的错配。`default` 与 `acceptEdits` 模式下，命令类工具无规则命中时由沙箱顶替人工（reason `sandboxed`）；readonly 的短路依旧最优先，deny/allow/沉淀规则/会话授权也都先于它。
+- **配置**（`config.yaml` 的 `sandbox:` 节，daemon 级，默认开）：
+  ```yaml
+  sandbox:
+    enabled: true        # 整体开关
+    writeRoots: []       # 追加写白名单（realpath 形式），如 npm 缓存目录
+  ```
+  沙箱启动失败或命令被沙箱拒绝 → exec 返回 error result（fail-closed，不降级裸跑）。可执行性探测用真实路径探测（如 `bwrap --die-with-parent true` 验证 user namespaces 真可用）。
+
+### 8. 人工确认流程
 
 ```
 gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间递增、可排序的唯一 ID）
@@ -187,7 +207,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
   - 超时/取消后 run 装配（core `executeRun`）的 `resolveConfirmation` 调 `expire` 把条目标记失效，迟到的裁决只会收到 unknown confirmation，不会确认一个已无人等待的动作。
 - deny 的 `user_denied` / `timeout` 两个 reason 不是 gate 产出的：gate 只产生 `blacklist` / `readonly` 两种拒绝（规则命中或只读会话禁写/exec），前两者是循环把人工拒绝/超时转成 error result 时的语义标记（note 块的 `kind`）。
 
-### 8. 沉淀规则（decided rules）
+### 9. 沉淀规则（decided rules）
 
 人工在确认里选"总是允许"后，一条**收窄的 allow 规则**落盘为 YAML 文件（`packages/core/src/storage/decided-rules.ts`），下一个 run 起由 gate 的 `decidedRules` 输入加载（判定链第 ②' 步，reason `"learned"`）：
 
@@ -197,13 +217,13 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 - **项目文件本地专属（防御三件套）**：落盘时自动把 `.kclaw/permissions.yaml` 追加进工作区 `.gitignore`；已被 git 跟踪的项目规则文件**整体忽略**（`loadDecidedRulesForRun` 检测 `git ls-files`，tracked 即不加载并在 daemon 日志告警）——克隆来的仓库无法夹带一份预授权清单；文档（本节）写明该行为。管理页（WebUI 权限页）对 git 跟踪的项目档显示"已被跟踪、规则不生效"的提示（`GET /permissions/rules` 返回 `tracked`/`ignored` 字段，两者恒等，规则列表恒空）。
 - **每 run 加载（`loadDecidedRulesForRun`）**：run 装配时读两档文件合并为规则串数组传 gate；删除文件里的条目（或整个文件）即收回授权，对下一个 run 立即生效。管理入口：WebUI「权限」页（`GET /permissions/rules` 列表、`DELETE /permissions/rules` 单条删除，项目档支持 `?workspace=` 指定）。
 
-### 9. grantedBy 记录
+### 10. grantedBy 记录
 
-每个被放行的调用都会把原因记在 tool 消息上：`ToolMessage.grantedBy: Record<callId, GrantedBy>`（`packages/core/src/protocol/messages.ts`，`GrantedBy = "safe" | "whitelist" | "session_grant" | "confirmed" | "accept_edits" | "learned"`）。这是完整的执行审计链——事后可逐调用追溯"这次执行的授权来源"；`learned`/`accept_edits` 两个值分别对应沉淀规则放行与 acceptEdits 模式放行。Web 端审计视图（`packages/web/src/audit/AuditView.tsx`）就按 callId 反查该字段渲染批注。
+每个被放行的调用都会把原因记在 tool 消息上：`ToolMessage.grantedBy: Record<callId, GrantedBy>`（`packages/core/src/protocol/messages.ts`，`GrantedBy = "safe" | "whitelist" | "session_grant" | "confirmed" | "accept_edits" | "learned" | "sandboxed"`）。这是完整的执行审计链——事后可逐调用追溯"这次执行的授权来源"；`learned`/`accept_edits` 两个值分别对应沉淀规则放行与 acceptEdits 模式放行，`sandboxed` 对应 exec 沙箱顶替人工的放行。Web 端审计视图（`packages/web/src/audit/AuditView.tsx`）就按 callId 反查该字段渲染批注。
 
-### 10. 会话级授权（SessionGrants）
+### 11. 会话级授权（SessionGrants）
 
-`SessionGrants` 是进程内存里的授权存储：人工确认某规则后 `grant(rule)` 存入编译后的规则，同一会话内相同调用不再重复询问。生效需要两个条件同时成立：`config.permissions.sessionGrants === true` **且**宿主在构造 gate 时传入 `grants` 存储。当前 daemon 装配传的是 `{workspace, safeTools, toolFacts, readRoots, mode, decidedRules}`，未传 grants——引擎与测试就绪，daemon 侧尚未接线，此分支暂不生效（跨 run 的持久授权由沉淀规则承担，SessionGrants 只覆盖同一 run 内的重复调用）。
+`SessionGrants` 是进程内存里的授权存储：人工确认某规则后 `grant(rule)` 存入编译后的规则，同一会话内相同调用不再重复询问。生效需要两个条件同时成立：`config.permissions.sessionGrants === true` **且**宿主在构造 gate 时传入 `grants` 存储。当前 daemon 装配传的是 `{workspace, safeTools, toolFacts, readRoots, mode, decidedRules, sandboxAvailable}`，未传 grants——引擎与测试就绪，daemon 侧尚未接线，此分支暂不生效（跨 run 的持久授权由沉淀规则承担，SessionGrants 只覆盖同一 run 内的重复调用）。
 
 ---
 
@@ -215,6 +235,9 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 - **规则大小写敏感**，`*` 之外无其它通配符（`?`、`[]` 都是字面字符）。
 - **SessionGrants 是进程内存**：daemon 重启即清空；且历史 grantedBy 记录不受影响（那是持久化在会话日志里的）。
 - **gate 缺失 = 全放行**：循环对未注入 `permissions` 的调用一律 `{type:"allow", reason:"safe"}`——组装宿主时漏配权限网关等于没有权限检查，daemon 装配始终注入。
+- **exec 沙箱是放行的批准方，不是额外的确认**：`sandboxed` 只在无规则命中、本应 confirm 的落点上生效；deny/allow/沉淀规则/会话授权的优先级都高于它，readonly 的短路也依旧最优先。
+- **沙箱不可用不裸跑**：平台工具缺失、user namespaces 被禁或沙箱启动失败时，exec 回落人工确认或返回 error result（fail-closed）；可用性探测在每 run 装配时做一次，探测失败会写 daemon 日志（仅观察，不打断 run）。
+- **v1 网络默认允许**：沙箱只隔离文件系统（凭据遮蔽 + 写范围），git clone / npm install / curl 照常；网络收窄留后续迭代。
 - **越界检查依赖 workspace 正确**：会话 `workdir` 决定了越界判定的边界；创建会话时不传 workdir 则落到 `config.workspace`（daemon 启动目录的默认值是进程当前目录）。
 
 ---
@@ -222,7 +245,8 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 ## 关联
 
 - [agent-loop](./agent-loop.md)：确认的竞速等待、note 块与 grantedBy 的写入现场
-- [tools](./tools.md)：risk/concurrency 元数据的来源与 11 个工具清单
+- [tools](./tools.md)：risk/concurrency 元数据的来源与 11 个工具清单；exec 工具的沙箱注入参数
+- [sandbox](./sandbox.md)：exec 沙箱 provider 的平台布局与降级链（批次 A 唯一新模块）
 - [storage](./storage.md)：decided-rules 文件的磁盘布局（会话容器之外）
 - [../server/run-manager.md](../server/run-manager.md)：gate + broker 的 daemon 侧装配
 - [../server/realtime.md](../server/realtime.md)：confirmation.resolve 帧的 WS 入口

@@ -25,6 +25,17 @@ compatibility promises.
 - **Learned / accept_edits grants** — the permission chain gained two allow
   steps (`learned` for persisted rules, `accept_edits` for the mode), each
   recorded in `grantedBy` for the audit trail.
+- **Exec OS sandbox** — the `exec` child process runs inside an OS sandbox
+  (macOS Seatbelt via `sandbox-exec`; Linux bubblewrap), as defense in depth
+  under the permission gate: the workspace and temp dirs stay writable, the
+  home directory is read-only with `~/.kclaw` masked (credentials unreachable),
+  and extra write roots are configurable. Network stays open (a settled v1
+  decision). In `default`/`acceptEdits` modes a command with no rule coverage
+  auto-passes as `grantedBy: "sandboxed"` when the sandbox is available;
+  otherwise it still goes to a human — fail-closed, never a bare run. New
+  `sandbox: {enabled, writeRoots}` config section (on by default). Linux
+  fallback chain: bwrap → manual confirmation; Landlock is a documented
+  follow-up (pure Node cannot issue the syscall).
 
 ### Changed
 
