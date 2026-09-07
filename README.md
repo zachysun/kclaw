@@ -56,7 +56,8 @@ The wizard ships DeepSeek / OpenAI / Ollama / custom templates; key input is hid
 ## Features
 
 - **Streaming chat**: the CLI REPL and the WebUI share the same experience — replies render as a stream, multi-turn and new sessions supported (example: asking "what is the largest file in `~/Downloads`" triggers the exec tool).
-- **Confirmation cards**: risky tools (exec, fs_edit, …) ask before executing (allow / deny); every decision is written to the audit log.
+- **Confirmation cards**: risky tools (exec, fs_edit, …) ask before executing with a four-way verdict (once / always-in-project / always-globally / reject); the "always" choices persist as rule files you can revoke from the WebUI "permissions" tab, and every decision is written to the audit log.
+- **Permission modes**: each session switches independently between readonly / default / accept-edits (CLI Shift+Tab or `/mode`, WebUI always-on selector); readonly denies all writes, accept-edits skips confirmation for in-workspace file edits.
 - **Sessions**: every message is persisted as part of the session's event stream (`sessions/<id>/events.jsonl`); history can be resumed at any time.
 - **Memory**: after each turn, new messages are extracted into per-topic markdown thread files (with a derived FTS5 index); a later related question gets the matching episode injected as a note.
 - **Jobs**: cron-scheduled jobs (e.g. `0 9 * * *` for a daily briefing); the daemon opens a new session on schedule and logs results to audit.

@@ -5,6 +5,36 @@ All notable changes to kclaw are documented in this file. The format is based on
 [semantic versioning](https://semver.org/) — note that the 0.x series makes no
 compatibility promises.
 
+## [Unreleased]
+
+### Added
+
+- **Permission modes** — each session now carries an independent permission mode
+  (`readonly` / `default` / `acceptEdits`), stored in session meta and switched
+  from the CLI (Shift+Tab cycle or `/mode`) or the WebUI (always-on selector).
+  `readonly` denies all write-class tools (fs_write / fs_edit / exec); in
+  `acceptEdits` in-workspace file writes skip confirmation. The daemon-level
+  readonly flag is gone — the mode is per-session, defaulting to `default`.
+- **Four-way confirmation verdicts** — confirmation prompts now offer
+  once / always-in-project / always-globally / reject (CLI: a four-item
+  selector; WebUI: four buttons on the card). The "always" choices persist a
+  narrowed allow rule — project rules in `<workspace>/.kclaw/permissions.yaml`
+  (auto-gitignored, ignored when git-tracked), global rules in
+  `~/.kclaw/permissions.yaml`, both 0600 with provenance — and apply from the
+  next run. A new WebUI "permissions" tab lists and deletes these rules.
+- **Learned / accept_edits grants** — the permission chain gained two allow
+  steps (`learned` for persisted rules, `accept_edits` for the mode), each
+  recorded in `grantedBy` for the audit trail.
+
+### Changed
+
+- **Session endpoints** — `POST /sessions/:id/readonly` was replaced by
+  `POST /sessions/:id/mode`; legacy `readonly` projections still read back as
+  `mode: "readonly"`.
+- **Confirmation wire protocol** — `confirmation.resolve` now takes a
+  `decision` (`"once" | "project" | "global" | "reject"`) instead of a boolean
+  `approved`, and `confirmation.resolved` reports that decision.
+
 ## [0.1.0] - 2026-09-06
 
 First tagged version. kclaw is a local personal agent: one daemon owns all

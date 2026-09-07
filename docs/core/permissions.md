@@ -40,11 +40,11 @@ export interface PermissionGate {
 export interface CompiledRule { tool: string; argGlob?: string }
 export function compileRule(s: string): CompiledRule
 export function globMatch(pattern: string, s: string): boolean
-export function extractArg(name: string, args: unknown): string
+export function extractArg(args: unknown, profile: PermissionProfile): string
 
 export class SessionGrants {
   grant(rule: string): void
-  hasMatch(tool: string, arg: string, workspace?: string): boolean
+  hasMatch(tool: string, arg: string, workspace?: string, profile?: PermissionProfile): boolean
   size(): number
 }
 
@@ -193,7 +193,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 
 - **两个文件，各自独立**：项目档 `<workspace>/.kclaw/permissions.yaml`（裁决所属会话的工作目录）、全局档 `~/.kclaw/permissions.yaml`。config.yaml 保持纯手写，程序从不写它。
 - **每条带出处**（`DecidedRuleEntry`）：`rule`（收窄后的规则）、`decidedAt`（ISO 时刻）、`origin`（触发裁决的工具名、原始参数 JSON、会话 id）。文件 0600 权限，原子写入。
-- **规则收窄（`narrowDecidedRule`）**：exec 收窄为"首词 + 子命令前缀"——`git push origin main` 落成 `exec:git push*`，`git fetch` 落成 `exec:git fetch`（单段命令精确形态）；链式命令只取第一段；命令 token 折叠为 basename（`/bin/rm -rf build` → `exec:rm -rf*`）。路径写类工具落**realpath 精确路径**（`fs_write:/w/proj/a.md`，只放行这一个文件）；其余工具落工具级规则（如 `mcp__srv__do`）。收窄宁紧勿松：人批准的是那一条命令，不是一个命令族。
+- **规则收窄（`narrowDecidedRule`）**：exec 按"首词 + 子命令前缀"收窄——`git push origin main` 落成 `exec:git push*`，`git fetch` 落成 `exec:git fetch*`（两词命令保留前两词 + 前缀）；**单词命令精确形态**（`ls` 落成 `exec:ls`）；链式命令只取第一段；命令 token 折叠为 basename（`/bin/rm -rf build` → `exec:rm -rf*`）。路径写类工具落 **realpath 精确路径**（`fs_write:/w/proj/a.md`，只放行这一个文件）；其余工具落工具级规则（如 `mcp__srv__do`）。收窄宁紧勿松：人批准的是那一条命令，不是一个命令族（前缀形态是可用性折衷——覆盖 `git push origin main` 与 `git push origin dev` 这类同族变体，代价是 `git push --force` 这类带旗标变体也会被前缀放行；拒绝的是更宽的命令族）。
 - **项目文件本地专属（防御三件套）**：落盘时自动把 `.kclaw/permissions.yaml` 追加进工作区 `.gitignore`；已被 git 跟踪的项目规则文件**整体忽略**（`loadDecidedRulesForRun` 检测 `git ls-files`，tracked 即不加载并在 daemon 日志告警）——克隆来的仓库无法夹带一份预授权清单；文档（本节）写明该行为。管理页（WebUI 权限页）对 git 跟踪的项目档显示"已被跟踪、规则不生效"的提示（`GET /permissions/rules` 返回 `tracked`/`ignored` 字段，两者恒等，规则列表恒空）。
 - **每 run 加载（`loadDecidedRulesForRun`）**：run 装配时读两档文件合并为规则串数组传 gate；删除文件里的条目（或整个文件）即收回授权，对下一个 run 立即生效。管理入口：WebUI「权限」页（`GET /permissions/rules` 列表、`DELETE /permissions/rules` 单条删除，项目档支持 `?workspace=` 指定）。
 
