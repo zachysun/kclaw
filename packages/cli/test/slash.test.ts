@@ -313,7 +313,7 @@ describe("slash /model", () => {
   })
 })
 
-describe("custom slash commands + readonly", () => {
+describe("custom slash commands + mode", () => {
   it("loads <commandsDir>/*.md as commands with {{args}} expansion", async () => {
     const dir = join(tmpdir(), `kclaw-cmd-${Date.now()}`)
     mkdirSync(dir, { recursive: true })
@@ -331,21 +331,41 @@ describe("custom slash commands + readonly", () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
-  it("/readonly toggles the session flag", async () => {
-    let current = {}
-    const posts: Array<{ readonly: boolean }> = []
-    const { ctx } = makeFakeCtx((method, path, body) => {
-      if (method === "GET") return current
-      posts.push(body as { readonly: boolean })
+  it("/mode POSTs the requested mode and mirrors it via setMode", async () => {
+    const posts: Array<{ mode: string }> = []
+    const set: string[] = []
+    const { ctx } = makeFakeCtx((_method, _path, body) => {
+      posts.push(body as { mode: string })
       return {}
     })
+    ctx.setMode = (m) => set.push(m)
     ctx.pendingAttachments = []
     const registry = createRegistry(ctx)
-    await runOrHint(dispatch("/readonly on", registry), registry, ctx)
-    expect(posts[0]).toEqual({ readonly: true })
-    current = { readonly: true }
-    await runOrHint(dispatch("/readonly", registry), registry, ctx)
-    expect(posts[1]).toEqual({ readonly: false })
+    await runOrHint(dispatch("/mode readonly", registry), registry, ctx)
+    expect(posts[0]).toEqual({ mode: "readonly" })
+    expect(set).toEqual(["readonly"])
+    await runOrHint(dispatch("/mode acceptEdits", registry), registry, ctx)
+    expect(posts[1]).toEqual({ mode: "acceptEdits" })
+    expect(set).toEqual(["readonly", "acceptEdits"])
+  })
+
+  it("/mode with no args prints the current value; unknown names are rejected", async () => {
+    const prints: string[] = []
+    const posts: unknown[] = []
+    const { ctx } = makeFakeCtx((method, _path, body) => {
+      if (method === "POST") posts.push(body)
+      return {}
+    })
+    ctx.setMode = () => {}
+    ctx.pendingAttachments = []
+    ctx.print = (t: string) => prints.push(t)
+    const registry = createRegistry(ctx)
+    await runOrHint(dispatch("/mode", registry), registry, ctx)
+    expect(posts).toEqual([])
+    expect(prints[0]).toContain("权限模式")
+    await runOrHint(dispatch("/mode trusted", registry), registry, ctx)
+    expect(posts).toEqual([])
+    expect(prints[1]).toContain("未知模式")
   })
 })
 

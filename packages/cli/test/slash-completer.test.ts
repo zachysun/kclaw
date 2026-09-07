@@ -23,7 +23,7 @@ describe("slashCompleter", () => {
       "/clear",
       "/sessions",
       "/model",
-      "/readonly",
+      "/mode",
       "/attach",
       "/compact",
       "/steer",

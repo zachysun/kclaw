@@ -55,8 +55,9 @@
  * queued server-side, and a duplicate would double-run it — the 120s
  * watchdog bounds that wait instead.
  */
-import { confirm, isCancel } from "@clack/prompts"
-import type { AgentEvent, ConfirmationRequestedPayload, MessageQueuedPayload } from "@kclaw/core"
+import { isCancel, select } from "@clack/prompts"
+import { isPermissionMode, PERMISSION_MODES } from "@kclaw/core"
+import type { AgentEvent, ConfirmationDecision, ConfirmationRequestedPayload, MessageQueuedPayload, PermissionMode } from "@kclaw/core"
 import { join } from "node:path"
 import { createInterface, type Interface as RlInterface } from "node:readline"
 import { KclawClient } from "./client.js"
@@ -85,6 +86,16 @@ const SUBSCRIBE_ACK_MS = 5_000
 const TTY = process.stdout.isTTY === true
 const dim = (s: string): string => (TTY ? `\x1b[2m${s}\x1b[22m` : s)
 const red = (s: string): string => (TTY ? `\x1b[31m${s}\x1b[39m` : s)
+
+/** Prompt string per mode: default keeps the bare "> "; other modes badge it. */
+function modePrompt(m: PermissionMode): string {
+  return m === "default" ? "> " : `[${m}] > `
+}
+
+/** Next mode in the Shift+Tab cycle (PERMISSION_MODES order, strictest first). */
+function nextMode(m: PermissionMode): PermissionMode {
+  return PERMISSION_MODES[(PERMISSION_MODES.indexOf(m) + 1) % PERMISSION_MODES.length]!
+}
 
 export interface ChatOptions {
   home?: string
@@ -120,6 +131,15 @@ interface ChatCtx {
    * meta override (it is a one-shot action, not a mode the CLI sets).
    */
   disposition: "steer" | "wait" | "interrupt"
+  /**
+   * The session's permission mode (readonly / default / acceptEdits): shown
+   * as a prompt badge (non-default only), cycled by Shift+Tab and flipped by
+   * /mode. Local mirror of the daemon's session meta — the daemon re-derives
+   * it per run, so this only drives the UI.
+   */
+  mode: PermissionMode
+  /** True while a @clack prompt owns the terminal (Shift+Tab stands down). */
+  inputPaused: boolean
   /**
    * The frame pump's one-shot waiters: each renderRun registers one waiter for
    * its next frame and the pump hands every arriving frame to exactly one of
@@ -233,28 +253,42 @@ export async function resolveSessionId(client: KclawClient, session: string | un
 /** Print the risk summary, collect the verdict (flags or @clack), send confirmation.resolve. */
 async function handleConfirmation(p: ConfirmationRequestedPayload, ctx: ChatCtx): Promise<void> {
   line(`⚠ ${p.toolCall.name} ${p.toolCall.argsJson} · 风险 ${p.risk} · 过期 ${p.expiresAt}`, ctx)
-  let approved: boolean
+  let decision: ConfirmationDecision
   if (ctx.auto === "yes") {
-    line(dim("[--yes] 已自动允许"), ctx)
-    approved = true
+    line(dim("[--yes] 已自动允许（仅本次）"), ctx)
+    decision = "once"
   } else if (ctx.auto === "no") {
     line(dim("[--no] 已自动拒绝"), ctx)
-    approved = false
+    decision = "reject"
   } else {
+    ctx.inputPaused = true
     ctx.rl.pause() // @clack owns the terminal while our readline sits quiet
-    let answer: boolean | symbol
+    let answer: ConfirmationDecision | symbol
     try {
-      answer = await confirm({ message: "允许执行?" })
+      answer = await select<ConfirmationDecision>({
+        message: "如何处置?",
+        options: [
+          { value: "once", label: "允许（仅本次）" },
+          { value: "project", label: "总是允许（本项目）" },
+          { value: "global", label: "总是允许（全局）" },
+          { value: "reject", label: "拒绝" },
+        ],
+      })
     } catch {
-      answer = false
+      answer = "reject"
     } finally {
+      ctx.inputPaused = false
       ctx.rl.resume()
     }
-    approved = answer === true // cancel symbol / anything not exactly true denies
-    if (isCancel(answer)) line(dim("已取消，默认拒绝"), ctx)
+    if (isCancel(answer)) {
+      line(dim("已取消，默认拒绝"), ctx)
+      decision = "reject"
+    } else {
+      decision = answer
+    }
   }
   try {
-    ctx.ws.send({ type: "confirmation.resolve", confirmationId: p.confirmationId, approved })
+    ctx.ws.send({ type: "confirmation.resolve", confirmationId: p.confirmationId, decision })
   } catch {
     // socket dropping — the reconnect path takes over
   }
@@ -676,6 +710,15 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
     }
   }
   const disposition = await resolveInitialDisposition()
+  const resolveInitialMode = async (): Promise<PermissionMode> => {
+    try {
+      const meta = (await client.request("GET", `/sessions/${sessionId}`)) as { mode?: string }
+      return isPermissionMode(meta.mode) ? meta.mode : "default"
+    } catch {
+      return "default"
+    }
+  }
+  const initialMode = await resolveInitialMode()
 
   const ctx: ChatCtx = {
     pendingAttachments: [],
@@ -683,11 +726,13 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
     client,
     ws: await openSubscribed(client, sessionId),
     sessionId,
-    rl: createInterface({ input: process.stdin, output: process.stdout, prompt: "> ", completer: createSlashCompleter(() => skillCommandMetas) }),
+    rl: createInterface({ input: process.stdin, output: process.stdout, prompt: modePrompt(initialMode), completer: createSlashCompleter(() => skillCommandMetas) }),
     showThinking: opts.showThinking === true,
     auto,
     io: { atLineStart: true },
     disposition,
+    mode: initialMode,
+    inputPaused: false,
     frameWaiters: [],
     pendingFrames: [],
     renderEpoch: 0,
@@ -726,9 +771,18 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
     async switchSession(id: string) {
       ctx.ws.send({ type: "unsubscribe", sessionId: ctx.sessionId })
       ctx.sessionId = id
-      ctx.ws.send({ type: "subscribe", sessionId: ctx.sessionId })
+      ctx.ws.send({ type: "subscribe", sessionId: id })
       ctx.pendingAttachments.length = 0 // attachments are session-scoped
       refreshSkillCommands() // 项目级技能跟会话工作目录：切会话后重拉
+      // The badge follows the new session's meta (best effort: a dead daemon
+      // keeps the stale badge until the next Shift+Tab round-trip).
+      try {
+        const meta = await ctx.client.request("GET", `/sessions/${id}`) as { mode?: string }
+        if (isPermissionMode(meta.mode)) {
+          ctx.mode = meta.mode
+          ctx.rl.setPrompt(modePrompt(meta.mode))
+        }
+      } catch { /* ignore — reconnect path resyncs nothing critical here */ }
     },
     exit() {
       // handled by the input loop (parsed.command === "exit" → break)
@@ -737,9 +791,11 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
       line(text, ctx)
     },
     pauseInput() {
+      ctx.inputPaused = true
       ctx.rl.pause()
     },
     resumeInput() {
+      ctx.inputPaused = false
       ctx.rl.resume()
     },
     get pendingAttachments() {
@@ -755,6 +811,17 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
       // /steer //wait flip the local mode AFTER the sticky override POST
       // succeeded; the next Enter-send carries the new disposition.
       ctx.disposition = d
+    },
+    setMode(m: "readonly" | "default" | "acceptEdits") {
+      // /mode flips the local mirror AFTER the POST succeeded: the badge and
+      // the Shift+Tab cycle base follow the daemon-confirmed value.
+      ctx.mode = m
+      ctx.rl.setPrompt(modePrompt(m))
+      if (!runActive) {
+        process.stdout.write("\n")
+        ctx.io.atLineStart = true
+        ctx.rl.prompt(true)
+      }
     },
     async queueCancel(target: string | "all") {
       try {
@@ -848,6 +915,37 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
   }
   ctx.rl.on("SIGINT", onSigint)
   process.on("SIGINT", onSigint)
+
+  // Shift+Tab cycles the session's permission mode (readonly → default →
+  // acceptEdits, Claude Code style). Stands down while a @clack prompt owns
+  // stdin; mid-run presses apply from the NEXT run (the daemon gates per
+  // run) — the notice prints and the badge updates on the next prompt.
+  let modeBusy = false
+  const cycleMode = async (): Promise<void> => {
+    if (ctx.inputPaused || modeBusy || !process.stdin.isTTY) return
+    modeBusy = true
+    const target = nextMode(ctx.mode)
+    try {
+      await ctx.client.request("POST", `/sessions/${ctx.sessionId}/mode`, { mode: target })
+      ctx.mode = target
+      ctx.rl.setPrompt(modePrompt(target))
+      line(dim(`权限模式: ${target}（Shift+Tab 继续切换）`), ctx)
+      if (!runActive) {
+        process.stdout.write("\n") // break off the drawn prompt line, then redraw
+        ctx.io.atLineStart = true
+        ctx.rl.prompt(true) // re-display the (new) prompt, preserving typed input
+      }
+    } catch {
+      // daemon unreachable — the badge stays; the next cycle retries
+    } finally {
+      modeBusy = false
+    }
+  }
+  if (process.stdin.isTTY) {
+    process.stdin.on("keypress", (_str, key: { name?: string; shift?: boolean; sequence?: string } | undefined) => {
+      if (key?.name === "tab" && key.shift === true) void cycleMode()
+    })
+  }
 
   try {
     // A piped stdin reaches EOF (and closes the interface) while the FIRST
