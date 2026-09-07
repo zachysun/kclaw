@@ -69,28 +69,32 @@ describe("checkCommandFrame — confirmation.resolve", () => {
     })
   })
 
-  it("requires a non-empty confirmationId and a boolean approved", () => {
-    expect(checkCommandFrame({ type: "confirmation.resolve", confirmationId: "", approved: true }, deps())).toEqual({
+  it("requires a non-empty confirmationId and a legal decision", () => {
+    expect(checkCommandFrame({ type: "confirmation.resolve", confirmationId: "", decision: "once" }, deps())).toEqual({
       kind: "error",
-      message: "confirmation.resolve requires a non-empty string confirmationId and a boolean approved",
+      message: 'confirmation.resolve requires a non-empty string confirmationId and decision "once" | "project" | "global" | "reject"',
+    })
+    expect(checkCommandFrame({ type: "confirmation.resolve", confirmationId: "c1", decision: "maybe" }, deps())).toEqual({
+      kind: "error",
+      message: 'confirmation.resolve requires a non-empty string confirmationId and decision "once" | "project" | "global" | "reject"',
     })
   })
 
   it("restricts client to cli|web", () => {
-    expect(checkCommandFrame({ type: "confirmation.resolve", confirmationId: "c1", approved: true, client: "api" }, deps())).toEqual({
+    expect(checkCommandFrame({ type: "confirmation.resolve", confirmationId: "c1", decision: "once", client: "api" }, deps())).toEqual({
       kind: "error",
       message: 'confirmation.resolve client must be "cli" or "web"',
     })
   })
 
   it("keeps a legal client verdict and drops an absent one", () => {
-    expect(checkCommandFrame({ type: "confirmation.resolve", confirmationId: "c1", approved: false, client: "web" }, deps())).toEqual({
+    expect(checkCommandFrame({ type: "confirmation.resolve", confirmationId: "c1", decision: "reject", client: "web" }, deps())).toEqual({
       kind: "command",
-      command: { type: "confirmation.resolve", confirmationId: "c1", approved: false, client: "web" },
+      command: { type: "confirmation.resolve", confirmationId: "c1", decision: "reject", client: "web" },
     })
-    expect(checkCommandFrame({ type: "confirmation.resolve", confirmationId: "c1", approved: true }, deps())).toEqual({
+    expect(checkCommandFrame({ type: "confirmation.resolve", confirmationId: "c1", decision: "project" }, deps())).toEqual({
       kind: "command",
-      command: { type: "confirmation.resolve", confirmationId: "c1", approved: true },
+      command: { type: "confirmation.resolve", confirmationId: "c1", decision: "project" },
     })
   })
 })

@@ -28,6 +28,7 @@ import {
   newBlockId,
   newId,
   newMessage,
+  type ConfirmationResolution,
   type EnqueueInput,
   type EventBus,
   type HookRegistry,
@@ -75,7 +76,7 @@ export interface RunManagerDeps {
    * Direct resolver override for tests. Takes precedence over the broker when
    * set — the daemon path relies on the broker alone.
    */
-  resolveConfirmation?: (confirmationId: string) => Promise<{ approved: boolean; by: "cli" | "web" | "timeout" }>
+  resolveConfirmation?: (confirmationId: string) => Promise<ConfirmationResolution>
   /**
    * Retry-visible llm per run: when set, EVERY
    * run builds its own client through this factory, receiving that run's
@@ -104,8 +105,6 @@ export interface RunManagerDeps {
   extraTools?: () => { executors: Map<string, ToolExecutor>; defs: ToolDefinition[] }
   /** Per-run token ledger (optional; recording failures are swallowed). */
   usageStore?: UsageStore
-  /** Daemon-level readonly flag (`--readonly`): all sessions start read-only. */
-  readonly?: boolean
   /**
    * User-hook registry: refreshed per run by the engine and
    * snapshotted into every run's hook chain. Optional (tests without user

@@ -106,8 +106,6 @@ export interface LaunchDaemonOptions {
   stopTimeoutMs?: number
   /** Directory of the built web UI to serve statically (see createApp). */
   webDist?: string
-  /** Readonly mode: fs_write/fs_edit/exec denied in every session. */
-  readonly?: boolean
 }
 
 /**
@@ -316,7 +314,6 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     model,
     usageStore: usage,
     hooks: hookRegistry,
-    ...(opts.readonly === true && { readonly: true }),
     ...(mcpManager !== undefined && { extraTools: () => mcpManager.tools() }),
     // Retry visibility: with the DEFAULT
     // composition every run builds its own retry-wrapped client carrying

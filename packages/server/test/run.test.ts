@@ -530,7 +530,7 @@ describe("RunManager.enqueue", () => {
     const { env, manager } = makeEnv(
       scriptClient([execToolTurn("call_3", "echo no"), textTurn("好的")]),
       undefined,
-      async () => ({ approved: false, by: "web" }),
+      async () => ({ decision: "reject" as const, by: "web" }),
     )
     const session = env.sessions.create("拒绝会话")
 
@@ -553,7 +553,7 @@ describe("RunManager.enqueue", () => {
       (c) => {
         c.permissions.confirmTimeoutMs = 50
       },
-      () => new Promise<{ approved: boolean; by: "web" }>(() => {}), // never settles
+      () => new Promise<{ decision: "once" | "reject"; by: "web" }>(() => {}), // never settles
     )
     const session = env.sessions.create("超时会话")
 
@@ -571,8 +571,8 @@ describe("RunManager.enqueue", () => {
   })
 
   it("discards a late human verdict that loses the timeout race", async () => {
-    const late = new Promise<{ approved: boolean; by: "web" }>((resolve) => {
-      setTimeout(() => resolve({ approved: true, by: "web" }), 250)
+    const late = new Promise<{ decision: "once"; by: "web" }>((resolve) => {
+      setTimeout(() => resolve({ decision: "once", by: "web" }), 250)
     })
     const { env, manager } = makeEnv(
       scriptClient([execToolTurn("call_5", "echo late"), textTurn("好的")]),
@@ -1811,7 +1811,7 @@ describe("RunManager model resolution + usage recording", () => {
 })
 
 describe("RunManager readonly mode", () => {
-  it("denies write-class tool calls with a readonly note when the session is readonly", async () => {
+  it("denies write-class tool calls with a denied note when the session mode is readonly", async () => {
     const { env, manager } = makeEnv(scriptClient([
       [
         { type: "tool_call_started", index: 0, callId: "c1", name: "fs_write" },
@@ -1821,7 +1821,7 @@ describe("RunManager readonly mode", () => {
       [textTurn("完成")],
     ]))
     const session = env.sessions.create("ro-session")
-    env.sessions.updateMeta(session.id, { readonly: true })
+    env.sessions.updateMeta(session.id, { mode: "readonly" })
     const outcome = await manager.enqueue(session.id, { userText: "写个文件", trigger: "user" })
     expect(outcome.stopReason).toBe("end_turn")
     // The denied tool call produced a note instead of running.

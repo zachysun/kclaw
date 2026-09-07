@@ -12,12 +12,12 @@
  * show exactly one of each event, never a duplicate from the broker side.
  */
 import { describe, it, expect, afterEach } from "vitest"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AddressInfo } from "node:net"
 import WebSocket from "ws"
-import { ConfirmationBroker, EventBus, SessionStore, loadConfig, resolvePaths } from "@kclaw/core"
+import { ConfirmationBroker, EventBus, SessionStore, loadConfig, loadDecidedRules, resolvePaths } from "@kclaw/core"
 import type {
   AgentEvent,
   ConfirmationRequestedPayload,
@@ -72,18 +72,18 @@ describe("ConfirmationBroker", () => {
     const broker = new ConfirmationBroker()
     const resolution = broker.create("conf_2", CALL, "sensitive", 60_000)
 
-    expect(broker.resolve("conf_2", true)).toBe(true)
-    await expect(resolution).resolves.toEqual({ approved: true, by: "cli" })
+    expect(broker.resolve("conf_2", "once")).toBe(true)
+    await expect(resolution).resolves.toEqual({ decision: "once", by: "cli" })
 
-    expect(broker.resolve("conf_2", true)).toBe(false)
+    expect(broker.resolve("conf_2", "once")).toBe(false)
     expect(broker.pending()).toEqual([])
   })
 
   it("keeps the web actor field on the resolution", async () => {
     const broker = new ConfirmationBroker()
     const resolution = broker.create("conf_w", CALL, "sensitive", 60_000)
-    expect(broker.resolve("conf_w", false, "web")).toBe(true)
-    await expect(resolution).resolves.toEqual({ approved: false, by: "web" })
+    expect(broker.resolve("conf_w", "reject", "web")).toBe(true)
+    await expect(resolution).resolves.toEqual({ decision: "reject", by: "web" })
   })
 
   it("resolves an unknown id to false without side effects", () => {
@@ -118,9 +118,9 @@ describe("ConfirmationBroker", () => {
     const created = broker.create("conf_5", CALL, "sensitive", 60_000)
     const waited = broker.wait("conf_5")
 
-    broker.resolve("conf_5", true, "web")
-    await expect(waited).resolves.toEqual({ approved: true, by: "web" })
-    await expect(created).resolves.toEqual({ approved: true, by: "web" })
+    broker.resolve("conf_5", "once", "web")
+    await expect(waited).resolves.toEqual({ decision: "once", by: "web" })
+    await expect(created).resolves.toEqual({ decision: "once", by: "web" })
 
     // unknown id: pending forever; the loop's own timeout race owns the denial
     const won = await Promise.race([
@@ -295,7 +295,7 @@ describe("confirmation gateway over /ws", () => {
     expect(typeof payload.expiresAt).toBe("string")
 
     ws.send(JSON.stringify({
-      type: "confirmation.resolve", confirmationId: payload.confirmationId, approved: true,
+      type: "confirmation.resolve", confirmationId: payload.confirmationId, decision: "once",
     }))
     expect(await waitFor(frames, (f) => f.type === "confirmation.resolved_ack")).toEqual({
       type: "confirmation.resolved_ack", confirmationId: payload.confirmationId, ok: true,
@@ -303,7 +303,7 @@ describe("confirmation gateway over /ws", () => {
 
     // a second resolve of the same id answers an error frame (entry settled)
     ws.send(JSON.stringify({
-      type: "confirmation.resolve", confirmationId: payload.confirmationId, approved: false,
+      type: "confirmation.resolve", confirmationId: payload.confirmationId, decision: "reject",
     }))
     const dup = await waitFor(frames, (f) => f.type === "error" && f.message === "unknown confirmation")
     expect(dup.message).toBe("unknown confirmation")
@@ -316,7 +316,7 @@ describe("confirmation gateway over /ws", () => {
     expect(events.filter((e) => e.type === "confirmation.requested")).toHaveLength(1)
     const resolved = events.filter((e) => e.type === "confirmation.resolved")
     expect(resolved).toHaveLength(1)
-    expect(resolved[0]!.payload).toEqual({ confirmationId: payload.confirmationId, approved: true, by: "cli" })
+    expect(resolved[0]!.payload).toEqual({ confirmationId: payload.confirmationId, decision: "once", by: "cli" })
 
     // order on the wire: requested < resolved < tool_result.created
     const at = (type: string): number => events.findIndex((e) => e.type === type)
@@ -350,7 +350,7 @@ describe("confirmation gateway over /ws", () => {
 
     const requested = (await waitFor(frames, (f) => f.type === "confirmation.requested")) as AgentEvent
     const { confirmationId } = requested.payload as ConfirmationRequestedPayload
-    ws.send(JSON.stringify({ type: "confirmation.resolve", confirmationId, approved: false }))
+    ws.send(JSON.stringify({ type: "confirmation.resolve", confirmationId, decision: "reject" }))
     await waitFor(frames, (f) => f.type === "confirmation.resolved_ack")
 
     const outcome = await run
@@ -358,7 +358,7 @@ describe("confirmation gateway over /ws", () => {
 
     const events = frames.filter(isAgentEvent)
     expect(events.find((e) => e.type === "confirmation.resolved")!.payload).toEqual({
-      confirmationId, approved: false, by: "cli",
+      confirmationId, decision: "reject", by: "cli",
     })
 
     const msgs = env.sessions.readMessages(session.id)
@@ -388,7 +388,7 @@ describe("confirmation gateway over /ws", () => {
     const { confirmationId } = requested.payload as ConfirmationRequestedPayload
 
     ws.send(JSON.stringify({
-      type: "confirmation.resolve", confirmationId, approved: true, client: "web",
+      type: "confirmation.resolve", confirmationId, decision: "once", client: "web",
     }))
     await waitFor(frames, (f) => f.type === "confirmation.resolved_ack")
 
@@ -397,7 +397,7 @@ describe("confirmation gateway over /ws", () => {
 
     const events = frames.filter(isAgentEvent)
     expect(events.find((e) => e.type === "confirmation.resolved")!.payload).toEqual({
-      confirmationId, approved: true, by: "web",
+      confirmationId, decision: "once", by: "web",
     })
 
     // the web-approved granted reason landed on the tool message
@@ -410,7 +410,7 @@ describe("confirmation gateway over /ws", () => {
     const frames = collectFrames(ws)
 
     ws.send(JSON.stringify({
-      type: "confirmation.resolve", confirmationId: "conf_x", approved: true, client: "mobile",
+      type: "confirmation.resolve", confirmationId: "conf_x", decision: "once", client: "mobile",
     }))
     await waitFor(frames, (f) => f.type === "error" && (f.message as string).includes("client"))
 
@@ -424,14 +424,14 @@ describe("confirmation gateway over /ws", () => {
     const ws = await openAuthed(url)
     const frames = collectFrames(ws)
 
-    ws.send(JSON.stringify({ type: "confirmation.resolve", confirmationId: "conf_missing", approved: true }))
+    ws.send(JSON.stringify({ type: "confirmation.resolve", confirmationId: "conf_missing", decision: "once" }))
     await waitFor(frames, (f) => f.type === "error" && f.message === "unknown confirmation")
 
     // malformed variants likewise error instead of crashing the connection
     ws.send(JSON.stringify({ type: "confirmation.resolve", confirmationId: "conf_x" }))
     await waitFor(frames, (f) => f.type === "error" && typeof f.message === "string"
-      && (f.message as string).includes("approved"))
-    ws.send(JSON.stringify({ type: "confirmation.resolve", approved: true }))
+      && (f.message as string).includes("decision"))
+    ws.send(JSON.stringify({ type: "confirmation.resolve", decision: "once" }))
     await waitFor(frames, (f) => f.type === "error" && typeof f.message === "string"
       && (f.message as string).includes("confirmationId"))
 
@@ -445,7 +445,79 @@ describe("confirmation gateway over /ws", () => {
     const ws = await openAuthed(url)
     const frames = collectFrames(ws)
 
-    ws.send(JSON.stringify({ type: "confirmation.resolve", confirmationId: "conf_x", approved: true }))
+    ws.send(JSON.stringify({ type: "confirmation.resolve", confirmationId: "conf_x", decision: "once" }))
     await waitFor(frames, (f) => f.type === "error" && /confirmation/.test(String(f.message)))
   })
+
+  it("persists a decided rule when the verdict is always-allow, not for once/reject", async () => {
+    const { env, url } = await makeGateway(
+      scriptClient([
+        execToolTurn("call_1", "git push origin main"),
+        execToolTurn("call_2", "git push origin dev"),
+        execToolTurn("call_3", "git fetch"),
+        execToolTurn("call_4", "echo done"),
+        textTurn("完成"),
+      ]),
+    )
+    const session = env.sessions.create("沉淀会话")
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await waitFor(frames, (f) => f.type === "subscribed")
+
+    const run = env.manager.enqueue(session.id, { userText: "执行 git 操作", trigger: "user" })
+
+    // call_1: always allow in this project → the narrowed prefix lands in the
+    // project file (which is born gitignored inside the workspace)
+    const requested1 = (await waitFor(frames, (f) => f.type === "confirmation.requested")) as AgentEvent
+    ws.send(JSON.stringify({
+      type: "confirmation.resolve", confirmationId: (requested1.payload as ConfirmationRequestedPayload).confirmationId,
+      decision: "project",
+    }))
+    await waitFor(frames, (f) => f.type === "confirmation.resolved_ack")
+
+    // call_2: matched by the just-decided `exec:git push*` rule? No — the
+    // gate was built at run start, so this still asks; allow once.
+    const requested2 = (await waitFor(frames, (f) =>
+      f.type === "confirmation.requested" && (f.payload as ConfirmationRequestedPayload).toolCall.callId === "call_2")) as AgentEvent
+    ws.send(JSON.stringify({
+      type: "confirmation.resolve", confirmationId: (requested2.payload as ConfirmationRequestedPayload).confirmationId,
+      decision: "once",
+    }))
+    await waitFor(frames, (f) => f.type === "confirmation.resolved_ack")
+
+    // call_3: always allow globally
+    const requested3 = (await waitFor(frames, (f) =>
+      f.type === "confirmation.requested" && (f.payload as ConfirmationRequestedPayload).toolCall.callId === "call_3")) as AgentEvent
+    ws.send(JSON.stringify({
+      type: "confirmation.resolve", confirmationId: (requested3.payload as ConfirmationRequestedPayload).confirmationId,
+      decision: "global",
+    }))
+    await waitFor(frames, (f) => f.type === "confirmation.resolved_ack")
+
+    // call_4: rejected — a reject verdict must persist nothing
+    const requested4 = (await waitFor(frames, (f) =>
+      f.type === "confirmation.requested" && (f.payload as ConfirmationRequestedPayload).toolCall.callId === "call_4")) as AgentEvent
+    ws.send(JSON.stringify({
+      type: "confirmation.resolve", confirmationId: (requested4.payload as ConfirmationRequestedPayload).confirmationId,
+      decision: "reject",
+    }))
+    await waitFor(frames, (f) => f.type === "confirmation.resolved_ack")
+
+    await run
+
+    // project scope: narrowed prefix + provenance, gitignored, inside the workspace
+    const projectRules = loadDecidedRules(join(env.config.workspace, ".kclaw", "permissions.yaml"))
+    expect(projectRules).toHaveLength(1)
+    expect(projectRules[0]!.rule).toBe("exec:git push*")
+    expect(projectRules[0]!.origin.tool).toBe("exec")
+    expect(projectRules[0]!.origin.sessionId).toBe(session.id)
+    expect(readFileSync(join(env.config.workspace, ".gitignore"), "utf8")).toContain(".kclaw/permissions.yaml")
+
+    // global scope: the call_3 rule landed in <home>/permissions.yaml
+    const globalRules = loadDecidedRules(join(env.paths.home, "permissions.yaml"))
+    expect(globalRules).toHaveLength(1)
+    expect(globalRules[0]!.rule).toBe("exec:git fetch*")
+  }, 30_000)
 })

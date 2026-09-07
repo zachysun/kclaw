@@ -334,6 +334,45 @@ describe("sessions routes", () => {
     expect(missing.statusCode).toBe(404)
     expect(missing.json()).toEqual({ error: "session not found" })
   })
+
+  it("POST /sessions/:id/mode switches the mode and returns the updated meta", async () => {
+    const created = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
+    for (const mode of ["readonly", "acceptEdits", "default"] as const) {
+      const res = await app.inject({
+        method: "POST",
+        url: `/sessions/${created.id}/mode`,
+        headers: AUTH,
+        payload: { mode },
+      })
+      expect(res.statusCode).toBe(200)
+      expect((res.json() as SessionMeta).mode).toBe(mode)
+      // the projection carries it too (GET reads the same meta)
+      const got = await app.inject({ method: "GET", url: `/sessions/${created.id}`, headers: AUTH })
+      expect((got.json() as SessionMeta).mode).toBe(mode)
+    }
+  })
+
+  it("POST /sessions/:id/mode rejects an unknown mode with 400", async () => {
+    const created = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${created.id}/mode`,
+      headers: AUTH,
+      payload: { mode: "trusted" },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(typeof (res.json() as { error: string }).error).toBe("string")
+  })
+
+  it("POST /sessions/:id/mode for an unknown session returns 404", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/sessions/ses_nope/mode",
+      headers: AUTH,
+      payload: { mode: "readonly" },
+    })
+    expect(res.statusCode).toBe(404)
+  })
 })
 
 describe("POST /sessions 切会话记忆写入（/clear、/new、新建会话共用）", () => {

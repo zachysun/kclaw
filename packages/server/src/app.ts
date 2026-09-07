@@ -9,6 +9,7 @@ import { EventBus } from "@kclaw/core"
 import type { RunManager } from "./run.js"
 import { registerWsRoutes } from "./ws.js"
 import { registerSessionRoutes } from "./routes/sessions.js"
+import { registerPermissionsRoutes } from "./routes/permissions.js"
 import { registerMemoryRoutes } from "./routes/memory.js"
 import { registerSkillRoutes } from "./routes/skills.js"
 import { registerAttachmentRoutes } from "./routes/attachments.js"
@@ -174,6 +175,8 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
 
   registerConfigRoutes(app, { config })
   registerFsRoutes(app, { workspace: config.workspace })
+  // 沉淀规则管理面：列表（含 git 跟踪状态）与删除，Web 权限页消费。
+  registerPermissionsRoutes(app, { paths, workspaceFallback: config.workspace })
 
   if (opts.usage !== undefined) {
     registerUsageRoutes(app, { usage: opts.usage, config })
@@ -191,6 +194,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
     attachmentsDir: opts.attachmentsDir,
     authTimeoutMs: opts.wsAuthTimeoutMs,
     heartbeatMs: opts.wsHeartbeatMs,
+    decidedRules: { home: paths.home, workspaceFallback: config.workspace },
   })
 
   if (opts.webDist !== undefined) {

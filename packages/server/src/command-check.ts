@@ -51,7 +51,7 @@ export function checkCommandFrame(frame: object, deps: CheckDeps): FrameCheck {
     token?: unknown
     sessionId?: unknown
     confirmationId?: unknown
-    approved?: unknown
+    decision?: unknown
     client?: unknown
     text?: unknown
     attachments?: unknown
@@ -80,12 +80,12 @@ export function checkCommandFrame(frame: object, deps: CheckDeps): FrameCheck {
       if (!deps.hasRun) {
         return { kind: "error", message: "confirmation gateway unavailable" }
       }
-      const { confirmationId, approved, client } = msg
+      const { confirmationId, decision, client } = msg
       if (typeof confirmationId !== "string" || confirmationId.length === 0
-        || typeof approved !== "boolean") {
+        || (decision !== "once" && decision !== "project" && decision !== "global" && decision !== "reject")) {
         return {
           kind: "error",
-          message: "confirmation.resolve requires a non-empty string confirmationId and a boolean approved",
+          message: 'confirmation.resolve requires a non-empty string confirmationId and decision "once" | "project" | "global" | "reject"',
         }
       }
       if (client !== undefined && client !== "cli" && client !== "web") {
@@ -96,7 +96,7 @@ export function checkCommandFrame(frame: object, deps: CheckDeps): FrameCheck {
         command: {
           type: "confirmation.resolve",
           confirmationId,
-          approved,
+          decision,
           ...(client !== undefined ? { client } : {}),
         },
       }

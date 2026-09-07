@@ -1,5 +1,5 @@
 import type { FastifyError, FastifyInstance } from "fastify"
-import type { KclawConfig, MemorySystem, SessionStore } from "@kclaw/core"
+import { isPermissionMode, type KclawConfig, type MemorySystem, type SessionStore } from "@kclaw/core"
 import type { RunManager } from "../run.js"
 
 /** Store dependencies for the session routes (injected by createApp). */
@@ -118,15 +118,17 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       return { ok: true }
     })
 
-    // Session-level readonly switch: write/exec tools deny with "readonly".
-    scope.post("/sessions/:id/readonly", async (request, reply) => {
+    // Session-level permission mode switch: readonly denies write/exec,
+    // acceptEdits auto-approves in-workspace file writes. Takes effect on
+    // the next run.
+    scope.post("/sessions/:id/mode", async (request, reply) => {
       const { id } = request.params as { id: string }
       if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
-      const body = request.body as { readonly?: unknown } | null | undefined
-      if (typeof body?.readonly !== "boolean") {
-        return reply.code(400).send({ error: "readonly must be a boolean" })
+      const body = (request.body ?? {}) as { mode?: unknown }
+      if (!isPermissionMode(body.mode)) {
+        return reply.code(400).send({ error: 'mode must be one of "readonly" | "default" | "acceptEdits"' })
       }
-      return stores.sessions.updateMeta(id, body.readonly ? { readonly: true } : { readonly: undefined })
+      return stores.sessions.updateMeta(id, { mode: body.mode })
     })
 
     scope.get("/sessions/:id", async (request, reply) => {
