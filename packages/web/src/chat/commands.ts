@@ -10,6 +10,7 @@
  * `help` is intentionally inert here: the composer view intercepts it (it
  * renders the command panel itself), so this branch is a defensive no-op.
  */
+import { isPermissionMode, PERMISSION_MODE_CONFIRMATIONS } from "@kclaw/core/permission-modes"
 import type { ParsedSlash } from "@kclaw/core/commands"
 import type { ApiClient } from "../api.js"
 
@@ -24,6 +25,11 @@ export interface WebCommandCtx {
   openSessions(): void
   /** Switch the session model ("" restores the daemon default). */
   switchModel(name: string): void
+  /**
+   * Sync the mode selector after a /mode switch POST succeeded (the command
+   * already POSTed — this only updates local state, no second request).
+   */
+  setMode?(m: "readonly" | "default" | "acceptEdits"): void
   models: string[]
   currentModel?: string
   /** 当前会话的工作目录（/memory save 触发手动写入的目标项目）。 */
@@ -58,15 +64,23 @@ export async function runWebCommand(parsed: ParsedSlash, ctx: WebCommandCtx): Pr
       }
       return true
     }
-    case "readonly": {
+    case "mode": {
       const arg = parsed.args.trim()
       try {
-        const current = await ctx.api.get<{ readonly?: boolean }>(`/sessions/${encodeURIComponent(ctx.sessionId)}`)
-        const target = arg === "on" ? true : arg === "off" ? false : !(current.readonly === true)
-        await ctx.api.post(`/sessions/${encodeURIComponent(ctx.sessionId)}/readonly`, { readonly: target })
-        ctx.notify(target ? "已开启只读模式（写与 exec 将被拒绝）" : "已关闭只读模式")
+        if (arg === "") {
+          const current = await ctx.api.get<{ mode?: string }>(`/sessions/${encodeURIComponent(ctx.sessionId)}`)
+          ctx.notify(`当前权限模式: ${current.mode ?? "default"}（可选 readonly / default / acceptEdits）`)
+          return true
+        }
+        if (!isPermissionMode(arg)) {
+          ctx.notify(`未知模式: ${arg}（可选 readonly / default / acceptEdits）`)
+          return true
+        }
+        await ctx.api.post(`/sessions/${encodeURIComponent(ctx.sessionId)}/mode`, { mode: arg })
+        ctx.setMode?.(arg)
+        ctx.notify(PERMISSION_MODE_CONFIRMATIONS[arg])
       } catch (err) {
-        ctx.notify(`只读切换失败: ${err instanceof Error ? err.message : String(err)}`)
+        ctx.notify(`权限模式切换失败: ${err instanceof Error ? err.message : String(err)}`)
       }
       return true
     }

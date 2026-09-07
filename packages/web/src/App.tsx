@@ -31,10 +31,11 @@ import { JobsView } from "./jobs/JobsView.js"
 import { AuditView } from "./audit/AuditView.js"
 import { MemoryView } from "./memory/MemoryView.js"
 import { SkillsView } from "./skills/SkillsView.js"
+import { PermissionsView } from "./permissions/PermissionsView.js"
 import type { FsBrowseResult, SessionMeta } from "./types.js"
 
 type DaemonStatus = "connecting" | "connected" | "error"
-type Tab = "chat" | "jobs" | "audit" | "usage" | "trash" | "memory" | "skills"
+type Tab = "chat" | "jobs" | "audit" | "usage" | "trash" | "memory" | "skills" | "permissions"
 
 /**
  * Union two raw message lists by id, chronological (a cache snapshot can be
@@ -374,6 +375,14 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
           >
             技能
           </button>
+          <button
+            type="button"
+            className={tab === "permissions" ? "tab active" : "tab"}
+            data-testid="tab-permissions"
+            onClick={() => switchTab("permissions")}
+          >
+            权限
+          </button>
         </nav>
         <span
           className={`status-dot ${status}`}
@@ -434,6 +443,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
           {tab === "trash" && <TrashView api={api} />}
           {tab === "memory" && <MemoryView api={api} notice={(t) => setSessionNotice(t)} openTarget={memoryTarget} onOpenConsumed={() => setMemoryTarget(null)} />}
           {tab === "skills" && <SkillsView api={api} notice={(t) => setSessionNotice(t)} workdir={selectedMeta?.workdir} />}
+          {tab === "permissions" && <PermissionsView api={api} notice={(t) => setSessionNotice(t)} workdir={selectedMeta?.workdir} />}
         </main>
       </div>
     </div>

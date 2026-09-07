@@ -224,7 +224,7 @@ describe("ChatView slash suggestions", () => {
     const help = h.container.querySelector('[data-testid="slash-help"]')
     expect(help).not.toBeNull()
     const text = help!.textContent ?? ""
-    for (const name of ["new", "clear", "sessions", "model", "readonly", "compact", "help"]) {
+    for (const name of ["new", "clear", "sessions", "model", "mode", "compact", "help"]) {
       expect(text).toContain(`/${name}`)
     }
     expect(text).not.toContain("/attach")

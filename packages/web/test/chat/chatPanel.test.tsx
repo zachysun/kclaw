@@ -611,35 +611,66 @@ describe("ChatPanel", () => {
     expect(card).not.toBeNull()
     expect(card!.textContent).toContain("exec")
     await act(async () => {
-      ;(h.container.querySelector('button[data-testid="confirm-allow"]') as HTMLButtonElement).click()
+      ;(h.container.querySelector('button[data-testid="confirm-once"]') as HTMLButtonElement).click()
     })
     expect(h.sockets[0]!.sent).toContain(
-      JSON.stringify({ type: "confirmation.resolve", confirmationId: "conf_1", approved: true, client: "web" }),
+      JSON.stringify({ type: "confirmation.resolve", confirmationId: "conf_1", decision: "once", client: "web" }),
     )
     // The daemon's confirmation.resolved event removes the card.
     await drive(() => {
-      pushFrame(h.sockets[0]!, ev("confirmation.resolved", { confirmationId: "conf_1", approved: true, by: "web" }))
+      pushFrame(h.sockets[0]!, ev("confirmation.resolved", { confirmationId: "conf_1", decision: "once", by: "web" }))
     })
     expect(h.container.querySelector('[data-testid="confirm-card"]')).toBeNull()
     h.unmount()
   })
 
-  it("deny button resolves with approved=false", async () => {
+  it("project/global persist a rule; reject denies without one", async () => {
     const h = await mount()
-    await drive(() => {
-      pushFrame(h.sockets[0]!, ev("confirmation.requested", {
-        confirmationId: "conf_2",
-        toolCall: { id: "b5", type: "tool_call", callId: "c1", name: "exec", args: {}, argsJson: "{}" },
-        risk: "safe",
-        expiresAt: "t",
-      }))
-    })
+    const request = async (confirmationId: string, callId: string, id: string): Promise<void> => {
+      await drive(() => {
+        pushFrame(h.sockets[0]!, ev("confirmation.requested", {
+          confirmationId,
+          toolCall: { id, type: "tool_call", callId, name: "exec", args: {}, argsJson: "{}" },
+          risk: "safe",
+          expiresAt: "t",
+        }))
+      })
+    }
+    const settle = async (confirmationId: string, decision: string, testid: string): Promise<void> => {
+      await act(async () => {
+        ;(h.container.querySelector(`button[data-testid="${testid}"]`) as HTMLButtonElement).click()
+      })
+      expect(h.sockets[0]!.sent).toContain(
+        JSON.stringify({ type: "confirmation.resolve", confirmationId, decision, client: "web" }),
+      )
+      // The daemon removes the card on confirmation.resolved; without this the
+      // next request would stack a second card and its buttons would shadow.
+      await drive(() => {
+        pushFrame(h.sockets[0]!, ev("confirmation.resolved", { confirmationId, decision, by: "web" }))
+      })
+      expect(h.container.querySelector('[data-testid="confirm-card"]')).toBeNull()
+    }
+    await request("conf_2", "c1", "b5")
+    await settle("conf_2", "project", "confirm-project")
+    await request("conf_3", "c2", "b6")
+    await settle("conf_3", "global", "confirm-global")
+    await request("conf_4", "c3", "b7")
+    await settle("conf_4", "reject", "confirm-reject")
+    h.unmount()
+  })
+
+  it("the mode selector mirrors session meta and POSTs on change", async () => {
+    const h = await mount({ meta: { mode: "readonly" } })
+    await flush()
+    const select = h.container.querySelector('[data-testid="mode-select"]') as HTMLSelectElement
+    expect(select).not.toBeNull()
+    expect(select.value).toBe("readonly")
     await act(async () => {
-      ;(h.container.querySelector('button[data-testid="confirm-deny"]') as HTMLButtonElement).click()
+      select.value = "acceptEdits"
+      select.dispatchEvent(new Event("change", { bubbles: true }))
     })
-    expect(h.sockets[0]!.sent).toContain(
-      JSON.stringify({ type: "confirmation.resolve", confirmationId: "conf_2", approved: false, client: "web" }),
-    )
+    expect(h.api.post).toHaveBeenCalledWith("/sessions/s1/mode", { mode: "acceptEdits" })
+    expect(select.value).toBe("acceptEdits")
     h.unmount()
   })
 

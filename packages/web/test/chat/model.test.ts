@@ -280,10 +280,10 @@ describe("confirmations", () => {
       risk: "sensitive",
       expiresAt: "2026-08-15T00:02:00.000Z",
     }))
-    state = applyEvent(state, ev("confirmation.resolved", { confirmationId: "conf_1", approved: true, by: "web" }))
+    state = applyEvent(state, ev("confirmation.resolved", { confirmationId: "conf_1", decision: "once", by: "web" }))
     expect(state.pendingConfirmations).toEqual([])
     // Resolving an unknown id is a no-op.
-    expect(applyEvent(state, ev("confirmation.resolved", { confirmationId: "conf_nope", approved: true, by: "web" })))
+    expect(applyEvent(state, ev("confirmation.resolved", { confirmationId: "conf_nope", decision: "reject", by: "web" })))
       .toBe(state)
   })
 
@@ -295,7 +295,7 @@ describe("confirmations", () => {
       }))
     state = push("conf_1")
     state = push("conf_2")
-    state = applyEvent(state, ev("confirmation.resolved", { confirmationId: "conf_1", approved: false, by: "web" }))
+    state = applyEvent(state, ev("confirmation.resolved", { confirmationId: "conf_1", decision: "reject", by: "web" }))
     expect(state.pendingConfirmations.map((c) => c.confirmationId)).toEqual(["conf_2"])
   })
 })

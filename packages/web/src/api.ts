@@ -12,7 +12,7 @@ export interface ApiClient {
   get<T = unknown>(path: string): Promise<T>
   post<T = unknown>(path: string, body?: unknown): Promise<T>
   patch<T = unknown>(path: string, body?: unknown): Promise<T>
-  del<T = unknown>(path: string): Promise<T>
+  del<T = unknown>(path: string, body?: unknown): Promise<T>
   /** Upload a raw file to a session's attachments dir (drag-and-drop). */
   upload(sessionId: string, file: File): Promise<{ path: string; name: string; size: number }>
 }
@@ -68,7 +68,7 @@ export function createApi(
     get: (path) => request("GET", path),
     post: (path, body) => request("POST", path, body),
     patch: (path, body) => request("PATCH", path, body),
-    del: (path) => request("DELETE", path),
+    del: (path, body) => request("DELETE", path, body),
     upload,
   }
 }

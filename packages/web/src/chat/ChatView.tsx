@@ -7,7 +7,8 @@
  */
 import { Fragment, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { parseSlashInput, replaceTrailingSlashToken, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
-import type { AttachmentRef } from "@kclaw/core/protocol"
+import { PERMISSION_MODES, type PermissionMode } from "@kclaw/core/permission-modes"
+import type { AttachmentRef, ConfirmationDecision } from "@kclaw/core/protocol"
 import type { ChatState, ConfirmationCard, NoteRender, RenderedBlock, RenderedMessage } from "./model.js"
 
 /**
@@ -47,7 +48,7 @@ export interface ChatViewProps {
   /** Send one user message (queued server-side; runs serialize like the CLI). */
   onSend: (text: string) => void
   /** Answer an inline confirmation card. */
-  onResolveConfirmation: (confirmationId: string, approved: boolean) => void
+  onResolveConfirmation: (confirmationId: string, decision: ConfirmationDecision) => void
   /** Attachments queued for the next message (drag-and-drop). */
   pendingAttachments: PendingAttachment[]
   /** Drop one queued attachment. */
@@ -58,6 +59,10 @@ export interface ChatViewProps {
   sessionModel?: string
   /** Switch the session model ("" clears to default). */
   onSwitchModel?: (name: string) => void
+  /** The session's permission mode (always-on selector next to the model one). */
+  mode?: PermissionMode
+  /** Switch the session permission mode (POSTs; applies from the next run). */
+  onSwitchMode?: (m: PermissionMode) => void
   /**
    * Transient status line (command results, reconnect/auth/upload/model
    * messages) — rendered directly above the composer, next to the input that
@@ -95,7 +100,10 @@ export interface ChatViewProps {
   extraCommands?: SlashCommandMeta[]
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onCancelCompaction, compactions, extraCommands }: ChatViewProps) {
+/** Selector labels per mode; the Record forces a label when a mode ships. */
+const MODE_LABELS: Record<PermissionMode, string> = { readonly: "只读", default: "默认", acceptEdits: "自动编辑" }
+
+export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onCancelCompaction, compactions, extraCommands }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Slash-suggestion state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -308,6 +316,25 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
           >
             <option value="">默认</option>
             {models.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </div>
+      )}
+      {onSwitchMode !== undefined && (
+        // Always-on permission mode selector (session-scoped, next run
+        // effective): readonly denies writes/exec, default confirms
+        // out-of-bounds actions, accept-edits skips confirmation for
+        // in-workspace file writes.
+        <div className="composer-row" data-testid="mode-selector-row">
+          <label>权限</label>
+          <select
+            className="mode-select"
+            data-testid="mode-select"
+            value={mode ?? "default"}
+            onChange={(e) => onSwitchMode(e.target.value as PermissionMode)}
+          >
+            <option value="readonly">{MODE_LABELS.readonly}</option>
+            <option value="default">{MODE_LABELS.default}</option>
+            <option value="acceptEdits">{MODE_LABELS.acceptEdits}</option>
           </select>
         </div>
       )}
@@ -612,7 +639,7 @@ function ConfirmationCardView({
   onResolve,
 }: {
   card: ConfirmationCard
-  onResolve: (confirmationId: string, approved: boolean) => void
+  onResolve: (confirmationId: string, decision: ConfirmationDecision) => void
 }) {
   return (
     <div className="confirm-card" data-testid="confirm-card">
@@ -620,8 +647,10 @@ function ConfirmationCardView({
       <div className="confirm-tool">⚡ {card.toolName} <code>{card.argsJson}</code></div>
       <div className="confirm-meta">risk: {card.risk} · expires {card.expiresAt}</div>
       <div className="confirm-actions">
-        <button data-testid="confirm-allow" onClick={() => onResolve(card.confirmationId, true)}>Allow</button>
-        <button data-testid="confirm-deny" onClick={() => onResolve(card.confirmationId, false)}>Deny</button>
+        <button data-testid="confirm-once" onClick={() => onResolve(card.confirmationId, "once")}>仅本次</button>
+        <button data-testid="confirm-project" onClick={() => onResolve(card.confirmationId, "project")}>总是（本项目）</button>
+        <button data-testid="confirm-global" onClick={() => onResolve(card.confirmationId, "global")}>总是（全局）</button>
+        <button data-testid="confirm-reject" onClick={() => onResolve(card.confirmationId, "reject")}>拒绝</button>
       </div>
     </div>
   )

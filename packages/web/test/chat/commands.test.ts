@@ -77,19 +77,23 @@ describe("runWebCommand", () => {
     expect(ctx.switchModel).toHaveBeenCalledWith("")
   })
 
-  it("turns readonly explicitly on and off", async () => {
+  it("/mode <name> POSTs the mode and syncs the selector; a bare /mode prints the current value", async () => {
     const ctx = makeCtx()
-    expect(await runWebCommand({ command: "readonly", args: "on" }, ctx)).toBe(true)
-    expect(ctx.api.post).toHaveBeenCalledWith("/sessions/s1/readonly", { readonly: true })
-    expect(await runWebCommand({ command: "readonly", args: "off" }, ctx)).toBe(true)
-    expect(ctx.api.post).toHaveBeenCalledWith("/sessions/s1/readonly", { readonly: false })
+    const setMode = vi.fn()
+    ctx.setMode = setMode
+    expect(await runWebCommand({ command: "mode", args: "readonly" }, ctx)).toBe(true)
+    expect(ctx.api.post).toHaveBeenCalledWith("/sessions/s1/mode", { mode: "readonly" })
+    expect(setMode).toHaveBeenCalledWith("readonly")
+    expect(await runWebCommand({ command: "mode", args: "" }, ctx)).toBe(true)
+    expect(ctx.api.get).toHaveBeenCalledWith("/sessions/s1")
+    expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("当前权限模式"))
   })
 
-  it("flips the current readonly state when no argument is given", async () => {
+  it("/mode rejects an unknown mode name without a POST", async () => {
     const ctx = makeCtx()
-    expect(await runWebCommand({ command: "readonly", args: "" }, ctx)).toBe(true)
-    expect(ctx.api.get).toHaveBeenCalledWith("/sessions/s1")
-    expect(ctx.api.post).toHaveBeenCalledWith("/sessions/s1/readonly", { readonly: false })
+    expect(await runWebCommand({ command: "mode", args: "trusted" }, ctx)).toBe(true)
+    expect(ctx.api.post).not.toHaveBeenCalled()
+    expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("未知模式"))
   })
 
   it("compacts with and without a focus argument", async () => {

@@ -13,6 +13,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react"
 import { parseSlashInput, skillCommandMeta } from "@kclaw/core/commands"
+import { isPermissionMode, type PermissionMode } from "@kclaw/core/permission-modes"
+import type { ConfirmationDecision } from "@kclaw/core/protocol"
 import { ApiError, type ApiClient } from "../api.js"
 import { WsAuthError, type WsClient } from "../ws.js"
 import {
@@ -317,13 +319,16 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       .catch((err: unknown) => setNotice(`模型切换失败: ${err instanceof Error ? err.message : String(err)}`))
   }, [api, sessionId])
 
-  // 初始发送处置（与 CLI chat 同源）：会话 meta 的 dispositionOverride
-  // 优先，其次配置默认，最后 steer。刚连上的 daemon 不可达（旧版本无该路由/字段）
-  // 时静默维持 steer。
+  // Initial send disposition (same source as CLI chat): the session meta's
+  // dispositionOverride wins, then the config default, then steer. An
+  // unreachable daemon (old versions lack this route/field) silently keeps
+  // steer. The same response also syncs the session's permission mode
+  // (missing mode field → default).
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>("default")
   useSilentFetch(
     () =>
       Promise.all([
-        api.get<{ dispositionOverride?: unknown }>(`/sessions/${encodeURIComponent(sessionId)}`),
+        api.get<{ dispositionOverride?: unknown; mode?: unknown }>(`/sessions/${encodeURIComponent(sessionId)}`),
         api.get<{ sessions?: { defaultDisposition?: unknown } }>("/config"),
       ]),
     ([meta, cfg]) => {
@@ -333,14 +338,30 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       if (override === "steer" || override === "wait") {
         baseDispositionRef.current = override
         setDisposition(override)
-        return
+      } else {
+        const fallback = cfg.sessions?.defaultDisposition
+        const base = fallback === "wait" ? "wait" : "steer"
+        baseDispositionRef.current = base
+        setDisposition(base)
       }
-      const fallback = cfg.sessions?.defaultDisposition
-      const base = fallback === "wait" ? "wait" : "steer"
-      baseDispositionRef.current = base
-      setDisposition(base)
+      setPermissionMode(isPermissionMode(meta.mode) ? meta.mode : "default")
     },
     [api, sessionId],
+  )
+
+  /** Always-on mode selector: applies locally now (next run picks it up), POST failure rolls back. */
+  const handleSwitchMode = useCallback(
+    (m: PermissionMode) => {
+      const previous = permissionMode
+      setPermissionMode(m)
+      api
+        .post(`/sessions/${encodeURIComponent(sessionId)}/mode`, { mode: m })
+        .catch((err: unknown) => {
+          setPermissionMode(previous)
+          setNotice(`权限模式切换失败: ${err instanceof Error ? err.message : String(err)}`)
+        })
+    },
+    [api, sessionId, permissionMode],
   )
 
   // v3 压缩审计：会话选中时与消息并行拉一次 GET
@@ -405,6 +426,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
         createSession: onCreateSession,
         openSessions: onOpenSessions,
         switchModel: handleSwitchModel,
+        setMode: (m) => setPermissionMode(m),
         models,
         currentModel,
       })
@@ -442,11 +464,12 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     setPendingAttachments((prev) => prev.filter((_, i) => i !== index))
   }, [])
 
-  const handleResolveConfirmation = useCallback((confirmationId: string, approved: boolean) => {
+  const handleResolveConfirmation = useCallback((confirmationId: string, decision: ConfirmationDecision) => {
     try {
       // client:"web" names this client so the daemon records web provenance on
       // the resolution and in the audit trail (the CLI omits it → "cli").
-      clientRef.current.send({ type: "confirmation.resolve", confirmationId, approved, client: "web" })
+      // decision "project"/"global" also persists a narrowed allow rule.
+      clientRef.current.send({ type: "confirmation.resolve", confirmationId, decision, client: "web" })
     } catch {
       setNotice("连接不可用，请稍后重试")
     }
@@ -507,6 +530,8 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           models={models}
           sessionModel={currentModel}
           onSwitchModel={handleSwitchModel}
+          mode={permissionMode}
+          onSwitchMode={handleSwitchMode}
           notice={notice}
           noticeAction={noticeAction}
           onDraftChange={clearNotice}
