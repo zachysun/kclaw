@@ -44,6 +44,7 @@ import type { UsageStore } from "../storage/usage.js"
 import type { SessionStore } from "../session/store.js"
 import type { Compactor } from "../session/compactor.js"
 import { ConfigPermissionGate, realpathWithin } from "../permissions/engine.js"
+import { loadDecidedRulesForRun } from "../storage/decided-rules.js"
 import { ConfirmationBroker, raceConfirmation, type ConfirmationResolution } from "../permissions/broker.js"
 import type { PermissionGate, RunOutcome } from "./loop.js"
 import { runAgent } from "./loop.js"
@@ -135,7 +136,7 @@ export interface RunEngineDeps {
    * Direct resolver override for tests. Takes precedence over the broker when
    * set — the daemon path relies on the broker alone.
    */
-  resolveConfirmation?: (confirmationId: string) => Promise<{ approved: boolean; by: "cli" | "web" | "timeout" }>
+  resolveConfirmation?: (confirmationId: string) => Promise<ConfirmationResolution>
   /**
    * Retry-visible llm per run: when set, EVERY
    * run builds its own client through this factory, receiving that run's
@@ -164,8 +165,6 @@ export interface RunEngineDeps {
   extraTools?: () => { executors: Map<string, ToolExecutor>; defs: ToolDefinition[] }
   /** Per-run token ledger (optional; recording failures are swallowed). */
   usageStore?: UsageStore
-  /** Daemon-level readonly flag (`--readonly`): all sessions start read-only. */
-  readonly?: boolean
   /**
    * User hook registry: the daemon-scoped bookkeeping for
    * ~/.kclaw/hooks files. Refreshed per run; its snapshot joins the run's
@@ -335,6 +334,11 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // --- permission wiring (config gate + confirmation gateway) ---
   const pendingConfirmations = new Map<string, ToolCallBlock>()
 
+  // Decided rules re-read every run (skills/hooks philosophy: edits take
+  // effect next message, no restart). A git-tracked project file is ignored
+  // here with a warning — a cloned repo must not pre-authorize itself.
+  const decided = loadDecidedRulesForRun(paths, workspace)
+
   const baseGate = new ConfigPermissionGate(config.permissions, {
     workspace,
     safeTools: new Set([...tools].filter(([, t]) => t.risk === "safe").map(([name]) => name)),
@@ -342,11 +346,14 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     // every treatment beyond safeTools from these — no permission logic in
     // the tools, no tool-name rosters in the gate (issue #9).
     toolFacts: deriveToolFacts(tools, toolDefs),
+    // Human-approved "always allow" rules (project + global scopes).
+    decidedRules: decided.rules,
     // Attachment reads: files under <home>/attachments are the daemon's own
     // uploaded inputs — safe path-arg tools reach them without a confirmation.
     readRoots: [paths.attachmentsDir],
-    // Readonly: the daemon-level flag OR this session's own toggle.
-    readonly: engine.deps.readonly === true || sessionMeta?.readonly === true,
+    // Mode: this session's own toggle (absent → default). The daemon has no
+    // mode flag — the session meta is the single source of truth.
+    mode: sessionMeta?.mode,
   })
   const confirmTimeoutMs = config.permissions.confirmTimeoutMs
   const broker = engine.deps.broker
@@ -387,7 +394,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       broker.expire(confirmationId)
       // the value is never used: the loop's own race resolved "aborted" and
       // denies without consulting the resolver
-      return { approved: false, by: "timeout" }
+      return { decision: "timeout", by: "timeout" }
     }
     pendingConfirmations.delete(confirmationId)
     if (raced.by === "timeout") broker.expire(confirmationId)

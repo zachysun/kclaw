@@ -5,6 +5,7 @@ import { newId } from "../protocol/ids.js"
 import type { ToolCallBlock } from "../protocol/blocks.js"
 import type { PermissionDecision, PermissionGate } from "../agent/loop.js"
 import type { KclawConfig } from "../storage/config.js"
+import type { PermissionMode } from "./modes.js"
 
 /** A compiled permission rule: bare tool name, or tool name plus arg glob. */
 export interface CompiledRule {
@@ -316,10 +317,19 @@ export interface ConfigPermissionGateOptions {
    */
   readRoots?: string[]
   /**
-   * Readonly mode: sensitive tools are denied unconditionally
-   * (reads, web and memory keep working). Reasons surface as "readonly".
+   * Session permission mode. `readonly` denies sensitive tools wholesale
+   * (reason "readonly"); `acceptEdits` auto-approves sensitive path-arg tools
+   * (fs_write/fs_edit) whose target stays inside the workspace — reason
+   * "accept_edits"; `default` (absent) confirms them. See permissions/modes.ts.
    */
-  readonly?: boolean
+  mode?: PermissionMode
+  /**
+   * Decided rules — allow rules a human produced by choosing "always allow"
+   * on a confirmation prompt (project + global scopes, pre-loaded per run).
+   * They sit AFTER the hand-written allow rules in the decision order and
+   * carry the same workspace-escape guard; approvals get reason "learned".
+   */
+  decidedRules?: string[]
 }
 
 /** A compiled rule that remembers its source string for deny notes. */
@@ -329,16 +339,19 @@ interface DenyRule extends CompiledRule {
 
 /**
  * Config-driven PermissionGate. Decision order, short-circuiting:
- * deny blacklist → allow whitelist → safeTools → session grants → confirm
- * with a fresh `conf_` id the surrounding loop routes to a human.
+ * deny blacklist → allow whitelist → decided rules → acceptEdits → workspace
+ * boundary → safeTools → session grants → confirm, with a fresh `conf_` id
+ * the surrounding loop routes to a human.
  * Command-arg tools (sensitive + `command` parameter — exec today) take a
  * dedicated branch (safeTools never lists them): deny matches every
- * normalized sub-command of a concatenated line, while allow/grant only ever
- * cover a single, concatenation-free command.
+ * normalized sub-command of a concatenated line, while allow/decided/grant
+ * only ever cover a single, concatenation-free command.
  */
 export class ConfigPermissionGate implements PermissionGate {
   readonly #allow: CompiledRule[]
   readonly #deny: DenyRule[]
+  readonly #decided: CompiledRule[]
+  readonly #mode: PermissionMode
   readonly #safeTools: Set<string>
   readonly #profiles: Map<string, PermissionProfile>
   readonly #grants: SessionGrants | undefined
@@ -346,11 +359,12 @@ export class ConfigPermissionGate implements PermissionGate {
   readonly #newConfirmationId: () => string
   readonly #workspace: string | undefined
   readonly #readRoots: string[]
-  readonly #readonly: boolean
 
   constructor(cfg: KclawConfig["permissions"], opts: ConfigPermissionGateOptions = {}) {
     this.#allow = cfg.allow.map(compileRule)
     this.#deny = cfg.deny.map((s) => ({ ...compileRule(s), source: s }))
+    this.#decided = (opts.decidedRules ?? []).map(compileRule)
+    this.#mode = opts.mode ?? "default"
     this.#safeTools = opts.safeTools ?? new Set()
     this.#profiles = new Map([...(opts.toolFacts ?? [])].map(([name, facts]) => [name, permissionProfile(facts)]))
     this.#grants = opts.grants
@@ -358,7 +372,6 @@ export class ConfigPermissionGate implements PermissionGate {
     this.#newConfirmationId = opts.newConfirmationId ?? (() => newId("conf"))
     this.#workspace = opts.workspace
     this.#readRoots = opts.readRoots ?? []
-    this.#readonly = opts.readonly ?? false
   }
 
   async check(toolCall: ToolCallBlock): Promise<PermissionDecision> {
@@ -367,14 +380,14 @@ export class ConfigPermissionGate implements PermissionGate {
     const arg = extractArg(toolCall.args, profile)
     // Readonly short-circuits EVERYTHING for sensitive tools (even a
     // whitelisted allow rule): the mode promises zero mutation risk.
-    if (this.#readonly && profile.readonlyDenied) {
+    if (this.#mode === "readonly" && profile.readonlyDenied) {
       return { type: "deny", reason: "readonly", noteText: "只读模式（readonly）" }
     }
 
-    // Command-arg tools: deny matches every sub-command (normalized); allow
-    // and session grants only ever apply to a single, concatenation-free
-    // command — a rule like `exec:git status*` must not wave through
-    // `git status; …`.
+    // Command-arg tools: deny matches every sub-command (normalized); allow,
+    // decided rules and session grants only ever apply to a single,
+    // concatenation-free command — a rule like `exec:git status*` must not
+    // wave through `git status; …`.
     if (profile.argField === "command") {
       const subs = splitSubcommands(arg).map(normalizeCommand)
       const execRuleMatches = (r: CompiledRule, s: string): boolean => {
@@ -389,6 +402,9 @@ export class ConfigPermissionGate implements PermissionGate {
       if (subs.length === 1) {
         if (this.#allow.some((r) => execRuleMatches(r, subs[0]))) {
           return { type: "allow", reason: "whitelist" }
+        }
+        if (this.#decided.some((r) => execRuleMatches(r, subs[0]))) {
+          return { type: "allow", reason: "learned" }
         }
         if (this.#sessionGrantsEnabled && this.#grants !== undefined) {
           const grantHit = this.#grants.rules().some((r) => execRuleMatches(r, subs[0]))
@@ -414,9 +430,24 @@ export class ConfigPermissionGate implements PermissionGate {
     if (this.#allow.some(matches) && !escapesWorkspace(profile, toolCall.args, this.#workspace, this.#readRoots)) {
       return { type: "allow", reason: "whitelist" }
     }
+    // Decided rules (human-approved "always allow"): same precedence shape as
+    // hand-written allow — inside the workspace only, escaped targets fall to
+    // the boundary check below — but one step later, so explicit
+    // configuration always outranks past approvals.
+    if (this.#decided.some(matches) && !escapesWorkspace(profile, toolCall.args, this.#workspace, this.#readRoots)) {
+      return { type: "allow", reason: "learned" }
+    }
+    // acceptEdits: sensitive path-arg tools (fs_write/fs_edit today) are
+    // auto-approved while the target stays inside the workspace; escaped
+    // targets fall through to the boundary check. exec (command-arg) never
+    // reaches this branch. AcceptEdits therefore cannot authorize anything
+    // beyond the workspace.
+    if (this.#mode === "acceptEdits" && profile.pathAware && !escapesWorkspace(profile, toolCall.args, this.#workspace, this.#readRoots)) {
+      return { type: "allow", reason: "accept_edits" }
+    }
     // Out-of-workspace path access is not auto-approved: even a "safe" tool
     // must go to a human when its target escapes the workspace. Runs after
-    // deny/allow so those still take precedence.
+    // deny/allow/decided/acceptEdits so those still take precedence.
     if (escapesWorkspace(profile, toolCall.args, this.#workspace, this.#readRoots)) {
       return { type: "confirm", confirmationId: this.#newConfirmationId() }
     }

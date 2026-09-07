@@ -10,7 +10,7 @@ export interface SessionCreatedEvent { type: "session.created"; at: string; titl
 export interface SessionRenamedEvent { type: "session.renamed"; at: string; title: string }
 export interface SessionDeletedEvent { type: "session.deleted"; at: string }
 export interface SessionRestoredEvent { type: "session.restored"; at: string }
-export interface SessionSetEvent { type: "session.set"; at: string; model?: string | null; readonly?: boolean | null; disposition?: "steer" | "wait" | "interrupt" | null }
+export interface SessionSetEvent { type: "session.set"; at: string; model?: string | null; /** @legacy pre-mode sessions; superseded by `mode` */ readonly?: boolean | null; mode?: import("../permissions/modes.js").PermissionMode | null; disposition?: "steer" | "wait" | "interrupt" | null }
 export type MessageEvent = { type: "message" } & Message
 export interface CompactionEvent { type: "compaction"; at: string; trigger: "manual" | "in-run" | "auto"; emergency?: true; focus?: string; from: string | null; upto: string; messages: number; segmentSummary: string; top: string }
 export interface MemoryEvent {

@@ -56,7 +56,7 @@ export interface ConfirmationRequestedPayload {
 }
 export interface ConfirmationResolvedPayload {
   confirmationId: string
-  approved: boolean
+  decision: "once" | "project" | "global" | "reject" | "timeout"
   by: "cli" | "web" | "timeout"
 }
 

@@ -106,7 +106,7 @@ describe("integration smoke", () => {
         toolDefs,
         permissions: gate,
         // auto-approve any confirmation (never reached on the whitelist path)
-        resolveConfirmation: async () => ({ approved: true, by: "cli" }),
+        resolveConfirmation: async () => ({ decision: "once" as const, by: "cli" as const }),
         hooks: chainOf(),
         onEvent: (e) => events.push(e),
         onMessage,
@@ -176,7 +176,7 @@ describe("integration smoke", () => {
         toolDefs,
         permissions: gate,
         // the human says yes: grantedBy "confirmed" lands on the tool message
-        resolveConfirmation: async () => ({ approved: true, by: "cli" }),
+        resolveConfirmation: async () => ({ decision: "once" as const, by: "cli" as const }),
         hooks: chainOf(),
         onEvent: (e) => events.push(e),
         onMessage,
@@ -205,7 +205,7 @@ describe("integration smoke", () => {
     expect(requested!.payload.toolCall).toMatchObject({ name: "exec" })
     expect(requested!.payload.risk).toBe("sensitive")
     expect(resolved).toBeDefined()
-    expect(resolved!.payload).toMatchObject({ approved: true, by: "cli" })
+    expect(resolved!.payload).toMatchObject({ decision: "once", by: "cli" })
     expect(resolved!.payload.confirmationId).toBe(requested!.payload.confirmationId)
     const idx = (t: string) => events.findIndex((e) => e.type === t)
     expect(idx("confirmation.requested")).toBeLessThan(idx("confirmation.resolved"))

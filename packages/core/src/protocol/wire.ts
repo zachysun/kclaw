@@ -50,10 +50,14 @@ export interface AuthFrame {
 export interface SubscribeFrame { type: "subscribe"; sessionId: string }
 export interface UnsubscribeFrame { type: "unsubscribe"; sessionId: string }
 
+/** A human verdict on a pending confirmation: the persistence scope of the
+ * approval (`once` approves this call only) or an explicit reject. */
+export type ConfirmationDecision = "once" | "project" | "global" | "reject"
+
 export interface ConfirmationResolveFrame {
   type: "confirmation.resolve"
   confirmationId: string
-  approved: boolean
+  decision: ConfirmationDecision
   /** Verdict provenance: the web UI names itself ("web"); omitted → "cli". */
   client?: "cli" | "web"
 }

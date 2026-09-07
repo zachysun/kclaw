@@ -28,7 +28,7 @@ describe("SLASH_COMMANDS", () => {
   })
 
   it("exposes the session/model/compact commands on both surfaces", () => {
-    for (const name of ["new", "clear", "sessions", "model", "readonly", "compact", "help", "memory"]) {
+    for (const name of ["new", "clear", "sessions", "model", "mode", "compact", "help", "memory"]) {
       const c = SLASH_COMMANDS.find((x) => x.name === name)
       expect(c?.surfaces).toContain("cli")
       expect(c?.surfaces).toContain("web")
@@ -72,7 +72,7 @@ describe("slashCompletions", () => {
 
   it("suggests every surface command for a bare slash, in display order", () => {
     const names = slashCompletions("/", "web").map((c) => c.name)
-    expect(names).toEqual(["new", "clear", "sessions", "model", "readonly", "compact", "help", "memory", "skill"])
+    expect(names).toEqual(["new", "clear", "sessions", "model", "mode", "compact", "help", "memory", "skill"])
   })
 
   it("prefix-matches a partially typed command", () => {

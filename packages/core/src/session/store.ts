@@ -8,6 +8,7 @@ import { appendJsonlLine, readJsonl } from "../storage/jsonl.js"
 import { applyEvent, isCompactionEvent, isMessageEvent } from "./events.js"
 import type { SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent } from "./events.js"
 import type { AttachmentRef, QueueEntry } from "../protocol/wire.js"
+import type { PermissionMode } from "../permissions/modes.js"
 
 // QueueEntry/AttachmentRef 的正本在 protocol/wire.ts（@kclaw/core/protocol 出口）；
 // 此处 re-export 维持既有从 store 的引用路径。
@@ -23,8 +24,12 @@ export interface SessionMeta {
   workdir?: string
   /** Per-session model override (empty/absent → daemon default). */
   model?: string
-  /** Per-session readonly mode (write/exec denied, reads fine). */
-  readonly?: boolean
+  /**
+   * Session permission mode (absent → "default"). Supersedes the legacy
+   * `readonly` boolean: a projected `readonly: true` reads back as
+   * `mode: "readonly"` (see normalize below and session.set handling).
+   */
+  mode?: PermissionMode
   deleted?: boolean
   deletedAt?: string
   /** Rolling compaction summary of messages before `compactedUpto` (context compaction). */
@@ -40,6 +45,20 @@ export interface SessionMeta {
 const META_FILE = "meta.json"
 const EVENTS_FILE = "events.jsonl"
 const QUEUE_FILE = "queue.jsonl"
+
+/**
+ * Read-time migration of pre-mode projections: a legacy `readonly: true`
+ * surfaces as `mode: "readonly"`; the boolean itself is dropped so writes
+ * only ever produce the new field. New sessions are untouched.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeLegacyMeta(m: any): SessionMeta {
+  if (m !== null && typeof m === "object" && m.readonly === true) {
+    if (m.mode === undefined) m.mode = "readonly"
+    delete m.readonly
+  }
+  return m as SessionMeta
+}
 
 /**
  * Event-sourced append-only JSONL session persistence: each session lives in
@@ -162,7 +181,7 @@ export class SessionStore {
   /** Read one session's projection (meta.json); when missing/corrupt, rebuild it from the event stream. */
   meta(id: string): SessionMeta | undefined {
     try {
-      return JSON.parse(readFileSync(this.metaPath(id), "utf8")) as SessionMeta
+      return normalizeLegacyMeta(JSON.parse(readFileSync(this.metaPath(id), "utf8")) as SessionMeta)
     } catch {
       return this.rebuildMeta(id)
     }
@@ -235,12 +254,12 @@ export class SessionStore {
     if (patch.title !== undefined && patch.title !== current.title) {
       events.push({ type: "session.renamed", at: now, title: patch.title })
     }
-    // model/readonly/dispositionOverride：键出现在 patch 即发 session.set 事件，
+    // model/mode/dispositionOverride：键出现在 patch 即发 session.set 事件，
     // 值 undefined 映射为 null（= 清除）。投影只由事件推进，重建时不复活已清除的覆盖。
-    if ("model" in patch || "readonly" in patch || "dispositionOverride" in patch) {
+    if ("model" in patch || "mode" in patch || "dispositionOverride" in patch) {
       const set: SessionSetEvent = { type: "session.set", at: now }
       if ("model" in patch) set.model = patch.model ?? null
-      if ("readonly" in patch) set.readonly = patch.readonly ?? null
+      if ("mode" in patch) set.mode = patch.mode ?? null
       if ("dispositionOverride" in patch) set.disposition = patch.dispositionOverride ?? null
       events.push(set)
     }

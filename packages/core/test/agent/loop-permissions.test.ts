@@ -85,13 +85,13 @@ describe("permission gate", () => {
       async check() { return { type: "confirm", confirmationId: "conf_1" } },
     }
     const { events, executed } = await runWith(gate, {
-      resolveConfirmation: async () => ({ approved: true, by: "cli" }),
+      resolveConfirmation: async () => ({ decision: "once" as const, by: "cli" as const }),
     })
     expect(events.find((e) => e.type === "confirmation.requested")).toMatchObject({
       payload: { confirmationId: "conf_1", toolCall: { callId: "call_1", name: "exec" }, risk: "sensitive" },
     })
     expect(events.find((e) => e.type === "confirmation.resolved")).toMatchObject({
-      payload: { approved: true, by: "cli" },
+      payload: { decision: "once", by: "cli" },
     })
     expect(executed).toHaveBeenCalled()
   })
@@ -110,7 +110,7 @@ describe("permission gate", () => {
     const { executed, events } = await p
     expect(executed).not.toHaveBeenCalled()
     expect(events.find((e) => e.type === "confirmation.resolved")).toMatchObject({
-      payload: { approved: false, by: "timeout" },
+      payload: { decision: "timeout", by: "timeout" },
     })
   })
 

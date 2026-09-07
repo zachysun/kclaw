@@ -32,7 +32,7 @@ export const SLASH_COMMANDS: readonly SlashCommandMeta[] = [
   { name: "clear", usage: "/clear", description: "新建会话（不带标题）", surfaces: ["cli", "web"] },
   { name: "sessions", usage: "/sessions", description: "选择会话并切换", surfaces: ["cli", "web"] },
   { name: "model", usage: "/model [名字]", description: "切换本会话的模型（无参数列出可用模型与当前值；/model default 恢复默认）", surfaces: ["cli", "web"] },
-  { name: "readonly", usage: "/readonly [on|off]", description: "切换本会话只读模式（写与 exec 将被拒绝）", surfaces: ["cli", "web"] },
+  { name: "mode", usage: "/mode [readonly|default|acceptEdits]", description: "切换本会话权限模式（无参数显示当前值；Shift+Tab 亦可循环切换）", surfaces: ["cli", "web"] },
   { name: "attach", usage: "/attach <path>", description: "上传附件，随下一条消息发送（无参数时列出待发附件）", surfaces: ["cli"] },
   { name: "compact", usage: "/compact [重点说明]", description: "手动压缩当前会话的早期对话（可指定摘要重点保留什么）", surfaces: ["cli", "web"] },
   { name: "steer", usage: "/steer", description: "本会话发送处置切换为引导（steer）：运行中发送的消息注入当前 run", surfaces: ["cli"] },

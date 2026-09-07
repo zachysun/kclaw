@@ -8,7 +8,8 @@
     ".": "./dist/index.js",
     "./commands": "./dist/commands.js",
     "./client-http": "./dist/client-http.js",
-    "./protocol": "./dist/protocol/index.js"
+    "./protocol": "./dist/protocol/index.js",
+    "./permission-modes": "./dist/permissions/modes.js"
   },
   "scripts": {
     "test": "vitest run",

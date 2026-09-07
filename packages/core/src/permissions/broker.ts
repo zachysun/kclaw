@@ -1,7 +1,13 @@
-import type { ConfirmationRequestedPayload, ToolCallBlock } from "../protocol/index.js"
+import type { ConfirmationDecision, ConfirmationRequestedPayload, ToolCallBlock } from "../protocol/index.js"
 
-/** Verdict value carried between the loop and its human resolver. */
-export type ConfirmationResolution = { approved: boolean; by: "cli" | "web" | "timeout" }
+/**
+ * Verdict value carried between the loop and its human resolver: the
+ * persistence scope of the approval, or `timeout` when the outer race
+ * denied it without a human. Approving decisions are every value but
+ * `reject`/`timeout`; the scope itself is consumed ABOVE the broker
+ * (the daemon persists decided rules from it).
+ */
+export type ConfirmationResolution = { decision: ConfirmationDecision | "timeout"; by: "cli" | "web" | "timeout" }
 
 /**
  * `Promise.race` against a timer AND an abort signal; the timer is cleared
@@ -22,7 +28,7 @@ export function raceConfirmation(
 ): Promise<ConfirmationResolution | "aborted"> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const sleep = new Promise<ConfirmationResolution>((resolve) => {
-    timer = setTimeout(() => resolve({ approved: false, by: "timeout" }), ms)
+    timer = setTimeout(() => resolve({ decision: "timeout", by: "timeout" }), ms)
   })
   let onAbort = () => {}
   const abort = new Promise<"aborted">((resolve) => {
@@ -120,17 +126,29 @@ export class ConfirmationBroker {
   }
 
   /**
+   * Read-only snapshot of a pending entry (toolCall + sessionId), for the
+   * daemon to scope a decided-rule persistence BEFORE resolving: after
+   * `resolve` the entry is gone. Undefined for unknown/stale ids.
+   */
+  lookup(confirmationId: string): { toolCall: ToolCallBlock; sessionId?: string } | undefined {
+    this.#prune()
+    const entry = this.#entries.get(confirmationId)
+    if (entry === undefined) return undefined
+    return { toolCall: entry.toolCall, sessionId: entry.sessionId }
+  }
+
+  /**
    * Apply a human verdict. True when a pending entry existed and settled NOW;
    * false for unknown ids, already-resolved entries, and stale (expired)
    * ones. `by` defaults to "cli" (v1 single-user; the field is retained for
    * the web UI).
    */
-  resolve(confirmationId: string, approved: boolean, by: ConfirmationActor = "cli"): boolean {
+  resolve(confirmationId: string, decision: ConfirmationDecision, by: ConfirmationActor = "cli"): boolean {
     this.#prune()
     const entry = this.#entries.get(confirmationId)
     if (entry === undefined) return false
     this.#entries.delete(confirmationId)
-    entry.settle({ approved, by })
+    entry.settle({ decision, by })
     return true
   }
 

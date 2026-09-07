@@ -18,7 +18,7 @@ import { raceConfirmation } from "../permissions/broker.js"
 
 /** Gate verdict for one tool call: run it, refuse it, or ask a human. */
 export type PermissionDecision =
-  | { type: "allow"; reason: "safe" | "whitelist" | "session_grant" }
+  | { type: "allow"; reason: "safe" | "whitelist" | "session_grant" | "accept_edits" | "learned" }
   | { type: "deny"; reason: "blacklist" | "user_denied" | "timeout" | "readonly"; noteText: string }
   | { type: "confirm"; confirmationId: string }
 
@@ -67,7 +67,7 @@ export interface AgentDeps {
   /** permission gate consulted before every tool execution */
   permissions?: PermissionGate
   /** answers confirmation.requested; missing resolver denies immediately by timeout */
-  resolveConfirmation?(confirmationId: string): Promise<{ approved: boolean; by: "cli" | "web" | "timeout" }>
+  resolveConfirmation?(confirmationId: string): Promise<{ decision: "once" | "project" | "global" | "reject" | "timeout"; by: "cli" | "web" | "timeout" }>
   /** how long a confirmation may sit unanswered before it denies (default 120s) */
   confirmTimeoutMs?: number
   /** abort guardrail: the run stops at the next checkpoint with stopReason "aborted" */
@@ -124,8 +124,6 @@ function errorMessage(err: unknown): string {
 
 /** Result output for tool calls that never ran because the run aborted first. */
 const NOT_RUN_OUTPUT = "run aborted before execution"
-
-type ConfirmationResolution = { approved: boolean; by: "cli" | "web" | "timeout" }
 
 /**
  * Guardrail wrapper around an LLM stream: the moment the abort signal fires,
@@ -577,7 +575,7 @@ async function runToolTurn(
     }, ctx))
     const resolution = await raceConfirmation(
       deps.resolveConfirmation?.(decision.confirmationId)
-        ?? Promise.resolve({ approved: false, by: "timeout" as const }),
+        ?? Promise.resolve({ decision: "timeout" as const, by: "timeout" as const }),
       confirmTimeoutMs,
       deps.signal,
     )
@@ -590,14 +588,14 @@ async function runToolTurn(
     }
     emit(makeEvent("confirmation.resolved", {
       confirmationId: decision.confirmationId,
-      approved: resolution.approved,
+      decision: resolution.decision,
       by: resolution.by,
     }, ctx))
-    if (resolution.approved) {
+    if (resolution.decision !== "reject" && resolution.decision !== "timeout") {
       entry.grantedBy = "confirmed"
       continue
     }
-    const timedOut = resolution.by === "timeout"
+    const timedOut = resolution.decision === "timeout"
     const text = timedOut ? "确认超时，操作未执行" : "用户拒绝了该操作"
     entry.result = errorResult(entry.call.callId, text)
     entry.note = {

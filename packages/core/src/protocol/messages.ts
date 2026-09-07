@@ -25,7 +25,7 @@ export interface AssistantMessage extends Message {
 }
 
 /** Why a tool call was allowed to run. */
-export type GrantedBy = "safe" | "whitelist" | "session_grant" | "confirmed"
+export type GrantedBy = "safe" | "whitelist" | "session_grant" | "confirmed" | "accept_edits" | "learned"
 
 export interface ToolMessage extends Message {
   role: "tool"

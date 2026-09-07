@@ -38,9 +38,14 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
         if (event.model === null) delete next.model
         else next.model = event.model
       }
-      if (event.readonly !== undefined) {
-        if (event.readonly === null) delete next.readonly
-        else next.readonly = event.readonly
+      if (event.mode !== undefined) {
+        if (event.mode === null) delete next.mode
+        else next.mode = event.mode
+      } else if (event.readonly !== undefined) {
+        // Legacy boolean events from pre-mode streams: readonly maps onto the
+        // mode axis (true → "readonly", false/null → fall back to default).
+        if (event.readonly === true) next.mode = "readonly"
+        else delete next.mode
       }
       if (event.disposition !== undefined) {
         if (event.disposition === null) delete next.dispositionOverride

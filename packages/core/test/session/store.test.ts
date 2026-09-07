@@ -319,7 +319,7 @@ describe("SessionStore event sourcing", () => {
   it("appendSystem 投影穿透：meta.json 全字段不变；仅 system 事件流 rebuildMeta 不崩", () => {
     const store = new SessionStore(dir)
     const meta = store.create("t")
-    store.updateMeta(meta.id, { model: "gpt-4", readonly: true })
+    store.updateMeta(meta.id, { model: "gpt-4", mode: "readonly" })
     const before = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
     store.appendSystem(meta.id, { at: new Date().toISOString(), text: "系统提示词全文" })
     const after = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
@@ -372,28 +372,46 @@ describe("SessionStore event sourcing", () => {
     expect("model" in rebuilt).toBe(false)
   })
 
-  it("clearing readonly via updateMeta emits session.set {readonly:null}; rebuildMeta does NOT resurrect it", () => {
+  it("clearing mode via updateMeta emits session.set {mode:null}; rebuildMeta does NOT resurrect it", () => {
     const store = new SessionStore(dir)
     const meta = store.create("t")
-    store.updateMeta(meta.id, { readonly: true })
-    store.updateMeta(meta.id, { readonly: undefined })
-    expect(store.meta(meta.id)!.readonly).toBeUndefined()
-    expect("readonly" in store.meta(meta.id)!).toBe(false)
+    store.updateMeta(meta.id, { mode: "readonly" })
+    store.updateMeta(meta.id, { mode: undefined })
+    expect(store.meta(meta.id)!.mode).toBeUndefined()
+    expect("mode" in store.meta(meta.id)!).toBe(false)
     const setEvents = store.readEvents(meta.id).filter((e) => e.type === "session.set")
     expect(setEvents).toHaveLength(2)
-    expect((setEvents[1] as { readonly: boolean | null }).readonly).toBeNull()
+    expect((setEvents[1] as { mode: string | null }).mode).toBeNull()
     const rebuilt = store.rebuildMeta(meta.id)!
-    expect(rebuilt.readonly).toBeUndefined()
-    expect("readonly" in rebuilt).toBe(false)
+    expect(rebuilt.mode).toBeUndefined()
+    expect("mode" in rebuilt).toBe(false)
+  })
+
+  it("legacy meta.json readonly:true reads back as mode:'readonly' and writes drop the boolean", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("t")
+    // 手写一个旧投影：readonly 布尔、无 mode
+    const legacyPath = join(dir, meta.id, "meta.json")
+    const legacy = JSON.parse(readFileSync(legacyPath, "utf8"))
+    delete legacy.mode
+    legacy.readonly = true
+    writeFileSync(legacyPath, JSON.stringify(legacy))
+    expect(store.meta(meta.id)!.mode).toBe("readonly")
+    expect("readonly" in store.meta(meta.id)!).toBe(false)
+    // 之后经 updateMeta 正常切档：只写 mode 字段
+    store.updateMeta(meta.id, { mode: "default" })
+    const after = JSON.parse(readFileSync(legacyPath, "utf8"))
+    expect(after.mode).toBe("default")
+    expect("readonly" in after).toBe(false)
   })
 
   it("setting model works and does not touch unrelated overrides (set is per-present-key)", () => {
     const store = new SessionStore(dir)
     const meta = store.create("t")
-    store.updateMeta(meta.id, { readonly: true })
-    store.updateMeta(meta.id, { model: "gpt-4" }) // 只含 model 的 patch 不应清掉 readonly
+    store.updateMeta(meta.id, { mode: "readonly" })
+    store.updateMeta(meta.id, { model: "gpt-4" }) // 只含 model 的 patch 不应清掉 mode
     expect(store.meta(meta.id)!.model).toBe("gpt-4")
-    expect(store.meta(meta.id)!.readonly).toBe(true)
+    expect(store.meta(meta.id)!.mode).toBe("readonly")
   })
 
   it("a session.set event with absent fields leaves the field untouched ({} semantics)", () => {
