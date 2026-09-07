@@ -330,6 +330,22 @@ export interface ConfigPermissionGateOptions {
    * carry the same workspace-escape guard; approvals get reason "learned".
    */
   decidedRules?: string[]
+  /**
+   * Whether the exec sandbox is available (the run assembly derives this from
+   * the sandbox provider's probe, single source with the exec tool's actual
+   * wrapper). When true, a command-class tool that would otherwise fall to
+   * confirm auto-passes with reason "sandboxed" — the sandbox, not a human,
+   * is the approval. Never overrides deny/rules; readonly still
+   * short-circuits everything above.
+   */
+  sandboxAvailable?: boolean
+  /**
+   * User-facing explanation shown on the confirmation when a command falls
+   * back to confirm BECAUSE the sandbox is unavailable (enabled in config but
+   * the platform probe failed). Absent when the sandbox is simply disabled by
+   * choice — that needs no explanation.
+   */
+  sandboxUnavailableNote?: string
 }
 
 /** A compiled rule that remembers its source string for deny notes. */
@@ -359,6 +375,8 @@ export class ConfigPermissionGate implements PermissionGate {
   readonly #newConfirmationId: () => string
   readonly #workspace: string | undefined
   readonly #readRoots: string[]
+  readonly #sandboxAvailable: boolean
+  readonly #sandboxUnavailableNote: string | undefined
 
   constructor(cfg: KclawConfig["permissions"], opts: ConfigPermissionGateOptions = {}) {
     this.#allow = cfg.allow.map(compileRule)
@@ -372,6 +390,8 @@ export class ConfigPermissionGate implements PermissionGate {
     this.#newConfirmationId = opts.newConfirmationId ?? (() => newId("conf"))
     this.#workspace = opts.workspace
     this.#readRoots = opts.readRoots ?? []
+    this.#sandboxAvailable = opts.sandboxAvailable ?? false
+    this.#sandboxUnavailableNote = opts.sandboxUnavailableNote
   }
 
   async check(toolCall: ToolCallBlock): Promise<PermissionDecision> {
@@ -411,7 +431,21 @@ export class ConfigPermissionGate implements PermissionGate {
           if (grantHit) return { type: "allow", reason: "session_grant" }
         }
       }
-      return { type: "confirm", confirmationId: this.#newConfirmationId() }
+      // The sandbox is the approval, not a human: a command with no rule
+      // coverage (including multi-segment lines) that would otherwise go to
+      // confirm runs sandboxed when the OS sandbox is available. It can never
+      // override a deny above; readonly never reaches here.
+      if (this.#sandboxAvailable) {
+        return { type: "allow", reason: "sandboxed" }
+      }
+      // Fail-closed: without the sandbox this stays a human confirmation. When
+      // the sandbox was enabled but unavailable (not just disabled), explain
+      // why on the confirmation.
+      return {
+        type: "confirm",
+        confirmationId: this.#newConfirmationId(),
+        ...(this.#sandboxUnavailableNote === undefined ? {} : { noteText: this.#sandboxUnavailableNote }),
+      }
     }
 
     // --- everything else: unchanged decision order ---

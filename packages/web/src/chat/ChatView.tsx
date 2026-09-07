@@ -646,6 +646,7 @@ function ConfirmationCardView({
       <div className="confirm-title">Confirmation requested</div>
       <div className="confirm-tool">⚡ {card.toolName} <code>{card.argsJson}</code></div>
       <div className="confirm-meta">risk: {card.risk} · expires {card.expiresAt}</div>
+      {card.noteText !== undefined && <div className="confirm-note">{card.noteText}</div>}
       <div className="confirm-actions">
         <button data-testid="confirm-once" onClick={() => onResolve(card.confirmationId, "once")}>仅本次</button>
         <button data-testid="confirm-project" onClick={() => onResolve(card.confirmationId, "project")}>总是（本项目）</button>

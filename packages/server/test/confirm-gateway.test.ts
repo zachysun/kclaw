@@ -198,6 +198,11 @@ async function makeGateway(
   const paths = resolvePaths(home)
   const config = loadConfig(paths)
   config.workspace = workspace
+  // These tests drive the confirmation gateway over a real WS server; the
+  // host may have an exec sandbox (macOS Seatbelt / Linux bwrap) that would
+  // auto-pass exec instead of confirming. Disable it — this suite is about
+  // the confirmation flow, not the sandbox.
+  config.sandbox = { enabled: false, writeRoots: [] }
   config.providers = {
     default: "mock",
     entries: { mock: { baseUrl: "http://127.0.0.1:1", apiKey: "test-key", model: "mock-model" } },

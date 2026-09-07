@@ -75,6 +75,52 @@ describe("ConfigPermissionGate", () => {
     expect(d.type).toBe("confirm")
     expect((d as { confirmationId: string }).confirmationId).toMatch(/^conf_/)
   })
+  it("sandboxed exec: default mode auto-passes an otherwise-confirm command as sandboxed", async () => {
+    const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxAvailable: true })
+    // no rule hits → would confirm → sandbox available → sandboxed allow
+    expect(await g.check(tc("exec", { command: "curl example.com" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
+    // multi-segment lines (no allow/grant coverage) are sandboxed too: the
+    // whole shell call runs inside the sandbox
+    expect(await g.check(tc("exec", { command: "git status; echo hi" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
+  })
+  it("sandbox unavailable: the same commands still go to confirm (fail-closed)", async () => {
+    const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set() })
+    expect(await g.check(tc("exec", { command: "curl example.com" }))).toMatchObject({ type: "confirm" })
+    expect(await g.check(tc("exec", { command: "git status; echo hi" }))).toMatchObject({ type: "confirm" })
+  })
+  it("confirm explains when the sandbox was attempted but unavailable", async () => {
+    const g = new ConfigPermissionGate(CFG, {
+      toolFacts: BUILTIN_FACTS, safeTools: new Set(),
+      sandboxUnavailableNote: "exec 沙箱不可用，本次操作需人工确认",
+    })
+    const d = await g.check(tc("exec", { command: "curl example.com" }))
+    expect(d).toMatchObject({ type: "confirm", noteText: "exec 沙箱不可用，本次操作需人工确认" })
+    // with the sandbox available the note never appears (auto-pass instead)
+    const g2 = new ConfigPermissionGate(CFG, {
+      toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxAvailable: true,
+      sandboxUnavailableNote: "exec 沙箱不可用，本次操作需人工确认",
+    })
+    expect(await g2.check(tc("exec", { command: "curl example.com" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
+  })
+  it("sandboxed never overrides deny / whitelist / decided / session grants", async () => {
+    const grants = new SessionGrants()
+    const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set(), grants, sandboxAvailable: true })
+    // deny still short-circuits (sudo in the default deny list)
+    expect(await g.check(tc("exec", { command: "sudo rm x" }))).toMatchObject({ type: "deny", reason: "blacklist" })
+    // an allow rule still wins with its own reason
+    expect(await g.check(tc("exec", { command: "git status" }))).toMatchObject({ type: "allow", reason: "whitelist" })
+    // a session grant still wins with its own reason
+    grants.grant("exec:npm test")
+    expect(await g.check(tc("exec", { command: "npm test" }))).toMatchObject({ type: "allow", reason: "session_grant" })
+  })
+  it("readonly mode still short-circuits a sandboxable exec", async () => {
+    const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxAvailable: true, mode: "readonly" })
+    expect(await g.check(tc("exec", { command: "curl example.com" }))).toMatchObject({ type: "deny", reason: "readonly" })
+  })
+  it("acceptEdits mode also auto-passes a sandboxable exec", async () => {
+    const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxAvailable: true, mode: "acceptEdits" })
+    expect(await g.check(tc("exec", { command: "curl example.com" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
+  })
   it("fs_write deny matches globbed path from args.path", async () => {
     const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set() })
     const d = await g.check(tc("fs_write", { path: "~/.ssh/authorized_keys", content: "x" }))

@@ -53,6 +53,8 @@ export interface ConfirmationRequestedPayload {
   toolCall: ToolCallBlock
   risk: "safe" | "sensitive"
   expiresAt: string
+  /** Human-facing reason shown on the confirmation (e.g. sandbox unavailable). */
+  noteText?: string
 }
 export interface ConfirmationResolvedPayload {
   confirmationId: string

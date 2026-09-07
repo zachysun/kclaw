@@ -92,6 +92,8 @@ export interface ConfirmationCard {
   argsJson: string
   risk: "safe" | "sensitive"
   expiresAt: string
+  /** Human-facing reason shown on the card (e.g. sandbox unavailable). */
+  noteText?: string
 }
 
 /** One waiting message of the daemon's send-message queue (view mirror). */
@@ -621,6 +623,7 @@ function pushConfirmation(state: ChatState, payload: ConfirmationRequestedPayloa
     argsJson: payload.toolCall.argsJson,
     risk: payload.risk,
     expiresAt: payload.expiresAt,
+    ...(payload.noteText === undefined ? {} : { noteText: payload.noteText }),
   }
   if (state.pendingConfirmations.some((c) => c.confirmationId === card.confirmationId)) return state
   return { ...state, pendingConfirmations: [...state.pendingConfirmations, card] }

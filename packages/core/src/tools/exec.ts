@@ -13,12 +13,23 @@
  *   (truncateMiddle only micro-trims the head's <=1-chunk overshoot).
  * - Exit 0 → ok; anything else → error with an `exit code N` prefix line.
  */
-import { spawn } from "node:child_process"
+import { spawn, type ChildProcess } from "node:child_process"
 import type { Readable } from "node:stream"
 import type { ToolExecutor } from "../agent/tools.js"
 
 const DEFAULT_TIMEOUT_MS = 60_000
 const DEFAULT_MAX_OUTPUT_BYTES = 100 * 1024
+
+/**
+ * The minimal spawn surface the exec tool needs from a sandbox wrapper:
+ * given a shell command line, produce a ChildProcess that runs it inside the
+ * sandbox. The real provider (sandbox/provider.ts) supplies this; the run
+ * assembly wires it only when the sandbox is available, so a "sandboxed"
+ * allowance and a sandboxed spawn are always the same source.
+ */
+export interface ExecSandboxSpawn {
+  spawn(command: string, opts: { cwd: string }): ChildProcess
+}
 
 /**
  * Clamp a string to `maxBytes` by keeping the first and last maxBytes/2
@@ -40,6 +51,13 @@ export function createExecTool(opts: {
   workspace: string
   timeoutMs?: number
   maxOutputBytes?: number
+  /**
+   * Optional sandbox wrapper. When present, the command runs inside the
+   * sandbox (the wrapper owns spawning); absent = bare spawn, exactly the
+   * pre-sandbox behavior. Wired by the run assembly from the sandbox
+   * provider's availability — never by the tool itself.
+   */
+  sandbox?: ExecSandboxSpawn
 }): ToolExecutor & { name: "exec" } {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES
@@ -66,13 +84,15 @@ export function createExecTool(opts: {
         let timedOut = false
         let timer: ReturnType<typeof setTimeout> | undefined
 
-        const child = spawn(command, {
-          shell: true,
-          cwd: opts.workspace,
-          // Own process group on POSIX so a timeout kill reaches shell
-          // descendants, not just the immediate child.
-          detached: process.platform !== "win32",
-        })
+        const child = opts.sandbox
+          ? opts.sandbox.spawn(command, { cwd: opts.workspace })
+          : spawn(command, {
+              shell: true,
+              cwd: opts.workspace,
+              // Own process group on POSIX so a timeout kill reaches shell
+              // descendants, not just the immediate child.
+              detached: process.platform !== "win32",
+            })
 
         const finish = (result: { status: "ok" | "error"; output: string }) => {
           if (settled) return

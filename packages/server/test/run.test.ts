@@ -9,6 +9,7 @@
  * run.
  */
 import { describe, it, expect, afterEach, vi } from "vitest"
+import { spawnSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -128,6 +129,11 @@ function makeEnv(
   const paths = resolvePaths(home)
   const config = loadConfig(paths)
   config.workspace = workspace
+  // These tests exercise confirmation / queueing semantics on a host that may
+  // have an exec sandbox (macOS Seatbelt / Linux bwrap): sandboxed exec would
+  // auto-pass instead of confirming. Disable it — the sandbox is exercised in
+  // core's provider tests, not here.
+  config.sandbox = { enabled: false, writeRoots: [] }
   config.providers = {
     default: "mock",
     entries: { mock: { baseUrl: "http://127.0.0.1:1", apiKey: "test-key", model: "mock-model" } },
@@ -489,6 +495,35 @@ describe("RunManager.enqueue", () => {
     expect(msgs[2]!.blocks[0]).toMatchObject({ type: "tool_result", status: "ok" })
 
     expect((msgs[2] as ToolMessage).grantedBy).toEqual({ call_2: "confirmed" })
+  })
+
+  it("exec with the OS sandbox available auto-passes as sandboxed, no confirmation", async () => {
+    // The real run-assembly probe must find a usable sandbox on this host
+    // (macOS sandbox-exec / Linux bwrap). Hosts without one (e.g. a CI runner
+    // with no bwrap) fall back to confirmation and this assertion cannot hold.
+    const hasHostSandbox =
+      process.platform === "darwin" ||
+      spawnSync("which", ["bwrap"], { encoding: "utf8" }).status === 0
+    if (!hasHostSandbox) return
+
+    // makeEnv turns the sandbox OFF by default (the confirmation suites need
+    // it); this suite explicitly re-enables it to drive the sandboxed path.
+    const { env, manager } = makeEnv(
+      scriptClient([execToolTurn("call_sbx", "echo sandboxed"), textTurn("完成")]),
+      (c) => { c.sandbox = { enabled: true, writeRoots: [] } },
+    )
+    const session = env.sessions.create("沙箱会话")
+    const outcome = await manager.enqueue(session.id, { userText: "执行 echo sandboxed", trigger: "user" })
+
+    expect(outcome.stopReason).toBe("end_turn")
+    const msgs = env.sessions.readMessages(session.id)
+    const toolMsg = msgs.find((m) => m.role === "tool") as ToolMessage
+    // grantedBy sandboxed, and NOT confirmed — no human was in the loop
+    expect(toolMsg.grantedBy).toEqual({ call_sbx: "sandboxed" })
+    const result = toolMsg.blocks[0] as ToolResultBlock
+    expect(result.status).toBe("ok")
+    expect(result.output).toContain("sandboxed")
+    expect(manager.broker.pending()).toEqual([])
   })
 
   it("fs_read outside the workspace requires confirmation and succeeds when approved", async () => {

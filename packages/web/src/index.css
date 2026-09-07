@@ -1034,6 +1034,12 @@ select:focus {
   margin-bottom: var(--space-2);
 }
 
+.confirm-note {
+  color: var(--warn);
+  font-size: 12px;
+  margin-bottom: var(--space-2);
+}
+
 .confirm-actions {
   display: flex;
   gap: var(--space-2);

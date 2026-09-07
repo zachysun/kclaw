@@ -10,7 +10,7 @@ import type { ToolExecutor } from "../agent/tools.js"
 import type { MemoryQuery, MemoryTriggers } from "../memory/system.js"
 import type { SkillRecord } from "../skills/index.js"
 import type { ToolDefinition } from "../provider/types.js"
-import { createExecTool } from "./exec.js"
+import { createExecTool, type ExecSandboxSpawn } from "./exec.js"
 import { createFsTools } from "./fs.js"
 import { createMemoryTools } from "./memory.js"
 import { createSessionTools, type SessionSearchFn } from "./session.js"
@@ -45,7 +45,7 @@ export function createBuiltinTools(opts: {
   workspace: string
   memoryCtx: { system: Pick<MemoryTriggers, "triggerImmediate"> & Pick<MemoryQuery, "searchAll">; sessionId: string; workdir: string; immediateEnabled: boolean }
   tavilyApiKey: string
-  exec?: Partial<{ timeoutMs: number; maxOutputBytes: number }>
+  exec?: Partial<{ timeoutMs: number; maxOutputBytes: number; sandbox: ExecSandboxSpawn }>
   web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean }>
   sessionSearch?: SessionSearchFn
   /** Skills scanned for this run (progressive disclosure's on-demand half). */
@@ -56,6 +56,9 @@ export function createBuiltinTools(opts: {
     workspace: opts.workspace,
     timeoutMs: opts.exec?.timeoutMs,
     maxOutputBytes: opts.exec?.maxOutputBytes,
+    // The run assembly passes the sandbox wrapper here only when it is
+    // actually available — single source with the gate's sandboxAvailable.
+    sandbox: opts.exec?.sandbox,
   })
   const fs = createFsTools({ workspace: opts.workspace })
   const web = createWebTools({

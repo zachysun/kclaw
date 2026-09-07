@@ -6,6 +6,13 @@ import type { KclawPaths } from "./paths.js"
 import type { NotifyChannel } from "../notify/notify.js"
 import type { McpServerConfig } from "../mcp/manager.js"
 
+/** `sandbox:` section of config.yaml (daemon-level). */
+export interface SandboxConfig {
+  enabled: boolean
+  /** Extra realpath write roots (e.g. the npm cache dir). */
+  writeRoots: string[]
+}
+
 export interface KclawConfig {
   providers: {
     default: string
@@ -58,6 +65,17 @@ export interface KclawConfig {
     allowPrivateNetworks?: boolean
   }
   exec: { timeoutMs: number; maxOutputBytes: number }
+  /**
+   * Exec OS sandbox (permission batch A). When enabled and the platform
+   * sandbox (macOS sandbox-exec / Linux bubblewrap) is available, `default`
+   * and `acceptEdits` modes auto-pass sandboxable exec commands (grantedBy
+   * "sandboxed") and every exec runs inside the sandbox: workspace + tmp
+   * writable, home read-only with ~/.kclaw masked. Unavailable sandbox falls
+   * back to manual confirmation (fail-closed — never a bare run). Optional
+   * only because older config.yaml files predate it; defaults to enabled with
+   * no extra write roots (defaultConfig).
+   */
+  sandbox?: SandboxConfig
   /**
    * Hook 系统。可选仅因老 config.yaml 早于它；
    * 缺省按读点的 ?? 默认值执行。
@@ -116,6 +134,7 @@ export const defaultConfig: KclawConfig = {
   },
   web: { tavilyApiKey: "", timeoutMs: 20_000, allowPrivateNetworks: false },
   exec: { timeoutMs: 60_000, maxOutputBytes: 100 * 1024 },
+  sandbox: { enabled: true, writeRoots: [] },
   sessions: { recycleBinTtlMs: 30 * 24 * 60 * 60 * 1000, defaultDisposition: "steer" as const },
   notify: { channels: [], timeoutMs: 10_000 },
   usage: { prices: {} },

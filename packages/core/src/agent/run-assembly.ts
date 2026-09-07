@@ -39,6 +39,7 @@ import { newMessage } from "../protocol/messages.js"
 import type { AttachmentRef } from "../protocol/wire.js"
 import type { LlmClient, ToolDefinition } from "../provider/types.js"
 import type { KclawConfig } from "../storage/config.js"
+import { defaultConfig } from "../storage/config.js"
 import type { KclawPaths } from "../storage/paths.js"
 import type { UsageStore } from "../storage/usage.js"
 import type { SessionStore } from "../session/store.js"
@@ -46,6 +47,7 @@ import type { Compactor } from "../session/compactor.js"
 import { ConfigPermissionGate, realpathWithin } from "../permissions/engine.js"
 import { loadDecidedRulesForRun } from "../storage/decided-rules.js"
 import { ConfirmationBroker, raceConfirmation, type ConfirmationResolution } from "../permissions/broker.js"
+import { createExecSandbox } from "../sandbox/provider.js"
 import type { PermissionGate, RunOutcome } from "./loop.js"
 import { runAgent } from "./loop.js"
 import type { SessionSearchFn } from "../tools/session.js"
@@ -300,6 +302,24 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       ? wrapSkillInvocations(input.userText, matchSkillInvocations(input.userText, skills))
       : undefined
 
+  // --- exec sandbox (batch A): one probe, two consumers --------------------
+  // `available` gates BOTH the exec tool's actual wrapper and the permission
+  // gate's sandboxed auto-pass from the SAME source, so a "sandboxed"
+  // allowance can never be issued while exec runs bare (and vice versa).
+  const sandbox = createExecSandbox(config.sandbox ?? defaultConfig.sandbox ?? { enabled: true, writeRoots: [] }, { workspace })
+  // User-chosen disable (sandbox.enabled: false) is a deliberate decision and
+  // stays silent; a probe failure (platform tool missing, userns blocked) is
+  // an environment problem worth a daemon log line — fail-closed either way.
+  const sandboxAttempted = config.sandbox?.enabled !== false
+  if (sandboxAttempted && !sandbox.available && sandbox.unavailableReason !== undefined) {
+    console.warn(`kclaw: exec sandbox unavailable (${sandbox.unavailableReason}); sandboxable exec falls back to manual confirmation`)
+  }
+  // When the sandbox was attempted but unavailable, the confirmation explains
+  // why (User Story: "回落到确认框并说明沙箱不可用").
+  const sandboxUnavailableNote = sandboxAttempted && !sandbox.available
+    ? "exec 沙箱不可用，本次操作需人工确认"
+    : undefined
+
   const { tools, toolDefs } = createBuiltinTools({
     workspace,
     memoryCtx: {
@@ -309,7 +329,11 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       immediateEnabled: config.memory.write.immediate,
     },
     tavilyApiKey: config.web.tavilyApiKey,
-    exec: { timeoutMs: config.exec.timeoutMs, maxOutputBytes: config.exec.maxOutputBytes },
+    exec: {
+      timeoutMs: config.exec.timeoutMs,
+      maxOutputBytes: config.exec.maxOutputBytes,
+      sandbox: sandbox.available ? sandbox : undefined,
+    },
     web: { timeoutMs: config.web.timeoutMs, allowPrivateNetworks: config.web.allowPrivateNetworks },
     sessionSearch: buildSessionSearch(engine.deps, sessionId),
     skills,
@@ -354,6 +378,12 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     // Mode: this session's own toggle (absent → default). The daemon has no
     // mode flag — the session meta is the single source of truth.
     mode: sessionMeta?.mode,
+    // Sandbox availability (same probe as the exec wrapper above): a command
+    // with no rule coverage auto-passes as sandboxed when available; when the
+    // sandbox was attempted but unavailable, the confirmation carries an
+    // explanation instead of the silent fail-closed default.
+    sandboxAvailable: sandbox.available,
+    sandboxUnavailableNote,
   })
   const confirmTimeoutMs = config.permissions.confirmTimeoutMs
   const broker = engine.deps.broker

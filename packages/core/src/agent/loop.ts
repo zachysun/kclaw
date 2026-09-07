@@ -18,9 +18,9 @@ import { raceConfirmation } from "../permissions/broker.js"
 
 /** Gate verdict for one tool call: run it, refuse it, or ask a human. */
 export type PermissionDecision =
-  | { type: "allow"; reason: "safe" | "whitelist" | "session_grant" | "accept_edits" | "learned" }
+  | { type: "allow"; reason: "safe" | "whitelist" | "session_grant" | "accept_edits" | "learned" | "sandboxed" }
   | { type: "deny"; reason: "blacklist" | "user_denied" | "timeout" | "readonly"; noteText: string }
-  | { type: "confirm"; confirmationId: string }
+  | { type: "confirm"; confirmationId: string; noteText?: string }
 
 /** Checked before every tool execution; missing gate == allow everything. */
 export interface PermissionGate {
@@ -572,6 +572,7 @@ async function runToolTurn(
       toolCall: entry.call,
       risk: deps.tools!.get(entry.call.name)!.risk,
       expiresAt: new Date(Date.now() + confirmTimeoutMs).toISOString(),
+      ...(decision.noteText === undefined ? {} : { noteText: decision.noteText }),
     }, ctx))
     const resolution = await raceConfirmation(
       deps.resolveConfirmation?.(decision.confirmationId)

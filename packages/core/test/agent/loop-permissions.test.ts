@@ -65,6 +65,14 @@ describe("permission gate", () => {
     expect(result.status).toBe("ok")
   })
 
+  it("sandboxed allowance runs the tool and records grantedBy sandboxed", async () => {
+    const gate: PermissionGate = { async check() { return { type: "allow", reason: "sandboxed" } } }
+    const { executed, messages } = await runWith(gate)
+    expect(executed).toHaveBeenCalled()
+    const toolMsg = messages.find((m) => m.role === "tool")!
+    expect(toolMsg.grantedBy).toEqual({ call_1: "sandboxed" })
+  })
+
   it("deny path: no execution, error result + note block, model continues", async () => {
     const gate: PermissionGate = {
       async check() { return { type: "deny", reason: "blacklist", noteText: "命令在黑名单中" } },

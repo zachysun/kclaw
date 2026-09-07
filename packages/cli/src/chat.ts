@@ -253,6 +253,7 @@ export async function resolveSessionId(client: KclawClient, session: string | un
 /** Print the risk summary, collect the verdict (flags or @clack), send confirmation.resolve. */
 async function handleConfirmation(p: ConfirmationRequestedPayload, ctx: ChatCtx): Promise<void> {
   line(`⚠ ${p.toolCall.name} ${p.toolCall.argsJson} · 风险 ${p.risk} · 过期 ${p.expiresAt}`, ctx)
+  if (p.noteText !== undefined) line(dim(p.noteText), ctx)
   let decision: ConfirmationDecision
   if (ctx.auto === "yes") {
     line(dim("[--yes] 已自动允许（仅本次）"), ctx)

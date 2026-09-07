@@ -24,7 +24,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest"
 import { execa } from "execa"
 import { execFileSync } from "node:child_process"
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { createServer, type Server, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
@@ -223,6 +223,12 @@ const mockServers: Server[] = []
 /** Temp homes to sweep in afterAll; homes[0] is the shared scenario home. */
 const homes: string[] = [mkdtempSync(join(tmpdir(), "kclaw-chat-home-"))]
 const home = homes[0]!
+// Scenarios B / B-deny drive the confirmation flow (--yes auto-approves,
+// --no auto-denies). On a host with an exec sandbox (macOS Seatbelt / Linux
+// bwrap) sandboxable exec auto-passes instead of confirming, so the shared
+// home turns the sandbox off — it is exercised by core's provider tests.
+mkdirSync(home, { recursive: true })
+writeFileSync(join(home, "config.yaml"), ["sandbox:", "  enabled: false", "  writeRoots: []", ""].join("\n"))
 
 /** Run the built CLI (bare or with args) against a home + the mock provider. */
 function runChatCli(args: string[], input: string, cwdHome: string = home) {
