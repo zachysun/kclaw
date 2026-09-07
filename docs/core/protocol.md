@@ -50,7 +50,7 @@ export interface AssistantMessage extends Message {
   stopReason: StopReason
 }
 
-export type GrantedBy = "safe" | "whitelist" | "session_grant" | "confirmed" | "accept_edits" | "learned"
+export type GrantedBy = "safe" | "whitelist" | "session_grant" | "confirmed" | "accept_edits" | "learned" | "sandboxed"
 
 export interface ToolMessage extends Message {
   role: "tool"
@@ -181,6 +181,7 @@ export interface ConfirmationRequestedPayload {
   toolCall: ToolCallBlock
   risk: "safe" | "sensitive"
   expiresAt: string
+  noteText?: string            // 给人工看的原因（如 exec 沙箱不可用），见 permissions.md 第 7 节
 }
 export interface ConfirmationResolvedPayload {
   confirmationId: string

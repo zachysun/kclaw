@@ -25,7 +25,7 @@
 export type PermissionDecision =
   | { type: "allow"; reason: "safe" | "whitelist" | "session_grant" | "learned" | "accept_edits" | "sandboxed" }
   | { type: "deny"; reason: "blacklist" | "user_denied" | "timeout" | "readonly"; noteText: string }
-  | { type: "confirm"; confirmationId: string }
+  | { type: "confirm"; confirmationId: string; noteText?: string }
 
 // packages/core/src/permissions/modes.ts — 会话权限模式（严格在前）
 export const PERMISSION_MODES = ["readonly", "default", "acceptEdits"] as const
@@ -173,7 +173,7 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
   - macOS `sandbox-exec` + SBPL profile——工作区与系统临时目录可写，家目录只读且 `~/.kclaw` 读拒绝（凭据隔离），网络默认允许（SBPL 规则按先匹配生效：`~/.kclaw` 读拒绝在宽放行之前、写白名单在兜底 deny 之前；路径一律 realpath 形态，`/tmp` 写作 `/private/tmp`）。
   - Linux bubblewrap（无特权 user namespaces）——整个根只读挂载、`~/.kclaw` 用 tmpfs 遮蔽（读不到凭据）、`/tmp` 与工作区可写、`--die-with-parent --new-session` 保证 exec 超时进程组 kill 能波及整棵进程树；**v1 不加 `--unshare-net`**（网络默认允许是拍板决策）。
   - 降级链：bwrap → **不可用**（回落人工确认，fail-closed——绝不让命令裸跑）。Landlock 兜底是后续项：纯 Node 无法发起 `landlock_create_ruleset` syscall，也没有成熟 CLI 包装。
-- **判定联动（`sandboxAvailable`）**：run 装配探测一次沙箱可用性，同源喂给两个消费方——exec 工具的实际包装器（可用的才注入）与 gate 的 `sandboxAvailable` 输入。因此 "sandboxed" 放行的命令必然真被沙箱包住；反之沙箱不可用时 exec 维持 confirm，不会出现"放了行却裸跑"的错配。`default` 与 `acceptEdits` 模式下，命令类工具无规则命中时由沙箱顶替人工（reason `sandboxed`）；readonly 的短路依旧最优先，deny/allow/沉淀规则/会话授权也都先于它。
+- **判定联动（`sandboxAvailable`）**：run 装配探测一次沙箱可用性，同源喂给两个消费方——exec 工具的实际包装器（可用的才注入）与 gate 的 `sandboxAvailable` 输入。因此 "sandboxed" 放行的命令必然真被沙箱包住；反之沙箱不可用时 exec 维持 confirm，不会出现"放了行却裸跑"的错配。`default` 与 `acceptEdits` 模式下，命令类工具无规则命中时由沙箱顶替人工（reason `sandboxed`）；readonly 的短路依旧最优先，deny/allow/沉淀规则/会话授权也都先于它。沙箱**启用但探测不可用**时，exec 回落的确认请求会带一条说明（`noteText`："exec 沙箱不可用，本次操作需人工确认"，CLI 暗色一行、WebUI 卡片注明，见第 8 节）；用户主动 `sandbox.enabled: false` 关闭沙箱时不带说明——那是刻意决定，不需要解释。
 - **配置**（`config.yaml` 的 `sandbox:` 节，daemon 级，默认开）：
   ```yaml
   sandbox:
@@ -187,6 +187,7 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
 ```
 gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间递增、可排序的唯一 ID）
   → 循环发 confirmation.requested {confirmationId, toolCall, risk, expiresAt = 现在+confirmTimeoutMs}
+     （exec 沙箱启用但不可用时的回落确认带 noteText，见第 7 节）
   → 三方竞速等待（raceConfirmation）：人工裁决 | confirmTimeoutMs 超时 | run 取消信号
       ├ once     → 执行，grantedBy = "confirmed"
       ├ project  → 执行 + 沉淀项目档规则，grantedBy = "confirmed"

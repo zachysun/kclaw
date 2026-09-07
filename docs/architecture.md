@@ -144,7 +144,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 - **daemon 崩溃**：JSONL 容忍尾部残缺行（只写了一半的行；`repairTornTail`/`readJsonl`，`packages/core/src/storage/jsonl.ts`）；在途 job 的该次触发已在认领（`claimDue`）时推进 `next_run_at`，被杀死的这一次不会重放，job 在下个调度点照常触发——"认领即推进到 now 之后下一次"的语义保证不重放积压。
 - **provider 彻底失败**：`runAgent` 不 reject——部分内容以 `stopReason:"error"` 持久化，`llm.failed {willRetry:false}` + `run.failed` 收尾；瞬时错误由 provider 层 `withRetry`（3 次尝试）内部消化并以 `llm.failed {willRetry:true}` 事件可见。
 - **取消**：WS `run.cancel` → `RunManager.cancel` 只中止当前 run（活跃 run 直接 `abort()`，无活跃 run 返回 false）→ 循环在下一个检查点以 `stopReason:"aborted"` 终止；**排队消息不受影响**，排队取消一律走 WS `queue.cancel`（wait 随时可取消、steer 注入前可取消，已注入的进了 JSONL 历史不删）。确认等待中的 abort 不是"超时拒绝"（不发 `confirmation.resolved`）。
-- **已知限制**：exec 规则按归一化命令匹配（空白折叠、命令取 basename，`/bin/rm` ≡ `rm`），含接续符（`;` `&&` `||` `|`、换行、命令替换 `$(...)`/反引号）的命令不再命中 allow/会话授权（回退 confirm），deny 对每个子命令分别匹配——但 flag 重排（`-r -f` 与 `-rf`）与引号内分隔符仍不识别，规则是尽力而为的防线、不是沙箱；fs 边界与路径规则已按 realpath 解析（symlink 逃逸落到 confirm，deny 无法经 symlink 绕过）；CLI 的 respawn 目标解析假定 repo checkout（`packages/cli` 与 `packages/server` 相邻）——独立分发包由 `kclaw` 包的 esbuild 产物解决。
+- **已知限制**：exec 规则按归一化命令匹配（空白折叠、命令取 basename，`/bin/rm` ≡ `rm`），含接续符（`;` `&&` `||` `|`、换行、命令替换 `$(...)`/反引号）的命令不再命中 allow/会话授权（回退 confirm；exec 沙箱可用时改由沙箱顶替人工放行，见 [permissions](./core/permissions.md) 第 7 节），deny 对每个子命令分别匹配——但 flag 重排（`-r -f` 与 `-rf`）与引号内分隔符仍不识别，规则是尽力而为的防线；真正的运行时兜底是批次 A 起为 exec 套的 OS 沙箱（工作区与临时目录可写、家目录只读且 `~/.kclaw` 遮蔽，见 [sandbox](./core/sandbox.md)）；fs 边界与路径规则已按 realpath 解析（symlink 逃逸落到 confirm，deny 无法经 symlink 绕过）；CLI 的 respawn 目标解析假定 repo checkout（`packages/cli` 与 `packages/server` 相邻）——独立分发包由 `kclaw` 包的 esbuild 产物解决。
 
 ---
 

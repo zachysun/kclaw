@@ -65,7 +65,7 @@ sandbox:
   writeRoots: []       # 追加写白名单（realpath 形式），如 ~/.npm 缓存目录
 ```
 
-daemon 级基础设施配置（非会话偏好），不进会话 meta。npm 等工具在沙箱内需要可写缓存：默认引导 `npm_config_cache` 指向工作区或临时目录，或由用户在 writeRoots 白名单家目录缓存路径。
+daemon 级基础设施配置（非会话偏好），不进会话 meta。npm 等工具在沙箱内需要可写缓存：把 `npm_config_cache` 指到工作区或临时目录，或把缓存路径加进 `writeRoots` 白名单。
 
 ## 测试策略
 
