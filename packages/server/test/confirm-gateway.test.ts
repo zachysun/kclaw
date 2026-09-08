@@ -563,6 +563,12 @@ describe("confirmation gateway over /ws", () => {
     }
     await run
 
+    // Direct guard for the batch D decision: in `auto` mode the gate must NOT
+    // consult run-scoped grants, so every repeated call still surfaces a real
+    // confirmation — three identical calls, three confirmation.requested
+    // frames (a swallowed one would hide the repetition induction needs).
+    expect(frames.filter((f) => f.type === "confirmation.requested")).toHaveLength(3)
+
     const projectRules = loadDecidedRules(join(env.config.workspace, ".kclaw", "permissions.yaml"))
     expect(projectRules).toHaveLength(1)
     expect(projectRules[0]!.rule).toBe("exec:git push*")

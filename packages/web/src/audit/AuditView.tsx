@@ -382,7 +382,6 @@ function sandboxSummary(event: SandboxCheckedEvent): string {
 function sandboxFullContent(event: SandboxCheckedEvent): string {
   const lines = [
     `enabled: ${event.enabled}`,
-    `attempted: ${event.attempted}`,
     `available: ${event.available}`,
   ]
   if (event.unavailableReason !== undefined) lines.push(`unavailableReason: ${event.unavailableReason}`)

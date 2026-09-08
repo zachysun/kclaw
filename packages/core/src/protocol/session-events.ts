@@ -25,9 +25,7 @@ export interface SandboxCheckedEvent {
   type: "sandbox.checked"; at: string
   /** config 是否开启沙箱（sandbox.enabled）。 */
   enabled: boolean
-  /** 是否真的执行了平台探测（enabled:false 时为 false）。 */
-  attempted: boolean
-  /** 探测结果：沙箱可用（exec 工具实际被包裹）。 */
+  /** 探测结果：沙箱可用（exec 工具实际被包裹）；配置关闭时恒 false（fail-closed）。 */
   available: boolean
   /** 不可用原因（仅 available:false 时可能带；配置关闭时不含——那是主动选择）。 */
   unavailableReason?: string

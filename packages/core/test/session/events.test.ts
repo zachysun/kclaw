@@ -92,7 +92,7 @@ describe("applyEvent", () => {
   it("sandbox.checked 不刷 updatedAt 且不改任何投影字段（审计事件）", () => {
     const meta = applyEvent(base, {
       type: "sandbox.checked", at: "2026-01-05T00:00:00.000Z",
-      enabled: true, attempted: true, available: false, unavailableReason: "bwrap not found on PATH",
+      enabled: true, available: false, unavailableReason: "bwrap not found on PATH",
     })
     expect(meta.updatedAt).toBe("2026-01-01T00:00:00.000Z")
     expect(meta).toEqual(base)
@@ -101,7 +101,7 @@ describe("applyEvent", () => {
 
 describe("isSandboxCheckedEvent", () => {
   it("接受 sandbox.checked 事件", () => {
-    expect(isSandboxCheckedEvent({ type: "sandbox.checked", at: "a", enabled: true, attempted: true, available: true })).toBe(true)
+    expect(isSandboxCheckedEvent({ type: "sandbox.checked", at: "a", enabled: true, available: true })).toBe(true)
   })
 
   it("拒绝其他事件类型", () => {

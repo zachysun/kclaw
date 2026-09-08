@@ -265,8 +265,10 @@ function escapesWorkspace(profile: PermissionProfile, args: unknown, workspace: 
 }
 
 /**
- * In-memory, process-lifetime grant store: rules a human approved during
- * this session so the same call stops re-prompting.
+ * In-memory, run-scoped grant store: rules a human approved (via `once`) so
+ * the same call stops re-prompting within this run. A fresh instance is
+ * created per run and dies with it — cross-run repetition is the decided
+ * rules' job (learned grants persist), not this store's.
  */
 export class SessionGrants {
   #rules: CompiledRule[] = []

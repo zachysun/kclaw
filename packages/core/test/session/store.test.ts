@@ -338,7 +338,6 @@ describe("SessionStore event sourcing", () => {
     store.appendSandboxChecked(meta.id, {
       at: new Date().toISOString(),
       enabled: true,
-      attempted: true,
       available: false,
       unavailableReason: "bwrap not found on PATH",
     })
@@ -347,7 +346,6 @@ describe("SessionStore event sourcing", () => {
     expect(sandboxEvents[0]).toMatchObject({
       type: "sandbox.checked",
       enabled: true,
-      attempted: true,
       available: false,
       unavailableReason: "bwrap not found on PATH",
     })

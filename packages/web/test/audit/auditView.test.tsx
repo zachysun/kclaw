@@ -83,7 +83,6 @@ function sandboxEvent(overrides: Record<string, unknown> = {}): SessionEvent {
     type: "sandbox.checked",
     at: "2026-08-19T10:07:00.000Z",
     enabled: true,
-    attempted: true,
     available: true,
     ...overrides,
   } as unknown as SessionEvent
@@ -679,7 +678,7 @@ describe("AuditView (trail)", () => {
     api.get.mockImplementation(async (path: string) => {
       if (path === "/sessions") return [session("s1", "会话1")]
       if (path === "/sessions/s1/events") {
-        return [sandboxEvent({ enabled: false, attempted: false, available: false })]
+        return [sandboxEvent({ enabled: false, available: false })]
       }
       throw new Error(`unexpected path: ${path}`)
     })
@@ -698,7 +697,6 @@ describe("AuditView (trail)", () => {
     const full = container.querySelector('[data-testid="sandbox-full-sb-0"]')
     expect(full).not.toBeNull()
     expect(full!.textContent).toContain("enabled: false")
-    expect(full!.textContent).toContain("attempted: false")
     expect(full!.textContent).toContain("available: false")
     unmount(root, container)
   })

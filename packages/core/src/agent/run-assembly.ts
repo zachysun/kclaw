@@ -332,15 +332,14 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     : undefined
   // Sandbox audit event (batch D): one per run, right after the probe — the
   // session's trail then shows what sandbox state THIS run had (config switch,
-  // probe attempt, availability, reason) beside the grantedBy/deny trail of
-  // what the gate decided with it. Same contract as the system audit event: a
-  // write failure fails the run (the audit promise is all-or-nothing). A
-  // deliberately disabled sandbox carries no reason — that's a choice, not an
-  // environment problem.
+  // availability, reason) beside the grantedBy/deny trail of what the gate
+  // decided with it. Same contract as the system audit event: a write failure
+  // fails the run (the audit promise is all-or-nothing). A deliberately
+  // disabled sandbox carries no reason — that's a choice, not an environment
+  // problem.
   sessions.appendSandboxChecked(sessionId, {
     at: new Date().toISOString(),
     enabled: sandboxAttempted,
-    attempted: sandboxAttempted,
     available: sandbox.available,
     ...(sandboxAttempted && sandbox.unavailableReason !== undefined ? { unavailableReason: sandbox.unavailableReason } : {}),
   })

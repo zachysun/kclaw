@@ -1852,10 +1852,10 @@ describe("RunManager model resolution + usage recording", () => {
 
 describe("RunManager sandbox.checked 事件审计", () => {
   type StreamEvent = ReturnType<SessionStore["readEvents"]>[number]
-  const isSandbox = (e: StreamEvent): e is StreamEvent & { type: "sandbox.checked"; enabled: boolean; attempted: boolean; available: boolean } =>
+  const isSandbox = (e: StreamEvent): e is StreamEvent & { type: "sandbox.checked"; enabled: boolean; available: boolean } =>
     e.type === "sandbox.checked"
 
-  it("一次 run 落恰好一条 sandbox.checked：配置关闭时 enabled/attempted 为 false、不带原因", async () => {
+  it("一次 run 落恰好一条 sandbox.checked：配置关闭时 enabled 为 false、不带原因", async () => {
     const { env, manager } = makeEnv(scriptClient([textTurn("收到")])) // makeEnv 默认关闭沙箱
     const session = env.sessions.create("沙箱审计关闭会话")
 
@@ -1864,7 +1864,7 @@ describe("RunManager sandbox.checked 事件审计", () => {
     const events = env.sessions.readEvents(session.id)
     const sandboxEvents = events.filter(isSandbox)
     expect(sandboxEvents).toHaveLength(1)
-    expect(sandboxEvents[0]).toMatchObject({ enabled: false, attempted: false, available: false })
+    expect(sandboxEvents[0]).toMatchObject({ enabled: false, available: false })
     expect("unavailableReason" in sandboxEvents[0]!).toBe(false)
     // 流序：sandbox.checked 先于本 run 的 user 消息事件
     const sbIdx = events.findIndex(isSandbox)
@@ -1888,7 +1888,6 @@ describe("RunManager sandbox.checked 事件审计", () => {
 
     const [sandboxEvent] = env.sessions.readEvents(session.id).filter(isSandbox)
     expect(sandboxEvent!.enabled).toBe(true)
-    expect(sandboxEvent!.attempted).toBe(true)
     expect(sandboxEvent!.available).toBe(hasHostSandbox)
     if (!hasHostSandbox) expect(typeof sandboxEvent!.unavailableReason).toBe("string")
   })
