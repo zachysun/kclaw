@@ -10,7 +10,7 @@ import type { AuditRow } from "./model.js"
 import {
   blockFullContent, blockSummary, blockTypeLabel, fmtMs, fmtRowTime, fmtUsage,
   memoryFullContent, memorySummary, rowTime, sandboxFullContent, sandboxSummary,
-  sessionFullContent, sessionSummary,
+  sessionFullContent, sessionSummary, summarize,
 } from "./model.js"
 
 export interface AuditRowItemProps {
@@ -79,7 +79,7 @@ function rowSummary(row: AuditRow): string {
     case "memory":
       return memorySummary(row.event)
     case "system":
-      return `${summarizeText(row.event.text, 60)} · ${row.event.text.length} 字`
+      return `${summarize(row.event.text, 60)} · ${row.event.text.length} 字`
     case "sandbox":
       return sandboxSummary(row.event)
     case "session":
@@ -140,9 +140,4 @@ function compactionSummary(record: Extract<AuditRow, { kind: "compaction" }>["re
         ? "自动（运行中）"
         : "自动（收尾）"
   return `${trigger}${record.emergency === true ? "·超限急救" : ""} · ${record.from ?? "会话开头"} – ${record.upto} · ${record.messages} 条`
-}
-
-function summarizeText(text: string, max: number): string {
-  const t = text.replace(/\s+/g, " ").trim()
-  return t.length > max ? `${t.slice(0, max)}…` : t
 }

@@ -350,6 +350,16 @@ export function summarize(text: string, max = 80): string {
   return t.length > max ? `${t.slice(0, max)}…` : t
 }
 
+/**
+ * Whether a bus frame is the store's persist notice (`session.appended`) —
+ * the one frame the audit page answers with an incremental re-pull.
+ * Agent-event frames carry a payload; command acks and error frames do not.
+ */
+export function isAppendedFrame(frame: unknown): boolean {
+  if (typeof frame !== "object" || frame === null || !("payload" in frame)) return false
+  return (frame as { type?: unknown }).type === "session.appended"
+}
+
 export function blockTypeLabel(block: Block): string {
   switch (block.type) {
     case "text":

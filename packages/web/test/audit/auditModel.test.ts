@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
   appendEvents, DEFAULT_FILTER, filterRows, flattenAudit, fmtMs, fmtRowTime, fmtUsage,
-  jumpTarget, matchRowIndexes, rowMatchesFilter,
+  isAppendedFrame, jumpTarget, matchRowIndexes, rowMatchesFilter,
 } from "../../src/audit/model.js"
 import type { AuditFilter, AuditRow } from "../../src/audit/model.js"
 import type {
@@ -247,5 +247,16 @@ describe("fmtRowTime", () => {
     const now = new Date("2026-09-08T12:00:00")
     expect(fmtRowTime("2026-09-08T07:05:09+08:00", now)).toMatch(/^\d{2}:\d{2}:\d{2}$/)
     expect(fmtRowTime("2026-09-01T07:05:00+08:00", now)).toMatch(/^\d{2}-\d{2} \d{2}:\d{2}$/)
+  })
+})
+
+describe("isAppendedFrame", () => {
+  it("只认携带 payload 的 session.appended 帧，ack/error/垃圾输入一律不触发", () => {
+    expect(isAppendedFrame({ type: "session.appended", id: "evt_1", ts: "t", payload: { eventType: "message" } })).toBe(true)
+    expect(isAppendedFrame({ type: "message.created", payload: {} })).toBe(false) // agent event, wrong type
+    expect(isAppendedFrame({ type: "ok" })).toBe(false) // command ack: no payload
+    expect(isAppendedFrame({ type: "error", error: "x" })).toBe(false) // error frame: no payload
+    expect(isAppendedFrame(null)).toBe(false)
+    expect(isAppendedFrame("frame")).toBe(false)
   })
 })

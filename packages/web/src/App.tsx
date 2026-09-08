@@ -35,7 +35,9 @@ import { PermissionsView } from "./permissions/PermissionsView.js"
 import type { FsBrowseResult, SessionMeta } from "./types.js"
 
 type DaemonStatus = "connecting" | "connected" | "error"
-type Tab = "chat" | "jobs" | "audit" | "usage" | "trash" | "memory" | "skills" | "permissions"
+
+const TABS = ["chat", "jobs", "audit", "usage", "trash", "memory", "skills", "permissions"] as const
+type Tab = (typeof TABS)[number]
 
 /**
  * Union two raw message lists by id, chronological (a cache snapshot can be
@@ -153,10 +155,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
           const params = new URLSearchParams(window.location.search)
           const target = params.get("session")
           const targetTab = params.get("tab")
-          if (
-            targetTab !== null &&
-            ["chat", "jobs", "audit", "usage", "trash", "memory", "skills", "permissions"].includes(targetTab)
-          ) {
+          if (targetTab !== null && (TABS as readonly string[]).includes(targetTab)) {
             if (targetTab === "audit") setAuditVisited(true) // deep links mount the kept-alive host too
             setTab(targetTab as Tab)
           }

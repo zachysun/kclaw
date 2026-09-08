@@ -42,7 +42,7 @@ export interface JobCompletedPayload { jobId: string; summary: string }
 export interface JobFailedPayload { jobId: string; error: { code: string; message: string } }
 export interface SessionRenamedPayload { title: string }
 
-/** 持久化通知：一条会话事件已写入 events.jsonl（store 落盘成功后发出——先落盘后广播，消费方可安全增量拉取）。 */
+/** Persist notice: one session event has been written to events.jsonl. Emitted by the store after a successful append — persisted BEFORE announced, so consumers can incrementally refetch safely. */
 export interface SessionAppendedPayload { eventType: SessionEvent["type"] }
 
 export interface BlockPayload { messageId: string; block: Block }

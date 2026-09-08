@@ -244,8 +244,9 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   const config = opts.config ?? loadConfig(paths)
   const token = loadOrCreateToken(paths.home)
 
-  // bus 先于 store 构造：store 的落盘通知回调要发总线帧（session.appended，
-  // 审计页等订阅方据此增量拉取事件流——先落盘后广播，无竞态）。
+  // The bus is built before the store: the store's post-append callback emits
+  // the session.appended bus frame (audit-page subscribers use it to refetch
+  // the stream incrementally — persisted before announced, no race).
   const bus = new EventBus()
   const sessions = new SessionStore(paths.sessionsDir, (sessionId, event) => {
     bus.emit(makeEvent("session.appended", { eventType: event.type }, { sessionId }))

@@ -15,7 +15,7 @@ import type { ApiClient } from "../../src/api.js"
 import { AuditView } from "../../src/audit/AuditView.js"
 import type { WsClient } from "../../src/ws.js"
 import type { Message, SessionEvent } from "../../src/types.js"
-import { scrollCalls, type ScrollCall } from "../helpers/virtuosoMock.js"
+import { fireAtBottom, scrollCalls, virtuosoProps, type ScrollCall } from "../helpers/virtuosoMock.js"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -816,6 +816,100 @@ describe("AuditView (audit)", () => {
       ;(container.querySelector('[data-testid="audit-jump-compaction-next"]') as HTMLButtonElement).click()
     })
     expect(scrollCalls().at(-1)!.index).toBe(1)
+    unmount(root, container)
+  })
+})
+
+describe("AuditView follow semantics & live errors", () => {
+  it("starts pinned to the bottom: followOutput on, no back-to-latest bubble", async () => {
+    const api = makeApi()
+    staticStream(api, [
+      messageEvent({ id: "m1", blocks: [{ id: "b1", type: "text", text: "一" }] }),
+      messageEvent({ id: "m2", blocks: [{ id: "b2", type: "text", text: "二" }] }),
+    ])
+
+    const { container, root } = await mount(api)
+    expect(virtuosoProps().followOutput).toBe("auto")
+    expect(virtuosoProps().initialTopMostItemIndex).toBe(1) // last visible row
+    expect(container.querySelector('[data-testid="audit-jump-latest"]')).toBeNull()
+    unmount(root, container)
+  })
+
+  it("pauses following when the user scrolls up; scrolling back to the bottom resumes it", async () => {
+    const api = makeApi()
+    staticStream(api, [messageEvent({ id: "m1", blocks: [{ id: "b1", type: "text", text: "一" }] })])
+
+    const { container, root } = await mount(api)
+    await act(async () => {
+      fireAtBottom(false) // the user scrolled away from the bottom
+    })
+    expect(container.querySelector('[data-testid="audit-jump-latest"]')).not.toBeNull()
+    expect(virtuosoProps().followOutput).toBe(false)
+
+    await act(async () => {
+      fireAtBottom(true) // back at the bottom → following re-engages on its own
+    })
+    expect(container.querySelector('[data-testid="audit-jump-latest"]')).toBeNull()
+    expect(virtuosoProps().followOutput).toBe("auto")
+    unmount(root, container)
+  })
+
+  it("the back-to-latest bubble re-engages following and scrolls to the last row", async () => {
+    const api = makeApi()
+    staticStream(api, [
+      messageEvent({ id: "m1", blocks: [{ id: "b1", type: "text", text: "一" }] }),
+      messageEvent({ id: "m2", blocks: [{ id: "b2", type: "text", text: "二" }] }),
+    ])
+
+    const { container, root } = await mount(api)
+    await act(async () => {
+      fireAtBottom(false)
+    })
+    await act(async () => {
+      ;(container.querySelector('[data-testid="audit-jump-latest"]') as HTMLButtonElement).click()
+    })
+    expect(container.querySelector('[data-testid="audit-jump-latest"]')).toBeNull()
+    expect(virtuosoProps().followOutput).toBe("auto")
+    expect(scrollCalls().at(-1)!.index).toBe(1) // the newest row
+    unmount(root, container)
+  })
+
+  it("a failed live pull shows a slim retry bar without dropping rows; retry recovers", async () => {
+    const api = makeApi()
+    const initial: SessionEvent[] = [messageEvent({ id: "m1", blocks: [{ id: "b1", type: "text", text: "初始" }] })]
+    let since1Calls = 0
+    api.get.mockImplementation(async (path: string) => {
+      if (path === "/sessions/s1/events?since=0") return initial
+      if (path === "/sessions/s1/events?since=1") {
+        since1Calls += 1
+        if (since1Calls === 1) throw new Error("网络断了")
+        return [messageEvent({ id: "m2", blocks: [{ id: "b2", type: "text", text: "补上的" }] })]
+      }
+      return []
+    })
+    const ws = makeWsFactory()
+
+    const { container, root } = await mount(api, { createWs: ws.factory })
+    await act(async () => {
+      ws.clients[0]!.push({ type: "session.appended", id: "evt_1", ts: "t", payload: { eventType: "message" } })
+    })
+    await flush()
+
+    // The failure surfaces near the live area; the loaded rows stay put.
+    const bar = container.querySelector('[data-testid="audit-live-error"]')
+    expect(bar).not.toBeNull()
+    expect(bar?.textContent).toContain("实时更新失败")
+    expect(bar?.textContent).toContain("网络断了")
+    expect(container.textContent).toContain("初始")
+    expect(container.querySelector('[data-testid="audit-error"]')).toBeNull() // full-page error NOT shown
+
+    // Retry re-pulls the same window (cursor never moved) and recovers.
+    await act(async () => {
+      ;(container.querySelector('[data-testid="audit-live-retry"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(container.querySelector('[data-testid="audit-live-error"]')).toBeNull()
+    expect(container.textContent).toContain("补上的")
     unmount(root, container)
   })
 })

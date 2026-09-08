@@ -11,6 +11,8 @@
  * incremental `?since=` fetch; the append-only array index is the cursor.
  * Initial load, reconnect reconcile, and retry all run the same tail-pull
  * (since = current length), so there is exactly one cursor to keep honest.
+ * A failed live pull surfaces a slim retry bar instead of dropping the
+ * loaded rows — the cursor stays put, so the retry re-pulls the same window.
  * Only persisted facts are shown — no streaming intermediates.
  *
  * Rendering is virtualized (react-virtuoso): variable row heights, bottom
@@ -26,12 +28,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso"
 import { type ApiClient } from "../api.js"
 import { WsAuthError, type WsClient } from "../ws.js"
-import type { AgentEvent } from "../types.js"
 import type { SessionEvent } from "../types.js"
 import { AuditRowItem } from "./AuditRowItem.js"
 import {
-  ALL_KINDS, appendEvents, DEFAULT_FILTER, filterRows, flattenAudit, jumpTarget,
-  matchRowIndexes, type AuditFilter, type AuditRowKind, type TimePreset,
+  ALL_KINDS, appendEvents, DEFAULT_FILTER, filterRows, flattenAudit, isAppendedFrame,
+  jumpTarget, matchRowIndexes, type AuditFilter, type AuditRowKind, type TimePreset,
 } from "./model.js"
 
 /** Max consecutive failed reconnects before giving up with a notice. */
@@ -52,15 +53,6 @@ const TIME_PRESETS: Array<{ value: TimePreset; label: string }> = [
   { value: "today", label: "今天" },
   { value: "custom", label: "自定义" },
 ]
-
-/** A ws frame carrying an agent event (payload present) vs. command acks / error frames. */
-function isAgentEvent(frame: unknown): frame is AgentEvent {
-  return (
-    typeof frame === "object" && frame !== null &&
-    typeof (frame as { type?: unknown }).type === "string" &&
-    "payload" in frame
-  )
-}
 
 /** ISO string → datetime-local input value ("yyyy-MM-ddThh:mm"), local time. */
 function isoToLocalInput(iso: string): string {
@@ -94,6 +86,8 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
   const [filter, setFilter] = useState<AuditFilter>(DEFAULT_FILTER)
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [notice, setNotice] = useState<string | null>(null)
+  /** A failed frame-driven (live) pull — non-destructive: loaded rows stay. */
+  const [liveError, setLiveError] = useState<string | null>(null)
   const [following, setFollowing] = useState(true)
   const [hitCursor, setHitCursor] = useState(0)
   const [reloadTick, setReloadTick] = useState(0)
@@ -101,6 +95,8 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
   const virtRef = useRef<VirtuosoHandle>(null)
   /** Last jump/scroll anchor (visible-row index) — the "from" of relative jumps. */
   const cursorRowRef = useRef(0)
+  /** The effect's live re-pull (since=cursor), exposed to the retry button. */
+  const liveRetryRef = useRef<(() => void) | null>(null)
 
   // One data effect per session: initial tail-pull (since=0 = full stream),
   // then a private ws subscription whose session.appended frames drive
@@ -122,6 +118,7 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
     setPhase("loading")
     setErrorText("")
     setNotice(null)
+    setLiveError(null)
     setFollowing(true)
     setExpanded(new Set())
     cursorRowRef.current = 0
@@ -140,15 +137,27 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
         if (cancelled) return
         cursor += fresh.length
         if (fresh.length > 0) setEvents((prev) => appendEvents(prev ?? [], fresh))
+        setLiveError(null)
         setPhase("ready")
       } finally {
         pulling = false
         if (dirty && !cancelled) {
           dirty = false
-          void pullTail()
+          pullTailLive()
         }
       }
     }
+
+    // Live pulls (frame-driven, merged re-pulls) must never dead-end the page:
+    // a failure surfaces as a slim retry bar and the cursor stays put, so the
+    // next frame — or the retry button — re-pulls the same window.
+    const pullTailLive = (): void => {
+      void pullTail().catch((err) => {
+        if (cancelled) return
+        setLiveError(err instanceof Error ? err.message : "实时更新失败")
+      })
+    }
+    liveRetryRef.current = pullTailLive
 
     const subscribe = (c: WsClient): void => {
       try {
@@ -162,7 +171,7 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
       try {
         for await (const frame of c.frames) {
           if (cancelled) return "closed"
-          if (isAgentEvent(frame) && frame.type === "session.appended") void pullTail()
+          if (isAppendedFrame(frame)) pullTailLive()
         }
         return "closed"
       } catch (err) {
@@ -209,6 +218,7 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
 
     return () => {
       cancelled = true
+      liveRetryRef.current = null
       client.close()
     }
   }, [api, createWs, sessionId, reloadTick])
@@ -452,6 +462,22 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
       {notice !== null && (
         <div className="audit-notice muted" data-testid="audit-notice" role="status">
           {notice}
+        </div>
+      )}
+      {liveError !== null && phase !== "error" && (
+        <div className="audit-error-bar" data-testid="audit-live-error" role="status">
+          <span className="form-error">实时更新失败：{liveError}</span>
+          <button
+            type="button"
+            className="audit-retry"
+            data-testid="audit-live-retry"
+            onClick={() => {
+              setLiveError(null)
+              liveRetryRef.current?.()
+            }}
+          >
+            重试
+          </button>
         </div>
       )}
       {phase === "error" && (

@@ -133,7 +133,7 @@ export class SessionStore {
       try {
         this.onAppended(id, event)
       } catch {
-        // 通知失败不算写失败：事件与投影已落盘
+        // A listener failure is not a write failure: event and projection are already durable.
       }
     }
   }
