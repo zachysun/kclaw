@@ -244,7 +244,12 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   const config = opts.config ?? loadConfig(paths)
   const token = loadOrCreateToken(paths.home)
 
-  const sessions = new SessionStore(paths.sessionsDir)
+  // bus 先于 store 构造：store 的落盘通知回调要发总线帧（session.appended，
+  // 审计页等订阅方据此增量拉取事件流——先落盘后广播，无竞态）。
+  const bus = new EventBus()
+  const sessions = new SessionStore(paths.sessionsDir, (sessionId, event) => {
+    bus.emit(makeEvent("session.appended", { eventType: event.type }, { sessionId }))
+  })
   // embedding 判定链：model 空 → 不构造客户端（向量路关闭）；provider 名
   // 缺省取 default provider entry；entry 不存在则向量路关闭并告警（不致命）。
   const embedCfg = config.memory.embedding
@@ -259,7 +264,6 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       console.error("kclaw memory: embedding provider not found, vector path disabled")
     }
   }
-  const bus = new EventBus()
   // 用户 hook 注册表：daemon 级账本，run 装配每 run 现扫
   // ~/.kclaw/hooks；装载失败经 registry 去重后广播一次 hook.failed(load)。
   const hookRegistry = new HookRegistry({

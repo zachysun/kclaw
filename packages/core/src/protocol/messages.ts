@@ -22,6 +22,8 @@ export interface AssistantMessage extends Message {
   model: string
   usage: Usage
   stopReason: StopReason
+  /** LLM 生成耗时（毫秒，流结束时刻）；仅流成功完成时存在，历史消息可能缺省。 */
+  latencyMs?: number
 }
 
 /** Why a tool call was allowed to run. */

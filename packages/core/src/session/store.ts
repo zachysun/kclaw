@@ -76,9 +76,18 @@ function normalizeLegacyMeta(m: any): SessionMeta {
  */
 export class SessionStore {
   private readonly sessionsDir: string
+  /**
+   * Optional post-append notifier (daemon wires it to the bus as a
+   * `session.appended` frame). Called after the event AND its projection are
+   * durably written, so subscribers can incrementally refetch; a throwing
+   * notifier is swallowed — announcing must never turn a successful write
+   * into a failure.
+   */
+  private readonly onAppended?: (sessionId: string, event: SessionEvent) => void
 
-  constructor(sessionsDir: string) {
+  constructor(sessionsDir: string, onAppended?: (sessionId: string, event: SessionEvent) => void) {
     this.sessionsDir = sessionsDir
+    this.onAppended = onAppended
     mkdirSync(sessionsDir, { recursive: true })
   }
 
@@ -120,6 +129,13 @@ export class SessionStore {
     const at = this.eventAt(event)
     const base: SessionMeta = current ?? { id, title: "", createdAt: at, updatedAt: at }
     this.writeMeta(applyEvent(base, event))
+    if (this.onAppended !== undefined) {
+      try {
+        this.onAppended(id, event)
+      } catch {
+        // 通知失败不算写失败：事件与投影已落盘
+      }
+    }
   }
 
   /** Load a session's event stream oldest-first; missing file yields []. */

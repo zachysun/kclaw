@@ -1,12 +1,14 @@
 import { newId } from "./ids.js"
 import type { Block, NoteBlock, ToolCallBlock } from "./blocks.js"
 import type { Message, StopReason, Usage } from "./messages.js"
+import type { SessionEvent } from "./session-events.js"
 
 export type EventType =
   // 生命周期
   | "run.started" | "run.completed" | "run.failed"
   | "message.created" | "message.completed"
   | "job.started" | "job.completed" | "job.failed"
+  | "session.appended"
   // 会话元数据
   | "session.renamed"
   // 流式
@@ -39,6 +41,9 @@ export interface JobStartedPayload { jobId: string }
 export interface JobCompletedPayload { jobId: string; summary: string }
 export interface JobFailedPayload { jobId: string; error: { code: string; message: string } }
 export interface SessionRenamedPayload { title: string }
+
+/** 持久化通知：一条会话事件已写入 events.jsonl（store 落盘成功后发出——先落盘后广播，消费方可安全增量拉取）。 */
+export interface SessionAppendedPayload { eventType: SessionEvent["type"] }
 
 export interface BlockPayload { messageId: string; block: Block }
 export interface BlockDeltaPayload { messageId: string; blockId: string; delta: string }
@@ -94,6 +99,7 @@ export type EventPayloadMap = {
   "job.started": JobStartedPayload
   "job.completed": JobCompletedPayload
   "job.failed": JobFailedPayload
+  "session.appended": SessionAppendedPayload
   "session.renamed": SessionRenamedPayload
   "text.created": BlockPayload
   "text.delta": BlockDeltaPayload

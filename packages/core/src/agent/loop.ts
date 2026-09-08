@@ -342,11 +342,13 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
     // A failed call is terminated by llm.failed, not llm.completed — the
     // degenerate created→delta→completed triple only completes what streamed.
     if (streamError === undefined) {
-      emit(makeEvent("llm.completed", { usage, stopReason, latencyMs: Date.now() - startedAt }, ctx))
+      const latencyMs = Date.now() - startedAt
+      assistant.latencyMs = latencyMs
+      emit(makeEvent("llm.completed", { usage, stopReason, latencyMs }, ctx))
       void deps.hooks.run("llm-after", {
         usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens },
         stopReason,
-        latencyMs: Date.now() - startedAt,
+        latencyMs,
       }).catch(() => { /* llm-after has no fatal builtins; observation must not disturb the run */ })
     }
 

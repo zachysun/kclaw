@@ -462,3 +462,32 @@ describe("SessionStore event sourcing", () => {
     expect(store.meta(meta.id)!.model).toBe("gpt-4")
   })
 })
+
+describe("SessionStore append hook", () => {
+  it("appendEvent 落盘成功后触发 onAppended（携带 sessionId 与事件本体）", () => {
+    const seen: Array<{ id: string; type: string }> = []
+    const s = new SessionStore(dir, (id, ev) => seen.push({ id, type: ev.type }))
+    const m = s.create()
+    s.appendMessage(m.id, newMessage(m.id, "user", [{ id: "blk_1", type: "text", text: "hi" }]))
+    // create 走 appendEvent（session.created），appendMessage 再一条：两条都通知
+    expect(seen).toEqual([
+      { id: m.id, type: "session.created" },
+      { id: m.id, type: "message" },
+    ])
+  })
+
+  it("onAppended 抛异常不破坏落盘与投影（通知失败不是写失败）", () => {
+    const s = new SessionStore(dir, () => { throw new Error("bus down") })
+    const m = s.create()
+    s.appendMessage(m.id, newMessage(m.id, "user", [{ id: "blk_1", type: "text", text: "hi" }]))
+    expect(s.readEvents(m.id)).toHaveLength(2)
+    expect(s.meta(m.id)!.updatedAt).toBeTruthy()
+  })
+
+  it("未传 onAppended 时行为不变", () => {
+    const s = new SessionStore(dir)
+    const m = s.create()
+    s.appendMessage(m.id, newMessage(m.id, "user", [{ id: "blk_1", type: "text", text: "hi" }]))
+    expect(s.readEvents(m.id)).toHaveLength(2)
+  })
+})
