@@ -45,7 +45,8 @@ import type { UsageStore } from "../storage/usage.js"
 import type { SessionStore } from "../session/store.js"
 import type { Compactor } from "../session/compactor.js"
 import { ConfigPermissionGate, realpathWithin } from "../permissions/engine.js"
-import { loadDecidedRulesForRun } from "../storage/decided-rules.js"
+import { appendDecidedRule, loadDecidedRulesForRun, narrowDecidedRule, projectDecidedRulesPath } from "../storage/decided-rules.js"
+import type { AutoLearnCounter } from "../permissions/auto-learn.js"
 import { ConfirmationBroker, raceConfirmation, type ConfirmationResolution } from "../permissions/broker.js"
 import { createExecSandbox } from "../sandbox/provider.js"
 import type { PermissionGate, RunOutcome } from "./loop.js"
@@ -139,6 +140,16 @@ export interface RunEngineDeps {
    * set — the daemon path relies on the broker alone.
    */
   resolveConfirmation?: (confirmationId: string) => Promise<ConfirmationResolution>
+  /**
+   * Auto-mode induction (batch C): when set, `auto` sessions' confirmation
+   * resolutions are fed to the counter here — the assembly seam sees every
+   * outcome (once / reject / timeout), which the ws command dispatcher cannot
+   * (a timeout settles inside the loop and never produces a resolve frame).
+   * A `once` verdict advances the per-session streak (crossing the threshold
+   * persists a `source:"auto"` project rule); a `reject` or a TIMEOUT resets
+   * it — denied operations are never inducted.
+   */
+  autoLearn?: { counter: AutoLearnCounter }
   /**
    * Retry-visible llm per run: when set, EVERY
    * run builds its own client through this factory, receiving that run's
@@ -384,6 +395,10 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     // explanation instead of the silent fail-closed default.
     sandboxAvailable: sandbox.available,
     sandboxUnavailableNote,
+    // The tools this assembly actually wrapped in the OS sandbox (exec gets
+    // the wrapper below; no other executor does). The gate's "sandboxed"
+    // auto-pass must never claim an unwrapped tool is sandboxed.
+    sandboxedTools: sandbox.available ? new Set(["exec"]) : new Set(),
   })
   const confirmTimeoutMs = config.permissions.confirmTimeoutMs
   const broker = engine.deps.broker
@@ -419,15 +434,51 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     engine.deps.resolveConfirmation ?? ((confirmationId: string) => broker.wait(confirmationId))
   const resolveConfirmation = async (confirmationId: string): Promise<ConfirmationResolution> => {
     const raced = await raceConfirmation(baseResolver(confirmationId), confirmTimeoutMs, controller.signal)
+    // Auto-mode induction (batch C): this seam sees EVERY settlement a human
+    // confirmation can reach — once / reject via the gateway, timeout when the
+    // race expires — unlike the ws dispatcher, which only ever sees resolve
+    // frames. The mode check uses this run's snapshot (the mode the
+    // confirmation was issued under), not the live meta a switch may have
+    // changed mid-run. An abort is NOT a denial (the run was cancelled) and
+    // never touches the counter.
+    const call = pendingConfirmations.get(confirmationId)
+    pendingConfirmations.delete(confirmationId)
     if (raced === "aborted") {
-      pendingConfirmations.delete(confirmationId)
       broker.expire(confirmationId)
       // the value is never used: the loop's own race resolved "aborted" and
       // denies without consulting the resolver
       return { decision: "timeout", by: "timeout" }
     }
-    pendingConfirmations.delete(confirmationId)
     if (raced.by === "timeout") broker.expire(confirmationId)
+    const autoLearn = engine.deps.autoLearn
+    if (autoLearn !== undefined && sessionMeta?.mode === "auto" && call !== undefined) {
+      // Key is scoped per session: streaks must never leak across sessions
+      // (another session's approvals must not help this one cross the
+      // threshold) even though the counter is one per process.
+      const ruleKey = narrowDecidedRule(call, workspace)
+      const key = `${sessionId}\n${ruleKey}`
+      if (raced.decision === "once") {
+        if (autoLearn.counter.approve(key)) {
+          try {
+            appendDecidedRule(
+              projectDecidedRulesPath(workspace),
+              {
+                rule: ruleKey,
+                decidedAt: new Date().toISOString(),
+                origin: { tool: call.name, argsJson: call.argsJson, sessionId },
+                source: "auto",
+              },
+              { workspace },
+            )
+          } catch (e) {
+            console.error(`kclaw: failed to persist auto-learned rule: ${e instanceof Error ? e.message : String(e)}`)
+          }
+        }
+      } else if (raced.decision === "reject" || raced.by === "timeout") {
+        // a "no" — explicit or by silence — resets the streak
+        autoLearn.counter.reject(key)
+      }
+    }
     return raced
   }
 

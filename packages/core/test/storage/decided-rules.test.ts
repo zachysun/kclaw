@@ -94,6 +94,27 @@ describe("decided rules file round-trip", () => {
     expect(rules).toHaveLength(1)
     expect(rules[0]!.rule).toBe("exec:ls")
   })
+
+  it("round-trips the source marker: auto persists, an absent marker reads as manual", () => {
+    const p = globalDecidedRulesPath(home)
+    appendDecidedRule(p, {
+      rule: "exec:git push*",
+      decidedAt: "2026-09-06T00:00:00.000Z",
+      origin: { tool: "exec", argsJson: "{}" },
+      source: "auto",
+    })
+    appendDecidedRule(p, {
+      rule: "exec:ls",
+      decidedAt: "2026-09-06T00:00:00.001Z",
+      origin: { tool: "exec", argsJson: "{}" },
+    })
+    const rules = loadDecidedRules(p)
+    expect(rules).toHaveLength(2)
+    expect(rules[0]!.source).toBe("auto")
+    expect(rules[1]!.source).toBeUndefined() // old files have no marker → manual
+    // the gate only consumes rule strings; the marker never leaks there
+    expect(decidedRuleStrings(rules)).toEqual(["exec:git push*", "exec:ls"])
+  })
 })
 
 describe("project scope defenses", () => {

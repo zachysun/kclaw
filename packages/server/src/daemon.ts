@@ -41,6 +41,7 @@ import {
   UsageStore,
   withRetry,
   HookRegistry,
+  AutoLearnCounter,
 } from "@kclaw/core"
 import type { KclawConfig, LlmClient } from "@kclaw/core"
 import { loadOrCreateToken } from "./auth.js"
@@ -314,6 +315,9 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     model,
     usageStore: usage,
     hooks: hookRegistry,
+    // auto mode induction (batch C): one per-process streak counter threaded
+    // through every run's assembly; threshold 0 disables induction.
+    autoLearn: { counter: new AutoLearnCounter(config.permissions.autoLearnThreshold ?? 3) },
     ...(mcpManager !== undefined && { extraTools: () => mcpManager.tools() }),
     // Retry visibility: with the DEFAULT
     // composition every run builds its own retry-wrapped client carrying

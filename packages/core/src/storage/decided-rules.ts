@@ -29,6 +29,12 @@ export interface DecidedRuleEntry {
     argsJson: string
     sessionId?: string
   }
+  /**
+   * Where the rule came from: "manual" = a human chose "always allow" on a
+   * confirmation; "auto" = the auto mode inducted it after repeated `once`
+   * approvals. Absent (old files) reads as "manual".
+   */
+  source?: "auto" | "manual"
 }
 
 interface DecidedRulesFile {

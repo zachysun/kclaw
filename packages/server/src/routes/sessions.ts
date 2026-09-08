@@ -1,5 +1,5 @@
 import type { FastifyError, FastifyInstance } from "fastify"
-import { isPermissionMode, type KclawConfig, type MemorySystem, type SessionStore } from "@kclaw/core"
+import { isPermissionMode, PERMISSION_MODES, type KclawConfig, type MemorySystem, type SessionStore } from "@kclaw/core"
 import type { RunManager } from "../run.js"
 
 /** Store dependencies for the session routes (injected by createApp). */
@@ -119,14 +119,15 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
     })
 
     // Session-level permission mode switch: readonly denies write/exec,
-    // acceptEdits auto-approves in-workspace file writes. Takes effect on
-    // the next run.
+    // acceptEdits auto-approves in-workspace file writes; trusted runs
+    // everything sandboxed/no-prompt inside the boundary, auto inducts
+    // repeated once-approvals into rules. Takes effect on the next run.
     scope.post("/sessions/:id/mode", async (request, reply) => {
       const { id } = request.params as { id: string }
       if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
       const body = (request.body ?? {}) as { mode?: unknown }
       if (!isPermissionMode(body.mode)) {
-        return reply.code(400).send({ error: 'mode must be one of "readonly" | "default" | "acceptEdits"' })
+        return reply.code(400).send({ error: `mode must be one of ${PERMISSION_MODES.join(" | ")}` })
       }
       return stores.sessions.updateMeta(id, { mode: body.mode })
     })

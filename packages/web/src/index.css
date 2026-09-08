@@ -1895,3 +1895,10 @@ select:focus {
   margin-left: auto;
   white-space: nowrap;
 }
+
+/* The "auto-learned" marker on a decided rule (batch C). */
+.perm-source {
+  font-style: normal;
+  color: var(--accent, #6b8cff);
+  margin-right: 6px;
+}

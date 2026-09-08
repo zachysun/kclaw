@@ -76,7 +76,9 @@ describe("ConfigPermissionGate", () => {
     expect((d as { confirmationId: string }).confirmationId).toMatch(/^conf_/)
   })
   it("sandboxed exec: default mode auto-passes an otherwise-confirm command as sandboxed", async () => {
-    const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxAvailable: true })
+    const g = new ConfigPermissionGate(CFG, {
+      toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxAvailable: true, sandboxedTools: new Set(["exec"]),
+    })
     // no rule hits → would confirm → sandbox available → sandboxed allow
     expect(await g.check(tc("exec", { command: "curl example.com" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
     // multi-segment lines (no allow/grant coverage) are sandboxed too: the
@@ -88,6 +90,24 @@ describe("ConfigPermissionGate", () => {
     expect(await g.check(tc("exec", { command: "curl example.com" }))).toMatchObject({ type: "confirm" })
     expect(await g.check(tc("exec", { command: "git status; echo hi" }))).toMatchObject({ type: "confirm" })
   })
+  it("a command-field tool NOT wrapped in the sandbox never auto-passes as sandboxed", async () => {
+    // A hypothetical schema-`command` adapter tool (MCP etc.): sandbox
+    // available but the assembly only wraps exec — the sandboxed auto-pass
+    // must not claim an unwrapped tool is sandboxed.
+    const facts = new Map([["mcp__shell__do", F("sensitive", "command")]])
+    // default mode: falls back to a human confirmation, not a sandboxed allow
+    const g = new ConfigPermissionGate({ ...CFG, allow: [], deny: [] }, {
+      toolFacts: facts, safeTools: new Set(), sandboxAvailable: true,
+    })
+    expect(await g.check(tc("mcp__shell__do", { command: "ls" }))).toMatchObject({ type: "confirm" })
+    // trusted mode (no human fallback): denied, never auto-passed unsandboxed
+    const t = new ConfigPermissionGate({ ...CFG, allow: [], deny: [] }, {
+      toolFacts: facts, safeTools: new Set(), sandboxAvailable: true, mode: "trusted",
+    })
+    const d = await t.check(tc("mcp__shell__do", { command: "ls" }))
+    expect(d).toMatchObject({ type: "deny", reason: "mode" })
+    expect((d as { noteText?: string }).noteText).toContain("无法沙箱化")
+  })
   it("confirm explains when the sandbox was attempted but unavailable", async () => {
     const g = new ConfigPermissionGate(CFG, {
       toolFacts: BUILTIN_FACTS, safeTools: new Set(),
@@ -97,14 +117,16 @@ describe("ConfigPermissionGate", () => {
     expect(d).toMatchObject({ type: "confirm", noteText: "exec 沙箱不可用，本次操作需人工确认" })
     // with the sandbox available the note never appears (auto-pass instead)
     const g2 = new ConfigPermissionGate(CFG, {
-      toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxAvailable: true,
+      toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxAvailable: true, sandboxedTools: new Set(["exec"]),
       sandboxUnavailableNote: "exec 沙箱不可用，本次操作需人工确认",
     })
     expect(await g2.check(tc("exec", { command: "curl example.com" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
   })
   it("sandboxed never overrides deny / whitelist / decided / session grants", async () => {
     const grants = new SessionGrants()
-    const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set(), grants, sandboxAvailable: true })
+    const g = new ConfigPermissionGate(CFG, {
+      toolFacts: BUILTIN_FACTS, safeTools: new Set(), grants, sandboxAvailable: true, sandboxedTools: new Set(["exec"]),
+    })
     // deny still short-circuits (sudo in the default deny list)
     expect(await g.check(tc("exec", { command: "sudo rm x" }))).toMatchObject({ type: "deny", reason: "blacklist" })
     // an allow rule still wins with its own reason
@@ -118,7 +140,9 @@ describe("ConfigPermissionGate", () => {
     expect(await g.check(tc("exec", { command: "curl example.com" }))).toMatchObject({ type: "deny", reason: "readonly" })
   })
   it("acceptEdits mode also auto-passes a sandboxable exec", async () => {
-    const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxAvailable: true, mode: "acceptEdits" })
+    const g = new ConfigPermissionGate(CFG, {
+      toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxAvailable: true, sandboxedTools: new Set(["exec"]), mode: "acceptEdits",
+    })
     expect(await g.check(tc("exec", { command: "curl example.com" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
   })
   it("fs_write deny matches globbed path from args.path", async () => {
@@ -471,6 +495,79 @@ describe("ConfigPermissionGate readRoots", () => {
       const ws = mkdtempSync(join(tmpdir(), "kclaw-gate-ae4-"))
       const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, workspace: ws, mode: "acceptEdits" })
       expect(await g.check(tc("fs_write", { path: join(homedir(), ".ssh", "x") }))).toMatchObject({ type: "deny", reason: "blacklist" })
+      rmSync(ws, { recursive: true, force: true })
+    })
+  })
+
+  describe("trusted mode (batch C)", () => {
+    it("exec with the sandbox available auto-passes as sandboxed, multi-segment included", async () => {
+      const g = new ConfigPermissionGate({ ...CFG, allow: [], deny: [] }, {
+        toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxAvailable: true, sandboxedTools: new Set(["exec"]), mode: "trusted",
+      })
+      expect(await g.check(tc("exec", { command: "curl example.com" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
+      // the whole shell call runs inside the sandbox, so chained lines pass too
+      expect(await g.check(tc("exec", { command: "git status; echo hi" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
+    })
+
+    it("exec without the sandbox is DENIED, never confirmed (fail-closed: no human in the loop)", async () => {
+      const g = new ConfigPermissionGate({ ...CFG, allow: [], deny: [] }, {
+        toolFacts: BUILTIN_FACTS, safeTools: new Set(), mode: "trusted",
+      })
+      const d = await g.check(tc("exec", { command: "curl example.com" }))
+      expect(d).toMatchObject({ type: "deny", reason: "mode" })
+      expect((d as { noteText?: string }).noteText).toContain("沙箱不可用")
+    })
+
+    it("deny blacklist still wins over the trust tier", async () => {
+      const g = new ConfigPermissionGate(CFG, {
+        toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxAvailable: true, sandboxedTools: new Set(["exec"]), mode: "trusted",
+      })
+      expect(await g.check(tc("exec", { command: "sudo rm x" }))).toMatchObject({ type: "deny", reason: "blacklist" })
+      expect(await g.check(tc("fs_write", { path: "~/.ssh/authorized_keys", content: "x" }))).toMatchObject({ type: "deny", reason: "blacklist" })
+      // a deny hit hidden inside a concatenated command is still caught
+      expect(await g.check(tc("exec", { command: "echo hi; sudo rm x" }))).toMatchObject({ type: "deny", reason: "blacklist" })
+    })
+
+    it("in-workspace writes auto-approve with reason trusted, reads stay safe", async () => {
+      const ws = mkdtempSync(join(tmpdir(), "kclaw-gate-t-"))
+      const g = new ConfigPermissionGate({ ...CFG, allow: [], deny: [] }, {
+        toolFacts: BUILTIN_FACTS, safeTools: new Set(["fs_read"]), workspace: ws, mode: "trusted",
+      })
+      expect(await g.check(tc("fs_write", { path: "out.txt", content: "x" }))).toMatchObject({ type: "allow", reason: "trusted" })
+      expect(await g.check(tc("fs_edit", { path: "src/a.ts", old: "a", new: "b" }))).toMatchObject({ type: "allow", reason: "trusted" })
+      expect(await g.check(tc("fs_read", { path: "notes/a.md" }))).toMatchObject({ type: "allow", reason: "safe" })
+      rmSync(ws, { recursive: true, force: true })
+    })
+
+    it("out-of-workspace path access is denied, not confirmed", async () => {
+      const ws = mkdtempSync(join(tmpdir(), "kclaw-gate-t2-"))
+      const g = new ConfigPermissionGate({ ...CFG, allow: [], deny: [] }, {
+        toolFacts: BUILTIN_FACTS, safeTools: new Set(["fs_read"]), workspace: ws, mode: "trusted",
+      })
+      const d1 = await g.check(tc("fs_write", { path: "/etc/hosts", content: "x" }))
+      expect(d1).toMatchObject({ type: "deny", reason: "mode" })
+      expect((d1 as { noteText?: string }).noteText).toContain("工作区内")
+      expect(await g.check(tc("fs_read", { path: "/etc/passwd" }))).toMatchObject({ type: "deny", reason: "mode" })
+      rmSync(ws, { recursive: true, force: true })
+    })
+
+    it("sensitive tools with no sandbox coverage (MCP adapters, unregistered) are denied", async () => {
+      const ws = mkdtempSync(join(tmpdir(), "kclaw-gate-t3-"))
+      const g = new ConfigPermissionGate({ ...CFG, allow: [], deny: [] }, {
+        toolFacts: new Map([["mcp__srv__do", F("sensitive")]]), safeTools: new Set(), workspace: ws, mode: "trusted",
+      })
+      const d = await g.check(tc("mcp__srv__do", { x: 1 }))
+      expect(d).toMatchObject({ type: "deny", reason: "mode" })
+      expect((d as { noteText?: string }).noteText).toContain("无法沙箱化")
+      rmSync(ws, { recursive: true, force: true })
+    })
+
+    it("safe tools pass through unchanged", async () => {
+      const ws = mkdtempSync(join(tmpdir(), "kclaw-gate-t4-"))
+      const g = new ConfigPermissionGate({ ...CFG, allow: [], deny: [] }, {
+        toolFacts: BUILTIN_FACTS, safeTools: new Set(["memory_search"]), workspace: ws, mode: "trusted",
+      })
+      expect(await g.check(tc("memory_search", { query: "x" }))).toMatchObject({ type: "allow", reason: "safe" })
       rmSync(ws, { recursive: true, force: true })
     })
   })

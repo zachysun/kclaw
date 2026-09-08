@@ -25,7 +25,7 @@ export interface KclawConfig {
      */
     timeoutMs?: number
   }
-  permissions: { allow: string[]; deny: string[]; confirmTimeoutMs: number; sessionGrants: boolean }
+  permissions: { allow: string[]; deny: string[]; confirmTimeoutMs: number; sessionGrants: boolean; autoLearnThreshold?: number }
   memory: {
     write: { immediate: boolean; manual: boolean; intervalMinutes: number; idleMinutes: number }
     /** 提取与内化用的模型；空 = 回落主对话模型。 */

@@ -346,6 +346,13 @@ export interface ConfigPermissionGateOptions {
    * choice — that needs no explanation.
    */
   sandboxUnavailableNote?: string
+  /**
+   * Tools whose executor the run assembly actually wrapped in the OS sandbox
+   * (exec today). The "sandboxed" auto-pass must never claim a tool is
+   * sandboxed when its execution is not wrapped — a schema-`command` adapter
+   * tool would otherwise ride the trusted no-prompt tier unsandboxed.
+   */
+  sandboxedTools?: ReadonlySet<string>
 }
 
 /** A compiled rule that remembers its source string for deny notes. */
@@ -377,6 +384,7 @@ export class ConfigPermissionGate implements PermissionGate {
   readonly #readRoots: string[]
   readonly #sandboxAvailable: boolean
   readonly #sandboxUnavailableNote: string | undefined
+  readonly #sandboxedTools: ReadonlySet<string>
 
   constructor(cfg: KclawConfig["permissions"], opts: ConfigPermissionGateOptions = {}) {
     this.#allow = cfg.allow.map(compileRule)
@@ -392,6 +400,13 @@ export class ConfigPermissionGate implements PermissionGate {
     this.#readRoots = opts.readRoots ?? []
     this.#sandboxAvailable = opts.sandboxAvailable ?? false
     this.#sandboxUnavailableNote = opts.sandboxUnavailableNote
+    this.#sandboxedTools = opts.sandboxedTools ?? new Set()
+  }
+
+  /** A compiled command rule vs one normalized sub-command (other tools' rules never cover this one). */
+  #execRuleMatches(rule: CompiledRule, tool: string, s: string): boolean {
+    if (rule.tool !== tool) return false
+    return rule.argGlob === undefined ? true : globMatch(normalizeCommand(rule.argGlob), s)
   }
 
   async check(toolCall: ToolCallBlock): Promise<PermissionDecision> {
@@ -404,38 +419,80 @@ export class ConfigPermissionGate implements PermissionGate {
       return { type: "deny", reason: "readonly", noteText: "只读模式（readonly）" }
     }
 
+    // trusted（批次 C）：沙箱与工作区边界内的操作全部自动放行、不弹确认；
+    // 边界外——exec 无法沙箱化、越界、无沙箱保护的敏感工具——一律拒绝
+    // （fail-closed）。免审档没有人工兜底，deny 黑名单仍最优先。
+    if (this.#mode === "trusted") {
+      if (profile.argField === "command") {
+        const subs = splitSubcommands(arg).map(normalizeCommand)
+        for (const rule of this.#deny) {
+          if (subs.some((s) => this.#execRuleMatches(rule, tool, s))) {
+            return { type: "deny", reason: "blacklist", noteText: `规则命中黑名单: ${rule.source}` }
+          }
+        }
+        // Only a tool the assembly ACTUALLY wrapped in the OS sandbox may
+        // pass as "sandboxed" — a schema-command adapter tool (MCP etc.) is
+        // not wrapped, so it is denied, never auto-passed unsandboxed.
+        if (this.#sandboxAvailable && this.#sandboxedTools.has(tool)) {
+          return { type: "allow", reason: "sandboxed" }
+        }
+        return {
+          type: "deny", reason: "mode",
+          noteText: this.#sandboxAvailable
+            ? "trusted 模式无法沙箱化该敏感工具"
+            : "trusted 模式要求 exec 进沙箱，但沙箱不可用",
+        }
+      }
+      const matches = (r: CompiledRule) => scopedMatch(r, tool, arg, this.#workspace, profile)
+      for (const rule of this.#deny) {
+        if (matches(rule)) {
+          return { type: "deny", reason: "blacklist", noteText: `规则命中黑名单: ${rule.source}` }
+        }
+      }
+      if (escapesWorkspace(profile, toolCall.args, this.#workspace, this.#readRoots)) {
+        return { type: "deny", reason: "mode", noteText: "trusted 模式只放行工作区内的操作" }
+      }
+      if (profile.pathAware) {
+        // 工作区内：sensitive 路径写（fs_write/fs_edit）→ trusted 放行；
+        // safe 路径读（fs_read/fs_list）→ safe 放行。
+        return profile.readonlyDenied
+          ? { type: "allow", reason: "trusted" }
+          : { type: "allow", reason: "safe" }
+      }
+      if (this.#safeTools.has(tool)) return { type: "allow", reason: "safe" }
+      // 无沙箱保护的 sensitive 工具（MCP 适配器、未注册工具）在免审档不能放行。
+      return { type: "deny", reason: "mode", noteText: "trusted 模式无法沙箱化该敏感工具" }
+    }
+
     // Command-arg tools: deny matches every sub-command (normalized); allow,
     // decided rules and session grants only ever apply to a single,
     // concatenation-free command — a rule like `exec:git status*` must not
     // wave through `git status; …`.
     if (profile.argField === "command") {
       const subs = splitSubcommands(arg).map(normalizeCommand)
-      const execRuleMatches = (r: CompiledRule, s: string): boolean => {
-        if (r.tool !== tool) return false // other tools' rules never cover this one
-        return r.argGlob === undefined ? true : globMatch(normalizeCommand(r.argGlob), s)
-      }
       for (const rule of this.#deny) {
-        if (subs.some((s) => execRuleMatches(rule, s))) {
+        if (subs.some((s) => this.#execRuleMatches(rule, tool, s))) {
           return { type: "deny", reason: "blacklist", noteText: `规则命中黑名单: ${rule.source}` }
         }
       }
       if (subs.length === 1) {
-        if (this.#allow.some((r) => execRuleMatches(r, subs[0]))) {
+        if (this.#allow.some((r) => this.#execRuleMatches(r, tool, subs[0]))) {
           return { type: "allow", reason: "whitelist" }
         }
-        if (this.#decided.some((r) => execRuleMatches(r, subs[0]))) {
+        if (this.#decided.some((r) => this.#execRuleMatches(r, tool, subs[0]))) {
           return { type: "allow", reason: "learned" }
         }
         if (this.#sessionGrantsEnabled && this.#grants !== undefined) {
-          const grantHit = this.#grants.rules().some((r) => execRuleMatches(r, subs[0]))
+          const grantHit = this.#grants.rules().some((r) => this.#execRuleMatches(r, tool, subs[0]))
           if (grantHit) return { type: "allow", reason: "session_grant" }
         }
       }
       // The sandbox is the approval, not a human: a command with no rule
       // coverage (including multi-segment lines) that would otherwise go to
-      // confirm runs sandboxed when the OS sandbox is available. It can never
+      // confirm runs sandboxed when the OS sandbox is available — and only
+      // when the assembly actually wrapped THIS tool in it. It can never
       // override a deny above; readonly never reaches here.
-      if (this.#sandboxAvailable) {
+      if (this.#sandboxAvailable && this.#sandboxedTools.has(tool)) {
         return { type: "allow", reason: "sandboxed" }
       }
       // Fail-closed: without the sandbox this stays a human confirmation. When

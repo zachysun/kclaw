@@ -18,8 +18,8 @@ import { raceConfirmation } from "../permissions/broker.js"
 
 /** Gate verdict for one tool call: run it, refuse it, or ask a human. */
 export type PermissionDecision =
-  | { type: "allow"; reason: "safe" | "whitelist" | "session_grant" | "accept_edits" | "learned" | "sandboxed" }
-  | { type: "deny"; reason: "blacklist" | "user_denied" | "timeout" | "readonly"; noteText: string }
+  | { type: "allow"; reason: "safe" | "whitelist" | "session_grant" | "accept_edits" | "learned" | "sandboxed" | "trusted" }
+  | { type: "deny"; reason: "blacklist" | "user_denied" | "timeout" | "readonly" | "mode"; noteText: string }
   | { type: "confirm"; confirmationId: string; noteText?: string }
 
 /** Checked before every tool execution; missing gate == allow everything. */

@@ -347,6 +347,12 @@ describe("custom slash commands + mode", () => {
     await runOrHint(dispatch("/mode acceptEdits", registry), registry, ctx)
     expect(posts[1]).toEqual({ mode: "acceptEdits" })
     expect(set).toEqual(["readonly", "acceptEdits"])
+    await runOrHint(dispatch("/mode trusted", registry), registry, ctx)
+    expect(posts[2]).toEqual({ mode: "trusted" })
+    expect(set).toEqual(["readonly", "acceptEdits", "trusted"])
+    await runOrHint(dispatch("/mode auto", registry), registry, ctx)
+    expect(posts[3]).toEqual({ mode: "auto" })
+    expect(set).toEqual(["readonly", "acceptEdits", "trusted", "auto"])
   })
 
   it("/mode with no args prints the current value; unknown names are rejected", async () => {
@@ -363,7 +369,7 @@ describe("custom slash commands + mode", () => {
     await runOrHint(dispatch("/mode", registry), registry, ctx)
     expect(posts).toEqual([])
     expect(prints[0]).toContain("权限模式")
-    await runOrHint(dispatch("/mode trusted", registry), registry, ctx)
+    await runOrHint(dispatch("/mode ADMIN", registry), registry, ctx)
     expect(posts).toEqual([])
     expect(prints[1]).toContain("未知模式")
   })

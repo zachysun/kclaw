@@ -15,7 +15,7 @@ const SNAPSHOT = {
   global: {
     path: "/home/.kclaw/permissions.yaml",
     rules: [
-      { rule: "exec:git push*", decidedAt: "2026-09-06T00:00:00.000Z", origin: { tool: "exec", argsJson: "{}", sessionId: "ses_1" } },
+      { rule: "exec:git push*", decidedAt: "2026-09-06T00:00:00.000Z", origin: { tool: "exec", argsJson: "{}", sessionId: "ses_1" }, source: "auto" },
     ],
   },
   project: {
@@ -73,6 +73,9 @@ describe("PermissionsView", () => {
     expect(container.textContent).toContain("fs_write:/w/proj/a.md")
     expect(container.textContent).toContain("ses_1")
     expect(container.textContent).toContain("/home/.kclaw/permissions.yaml")
+    // the auto-learned marker renders for a source:"auto" rule, not for manual ones
+    expect(container.querySelector('[data-testid="perm-source-global-0"]')?.textContent).toBe("自动学习")
+    expect(container.querySelector('[data-testid="perm-source-project-0"]')).toBeNull()
   })
 
   it("flags a git-tracked project file as ignored", async () => {

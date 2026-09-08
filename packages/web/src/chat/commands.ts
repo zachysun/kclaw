@@ -10,7 +10,8 @@
  * `help` is intentionally inert here: the composer view intercepts it (it
  * renders the command panel itself), so this branch is a defensive no-op.
  */
-import { isPermissionMode, PERMISSION_MODE_CONFIRMATIONS } from "@kclaw/core/permission-modes"
+import { isPermissionMode, PERMISSION_MODES, PERMISSION_MODE_CONFIRMATIONS } from "@kclaw/core/permission-modes"
+import type { PermissionMode } from "@kclaw/core/permission-modes"
 import type { ParsedSlash } from "@kclaw/core/commands"
 import type { ApiClient } from "../api.js"
 
@@ -29,7 +30,7 @@ export interface WebCommandCtx {
    * Sync the mode selector after a /mode switch POST succeeded (the command
    * already POSTed — this only updates local state, no second request).
    */
-  setMode?(m: "readonly" | "default" | "acceptEdits"): void
+  setMode?(m: PermissionMode): void
   models: string[]
   currentModel?: string
   /** 当前会话的工作目录（/memory save 触发手动写入的目标项目）。 */
@@ -69,11 +70,11 @@ export async function runWebCommand(parsed: ParsedSlash, ctx: WebCommandCtx): Pr
       try {
         if (arg === "") {
           const current = await ctx.api.get<{ mode?: string }>(`/sessions/${encodeURIComponent(ctx.sessionId)}`)
-          ctx.notify(`当前权限模式: ${current.mode ?? "default"}（可选 readonly / default / acceptEdits）`)
+          ctx.notify(`当前权限模式: ${current.mode ?? "default"}（可选 ${PERMISSION_MODES.join(" / ")}）`)
           return true
         }
         if (!isPermissionMode(arg)) {
-          ctx.notify(`未知模式: ${arg}（可选 readonly / default / acceptEdits）`)
+          ctx.notify(`未知模式: ${arg}（可选 ${PERMISSION_MODES.join(" / ")}）`)
           return true
         }
         await ctx.api.post(`/sessions/${encodeURIComponent(ctx.sessionId)}/mode`, { mode: arg })

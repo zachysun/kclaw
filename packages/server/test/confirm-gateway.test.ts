@@ -17,7 +17,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AddressInfo } from "node:net"
 import WebSocket from "ws"
-import { ConfirmationBroker, EventBus, SessionStore, loadConfig, loadDecidedRules, resolvePaths } from "@kclaw/core"
+import { ConfirmationBroker, EventBus, SessionStore, loadConfig, loadDecidedRules, resolvePaths, AutoLearnCounter } from "@kclaw/core"
 import type {
   AgentEvent,
   ConfirmationRequestedPayload,
@@ -212,7 +212,12 @@ async function makeGateway(
   const sessions = new SessionStore(paths.sessionsDir)
   const memory = makeMemoryFake()
   const bus = new EventBus()
-  const manager = new RunManager({ config, paths, sessions, memory, bus, llm, workspace })
+  const manager = new RunManager({
+    config, paths, sessions, memory, bus, llm, workspace,
+    // auto induction (batch C) rides the run assembly seam, wired here like
+    // the daemon does; threshold from config (default 3).
+    autoLearn: { counter: new AutoLearnCounter(config.permissions.autoLearnThreshold ?? 3) },
+  })
 
   const app = await createApp({
     home,
@@ -524,5 +529,182 @@ describe("confirmation gateway over /ws", () => {
     const globalRules = loadDecidedRules(join(env.paths.home, "permissions.yaml"))
     expect(globalRules).toHaveLength(1)
     expect(globalRules[0]!.rule).toBe("exec:git fetch*")
+  }, 30_000)
+
+  it("auto mode inducts a source:'auto' project rule after N consecutive once approvals", async () => {
+    const { env, url } = await makeGateway(
+      scriptClient([
+        execToolTurn("call_1", "git push origin main"),
+        execToolTurn("call_2", "git push origin main"),
+        execToolTurn("call_3", "git push origin main"),
+        textTurn("完成"),
+      ]),
+    )
+    const session = env.sessions.create("自动学习会话")
+    env.sessions.updateMeta(session.id, { mode: "auto" }) // the induction gate
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await waitFor(frames, (f) => f.type === "subscribed")
+
+    const run = env.manager.enqueue(session.id, { userText: "执行 git 操作", trigger: "user" })
+
+    // three identical once approvals (the same narrowed key `exec:git push*`)
+    for (let i = 1; i <= 3; i++) {
+      const requested = (await waitFor(frames, (f) =>
+        f.type === "confirmation.requested" && (f.payload as ConfirmationRequestedPayload).toolCall.callId === `call_${i}`)) as AgentEvent
+      ws.send(JSON.stringify({
+        type: "confirmation.resolve",
+        confirmationId: (requested.payload as ConfirmationRequestedPayload).confirmationId,
+        decision: "once",
+      }))
+      await waitFor(frames, (f) => f.type === "confirmation.resolved_ack")
+    }
+    await run
+
+    const projectRules = loadDecidedRules(join(env.config.workspace, ".kclaw", "permissions.yaml"))
+    expect(projectRules).toHaveLength(1)
+    expect(projectRules[0]!.rule).toBe("exec:git push*")
+    expect(projectRules[0]!.source).toBe("auto")
+  }, 30_000)
+
+  it("a reject resets the streak: approvals split by a 'no' never reach the threshold", async () => {
+    const { env, url } = await makeGateway(
+      scriptClient([
+        execToolTurn("call_1", "git push origin main"),
+        execToolTurn("call_2", "git push origin main"),
+        execToolTurn("call_3", "git push origin main"),
+        execToolTurn("call_4", "git push origin main"),
+        execToolTurn("call_5", "git push origin main"),
+        textTurn("完成"),
+      ]),
+    )
+    const session = env.sessions.create("自动学习拒绝会话")
+    env.sessions.updateMeta(session.id, { mode: "auto" })
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await waitFor(frames, (f) => f.type === "subscribed")
+
+    const run = env.manager.enqueue(session.id, { userText: "执行 git 操作", trigger: "user" })
+
+    const resolve = async (callId: string, decision: "once" | "reject") => {
+      const requested = (await waitFor(frames, (f) =>
+        f.type === "confirmation.requested" && (f.payload as ConfirmationRequestedPayload).toolCall.callId === callId)) as AgentEvent
+      ws.send(JSON.stringify({
+        type: "confirmation.resolve",
+        confirmationId: (requested.payload as ConfirmationRequestedPayload).confirmationId,
+        decision,
+      }))
+      await waitFor(frames, (f) => f.type === "confirmation.resolved_ack")
+    }
+
+    // once, once → streak 2; reject → reset; once, once → streak 2 again
+    await resolve("call_1", "once")
+    await resolve("call_2", "once")
+    await resolve("call_3", "reject")
+    await resolve("call_4", "once")
+    await resolve("call_5", "once")
+    await run
+
+    const projectRules = loadDecidedRules(join(env.config.workspace, ".kclaw", "permissions.yaml"))
+    expect(projectRules).toHaveLength(0) // 2+2 < 3 — the reject's reset held
+  }, 30_000)
+
+  it("project/global verdicts never count toward induction, and mix cleanly with auto rules", async () => {
+    const { env, url } = await makeGateway(
+      scriptClient([
+        execToolTurn("call_1", "git push origin main"),
+        execToolTurn("call_2", "git push origin main"),
+        execToolTurn("call_3", "git fetch"),
+        execToolTurn("call_4", "git push origin main"),
+        textTurn("完成"),
+      ]),
+    )
+    const session = env.sessions.create("自动学习混合会话")
+    env.sessions.updateMeta(session.id, { mode: "auto" })
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await waitFor(frames, (f) => f.type === "subscribed")
+
+    const run = env.manager.enqueue(session.id, { userText: "执行 git 操作", trigger: "user" })
+
+    const resolve = async (callId: string, decision: "once" | "project") => {
+      const requested = (await waitFor(frames, (f) =>
+        f.type === "confirmation.requested" && (f.payload as ConfirmationRequestedPayload).toolCall.callId === callId)) as AgentEvent
+      ws.send(JSON.stringify({
+        type: "confirmation.resolve",
+        confirmationId: (requested.payload as ConfirmationRequestedPayload).confirmationId,
+        decision,
+      }))
+      await waitFor(frames, (f) => f.type === "confirmation.resolved_ack")
+    }
+
+    // once, once → streak 2; project (does NOT advance nor reset); once → streak 3 → induct
+    await resolve("call_1", "once")
+    await resolve("call_2", "once")
+    await resolve("call_3", "project")
+    await resolve("call_4", "once")
+    await run
+
+    const projectRules = loadDecidedRules(join(env.config.workspace, ".kclaw", "permissions.yaml"))
+    expect(projectRules).toHaveLength(2)
+    // the hand-written "always allow" lands unmarked (manual)…
+    const manual = projectRules.find((r) => r.rule === "exec:git fetch*")
+    expect(manual?.source).toBeUndefined()
+    // …while the auto-inducted one is marked
+    const auto = projectRules.find((r) => r.rule === "exec:git push*")
+    expect(auto?.source).toBe("auto")
+  }, 30_000)
+
+  it("a TIMEOUT deny resets the streak: approvals split by a timeout never reach the threshold", async () => {
+    // 200ms confirmation window so a verdict-less confirmation times out
+    // inside the run (the assembly seam sees the timeout and resets).
+    const { env, url } = await makeGateway(
+      scriptClient([
+        execToolTurn("call_1", "git push origin main"),
+        execToolTurn("call_2", "git push origin main"),
+        execToolTurn("call_3", "git push origin main"),
+        execToolTurn("call_4", "git push origin main"),
+        execToolTurn("call_5", "git push origin main"),
+        textTurn("完成"),
+      ]),
+    )
+    env.config.permissions.confirmTimeoutMs = 200
+    const session = env.sessions.create("自动学习超时会话")
+    env.sessions.updateMeta(session.id, { mode: "auto" })
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await waitFor(frames, (f) => f.type === "subscribed")
+
+    const run = env.manager.enqueue(session.id, { userText: "执行 git 操作", trigger: "user" })
+
+    const resolve = async (callId: string) => {
+      const requested = (await waitFor(frames, (f) =>
+        f.type === "confirmation.requested" && (f.payload as ConfirmationRequestedPayload).toolCall.callId === callId)) as AgentEvent
+      ws.send(JSON.stringify({
+        type: "confirmation.resolve",
+        confirmationId: (requested.payload as ConfirmationRequestedPayload).confirmationId,
+        decision: "once",
+      }))
+      await waitFor(frames, (f) => f.type === "confirmation.resolved_ack")
+    }
+
+    // once, once → streak 2; call_3 is left unanswered → times out (a "no"
+    // by silence) → resets; once, once → streak 2 again → no induction
+    await resolve("call_1")
+    await resolve("call_2")
+    await resolve("call_4")
+    await resolve("call_5")
+    await run
+
+    const projectRules = loadDecidedRules(join(env.config.workspace, ".kclaw", "permissions.yaml"))
+    expect(projectRules).toHaveLength(0) // 2 + timeout + 2 < 3 — the reset held
   }, 30_000)
 })

@@ -46,6 +46,7 @@ import {
   type ToolDefinition,
   type ToolExecutor,
   type UsageStore,
+  type AutoLearnCounter,
 } from "@kclaw/core"
 
 export interface RunManagerDeps {
@@ -77,6 +78,13 @@ export interface RunManagerDeps {
    * set — the daemon path relies on the broker alone.
    */
   resolveConfirmation?: (confirmationId: string) => Promise<ConfirmationResolution>
+  /**
+   * Auto-mode induction (batch C): the per-process streak counter, threaded
+   * into every run's assembly (see RunEngineDeps.autoLearn). One instance per
+   * daemon; keys are session-scoped at the assembly seam. Absent → auto mode
+   * keeps the default decision chain without induction (tests).
+   */
+  autoLearn?: { counter: AutoLearnCounter }
   /**
    * Retry-visible llm per run: when set, EVERY
    * run builds its own client through this factory, receiving that run's

@@ -84,6 +84,9 @@ describe("runWebCommand", () => {
     expect(await runWebCommand({ command: "mode", args: "readonly" }, ctx)).toBe(true)
     expect(ctx.api.post).toHaveBeenCalledWith("/sessions/s1/mode", { mode: "readonly" })
     expect(setMode).toHaveBeenCalledWith("readonly")
+    expect(await runWebCommand({ command: "mode", args: "auto" }, ctx)).toBe(true)
+    expect(ctx.api.post).toHaveBeenCalledWith("/sessions/s1/mode", { mode: "auto" })
+    expect(setMode).toHaveBeenCalledWith("auto")
     expect(await runWebCommand({ command: "mode", args: "" }, ctx)).toBe(true)
     expect(ctx.api.get).toHaveBeenCalledWith("/sessions/s1")
     expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("当前权限模式"))
@@ -91,7 +94,7 @@ describe("runWebCommand", () => {
 
   it("/mode rejects an unknown mode name without a POST", async () => {
     const ctx = makeCtx()
-    expect(await runWebCommand({ command: "mode", args: "trusted" }, ctx)).toBe(true)
+    expect(await runWebCommand({ command: "mode", args: "ADMIN" }, ctx)).toBe(true)
     expect(ctx.api.post).not.toHaveBeenCalled()
     expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("未知模式"))
   })

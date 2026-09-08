@@ -14,6 +14,8 @@ interface RuleRow {
   rule: string
   decidedAt: string
   origin: { tool: string; argsJson?: string; sessionId?: string }
+  /** Absent/omitted reads as manual (a human chose "always allow"). */
+  source?: "auto" | "manual"
 }
 
 interface ScopeBlock {
@@ -91,6 +93,7 @@ export function PermissionsView({ api, notice, workdir }: {
             <li key={i} data-testid={`perm-rule-${scope}-${i}`}>
               <code className="perm-rule">{r.rule}</code>
               <span className="perm-meta">
+                {r.source === "auto" && <em className="perm-source" data-testid={`perm-source-${scope}-${i}`}>自动学习</em>}
                 {shortTime(r.decidedAt)}
                 {r.origin.sessionId !== undefined ? ` · ${r.origin.sessionId}` : ""}
               </span>
@@ -110,7 +113,7 @@ export function PermissionsView({ api, notice, workdir }: {
   return (
     <div className="permissions-view" data-testid="permissions-view">
       <p className="muted perm-intro">
-        这些规则来自审批确认里选择「总是允许」的操作：项目档存工作区的
+        这些规则来自审批确认里选择「总是允许」的操作（auto 模式下反复放行的操作会自动沉淀，标注「自动学习」）：项目档存工作区的
         <code>.kclaw/permissions.yaml</code>（自动加入 .gitignore），全局档存
         <code>~/.kclaw/permissions.yaml</code>。删除即收回自动放行。
       </p>

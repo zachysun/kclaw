@@ -337,7 +337,7 @@ describe("sessions routes", () => {
 
   it("POST /sessions/:id/mode switches the mode and returns the updated meta", async () => {
     const created = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
-    for (const mode of ["readonly", "acceptEdits", "default"] as const) {
+    for (const mode of ["readonly", "acceptEdits", "default", "trusted", "auto"] as const) {
       const res = await app.inject({
         method: "POST",
         url: `/sessions/${created.id}/mode`,
@@ -358,7 +358,7 @@ describe("sessions routes", () => {
       method: "POST",
       url: `/sessions/${created.id}/mode`,
       headers: AUTH,
-      payload: { mode: "trusted" },
+      payload: { mode: "ADMIN" },
     })
     expect(res.statusCode).toBe(400)
     expect(typeof (res.json() as { error: string }).error).toBe("string")

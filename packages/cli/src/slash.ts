@@ -9,8 +9,9 @@
  */
 import { isCancel, select } from "@clack/prompts"
 import { parseSlashInput, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
-import { isPermissionMode, PERMISSION_MODE_CONFIRMATIONS } from "@kclaw/core"
+import { isPermissionMode, PERMISSION_MODES, PERMISSION_MODE_CONFIRMATIONS } from "@kclaw/core"
 import type { AttachmentRef } from "@kclaw/core"
+import type { PermissionMode } from "@kclaw/core"
 import type { KclawClient } from "./client.js"
 
 /** Everything a registered command may reach at run time (a view over the chat loop's live state). */
@@ -42,7 +43,7 @@ export interface SlashCtx {
    * Update the chat-loop's local permission-mode mirror after a successful
    * POST (badge + the Shift+Tab cycle base stay in sync with /mode).
    */
-  setMode?(m: "readonly" | "default" | "acceptEdits"): void
+  setMode?(m: PermissionMode): void
   /**
    * Interrupt-send a message: one `send_message` carrying the `interrupt`
    * disposition (the daemon drops the active run and queues this at the
@@ -273,11 +274,11 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
       const arg = args.trim()
       if (arg === "") {
         const current = (await ctx.client.request("GET", `/sessions/${ctx.sessionId}`)) as { mode?: string }
-        ctx.print(`权限模式: ${current.mode ?? "default"}（可选 readonly / default / acceptEdits，或 Shift+Tab 循环切换）`)
+        ctx.print(`权限模式: ${current.mode ?? "default"}（可选 ${PERMISSION_MODES.join(" / ")}，或 Shift+Tab 循环切换）`)
         return
       }
       if (!isPermissionMode(arg)) {
-        ctx.print(`未知模式: ${arg}（可选 readonly / default / acceptEdits）`)
+        ctx.print(`未知模式: ${arg}（可选 ${PERMISSION_MODES.join(" / ")}）`)
         return
       }
       await ctx.client.request("POST", `/sessions/${ctx.sessionId}/mode`, { mode: arg })

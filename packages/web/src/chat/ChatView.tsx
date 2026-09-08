@@ -101,7 +101,13 @@ export interface ChatViewProps {
 }
 
 /** Selector labels per mode; the Record forces a label when a mode ships. */
-const MODE_LABELS: Record<PermissionMode, string> = { readonly: "只读", default: "默认", acceptEdits: "自动编辑" }
+const MODE_LABELS: Record<PermissionMode, string> = {
+  readonly: "只读",
+  default: "默认",
+  acceptEdits: "自动编辑",
+  trusted: "信任",
+  auto: "自动学习",
+}
 
 export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onCancelCompaction, compactions, extraCommands }: ChatViewProps) {
   const [draft, setDraft] = useState("")
@@ -332,9 +338,9 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
             value={mode ?? "default"}
             onChange={(e) => onSwitchMode(e.target.value as PermissionMode)}
           >
-            <option value="readonly">{MODE_LABELS.readonly}</option>
-            <option value="default">{MODE_LABELS.default}</option>
-            <option value="acceptEdits">{MODE_LABELS.acceptEdits}</option>
+            {PERMISSION_MODES.map((m) => (
+              <option key={m} value={m}>{MODE_LABELS[m]}</option>
+            ))}
           </select>
         </div>
       )}

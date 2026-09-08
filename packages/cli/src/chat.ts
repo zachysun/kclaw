@@ -813,7 +813,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
       // succeeded; the next Enter-send carries the new disposition.
       ctx.disposition = d
     },
-    setMode(m: "readonly" | "default" | "acceptEdits") {
+    setMode(m: PermissionMode) {
       // /mode flips the local mirror AFTER the POST succeeded: the badge and
       // the Shift+Tab cycle base follow the daemon-confirmed value.
       ctx.mode = m

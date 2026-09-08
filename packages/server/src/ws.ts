@@ -252,14 +252,17 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
         // from the loop, not from here.
         const actor: ConfirmationActor = check.command.client === "web" ? "web" : "cli"
         const { decision } = check.command
-        const entry = opts.decidedRules !== undefined && (decision === "project" || decision === "global")
-          ? broker.lookup(check.command.confirmationId)
-          : undefined
+        const needsEntry =
+          opts.decidedRules !== undefined && (decision === "project" || decision === "global")
+        const entry = needsEntry ? broker.lookup(check.command.confirmationId) : undefined
         const ok = broker.resolve(check.command.confirmationId, decision, actor)
         if (!ok) return send(socket, { type: "error", message: "unknown confirmation" })
         // Persistence is best-effort and MUST NOT break the confirmation
         // flow: a write failure logs and still acks, the verdict itself has
-        // already settled.
+        // already settled. Only "always allow" (project/global) persists here
+        // — a once/reject/timeout verdict never writes a rule (auto induction
+        // for auto sessions lives in the run assembly's resolveConfirmation,
+        // where every outcome including timeout is visible).
         if (entry !== undefined && opts.decidedRules !== undefined) {
           try {
             const workspace =
