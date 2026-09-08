@@ -146,11 +146,20 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
     })
 
     // Full event stream (event-sourcing truth): oldest-first, includes
-    // session.created, message, and compaction events.
+    // session.created, message, and compaction events. `?since=N` returns
+    // only events at index >= N (the stream is append-only, so the array
+    // index is a stable incremental cursor); omitted or 0 = full stream.
     scope.get("/sessions/:id/events", async (request, reply) => {
       const { id } = request.params as { id: string }
       if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
-      return stores.sessions.readEvents(id)
+      const raw = (request.query as Record<string, unknown>).since
+      let since = 0
+      if (raw !== undefined) {
+        const n = typeof raw === "string" ? Number(raw) : NaN
+        if (!Number.isInteger(n) || n < 0) return reply.code(400).send({ error: "since must be a non-negative integer" })
+        since = n
+      }
+      return stores.sessions.readEvents(id).slice(since)
     })
 
     // Compaction audit log: read-only view over compaction events.

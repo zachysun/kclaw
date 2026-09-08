@@ -164,6 +164,42 @@ describe("sessions routes", () => {
     expect(res.json()).toEqual({ error: "session not found" })
   })
 
+  it("GET /sessions/:id/events?since=N returns only events at index >= N", async () => {
+    const created = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
+    store.appendMessage(created.id, newMessage(created.id, "user", [{ id: "blk_1", type: "text", text: "hello" }]))
+    store.appendMessage(created.id, newMessage(created.id, "assistant", [{ id: "blk_2", type: "text", text: "hi" }]))
+    // 全量 3 条（created + 2 message）；since=1 跳过 session.created
+    const res = await app.inject({ method: "GET", url: `/sessions/${created.id}/events?since=1`, headers: AUTH })
+    expect(res.statusCode).toBe(200)
+    const events = res.json() as Array<{ type: string }>
+    expect(events.map((e) => e.type)).toEqual(["message", "message"])
+  })
+
+  it("GET /sessions/:id/events?since=0 and a missing since both return the full stream", async () => {
+    const created = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
+    store.appendMessage(created.id, newMessage(created.id, "user", [{ id: "blk_1", type: "text", text: "hello" }]))
+    const all = await app.inject({ method: "GET", url: `/sessions/${created.id}/events`, headers: AUTH })
+    const zero = await app.inject({ method: "GET", url: `/sessions/${created.id}/events?since=0`, headers: AUTH })
+    expect((zero.json() as unknown[]).length).toBe((all.json() as unknown[]).length)
+    expect((zero.json() as Array<{ type: string }>)[0]!.type).toBe("session.created")
+  })
+
+  it("GET /sessions/:id/events?since beyond the end returns []", async () => {
+    const created = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
+    const res = await app.inject({ method: "GET", url: `/sessions/${created.id}/events?since=99`, headers: AUTH })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual([])
+  })
+
+  it("GET /sessions/:id/events with a non-numeric or negative since returns 400", async () => {
+    const created = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
+    const bad = await app.inject({ method: "GET", url: `/sessions/${created.id}/events?since=abc`, headers: AUTH })
+    const neg = await app.inject({ method: "GET", url: `/sessions/${created.id}/events?since=-1`, headers: AUTH })
+    expect(bad.statusCode).toBe(400)
+    expect(neg.statusCode).toBe(400)
+    expect(typeof (bad.json() as { error: string }).error).toBe("string")
+  })
+
   it("PATCH /sessions/:id for an unknown id returns 404", async () => {
     const res = await app.inject({
       method: "PATCH",
