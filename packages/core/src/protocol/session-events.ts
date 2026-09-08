@@ -6,7 +6,7 @@
  */
 import type { Message } from "./messages.js"
 
-export interface SessionCreatedEvent { type: "session.created"; at: string; title: string; workdir?: string; jobId?: string }
+export interface SessionCreatedEvent { type: "session.created"; at: string; title: string; workdir?: string; jobId?: string; /** 创建时固化的权限模式快照（config permissions.defaultMode）；缺省 default。 */ mode?: import("../permissions/modes.js").PermissionMode }
 export interface SessionRenamedEvent { type: "session.renamed"; at: string; title: string }
 export interface SessionDeletedEvent { type: "session.deleted"; at: string }
 export interface SessionRestoredEvent { type: "session.restored"; at: string }
@@ -21,5 +21,16 @@ export interface MemoryEvent {
   topic?: string; file?: string; scope?: string; source?: string
 }
 export interface SystemEvent { type: "system"; at: string; text: string }
+export interface SandboxCheckedEvent {
+  type: "sandbox.checked"; at: string
+  /** config 是否开启沙箱（sandbox.enabled）。 */
+  enabled: boolean
+  /** 是否真的执行了平台探测（enabled:false 时为 false）。 */
+  attempted: boolean
+  /** 探测结果：沙箱可用（exec 工具实际被包裹）。 */
+  available: boolean
+  /** 不可用原因（仅 available:false 时可能带；配置关闭时不含——那是主动选择）。 */
+  unavailableReason?: string
+}
 
-export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent | MessageEvent | CompactionEvent | MemoryEvent | SystemEvent
+export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent | MessageEvent | CompactionEvent | MemoryEvent | SystemEvent | SandboxCheckedEvent

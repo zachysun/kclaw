@@ -21,7 +21,7 @@
  *   is logged and dropped: the interval must survive its own failures (v1).
  */
 import { makeEvent } from "@kclaw/core"
-import type { Job, JobScheduler, Message, Notifier, SessionMeta, SessionStore, TextBlock } from "@kclaw/core"
+import type { Job, JobScheduler, Message, Notifier, PermissionMode, SessionMeta, SessionStore, TextBlock } from "@kclaw/core"
 import type { EventBus } from "@kclaw/core"
 import type { RunManager } from "./run.js"
 
@@ -49,6 +49,12 @@ export interface SchedulerTickDeps {
   notifier?: Notifier
   /** Web UI base (e.g. http://127.0.0.1:<port>) for session links in pushes. */
   webBase?: string
+  /**
+   * Initial permission mode for job-created sessions (the daemon's config
+   * `permissions.defaultMode`); absent → "default". Job sessions are daemon
+   * sessions like any other — a configured default applies to them too.
+   */
+  defaultMode?: PermissionMode
 }
 
 /** Handle over a running tick loop. */
@@ -135,7 +141,7 @@ export function startSchedulerTick(deps: SchedulerTickDeps): SchedulerTickHandle
     inFlight.add(job.id)
     let session: SessionMeta | undefined // hoisted: fail() pushes its handle
     try {
-      session = sessions.create(job.name, job.id)
+      session = sessions.create(job.name, job.id, undefined, deps.defaultMode)
       // Keep the job's history bounded: soft-delete older sessions beyond
       // JOB_SESSION_KEEP (newest first). They land in the recycle bin and are
       // purged by the existing retention sweep.

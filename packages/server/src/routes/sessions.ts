@@ -65,7 +65,7 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       const fromSession = stores.memory !== undefined && workdir !== undefined
         ? stores.memory.recentSessionId(workdir)
         : undefined
-      const created = stores.sessions.create(parsed.title, undefined, workdir)
+      const created = stores.sessions.create(parsed.title, undefined, workdir, stores.config?.permissions.defaultMode)
       if (stores.memory !== undefined && workdir !== undefined) {
         void stores.memory.triggerClear(workdir, fromSession).catch((err) => {
           console.error(`kclaw memory clear failed: ${String(err)}`)

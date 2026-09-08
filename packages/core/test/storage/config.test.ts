@@ -103,6 +103,52 @@ describe("loadConfig / saveConfig", () => {
     writeFileSync(join(home, "config.yaml"), "sessions:\n  defaultDisposition: wait\n")
     expect(loadConfig(resolvePaths(home)).sessions.defaultDisposition).toBe("wait")
   })
+  it("permissions.defaultMode defaults to default, merges from yaml, and rejects bad values with a warning", () => {
+    expect(defaultConfig.permissions.defaultMode).toBe("default")
+    const home = mkdtempSync(join(tmpdir(), "kclaw-cfg-"))
+    writeFileSync(join(home, "config.yaml"), "permissions:\n  defaultMode: readonly\n")
+    expect(loadConfig(resolvePaths(home)).permissions.defaultMode).toBe("readonly")
+    // 非法值（要进事件流的字段必须严格校验）回落 default 并警告
+    writeFileSync(join(home, "config.yaml"), "permissions:\n  defaultMode: bogus\n")
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const cfg = loadConfig(resolvePaths(home))
+      expect(cfg.permissions.defaultMode).toBe("default")
+      expect(warn).toHaveBeenCalledOnce()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+  it("permissions 整节非对象（YAML 空节）按默认节整体回落并警告，不裸抛", () => {
+    const home = mkdtempSync(join(tmpdir(), "kclaw-cfg-"))
+    writeFileSync(join(home, "config.yaml"), "permissions:\n") // 解析为 null
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const cfg = loadConfig(resolvePaths(home))
+      expect(cfg.permissions).toEqual(defaultConfig.permissions)
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+  it("defaultMode 非法时只重置该字段，不丢用户已有的 allow/deny", () => {
+    const home = mkdtempSync(join(tmpdir(), "kclaw-cfg-"))
+    writeFileSync(join(home, "config.yaml"), [
+      "permissions:",
+      "  defaultMode: bogus",
+      "  deny:",
+      "    - exec:rm -rf*",
+    ].join("\n"))
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const cfg = loadConfig(resolvePaths(home))
+      expect(cfg.permissions.defaultMode).toBe("default")
+      expect(cfg.permissions.deny).toEqual(["exec:rm -rf*"])
+      expect(warn).toHaveBeenCalledOnce()
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })
 
 describe("memory config", () => {

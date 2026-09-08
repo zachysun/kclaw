@@ -77,6 +77,18 @@ function systemEvent(overrides: Record<string, unknown> = {}): SessionEvent {
   } as unknown as SessionEvent
 }
 
+/** A sandbox.checked event (defaults mirror core SandboxCheckedEvent). */
+function sandboxEvent(overrides: Record<string, unknown> = {}): SessionEvent {
+  return {
+    type: "sandbox.checked",
+    at: "2026-08-19T10:07:00.000Z",
+    enabled: true,
+    attempted: true,
+    available: true,
+    ...overrides,
+  } as unknown as SessionEvent
+}
+
 function makeApi(): ApiClient & {
   get: ReturnType<typeof vi.fn>
   post: ReturnType<typeof vi.fn>
@@ -617,6 +629,77 @@ describe("AuditView (trail)", () => {
     await flush()
 
     expect(container.querySelector('[data-testid="trail-empty"]')?.textContent).toContain("暂无轨迹")
+    unmount(root, container)
+  })
+
+  it("renders a sandbox.checked event as a 沙箱 row: available", async () => {
+    const api = makeApi()
+    api.get.mockImplementation(async (path: string) => {
+      if (path === "/sessions") return [session("s1", "会话1")]
+      if (path === "/sessions/s1/events") return [sandboxEvent()]
+      throw new Error(`unexpected path: ${path}`)
+    })
+
+    const { container, root } = await mount(api)
+    selectValue(container.querySelector('[data-testid="trail-session-select"]') as HTMLSelectElement, "s1")
+    await flush()
+
+    const row = container.querySelector('[data-testid="sandbox-row-sb-0"]')
+    expect(row).not.toBeNull()
+    expect(row!.textContent).toContain("沙箱")
+    expect(row!.textContent).toContain("可用")
+    // Collapsed: the raw fields are not rendered.
+    expect(container.querySelector('[data-testid="sandbox-full-sb-0"]')).toBeNull()
+    unmount(root, container)
+  })
+
+  it("renders an unavailable sandbox row with the reason", async () => {
+    const api = makeApi()
+    api.get.mockImplementation(async (path: string) => {
+      if (path === "/sessions") return [session("s1", "会话1")]
+      if (path === "/sessions/s1/events") {
+        return [sandboxEvent({ available: false, unavailableReason: "bwrap not found on PATH" })]
+      }
+      throw new Error(`unexpected path: ${path}`)
+    })
+
+    const { container, root } = await mount(api)
+    selectValue(container.querySelector('[data-testid="trail-session-select"]') as HTMLSelectElement, "s1")
+    await flush()
+
+    const row = container.querySelector('[data-testid="sandbox-row-sb-0"]')
+    expect(row).not.toBeNull()
+    expect(row!.textContent).toContain("不可用")
+    expect(row!.textContent).toContain("bwrap not found on PATH")
+    unmount(root, container)
+  })
+
+  it("renders a disabled sandbox row as 已关闭 and expands to the raw fields", async () => {
+    const api = makeApi()
+    api.get.mockImplementation(async (path: string) => {
+      if (path === "/sessions") return [session("s1", "会话1")]
+      if (path === "/sessions/s1/events") {
+        return [sandboxEvent({ enabled: false, attempted: false, available: false })]
+      }
+      throw new Error(`unexpected path: ${path}`)
+    })
+
+    const { container, root } = await mount(api)
+    selectValue(container.querySelector('[data-testid="trail-session-select"]') as HTMLSelectElement, "s1")
+    await flush()
+
+    const row = container.querySelector('[data-testid="sandbox-row-sb-0"]')
+    expect(row).not.toBeNull()
+    expect(row!.textContent).toContain("已关闭")
+
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="sandbox-row-sb-0"]') as HTMLButtonElement).click()
+    })
+    const full = container.querySelector('[data-testid="sandbox-full-sb-0"]')
+    expect(full).not.toBeNull()
+    expect(full!.textContent).toContain("enabled: false")
+    expect(full!.textContent).toContain("attempted: false")
+    expect(full!.textContent).toContain("available: false")
     unmount(root, container)
   })
 })

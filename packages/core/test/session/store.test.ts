@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SessionStore } from "../../src/session/store.js"
-import { isSystemEvent } from "../../src/session/events.js"
+import { isSandboxCheckedEvent, isSystemEvent } from "../../src/session/events.js"
 import { newMessage } from "../../src/protocol/messages.js"
 import type { CompactionRecord } from "../../src/session/compaction.js"
 
@@ -285,6 +285,20 @@ describe("SessionStore event sourcing", () => {
     expect(store.meta(meta.id)!.title).toBe("标题")
   })
 
+  it("create 固化初始权限模式：缺省显式写 default，config 默认档传入则写该档", () => {
+    const store = new SessionStore(dir)
+    const dflt = store.create("缺省档")
+    // 事件恒带 mode 字段：meta.mode 永远有真实值（gate 读它判定，不各自回落）
+    const [created] = store.readEvents(dflt.id)
+    expect(created).toMatchObject({ type: "session.created", mode: "default" })
+    expect(store.meta(dflt.id)!.mode).toBe("default")
+
+    const ro = store.create("只读档", undefined, undefined, "readonly")
+    expect(store.meta(ro.id)!.mode).toBe("readonly")
+    const trusted = store.create("信任档", undefined, undefined, "trusted")
+    expect(store.meta(trusted.id)!.mode).toBe("trusted")
+  })
+
   it("appendMessage 写 message 事件，readMessages 还原", () => {
     const store = new SessionStore(dir)
     const meta = store.create()
@@ -314,6 +328,32 @@ describe("SessionStore event sourcing", () => {
     // 其他事件类型不受影响
     expect(store.readMessages(meta.id)).toHaveLength(1)
     expect(store.readCompactions(meta.id)).toHaveLength(1)
+  })
+
+  it("appendSandboxChecked 写 sandbox.checked 事件：恰好一条、字段完整、投影穿透（updatedAt 不动）", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("t")
+    store.updateMeta(meta.id, { model: "gpt-4", mode: "readonly" })
+    const before = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
+    store.appendSandboxChecked(meta.id, {
+      at: new Date().toISOString(),
+      enabled: true,
+      attempted: true,
+      available: false,
+      unavailableReason: "bwrap not found on PATH",
+    })
+    const sandboxEvents = store.readEvents(meta.id).filter(isSandboxCheckedEvent)
+    expect(sandboxEvents).toHaveLength(1)
+    expect(sandboxEvents[0]).toMatchObject({
+      type: "sandbox.checked",
+      enabled: true,
+      attempted: true,
+      available: false,
+      unavailableReason: "bwrap not found on PATH",
+    })
+    // 审计事件不进投影：含 updatedAt 在内的所有投影字段逐字段一致
+    const after = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
+    expect(after).toEqual(before)
   })
 
   it("appendSystem 投影穿透：meta.json 全字段不变；仅 system 事件流 rebuildMeta 不崩", () => {

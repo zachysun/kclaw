@@ -8,28 +8,30 @@
  * per block; compaction events become "压缩" rows; memory events become "记忆"
  * rows; system events become "系统提示词" rows (snippet + char count collapsed,
  * full prompt on expand, "已变化" badge when the text differs from the
- * previous system row); the session metadata events (session.created/renamed/…)
- * are skipped.
+ * previous system row); sandbox.checked events become "沙箱" rows (one per
+ * run: 可用 / 不可用（原因）/ 已关闭); the session metadata events
+ * (session.created/renamed/…) are skipped.
  * Each row shows a type label plus a one-line summary, and expands on click
  * to the full payload. No mutation, no /audit — the old audit tail route is
  * gone.
  */
 import { useEffect, useState } from "react"
 import { type ApiClient } from "../api.js"
-import type { Block, CompactionEvent, MemoryEvent, MessageEvent, Role, SessionEvent, SessionMeta, SystemEvent, ToolGrantReason } from "../types.js"
+import type { Block, CompactionEvent, MemoryEvent, MessageEvent, Role, SandboxCheckedEvent, SessionEvent, SessionMeta, SystemEvent, ToolGrantReason } from "../types.js"
 
 /**
  * One flattened trail row: either a message block (carrying the owning
  * message's role + timestamp, and for tool rows the grant reason), a
- * compaction event (carrying its own `at` timestamp), a memory event, or a
+ * compaction event (carrying its own `at` timestamp), a memory event, a
  * system event (carrying whether its text differs from the previous system
- * row in stream order).
+ * row in stream order), or a sandbox audit event.
  */
 type TrailRow =
   | { kind: "block"; key: string; role: Role; block: Block; createdAt: string; grantedBy?: ToolGrantReason }
   | { kind: "compaction"; key: string; record: CompactionEvent; at: string }
   | { kind: "memory"; key: string; event: MemoryEvent }
   | { kind: "system"; key: string; event: SystemEvent; changed: boolean }
+  | { kind: "sandbox"; key: string; event: SandboxCheckedEvent }
 
 export function AuditView({ api }: { api: ApiClient }) {
   const [sessions, setSessions] = useState<SessionMeta[] | null>(null)
@@ -201,6 +203,26 @@ export function AuditView({ api }: { api: ApiClient }) {
                     )}
                   </li>
                 )
+              case "sandbox":
+                return (
+                  <li key={row.key} className="trail-row-item">
+                    <button
+                      type="button"
+                      className="trail-row"
+                      data-testid={`sandbox-row-${row.key}`}
+                      onClick={toggle}
+                    >
+                      <span className="trail-type">沙箱</span>
+                      <span className="trail-summary">{sandboxSummary(row.event)}</span>
+                      <span className="trail-meta muted">{new Date(row.event.at).toLocaleString()}</span>
+                    </button>
+                    {isExpanded && (
+                      <pre className="trail-full" data-testid={`sandbox-full-${row.key}`}>
+                        {sandboxFullContent(row.event)}
+                      </pre>
+                    )}
+                  </li>
+                )
               default:
                 return (
                   <li key={row.key} className="trail-row-item">
@@ -247,7 +269,8 @@ export function AuditView({ api }: { api: ApiClient }) {
  * their own; each carries `changed` — whether its text differs from the
  * previous system row in stream order (adjacent system rows compare directly,
  * ignoring the rows in between; the first system row of a session never
- * changes). The stream is append-only and time-ordered,
+ * changes). Sandbox audit events become "沙箱" rows. The stream is append-only
+ * and time-ordered,
  * so rows are emitted in event-array order — no timestamp re-sort needed.
  * Session metadata events (session.created/renamed/deleted/restored/set) are
  * intentionally skipped: the trail is about conversation + maintenance
@@ -270,6 +293,7 @@ function flattenTrail(events: SessionEvent[] | null): TrailRow[] {
   let cp = 0
   let mem = 0
   let sys = 0
+  let sb = 0
   let lastSystemText: string | null = null
   for (const event of events) {
     switch (event.type) {
@@ -303,6 +327,9 @@ function flattenTrail(events: SessionEvent[] | null): TrailRow[] {
           changed: lastSystemText !== null && lastSystemText !== event.text,
         })
         lastSystemText = event.text
+        break
+      case "sandbox.checked":
+        rows.push({ kind: "sandbox", key: `sb-${sb++}`, event })
         break
       // session.created / renamed / deleted / restored / set — not rendered
       // (already reflected in the session dropdown). Listed explicitly so a
@@ -341,6 +368,24 @@ function memoryFullContent(event: MemoryEvent): string {
   if (event.file !== undefined) lines.push(`file: ${event.file}`)
   if (event.scope !== undefined) lines.push(`scope: ${event.scope}`)
   if (event.source !== undefined) lines.push(`source: ${event.source}`)
+  return lines.join("\n")
+}
+
+/** One-line sandbox summary: 可用 / 不可用（原因）/ 已关闭. */
+function sandboxSummary(event: SandboxCheckedEvent): string {
+  if (!event.enabled) return "已关闭（配置未启用）"
+  if (!event.available) return `不可用${event.unavailableReason !== undefined ? `（${event.unavailableReason}）` : ""}`
+  return "可用"
+}
+
+/** Full sandbox audit payload on expand. */
+function sandboxFullContent(event: SandboxCheckedEvent): string {
+  const lines = [
+    `enabled: ${event.enabled}`,
+    `attempted: ${event.attempted}`,
+    `available: ${event.available}`,
+  ]
+  if (event.unavailableReason !== undefined) lines.push(`unavailableReason: ${event.unavailableReason}`)
   return lines.join("\n")
 }
 

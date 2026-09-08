@@ -300,7 +300,12 @@ export interface ConfigPermissionGateOptions {
    * missing from the table (model hallucination) gets the strictest default.
    */
   toolFacts?: Map<string, ToolFacts>
-  /** grant store consulted only when config enables sessionGrants */
+  /**
+   * Run-scoped grant store (batch D wiring). Consulted only when config
+   * enables sessionGrants AND the session mode is not `auto`: auto's contract
+   * is learning from HUMAN confirmations — a run grant would hide the
+   * repetitions induction needs to observe (batch C semantics unchanged).
+   */
   grants?: SessionGrants
   /** id factory for confirm decisions (injectable for tests) */
   newConfirmationId?: () => string
@@ -482,7 +487,7 @@ export class ConfigPermissionGate implements PermissionGate {
         if (this.#decided.some((r) => this.#execRuleMatches(r, tool, subs[0]))) {
           return { type: "allow", reason: "learned" }
         }
-        if (this.#sessionGrantsEnabled && this.#grants !== undefined) {
+        if (this.#sessionGrantsEnabled && this.#mode !== "auto" && this.#grants !== undefined) {
           const grantHit = this.#grants.rules().some((r) => this.#execRuleMatches(r, tool, subs[0]))
           if (grantHit) return { type: "allow", reason: "session_grant" }
         }
@@ -545,7 +550,7 @@ export class ConfigPermissionGate implements PermissionGate {
     if (this.#safeTools.has(tool)) {
       return { type: "allow", reason: "safe" }
     }
-    if (this.#sessionGrantsEnabled && this.#grants?.hasMatch(tool, arg, this.#workspace, profile)) {
+    if (this.#sessionGrantsEnabled && this.#mode !== "auto" && this.#grants?.hasMatch(tool, arg, this.#workspace, profile)) {
       return { type: "allow", reason: "session_grant" }
     }
     return { type: "confirm", confirmationId: this.#newConfirmationId() }

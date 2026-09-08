@@ -6,7 +6,7 @@ import type { CompactionRecord, CompactionState } from "./compaction.js"
 import { writeFileAtomic } from "../storage/atomic.js"
 import { appendJsonlLine, readJsonl } from "../storage/jsonl.js"
 import { applyEvent, isCompactionEvent, isMessageEvent } from "./events.js"
-import type { SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent } from "./events.js"
+import type { SandboxCheckedEvent, SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent } from "./events.js"
 import type { AttachmentRef, QueueEntry } from "../protocol/wire.js"
 import type { PermissionMode } from "../permissions/modes.js"
 
@@ -139,11 +139,16 @@ export class SessionStore {
     return meta
   }
 
-  /** Create a new session directory: append a session.created event, return its projected meta. */
-  create(title?: string, jobId?: string, workdir?: string): SessionMeta {
+  /**
+   * Create a new session directory: append a session.created event, return
+   * its projected meta. The initial permission mode is frozen at creation
+   * (the daemon's config default; absent → "default"), so meta.mode always
+   * carries a real value and later config changes only affect NEW sessions.
+   */
+  create(title?: string, jobId?: string, workdir?: string, mode: PermissionMode = "default"): SessionMeta {
     const id = newId("ses")
     const now = new Date().toISOString()
-    const event: SessionCreatedEvent = { type: "session.created", at: now, title: title ?? "新会话" }
+    const event: SessionCreatedEvent = { type: "session.created", at: now, title: title ?? "新会话", mode }
     if (jobId !== undefined) event.jobId = jobId
     if (workdir !== undefined) event.workdir = workdir
     this.appendEvent(id, event)
@@ -214,6 +219,11 @@ export class SessionStore {
   /** Append one system audit event (每次对话运行的系统提示词全量留痕); the projection stays untouched (不推进 updatedAt)。 */
   appendSystem(id: string, event: Omit<SystemEvent, "type">): void {
     this.appendEvent(id, { type: "system", ...event })
+  }
+
+  /** Append one sandbox audit event (每 run 一条，run 装配探测后立即落盘); the projection stays untouched (不推进 updatedAt)。 */
+  appendSandboxChecked(id: string, event: Omit<SandboxCheckedEvent, "type">): void {
+    this.appendEvent(id, { type: "sandbox.checked", ...event })
   }
 
   /**

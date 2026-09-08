@@ -1845,6 +1845,90 @@ describe("RunManager model resolution + usage recording", () => {
   })
 })
 
+// --- sandbox.checked 事件审计（批次 D，第 10 种持久化事件）---------------------
+// 每次 run 在沙箱探测后立即落一条 sandbox.checked 事件：config 开关、是否真的
+// 探测、探测结果与原因（只落盘，不上总线；不进投影、不推进 updatedAt）。语义
+// 拍板：写入失败即本次 run 失败（与 system 事件同待遇——审计承诺必须完整）。
+
+describe("RunManager sandbox.checked 事件审计", () => {
+  type StreamEvent = ReturnType<SessionStore["readEvents"]>[number]
+  const isSandbox = (e: StreamEvent): e is StreamEvent & { type: "sandbox.checked"; enabled: boolean; attempted: boolean; available: boolean } =>
+    e.type === "sandbox.checked"
+
+  it("一次 run 落恰好一条 sandbox.checked：配置关闭时 enabled/attempted 为 false、不带原因", async () => {
+    const { env, manager } = makeEnv(scriptClient([textTurn("收到")])) // makeEnv 默认关闭沙箱
+    const session = env.sessions.create("沙箱审计关闭会话")
+
+    await manager.enqueue(session.id, { userText: "你好", trigger: "user" })
+
+    const events = env.sessions.readEvents(session.id)
+    const sandboxEvents = events.filter(isSandbox)
+    expect(sandboxEvents).toHaveLength(1)
+    expect(sandboxEvents[0]).toMatchObject({ enabled: false, attempted: false, available: false })
+    expect("unavailableReason" in sandboxEvents[0]!).toBe(false)
+    // 流序：sandbox.checked 先于本 run 的 user 消息事件
+    const sbIdx = events.findIndex(isSandbox)
+    const userMsgIdx = events.findIndex((e) => e.type === "message" && e.role === "user")
+    expect(userMsgIdx).toBeGreaterThan(sbIdx)
+  })
+
+  it("配置开启时如实留痕宿主探测结果", async () => {
+    // 宿主的真实探测结果（macOS sandbox-exec / Linux bwrap）：有沙箱则
+    // available:true，无则 false 且带原因——本测试两种走向都必须如实断言。
+    const hasHostSandbox =
+      process.platform === "darwin" ||
+      spawnSync("which", ["bwrap"], { encoding: "utf8" }).status === 0
+    const { env, manager } = makeEnv(
+      scriptClient([textTurn("收到")]),
+      (c) => { c.sandbox = { enabled: true, writeRoots: [] } },
+    )
+    const session = env.sessions.create("沙箱审计开启会话")
+
+    await manager.enqueue(session.id, { userText: "你好", trigger: "user" })
+
+    const [sandboxEvent] = env.sessions.readEvents(session.id).filter(isSandbox)
+    expect(sandboxEvent!.enabled).toBe(true)
+    expect(sandboxEvent!.attempted).toBe(true)
+    expect(sandboxEvent!.available).toBe(hasHostSandbox)
+    if (!hasHostSandbox) expect(typeof sandboxEvent!.unavailableReason).toBe("string")
+  })
+
+  it("appendSandboxChecked 写入失败即本次 run 失败：outcome 拒绝 + queue_entry_failed 可见性，驱动器不停转", async () => {
+    const { env, manager } = makeEnv(scriptClient([textTurn("收到")]))
+    const session = env.sessions.create("炸沙箱审计会话")
+    const socket = new FakeSocket()
+    env.bus.subscribe(session.id, socket)
+
+    // 只炸 appendSandboxChecked 的 store 视图："跑了但没留痕"的静默缺口不允许
+    const failingStore = Object.create(env.sessions) as SessionStore
+    Object.defineProperty(failingStore, "appendSandboxChecked", {
+      value(): void {
+        throw new Error("disk full: cannot append sandbox.checked")
+      },
+    })
+    const failingManager = new RunManager({
+      config: env.config, paths: env.paths, sessions: failingStore,
+      memory: env.memory, bus: env.bus,
+      llm: scriptClient([textTurn("收到")]), workspace: env.config.workspace,
+    })
+
+    // 装配段（runAgent 之前）同步抛 → 驱动器条目级失败兜底：outcome 以该错误拒绝
+    await expect(failingManager.enqueue(session.id, { userText: "写不进去", trigger: "user" }))
+      .rejects.toThrow("disk full: cannot append sandbox.checked")
+
+    // 可见性：bus 上补发 run.failed {code:"queue_entry_failed"}，message 带原因
+    const failed = received(socket).find((e) => e.type === "run.failed")
+    expect(failed).toBeDefined()
+    expect(failed!.payload).toMatchObject({ error: { code: "queue_entry_failed" } })
+    expect((failed!.payload as { error: { message: string } }).error.message).toContain("disk full")
+
+    // 驱动器没有停转：随后一次正常 enqueue 照常完成并补上审计
+    const outcome = await manager.enqueue(session.id, { userText: "再来一次", trigger: "user" })
+    expect(outcome.stopReason).toBe("end_turn")
+    expect(env.sessions.readEvents(session.id).filter(isSandbox)).toHaveLength(1)
+  })
+})
+
 describe("RunManager readonly mode", () => {
   it("denies write-class tool calls with a denied note when the session mode is readonly", async () => {
     const { env, manager } = makeEnv(scriptClient([

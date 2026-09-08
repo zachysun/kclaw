@@ -69,6 +69,17 @@ describe("ConfigPermissionGate", () => {
     grants.grant("exec:npm test")
     expect(await g.check(tc("exec", { command: "npm test" }))).toMatchObject({ type: "allow", reason: "session_grant" })
   })
+  it("auto mode does NOT consult run grants: a granted call still confirms (induction must see human approvals)", async () => {
+    // batch C semantics preserved: auto learns from once approvals — a run
+    // grant would hide the repetitions the counter needs. Even a populated
+    // grant store is ignored in auto mode.
+    const grants = new SessionGrants()
+    grants.grant("exec:npm test")
+    const g = new ConfigPermissionGate(CFG, {
+      toolFacts: BUILTIN_FACTS, safeTools: new Set(), grants, mode: "auto",
+    })
+    expect(await g.check(tc("exec", { command: "npm test" }))).toMatchObject({ type: "confirm" })
+  })
   it("falls through to confirm with fresh confirmationId", async () => {
     const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set() })
     const d = await g.check(tc("exec", { command: "curl example.com" }))

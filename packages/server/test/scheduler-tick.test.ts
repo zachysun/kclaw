@@ -32,6 +32,7 @@ import type {
   LlmClient,
   LlmStreamEvent,
   MemorySystem,
+  PermissionMode,
 } from "@kclaw/core"
 import { RunManager } from "../src/run.js"
 import { startSchedulerTick } from "../src/scheduler-tick.js"
@@ -155,7 +156,7 @@ function backdate(scheduler: JobScheduler, id: string): void {
   scheduler.update(id, { nextRunAt: new Date(Date.now() - 60_000).toISOString() })
 }
 
-function startTick(env: TickEnv, intervalMs: number, purgeTtlMs?: number): { stop(): Promise<void> } {
+function startTick(env: TickEnv, intervalMs: number, purgeTtlMs?: number, defaultMode?: PermissionMode): { stop(): Promise<void> } {
   const tick = startSchedulerTick({
     scheduler: env.scheduler,
     run: env.manager,
@@ -163,6 +164,7 @@ function startTick(env: TickEnv, intervalMs: number, purgeTtlMs?: number): { sto
     sessions: env.sessions,
     intervalMs,
     purgeTtlMs,
+    ...(defaultMode === undefined ? {} : { defaultMode }),
   })
   tickers.push(tick)
   return tick
@@ -215,6 +217,20 @@ describe("startSchedulerTick", () => {
     await sleep(100)
     expect(received(env.socket).filter((e) => e.type === "job.started")).toHaveLength(1)
     expect(env.sessions.list()).toHaveLength(1)
+  })
+
+  it("job-created sessions honor the injected defaultMode (daemon config)", async () => {
+    const env = makeEnv(scriptClient([textTurn("好了")]))
+    const job = env.scheduler.create({ name: "只读任务", cron: "* * * * *", prompt: "跑一下" })
+    backdate(env.scheduler, job.id)
+
+    startTick(env, 25, undefined, "readonly")
+
+    await waitForEvent(env.socket, "job.completed")
+
+    // the daemon's default mode applies to job sessions too, frozen at creation
+    const [session] = env.sessions.list()
+    expect(session.mode).toBe("readonly")
   })
 
   it("fires due jobs through claimDue (no double-fire on overlapping ticks)", async () => {

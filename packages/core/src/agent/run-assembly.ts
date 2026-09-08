@@ -44,7 +44,7 @@ import type { KclawPaths } from "../storage/paths.js"
 import type { UsageStore } from "../storage/usage.js"
 import type { SessionStore } from "../session/store.js"
 import type { Compactor } from "../session/compactor.js"
-import { ConfigPermissionGate, realpathWithin } from "../permissions/engine.js"
+import { ConfigPermissionGate, realpathWithin, SessionGrants } from "../permissions/engine.js"
 import { appendDecidedRule, loadDecidedRulesForRun, narrowDecidedRule, projectDecidedRulesPath } from "../storage/decided-rules.js"
 import type { AutoLearnCounter } from "../permissions/auto-learn.js"
 import { ConfirmationBroker, raceConfirmation, type ConfirmationResolution } from "../permissions/broker.js"
@@ -330,6 +330,20 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   const sandboxUnavailableNote = sandboxAttempted && !sandbox.available
     ? "exec 沙箱不可用，本次操作需人工确认"
     : undefined
+  // Sandbox audit event (batch D): one per run, right after the probe — the
+  // session's trail then shows what sandbox state THIS run had (config switch,
+  // probe attempt, availability, reason) beside the grantedBy/deny trail of
+  // what the gate decided with it. Same contract as the system audit event: a
+  // write failure fails the run (the audit promise is all-or-nothing). A
+  // deliberately disabled sandbox carries no reason — that's a choice, not an
+  // environment problem.
+  sessions.appendSandboxChecked(sessionId, {
+    at: new Date().toISOString(),
+    enabled: sandboxAttempted,
+    attempted: sandboxAttempted,
+    available: sandbox.available,
+    ...(sandboxAttempted && sandbox.unavailableReason !== undefined ? { unavailableReason: sandbox.unavailableReason } : {}),
+  })
 
   const { tools, toolDefs } = createBuiltinTools({
     workspace,
@@ -374,6 +388,13 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // here with a warning — a cloned repo must not pre-authorize itself.
   const decided = loadDecidedRulesForRun(paths, workspace)
 
+  // SessionGrants (batch D): run-scoped grant store. A once-approval in THIS
+  // run lands here (see the resolveConfirmation seam below), so the same call
+  // stops re-prompting until the run ends — the next message asks again.
+  // Wired only when config enables the feature; cross-run persistence stays
+  // with decided rules, so no long-lived exemption is ever created here.
+  const grants = config.permissions.sessionGrants === true ? new SessionGrants() : undefined
+
   const baseGate = new ConfigPermissionGate(config.permissions, {
     workspace,
     safeTools: new Set([...tools].filter(([, t]) => t.risk === "safe").map(([name]) => name)),
@@ -399,6 +420,9 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     // the wrapper below; no other executor does). The gate's "sandboxed"
     // auto-pass must never claim an unwrapped tool is sandboxed.
     sandboxedTools: sandbox.available ? new Set(["exec"]) : new Set(),
+    // Run-scoped grants (batch D): consulted only when config enables
+    // sessionGrants; reason "session_grant".
+    grants,
   })
   const confirmTimeoutMs = config.permissions.confirmTimeoutMs
   const broker = engine.deps.broker
@@ -450,6 +474,16 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       return { decision: "timeout", by: "timeout" }
     }
     if (raced.by === "timeout") broker.expire(confirmationId)
+    // SessionGrants (batch D): a once-approval also lands in this run's grant
+    // store, keyed by the same narrowed rule the gate re-checks — the same
+    // call within THIS run stops re-prompting. project/global approvals
+    // already persist a rule (no grant needed); reject/timeout never grant.
+    // The gate skips grants in `auto` mode (learning observes human
+    // confirmations), so an auto-mode write here is dead weight — harmless,
+    // and kept unconditional so the seam never has to know the gate's modes.
+    if (raced.decision === "once" && call !== undefined) {
+      grants?.grant(narrowDecidedRule(call, workspace))
+    }
     const autoLearn = engine.deps.autoLearn
     if (autoLearn !== undefined && sessionMeta?.mode === "auto" && call !== undefined) {
       // Key is scoped per session: streaks must never leak across sessions

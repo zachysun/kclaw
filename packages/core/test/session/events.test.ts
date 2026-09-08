@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { applyEvent, isSystemEvent, type SessionEvent } from "../../src/session/events.js"
+import { applyEvent, isSandboxCheckedEvent, isSystemEvent, type SessionEvent } from "../../src/session/events.js"
 import type { SessionMeta } from "../../src/session/store.js"
 
 const base: SessionMeta = { id: "ses_1", title: "t", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }
@@ -9,6 +9,13 @@ describe("applyEvent", () => {
     const meta = applyEvent(base, { type: "session.created", at: "2026-01-01T00:00:00.000Z", title: "新会话", workdir: "/w" })
     expect(meta.title).toBe("新会话")
     expect(meta.workdir).toBe("/w")
+  })
+
+  it("session.created 带 mode 时投影进 meta.mode；不带则不设（旧事件流）", () => {
+    const withMode = applyEvent(base, { type: "session.created", at: "a", title: "只读会话", mode: "readonly" })
+    expect(withMode.mode).toBe("readonly")
+    const legacy = applyEvent(base, { type: "session.created", at: "a", title: "旧会话" })
+    expect("mode" in legacy).toBe(false)
   })
 
   it("message 刷 updatedAt", () => {
@@ -80,6 +87,30 @@ describe("applyEvent", () => {
     const meta = applyEvent(base, { type: "system", at: "2026-01-04T00:00:00.000Z", text: "系统提示词全文" })
     expect(meta.updatedAt).toBe("2026-01-01T00:00:00.000Z")
     expect(meta).toEqual(base)
+  })
+
+  it("sandbox.checked 不刷 updatedAt 且不改任何投影字段（审计事件）", () => {
+    const meta = applyEvent(base, {
+      type: "sandbox.checked", at: "2026-01-05T00:00:00.000Z",
+      enabled: true, attempted: true, available: false, unavailableReason: "bwrap not found on PATH",
+    })
+    expect(meta.updatedAt).toBe("2026-01-01T00:00:00.000Z")
+    expect(meta).toEqual(base)
+  })
+})
+
+describe("isSandboxCheckedEvent", () => {
+  it("接受 sandbox.checked 事件", () => {
+    expect(isSandboxCheckedEvent({ type: "sandbox.checked", at: "a", enabled: true, attempted: true, available: true })).toBe(true)
+  })
+
+  it("拒绝其他事件类型", () => {
+    const events: SessionEvent[] = [
+      { type: "message", id: "m1", sessionId: "ses_1", role: "user", blocks: [], createdAt: "2026-01-02T00:00:00.000Z" },
+      { type: "system", at: "a", text: "x" },
+      { type: "memory", at: "a", trigger: "follow", kind: "episode", op: "append", topic: "kclaw" },
+    ]
+    for (const e of events) expect(isSandboxCheckedEvent(e)).toBe(false)
   })
 })
 

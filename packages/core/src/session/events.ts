@@ -1,15 +1,15 @@
 import type {
-  CompactionEvent, MemoryEvent, MessageEvent, SessionCreatedEvent, SessionDeletedEvent,
+  CompactionEvent, MemoryEvent, MessageEvent, SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
   SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SessionEvent, SystemEvent,
 } from "../protocol/session-events.js"
 import type { SessionMeta } from "./store.js"
 
-// The nine event types live in protocol/session-events.ts (the browser-safe
+// The ten event types live in protocol/session-events.ts (the browser-safe
 // canon the web trail view imports); this module owns the runtime side —
 // guards and the meta projection — and re-exports the types for the Node
 // packages that historically imported them from here.
 export type {
-  CompactionEvent, MemoryEvent, MessageEvent, SessionCreatedEvent, SessionDeletedEvent,
+  CompactionEvent, MemoryEvent, MessageEvent, SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
   SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SystemEvent,
 } from "../protocol/session-events.js"
 
@@ -17,6 +17,7 @@ export function isMessageEvent(e: SessionEvent): e is MessageEvent { return e.ty
 export function isCompactionEvent(e: SessionEvent): e is CompactionEvent { return e.type === "compaction" }
 export function isMemoryEvent(e: SessionEvent): e is MemoryEvent { return e.type === "memory" }
 export function isSystemEvent(e: SessionEvent): e is SystemEvent { return e.type === "system" }
+export function isSandboxCheckedEvent(e: SessionEvent): e is SandboxCheckedEvent { return e.type === "sandbox.checked" }
 
 export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta {
   const next = { ...meta }
@@ -27,6 +28,8 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
       next.updatedAt = event.at
       if (event.workdir !== undefined) next.workdir = event.workdir
       if (event.jobId !== undefined) next.jobId = event.jobId
+      // 创建时固化的默认模式：旧事件流无 mode → 投影不设（gate 读时回落 default）。
+      if (event.mode !== undefined) next.mode = event.mode
       break
     }
     case "session.renamed": next.title = event.title; next.updatedAt = event.at; break
@@ -62,6 +65,7 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
       break
     }
     case "memory": break // 不更新任何投影字段（含 updatedAt）
+    case "sandbox.checked": break // 审计事件同样不进投影、不推进 updatedAt
   }
   return next
 }

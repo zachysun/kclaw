@@ -373,7 +373,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // reconnecting clients are corrected wholesale by GET /queue.
   run.recoverQueues()
 
-  const tick = startSchedulerTick({ scheduler: jobs, run, bus, sessions, intervalMs: opts.schedulerIntervalMs ?? DEFAULT_SCHEDULER_INTERVAL_MS, purgeTtlMs: config.sessions.recycleBinTtlMs, notifier, webBase: `http://${HOST}:${port}` })
+  const tick = startSchedulerTick({ scheduler: jobs, run, bus, sessions, intervalMs: opts.schedulerIntervalMs ?? DEFAULT_SCHEDULER_INTERVAL_MS, purgeTtlMs: config.sessions.recycleBinTtlMs, notifier, webBase: `http://${HOST}:${port}`, defaultMode: config.permissions.defaultMode })
   // 记忆调度器：定时 + 跟随补查。workdirs = 全部有会话的
   // 项目（去重）；daemon 重启后首次 sweep 会补查落盘的挂起跟随检查。
   const memoryTick = startMemoryScheduler({

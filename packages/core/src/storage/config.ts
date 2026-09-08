@@ -5,6 +5,7 @@ import { DEFAULT_LLM_TIMEOUT_MS } from "../provider/openai-compat.js"
 import type { KclawPaths } from "./paths.js"
 import type { NotifyChannel } from "../notify/notify.js"
 import type { McpServerConfig } from "../mcp/manager.js"
+import { isPermissionMode, type PermissionMode } from "../permissions/modes.js"
 
 /** `sandbox:` section of config.yaml (daemon-level). */
 export interface SandboxConfig {
@@ -25,7 +26,7 @@ export interface KclawConfig {
      */
     timeoutMs?: number
   }
-  permissions: { allow: string[]; deny: string[]; confirmTimeoutMs: number; sessionGrants: boolean; autoLearnThreshold?: number }
+  permissions: { allow: string[]; deny: string[]; confirmTimeoutMs: number; sessionGrants: boolean; autoLearnThreshold?: number; /** 新会话的初始权限模式（创建时固化为 meta.mode）。缺省 "default"。 */ defaultMode?: PermissionMode }
   memory: {
     write: { immediate: boolean; manual: boolean; intervalMinutes: number; idleMinutes: number }
     /** 提取与内化用的模型；空 = 回落主对话模型。 */
@@ -122,7 +123,7 @@ export interface KclawConfig {
 
 export const defaultConfig: KclawConfig = {
   providers: { default: "", entries: {}, timeoutMs: DEFAULT_LLM_TIMEOUT_MS },
-  permissions: { allow: [], deny: ["exec:sudo*", "exec:rm -rf*"], confirmTimeoutMs: 120_000, sessionGrants: true },
+  permissions: { allow: [], deny: ["exec:sudo*", "exec:rm -rf*"], confirmTimeoutMs: 120_000, sessionGrants: true, defaultMode: "default" },
   memory: {
     write: { immediate: true, manual: true, intervalMinutes: 30, idleMinutes: 10 },
     extractModel: "",
@@ -192,7 +193,20 @@ export function loadConfig(paths: KclawPaths): KclawConfig {
   if (legacyAutoExtract !== undefined) {
     console.warn("kclaw config: memory.autoExtract is deprecated (v1) and ignored; use memory.write.* instead")
   }
-  return deepMerge(structuredClone(defaultConfig), file)
+  const merged = deepMerge(structuredClone(defaultConfig), file)
+  // permissions.defaultMode 会进事件流（session.created 的 mode 字段），必须严格校验；
+  // 非法值（含 YAML 里 `permissions:` 空节解析为 null 的整节非对象）回落 "default" 并
+  // 警告。整节非对象时按默认节整体回落（没有可保留的合法内容）；字段非法时只重置该字段，
+  // 不碰用户已有的 allow/deny 等。
+  const perms = merged.permissions
+  if (!isPlainObject(perms)) {
+    console.warn("kclaw config: permissions section is not a mapping; falling back to defaults")
+    merged.permissions = { ...defaultConfig.permissions }
+  } else if (!isPermissionMode(perms.defaultMode)) {
+    console.warn(`kclaw config: permissions.defaultMode "${String(perms.defaultMode)}" is invalid; falling back to "default"`)
+    merged.permissions.defaultMode = "default"
+  }
+  return merged
 }
 
 /** Serialize config to config.yaml (atomic whole-file rewrite; 0600 — holds apiKey plaintext). */

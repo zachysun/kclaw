@@ -708,3 +708,123 @@ describe("confirmation gateway over /ws", () => {
     expect(projectRules).toHaveLength(0) // 2 + timeout + 2 < 3 — the reset held
   }, 30_000)
 })
+
+// --- sessionGrants run 级接线（批次 D）-----------------------------------------
+// 引擎的 session_grant 判定批次一就绪；本块验收 run 装配的真实接线：一次
+// once 确认把同一收窄规则写入本次 run 的 grant store，同一 run 内同操作
+// 不再弹确认（reason session_grant）；reject 不写；config 关闭特性时不接线。
+
+describe("sessionGrants run 级接线", () => {
+  it("a once approval grants the SAME call within this run — the repeat call auto-passes, no second confirmation", async () => {
+    const { env, url } = await makeGateway(
+      scriptClient([
+        execToolTurn("call_1", "git push origin main"),
+        execToolTurn("call_2", "git push origin main"),
+        textTurn("完成"),
+      ]),
+    )
+    const session = env.sessions.create("会话级豁免会话")
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await waitFor(frames, (f) => f.type === "subscribed")
+
+    const run = env.manager.enqueue(session.id, { userText: "执行 git 操作", trigger: "user" })
+
+    // the first identical call is confirmed once...
+    const requested = (await waitFor(frames, (f) =>
+      f.type === "confirmation.requested" && (f.payload as ConfirmationRequestedPayload).toolCall.callId === "call_1")) as AgentEvent
+    ws.send(JSON.stringify({
+      type: "confirmation.resolve",
+      confirmationId: (requested.payload as ConfirmationRequestedPayload).confirmationId,
+      decision: "once",
+    }))
+    await waitFor(frames, (f) => f.type === "confirmation.resolved_ack")
+    await run
+
+    // ...the second identical call in the SAME run hit the run-scoped grant
+    // store (reason session_grant): exactly ONE confirmation was requested.
+    const events = frames.filter(isAgentEvent)
+    expect(events.filter((e) => e.type === "confirmation.requested")).toHaveLength(1)
+
+    const tools = env.sessions.readMessages(session.id).filter((m) => m.role === "tool") as ToolMessage[]
+    expect(tools).toHaveLength(2)
+    expect(tools[0]!.grantedBy).toEqual({ call_1: "confirmed" })
+    expect(tools[1]!.grantedBy).toEqual({ call_2: "session_grant" })
+  }, 30_000)
+
+  it("a reject grants nothing — the same call re-confirms within the run", async () => {
+    const { env, url } = await makeGateway(
+      scriptClient([
+        execToolTurn("call_1", "git push origin main"),
+        execToolTurn("call_2", "git push origin main"),
+        textTurn("完成"),
+      ]),
+    )
+    const session = env.sessions.create("会话级豁免拒绝会话")
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await waitFor(frames, (f) => f.type === "subscribed")
+
+    const run = env.manager.enqueue(session.id, { userText: "执行 git 操作", trigger: "user" })
+
+    const resolve = async (callId: string, decision: "once" | "reject") => {
+      const requested = (await waitFor(frames, (f) =>
+        f.type === "confirmation.requested" && (f.payload as ConfirmationRequestedPayload).toolCall.callId === callId)) as AgentEvent
+      ws.send(JSON.stringify({
+        type: "confirmation.resolve",
+        confirmationId: (requested.payload as ConfirmationRequestedPayload).confirmationId,
+        decision,
+      }))
+      await waitFor(frames, (f) => f.type === "confirmation.resolved_ack")
+    }
+
+    await resolve("call_1", "reject")
+    await resolve("call_2", "once")
+    await run
+
+    // the reject granted nothing: call_2 still needed a human confirmation
+    const events = frames.filter(isAgentEvent)
+    expect(events.filter((e) => e.type === "confirmation.requested")).toHaveLength(2)
+  }, 30_000)
+
+  it("config disables sessionGrants: a once approval does not suppress the repeat confirm", async () => {
+    const { env, url } = await makeGateway(
+      scriptClient([
+        execToolTurn("call_1", "git push origin main"),
+        execToolTurn("call_2", "git push origin main"),
+        textTurn("完成"),
+      ]),
+    )
+    env.config.permissions.sessionGrants = false // the daemon switched the feature off
+    const session = env.sessions.create("会话级豁免关闭会话")
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await waitFor(frames, (f) => f.type === "subscribed")
+
+    const run = env.manager.enqueue(session.id, { userText: "执行 git 操作", trigger: "user" })
+
+    const resolve = async (callId: string) => {
+      const requested = (await waitFor(frames, (f) =>
+        f.type === "confirmation.requested" && (f.payload as ConfirmationRequestedPayload).toolCall.callId === callId)) as AgentEvent
+      ws.send(JSON.stringify({
+        type: "confirmation.resolve",
+        confirmationId: (requested.payload as ConfirmationRequestedPayload).confirmationId,
+        decision: "once",
+      }))
+      await waitFor(frames, (f) => f.type === "confirmation.resolved_ack")
+    }
+
+    await resolve("call_1")
+    await resolve("call_2")
+    await run
+
+    const events = frames.filter(isAgentEvent)
+    expect(events.filter((e) => e.type === "confirmation.requested")).toHaveLength(2)
+  }, 30_000)
+})

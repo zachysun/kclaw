@@ -64,6 +64,18 @@ describe("sessions routes", () => {
     expect((res.json() as SessionMeta).workdir).toBe("/ws/root")
   })
 
+  it("POST /sessions 把 config.permissions.defaultMode 固化为会话初始模式（缺省 default）", async () => {
+    const dflt = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
+    expect(dflt.mode).toBe("default")
+
+    // 改 config 默认档：只影响之后新建的会话（创建时固化，旧会话不变）
+    config.permissions.defaultMode = "readonly"
+    const ro = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
+    expect(ro.mode).toBe("readonly")
+    const stale = (await app.inject({ method: "GET", url: `/sessions/${dflt.id}`, headers: AUTH })).json() as SessionMeta
+    expect(stale.mode).toBe("default")
+  })
+
   it("POST /sessions with an empty workdir string returns 400", async () => {
     const res = await app.inject({
       method: "POST", url: "/sessions", headers: AUTH, payload: { workdir: "" },

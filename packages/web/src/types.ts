@@ -8,7 +8,7 @@
 export type {
   AttachmentBlock, AttachmentSource, Block, Message, NoteBlock, NoteKind, Role,
   TextBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock, ToolStatus,
-  CompactionEvent, MemoryEvent, MessageEvent, SessionCreatedEvent, SessionDeletedEvent,
+  CompactionEvent, MemoryEvent, MessageEvent, SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
   SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SystemEvent,
 } from "@kclaw/core/protocol"
 // The core canon names this GrantedBy; the web UI's historical name stays.
