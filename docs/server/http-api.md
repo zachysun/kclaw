@@ -38,7 +38,7 @@
 | POST | `/sessions/:id/model` | 会话级模型切换（只影响此会话**之后**的 run，历史不动） | `{model?}`：provider 条目名（entry key，见 [run-manager](./run-manager.md) 的模型解析）或裸模型名；`""`/缺省清空回落默认；类型不对 400 `model must be a string`，条目不存在 400 `model not found: <name>` | `SessionMeta` |
 | POST | `/sessions/:id/mode` | 会话级权限模式切换（只影响此会话**之后**的 run，历史不动；机制见 [permissions](../core/permissions.md)） | `{mode: "readonly"\|"default"\|"acceptEdits"\|"trusted"\|"auto"}` 必填；非法值 400 `mode must be one of readonly | default | acceptEdits | trusted | auto` | `SessionMeta` |
 | GET | `/sessions/:id/messages` | 读全部消息（对话/断线恢复的数据源，ChatPanel 用） | — | `Message[]`（事件流投影视图——`readMessages` 从 events.jsonl 过滤 `message` 事件按事件序返回；**排队未执行的消息不在其中**，见 `/queue`） |
-| GET | `/sessions/:id/events` | 完整事件流（事件溯源的唯一真相；轨迹页的单源数据） | — | `SessionEvent[]`（append-only，按事件序；含 session.created / message / compaction / memory / system / sandbox.checked 等全部事件，见 [storage](../core/storage.md)） |
+| GET | `/sessions/:id/events` | 完整事件流（事件溯源的唯一真相；审计页的单源数据） | `since?`：非负整数，只返回数组下标 `>= since` 的事件（流是 append-only，下标即稳定增量游标；缺省/0 = 全量；越界返回 `[]`；负数/非整数 400 `since must be a non-negative integer`） | `SessionEvent[]`（append-only，按事件序；含 session.created / message / compaction / memory / system / sandbox.checked 等全部事件，见 [storage](../core/storage.md)） |
 | GET | `/sessions/:id/queue` | 排队消息快照：重连/刷新的全量纠偏兜底 | — | `QueueEntry[]`（`queue.jsonl` 整文件读出，数组顺序即执行顺序；steer 条目排在可执行条目之后；空队列返回 `[]`） |
 | POST | `/sessions/:id/disposition` | 会话级发送处置覆盖（CLI `/steer`、`/wait` 与 Web 三选的 steer/wait 的 sticky 存储；interrupt 在 Web 为一次性、CLI 为 `/interrupt` 一次性动作，均不落覆盖） | `{disposition: "steer"\|"wait"\|"interrupt"}` 必填；非法值 400 `disposition must be "steer", "wait" or "interrupt"` | `SessionMeta`（写入 `dispositionOverride`，优先于配置默认） |
 | GET | `/sessions/:id/compactions` | 压缩审计记录（事件流里 `compaction` 事件的只读视图） | — | `CompactionRecord[]`（从 events.jsonl 过滤 `compaction` 事件按事件序返回；无事件返回 `[]`） |
@@ -210,15 +210,16 @@ interface Job {
 
 ## 审计的读取方式
 
-web 的轨迹页（`packages/web/src/audit/AuditView.tsx`）演示了标准用法：
+web 的审计页（`packages/web/src/audit/AuditView.tsx`）演示了标准用法：
 
-1. `GET /sessions` 获取全部会话（下拉选择"按会话筛选"即选择 `:id`）；
-2. `GET /sessions/:id/events` 获取该会话**完整事件流**（`SessionEvent[]`，append-only、按事件序）；
-3. 客户端按流序摊平成逐行轨迹：`message` 事件每条消息按块（block）摊平（role + 类型标签 + 摘要，点击展开完整块），`compaction` 事件渲染成"压缩"行、`memory` 事件渲染成"记忆"行、`system` 事件渲染成"系统提示词"行（开头片段 + 字符数，点击展开全文，与相邻上一条"系统提示词"行文本不同标"已变化"）、`sandbox.checked` 事件渲染成"沙箱"行（可用 / 不可用（原因）/ 已关闭），会话元数据事件（session.created/renamed/…）跳过。
+1. 会话选择跟随应用侧栏的全局选中（也支持 `?tab=audit&session=<id>` 深链）；
+2. `GET /sessions/:id/events?since=0` 获取该会话**完整事件流**（`SessionEvent[]`，append-only、按事件序）；
+3. 客户端按流序摊平成逐行审计：`message` 事件每条消息按块（block）摊平（role + 类型标签 + 摘要，点击展开完整块；assistant 消息的最后一块行上显示 token 用量与 LLM 耗时 `latencyMs`，tool_result 行显示执行耗时 `durationMs`），`compaction` 事件渲染成"压缩"行、`memory` 事件渲染成"记忆"行、`system` 事件渲染成"系统提示词"行（开头片段 + 字符数，点击展开全文，与相邻上一条文本不同标"已变化"）、`sandbox.checked` 事件渲染成"沙箱"行（可用 / 不可用（原因）/ 已关闭）、会话元数据事件（created/renamed/deleted/restored/set）渲染成轻量"会话"行——**十种持久化事件全部上墙**；
+4. 实时增量：页面私有 ws 连接订阅会话，收到 `session.appended` 通知帧（存储层落盘成功后发出，先落盘后广播）即 `GET /sessions/:id/events?since=<已有条数>` 增量拉取，append-only 下标做游标、断线重连后重拉对账。
 
-只读、无 mutation、无独立 `/audit` 路由——事件流（`events.jsonl`，一行一个事件的 append-only 文件）是轨迹的唯一事实来源，HTTP 只是它的读取窗口。tool 消息上的 `grantedBy`（每个工具调用的放行原因）随 `message` 事件一起返回，是"谁批准了这个操作"的审计依据。
+只读、无 mutation、无独立 `/audit` 路由——事件流（`events.jsonl`，一行一个事件的 append-only 文件）是审计的唯一事实来源，HTTP 只是它的读取窗口。tool 消息上的 `grantedBy`（每个工具调用的放行原因）随 `message` 事件一起返回，是"谁批准了这个操作"的审计依据。
 
-压缩审计不再单独拉取：`compaction` 事件就在同一事件流里，轨迹页随事件流一并渲染（`GET /sessions/:id/compactions` 仍存在，是它的只读投影视图，见 [compaction](../core/compaction.md)）。
+压缩审计不再单独拉取：`compaction` 事件就在同一事件流里，审计页随事件流一并渲染（`GET /sessions/:id/compactions` 仍存在，是它的只读投影视图，见 [compaction](../core/compaction.md)）。
 
 ## 鉴权中间件行为
 
@@ -240,7 +241,7 @@ app.addHook("preHandler", async (request, reply) => {
 
 ## 边界与出错
 
-- **无分页**：`GET /sessions`、`GET /sessions/:id/messages` 与 `GET /sessions/:id/events` 都是全量返回；个人使用规模下接受，超大会话的截断在客户端渲染层完成。
+- **无分页，只有增量**：`GET /sessions` 与 `GET /sessions/:id/messages` 全量返回；`GET /sessions/:id/events` 全量返回但支持 `?since=` 增量游标（append-only 下标）。个人使用规模下接受；审计页的列表渲染在客户端用虚拟滚动（只渲染可视行）承载大会话。
 - **软删除的会话不在默认列表**：`GET /sessions` 缺省过滤 `deleted:true`；要操作回收站必须显式 `?deleted=true`（恢复/永久删除路由不区分列表，直接按 id 操作）。
 - **PATCH `/sessions/:id` 的 workdir 是解析但未生效的字段**（源码只把 title 传给 `updateMeta`）——API 消费者不应依赖它。
 - **`POST /jobs` 的 cron 校验依赖 cron-parser 的报错文本**，客户端展示的是原始英文错误。

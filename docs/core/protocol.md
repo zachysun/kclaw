@@ -136,11 +136,11 @@ export function makeEvent<T extends EventType>(
 ): AgentEvent<T>
 ```
 
-`EventType` 共 **36 种**，十个分组：
+`EventType` 共 **37 种**，十个分组：
 
 | 分组 | 事件 | 数量 |
 |------|------|------|
-| 生命周期 | `run.started` `run.completed` `run.failed` `message.created` `message.completed` `job.started` `job.completed` `job.failed` | 8 |
+| 生命周期 | `run.started` `run.completed` `run.failed` `message.created` `message.completed` `job.started` `job.completed` `job.failed` `session.appended` | 9 |
 | 会话元数据 | `session.renamed` | 1 |
 | 流式 | `text.created/delta/completed` `thinking.created/delta/completed` `tool_call.created/delta/completed` `tool_result.created/delta/completed` `attachment.created` `attachment.completed` | 14 |
 | 模型调用 | `llm.started` `llm.completed` `llm.failed` | 3 |
@@ -159,6 +159,8 @@ export interface RunCompletedPayload { stopReason: StopReason; usage: Usage }
 export interface RunFailedPayload    { error: { code: string; message: string } }
 export interface JobCompletedPayload { jobId: string; summary: string }
 export interface SessionRenamedPayload { title: string }
+/** 持久化通知：一条会话事件已写入 events.jsonl（store 落盘成功后发出，先落盘后广播）。 */
+export interface SessionAppendedPayload { eventType: SessionEvent["type"] }
 
 export interface BlockPayload         { messageId: string; block: Block }
 export interface BlockDeltaPayload    { messageId: string; blockId: string; delta: string }
@@ -231,6 +233,7 @@ export interface HookFailedPayload {
 | `hook.failed` | core 钩子系统（`hooks/runner.ts` 的 skip 失败报告 + `hooks/registry.ts` 的装载失败去重报告；两处都经 run 装配/daemon 的总线扇出） |
 | `job.*` | server 的 `scheduler-tick.ts` |
 | `session.renamed` | server 的自动命名（`autoname.ts`：新标题写回 meta 后发出） |
+| `session.appended` | core 的 `SessionStore`（`session/store.ts`：每个事件与其投影成功写入后经构造时注入的回调发出；daemon 装配时接 `EventBus`——先落盘后广播，web 审计页据此增量拉取） |
 | `attachment.*` | 目前**已定义无发射方**——附件以 attachment 块随用户消息整体持久化与广播（`message.completed` 携带全量消息），不需要单独的块级事件流 |
 
 ---
@@ -239,7 +242,7 @@ export interface HookFailedPayload {
 
 `wire.ts` 定义 WS 的客户端→daemon 指令帧（`ClientCommand` 联合：auth / subscribe / unsubscribe / confirmation.resolve / send_message / queue.cancel / run.cancel / compaction.cancel）与 daemon→客户端的应答帧（各指令的 ack、`ErrorFrame`），合并为 `ServerFrame`；附件引用 `AttachmentRef{path,name,size,mimeType}` 与排队条目 `QueueEntry` 也在此（`session/store.ts` re-export 保持旧引用路径）。字段规则与报错文案不在类型里——它们的唯一实现是 server 的 `command-check.ts`（见 [realtime](../server/realtime.md)）。
 
-`session-events.ts` 定义会话事件流（`events.jsonl`，`GET /sessions/:id/events` 的返回形状）的十种事件类型：会话元数据五种（created/renamed/deleted/restored/set）+ `message` / `compaction` / `memory` / `system` / `sandbox.checked`。`session.created` 携带创建时固化的初始权限模式 `mode`（可选，旧流缺省 default）；`session.set` 携带元数据的增量补丁（`model` / `mode`（会话权限模式）/ `disposition`，键出现在补丁里才发）；旧会话流里的 `readonly` 布尔字段是 legacy，读取时映射为 `mode`。`sandbox.checked` 是每 run 一条的沙箱状态审计（`{enabled, available, unavailableReason?}`），与 `system` 一样只落事件流、不进 bus 的 `EventType`（36 种总数不变）。只放类型；运行时守卫（`isMessageEvent` 等）与 meta 投影（`applyEvent`）在 `session/events.ts`。
+`session-events.ts` 定义会话事件流（`events.jsonl`，`GET /sessions/:id/events` 的返回形状）的十种事件类型：会话元数据五种（created/renamed/deleted/restored/set）+ `message` / `compaction` / `memory` / `system` / `sandbox.checked`。`session.created` 携带创建时固化的初始权限模式 `mode`（可选，旧流缺省 default）；`session.set` 携带元数据的增量补丁（`model` / `mode`（会话权限模式）/ `disposition`，键出现在补丁里才发）；旧会话流里的 `readonly` 布尔字段是 legacy，读取时映射为 `mode`。`sandbox.checked` 是每 run 一条的沙箱状态审计（`{enabled, available, unavailableReason?}`），与 `system` 一样只落事件流、不进 bus 的 `EventType`——它们对外部的可见性由 `session.appended` 通知帧间接承载（订阅端收到后拉 `/events` 即见）。assistant 消息可携带可选 `latencyMs`（LLM 生成耗时毫秒，流成功完成时随 `usage` 一并持久化；旧消息与失败流缺省）。只放类型；运行时守卫（`isMessageEvent` 等）与 meta 投影（`applyEvent`）在 `session/events.ts`。
 
 ---
 
