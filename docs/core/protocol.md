@@ -48,6 +48,7 @@ export interface AssistantMessage extends Message {
   model: string
   usage: Usage
   stopReason: StopReason
+  latencyMs?: number    // LLM 生成耗时（毫秒，流结束时刻测量）；仅流成功完成时存在，历史消息可能缺省
 }
 
 export type GrantedBy = "safe" | "whitelist" | "session_grant" | "confirmed" | "accept_edits" | "learned" | "sandboxed" | "trusted"

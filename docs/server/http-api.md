@@ -10,7 +10,7 @@
 - **错误形状统一为 `{error: string}`**：会话/任务两个路由分组（scope）注册了 `setErrorHandler`，把 Fastify 的 body 解析错误（非法 JSON、空 body）也归一成这个形状；其余分组未注册（body 解析错误走 Fastify 默认形状 `{statusCode, error, message}`），客户端需兼容两种。客户端的共享 HTTP 基座（`@kclaw/core/client-http`）正是从这个 `error` 字段提取错误消息、取不到退回 `HTTP <status>`，见 [client-http](../core/client-http.md)。
 - **404 显式可判别**：会话/任务路由先查存在性（`sessions.meta(id)` / `jobs.get(id)`），不存在返回 `404 {error:"session not found"|"job not found"}`，不依赖异常路径。
 - **配置接口只读且脱敏**：API key 永远掩码返回，没有写回路由——修改配置通过文件（config.yaml）进行，daemon 重启后生效。
-- **消息审计没有专门路由，压缩审计有只读视图**：轨迹页（web 的 `AuditView`）就是 `GET /sessions`（会话下拉）+ `GET /sessions/:id/events`（该会话完整事件流）两个只读接口组合而成，不存在 `/audit` 路由。压缩审计不同——手动压缩刻意不产生消息，纯靠消息流看不到它的痕迹，因此 `GET /sessions/:id/compactions` 作为事件流里 `compaction` 事件的只读视图存在（见 [compaction](../core/compaction.md)）。
+- **消息审计没有专门路由，压缩审计有只读视图**：审计页（web 的 `AuditView`）没有独立 `/audit` 路由——它由 `GET /sessions/:id/events`（该会话完整事件流，`?since=` 增量游标）单源读取 + 页面私有 ws 订阅（`session.appended` 通知帧驱动增量拉取）组合而成，会话选择跟随应用侧栏的全局选中。压缩审计不同——手动压缩刻意不产生消息，纯靠消息流看不到它的痕迹，因此 `GET /sessions/:id/compactions` 作为事件流里 `compaction` 事件的只读视图存在（见 [compaction](../core/compaction.md)）。
 - **可选能力按注入条件注册**：附件路由只在传入 `attachmentsDir` 时注册、用量路由只在传入 `UsageStore` 时注册——能力未装配就没有这些路径，而不是"注册了但报错"；`GET /mcp` 则始终存在，daemon 未装配 McpManager 时返回空 server 列表。技能组与记忆组同为始终注册，但语义不同：记忆组未装配 `MemorySystem` 时降级 503，技能组没有装配依赖（技能是文件即真相，每次请求现扫），始终正常工作。
 
 ## 路由清单
