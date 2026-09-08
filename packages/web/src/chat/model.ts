@@ -500,6 +500,7 @@ export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
     case "job.completed":
     case "job.failed":
     case "session.renamed":
+    case "session.appended":
     case "attachment.created":
     case "attachment.completed":
     case "llm.started":

@@ -10,7 +10,10 @@ import type {
 
 // ---------- fixtures ----------
 
-function msgEvent(id: string, role: "user" | "assistant" | "tool", blocks: Block[], extra: Partial<MessageEvent> = {}): MessageEvent {
+function msgEvent(
+  id: string, role: "user" | "assistant" | "tool", blocks: Block[],
+  extra: Partial<MessageEvent> & { usage?: { inputTokens: number; outputTokens: number }; latencyMs?: number; grantedBy?: Record<string, string>; model?: string; stopReason?: string } = {},
+): MessageEvent {
   return {
     type: "message", id, sessionId: "s1", role, blocks,
     createdAt: `2026-09-08T10:00:0${id.length % 10}.000Z`, ...extra,

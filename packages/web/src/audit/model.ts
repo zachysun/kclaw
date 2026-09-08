@@ -30,7 +30,7 @@ export type AuditRow =
   }
   | { kind: "compaction"; key: string; index: number; record: CompactionEvent; at: string }
   | { kind: "memory"; key: string; index: number; event: MemoryEvent; at: string }
-  | { kind: "system"; key: string; index: number; event: SystemEvent; changed: boolean }
+  | { kind: "system"; key: string; index: number; event: SystemEvent; at: string; changed: boolean }
   | { kind: "sandbox"; key: string; index: number; event: SandboxCheckedEvent; at: string }
   | { kind: "session"; key: string; index: number; event: SessionMetaEvent; at: string }
 
@@ -48,29 +48,33 @@ export function flattenAudit(events: SessionEvent[]): AuditRow[] {
   const rows: AuditRow[] = []
 
   // callId → grant reason, from every tool message event's grantedBy map.
+  // MessageEvent is a Message superset without per-role fields, so the
+  // role-conditional extras (grantedBy / usage / latencyMs) narrow by cast.
   const grantByCallId = new Map<string, ToolGrantReason>()
   for (const event of events) {
     if (event.type !== "message" || event.role !== "tool") continue
-    if (event.grantedBy === undefined) continue
-    for (const [callId, reason] of Object.entries(event.grantedBy)) grantByCallId.set(callId, reason)
+    const granted = (event as MessageEvent & { grantedBy?: Record<string, ToolGrantReason> }).grantedBy
+    if (granted === undefined) continue
+    for (const [callId, reason] of Object.entries(granted)) grantByCallId.set(callId, reason)
   }
 
   let lastSystemText: string | null = null
   events.forEach((event, index) => {
     switch (event.type) {
       case "message": {
-        const isAssistant = event.role === "assistant"
-        const usage = isAssistant ? event.usage : undefined
-        const latencyMs = isAssistant ? event.latencyMs : undefined
-        const last = event.blocks.length - 1
-        event.blocks.forEach((block, i) => {
+        const msg = event as MessageEvent & { usage?: Usage; latencyMs?: number }
+        const isAssistant = msg.role === "assistant"
+        const usage = isAssistant ? msg.usage : undefined
+        const latencyMs = isAssistant ? msg.latencyMs : undefined
+        const last = msg.blocks.length - 1
+        msg.blocks.forEach((block, i) => {
           const row: AuditRow = {
             kind: "block",
             key: `${index}-${i}`,
             index,
-            role: event.role,
+            role: msg.role,
             block,
-            createdAt: event.createdAt,
+            createdAt: msg.createdAt,
             messageTail: i === last,
           }
           if (isAssistant) {
@@ -97,6 +101,7 @@ export function flattenAudit(events: SessionEvent[]): AuditRow[] {
           key: `${index}`,
           index,
           event,
+          at: event.at,
           changed: lastSystemText !== null && lastSystemText !== event.text,
         })
         lastSystemText = event.text
