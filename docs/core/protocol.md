@@ -50,7 +50,7 @@ export interface AssistantMessage extends Message {
   stopReason: StopReason
 }
 
-export type GrantedBy = "safe" | "whitelist" | "session_grant" | "confirmed" | "accept_edits" | "learned" | "sandboxed"
+export type GrantedBy = "safe" | "whitelist" | "session_grant" | "confirmed" | "accept_edits" | "learned" | "sandboxed" | "trusted"
 
 export interface ToolMessage extends Message {
   role: "tool"

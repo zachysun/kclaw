@@ -23,12 +23,12 @@
 ```ts
 // 判定结果（定义在 packages/core/src/agent/loop.ts，gate 实现它）
 export type PermissionDecision =
-  | { type: "allow"; reason: "safe" | "whitelist" | "session_grant" | "learned" | "accept_edits" | "sandboxed" }
-  | { type: "deny"; reason: "blacklist" | "user_denied" | "timeout" | "readonly"; noteText: string }
+  | { type: "allow"; reason: "safe" | "whitelist" | "session_grant" | "learned" | "accept_edits" | "sandboxed" | "trusted" }
+  | { type: "deny"; reason: "blacklist" | "user_denied" | "timeout" | "readonly" | "mode"; noteText: string }
   | { type: "confirm"; confirmationId: string; noteText?: string }
 
 // packages/core/src/permissions/modes.ts — 会话权限模式（严格在前）
-export const PERMISSION_MODES = ["readonly", "default", "acceptEdits"] as const
+export const PERMISSION_MODES = ["readonly", "default", "acceptEdits", "trusted", "auto"] as const
 export type PermissionMode = (typeof PERMISSION_MODES)[number]
 export function isPermissionMode(v: unknown): v is PermissionMode
 export const PERMISSION_MODE_CONFIRMATIONS: Record<PermissionMode, string>  // 切换确认文案
@@ -100,6 +100,8 @@ permissions:
 ```
 ⓪ 模式 readonly 且工具 risk 为 sensitive
                         → deny {reason:"readonly", noteText:"只读模式（readonly）"}
+⓪' 模式 trusted（批次 C）
+                        → 见下节「trusted 分支」：黑名单优先，边界内全放行、边界外全 deny
 ① deny 规则命中        → deny {reason:"blacklist", noteText:"规则命中黑名单: <原规则>"}
 ② allow 规则命中且目标不逃逸工作区 → allow {reason:"whitelist"}（命中但经符号链接逃逸出工作区 → 落到 ③）
 ②' 沉淀规则命中且目标不逃逸工作区 → allow {reason:"learned"}（逃逸 → 落到 ③）
@@ -109,6 +111,16 @@ permissions:
 ⑤ sessionGrants 开启且授权命中 → allow {reason:"session_grant"}
 ⑥ 以上全不中            → confirm，签发新 conf_ id
 ```
+
+**trusted 分支**（`mode === "trusted"`，在 readonly 短路之后、规则命中之前接管）：这是免审档——没有人工兜底，所以边界外一律**拒绝**而不是 confirm（fail-closed）。执行顺序：
+
+1. deny 黑名单仍然最优先：命令类对每个归一化子命令分别匹配，路径类按 scopedMatch 匹配，命中即 `deny {reason:"blacklist"}`。
+2. 命令类（仅 exec 被装配层真正包进 OS 沙箱，`sandboxedTools` 事实）：该工具被沙箱包裹且沙箱可用 → `allow {reason:"sandboxed"}`（整个 shell 调用进沙箱）；否则 → `deny {reason:"mode"}`——沙箱不可用或启用被关时 noteText 为"trusted 模式要求 exec 进沙箱，但沙箱不可用"，工具可沙箱化但未被包裹时（schema 带 `command` 字段的 MCP 适配器等）为"trusted 模式无法沙箱化该敏感工具"。**绝不让未包裹的工具顶着"已沙箱化"的名头在免审档裸跑**。
+3. 路径类工具：目标逃逸工作区 → `deny {reason:"mode", noteText:"trusted 模式只放行工作区内的操作"}`；工作区内 sensitive 路径写（fs_write/fs_edit）→ `allow {reason:"trusted"}`、safe 路径读 → `allow {reason:"safe"}`。
+4. safe 工具照常 `allow {reason:"safe"}`。
+5. 无沙箱保护的 sensitive 工具（MCP 适配器、未注册工具）→ `deny {reason:"mode", noteText:"trusted 模式无法沙箱化该敏感工具"}`。
+
+trusted 不 consult allow / 沉淀规则 / 会话授权——边界内本就全放行，它们没有存在意义；边界外 deny 也比任何 allow 都优先。
 
 命令类工具（sensitive 且带 `command` 参数，exec 今天是唯一成员）走专属分支：deny 对**每个归一化子命令**分别匹配；allow、沉淀规则与会话授权只在命令**恰好一段**（无接续符）时参与——`exec:git status*` 不可能放行 `git status; …`。两分支都未命中时：**若 exec 沙箱可用（`sandboxAvailable`）→ `allow {reason:"sandboxed"}`**——沙箱（而非人工）是这次放行的批准方，整个 shell 调用都在沙箱内运行（含多段命令）；沙箱不可用才 confirm。sandboxed 永远不覆盖 deny 与规则命中，readonly 的 ⓪ 步短路依旧最优先。沉淀规则的 exec 形态在落盘时即收窄为"首词 + 子命令前缀"（`exec:git push*`，见沉淀规则一节），匹配语义与 allow 一致。
 
@@ -138,10 +150,12 @@ exec 没有可判定的"目标路径"——命令可以以任何方式访问文�
 
 gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
 
-- **mode（会话权限模式）**：`"readonly" | "default" | "acceptEdits"` 三档（`trusted`/`auto` 留待后续批次，枚举已按增长设计），存在会话元数据 `meta.mode`，缺省 `default`；run 装配每 run 从会话 meta 读出传入 gate。各档语义：
+- **mode（会话权限模式）**：`PERMISSION_MODES = ["readonly" | "default" | "acceptEdits" | "trusted" | "auto"]` 五档，存在会话元数据 `meta.mode`，缺省 `default`；run 装配每 run 从会话 meta 读出传入 gate。各档语义：
   - *readonly*：**risk 为 sensitive 的工具**（由 risk 直接派生，引擎不持名单——今天恰为 `fs_write`/`fs_edit`/`exec` 三个）在判定链第 ⓪ 步直接拒绝——reason `"readonly"`、note 文案 `只读模式（readonly）`，工具得到 error result 并随 tool 消息落一个 `kind:"denied"` note；读、web 与 memory 工具不受影响。短路排在一切规则之前：白名单里的 `allow: exec:*` 在只读下同样不执行——这个模式承诺的是零写入风险。
   - *default*：默认档，判定链照常走（本节其余内容描述的就是它）。
   - *acceptEdits*：工作区内的文件写入免逐次确认——判定链第 ②'' 步对**路径写类工具**（带 `path` 参数且 sensitive）的目标做工作区内检查，通过即 `allow {reason:"accept_edits"}`；越界目标与 exec 等命令类工具不受益，仍走 confirm。
+  - *trusted*（批次 C）：免审档——沙箱与工作区边界内的操作全部自动放行、不弹确认；边界外（exec 无法沙箱化、越界、无沙箱保护的 sensitive 工具）一律拒绝（fail-closed，见第 2 节「trusted 分支」）。前提是 exec 沙箱可用（`config.sandbox.enabled` 默认开）：沙箱不可用或未启用时，trusted 下的 exec 直接 deny——免审档没有人工兜底，拒绝是唯一安全出路。
+  - *auto*（批次 C）：判定链与 default 相同，额外叠加**规则归纳**：auto 会话里同一个操作（同一收窄键）被连续 `once` 批准 N 次（`config.permissions.autoLearnThreshold`，默认 3，0 关闭）后，自动把该操作沉淀为一条 `source:"auto"` 的项目档规则（落盘位置与手动"总是允许"相同，下个 run 起生效）；任何一次 `reject` **或超时**清零该键的计数——"拒绝"（含沉默的超时拒绝）是明确信号，不许被更早的放行覆盖。计数在进程内、**键按会话隔离**（跨会话的批准互不叠加；daemon 重启即清零，跨会话持久化是文档化后续项）；`project`/`global` 裁决不参与计数（那是显式的"总是允许"，无需归纳）；沙箱自动放行的调用也从不计数——归纳只针对人工裁决。auto 模式本身不自动放行任何东西，它只是把反复的人工批准变成规则。
   - 切换入口：CLI 的 Shift+Tab 循环与 `/mode` 命令、WebUI 的常驻选择器，最终都落到 `POST /sessions/:id/mode`（事件溯源写入：追加一条 `session.set` 事件进会话事件流并折进 meta 投影，`GET /sessions/:id/events` 可见，不做 WS 广播）；下一次 run 起生效。旧版 `POST /sessions/:id/readonly` 已移除，读兼容见下。
   - **legacy 读兼容**：投影 `meta.json` 里旧的 `readonly: true` 读出时映射为 `mode: "readonly"`（布尔删除）；事件流里旧的 `session.set {readonly}` 同样映射。写入端只产 `mode`。
   - daemon 级只读启动旗标（`--readonly`）已随本批移除：模式是会话级事实，宿主不再设全局上限。
@@ -173,7 +187,7 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
   - macOS `sandbox-exec` + SBPL profile——工作区与系统临时目录可写，家目录只读且 `~/.kclaw` 读拒绝（凭据隔离），网络默认允许（SBPL 规则按先匹配生效：`~/.kclaw` 读拒绝在宽放行之前、写白名单在兜底 deny 之前；路径一律 realpath 形态，`/tmp` 写作 `/private/tmp`）。
   - Linux bubblewrap（无特权 user namespaces）——整个根只读挂载、`~/.kclaw` 用 tmpfs 遮蔽（读不到凭据）、`/tmp` 与工作区可写、`--die-with-parent --new-session` 保证 exec 超时进程组 kill 能波及整棵进程树；**v1 不加 `--unshare-net`**（网络默认允许是拍板决策）。
   - 降级链：bwrap → **不可用**（回落人工确认，fail-closed——绝不让命令裸跑）。Landlock 兜底是后续项：纯 Node 无法发起 `landlock_create_ruleset` syscall，也没有成熟 CLI 包装。
-- **判定联动（`sandboxAvailable`）**：run 装配探测一次沙箱可用性，同源喂给两个消费方——exec 工具的实际包装器（可用的才注入）与 gate 的 `sandboxAvailable` 输入。因此 "sandboxed" 放行的命令必然真被沙箱包住；反之沙箱不可用时 exec 维持 confirm，不会出现"放了行却裸跑"的错配。`default` 与 `acceptEdits` 模式下，命令类工具无规则命中时由沙箱顶替人工（reason `sandboxed`）；readonly 的短路依旧最优先，deny/allow/沉淀规则/会话授权也都先于它。沙箱**启用但探测不可用**时，exec 回落的确认请求会带一条说明（`noteText`："exec 沙箱不可用，本次操作需人工确认"，CLI 暗色一行、WebUI 卡片注明，见第 8 节）；用户主动 `sandbox.enabled: false` 关闭沙箱时不带说明——那是刻意决定，不需要解释。
+- **判定联动（`sandboxAvailable` + `sandboxedTools`）**：run 装配探测一次沙箱可用性，同源喂给两个消费方——exec 工具的实际包装器（可用的才注入）与 gate 的 `sandboxAvailable` 输入——并把**实际被包裹的工具集**（`sandboxedTools`，今天只有 exec）一并传给 gate。因此 "sandboxed" 放行的命令必然真被沙箱包住；反之沙箱不可用时 exec 维持 confirm，不会出现"放了行却裸跑"的错配。`default` 与 `acceptEdits` 模式下，被包裹的命令类工具无规则命中时由沙箱顶替人工（reason `sandboxed`）；trusted 模式下未包裹的命令类工具（schema 带 `command` 字段的适配器等）直接被 deny，绝不顶着"已沙箱化"的名头放行。readonly 的短路依旧最优先，deny/allow/沉淀规则/会话授权也都先于它。沙箱**启用但探测不可用**时，exec 回落的确认请求会带一条说明（`noteText`："exec 沙箱不可用，本次操作需人工确认"，CLI 暗色一行、WebUI 卡片注明，见第 8 节）；用户主动 `sandbox.enabled: false` 关闭沙箱时不带说明——那是刻意决定，不需要解释。
 - **配置**（`config.yaml` 的 `sandbox:` 节，daemon 级，默认开）：
   ```yaml
   sandbox:
@@ -204,6 +218,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
   - 登记：run 装配（core `executeRun`）的包装 gate，confirm 判定一出就在 broker 登记（携带 toolCall、risk、会话 id）。
   - 裁决：CLI/Web 经 WS `confirmation.resolve` 帧调 `broker.resolve(id, decision, by)`（`by` 默认 `"cli"`，WebUI 帧带 `client:"web"`）。裁决返回布尔——unknown/stale id 落空。
   - 沉淀的落盘在 server 侧 WS 入口（`packages/server/src/ws.ts`）：resolve 之前先 `broker.lookup(id)` 快照 toolCall 与会话（resolve 会移除条目），`project`/`global` 裁决才落盘；`once`/`reject`/未知 id 不写任何文件。项目档的目标工作目录取会话元数据的 `workdir`（缺省回退 daemon 配置的工作目录）。
+  - **auto 模式归纳在装配层（不在 WS 入口）**：run 装配（core `run-assembly.ts`）的 `resolveConfirmation` wrapper 能看到**每一种**裁决结局——`once`/`reject` 经网关、**超时**在竞速内自行到期——这是 WS 命令分发层做不到的（超时永不产生 resolve 帧）。当裁决所属会话的模式是 `auto`（用 run 启动时的快照，不是 resolve 时刻的实时值，避免切模式竞态）时：`once` 裁决先喂给 `AutoLearnCounter`（core 纯内存类，键 = `sessionId + 收窄键`，按会话隔离，见第 5 节 auto 档）——跨过阈值即落盘一条 `source:"auto"` 的项目档规则（best-effort，写失败只记日志不打断 run）；`reject` **或超时**清零该键计数；abort（run 取消）不是拒绝、不碰计数。判定链与规则引擎完全不知道 auto 的存在——归纳发生在裁决侧，规则落盘后由既有机制生效。WS 入口只保留 `project`/`global` 的"总是允许"落盘。
   - broker **不发事件、不设内部超时**——事件归循环，计时归循环与装配侧的同一竞速机制；两处用同一超时值竞速保证视图一致。
   - 超时/取消后 run 装配（core `executeRun`）的 `resolveConfirmation` 调 `expire` 把条目标记失效，迟到的裁决只会收到 unknown confirmation，不会确认一个已无人等待的动作。
 - deny 的 `user_denied` / `timeout` 两个 reason 不是 gate 产出的：gate 只产生 `blacklist` / `readonly` 两种拒绝（规则命中或只读会话禁写/exec），前两者是循环把人工拒绝/超时转成 error result 时的语义标记（note 块的 `kind`）。
@@ -213,14 +228,14 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 人工在确认里选"总是允许"后，一条**收窄的 allow 规则**落盘为 YAML 文件（`packages/core/src/storage/decided-rules.ts`），下一个 run 起由 gate 的 `decidedRules` 输入加载（判定链第 ②' 步，reason `"learned"`）：
 
 - **两个文件，各自独立**：项目档 `<workspace>/.kclaw/permissions.yaml`（裁决所属会话的工作目录）、全局档 `~/.kclaw/permissions.yaml`。config.yaml 保持纯手写，程序从不写它。
-- **每条带出处**（`DecidedRuleEntry`）：`rule`（收窄后的规则）、`decidedAt`（ISO 时刻）、`origin`（触发裁决的工具名、原始参数 JSON、会话 id）。文件 0600 权限，原子写入。
+- **每条带出处**（`DecidedRuleEntry`）：`rule`（收窄后的规则）、`decidedAt`（ISO 时刻）、`origin`（触发裁决的工具名、原始参数 JSON、会话 id）、`source`（可选——`"auto"` 表示 auto 模式归纳，缺省即 `"manual"`，兼容没有该字段的旧文件）。文件 0600 权限，原子写入。
 - **规则收窄（`narrowDecidedRule`）**：exec 按"首词 + 子命令前缀"收窄——`git push origin main` 落成 `exec:git push*`，`git fetch` 落成 `exec:git fetch*`（两词命令保留前两词 + 前缀）；**单词命令精确形态**（`ls` 落成 `exec:ls`）；链式命令只取第一段；命令 token 折叠为 basename（`/bin/rm -rf build` → `exec:rm -rf*`）。路径写类工具落 **realpath 精确路径**（`fs_write:/w/proj/a.md`，只放行这一个文件）；其余工具落工具级规则（如 `mcp__srv__do`）。收窄宁紧勿松：人批准的是那一条命令，不是一个命令族（前缀形态是可用性折衷——覆盖 `git push origin main` 与 `git push origin dev` 这类同族变体，代价是 `git push --force` 这类带旗标变体也会被前缀放行；拒绝的是更宽的命令族）。
 - **项目文件本地专属（防御三件套）**：落盘时自动把 `.kclaw/permissions.yaml` 追加进工作区 `.gitignore`；已被 git 跟踪的项目规则文件**整体忽略**（`loadDecidedRulesForRun` 检测 `git ls-files`，tracked 即不加载并在 daemon 日志告警）——克隆来的仓库无法夹带一份预授权清单；文档（本节）写明该行为。管理页（WebUI 权限页）对 git 跟踪的项目档显示"已被跟踪、规则不生效"的提示（`GET /permissions/rules` 返回 `tracked`/`ignored` 字段，两者恒等，规则列表恒空）。
 - **每 run 加载（`loadDecidedRulesForRun`）**：run 装配时读两档文件合并为规则串数组传 gate；删除文件里的条目（或整个文件）即收回授权，对下一个 run 立即生效。管理入口：WebUI「权限」页（`GET /permissions/rules` 列表、`DELETE /permissions/rules` 单条删除，项目档支持 `?workspace=` 指定）。
 
 ### 10. grantedBy 记录
 
-每个被放行的调用都会把原因记在 tool 消息上：`ToolMessage.grantedBy: Record<callId, GrantedBy>`（`packages/core/src/protocol/messages.ts`，`GrantedBy = "safe" | "whitelist" | "session_grant" | "confirmed" | "accept_edits" | "learned" | "sandboxed"`）。这是完整的执行审计链——事后可逐调用追溯"这次执行的授权来源"；`learned`/`accept_edits` 两个值分别对应沉淀规则放行与 acceptEdits 模式放行，`sandboxed` 对应 exec 沙箱顶替人工的放行。Web 端审计视图（`packages/web/src/audit/AuditView.tsx`）就按 callId 反查该字段渲染批注。
+每个被放行的调用都会把原因记在 tool 消息上：`ToolMessage.grantedBy: Record<callId, GrantedBy>`（`packages/core/src/protocol/messages.ts`，`GrantedBy = "safe" | "whitelist" | "session_grant" | "confirmed" | "accept_edits" | "learned" | "sandboxed" | "trusted"`）。这是完整的执行审计链——事后可逐调用追溯"这次执行的授权来源"；`learned`/`accept_edits` 两个值分别对应沉淀规则放行与 acceptEdits 模式放行，`sandboxed` 对应 exec 沙箱顶替人工的放行，`trusted` 对应 trusted 模式对工作区内写操作的放行。Web 端审计视图（`packages/web/src/audit/AuditView.tsx`）就按 callId 反查该字段渲染批注。
 
 ### 11. 会话级授权（SessionGrants）
 
@@ -237,6 +252,8 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 - **SessionGrants 是进程内存**：daemon 重启即清空；且历史 grantedBy 记录不受影响（那是持久化在会话日志里的）。
 - **gate 缺失 = 全放行**：循环对未注入 `permissions` 的调用一律 `{type:"allow", reason:"safe"}`——组装宿主时漏配权限网关等于没有权限检查，daemon 装配始终注入。
 - **exec 沙箱是放行的批准方，不是额外的确认**：`sandboxed` 只在无规则命中、本应 confirm 的落点上生效；deny/allow/沉淀规则/会话授权的优先级都高于它，readonly 的短路也依旧最优先。
+- **trusted 免审档没有人工兜底**：边界外一律 deny——exec 沙箱不可用、路径越出工作区、无沙箱保护的 sensitive 工具（MCP 适配器、未注册工具）在 trusted 下都会被拒绝而不是交给人工；deny 黑名单仍然最优先。开着沙箱才应该用 trusted。
+- **auto 归纳只针对人工裁决**：沙箱自动放行（`sandboxed`）的调用从不计数——那没有经过人的判断，归纳它等于把沙箱当作授权人；`project`/`global` 是显式"总是允许"，也从不计数。计数是进程内存、**键按会话隔离**（`sessionId + 收窄键`，跨会话批准互不叠加），daemon 重启即清零（文档化后续项：跨会话持久化）。
 - **沙箱不可用不裸跑**：平台工具缺失、user namespaces 被禁或沙箱启动失败时，exec 回落人工确认或返回 error result（fail-closed）；可用性探测在每 run 装配时做一次，探测失败会写 daemon 日志（仅观察，不打断 run）。
 - **v1 网络默认允许**：沙箱只隔离文件系统（凭据遮蔽 + 写范围），git clone / npm install / curl 照常；网络收窄留后续迭代。
 - **越界检查依赖 workspace 正确**：会话 `workdir` 决定了越界判定的边界；创建会话时不传 workdir 则落到 `config.workspace`（daemon 启动目录的默认值是进程当前目录）。

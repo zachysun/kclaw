@@ -63,8 +63,8 @@ export interface RunOutcome { stopReason: StopReason; totalUsage: Usage; message
 
 ```ts
 export type PermissionDecision =
-  | { type: "allow"; reason: "safe" | "whitelist" | "session_grant" | "accept_edits" | "learned" | "sandboxed" }
-  | { type: "deny"; reason: "blacklist" | "user_denied" | "timeout" | "readonly"; noteText: string }
+  | { type: "allow"; reason: "safe" | "whitelist" | "session_grant" | "accept_edits" | "learned" | "sandboxed" | "trusted" }
+  | { type: "deny"; reason: "blacklist" | "user_denied" | "timeout" | "readonly" | "mode"; noteText: string }
   | { type: "confirm"; confirmationId: string; noteText?: string }
 ```
 

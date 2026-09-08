@@ -36,7 +36,7 @@
 | POST | `/sessions/:id/restore` | 从回收站恢复（清除 `deleted`/`deletedAt`） | — | `SessionMeta` |
 | POST | `/sessions/:id/purge` | 永久删除（整个会话目录删除） | — | `{ok: true}` |
 | POST | `/sessions/:id/model` | 会话级模型切换（只影响此会话**之后**的 run，历史不动） | `{model?}`：provider 条目名（entry key，见 [run-manager](./run-manager.md) 的模型解析）或裸模型名；`""`/缺省清空回落默认；类型不对 400 `model must be a string`，条目不存在 400 `model not found: <name>` | `SessionMeta` |
-| POST | `/sessions/:id/mode` | 会话级权限模式切换（只影响此会话**之后**的 run，历史不动；机制见 [permissions](../core/permissions.md)） | `{mode: "readonly"\|"default"\|"acceptEdits"}` 必填；非法值 400 `mode must be one of "readonly" | "default" | "acceptEdits"` | `SessionMeta` |
+| POST | `/sessions/:id/mode` | 会话级权限模式切换（只影响此会话**之后**的 run，历史不动；机制见 [permissions](../core/permissions.md)） | `{mode: "readonly"\|"default"\|"acceptEdits"\|"trusted"\|"auto"}` 必填；非法值 400 `mode must be one of readonly | default | acceptEdits | trusted | auto` | `SessionMeta` |
 | GET | `/sessions/:id/messages` | 读全部消息（对话/断线恢复的数据源，ChatPanel 用） | — | `Message[]`（事件流投影视图——`readMessages` 从 events.jsonl 过滤 `message` 事件按事件序返回；**排队未执行的消息不在其中**，见 `/queue`） |
 | GET | `/sessions/:id/events` | 完整事件流（事件溯源的唯一真相；轨迹页的单源数据） | — | `SessionEvent[]`（append-only，按事件序；含 session.created / message / compaction / memory / system 等全部事件，见 [storage](../core/storage.md)） |
 | GET | `/sessions/:id/queue` | 排队消息快照：重连/刷新的全量纠偏兜底 | — | `QueueEntry[]`（`queue.jsonl` 整文件读出，数组顺序即执行顺序；steer 条目排在可执行条目之后；空队列返回 `[]`） |
@@ -57,7 +57,7 @@ interface SessionMeta {
   jobId?: string        // 由定时任务创建的会话带此字段
   workdir?: string      // 会话级工作目录（run 以它覆盖全局 workspace）
   model?: string        // 会话级模型覆盖（缺省 → 守护进程默认模型）
-  mode?: "readonly" | "default" | "acceptEdits"   // 会话权限模式（缺省 default）；旧 readonly 布尔是 legacy，读取时映射为 mode
+  mode?: "readonly" | "default" | "acceptEdits" | "trusted" | "auto"   // 会话权限模式（缺省 default）；旧 readonly 布尔是 legacy，读取时映射为 mode
   deleted?: boolean
   deletedAt?: string
   compactedSummary?: string   // v1 压缩遗留：不再清除，被 compaction 遮蔽（见 compaction.md）

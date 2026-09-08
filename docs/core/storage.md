@@ -57,6 +57,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `permissions.allow` / `deny` | `[]` / `["exec:sudo*", "exec:rm -rf*"]` | 权限规则，见 [permissions](./permissions.md) |
 | `permissions.confirmTimeoutMs` | `120000` | 人工确认等待上限，超时按拒绝处理 |
 | `permissions.sessionGrants` | `true` | 会话内"本次允许"记忆是否生效 |
+| `permissions.autoLearnThreshold` | `3` | auto 模式的归纳阈值：同一操作被连续 `once` 批准多少次后自动沉淀为项目档规则；`0` 关闭归纳（仅保留 auto 模式的判定链） |
 | `memory.write.{immediate, manual, intervalMinutes, idleMinutes}` | `true` / `true` / `30` / `10` | 记忆写入触发开关（immediate/manual/clear/interval/follow 五触发，clear 挂在 `POST /sessions` 无独立开关）：immediate = `memory_save` 工具当场触发；manual = 手动触发开关（`/memory save`（CLI/web）走 `POST /memory/trigger-manual`，`false` 时该路由返回 400）；intervalMinutes = 定时兜底间隔（0 关闭）；idleMinutes = 跟随门禁空闲分钟（0 关闭）。完整语义见 [memory](./memory.md) |
 | `memory.extractModel` / `threadInactiveDays` / `consolidate` / `consolidateHour` | `""` / `14` / `true` / `3` | 提取/内化用的模型（空回落主对话模型）、线闲置多少天自动转 inactive、内化开关、夜间闲时内化的本地小时（负值关闭） |
 | `memory.embedding.{provider, model}` | `""` / `""` | 向量检索判定链：`model` 空则向量路整体关闭（纯 BM25）；provider 空回落 default 条目 |
@@ -118,7 +119,7 @@ export function readJsonl(file: string): unknown[]
 - `meta.json`：**派生投影**（`SessionMeta`），由事件流经 `applyEvent` 逐条折叠得出；meta.json 缺失或损坏时 `meta()` 自动从事件流重建（`rebuildMeta`），任何时候删掉它也能重建。崩溃恢复时允许它滞后于事件流（meta 只是投影、非真相，不会丢数据）；滞后不会被后续写入自动追平——`appendEvent` 先读当前投影、只折入新事件——仅在 meta.json 缺失或损坏时经 `rebuildMeta` 重放整条事件流整流。整文件原子重写（`updateMeta` 合并 patch、`undefined` 键删除；`message` / `compaction` 事件会推进投影的 `updatedAt`，`memory` / `system` 事件不推进）。
 - `queue.jsonl`：**运行态**排队消息（`{ messageId, disposition, text, trigger, attachments?, note?, enqueuedAt }`，顺序即执行顺序，见 [run-manager](../server/run-manager.md) 的消息队列）。与事件流不同——`replaceQueue` 每次**整文件重写**，不是 append-only；不参与 meta.json。
 
-`meta.json` 字段：`SessionMeta { id, title, createdAt, updatedAt, jobId?, workdir?, model?, mode?, deleted?, deletedAt?, compactedSummary?, compactedUpto?, compaction?, dispositionOverride? }`，其中 `model` 为会话级模型覆盖（空/缺省回落 daemon 默认）、`mode` 为会话权限模式（`"readonly" | "default" | "acceptEdits"`，缺省 default；旧 `readonly` 布尔读出时映射为 `mode:"readonly"` 并删除布尔键，写入端只产 `mode`，见 [permissions](./permissions.md)）；`compaction` 是分层压缩状态 `{ segments, top, upto }`（语义见 [compaction](./compaction.md)），由 `compaction` 事件投影（每次压缩把新段折进 `segments`，`updateMeta` 不再直接合并它）；`compactedSummary`/`compactedUpto` 是 v1 压缩的遗留字段——不再被清除，但运行侧读压缩视图时 `compaction` 优先（压缩引擎 `Compactor` 的 `compact` 里 `prev` 先读 `compaction`，见 [compaction](./compaction.md)），两者并存无功能影响；`dispositionOverride` 是会话级处置覆盖（`"steer" | "wait" | "interrupt"`，优先于 `sessions.defaultDisposition`；服务端路由仍接受三值写入，但客户端当前只写 steer/wait——interrupt 在 Web 与 CLI 都是一次性动作、不落覆盖，`"interrupt"` 值只会来自历史遗留，见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)）。
+`meta.json` 字段：`SessionMeta { id, title, createdAt, updatedAt, jobId?, workdir?, model?, mode?, deleted?, deletedAt?, compactedSummary?, compactedUpto?, compaction?, dispositionOverride? }`，其中 `model` 为会话级模型覆盖（空/缺省回落 daemon 默认）、`mode` 为会话权限模式（`"readonly" | "default" | "acceptEdits" | "trusted" | "auto"` 五档，缺省 default；旧 `readonly` 布尔读出时映射为 `mode:"readonly"` 并删除布尔键，写入端只产 `mode`，见 [permissions](./permissions.md)）；`compaction` 是分层压缩状态 `{ segments, top, upto }`（语义见 [compaction](./compaction.md)），由 `compaction` 事件投影（每次压缩把新段折进 `segments`，`updateMeta` 不再直接合并它）；`compactedSummary`/`compactedUpto` 是 v1 压缩的遗留字段——不再被清除，但运行侧读压缩视图时 `compaction` 优先（压缩引擎 `Compactor` 的 `compact` 里 `prev` 先读 `compaction`，见 [compaction](./compaction.md)），两者并存无功能影响；`dispositionOverride` 是会话级处置覆盖（`"steer" | "wait" | "interrupt"`，优先于 `sessions.defaultDisposition`；服务端路由仍接受三值写入，但客户端当前只写 steer/wait——interrupt 在 Web 与 CLI 都是一次性动作、不落覆盖，`"interrupt"` 值只会来自历史遗留，见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)）。
 
 `Message`（`packages/core/src/protocol/messages.ts`）基础字段 `{ id, sessionId, role: "user" | "assistant" | "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因）。id 前缀 `msg_` / `ses_`，ULID。`messages` / `compactions` 现在是事件流的**只读投影视图**：`readMessages` 从事件流过滤出 `message` 事件、`readCompactions` 过滤出 `compaction` 事件，`readQueue` 读 `queue.jsonl`。
 
@@ -144,7 +145,7 @@ export function readJsonl(file: string): unknown[]
 | 文件 | 作用域 | 写入方 |
 |------|--------|--------|
 | `<home>/permissions.yaml` | 全局档，任何工作区生效 | server 的 WS 确认入口（`packages/server/src/ws.ts`，global 裁决） |
-| `<workspace>/.kclaw/permissions.yaml` | 项目档，只对该工作区的会话生效；首次落盘自动建 `.kclaw` 目录、把 `.kclaw/permissions.yaml` 追加进工作区 `.gitignore`（幂等） | 同上（project 裁决） |
+| `<workspace>/.kclaw/permissions.yaml` | 项目档，只对该工作区的会话生效；首次落盘自动建 `.kclaw` 目录、把 `.kclaw/permissions.yaml` 追加进工作区 `.gitignore`（幂等） | 同上（project 裁决）；auto 模式归纳的 `source:"auto"` 规则也在 run 装配层写入同一文件 |
 
 格式（每条是一个 `DecidedRuleEntry`）：
 
@@ -156,9 +157,10 @@ rules:
       tool: "exec"
       argsJson: '{"command":"git push origin main"}'
       sessionId: "ses_…"
+    source: "auto"                 # 可选：auto 模式归纳（缺省/缺失 = 人工"总是允许"）
 ```
 
-文件权限 0600、`writeFileAtomic` 原子写入；程序**从不写 config.yaml**（config.yaml 保持纯手写面）。每 run 由 `loadDecidedRulesForRun` 读入合并为规则串数组传给权限 gate：全局档恒载；项目档仅当工作区已定义、文件存在且**未被 git 跟踪**时载入（`isGitTracked` 用 `git ls-files --error-unmatch` 探测，tracked 即整体忽略并在 daemon 日志告警——克隆来的仓库无法夹带一份预授权清单）。删除文件里的条目（或整个文件）即收回授权，对下一个 run 立即生效。管理入口：`GET`/`DELETE /permissions/rules`（见 [http-api](../server/http-api.md)）与 WebUI「权限」页。
+文件权限 0600、`writeFileAtomic` 原子写入；程序**从不写 config.yaml**（config.yaml 保持纯手写面）。`source` 字段区分规则的两种来源——人工在确认里选"总是允许"（manual，缺省）与 auto 模式连续 `once` 裁决自动归纳（auto，见 [permissions](./permissions.md) 第 5 节）——只是溯源标记，规则引擎不读它，加载与生效路径与手工规则完全一致。每 run 由 `loadDecidedRulesForRun` 读入合并为规则串数组传给权限 gate：全局档恒载；项目档仅当工作区已定义、文件存在且**未被 git 跟踪**时载入（`isGitTracked` 用 `git ls-files --error-unmatch` 探测，tracked 即整体忽略并在 daemon 日志告警——克隆来的仓库无法夹带一份预授权清单）。删除文件里的条目（或整个文件）即收回授权，对下一个 run 立即生效。管理入口：`GET`/`DELETE /permissions/rules`（见 [http-api](../server/http-api.md)）与 WebUI「权限」页。
 
 ---
 

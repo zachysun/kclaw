@@ -76,7 +76,7 @@ export interface SlashCtx {
                                        // 切会话时也清空（附件是会话级的）
   send(text: string): void          // 发送普通消息（自定义命令把模板展开成文本走这里）
   setDisposition?(d: "steer" | "wait"): void   // 切换本会话发送处置模式（/steer、/wait 调；sticky POST 成功后才切）
-  setMode?(m: "readonly" | "default" | "acceptEdits"): void
+  setMode?(m: "readonly" | "default" | "acceptEdits" | "trusted" | "auto"): void
                                      // 翻转本地权限模式镜像（/mode 与 Shift+Tab 共用；POST /sessions/:id/mode 成功后才调）
   queueCancel(target: string | "all"): Promise<void>  // 发 queue.cancel 帧：messageId 取消单条，"all" 清空全部
   sendInterrupt(text: string): void  // 一次性中断发送：带 interrupt 处置的 send_message（/interrupt 展开成这个）
@@ -122,7 +122,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 
 ### 权限模式：提示符徽章与 Shift+Tab 循环
 
-提示符随会话权限模式变化：`default` 是裸 `> `；非默认模式前缀徽章 `[readonly] > ` / `[acceptEdits] > `（run 进行中按下时徽章保持旧值，从下一次 run 起生效）。Shift+Tab 按 `PERMISSION_MODES` 顺序（readonly → default → acceptEdits，严格在前）循环切换：`POST /sessions/:id/mode {mode}` 成功后更新本地镜像与提示符并打印 `权限模式: <模式>（Shift+Tab 继续切换）`，失败静默（徽章保持）。模式在 run 中切换同样落到下一次 run——daemon 的权限 gate 每 run 从会话 meta 读取。
+提示符随会话权限模式变化：`default` 是裸 `> `；非默认模式前缀徽章 `[readonly] > ` / `[acceptEdits] > ` / `[trusted] > ` / `[auto] > `（run 进行中按下时徽章保持旧值，从下一次 run 起生效）。Shift+Tab 按 `PERMISSION_MODES` 顺序（readonly → default → acceptEdits → trusted → auto，严格在前）循环切换：`POST /sessions/:id/mode {mode}` 成功后更新本地镜像与提示符并打印 `权限模式: <模式>（Shift+Tab 继续切换）`，失败静默（徽章保持）。模式在 run 中切换同样落到下一次 run——daemon 的权限 gate 每 run 从会话 meta 读取。
 
 ## slash 命令机制（packages/cli/src/slash.ts）
 
@@ -138,7 +138,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 | `/clear` | 同 `/new` 但不带标题（快速新建一个空白会话）；服务端在创建新会话后异步触发一次切会话记忆写入（clear 触发，沉淀旧会话的对话，不阻塞切换） |
 | `/sessions` | `GET /sessions` 列表；空则"（还没有会话）"；否则暂停 readline、@clack 单选列表、切换会话 |
 | `/model [名字]` | 不带参数时列出可用模型（读 `GET /config` 的 provider 条目名）和当前用的模型；带上名字则调 `POST /sessions/:id/model` 切换本会话模型，只影响之后的回复；`/model default` 恢复默认；名字不存在时打印服务端 400 的原文（如 `model not found: …`） |
-| `/mode [readonly\|default\|acceptEdits]` | 切换本会话权限模式（无参数显示当前模式与可选项）；通过 `POST /sessions/:id/mode` 生效、下一次 run 起生效——`readonly` 拒绝写文件与执行命令类工具、`acceptEdits` 工作区内文件写入免逐次确认（见 [permissions](../core/permissions.md)） |
+| `/mode [readonly\|default\|acceptEdits\|trusted\|auto]` | 切换本会话权限模式（无参数显示当前模式与可选项）；通过 `POST /sessions/:id/mode` 生效、下一次 run 起生效——`readonly` 拒绝写文件与执行命令类工具、`acceptEdits` 工作区内文件写入免逐次确认、`trusted` 沙箱与工作区内免确认（边界外拒绝）、`auto` 反复放行的操作自动沉淀为规则（见 [permissions](../core/permissions.md)） |
 | `/attach <路径>` | 读入本地文件、按扩展名粗判 MIME 类型，经 `client.uploadAttachment` 上传并把返回的引用放进待发队列，随你的下一条消息一起发送；不带参数时列出当前待发的附件；失败打印 `附件上传失败: …` |
 | `/compact [重点说明]` | 手动压缩当前会话的早期对话（跳过触发线立即执行一次，机制见 [compaction](../core/compaction.md)）：调 `POST /sessions/:id/compact`，参数作为摘要重点说明（focus）进入两次摘要调用；打印 daemon 返回的一句话（`压缩了 N 段…` / `无可压缩内容` / `会话正在运行`）；失败打印 `压缩失败: …` |
 | `/steer` | 无参切换命令：`POST /sessions/:id/disposition {disposition:"steer"}` 写会话级覆盖（sticky，与 Web 三选同一存储），成功后切本地模式并打印"本会话处置模式：引导（steer）…"；失败打印 `切换处置失败: …` 且**不**切本地模式（回车直发维持旧处置） |

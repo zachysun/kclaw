@@ -10,8 +10,9 @@ compatibility promises.
 ### Added
 
 - **Permission modes** — each session now carries an independent permission mode
-  (`readonly` / `default` / `acceptEdits`), stored in session meta and switched
-  from the CLI (Shift+Tab cycle or `/mode`) or the WebUI (always-on selector).
+  (`readonly` / `default` / `acceptEdits` / `trusted` / `auto`), stored in
+  session meta and switched from the CLI (Shift+Tab cycle or `/mode`) or the
+  WebUI (always-on selector).
   `readonly` denies all write-class tools (fs_write / fs_edit / exec); in
   `acceptEdits` in-workspace file writes skip confirmation. The daemon-level
   readonly flag is gone — the mode is per-session, defaulting to `default`.
@@ -36,6 +37,22 @@ compatibility promises.
   `sandbox: {enabled, writeRoots}` config section (on by default). Linux
   fallback chain: bwrap → manual confirmation; Landlock is a documented
   follow-up (pure Node cannot issue the syscall).
+- **Trusted session mode** — a fifth permission mode (`trusted`) that
+  auto-approves everything inside the sandbox/workspace boundary with no
+  prompts and denies everything outside it (fail-closed: no human fallback).
+  Deny blacklist rules still short-circuit first; exec requires the OS sandbox
+  (denied with a `mode` reason when unavailable); sensitive tools without
+  sandbox coverage (MCP adapters, unregistered tools) are denied outright.
+- **Auto-learned rules** — a sixth permission mode (`auto`) that keeps the
+  `default` decision chain and adds rule induction: when the same operation is
+  approved with `once` N consecutive times (`permissions.autoLearnThreshold`,
+  default 3, 0 disables), it is persisted as a `source: "auto"` project-scope
+  decided rule that applies from the next run. Any `reject` or TIMEOUT resets
+  the streak (per-session scoped keys — approvals in one session never help
+  another cross the threshold);
+  `project`/`global` verdicts and sandboxed auto-passes never count. Decided
+  rule entries gained an optional `source` marker (`"auto" | "manual"`, absent
+  reads as manual) for audit, with no engine-side behavior change.
 
 ### Changed
 
