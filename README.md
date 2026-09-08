@@ -140,6 +140,7 @@ providers:
 | `providers` | As above. When absent, the `KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY / KCLAW_LLM_MODEL` environment variables also work (config wins over env). Local Ollama works: `baseUrl: http://127.0.0.1:11434/v1`, `apiKey: ollama`. |
 | `workspace` | Sandbox root for file tools (fs_read/fs_edit, …); access outside it is denied. |
 | `permissions.allow / deny` | Prefix-matching rules (e.g. `exec:git *`): allow skips confirmation, deny rejects outright, everything else asks. |
+| `permissions.defaultMode` | Default permission mode for newly created sessions (`readonly` / `default` / `accept-edits` / `trusted` / `auto`), frozen into each session at creation; changing it only affects sessions created afterwards. |
 | `exec.timeoutMs / maxOutputBytes` | Timeout and output truncation for the exec tool. |
 | `web.tavilyApiKey` | Optional; enables web_search. |
 | `web.timeoutMs` | Timeout for web tool requests (default 20000ms; both `web_search` and `web_fetch` are bound by it — a hung site no longer stalls the whole run). |

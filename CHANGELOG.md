@@ -53,6 +53,22 @@ compatibility promises.
   `project`/`global` verdicts and sandboxed auto-passes never count. Decided
   rule entries gained an optional `source` marker (`"auto" | "manual"`, absent
   reads as manual) for audit, with no engine-side behavior change.
+- **Session grants wired (run-scoped)** — the pre-existing `SessionGrants`
+  decision path is now actually wired: each run builds a fresh grant store
+  (when `permissions.sessionGrants` is on), a `once` approval grants the same
+  narrowed rule until the run ends, and repeated identical calls within that
+  run stop re-prompting (`grantedBy: "session_grant"`). Cross-run persistence
+  stays with decided rules — no long-lived exemption is ever created. `auto`
+  sessions skip grants so induction still observes every human confirmation.
+- **Config default permission mode** — `permissions.defaultMode` sets the
+  initial mode for newly created sessions, frozen into `session.created` and
+  `meta.mode` at creation (changing the config only affects sessions created
+  afterwards; invalid values fall back to `default` with a warning).
+- **Sandbox audit event** — each run appends one `sandbox.checked` session
+  event (`enabled` / `attempted` / `available` / `unavailableReason`) right
+  after the sandbox probe; the trail page renders it as a 沙箱 row (可用 /
+  不可用（原因）/ 已关闭). Same contract as the system audit event: not
+  broadcast, not projected, and a write failure fails the run.
 
 ### Changed
 

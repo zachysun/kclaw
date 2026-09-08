@@ -53,7 +53,9 @@ export class ConfigPermissionGate implements PermissionGate {
     safeTools?: Set<string>        // 可自动放行的工具名集合
     toolFacts?: Map<string, { risk; argFields }>  // 工具注册事实表（risk + 参数字段名），
                                    // safeTools 之外的一切待遇由引擎按它派生（见"待遇派生"）
-    grants?: SessionGrants         // 仅当 config 开启 sessionGrants 时被查询
+    grants?: SessionGrants         // run 级授权存储（批次 D 接线）：仅当 config 开启
+                                   // sessionGrants 且会话模式非 auto 时被查询（auto 要从
+                                   // 人工确认中学习，run 级免询会隐藏归纳信号）
     newConfirmationId?: () => string
     workspace?: string             // 会话工作目录，越界判定与路径规范化用它
     readRoots?: string[]           // 额外可读根：safe 的路径参数工具视同工作区（daemon 传附件目录）
@@ -74,7 +76,9 @@ permissions:
   allow: []                          # 默认空
   deny: ["exec:sudo*", "exec:rm -rf*"]
   confirmTimeoutMs: 120000           # 确认等待上限，默认 120s
-  sessionGrants: true
+  sessionGrants: true                # 会话内"本次允许"记忆是否生效（run 级）
+  defaultMode: default               # 新会话的初始权限模式（创建时固化为 meta.mode；缺省 default）
+  # autoLearnThreshold: 3            # auto 模式归纳阈值（默认 3，0 关闭），见第 5 节
 ```
 
 ---
@@ -150,12 +154,12 @@ exec 没有可判定的"目标路径"——命令可以以任何方式访问文�
 
 gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
 
-- **mode（会话权限模式）**：`PERMISSION_MODES = ["readonly" | "default" | "acceptEdits" | "trusted" | "auto"]` 五档，存在会话元数据 `meta.mode`，缺省 `default`；run 装配每 run 从会话 meta 读出传入 gate。各档语义：
+- **mode（会话权限模式）**：`PERMISSION_MODES = ["readonly" | "default" | "acceptEdits" | "trusted" | "auto"]` 五档，存在会话元数据 `meta.mode`，缺省 `default`；daemon 创建的新会话（HTTP `POST /sessions` 与任务调度建会话）把 `config.permissions.defaultMode` 的当前值**固化为初始 mode**（事件流 `session.created` 带 `mode` 字段，旧流无该字段则读时缺省 default）——改 config 默认只影响之后新建的会话；run 装配每 run 从会话 meta 读出传入 gate。各档语义：
   - *readonly*：**risk 为 sensitive 的工具**（由 risk 直接派生，引擎不持名单——今天恰为 `fs_write`/`fs_edit`/`exec` 三个）在判定链第 ⓪ 步直接拒绝——reason `"readonly"`、note 文案 `只读模式（readonly）`，工具得到 error result 并随 tool 消息落一个 `kind:"denied"` note；读、web 与 memory 工具不受影响。短路排在一切规则之前：白名单里的 `allow: exec:*` 在只读下同样不执行——这个模式承诺的是零写入风险。
   - *default*：默认档，判定链照常走（本节其余内容描述的就是它）。
   - *acceptEdits*：工作区内的文件写入免逐次确认——判定链第 ②'' 步对**路径写类工具**（带 `path` 参数且 sensitive）的目标做工作区内检查，通过即 `allow {reason:"accept_edits"}`；越界目标与 exec 等命令类工具不受益，仍走 confirm。
   - *trusted*（批次 C）：免审档——沙箱与工作区边界内的操作全部自动放行、不弹确认；边界外（exec 无法沙箱化、越界、无沙箱保护的 sensitive 工具）一律拒绝（fail-closed，见第 2 节「trusted 分支」）。前提是 exec 沙箱可用（`config.sandbox.enabled` 默认开）：沙箱不可用或未启用时，trusted 下的 exec 直接 deny——免审档没有人工兜底，拒绝是唯一安全出路。
-  - *auto*（批次 C）：判定链与 default 相同，额外叠加**规则归纳**：auto 会话里同一个操作（同一收窄键）被连续 `once` 批准 N 次（`config.permissions.autoLearnThreshold`，默认 3，0 关闭）后，自动把该操作沉淀为一条 `source:"auto"` 的项目档规则（落盘位置与手动"总是允许"相同，下个 run 起生效）；任何一次 `reject` **或超时**清零该键的计数——"拒绝"（含沉默的超时拒绝）是明确信号，不许被更早的放行覆盖。计数在进程内、**键按会话隔离**（跨会话的批准互不叠加；daemon 重启即清零，跨会话持久化是文档化后续项）；`project`/`global` 裁决不参与计数（那是显式的"总是允许"，无需归纳）；沙箱自动放行的调用也从不计数——归纳只针对人工裁决。auto 模式本身不自动放行任何东西，它只是把反复的人工批准变成规则。
+  - *auto*（批次 C）：判定链与 default 相同，额外叠加**规则归纳**：auto 会话里同一个操作（同一收窄键）被连续 `once` 批准 N 次（`config.permissions.autoLearnThreshold`，默认 3，0 关闭）后，自动把该操作沉淀为一条 `source:"auto"` 的项目档规则（落盘位置与手动"总是允许"相同，下个 run 起生效）；任何一次 `reject` **或超时**清零该键的计数——"拒绝"（含沉默的超时拒绝）是明确信号，不许被更早的放行覆盖。计数在进程内、**键按会话隔离**（跨会话的批准互不叠加；daemon 重启即清零，跨会话持久化是文档化后续项）；`project`/`global` 裁决不参与计数（那是显式的"总是允许"，无需归纳）；沙箱自动放行的调用也从不计数——归纳只针对人工裁决。**auto 模式不消费 run 级会话授权**（见第 11 节）：run 级免询会吞掉同一 run 内的重复确认、让归纳看不见连续的人工放行，所以即使 sessionGrants 开启、授权存储已就位，auto 会话仍逐次确认直到归纳落盘。auto 模式本身不自动放行任何东西，它只是把反复的人工批准变成规则。
   - 切换入口：CLI 的 Shift+Tab 循环与 `/mode` 命令、WebUI 的常驻选择器，最终都落到 `POST /sessions/:id/mode`（事件溯源写入：追加一条 `session.set` 事件进会话事件流并折进 meta 投影，`GET /sessions/:id/events` 可见，不做 WS 广播）；下一次 run 起生效。旧版 `POST /sessions/:id/readonly` 已移除，读兼容见下。
   - **legacy 读兼容**：投影 `meta.json` 里旧的 `readonly: true` 读出时映射为 `mode: "readonly"`（布尔删除）；事件流里旧的 `session.set {readonly}` 同样映射。写入端只产 `mode`。
   - daemon 级只读启动旗标（`--readonly`）已随本批移除：模式是会话级事实，宿主不再设全局上限。
@@ -195,6 +199,7 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
     writeRoots: []       # 追加写白名单（realpath 形式），如 npm 缓存目录
   ```
   沙箱启动失败或命令被沙箱拒绝 → exec 返回 error result（fail-closed，不降级裸跑）。可执行性探测用真实路径探测（如 `bwrap --die-with-parent true` 验证 user namespaces 真可用）。
+  - **审计（批次 D）**：run 装配在每次探测后向会话事件流落一条 `sandbox.checked` 审计事件（第 10 种会话事件，字段 `enabled`=config 开关 / `attempted`=是否真探测 / `available`=探测结果 / `unavailableReason`=原因；主动关闭沙箱不带原因）。每 run 恰一条，只落盘不上总线、不进 meta 投影、不推进 updatedAt，写失败即 run 失败（与 `system` 审计事件同契约）——轨迹页可逐 run 回看"当时沙箱是什么状态"，配合 grantedBy / deny note 串成完整审计链（见 [webui](./webui.md)）。
 
 ### 8. 人工确认流程
 
@@ -218,7 +223,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
   - 登记：run 装配（core `executeRun`）的包装 gate，confirm 判定一出就在 broker 登记（携带 toolCall、risk、会话 id）。
   - 裁决：CLI/Web 经 WS `confirmation.resolve` 帧调 `broker.resolve(id, decision, by)`（`by` 默认 `"cli"`，WebUI 帧带 `client:"web"`）。裁决返回布尔——unknown/stale id 落空。
   - 沉淀的落盘在 server 侧 WS 入口（`packages/server/src/ws.ts`）：resolve 之前先 `broker.lookup(id)` 快照 toolCall 与会话（resolve 会移除条目），`project`/`global` 裁决才落盘；`once`/`reject`/未知 id 不写任何文件。项目档的目标工作目录取会话元数据的 `workdir`（缺省回退 daemon 配置的工作目录）。
-  - **auto 模式归纳在装配层（不在 WS 入口）**：run 装配（core `run-assembly.ts`）的 `resolveConfirmation` wrapper 能看到**每一种**裁决结局——`once`/`reject` 经网关、**超时**在竞速内自行到期——这是 WS 命令分发层做不到的（超时永不产生 resolve 帧）。当裁决所属会话的模式是 `auto`（用 run 启动时的快照，不是 resolve 时刻的实时值，避免切模式竞态）时：`once` 裁决先喂给 `AutoLearnCounter`（core 纯内存类，键 = `sessionId + 收窄键`，按会话隔离，见第 5 节 auto 档）——跨过阈值即落盘一条 `source:"auto"` 的项目档规则（best-effort，写失败只记日志不打断 run）；`reject` **或超时**清零该键计数；abort（run 取消）不是拒绝、不碰计数。判定链与规则引擎完全不知道 auto 的存在——归纳发生在裁决侧，规则落盘后由既有机制生效。WS 入口只保留 `project`/`global` 的"总是允许"落盘。
+  - **auto 模式归纳在装配层（不在 WS 入口）**：run 装配（core `run-assembly.ts`）的 `resolveConfirmation` wrapper 能看到**每一种**裁决结局——`once`/`reject` 经网关、**超时**在竞速内自行到期——这是 WS 命令分发层做不到的（超时永不产生 resolve 帧）。当裁决所属会话的模式是 `auto`（用 run 启动时的快照，不是 resolve 时刻的实时值，避免切模式竞态）时：`once` 裁决先喂给 `AutoLearnCounter`（core 纯内存类，键 = `sessionId + 收窄键`，按会话隔离，见第 5 节 auto 档）——跨过阈值即落盘一条 `source:"auto"` 的项目档规则（best-effort，写失败只记日志不打断 run）；`reject` **或超时**清零该键计数；abort（run 取消）不是拒绝、不碰计数。同一 seam 里，`once` 裁决还会把收窄规则写入**本次 run 的授权存储**（`grants.grant`，批次 D 接线，见第 11 节）——auto 模式下 gate 不消费它，属死写，无副作用。判定链与规则引擎完全不知道 auto 的存在——归纳发生在裁决侧，规则落盘后由既有机制生效。WS 入口只保留 `project`/`global` 的"总是允许"落盘。
   - broker **不发事件、不设内部超时**——事件归循环，计时归循环与装配侧的同一竞速机制；两处用同一超时值竞速保证视图一致。
   - 超时/取消后 run 装配（core `executeRun`）的 `resolveConfirmation` 调 `expire` 把条目标记失效，迟到的裁决只会收到 unknown confirmation，不会确认一个已无人等待的动作。
 - deny 的 `user_denied` / `timeout` 两个 reason 不是 gate 产出的：gate 只产生 `blacklist` / `readonly` 两种拒绝（规则命中或只读会话禁写/exec），前两者是循环把人工拒绝/超时转成 error result 时的语义标记（note 块的 `kind`）。
@@ -237,9 +242,13 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 
 每个被放行的调用都会把原因记在 tool 消息上：`ToolMessage.grantedBy: Record<callId, GrantedBy>`（`packages/core/src/protocol/messages.ts`，`GrantedBy = "safe" | "whitelist" | "session_grant" | "confirmed" | "accept_edits" | "learned" | "sandboxed" | "trusted"`）。这是完整的执行审计链——事后可逐调用追溯"这次执行的授权来源"；`learned`/`accept_edits` 两个值分别对应沉淀规则放行与 acceptEdits 模式放行，`sandboxed` 对应 exec 沙箱顶替人工的放行，`trusted` 对应 trusted 模式对工作区内写操作的放行。Web 端审计视图（`packages/web/src/audit/AuditView.tsx`）就按 callId 反查该字段渲染批注。
 
-### 11. 会话级授权（SessionGrants）
+### 11. 会话级授权（SessionGrants，批次 D 接线）
 
-`SessionGrants` 是进程内存里的授权存储：人工确认某规则后 `grant(rule)` 存入编译后的规则，同一会话内相同调用不再重复询问。生效需要两个条件同时成立：`config.permissions.sessionGrants === true` **且**宿主在构造 gate 时传入 `grants` 存储。当前 daemon 装配传的是 `{workspace, safeTools, toolFacts, readRoots, mode, decidedRules, sandboxAvailable}`，未传 grants——引擎与测试就绪，daemon 侧尚未接线，此分支暂不生效（跨 run 的持久授权由沉淀规则承担，SessionGrants 只覆盖同一 run 内的重复调用）。
+`SessionGrants` 是进程内存、**单 run 有效**的授权存储：run 装配（core `executeRun`）在 `config.permissions.sessionGrants === true` 时每 run 新建一个实例传入 gate，run 结束即弃（类名早于 run 级语义，行为以本文为准）。写入在装配层的 `resolveConfirmation` seam（与 auto 归纳同处，互不干扰）：一次 `once` 裁决把该调用的收窄规则 `grant()` 进存储；`project`/`global`（已落盘沉淀规则，无需授权）、`reject`、超时一律不写。
+
+消费在 gate 判定链第 ⑤ 步（reason `"session_grant"`）：**同一 run 内**相同调用（同一收窄规则）不再弹确认。下一条消息重新询问——跨 run 的持久免询仍由沉淀规则承担，SessionGrants 从不产生长期豁免。
+
+**auto 模式例外**：gate 在 `auto` 会话里跳过授权咨询（无论存储是否已就位）。auto 的契约是从人工确认中学习，run 级免询会吞掉同一 run 内的重复确认、破坏「连续 N 次 once → 归纳」（含单 run 内 N 次的批次 C 语义）——所以 auto 下重复调用仍逐次确认，直到归纳落盘。装配 seam 的写入保持无条件（auto 模式下是死写，无害），判定收敛在 gate（模式语义归引擎）。
 
 ---
 
@@ -249,7 +258,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 - **readonly 模式短路一切放行路径**：包括 allow 白名单、沉淀规则与会话授权；它不是一条 deny 规则（写不进 config），而是会话模式开关。
 - **沉淀规则的授权范围以工作区为界**：learned 放行只在目标不逃逸工作区时生效（与 allow 同一豁免规则）；exec 沉淀规则落盘时收窄为首词 + 子命令前缀，删除规则或整个文件即收回授权。
 - **规则大小写敏感**，`*` 之外无其它通配符（`?`、`[]` 都是字面字符）。
-- **SessionGrants 是进程内存**：daemon 重启即清空；且历史 grantedBy 记录不受影响（那是持久化在会话日志里的）。
+- **SessionGrants 是进程内存且单 run 有效**：每 run 新建、run 结束即弃，daemon 重启即清空；且历史 grantedBy 记录不受影响（那是持久化在会话日志里的）。
 - **gate 缺失 = 全放行**：循环对未注入 `permissions` 的调用一律 `{type:"allow", reason:"safe"}`——组装宿主时漏配权限网关等于没有权限检查，daemon 装配始终注入。
 - **exec 沙箱是放行的批准方，不是额外的确认**：`sandboxed` 只在无规则命中、本应 confirm 的落点上生效；deny/allow/沉淀规则/会话授权的优先级都高于它，readonly 的短路也依旧最优先。
 - **trusted 免审档没有人工兜底**：边界外一律 deny——exec 沙箱不可用、路径越出工作区、无沙箱保护的 sensitive 工具（MCP 适配器、未注册工具）在 trusted 下都会被拒绝而不是交给人工；deny 黑名单仍然最优先。开着沙箱才应该用 trusted。

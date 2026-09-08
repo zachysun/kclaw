@@ -28,7 +28,7 @@
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
-| POST | `/sessions` | 创建会话 | `{title?, workdir?}`（均可缺省；传入时必须是非空字符串）；**workdir 缺省落 `config.workspace` 的值**，保证每条会话都带具体工作目录；创建成功后**异步触发一次切会话记忆写入**（clear 触发，归属 = 创建前的项目最近活动会话，即用户刚离开的旧会话；未装配记忆系统时不触发），不阻塞响应 | 201，`SessionMeta`（title 缺省为 `"新会话"`） |
+| POST | `/sessions` | 创建会话 | `{title?, workdir?}`（均可缺省；传入时必须是非空字符串）；**workdir 缺省落 `config.workspace` 的值**，保证每条会话都带具体工作目录；初始权限模式取 `config.permissions.defaultMode` 的当前值**固化为 `meta.mode`**（缺省 default；改配置只影响之后新建的会话）；创建成功后**异步触发一次切会话记忆写入**（clear 触发，归属 = 创建前的项目最近活动会话，即用户刚离开的旧会话；未装配记忆系统时不触发），不阻塞响应 | 201，`SessionMeta`（title 缺省为 `"新会话"`） |
 | GET | `/sessions` | 会话列表（updatedAt 新的在前） | 查询参数 `deleted=true` 返回回收站会话；缺省只返回未删除会话 | `SessionMeta[]` |
 | GET | `/sessions/:id` | 读单个会话元数据 | — | `SessionMeta` |
 | PATCH | `/sessions/:id` | 改名 | `{title?}`（非空字符串；body 里的 `workdir` 被解析但**不生效**，只有 title 传给 `updateMeta`） | `SessionMeta` |
@@ -38,7 +38,7 @@
 | POST | `/sessions/:id/model` | 会话级模型切换（只影响此会话**之后**的 run，历史不动） | `{model?}`：provider 条目名（entry key，见 [run-manager](./run-manager.md) 的模型解析）或裸模型名；`""`/缺省清空回落默认；类型不对 400 `model must be a string`，条目不存在 400 `model not found: <name>` | `SessionMeta` |
 | POST | `/sessions/:id/mode` | 会话级权限模式切换（只影响此会话**之后**的 run，历史不动；机制见 [permissions](../core/permissions.md)） | `{mode: "readonly"\|"default"\|"acceptEdits"\|"trusted"\|"auto"}` 必填；非法值 400 `mode must be one of readonly | default | acceptEdits | trusted | auto` | `SessionMeta` |
 | GET | `/sessions/:id/messages` | 读全部消息（对话/断线恢复的数据源，ChatPanel 用） | — | `Message[]`（事件流投影视图——`readMessages` 从 events.jsonl 过滤 `message` 事件按事件序返回；**排队未执行的消息不在其中**，见 `/queue`） |
-| GET | `/sessions/:id/events` | 完整事件流（事件溯源的唯一真相；轨迹页的单源数据） | — | `SessionEvent[]`（append-only，按事件序；含 session.created / message / compaction / memory / system 等全部事件，见 [storage](../core/storage.md)） |
+| GET | `/sessions/:id/events` | 完整事件流（事件溯源的唯一真相；轨迹页的单源数据） | — | `SessionEvent[]`（append-only，按事件序；含 session.created / message / compaction / memory / system / sandbox.checked 等全部事件，见 [storage](../core/storage.md)） |
 | GET | `/sessions/:id/queue` | 排队消息快照：重连/刷新的全量纠偏兜底 | — | `QueueEntry[]`（`queue.jsonl` 整文件读出，数组顺序即执行顺序；steer 条目排在可执行条目之后；空队列返回 `[]`） |
 | POST | `/sessions/:id/disposition` | 会话级发送处置覆盖（CLI `/steer`、`/wait` 与 Web 三选的 steer/wait 的 sticky 存储；interrupt 在 Web 为一次性、CLI 为 `/interrupt` 一次性动作，均不落覆盖） | `{disposition: "steer"\|"wait"\|"interrupt"}` 必填；非法值 400 `disposition must be "steer", "wait" or "interrupt"` | `SessionMeta`（写入 `dispositionOverride`，优先于配置默认） |
 | GET | `/sessions/:id/compactions` | 压缩审计记录（事件流里 `compaction` 事件的只读视图） | — | `CompactionRecord[]`（从 events.jsonl 过滤 `compaction` 事件按事件序返回；无事件返回 `[]`） |
@@ -214,7 +214,7 @@ web 的轨迹页（`packages/web/src/audit/AuditView.tsx`）演示了标准用�
 
 1. `GET /sessions` 获取全部会话（下拉选择"按会话筛选"即选择 `:id`）；
 2. `GET /sessions/:id/events` 获取该会话**完整事件流**（`SessionEvent[]`，append-only、按事件序）；
-3. 客户端按流序摊平成逐行轨迹：`message` 事件每条消息按块（block）摊平（role + 类型标签 + 摘要，点击展开完整块），`compaction` 事件渲染成"压缩"行、`memory` 事件渲染成"记忆"行、`system` 事件渲染成"系统提示词"行（开头片段 + 字符数，点击展开全文，与相邻上一条"系统提示词"行文本不同标"已变化"），会话元数据事件（session.created/renamed/…）跳过。
+3. 客户端按流序摊平成逐行轨迹：`message` 事件每条消息按块（block）摊平（role + 类型标签 + 摘要，点击展开完整块），`compaction` 事件渲染成"压缩"行、`memory` 事件渲染成"记忆"行、`system` 事件渲染成"系统提示词"行（开头片段 + 字符数，点击展开全文，与相邻上一条"系统提示词"行文本不同标"已变化"）、`sandbox.checked` 事件渲染成"沙箱"行（可用 / 不可用（原因）/ 已关闭），会话元数据事件（session.created/renamed/…）跳过。
 
 只读、无 mutation、无独立 `/audit` 路由——事件流（`events.jsonl`，一行一个事件的 append-only 文件）是轨迹的唯一事实来源，HTTP 只是它的读取窗口。tool 消息上的 `grantedBy`（每个工具调用的放行原因）随 `message` 事件一起返回，是"谁批准了这个操作"的审计依据。
 
