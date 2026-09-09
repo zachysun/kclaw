@@ -61,6 +61,12 @@ export interface AgentDeps {
   toolResultKeep?: number
   /** Per-request output cap (config entry `maxOutput`) sent as max_tokens; undefined = provider default. */
   maxTokens?: number
+  /**
+   * Tool-loop guard threshold: after this many IDENTICAL consecutive tool
+   * executions (same tool + same args), a strategy reminder is appended to
+   * the result the model sees. 0 disables the guard.
+   */
+  loopMaxRepeats?: number
   maxIterations?: number
   /** executors keyed by tool name; calls to unknown names come back as error results */
   tools?: Map<string, ToolExecutor>
@@ -160,6 +166,12 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
   const maxIterations = deps.maxIterations ?? 25
   const window = deps.window ?? 200
   const emit = (e: AgentEvent) => deps.onEvent(e)
+  // Tool-loop guard state: signature of the last executed call and its
+  // consecutive repeat count, alive ACROSS turns (the guard detects a loop
+  // that spans iterations). Same tool + same argsJson on the wire is
+  // trigger-grade; a threshold of 0 skips the check entirely.
+  const loopThreshold = deps.loopMaxRepeats ?? 5
+  const loopState = { sig: "", count: 0 }
 
   emit(makeEvent("run.started", { trigger: input.trigger ?? "user" }, ctx))
 
@@ -467,7 +479,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
     }
 
     if (stopReason === "tool_use" && entries.length > 0) {
-      await runToolTurn(entries, { input, deps, emit, ctx, all })
+      await runToolTurn(entries, { input, deps, emit, ctx, all, loop: loopState, threshold: loopThreshold })
       // 迭代边界中途压缩（compaction-check 位置）：工具批次
       // 完成后、引导注入之前。返回 null/undefined = 不压/已取消/失败，照常继续；
       // 抛错（skip 语义下不会发生，防御保留）同样照常继续（压缩失败不补救，
@@ -526,9 +538,13 @@ async function runToolTurn(
     emit(e: AgentEvent): void
     ctx: { sessionId: string; runId: string }
     all: Message[]
+    /** Cross-turn loop-guard state, owned by runAgent. */
+    loop: { sig: string; count: number }
+    /** Guard threshold (0 = off), resolved once in runAgent. */
+    threshold: number
   },
 ): Promise<void> {
-  const { input, deps, emit, ctx, all } = o
+  const { input, deps, emit, ctx, all, loop, threshold } = o
 
   // The tool message skeleton exists before execution so tool_result.delta
   // events during execution carry the real messageId.
@@ -635,6 +651,17 @@ async function runToolTurn(
     } catch (err) {
       block.status = "error"
       block.output = errorMessage(err)
+    }
+    // Loop guard (after execution, before completed is emitted so events and
+    // history stay consistent): identical consecutive executions append a
+    // strategy reminder the model sees on its next read of the result.
+    if (threshold > 0) {
+      const sig = `${entry.call.name}\u0000${entry.call.argsJson}`
+      if (sig === loop.sig) loop.count += 1
+      else { loop.sig = sig; loop.count = 1 }
+      if (loop.count >= threshold) {
+        block.output += `\n<system-reminder kind="loop-guard">同一个工具调用（${entry.call.name}）已连续重复 ${loop.count} 次，可能在空转。请停止重复：核对参数与前置条件、换一种做法，或直接向用户说明。</system-reminder>`
+      }
     }
     block.durationMs = performance.now() - startedAt
     emit(makeEvent("tool_result.completed", { messageId: toolMsg.id, block }, ctx))

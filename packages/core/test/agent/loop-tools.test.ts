@@ -299,3 +299,73 @@ describe("runAgent tool turn", () => {
     })
   })
 })
+
+describe("tool loop guard", () => {
+  const repeated = (rounds: number, argsJson = '{"q":"x"}'): LlmStreamEvent[][] =>
+    [...Array(rounds)].map((_, i) => [...toolCallStream(0, `call_${i}`, "search", argsJson)]).concat([FINAL])
+
+  const resultsOf = (events: Parameters<Parameters<typeof runAgent>[1]["onEvent"]>[]) =>
+    eventsOf(events as AgentEvent[], "tool_result.completed").map((e) => (e.payload as { block: ToolCallBlock }).block)
+
+  it("appends a loop-guard reminder once repeats reach the threshold", async () => {
+    const messages: Message[] = []
+    const events: AgentEvent[] = []
+    await runAgent(
+      { sessionId: "s", history: [], system: "", userText: "go" },
+      {
+        llm: scriptClient(repeated(6)),
+        model: "m",
+        tools: new Map([["search", echoTool()]]),
+        loopMaxRepeats: 5,
+        hooks: chainOf(),
+        onEvent: (e) => events.push(e as AgentEvent),
+        onMessage: (m) => messages.push(m),
+      } as Parameters<typeof runAgent>[1],
+    )
+    const results = eventsOf(events, "tool_result.completed").map((e) => (e.payload as { block: { output: string } }).block)
+    expect(results).toHaveLength(6)
+    expect(results[3]!.output).not.toContain("loop-guard")
+    expect(results[4]!.output).toContain("loop-guard")
+    expect(results[5]!.output).toContain("已连续重复 6 次")
+    expect(messages.at(-2)!.blocks.some((b) => b.type === "tool_result" && b.output.includes("loop-guard"))).toBe(true)
+  })
+
+  it("a changed signature resets the counter; 0 disables the guard", async () => {
+    const events: AgentEvent[] = []
+    const calls = (rounds: number, argsJson: string): LlmStreamEvent[][] =>
+      [...Array(rounds)].map((_, i) => [...toolCallStream(0, `call_${i}`, "search", argsJson)])
+    // 6 rounds: a,a,a,b,b,b,end — thresholds never reached per signature
+    const script = [...calls(3, '{"q":"a"}'), ...calls(3, '{"q":"b"}'), FINAL]
+    await runAgent(
+      { sessionId: "s", history: [], system: "", userText: "go" },
+      {
+        llm: scriptClient(script),
+        model: "m",
+        tools: new Map([["search", echoTool()]]),
+        loopMaxRepeats: 5,
+        hooks: chainOf(),
+        onEvent: (e) => events.push(e as AgentEvent),
+        onMessage: () => {},
+      } as Parameters<typeof runAgent>[1],
+    )
+    const results = eventsOf(events, "tool_result.completed").map((e) => (e.payload as { block: { output: string } }).block)
+    expect(results).toHaveLength(6)
+    expect(results.every((r) => !r.output.includes("loop-guard"))).toBe(true)
+
+    const eventsOff: AgentEvent[] = []
+    await runAgent(
+      { sessionId: "s", history: [], system: "", userText: "go" },
+      {
+        llm: scriptClient(repeated(4)),
+        model: "m",
+        tools: new Map([["search", echoTool()]]),
+        loopMaxRepeats: 0,
+        hooks: chainOf(),
+        onEvent: (e) => eventsOff.push(e as AgentEvent),
+        onMessage: () => {},
+      } as Parameters<typeof runAgent>[1],
+    )
+    const off = eventsOf(eventsOff, "tool_result.completed").map((e) => (e.payload as { block: { output: string } }).block)
+    expect(off.every((r) => !r.output.includes("loop-guard"))).toBe(true)
+  })
+})

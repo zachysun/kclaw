@@ -74,6 +74,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `sandbox.enabled` / `writeRoots` | `true` / `[]` | exec 沙箱整体开关与追加写白名单（realpath 形态），见 [sandbox](./sandbox.md)；可选字段仅为兼容旧配置文件 |
 | `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 清理用（见 [jobs](./jobs.md)） |
 | `sessions.contextTokens` / `compactAtRatio` / `compactPanicRatio` / `compactTargetRatio` / `toolResultKeep` | `128000` / `0.66` / `0.85` / `0.33` / `8` | 上下文压缩 v2/v3（见 [compaction](./compaction.md)）：token 预算、触发线（估算发送量达预算 × 0.66 即压缩）、红线（运行中水位达预算 × 0.85 时在迭代边界触发中途压缩）、压缩后保留部分目标（预算 × 0.33）、发送时保留最近几个工具结果原文。五个字段均可选，缺省值在读取处兜底（前四个在 run 装配 core `executeRun`，`compactTargetRatio` 在压缩引擎 `Compactor`） |
+| `sessions.toolLoopMaxRepeats` | `5` | 工具死循环守卫：同一工具调用（同名同参数）连续执行达 N 次后，该次结果附加 `<system-reminder kind="loop-guard">` 换策略提醒（跨工具回合计数、结果改变即重置）；`0` 关闭（见 [agent-loop](./agent-loop.md)） |
 | `sessions.defaultDisposition` | `"steer"` | 不带 disposition 的 send_message 的默认处置（见 [run-manager](../server/run-manager.md)）；会话可经 `meta.dispositionOverride` 覆盖 |
 | `sessions.compactThreshold` / `compactKeep` | 无（废弃） | v1 压缩（40 条触发、保留 25 条）的字段，已废弃不生效：配置文件里存在时不报错，但没有任何消费方 |
 | `subagents.maxConcurrent` | `4` | 每个主会话同时存活的子代理上限（per-parent 计数，超限派发立即返回 error、不建会话，见 [subagents](./subagents.md)）；可选字段，缺省值在 spawner 构建处兜底 |

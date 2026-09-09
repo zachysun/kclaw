@@ -106,7 +106,8 @@ run.started {trigger}
 3. **权限检查**：每个可执行调用按模型顺序过 `check`——`deny` → error result + note 块（`kind:"denied"|"timeout"`）；`allow` → 记 `grantedBy`（`sandboxed` 即命令类工具由 exec 沙箱顶替人工的放行，见 [permissions](./permissions.md) 第 7 节）；`confirm` → 发 `confirmation.requested {confirmationId, toolCall, risk, expiresAt}`（沙箱启用但不可用的回落确认带 `noteText`），`raceConfirmation` 三方竞速（人工裁决 | confirmTimeoutMs 超时 | abort 信号）。人工裁决是四选一（`once` / `project` / `global` / `reject`，来自 `confirmation.resolve` 帧）：`once`/`project`/`global` 都放行并记 `grantedBy:"confirmed"`（project/global 的规则沉淀在 server 侧 WS 入口，见 [permissions](./permissions.md)）；`reject`/超时的文案固定："用户拒绝了该操作" / "确认超时，操作未执行"。
 4. **调度**：`concurrency:"parallel"` 的调用 `Promise.allSettled` 并发；`"serial"` 的在并行组全部 settle 后逐个 `await`——串行排他是结构保证（屏障 + 顺序 await：先等并行组全部结束，再逐个顺序执行），不是测试约束。执行器收到 `ctx.signal`（即 `deps.signal`）：长时间运行的工具（如 `subagent_run`）靠它感知父 run 的中止，实现"父停子停"（见 [subagents](./subagents.md)）。
 5. **结果**：每个执行中的结果发 `tool_result.created → tool_result.delta（executor 的 onOutput）→ tool_result.completed`；未执行（参数解析失败/未知工具/钩子闸门拒绝/abort 拦截）的结果只补 created+completed。结果块一律按模型给定顺序写入；拒绝 note 排在结果之后；`grantedBy` 记为 `Record<callId, GrantedBy>` 挂在 tool 消息上。
-6. `onMessage` 持久化 → `message.completed` → 回到循环顶部。
+6. **死循环守卫**：执行完成后（completed 发出前）按"工具名 + 参数串"签名做跨回合计数——同一签名连续执行达到 `sessions.toolLoopMaxRepeats`（缺省 5，`0` 关闭）次时，该次结果附加一行 `<system-reminder kind="loop-guard">` 换策略提醒，随结果持久化、审计可见；签名变化即重置计数。守卫只提醒不终止，硬停止留待真实需要时再做。
+7. `onMessage` 持久化 → `message.completed` → 回到循环顶部。
 
 ### turn-boundary 位置（引导注入）
 

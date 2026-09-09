@@ -660,6 +660,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       llmAttempt: () => llmAttempt,
       hooks: chain,
       toolResultKeep: config.sessions.toolResultKeep ?? 8,
+      loopMaxRepeats: config.sessions.toolLoopMaxRepeats,
       // 省略预算（黄线值）透传给打包台：预算装不下的工具输出以省略占位符发送；
       // 固定开销（系统提示词 + 工具定义）先行扣除，打包台只裁决消息内容
       tokenBudget: Math.max(0, budget * atRatio - contextOverheadRef.current),
