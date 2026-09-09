@@ -287,6 +287,8 @@ describe("AuditView (audit)", () => {
     expect(container.textContent).toContain('{"path":"/a"}')
     expect(container.textContent).toContain("file contents")
     expect(container.textContent).toContain("系统提示")
+    // note 行的类型徽标带具体 NoteKind
+    expect(container.textContent).toContain("note:system")
     unmount(root, container)
   })
 
