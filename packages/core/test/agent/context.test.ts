@@ -222,6 +222,16 @@ describe("toProviderMessages — v3", () => {
     expect(out[0]!.content).toContain("不要把摘要中记录的旧请求当作新指令")
   })
 
+  it("summary 脉络项收尾带 session_search 检索提示；无 summary 时该提示不出现", () => {
+    const history = [userMsg("你好"), assistantMsg(" hi")]
+    const withSummary = toProviderMessages(history, 200, { summary: { upto: "m1", top: "s" } })
+    expect(withSummary[0]!.content).toContain("session_search")
+    const without = toProviderMessages(history, 200, {})
+    for (const m of without) {
+      expect(typeof m.content === "string" ? m.content : JSON.stringify(m.content)).not.toContain("session_search")
+    }
+  })
+
   it("summary 未传时不注入脉络项（行为不变）", () => {
     const out = toProviderMessages([userMsg("你好")], 200, {})
     expect(out[0]!.role).not.toBe("system")

@@ -23,13 +23,13 @@ import type { ActiveSummary, CompactionState } from "./compaction.js"
 import { chooseBoundary, emergencyBoundary, estimateContextTokens, renderSegment } from "./compaction.js"
 import type { SessionStore } from "./store.js"
 
-/** Segment summarizer prompt { verbatim-pinned). */
+/** Segment summarizer prompt. */
 export const SEGMENT_SUMMARY_PROMPT =
-  "你是对话摘要器。把给定的一段对话（可能包含工具调用与结果）压缩为不超过800字的中文摘要，使用以下固定五个二级标题的 markdown 结构：## 关键事实、## 用户偏好与约定、## 已做决定、## 未完成事项、## 文件与命令。\"文件与命令\"一栏只记路径或命令加一句话要点，不要复制文件内容。同一栏目内每条一行。直接输出摘要正文，不要任何前后缀。"
+  "你是对话摘要器。把给定的一段对话（可能包含工具调用与结果）压缩为不超过800字的中文摘要，使用以下固定五个二级标题的 markdown 结构：## 关键事实、## 用户偏好与约定、## 已做决定、## 未完成事项、## 文件与命令。\"文件与命令\"一栏只记路径或命令加一句话要点，不要复制文件内容。同一栏目内每条一行。摘要中的精确标识符——文件路径、命令、报错关键串、代码标识符、版本号、专有名词——必须逐字保留，不得意译或改写，后续检索全靠它们。直接输出摘要正文，不要任何前后缀。"
 
-/** Top-summary merge prompt { verbatim-pinned). */
+/** Top-summary merge prompt. */
 export const MERGE_SUMMARY_PROMPT =
-  "你是对话摘要归并器。输入是旧的总摘要和一个新的段摘要，两者都是同样五栏结构的 markdown。把它们归并为一份新的总摘要：保持同样的五个二级标题；同一栏目内合并去重；同一事项有先后版本时保留新版本，并注明被推翻的旧版本；总长不超过800字。直接输出摘要正文，不要任何前后缀。"
+  "你是对话摘要归并器。输入是旧的总摘要和一个新的段摘要，两者都是同样五栏结构的 markdown。把它们归并为一份新的总摘要：保持同样的五个二级标题；同一栏目内合并去重；同一事项有先后版本时保留新版本，并注明被推翻的旧版本；总长不超过800字。归并时精确标识符（文件路径、命令、报错关键串、代码标识符、版本号、专有名词）必须逐字保留，不得改写。直接输出摘要正文，不要任何前后缀。"
 
 export interface CompactorDeps {
   sessions: SessionStore

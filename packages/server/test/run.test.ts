@@ -2039,7 +2039,7 @@ describe("RunManager skill injection", () => {
     expect(system).not.toContain("全局部署版")
   })
 
-  it("rescans both scopes every run: a skill written between runs shows up in the next", async () => {
+  it("system prompt freeze: a skill written between runs stays out of the epoch; the listing refreshes after compaction", async () => {
     const requests: LlmRequest[] = []
     const llm: LlmClient = {
       async *stream(req): AsyncIterable<LlmStreamEvent> {
@@ -2048,14 +2048,21 @@ describe("RunManager skill injection", () => {
       },
     }
     const { env, manager } = makeEnv(llm)
-    const session = env.sessions.create("重扫会话")
+    const session = env.sessions.create("冻结纪元会话")
 
     await manager.enqueue(session.id, { userText: "第一轮", trigger: "user" })
     expect(requests[0]!.system ?? "").not.toContain("## 可用技能")
 
+    // 提示词缓存纪律：纪元中途新放的技能不重写请求前缀——第二轮的 system
+    // 与第一轮逐字节一致（现扫结果只影响点名包装与 skill_read，不影响清单）。
     writeSkill(join(env.config.workspace, ".kclaw", "skills"), "fresh", "---\ndescription: 新放的技能。\n---\n\n正文\n")
     await manager.enqueue(session.id, { userText: "第二轮", trigger: "user" })
-    expect(requests[1]!.system ?? "").toContain("fresh")
+    expect(requests[1]!.system ?? "").toBe(requests[0]!.system)
+
+    // 压缩清除冻结基线（重冻结边界）：下一轮重新装配，新技能进清单。
+    env.sessions.appendCompaction(session.id, { at: new Date().toISOString(), trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
+    await manager.enqueue(session.id, { userText: "第三轮", trigger: "user" })
+    expect(requests[2]!.system ?? "").toContain("fresh")
   })
 
   it("skill_read loads the body as a tool result (project copy wins on name)", async () => {
