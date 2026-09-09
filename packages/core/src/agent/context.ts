@@ -64,7 +64,7 @@ export function toProviderMessages(
 
   if (opts?.tokenBudget !== undefined && capped.length > 0) {
     // 基线 = 非工具结果内容的估算 + 每个被条数上限挤掉结果的占位行（约 30 token）
-    // （system 提示与工具定义的固定开销不含在内：触发线本身已为其留了余量）
+    // （system 提示与工具定义的固定开销已由调用方从 tokenBudget 中预先扣除）
     let acc = 0
     for (const m of recent) {
       for (const b of m.blocks) {

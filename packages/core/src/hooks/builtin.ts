@@ -79,6 +79,12 @@ export interface BuiltinHookDeps {
   drainSteer: () => Message[]
   // system-materials input: the model-facing skill listing (per-run scan)
   skillList: string
+  /**
+   * Fixed per-request overhead in estimated tokens (assembled system prompt +
+   * wire tool schemas). Lazy getter: hooks register before the system prompt
+   * is assembled and only read this when they fire.
+   */
+  contextOverhead: () => number
   // compaction-after wiring: the factory calls back into the run's chain
   compactionAfter: (phase: "in-run" | "post-run" | "manual", result: "ok" | "failed" | "cancelled") => Promise<void>
 }
@@ -110,7 +116,7 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
   const {
     sessionId, sessions, memory, config, workspace, compactor, signal,
     runLlm, model, usageStore, busEmit, runIdRef, jobNotes, trigger,
-    llmUserText, drainSteer, skillList, compactionAfter,
+    llmUserText, drainSteer, skillList, contextOverhead, compactionAfter,
   } = deps
   const childRun = deps.childRun === true
   const usageSessionId = deps.usageSessionId ?? sessionId
@@ -190,10 +196,12 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
       // the red line → don't compact. A throw resolves undefined == decline.
       if (compactor.cancelled(sessionId) || signal.aborted) return null
       const boundaryHistory = sessions.readMessages(sessionId)
-      if (estimateContextTokens(boundaryHistory) < budget * panicRatio) return null
+      const overhead = contextOverhead()
+      if (estimateContextTokens(boundaryHistory, undefined, overhead) < budget * panicRatio) return null
       const next = await compactor.auto(sessionId, boundaryHistory, config, runLlm, model, {
         phase: "in-run",
         signal,
+        overheadTokens: overhead,
       })
       void compactionAfter("in-run", "ok")
       return next
@@ -232,10 +240,12 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
       // user-cancelled compaction for this run.
       if (outcome.stopReason === "aborted" || outcome.stopReason === "error" || compactor.cancelled(sessionId)) return
       const postRunHistory = sessions.readMessages(sessionId)
-      if (estimateContextTokens(postRunHistory) < budget * atRatio) return
+      const overhead = contextOverhead()
+      if (estimateContextTokens(postRunHistory, undefined, overhead) < budget * atRatio) return
       await compactor.auto(sessionId, postRunHistory, config, runLlm, model, {
         phase: "post-run",
         signal,
+        overheadTokens: overhead,
       })
       void compactionAfter("post-run", "ok")
     }, Number.POSITIVE_INFINITY),

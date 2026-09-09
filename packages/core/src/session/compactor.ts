@@ -97,7 +97,7 @@ export class Compactor {
     config: KclawConfig,
     llm: LlmClient,
     model: string,
-    opts: { phase: CompactionPhase; signal?: AbortSignal; emergency?: boolean },
+    opts: { phase: CompactionPhase; signal?: AbortSignal; emergency?: boolean; overheadTokens?: number },
   ): Promise<ActiveSummary | null> {
     if (this.#cancelled.has(sessionId) || opts.signal?.aborted === true) return null
     const ctrl = new AbortController()
@@ -109,6 +109,7 @@ export class Compactor {
         phase: opts.phase,
         signal: ctrl.signal,
         ...(opts.emergency === true ? { emergency: true } : {}),
+        ...(opts.overheadTokens === undefined ? {} : { overheadTokens: opts.overheadTokens }),
       })
       return out.compacted && out.upto !== undefined
         ? { upto: out.upto, top: out.summary ?? "" }
@@ -147,7 +148,7 @@ export class Compactor {
     config: KclawConfig,
     runLlm: LlmClient,
     model: string,
-    opts: { focus?: string; manual?: boolean; phase?: CompactionPhase; signal?: AbortSignal; emergency?: boolean } = {},
+    opts: { focus?: string; manual?: boolean; phase?: CompactionPhase; signal?: AbortSignal; emergency?: boolean; overheadTokens?: number } = {},
   ): Promise<{ summary?: string; upto?: string; segments: number; active: Message[]; compacted: boolean }> {
     const { sessions } = this.#deps
     const meta = sessions.meta(sessionId)
@@ -167,7 +168,7 @@ export class Compactor {
     // 首请求里 active 没有 assistant 锚点，system/工具定义开销全漏计，估算会明显
     // 偏低，按黄线拦截会静默放弃急救、run 直接以 error 收场。急救只跳过触发判断，
     // 后续流程（两次摘要调用、meta 写入、审计、事件）与普通压缩完全一致。
-    if (!manual && !emergency && estimateContextTokens(active, userText) < budget * atRatio) {
+    if (!manual && !emergency && estimateContextTokens(active, userText, opts.overheadTokens) < budget * atRatio) {
       return { summary: prev?.top, upto: prev?.upto, segments: prev?.segments.length ?? 0, active, compacted: false }
     }
 

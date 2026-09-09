@@ -34,6 +34,18 @@ describe("estimateContextTokens", () => {
     const u = newMessage("s", "user", [{ id: "b1", type: "text", text: "你好" }])
     expect(estimateContextTokens([u])).toBeGreaterThanOrEqual(2)
   })
+
+  it("adds overhead only in the anchor-less view (fresh session / post-compaction first request)", () => {
+    const u = newMessage("s", "user", [{ id: "b1", type: "text", text: "你好" }])
+    // 无锚点：固定开销计入
+    expect(estimateContextTokens([u], undefined, 7_000)).toBeGreaterThanOrEqual(7_000 + 2)
+    // 有锚点：inputTokens 已含固定开销，再传也不重复计
+    const a = newAssistantMessage("s", "m", [{ id: "b2", type: "text", text: "答" }])
+    a.usage = { inputTokens: 10_000, outputTokens: 5 }
+    const withAnchor = estimateContextTokens([u, a], undefined, 7_000)
+    expect(withAnchor).toBeGreaterThanOrEqual(10_000)
+    expect(withAnchor).toBeLessThan(10_000 + 100)
+  })
 })
 
 describe("chooseBoundary", () => {

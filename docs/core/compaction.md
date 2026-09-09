@@ -134,7 +134,7 @@ export interface CompactionRecord {
 | 超限紧急急救 | 一次流式调用抛出上下文超限错误且零输出：不看水位线，"已经爆了"就是事实 | `in-run` | `in-run` 加 `emergency: true` |
 | 手动 /compact | 用户主动调用，跳过一切触发线 | `manual` | `manual` |
 
-水位是 `estimateContextTokens(会话历史)`：锚定最后一条助手消息记录的真实 `usage.inputTokens`（上一次实际发出的请求大小），锚之后的新消息按字符粗算。锚定使已被压缩的旧内容天然不计入——它们根本不在上一次请求里——所以直接对全量历史读数即可，不需要先切出未压缩部分。收尾压缩在运行的收尾路径里 await 完成，会话驱动器的串行化保证压缩期间新到的消息排队等待、不会并发写会话元数据；中途压缩是 `compaction-check` 位置的内置钩子 `mid-run-panic`（见 [hooks](./hooks.md)），成功后的新压缩视图从下一次请求开始生效；超限急救是 `overflow-rescue` 位置的内置钩子 `overflow-emergency`，成功后整次请求静默重发一次。
+水位是 `estimateContextTokens(会话历史)`：锚定最后一条助手消息记录的真实 `usage.inputTokens`（上一次实际发出的请求大小），锚之后的新消息按字符粗算。锚定使已被压缩的旧内容天然不计入——它们根本不在上一次请求里——所以直接对全量历史读数即可，不需要先切出未压缩部分。没有锚点的窗口（新会话首条、压缩后的首请求）由显式的固定开销项兜底：run 装配在系统提示词定稿后按字符粗算一次"系统提示词 + 工具定义"的估算值，水位读数在无锚点时加上这一项（有锚点时不加——锚点里的 `inputTokens` 已包含它，再加就重复计）。收尾压缩在运行的收尾路径里 await 完成，会话驱动器的串行化保证压缩期间新到的消息排队等待、不会并发写会话元数据；中途压缩是 `compaction-check` 位置的内置钩子 `mid-run-panic`（见 [hooks](./hooks.md)），成功后的新压缩视图从下一次请求开始生效；超限急救是 `overflow-rescue` 位置的内置钩子 `overflow-emergency`，成功后整次请求静默重发一次。
 
 急救有独立的强制分界兜底（`emergencyBoundary`，`session/compaction.ts`）：急救通常发生在压缩后的首请求或单轮工具输出暴涨时，`active` 里可能没有助手锚点、固定开销全漏计，`chooseBoundary` 据此可能找不到边界——此时不看预算，直接退守最小可行上下文：只保留最近一轮用户轮次（最后一条 user 消息及其之后的整轮），更早的全部压掉；整个 `active` 只有一轮时返回无可压缩。
 
@@ -243,12 +243,12 @@ llm.stream({ system: <人格>, messages: [
 
 ## 机制三：工具输出省略（预算驱动）
 
-位置在 `toProviderMessages`（`packages/core/src/agent/context.ts`）——所有发给模型供应商的请求都经它构造。两个可选参数共同决定哪些工具结果保留原文：`opts.toolResultKeep` 是**条数上限**（server 从配置 `sessions.toolResultKeep` 读值、默认 8，经 agent 循环的 `deps.toolResultKeep` 传入），`opts.tokenBudget` 是**省略预算**（server 传入黄线值：预算 × `compactAtRatio`）。不传时行为完全不变（全部保留）。
+位置在 `toProviderMessages`（`packages/core/src/agent/context.ts`）——所有发给模型供应商的请求都经它构造。两个可选参数共同决定哪些工具结果保留原文：`opts.toolResultKeep` 是**条数上限**（server 从配置 `sessions.toolResultKeep` 读值、默认 8，经 agent 循环的 `deps.toolResultKeep` 传入），`opts.tokenBudget` 是**省略预算**（run 装配传入黄线值扣除固定开销后的余额：预算 × `compactAtRatio` − 系统提示词与工具定义的估算值）。不传时行为完全不变（全部保留）。
 
 每次构造请求时分两步筛：
 
 1. **条数上限**：从最新消息往前数，最近 8 个（`toolResultKeep`）工具结果进入候选，更早的直接换成占位符。这一步挡住的是极端长寿运行——比如 40 次工具调用的输出不可能都留着。
-2. **预算装入**：先算基线——窗口内所有非工具结果内容（文本、thinking、note、工具调用参数、内联附件正文）的估算值，加上第 1 步已挤掉的结果按每条约 30 token 的占位成本；系统提示与工具定义的固定开销不算在内（触发线本身已为它们留了余量）。然后从最新往回逐条把候选结果的估算值往基线上加：装得下的保留原文，遇到第一条装不下的，它连同比它更旧的全部换成占位符。
+2. **预算装入**：先算基线——窗口内所有非工具结果内容（文本、thinking、note、工具调用参数、内联附件正文）的估算值，加上第 1 步已挤掉的结果按每条约 30 token 的占位成本；系统提示与工具定义的固定开销不在基线里，它们已从省略预算中预先扣除（见上）。然后从最新往回逐条把候选结果的估算值往基线上加：装得下的保留原文，遇到第一条装不下的，它连同比它更旧的全部换成占位符。
 
 占位符是一行文字：
 

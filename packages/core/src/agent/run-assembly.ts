@@ -44,6 +44,7 @@ import type { KclawPaths } from "../storage/paths.js"
 import type { UsageStore } from "../storage/usage.js"
 import type { SessionStore } from "../session/store.js"
 import type { Compactor } from "../session/compactor.js"
+import { estimateTokens } from "../session/compaction.js"
 import { ConfigPermissionGate, realpathWithin, SessionGrants } from "../permissions/engine.js"
 import { appendDecidedRule, loadDecidedRulesForRun, narrowDecidedRule, projectDecidedRulesPath } from "../storage/decided-rules.js"
 import type { AutoLearnCounter } from "../permissions/auto-learn.js"
@@ -563,6 +564,14 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // config source, one read per side).
   const budget = config.sessions.contextTokens ?? 128_000
   const atRatio = config.sessions.compactAtRatio ?? 0.66
+  // Fixed per-request overhead for the compaction/packing judgments: the
+  // assembled system prompt plus the wire tool schemas. The trigger estimate
+  // anchors on the last assistant's reported inputTokens (already including
+  // this overhead for anchored requests); this term covers the anchor-less
+  // view — fresh session, or the first request after a compaction — and the
+  // packing budget below is shrunk by the same amount. Filled in after the
+  // system-before/after chains run; hooks read it lazily via the getter.
+  const contextOverheadRef = { current: 0 }
 
   // Register the chain: builtins first (per-run closures), then user files,
   // then test injections. User entries land at default order 1000 — AFTER
@@ -585,6 +594,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     llmUserText,
     drainSteer: handoff.drainSteer,
     skillList: skillListPrompt(skills),
+    contextOverhead: () => contextOverheadRef.current,
     ...(childRun ? { childRun: true } : {}),
     usageSessionId: sessionMeta?.parentSessionId ?? sessionId,
     compactionAfter: async (phase, result) => {
@@ -611,6 +621,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   let system = [base, ...segments, SYSTEM_INJECTION_CONVENTION].filter((s) => s !== "").join("\n\n")
   const rewrittenSystem = await chain.run("system-after", { system })
   if (rewrittenSystem !== undefined) system = rewrittenSystem
+  contextOverheadRef.current = estimateTokens(system) + estimateTokens(JSON.stringify(toolDefs))
 
   const outcome = await runAgent(
     {
@@ -638,8 +649,9 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       llmAttempt: () => llmAttempt,
       hooks: chain,
       toolResultKeep: config.sessions.toolResultKeep ?? 8,
-      // 省略预算（黄线值）透传给打包台：预算装不下的工具输出以省略占位符发送
-      tokenBudget: budget * atRatio,
+      // 省略预算（黄线值）透传给打包台：预算装不下的工具输出以省略占位符发送；
+      // 固定开销（系统提示词 + 工具定义）先行扣除，打包台只裁决消息内容
+      tokenBudget: Math.max(0, budget * atRatio - contextOverheadRef.current),
       onEvent: (e) => {
         if (e.type === "run.started" && e.runId !== undefined) runId = e.runId
         else if (e.type === "llm.completed" || e.type === "llm.failed") llmAttempt = 1

@@ -30,9 +30,13 @@ function messageText(m: Message): string {
  * Anchors on the last assistant message's real usage.inputTokens (the last
  * actually-sent request size, system prompt and tool defs included — biased
  * LARGE, which only compacts earlier: the safe direction); messages after
- * it are estimated per message.
+ * it are estimated per message. `overheadTokens` (assembled system prompt +
+ * tool schemas) covers the anchor-LESS view — fresh session or the first
+ * request after a compaction, where no assistant message carries the real
+ * per-request overhead; with an anchor it is already inside the reported
+ * inputTokens, so passing it there would double-count.
  */
-export function estimateContextTokens(active: Message[], extraText?: string): number {
+export function estimateContextTokens(active: Message[], extraText?: string, overheadTokens?: number): number {
   let anchorIdx = -1
   for (let i = active.length - 1; i >= 0; i--) {
     if (active[i]!.role === "assistant") { anchorIdx = i; break }
@@ -43,6 +47,7 @@ export function estimateContextTokens(active: Message[], extraText?: string): nu
   let sum = 0
   for (let i = anchorIdx + 1; i < active.length; i++) sum += estimateTokens(messageText(active[i]!))
   if (extraText !== undefined) sum += estimateTokens(extraText)
+  if (anchorIdx < 0 && overheadTokens !== undefined) sum += overheadTokens
   return base + sum
 }
 
