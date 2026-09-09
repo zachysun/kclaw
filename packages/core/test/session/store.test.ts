@@ -490,4 +490,16 @@ describe("SessionStore append hook", () => {
     s.appendMessage(m.id, newMessage(m.id, "user", [{ id: "blk_1", type: "text", text: "hi" }]))
     expect(s.readEvents(m.id)).toHaveLength(2)
   })
+
+  it("落盘失败不触发 onAppended（异常照常抛出——通知只属于写成功的追加）", () => {
+    // 把会话的 events.jsonl 换成目录：追加写入必然失败（EISDIR），
+    // 回调必须未被调用（"先落盘后广播"的不变式由这条用例守住）。
+    const seen: Array<{ id: string; type: string }> = []
+    const s = new SessionStore(dir, (id, ev) => seen.push({ id, type: ev.type }))
+    const m = s.create()
+    rmSync(join(dir, m.id, "events.jsonl"))
+    mkdirSync(join(dir, m.id, "events.jsonl"))
+    expect(() => s.appendMessage(m.id, newMessage(m.id, "user", [{ id: "blk_1", type: "text", text: "hi" }]))).toThrow()
+    expect(seen).toEqual([{ id: m.id, type: "session.created" }])
+  })
 })
