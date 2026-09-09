@@ -112,6 +112,17 @@ export interface HookMeta {
    */
   failure: "fatal" | "skip" | "deny"
   origin: "builtin" | "user"
+  /**
+   * Per-entry time budget override (ms). undefined = the chain default
+   * (config hooks.timeoutMs, 5s); Infinity = untimed. The compaction
+   * builtins (mid-run-panic / overflow-emergency / post-run-compaction)
+   * declare Infinity: their work is two provider calls whose duration is
+   * the LLM's — bounded by the provider per-request timeout and the run's
+   * abort signal — which is exactly the pre-migration inline behavior
+   * (a 5s race here made every real compaction time out and orphan a
+   * background duplicate).
+   */
+  timeoutMs?: number
   /** Load failure reason (user hooks only); a failed entry never runs. */
   error?: string
 }

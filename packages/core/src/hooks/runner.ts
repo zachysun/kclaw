@@ -26,7 +26,8 @@
  *   turn, and runGate reports the FIRST denial.
  * - Timeout: every handler is raced against `timeoutMs` (config
  *   hooks.timeoutMs, default 5s); a timeout is a failure with the same
- *   fatal/skip/deny split.
+ *   fatal/skip/deny split. An entry's meta.timeoutMs overrides the chain
+ *   default (Infinity = untimed — the compaction builtins use it).
  * - An empty position short-circuits: run() resolves undefined synchronously
  *   (zero cost when no hook is installed) and has() is false.
  */
@@ -158,7 +159,8 @@ export class HookChain implements HookRunner {
     position: HookPosition,
     ctx: HookContextMap[HookPosition],
   ): Promise<{ ok: true; value: unknown } | { ok: false; error: unknown }> {
-    const budget = this.#opts.timeoutMs?.() ?? DEFAULT_HOOK_TIMEOUT_MS
+    // 条目级覆盖优先：内置压缩钩子声明 Infinity（迁移前内联行为本就不限时）。
+    const budget = entry.meta.timeoutMs ?? this.#opts.timeoutMs?.() ?? DEFAULT_HOOK_TIMEOUT_MS
     let timer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<never>((_, reject) => {
       if (budget <= 0 || !Number.isFinite(budget)) return

@@ -12,6 +12,7 @@ import { EventBus } from "../../src/bus.js"
 import type { AgentEvent } from "../../src/protocol/events.js"
 import { SessionStore } from "../../src/session/store.js"
 import { Compactor } from "../../src/session/compactor.js"
+import { newMessage } from "../../src/protocol/messages.js"
 import { MemorySystem } from "../../src/memory/system.js"
 import { ConfirmationBroker } from "../../src/permissions/broker.js"
 import { HookRegistry } from "../../src/hooks/registry.js"
@@ -182,6 +183,40 @@ describe("executeRun × hook system", () => {
     expect(outcome.stopReason).toBe("end_turn")
     // 内置 usage-ledger(10) → 注入 watcher(15) → post-run-compaction(20)
     expect(order).toEqual(["watcher"])
+  })
+
+  it("收尾压缩慢于钩子预算：压缩钩子不限时，完整落地且 run 正常完成", async () => {
+    // 回归背景（2026-09-09 线上）：迁移把内联压缩放进 5s 钩子竞速，真实压缩
+    // （两次 LLM 调用）必超时——mid-run 甩出后台重复压缩，post-run（fatal）
+    // 把已完成 run 拖成条目级失败。这里用 50ms 钩子预算 + 80ms/次的 LLM 复现。
+    const base = loadConfig(resolvePaths(home))
+    const cfg = {
+      ...base,
+      sessions: { ...base.sessions, contextTokens: 1500 },
+      hooks: { timeoutMs: 50 },
+    }
+    const llm: LlmClient = {
+      async *stream(): AsyncIterable<LlmStreamEvent> {
+        await new Promise((resolve) => setTimeout(resolve, 80))
+        yield { type: "text_delta", delta: "x".repeat(2000) }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 999_000, outputTokens: 1 } }
+      },
+    }
+    const { engine, bus, sessions, sessionId } = makeEngine({ llm, config: cfg })
+    // 预置一条早先的用户消息：给 chooseBoundary 留出可压的分界（单轮切不出）
+    const seed = newMessage(sessionId, "user", [{ id: "b-seed", type: "text", text: "x".repeat(2000) }])
+    sessions.appendMessage(sessionId, seed)
+
+    const outcome = await executeRun(engine, handoff(sessionId, "x".repeat(2000)))
+    expect(outcome.stopReason).toBe("end_turn")
+    // 压缩真的发生且成对收尾：started(post-run) → completed(ok)，持久化恰一条
+    expect(bus.events.some((e) => e.type === "compaction.started" && e.payload.phase === "post-run")).toBe(true)
+    const completed = bus.events.find((e) => e.type === "compaction.completed")
+    expect(completed!.payload).toMatchObject({ phase: "post-run", result: "ok" })
+    expect(sessions.readEvents(sessionId).filter((e) => e.type === "compaction")).toHaveLength(1)
+    expect(sessions.meta(sessionId)?.compaction).toBeDefined()
+    // 无任何钩子失败（修复前这里是 fatal timeout：executeRun 直接拒绝）
+    expect(bus.events.some((e) => e.type === "hook.failed")).toBe(false)
   })
 })
 

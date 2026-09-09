@@ -19,7 +19,11 @@
  *   keep their old "throw == decline" semantics via failure: "skip" (a failed
  *   decision resolves to undefined, which the loop treats as "don't
  *   compact"), and post-run-compaction stays fatal (its old throw propagated
- *   to the queue's entry-level failure).
+ *   to the queue's entry-level failure). All three run UNTIMED
+ *   (meta.timeoutMs = Infinity): their body is two provider calls whose
+ *   duration is the LLM's, and the pre-migration inline code had no timeout
+ *   — the blanket 5s race made every real compaction time out, orphaning a
+ *   background duplicate that raced the next boundary's second attempt.
  */
 import { newBlockId } from "../protocol/blocks.js"
 import type { NoteBlock } from "../protocol/blocks.js"
@@ -120,8 +124,12 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
     name: string, position: K, order: number, description: string,
     failure: "fatal" | "skip",
     handler: (ctx: HookContextMap[K]) => Promise<HookResultMap[K] | undefined | void> | HookResultMap[K] | undefined | void,
+    timeoutMs?: number,
   ): HookEntry => ({
-    meta: { name, position, description, enabled: true, order, failure, origin: "builtin" },
+    meta: {
+      name, position, description, enabled: true, order, failure, origin: "builtin",
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    },
     handler: handler as HookEntry["handler"],
   })
 
@@ -189,7 +197,7 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
       })
       void compactionAfter("in-run", "ok")
       return next
-    }),
+    }, Number.POSITIVE_INFINITY),
     builtin("overflow-emergency", "overflow-rescue", 10, BUILTIN_HOOK_DEFINITIONS[7]!.description, "skip", async () => {
       // No watermark check — "it already overflowed" is a fact. Abort after
       // the await → null (the resend would be torn down at the next
@@ -201,7 +209,7 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
       })
       void compactionAfter("in-run", "ok")
       return signal.aborted ? null : next
-    }),
+    }, Number.POSITIVE_INFINITY),
     builtin("usage-ledger", "run-after", 10, BUILTIN_HOOK_DEFINITIONS[8]!.description, "skip", ({ outcome }) => {
       if (usageStore === undefined) return
       try {
@@ -230,7 +238,7 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
         signal,
       })
       void compactionAfter("post-run", "ok")
-    }),
+    }, Number.POSITIVE_INFINITY),
     builtin("follow-check", "run-after", 30, BUILTIN_HOOK_DEFINITIONS[10]!.description, "skip", () => {
       // Children never schedule follow extraction (memory isolation).
       if (childRun) return

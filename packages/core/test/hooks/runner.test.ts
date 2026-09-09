@@ -7,7 +7,7 @@ function entry(
   name: string,
   position: HookPosition,
   handler: (ctx: never) => unknown,
-  opts: { order?: number; failure?: "fatal" | "skip" | "deny"; enabled?: boolean } = {},
+  opts: { order?: number; failure?: "fatal" | "skip" | "deny"; enabled?: boolean; timeoutMs?: number } = {},
 ): HookEntry {
   return {
     meta: {
@@ -17,6 +17,7 @@ function entry(
       order: opts.order ?? 10,
       failure: opts.failure ?? "fatal",
       origin: "builtin",
+      ...(opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
     },
     handler,
   }
@@ -112,6 +113,22 @@ describe("HookChain", () => {
     const chain = new HookChain({ timeoutMs: () => 0 })
     chain.register(entry("forever", "run-before", () => "done"))
     expect(await chain.run("run-before", msg("x"))).toBe("done")
+  })
+
+  it("条目级 meta.timeoutMs 覆盖链预算：Infinity 不限时、有限值放宽（内置压缩钩子的通道）", async () => {
+    const slow = () => new Promise<string>((resolve) => setTimeout(() => resolve("done"), 40))
+    // 链预算 10ms：无限条目预算 → 40ms handler 完整跑完
+    const infChain = new HookChain({ timeoutMs: () => 10 })
+    infChain.register(entry("slow-inf", "run-before", slow, { failure: "skip", timeoutMs: Number.POSITIVE_INFINITY }))
+    expect(await infChain.run("run-before", msg("x"))).toBe("done")
+    // 有限条目预算同样覆盖链预算：200ms 条目预算放行 40ms handler
+    const wideChain = new HookChain({ timeoutMs: () => 10 })
+    wideChain.register(entry("slow-wide", "run-before", slow, { failure: "skip", timeoutMs: 200 }))
+    expect(await wideChain.run("run-before", msg("x"))).toBe("done")
+    // 未声明的条目仍被链预算掐（对照，语义不变）
+    const defChain = new HookChain({ timeoutMs: () => 10 })
+    defChain.register(entry("slow-def", "run-before", slow, { failure: "skip" }))
+    expect(await defChain.run("run-before", msg("x"))).toBeUndefined()
   })
 
   it("enabled:false 与带 error 的条目不注册", async () => {
