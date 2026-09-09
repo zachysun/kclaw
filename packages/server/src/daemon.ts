@@ -47,6 +47,7 @@ import type { KclawConfig, LlmClient } from "@kclaw/core"
 import { loadOrCreateToken } from "./auth.js"
 import { EventBus } from "@kclaw/core"
 import { RunManager } from "./run.js"
+import { createSubagentSpawner } from "./subagent.js"
 import { startSchedulerTick } from "./scheduler-tick.js"
 import { startMemoryScheduler } from "./memory-scheduler.js"
 import { createApp } from "./app.js"
@@ -309,6 +310,20 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
           onError: (name, error) => console.error(`kclaw mcp ${name} error: ${error}`),
         })
       : undefined
+  // Subagent dispatch: the spawner needs the RunManager (it submits/cancels
+  // child runs) while the RunManager's engine deps need the spawner — a
+  // late-bound getter breaks the cycle (dispatches only fire mid-run, long
+  // after both sides exist).
+  let runRef: RunManager | undefined
+  const subagentSpawner = createSubagentSpawner({
+    config,
+    sessions,
+    bus,
+    getRun: () => {
+      if (runRef === undefined) throw new Error("run manager not ready")
+      return runRef
+    },
+  })
   const run = new RunManager({
     config,
     paths,
@@ -320,6 +335,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     model,
     usageStore: usage,
     hooks: hookRegistry,
+    subagents: { spawner: subagentSpawner },
     // auto mode induction (batch C): one per-process streak counter threaded
     // through every run's assembly; threshold 0 disables induction.
     autoLearn: { counter: new AutoLearnCounter(config.permissions.autoLearnThreshold ?? 3) },
@@ -335,6 +351,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
         defaultLlmFactory(config, onRetry),
     }),
   })
+  runRef = run
 
   const app = await createApp({
     home: paths.home,

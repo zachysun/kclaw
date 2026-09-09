@@ -103,6 +103,8 @@ export default async (ctx) => {
 
 两个值得知道的次序：run-before 上 `memory-inject(10)` 只收集记忆 note，`user-message-land(20)` 统一把 job note（在前）与记忆 note 追加进消息、持久化并广播——这与迁移前的块顺序、`note.emitted` 次序完全一致。system-after 上用户改写（默认 1000）排在 `system-audit(9000)` 之前，审计永远记录模型实际看到的那份提示词。
 
+**子代理 run 的派生跳过**：会话 meta 带 `parentSessionId` 时，run 装配给内置钩子链带 `childRun: true`（同一个事实派生，无独立开关，见 [subagents](./subagents.md)），四个内置钩子直接让位——`memory-inject` 不检索不收集（子代理不注入记忆 note）、`autoname` 跳过（标题已带"子代理 · "前缀）、`follow-check` 不挂检查（子会话不进记忆的任何提取路径）、`system-materials` 返回空段（系统提示词整体换成精简的 `subagentSystemPrompt`，不带认知与技能清单）。`usage-ledger` 照常记账，但记到 `usageSessionId`（= 父会话 id）名下——子代理的 token 消耗归因到派它的主对话。
+
 ---
 
 ## 管理面

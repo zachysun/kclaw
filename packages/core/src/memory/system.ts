@@ -329,15 +329,15 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
 
   // ---- 触发入口（工具/调度器消费） ----
 
-  /** 项目最近活动会话（interval/admin-threads 无显式归属时的回落目标）。 */
+  /** 项目最近活动会话（interval/admin-threads 无显式归属时的回落目标）；子会话（subagent）不参与回落。 */
   #recentSessionId(workdir: string): string | undefined {
-    return this.#sessions.list().filter((m) => (m.workdir ?? "") === workdir)
+    return this.#sessions.list().filter((m) => (m.workdir ?? "") === workdir && m.parentSessionId === undefined)
       .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))[0]?.id
   }
 
-  /** 全局最近活动会话（global 认知 admin 事件归属）。 */
+  /** 全局最近活动会话（global 认知 admin 事件归属）；子会话同样不参与。 */
   #recentGlobalSessionId(): string | undefined {
-    return this.#sessions.list()[0]?.id
+    return this.#sessions.list().find((m) => m.parentSessionId === undefined)?.id
   }
 
   /** 立刻写入（memory_save 工具）：增量提取自最近水位的消息（水位推进两路）。

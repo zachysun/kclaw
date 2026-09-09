@@ -188,8 +188,10 @@ pnpm test        # 全部包 vitest（cli/server 快速验证需先 pnpm build�
   - [permissions](docs/core/permissions.md) — 权限网关
   - [protocol](docs/core/protocol.md) — 消息 / 内容块 / 事件三层协议
   - [provider](docs/core/provider.md) — OpenAI 兼容的 LLM 接入层
+  - [sandbox](docs/core/sandbox.md) — exec 的 OS 沙箱（Seatbelt / bubblewrap）
   - [skills](docs/core/skills.md) — 技能机制（渐进披露）
   - [storage](docs/core/storage.md) — 路径、配置与会话持久化
+  - [subagents](docs/core/subagents.md) — 子代理委派（子会话、单层委派）
   - [tools](docs/core/tools.md) — 内置工具体系与注册
 - server/（daemon）
   - [daemon](docs/server/daemon.md) — 生命周期与鉴权

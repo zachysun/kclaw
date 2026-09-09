@@ -118,6 +118,14 @@ export interface KclawConfig {
    * predate it; defaults to an empty server map (defaultConfig).
    */
   mcp?: { servers?: Record<string, McpServerConfig> }
+  /**
+   * Subagent delegation (issue #16). Optional only because older config.yaml
+   * files predate it; defaults to maxConcurrent 4 (defaultConfig).
+   */
+  subagents?: {
+    /** Live subagents allowed per parent run at once; an over-cap spawn returns an immediate error result. */
+    maxConcurrent?: number
+  }
   workspace: string
 }
 
@@ -140,6 +148,7 @@ export const defaultConfig: KclawConfig = {
   notify: { channels: [], timeoutMs: 10_000 },
   usage: { prices: {} },
   mcp: { servers: {} },
+  subagents: { maxConcurrent: 4 },
   workspace: process.cwd(),
 }
 

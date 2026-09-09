@@ -24,10 +24,9 @@
  * - The reducer is a pure function: every transition returns a NEW state.
  */
 import type {
-  AgentEvent as CoreAgentEvent,
+  AnyAgentEvent,
   Block,
   ConfirmationRequestedPayload,
-  EventType,
   MemoryWrittenPayload,
   Message,
   Role,
@@ -36,11 +35,11 @@ import type {
 export type { Block, ConfirmationRequestedPayload, Message, Role }
 
 /**
- * The daemon's full event catalog as a discriminated union: core's generic
- * AgentEvent<T> distributed over every EventType, so switch(event.type)
- * narrows payload per case.
+ * The daemon's full event catalog as a discriminated union (the protocol
+ * canon's AnyAgentEvent), so switch(event.type) narrows payload per case.
+ * The alias keeps the renderer's historical name.
  */
-export type AgentEvent = { [T in EventType]: CoreAgentEvent<T> }[EventType]
+export type AgentEvent = AnyAgentEvent
 
 /** memory.written 的 payload（点击通知条跳转记忆页所需字段）——正本形状。 */
 export type MemoryWrittenInfo = MemoryWrittenPayload
@@ -72,6 +71,8 @@ export interface ToolResultRender {
   status: "ok" | "error"
   output: string
   durationMs: number
+  /** Structured payload the executor attached (e.g. a subagent's childSessionId). */
+  data?: unknown
 }
 export interface AttachmentRender { kind: "attachment"; blockId: string; mimeType: string }
 
@@ -538,7 +539,15 @@ function renderBlock(block: Block): RenderedBlock {
     case "tool_call":
       return { kind: "tool_call", blockId: block.id, callId: block.callId, name: block.name, argsJson: block.argsJson }
     case "tool_result":
-      return { kind: "tool_result", blockId: block.id, callId: block.callId, status: block.status, output: block.output, durationMs: block.durationMs }
+      return {
+        kind: "tool_result",
+        blockId: block.id,
+        callId: block.callId,
+        status: block.status,
+        output: block.output,
+        durationMs: block.durationMs,
+        ...(block.data !== undefined ? { data: block.data } : {}),
+      }
     case "attachment":
       return { kind: "attachment", blockId: block.id, mimeType: block.mimeType }
   }

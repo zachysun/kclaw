@@ -59,7 +59,16 @@ export interface BuiltinHookDeps {
   runIdRef: { current?: string }
   // user-message-land / autoname inputs (former onUserMessage closure state)
   jobNotes: NoteBlock[]
-  trigger: "user" | "job"
+  trigger: "user" | "job" | "agent"
+  /**
+   * Subagent child run (the session's parentSessionId is set): the run is a
+   * dispatched executor's only turn — memory injection, autoname, the follow
+   * gate and system materials (cognition + skill list) all skip; the usage
+   * ledger records under the PARENT session (usageSessionId).
+   */
+  childRun?: boolean
+  /** Session the usage ledger attributes this run's tokens to (child → parent). */
+  usageSessionId?: string
   // skill-wrap input (former mapLlmMessages closure state)
   llmUserText: string | undefined
   // steering input (former AgentDeps.steering)
@@ -99,6 +108,8 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
     runLlm, model, usageStore, busEmit, runIdRef, jobNotes, trigger,
     llmUserText, drainSteer, skillList, compactionAfter,
   } = deps
+  const childRun = deps.childRun === true
+  const usageSessionId = deps.usageSessionId ?? sessionId
   const budget = config.sessions.contextTokens ?? 128_000
   const atRatio = config.sessions.compactAtRatio ?? 0.66
   const panicRatio = config.sessions.compactPanicRatio ?? 0.85
@@ -117,6 +128,8 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
   return [
     builtin("memory-inject", "run-before", 10, BUILTIN_HOOK_DEFINITIONS[0]!.description, "skip", async ({ message }) => {
       // Memory is an accelerator: a failing search never blocks the run.
+      // Subagent children carry no memory materials (Q7: 记忆隔离).
+      if (childRun) return
       // Notes are COLLECTED here, not pushed onto the message: the land step
       // (order 20) appends job notes first, then these — preserving the
       // pre-migration block order (text → job → memory) and the matching
@@ -142,7 +155,9 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
       return message
     }),
     builtin("autoname", "run-before", 30, BUILTIN_HOOK_DEFINITIONS[2]!.description, "skip", ({ message }) => {
-      if (trigger === "job") return
+      // Only human-sent turns autoname: job notes are daemon-composed and
+      // subagent children get their title at spawn time (label/task).
+      if (trigger !== "user") return
       void scheduleAutoname(
         { sessions, llm: runLlm, model, emit: busEmit },
         sessionId, textOf(message),
@@ -191,7 +206,8 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
       if (usageStore === undefined) return
       try {
         usageStore.record({
-          sessionId,
+          // Subagent tokens group under the parent session (issue #16 记账).
+          sessionId: usageSessionId,
           runId: runIdRef.current ?? "",
           model,
           inputTokens: outcome.totalUsage.inputTokens,
@@ -216,6 +232,8 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
       void compactionAfter("post-run", "ok")
     }),
     builtin("follow-check", "run-after", 30, BUILTIN_HOOK_DEFINITIONS[10]!.description, "skip", () => {
+      // Children never schedule follow extraction (memory isolation).
+      if (childRun) return
       if (config.memory.write.idleMinutes > 0) {
         try {
           memory.scheduleFollowCheck?.(sessionId, new Date().toISOString())
@@ -225,6 +243,8 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
       }
     }),
     builtin("system-materials", "system-before", 10, BUILTIN_HOOK_DEFINITIONS[11]!.description, "skip", () => {
+      // Subagent children run on the lean prompt: no cognition, no skill list.
+      if (childRun) return []
       // Cognition injection failure is silently skipped (run proceeds with
       // base prompt only) — pre-migration parity.
       let cognition = ""

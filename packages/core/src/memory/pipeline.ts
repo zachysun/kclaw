@@ -275,8 +275,11 @@ export class MemoryPipeline {
 
   #sessionRows(projectId: string): Array<{ id: string; createdAt: string; messages: Message[] }> {
     const workdir = this.#layout.workdirOf(projectId) ?? ""
+    // 子会话（subagent 派生）整体排除在提取范围外：它们是工具的过程文本，
+    // 沉淀责任在主线（结题答复回到父会话后由主线决定存否）——interval 的
+    // 全量逐会话补增量也因此永远扫不到它们（issue #16 记忆隔离）。
     return this.#sessions.list()
-      .filter((m) => (m.workdir ?? "") === workdir)
+      .filter((m) => (m.workdir ?? "") === workdir && m.parentSessionId === undefined)
       .map((m) => ({ id: m.id, createdAt: m.createdAt, messages: this.#sessions.readMessages(m.id) }))
       .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0))
   }

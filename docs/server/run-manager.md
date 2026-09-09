@@ -54,17 +54,20 @@ export interface RunManagerDeps {
                                         // 连接在两次 run 之间上/下线都反映到下一次请求；defs 追加在内置 defs 之后，
                                         // 与内置撞名时打一行日志且适配器执行器胜出（schema 随执行器走）
   usageStore?: UsageStore              // 每 run token 台账（缺省不记录；记录失败只打日志）
+  subagents?: { spawner: SubagentSpawner }
+                                        // 子代理派发后端（daemon 装配 createSubagentSpawner 的产物，
+                                        // 见 subagents.md）：注入后主线 run 的工具面多出 subagent_run
 }
 
 export interface EnqueueInput {
   userText: string
-  trigger: "user" | "job"
+  trigger: "user" | "job" | "agent"
   model?: string       // 本 run 的模型覆盖（job 配置的模型或客户端强制）；缺席 → 会话 meta → 默认
   attachments?: AttachmentRef[]  // 挂到用户消息上的附件引用（调用方已校验，这里防御性复验）
   note?: string        // job 来源行，落在用户消息的 kind:"job" note 块
   disposition?: "steer" | "wait" | "interrupt"
                         // 单次显式处置（层级最高）；缺省 = 会话覆盖 ?? 配置默认；
-                        // trigger:"job" 固定 wait，不读默认
+                        // trigger:"job" 与 "agent" 固定 wait，不读默认
   messageId?: string   // 内部：驱动器出队执行时传入的预分配消息 id（ws 层不传）
 }
 
@@ -172,16 +175,16 @@ submit(sessionId, input)
    - **L2 常驻（系统提示）**：认知块不再由装配直接拼——它由 `system-before` 位置的内置 `system-materials` 钩子收集（`memory.cognitionPrompt(workspace)`，scope 过滤 + 预算取舍详见 memory.md；认知为空或抛错时该段缺席，run 照常进行），与技能清单一起在系统提示词组装时追加（见第 10 步）。
    - **L1 情节（用户消息 note）**：由 run-before 位置的内置 `memory-inject` 钩子检索（`memory.searchEpisodes(workspace, 首条文本前 200 字符, 5)`），命中变成 `kind:"memory"` note 块（文本 `相关经历（<线的一句话标题>）: <情节正文>`）；检索抛错则不带记忆继续（记忆是加速器，不得阻塞 run）。
 5. **读 history**（此刻用户消息尚未追加），构造纯 text 骨架 `userMessage`，`input.attachments` 经 `mountAttachments` 挂成 attachment 块放进同一消息。**消息 id 采用排队时预分配的 `input.messageId`**（出队执行时由 `#executeEntry` 从条目还原传入）——前端气泡从"排队态"原地升级、id 不变；空闲直发没有这个附加，id 为构建时现生成。job 触发的提示文案（`input.note`）也在此备成 `kind:"job"` note 块，交由 run-before 链落位。
-6. **技能扫描与工具**：先 `scanSkillDirs({global: paths.skillsDir, project: join(workspace, ".kclaw", "skills")})` 现扫技能目录（全局 `<home>/skills` + 会话工作目录的项目级 `.kclaw/skills`，项目同名整目录覆盖；渐进披露第一层的数据源，机制见 [skills](../core/skills.md)）；同时算好技能点名的隐式包装——`trigger: "user"` 时对用户原文做点名检测（`matchSkillInvocations`）并生成模型视图改写文本 `llmUserText`（交给 `llm-before` 位置的内置 `skill-wrap` 钩子应用），`job` 触发不参与点名。随后 `createBuiltinTools({workspace, memory, tavilyApiKey, exec 超时/输出上限 + 沙箱包装器（可用才注入）, web 超时/私网开关, skills})`——把同一份扫描结果传给 `skill_read` 工具（渐进披露第二层，按需取正文）；`deps.tools` 的执行器按名覆盖；`extraTools()` 每 run 求值一次，defs 追加、撞名打 `kclaw tool name collision: <name> (adapter overrides builtin)` 且适配器执行器胜出。
+6. **技能扫描与工具**：先 `scanSkillDirs({global: paths.skillsDir, project: join(workspace, ".kclaw", "skills")})` 现扫技能目录（全局 `<home>/skills` + 会话工作目录的项目级 `.kclaw/skills`，项目同名整目录覆盖；渐进披露第一层的数据源，机制见 [skills](../core/skills.md)）；同时算好技能点名的隐式包装——`trigger: "user"` 时对用户原文做点名检测（`matchSkillInvocations`）并生成模型视图改写文本 `llmUserText`（交给 `llm-before` 位置的内置 `skill-wrap` 钩子应用），`job`/`agent` 触发不参与点名。随后 `createBuiltinTools({workspace, memory, tavilyApiKey, exec 超时/输出上限 + 沙箱包装器（可用才注入）, web 超时/私网开关, skills, subagent?, childRun})`——把同一份扫描结果传给 `skill_read` 工具（渐进披露第二层，按需取正文）；`deps.subagents` 存在且本 run 非子代理时多注册 `subagent_run`（spawner 与父会话 id 随行，机制见 [subagents](../core/subagents.md)）；会话 meta 带 `parentSessionId`（子代理 run）时带 `childRun: true`——工具面裁掉 `memory_save` 与 `subagent_run`，系统提示词换成精简的子代理提示词；`deps.tools` 的执行器按名覆盖；`extraTools()` 每 run 求值一次，defs 追加、撞名打 `kclaw tool name collision: <name> (adapter overrides builtin)` 且适配器执行器胜出。
 7. **权限**：在 `ConfigPermissionGate` 外再包一层负责登记确认的 gate。装配 gate 的输入会话与磁盘各占一半、每 run 现取：`mode` 读会话 meta（`sessionMeta.mode`，缺省 `default`——daemon 没有全局模式旗标，会话 meta 是唯一真相）；`decidedRules` 经 `loadDecidedRulesForRun` 每 run 重读沉淀规则文件（全局档恒载；项目档被 git 跟踪则跳过并告警，机制见 [permissions](../core/permissions.md)）；`workspace` 取会话 `workdir`（缺省 `deps.workspace`），越界判定与项目档路径都以此为准；`readRoots` 传入附件目录 `paths.attachmentsDir`——上传目录里的文件是 daemon 自己收下的用户输入，fs_read/fs_list 读它们不需要人工确认；`safeTools`/`toolFacts` 按内置工具注册的 risk 与参数 schema 字段名派生（引擎不持工具名单）。exec 沙箱（批次 A）先于建工具探测一次可用性（`createExecSandbox`，结果写 daemon 日志当观察、不打断 run），探测结果同源喂两个消费方——exec 工具的沙箱包装器（第 6 步）与 gate 的 `sandboxAvailable`；沙箱启用但探测不可用时，gate 判出的 exec 确认请求带说明 `noteText`（"exec 沙箱不可用，本次操作需人工确认"）。gate 判出 `confirm` 时，用 gate 签发的 id 调 `broker.create(confirmationId, toolCall, risk ?? "sensitive", confirmTimeoutMs, sessionId)` 登记——这一步只做登记，`confirmation.requested` 事件仍由循环发，全链路用的是同一个 id。
 8. **resolveConfirmation**：`broker.wait(confirmationId)` 经共享的 `raceConfirmation(同 confirmTimeoutMs, controller.signal)`（`permissions/broker.ts` 导出，循环与装配用同一个函数）竞速——人工裁决 / 超时 / abort 三方。非人工胜出（超时或 abort）即 `broker.expire`，晚到的人工 resolve 只会得到 `unknown confirmation`。
 9. **模型解析与 LLM 客户端**：`llmForRun(onLlmRetry)` 为本 run 构造带重试可见性的客户端——重试回调把 attempt 计数推进并触发 `llm-retry` 位置的钩子链（内置 `retry-notify` 转 `llm.failed {willRetry:true}` 事件）；`runId` 从循环的第一个事件 `run.started` 捕获，`llmAttempt` 计数在 `llm.completed/failed` 后复位。随后三级解析模型：`resolveEntry(input.model ?? sessionMeta?.model ?? defaultModel)`。
 10. **压缩视图**：`RunInput.compaction` 传入会话 meta 里的压缩状态 `{ upto, top }`（无则 undefined）——循环据此在请求里垫脉络项、跳过已压缩部分。**不再有发送前预压缩**。`session_search` 的检索后端在此懒构造（`buildSessionSearch`：返回一个首次调用才现读该会话事件流的闭包，交给 `createBuiltinTools`）。
-11. **系统提示词（钩子化组装）**：`base` 取 AGENTS.md（缺省回退 `DEFAULT_SYSTEM_PROMPT`）→ `system-before` 链追加段落（内置 `system-materials`：L2 认知 + 技能清单 `skillListPrompt(skills)`；用户文件段落累积在其后）→ 段落按序拼进全文 → `system-after` 链过终稿（用户改写在前，内置 `system-audit` fatal 排最后——它把**最终全文**经 `sessions.appendSystem` 落一条 `system` 事件进事件流，每 run 恰好一条、写失败即本次 run 失败；事件序上先于本 run 的 user 消息）。
+11. **系统提示词（钩子化组装）**：`base` 取 AGENTS.md（缺省回退 `DEFAULT_SYSTEM_PROMPT`；子代理 run 换成 `subagentSystemPrompt(workspace)` 精简提示词，见 [subagents](../core/subagents.md)）→ `system-before` 链追加段落（内置 `system-materials`：L2 认知 + 技能清单 `skillListPrompt(skills)`；子代理 run 该钩子返回空段——认知与技能清单都不带；用户文件段落累积在其后）→ 段落按序拼进全文 → `system-after` 链过终稿（用户改写在前，内置 `system-audit` fatal 排最后——它把**最终全文**经 `sessions.appendSystem` 落一条 `system` 事件进事件流，每 run 恰好一条、写失败即本次 run 失败；事件序上先于本 run 的 user 消息）。
 12. **runAgent**：`hooks` 传第 3 步的链（循环的全部行为接缝：run-before 落位消息、llm-before 改写视图、turn-boundary 接 `handoff.drainSteer` 的引导注入、compaction-check / overflow-rescue 两个压缩决策位经 `compactor.auto` 执行）；`signal` 接本 run 的 controller；`toolResultKeep` 从 `config.sessions.toolResultKeep`（默认 8）传入、`tokenBudget` 传 `预算 × compactAtRatio`，共同驱动请求构造时的预算驱动工具输出省略。两个持久化回调整装在 deps 上：
     - `onEvent`：捕获 runId / 复位 attempt → `bus.emit`（再包一层 try/catch，单个异常订阅者不会中断 run）。
     - `onMessage`：assistant/tool 消息持久化（用户消息的持久化由 run-before 链的 `user-message-land` 负责，不经这里）。
-13. **run-after 链**：`runAgent` 返回后串行跑收尾链——内置 `usage-ledger(10)`（有 usageStore 就记一行用量，失败仅日志）→ 任何排其后的用户/注入条目 → 内置 `post-run-compaction(20)`（stopReason 非 `aborted`/`error` 且水位 ≥ `预算 × compactAtRatio` 时 `compactor.auto({phase:"post-run", signal})`，fatal：压缩失败传播为条目级失败；await 它，发生在活动登记清除前——驱动器串行化让压缩期间新消息排队，手动 /compact 此时也被"会话活跃"拒绝）→ 内置 `follow-check(30)`（`config.memory.write.idleMinutes > 0` 时挂起跟随检查，落该项目 `state.json`，daemon 重启后由记忆调度器补查；失败静默）。最后 `#executeEntry` 在 finally 里清理 `#active`/`#activeOutcomes` 中属于本 run 的登记（仍是自己才删，防止误删后继 run 的）。
+13. **run-after 链**：`runAgent` 返回后串行跑收尾链——内置 `usage-ledger(10)`（有 usageStore 就记一行用量，失败仅日志；子代理 run 记到父会话名下——`usageSessionId` = `meta.parentSessionId ?? 自身`）→ 任何排其后的用户/注入条目 → 内置 `post-run-compaction(20)`（stopReason 非 `aborted`/`error` 且水位 ≥ `预算 × compactAtRatio` 时 `compactor.auto({phase:"post-run", signal})`，fatal：压缩失败传播为条目级失败；await 它，发生在活动登记清除前——驱动器串行化让压缩期间新消息排队，手动 /compact 此时也被"会话活跃"拒绝）→ 内置 `follow-check(30)`（`config.memory.write.idleMinutes > 0` 时挂起跟随检查，落该项目 `state.json`，daemon 重启后由记忆调度器补查；子代理 run 不挂；失败静默）。最后 `#executeEntry` 在 finally 里清理 `#active`/`#activeOutcomes` 中属于本 run 的登记（仍是自己才删，防止误删后继 run 的）。
 
 调度心跳的 job run 使用同一入口：`run.enqueue(session.id, {userText: job.prompt, trigger: "job", note: "本会话由定时任务「<name>」触发"})`（`packages/server/src/scheduler-tick.ts`），job 触发的 run 跳过自动命名。
 

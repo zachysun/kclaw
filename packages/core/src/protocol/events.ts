@@ -32,7 +32,7 @@ export type EventType =
   // 扩展（hook 系统）：用户 hook 装载/执行失败，fail-open 不影响 run
   | "hook.failed"
 
-export interface RunStartedPayload { trigger: "user" | "job" }
+export interface RunStartedPayload { trigger: "user" | "job" | "agent" }
 export interface RunCompletedPayload { stopReason: StopReason; usage: Usage }
 export interface RunFailedPayload { error: { code: string; message: string } }
 export interface MessageCreatedPayload { message: Message }
@@ -138,6 +138,13 @@ export type AgentEvent<T extends EventType = EventType> = {
   runId?: string
   payload: EventPayloadMap[T]
 }
+
+/**
+ * AgentEvent distributed over every EventType — the discriminated union the
+ * three clients narrow on (`switch (e.type)` narrows the payload per case).
+ * The generic `AgentEvent` does NOT distribute; narrow on this one.
+ */
+export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 
 export function makeEvent<T extends EventType>(
   type: T, payload: EventPayloadMap[T],

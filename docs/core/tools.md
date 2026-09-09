@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/tools/` 实现全部 11 个内置工具，并把它们装配成两份对齐的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
+`packages/core/src/tools/` 实现全部 12 个内置工具，并把它们装配成两份对齐的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
 
 ---
 
@@ -42,6 +42,9 @@ export function createBuiltinTools(opts: {
   web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean }>
   sessionSearch?: SessionSearchFn    // session_search 的检索后端（server 每 run 注入）；缺席时工具仍注册、返回"(无可检索内容)"
   skills?: SkillRecord[]             // 技能目录扫描结果：skill_read 按名加载正文（见 skills.md）
+  subagent?: { spawner: SubagentSpawner; parentSessionId: string }
+  // subagent_run 的派发后端（server 侧 spawner，见 subagents.md）；缺席时 subagent_run 不注册
+  childRun?: boolean                 // 本 run 自身是子代理（meta.parentSessionId 派生）：裁掉 memory_save 与 subagent_run
   fetchImpl?: typeof fetch
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] }
 
@@ -57,7 +60,7 @@ export function makeTool<N extends string>(
 
 ---
 
-## 11 个内置工具
+## 12 个内置工具
 
 | 名称 | 职责 | risk / concurrency |
 |------|------|--------------------|
@@ -72,6 +75,7 @@ export function makeTool<N extends string>(
 | `memory_search` | 全文检索记忆 | safe / parallel |
 | `session_search` | 全文检索当前会话已压缩的早期对话 | safe / parallel |
 | `skill_read` | 按名字加载一个技能（skill）的完整规程正文 | safe / parallel |
+| `subagent_run` | 派出一个子代理独立执行一段自包含任务，结题答复即工具结果 | safe / parallel |
 
 ### exec（`tools/exec.ts`）
 
@@ -125,6 +129,12 @@ export function makeTool<N extends string>(
 
 skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每 run 现扫技能目录后传入同一份结果（渐进披露第二层），系统提示词里的技能清单用同一份扫描结果（第一层）。点名包装等其余机制见 [skills](./skills.md)。
 
+### subagent 工具（`tools/subagent.ts`）
+
+**subagent_run** `{task, label?}`：派一个子代理执行一段自包含任务，阻塞等待其结题答复作为工具结果（完整机制、生命周期与结果整形见 [subagents](./subagents.md)）。执行器是薄壳——校验 `task` 非空字符串、`label` 为字符串后调一次 spawner，会话创建/run 提交/状态转发都在 server 侧实现。`risk: "safe"`：派出动作本身不碰敏感资源，子 run 自己的工具调用照常过自己的权限门；`concurrency: "parallel"`：一批多个 `subagent_run` 并发执行即并行路径。子代理的 `childSessionId` 经结果的 `data` 字段随块持久化（web 的"查看子代理轨迹"链接读它）。
+
+注册是**条件性**的（与 session/skill 工具的"始终注册"不同）：`subagent` 选项缺席（daemon 未装配 spawner）或本 run 自身是子代理（单层委派）时不注册 `subagent_run`；子代理的工具面同时裁掉 `memory_save`（记忆隔离）。
+
 ---
 
 ## callId 配对生命周期
@@ -164,4 +174,5 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 - [memory](./memory.md)：memory 工具背后的存储与检索
 - [compaction](./compaction.md)：session_search 检索的索引来源（压缩段）与工具输出省略
 - [skills](./skills.md)：skill_read 背后的技能包机制（渐进披露、双作用域、点名包装）
+- [subagents](./subagents.md)：subagent_run 背后的子会话生命周期、并发上限与结果整形
 - [mcp](./mcp.md)：同一 ToolExecutor 契约的另一种工具来源
