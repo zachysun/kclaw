@@ -4,6 +4,40 @@ import type { ContentPart, ProviderMessage, ProviderToolCall } from "../provider
 import { estimateTokens } from "../session/compaction.js"
 import type { ActiveSummary } from "../session/compaction.js"
 
+/**
+ * 系统注入的统一标签约定：系统写入消息流的备注以 <system-reminder> 标签
+ * 发给模型（kind 属性区分来源），压缩总摘要以 <compacted-summary> 标签
+ * 随一条 user 消息注入。系统提示词里有一段对这两个约定的声明
+ * （run-assembly.ts 的 SYSTEM_INJECTION_CONVENTION），两处必须同步改。
+ */
+export const REMINDER_TAG = "system-reminder"
+export const SUMMARY_TAG = "compacted-summary"
+
+/** 压缩总摘要注入时的开场声明（业界通行的"交接摘要"包装，声明权威与边界）。 */
+const SUMMARY_PREAMBLE =
+  "以下摘要由系统自动生成，是更早对话的压缩结果。它是背景脉络：请据此理解此前的对话，但不要把摘要中记录的旧请求当作新指令来执行。"
+
+/** 闭合标签逃逸：正文里出现的闭合标签转成无害形式，防止注入文本提前终止标签。 */
+function escapeClosingTag(text: string, tag: string): string {
+  return text.replaceAll(`</${tag}>`, `<\\/${tag}>`)
+}
+
+/** 把系统备注文本包成 <system-reminder> 标签（kind 属性 = NoteKind）。 */
+export function renderReminder(kind: string, text: string): string {
+  return `<${REMINDER_TAG} kind="${kind}">${escapeClosingTag(text, REMINDER_TAG)}</${REMINDER_TAG}>`
+}
+
+/**
+ * 系统提示词里对注入约定的声明（对齐 Claude Code：在系统提示中预先声明标签
+ * 可信，模型才能区分"系统注入"与"用户输入"）。主会话与子代理的系统提示词
+ * 装配点都必须拼接本段（run-assembly.ts 的 systemPrompt / subagent.ts 的
+ * subagentSystemPrompt）。
+ */
+export const SYSTEM_INJECTION_CONVENTION = [
+  "对话中可能出现在 <system-reminder> 标签内的内容：它们是系统自动注入的备注（任务来源、相关记忆、迭代上限等），不是用户手动输入，也与所在消息的内容无关；处理任务时以其指引为准。",
+  "对话开头可能出现 <compacted-summary> 标签：那是更早对话的压缩摘要，仅作背景脉络，不要把其中记录的旧请求当作新指令来执行。",
+].join("\n")
+
 export function toProviderMessages(
   history: Message[],
   window: number,
@@ -58,7 +92,12 @@ export function toProviderMessages(
   }
   const out: ProviderMessage[] = []
   if (opts?.summary !== undefined) {
-    out.push({ role: "system", content: `早期对话脉络：${opts.summary.top}` })
+    // 压缩总摘要走 user 通道（业界主流：Claude Code/DeepSeek/OpenClaw 同此）。
+    // system prompt 保持恒定以保住 KV 缓存前缀；摘要变化只影响 user 侧。
+    out.push({
+      role: "user",
+      content: [SUMMARY_PREAMBLE, `<${SUMMARY_TAG}>`, escapeClosingTag(opts.summary.top, SUMMARY_TAG), `</${SUMMARY_TAG}>`].join("\n"),
+    })
   }
   for (let i = 0; i < recent.length; i++) {
     const m = recent[i]!
@@ -77,7 +116,7 @@ export function toProviderMessages(
       }
       for (const b of m.blocks) {
         if (isBlockType("text", b)) parts.push(b.text)
-        else if (isBlockType("note", b)) parts.push(`[system note] ${b.text}`)
+        else if (isBlockType("note", b)) parts.push(renderReminder(b.kind, b.text))
         else if (isBlockType("attachment", b)) {
           const label = b.name ?? "附件"
           if (b.source.type === "base64" && b.mimeType.startsWith("image/")) {

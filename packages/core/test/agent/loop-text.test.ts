@@ -260,9 +260,9 @@ describe("runAgent with a caller-supplied user message", () => {
     expect(outcome.messages[0]).toBe(userMessage)
     expect(messages.map((m) => m.role)).toEqual(["assistant"])
 
-    // notes ride along to the provider: text + "[system note] 相关记忆: ...".
+    // notes ride along to the provider: text + the <system-reminder> wrapper.
     expect(requests[0]!.messages).toEqual([
-      { role: "user", content: "hi\n[system note] 相关记忆: 用户在上海" },
+      { role: "user", content: "hi\n<system-reminder kind=\"memory\">相关记忆: 用户在上海</system-reminder>" },
     ])
   })
 })

@@ -51,6 +51,7 @@ import { ConfirmationBroker, raceConfirmation, type ConfirmationResolution } fro
 import { createExecSandbox } from "../sandbox/provider.js"
 import type { PermissionGate, RunOutcome } from "./loop.js"
 import { runAgent } from "./loop.js"
+import { SYSTEM_INJECTION_CONVENTION } from "./context.js"
 import { subagentSystemPrompt, type SubagentSpawner } from "./subagent.js"
 import type { SessionSearchFn } from "../tools/session.js"
 import type { ToolExecutor } from "./tools.js"
@@ -599,13 +600,15 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
 
   // 系统提示词（hook 化的组装）：AGENTS.md 基座 →
   // system-before 链追加段落（内置 system-materials：认知 + 技能列表）→
+  // 末尾恒定拼接注入约定（模型据此识别 <system-reminder> /
+  // <compacted-summary> 是系统注入而非用户输入；放最后保持位置稳定）→
   // system-after 链（用户可改终稿；内置 system-audit fatal 全量留痕，排在其
   // 后——审计永远记录模型实际看到的那份）。写失败即本次 run 失败，由驱动器
   // 的条目级失败兜底（与迁移前一致）。
   // 子代理 run 用专用精简模板（身份 + 工作区 + 纪律），不带 persona 与记忆材料。
   const base = childRun ? subagentSystemPrompt(workspace) : systemPrompt(paths.agentsMd)
   const segments = (await chain.run("system-before", { base })) ?? []
-  let system = [base, ...segments].filter((s) => s !== "").join("\n\n")
+  let system = [base, ...segments, SYSTEM_INJECTION_CONVENTION].filter((s) => s !== "").join("\n\n")
   const rewrittenSystem = await chain.run("system-after", { system })
   if (rewrittenSystem !== undefined) system = rewrittenSystem
 

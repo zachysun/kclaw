@@ -64,9 +64,9 @@ describe("compaction hooks in the agent loop", () => {
     expect(outcome.stopReason).toBe("end_turn")
     // 顺序：工具批次完成 → compaction-check → turn-boundary
     expect(order).toEqual(["compact", "steer"])
-    // 下一次请求：messages[0] 是脉络项
-    expect(views[1]![0]!.role).toBe("system")
-    expect(String(views[1]![0]!.content)).toMatch(/^早期对话脉络：S/)
+    // 下一次请求：messages[0] 是压缩摘要（user 消息）
+    expect(views[1]![0]!.role).toBe("user")
+    expect(String(views[1]![0]!.content)).toContain("<compacted-summary>\nS")
     // upto（含）之前的原文不再出现
     const flat = views[1]!.map((m) => JSON.stringify(m)).join("\n")
     expect(flat).not.toContain("很早的话题")
@@ -109,8 +109,8 @@ describe("compaction hooks in the agent loop", () => {
     const outcome = await runAgent(baseInput([userMsg("u0", "很早的话题"), userMsg("u1", "upto 消息")]), deps)
     expect(calls).toBe(2)
     expect(outcome.stopReason).toBe("end_turn")
-    // 重试换压缩视图：messages[0] 是脉络项，upto 前原文消失
-    expect(String(views[1]![0]!.content)).toMatch(/^早期对话脉络：S/)
+    // 重试换压缩视图：messages[0] 是压缩摘要，upto 前原文消失
+    expect(String(views[1]![0]!.content)).toContain("<compacted-summary>\nS")
     expect(views[1]!.map((m) => JSON.stringify(m)).join("\n")).not.toContain("很早的话题")
     // 内部自愈：不额外发 llm.started / llm.failed
     expect(events.filter((e) => e.type === "llm.started")).toHaveLength(1)

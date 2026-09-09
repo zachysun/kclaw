@@ -89,7 +89,7 @@ describe("openai-compat client", () => {
     await collect(createOpenAiCompatClient({ baseUrl: "https://x/v1", apiKey: "k", fetchImpl }), {
       model: "m", system: "be brief",
       messages: [
-        { role: "system", content: "早期对话脉络：早前聊过压缩" },
+        { role: "system", content: "（系统提示补充段）" },
         { role: "user", content: "hi" },
       ],
       tools: [],
@@ -97,7 +97,7 @@ describe("openai-compat client", () => {
     const body = await captured!.json()
     expect(body.messages[0]).toEqual({ role: "system", content: "be brief" }) // 人格在前
     expect(body.messages[1].role).toBe("system")
-    expect(body.messages[1].content.startsWith("早期对话脉络：")).toBe(true)
+    expect(body.messages[1].content.startsWith("（系统提示补充段）")).toBe(true)
   })
 
   it("throws the classified `llm http <status>` message on non-2xx", async () => {

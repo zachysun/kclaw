@@ -648,14 +648,16 @@ describe("RunManager.enqueue", () => {
     const session = env.sessions.create("人设会话")
 
     await manager.enqueue(session.id, { userText: "嗨", trigger: "user" })
-    expect(requests[0]!.system).toBe("# 人设\n你是测试助理。")
+    expect(requests[0]!.system).toContain("# 人设\n你是测试助理。")
 
     // a second session WITHOUT AGENTS.md… is impossible here (same home), so
     // the default branch is pinned from a fresh home with no file written.
     const fresh = makeEnv(llm)
     const session2 = fresh.env.sessions.create("默认人设会话")
     await fresh.manager.enqueue(session2.id, { userText: "嗨", trigger: "user" })
-    expect(requests.at(-1)!.system).toBe("你是 kclaw，一个务实的个人助理。")
+    // 人格在首位，注入约定作为系统提示词的最后一段恒定存在
+    expect(requests.at(-1)!.system).toContain("你是 kclaw，一个务实的个人助理。")
+    expect(requests.at(-1)!.system).toContain("<system-reminder>")
   })
 
   it("aborts a hanging run: cancel() → outcome stopReason aborted", async () => {
@@ -992,8 +994,9 @@ describe("RunManager context compaction", () => {
     expect(meta!.compaction!.segments).toHaveLength(2)
     expect(meta!.compaction!.top).toBe("总摘要B")
     // the second run's main request already saw the first compaction's view
-    expect(reqs[3]!.messages[0]!.role).toBe("system")
-    expect(reqs[3]!.messages[0]!.content).toContain("早期对话脉络：总摘要A")
+    expect(reqs[3]!.messages[0]!.role).toBe("user")
+    expect(reqs[3]!.messages[0]!.content).toContain("<compacted-summary>")
+    expect(reqs[3]!.messages[0]!.content).toContain("总摘要A")
     // the second merge's input carries the old top and the new segment summary
     const mergeInput = reqs[5]!.messages[0]!.content as string
     expect(mergeInput).toContain("总摘要A")
@@ -1145,8 +1148,9 @@ describe("RunManager context compaction", () => {
     expect(types).not.toContain("compaction.completed")
     // the persisted view drives THIS run's provider messages: the context
     // thread item first, the verbatim text before upto gone
-    expect(reqs[0]!.messages[0]!.role).toBe("system")
-    expect(reqs[0]!.messages[0]!.content).toContain("早期对话脉络：总摘要A")
+    expect(reqs[0]!.messages[0]!.role).toBe("user")
+    expect(reqs[0]!.messages[0]!.content).toContain("<compacted-summary>")
+    expect(reqs[0]!.messages[0]!.content).toContain("总摘要A")
     expect(JSON.stringify(reqs[0]!.messages)).not.toContain("历史问题1")
   })
 
@@ -1339,8 +1343,9 @@ describe("RunManager context compaction", () => {
     // verbatim text before upto gone, and the retry was silent (one llm.started)
     expect(reqs.length).toBe(4)
     const retry = reqs[3]!
-    expect(retry.messages[0]!.role).toBe("system")
-    expect(retry.messages[0]!.content).toContain("早期对话脉络：总摘要E")
+    expect(retry.messages[0]!.role).toBe("user")
+    expect(retry.messages[0]!.content).toContain("<compacted-summary>")
+    expect(retry.messages[0]!.content).toContain("总摘要E")
     expect(JSON.stringify(retry.messages)).not.toContain("历史问题1")
     expect(events.filter((e) => e.type === "llm.started")).toHaveLength(1)
   })
@@ -1388,8 +1393,9 @@ describe("RunManager context compaction", () => {
     // verbatim text gone, only the fresh user turn remains
     expect(reqs.length).toBe(4)
     const retry = reqs[3]!
-    expect(retry.messages[0]!.role).toBe("system")
-    expect(retry.messages[0]!.content).toContain("早期对话脉络：总摘要E")
+    expect(retry.messages[0]!.role).toBe("user")
+    expect(retry.messages[0]!.content).toContain("<compacted-summary>")
+    expect(retry.messages[0]!.content).toContain("总摘要E")
     expect(JSON.stringify(retry.messages)).not.toContain("历史问题1")
     expect(JSON.stringify(retry.messages)).not.toContain("历史回答1")
     expect(JSON.stringify(retry.messages)).toContain("新问题")
@@ -1429,8 +1435,8 @@ describe("RunManager context compaction", () => {
     expect(reqs[0]!.messages[0]!.role).not.toBe("system")
     expect(JSON.stringify(reqs[0]!.messages)).toContain("历史问题1")
     // …the request AFTER it leads with the context thread item
-    expect(reqs[3]!.messages[0]!.role).toBe("system")
-    expect(reqs[3]!.messages[0]!.content).toContain("早期对话脉络：总摘要I")
+    expect(reqs[3]!.messages[0]!.role).toBe("user")
+    expect(reqs[3]!.messages[0]!.content).toContain("总摘要I")
     expect(JSON.stringify(reqs[3]!.messages)).not.toContain("历史问题1")
     // the run's own tail stayed verbatim
     expect(JSON.stringify(reqs[3]!.messages)).toContain("执行一下")
@@ -1579,7 +1585,8 @@ describe("RunManager system 事件审计", () => {
     const events = env.sessions.readEvents(session.id)
     const systemEvents = events.filter(isSystem)
     expect(systemEvents).toHaveLength(1)
-    expect(systemEvents[0]!.text).toBe("# 人设\n你是测试助理。")
+    expect(systemEvents[0]!.text).toContain("# 人设\n你是测试助理。")
+    expect(systemEvents[0]!.text).toContain("<system-reminder>")
     expect(Number.isNaN(Date.parse(systemEvents[0]!.at))).toBe(false)
     // 流序：system 事件先于本 run 的 user 消息事件
     const systemIdx = events.findIndex(isSystem)
@@ -1596,10 +1603,12 @@ describe("RunManager system 事件审计", () => {
     await manager.enqueue(session.id, { userText: "你好", trigger: "user" })
 
     const [systemEvent] = env.sessions.readEvents(session.id).filter(isSystem)
-    expect(systemEvent!.text).toBe("你是 kclaw，一个务实的个人助理。")
+    // 人格在首、注入约定恒定为最后一段
+    expect(systemEvent!.text).toContain("你是 kclaw，一个务实的个人助理。")
+    expect(systemEvent!.text).toContain("<system-reminder>")
   })
 
-  it("认知非空时 system 事件文本 = AGENTS.md + 空行 + 认知", async () => {
+  it("认知非空时 system 事件文本 = AGENTS.md + 空行 + 认知 + 空行 + 注入约定", async () => {
     const fakeMemory = {
       cognitionPrompt: () => "[关于用户]\nMaster 偏好中文。",
       searchEpisodes: async () => [],
@@ -1611,7 +1620,8 @@ describe("RunManager system 事件审计", () => {
     await manager.enqueue(session.id, { userText: "你好", trigger: "user" })
 
     const [systemEvent] = env.sessions.readEvents(session.id).filter(isSystem)
-    expect(systemEvent!.text).toBe("# 人设\n你是测试助理。\n\n[关于用户]\nMaster 偏好中文。")
+    expect(systemEvent!.text).toContain("# 人设\n你是测试助理。\n\n[关于用户]\nMaster 偏好中文。")
+    expect(systemEvent!.text).toContain("<system-reminder>")
   })
 
   it("appendSystem 写入失败即本次 run 失败：outcome 拒绝 + queue_entry_failed 可见性，驱动器不停转", async () => {

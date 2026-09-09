@@ -31,7 +31,7 @@
 | 压缩段（段） | 一次压缩中被转换成摘要的那段连续消息。 |
 | 段摘要 | 针对一个压缩段生成的摘要，固定五个栏目（见下文），生成之后永不修改。 |
 | 总摘要 | 所有段摘要归并成的一份完整脉络，每轮发给模型的就是它。 |
-| 脉络项 | 总摘要进入模型请求的形态：一条内容为 `早期对话脉络：{总摘要}` 的 system 消息，垫在请求 messages 的最前面（见"注入"）。 |
+| 脉络项 | 总摘要进入模型请求的形态：一条 user 消息——交接声明 + `<compacted-summary>` 标签包裹的总摘要——垫在请求 messages 的最前面（见"注入"）。 |
 | 分界 | 压缩内容和保留原文部分的边界，用一条消息的 id 表示。 |
 | 保留部分 | 分界之后、继续按原文发送的近期历史。 |
 | 预算 | 一个会话允许的上下文 token 上限（配置 `sessions.contextTokens`，默认 128000）。 |
@@ -227,11 +227,11 @@ m1  m2  m3 │ m4  m5  m6  m7 │ m8 … m12
 
 ### 注入
 
-总摘要以**脉络项**进入发给模型的请求：`toProviderMessages` 收到 `summary` 参数（`ActiveSummary { upto, top }`）时，把 `messages[0]` 垫成一条 system 消息，内容固定为 `早期对话脉络：{top}`。请求里 `system` 字段承载的人格提示不受影响（两者是不同字段），最终发给模型的顺序是**人格 → 脉络 → 对话**：
+总摘要以**脉络项**进入发给模型的请求：`toProviderMessages` 收到 `summary` 参数（`ActiveSummary { upto, top }`）时，把 `messages[0]` 垫成一条 **user 消息**——开场是一句交接声明（说明这是系统生成的压缩摘要、只作背景脉络、不要把摘要里的旧请求当新指令），正文用 `<compacted-summary>` 标签包裹总摘要。走 user 通道而不是垫 system 消息是刻意的：system prompt 保持每轮恒定才能保住服务商的 KV 前缀缓存，摘要变化只影响 user 侧（重建一次缓存后即稳定）；这也是业界通行做法（Claude Code / DeepSeek / OpenClaw 的压缩摘要都走 user 消息）。最终发给模型的顺序是**人格 → 脉络 → 对话**：
 
 ```
 llm.stream({ system: <人格>, messages: [
-  { role: "system", content: "早期对话脉络：<总摘要>" }   ← 脉络项（messages[0]）
+  { role: "user", content: "以下摘要由系统自动生成…\n<compacted-summary>\n<总摘要>\n</compacted-summary>" }   ← 脉络项（messages[0]）
   { role: "user",   content: <保留部分第一条> }
   … 保留部分的原文
 ] })
