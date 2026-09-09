@@ -41,12 +41,12 @@ import {
 const MAX_RECONNECT_ATTEMPTS = 3
 
 const KIND_LABELS: Record<AuditRowKind, string> = {
-  block: "消息",
-  compaction: "压缩",
-  memory: "记忆",
-  system: "系统",
-  sandbox: "沙箱",
-  session: "会话",
+  block: "block",
+  compaction: "compaction",
+  memory: "memory",
+  system: "system",
+  sandbox: "sandbox",
+  session: "session",
 }
 
 const TIME_PRESETS: Array<{ value: TimePreset; label: string }> = [

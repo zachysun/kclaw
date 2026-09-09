@@ -56,15 +56,15 @@ function rowLabel(row: AuditRow): string {
     case "block":
       return blockTypeLabel(row.block)
     case "compaction":
-      return "压缩"
+      return "compaction"
     case "memory":
-      return "记忆"
+      return "memory"
     case "system":
-      return "系统提示词"
+      return "system"
     case "sandbox":
-      return "沙箱"
+      return "sandbox"
     case "session":
-      return "会话"
+      return "session"
   }
 }
 
