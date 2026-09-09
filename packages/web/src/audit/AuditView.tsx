@@ -18,10 +18,12 @@
  * Rendering is virtualized (react-virtuoso): variable row heights, bottom
  * following (auto-follow while pinned to the bottom, pause on scroll-up, a
  * "回到最新" bubble to resume), and stable row keys carrying the event index
- * so expansion survives appends. Type toggles + time range FILTER rows;
- * keyword SEARCH marks hits (row marker + hit counter + prev/next jumps,
- * like an editor search); jumps also target the previous/next compaction
- * boundary. Session selection follows the sidebar (owned by the shell); the
+ * so expansion survives appends. Type toggles + keyword substring + time
+ * range FILTER rows (AND); jumps target the latest row and the previous/next
+ * compaction boundary, anchored on the first visible row (rangeChanged keeps
+ * the anchor honest through manual scrolls). Dynamic time presets (1h /
+ * today) re-evaluate on a slow tick so an idle page still drops aged-out
+ * rows. Session selection follows the sidebar (owned by the shell); the
  * component stays mounted (hidden) across tab switches.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -31,8 +33,8 @@ import { WsAuthError, type WsClient } from "../ws.js"
 import type { SessionEvent } from "../types.js"
 import { AuditRowItem } from "./AuditRowItem.js"
 import {
-  ALL_KINDS, appendEvents, DEFAULT_FILTER, filterRows, flattenAudit, isAppendedFrame,
-  jumpTarget, matchRowIndexes, type AuditFilter, type AuditRowKind, type TimePreset,
+  ALL_KINDS, appendEvents, appendRows, DEFAULT_FILTER, filterRows, isAppendedFrame,
+  jumpTarget, type AuditFilter, type AuditRow, type AuditRowKind, type TimePreset,
 } from "./model.js"
 
 /** Max consecutive failed reconnects before giving up with a notice. */
@@ -81,6 +83,9 @@ export interface AuditViewProps {
 
 export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewProps) {
   const [events, setEvents] = useState<SessionEvent[] | null>(null)
+  // Rows are maintained incrementally (appendRows on each pull) instead of
+  // re-flattening the whole stream on every live append.
+  const [rows, setRows] = useState<AuditRow[]>([])
   const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading")
   const [errorText, setErrorText] = useState("")
   const [filter, setFilter] = useState<AuditFilter>(DEFAULT_FILTER)
@@ -89,8 +94,9 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
   /** A failed frame-driven (live) pull — non-destructive: loaded rows stay. */
   const [liveError, setLiveError] = useState<string | null>(null)
   const [following, setFollowing] = useState(true)
-  const [hitCursor, setHitCursor] = useState(0)
   const [reloadTick, setReloadTick] = useState(0)
+  /** Re-evaluation clock for the dynamic time presets (1h / today). */
+  const [nowTick, setNowTick] = useState(() => new Date())
 
   const virtRef = useRef<VirtuosoHandle>(null)
   /** Last jump/scroll anchor (visible-row index) — the "from" of relative jumps. */
@@ -105,6 +111,7 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
   useEffect(() => {
     if (sessionId === null) {
       setEvents(null)
+      setRows([])
       setPhase("ready")
       return
     }
@@ -121,6 +128,7 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
     setLiveError(null)
     setFollowing(true)
     setExpanded(new Set())
+    setRows([])
     cursorRowRef.current = 0
 
     // since = current cursor: full stream on first call, increments after.
@@ -135,8 +143,12 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
           `/sessions/${encodeURIComponent(sessionId)}/events?since=${cursor}`,
         )
         if (cancelled) return
+        const base = cursor
         cursor += fresh.length
-        if (fresh.length > 0) setEvents((prev) => appendEvents(prev ?? [], fresh))
+        if (fresh.length > 0) {
+          setEvents((prev) => appendEvents(prev ?? [], fresh))
+          setRows((prev) => appendRows(prev, base, fresh))
+        }
         setLiveError(null)
         setPhase("ready")
       } finally {
@@ -223,10 +235,17 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
     }
   }, [api, createWs, sessionId, reloadTick])
 
-  const rows = useMemo(() => flattenAudit(events ?? []), [events])
-  const visibleRows = useMemo(() => filterRows(rows, filter, new Date()), [rows, filter])
-  const hits = useMemo(() => matchRowIndexes(visibleRows, filter.keyword), [visibleRows, filter.keyword])
-  const hitSet = useMemo(() => new Set(hits), [hits])
+  const visibleRows = useMemo(() => filterRows(rows, filter, nowTick), [rows, filter, nowTick])
+
+  // A pinned "最近 1 小时" / "今天" window goes stale on an idle page — rows
+  // should age out with real time, not only on the next event. A slow tick
+  // keeps the window honest; fixed presets (all / custom bounds) need none.
+  const dynamicTime = filter.timePreset === "1h" || filter.timePreset === "today"
+  useEffect(() => {
+    if (!dynamicTime) return
+    const timer = setInterval(() => setNowTick(new Date()), 30_000)
+    return () => clearInterval(timer)
+  }, [dynamicTime])
 
   const setKind = useCallback((kind: AuditRowKind, on: boolean) => {
     setFilter((f) => ({ ...f, kinds: { ...f.kinds, [kind]: on } }))
@@ -234,7 +253,6 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
 
   const setKeyword = useCallback((kw: string) => {
     setFilter((f) => ({ ...f, keyword: kw }))
-    setHitCursor(0) // a new search restarts the hit walk
   }, [])
 
   const setTimePreset = useCallback((preset: TimePreset) => {
@@ -271,22 +289,11 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
     [visibleRows],
   )
 
-  const jumpHit = useCallback(
-    (dir: 1 | -1) => {
-      if (hits.length === 0) return
-      const next = (hitCursor + (dir === 1 ? 1 : -1) + hits.length) % hits.length
-      setHitCursor(next)
-      scrollToRow(hits[next]!)
-    },
-    [hits, hitCursor, scrollToRow],
-  )
-
   const jumpLatest = useCallback(() => {
     setFollowing(true)
     if (visibleRows.length > 0) scrollToRow(visibleRows.length - 1)
   }, [visibleRows.length, scrollToRow])
 
-  const keyword = filter.keyword.trim()
   const rowsBody = (() => {
     if (phase === "loading") {
       return (
@@ -328,12 +335,16 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
           initialTopMostItemIndex={visibleRows.length - 1}
           followOutput={following ? "auto" : false}
           atBottomStateChange={setFollowing}
+          rangeChanged={(range) => {
+            // The jump anchor follows the viewport: after a manual scroll,
+            // prev/next-compaction jump relative to what the user sees.
+            cursorRowRef.current = range.startIndex
+          }}
           computeItemKey={(_index, row) => row.key}
           itemContent={(index, row) => (
             <AuditRowItem
               row={row}
               expanded={expanded.has(row.key)}
-              hit={hitSet.has(index)}
               onToggle={toggleExpanded}
             />
           )}
@@ -380,33 +391,10 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
             type="search"
             className="audit-kw"
             data-testid="audit-keyword"
-            placeholder="搜索事件内容…"
+            placeholder="按关键词过滤事件内容…"
             value={filter.keyword}
             onChange={(e) => setKeyword(e.target.value)}
           />
-          {keyword !== "" && (
-            <span className="audit-hits muted" data-testid="audit-hit-count">
-              命中 {hits.length > 0 ? (hitCursor % hits.length) + 1 : 0}/{hits.length}
-            </span>
-          )}
-          <button
-            type="button"
-            className="audit-jump-btn"
-            data-testid="audit-hit-prev"
-            disabled={hits.length === 0}
-            onClick={() => jumpHit(-1)}
-          >
-            ↑ 上一处
-          </button>
-          <button
-            type="button"
-            className="audit-jump-btn"
-            data-testid="audit-hit-next"
-            disabled={hits.length === 0}
-            onClick={() => jumpHit(1)}
-          >
-            ↓ 下一处
-          </button>
           <button
             type="button"
             className="audit-jump-btn"

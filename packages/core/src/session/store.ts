@@ -4,7 +4,7 @@ import { newId } from "../protocol/ids.js"
 import type { Message } from "../protocol/messages.js"
 import type { CompactionRecord, CompactionState } from "./compaction.js"
 import { writeFileAtomic } from "../storage/atomic.js"
-import { appendJsonlLine, readJsonl } from "../storage/jsonl.js"
+import { appendJsonlLine, readJsonl, readJsonlFrom } from "../storage/jsonl.js"
 import { applyEvent, isCompactionEvent, isMessageEvent } from "./events.js"
 import type { SandboxCheckedEvent, SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent } from "./events.js"
 import type { AttachmentRef, QueueEntry } from "../protocol/wire.js"
@@ -141,6 +141,12 @@ export class SessionStore {
   /** Load a session's event stream oldest-first; missing file yields []. */
   readEvents(id: string): SessionEvent[] {
     return readJsonl(this.eventsPath(id)) as SessionEvent[]
+  }
+
+  /** Tail read for incremental pulls: the events at indexes >= since, with
+   *  the skipped prefix neither parsed nor materialized. */
+  readEventsFrom(id: string, since: number): SessionEvent[] {
+    return readJsonlFrom(this.eventsPath(id), since) as SessionEvent[]
   }
 
   /** Rebuild the meta projection from the full event stream and write it back;

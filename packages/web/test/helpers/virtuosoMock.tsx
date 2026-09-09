@@ -3,7 +3,8 @@
  * recording scrollToIndex. jsdom has no layout, so the real library renders
  * nothing; the audit tests exercise data flow, not virtualization. Follow
  * semantics go through the captured props: fireAtBottom invokes the
- * atBottomStateChange callback the view wired up.
+ * atBottomStateChange callback and fireRangeChanged the rangeChanged callback
+ * the view wired up.
  */
 import React from "react"
 
@@ -12,11 +13,17 @@ export interface ScrollCall {
   align?: string
 }
 
+export interface ListRange {
+  startIndex: number
+  endIndex: number
+}
+
 interface CapturedProps {
   data?: unknown[]
   itemContent?: (index: number, row: unknown) => React.ReactNode
   followOutput?: unknown
   atBottomStateChange?: (atBottom: boolean) => void
+  rangeChanged?: (range: ListRange) => void
   initialTopMostItemIndex?: number
   [key: string]: unknown
 }
@@ -40,6 +47,11 @@ export function virtuosoProps(): CapturedProps {
 /** Simulate the user scrolling away from / back to the bottom of the list. */
 export function fireAtBottom(atBottom: boolean): void {
   virtuosoProps().atBottomStateChange?.(atBottom)
+}
+
+/** Simulate the visible range changing (a manual scroll to a new window). */
+export function fireRangeChanged(range: ListRange): void {
+  virtuosoProps().rangeChanged?.(range)
 }
 
 export const Virtuoso = React.forwardRef(function VirtuosoMock(

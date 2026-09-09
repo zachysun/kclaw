@@ -1478,10 +1478,6 @@ select:focus {
   min-width: 180px;
 }
 
-.audit-hits {
-  white-space: nowrap;
-}
-
 .audit-jump-btn {
   font-size: 12px;
   padding: 3px 8px;
@@ -1553,12 +1549,6 @@ select:focus {
 .audit-row:hover {
   background: var(--surface-2);
   border-color: var(--border-strong);
-}
-
-/* keyword-search hit marker (search marks, it does not filter) */
-.audit-row.audit-hit {
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
 .audit-type {

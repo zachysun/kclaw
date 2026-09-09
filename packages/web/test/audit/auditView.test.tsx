@@ -15,7 +15,7 @@ import type { ApiClient } from "../../src/api.js"
 import { AuditView } from "../../src/audit/AuditView.js"
 import type { WsClient } from "../../src/ws.js"
 import type { Message, SessionEvent } from "../../src/types.js"
-import { fireAtBottom, scrollCalls, virtuosoProps, type ScrollCall } from "../helpers/virtuosoMock.js"
+import { fireAtBottom, fireRangeChanged, scrollCalls, virtuosoProps, type ScrollCall } from "../helpers/virtuosoMock.js"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -774,9 +774,9 @@ describe("AuditView (audit)", () => {
     unmount(root, container)
   })
 
-  // ---------- keyword search + jumps ----------
+  // ---------- keyword filter + jumps ----------
 
-  it("marks keyword hits and jumps between them (and to compaction bounds)", async () => {
+  it("keyword filters rows (AND with the other dimensions); compaction jumps still work", async () => {
     const api = makeApi()
     staticStream(api, [
       messageEvent({ id: "m1", blocks: [{ id: "b1", type: "text", text: "first needle" }] }),
@@ -796,26 +796,93 @@ describe("AuditView (audit)", () => {
       await flush()
     }
 
+    expect(rowIds(container)).toHaveLength(3)
     await typeKeyword("needle")
-    expect(container.querySelector('[data-testid="audit-hit-count"]')?.textContent).toContain("1/2")
-    // Both hit rows carry the marker class.
-    expect(container.querySelectorAll(".audit-hit")).toHaveLength(2)
+    // Case-insensitive substring over full content: only the two needle rows stay.
+    expect(rowIds(container)).toEqual(["audit-row-0-0", "audit-row-2-0"])
 
-    await act(async () => {
-      ;(container.querySelector('[data-testid="audit-hit-next"]') as HTMLButtonElement).click()
-    })
-    expect(scrollCalls().at(-1)!.index).toBe(2) // second needle row
-
-    await act(async () => {
-      ;(container.querySelector('[data-testid="audit-hit-prev"]') as HTMLButtonElement).click()
-    })
-    expect(scrollCalls().at(-1)!.index).toBe(0)
+    // Blank keyword stops filtering.
+    await typeKeyword("")
+    expect(rowIds(container)).toHaveLength(3)
 
     // Compaction jump from the top of the list.
     await act(async () => {
       ;(container.querySelector('[data-testid="audit-jump-compaction-next"]') as HTMLButtonElement).click()
     })
     expect(scrollCalls().at(-1)!.index).toBe(1)
+    unmount(root, container)
+  })
+
+  it("no keyword match shows the filtered-empty state, not the plain empty state", async () => {
+    const api = makeApi()
+    staticStream(api, [messageEvent({ id: "m1", blocks: [{ id: "b1", type: "text", text: "你好" }] })])
+
+    const { container, root } = await mount(api)
+    const kw = container.querySelector('input[data-testid="audit-keyword"]') as HTMLInputElement
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!
+      setter.call(kw, "不存在的词")
+      kw.dispatchEvent(new Event("input", { bubbles: true }))
+    })
+    await flush()
+    expect(container.querySelector('[data-testid="audit-empty"]')?.textContent).toContain("当前过滤条件下没有匹配的事件")
+    unmount(root, container)
+  })
+
+  it("dynamic time presets re-evaluate on the tick: an aged-out row drops without new events", async () => {
+    vi.useFakeTimers()
+    try {
+      const api = makeApi()
+      // A message 59 minutes old — inside "1h" now, outside after the tick.
+      const createdAt = new Date(Date.now() - 59 * 60_000).toISOString()
+      staticStream(api, [messageEvent({ id: "m1", blocks: [{ id: "b1", type: "text", text: "快过期的" }], createdAt })])
+
+      const { container, root } = await mount(api)
+      await act(async () => {
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")!.set!
+        const select = container.querySelector('select[data-testid="audit-time-preset"]') as HTMLSelectElement
+        setter.call(select, "1h")
+        select.dispatchEvent(new Event("change", { bubbles: true }))
+      })
+      expect(rowIds(container)).toHaveLength(1)
+
+      await act(async () => {
+        vi.advanceTimersByTime(2 * 60_000) // past the 30s tick, row is now > 1h old
+      })
+      expect(rowIds(container)).toEqual([])
+      unmount(root, container)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("the jump anchor follows the viewport: compaction jumps are relative to the first visible row", async () => {
+    const api = makeApi()
+    staticStream(api, [
+      messageEvent({ id: "m1", blocks: [{ id: "b1", type: "text", text: "一" }] }),
+      compactionEvent({ at: "2026-08-19T10:01:30.000Z" }),
+      messageEvent({ id: "m2", blocks: [{ id: "b2", type: "text", text: "二" }] }),
+      compactionEvent({ at: "2026-08-19T10:03:30.000Z" }),
+      messageEvent({ id: "m3", blocks: [{ id: "b3", type: "text", text: "三" }], createdAt: "2026-08-19T10:04:00.000Z" }),
+    ])
+
+    const { container, root } = await mount(api)
+    // Jump to the first compaction from the top.
+    await act(async () => {
+      ;(container.querySelector('[data-testid="audit-jump-compaction-next"]') as HTMLButtonElement).click()
+    })
+    expect(scrollCalls().at(-1)!.index).toBe(1)
+
+    // The user manually scrolls down to the last row: the anchor must follow
+    // (rangeChanged reports the visible window), so "prev compaction" jumps
+    // from the CURRENT position, not from the stale jump target.
+    await act(async () => {
+      fireRangeChanged({ startIndex: 4, endIndex: 4 })
+    })
+    await act(async () => {
+      ;(container.querySelector('[data-testid="audit-jump-compaction-prev"]') as HTMLButtonElement).click()
+    })
+    expect(scrollCalls().at(-1)!.index).toBe(3) // the second compaction, before row 4
     unmount(root, container)
   })
 })

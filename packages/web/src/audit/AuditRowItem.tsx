@@ -16,19 +16,17 @@ import {
 export interface AuditRowItemProps {
   row: AuditRow
   expanded: boolean
-  /** Keyword-search hit (row background marker). */
-  hit: boolean
   onToggle: (key: string) => void
 }
 
-export const AuditRowItem = memo(function AuditRowItem({ row, expanded, hit, onToggle }: AuditRowItemProps) {
+export const AuditRowItem = memo(function AuditRowItem({ row, expanded, onToggle }: AuditRowItemProps) {
   const toggle = () => onToggle(row.key)
   const time = fmtRowTime(rowTime(row))
 
   const head = (
     <button
       type="button"
-      className={hit ? "audit-row audit-hit" : "audit-row"}
+      className="audit-row"
       data-testid={`${row.kind === "block" ? "audit" : row.kind}-row-${row.key}`}
       onClick={toggle}
     >
@@ -46,7 +44,7 @@ export const AuditRowItem = memo(function AuditRowItem({ row, expanded, hit, onT
   ) : null
 
   return (
-    <li key={row.key} className="audit-row-item" data-hit={hit ? "true" : undefined}>
+    <li key={row.key} className="audit-row-item">
       {head}
       {full}
     </li>

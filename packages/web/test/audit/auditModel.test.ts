@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
-  appendEvents, DEFAULT_FILTER, filterRows, flattenAudit, fmtMs, fmtRowTime, fmtUsage,
-  isAppendedFrame, jumpTarget, matchRowIndexes, rowMatchesFilter,
+  appendEvents, appendRows, DEFAULT_FILTER, filterRows, flattenAudit, fmtMs, fmtRowTime, fmtUsage,
+  isAppendedFrame, jumpTarget, rowMatchesFilter,
 } from "../../src/audit/model.js"
 import type { AuditFilter, AuditRow } from "../../src/audit/model.js"
 import type {
@@ -159,34 +159,72 @@ describe("rowMatchesFilter / filterRows", () => {
     // COMPACTION at 10:05 落在 to 上（含）；msg at 10:00:0x 落在区间内
     expect(filterRows(rows, both, NOW).map((r) => r.kind)).toEqual(["block", "compaction"])
   })
-})
+  it("关键词维度（AND）：匹配全文保留、不匹配筛掉、空白关键词全过", () => {
+    const rows = flattenAudit([
+      msgEvent("msg_1", "user", [{ id: "b1", type: "text", text: "The Quick Brown Fox" }]),
+      COMPACTION, // 段摘要/总摘要含"摘要内容"
+      msgEvent("msg_2", "tool", [TOOL_RESULT], { grantedBy: { call_1: "safe" } }),
+    ])
+    const withKw = (keyword: string): AuditFilter => ({ ...DEFAULT_FILTER, keyword })
 
-// ---------- 关键词（搜索不筛行，供高亮与跳转） ----------
-
-describe("matchRowIndexes", () => {
-  const rows = flattenAudit([
-    msgEvent("msg_1", "user", [{ id: "b1", type: "text", text: "The Quick Brown Fox" }]),
-    COMPACTION, // 段摘要/总摘要含"摘要内容"
-    msgEvent("msg_2", "tool", [TOOL_RESULT], { grantedBy: { call_1: "safe" } }),
-  ])
-
-  it("大小写不敏感", () => {
-    expect(matchRowIndexes(rows, "quick brown")).toEqual([0])
-  })
-
-  it("搜全文而非摘要（长输出被摘要截断仍可命中）", () => {
+    // 大小写不敏感，匹配的行保留、其余筛掉
+    expect(filterRows(rows, withKw("quick brown"), NOW).map((r) => r.kind)).toEqual(["block"])
+    // 压缩行搜段摘要与总摘要
+    expect(filterRows(rows, withKw("段摘要内容"), NOW).map((r) => r.kind)).toEqual(["compaction"])
+    // 搜全文而非摘要（长输出被摘要截断仍可命中）
     const long: Block = { id: "b9", type: "tool_result", callId: "c9", status: "ok", output: `${"x".repeat(200)}needle`, durationMs: 1 }
     const r2 = flattenAudit([msgEvent("msg_9", "tool", [long])])
-    expect(matchRowIndexes(r2, "needle")).toEqual([0])
+    expect(filterRows(r2, withKw("needle"), NOW)).toHaveLength(1)
+    // 空白关键词不过滤
+    expect(filterRows(rows, withKw(""), NOW)).toHaveLength(3)
+    expect(filterRows(rows, withKw("   "), NOW)).toHaveLength(3)
+    // 无命中 → 空（视图层的"当前过滤条件下没有匹配的事件"空态）
+    expect(filterRows(rows, withKw("不存在的词"), NOW)).toEqual([])
   })
 
-  it("压缩行搜段摘要与总摘要", () => {
-    expect(matchRowIndexes(rows, "段摘要内容")).toEqual([1])
+  it("三维度 AND 组合：类型+关键词+时间同时收窄", () => {
+    const f: AuditFilter = {
+      ...DEFAULT_FILTER, kinds: { ...DEFAULT_FILTER.kinds, compaction: false },
+      keyword: "摘要", timePreset: "1h",
+    }
+    // COMPACTION 命中关键词但类型被关；TEXT 行在时间内但不命中关键词 → 全空
+    expect(filterRows(rows, f, NOW)).toEqual([])
+  })
+})
+
+// ---------- 增量摊平（appendRows ≡ 全量重摊） ----------
+
+describe("appendRows", () => {
+  const full: SessionEvent[] = [
+    { type: "session.created", at: "2026-09-08T09:59:00.000Z", title: "会话1" },
+    msgEvent("msg_1", "assistant", [
+      { id: "b1", type: "tool_call", callId: "call_1", name: "fs.read", args: {}, argsJson: "{}" },
+    ], { model: "m", usage: { inputTokens: 1, outputTokens: 2 } }),
+    msgEvent("msg_2", "tool", [TOOL_RESULT], { grantedBy: { call_1: "safe" } }),
+    { type: "system", at: "2026-09-08T10:00:00.000Z", text: "你是 kclaw 助手。" },
+    COMPACTION,
+  ]
+
+  it("逐批追加与全量 flattenAudit 等价（含 grantedBy 跨批回填与 system changed 续接）", () => {
+    // 逐条追加：最苛刻的切分方式，每批恰好一个事件
+    let rows: AuditRow[] = []
+    full.forEach((event, i) => {
+      rows = appendRows(rows, i, [event])
+    })
+    expect(rows).toEqual(flattenAudit(full))
   })
 
-  it("空关键词无命中", () => {
-    expect(matchRowIndexes(rows, "")).toEqual([])
-    expect(matchRowIndexes(rows, "   ")).toEqual([])
+  it("任意切分点等价（prefix/suffix 两批）", () => {
+    for (let cut = 0; cut <= full.length; cut++) {
+      const prefix = flattenAudit(full.slice(0, cut))
+      const merged = appendRows(prefix, cut, full.slice(cut))
+      expect(merged).toEqual(flattenAudit(full))
+    }
+  })
+
+  it("空批次原样返回", () => {
+    const rows = flattenAudit(full)
+    expect(appendRows(rows, full.length, [])).toBe(rows)
   })
 })
 

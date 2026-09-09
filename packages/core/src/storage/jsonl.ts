@@ -56,6 +56,18 @@ export function appendJsonlLine(file: string, value: unknown): void {
  * corruption, not a crash artifact, so it throws.
  */
 export function readJsonl(file: string): unknown[] {
+  return readJsonlFrom(file, 0)
+}
+
+/**
+ * Tail read: parse only the lines at indexes >= since, skipping the prefix
+ * without parsing it (the tail-pull path: one line per ?since= increment).
+ * The file is still read whole — there is no byte index for line offsets —
+ * but skipped lines cost neither JSON.parse nor array slots. Corruption
+ * semantics match readJsonl for the parsed region; a corrupt line inside
+ * the skipped prefix is never observed.
+ */
+export function readJsonlFrom(file: string, since: number): unknown[] {
   let raw: string
   try {
     raw = readFileSync(file, "utf8")
@@ -65,7 +77,7 @@ export function readJsonl(file: string): unknown[] {
   const lines = raw.split("\n")
   if (lines[lines.length - 1] === "") lines.pop() // trailing newline after a complete append
   const values: unknown[] = []
-  for (let i = 0; i < lines.length; i++) {
+  for (let i = since; i < lines.length; i++) {
     const line = lines[i]
     if (line === "") continue
     try {

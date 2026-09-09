@@ -46,94 +46,143 @@ export type AuditRow =
  */
 export function flattenAudit(events: SessionEvent[]): AuditRow[] {
   const rows: AuditRow[] = []
+  const ctx = { lastSystemText: null as string | null }
+  const grantByCallId = collectGrantReasons(events)
+  events.forEach((event, index) => flattenEventInto(rows, event, index, grantByCallId, ctx))
+  return rows
+}
 
-  // callId → grant reason, from every tool message event's grantedBy map.
+/**
+ * Incremental counterpart to flattenAudit for live appends: flatten only the
+ * freshly appended slice (`baseIndex` = its first event's array index) and
+ * continue the existing row list. Equivalent to re-flattening the whole
+ * stream — guarded by an equivalence test. Two cross-batch seams are handled
+ * explicitly: grant reasons arriving in the slice backfill tool rows from
+ * EARLIER batches (the tool message event lands after the tool_call block it
+ * explains), and the system `changed` marker seeds from the last system row
+ * already in `rows`.
+ */
+export function appendRows(rows: AuditRow[], baseIndex: number, fresh: SessionEvent[]): AuditRow[] {
+  if (fresh.length === 0) return rows
+  const grantByCallId = collectGrantReasons(fresh)
+
+  // Backfill: a grant reason in this slice may explain a tool block flattened
+  // by an earlier batch.
+  const backfilled = rows.map((row) => {
+    if (
+      row.kind !== "block" || row.grantedBy !== undefined ||
+      (row.block.type !== "tool_call" && row.block.type !== "tool_result")
+    ) return row
+    const reason = grantByCallId.get(row.block.callId)
+    return reason === undefined ? row : { ...row, grantedBy: reason }
+  })
+
+  let lastSystemText: string | null = null
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i]!
+    if (row.kind === "system") {
+      lastSystemText = row.event.text
+      break
+    }
+  }
+  const ctx = { lastSystemText }
+  fresh.forEach((event, offset) => flattenEventInto(backfilled, event, baseIndex + offset, grantByCallId, ctx))
+  return backfilled
+}
+
+/** callId → grant reason from every tool message event's grantedBy map. */
+function collectGrantReasons(events: SessionEvent[]): Map<string, ToolGrantReason> {
   // MessageEvent is a Message superset without per-role fields, so the
-  // role-conditional extras (grantedBy / usage / latencyMs) narrow by cast.
-  const grantByCallId = new Map<string, ToolGrantReason>()
+  // role-conditional grantedBy narrows by cast.
+  const map = new Map<string, ToolGrantReason>()
   for (const event of events) {
     if (event.type !== "message" || event.role !== "tool") continue
     const granted = (event as MessageEvent & { grantedBy?: Record<string, ToolGrantReason> }).grantedBy
     if (granted === undefined) continue
-    for (const [callId, reason] of Object.entries(granted)) grantByCallId.set(callId, reason)
+    for (const [callId, reason] of Object.entries(granted)) map.set(callId, reason)
   }
+  return map
+}
 
-  let lastSystemText: string | null = null
-  events.forEach((event, index) => {
-    switch (event.type) {
-      case "message": {
-        const msg = event as MessageEvent & { usage?: Usage; latencyMs?: number }
-        const isAssistant = msg.role === "assistant"
-        const usage = isAssistant ? msg.usage : undefined
-        const latencyMs = isAssistant ? msg.latencyMs : undefined
-        const last = msg.blocks.length - 1
-        msg.blocks.forEach((block, i) => {
-          const row: AuditRow = {
-            kind: "block",
-            key: `${index}-${i}`,
-            index,
-            role: msg.role,
-            block,
-            createdAt: msg.createdAt,
-            messageTail: i === last,
-          }
-          if (isAssistant) {
-            row.usage = usage
-            row.latencyMs = latencyMs
-          }
-          if (block.type === "tool_call" || block.type === "tool_result") {
-            const reason = grantByCallId.get(block.callId)
-            if (reason !== undefined) row.grantedBy = reason
-          }
-          rows.push(row)
-        })
-        break
-      }
-      case "compaction":
-        rows.push({ kind: "compaction", key: `${index}`, index, record: event, at: event.at })
-        break
-      case "memory":
-        rows.push({ kind: "memory", key: `${index}`, index, event, at: event.at })
-        break
-      case "system": {
-        rows.push({
-          kind: "system",
-          key: `${index}`,
+/** Flatten ONE event at array position `index`, appending its row(s). */
+function flattenEventInto(
+  rows: AuditRow[], event: SessionEvent, index: number,
+  grantByCallId: Map<string, ToolGrantReason>, ctx: { lastSystemText: string | null },
+): void {
+  switch (event.type) {
+    case "message": {
+      const msg = event as MessageEvent & { usage?: Usage; latencyMs?: number }
+      const isAssistant = msg.role === "assistant"
+      const usage = isAssistant ? msg.usage : undefined
+      const latencyMs = isAssistant ? msg.latencyMs : undefined
+      const last = msg.blocks.length - 1
+      msg.blocks.forEach((block, i) => {
+        const row: AuditRow = {
+          kind: "block",
+          key: `${index}-${i}`,
           index,
-          event,
-          at: event.at,
-          changed: lastSystemText !== null && lastSystemText !== event.text,
-        })
-        lastSystemText = event.text
-        break
-      }
-      case "sandbox.checked":
-        rows.push({ kind: "sandbox", key: `${index}`, index, event, at: event.at })
-        break
-      case "session.created":
-      case "session.renamed":
-      case "session.deleted":
-      case "session.restored":
-      case "session.set":
-        rows.push({ kind: "session", key: `${index}`, index, event, at: event.at })
-        break
-      default: {
-        // Compile-time exhaustiveness sentinel: a new SessionEvent member
-        // fails this assignment instead of silently vanishing from the audit.
-        const unhandled: never = event
-        void unhandled
-        break
-      }
+          role: msg.role,
+          block,
+          createdAt: msg.createdAt,
+          messageTail: i === last,
+        }
+        if (isAssistant) {
+          row.usage = usage
+          row.latencyMs = latencyMs
+        }
+        if (block.type === "tool_call" || block.type === "tool_result") {
+          const reason = grantByCallId.get(block.callId)
+          if (reason !== undefined) row.grantedBy = reason
+        }
+        rows.push(row)
+      })
+      break
     }
-  })
-  return rows
+    case "compaction":
+      rows.push({ kind: "compaction", key: `${index}`, index, record: event, at: event.at })
+      break
+    case "memory":
+      rows.push({ kind: "memory", key: `${index}`, index, event, at: event.at })
+      break
+    case "system": {
+      rows.push({
+        kind: "system",
+        key: `${index}`,
+        index,
+        event,
+        at: event.at,
+        changed: ctx.lastSystemText !== null && ctx.lastSystemText !== event.text,
+      })
+      ctx.lastSystemText = event.text
+      break
+    }
+    case "sandbox.checked":
+      rows.push({ kind: "sandbox", key: `${index}`, index, event, at: event.at })
+      break
+    case "session.created":
+    case "session.renamed":
+    case "session.deleted":
+    case "session.restored":
+    case "session.set":
+      rows.push({ kind: "session", key: `${index}`, index, event, at: event.at })
+      break
+    default: {
+      // Compile-time exhaustiveness sentinel: a new SessionEvent member
+      // fails this assignment instead of silently vanishing from the audit.
+      const unhandled: never = event
+      void unhandled
+      break
+    }
+  }
 }
 
 // ---------- 过滤 ----------
 
 export type TimePreset = "all" | "1h" | "today" | "custom"
 
-/** The six row-type toggles + keyword + time range. Keyword does NOT filter rows — it drives highlight + jump (search, not sieve). */
+/** The six row-type toggles + keyword + time range, combined with AND: a row
+ *  is visible only when its kind is on, its full text contains the keyword,
+ *  and its timestamp falls in the time window. */
 export interface AuditFilter {
   kinds: Record<AuditRowKind, boolean>
   keyword: string
@@ -174,17 +223,7 @@ function timeMatches(row: AuditRow, f: AuditFilter, now: Date): boolean {
   return t >= (Number.isNaN(from) ? -Infinity : from) && t <= (Number.isNaN(to) ? Infinity : to)
 }
 
-export function rowMatchesFilter(row: AuditRow, f: AuditFilter, now: Date): boolean {
-  return f.kinds[row.kind] === true && timeMatches(row, f, now)
-}
-
-export function filterRows(rows: AuditRow[], f: AuditFilter, now: Date): AuditRow[] {
-  return rows.filter((row) => rowMatchesFilter(row, f, now))
-}
-
-// ---------- 关键词搜索（高亮 + 跳转，不筛行） ----------
-
-/** Everything a keyword search should see for this row — FULL content, not the truncated summary. */
+/** Everything the keyword filter matches against — FULL content, not the truncated summary. */
 export function rowSearchText(row: AuditRow): string {
   switch (row.kind) {
     case "block": {
@@ -204,16 +243,22 @@ export function rowSearchText(row: AuditRow): string {
   }
 }
 
-/** Row indexes (into `rows`) whose full text contains the keyword, case-insensitive. Empty/blank keyword → no matches. */
-export function matchRowIndexes(rows: AuditRow[], keyword: string): number[] {
-  const needle = keyword.trim().toLowerCase()
-  if (needle === "") return []
-  const hits: number[] = []
-  rows.forEach((row, i) => {
-    if (rowSearchText(row).toLowerCase().includes(needle)) hits.push(i)
-  })
-  return hits
+/** Blank keyword matches everything; otherwise a case-insensitive substring
+ *  test over the row's full text. */
+function keywordMatches(row: AuditRow, f: AuditFilter): boolean {
+  const needle = f.keyword.trim().toLowerCase()
+  return needle === "" || rowSearchText(row).toLowerCase().includes(needle)
 }
+
+export function rowMatchesFilter(row: AuditRow, f: AuditFilter, now: Date): boolean {
+  return f.kinds[row.kind] === true && keywordMatches(row, f) && timeMatches(row, f, now)
+}
+
+export function filterRows(rows: AuditRow[], f: AuditFilter, now: Date): AuditRow[] {
+  return rows.filter((row) => rowMatchesFilter(row, f, now))
+}
+
+// ---------- 跳转锚点 ----------
 
 /**
  * The nearest candidate strictly after (dir=1) / before (dir=-1) `from`,

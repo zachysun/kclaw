@@ -149,6 +149,8 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
     // session.created, message, and compaction events. `?since=N` returns
     // only events at index >= N (the stream is append-only, so the array
     // index is a stable incremental cursor); omitted or 0 = full stream.
+    // The since path reads only the file's tail lines (no parsing of the
+    // skipped prefix) — live tails stay cheap as streams grow.
     scope.get("/sessions/:id/events", async (request, reply) => {
       const { id } = request.params as { id: string }
       if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
@@ -159,7 +161,7 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
         if (!Number.isInteger(n) || n < 0) return reply.code(400).send({ error: "since must be a non-negative integer" })
         since = n
       }
-      return stores.sessions.readEvents(id).slice(since)
+      return stores.sessions.readEventsFrom(id, since)
     })
 
     // Compaction audit log: read-only view over compaction events.
