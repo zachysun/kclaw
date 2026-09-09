@@ -36,10 +36,11 @@ export function createBuiltinTools(opts: {
   memoryCtx: { system: MemorySystem; sessionId: string; workdir: string; immediateEnabled: boolean }
   // 记忆系统 v2 门面 + 当前会话上下文；immediateEnabled 决定 memory_save 是否当场触发写入
   tavilyApiKey: string
-  exec?: Partial<{ timeoutMs: number; maxOutputBytes: number; sandbox: ExecSandboxSpawn }>
+  exec?: Partial<{ timeoutMs: number; maxOutputBytes: number; sandbox: ExecSandboxSpawn; spillDir: string }>
   // sandbox = exec 沙箱包装器（批次 A）：run 装配仅在沙箱可用时传入（见 sandbox.md），
   // exec 工具本身不探测平台；缺省 = 裸跑，即沙箱功能不存在前的行为
-  web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean }>
+  // spillDir = <home>/spill：截断时全量输出落盘 + 模型视图附 fs_read 定位行（见 tools/spill.ts）
+  web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean; spillDir: string }>
   sessionSearch?: SessionSearchFn    // session_search 的检索后端（server 每 run 注入）；缺席时工具仍注册、返回"(无可检索内容)"
   skills?: SkillRecord[]             // 技能目录扫描结果：skill_read 按名加载正文（见 skills.md）
   subagent?: { spawner: SubagentSpawner; parentSessionId: string }
@@ -85,6 +86,7 @@ export function makeTool<N extends string>(
 
 - **超时**：默认 `timeoutMs = 60_000`（`config.yaml` 的 `exec.timeoutMs` 同为 60s 默认值）。超时先 `process.kill(-pid, "SIGKILL")` 终止整个进程组（连带 shell 的子进程，如 `sleep`；Windows 无进程组，退回只终止直接子进程），然后返回 `{status:"error", output: "command timed out after 60000ms\n<部分输出>"}`——已产生的输出仍然返回。
 - **输出截断**：流式累计到 `maxOutputBytes`（默认 100 KiB，即 `100 * 1024`）即停止积累——头部保留，之后的 chunk 只计字节数不再转发；到达上限那一刻发一条截断提示 delta（`...[output truncated, further output dropped]...`），结束时在尾部附 `...[dropped N bytes]...` 字节数标记。`truncateMiddle` 只对头部超出上限 ≤1 chunk 的部分微裁剪（插 `\n...[truncated N bytes]...\n` 标记）。按 UTF-8 字节计数，多字节字符在切点被拆开会解码成 U+FFFD 替换字符，属可接受损失。
+- **输出溢出落盘（spill）**：run 装配传入 `spillDir`（`<home>/spill`）后，流式读取把全量输出另存一份（上限 `SPILL_MAX_BYTES = 10 MiB`，超出即停、落盘副本标注"仅保留前 10MB"）；发生截断时模型视图在 `dropped` 标记后追加一行 `[完整输出已存盘: <路径>；需要更多内容时用 fs_read 读取该文件]`——spill 目录在权限引擎 readRoots 内，`fs_read` 无需确认即可读。落盘尽力而为：写失败静默退化为纯截断；未传 `spillDir`（如部分测试）则行为与无 spill 时完全一致。
 - **退出码**：0 → ok；非 0 → error，输出带 `exit code N` 首行；stdout 与 stderr 合并，到达即经 `ctx.onOutput` 流式回传。
 - 空/非字符串 `command` 直接返回 error（`args.command must be a non-empty string`）。
 
@@ -102,7 +104,7 @@ export function makeTool<N extends string>(
 两个工具的每次请求都带 `AbortSignal.timeout(timeoutMs)`（默认 20 秒，`config.yaml` 的 `web.timeoutMs`）——卡死的远端主机不能拖住一个 run。
 
 - **web_search**：POST `https://api.tavily.com/search`，体为 `{api_key, query, max_results}`；`maxResults` 默认 5、钳制在 [1, 10]。目标是固定的公网 Tavily 域名，**不走私网检查**。`output` 是给模型的 markdown 列表（`- [title](url)：content`），无结果输出 `(no results)`；`data` 携带原始三元组 `{results: [{title, url, content}]}` 供渲染。
-- **web_fetch**：只接受 http(s) URL。内置一层 SSRF（Server-Side Request Forgery，服务端请求伪造——诱导服务器自己去访问内网地址的攻击）防护：不使用 fetch 的自动跟随重定向，而是手工循环（至多 `DEFAULT_MAX_REDIRECTS = 5` 跳），每一跳的目标——初始 URL 与每个 `Location`——都在真正请求前经 DNS 解析（字面 IP 直接判定）并按拒绝名单核查：loopback/未指定/链路本地/私网地址（127/8、0.0.0.0、::1、`::ffff:` 映射、10/8、172.16–31、192.168/16、169.254/16、fc00::/7、fe80::/10）一律拒绝，除非 config 里 `web.allowPrivateNetworks: true` 显式豁免（如允许抓本机 Ollama 端点）。非 2xx 报 `HTTP <status> <statusText> for <url>`。HTML 经 linkedom 解析 + Readability（Mozilla 的正文提取库）取文章正文，失败回退为移除 `script/style/noscript/template/svg` 后的 body 文本（对原始 HTML 重新解析，避免污染），仍为空则 `(no extractable text content)`；非 HTML 内容按纯文本返回。响应体经流式读取、**越过 `maxFetchBytes`（默认 512 KiB）即 cancel 连接**——上限施加于 DOM 解析之前，超大页面无法在解析阶段吃内存；截断附 `...[truncated, dropped N bytes]...` 标记。
+- **web_fetch**：只接受 http(s) URL。内置一层 SSRF（Server-Side Request Forgery，服务端请求伪造——诱导服务器自己去访问内网地址的攻击）防护：不使用 fetch 的自动跟随重定向，而是手工循环（至多 `DEFAULT_MAX_REDIRECTS = 5` 跳），每一跳的目标——初始 URL 与每个 `Location`——都在真正请求前经 DNS 解析（字面 IP 直接判定）并按拒绝名单核查：loopback/未指定/链路本地/私网地址（127/8、0.0.0.0、::1、`::ffff:` 映射、10/8、172.16–31、192.168/16、169.254/16、fc00::/7、fe80::/10）一律拒绝，除非 config 里 `web.allowPrivateNetworks: true` 显式豁免（如允许抓本机 Ollama 端点）。非 2xx 报 `HTTP <status> <statusText> for <url>`。HTML 经 linkedom 解析 + Readability（Mozilla 的正文提取库）取文章正文，失败回退为移除 `script/style/noscript/template/svg` 后的 body 文本（对原始 HTML 重新解析，避免污染），仍为空则 `(no extractable text content)`；非 HTML 内容按纯文本返回。响应体经流式读取、**越过 `maxFetchBytes`（默认 512 KiB）即 cancel 连接**——上限施加于 DOM 解析之前，超大页面无法在解析阶段吃内存；截断附 `...[truncated, dropped N bytes]...` 标记。装配了 `spillDir` 时读取上限放宽到 10 MiB（spill 天花板），被截掉的原始正文落盘并以 fs_read 定位行替代字节数标记（spill 写失败回退原标记）。
 
 ### memory 工具（`tools/memory.ts`）
 

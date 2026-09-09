@@ -20,7 +20,9 @@
  *   extraction comes up empty it falls back to body text with script/style
  *   nodes removed. Non-HTML content-types are returned as plain text. Bodies
  *   are read through a stream that is cancelled once `maxFetchBytes`
- *   (default 512KB) is passed, ending in a truncation marker; the cap is
+ *   (default 512KB) is passed (or the 10MB spill ceiling when a spill dir is
+ *   wired), ending in a truncation marker — or an fs_read locator when the
+ *   captured span was spilled to disk; the cap is
  *   applied to the raw body BEFORE parsing so an oversized page can't blow
  *   up memory in the DOM stage.
  *
@@ -37,6 +39,7 @@ import { Readability } from "@mozilla/readability"
 import { parseHTML } from "linkedom"
 import type { ToolExecutor } from "../agent/tools.js"
 import { errMsg, makeTool, optInt, requireString, ToolError } from "./shared.js"
+import { spillLocatorLine, spillToolOutput, SPILL_MAX_BYTES } from "./spill.js"
 
 const TAVILY_URL = "https://api.tavily.com/search"
 const DEFAULT_MAX_RESULTS = 5
@@ -90,31 +93,51 @@ function capBytes(s: string, maxBytes: number): { text: string; dropped: number 
 }
 
 /**
- * Read a response body as text, stopping at `maxBytes`: once the cap is
- * passed the reader is cancelled, so an infinite/huge stream can neither
- * grow memory without bound nor keep the connection busy. `dropped` is the
- * byte count beyond the cap (estimated from what was consumed).
+ * Read a response body as text, stopping at `maxBytes` (or at `spillCap` when
+ * given — the extra span is captured for the on-disk spill copy). Once the
+ * ceiling is passed the reader is cancelled, so an infinite/huge stream can
+ * neither grow memory without bound nor keep the connection busy. `dropped`
+ * is the byte count beyond the view cap (estimated from what was consumed).
+ * `spill` carries everything read up to the ceiling; `spillPartial` marks a
+ * copy that stopped before the stream ended.
  */
-async function readBodyCapped(res: Response, maxBytes: number): Promise<{ text: string; dropped: number }> {
-  if (res.body === null) return capBytes(await res.text(), maxBytes)
+async function readBodyCapped(
+  res: Response,
+  maxBytes: number,
+  spillCap?: number,
+): Promise<{ text: string; dropped: number; spill?: string; spillPartial?: boolean }> {
+  if (res.body === null) {
+    const full = await res.text()
+    const { text, dropped } = capBytes(full, maxBytes)
+    if (dropped === 0 || spillCap === undefined) return { text, dropped }
+    const buf = Buffer.from(full, "utf8")
+    if (buf.length <= spillCap) return { text, dropped, spill: full }
+    return { text, dropped, spill: buf.subarray(0, spillCap).toString("utf8"), spillPartial: true }
+  }
   const reader = res.body.getReader()
   const chunks: Uint8Array[] = []
+  const ceiling = spillCap ?? maxBytes
   let received = 0
   let capped = false
-  while (!capped) {
+  let spillPartial = false
+  while (true) {
     const { done, value } = await reader.read()
     if (done === true) break
     chunks.push(value)
     received += value.byteLength
-    if (received > maxBytes) {
+    if (received > ceiling) {
       capped = true
+      spillPartial = spillCap !== undefined
       await reader.cancel().catch(() => undefined)
+      break
     }
   }
   const buf = Buffer.concat(chunks.map((c) => Buffer.from(c)))
-  if (!capped) return capBytes(buf.toString("utf8"), maxBytes)
-  const head = buf.subarray(0, maxBytes).toString("utf8")
-  return { text: head, dropped: received - maxBytes }
+  const decoded = buf.toString("utf8")
+  const { text, dropped } = capBytes(decoded, maxBytes)
+  if (dropped === 0) return { text, dropped }
+  if (spillCap === undefined) return { text, dropped }
+  return { text, dropped, spill: decoded, ...(spillPartial ? { spillPartial: true } : {}) }
 }
 
 /**
@@ -158,6 +181,8 @@ export function createWebTools(opts: {
   timeoutMs?: number
   /** Opt out of the private/loopback target denial (e.g. a local Ollama endpoint). */
   allowPrivateNetworks?: boolean
+  /** Full-output spill dir (<home>/spill); undefined = truncation drops data as before. */
+  spillDir?: string
   /** Hostname resolver used by the private-network check; tests inject a stub. */
   lookupImpl?: (host: string) => Promise<string[]>
 }): { "web_search": ToolExecutor; "web_fetch": ToolExecutor } {
@@ -253,17 +278,25 @@ export function createWebTools(opts: {
       throw new ToolError(`HTTP ${res.status} ${res.statusText} for ${url}`.replace(/\s+$/, ""))
     }
 
-    let raw: { text: string; dropped: number }
+    let raw: { text: string; dropped: number; spill?: string; spillPartial?: boolean }
     try {
-      raw = await readBodyCapped(res, maxFetchBytes)
+      raw = await readBodyCapped(res, maxFetchBytes, opts.spillDir === undefined ? undefined : SPILL_MAX_BYTES)
     } catch (e) {
       throw new ToolError(`reading body failed: ${errMsg(e)}`)
     }
     const { text: body_, dropped } = raw
     const contentType = res.headers?.get("content-type") ?? ""
     const body = /html/i.test(contentType) ? extractReadableText(body_) : body_
-    const marker = dropped > 0 ? `\n...[truncated, dropped ${dropped} bytes]...` : ""
-    return { status: "ok", output: body + marker }
+    let tail = ""
+    if (dropped > 0) {
+      // The spill copy is the RAW captured body (pre-extraction); when the
+      // spill failed (no dir / write error) fall back to the plain marker.
+      const spill = spillToolOutput(opts.spillDir, "web_fetch", raw.spill ?? "")
+      tail = spill.path !== undefined
+        ? spillLocatorLine(spill)
+        : `\n...[truncated, dropped ${dropped} bytes]...`
+    }
+    return { status: "ok", output: body + tail }
   })
 
   return { "web_search": web_search, "web_fetch": web_fetch }

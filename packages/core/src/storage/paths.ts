@@ -28,6 +28,8 @@ export interface KclawPaths {
   usageDb: string
   /** ~/.kclaw/attachments/<session-id>/ — large attachment spillover */
   attachmentsDir: string
+  /** ~/.kclaw/spill — full tool output kept readable when the model view truncates */
+  spillDir: string
   /** ~/.kclaw/logs */
   logsDir: string
 }
@@ -62,9 +64,10 @@ export function resolvePaths(home?: string): KclawPaths {
     jobsDb: join(root, "jobs.db"),
     usageDb: join(root, "usage.db"),
     attachmentsDir: join(root, "attachments"),
+    spillDir: join(root, "spill"),
     logsDir: join(root, "logs"),
   }
-  for (const dir of [paths.memoryNotesDir, paths.sessionsDir, paths.attachmentsDir, paths.logsDir]) {
+  for (const dir of [paths.memoryNotesDir, paths.sessionsDir, paths.attachmentsDir, paths.spillDir, paths.logsDir]) {
     mkdirSync(dir, { recursive: true })
   }
   return paths

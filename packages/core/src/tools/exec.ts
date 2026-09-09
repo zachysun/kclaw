@@ -16,6 +16,7 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import type { Readable } from "node:stream"
 import type { ToolExecutor } from "../agent/tools.js"
+import { spillLocatorLine, spillToolOutput, SPILL_MAX_BYTES } from "./spill.js"
 
 const DEFAULT_TIMEOUT_MS = 60_000
 const DEFAULT_MAX_OUTPUT_BYTES = 100 * 1024
@@ -58,6 +59,8 @@ export function createExecTool(opts: {
    * provider's availability — never by the tool itself.
    */
   sandbox?: ExecSandboxSpawn
+  /** Full-output spill dir (<home>/spill); undefined = truncation drops data as before. */
+  spillDir?: string
 }): ToolExecutor & { name: "exec" } {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES
@@ -83,6 +86,11 @@ export function createExecTool(opts: {
         let settled = false
         let timedOut = false
         let timer: ReturnType<typeof setTimeout> | undefined
+        // Everything the process emitted, up to the spill ceiling: the model
+        // view truncates at maxOutputBytes, the spill copy keeps the span
+        // readable (fs_read locator) instead of dropping it.
+        let spillBuf = ""
+        let spillBytes = 0
 
         const child = opts.sandbox
           ? opts.sandbox.spawn(command, { cwd: opts.workspace })
@@ -120,16 +128,23 @@ export function createExecTool(opts: {
         }
 
         // Final output for both finish paths: always byte-truncated, plus a
-        // drop marker when streaming hit the cap.
-        const capped = (): string =>
-          droppedBytes > 0
-            ? `${truncateMiddle(output, maxOutputBytes)}\n...[dropped ${droppedBytes} bytes]...`
-            : truncateMiddle(output, maxOutputBytes)
+        // drop marker when streaming hit the cap, plus an fs_read locator
+        // when the captured span was spilled to disk.
+        const capped = (): string => {
+          const base = truncateMiddle(output, maxOutputBytes)
+          if (droppedBytes === 0) return base
+          const spill = spillToolOutput(opts.spillDir, "exec", spillBuf)
+          return `${base}\n...[dropped ${droppedBytes} bytes]...${spillLocatorLine(spill)}`
+        }
 
         for (const stream of [child.stdout, child.stderr]) {
           if (!stream) continue
           stream.setEncoding("utf8")
           stream.on("data", (chunk: string) => {
+            if (spillBytes <= SPILL_MAX_BYTES) {
+              spillBuf += chunk
+              spillBytes += Buffer.byteLength(chunk)
+            }
             if (droppedBytes > 0) {
               // already capped: keep counting, forward nothing
               droppedBytes += Buffer.byteLength(chunk)

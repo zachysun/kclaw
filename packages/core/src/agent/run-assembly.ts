@@ -371,8 +371,9 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       timeoutMs: config.exec.timeoutMs,
       maxOutputBytes: config.exec.maxOutputBytes,
       sandbox: sandbox.available ? sandbox : undefined,
+      spillDir: paths.spillDir,
     },
-    web: { timeoutMs: config.web.timeoutMs, allowPrivateNetworks: config.web.allowPrivateNetworks },
+    web: { timeoutMs: config.web.timeoutMs, allowPrivateNetworks: config.web.allowPrivateNetworks, spillDir: paths.spillDir },
     sessionSearch: buildSessionSearch(engine.deps, sessionId),
     skills,
     ...(engine.deps.subagents !== undefined && !childRun
@@ -423,7 +424,9 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     decidedRules: decided.rules,
     // Attachment reads: files under <home>/attachments are the daemon's own
     // uploaded inputs — safe path-arg tools reach them without a confirmation.
-    readRoots: [paths.attachmentsDir],
+    // The spill dir joins the read roots so a truncation locator's fs_read
+    // hint can actually read the spilled copy back.
+    readRoots: [paths.attachmentsDir, paths.spillDir],
     // Mode: this session's own toggle (absent → default). The daemon has no
     // mode flag — the session meta is the single source of truth.
     mode: sessionMeta?.mode,

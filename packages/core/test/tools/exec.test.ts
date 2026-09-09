@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawn } from "node:child_process"
@@ -58,6 +58,25 @@ describe("exec tool", () => {
     expect(r.output.length).toBeLessThan(2048 + 200) // head + marker only
     const totalDelta = deltas.join("").length
     expect(totalDelta).toBeLessThan(2048 + 200)
+  }, 10_000)
+  it("spills the captured span when a spill dir is wired: locator in output, full text on disk", async () => {
+    const spillDir = join(ws, "spill")
+    const tool = createExecTool({ workspace: ws, maxOutputBytes: 10 * 1024, spillDir })
+    const r = await run(tool, "seq 1 100000") // ~588KB view-truncated, spill keeps up to 10MB
+    expect(r.status).toBe("ok")
+    expect(r.output).toMatch(/\[dropped \d+ bytes\]/)
+    expect(r.output).toMatch(/完整输出已存盘: .+\.txt/)
+    // The locator names a real file holding the full sequence.
+    const m = /完整输出已存盘: (\S+\.txt)/.exec(r.output)!
+    const spilled = readFileSync(m[1]!, "utf8")
+    expect(spilled.trimEnd().split("\n").at(-1)).toBe("100000") // tail survived in the spill
+    expect(spilled.length).toBeGreaterThan(r.output.length)
+  }, 10_000)
+  it("no spill dir wired: dropped data stays dropped (legacy behavior)", async () => {
+    const tool = createExecTool({ workspace: ws, maxOutputBytes: 10 * 1024 })
+    const r = await run(tool, "seq 1 100000")
+    expect(r.output).toMatch(/\[dropped \d+ bytes\]/)
+    expect(r.output).not.toMatch(/完整输出已存盘/)
   }, 10_000)
 })
 

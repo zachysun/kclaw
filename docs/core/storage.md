@@ -37,11 +37,12 @@ export function resolvePaths(home?: string): KclawPaths
 | `<home>/jobs.db` | 定时任务表 | JobScheduler |
 | `<home>/usage.db` | 每次 LLM 运行的 token 用量台账 | UsageStore |
 | `<home>/attachments/<id>/` | 附件外存目录（每会话一个子目录） | server 上传路由 `routes/attachments.ts`；运行时只读挂载 |
+| `<home>/spill/` | 工具输出溢出目录（exec / web_fetch 截断时把捕获的全量输出写到这里，模型视图附 fs_read 定位行） | core `tools/spill.ts`（单文件上限 10 MiB，超出部分不保留）；目录在权限引擎 readRoots 内，`fs_read` 可直接读 |
 | `<home>/logs/` | 日志目录 | 预留：目录会创建，当前代码无写入方 |
 | `<home>/daemon.json` | daemon 存活标识（server 侧） | `launchDaemon` |
 | `<home>/token` | daemon 鉴权 token（server 侧） | `loadOrCreateToken` |
 
-`logs` 目录在当前源码中只有路径创建、没有写入方——如实记录为预留；`attachments` 由上传路由写入、由权限引擎的 readRoots 与附件挂载读取，见 [run-manager](../server/run-manager.md)。
+`logs` 目录在当前源码中只有路径创建、没有写入方——如实记录为预留；`attachments` 由上传路由写入、由权限引擎的 readRoots 与附件挂载读取，见 [run-manager](../server/run-manager.md)。`spill` 是尽力而为的落盘：写入失败静默退化为纯截断输出，文件为普通文件、可随时手动清理（尚无 TTL 清理）。
 
 ---
 
@@ -96,7 +97,7 @@ export interface KclawPaths {
   skillsDir: string               // <home>/skills —— 全局技能包目录（见 skills.md）
   memoryDir: string; memoryNotesDir: string; memoryIndexDb: string
   sessionsDir: string; jobsDb: string; usageDb: string
-  attachmentsDir: string; logsDir: string
+  attachmentsDir: string; spillDir: string; logsDir: string
 }
 
 // packages/core/src/storage/config.ts

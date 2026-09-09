@@ -1,5 +1,12 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { mkdtempSync, rmSync, readFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { createWebTools } from "../../src/tools/web.js"
+
+let spillHome: string
+beforeEach(() => { spillHome = mkdtempSync(join(tmpdir(), "kclaw-web-spill-")) })
+afterEach(() => { rmSync(spillHome, { recursive: true, force: true }) })
 
 const HTML = `<!doctype html><html><head><title>T</title><script>bad()</script></head>
 <body><article><h1>Big News</h1><p>The quick brown fox jumps over the lazy dog. ${"x".repeat(50)}</p></article></body></html>`
@@ -79,6 +86,29 @@ describe("web tools", () => {
     expect(r.status).toBe("ok")
     expect(r.output).toMatch(/truncated, dropped/)
     expect(pulls).toBeLessThanOrEqual(7) // 4KB cap + small slack; an unbounded reader would keep pulling
+  })
+  it("web_fetch spills the captured span when a spill dir is wired", async () => {
+    const CHUNK = 1024
+    let pulls = 0
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) {
+        pulls += 1
+        c.enqueue(new TextEncoder().encode("a".repeat(CHUNK)))
+      },
+    })
+    const fetchImpl = (async () => new Response(body, { status: 200, headers: { "content-type": "text/plain" } })) as typeof fetch
+    const t = createWebTools({
+      tavilyApiKey: "k", fetchImpl, maxFetchBytes: 4 * CHUNK,
+      spillDir: join(spillHome, "spill"),
+      lookupImpl: (async () => ["93.184.216.34"]) as (host: string) => Promise<string[]>,
+    })
+    const r = await call(t.web_fetch, { url: "https://example.com/big" })
+    expect(r.status).toBe("ok")
+    expect(r.output).toMatch(/完整输出已存盘: .+\.txt/)
+    const m = /完整输出已存盘: (\S+\.txt)/.exec(r.output)!
+    const spilled = readFileSync(m[1]!, "utf8")
+    expect(spilled.length).toBeGreaterThan(4 * CHUNK) // beyond the view cap
+    expect(pulls).toBeGreaterThanOrEqual(5) // kept reading past the view cap for the spill
   })
   it("passes an AbortSignal to web_search too", async () => {
     let sawSignal = false

@@ -48,8 +48,8 @@ export function createBuiltinTools(opts: {
   workspace: string
   memoryCtx: { system: Pick<MemoryTriggers, "triggerImmediate"> & Pick<MemoryQuery, "searchAll">; sessionId: string; workdir: string; immediateEnabled: boolean }
   tavilyApiKey: string
-  exec?: Partial<{ timeoutMs: number; maxOutputBytes: number; sandbox: ExecSandboxSpawn }>
-  web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean }>
+  exec?: Partial<{ timeoutMs: number; maxOutputBytes: number; sandbox: ExecSandboxSpawn; spillDir: string }>
+  web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean; spillDir: string }>
   sessionSearch?: SessionSearchFn
   /** Skills scanned for this run (progressive disclosure's on-demand half). */
   skills?: SkillRecord[]
@@ -74,6 +74,7 @@ export function createBuiltinTools(opts: {
     // The run assembly passes the sandbox wrapper here only when it is
     // actually available — single source with the gate's sandboxAvailable.
     sandbox: opts.exec?.sandbox,
+    spillDir: opts.exec?.spillDir,
   })
   const fs = createFsTools({ workspace: opts.workspace })
   const web = createWebTools({
@@ -81,6 +82,7 @@ export function createBuiltinTools(opts: {
     fetchImpl: opts.fetchImpl,
     timeoutMs: opts.web?.timeoutMs,
     allowPrivateNetworks: opts.web?.allowPrivateNetworks,
+    spillDir: opts.web?.spillDir,
   })
   const memory = createMemoryTools(opts.memoryCtx)
   const session = createSessionTools(opts.sessionSearch)
