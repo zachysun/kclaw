@@ -282,9 +282,18 @@ describe("fmtUsage", () => {
 
 describe("fmtRowTime", () => {
   it("今天的行只显示时分秒，跨天显示月日时分", () => {
-    const now = new Date("2026-09-08T12:00:00")
-    expect(fmtRowTime("2026-09-08T07:05:09+08:00", now)).toMatch(/^\d{2}:\d{2}:\d{2}$/)
-    expect(fmtRowTime("2026-09-01T07:05:00+08:00", now)).toMatch(/^\d{2}-\d{2} \d{2}:\d{2}$/)
+    // fmtRowTime renders in the viewer's local timezone and compares local
+    // calendar days, so pinning two fixed instants flips same-day/cross-day
+    // depending on the runner's TZ (CI runs UTC). Build both inputs with
+    // local Date arithmetic — the calendar relationship then holds everywhere.
+    const now = new Date(2026, 8, 8, 12, 0, 0) // local 2026-09-08 12:00
+    const today = new Date(now)
+    today.setHours(7, 5, 9)
+    const otherDay = new Date(now)
+    otherDay.setDate(otherDay.getDate() - 7)
+    otherDay.setHours(7, 5, 0)
+    expect(fmtRowTime(today.toISOString(), now)).toMatch(/^\d{2}:\d{2}:\d{2}$/)
+    expect(fmtRowTime(otherDay.toISOString(), now)).toMatch(/^\d{2}-\d{2} \d{2}:\d{2}$/)
   })
 })
 
