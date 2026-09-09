@@ -23,8 +23,7 @@ import {
   makeEvent,
   subagentTitle,
   truncateAnswer,
-  type AgentEvent as CoreAgentEvent,
-  type EventType,
+  type AnyAgentEvent,
   type KclawConfig,
   type EventBus,
   type RunOutcome,
@@ -34,9 +33,6 @@ import {
   type SubagentSpawner,
 } from "@kclaw/core"
 import type { RunManager } from "./run.js"
-
-/** The event catalog as a discriminated union (switch narrows payload per case). */
-type AnyAgentEvent = { [T in EventType]: CoreAgentEvent<T> }[EventType]
 
 /** Minimum gap between two status lines (the "每隔一段时间更新" contract). */
 const STATUS_INTERVAL_MS = 2_000

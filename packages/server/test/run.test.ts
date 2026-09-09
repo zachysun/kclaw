@@ -1951,6 +1951,19 @@ describe("RunManager readonly mode", () => {
   })
 })
 
+describe("RunManager subagent session guard", () => {
+  it("rejects user-triggered submissions on a child session (read-only to users)", () => {
+    const { env, manager } = makeEnv(scriptClient([textTurn("不会被消费")]))
+    const parent = env.sessions.create("主会话")
+    // 子会话：meta 带 parentSessionId（create 的第五参）
+    const child = env.sessions.create("子代理 · 试跑", undefined, undefined, "default", parent.id)
+    expect(() => manager.submit(child.id, { userText: "插话", trigger: "user" }))
+      .toThrow("子代理会话不接收用户消息")
+    // 没有任何消息落进子会话
+    expect(env.sessions.readMessages(child.id)).toHaveLength(0)
+  })
+})
+
 // --- skill 注入（渐进披露：列表常驻 + skill_read 按需取正文）------------------
 // 技能目录每 run 重扫：全局 <home>/skills + 项目 <workdir>/.kclaw/skills，
 // 项目级整目录覆盖全局。模型可见段追加进系统提示词（persona + 认知之后），

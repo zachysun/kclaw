@@ -139,6 +139,13 @@ export type AgentEvent<T extends EventType = EventType> = {
   payload: EventPayloadMap[T]
 }
 
+/**
+ * AgentEvent distributed over every EventType — the discriminated union the
+ * three clients narrow on (`switch (e.type)` narrows the payload per case).
+ * The generic `AgentEvent` does NOT distribute; narrow on this one.
+ */
+export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
+
 export function makeEvent<T extends EventType>(
   type: T, payload: EventPayloadMap[T],
   ctx: { sessionId?: string; runId?: string } = {},

@@ -920,10 +920,17 @@ select:focus {
   font-family: var(--font-mono);
 }
 
-/* Subagent spawn row's trail link (audit jump). */
-.subagent-trail-link {
+/* Subagent spawn row's audit jump link. */
+.subagent-audit-link {
   margin: 6px 0 2px;
   font-size: 12px;
+}
+
+/* Child sessions are read-only: this line replaces the whole composer. */
+.chat-readonly-hint {
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .blk-tool-result pre {

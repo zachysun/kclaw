@@ -63,7 +63,7 @@ export interface ChatPanelProps {
   workdir?: string
   /** memory.written 通知条点击 → 跳转记忆页对应文件；不传则通知条保持纯文本。 */
   onOpenMemoryWritten?: (info: MemoryWrittenInfo) => void
-  /** Open a subagent's audit trail (the spawn row's 查看轨迹 link). */
+  /** Open a subagent's audit view (the spawn row's link). */
   onOpenAudit?: (sessionId: string) => void
 }
 
@@ -327,13 +327,19 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   // steer. The same response also syncs the session's permission mode
   // (missing mode field → default).
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("default")
+  // Child sessions (meta.parentSessionId set) are read-only: the composer is
+  // replaced by a hint. Reset on session switch so a failed meta pull never
+  // carries the previous session's verdict over.
+  const [childSession, setChildSession] = useState(false)
+  useEffect(() => setChildSession(false), [sessionId])
   useSilentFetch(
     () =>
       Promise.all([
-        api.get<{ dispositionOverride?: unknown; mode?: unknown }>(`/sessions/${encodeURIComponent(sessionId)}`),
+        api.get<{ dispositionOverride?: unknown; mode?: unknown; parentSessionId?: unknown }>(`/sessions/${encodeURIComponent(sessionId)}`),
         api.get<{ sessions?: { defaultDisposition?: unknown } }>("/config"),
       ]),
     ([meta, cfg]) => {
+      setChildSession(typeof meta.parentSessionId === "string" && meta.parentSessionId !== "")
       // 会话级覆盖只可能是 steer/wait（interrupt 已不再写 sticky，见
       // handleSetDisposition；历史遗留的 "interrupt" 覆盖按 steer 回退）。
       const override = meta.dispositionOverride
@@ -542,6 +548,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           onCancelQueued={handleCancelQueued}
           onCancelAllQueued={() => handleCancelQueued()}
           onOpenAudit={onOpenAudit}
+          readOnly={childSession}
           onCancelCompaction={handleCancelCompaction}
           compactions={compactions}
           extraCommands={skillRows.map((r) => skillCommandMeta(r.name, r.description, "web"))}

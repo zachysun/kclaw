@@ -57,7 +57,7 @@
  */
 import { isCancel, select } from "@clack/prompts"
 import { isPermissionMode, PERMISSION_MODES } from "@kclaw/core"
-import type { AgentEvent, ConfirmationDecision, ConfirmationRequestedPayload, MessageQueuedPayload, PermissionMode } from "@kclaw/core"
+import type { AnyAgentEvent, ConfirmationDecision, ConfirmationRequestedPayload, MessageQueuedPayload, PermissionMode } from "@kclaw/core"
 import { join } from "node:path"
 import { createInterface, type Interface as RlInterface } from "node:readline"
 import { KclawClient } from "./client.js"
@@ -65,9 +65,6 @@ import type { WsFrame, WsHandle } from "./client.js"
 import { createRegistry, createSlashCompleter, dispatch, refreshSkillCommands as refreshSkillCommandsOp, runOrHint, slashCompleter, type AttachmentRef, type SlashCtx } from "./slash.js"
 import type { SlashCommandMeta } from "@kclaw/core/commands"
 import { expandFileRefs } from "./file-refs.js"
-
-/** AgentEvent distributed over its event types, so `switch (ev.type)` narrows `ev.payload`. */
-type AnyAgentEvent = { [K in AgentEvent["type"]]: AgentEvent<K> }[AgentEvent["type"]]
 
 /** Session rows as served by GET /sessions (SessionStore meta shape). */
 interface SessionInfo {

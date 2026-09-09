@@ -88,7 +88,7 @@ export interface ChatViewProps {
   onCancelQueued?: (messageId: string) => void
   /** Cancel every still-queued message (the banner's 全部取消). */
   onCancelAllQueued?: () => void
-  /** Open a subagent's audit trail (the spawn row's 查看轨迹 link). */
+  /** Open a subagent's audit view (the spawn row's link). */
   onOpenAudit?: (sessionId: string) => void
   /** Cancel the in-flight automatic compaction (the indicator's 取消, v3 compaction.cancel). */
   onCancelCompaction?: () => void
@@ -100,6 +100,12 @@ export interface ChatViewProps {
   compactions?: CompactionRecordView[] | null
   /** 已装用户可见技能的动态命令（/技能名）：合并进建议菜单与 /help 面板（内置优先）。 */
   extraCommands?: SlashCommandMeta[]
+  /**
+   * A child session (meta.parentSessionId set) is read-only to the user: the
+   * whole input area (model/mode selectors, attachments, composer) is replaced
+   * by one hint line; the server's submit also rejects user-triggered posts.
+   */
+  readOnly?: boolean
 }
 
 /** Selector labels per mode; the Record forces a label when a mode ships. */
@@ -111,7 +117,7 @@ const MODE_LABELS: Record<PermissionMode, string> = {
   auto: "自动学习",
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, compactions, extraCommands }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, compactions, extraCommands, readOnly }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Slash-suggestion state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -313,7 +319,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
       {view.pendingConfirmations.map((card) => (
         <ConfirmationCardView key={card.confirmationId} card={card} onResolve={onResolveConfirmation} />
       ))}
-      {(models !== undefined && models.length > 0 && onSwitchModel !== undefined) && (
+      {!readOnly && (models !== undefined && models.length > 0 && onSwitchModel !== undefined) && (
         <div className="composer-row" data-testid="model-selector-row">
           <label>模型</label>
           <select
@@ -327,7 +333,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
           </select>
         </div>
       )}
-      {onSwitchMode !== undefined && (
+      {!readOnly && onSwitchMode !== undefined && (
         // Always-on permission mode selector (session-scoped, next run
         // effective): readonly denies writes/exec, default confirms
         // out-of-bounds actions, accept-edits skips confirmation for
@@ -346,7 +352,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
           </select>
         </div>
       )}
-      {pendingAttachments.length > 0 && (
+      {!readOnly && pendingAttachments.length > 0 && (
         <div className="attachment-chips" data-testid="attachment-chips">
           {pendingAttachments.map((a, i) => (
             <span key={i} className="attachment-chip" data-testid="attachment-chip">
@@ -395,7 +401,15 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
           ))}
         </div>
       )}
-      <form className="chat-composer" ref={composerRef} onSubmit={submit}>
+      {readOnly ? (
+        // Child sessions are read-only (spec pin: treat the subagent as a
+        // tool): no composer, one hint line pointing at the audit page; the
+        // server-side submit rejects user-triggered posts as the backstop.
+        <div className="chat-readonly-hint" data-testid="subagent-readonly-hint">
+          子代理会话只读——它的过程与结题答复在审计页查看
+        </div>
+      ) : (
+        <form className="chat-composer" ref={composerRef} onSubmit={submit}>
         {completions.length > 0 && (
           <ul
             className="slash-menu"
@@ -451,7 +465,8 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
           </div>
         )}
         <button type="submit" data-testid="send-button">Send</button>
-      </form>
+        </form>
+      )}
     </div>
   )
 }
@@ -630,7 +645,7 @@ function BlockView({ block, onOpenAudit }: { block: RenderedBlock; onOpenAudit?:
     case "tool_result": {
       // A subagent dispatch row: the live status (streamed into output) is the
       // summary's latest line, and the settled result links to the child's
-      // audit trail via the executor-attached childSessionId.
+      // audit view via the executor-attached childSessionId.
       const childSessionId = (block.data as { childSessionId?: string } | undefined)?.childSessionId
       if (childSessionId !== undefined) {
         return (
@@ -640,8 +655,8 @@ function BlockView({ block, onOpenAudit }: { block: RenderedBlock; onOpenAudit?:
             </summary>
             <pre>{block.output}</pre>
             {onOpenAudit !== undefined && (
-              <button className="subagent-trail-link" data-testid="subagent-trail-link" onClick={() => onOpenAudit(childSessionId)}>
-                查看子代理轨迹
+              <button className="subagent-audit-link" data-testid="subagent-audit-link" onClick={() => onOpenAudit(childSessionId)}>
+                查看子代理审计
               </button>
             )}
           </details>

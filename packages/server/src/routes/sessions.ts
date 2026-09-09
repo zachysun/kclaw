@@ -108,9 +108,10 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       const meta = stores.sessions.meta(id)
       if (meta === undefined) return reply.code(404).send(NOT_FOUND)
       // Cascade: a parent's children (subagent sessions) are soft-deleted with
-      // it — no orphans in the recycle bin.
-      for (const child of stores.sessions.list().filter((m) => m.parentSessionId === id)) {
-        stores.sessions.delete(child.id)
+      // it — no orphans in the recycle bin. Already-deleted children keep
+      // their original deletedAt (listByParent includes them; skip those).
+      for (const child of stores.sessions.listByParent(id)) {
+        if (!child.deleted) stores.sessions.delete(child.id)
       }
       return stores.sessions.delete(id)
     })

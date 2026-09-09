@@ -9,7 +9,7 @@ import { act } from "react"
 import { ChatView } from "../../src/chat/ChatView.js"
 import { applyEvent, initChat, type ChatState, type Message } from "../../src/chat/model.js"
 
-function mountWith(view: ChatState, onOpenAudit?: (sessionId: string) => void) {
+function mountWith(view: ChatState, onOpenAudit?: (sessionId: string) => void, opts: { readOnly?: boolean } = {}) {
   const container = document.createElement("div")
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -22,6 +22,7 @@ function mountWith(view: ChatState, onOpenAudit?: (sessionId: string) => void) {
         pendingAttachments={[]}
         onRemoveAttachment={vi.fn()}
         onOpenAudit={onOpenAudit}
+        readOnly={opts.readOnly}
       />,
     )
   })
@@ -77,7 +78,7 @@ describe("subagent chat rendering", () => {
     const row = container.querySelector('[data-testid="blk-tool-result-subagent"]')
     expect(row).not.toBeNull()
     expect(row!.querySelector("summary")!.textContent).toContain("共 3 处 TODO") // latest line, not the head
-    const link = row!.querySelector('[data-testid="subagent-trail-link"]') as HTMLButtonElement
+    const link = row!.querySelector('[data-testid="subagent-audit-link"]') as HTMLButtonElement
     expect(link).not.toBeNull()
     act(() => {
       link.click()
@@ -99,5 +100,14 @@ describe("subagent chat rendering", () => {
     expect(second.container.querySelector('[data-testid="blk-tool-result-subagent"]')).toBeNull()
     expect(second.container.querySelector('[data-testid="blk-tool-result"]')).not.toBeNull()
     second.unmount()
+  })
+
+  it("view: readOnly replaces the composer with the child-session hint", () => {
+    const { container, unmount } = mountWith(initChat(spawnConversation()), undefined, { readOnly: true })
+    expect(container.querySelector('[data-testid="subagent-readonly-hint"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="chat-input"]')).toBeNull()
+    expect(container.querySelector('[data-testid="send-button"]')).toBeNull()
+    expect(container.querySelector('[data-testid="mode-select"]')).toBeNull()
+    unmount()
   })
 })

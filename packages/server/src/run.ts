@@ -228,6 +228,13 @@ export class RunManager {
     const { config, sessions, bus } = this.#deps
     const meta = sessions.meta(sessionId)
     if (meta === undefined) throw new Error("session not found")
+    // Child sessions are read-only to users: their only input is the dispatch
+    // task (delegation semantics). User-triggered submissions (a chat client
+    // connected to a child session) are rejected; "agent" is the spawner's own
+    // submission and "job" never lands on a child — neither is affected.
+    if (input.trigger === "user" && meta.parentSessionId !== undefined) {
+      throw new Error("子代理会话不接收用户消息（只读；过程与结果见审计页）")
+    }
     // 处置解析链：显式 > 会话覆盖 > 配置默认；job/agent 触发固定 wait
     // （无人值守的排队行为必须可预测；agent 子 run 由派发器独占驱动）。
     const disposition = input.trigger === "job" || input.trigger === "agent"
