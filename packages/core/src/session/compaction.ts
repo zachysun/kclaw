@@ -143,8 +143,7 @@ const TOOL_RESULT_MAX = 300
 
 /**
  * Compaction/extraction input rendering: one line per
- * message; tool activity condensed (call `→ name(args)`, result `⇐ head`),
- * compact-kind notes excluded (the top summary already lives in meta).
+ * message; tool activity condensed (call `→ name(args)`, result `⇐ head`).
  */
 export function renderSegment(messages: Message[]): string {
   const lines: string[] = []
@@ -152,7 +151,7 @@ export function renderSegment(messages: Message[]): string {
     const parts: string[] = []
     for (const b of m.blocks) {
       if (isBlockType("text", b)) parts.push(b.text)
-      else if (isBlockType("note", b) && b.kind !== "compact") parts.push(b.text)
+      else if (isBlockType("note", b)) parts.push(b.text)
       else if (isBlockType("tool_call", b)) {
         const args = b.argsJson.length > TOOL_ARGS_MAX ? `${b.argsJson.slice(0, TOOL_ARGS_MAX)}…` : b.argsJson
         parts.push(`→ ${b.name}(${args})`)

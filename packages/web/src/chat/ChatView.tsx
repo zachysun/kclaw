@@ -9,7 +9,7 @@ import { Fragment, useLayoutEffect, useRef, useState, type FormEvent, type Keybo
 import { parseSlashInput, replaceTrailingSlashToken, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
 import { PERMISSION_MODES, type PermissionMode } from "@kclaw/core/permission-modes"
 import type { AttachmentRef, ConfirmationDecision } from "@kclaw/core/protocol"
-import type { ChatState, ConfirmationCard, NoteRender, RenderedBlock, RenderedMessage } from "./model.js"
+import type { ChatState, ConfirmationCard, RenderedBlock, RenderedMessage } from "./model.js"
 
 /**
  * How a message enters a busy session: steer injects into the live
@@ -90,12 +90,12 @@ export interface ChatViewProps {
   onCancelAllQueued?: () => void
   /** Open a subagent's audit view (the spawn row's link). */
   onOpenAudit?: (sessionId: string) => void
-  /** Cancel the in-flight automatic compaction (the indicator's 取消, v3 compaction.cancel). */
+  /** Cancel the in-flight automatic compaction (the indicator's 取消, compaction.cancel). */
   onCancelCompaction?: () => void
   /**
-   * v3 压缩审计记录（GET /sessions/:id/compactions 的 UI 镜像，ChatPanel
+   * 压缩审计记录（GET /sessions/:id/compactions 的 UI 镜像，ChatPanel
    * 在会话选中时并行拉取）。null/undefined（未加载或拉取失败）→ 不渲染
-   * 审计折叠条；旧会话的 compact note 路径（contextBarFor）不受影响。
+   * 审计折叠条。
    */
   compactions?: CompactionRecordView[] | null
   /** 已装用户可见技能的动态命令（/技能名）：合并进建议菜单与 /help 面板（内置优先）。 */
@@ -133,8 +133,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
   // 独立于一次性 notice——它是状态，不随输入清除。
   const queuedRows = view.queue
 
-  // v3 审计折叠条（压缩不再挂 compact note 后的唯一新来源）；未加载/失败
-  // （null）→ 空数组，消息流与旧版完全一致。
+  // 审计折叠条；未加载/失败（null）→ 空数组。
   const auditBars = compactions == null ? [] : compactionBars(view.messages, compactions)
 
   /** 三选的方向键旋转（方向键+回车与点击皆可；回车/空格是按钮原生行为）。 */
@@ -269,18 +268,14 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
         </div>
       )}
       <div className="chat-log" data-testid="chat-log">
-        {view.messages.map((message, idx) => {
-          const context = contextBarFor(view.messages, idx)
-          return (
-            <Fragment key={message.id}>
-              {auditBars.filter((b) => b.insertIdx === idx).map((b) => (
-                <AuditContextNote key={b.key} bar={b} />
-              ))}
-              {context !== null && <CompactContextNote context={context} />}
-              <MessageBubble message={message} onOpenAudit={onOpenAudit} />
-            </Fragment>
-          )
-        })}
+        {view.messages.map((message, idx) => (
+          <Fragment key={message.id}>
+            {auditBars.filter((b) => b.insertIdx === idx).map((b) => (
+              <AuditContextNote key={b.key} bar={b} />
+            ))}
+            <MessageBubble message={message} onOpenAudit={onOpenAudit} />
+          </Fragment>
+        ))}
         {/* upto 是最后一条消息（收尾压缩后没有新消息）→ 折叠条挂在消息流末尾。 */}
         {auditBars.filter((b) => b.insertIdx >= view.messages.length).map((b) => (
           <AuditContextNote key={b.key} bar={b} />
@@ -471,54 +466,8 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
   )
 }
 
-/** Everything the collapsed context bar shows for one compaction. */
-export interface CompactContextInfo {
-  segments: number
-  kept: number
-  /** The compact note's full text (summary + retrieval hint). */
-  summary: string
-  /** The kept verbatim messages preceding this user message, in order. */
-  keptMessages: { role: string; text: string }[]
-}
-
 /**
- * Compaction context for the user message at `idx`, or null when it shows no
- * bar. The server re-attaches the compact note EVERY turn (the model needs the
- * summary each request), and `kept` counts the user's own message — so a bar
- * renders only when the segment count changes (a real new compaction), and the
- * kept-message preview excludes the message itself.
- */
-export function contextBarFor(messages: RenderedMessage[], idx: number): CompactContextInfo | null {
-  const message = messages[idx]!
-  if (message.role !== "user") return null
-  const note = message.blocks.find(
-    (b): b is NoteRender => b.kind === "note" && b.noteKind === "compact" && b.compact !== undefined,
-  )
-  if (note === undefined || note.compact === undefined) return null
-  let seen: number | null = null
-  for (let i = 0; i < idx; i++) {
-    for (const b of messages[i]!.blocks) {
-      if (b.kind === "note" && b.noteKind === "compact" && b.compact !== undefined) seen = b.compact.segments
-    }
-  }
-  if (seen === note.compact.segments) return null
-  const precedingKept = Math.max(0, note.compact.kept - 1)
-  const keptMessages = messages
-    .slice(Math.max(0, idx - precedingKept), idx)
-    .map((m) => ({ role: m.role, text: flattenText(m.blocks) }))
-  return { segments: note.compact.segments, kept: note.compact.kept, summary: note.text, keptMessages }
-}
-
-/** First text block, whitespace-collapsed, capped for the preview line. */
-function flattenText(blocks: RenderedBlock[]): string {
-  const first = blocks.find((b) => b.kind === "text")
-  const text = first !== undefined && first.kind === "text" ? first.text : ""
-  const collapsed = text.replace(/\s+/g, " ").trim()
-  return collapsed.length > 120 ? `${collapsed.slice(0, 120)}…` : collapsed
-}
-
-/**
- * v3 压缩审计记录的 web 侧轻量镜像（GET /sessions/:id/compactions 的 UI
+ * 压缩审计记录的 web 侧轻量镜像（GET /sessions/:id/compactions 的 UI
  * 子集，刻意不引 @kclaw/core——web 包自包含，见 model.ts 的协议镜像决策）。
  */
 export interface CompactionRecordView {
@@ -537,21 +486,15 @@ export interface CompactionAuditBar {
   key: string
   /** 折叠条插在 messages[insertIdx] 之前（= upto 气泡之后）。 */
   insertIdx: number
-  /** 第 N 次压缩（记录序号 + 1）——与旧 note 的 compact.segments 同源。 */
+  /** 第 N 次压缩（记录序号 + 1）。 */
   segments: number
   summary: string
 }
 
 /**
- * Derive the audit-driven collapsed context bars (v3): one per compaction
+ * Derive the audit-driven collapsed context bars: one per compaction
  * record, inserted right AFTER the record's `upto` message. Records whose
  * upto no longer exists (deleted messages) are dropped.
- *
- * 去重（旧 v2 会话兼容）：v2 的同一次压缩还会在"压缩后新一轮的用户消息"
- * 上挂 compact note（note.compact.segments === 记录序号+1，且该消息必然在
- * upto 之后——中间隔着保留窗口）。这样一条 note 存在时，contextBarFor 已经
- * 为该压缩渲染了折叠条，审计条必须跳过（同一压缩不显示两个折叠条）；note
- * 缺失（消息被删/未持久化）时 note 条本来也不渲染，审计条照常补位。
  */
 export function compactionBars(
   messages: RenderedMessage[],
@@ -562,49 +505,18 @@ export function compactionBars(
     const segments = ordinal + 1
     const uptoIdx = messages.findIndex((m) => m.id === record.upto)
     if (uptoIdx === -1) return
-    const supersededByNote = messages.some(
-      (m, i) =>
-        i > uptoIdx &&
-        m.role === "user" &&
-        m.blocks.some(
-          (b) => b.kind === "note" && b.noteKind === "compact" && b.compact !== undefined && b.compact.segments === segments,
-        ),
-    )
-    if (supersededByNote) return
     bars.push({ key: `compaction-${ordinal}-${record.upto}`, insertIdx: uptoIdx + 1, segments, summary: record.segmentSummary })
   })
   return bars
 }
 
-/** Audit-driven collapsed <details> — same shape/style as the note bar, summary-only body (审计记录无 kept 数据). */
+/** Audit-driven collapsed <details>, summary-only body (审计记录无 kept 数据). */
 function AuditContextNote({ bar }: { bar: CompactionAuditBar }) {
   return (
     <details className="ctx-note" data-testid="ctx-note-audit">
       <summary>模型上下文：早期对话已压缩为 {bar.segments} 段（点击展开）</summary>
       <div className="ctx-note-body">
         <p className="ctx-note-summary">{bar.summary}</p>
-      </div>
-    </details>
-  )
-}
-
-/** Collapsed-by-default <details> listing what the model sees for early context. */
-function CompactContextNote({ context }: { context: CompactContextInfo }) {
-  return (
-    <details className="ctx-note" data-testid="ctx-note">
-      <summary>模型上下文：早期对话已压缩为 {context.segments} 段（点击展开）</summary>
-      <div className="ctx-note-body">
-        <p className="ctx-note-summary">{context.summary}</p>
-        {context.keptMessages.length > 0 && (
-          <div className="ctx-note-kept" data-testid="ctx-note-kept">
-            <div className="ctx-note-kept-head">保留的原文（最近 {context.keptMessages.length} 条）：</div>
-            {context.keptMessages.map((m, i) => (
-              <div key={i} className="ctx-note-kept-line">
-                {m.role === "user" ? "用户" : "助手"}：{m.text}
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     </details>
   )
@@ -632,9 +544,6 @@ function BlockView({ block, onOpenAudit }: { block: RenderedBlock; onOpenAudit?:
         </details>
       )
     case "note":
-      // Compact notes render as the collapsed context bar above their message
-      // (contextBarFor); a legacy one without meta falls through to inline.
-      if (block.noteKind === "compact" && block.compact !== undefined) return null
       return <span className="blk-note" data-testid="blk-note">[note] {block.text}</span>
     case "tool_call":
       return (

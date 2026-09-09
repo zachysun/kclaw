@@ -9,7 +9,7 @@ import { describe, it, expect, vi } from "vitest"
 import { createRoot, type Root } from "react-dom/client"
 import { act } from "react"
 import { ChatView, availableSlashMenuMaxHeight, compactionBars, type CompactionRecordView, type Disposition } from "../../src/chat/ChatView.js"
-import { initChat, type Block, type ChatState, type Message } from "../../src/chat/model.js"
+import { initChat, type ChatState, type Message } from "../../src/chat/model.js"
 
 /** Optional props/view overrides for the new disposition/queue scenarios. */
 interface ViewOpts {
@@ -20,7 +20,7 @@ interface ViewOpts {
   onCancelQueued?: (messageId: string) => void
   onCancelAllQueued?: () => void
   onCancelCompaction?: () => void
-  /** v3 压缩审计记录（GET /sessions/:id/compactions 的 UI 镜像）。 */
+  /** 压缩审计记录（GET /sessions/:id/compactions 的 UI 镜像）。 */
   compactions?: CompactionRecordView[] | null
   /** 通知条与可点击动作（memory.written 跳转）。 */
   notice?: string | null
@@ -270,7 +270,7 @@ describe("availableSlashMenuMaxHeight", () => {
   })
 })
 
-describe("compacting indicator cancel button (v3 compaction.cancel)", () => {
+describe("compacting indicator cancel button (compaction.cancel)", () => {
   it("renders the cancel button inside the compacting indicator and fires onCancelCompaction on click", () => {
     const onCancelCompaction = vi.fn()
     const h = mountView([], { view: { compacting: true }, onCancelCompaction })
@@ -310,76 +310,6 @@ describe("compacting indicator cancel button (v3 compaction.cancel)", () => {
       expect(h.container.querySelector('[data-testid="compaction-cancel"]')).not.toBeNull()
       h.unmount()
     }
-  })
-})
-
-describe("compact context block", () => {
-  const ctxNote = (segments: number, kept: number): Block => ({
-    id: `note-${segments}-${kept}-${Math.random().toString(36).slice(2, 6)}`,
-    type: "note",
-    kind: "compact",
-    text: `早期对话已压缩为 ${segments} 段（保留最近 ${kept} 条原文；可用 session_search 检索早期细节）。摘要：\n总摘要${segments}`,
-    compact: { segments, kept },
-  })
-  const u = (id: string, t: string, blocks: Block[] = []) =>
-    ({ id, sessionId: "s1", role: "user" as const, blocks: [{ id: `${id}-b`, type: "text" as const, text: t }, ...blocks], createdAt: "2026-08-28T00:00:00.000Z" })
-  const a = (id: string, t: string) =>
-    ({ id, sessionId: "s1", role: "assistant" as const, blocks: [{ id: `${id}-b`, type: "text" as const, text: t }], createdAt: "2026-08-28T00:00:00.000Z" })
-
-  it("renders the compact note as a collapsed block ABOVE the user message, not inline below", () => {
-    const h = mountView([
-      u("m0", "早期问题"), a("m1", "早期回答"),
-      u("m2", "1 + 1 =?", [ctxNote(2, 2)]),
-    ])
-    const bar = h.container.querySelector('[data-testid="ctx-note"]')
-    expect(bar).not.toBeNull()
-    expect(bar!.textContent).toContain("已压缩为 2 段")
-    expect(bar!.textContent).toContain("保留最近 2 条")
-    // the summary lives inside the expandable block
-    expect(bar!.textContent).toContain("总摘要2")
-    // the note is not ALSO rendered inline below the message
-    expect(h.container.querySelectorAll('[data-testid="blk-note"]')).toHaveLength(0)
-    // the bar sits before its message bubble in document order
-    const bubble = h.container.querySelector('[data-testid="msg-user"]:last-of-type')!
-    expect(bar!.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    h.unmount()
-  })
-
-  it("lists the kept verbatim messages inside the expanded block", () => {
-    // kept counts the user's own message (server: active.length), so two
-    // preceding verbatim messages + this one = kept 3.
-    const h = mountView([
-      u("m0", "早期问题"), a("m1", "早期回答"),
-      u("m2", "1 + 1 =?", [ctxNote(2, 3)]),
-    ])
-    const kept = h.container.querySelector('[data-testid="ctx-note-kept"]')
-    expect(kept).not.toBeNull()
-    expect(kept!.textContent).toContain("早期问题")
-    expect(kept!.textContent).toContain("早期回答")
-    h.unmount()
-  })
-
-  it("shows the bar once per compaction: carried notes on later messages do not repeat it", () => {
-    const h = mountView([
-      u("m0", "早期问题"), a("m1", "早期回答"),
-      u("m2", "第一条", [ctxNote(2, 2)]), a("m3", "答一"),
-      u("m4", "第二条", [ctxNote(2, 4)]), a("m5", "答二"),
-    ])
-    // same segment count = no new compaction → the bar appears exactly once
-    expect(h.container.querySelectorAll('[data-testid="ctx-note"]')).toHaveLength(1)
-    h.unmount()
-  })
-
-  it("shows a new bar when a new compaction raises the segment count", () => {
-    const h = mountView([
-      u("m0", "早期问题"), a("m1", "早期回答"),
-      u("m2", "第一条", [ctxNote(2, 2)]), a("m3", "答一"),
-      u("m4", "第二条", [ctxNote(3, 4)]), a("m5", "答二"),
-    ])
-    expect(h.container.querySelectorAll('[data-testid="ctx-note"]')).toHaveLength(2)
-    const bars = [...h.container.querySelectorAll('[data-testid="ctx-note"]')]
-    expect(bars[1]!.textContent).toContain("已压缩为 3 段")
-    h.unmount()
   })
 })
 
@@ -498,16 +428,9 @@ describe("clickable notice (memory.written 跳转)", () => {
   })
 })
 
-describe("audit-driven collapsed context bars (v3 compactionBars)", () => {
-  const ctxNote = (segments: number, kept: number): Block => ({
-    id: `note-${segments}-${kept}-${Math.random().toString(36).slice(2, 6)}`,
-    type: "note",
-    kind: "compact",
-    text: `早期对话已压缩为 ${segments} 段（保留最近 ${kept} 条原文；可用 session_search 检索早期细节）。摘要：\n总摘要${segments}`,
-    compact: { segments, kept },
-  })
-  const u = (id: string, t: string, blocks: Block[] = []) =>
-    ({ id, sessionId: "s1", role: "user" as const, blocks: [{ id: `${id}-b`, type: "text" as const, text: t }, ...blocks], createdAt: "2026-08-30T00:00:00.000Z" })
+describe("audit-driven collapsed context bars (compactionBars)", () => {
+  const u = (id: string, t: string) =>
+    ({ id, sessionId: "s1", role: "user" as const, blocks: [{ id: `${id}-b`, type: "text" as const, text: t }], createdAt: "2026-08-30T00:00:00.000Z" })
   const a = (id: string, t: string) =>
     ({ id, sessionId: "s1", role: "assistant" as const, blocks: [{ id: `${id}-b`, type: "text" as const, text: t }], createdAt: "2026-08-30T00:00:00.000Z" })
   const rec = (upto: string, segmentSummary: string): CompactionRecordView =>
@@ -515,16 +438,14 @@ describe("audit-driven collapsed context bars (v3 compactionBars)", () => {
 
   const auditBars = (container: HTMLElement) =>
     [...container.querySelectorAll('[data-testid="ctx-note-audit"]')] as HTMLElement[]
-  const noteBars = (container: HTMLElement) =>
-    [...container.querySelectorAll('[data-testid="ctx-note"]')] as HTMLElement[]
   /** 文档序：a 在 b 之前。 */
   const isBefore = (a: Node, b: Node): boolean =>
     Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
   /** compactionBars 吃 RenderedMessage[]——initChat 做与渲染一致的转换。 */
   const rendered = (messages: Message[]) => initChat(messages).messages
 
-  // 组 1：纯新会话（v3，无 compact note）——每条审计记录在各自 upto 消息后渲染一条折叠条。
-  it("a note-free session renders one audit bar after each record's upto message", () => {
+  // 每条审计记录在各自 upto 消息后渲染一条折叠条。
+  it("renders one audit bar after each record's upto message", () => {
     const messages = [
       u("m0", "问题一"), a("m1", "回答一"),
       u("m2", "问题二"), a("m3", "回答二"),
@@ -540,8 +461,6 @@ describe("audit-driven collapsed context bars (v3 compactionBars)", () => {
 
     const h = mountView(messages, { compactions: records })
     expect(auditBars(h.container)).toHaveLength(2)
-    // 旧 note 路径一条都不出（纯新会话没有 note）。
-    expect(noteBars(h.container)).toHaveLength(0)
     const [bar1, bar2] = auditBars(h.container)
     expect(bar1!.textContent).toContain("已压缩为 1 段")
     expect(bar1!.textContent).toContain("第一段：聊了环境搭建")
@@ -566,59 +485,7 @@ describe("audit-driven collapsed context bars (v3 compactionBars)", () => {
     h.unmount()
   })
 
-  // 组 2：旧（v2）会话——note 条与记录指同一次压缩，只显示 note 条。
-  it("a legacy session whose note coincides with the record shows ONLY the note bar (empty kept window)", () => {
-    // kept=1（只有 note 所在消息自己）→ note 条渲染在 m2 上方，恰与记录条
-    // 的插入位（m1 之后 = m2 之前）重合——同一次压缩不得出现两个折叠条。
-    const messages = [
-      u("m0", "早期问题"), a("m1", "早期回答"),
-      u("m2", "压缩后的新话题", [ctxNote(1, 1)]), a("m3", "新回答"),
-    ]
-    const records = [rec("m1", "第一段：旧摘要")]
-    expect(compactionBars(rendered(messages), records)).toEqual([]) // 去重后为空
-    const h = mountView(messages, { compactions: records })
-    expect(auditBars(h.container)).toHaveLength(0)
-    expect(noteBars(h.container)).toHaveLength(1)
-    expect(noteBars(h.container)[0]!.textContent).toContain("总摘要1")
-    h.unmount()
-  })
-
-  it("dedup works even when the note bar sits further down (non-empty kept window)", () => {
-    // v2 的 note 挂在压缩后新一轮的用户消息上，与 upto 之间隔着一个保留
-    // 窗口——note 条（m4 上方）与记录条（m1 之后）位置并不重合，但指同一
-    // 次压缩：记录仍须跳过。
-    const messages = [
-      u("m0", "早期问题"), a("m1", "早期回答"),
-      u("m2", "保留一"), a("m3", "保留二"),
-      u("m4", "压缩后的新话题", [ctxNote(1, 3)]), a("m5", "新回答"),
-    ]
-    const records = [rec("m1", "第一段：旧摘要")]
-    expect(compactionBars(rendered(messages), records)).toEqual([])
-    const h = mountView(messages, { compactions: records })
-    expect(auditBars(h.container)).toHaveLength(0)
-    expect(noteBars(h.container)).toHaveLength(1) // note 条照常
-    h.unmount()
-  })
-
-  it("an old session continued under v3: the old compaction keeps its note bar, the new one gets an audit bar", () => {
-    // 同一条消息流里：第 1 次压缩是 v2 时代（有 note）→ 只显 note 条；
-    // 第 2 次压缩是 v3 时代（无 note）→ 审计条照常渲染。
-    const messages = [
-      u("m0", "早期问题"), a("m1", "早期回答"),
-      u("m2", "保留一"), a("m3", "保留二"),
-      u("m4", "旧时代的新话题", [ctxNote(1, 3)]), a("m5", "旧回答"),
-      u("m6", "v3 时代的话题"), a("m7", "新回答"),
-    ]
-    const records = [rec("m1", "第一段：旧摘要"), rec("m5", "第二段：新摘要")]
-    const h = mountView(messages, { compactions: records })
-    expect(noteBars(h.container)).toHaveLength(1)
-    expect(auditBars(h.container)).toHaveLength(1)
-    expect(auditBars(h.container)[0]!.textContent).toContain("已压缩为 2 段")
-    expect(auditBars(h.container)[0]!.textContent).toContain("第二段：新摘要")
-    h.unmount()
-  })
-
-  // 组 3：upto 指向已删消息 → 该条丢弃（不渲染）。
+  // upto 指向已删消息 → 该条丢弃（不渲染）。
   it("drops records whose upto message no longer exists", () => {
     const messages = [
       u("m0", "问题一"), a("m1", "回答一"),

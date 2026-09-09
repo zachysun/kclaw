@@ -348,15 +348,9 @@ export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean
       return false
     // note.emitted: one dim line per note block — including the memory/job
     // notes the daemon injects onto the user message (each is announced
-    // exactly once, between that message's created and completed). Compact
-    // notes with the structured meta are the exception: the daemon re-
-    // attaches them EVERY run (the model needs the summary), so printing the
-    // full text here would repeat it every turn — the compaction.completed
-    // line below announces a compaction once instead. Legacy daemons send
-    // compact notes without the meta — keep the old full print for those.
+    // exactly once, between that message's created and completed).
     case "note.emitted": {
       const block = ev.payload.block
-      if (block.type === "note" && block.kind === "compact" && block.compact !== undefined) return false
       line(dim(`[note] ${block.text}`), ctx)
       return false
     }

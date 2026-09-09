@@ -78,23 +78,7 @@ describe("renderFrame compaction events", () => {
   })
 })
 
-describe("renderFrame compact note dedup", () => {
-  it("silently drops the re-attached compact note (it carries the structured meta)", async () => {
-    const block: NoteBlock = {
-      id: "b1", type: "note", kind: "compact",
-      text: "早期对话已压缩为 1 段（保留最近 4 条原文…）。摘要：\n很长的摘要全文",
-      compact: { segments: 1, kept: 4 },
-    }
-    const out = await capture((ctx) => renderFrame(ev("note.emitted", { messageId: "m1", block }), ctx))
-    expect(out).toBe("")
-  })
-
-  it("keeps printing legacy compact notes without the meta (older daemons)", async () => {
-    const block: NoteBlock = { id: "b1", type: "note", kind: "compact", text: "旧格式的压缩说明全文" }
-    const out = await capture((ctx) => renderFrame(ev("note.emitted", { messageId: "m1", block }), ctx))
-    expect(out).toContain("[note] 旧格式的压缩说明全文")
-  })
-
+describe("renderFrame note.emitted", () => {
   it("keeps printing memory and job notes as before", async () => {
     const block: NoteBlock = { id: "b1", type: "note", kind: "memory", text: "记住的要点" }
     const out = await capture((ctx) => renderFrame(ev("note.emitted", { messageId: "m1", block }), ctx))

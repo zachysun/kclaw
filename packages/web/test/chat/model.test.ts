@@ -194,16 +194,6 @@ describe("block created/completed calibration", () => {
     ])
   })
 
-  it("carries the compact meta on compact notes (persisted and via note.emitted)", () => {
-    const compact = { ...note("b2", "compact", "早期对话已压缩为 2 段"), compact: { segments: 2, kept: 4 } }
-    const view = initChat([msg("m1", "user", [text("b1", "hi"), compact as Block])])
-    expect(view.messages[0]!.blocks[1]).toEqual({
-      kind: "note", blockId: "b2", noteKind: "compact", text: "早期对话已压缩为 2 段", compact: { segments: 2, kept: 4 },
-    })
-    const live = applyEvent(initChat([msg("m9", "user", [text("b1", "hi")])]), ev("note.emitted", { messageId: "m9", block: compact }))
-    expect((live.messages[0]!.blocks[1] as { compact?: unknown }).compact).toEqual({ segments: 2, kept: 4 })
-  })
-
   it("drops block events for an unknown message", () => {
     const state = initChat([])
     expect(applyEvent(state, ev("text.created", { messageId: "ghost", block: text("b4", "") }))).toBe(state)

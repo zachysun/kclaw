@@ -96,10 +96,8 @@ export interface ToolResultBlock {
   durationMs: number
 }
 
-export type NoteKind = "system" | "job" | "memory" | "timeout" | "denied" | "compact"
-export interface NoteBlock { id: BlockId; type: "note"; kind: NoteKind; text: string
-  compact?: { segments: number; kept: number }   // 仅 kind==="compact" 时携带：本次压缩的段数与会话保留原文条数；UI 专用，provider 渲染不读它
-}
+export type NoteKind = "system" | "job" | "memory" | "timeout" | "denied"
+export interface NoteBlock { id: BlockId; type: "note"; kind: NoteKind; text: string }
 
 export type AttachmentSource =
   | { type: "base64"; data: string }
@@ -113,7 +111,7 @@ export interface AttachmentBlock {
 }
 ```
 
-note 是"系统写入对话的信息"（记忆注入、job 触发、压缩摘要、权限拒绝/超时），属于对话内容、模型可读。类型守卫 `isBlockType(t, v)` 与 `newBlockId()` 也在此文件。
+note 是"系统写入对话的信息"（记忆注入、job 触发、迭代截断、权限拒绝/超时），属于对话内容、模型可读。类型守卫 `isBlockType(t, v)` 与 `newBlockId()` 也在此文件。
 
 ---
 

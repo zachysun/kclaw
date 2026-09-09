@@ -140,16 +140,14 @@ describe("renderSegment", () => {
     expect(line).not.toContain("炸".repeat(301))
   })
 
-  it("excludes compact-kind notes (already persisted as the top summary)", () => {
+  it("includes note blocks by their text", () => {
     const u = newMessage("s", "user", [
       { id: "b1", type: "text", text: "问题" },
-      { id: "b2", type: "note", kind: "compact", text: "早期对话已压缩…" },
-      { id: "b3", type: "note", kind: "memory", text: "相关记忆: 用户在上海" },
+      { id: "b2", type: "note", kind: "memory", text: "相关记忆: 用户在上海" },
     ])
     const line = renderSegment([u])
     expect(line).toContain("问题")
     expect(line).toContain("相关记忆: 用户在上海")
-    expect(line).not.toContain("早期对话已压缩")
   })
 
   it("renders tool-only messages without text as <tool use>", () => {

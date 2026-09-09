@@ -54,8 +54,6 @@ export interface NoteRender {
   blockId: string
   noteKind: string
   text: string
-  /** Structured compaction state (kind==="compact" only) — see @kclaw/core NoteBlock. */
-  compact?: { segments: number; kept: number }
 }
 export interface ToolCallRender {
   kind: "tool_call"
@@ -529,13 +527,7 @@ function renderBlock(block: Block): RenderedBlock {
     case "thinking":
       return { kind: "thinking", blockId: block.id, text: block.text }
     case "note":
-      return {
-        kind: "note",
-        blockId: block.id,
-        noteKind: block.kind,
-        text: block.text,
-        ...(block.compact !== undefined ? { compact: block.compact } : {}),
-      }
+      return { kind: "note", blockId: block.id, noteKind: block.kind, text: block.text }
     case "tool_call":
       return { kind: "tool_call", blockId: block.id, callId: block.callId, name: block.name, argsJson: block.argsJson }
     case "tool_result":

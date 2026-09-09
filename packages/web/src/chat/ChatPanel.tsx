@@ -372,10 +372,9 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     [api, sessionId, permissionMode],
   )
 
-  // v3 压缩审计：会话选中时与消息并行拉一次 GET
+  // 压缩审计：会话选中时与消息并行拉一次 GET
   // /sessions/:id/compactions（参考 AuditView 的 api 用法）。失败静默——
-  // 折叠条只是增强显示，compactions 保持 null 就不渲染审计条（旧 note
-  // 会话的 contextBarFor 路径不受影响）。
+  // 折叠条只是增强显示，compactions 保持 null 就不渲染审计条。
   const [compactions, setCompactions] = useState<CompactionRecordView[] | null>(null)
   useSilentFetch(
     () => {

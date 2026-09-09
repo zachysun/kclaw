@@ -1148,9 +1148,6 @@ describe("RunManager context compaction", () => {
     expect(reqs[0]!.messages[0]!.role).toBe("system")
     expect(reqs[0]!.messages[0]!.content).toContain("早期对话脉络：总摘要A")
     expect(JSON.stringify(reqs[0]!.messages)).not.toContain("历史问题1")
-    // no compact note on the user message anymore (v3 removed the injection)
-    const user = env.sessions.readMessages(session.id).find((m) => m.role === "user" && m.blocks.some((b) => b.type === "text" && b.text === "新问题"))!
-    expect(user.blocks.some((b) => b.type === "note" && b.kind === "compact")).toBe(false)
   })
 
   it("compactSession refuses while a run is active or queued", async () => {

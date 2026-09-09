@@ -27,21 +27,13 @@ export interface ToolResultBlock {
   durationMs: number
 }
 
-export type NoteKind = "system" | "job" | "memory" | "timeout" | "denied" | "compact"
+export type NoteKind = "system" | "job" | "memory" | "timeout" | "denied"
 
 export interface NoteBlock {
   id: BlockId
   type: "note"
   kind: NoteKind
   text: string
-  /**
-   * Structured compaction state, set only on kind==="compact" notes: the
-   * segment count and the kept verbatim tail size AT THIS TURN. UI-only —
-   * the provider rendering reads note text alone (context.ts), so the model
-   * never sees this field; the webui uses it to collapse the context display
-   * and show it once per compaction.
-   */
-  compact?: { segments: number; kept: number }
 }
 
 export type AttachmentSource =
