@@ -164,19 +164,162 @@ export function normalizeCommand(cmd: string): string {
 
 /**
  * Split a shell command line into sub-commands at ; && || | newlines and the
- * command-substitution openers `$(` and a backtick: exec runs under a shell,
- * so `git status $(curl evil)` would really execute the substitution — the
- * split makes deny match the embedded command while multi-segment lines lose
- * allow/grant coverage (same semantics as the other continuations).
- * NOT quote-aware: `echo "a;b"` splits into two segments. Both error
- * directions are safe (deny may over-match, allow/grant stops applying),
- * documented in the README's configuration section.
+ * command-substitution openers `$(` and a backtick — QUOTE-AWARE: single
+ * quotes keep everything inert, double quotes make `;`/`|`/`&&` inert but
+ * still split at `$(` and a backtick (command substitution executes there
+ * too), and an escaping backslash makes the next char a literal. exec runs
+ * under a shell, so `git status $(curl evil)` would really execute the
+ * substitution — the split makes deny match the embedded command while
+ * multi-segment lines lose allow/grant coverage (same semantics as the other
+ * continuations). Ambiguous corners over-split rather than under-split, the
+ * safe direction: deny scans every segment while allow/grant simply stops
+ * applying across concatenations.
  */
 export function splitSubcommands(cmd: string): string[] {
-  return cmd
-    .split(/&&|\|\||;|\||\n|\$\(|`/)
-    .map((s) => s.trim())
-    .filter((s) => s !== "")
+  const segs: string[] = []
+  let cur = ""
+  let quote: '"' | "'" | undefined
+  const flush = (): void => {
+    const s = cur.trim()
+    if (s !== "") segs.push(s)
+    cur = ""
+  }
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i]!
+    // `$(` and a backtick execute even inside double quotes → split always;
+    // inside single quotes they are inert data.
+    if (quote !== "'" && c === "$" && cmd[i + 1] === "(") {
+      flush()
+      i++
+      continue
+    }
+    if (quote !== "'" && c === "`") {
+      flush()
+      continue
+    }
+    if (quote !== undefined) {
+      if (c === quote) quote = undefined
+      cur += c
+      continue
+    }
+    if (c === "\\") {
+      cur += c
+      i++
+      if (i < cmd.length) cur += cmd[i]!
+      continue
+    }
+    if (c === '"' || c === "'") {
+      quote = c
+      cur += c
+      continue
+    }
+    if (c === ";" || c === "|" || c === "\n") {
+      flush()
+      continue
+    }
+    if (c === "&" && cmd[i + 1] === "&") {
+      flush()
+      i++
+      continue
+    }
+    cur += c
+  }
+  flush()
+  return segs
+}
+
+/** POSIX-ish word splitter for ONE segment: quotes group (and are removed),
+ *  an escaping backslash makes the next char literal. Unterminated quotes
+ *  take the rest of the line into one word. Not a full shell grammar — just
+ *  enough for deny-token matching. */
+export function tokenizeWords(segment: string): string[] {
+  const words: string[] = []
+  let cur = ""
+  let quote: '"' | "'" | undefined
+  const end = (): void => {
+    if (cur !== "") words.push(cur)
+    cur = ""
+  }
+  for (let i = 0; i < segment.length; i++) {
+    const c = segment[i]!
+    if (quote === undefined && (c === " " || c === "\t")) {
+      end()
+      continue
+    }
+    if (quote === undefined && (c === '"' || c === "'")) {
+      quote = c
+      continue
+    }
+    if (quote !== undefined && c === quote) {
+      quote = undefined
+      continue
+    }
+    if (c === "\\" && i + 1 < segment.length && quote !== "'") {
+      cur += segment[++i]!
+      continue
+    }
+    cur += c
+  }
+  end()
+  return words
+}
+
+/**
+ * Token form of one segment for deny matching: words with the head reduced
+ * to its basename and aggregated letters-only short flags expanded (`-rf` →
+ * `-r -f`). Long flags (`--force`), flags with attached values (`-d,`) and
+ * plain args stay whole — a command-specific flag database is out of scope;
+ * rule and segment expand identically, so consistency is what matters.
+ */
+export function denyTokens(segment: string): string[] {
+  const words = tokenizeWords(segment)
+  if (words.length === 0) return []
+  const head = path.basename(words[0]!)
+  const rest = words.slice(1).flatMap((w) =>
+    /^-[a-zA-Z]{2,}$/.test(w) ? [...w.slice(1)].map((ch) => `-${ch}`) : [w],
+  )
+  return [head, ...rest]
+}
+
+/**
+ * Token-set cover: does one deny-rule glob cover one command segment?
+ * Head must equal the segment head (prefix when the rule head ends with
+ * `*`); every remaining rule token must be present among the segment's
+ * tokens (multiset — each match consumes one; a trailing `*` on a rule token
+ * degrades it to a prefix match). Order-insensitive by design, which closes
+ * the flag-reordering blind spot: `exec:rm -rf*` also covers `rm -r -f x`
+ * and `rm -f -r /bin/x`. DENY-SIDE ONLY — over-matching is the safe
+ * direction here; allow/decided/grants keep the legacy string form (widening
+ * an auto-allow would be fail-open). Rule globs carrying internal `*`s
+ * (`*secret*`) are not token-coverable → false (the legacy glob path still
+ * runs).
+ */
+export function denyTokenCover(ruleGlob: string, segment: string): boolean {
+  const ruleWords = tokenizeWords(ruleGlob)
+  const seg = denyTokens(segment)
+  if (ruleWords.length === 0 || seg.length === 0) return false
+  const headRaw = ruleWords[0]!
+  const headStar = headRaw.endsWith("*")
+  const headTok = headStar ? headRaw.slice(0, -1) : headRaw
+  if (headTok.includes("*")) return false
+  const head = path.basename(headTok)
+  const segHead = seg[0]!
+  if (headStar ? !segHead.startsWith(head) : segHead !== head) return false
+  const pool = seg.slice(1)
+  for (const raw of ruleWords.slice(1)) {
+    const star = raw.endsWith("*")
+    const base = star ? raw.slice(0, -1) : raw
+    if (base.includes("*")) return false
+    const pieces = /^-[a-zA-Z]{2,}$/.test(base) ? [...base.slice(1)].map((ch) => `-${ch}`) : [base]
+    for (let k = 0; k < pieces.length; k++) {
+      const want = pieces[k]!
+      const wantStar = star && k === pieces.length - 1
+      const idx = pool.findIndex((t) => (wantStar ? t.startsWith(want) : t === want))
+      if (idx === -1) return false
+      pool.splice(idx, 1)
+    }
+  }
+  return true
 }
 
 /** Expand a leading `~` / `~/` to the home directory; other strings pass through. */
@@ -416,6 +559,20 @@ export class ConfigPermissionGate implements PermissionGate {
     return rule.argGlob === undefined ? true : globMatch(normalizeCommand(rule.argGlob), s)
   }
 
+  /**
+   * Deny-side exec matching, two paths ORed: the legacy normalized-string
+   * glob (every rule keeps firing on exactly what it fired on before) plus
+   * token-set cover (closes the flag-reordering/aggregate-flag blind spot —
+   * `exec:rm -rf*` also catches `rm -r -f x`). Allow/decided/grants never use
+   * the token path: widening an auto-allow would be fail-open.
+   */
+  #execDenyHit(rule: DenyRule, tool: string, segment: string): boolean {
+    if (rule.tool !== tool) return false
+    if (rule.argGlob === undefined) return true
+    if (globMatch(normalizeCommand(rule.argGlob), normalizeCommand(segment))) return true
+    return denyTokenCover(rule.argGlob, segment)
+  }
+
   async check(toolCall: ToolCallBlock): Promise<PermissionDecision> {
     const tool = toolCall.name
     const profile = this.#profiles.get(tool) ?? permissionProfile(undefined)
@@ -431,9 +588,9 @@ export class ConfigPermissionGate implements PermissionGate {
     // （fail-closed）。免审档没有人工兜底，deny 黑名单仍最优先。
     if (this.#mode === "trusted") {
       if (profile.argField === "command") {
-        const subs = splitSubcommands(arg).map(normalizeCommand)
+        const subs = splitSubcommands(arg)
         for (const rule of this.#deny) {
-          if (subs.some((s) => this.#execRuleMatches(rule, tool, s))) {
+          if (subs.some((s) => this.#execDenyHit(rule, tool, s))) {
             return { type: "deny", reason: "blacklist", noteText: `规则命中黑名单: ${rule.source}` }
           }
         }
@@ -476,21 +633,22 @@ export class ConfigPermissionGate implements PermissionGate {
     // concatenation-free command — a rule like `exec:git status*` must not
     // wave through `git status; …`.
     if (profile.argField === "command") {
-      const subs = splitSubcommands(arg).map(normalizeCommand)
+      const subs = splitSubcommands(arg)
       for (const rule of this.#deny) {
-        if (subs.some((s) => this.#execRuleMatches(rule, tool, s))) {
+        if (subs.some((s) => this.#execDenyHit(rule, tool, s))) {
           return { type: "deny", reason: "blacklist", noteText: `规则命中黑名单: ${rule.source}` }
         }
       }
       if (subs.length === 1) {
-        if (this.#allow.some((r) => this.#execRuleMatches(r, tool, subs[0]))) {
+        const single = normalizeCommand(subs[0]!)
+        if (this.#allow.some((r) => this.#execRuleMatches(r, tool, single))) {
           return { type: "allow", reason: "whitelist" }
         }
-        if (this.#decided.some((r) => this.#execRuleMatches(r, tool, subs[0]))) {
+        if (this.#decided.some((r) => this.#execRuleMatches(r, tool, single))) {
           return { type: "allow", reason: "learned" }
         }
         if (this.#sessionGrantsEnabled && this.#mode !== "auto" && this.#grants !== undefined) {
-          const grantHit = this.#grants.rules().some((r) => this.#execRuleMatches(r, tool, subs[0]))
+          const grantHit = this.#grants.rules().some((r) => this.#execRuleMatches(r, tool, single))
           if (grantHit) return { type: "allow", reason: "session_grant" }
         }
       }

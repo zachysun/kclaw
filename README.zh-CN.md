@@ -146,7 +146,7 @@ providers:
 | `web.allowPrivateNetworks` | 默认 false：`web_fetch` 拒绝解析到私网/loopback 的地址（redirect 每一跳都会检查）；需要抓本机服务（如本机 Ollama）时设 true 放行。 |
 | `~/.kclaw/AGENTS.md` | agent 人设，注入系统提示词。 |
 
-`exec:` 规则按归一化命令匹配——空白折叠为单空格、命令取 basename（`/bin/rm` ≡ `rm`）；含接续符（`;` `&&` `||` `|`、换行、命令替换 `$(...)`/反引号）的命令不会命中 allow/会话授权（回退确认），deny 则对每个子命令分别匹配。exec 规则是尽力而为的防线，不是沙箱。
+`exec:` 规则按归一化命令匹配——空白折叠为单空格、命令取 basename（`/bin/rm` ≡ `rm`）；接续符拆分感知引号（`echo "a;b"` 是一段），deny 匹配在此基础上再加 token 集合覆盖——旗标换序与聚合旗标（`rm -r -f` ≡ `rm -rf`）同样命中黑名单；含接续符（`;` `&&` `||` `|`、换行、命令替换 `$(...)`/反引号）的命令不会命中 allow/会话授权（回退确认）。exec 规则是尽力而为的防线，不是沙箱。
 
 > [!NOTE]
 > 数据目录可用 `KCLAW_HOME` 或 `--home <dir>` 重定向（测试友好）。

