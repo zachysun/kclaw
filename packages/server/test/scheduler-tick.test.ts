@@ -156,7 +156,7 @@ function backdate(scheduler: JobScheduler, id: string): void {
   scheduler.update(id, { nextRunAt: new Date(Date.now() - 60_000).toISOString() })
 }
 
-function startTick(env: TickEnv, intervalMs: number, purgeTtlMs?: number, defaultMode?: PermissionMode): { stop(): Promise<void> } {
+function startTick(env: TickEnv, intervalMs: number, purgeTtlMs?: number, defaultMode?: PermissionMode, now?: () => Date): { stop(): Promise<void> } {
   const tick = startSchedulerTick({
     scheduler: env.scheduler,
     run: env.manager,
@@ -165,6 +165,7 @@ function startTick(env: TickEnv, intervalMs: number, purgeTtlMs?: number, defaul
     intervalMs,
     purgeTtlMs,
     ...(defaultMode === undefined ? {} : { defaultMode }),
+    ...(now === undefined ? {} : { now }),
   })
   tickers.push(tick)
   return tick
@@ -176,9 +177,14 @@ describe("startSchedulerTick", () => {
   it("fires a due job end to end: session, job note, markRun ok, no re-run", async () => {
     const env = makeEnv(scriptClient([textTurn("早报好了")]))
     const job = env.scheduler.create({ name: "早报", cron: "* * * * *", prompt: "给我今日早报" })
-    backdate(env.scheduler, job.id)
+    // 时钟钉死在 t0：claimDue 把 next_run_at 推进到"下一个分钟边界"（12:01），
+    // 真实时钟若在观察窗内跨过边界，* * * * * 的任务会合法地再次到期——
+    // 合跑负载下偶发双触发就是这个机理。固定 now 后 next_run_at 永远在
+    // "未来"，no-re-run 断言与真实时钟彻底解耦（t0 取半分钟处，边界 30s 外）。
+    const t0 = new Date("2026-06-01T12:00:30.000Z")
+    env.scheduler.update(job.id, { nextRunAt: new Date(t0.getTime() - 60_000).toISOString() })
 
-    startTick(env, 25)
+    startTick(env, 25, undefined, undefined, () => t0)
 
     await waitForEvent(env.socket, "job.completed")
 
