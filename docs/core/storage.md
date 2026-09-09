@@ -52,7 +52,7 @@ export function resolvePaths(home?: string): KclawPaths
 | 字段 | 默认值 | 含义 / 消费方 |
 |------|--------|---------------|
 | `providers.default` | `""` | 默认 provider 名，指向 entries 里的一条 |
-| `providers.entries` | `{}` | `Record<名, { baseUrl, apiKey, model }>`；daemon 启动时解析（config 优先，`KCLAW_LLM_BASE_URL` / `KCLAW_LLM_API_KEY` / `KCLAW_LLM_MODEL` 环境变量补空） |
+| `providers.entries` | `{}` | `Record<名, { baseUrl, apiKey, model, contextWindow?, maxOutput? }>`；daemon 启动时解析（config 优先，`KCLAW_LLM_BASE_URL` / `KCLAW_LLM_API_KEY` / `KCLAW_LLM_MODEL` 环境变量补空）。`contextWindow` 参与压缩预算的 min 解析、`maxOutput` 随请求下发 max_tokens（见 [compaction](./compaction.md)） |
 | `providers.timeoutMs` | `120000` | 单次 LLM 请求超时（`DEFAULT_LLM_TIMEOUT_MS`）；可选字段仅为兼容旧配置文件 |
 | `permissions.allow` / `deny` | `[]` / `["exec:sudo*", "exec:rm -rf*"]` | 权限规则，见 [permissions](./permissions.md) |
 | `permissions.confirmTimeoutMs` | `120000` | 人工确认等待上限，超时按拒绝处理 |

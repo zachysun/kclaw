@@ -218,6 +218,41 @@ describe("executeRun × hook system", () => {
     // 无任何钩子失败（修复前这里是 fatal timeout：executeRun 直接拒绝）
     expect(bus.events.some((e) => e.type === "hook.failed")).toBe(false)
   })
+
+  it("模型条目的 contextWindow 收紧压缩线、maxOutput 随请求下发", async () => {
+    // 预算取 min(会话上限, 模型窗口)：窗口 1000 → 黄线 660。回复锚点 700 在
+    // 默认 128k 预算下永远不会触发压缩，但被窗口压过线——压缩必须发生，
+    // 且 maxOutput 以 max_tokens 形式出现在发给供应商的请求里。
+    const base = loadConfig(resolvePaths(home))
+    const cfg = {
+      ...base,
+      providers: {
+        ...base.providers,
+        default: "m",
+        entries: { m: { baseUrl: "http://x", apiKey: "k", model: "m1", contextWindow: 1000, maxOutput: 111 } },
+      },
+    }
+    const requests: Array<{ maxTokens?: number }> = []
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        requests.push(req)
+        yield { type: "text_delta", delta: "x".repeat(2000) }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 700, outputTokens: 1 } }
+      },
+    }
+    const { engine, bus, sessions, sessionId } = makeEngine({ llm, config: cfg })
+    // 预置一条早先的用户消息：给 chooseBoundary 留出可压的分界（单轮切不出）
+    const seed = newMessage(sessionId, "user", [{ id: "b-seed", type: "text", text: "x".repeat(2000) }])
+    sessions.appendMessage(sessionId, seed)
+
+    const outcome = await executeRun(engine, handoff(sessionId, "x".repeat(2000)))
+    expect(outcome.stopReason).toBe("end_turn")
+    expect(bus.events.some((e) => e.type === "compaction.started" && e.payload.phase === "post-run")).toBe(true)
+    expect(sessions.meta(sessionId)?.compaction).toBeDefined()
+    // 主 run 的请求带 max_tokens；压缩摘要请求（两次 LLM 调用）不携带
+    expect(requests.filter((r) => r.maxTokens === 111).length).toBeGreaterThanOrEqual(1)
+    expect(requests.some((r) => r.maxTokens === undefined)).toBe(true)
+  })
 })
 
 /** 防止 runAgent import 被裁掉的类型引用（loop 语义测试在 agent/ 目录）。 */

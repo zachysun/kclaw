@@ -97,7 +97,7 @@ export class Compactor {
     config: KclawConfig,
     llm: LlmClient,
     model: string,
-    opts: { phase: CompactionPhase; signal?: AbortSignal; emergency?: boolean; overheadTokens?: number },
+    opts: { phase: CompactionPhase; signal?: AbortSignal; emergency?: boolean; overheadTokens?: number; budget?: number },
   ): Promise<ActiveSummary | null> {
     if (this.#cancelled.has(sessionId) || opts.signal?.aborted === true) return null
     const ctrl = new AbortController()
@@ -110,6 +110,7 @@ export class Compactor {
         signal: ctrl.signal,
         ...(opts.emergency === true ? { emergency: true } : {}),
         ...(opts.overheadTokens === undefined ? {} : { overheadTokens: opts.overheadTokens }),
+        ...(opts.budget === undefined ? {} : { budget: opts.budget }),
       })
       return out.compacted && out.upto !== undefined
         ? { upto: out.upto, top: out.summary ?? "" }
@@ -148,7 +149,7 @@ export class Compactor {
     config: KclawConfig,
     runLlm: LlmClient,
     model: string,
-    opts: { focus?: string; manual?: boolean; phase?: CompactionPhase; signal?: AbortSignal; emergency?: boolean; overheadTokens?: number } = {},
+    opts: { focus?: string; manual?: boolean; phase?: CompactionPhase; signal?: AbortSignal; emergency?: boolean; overheadTokens?: number; budget?: number } = {},
   ): Promise<{ summary?: string; upto?: string; segments: number; active: Message[]; compacted: boolean }> {
     const { sessions } = this.#deps
     const meta = sessions.meta(sessionId)
@@ -159,7 +160,9 @@ export class Compactor {
     const prevIdx = prev === undefined ? -1 : history.findIndex((m) => m.id === prev.upto)
     const active = prevIdx >= 0 ? history.slice(prevIdx + 1) : history
 
-    const budget = config.sessions.contextTokens ?? 128_000
+    // Per-run budget override (model contextWindow from resolveContextTokens);
+    // falls back to the config cap, then the 128k default.
+    const budget = opts.budget ?? config.sessions.contextTokens ?? 128_000
     const atRatio = config.sessions.compactAtRatio ?? 0.66
     const targetRatio = config.sessions.compactTargetRatio ?? 0.33
     const manual = opts.manual === true

@@ -17,7 +17,15 @@ export interface SandboxConfig {
 export interface KclawConfig {
   providers: {
     default: string
-    entries: Record<string, { baseUrl: string; apiKey: string; model: string }>
+    entries: Record<string, {
+      baseUrl: string
+      apiKey: string
+      model: string
+      /** 模型上下文窗口（token）。配置后压缩预算取 min(会话 contextTokens, 此值)；缺省不设上限。 */
+      contextWindow?: number
+      /** 单次回复的输出上限（token）。配置后随请求下发 max_tokens；缺省沿用供应商默认。 */
+      maxOutput?: number
+    }>
     /**
      * Per-request llm timeout the daemon passes to the provider client:
      * bounds the fetch AND the SSE body so a hung provider
@@ -221,4 +229,23 @@ export function loadConfig(paths: KclawPaths): KclawConfig {
 /** Serialize config to config.yaml (atomic whole-file rewrite; 0600 — holds apiKey plaintext). */
 export function saveConfig(paths: KclawPaths, config: KclawConfig): void {
   writeFileAtomic(paths.config, stringify(config), 0o600)
+}
+
+/**
+ * Effective compaction/context budget in tokens: min(explicit session cap,
+ * model window when the entry declares one), defaulting to 128k when neither
+ * exists. `entryKey` is the config entry name a session/user model resolves
+ * to (a raw wire model name that matches no entry falls back to the default
+ * entry, then to no window). All budget readers — the compaction hooks, the
+ * Compactor, the packing budget in run assembly — must resolve through this
+ * one helper so a per-model window tightens every line together.
+ */
+export function resolveContextTokens(config: KclawConfig, entryKey?: string): number {
+  const key = entryKey !== undefined && config.providers.entries[entryKey] !== undefined
+    ? entryKey
+    : config.providers.default
+  const window = config.providers.entries[key]?.contextWindow
+  const configured = config.sessions.contextTokens
+  if (window === undefined || !Number.isFinite(window) || window <= 0) return configured ?? 128_000
+  return Math.min(configured ?? Number.POSITIVE_INFINITY, window)
 }

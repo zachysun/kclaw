@@ -39,7 +39,7 @@ import { newMessage } from "../protocol/messages.js"
 import type { AttachmentRef } from "../protocol/wire.js"
 import type { LlmClient, ToolDefinition } from "../provider/types.js"
 import type { KclawConfig } from "../storage/config.js"
-import { defaultConfig } from "../storage/config.js"
+import { defaultConfig, resolveContextTokens } from "../storage/config.js"
 import type { KclawPaths } from "../storage/paths.js"
 import type { UsageStore } from "../storage/usage.js"
 import type { SessionStore } from "../session/store.js"
@@ -557,12 +557,19 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // model is the entry's `.model` ("deepseek-v4-flash"); resolve keys to that
   // model, leaving already-raw API model names untouched.
   const resolveEntry = (m: string): string => config.providers.entries[m]?.model ?? m
-  const model = resolveEntry(input.model ?? sessionMeta?.model ?? defaultModel)
+  const rawModel = input.model ?? sessionMeta?.model ?? defaultModel
+  const model = resolveEntry(rawModel)
+  // Entry metadata for this run: the budget (contextWindow cap via
+  // resolveContextTokens) feeds every compaction line and the packing
+  // budget; maxOutput rides each request as max_tokens.
+  const entryKey = config.providers.entries[rawModel] !== undefined ? rawModel : config.providers.default
+  const entry = config.providers.entries[entryKey]
+  const budget = resolveContextTokens(config, entryKey)
+  const maxOutput = entry?.maxOutput
 
   // v3 compaction thresholds: the loop's packing budget reads them here; the
-  // compaction decision hooks read the same config inside the chain (single
-  // config source, one read per side).
-  const budget = config.sessions.contextTokens ?? 128_000
+  // compaction decision hooks get the same resolved budget via the chain deps
+  // (single config source, one read per side).
   const atRatio = config.sessions.compactAtRatio ?? 0.66
   // Fixed per-request overhead for the compaction/packing judgments: the
   // assembled system prompt plus the wire tool schemas. The trigger estimate
@@ -586,6 +593,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     signal: controller.signal,
     runLlm,
     model,
+    budget,
     usageStore: engine.deps.usageStore,
     busEmit,
     runIdRef: { get current() { return runId } },
@@ -652,6 +660,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       // 省略预算（黄线值）透传给打包台：预算装不下的工具输出以省略占位符发送；
       // 固定开销（系统提示词 + 工具定义）先行扣除，打包台只裁决消息内容
       tokenBudget: Math.max(0, budget * atRatio - contextOverheadRef.current),
+      ...(maxOutput === undefined ? {} : { maxTokens: maxOutput }),
       onEvent: (e) => {
         if (e.type === "run.started" && e.runId !== undefined) runId = e.runId
         else if (e.type === "llm.completed" || e.type === "llm.failed") llmAttempt = 1

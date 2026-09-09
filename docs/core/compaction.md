@@ -34,7 +34,7 @@
 | 脉络项 | 总摘要进入模型请求的形态：一条 user 消息——交接声明 + `<compacted-summary>` 标签包裹的总摘要——垫在请求 messages 的最前面（见"注入"）。 |
 | 分界 | 压缩内容和保留原文部分的边界，用一条消息的 id 表示。 |
 | 保留部分 | 分界之后、继续按原文发送的近期历史。 |
-| 预算 | 一个会话允许的上下文 token 上限（配置 `sessions.contextTokens`，默认 128000）。 |
+| 预算 | 一个会话允许的上下文 token 上限：取 `sessions.contextTokens`（默认 128000）与模型条目 `providers.entries.<key>.contextWindow` 中的较小者；两者都没配时 128000。所有预算读数（两道触发线、压缩引擎、打包预算）经 `resolveContextTokens` 统一解析，模型窗口一收紧则全线收紧。 |
 | 水位 | 对"当前会话全部未压缩历史"的 token 估算值（`estimateContextTokens`），是两道触发线的读数来源。 |
 | 黄线 | 预算的 66%（`compactAtRatio`）：收尾压缩的触发线，也是工具输出省略的预算值。 |
 | 红线 | 预算的 85%（`compactPanicRatio`）：中途压缩的触发线。 |
@@ -320,11 +320,13 @@ llm.stream({ system: <人格>, messages: [
 
 | 字段 | 默认 | 含义 |
 |------|------|------|
-| `contextTokens` | `128000` | 上下文 token 预算 |
+| `contextTokens` | `128000` | 上下文 token 预算（与模型条目的 `contextWindow` 取较小者生效） |
 | `compactAtRatio` | `0.66` | 黄线：收尾压缩触发线，也是工具输出省略的预算比例 |
 | `compactPanicRatio` | `0.85` | 红线：中途压缩触发线 |
 | `compactTargetRatio` | `0.33` | 压缩后保留部分的目标大小（占预算比例） |
 | `toolResultKeep` | `8` | 发送时保留工具结果原文的**最多条数**（预算驱动省略的条数上限） |
+
+模型条目侧的两个可选字段（`providers.entries.<key>`）：`contextWindow` 是该模型的上下文窗口，作为预算上限参与 `resolveContextTokens` 的 min 解析；`maxOutput` 是单次回复的输出上限，run 装配经 agent 循环随每个请求下发为 `max_tokens`（缺省不下发，沿用供应商默认）。
 
 废弃：`compactThreshold`（旧版 40 条触发）与 `compactKeep`（旧版保留 25 条）。配置文件里存在时不报错，但不再起作用。
 

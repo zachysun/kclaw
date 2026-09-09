@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync, existsSync 
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { resolvePaths } from "../../src/storage/paths.js"
-import { loadConfig, saveConfig, defaultConfig } from "../../src/storage/config.js"
+import { loadConfig, saveConfig, defaultConfig, resolveContextTokens } from "../../src/storage/config.js"
+import type { KclawConfig } from "../../src/storage/config.js"
 import { writeFileAtomic } from "../../src/storage/atomic.js"
 
 let home: string
@@ -215,5 +216,61 @@ describe("writeFileAtomic", () => {
     const paths = resolvePaths(home)
     saveConfig(paths, loadConfig(paths))
     expect(statSync(paths.config).mode & 0o777).toBe(0o600)
+  })
+})
+
+describe("resolveContextTokens", () => {
+  const base = (over: Partial<KclawConfig["providers"]> = {}) => {
+    const cfg = structuredClone(defaultConfig)
+    Object.assign(cfg.providers, over)
+    return cfg
+  }
+
+  it("falls back to 128k when nothing is declared", () => {
+    expect(resolveContextTokens(base())).toBe(128_000)
+  })
+
+  it("uses the session cap when the model has no window", () => {
+    const cfg = base()
+    cfg.sessions.contextTokens = 50_000
+    expect(resolveContextTokens(cfg)).toBe(50_000)
+  })
+
+  it("uses the model window when no session cap exists", () => {
+    const cfg = base({
+      default: "m",
+      entries: { m: { baseUrl: "http://x", apiKey: "k", model: "m1", contextWindow: 200_000 } },
+    })
+    expect(resolveContextTokens(cfg, "m")).toBe(200_000)
+  })
+
+  it("takes the min when both exist", () => {
+    const cfg = base({
+      default: "m",
+      entries: { m: { baseUrl: "http://x", apiKey: "k", model: "m1", contextWindow: 32_000 } },
+    })
+    cfg.sessions.contextTokens = 128_000
+    expect(resolveContextTokens(cfg, "m")).toBe(32_000)
+    cfg.sessions.contextTokens = 16_000
+    expect(resolveContextTokens(cfg, "m")).toBe(16_000)
+  })
+
+  it("unknown entry key falls back to the default entry's window", () => {
+    const cfg = base({
+      default: "m",
+      entries: { m: { baseUrl: "http://x", apiKey: "k", model: "m1", contextWindow: 90_000 } },
+    })
+    // raw wire model name "m1" matches no entry key → default entry "m"
+    expect(resolveContextTokens(cfg, "m1")).toBe(90_000)
+  })
+
+  it("ignores nonsensical window values", () => {
+    const cfg = base({
+      default: "m",
+      entries: { m: { baseUrl: "http://x", apiKey: "k", model: "m1", contextWindow: 0 } },
+    })
+    cfg.sessions.contextTokens = 50_000
+    expect(resolveContextTokens(cfg, "m")).toBe(50_000)
+    expect(resolveContextTokens(cfg)).toBe(50_000)
   })
 })

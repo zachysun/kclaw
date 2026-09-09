@@ -56,6 +56,12 @@ export interface BuiltinHookDeps {
   signal: AbortSignal
   runLlm: LlmClient
   model: string
+  /**
+   * Effective context budget (resolveContextTokens over the run's model
+   * entry): the compaction trigger lines read this instead of re-deriving
+   * from config, so a per-model contextWindow tightens them too.
+   */
+  budget: number
   usageStore?: UsageStore
   /** bus fan-out with its swallow-guard (the assembly's busEmit). */
   busEmit: (e: AgentEvent) => void
@@ -115,12 +121,11 @@ export const BUILTIN_HOOK_DEFINITIONS: ReadonlyArray<{
 export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
   const {
     sessionId, sessions, memory, config, workspace, compactor, signal,
-    runLlm, model, usageStore, busEmit, runIdRef, jobNotes, trigger,
+    runLlm, model, budget, usageStore, busEmit, runIdRef, jobNotes, trigger,
     llmUserText, drainSteer, skillList, contextOverhead, compactionAfter,
   } = deps
   const childRun = deps.childRun === true
   const usageSessionId = deps.usageSessionId ?? sessionId
-  const budget = config.sessions.contextTokens ?? 128_000
   const atRatio = config.sessions.compactAtRatio ?? 0.66
   const panicRatio = config.sessions.compactPanicRatio ?? 0.85
   const runCtx = () => (runIdRef.current === undefined ? { sessionId } : { sessionId, runId: runIdRef.current })
@@ -202,6 +207,7 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
         phase: "in-run",
         signal,
         overheadTokens: overhead,
+        budget,
       })
       void compactionAfter("in-run", "ok")
       return next
@@ -246,6 +252,7 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
         phase: "post-run",
         signal,
         overheadTokens: overhead,
+        budget,
       })
       void compactionAfter("post-run", "ok")
     }, Number.POSITIVE_INFINITY),

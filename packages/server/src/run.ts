@@ -48,6 +48,7 @@ import {
   type ToolExecutor,
   type UsageStore,
   type AutoLearnCounter,
+  resolveContextTokens,
 } from "@kclaw/core"
 
 export interface RunManagerDeps {
@@ -392,7 +393,15 @@ export class RunManager {
     const history = sessions.readMessages(sessionId)
     const defaultModel = this.#deps.model ?? config.providers.entries[config.providers.default]?.model ?? ""
     const model = config.providers.entries[meta.model ?? ""]?.model ?? meta.model ?? defaultModel
-    const out = await this.#compactor.compact(sessionId, history, "", config, llm, model, { focus, manual: true, phase: "manual" })
+    // Same budget resolution as executeRun: a model entry contextWindow
+    // tightens the manual path's line too.
+    const entryKey = meta.model !== undefined && config.providers.entries[meta.model] !== undefined ? meta.model : undefined
+    const out = await this.#compactor.compact(sessionId, history, "", config, llm, model, {
+      focus,
+      manual: true,
+      phase: "manual",
+      budget: resolveContextTokens(config, entryKey),
+    })
     return {
       message: out.compacted
         ? `压缩了 ${out.segments} 段，剩 ${out.active.length} 条原文消息`

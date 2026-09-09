@@ -59,6 +59,8 @@ export interface AgentDeps {
   window?: number
   /** Tool results kept verbatim in the provider view; undefined = keep all. */
   toolResultKeep?: number
+  /** Per-request output cap (config entry `maxOutput`) sent as max_tokens; undefined = provider default. */
+  maxTokens?: number
   maxIterations?: number
   /** executors keyed by tool name; calls to unknown names come back as error results */
   tools?: Map<string, ToolExecutor>
@@ -276,6 +278,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
           system: input.system,
           messages: await buildMessages(),
           tools: deps.toolDefs ?? [],
+          ...(deps.maxTokens === undefined ? {} : { maxTokens: deps.maxTokens }),
         }), deps.signal)) {
           // Abort checkpoint: stop consuming the stream the moment the signal fires.
           if (deps.signal?.aborted) break
