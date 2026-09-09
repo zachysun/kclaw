@@ -41,7 +41,7 @@ exec 工具消费的最小面（`tools/exec.ts` 的 `ExecSandboxSpawn`）只有 
 两平台共同点：
 
 - **路径一律 realpath 形态**：`/tmp` 在 macOS 真实路径是 `/private/tmp`，词面匹配可被符号链接绕开（实测踩坑）。`realpathWithin`（来自 permissions/engine.ts）统一解析。
-- **网络默认允许（v1 拍板决策）**：bwrap 不加 `--unshare-net`，seatbelt profile 放行 `network*`——git clone / npm install / curl 照常工作；网络收窄是后续迭代。
+- **网络默认允许，可配 deny**：缺省（`sandbox.network: "allow"`）bwrap 不加 `--unshare-net`、seatbelt profile 放行 `network*`——git clone / npm install / curl 照常工作。`sandbox.network: "deny"` 时 exec 子进程不可建出站/入站连接：Seatbelt 换成 `(deny network-outbound)` + `(deny network-inbound)`（实测裸 `(deny network*)` 过宽——通配符连 shell 启动要用的内部操作一起拦，进程直接起不来；outbound/inbound 恰好拦 `connect()`/`accept()` 而进程可用），bwrap 加 `--unshare-net`。**web_search/web_fetch 不受影响**：它们在 daemon 进程内执行、不走 exec 子进程——这是"断网沙箱不需要沙箱外代理"的架构红利。
 - **进程组语义保留**：包装器 spawn 时 `detached: true`，exec 工具的超时 `kill(-pid)` 照旧波及整棵进程树；bwrap 的 `--new-session --die-with-parent` 双保险。
 - **越界表现为命令的普通失败**：沙箱内访问放行集外路径得到 Operation not permitted / Read-only file system 之类错误，exec 以 error result 透传——命令"被沙箱拒绝"与"启动失败"都 fail-closed。
 
@@ -63,12 +63,13 @@ bwrap 不可用 → 不可用（回落人工确认）
 sandbox:
   enabled: true        # 默认开
   writeRoots: []       # 追加写白名单（realpath 形式），如 ~/.npm 缓存目录
+  network: allow       # allow | deny；deny 时 exec 子进程断网（web 工具不受影响）
 ```
 
 daemon 级基础设施配置（非会话偏好），不进会话 meta。npm 等工具在沙箱内需要可写缓存：把 `npm_config_cache` 指到工作区或临时目录，或把缓存路径加进 `writeRoots` 白名单。
 
 ## 测试策略
 
-- **纯函数**：`seatbeltProfile` / `bwrapArgs` 断言布局形状（写白名单含工作区与 writeRoots、`~/.kclaw` 遮蔽、无 unshare-net、命令经 `/bin/sh -c`）。
+- **纯函数**：`seatbeltProfile` / `bwrapArgs` 断言布局形状（写白名单含工作区与 writeRoots、`~/.kclaw` 遮蔽、缺省无 unshare-net、deny 才有、命令经 `/bin/sh -c`）。
 - **注入 seam**：`createExecSandbox` 的 `which`/`tmpDirs` 可注入；exec 工具的沙箱参数用 fake sandbox（放行 / 失败 / 超时）驱动——见 `tools/exec.test.ts`。
-- **真实冒烟**（环境依赖，慢速测试）：macOS 本机真 `sandbox-exec`（写工作区成功、写家目录被拒、读 `~/.kclaw` 被拒、网络 socket 可建），Linux CI ubuntu runner 真 bwrap（写工作区成功、家目录只读、`~/.kclaw` 遮蔽）。冒烟用注入的**假 home**（tmp 或真 home 下的临时目录），不碰真实 `~/.kclaw`。
+- **真实冒烟**（环境依赖，慢速测试）：macOS 本机真 `sandbox-exec`（写工作区成功、写家目录被拒、读 `~/.kclaw` 被拒、网络 socket 可建；network deny 时出站 connect 得 EPERM 而文件操作照常），Linux CI ubuntu runner 真 bwrap（写工作区成功、家目录只读、`~/.kclaw` 遮蔽）。冒烟用注入的**假 home**（tmp 或真 home 下的临时目录），不碰真实 `~/.kclaw`。

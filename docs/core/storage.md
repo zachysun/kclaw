@@ -71,7 +71,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `usage.prices` | `{}` | 模型 → `{inputPerM?, outputPerM?}`：每百万 token 的美元单价，用量台账算成本用；缺条目的模型成本按 0 |
 | `mcp.servers` | `{}` | 外部 MCP server 配置表（stdio/http 两种形态），daemon 启动时据此装配 McpManager（见 [mcp](./mcp.md)） |
 | `exec.timeoutMs` / `maxOutputBytes` | `60000` / `102400`（100 KiB） | exec 工具超时与输出截断上限 |
-| `sandbox.enabled` / `writeRoots` | `true` / `[]` | exec 沙箱整体开关与追加写白名单（realpath 形态），见 [sandbox](./sandbox.md)；可选字段仅为兼容旧配置文件 |
+| `sandbox.enabled` / `writeRoots` / `network` | `true` / `[]` / `"allow"` | exec 沙箱整体开关、追加写白名单（realpath 形态）与沙箱内网络开关（deny 时 exec 子进程断网，web 工具不受影响），见 [sandbox](./sandbox.md)；可选字段仅为兼容旧配置文件 |
 | `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 清理用（见 [jobs](./jobs.md)） |
 | `sessions.contextTokens` / `compactAtRatio` / `compactPanicRatio` / `compactTargetRatio` / `toolResultKeep` | `128000` / `0.66` / `0.85` / `0.33` / `8` | 上下文压缩 v2/v3（见 [compaction](./compaction.md)）：token 预算、触发线（估算发送量达预算 × 0.66 即压缩）、红线（运行中水位达预算 × 0.85 时在迭代边界触发中途压缩）、压缩后保留部分目标（预算 × 0.33）、发送时保留最近几个工具结果原文。五个字段均可选，缺省值在读取处兜底（前四个在 run 装配 core `executeRun`，`compactTargetRatio` 在压缩引擎 `Compactor`） |
 | `sessions.toolLoopMaxRepeats` | `5` | 工具死循环守卫：同一工具调用（同名同参数）连续执行达 N 次后，该次结果附加 `<system-reminder kind="loop-guard">` 换策略提醒（跨工具回合计数、结果改变即重置）；`0` 关闭（见 [agent-loop](./agent-loop.md)） |

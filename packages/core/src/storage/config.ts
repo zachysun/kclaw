@@ -12,6 +12,13 @@ export interface SandboxConfig {
   enabled: boolean
   /** Extra realpath write roots (e.g. the npm cache dir). */
   writeRoots: string[]
+  /**
+   * 沙箱内网络开关（`"allow" | "deny"`，缺省 `"allow"` 保持既有行为）。deny 时
+   * exec 子进程不可建出站/入站连接（Seatbelt `deny network-outbound/inbound`、
+   * bwrap `--unshare-net`）；web_search/web_fetch 在 daemon 进程内执行、不走
+   * exec 子进程，不受此开关影响。
+   */
+  network?: "allow" | "deny"
 }
 
 export interface KclawConfig {

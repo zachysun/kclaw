@@ -16,8 +16,11 @@
  *   First-match rule order matters (an allow list then a deny fallback).
  * - Linux: bubblewrap, no setuid — whole root ro-bind, ~/.kclaw tmpfs-masked,
  *   /tmp + workspace writable, `--die-with-parent --new-session` so the exec
- *   tool's process-group kill and the timeout reach the whole tree. NO
- *   `--unshare-net` in v1 (network stays open, a settled decision).
+ *   tool's process-group kill and the timeout reach the whole tree. Network
+ *   stays OPEN by default (v1 decision); `sandbox.network: "deny"` opts into
+ *   isolation (`deny network-outbound/inbound` on Seatbelt, `--unshare-net`
+ *   for bwrap) — web tools are unaffected (they run in the daemon, not the
+ *   exec child).
  * - Linux fallback chain: bwrap → unavailable (manual confirmation).
  *   Landlock fallback is a follow-up: pure Node cannot issue the
  *   landlock_create_ruleset syscall, and no mature CLI wrapper exists.
@@ -58,22 +61,30 @@ const realpathOf = (p: string): string => realpathWithin(resolve(p))
  * writable, and the ~/.kclaw read-denial comes before the broad read allow.
  * Paths must be realpath form (Seatbelt matches literally; /tmp is really
  * /private/tmp — a lexical /tmp rule is bypassable via the symlink).
+ *
+ * network: "allow" keeps `(allow network*)`. "deny" swaps it for outbound +
+ * inbound denies — a bare `(deny network*)` is TOO BROAD on Seatbelt (the
+ * wildcard also matches internal ops the shell needs to even start, observed
+ * empirically: process exec broke), while outbound+inbound precisely blocks
+ * connect()/accept() and leaves the process usable.
  */
 export function seatbeltProfile(o: {
   workspace: string
   home: string
   writeRoots: string[]
   tmpDirs: string[]
+  network?: "allow" | "deny"
 }): string {
   const ws = realpathOf(o.workspace)
   const home = realpathOf(o.home)
   const write = [ws, ...o.tmpDirs.map(realpathOf), ...o.writeRoots.map(realpathOf)]
   const writeClause = write.map((p) => `(subpath "${p}")`).join(" ")
+  const network = o.network ?? "allow"
   return [
     "(version 1)",
     '(import "system.sb")',
     "(allow process*)",
-    "(allow network*)",
+    ...(network === "deny" ? ["(deny network-outbound)", "(deny network-inbound)"] : ["(allow network*)"]),
     `(deny file-read* (subpath "${join(home, ".kclaw")}"))`,
     "(allow file-read*)",
     `(allow file-write* ${writeClause})`,
@@ -85,22 +96,25 @@ export function seatbeltProfile(o: {
 /**
  * Linux bubblewrap argv (leading non-flag = the command to run inside).
  * Whole root ro-bind, then tmpfs/bind overrides — a later mount of the same
- * path shadows an earlier one, so the writable spots win. No --unshare-net
- * (network open in v1). --new-session makes bwrap the session leader, so the
- * exec tool's `kill(-pid)` (its own new process group) still reaps the whole
- * tree, and --die-with-parent covers a SIGKILL'd bwrap's descendants.
+ * path shadows an earlier one, so the writable spots win. network: "deny"
+ * adds `--unshare-net` (own network namespace, loopback down). --new-session
+ * makes bwrap the session leader, so the exec tool's `kill(-pid)` (its own
+ * new process group) still reaps the whole tree, and --die-with-parent covers
+ * a SIGKILL'd bwrap's descendants.
  */
 export function bwrapArgs(o: {
   workspace: string
   home: string
   writeRoots: string[]
   command: string
+  network?: "allow" | "deny"
 }): string[] {
   const ws = realpathOf(o.workspace)
   const home = realpathOf(o.home)
   const args = [
     "--die-with-parent",
     "--new-session",
+    ...(o.network === "deny" ? ["--unshare-net"] : []),
     "--ro-bind", "/", "/",
     "--tmpfs", join(home, ".kclaw"),
     "--tmpfs", "/tmp",
@@ -146,6 +160,7 @@ export function createExecSandbox(
   }
   const home = o.home ?? homedir()
   const tmpDirs = o.tmpDirs ?? [tmpdir(), "/private/tmp"]
+  const network = cfg.network ?? "allow"
   const which = o.which ?? findOnPath
   // The exec tool always spawns with cwd = workspace, so that is the layout's
   // workspace when the caller did not pin one.
@@ -158,7 +173,7 @@ export function createExecSandbox(
     return {
       available: true,
       spawn(command, opts) {
-        const profile = seatbeltProfile({ workspace: workspaceFor(opts.cwd), home, writeRoots: cfg.writeRoots, tmpDirs })
+        const profile = seatbeltProfile({ workspace: workspaceFor(opts.cwd), home, writeRoots: cfg.writeRoots, tmpDirs, network })
         return spawn(SEATBELT_BIN, ["-p", profile, "/bin/sh", "-c", command], {
           cwd: opts.cwd,
           // Own process group so the exec tool's timeout kill(-pid) reaches
@@ -181,7 +196,7 @@ export function createExecSandbox(
     return {
       available: true,
       spawn(command, opts) {
-        const args = bwrapArgs({ workspace: workspaceFor(opts.cwd), home, writeRoots: cfg.writeRoots, command })
+        const args = bwrapArgs({ workspace: workspaceFor(opts.cwd), home, writeRoots: cfg.writeRoots, command, network })
         return spawn(bwrap, args, { cwd: opts.cwd, detached: true })
       },
     }

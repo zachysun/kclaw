@@ -39,6 +39,25 @@ describe("seatbeltProfile", () => {
     expect(p).toContain('(subpath "/Users/u/.npm")')
     expect(p).toContain("(allow network*)")
   })
+
+  it("network deny swaps the allow for outbound+inbound denies (bare network* breaks exec)", () => {
+    const p = seatbeltProfile({
+      workspace: "/Users/u/proj",
+      home: "/Users/u",
+      writeRoots: [],
+      tmpDirs: ["/private/tmp"],
+      network: "deny",
+    })
+    expect(p).not.toContain("(allow network*)")
+    expect(p).toContain("(deny network-outbound)")
+    expect(p).toContain("(deny network-inbound)")
+    // file rules untouched
+    expect(p).toContain("(allow file-read*)")
+    expect(p).toContain("(deny file-write*)")
+    // 缺省（undefined）等价 allow
+    const def = seatbeltProfile({ workspace: "/w", home: "/h", writeRoots: [], tmpDirs: [] })
+    expect(def).toContain("(allow network*)")
+  })
 })
 
 describe("bwrapArgs", () => {
@@ -58,8 +77,11 @@ describe("bwrapArgs", () => {
       expect(s).toContain(`--bind ${ws} ${ws}`)
       expect(s).toContain(`--bind ${extra} ${extra}`)
       expect(s).toContain(`--chdir ${ws} /bin/sh -c git status`)
-      // v1 decision: network stays open — no unshare-net anywhere
+      // default (allow): no unshare-net anywhere
       expect(s).not.toContain("unshare-net")
+      // network deny adds --unshare-net
+      const denied = bwrapArgs({ workspace: ws, home, writeRoots: [], command: "true", network: "deny" })
+      expect(denied).toContain("--unshare-net")
     } finally {
       rmSync(ws, { recursive: true, force: true })
       rmSync(home, { recursive: true, force: true })
@@ -164,6 +186,31 @@ describe("macOS seatbelt smoke", { skip: !isMac }, () => {
       rmSync(ws, { recursive: true, force: true })
       rmSync(home, { recursive: true, force: true })
       rmSync(extra, { recursive: true, force: true })
+    }
+  })
+
+  it("network deny: connect is blocked (EPERM) while file ops keep working", async () => {
+    const ws = mkdtempSync(join(tmpdir(), "kclaw-sbx-ws-"))
+    const home = fakeHome()
+    try {
+      const sb = createExecSandbox(
+        { enabled: true, writeRoots: [], network: "deny" },
+        { workspace: ws, home, tmpDirs: ["/private/tmp"] },
+      )
+      expect(sb.available).toBe(true)
+
+      // file ops untouched
+      const ok = await runIn(sb, `echo hi > ${ws}/out.txt`, ws)
+      expect(ok.status).toBe(0)
+
+      // an outbound connect is denied by the sandbox (EPERM), not by the
+      // absence of a listener (that would be ECONNREFUSED)
+      const py = 'import socket\ntry:\n    s=socket.socket()\n    s.connect(("127.0.0.1", 54321))\n    print("CONNECT-OK")\nexcept Exception as e:\n    print("CONNECT-FAIL:", type(e).__name__)'
+      const net = await runIn(sb, `python3 -c '${py}'`, ws)
+      expect(net.output).toContain("CONNECT-FAIL: PermissionError")
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+      rmSync(home, { recursive: true, force: true })
     }
   })
 })
