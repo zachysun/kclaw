@@ -62,10 +62,18 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
     case "compaction": {
       const segments = [...(next.compaction?.segments ?? []), { upto: event.upto, summary: event.segmentSummary }]
       next.compaction = { segments, top: event.top, upto: event.upto }
+      // 压缩改写消息历史 = 请求前缀必然全量失效（缓存冷启动），正是重冻结
+      // 边界：清除冻结基线，下一次 run 重新装配并经 system 事件固化新基线。
+      delete next.systemBaseline
       next.updatedAt = event.at
       break
     }
     case "memory": break // 不更新任何投影字段（含 updatedAt）
+    case "system":
+      // 审计留痕即基线写入口：每次 run 的系统提示词全量事件 upsert 冻结基线
+      // （提示词缓存纪律）。基线外字段与 updatedAt 一律不动。
+      next.systemBaseline = { text: event.text, frozenAt: event.at }
+      break
     case "sandbox.checked": break // 审计事件同样不进投影、不推进 updatedAt
   }
   return next

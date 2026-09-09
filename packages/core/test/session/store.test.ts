@@ -368,21 +368,39 @@ describe("SessionStore event sourcing", () => {
     expect(after).toEqual(before)
   })
 
-  it("appendSystem 投影穿透：meta.json 全字段不变；仅 system 事件流 rebuildMeta 不崩", () => {
+  it("appendSystem 投影效果=upsert 冻结基线：updatedAt 与其余字段不动，压缩清除，rebuild 一致", () => {
     const store = new SessionStore(dir)
     const meta = store.create("t")
     store.updateMeta(meta.id, { model: "gpt-4", mode: "readonly" })
     const before = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
-    store.appendSystem(meta.id, { at: new Date().toISOString(), text: "系统提示词全文" })
+    store.appendSystem(meta.id, { at: "2026-01-02T00:00:00.000Z", text: "run-1 的系统提示词" })
     const after = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
-    expect(after).toEqual(before) // 含 updatedAt 在内的所有投影字段逐字段一致
+    // 基线之外的投影字段（含 updatedAt）逐字段一致；基线文本与冻结时刻就位
+    expect(after.systemBaseline).toEqual({ text: "run-1 的系统提示词", frozenAt: "2026-01-02T00:00:00.000Z" })
+    const { systemBaseline: _drop, ...rest } = after
+    const { systemBaseline: _dropBefore, ...restBefore } = before
+    expect(rest).toEqual(restBefore)
+    // 后一条 system 事件覆盖前一条（最新胜出）
+    store.appendSystem(meta.id, { at: "2026-01-03T00:00:00.000Z", text: "run-2 的系统提示词" })
+    expect(store.meta(meta.id)!.systemBaseline).toEqual({ text: "run-2 的系统提示词", frozenAt: "2026-01-03T00:00:00.000Z" })
+    // 压缩事件清除基线（重冻结边界）；压缩后下一条 system 事件重新固化
+    store.appendCompaction(meta.id, { at: "2026-01-04T00:00:00.000Z", trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
+    expect(store.meta(meta.id)!.systemBaseline).toBeUndefined()
+    store.appendSystem(meta.id, { at: "2026-01-05T00:00:00.000Z", text: "压缩后重新装配的系统提示词" })
+    expect(store.meta(meta.id)!.systemBaseline?.text).toBe("压缩后重新装配的系统提示词")
+    // 事件流全量重建投影，与增量推进结果一致
+    store.appendCompaction(meta.id, { at: "2026-01-06T00:00:00.000Z", trigger: "manual", from: "m1", upto: "m2", messages: 1, segmentSummary: "s2", top: "t2" })
+    const rebuilt = store.rebuildMeta(meta.id)!
+    expect(rebuilt).toEqual(store.meta(meta.id))
+    expect(rebuilt.systemBaseline).toBeUndefined()
     // 事件流仅一条 system 事件（无 session.created）：rebuildMeta 从 at 取时间，不崩
     const only = "ses_sys_only"
     store.appendSystem(only, { at: new Date().toISOString(), text: "唯一一条 system 事件" })
-    const rebuilt = store.rebuildMeta(only)!
-    expect(rebuilt.id).toBe(only)
-    expect(Number.isNaN(Date.parse(rebuilt.createdAt))).toBe(false)
-    expect(Number.isNaN(Date.parse(rebuilt.updatedAt))).toBe(false)
+    const onlyMeta = store.rebuildMeta(only)!
+    expect(onlyMeta.id).toBe(only)
+    expect(onlyMeta.systemBaseline?.text).toBe("唯一一条 system 事件")
+    expect(Number.isNaN(Date.parse(onlyMeta.createdAt))).toBe(false)
+    expect(Number.isNaN(Date.parse(onlyMeta.updatedAt))).toBe(false)
   })
 
   it("system 事件按追加顺序穿插在 message/compaction 之间", () => {

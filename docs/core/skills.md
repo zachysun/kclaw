@@ -56,7 +56,7 @@
 
 ### 第一层：系统提示词技能清单（skillListPrompt）
 
-每 run 拼装系统提示词时，把模型可见的技能（未被 `disable-model-invocation` 隐藏的）渲染成一段"可用技能"清单，追加在 AGENTS.md 基础提示与 L2 认知之后（见 [run-manager](../server/run-manager.md) 的装配第 2/9 步）：
+每 run 拼装系统提示词时，把模型可见的技能（未被 `disable-model-invocation` 隐藏的）渲染成一段"可用技能"清单，追加在 AGENTS.md 基础提示与 L2 认知之后（见 [run-manager](../server/run-manager.md) 的装配第 6/11 步）。清单随系统提示词的冻结基线走纪元语义（见 [hooks](./hooks.md)）：纪元中途安装/卸载的技能不重写请求前缀，要等下一次压缩后的重冻结才进清单——但点名与 `skill_read` 每 run 现扫，不受清单陈旧影响。清单格式：
 
 ```
 ## 可用技能

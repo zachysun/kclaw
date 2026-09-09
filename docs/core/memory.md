@@ -169,14 +169,14 @@ updated: 2026-08-30
 
 ### L2 常驻注入（系统提示）
 
-`MemorySystem.cognitionPrompt(workdir)`（`packages/core/src/memory/system.ts`）在每次 run 装配系统提示时由 `system-before` 位置的内置 `system-materials` 钩子调用（见 [hooks](./hooks.md)），返回的认知块作为第一个段落追加在 AGENTS.md 基础提示之后。规则：
+`MemorySystem.cognitionPrompt(workdir)`（`packages/core/src/memory/system.ts`）在 run 装配系统提示时由 `system-before` 位置的内置 `system-materials` 钩子调用（见 [hooks](./hooks.md)），返回的认知块作为第一个段落追加在 AGENTS.md 基础提示之后。规则：
 
 1. **scope 过滤**：只收 `scope: "global"` 与 `scope: "project:<当前项目id>"` 的认知文件；
 2. **token 预算**：`memory.injectTokenBudget`（默认 1000）按 `estimateTokens(title + body)` 记账——**只约束 L2 认知常驻注入**，L1 情节检索的 top-5 是全量注入、不受此限；
 3. **整文件取舍**：按 `rule > persona > wiki` 的优先级逐文件放入，**放不下的整文件跳过**（打一行 `kclaw memory cognition skipped (over inject budget)` 日志），绝不截断；
 4. **块序**固定：`[关于用户]`（persona）→ `[项目认知]`（scope 为 `project:` 的文件）→ `[通用规则]`（全局的 rule/wiki）。
 
-没有任何文件、或全部超出预算时返回空字符串，run 回落到纯基础提示；认知注入失败静默跳过，run 照常进行。
+没有任何文件、或全部超出预算时返回空字符串，run 回落到纯基础提示；认知注入失败静默跳过，run 照常进行。认知段随系统提示词的冻结基线一起走纪元语义（见 [hooks](./hooks.md)）：纪元内的认知更新不重写请求前缀，下一次压缩后的重冻结才带进系统提示。
 
 ### L1 情节检索（用户消息 note）
 

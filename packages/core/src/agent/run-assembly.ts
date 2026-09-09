@@ -619,19 +619,33 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   chain.registerAll(engine.deps.hooks?.snapshot() ?? [])
   if (engine.deps.extraHooks !== undefined) chain.registerAll(engine.deps.extraHooks)
 
-  // 系统提示词（hook 化的组装）：AGENTS.md 基座 →
-  // system-before 链追加段落（内置 system-materials：认知 + 技能列表）→
-  // 末尾恒定拼接注入约定（模型据此识别 <system-reminder> /
-  // <compacted-summary> 是系统注入而非用户输入；放最后保持位置稳定）→
-  // system-after 链（用户可改终稿；内置 system-audit fatal 全量留痕，排在其
-  // 后——审计永远记录模型实际看到的那份）。写失败即本次 run 失败，由驱动器
-  // 的条目级失败兜底（与迁移前一致）。
-  // 子代理 run 用专用精简模板（身份 + 工作区 + 纪律），不带 persona 与记忆材料。
-  const base = childRun ? subagentSystemPrompt(workspace) : systemPrompt(paths.agentsMd)
-  const segments = (await chain.run("system-before", { base })) ?? []
-  let system = [base, ...segments, SYSTEM_INJECTION_CONVENTION].filter((s) => s !== "").join("\n\n")
-  const rewrittenSystem = await chain.run("system-after", { system })
-  if (rewrittenSystem !== undefined) system = rewrittenSystem
+  // 系统提示词（提示词缓存纪律）：会话 meta 里已有冻结基线时，基线文本就是
+  // 本 run 的系统提示词——组装链（system-before/after）整体跳过，认知刷新、
+  // 技能清单、AGENTS.md 与用户钩子的段落变化都不再重写请求前缀（provider
+  // 前缀缓存按前缀逐字节命中，前缀稳定 = 纪元内后续 run 全部命中）。审计
+  // 照旧每 run 一条全量留痕（直接落盘，与链内 fatal 钩子同语义：写失败即
+  // run 失败），审计页的"已变化"标记因此恰落在重冻结点上。压缩事件在投影
+  // 里清除基线（applyEvent），下一次 run 重新装配并在审计落盘时重新固化
+  // ——压缩本来就使缓存全量失效，纪元边界设在冷启动处零额外成本。
+  // 无基线（新会话 / 升级后首 run / 压缩后首 run）走既有链路装配，链内
+  // system-audit 落盘时投影自动固化新基线。
+  // 子代理 run 的精简模板同样适用（首 run 固化，模板无变化）。
+  const frozenBaseline = sessionMeta?.systemBaseline
+  let system: string
+  if (frozenBaseline !== undefined) {
+    system = frozenBaseline.text
+    sessions.appendSystem(sessionId, { at: new Date().toISOString(), text: system })
+  } else {
+    // AGENTS.md 基座 → system-before 链追加段落（内置 system-materials：
+    // 认知 + 技能列表）→ 末尾恒定拼接注入约定（放最后保持位置稳定）→
+    // system-after 链（用户可改终稿；内置 system-audit fatal 全量留痕——
+    // 审计永远记录模型实际看到的那份，落盘即固化新基线）。
+    const base = childRun ? subagentSystemPrompt(workspace) : systemPrompt(paths.agentsMd)
+    const segments = (await chain.run("system-before", { base })) ?? []
+    system = [base, ...segments, SYSTEM_INJECTION_CONVENTION].filter((s) => s !== "").join("\n\n")
+    const rewrittenSystem = await chain.run("system-after", { system })
+    if (rewrittenSystem !== undefined) system = rewrittenSystem
+  }
   contextOverheadRef.current = estimateTokens(system) + estimateTokens(JSON.stringify(toolDefs))
 
   const outcome = await runAgent(

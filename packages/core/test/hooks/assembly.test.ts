@@ -120,6 +120,52 @@ describe("executeRun × hook system", () => {
     expect((systemEvents[0] as { text: string }).text.length).toBeGreaterThan(0)
   })
 
+  it("提示词缓存纪律：基线冻结后链路跳过、前缀稳定；压缩清除后重新装配并再次固化", async () => {
+    const requests: string[] = []
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        requests.push(req.system)
+        yield { type: "text_delta", delta: "done" }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 3, outputTokens: 2 } }
+      },
+    }
+    const segmentRuns: number[] = []
+    const extra: HookEntry[] = [
+      hook("drift-segment", "system-before", () => {
+        segmentRuns.push(1)
+        return ["【漂移段】"]
+      }, { failure: "skip" }),
+    ]
+    const { engine, sessions, sessionId } = makeEngine({ llm, extraHooks: extra })
+    writeFileSync(engine.deps.paths.agentsMd, "v1 人设")
+
+    // run 1：无基线 → 全链装配；审计落盘即固化基线
+    await executeRun(engine, handoff(sessionId))
+    expect(requests[0]).toContain("v1 人设")
+    expect(requests[0]).toContain("【漂移段】")
+    expect(sessions.meta(sessionId)!.systemBaseline?.text).toBe(requests[0])
+    expect(sessions.readEvents(sessionId).filter((e) => e.type === "system")).toHaveLength(1)
+
+    // 漂移源变化（AGENTS.md 改写）；run 2 走冻结基线：请求前缀逐字节不变、组装链不跑
+    writeFileSync(engine.deps.paths.agentsMd, "v2 人设")
+    await executeRun(engine, handoff(sessionId, "第二条"))
+    expect(requests[1]).toBe(requests[0])
+    expect(segmentRuns).toHaveLength(1)
+    const audits = sessions.readEvents(sessionId).filter((e) => e.type === "system")
+    expect(audits).toHaveLength(2)
+    expect((audits[1] as { text: string }).text).toBe(requests[0]) // 审计=模型实际视图
+
+    // 压缩清除基线（重冻结边界）；run 3 重新装配，漂移源的新内容生效并再次固化
+    sessions.appendCompaction(sessionId, { at: new Date().toISOString(), trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
+    expect(sessions.meta(sessionId)!.systemBaseline).toBeUndefined()
+    await executeRun(engine, handoff(sessionId, "压缩后第一条"))
+    expect(requests[2]).toContain("v2 人设")
+    expect(requests[2]).not.toContain("v1 人设")
+    expect(segmentRuns).toHaveLength(2)
+    expect(sessions.meta(sessionId)!.systemBaseline?.text).toBe(requests[2])
+    expect(sessions.readEvents(sessionId).filter((e) => e.type === "system")).toHaveLength(3)
+  })
+
   it("extraHooks 在链上生效：system-before 段落进系统提示词、llm-before 改写只动模型视图", async () => {
     const extra: HookEntry[] = [
       hook("test-segment", "system-before", () => ["【测试段落】"]),

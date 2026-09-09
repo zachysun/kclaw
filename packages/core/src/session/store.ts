@@ -43,6 +43,13 @@ export interface SessionMeta {
   compactedUpto?: string
   /** layered compaction state; absent on fresh/legacy sessions. */
   compaction?: CompactionState
+  /**
+   * 冻结的系统提示词基线（提示词缓存纪律）：非空时 run 直接以其 text 为系统
+   * 提示词，认知/技能清单/AGENTS.md/钩子的变化不再重写请求前缀，留到下一次
+   * 压缩清除此字段后随首个 system 审计事件重新固化（纪元语义）。
+   * 投影由事件推进：system 事件 upsert、compaction 事件清除——事件流唯一真相。
+   */
+  systemBaseline?: { text: string; frozenAt: string }
   /** 会话级处置覆盖（/steer /wait、Web 三选）：优先于 sessions.defaultDisposition。 */
   dispositionOverride?: "steer" | "wait" | "interrupt"
 }
@@ -250,7 +257,7 @@ export class SessionStore {
     }
   }
 
-  /** Append one system audit event (每次对话运行的系统提示词全量留痕); the projection stays untouched (不推进 updatedAt)。 */
+  /** Append one system audit event (每次对话运行的系统提示词全量留痕); the projection's only effect is upserting the frozen system baseline (systemBaseline，不推进 updatedAt)。 */
   appendSystem(id: string, event: Omit<SystemEvent, "type">): void {
     this.appendEvent(id, { type: "system", ...event })
   }

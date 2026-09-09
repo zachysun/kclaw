@@ -44,7 +44,7 @@
 
 ## 数据模型
 
-压缩状态有两处体现（目录结构见 [storage](./storage.md)）：`meta.json` 的 `compaction` 字段（由 `compaction` 事件投影）与事件流里 append-only 的 `compaction` 事件（压缩审计本身）。
+压缩状态有两处体现（目录结构见 [storage](./storage.md)）：`meta.json` 的 `compaction` 字段（由 `compaction` 事件投影）与事件流里 append-only 的 `compaction` 事件（压缩审计本身）。压缩事件对投影还有第二个效果：**清除 `meta.systemBaseline`**（冻结的系统提示词基线）——压缩改写消息历史，provider 前缀缓存必然全量失效，正是系统提示词重新装配、重新固化的纪元边界（见 [hooks](./hooks.md) 的冻结基线一节）。
 
 ### meta.json 的 `compaction` 字段
 

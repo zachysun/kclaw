@@ -83,10 +83,16 @@ describe("applyEvent", () => {
     expect(both.mode).toBe("default")
   })
 
-  it("system 不刷 updatedAt 且不改任何投影字段", () => {
+  it("system upsert 冻结基线：不刷 updatedAt、基线外字段不动；compaction 清除基线", () => {
     const meta = applyEvent(base, { type: "system", at: "2026-01-04T00:00:00.000Z", text: "系统提示词全文" })
     expect(meta.updatedAt).toBe("2026-01-01T00:00:00.000Z")
-    expect(meta).toEqual(base)
+    expect(meta.systemBaseline).toEqual({ text: "系统提示词全文", frozenAt: "2026-01-04T00:00:00.000Z" })
+    const { systemBaseline: _drop, ...rest } = meta
+    const { systemBaseline: _dropBase, ...restBase } = base
+    expect(rest).toEqual(restBase)
+    const compacted = applyEvent(meta, { type: "compaction", at: "2026-01-05T00:00:00.000Z", trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
+    expect(compacted.systemBaseline).toBeUndefined()
+    expect("systemBaseline" in compacted).toBe(false)
   })
 
   it("sandbox.checked 不刷 updatedAt 且不改任何投影字段（审计事件）", () => {
