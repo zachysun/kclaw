@@ -29,7 +29,7 @@ export interface RunInput {
   history: Message[]          // 不含本次用户消息
   system: string
   userText: string
-  trigger?: "user" | "job"
+  trigger?: "user" | "job" | "agent"   // agent = 子代理 run（模型经 subagent_run 派出，见 subagents.md）
   userMessage?: Message       // 宿主预制时循环原样使用且不再经 onMessage 持久化
   compaction?: ActiveSummary  // 运行起点的压缩视图（来自会话 meta）：生效时 upto（含）之前的原文不再发给模型，脉络项由 toProviderMessages 垫在 messages[0]
 }
@@ -104,7 +104,7 @@ run.started {trigger}
 1. 建 `role:"tool"` 消息骨架 → `message.created`（先于执行，使 delta 事件可携带真实 messageId）。
 2. **钩子闸门**：每个可执行调用先过 `hooks.runGate("tool-before", {toolCall})`（观察 + 失败否决权）——声明 `failure:"deny"` 的钩子失败时该调用被拒绝：error result（文案 `钩子 <名> 失败，操作未执行：<原因>`）+ `kind:"denied"` note，不进权限检查、不执行，run 继续；其余失败照旧跳过。
 3. **权限检查**：每个可执行调用按模型顺序过 `check`——`deny` → error result + note 块（`kind:"denied"|"timeout"`）；`allow` → 记 `grantedBy`（`sandboxed` 即命令类工具由 exec 沙箱顶替人工的放行，见 [permissions](./permissions.md) 第 7 节）；`confirm` → 发 `confirmation.requested {confirmationId, toolCall, risk, expiresAt}`（沙箱启用但不可用的回落确认带 `noteText`），`raceConfirmation` 三方竞速（人工裁决 | confirmTimeoutMs 超时 | abort 信号）。人工裁决是四选一（`once` / `project` / `global` / `reject`，来自 `confirmation.resolve` 帧）：`once`/`project`/`global` 都放行并记 `grantedBy:"confirmed"`（project/global 的规则沉淀在 server 侧 WS 入口，见 [permissions](./permissions.md)）；`reject`/超时的文案固定："用户拒绝了该操作" / "确认超时，操作未执行"。
-4. **调度**：`concurrency:"parallel"` 的调用 `Promise.allSettled` 并发；`"serial"` 的在并行组全部 settle 后逐个 `await`——串行排他是结构保证（屏障 + 顺序 await：先等并行组全部结束，再逐个顺序执行），不是测试约束。
+4. **调度**：`concurrency:"parallel"` 的调用 `Promise.allSettled` 并发；`"serial"` 的在并行组全部 settle 后逐个 `await`——串行排他是结构保证（屏障 + 顺序 await：先等并行组全部结束，再逐个顺序执行），不是测试约束。执行器收到 `ctx.signal`（即 `deps.signal`）：长时间运行的工具（如 `subagent_run`）靠它感知父 run 的中止，实现"父停子停"（见 [subagents](./subagents.md)）。
 5. **结果**：每个执行中的结果发 `tool_result.created → tool_result.delta（executor 的 onOutput）→ tool_result.completed`；未执行（参数解析失败/未知工具/钩子闸门拒绝/abort 拦截）的结果只补 created+completed。结果块一律按模型给定顺序写入；拒绝 note 排在结果之后；`grantedBy` 记为 `Record<callId, GrantedBy>` 挂在 tool 消息上。
 6. `onMessage` 持久化 → `message.completed` → 回到循环顶部。
 
@@ -180,7 +180,7 @@ daemon 侧 `RunManager.cancel(sessionId)` 调 `AbortController.abort()`，循环
 - **参数解析失败 / 未知工具**：不执行、不进入权限检查；error result（`"invalid tool args json"` / `"unknown tool: <name>"`）随 tool 消息持久化，循环继续。
 - **迭代耗尽**：最后一次迭代若仍是 `tool_use`，先在该 assistant 消息上附加 `kind:"system"` 截断 note（"已达最大迭代次数（25）…"）再持久化，然后 `run.failed {code:"max_iterations"}`——用户和下一轮模型均可看到中断原因。
 - **钩子失败**：run-before 链的 fatal 抛错或持久化抛错 → `run.failed {code:"user_message_failed"}`，resolve `stopReason:"error"`；用户钩子失败兜底自声明（skip 跳过 / deny 否决所在闸门），失败只发 `hook.failed` 事件不伤 run（见 [hooks](./hooks.md)）。
-- **工具执行器契约**：`ToolExecutor.execute` 应吞掉一切异常返回 `{status:"error", output}`（内置工具由 `shared.ts` 的包装保证）；循环对 settle 失败也统一转为 error result（保证异常也产出结果）。
+- **工具执行器契约**：`ToolExecutor.execute` 应吞掉一切异常返回 `{status:"error", output}`（内置工具由 `shared.ts` 的包装保证）；循环对 settle 失败也统一转为 error result（保证异常也产出结果）。执行 ctx 带可选 `signal`（父 run 的中止信号）与 `onOutput`（部分输出的流式回传）。
 
 ---
 

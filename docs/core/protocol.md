@@ -155,7 +155,7 @@ export function makeEvent<T extends EventType>(
 关键 payload：
 
 ```ts
-export interface RunStartedPayload   { trigger: "user" | "job" }
+export interface RunStartedPayload   { trigger: "user" | "job" | "agent" }
 export interface RunCompletedPayload { stopReason: StopReason; usage: Usage }
 export interface RunFailedPayload    { error: { code: string; message: string } }
 export interface JobCompletedPayload { jobId: string; summary: string }
@@ -243,7 +243,7 @@ export interface HookFailedPayload {
 
 `wire.ts` 定义 WS 的客户端→daemon 指令帧（`ClientCommand` 联合：auth / subscribe / unsubscribe / confirmation.resolve / send_message / queue.cancel / run.cancel / compaction.cancel）与 daemon→客户端的应答帧（各指令的 ack、`ErrorFrame`），合并为 `ServerFrame`；附件引用 `AttachmentRef{path,name,size,mimeType}` 与排队条目 `QueueEntry` 也在此（`session/store.ts` re-export 保持旧引用路径）。字段规则与报错文案不在类型里——它们的唯一实现是 server 的 `command-check.ts`（见 [realtime](../server/realtime.md)）。
 
-`session-events.ts` 定义会话事件流（`events.jsonl`，`GET /sessions/:id/events` 的返回形状）的十种事件类型：会话元数据五种（created/renamed/deleted/restored/set）+ `message` / `compaction` / `memory` / `system` / `sandbox.checked`。`session.created` 携带创建时固化的初始权限模式 `mode`（可选，旧流缺省 default）；`session.set` 携带元数据的增量补丁（`model` / `mode`（会话权限模式）/ `disposition`，键出现在补丁里才发）；旧会话流里的 `readonly` 布尔字段是 legacy，读取时映射为 `mode`。`sandbox.checked` 是每 run 一条的沙箱状态审计（`{enabled, available, unavailableReason?}`），与 `system` 一样只落事件流、不进 bus 的 `EventType`——它们对外部的可见性由 `session.appended` 通知帧间接承载（订阅端收到后拉 `/events` 即见）。assistant 消息可携带可选 `latencyMs`（LLM 生成耗时毫秒，流成功完成时随 `usage` 一并持久化；旧消息与失败流缺省）。只放类型；运行时守卫（`isMessageEvent` 等）与 meta 投影（`applyEvent`）在 `session/events.ts`。
+`session-events.ts` 定义会话事件流（`events.jsonl`，`GET /sessions/:id/events` 的返回形状）的十种事件类型：会话元数据五种（created/renamed/deleted/restored/set）+ `message` / `compaction` / `memory` / `system` / `sandbox.checked`。`session.created` 携带创建时固化的初始权限模式 `mode`（可选，旧流缺省 default）与可选 `parentSessionId`（子代理会话的父会话标识——引擎侧一切子代理特化从它派生，见 [subagents](./subagents.md)）；`session.set` 携带元数据的增量补丁（`model` / `mode`（会话权限模式）/ `disposition`，键出现在补丁里才发）；旧会话流里的 `readonly` 布尔字段是 legacy，读取时映射为 `mode`。`sandbox.checked` 是每 run 一条的沙箱状态审计（`{enabled, available, unavailableReason?}`），与 `system` 一样只落事件流、不进 bus 的 `EventType`——它们对外部的可见性由 `session.appended` 通知帧间接承载（订阅端收到后拉 `/events` 即见）。assistant 消息可携带可选 `latencyMs`（LLM 生成耗时毫秒，流成功完成时随 `usage` 一并持久化；旧消息与失败流缺省）。只放类型；运行时守卫（`isMessageEvent` 等）与 meta 投影（`applyEvent`）在 `session/events.ts`。
 
 ---
 

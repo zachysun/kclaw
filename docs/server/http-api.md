@@ -29,12 +29,12 @@
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
 | POST | `/sessions` | 创建会话 | `{title?, workdir?}`（均可缺省；传入时必须是非空字符串）；**workdir 缺省落 `config.workspace` 的值**，保证每条会话都带具体工作目录；初始权限模式取 `config.permissions.defaultMode` 的当前值**固化为 `meta.mode`**（缺省 default；改配置只影响之后新建的会话）；创建成功后**异步触发一次切会话记忆写入**（clear 触发，归属 = 创建前的项目最近活动会话，即用户刚离开的旧会话；未装配记忆系统时不触发），不阻塞响应 | 201，`SessionMeta`（title 缺省为 `"新会话"`） |
-| GET | `/sessions` | 会话列表（updatedAt 新的在前） | 查询参数 `deleted=true` 返回回收站会话；缺省只返回未删除会话 | `SessionMeta[]` |
+| GET | `/sessions` | 会话列表（updatedAt 新的在前） | 查询参数 `deleted=true` 返回回收站会话；缺省只返回未删除会话。两种情况都**不含子代理会话**（meta 带 `parentSessionId` 的会话不是列表一等公民），`children=true` 才列出（给定父的子代理排查用，见 [subagents](../core/subagents.md)） | `SessionMeta[]` |
 | GET | `/sessions/:id` | 读单个会话元数据 | — | `SessionMeta` |
 | PATCH | `/sessions/:id` | 改名 | `{title?}`（非空字符串；body 里的 `workdir` 被解析但**不生效**，只有 title 传给 `updateMeta`） | `SessionMeta` |
-| DELETE | `/sessions/:id` | 软删除（移入回收站，标记 `deleted`/`deletedAt`） | — | `SessionMeta` |
+| DELETE | `/sessions/:id` | 软删除（移入回收站，标记 `deleted`/`deletedAt`）；**级联软删其全部子代理会话**（不留孤儿，见 [subagents](../core/subagents.md)） | — | `SessionMeta` |
 | POST | `/sessions/:id/restore` | 从回收站恢复（清除 `deleted`/`deletedAt`） | — | `SessionMeta` |
-| POST | `/sessions/:id/purge` | 永久删除（整个会话目录删除） | — | `{ok: true}` |
+| POST | `/sessions/:id/purge` | 永久删除（整个会话目录删除）；**级联永久删除其全部子代理会话** | — | `{ok: true}` |
 | POST | `/sessions/:id/model` | 会话级模型切换（只影响此会话**之后**的 run，历史不动） | `{model?}`：provider 条目名（entry key，见 [run-manager](./run-manager.md) 的模型解析）或裸模型名；`""`/缺省清空回落默认；类型不对 400 `model must be a string`，条目不存在 400 `model not found: <name>` | `SessionMeta` |
 | POST | `/sessions/:id/mode` | 会话级权限模式切换（只影响此会话**之后**的 run，历史不动；机制见 [permissions](../core/permissions.md)） | `{mode: "readonly"\|"default"\|"acceptEdits"\|"trusted"\|"auto"}` 必填；非法值 400 `mode must be one of readonly | default | acceptEdits | trusted | auto` | `SessionMeta` |
 | GET | `/sessions/:id/messages` | 读全部消息（对话/断线恢复的数据源，ChatPanel 用） | — | `Message[]`（事件流投影视图——`readMessages` 从 events.jsonl 过滤 `message` 事件按事件序返回；**排队未执行的消息不在其中**，见 `/queue`） |
@@ -76,7 +76,7 @@ interface QueueEntry {
   messageId: string                       // 分配即固定；出队执行/steer 注入用同一 id 构建 Message
   disposition: "steer" | "wait" | "interrupt"
   text: string
-  trigger: "user" | "job"                 // 还原触发源（job 的 note/触发语义在出队执行时需要）
+  trigger: "user" | "job" | "agent"       // 还原触发源（agent = 子代理 run；job 的 note/触发语义在出队执行时需要）
   attachments?: AttachmentRef[]           // {path,name,size,mimeType}，路径已校验（与 send_message 帧同一形状）
   note?: string                           // job 来源说明
   enqueuedAt: string                      // ISO-8601

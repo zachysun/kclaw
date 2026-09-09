@@ -28,6 +28,10 @@ _Avoid_: 系统配置
 会话事件流（会话的唯一真相）在 Web 端的只读回看视图，原则是"让用户掌握发生的一切"。
 _Avoid_: 轨迹、trail、trajectory、日志页
 
+**Subagent（子代理）**:
+主对话模型经 `subagent_run` 工具自主派出的短命执行单元：独立子会话（`meta.parentSessionId` 标识）、单层委派、结题答复即工具结果。子会话对用户只读。
+_Avoid_: 子agent、分支会话、平行代理
+
 ### 架构约定
 
 **Protocol（线上形状）**:

@@ -192,6 +192,7 @@ Docs:
   - [sandbox](docs/core/sandbox.md) — the exec OS sandbox (Seatbelt / bubblewrap)
   - [skills](docs/core/skills.md) — the skill mechanism (progressive disclosure)
   - [storage](docs/core/storage.md) — paths, config, and session persistence
+  - [subagents](docs/core/subagents.md) — subagent delegation (child sessions, one-level dispatch)
   - [tools](docs/core/tools.md) — the built-in tool system and registration
 - server/ (the daemon)
   - [daemon](docs/server/daemon.md) — lifecycle and auth

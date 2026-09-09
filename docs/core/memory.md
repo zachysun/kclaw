@@ -118,7 +118,7 @@ updated: 2026-08-30
 | **immediate**（立即） | `memory_save` 工具 → `system.triggerImmediate(sessionId)` | 该会话自水位起的增量 | 模型在对话中主动要求"记下来"，当场处理；`memory.write.immediate=false` 时工具返回固定提示、内容留给后台触发沉淀 |
 | **manual**（手动） | `MemorySystem.triggerManual(workdir)` | 回落会话自水位起的增量 | 用户通过 **`/memory save` 斜杠命令**（CLI 与 web 均有）触发当前项目的手动写入；CLI 取启动目录、web 取当前会话工作目录。归属会话缺省回落"项目最近活动会话"。开关 `memory.write.manual`（默认 true）关闭时路由返回 400 |
 | **clear**（切会话） | `POST /sessions` 创建新会话时 → `system.triggerClear(workdir, 旧会话)` | 该会话自水位起的增量 | CLI `/clear`、`/new` 与 web 新建会话共用该路由，创建成功后**异步**触发对旧会话所在项目的提取（不阻塞建会话响应；失败只打日志，由水位防重复、下次触发补上）。归属会话取创建前的项目最近活动会话——此刻它必然是用户刚离开的旧会话；未装配记忆系统时不触发 |
-| **interval**（定时） | `memory-scheduler`（默认每 60s 扫一次） | 该项目**全部会话**逐个补各自增量 | 距上次定时触发满 `memory.write.intervalMinutes` 分钟就触发一次（0 关闭）；上次时间落在 `state.json` 的 `intervalLastRun`，未触发过则立刻首跑。无显式归属会话，对每个水位落后的会话各跑一批提取，单会话失败不阻塞其他会话 |
+| **interval**（定时） | `memory-scheduler`（默认每 60s 扫一次） | 该项目**全部会话**（不含子代理会话）逐个补各自增量 | 距上次定时触发满 `memory.write.intervalMinutes` 分钟就触发一次（0 关闭）；上次时间落在 `state.json` 的 `intervalLastRun`，未触发过则立刻首跑。无显式归属会话，对每个水位落后的会话各跑一批提取，单会话失败不阻塞其他会话 |
 | **follow**（跟随） | run 收尾挂起检查 + 门禁判定 | 该会话自水位起的增量 | 每个 run 结束（任何 stopReason）由 run 装配（core `executeRun`）挂一个跟随检查；`end_turn` 之后满 `memory.write.idleMinutes` 分钟无新活动才真正触发（0 关闭），见下 |
 
 **会话级增量**：水位**每会话各一本**（interval/follow 两游标），范围一律取"该会话两个水位中较靠后的那一条"之后的新消息（`advanceAll` 把该会话两个水位一并推进的只有 manual/immediate/clear，interval/follow 只推自己的）——任何一个先跑到，其余触发都不会重复提取同一段消息。首跑无水位时该会话全量提取一次，此后只增不重。2026-09-02 回归（一）：此前 manual/immediate/clear 不看水位、每次全量重扫，切一次会话就把已提取过的旧消息重新送审，同一情节被反复落线；改为统一增量后已提取过的内容不再进入提取输入。2026-09-02 回归（二）：统一增量最初做成**项目级**水位——跨会话按会话创建序划界，晚创建会话推进过水位后，老会话的新消息被整段跳过（用户在老会话里改名，`memory_save` 当场空转、内容永久漏提取）；水位改为**会话级**后，提取窗口只在自己会话的消息序列里推进，跨会话比较不复存在。会话内水位消息被删导致失配时按"宁可重提取不可漏提取"退化为该会话全量（见 `WriteLedger.since`）。
@@ -285,7 +285,8 @@ v2 提供三套人工管理面，全部落在既有文档：
   topic?: string, file?: string, scope?: string, source?: string }
 ```
 
-- **归属规则**：memory 事件挂在**触发会话**的目录里——immediate（`memory_save` 工具）显式带会话；manual（`/memory save` 或 `POST /memory/trigger-manual`，HTTP 路由可选 `sessionId` 覆盖、CLI/web 命令不传）与 nightly 缺省**回落该项目最近活动会话**（`recentSessionId`）；interval **无显式归属**——pipeline 对全部会话逐个补增量，各批次的 memory 事件挂**各自来源会话**；clear 挂**创建新会话前的项目最近活动会话**（即用户刚离开的旧会话，`POST /sessions` 路由在创建前取好传入）；follow 挂**发起该检查的会话**（check.sessionId）；admin（记忆页的覆写/删除）挂"最近活动会话"——线文件操作挂该项目最近活动会话、全局认知操作挂**全局**最近活动会话。找不到归属会话时跳过（不落事件）。
+- **归属规则**：memory 事件挂在**触发会话**的目录里——immediate（`memory_save` 工具）显式带会话；manual（`/memory save` 或 `POST /memory/trigger-manual`，HTTP 路由可选 `sessionId` 覆盖、CLI/web 命令不传）与 nightly 缺省**回落该项目最近活动会话**（`recentSessionId`，不选子代理会话）；interval **无显式归属**——pipeline 对全部会话（不含子代理会话）逐个补增量，各批次的 memory 事件挂**各自来源会话**；clear 挂**创建新会话前的项目最近活动会话**（即用户刚离开的旧会话，`POST /sessions` 路由在创建前取好传入）；follow 挂**发起该检查的会话**（check.sessionId；子代理 run 不挂检查）；admin（记忆页的覆写/删除）挂"最近活动会话"——线文件操作挂该项目最近活动会话、全局认知操作挂**全局**最近活动会话。找不到归属会话时跳过（不落事件）。
+- **子代理会话完全隔离**（v1 子代理的拍板：把子代理当成工具，不是人）：meta 带 `parentSessionId` 的会话不进任何提取路径——interval 扫描不列它、`recentSessionId`/`recentGlobalSessionId` 回落不选它、follow-check 不为它挂检查（run 装配的钩子直接跳过，见 [hooks](./hooks.md)）；子代理的工具面也没有 `memory_save`。子代理的过程不沉淀为长期记忆（见 [subagents](./subagents.md)）。
 - **事件体不带 `sessionId` 字段**：会话由所在目录决定（Ruling 5），payload 里没有它。
 - **不推进投影 `updatedAt`**：`applyEvent` 对 `memory` 事件不更新任何投影字段（见 [storage](./storage.md) 的 events.jsonl 一节）。
 - 可通过 `GET /sessions/:id/events` 查询某会话的完整事件流（含 memory 事件），web 审计页把它们渲染成"记忆"行（见 [http-api](../server/http-api.md) 与 [webui](../web/webui.md)）。
