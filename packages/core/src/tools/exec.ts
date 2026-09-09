@@ -88,9 +88,13 @@ export function createExecTool(opts: {
         let timer: ReturnType<typeof setTimeout> | undefined
         // Everything the process emitted, up to the spill ceiling: the model
         // view truncates at maxOutputBytes, the spill copy keeps the span
-        // readable (fs_read locator) instead of dropping it.
+        // readable (fs_read locator) instead of dropping it. Accumulation is
+        // gated on a wired spill dir — without one the capture would be pure
+        // memory waste (up to 10MB per truncated call) for a spill that can
+        // never happen.
         let spillBuf = ""
         let spillBytes = 0
+        const spillWired = opts.spillDir !== undefined
 
         const child = opts.sandbox
           ? opts.sandbox.spawn(command, { cwd: opts.workspace })
@@ -141,7 +145,7 @@ export function createExecTool(opts: {
           if (!stream) continue
           stream.setEncoding("utf8")
           stream.on("data", (chunk: string) => {
-            if (spillBytes <= SPILL_MAX_BYTES) {
+            if (spillWired && spillBytes <= SPILL_MAX_BYTES) {
               spillBuf += chunk
               spillBytes += Buffer.byteLength(chunk)
             }

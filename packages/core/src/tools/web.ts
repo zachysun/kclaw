@@ -289,12 +289,11 @@ export function createWebTools(opts: {
     const body = /html/i.test(contentType) ? extractReadableText(body_) : body_
     let tail = ""
     if (dropped > 0) {
-      // The spill copy is the RAW captured body (pre-extraction); when the
-      // spill failed (no dir / write error) fall back to the plain marker.
-      const spill = spillToolOutput(opts.spillDir, "web_fetch", raw.spill ?? "")
-      tail = spill.path !== undefined
-        ? spillLocatorLine(spill)
-        : `\n...[truncated, dropped ${dropped} bytes]...`
+      // The spill copy is the RAW captured body (pre-extraction). Same shape
+      // as exec: the drop marker always carries the byte count, and a
+      // successful spill appends the fs_read locator after it.
+      tail = `\n...[truncated, dropped ${dropped} bytes]...`
+      tail += spillLocatorLine(spillToolOutput(opts.spillDir, "web_fetch", raw.spill ?? ""))
     }
     return { status: "ok", output: body + tail }
   })

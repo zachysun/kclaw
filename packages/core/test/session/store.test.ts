@@ -383,6 +383,9 @@ describe("SessionStore event sourcing", () => {
     // 后一条 system 事件覆盖前一条（最新胜出）
     store.appendSystem(meta.id, { at: "2026-01-03T00:00:00.000Z", text: "run-2 的系统提示词" })
     expect(store.meta(meta.id)!.systemBaseline).toEqual({ text: "run-2 的系统提示词", frozenAt: "2026-01-03T00:00:00.000Z" })
+    // 文本未变的重复审计：frozenAt 保留原值（= 这份文本成为基线的时刻）
+    store.appendSystem(meta.id, { at: "2026-01-03T06:00:00.000Z", text: "run-2 的系统提示词" })
+    expect(store.meta(meta.id)!.systemBaseline).toEqual({ text: "run-2 的系统提示词", frozenAt: "2026-01-03T00:00:00.000Z" })
     // 压缩事件清除基线（重冻结边界）；压缩后下一条 system 事件重新固化
     store.appendCompaction(meta.id, { at: "2026-01-04T00:00:00.000Z", trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
     expect(store.meta(meta.id)!.systemBaseline).toBeUndefined()

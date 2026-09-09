@@ -71,8 +71,12 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
     case "memory": break // 不更新任何投影字段（含 updatedAt）
     case "system":
       // 审计留痕即基线写入口：每次 run 的系统提示词全量事件 upsert 冻结基线
-      // （提示词缓存纪律）。基线外字段与 updatedAt 一律不动。
-      next.systemBaseline = { text: event.text, frozenAt: event.at }
+      // （提示词缓存纪律）。文本未变时保留原 frozenAt——它记录的是"这份文本
+      // 成为基线的时刻"，不是"最后一次审计的时刻"（那去事件流里看）；
+      // 基线外字段与 updatedAt 一律不动。
+      if (next.systemBaseline?.text !== event.text) {
+        next.systemBaseline = { text: event.text, frozenAt: event.at }
+      }
       break
     case "sandbox.checked": break // 审计事件同样不进投影、不推进 updatedAt
   }

@@ -33,11 +33,14 @@ export function spillToolOutput(spillDir: string | undefined, toolName: string, 
     const name = `${Date.now().toString(36)}-${counter.toString(36).padStart(4, "0")}-${toolName.replace(/[^a-zA-Z0-9_-]/g, "_")}.txt`
     const path = join(spillDir, name)
     const buf = Buffer.from(captured, "utf8")
+    // Tool output can embed secrets (env dumps, curl bodies) — the spilled
+    // copy gets the same 0600 treatment as the daemon's own config/token
+    // files, not the 0644 default.
     if (buf.length > SPILL_MAX_BYTES) {
-      writeFileSync(path, buf.subarray(0, SPILL_MAX_BYTES))
+      writeFileSync(path, buf.subarray(0, SPILL_MAX_BYTES), { mode: 0o600 })
       return { path, partial: true }
     }
-    writeFileSync(path, buf)
+    writeFileSync(path, buf, { mode: 0o600 })
     return { path }
   } catch {
     return {}
