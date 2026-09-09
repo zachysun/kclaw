@@ -19,7 +19,7 @@ A locally resident personal agent: a single daemon owns all state; the CLI and W
    │           @kclaw/core (pure-library agent engine)          │
    │           ├─ run assembly: agent loop, tools, permissions  │
    │           ├─ confirmation broker: risky tools confirm      │
-   │           ├─ Event bus: 36 AgentEvent kinds                │
+   │           ├─ Event bus: 37 AgentEvent kinds                │
    │           └─ memory · compaction                           │
    │                          │                                 │
    └──────────────────────────┼─────────────────────────────────┘

@@ -11,6 +11,9 @@ import { act } from "react"
 import { App } from "../src/App.js"
 import type { SessionMeta } from "../src/types.js"
 
+// jsdom has no layout: flatten the audit list into a plain map (test data flow, not the library).
+vi.mock("react-virtuoso", async () => await import("./helpers/virtuosoMock.js"))
+
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 /** Browser-shaped fake socket; CONNECTING sends throw until `open()`. */
@@ -102,7 +105,7 @@ describe("App (sessions + tabs)", () => {
       "GET /status": { body: { ok: true } },
       "GET /sessions": { body: [session("s1", "第一会话")] },
       "GET /jobs": { body: [] },
-      "GET /audit": { body: [] },
+      "GET /sessions/s1/events": { body: [] },
     })
     localStorage.setItem("kclaw_token", "tok-1")
     const { container, root } = mountApp()
@@ -132,6 +135,69 @@ describe("App (sessions + tabs)", () => {
       ;(container.querySelector('button[data-testid="tab-chat"]') as HTMLButtonElement).click()
     })
     expect(container.querySelector('[data-testid="chat-empty"]')).not.toBeNull()
+    root.unmount()
+    container.remove()
+  })
+
+  it("keeps the audit view mounted (offscreen) after switching away, preserving its state", async () => {
+    mockFetch(fetchMock, {
+      "GET /status": { body: { ok: true } },
+      "GET /sessions": { body: [session("s1", "第一会话")] },
+      "GET /sessions/s1/messages": { body: [] },
+      "GET /sessions/s1/events": { body: [] },
+    })
+    localStorage.setItem("kclaw_token", "tok-1")
+    const { container, root } = mountApp()
+    await act(async () => {
+      root.render(<App />)
+    })
+    await flush()
+    await flush()
+
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="tab-audit"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(container.querySelector('[data-testid="audit-view"]')).not.toBeNull()
+
+    // Switch to chat: the audit host stays in the DOM, offscreen.
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="tab-chat"]') as HTMLButtonElement).click()
+    })
+    const host = container.querySelector('[data-testid="audit-host"]')
+    expect(host).not.toBeNull()
+    expect(host!.className).toContain("offscreen")
+
+    // Back to audit: same live host, no offscreen class.
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="tab-audit"]') as HTMLButtonElement).click()
+    })
+    expect(container.querySelector('[data-testid="audit-host"]')!.className).not.toContain("offscreen")
+    root.unmount()
+    container.remove()
+  })
+
+  it("deep-links to the audit tab for a session via ?tab=audit&session=<id>", async () => {
+    history.replaceState({}, "", "/?tab=audit&session=s1")
+    mockFetch(fetchMock, {
+      "GET /status": { body: { ok: true } },
+      "GET /sessions": { body: [session("s1", "第一会话")] },
+      "GET /sessions/s1/messages": { body: [] },
+      "GET /sessions/s1/events": { body: [{ type: "session.created", at: "2026-08-15T00:00:00.000Z", title: "第一会话" }] },
+    })
+    localStorage.setItem("kclaw_token", "tok-1")
+    const { container, root } = mountApp()
+    await act(async () => {
+      root.render(<App />)
+    })
+    await flush()
+    await flush()
+
+    // Audit tab active, following the deep-linked session, URL stripped.
+    expect(container.querySelector('[data-testid="audit-view"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="audit-session-chip"]')?.textContent).toContain("第一会话")
+    expect(container.querySelector('[data-testid="session-row-0"]')).not.toBeNull()
+    expect(window.location.search).toBe("")
     root.unmount()
     container.remove()
   })

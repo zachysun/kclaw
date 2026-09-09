@@ -86,6 +86,7 @@ run.started {trigger}
       ⑥ tool_call.completed ×N（流结束后才 parse argsJson）
       ⑦ assistant 补全：块为空 → 整条丢弃（不持久化、无 completed）
         否则 text/thinking.completed → onMessage → message.completed
+        （assistant 消息随 llm.completed 的 latencyMs 一并落盘——流成功完成才有，失败流缺省）
       ⑧ stopReason 分派：
          end_turn          → run.completed，返回
          error             → 悬空 tool_call（无配对结果的调用）合成 error result 配对持久化 → llm.failed{willRetry:false} → run.failed，返回

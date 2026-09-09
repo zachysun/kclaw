@@ -1,443 +1,488 @@
 /**
- * AuditView — the trail page (轨迹页). Single source of truth is the session's
- * event stream, read through GET /sessions (the session dropdown) and
- * GET /sessions/:id/events (the trail itself). The stream is append-only and
- * time-ordered (session.created → message → compaction → memory …), so it is
- * rendered in array order — oldest at the top, newest at the bottom, like a
- * log. Message events carry the full Message payload and flatten into one row
- * per block; compaction events become "压缩" rows; memory events become "记忆"
- * rows; system events become "系统提示词" rows (snippet + char count collapsed,
- * full prompt on expand, "已变化" badge when the text differs from the
- * previous system row); sandbox.checked events become "沙箱" rows (one per
- * run: 可用 / 不可用（原因）/ 已关闭); the session metadata events
- * (session.created/renamed/…) are skipped.
- * Each row shows a type label plus a one-line summary, and expands on click
- * to the full payload. No mutation, no /audit — the old audit tail route is
- * gone.
+ * AuditView — the audit page (审计页): a live, filterable, virtualized read
+ * over a session's persisted event stream (the single source of truth,
+ * GET /sessions/:id/events). Guiding principle: the user masters everything
+ * that happened.
+ *
+ * Live tailing: the page opens its OWN ws connection (the chat connection is
+ * untouched) and subscribes to the session. The store announces every
+ * persisted event with a `session.appended` frame (persist BEFORE announce,
+ * for every event type — memory included), and the page answers it with an
+ * incremental `?since=` fetch; the append-only array index is the cursor.
+ * Initial load, reconnect reconcile, and retry all run the same tail-pull
+ * (since = current length), so there is exactly one cursor to keep honest.
+ * A failed live pull surfaces a slim retry bar instead of dropping the
+ * loaded rows — the cursor stays put, so the retry re-pulls the same window.
+ * Only persisted facts are shown — no streaming intermediates.
+ *
+ * Rendering is virtualized (react-virtuoso): variable row heights, bottom
+ * following (auto-follow while pinned to the bottom, pause on scroll-up, a
+ * "回到最新" bubble to resume), and stable row keys carrying the event index
+ * so expansion survives appends. Type toggles + keyword substring + time
+ * range FILTER rows (AND); jumps target the latest row and the previous/next
+ * compaction boundary, anchored on the first visible row (rangeChanged keeps
+ * the anchor honest through manual scrolls). Dynamic time presets (1h /
+ * today) re-evaluate on a slow tick so an idle page still drops aged-out
+ * rows. Session selection follows the sidebar (owned by the shell); the
+ * component stays mounted (hidden) across tab switches.
  */
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso"
 import { type ApiClient } from "../api.js"
-import type { Block, CompactionEvent, MemoryEvent, MessageEvent, Role, SandboxCheckedEvent, SessionEvent, SessionMeta, SystemEvent, ToolGrantReason } from "../types.js"
+import { WsAuthError, type WsClient } from "../ws.js"
+import type { SessionEvent } from "../types.js"
+import { AuditRowItem } from "./AuditRowItem.js"
+import {
+  ALL_KINDS, appendEvents, appendRows, DEFAULT_FILTER, filterRows, isAppendedFrame,
+  jumpTarget, type AuditFilter, type AuditRow, type AuditRowKind, type TimePreset,
+} from "./model.js"
 
-/**
- * One flattened trail row: either a message block (carrying the owning
- * message's role + timestamp, and for tool rows the grant reason), a
- * compaction event (carrying its own `at` timestamp), a memory event, a
- * system event (carrying whether its text differs from the previous system
- * row in stream order), or a sandbox audit event.
- */
-type TrailRow =
-  | { kind: "block"; key: string; role: Role; block: Block; createdAt: string; grantedBy?: ToolGrantReason }
-  | { kind: "compaction"; key: string; record: CompactionEvent; at: string }
-  | { kind: "memory"; key: string; event: MemoryEvent }
-  | { kind: "system"; key: string; event: SystemEvent; changed: boolean }
-  | { kind: "sandbox"; key: string; event: SandboxCheckedEvent }
+/** Max consecutive failed reconnects before giving up with a notice. */
+const MAX_RECONNECT_ATTEMPTS = 3
 
-export function AuditView({ api }: { api: ApiClient }) {
-  const [sessions, setSessions] = useState<SessionMeta[] | null>(null)
-  const [selectedId, setSelectedId] = useState<string>("")
+const KIND_LABELS: Record<AuditRowKind, string> = {
+  block: "消息",
+  compaction: "压缩",
+  memory: "记忆",
+  system: "系统",
+  sandbox: "沙箱",
+  session: "会话",
+}
+
+const TIME_PRESETS: Array<{ value: TimePreset; label: string }> = [
+  { value: "all", label: "全部时间" },
+  { value: "1h", label: "最近 1 小时" },
+  { value: "today", label: "今天" },
+  { value: "custom", label: "自定义" },
+]
+
+/** ISO string → datetime-local input value ("yyyy-MM-ddThh:mm"), local time. */
+function isoToLocalInput(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ""
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** datetime-local input value → ISO string ("" stays ""). */
+function localInputToIso(v: string): string {
+  if (v === "") return ""
+  const d = new Date(v)
+  return Number.isNaN(d.getTime()) ? "" : d.toISOString()
+}
+
+export interface AuditViewProps {
+  api: ApiClient
+  /** Per-connection ws factory (from useDaemonClients) — the page owns its connection. */
+  createWs: () => WsClient
+  /** Follows the shell's selected session; null → the "no session" empty state. */
+  sessionId: string | null
+  /** Display-only: the selected session's title (chip next to the page title). */
+  sessionTitle?: string | null
+}
+
+export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewProps) {
   const [events, setEvents] = useState<SessionEvent[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [expandedKey, setExpandedKey] = useState<string | null>(null)
+  // Rows are maintained incrementally (appendRows on each pull) instead of
+  // re-flattening the whole stream on every live append.
+  const [rows, setRows] = useState<AuditRow[]>([])
+  const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading")
+  const [errorText, setErrorText] = useState("")
+  const [filter, setFilter] = useState<AuditFilter>(DEFAULT_FILTER)
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
+  const [notice, setNotice] = useState<string | null>(null)
+  /** A failed frame-driven (live) pull — non-destructive: loaded rows stay. */
+  const [liveError, setLiveError] = useState<string | null>(null)
+  const [following, setFollowing] = useState(true)
+  const [reloadTick, setReloadTick] = useState(0)
+  /** Re-evaluation clock for the dynamic time presets (1h / today). */
+  const [nowTick, setNowTick] = useState(() => new Date())
 
-  // Session dropdown on mount.
-  useEffect(() => {
-    let cancelled = false
-    api
-      .get<SessionMeta[]>("/sessions")
-      .then((metas) => {
-        if (cancelled) return
-        setSessions(metas)
-        setError(null)
-      })
-      .catch((err) => {
-        if (cancelled) return
-        setSessions([])
-        setError(err instanceof Error ? err.message : "加载会话失败")
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [api])
+  const virtRef = useRef<VirtuosoHandle>(null)
+  /** Last jump/scroll anchor (visible-row index) — the "from" of relative jumps. */
+  const cursorRowRef = useRef(0)
+  /** The effect's live re-pull (since=cursor), exposed to the retry button. */
+  const liveRetryRef = useRef<(() => void) | null>(null)
 
-  // Pull the selected session's full event stream (none until a session is
-  // chosen). The stream is the single source of truth for the trail — no
-  // separate /messages + /compactions fetches anymore.
+  // One data effect per session: initial tail-pull (since=0 = full stream),
+  // then a private ws subscription whose session.appended frames drive
+  // incremental pulls. Reconnects re-pull the tail to reconcile; consecutive
+  // failures are bounded, mirroring the chat panel's contract.
   useEffect(() => {
-    if (selectedId === "") {
+    if (sessionId === null) {
       setEvents(null)
+      setRows([])
+      setPhase("ready")
       return
     }
     let cancelled = false
+    let client = createWs()
+    let cursor = 0
+    let pulling = false
+    let dirty = false
+
     setEvents(null)
-    setError(null)
-    api
-      .get<SessionEvent[]>(`/sessions/${encodeURIComponent(selectedId)}/events`)
-      .then((evts) => {
+    setPhase("loading")
+    setErrorText("")
+    setNotice(null)
+    setLiveError(null)
+    setFollowing(true)
+    setExpanded(new Set())
+    setRows([])
+    cursorRowRef.current = 0
+
+    // since = current cursor: full stream on first call, increments after.
+    const pullTail = async (): Promise<void> => {
+      if (pulling) {
+        dirty = true
+        return
+      }
+      pulling = true
+      try {
+        const fresh = await api.get<SessionEvent[]>(
+          `/sessions/${encodeURIComponent(sessionId)}/events?since=${cursor}`,
+        )
         if (cancelled) return
-        setEvents(evts)
-      })
-      .catch((err) => {
+        const base = cursor
+        cursor += fresh.length
+        if (fresh.length > 0) {
+          setEvents((prev) => appendEvents(prev ?? [], fresh))
+          setRows((prev) => appendRows(prev, base, fresh))
+        }
+        setLiveError(null)
+        setPhase("ready")
+      } finally {
+        pulling = false
+        if (dirty && !cancelled) {
+          dirty = false
+          pullTailLive()
+        }
+      }
+    }
+
+    // Live pulls (frame-driven, merged re-pulls) must never dead-end the page:
+    // a failure surfaces as a slim retry bar and the cursor stays put, so the
+    // next frame — or the retry button — re-pulls the same window.
+    const pullTailLive = (): void => {
+      void pullTail().catch((err) => {
         if (cancelled) return
-        setEvents([])
-        setError(err instanceof Error ? err.message : "加载轨迹失败")
+        setLiveError(err instanceof Error ? err.message : "实时更新失败")
       })
+    }
+    liveRetryRef.current = pullTailLive
+
+    const subscribe = (c: WsClient): void => {
+      try {
+        c.send({ type: "subscribe", sessionId })
+      } catch {
+        // A closed socket drops the frame silently; the reconnect loop re-subscribes.
+      }
+    }
+
+    const eventLoop = async (c: WsClient): Promise<"closed" | "auth" | "error"> => {
+      try {
+        for await (const frame of c.frames) {
+          if (cancelled) return "closed"
+          if (isAppendedFrame(frame)) pullTailLive()
+        }
+        return "closed"
+      } catch (err) {
+        return err instanceof WsAuthError ? "auth" : "error"
+      }
+    }
+
+    const run = async (): Promise<void> => {
+      let attempts = 0
+      while (!cancelled) {
+        subscribe(client)
+        const outcome = await eventLoop(client)
+        if (cancelled) return
+        if (outcome === "auth") {
+          setNotice("认证已失效，请刷新页面重新输入 token")
+          return
+        }
+        attempts += 1
+        if (attempts > MAX_RECONNECT_ATTEMPTS) {
+          setNotice("实时连接已断开，请刷新页面")
+          return
+        }
+        setNotice("连接已断开，正在重连…")
+        try {
+          client = createWs()
+          subscribe(client)
+          await pullTail() // reconnect reconcile: catch up on missed appends
+          if (cancelled) return
+          attempts = 0
+          setNotice(null)
+        } catch {
+          if (cancelled) return
+          setNotice("重连失败，请刷新页面")
+        }
+      }
+    }
+
+    pullTail().catch((err) => {
+      if (cancelled) return
+      setPhase("error")
+      setErrorText(err instanceof Error ? err.message : "加载事件流失败")
+    })
+    void run()
+
     return () => {
       cancelled = true
+      liveRetryRef.current = null
+      client.close()
     }
-  }, [api, selectedId])
+  }, [api, createWs, sessionId, reloadTick])
 
-  const rows = flattenTrail(events)
+  const visibleRows = useMemo(() => filterRows(rows, filter, nowTick), [rows, filter, nowTick])
+
+  // A pinned "最近 1 小时" / "今天" window goes stale on an idle page — rows
+  // should age out with real time, not only on the next event. A slow tick
+  // keeps the window honest; fixed presets (all / custom bounds) need none.
+  const dynamicTime = filter.timePreset === "1h" || filter.timePreset === "today"
+  useEffect(() => {
+    if (!dynamicTime) return
+    const timer = setInterval(() => setNowTick(new Date()), 30_000)
+    return () => clearInterval(timer)
+  }, [dynamicTime])
+
+  const setKind = useCallback((kind: AuditRowKind, on: boolean) => {
+    setFilter((f) => ({ ...f, kinds: { ...f.kinds, [kind]: on } }))
+  }, [])
+
+  const setKeyword = useCallback((kw: string) => {
+    setFilter((f) => ({ ...f, keyword: kw }))
+  }, [])
+
+  const setTimePreset = useCallback((preset: TimePreset) => {
+    setFilter((f) => ({ ...f, timePreset: preset }))
+  }, [])
+
+  const setTimeBound = useCallback((which: "timeFrom" | "timeTo", iso: string) => {
+    setFilter((f) => ({ ...f, [which]: iso }))
+  }, [])
+
+  const toggleExpanded = useCallback((key: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
+
+  const scrollToRow = useCallback((index: number) => {
+    cursorRowRef.current = index
+    virtRef.current?.scrollToIndex({ index, align: "center" })
+  }, [])
+
+  const jumpRows = useCallback((candidates: number[], dir: 1 | -1) => {
+    const from = cursorRowRef.current
+    const target = jumpTarget(candidates, from, dir)
+    if (target !== null) scrollToRow(target)
+    return target
+  }, [scrollToRow])
+
+  const compactionIndexes = useMemo(
+    () => visibleRows.reduce<number[]>((acc, r, i) => (r.kind === "compaction" ? (acc.push(i), acc) : acc), []),
+    [visibleRows],
+  )
+
+  const jumpLatest = useCallback(() => {
+    setFollowing(true)
+    if (visibleRows.length > 0) scrollToRow(visibleRows.length - 1)
+  }, [visibleRows.length, scrollToRow])
+
+  const rowsBody = (() => {
+    if (phase === "loading") {
+      return (
+        <p className="muted table-empty" data-testid="audit-loading">
+          加载事件流…
+        </p>
+      )
+    }
+    if (sessionId === null) {
+      return (
+        <p className="muted table-empty" data-testid="audit-empty">
+          在左侧选择一个会话查看它的审计事件流
+        </p>
+      )
+    }
+    if (rows.length === 0) {
+      return (
+        <p className="muted table-empty" data-testid="audit-empty">
+          暂无事件
+        </p>
+      )
+    }
+    if (visibleRows.length === 0) {
+      return (
+        <p className="muted table-empty" data-testid="audit-empty">
+          当前过滤条件下没有匹配的事件
+        </p>
+      )
+    }
+    return (
+      <div className="audit-list-wrap">
+        <Virtuoso
+          ref={virtRef}
+          key={sessionId}
+          className="audit-list"
+          data-testid="audit-list"
+          style={{ height: "100%" }}
+          data={visibleRows}
+          initialTopMostItemIndex={visibleRows.length - 1}
+          followOutput={following ? "auto" : false}
+          atBottomStateChange={setFollowing}
+          rangeChanged={(range) => {
+            // The jump anchor follows the viewport: after a manual scroll,
+            // prev/next-compaction jump relative to what the user sees.
+            cursorRowRef.current = range.startIndex
+          }}
+          computeItemKey={(_index, row) => row.key}
+          itemContent={(index, row) => (
+            <AuditRowItem
+              row={row}
+              expanded={expanded.has(row.key)}
+              onToggle={toggleExpanded}
+            />
+          )}
+        />
+        {!following && (
+          <button
+            type="button"
+            className="audit-latest-fab"
+            data-testid="audit-jump-latest"
+            onClick={jumpLatest}
+          >
+            回到最新 ↓
+          </button>
+        )}
+      </div>
+    )
+  })()
 
   return (
     <div className="audit-view" data-testid="audit-view">
       <div className="view-head">
-        <h2 className="view-title">轨迹</h2>
+        <h2 className="view-title">审计</h2>
+        <span className="audit-session-chip" data-testid="audit-session-chip">
+          {sessionTitle ?? (sessionId !== null ? sessionId : "未选择会话")}
+        </span>
       </div>
-      <div className="trail-filter">
-        <label htmlFor="trail-session">会话</label>
-        <select
-          id="trail-session"
-          data-testid="trail-session-select"
-          value={selectedId}
-          onChange={(event) => {
-            setSelectedId(event.target.value)
-            setExpandedKey(null)
-          }}
-        >
-          <option value="">选择会话…</option>
-          {(sessions ?? []).map((session) => (
-            <option key={session.id} value={session.id}>
-              {session.title}
-            </option>
+
+      <div className="audit-toolbar">
+        <div className="audit-toolbar-row" role="group" aria-label="行类型过滤">
+          {ALL_KINDS.map((kind) => (
+            <label key={kind} className="audit-kind-toggle">
+              <input
+                type="checkbox"
+                data-testid={`kind-${kind}`}
+                checked={filter.kinds[kind]}
+                onChange={(e) => setKind(kind, e.target.checked)}
+              />
+              {KIND_LABELS[kind]}
+            </label>
           ))}
-        </select>
+        </div>
+        <div className="audit-toolbar-row">
+          <input
+            type="search"
+            className="audit-kw"
+            data-testid="audit-keyword"
+            placeholder="按关键词过滤事件内容…"
+            value={filter.keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+          />
+          <button
+            type="button"
+            className="audit-jump-btn"
+            data-testid="audit-jump-compaction-prev"
+            disabled={compactionIndexes.length === 0}
+            onClick={() => void jumpRows(compactionIndexes, -1)}
+          >
+            ↑ 上次压缩
+          </button>
+          <button
+            type="button"
+            className="audit-jump-btn"
+            data-testid="audit-jump-compaction-next"
+            disabled={compactionIndexes.length === 0}
+            onClick={() => void jumpRows(compactionIndexes, 1)}
+          >
+            ↓ 下次压缩
+          </button>
+          <select
+            className="audit-time-preset"
+            data-testid="audit-time-preset"
+            value={filter.timePreset}
+            onChange={(e) => setTimePreset(e.target.value as TimePreset)}
+          >
+            {TIME_PRESETS.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          {filter.timePreset === "custom" && (
+            <>
+              <input
+                type="datetime-local"
+                className="audit-time-input"
+                data-testid="audit-time-from"
+                value={isoToLocalInput(filter.timeFrom)}
+                onChange={(e) => setTimeBound("timeFrom", localInputToIso(e.target.value))}
+              />
+              <span className="muted">–</span>
+              <input
+                type="datetime-local"
+                className="audit-time-input"
+                data-testid="audit-time-to"
+                value={isoToLocalInput(filter.timeTo)}
+                onChange={(e) => setTimeBound("timeTo", localInputToIso(e.target.value))}
+              />
+            </>
+          )}
+        </div>
       </div>
-      {error !== null && (
-        <div className="form-error" role="alert" data-testid="trail-error">
-          {error}
+
+      {notice !== null && (
+        <div className="audit-notice muted" data-testid="audit-notice" role="status">
+          {notice}
         </div>
       )}
-      {rows.length === 0 ? (
-        <p className="muted table-empty" data-testid="trail-empty">
-          暂无轨迹
-        </p>
-      ) : (
-        <ul className="trail-list" data-testid="trail-list">
-          {rows.map((row) => {
-            const isExpanded = expandedKey === row.key
-            const toggle = () => setExpandedKey((key) => (key === row.key ? null : row.key))
-            switch (row.kind) {
-              case "compaction":
-                return (
-                  <li key={row.key} className="trail-row-item">
-                    <button
-                      type="button"
-                      className="trail-row"
-                      data-testid={`compaction-row-${row.key}`}
-                      onClick={toggle}
-                    >
-                      <span className="trail-type">压缩</span>
-                      <span className="trail-summary">
-                        {row.record.trigger === "manual"
-                          ? `手动${row.record.focus ? `（${row.record.focus}）` : ""}`
-                          : row.record.trigger === "in-run"
-                            ? "自动（运行中）"
-                            : "自动（收尾）"}
-                        {row.record.emergency === true ? "·超限急救" : ""}
-                        {` · ${row.record.from ?? "会话开头"} – ${row.record.upto} · ${row.record.messages} 条`}
-                      </span>
-                      <span className="trail-meta muted">{new Date(row.at).toLocaleString()}</span>
-                    </button>
-                    {isExpanded && (
-                      <pre className="trail-full" data-testid={`compaction-full-${row.key}`}>
-                        {`段摘要：\n${row.record.segmentSummary}\n\n总摘要：\n${row.record.top}`}
-                      </pre>
-                    )}
-                  </li>
-                )
-              case "memory":
-                return (
-                  <li key={row.key} className="trail-row-item">
-                    <button
-                      type="button"
-                      className="trail-row"
-                      data-testid={`memory-row-${row.key}`}
-                      onClick={toggle}
-                    >
-                      <span className="trail-type">记忆</span>
-                      <span className="trail-summary">{memorySummary(row.event)}</span>
-                      <span className="trail-meta muted">{new Date(row.event.at).toLocaleString()}</span>
-                    </button>
-                    {isExpanded && (
-                      <pre className="trail-full" data-testid={`memory-full-${row.key}`}>
-                        {memoryFullContent(row.event)}
-                      </pre>
-                    )}
-                  </li>
-                )
-              case "system":
-                return (
-                  <li key={row.key} className="trail-row-item">
-                    <button
-                      type="button"
-                      className="trail-row"
-                      data-testid={`system-row-${row.key}`}
-                      onClick={toggle}
-                    >
-                      <span className="trail-type">系统提示词</span>
-                      <span className="trail-summary">
-                        {`${summarize(row.event.text, 60)} · ${row.event.text.length} 字`}
-                      </span>
-                      <span className="trail-meta muted">{new Date(row.event.at).toLocaleString()}</span>
-                      {row.changed && (
-                        <span className="trail-grant" data-testid={`system-changed-${row.key}`}>
-                          已变化
-                        </span>
-                      )}
-                    </button>
-                    {isExpanded && (
-                      <pre className="trail-full" data-testid={`system-full-${row.key}`}>
-                        {row.event.text}
-                      </pre>
-                    )}
-                  </li>
-                )
-              case "sandbox":
-                return (
-                  <li key={row.key} className="trail-row-item">
-                    <button
-                      type="button"
-                      className="trail-row"
-                      data-testid={`sandbox-row-${row.key}`}
-                      onClick={toggle}
-                    >
-                      <span className="trail-type">沙箱</span>
-                      <span className="trail-summary">{sandboxSummary(row.event)}</span>
-                      <span className="trail-meta muted">{new Date(row.event.at).toLocaleString()}</span>
-                    </button>
-                    {isExpanded && (
-                      <pre className="trail-full" data-testid={`sandbox-full-${row.key}`}>
-                        {sandboxFullContent(row.event)}
-                      </pre>
-                    )}
-                  </li>
-                )
-              default:
-                return (
-                  <li key={row.key} className="trail-row-item">
-                    <button
-                      type="button"
-                      className="trail-row"
-                      data-testid={`trail-row-${row.key}`}
-                      onClick={toggle}
-                    >
-                      <span className="trail-type">{blockTypeLabel(row.block)}</span>
-                      <span className="trail-summary">{blockSummary(row.block)}</span>
-                      <span className="trail-meta muted">
-                        {row.role} · {row.createdAt}
-                      </span>
-                      {row.grantedBy !== undefined && (
-                        <span className="trail-grant" data-testid={`trail-grant-${row.key}`}>
-                          放行: {row.grantedBy}
-                        </span>
-                      )}
-                    </button>
-                    {isExpanded && (
-                      <pre className="trail-full" data-testid={`trail-full-${row.key}`}>
-                        {blockFullContent(row.block)}
-                      </pre>
-                    )}
-                  </li>
-                )
-            }
-          })}
-        </ul>
+      {liveError !== null && phase !== "error" && (
+        <div className="audit-error-bar" data-testid="audit-live-error" role="status">
+          <span className="form-error">实时更新失败：{liveError}</span>
+          <button
+            type="button"
+            className="audit-retry"
+            data-testid="audit-live-retry"
+            onClick={() => {
+              setLiveError(null)
+              liveRetryRef.current?.()
+            }}
+          >
+            重试
+          </button>
+        </div>
       )}
+      {phase === "error" && (
+        <div className="audit-error-bar" data-testid="audit-error" role="alert">
+          <span className="form-error">{errorText}</span>
+          <button
+            type="button"
+            className="audit-retry"
+            data-testid="audit-retry"
+            onClick={() => setReloadTick((t) => t + 1)}
+          >
+            重试
+          </button>
+        </div>
+      )}
+
+      {rowsBody}
     </div>
   )
-}
-
-/**
- * Flatten the event stream into one row per rendered event. Message events
- * flatten into one row per block; blocks within a message keep their authored
- * order. Tool rows (tool_call/tool_result) carry the grant reason for their
- * callId, resolved from the tool message events' message-level `grantedBy`
- * maps (a tool_call lives on an assistant message, its tool_result + grantedBy
- * on the matching tool message — so we join by callId). Compaction and memory
- * events become rows of their own. System events become "系统提示词" rows of
- * their own; each carries `changed` — whether its text differs from the
- * previous system row in stream order (adjacent system rows compare directly,
- * ignoring the rows in between; the first system row of a session never
- * changes). Sandbox audit events become "沙箱" rows. The stream is append-only
- * and time-ordered,
- * so rows are emitted in event-array order — no timestamp re-sort needed.
- * Session metadata events (session.created/renamed/deleted/restored/set) are
- * intentionally skipped: the trail is about conversation + maintenance
- * content, and those are already reflected in the session dropdown.
- */
-function flattenTrail(events: SessionEvent[] | null): TrailRow[] {
-  if (events === null) return []
-  const rows: TrailRow[] = []
-
-  // callId → grant reason, gathered from every tool message event's grantedBy map.
-  const grantByCallId = new Map<string, ToolGrantReason>()
-  for (const event of events) {
-    if (event.type !== "message") continue
-    if (event.role !== "tool") continue
-    const toolEvent = event as MessageEvent & { grantedBy?: Record<string, ToolGrantReason> }
-    if (toolEvent.grantedBy === undefined) continue
-    for (const [callId, reason] of Object.entries(toolEvent.grantedBy)) grantByCallId.set(callId, reason)
-  }
-
-  let cp = 0
-  let mem = 0
-  let sys = 0
-  let sb = 0
-  let lastSystemText: string | null = null
-  for (const event of events) {
-    switch (event.type) {
-      case "message":
-        event.blocks.forEach((block, i) => {
-          const row: TrailRow = {
-            kind: "block",
-            key: `${event.id}-${i}`,
-            role: event.role,
-            block,
-            createdAt: event.createdAt,
-          }
-          if (block.type === "tool_call" || block.type === "tool_result") {
-            const reason = grantByCallId.get(block.callId)
-            if (reason !== undefined) row.grantedBy = reason
-          }
-          rows.push(row)
-        })
-        break
-      case "compaction":
-        rows.push({ kind: "compaction", key: `cp-${cp++}`, record: event, at: event.at })
-        break
-      case "memory":
-        rows.push({ kind: "memory", key: `mem-${mem++}`, event })
-        break
-      case "system":
-        rows.push({
-          kind: "system",
-          key: `sys-${sys++}`,
-          event,
-          changed: lastSystemText !== null && lastSystemText !== event.text,
-        })
-        lastSystemText = event.text
-        break
-      case "sandbox.checked":
-        rows.push({ kind: "sandbox", key: `sb-${sb++}`, event })
-        break
-      // session.created / renamed / deleted / restored / set — not rendered
-      // (already reflected in the session dropdown). Listed explicitly so a
-      // NEW core session-event type trips the sentinel below instead of
-      // silently vanishing from the trail.
-      case "session.created":
-      case "session.renamed":
-      case "session.deleted":
-      case "session.restored":
-      case "session.set":
-        break
-      default: {
-        // Compile-time exhaustiveness sentinel: a new SessionEvent member
-        // lands here as a non-never `event` and fails this assignment.
-        const unhandled: never = event
-        void unhandled
-        break
-      }
-    }
-  }
-  return rows
-}
-
-/** One-line memory summary: 记忆 · trigger · kind · op · (topic) · (file). */
-function memorySummary(event: MemoryEvent): string {
-  let s = `记忆 · ${event.trigger} · ${event.kind} · ${event.op}`
-  if (event.topic !== undefined) s += ` · ${event.topic}`
-  if (event.file !== undefined) s += ` · ${event.file}`
-  return s
-}
-
-/** Full memory payload on expand (present fields only). */
-function memoryFullContent(event: MemoryEvent): string {
-  const lines = [`trigger: ${event.trigger}`, `kind: ${event.kind}`, `op: ${event.op}`]
-  if (event.topic !== undefined) lines.push(`topic: ${event.topic}`)
-  if (event.file !== undefined) lines.push(`file: ${event.file}`)
-  if (event.scope !== undefined) lines.push(`scope: ${event.scope}`)
-  if (event.source !== undefined) lines.push(`source: ${event.source}`)
-  return lines.join("\n")
-}
-
-/** One-line sandbox summary: 可用 / 不可用（原因）/ 已关闭. */
-function sandboxSummary(event: SandboxCheckedEvent): string {
-  if (!event.enabled) return "已关闭（配置未启用）"
-  if (!event.available) return `不可用${event.unavailableReason !== undefined ? `（${event.unavailableReason}）` : ""}`
-  return "可用"
-}
-
-/** Full sandbox audit payload on expand. */
-function sandboxFullContent(event: SandboxCheckedEvent): string {
-  const lines = [
-    `enabled: ${event.enabled}`,
-    `available: ${event.available}`,
-  ]
-  if (event.unavailableReason !== undefined) lines.push(`unavailableReason: ${event.unavailableReason}`)
-  return lines.join("\n")
-}
-
-/** Whitespace-collapsed, first-N-chars summary. */
-function summarize(text: string, max = 80): string {
-  const t = text.replace(/\s+/g, " ").trim()
-  return t.length > max ? `${t.slice(0, max)}…` : t
-}
-
-function blockTypeLabel(block: Block): string {
-  switch (block.type) {
-    case "text":
-      return "text"
-    case "thinking":
-      return "thinking"
-    case "tool_call":
-      return "tool_call"
-    case "tool_result":
-      return "tool_result"
-    case "note":
-      return "note"
-    case "attachment":
-      return "attachment"
-  }
-}
-
-function blockSummary(block: Block): string {
-  switch (block.type) {
-    case "text":
-    case "thinking":
-      return summarize(block.text)
-    case "tool_call":
-      return `${block.name} ${summarize(block.argsJson)}`
-    case "tool_result":
-      return summarize(block.output)
-    case "note":
-      return summarize(block.text)
-    case "attachment":
-      return block.mimeType
-  }
-}
-
-function blockFullContent(block: Block): string {
-  switch (block.type) {
-    case "text":
-    case "thinking":
-    case "note":
-      return block.text
-    case "tool_call":
-      return block.argsJson
-    case "tool_result":
-      return block.output
-    case "attachment":
-      return JSON.stringify(block.source, null, 2)
-  }
 }

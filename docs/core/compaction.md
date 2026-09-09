@@ -312,7 +312,7 @@ llm.stream({ system: <人格>, messages: [
 
 ## 压缩审计
 
-`compaction` 事件是自动与手动压缩共同的记录载体（手动压缩刻意不产生消息，纯靠消息流看不到它的痕迹），作为 append-only 事件流里的一条追加在会话目录 `events.jsonl` 中；`GET /sessions/:id/compactions` 是它的只读投影视图（从事件流过滤 `compaction` 事件）。审计页（`packages/web/src/audit/AuditView.tsx`）改拉 `GET /sessions/:id/events` 单源，按事件流序把 `compaction` 事件渲染成一行"压缩"行：触发方式（`自动（收尾）` / `自动（运行中）` / `手动`，带 `emergency` 标记的追加"·超限急救"，手动显示 focus）、被压范围（`from`–`upto`，首条为 null 显示"会话开头"）、消息条数；点击展开该次的段摘要与总摘要全文。无记录时不显示。消息轨迹本身仍然没有专门的审计接口（见 [http-api](../server/http-api.md)）。
+`compaction` 事件是自动与手动压缩共同的记录载体（手动压缩刻意不产生消息，纯靠消息流看不到它的痕迹），作为 append-only 事件流里的一条追加在会话目录 `events.jsonl` 中；`GET /sessions/:id/compactions` 是它的只读投影视图（从事件流过滤 `compaction` 事件）。审计页（`packages/web/src/audit/AuditView.tsx`）改拉 `GET /sessions/:id/events` 单源，按事件流序把 `compaction` 事件渲染成一行"压缩"行：触发方式（`自动（收尾）` / `自动（运行中）` / `手动`，带 `emergency` 标记的追加"·超限急救"，手动显示 focus）、被压范围（`from`–`upto`，首条为 null 显示"会话开头"）、消息条数；点击展开该次的段摘要与总摘要全文。无记录时不显示。消息历史本身仍然没有专门的审计接口（见 [http-api](../server/http-api.md)）。
 
 ---
 

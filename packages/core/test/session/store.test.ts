@@ -462,3 +462,80 @@ describe("SessionStore event sourcing", () => {
     expect(store.meta(meta.id)!.model).toBe("gpt-4")
   })
 })
+
+describe("SessionStore append hook", () => {
+  it("appendEvent 落盘成功后触发 onAppended（携带 sessionId 与事件本体）", () => {
+    const seen: Array<{ id: string; type: string }> = []
+    const s = new SessionStore(dir, (id, ev) => seen.push({ id, type: ev.type }))
+    const m = s.create()
+    s.appendMessage(m.id, newMessage(m.id, "user", [{ id: "blk_1", type: "text", text: "hi" }]))
+    // create 走 appendEvent（session.created），appendMessage 再一条：两条都通知
+    expect(seen).toEqual([
+      { id: m.id, type: "session.created" },
+      { id: m.id, type: "message" },
+    ])
+  })
+
+  it("onAppended 抛异常不破坏落盘与投影（通知失败不是写失败）", () => {
+    const s = new SessionStore(dir, () => { throw new Error("bus down") })
+    const m = s.create()
+    s.appendMessage(m.id, newMessage(m.id, "user", [{ id: "blk_1", type: "text", text: "hi" }]))
+    expect(s.readEvents(m.id)).toHaveLength(2)
+    expect(s.meta(m.id)!.updatedAt).toBeTruthy()
+  })
+
+  it("未传 onAppended 时行为不变", () => {
+    const s = new SessionStore(dir)
+    const m = s.create()
+    s.appendMessage(m.id, newMessage(m.id, "user", [{ id: "blk_1", type: "text", text: "hi" }]))
+    expect(s.readEvents(m.id)).toHaveLength(2)
+  })
+
+  it("落盘失败不触发 onAppended（异常照常抛出——通知只属于写成功的追加）", () => {
+    // 把会话的 events.jsonl 换成目录：追加写入必然失败（EISDIR），
+    // 回调必须未被调用（"先落盘后广播"的不变式由这条用例守住）。
+    const seen: Array<{ id: string; type: string }> = []
+    const s = new SessionStore(dir, (id, ev) => seen.push({ id, type: ev.type }))
+    const m = s.create()
+    rmSync(join(dir, m.id, "events.jsonl"))
+    mkdirSync(join(dir, m.id, "events.jsonl"))
+    expect(() => s.appendMessage(m.id, newMessage(m.id, "user", [{ id: "blk_1", type: "text", text: "hi" }]))).toThrow()
+    expect(seen).toEqual([{ id: m.id, type: "session.created" }])
+  })
+})
+
+describe("SessionStore readEventsFrom (tail read)", () => {
+  function seeded(): { s: SessionStore; id: string } {
+    const s = new SessionStore(dir)
+    const m = s.create()
+    for (let i = 1; i <= 3; i++) {
+      s.appendMessage(m.id, newMessage(m.id, "user", [{ id: `blk_${i}`, type: "text", text: `msg${i}` }]))
+    }
+    return { s, id: m.id }
+  }
+
+  it("等价于 readEvents().slice(since)：0/中间/越界三档", () => {
+    const { s, id } = seeded()
+    const full = s.readEvents(id)
+    expect(s.readEventsFrom(id, 0)).toEqual(full)
+    expect(s.readEventsFrom(id, 2)).toEqual(full.slice(2))
+    expect(s.readEventsFrom(id, 99)).toEqual([])
+  })
+
+  it("只解析尾部：跳过的行损坏不抛错，尾部的损坏语义与 readJsonl 一致（丢撕裂数据）", () => {
+    const { s, id } = seeded()
+    // 模拟真实损坏场景比较绕，这里直接验证"跳过区不 parse"：把首行改成非法 JSON，
+    // readEvents 会抛（corrupt），readEventsFrom(1, …) 不受影响。
+    const file = join(dir, id, "events.jsonl")
+    const lines = readFileSync(file, "utf8").split("\n")
+    lines[0] = "{corrupt"
+    writeFileSync(file, lines.join("\n"))
+    expect(() => s.readEvents(id)).toThrow()
+    expect(s.readEventsFrom(id, 1)).toHaveLength(3)
+  })
+
+  it("不存在的会话返回 []（与 readEvents 同语义）", () => {
+    const s = new SessionStore(dir)
+    expect(s.readEventsFrom("ses_none", 0)).toEqual([])
+  })
+})

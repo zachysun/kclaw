@@ -127,6 +127,7 @@ export function readJsonl(file: string): unknown[]
 崩溃容忍的两个策略函数（`packages/core/src/storage/jsonl.ts`），事件流与队列共用：
 
 - `readJsonl(file)`：缺失文件返回 `[]`；去掉完整追加留下的末尾空行后逐行 `JSON.parse`；**最后一行**解析失败视为断尾崩溃产物，丢弃并停止；**中间任何一行**解析失败则抛错——崩溃不可能制造中间坏行，那是 bug 或外部破坏，静默跳过等于掩盖问题。
+- `readJsonlFrom(file, since)`：`readJsonl` 的尾部读变体，供增量拉取（`SessionStore.readEventsFrom` / 审计页 `?since=`）——文件仍整体读入（JSONL 没有行偏移索引），但下标 `< since` 的行**不解析、不构建**，增量开销随返回条数而非流总长走；已解析区域的损坏语义与 `readJsonl` 一致，跳过区的损坏不可见。`readJsonl` 即 `readJsonlFrom(file, 0)`。
 - `repairTornTail(file)` + `appendJsonlLine(file, value)`：每次追加前检查最后一个字节，是 `\n` 说明上次干净结束；否则**先截断到上一个换行再追加**。截断点是**字节偏移**（`Buffer.lastIndexOf(0x0a)`）：UTF-8 的多字节序列内部不会出现 0x0a（续字节都 ≥ 0x80），所以单字节探测可靠；若用解码字符串的 indexOf 得到的是 UTF-16 码元下标，切点可能落在多字节字符中间，恰好破坏上一行。文件不存在时修复是 no-op。
 
 会话的删除语义在 `SessionStore`：`delete()` 软删除（追加 `session.deleted` 事件，投影置 `deleted: true, deletedAt`），`restore()` 恢复（追加 `session.restored` 事件），`purge()` 物理删除整个目录，`purgeExpired(ttlMs)` 清理过期软删除会话（由 scheduler tick 周期调用）。

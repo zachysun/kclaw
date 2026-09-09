@@ -67,10 +67,15 @@ resolvePaths(home)                  建目录树（core/storage/paths.ts）
 acquireDaemonSlot                   wx 独占认领 <home>/daemon.json：占位 {port:0, pid, startedAt, starting:true}
 loadConfig(paths)                   config.yaml 深合并默认值
 loadOrCreateToken(paths.home)       读/生成 <home>/token
-new SessionStore(paths.sessionsDir)
+new EventBus()                      总线先于 store 构造：store 的落盘通知回调要发
+                                    session.appended 总线帧（先落盘后广播，审计页等
+                                    订阅方据此增量拉取事件流——见 realtime/protocol）
+new SessionStore(paths.sessionsDir, onAppended)
+                                    store 构造时注入落盘通知回调：每个事件（含投影）
+                                    成功写入 events.jsonl 后发 session.appended
+                                    （通知抛错被吞掉，写成功不被通知连累）
 embedding 判定链（memory.embedding） model 非空才构造 embedding 客户端（见 memory.md 判定链）；
-                                    构造在 EventBus 之后、MemorySystem 之前，赋给下方 memory
-new EventBus()
+                                    构造在 EventBus/SessionStore 之后、MemorySystem 之前，赋给下方 memory
 new MemorySystem({memoryDir, sessions, config, resolveLlm, embed, emit})
                                     记忆系统门面（见 memory.md）；装配后立即三件事：
                                     migrateV1Notes（notes/*.md 三路分流并入 persona/rule/wiki，删 notes/）

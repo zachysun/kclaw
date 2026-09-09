@@ -6,8 +6,8 @@
  * UI-relevant subset of what the HTTP routes return).
  */
 export type {
-  AttachmentBlock, AttachmentSource, Block, Message, NoteBlock, NoteKind, Role,
-  TextBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock, ToolStatus,
+  AgentEvent, AttachmentBlock, AttachmentSource, Block, Message, NoteBlock, NoteKind, Role,
+  TextBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock, ToolStatus, Usage,
   CompactionEvent, MemoryEvent, MessageEvent, SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
   SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SystemEvent,
 } from "@kclaw/core/protocol"

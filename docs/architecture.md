@@ -12,7 +12,7 @@ kclaw 是一个本地常驻的个人 agent：一个 daemon 进程独占全部状
 - **core 是纯库**：`@kclaw/core` 不依赖 fastify/ws/commander，不感知 HTTP/WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）的存在。LLM（`deps.llm`）、工具执行、事件出口（`deps.onEvent`）、持久化（`deps.onMessage`）全部注入，整个 agent 循环可用 mock 离线测试。
 - **daemon 只绑 loopback（本机回环地址，外部网络访问不到）**：`HOST = "127.0.0.1"`（`packages/server/src/daemon.ts` 与 `packages/cli/src/daemon-ctl.ts` 各自硬编码），默认绑临时端口（`port: 0`），端口与 pid 写入 `<home>/daemon.json`，鉴权靠 `<home>/token` 里的 Bearer token（放在 HTTP `Authorization` 请求头里的访问令牌）。
 - **实时事件不持久化，持久化的是 events.jsonl 事件流**：WS 上推送的增量事件（text.delta、message.created 等）不落盘、不重发、不回放；会话的持久化形式是 events.jsonl 事件流（唯一真相，message / compaction / memory / system 等业务事件都在这里）与 meta.json 投影（见 [storage](./core/storage.md)）。客户端断线恢复 = HTTP 拉全量消息 + 只订阅新事件（详见 [protocol](./core/protocol.md)）。
-- **WebUI 是独立产物**：`@kclaw/web` 除 react/react-dom 外仅依赖 `@kclaw/core` 的 `commands` 共享表（纯数据：slash 命令的 name/usage 元数据，见 [extending](./extending.md)），构建为静态文件后由 daemon 托管（`resolveWebDist` → `packages/web/dist`）。
+- **WebUI 是独立产物**：`@kclaw/web` 的运行时依赖只有 react/react-dom、`@kclaw/core`（`commands` 共享表——纯数据：slash 命令的 name/usage 元数据，见 [extending](./extending.md)；`protocol` 子路径出口——线上形状的类型正本）以及 react-virtuoso（审计页的虚拟滚动列表库，见 [webui](./web/webui.md)），构建为静态文件后由 daemon 托管（`resolveWebDist` → `packages/web/dist`）。
 
 ---
 
@@ -24,19 +24,19 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
  ├── @kclaw/core     纯库，agent 引擎（run 装配/压缩引擎/事件总线/确认网关都在这里；server 与 cli 都依赖它）
  ├── @kclaw/server   daemon：Fastify app + RunManager 队列状态机（依赖 core）
  ├── @kclaw/cli      客户端：REPL / daemon 控制（依赖 core 的类型、ws、commander）
- └── @kclaw/web      客户端：React SPA（依赖 core 的 commands 共享表，vite 独立构建）
+ └── @kclaw/web      客户端：React SPA（依赖 core 的 commands/protocol 子路径出口与 react-virtuoso，vite 独立构建）
 ```
 
-依赖方向唯一：`core ← server`、`core ← cli`。`web` 只依赖 core 的 `commands` 共享表（纯数据，不含 agent 引擎），`kclaw` 只在构建期聚合。
+依赖方向唯一：`core ← server`、`core ← cli`。`web` 只依赖 core 的 `commands`/`protocol` 子路径出口（纯数据/纯类型，不含 agent 引擎）与 react-virtuoso，`kclaw` 只在构建期聚合。
 
 ### 各包内部结构
 
 | 包 | 入口 | 内容 |
 |----|------|------|
-| core | `packages/core/src/index.ts` | 入口统一导出 14 个子目录：`protocol/`（消息/块/事件/WS 指令帧/会话事件/ID——线上形状的类型正本，经 `@kclaw/core/protocol` 子路径出口供三端引用）、`provider/`（OpenAI 兼容客户端+重试）、`agent/`（循环+上下文组装+工具契约+单 run 装配 `run-assembly.ts` 的 `executeRun`）、`hooks/`（钩子系统：14 位置网格 + HookChain 注册接口 + 用户文件装载 + 内置钩子，见 [hooks](./core/hooks.md)）、`storage/`（路径/配置/JSONL，即每行一条 JSON 的文本文件；含用量台账 `usage.ts` 与沉淀权限规则文件 `decided-rules.ts`）、`session/`（SessionStore 与上下文压缩：估算/分界/渲染纯函数、事件溯源存储、压缩引擎 `Compactor`、自动命名；`session_search` 直接扫事件流）、`permissions/`（ConfigPermissionGate + 确认网关 ConfirmationBroker）、`memory/`（MemorySystem：L1 项目情节 + L2 全局认知 + FTS5/向量索引，见 [memory](./core/memory.md)）、`text/`（共享中文分词器与 FTS 辅助）、`tools/`（11 个内置工具）、`skills/`（技能包解析/双作用域扫描/点名匹配，见 [skills](./core/skills.md)）、`jobs/`（JobScheduler）、`mcp/`（MCP 客户端管理器）、`notify/`（任务完成通知）；根级 `bus.ts`（EventBus 进程内事件分发）与 `client-http.ts`（CLI/WebUI 共享的 HTTP 请求基座：Bearer 注入、错误体提取、204/空响应处理，经 `@kclaw/core/client-http` 子路径出口；不 import 任何 Node 专属模块，浏览器可直接打包） |
-| server | `packages/server/src/index.ts` | `app.ts`（createApp 装配）、`daemon.ts`（launchDaemon）、`auth.ts`（token）、`run.ts`（RunManager 队列状态机；单 run 装配在 core 的 `executeRun`）、`command-check.ts`（WS 命令帧的唯一校验点）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`、`memory-scheduler.ts`（记忆定时/跟随兜底调度）、`routes/`（sessions/attachments/jobs/config/fs/usage/memory/skills/hooks） |
+| core | `packages/core/src/index.ts` | 入口统一导出 14 个子目录：`protocol/`（消息/块/事件/WS 指令帧/会话事件/ID——线上形状的类型正本，经 `@kclaw/core/protocol` 子路径出口供三端引用）、`provider/`（OpenAI 兼容客户端+重试）、`agent/`（循环+上下文组装+工具契约+单 run 装配 `run-assembly.ts` 的 `executeRun`）、`hooks/`（钩子系统：14 位置网格 + HookChain 注册接口 + 用户文件装载 + 内置钩子，见 [hooks](./core/hooks.md)）、`storage/`（路径/配置/JSONL，即每行一条 JSON 的文本文件；含用量台账 `usage.ts` 与沉淀权限规则文件 `decided-rules.ts`）、`session/`（SessionStore 与上下文压缩：估算/分界/渲染纯函数、事件溯源存储、压缩引擎 `Compactor`、自动命名；`session_search` 直接扫事件流）、`permissions/`（ConfigPermissionGate + 确认网关 ConfirmationBroker）、`memory/`（MemorySystem：L1 项目情节 + L2 全局认知 + FTS5/向量索引，见 [memory](./core/memory.md)）、`text/`（共享中文分词器与 FTS 辅助）、`tools/`（11 个内置工具）、`skills/`（技能包解析/双作用域扫描/点名匹配，见 [skills](./core/skills.md)）、`jobs/`（JobScheduler）、`mcp/`（MCP 客户端管理器）、`notify/`（任务完成通知）；根级 `bus.ts`（EventBus 进程内事件分发）与 `client-http.ts`（CLI/WebUI 共享的 HTTP 请求基座：Bearer 注入、错误体提取、204/空响应处理，经 `@kclaw/core/client-http` 子路径出口；不 import 任何 Node 专属模块，浏览器可直接打包）；另有内部模块 `sandbox/`（exec 的 OS 沙箱：Seatbelt/bwrap 探测与包装，见 [sandbox](./core/sandbox.md)）不经入口导出、由 run 装配直接 import |
+| server | `packages/server/src/index.ts` | `app.ts`（createApp 装配）、`daemon.ts`（launchDaemon）、`auth.ts`（token）、`run.ts`（RunManager 队列状态机；单 run 装配在 core 的 `executeRun`）、`command-check.ts`（WS 命令帧的唯一校验点）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`、`memory-scheduler.ts`（记忆定时/跟随兜底调度）、`routes/`（sessions/attachments/jobs/config/fs/usage/memory/skills/hooks/permissions） |
 | cli | `packages/cli/src/index.ts` | commander 命令树（默认进 chat）；`chat.ts`（REPL+渲染+@引用展开）、`client.ts`（KclawClient）、`daemon-ctl.ts`（探测/启动/停止）、`slash.ts`、`file-refs.ts`、`wizard.ts`、`provider-check.ts`、`web-cmd.ts` |
-| web | `packages/web/src/main.tsx` | 视图（chat/sessions/jobs/audit/usage/trash/memory/skills + DirectoryPicker）、离线外壳（`sw.js`/manifest/OfflineBanner）、`ws.ts`（WS 客户端）、`token.ts`（token 引导） |
+| web | `packages/web/src/main.tsx` | 视图（chat/sessions/jobs/audit/usage/trash/memory/skills/permissions + DirectoryPicker）、离线外壳（`sw.js`/manifest/OfflineBanner）、`ws.ts`（WS 客户端）、`token.ts`（token 引导） |
 
 ---
 
@@ -46,7 +46,8 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 ┌─ kclaw daemon（常驻进程，唯一状态权威）───────────────────────┐
 │  127.0.0.1:<port>  （port 写入 <home>/daemon.json）            │
 │  HTTP: /health /status /sessions* /attachments* /jobs*         │
-│        /config /fs/browse /usage /mcp /skills /hooks （Bearer）       │
+│        /memory* /permissions /skills /hooks /config            │
+│        /fs/browse /usage /mcp （Bearer）                        │
 │  WS:   /ws（首帧 auth 或 ?token=；subscribe + 命令 + 事件流）   │
 │  常驻: RunManager（会话串行 run）· scheduler tick（默认 30s）   │
 │        · 记忆调度器（定时 + 跟随，默认 60s 扫）                 │

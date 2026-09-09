@@ -22,6 +22,8 @@ export interface AssistantMessage extends Message {
   model: string
   usage: Usage
   stopReason: StopReason
+  /** Wall-clock LLM generation time in ms (measured at stream completion); present only on successful completions, so historical messages may lack it. */
+  latencyMs?: number
 }
 
 /** Why a tool call was allowed to run. */

@@ -35,7 +35,9 @@ import { PermissionsView } from "./permissions/PermissionsView.js"
 import type { FsBrowseResult, SessionMeta } from "./types.js"
 
 type DaemonStatus = "connecting" | "connected" | "error"
-type Tab = "chat" | "jobs" | "audit" | "usage" | "trash" | "memory" | "skills" | "permissions"
+
+const TABS = ["chat", "jobs", "audit", "usage", "trash", "memory", "skills", "permissions"] as const
+type Tab = (typeof TABS)[number]
 
 /**
  * Union two raw message lists by id, chronological (a cache snapshot can be
@@ -118,8 +120,12 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
   // Mobile-only: the sidebar slides in as a drawer behind this flag (desktop
   // keeps it permanently visible).
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  // The audit page stays mounted once visited (hidden offscreen on other tabs)
+  // so its live connection, filters, and scroll position survive navigation.
+  const [auditVisited, setAuditVisited] = useState(false)
   // One-shot ?session=<id> deep link (notification targets): consumed exactly
-  // once, after the session list loads, then stripped from the URL.
+  // once, after the session list loads, then stripped from the URL. An
+  // optional ?tab=<name> rides along (e.g. /?tab=audit&session=…).
   const deepLinkConsumed = useRef(false)
 
   useEffect(() => {
@@ -146,8 +152,14 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
         if (!cancelled) setSessions(metas)
         if (!cancelled && !deepLinkConsumed.current) {
           deepLinkConsumed.current = true
-          const target = new URLSearchParams(window.location.search).get("session")
-          // Consume the param either way (hit or miss) so a refresh or later
+          const params = new URLSearchParams(window.location.search)
+          const target = params.get("session")
+          const targetTab = params.get("tab")
+          if (targetTab !== null && (TABS as readonly string[]).includes(targetTab)) {
+            if (targetTab === "audit") setAuditVisited(true) // deep links mount the kept-alive host too
+            setTab(targetTab as Tab)
+          }
+          // Consume the params either way (hit or miss) so a refresh or later
           // navigation never re-triggers the jump.
           window.history.replaceState({}, "", "/")
           if (target !== null && metas.some((meta) => meta.id === target)) {
@@ -219,6 +231,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
   // A tab click on mobile should also dismiss the sidebar drawer.
   const switchTab = useCallback((next: Tab) => {
     setSidebarOpen(false)
+    if (next === "audit") setAuditVisited(true)
     setTab(next)
   }, [])
 
@@ -438,7 +451,18 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
             </p>
           )}
           {tab === "jobs" && <JobsView api={api} />}
-          {tab === "audit" && <AuditView api={api} />}
+          {auditVisited && (
+            // Kept mounted (offscreen, not display:none — Virtuoso needs real
+            // layout) so the live stream, filters, and scroll survive tab switches.
+            <div className={tab === "audit" ? "audit-host" : "audit-host offscreen"} data-testid="audit-host">
+              <AuditView
+                api={api}
+                createWs={createWs}
+                sessionId={selectedId}
+                sessionTitle={selectedMeta?.title ?? null}
+              />
+            </div>
+          )}
           {tab === "usage" && <UsageView api={api} />}
           {tab === "trash" && <TrashView api={api} />}
           {tab === "memory" && <MemoryView api={api} notice={(t) => setSessionNotice(t)} openTarget={memoryTarget} onOpenConsumed={() => setMemoryTarget(null)} />}

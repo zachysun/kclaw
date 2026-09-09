@@ -4,7 +4,7 @@ import type { PermissionGate } from "../../src/agent/loop.js"
 import { withLastUserText } from "../../src/agent/context.js"
 import type { ToolExecutor } from "../../src/agent/tools.js"
 import type { LlmClient, LlmStreamEvent } from "../../src/provider/types.js"
-import { newMessage, type Message } from "../../src/protocol/messages.js"
+import { newMessage, type AssistantMessage, type Message } from "../../src/protocol/messages.js"
 import { chainOf, hook } from "./hook-utils.js"
 
 /** First stream call asks for the tool, every later call finishes the run. */
@@ -181,5 +181,25 @@ describe("runAgent llm-before（LLM 执行前的模型视图改写钩子）", ()
       { llm, model: "m", hooks: chainOf(), onEvent: () => {}, onMessage: () => {} } as Parameters<typeof runAgent>[1],
     )
     expect((requests[0]!.messages.at(-1) as { role: string; content: string }).content).toBe("原文")
+  })
+})
+
+describe("runAgent assistant latency", () => {
+  it("assistant 消息携带 latencyMs（LLM 生成耗时，毫秒）", async () => {
+    const llm: LlmClient = {
+      async *stream() {
+        await new Promise((r) => setTimeout(r, 15))
+        yield { type: "text_delta", delta: "ok" }
+        yield { type: "message_done", stopReason: "end_turn" as const, usage: { inputTokens: 1, outputTokens: 1 } }
+      },
+    }
+    const messages: Message[] = []
+    await runAgent(
+      { sessionId: "s", history: [], system: "", userText: "go" },
+      { llm, model: "m", hooks: chainOf(), onEvent: () => {}, onMessage: (m) => messages.push(m) } as Parameters<typeof runAgent>[1],
+    )
+    const a = messages.find((m) => m.role === "assistant")! as AssistantMessage
+    expect(typeof a.latencyMs).toBe("number")
+    expect(a.latencyMs!).toBeGreaterThanOrEqual(10)
   })
 })

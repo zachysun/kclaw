@@ -1407,30 +1407,132 @@ select:focus {
   margin-top: var(--space-3);
 }
 
-/* audit trail — flat rows with a type chip */
-.trail-filter {
+/* audit page — virtualized live event stream */
+/* The audit view fills the pane and scrolls internally (Virtuoso owns the
+   scroller); .main must not double-scroll while the audit tab is visible. */
+.main:has(.audit-host:not(.offscreen)) {
   display: flex;
-  align-items: center;
+  overflow: hidden;
+}
+
+.audit-host {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Tab keep-alive: hidden must NOT be display:none — Virtuoso needs real
+   layout to measure rows. Offscreen keeps geometry, drops interactivity. */
+.audit-host.offscreen {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.audit-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.audit-session-chip {
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-toolbar {
+  display: flex;
+  flex-direction: column;
   gap: var(--space-2);
   margin-bottom: var(--space-3);
   font-size: 12px;
   color: var(--muted);
 }
 
-.trail-filter select {
-  min-width: 200px;
+.audit-toolbar-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
-.trail-list {
+.audit-kind-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  user-select: none;
+  cursor: pointer;
+}
+
+.audit-kw {
+  min-width: 180px;
+}
+
+.audit-jump-btn {
+  font-size: 12px;
+  padding: 3px 8px;
+}
+
+.audit-jump-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.audit-time-preset {
+  min-width: 0;
+}
+
+.audit-time-input {
+  font-size: 12px;
+}
+
+.audit-notice {
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+.audit-error-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.audit-retry {
+  flex-shrink: 0;
+  font-size: 12px;
+  padding: 3px 10px;
+}
+
+.audit-list-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.audit-list {
   list-style: none;
-  margin: 0;
-  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
+  padding: 0 4px 4px 0;
 }
 
-.trail-row {
+.audit-row-item {
+  padding: 0;
+}
+
+.audit-row {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -1444,12 +1546,12 @@ select:focus {
   font-size: 12px;
 }
 
-.trail-row:hover {
+.audit-row:hover {
   background: var(--surface-2);
   border-color: var(--border-strong);
 }
 
-.trail-type {
+.audit-type {
   flex-shrink: 0;
   font-size: 11px;
   padding: 1px 6px;
@@ -1459,7 +1561,7 @@ select:focus {
   border: 1px solid var(--border);
 }
 
-.trail-summary {
+.audit-summary {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -1468,18 +1570,30 @@ select:focus {
   color: var(--text-dim);
 }
 
-.trail-meta {
+.audit-meta {
   flex-shrink: 0;
   font-size: 11px;
 }
 
-.trail-grant {
+.audit-grant {
   flex-shrink: 0;
   font-size: 11px;
   color: var(--success);
 }
 
-.trail-full {
+.audit-usage,
+.audit-duration {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+.audit-full {
   margin: 0;
   padding: var(--space-2) var(--space-3);
   background: var(--surface);
@@ -1489,6 +1603,25 @@ select:focus {
   font-family: var(--font-mono);
   font-size: 12px;
   overflow-x: auto;
+}
+
+/* resume-following bubble (visible while scrolled away from the bottom) */
+.audit-latest-fab {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 5;
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.audit-latest-fab:hover {
+  background: var(--surface-2);
 }
 
 /* trash */
@@ -1718,6 +1851,29 @@ select:focus {
 
   .view-title {
     font-size: 16px;
+  }
+
+  /* audit rows: let summaries wrap instead of truncating away the content */
+  .audit-summary {
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  .audit-row {
+    flex-wrap: wrap;
+  }
+
+  .audit-kw {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .audit-time-input {
+    max-width: 46%;
+  }
+
+  .audit-session-chip {
+    max-width: 60%;
   }
 }
 

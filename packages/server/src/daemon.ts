@@ -244,7 +244,13 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   const config = opts.config ?? loadConfig(paths)
   const token = loadOrCreateToken(paths.home)
 
-  const sessions = new SessionStore(paths.sessionsDir)
+  // The bus is built before the store: the store's post-append callback emits
+  // the session.appended bus frame (audit-page subscribers use it to refetch
+  // the stream incrementally — persisted before announced, no race).
+  const bus = new EventBus()
+  const sessions = new SessionStore(paths.sessionsDir, (sessionId, event) => {
+    bus.emit(makeEvent("session.appended", { eventType: event.type }, { sessionId }))
+  })
   // embedding 判定链：model 空 → 不构造客户端（向量路关闭）；provider 名
   // 缺省取 default provider entry；entry 不存在则向量路关闭并告警（不致命）。
   const embedCfg = config.memory.embedding
@@ -259,7 +265,6 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       console.error("kclaw memory: embedding provider not found, vector path disabled")
     }
   }
-  const bus = new EventBus()
   // 用户 hook 注册表：daemon 级账本，run 装配每 run 现扫
   // ~/.kclaw/hooks；装载失败经 registry 去重后广播一次 hook.failed(load)。
   const hookRegistry = new HookRegistry({

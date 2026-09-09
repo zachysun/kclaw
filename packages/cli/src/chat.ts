@@ -432,6 +432,9 @@ export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean
     case "message.queued":
     case "message.steered":
     case "message.queue_cancelled":
+    // session.appended: the persistence announcement consumed by the webui
+    // audit page (incremental refetch); the CLI renders nothing.
+    case "session.appended":
       return false
     default: {
       // Compile-time exhaustiveness sentinel: a new core event type lands
