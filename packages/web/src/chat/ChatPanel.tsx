@@ -63,6 +63,8 @@ export interface ChatPanelProps {
   workdir?: string
   /** memory.written 通知条点击 → 跳转记忆页对应文件；不传则通知条保持纯文本。 */
   onOpenMemoryWritten?: (info: MemoryWrittenInfo) => void
+  /** Open a subagent's audit trail (the spawn row's 查看轨迹 link). */
+  onOpenAudit?: (sessionId: string) => void
 }
 
 /** Max consecutive failed reconnects before giving up with a notice. */
@@ -90,7 +92,7 @@ function errorFrameMessage(frame: unknown): string | null {
   return typeof message === "string" ? message : null
 }
 
-export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten }: ChatPanelProps) {
+export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten, onOpenAudit }: ChatPanelProps) {
   const [view, setViewState] = useState<ChatState>(() => initChat(initialMessages))
   const [notice, setNotice] = useState<string | null>(null)
   // 已装用户可见技能：出现在斜杠菜单的动态命令（/技能名），会话切换重拉
@@ -539,6 +541,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           onSetDisposition={handleSetDisposition}
           onCancelQueued={handleCancelQueued}
           onCancelAllQueued={() => handleCancelQueued()}
+          onOpenAudit={onOpenAudit}
           onCancelCompaction={handleCancelCompaction}
           compactions={compactions}
           extraCommands={skillRows.map((r) => skillCommandMeta(r.name, r.description, "web"))}

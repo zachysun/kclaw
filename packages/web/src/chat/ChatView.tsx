@@ -88,6 +88,8 @@ export interface ChatViewProps {
   onCancelQueued?: (messageId: string) => void
   /** Cancel every still-queued message (the banner's 全部取消). */
   onCancelAllQueued?: () => void
+  /** Open a subagent's audit trail (the spawn row's 查看轨迹 link). */
+  onOpenAudit?: (sessionId: string) => void
   /** Cancel the in-flight automatic compaction (the indicator's 取消, v3 compaction.cancel). */
   onCancelCompaction?: () => void
   /**
@@ -109,7 +111,7 @@ const MODE_LABELS: Record<PermissionMode, string> = {
   auto: "自动学习",
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onCancelCompaction, compactions, extraCommands }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, compactions, extraCommands }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Slash-suggestion state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -269,7 +271,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
                 <AuditContextNote key={b.key} bar={b} />
               ))}
               {context !== null && <CompactContextNote context={context} />}
-              <MessageBubble message={message} />
+              <MessageBubble message={message} onOpenAudit={onOpenAudit} />
             </Fragment>
           )
         })}
@@ -593,17 +595,17 @@ function CompactContextNote({ context }: { context: CompactContextInfo }) {
   )
 }
 
-function MessageBubble({ message }: { message: RenderedMessage }) {
+function MessageBubble({ message, onOpenAudit }: { message: RenderedMessage; onOpenAudit?: (sessionId: string) => void }) {
   const streaming = message.pending && message.blocks.length === 0
   return (
     <div className={`message message-${message.role}`} data-testid={`msg-${message.role}`}>
       {streaming && <div className="msg-pending" data-testid="msg-pending">…</div>}
-      {message.blocks.map((block) => <BlockView key={block.blockId} block={block} />)}
+      {message.blocks.map((block) => <BlockView key={block.blockId} block={block} onOpenAudit={onOpenAudit} />)}
     </div>
   )
 }
 
-function BlockView({ block }: { block: RenderedBlock }) {
+function BlockView({ block, onOpenAudit }: { block: RenderedBlock; onOpenAudit?: (sessionId: string) => void }) {
   switch (block.kind) {
     case "text":
       return <p className="blk-text" data-testid="blk-text">{block.text}</p>
@@ -625,7 +627,26 @@ function BlockView({ block }: { block: RenderedBlock }) {
           ⚡ {block.name} <code>{block.argsJson}</code>
         </div>
       )
-    case "tool_result":
+    case "tool_result": {
+      // A subagent dispatch row: the live status (streamed into output) is the
+      // summary's latest line, and the settled result links to the child's
+      // audit trail via the executor-attached childSessionId.
+      const childSessionId = (block.data as { childSessionId?: string } | undefined)?.childSessionId
+      if (childSessionId !== undefined) {
+        return (
+          <details className="blk-tool-result" data-testid="blk-tool-result-subagent">
+            <summary>
+              ↳ 子代理 · {latestLine(block.output)}
+            </summary>
+            <pre>{block.output}</pre>
+            {onOpenAudit !== undefined && (
+              <button className="subagent-trail-link" data-testid="subagent-trail-link" onClick={() => onOpenAudit(childSessionId)}>
+                查看子代理轨迹
+              </button>
+            )}
+          </details>
+        )
+      }
       return (
         <details className="blk-tool-result" data-testid="blk-tool-result">
           <summary>
@@ -635,6 +656,7 @@ function BlockView({ block }: { block: RenderedBlock }) {
           <pre>{block.output}</pre>
         </details>
       )
+    }
     case "attachment":
       return <span className="blk-attachment" data-testid="blk-attachment">[attachment: {block.mimeType}]</span>
   }
@@ -667,4 +689,11 @@ function ConfirmationCardView({
 function summarizeOutput(output: string): string {
   const text = output.replace(/\s+/g, " ").trim()
   return text.length > 80 ? `${text.slice(0, 80)}…` : text
+}
+
+/** Last non-empty line of a streaming subagent status feed (the live one-liner). */
+function latestLine(output: string): string {
+  const lines = output.split("\n").map((l) => l.trim()).filter((l) => l !== "")
+  const last = lines[lines.length - 1] ?? ""
+  return last.length > 100 ? `${last.slice(0, 100)}…` : last
 }

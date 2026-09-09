@@ -32,7 +32,7 @@ export type EventType =
   // 扩展（hook 系统）：用户 hook 装载/执行失败，fail-open 不影响 run
   | "hook.failed"
 
-export interface RunStartedPayload { trigger: "user" | "job" }
+export interface RunStartedPayload { trigger: "user" | "job" | "agent" }
 export interface RunCompletedPayload { stopReason: StopReason; usage: Usage }
 export interface RunFailedPayload { error: { code: string; message: string } }
 export interface MessageCreatedPayload { message: Message }

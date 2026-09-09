@@ -51,6 +51,7 @@ import { ConfirmationBroker, raceConfirmation, type ConfirmationResolution } fro
 import { createExecSandbox } from "../sandbox/provider.js"
 import type { PermissionGate, RunOutcome } from "./loop.js"
 import { runAgent } from "./loop.js"
+import { subagentSystemPrompt, type SubagentSpawner } from "./subagent.js"
 import type { SessionSearchFn } from "../tools/session.js"
 import type { ToolExecutor } from "./tools.js"
 import { createBuiltinTools, deriveToolFacts } from "../tools/index.js"
@@ -85,7 +86,7 @@ export type LlmRetrySink = (info: { attempt: number; error: unknown }) => void
  */
 export interface EnqueueInput {
   userText: string
-  trigger: "user" | "job"
+  trigger: "user" | "job" | "agent"
   /**
    * Per-run model override (a job's configured model, or a client-forced
    * one). Priority per run: input.model > session meta model > daemon
@@ -176,6 +177,13 @@ export interface RunEngineDeps {
    * adapter's executor wins (schema follows the executor).
    */
   extraTools?: () => { executors: Map<string, ToolExecutor>; defs: ToolDefinition[] }
+  /**
+   * Subagent dispatch (issue #16): the server-side spawner. When set,
+   * mainline runs gain the `subagent_run` builtin tool; the child run's own
+   * assembly never sees it (single-level delegation — child detection is the
+   * session meta's parentSessionId, not this flag).
+   */
+  subagents?: { spawner: SubagentSpawner }
   /** Per-run token ledger (optional; recording failures are swallowed). */
   usageStore?: UsageStore
   /**
@@ -253,6 +261,10 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   const { config, paths, sessions, memory, bus } = engine.deps
   const sessionMeta = sessions.meta(sessionId)
   const workspace = sessionMeta?.workdir ?? engine.deps.workspace
+  // Subagent child run: the session meta's parentSessionId is the single
+  // source of child identity — lean prompt, narrow tool surface, hook
+  // skippings and usage attribution all derive from it (issue #16).
+  const childRun = sessionMeta?.parentSessionId !== undefined
 
   // 用户 hooks 每 run 现扫：改文件下一轮生效（与技能同心智）。新装载失败经
   // registry 去重后发一次 hook.failed(load) 事件。
@@ -361,6 +373,10 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     web: { timeoutMs: config.web.timeoutMs, allowPrivateNetworks: config.web.allowPrivateNetworks },
     sessionSearch: buildSessionSearch(engine.deps, sessionId),
     skills,
+    ...(engine.deps.subagents !== undefined && !childRun
+      ? { subagent: { spawner: engine.deps.subagents.spawner, parentSessionId: sessionId } }
+      : {}),
+    ...(childRun ? { childRun: true } : {}),
   })
   // test/adapter seam: per-name executor overrides on top of the
   // builtins; toolDefs stay the builtins' — an override replaces behavior,
@@ -568,6 +584,8 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     llmUserText,
     drainSteer: handoff.drainSteer,
     skillList: skillListPrompt(skills),
+    ...(childRun ? { childRun: true } : {}),
+    usageSessionId: sessionMeta?.parentSessionId ?? sessionId,
     compactionAfter: async (phase, result) => {
       try {
         await chain.run("compaction-after", { phase, result })
@@ -584,7 +602,8 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // system-after 链（用户可改终稿；内置 system-audit fatal 全量留痕，排在其
   // 后——审计永远记录模型实际看到的那份）。写失败即本次 run 失败，由驱动器
   // 的条目级失败兜底（与迁移前一致）。
-  const base = systemPrompt(paths.agentsMd)
+  // 子代理 run 用专用精简模板（身份 + 工作区 + 纪律），不带 persona 与记忆材料。
+  const base = childRun ? subagentSystemPrompt(workspace) : systemPrompt(paths.agentsMd)
   const segments = (await chain.run("system-before", { base })) ?? []
   let system = [base, ...segments].filter((s) => s !== "").join("\n\n")
   const rewrittenSystem = await chain.run("system-after", { system })

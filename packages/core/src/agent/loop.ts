@@ -32,7 +32,7 @@ export interface RunInput {
   history: Message[]
   system: string
   userText: string
-  trigger?: "user" | "job"
+  trigger?: "user" | "job" | "agent"
   /**
    * Pre-built user message for this run (daemon-side composition): when set,
    * the loop uses it verbatim instead of synthesizing one from `userText`
@@ -618,6 +618,9 @@ async function runToolTurn(
     const startedAt = performance.now()
     try {
       const res = await executor.execute(entry.call.args, {
+        // The run's abort signal reaches executors too (parent-stop-child-stop
+        // for subagent_run; long-running tools cut short at the next checkpoint).
+        ...(deps.signal === undefined ? {} : { signal: deps.signal }),
         onOutput(delta) {
           block.output += delta
           emit(makeEvent("tool_result.delta", { messageId: toolMsg.id, callId: entry.call.callId, delta }, ctx))

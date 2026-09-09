@@ -6,7 +6,7 @@
  */
 import type { Message } from "./messages.js"
 
-export interface SessionCreatedEvent { type: "session.created"; at: string; title: string; workdir?: string; jobId?: string; /** 创建时固化的权限模式快照（config permissions.defaultMode）；缺省 default。 */ mode?: import("../permissions/modes.js").PermissionMode }
+export interface SessionCreatedEvent { type: "session.created"; at: string; title: string; workdir?: string; jobId?: string; /** 创建时固化的权限模式快照（config permissions.defaultMode）；缺省 default。 */ mode?: import("../permissions/modes.js").PermissionMode; /** 父会话（subagent 派生关系）：设置即子会话——列表默认过滤、记忆提取排除、用量归组到父。 */ parentSessionId?: string }
 export interface SessionRenamedEvent { type: "session.renamed"; at: string; title: string }
 export interface SessionDeletedEvent { type: "session.deleted"; at: string }
 export interface SessionRestoredEvent { type: "session.restored"; at: string }

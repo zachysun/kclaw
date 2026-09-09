@@ -442,6 +442,13 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
                 onOpenSessions={handleOpenSessions}
                 workdir={selectedMeta?.workdir}
                 onOpenMemoryWritten={handleOpenMemoryWritten}
+                onOpenAudit={(childId) => {
+                  // A subagent's trail: audit follows the selected session, so
+                  // selecting the child + switching tabs lands the audit page
+                  // on it (the child never appears in the sidebar list).
+                  selectSession(childId)
+                  switchTab("audit")
+                }}
               />
             </div>
           )}

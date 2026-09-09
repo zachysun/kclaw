@@ -72,6 +72,8 @@ export interface ToolResultRender {
   status: "ok" | "error"
   output: string
   durationMs: number
+  /** Structured payload the executor attached (e.g. a subagent's childSessionId). */
+  data?: unknown
 }
 export interface AttachmentRender { kind: "attachment"; blockId: string; mimeType: string }
 
@@ -538,7 +540,15 @@ function renderBlock(block: Block): RenderedBlock {
     case "tool_call":
       return { kind: "tool_call", blockId: block.id, callId: block.callId, name: block.name, argsJson: block.argsJson }
     case "tool_result":
-      return { kind: "tool_result", blockId: block.id, callId: block.callId, status: block.status, output: block.output, durationMs: block.durationMs }
+      return {
+        kind: "tool_result",
+        blockId: block.id,
+        callId: block.callId,
+        status: block.status,
+        output: block.output,
+        durationMs: block.durationMs,
+        ...(block.data !== undefined ? { data: block.data } : {}),
+      }
     case "attachment":
       return { kind: "attachment", blockId: block.id, mimeType: block.mimeType }
   }

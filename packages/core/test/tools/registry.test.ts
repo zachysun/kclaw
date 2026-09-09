@@ -52,6 +52,47 @@ describe("builtin tool registry", () => {
     expect([...registry.tools.keys()].sort()).toEqual([...ALL_TOOLS].sort())
     expect(registry.toolDefs.map((d) => d.name).sort()).toEqual([...registry.tools.keys()].sort())
   })
+  it("a spawner adds subagent_run to the mainline surface (12 tools)", () => {
+    const withSpawner = createBuiltinTools({
+      workspace: dir,
+      memoryCtx: {
+        system: {
+          triggerImmediate: vi.fn(async () => undefined),
+          searchAll: vi.fn(async () => []),
+        } as unknown as MemorySystem,
+        sessionId: "ses_1",
+        workdir: dir,
+        immediateEnabled: false,
+      },
+      tavilyApiKey: "tvly-test",
+      subagent: { spawner: vi.fn(), parentSessionId: "ses_1" },
+    })
+    expect(withSpawner.tools.has("subagent_run")).toBe(true)
+    expect(withSpawner.tools.get("subagent_run")!.risk).toBe("safe")
+    expect(withSpawner.tools.get("subagent_run")!.concurrency).toBe("parallel")
+    expect([...withSpawner.tools.keys()]).toHaveLength(ALL_TOOLS.length + 1)
+  })
+  it("a child run drops memory_save and never carries subagent_run (no grandchildren)", () => {
+    const child = createBuiltinTools({
+      workspace: dir,
+      memoryCtx: {
+        system: {
+          triggerImmediate: vi.fn(async () => undefined),
+          searchAll: vi.fn(async () => []),
+        } as unknown as MemorySystem,
+        sessionId: "ses_child",
+        workdir: dir,
+        immediateEnabled: false,
+      },
+      tavilyApiKey: "tvly-test",
+      childRun: true,
+      // Even with a spawner (wrongly) handed over, a child never sees it.
+      subagent: { spawner: vi.fn(), parentSessionId: "ses_child" },
+    })
+    expect(child.tools.has("memory_save")).toBe(false)
+    expect(child.tools.has("subagent_run")).toBe(false)
+    expect([...child.tools.keys()]).toHaveLength(ALL_TOOLS.length - 1)
+  })
   it("every def has description and complete JSON Schema with required arrays", () => {
     for (const def of registry.toolDefs) {
       expect(typeof def.description).toBe("string")

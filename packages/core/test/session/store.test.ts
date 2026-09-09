@@ -21,6 +21,20 @@ describe("SessionStore", () => {
     expect(s.meta(m.id)!.title).toBe("早报会话")
   })
 
+  it("parentSessionId rides session.created into the projection and listByParent finds children", () => {
+    const s = new SessionStore(dir)
+    const parent = s.create("主线", undefined, "/w", "default")
+    const child = s.create("子代理 · 扫 TODO", undefined, "/w", "default", parent.id)
+    expect(s.meta(child.id)!.parentSessionId).toBe(parent.id)
+    expect(s.meta(parent.id)!.parentSessionId).toBeUndefined()
+    // The parent link survives a projection rebuild from the event stream.
+    expect(s.rebuildMeta(child.id)!.parentSessionId).toBe(parent.id)
+    // listByParent spans the recycle bin (delete/purge cascade input).
+    s.delete(child.id)
+    expect(s.listByParent(parent.id).map((m) => m.id)).toEqual([child.id])
+    expect(s.listByParent("ses_none")).toEqual([])
+  })
+
   it("listByJob returns one job's non-deleted sessions newest-updated first", async () => {
     const s = new SessionStore(dir)
     const older = s.create("旧", "job_a")

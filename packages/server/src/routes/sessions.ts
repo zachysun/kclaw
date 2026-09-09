@@ -75,8 +75,12 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
     })
 
     scope.get("/sessions", async (request) => {
-      const q = (request.query as { deleted?: unknown } | undefined)?.deleted
-      return stores.sessions.list({ deleted: q === "true" })
+      const query = (request.query as { deleted?: unknown; children?: unknown } | undefined) ?? {}
+      // Child sessions (subagent dispatches) stay out of the default list —
+      // they are ephemeral work units whose full trail lives in the audit
+      // view; `children=true` opts in, and by-id access is always open.
+      const metas = stores.sessions.list({ deleted: query.deleted === "true" })
+      return query.children === "true" ? metas : metas.filter((m) => m.parentSessionId === undefined)
     })
 
     // Runtime model switch: only affects this session's LATER runs (history
@@ -101,7 +105,13 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
 
     scope.delete("/sessions/:id", async (request, reply) => {
       const { id } = request.params as { id: string }
-      if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
+      const meta = stores.sessions.meta(id)
+      if (meta === undefined) return reply.code(404).send(NOT_FOUND)
+      // Cascade: a parent's children (subagent sessions) are soft-deleted with
+      // it — no orphans in the recycle bin.
+      for (const child of stores.sessions.list().filter((m) => m.parentSessionId === id)) {
+        stores.sessions.delete(child.id)
+      }
       return stores.sessions.delete(id)
     })
 
@@ -114,6 +124,11 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
     scope.post("/sessions/:id/purge", async (request, reply) => {
       const { id } = request.params as { id: string }
       if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
+      // Purge cascade mirrors the delete cascade (children are soft-deleted
+      // with their parent, so both die together here).
+      for (const child of stores.sessions.listByParent(id)) {
+        stores.sessions.purge(child.id)
+      }
       stores.sessions.purge(id)
       return { ok: true }
     })

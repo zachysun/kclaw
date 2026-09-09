@@ -920,6 +920,12 @@ select:focus {
   font-family: var(--font-mono);
 }
 
+/* Subagent spawn row's trail link (audit jump). */
+.subagent-trail-link {
+  margin: 6px 0 2px;
+  font-size: 12px;
+}
+
 .blk-tool-result pre {
   margin: 4px 0 0;
   white-space: pre-wrap;

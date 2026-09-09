@@ -7,6 +7,7 @@
  * asserts it stays that way in both directions).
  */
 import type { ToolExecutor } from "../agent/tools.js"
+import type { SubagentSpawner } from "../agent/subagent.js"
 import type { MemoryQuery, MemoryTriggers } from "../memory/system.js"
 import type { SkillRecord } from "../skills/index.js"
 import type { ToolDefinition } from "../provider/types.js"
@@ -15,6 +16,7 @@ import { createFsTools } from "./fs.js"
 import { createMemoryTools } from "./memory.js"
 import { createSessionTools, type SessionSearchFn } from "./session.js"
 import { createSkillTools, SKILL_READ_DESCRIPTION } from "./skills.js"
+import { createSubagentTool, SUBAGENT_RUN_DESCRIPTION } from "./subagent.js"
 import { createWebTools } from "./web.js"
 
 export { createExecTool, truncateMiddle } from "./exec.js"
@@ -23,6 +25,7 @@ export { createMemoryTools } from "./memory.js"
 export { createSessionTools, type SessionSearchFn } from "./session.js"
 export { searchSessionEvents, type SessionHit } from "./session-search.js"
 export { createSkillTools, SKILL_READ_DESCRIPTION } from "./skills.js"
+export { createSubagentTool, SUBAGENT_RUN_DESCRIPTION } from "./subagent.js"
 export { createWebTools } from "./web.js"
 
 /** A string property with a model-facing description. */
@@ -50,6 +53,18 @@ export function createBuiltinTools(opts: {
   sessionSearch?: SessionSearchFn
   /** Skills scanned for this run (progressive disclosure's on-demand half). */
   skills?: SkillRecord[]
+  /**
+   * Subagent dispatch (mainline runs only): when set, `subagent_run` joins the
+   * registry wired to this spawner. Absent → no dispatch tool (tests, and
+   * every child run — children cannot spawn grandchildren).
+   */
+  subagent?: { spawner: SubagentSpawner; parentSessionId: string }
+  /**
+   * True for a subagent's own run: the surface drops `memory_save` (memory
+   * stays a mainline responsibility) and `subagent_run` (single-level
+   * delegation), leaving the remaining builtins + adapters.
+   */
+  childRun?: boolean
   fetchImpl?: typeof fetch
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] } {
   const exec = createExecTool({
@@ -186,9 +201,32 @@ export function createBuiltinTools(opts: {
     },
   ]
 
+  // Subagent surface rules (issue #16): a child run drops memory_save (memory
+  // stays a mainline responsibility) and never carries subagent_run (single-
+  // level delegation). A mainline run gains subagent_run only when the
+  // assembly injected a spawner (the daemon does; bare engine tests do not).
+  const surface = opts.childRun === true
+    ? entries.filter((e) => e.name !== "memory_save")
+    : [...entries]
+  if (opts.subagent !== undefined && opts.childRun !== true) {
+    surface.push({
+      name: "subagent_run",
+      tool: createSubagentTool(opts.subagent.spawner, opts.subagent.parentSessionId),
+      def: def(
+        "subagent_run",
+        SUBAGENT_RUN_DESCRIPTION,
+        {
+          task: str("Self-contained task description — the child sees nothing of this conversation"),
+          label: str("Short display name shown in status lines and confirmation cards"),
+        },
+        ["task"],
+      ),
+    })
+  }
+
   return {
-    tools: new Map(entries.map((e) => [e.name, e.tool])),
-    toolDefs: entries.map((e) => e.def),
+    tools: new Map(surface.map((e) => [e.name, e.tool])),
+    toolDefs: surface.map((e) => e.def),
   }
 }
 

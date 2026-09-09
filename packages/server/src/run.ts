@@ -43,6 +43,7 @@ import {
   type RunEngine,
   type RunOutcome,
   type SessionStore,
+  type SubagentSpawner,
   type ToolDefinition,
   type ToolExecutor,
   type UsageStore,
@@ -111,6 +112,12 @@ export interface RunManagerDeps {
    * adapter's executor wins (schema follows the executor).
    */
   extraTools?: () => { executors: Map<string, ToolExecutor>; defs: ToolDefinition[] }
+  /**
+   * Subagent dispatch (issue #16): the daemon's spawner implementation
+   * (server/src/subagent.ts). Flows into every mainline run's assembly as the
+   * `subagent_run` builtin; child runs never see it.
+   */
+  subagents?: { spawner: SubagentSpawner }
   /** Per-run token ledger (optional; recording failures are swallowed). */
   usageStore?: UsageStore
   /**
@@ -221,8 +228,9 @@ export class RunManager {
     const { config, sessions, bus } = this.#deps
     const meta = sessions.meta(sessionId)
     if (meta === undefined) throw new Error("session not found")
-    // 处置解析链：显式 > 会话覆盖 > 配置默认；job 触发固定 wait（不读默认）
-    const disposition = input.trigger === "job"
+    // 处置解析链：显式 > 会话覆盖 > 配置默认；job/agent 触发固定 wait
+    // （无人值守的排队行为必须可预测；agent 子 run 由派发器独占驱动）。
+    const disposition = input.trigger === "job" || input.trigger === "agent"
       ? "wait"
       : input.disposition ?? meta.dispositionOverride ?? config.sessions.defaultDisposition ?? "steer"
     const queue = this.#queues.get(sessionId) ?? []

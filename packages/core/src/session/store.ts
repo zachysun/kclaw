@@ -22,6 +22,11 @@ export interface SessionMeta {
   updatedAt: string // ISO-8601
   jobId?: string
   workdir?: string
+  /**
+   * 父会话（subagent 派生关系）：设置即子会话。子会话不出现在默认会话列表、
+   * 不进记忆提取扫描，token 用量归组到父会话名下；完整轨迹仍按 id 可查（审计）。
+   */
+  parentSessionId?: string
   /** Per-session model override (empty/absent → daemon default). */
   model?: string
   /**
@@ -167,12 +172,13 @@ export class SessionStore {
    * (the daemon's config default; absent → "default"), so meta.mode always
    * carries a real value and later config changes only affect NEW sessions.
    */
-  create(title?: string, jobId?: string, workdir?: string, mode: PermissionMode = "default"): SessionMeta {
+  create(title?: string, jobId?: string, workdir?: string, mode: PermissionMode = "default", parentSessionId?: string): SessionMeta {
     const id = newId("ses")
     const now = new Date().toISOString()
     const event: SessionCreatedEvent = { type: "session.created", at: now, title: title ?? "新会话", mode }
     if (jobId !== undefined) event.jobId = jobId
     if (workdir !== undefined) event.workdir = workdir
+    if (parentSessionId !== undefined) event.parentSessionId = parentSessionId
     this.appendEvent(id, event)
     return this.meta(id)!
   }
@@ -203,6 +209,12 @@ export class SessionStore {
   /** Non-deleted sessions of one job, newest-updated first (job-history queries). */
   listByJob(jobId: string): SessionMeta[] {
     return this.list().filter((m) => m.jobId === jobId)
+  }
+
+  /** Sessions (recycle-bin view included) spawned by `parentSessionId`, for the delete/purge cascade. */
+  listByParent(parentSessionId: string): SessionMeta[] {
+    return [...this.list(), ...this.list({ deleted: true })]
+      .filter((m) => m.parentSessionId === parentSessionId)
   }
 
   /** Read one session's projection (meta.json); when missing/corrupt, rebuild it from the event stream. */
