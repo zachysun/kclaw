@@ -24,7 +24,7 @@
 - **上下文压缩（token 触发的分层摘要，五个触发点）**：压缩不再发生在发送路径上——引擎直接以全量 `history` 起 run，用户发消息永远零压缩等待。五个触发点由 run 路径编排（机制细节与数据格式见 [compaction](../core/compaction.md)）：
   - **后台预压**：`compaction-check` 位置的内置钩子 `background-precompact`（排在 `mid-run-panic` 之前）在每个迭代边界检查：上下文占用进入 [预压线, 红线) 区间且无在飞压缩、无挂起成果、无取消标记时，`compactor.background(...)` 非阻塞派一次后台压缩（`Compactor.background` 登记在飞后立即返回，摘要调用在后台跑，不挂 run 的中止信号）。成功后成果先写入元数据、视图挂起，由下一次迭代边界的 `mid-run-panic` 取用。
   - **收尾压缩**（主路径）：`runAgent` 返回且 stopReason 非 `aborted`/`error` 时，用 `estimateContextTokens(readMessages(sessionId))` 估算上下文占用（锚定最后一条助手消息记录的真实 `usage.inputTokens`，锚之前的内容天然不计入——它们不在上一次请求里，所以直接对全量历史读数即可），上下文占用 ≥ `budget × (compactAtRatio ?? 0.80)` 就 `compactor.auto({phase:"post-run", signal})`。它在 `executeRun` 内 await、位于 token 用量记录之后——会话驱动器的串行化保证压缩期间新到的消息排队等待、不会并发写会话元数据（这窗口内收到的手动 /compact 也被"会话活跃"条件自然挂起，下一轮 run 的收尾链冲刷）。估算前若还有在飞的后台压缩，先等它落定（挂起视图取走丢弃——循环已结束没有下一次请求可应用，元数据已携带同一成果）再读数；等待后走正常黄线判断，auto 内部的活跃段细判自适应——后台成果已把活跃段打下去时它自然不再压。
-  - **中途压缩**：`compaction-check` 位置的内置钩子 `mid-run-panic`（见 [hooks](../core/hooks.md)）在每轮迭代边界触发。钩子内先取挂起的后台成果（有就直接采用为新压缩视图——水位多半已落回线下，不再压第二次），再查取消标记与 run 的中止信号（任一命中返回 null 不压），然后算上下文占用：≥ `budget × (compactPanicRatio ?? 0.90)` 才进入压的分支。若此刻有在飞后台压缩则先等它落定，再按挂起分界重估活跃段（重估读数受旧锚点影响偏高，安全方向）——仍超红线才同步压（活跃段切不出边界就放弃硬压、应用挂起成果），否则直接应用挂起成果；压缩成功返回新的压缩视图 `{ upto, top }`，循环从下一次请求起应用（`upto` 之前原文不再发、脉络项垫在 `messages[0]`）；失败返回 null、运行不补救继续。
+  - **中途压缩**：`compaction-check` 位置的内置钩子 `mid-run-panic`（见 [hooks](../core/hooks.md)）在每轮迭代边界触发。钩子内先查取消标记与 run 的中止信号（任一命中返回 null 不压，挂起的后台成果也留到下一次运行再应用），未命中再取挂起的后台成果（有就直接采用为新压缩视图——水位多半已落回线下，不再压第二次），然后算上下文占用：≥ `budget × (compactPanicRatio ?? 0.90)` 才进入压的分支。若此刻有在飞后台压缩则先等它落定，再按挂起分界重估活跃段（重估读数受旧锚点影响偏高，安全方向）——仍超红线才同步压（活跃段切不出边界就放弃硬压、应用挂起成果），否则直接应用挂起成果；压缩成功返回新的压缩视图 `{ upto, top }`，循环从下一次请求起应用（`upto` 之前原文不再发、脉络项垫在 `messages[0]`）；失败返回 null、运行不补救继续。
   - **超限急救**：`overflow-rescue` 位置的内置钩子 `overflow-emergency` 在流式调用抛出上下文超限错误且零输出时触发——不看上下文占用，"已经爆了"就是事实。救援等不得：先 `compactor.abortInFlight` 掐掉在飞的后台压缩并等它落定（被掐的成果丢弃，原文无损；不用 `cancel`——它的取消标记会压制紧随其后的急救本身），再 `compactor.auto({phase:"in-run", emergency:true, signal})`；成功则循环整次请求静默重发一次（最多一次），仍失败才走报错路径。
   - **手动 /compact**：`compactSession` 直调 core `Compactor.compact({manual:true, phase:"manual"})`，跳过触发线；会话忙时不拒绝而是挂起，运行结束的收尾链先冲刷它（见下文第 13 步），已有排队消息时仍拒绝。
   - `Compactor.auto`（core `session/compactor.ts`）是收尾/中途/超限三路的共用装配：为每次压缩建独立 AbortController 并登记在一张"正在进行中"的表里（后台预压也登记同一张表，`waitForSettled` 供同步路径等待），run 的中止信号联动过去（run 中止时顺带取消同步压缩），run 结束时清理；压缩自身的摘要调用经 `collectStreamText` 带 `{ signal }`，取消信号触发时抛出 → `Compactor.compact` 走 cancelled 分支。`cancelCompaction`（WebUI 指示行取消按钮 → WS 帧 `compaction.cancel`）写会话级取消标记并取消正在进行的压缩（含后台预压）；标记在每次 run 装配（`executeRun`）开头清除，只压制本次运行内的自动压缩。
@@ -113,9 +113,10 @@ export class RunManager {
                                         // 取消进行中的自动压缩：写会话级取消标记 + 取消压缩用的
                                         // controller；返回"是否有压缩正在进行"。标记只压制本次运行内
                                         // 的自动压缩（中途/收尾），下一次运行开始时清除；手动 /compact 不查标记
-  compactSession(sessionId: string, focus?: string): Promise<{ message: string }>
-                                        // 手动压缩（HTTP/CLI/web 三入口共用）：队列非空或会话活跃
-                                        // 时拒绝（双条件文案不同；收尾压缩算在"活跃"窗口内）；
+  compactSession(sessionId: string, focus?: string): Promise<{ queued?: boolean; message: string }>
+                                        // 手动压缩（HTTP/CLI/web 三入口共用）：队列非空仍拒绝
+                                        // （409）；会话活跃时不再拒绝而是挂起——返回
+                                        // {queued:true}，运行结束的收尾链先冲刷它（manual-compact-flush）；
                                         // 无可压缩内容返回固定文案
 }
 ```
