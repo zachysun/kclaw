@@ -403,13 +403,18 @@ describe("queueCancel", () => {
 })
 
 describe("compactSession refusal", () => {
-  it("refuses while running with the running message", async () => {
+  it("defers while running with the queued acknowledgment", async () => {
     const gate = makeGate()
     const mgr = managerWith({ llm: gateLlm(gate, false), tools: new Map([["gate", gateTool(gate)]]) })
     const meta = sessions.create("t", undefined, "/w")
     const run = mgr.submit(meta.id, { userText: "x", trigger: "user" })
     await gate.toolEntered
-    await expect(mgr.compactSession(meta.id)).rejects.toThrow("会话正在运行，等它结束")
+    // a busy session parks the manual request instead of refusing; the
+    // parked focus flushes on the next run's run-after chain
+    await expect(mgr.compactSession(meta.id, "重点保留登录模块")).resolves.toEqual({
+      queued: true,
+      message: "已排队：当前运行结束后自动压缩",
+    })
     mgr.cancel(meta.id)
     gate.releaseTool()
     await run.outcome // 不留仍在跑的 run（afterEach rmSync 竞争）

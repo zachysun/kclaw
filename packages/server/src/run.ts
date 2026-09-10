@@ -376,17 +376,24 @@ export class RunManager {
   }
 
   /**
-   * Manual compaction: runs #compactV2 with a focus, ignoring
-   * the trigger line. Both refusals are checked before any
-   * compaction work, queue first: when an active run AND a backed-up queue
-   * coexist, the queued-count message is the actionable one — "wait it out"
-   * alone never unblocks a backed-up queue. Compaction reads full history
-   * and writes meta, which a concurrent run would corrupt.
+   * Manual compaction: runs the layered compaction with a focus, ignoring
+   * the trigger line. Queue-backed-up sessions are still refused first (when
+   * an active run AND a backed-up queue coexist, the queued-count message is
+   * the actionable one — "wait it out" alone never unblocks a backed-up
+   * queue). An ACTIVE run no longer refuses: the request is DEFERRED on the
+   * compactor (later focus overwrites earlier) and the run-after chain
+   * flushes it after the run — the caller gets a queued acknowledgment.
+   * The deferral marker is in-memory only; a daemon restart drops it (a lost
+   * compaction is harmless — the user resends). The idle path compacts right
+   * away as before.
    */
-  async compactSession(sessionId: string, focus?: string): Promise<{ message: string }> {
+  async compactSession(sessionId: string, focus?: string): Promise<{ queued?: boolean; message: string }> {
     const pending = this.queue(sessionId).length
     if (pending > 0) throw new Error(`还有 ${pending} 条排队消息，先处理或取消`)
-    if (this.#active.has(sessionId)) throw new Error("会话正在运行，等它结束")
+    if (this.#active.has(sessionId)) {
+      this.#compactor.deferManual(sessionId, focus)
+      return { queued: true, message: "已排队：当前运行结束后自动压缩" }
+    }
     const { config, sessions, llm } = this.#deps
     const meta = sessions.meta(sessionId)
     if (meta === undefined) throw new Error("session not found")

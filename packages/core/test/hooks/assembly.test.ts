@@ -2,7 +2,7 @@
  * executeRun 与钩子系统的端到端：内置链照常工作、extraHooks /
  * HookRegistry 的用户条目在同一链上生效、fail-open 失败发 hook.failed 且不伤 run。
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
@@ -266,7 +266,7 @@ describe("executeRun × hook system", () => {
   })
 
   it("模型条目的 contextWindow 收紧压缩线、maxOutput 随请求下发", async () => {
-    // 预算取 min(会话上限, 模型窗口)：窗口 1000 → 黄线 660。回复锚点 700 在
+    // 预算取 min(会话上限, 模型窗口)：窗口 1000 → 黄线 800。回复锚点 900 在
     // 默认 128k 预算下永远不会触发压缩，但被窗口压过线——压缩必须发生，
     // 且 maxOutput 以 max_tokens 形式出现在发给供应商的请求里。
     const base = loadConfig(resolvePaths(home))
@@ -283,7 +283,7 @@ describe("executeRun × hook system", () => {
       async *stream(req): AsyncIterable<LlmStreamEvent> {
         requests.push(req)
         yield { type: "text_delta", delta: "x".repeat(2000) }
-        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 700, outputTokens: 1 } }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 900, outputTokens: 1 } }
       },
     }
     const { engine, bus, sessions, sessionId } = makeEngine({ llm, config: cfg })
@@ -302,6 +302,137 @@ describe("executeRun × hook system", () => {
 })
 
 /** 防止 runAgent import 被裁掉的类型引用（loop 语义测试在 agent/ 目录）。 */
+describe("executeRun × v4 水位线", () => {
+  /** 预置 N 轮历史（每轮 user+assistant，文本可区分），给 chooseBoundary 留出分界。 */
+  function seedTurns(sessions: InstanceType<typeof SessionStore>, sessionId: string, turns: number): void {
+    for (let i = 0; i < turns; i++) {
+      const u = newMessage(sessionId, "user", [{ id: `b-su${i}`, type: "text", text: `历史问题${i}，`.repeat(30) }])
+      u.id = `su${i}`
+      sessions.appendMessage(sessionId, u)
+      const a = newMessage(sessionId, "assistant", [{ id: `b-sa${i}`, type: "text", text: `历史回答${i}，`.repeat(30) }])
+      a.id = `sa${i}`
+      sessions.appendMessage(sessionId, a)
+    }
+  }
+
+  /**
+   * 主请求按脚本走（tool_use ×mainTurns → end_turn）；摘要请求吐固定摘要并
+   * 记录。`holdTurn` 在第 N 轮主请求的流末尾（message_done 之前）挂起——
+   * 测试借这个停顿在"下一个迭代边界到来之前"完成外部编排（放行摘要 gate）。
+   */
+  function waterlineLlm(opts: {
+    mainTurns: number
+    anchor?: number
+    summaryGate?: Promise<void>
+    holdTurn?: number
+    holdPromise?: Promise<void>
+  }) {
+    const mainRequests: Array<{ messages: Array<{ role: string; content: unknown }> }> = []
+    const summaryRequests: Array<{ messages: Array<{ role: string; content: unknown }> }> = []
+    let mainCalls = 0
+    const anchor = opts.anchor ?? 780
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        if (typeof req.system === "string" && req.system.startsWith("你是对话摘要")) {
+          summaryRequests.push(req as never)
+          if (opts.summaryGate !== undefined) await opts.summaryGate
+          yield { type: "text_delta", delta: "后台段摘要" }
+          yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 10, outputTokens: 5 } }
+          return
+        }
+        mainCalls += 1
+        mainRequests.push(req as never)
+        if (mainCalls <= opts.mainTurns) {
+          yield { type: "tool_call_started", index: 0, callId: `c${mainCalls}`, name: "noop" }
+          yield { type: "tool_call_delta", index: 0, delta: "{}" }
+          if (opts.holdTurn !== undefined && mainCalls === opts.holdTurn && opts.holdPromise !== undefined) {
+            await opts.holdPromise
+          }
+          yield { type: "message_done", stopReason: "tool_use", usage: { inputTokens: anchor, outputTokens: 1 } }
+        } else {
+          yield { type: "text_delta", delta: "done" }
+          yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: anchor, outputTokens: 1 } }
+        }
+      },
+    }
+    return { llm, mainRequests, summaryRequests }
+  }
+
+  it("预压线触发后台压缩：同一 run 的后续迭代边界应用挂起成果", async () => {
+    // 锚点 780 / 预算 1000 → 水位 0.78 ∈ [0.75 预压, 0.90 红线)：边界 1 kick
+    // 后台；测试放行摘要后，边界 2 应用挂起视图——第三次请求应垫总摘要。
+    const base = loadConfig(resolvePaths(home))
+    const cfg = { ...base, sessions: { ...base.sessions, contextTokens: 1000 } }
+    const summaryGate = Promise.withResolvers<void>()
+    const holdTurn = Promise.withResolvers<void>()
+    const { llm, mainRequests, summaryRequests } = waterlineLlm({
+      mainTurns: 2, summaryGate: summaryGate.promise, holdTurn: 2, holdPromise: holdTurn.promise,
+    })
+    const { engine, bus, sessions, sessionId } = makeEngine({ llm, config: cfg })
+    seedTurns(sessions, sessionId, 3)
+
+    const run = executeRun(engine, handoff(sessionId, "x".repeat(500)))
+    // 边界 1 已 kick 后台（摘要卡在 gate）：放行它，等后台完成写元数据，
+    // 再放行被扣住的第 2 轮流——边界 2 应用挂起成果
+    await vi.waitFor(() => expect(summaryRequests.length).toBe(1))
+    summaryGate.resolve()
+    await vi.waitFor(() => expect(bus.events.some((e) => e.type === "compaction.completed")).toBe(true))
+    holdTurn.resolve()
+    const outcome = await run
+    expect(outcome.stopReason).toBe("end_turn")
+
+    // 后台压缩写入元数据（审计恰一条）
+    expect(sessions.readEvents(sessionId).filter((e) => e.type === "compaction")).toHaveLength(1)
+    expect(sessions.meta(sessionId)?.compaction).toBeDefined()
+
+    // 第三次主请求（边界 2 之后）：垫上压缩摘要、upto 前原文消失
+    const third = mainRequests[2]!
+    expect(String(third.messages[0]!.content)).toContain("<compacted-summary>")
+    expect(String(third.messages[0]!.content)).toContain("后台段摘要")
+    expect(JSON.stringify(third.messages)).not.toContain("历史问题0")
+  })
+
+  it("水位达红线时不预压：红线同步压缩兜底（请求 2 即带摘要）", async () => {
+    // 锚点 950 / 预算 1000 → 水位 0.95 ≥ 红线：precompact 让位，mid-run-panic 同步压
+    const base = loadConfig(resolvePaths(home))
+    const cfg = { ...base, sessions: { ...base.sessions, contextTokens: 1000 } }
+    const { llm, mainRequests } = waterlineLlm({ mainTurns: 1, anchor: 950 })
+    const { engine, bus, sessions, sessionId } = makeEngine({ llm, config: cfg })
+    seedTurns(sessions, sessionId, 3)
+
+    const outcome = await executeRun(engine, handoff(sessionId, "x".repeat(500)))
+    expect(outcome.stopReason).toBe("end_turn")
+    // 同步压缩发生且紧随边界：第二次主请求已带摘要（不等下一次边界）
+    const second = mainRequests[1]!
+    expect(String(second.messages[0]!.content)).toContain("<compacted-summary>")
+    expect(bus.events.some((e) => e.type === "compaction.started" && e.payload.phase === "in-run")).toBe(true)
+  })
+
+  it("挂起的 /compact 在收尾链冲刷：自动收尾压缩之前执行", async () => {
+    // 预算 400 → 手动边界切得出（尾部 126 < 目标 132）；锚点 780 过黄线但
+    // flush 先执行、压完水位落回，post-run 判断自然不重复压
+    const base = loadConfig(resolvePaths(home))
+    const cfg = { ...base, sessions: { ...base.sessions, contextTokens: 400 } }
+    const { llm, mainRequests, summaryRequests } = waterlineLlm({ mainTurns: 0 })
+    const { engine, bus, sessions, sessionId } = makeEngine({ llm, config: cfg })
+    seedTurns(sessions, sessionId, 3)
+    engine.compactor.deferManual(sessionId, "重点保留登录模块")
+
+    const outcome = await executeRun(engine, handoff(sessionId, "x".repeat(500)))
+    expect(outcome.stopReason).toBe("end_turn")
+
+    // 挂起压缩执行：审计 trigger "manual" 带 focus；主 run 结束后发生
+    const records = sessions.readEvents(sessionId).filter((e) => e.type === "compaction")
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({ trigger: "manual", focus: "重点保留登录模块" })
+    // 收尾链在 run 完成事件之后（run-after 语义）
+    const completedIdx = bus.events.findIndex((e) => e.type === "compaction.completed")
+    expect(completedIdx).toBeGreaterThan(bus.events.findIndex((e) => e.type === "run.completed"))
+    expect(summaryRequests.length).toBe(2)
+    expect(mainRequests.length).toBe(1)
+  })
+})
+
 describe("loop re-export sanity", () => {
   it("runAgent 与 executeRun 同源可用", () => {
     expect(typeof runAgent).toBe("function")

@@ -42,9 +42,9 @@
 | GET | `/sessions/:id/queue` | 排队消息快照：重连/刷新后校正客户端状态的全量依据 | — | `QueueEntry[]`（`queue.jsonl` 整文件读出，数组顺序即执行顺序；steer 条目排在可执行条目之后；空队列返回 `[]`） |
 | POST | `/sessions/:id/disposition` | 会话级发送处置覆盖（CLI `/steer`、`/wait` 与 Web 三选的 steer/wait 的持续生效存储；interrupt 在 Web 为一次性、CLI 为 `/interrupt` 一次性动作，均不写覆盖） | `{disposition: "steer"\|"wait"\|"interrupt"}` 必填；非法值 400 `disposition must be "steer", "wait" or "interrupt"` | `SessionMeta`（写入 `dispositionOverride`，优先于配置默认） |
 | GET | `/sessions/:id/compactions` | 压缩审计记录（事件流里 `compaction` 事件的只读视图） | — | `CompactionRecord[]`（从 events.jsonl 过滤 `compaction` 事件按事件序返回；无事件返回 `[]`） |
-| POST | `/sessions/:id/compact` | 手动压缩：跳过触发线立即压缩一次（机制见 [compaction](../core/compaction.md)） | `{focus?}`：可选非空字符串，作为重点说明进入两次摘要调用；空串/非字符串 400 `focus must be a non-empty string` | `{message: string}`：成功 `压缩了 N 段，剩 X 条原文消息`；无可压缩内容 `无可压缩内容` |
+| POST | `/sessions/:id/compact` | 手动压缩：跳过触发线立即压缩一次（机制见 [compaction](../core/compaction.md)） | `{focus?}`：可选非空字符串，作为重点说明进入两次摘要调用；空串/非字符串 400 `focus must be a non-empty string` | `{message: string, queued?: boolean}`：成功 `压缩了 N 段，剩 X 条原文消息`；无可压缩内容 `无可压缩内容`；会话忙时挂起 `{queued: true, message: "已排队：当前运行结束后自动压缩"}` |
 
-`:id` 不存在时上述全部返回 `404 {error:"session not found"}`；body 校验失败返回 400（如 `title must be a non-empty string`）。compact 的额外拒绝路径（双条件、两条文案，队列优先——正在跑的 run 与积压队列并存时"先处理排队"才是可行动建议）：队列非空 409 `还有 N 条排队消息，先处理或取消`；会话活跃 409 `会话正在运行，等它结束`；RunManager 未装配时 503。
+`:id` 不存在时上述全部返回 `404 {error:"session not found"}`；body 校验失败返回 400（如 `title must be a non-empty string`）。compact 的额外路径：会话活跃不拒绝而是**挂起**（200 `{queued: true, message: "已排队：当前运行结束后自动压缩"}`，运行结束的收尾链自动冲刷）；队列非空仍拒绝 409 `还有 N 条排队消息，先处理或取消`（排队消息会连开多个 run，压缩窗口无法预期）；RunManager 未装配时 503。
 
 `SessionMeta` 字段（`packages/core/src/session/store.ts`）：
 

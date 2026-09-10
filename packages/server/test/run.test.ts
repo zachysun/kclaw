@@ -1154,17 +1154,36 @@ describe("RunManager context compaction", () => {
     expect(JSON.stringify(reqs[0]!.messages)).not.toContain("历史问题1")
   })
 
-  it("compactSession refuses while a run is active or queued", async () => {
-    // a never-ending llm keeps the run hanging: the session counts as busy
-    const { env, manager } = makeEnv(hangingClient())
+  it("compactSession defers while a run is active; queued messages still refuse", async () => {
+    // a never-ending llm keeps the run hanging: the session counts as busy —
+    // the request is deferred (queued ack), NOT refused. The run-after chain
+    // flushes it after the run settles.
+    const { env, manager } = makeEnv(
+      scriptClient([textTurnWithUsage("主回复", 10_000), textTurn("段摘要G"), textTurn("总摘要G")]),
+      (c) => { c.sessions.contextTokens = 40 }, // tiny target so the deferred manual boundary exists
+    )
     const session = env.sessions.create("忙会话")
+    seedHistory(env.sessions, session.id, 3)
     const p = manager.enqueue(session.id, { userText: "长任务", trigger: "user" })
-    await expect(manager.compactSession(session.id)).rejects.toThrow("会话正在运行")
-    expect(manager.cancel(session.id)).toBe(true)
+    await expect(manager.compactSession(session.id, "重点保留登录模块")).resolves.toEqual({
+      queued: true,
+      message: "已排队：当前运行结束后自动压缩",
+    })
     await p
-    // the gate lifts once the run settled: nothing to compact → the
-    // nothing-to-do message, not a busy error
-    await expect(manager.compactSession(session.id)).resolves.toEqual({ message: "无可压缩内容" })
+    // the deferral was flushed by the run-after chain: a manual compaction
+    // record with the focus landed
+    const records = env.sessions.readCompactions(session.id)
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({ trigger: "manual", focus: "重点保留登录模块" })
+
+    // backed-up queued messages still refuse (they need human attention first)
+    const { manager: m2, env: e2 } = makeEnv(hangingClient())
+    const s2 = e2.sessions.create("队列拒绝")
+    const p2 = m2.enqueue(s2.id, { userText: "占住运行", trigger: "user" })
+    void m2.enqueue(s2.id, { userText: "排队消息", trigger: "user", disposition: "wait" })
+    await expect(m2.compactSession(s2.id)).rejects.toThrow(/还有 \d+ 条排队消息/)
+    expect(m2.cancel(s2.id)).toBe(true)
+    await p2
   })
 
   it("compactSession throws session not found for a missing session", async () => {
@@ -1409,7 +1428,7 @@ describe("RunManager context compaction", () => {
         textTurn("段摘要I"), textTurn("总摘要I"), textTurn("完成"),
       ]), reqs),
       (c) => {
-        c.sessions.contextTokens = 10 // red line: 10 × 0.85 = 8.5
+        c.sessions.contextTokens = 10 // red line: 10 × 0.90 = 9
         c.permissions.allow = ["exec:echo*"]
       },
     )
