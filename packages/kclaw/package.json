@@ -1,6 +1,6 @@
 {
   "name": "kclaw",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local resident personal agent: one daemon owns all state; CLI and WebUI are its clients.",
   "type": "module",
   "license": "MIT",

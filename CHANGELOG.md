@@ -5,7 +5,7 @@ All notable changes to kclaw are documented in this file. The format is based on
 [semantic versioning](https://semver.org/) — note that the 0.x series makes no
 compatibility promises.
 
-## [Unreleased]
+## [0.2.0] - 2026-09-10
 
 ### Added
 
@@ -69,6 +69,59 @@ compatibility promises.
   after the sandbox probe; the trail page renders it as a 沙箱 row (可用 /
   不可用（原因）/ 已关闭). Same contract as the system audit event: not
   broadcast, not projected, and a write failure fails the run.
+- **Subagents** — the model can delegate focused work to a child session via
+  a `subagent_run` tool (task text + label): each delegation spawns an
+  independent session linked to its caller by `parentSessionId`, runs to
+  completion, and returns the final answer to the parent run. Up to four
+  subagents run concurrently; stopping the parent stops its children.
+  Subagent sessions are isolated — no memory extraction, token usage billed
+  to the parent — and strictly read-only to the user: messages cannot be
+  sent to them directly, but they are fully visible in the audit trail, with
+  a live one-line progress indicator (current tool + truncated text) on the
+  chat page.
+- **Audit view overhaul** — the audit page was rebuilt for scale and
+  liveness: virtualized rendering over the full event stream, a dedicated
+  websocket for live tailing under a single cursor, all six event-row types
+  rendered (note rows badge their specific kind; per-run system-prompt and
+  sandbox rows included), AND-combined keyword filtering, time-range
+  presets, tab keep-alive and deep links. Two core/server additions back it:
+  `session.appended` bus frames (emitted after each append lands, so live
+  viewers never race the store) and a `?since=` cursor on
+  `GET /sessions/:id/events` with tail reads that skip unneeded lines
+  without parsing them. Assistant messages now record `latencyMs`.
+- **System-reminder injection** — note blocks are wrapped in
+  `<system-reminder kind="...">` tags, and the compaction summary moved to a
+  `<compacted-summary>` tag at the head of the next user message; the system
+  prompt states the convention up front so tagged content reads as context,
+  not instructions. Closing-tag escapes keep a note from forging its own
+  reminder tags.
+- **Frozen system prompt (prefix-cache friendly)** — a session freezes its
+  assembled system prompt after the first run (`meta.systemBaseline`);
+  later runs reuse it byte-for-byte, so provider prefix caches hit. A
+  compaction is the re-freeze boundary (the cache is cold there anyway);
+  skill-list, AGENTS.md and hook-section changes take effect at the next
+  epoch instead of mid-conversation. Every run still audits the full prompt
+  it ran with.
+- **Tool-output spill** — when a tool result is truncated to fit the
+  context, the full output is written to `<home>/spill` (mode 0600) and the
+  truncation marker names the file and byte range, so `fs_read` can pull
+  exact slices afterwards. exec without a spill directory no longer buffers
+  output it would never use.
+- **Tool-loop guard** — five structurally identical tool calls in a row
+  append a reminder to change strategy; the loop itself does not abort.
+- **Sandbox network switch** — `sandbox.network: "deny"` cuts the exec child
+  process off the network (Seatbelt denies `network-outbound` and
+  `network-inbound`; bubblewrap adds `--unshare-net`); the default stays
+  `"allow"` and web tools are unaffected either way.
+- **Compaction trigger accuracy** — the trigger now counts the fixed
+  per-request overhead (system prompt + tool schemas) against the context
+  budget, and optional per-model `contextWindow` / `maxOutput` entries in
+  the model config tighten the per-model budget instead of a global
+  estimate.
+- **Compaction summary quality** — summary prompts now require verbatim
+  preservation of exact identifiers (file paths, commands, error strings,
+  code identifiers, versions), and the post-compaction context tells
+  `session_search` that full text lives in earlier segments it can query.
 
 ### Changed
 
@@ -78,6 +131,13 @@ compatibility promises.
 - **Confirmation wire protocol** — `confirmation.resolve` now takes a
   `decision` (`"once" | "project" | "global" | "reject"`) instead of a boolean
   `approved`, and `confirmation.resolved` reports that decision.
+- **Per-entry hook timeouts** — a hook may override the chain budget with its
+  own `timeoutMs`; the three compaction builtins run untimed, since a real
+  compaction needs two LLM calls and can never fit a short chain budget.
+- **Compact note kind removed** — compaction summaries no longer exist as
+  `kind: "compact"` note blocks (the `<compacted-summary>` user-channel tag
+  replaced them); existing `compact` notes in old event streams render as
+  plain notes.
 
 ## [0.1.0] - 2026-09-06
 
