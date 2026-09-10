@@ -206,6 +206,45 @@ describe("Compactor 调度状态机", () => {
     expect(compactor.takeParked(session.id)).toBeNull()
   })
 
+  it("同步压缩没写成（水位细判拦下）不丢挂起成果：兜底仍可用", async () => {
+    const sessions = new SessionStore(join(home, "s"))
+    const session = sessions.create("不成不丢")
+    const history = seedHistory(sessions, session.id)
+    const { compactor, config, llm } = await setup(sessions)
+
+    // 后台完成 → 挂起
+    compactor.background(session.id, history, config, llm.client, "m")
+    llm.release()
+    await vi.waitFor(() => expect(llm.calls.filter(isSummaryCall).length).toBeGreaterThanOrEqual(2))
+    await vi.waitFor(() => expect(compactor.parked(session.id)).toBe(true))
+
+    // 同步压缩在过小的历史上跑（估算 < 黄线）→ declined（compacted:false），
+    // 什么都没写：挂起成果仍是最新视图，不得被入口顺手清掉
+    const tiny = [newMessage(session.id, "user", [{ id: "btiny", type: "text", text: "小" }])]
+    const out = await compactor.compact(session.id, tiny, "", config, llm.client, "m", { phase: "post-run" })
+    expect(out.compacted).toBe(false)
+    expect(compactor.parked(session.id)).toBe(true)
+  })
+
+  it("abortInFlight 掐在飞但不写取消标记（急救清场专用）：后续压缩照常开工", async () => {
+    const sessions = new SessionStore(join(home, "s"))
+    const session = sessions.create("急救清场")
+    const history = seedHistory(sessions, session.id)
+    const { compactor, config, llm } = await setup(sessions)
+
+    expect(compactor.background(session.id, history, config, llm.client, "m")).toBe(true)
+    expect(compactor.abortInFlight(session.id)).toBe(true)
+    expect(compactor.cancelled(session.id)).toBe(false) // 与 cancel() 的分界：不写标记
+    llm.release() // 被掐的调用走取消分支收场
+    await vi.waitFor(() => expect(compactor.hasInFlight(session.id)).toBe(false))
+    expect(compactor.parked(session.id)).toBe(false)
+
+    // cancel() 的标记会压制下一次开工；abortInFlight 没写 → 立刻能再 kick
+    expect(compactor.background(session.id, history, config, llm.client, "m")).toBe(true)
+    llm.release()
+    await vi.waitFor(() => expect(compactor.parked(session.id)).toBe(true))
+  })
+
   it("挂起 /compact：后到覆盖先到，取走即清", async () => {
     const sessions = new SessionStore(join(home, "s"))
     const session = sessions.create("挂起manual")

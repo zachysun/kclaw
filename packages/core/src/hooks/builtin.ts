@@ -219,20 +219,33 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
       // Cancellation marker or an already-aborted run → don't compact. A throw
       // resolves undefined == decline.
       if (compactor.cancelled(sessionId) || signal.aborted) return null
-      // 挂起的后台成果优先：直接换视图。应用后的水位由下一次边界的真实请求
-      // 锚点重新判断——这里不做"应用后估算"（字符级重估会低估，锚点已失效）。
+      // A parked background result is applied first — it is strictly newer
+      // than the run's view and the real request anchor self-heals at the
+      // next boundary (no post-apply re-estimate: the anchor is stale).
       const parkedView = compactor.takeParked(sessionId)
       if (parkedView !== null) return parkedView
-      const boundaryHistory = sessions.readMessages(sessionId)
       const overhead = contextOverhead()
-      if (estimateContextTokens(boundaryHistory, undefined, overhead) < budget * panicRatio) return null
+      if (estimateContextTokens(sessions.readMessages(sessionId), undefined, overhead) < budget * panicRatio) return null
       if (compactor.hasInFlight(sessionId)) {
-        // 红线撞在飞后台：等它结束再决定（单压缩不变量）。等待期间用户取消
-        // 压缩则放弃本次判定。
+        // Red line hit while a background compaction is in flight: wait for
+        // it to settle (single-compaction invariant), then re-estimate on the
+        // span its parked view would keep — sync-compact only if that active
+        // span still crosses the red line (spec D5). The re-read is biased
+        // large (anchor predates the parked view) — the safe direction.
         await compactor.waitForSettled(sessionId, signal)
         if (compactor.cancelled(sessionId) || signal.aborted) return null
       }
-      const next = await compactor.auto(sessionId, sessions.readMessages(sessionId), config, runLlm, model, {
+      const history = sessions.readMessages(sessionId)
+      const settled = compactor.takeParked(sessionId)
+      if (settled !== null) {
+        const keepFrom = history.findIndex((m) => m.id === settled.upto) + 1
+        const active = keepFrom > 0 ? history.slice(keepFrom) : undefined
+        if (active !== undefined && active.length > 0 &&
+            estimateContextTokens(active, undefined, overhead) < budget * panicRatio) {
+          return settled
+        }
+      }
+      const next = await compactor.auto(sessionId, history, config, runLlm, model, {
         phase: "in-run",
         signal,
         overheadTokens: overhead,
@@ -242,18 +255,20 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
         void compactionAfter("in-run", "ok")
         return next
       }
-      // 同步压缩没发生（等待后台完成后水位已落回红线以下，细判拦下）：应用
-      // 后台成果——它正是这轮等待的产物，不该留在内存里过夜。
-      return compactor.takeParked(sessionId)
+      // The sync compaction didn't happen (waterline/boundary decline, or the
+      // summarizer failed — either way nothing was written): the parked result
+      // we waited for is still the newest view — apply it rather than drop it.
+      return settled
     }, Number.POSITIVE_INFINITY),
     builtin("overflow-emergency", "overflow-rescue", 10, BUILTIN_HOOK_DEFINITIONS[7]!.description, "skip", async () => {
       // No watermark check — "it already overflowed" is a fact. Abort after
       // the await → null (the resend would be torn down at the next
       // checkpoint anyway).
-      // 急救撞在飞后台：先掐掉它并等其退出（单压缩不变量；成果丢弃——原文
-      // 无损，下次重压），再立即同步急救。救援路径不等摘要慢慢跑完。
+      // 急救撞在飞后台：abortInFlight 掐掉它并等其退出（单压缩不变量；成果
+      // 丢弃——原文无损，下次重压），再立即同步急救。救援路径不等摘要慢慢
+      // 跑完；不用 cancel()——它的取消标记会压制紧随其后的急救 auto()。
       if (compactor.hasInFlight(sessionId)) {
-        compactor.cancel(sessionId)
+        compactor.abortInFlight(sessionId)
         await compactor.waitForSettled(sessionId)
       }
       const next = await compactor.auto(sessionId, sessions.readMessages(sessionId), config, runLlm, model, {
@@ -305,7 +320,10 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
       if (compactor.hasInFlight(sessionId)) {
         // 收尾撞在飞后台（预压没跑完 run 就结束了）：等它完成再判断——绝不
         // 并发第二个压缩。等待后走正常判断（auto 内部的活跃段细判自适应）。
+        // 循环已结束，挂起视图没有"下一次请求"可应用，取走丢弃——元数据
+        // 已携带同一成果，下一次运行从 meta 读到它。
         await compactor.waitForSettled(sessionId, signal)
+        compactor.takeParked(sessionId)
       }
       const postRunHistory = sessions.readMessages(sessionId)
       const overhead = contextOverhead()

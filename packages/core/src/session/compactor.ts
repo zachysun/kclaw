@@ -41,12 +41,6 @@ export interface CompactorDeps {
   emit: (e: AgentEvent) => void
 }
 
-/** 在飞压缩的登记：controller 掐调用 + kind 区分后台/同步（等待与作废规则按 kind 走）。 */
-interface InFlight {
-  ctrl: AbortController
-  kind: "background" | "sync"
-}
-
 export class Compactor {
   readonly #deps: CompactorDeps
   /**
@@ -55,12 +49,13 @@ export class Compactor {
    * 只作用于当时那次运行，新运行从干净状态恢复。手动压缩不受压制。
    */
   readonly #cancelled = new Set<string>()
-  /** 每会话在飞的压缩：cancel() 掐它；finally 清理并放行等待者。 */
-  readonly #inFlight = new Map<string, InFlight>()
+  /** 每会话在飞的压缩 controller：cancel()/abortInFlight() 掐它；finally 清理并放行等待者。 */
+  readonly #inFlight = new Map<string, AbortController>()
   /**
    * 后台压缩的成果，已完成、未应用：由下一次迭代边界（mid-run-panic）
    * takeParked 应用到运行视图。元数据在完成时已写入，这里只是内存视图交接。
-   * 同步压缩开始时作废本会话的挂起（其视图基于含挂起成果的元数据、更新）。
+   * 同步压缩**成功**时作废本会话的挂起（其视图基于含挂起成果的元数据、
+   * 更新——见 compact() 成功路径的注释）；没写成则挂起仍有效。
    */
   readonly #parked = new Map<string, ActiveSummary>()
   /** 挂起的 /compact：会话忙时登记，收尾链（manual-compact-flush）冲刷。纯内存，重启即丢。 */
@@ -81,15 +76,28 @@ export class Compactor {
    */
   cancel(sessionId: string): boolean {
     this.#cancelled.add(sessionId)
-    const flight = this.#inFlight.get(sessionId)
-    if (flight === undefined) return false
-    flight.ctrl.abort()
+    const ctrl = this.#inFlight.get(sessionId)
+    if (ctrl === undefined) return false
+    ctrl.abort()
     return true
   }
 
   /** 取消标记是否压着该会话（自动压缩钩子开工前先问这个）。 */
   cancelled(sessionId: string): boolean {
     return this.#cancelled.has(sessionId)
+  }
+
+  /**
+   * 掐掉在飞的压缩但**不写取消标记**：溢出急救专用的清场——cancel() 的标记
+   * 会压制紧随其后的急救 auto()（它开工前先查标记），等于急救自堵。被掐的
+   * 压缩走取消分支（completed result:"cancelled"），不写任何数据。返回调用
+   * 时刻是否存在在飞的压缩。
+   */
+  abortInFlight(sessionId: string): boolean {
+    const ctrl = this.#inFlight.get(sessionId)
+    if (ctrl === undefined) return false
+    ctrl.abort()
+    return true
   }
 
   /** 清除取消标记（每次 run 开头：取消只压制一次运行）。 */
@@ -183,7 +191,7 @@ export class Compactor {
     if (this.#cancelled.has(sessionId)) return false
     if (this.#inFlight.has(sessionId) || this.#parked.has(sessionId)) return false
     const ctrl = new AbortController()
-    this.#inFlight.set(sessionId, { ctrl, kind: "background" })
+    this.#inFlight.set(sessionId, ctrl)
     void (async () => {
       try {
         const out = await this.compact(sessionId, history, "", config, runLlm, model, {
@@ -199,7 +207,7 @@ export class Compactor {
       } catch (err) {
         console.error("kclaw compaction (background) failed:", err)
       } finally {
-        if (this.#inFlight.get(sessionId)?.ctrl === ctrl) this.#inFlight.delete(sessionId)
+        if (this.#inFlight.get(sessionId) === ctrl) this.#inFlight.delete(sessionId)
         this.#flushWaiters(sessionId)
       }
     })()
@@ -226,7 +234,7 @@ export class Compactor {
   ): Promise<ActiveSummary | null> {
     if (this.#cancelled.has(sessionId) || opts.signal?.aborted === true) return null
     const ctrl = new AbortController()
-    this.#inFlight.set(sessionId, { ctrl, kind: "sync" })
+    this.#inFlight.set(sessionId, ctrl)
     const onAbort = (): void => { ctrl.abort() }
     opts.signal?.addEventListener("abort", onAbort, { once: true })
     try {
@@ -245,7 +253,7 @@ export class Compactor {
       return null
     } finally {
       opts.signal?.removeEventListener("abort", onAbort)
-      if (this.#inFlight.get(sessionId)?.ctrl === ctrl) this.#inFlight.delete(sessionId)
+      if (this.#inFlight.get(sessionId) === ctrl) this.#inFlight.delete(sessionId)
       this.#flushWaiters(sessionId)
     }
   }
@@ -285,12 +293,6 @@ export class Compactor {
         : undefined)
     const prevIdx = prev === undefined ? -1 : history.findIndex((m) => m.id === prev.upto)
     const active = prevIdx >= 0 ? history.slice(prevIdx + 1) : history
-
-    // A synchronous compaction supersedes any parked background result: this
-    // compaction's `prev` already contains the parked outcome (it read the
-    // updated meta), so its own view is strictly newer — applying the stale
-    // parked view afterwards would roll the run's view back to an older upto.
-    this.#parked.delete(sessionId)
 
     // Per-run budget override (model contextWindow from resolveContextTokens);
     // falls back to the config cap, then the 128k default.
@@ -370,6 +372,14 @@ export class Compactor {
       this.#deps.emit(
         makeEvent("compaction.completed", { segments: nextSegments.length, kept: active.length - boundary.keepFrom, phase, result: "ok" }, { sessionId }),
       )
+      // Success supersedes any parked background result — only here, not at
+      // entry: this compaction's view is based on meta that already contains
+      // the parked outcome, so its own upto is strictly newer and the parked
+      // view must never be applied after it. A compaction that didn't happen
+      // (waterline/boundary decline above, summarizer failure in the catch)
+      // writes nothing, so a parked view stays current and its consumer's
+      // fallback (mid-run-panic's `next ?? settled`) remains real.
+      this.#parked.delete(sessionId)
       return { summary: top, upto, segments: nextSegments.length, active: active.slice(boundary.keepFrom), compacted: true }
     } catch (err) {
       // An aborted signal turns any throw into "cancelled": the run is being

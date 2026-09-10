@@ -323,6 +323,10 @@ describe("executeRun × v4 水位线", () => {
   function waterlineLlm(opts: {
     mainTurns: number
     anchor?: number
+    /** 逐主请求的锚点覆盖（anchors[N-1] 为主请求 N 的 inputTokens，缺省回落 anchor）。 */
+    anchors?: number[]
+    /** 第 N 次主请求零输出直接抛上下文超限错误（触发 overflow-rescue）。 */
+    overflowAt?: number
     summaryGate?: Promise<void>
     holdTurn?: number
     holdPromise?: Promise<void>
@@ -331,6 +335,7 @@ describe("executeRun × v4 水位线", () => {
     const summaryRequests: Array<{ messages: Array<{ role: string; content: unknown }> }> = []
     let mainCalls = 0
     const anchor = opts.anchor ?? 780
+    const anchorFor = (call: number): number => opts.anchors?.[call - 1] ?? anchor
     const llm: LlmClient = {
       async *stream(req): AsyncIterable<LlmStreamEvent> {
         if (typeof req.system === "string" && req.system.startsWith("你是对话摘要")) {
@@ -342,16 +347,19 @@ describe("executeRun × v4 水位线", () => {
         }
         mainCalls += 1
         mainRequests.push(req as never)
+        if (opts.overflowAt !== undefined && mainCalls === opts.overflowAt) {
+          throw new Error("prompt is too long: 200000 tokens > 128000 maximum")
+        }
         if (mainCalls <= opts.mainTurns) {
           yield { type: "tool_call_started", index: 0, callId: `c${mainCalls}`, name: "noop" }
           yield { type: "tool_call_delta", index: 0, delta: "{}" }
           if (opts.holdTurn !== undefined && mainCalls === opts.holdTurn && opts.holdPromise !== undefined) {
             await opts.holdPromise
           }
-          yield { type: "message_done", stopReason: "tool_use", usage: { inputTokens: anchor, outputTokens: 1 } }
+          yield { type: "message_done", stopReason: "tool_use", usage: { inputTokens: anchorFor(mainCalls), outputTokens: 1 } }
         } else {
           yield { type: "text_delta", delta: "done" }
-          yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: anchor, outputTokens: 1 } }
+          yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: anchorFor(mainCalls), outputTokens: 1 } }
         }
       },
     }
@@ -406,6 +414,105 @@ describe("executeRun × v4 水位线", () => {
     const second = mainRequests[1]!
     expect(String(second.messages[0]!.content)).toContain("<compacted-summary>")
     expect(bus.events.some((e) => e.type === "compaction.started" && e.payload.phase === "in-run")).toBe(true)
+  })
+
+  it("红线撞在飞后台：等它落定（不并发第二个压缩），落定后应用挂起成果", async () => {
+    // 锚点 780 → 950：边界 1 水位 0.78 落预压区间 kick 后台（摘要卡 gate）；
+    // 边界 2 水位 0.95 过红线 → mid-run-panic 等在飞后台，绝不并发第二个
+    // 压缩。放行后后台落定：挂起视图的重估否掉同步硬压（活跃段锚点偏大、
+    // 且切不出边界——spec 故事 19"放弃硬压"），兜底应用挂起成果
+    const base = loadConfig(resolvePaths(home))
+    const cfg = { ...base, sessions: { ...base.sessions, contextTokens: 1000 } }
+    const summaryGate = Promise.withResolvers<void>()
+    const { llm, mainRequests, summaryRequests } = waterlineLlm({
+      mainTurns: 2, anchors: [780, 950], summaryGate: summaryGate.promise,
+    })
+    const { engine, bus, sessions, sessionId } = makeEngine({ llm, config: cfg })
+    seedTurns(sessions, sessionId, 3)
+
+    const run = executeRun(engine, handoff(sessionId, "x".repeat(500)))
+    await vi.waitFor(() => expect(summaryRequests.length).toBe(1)) // 后台在飞
+    await new Promise((r) => setTimeout(r, 50))
+    // 红线判定撞上在飞：run 停在边界等待，第二个压缩没有开工
+    expect(summaryRequests.length).toBe(1)
+    expect(mainRequests.length).toBe(2)
+
+    summaryGate.resolve()
+    const outcome = await run
+    expect(outcome.stopReason).toBe("end_turn")
+
+    // 恰好一笔压缩（后台那笔）：等待不产生交叠的重复摘要
+    const records = sessions.readEvents(sessionId).filter((e) => e.type === "compaction")
+    expect(records).toHaveLength(1)
+    expect(summaryRequests.length).toBe(2)
+    // 第三次主请求带挂起成果的压缩摘要（应用成功）
+    expect(String(mainRequests[2]!.messages[0]!.content)).toContain("<compacted-summary>")
+    expect(JSON.stringify(mainRequests[2]!.messages)).not.toContain("历史问题0")
+  })
+
+  it("运行结束时后台未完成：收尾等它落定（单压缩不变量，不重复压缩）", async () => {
+    // 锚点 780 全程：边界 1 kick 后台（摘要卡 gate），主 run 两轮内自然结束；
+    // 收尾压缩发现后台在飞 → 等待落定——run 挂在收尾链上不结束。落定后水位
+    // 0.78 低于黄线，收尾不再压：全程恰好一笔压缩（后台那笔）
+    const base = loadConfig(resolvePaths(home))
+    const cfg = { ...base, sessions: { ...base.sessions, contextTokens: 1000 } }
+    const summaryGate = Promise.withResolvers<void>()
+    const { llm, mainRequests, summaryRequests } = waterlineLlm({
+      mainTurns: 1, summaryGate: summaryGate.promise,
+    })
+    const { engine, bus, sessions, sessionId } = makeEngine({ llm, config: cfg })
+    seedTurns(sessions, sessionId, 3)
+
+    const run = executeRun(engine, handoff(sessionId, "x".repeat(500)))
+    await vi.waitFor(() => expect(summaryRequests.length).toBe(1)) // 后台在飞
+    // 主请求早已走完（end_turn），run 仍挂着：收尾压缩在等后台
+    expect(mainRequests.length).toBe(2)
+    const pending = await Promise.race([run, new Promise((r) => setTimeout(() => r("pending"), 50))])
+    expect(pending).toBe("pending")
+
+    summaryGate.resolve()
+    const outcome = await run
+    expect(outcome.stopReason).toBe("end_turn")
+
+    // 后台那笔是唯一压缩；收尾等待后水位落回黄线以下，没有第二笔
+    const records = sessions.readEvents(sessionId).filter((e) => e.type === "compaction")
+    expect(records).toHaveLength(1)
+    expect(summaryRequests.length).toBe(2)
+    expect(bus.events.some((e) => e.type === "compaction.completed")).toBe(true)
+  })
+
+  it("急救撞在飞后台：掐掉在飞（不写取消标记）并立即同步急救", async () => {
+    // 边界 1 kick 后台（摘要卡 gate）；第 2 次主请求零输出抛超限 → 急救先
+    // abortInFlight 清场再等其退出。旧实现的 cancel() 在这里自堵（取消标记
+    // 压制紧随的急救 auto()），run 会以溢出错误收场、零压缩记录
+    const base = loadConfig(resolvePaths(home))
+    const cfg = { ...base, sessions: { ...base.sessions, contextTokens: 1000 } }
+    const summaryGate = Promise.withResolvers<void>()
+    const { llm, mainRequests, summaryRequests } = waterlineLlm({
+      mainTurns: 1, summaryGate: summaryGate.promise, overflowAt: 2,
+    })
+    const { engine, sessions, sessionId } = makeEngine({ llm, config: cfg })
+    seedTurns(sessions, sessionId, 3)
+
+    const run = executeRun(engine, handoff(sessionId, "x".repeat(500)))
+    await vi.waitFor(() => expect(summaryRequests.length).toBe(1)) // 边界 1 kick 后台
+    await vi.waitFor(() => expect(mainRequests.length).toBe(2)) // 第 2 次请求已抛超限
+    await new Promise((r) => setTimeout(r, 50))
+    // 急救在等在飞后台退出：run 挂着，急救的摘要调用还没发生
+    expect(summaryRequests.length).toBe(1)
+    const pending = await Promise.race([run, new Promise((r) => setTimeout(() => r("pending"), 50))])
+    expect(pending).toBe("pending")
+
+    summaryGate.resolve() // 被掐的后台调用走出取消分支，急救开工
+    const outcome = await run
+    expect(outcome.stopReason).toBe("end_turn")
+
+    // 恰好一笔压缩 = 急救那笔（emergency 标记）；被掐的后台零写入
+    const records = sessions.readEvents(sessionId).filter((e) => e.type === "compaction")
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({ trigger: "in-run", emergency: true })
+    // 重发请求带急救压缩摘要
+    expect(String(mainRequests[2]!.messages[0]!.content)).toContain("<compacted-summary>")
   })
 
   it("挂起的 /compact 在收尾链冲刷：自动收尾压缩之前执行", async () => {
