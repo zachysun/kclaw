@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/skills/` 实现技能包（skill）的解析、双作用域扫描与点名匹配；`packages/core/src/tools/skills.ts` 实现 `skill_read` 工具；系统提示词里的技能列表、点名的隐式包装在 run 装配（core `packages/core/src/agent/run-assembly.ts` 的 `executeRun`）每 run 完成；只读管理面在 `packages/server/src/routes/skills.ts`（CLI `/skill` 与 Web 技能页共用）。
+`packages/core/src/skills/` 实现技能包（skill）的解析、双作用域扫描与点名匹配；`packages/core/src/tools/skills.ts` 实现 `skill_read` 工具；系统提示词里的技能列表、点名的隐式包装在 run 装配（core `packages/core/src/agent/run-assembly.ts` 的 `executeRun`）每个 run 完成；只读管理入口在 `packages/server/src/routes/skills.ts`（CLI `/skill` 与 Web 技能页共用）。
 
 技能是一种"把操作规程交给模型"的机制：一个技能是一个目录，里面放一份 `SKILL.md`（YAML 头部 + Markdown 正文），描述"遇到什么情况、照什么规程做"。它不写死在代码里——把目录放进约定位置、下一个会话轮次即生效；模型需要用到时按名字把全文加载进上下文，平时不占用。
 
@@ -16,7 +16,7 @@
 - **项目级整目录覆盖全局**：同名技能在不同作用域并存时，项目那份整体替换全局那份（整目录覆盖，不做字段合并）。
 - **兼容生态技能**：只解释五个字段，其余 frontmatter 字段一律忽略且不报错——Agent Skills 生态里的现成技能可以不改就放进目录。CRLF 换行与文件头 BOM 都容忍。
 - **只改模型看到的输入**：技能点名的隐式包装是内置 `skill-wrap` 钩子（`llm-before` 位置，见 [hooks](./hooks.md)），只改写发给模型的那一份消息——持久化、事件流与聊天气泡保持用户原文（所见即所发）。
-- **每 run 现扫，文件即真相**：技能目录在每次 run 开始时重新扫描（不存在则跳过、单条损坏只跳过该条，不拖垮整个 run），改动技能文件不用重启 daemon；`/skills` 管理路由同样每次请求现扫，与 run 同源同规则。
+- **每个 run 重新扫描，文件即真相**：技能目录在每次 run 开始时重新扫描（不存在则跳过、单条损坏只跳过该条，不拖垮整个 run），改动技能文件不用重启 daemon；`/skills` 管理路由同样每次请求重新扫描，与 run 同源同规则。
 - **用户面隐藏是"不存在"**：`user-invocable: false` 的技能对用户面完全不可见——列表不显示、点名 404，且 404 与"名字不存在"同响应（不向探测者泄露存在性），对齐 Claude Code"从 / 菜单隐藏"。
 
 ---
@@ -56,7 +56,7 @@
 
 ### 第一层：系统提示词技能清单（skillListPrompt）
 
-每 run 拼装系统提示词时，把模型可见的技能（未被 `disable-model-invocation` 隐藏的）渲染成一段"可用技能"清单，追加在 AGENTS.md 基础提示与 L2 认知之后（见 [run-manager](../server/run-manager.md) 的装配第 6/11 步）。清单随系统提示词的冻结基线走纪元语义（见 [hooks](./hooks.md)）：纪元中途安装/卸载的技能不重写请求前缀，要等下一次压缩后的重冻结才进清单——但点名与 `skill_read` 每 run 现扫，不受清单陈旧影响。清单格式：
+每 run 拼装系统提示词时，把模型可见的技能（未被 `disable-model-invocation` 隐藏的）渲染成一段"可用技能"清单，追加在 AGENTS.md 基础提示与 L2 认知之后（见 [run-manager](../server/run-manager.md) 的装配第 6/11 步）。清单随系统提示词的冻结基线走纪元语义（见 [hooks](./hooks.md)）：纪元中途安装/卸载的技能不重写请求前缀，要等下一次压缩后的重冻结才进清单——但点名与 `skill_read` 每个 run 重新扫描目录，不受清单陈旧影响。清单格式：
 
 ```
 ## 可用技能
@@ -86,9 +86,9 @@
 
 **仅 `trigger: "user"` 生效**：job 提示是 daemon 生成的内部指令，不参与点名。
 
-## 管理面与前端入口
+## 管理入口与前端入口
 
-`/skills` 路由族（`packages/server/src/routes/skills.ts`，始终注册、无装配依赖）是只读管理面：
+`/skills` 路由族（`packages/server/src/routes/skills.ts`，始终注册、无装配依赖）是只读管理入口：
 
 - `GET /skills?workdir=`：用户可见技能列表 `{name, displayName, description, visibility, origin}`——`visibility` 是 `all`（模型+用户）或 `user-only`（被 `disable-model-invocation` 隐藏但仍用户可见），`origin` 是 `global` / `project`；
 - `GET /skills/:name?workdir=`：单个技能详情，带 `content`（SKILL.md 正文）。路径段先过白名单校验（拦目录穿越段）；`user-invocable: false` 的技能 404，与未知名字同响应。
@@ -108,7 +108,7 @@
 
 ## 关联
 
-- [tools](./tools.md)：`skill_read` 在 11 个内置工具里的位置与注册
+- [tools](./tools.md)：`skill_read` 在 12 个内置工具里的位置与注册
 - [hooks](./hooks.md)：`skill-wrap` 内置钩子（`llm-before` 位置的点名包装）与 `withLastUserText`
 - [agent-loop](./agent-loop.md)：`llm-before` 位置在循环里的触发时机
 - [run-manager](../server/run-manager.md)：系统提示词装配（基础 + 认知 + 技能清单）、技能目录每 run 扫描

@@ -10,7 +10,7 @@
 - **路径解析复用 core**：`detectProviderStatus` 与向导都用 `@kclaw/core` 的 `resolvePaths`/`loadConfig`/`saveConfig`（真实的 `KclawPaths` 形状），不自建替代实现，CLI 侧的路径解析永远不会与 daemon 发生漂移（其 mkdir 副作用只是提前创建 home 目录树，任何 kclaw 调用本来也会创建）。
 - **向导是验证环节不是必经之路**：只在 "missing" 且 stdout 是 TTY 时启动；取消（Ctrl+C 等）或"重试？→否"都直接静默退出，**文件系统零改动**——绝不写入不完整的 config.yaml。
 - **连通测试用最小请求**：一次 `max_tokens: 1` 的补全请求，验证 key、model、baseUrl 三项组合可用，不浪费 token。
-- **key 文件权限 0600**：`saveConfig` 本身就是原子写（`writeFileAtomic`：临时文件落盘后 rename，mode 直接 0600）；向导保存后再 `chmodSync(paths.config, 0o600)` 是双保险——若该文件此前以更宽权限存在也一并收紧。API key 持久化在这个文件里，仅属主可读写。
+- **key 文件权限 0600**：`saveConfig` 本身就是原子写（`writeFileAtomic`：临时文件写入后 rename，mode 直接 0600）；向导保存后再 `chmodSync(paths.config, 0o600)` 是双保险——若该文件此前以更宽权限存在也一并收紧。API key 持久化在这个文件里，仅属主可读写。
 - **`kclaw web` 不向用户展示 token**：URL 带 token 只用于浏览器一次交接，终端打印的地址刻意去掉 `?token=` 部分（用户能看见/分享的是不带 token 的 URL）。
 
 ## provider 判定（packages/cli/src/provider-check.ts）
@@ -55,7 +55,7 @@ export function detectProviderStatus(home: string): ProviderStatus
 | 判定 | 条件 | 文案 | 重试回到的步骤（`retryStepFor`） |
 |------|------|------|------|
 | `key` | HTTP 401/403 | API key 无效（401/403） | key 输入 |
-| `model` | HTTP 404，或 400 且报文含 "model" | 模型名不对（404/400） | model 输入 |
+| `model` | HTTP 404，或 400 且报错文本含 "model" | 模型名不对（404/400） | model 输入 |
 | `network` | 请求根本没到达（status 为 null） | 连不上服务端（网络或 baseUrl 不通） | 模板选择（custom 的 baseUrl 并入这步） |
 | `unknown` | 其余 | 未知错误 | 模板选择 |
 
@@ -80,7 +80,7 @@ export async function webAction(home: string): Promise<void>
 1. `ensureDaemon(home)` 确保 daemon 在运行（不在则启动，打印 `daemon started`）。
 2. 读 `<home>/token`。
 3. `buildWebUrl(info.port, token)` 构造 URL（token 经 URL 编码，含保留字符也能完整保留于查询参数）。
-4. 有浏览器命令（macOS/Linux）→ `spawn(cmd, [url], {detached: true, stdio: "ignore"}).unref()` 脱离启动（CLI 不等浏览器、浏览器寿命独立于 CLI），打印 `opening <不带 token 的 URL> in your browser`；没有命令 → 直接打印 `open <完整 URL>` 让用户手动打开。
+4. 有浏览器命令（macOS/Linux）→ `spawn(cmd, [url], {detached: true, stdio: "ignore"}).unref()` 以独立进程启动（CLI 不等浏览器、浏览器寿命独立于 CLI），打印 `opening <不带 token 的 URL> in your browser`；没有命令 → 直接打印 `open <完整 URL>` 让用户手动打开。
 
 浏览器侧的接收：WebUI 启动时把 `?token=` 存进 localStorage 并从地址栏清除（`bootstrapToken`，见 [webui](../web/webui.md)）。
 

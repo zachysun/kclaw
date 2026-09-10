@@ -5,12 +5,12 @@
 `packages/core/src/protocol/` 定义贯穿全系统的数据模型，六个文件按粒度分层：`messages.ts`（持久化单位；持久化 = 写入磁盘长期保存）、`blocks.ts`（消息内结构化片段）、`events.ts`（瞬时广播）、`wire.ts`（WS 指令帧与应答帧）、`session-events.ts`（会话事件流的持久化事件类型）、`ids.ts`（ID 体系）。三层按生命周期划分：
 
 ```
-Event（瞬时，不持久化）──沉淀为──▶ Message（持久化单位）──内含──▶ Block（结构化片段）
+Event（瞬时，不持久化）──记录为──▶ Message（持久化单位）──内含──▶ Block（结构化片段）
 ```
 
 server 与 CLI/WebUI 之间传输的就是这些类型：JSONL（每行一条 JSON 的文本文件）里每行一条 `Message`，WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）事件流里每帧一个 `AgentEvent`，daemon 不翻译、不改写。
 
-**类型正本与出口**：这六份文件是全部线上形状的唯一类型出处。除 core 主入口外，它们经 `package.json` 的子路径出口 `@kclaw/core/protocol` 对外发布——纯类型与纯函数、不含任何 Node API，浏览器构建（WebUI）直接 `import type` 引用而不会把 Node 绑定的主入口打进包里（`@kclaw/core/commands` 是同一先例）。三端约定：不手抄镜像，一律引用正本；web/cli 的事件消费 switch 以 `default: const unhandled: never = event` 哨兵收尾，core 新增事件类型而消费端未表态时编译失败。
+**权威类型与出口**：这六份文件是全部线上数据形状的唯一类型出处。除 core 主入口外，它们经 `package.json` 的子路径出口 `@kclaw/core/protocol` 对外发布——纯类型与纯函数、不含任何 Node API，浏览器构建（WebUI）直接 `import type` 引用而不会把 Node 绑定的主入口打进包里（`@kclaw/core/commands` 是同一先例）。三端约定：不手抄镜像，一律引用这份权威定义；web/cli 的事件消费 switch 以 `default: const unhandled: never = event` 哨兵收尾，core 新增事件类型而消费端未表态时编译失败。
 
 ---
 
@@ -147,7 +147,7 @@ export function makeEvent<T extends EventType>(
 | note 单发 | `note.emitted` | 1 |
 | 消息排队与引导 | `message.queued` `message.steered` `message.queue_cancelled` | 3 |
 | 上下文压缩 | `compaction.started` `compaction.completed` | 2 |
-| 记忆落盘 | `memory.written` | 1 |
+| 记忆写入 | `memory.written` | 1 |
 | 扩展 | `hook.failed` | 1 |
 
 关键 payload：
@@ -158,7 +158,7 @@ export interface RunCompletedPayload { stopReason: StopReason; usage: Usage }
 export interface RunFailedPayload    { error: { code: string; message: string } }
 export interface JobCompletedPayload { jobId: string; summary: string }
 export interface SessionRenamedPayload { title: string }
-/** 持久化通知：一条会话事件已写入 events.jsonl（store 落盘成功后发出，先落盘后广播）。 */
+/** 持久化通知：一条会话事件已写入 events.jsonl（store 写入成功后发出，先写入后广播）。 */
 export interface SessionAppendedPayload { eventType: SessionEvent["type"] }
 
 export interface BlockPayload         { messageId: string; block: Block }
@@ -187,7 +187,7 @@ export interface ConfirmationRequestedPayload {
 export interface ConfirmationResolvedPayload {
   confirmationId: string
   // 人工四选裁决（once 仅本次 / project 总是·项目 / global 总是·全局 / reject 拒绝），
-  // timeout 是无人裁决的竞速失败结果——循环侧产生，不经确认网关。
+  // timeout 是无人裁决时等到超时的结果——循环侧产生，不经确认网关。
   decision: "once" | "project" | "global" | "reject" | "timeout"
   by: "cli" | "web" | "timeout"
 }
@@ -202,8 +202,8 @@ export interface MessageQueuedPayload {
 export interface MessageSteeredPayload { messageId: string }
 export interface MessageQueueCancelledPayload { messageId?: string; all?: boolean }
 
-// 记忆写入管线每次实际落盘时发出：episode 带 topic（线名）、cognition 带 scope；
-// 事件不带 sessionId（项目级事务），只作"已落盘"的轻提示，订阅端不驱动状态机。
+// 记忆写入管线每次实际写入文件时发出：episode 带 topic（线名）、cognition 带 scope；
+// 事件不带 sessionId（项目级事务），只作「已写入」的轻提示，订阅端不驱动状态机。
 export interface MemoryWrittenPayload {
   path: string
   kind: "episode" | "cognition"
@@ -211,7 +211,7 @@ export interface MemoryWrittenPayload {
   scope?: string
 }
 
-// 钩子失败：失败兜底自声明（skip 跳过 / deny 否决闸门），run 不因钩子失败而崩，但失败必须可见。
+// 钩子失败：失败时的行为自行声明（skip 跳过 / deny 否决闸门），run 不因钩子失败而崩，但失败必须可见。
 // phase:"load" 是装载期失败（无 sessionId/runId）；"run" 是执行期失败（带所在 run 的上下文）。
 export interface HookFailedPayload {
   hook: string
@@ -228,11 +228,11 @@ export interface HookFailedPayload {
 | run / message / 流式 / llm / confirmation / note / `message.steered` | core 的 agent 循环（`agent/loop.ts`；`message.steered` 在 steering 注入时逐条发出，事件级 `runId` 标识注入的 run） |
 | `message.queued` `message.queue_cancelled` | server 的 `RunManager`（`run.ts`：submit / recoverQueues / queueCancel） |
 | `compaction.started` `compaction.completed` | core 压缩引擎 `Compactor`（`packages/core/src/session/compactor.ts` 的 `compact` / `auto`，覆盖收尾 post-run / 运行中 in-run / 手动 manual 三路） |
-| `memory.written` | core 的 `MemoryPipeline`（`memory/pipeline.ts`，每次落盘经装配的 emit 钩子广播；daemon 侧接钩子的点在 `server/daemon.ts`） |
+| `memory.written` | core 的 `MemoryPipeline`（`memory/pipeline.ts`，每次写入经装配的 emit 钩子广播；daemon 侧接钩子的点在 `server/daemon.ts`） |
 | `hook.failed` | core 钩子系统（`hooks/runner.ts` 的 skip 失败报告 + `hooks/registry.ts` 的装载失败去重报告；两处都经 run 装配/daemon 的总线扇出） |
 | `job.*` | server 的 `scheduler-tick.ts` |
 | `session.renamed` | server 的自动命名（`autoname.ts`：新标题写回 meta 后发出） |
-| `session.appended` | core 的 `SessionStore`（`session/store.ts`：每个事件与其投影成功写入后经构造时注入的回调发出；daemon 装配时接 `EventBus`——先落盘后广播，web 审计页据此增量拉取） |
+| `session.appended` | core 的 `SessionStore`（`session/store.ts`：每个事件与其投影成功写入后经构造时注入的回调发出；daemon 装配时接 `EventBus`——先写入后广播，web 审计页据此增量拉取） |
 | `attachment.*` | 目前**已定义无发射方**——附件以 attachment 块随用户消息整体持久化与广播（`message.completed` 携带全量消息），不需要单独的块级事件流 |
 
 ---
@@ -241,7 +241,7 @@ export interface HookFailedPayload {
 
 `wire.ts` 定义 WS 的客户端→daemon 指令帧（`ClientCommand` 联合：auth / subscribe / unsubscribe / confirmation.resolve / send_message / queue.cancel / run.cancel / compaction.cancel）与 daemon→客户端的应答帧（各指令的 ack、`ErrorFrame`），合并为 `ServerFrame`；附件引用 `AttachmentRef{path,name,size,mimeType}` 与排队条目 `QueueEntry` 也在此（`session/store.ts` re-export 保持旧引用路径）。字段规则与报错文案不在类型里——它们的唯一实现是 server 的 `command-check.ts`（见 [realtime](../server/realtime.md)）。
 
-`session-events.ts` 定义会话事件流（`events.jsonl`，`GET /sessions/:id/events` 的返回形状）的十种事件类型：会话元数据五种（created/renamed/deleted/restored/set）+ `message` / `compaction` / `memory` / `system` / `sandbox.checked`。`session.created` 携带创建时固化的初始权限模式 `mode`（可选，旧流缺省 default）与可选 `parentSessionId`（子代理会话的父会话标识——引擎侧一切子代理特化从它派生，见 [subagents](./subagents.md)）；`session.set` 携带元数据的增量补丁（`model` / `mode`（会话权限模式）/ `disposition`，键出现在补丁里才发）；旧会话流里的 `readonly` 布尔字段是 legacy，读取时映射为 `mode`。`sandbox.checked` 是每 run 一条的沙箱状态审计（`{enabled, available, unavailableReason?}`），与 `system` 一样只落事件流、不进 bus 的 `EventType`——它们对外部的可见性由 `session.appended` 通知帧间接承载（订阅端收到后拉 `/events` 即见）。assistant 消息可携带可选 `latencyMs`（LLM 生成耗时毫秒，流成功完成时随 `usage` 一并持久化；旧消息与失败流缺省）。只放类型；运行时守卫（`isMessageEvent` 等）与 meta 投影（`applyEvent`）在 `session/events.ts`。
+`session-events.ts` 定义会话事件流（`events.jsonl`，`GET /sessions/:id/events` 的返回形状）的十种事件类型：会话元数据五种（created/renamed/deleted/restored/set）+ `message` / `compaction` / `memory` / `system` / `sandbox.checked`。`session.created` 携带创建时固化的初始权限模式 `mode`（可选，旧流缺省 default）与可选 `parentSessionId`（子代理会话的父会话标识——引擎侧一切子代理特化从它派生，见 [subagents](./subagents.md)）；`session.set` 携带元数据的增量补丁（`model` / `mode`（会话权限模式）/ `disposition`，键出现在补丁里才发）；旧会话流里的 `readonly` 布尔字段是 legacy，读取时映射为 `mode`。`sandbox.checked` 是每 run 一条的沙箱状态审计（`{enabled, available, unavailableReason?}`），与 `system` 一样只写事件流、不进 bus 的 `EventType`——它们对外部的可见性由 `session.appended` 通知帧间接承载（订阅端收到后拉 `/events` 即见）。assistant 消息可携带可选 `latencyMs`（LLM 生成耗时毫秒，流成功完成时随 `usage` 一并持久化；旧消息与失败流缺省）。只放类型；运行时守卫（`isMessageEvent` 等）与 meta 投影（`applyEvent`）在 `session/events.ts`。
 
 ---
 
@@ -268,26 +268,26 @@ export function newId(prefix: IdPrefix): string {
 | `evt` | `events.ts` 的 makeEvent |
 | `run` | `agent/loop.ts` 的 runAgent |
 | `conf` | `permissions/engine.ts` 的确认 id 工厂 |
-| `mem` | 已声明、当前无生成点（v1 note id 前缀，v2 线/认知文件不用前缀 id，见下） |
+| `mem` | 已声明、当前无生成点（旧版 note id 前缀，现版线/认知文件不用前缀 id，见下） |
 | `job` | `jobs/scheduler.ts` |
-| `att` | server 的上传路由（`routes/attachments.ts`，落盘文件名 `<att_…>__<原名>`） |
+| `att` | server 的上传路由（`routes/attachments.ts`，写入磁盘的文件名 `<att_…>__<原名>`） |
 
-`call` 前缀已声明但当前无生成点——`callId` 由 provider 原样传入（OpenAI 的 tool_call id，缺失时 provider 合成 `call_idx_<index>`，见 `provider/openai-compat.ts`）。`mem` 前缀同 `call`：v2 中 `newId("mem")` 全仓无调用处（线/认知文件按 `topic`/`kind-name` 命名，不生成 mem_* id），保留声明仅为兼容阅读 v1 的 note id（`mem_<ULID>`）。单调 ULID 保证同进程内 ID 按时间排序，日志/JSONL 天然有序。
+`call` 前缀已声明但当前无生成点——`callId` 由 provider 原样传入（OpenAI 的 tool_call id，缺失时 provider 合成 `call_idx_<index>`，见 `provider/openai-compat.ts`）。`mem` 前缀同 `call`：现在的代码里 `newId("mem")` 全仓无调用处（线/认知文件按 `topic`/`kind-name` 命名，不生成 mem_* id），保留声明仅为兼容阅读旧版的 note id（`mem_<ULID>`）。单调 ULID 保证同进程内 ID 按时间排序，日志/JSONL 天然有序。
 
 ---
 
 ## 持久化规则
 
-- **实时增量事件不持久化、不回放**。WS 上推送的事件（text.delta、message.created 等）只描述"正在发生"的增量，不落盘、不重发；会话的权威历史是 events.jsonl 事件流（见下"持久化格式"）。断线恢复 = HTTP `GET /sessions/:id/messages` 拉全量消息 + 只订阅新事件（WS `subscribe`）。单 WS 连接天然有序，事件不带序号——有意的简化。
+- **实时增量事件不持久化、不回放**。WS 上推送的事件（text.delta、message.created 等）只描述"正在发生"的增量，不写入磁盘、不重发；会话的权威历史是 events.jsonl 事件流（见下"持久化格式"）。断线恢复 = HTTP `GET /sessions/:id/messages` 拉全量消息 + 只订阅新事件（WS `subscribe`）。单 WS 连接天然有序，事件不带序号——有意的简化。
 - **持久化的块永远是完整的**："写到一半的块"只存在于事件流中；`onMessage` 收到的消息是终稿快照。因此 JSONL 每行读取后自洽，无需校验。
-- **持久化格式**：会话目录是事件溯源结构（见 [storage](./storage.md)）——`sessions/<id>/events.jsonl` 是唯一真相，一行一条 `JSON.stringify(event)`（消息即 `{type:"message"}` 事件，携带完整 Message）；`meta.json` 是投影快照（标题/时间戳等当前值，可由事件流重建）；`queue.jsonl` 存运行态排队。崩溃容忍：读到尾部残缺行（只写了一半的行）时丢弃、写前字节级修复（`storage/jsonl.ts` 的 `readJsonl` / `repairTornTail`）。
+- **持久化格式**：会话目录是事件流结构（见 [storage](./storage.md)）——`sessions/<id>/events.jsonl` 是唯一真相，一行一条 `JSON.stringify(event)`（消息即 `{type:"message"}` 事件，携带完整 Message）；`meta.json` 是投影快照（标题/时间戳等当前值，可由事件流重建）；`queue.jsonl` 存运行态排队。崩溃容忍：读到尾部残缺行（只写了一半的行）时丢弃、写前字节级修复（`storage/jsonl.ts` 的 `readJsonl` / `repairTornTail`）。
 - **先持久化后广播**：`message.completed` 永远跟在 `onMessage` 之后，事件流反映的是已持久化状态。
 
 ---
 
 ## 边界与出错
 
-- 实时事件无 ack、无重发：客户端错过的增量事件不补发，通过"拉全量 + 订阅新事件"对账，而非回放（回放语义由 events.jsonl 的唯一真相承载，`GET /sessions/:id/events` 可按会话回查整条事件流）。
+- 实时事件无 ack、无重发：客户端错过的增量事件不补发，靠「HTTP 拉全量 + 只订阅新事件」补齐，而不是回放（回放语义由 events.jsonl 的唯一真相承载，`GET /sessions/:id/events` 可按会话回查整条事件流）。
 - `message.created` 之后消息可能永远不 `completed`（空 assistant 被丢弃、宿主钩子抛错）——客户端不能假设 created 必有 completed 配对。
 - `AgentEvent.sessionId` 缺失即广播语义（`EventBus.emit` 发给全部已连接 socket），客户端不应把它当异常。
 - `attachment` 的 `file` source 指向 `<home>/attachments/<session-id>/`：客户端先把文件传到该目录（HTTP `POST /sessions/:id/attachments`），发起消息时引用路径、由服务端挂载为块（见 [run-manager](../server/run-manager.md)）；大文件不进 JSONL，JSONL 里只有指向磁盘的元数据。

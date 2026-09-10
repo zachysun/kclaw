@@ -8,7 +8,7 @@
 
 ## 设计决策
 
-- **统一执行接口**：内置工具、MCP 适配器（`mcp__<server>__<tool>`，见 [mcp](./mcp.md)）实现同一个 `ToolExecutor`——循环不区分工具来源。`risk` 与 `concurrency` 是声明性元数据：前者驱动权限检查（safe 的工具集可自动放行；sensitive 在只读模式被无条件拒绝），后者驱动同批调用的调度。权限引擎需要的其余待遇（路径归一、工作目录边界、读豁免、规则匹配取哪个参数）不要求工具声明——由引擎从 `risk` 加参数 schema 的字段名派生（见 [permissions](./permissions.md) 的待遇派生节）：写参数按惯例命名 `path`、命令参数命名 `command` 即自动入网。
+- **统一执行接口**：内置工具、MCP 适配器（`mcp__<server>__<tool>`，见 [mcp](./mcp.md)）实现同一个 `ToolExecutor`——循环不区分工具来源。`risk` 与 `concurrency` 是声明性元数据：前者驱动权限检查（safe 的工具集可自动放行；sensitive 在只读模式被无条件拒绝），后者驱动同批调用的调度。权限引擎需要的其余待遇（路径归一、工作目录边界、读豁免、规则匹配取哪个参数）不要求工具声明——由引擎从 `risk` 加参数 schema 的字段名派生（见 [permissions](./permissions.md) 的待遇派生节）：写参数按惯例命名 `path`、命令参数命名 `command`，就自动被规则引擎识别。
 - **注册表与定义同源**：`createBuiltinTools` 把执行器和 ToolDefinition 放在同一条 entries 列表里，`tools` 的键集合与 `toolDefs` 的名字集合天然一致（`registry.test.ts` 双向断言这一点），不会出现"模型可见但循环无法执行"的名字。
 - **schema 面向模型，校验为手写实现**：parameters 字段是 JSON Schema（描述 JSON 参数结构的规范格式），随请求传给模型引导其生成参数；运行时不加载 schema 校验库，而是用 `shared.ts` 里的手写校验函数（`requireString` / `optInt` / `optStringArray`）逐个字段检查——失败抛 `ToolError`，由 `makeTool` 统一转成 `{status:"error"}` 结果，异常永远不逃出执行器。
 - **fs 工具不做工作目录越界拦截**：路径只经 `path.resolve(workspace, p)` 解析，越界与否交给权限网关判定（越界会变成一次可由人批准的确认）——如果工具层先拒绝，人工批准后的调用仍会失败，确认就失去意义。
@@ -37,9 +37,9 @@ export function createBuiltinTools(opts: {
   // 记忆系统 v2 门面 + 当前会话上下文；immediateEnabled 决定 memory_save 是否当场触发写入
   tavilyApiKey: string
   exec?: Partial<{ timeoutMs: number; maxOutputBytes: number; sandbox: ExecSandboxSpawn; spillDir: string }>
-  // sandbox = exec 沙箱包装器（批次 A）：run 装配仅在沙箱可用时传入（见 sandbox.md），
+  // sandbox = exec 沙箱包装器：run 装配仅在沙箱可用时传入（见 sandbox.md），
   // exec 工具本身不探测平台；缺省 = 裸跑，即沙箱功能不存在前的行为
-  // spillDir = <home>/spill：截断时全量输出落盘 + 模型视图附 fs_read 定位行（见 tools/spill.ts）
+  // spillDir = <home>/spill：截断时全量输出写入磁盘 + 模型视图附 fs_read 定位行（见 tools/spill.ts）
   web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean; spillDir: string }>
   sessionSearch?: SessionSearchFn    // session_search 的检索后端（server 每 run 注入）；缺席时工具仍注册、返回"(无可检索内容)"
   skills?: SkillRecord[]             // 技能目录扫描结果：skill_read 按名加载正文（见 skills.md）
@@ -82,11 +82,11 @@ export function makeTool<N extends string>(
 
 `spawn(command, {shell: true, cwd: workspace, detached: POSIX 下为 true})`——cwd 固定在工作目录；`detached` 让子进程成为进程组（一组一起调度/发信号的进程）组长。关键约束：
 
-- **沙箱注入**（批次 A）：构造参数可选带 `sandbox`（`ExecSandboxSpawn`，一个 `spawn(command, {cwd}) → ChildProcess`）。注入时命令改经沙箱包装器运行（其内部负责再经 `/bin/sh -c` 与进程组语义，见 [sandbox](./sandbox.md)）；缺省裸跑即沙箱功能不存在前的行为。run 装配只在沙箱可用时注入，与权限引擎的 `sandboxAvailable` 同源。
+- **沙箱注入**：构造参数可选带 `sandbox`（`ExecSandboxSpawn`，一个 `spawn(command, {cwd}) → ChildProcess`）。注入时命令改经沙箱包装器运行（其内部负责再经 `/bin/sh -c` 与进程组语义，见 [sandbox](./sandbox.md)）；缺省裸跑即沙箱功能不存在前的行为。run 装配只在沙箱可用时注入，与权限引擎的 `sandboxAvailable` 同源。
 
 - **超时**：默认 `timeoutMs = 60_000`（`config.yaml` 的 `exec.timeoutMs` 同为 60s 默认值）。超时先 `process.kill(-pid, "SIGKILL")` 终止整个进程组（连带 shell 的子进程，如 `sleep`；Windows 无进程组，退回只终止直接子进程），然后返回 `{status:"error", output: "command timed out after 60000ms\n<部分输出>"}`——已产生的输出仍然返回。
 - **输出截断**：流式累计到 `maxOutputBytes`（默认 100 KiB，即 `100 * 1024`）即停止积累——头部保留，之后的 chunk 只计字节数不再转发；到达上限那一刻发一条截断提示 delta（`...[output truncated, further output dropped]...`），结束时在尾部附 `...[dropped N bytes]...` 字节数标记。`truncateMiddle` 只对头部超出上限 ≤1 chunk 的部分微裁剪（插 `\n...[truncated N bytes]...\n` 标记）。按 UTF-8 字节计数，多字节字符在切点被拆开会解码成 U+FFFD 替换字符，属可接受损失。
-- **输出溢出落盘（spill）**：run 装配传入 `spillDir`（`<home>/spill`）后，流式读取把全量输出另存一份（上限 `SPILL_MAX_BYTES = 10 MiB`，超出即停、落盘副本标注"仅保留前 10MB"）；发生截断时模型视图在 `dropped` 标记后追加一行 `[完整输出已存盘: <路径>；需要更多内容时用 fs_read 读取该文件]`——spill 目录在权限引擎 readRoots 内，`fs_read` 无需确认即可读。落盘尽力而为：写失败静默退化为纯截断；未传 `spillDir`（如部分测试）则行为与无 spill 时完全一致。
+- **输出溢出存盘（spill）**：run 装配传入 `spillDir`（`<home>/spill`）后，流式读取把全量输出另存一份（上限 `SPILL_MAX_BYTES = 10 MiB`，超出即停、存盘副本标注"仅保留前 10MB"）；发生截断时模型视图在 `dropped` 标记后追加一行 `[完整输出已存盘: <路径>；需要更多内容时用 fs_read 读取该文件]`——spill 目录在权限引擎 readRoots 内，`fs_read` 无需确认即可读。存盘尽力而为：写失败静默退化为纯截断；未传 `spillDir`（如部分测试）则行为与无 spill 时完全一致。
 - **退出码**：0 → ok；非 0 → error，输出带 `exit code N` 首行；stdout 与 stderr 合并，到达即经 `ctx.onOutput` 流式回传。
 - 空/非字符串 `command` 直接返回 error（`args.command must be a non-empty string`）。
 
@@ -104,13 +104,13 @@ export function makeTool<N extends string>(
 两个工具的每次请求都带 `AbortSignal.timeout(timeoutMs)`（默认 20 秒，`config.yaml` 的 `web.timeoutMs`）——卡死的远端主机不能拖住一个 run。
 
 - **web_search**：POST `https://api.tavily.com/search`，体为 `{api_key, query, max_results}`；`maxResults` 默认 5、钳制在 [1, 10]。目标是固定的公网 Tavily 域名，**不走私网检查**。`output` 是给模型的 markdown 列表（`- [title](url)：content`），无结果输出 `(no results)`；`data` 携带原始三元组 `{results: [{title, url, content}]}` 供渲染。
-- **web_fetch**：只接受 http(s) URL。内置一层 SSRF（Server-Side Request Forgery，服务端请求伪造——诱导服务器自己去访问内网地址的攻击）防护：不使用 fetch 的自动跟随重定向，而是手工循环（至多 `DEFAULT_MAX_REDIRECTS = 5` 跳），每一跳的目标——初始 URL 与每个 `Location`——都在真正请求前经 DNS 解析（字面 IP 直接判定）并按拒绝名单核查：loopback/未指定/链路本地/私网地址（127/8、0.0.0.0、::1、`::ffff:` 映射、10/8、172.16–31、192.168/16、169.254/16、fc00::/7、fe80::/10）一律拒绝，除非 config 里 `web.allowPrivateNetworks: true` 显式豁免（如允许抓本机 Ollama 端点）。非 2xx 报 `HTTP <status> <statusText> for <url>`。HTML 经 linkedom 解析 + Readability（Mozilla 的正文提取库）取文章正文，失败回退为移除 `script/style/noscript/template/svg` 后的 body 文本（对原始 HTML 重新解析，避免污染），仍为空则 `(no extractable text content)`；非 HTML 内容按纯文本返回。响应体经流式读取、**越过 `maxFetchBytes`（默认 512 KiB）即 cancel 连接**——上限施加于 DOM 解析之前，超大页面无法在解析阶段吃内存；截断附 `...[truncated, dropped N bytes]...` 标记。装配了 `spillDir` 时读取上限放宽到 10 MiB（spill 天花板），被截掉的原始正文落盘，字节数标记保留、fs_read 定位行追加其后（与 exec 同一输出形状；spill 写失败时定位行为空，只剩字节数标记）。
+- **web_fetch**：只接受 http(s) URL。内置一层 SSRF（Server-Side Request Forgery，服务端请求伪造——诱导服务器自己去访问内网地址的攻击）防护：不使用 fetch 的自动跟随重定向，而是手工循环（至多 `DEFAULT_MAX_REDIRECTS = 5` 跳），每一跳的目标——初始 URL 与每个 `Location`——都在真正请求前经 DNS 解析（字面 IP 直接判定）并按拒绝名单核查：loopback/未指定/链路本地/私网地址（127/8、0.0.0.0、::1、`::ffff:` 映射、10/8、172.16–31、192.168/16、169.254/16、fc00::/7、fe80::/10）一律拒绝，除非 config 里 `web.allowPrivateNetworks: true` 显式豁免（如允许抓本机 Ollama 端点）。非 2xx 报 `HTTP <status> <statusText> for <url>`。HTML 经 linkedom 解析 + Readability（Mozilla 的正文提取库）取文章正文，失败回退为移除 `script/style/noscript/template/svg` 后的 body 文本（对原始 HTML 重新解析，避免污染），仍为空则 `(no extractable text content)`；非 HTML 内容按纯文本返回。响应体经流式读取、**越过 `maxFetchBytes`（默认 512 KiB）即 cancel 连接**——上限施加于 DOM 解析之前，超大页面无法借解析阶段膨胀内存；截断附 `...[truncated, dropped N bytes]...` 标记。装配了 `spillDir` 时读取上限放宽到 10 MiB（spill 天花板），被截掉的原始正文存盘，字节数标记保留、fs_read 定位行追加其后（与 exec 同一输出形状；spill 写失败时定位行为空，只剩字节数标记）。
 
 ### memory 工具（`tools/memory.ts`）
 
-是 `MemorySystem` 门面的薄封装（v2：主题线 markdown 为准、FTS5 + 向量为派生索引，见 [memory](./memory.md)）。
+是 `MemorySystem` 门面的薄封装（主题线 markdown 为准、FTS5 + 向量为派生索引，见 [memory](./memory.md)）。
 
-- **memory_save** `{text}`：text 是"要记内容的提示"（v1 的 `tags` 已删，多余字段忽略）；当场触发 `system.triggerImmediate` 处理当前这轮对话——真有提取批次（该会话自水位起有未处理的新消息）时输出 `已触发记忆写入（处理当前这轮对话）`，没有增量时如实输出 `该轮没有需要沉淀的新内容`（不谎报写入，v2 改名事故的教训）；`memory.write.immediate=false` 时返回 `立即写入已关闭（memory.write.immediate=false），该内容将在后台定时/跟随触发时沉淀`——此时不落盘，内容留给后台兜底。
+- **memory_save** `{text}`：text 是"要记内容的提示"（旧版的 `tags` 已删，多余字段忽略）；当场触发 `system.triggerImmediate` 处理当前这轮对话——真有提取批次（该会话自上次提取位置起有未处理的新消息）时输出 `已触发记忆写入（处理当前这轮对话）`，没有增量时如实输出 `该轮没有需要沉淀的新内容`（不谎报写入，记忆重复写入事故的教训）；`memory.write.immediate=false` 时返回 `立即写入已关闭（memory.write.immediate=false），该内容将在后台定时/跟随触发时沉淀`——此时不写入，内容留给后台触发时处理。
 - **memory_search** `{query, limit?}`：`system.searchAll` 跨**全部**项目库 + 全局库的混合检索（关键词 + 向量，打分见 [memory](./memory.md)），`limit` 默认 5、最大 20；每个命中一行 `- [经历|认知] [scope] 正文`（scope 如 `project:<id>` / `global`），无命中输出 `（没有相关记忆）`。
 
 两个工具 safe + parallel：只访问记忆目录与索引，不修改工作目录本身（"parallel" 只表示调度器不强制排序）。
@@ -129,7 +129,7 @@ export function makeTool<N extends string>(
 
 ### 与 skill 机制的衔接
 
-skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每 run 现扫技能目录后传入同一份结果（渐进披露第二层），系统提示词里的技能清单用同一份扫描结果（第一层）。点名包装等其余机制见 [skills](./skills.md)。
+skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每 run 重新扫描技能目录后传入同一份结果（渐进披露第二层），系统提示词里的技能清单用同一份扫描结果（第一层）。点名包装等其余机制见 [skills](./skills.md)。
 
 ### subagent 工具（`tools/subagent.ts`）
 
@@ -159,7 +159,7 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 
 ## 边界与出错
 
-- **执行器永不抛异常**：`makeTool` 把一切异常转为 `{status:"error"}`；循环对 settle 失败也统一转为 error result（保证异常也产出结果）。
+- **执行器永不抛异常**：`makeTool` 把一切异常转为 `{status:"error"}`；循环对执行器抛异常（Promise 拒绝）也统一转为 error result（保证异常也产出结果）。
 - **参数校验失败/未知工具名**：在权限检查**之前**就被拦截为 error result，不会进权限判定，也不会执行。
 - **fs_read/fs_list 仅支持 UTF-8 文本**：二进制文件的读取结果为替换字符，判断交给上层（fs_edit 有显式二进制拦截）。
 - **网络工具的失败即结果**：web_search/web_fetch 的网络错误、非 2xx、JSON 解析失败都是 error result 文本，模型可以看到并决定下一步；不带自动重试。

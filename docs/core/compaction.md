@@ -5,7 +5,7 @@
 会话聊得越长，每次发给模型的上下文就越大，大到超出模型窗口后请求会直接失败。压缩机制把较早的对话转换成摘要、之后不再按原文发送，让每轮发送量回到预算以内；被压掉的细节仍然留在硬盘上，并可通过 `session_search` 检索回来。整套机制分三层，互相独立：
 
 1. **触发与分界**（`packages/core/src/session/compaction.ts` 的 `estimateContextTokens` / `chooseBoundary`）：按 token 估算判断何时压缩、压到哪里。触发点有四个——收尾压缩、中途压缩、超限紧急急救、手动 `/compact`——都不在"用户发送消息"的路径上，发送永不等待压缩。
-2. **分层摘要**（同一模块的 `renderSegment` 加压缩引擎的编排——core `packages/core/src/session/compactor.ts` 的 `Compactor.compact`，即原 server 侧 `#compactV2` 迁入）：两次不带工具的模型调用，先给新压掉的段生成"段摘要"，再归并进"总摘要"。
+2. **分层摘要**（同一模块的 `renderSegment` 加压缩引擎的编排——core `packages/core/src/session/compactor.ts` 的 `Compactor.compact`）：两次不带工具的模型调用，先给新压掉的段生成"段摘要"，再归并进"总摘要"。
 3. **工具输出省略**（`packages/core/src/agent/context.ts` 的 `toProviderMessages`）：每次构造请求时在省略预算内从最新往回保留工具结果，装不下的换成一行占位文字，防止一次运行内的多次工具调用把上下文撑爆。
 
 外围还有三件配套物：`session_search` 工具（检索函数 `packages/core/src/tools/session-search.ts`，直接扫会话事件流）负责"找得回来"；手动压缩（`RunManager.compactSession` + HTTP/CLI/web 三个入口）负责"人能主动压"；压缩审计（事件流里的 `compaction` 事件）负责"压过之后查得到"。调模型与写盘的编排在 core 的压缩引擎 `Compactor`（见上文第 2 层）完成，`RunManager` 只保留手动压缩入口。
@@ -15,10 +15,10 @@
 ## 设计决策
 
 - **按 token 触发，不按消息条数**：一条消息可能是 10 个字也可能是一次返回 100KB 的工具输出，条数说明不了上下文大小。触发判断用估算：基准取最近一次真实请求的大小（最后一条助手消息记录的 `usage.inputTokens`，模型供应商返回的真实数字，天然含系统提示与工具定义的固定开销），基准之后的新消息按字符粗算（`estimateTokens`：CJK 字符每个记 0.75 个 token，其余字符四个记 1 个，结果向上取整）。估算整体偏大而非偏小——偏大只会让压缩提前发生，方向安全。
-- **细节只损失一次**：旧机制每次压缩都把旧摘要重新压一遍，细节一轮轮丢失。v2 把摘要拆成两层——**段摘要**针对一段对话生成之后永不修改，**总摘要**只做"旧总摘要 + 新段摘要"的归并。细节只在新段摘要素成时损失一次，总摘要随时可以从全部段摘要重跑归并重新生成（段摘要是不变的底稿，不依赖对话原文）。
+- **细节只损失一次**：更早的做法是每次压缩都把旧摘要重新压一遍，细节一轮轮丢失。现在的机制把摘要拆成两层——**段摘要**针对一段对话生成之后永不修改，**总摘要**只做"旧总摘要 + 新段摘要"的归并。细节只在新段摘要素成时损失一次，总摘要随时可以从全部段摘要重跑归并重新生成（段摘要是不变的底稿，不依赖对话原文）。
 - **保留部分对齐用户消息**：分界起点固定落在一条用户消息上，保证压掉的段和保留的部分都是从"用户提问"开始的完整轮次，工具调用和它的结果永远在同一侧——OpenAI 兼容接口要求两者配对出现，拆开会直接报错。
 - **压缩不挡发送，失败不挡运行**：四个触发点全部不在发送路径上——发送消息后立即开始运行，压缩要么发生在运行结束后的收尾、要么在运行中途的迭代边界、要么是对超限错误的急救重试。摘要调用抛错时发出 `result:"failed"` 的结束事件并记日志，运行照常继续，下一次过线重新触发；压缩事件（含投影）追加失败只记日志，不发失败事件（见"边界与出错"）。最坏情况等于"没有压缩"，不会比现状差。
-- **检索与审计是外围，不是前提**：`session_search` 每次调用现读事件流，没有需要维护或重建的持久索引；审计是事件流里的一条 `compaction` 事件，追加失败只记日志，不让已成功的压缩回退。
+- **检索与审计是外围，不是前提**：`session_search` 每次调用都重新读一遍事件流，没有需要维护或重建的持久索引；审计是事件流里的一条 `compaction` 事件，追加失败只记日志，不让已成功的压缩回退。
 - **循环窗口退居保险**：agent 循环"最多取最近 N 条消息"的硬上限从 40 放宽到 200（`packages/core/src/agent/loop.ts`），角色从主要控制手段退化为防止估算彻底失准的极端保险。
 
 ---
@@ -134,9 +134,9 @@ export interface CompactionRecord {
 | 超限紧急急救 | 一次流式调用抛出上下文超限错误且零输出：不看水位线，"已经爆了"就是事实 | `in-run` | `in-run` 加 `emergency: true` |
 | 手动 /compact | 用户主动调用，跳过一切触发线 | `manual` | `manual` |
 
-水位是 `estimateContextTokens(会话历史)`：锚定最后一条助手消息记录的真实 `usage.inputTokens`（上一次实际发出的请求大小），锚之后的新消息按字符粗算。锚定使已被压缩的旧内容天然不计入——它们根本不在上一次请求里——所以直接对全量历史读数即可，不需要先切出未压缩部分。没有锚点的窗口（新会话首条、压缩后的首请求）由显式的固定开销项兜底：run 装配在系统提示词定稿后按字符粗算一次"系统提示词 + 工具定义"的估算值，水位读数在无锚点时加上这一项（有锚点时不加——锚点里的 `inputTokens` 已包含它，再加就重复计）。收尾压缩在运行的收尾路径里 await 完成，会话驱动器的串行化保证压缩期间新到的消息排队等待、不会并发写会话元数据；中途压缩是 `compaction-check` 位置的内置钩子 `mid-run-panic`（见 [hooks](./hooks.md)），成功后的新压缩视图从下一次请求开始生效；超限急救是 `overflow-rescue` 位置的内置钩子 `overflow-emergency`，成功后整次请求静默重发一次。
+水位是 `estimateContextTokens(会话历史)`：锚定最后一条助手消息记录的真实 `usage.inputTokens`（上一次实际发出的请求大小），锚之后的新消息按字符粗算。锚定使已被压缩的旧内容天然不计入——它们根本不在上一次请求里——所以直接对全量历史读数即可，不需要先切出未压缩部分。没有锚点的窗口（新会话首条、压缩后的首请求）由显式的固定开销项补上：run 装配在系统提示词定稿后按字符粗算一次"系统提示词 + 工具定义"的估算值，水位读数在无锚点时加上这一项（有锚点时不加——锚点里的 `inputTokens` 已包含它，再加就重复计）。收尾压缩在运行的收尾路径里 await 完成，会话驱动器的串行化保证压缩期间新到的消息排队等待、不会并发写会话元数据；中途压缩是 `compaction-check` 位置的内置钩子 `mid-run-panic`（见 [hooks](./hooks.md)），成功后的新压缩视图从下一次请求开始生效；超限急救是 `overflow-rescue` 位置的内置钩子 `overflow-emergency`，成功后整次请求静默重发一次。
 
-急救有独立的强制分界兜底（`emergencyBoundary`，`session/compaction.ts`）：急救通常发生在压缩后的首请求或单轮工具输出暴涨时，`active` 里可能没有助手锚点、固定开销全漏计，`chooseBoundary` 据此可能找不到边界——此时不看预算，直接退守最小可行上下文：只保留最近一轮用户轮次（最后一条 user 消息及其之后的整轮），更早的全部压掉；整个 `active` 只有一轮时返回无可压缩。
+急救有独立的强制分界保底（`emergencyBoundary`，`session/compaction.ts`）：急救通常发生在压缩后的首请求或单轮工具输出暴涨时，`active` 里可能没有助手锚点、固定开销全漏计，`chooseBoundary` 据此可能找不到边界——此时不看预算，直接退守最小可行上下文：只保留最近一轮用户轮次（最后一条 user 消息及其之后的整轮），更早的全部压掉；整个 `active` 只有一轮时返回无可压缩。
 
 两道线的分工：黄线（`compactAtRatio`，默认 0.66）只配收尾压缩——一次压缩就把保留部分压到预算的三分之一（`compactTargetRatio` 默认 0.33），余量已够；红线（`compactPanicRatio`，默认 0.85）配中途压缩，防的是一次运行内部工具输出累积把水位继续推向预算。压完留 33%，意味着之后要再积累一倍的新对话才会再次触发（压缩要花两次模型调用，不能太频繁）；默认预算 128000 的三分之一（约 42,000 token）的原文量也足够模型记住当前任务的来龙去脉。运行内更细粒度的膨胀由机制三在每次构造请求时按预算自动省略，红线是它之上的保险。
 
@@ -184,7 +184,7 @@ m1  m2  m3 │ m4  m5  m6  m7 │ m8 … m12
 
 > 你是对话摘要器。把给定的一段对话（可能包含工具调用与结果）压缩为不超过800字的中文摘要，使用以下固定五个二级标题的 markdown 结构：## 关键事实、## 用户偏好与约定、## 已做决定、## 未完成事项、## 文件与命令。"文件与命令"一栏只记路径或命令加一句话要点，不要复制文件内容。同一栏目内每条一行。摘要中的精确标识符——文件路径、命令、报错关键串、代码标识符、版本号、专有名词——必须逐字保留，不得意译或改写，后续检索全靠它们。直接输出摘要正文，不要任何前后缀。
 
-"文件与命令"只记路径加一句要点：文件内容不用背下来，模型之后可以自己重新读。逐字保留精确标识符是压缩质量守卫的提示词层（2026-09-09）：摘要丢了 `ERR_MODULE_NOT_FOUND` 或 `packages/core/src/session/compactor.ts` 这样的精确串，后续的 `session_search` 关键词检索就再也命不中原事。一份段摘要的实际样子：
+"文件与命令"只记路径加一句要点：文件内容不用背下来，模型之后可以自己重新读。逐字保留精确标识符是压缩质量的提示词层守卫：摘要丢了 `ERR_MODULE_NOT_FOUND` 或 `packages/core/src/session/compactor.ts` 这样的精确串，后续的 `session_search` 关键词检索就再也命不中原事。一份段摘要的实际样子：
 
 ```markdown
 ## 关键事实
@@ -217,13 +217,13 @@ m1  m2  m3 │ m4  m5  m6  m7 │ m8 … m12
 
 800 字上限是有意的取舍：段落多了之后要点装不下是常态，装不下的细节只留在段摘要里（段摘要以 `compaction` 事件持久化在事件流里，`session_search` 可检索），总摘要只负责脉络；模型要具体内容用 `session_search` 查段原文（见下文）。
 
-两次调用都使用主对话模型、不带工具、用 `collectStreamText` 收集结果；自动路径传入取消信号（`collectStreamText` 支持中止，信号触发时抛出、已收集的部分作废）。**两次调用全部成功之后才写任何数据**——落盘动作是追加一条 `compaction` 事件（同时投影 `meta.compaction`）：摘要调用抛错则本次压缩作废（"throw = 压缩没发生"，回退按全量历史继续）；事件追加失败只记日志、不回退已成功的压缩（见"边界与出错"）。手动压缩传入的重点说明以一行 `用户特别要求重点保留：{focus}` 追加到两次调用的用户消息末尾。
+两次调用都使用主对话模型、不带工具、用 `collectStreamText` 收集结果；自动路径传入取消信号（`collectStreamText` 支持中止，信号触发时抛出、已收集的部分作废）。**两次调用全部成功之后才写任何数据**——写入动作是追加一条 `compaction` 事件（同时投影 `meta.compaction`）：摘要调用抛错则本次压缩作废（"throw = 压缩没发生"，回退按全量历史继续）；事件追加失败只记日志、不回退已成功的压缩（见"边界与出错"）。手动压缩传入的重点说明以一行 `用户特别要求重点保留：{focus}` 追加到两次调用的用户消息末尾。
 
 ### 过程可见性
 
-压缩要花数秒的模型调用，期间若不发事件，客户端看到的就是无解释的停顿。因此确定要压缩时（水位过线且边界已定）向总线发 `compaction.started`（payload 只有 `phase`，标记本次压缩属于收尾/中途/手动哪个阶段），meta 与审计落盘后发 `compaction.completed`（payload 为累计段数、保留条数、phase 与 `result`）。**`started` 一旦发出，`completed` 必达**，无论接下来发生什么：成功是 `result:"ok"`；摘要调用或写盘抛错是 `result:"failed"`；取消信号触发是 `result:"cancelled"`（此时 segments/kept 为 0）。预算未过线、压缩没有开始，则两个事件都不发——客户端永远不会看到没有配对结束的开始。
+压缩要花数秒的模型调用，期间若不发事件，客户端看到的就是无解释的停顿。因此确定要压缩时（水位过线且边界已定）向总线发 `compaction.started`（payload 只有 `phase`，标记本次压缩属于收尾/中途/手动哪个阶段），meta 与审计写入磁盘后发 `compaction.completed`（payload 为累计段数、保留条数、phase 与 `result`）。**`started` 一旦发出，`completed` 必达**，无论接下来发生什么：成功是 `result:"ok"`；摘要调用或写盘抛错是 `result:"failed"`；取消信号触发是 `result:"cancelled"`（此时 segments/kept 为 0）。预算未过线、压缩没有开始，则两个事件都不发——客户端永远不会看到没有配对结束的开始。
 
-两个客户端都吃这套保证。CLI 对 `completed` 按 `result` 分三支：`ok` 打一行灰字 `✱ 早期对话已压缩为 N 段，保留最近 M 条原文（早期细节可用 session_search 检索）`，`failed` 打 `✱ 压缩失败，本轮继续（稍后自动重试）`，`cancelled` 打 `✱ 压缩已取消`；`started` 打 `[正在压缩早期对话…]`。WebUI 以 `compacting` 标志驱动"正在压缩早期对话…"指示行，`completed` 无论什么 `result` 都清掉标志（必达语义让清除无条件成立），指示行上带"取消"按钮；`run.started`/`run.completed`/`run.failed` 也兼作兜底清除条件（防御异常断线）。
+两个客户端都依赖这套保证。CLI 对 `completed` 按 `result` 分三支：`ok` 打一行灰字 `✱ 早期对话已压缩为 N 段，保留最近 M 条原文（早期细节可用 session_search 检索）`，`failed` 打 `✱ 压缩失败，本轮继续（稍后自动重试）`，`cancelled` 打 `✱ 压缩已取消`；`started` 打 `[正在压缩早期对话…]`。WebUI 以 `compacting` 标志驱动"正在压缩早期对话…"指示行，`completed` 无论什么 `result` 都清掉标志（必达语义让清除无条件成立），指示行上带"取消"按钮；`run.started`/`run.completed`/`run.failed` 也兼作保底清除条件（防御异常断线）。
 
 ### 注入
 
@@ -278,7 +278,7 @@ llm.stream({ system: <人格>, messages: [
 
 ## 会话检索（session_search）
 
-- **检索函数**（`packages/core/src/tools/session-search.ts` 的 `searchSessionEvents`，纯函数）：每次调用现读会话完整事件流（run 装配侧的 `buildSessionSearch` 经 `SessionStore.readEvents` 读入），只对压缩段做匹配——对每条 `compaction` 事件，取它覆盖的段区间（`(上一段 upto, 本段 upto]` 内的 `message` 事件，按相邻 `upto` 划分、每条消息只归属一段），把 query 对该段消息块做**朴素包含匹配**（`JSON.stringify(blocks)` 的子串判断，不切词、不建索引），命中归到该压缩事件的段摘要；`compaction` 事件的 `upto` 在流里找不到则跳过该段（不误扫整条流）；没有 `compaction` 事件或没有命中返回空。
+- **检索函数**（`packages/core/src/tools/session-search.ts` 的 `searchSessionEvents`，纯函数）：每次调用都重新读一遍会话完整事件流（run 装配侧的 `buildSessionSearch` 经 `SessionStore.readEvents` 读入），只对压缩段做匹配——对每条 `compaction` 事件，取它覆盖的段区间（`(上一段 upto, 本段 upto]` 内的 `message` 事件，按相邻 `upto` 划分、每条消息只归属一段），把 query 对该段消息块做**朴素包含匹配**（`JSON.stringify(blocks)` 的子串判断，不切词、不建索引），命中归到该压缩事件的段摘要；`compaction` 事件的 `upto` 在流里找不到则跳过该段（不误扫整条流）；没有 `compaction` 事件或没有命中返回空。
 - **工具**（`packages/core/src/tools/session.ts` 的 `createSessionTools`）：
 
 | 项 | 值 |
@@ -289,7 +289,7 @@ llm.stream({ system: <人格>, messages: [
 | 输出 | 每个命中一行 `- <段摘要>` 加缩进的文本片段（该段消息块序列化文本的前 200 字符） |
 | 无内容 | 会话没有压缩段、或没有命中时返回 `(无可检索内容)` |
 
-工具始终注册（工具列表不随会话状态变化，未注入检索函数时同样返回 `(无可检索内容)`）；检索函数由 run 装配（core `executeRun`）每个 run 懒构造（`buildSessionSearch`），每次调用现读该会话事件流，没有需要维护或重建的持久索引。
+工具始终注册（工具列表不随会话状态变化，未注入检索函数时同样返回 `(无可检索内容)`）；检索函数由 run 装配（core `executeRun`）每个 run 懒构造（`buildSessionSearch`），每次调用都重新读一遍该会话事件流，没有需要维护或重建的持久索引。
 
 ---
 
@@ -316,7 +316,7 @@ llm.stream({ system: <人格>, messages: [
 
 ## 配置
 
-`config.yaml` 的 `sessions` 段（`packages/core/src/storage/config.ts`；缺省值在读处兜底）：
+`config.yaml` 的 `sessions` 段（`packages/core/src/storage/config.ts`；缺省值在读取处补齐）：
 
 | 字段 | 默认 | 含义 |
 |------|------|------|
@@ -339,7 +339,7 @@ llm.stream({ system: <人格>, messages: [
 | 失败点 | 行为 |
 |--------|------|
 | 收尾压缩的摘要调用失败 | 记日志 + 发 `completed {result:"failed"}`，不写审计记录；下一次收尾或中途过线重新触发 |
-| 中途压缩的摘要调用失败 | 同上；运行不补救继续，靠工具输出省略兜底 |
+| 中途压缩的摘要调用失败 | 同上；运行不补救继续，靠工具输出省略保底 |
 | 中途压缩被用户取消 | 发 `completed {result:"cancelled"}`，不写压缩事件/投影；本次运行内不再自动触发（取消标记），下次运行恢复正常 |
 | 中途压缩被中止信号打断 | 同取消；运行本身走中止路径 |
 | 压缩审计（compaction 事件）追加失败 | 压缩照常生效，只记 `kclaw compaction audit … append failed:` 日志；不得因审计失败回退已成功的压缩（投影缺口可经 `rebuildMeta` 从事件流整流重建） |
@@ -354,7 +354,7 @@ llm.stream({ system: <人格>, messages: [
 
 - [memory](./memory.md)：记忆提取与压缩共用的消息渲染（`renderSegment`）
 - [storage](./storage.md)：会话目录布局、events.jsonl 事件流与 meta 投影、JSONL 的追加/断尾修复、config 字段定义
-- [agent-loop](./agent-loop.md)：`toProviderMessages` 的窗口与预算驱动省略、循环的压缩视图与两个压缩钩子、超限重试、window 200 的兜底位置
+- [agent-loop](./agent-loop.md)：`toProviderMessages` 的窗口与预算驱动省略、循环的压缩视图与两个压缩钩子、超限重试、window 200 的保底位置
 - [tools](./tools.md)：session_search 在工具体系中的注册与 safe/parallel 语义
 - [run-manager](../server/run-manager.md)：`Compactor` 的四触发点编排（收尾/中途/超限在 run 装配、手动在 compactSession）、`cancelCompaction`、收尾压缩的串行化
 - [http-api](../server/http-api.md)：`POST /sessions/:id/compact`、`GET /sessions/:id/compactions` 与 `GET /sessions/:id/events`

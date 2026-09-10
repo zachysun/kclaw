@@ -8,7 +8,7 @@
 
 - **只绑回环地址**：`HOST = "127.0.0.1"`（本机回环地址，外部网络访问不到）。daemon 不做网络隔离，安全完全交给 token；绑回环保证其他机器无法连接。
 - **默认临时端口**：`port: 0`（让操作系统分配一个空闲端口），真实端口 listen 成功后从 `app.server.address()` 读出并写入 `daemon.json`。客户端通过文件发现端口，不依赖约定端口。
-- **daemon.json 是独占 slot，启动第一步就认领**：装配开始即以 `wx` 原子创建占位 `{port: 0, pid, startedAt, starting: true}`（并发第二个启动者拿到 EEXIST，看到存活 pid 即拒绝"daemon already running"；死 pid 的残留被回收重认领）；listen 成功后回填真实 `{port, pid, startedAt}`（同一 startedAt，`starting` 移除），此时文件才指向可用端口。`launchDaemon` resolve 时 daemon 已在服务并在调度。CLI 侧以"文件出现且 `/health` 可访问"作为就绪判据。
+- **daemon.json 是独占占位，启动第一步就认领**：装配开始即以 `wx` 原子创建占位 `{port: 0, pid, startedAt, starting: true}`（并发第二个启动者拿到 EEXIST，看到存活 pid 即拒绝"daemon already running"；死 pid 的残留被回收重认领）；listen 成功后回填真实 `{port, pid, startedAt}`（同一 startedAt，`starting` 移除），此时文件才指向可用端口。`launchDaemon` resolve 时 daemon 已在服务并在调度。CLI 侧以"文件出现且 `/health` 可访问"作为就绪判据。
 - **token 是 daemon 的稳定身份**：`<home>/token` 首次启动时生成（UUID，文件权限 0600，仅属主可读写），重启复用，stop 不删除；仅 daemon.json 会被删除。因此 CLI/WebUI 保存的 token 在 daemon 重启后仍然有效。
 - **鉴权是"每路由必带 Bearer"加白名单豁免**：一个 `preHandler` 钩子拦截全部路由，只有三处豁免——`/health`、`/ws`、静态 WebUI 外壳（见下）。豁免列表是封闭集合，新增路由默认受保护。
 - **有界停止**：`stop()` 的每一步（停调度、关服务器）有独立超时（默认 60s）。超时则 `stop()` reject、daemon.json **保留**——进程仍在运行，指向它的文件必须与事实一致；虚报"已停止"会诱发双 daemon、job 双触发。
@@ -67,11 +67,11 @@ resolvePaths(home)                  建目录树（core/storage/paths.ts）
 acquireDaemonSlot                   wx 独占认领 <home>/daemon.json：占位 {port:0, pid, startedAt, starting:true}
 loadConfig(paths)                   config.yaml 深合并默认值
 loadOrCreateToken(paths.home)       读/生成 <home>/token
-new EventBus()                      总线先于 store 构造：store 的落盘通知回调要发
-                                    session.appended 总线帧（先落盘后广播，审计页等
+new EventBus()                      总线先于 store 构造：store 的写入完成通知回调要发
+                                    session.appended 总线帧（先写入后广播，审计页等
                                     订阅方据此增量拉取事件流——见 realtime/protocol）
 new SessionStore(paths.sessionsDir, onAppended)
-                                    store 构造时注入落盘通知回调：每个事件（含投影）
+                                    store 构造时注入写入完成通知回调：每个事件（含投影）
                                     成功写入 events.jsonl 后发 session.appended
                                     （通知抛错被吞掉，写成功不被通知连累）
 embedding 判定链（memory.embedding） model 非空才构造 embedding 客户端（见 memory.md 判定链）；
@@ -79,10 +79,10 @@ embedding 判定链（memory.embedding） model 非空才构造 embedding 客户
 new MemorySystem({memoryDir, sessions, config, resolveLlm, embed, emit})
                                     记忆系统门面（见 memory.md）；装配后立即三件事：
                                     migrateV1Notes（notes/*.md 三路分流并入 persona/rule/wiki，删 notes/）
-                                    rmSync index.db（v1 派生物直接删）
-                                    reconcile()（全部项目库 + 全局库对账，向量后台补算）
+                                    rmSync index.db（旧版派生索引直接删）
+                                    reconcile()（全部项目库 + 全局库重建索引，向量后台补算）
 new JobScheduler(paths.jobsDb)
-new UsageStore(paths.usageDb)       token 台账（SQLite，stop 时 close）
+new UsageStore(paths.usageDb)       token 用量记录（SQLite，stop 时 close）
 defaultLlmFactory(config) + resolveModel(config)   见"provider 解析"
 new McpManager({servers})           仅当 config.mcp.servers 非空；否则 undefined（不装配）
 createSubagentSpawner({config, sessions, bus, getRun})
@@ -104,7 +104,7 @@ createNotifier(notify.channels)     ← 仅当 notify.channels 非空时创建�
 void mcpManager.start()             ← 有管理器才执行；不阻塞就绪，连接随后陆续建立
 run.recoverQueues()                 崩溃恢复：queue.jsonl 整体重排，steer/interrupt 降级 wait（见 run-manager）
 startSchedulerTick({...})           立即一次检查 + 每 30s 一次（deps 携带 notifier 与 webBase=`http://127.0.0.1:<port>`，用于推送中的 `?session=` 链接）
-startMemoryScheduler({...})         记忆调度器：定时 + 跟随兜底触发（默认 60s 扫一次，见 memory.md）
+startMemoryScheduler({...})         记忆调度器：定时 + 跟随保底触发（默认 60s 扫一次，见 memory.md）
 return { port, token, pid, stop }
 ```
 
@@ -155,23 +155,23 @@ bin 脚本注册信号处理：SIGTERM/SIGINT → `shutdown()`（`stopping` 标�
 ```
 withStopTimeout(tick.stop(), 60s)   // 停心跳；tick.stop 会 await 所有进行中的 job run
 withStopTimeout(memoryTick.stop(), 60s)
-                                    // 停记忆调度器（定时 + 跟随兜底）
+                                    // 停记忆调度器（定时 + 跟随保底）
 withStopTimeout(mcpManager.stop(), 60s)
                                     // 有管理器才有此步：断开全部 MCP server（幂等）
 withStopTimeout(app.close(), 60s)   // 关服务器；app.close 会 await 所有连接
 withStopTimeout(memory.stop(), 60s) // 关闭全部 VectorIndex 的 sqlite 连接（防句柄/内存泄漏）
-usage.close()                       // 关台账数据库
+usage.close()                       // 关用量数据库
 rmSync(<home>/daemon.json)          // 只有全部成功才删
 ```
 
 `withStopTimeout(p, timeoutMs, step)` 用 `Promise.race([p, deadline])` 给每步设限。超时的一步**不会被取消**（它可能稍后自行完成，迟到的失败被丢弃——超时已经报告过失败，不能再以未处理 rejection 的形式抛出）。设限的原因：挂死的 provider 流会阻塞 tracked job run，卡住的客户端会阻塞 `app.close`，没有超时上限的 `stop()` 会永远不返回。
 
-**超时路径**：`stop()` reject → bin exit 1 → **daemon.json 保留**（进程仍在运行）。进行中的 job run 按 §11 崩溃容忍语义放弃：JSONL 容忍尾部残缺行；该次触发认领时已推进 `next_run_at`，重启后不会重放，job 在下个调度点照常触发。
+**超时路径**：`stop()` reject → bin exit 1 → **daemon.json 保留**（进程仍在运行）。进行中的 job run 按崩溃容忍语义放弃（见 [jobs](../core/jobs.md) 的「停机与在途运行」）：JSONL 容忍尾部残缺行；该次触发认领时已推进 `next_run_at`，重启后不会重放，job 在下个调度点照常触发。
 
 ### CLI 侧的 pid 校验与 stop（daemon-ctl.ts）
 
 - `readDaemonJson(home)`：解析 `{port, pid, startedAt}`；pid 必须是**正整数**（pid 0 会让 `process.kill(0,…)` 信号整个进程组）——不合法视同文件不存在。
-- `ensureDaemon`（探测/重启）：daemon.json 健康（`GET /health` 可访问）→ 直接使用；文件在、health 不可访问、pid 已终止（`process.kill(pid, 0)` 抛 ESRCH）→ 判定失效，stderr 提示 "stale daemon.json, respawning" 后 `spawnDaemon` 分叉启动（detached、stdio ignore、unref，目标 `resolveServerBin()` 解析到 `packages/server/bin/kclaw-server.mjs`）；pid 存活但不健康 → 仅在 5s 预算内轮询等待（250ms 间隔），**绝不在 pid 存活时再次启动**（否则第一个进程会被孤儿化）。
+- `ensureDaemon`（探测/重启）：daemon.json 健康（`GET /health` 可访问）→ 直接使用；文件在、health 不可访问、pid 已终止（`process.kill(pid, 0)` 抛 ESRCH）→ 判定失效，stderr 提示 "stale daemon.json, respawning" 后 `spawnDaemon` 分叉启动（detached、stdio ignore、unref，目标 `resolveServerBin()` 解析到 `packages/server/bin/kclaw-server.mjs`）；pid 存活但不健康 → 仅在 5s 预算内轮询等待（250ms 间隔），**绝不在 pid 存活时再次启动**（否则会同时出现两个 daemon）。
 - `stopDaemon`：对 daemon.json 的 pid 发 SIGTERM（ESRCH 视为已死，继续清理）→ 轮询直到端口拒绝连接（预算 5s）→ 预算耗尽而 `/health` 仍应答 → 抛 `stop failed: daemon still responding…` 且**不删除 daemon.json**；否则删除文件并返回 "stopped"。
 
 ## 边界与出错

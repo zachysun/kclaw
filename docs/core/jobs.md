@@ -10,7 +10,7 @@
 
 - **全部状态一张表**：job 的所有字段（含下次触发时间、上次结果）都存在 `<home>/jobs.db` 的 `jobs` 表里，进程内存中不缓存。每个 `JobScheduler` 实例打开同一个文件看到同一批行，daemon 可以使用全新句柄轮询，重启无需恢复步骤。
 - **时间存 ISO-8601 字符串**：ISO 字符串的字典序就是时间序，所以"到期与否"可以下推成一条 SQL 字符串比较（`next_run_at <= now`），不需要读出整表在 JS 里比时间。
-- **跳过积压**：`claimDue` 在认领时把 `nextRunAt` 推进到"now 之后的下一次"，而不是"上次触发点加一个周期"。daemon 停机两小时后重启，`*/5` 的任务不会补执行 24 次错过的时间点，而是直接计算 now 之后的下一次；`markRun` 只记录 `last_*` 字段，不再推进时间。
+- **跳过积压**：`claimDue` 在认领时（认领 = 原子地取走到期任务并推进它的下次触发时间，防止重复触发）把 `nextRunAt` 推进到"now 之后的下一次"，而不是"上次触发点加一个周期"。daemon 停机两小时后重启，`*/5` 的任务不会补执行 24 次错过的时间点，而是直接计算 now 之后的下一次；`markRun` 只记录 `last_*` 字段，不再推进时间。
 - **`next()` 严格排他**：cron-parser 的 `next()` 对 `currentDate` 是排他的（恰好相等也不算），所以 `nextIsoAfter` 的语义是"严格晚于给定时刻的第一次触发"。无效 cron 表达式原样抛出 cron-parser 自身的错误消息，不做包装。
 - **id 即创建序**：id 用 `newId("job")` 生成（ULID，一种按时间有序的唯一 id），`list()` 按 `ORDER BY id` 排序，天然就是创建顺序。
 - **job 事件广播不带会话**：`job.started` / `job.completed` / `job.failed` 事件用不带上下文的 `makeEvent` 构造（无 sessionId/runId），EventBus 会把它们广播给每一个连接的客户端——任何界面都能看到调度活动，而不只是订阅了某个会话的客户端。

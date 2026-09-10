@@ -42,11 +42,11 @@ export async function httpRequest(url: string, init: HttpRequestInit): Promise<u
 ## 边界与出错
 
 - **错误消息优先服务端文案**：响应体是合法 JSON 且 `error` 字段是字符串时用它；否则（如网关层返回的非 JSON 页面）退回 `HTTP <status>`。
-- **浏览器安全是硬约束**：本模块不允许出现 `node:*` import，否则 WebUI 打包会失败——这是该模块存在的隐含验收线。
+- **浏览器安全是硬约束**：本模块不允许出现 `node:*` import，否则 WebUI 打包会失败——这是本模块的一条硬性要求。
 
 ## 关联
 
 - [http-api](../server/http-api.md)：服务端路由与统一错误形状 `{error: string}`（本模块提取的来源）
-- [protocol](./protocol.md)：类型正本与子路径出口的同构先例
+- [protocol](./protocol.md)：与 protocol 相同的「权威类型 + 子路径出口」模式
 - [cli](../cli/cli.md)：`KclawClient.request` / `uploadAttachment` 的消费侧
 - [webui](../web/webui.md)：`api.ts` 的消费侧与 401 重入
