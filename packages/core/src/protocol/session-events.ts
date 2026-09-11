@@ -4,7 +4,7 @@
  * browser build can import them through the `@kclaw/core/protocol` subpath;
  * the guards and the meta projection (applyEvent) live in session/events.ts.
  */
-import type { Message } from "./messages.js"
+import type { Message, StopReason, Usage } from "./messages.js"
 
 export interface SessionCreatedEvent { type: "session.created"; at: string; title: string; workdir?: string; jobId?: string; /** 创建时固化的权限模式快照（config permissions.defaultMode）；缺省 default。 */ mode?: import("../permissions/modes.js").PermissionMode; /** 父会话（subagent 派生关系）：设置即子会话——列表默认过滤、记忆提取排除、用量归组到父。 */ parentSessionId?: string }
 export interface SessionRenamedEvent { type: "session.renamed"; at: string; title: string }
@@ -30,5 +30,29 @@ export interface SandboxCheckedEvent {
   /** 不可用原因（仅 available:false 时可能带；配置关闭时不含——那是主动选择）。 */
   unavailableReason?: string
 }
+/** 一次对话运行的起点留痕（每 run 一条，与消息事件夹出一轮的边界）。 */
+export interface RunStartedEvent {
+  type: "run.started"; at: string
+  trigger: "user" | "job" | "agent"
+}
+/**
+ * 一次对话运行的终点留痕（每 run 恰一条，与 run.started 成对）。stopReason
+ * 为 error 时带 error；正常终点的 usage 为全程累计用量。aborted 也是正常落款
+ * （用户中止是有意的终止，不是故障）。
+ */
+export interface RunEndedEvent {
+  type: "run.ended"; at: string
+  stopReason: StopReason
+  usage?: Usage
+  error?: { code: string; message: string }
+}
+/** 一次人工确认的裁决留痕（每次确认裁决一条；运行中被中止的确认不落——中止不是裁决）。 */
+export interface PermissionDecidedEvent {
+  type: "permission.decided"; at: string
+  confirmationId: string
+  decision: "once" | "project" | "global" | "reject" | "timeout"
+  by: "cli" | "web" | "timeout"
+  tool: { callId: string; name: string; argsJson: string }
+}
 
-export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent | MessageEvent | CompactionEvent | MemoryEvent | SystemEvent | SandboxCheckedEvent
+export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent | MessageEvent | CompactionEvent | MemoryEvent | SystemEvent | SandboxCheckedEvent | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent

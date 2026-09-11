@@ -8,8 +8,8 @@
 import { memo } from "react"
 import type { AuditRow } from "./model.js"
 import {
-  blockFullContent, blockSummary, blockTypeLabel, fmtMs, fmtRowTime, fmtUsage,
-  memoryFullContent, memorySummary, rowTime, sandboxFullContent, sandboxSummary,
+  blockFullContent, blockSummary, blockTypeLabel, decisionFullContent, decisionSummary, fmtMs, fmtRowTime, fmtUsage,
+  memoryFullContent, memorySummary, rowTime, runSummary, sandboxFullContent, sandboxSummary,
   sessionFullContent, sessionSummary, summarize,
 } from "./model.js"
 
@@ -65,6 +65,10 @@ function rowLabel(row: AuditRow): string {
       return "sandbox"
     case "session":
       return "session"
+    case "run":
+      return "run"
+    case "decision":
+      return "permission"
   }
 }
 
@@ -82,6 +86,10 @@ function rowSummary(row: AuditRow): string {
       return sandboxSummary(row.event)
     case "session":
       return sessionSummary(row.event)
+    case "run":
+      return runSummary(row.event)
+    case "decision":
+      return decisionSummary(row.event)
   }
 }
 
@@ -127,6 +135,10 @@ function rowFull(row: AuditRow): string {
       return sandboxFullContent(row.event)
     case "session":
       return sessionFullContent(row.event)
+    case "run":
+      return JSON.stringify(row.event, null, 2)
+    case "decision":
+      return decisionFullContent(row.event)
   }
 }
 

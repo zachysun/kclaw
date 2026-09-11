@@ -6,7 +6,7 @@ import type { CompactionRecord, CompactionState } from "./compaction.js"
 import { writeFileAtomic } from "../storage/atomic.js"
 import { appendJsonlLine, readJsonl, readJsonlFrom } from "../storage/jsonl.js"
 import { applyEvent, isCompactionEvent, isMessageEvent } from "./events.js"
-import type { SandboxCheckedEvent, SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent } from "./events.js"
+import type { PermissionDecidedEvent, RunEndedEvent, RunStartedEvent, SandboxCheckedEvent, SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent } from "./events.js"
 import type { AttachmentRef, QueueEntry } from "../protocol/wire.js"
 import type { PermissionMode } from "../permissions/modes.js"
 
@@ -265,6 +265,21 @@ export class SessionStore {
   /** Append one sandbox audit event (每 run 一条，run 装配探测后立即落盘); the projection stays untouched (不推进 updatedAt)。 */
   appendSandboxChecked(id: string, event: Omit<SandboxCheckedEvent, "type">): void {
     this.appendEvent(id, { type: "sandbox.checked", ...event })
+  }
+
+  /** Append one run-boundary audit event（run 起点/终点留痕，与消息事件夹出一轮边界）; the projection stays untouched (不推进 updatedAt)。 */
+  appendRunStarted(id: string, event: Omit<RunStartedEvent, "type">): void {
+    this.appendEvent(id, { type: "run.started", ...event })
+  }
+
+  /** Append one run-boundary audit event（run 终点落款；失败带 error，成功带全程用量）; the projection stays untouched (不推进 updatedAt)。 */
+  appendRunEnded(id: string, event: Omit<RunEndedEvent, "type">): void {
+    this.appendEvent(id, { type: "run.ended", ...event })
+  }
+
+  /** Append one permission-decision audit event（每次人工确认的裁决留痕; 中止不是裁决，不落）; the projection stays untouched (不推进 updatedAt)。 */
+  appendPermissionDecided(id: string, event: Omit<PermissionDecidedEvent, "type">): void {
+    this.appendEvent(id, { type: "permission.decided", ...event })
   }
 
   /**

@@ -103,6 +103,36 @@ describe("applyEvent", () => {
     expect(meta.updatedAt).toBe("2026-01-01T00:00:00.000Z")
     expect(meta).toEqual(base)
   })
+
+  it("run.started / run.ended / permission.decided 不刷 updatedAt 且不改任何投影字段（审计事件）", () => {
+    const runStarted = applyEvent(base, {
+      type: "run.started", at: "2026-01-05T00:00:00.000Z", trigger: "user",
+    })
+    expect(runStarted.updatedAt).toBe("2026-01-01T00:00:00.000Z")
+    expect(runStarted).toEqual(base)
+
+    const runEnded = applyEvent(base, {
+      type: "run.ended", at: "2026-01-05T00:00:00.000Z",
+      stopReason: "end_turn", usage: { inputTokens: 120, outputTokens: 45 },
+    })
+    expect(runEnded.updatedAt).toBe("2026-01-01T00:00:00.000Z")
+    expect(runEnded).toEqual(base)
+
+    const failed = applyEvent(base, {
+      type: "run.ended", at: "2026-01-05T00:00:00.000Z",
+      stopReason: "error", error: { code: "llm_error", message: "boom" },
+    })
+    expect(failed.updatedAt).toBe("2026-01-01T00:00:00.000Z")
+    expect(failed).toEqual(base)
+
+    const decided = applyEvent(base, {
+      type: "permission.decided", at: "2026-01-05T00:00:00.000Z",
+      confirmationId: "conf_1", decision: "once", by: "cli",
+      tool: { callId: "call_1", name: "exec", argsJson: '{"command":"ls"}' },
+    })
+    expect(decided.updatedAt).toBe("2026-01-01T00:00:00.000Z")
+    expect(decided).toEqual(base)
+  })
 })
 
 describe("isSandboxCheckedEvent", () => {

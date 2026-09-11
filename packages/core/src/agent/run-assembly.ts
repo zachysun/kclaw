@@ -31,7 +31,7 @@
  */
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import type { AgentEvent } from "../protocol/events.js"
+import type { AgentEvent, AnyAgentEvent } from "../protocol/events.js"
 import type { AttachmentBlock, NoteBlock, ToolCallBlock } from "../protocol/blocks.js"
 import { newBlockId } from "../protocol/blocks.js"
 import type { Message } from "../protocol/messages.js"
@@ -490,10 +490,23 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     if (raced === "aborted") {
       broker.expire(confirmationId)
       // the value is never used: the loop's own race resolved "aborted" and
-      // denies without consulting the resolver
+      // denies without consulting the resolver. No decision is archived —
+      // an abort is not a verdict.
       return { decision: "timeout", by: "timeout" }
     }
     if (raced.by === "timeout") broker.expire(confirmationId)
+    // Permission-decision archive: who approved what, and when, lands in the
+    // session archive beside the tool row's grantedBy outcome. Timeouts are
+    // verdicts too (silence is a "no"); aborts never reach here.
+    if (call !== undefined) {
+      sessions.appendPermissionDecided(sessionId, {
+        at: new Date().toISOString(),
+        confirmationId,
+        decision: raced.decision,
+        by: raced.by,
+        tool: { callId: call.callId, name: call.name, argsJson: call.argsJson },
+      })
+    }
     // SessionGrants (batch D): a once-approval also lands in this run's grant
     // store, keyed by the same narrowed rule the gate re-checks — the same
     // call within THIS run stops re-prompting. project/global approvals
@@ -679,9 +692,34 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       // 固定开销（系统提示词 + 工具定义）先行扣除，打包台只裁决消息内容
       tokenBudget: Math.max(0, budget * atRatio - contextOverheadRef.current),
       ...(maxOutput === undefined ? {} : { maxTokens: maxOutput }),
-      onEvent: (e) => {
+      onEvent: (raw) => {
+        // Narrow to the distributive form so per-type payload access typechecks.
+        const e = raw as AnyAgentEvent
         if (e.type === "run.started" && e.runId !== undefined) runId = e.runId
         else if (e.type === "llm.completed" || e.type === "llm.failed") llmAttempt = 1
+        // Run-boundary archive: every run brackets its message events with a
+        // run.started + run.ended pair in the session archive, so the trail
+        // shows where each run began and ended without inferring it from the
+        // last assistant message's stop reason. A failed run lands an ended
+        // record too (stopReason "error" + the failure) — a started run
+        // always reaches a terminal record, same invariant as the wire
+        // events. Same contract as the system/sandbox audit events: a write
+        // failure fails the run (the audit promise is all-or-nothing).
+        if (e.type === "run.started") {
+          sessions.appendRunStarted(sessionId, { at: new Date().toISOString(), trigger: e.payload.trigger })
+        } else if (e.type === "run.completed") {
+          sessions.appendRunEnded(sessionId, {
+            at: new Date().toISOString(),
+            stopReason: e.payload.stopReason,
+            usage: e.payload.usage,
+          })
+        } else if (e.type === "run.failed") {
+          sessions.appendRunEnded(sessionId, {
+            at: new Date().toISOString(),
+            stopReason: "error",
+            error: e.payload.error,
+          })
+        }
         busEmit(e)
       },
       onMessage: (m) => sessions.appendMessage(m.sessionId, m),

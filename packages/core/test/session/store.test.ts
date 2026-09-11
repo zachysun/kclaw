@@ -368,6 +368,46 @@ describe("SessionStore event sourcing", () => {
     expect(after).toEqual(before)
   })
 
+  it("appendRunStarted / appendRunEnded / appendPermissionDecided 写审计事件：字段完整、投影穿透（updatedAt 不动）", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("t")
+    store.updateMeta(meta.id, { model: "gpt-4", mode: "readonly" })
+    const before = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
+
+    store.appendRunStarted(meta.id, { at: "2026-01-02T00:00:00.000Z", trigger: "user" })
+    store.appendRunEnded(meta.id, {
+      at: "2026-01-02T00:01:00.000Z", stopReason: "end_turn",
+      usage: { inputTokens: 120, outputTokens: 45 },
+    })
+    store.appendRunEnded(meta.id, {
+      at: "2026-01-02T00:02:00.000Z", stopReason: "error",
+      error: { code: "llm_error", message: "boom" },
+    })
+    store.appendPermissionDecided(meta.id, {
+      at: "2026-01-02T00:00:30.000Z", confirmationId: "conf_1", decision: "once", by: "cli",
+      tool: { callId: "call_1", name: "exec", argsJson: '{"command":"ls"}' },
+    })
+
+    const events = store.readEvents(meta.id)
+    expect(events.filter((e) => e.type === "run.started")).toHaveLength(1)
+    const ended = events.filter((e) => e.type === "run.ended")
+    expect(ended).toHaveLength(2)
+    expect(ended[0]).toMatchObject({ stopReason: "end_turn", usage: { inputTokens: 120, outputTokens: 45 } })
+    expect("error" in ended[0]!).toBe(false)
+    expect(ended[1]).toMatchObject({ stopReason: "error", error: { code: "llm_error" } })
+    expect("usage" in ended[1]!).toBe(false)
+    const decided = events.filter((e) => e.type === "permission.decided")
+    expect(decided).toHaveLength(1)
+    expect(decided[0]).toMatchObject({
+      confirmationId: "conf_1", decision: "once", by: "cli",
+      tool: { callId: "call_1", name: "exec", argsJson: '{"command":"ls"}' },
+    })
+
+    // 审计事件不进投影：含 updatedAt 在内的所有投影字段逐字段一致
+    const after = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
+    expect(after).toEqual(before)
+  })
+
   it("appendSystem 投影效果=upsert 冻结基线：updatedAt 与其余字段不动，压缩清除，rebuild 一致", () => {
     const store = new SessionStore(dir)
     const meta = store.create("t")

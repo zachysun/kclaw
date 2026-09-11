@@ -154,6 +154,37 @@ function sandboxEvent(overrides: Record<string, unknown> = {}): SessionEvent {
   } as unknown as SessionEvent
 }
 
+function runStartedEvent(overrides: Record<string, unknown> = {}): SessionEvent {
+  return {
+    type: "run.started",
+    at: "2026-08-19T10:10:00.000Z",
+    trigger: "user",
+    ...overrides,
+  } as unknown as SessionEvent
+}
+
+function runEndedEvent(overrides: Record<string, unknown> = {}): SessionEvent {
+  return {
+    type: "run.ended",
+    at: "2026-08-19T10:11:00.000Z",
+    stopReason: "end_turn",
+    usage: { inputTokens: 120, outputTokens: 45 },
+    ...overrides,
+  } as unknown as SessionEvent
+}
+
+function permissionDecidedEvent(overrides: Record<string, unknown> = {}): SessionEvent {
+  return {
+    type: "permission.decided",
+    at: "2026-08-19T10:10:30.000Z",
+    confirmationId: "conf_1",
+    decision: "once",
+    by: "cli",
+    tool: { callId: "call_1", name: "exec", argsJson: '{"command":"ls"}' },
+    ...overrides,
+  } as unknown as SessionEvent
+}
+
 function makeApi(): ApiClient & {
   get: ReturnType<typeof vi.fn>
   post: ReturnType<typeof vi.fn>
@@ -554,6 +585,38 @@ describe("AuditView (audit)", () => {
     expect(full).not.toBeNull()
     expect(full!.textContent).toContain("enabled: false")
     expect(full!.textContent).toContain("available: false")
+    unmount(root, container)
+  })
+
+  it("renders run boundary and permission decision rows with expandable payload", async () => {
+    const api = makeApi()
+    staticStream(api, [
+      runStartedEvent(),
+      permissionDecidedEvent(),
+      runEndedEvent(),
+      runEndedEvent({
+        stopReason: "error",
+        usage: undefined,
+        error: { code: "llm_error", message: "provider down" },
+        at: "2026-08-19T10:12:00.000Z",
+      }),
+    ])
+
+    const { container, root } = await mount(api)
+    expect(container.querySelector('[data-testid="run-row-0"]')!.textContent).toContain("运行开始")
+    expect(container.querySelector('[data-testid="decision-row-1"]')!.textContent).toContain("批准（仅本次）")
+    expect(container.querySelector('[data-testid="decision-row-1"]')!.textContent).toContain("exec")
+    expect(container.querySelector('[data-testid="run-row-2"]')!.textContent).toContain("end_turn")
+    expect(container.querySelector('[data-testid="run-row-3"]')!.textContent).toContain("error")
+    expect(container.querySelector('[data-testid="run-row-3"]')!.textContent).toContain("provider down")
+
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="decision-row-1"]') as HTMLButtonElement).click()
+    })
+    const full = container.querySelector('[data-testid="audit-full-1"]')
+    expect(full).not.toBeNull()
+    expect(full!.textContent).toContain("conf_1")
+    expect(full!.textContent).toContain("call_1")
     unmount(root, container)
   })
 

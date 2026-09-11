@@ -1935,6 +1935,137 @@ describe("RunManager sandbox.checked 事件审计", () => {
   })
 })
 
+// --- run 边界与权限裁决的档案事件（issue #18）--------------------------------
+// 每次 run 落一对 run.started / run.ended（含 trigger、stopReason、usage/error），
+// 每次人工确认的裁决落一条 permission.decided。只落盘不上总线；不进投影、
+// 不推进 updatedAt。写入失败即本次 run 失败（与 system/sandbox 审计同待遇）。
+
+describe("RunManager run 边界与权限裁决档案事件", () => {
+  type StreamEvent = ReturnType<SessionStore["readEvents"]>[number]
+  const of = (events: StreamEvent[], type: "run.started" | "run.ended" | "permission.decided") =>
+    events.filter((e) => e.type === type)
+
+  it("一次 run 落恰好一对 run.started / run.ended：trigger、stopReason、usage 就位，夹住本轮消息事件", async () => {
+    const { env, manager } = makeEnv(scriptClient([textTurn("收到")]))
+    const session = env.sessions.create("边界会话")
+
+    await manager.enqueue(session.id, { userText: "你好", trigger: "user" })
+
+    const events = env.sessions.readEvents(session.id)
+    const started = of(events, "run.started")
+    const ended = of(events, "run.ended")
+    expect(started).toHaveLength(1)
+    expect(ended).toHaveLength(1)
+    expect(started[0]).toMatchObject({ trigger: "user" })
+    expect(ended[0]).toMatchObject({ stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 2 } })
+    expect("error" in ended[0]!).toBe(false)
+    // 次序：run.started 先于本 run 的 user 消息事件，run.ended 殿后
+    const first = events.findIndex((e) => e.type === "run.started")
+    const userMsg = events.findIndex((e) => e.type === "message" && e.role === "user")
+    const last = events.findIndex((e) => e.type === "run.ended")
+    expect(first).toBeLessThan(userMsg)
+    expect(last).toBe(events.length - 1)
+  })
+
+  it("失败的 run 也落 run.ended（stopReason error + 失败原因）——有始必有终", async () => {
+    const { env, manager } = makeEnv({
+      async *stream(): AsyncIterable<LlmStreamEvent> { throw new Error("provider down") },
+    })
+    const session = env.sessions.create("失败边界会话")
+
+    const outcome = await manager.enqueue(session.id, { userText: "你好", trigger: "user" })
+    expect(outcome.stopReason).toBe("error")
+
+    const ended = of(env.sessions.readEvents(session.id), "run.ended")
+    expect(ended).toHaveLength(1)
+    expect(ended[0]).toMatchObject({ stopReason: "error", error: { code: "llm_error" } })
+  })
+
+  it("确认批准落 permission.decided：verdict、actor、工具身份齐全，先于工具执行", async () => {
+    const { env, manager } = makeEnv(scriptClient([execToolTurn("call_2", "echo yes"), textTurn("好")]))
+    const session = env.sessions.create("裁决会话")
+
+    const run = manager.enqueue(session.id, { userText: "执行 echo yes", trigger: "user" })
+    const deadline = Date.now() + 2000
+    while (manager.broker.pending().length === 0) {
+      if (Date.now() > deadline) throw new Error("confirmation never became pending")
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    const [listed] = manager.broker.pending()
+    expect(listed).toMatchObject({
+      confirmationId: expect.stringMatching(/^conf_/),
+      toolCall: expect.objectContaining({ name: "exec" }),
+      risk: "sensitive",
+    })
+    expect(manager.broker.resolve(listed!.confirmationId, "once", "cli")).toBe(true)
+    await run
+
+    const events = env.sessions.readEvents(session.id)
+    const decided = of(events, "permission.decided")
+    expect(decided).toHaveLength(1)
+    expect(decided[0]).toMatchObject({
+      confirmationId: listed!.confirmationId,
+      decision: "once",
+      by: "cli",
+      tool: { callId: "call_2", name: "exec", argsJson: expect.stringContaining("echo yes") },
+    })
+    // 次序：裁决记录在对应的工具结果消息事件之前
+    const decidedIdx = events.findIndex((e) => e.type === "permission.decided")
+    const toolResultIdx = events.findIndex((e) => e.type === "message" && e.role === "tool")
+    expect(decidedIdx).toBeLessThan(toolResultIdx)
+  })
+
+  it("确认超时落 decision timeout / by timeout；拒绝落 decision reject", async () => {
+    const { env, manager } = makeEnv(
+      scriptClient([execToolTurn("call_t", "echo slow"), textTurn("好")]),
+      (c) => { c.permissions.confirmTimeoutMs = 50 },
+    )
+    const session = env.sessions.create("超时裁决会话")
+    await manager.enqueue(session.id, { userText: "执行 echo slow", trigger: "user" })
+
+    const timedOut = of(env.sessions.readEvents(session.id), "permission.decided")
+    expect(timedOut).toHaveLength(1)
+    expect(timedOut[0]).toMatchObject({ decision: "timeout", by: "timeout" })
+
+    const { env: env2, manager: manager2 } = makeEnv(
+      scriptClient([execToolTurn("call_r", "echo no"), textTurn("好")]),
+      undefined,
+      () => Promise.resolve({ decision: "reject" as const, by: "web" as const }),
+    )
+    const session2 = env2.sessions.create("拒绝裁决会话")
+    await manager2.enqueue(session2.id, { userText: "执行 echo no", trigger: "user" })
+
+    const rejected = of(env2.sessions.readEvents(session2.id), "permission.decided")
+    expect(rejected).toHaveLength(1)
+    expect(rejected[0]).toMatchObject({ decision: "reject", by: "web" })
+  })
+
+  it("运行中被中止的 run 落 run.ended stopReason aborted；确认等待中的中止不落裁决", async () => {
+    // 挂起的流让 run 停在确认等待：中止后既不该有裁决记录，也必须有 ended 落款。
+    const { env, manager } = makeEnv(
+      scriptClient([execToolTurn("call_a", "echo hang"), textTurn("好")]),
+      (c) => { c.permissions.confirmTimeoutMs = 60_000 },
+    )
+    const session = env.sessions.create("中止会话")
+    const run = manager.enqueue(session.id, { userText: "执行 echo hang", trigger: "user" })
+
+    const deadline = Date.now() + 2000
+    while (manager.broker.pending().length === 0) {
+      if (Date.now() > deadline) throw new Error("confirmation never became pending")
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    await manager.cancel(session.id)
+    const outcome = await run
+    expect(outcome.stopReason).toBe("aborted")
+
+    const events = env.sessions.readEvents(session.id)
+    expect(of(events, "permission.decided")).toHaveLength(0)
+    const ended = of(events, "run.ended")
+    expect(ended).toHaveLength(1)
+    expect(ended[0]).toMatchObject({ stopReason: "aborted" })
+  })
+})
+
 describe("RunManager readonly mode", () => {
   it("denies write-class tool calls with a denied note when the session mode is readonly", async () => {
     const { env, manager } = makeEnv(scriptClient([

@@ -1,15 +1,17 @@
 import type {
-  CompactionEvent, MemoryEvent, MessageEvent, SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
+  CompactionEvent, MemoryEvent, MessageEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
+  SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
   SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SessionEvent, SystemEvent,
 } from "../protocol/session-events.js"
 import type { SessionMeta } from "./store.js"
 
-// The ten event types live in protocol/session-events.ts (the browser-safe
+// The event types live in protocol/session-events.ts (the browser-safe
 // canon the web trail view imports); this module owns the runtime side —
 // guards and the meta projection — and re-exports the types for the Node
 // packages that historically imported them from here.
 export type {
-  CompactionEvent, MemoryEvent, MessageEvent, SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
+  CompactionEvent, MemoryEvent, MessageEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
+  SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
   SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SystemEvent,
 } from "../protocol/session-events.js"
 
@@ -18,6 +20,9 @@ export function isCompactionEvent(e: SessionEvent): e is CompactionEvent { retur
 export function isMemoryEvent(e: SessionEvent): e is MemoryEvent { return e.type === "memory" }
 export function isSystemEvent(e: SessionEvent): e is SystemEvent { return e.type === "system" }
 export function isSandboxCheckedEvent(e: SessionEvent): e is SandboxCheckedEvent { return e.type === "sandbox.checked" }
+export function isRunStartedEvent(e: SessionEvent): e is RunStartedEvent { return e.type === "run.started" }
+export function isRunEndedEvent(e: SessionEvent): e is RunEndedEvent { return e.type === "run.ended" }
+export function isPermissionDecidedEvent(e: SessionEvent): e is PermissionDecidedEvent { return e.type === "permission.decided" }
 
 export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta {
   const next = { ...meta }
@@ -79,6 +84,14 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
       }
       break
     case "sandbox.checked": break // 审计事件同样不进投影、不推进 updatedAt
+    case "run.started":
+    case "run.ended":
+    case "permission.decided": break // 审计事件：只留痕，不动投影
+    default: {
+      const unhandled: never = event
+      void unhandled
+      break
+    }
   }
   return next
 }

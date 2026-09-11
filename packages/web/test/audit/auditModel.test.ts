@@ -5,7 +5,8 @@ import {
 } from "../../src/audit/model.js"
 import type { AuditFilter, AuditRow } from "../../src/audit/model.js"
 import type {
-  Block, CompactionEvent, MessageEvent, SandboxCheckedEvent, SessionEvent, SystemEvent,
+  Block, CompactionEvent, MessageEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
+  SandboxCheckedEvent, SessionEvent, SystemEvent,
 } from "../../src/types.js"
 
 // ---------- fixtures ----------
@@ -31,6 +32,19 @@ const COMPACTION: CompactionEvent = {
 
 const SYSTEM: SystemEvent = { type: "system", at: "2026-09-08T10:00:00.000Z", text: "系统提示词正文" }
 const SANDBOX: SandboxCheckedEvent = { type: "sandbox.checked", at: "2026-09-08T10:00:00.000Z", enabled: true, available: true }
+const RUN_STARTED: RunStartedEvent = { type: "run.started", at: "2026-09-08T10:00:00.000Z", trigger: "user" }
+const RUN_ENDED: RunEndedEvent = {
+  type: "run.ended", at: "2026-09-08T10:01:00.000Z", stopReason: "end_turn",
+  usage: { inputTokens: 120, outputTokens: 45 },
+}
+const RUN_FAILED: RunEndedEvent = {
+  type: "run.ended", at: "2026-09-08T10:02:00.000Z", stopReason: "error",
+  error: { code: "llm_error", message: "provider down" },
+}
+const DECIDED: PermissionDecidedEvent = {
+  type: "permission.decided", at: "2026-09-08T10:00:30.000Z", confirmationId: "conf_1",
+  decision: "once", by: "cli", tool: { callId: "call_1", name: "exec", argsJson: '{"command":"ls"}' },
+}
 
 // ---------- flattenAudit ----------
 
@@ -117,7 +131,7 @@ function kindsFilter(off: AuditRow["kind"]): AuditFilter {
   return {
     ...DEFAULT_FILTER,
     kinds: {
-      block: true, compaction: true, memory: true, system: true, sandbox: true, session: true,
+      block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true,
       [off]: false,
     },
   }
@@ -225,6 +239,15 @@ describe("appendRows", () => {
   it("空批次原样返回", () => {
     const rows = flattenAudit(full)
     expect(appendRows(rows, full.length, [])).toBe(rows)
+  })
+})
+
+describe("run / decision 行的过滤开关", () => {
+  it("关闭 run 后 run 行不可见，decision 不受影响", () => {
+    const rows = flattenAudit([RUN_STARTED, DECIDED, RUN_ENDED])
+    const f = kindsFilter("run")
+    const visible = filterRows(rows, f, NOW)
+    expect(visible.map((r) => r.kind)).toEqual(["decision"])
   })
 })
 
