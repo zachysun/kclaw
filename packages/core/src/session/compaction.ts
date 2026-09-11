@@ -1,5 +1,6 @@
 import type { AssistantMessage, Message } from "../protocol/messages.js"
 import { isBlockType } from "../protocol/blocks.js"
+import { SPILL_LOCATOR_PREFIX } from "../tools/spill.js"
 
 const CJK = /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/
 
@@ -161,7 +162,7 @@ export function extractSpillLocators(messages: Message[]): string[] {
       if (!isBlockType("tool_result", b)) continue
       for (const line of b.output.split("\n")) {
         const trimmed = line.trim()
-        if (trimmed.startsWith("[完整输出已存盘:") && trimmed.endsWith("]") && !out.includes(trimmed)) {
+        if (trimmed.startsWith(SPILL_LOCATOR_PREFIX) && trimmed.endsWith("]") && !out.includes(trimmed)) {
           out.push(trimmed)
         }
       }
@@ -191,7 +192,7 @@ export function renderSegment(messages: Message[]): string {
       } else if (isBlockType("tool_result", b)) {
         // Spill locator lines live at the END of a truncated output — pull
         // them out before slicing so the pointer never gets cut.
-        const locatorIdx = b.output.lastIndexOf("\n[完整输出已存盘:")
+        const locatorIdx = b.output.lastIndexOf(`\n${SPILL_LOCATOR_PREFIX}`)
         const hasLocator = locatorIdx >= 0 && b.output.slice(locatorIdx).trimEnd().endsWith("]")
         const body = hasLocator ? b.output.slice(0, locatorIdx) : b.output
         const locator = hasLocator ? "\n" + b.output.slice(locatorIdx + 1).trim() : ""

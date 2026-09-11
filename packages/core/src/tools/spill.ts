@@ -47,9 +47,12 @@ export function spillToolOutput(spillDir: string | undefined, toolName: string, 
   }
 }
 
+/** The single source of the locator marker: spill.ts writes it, compaction's renderer/extractor match on it. */
+export const SPILL_LOCATOR_PREFIX = "[完整输出已存盘: "
+
 /** Locator line appended after a truncated tool output ("" when nothing spilled). */
 export function spillLocatorLine(result: SpillResult): string {
   if (result.path === undefined) return ""
   const note = result.partial === true ? "（该文件仅保留了前 10MB）" : ""
-  return `\n[完整输出已存盘: ${result.path}${note}；需要更多内容时用 fs_read 读取该文件]`
+  return `\n${SPILL_LOCATOR_PREFIX}${result.path}${note}；需要更多内容时用 fs_read 读取该文件]`
 }

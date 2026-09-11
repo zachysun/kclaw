@@ -653,12 +653,13 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // 前缀缓存按从头逐字节相同匹配：live 变化只失效变化点之后，stable 前缀
   // 继续命中；装技能、夜间认知刷新在下一 run 即时生效，不再等压缩边界。
   // 两段全命中时 system-after 链跳过（与单段时代的冻结 run 同语义）；至少
-  // 一段变化时走 system-after（用户可改终稿）——用户改写发生时终稿整体固化
-  // 进 stable 基线（改写每 run 重新生效，审计恒记录模型实际看到的那份）。
-  // 审计每 run 一条双段全量留痕（直接落盘；写失败即 run 失败）。压缩事件在
-  // 投影里清除基线（applyEvent），下一次 run 重新装配并固化——压缩本来就使
-  // 缓存全量失效，纪元边界设在冷启动处零额外成本。子代理 run 的精简模板
-  // 同样适用（live 恒空）。
+  // 一段变化时走 system-after（用户可改终稿）——改写发生时事件记 stable=终稿
+  // （审计恒记录模型实际看到的那份）、live=现算文本：stable 基线于是偏离现算
+  // 值，下一个 run 自然重装配、改写每 run 重新生效；live 基线则照常逐字比对，
+  // frozenAt 不会虚假刷新。审计每 run 一条双段全量留痕（直接落盘；写失败即
+  // run 失败）。压缩事件在投影里清除基线（applyEvent），下一次 run 重新装配
+  // 并固化——压缩本来就使缓存全量失效，纪元边界设在冷启动处零额外成本。
+  // 子代理 run 的精简模板同样适用（live 恒空）。
   const baseline = sessionMeta?.systemBaseline
   const base = childRun ? subagentSystemPrompt(workspace) : systemPrompt(paths.agentsMd)
   const stable = [base, SYSTEM_INJECTION_CONVENTION].filter((s) => s !== "").join("\n\n")
@@ -677,7 +678,12 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     const rewrittenSystem = await chain.run("system-after", { system: draft })
     if (rewrittenSystem !== undefined) {
       system = rewrittenSystem
-      sessions.appendSystem(sessionId, { at: new Date().toISOString(), stable: system })
+      // stable freezes the REWRITTEN text (what the model actually saw — the
+      // audit's contract), so the next run's fresh stable differs and the
+      // assembly (and the rewrite) re-runs; live carries the freshly computed
+      // segment so ITS baseline still compares equal across rewrites — a
+      // rewrite must not phantom-refresh live's frozenAt.
+      sessions.appendSystem(sessionId, { at: new Date().toISOString(), stable: system, live })
     } else {
       system = draft
       sessions.appendSystem(sessionId, { at: new Date().toISOString(), stable, live })
@@ -722,7 +728,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
         if (e.type === "run.started" && e.runId !== undefined) runId = e.runId
         else if (e.type === "llm.completed" || e.type === "llm.failed") llmAttempt = 1
         // Run-boundary archive: every run brackets its message events with a
-        // run.started + run.ended pair in the session archive, so the trail
+        // run.started + run.ended pair in the session archive, so the archive
         // shows where each run began and ended without inferring it from the
         // last assistant message's stop reason. A failed run lands an ended
         // record too (stopReason "error" + the failure) — a started run

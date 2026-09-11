@@ -89,7 +89,7 @@ describe("ask_user_questions executor", () => {
 describe("ConfirmationBroker question registry", () => {
   it("确认与问题两类条目共存：各自的 resolve 互不串扰", async () => {
     const broker = new ConfirmationBroker()
-    const q = broker.createQuestion("q_1", [{ text: "在吗?" }], 60_000, "ses_a")
+    const q = broker.createQuestion("q_1", 60_000)
     const confP = broker.create("conf_1", { id: "blk_1", type: "tool_call", callId: "call_1", name: "exec", argsJson: "{}" }, "safe", 60_000, "ses_a")
     expect(broker.resolveQuestion("conf_1", [["x"]])).toBe(false)
     expect(broker.resolve("q_1", "once")).toBe(false)
@@ -101,10 +101,10 @@ describe("ConfirmationBroker question registry", () => {
 
   it("重复结算返回 false；过期条目上的迟到回答也返回 false", async () => {
     const broker = new ConfirmationBroker()
-    broker.createQuestion("q_2", [{ text: "a" }], 60_000)
+    broker.createQuestion("q_2", 60_000)
     expect(broker.resolveQuestion("q_2", [["1"]])).toBe(true)
     expect(broker.resolveQuestion("q_2", [["2"]])).toBe(false)
-    broker.createQuestion("q_3", [{ text: "a" }], 5)
+    broker.createQuestion("q_3", 5)
     await new Promise((r) => setTimeout(r, 15))
     expect(broker.resolveQuestion("q_3", [["迟到"]])).toBe(false)
   })

@@ -84,7 +84,7 @@ export function createAskUserQuestionsTool(opts: {
       }
       const questionId = newId("q")
       const expiresAt = new Date(Date.now() + timeoutMs).toISOString()
-      const resolution = opts.broker.createQuestion(questionId, questions, timeoutMs)
+      const resolution = opts.broker.createQuestion(questionId, timeoutMs)
       opts.emit("question.requested", { questionId, questions, expiresAt })
       const raced = await racePending(resolution, timeoutMs, ctx.signal, {
         answers: [],

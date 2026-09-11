@@ -148,13 +148,14 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
           return
         }
         // A background dispatch has already returned its tool result — status
-        // lines have no onOutput left to flow into; only the cards forward.
-        if (background) return
+        // lines have no onOutput left to flow into; the CARDS STILL FORWARD
+        // (a background child's sensitive calls must reach the user too).
         switch (e.type) {
           case "message.created":
-            if (e.payload?.message?.role === "assistant") status(`▸ 生成中`)
+            if (!background && e.payload?.message?.role === "assistant") status(`▸ 生成中`)
             break
           case "tool_call.completed": {
+            if (background) break
             const block = e.payload.block
             if (block.type !== "tool_call") break
             latestText = ""
@@ -162,8 +163,10 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
             break
           }
           case "text.delta":
-            latestText += e.payload.delta
-            status(`▸ 生成：${excerpt(latestText)}`)
+            if (!background) {
+              latestText += e.payload.delta
+              status(`▸ 生成：${excerpt(latestText)}`)
+            }
             break
           case "confirmation.requested": {
             // The card lands on the PARENT channel (where the user is looking),
@@ -204,9 +207,11 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
     const teardown = (): void => {
       deps.bus.unsubscribe(child.id, subscriber)
       children.delete(child.id)
+      // Only THIS dispatch's own budget book clears — a blocking child
+      // finishing must not erase the background book (or vice versa), or the
+      // caps drift and cancelBackgroundForParent loses still-running children.
       if (children.size === 0) {
-        live.delete(req.parentSessionId)
-        backgroundLive.delete(req.parentSessionId)
+        ;(background ? backgroundLive : live).delete(req.parentSessionId)
       }
     }
 

@@ -1,4 +1,4 @@
-import type { ConfirmationDecision, ConfirmationRequestedPayload, QuestionSpec, ToolCallBlock } from "../protocol/index.js"
+import type { ConfirmationDecision, ConfirmationRequestedPayload, ToolCallBlock } from "../protocol/index.js"
 
 /**
  * Verdict value carried between the loop and its human resolver: the
@@ -212,22 +212,16 @@ export class ConfirmationBroker {
   // entry); a resolution that settles nothing returns false so a late
   // gateway frame reports "unknown question".
 
-  /** Register a pending question; the promise settles only via resolveQuestion. */
-  createQuestion(
-    questionId: string,
-    questions: QuestionSpec[],
-    timeoutMs: number,
-    sessionId?: string,
-  ): Promise<QuestionResolution> {
+  /** Register a pending question; the promise settles only via resolveQuestion.
+   * The asked questions themselves live on the question.requested event, not here. */
+  createQuestion(questionId: string, timeoutMs: number): Promise<QuestionResolution> {
     let settle!: (r: QuestionResolution) => void
     const resolution = new Promise<QuestionResolution>((res) => {
       settle = res
     })
     this.#questions.set(questionId, {
       questionId,
-      questions,
       expiresAt: new Date(Date.now() + timeoutMs).toISOString(),
-      ...(sessionId === undefined ? {} : { sessionId }),
       settle,
       resolution,
     })
@@ -252,9 +246,7 @@ export class ConfirmationBroker {
 
 interface PendingQuestion {
   questionId: string
-  questions: QuestionSpec[]
   expiresAt: string
-  sessionId?: string
   settle: (r: QuestionResolution) => void
   resolution: Promise<QuestionResolution>
 }

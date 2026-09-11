@@ -619,3 +619,51 @@ describe("subagent background mode", () => {
     }, "failure notice", 8_000)
   }, 20_000)
 })
+
+describe("subagent background card forwarding", () => {
+  it("forwards a background child's confirmation card to the parent channel and completes after the verdict", async () => {
+    // Default config: allow list empty → the child's exec call needs a
+    // confirmation. In background mode the card must STILL reach the parent
+    // channel (status lines are muted; cards are not).
+    const parentScript = [
+      spawnBackgroundTurn("call_1", "跑个命令", "bg-runner"),
+      textTurn("派出去了"),
+    ]
+    const childScript = [execTurn("call_c", "echo hi"), textTurn("命令完成")]
+    let parentCalls = 0
+    let childCalls = 0
+    const llm: LlmClient = {
+      async *stream(req) {
+        if (req.system.includes("子代理")) yield* childScript[Math.min(childCalls++, childScript.length - 1)]!
+        else yield* parentScript[Math.min(parentCalls++, parentScript.length - 1)]!
+      },
+    }
+    const { sessions, manager, bus } = makeEnv(llm)
+    const parent = sessions.create("主线")
+    const socket = new FakeSocket()
+    bus.subscribe(parent.id, socket)
+
+    const outcome = await manager.enqueue(parent.id, { userText: "后台跑命令", trigger: "user" })
+    expect(outcome.stopReason).toBe("end_turn") // the parent is NOT blocked by the child
+
+    // The card lands on the parent channel, labeled with the background child.
+    const deadline = Date.now() + 5_000
+    let card: AgentEvent | undefined
+    while (Date.now() < deadline && card === undefined) {
+      card = received(socket).find((e) => e.type === "confirmation.requested")
+      if (card === undefined) await new Promise((r) => setTimeout(r, 10))
+    }
+    expect(card).toBeDefined()
+    expect(card!.sessionId).toBe(parent.id)
+    expect((card!.payload as { noteText?: string }).noteText).toContain("来自子代理 bg-runner")
+    expect((card!.payload as { toolCall: { name: string } }).toolCall.name).toBe("exec")
+
+    // Approving lets the background child finish; the completion notice follows.
+    expect(manager.broker.resolve((card!.payload as { confirmationId: string }).confirmationId, "once", "web")).toBe(true)
+    await until(() => {
+      const msgs = sessions.readMessages(parent.id).filter((m) => m.role === "assistant")
+      const last = msgs.at(-1)
+      return last !== undefined && last.blocks[0]!.type === "note" && (last.blocks[0] as { text: string }).text.includes("已完成")
+    }, "completion notice", 8_000)
+  }, 15_000)
+})

@@ -620,15 +620,17 @@ function QuestionCardView({
 }) {
   const [textValues, setTextValues] = useState<string[]>(() => card.questions.map(() => ""))
   const [multiPicks, setMultiPicks] = useState<string[][]>(() => card.questions.map(() => []))
+  // An empty answer array means "skipped" — the same contract as the CLI's
+  // enter-to-skip, and the tool result renders it as （未回答）.
   const answers: string[][] = card.questions.map((q, i) => {
     if (Array.isArray(q.options) && q.options.length > 0) return multiPicks[i] ?? []
     const t = (textValues[i] ?? "").trim()
     return t === "" ? [] : [t]
   })
-  const allAnswered = answers.every((a) => a.length > 0)
   return (
     <div className="question-card" data-testid="question-card">
       <div className="confirm-title">问题待回答</div>
+      <div className="confirm-meta">expires {card.expiresAt}</div>
       {card.noteText !== undefined && <div className="confirm-note">{card.noteText}</div>}
       {card.questions.map((q, i) => (
         <div key={i} className="question-item" data-testid={`question-item-${i}`}>
@@ -672,7 +674,7 @@ function QuestionCardView({
         </div>
       ))}
       <div className="confirm-actions">
-        <button data-testid="question-submit" disabled={!allAnswered} onClick={() => onAnswer(card.questionId, answers)}>
+        <button data-testid="question-submit" onClick={() => onAnswer(card.questionId, answers)}>
           提交回答
         </button>
       </div>

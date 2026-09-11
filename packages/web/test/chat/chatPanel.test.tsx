@@ -637,8 +637,9 @@ describe("ChatPanel", () => {
       }))
     })
     expect(h.container.querySelector('[data-testid="question-card"]')).not.toBeNull()
-    // Submit is disabled until every question has an answer.
-    expect((h.container.querySelector('button[data-testid="question-submit"]') as HTMLButtonElement).disabled).toBe(true)
+    // Submit is always enabled: an empty answer means "skipped" (the CLI's
+    // enter-to-skip contract; the tool result renders it as （未回答）).
+    expect((h.container.querySelector('button[data-testid="question-submit"]') as HTMLButtonElement).disabled).toBe(false)
     // Pick one option, type free text.
     await act(async () => {
       ;(h.container.querySelector('button[data-testid="question-0-option"]') as HTMLButtonElement).click()
