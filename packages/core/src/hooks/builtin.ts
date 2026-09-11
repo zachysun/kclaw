@@ -16,15 +16,23 @@
  *   audit record itself (the split freeze needs the stable/live segments,
  *   which live above the chain). User system-after hooks rewrite the draft;
  *   a rewrite is frozen as the stable baseline by the assembly.
- * - The two compaction decision hooks (mid-run panic / overflow emergency)
- *   keep their old "throw == decline" semantics via failure: "skip" (a failed
+ * - The compaction decision hooks (mid-run panic / overflow emergency) keep
+ *   their old "throw == decline" semantics via failure: "skip" (a failed
  *   decision resolves to undefined, which the loop treats as "don't
  *   compact"), and post-run-compaction stays fatal (its old throw propagated
- *   to the queue's entry-level failure). All three run UNTIMED
- *   (meta.timeoutMs = Infinity): their body is two provider calls whose
- *   duration is the LLM's, and the pre-migration inline code had no timeout
- *   — the blanket 5s race made every real compaction time out, orphaning a
- *   background duplicate that raced the next boundary's second attempt.
+ *   to the queue's entry-level failure). Every compaction hook runs
+ *   UNTIMED (meta.timeoutMs = Infinity): its body is two provider calls
+ *   whose duration is the LLM's, and the pre-migration inline code had no
+ *   timeout — the blanket 5s race made every real compaction time out,
+ *   orphaning a background duplicate that raced the next boundary's second
+ *   attempt.
+ *
+ * Single source of truth: every builtin is declared ONCE in
+ * BUILTIN_HOOK_SPECS (metadata + a handler factory bound to the run's
+ * runtime). The management-plane list (BUILTIN_HOOK_DEFINITIONS) is projected
+ * from it and makeBuiltinHooks builds the chain entries from it — the two
+ * can never drift apart (an index shift once silently mispaired a hook with
+ * another's description after an entry was removed).
  */
 import { newBlockId } from "../protocol/blocks.js"
 import type { NoteBlock } from "../protocol/blocks.js"
@@ -96,271 +104,440 @@ export interface BuiltinHookDeps {
   compactionAfter: (phase: "in-run" | "post-run" | "manual", result: "ok" | "failed" | "cancelled") => Promise<void>
 }
 
-/** Static builtin hook definitions for the management plane (positions + copy). */
+/**
+ * HookRuntime — the deps plus the cheap per-run derivations the handlers
+ * used to close over from the factory scope. Each spec's handler factory
+ * destructures what it needs.
+ */
+interface HookRuntime extends BuiltinHookDeps {
+  childRun: boolean
+  usageSessionId: string
+  // yellow / red / ahead waterlines (defaults 0.8 / 0.9 / 0.75)
+  atRatio: number
+  panicRatio: number
+  aheadRatio: number
+  runCtx: () => { sessionId: string; runId?: string }
+  /** Notes collected by memory-inject(10), appended by user-message-land(20). */
+  memoryNotes: NoteBlock[]
+}
+
+/** One builtin hook: metadata + a handler factory bound to the run's runtime. */
+interface BuiltinHookSpec<K extends HookPosition> {
+  name: string
+  position: K
+  order: number
+  description: string
+  failure: "fatal" | "skip"
+  timeoutMs?: number
+  makeHandler: (
+    rt: HookRuntime,
+  ) => (ctx: HookContextMap[K]) => Promise<HookResultMap[K] | undefined | void> | HookResultMap[K] | undefined | void
+}
+
+/** Position-widened spec as stored in the array (ctx typing already checked per-spec). */
+type AnyBuiltinHookSpec = Omit<BuiltinHookSpec<HookPosition>, "makeHandler"> & {
+  makeHandler: (rt: HookRuntime) => HookEntry["handler"]
+}
+
+/** Keeps each spec's ctx type tied to its position literal at the declaration site. */
+function spec<K extends HookPosition>(s: BuiltinHookSpec<K>): AnyBuiltinHookSpec {
+  return { ...s, makeHandler: s.makeHandler as AnyBuiltinHookSpec["makeHandler"] }
+}
+
+const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
+  spec({
+    name: "memory-inject",
+    position: "run-before",
+    order: 10,
+    description: "检索记忆库并把相关经历挂为用户消息的 note",
+    failure: "skip",
+    makeHandler: (rt) => {
+      const { childRun, memory, workspace, memoryNotes } = rt
+      return async ({ message }) => {
+        // Memory is an accelerator: a failing search never blocks the run.
+        // Subagent children carry no memory materials (Q7: 记忆隔离).
+        if (childRun) return
+        // Notes are COLLECTED here, not pushed onto the message: the land step
+        // (order 20) appends job notes first, then these — preserving the
+        // pre-migration block order (text → job → memory) and the matching
+        // note.emitted order.
+        try {
+          for (const hit of await memory.searchEpisodes(workspace, textOf(message).slice(0, MEMORY_QUERY_CHARS), MEMORY_LIMIT)) {
+            memoryNotes.push({ id: newBlockId(), type: "note", kind: "memory", text: `相关经历（${hit.title}）: ${hit.text}` })
+          }
+        } catch {
+          // ignore: run without memory context
+        }
+      }
+    },
+  }),
+  spec({
+    name: "user-message-land",
+    position: "run-before",
+    order: 20,
+    description: "补齐任务来源 note 并持久化用户消息",
+    failure: "fatal",
+    makeHandler: (rt) => {
+      const { jobNotes, memoryNotes, sessions, sessionId, runCtx, busEmit } = rt
+      return ({ message }) => {
+        // Notes become part of the message BEFORE it is persisted and
+        // completed; persist first, then announce — wire order stays
+        // created → note.emitted ×N → completed, job notes before memory notes.
+        message.blocks.push(...jobNotes, ...memoryNotes)
+        sessions.appendMessage(sessionId, message)
+        const noteCtx = runCtx()
+        for (const block of [...jobNotes, ...memoryNotes]) {
+          busEmit(makeEvent("note.emitted", { messageId: message.id, block }, noteCtx))
+        }
+        return message
+      }
+    },
+  }),
+  spec({
+    name: "autoname",
+    position: "run-before",
+    order: 30,
+    description: "新会话首条消息的后台自动命名",
+    failure: "skip",
+    makeHandler: (rt) => {
+      const { trigger, sessions, runLlm, model, busEmit, sessionId } = rt
+      return ({ message }) => {
+        // Only human-sent turns autoname: job notes are daemon-composed and
+        // subagent children get their title at spawn time (label/task).
+        if (trigger !== "user") return
+        void scheduleAutoname(
+          { sessions, llm: runLlm, model, emit: busEmit },
+          sessionId, textOf(message),
+        )
+      }
+    },
+  }),
+  spec({
+    name: "skill-wrap",
+    position: "llm-before",
+    order: 10,
+    description: "技能点名的隐式包装（只改发给模型的视图）",
+    failure: "skip",
+    makeHandler: (rt) => {
+      const { llmUserText } = rt
+      return ({ messages }) => {
+        // Implicit wrap of named skills: only the provider view is rewritten —
+        // persistence, events and the chat bubble keep the user's raw text.
+        return llmUserText === undefined ? undefined : withLastUserText(messages, llmUserText)
+      }
+    },
+  }),
+  spec({
+    name: "retry-notify",
+    position: "llm-retry",
+    order: 10,
+    description: "把 provider 重试转成 llm.failed(willRetry) 事件",
+    failure: "skip",
+    makeHandler: (rt) => {
+      const { busEmit, runCtx } = rt
+      return ({ attempt, error }) => {
+        busEmit(makeEvent("llm.failed", {
+          error: { code: "llm_retry", message: error },
+          willRetry: true,
+        }, runCtx()))
+      }
+    },
+  }),
+  spec({
+    name: "steering-drain",
+    position: "turn-boundary",
+    order: 10,
+    description: "取走队列的引导缓冲并注入对话",
+    failure: "fatal",
+    makeHandler: (rt) => {
+      const { drainSteer } = rt
+      return () => {
+        return drainSteer()
+      }
+    },
+  }),
+  spec({
+    name: "background-precompact",
+    position: "compaction-check",
+    order: 5,
+    description: "预压线触发后台压缩（不阻塞请求，成果待应用）",
+    failure: "skip",
+    timeoutMs: Number.POSITIVE_INFINITY,
+    makeHandler: (rt) => {
+      const { compactor, sessionId, signal, sessions, contextOverhead, budget, aheadRatio, panicRatio, config, runLlm, model } = rt
+      return () => {
+        // 预压线（ahead ≤ 估算水位 < 红线）且无在飞、无挂起成果时，在后台启动
+        // 压缩：不阻塞下一次请求，成果由后续迭代边界应用（mid-run-panic）。
+        // 水位已达红线的场景让位给 mid-run-panic 的同步路径。
+        if (compactor.cancelled(sessionId) || signal.aborted) return
+        const history = sessions.readMessages(sessionId)
+        const overhead = contextOverhead()
+        const level = estimateContextTokens(history, undefined, overhead)
+        if (level < budget * aheadRatio || level >= budget * panicRatio) return
+        compactor.background(sessionId, history, config, runLlm, model, {
+          overheadTokens: overhead,
+          budget,
+        })
+        // 只开工，不换视图：undefined 不影响同位后续钩子的返回值。
+        return undefined
+      }
+    },
+  }),
+  spec({
+    name: "mid-run-panic",
+    position: "compaction-check",
+    order: 10,
+    description: "红线水位的迭代边界中途压缩判定（含后台成果应用）",
+    failure: "skip",
+    timeoutMs: Number.POSITIVE_INFINITY,
+    makeHandler: (rt) => {
+      const { compactor, sessionId, signal, contextOverhead, budget, panicRatio, sessions, config, runLlm, model, compactionAfter } = rt
+      return async () => {
+        // Cancellation marker or an already-aborted run → don't compact. A throw
+        // resolves undefined == decline.
+        if (compactor.cancelled(sessionId) || signal.aborted) return null
+        // A parked background result is applied first — it is strictly newer
+        // than the run's view and the real request anchor self-heals at the
+        // next boundary (no post-apply re-estimate: the anchor is stale).
+        const parkedView = compactor.takeParked(sessionId)
+        if (parkedView !== null) return parkedView
+        const overhead = contextOverhead()
+        if (estimateContextTokens(sessions.readMessages(sessionId), undefined, overhead) < budget * panicRatio) return null
+        if (compactor.hasInFlight(sessionId)) {
+          // Red line hit while a background compaction is in flight: wait for
+          // it to settle (single-compaction invariant), then re-estimate on the
+          // span its parked view would keep — sync-compact only if that active
+          // span still crosses the red line (spec D5). The re-read is biased
+          // large (anchor predates the parked view) — the safe direction.
+          await compactor.waitForSettled(sessionId, signal)
+          if (compactor.cancelled(sessionId) || signal.aborted) return null
+        }
+        const history = sessions.readMessages(sessionId)
+        const settled = compactor.takeParked(sessionId)
+        if (settled !== null) {
+          const keepFrom = history.findIndex((m) => m.id === settled.upto) + 1
+          const active = keepFrom > 0 ? history.slice(keepFrom) : undefined
+          if (active !== undefined && active.length > 0 &&
+              estimateContextTokens(active, undefined, overhead) < budget * panicRatio) {
+            return settled
+          }
+        }
+        const next = await compactor.auto(sessionId, history, config, runLlm, model, {
+          phase: "in-run",
+          signal,
+          overheadTokens: overhead,
+          budget,
+        })
+        if (next !== null) {
+          void compactionAfter("in-run", "ok")
+          return next
+        }
+        // The sync compaction didn't happen (waterline/boundary decline, or the
+        // summarizer failed — either way nothing was written): the parked result
+        // we waited for is still the newest view — apply it rather than drop it.
+        return settled
+      }
+    },
+  }),
+  spec({
+    name: "overflow-emergency",
+    position: "overflow-rescue",
+    order: 10,
+    description: "上下文溢出的急救压缩（换视图整次重发）",
+    failure: "skip",
+    timeoutMs: Number.POSITIVE_INFINITY,
+    makeHandler: (rt) => {
+      const { compactor, sessionId, sessions, config, runLlm, model, signal, compactionAfter } = rt
+      return async () => {
+        // No watermark check — "it already overflowed" is a fact. Abort after
+        // the await → null (the resend would be torn down at the next
+        // checkpoint anyway).
+        // 急救撞在飞后台：abortInFlight 掐掉它并等其退出（单压缩不变量；成果
+        // 丢弃——原文无损，下次重压），再立即同步急救。救援路径不等摘要慢慢
+        // 跑完；不用 cancel()——它的取消标记会压制紧随其后的急救 auto()。
+        if (compactor.hasInFlight(sessionId)) {
+          compactor.abortInFlight(sessionId)
+          await compactor.waitForSettled(sessionId)
+        }
+        const next = await compactor.auto(sessionId, sessions.readMessages(sessionId), config, runLlm, model, {
+          phase: "in-run",
+          emergency: true,
+          signal,
+        })
+        void compactionAfter("in-run", "ok")
+        return signal.aborted ? null : next
+      }
+    },
+  }),
+  spec({
+    name: "usage-ledger",
+    position: "run-after",
+    order: 10,
+    description: "记录本次 run 的 token 用量台账",
+    failure: "skip",
+    makeHandler: (rt) => {
+      const { usageStore, usageSessionId, runIdRef, model } = rt
+      return ({ outcome }) => {
+        if (usageStore === undefined) return
+        try {
+          usageStore.record({
+            // Subagent tokens group under the parent session (issue #16 记账).
+            sessionId: usageSessionId,
+            runId: runIdRef.current ?? "",
+            model,
+            inputTokens: outcome.totalUsage.inputTokens,
+            outputTokens: outcome.totalUsage.outputTokens,
+            at: new Date().toISOString(),
+          })
+        } catch (err) {
+          console.error("kclaw usage record failed:", err)
+        }
+      }
+    },
+  }),
+  spec({
+    name: "manual-compact-flush",
+    position: "run-after",
+    order: 15,
+    description: "冲刷挂起的 /compact（忙时登记，运行结束后执行）",
+    failure: "skip",
+    timeoutMs: Number.POSITIVE_INFINITY,
+    makeHandler: (rt) => {
+      const { compactor, sessionId, signal, sessions, config, runLlm, model, budget, compactionAfter } = rt
+      return async () => {
+        // 冲刷挂起的 /compact（会话忙时登记的）：在自动收尾压缩之前执行——
+        // 用户显式意图优先，压完水位落回，自动收尾检查自然不再触发。
+        // 不做忙碌/排队检查（收尾链时刻必然不忙；运行期间排队的消息等下一条
+        // 出队，与压缩无关）。失败按 skip：hook.failed 事件 + 日志，不连坐 run。
+        if (!compactor.hasDeferredManual(sessionId)) return
+        if (compactor.hasInFlight(sessionId)) await compactor.waitForSettled(sessionId, signal)
+        const deferred = compactor.takeDeferredManual(sessionId)
+        if (deferred === null) return
+        await compactor.compact(sessionId, sessions.readMessages(sessionId), "", config, runLlm, model, {
+          focus: deferred.focus,
+          manual: true,
+          phase: "manual",
+          budget,
+        })
+        void compactionAfter("manual", "ok")
+      }
+    },
+  }),
+  spec({
+    name: "post-run-compaction",
+    position: "run-after",
+    order: 20,
+    description: "黄线水位触发的收尾压缩",
+    failure: "fatal",
+    timeoutMs: Number.POSITIVE_INFINITY,
+    makeHandler: (rt) => {
+      const { compactor, sessionId, sessions, contextOverhead, budget, atRatio, config, runLlm, model, signal, compactionAfter } = rt
+      return async ({ outcome }) => {
+        // aborted/error runs are not finalized (the former is being torn down,
+        // the latter just failed); the cancellation marker suppresses a
+        // user-cancelled compaction for this run.
+        if (outcome.stopReason === "aborted" || outcome.stopReason === "error" || compactor.cancelled(sessionId)) return
+        if (compactor.hasInFlight(sessionId)) {
+          // 收尾撞在飞后台（预压没跑完 run 就结束了）：等它完成再判断——绝不
+          // 并发第二个压缩。等待后走正常判断（auto 内部的活跃段细判自适应）。
+          // 循环已结束，挂起视图没有"下一次请求"可应用，取走丢弃——元数据
+          // 已携带同一成果，下一次运行从 meta 读到它。
+          await compactor.waitForSettled(sessionId, signal)
+          compactor.takeParked(sessionId)
+        }
+        const postRunHistory = sessions.readMessages(sessionId)
+        const overhead = contextOverhead()
+        if (estimateContextTokens(postRunHistory, undefined, overhead) < budget * atRatio) return
+        await compactor.auto(sessionId, postRunHistory, config, runLlm, model, {
+          phase: "post-run",
+          signal,
+          overheadTokens: overhead,
+          budget,
+        })
+        void compactionAfter("post-run", "ok")
+      }
+    },
+  }),
+  spec({
+    name: "follow-check",
+    position: "run-after",
+    order: 30,
+    description: "挂起记忆空闲检查（调度器补查）",
+    failure: "skip",
+    makeHandler: (rt) => {
+      const { childRun, config, memory, sessionId } = rt
+      return () => {
+        // Children never schedule follow extraction (memory isolation).
+        if (childRun) return
+        if (config.memory.write.idleMinutes > 0) {
+          try {
+            memory.scheduleFollowCheck?.(sessionId, new Date().toISOString())
+          } catch {
+            // a failed follow-gate schedule never affects the run
+          }
+        }
+      }
+    },
+  }),
+  spec({
+    name: "system-materials",
+    position: "system-before",
+    order: 10,
+    description: "收集认知与技能列表两个提示词段",
+    failure: "skip",
+    makeHandler: (rt) => {
+      const { childRun, memory, workspace, skillList } = rt
+      return () => {
+        // Subagent children run on the lean prompt: no cognition, no skill list.
+        if (childRun) return []
+        // Cognition injection failure is silently skipped (run proceeds with
+        // base prompt only) — pre-migration parity.
+        let cognition = ""
+        try {
+          cognition = memory.cognitionPrompt(workspace)
+        } catch {
+          // 认知注入失败静默跳过
+        }
+        return [cognition, skillList].filter((s) => s !== "")
+      }
+    },
+  }),
+]
+
+/**
+ * Static builtin hook definitions for the management plane (positions +
+ * copy) — projected from BUILTIN_HOOK_SPECS, the single source both the
+ * chain assembly and this list build on.
+ */
 export const BUILTIN_HOOK_DEFINITIONS: ReadonlyArray<{
   name: string
   position: HookPosition
   description: string
   failure: "fatal" | "skip"
-}> = [
-  { name: "memory-inject", position: "run-before", description: "检索记忆库并把相关经历挂为用户消息的 note", failure: "skip" },
-  { name: "user-message-land", position: "run-before", description: "补齐任务来源 note 并持久化用户消息", failure: "fatal" },
-  { name: "autoname", position: "run-before", description: "新会话首条消息的后台自动命名", failure: "skip" },
-  { name: "skill-wrap", position: "llm-before", description: "技能点名的隐式包装（只改发给模型的视图）", failure: "skip" },
-  { name: "retry-notify", position: "llm-retry", description: "把 provider 重试转成 llm.failed(willRetry) 事件", failure: "skip" },
-  { name: "steering-drain", position: "turn-boundary", description: "取走队列的引导缓冲并注入对话", failure: "fatal" },
-  { name: "mid-run-panic", position: "compaction-check", description: "红线水位的迭代边界中途压缩判定（含后台成果应用）", failure: "skip" },
-  { name: "overflow-emergency", position: "overflow-rescue", description: "上下文溢出的急救压缩（换视图整次重发）", failure: "skip" },
-  { name: "usage-ledger", position: "run-after", description: "记录本次 run 的 token 用量台账", failure: "skip" },
-  { name: "post-run-compaction", position: "run-after", description: "黄线水位触发的收尾压缩", failure: "fatal" },
-  { name: "follow-check", position: "run-after", description: "挂起记忆空闲检查（调度器补查）", failure: "skip" },
-  { name: "system-materials", position: "system-before", description: "收集认知与技能列表两个提示词段", failure: "skip" },
-  { name: "background-precompact", position: "compaction-check", description: "预压线触发后台压缩（不阻塞请求，成果待应用）", failure: "skip" },
-  { name: "manual-compact-flush", position: "run-after", description: "冲刷挂起的 /compact（忙时登记，运行结束后执行）", failure: "skip" },
-]
+}> = BUILTIN_HOOK_SPECS.map(({ name, position, description, failure }) => ({ name, position, description, failure }))
 
 /** Build this run's builtin chain entries (closures over run resources). */
 export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
-  const {
-    sessionId, sessions, memory, config, workspace, compactor, signal,
-    runLlm, model, budget, usageStore, busEmit, runIdRef, jobNotes, trigger,
-    llmUserText, drainSteer, skillList, contextOverhead, compactionAfter,
-  } = deps
-  const childRun = deps.childRun === true
-  const usageSessionId = deps.usageSessionId ?? sessionId
-  const atRatio = config.sessions.compactAtRatio ?? 0.8
-  const panicRatio = config.sessions.compactPanicRatio ?? 0.9
-  const aheadRatio = config.sessions.compactAheadRatio ?? 0.75
-  const runCtx = () => (runIdRef.current === undefined ? { sessionId } : { sessionId, runId: runIdRef.current })
-  const memoryNotes: NoteBlock[] = []
-
-  const builtin = <K extends HookPosition>(
-    name: string, position: K, order: number, description: string,
-    failure: "fatal" | "skip",
-    handler: (ctx: HookContextMap[K]) => Promise<HookResultMap[K] | undefined | void> | HookResultMap[K] | undefined | void,
-    timeoutMs?: number,
-  ): HookEntry => ({
+  const rt: HookRuntime = {
+    ...deps,
+    childRun: deps.childRun === true,
+    usageSessionId: deps.usageSessionId ?? deps.sessionId,
+    atRatio: deps.config.sessions.compactAtRatio ?? 0.8,
+    panicRatio: deps.config.sessions.compactPanicRatio ?? 0.9,
+    aheadRatio: deps.config.sessions.compactAheadRatio ?? 0.75,
+    runCtx: () => (deps.runIdRef.current === undefined
+      ? { sessionId: deps.sessionId }
+      : { sessionId: deps.sessionId, runId: deps.runIdRef.current }),
+    memoryNotes: [],
+  }
+  return BUILTIN_HOOK_SPECS.map((s) => ({
     meta: {
-      name, position, description, enabled: true, order, failure, origin: "builtin",
-      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      name: s.name, position: s.position, description: s.description,
+      enabled: true, order: s.order, failure: s.failure, origin: "builtin",
+      ...(s.timeoutMs === undefined ? {} : { timeoutMs: s.timeoutMs }),
     },
-    handler: handler as HookEntry["handler"],
-  })
-
-  return [
-    builtin("memory-inject", "run-before", 10, BUILTIN_HOOK_DEFINITIONS[0]!.description, "skip", async ({ message }) => {
-      // Memory is an accelerator: a failing search never blocks the run.
-      // Subagent children carry no memory materials (Q7: 记忆隔离).
-      if (childRun) return
-      // Notes are COLLECTED here, not pushed onto the message: the land step
-      // (order 20) appends job notes first, then these — preserving the
-      // pre-migration block order (text → job → memory) and the matching
-      // note.emitted order.
-      try {
-        for (const hit of await memory.searchEpisodes(workspace, textOf(message).slice(0, MEMORY_QUERY_CHARS), MEMORY_LIMIT)) {
-          memoryNotes.push({ id: newBlockId(), type: "note", kind: "memory", text: `相关经历（${hit.title}）: ${hit.text}` })
-        }
-      } catch {
-        // ignore: run without memory context
-      }
-    }),
-    builtin("user-message-land", "run-before", 20, BUILTIN_HOOK_DEFINITIONS[1]!.description, "fatal", ({ message }) => {
-      // Notes become part of the message BEFORE it is persisted and
-      // completed; persist first, then announce — wire order stays
-      // created → note.emitted ×N → completed, job notes before memory notes.
-      message.blocks.push(...jobNotes, ...memoryNotes)
-      sessions.appendMessage(sessionId, message)
-      const noteCtx = runCtx()
-      for (const block of [...jobNotes, ...memoryNotes]) {
-        busEmit(makeEvent("note.emitted", { messageId: message.id, block }, noteCtx))
-      }
-      return message
-    }),
-    builtin("autoname", "run-before", 30, BUILTIN_HOOK_DEFINITIONS[2]!.description, "skip", ({ message }) => {
-      // Only human-sent turns autoname: job notes are daemon-composed and
-      // subagent children get their title at spawn time (label/task).
-      if (trigger !== "user") return
-      void scheduleAutoname(
-        { sessions, llm: runLlm, model, emit: busEmit },
-        sessionId, textOf(message),
-      )
-    }),
-    builtin("skill-wrap", "llm-before", 10, BUILTIN_HOOK_DEFINITIONS[3]!.description, "skip", ({ messages }) => {
-      // Implicit wrap of named skills: only the provider view is rewritten —
-      // persistence, events and the chat bubble keep the user's raw text.
-      return llmUserText === undefined ? undefined : withLastUserText(messages, llmUserText)
-    }),
-    builtin("retry-notify", "llm-retry", 10, BUILTIN_HOOK_DEFINITIONS[4]!.description, "skip", ({ attempt, error }) => {
-      busEmit(makeEvent("llm.failed", {
-        error: { code: "llm_retry", message: error },
-        willRetry: true,
-      }, runCtx()))
-    }),
-    builtin("steering-drain", "turn-boundary", 10, BUILTIN_HOOK_DEFINITIONS[5]!.description, "fatal", () => {
-      return drainSteer()
-    }),
-    builtin("background-precompact", "compaction-check", 5, BUILTIN_HOOK_DEFINITIONS[12]!.description, "skip", () => {
-      // 预压线（ahead ≤ 估算水位 < 红线）且无在飞、无挂起成果时，在后台启动
-      // 压缩：不阻塞下一次请求，成果由后续迭代边界应用（mid-run-panic）。
-      // 水位已达红线的场景让位给 mid-run-panic 的同步路径。
-      if (compactor.cancelled(sessionId) || signal.aborted) return
-      const history = sessions.readMessages(sessionId)
-      const overhead = contextOverhead()
-      const level = estimateContextTokens(history, undefined, overhead)
-      if (level < budget * aheadRatio || level >= budget * panicRatio) return
-      compactor.background(sessionId, history, config, runLlm, model, {
-        overheadTokens: overhead,
-        budget,
-      })
-      // 只开工，不换视图：undefined 不影响同位后续钩子的返回值。
-      return undefined
-    }, Number.POSITIVE_INFINITY),
-    builtin("mid-run-panic", "compaction-check", 10, BUILTIN_HOOK_DEFINITIONS[6]!.description, "skip", async () => {
-      // Cancellation marker or an already-aborted run → don't compact. A throw
-      // resolves undefined == decline.
-      if (compactor.cancelled(sessionId) || signal.aborted) return null
-      // A parked background result is applied first — it is strictly newer
-      // than the run's view and the real request anchor self-heals at the
-      // next boundary (no post-apply re-estimate: the anchor is stale).
-      const parkedView = compactor.takeParked(sessionId)
-      if (parkedView !== null) return parkedView
-      const overhead = contextOverhead()
-      if (estimateContextTokens(sessions.readMessages(sessionId), undefined, overhead) < budget * panicRatio) return null
-      if (compactor.hasInFlight(sessionId)) {
-        // Red line hit while a background compaction is in flight: wait for
-        // it to settle (single-compaction invariant), then re-estimate on the
-        // span its parked view would keep — sync-compact only if that active
-        // span still crosses the red line (spec D5). The re-read is biased
-        // large (anchor predates the parked view) — the safe direction.
-        await compactor.waitForSettled(sessionId, signal)
-        if (compactor.cancelled(sessionId) || signal.aborted) return null
-      }
-      const history = sessions.readMessages(sessionId)
-      const settled = compactor.takeParked(sessionId)
-      if (settled !== null) {
-        const keepFrom = history.findIndex((m) => m.id === settled.upto) + 1
-        const active = keepFrom > 0 ? history.slice(keepFrom) : undefined
-        if (active !== undefined && active.length > 0 &&
-            estimateContextTokens(active, undefined, overhead) < budget * panicRatio) {
-          return settled
-        }
-      }
-      const next = await compactor.auto(sessionId, history, config, runLlm, model, {
-        phase: "in-run",
-        signal,
-        overheadTokens: overhead,
-        budget,
-      })
-      if (next !== null) {
-        void compactionAfter("in-run", "ok")
-        return next
-      }
-      // The sync compaction didn't happen (waterline/boundary decline, or the
-      // summarizer failed — either way nothing was written): the parked result
-      // we waited for is still the newest view — apply it rather than drop it.
-      return settled
-    }, Number.POSITIVE_INFINITY),
-    builtin("overflow-emergency", "overflow-rescue", 10, BUILTIN_HOOK_DEFINITIONS[7]!.description, "skip", async () => {
-      // No watermark check — "it already overflowed" is a fact. Abort after
-      // the await → null (the resend would be torn down at the next
-      // checkpoint anyway).
-      // 急救撞在飞后台：abortInFlight 掐掉它并等其退出（单压缩不变量；成果
-      // 丢弃——原文无损，下次重压），再立即同步急救。救援路径不等摘要慢慢
-      // 跑完；不用 cancel()——它的取消标记会压制紧随其后的急救 auto()。
-      if (compactor.hasInFlight(sessionId)) {
-        compactor.abortInFlight(sessionId)
-        await compactor.waitForSettled(sessionId)
-      }
-      const next = await compactor.auto(sessionId, sessions.readMessages(sessionId), config, runLlm, model, {
-        phase: "in-run",
-        emergency: true,
-        signal,
-      })
-      void compactionAfter("in-run", "ok")
-      return signal.aborted ? null : next
-    }, Number.POSITIVE_INFINITY),
-    builtin("usage-ledger", "run-after", 10, BUILTIN_HOOK_DEFINITIONS[8]!.description, "skip", ({ outcome }) => {
-      if (usageStore === undefined) return
-      try {
-        usageStore.record({
-          // Subagent tokens group under the parent session (issue #16 记账).
-          sessionId: usageSessionId,
-          runId: runIdRef.current ?? "",
-          model,
-          inputTokens: outcome.totalUsage.inputTokens,
-          outputTokens: outcome.totalUsage.outputTokens,
-          at: new Date().toISOString(),
-        })
-      } catch (err) {
-        console.error("kclaw usage record failed:", err)
-      }
-    }),
-    builtin("manual-compact-flush", "run-after", 15, BUILTIN_HOOK_DEFINITIONS[13]!.description, "skip", async () => {
-      // 冲刷挂起的 /compact（会话忙时登记的）：在自动收尾压缩之前执行——
-      // 用户显式意图优先，压完水位落回，自动收尾检查自然不再触发。
-      // 不做忙碌/排队检查（收尾链时刻必然不忙；运行期间排队的消息等下一条
-      // 出队，与压缩无关）。失败按 skip：hook.failed 事件 + 日志，不连坐 run。
-      if (!compactor.hasDeferredManual(sessionId)) return
-      if (compactor.hasInFlight(sessionId)) await compactor.waitForSettled(sessionId, signal)
-      const deferred = compactor.takeDeferredManual(sessionId)
-      if (deferred === null) return
-      await compactor.compact(sessionId, sessions.readMessages(sessionId), "", config, runLlm, model, {
-        focus: deferred.focus,
-        manual: true,
-        phase: "manual",
-        budget,
-      })
-      void compactionAfter("manual", "ok")
-    }, Number.POSITIVE_INFINITY),
-    builtin("post-run-compaction", "run-after", 20, BUILTIN_HOOK_DEFINITIONS[9]!.description, "fatal", async ({ outcome }) => {
-      // aborted/error runs are not finalized (the former is being torn down,
-      // the latter just failed); the cancellation marker suppresses a
-      // user-cancelled compaction for this run.
-      if (outcome.stopReason === "aborted" || outcome.stopReason === "error" || compactor.cancelled(sessionId)) return
-      if (compactor.hasInFlight(sessionId)) {
-        // 收尾撞在飞后台（预压没跑完 run 就结束了）：等它完成再判断——绝不
-        // 并发第二个压缩。等待后走正常判断（auto 内部的活跃段细判自适应）。
-        // 循环已结束，挂起视图没有"下一次请求"可应用，取走丢弃——元数据
-        // 已携带同一成果，下一次运行从 meta 读到它。
-        await compactor.waitForSettled(sessionId, signal)
-        compactor.takeParked(sessionId)
-      }
-      const postRunHistory = sessions.readMessages(sessionId)
-      const overhead = contextOverhead()
-      if (estimateContextTokens(postRunHistory, undefined, overhead) < budget * atRatio) return
-      await compactor.auto(sessionId, postRunHistory, config, runLlm, model, {
-        phase: "post-run",
-        signal,
-        overheadTokens: overhead,
-        budget,
-      })
-      void compactionAfter("post-run", "ok")
-    }, Number.POSITIVE_INFINITY),
-    builtin("follow-check", "run-after", 30, BUILTIN_HOOK_DEFINITIONS[10]!.description, "skip", () => {
-      // Children never schedule follow extraction (memory isolation).
-      if (childRun) return
-      if (config.memory.write.idleMinutes > 0) {
-        try {
-          memory.scheduleFollowCheck?.(sessionId, new Date().toISOString())
-        } catch {
-          // a failed follow-gate schedule never affects the run
-        }
-      }
-    }),
-    builtin("system-materials", "system-before", 10, BUILTIN_HOOK_DEFINITIONS[11]!.description, "skip", () => {
-      // Subagent children run on the lean prompt: no cognition, no skill list.
-      if (childRun) return []
-      // Cognition injection failure is silently skipped (run proceeds with
-      // base prompt only) — pre-migration parity.
-      let cognition = ""
-      try {
-        cognition = memory.cognitionPrompt(workspace)
-      } catch {
-        // 认知注入失败静默跳过
-      }
-      return [cognition, skillList].filter((s) => s !== "")
-    }),
-  ]
+    handler: s.makeHandler(rt),
+  }))
 }
 
 function textOf(m: Message): string {
