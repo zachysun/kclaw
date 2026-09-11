@@ -1572,7 +1572,7 @@ describe("RunManager memory injection", () => {
 describe("RunManager system 事件审计", () => {
   // 批 1 的 isSystemEvent 守卫未导出到 @kclaw/core 公共入口：测试内行内收窄
   type StreamEvent = ReturnType<SessionStore["readEvents"]>[number]
-  const isSystem = (e: StreamEvent): e is StreamEvent & { type: "system"; at: string; text: string } =>
+  const isSystem = (e: StreamEvent): e is StreamEvent & { type: "system"; at: string; stable: string; live?: string } =>
     e.type === "system"
 
   it("一次 run 落恰好一条 system 事件：文本为 AGENTS.md 原文，先于本 run 的 user 消息", async () => {
@@ -1585,8 +1585,9 @@ describe("RunManager system 事件审计", () => {
     const events = env.sessions.readEvents(session.id)
     const systemEvents = events.filter(isSystem)
     expect(systemEvents).toHaveLength(1)
-    expect(systemEvents[0]!.text).toContain("# 人设\n你是测试助理。")
-    expect(systemEvents[0]!.text).toContain("<system-reminder>")
+    expect(systemEvents[0]!.stable).toContain("# 人设\n你是测试助理。")
+    expect(systemEvents[0]!.stable).toContain("<system-reminder>") // 注入约定恒在稳定段
+    expect(systemEvents[0]!.live).toBe("")
     expect(Number.isNaN(Date.parse(systemEvents[0]!.at))).toBe(false)
     // 流序：system 事件先于本 run 的 user 消息事件
     const systemIdx = events.findIndex(isSystem)
@@ -1603,9 +1604,9 @@ describe("RunManager system 事件审计", () => {
     await manager.enqueue(session.id, { userText: "你好", trigger: "user" })
 
     const [systemEvent] = env.sessions.readEvents(session.id).filter(isSystem)
-    // 人格在首、注入约定恒定为最后一段
-    expect(systemEvent!.text).toContain("你是 kclaw，一个务实的个人助理。")
-    expect(systemEvent!.text).toContain("<system-reminder>")
+    // 人格在首、注入约定恒定为最后一段——两者都在稳定段
+    expect(systemEvent!.stable).toContain("你是 kclaw，一个务实的个人助理。")
+    expect(systemEvent!.stable).toContain("<system-reminder>")
   })
 
   it("认知非空时 system 事件文本 = AGENTS.md + 空行 + 认知 + 空行 + 注入约定", async () => {
@@ -1620,8 +1621,10 @@ describe("RunManager system 事件审计", () => {
     await manager.enqueue(session.id, { userText: "你好", trigger: "user" })
 
     const [systemEvent] = env.sessions.readEvents(session.id).filter(isSystem)
-    expect(systemEvent!.text).toContain("# 人设\n你是测试助理。\n\n[关于用户]\nMaster 偏好中文。")
-    expect(systemEvent!.text).toContain("<system-reminder>")
+    // 稳定段 = 人设 + 注入约定；认知归实时段（live 变化不重写稳定前缀）
+    expect(systemEvent!.stable).toContain("# 人设\n你是测试助理。")
+    expect(systemEvent!.stable).toContain("<system-reminder>")
+    expect(systemEvent!.live).toContain("[关于用户]\nMaster 偏好中文。")
   })
 
   it("appendSystem 写入失败即本次 run 失败：outcome 拒绝 + queue_entry_failed 可见性，驱动器不停转", async () => {
@@ -2144,9 +2147,11 @@ describe("RunManager skill injection", () => {
     expect(system).toContain("commit-helper")
     expect(system).toContain("按仓库规范写提交说明")
     expect(system).not.toContain("heavy-flow")
-    // system 审计事件与发给模型的提示词同文
+    // system 审计事件两段拼接 = 发给模型的提示词；技能清单归属实时段
     const [systemEvent] = env.sessions.readEvents(session.id).filter(isSystem)
-    expect(systemEvent!.text).toBe(system)
+    const joined = [systemEvent!.stable, systemEvent!.live].filter((x) => x !== "").join("\n\n")
+    expect(joined).toBe(system)
+    expect(systemEvent!.live).toContain("## 可用技能")
   })
 
   it("project skill overrides the same-named global one for sessions in that workdir", async () => {
@@ -2170,7 +2175,7 @@ describe("RunManager skill injection", () => {
     expect(system).not.toContain("全局部署版")
   })
 
-  it("system prompt freeze: a skill written between runs stays out of the epoch; the listing refreshes after compaction", async () => {
+  it("分段冻结：两轮之间新放的技能下一轮进清单（stable 前缀逐字节不变）；压缩清除后重新装配", async () => {
     const requests: LlmRequest[] = []
     const llm: LlmClient = {
       async *stream(req): AsyncIterable<LlmStreamEvent> {
@@ -2179,21 +2184,27 @@ describe("RunManager skill injection", () => {
       },
     }
     const { env, manager } = makeEnv(llm)
-    const session = env.sessions.create("冻结纪元会话")
+    const session = env.sessions.create("分段冻结会话")
 
     await manager.enqueue(session.id, { userText: "第一轮", trigger: "user" })
     expect(requests[0]!.system ?? "").not.toContain("## 可用技能")
+    const stable1 = env.sessions.meta(session.id)!.systemBaseline!.stable.text
 
-    // 提示词缓存纪律：纪元中途新放的技能不重写请求前缀——第二轮的 system
-    // 与第一轮逐字节一致（现扫结果只影响点名包装与 skill_read，不影响清单）。
+    // live 段即时生效：两轮之间新放的技能在下一轮的清单里出现；stable 前缀
+    // 逐字节不变（前缀缓存命中面），只是实时段起重新计算。
     writeSkill(join(env.config.workspace, ".kclaw", "skills"), "fresh", "---\ndescription: 新放的技能。\n---\n\n正文\n")
     await manager.enqueue(session.id, { userText: "第二轮", trigger: "user" })
-    expect(requests[1]!.system ?? "").toBe(requests[0]!.system)
+    expect(requests[1]!.system ?? "").toContain("fresh")
+    expect((requests[1]!.system ?? "").startsWith(stable1)).toBe(true)
+    expect(env.sessions.meta(session.id)!.systemBaseline!.stable).toEqual(
+      env.sessions.meta(session.id)!.systemBaseline!.stable,
+    )
 
-    // 压缩清除冻结基线（重冻结边界）：下一轮重新装配，新技能进清单。
+    // 压缩清除双段基线（重冻结边界 = 缓存冷启动）：下一轮重新装配，清单保持。
     env.sessions.appendCompaction(session.id, { at: new Date().toISOString(), trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
     await manager.enqueue(session.id, { userText: "第三轮", trigger: "user" })
     expect(requests[2]!.system ?? "").toContain("fresh")
+    expect((requests[2]!.system ?? "").startsWith(stable1)).toBe(true)
   })
 
   it("skill_read loads the body as a tool result (project copy wins on name)", async () => {

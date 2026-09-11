@@ -229,7 +229,7 @@ describe("subagent dispatch (integration)", () => {
 
     // The child's own event stream keeps the full audit (system prompt + sandbox probe).
     const childEvents = sessions.readEvents(child.id)
-    expect(childEvents.some((e) => e.type === "system" && e.text.includes("子代理"))).toBe(true)
+    expect(childEvents.some((e) => e.type === "system" && e.stable.includes("子代理"))).toBe(true)
     expect(childEvents.some((e) => e.type === "sandbox.checked")).toBe(true)
 
     // Status lines streamed to the PARENT channel (tool_result.delta).

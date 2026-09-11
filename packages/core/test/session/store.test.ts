@@ -368,6 +368,22 @@ describe("SessionStore event sourcing", () => {
     expect(after).toEqual(before)
   })
 
+  it("旧版单段 systemBaseline 的 meta.json 读时归一化为 stable 段（live 缺省，下一 run 装配补齐）", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("t")
+    // 直接写旧形状投影（pre-split 产物）
+    const metaPath = join(dir, meta.id, "meta.json")
+    const legacy = JSON.parse(readFileSync(metaPath, "utf8"))
+    legacy.systemBaseline = { text: "旧单段全文", frozenAt: "2026-01-01T00:00:00.000Z" }
+    writeFileSync(metaPath, JSON.stringify(legacy))
+    const normalized = store.meta(meta.id)!
+    expect(normalized.systemBaseline).toEqual({
+      stable: { text: "旧单段全文", frozenAt: "2026-01-01T00:00:00.000Z" },
+    })
+    expect("live" in normalized.systemBaseline!).toBe(false)
+    expect("text" in normalized.systemBaseline!).toBe(false)
+  })
+
   it("appendRunStarted / appendRunEnded / appendPermissionDecided 写审计事件：字段完整、投影穿透（updatedAt 不动）", () => {
     const store = new SessionStore(dir)
     const meta = store.create("t")
@@ -408,29 +424,34 @@ describe("SessionStore event sourcing", () => {
     expect(after).toEqual(before)
   })
 
-  it("appendSystem 投影效果=upsert 冻结基线：updatedAt 与其余字段不动，压缩清除，rebuild 一致", () => {
+  it("appendSystem 投影效果=逐段 upsert 冻结基线：updatedAt 与其余字段不动，压缩清除，rebuild 一致", () => {
     const store = new SessionStore(dir)
     const meta = store.create("t")
     store.updateMeta(meta.id, { model: "gpt-4", mode: "readonly" })
     const before = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
-    store.appendSystem(meta.id, { at: "2026-01-02T00:00:00.000Z", text: "run-1 的系统提示词" })
+    store.appendSystem(meta.id, { at: "2026-01-02T00:00:00.000Z", stable: "run-1 的稳定段", live: "run-1 的实时段" })
     const after = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
-    // 基线之外的投影字段（含 updatedAt）逐字段一致；基线文本与冻结时刻就位
-    expect(after.systemBaseline).toEqual({ text: "run-1 的系统提示词", frozenAt: "2026-01-02T00:00:00.000Z" })
+    // 基线之外的投影字段（含 updatedAt）逐字段一致；两段基线与各自冻结时刻就位
+    expect(after.systemBaseline).toEqual({
+      stable: { text: "run-1 的稳定段", frozenAt: "2026-01-02T00:00:00.000Z" },
+      live: { text: "run-1 的实时段", frozenAt: "2026-01-02T00:00:00.000Z" },
+    })
     const { systemBaseline: _drop, ...rest } = after
     const { systemBaseline: _dropBefore, ...restBefore } = before
     expect(rest).toEqual(restBefore)
-    // 后一条 system 事件覆盖前一条（最新胜出）
-    store.appendSystem(meta.id, { at: "2026-01-03T00:00:00.000Z", text: "run-2 的系统提示词" })
-    expect(store.meta(meta.id)!.systemBaseline).toEqual({ text: "run-2 的系统提示词", frozenAt: "2026-01-03T00:00:00.000Z" })
-    // 文本未变的重复审计：frozenAt 保留原值（= 这份文本成为基线的时刻）
-    store.appendSystem(meta.id, { at: "2026-01-03T06:00:00.000Z", text: "run-2 的系统提示词" })
-    expect(store.meta(meta.id)!.systemBaseline).toEqual({ text: "run-2 的系统提示词", frozenAt: "2026-01-03T00:00:00.000Z" })
+    // live 单独刷新：stable 的 frozenAt 保留（逐段独立冻结）
+    store.appendSystem(meta.id, { at: "2026-01-03T00:00:00.000Z", stable: "run-1 的稳定段", live: "run-2 的实时段" })
+    expect(store.meta(meta.id)!.systemBaseline!.stable.frozenAt).toBe("2026-01-02T00:00:00.000Z")
+    expect(store.meta(meta.id)!.systemBaseline!.live!.text).toBe("run-2 的实时段")
+    // 两段都未变的重复审计：frozenAt 均保留原值（= 各自文本成为基线的时刻）
+    store.appendSystem(meta.id, { at: "2026-01-03T06:00:00.000Z", stable: "run-1 的稳定段", live: "run-2 的实时段" })
+    expect(store.meta(meta.id)!.systemBaseline!.stable.frozenAt).toBe("2026-01-02T00:00:00.000Z")
+    expect(store.meta(meta.id)!.systemBaseline!.live!.frozenAt).toBe("2026-01-03T00:00:00.000Z")
     // 压缩事件清除基线（重冻结边界）；压缩后下一条 system 事件重新固化
     store.appendCompaction(meta.id, { at: "2026-01-04T00:00:00.000Z", trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
     expect(store.meta(meta.id)!.systemBaseline).toBeUndefined()
-    store.appendSystem(meta.id, { at: "2026-01-05T00:00:00.000Z", text: "压缩后重新装配的系统提示词" })
-    expect(store.meta(meta.id)!.systemBaseline?.text).toBe("压缩后重新装配的系统提示词")
+    store.appendSystem(meta.id, { at: "2026-01-05T00:00:00.000Z", stable: "压缩后重新装配的稳定段", live: "压缩后实时段" })
+    expect(store.meta(meta.id)!.systemBaseline?.stable.text).toBe("压缩后重新装配的稳定段")
     // 事件流全量重建投影，与增量推进结果一致
     store.appendCompaction(meta.id, { at: "2026-01-06T00:00:00.000Z", trigger: "manual", from: "m1", upto: "m2", messages: 1, segmentSummary: "s2", top: "t2" })
     const rebuilt = store.rebuildMeta(meta.id)!
@@ -438,10 +459,10 @@ describe("SessionStore event sourcing", () => {
     expect(rebuilt.systemBaseline).toBeUndefined()
     // 事件流仅一条 system 事件（无 session.created）：rebuildMeta 从 at 取时间，不崩
     const only = "ses_sys_only"
-    store.appendSystem(only, { at: new Date().toISOString(), text: "唯一一条 system 事件" })
+    store.appendSystem(only, { at: new Date().toISOString(), stable: "唯一一条 system 事件的稳定段", live: "唯一实时段" })
     const onlyMeta = store.rebuildMeta(only)!
     expect(onlyMeta.id).toBe(only)
-    expect(onlyMeta.systemBaseline?.text).toBe("唯一一条 system 事件")
+    expect(onlyMeta.systemBaseline?.stable.text).toBe("唯一一条 system 事件的稳定段")
     expect(Number.isNaN(Date.parse(onlyMeta.createdAt))).toBe(false)
     expect(Number.isNaN(Date.parse(onlyMeta.updatedAt))).toBe(false)
   })

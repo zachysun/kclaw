@@ -139,7 +139,8 @@ function systemEvent(overrides: Record<string, unknown> = {}): SessionEvent {
   return {
     type: "system",
     at: "2026-08-19T10:06:00.000Z",
-    text: "你是 kclaw 助手。",
+    stable: "你是 kclaw 助手。",
+    live: "",
     ...overrides,
   } as unknown as SessionEvent
 }

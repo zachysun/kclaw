@@ -83,7 +83,7 @@ export function appendRows(rows: AuditRow[], baseIndex: number, fresh: SessionEv
   for (let i = rows.length - 1; i >= 0; i--) {
     const row = rows[i]!
     if (row.kind === "system") {
-      lastSystemText = row.event.text
+      lastSystemText = systemFullText(row.event)
       break
     }
   }
@@ -153,9 +153,9 @@ function flattenEventInto(
         index,
         event,
         at: event.at,
-        changed: ctx.lastSystemText !== null && ctx.lastSystemText !== event.text,
+        changed: ctx.lastSystemText !== null && ctx.lastSystemText !== systemFullText(event),
       })
-      ctx.lastSystemText = event.text
+      ctx.lastSystemText = systemFullText(event)
       break
     }
     case "sandbox.checked":
@@ -244,7 +244,7 @@ export function rowSearchText(row: AuditRow): string {
     case "memory":
       return memoryFullContent(row.event)
     case "system":
-      return row.event.text
+      return systemFullText(row.event)
     case "sandbox":
       return `${sandboxSummary(row.event)} ${sandboxFullContent(row.event)}`
     case "session":
@@ -356,6 +356,15 @@ export function sandboxFullContent(event: SandboxCheckedEvent): string {
   const lines = [`enabled: ${event.enabled}`, `available: ${event.available}`]
   if (event.unavailableReason !== undefined) lines.push(`unavailableReason: ${event.unavailableReason}`)
   return lines.join("\n")
+}
+
+/**
+ * The system prompt text the model actually saw: legacy single-text events
+ * carry it in `text`; split events compose it from stable + live segments.
+ */
+export function systemFullText(event: SystemEvent): string {
+  if (event.text !== undefined) return event.text
+  return [event.stable, event.live].filter((s) => s !== undefined && s !== "").join("\n\n")
 }
 
 /** One-line run-boundary summary: 运行开始 · trigger / 运行结束 · stopReason（+用量或失败原因）. */

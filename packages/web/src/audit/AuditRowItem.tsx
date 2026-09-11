@@ -10,7 +10,7 @@ import type { AuditRow } from "./model.js"
 import {
   blockFullContent, blockSummary, blockTypeLabel, decisionFullContent, decisionSummary, fmtMs, fmtRowTime, fmtUsage,
   memoryFullContent, memorySummary, rowTime, runSummary, sandboxFullContent, sandboxSummary,
-  sessionFullContent, sessionSummary, summarize,
+  sessionFullContent, sessionSummary, summarize, systemFullText,
 } from "./model.js"
 
 export interface AuditRowItemProps {
@@ -80,8 +80,10 @@ function rowSummary(row: AuditRow): string {
       return compactionSummary(row.record)
     case "memory":
       return memorySummary(row.event)
-    case "system":
-      return `${summarize(row.event.text, 60)} · ${row.event.text.length} 字`
+    case "system": {
+      const full = systemFullText(row.event)
+      return `${summarize(full, 60)} · ${full.length} 字`
+    }
     case "sandbox":
       return sandboxSummary(row.event)
     case "session":
@@ -130,7 +132,9 @@ function rowFull(row: AuditRow): string {
     case "memory":
       return memoryFullContent(row.event)
     case "system":
-      return row.event.text
+      return row.event.text !== undefined
+        ? row.event.text
+        : `【稳定段】\n${row.event.stable}\n\n【实时段】\n${row.event.live ?? ""}`
     case "sandbox":
       return sandboxFullContent(row.event)
     case "session":

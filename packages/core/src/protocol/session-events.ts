@@ -20,7 +20,13 @@ export interface MemoryEvent {
   op: "append" | "update" | "new-thread" | "rewrite" | "create" | "overwrite" | "delete" | "inactivate"
   topic?: string; file?: string; scope?: string; source?: string
 }
-export interface SystemEvent { type: "system"; at: string; text: string }
+/**
+ * 系统提示词全量留痕（每 run 一条）。双段结构：stable（人设基座 + 注入约定，
+ * 缓存冻结面）在前，live（认知 + 技能清单，低频变化面）在后——前缀缓存按
+ * 从头逐字节相同匹配，live 变化只从变化点起失效。legacy 单文本事件只带
+ * text（读作 stable）；新事件恒带 stable，live 仅在非空时携带。
+ */
+export interface SystemEvent { type: "system"; at: string; stable: string; live?: string; /** @legacy pre-split single-text events; reads back as the stable segment */ text?: string }
 export interface SandboxCheckedEvent {
   type: "sandbox.checked"; at: string
   /** config 是否开启沙箱（sandbox.enabled）。 */

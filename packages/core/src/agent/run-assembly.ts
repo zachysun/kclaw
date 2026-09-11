@@ -632,32 +632,41 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   chain.registerAll(engine.deps.hooks?.snapshot() ?? [])
   if (engine.deps.extraHooks !== undefined) chain.registerAll(engine.deps.extraHooks)
 
-  // 系统提示词（提示词缓存纪律）：会话 meta 里已有冻结基线时，基线文本就是
-  // 本 run 的系统提示词——组装链（system-before/after）整体跳过，认知刷新、
-  // 技能清单、AGENTS.md 与用户钩子的段落变化都不再重写请求前缀（provider
-  // 前缀缓存按前缀逐字节命中，前缀稳定 = 纪元内后续 run 全部命中）。审计
-  // 照旧每 run 一条全量留痕（直接落盘，与链内 fatal 钩子同语义：写失败即
-  // run 失败），审计页的"已变化"标记因此恰落在重冻结点上。压缩事件在投影
-  // 里清除基线（applyEvent），下一次 run 重新装配并在审计落盘时重新固化
-  // ——压缩本来就使缓存全量失效，纪元边界设在冷启动处零额外成本。
-  // 无基线（新会话 / 升级后首 run / 压缩后首 run）走既有链路装配，链内
-  // system-audit 落盘时投影自动固化新基线。
-  // 子代理 run 的精简模板同样适用（首 run 固化，模板无变化）。
-  const frozenBaseline = sessionMeta?.systemBaseline
+  // 系统提示词（提示词缓存纪律，双段独立冻结）：stable（人设基座 + 注入约定）
+  // 是缓存冻结面，live（认知 + 技能清单）是低频变化面。每 run 两段现算、与
+  // 基线逐段比对——段文本没变就沿用基线（frozenAt 不动），变了就重冻结该段。
+  // 前缀缓存按从头逐字节相同匹配：live 变化只失效变化点之后，stable 前缀
+  // 继续命中；装技能、夜间认知刷新在下一 run 即时生效，不再等压缩边界。
+  // 两段全命中时 system-after 链跳过（与单段时代的冻结 run 同语义）；至少
+  // 一段变化时走 system-after（用户可改终稿）——用户改写发生时终稿整体固化
+  // 进 stable 基线（改写每 run 重新生效，审计恒记录模型实际看到的那份）。
+  // 审计每 run 一条双段全量留痕（直接落盘；写失败即 run 失败）。压缩事件在
+  // 投影里清除基线（applyEvent），下一次 run 重新装配并固化——压缩本来就使
+  // 缓存全量失效，纪元边界设在冷启动处零额外成本。子代理 run 的精简模板
+  // 同样适用（live 恒空）。
+  const baseline = sessionMeta?.systemBaseline
+  const base = childRun ? subagentSystemPrompt(workspace) : systemPrompt(paths.agentsMd)
+  const stable = [base, SYSTEM_INJECTION_CONVENTION].filter((s) => s !== "").join("\n\n")
+  // live：system-before 链产出（内置 system-materials：认知 + 技能清单；
+  // 用户段落同列此链，一并归属 live 段）。
+  const segments = (await chain.run("system-before", { base })) ?? []
+  const live = segments.filter((s) => s !== "").join("\n\n")
+  const stableFresh = baseline === undefined || baseline.stable.text !== stable
+  const liveFresh = baseline?.live === undefined || baseline.live.text !== live
   let system: string
-  if (frozenBaseline !== undefined) {
-    system = frozenBaseline.text
-    sessions.appendSystem(sessionId, { at: new Date().toISOString(), text: system })
+  if (!stableFresh && !liveFresh) {
+    system = [baseline.stable.text, baseline.live!.text].filter((s) => s !== "").join("\n\n")
+    sessions.appendSystem(sessionId, { at: new Date().toISOString(), stable, live })
   } else {
-    // AGENTS.md 基座 → system-before 链追加段落（内置 system-materials：
-    // 认知 + 技能列表）→ 末尾恒定拼接注入约定（放最后保持位置稳定）→
-    // system-after 链（用户可改终稿；内置 system-audit fatal 全量留痕——
-    // 审计永远记录模型实际看到的那份，落盘即固化新基线）。
-    const base = childRun ? subagentSystemPrompt(workspace) : systemPrompt(paths.agentsMd)
-    const segments = (await chain.run("system-before", { base })) ?? []
-    system = [base, ...segments, SYSTEM_INJECTION_CONVENTION].filter((s) => s !== "").join("\n\n")
-    const rewrittenSystem = await chain.run("system-after", { system })
-    if (rewrittenSystem !== undefined) system = rewrittenSystem
+    const draft = [stable, live].filter((s) => s !== "").join("\n\n")
+    const rewrittenSystem = await chain.run("system-after", { system: draft })
+    if (rewrittenSystem !== undefined) {
+      system = rewrittenSystem
+      sessions.appendSystem(sessionId, { at: new Date().toISOString(), stable: system })
+    } else {
+      system = draft
+      sessions.appendSystem(sessionId, { at: new Date().toISOString(), stable, live })
+    }
   }
   contextOverheadRef.current = estimateTokens(system) + estimateTokens(JSON.stringify(toolDefs))
 
