@@ -83,13 +83,40 @@ describe("applyEvent", () => {
     expect(both.mode).toBe("default")
   })
 
-  it("system upsert 冻结基线：不刷 updatedAt、基线外字段不动；compaction 清除基线", () => {
-    const meta = applyEvent(base, { type: "system", at: "2026-01-04T00:00:00.000Z", text: "系统提示词全文" })
+  it("system 双段逐段 upsert：不刷 updatedAt、基线外字段不动；段文本未变保留 frozenAt；compaction 清除基线", () => {
+    // legacy 单文本事件读作 stable 段
+    const legacy = applyEvent(base, { type: "system", at: "2026-01-04T00:00:00.000Z", text: "单段全文" })
+    expect(legacy.systemBaseline).toEqual({
+      stable: { text: "单段全文", frozenAt: "2026-01-04T00:00:00.000Z" },
+      live: { text: "", frozenAt: "2026-01-04T00:00:00.000Z" },
+    })
+    // 双段事件：逐段冻结
+    const meta = applyEvent(base, {
+      type: "system", at: "2026-01-04T00:00:00.000Z",
+      stable: "人设与注入约定", live: "认知与技能清单",
+    })
     expect(meta.updatedAt).toBe("2026-01-01T00:00:00.000Z")
-    expect(meta.systemBaseline).toEqual({ text: "系统提示词全文", frozenAt: "2026-01-04T00:00:00.000Z" })
+    expect(meta.systemBaseline).toEqual({
+      stable: { text: "人设与注入约定", frozenAt: "2026-01-04T00:00:00.000Z" },
+      live: { text: "认知与技能清单", frozenAt: "2026-01-04T00:00:00.000Z" },
+    })
     const { systemBaseline: _drop, ...rest } = meta
     const { systemBaseline: _dropBase, ...restBase } = base
     expect(rest).toEqual(restBase)
+    // live 单独刷新：stable 的 frozenAt 保留（该文本仍是当初那份）
+    const liveRefreshed = applyEvent(meta, {
+      type: "system", at: "2026-01-04T12:00:00.000Z",
+      stable: "人设与注入约定", live: "认知与技能清单（新技能）",
+    })
+    expect(liveRefreshed.systemBaseline!.stable).toEqual({ text: "人设与注入约定", frozenAt: "2026-01-04T00:00:00.000Z" })
+    expect(liveRefreshed.systemBaseline!.live).toEqual({ text: "认知与技能清单（新技能）", frozenAt: "2026-01-04T12:00:00.000Z" })
+    // stable 单独重冻结：live 的 frozenAt 保留
+    const stableRefrozen = applyEvent(liveRefreshed, {
+      type: "system", at: "2026-01-05T00:00:00.000Z",
+      stable: "人设与注入约定（改）", live: "认知与技能清单（新技能）",
+    })
+    expect(stableRefrozen.systemBaseline!.stable.frozenAt).toBe("2026-01-05T00:00:00.000Z")
+    expect(stableRefrozen.systemBaseline!.live.frozenAt).toBe("2026-01-04T12:00:00.000Z")
     const compacted = applyEvent(meta, { type: "compaction", at: "2026-01-05T00:00:00.000Z", trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
     expect(compacted.systemBaseline).toBeUndefined()
     expect("systemBaseline" in compacted).toBe(false)
@@ -102,6 +129,36 @@ describe("applyEvent", () => {
     })
     expect(meta.updatedAt).toBe("2026-01-01T00:00:00.000Z")
     expect(meta).toEqual(base)
+  })
+
+  it("run.started / run.ended / permission.decided 不刷 updatedAt 且不改任何投影字段（审计事件）", () => {
+    const runStarted = applyEvent(base, {
+      type: "run.started", at: "2026-01-05T00:00:00.000Z", trigger: "user",
+    })
+    expect(runStarted.updatedAt).toBe("2026-01-01T00:00:00.000Z")
+    expect(runStarted).toEqual(base)
+
+    const runEnded = applyEvent(base, {
+      type: "run.ended", at: "2026-01-05T00:00:00.000Z",
+      stopReason: "end_turn", usage: { inputTokens: 120, outputTokens: 45 },
+    })
+    expect(runEnded.updatedAt).toBe("2026-01-01T00:00:00.000Z")
+    expect(runEnded).toEqual(base)
+
+    const failed = applyEvent(base, {
+      type: "run.ended", at: "2026-01-05T00:00:00.000Z",
+      stopReason: "error", error: { code: "llm_error", message: "boom" },
+    })
+    expect(failed.updatedAt).toBe("2026-01-01T00:00:00.000Z")
+    expect(failed).toEqual(base)
+
+    const decided = applyEvent(base, {
+      type: "permission.decided", at: "2026-01-05T00:00:00.000Z",
+      confirmationId: "conf_1", decision: "once", by: "cli",
+      tool: { callId: "call_1", name: "exec", argsJson: '{"command":"ls"}' },
+    })
+    expect(decided.updatedAt).toBe("2026-01-01T00:00:00.000Z")
+    expect(decided).toEqual(base)
   })
 })
 

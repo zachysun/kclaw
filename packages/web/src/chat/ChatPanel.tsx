@@ -482,6 +482,14 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
   }, [])
 
+  const handleAnswerQuestion = useCallback((questionId: string, answers: string[][]) => {
+    try {
+      clientRef.current.send({ type: "question.resolve", questionId, answers, client: "web" })
+    } catch {
+      setNotice("连接不可用，请稍后重试")
+    }
+  }, [])
+
   /** Cancel queued messages: one id, or all still-queued when omitted. */
   const handleCancelQueued = useCallback((messageId?: string) => {
     try {
@@ -532,6 +540,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           view={view}
           onSend={handleSend}
           onResolveConfirmation={handleResolveConfirmation}
+          onAnswerQuestion={handleAnswerQuestion}
           pendingAttachments={pendingAttachments}
           onRemoveAttachment={handleRemoveAttachment}
           models={models}

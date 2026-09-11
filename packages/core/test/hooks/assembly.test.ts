@@ -114,13 +114,15 @@ describe("executeRun × hook system", () => {
     const persisted = sessions.readMessages(sessionId)
     expect(persisted.map((m) => m.role)).toEqual(["user", "assistant"])
 
-    // system-audit（system-after，fatal）：一份全量系统提示词事件
+    // system 审计（每 run 一条，双段全量留痕）：stable/live 两段就位
     const systemEvents = sessions.readEvents(sessionId).filter((e) => e.type === "system")
     expect(systemEvents).toHaveLength(1)
-    expect((systemEvents[0] as { text: string }).text.length).toBeGreaterThan(0)
+    const audit = systemEvents[0] as { stable: string; live: string }
+    expect(audit.stable.length).toBeGreaterThan(0)
+    expect(audit.live).toBe("") // 默认环境无认知无技能：live 为空串
   })
 
-  it("提示词缓存纪律：基线冻结后链路跳过、前缀稳定；压缩清除后重新装配并再次固化", async () => {
+  it("分段冻结：live 变化即时生效且 stable 前缀逐字节不变；stable 变化整体重冻结；压缩清除后重新装配", async () => {
     const requests: string[] = []
     const llm: LlmClient = {
       async *stream(req): AsyncIterable<LlmStreamEvent> {
@@ -139,31 +141,50 @@ describe("executeRun × hook system", () => {
     const { engine, sessions, sessionId } = makeEngine({ llm, extraHooks: extra })
     writeFileSync(engine.deps.paths.agentsMd, "v1 人设")
 
-    // run 1：无基线 → 全链装配；审计落盘即固化基线
+    // run 1：无基线 → 全链装配；审计落盘即逐段固化
     await executeRun(engine, handoff(sessionId))
     expect(requests[0]).toContain("v1 人设")
     expect(requests[0]).toContain("【漂移段】")
-    expect(sessions.meta(sessionId)!.systemBaseline?.text).toBe(requests[0])
+    const baseline1 = sessions.meta(sessionId)!.systemBaseline!
+    expect(baseline1.stable.text).toContain("v1 人设")
+    expect(baseline1.live.text).toContain("【漂移段】")
+    expect(baseline1.stable.frozenAt).toBe(baseline1.live.frozenAt)
     expect(sessions.readEvents(sessionId).filter((e) => e.type === "system")).toHaveLength(1)
 
-    // 漂移源变化（AGENTS.md 改写）；run 2 走冻结基线：请求前缀逐字节不变、组装链不跑
-    writeFileSync(engine.deps.paths.agentsMd, "v2 人设")
+    // live 漂移源变化（装一个新技能）；run 2：live 刷新生效，stable 前缀逐字节不变
+    const skillsDir = engine.deps.paths.skillsDir
+    mkdirSync(join(skillsDir, "commit-helper"), { recursive: true })
+    writeFileSync(join(skillsDir, "commit-helper", "SKILL.md"), "---\ndescription: 提交助手\n---\n\n正文\n")
     await executeRun(engine, handoff(sessionId, "第二条"))
-    expect(requests[1]).toBe(requests[0])
-    expect(segmentRuns).toHaveLength(1)
-    const audits = sessions.readEvents(sessionId).filter((e) => e.type === "system")
-    expect(audits).toHaveLength(2)
-    expect((audits[1] as { text: string }).text).toBe(requests[0]) // 审计=模型实际视图
+    expect(requests[1]).toContain("commit-helper")
+    expect(requests[1].startsWith(baseline1.stable.text)).toBe(true) // stable 前缀逐字节命中
+    expect(segmentRuns).toHaveLength(2) // system-before 链每 run 都跑（live 现算）
+    const baseline2 = sessions.meta(sessionId)!.systemBaseline!
+    expect(baseline2.stable).toEqual(baseline1.stable) // stable 基线原样保留（frozenAt 不动）
+    expect(baseline2.live.text).toContain("commit-helper")
+    expect(baseline2.live.frozenAt).not.toBe(baseline1.live.frozenAt)
+    const audits2 = sessions.readEvents(sessionId).filter((e) => e.type === "system")
+    expect(audits2).toHaveLength(2)
+    expect((audits2[1] as { live: string }).live).toContain("commit-helper") // 审计=模型实际视图
 
-    // 压缩清除基线（重冻结边界）；run 3 重新装配，漂移源的新内容生效并再次固化
+    // stable 漂移源变化（AGENTS.md 改写 = 人设编辑）；run 3：稳定段重冻结，新内容生效
+    writeFileSync(engine.deps.paths.agentsMd, "v2 人设")
+    await executeRun(engine, handoff(sessionId, "第三条"))
+    expect(requests[2]).toContain("v2 人设")
+    expect(requests[2]).not.toContain("v1 人设")
+    const baseline3 = sessions.meta(sessionId)!.systemBaseline!
+    expect(baseline3.stable.text).toContain("v2 人设")
+    expect(baseline3.stable.frozenAt).not.toBe(baseline2.stable.frozenAt)
+
+    // 压缩清除基线（重冻结边界 = 缓存冷启动）；run 4 重新装配并再次固化
     sessions.appendCompaction(sessionId, { at: new Date().toISOString(), trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
     expect(sessions.meta(sessionId)!.systemBaseline).toBeUndefined()
     await executeRun(engine, handoff(sessionId, "压缩后第一条"))
-    expect(requests[2]).toContain("v2 人设")
-    expect(requests[2]).not.toContain("v1 人设")
-    expect(segmentRuns).toHaveLength(2)
-    expect(sessions.meta(sessionId)!.systemBaseline?.text).toBe(requests[2])
-    expect(sessions.readEvents(sessionId).filter((e) => e.type === "system")).toHaveLength(3)
+    expect(requests[3]).toContain("v2 人设")
+    expect(requests[3]).toContain("commit-helper")
+    expect(segmentRuns).toHaveLength(4)
+    expect(sessions.meta(sessionId)!.systemBaseline?.stable.text).toContain("v2 人设")
+    expect(sessions.readEvents(sessionId).filter((e) => e.type === "system")).toHaveLength(4)
   })
 
   it("extraHooks 在链上生效：system-before 段落进系统提示词、llm-before 改写只动模型视图", async () => {
@@ -180,7 +201,7 @@ describe("executeRun × hook system", () => {
 
     const systemEvents = sessions.readEvents(sessionId).filter((e) => e.type === "system")
     expect(systemEvents).toHaveLength(1)
-    expect((systemEvents[0] as { text: string }).text).toContain("【测试段落】")
+    expect((systemEvents[0] as { live: string }).live).toContain("【测试段落】") // system-before 段落归属 live 段
 
     // 模型视图被改写；持久化的用户消息保持原文
     expect(String(lastRequest!.messages.at(-1)!.content)).toContain("【已包装】")
@@ -215,7 +236,7 @@ describe("executeRun × hook system", () => {
     const outcome = await executeRun(engine, handoff(sessionId))
     expect(outcome.stopReason).toBe("end_turn")
     const systemEvents = sessions.readEvents(sessionId).filter((e) => e.type === "system")
-    expect((systemEvents[0] as { text: string }).text).toContain("【用户文件段落】")
+    expect((systemEvents[0] as { live: string }).live).toContain("【用户文件段落】")
     expect(bus.events.some((e) => e.type === "hook.failed")).toBe(false)
   })
 

@@ -5,7 +5,8 @@ import {
 } from "../../src/audit/model.js"
 import type { AuditFilter, AuditRow } from "../../src/audit/model.js"
 import type {
-  Block, CompactionEvent, MessageEvent, SandboxCheckedEvent, SessionEvent, SystemEvent,
+  Block, CompactionEvent, MessageEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
+  SandboxCheckedEvent, SessionEvent, SystemEvent,
 } from "../../src/types.js"
 
 // ---------- fixtures ----------
@@ -29,8 +30,22 @@ const COMPACTION: CompactionEvent = {
   upto: "msg_2", messages: 12, segmentSummary: "段摘要内容", top: "总摘要内容",
 }
 
-const SYSTEM: SystemEvent = { type: "system", at: "2026-09-08T10:00:00.000Z", text: "系统提示词正文" }
+const SYSTEM: SystemEvent = { type: "system", at: "2026-09-08T10:00:00.000Z", stable: "系统提示词正文", live: "" }
+const SYSTEM_LEGACY = { type: "system", at: "2026-09-08T10:00:00.000Z", text: "系统提示词正文" } as unknown as SystemEvent
 const SANDBOX: SandboxCheckedEvent = { type: "sandbox.checked", at: "2026-09-08T10:00:00.000Z", enabled: true, available: true }
+const RUN_STARTED: RunStartedEvent = { type: "run.started", at: "2026-09-08T10:00:00.000Z", trigger: "user" }
+const RUN_ENDED: RunEndedEvent = {
+  type: "run.ended", at: "2026-09-08T10:01:00.000Z", stopReason: "end_turn",
+  usage: { inputTokens: 120, outputTokens: 45 },
+}
+const RUN_FAILED: RunEndedEvent = {
+  type: "run.ended", at: "2026-09-08T10:02:00.000Z", stopReason: "error",
+  error: { code: "llm_error", message: "provider down" },
+}
+const DECIDED: PermissionDecidedEvent = {
+  type: "permission.decided", at: "2026-09-08T10:00:30.000Z", confirmationId: "conf_1",
+  decision: "once", by: "cli", tool: { callId: "call_1", name: "exec", argsJson: '{"command":"ls"}' },
+}
 
 // ---------- flattenAudit ----------
 
@@ -96,14 +111,20 @@ describe("flattenAudit", () => {
     expect(rows[1]!.grantedBy).toBe("confirmed")
   })
 
-  it("system 行 changed：首条不标、相同不标、不同标（既有语义）", () => {
+  it("system 行 changed：首条不标、相同不标、不同标；legacy 单文本事件与双段事件同表比较", () => {
     const events: SessionEvent[] = [
-      { type: "system", at: "2026-09-08T10:00:00.000Z", text: "A" },
-      { type: "system", at: "2026-09-08T10:01:00.000Z", text: "A" },
-      { type: "system", at: "2026-09-08T10:02:00.000Z", text: "B" },
+      { type: "system", at: "2026-09-08T10:00:00.000Z", stable: "A", live: "" },
+      { type: "system", at: "2026-09-08T10:01:00.000Z", stable: "A", live: "" },
+      { type: "system", at: "2026-09-08T10:02:00.000Z", stable: "B", live: "" },
     ]
     const rows = flattenAudit(events) as Extract<AuditRow, { kind: "system" }>[]
     expect(rows.map((r) => r.changed)).toEqual([false, false, true])
+    // legacy text 事件读出的全文与同文双段事件一致：不误标变化
+    const mixed = flattenAudit([
+      { type: "system", at: "2026-09-08T10:00:00.000Z", stable: "C", live: "" },
+      { type: "system", at: "2026-09-08T10:01:00.000Z", text: "C" } as unknown as SessionEvent,
+    ]) as Extract<AuditRow, { kind: "system" }>[]
+    expect(mixed.map((r) => r.changed)).toEqual([false, false])
   })
 
   it("空数组与 null", () => {
@@ -117,7 +138,7 @@ function kindsFilter(off: AuditRow["kind"]): AuditFilter {
   return {
     ...DEFAULT_FILTER,
     kinds: {
-      block: true, compaction: true, memory: true, system: true, sandbox: true, session: true,
+      block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true,
       [off]: false,
     },
   }
@@ -201,7 +222,7 @@ describe("appendRows", () => {
       { id: "b1", type: "tool_call", callId: "call_1", name: "fs.read", args: {}, argsJson: "{}" },
     ], { model: "m", usage: { inputTokens: 1, outputTokens: 2 } }),
     msgEvent("msg_2", "tool", [TOOL_RESULT], { grantedBy: { call_1: "safe" } }),
-    { type: "system", at: "2026-09-08T10:00:00.000Z", text: "你是 kclaw 助手。" },
+    { type: "system", at: "2026-09-08T10:00:00.000Z", stable: "你是 kclaw 助手。", live: "" },
     COMPACTION,
   ]
 
@@ -225,6 +246,15 @@ describe("appendRows", () => {
   it("空批次原样返回", () => {
     const rows = flattenAudit(full)
     expect(appendRows(rows, full.length, [])).toBe(rows)
+  })
+})
+
+describe("run / decision 行的过滤开关", () => {
+  it("关闭 run 后 run 行不可见，decision 不受影响", () => {
+    const rows = flattenAudit([RUN_STARTED, DECIDED, RUN_ENDED])
+    const f = kindsFilter("run")
+    const visible = filterRows(rows, f, NOW)
+    expect(visible.map((r) => r.kind)).toEqual(["decision"])
   })
 })
 

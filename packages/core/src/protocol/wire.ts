@@ -62,6 +62,15 @@ export interface ConfirmationResolveFrame {
   client?: "cli" | "web"
 }
 
+/** One answer set for a pending ask_user_questions call: one string array per question, in ask order. */
+export interface QuestionResolveFrame {
+  type: "question.resolve"
+  questionId: string
+  answers: string[][]
+  /** Answer provenance: the web UI names itself ("web"); omitted → "cli". */
+  client?: "cli" | "web"
+}
+
 export interface SendMessageFrame {
   type: "send_message"
   sessionId: string
@@ -86,6 +95,7 @@ export type ClientCommand =
   | SubscribeFrame
   | UnsubscribeFrame
   | ConfirmationResolveFrame
+  | QuestionResolveFrame
   | SendMessageFrame
   | QueueCancelFrame
   | RunCancelFrame
@@ -96,6 +106,7 @@ export type ClientCommand =
 export interface SubscribedAck { type: "subscribed"; sessionId: string }
 export interface UnsubscribedAck { type: "unsubscribed"; sessionId: string }
 export interface ConfirmationResolvedAck { type: "confirmation.resolved_ack"; confirmationId: string; ok: true }
+export interface QuestionResolvedAck { type: "question.resolved_ack"; questionId: string; ok: true }
 export interface SendMessageAck { type: "send_message_ack"; sessionId: string; messageId: string; queued: boolean }
 export interface QueueCancelAck { type: "queue.cancel_ack"; sessionId: string; cancelled: string[] }
 export interface RunCancelAck { type: "run_cancel_ack"; sessionId: string }
@@ -108,6 +119,7 @@ export type ServerAck =
   | SubscribedAck
   | UnsubscribedAck
   | ConfirmationResolvedAck
+  | QuestionResolvedAck
   | SendMessageAck
   | QueueCancelAck
   | RunCancelAck

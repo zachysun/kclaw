@@ -9,7 +9,7 @@ import { Fragment, useLayoutEffect, useRef, useState, type FormEvent, type Keybo
 import { parseSlashInput, replaceTrailingSlashToken, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
 import { PERMISSION_MODES, type PermissionMode } from "@kclaw/core/permission-modes"
 import type { AttachmentRef, ConfirmationDecision } from "@kclaw/core/protocol"
-import type { ChatState, ConfirmationCard, RenderedBlock, RenderedMessage } from "./model.js"
+import type { ChatState, ConfirmationCard, QuestionCard, RenderedBlock, RenderedMessage } from "./model.js"
 
 /**
  * How a message enters a busy session: steer injects into the live
@@ -49,6 +49,8 @@ export interface ChatViewProps {
   onSend: (text: string) => void
   /** Answer an inline confirmation card. */
   onResolveConfirmation: (confirmationId: string, decision: ConfirmationDecision) => void
+  /** Answer an inline question card (one string array per question, in ask order). */
+  onAnswerQuestion: (questionId: string, answers: string[][]) => void
   /** Attachments queued for the next message (drag-and-drop). */
   pendingAttachments: PendingAttachment[]
   /** Drop one queued attachment. */
@@ -108,7 +110,7 @@ export interface ChatViewProps {
   readOnly?: boolean
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, compactions, extraCommands, readOnly }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, compactions, extraCommands, readOnly }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Slash-suggestion state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -304,6 +306,9 @@ export function ChatView({ view, onSend, onResolveConfirmation, pendingAttachmen
       )}
       {view.pendingConfirmations.map((card) => (
         <ConfirmationCardView key={card.confirmationId} card={card} onResolve={onResolveConfirmation} />
+      ))}
+      {view.pendingQuestions.map((card) => (
+        <QuestionCardView key={card.questionId} card={card} onAnswer={onAnswerQuestion} />
       ))}
       {!readOnly && (models !== undefined && models.length > 0 && onSwitchModel !== undefined) && (
         <div className="composer-row" data-testid="model-selector-row">
@@ -595,6 +600,83 @@ function ConfirmationCardView({
         <button data-testid="confirm-project" onClick={() => onResolve(card.confirmationId, "project")}>总是（本项目）</button>
         <button data-testid="confirm-global" onClick={() => onResolve(card.confirmationId, "global")}>总是（全局）</button>
         <button data-testid="confirm-reject" onClick={() => onResolve(card.confirmationId, "reject")}>拒绝</button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * One pending ask_user_questions card: each question renders as option
+ * buttons (single-pick submits immediately; multiSelect toggles + a submit
+ * row) or a free-text input. Submitting sends the whole answer set — one
+ * string array per question — as one question.resolve frame.
+ */
+function QuestionCardView({
+  card,
+  onAnswer,
+}: {
+  card: QuestionCard
+  onAnswer: (questionId: string, answers: string[][]) => void
+}) {
+  const [textValues, setTextValues] = useState<string[]>(() => card.questions.map(() => ""))
+  const [multiPicks, setMultiPicks] = useState<string[][]>(() => card.questions.map(() => []))
+  // An empty answer array means "skipped" — the same contract as the CLI's
+  // enter-to-skip, and the tool result renders it as （未回答）.
+  const answers: string[][] = card.questions.map((q, i) => {
+    if (Array.isArray(q.options) && q.options.length > 0) return multiPicks[i] ?? []
+    const t = (textValues[i] ?? "").trim()
+    return t === "" ? [] : [t]
+  })
+  return (
+    <div className="question-card" data-testid="question-card">
+      <div className="confirm-title">问题待回答</div>
+      <div className="confirm-meta">expires {card.expiresAt}</div>
+      {card.noteText !== undefined && <div className="confirm-note">{card.noteText}</div>}
+      {card.questions.map((q, i) => (
+        <div key={i} className="question-item" data-testid={`question-item-${i}`}>
+          <div className="question-text-label">{q.text}</div>
+          {Array.isArray(q.options) && q.options.length > 0 ? (
+            <div className="confirm-actions">
+              {q.options.map((opt) => {
+                const picked = multiPicks[i]?.includes(opt) ?? false
+                return (
+                  <button
+                    key={opt}
+                    data-testid={`question-${i}-option`}
+                    className={picked ? "question-picked" : undefined}
+                    onClick={() => {
+                      setMultiPicks((prev) => {
+                        const next = prev.map((p, j) => (j === i ? [...p] : p))
+                        const cur = next[i] ?? []
+                        if (q.multiSelect === true) {
+                          next[i] = picked ? cur.filter((x) => x !== opt) : [...cur, opt]
+                        } else {
+                          next[i] = [opt]
+                        }
+                        return next
+                      })
+                    }}
+                  >
+                    {opt}
+                  </button>
+                )
+              })}
+            </div>
+          ) : (
+            <input
+              className="question-text"
+              data-testid={`question-${i}-text`}
+              value={textValues[i] ?? ""}
+              placeholder="自由输入，留空跳过"
+              onChange={(e) => setTextValues((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))}
+            />
+          )}
+        </div>
+      ))}
+      <div className="confirm-actions">
+        <button data-testid="question-submit" onClick={() => onAnswer(card.questionId, answers)}>
+          提交回答
+        </button>
       </div>
     </div>
   )

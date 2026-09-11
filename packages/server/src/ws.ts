@@ -124,7 +124,11 @@ declare module "fastify" {
  * broker's resolution (acked `{type:"confirmation.resolved_ack",
  * confirmationId, ok:true}`, or an error frame for an unknown/settled id —
  * the confirmation.resolved EVENT on the bus is emitted by the loop, never
- * here), `{type:"send_message", sessionId, text, disposition?, attachments?}`
+ * here), `{type:"question.resolve", questionId, answers, client?}` to answer
+ * a pending ask_user_questions call the same way (`answers` is one string
+ * array per question; acked `{type:"question.resolved_ack", questionId,
+ * ok:true}` — the question.resolved EVENT is emitted by the tool executor),
+ * `{type:"send_message", sessionId, text, disposition?, attachments?}`
  * to submit an agent run on the session (acked
  * `{type:"send_message_ack", sessionId, messageId, queued}` immediately —
  * submit decides synchronously, and the run's progress streams as run.* events
@@ -295,6 +299,19 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
           }
         }
         return send(socket, { type: "confirmation.resolved_ack", confirmationId: check.command.confirmationId, ok: true })
+      }
+      case "question.resolve": {
+        const broker = opts.run?.broker
+        if (broker === undefined) {
+          return send(socket, { type: "error", message: "question gateway unavailable" })
+        }
+        // Answer provenance mirrors confirmations ("web" names itself). The
+        // resulting question.resolved EVENT is emitted by the tool executor
+        // when its race settles — never from here.
+        const actor: ConfirmationActor = check.command.client === "web" ? "web" : "cli"
+        const ok = broker.resolveQuestion(check.command.questionId, check.command.answers, actor)
+        if (!ok) return send(socket, { type: "error", message: "unknown question" })
+        return send(socket, { type: "question.resolved_ack", questionId: check.command.questionId, ok: true })
       }
       case "send_message": {
         const run = opts.run

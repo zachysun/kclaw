@@ -25,7 +25,7 @@ describe("GET /hooks", () => {
     const res = await app.inject({ method: "GET", url: "/hooks", headers: auth })
     expect(res.statusCode).toBe(200)
     const body = res.json() as { builtin: Array<Record<string, unknown>>; user: unknown[] }
-    expect(body.builtin.length).toBeGreaterThanOrEqual(13)
+    expect(body.builtin.length).toBeGreaterThanOrEqual(12)
     expect(body.builtin[0]).toMatchObject({ origin: "builtin", position: expect.any(String) })
     expect(body.user).toEqual([])
   })

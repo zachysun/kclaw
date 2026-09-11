@@ -12,6 +12,15 @@ import { describe, it, expect, vi } from "vitest"
 import { renderFrame, type ChatCtx } from "../src/chat.js"
 import type { AgentEvent, NoteBlock } from "@kclaw/core"
 
+// The @clack prompts own the terminal; tests answer through this mock so the
+// question flow is exercisable headlessly (arrow-key ergonomics are @clack's).
+vi.mock("@clack/prompts", () => ({
+  isCancel: (v: unknown) => typeof v === "symbol",
+  select: vi.fn(async () => "方案A"),
+  multiselect: vi.fn(async () => ["db", "api"]),
+  text: vi.fn(async () => "没有补充"),
+}))
+
 function makeCtx(): { ctx: ChatCtx; lines: string[] } {
   const lines: string[] = []
   const ctx = {
@@ -83,6 +92,78 @@ describe("renderFrame note.emitted", () => {
     const block: NoteBlock = { id: "b1", type: "note", kind: "memory", text: "记住的要点" }
     const out = await capture((ctx) => renderFrame(ev("note.emitted", { messageId: "m1", block }), ctx))
     expect(out).toContain("[note] 记住的要点")
+  })
+})
+
+describe("renderFrame question cards (issue #21)", () => {
+  /** A ctx with a recording ws + readline pair (handleQuestion drives both). */
+  function makeQuestionCtx(): { ctx: ChatCtx; sent: unknown[]; rlCalls: string[] } {
+    const sent: unknown[] = []
+    const rlCalls: string[] = []
+    const ctx = {
+      ...makeCtx().ctx,
+      rl: { pause: () => rlCalls.push("pause"), resume: () => rlCalls.push("resume") },
+      ws: { send: (frame: unknown) => sent.push(frame) },
+      inputPaused: false,
+    } as unknown as ChatCtx
+    return { ctx, sent, rlCalls }
+  }
+
+  it("collects per-question answers via @clack and sends one question.resolve frame", async () => {
+    const { select, multiselect, text } = await import("@clack/prompts")
+    const writes: string[] = []
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString())
+      return true
+    })
+    try {
+      const { ctx, sent, rlCalls } = makeQuestionCtx()
+      const done = await renderFrame(ev("question.requested", {
+        questionId: "q_1",
+        questions: [
+          { text: "用哪个方案?", options: ["方案A", "方案B"] },
+          { text: "补充说明?" },
+          { text: "改哪些?", options: ["db", "api"], multiSelect: true },
+        ],
+        expiresAt: "t",
+      }), ctx)
+      expect(done).toBe(false)
+      // The header line announced the questions; each prompt got its question
+      // text (the prompt UI itself is @clack's, mocked here).
+      expect(writes.join("")).toContain("❓ 3 个问题待回答")
+      expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "用哪个方案?" }))
+      expect(text).toHaveBeenCalledWith(expect.objectContaining({ message: "补充说明?" }))
+      expect(multiselect).toHaveBeenCalledWith(expect.objectContaining({ message: "改哪些?" }))
+      expect(rlCalls).toEqual(["pause", "resume"])
+      // One answer array per question, in ask order; one resolve frame.
+      expect(sent).toHaveLength(1)
+      expect(sent[0]).toMatchObject({
+        type: "question.resolve",
+        questionId: "q_1",
+        answers: [["方案A"], ["没有补充"], ["db", "api"]],
+      })
+      expect(select).toHaveBeenCalledTimes(1)
+      expect(text).toHaveBeenCalledTimes(1)
+      expect(multiselect).toHaveBeenCalledTimes(1)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it("stays silent and non-terminating on question.resolved (the answers were already collected)", async () => {
+    const writes: string[] = []
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString())
+      return true
+    })
+    try {
+      const { ctx } = makeCtx()
+      const done = await renderFrame(ev("question.resolved", { questionId: "q_1", answers: [["a"]], by: "cli" }), ctx)
+      expect(done).toBe(false)
+      expect(writes.join("")).toBe("")
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
 

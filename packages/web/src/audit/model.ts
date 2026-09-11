@@ -8,14 +8,14 @@
  * incremental appends and full recomputes.
  */
 import type {
-  Block, CompactionEvent, MemoryEvent, MessageEvent, Role, SandboxCheckedEvent,
-  SessionCreatedEvent, SessionDeletedEvent, SessionEvent, SessionRenamedEvent,
+  Block, CompactionEvent, MemoryEvent, MessageEvent, PermissionDecidedEvent, Role, RunEndedEvent, RunStartedEvent,
+  SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent, SessionEvent, SessionRenamedEvent,
   SessionRestoredEvent, SessionSetEvent, SystemEvent, ToolGrantReason, Usage,
 } from "../types.js"
 
 export type SessionMetaEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent
 
-export type AuditRowKind = "block" | "compaction" | "memory" | "system" | "sandbox" | "session"
+export type AuditRowKind = "block" | "compaction" | "memory" | "system" | "sandbox" | "session" | "run" | "decision"
 
 /**
  * One flattened audit row. Block rows carry the owning message's role,
@@ -33,6 +33,8 @@ export type AuditRow =
   | { kind: "system"; key: string; index: number; event: SystemEvent; at: string; changed: boolean }
   | { kind: "sandbox"; key: string; index: number; event: SandboxCheckedEvent; at: string }
   | { kind: "session"; key: string; index: number; event: SessionMetaEvent; at: string }
+  | { kind: "run"; key: string; index: number; event: RunStartedEvent | RunEndedEvent; at: string }
+  | { kind: "decision"; key: string; index: number; event: PermissionDecidedEvent; at: string }
 
 /**
  * Flatten the event stream into rows, one per rendered event. Message events
@@ -81,7 +83,7 @@ export function appendRows(rows: AuditRow[], baseIndex: number, fresh: SessionEv
   for (let i = rows.length - 1; i >= 0; i--) {
     const row = rows[i]!
     if (row.kind === "system") {
-      lastSystemText = row.event.text
+      lastSystemText = systemFullText(row.event)
       break
     }
   }
@@ -151,13 +153,20 @@ function flattenEventInto(
         index,
         event,
         at: event.at,
-        changed: ctx.lastSystemText !== null && ctx.lastSystemText !== event.text,
+        changed: ctx.lastSystemText !== null && ctx.lastSystemText !== systemFullText(event),
       })
-      ctx.lastSystemText = event.text
+      ctx.lastSystemText = systemFullText(event)
       break
     }
     case "sandbox.checked":
       rows.push({ kind: "sandbox", key: `${index}`, index, event, at: event.at })
+      break
+    case "run.started":
+    case "run.ended":
+      rows.push({ kind: "run", key: `${index}`, index, event, at: event.at })
+      break
+    case "permission.decided":
+      rows.push({ kind: "decision", key: `${index}`, index, event, at: event.at })
       break
     case "session.created":
     case "session.renamed":
@@ -192,10 +201,10 @@ export interface AuditFilter {
   timeTo: string
 }
 
-export const ALL_KINDS: AuditRowKind[] = ["block", "compaction", "memory", "system", "sandbox", "session"]
+export const ALL_KINDS: AuditRowKind[] = ["block", "compaction", "memory", "system", "sandbox", "session", "run", "decision"]
 
 export const DEFAULT_FILTER: AuditFilter = {
-  kinds: { block: true, compaction: true, memory: true, system: true, sandbox: true, session: true },
+  kinds: { block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true },
   keyword: "",
   timePreset: "all",
   timeFrom: "",
@@ -235,11 +244,15 @@ export function rowSearchText(row: AuditRow): string {
     case "memory":
       return memoryFullContent(row.event)
     case "system":
-      return row.event.text
+      return systemFullText(row.event)
     case "sandbox":
       return `${sandboxSummary(row.event)} ${sandboxFullContent(row.event)}`
     case "session":
       return sessionSummary(row.event)
+    case "run":
+      return runSummary(row.event)
+    case "decision":
+      return `${decisionSummary(row.event)} ${decisionFullContent(row.event)}`
   }
 }
 
@@ -343,6 +356,47 @@ export function sandboxFullContent(event: SandboxCheckedEvent): string {
   const lines = [`enabled: ${event.enabled}`, `available: ${event.available}`]
   if (event.unavailableReason !== undefined) lines.push(`unavailableReason: ${event.unavailableReason}`)
   return lines.join("\n")
+}
+
+/**
+ * The system prompt text the model actually saw: legacy single-text events
+ * carry it in `text`; split events compose it from stable + live segments.
+ */
+export function systemFullText(event: SystemEvent): string {
+  if (event.text !== undefined) return event.text
+  return [event.stable, event.live].filter((s) => s !== undefined && s !== "").join("\n\n")
+}
+
+/** One-line run-boundary summary: 运行开始 · trigger / 运行结束 · stopReason（+用量或失败原因）. */
+export function runSummary(event: RunStartedEvent | RunEndedEvent): string {
+  if (event.type === "run.started") return `运行开始 · ${event.trigger}`
+  let s = `运行结束 · ${event.stopReason}`
+  if (event.error !== undefined) s += ` · ${event.error.code}: ${event.error.message}`
+  else if (event.usage !== undefined) s += ` · ${fmtUsage(event.usage)}`
+  return s
+}
+
+/** One-line permission-decision summary: 权限 · 裁决 · 谁批的 · 工具名. */
+export function decisionSummary(event: PermissionDecidedEvent): string {
+  const verdict =
+    event.decision === "once" ? "批准（仅本次）"
+    : event.decision === "project" ? "批准（本项目）"
+    : event.decision === "global" ? "批准（全局）"
+    : event.decision === "reject" ? "拒绝"
+    : "超时"
+  return `权限 · ${verdict} · ${event.by} · ${event.tool.name}`
+}
+
+/** Full permission-decision payload on expand. */
+export function decisionFullContent(event: PermissionDecidedEvent): string {
+  return [
+    `decision: ${event.decision}`,
+    `by: ${event.by}`,
+    `tool: ${event.tool.name}`,
+    `callId: ${event.tool.callId}`,
+    `argsJson: ${event.tool.argsJson}`,
+    `confirmationId: ${event.confirmationId}`,
+  ].join("\n")
 }
 
 /** One-line session metadata summary, per event kind. */

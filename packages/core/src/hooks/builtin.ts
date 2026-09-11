@@ -12,9 +12,10 @@
  * - run-before: memory-inject(10) → user-message-land(20, fatal: persist +
  *   note.emitted — wire order created → note.emitted ×N → completed) →
  *   autoname(30, fire-and-forget).
- * - system-after: user hooks (default order 1000, rewrite the final draft)
- *   run BEFORE system-audit(9000, fatal: appendSystem), so the audit always
- *   captures what the model will actually see.
+ * - system-audit is NOT a hook: the run assembly appends the two-segment
+ *   audit record itself (the split freeze needs the stable/live segments,
+ *   which live above the chain). User system-after hooks rewrite the draft;
+ *   a rewrite is frozen as the stable baseline by the assembly.
  * - The two compaction decision hooks (mid-run panic / overflow emergency)
  *   keep their old "throw == decline" semantics via failure: "skip" (a failed
  *   decision resolves to undefined, which the loop treats as "don't
@@ -114,7 +115,6 @@ export const BUILTIN_HOOK_DEFINITIONS: ReadonlyArray<{
   { name: "post-run-compaction", position: "run-after", description: "黄线水位触发的收尾压缩", failure: "fatal" },
   { name: "follow-check", position: "run-after", description: "挂起记忆空闲检查（调度器补查）", failure: "skip" },
   { name: "system-materials", position: "system-before", description: "收集认知与技能列表两个提示词段", failure: "skip" },
-  { name: "system-audit", position: "system-after", description: "系统提示词全量审计留痕（写失败即 run 失败）", failure: "fatal" },
   { name: "background-precompact", position: "compaction-check", description: "预压线触发后台压缩（不阻塞请求，成果待应用）", failure: "skip" },
   { name: "manual-compact-flush", position: "run-after", description: "冲刷挂起的 /compact（忙时登记，运行结束后执行）", failure: "skip" },
 ]
@@ -199,7 +199,7 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
     builtin("steering-drain", "turn-boundary", 10, BUILTIN_HOOK_DEFINITIONS[5]!.description, "fatal", () => {
       return drainSteer()
     }),
-    builtin("background-precompact", "compaction-check", 5, BUILTIN_HOOK_DEFINITIONS[13]!.description, "skip", () => {
+    builtin("background-precompact", "compaction-check", 5, BUILTIN_HOOK_DEFINITIONS[12]!.description, "skip", () => {
       // 预压线（ahead ≤ 估算水位 < 红线）且无在飞、无挂起成果时，在后台启动
       // 压缩：不阻塞下一次请求，成果由后续迭代边界应用（mid-run-panic）。
       // 水位已达红线的场景让位给 mid-run-panic 的同步路径。
@@ -295,7 +295,7 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
         console.error("kclaw usage record failed:", err)
       }
     }),
-    builtin("manual-compact-flush", "run-after", 15, BUILTIN_HOOK_DEFINITIONS[14]!.description, "skip", async () => {
+    builtin("manual-compact-flush", "run-after", 15, BUILTIN_HOOK_DEFINITIONS[13]!.description, "skip", async () => {
       // 冲刷挂起的 /compact（会话忙时登记的）：在自动收尾压缩之前执行——
       // 用户显式意图优先，压完水位落回，自动收尾检查自然不再触发。
       // 不做忙碌/排队检查（收尾链时刻必然不忙；运行期间排队的消息等下一条
@@ -359,13 +359,6 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
         // 认知注入失败静默跳过
       }
       return [cognition, skillList].filter((s) => s !== "")
-    }),
-    builtin("system-audit", "system-after", 9000, BUILTIN_HOOK_DEFINITIONS[12]!.description, "fatal", ({ system }) => {
-      // Exactly one full-text audit event per run — steer injections and
-      // in-run LLM calls reuse the same prompt. No phantom-session guard
-      // (parity with message writes) and no swallowing: a failed write fails
-      // the run (the queue's entry-level failure catches it).
-      sessions.appendSystem(sessionId, { at: new Date().toISOString(), text: system })
     }),
   ]
 }

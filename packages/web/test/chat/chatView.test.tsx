@@ -38,6 +38,7 @@ function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
         view={{ ...initChat(messages), ...opts.view }}
         onSend={onSend}
         onResolveConfirmation={vi.fn()}
+        onAnswerQuestion={vi.fn()}
         pendingAttachments={[]}
         onRemoveAttachment={vi.fn()}
         disposition={opts.disposition}

@@ -47,7 +47,7 @@ import type { KclawConfig, LlmClient } from "@kclaw/core"
 import { loadOrCreateToken } from "./auth.js"
 import { EventBus } from "@kclaw/core"
 import { RunManager } from "./run.js"
-import { createSubagentSpawner } from "./subagent.js"
+import { createSubagentHost } from "./subagent.js"
 import { startSchedulerTick } from "./scheduler-tick.js"
 import { startMemoryScheduler } from "./memory-scheduler.js"
 import { createApp } from "./app.js"
@@ -315,7 +315,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // late-bound getter breaks the cycle (dispatches only fire mid-run, long
   // after both sides exist).
   let runRef: RunManager | undefined
-  const subagentSpawner = createSubagentSpawner({
+  const subagentHost = createSubagentHost({
     config,
     sessions,
     bus,
@@ -335,7 +335,11 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     model,
     usageStore: usage,
     hooks: hookRegistry,
-    subagents: { spawner: subagentSpawner },
+    subagents: {
+      spawner: subagentHost.spawner,
+      collector: subagentHost.collector,
+      cancelBackgroundForParent: subagentHost.cancelBackgroundForParent,
+    },
     // auto mode induction (batch C): one per-process streak counter threaded
     // through every run's assembly; threshold 0 disables induction.
     autoLearn: { counter: new AutoLearnCounter(config.permissions.autoLearnThreshold ?? 3) },

@@ -20,7 +20,7 @@ import type {
   AgentEvent, KclawConfig, KclawPaths, LlmClient, LlmRequest, LlmStreamEvent, MemorySystem,
 } from "@kclaw/core"
 import { RunManager, type RunManagerDeps } from "../src/run.js"
-import { createSubagentSpawner } from "../src/subagent.js"
+import { createSubagentHost } from "../src/subagent.js"
 import { createApp } from "../src/index.js"
 import type { FastifyInstance } from "fastify"
 
@@ -63,6 +63,23 @@ function spawnTurn(callId: string, task: string, label?: string): LlmStreamEvent
   return [
     { type: "tool_call_started", index: 0, callId, name: "subagent_run" },
     { type: "tool_call_delta", index: 0, delta: JSON.stringify(args) },
+    { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 1, outputTokens: 2 } },
+  ]
+}
+
+function spawnBackgroundTurn(callId: string, task: string, label?: string): LlmStreamEvent[] {
+  const args = label === undefined ? { task, run_in_background: true } : { task, label, run_in_background: true }
+  return [
+    { type: "tool_call_started", index: 0, callId, name: "subagent_run" },
+    { type: "tool_call_delta", index: 0, delta: JSON.stringify(args) },
+    { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 1, outputTokens: 2 } },
+  ]
+}
+
+function collectTurn(callId: string, childSessionId: string): LlmStreamEvent[] {
+  return [
+    { type: "tool_call_started", index: 0, callId, name: "subagent_collect" },
+    { type: "tool_call_delta", index: 0, delta: JSON.stringify({ childSessionId }) },
     { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 1, outputTokens: 2 } },
   ]
 }
@@ -115,6 +132,7 @@ interface SubagentEnv {
   /** Every bus event, session-scoped included (an own-property emit tap). */
   allEvents: AgentEvent[]
   usage: UsageStore
+  host: ReturnType<typeof createSubagentHost>
 }
 
 /**
@@ -150,7 +168,7 @@ function makeEnv(llm: LlmClient, patchConfig?: (c: KclawConfig) => void): Subage
   }
 
   let runRef: RunManager | undefined
-  const spawner = createSubagentSpawner({
+  const host = createSubagentHost({
     config, sessions, bus, getRun: () => {
       if (runRef === undefined) throw new Error("run manager not ready")
       return runRef
@@ -159,10 +177,14 @@ function makeEnv(llm: LlmClient, patchConfig?: (c: KclawConfig) => void): Subage
   const manager = new RunManager({
     config, paths, sessions, memory, bus, llm, workspace,
     usageStore: usage,
-    subagents: { spawner },
+    subagents: {
+      spawner: host.spawner,
+      collector: host.collector,
+      cancelBackgroundForParent: host.cancelBackgroundForParent,
+    },
   })
   runRef = manager
-  return { paths, config, sessions, bus, manager, allEvents, usage }
+  return { paths, config, sessions, bus, manager, allEvents, usage, host }
 }
 
 // --- tests ------------------------------------------------------------------
@@ -229,7 +251,7 @@ describe("subagent dispatch (integration)", () => {
 
     // The child's own event stream keeps the full audit (system prompt + sandbox probe).
     const childEvents = sessions.readEvents(child.id)
-    expect(childEvents.some((e) => e.type === "system" && e.text.includes("子代理"))).toBe(true)
+    expect(childEvents.some((e) => e.type === "system" && e.stable.includes("子代理"))).toBe(true)
     expect(childEvents.some((e) => e.type === "sandbox.checked")).toBe(true)
 
     // Status lines streamed to the PARENT channel (tool_result.delta).
@@ -450,4 +472,198 @@ describe("subagent visibility routes", () => {
     expect(store.meta(child.id)).toBeUndefined()
     expect(store.meta(parent.id)).toBeUndefined()
   })
+})
+
+// --- background mode (issue #22) ----------------------------------------------
+
+/** Poll until `pred` holds on the parent's messages; throws on timeout. */
+async function until(pred: () => boolean, what: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!pred()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`)
+    await new Promise((r) => setTimeout(r, 10))
+  }
+}
+
+describe("subagent background mode", () => {
+  it("dispatches immediately, the parent run finishes first, and a completion notice lands without a run", async () => {
+    // Parent and child turns are served SEPARATELY (keyed on the lean child
+    // prompt) — a global script would be a scheduling race now that the child
+    // runs concurrently with its parent's remainder.
+    const parentScript = [
+      spawnBackgroundTurn("call_1", "慢慢调研", "crawler"),
+      textTurn("已派出，先干别的"),
+    ]
+    const childScript = [textTurn("调研结论：一切正常")]
+    let parentCalls = 0
+    let childCalls = 0
+    const llm: LlmClient = {
+      async *stream(req) {
+        if (req.system.includes("子代理")) yield* childScript[Math.min(childCalls++, childScript.length - 1)]!
+        else yield* parentScript[Math.min(parentCalls++, parentScript.length - 1)]!
+      },
+    }
+    const { sessions, manager, allEvents, host } = makeEnv(llm)
+    const parent = sessions.create("主线")
+
+    const outcome = await manager.enqueue(parent.id, { userText: "后台调研一下", trigger: "user" })
+    expect(outcome.stopReason).toBe("end_turn")
+
+    // The dispatch result came back immediately: child id + collect hint, NOT the answer.
+    const parentMsgs = sessions.readMessages(parent.id)
+    const toolMsg = parentMsgs.find((m) => m.role === "tool")!
+    const result = toolMsg.blocks.find((b) => b.type === "tool_result") as { status: string; output: string; data?: { childSessionId?: string } }
+    expect(result.status).toBe("ok")
+    expect(result.output).toContain("已在后台派出子代理「crawler」")
+    expect(result.output).toContain("subagent_collect")
+    const childId = result.data!.childSessionId!
+    expect(sessions.meta(childId)!.parentSessionId).toBe(parent.id)
+
+    // The child still runs to completion AFTER the parent run has ended.
+    await until(() => sessions.readMessages(childId).some((m) => m.role === "assistant"), "child answer")
+
+    // The completion notice: one assistant message with a system note on the parent.
+    await until(() => sessions.readMessages(parent.id).some((m) => m.role === "assistant" && m.id !== parentMsgs.find((x) => x.role === "assistant")?.id), "notice message")
+    const notice = sessions.readMessages(parent.id).filter((m) => m.role === "assistant").at(-1)!
+    const note = notice.blocks[0]! as { type: string; kind: string; text: string }
+    expect(note.type).toBe("note")
+    expect(note.kind).toBe("system")
+    expect(note.text).toContain("后台子代理「crawler」已完成")
+    expect(note.text).toContain("调研结论：一切正常")
+    expect(note.text).toContain(`childSessionId: ${childId}`)
+
+    // The notice was announced on the parent channel (message.created/completed)…
+    const created = allEvents.filter((e) => e.type === "message.created" && e.sessionId === parent.id)
+    expect(created.some((e) => e.payload.message.id === notice.id)).toBe(true)
+    expect(allEvents.some((e) => e.type === "message.completed" && e.sessionId === parent.id && e.payload.message.id === notice.id)).toBe(true)
+    // …but it triggered NO run: the parent started exactly one run (the user's).
+    expect(allEvents.filter((e) => e.type === "run.started" && e.sessionId === parent.id)).toHaveLength(1)
+
+    // Collect now returns the child's full answer.
+    const collected = await host.collector({ parentSessionId: parent.id, childSessionId: childId })
+    expect(collected.status).toBe("ok")
+    expect(collected.output).toBe("调研结论：一切正常")
+  })
+
+  it("collect is gated to the parent's own children and reports unknown ids", async () => {
+    const { sessions, host } = makeEnv(scriptClient([textTurn("hi")]))
+    const parent = sessions.create("主线")
+    const stranger = sessions.create("别人家")
+
+    expect((await host.collector({ parentSessionId: parent.id, childSessionId: "ses_missing" })).status).toBe("error")
+    expect((await host.collector({ parentSessionId: parent.id, childSessionId: "ses_missing" })).output).toContain("不存在")
+    // A real session that is NOT this parent's child is refused.
+    const foreign = (await host.collector({ parentSessionId: stranger.id, childSessionId: parent.id }))
+    expect(foreign.status).toBe("error")
+    expect(foreign.output).toContain("不是当前会话派出的子代理")
+  })
+
+  it("collect returns a not-yet answer while the child is still producing", async () => {
+    const parentScript = [
+      spawnBackgroundTurn("call_1", "慢慢跑", "slow"),
+      textTurn("好"),
+    ]
+    const childScript = [textTurn("终于完成")]
+    let parentCalls = 0
+    let childCalls = 0
+    const llm: LlmClient = {
+      async *stream(req) {
+        if (req.system.includes("子代理")) yield* childScript[Math.min(childCalls++, childScript.length - 1)]!
+        else yield* parentScript[Math.min(parentCalls++, parentScript.length - 1)]!
+      },
+    }
+    const { sessions, manager, host } = makeEnv(llm)
+    const parent = sessions.create("主线")
+    await manager.enqueue(parent.id, { userText: "派后台", trigger: "user" })
+    const childId = sessions.listByParent(parent.id)[0]!.id
+
+    // The child may not have produced its answer yet — collect says so, not an error.
+    const early = await host.collector({ parentSessionId: parent.id, childSessionId: childId })
+    if (early.status === "ok" && early.output.includes("还没有可收集的答复")) return
+    // If the child already finished (scheduling), the answer is there instead.
+    expect(early.output).toContain("终于完成")
+    await until(() => sessions.readMessages(childId).some((m) => m.role === "assistant"), "child answer")
+  })
+
+  it("cancelBackgroundChildren stops live background children when the parent dies; a settled child notifies '未正常完成'", async () => {
+    const parentScript = [
+      spawnBackgroundTurn("call_1", "永跑任务", "zombie"),
+      textTurn("派出去了"),
+    ]
+    let parentCalls = 0
+    const llm: LlmClient = {
+      async *stream(req) {
+        // The child hangs forever (its lean prompt identifies it); only the
+        // cancel can free it. The parent consumes its own script in order.
+        if (req.system.includes("子代理")) await new Promise<never>(() => {})
+        yield* parentScript[Math.min(parentCalls++, parentScript.length - 1)]!
+      },
+    }
+    const { sessions, manager } = makeEnv(llm)
+    const parent = sessions.create("主线")
+
+    const outcome = await manager.enqueue(parent.id, { userText: "后台永跑", trigger: "user" })
+    expect(outcome.stopReason).toBe("end_turn")
+
+    // Wait for the background child's run to actually start, then cancel it
+    // through the parent-delete seam.
+    const childId = sessions.listByParent(parent.id)[0]!.id
+    await until(() => sessions.readMessages(childId).length > 0, "child run started")
+
+    expect(manager.cancelBackgroundChildren(parent.id)).toBe(1)
+    // Give the outcome a beat to settle, then check the failure notice.
+    await until(() => {
+      const msgs = sessions.readMessages(parent.id).filter((m) => m.role === "assistant")
+      const last = msgs.at(-1)
+      return last !== undefined && last.blocks[0]!.type === "note" && (last.blocks[0] as { text: string }).text.includes("未正常完成")
+    }, "failure notice", 8_000)
+  }, 20_000)
+})
+
+describe("subagent background card forwarding", () => {
+  it("forwards a background child's confirmation card to the parent channel and completes after the verdict", async () => {
+    // Default config: allow list empty → the child's exec call needs a
+    // confirmation. In background mode the card must STILL reach the parent
+    // channel (status lines are muted; cards are not).
+    const parentScript = [
+      spawnBackgroundTurn("call_1", "跑个命令", "bg-runner"),
+      textTurn("派出去了"),
+    ]
+    const childScript = [execTurn("call_c", "echo hi"), textTurn("命令完成")]
+    let parentCalls = 0
+    let childCalls = 0
+    const llm: LlmClient = {
+      async *stream(req) {
+        if (req.system.includes("子代理")) yield* childScript[Math.min(childCalls++, childScript.length - 1)]!
+        else yield* parentScript[Math.min(parentCalls++, parentScript.length - 1)]!
+      },
+    }
+    const { sessions, manager, bus } = makeEnv(llm)
+    const parent = sessions.create("主线")
+    const socket = new FakeSocket()
+    bus.subscribe(parent.id, socket)
+
+    const outcome = await manager.enqueue(parent.id, { userText: "后台跑命令", trigger: "user" })
+    expect(outcome.stopReason).toBe("end_turn") // the parent is NOT blocked by the child
+
+    // The card lands on the parent channel, labeled with the background child.
+    const deadline = Date.now() + 5_000
+    let card: AgentEvent | undefined
+    while (Date.now() < deadline && card === undefined) {
+      card = received(socket).find((e) => e.type === "confirmation.requested")
+      if (card === undefined) await new Promise((r) => setTimeout(r, 10))
+    }
+    expect(card).toBeDefined()
+    expect(card!.sessionId).toBe(parent.id)
+    expect((card!.payload as { noteText?: string }).noteText).toContain("来自子代理 bg-runner")
+    expect((card!.payload as { toolCall: { name: string } }).toolCall.name).toBe("exec")
+
+    // Approving lets the background child finish; the completion notice follows.
+    expect(manager.broker.resolve((card!.payload as { confirmationId: string }).confirmationId, "once", "web")).toBe(true)
+    await until(() => {
+      const msgs = sessions.readMessages(parent.id).filter((m) => m.role === "assistant")
+      const last = msgs.at(-1)
+      return last !== undefined && last.blocks[0]!.type === "note" && (last.blocks[0] as { text: string }).text.includes("已完成")
+    }, "completion notice", 8_000)
+  }, 15_000)
 })

@@ -129,6 +129,8 @@ export interface KclawConfig {
     toolLoopMaxRepeats?: number
     /** 不带 disposition 的 send_message 取"会话覆盖 ?? 此默认"。缺省 "steer"。 */
     defaultDisposition?: "steer" | "wait" | "interrupt"
+    /** ask_user_questions 的等待上限（毫秒）。缺省 600000（10 分钟）。 */
+    askTimeoutMs?: number
   }
   /**
    * Job-finish notifications. Delivery failures are only logged (onError),
@@ -154,6 +156,8 @@ export interface KclawConfig {
   subagents?: {
     /** Live subagents allowed per parent run at once; an over-cap spawn returns an immediate error result. */
     maxConcurrent?: number
+    /** Live BACKGROUND subagents allowed per parent session (issue #22), counted separately from maxConcurrent. Default 4. */
+    maxBackground?: number
   }
   workspace: string
 }

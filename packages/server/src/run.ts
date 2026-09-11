@@ -43,6 +43,7 @@ import {
   type RunEngine,
   type RunOutcome,
   type SessionStore,
+  type SubagentCollector,
   type SubagentSpawner,
   type ToolDefinition,
   type ToolExecutor,
@@ -116,9 +117,15 @@ export interface RunManagerDeps {
   /**
    * Subagent dispatch (issue #16): the daemon's spawner implementation
    * (server/src/subagent.ts). Flows into every mainline run's assembly as the
-   * `subagent_run` builtin; child runs never see it.
+   * `subagent_run` builtin; child runs never see it. `collector` (issue #22)
+   * adds `subagent_collect` next to it; `cancelBackgroundForParent` backs the
+   * delete/purge cascade (exposed via cancelBackgroundChildren).
    */
-  subagents?: { spawner: SubagentSpawner }
+  subagents?: {
+    spawner: SubagentSpawner
+    collector?: SubagentCollector
+    cancelBackgroundForParent?: (parentSessionId: string) => number
+  }
   /** Per-run token ledger (optional; recording failures are swallowed). */
   usageStore?: UsageStore
   /**
@@ -218,6 +225,15 @@ export class RunManager {
   /** The confirmation gateway this manager's runs answer through (WS/CLI verdicts land here). */
   get broker(): ConfirmationBroker {
     return this.#broker
+  }
+
+  /**
+   * Cancel every live BACKGROUND subagent of one parent session (issue #22) —
+   * the delete/purge cascade's cancellation half. No-op (returns 0) when no
+   * spawner with background bookkeeping is wired.
+   */
+  cancelBackgroundChildren(parentSessionId: string): number {
+    return this.#deps.subagents?.cancelBackgroundForParent?.(parentSessionId) ?? 0
   }
 
   /**

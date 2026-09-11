@@ -31,7 +31,7 @@
  */
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import type { AgentEvent } from "../protocol/events.js"
+import type { AgentEvent, AnyAgentEvent } from "../protocol/events.js"
 import type { AttachmentBlock, NoteBlock, ToolCallBlock } from "../protocol/blocks.js"
 import { newBlockId } from "../protocol/blocks.js"
 import type { Message } from "../protocol/messages.js"
@@ -53,10 +53,11 @@ import { createExecSandbox } from "../sandbox/provider.js"
 import type { PermissionGate, RunOutcome } from "./loop.js"
 import { runAgent } from "./loop.js"
 import { SYSTEM_INJECTION_CONVENTION } from "./context.js"
-import { subagentSystemPrompt, type SubagentSpawner } from "./subagent.js"
+import { subagentSystemPrompt, type SubagentCollector, type SubagentSpawner } from "./subagent.js"
 import type { SessionSearchFn } from "../tools/session.js"
 import type { ToolExecutor } from "./tools.js"
 import { createBuiltinTools, deriveToolFacts } from "../tools/index.js"
+import { makeEvent } from "../protocol/events.js"
 import { searchSessionEvents } from "../tools/session-search.js"
 import { matchSkillInvocations, scanSkillDirs, skillListPrompt, wrapSkillInvocations } from "../skills/index.js"
 import type { MemorySystem } from "../memory/system.js"
@@ -185,7 +186,7 @@ export interface RunEngineDeps {
    * assembly never sees it (single-level delegation — child detection is the
    * session meta's parentSessionId, not this flag).
    */
-  subagents?: { spawner: SubagentSpawner }
+  subagents?: { spawner: SubagentSpawner; collector?: SubagentCollector }
   /** Per-run token ledger (optional; recording failures are swallowed). */
   usageStore?: UsageStore
   /**
@@ -377,8 +378,22 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     sessionSearch: buildSessionSearch(engine.deps, sessionId),
     skills,
     ...(engine.deps.subagents !== undefined && !childRun
-      ? { subagent: { spawner: engine.deps.subagents.spawner, parentSessionId: sessionId } }
+      ? {
+          subagent: {
+            spawner: engine.deps.subagents.spawner,
+            parentSessionId: sessionId,
+            ...(engine.deps.subagents.collector === undefined ? {} : { collector: engine.deps.subagents.collector }),
+          },
+        }
       : {}),
+    // Mid-run questions (issue #21): every run — mainline and child alike —
+    // can ask; the broker is the shared gateway object, and the emitter
+    // stamps the events with this run's session/runId context.
+    ask: {
+      broker: engine.deps.broker,
+      timeoutMs: config.sessions.askTimeoutMs,
+      emit: (type, payload) => busEmit(makeEvent(type, payload, eventCtx())),
+    },
     ...(childRun ? { childRun: true } : {}),
   })
   // test/adapter seam: per-name executor overrides on top of the
@@ -490,10 +505,23 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     if (raced === "aborted") {
       broker.expire(confirmationId)
       // the value is never used: the loop's own race resolved "aborted" and
-      // denies without consulting the resolver
+      // denies without consulting the resolver. No decision is archived —
+      // an abort is not a verdict.
       return { decision: "timeout", by: "timeout" }
     }
     if (raced.by === "timeout") broker.expire(confirmationId)
+    // Permission-decision archive: who approved what, and when, lands in the
+    // session archive beside the tool row's grantedBy outcome. Timeouts are
+    // verdicts too (silence is a "no"); aborts never reach here.
+    if (call !== undefined) {
+      sessions.appendPermissionDecided(sessionId, {
+        at: new Date().toISOString(),
+        confirmationId,
+        decision: raced.decision,
+        by: raced.by,
+        tool: { callId: call.callId, name: call.name, argsJson: call.argsJson },
+      })
+    }
     // SessionGrants (batch D): a once-approval also lands in this run's grant
     // store, keyed by the same narrowed rule the gate re-checks — the same
     // call within THIS run stops re-prompting. project/global approvals
@@ -622,32 +650,47 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   chain.registerAll(engine.deps.hooks?.snapshot() ?? [])
   if (engine.deps.extraHooks !== undefined) chain.registerAll(engine.deps.extraHooks)
 
-  // 系统提示词（提示词缓存纪律）：会话 meta 里已有冻结基线时，基线文本就是
-  // 本 run 的系统提示词——组装链（system-before/after）整体跳过，认知刷新、
-  // 技能清单、AGENTS.md 与用户钩子的段落变化都不再重写请求前缀（provider
-  // 前缀缓存按前缀逐字节命中，前缀稳定 = 纪元内后续 run 全部命中）。审计
-  // 照旧每 run 一条全量留痕（直接落盘，与链内 fatal 钩子同语义：写失败即
-  // run 失败），审计页的"已变化"标记因此恰落在重冻结点上。压缩事件在投影
-  // 里清除基线（applyEvent），下一次 run 重新装配并在审计落盘时重新固化
-  // ——压缩本来就使缓存全量失效，纪元边界设在冷启动处零额外成本。
-  // 无基线（新会话 / 升级后首 run / 压缩后首 run）走既有链路装配，链内
-  // system-audit 落盘时投影自动固化新基线。
-  // 子代理 run 的精简模板同样适用（首 run 固化，模板无变化）。
-  const frozenBaseline = sessionMeta?.systemBaseline
+  // 系统提示词（提示词缓存纪律，双段独立冻结）：stable（人设基座 + 注入约定）
+  // 是缓存冻结面，live（认知 + 技能清单）是低频变化面。每 run 两段现算、与
+  // 基线逐段比对——段文本没变就沿用基线（frozenAt 不动），变了就重冻结该段。
+  // 前缀缓存按从头逐字节相同匹配：live 变化只失效变化点之后，stable 前缀
+  // 继续命中；装技能、夜间认知刷新在下一 run 即时生效，不再等压缩边界。
+  // 两段全命中时 system-after 链跳过（与单段时代的冻结 run 同语义）；至少
+  // 一段变化时走 system-after（用户可改终稿）——改写发生时事件记 stable=终稿
+  // （审计恒记录模型实际看到的那份）、live=现算文本：stable 基线于是偏离现算
+  // 值，下一个 run 自然重装配、改写每 run 重新生效；live 基线则照常逐字比对，
+  // frozenAt 不会虚假刷新。审计每 run 一条双段全量留痕（直接落盘；写失败即
+  // run 失败）。压缩事件在投影里清除基线（applyEvent），下一次 run 重新装配
+  // 并固化——压缩本来就使缓存全量失效，纪元边界设在冷启动处零额外成本。
+  // 子代理 run 的精简模板同样适用（live 恒空）。
+  const baseline = sessionMeta?.systemBaseline
+  const base = childRun ? subagentSystemPrompt(workspace) : systemPrompt(paths.agentsMd)
+  const stable = [base, SYSTEM_INJECTION_CONVENTION].filter((s) => s !== "").join("\n\n")
+  // live：system-before 链产出（内置 system-materials：认知 + 技能清单；
+  // 用户段落同列此链，一并归属 live 段）。
+  const segments = (await chain.run("system-before", { base })) ?? []
+  const live = segments.filter((s) => s !== "").join("\n\n")
+  const stableFresh = baseline === undefined || baseline.stable.text !== stable
+  const liveFresh = baseline?.live === undefined || baseline.live.text !== live
   let system: string
-  if (frozenBaseline !== undefined) {
-    system = frozenBaseline.text
-    sessions.appendSystem(sessionId, { at: new Date().toISOString(), text: system })
+  if (!stableFresh && !liveFresh) {
+    system = [baseline.stable.text, baseline.live!.text].filter((s) => s !== "").join("\n\n")
+    sessions.appendSystem(sessionId, { at: new Date().toISOString(), stable, live })
   } else {
-    // AGENTS.md 基座 → system-before 链追加段落（内置 system-materials：
-    // 认知 + 技能列表）→ 末尾恒定拼接注入约定（放最后保持位置稳定）→
-    // system-after 链（用户可改终稿；内置 system-audit fatal 全量留痕——
-    // 审计永远记录模型实际看到的那份，落盘即固化新基线）。
-    const base = childRun ? subagentSystemPrompt(workspace) : systemPrompt(paths.agentsMd)
-    const segments = (await chain.run("system-before", { base })) ?? []
-    system = [base, ...segments, SYSTEM_INJECTION_CONVENTION].filter((s) => s !== "").join("\n\n")
-    const rewrittenSystem = await chain.run("system-after", { system })
-    if (rewrittenSystem !== undefined) system = rewrittenSystem
+    const draft = [stable, live].filter((s) => s !== "").join("\n\n")
+    const rewrittenSystem = await chain.run("system-after", { system: draft })
+    if (rewrittenSystem !== undefined) {
+      system = rewrittenSystem
+      // stable freezes the REWRITTEN text (what the model actually saw — the
+      // audit's contract), so the next run's fresh stable differs and the
+      // assembly (and the rewrite) re-runs; live carries the freshly computed
+      // segment so ITS baseline still compares equal across rewrites — a
+      // rewrite must not phantom-refresh live's frozenAt.
+      sessions.appendSystem(sessionId, { at: new Date().toISOString(), stable: system, live })
+    } else {
+      system = draft
+      sessions.appendSystem(sessionId, { at: new Date().toISOString(), stable, live })
+    }
   }
   contextOverheadRef.current = estimateTokens(system) + estimateTokens(JSON.stringify(toolDefs))
 
@@ -682,9 +725,34 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       // 固定开销（系统提示词 + 工具定义）先行扣除，打包台只裁决消息内容
       tokenBudget: Math.max(0, budget * packRatio - contextOverheadRef.current),
       ...(maxOutput === undefined ? {} : { maxTokens: maxOutput }),
-      onEvent: (e) => {
+      onEvent: (raw) => {
+        // Narrow to the distributive form so per-type payload access typechecks.
+        const e = raw as AnyAgentEvent
         if (e.type === "run.started" && e.runId !== undefined) runId = e.runId
         else if (e.type === "llm.completed" || e.type === "llm.failed") llmAttempt = 1
+        // Run-boundary archive: every run brackets its message events with a
+        // run.started + run.ended pair in the session archive, so the archive
+        // shows where each run began and ended without inferring it from the
+        // last assistant message's stop reason. A failed run lands an ended
+        // record too (stopReason "error" + the failure) — a started run
+        // always reaches a terminal record, same invariant as the wire
+        // events. Same contract as the system/sandbox audit events: a write
+        // failure fails the run (the audit promise is all-or-nothing).
+        if (e.type === "run.started") {
+          sessions.appendRunStarted(sessionId, { at: new Date().toISOString(), trigger: e.payload.trigger })
+        } else if (e.type === "run.completed") {
+          sessions.appendRunEnded(sessionId, {
+            at: new Date().toISOString(),
+            stopReason: e.payload.stopReason,
+            usage: e.payload.usage,
+          })
+        } else if (e.type === "run.failed") {
+          sessions.appendRunEnded(sessionId, {
+            at: new Date().toISOString(),
+            stopReason: "error",
+            error: e.payload.error,
+          })
+        }
         busEmit(e)
       },
       onMessage: (m) => sessions.appendMessage(m.sessionId, m),
