@@ -20,8 +20,20 @@ import type { LlmClient } from "../provider/types.js"
 import { collectStreamText } from "../provider/collect.js"
 import type { KclawConfig } from "../storage/config.js"
 import type { ActiveSummary, CompactionState } from "./compaction.js"
-import { chooseBoundary, emergencyBoundary, estimateContextTokens, renderSegment } from "./compaction.js"
+import { chooseBoundary, emergencyBoundary, estimateContextTokens, extractSpillLocators, renderSegment } from "./compaction.js"
 import type { SessionStore } from "./store.js"
+
+/**
+ * Append spill locator lines to a summary, deduped against lines it already
+ * carries (a merged top inherits the previous top's pointers). Returns the
+ * text unchanged when there is nothing to append.
+ */
+function appendLocators(summary: string, locators: string[]): string {
+  if (locators.length === 0) return summary
+  const fresh = locators.filter((l) => !summary.includes(l))
+  if (fresh.length === 0) return summary
+  return `${summary}\n${fresh.join("\n")}`
+}
 
 /** Segment summarizer prompt. */
 export const SEGMENT_SUMMARY_PROMPT =
@@ -205,16 +217,24 @@ export class Compactor {
         messages: [{ role: "user", content: body + focusLine }],
         tools: [],
       }, { signal: opts.signal })
-      const mergeInput = prev === undefined ? segmentSummary : `${prev.top}\n\n新的段摘要：\n${segmentSummary}`
+      // Spill pointers survive STRUCTURALLY: the segment summary and the top
+      // summary carry the locator lines regardless of what the summarizer
+      // wrote — after compaction the full copies stay reachable (fs_read),
+      // and the pointer never depends on prompt discipline. Deduped against
+      // what the previous top already carries.
+      const locators = extractSpillLocators(seg)
+      const summaryWithPointers = appendLocators(segmentSummary, locators)
+      const mergeInput = prev === undefined ? summaryWithPointers : `${prev.top}\n\n新的段摘要：\n${summaryWithPointers}`
       const top = await collectStreamText(runLlm, {
         model,
         system: MERGE_SUMMARY_PROMPT,
         messages: [{ role: "user", content: mergeInput + focusLine }],
         tools: [],
       }, { signal: opts.signal })
+      const topWithPointers = appendLocators(top, locators)
 
       const upto = seg[seg.length - 1]!.id
-      const nextSegments = [...(prev?.segments ?? []), { upto, summary: segmentSummary }]
+      const nextSegments = [...(prev?.segments ?? []), { upto, summary: summaryWithPointers }]
       try {
         sessions.appendCompaction(sessionId, {
           at: new Date().toISOString(),
@@ -226,8 +246,8 @@ export class Compactor {
           from: prevIdx >= 0 ? seg[0]!.id : null,
           upto,
           messages: seg.length,
-          segmentSummary,
-          top,
+          segmentSummary: summaryWithPointers,
+          top: topWithPointers,
         })
       } catch (err) {
         console.error(`kclaw compaction audit (${sessionId}) append failed:`, err)

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { newAssistantMessage, newMessage } from "../../src/protocol/messages.js"
 import { estimateContextTokens, estimateTokens } from "../../src/session/compaction.js"
-import { chooseBoundary, emergencyBoundary, renderSegment, segmentRanges } from "../../src/session/compaction.js"
+import { chooseBoundary, emergencyBoundary, extractSpillLocators, renderSegment, segmentRanges } from "../../src/session/compaction.js"
 
 function hist(...roles: Array<"user" | "assistant">): Array<ReturnType<typeof newMessage>> {
   return roles.map((r, i) =>
@@ -124,6 +124,24 @@ describe("segmentRanges", () => {
   })
 })
 
+describe("extractSpillLocators", () => {
+  it("提取全部 spill locator 行并去重；无 locator 时为空", () => {
+    const l1 = "[完整输出已存盘: /spill/1-exec.txt；需要更多内容时用 fs_read 读取该文件]"
+    const l2 = "[完整输出已存盘: /spill/2-web.txt（该文件仅保留了前 10MB）；需要更多内容时用 fs_read 读取该文件]"
+    const t = newMessage("s", "tool", [
+      { id: "b1", type: "tool_result", callId: "c1", status: "ok", output: "head\n" + l1, durationMs: 1 },
+      { id: "b2", type: "tool_result", callId: "c2", status: "error", output: l2, durationMs: 1 },
+    ])
+    const t2 = newMessage("s", "tool", [
+      { id: "b3", type: "tool_result", callId: "c3", status: "ok", output: "head\n" + l1, durationMs: 1 },
+    ])
+    expect(extractSpillLocators([t, t2])).toEqual([l1, l2])
+    expect(extractSpillLocators([newMessage("s", "tool", [
+      { id: "b4", type: "tool_result", callId: "c4", status: "ok", output: "plain output", durationMs: 1 },
+    ])])).toEqual([])
+  })
+})
+
 describe("renderSegment", () => {
   it("renders one line per message with tool call/result condensed", () => {
     const u = newMessage("s", "user", [{ id: "b1", type: "text", text: "看一下配置" }])
@@ -150,6 +168,31 @@ describe("renderSegment", () => {
     expect(line).toContain("[错误]")
     expect(line.length).toBeLessThan(2000)
     expect(line).not.toContain("炸".repeat(301))
+  })
+
+  it("错误输出的尾部错误串保真：超长错误渲染头尾两段，中段省略", () => {
+    const tail = "Error: ECONNREFUSED 10.0.0.8:5432 (最后一次重试失败)"
+    const t = newMessage("s", "tool", [
+      { id: "b1", type: "tool_result", callId: "c1", status: "error", output: "log 前缀\n".repeat(80) + tail, durationMs: 1 },
+    ])
+    const line = renderSegment([t])
+    expect(line).toContain("[错误]")
+    expect(line).toContain(tail) // 尾部错误串必须到达摘要模型
+    expect(line).toContain("…[中略]…")
+    // ok 状态不保尾：仍然只截头部
+    const ok = newMessage("s", "tool", [
+      { id: "b2", type: "tool_result", callId: "c2", status: "ok", output: "好".repeat(1000), durationMs: 1 },
+    ])
+    expect(renderSegment([ok])).not.toContain("…[中略]…")
+  })
+
+  it("spill locator 行逐字保留：超长输出截头后 locator 仍完整出现在渲染里", () => {
+    const locator = "[完整输出已存盘: /home/kclaw/spill/abc123-exec.txt；需要更多内容时用 fs_read 读取该文件]"
+    const t = newMessage("s", "tool", [
+      { id: "b1", type: "tool_result", callId: "c1", status: "ok", output: "长输出".repeat(500) + "\n" + locator, durationMs: 1 },
+    ])
+    const line = renderSegment([t])
+    expect(line).toContain(locator)
   })
 
   it("includes note blocks by their text", () => {

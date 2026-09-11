@@ -145,10 +145,38 @@ export function segmentRanges(
 const SEGMENT_LINE_MAX = 2_000
 const TOOL_ARGS_MAX = 120
 const TOOL_RESULT_MAX = 300
+/** 错误输出额外保留的尾部窗口：失败的原因几乎总在输出的末尾。 */
+const TOOL_RESULT_TAIL_MAX = 200
+
+/**
+ * Extract spill locator lines ([完整输出已存盘: …]) from a rendered span's
+ * tool results, deduplicated in order. The compactor appends these to the
+ * segment/top summaries STRUCTURALLY — the pointer to the full copy is
+ * code-guaranteed to survive, not left to the summarizer's discretion.
+ */
+export function extractSpillLocators(messages: Message[]): string[] {
+  const out: string[] = []
+  for (const m of messages) {
+    for (const b of m.blocks) {
+      if (!isBlockType("tool_result", b)) continue
+      for (const line of b.output.split("\n")) {
+        const trimmed = line.trim()
+        if (trimmed.startsWith("[完整输出已存盘:") && trimmed.endsWith("]") && !out.includes(trimmed)) {
+          out.push(trimmed)
+        }
+      }
+    }
+  }
+  return out
+}
 
 /**
  * Compaction/extraction input rendering: one line per
  * message; tool activity condensed (call `→ name(args)`, result `⇐ head`).
+ * Error-status results keep head AND tail slices — the actual failure reason
+ * almost always sits at the tail. Spill locator lines survive verbatim even
+ * when the surrounding output truncates, so the pointer to the full copy
+ * reaches the summary model.
  */
 export function renderSegment(messages: Message[]): string {
   const lines: string[] = []
@@ -161,8 +189,20 @@ export function renderSegment(messages: Message[]): string {
         const args = b.argsJson.length > TOOL_ARGS_MAX ? `${b.argsJson.slice(0, TOOL_ARGS_MAX)}…` : b.argsJson
         parts.push(`→ ${b.name}(${args})`)
       } else if (isBlockType("tool_result", b)) {
-        const prefix = b.status === "error" ? "[错误] " : ""
-        parts.push(`⇐ ${prefix}${b.output.slice(0, TOOL_RESULT_MAX)}`)
+        // Spill locator lines live at the END of a truncated output — pull
+        // them out before slicing so the pointer never gets cut.
+        const locatorIdx = b.output.lastIndexOf("\n[完整输出已存盘:")
+        const hasLocator = locatorIdx >= 0 && b.output.slice(locatorIdx).trimEnd().endsWith("]")
+        const body = hasLocator ? b.output.slice(0, locatorIdx) : b.output
+        const locator = hasLocator ? "\n" + b.output.slice(locatorIdx + 1).trim() : ""
+        if (b.status === "error" && body.length > TOOL_RESULT_MAX + TOOL_RESULT_TAIL_MAX) {
+          const tail = body.slice(-TOOL_RESULT_TAIL_MAX)
+          parts.push(`⇐ [错误] ${body.slice(0, TOOL_RESULT_MAX)}…[中略]…${tail}${locator}`)
+        } else {
+          const prefix = b.status === "error" ? "[错误] " : ""
+          const head = body.length > TOOL_RESULT_MAX ? `${body.slice(0, TOOL_RESULT_MAX)}…` : body
+          parts.push(`⇐ ${prefix}${head}${locator}`)
+        }
       }
     }
     const body = parts.join(" ").trim()
