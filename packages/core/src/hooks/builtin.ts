@@ -108,13 +108,15 @@ export const BUILTIN_HOOK_DEFINITIONS: ReadonlyArray<{
   { name: "skill-wrap", position: "llm-before", description: "技能点名的隐式包装（只改发给模型的视图）", failure: "skip" },
   { name: "retry-notify", position: "llm-retry", description: "把 provider 重试转成 llm.failed(willRetry) 事件", failure: "skip" },
   { name: "steering-drain", position: "turn-boundary", description: "取走队列的引导缓冲并注入对话", failure: "fatal" },
-  { name: "mid-run-panic", position: "compaction-check", description: "红线水位的迭代边界中途压缩判定", failure: "skip" },
+  { name: "mid-run-panic", position: "compaction-check", description: "红线水位的迭代边界中途压缩判定（含后台成果应用）", failure: "skip" },
   { name: "overflow-emergency", position: "overflow-rescue", description: "上下文溢出的急救压缩（换视图整次重发）", failure: "skip" },
   { name: "usage-ledger", position: "run-after", description: "记录本次 run 的 token 用量台账", failure: "skip" },
   { name: "post-run-compaction", position: "run-after", description: "黄线水位触发的收尾压缩", failure: "fatal" },
   { name: "follow-check", position: "run-after", description: "挂起记忆空闲检查（调度器补查）", failure: "skip" },
   { name: "system-materials", position: "system-before", description: "收集认知与技能列表两个提示词段", failure: "skip" },
   { name: "system-audit", position: "system-after", description: "系统提示词全量审计留痕（写失败即 run 失败）", failure: "fatal" },
+  { name: "background-precompact", position: "compaction-check", description: "预压线触发后台压缩（不阻塞请求，成果待应用）", failure: "skip" },
+  { name: "manual-compact-flush", position: "run-after", description: "冲刷挂起的 /compact（忙时登记，运行结束后执行）", failure: "skip" },
 ]
 
 /** Build this run's builtin chain entries (closures over run resources). */
@@ -126,8 +128,9 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
   } = deps
   const childRun = deps.childRun === true
   const usageSessionId = deps.usageSessionId ?? sessionId
-  const atRatio = config.sessions.compactAtRatio ?? 0.66
-  const panicRatio = config.sessions.compactPanicRatio ?? 0.85
+  const atRatio = config.sessions.compactAtRatio ?? 0.8
+  const panicRatio = config.sessions.compactPanicRatio ?? 0.9
+  const aheadRatio = config.sessions.compactAheadRatio ?? 0.75
   const runCtx = () => (runIdRef.current === undefined ? { sessionId } : { sessionId, runId: runIdRef.current })
   const memoryNotes: NoteBlock[] = []
 
@@ -196,26 +199,78 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
     builtin("steering-drain", "turn-boundary", 10, BUILTIN_HOOK_DEFINITIONS[5]!.description, "fatal", () => {
       return drainSteer()
     }),
-    builtin("mid-run-panic", "compaction-check", 10, BUILTIN_HOOK_DEFINITIONS[6]!.description, "skip", async () => {
-      // Cancellation marker or an already-aborted run → don't compact; below
-      // the red line → don't compact. A throw resolves undefined == decline.
-      if (compactor.cancelled(sessionId) || signal.aborted) return null
-      const boundaryHistory = sessions.readMessages(sessionId)
+    builtin("background-precompact", "compaction-check", 5, BUILTIN_HOOK_DEFINITIONS[13]!.description, "skip", () => {
+      // 预压线（ahead ≤ 估算水位 < 红线）且无在飞、无挂起成果时，在后台启动
+      // 压缩：不阻塞下一次请求，成果由后续迭代边界应用（mid-run-panic）。
+      // 水位已达红线的场景让位给 mid-run-panic 的同步路径。
+      if (compactor.cancelled(sessionId) || signal.aborted) return
+      const history = sessions.readMessages(sessionId)
       const overhead = contextOverhead()
-      if (estimateContextTokens(boundaryHistory, undefined, overhead) < budget * panicRatio) return null
-      const next = await compactor.auto(sessionId, boundaryHistory, config, runLlm, model, {
+      const level = estimateContextTokens(history, undefined, overhead)
+      if (level < budget * aheadRatio || level >= budget * panicRatio) return
+      compactor.background(sessionId, history, config, runLlm, model, {
+        overheadTokens: overhead,
+        budget,
+      })
+      // 只开工，不换视图：undefined 不影响同位后续钩子的返回值。
+      return undefined
+    }, Number.POSITIVE_INFINITY),
+    builtin("mid-run-panic", "compaction-check", 10, BUILTIN_HOOK_DEFINITIONS[6]!.description, "skip", async () => {
+      // Cancellation marker or an already-aborted run → don't compact. A throw
+      // resolves undefined == decline.
+      if (compactor.cancelled(sessionId) || signal.aborted) return null
+      // A parked background result is applied first — it is strictly newer
+      // than the run's view and the real request anchor self-heals at the
+      // next boundary (no post-apply re-estimate: the anchor is stale).
+      const parkedView = compactor.takeParked(sessionId)
+      if (parkedView !== null) return parkedView
+      const overhead = contextOverhead()
+      if (estimateContextTokens(sessions.readMessages(sessionId), undefined, overhead) < budget * panicRatio) return null
+      if (compactor.hasInFlight(sessionId)) {
+        // Red line hit while a background compaction is in flight: wait for
+        // it to settle (single-compaction invariant), then re-estimate on the
+        // span its parked view would keep — sync-compact only if that active
+        // span still crosses the red line (spec D5). The re-read is biased
+        // large (anchor predates the parked view) — the safe direction.
+        await compactor.waitForSettled(sessionId, signal)
+        if (compactor.cancelled(sessionId) || signal.aborted) return null
+      }
+      const history = sessions.readMessages(sessionId)
+      const settled = compactor.takeParked(sessionId)
+      if (settled !== null) {
+        const keepFrom = history.findIndex((m) => m.id === settled.upto) + 1
+        const active = keepFrom > 0 ? history.slice(keepFrom) : undefined
+        if (active !== undefined && active.length > 0 &&
+            estimateContextTokens(active, undefined, overhead) < budget * panicRatio) {
+          return settled
+        }
+      }
+      const next = await compactor.auto(sessionId, history, config, runLlm, model, {
         phase: "in-run",
         signal,
         overheadTokens: overhead,
         budget,
       })
-      void compactionAfter("in-run", "ok")
-      return next
+      if (next !== null) {
+        void compactionAfter("in-run", "ok")
+        return next
+      }
+      // The sync compaction didn't happen (waterline/boundary decline, or the
+      // summarizer failed — either way nothing was written): the parked result
+      // we waited for is still the newest view — apply it rather than drop it.
+      return settled
     }, Number.POSITIVE_INFINITY),
     builtin("overflow-emergency", "overflow-rescue", 10, BUILTIN_HOOK_DEFINITIONS[7]!.description, "skip", async () => {
       // No watermark check — "it already overflowed" is a fact. Abort after
       // the await → null (the resend would be torn down at the next
       // checkpoint anyway).
+      // 急救撞在飞后台：abortInFlight 掐掉它并等其退出（单压缩不变量；成果
+      // 丢弃——原文无损，下次重压），再立即同步急救。救援路径不等摘要慢慢
+      // 跑完；不用 cancel()——它的取消标记会压制紧随其后的急救 auto()。
+      if (compactor.hasInFlight(sessionId)) {
+        compactor.abortInFlight(sessionId)
+        await compactor.waitForSettled(sessionId)
+      }
       const next = await compactor.auto(sessionId, sessions.readMessages(sessionId), config, runLlm, model, {
         phase: "in-run",
         emergency: true,
@@ -240,11 +295,36 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
         console.error("kclaw usage record failed:", err)
       }
     }),
+    builtin("manual-compact-flush", "run-after", 15, BUILTIN_HOOK_DEFINITIONS[14]!.description, "skip", async () => {
+      // 冲刷挂起的 /compact（会话忙时登记的）：在自动收尾压缩之前执行——
+      // 用户显式意图优先，压完水位落回，自动收尾检查自然不再触发。
+      // 不做忙碌/排队检查（收尾链时刻必然不忙；运行期间排队的消息等下一条
+      // 出队，与压缩无关）。失败按 skip：hook.failed 事件 + 日志，不连坐 run。
+      if (!compactor.hasDeferredManual(sessionId)) return
+      if (compactor.hasInFlight(sessionId)) await compactor.waitForSettled(sessionId, signal)
+      const deferred = compactor.takeDeferredManual(sessionId)
+      if (deferred === null) return
+      await compactor.compact(sessionId, sessions.readMessages(sessionId), "", config, runLlm, model, {
+        focus: deferred.focus,
+        manual: true,
+        phase: "manual",
+        budget,
+      })
+      void compactionAfter("manual", "ok")
+    }, Number.POSITIVE_INFINITY),
     builtin("post-run-compaction", "run-after", 20, BUILTIN_HOOK_DEFINITIONS[9]!.description, "fatal", async ({ outcome }) => {
       // aborted/error runs are not finalized (the former is being torn down,
       // the latter just failed); the cancellation marker suppresses a
       // user-cancelled compaction for this run.
       if (outcome.stopReason === "aborted" || outcome.stopReason === "error" || compactor.cancelled(sessionId)) return
+      if (compactor.hasInFlight(sessionId)) {
+        // 收尾撞在飞后台（预压没跑完 run 就结束了）：等它完成再判断——绝不
+        // 并发第二个压缩。等待后走正常判断（auto 内部的活跃段细判自适应）。
+        // 循环已结束，挂起视图没有"下一次请求"可应用，取走丢弃——元数据
+        // 已携带同一成果，下一次运行从 meta 读到它。
+        await compactor.waitForSettled(sessionId, signal)
+        compactor.takeParked(sessionId)
+      }
       const postRunHistory = sessions.readMessages(sessionId)
       const overhead = contextOverhead()
       if (estimateContextTokens(postRunHistory, undefined, overhead) < budget * atRatio) return

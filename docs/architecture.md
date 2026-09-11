@@ -142,7 +142,7 @@ run 的装配在 core 的 `executeRun`（`packages/core/src/agent/run-assembly.t
 
 - 每条消息：`deps.onMessage` → `SessionStore.appendMessage` → events.jsonl 追加一条 message 事件，并汇入 meta.json 投影。
 - 每个事件：`deps.onEvent` → `bus.emit` → JSON 序列化 → 只发给订阅了该会话的 socket（`packages/core/src/bus.ts`）。
-- run 结束时（run-after 钩子链）：往 usage.db 记一行用量（失败只写日志，不影响 run）；`memory.write.idleMinutes>0` 时挂一个跟随触发的记忆检查（记忆由 memory_save 工具与定时/跟随调度器写入，见 [memory](./core/memory.md)）；上下文占用到达黄线（预算的 66%）时执行一次收尾压缩，压缩失败则本次 run 以失败收场；非定时任务会话的第一条消息触发自动命名，成功后改名并广播 session.renamed。
+- run 结束时（run-after 钩子链）：往 usage.db 记一行用量（失败只写日志，不影响 run）；`memory.write.idleMinutes>0` 时挂一个跟随触发的记忆检查（记忆由 memory_save 工具与定时/跟随调度器写入，见 [memory](./core/memory.md)）；上下文占用到达黄线（预算的 80%）时执行一次收尾压缩，压缩失败则本次 run 以失败收场；非定时任务会话的第一条消息触发自动命名，成功后改名并广播 session.renamed。
 - 客户端渲染（CLI 写 stdout；WebUI 更新 React 状态），最后 run.completed 终态。
 
 两条不变量贯穿全链：

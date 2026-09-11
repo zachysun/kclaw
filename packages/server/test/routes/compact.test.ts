@@ -96,23 +96,20 @@ describe("POST /sessions/:id/compact", () => {
     expect(compactCalls).toEqual([{ id: s.id, focus: "重点保留登录模块" }])
   })
 
-  it("maps the busy refusal to 409", async () => {
+  it("passes a queued acknowledgment through with 200 (busy sessions defer, not refuse)", async () => {
     const s = sessions.create("忙会话")
-    compactResult = new Error("会话正在运行，等它结束")
+    compactResult = { queued: true, message: "已排队：当前运行结束后自动压缩" }
     const res = await app.inject({ method: "POST", url: `/sessions/${s.id}/compact`, headers: AUTH })
-    expect(res.statusCode).toBe(409)
-    expect(res.json()).toEqual({ error: "会话正在运行，等它结束" })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ queued: true, message: "已排队：当前运行结束后自动压缩" })
   })
 
-  it("maps both refusal messages to 409", async () => {
-    // fake compactSession 依次 reject 两种拒绝文案，断言均映射 409 且原文案透传
+  it("maps the queued-messages refusal to 409", async () => {
     const s = sessions.create("双拒会话")
-    for (const message of ["会话正在运行，等它结束", "还有 2 条排队消息，先处理或取消"]) {
-      compactResult = new Error(message)
-      const res = await app.inject({ method: "POST", url: `/sessions/${s.id}/compact`, headers: AUTH })
-      expect(res.statusCode).toBe(409)
-      expect(res.json()).toEqual({ error: message })
-    }
+    compactResult = new Error("还有 2 条排队消息，先处理或取消")
+    const res = await app.inject({ method: "POST", url: `/sessions/${s.id}/compact`, headers: AUTH })
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toEqual({ error: "还有 2 条排队消息，先处理或取消" })
   })
 
   it("503s when no run manager is wired", async () => {

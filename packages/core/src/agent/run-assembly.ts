@@ -570,10 +570,13 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   const budget = resolveContextTokens(config, entryKey)
   const maxOutput = entry?.maxOutput
 
-  // v3 compaction thresholds: the loop's packing budget reads them here; the
-  // compaction decision hooks get the same resolved budget via the chain deps
-  // (single config source, one read per side).
-  const atRatio = config.sessions.compactAtRatio ?? 0.66
+  // v3/v4 compaction thresholds: the loop's packing budget reads the pack
+  // ratio here; the compaction decision hooks get the yellow/red/ahead lines
+  // via the chain deps (single config source, one read per side). The packing
+  // budget is DECOUPLED from the yellow line: the yellow line only gates
+  // post-run compaction, the pack line (default 0.70) owns request-assembly
+  // omission — loosening the yellow line must not dilute omission.
+  const packRatio = config.sessions.compactPackRatio ?? 0.7
   // Fixed per-request overhead for the compaction/packing judgments: the
   // assembled system prompt plus the wire tool schemas. The trigger estimate
   // anchors on the last assistant's reported inputTokens (already including
@@ -675,9 +678,9 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       hooks: chain,
       toolResultKeep: config.sessions.toolResultKeep ?? 8,
       loopMaxRepeats: config.sessions.toolLoopMaxRepeats,
-      // 省略预算（黄线值）透传给打包台：预算装不下的工具输出以省略占位符发送；
+      // 省略预算（省略线值）透传给打包台：预算装不下的工具输出以省略占位符发送；
       // 固定开销（系统提示词 + 工具定义）先行扣除，打包台只裁决消息内容
-      tokenBudget: Math.max(0, budget * atRatio - contextOverheadRef.current),
+      tokenBudget: Math.max(0, budget * packRatio - contextOverheadRef.current),
       ...(maxOutput === undefined ? {} : { maxTokens: maxOutput }),
       onEvent: (e) => {
         if (e.type === "run.started" && e.runId !== undefined) runId = e.runId

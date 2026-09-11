@@ -21,12 +21,13 @@
 - **附件挂载：按文件类型分三种处理**：`mountAttachments` 把用户上传的文件转成用户消息上的 attachment 块。文本类文件（MIME 为 `text/*` 或扩展名是常见文本类型）且不超过 64KiB 时，读出正文内联进消息（超过 8192 字符截断并加 `\n…[已截断]`）；图片且不超过 5MiB 时转成 base64 内嵌（作为多模态内容段发给模型）；其余文件只在块里放 `{type:"file", path}` 路径信息，模型需要内容时自己用 fs_read 读。安全上有两道检查：ws 层在校验 send_message 帧时查过一次路径，这里再用 `realpathWithin` 复核一遍——引用越出本会话附件目录就直接抛错、终止整条 run。
 - **用量记录失败不影响 run**：run 正常结束后向 `usageStore.record` 记一行（会话 id/run id/模型/输入输出 token/时刻）。这行代码包在 try/catch 里，失败只打 `kclaw usage record failed:` 日志；daemon 没注入 usageStore 时整个步骤跳过。
 - **记忆写入在 core 侧，run 路径只留注入与挂起**：旧版的"run 结束后服务端发出即忘的自动提取"（`config.memory.autoExtract`）已移除——写入管线整体移入 core 的 `MemoryPipeline`（`packages/core/src/memory/pipeline.ts`），由五触发驱动（`memory_save` 工具的 immediate、`/memory save` 的手动 manual、新建会话路由的 clear、定时 interval、跟随 follow，机制见 [memory](../core/memory.md)）。run 路径（core `executeRun`）只承担三件事：每次 run 的两级注入（L2 认知常驻系统提示 + L1 情节 note，见装配第 4 步）；给 `createBuiltinTools` 传入 `memoryCtx.immediateEnabled = config.memory.write.immediate`（决定 `memory_save` 工具是否当场触发写入）；run 收尾时挂起跟随检查（`idleMinutes > 0` 时 `memory.scheduleFollowCheck`，写入 `<projectDir>/state.json`，daemon 重启后由记忆调度器补查，见下文装配第 13 步）。
-- **上下文压缩（token 触发的分层摘要，四个触发点）**：压缩不再发生在发送路径上——引擎直接以全量 `history` 起 run，用户发消息永远零压缩等待。四个触发点由 run 路径编排（机制细节与数据格式见 [compaction](../core/compaction.md)）：
-  - **收尾压缩**（主路径）：`runAgent` 返回且 stopReason 非 `aborted`/`error` 时，用 `estimateContextTokens(readMessages(sessionId))` 估算上下文占用（锚定最后一条助手消息记录的真实 `usage.inputTokens`，锚之前的内容天然不计入——它们不在上一次请求里，所以直接对全量历史读数即可），上下文占用 ≥ `budget × (compactAtRatio ?? 0.66)` 就 `compactor.auto({phase:"post-run", signal})`。它在 `executeRun` 内 await、位于 token 用量记录之后——会话驱动器的串行化保证压缩期间新到的消息排队等待、不会并发写会话元数据（这也让手动 /compact 在收尾压缩期间被"会话活跃"条件自然拒绝）。
-  - **中途压缩**：`compaction-check` 位置的内置钩子 `mid-run-panic`（见 [hooks](../core/hooks.md)）在每轮迭代边界触发。钩子内先查取消标记与 run 的中止信号（任一命中返回 null 不压），再算上下文占用，≥ `budget × (compactPanicRatio ?? 0.85)` 才压；压缩成功返回新的压缩视图 `{ upto, top }`，循环从下一次请求起应用（`upto` 之前原文不再发、脉络项垫在 `messages[0]`）；失败返回 null、运行不补救继续。
-  - **超限急救**：`overflow-rescue` 位置的内置钩子 `overflow-emergency` 在流式调用抛出上下文超限错误且零输出时触发——不看上下文占用，"已经爆了"就是事实，`compactor.auto({phase:"in-run", emergency:true, signal})`；成功则循环整次请求静默重发一次（最多一次），仍失败才走报错路径。
-  - **手动 /compact**：`compactSession` 直调 core `Compactor.compact({manual:true, phase:"manual"})`，跳过触发线。
-  - `Compactor.auto`（core `session/compactor.ts`）是收尾/中途/超限三路的共用装配：为每次压缩建独立 AbortController 并登记在一张"正在进行中"的表里，run 的中止信号联动过去（run 中止时顺带取消压缩），run 结束时清理；压缩自身的摘要调用经 `collectStreamText` 带 `{ signal }`，取消信号触发时抛出 → `Compactor.compact` 走 cancelled 分支。`cancelCompaction`（WebUI 指示行取消按钮 → WS 帧 `compaction.cancel`）写会话级取消标记并取消正在进行的压缩；标记在每次 run 装配（`executeRun`）开头清除，只压制本次运行内的自动压缩。
+- **上下文压缩（token 触发的分层摘要，五个触发点）**：压缩不再发生在发送路径上——引擎直接以全量 `history` 起 run，用户发消息永远零压缩等待。五个触发点由 run 路径编排（机制细节与数据格式见 [compaction](../core/compaction.md)）：
+  - **后台预压**：`compaction-check` 位置的内置钩子 `background-precompact`（排在 `mid-run-panic` 之前）在每个迭代边界检查：上下文占用进入 [预压线, 红线) 区间且无在飞压缩、无挂起成果、无取消标记时，`compactor.background(...)` 非阻塞派一次后台压缩（`Compactor.background` 登记在飞后立即返回，摘要调用在后台跑，不挂 run 的中止信号）。成功后成果先写入元数据、视图挂起，由下一次迭代边界的 `mid-run-panic` 取用。
+  - **收尾压缩**（主路径）：`runAgent` 返回且 stopReason 非 `aborted`/`error` 时，用 `estimateContextTokens(readMessages(sessionId))` 估算上下文占用（锚定最后一条助手消息记录的真实 `usage.inputTokens`，锚之前的内容天然不计入——它们不在上一次请求里，所以直接对全量历史读数即可），上下文占用 ≥ `budget × (compactAtRatio ?? 0.80)` 就 `compactor.auto({phase:"post-run", signal})`。它在 `executeRun` 内 await、位于 token 用量记录之后——会话驱动器的串行化保证压缩期间新到的消息排队等待、不会并发写会话元数据（这窗口内收到的手动 /compact 也被"会话活跃"条件自然挂起，下一轮 run 的收尾链冲刷）。估算前若还有在飞的后台压缩，先等它落定（挂起视图取走丢弃——循环已结束没有下一次请求可应用，元数据已携带同一成果）再读数；等待后走正常黄线判断，auto 内部的活跃段细判自适应——后台成果已把活跃段打下去时它自然不再压。
+  - **中途压缩**：`compaction-check` 位置的内置钩子 `mid-run-panic`（见 [hooks](../core/hooks.md)）在每轮迭代边界触发。钩子内先查取消标记与 run 的中止信号（任一命中返回 null 不压，挂起的后台成果也留到下一次运行再应用），未命中再取挂起的后台成果（有就直接采用为新压缩视图——水位多半已落回线下，不再压第二次），然后算上下文占用：≥ `budget × (compactPanicRatio ?? 0.90)` 才进入压的分支。若此刻有在飞后台压缩则先等它落定，再按挂起分界重估活跃段（重估读数受旧锚点影响偏高，安全方向）——仍超红线才同步压（活跃段切不出边界就放弃硬压、应用挂起成果），否则直接应用挂起成果；压缩成功返回新的压缩视图 `{ upto, top }`，循环从下一次请求起应用（`upto` 之前原文不再发、脉络项垫在 `messages[0]`）；失败返回 null、运行不补救继续。
+  - **超限急救**：`overflow-rescue` 位置的内置钩子 `overflow-emergency` 在流式调用抛出上下文超限错误且零输出时触发——不看上下文占用，"已经爆了"就是事实。救援等不得：先 `compactor.abortInFlight` 掐掉在飞的后台压缩并等它落定（被掐的成果丢弃，原文无损；不用 `cancel`——它的取消标记会压制紧随其后的急救本身），再 `compactor.auto({phase:"in-run", emergency:true, signal})`；成功则循环整次请求静默重发一次（最多一次），仍失败才走报错路径。
+  - **手动 /compact**：`compactSession` 直调 core `Compactor.compact({manual:true, phase:"manual"})`，跳过触发线；会话忙时不拒绝而是挂起，运行结束的收尾链先冲刷它（见下文第 13 步），已有排队消息时仍拒绝。
+  - `Compactor.auto`（core `session/compactor.ts`）是收尾/中途/超限三路的共用装配：为每次压缩建独立 AbortController 并登记在一张"正在进行中"的表里（后台预压也登记同一张表，`waitForSettled` 供同步路径等待），run 的中止信号联动过去（run 中止时顺带取消同步压缩），run 结束时清理；压缩自身的摘要调用经 `collectStreamText` 带 `{ signal }`，取消信号触发时抛出 → `Compactor.compact` 走 cancelled 分支。`cancelCompaction`（WebUI 指示行取消按钮 → WS 帧 `compaction.cancel`）写会话级取消标记并取消正在进行的压缩（含后台预压）；标记在每次 run 装配（`executeRun`）开头清除，只压制本次运行内的自动压缩。
   - `Compactor.compact` 内部：按 `SessionMeta.compaction.upto` 切出 active 历史（旧会话退回读 `compactedUpto`，标记在历史里找不到视为无标记），上下文占用过线后由 `chooseBoundary` 选出分界——从最新往回累加到预算 × `compactTargetRatio`（默认 0.33）为止，起点再对齐到最近的用户消息（保证段与保留部分都是完整轮次）。压缩是两次无 tools 的 `collectStreamText` 调用（复用本轮 `runLlm` 与解析出的 model，`Compactor.auto` 内 await）：新段经 `renderSegment` 生成固定五栏的段摘要，再与旧总摘要归并出新总摘要；**两次全部成功后**追加一条 `compaction` 事件（这是 `meta.compaction` 与压缩审计的唯一写入点——事件投影据此维护 `{ segments, top, upto }`，`trigger` 按 `manual`/`in-run`/`auto` 三值、超限急救带 `emergency`）。旧版压缩的遗留字段 `compactedSummary`/`compactedUpto` 不再主动删除（有 `meta.compaction` 后即被遮蔽、无实际作用）。事件：上下文占用过线且边界已定先发 `compaction.started {phase}`，之后无论成败/取消必发 `compaction.completed {segments, kept, phase, result}`（失败/取消时 segments/kept 为 0）；占用未过线则两个事件都不发。模型调用或事件写入抛错时 `Compactor.compact` 记一行 `kclaw compaction failed:` 日志后上抛，`Compactor.auto` 消化为 null——运行照常继续，下一次过线重新触发。总摘要不再挂 note，而是经循环的压缩视图以脉络项进请求（见 [compaction](../core/compaction.md) 的"注入"）。
 
 ## 接口
@@ -112,9 +113,10 @@ export class RunManager {
                                         // 取消进行中的自动压缩：写会话级取消标记 + 取消压缩用的
                                         // controller；返回"是否有压缩正在进行"。标记只压制本次运行内
                                         // 的自动压缩（中途/收尾），下一次运行开始时清除；手动 /compact 不查标记
-  compactSession(sessionId: string, focus?: string): Promise<{ message: string }>
-                                        // 手动压缩（HTTP/CLI/web 三入口共用）：队列非空或会话活跃
-                                        // 时拒绝（双条件文案不同；收尾压缩算在"活跃"窗口内）；
+  compactSession(sessionId: string, focus?: string): Promise<{ queued?: boolean; message: string }>
+                                        // 手动压缩（HTTP/CLI/web 三入口共用）：队列非空仍拒绝
+                                        // （409）；会话活跃时不再拒绝而是挂起——返回
+                                        // {queued:true}，运行结束的收尾链先冲刷它（manual-compact-flush）；
                                         // 无可压缩内容返回固定文案
 }
 ```
@@ -130,7 +132,7 @@ export class ConfirmationBroker {
 }
 ```
 
-关键常量（core `agent/run-assembly.ts`；两个压缩提示词在 `session/compactor.ts`）：`MEMORY_QUERY_CHARS = 200`（用户文本前 200 字符做 L1 情节检索）、`MEMORY_LIMIT = 5`（最多注入 5 条情节 note）、`DEFAULT_SYSTEM_PROMPT = "你是 kclaw，一个务实的个人助理。"`（AGENTS.md 缺失/为空时的回退提示）；附件挂载的 `TEXT_INLINE_MAX_BYTES = 64KiB`、`TEXT_INLINE_MAX_CHARS = 8192`、`IMAGE_INLINE_MAX_BYTES = 5MiB`。两个固化系统提示词（压缩用）：`SEGMENT_SUMMARY_PROMPT`（段摘要：固定五栏 markdown、不超过 800 字）、`MERGE_SUMMARY_PROMPT`（总摘要归并：同样五栏、保留新版本并注明被推翻的旧版本）；记忆提取/内化的提示词已随写入管线移入 core（见 [memory](../core/memory.md)）。压缩触发的四个比例不在 defaultConfig 里（`sessions` 段的 `contextTokens`/`compactAtRatio`/`compactPanicRatio`/`compactTargetRatio`/`toolResultKeep` 均可选），缺省值在读取处（core `executeRun`）补齐（128000 / 0.66 / 0.85 / 0.33 / 8）。确认超时来自 `config.permissions.confirmTimeoutMs`，默认 `120_000`（120 秒，`packages/core/src/storage/config.ts` 的 defaultConfig）。
+关键常量（core `agent/run-assembly.ts`；两个压缩提示词在 `session/compactor.ts`）：`MEMORY_QUERY_CHARS = 200`（用户文本前 200 字符做 L1 情节检索）、`MEMORY_LIMIT = 5`（最多注入 5 条情节 note）、`DEFAULT_SYSTEM_PROMPT = "你是 kclaw，一个务实的个人助理。"`（AGENTS.md 缺失/为空时的回退提示）；附件挂载的 `TEXT_INLINE_MAX_BYTES = 64KiB`、`TEXT_INLINE_MAX_CHARS = 8192`、`IMAGE_INLINE_MAX_BYTES = 5MiB`。两个固化系统提示词（压缩用）：`SEGMENT_SUMMARY_PROMPT`（段摘要：固定五栏 markdown、不超过 800 字）、`MERGE_SUMMARY_PROMPT`（总摘要归并：同样五栏、保留新版本并注明被推翻的旧版本）；记忆提取/内化的提示词已随写入管线移入 core（见 [memory](../core/memory.md)）。压缩触发的五个比例不在 defaultConfig 里（`sessions` 段的 `contextTokens`/`compactPackRatio`/`compactAheadRatio`/`compactAtRatio`/`compactPanicRatio`/`compactTargetRatio`/`toolResultKeep` 均可选），缺省值在读取处补齐：预算与省略线（128000 / 0.70）在 core `executeRun`，预压线/红线/黄线复核（0.75 / 0.90 / 0.80）在压缩内置钩子定义处，目标比例（0.33）与黄线在压缩引擎 `Compactor`。确认超时来自 `config.permissions.confirmTimeoutMs`，默认 `120_000`（120 秒，`packages/core/src/storage/config.ts` 的 defaultConfig）。
 
 ## 核心流程
 
@@ -181,10 +183,10 @@ submit(sessionId, input)
 9. **模型解析与 LLM 客户端**：`llmForRun(onLlmRetry)` 为本 run 构造带重试可见性的客户端——重试回调把 attempt 计数推进并触发 `llm-retry` 位置的钩子链（内置 `retry-notify` 转 `llm.failed {willRetry:true}` 事件）；`runId` 从循环的第一个事件 `run.started` 捕获，`llmAttempt` 计数在 `llm.completed/failed` 后复位。随后按三级优先级解析模型：`resolveEntry(input.model ?? sessionMeta?.model ?? defaultModel)`。
 10. **压缩视图**：`RunInput.compaction` 传入会话 meta 里的压缩状态 `{ upto, top }`（无则 undefined）——循环据此在请求里垫脉络项、跳过已压缩部分。**不再有发送前预压缩**。`session_search` 的检索后端在此懒构造（`buildSessionSearch`：返回一个首次调用才读取该会话事件流的闭包，交给 `createBuiltinTools`）。
 11. **系统提示词（冻结基线 + 钩子化组装）**：会话 meta 带 `systemBaseline`（提示词缓存纪律，见 [hooks](../core/hooks.md)）时走**冻结路径**——基线文本就是本 run 的系统提示词，组装链（system-before/after）整体跳过，认知/技能清单/AGENTS.md/用户钩子段落的变化都不重写请求前缀（provider 前缀缓存按前缀逐字节命中）；审计照旧每 run 一条（直接 `sessions.appendSystem`，写失败即 run 失败），投影随之写入或更新基线（文本不变时 `frozenAt` 保留原值——它是"这份文本成为基线的时刻"；文本变了才更新）。无基线（新会话 / 升级后首 run / 压缩后首 run）走**装配路径**：`base` 取 AGENTS.md（缺省回退 `DEFAULT_SYSTEM_PROMPT`；子代理 run 换成 `subagentSystemPrompt(workspace)` 精简提示词，见 [subagents](../core/subagents.md)）→ `system-before` 链追加段落（内置 `system-materials`：L2 认知 + 技能清单 `skillListPrompt(skills)`；子代理 run 该钩子返回空段——认知与技能清单都不带；用户文件段落累积在其后）→ 末尾恒定拼接**注入约定段**（`agent/context.ts` 的 `SYSTEM_INJECTION_CONVENTION`：声明 `<system-reminder>` / `<compacted-summary>` 标签是系统注入而非用户输入，见 [agent-loop](../core/agent-loop.md)）→ 段落按序拼进全文 → `system-after` 链过终稿（用户改写在前，内置 `system-audit` fatal 排最后——它把**最终全文**经 `sessions.appendSystem` 写一条 `system` 事件进事件流，每 run 恰好一条、写失败即本次 run 失败；事件序上先于本 run 的 user 消息；投影随之固化新基线）。压缩事件在投影里清除基线，下一个 run 回到装配路径重新固化——纪元边界设在压缩后的缓存冷启动处，零额外成本。
-12. **runAgent**：`hooks` 传第 3 步的链（循环的全部行为挂载点：run-before 写入消息、llm-before 改写视图、turn-boundary 接 `handoff.drainSteer` 的引导注入、compaction-check / overflow-rescue 两个压缩决策位经 `compactor.auto` 执行）；`signal` 接本 run 的 controller；`toolResultKeep` 从 `config.sessions.toolResultKeep`（默认 8）传入、`tokenBudget` 传 `预算 × compactAtRatio`，共同驱动请求构造时的预算驱动工具输出省略。两个持久化回调整装在 deps 上：
+12. **runAgent**：`hooks` 传第 3 步的链（循环的全部行为挂载点：run-before 写入消息、llm-before 改写视图、turn-boundary 接 `handoff.drainSteer` 的引导注入、compaction-check / overflow-rescue 两个压缩决策位经 `compactor.auto`/`compactor.background` 执行）；`signal` 接本 run 的 controller；`toolResultKeep` 从 `config.sessions.toolResultKeep`（默认 8）传入、`tokenBudget` 传 `预算 × compactPackRatio`（省略线 0.70 扣除固定开销），共同驱动请求构造时的预算驱动工具输出省略。两个持久化回调整装在 deps 上：
     - `onEvent`：捕获 runId / 复位 attempt → `bus.emit`（再包一层 try/catch，单个异常订阅者不会中断 run）。
     - `onMessage`：assistant/tool 消息持久化（用户消息的持久化由 run-before 链的 `user-message-land` 负责，不经这里）。
-13. **run-after 链**：`runAgent` 返回后串行跑收尾链——内置 `usage-ledger(10)`（有 usageStore 就记一行用量，失败仅日志；子代理 run 记到父会话名下——`usageSessionId` = `meta.parentSessionId ?? 自身`）→ 任何排其后的用户/注入条目 → 内置 `post-run-compaction(20)`（stopReason 非 `aborted`/`error` 且上下文占用 ≥ `预算 × compactAtRatio` 时 `compactor.auto({phase:"post-run", signal})`，fatal：压缩失败传播为条目级失败；await 它，发生在活动登记清除前——驱动器串行化让压缩期间新消息排队，手动 /compact 此时也被"会话活跃"拒绝）→ 内置 `follow-check(30)`（`config.memory.write.idleMinutes > 0` 时挂起跟随检查，写入该项目 `state.json`，daemon 重启后由记忆调度器补查；子代理 run 不挂；失败静默）。最后 `#executeEntry` 在 finally 里清理 `#active`/`#activeOutcomes` 中属于本 run 的登记（仍是自己才删，防止误删后继 run 的）。
+13. **run-after 链**：`runAgent` 返回后串行跑收尾链——内置 `usage-ledger(10)`（有 usageStore 就记一行用量，失败仅日志；子代理 run 记到父会话名下——`usageSessionId` = `meta.parentSessionId ?? 自身`）→ 任何排其后的用户/注入条目 → 内置 `manual-compact-flush(15)`（运行忙时挂起的 /compact 在这里冲刷：取挂起的 focus，直调 `Compactor.compact({manual:true, phase:"manual"})`；没有挂起就零开销跳过）→ 内置 `post-run-compaction(20)`（stopReason 非 `aborted`/`error` 且上下文占用 ≥ `预算 × compactAtRatio` 时 `compactor.auto({phase:"post-run", signal})`；估算前有在飞后台压缩则先等它落定——等来的成果多半已把水位打回线下。fatal：压缩失败传播为条目级失败；await 它，发生在活动登记清除前——驱动器串行化让压缩期间新消息排队，手动 /compact 此时也被"会话活跃"条件自然挂起到下一轮）→ 内置 `follow-check(30)`（`config.memory.write.idleMinutes > 0` 时挂起跟随检查，写入该项目 `state.json`，daemon 重启后由记忆调度器补查；子代理 run 不挂；失败静默）。最后 `#executeEntry` 在 finally 里清理 `#active`/`#activeOutcomes` 中属于本 run 的登记（仍是自己才删，防止误删后继 run 的）。
 
 调度心跳的 job run 使用同一入口：`run.enqueue(session.id, {userText: job.prompt, trigger: "job", note: "本会话由定时任务「<name>」触发"})`（`packages/server/src/scheduler-tick.ts`），job 触发的 run 跳过自动命名。
 
@@ -238,14 +240,14 @@ steer 条目被 `submit` 放进 `#steerBuf` 后，目标 run 在**迭代边界**
 
 daemon 启动时对每个 queue.jsonl 非空的会话调用：整体重排为内存队列并重新起转驱动器。**steer 与 interrupt 条目一律降级为 wait**——它们的目标场景（某个正在跑的 run）已不存在，降级重排是唯一说得通的语义；恢复后的队列在审计意义上无损（消息都还在），仅在"原本想引导/中断"的意图上打了折扣，这是重启的固有代价。每条恢复条目重新广播 `message.queued {disposition:"wait", position:i}`，让重连的客户端重建排队气泡。
 
-### compactSession：手动压缩（双条件拒绝）
+### compactSession：手动压缩（忙时挂起，排队消息仍拒绝）
 
-`compactSession(sessionId, focus?)` 是 `/compact` 的服务端入口（HTTP `POST /sessions/:id/compact`、CLI `/compact`、web "压缩"按钮三者共同调用）。先检查忙，**两个拒绝条件、两条文案**，队列优先——正在跑的 run 与积压队列并存时，"等它结束"永远解不了围，"先处理或取消排队"才是可行动的建议：
+`compactSession(sessionId, focus?)` 是 `/compact` 的服务端入口（HTTP `POST /sessions/:id/compact`、CLI `/compact`、web "压缩"按钮三者共同调用）。忙闲分两条路：
 
-- queue.jsonl 非空 → 抛 `还有 N 条排队消息，先处理或取消`；
-- `#active` 有活动 run → 抛 `会话正在运行，等它结束`。
+- `#active` 有活动 run → **挂起**：`compactor.deferManual(sessionId, focus)` 记下请求（只留最后一次的 focus，后来的覆盖先前的），立即返回 `{queued: true, message: "已排队：当前运行结束后自动压缩"}`（HTTP 200）。冲刷点在运行结束的收尾链上：内置钩子 `manual-compact-flush(15)` 在自动收尾压缩 `post-run-compaction(20)` 之前执行，取挂起的 focus 以 `manual: true` 真正压缩——用户点的那次压缩先于自动压缩发生。挂起在内存里，daemon 重启即丢。挂起的冲刷跳过忙碌/排队检查：它本来就在"运行结束后"执行，此刻队列里有消息是常态。
+- `#active` 空、但 queue.jsonl 非空 → **仍拒绝** 409 `还有 N 条排队消息，先处理或取消`（排队消息会连开多个 run，压缩窗口无法预期，"先处理或取消排队"才是可行动的建议）。
 
-两者都映射为 HTTP 409（压缩要读全量历史、写会话元数据，与运行中的写入并发会互相破坏）。通过后按会话 meta 解析模型，以 `manual: true` 调 core `Compactor.compact`，跳过触发判断，其余流程（两次摘要调用、compaction 事件写入）与自动压缩完全一致。返回一句话：成功是 `压缩了 N 段，剩 X 条原文消息`，历史太短没有可压缩内容是 `无可压缩内容`（不产生任何状态变化）。手动压缩**不产生新消息**：总摘要经压缩视图的脉络项进请求，本次压缩的痕迹是一条 `compaction` 事件（`trigger: "manual"`，带 focus）。
+会话空闲且无排队时按会话 meta 解析模型，以 `manual: true` 调 core `Compactor.compact`，跳过触发判断，其余流程（两次摘要调用、compaction 事件写入）与自动压缩完全一致。返回一句话：成功是 `压缩了 N 段，剩 X 条原文消息`，历史太短没有可压缩内容是 `无可压缩内容`（不产生任何状态变化）。手动压缩**不产生新消息**：总摘要经压缩视图的脉络项进请求，本次压缩的痕迹是一条 `compaction` 事件（`trigger: "manual"`，带 focus）。
 
 ### 自动命名（core session/autoname.ts）
 

@@ -51,7 +51,7 @@
 - **真链式改写**：改写位置的返回值回填进 ctx 的改写字段（`run-before` 的 `message`、`llm-before` 的 `messages`、`system-after` 的 `system`），下一个 handler 看到的是改写后的值——这保证"用户改写在前、内置持久化在后"时，持久化落的是改写后的消息。调用方传入的 ctx 对象本身不被改动。
 - **追加型位置**：`system-before` 的返回值是段落**数组**，多个钩子的段落累积拼接而不是互相覆盖。
 - **失败分派**：抛错/超时按 `meta.failure` 分派——`fatal` 让整次 `run()` 拒绝（循环既有的各位置 catch 路径接管，错误码保持原样：`user_message_failed`、`steering_failed` 等）；`skip` 发 `hook.failed {phase:"run"}` 后继续下一个 handler；`deny` 同样发事件并继续跑完链（后面的观察者不丢），但经 `runGate` 出口把首个失败记为**否决**——`tool-before` 位置上循环据此给该工具写拒绝结果（错误结果 + `denied` note，工具不执行，run 继续）。
-- **超时**：每个 handler 与 `config.hooks.timeoutMs`（默认 5000ms）同时计时，超时的一方算失败，走同样的 fatal/skip/deny 分派。条目可用 `meta.timeoutMs` 覆盖链预算（`Infinity` = 不限时）：三个内置压缩钩子（mid-run-panic / overflow-emergency / post-run-compaction）声明了不限时——它们的函数体是两次 provider 调用，时长由 LLM 决定，改成钩子形态前的内联代码本就不限时；时长上限由 provider 单请求超时与 run 中止信号保底。
+- **超时**：每个 handler 与 `config.hooks.timeoutMs`（默认 5000ms）同时计时，超时的一方算失败，走同样的 fatal/skip/deny 分派。条目可用 `meta.timeoutMs` 覆盖链预算（`Infinity` = 不限时）：五个内置压缩钩子（background-precompact / mid-run-panic / overflow-emergency / manual-compact-flush / post-run-compaction）声明了不限时——它们的函数体是两次 provider 调用，时长由 LLM 决定，改成钩子形态前的内联代码本就不限时；时长上限由 provider 单请求超时与 run 中止信号保底。
 - **空位置零开销**：没有注册任何 handler 的位置同步短路返回 `undefined`，`has()` 为 false（循环据此判断要不要走进某个分支，如 overflow-rescue）。
 
 ---
@@ -95,10 +95,12 @@ export default async (ctx) => {
 | 10 | `skill-wrap` | llm-before | skip | 技能点名的隐式包装（只改模型视图） |
 | 10 | `retry-notify` | llm-retry | skip | 把 provider 重试转成 `llm.failed {willRetry:true}` 事件 |
 | 10 | `steering-drain` | turn-boundary | fatal | 取走队列的引导缓冲并注入对话 |
-| 10 | `mid-run-panic` | compaction-check | skip | 红线水位触发的中途压缩判定（`null` = 不压） |
-| 10 | `overflow-emergency` | overflow-rescue | skip | 超限急救压缩（换视图整次重发） |
+| 5 | `background-precompact` | compaction-check | skip | 预压区间的后台压缩派发（非阻塞，见 [compaction](./compaction.md) 机制四） |
+| 10 | `mid-run-panic` | compaction-check | skip | 红线水位触发的中途压缩判定（`null` = 不压）；先应用挂起的后台成果，遇在飞后台先等 |
+| 10 | `overflow-emergency` | overflow-rescue | skip | 超限急救压缩（换视图整次重发）；先掐掉在飞后台 |
 | 10 | `usage-ledger` | run-after | skip | 记录本次 run 的用量 |
-| 20 | `post-run-compaction` | run-after | fatal | 上下文到达黄线时触发的收尾压缩 |
+| 15 | `manual-compact-flush` | run-after | skip | 冲刷运行忙时挂起的 /compact（在自动收尾压缩之前） |
+| 20 | `post-run-compaction` | run-after | fatal | 上下文到达黄线时触发的收尾压缩（估算前等在飞后台落定） |
 | 30 | `follow-check` | run-after | skip | 挂起记忆空闲检查（调度器补查） |
 | 10 | `system-materials` | system-before | skip | 收集 L2 认知与技能清单两个提示词段 |
 | 9000 | `system-audit` | system-after | fatal | 系统提示词全量审计留痕（`appendSystem`，写失败即 run 失败） |
@@ -111,7 +113,7 @@ export default async (ctx) => {
 
 ## 管理接口
 
-`GET /hooks`（`packages/server/src/routes/hooks.ts`，Bearer 保护）返回 `{ builtin, user }`：`builtin` 是 13 条内置钩子定义（名字/位置/描述/failure，不依赖运行态）；`user` 是 `HookRegistry.list()` 的用户侧视图（健康、禁用、装载失败三类都在，失败条目 `position:"?"` 且带 `error` 原因）。CLI 与 WebUI 的钩子管理页共用这份只读快照。
+`GET /hooks`（`packages/server/src/routes/hooks.ts`，Bearer 保护）返回 `{ builtin, user }`：`builtin` 是 15 条内置钩子定义（名字/位置/描述/failure，不依赖运行态）；`user` 是 `HookRegistry.list()` 的用户侧视图（健康、禁用、装载失败三类都在，失败条目 `position:"?"` 且带 `error` 原因）。CLI 与 WebUI 的钩子管理页共用这份只读快照。
 
 ---
 

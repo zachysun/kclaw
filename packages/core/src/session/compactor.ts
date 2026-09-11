@@ -45,12 +45,23 @@ export class Compactor {
   readonly #deps: CompactorDeps
   /**
    * 每会话压缩取消标记：cancel() 写入，压制本次运行内的
-   * 全部自动压缩（中途/收尾）；每次 run 开头 clearCancelled——取消只作用于
-   * 当时那次运行，新运行从干净状态恢复。
+   * 全部自动压缩（中途/收尾/后台预压）；每次 run 开头 clearCancelled——取消
+   * 只作用于当时那次运行，新运行从干净状态恢复。手动压缩不受压制。
    */
   readonly #cancelled = new Set<string>()
-  /** 每会话在飞的自动压缩 controller：cancel() 掐它；finally 清理。 */
+  /** 每会话在飞的压缩 controller：cancel()/abortInFlight() 掐它；finally 清理并放行等待者。 */
   readonly #inFlight = new Map<string, AbortController>()
+  /**
+   * 后台压缩的成果，已完成、未应用：由下一次迭代边界（mid-run-panic）
+   * takeParked 应用到运行视图。元数据在完成时已写入，这里只是内存视图交接。
+   * 同步压缩**成功**时作废本会话的挂起（其视图基于含挂起成果的元数据、
+   * 更新——见 compact() 成功路径的注释）；没写成则挂起仍有效。
+   */
+  readonly #parked = new Map<string, ActiveSummary>()
+  /** 挂起的 /compact：会话忙时登记，收尾链（manual-compact-flush）冲刷。纯内存，重启即丢。 */
+  readonly #deferredManual = new Map<string, { focus?: string }>()
+  /** 等待在飞压缩结束的续体（红线/收尾/挂起冲刷的"等、称、再决定"）。 */
+  readonly #waiters = new Map<string, Array<() => void>>()
 
   constructor(deps: CompactorDeps) {
     this.#deps = deps
@@ -59,8 +70,8 @@ export class Compactor {
   /**
    * 取消自动压缩：abort 在飞的压缩 controller（compact 的
    * 取消分支吞掉中止，发 completed result:"cancelled"），同时写取消标记——
-   * 本次 run 内后续的中途/收尾压缩钩子据此直接跳过；标记在下一次 run 开头
-   * 清除，新运行恢复正常压缩。返回：调用时刻是否存在在飞的压缩（false =
+   * 本次 run 内后续的中途/收尾/后台压缩钩子据此直接跳过；标记在下一次 run
+   * 开头清除，新运行恢复正常压缩。返回：调用时刻是否存在在飞的压缩（false =
    * 没什么可掐，但标记仍写入，压制本次运行内尚未发生的自动压缩）。
    */
   cancel(sessionId: string): boolean {
@@ -76,9 +87,131 @@ export class Compactor {
     return this.#cancelled.has(sessionId)
   }
 
+  /**
+   * 掐掉在飞的压缩但**不写取消标记**：溢出急救专用的清场——cancel() 的标记
+   * 会压制紧随其后的急救 auto()（它开工前先查标记），等于急救自堵。被掐的
+   * 压缩走取消分支（completed result:"cancelled"），不写任何数据。返回调用
+   * 时刻是否存在在飞的压缩。
+   */
+  abortInFlight(sessionId: string): boolean {
+    const ctrl = this.#inFlight.get(sessionId)
+    if (ctrl === undefined) return false
+    ctrl.abort()
+    return true
+  }
+
   /** 清除取消标记（每次 run 开头：取消只压制一次运行）。 */
   clearCancelled(sessionId: string): void {
     this.#cancelled.delete(sessionId)
+  }
+
+  /** 该会话是否有在飞的压缩（后台或同步）。 */
+  hasInFlight(sessionId: string): boolean {
+    return this.#inFlight.has(sessionId)
+  }
+
+  /**
+   * 后台压缩的成果是否已挂起待应用。迭代边界应用它之前，预压钩子不再开工。
+   */
+  parked(sessionId: string): boolean {
+    return this.#parked.has(sessionId)
+  }
+
+  /**
+   * 取走挂起的后台成果（应用即清，不会二次应用）。无则 null。
+   */
+  takeParked(sessionId: string): ActiveSummary | null {
+    const view = this.#parked.get(sessionId)
+    this.#parked.delete(sessionId)
+    return view ?? null
+  }
+
+  /**
+   * 等待该会话在飞的压缩结束（完成/失败/被取消都算结束）。无在飞时立即返回。
+   * 等待方（红线/收尾/挂起冲刷）在返回后重估水位、再决定同步压缩。
+   * `signal` 仅用于提前解挂等待者（run 被中止时不悬挂）。
+   */
+  waitForSettled(sessionId: string, signal?: AbortSignal): Promise<void> {
+    if (!this.#inFlight.has(sessionId)) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      const done = (): void => {
+        signal?.removeEventListener("abort", onAbort)
+        resolve()
+      }
+      const onAbort = (): void => done()
+      signal?.addEventListener("abort", onAbort, { once: true })
+      const list = this.#waiters.get(sessionId) ?? []
+      list.push(done)
+      this.#waiters.set(sessionId, list)
+    })
+  }
+
+  /**
+   * 挂起一次手动压缩（会话忙时的 /compact）：后到覆盖先到，收尾链冲刷。
+   * 纯内存，daemon 重启即丢（压缩无损，丢了重发即可）。
+   */
+  deferManual(sessionId: string, focus?: string): void {
+    this.#deferredManual.set(sessionId, focus === undefined ? {} : { focus })
+  }
+
+  /** 是否有挂起的手动压缩。 */
+  hasDeferredManual(sessionId: string): boolean {
+    return this.#deferredManual.has(sessionId)
+  }
+
+  /** 取走挂起的手动压缩（冲刷即清）。无则 null。 */
+  takeDeferredManual(sessionId: string): { focus?: string } | null {
+    const d = this.#deferredManual.get(sessionId)
+    this.#deferredManual.delete(sessionId)
+    return d ?? null
+  }
+
+  #flushWaiters(sessionId: string): void {
+    const list = this.#waiters.get(sessionId)
+    if (list === undefined) return
+    this.#waiters.delete(sessionId)
+    for (const w of list) w()
+  }
+
+  /**
+   * 非阻塞启动一次后台压缩（预压线触发）：登记在飞（kind "background"）后
+   * 立即返回，摘要调用在后台进行——不挂 run 的中止信号（用户取消运行时它
+   * 照常跑完，成果写入元数据，下次运行受益；daemon 退出掐断它等于没发生）。
+   * 成功后成果挂起（takeParked 由下一次迭代边界应用）；失败等于没发生。
+   * 返回是否真的启动了（已取消/已在飞/已有挂起成果 → false）。
+   */
+  background(
+    sessionId: string,
+    history: Message[],
+    config: KclawConfig,
+    runLlm: LlmClient,
+    model: string,
+    opts: { overheadTokens?: number; budget?: number } = {},
+  ): boolean {
+    if (this.#cancelled.has(sessionId)) return false
+    if (this.#inFlight.has(sessionId) || this.#parked.has(sessionId)) return false
+    const ctrl = new AbortController()
+    this.#inFlight.set(sessionId, ctrl)
+    void (async () => {
+      try {
+        const out = await this.compact(sessionId, history, "", config, runLlm, model, {
+          phase: "in-run",
+          background: true,
+          signal: ctrl.signal,
+          ...(opts.overheadTokens === undefined ? {} : { overheadTokens: opts.overheadTokens }),
+          ...(opts.budget === undefined ? {} : { budget: opts.budget }),
+        })
+        if (out.compacted && out.upto !== undefined) {
+          this.#parked.set(sessionId, { upto: out.upto, top: out.summary ?? "" })
+        }
+      } catch (err) {
+        console.error("kclaw compaction (background) failed:", err)
+      } finally {
+        if (this.#inFlight.get(sessionId) === ctrl) this.#inFlight.delete(sessionId)
+        this.#flushWaiters(sessionId)
+      }
+    })()
+    return true
   }
 
   /**
@@ -121,6 +254,7 @@ export class Compactor {
     } finally {
       opts.signal?.removeEventListener("abort", onAbort)
       if (this.#inFlight.get(sessionId) === ctrl) this.#inFlight.delete(sessionId)
+      this.#flushWaiters(sessionId)
     }
   }
 
@@ -149,7 +283,7 @@ export class Compactor {
     config: KclawConfig,
     runLlm: LlmClient,
     model: string,
-    opts: { focus?: string; manual?: boolean; phase?: CompactionPhase; signal?: AbortSignal; emergency?: boolean; overheadTokens?: number; budget?: number } = {},
+    opts: { focus?: string; manual?: boolean; background?: boolean; phase?: CompactionPhase; signal?: AbortSignal; emergency?: boolean; overheadTokens?: number; budget?: number } = {},
   ): Promise<{ summary?: string; upto?: string; segments: number; active: Message[]; compacted: boolean }> {
     const { sessions } = this.#deps
     const meta = sessions.meta(sessionId)
@@ -163,15 +297,18 @@ export class Compactor {
     // Per-run budget override (model contextWindow from resolveContextTokens);
     // falls back to the config cap, then the 128k default.
     const budget = opts.budget ?? config.sessions.contextTokens ?? 128_000
-    const atRatio = config.sessions.compactAtRatio ?? 0.66
+    const atRatio = config.sessions.compactAtRatio ?? 0.8
     const targetRatio = config.sessions.compactTargetRatio ?? 0.33
     const manual = opts.manual === true
     const emergency = opts.emergency === true
+    const background = opts.background === true
     // 急救豁免黄线细判：溢出发生时"已经爆了"就是事实——尤其压缩后
     // 首请求里 active 没有 assistant 锚点，system/工具定义开销全漏计，估算会明显
     // 偏低，按黄线拦截会静默放弃急救、run 直接以 error 收场。急救只跳过触发判断，
     // 后续流程（两次摘要调用、meta 写入、审计、事件）与普通压缩完全一致。
-    if (!manual && !emergency && estimateContextTokens(active, userText, opts.overheadTokens) < budget * atRatio) {
+    // 后台压缩同样豁免：预压线（0.75）低于黄线（0.80），黄线细判会把整个预压
+    // 区间的后台压缩静默拦掉，预压形同虚设。
+    if (!manual && !emergency && !background && estimateContextTokens(active, userText, opts.overheadTokens) < budget * atRatio) {
       return { summary: prev?.top, upto: prev?.upto, segments: prev?.segments.length ?? 0, active, compacted: false }
     }
 
@@ -235,6 +372,14 @@ export class Compactor {
       this.#deps.emit(
         makeEvent("compaction.completed", { segments: nextSegments.length, kept: active.length - boundary.keepFrom, phase, result: "ok" }, { sessionId }),
       )
+      // Success supersedes any parked background result — only here, not at
+      // entry: this compaction's view is based on meta that already contains
+      // the parked outcome, so its own upto is strictly newer and the parked
+      // view must never be applied after it. A compaction that didn't happen
+      // (waterline/boundary decline above, summarizer failure in the catch)
+      // writes nothing, so a parked view stays current and its consumer's
+      // fallback (mid-run-panic's `next ?? settled`) remains real.
+      this.#parked.delete(sessionId)
       return { summary: top, upto, segments: nextSegments.length, active: active.slice(boundary.keepFrom), compacted: true }
     } catch (err) {
       // An aborted signal turns any throw into "cancelled": the run is being
