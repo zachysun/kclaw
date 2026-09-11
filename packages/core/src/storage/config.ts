@@ -144,6 +144,8 @@ export interface KclawConfig {
   subagents?: {
     /** Live subagents allowed per parent run at once; an over-cap spawn returns an immediate error result. */
     maxConcurrent?: number
+    /** Live BACKGROUND subagents allowed per parent session (issue #22), counted separately from maxConcurrent. Default 4. */
+    maxBackground?: number
   }
   workspace: string
 }

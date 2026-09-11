@@ -53,7 +53,7 @@ import { createExecSandbox } from "../sandbox/provider.js"
 import type { PermissionGate, RunOutcome } from "./loop.js"
 import { runAgent } from "./loop.js"
 import { SYSTEM_INJECTION_CONVENTION } from "./context.js"
-import { subagentSystemPrompt, type SubagentSpawner } from "./subagent.js"
+import { subagentSystemPrompt, type SubagentCollector, type SubagentSpawner } from "./subagent.js"
 import type { SessionSearchFn } from "../tools/session.js"
 import type { ToolExecutor } from "./tools.js"
 import { createBuiltinTools, deriveToolFacts } from "../tools/index.js"
@@ -186,7 +186,7 @@ export interface RunEngineDeps {
    * assembly never sees it (single-level delegation — child detection is the
    * session meta's parentSessionId, not this flag).
    */
-  subagents?: { spawner: SubagentSpawner }
+  subagents?: { spawner: SubagentSpawner; collector?: SubagentCollector }
   /** Per-run token ledger (optional; recording failures are swallowed). */
   usageStore?: UsageStore
   /**
@@ -378,7 +378,13 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     sessionSearch: buildSessionSearch(engine.deps, sessionId),
     skills,
     ...(engine.deps.subagents !== undefined && !childRun
-      ? { subagent: { spawner: engine.deps.subagents.spawner, parentSessionId: sessionId } }
+      ? {
+          subagent: {
+            spawner: engine.deps.subagents.spawner,
+            parentSessionId: sessionId,
+            ...(engine.deps.subagents.collector === undefined ? {} : { collector: engine.deps.subagents.collector }),
+          },
+        }
       : {}),
     // Mid-run questions (issue #21): every run — mainline and child alike —
     // can ask; the broker is the shared gateway object, and the emitter

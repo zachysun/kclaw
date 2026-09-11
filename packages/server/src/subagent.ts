@@ -8,12 +8,27 @@
  * - A plain bus subscriber (EventBus takes any {send} shape) watches the
  *   child's channel: tool calls and text deltas become throttled one-line
  *   status (the tool's onOutput → tool_result.delta on the PARENT channel),
- *   and confirmation.requested/resolved are FORWARDED to the parent channel
- *   with a "来自子代理" note — the parent's subscribers (web/CLI) then show
- *   the card where the user is looking, and verdicts settle through the same
- *   global broker by confirmationId.
+ *   and confirmation/question requested/resolved are FORWARDED to the parent
+ *   channel — the parent's subscribers (web/CLI) then show the card where the
+ *   user is looking, and verdicts/answers settle through the same global
+ *   broker by id.
  * - Parent abort → run.cancel(child): the child stops at its next checkpoint
- *   (parent-stop-child-stop), and the outcome settles the dispatch.
+ *   (parent-stop-child-stop), and the outcome settles the dispatch. Background
+ *   dispatches (issue #22) deliberately SKIP this: their lifecycle attaches to
+ *   the parent SESSION, so a parent-run abort/finish never cancels them.
+ *
+ * Background mode adds three pieces, all keyed by the parent session:
+ * - an immediate tool result (child session id + label), the child keeps
+ *   running past the parent run's end;
+ * - a completion notice — one assistant message carrying a system note
+ *   (label, truncated summary, collect hint) appended to the parent session
+ *   and announced via message.created/completed WITHOUT triggering a run —
+ *   so the next turn naturally sees it;
+ * - `cancelBackgroundForParent` for the delete/purge cascade (the routes
+ *   call it before soft-deleting, so nothing keeps running orphaned).
+ *
+ * `collector` backs the `subagent_collect` tool: read a child's final answer
+ * later, gated to the parent that spawned it.
  *
  * Everything child-specific in the ENGINE (lean prompt, surface, memory
  * isolation, usage attribution) keys off the session meta's parentSessionId —
@@ -21,6 +36,8 @@
  */
 import {
   makeEvent,
+  newMessage,
+  newBlockId,
   subagentTitle,
   truncateAnswer,
   type AnyAgentEvent,
@@ -28,6 +45,7 @@ import {
   type EventBus,
   type RunOutcome,
   type SessionStore,
+  type SubagentCollector,
   type SubagentSpawnRequest,
   type SubagentSpawnResult,
   type SubagentSpawner,
@@ -40,6 +58,9 @@ const STATUS_INTERVAL_MS = 2_000
 /** Chars of a text-delta excerpt shown in a status line. */
 const STATUS_EXCERPT_CHARS = 80
 
+/** Chars of the child answer carried by a background completion notice. */
+const NOTICE_EXCERPT_CHARS = 400
+
 export interface SubagentHostDeps {
   config: KclawConfig
   sessions: SessionStore
@@ -48,23 +69,50 @@ export interface SubagentHostDeps {
   getRun: () => RunManager
 }
 
-/** Build the daemon's spawner (one per daemon; per-parent live counts live here). */
-export function createSubagentSpawner(deps: SubagentHostDeps): SubagentSpawner {
-  const maxConcurrent = deps.config.subagents?.maxConcurrent ?? 4
-  /** Live child session ids per parent session (the per-run concurrency cap). */
-  const live = new Map<string, Set<string>>()
+/** What the daemon wires: the spawner, the collector, and the delete-cascade cancel. */
+export interface SubagentHost {
+  spawner: SubagentSpawner
+  collector: SubagentCollector
+  /**
+   * Cancel every background child of one parent session (delete/purge
+   * cascade). Returns how many were still live — informational only.
+   */
+  cancelBackgroundForParent(parentSessionId: string): number
+}
 
-  return async (req: SubagentSpawnRequest): Promise<SubagentSpawnResult> => {
+/** Build the daemon's subagent host (one per daemon; live counts live here). */
+export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
+  const maxConcurrent = deps.config.subagents?.maxConcurrent ?? 4
+  const maxBackground = deps.config.subagents?.maxBackground ?? 4
+  /** Live blocking child session ids per parent session (the per-run cap). */
+  const live = new Map<string, Set<string>>()
+  /** Live BACKGROUND child session ids per parent session (its own cap, its own lifecycle). */
+  const backgroundLive = new Map<string, Set<string>>()
+
+  const spawner: SubagentSpawner = async (req: SubagentSpawnRequest): Promise<SubagentSpawnResult> => {
     const parent = deps.sessions.meta(req.parentSessionId)
     if (parent === undefined) {
       return { status: "error", output: `subagent dispatch failed: parent session not found (${req.parentSessionId})` }
     }
-    // Cap first: an over-cap dispatch must not even create a session.
-    const children = live.get(req.parentSessionId) ?? new Set<string>()
-    if (children.size >= maxConcurrent) {
-      return { status: "error", output: `已达子代理并发上限（${maxConcurrent} 个同时运行）；等现有子代理结束后再派` }
+    const background = req.background === true
+    // Cap first: an over-cap dispatch must not even create a session. The two
+    // budgets are counted separately (issue #22) so background tasks cannot
+    // starve foreground dispatches (or vice versa).
+    const children =
+      background
+        ? (backgroundLive.get(req.parentSessionId) ?? backgroundLive.set(req.parentSessionId, new Set()).get(req.parentSessionId)!)
+        : (live.get(req.parentSessionId) ?? live.set(req.parentSessionId, new Set()).get(req.parentSessionId)!)
+    const cap = background ? maxBackground : maxConcurrent
+    if (children.size >= cap) {
+      return {
+        status: "error",
+        output: background
+          ? `已达后台子代理并发上限（${maxBackground} 个同时运行）；等现有后台任务结束后再派，或改用阻塞模式`
+          : `已达子代理并发上限（${maxConcurrent} 个同时运行）；等现有子代理结束后再派`,
+      }
     }
-    // A parent aborted before the dispatch started: nothing to run.
+    // A parent aborted before the dispatch started: nothing to run. (Background
+    // dispatches don't carry the run signal at all — checked in the tool.)
     if (req.signal?.aborted === true) {
       return { status: "error", output: "run aborted before subagent dispatch" }
     }
@@ -78,7 +126,7 @@ export function createSubagentSpawner(deps: SubagentHostDeps): SubagentSpawner {
       req.parentSessionId,
     )
     children.add(child.id)
-    live.set(req.parentSessionId, children)
+    const who = label ?? child.id
 
     // Status + confirmation forwarding: one bus subscriber on the child channel.
     let lastStatusAt = 0
@@ -89,7 +137,6 @@ export function createSubagentSpawner(deps: SubagentHostDeps): SubagentSpawner {
       lastStatusAt = now
       req.onStatus(`${line}\n`)
     }
-    const who = label ?? child.id
     const forwardCtx = (e: AnyAgentEvent): { sessionId: string; runId?: string } =>
       e.runId === undefined ? { sessionId: req.parentSessionId } : { sessionId: req.parentSessionId, runId: e.runId }
     const subscriber = {
@@ -100,6 +147,9 @@ export function createSubagentSpawner(deps: SubagentHostDeps): SubagentSpawner {
         } catch {
           return
         }
+        // A background dispatch has already returned its tool result — status
+        // lines have no onOutput left to flow into; only the cards forward.
+        if (background) return
         switch (e.type) {
           case "message.created":
             if (e.payload?.message?.role === "assistant") status(`▸ 生成中`)
@@ -151,13 +201,50 @@ export function createSubagentSpawner(deps: SubagentHostDeps): SubagentSpawner {
     }
     deps.bus.subscribe(child.id, subscriber)
 
-    let settled = false
     const teardown = (): void => {
-      if (settled) return
-      settled = true
       deps.bus.unsubscribe(child.id, subscriber)
       children.delete(child.id)
-      if (children.size === 0) live.delete(req.parentSessionId)
+      if (children.size === 0) {
+        live.delete(req.parentSessionId)
+        backgroundLive.delete(req.parentSessionId)
+      }
+    }
+
+    // Parent-stop-child-stop is a BLOCKING-mode contract: aborting the parent
+    // run cancels the child run. A background child deliberately has no such
+    // listener — its lifecycle belongs to the parent SESSION.
+
+    if (background) {
+      // Fire and forget: the submit decides synchronously (a throw here is a
+      // dispatch failure the tool result reports immediately); the outcome is
+      // consumed by the completion notice, not by a waiting tool call.
+      try {
+        const submitted = deps.getRun().submit(child.id, {
+          userText: req.task,
+          trigger: "agent",
+          disposition: "wait",
+          ...(parent.model !== undefined && parent.model !== "" ? { model: parent.model } : {}),
+        })
+        void submitted.outcome
+          .then((outcome) => notifyBackgroundDone(req.parentSessionId, child.id, who, outcome))
+          .catch((err: unknown) => {
+            deps.sessions.meta(req.parentSessionId) !== undefined &&
+              console.error(`kclaw subagent background (${who}) outcome lost:`, err)
+          })
+          .finally(teardown)
+      } catch (err) {
+        teardown()
+        return {
+          status: "error",
+          output: `subagent dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
+          childSessionId: child.id,
+        }
+      }
+      return {
+        status: "ok",
+        output: `已在后台派出子代理「${who}」（会话 ${child.id}）。它会独立运行，不受本次对话结束影响；完成后这里会收到一条完成通知，届时可用 subagent_collect（childSessionId: ${child.id}）取完整答复。`,
+        childSessionId: child.id,
+      }
     }
 
     // Parent-stop-child-stop: aborting the parent run cancels the child run;
@@ -192,8 +279,75 @@ export function createSubagentSpawner(deps: SubagentHostDeps): SubagentSpawner {
       teardown()
     }
   }
+
+  /** The completion notice: one system-note message on the parent session, no run. */
+  const notifyBackgroundDone = (parentId: string, childId: string, who: string, outcome: RunOutcome): void => {
+    // The parent may have been deleted while the child ran — nothing to notify.
+    const meta = deps.sessions.meta(parentId)
+    if (meta === undefined || meta.deleted) return
+    const answer = answerOf(outcome)
+    const summary = answer === "" ? "" : excerptLong(answer)
+    const text = outcome.stopReason === "end_turn"
+      ? `后台子代理「${who}」已完成（会话 ${childId}）。结果摘要：${summary === "" ? "（未给出结题答复）" : summary}。完整答复可用 subagent_collect 工具获取（childSessionId: ${childId}）。`
+      : `后台子代理「${who}」未正常完成（${outcome.stopReason}，会话 ${childId}）${summary === "" ? "" : `。已有产出：${summary}`}。可用 subagent_collect 查看它已产出的内容（childSessionId: ${childId}）。`
+    const message = newMessage(parentId, "assistant", [
+      { id: newBlockId(), type: "note", kind: "system", text },
+    ])
+    deps.sessions.appendMessage(parentId, message)
+    // Announce on the parent channel so open views refresh; no run is started.
+    deps.bus.emit(makeEvent("message.created", { message }, { sessionId: parentId }))
+    deps.bus.emit(makeEvent("message.completed", { message }, { sessionId: parentId }))
+  }
+
+  const cancelBackgroundForParent = (parentSessionId: string): number => {
+    const ids = backgroundLive.get(parentSessionId)
+    if (ids === undefined) return 0
+    for (const id of ids) {
+      try {
+        deps.getRun().cancel(id)
+      } catch {
+        // daemon teardown — nothing left to cancel
+      }
+    }
+    return ids.size
+  }
+
+  const collector: SubagentCollector = async (req) => {
+    const childMeta = deps.sessions.meta(req.childSessionId)
+    if (childMeta === undefined) {
+      return { status: "error", output: `subagent_collect: 子代理会话不存在（${req.childSessionId}）` }
+    }
+    // A session may only collect its OWN children — no cross-session reads.
+    if (childMeta.parentSessionId !== req.parentSessionId) {
+      return { status: "error", output: "subagent_collect: 该会话不是当前会话派出的子代理" }
+    }
+    const msgs = deps.sessions.readMessages(req.childSessionId)
+    const last = [...msgs].reverse().find((m) => m.role === "assistant")
+    const answer = last === undefined
+      ? ""
+      : last.blocks
+          .filter((b) => b.type === "text")
+          .map((b) => (b as { text: string }).text)
+          .join("\n")
+          .trim()
+    if (answer === "") {
+      return {
+        status: "ok",
+        output: `子代理（${req.childSessionId}）还没有可收集的答复（可能仍在运行）；完成通知出现后再收集。`,
+        childSessionId: req.childSessionId,
+      }
+    }
+    return { status: "ok", output: truncateAnswer(answer), childSessionId: req.childSessionId }
+  }
+
+  return { spawner, collector, cancelBackgroundForParent }
 }
 
+/** Long-form excerpt for completion notices (head only, single line). */
+function excerptLong(text: string): string {
+  const collapsed = text.replace(/\s+/g, " ").trim()
+  return collapsed.length > NOTICE_EXCERPT_CHARS ? `${collapsed.slice(0, NOTICE_EXCERPT_CHARS)}…` : collapsed
+}
 /** The child's final assistant text (its whole visible work product), truncated head+tail. */
 function answerOf(outcome: RunOutcome): string {
   const last = [...outcome.messages].reverse().find((m) => m.role === "assistant")

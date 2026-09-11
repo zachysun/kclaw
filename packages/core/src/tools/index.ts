@@ -18,7 +18,8 @@ import { createFsTools } from "./fs.js"
 import { createMemoryTools } from "./memory.js"
 import { createSessionTools, type SessionSearchFn } from "./session.js"
 import { createSkillTools, SKILL_READ_DESCRIPTION } from "./skills.js"
-import { createSubagentTool, SUBAGENT_RUN_DESCRIPTION } from "./subagent.js"
+import { createSubagentTool, createSubagentCollectTool, SUBAGENT_RUN_DESCRIPTION, SUBAGENT_COLLECT_DESCRIPTION } from "./subagent.js"
+import type { SubagentCollector } from "../agent/subagent.js"
 import { createWebTools } from "./web.js"
 
 export { createAskUserQuestionsTool, ASK_USER_QUESTIONS_DESCRIPTION, type QuestionEventEmitter } from "./ask.js"
@@ -28,7 +29,7 @@ export { createMemoryTools } from "./memory.js"
 export { createSessionTools, type SessionSearchFn } from "./session.js"
 export { searchSessionEvents, type SessionHit } from "./session-search.js"
 export { createSkillTools, SKILL_READ_DESCRIPTION } from "./skills.js"
-export { createSubagentTool, SUBAGENT_RUN_DESCRIPTION } from "./subagent.js"
+export { createSubagentTool, createSubagentCollectTool, SUBAGENT_RUN_DESCRIPTION, SUBAGENT_COLLECT_DESCRIPTION } from "./subagent.js"
 export { createWebTools } from "./web.js"
 
 /** A string property with a model-facing description. */
@@ -59,9 +60,11 @@ export function createBuiltinTools(opts: {
   /**
    * Subagent dispatch (mainline runs only): when set, `subagent_run` joins the
    * registry wired to this spawner. Absent → no dispatch tool (tests, and
-   * every child run — children cannot spawn grandchildren).
+   * every child run — children cannot spawn grandchildren). `collector` (when
+   * set with it) adds `subagent_collect` for fetching a background child's
+   * answer on demand (issue #22).
    */
-  subagent?: { spawner: SubagentSpawner; parentSessionId: string }
+  subagent?: { spawner: SubagentSpawner; parentSessionId: string; collector?: SubagentCollector }
   /**
    * Mid-run questions (issue #21): when set, `ask_user_questions` joins the
    * registry wired to the shared confirmation broker. Absent → no ask tool
@@ -221,19 +224,33 @@ export function createBuiltinTools(opts: {
     ? entries.filter((e) => e.name !== "memory_save")
     : [...entries]
   if (opts.subagent !== undefined && opts.childRun !== true) {
+    const { spawner, parentSessionId, collector } = opts.subagent
     surface.push({
       name: "subagent_run",
-      tool: createSubagentTool(opts.subagent.spawner, opts.subagent.parentSessionId),
+      tool: createSubagentTool(spawner, parentSessionId),
       def: def(
         "subagent_run",
         SUBAGENT_RUN_DESCRIPTION,
         {
           task: str("Self-contained task description — the child sees nothing of this conversation"),
           label: str("Short display name shown in status lines and confirmation cards"),
+          run_in_background: { type: "boolean", description: "True = return the child session id immediately; the completion notice arrives later and subagent_collect fetches the answer (default false = wait for the result here)" },
         },
         ["task"],
       ),
     })
+    if (collector !== undefined) {
+      surface.push({
+        name: "subagent_collect",
+        tool: createSubagentCollectTool(collector, parentSessionId),
+        def: def(
+          "subagent_collect",
+          SUBAGENT_COLLECT_DESCRIPTION,
+          { childSessionId: str("The child session id to collect (from the background dispatch result or the completion notice)") },
+          ["childSessionId"],
+        ),
+      })
+    }
   }
   if (opts.ask !== undefined) {
     surface.push({

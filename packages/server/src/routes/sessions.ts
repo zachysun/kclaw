@@ -107,6 +107,10 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       const { id } = request.params as { id: string }
       const meta = stores.sessions.meta(id)
       if (meta === undefined) return reply.code(404).send(NOT_FOUND)
+      // Cancel-first: live BACKGROUND subagents of this parent die with it
+      // (issue #22) — the soft-delete cascade below then removes their
+      // sessions, so nothing keeps running orphaned.
+      stores.run?.cancelBackgroundChildren(id)
       // Cascade: a parent's children (subagent sessions) are soft-deleted with
       // it — no orphans in the recycle bin. Already-deleted children keep
       // their original deletedAt (listByParent includes them; skip those).
@@ -125,8 +129,10 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
     scope.post("/sessions/:id/purge", async (request, reply) => {
       const { id } = request.params as { id: string }
       if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
-      // Purge cascade mirrors the delete cascade (children are soft-deleted
-      // with their parent, so both die together here).
+      // Cancel-first mirrors the delete route (background children die with
+      // their parent); then the purge cascade (children are soft-deleted with
+      // their parent, so both die together here).
+      stores.run?.cancelBackgroundChildren(id)
       for (const child of stores.sessions.listByParent(id)) {
         stores.sessions.purge(child.id)
       }

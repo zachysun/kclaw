@@ -26,7 +26,14 @@ export interface SubagentSpawnRequest {
   task: string
   /** Optional display name (confirmation cards, session title, status lines). */
   label?: string
-  /** The parent run's abort signal: aborting it must stop the child run too. */
+  /**
+   * Background mode (issue #22): the dispatch returns immediately and the
+   * child's lifecycle attaches to the PARENT SESSION, not the parent run —
+   * the signal is deliberately NOT tied to the child (a parent-run abort
+   * must not cancel it).
+   */
+  background?: boolean
+  /** The parent run's abort signal: aborting it must stop the child run too (blocking mode). */
   signal?: AbortSignal
   /** Live one-line status sink (the tool's onOutput channel, bus-fed). */
   onStatus(line: string): void
@@ -39,6 +46,17 @@ export interface SubagentSpawnResult {
   /** The child session — carried in the tool result's `data` for audit links. */
   childSessionId?: string
 }
+
+/**
+ * The collect seam (issue #22): fetch a background child's final answer long
+ * after its dispatch. Implemented server-side (it reads the child session's
+ * messages); the request carries the parent id so a session can only collect
+ * its OWN children.
+ */
+export type SubagentCollector = (req: {
+  parentSessionId: string
+  childSessionId: string
+}) => Promise<SubagentSpawnResult>
 
 /**
  * The narrow seam the assembly injects (server implements with real session
