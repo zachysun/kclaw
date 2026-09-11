@@ -12,7 +12,7 @@
 
 - **位置网格是封闭枚举**：`HookPosition` 是 14 个命名位置的联合类型。位置只开在"真实存在改动需求的地方"——改写用户消息、改写模型视图、注入引导、压缩判定……没有改动需求的地方不开位置。加一个位置 = 更新 `HookContextMap`/`HookResultMap` 两张契约表，编译器会走查每一个消费方（封闭原则）。
 - **注册接口是唯一挂载入口**：内置闭包、用户文件、测试注入，全部经 `HookChain.register` 进链。引擎不区分"自己人"和"外人"——它自己就是这套机制的第一批用户。
-- **失败时怎么办由文件自己声明，默认放行**：用户文件可声明 `failure: "skip"`（默认，失败即跳过、只发一条 `hook.failed`，run 照常继续）或 `"deny"`（失败时否决所在闸门——`tool-before` 位置上就是该工具不执行，fail-closed 自选档）；声明 `"fatal"` 的用户文件拒绝装载（用户代码没有杀死整个 run 的权力）。引擎内置钩子在原行为抛错传播的地方保留 `fatal`（如用户消息持久化、系统提示词审计），语义与改成钩子形态之前完全一致。
+- **失败时怎么办由文件自己声明，默认放行**：用户文件可声明 `failure: "skip"`（默认，失败即跳过、只发一条 `hook.failed`，run 照常继续）或 `"deny"`（失败时否决所在闸门——`tool-before` 位置上就是该工具不执行，fail-closed 自选档）；声明 `"fatal"` 的用户文件拒绝装载（用户代码没有杀死整个 run 的权力）。引擎内置钩子在原行为抛错传播的地方保留 `fatal`（如用户消息持久化），语义与改成钩子形态之前完全一致。
 - **改写权只开在四处**：`run-before`（用户消息）、`llm-before`（模型视图）、`system-before`（系统提示词追加段落）、`system-after`（系统提示词终稿）。其余位置是观察（返回值忽略）或内置独占的决策位（`compaction-check`/`overflow-rescue`：压缩判定闭包着压缩引擎，用户钩子不注册）。
 - **权限与确认不进钩子链**：工具执行前的权限裁决保持循环的控制流（`tool-before` 位置观察 + deny 否决权，见上）。把"允许/拒绝/确认"做成可改写钩子等于把安全边界交给目录里的文件，收益配不上风险；`deny` 档给的是"钩子失败宁可不放行"的表达力，不是主动裁决权。
 - **每个 run 重新扫描，文件即真相**：用户钩子目录在每次 run 开始时重扫（与技能同一套思路），改文件下一轮生效、不重启 daemon。装载失败按"文件名+mtime+错误"去重后发一次 `hook.failed {phase:"load"}` 事件——管理接口持续显示失败，事件流不被刷屏。
@@ -37,11 +37,11 @@
 | `compaction-after` | 一次压缩完成后 | `{ phase, result }` | 忽略 | 观察压缩结局 |
 | `think-after` | 思考块完成后 | `{ block }` | 忽略 | 观察思考 |
 | `system-before` | 系统提示词组装前 | `{ base }` | `string[]` | 追加段落（内置：认知 + 技能清单），**多钩子累积** |
-| `system-after` | 系统提示词终稿、审计之前 | `{ system }` | `string` | 改写终稿（内置：全量审计留痕排在其后） |
+| `system-after` | 系统提示词终稿（两段拼装之后、装配层冻结基线之前） | `{ system }` | `string` | 改写终稿（用户改写随后被装配层整体固化进 stable 基线并审计） |
 
-用户钩子默认 order 1000——落在内置钩子（10–99）之后、系统审计（9000）之前，所以用户对系统提示词的改写永远在被审计的那份里。
+用户钩子默认 order 1000——落在内置钩子（10–99）之后。system-after 上用户改写排在前面，装配层最后把终稿冻结为基线（见下），所以用户对系统提示词的改写永远在被审计的那份里。
 
-**冻结基线（提示词缓存策略）**：会话 meta 的 `systemBaseline` 非空时（见 [storage](./storage.md)），本 run 的系统提示词就是基线文本——`system-before` / `system-after` 两条链**整体不跑**，用户钩子在这两个位置注入或改写的段落同样冻结在纪元内；基线由上一 run 的 `system` 审计事件固化，压缩清除后下一个 run 才会重新装配（新段落那时生效）。这是刻意语义：provider 前缀缓存按前缀逐字节命中，前缀稳定意味着纪元内后续 run 全部命中。固化走审计事件投影（零新事件类型），审计仍每 run 一条、记录的永远是模型实际看到的那份。
+**冻结基线（提示词缓存策略，双段独立）**：系统提示词分两段——**stable**（人设基座 + 注入约定，缓存冻结面）在前，**live**（认知 + 技能清单，低频变化面）在后。会话 meta 的 `systemBaseline`（见 [storage](./storage.md)）为两段各存一份基线 `{ text, frozenAt }`：每 run 两段现算、与基线逐段比对——哪段文本变了就重冻结哪段，没变的沿用基线（`frozenAt` 记录的是"这份文本成为基线的时刻"）。前缀缓存按从头逐字节相同匹配，live 变化只失效变化点之后，stable 前缀继续命中；装一个新技能、夜间认知刷新在下一个 run 即时生效，不再等压缩边界。两段全命中时 `system-before` / `system-after` 两条链**整体不跑**（用户钩子在这两个位置注入或改写的段落同样冻结）；至少一段变化时走 `system-after` 链，用户改写发生时终稿整体固化进 stable 基线——改写每 run 重新生效，审计恒记录模型实际看到的那份。基线由上一 run 的 `system` 审计事件按段固化，压缩清除后下一个 run 重新装配（见 [compaction](./compaction.md)）。
 
 ---
 
@@ -102,10 +102,9 @@ export default async (ctx) => {
 | 15 | `manual-compact-flush` | run-after | skip | 冲刷运行忙时挂起的 /compact（在自动收尾压缩之前） |
 | 20 | `post-run-compaction` | run-after | fatal | 上下文到达黄线时触发的收尾压缩（估算前等在飞后台落定） |
 | 30 | `follow-check` | run-after | skip | 挂起记忆空闲检查（调度器补查） |
-| 10 | `system-materials` | system-before | skip | 收集 L2 认知与技能清单两个提示词段 |
-| 9000 | `system-audit` | system-after | fatal | 系统提示词全量审计留痕（`appendSystem`，写失败即 run 失败） |
+| 10 | `system-materials` | system-before | skip | 收集 L2 认知与技能清单两个提示词段（即 live 段） |
 
-两个值得知道的次序：run-before 上 `memory-inject(10)` 只收集记忆 note，`user-message-land(20)` 统一把 job note（在前）与记忆 note 追加进消息、持久化并广播——这与改成钩子形态之前的块顺序、`note.emitted` 次序完全一致。system-after 上用户改写（默认 1000）排在 `system-audit(9000)` 之前，审计永远记录模型实际看到的那份提示词。
+两个值得知道的次序：run-before 上 `memory-inject(10)` 只收集记忆 note，`user-message-land(20)` 统一把 job note（在前）与记忆 note 追加进消息、持久化并广播——这与改成钩子形态之前的块顺序、`note.emitted` 次序完全一致。system-after 上用户改写（默认 1000）排在前面，随后装配层把终稿（用户改写或原稿）按段冻结进基线并写 `system` 审计事件——**系统提示词的审计留痕不是钩子**：`system` 事件的双段写入（stable/live）由 run 装配层直接落盘（写失败即 run 失败），因为分段冻结需要 stable/live 两段文本，而它们位于钩子链之上（见 [run-manager](../server/run-manager.md) 装配第 11 步）。
 
 **子代理 run 的派生跳过**：会话 meta 带 `parentSessionId` 时，run 装配给内置钩子链带 `childRun: true`（同一个事实派生，无独立开关，见 [subagents](./subagents.md)），四个内置钩子直接让位——`memory-inject` 不检索不收集（子代理不注入记忆 note）、`autoname` 跳过（标题已带"子代理 · "前缀）、`follow-check` 不挂检查（子会话不进记忆的任何提取路径）、`system-materials` 返回空段（系统提示词整体换成精简的 `subagentSystemPrompt`，不带认知与技能清单）。`usage-ledger` 照常记账，但记到 `usageSessionId`（= 父会话 id）名下——子代理的 token 消耗归因到派它的主对话。
 
@@ -113,7 +112,7 @@ export default async (ctx) => {
 
 ## 管理接口
 
-`GET /hooks`（`packages/server/src/routes/hooks.ts`，Bearer 保护）返回 `{ builtin, user }`：`builtin` 是 15 条内置钩子定义（名字/位置/描述/failure，不依赖运行态）；`user` 是 `HookRegistry.list()` 的用户侧视图（健康、禁用、装载失败三类都在，失败条目 `position:"?"` 且带 `error` 原因）。CLI 与 WebUI 的钩子管理页共用这份只读快照。
+`GET /hooks`（`packages/server/src/routes/hooks.ts`，Bearer 保护）返回 `{ builtin, user }`：`builtin` 是 14 条内置钩子定义（名字/位置/描述/failure，不依赖运行态，从 `BUILTIN_HOOK_SPECS` 单一真相投影而来）；`user` 是 `HookRegistry.list()` 的用户侧视图（健康、禁用、装载失败三类都在，失败条目 `position:"?"` 且带 `error` 原因）。CLI 与 WebUI 的钩子管理页共用这份只读快照。
 
 ---
 

@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/ws.ts` 的 `registerWsRoutes` 提供 `GET /ws` 端点（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送），处理连接认证并分发 7 种客户端命令帧与各自应答（ack）。指令帧/应答帧的**类型的权威定义**在 `@kclaw/core/protocol` 的 `wire.ts`（`ClientCommand` / `ServerFrame`）；每条字段规则与报错文案的**唯一校验实现**在 `packages/server/src/command-check.ts` 的 `checkCommandFrame`（ws.ts 解析 JSON 后调用它，再按返回的合法命令分发——校验顺序与文案集中在一份代码里）。`@kclaw/core` 的 `EventBus`（`packages/core/src/bus.ts`）是进程内的事件分发器：把 agent 循环与服务端流程产生的 37 种事件按会话投递给订阅了它的连接。两者共同构成 daemon 的实时通信层。
+`packages/server/src/ws.ts` 的 `registerWsRoutes` 提供 `GET /ws` 端点（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送），处理连接认证并分发 8 种客户端命令帧与各自应答（ack）。指令帧/应答帧的**类型的权威定义**在 `@kclaw/core/protocol` 的 `wire.ts`（`ClientCommand` / `ServerFrame`）；每条字段规则与报错文案的**唯一校验实现**在 `packages/server/src/command-check.ts` 的 `checkCommandFrame`（ws.ts 解析 JSON 后调用它，再按返回的合法命令分发——校验顺序与文案集中在一份代码里）。`@kclaw/core` 的 `EventBus`（`packages/core/src/bus.ts`）是进程内的事件分发器：把 agent 循环与服务端流程产生的 39 种事件按会话投递给订阅了它的连接。两者共同构成 daemon 的实时通信层。
 
 ## 设计决策
 
@@ -23,7 +23,7 @@
 {"type": "auth", "token": "<daemon token>"}
 ```
 
-7 种命令帧（认证后才受理）：
+8 种命令帧（认证后才受理）：
 
 | 命令帧 | 字段 | 应答（ack） | 失败时的 error 帧 message |
 |--------|------|------------|--------------------------|
@@ -34,6 +34,7 @@
 | `{"type":"queue.cancel","sessionId","messageId"?}` | sessionId 非空字符串；`messageId` 可选（缺省 = 清空全部可取消条目：全部 wait + 未注入 steer） | `{"type":"queue.cancel_ack","sessionId","cancelled":["msg_…"]}`（实际取消的 id 列表） | `已注入`（该条近期已注入，进了 JSONL 机器不删历史）；`not found`；`run manager not available`；字段不合法提示 |
 | `{"type":"run.cancel","sessionId"}` | sessionId 非空字符串 | `{"type":"run_cancel_ack","sessionId"}` | `no active run`（该会话当前无正在执行的 run）；`run manager not available` |
 `{"type":"compaction.cancel","sessionId"}` | sessionId 非空字符串 | `{"type":"compaction_cancel_ack","sessionId","active"}`（`active` = 取消时是否确有自动压缩正在进行） | `run manager not available`；字段不合法提示。无进行中的压缩时是正常 no-op（`active:false`），不是错误 |
+| `{"type":"question.resolve","questionId","answers","client"?}` | questionId 非空字符串、answers 是 `string[][]`（按提问顺序每题一个字符串数组）、client 可选 `"cli"\|"web"`（缺省按 cli） | `{"type":"question.resolved_ack","questionId","ok":true}` | `unknown question`（未知/已过期）；`question gateway unavailable`（app 未接 broker）；字段不合法的具体提示 |
 
 收到未知 `type` 返回 `{"type":"error","message":"unknown command: <type>"}`，连接保持打开；非法 JSON / 非 JSON 对象返回 error 帧（`frame is not valid JSON` / `frame must be a JSON object`），连接同样保持。**认证之前**发来的任何帧（含坏 JSON）都按未授权处理：error 帧 + 关闭码 4001。重复 auth 回 `already authenticated`。认证超时：连接后 `authTimeoutMs`（默认 10s）内未认证即以 4002 关闭。认证通过后有心跳：每 `heartbeatMs`（默认 30s）ping 一次，连续两个周期未收到 pong 即 `terminate` 硬断开（无关闭码）。
 
@@ -65,14 +66,14 @@
 }
 ```
 
-`EventType` 共 **37 种**（`packages/core/src/protocol/events.ts`；十个语义分组的完整表见 [protocol](../core/protocol.md)），按投递方式分两组：
+`EventType` 共 **39 种**（`packages/core/src/protocol/events.ts`；十一个语义分组的完整表见 [protocol](../core/protocol.md)），按投递方式分两组：
 
 | 分组 | 事件 | 投递 |
 |------|------|------|
-| 会话事件（带 sessionId，发订阅者） | `run.started` `run.completed` `run.failed`；`message.created` `message.completed`；`text/thinking/tool_call/tool_result` 的 `created/delta/completed`（12 个）；`attachment.created` `attachment.completed`；`llm.started` `llm.completed` `llm.failed`；`confirmation.requested` `confirmation.resolved`；`note.emitted`；`message.queued` `message.steered` `message.queue_cancelled`（见上文"消息排队与引导"）；`compaction.started` `compaction.completed`（payload 见 [protocol](../core/protocol.md)：started 带 phase，completed 带 phase/result——`started` 一旦发出 `completed` 必达，成功/失败/取消分别报 `ok`/`failed`/`cancelled`，让客户端可靠地清除"正在压缩"状态）；`session.renamed`；`session.appended`（持久化通知，payload 携带该次写入事件的 `eventType`） | `EventBus.emit` 查 `sessions.get(sessionId)`，发给该集合内的 socket |
+| 会话事件（带 sessionId，发订阅者） | `run.started` `run.completed` `run.failed`；`message.created` `message.completed`；`text/thinking/tool_call/tool_result` 的 `created/delta/completed`（12 个）；`attachment.created` `attachment.completed`；`llm.started` `llm.completed` `llm.failed`；`confirmation.requested` `confirmation.resolved`；`question.requested` `question.resolved`（`ask_user_questions` 工具的等待生命周期）；`note.emitted`；`message.queued` `message.steered` `message.queue_cancelled`（见上文"消息排队与引导"）；`compaction.started` `compaction.completed`（payload 见 [protocol](../core/protocol.md)：started 带 phase，completed 带 phase/result——`started` 一旦发出 `completed` 必达，成功/失败/取消分别报 `ok`/`failed`/`cancelled`，让客户端可靠地清除"正在压缩"状态）；`session.renamed`；`session.appended`（持久化通知，payload 携带该次写入事件的 `eventType`） | `EventBus.emit` 查 `sessions.get(sessionId)`，发给该集合内的 socket |
 | 广播事件（无 sessionId，发全体连接） | `job.started` `job.completed` `job.failed`；`memory.written`（记忆写入，项目级事务不带 sessionId——见下） | `EventBus.emit` 遍历全部已 connect 的 socket |
 
-发射方分布：24 种会话事件由 agent 循环产生、经引擎（core `executeRun`）的 `onEvent` 钩子发送到总线（含 `run.failed {code:"steering_failed"}` 等循环内合成的终态，以及 steering 注入时逐条发出的 `message.steered`）。不经 agent 循环的会话事件由服务端流程直接发送：`message.queued`/`message.queue_cancelled` 与条目级失败的 `run.failed {code:"queue_entry_failed"}` 由 `RunManager`（submit / queueCancel / recoverQueues / 驱动器）发出；`compaction.started`/`completed` 由 core 压缩引擎 `Compactor`（收尾/中途/超限三路共用的 `auto`，见 [run-manager](./run-manager.md)）发出；`session.renamed` 不经过 agent 循环：run 入队用户消息后，引擎会异步调度 `scheduleAutoname`（core `session/autoname.ts`）生成会话标题，新标题成功写回 meta 后才经注入的 emit 钩子（`busEmit`）发出这个事件；生成失败则静默放弃（流程细节见 [run-manager](./run-manager.md)）。`session.appended` 由 `SessionStore` 在**每个事件（含投影）成功写入 events.jsonl 之后**经 daemon 装配的回调发出（先写入磁盘后广播，对全部十种持久化事件生效；web 审计页收到它即按 `?since=` 游标增量拉取——这是唯一一条由存储层而非业务流程发出的事件）。3 种 `job.*` 由 `scheduler-tick.ts` 的 `makeEvent(...)` **不带 ctx** 调用产生（`makeEvent` 只在传了 `ctx.sessionId` 时才写字段）。`memory.written` 由 core 的 `MemoryPipeline` 在每次写入时发出，经 daemon 装配的 emit 钩子（`daemon.ts`）广播——不带 sessionId（项目级事务），订阅端只当"已写入"的轻提示。`attachment.*` 已定义但当前无发射方。
+发射方分布：26 种会话事件由 agent 循环产生、经引擎（core `executeRun`）的 `onEvent` 钩子发送到总线（含 `run.failed {code:"steering_failed"}` 等循环内合成的终态，steering 注入时逐条发出的 `message.steered`，以及 `ask_user_questions` 工具执行器经装配注入的 emit 钩子发出的 `question.requested`/`question.resolved`——执行器运行在循环的工具回合内）。不经 agent 循环的会话事件由服务端流程直接发送：`message.queued`/`message.queue_cancelled` 与条目级失败的 `run.failed {code:"queue_entry_failed"}` 由 `RunManager`（submit / queueCancel / recoverQueues / 驱动器）发出；`compaction.started`/`completed` 由 core 压缩引擎 `Compactor`（收尾/中途/超限三路共用的 `auto`，见 [run-manager](./run-manager.md)）发出；`session.renamed` 不经过 agent 循环：run 入队用户消息后，引擎会异步调度 `scheduleAutoname`（core `session/autoname.ts`）生成会话标题，新标题成功写回 meta 后才经注入的 emit 钩子（`busEmit`）发出这个事件；生成失败则静默放弃（流程细节见 [run-manager](./run-manager.md)）。`session.appended` 由 `SessionStore` 在**每个事件（含投影）成功写入 events.jsonl 之后**经 daemon 装配的回调发出（先写入磁盘后广播，对全部十三种持久化事件生效；web 审计页收到它即按 `?since=` 游标增量拉取——这是唯一一条由存储层而非业务流程发出的事件）。3 种 `job.*` 由 `scheduler-tick.ts` 的 `makeEvent(...)` **不带 ctx** 调用产生（`makeEvent` 只在传了 `ctx.sessionId` 时才写字段）。`memory.written` 由 core 的 `MemoryPipeline` 在每次写入时发出，经 daemon 装配的 emit 钩子（`daemon.ts`）广播——不带 sessionId（项目级事务），订阅端只当"已写入"的轻提示。`attachment.*` 已定义但当前无发射方。
 
 ## 订阅模型（EventBus）
 
@@ -137,7 +138,7 @@ export class EventBus {
 
 ## 关联
 
-- [protocol](../core/protocol.md)：37 种事件与 payload 全表、信封字段
+- [protocol](../core/protocol.md)：39 种事件与 payload 全表、信封字段
 - [run-manager](./run-manager.md)：命令帧在服务端的后续（入队/取消/确认网关）
 - [http-api](./http-api.md)：断线恢复依赖的 `GET /sessions/:id/messages`
 - [daemon](./daemon.md)：/ws 为何豁免 HTTP 鉴权

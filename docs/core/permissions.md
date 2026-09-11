@@ -182,9 +182,9 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
 | readRoots 读豁免 | 带 `path` 参数且 safe | fs_read、fs_list |
 | 规则匹配取 `command` 字段 | 带 `command` 参数（即命令类，走专属分支） | exec |
 
-**新工具因此零引擎改动**：按惯例把写参数命名为 `path`（或命令参数命名为 `command`）并声明 risk，待遇自动齐备——漏声明的缺省是最严待遇（不进 safeTools、无豁免，需确认）。未注册工具（模型幻觉调用不存在的名字）按同样最严缺省处理。结构约定优于名单：名单漏一个名字是漏洞，结构让新工具天然被覆盖。按当前 12 个内置工具的声明（见 [tools](./tools.md)）：
+**新工具因此零引擎改动**：按惯例把写参数命名为 `path`（或命令参数命名为 `command`）并声明 risk，待遇自动齐备——漏声明的缺省是最严待遇（不进 safeTools、无豁免，需确认）。未注册工具（模型幻觉调用不存在的名字）按同样最严缺省处理。结构约定优于名单：名单漏一个名字是漏洞，结构让新工具天然被覆盖。按当前 14 个内置工具的声明（见 [tools](./tools.md)）：
 
-- **safe（命中即自动放行）**：`fs_read`、`fs_list`、`web_search`、`web_fetch`、`memory_save`、`memory_search`、`session_search`、`skill_read`、`subagent_run`——共 9 个，全是不改工作目录状态的 parallel 工具；
+- **safe（命中即自动放行）**：`fs_read`、`fs_list`、`web_search`、`web_fetch`、`memory_save`、`memory_search`、`session_search`、`skill_read`、`subagent_run`、`subagent_collect`、`ask_user_questions`——共 11 个，全是不改工作目录状态的 parallel 工具；
 - **sensitive（无 allow 规则命中必然 confirm）**：`exec`、`fs_write`、`fs_edit`——共 3 个。注意 fs_read/fs_list 虽是 safe，目标越界且不在 readRoots 内时仍进入 confirm（第 ③ 步）；MCP 适配器工具（见 [mcp](./mcp.md)）一律声明 sensitive。
 
 ### 7. exec 沙箱（OS 层）
@@ -203,7 +203,7 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
     writeRoots: []       # 追加写白名单（realpath 形式），如 npm 缓存目录
   ```
   沙箱启动失败或命令被沙箱拒绝 → exec 返回 error result（fail-closed，不降级裸跑）。可执行性探测用真实路径探测（如 `bwrap --die-with-parent true` 验证 user namespaces 真可用）。
-  - **审计**：run 装配在每次探测后向会话事件流写一条 `sandbox.checked` 审计事件（第 10 种会话事件，字段 `enabled`=config 开关 / `available`=探测结果 / `unavailableReason`=原因；主动关闭沙箱时 `available` 恒 false 且不带原因）。每 run 恰一条，只写入事件流不上总线、不进 meta 投影、不推进 updatedAt，写失败即 run 失败（与 `system` 审计事件同契约）——审计页可逐 run 回看"当时沙箱是什么状态"，配合 grantedBy / deny note 串成完整审计链（见 [webui](../web/webui.md)）。
+  - **审计**：run 装配在每次探测后向会话事件流写一条 `sandbox.checked` 审计事件（第 13 种会话事件，字段 `enabled`=config 开关 / `available`=探测结果 / `unavailableReason`=原因；主动关闭沙箱时 `available` 恒 false 且不带原因）。每 run 恰一条，只写入事件流不上总线、不进 meta 投影、不推进 updatedAt，写失败即 run 失败（与 `system` 审计事件同契约）——审计页可逐 run 回看"当时沙箱是什么状态"，配合 grantedBy / deny note 串成完整审计链（见 [webui](../web/webui.md)）。人工确认的裁决另有 `permission.decided` 事件留痕（裁决、裁决者、工具身份；中止不是裁决不落），与沙箱审计合起来构成完整的放行链路。
 
 ### 8. 人工确认流程
 
@@ -276,7 +276,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 ## 关联
 
 - [agent-loop](./agent-loop.md)：确认的三方等待、note 块与 grantedBy 的写入现场
-- [tools](./tools.md)：risk/concurrency 元数据的来源与 12 个工具清单；exec 工具的沙箱注入参数
+- [tools](./tools.md)：risk/concurrency 元数据的来源与 14 个工具清单；exec 工具的沙箱注入参数
 - [sandbox](./sandbox.md)：exec 沙箱 provider 的平台布局与降级链
 - [storage](./storage.md)：decided-rules 文件的磁盘布局（会话容器之外）
 - [../server/run-manager.md](../server/run-manager.md)：gate + broker 的 daemon 侧装配

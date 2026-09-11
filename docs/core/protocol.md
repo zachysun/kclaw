@@ -135,7 +135,7 @@ export function makeEvent<T extends EventType>(
 ): AgentEvent<T>
 ```
 
-`EventType` 共 **37 种**，十个分组：
+`EventType` 共 **39 种**，十一个分组：
 
 | 分组 | 事件 | 数量 |
 |------|------|------|
@@ -144,6 +144,7 @@ export function makeEvent<T extends EventType>(
 | 流式 | `text.created/delta/completed` `thinking.created/delta/completed` `tool_call.created/delta/completed` `tool_result.created/delta/completed` `attachment.created` `attachment.completed` | 14 |
 | 模型调用 | `llm.started` `llm.completed` `llm.failed` | 3 |
 | 人工确认 | `confirmation.requested` `confirmation.resolved` | 2 |
+| 运行中提问 | `question.requested` `question.resolved` | 2 |
 | note 单发 | `note.emitted` | 1 |
 | 消息排队与引导 | `message.queued` `message.steered` `message.queue_cancelled` | 3 |
 | 上下文压缩 | `compaction.started` `compaction.completed` | 2 |
@@ -192,6 +193,26 @@ export interface ConfirmationResolvedPayload {
   by: "cli" | "web" | "timeout"
 }
 
+// 运行中提问（ask_user_questions 工具，issue #21）：与确认共用同一个网关对象
+// （一个 broker 对象、两类挂起条目）。question.requested 发出后等待三方——
+// 人工回答 / 超时 / run 中止，谁先到算谁；中止不是回答（不发 resolved，与确认流同规则）。
+export interface QuestionSpec {
+  text: string                      // 问题本身，自包含、可独立回答
+  options?: string[]                // 有则从选项里选（单选；multiSelect 时多选），无则自由文本
+  multiSelect?: boolean             // 仅对有 options 的题有意义：允许多选
+}
+export interface QuestionRequestedPayload {
+  questionId: string
+  questions: QuestionSpec[]         // 1–5 个问题
+  expiresAt: string
+  noteText?: string                 // 给人工看的标签（如"来自子代理 X"的转发卡）
+}
+export interface QuestionResolvedPayload {
+  questionId: string
+  answers?: string[][]              // 按提问顺序每题一个数组；无人回答（超时）时缺省
+  by: "cli" | "web" | "timeout"
+}
+
 export interface NoteEmittedPayload { messageId: string; block: NoteBlock }
 
 export interface MessageQueuedPayload {
@@ -226,6 +247,7 @@ export interface HookFailedPayload {
 | 事件 | 发射方 |
 |------|--------|
 | run / message / 流式 / llm / confirmation / note / `message.steered` | core 的 agent 循环（`agent/loop.ts`；`message.steered` 在 steering 注入时逐条发出，事件级 `runId` 标识注入的 run） |
+| `question.requested` `question.resolved` | `ask_user_questions` 工具的执行器（`tools/ask.ts`，经 run 装配注入的 emit 钩子带 run 上下文发到总线；执行器在循环的工具回合内运行） |
 | `message.queued` `message.queue_cancelled` | server 的 `RunManager`（`run.ts`：submit / recoverQueues / queueCancel） |
 | `compaction.started` `compaction.completed` | core 压缩引擎 `Compactor`（`packages/core/src/session/compactor.ts` 的 `compact` / `auto`，覆盖收尾 post-run / 运行中 in-run / 手动 manual 三路） |
 | `memory.written` | core 的 `MemoryPipeline`（`memory/pipeline.ts`，每次写入经装配的 emit 钩子广播；daemon 侧接钩子的点在 `server/daemon.ts`） |
@@ -241,7 +263,7 @@ export interface HookFailedPayload {
 
 `wire.ts` 定义 WS 的客户端→daemon 指令帧（`ClientCommand` 联合：auth / subscribe / unsubscribe / confirmation.resolve / send_message / queue.cancel / run.cancel / compaction.cancel）与 daemon→客户端的应答帧（各指令的 ack、`ErrorFrame`），合并为 `ServerFrame`；附件引用 `AttachmentRef{path,name,size,mimeType}` 与排队条目 `QueueEntry` 也在此（`session/store.ts` re-export 保持旧引用路径）。字段规则与报错文案不在类型里——它们的唯一实现是 server 的 `command-check.ts`（见 [realtime](../server/realtime.md)）。
 
-`session-events.ts` 定义会话事件流（`events.jsonl`，`GET /sessions/:id/events` 的返回形状）的十种事件类型：会话元数据五种（created/renamed/deleted/restored/set）+ `message` / `compaction` / `memory` / `system` / `sandbox.checked`。`session.created` 携带创建时固化的初始权限模式 `mode`（可选，旧流缺省 default）与可选 `parentSessionId`（子代理会话的父会话标识——引擎侧一切子代理特化从它派生，见 [subagents](./subagents.md)）；`session.set` 携带元数据的增量补丁（`model` / `mode`（会话权限模式）/ `disposition`，键出现在补丁里才发）；旧会话流里的 `readonly` 布尔字段是 legacy，读取时映射为 `mode`。`sandbox.checked` 是每 run 一条的沙箱状态审计（`{enabled, available, unavailableReason?}`），与 `system` 一样只写事件流、不进 bus 的 `EventType`——它们对外部的可见性由 `session.appended` 通知帧间接承载（订阅端收到后拉 `/events` 即见）。assistant 消息可携带可选 `latencyMs`（LLM 生成耗时毫秒，流成功完成时随 `usage` 一并持久化；旧消息与失败流缺省）。只放类型；运行时守卫（`isMessageEvent` 等）与 meta 投影（`applyEvent`）在 `session/events.ts`。
+`session-events.ts` 定义会话事件流（`events.jsonl`，`GET /sessions/:id/events` 的返回形状）的十三种事件类型：会话元数据五种（created/renamed/deleted/restored/set）+ `message` / `compaction` / `memory` / `system` / `sandbox.checked` + 运行档案三种（`run.started` / `run.ended` / `permission.decided`）。`session.created` 携带创建时固化的初始权限模式 `mode`（可选，旧流缺省 default）与可选 `parentSessionId`（子代理会话的父会话标识——引擎侧一切子代理特化从它派生，见 [subagents](./subagents.md)）；`session.set` 携带元数据的增量补丁（`model` / `mode`（会话权限模式）/ `disposition`，键出现在补丁里才发）；旧会话流里的 `readonly` 布尔字段是 legacy，读取时映射为 `mode`。`sandbox.checked` 是每 run 一条的沙箱状态审计（`{enabled, available, unavailableReason?}`），与 `system` 一样只写事件流、不进 bus 的 `EventType`——它们对外部的可见性由 `session.appended` 通知帧间接承载（订阅端收到后拉 `/events` 即见）。`run.started` / `run.ended` 每 run 成对出现，把该 run 的消息事件夹成一轮边界——失败 run 也落 `run.ended`（`stopReason:"error"` 带错误），起点的 run 必有终点留痕；`permission.decided` 记录每次落定的人工确认裁决（裁决、裁决者、工具身份），运行中被中止的确认不落（中止不是裁决）。`system` 事件是每 run 一条的双段系统提示词留痕：`stable`（人设基座 + 注入约定）与可选 `live`（认知 + 技能清单），legacy 单文本事件只带 `text`（读作 stable）。assistant 消息可携带可选 `latencyMs`（LLM 生成耗时毫秒，流成功完成时随 `usage` 一并持久化；旧消息与失败流缺省）。只放类型；运行时守卫（`isMessageEvent` 等）与 meta 投影（`applyEvent`）在 `session/events.ts`。
 
 ---
 

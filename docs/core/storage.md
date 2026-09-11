@@ -27,7 +27,7 @@ export function resolvePaths(home?: string): KclawPaths
 |------|------|--------|
 | `<home>/config.yaml` | 全部配置（见下节） | CLI 向导 `saveConfig`；用户手编 |
 | `<home>/permissions.yaml` | 全局权限规则——在人工确认里选「总是允许」后保存下来的收紧 allow 规则；项目档在工作区 `.kclaw/permissions.yaml`（见下文「保存的权限规则」一节） | server 的 WS 确认入口 `ws.ts`；用户手编亦可 |
-| `<home>/AGENTS.md` | agent 人格设定，非空则作为系统提示的一部分；每次运行拼装的完整系统提示以 `system` 事件全量记录 | 用户手编；daemon 启动时读 |
+| `<home>/AGENTS.md` | agent 人格设定，非空则作为系统提示的一部分（stable 段基座）；每次运行拼装的完整系统提示以 `system` 事件按 stable/live 两段全量记录 | 用户手编；daemon 启动时读 |
 | `<home>/memory/global/` | L2 全局认知（persona.md、wiki/、rule/ 的 markdown，文件即真相） | MemorySystem / 用户手编 |
 | `<home>/memory/projects/<id>/` | L1 项目情节（`<topic>.md` 主题线、workdir.txt、MEMORY.md、state.json、vectors.db） | MemorySystem / 用户手编 |
 | `<home>/memory/notes/`、`<home>/memory/index.db` | 旧版记忆目录的遗留：前者是迁移输入（daemon 启动时读取后删除）、后者是旧版派生索引（已直接删除） | 仅 daemon 启动迁移（见 [memory](./memory.md)） |
@@ -119,9 +119,10 @@ export function readJsonl(file: string): unknown[]
 
 每个会话一个目录 `<sessionsDir>/<id>/`，固定三个文件，由 `SessionStore`（`packages/core/src/session/store.ts`）统一管理。三个文件的分工：**events.jsonl 是唯一真相，meta.json 是从它推导出来的快速读取摘要，queue.jsonl 是运行态的排队消息。**
 
-- **`events.jsonl`（唯一真相）**：只追加的事件流，一行一个 `SessionEvent`（JSON 序列化），共 10 种事件——
+- **`events.jsonl`（唯一真相）**：只追加的事件流，一行一个 `SessionEvent`（JSON 序列化），共 13 种事件——
   - 会话生命周期 5 种：`session.created`（含创建时固化的初始权限模式 `mode`；子代理会话还带 `parentSessionId`）、`session.renamed`、`session.deleted`、`session.restored`、`session.set`（model / mode / disposition 的会话级设置；旧的 `readonly` 布尔字段是历史遗留，读取时映射为 mode）。
-  - 内容类 5 种：`message`（一条消息）、`compaction`（一次压缩的审计）、`memory`（一次记忆写入的审计）、`system`（一条系统提示词审计——每次对话运行落一条拼装完成的全文）、`sandbox.checked`（一条沙箱状态审计——每次对话运行探测后落一条 `{enabled, available, unavailableReason?}`）。
+  - 内容类 5 种：`message`（一条消息）、`compaction`（一次压缩的审计）、`memory`（一次记忆写入的审计）、`system`（一条系统提示词审计——每次对话运行落一条，携带 stable/live 两段拼装文本）、`sandbox.checked`（一条沙箱状态审计——每次对话运行探测后落一条 `{enabled, available, unavailableReason?}`）。
+  - 运行档案 3 种：`run.started` / `run.ended`（每 run 一对，把该 run 的消息事件夹成一轮边界；失败 run 也落 `run.ended`，起点必有终点）、`permission.decided`（每次人工确认裁决的留痕；被中止的确认不落）。<br>运行档案与 `system` / `sandbox.checked` 一样只写事件流、不进 meta 投影、不推进 `updatedAt`。
 
   所有写入都先追加事件，再把事件汇入 meta.json 摘要（见下）。
 - **`meta.json`（派生摘要）**：类型 `SessionMeta`，由事件流经 `applyEvent` 逐条推导得出。它是「摘要」而非真相：删除或损坏都能从事件流完整重建（`meta()` 发现缺失或损坏时自动 `rebuildMeta`）。崩溃恢复时允许它暂时落后于事件流（落后不会丢数据）；但落后不会被后续写入自动追平——`appendEvent` 先读当前摘要、只汇入新事件——只有 meta.json 缺失或损坏时才经 `rebuildMeta` 重放整条事件流。meta.json 整文件原子重写（`updateMeta` 合并 patch，`undefined` 键表示删除；`message` / `compaction` 事件会推进摘要的 `updatedAt`，`memory` / `system` / `sandbox.checked` 事件不推进——审计类事件不算会话「更新」）。两条特殊的推导规则：`system` 事件把全文 upsert 进摘要的 `systemBaseline`（系统提示词的冻结基线，见下文），`compaction` 事件把 `systemBaseline` 清除（压缩改写了消息历史，提示词缓存必然全部失效，正是重新装配、重新冻结的时机）。
@@ -140,7 +141,7 @@ export function readJsonl(file: string): unknown[]
 | `compaction?` | 分层压缩状态 `{ segments, top, upto }`（语义见 [compaction](./compaction.md)），由 `compaction` 事件推导（每次压缩把新段汇入 `segments`；`updateMeta` 不再直接改它） |
 | `compactedSummary?` / `compactedUpto?` | 旧版压缩的遗留字段——不再被清除，但运行侧读压缩视图时 `compaction` 优先（压缩引擎 `Compactor` 的 `compact` 里 `prev` 先读 `compaction`，见 [compaction](./compaction.md)）；两者并存没有功能影响 |
 | `dispositionOverride?` | 会话级发送处置覆盖（`"steer" \| "wait" \| "interrupt"`），优先于 `sessions.defaultDisposition`。服务端路由仍接受三个值的写入，但客户端当前只写 steer/wait——interrupt 在 Web 与 CLI 都是一次性动作、不写会话级覆盖，`"interrupt"` 值只会来自历史遗留（见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)） |
-| `systemBaseline?` | 冻结的系统提示词基线 `{ text, frozenAt }`。作用：非空时，run 直接以基线文本作为系统提示词，组装链整体跳过——认知、技能清单、AGENTS.md、钩子段落的改动都要等下一次压缩清除基线后，随新的 `system` 事件重新固化（这是提示词缓存的稳定性策略，详见 [hooks](./hooks.md)）。推导规则：`system` 事件 upsert（文本没变就保留 `frozenAt`——它记录这份文本成为基线的时刻）、`compaction` 事件清除，都不推进 `updatedAt` |
+| `systemBaseline?` | 冻结的系统提示词基线，双段独立 `{ stable: {text, frozenAt}, live?: {text, frozenAt} }`。作用：每 run 两段现算、与基线逐段比对——哪段文本变了就重冻结哪段（`frozenAt` 记录这份文本成为基线的时刻），没变的沿用基线，`system-before` / `system-after` 组装链只在至少一段变化时才跑（提示词缓存的稳定性策略，详见 [hooks](./hooks.md)）。推导规则：`system` 事件按段 upsert（legacy 单文本事件读作 stable）、`compaction` 事件清除（压缩改写了消息历史，缓存必然全量失效，正是重新装配的纪元边界），都不推进 `updatedAt` |
 
 `Message`（`packages/core/src/protocol/messages.ts`）的基础字段是 `{ id, sessionId, role: "user" \| "assistant" \| "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因）。id 前缀 `msg_` / `ses_`，ULID 格式。会话的消息列表和压缩列表如今都是事件流的只读视图：`readMessages` 从事件流过滤出 `message` 事件、`readCompactions` 过滤出 `compaction` 事件，`readQueue` 读 `queue.jsonl`。
 

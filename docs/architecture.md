@@ -52,7 +52,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 | `permissions/` | ConfigPermissionGate（权限判定）+ ConfirmationBroker（人工确认网关） |
 | `memory/` | MemorySystem：L1 项目情节 + L2 全局认知 + FTS5/向量索引（见 [memory](./core/memory.md)） |
 | `text/` | 三端共享的中文分词器与全文检索（FTS）辅助 |
-| `tools/` | 12 个内置工具 |
+| `tools/` | 14 个内置工具（11 常驻 + 条件注册的子代理派发/取回与运行中提问） |
 | `skills/` | 技能包解析、双作用域扫描、点名匹配（见 [skills](./core/skills.md)） |
 | `jobs/` | JobScheduler（定时任务调度） |
 | `mcp/` | MCP（Model Context Protocol：给模型接入外部工具的开放协议）客户端管理器 |
@@ -126,7 +126,7 @@ run 的装配在 core 的 `executeRun`（`packages/core/src/agent/run-assembly.t
 1. 附件引用挂载为 attachment 块（多模态、内联文本、fs_read 提示三种形态）。
 2. 确定模型：`input.model` → 会话 meta → 默认配置，三级依次回落，条目名翻译成线上模型名。
 3. 记忆检索：拿用户文本的前 200 字符搜项目情节，取前 5 条，作为 note 块注入用户消息；另把 L2 全局认知拼进系统提示（见 [memory](./core/memory.md)）。
-4. 扫描技能目录（全局 `<home>/skills` + 工作区 `.kclaw/skills`），把可用技能清单追加进系统提示——此时系统提示由 AGENTS.md、全局认知、技能清单三段组成；若消息里出现 `/技能名`（任意位置），生成一份改写后的模型视图文本（见 [skills](./core/skills.md)）。
+4. 扫描技能目录（全局 `<home>/skills` + 工作区 `.kclaw/skills`），把可用技能清单追加进系统提示——此时系统提示分两段组装：**stable**（人设基座 + 注入约定，缓存冻结面）在前，**live**（全局认知 + 技能清单，低频变化面）在后；若消息里出现 `/技能名`（任意位置），生成一份改写后的模型视图文本（见 [skills](./core/skills.md)）。
 5. 读会话历史（在读之后才追加新用户消息）→ `createBuiltinTools`（含 skill_read）+ extraTools（MCP 工具）→ `ConfigPermissionGate`（readRoots 为附件目录；权限模式与已保存规则每个 run 都从会话 meta 和磁盘现读）。
 6. 进入 agent 循环 `runAgent(...)`（`packages/core/src/agent/loop.ts`）：
    - `llm.stream(await buildMessages())`：`toProviderMessages(history, window=200)` 负责把历史组装成发往模型的请求（`agent/context.ts`）；llm-before 钩子链只能修改模型看到的输入（技能点名的包装就是内置的 skill-wrap 钩子，用 `withLastUserText` 锚定最后一条 user 消息）。
@@ -136,7 +136,7 @@ run 的装配在 core 的 `executeRun`（`packages/core/src/agent/run-assembly.t
    - turn-boundary 钩子链（内置 steering-drain）取走引导缓冲里的消息逐条注入：message.created → onMessage 持久化 → message.completed → message.steered。
    - 回到下一轮模型调用，直到模型输出 end_turn。
 
-系统提示词的全量留痕发生在进入模型循环之前：引擎拼装好系统提示词后调用 `SessionStore.appendSystem`，往 events.jsonl 追加一条 system 事件——每 run 恰好一条，不并入 meta 投影、不上事件总线，写失败则本次 run 直接失败。
+系统提示词的全量留痕发生在进入模型循环之前：引擎拼装好系统提示词后调用 `SessionStore.appendSystem`，往 events.jsonl 追加一条 system 事件（按 stable/live 两段记录）——每 run 恰好一条，不并入 meta 投影、不上事件总线，写失败则本次 run 直接失败。run 的边界（`run.started` / `run.ended`）与人工确认的裁决（`permission.decided`）也在此层落进会话档案，三者构成审计页的"每轮发生了什么"（见 [run-manager](./server/run-manager.md) 与 [webui](./web/webui.md)）。
 
 ### 第三步：收尾与广播
 

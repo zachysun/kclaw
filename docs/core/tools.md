@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/tools/` 实现全部 12 个内置工具，并把它们装配成两份对齐的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
+`packages/core/src/tools/` 实现 14 个内置工具（11 个常驻 + 3 个按装配条件注册），并把它们装配成两份对齐的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
 
 ---
 
@@ -43,8 +43,12 @@ export function createBuiltinTools(opts: {
   web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean; spillDir: string }>
   sessionSearch?: SessionSearchFn    // session_search 的检索后端（server 每 run 注入）；缺席时工具仍注册、返回"(无可检索内容)"
   skills?: SkillRecord[]             // 技能目录扫描结果：skill_read 按名加载正文（见 skills.md）
-  subagent?: { spawner: SubagentSpawner; parentSessionId: string }
-  // subagent_run 的派发后端（server 侧 spawner，见 subagents.md）；缺席时 subagent_run 不注册
+  subagent?: { spawner: SubagentSpawner; parentSessionId: string; collector?: SubagentCollector }
+  // 子代理派发后端（server 侧 spawner，见 subagents.md）；缺席时 subagent_run 不注册；
+  // collector 随行时追加 subagent_collect（后台子代理的答复按需取回，issue #22）
+  ask?: { broker: ConfirmationBroker; timeoutMs?: number; emit: QuestionEventEmitter }
+  // 运行中提问（issue #21）：broker 与确认共用同一个网关对象；缺席时 ask_user_questions 不注册。
+  // run 装配对每个 run 都注入——主线与子代理一样（子代理的转发卡沿确认先例）
   childRun?: boolean                 // 本 run 自身是子代理（meta.parentSessionId 派生）：裁掉 memory_save 与 subagent_run
   fetchImpl?: typeof fetch
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] }
@@ -61,7 +65,7 @@ export function makeTool<N extends string>(
 
 ---
 
-## 12 个内置工具
+## 14 个内置工具
 
 | 名称 | 职责 | risk / concurrency |
 |------|------|--------------------|
@@ -76,7 +80,11 @@ export function makeTool<N extends string>(
 | `memory_search` | 全文检索记忆 | safe / parallel |
 | `session_search` | 全文检索当前会话已压缩的早期对话 | safe / parallel |
 | `skill_read` | 按名字加载一个技能（skill）的完整规程正文 | safe / parallel |
-| `subagent_run` | 派出一个子代理独立执行一段自包含任务，结题答复即工具结果 | safe / parallel |
+| `subagent_run` | 派出一个子代理独立执行一段自包含任务（可后台），结题答复即工具结果 | safe / parallel |
+| `subagent_collect` | 按子会话 id 取回后台子代理的完整结题答复 | safe / parallel |
+| `ask_user_questions` | 向用户提出 1–5 个需要当场拍板的问题，回答即工具结果 | safe / parallel |
+
+前 11 个**常驻注册**（工具列表不随会话状态变化）；`subagent_run`/`subagent_collect` 仅在 daemon 装配了子代理派发后端时注册（子代理自己的 run 两者都不注册——单层委派、不能再派孙代理），`ask_user_questions` 每个 run 都注册（见下文各自的"注册是条件性的"说明）。
 
 ### exec（`tools/exec.ts`）
 
@@ -133,9 +141,15 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 
 ### subagent 工具（`tools/subagent.ts`）
 
-**subagent_run** `{task, label?}`：派一个子代理执行一段自包含任务，阻塞等待其结题答复作为工具结果（完整机制、生命周期与结果整形见 [subagents](./subagents.md)）。执行器是薄壳——校验 `task` 非空字符串、`label` 为字符串后调一次 spawner，会话创建/run 提交/状态转发都在 server 侧实现。`risk: "safe"`：派出动作本身不碰敏感资源，子 run 自己的工具调用照常过自己的权限门；`concurrency: "parallel"`：一批多个 `subagent_run` 并发执行即并行路径。子代理的 `childSessionId` 经结果的 `data` 字段随块持久化（web 的"查看子代理轨迹"链接读它）。
+**subagent_run** `{task, label?, run_in_background?}`：派一个子代理执行一段自包含任务，阻塞等待其结题答复作为工具结果（完整机制、生命周期与结果整形见 [subagents](./subagents.md)）。执行器是薄壳——校验 `task` 非空字符串、`label` 与 `run_in_background` 为相应类型后调一次 spawner，会话创建/run 提交/状态转发都在 server 侧实现。`run_in_background: true` 时派发立即返回子会话 id（不阻塞父 run，生命周期挂到父**会话**而不是父 run——父 run 结束或中止不会取消它），子代理完成后父会话收到一条完成通知消息，届时用 `subagent_collect` 取完整答复。`risk: "safe"`：派出动作本身不碰敏感资源，子 run 自己的工具调用照常过自己的权限门；`concurrency: "parallel"`：一批多个 `subagent_run` 并发执行即并行路径。子代理的 `childSessionId` 经结果的 `data` 字段随块持久化（web 的"查看子代理轨迹"链接读它）。
 
-注册是**条件性**的（与 session/skill 工具的"始终注册"不同）：`subagent` 选项缺席（daemon 未装配 spawner）或本 run 自身是子代理（单层委派）时不注册 `subagent_run`；子代理的工具面同时裁掉 `memory_save`（记忆隔离）。
+**subagent_collect** `{childSessionId}`：按子会话 id 取回后台子代理的最终结题答复（头尾截断，与阻塞结果同一形状）。只能取**本会话**派出的子代理——collector 校验 `parentSessionId` 归属，别人的子代理与未知 id 都是 error 结果。`risk: "safe"`、`concurrency: "parallel"`。
+
+注册是**条件性**的（与 session/skill 工具的"始终注册"不同）：`subagent` 选项缺席（daemon 未装配 spawner）或本 run 自身是子代理（单层委派）时不注册 `subagent_run` 与 `subagent_collect`；子代理的工具面同时裁掉 `memory_save`（记忆隔离）。
+
+### ask 工具（`tools/ask.ts`）
+
+**ask_user_questions** `{questions: [{text, options?, multiSelect?}]}`：向用户提出 1–5 个需要当场拍板的问题（选项单选/多选或自由文本），等待用户回答后把答案文本作为工具结果返回（每个问题一行 `N. <问题>\n   → <回答>`；选项题按选项文案拼接、自由题按输入文本，未回答显示"（未回答）"）。描述里带一条软性指引：只在关键分叉点用——信息缺失会导致方案走偏、或不可逆操作前必须用户拍板时；能从上下文或文件里推断的信息不要问。等待走与人工确认**同一个**三方竞速（`racePending`，`permissions/broker.ts`）：人工回答 / `sessions.askTimeoutMs` 超时（默认 10 分钟）/ run 中止，谁先到算谁——超时是合法结局（返回 `ok`，附"用户未在限时内回答，不要重复调用，基于合理假设继续"的说明，模型必须学会处理空回答），中止不是（错误结果、不发 `question.resolved`，与确认流的规则一致）。`risk: "safe"`：提问本身不碰敏感资源；`concurrency: "parallel"`。
 
 ---
 
@@ -176,5 +190,6 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 - [memory](./memory.md)：memory 工具背后的存储与检索
 - [compaction](./compaction.md)：session_search 检索的索引来源（压缩段）与工具输出省略
 - [skills](./skills.md)：skill_read 背后的技能包机制（渐进披露、双作用域、点名包装）
-- [subagents](./subagents.md)：subagent_run 背后的子会话生命周期、并发上限与结果整形
+- [subagents](./subagents.md)：subagent_run / subagent_collect 背后的子会话生命周期、并发上限、后台模式与结果整形
+- [permissions](./permissions.md)：ask_user_questions 与人工确认共用的三方竞速网关（`racePending`）
 - [mcp](./mcp.md)：同一 ToolExecutor 契约的另一种工具来源
