@@ -117,6 +117,8 @@ export interface KclawConfig {
     toolLoopMaxRepeats?: number
     /** 不带 disposition 的 send_message 取"会话覆盖 ?? 此默认"。缺省 "steer"。 */
     defaultDisposition?: "steer" | "wait" | "interrupt"
+    /** ask_user_questions 的等待上限（毫秒）。缺省 600000（10 分钟）。 */
+    askTimeoutMs?: number
   }
   /**
    * Job-finish notifications. Delivery failures are only logged (onError),

@@ -57,6 +57,7 @@ import { subagentSystemPrompt, type SubagentSpawner } from "./subagent.js"
 import type { SessionSearchFn } from "../tools/session.js"
 import type { ToolExecutor } from "./tools.js"
 import { createBuiltinTools, deriveToolFacts } from "../tools/index.js"
+import { makeEvent } from "../protocol/events.js"
 import { searchSessionEvents } from "../tools/session-search.js"
 import { matchSkillInvocations, scanSkillDirs, skillListPrompt, wrapSkillInvocations } from "../skills/index.js"
 import type { MemorySystem } from "../memory/system.js"
@@ -379,6 +380,14 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     ...(engine.deps.subagents !== undefined && !childRun
       ? { subagent: { spawner: engine.deps.subagents.spawner, parentSessionId: sessionId } }
       : {}),
+    // Mid-run questions (issue #21): every run — mainline and child alike —
+    // can ask; the broker is the shared gateway object, and the emitter
+    // stamps the events with this run's session/runId context.
+    ask: {
+      broker: engine.deps.broker,
+      timeoutMs: config.sessions.askTimeoutMs,
+      emit: (type, payload) => busEmit(makeEvent(type, payload, eventCtx())),
+    },
     ...(childRun ? { childRun: true } : {}),
   })
   // test/adapter seam: per-name executor overrides on top of the

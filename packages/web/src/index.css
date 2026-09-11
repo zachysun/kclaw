@@ -1069,6 +1069,55 @@ select:focus {
   color: #0d1a0c;
 }
 
+/* Question cards (ask_user_questions): the agent asking, not warning —
+   accent framing instead of warn; questions list option buttons or a
+   free-text input, one submit sends the whole answer set. */
+.question-card {
+  border: 1px solid var(--accent);
+  background: var(--accent-dim);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.question-card .confirm-title {
+  color: var(--accent);
+}
+
+.question-card .confirm-note {
+  color: var(--text-dim);
+}
+
+.question-item {
+  margin-bottom: var(--space-2);
+}
+
+.question-text-label {
+  margin-bottom: var(--space-1);
+  font-weight: 600;
+}
+
+.question-text {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.question-text::placeholder {
+  color: var(--muted);
+}
+
+.confirm-actions button.question-picked {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: var(--accent-dim);
+}
+
 .composer-row {
   display: flex;
   align-items: center;

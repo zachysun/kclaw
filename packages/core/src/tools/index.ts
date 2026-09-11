@@ -11,6 +11,8 @@ import type { SubagentSpawner } from "../agent/subagent.js"
 import type { MemoryQuery, MemoryTriggers } from "../memory/system.js"
 import type { SkillRecord } from "../skills/index.js"
 import type { ToolDefinition } from "../provider/types.js"
+import { createAskUserQuestionsTool, ASK_USER_QUESTIONS_DESCRIPTION, type QuestionEventEmitter } from "./ask.js"
+import type { ConfirmationBroker } from "../permissions/broker.js"
 import { createExecTool, type ExecSandboxSpawn } from "./exec.js"
 import { createFsTools } from "./fs.js"
 import { createMemoryTools } from "./memory.js"
@@ -19,6 +21,7 @@ import { createSkillTools, SKILL_READ_DESCRIPTION } from "./skills.js"
 import { createSubagentTool, SUBAGENT_RUN_DESCRIPTION } from "./subagent.js"
 import { createWebTools } from "./web.js"
 
+export { createAskUserQuestionsTool, ASK_USER_QUESTIONS_DESCRIPTION, type QuestionEventEmitter } from "./ask.js"
 export { createExecTool, truncateMiddle } from "./exec.js"
 export { createFsTools } from "./fs.js"
 export { createMemoryTools } from "./memory.js"
@@ -59,6 +62,13 @@ export function createBuiltinTools(opts: {
    * every child run — children cannot spawn grandchildren).
    */
   subagent?: { spawner: SubagentSpawner; parentSessionId: string }
+  /**
+   * Mid-run questions (issue #21): when set, `ask_user_questions` joins the
+   * registry wired to the shared confirmation broker. Absent → no ask tool
+   * (bare engine constructions); the run assembly always injects it — child
+   * runs included (forwarded cards follow the confirmation precedent).
+   */
+  ask?: { broker: ConfirmationBroker; timeoutMs?: number; emit: QuestionEventEmitter }
   /**
    * True for a subagent's own run: the surface drops `memory_save` (memory
    * stays a mainline responsibility) and `subagent_run` (single-level
@@ -222,6 +232,34 @@ export function createBuiltinTools(opts: {
           label: str("Short display name shown in status lines and confirmation cards"),
         },
         ["task"],
+      ),
+    })
+  }
+  if (opts.ask !== undefined) {
+    surface.push({
+      name: "ask_user_questions",
+      tool: createAskUserQuestionsTool(opts.ask),
+      def: def(
+        "ask_user_questions",
+        ASK_USER_QUESTIONS_DESCRIPTION,
+        {
+          questions: {
+            type: "array",
+            description: "1-5 questions to ask the user",
+            items: {
+              type: "object",
+              properties: {
+                text: str("The question, self-contained and answerable on its own"),
+                options: { type: "array", items: { type: "string" }, description: "2+ choices to pick from; omit for free text" },
+                multiSelect: { type: "boolean", description: "With options: allow several picks (default single)" },
+              },
+              required: ["text"],
+            },
+            minItems: 1,
+            maxItems: 5,
+          },
+        },
+        ["questions"],
       ),
     })
   }

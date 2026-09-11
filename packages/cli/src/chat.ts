@@ -55,9 +55,9 @@
  * queued server-side, and a duplicate would double-run it — the 120s
  * watchdog bounds that wait instead.
  */
-import { isCancel, select } from "@clack/prompts"
+import { isCancel, select, multiselect, text } from "@clack/prompts"
 import { isPermissionMode, PERMISSION_MODES } from "@kclaw/core"
-import type { AnyAgentEvent, ConfirmationDecision, ConfirmationRequestedPayload, MessageQueuedPayload, PermissionMode } from "@kclaw/core"
+import type { AnyAgentEvent, ConfirmationDecision, ConfirmationRequestedPayload, MessageQueuedPayload, PermissionMode, QuestionRequestedPayload } from "@kclaw/core"
 import { join } from "node:path"
 import { createInterface, type Interface as RlInterface } from "node:readline"
 import { KclawClient } from "./client.js"
@@ -292,6 +292,47 @@ async function handleConfirmation(p: ConfirmationRequestedPayload, ctx: ChatCtx)
   }
 }
 
+/** Collect the answers for one pending question (options → arrows+enter, free text → typed line). */
+async function handleQuestion(p: QuestionRequestedPayload, ctx: ChatCtx): Promise<void> {
+  line(`❓ ${p.questions.length} 个问题待回答${p.noteText === undefined ? "" : dim(` · ${p.noteText}`)}`, ctx)
+  const answers: string[][] = []
+  ctx.inputPaused = true
+  ctx.rl.pause() // @clack owns the terminal while our readline sits quiet
+  try {
+    for (const q of p.questions) {
+      if (Array.isArray(q.options) && q.options.length > 0) {
+        if (q.multiSelect === true) {
+          const picked = await multiselect<string>({
+            message: q.text,
+            options: q.options.map((o) => ({ value: o, label: o })),
+            required: false,
+          })
+          answers.push(isCancel(picked) ? [] : [...picked])
+        } else {
+          const picked = await select<string>({
+            message: q.text,
+            options: q.options.map((o) => ({ value: o, label: o })),
+          })
+          answers.push(isCancel(picked) ? [] : [picked])
+        }
+      } else {
+        const typed = await text({ message: q.text, placeholder: "回车跳过" })
+        answers.push(isCancel(typed) || typeof typed !== "string" ? [] : typed.trim() === "" ? [] : [typed])
+      }
+    }
+  } catch {
+    answers.push(...p.questions.slice(answers.length).map(() => []))
+  } finally {
+    ctx.inputPaused = false
+    ctx.rl.resume()
+  }
+  try {
+    ctx.ws.send({ type: "question.resolve", questionId: p.questionId, answers })
+  } catch {
+    // socket dropping — the reconnect path takes over
+  }
+}
+
 /**
  * Render one frame; resolves true when the run reached a terminal state
  * (run.completed / run.failed) or a command error frame arrived — anything
@@ -336,6 +377,13 @@ export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean
     // left out.
     case "confirmation.requested":
       await handleConfirmation(ev.payload, ctx)
+      return false
+    case "question.requested":
+      await handleQuestion(ev.payload, ctx)
+      return false
+    // question.resolved: the pending question already collected its answers
+    // interactively above; the broadcast needs nothing.
+    case "question.resolved":
       return false
     // message.created/completed (any role): deliberately nothing. The USER
     // message events (the daemon announces the user message lifecycle on the

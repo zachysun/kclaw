@@ -99,6 +99,48 @@ describe("checkCommandFrame — confirmation.resolve", () => {
   })
 })
 
+describe("checkCommandFrame — question.resolve", () => {
+  it("answers the gateway error before field checks when no run is wired", () => {
+    expect(checkCommandFrame({ type: "question.resolve", questionId: "", answers: [] }, deps({ hasRun: false }))).toEqual({
+      kind: "error",
+      message: "question gateway unavailable",
+    })
+  })
+
+  it("requires a non-empty questionId and string[][] answers", () => {
+    expect(checkCommandFrame({ type: "question.resolve", questionId: "", answers: [["a"]] }, deps())).toEqual({
+      kind: "error",
+      message: "question.resolve requires a non-empty string questionId and answers as string[][] (one array per question)",
+    })
+    expect(checkCommandFrame({ type: "question.resolve", questionId: "q1", answers: "a" }, deps())).toEqual({
+      kind: "error",
+      message: "question.resolve requires a non-empty string questionId and answers as string[][] (one array per question)",
+    })
+    expect(checkCommandFrame({ type: "question.resolve", questionId: "q1", answers: [["a", 3]] }, deps())).toEqual({
+      kind: "error",
+      message: "question.resolve requires a non-empty string questionId and answers as string[][] (one array per question)",
+    })
+  })
+
+  it("restricts client to cli|web", () => {
+    expect(checkCommandFrame({ type: "question.resolve", questionId: "q1", answers: [], client: "api" }, deps())).toEqual({
+      kind: "error",
+      message: 'question.resolve client must be "cli" or "web"',
+    })
+  })
+
+  it("keeps a legal answer set and drops an absent client", () => {
+    expect(checkCommandFrame({ type: "question.resolve", questionId: "q1", answers: [["方案A"], []], client: "web" }, deps())).toEqual({
+      kind: "command",
+      command: { type: "question.resolve", questionId: "q1", answers: [["方案A"], []], client: "web" },
+    })
+    expect(checkCommandFrame({ type: "question.resolve", questionId: "q1", answers: [["自由文本"]] }, deps())).toEqual({
+      kind: "command",
+      command: { type: "question.resolve", questionId: "q1", answers: [["自由文本"]] },
+    })
+  })
+})
+
 describe("checkCommandFrame — send_message", () => {
   it("requires the run manager before field checks", () => {
     expect(checkCommandFrame(sendFrame(), deps({ hasRun: false }))).toEqual({

@@ -19,6 +19,7 @@ function mountWith(view: ChatState, onOpenAudit?: (sessionId: string) => void, o
         view={view}
         onSend={vi.fn()}
         onResolveConfirmation={vi.fn()}
+        onAnswerQuestion={vi.fn()}
         pendingAttachments={[]}
         onRemoveAttachment={vi.fn()}
         onOpenAudit={onOpenAudit}

@@ -29,10 +29,11 @@ import type {
   ConfirmationRequestedPayload,
   MemoryWrittenPayload,
   Message,
+  QuestionRequestedPayload,
   Role,
 } from "@kclaw/core/protocol"
 
-export type { Block, ConfirmationRequestedPayload, Message, Role }
+export type { Block, ConfirmationRequestedPayload, Message, QuestionRequestedPayload, Role }
 
 /**
  * The daemon's full event catalog as a discriminated union (the protocol
@@ -115,6 +116,8 @@ export interface ChatState {
   queue: QueueEntryView[]
   runState: RunState
   pendingConfirmations: ConfirmationCard[]
+  /** Waiting ask_user_questions cards (issue #21) — same lifecycle as confirmations. */
+  pendingQuestions: QuestionCard[]
   error?: string
   /**
    * Provider retry in progress: set by `llm.failed {willRetry:true}` while the
@@ -152,6 +155,7 @@ export function initChat(messages: Message[]): ChatState {
     queue: [],
     runState: "idle",
     pendingConfirmations: [],
+    pendingQuestions: [],
   }
 }
 
@@ -489,6 +493,10 @@ export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
       return pushConfirmation(state, event.payload)
     case "confirmation.resolved":
       return removeConfirmation(state, event.payload.confirmationId)
+    case "question.requested":
+      return pushQuestion(state, event.payload)
+    case "question.resolved":
+      return removeQuestion(state, event.payload.questionId)
     // The catalog's pass-through events (no view state to change): job
     // lifecycle and session renames are other views' business, attachment
     // blocks are calibrated wholesale by message.completed, llm.started is
@@ -635,4 +643,29 @@ function removeConfirmation(state: ChatState, confirmationId: string): ChatState
   const pending = state.pendingConfirmations.filter((c) => c.confirmationId !== confirmationId)
   if (pending.length === state.pendingConfirmations.length) return state
   return { ...state, pendingConfirmations: pending }
+}
+
+/** A question card mirrors QuestionRequestedPayload — the view collects answers and sends question.resolve. */
+export interface QuestionCard {
+  questionId: string
+  questions: QuestionRequestedPayload["questions"]
+  expiresAt: string
+  noteText?: string
+}
+
+function pushQuestion(state: ChatState, payload: QuestionRequestedPayload): ChatState {
+  if (state.pendingQuestions.some((q) => q.questionId === payload.questionId)) return state
+  const card: QuestionCard = {
+    questionId: payload.questionId,
+    questions: payload.questions,
+    expiresAt: payload.expiresAt,
+    ...(payload.noteText === undefined ? {} : { noteText: payload.noteText }),
+  }
+  return { ...state, pendingQuestions: [...state.pendingQuestions, card] }
+}
+
+function removeQuestion(state: ChatState, questionId: string): ChatState {
+  const pending = state.pendingQuestions.filter((q) => q.questionId !== questionId)
+  if (pending.length === state.pendingQuestions.length) return state
+  return { ...state, pendingQuestions: pending }
 }

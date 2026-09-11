@@ -129,6 +129,21 @@ export function createSubagentSpawner(deps: SubagentHostDeps): SubagentSpawner {
           case "confirmation.resolved":
             deps.bus.emit(makeEvent("confirmation.resolved", { ...e.payload }, forwardCtx(e)))
             break
+          case "question.requested": {
+            // Same forwarding rule as confirmation cards (issue #21): the
+            // card lands on the parent channel labeled with the subagent;
+            // resolution stays global by id on the shared broker.
+            deps.bus.emit(makeEvent("question.requested", {
+              ...e.payload,
+              noteText: e.payload.noteText === undefined
+                ? `来自子代理 ${who}`
+                : `来自子代理 ${who} · ${e.payload.noteText}`,
+            }, forwardCtx(e)))
+            break
+          }
+          case "question.resolved":
+            deps.bus.emit(makeEvent("question.resolved", { ...e.payload }, forwardCtx(e)))
+            break
           default:
             break
         }

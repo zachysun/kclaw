@@ -51,6 +51,8 @@ export function checkCommandFrame(frame: object, deps: CheckDeps): FrameCheck {
     token?: unknown
     sessionId?: unknown
     confirmationId?: unknown
+    questionId?: unknown
+    answers?: unknown
     decision?: unknown
     client?: unknown
     text?: unknown
@@ -97,6 +99,32 @@ export function checkCommandFrame(frame: object, deps: CheckDeps): FrameCheck {
           type: "confirmation.resolve",
           confirmationId,
           decision,
+          ...(client !== undefined ? { client } : {}),
+        },
+      }
+    }
+    case "question.resolve": {
+      if (!deps.hasRun) {
+        return { kind: "error", message: "question gateway unavailable" }
+      }
+      const { questionId, answers, client } = msg
+      const answersOk = Array.isArray(answers)
+        && answers.every((perQ) => Array.isArray(perQ) && perQ.every((a) => typeof a === "string"))
+      if (typeof questionId !== "string" || questionId.length === 0 || !answersOk) {
+        return {
+          kind: "error",
+          message: "question.resolve requires a non-empty string questionId and answers as string[][] (one array per question)",
+        }
+      }
+      if (client !== undefined && client !== "cli" && client !== "web") {
+        return { kind: "error", message: 'question.resolve client must be "cli" or "web"' }
+      }
+      return {
+        kind: "command",
+        command: {
+          type: "question.resolve",
+          questionId,
+          answers: answers as string[][],
           ...(client !== undefined ? { client } : {}),
         },
       }

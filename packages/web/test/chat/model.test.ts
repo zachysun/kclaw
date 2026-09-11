@@ -290,6 +290,47 @@ describe("confirmations", () => {
   })
 })
 
+describe("questions (ask_user_questions)", () => {
+  const QUESTIONS = [
+    { text: "用哪个方案?", options: ["方案A", "方案B"] },
+    { text: "补充说明?" },
+  ]
+
+  it("question.requested pushes a card with the questions intact", () => {
+    const state = initChat([])
+    const next = applyEvent(state, ev("question.requested", {
+      questionId: "q_1",
+      questions: QUESTIONS,
+      expiresAt: "2026-09-11T00:10:00.000Z",
+      noteText: "来自子代理 小李",
+    }))
+    expect(next.pendingQuestions).toEqual([
+      {
+        questionId: "q_1",
+        questions: QUESTIONS,
+        expiresAt: "2026-09-11T00:10:00.000Z",
+        noteText: "来自子代理 小李",
+      },
+    ])
+  })
+
+  it("does not duplicate a still-pending question", () => {
+    const payload = { questionId: "q_1", questions: QUESTIONS, expiresAt: "t" }
+    let state = initChat([])
+    state = applyEvent(state, ev("question.requested", payload))
+    const next = applyEvent(state, ev("question.requested", payload))
+    expect(next.pendingQuestions).toHaveLength(1)
+  })
+
+  it("question.resolved removes the card by questionId; unknown id is a no-op", () => {
+    let state = initChat([])
+    state = applyEvent(state, ev("question.requested", { questionId: "q_1", questions: QUESTIONS, expiresAt: "t" }))
+    state = applyEvent(state, ev("question.resolved", { questionId: "q_1", answers: [["方案A"], []], by: "web" }))
+    expect(state.pendingQuestions).toEqual([])
+    expect(applyEvent(state, ev("question.resolved", { questionId: "q_nope", by: "timeout" }))).toBe(state)
+  })
+})
+
 describe("mergeMessages (reconnect)", () => {
   it("replaces messages the fresh pull knows and keeps live-only messages", () => {
     const existing = initChat([msg("m1", "user", [text("b1", "old")])]).messages

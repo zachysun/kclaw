@@ -21,6 +21,8 @@ export type EventType =
   | "llm.started" | "llm.completed" | "llm.failed"
   // 人工介入
   | "confirmation.requested" | "confirmation.resolved"
+  // 运行中提问（ask_user_questions 工具的等待生命周期）
+  | "question.requested" | "question.resolved"
   // note 单发
   | "note.emitted"
   // 记忆写入（项目级事务，广播，不带 sessionId）
@@ -64,6 +66,28 @@ export interface ConfirmationRequestedPayload {
 export interface ConfirmationResolvedPayload {
   confirmationId: string
   decision: "once" | "project" | "global" | "reject" | "timeout"
+  by: "cli" | "web" | "timeout"
+}
+
+/** One question the model asks the user mid-run (ask_user_questions). */
+export interface QuestionSpec {
+  text: string
+  /** When present the user picks from these; absent → free text. */
+  options?: string[]
+  /** Only meaningful with options: allow several picks (default single). */
+  multiSelect?: boolean
+}
+export interface QuestionRequestedPayload {
+  questionId: string
+  questions: QuestionSpec[]
+  expiresAt: string
+  /** Human-facing label (e.g. "来自子代理 X" on a forwarded card). */
+  noteText?: string
+}
+export interface QuestionResolvedPayload {
+  questionId: string
+  /** Per-question answers in ask order; absent when nobody answered (timeout). */
+  answers?: string[][]
   by: "cli" | "web" | "timeout"
 }
 
@@ -120,6 +144,8 @@ export type EventPayloadMap = {
   "llm.failed": LlmFailedPayload
   "confirmation.requested": ConfirmationRequestedPayload
   "confirmation.resolved": ConfirmationResolvedPayload
+  "question.requested": QuestionRequestedPayload
+  "question.resolved": QuestionResolvedPayload
   "note.emitted": NoteEmittedPayload
   "memory.written": MemoryWrittenPayload
   "message.queued": MessageQueuedPayload

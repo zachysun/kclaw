@@ -624,6 +624,69 @@ describe("ChatPanel", () => {
     h.unmount()
   })
 
+  it("renders a question card and submits option + free-text answers", async () => {
+    const h = await mount()
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("question.requested", {
+        questionId: "q_1",
+        questions: [
+          { text: "用哪个方案?", options: ["方案A", "方案B"] },
+          { text: "补充说明?" },
+        ],
+        expiresAt: "2026-09-11T00:10:00.000Z",
+      }))
+    })
+    expect(h.container.querySelector('[data-testid="question-card"]')).not.toBeNull()
+    // Submit is disabled until every question has an answer.
+    expect((h.container.querySelector('button[data-testid="question-submit"]') as HTMLButtonElement).disabled).toBe(true)
+    // Pick one option, type free text.
+    await act(async () => {
+      ;(h.container.querySelector('button[data-testid="question-0-option"]') as HTMLButtonElement).click()
+    })
+    const freeText = h.container.querySelector('input[data-testid="question-1-text"]') as HTMLInputElement
+    const inputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!
+    await act(async () => {
+      inputSetter.call(freeText, "没有补充")
+      freeText.dispatchEvent(new Event("input", { bubbles: true }))
+    })
+    await act(async () => {
+      ;(h.container.querySelector('button[data-testid="question-submit"]') as HTMLButtonElement).click()
+    })
+    expect(h.sockets[0]!.sent).toContain(
+      JSON.stringify({ type: "question.resolve", questionId: "q_1", answers: [["方案A"], ["没有补充"]], client: "web" }),
+    )
+    // The daemon's question.resolved event removes the card.
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("question.resolved", { questionId: "q_1", answers: [["方案A"], ["没有补充"]], by: "web" }))
+    })
+    expect(h.container.querySelector('[data-testid="question-card"]')).toBeNull()
+    h.unmount()
+  })
+
+  it("multiSelect questions submit several picks in one answer", async () => {
+    const h = await mount()
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("question.requested", {
+        questionId: "q_2",
+        questions: [{ text: "改哪些?", options: ["db", "api"], multiSelect: true }],
+        expiresAt: "t",
+      }))
+    })
+    await act(async () => {
+      ;(h.container.querySelectorAll('button[data-testid="question-0-option"]')[0] as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      ;(h.container.querySelectorAll('button[data-testid="question-0-option"]')[1] as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      ;(h.container.querySelector('button[data-testid="question-submit"]') as HTMLButtonElement).click()
+    })
+    expect(h.sockets[0]!.sent).toContain(
+      JSON.stringify({ type: "question.resolve", questionId: "q_2", answers: [["db", "api"]], client: "web" }),
+    )
+    h.unmount()
+  })
+
   it("project/global persist a rule; reject denies without one", async () => {
     const h = await mount()
     const request = async (confirmationId: string, callId: string, id: string): Promise<void> => {

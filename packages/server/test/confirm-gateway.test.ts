@@ -158,6 +158,14 @@ function execToolTurn(callId: string, command: string): LlmStreamEvent[] {
   ]
 }
 
+function askToolTurn(callId: string, questions: unknown): LlmStreamEvent[] {
+  return [
+    { type: "tool_call_started", index: 0, callId, name: "ask_user_questions" },
+    { type: "tool_call_delta", index: 0, delta: JSON.stringify({ questions }) },
+    { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 1, outputTokens: 2 } },
+  ]
+}
+
 interface GwEnv {
   paths: KclawPaths
   config: KclawConfig
@@ -713,6 +721,97 @@ describe("confirmation gateway over /ws", () => {
     const projectRules = loadDecidedRules(join(env.config.workspace, ".kclaw", "permissions.yaml"))
     expect(projectRules).toHaveLength(0) // 2 + timeout + 2 < 3 — the reset held
   }, 30_000)
+})
+
+// --- question gateway over /ws (issue #21) -----------------------------------
+// ask_user_questions rides the SAME broker and gateway path as confirmations:
+// the tool executor registers the pending question and emits question.requested
+// (stamped with the run context), the ws question.resolve frame settles it, and
+// the tool's race produces the tool result. Exactly one requested/resolved pair
+// per question — the broker emits nothing.
+
+describe("question gateway over /ws", () => {
+  it("answers a question end to end: requested → resolve → resolved → tool result carries the answers", async () => {
+    const { env, url } = await makeGateway(
+      scriptClient([
+        askToolTurn("call_q1", [
+          { text: "用哪个方案?", options: ["方案A", "方案B"] },
+          { text: "补充说明?" },
+        ]),
+        textTurn("好，按方案A做"),
+      ]),
+    )
+    const session = env.sessions.create("提问会话")
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await waitFor(frames, (f) => f.type === "subscribed")
+
+    const run = env.manager.enqueue(session.id, { userText: "问我用哪个方案", trigger: "user" })
+
+    const requested = (await waitFor(frames, (f) => f.type === "question.requested")) as AgentEvent
+    const payload = requested.payload as { questionId: string; questions: Array<{ text: string; options?: string[] }>; expiresAt: string }
+    expect(payload.questionId).toMatch(/^q_/)
+    expect(payload.questions).toEqual([
+      { text: "用哪个方案?", options: ["方案A", "方案B"] },
+      { text: "补充说明?" },
+    ])
+    expect(typeof payload.expiresAt).toBe("string")
+
+    ws.send(JSON.stringify({
+      type: "question.resolve", questionId: payload.questionId, answers: [["方案A"], []], client: "web",
+    }))
+    expect(await waitFor(frames, (f) => f.type === "question.resolved_ack")).toEqual({
+      type: "question.resolved_ack", questionId: payload.questionId, ok: true,
+    })
+
+    // a second resolve of the same id answers an error frame (entry settled)
+    ws.send(JSON.stringify({
+      type: "question.resolve", questionId: payload.questionId, answers: [["方案B"]],
+    }))
+    expect(await waitFor(frames, (f) => f.type === "error" && f.message === "unknown question")).toMatchObject({
+      type: "error", message: "unknown question",
+    })
+
+    await run
+    // exactly one requested/resolved pair reached the subscriber
+    expect(frames.filter((f) => f.type === "question.requested")).toHaveLength(1)
+    expect(frames.filter((f) => f.type === "question.resolved")).toHaveLength(1)
+    const resolved = frames.find((f) => f.type === "question.resolved") as AgentEvent
+    expect(resolved.payload).toMatchObject({ questionId: payload.questionId, answers: [["方案A"], []], by: "web" })
+
+    const msgs = env.sessions.readMessages(session.id)
+    expect(msgs.map((m) => m.role)).toEqual(["user", "assistant", "tool", "assistant"])
+    const result = msgs[2]!.blocks[0] as ToolResultBlock
+    expect(result).toMatchObject({ type: "tool_result", callId: "call_q1", status: "ok" })
+    expect(result.output).toContain("1. 用哪个方案?\n   → 方案A")
+    expect(result.output).toContain("2. 补充说明?\n   → （未回答）")
+  }, 15_000)
+
+  it("rejects a malformed answers payload with an error frame", async () => {
+    const { env, url } = await makeGateway(scriptClient([textTurn("hi")]))
+    const session = env.sessions.create("坏载荷会话")
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "question.resolve", questionId: "q_x", answers: "nope" }))
+    expect(await waitFor(frames, (f) => f.type === "error")).toMatchObject({
+      type: "error", message: expect.stringContaining("string[][]"),
+    })
+    await env.manager.enqueue(session.id, { userText: "hi", trigger: "user" })
+  })
+
+  it("answers an error frame for an unknown question id", async () => {
+    const { env, url } = await makeGateway(scriptClient([textTurn("hi")]))
+    const session = env.sessions.create("未知问题会话")
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "question.resolve", questionId: "q_missing", answers: [["a"]] }))
+    expect(await waitFor(frames, (f) => f.type === "error")).toMatchObject({
+      type: "error", message: "unknown question",
+    })
+    await env.manager.enqueue(session.id, { userText: "hi", trigger: "user" })
+  })
 })
 
 // --- sessionGrants run 级接线（批次 D）-----------------------------------------

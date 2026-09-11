@@ -1,4 +1,4 @@
-import type { ConfirmationDecision, ConfirmationRequestedPayload, ToolCallBlock } from "../protocol/index.js"
+import type { ConfirmationDecision, ConfirmationRequestedPayload, QuestionSpec, ToolCallBlock } from "../protocol/index.js"
 
 /**
  * Verdict value carried between the loop and its human resolver: the
@@ -8,6 +8,10 @@ import type { ConfirmationDecision, ConfirmationRequestedPayload, ToolCallBlock 
  * (the daemon persists decided rules from it).
  */
 export type ConfirmationResolution = { decision: ConfirmationDecision | "timeout"; by: "cli" | "web" | "timeout" }
+
+/** A human answer set for a pending question: one string array per asked question, in ask order.
+ * `by` carries "timeout" only as the race sentinel — the gateway never settles a question with it. */
+export type QuestionResolution = { answers: string[][]; by: "cli" | "web" | "timeout" }
 
 /**
  * `Promise.race` against a timer AND an abort signal; the timer is cleared
@@ -26,9 +30,19 @@ export function raceConfirmation(
   ms: number,
   signal: AbortSignal | undefined,
 ): Promise<ConfirmationResolution | "aborted"> {
+  return racePending(p, ms, signal, { decision: "timeout", by: "timeout" })
+}
+
+/** The value-type-generic core of raceConfirmation: questions race with an answer-shaped timeout sentinel. */
+export function racePending<T>(
+  p: Promise<T>,
+  ms: number,
+  signal: AbortSignal | undefined,
+  timeoutValue: T,
+): Promise<T | "aborted"> {
   let timer: ReturnType<typeof setTimeout> | undefined
-  const sleep = new Promise<ConfirmationResolution>((resolve) => {
-    timer = setTimeout(() => resolve({ decision: "timeout", by: "timeout" }), ms)
+  const sleep = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(timeoutValue), ms)
   })
   let onAbort = () => {}
   const abort = new Promise<"aborted">((resolve) => {
@@ -85,9 +99,19 @@ interface PendingEntry {
  *   whose expiresAt passed.
  *
  * Relocated verbatim from server/src/confirm.ts (card ① engine relocation).
+ *
+ * Since the ask_user_questions tool (issue #21) this is a TWO-kind waiting
+ * registry: confirmations (verdict → tool proceeds or is denied) and
+ * questions (answers → the tool result the model reads). Both kinds share
+ * the same shape — id → pending promise raced against a timeout and abort —
+ * and the same gateway path (the daemon hands ws frames to one object), so
+ * they live side by side in one class. Events are still emitted by whoever
+ * awaits (the loop for confirmations, the tool executor for questions);
+ * the broker never emits.
  */
 export class ConfirmationBroker {
   readonly #entries = new Map<string, PendingEntry>()
+  readonly #questions = new Map<string, PendingQuestion>()
 
   /**
    * Register a pending confirmation. `timeoutMs` only stamps the entry's
@@ -178,5 +202,59 @@ export class ConfirmationBroker {
     for (const [id, entry] of this.#entries) {
       if (Date.parse(entry.expiresAt) <= now) this.#entries.delete(id)
     }
+    for (const [id, entry] of this.#questions) {
+      if (Date.parse(entry.expiresAt) <= now) this.#questions.delete(id)
+    }
   }
+
+  // ---- questions (ask_user_questions): same registry shape, answer instead
+  // of verdict. The tool executor owns the timeout race (it created the
+  // entry); a resolution that settles nothing returns false so a late
+  // gateway frame reports "unknown question".
+
+  /** Register a pending question; the promise settles only via resolveQuestion. */
+  createQuestion(
+    questionId: string,
+    questions: QuestionSpec[],
+    timeoutMs: number,
+    sessionId?: string,
+  ): Promise<QuestionResolution> {
+    let settle!: (r: QuestionResolution) => void
+    const resolution = new Promise<QuestionResolution>((res) => {
+      settle = res
+    })
+    this.#questions.set(questionId, {
+      questionId,
+      questions,
+      expiresAt: new Date(Date.now() + timeoutMs).toISOString(),
+      ...(sessionId === undefined ? {} : { sessionId }),
+      settle,
+      resolution,
+    })
+    return resolution
+  }
+
+  /** Apply a human answer set. True when a pending question existed and settled NOW. */
+  resolveQuestion(questionId: string, answers: string[][], by: ConfirmationActor = "cli"): boolean {
+    this.#prune()
+    const entry = this.#questions.get(questionId)
+    if (entry === undefined) return false
+    this.#questions.delete(questionId)
+    entry.settle({ answers, by })
+    return true
+  }
+
+  /** Mark a question stale (timeout/abort settled the race without a human). */
+  expireQuestion(questionId: string): void {
+    this.#questions.delete(questionId)
+  }
+}
+
+interface PendingQuestion {
+  questionId: string
+  questions: QuestionSpec[]
+  expiresAt: string
+  sessionId?: string
+  settle: (r: QuestionResolution) => void
+  resolution: Promise<QuestionResolution>
 }
