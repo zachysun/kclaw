@@ -14,7 +14,7 @@ import type { ActiveSummary } from "../session/compaction.js"
 import { toProviderMessages } from "./context.js"
 import type { ToolExecutor } from "./tools.js"
 import type { HookRunner } from "../hooks/types.js"
-import { raceConfirmation } from "../permissions/broker.js"
+import { raceConfirmation, type ConfirmationResolution } from "../permissions/broker.js"
 
 /** Gate verdict for one tool call: run it, refuse it, or ask a human. */
 export type PermissionDecision =
@@ -74,8 +74,12 @@ export interface AgentDeps {
   toolDefs?: ToolDefinition[]
   /** permission gate consulted before every tool execution */
   permissions?: PermissionGate
-  /** answers confirmation.requested; missing resolver denies immediately by timeout */
-  resolveConfirmation?(confirmationId: string): Promise<{ decision: "once" | "project" | "global" | "reject" | "timeout"; by: "cli" | "web" | "timeout" }>
+  /**
+   * Answers confirmation.requested with a human verdict; "timeout" (or a
+   * missing resolver) denies by timeout. The timeout never travels inside a
+   * verdict object — the race answers the named "timeout" sentinel.
+   */
+  resolveConfirmation?(confirmationId: string): Promise<ConfirmationResolution | "timeout">
   /** how long a confirmation may sit unanswered before it denies (default 120s) */
   confirmTimeoutMs?: number
   /** abort guardrail: the run stops at the next checkpoint with stopReason "aborted" */
@@ -596,8 +600,7 @@ async function runToolTurn(
       ...(decision.noteText === undefined ? {} : { noteText: decision.noteText }),
     }, ctx))
     const resolution = await raceConfirmation(
-      deps.resolveConfirmation?.(decision.confirmationId)
-        ?? Promise.resolve({ decision: "timeout" as const, by: "timeout" as const }),
+      deps.resolveConfirmation?.(decision.confirmationId) ?? Promise.resolve("timeout" as const),
       confirmTimeoutMs,
       deps.signal,
     )
@@ -608,16 +611,18 @@ async function runToolTurn(
       // aborted at the next checkpoint.
       break
     }
+    // A timeout is the race's named sentinel, not a verdict object; the wire
+    // event reports it as decision/by "timeout" as before.
+    const timedOut = resolution === "timeout"
     emit(makeEvent("confirmation.resolved", {
       confirmationId: decision.confirmationId,
-      decision: resolution.decision,
-      by: resolution.by,
+      decision: timedOut ? "timeout" : resolution.decision,
+      by: timedOut ? "timeout" : resolution.by,
     }, ctx))
-    if (resolution.decision !== "reject" && resolution.decision !== "timeout") {
+    if (!timedOut && resolution.decision !== "reject") {
       entry.grantedBy = "confirmed"
       continue
     }
-    const timedOut = resolution.decision === "timeout"
     const text = timedOut ? "确认超时，操作未执行" : "用户拒绝了该操作"
     entry.result = errorResult(entry.call.callId, text)
     entry.note = {

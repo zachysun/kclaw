@@ -55,6 +55,15 @@ function requireQuestions(args: unknown): QuestionSpec[] {
   })
 }
 
+/** Align a raw answer set to the asked questions: per-question position, non-array
+ * or missing slots become empty ("未回答"), overflow answers are dropped. */
+function normalizeAnswers(questions: QuestionSpec[], raw: string[][]): string[][] {
+  return questions.map((_, i) => {
+    const a = raw[i]
+    return Array.isArray(a) ? a.filter((x) => typeof x === "string") : []
+  })
+}
+
 /** Human-readable tool-result text for an answer set (model-facing). */
 function formatAnswers(questions: QuestionSpec[], answers: string[][]): string {
   return questions
@@ -86,17 +95,14 @@ export function createAskUserQuestionsTool(opts: {
       const expiresAt = new Date(Date.now() + timeoutMs).toISOString()
       const resolution = opts.broker.createQuestion(questionId, timeoutMs)
       opts.emit("question.requested", { questionId, questions, expiresAt })
-      const raced = await racePending(resolution, timeoutMs, ctx.signal, {
-        answers: [],
-        by: "timeout",
-      })
+      const raced = await racePending(resolution, timeoutMs, ctx.signal)
       if (raced === "aborted") {
         // An aborted wait is not an answer: no question.resolved — the run is
         // being torn down. Expire so a late gateway answer reports "unknown".
         opts.broker.expireQuestion(questionId)
         return { status: "error", output: "问题等待随运行中止而取消，未获得用户回答" }
       }
-      if (raced.by === "timeout") {
+      if (raced === "timeout") {
         // The broker entry stays (its promise never settles on expiry) — drop
         // the stale entry so a late answer reports "unknown question".
         opts.broker.expireQuestion(questionId)
@@ -108,11 +114,12 @@ export function createAskUserQuestionsTool(opts: {
           data: { questionId, answers: questions.map(() => [] as string[]) },
         }
       }
-      opts.emit("question.resolved", { questionId, answers: raced.answers, by: raced.by })
+      const answers = normalizeAnswers(questions, raced.answers)
+      opts.emit("question.resolved", { questionId, answers, by: raced.by })
       return {
         status: "ok",
-        output: `用户回答：\n${formatAnswers(questions, raced.answers)}`,
-        data: { questionId, answers: raced.answers },
+        output: `用户回答：\n${formatAnswers(questions, answers)}`,
+        data: { questionId, answers },
       }
     },
   }

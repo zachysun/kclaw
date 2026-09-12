@@ -5,10 +5,10 @@
  *
  * Responsibilities: platform availability probing + spawn wrapping. The
  * provider carries NO business judgment — whether a sandboxed exec auto-passes
- * the permission gate is decided in permissions/engine.ts from
- * `sandboxAvailable`, which the run assembly derives from `provider.available`
- * (single source, so a "sandboxed" allowance can never be issued while exec
- * runs bare).
+ * the permission gate is decided in permissions/engine.ts from the set of
+ * tools the run assembly actually wrapped (the assembly wraps exec only when
+ * `provider.available` — single source, so a "sandboxed" allowance can never
+ * be issued while exec runs bare).
  *
  * Platform layout (see docs/superpowers/exec-sandbox-spec.md):
  * - macOS: sandbox-exec + an SBPL profile — workspace/tmp writable, home

@@ -46,7 +46,7 @@ import type { SessionStore } from "../session/store.js"
 import type { Compactor } from "../session/compactor.js"
 import { resolveWaterlines } from "../session/waterlines.js"
 import { ConfigPermissionGate, realpathWithin, SessionGrants } from "../permissions/engine.js"
-import { appendDecidedRule, loadDecidedRulesForRun, narrowDecidedRule, projectDecidedRulesPath } from "../storage/decided-rules.js"
+import { appendDecidedRule, globalDecidedRulesPath, loadDecidedRulesForRun, narrowDecidedRule, projectDecidedRulesPath } from "../storage/decided-rules.js"
 import type { AutoLearnCounter } from "../permissions/auto-learn.js"
 import { ConfirmationBroker, raceConfirmation, type ConfirmationResolution } from "../permissions/broker.js"
 import { createExecSandbox } from "../sandbox/provider.js"
@@ -143,7 +143,7 @@ export interface RunEngineDeps {
    * Direct resolver override for tests. Takes precedence over the broker when
    * set — the daemon path relies on the broker alone.
    */
-  resolveConfirmation?: (confirmationId: string) => Promise<ConfirmationResolution>
+  resolveConfirmation?: (confirmationId: string) => Promise<ConfirmationResolution | "timeout">
   /**
    * Auto-mode induction (batch C): when set, `auto` sessions' confirmation
    * resolutions are fed to the counter here — the assembly seam sees every
@@ -445,11 +445,9 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     // Mode: this session's own toggle (absent → default). The daemon has no
     // mode flag — the session meta is the single source of truth.
     mode: sessionMeta?.mode,
-    // Sandbox availability (same probe as the exec wrapper above): a command
-    // with no rule coverage auto-passes as sandboxed when available; when the
-    // sandbox was attempted but unavailable, the confirmation carries an
-    // explanation instead of the silent fail-closed default.
-    sandboxAvailable: sandbox.available,
+    // When the sandbox was attempted but unavailable (nothing wrapped), the
+    // confirmation carries an explanation instead of the silent fail-closed
+    // default.
     sandboxUnavailableNote,
     // The tools this assembly actually wrapped in the OS sandbox (exec gets
     // the wrapper below; no other executor does). The gate's "sandboxed"
@@ -491,7 +489,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // confirmation" instead of acking a verdict nothing will act on.
   const baseResolver =
     engine.deps.resolveConfirmation ?? ((confirmationId: string) => broker.wait(confirmationId))
-  const resolveConfirmation = async (confirmationId: string): Promise<ConfirmationResolution> => {
+  const resolveConfirmation = async (confirmationId: string): Promise<ConfirmationResolution | "timeout"> => {
     const raced = await raceConfirmation(baseResolver(confirmationId), confirmTimeoutMs, controller.signal)
     // Auto-mode induction (batch C): this seam sees EVERY settlement a human
     // confirmation can reach — once / reject via the gateway, timeout when the
@@ -507,9 +505,10 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       // the value is never used: the loop's own race resolved "aborted" and
       // denies without consulting the resolver. No decision is archived —
       // an abort is not a verdict.
-      return { decision: "timeout", by: "timeout" }
+      return "timeout"
     }
-    if (raced.by === "timeout") broker.expire(confirmationId)
+    const timedOut = raced === "timeout"
+    if (timedOut) broker.expire(confirmationId)
     // Permission-decision archive: who approved what, and when, lands in the
     // session archive beside the tool row's grantedBy outcome. Timeouts are
     // verdicts too (silence is a "no"); aborts never reach here.
@@ -517,10 +516,29 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       sessions.appendPermissionDecided(sessionId, {
         at: new Date().toISOString(),
         confirmationId,
-        decision: raced.decision,
-        by: raced.by,
+        decision: timedOut ? "timeout" : raced.decision,
+        by: timedOut ? "timeout" : raced.by,
         tool: { callId: call.callId, name: call.name, argsJson: call.argsJson },
       })
+    }
+    // Always-allow persistence (project/global): every consequence of one
+    // human verdict lives in this seam. Best-effort — a write failure logs
+    // and the settled verdict stands; a once/reject/timeout verdict never
+    // writes a rule.
+    if (!timedOut && (raced.decision === "project" || raced.decision === "global") && call !== undefined) {
+      try {
+        appendDecidedRule(
+          raced.decision === "global" ? globalDecidedRulesPath(paths.home) : projectDecidedRulesPath(workspace),
+          {
+            rule: narrowDecidedRule(call, workspace),
+            decidedAt: new Date().toISOString(),
+            origin: { tool: call.name, argsJson: call.argsJson, sessionId },
+          },
+          raced.decision === "project" ? { workspace } : {},
+        )
+      } catch (e) {
+        console.error(`kclaw: failed to persist decided rule: ${e instanceof Error ? e.message : String(e)}`)
+      }
     }
     // SessionGrants (batch D): a once-approval also lands in this run's grant
     // store, keyed by the same narrowed rule the gate re-checks — the same
@@ -529,7 +547,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     // The gate skips grants in `auto` mode (learning observes human
     // confirmations), so an auto-mode write here is dead weight — harmless,
     // and kept unconditional so the seam never has to know the gate's modes.
-    if (raced.decision === "once" && call !== undefined) {
+    if (!timedOut && raced.decision === "once" && call !== undefined) {
       grants?.grant(narrowDecidedRule(call, workspace))
     }
     const autoLearn = engine.deps.autoLearn
@@ -539,7 +557,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       // threshold) even though the counter is one per process.
       const ruleKey = narrowDecidedRule(call, workspace)
       const key = `${sessionId}\n${ruleKey}`
-      if (raced.decision === "once") {
+      if (!timedOut && raced.decision === "once") {
         if (autoLearn.counter.approve(key)) {
           try {
             appendDecidedRule(
@@ -556,12 +574,12 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
             console.error(`kclaw: failed to persist auto-learned rule: ${e instanceof Error ? e.message : String(e)}`)
           }
         }
-      } else if (raced.decision === "reject" || raced.by === "timeout") {
+      } else if (timedOut || raced.decision === "reject") {
         // a "no" — explicit or by silence — resets the streak
         autoLearn.counter.reject(key)
       }
     }
-    return raced
+    return timedOut ? "timeout" : raced
   }
 
   // --- retry visibility --------------------------------------------------------

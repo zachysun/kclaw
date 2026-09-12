@@ -194,7 +194,6 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
     attachmentsDir: opts.attachmentsDir,
     authTimeoutMs: opts.wsAuthTimeoutMs,
     heartbeatMs: opts.wsHeartbeatMs,
-    decidedRules: { home: paths.home, workspaceFallback: config.workspace },
   })
 
   if (opts.webDist !== undefined) {

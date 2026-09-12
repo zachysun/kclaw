@@ -2,47 +2,35 @@ import type { ConfirmationDecision, ConfirmationRequestedPayload, ToolCallBlock 
 
 /**
  * Verdict value carried between the loop and its human resolver: the
- * persistence scope of the approval, or `timeout` when the outer race
- * denied it without a human. Approving decisions are every value but
- * `reject`/`timeout`; the scope itself is consumed ABOVE the broker
- * (the daemon persists decided rules from it).
+ * persistence scope of the approval. Approving decisions are every value but
+ * `reject`; the scope itself is consumed in the run assembly's
+ * resolveConfirmation seam, which also persists the decided rule.
  */
-export type ConfirmationResolution = { decision: ConfirmationDecision | "timeout"; by: "cli" | "web" | "timeout" }
+export type ConfirmationResolution = { decision: ConfirmationDecision; by: ConfirmationActor }
 
-/** A human answer set for a pending question: one string array per asked question, in ask order.
- * `by` carries "timeout" only as the race sentinel — the gateway never settles a question with it. */
-export type QuestionResolution = { answers: string[][]; by: "cli" | "web" | "timeout" }
+/** A human answer set for a pending question: one string array per asked question, in ask order. */
+export type QuestionResolution = { answers: string[][]; by: ConfirmationActor }
 
 /**
  * `Promise.race` against a timer AND an abort signal; the timer is cleared
- * and the listener removed once the race settles. An abort wins as the
- * sentinel "aborted" — kept distinct from the timeout fallback so an aborted
- * wait is never misreported as a timeout-deny.
+ * and the listener removed once the race settles. The race answers with the
+ * awaited value, or the named sentinels "timeout" (the timer won) and
+ * "aborted" (the signal fired) — an abort is kept distinct from a timeout so
+ * an aborted wait is never misreported as a timeout-deny, and neither
+ * sentinel is ever smuggled through as a human answer.
  *
- * The SINGLE implementation for both racers that must agree on a
- * confirmation's outcome: the loop (waiting to act on the verdict) and the
- * run assembly (expiring the broker entry when the race settles without a
- * human). Formerly two verbatim-identical copies (loop vs assembly) kept in
- * sync by comments — unified as part of the hook-system migration.
+ * The SINGLE implementation for every racer that must agree on a pending
+ * entry's outcome: the loop and the run assembly (confirmations), the ask
+ * tool (questions).
  */
-export function raceConfirmation(
-  p: Promise<ConfirmationResolution>,
-  ms: number,
-  signal: AbortSignal | undefined,
-): Promise<ConfirmationResolution | "aborted"> {
-  return racePending(p, ms, signal, { decision: "timeout", by: "timeout" })
-}
-
-/** The value-type-generic core of raceConfirmation: questions race with an answer-shaped timeout sentinel. */
 export function racePending<T>(
   p: Promise<T>,
   ms: number,
   signal: AbortSignal | undefined,
-  timeoutValue: T,
-): Promise<T | "aborted"> {
+): Promise<T | "timeout" | "aborted"> {
   let timer: ReturnType<typeof setTimeout> | undefined
-  const sleep = new Promise<T>((resolve) => {
-    timer = setTimeout(() => resolve(timeoutValue), ms)
+  const sleep = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), ms)
   })
   let onAbort = () => {}
   const abort = new Promise<"aborted">((resolve) => {
@@ -59,18 +47,99 @@ export function racePending<T>(
   })
 }
 
+/** The confirmation-shaped race: resolver vs timeout vs run abort. */
+export function raceConfirmation(
+  p: Promise<ConfirmationResolution | "timeout">,
+  ms: number,
+  signal: AbortSignal | undefined,
+): Promise<ConfirmationResolution | "timeout" | "aborted"> {
+  return racePending(p, ms, signal)
+}
+
 /** Who answered a confirmation (v1 is single-user CLI; "web" is retained for the UI). */
 export type ConfirmationActor = "cli" | "web"
 
-interface PendingEntry {
+interface PendingEntry<R, V> {
+  record: R
+  /** settles the promise returned by create()/wait(); removal from the map is the settled flag */
+  settle: (v: V) => void
+  resolution: Promise<V>
+}
+
+/**
+ * One waiting registry: id → a record with an informational expiry, and a
+ * promise only resolve() can settle. Expired entries are dropped lazily on
+ * the next read (their promise stays pending forever — the outer race owns
+ * the denial). Confirmations and questions are two instances of this one
+ * shape; the per-kind payloads live in the record type.
+ */
+class PendingRegistry<R extends { expiresAt: string }, V> {
+  readonly #entries = new Map<string, PendingEntry<R, V>>()
+
+  /** Register a pending entry; returns the promise only resolve() can settle. */
+  create(id: string, record: R): Promise<V> {
+    let settle!: (v: V) => void
+    const resolution = new Promise<V>((res) => {
+      settle = res
+    })
+    this.#entries.set(id, { record, settle, resolution })
+    return resolution
+  }
+
+  /** The promise behind create(). Unknown ids never settle — the caller's own timeout race owns the denial. */
+  wait(id: string): Promise<V> {
+    return this.#entries.get(id)?.resolution ?? new Promise<V>(() => {})
+  }
+
+  /** Read-only record snapshot; undefined for unknown/stale ids. */
+  lookup(id: string): R | undefined {
+    this.#prune()
+    return this.#entries.get(id)?.record
+  }
+
+  /**
+   * Settle with a value. True when a pending entry existed and settled NOW;
+   * false for unknown ids, already-resolved entries, and stale (expired) ones.
+   */
+  resolve(id: string, v: V): boolean {
+    this.#prune()
+    const entry = this.#entries.get(id)
+    if (entry === undefined) return false
+    this.#entries.delete(id)
+    entry.settle(v)
+    return true
+  }
+
+  /** Drop the entry without a verdict: a late resolve observes "unknown id". */
+  expire(id: string): void {
+    this.#entries.delete(id)
+  }
+
+  /** Current records (pruned), e.g. for a listing endpoint. */
+  pending(): R[] {
+    this.#prune()
+    return [...this.#entries.values()].map((e) => e.record)
+  }
+
+  #prune(): void {
+    const now = Date.now()
+    for (const [id, entry] of this.#entries) {
+      if (Date.parse(entry.record.expiresAt) <= now) this.#entries.delete(id)
+    }
+  }
+}
+
+interface ConfirmationRecord {
   confirmationId: string
   toolCall: ToolCallBlock
   risk: "safe" | "sensitive"
   expiresAt: string
   sessionId?: string
-  /** settles the promise returned by create()/wait(); removal from the map is the settled flag */
-  settle: (r: ConfirmationResolution) => void
-  resolution: Promise<ConfirmationResolution>
+}
+
+interface QuestionRecord {
+  questionId: string
+  expiresAt: string
 }
 
 /**
@@ -98,20 +167,17 @@ interface PendingEntry {
  *   verdict nothing will act on. `pending()` additionally prunes entries
  *   whose expiresAt passed.
  *
- * Relocated verbatim from server/src/confirm.ts (card ① engine relocation).
- *
- * Since the ask_user_questions tool (issue #21) this is a TWO-kind waiting
- * registry: confirmations (verdict → tool proceeds or is denied) and
- * questions (answers → the tool result the model reads). Both kinds share
- * the same shape — id → pending promise raced against a timeout and abort —
- * and the same gateway path (the daemon hands ws frames to one object), so
- * they live side by side in one class. Events are still emitted by whoever
- * awaits (the loop for confirmations, the tool executor for questions);
- * the broker never emits.
+ * Since the ask_user_questions tool this is a TWO-kind waiting registry:
+ * confirmations (verdict → tool proceeds or is denied) and questions
+ * (answers → the tool result the model reads). Both kinds are one
+ * PendingRegistry instance each — same shape, same gateway path (the daemon
+ * hands ws frames to one object). Events are still emitted by whoever awaits
+ * (the loop for confirmations, the tool executor for questions); the broker
+ * never emits.
  */
 export class ConfirmationBroker {
-  readonly #entries = new Map<string, PendingEntry>()
-  readonly #questions = new Map<string, PendingQuestion>()
+  readonly #entries = new PendingRegistry<ConfirmationRecord, ConfirmationResolution>()
+  readonly #questions = new PendingRegistry<QuestionRecord, QuestionResolution>()
 
   /**
    * Register a pending confirmation. `timeoutMs` only stamps the entry's
@@ -124,20 +190,13 @@ export class ConfirmationBroker {
     timeoutMs: number,
     sessionId?: string,
   ): Promise<ConfirmationResolution> {
-    let settle!: (r: ConfirmationResolution) => void
-    const resolution = new Promise<ConfirmationResolution>((res) => {
-      settle = res
-    })
-    this.#entries.set(confirmationId, {
+    return this.#entries.create(confirmationId, {
       confirmationId,
       toolCall,
       risk,
       expiresAt: new Date(Date.now() + timeoutMs).toISOString(),
       sessionId,
-      settle,
-      resolution,
     })
-    return resolution
   }
 
   /**
@@ -145,20 +204,17 @@ export class ConfirmationBroker {
    * Unknown ids never settle — the loop's own timeout race owns the denial.
    */
   wait(confirmationId: string): Promise<ConfirmationResolution> {
-    const entry = this.#entries.get(confirmationId)
-    return entry?.resolution ?? new Promise<ConfirmationResolution>(() => {})
+    return this.#entries.wait(confirmationId)
   }
 
   /**
-   * Read-only snapshot of a pending entry (toolCall + sessionId), for the
-   * daemon to scope a decided-rule persistence BEFORE resolving: after
-   * `resolve` the entry is gone. Undefined for unknown/stale ids.
+   * Read-only snapshot of a pending entry (toolCall + sessionId). Undefined
+   * for unknown/stale ids.
    */
   lookup(confirmationId: string): { toolCall: ToolCallBlock; sessionId?: string } | undefined {
-    this.#prune()
-    const entry = this.#entries.get(confirmationId)
-    if (entry === undefined) return undefined
-    return { toolCall: entry.toolCall, sessionId: entry.sessionId }
+    const record = this.#entries.lookup(confirmationId)
+    if (record === undefined) return undefined
+    return { toolCall: record.toolCall, sessionId: record.sessionId }
   }
 
   /**
@@ -168,12 +224,7 @@ export class ConfirmationBroker {
    * the web UI).
    */
   resolve(confirmationId: string, decision: ConfirmationDecision, by: ConfirmationActor = "cli"): boolean {
-    this.#prune()
-    const entry = this.#entries.get(confirmationId)
-    if (entry === undefined) return false
-    this.#entries.delete(confirmationId)
-    entry.settle({ decision, by })
-    return true
+    return this.#entries.resolve(confirmationId, { decision, by })
   }
 
   /**
@@ -182,13 +233,12 @@ export class ConfirmationBroker {
    * only ever observe "unknown confirmation".
    */
   expire(confirmationId: string): void {
-    this.#entries.delete(confirmationId)
+    this.#entries.expire(confirmationId)
   }
 
   /** Current pending entries as the wire payloads (for a future HTTP list endpoint). */
   pending(): ConfirmationRequestedPayload[] {
-    this.#prune()
-    return [...this.#entries.values()].map(({ confirmationId, toolCall, risk, expiresAt }) => ({
+    return this.#entries.pending().map(({ confirmationId, toolCall, risk, expiresAt }) => ({
       confirmationId,
       toolCall,
       risk,
@@ -196,57 +246,27 @@ export class ConfirmationBroker {
     }))
   }
 
-  /** Drop entries whose informational expiry passed (their promise stays pending forever). */
-  #prune(): void {
-    const now = Date.now()
-    for (const [id, entry] of this.#entries) {
-      if (Date.parse(entry.expiresAt) <= now) this.#entries.delete(id)
-    }
-    for (const [id, entry] of this.#questions) {
-      if (Date.parse(entry.expiresAt) <= now) this.#questions.delete(id)
-    }
-  }
-
-  // ---- questions (ask_user_questions): same registry shape, answer instead
-  // of verdict. The tool executor owns the timeout race (it created the
-  // entry); a resolution that settles nothing returns false so a late
-  // gateway frame reports "unknown question".
+  // ---- questions (ask_user_questions): same registry, answer instead of
+  // verdict. The tool executor owns the timeout race (it created the entry);
+  // a resolution that settles nothing returns false so a late gateway frame
+  // reports "unknown question".
 
   /** Register a pending question; the promise settles only via resolveQuestion.
    * The asked questions themselves live on the question.requested event, not here. */
   createQuestion(questionId: string, timeoutMs: number): Promise<QuestionResolution> {
-    let settle!: (r: QuestionResolution) => void
-    const resolution = new Promise<QuestionResolution>((res) => {
-      settle = res
-    })
-    this.#questions.set(questionId, {
+    return this.#questions.create(questionId, {
       questionId,
       expiresAt: new Date(Date.now() + timeoutMs).toISOString(),
-      settle,
-      resolution,
     })
-    return resolution
   }
 
   /** Apply a human answer set. True when a pending question existed and settled NOW. */
   resolveQuestion(questionId: string, answers: string[][], by: ConfirmationActor = "cli"): boolean {
-    this.#prune()
-    const entry = this.#questions.get(questionId)
-    if (entry === undefined) return false
-    this.#questions.delete(questionId)
-    entry.settle({ answers, by })
-    return true
+    return this.#questions.resolve(questionId, { answers, by })
   }
 
   /** Mark a question stale (timeout/abort settled the race without a human). */
   expireQuestion(questionId: string): void {
-    this.#questions.delete(questionId)
+    this.#questions.expire(questionId)
   }
-}
-
-interface PendingQuestion {
-  questionId: string
-  expiresAt: string
-  settle: (r: QuestionResolution) => void
-  resolution: Promise<QuestionResolution>
 }
