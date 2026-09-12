@@ -44,7 +44,6 @@ import type { KclawPaths } from "../storage/paths.js"
 import type { UsageStore } from "../storage/usage.js"
 import type { SessionStore } from "../session/store.js"
 import type { Compactor } from "../session/compactor.js"
-import { estimateTokens } from "../session/compaction.js"
 import { resolveWaterlines } from "../session/waterlines.js"
 import { ConfigPermissionGate, realpathWithin, SessionGrants } from "../permissions/engine.js"
 import { appendDecidedRule, loadDecidedRulesForRun, narrowDecidedRule, projectDecidedRulesPath } from "../storage/decided-rules.js"
@@ -53,7 +52,7 @@ import { ConfirmationBroker, raceConfirmation, type ConfirmationResolution } fro
 import { createExecSandbox } from "../sandbox/provider.js"
 import type { PermissionGate, RunOutcome } from "./loop.js"
 import { runAgent } from "./loop.js"
-import { SYSTEM_INJECTION_CONVENTION } from "./context.js"
+import { assembleSystemPrompt } from "./system-prompt.js"
 import { subagentSystemPrompt, type SubagentCollector, type SubagentSpawner } from "./subagent.js"
 import type { SessionSearchFn } from "../tools/session.js"
 import type { ToolExecutor } from "./tools.js"
@@ -644,49 +643,18 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   chain.registerAll(engine.deps.hooks?.snapshot() ?? [])
   if (engine.deps.extraHooks !== undefined) chain.registerAll(engine.deps.extraHooks)
 
-  // 系统提示词（提示词缓存纪律，双段独立冻结）：stable（人设基座 + 注入约定）
-  // 是缓存冻结面，live（认知 + 技能清单）是低频变化面。每 run 两段现算、与
-  // 基线逐段比对——段文本没变就沿用基线（frozenAt 不动），变了就重冻结该段。
-  // 前缀缓存按从头逐字节相同匹配：live 变化只失效变化点之后，stable 前缀
-  // 继续命中；装技能、夜间认知刷新在下一 run 即时生效，不再等压缩边界。
-  // 两段全命中时 system-after 链跳过（与单段时代的冻结 run 同语义）；至少
-  // 一段变化时走 system-after（用户可改终稿）——改写发生时事件记 stable=终稿
-  // （审计恒记录模型实际看到的那份）、live=现算文本：stable 基线于是偏离现算
-  // 值，下一个 run 自然重装配、改写每 run 重新生效；live 基线则照常逐字比对，
-  // frozenAt 不会虚假刷新。审计每 run 一条双段全量留痕（直接落盘；写失败即
-  // run 失败）。压缩事件在投影里清除基线（applyEvent），下一次 run 重新装配
-  // 并固化——压缩本来就使缓存全量失效，纪元边界设在冷启动处零额外成本。
-  // 子代理 run 的精简模板同样适用（live 恒空）。
-  const baseline = sessionMeta?.systemBaseline
-  const base = childRun ? subagentSystemPrompt(workspace) : systemPrompt(paths.agentsMd)
-  const stable = [base, SYSTEM_INJECTION_CONVENTION].filter((s) => s !== "").join("\n\n")
-  // live：system-before 链产出（内置 system-materials：认知 + 技能清单；
-  // 用户段落同列此链，一并归属 live 段）。
-  const segments = (await chain.run("system-before", { base })) ?? []
-  const live = segments.filter((s) => s !== "").join("\n\n")
-  const stableFresh = baseline === undefined || baseline.stable.text !== stable
-  const liveFresh = baseline?.live === undefined || baseline.live.text !== live
-  let system: string
-  if (!stableFresh && !liveFresh) {
-    system = [baseline.stable.text, baseline.live!.text].filter((s) => s !== "").join("\n\n")
-    sessions.appendSystem(sessionId, { at: new Date().toISOString(), stable, live })
-  } else {
-    const draft = [stable, live].filter((s) => s !== "").join("\n\n")
-    const rewrittenSystem = await chain.run("system-after", { system: draft })
-    if (rewrittenSystem !== undefined) {
-      system = rewrittenSystem
-      // stable freezes the REWRITTEN text (what the model actually saw — the
-      // audit's contract), so the next run's fresh stable differs and the
-      // assembly (and the rewrite) re-runs; live carries the freshly computed
-      // segment so ITS baseline still compares equal across rewrites — a
-      // rewrite must not phantom-refresh live's frozenAt.
-      sessions.appendSystem(sessionId, { at: new Date().toISOString(), stable: system, live })
-    } else {
-      system = draft
-      sessions.appendSystem(sessionId, { at: new Date().toISOString(), stable, live })
-    }
-  }
-  contextOverheadRef.current = estimateTokens(system) + estimateTokens(JSON.stringify(toolDefs))
+  // 系统提示词组装 + 双段冻结 + 审计落盘在 system-prompt.ts 一处完成；
+  // 固定开销在这里赋值一次，压缩/打包钩子经 contextOverhead 读取函数惰性
+  // 取值（钩子注册先于组装，读取函数必须保持惰性）。
+  const { system, overheadTokens } = await assembleSystemPrompt({
+    chain,
+    sessions,
+    sessionId,
+    base: childRun ? subagentSystemPrompt(workspace) : systemPrompt(paths.agentsMd),
+    baseline: sessionMeta?.systemBaseline,
+    toolDefs,
+  })
+  contextOverheadRef.current = overheadTokens
 
   const outcome = await runAgent(
     {
