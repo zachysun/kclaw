@@ -39,7 +39,7 @@ import { newMessage } from "../protocol/messages.js"
 import type { AttachmentRef } from "../protocol/wire.js"
 import type { LlmClient, ToolDefinition } from "../provider/types.js"
 import type { KclawConfig } from "../storage/config.js"
-import { defaultConfig, resolveContextTokens } from "../storage/config.js"
+import { defaultConfig, resolveContextTokens, resolveRunModel } from "../storage/config.js"
 import type { KclawPaths } from "../storage/paths.js"
 import type { UsageStore } from "../storage/usage.js"
 import type { SessionStore } from "../session/store.js"
@@ -585,19 +585,12 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   }
   const runLlm = engine.deps.llmForRun?.(onLlmRetry) ?? engine.deps.llm
   const defaultModel = engine.deps.model ?? config.providers.entries[config.providers.default]?.model ?? ""
-  // A session/job model may name a provider ENTRY ("deepseek") whose wire
-  // model is the entry's `.model` ("deepseek-v4-flash"); resolve keys to that
-  // model, leaving already-raw API model names untouched.
-  const resolveEntry = (m: string): string => config.providers.entries[m]?.model ?? m
   const rawModel = input.model ?? sessionMeta?.model ?? defaultModel
-  const model = resolveEntry(rawModel)
-  // Entry metadata for this run: the budget (contextWindow cap via
-  // resolveContextTokens) feeds every compaction line and the packing
-  // budget; maxOutput rides each request as max_tokens.
-  const entryKey = config.providers.entries[rawModel] !== undefined ? rawModel : config.providers.default
-  const entry = config.providers.entries[entryKey]
-  const budget = resolveContextTokens(config, entryKey)
-  const maxOutput = entry?.maxOutput
+  // Entry metadata for this run: the wire model (entry names resolve to the
+  // entry's `.model`), the budget (contextWindow cap via resolveContextTokens)
+  // feeds every compaction line and the packing budget; maxOutput rides each
+  // request as max_tokens.
+  const { model, budget, maxOutput } = resolveRunModel(config, rawModel)
   // Waterlines resolved once for this run's budget: the request-assembly
   // omission budget reads the pack line here; the compaction trigger hooks get
   // the full schedule via the chain deps. The packing budget is DECOUPLED from

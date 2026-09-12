@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync, existsSync 
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { resolvePaths } from "../../src/storage/paths.js"
-import { loadConfig, saveConfig, defaultConfig, resolveContextTokens } from "../../src/storage/config.js"
+import { loadConfig, saveConfig, defaultConfig, resolveContextTokens, resolveRunModel } from "../../src/storage/config.js"
 import type { KclawConfig } from "../../src/storage/config.js"
 import { writeFileAtomic } from "../../src/storage/atomic.js"
 
@@ -317,5 +317,51 @@ describe("resolveContextTokens", () => {
     cfg.sessions.contextTokens = 50_000
     expect(resolveContextTokens(cfg, "m")).toBe(50_000)
     expect(resolveContextTokens(cfg)).toBe(50_000)
+  })
+})
+
+describe("resolveRunModel", () => {
+  const base = (over: Partial<KclawConfig["providers"]> = {}) => {
+    const cfg = structuredClone(defaultConfig)
+    Object.assign(cfg.providers, over)
+    return cfg
+  }
+
+  it("resolves an entry-named model to the entry's wire model, window budget and maxOutput", () => {
+    const cfg = base({
+      default: "m",
+      entries: {
+        m: { baseUrl: "http://x", apiKey: "k", model: "m1" },
+        d: {
+          baseUrl: "http://x", apiKey: "k", model: "d1",
+          contextWindow: 200_000, maxOutput: 8_192,
+        },
+      },
+    })
+    const r = resolveRunModel(cfg, "d")
+    expect(r.model).toBe("d1")
+    expect(r.entryKey).toBe("d")
+    expect(r.budget).toBe(200_000)
+    expect(r.maxOutput).toBe(8_192)
+  })
+
+  it("passes a raw wire model through with default-entry budget resolution", () => {
+    const cfg = base({
+      default: "m",
+      entries: { m: { baseUrl: "http://x", apiKey: "k", model: "m1", contextWindow: 90_000 } },
+    })
+    const r = resolveRunModel(cfg, "m1")
+    expect(r.model).toBe("m1")
+    expect(r.entryKey).toBe("m")
+    expect(r.budget).toBe(90_000)
+    expect(r.maxOutput).toBeUndefined()
+  })
+
+  it("falls back to the 128k default with no entries and no caps", () => {
+    const r = resolveRunModel(base(), "some-model")
+    expect(r.model).toBe("some-model")
+    expect(r.entryKey).toBe("")
+    expect(r.budget).toBe(128_000)
+    expect(r.maxOutput).toBeUndefined()
   })
 })

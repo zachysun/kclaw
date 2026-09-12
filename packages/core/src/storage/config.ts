@@ -267,3 +267,28 @@ export function resolveContextTokens(config: KclawConfig, entryKey?: string): nu
   if (window === undefined || !Number.isFinite(window) || window <= 0) return configured ?? 128_000
   return Math.min(configured ?? Number.POSITIVE_INFINITY, window)
 }
+
+/**
+ * Resolve a run's model line end to end: a session/user model may name a
+ * provider ENTRY ("deepseek") whose wire model is the entry's `.model`
+ * ("deepseek-v4-flash"); a name matching no entry is already a raw wire model
+ * and passes through unchanged, with entry-key/budget resolution falling back
+ * to the configured default entry. Output is everything the request assembly
+ * and the manual compact path need: the wire model, the entry key, the
+ * effective context budget (resolveContextTokens), and the entry's
+ * max_tokens cap when declared. Both call sites resolve through this one
+ * helper so the two paths can never disagree on budgets.
+ */
+export function resolveRunModel(
+  config: KclawConfig,
+  rawModel: string,
+): { model: string; entryKey: string; budget: number; maxOutput?: number } {
+  const entryKey = config.providers.entries[rawModel] !== undefined ? rawModel : config.providers.default
+  const entry = config.providers.entries[entryKey]
+  return {
+    model: config.providers.entries[rawModel]?.model ?? rawModel,
+    entryKey,
+    budget: resolveContextTokens(config, entryKey),
+    ...(entry?.maxOutput === undefined ? {} : { maxOutput: entry.maxOutput }),
+  }
+}
