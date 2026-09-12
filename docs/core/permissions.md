@@ -107,6 +107,8 @@ permissions:
 
 ### 2. 判定链（`check` 的短路顺序）
 
+readonly 模式还有一道更早的关口：**装配期可见性收窄**——只读 run 在组装工具面时就把 risk 为 sensitive 的工具整个从模型视野移除（MCP 适配器工具同样按 risk 处理，内置与适配器一视同仁），模型拿到的工具清单里根本没有它们。下面的第 ⓪ 步因此是对**残余调用**的兜底——比如模型从上下文残留里记着工具名、执意发起调用时，循环按"未注册工具"回答 `unknown tool`，判定链根本不被触及。
+
 ```
 ⓪ 模式 readonly 且工具 risk 为 sensitive
                         → deny {reason:"readonly", noteText:"只读模式（readonly）"}
@@ -161,7 +163,7 @@ exec 没有可判定的"目标路径"——命令可以以任何方式访问文�
 gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
 
 - **mode（会话权限模式）**：`PERMISSION_MODES = ["readonly" | "default" | "acceptEdits" | "trusted" | "auto"]` 五档，存在会话元数据 `meta.mode`，缺省 `default`；daemon 创建的新会话（HTTP `POST /sessions` 与任务调度建会话）把 `config.permissions.defaultMode` 的当前值**固化为初始 mode**（事件流 `session.created` 带 `mode` 字段，旧流无该字段则读时缺省 default）——改 config 默认只影响之后新建的会话；run 装配每 run 从会话 meta 读出传入 gate。各档语义：
-  - *readonly*：**risk 为 sensitive 的工具**（由 risk 直接派生，引擎不持名单——今天恰为 `fs_write`/`fs_edit`/`exec` 三个）在判定链第 ⓪ 步直接拒绝——reason `"readonly"`、note 文案 `只读模式（readonly）`，工具得到 error result 并随 tool 消息落一个 `kind:"denied"` note；读、web 与 memory 工具不受影响。短路排在一切规则之前：白名单里的 `allow: exec:*` 在只读下同样不执行——这个模式承诺的是零写入风险。
+  - *readonly*：**risk 为 sensitive 的工具**（由 risk 直接派生，引擎不持名单——今天恰为 `fs_write`/`fs_edit`/`exec` 三个）在判定链第 ⓪ 步直接拒绝——reason `"readonly"`、note 文案 `只读模式（readonly）`，工具得到 error result 并随 tool 消息落一个 `kind:"denied"` note；读、web 与 memory 工具不受影响。短路排在一切规则之前：白名单里的 `allow: exec:*` 在只读下同样不执行——这个模式承诺的是零写入风险。在此之上，只读 run 的装配还会把这些工具（连同同样声明 sensitive 的 MCP 适配器工具）整个移出模型工具面——模型看到的清单里根本没有它们；第 ⓪ 步因此只剩兜底意义，只有当模型从残留上下文里执意调用一个不可见的名字时才会触发，循环直接按 `unknown tool` 报错，不产生 denied note。可见性与 gate 用同一份 risk 事实（都从注册表派生），两者不会漂移。
   - *default*：默认档，判定链照常走（本节其余内容描述的就是它）。
   - *acceptEdits*：工作区内的文件写入免逐次确认——判定链第 ②'' 步对**路径写类工具**（带 `path` 参数且 sensitive）的目标做工作区内检查，通过即 `allow {reason:"accept_edits"}`；越界目标与 exec 等命令类工具不受益，仍走 confirm。
   - *trusted*：免审档——沙箱与工作区边界内的操作全部自动放行、不弹确认；边界外（exec 无法沙箱化、越界、无沙箱保护的 sensitive 工具）一律拒绝（fail-closed，见第 2 节「trusted 分支」）。前提是 exec 沙箱可用（`config.sandbox.enabled` 默认开）：沙箱不可用或未启用时，trusted 下的 exec 直接 deny——免审档没有人工确认这道防线，拒绝是唯一安全出路。
@@ -178,7 +180,7 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
 | 待遇 | 派生规则 | 今天的成员 |
 |------|----------|------------|
 | safeTools 自动放行 | `risk === "safe"` | fs_read、fs_list、web_search、web_fetch、memory_save、memory_search、session_search、skill_read、subagent_run、subagent_collect、ask_user_questions |
-| readonly 无条件拒绝 | `risk === "sensitive"` | exec、fs_write、fs_edit |
+| readonly 无条件拒绝（且不进入只读 run 的模型工具面） | `risk === "sensitive"` | exec、fs_write、fs_edit |
 | 路径规范化双匹配（防拼写绕过） | 带 `path` 参数且 sensitive | fs_write、fs_edit |
 | 工作目录边界检查 | 带 `path` 参数 | fs_read、fs_list、fs_write、fs_edit |
 | readRoots 读豁免 | 带 `path` 参数且 safe | fs_read、fs_list |

@@ -56,7 +56,7 @@ import { assembleSystemPrompt } from "./system-prompt.js"
 import { subagentSystemPrompt, type SubagentCollector, type SubagentSpawner } from "./subagent.js"
 import type { SessionSearchFn } from "../tools/session.js"
 import type { ToolExecutor } from "./tools.js"
-import { createBuiltinTools, deriveToolFacts } from "../tools/index.js"
+import { createBuiltinTools, deriveToolFacts, dropSensitiveTools } from "../tools/index.js"
 import { makeEvent } from "../protocol/events.js"
 import { searchSessionEvents } from "../tools/session-search.js"
 import { matchSkillInvocations, scanSkillDirs, skillListPrompt, wrapSkillInvocations } from "../skills/index.js"
@@ -412,6 +412,15 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     }
     toolDefs.push(...extra.defs)
   }
+
+  // Readonly visibility: the gate short-circuits every sensitive tool in
+  // readonly mode before any rule (reason "readonly"), so listing one would
+  // only buy the model a guaranteed refusal. Narrow the surface instead —
+  // builtins and adapters alike; the gate below derives safeTools and tool
+  // facts from whatever survives. Surfaces are built per run, so a mode
+  // switch takes effect on the next message, same as the gate's own mode
+  // snapshot.
+  if (sessionMeta?.mode === "readonly") dropSensitiveTools(tools, toolDefs)
 
   // --- permission wiring (config gate + confirmation gateway) ---
   const pendingConfirmations = new Map<string, ToolCallBlock>()

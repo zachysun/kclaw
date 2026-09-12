@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createBuiltinTools } from "../../src/tools/index.js"
+import { createBuiltinTools, dropSensitiveTools } from "../../src/tools/index.js"
 import type { MemorySystem } from "../../src/memory/system.js"
 import type { ToolDefinition } from "../../src/provider/types.js"
 
@@ -131,5 +131,46 @@ describe("builtin tool registry", () => {
     expect(registry.tools.get("fs_read")!.concurrency).toBe("parallel")
     expect(registry.tools.get("memory_save")!.risk).toBe("safe")
     expect(registry.tools.get("web_search")!.concurrency).toBe("parallel")
+  })
+
+  describe("dropSensitiveTools (readonly visibility)", () => {
+    it("drops exactly the sensitive tools and keeps tools/defs the same set", () => {
+      const { tools, toolDefs } = createBuiltinTools({
+        workspace: dir,
+        memoryCtx: {
+          system: {
+            triggerImmediate: vi.fn(async () => undefined),
+            searchAll: vi.fn(async () => []),
+          } as unknown as MemorySystem,
+          sessionId: "ses_1",
+          workdir: dir,
+          immediateEnabled: false,
+        },
+        tavilyApiKey: "tvly-test",
+        subagent: { spawner: vi.fn(), parentSessionId: "ses_1" },
+      })
+      dropSensitiveTools(tools, toolDefs)
+      // sensitive today: exec, fs_write, fs_edit — everything safe survives,
+      // including the safe subagent pair
+      expect(tools.has("exec")).toBe(false)
+      expect(tools.has("fs_write")).toBe(false)
+      expect(tools.has("fs_edit")).toBe(false)
+      expect(tools.has("fs_read")).toBe(true)
+      expect(tools.has("fs_list")).toBe(true)
+      expect(tools.has("memory_save")).toBe(true)
+      expect(tools.has("subagent_run")).toBe(true)
+      // map keys and def names stay one set, both directions
+      expect([...tools.keys()].sort()).toEqual(toolDefs.map((d) => d.name).sort())
+      // every survivor is safe — the gate's readonlyDenied set and the
+      // dropped set can never drift apart
+      for (const [, tool] of tools) expect(tool.risk).toBe("safe")
+    })
+
+    it("is a no-op on an already narrow surface and tolerates missing defs", () => {
+      const tools = new Map([["fs_read", registry.tools.get("fs_read")!]])
+      const toolDefs: ToolDefinition[] = []
+      dropSensitiveTools(tools, toolDefs)
+      expect([...tools.keys()]).toEqual(["fs_read"])
+    })
   })
 })
