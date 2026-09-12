@@ -422,8 +422,13 @@ export class RunManager {
       phase: "manual",
       budget,
     })
+    // A failed manual compaction surfaces to the HTTP caller exactly as any
+    // other compaction failure: the error rethrown (the completed event and
+    // the daemon log already recorded it). A manual /compact carries no
+    // signal, so "cancelled" is unreachable here; declined reads as before.
+    if (out.status === "failed") throw out.error
     return {
-      message: out.compacted
+      message: out.status === "applied"
         ? `压缩了 ${out.segments} 段，剩 ${out.active.length} 条原文消息`
         : "无可压缩内容",
     }

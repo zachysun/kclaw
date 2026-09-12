@@ -16,16 +16,14 @@
  *   audit record itself (the split freeze needs the stable/live segments,
  *   which live above the chain). User system-after hooks rewrite the draft;
  *   a rewrite is frozen as the stable baseline by the assembly.
- * - The compaction decision hooks (mid-run panic / overflow emergency) keep
- *   their old "throw == decline" semantics via failure: "skip" (a failed
- *   decision resolves to undefined, which the loop treats as "don't
- *   compact"), and post-run-compaction stays fatal (its old throw propagated
- *   to the queue's entry-level failure). Every compaction hook runs
- *   UNTIMED (meta.timeoutMs = Infinity): its body is two provider calls
- *   whose duration is the LLM's, and the pre-migration inline code had no
- *   timeout — the blanket 5s race made every real compaction time out,
- *   orphaning a background duplicate that raced the next boundary's second
- *   attempt.
+ * - The compaction hooks branch on the Compactor's named CompactionOutcome
+ *   (applied/declined/failed/cancelled) and forward the truth to the
+ *   compaction-after chain; a failed compaction is announced by its
+ *   completed event and never fails the run (failure: "skip" everywhere).
+ *   Every compaction hook runs UNTIMED (meta.timeoutMs = Infinity): its
+ *   body is two provider calls whose duration is the LLM's — a timed hook
+ *   would cut real compactions off and orphan a background duplicate that
+ *   races the next boundary's second attempt.
  *
  * Single source of truth: every builtin is declared ONCE in
  * BUILTIN_HOOK_SPECS (metadata + a handler factory bound to the run's
@@ -291,8 +289,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     makeHandler: (rt) => {
       const { compactor, sessionId, signal, contextOverhead, waterlines, sessions, config, runLlm, model, compactionAfter } = rt
       return async () => {
-        // Cancellation marker or an already-aborted run → don't compact. A throw
-        // resolves undefined == decline.
+        // Cancellation marker or an already-aborted run → don't compact.
         if (compactor.cancelled(sessionId) || signal.aborted) return null
         // A parked background result is applied first — it is strictly newer
         // than the run's view and the real request anchor self-heals at the
@@ -320,19 +317,23 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
             return settled
           }
         }
-        const next = await compactor.auto(sessionId, history, config, runLlm, model, {
+        const outcome = await compactor.auto(sessionId, history, config, runLlm, model, {
           phase: "in-run",
           signal,
           overheadTokens: overhead,
           budget: waterlines.budget,
         })
-        if (next !== null) {
+        // Truthful forwarding: applied → ok, failed/cancelled under their own
+        // name, declined fires nothing (no compaction happened — matching the
+        // event stream, where neither started nor completed fired). A failed
+        // or declined sync attempt still falls through to the parked view:
+        // it is the newest thing we have.
+        if (outcome.status === "applied") {
           void compactionAfter("in-run", "ok")
-          return next
+          return { upto: outcome.upto, top: outcome.top }
         }
-        // The sync compaction didn't happen (waterline/boundary decline, or the
-        // summarizer failed — either way nothing was written): the parked result
-        // we waited for is still the newest view — apply it rather than drop it.
+        if (outcome.status === "failed") void compactionAfter("in-run", "failed")
+        else if (outcome.status === "cancelled") void compactionAfter("in-run", "cancelled")
         return settled
       }
     },
@@ -357,13 +358,18 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
           compactor.abortInFlight(sessionId)
           await compactor.waitForSettled(sessionId)
         }
-        const next = await compactor.auto(sessionId, sessions.readMessages(sessionId), config, runLlm, model, {
+        const outcome = await compactor.auto(sessionId, sessions.readMessages(sessionId), config, runLlm, model, {
           phase: "in-run",
           emergency: true,
           signal,
         })
-        void compactionAfter("in-run", "ok")
-        return signal.aborted ? null : next
+        // Only a real compaction reports "ok" here — a failed or cancelled
+        // rescue forwards its own name, a declined one stays silent (nothing
+        // happened).
+        if (outcome.status === "applied") void compactionAfter("in-run", "ok")
+        else if (outcome.status === "failed") void compactionAfter("in-run", "failed")
+        else if (outcome.status === "cancelled") void compactionAfter("in-run", "cancelled")
+        return outcome.status === "applied" ? { upto: outcome.upto, top: outcome.top } : null
       }
     },
   }),
@@ -406,18 +412,21 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
         // 冲刷挂起的 /compact（会话忙时登记的）：在自动收尾压缩之前执行——
         // 用户显式意图优先，压完水位落回，自动收尾检查自然不再触发。
         // 不做忙碌/排队检查（收尾链时刻必然不忙；运行期间排队的消息等下一条
-        // 出队，与压缩无关）。失败按 skip：hook.failed 事件 + 日志，不连坐 run。
+        // 出队，与压缩无关）。压缩以结局回答：applied 转发 ok，failed 转发
+        // failed（completed 事件已记录，压缩失败不连坐 run）。
         if (!compactor.hasDeferredManual(sessionId)) return
         if (compactor.hasInFlight(sessionId)) await compactor.waitForSettled(sessionId, signal)
         const deferred = compactor.takeDeferredManual(sessionId)
         if (deferred === null) return
-        await compactor.compact(sessionId, sessions.readMessages(sessionId), "", config, runLlm, model, {
+        const outcome = await compactor.compact(sessionId, sessions.readMessages(sessionId), "", config, runLlm, model, {
           focus: deferred.focus,
           manual: true,
           phase: "manual",
           budget: waterlines.budget,
         })
-        void compactionAfter("manual", "ok")
+        if (outcome.status === "applied") void compactionAfter("manual", "ok")
+        else if (outcome.status === "failed") void compactionAfter("manual", "failed")
+        else if (outcome.status === "cancelled") void compactionAfter("manual", "cancelled")
       }
     },
   }),
@@ -426,15 +435,15 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     position: "run-after",
     order: 20,
     description: "黄线水位触发的收尾压缩",
-    failure: "fatal",
+    failure: "skip",
     timeoutMs: Number.POSITIVE_INFINITY,
     makeHandler: (rt) => {
       const { compactor, sessionId, sessions, contextOverhead, waterlines, config, runLlm, model, signal, compactionAfter } = rt
-      return async ({ outcome }) => {
+      return async ({ outcome: runOutcome }) => {
         // aborted/error runs are not finalized (the former is being torn down,
         // the latter just failed); the cancellation marker suppresses a
         // user-cancelled compaction for this run.
-        if (outcome.stopReason === "aborted" || outcome.stopReason === "error" || compactor.cancelled(sessionId)) return
+        if (runOutcome.stopReason === "aborted" || runOutcome.stopReason === "error" || compactor.cancelled(sessionId)) return
         if (compactor.hasInFlight(sessionId)) {
           // 收尾撞在飞后台（预压没跑完 run 就结束了）：等它完成再判断——绝不
           // 并发第二个压缩。等待后走正常判断（auto 内部的活跃段细判自适应）。
@@ -446,13 +455,17 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
         const postRunHistory = sessions.readMessages(sessionId)
         const overhead = contextOverhead()
         if (!waterlines.exceedsFullHistory("at", estimateContextTokens(postRunHistory, undefined, overhead))) return
-        await compactor.auto(sessionId, postRunHistory, config, runLlm, model, {
+        const outcome = await compactor.auto(sessionId, postRunHistory, config, runLlm, model, {
           phase: "post-run",
           signal,
           overheadTokens: overhead,
           budget: waterlines.budget,
         })
-        void compactionAfter("post-run", "ok")
+        // A failed final compaction is announced by its completed event and
+        // forwarded as "failed" — it does not fail the run.
+        if (outcome.status === "applied") void compactionAfter("post-run", "ok")
+        else if (outcome.status === "failed") void compactionAfter("post-run", "failed")
+        else if (outcome.status === "cancelled") void compactionAfter("post-run", "cancelled")
       }
     },
   }),

@@ -202,7 +202,7 @@ describe("Compactor 调度状态机", () => {
     // 同步压缩自己的视图（基于含挂起成果的 meta）生效
     seedHistory(sessions, session.id, 6)
     const view = await compactor.auto(session.id, sessions.readMessages(session.id), config, llm.client, "m", { manual: true })
-    expect(view).not.toBeNull()
+    expect(view.status).toBe("applied")
     expect(compactor.takeParked(session.id)).toBeNull()
   })
 
@@ -218,11 +218,11 @@ describe("Compactor 调度状态机", () => {
     await vi.waitFor(() => expect(llm.calls.filter(isSummaryCall).length).toBeGreaterThanOrEqual(2))
     await vi.waitFor(() => expect(compactor.parked(session.id)).toBe(true))
 
-    // 同步压缩在过小的历史上跑（估算 < 黄线）→ declined（compacted:false），
+    // 同步压缩在过小的历史上跑（估算 < 黄线）→ declined 结局，
     // 什么都没写：挂起成果仍是最新视图，不得被入口顺手清掉
     const tiny = [newMessage(session.id, "user", [{ id: "btiny", type: "text", text: "小" }])]
     const out = await compactor.compact(session.id, tiny, "", config, llm.client, "m", { phase: "post-run" })
-    expect(out.compacted).toBe(false)
+    expect(out.status).toBe("declined")
     expect(compactor.parked(session.id)).toBe(true)
   })
 

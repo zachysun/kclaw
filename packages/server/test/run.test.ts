@@ -1114,14 +1114,12 @@ describe("RunManager context compaction", () => {
       expect(reqs[1]!.system).toContain("对话摘要器")
       // Completed-must-arrive protocol (v3): a started is ALWAYS paired with a
       // completed — failure reports result "failed" with zeroed counters. The
-      // failure logs once inside #compactV2 and once more in #runAutoCompaction
-      // (which swallows the throw: the hook path gets null; no fallback).
+      // failure logs exactly once inside the Compactor, tagged with the phase.
       const events = received(socket)
       expect(events.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "post-run" }])
       const completed = events.find((e) => e.type === "compaction.completed")
       expect(completed).toBeDefined()
       expect(completed!.payload).toEqual({ segments: 0, kept: 0, phase: "post-run", result: "failed" })
-      expect(errorSpy.mock.calls.filter((c) => String(c[0]).startsWith("kclaw compaction failed"))).toHaveLength(1)
       expect(errorSpy.mock.calls.filter((c) => String(c[0]).startsWith("kclaw compaction (post-run) failed"))).toHaveLength(1)
     } finally {
       errorSpy.mockRestore()
@@ -1267,8 +1265,8 @@ describe("RunManager context compaction", () => {
       const socket = new FakeSocket()
       env.bus.subscribe(session.id, socket)
 
-      // compactSession keeps propagating #compactV2's throw: the HTTP route
-      // maps it to a 500 carrying the message (routes/compact.test.ts).
+      // compactSession rethrows the failed outcome's carried error: the HTTP
+      // route maps it to a 500 carrying the message (routes/compact.test.ts).
       await expect(manager.compactSession(session.id)).rejects.toThrow("手动摘要挂了")
 
       const events = received(socket)
@@ -1278,7 +1276,7 @@ describe("RunManager context compaction", () => {
       expect(completed!.payload).toEqual({ segments: 0, kept: 0, phase: "manual", result: "failed" })
       expect(env.sessions.meta(session.id)?.compaction).toBeUndefined()
       expect(env.sessions.readCompactions(session.id)).toEqual([])
-      expect(errorSpy.mock.calls.filter((c) => String(c[0]).startsWith("kclaw compaction failed"))).toHaveLength(1)
+      expect(errorSpy.mock.calls.filter((c) => String(c[0]).startsWith("kclaw compaction (manual) failed"))).toHaveLength(1)
     } finally {
       errorSpy.mockRestore()
     }
