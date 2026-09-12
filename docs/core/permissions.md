@@ -61,9 +61,11 @@ export class ConfigPermissionGate implements PermissionGate {
     readRoots?: string[]           // 额外可读根：safe 的路径参数工具视同工作区（daemon 传附件目录）
     mode?: PermissionMode          // 会话权限模式，缺省 default（daemon 按会话 meta 逐 run 传入）
     decidedRules?: string[]        // 沉淀规则（"总是允许"产生的 allow 规则，每 run 从文件加载）
-    sandboxAvailable?: boolean     // exec 沙箱可用性（daemon 由沙箱 provider 探测传入，
-                                   // 与 exec 工具实际套的沙箱同源）：命令类工具无规则命中时，
-                                   // 可用则 allow {reason:"sandboxed"}，否则 confirm
+    sandboxedTools?: ReadonlySet<string>
+                                   // run 装配实际套了沙箱的工具集（exec）。它同时是可用性
+                                   // 事实：集合非空 = 沙箱探测通过且有工具真被包裹——命令类
+                                   // 工具无规则命中时 allow {reason:"sandboxed"}，否则 confirm；
+                                   // 集合外的工具永远不会顶着"已沙箱化"的名头放行
   })
   check(toolCall: ToolCallBlock): Promise<PermissionDecision>
 }
@@ -130,7 +132,7 @@ permissions:
 
 trusted 不查询 allow / 沉淀规则 / 会话授权——边界内本就全放行，它们没有存在意义；边界外 deny 也比任何 allow 都优先。
 
-命令类工具（sensitive 且带 `command` 参数，exec 今天是唯一成员）走专属分支：deny 对**每个归一化子命令**分别匹配；allow、沉淀规则与会话授权只在命令**恰好一段**（无接续符）时参与——`exec:git status*` 不可能放行 `git status; …`。两分支都未命中时：**若 exec 沙箱可用（`sandboxAvailable`）→ `allow {reason:"sandboxed"}`**——沙箱（而非人工）是这次放行的批准方，整个 shell 调用都在沙箱内运行（含多段命令）；沙箱不可用才 confirm。sandboxed 永远不覆盖 deny 与规则命中，readonly 的 ⓪ 步短路依旧最优先。沉淀规则的 exec 形态在保存时即收紧为"首词 + 子命令前缀"（`exec:git push*`，见沉淀规则一节），匹配语义与 allow 一致。
+命令类工具（sensitive 且带 `command` 参数，exec 今天是唯一成员）走专属分支：deny 对**每个归一化子命令**分别匹配；allow、沉淀规则与会话授权只在命令**恰好一段**（无接续符）时参与——`exec:git status*` 不可能放行 `git status; …`。两分支都未命中时：**若 exec 真被沙箱包裹（被包裹工具集非空）→ `allow {reason:"sandboxed"}`**——沙箱（而非人工）是这次放行的批准方，整个 shell 调用都在沙箱内运行（含多段命令）；沙箱不可用才 confirm。sandboxed 永远不覆盖 deny 与规则命中，readonly 的 ⓪ 步短路依旧最优先。沉淀规则的 exec 形态在保存时即收紧为"首词 + 子命令前缀"（`exec:git push*`，见沉淀规则一节），匹配语义与 allow 一致。
 
 ### 3. 路径规范化匹配（防拼写绕过）
 
@@ -195,7 +197,7 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
   - macOS `sandbox-exec` + SBPL profile——工作区与系统临时目录可写，家目录只读且 `~/.kclaw` 读拒绝（凭据隔离），网络默认允许（SBPL 规则按先匹配生效：`~/.kclaw` 读拒绝在宽放行之前、写白名单在保底 deny 之前；路径一律 realpath 形态，`/tmp` 写作 `/private/tmp`）。
   - Linux bubblewrap（无特权 user namespaces）——整个根只读挂载、`~/.kclaw` 用 tmpfs 遮蔽（读不到凭据）、`/tmp` 与工作区可写、`--die-with-parent --new-session` 保证 exec 超时进程组 kill 能波及整棵进程树；网络默认允许（不加 `--unshare-net`），`sandbox.network: "deny"` 时加 `--unshare-net` 断网（见 [sandbox](./sandbox.md)）。
   - 降级链：bwrap → **不可用**（回落人工确认，fail-closed——绝不让命令裸跑）。Landlock 保底是后续项：纯 Node 无法发起 `landlock_create_ruleset` syscall，也没有成熟 CLI 包装。
-- **判定联动（`sandboxAvailable` + `sandboxedTools`）**：run 装配探测一次沙箱可用性，同源喂给两个消费方——exec 工具的实际包装器（可用的才注入）与 gate 的 `sandboxAvailable` 输入——并把**实际被包裹的工具集**（`sandboxedTools`，今天只有 exec）一并传给 gate。因此 "sandboxed" 放行的命令必然真被沙箱包住；反之沙箱不可用时 exec 维持 confirm，不会出现"放了行却裸跑"的错配。`default` 与 `acceptEdits` 模式下，被包裹的命令类工具无规则命中时由沙箱顶替人工（reason `sandboxed`）；trusted 模式下未包裹的命令类工具（schema 带 `command` 字段的适配器等）直接被 deny，绝不顶着"已沙箱化"的名头放行。readonly 的短路依旧最优先，deny/allow/沉淀规则/会话授权也都先于它。沙箱**启用但探测不可用**时，exec 回落的确认请求会带一条说明（`noteText`："exec 沙箱不可用，本次操作需人工确认"，CLI 暗色一行、WebUI 卡片注明，见第 8 节）；用户主动 `sandbox.enabled: false` 关闭沙箱时不带说明——那是刻意决定，不需要解释。
+- **判定联动（`sandboxedTools`）**：run 装配探测一次沙箱可用性，同源喂给两个消费方——exec 工具的实际包装器（可用的才注入）与 gate 的**实际被包裹的工具集**输入（`sandboxedTools`，今天只有 exec；集合非空即沙箱可用，gate 不再单独收可用性布尔）。因此 "sandboxed" 放行的命令必然真被沙箱包住；反之沙箱不可用时 exec 维持 confirm，不会出现"放了行却裸跑"的错配。`default` 与 `acceptEdits` 模式下，被包裹的命令类工具无规则命中时由沙箱顶替人工（reason `sandboxed`）；trusted 模式下未包裹的命令类工具（schema 带 `command` 字段的适配器等）直接被 deny，绝不顶着"已沙箱化"的名头放行。readonly 的短路依旧最优先，deny/allow/沉淀规则/会话授权也都先于它。沙箱**启用但探测不可用**时，exec 回落的确认请求会带一条说明（`noteText`："exec 沙箱不可用，本次操作需人工确认"，CLI 暗色一行、WebUI 卡片注明，见第 8 节）；用户主动 `sandbox.enabled: false` 关闭沙箱时不带说明——那是刻意决定，不需要解释。
 - **配置**（`config.yaml` 的 `sandbox:` 节，daemon 级，默认开）：
   ```yaml
   sandbox:
@@ -226,8 +228,8 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 - 确认网关 `ConfirmationBroker`（`packages/core/src/permissions/broker.ts`）：
   - 登记：run 装配（core `executeRun`）的包装 gate，confirm 判定一出就在 broker 登记（携带 toolCall、risk、会话 id）。
   - 裁决：CLI/Web 经 WS `confirmation.resolve` 帧调 `broker.resolve(id, decision, by)`（`by` 默认 `"cli"`，WebUI 帧带 `client:"web"`）。裁决返回布尔——unknown/stale id 落空。
-  - 沉淀规则的保存在 server 侧 WS 入口（`packages/server/src/ws.ts`）：resolve 之前先 `broker.lookup(id)` 快照 toolCall 与会话（resolve 会移除条目），`project`/`global` 裁决才写文件；`once`/`reject`/未知 id 不写任何文件。项目档的目标工作目录取会话元数据的 `workdir`（缺省回退 daemon 配置的工作目录）。
-  - **auto 模式归纳在装配层（不在 WS 入口）**：run 装配（core `run-assembly.ts`）的 `resolveConfirmation` wrapper 能看到**每一种**裁决结局——`once`/`reject` 经网关、**超时**在共享的等待计时内自行到期——这是 WS 命令分发层做不到的（超时永不产生 resolve 帧）。当裁决所属会话的模式是 `auto`（用 run 启动时的快照，不是 resolve 时刻的实时值，避免切模式竞态）时：`once` 裁决先喂给 `AutoLearnCounter`（core 纯内存类，键 = `sessionId + 收紧键`，按会话隔离，见第 5 节 auto 档）——跨过阈值即保存一条 `source:"auto"` 的项目档规则（尽力而为，写失败只记日志不打断 run）；`reject` **或超时**清零该键计数；abort（run 取消）不是拒绝、不碰计数。同一个包装里，`once` 裁决还会把收紧规则写入**本次 run 的授权存储**（`grants.grant`，见第 11 节）——auto 模式下 gate 不消费它，属死写，无副作用。判定链与规则引擎完全不知道 auto 的存在——归纳发生在裁决侧，规则保存后由既有机制生效。WS 入口只保留 `project`/`global` 的"总是允许"落定。
+  - 一次人工裁决的全部后果都收在 run 装配（core `run-assembly.ts`）的 `resolveConfirmation` 一处：`project`/`global` 的沉淀规则写文件、审计留痕、`once` 授权、auto 归纳。这个缝合层握有工具调用快照与本次 run 的工作目录，也看得到每一种结局（超时与 abort 都到不了 WS 层）。WS 入口只做三步——认领裁决方（`cli`/`web`）→ `broker.resolve` → 回执。`once`/`reject`/未知 id 不写任何文件；写文件失败只记日志，裁决照常生效（项目档的目标工作目录就是本次 run 的工作目录）。
+  - **auto 模式归纳在装配层（不在 WS 入口）**：run 装配（core `run-assembly.ts`）的 `resolveConfirmation` wrapper 能看到**每一种**裁决结局——`once`/`reject` 经网关、**超时**在共享的等待计时内自行到期——这是 WS 命令分发层做不到的（超时永不产生 resolve 帧）。当裁决所属会话的模式是 `auto`（用 run 启动时的快照，不是 resolve 时刻的实时值，避免切模式竞态）时：`once` 裁决先喂给 `AutoLearnCounter`（core 纯内存类，键 = `sessionId + 收紧键`，按会话隔离，见第 5 节 auto 档）——跨过阈值即保存一条 `source:"auto"` 的项目档规则（尽力而为，写失败只记日志不打断 run）；`reject` **或超时**清零该键计数；abort（run 取消）不是拒绝、不碰计数。同一个包装里，`once` 裁决还会把收紧规则写入**本次 run 的授权存储**（`grants.grant`，见第 11 节）——auto 模式下 gate 不消费它，属死写，无副作用。判定链与规则引擎完全不知道 auto 的存在——归纳发生在裁决侧，规则保存后由既有机制生效。WS 入口不参与归纳。
   - broker **不发事件、不设内部超时**——事件归循环，计时归循环与装配侧的同一套计时机制；两处用同一超时值计时保证视图一致。
   - 超时/取消后 run 装配（core `executeRun`）的 `resolveConfirmation` 调 `expire` 把条目标记失效，迟到的裁决只会收到 unknown confirmation，不会确认一个已无人等待的动作。
 - deny 的 `user_denied` / `timeout` 两个 reason 不是 gate 产出的：gate 只产生 `blacklist` / `readonly` 两种拒绝（规则命中或只读会话禁写/exec），前两者是循环把人工拒绝/超时转成 error result 时的语义标记（note 块的 `kind`）。
