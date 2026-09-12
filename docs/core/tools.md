@@ -84,7 +84,7 @@ export function makeTool<N extends string>(
 | `subagent_collect` | 按子会话 id 取回后台子代理的完整结题答复 | safe / parallel |
 | `ask_user_questions` | 向用户提出 1–5 个需要当场拍板的问题，回答即工具结果 | safe / parallel |
 
-前 11 个**常驻注册**（工具列表不随会话状态变化）；`subagent_run`/`subagent_collect` 仅在 daemon 装配了子代理派发后端时注册（子代理自己的 run 两者都不注册——单层委派、不能再派孙代理），`ask_user_questions` 每个 run 都注册（见下文各自的"注册是条件性的"说明）。
+前 11 个**常驻注册**（注册与否不随会话状态变化；唯一的可见性例外是 readonly 模式——装配把 risk 为 sensitive 的工具整个移出该 run 的模型工具面，见 [permissions](./permissions.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 装配了子代理派发后端时注册（子代理自己的 run 两者都不注册——单层委派、不能再派孙代理），`ask_user_questions` 每个 run 都注册（见下文各自的"注册是条件性的"说明）。
 
 ### exec（`tools/exec.ts`）
 

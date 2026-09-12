@@ -16,7 +16,7 @@
 
 - **单层委派**：子 run 的工具面**不注册** `subagent_run` 与 `subagent_collect`（也没有 `memory_save`，见记忆隔离）——子代理不能再派子代理，防递归失控。
 
-- **权限不放宽**：子 run 有自己的权限门，冻结父会话创建时的 `mode`；敏感操作照常请求人工确认。确认卡片经 spawner **转发到父会话频道**（用户正看着的地方），`noteText` 前缀"来自子代理 `<label 或会话 id>`"；裁决仍由全局 broker 按 `confirmationId` 统一处理，任何客户端答都行。Web 与 CLI 无需改动就能收到卡片。
+- **权限不放宽**：子 run 有自己的权限门，冻结父会话创建时的 `mode`；敏感操作照常请求人工确认。确认卡片经 spawner **转发到父会话频道**（用户正看着的地方），`noteText` 前缀"来自子代理 `<label 或会话 id>`"；裁决仍由全局 broker 按 `confirmationId` 统一处理，任何客户端答都行。Web 与 CLI 无需改动就能收到卡片。可见性同样继承：父会话为 readonly 时，子 run 的工具面按同一规则收窄（sensitive 工具不可见），见 [permissions](./permissions.md)。
 
 - **父停子停**：工具执行器把父 run 的 abort 信号递给 spawner，spawner 监听到中止即 `run.cancel(child)`——子 run 在下一个检查点停下，派发以 error 结果（"随主任务中止而停止"，附中止前产出）收口。
 
