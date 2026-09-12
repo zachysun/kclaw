@@ -26,7 +26,7 @@ export function resolvePaths(home?: string): KclawPaths
 | 路径 | 用途 | 写入方 |
 |------|------|--------|
 | `<home>/config.yaml` | 全部配置（见下节） | CLI 向导 `saveConfig`；用户手编 |
-| `<home>/permissions.yaml` | 全局权限规则——在人工确认里选「总是允许」后保存下来的收紧 allow 规则；项目档在工作区 `.kclaw/permissions.yaml`（见下文「保存的权限规则」一节） | server 的 WS 确认入口 `ws.ts`；用户手编亦可 |
+| `<home>/permissions.yaml` | 全局权限规则——在人工确认里选「总是允许」后保存下来的收紧 allow 规则；项目档在工作区 `.kclaw/permissions.yaml`（见下文「保存的权限规则」一节） | run 装配的确认缝合层（`packages/core/src/agent/run-assembly.ts` 的 `resolveConfirmation`，global 裁决时写入）；用户手编亦可 |
 | `<home>/AGENTS.md` | agent 人格设定，非空则作为系统提示的一部分（stable 段基座）；每次运行拼装的完整系统提示以 `system` 事件按 stable/live 两段全量记录 | 用户手编；daemon 启动时读 |
 | `<home>/memory/global/` | L2 全局认知（persona.md、wiki/、rule/ 的 markdown，文件即真相） | MemorySystem / 用户手编 |
 | `<home>/memory/projects/<id>/` | L1 项目情节（`<topic>.md` 主题线、workdir.txt、MEMORY.md、state.json、vectors.db） | MemorySystem / 用户手编 |
@@ -169,7 +169,7 @@ export function readJsonl(file: string): unknown[]
 
 | 文件 | 作用域 | 写入方 |
 |------|--------|--------|
-| `<home>/permissions.yaml` | 全局档，任何工作区生效 | server 的 WS 确认入口（`packages/server/src/ws.ts`，global 裁决） |
+| `<home>/permissions.yaml` | 全局档，任何工作区生效 | run 装配的确认缝合层（`packages/core/src/agent/run-assembly.ts` 的 `resolveConfirmation`，global 裁决时写入） |
 | `<workspace>/.kclaw/permissions.yaml` | 项目档，只对该工作区的会话生效；首次保存时自动建 `.kclaw` 目录、把 `.kclaw/permissions.yaml` 追加进工作区 `.gitignore`（重复执行无副作用） | 同上（project 裁决）；auto 模式归纳的 `source:"auto"` 规则也在 run 装配层写入同一文件 |
 
 格式（每条是一个 `DecidedRuleEntry`）：

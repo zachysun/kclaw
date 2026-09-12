@@ -210,10 +210,11 @@ steer 条目被 `submit` 放进 `#steerBuf` 后，目标 run 在**迭代边界**
       （沙箱启用但不可用的回落确认带 noteText，CLI 暗色一行 / WebUI 卡片注明）
       ↓ 等待 resolveConfirmation —— 三方同时等待，谁先到算谁
       ├─ WS/CLI：confirmation.resolve {confirmationId, decision, client}
-      │    → ws.ts 先 broker.lookup(conf_…) 快照 toolCall 与会话（resolve 会移除条目）；
-      │      decision 为 project/global 时按快照收紧规则后写入规则文件（项目档/全局档，见
-      │      [permissions](../core/permissions.md) 的沉淀规则一节）；once/reject/未知 id 不写文件
-      │    → broker.resolve → true；ws.ts 回 confirmation.resolved_ack；循环发 confirmation.resolved
+      │    → ws.ts 只认领裁决方（client 字段，缺省 cli）→ broker.resolve → true；
+      │      ws.ts 回 confirmation.resolved_ack；循环发 confirmation.resolved
+      │      （裁决的全部后果——project/global 的沉淀规则写文件、审计留痕、once 授权、
+      │      auto 归纳——都在 run 装配的确认缝合层 resolveConfirmation 一处，见
+      │      [permissions](../core/permissions.md) 的确认网关一节；once/reject/未知 id 不写文件）
       ├─ 120s 超时：循环按拒绝处理（note「确认超时，操作未执行」）；
       │    引擎侧同超时 → broker.expire → 条目作废
       └─ run.cancel 的 abort：循环不发 confirmation.resolved（取消≠超时拒绝），
