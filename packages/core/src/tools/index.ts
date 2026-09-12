@@ -288,6 +288,24 @@ export function createBuiltinTools(opts: {
 }
 
 /**
+ * Drop every sensitive tool from a live surface, in place, keeping the tools
+ * map and the defs list the same set. The readonly mode's gate short-circuits
+ * sensitive tools before any rule — even an allow rule cannot save one — so a
+ * listed sensitive tool is a call the model can only lose; narrowing the
+ * surface spares it those turns. Visibility only: the gate stays the
+ * boundary, and only the readonly assembly may call this (every other mode
+ * can legitimately authorize a sensitive tool).
+ */
+export function dropSensitiveTools(tools: Map<string, ToolExecutor>, toolDefs: ToolDefinition[]): void {
+  for (const [name, tool] of [...tools]) {
+    if (tool.risk !== "sensitive") continue
+    tools.delete(name)
+    const idx = toolDefs.findIndex((d) => d.name === name)
+    if (idx !== -1) toolDefs.splice(idx, 1)
+  }
+}
+
+/**
  * The permission-relevant facts of the registered tools (risk + schema arg
  * field names), derived in one place from the registry. The permission gate
  * consumes this table and derives every treatment itself — no tool carries

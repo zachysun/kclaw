@@ -2087,7 +2087,7 @@ describe("RunManager run 边界与权限裁决档案事件", () => {
 })
 
 describe("RunManager readonly mode", () => {
-  it("denies write-class tool calls with a denied note when the session mode is readonly", async () => {
+  it("keeps write-class tools off the surface: a stubborn call errors unknown and never runs", async () => {
     const { env, manager } = makeEnv(scriptClient([
       [
         { type: "tool_call_started", index: 0, callId: "c1", name: "fs_write" },
@@ -2100,12 +2100,18 @@ describe("RunManager readonly mode", () => {
     env.sessions.updateMeta(session.id, { mode: "readonly" })
     const outcome = await manager.enqueue(session.id, { userText: "写个文件", trigger: "user" })
     expect(outcome.stopReason).toBe("end_turn")
-    // The denied tool call produced a note instead of running.
+    // fs_write is not even listed in readonly mode, so the call never reaches
+    // the gate: the loop answers it as an unknown tool (the model kept the
+    // name from stale context), and no denied note is produced.
     const messages = env.sessions.readMessages(session.id)
-    const toolNote = messages.some((m) =>
+    const toolMsg = messages.find((m) => m.role === "tool")
+    const result = toolMsg?.blocks.find((b) => b.type === "tool_result") as { status: string; output: string } | undefined
+    expect(result?.status).toBe("error")
+    expect(result?.output).toContain("unknown tool: fs_write")
+    const deniedNote = messages.some((m) =>
       m.blocks.some((b) => b.type === "note" && "kind" in b && (b as { kind?: string }).kind === "denied"),
     )
-    expect(toolNote).toBe(true)
+    expect(deniedNote).toBe(false)
   })
 })
 
