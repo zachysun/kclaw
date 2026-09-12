@@ -65,6 +65,9 @@ export interface Waterlines {
  * range/order validation is loadConfig's job, so values here are trusted.
  */
 export function resolveWaterlines(config: KclawConfig, budget: number): Waterlines {
+  // Both predicates compare the same way today; the two names exist so every
+  // call site states which denominator it estimated against (full history vs
+  // the settled active span) — the fork is the callers' estimation choice.
   const s = config.sessions
   const lines = {
     pack: budget * (s.compactPackRatio ?? WATERLINE_DEFAULTS.pack),

@@ -88,7 +88,7 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
    * Live children, one record per child session: its parent and the dispatch
    * mode. The per-mode caps and the delete-cascade cancel scan this by
    * parent+mode — a handful of entries at most (caps are 4+4), so a scan is
-   * free and two books can never drift apart.
+   * free and every consumer reads the same source.
    */
   const live = new Map<string, { parentId: string; mode: "blocking" | "background" }>()
 

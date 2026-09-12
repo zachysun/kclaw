@@ -106,7 +106,7 @@ export interface KclawConfig {
     compactKeep?: number
     /** Context token budget. Default 128000 (resolveContextTokens applies it). */
     contextTokens?: number
-    /** Compaction waterlines (ratios of the budget): defaults and the target < at < ahead < panic ordering are owned by the waterlines module, which also validates them at load time. */
+    /** Compaction waterlines (ratios of the budget): defaults and the target < ahead < at < panic ordering are owned by the waterlines module, which also validates them at load time. */
     compactAtRatio?: number
     compactTargetRatio?: number
     compactPanicRatio?: number
@@ -238,7 +238,7 @@ export function loadConfig(paths: KclawPaths): KclawConfig {
     merged.permissions.defaultMode = "default"
   }
   // Compaction waterlines: same style — values out of (0,1] or out of order
-  // (target < at < ahead < panic) fall back to the module defaults with one
+  // (target < ahead < at < panic) fall back to the module defaults with one
   // warning; the pack line is validated independently (decoupled by design).
   validateWaterlineConfig(merged.sessions)
   return merged

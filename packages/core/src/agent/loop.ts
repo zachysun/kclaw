@@ -612,7 +612,7 @@ async function runToolTurn(
       break
     }
     // A timeout is the race's named sentinel, not a verdict object; the wire
-    // event reports it as decision/by "timeout" as before.
+    // event reports it as decision/by "timeout".
     const timedOut = resolution === "timeout"
     emit(makeEvent("confirmation.resolved", {
       confirmationId: decision.confirmationId,

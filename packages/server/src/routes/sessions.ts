@@ -17,8 +17,8 @@ export interface SessionStores {
   memory?: MemorySystem
   /**
    * Cancel every live BACKGROUND subagent of one parent session (the
-   * subagent host's ledger, injected by createApp). Missing → delete/purge
-   * skip the cancellation half.
+   * subagent host's live records, injected by createApp). Missing →
+   * delete/purge skip the cancellation half.
    */
   cancelBackgroundForParent?: (parentSessionId: string) => number
 }

@@ -480,6 +480,25 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     },
   }
 
+  // Best-effort decided-rule write: a failure logs and the verdict stands.
+  const persistDecidedRule = (
+    target: string,
+    rule: string,
+    origin: { tool: string; argsJson: string; sessionId?: string },
+    opts: { workspace?: string; autoLearned?: boolean } = {},
+  ): void => {
+    try {
+      appendDecidedRule(target, {
+        rule,
+        decidedAt: new Date().toISOString(),
+        origin,
+        ...(opts.autoLearned === true ? { source: "auto" as const } : {}),
+      }, opts.workspace === undefined ? {} : { workspace: opts.workspace })
+    } catch (e) {
+      console.error(`kclaw: failed to persist ${opts.autoLearned === true ? "auto-learned " : ""}decided rule: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
   // Confirmation answering: deps' direct resolver when wired (test seam),
   // else the broker's pending promise (the daemon path: WS/CLI verdicts
   // settle it). The resolver is raced against the SAME timeout the loop
@@ -526,19 +545,12 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     // and the settled verdict stands; a once/reject/timeout verdict never
     // writes a rule.
     if (!timedOut && (raced.decision === "project" || raced.decision === "global") && call !== undefined) {
-      try {
-        appendDecidedRule(
-          raced.decision === "global" ? globalDecidedRulesPath(paths.home) : projectDecidedRulesPath(workspace),
-          {
-            rule: narrowDecidedRule(call, workspace),
-            decidedAt: new Date().toISOString(),
-            origin: { tool: call.name, argsJson: call.argsJson, sessionId },
-          },
-          raced.decision === "project" ? { workspace } : {},
-        )
-      } catch (e) {
-        console.error(`kclaw: failed to persist decided rule: ${e instanceof Error ? e.message : String(e)}`)
-      }
+      persistDecidedRule(
+        raced.decision === "global" ? globalDecidedRulesPath(paths.home) : projectDecidedRulesPath(workspace),
+        narrowDecidedRule(call, workspace),
+        { tool: call.name, argsJson: call.argsJson, sessionId },
+        raced.decision === "project" ? { workspace } : {},
+      )
     }
     // SessionGrants (batch D): a once-approval also lands in this run's grant
     // store, keyed by the same narrowed rule the gate re-checks — the same
@@ -559,20 +571,12 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       const key = `${sessionId}\n${ruleKey}`
       if (!timedOut && raced.decision === "once") {
         if (autoLearn.counter.approve(key)) {
-          try {
-            appendDecidedRule(
-              projectDecidedRulesPath(workspace),
-              {
-                rule: ruleKey,
-                decidedAt: new Date().toISOString(),
-                origin: { tool: call.name, argsJson: call.argsJson, sessionId },
-                source: "auto",
-              },
-              { workspace },
-            )
-          } catch (e) {
-            console.error(`kclaw: failed to persist auto-learned rule: ${e instanceof Error ? e.message : String(e)}`)
-          }
+          persistDecidedRule(
+            projectDecidedRulesPath(workspace),
+            ruleKey,
+            { tool: call.name, argsJson: call.argsJson, sessionId },
+            { workspace, autoLearned: true },
+          )
         }
       } else if (timedOut || raced.decision === "reject") {
         // a "no" — explicit or by silence — resets the streak

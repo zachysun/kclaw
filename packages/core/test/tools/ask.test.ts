@@ -51,6 +51,26 @@ describe("ask_user_questions executor", () => {
     expect(resolved!.payload).toMatchObject({ questionId, by: "web" })
   })
 
+  it("错位应答按问题序规整：缺位补空、非数组槽位按未回答、越位丢弃", async () => {
+    const { broker, emitted, tool } = makeTool()
+    const args = { questions: [{ text: "一?" }, { text: "二?" }, { text: "三?" }] }
+    const pending = tool.execute(args, { onOutput: () => {} })
+    const requested = emitted.find((e) => e.type === "question.requested")!
+    const questionId = (requested.payload as { questionId: string }).questionId
+    // 网关应答错位：第 2 题的槽位不是数组（按未回答处理），第 4 组越位
+    // （丢弃）——结果与 data 都按问题数对齐
+    expect(broker.resolveQuestion(questionId, [["甲"], "bad", ["丙"], ["越位"]] as unknown as string[][], "cli")).toBe(true)
+    const r = await pending
+    expect(r.status).toBe("ok")
+    expect(r.output).toContain("1. 一?\n   → 甲")
+    expect(r.output).toContain("2. 二?\n   → （未回答）")
+    expect(r.output).toContain("3. 三?\n   → 丙")
+    expect(r.output).not.toContain("越位")
+    expect(r.data).toEqual({ questionId, answers: [["甲"], [], ["丙"]] })
+    const resolved = emitted.find((e) => e.type === "question.resolved")
+    expect(resolved!.payload).toMatchObject({ questionId, answers: [["甲"], [], ["丙"]], by: "cli" })
+  })
+
   it("超时路径：竞速定时器先到 → ok 结果含『未在限时内回答』，resolved 带 by:timeout，条目过期", async () => {
     const { broker, emitted, tool } = makeTool({ timeoutMs: 20 })
     const pending = tool.execute({ questions: [{ text: "在吗?" }] }, { onOutput: () => {} })

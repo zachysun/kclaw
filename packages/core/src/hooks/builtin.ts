@@ -38,6 +38,7 @@ import { makeEvent, type AgentEvent } from "../protocol/index.js"
 import type { Message } from "../protocol/messages.js"
 import type { LlmClient } from "../provider/types.js"
 import { estimateContextTokens, type ActiveSummary } from "../session/compaction.js"
+import type { CompactionOutcome } from "../session/compactor.js"
 import type { Waterlines } from "../session/waterlines.js"
 import { scheduleAutoname } from "../session/autoname.js"
 import type { SessionStore } from "../session/store.js"
@@ -52,6 +53,22 @@ import type { HookEntry, HookContextMap, HookPosition, HookResultMap } from "./t
 const MEMORY_QUERY_CHARS = 200
 /** Top-N memory notes injected onto the user message. */
 const MEMORY_LIMIT = 5
+
+/**
+ * Forward a compaction outcome to the compaction-after chain: applied/
+ * failed/cancelled under their own name, declined silently — nothing
+ * happened, matching the event stream where neither started nor completed
+ * fired.
+ */
+function forwardOutcome(
+  compactionAfter: BuiltinHookDeps["compactionAfter"],
+  phase: "in-run" | "post-run" | "manual",
+  outcome: CompactionOutcome,
+): void {
+  if (outcome.status === "applied") void compactionAfter(phase, "ok")
+  else if (outcome.status === "failed") void compactionAfter(phase, "failed")
+  else if (outcome.status === "cancelled") void compactionAfter(phase, "cancelled")
+}
 
 /** Per-run resources the builtin closures capture. */
 export interface BuiltinHookDeps {
@@ -323,18 +340,10 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
           overheadTokens: overhead,
           budget: waterlines.budget,
         })
-        // Truthful forwarding: applied → ok, failed/cancelled under their own
-        // name, declined fires nothing (no compaction happened — matching the
-        // event stream, where neither started nor completed fired). A failed
-        // or declined sync attempt still falls through to the parked view:
+        forwardOutcome(compactionAfter, "in-run", outcome)
+        // A failed or declined sync attempt falls through to the parked view:
         // it is the newest thing we have.
-        if (outcome.status === "applied") {
-          void compactionAfter("in-run", "ok")
-          return { upto: outcome.upto, top: outcome.top }
-        }
-        if (outcome.status === "failed") void compactionAfter("in-run", "failed")
-        else if (outcome.status === "cancelled") void compactionAfter("in-run", "cancelled")
-        return settled
+        return outcome.status === "applied" ? { upto: outcome.upto, top: outcome.top } : settled
       }
     },
   }),
@@ -363,12 +372,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
           emergency: true,
           signal,
         })
-        // Only a real compaction reports "ok" here — a failed or cancelled
-        // rescue forwards its own name, a declined one stays silent (nothing
-        // happened).
-        if (outcome.status === "applied") void compactionAfter("in-run", "ok")
-        else if (outcome.status === "failed") void compactionAfter("in-run", "failed")
-        else if (outcome.status === "cancelled") void compactionAfter("in-run", "cancelled")
+        forwardOutcome(compactionAfter, "in-run", outcome)
         return outcome.status === "applied" ? { upto: outcome.upto, top: outcome.top } : null
       }
     },
@@ -412,8 +416,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
         // 冲刷挂起的 /compact（会话忙时登记的）：在自动收尾压缩之前执行——
         // 用户显式意图优先，压完水位落回，自动收尾检查自然不再触发。
         // 不做忙碌/排队检查（收尾链时刻必然不忙；运行期间排队的消息等下一条
-        // 出队，与压缩无关）。压缩以结局回答：applied 转发 ok，failed 转发
-        // failed（completed 事件已记录，压缩失败不连坐 run）。
+        // 出队，与压缩无关）。
         if (!compactor.hasDeferredManual(sessionId)) return
         if (compactor.hasInFlight(sessionId)) await compactor.waitForSettled(sessionId, signal)
         const deferred = compactor.takeDeferredManual(sessionId)
@@ -424,9 +427,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
           phase: "manual",
           budget: waterlines.budget,
         })
-        if (outcome.status === "applied") void compactionAfter("manual", "ok")
-        else if (outcome.status === "failed") void compactionAfter("manual", "failed")
-        else if (outcome.status === "cancelled") void compactionAfter("manual", "cancelled")
+        forwardOutcome(compactionAfter, "manual", outcome)
       }
     },
   }),
@@ -461,11 +462,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
           overheadTokens: overhead,
           budget: waterlines.budget,
         })
-        // A failed final compaction is announced by its completed event and
-        // forwarded as "failed" — it does not fail the run.
-        if (outcome.status === "applied") void compactionAfter("post-run", "ok")
-        else if (outcome.status === "failed") void compactionAfter("post-run", "failed")
-        else if (outcome.status === "cancelled") void compactionAfter("post-run", "cancelled")
+        forwardOutcome(compactionAfter, "post-run", outcome)
       }
     },
   }),

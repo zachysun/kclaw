@@ -167,7 +167,7 @@ interface QuestionRecord {
  *   verdict nothing will act on. `pending()` additionally prunes entries
  *   whose expiresAt passed.
  *
- * Since the ask_user_questions tool this is a TWO-kind waiting registry:
+ * A TWO-kind waiting registry:
  * confirmations (verdict → tool proceeds or is denied) and questions
  * (answers → the tool result the model reads). Both kinds are one
  * PendingRegistry instance each — same shape, same gateway path (the daemon
