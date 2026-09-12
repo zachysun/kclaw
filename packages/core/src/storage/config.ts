@@ -6,6 +6,7 @@ import type { KclawPaths } from "./paths.js"
 import type { NotifyChannel } from "../notify/notify.js"
 import type { McpServerConfig } from "../mcp/manager.js"
 import { isPermissionMode, type PermissionMode } from "../permissions/modes.js"
+import { validateWaterlineConfig } from "../session/waterlines.js"
 
 /** `sandbox:` section of config.yaml (daemon-level). */
 export interface SandboxConfig {
@@ -103,27 +104,15 @@ export interface KclawConfig {
     compactThreshold?: number
     /** DEPRECATED (v1 compaction, inert): keep newest N messages verbatim. */
     compactKeep?: number
-    /** v2: context token budget. Default 128000 (read site applies ?? default). */
+    /** Context token budget. Default 128000 (resolveContextTokens applies it). */
     contextTokens?: number
-    /** v2: compact when the estimate exceeds budget × ratio (the post-run "yellow" line). Default 0.80. */
+    /** Compaction waterlines (ratios of the budget): defaults and the target < at < ahead < panic ordering are owned by the waterlines module, which also validates them at load time. */
     compactAtRatio?: number
-    /** v2: post-compaction target for the verbatim window (× budget). Default 0.33. */
     compactTargetRatio?: number
-    /** v3: 运行中途检查线（红）。估算水位超过 budget × 此比例即在迭代边界触发中途压缩。缺省 0.90。 */
     compactPanicRatio?: number
-    /**
-     * v4: 预压线（黄线与红线之间）。运行中迭代边界估算水位进入
-     * [compactAheadRatio, compactPanicRatio) 区间且无在飞压缩时，在后台启动
-     * 压缩（不阻塞请求，完成后写入会话元数据、由下一次迭代边界应用）。
-     * 缺省 0.75。
-     */
     compactAheadRatio?: number
-    /**
-     * v4: 省略线。请求组装时工具结果的省略预算 = 预算 × 此比例 − 固定开销
-     * （此前与 compactAtRatio 共用一个值）。缺省 0.70。
-     */
     compactPackRatio?: number
-    /** v2: tool results kept verbatim in the provider view. Default 8. */
+    /** Tool results kept verbatim in the provider view. Default 8 (read site applies it). */
     toolResultKeep?: number
     /** 工具死循环守卫：同一工具调用（同名同参数）连续执行 N 次后，向该次结果附加换策略提醒。0 = 关闭；缺省 5（读取处兜底）。 */
     toolLoopMaxRepeats?: number
@@ -248,6 +237,10 @@ export function loadConfig(paths: KclawPaths): KclawConfig {
     console.warn(`kclaw config: permissions.defaultMode "${String(perms.defaultMode)}" is invalid; falling back to "default"`)
     merged.permissions.defaultMode = "default"
   }
+  // Compaction waterlines: same style — values out of (0,1] or out of order
+  // (target < at < ahead < panic) fall back to the module defaults with one
+  // warning; the pack line is validated independently (decoupled by design).
+  validateWaterlineConfig(merged.sessions)
   return merged
 }
 

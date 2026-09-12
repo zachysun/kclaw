@@ -84,6 +84,51 @@ describe("loadConfig / saveConfig", () => {
     expect(cfg.sessions.compactAtRatio).toBeUndefined()
     expect(cfg.sessions.compactThreshold).toBe(99) // tolerated, inert
   })
+  it("falls invalid waterlines back to defaults with a warning (value out of range)", () => {
+    const paths = resolvePaths(home)
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    writeFileSync(paths.config, ["sessions:", "  compactAtRatio: 1.5"].join("\n"))
+    const cfg = loadConfig(paths)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]![0]).toContain("compact{Target,At,Ahead,Panic}Ratio")
+    expect(cfg.sessions.compactAtRatio).toBeUndefined()
+    expect(cfg.sessions.compactPanicRatio).toBeUndefined()
+  })
+  it("falls inverted waterline order back to defaults (ahead ≥ panic empties the pre-compaction window)", () => {
+    const paths = resolvePaths(home)
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    writeFileSync(paths.config, ["sessions:", "  compactAheadRatio: 0.95"].join("\n"))
+    const cfg = loadConfig(paths)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(cfg.sessions.compactAheadRatio).toBeUndefined()
+    expect(cfg.sessions.compactAtRatio).toBeUndefined()
+  })
+  it("validates compactPackRatio independently of the trigger group", () => {
+    const paths = resolvePaths(home)
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    writeFileSync(paths.config, ["sessions:", "  compactPackRatio: -1", "  compactAtRatio: 0.85"].join("\n"))
+    const cfg = loadConfig(paths)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]![0]).toContain("compactPackRatio")
+    expect(cfg.sessions.compactPackRatio).toBeUndefined()
+    expect(cfg.sessions.compactAtRatio).toBe(0.85)
+  })
+  it("keeps a valid custom waterline configuration untouched", () => {
+    const paths = resolvePaths(home)
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    writeFileSync(paths.config, [
+      "sessions:",
+      "  compactTargetRatio: 0.2",
+      "  compactAheadRatio: 0.5",
+      "  compactAtRatio: 0.7",
+      "  compactPanicRatio: 0.95",
+      "  compactPackRatio: 0.4",
+    ].join("\n"))
+    const cfg = loadConfig(paths)
+    expect(warn).not.toHaveBeenCalled()
+    expect(cfg.sessions.compactAtRatio).toBe(0.7)
+    expect(cfg.sessions.compactPackRatio).toBe(0.4)
+  })
   it("does not share nested references with defaultConfig", () => {
     const pristine = structuredClone(defaultConfig)
     const paths = resolvePaths(home)

@@ -21,6 +21,7 @@ import { collectStreamText } from "../provider/collect.js"
 import type { KclawConfig } from "../storage/config.js"
 import type { ActiveSummary, CompactionState } from "./compaction.js"
 import { chooseBoundary, emergencyBoundary, estimateContextTokens, extractSpillLocators, renderSegment } from "./compaction.js"
+import { resolveWaterlines } from "./waterlines.js"
 import type { SessionStore } from "./store.js"
 
 /**
@@ -307,10 +308,10 @@ export class Compactor {
     const active = prevIdx >= 0 ? history.slice(prevIdx + 1) : history
 
     // Per-run budget override (model contextWindow from resolveContextTokens);
-    // falls back to the config cap, then the 128k default.
+    // falls back to the config cap, then the 128k default. The waterline
+    // schedule (yellow line, target ratio) resolves against the same budget.
     const budget = opts.budget ?? config.sessions.contextTokens ?? 128_000
-    const atRatio = config.sessions.compactAtRatio ?? 0.8
-    const targetRatio = config.sessions.compactTargetRatio ?? 0.33
+    const waterlines = resolveWaterlines(config, budget)
     const manual = opts.manual === true
     const emergency = opts.emergency === true
     const background = opts.background === true
@@ -320,11 +321,14 @@ export class Compactor {
     // 后续流程（两次摘要调用、meta 写入、审计、事件）与普通压缩完全一致。
     // 后台压缩同样豁免：预压线（0.75）低于黄线（0.80），黄线细判会把整个预压
     // 区间的后台压缩静默拦掉，预压形同虚设。
-    if (!manual && !emergency && !background && estimateContextTokens(active, userText, opts.overheadTokens) < budget * atRatio) {
+    // 这里的黄线判定走活跃段口径：预算细判发生在边界切出之后，若压缩会留下的
+    // 部分没过线，压了也无收益——放弃且什么都不丢（收尾钩子的门槛判定则是
+    // 全量历史口径，两处口径差异是承重设计，见 waterlines 模块说明）。
+    if (!manual && !emergency && !background && !waterlines.exceedsActiveSpan("at", estimateContextTokens(active, userText, opts.overheadTokens))) {
       return { summary: prev?.top, upto: prev?.upto, segments: prev?.segments.length ?? 0, active, compacted: false }
     }
 
-    let boundary = chooseBoundary(active, { budget, targetRatio })
+    let boundary = chooseBoundary(active, { budget, targetRatio: waterlines.targetRatio })
     if (boundary === undefined && emergency) {
       // 预算细判不可信时 chooseBoundary 可能切不出边界——强制退守最小可行
       // 上下文：只保留最近一轮用户轮次（emergencyBoundary）。

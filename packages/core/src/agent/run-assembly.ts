@@ -45,6 +45,7 @@ import type { UsageStore } from "../storage/usage.js"
 import type { SessionStore } from "../session/store.js"
 import type { Compactor } from "../session/compactor.js"
 import { estimateTokens } from "../session/compaction.js"
+import { resolveWaterlines } from "../session/waterlines.js"
 import { ConfigPermissionGate, realpathWithin, SessionGrants } from "../permissions/engine.js"
 import { appendDecidedRule, loadDecidedRulesForRun, narrowDecidedRule, projectDecidedRulesPath } from "../storage/decided-rules.js"
 import type { AutoLearnCounter } from "../permissions/auto-learn.js"
@@ -597,14 +598,14 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   const entry = config.providers.entries[entryKey]
   const budget = resolveContextTokens(config, entryKey)
   const maxOutput = entry?.maxOutput
+  // Waterlines resolved once for this run's budget: the request-assembly
+  // omission budget reads the pack line here; the compaction trigger hooks get
+  // the full schedule via the chain deps. The packing budget is DECOUPLED from
+  // the yellow line: the yellow line only gates post-run compaction, the pack
+  // line owns request-assembly omission — loosening the yellow line must not
+  // dilute omission.
+  const waterlines = resolveWaterlines(config, budget)
 
-  // v3/v4 compaction thresholds: the loop's packing budget reads the pack
-  // ratio here; the compaction decision hooks get the yellow/red/ahead lines
-  // via the chain deps (single config source, one read per side). The packing
-  // budget is DECOUPLED from the yellow line: the yellow line only gates
-  // post-run compaction, the pack line (default 0.70) owns request-assembly
-  // omission — loosening the yellow line must not dilute omission.
-  const packRatio = config.sessions.compactPackRatio ?? 0.7
   // Fixed per-request overhead for the compaction/packing judgments: the
   // assembled system prompt plus the wire tool schemas. The trigger estimate
   // anchors on the last assistant's reported inputTokens (already including
@@ -627,7 +628,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     signal: controller.signal,
     runLlm,
     model,
-    budget,
+    waterlines,
     usageStore: engine.deps.usageStore,
     busEmit,
     runIdRef: { get current() { return runId } },
@@ -723,7 +724,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       loopMaxRepeats: config.sessions.toolLoopMaxRepeats,
       // 省略预算（省略线值）透传给打包台：预算装不下的工具输出以省略占位符发送；
       // 固定开销（系统提示词 + 工具定义）先行扣除，打包台只裁决消息内容
-      tokenBudget: Math.max(0, budget * packRatio - contextOverheadRef.current),
+      tokenBudget: Math.max(0, waterlines.pack - contextOverheadRef.current),
       ...(maxOutput === undefined ? {} : { maxTokens: maxOutput }),
       onEvent: (raw) => {
         // Narrow to the distributive form so per-type payload access typechecks.
