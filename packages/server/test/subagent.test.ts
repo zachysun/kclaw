@@ -180,7 +180,6 @@ function makeEnv(llm: LlmClient, patchConfig?: (c: KclawConfig) => void): Subage
     subagents: {
       spawner: host.spawner,
       collector: host.collector,
-      cancelBackgroundForParent: host.cancelBackgroundForParent,
     },
   })
   runRef = manager
@@ -585,7 +584,7 @@ describe("subagent background mode", () => {
     await until(() => sessions.readMessages(childId).some((m) => m.role === "assistant"), "child answer")
   })
 
-  it("cancelBackgroundChildren stops live background children when the parent dies; a settled child notifies '未正常完成'", async () => {
+  it("cancelBackgroundForParent stops live background children when the parent dies; a settled child notifies '未正常完成'", async () => {
     const parentScript = [
       spawnBackgroundTurn("call_1", "永跑任务", "zombie"),
       textTurn("派出去了"),
@@ -599,7 +598,7 @@ describe("subagent background mode", () => {
         yield* parentScript[Math.min(parentCalls++, parentScript.length - 1)]!
       },
     }
-    const { sessions, manager } = makeEnv(llm)
+    const { sessions, manager, host } = makeEnv(llm)
     const parent = sessions.create("主线")
 
     const outcome = await manager.enqueue(parent.id, { userText: "后台永跑", trigger: "user" })
@@ -610,13 +609,55 @@ describe("subagent background mode", () => {
     const childId = sessions.listByParent(parent.id)[0]!.id
     await until(() => sessions.readMessages(childId).length > 0, "child run started")
 
-    expect(manager.cancelBackgroundChildren(parent.id)).toBe(1)
+    expect(host.cancelBackgroundForParent(parent.id)).toBe(1)
     // Give the outcome a beat to settle, then check the failure notice.
     await until(() => {
       const msgs = sessions.readMessages(parent.id).filter((m) => m.role === "assistant")
       const last = msgs.at(-1)
       return last !== undefined && last.blocks[0]!.type === "note" && (last.blocks[0] as { text: string }).text.includes("未正常完成")
     }, "failure notice", 8_000)
+  }, 20_000)
+
+  it("前台子代理完成不清掉后台记录：两种模式各记各的账", async () => {
+    // 同一父会话先后派一个后台子代理（永跑）和一个前台子代理（立刻完成）。
+    // 前台的收尾绝不能影响后台的记录——级联取消必须仍能找到后台孩子。
+    // （曾经双份按父分组的账本让收尾误删对方的记录，级联取消扑空。）
+    const parentScript = [
+      spawnBackgroundTurn("call_1", "永跑任务", "bg"),
+      spawnTurn("call_2", "快速任务"),
+      textTurn("都派出去了"),
+    ]
+    let parentCalls = 0
+    let childCalls = 0
+    const llm: LlmClient = {
+      async *stream(req) {
+        // 子代理的精简提示词里没有任务文本以外的区分——借首条 user 消息里的
+        // 任务名分流：前台孩子立刻完成，后台孩子永跑（只有级联取消能终结）。
+        if (req.system.includes("子代理")) {
+          childCalls++
+          if (JSON.stringify(req.messages).includes("快速任务")) yield* [textTurn("干完了")]
+          else await new Promise<never>(() => {})
+          return
+        }
+        yield* parentScript[Math.min(parentCalls++, parentScript.length - 1)]!
+      },
+    }
+    const { sessions, manager, host } = makeEnv(llm)
+    const parent = sessions.create("主线")
+
+    // 派发是阻塞式的：run 完成即前台子代理（连同它的记账收尾）已结束
+    const outcome = await manager.enqueue(parent.id, { userText: "一前一后", trigger: "user" })
+    expect(outcome.stopReason).toBe("end_turn")
+
+    // 前台已收尾；后台仍在册——级联取消恰好找到它并终结
+    expect(host.cancelBackgroundForParent(parent.id)).toBe(1)
+    await until(() => {
+      const msgs = sessions.readMessages(parent.id).filter((m) => m.role === "assistant")
+      const last = msgs.at(-1)
+      return last !== undefined && last.blocks[0]!.type === "note" && (last.blocks[0] as { text: string }).text.includes("未正常完成")
+    }, "failure notice", 8_000)
+    // 收尾后账本彻底清空
+    expect(host.cancelBackgroundForParent(parent.id)).toBe(0)
   }, 20_000)
 })
 

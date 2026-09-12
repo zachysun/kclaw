@@ -170,7 +170,7 @@ export const defaultConfig: KclawConfig = {
   notify: { channels: [], timeoutMs: 10_000 },
   usage: { prices: {} },
   mcp: { servers: {} },
-  subagents: { maxConcurrent: 4 },
+  subagents: { maxConcurrent: 4, maxBackground: 4 },
   workspace: process.cwd(),
 }
 
