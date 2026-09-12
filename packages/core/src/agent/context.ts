@@ -31,6 +31,14 @@ function escapeClosingTag(text: string, tag: string): string {
   return text.replaceAll(`</${tag}>`, `<\\/${tag}>`)
 }
 
+/**
+ * 省略预算再紧也无条件保留的最新工具结果条数。省略占位符指示"重新调用
+ * 获取"，若当轮输出也被省略，重调的新结果同样被省略，模型对工具彻底
+ * 致盲且易绕死循环；保底这几条让模型始终看得到最近发生了什么。突破
+ * 省略线的是常量上界（工具输出在上游有尺寸截断），不会随历史增长。
+ */
+const GUARANTEED_TOOL_RESULTS = 2
+
 /** 把系统备注文本包成 <system-reminder> 标签（kind 属性 = NoteKind）。 */
 export function renderReminder(kind: string, text: string): string {
   return `<${REMINDER_TAG} kind="${kind}">${escapeClosingTag(text, REMINDER_TAG)}</${REMINDER_TAG}>`
@@ -83,8 +91,9 @@ export function toProviderMessages(
       }
     }
     acc += results.slice(capped.length).length * 30
-    // 最新→最旧逐条装：装得下保留，装不下（含它之后全部）省略
-    for (const r of capped) {
+    // 最新→最旧逐条装：装得下保留，装不下省略；最新 K 条无条件保留（保底可见性）
+    for (const [idx, r] of capped.entries()) {
+      if (idx < GUARANTEED_TOOL_RESULTS) continue
       const t = estimateTokens(r.output)
       if (acc + t > opts.tokenBudget) evict.add(r.callId)
       else acc += t
