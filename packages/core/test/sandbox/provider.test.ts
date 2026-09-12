@@ -160,6 +160,9 @@ describe("macOS seatbelt smoke", { skip: !isMac }, () => {
 
       const homeWrite = await runIn(sb, `echo evil > ${join(home, "evil.txt")}`, ws)
       expect(homeWrite.status).not.toBe(0)
+      // side-effect check, not just the exit code: the write must not have
+      // landed anywhere
+      expect(existsSync(join(home, "evil.txt"))).toBe(false)
 
       // network stack stays open (v1 decision): creating a socket works
       const net = await runIn(sb, "python3 -c \"import socket; socket.socket().close(); print('net-ok')\"", ws)
@@ -237,6 +240,9 @@ describe("linux bwrap smoke", { skip: !isLinux || !linuxHasBwrap }, () => {
 
       const homeWrite = await runIn(sb, `echo evil > ${join(home, "evil.txt")}`, ws)
       expect(homeWrite.status).not.toBe(0)
+      // side-effect check, not just the exit code: the write must not have
+      // landed anywhere
+      expect(existsSync(join(home, "evil.txt"))).toBe(false)
     } finally {
       rmSync(ws, { recursive: true, force: true })
       rmSync(home, { recursive: true, force: true })

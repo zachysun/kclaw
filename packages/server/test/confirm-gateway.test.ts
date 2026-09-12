@@ -12,7 +12,7 @@
  * show exactly one of each event, never a duplicate from the broker side.
  */
 import { describe, it, expect, afterEach } from "vitest"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AddressInfo } from "node:net"
@@ -24,6 +24,7 @@ import type {
   KclawConfig,
   KclawPaths,
   LlmClient,
+  LlmRequest,
   LlmStreamEvent,
   MemorySystem,
   ToolCallBlock,
@@ -255,6 +256,21 @@ async function waitFor(frames: Frame[], pred: (f: Frame) => boolean, timeoutMs =
     const found = frames.find(pred)
     if (found !== undefined) return found
     if (Date.now() > deadline) throw new Error(`frame not observed within ${timeoutMs}ms`)
+    await sleep(5)
+  }
+}
+
+/**
+ * The Nth confirmation.requested event (0-based), waiting only for events
+ * BEYOND the ones already seen — unlike waitFor, this cannot match a frame
+ * from an earlier run of the same script.
+ */
+async function waitRequested(frames: Frame[], index: number, timeoutMs = 5000): Promise<ConfirmationRequestedPayload> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const events = frames.filter(isAgentEvent).filter((e) => e.type === "confirmation.requested")
+    if (events.length > index) return events[index]!.payload as ConfirmationRequestedPayload
+    if (Date.now() > deadline) throw new Error(`confirmation.requested #${index} not observed within ${timeoutMs}ms`)
     await sleep(5)
   }
 }
@@ -537,6 +553,39 @@ describe("confirmation gateway over /ws", () => {
     const globalRules = loadDecidedRules(join(env.paths.home, "permissions.yaml"))
     expect(globalRules).toHaveLength(1)
     expect(globalRules[0]!.rule).toBe("exec:git fetch*")
+  }, 30_000)
+
+  it("a verdict arriving after the run aborted persists no decided rule", async () => {
+    const { env, url } = await makeGateway(
+      scriptClient([execToolTurn("call_1", "git push origin main"), textTurn("完成")]),
+    )
+    const session = env.sessions.create("中止迟到判决会话")
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await waitFor(frames, (f) => f.type === "subscribed")
+
+    const run = env.manager.enqueue(session.id, { userText: "执行 git 操作", trigger: "user" })
+
+    const requested = (await waitFor(frames, (f) => f.type === "confirmation.requested")) as AgentEvent
+    const confirmationId = (requested.payload as ConfirmationRequestedPayload).confirmationId
+
+    // the user cancels the run while the confirmation is still pending
+    ws.send(JSON.stringify({ type: "run.cancel", sessionId: session.id }))
+    await waitFor(frames, (f) => f.type === "run_cancel_ack")
+    await run
+
+    // the late "always allow" finds no live confirmation: the abort expired
+    // the broker entry, so the gateway errors instead of acking a verdict
+    // nothing will act on
+    ws.send(JSON.stringify({ type: "confirmation.resolve", confirmationId, decision: "project" }))
+    await waitFor(frames, (f) => f.type === "error" && f.message === "unknown confirmation")
+
+    // and the verdict wrote NOTHING: no project rule file was even created,
+    // and the global file stays empty
+    expect(existsSync(join(env.config.workspace, ".kclaw", "permissions.yaml"))).toBe(false)
+    expect(loadDecidedRules(join(env.paths.home, "permissions.yaml"))).toHaveLength(0)
   }, 30_000)
 
   it("auto mode inducts a source:'auto' project rule after N consecutive once approvals", async () => {
@@ -932,4 +981,71 @@ describe("sessionGrants run 级接线", () => {
     const events = frames.filter(isAgentEvent)
     expect(events.filter((e) => e.type === "confirmation.requested")).toHaveLength(2)
   }, 30_000)
+
+  it("a once grant dies with its run: the NEXT run re-confirms the same call", async () => {
+    const { env, url } = await makeGateway(
+      scriptClient([
+        execToolTurn("call_1", "git push origin main"),
+        textTurn("第一轮完成"),
+        execToolTurn("call_1", "git push origin main"),
+        textTurn("第二轮完成"),
+      ]),
+    )
+    const session = env.sessions.create("豁免不跨轮会话")
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await waitFor(frames, (f) => f.type === "subscribed")
+
+    // two identical runs over the same call: each asks once. A grant that
+    // outlived its run would silently auto-pass the second one.
+    for (let round = 0; round < 2; round++) {
+      const run = env.manager.enqueue(session.id, { userText: "执行 git 操作", trigger: "user" })
+      const requested = await waitRequested(frames, round)
+      ws.send(JSON.stringify({
+        type: "confirmation.resolve",
+        confirmationId: requested.confirmationId,
+        decision: "once",
+      }))
+      await run
+    }
+
+    const events = frames.filter(isAgentEvent)
+    expect(events.filter((e) => e.type === "confirmation.requested")).toHaveLength(2)
+  }, 30_000)
+})
+
+describe("readonly tool visibility", () => {
+  it("a readonly run shows the model no sensitive tool; safe tools stay listed", async () => {
+    const seen: string[][] = []
+    const inner = scriptClient([textTurn("好")])
+    const llm: LlmClient = {
+      async *stream(req: LlmRequest): AsyncIterable<LlmStreamEvent> {
+        seen.push(req.tools.map((d) => d.name))
+        yield* inner.stream(req)
+      },
+    }
+    const { env, url } = await makeGateway(llm)
+    const session = env.sessions.create("只读可见性会话")
+    env.sessions.updateMeta(session.id, { mode: "readonly" })
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await waitFor(frames, (f) => f.type === "subscribed")
+
+    await env.manager.enqueue(session.id, { userText: "你好", trigger: "user" })
+
+    expect(seen.length).toBeGreaterThan(0)
+    for (const names of seen) {
+      // every tool the readonly gate would deny wholesale is gone from the
+      // model's view (sensitive today: exec, fs_write, fs_edit)
+      expect(names).not.toContain("exec")
+      expect(names).not.toContain("fs_write")
+      expect(names).not.toContain("fs_edit")
+      // safe tools the gate would allow stay visible
+      expect(names).toContain("fs_read")
+    }
+  })
 })
