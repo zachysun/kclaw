@@ -70,7 +70,7 @@ describe("Compactor 结构化 spill 指针", () => {
       const calls: LlmRequest[] = []
 
       const out = await compactor.compact(session.id, history, "", config, stubSummarizer(calls), "mock-model")
-      expect(out.compacted).toBe(true)
+      expect(out.status).toBe("applied")
 
       const [record] = sessions.readCompactions(session.id)
       expect(record.segmentSummary).toContain(LOCATOR_A)

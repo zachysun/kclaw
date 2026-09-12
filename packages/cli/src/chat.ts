@@ -247,6 +247,18 @@ export async function resolveSessionId(client: KclawClient, session: string | un
   return session
 }
 
+/** Run an @clack prompt with our readline paused (@clack owns the terminal while it runs). */
+async function withPausedInput<T>(ctx: ChatCtx, fn: () => Promise<T>): Promise<T> {
+  ctx.inputPaused = true
+  ctx.rl.pause() // @clack owns the terminal while our readline sits quiet
+  try {
+    return await fn()
+  } finally {
+    ctx.inputPaused = false
+    ctx.rl.resume()
+  }
+}
+
 /** Print the risk summary, collect the verdict (flags or @clack), send confirmation.resolve. */
 async function handleConfirmation(p: ConfirmationRequestedPayload, ctx: ChatCtx): Promise<void> {
   line(`⚠ ${p.toolCall.name} ${p.toolCall.argsJson} · 风险 ${p.risk} · 过期 ${p.expiresAt}`, ctx)
@@ -259,24 +271,20 @@ async function handleConfirmation(p: ConfirmationRequestedPayload, ctx: ChatCtx)
     line(dim("[--no] 已自动拒绝"), ctx)
     decision = "reject"
   } else {
-    ctx.inputPaused = true
-    ctx.rl.pause() // @clack owns the terminal while our readline sits quiet
     let answer: ConfirmationDecision | symbol
     try {
-      answer = await select<ConfirmationDecision>({
-        message: "如何处置?",
-        options: [
-          { value: "once", label: "允许（仅本次）" },
-          { value: "project", label: "总是允许（本项目）" },
-          { value: "global", label: "总是允许（全局）" },
-          { value: "reject", label: "拒绝" },
-        ],
-      })
+      answer = await withPausedInput(ctx, () =>
+        select<ConfirmationDecision>({
+          message: "如何处置?",
+          options: [
+            { value: "once", label: "允许（仅本次）" },
+            { value: "project", label: "总是允许（本项目）" },
+            { value: "global", label: "总是允许（全局）" },
+            { value: "reject", label: "拒绝" },
+          ],
+        }))
     } catch {
       answer = "reject"
-    } finally {
-      ctx.inputPaused = false
-      ctx.rl.resume()
     }
     if (isCancel(answer)) {
       line(dim("已取消，默认拒绝"), ctx)
@@ -295,37 +303,35 @@ async function handleConfirmation(p: ConfirmationRequestedPayload, ctx: ChatCtx)
 /** Collect the answers for one pending question (options → arrows+enter, free text → typed line). */
 async function handleQuestion(p: QuestionRequestedPayload, ctx: ChatCtx): Promise<void> {
   line(`❓ ${p.questions.length} 个问题待回答${p.noteText === undefined ? "" : dim(` · ${p.noteText}`)}`, ctx)
-  const answers: string[][] = []
-  ctx.inputPaused = true
-  ctx.rl.pause() // @clack owns the terminal while our readline sits quiet
-  try {
-    for (const q of p.questions) {
-      if (Array.isArray(q.options) && q.options.length > 0) {
-        if (q.multiSelect === true) {
-          const picked = await multiselect<string>({
-            message: q.text,
-            options: q.options.map((o) => ({ value: o, label: o })),
-            required: false,
-          })
-          answers.push(isCancel(picked) ? [] : [...picked])
+  const answers: string[][] = await withPausedInput(ctx, async () => {
+    const collected: string[][] = []
+    try {
+      for (const q of p.questions) {
+        if (Array.isArray(q.options) && q.options.length > 0) {
+          if (q.multiSelect === true) {
+            const picked = await multiselect<string>({
+              message: q.text,
+              options: q.options.map((o) => ({ value: o, label: o })),
+              required: false,
+            })
+            collected.push(isCancel(picked) ? [] : [...picked])
+          } else {
+            const picked = await select<string>({
+              message: q.text,
+              options: q.options.map((o) => ({ value: o, label: o })),
+            })
+            collected.push(isCancel(picked) ? [] : [picked])
+          }
         } else {
-          const picked = await select<string>({
-            message: q.text,
-            options: q.options.map((o) => ({ value: o, label: o })),
-          })
-          answers.push(isCancel(picked) ? [] : [picked])
+          const typed = await text({ message: q.text, placeholder: "回车跳过" })
+          collected.push(isCancel(typed) || typeof typed !== "string" ? [] : typed.trim() === "" ? [] : [typed])
         }
-      } else {
-        const typed = await text({ message: q.text, placeholder: "回车跳过" })
-        answers.push(isCancel(typed) || typeof typed !== "string" ? [] : typed.trim() === "" ? [] : [typed])
       }
+    } catch {
+      collected.push(...p.questions.slice(collected.length).map(() => []))
     }
-  } catch {
-    answers.push(...p.questions.slice(answers.length).map(() => []))
-  } finally {
-    ctx.inputPaused = false
-    ctx.rl.resume()
-  }
+    return collected
+  })
   try {
     ctx.ws.send({ type: "question.resolve", questionId: p.questionId, answers })
   } catch {

@@ -2,10 +2,10 @@
 
 ## 职责
 
-`packages/core/src/sandbox/provider.ts` 的 `createExecSandbox` 是 exec 沙箱的专门模块：给 `exec` 工具的子进程套一层操作系统沙箱，作为权限确认之下的纵深防御（多层防线：一层失守还有下一层）——命令即使获准运行，也被限制在受控范围内（模型被提示词注入攻击时，人工确认挡不住命令内部的动作，沙箱保底）。模块只做两件事：**平台可用性探测** 与 **spawn 包装**，不做任何业务判定——"沙箱化是否免审"归权限引擎（`permissions/engine.ts` 的 `sandboxAvailable` 输入），由 run 装配（core `executeRun`）用同一次探测结果喂给两个消费方：
+`packages/core/src/sandbox/provider.ts` 的 `createExecSandbox` 是 exec 沙箱的专门模块：给 `exec` 工具的子进程套一层操作系统沙箱，作为权限确认之下的纵深防御（多层防线：一层失守还有下一层）——命令即使获准运行，也被限制在受控范围内（模型被提示词注入攻击时，人工确认挡不住命令内部的动作，沙箱保底）。模块只做两件事：**平台可用性探测** 与 **spawn 包装**，不做任何业务判定——"沙箱化是否免审"归权限引擎（`permissions/engine.ts` 由被包裹工具集推导可用性），由 run 装配（core `executeRun`）用同一次探测结果喂给两个消费方：
 
 1. `createBuiltinTools` 的 `exec.sandbox`（只有可用才注入，exec 工具本身不探测平台）；
-2. `ConfigPermissionGate` 的 `sandboxAvailable`（命令类工具无规则命中时 `allow {reason:"sandboxed"}`）。
+2. `ConfigPermissionGate` 的 `sandboxedTools` 集合（集合非空即沙箱可用：命令类工具无规则命中时 `allow {reason:"sandboxed"}`）。
 
 单一来源保证 **"sandboxed" 放行的命令必然真被沙箱包住**，反之沙箱不可用时 exec 维持人工确认（fail-closed：出问题落到更安全的一侧，绝不放行裸跑）。
 
@@ -29,7 +29,7 @@ export function createExecSandbox(
 ): ExecSandbox
 ```
 
-exec 工具消费的最小面（`tools/exec.ts` 的 `ExecSandboxSpawn`）只有 `spawn`；`createExecSandbox` 的返回值同时满足它（可用时）与 gate 的可用性布尔。
+exec 工具消费的最小面（`tools/exec.ts` 的 `ExecSandboxSpawn`）只有 `spawn`；`createExecSandbox` 的返回值同时满足它（可用时）与 gate 侧的被包裹工具集。
 
 ## 平台布局
 
@@ -55,7 +55,7 @@ bwrap 不可用 → 不可用（回落人工确认）
 - 探测在每 run 装配做一次；`bwrap --die-with-parent true` 验证 user namespaces 真的可用（而非只找到二进制）。
 - **Landlock 保底是后续项**：纯 Node 无法发起 `landlock_create_ruleset` syscall，也没有成熟 CLI 包装工具。降级为"不可用 → 人工确认"是 fail-closed 方向，安全不降级。
 - macOS 的 `sandbox-exec` 被 Apple 标注 deprecated 但当前系统仍可用；长期迁移 libsandbox C API 不属本批。
-- `sandbox.enabled: false` 关闭整个特性：exec 恢复裸跑、gate 的 `sandboxAvailable` 为 false（所有 exec 走既有判定链）。
+- `sandbox.enabled: false` 关闭整个特性：exec 恢复裸跑、gate 的被包裹工具集为空（所有 exec 走既有判定链）。
 
 ## 配置
 

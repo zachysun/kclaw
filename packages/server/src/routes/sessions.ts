@@ -15,6 +15,12 @@ export interface SessionStores {
    * (same behavior as a project without memory assembled).
    */
   memory?: MemorySystem
+  /**
+   * Cancel every live BACKGROUND subagent of one parent session (the
+   * subagent host's live records, injected by createApp). Missing →
+   * delete/purge skip the cancellation half.
+   */
+  cancelBackgroundForParent?: (parentSessionId: string) => number
 }
 
 const NOT_FOUND = { error: "session not found" } as const
@@ -110,7 +116,7 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       // Cancel-first: live BACKGROUND subagents of this parent die with it
       // (issue #22) — the soft-delete cascade below then removes their
       // sessions, so nothing keeps running orphaned.
-      stores.run?.cancelBackgroundChildren(id)
+      stores.cancelBackgroundForParent?.(id)
       // Cascade: a parent's children (subagent sessions) are soft-deleted with
       // it — no orphans in the recycle bin. Already-deleted children keep
       // their original deletedAt (listByParent includes them; skip those).
@@ -132,7 +138,7 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       // Cancel-first mirrors the delete route (background children die with
       // their parent); then the purge cascade (children are soft-deleted with
       // their parent, so both die together here).
-      stores.run?.cancelBackgroundChildren(id)
+      stores.cancelBackgroundForParent?.(id)
       for (const child of stores.sessions.listByParent(id)) {
         stores.sessions.purge(child.id)
       }

@@ -10,8 +10,9 @@
  * current run (the daemon's cancelCompaction forwards here).
  *
  * Relocated verbatim from server/src/run.ts (#compactV2 / #runAutoCompaction,
- * card ① engine relocation): prompts byte-identical, event order identical,
- * the "throw = compaction did not happen" contract identical.
+ * card ① engine relocation): prompts byte-identical, event order identical.
+ * A compaction that did not happen is answered with a named CompactionOutcome
+ * (declined/failed/cancelled), never with data that looks like a view.
  */
 import type { AgentEvent, CompactionPhase } from "../protocol/events.js"
 import { makeEvent } from "../protocol/events.js"
@@ -21,6 +22,7 @@ import { collectStreamText } from "../provider/collect.js"
 import type { KclawConfig } from "../storage/config.js"
 import type { ActiveSummary, CompactionState } from "./compaction.js"
 import { chooseBoundary, emergencyBoundary, estimateContextTokens, extractSpillLocators, renderSegment } from "./compaction.js"
+import { resolveWaterlines } from "./waterlines.js"
 import type { SessionStore } from "./store.js"
 
 /**
@@ -52,6 +54,25 @@ export interface CompactorDeps {
    */
   emit: (e: AgentEvent) => void
 }
+
+/**
+ * The four ways a compaction attempt can conclude — compact() and auto()
+ * answer with this instead of collapsing "nothing happened" into one null:
+ * - applied — a new view exists: upto/top name it, segments counts the merged
+ *   segment summaries, active is the span the view keeps in full.
+ * - declined — nothing wrong, nothing worth doing: the waterline fine-check
+ *   saw no benefit or no viable boundary existed. Nothing written, no events.
+ * - failed — a summarizer call broke. The completed event carried "failed",
+ *   the error is logged once here and returned for callers that must surface
+ *   it (the daemon's manual endpoint rethrows).
+ * - cancelled — the signal aborted mid-flight: the run is being torn down,
+ *   the attempt is swallowed by design. Nothing was written.
+ */
+export type CompactionOutcome =
+  | { status: "applied"; upto: string; top: string; segments: number; active: Message[] }
+  | { status: "declined" }
+  | { status: "failed"; error: unknown }
+  | { status: "cancelled" }
 
 export class Compactor {
   readonly #deps: CompactorDeps
@@ -213,8 +234,8 @@ export class Compactor {
           ...(opts.overheadTokens === undefined ? {} : { overheadTokens: opts.overheadTokens }),
           ...(opts.budget === undefined ? {} : { budget: opts.budget }),
         })
-        if (out.compacted && out.upto !== undefined) {
-          this.#parked.set(sessionId, { upto: out.upto, top: out.summary ?? "" })
+        if (out.status === "applied") {
+          this.#parked.set(sessionId, { upto: out.upto, top: out.top })
         }
       } catch (err) {
         console.error("kclaw compaction (background) failed:", err)
@@ -229,12 +250,11 @@ export class Compactor {
   /**
    * 自动压缩装配：中途钩子、超限钩子与收尾压缩共用。
    * 独立 AbortController 登记 #inFlight（cancel 掐它），并监听
-   * run 的 signal——run 中止顺带掐压缩;finally 清理。取消标记或 run signal 已
-   * 中止时不开工（三路统一入口,manual 路径不经此——emergency 因此永远不会与
-   * manual 组合)。任何异常打一行 `kclaw compaction (phase) failed:` 后返回
-   * null（钩子侧"压缩失败不补救",真失败的 started/completed 与第一行日志
-   * 已由 compact 发出/记录）。压缩成功返回新视图 { upto, top },水位不够
-   * 或无可压缩边界时 compact 返回 compacted:false → null。
+   * run 的 signal——run 中止顺带掐压缩；finally 清理。取消标记或 run signal 已
+   * 中止时不开工，回答 cancelled（三路统一入口，manual 路径不经此——
+   * emergency 因此永远不会与 manual 组合）。压缩结论原样转发 compact() 的
+   * CompactionOutcome：applied/declined/failed/cancelled 四值具名，触发钩子
+   * 据此分支、compaction-after 链据此如实转发，不再从 null 里猜。
    */
   async auto(
     sessionId: string,
@@ -243,26 +263,20 @@ export class Compactor {
     llm: LlmClient,
     model: string,
     opts: { phase: CompactionPhase; signal?: AbortSignal; emergency?: boolean; overheadTokens?: number; budget?: number },
-  ): Promise<ActiveSummary | null> {
-    if (this.#cancelled.has(sessionId) || opts.signal?.aborted === true) return null
+  ): Promise<CompactionOutcome> {
+    if (this.#cancelled.has(sessionId) || opts.signal?.aborted === true) return { status: "cancelled" }
     const ctrl = new AbortController()
     this.#inFlight.set(sessionId, ctrl)
     const onAbort = (): void => { ctrl.abort() }
     opts.signal?.addEventListener("abort", onAbort, { once: true })
     try {
-      const out = await this.compact(sessionId, history, "", config, llm, model, {
+      return await this.compact(sessionId, history, "", config, llm, model, {
         phase: opts.phase,
         signal: ctrl.signal,
         ...(opts.emergency === true ? { emergency: true } : {}),
         ...(opts.overheadTokens === undefined ? {} : { overheadTokens: opts.overheadTokens }),
         ...(opts.budget === undefined ? {} : { budget: opts.budget }),
       })
-      return out.compacted && out.upto !== undefined
-        ? { upto: out.upto, top: out.summary ?? "" }
-        : null
-    } catch (err) {
-      console.error(`kclaw compaction (${opts.phase}) failed:`, err)
-      return null
     } finally {
       opts.signal?.removeEventListener("abort", onAbort)
       if (this.#inFlight.get(sessionId) === ctrl) this.#inFlight.delete(sessionId)
@@ -271,22 +285,22 @@ export class Compactor {
   }
 
   /**
-   * layered compaction. Trigger: estimate ≥ budget×ratio, or a
-   * manual focus. Two tool-less LLM calls (segment summary, top merge), then
-   * ONE meta write — no state lands unless both calls succeed, so a throw
-   * anywhere equals "compaction did not happen" and the caller falls back to
+   * layered compaction. Trigger: estimate ≥ budget×ratio, or a manual focus.
+   * Two tool-less LLM calls (segment summary, top merge), then ONE meta
+   * write — no state lands unless both calls succeed, so a summarizer
+   * failure equals "compaction did not happen" and the caller falls back to
    * the full history. The segment index write and the audit append are
    * best-effort (logged, never fatal).
    *
-   * v3 additions: `phase` names the trigger stage (started/completed events
-   * carry it; the audit trigger maps manual → "manual", phase "in-run" →
-   * "in-run", else "auto"), `emergency` flags the over-limit rescue in the
-   * audit record, and `signal` makes both summarizer calls abortable.
-   * completed is GUARANTEED once started has fired: ok on success, "failed"
-   * on a throw (rethrown to the caller — "throw = compaction did not
-   * happen" — and logged here exactly once), "cancelled" when the signal
-   * aborted (swallowed — the run is being torn down, not failing). Below the
-   * water mark or without a boundary, NEITHER event fires (nothing began).
+   * `phase` names the trigger stage (started/completed events carry it; the
+   * audit trigger maps manual → "manual", phase "in-run" → "in-run", else
+   * "auto"), `emergency` flags the over-limit rescue in the audit record, and
+   * `signal` makes both summarizer calls abortable. completed is GUARANTEED
+   * once started has fired: result "ok" on success, "failed" on a summarizer
+   * failure (returned as the failed outcome — logged here exactly once),
+   * "cancelled" when the signal aborted (swallowed — the run is being torn
+   * down, cancellation is not a failure). Below the water mark or without a
+   * boundary, NEITHER event fires (nothing began) — the declined outcome.
    */
   async compact(
     sessionId: string,
@@ -296,7 +310,7 @@ export class Compactor {
     runLlm: LlmClient,
     model: string,
     opts: { focus?: string; manual?: boolean; background?: boolean; phase?: CompactionPhase; signal?: AbortSignal; emergency?: boolean; overheadTokens?: number; budget?: number } = {},
-  ): Promise<{ summary?: string; upto?: string; segments: number; active: Message[]; compacted: boolean }> {
+  ): Promise<CompactionOutcome> {
     const { sessions } = this.#deps
     const meta = sessions.meta(sessionId)
     const prev: CompactionState | undefined = meta?.compaction ??
@@ -307,10 +321,10 @@ export class Compactor {
     const active = prevIdx >= 0 ? history.slice(prevIdx + 1) : history
 
     // Per-run budget override (model contextWindow from resolveContextTokens);
-    // falls back to the config cap, then the 128k default.
+    // falls back to the config cap, then the 128k default. The waterline
+    // schedule (yellow line, target ratio) resolves against the same budget.
     const budget = opts.budget ?? config.sessions.contextTokens ?? 128_000
-    const atRatio = config.sessions.compactAtRatio ?? 0.8
-    const targetRatio = config.sessions.compactTargetRatio ?? 0.33
+    const waterlines = resolveWaterlines(config, budget)
     const manual = opts.manual === true
     const emergency = opts.emergency === true
     const background = opts.background === true
@@ -320,11 +334,14 @@ export class Compactor {
     // 后续流程（两次摘要调用、meta 写入、审计、事件）与普通压缩完全一致。
     // 后台压缩同样豁免：预压线（0.75）低于黄线（0.80），黄线细判会把整个预压
     // 区间的后台压缩静默拦掉，预压形同虚设。
-    if (!manual && !emergency && !background && estimateContextTokens(active, userText, opts.overheadTokens) < budget * atRatio) {
-      return { summary: prev?.top, upto: prev?.upto, segments: prev?.segments.length ?? 0, active, compacted: false }
+    // 这里的黄线判定走活跃段口径：预算细判发生在边界切出之后，若压缩会留下的
+    // 部分没过线，压了也无收益——放弃且什么都不丢（收尾钩子的门槛判定则是
+    // 全量历史口径，两处口径差异是承重设计，见 waterlines 模块说明）。
+    if (!manual && !emergency && !background && !waterlines.exceedsActiveSpan("at", estimateContextTokens(active, userText, opts.overheadTokens))) {
+      return { status: "declined" }
     }
 
-    let boundary = chooseBoundary(active, { budget, targetRatio })
+    let boundary = chooseBoundary(active, { budget, targetRatio: waterlines.targetRatio })
     if (boundary === undefined && emergency) {
       // 预算细判不可信时 chooseBoundary 可能切不出边界——强制退守最小可行
       // 上下文：只保留最近一轮用户轮次（emergencyBoundary）。
@@ -332,7 +349,7 @@ export class Compactor {
       if (forced !== undefined) boundary = { keepFrom: forced }
     }
     if (boundary === undefined) {
-      return { summary: prev?.top, upto: prev?.upto, segments: prev?.segments.length ?? 0, active, compacted: false }
+      return { status: "declined" }
     }
 
     const phase = opts.phase ?? (manual ? "manual" : "post-run")
@@ -400,22 +417,23 @@ export class Compactor {
       // writes nothing, so a parked view stays current and its consumer's
       // fallback (mid-run-panic's `next ?? settled`) remains real.
       this.#parked.delete(sessionId)
-      return { summary: top, upto, segments: nextSegments.length, active: active.slice(boundary.keepFrom), compacted: true }
+      return { status: "applied", upto, top, segments: nextSegments.length, active: active.slice(boundary.keepFrom) }
     } catch (err) {
       // An aborted signal turns any throw into "cancelled": the run is being
       // torn down, the summarizer call was cut mid-flight — report that (and
       // swallow: cancellation is not a failure). Everything else is a real
-      // failure: announce it, log it ONCE here, and rethrow — the caller's
-      // "throw = compaction did not happen" contract is unchanged.
+      // failure: announce it, log it ONCE here, and answer failed with the
+      // error attached — callers that must surface it (the daemon's manual
+      // endpoint) rethrow.
       const cancelled = opts.signal?.aborted === true
       this.#deps.emit(
         makeEvent("compaction.completed", { segments: 0, kept: 0, phase, result: cancelled ? "cancelled" : "failed" }, { sessionId }),
       )
       if (cancelled) {
-        return { summary: prev?.top, upto: prev?.upto, segments: prev?.segments.length ?? 0, active, compacted: false }
+        return { status: "cancelled" }
       }
-      console.error("kclaw compaction failed:", err)
-      throw err
+      console.error(`kclaw compaction (${phase}) failed:`, err)
+      return { status: "failed", error: err }
     }
   }
 }

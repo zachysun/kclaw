@@ -481,15 +481,6 @@ export interface ConfigPermissionGateOptions {
    */
   decidedRules?: string[]
   /**
-   * Whether the exec sandbox is available (the run assembly derives this from
-   * the sandbox provider's probe, single source with the exec tool's actual
-   * wrapper). When true, a command-class tool that would otherwise fall to
-   * confirm auto-passes with reason "sandboxed" — the sandbox, not a human,
-   * is the approval. Never overrides deny/rules; readonly still
-   * short-circuits everything above.
-   */
-  sandboxAvailable?: boolean
-  /**
    * User-facing explanation shown on the confirmation when a command falls
    * back to confirm BECAUSE the sandbox is unavailable (enabled in config but
    * the platform probe failed). Absent when the sandbox is simply disabled by
@@ -498,9 +489,12 @@ export interface ConfigPermissionGateOptions {
   sandboxUnavailableNote?: string
   /**
    * Tools whose executor the run assembly actually wrapped in the OS sandbox
-   * (exec today). The "sandboxed" auto-pass must never claim a tool is
-   * sandboxed when its execution is not wrapped — a schema-`command` adapter
-   * tool would otherwise ride the trusted no-prompt tier unsandboxed.
+   * (exec today). This set doubles as the availability fact: sandbox
+   * availability means "at least one tool is actually wrapped" — the
+   * "sandboxed" auto-pass must never claim a tool is sandboxed when its
+   * execution is not wrapped, and a wrapped tool implies the probe
+   * succeeded. A schema-`command` adapter tool would otherwise ride the
+   * trusted no-prompt tier unsandboxed.
    */
   sandboxedTools?: ReadonlySet<string>
 }
@@ -548,7 +542,7 @@ export class ConfigPermissionGate implements PermissionGate {
     this.#newConfirmationId = opts.newConfirmationId ?? (() => newId("conf"))
     this.#workspace = opts.workspace
     this.#readRoots = opts.readRoots ?? []
-    this.#sandboxAvailable = opts.sandboxAvailable ?? false
+    this.#sandboxAvailable = (opts.sandboxedTools?.size ?? 0) > 0
     this.#sandboxUnavailableNote = opts.sandboxUnavailableNote
     this.#sandboxedTools = opts.sandboxedTools ?? new Set()
   }

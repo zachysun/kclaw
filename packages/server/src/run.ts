@@ -49,7 +49,7 @@ import {
   type ToolExecutor,
   type UsageStore,
   type AutoLearnCounter,
-  resolveContextTokens,
+  resolveRunModel,
 } from "@kclaw/core"
 
 export interface RunManagerDeps {
@@ -118,13 +118,13 @@ export interface RunManagerDeps {
    * Subagent dispatch (issue #16): the daemon's spawner implementation
    * (server/src/subagent.ts). Flows into every mainline run's assembly as the
    * `subagent_run` builtin; child runs never see it. `collector` (issue #22)
-   * adds `subagent_collect` next to it; `cancelBackgroundForParent` backs the
-   * delete/purge cascade (exposed via cancelBackgroundChildren).
+   * adds `subagent_collect` next to it. The delete/purge cascade cancels
+   * through the host directly (the daemon wires the route option), not
+   * through the run manager.
    */
   subagents?: {
     spawner: SubagentSpawner
     collector?: SubagentCollector
-    cancelBackgroundForParent?: (parentSessionId: string) => number
   }
   /** Per-run token ledger (optional; recording failures are swallowed). */
   usageStore?: UsageStore
@@ -225,15 +225,6 @@ export class RunManager {
   /** The confirmation gateway this manager's runs answer through (WS/CLI verdicts land here). */
   get broker(): ConfirmationBroker {
     return this.#broker
-  }
-
-  /**
-   * Cancel every live BACKGROUND subagent of one parent session (issue #22) —
-   * the delete/purge cascade's cancellation half. No-op (returns 0) when no
-   * spawner with background bookkeeping is wired.
-   */
-  cancelBackgroundChildren(parentSessionId: string): number {
-    return this.#deps.subagents?.cancelBackgroundForParent?.(parentSessionId) ?? 0
   }
 
   /**
@@ -415,18 +406,20 @@ export class RunManager {
     if (meta === undefined) throw new Error("session not found")
     const history = sessions.readMessages(sessionId)
     const defaultModel = this.#deps.model ?? config.providers.entries[config.providers.default]?.model ?? ""
-    const model = config.providers.entries[meta.model ?? ""]?.model ?? meta.model ?? defaultModel
-    // Same budget resolution as executeRun: a model entry contextWindow
-    // tightens the manual path's line too.
-    const entryKey = meta.model !== undefined && config.providers.entries[meta.model] !== undefined ? meta.model : undefined
+    const { model, budget } = resolveRunModel(config, meta.model ?? defaultModel)
     const out = await this.#compactor.compact(sessionId, history, "", config, llm, model, {
       focus,
       manual: true,
       phase: "manual",
-      budget: resolveContextTokens(config, entryKey),
+      budget,
     })
+    // A failed manual compaction surfaces to the HTTP caller exactly as any
+    // other compaction failure: the error rethrown (the completed event and
+    // the daemon log already recorded it). A manual /compact carries no
+    // signal, so "cancelled" is unreachable here; declined reads as before.
+    if (out.status === "failed") throw out.error
     return {
-      message: out.compacted
+      message: out.status === "applied"
         ? `压缩了 ${out.segments} 段，剩 ${out.active.length} 条原文消息`
         : "无可压缩内容",
     }

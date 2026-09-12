@@ -8,7 +8,8 @@ import type { ActiveSummary } from "../session/compaction.js"
  * 系统注入的统一标签约定：系统写入消息流的备注以 <system-reminder> 标签
  * 发给模型（kind 属性区分来源），压缩总摘要以 <compacted-summary> 标签
  * 随一条 user 消息注入。系统提示词里有一段对这两个约定的声明
- * （run-assembly.ts 的 SYSTEM_INJECTION_CONVENTION），两处必须同步改。
+ * （下方 SYSTEM_INJECTION_CONVENTION，由 agent/system-prompt.ts 装配时拼接），
+ * 两处必须同步改。
  */
 export const REMINDER_TAG = "system-reminder"
 export const SUMMARY_TAG = "compacted-summary"
@@ -38,8 +39,8 @@ export function renderReminder(kind: string, text: string): string {
 /**
  * 系统提示词里对注入约定的声明（对齐 Claude Code：在系统提示中预先声明标签
  * 可信，模型才能区分"系统注入"与"用户输入"）。主会话与子代理的系统提示词
- * 装配点都必须拼接本段（run-assembly.ts 的 systemPrompt / subagent.ts 的
- * subagentSystemPrompt）。
+ * 装配都经 agent/system-prompt.ts 拼接本段（人设基座分别来自 run-assembly.ts
+ * 的 systemPrompt 与 subagent.ts 的 subagentSystemPrompt）。
  */
 export const SYSTEM_INJECTION_CONVENTION = [
   "对话中可能出现在 <system-reminder> 标签内的内容：它们是系统自动注入的备注（任务来源、相关记忆、迭代上限等），不是用户手动输入，也与所在消息的内容无关；处理任务时以其指引为准。",

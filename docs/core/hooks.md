@@ -34,7 +34,7 @@
 | `turn-boundary` | 迭代边界（工具批次后、下一轮调用前） | `{}` | `Message[]` | 注入消息（内置：引导缓冲 drain） |
 | `compaction-check` | 迭代边界的中途压缩判定（内置独占） | `{}` | `ActiveSummary \| null` | 决策位：返回新视图 = 压缩生效 |
 | `overflow-rescue` | 上下文超限急救（内置独占） | `{ error }` | `ActiveSummary \| null` | 决策位：返回新视图 = 换视图整次重发 |
-| `compaction-after` | 一次压缩完成后 | `{ phase, result }` | 忽略 | 观察压缩结局 |
+| `compaction-after` | 一次压缩完成后 | `{ phase, result }` | 忽略 | 观察压缩结局（`result` 为 ok/failed/cancelled，如实转发；压缩没发生时静默） |
 | `think-after` | 思考块完成后 | `{ block }` | 忽略 | 观察思考 |
 | `system-before` | 系统提示词组装前 | `{ base }` | `string[]` | 追加段落（内置：认知 + 技能清单），**多钩子累积** |
 | `system-after` | 系统提示词终稿（两段拼装之后、装配层冻结基线之前） | `{ system }` | `string` | 改写终稿（用户改写随后被装配层整体固化进 stable 基线并审计） |
@@ -51,7 +51,7 @@
 - **真链式改写**：改写位置的返回值回填进 ctx 的改写字段（`run-before` 的 `message`、`llm-before` 的 `messages`、`system-after` 的 `system`），下一个 handler 看到的是改写后的值——这保证"用户改写在前、内置持久化在后"时，持久化落的是改写后的消息。调用方传入的 ctx 对象本身不被改动。
 - **追加型位置**：`system-before` 的返回值是段落**数组**，多个钩子的段落累积拼接而不是互相覆盖。
 - **失败分派**：抛错/超时按 `meta.failure` 分派——`fatal` 让整次 `run()` 拒绝（循环既有的各位置 catch 路径接管，错误码保持原样：`user_message_failed`、`steering_failed` 等）；`skip` 发 `hook.failed {phase:"run"}` 后继续下一个 handler；`deny` 同样发事件并继续跑完链（后面的观察者不丢），但经 `runGate` 出口把首个失败记为**否决**——`tool-before` 位置上循环据此给该工具写拒绝结果（错误结果 + `denied` note，工具不执行，run 继续）。
-- **超时**：每个 handler 与 `config.hooks.timeoutMs`（默认 5000ms）同时计时，超时的一方算失败，走同样的 fatal/skip/deny 分派。条目可用 `meta.timeoutMs` 覆盖链预算（`Infinity` = 不限时）：五个内置压缩钩子（background-precompact / mid-run-panic / overflow-emergency / manual-compact-flush / post-run-compaction）声明了不限时——它们的函数体是两次 provider 调用，时长由 LLM 决定，改成钩子形态前的内联代码本就不限时；时长上限由 provider 单请求超时与 run 中止信号保底。
+- **超时**：每个 handler 与 `config.hooks.timeoutMs`（默认 5000ms）同时计时，超时的一方算失败，走同样的 fatal/skip/deny 分派。条目可用 `meta.timeoutMs` 覆盖链预算（`Infinity` = 不限时）：五个内置压缩钩子（background-precompact / mid-run-panic / overflow-emergency / manual-compact-flush / post-run-compaction）声明了不限时——它们的函数体是两次 provider 调用，时长由 LLM 决定；时长上限由 provider 单请求超时与 run 中止信号保底。
 - **空位置零开销**：没有注册任何 handler 的位置同步短路返回 `undefined`，`has()` 为 false（循环据此判断要不要走进某个分支，如 overflow-rescue）。
 
 ---
@@ -100,7 +100,7 @@ export default async (ctx) => {
 | 10 | `overflow-emergency` | overflow-rescue | skip | 超限急救压缩（换视图整次重发）；先掐掉正在执行的后台压缩 |
 | 10 | `usage-ledger` | run-after | skip | 记录本次 run 的用量 |
 | 15 | `manual-compact-flush` | run-after | skip | 冲刷运行忙时排队的 /compact（在自动收尾压缩之前） |
-| 20 | `post-run-compaction` | run-after | fatal | 上下文到达黄线时触发的收尾压缩（估算前等正在执行的后台压缩结束） |
+| 20 | `post-run-compaction` | run-after | skip | 上下文到达黄线时触发的收尾压缩（估算前等正在执行的后台压缩结束；压缩失败只记日志，不影响 run 收尾） |
 | 30 | `follow-check` | run-after | skip | 排一个记忆空闲检查（调度器补查） |
 | 10 | `system-materials` | system-before | skip | 收集 L2 认知与技能清单两个提示词段（即 live 段） |
 

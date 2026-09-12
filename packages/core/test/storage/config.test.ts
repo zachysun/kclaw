@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync, existsSync 
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { resolvePaths } from "../../src/storage/paths.js"
-import { loadConfig, saveConfig, defaultConfig, resolveContextTokens } from "../../src/storage/config.js"
+import { loadConfig, saveConfig, defaultConfig, resolveContextTokens, resolveRunModel } from "../../src/storage/config.js"
 import type { KclawConfig } from "../../src/storage/config.js"
 import { writeFileAtomic } from "../../src/storage/atomic.js"
 
@@ -83,6 +83,51 @@ describe("loadConfig / saveConfig", () => {
     expect(cfg.sessions.contextTokens).toBe(200_000)
     expect(cfg.sessions.compactAtRatio).toBeUndefined()
     expect(cfg.sessions.compactThreshold).toBe(99) // tolerated, inert
+  })
+  it("falls invalid waterlines back to defaults with a warning (value out of range)", () => {
+    const paths = resolvePaths(home)
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    writeFileSync(paths.config, ["sessions:", "  compactAtRatio: 1.5"].join("\n"))
+    const cfg = loadConfig(paths)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]![0]).toContain("compact{Target,At,Ahead,Panic}Ratio")
+    expect(cfg.sessions.compactAtRatio).toBeUndefined()
+    expect(cfg.sessions.compactPanicRatio).toBeUndefined()
+  })
+  it("falls inverted waterline order back to defaults (ahead ≥ panic empties the pre-compaction window)", () => {
+    const paths = resolvePaths(home)
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    writeFileSync(paths.config, ["sessions:", "  compactAheadRatio: 0.95"].join("\n"))
+    const cfg = loadConfig(paths)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(cfg.sessions.compactAheadRatio).toBeUndefined()
+    expect(cfg.sessions.compactAtRatio).toBeUndefined()
+  })
+  it("validates compactPackRatio independently of the trigger group", () => {
+    const paths = resolvePaths(home)
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    writeFileSync(paths.config, ["sessions:", "  compactPackRatio: -1", "  compactAtRatio: 0.85"].join("\n"))
+    const cfg = loadConfig(paths)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]![0]).toContain("compactPackRatio")
+    expect(cfg.sessions.compactPackRatio).toBeUndefined()
+    expect(cfg.sessions.compactAtRatio).toBe(0.85)
+  })
+  it("keeps a valid custom waterline configuration untouched", () => {
+    const paths = resolvePaths(home)
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    writeFileSync(paths.config, [
+      "sessions:",
+      "  compactTargetRatio: 0.2",
+      "  compactAheadRatio: 0.5",
+      "  compactAtRatio: 0.7",
+      "  compactPanicRatio: 0.95",
+      "  compactPackRatio: 0.4",
+    ].join("\n"))
+    const cfg = loadConfig(paths)
+    expect(warn).not.toHaveBeenCalled()
+    expect(cfg.sessions.compactAtRatio).toBe(0.7)
+    expect(cfg.sessions.compactPackRatio).toBe(0.4)
   })
   it("does not share nested references with defaultConfig", () => {
     const pristine = structuredClone(defaultConfig)
@@ -272,5 +317,51 @@ describe("resolveContextTokens", () => {
     cfg.sessions.contextTokens = 50_000
     expect(resolveContextTokens(cfg, "m")).toBe(50_000)
     expect(resolveContextTokens(cfg)).toBe(50_000)
+  })
+})
+
+describe("resolveRunModel", () => {
+  const base = (over: Partial<KclawConfig["providers"]> = {}) => {
+    const cfg = structuredClone(defaultConfig)
+    Object.assign(cfg.providers, over)
+    return cfg
+  }
+
+  it("resolves an entry-named model to the entry's wire model, window budget and maxOutput", () => {
+    const cfg = base({
+      default: "m",
+      entries: {
+        m: { baseUrl: "http://x", apiKey: "k", model: "m1" },
+        d: {
+          baseUrl: "http://x", apiKey: "k", model: "d1",
+          contextWindow: 200_000, maxOutput: 8_192,
+        },
+      },
+    })
+    const r = resolveRunModel(cfg, "d")
+    expect(r.model).toBe("d1")
+    expect(r.entryKey).toBe("d")
+    expect(r.budget).toBe(200_000)
+    expect(r.maxOutput).toBe(8_192)
+  })
+
+  it("passes a raw wire model through with default-entry budget resolution", () => {
+    const cfg = base({
+      default: "m",
+      entries: { m: { baseUrl: "http://x", apiKey: "k", model: "m1", contextWindow: 90_000 } },
+    })
+    const r = resolveRunModel(cfg, "m1")
+    expect(r.model).toBe("m1")
+    expect(r.entryKey).toBe("m")
+    expect(r.budget).toBe(90_000)
+    expect(r.maxOutput).toBeUndefined()
+  })
+
+  it("falls back to the 128k default with no entries and no caps", () => {
+    const r = resolveRunModel(base(), "some-model")
+    expect(r.model).toBe("some-model")
+    expect(r.entryKey).toBe("")
+    expect(r.budget).toBe(128_000)
+    expect(r.maxOutput).toBeUndefined()
   })
 })

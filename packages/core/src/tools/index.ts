@@ -85,7 +85,7 @@ export function createBuiltinTools(opts: {
     timeoutMs: opts.exec?.timeoutMs,
     maxOutputBytes: opts.exec?.maxOutputBytes,
     // The run assembly passes the sandbox wrapper here only when it is
-    // actually available — single source with the gate's sandboxAvailable.
+    // actually available — single source with the gate's sandboxedTools set.
     sandbox: opts.exec?.sandbox,
     spillDir: opts.exec?.spillDir,
   })

@@ -338,7 +338,6 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     subagents: {
       spawner: subagentHost.spawner,
       collector: subagentHost.collector,
-      cancelBackgroundForParent: subagentHost.cancelBackgroundForParent,
     },
     // auto mode induction (batch C): one per-process streak counter threaded
     // through every run's assembly; threshold 0 disables induction.
@@ -363,6 +362,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     stores: { sessions, jobs, config, paths },
     bus,
     run,
+    cancelBackgroundForParent: subagentHost.cancelBackgroundForParent,
     mcp: mcpManager !== undefined ? { status: () => mcpManager.status() } : undefined,
     attachmentsDir: paths.attachmentsDir,
     usage,

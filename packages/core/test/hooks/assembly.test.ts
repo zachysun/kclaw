@@ -320,6 +320,43 @@ describe("executeRun × hook system", () => {
     expect(requests.filter((r) => r.maxTokens === 111).length).toBeGreaterThanOrEqual(1)
     expect(requests.some((r) => r.maxTokens === undefined)).toBe(true)
   })
+
+  it("压缩失败如实转发：compaction-after 收到 failed，run 照常完成", async () => {
+    // 摘要调用抛错 → compact 以 failed 结局回答（completed 事件记录 failed，
+    // 错误只在压缩器里打一行日志）；触发钩子把 failed 如实转发给
+    // compaction-after 链；收尾压缩失败不连坐 run。
+    const base = loadConfig(resolvePaths(home))
+    const cfg = {
+      ...base,
+      sessions: { ...base.sessions, contextTokens: 1500 },
+    }
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        if (typeof req.system === "string" && req.system.startsWith("你是对话摘要")) {
+          throw new Error("summarizer down")
+        }
+        yield { type: "text_delta", delta: "x".repeat(2000) }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 999_000, outputTokens: 1 } }
+      },
+    }
+    const afters: Array<{ phase: string; result: string }> = []
+    const extra: HookEntry[] = [
+      hook("after-recorder", "compaction-after", (ctx) => { afters.push({ ...ctx }) }),
+    ]
+    const { engine, bus, sessions, sessionId } = makeEngine({ llm, config: cfg, extraHooks: extra })
+    // 预置一条早先的用户消息：给 chooseBoundary 留出可压的分界（单轮切不出）
+    const seed = newMessage(sessionId, "user", [{ id: "b-seed", type: "text", text: "x".repeat(2000) }])
+    sessions.appendMessage(sessionId, seed)
+
+    const outcome = await executeRun(engine, handoff(sessionId, "x".repeat(2000)))
+    expect(outcome.stopReason).toBe("end_turn")
+    const completed = bus.events.find((e) => e.type === "compaction.completed")
+    expect(completed!.payload).toMatchObject({ phase: "post-run", result: "failed" })
+    expect(afters).toEqual([{ phase: "post-run", result: "failed" }])
+    // 失败不写任何数据：没有新视图落 meta，钩子也没有失败事件
+    expect(sessions.meta(sessionId)?.compaction).toBeUndefined()
+    expect(bus.events.some((e) => e.type === "hook.failed")).toBe(false)
+  })
 })
 
 /** 防止 runAgent import 被裁掉的类型引用（loop 语义测试在 agent/ 目录）。 */

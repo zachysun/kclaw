@@ -39,20 +39,20 @@ import { newMessage } from "../protocol/messages.js"
 import type { AttachmentRef } from "../protocol/wire.js"
 import type { LlmClient, ToolDefinition } from "../provider/types.js"
 import type { KclawConfig } from "../storage/config.js"
-import { defaultConfig, resolveContextTokens } from "../storage/config.js"
+import { defaultConfig, resolveContextTokens, resolveRunModel } from "../storage/config.js"
 import type { KclawPaths } from "../storage/paths.js"
 import type { UsageStore } from "../storage/usage.js"
 import type { SessionStore } from "../session/store.js"
 import type { Compactor } from "../session/compactor.js"
-import { estimateTokens } from "../session/compaction.js"
+import { resolveWaterlines } from "../session/waterlines.js"
 import { ConfigPermissionGate, realpathWithin, SessionGrants } from "../permissions/engine.js"
-import { appendDecidedRule, loadDecidedRulesForRun, narrowDecidedRule, projectDecidedRulesPath } from "../storage/decided-rules.js"
+import { appendDecidedRule, globalDecidedRulesPath, loadDecidedRulesForRun, narrowDecidedRule, projectDecidedRulesPath } from "../storage/decided-rules.js"
 import type { AutoLearnCounter } from "../permissions/auto-learn.js"
 import { ConfirmationBroker, raceConfirmation, type ConfirmationResolution } from "../permissions/broker.js"
 import { createExecSandbox } from "../sandbox/provider.js"
 import type { PermissionGate, RunOutcome } from "./loop.js"
 import { runAgent } from "./loop.js"
-import { SYSTEM_INJECTION_CONVENTION } from "./context.js"
+import { assembleSystemPrompt } from "./system-prompt.js"
 import { subagentSystemPrompt, type SubagentCollector, type SubagentSpawner } from "./subagent.js"
 import type { SessionSearchFn } from "../tools/session.js"
 import type { ToolExecutor } from "./tools.js"
@@ -143,7 +143,7 @@ export interface RunEngineDeps {
    * Direct resolver override for tests. Takes precedence over the broker when
    * set — the daemon path relies on the broker alone.
    */
-  resolveConfirmation?: (confirmationId: string) => Promise<ConfirmationResolution>
+  resolveConfirmation?: (confirmationId: string) => Promise<ConfirmationResolution | "timeout">
   /**
    * Auto-mode induction (batch C): when set, `auto` sessions' confirmation
    * resolutions are fed to the counter here — the assembly seam sees every
@@ -445,11 +445,9 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     // Mode: this session's own toggle (absent → default). The daemon has no
     // mode flag — the session meta is the single source of truth.
     mode: sessionMeta?.mode,
-    // Sandbox availability (same probe as the exec wrapper above): a command
-    // with no rule coverage auto-passes as sandboxed when available; when the
-    // sandbox was attempted but unavailable, the confirmation carries an
-    // explanation instead of the silent fail-closed default.
-    sandboxAvailable: sandbox.available,
+    // When the sandbox was attempted but unavailable (nothing wrapped), the
+    // confirmation carries an explanation instead of the silent fail-closed
+    // default.
     sandboxUnavailableNote,
     // The tools this assembly actually wrapped in the OS sandbox (exec gets
     // the wrapper below; no other executor does). The gate's "sandboxed"
@@ -482,6 +480,25 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     },
   }
 
+  // Best-effort decided-rule write: a failure logs and the verdict stands.
+  const persistDecidedRule = (
+    target: string,
+    rule: string,
+    origin: { tool: string; argsJson: string; sessionId?: string },
+    opts: { workspace?: string; autoLearned?: boolean } = {},
+  ): void => {
+    try {
+      appendDecidedRule(target, {
+        rule,
+        decidedAt: new Date().toISOString(),
+        origin,
+        ...(opts.autoLearned === true ? { source: "auto" as const } : {}),
+      }, opts.workspace === undefined ? {} : { workspace: opts.workspace })
+    } catch (e) {
+      console.error(`kclaw: failed to persist ${opts.autoLearned === true ? "auto-learned " : ""}decided rule: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
   // Confirmation answering: deps' direct resolver when wired (test seam),
   // else the broker's pending promise (the daemon path: WS/CLI verdicts
   // settle it). The resolver is raced against the SAME timeout the loop
@@ -491,7 +508,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // confirmation" instead of acking a verdict nothing will act on.
   const baseResolver =
     engine.deps.resolveConfirmation ?? ((confirmationId: string) => broker.wait(confirmationId))
-  const resolveConfirmation = async (confirmationId: string): Promise<ConfirmationResolution> => {
+  const resolveConfirmation = async (confirmationId: string): Promise<ConfirmationResolution | "timeout"> => {
     const raced = await raceConfirmation(baseResolver(confirmationId), confirmTimeoutMs, controller.signal)
     // Auto-mode induction (batch C): this seam sees EVERY settlement a human
     // confirmation can reach — once / reject via the gateway, timeout when the
@@ -507,9 +524,10 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       // the value is never used: the loop's own race resolved "aborted" and
       // denies without consulting the resolver. No decision is archived —
       // an abort is not a verdict.
-      return { decision: "timeout", by: "timeout" }
+      return "timeout"
     }
-    if (raced.by === "timeout") broker.expire(confirmationId)
+    const timedOut = raced === "timeout"
+    if (timedOut) broker.expire(confirmationId)
     // Permission-decision archive: who approved what, and when, lands in the
     // session archive beside the tool row's grantedBy outcome. Timeouts are
     // verdicts too (silence is a "no"); aborts never reach here.
@@ -517,10 +535,22 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       sessions.appendPermissionDecided(sessionId, {
         at: new Date().toISOString(),
         confirmationId,
-        decision: raced.decision,
-        by: raced.by,
+        decision: timedOut ? "timeout" : raced.decision,
+        by: timedOut ? "timeout" : raced.by,
         tool: { callId: call.callId, name: call.name, argsJson: call.argsJson },
       })
+    }
+    // Always-allow persistence (project/global): every consequence of one
+    // human verdict lives in this seam. Best-effort — a write failure logs
+    // and the settled verdict stands; a once/reject/timeout verdict never
+    // writes a rule.
+    if (!timedOut && (raced.decision === "project" || raced.decision === "global") && call !== undefined) {
+      persistDecidedRule(
+        raced.decision === "global" ? globalDecidedRulesPath(paths.home) : projectDecidedRulesPath(workspace),
+        narrowDecidedRule(call, workspace),
+        { tool: call.name, argsJson: call.argsJson, sessionId },
+        raced.decision === "project" ? { workspace } : {},
+      )
     }
     // SessionGrants (batch D): a once-approval also lands in this run's grant
     // store, keyed by the same narrowed rule the gate re-checks — the same
@@ -529,7 +559,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     // The gate skips grants in `auto` mode (learning observes human
     // confirmations), so an auto-mode write here is dead weight — harmless,
     // and kept unconditional so the seam never has to know the gate's modes.
-    if (raced.decision === "once" && call !== undefined) {
+    if (!timedOut && raced.decision === "once" && call !== undefined) {
       grants?.grant(narrowDecidedRule(call, workspace))
     }
     const autoLearn = engine.deps.autoLearn
@@ -539,29 +569,21 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       // threshold) even though the counter is one per process.
       const ruleKey = narrowDecidedRule(call, workspace)
       const key = `${sessionId}\n${ruleKey}`
-      if (raced.decision === "once") {
+      if (!timedOut && raced.decision === "once") {
         if (autoLearn.counter.approve(key)) {
-          try {
-            appendDecidedRule(
-              projectDecidedRulesPath(workspace),
-              {
-                rule: ruleKey,
-                decidedAt: new Date().toISOString(),
-                origin: { tool: call.name, argsJson: call.argsJson, sessionId },
-                source: "auto",
-              },
-              { workspace },
-            )
-          } catch (e) {
-            console.error(`kclaw: failed to persist auto-learned rule: ${e instanceof Error ? e.message : String(e)}`)
-          }
+          persistDecidedRule(
+            projectDecidedRulesPath(workspace),
+            ruleKey,
+            { tool: call.name, argsJson: call.argsJson, sessionId },
+            { workspace, autoLearned: true },
+          )
         }
-      } else if (raced.decision === "reject" || raced.by === "timeout") {
+      } else if (timedOut || raced.decision === "reject") {
         // a "no" — explicit or by silence — resets the streak
         autoLearn.counter.reject(key)
       }
     }
-    return raced
+    return timedOut ? "timeout" : raced
   }
 
   // --- retry visibility --------------------------------------------------------
@@ -584,27 +606,20 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   }
   const runLlm = engine.deps.llmForRun?.(onLlmRetry) ?? engine.deps.llm
   const defaultModel = engine.deps.model ?? config.providers.entries[config.providers.default]?.model ?? ""
-  // A session/job model may name a provider ENTRY ("deepseek") whose wire
-  // model is the entry's `.model` ("deepseek-v4-flash"); resolve keys to that
-  // model, leaving already-raw API model names untouched.
-  const resolveEntry = (m: string): string => config.providers.entries[m]?.model ?? m
   const rawModel = input.model ?? sessionMeta?.model ?? defaultModel
-  const model = resolveEntry(rawModel)
-  // Entry metadata for this run: the budget (contextWindow cap via
-  // resolveContextTokens) feeds every compaction line and the packing
-  // budget; maxOutput rides each request as max_tokens.
-  const entryKey = config.providers.entries[rawModel] !== undefined ? rawModel : config.providers.default
-  const entry = config.providers.entries[entryKey]
-  const budget = resolveContextTokens(config, entryKey)
-  const maxOutput = entry?.maxOutput
+  // Entry metadata for this run: the wire model (entry names resolve to the
+  // entry's `.model`), the budget (contextWindow cap via resolveContextTokens)
+  // feeds every compaction line and the packing budget; maxOutput rides each
+  // request as max_tokens.
+  const { model, budget, maxOutput } = resolveRunModel(config, rawModel)
+  // Waterlines resolved once for this run's budget: the request-assembly
+  // omission budget reads the pack line here; the compaction trigger hooks get
+  // the full schedule via the chain deps. The packing budget is DECOUPLED from
+  // the yellow line: the yellow line only gates post-run compaction, the pack
+  // line owns request-assembly omission — loosening the yellow line must not
+  // dilute omission.
+  const waterlines = resolveWaterlines(config, budget)
 
-  // v3/v4 compaction thresholds: the loop's packing budget reads the pack
-  // ratio here; the compaction decision hooks get the yellow/red/ahead lines
-  // via the chain deps (single config source, one read per side). The packing
-  // budget is DECOUPLED from the yellow line: the yellow line only gates
-  // post-run compaction, the pack line (default 0.70) owns request-assembly
-  // omission — loosening the yellow line must not dilute omission.
-  const packRatio = config.sessions.compactPackRatio ?? 0.7
   // Fixed per-request overhead for the compaction/packing judgments: the
   // assembled system prompt plus the wire tool schemas. The trigger estimate
   // anchors on the last assistant's reported inputTokens (already including
@@ -627,7 +642,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     signal: controller.signal,
     runLlm,
     model,
-    budget,
+    waterlines,
     usageStore: engine.deps.usageStore,
     busEmit,
     runIdRef: { get current() { return runId } },
@@ -650,49 +665,18 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   chain.registerAll(engine.deps.hooks?.snapshot() ?? [])
   if (engine.deps.extraHooks !== undefined) chain.registerAll(engine.deps.extraHooks)
 
-  // 系统提示词（提示词缓存纪律，双段独立冻结）：stable（人设基座 + 注入约定）
-  // 是缓存冻结面，live（认知 + 技能清单）是低频变化面。每 run 两段现算、与
-  // 基线逐段比对——段文本没变就沿用基线（frozenAt 不动），变了就重冻结该段。
-  // 前缀缓存按从头逐字节相同匹配：live 变化只失效变化点之后，stable 前缀
-  // 继续命中；装技能、夜间认知刷新在下一 run 即时生效，不再等压缩边界。
-  // 两段全命中时 system-after 链跳过（与单段时代的冻结 run 同语义）；至少
-  // 一段变化时走 system-after（用户可改终稿）——改写发生时事件记 stable=终稿
-  // （审计恒记录模型实际看到的那份）、live=现算文本：stable 基线于是偏离现算
-  // 值，下一个 run 自然重装配、改写每 run 重新生效；live 基线则照常逐字比对，
-  // frozenAt 不会虚假刷新。审计每 run 一条双段全量留痕（直接落盘；写失败即
-  // run 失败）。压缩事件在投影里清除基线（applyEvent），下一次 run 重新装配
-  // 并固化——压缩本来就使缓存全量失效，纪元边界设在冷启动处零额外成本。
-  // 子代理 run 的精简模板同样适用（live 恒空）。
-  const baseline = sessionMeta?.systemBaseline
-  const base = childRun ? subagentSystemPrompt(workspace) : systemPrompt(paths.agentsMd)
-  const stable = [base, SYSTEM_INJECTION_CONVENTION].filter((s) => s !== "").join("\n\n")
-  // live：system-before 链产出（内置 system-materials：认知 + 技能清单；
-  // 用户段落同列此链，一并归属 live 段）。
-  const segments = (await chain.run("system-before", { base })) ?? []
-  const live = segments.filter((s) => s !== "").join("\n\n")
-  const stableFresh = baseline === undefined || baseline.stable.text !== stable
-  const liveFresh = baseline?.live === undefined || baseline.live.text !== live
-  let system: string
-  if (!stableFresh && !liveFresh) {
-    system = [baseline.stable.text, baseline.live!.text].filter((s) => s !== "").join("\n\n")
-    sessions.appendSystem(sessionId, { at: new Date().toISOString(), stable, live })
-  } else {
-    const draft = [stable, live].filter((s) => s !== "").join("\n\n")
-    const rewrittenSystem = await chain.run("system-after", { system: draft })
-    if (rewrittenSystem !== undefined) {
-      system = rewrittenSystem
-      // stable freezes the REWRITTEN text (what the model actually saw — the
-      // audit's contract), so the next run's fresh stable differs and the
-      // assembly (and the rewrite) re-runs; live carries the freshly computed
-      // segment so ITS baseline still compares equal across rewrites — a
-      // rewrite must not phantom-refresh live's frozenAt.
-      sessions.appendSystem(sessionId, { at: new Date().toISOString(), stable: system, live })
-    } else {
-      system = draft
-      sessions.appendSystem(sessionId, { at: new Date().toISOString(), stable, live })
-    }
-  }
-  contextOverheadRef.current = estimateTokens(system) + estimateTokens(JSON.stringify(toolDefs))
+  // 系统提示词组装 + 双段冻结 + 审计落盘在 system-prompt.ts 一处完成；
+  // 固定开销在这里赋值一次，压缩/打包钩子经 contextOverhead 读取函数惰性
+  // 取值（钩子注册先于组装，读取函数必须保持惰性）。
+  const { system, overheadTokens } = await assembleSystemPrompt({
+    chain,
+    sessions,
+    sessionId,
+    base: childRun ? subagentSystemPrompt(workspace) : systemPrompt(paths.agentsMd),
+    baseline: sessionMeta?.systemBaseline,
+    toolDefs,
+  })
+  contextOverheadRef.current = overheadTokens
 
   const outcome = await runAgent(
     {
@@ -723,7 +707,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       loopMaxRepeats: config.sessions.toolLoopMaxRepeats,
       // 省略预算（省略线值）透传给打包台：预算装不下的工具输出以省略占位符发送；
       // 固定开销（系统提示词 + 工具定义）先行扣除，打包台只裁决消息内容
-      tokenBudget: Math.max(0, budget * packRatio - contextOverheadRef.current),
+      tokenBudget: Math.max(0, waterlines.pack - contextOverheadRef.current),
       ...(maxOutput === undefined ? {} : { maxTokens: maxOutput }),
       onEvent: (raw) => {
         // Narrow to the distributive form so per-type payload access typechecks.

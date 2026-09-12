@@ -6,7 +6,6 @@ import type { RunManager } from "./run.js"
 import { tokenEquals } from "./auth.js"
 import { checkCommandFrame } from "./command-check.js"
 import type { ConfirmationActor } from "@kclaw/core"
-import { appendDecidedRule, globalDecidedRulesPath, narrowDecidedRule, projectDecidedRulesPath } from "@kclaw/core"
 
 /** Dependencies of the /ws route (injected by createApp). */
 export interface WsOptions {
@@ -45,14 +44,6 @@ export interface WsOptions {
    * daemon runs on the default (30s).
    */
   heartbeatMs?: number
-  /**
-   * Decided-rule persistence for "always allow" verdicts: `global` appends
-   * to `<home>/permissions.yaml`, `project` to
-   * `<session workdir>/.kclaw/permissions.yaml` (fallback when the session
-   * has no workdir). Absent → verdicts are honored but nothing is persisted
-   * (tests).
-   */
-  decidedRules?: { home: string; workspaceFallback?: string }
 }
 
 /** Close code for WS authentication failures. */
@@ -249,55 +240,14 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
           return send(socket, { type: "error", message: "confirmation gateway unavailable" })
         }
         // Verdict provenance: the web UI names itself (client:"web"); the CLI
-        // omits it → "cli". Snapshot the entry BEFORE resolving (resolve
-        // removes it) so an "always" decision can be persisted with its
-        // origin; a decision that settles nothing (unknown/stale id)
-        // persists nothing. The resulting confirmation.resolved event comes
-        // from the loop, not from here.
+        // omits it → "cli". The consequences of the verdict — the decided-rule
+        // persistence for "always allow", the archive, the grants — all live
+        // in the run assembly's resolveConfirmation seam, which sees every
+        // settlement a human verdict can reach. The resulting
+        // confirmation.resolved EVENT comes from the loop, not from here.
         const actor: ConfirmationActor = check.command.client === "web" ? "web" : "cli"
-        const { decision } = check.command
-        const needsEntry =
-          opts.decidedRules !== undefined && (decision === "project" || decision === "global")
-        const entry = needsEntry ? broker.lookup(check.command.confirmationId) : undefined
-        const ok = broker.resolve(check.command.confirmationId, decision, actor)
+        const ok = broker.resolve(check.command.confirmationId, check.command.decision, actor)
         if (!ok) return send(socket, { type: "error", message: "unknown confirmation" })
-        // Persistence is best-effort and MUST NOT break the confirmation
-        // flow: a write failure logs and still acks, the verdict itself has
-        // already settled. Only "always allow" (project/global) persists here
-        // — a once/reject/timeout verdict never writes a rule (auto induction
-        // for auto sessions lives in the run assembly's resolveConfirmation,
-        // where every outcome including timeout is visible).
-        if (entry !== undefined && opts.decidedRules !== undefined) {
-          try {
-            const workspace =
-              entry.sessionId !== undefined
-                ? (opts.sessions.meta(entry.sessionId)?.workdir ?? opts.decidedRules.workspaceFallback)
-                : opts.decidedRules.workspaceFallback
-            const target =
-              decision === "global"
-                ? globalDecidedRulesPath(opts.decidedRules.home)
-                : workspace !== undefined
-                  ? projectDecidedRulesPath(workspace)
-                  : undefined
-            if (target !== undefined) {
-              appendDecidedRule(
-                target,
-                {
-                  rule: narrowDecidedRule(entry.toolCall, workspace),
-                  decidedAt: new Date().toISOString(),
-                  origin: {
-                    tool: entry.toolCall.name,
-                    argsJson: entry.toolCall.argsJson,
-                    ...(entry.sessionId !== undefined ? { sessionId: entry.sessionId } : {}),
-                  },
-                },
-                decision === "project" && workspace !== undefined ? { workspace } : {},
-              )
-            }
-          } catch (e) {
-            console.error(`kclaw: failed to persist decided rule: ${e instanceof Error ? e.message : String(e)}`)
-          }
-        }
         return send(socket, { type: "confirmation.resolved_ack", confirmationId: check.command.confirmationId, ok: true })
       }
       case "question.resolve": {

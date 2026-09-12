@@ -16,16 +16,14 @@
  *   audit record itself (the split freeze needs the stable/live segments,
  *   which live above the chain). User system-after hooks rewrite the draft;
  *   a rewrite is frozen as the stable baseline by the assembly.
- * - The compaction decision hooks (mid-run panic / overflow emergency) keep
- *   their old "throw == decline" semantics via failure: "skip" (a failed
- *   decision resolves to undefined, which the loop treats as "don't
- *   compact"), and post-run-compaction stays fatal (its old throw propagated
- *   to the queue's entry-level failure). Every compaction hook runs
- *   UNTIMED (meta.timeoutMs = Infinity): its body is two provider calls
- *   whose duration is the LLM's, and the pre-migration inline code had no
- *   timeout — the blanket 5s race made every real compaction time out,
- *   orphaning a background duplicate that raced the next boundary's second
- *   attempt.
+ * - The compaction hooks branch on the Compactor's named CompactionOutcome
+ *   (applied/declined/failed/cancelled) and forward the truth to the
+ *   compaction-after chain; a failed compaction is announced by its
+ *   completed event and never fails the run (failure: "skip" everywhere).
+ *   Every compaction hook runs UNTIMED (meta.timeoutMs = Infinity): its
+ *   body is two provider calls whose duration is the LLM's — a timed hook
+ *   would cut real compactions off and orphan a background duplicate that
+ *   races the next boundary's second attempt.
  *
  * Single source of truth: every builtin is declared ONCE in
  * BUILTIN_HOOK_SPECS (metadata + a handler factory bound to the run's
@@ -40,6 +38,8 @@ import { makeEvent, type AgentEvent } from "../protocol/index.js"
 import type { Message } from "../protocol/messages.js"
 import type { LlmClient } from "../provider/types.js"
 import { estimateContextTokens, type ActiveSummary } from "../session/compaction.js"
+import type { CompactionOutcome } from "../session/compactor.js"
+import type { Waterlines } from "../session/waterlines.js"
 import { scheduleAutoname } from "../session/autoname.js"
 import type { SessionStore } from "../session/store.js"
 import type { Compactor } from "../session/compactor.js"
@@ -54,6 +54,22 @@ const MEMORY_QUERY_CHARS = 200
 /** Top-N memory notes injected onto the user message. */
 const MEMORY_LIMIT = 5
 
+/**
+ * Forward a compaction outcome to the compaction-after chain: applied/
+ * failed/cancelled under their own name, declined silently — nothing
+ * happened, matching the event stream where neither started nor completed
+ * fired.
+ */
+function forwardOutcome(
+  compactionAfter: BuiltinHookDeps["compactionAfter"],
+  phase: "in-run" | "post-run" | "manual",
+  outcome: CompactionOutcome,
+): void {
+  if (outcome.status === "applied") void compactionAfter(phase, "ok")
+  else if (outcome.status === "failed") void compactionAfter(phase, "failed")
+  else if (outcome.status === "cancelled") void compactionAfter(phase, "cancelled")
+}
+
 /** Per-run resources the builtin closures capture. */
 export interface BuiltinHookDeps {
   sessionId: string
@@ -66,11 +82,12 @@ export interface BuiltinHookDeps {
   runLlm: LlmClient
   model: string
   /**
-   * Effective context budget (resolveContextTokens over the run's model
-   * entry): the compaction trigger lines read this instead of re-deriving
-   * from config, so a per-model contextWindow tightens them too.
+   * Waterline thresholds resolved once for this run's budget (absolute token
+   * values from resolveWaterlines): compaction trigger decisions read this
+   * instead of re-deriving from config, so a per-model contextWindow tightens
+   * them too. `.budget` is the same budget the compactor calls receive.
    */
-  budget: number
+  waterlines: Waterlines
   usageStore?: UsageStore
   /** bus fan-out with its swallow-guard (the assembly's busEmit). */
   busEmit: (e: AgentEvent) => void
@@ -112,10 +129,6 @@ export interface BuiltinHookDeps {
 interface HookRuntime extends BuiltinHookDeps {
   childRun: boolean
   usageSessionId: string
-  // yellow / red / ahead waterlines (defaults 0.8 / 0.9 / 0.75)
-  atRatio: number
-  panicRatio: number
-  aheadRatio: number
   runCtx: () => { sessionId: string; runId?: string }
   /** Notes collected by memory-inject(10), appended by user-message-land(20). */
   memoryNotes: NoteBlock[]
@@ -264,7 +277,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     failure: "skip",
     timeoutMs: Number.POSITIVE_INFINITY,
     makeHandler: (rt) => {
-      const { compactor, sessionId, signal, sessions, contextOverhead, budget, aheadRatio, panicRatio, config, runLlm, model } = rt
+      const { compactor, sessionId, signal, sessions, contextOverhead, waterlines, config, runLlm, model } = rt
       return () => {
         // 预压线（ahead ≤ 估算水位 < 红线）且无在飞、无暂存成果时，在后台启动
         // 压缩：不阻塞下一次请求，成果由后续迭代边界应用（mid-run-panic）。
@@ -273,10 +286,10 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
         const history = sessions.readMessages(sessionId)
         const overhead = contextOverhead()
         const level = estimateContextTokens(history, undefined, overhead)
-        if (level < budget * aheadRatio || level >= budget * panicRatio) return
+        if (!waterlines.exceedsFullHistory("ahead", level) || waterlines.exceedsFullHistory("panic", level)) return
         compactor.background(sessionId, history, config, runLlm, model, {
           overheadTokens: overhead,
-          budget,
+          budget: waterlines.budget,
         })
         // 只开工，不换视图：undefined 不影响同位后续钩子的返回值。
         return undefined
@@ -291,10 +304,9 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     failure: "skip",
     timeoutMs: Number.POSITIVE_INFINITY,
     makeHandler: (rt) => {
-      const { compactor, sessionId, signal, contextOverhead, budget, panicRatio, sessions, config, runLlm, model, compactionAfter } = rt
+      const { compactor, sessionId, signal, contextOverhead, waterlines, sessions, config, runLlm, model, compactionAfter } = rt
       return async () => {
-        // Cancellation marker or an already-aborted run → don't compact. A throw
-        // resolves undefined == decline.
+        // Cancellation marker or an already-aborted run → don't compact.
         if (compactor.cancelled(sessionId) || signal.aborted) return null
         // A parked background result is applied first — it is strictly newer
         // than the run's view and the real request anchor self-heals at the
@@ -302,7 +314,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
         const parkedView = compactor.takeParked(sessionId)
         if (parkedView !== null) return parkedView
         const overhead = contextOverhead()
-        if (estimateContextTokens(sessions.readMessages(sessionId), undefined, overhead) < budget * panicRatio) return null
+        if (!waterlines.exceedsFullHistory("panic", estimateContextTokens(sessions.readMessages(sessionId), undefined, overhead))) return null
         if (compactor.hasInFlight(sessionId)) {
           // Red line hit while a background compaction is in flight: wait for
           // it to settle (single-compaction invariant), then re-estimate on the
@@ -318,24 +330,20 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
           const keepFrom = history.findIndex((m) => m.id === settled.upto) + 1
           const active = keepFrom > 0 ? history.slice(keepFrom) : undefined
           if (active !== undefined && active.length > 0 &&
-              estimateContextTokens(active, undefined, overhead) < budget * panicRatio) {
+              !waterlines.exceedsActiveSpan("panic", estimateContextTokens(active, undefined, overhead))) {
             return settled
           }
         }
-        const next = await compactor.auto(sessionId, history, config, runLlm, model, {
+        const outcome = await compactor.auto(sessionId, history, config, runLlm, model, {
           phase: "in-run",
           signal,
           overheadTokens: overhead,
-          budget,
+          budget: waterlines.budget,
         })
-        if (next !== null) {
-          void compactionAfter("in-run", "ok")
-          return next
-        }
-        // The sync compaction didn't happen (waterline/boundary decline, or the
-        // summarizer failed — either way nothing was written): the parked result
-        // we waited for is still the newest view — apply it rather than drop it.
-        return settled
+        forwardOutcome(compactionAfter, "in-run", outcome)
+        // A failed or declined sync attempt falls through to the parked view:
+        // it is the newest thing we have.
+        return outcome.status === "applied" ? { upto: outcome.upto, top: outcome.top } : settled
       }
     },
   }),
@@ -359,13 +367,13 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
           compactor.abortInFlight(sessionId)
           await compactor.waitForSettled(sessionId)
         }
-        const next = await compactor.auto(sessionId, sessions.readMessages(sessionId), config, runLlm, model, {
+        const outcome = await compactor.auto(sessionId, sessions.readMessages(sessionId), config, runLlm, model, {
           phase: "in-run",
           emergency: true,
           signal,
         })
-        void compactionAfter("in-run", "ok")
-        return signal.aborted ? null : next
+        forwardOutcome(compactionAfter, "in-run", outcome)
+        return outcome.status === "applied" ? { upto: outcome.upto, top: outcome.top } : null
       }
     },
   }),
@@ -403,23 +411,23 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     failure: "skip",
     timeoutMs: Number.POSITIVE_INFINITY,
     makeHandler: (rt) => {
-      const { compactor, sessionId, signal, sessions, config, runLlm, model, budget, compactionAfter } = rt
+      const { compactor, sessionId, signal, sessions, config, runLlm, model, waterlines, compactionAfter } = rt
       return async () => {
         // 冲刷挂起的 /compact（会话忙时登记的）：在自动收尾压缩之前执行——
         // 用户显式意图优先，压完水位落回，自动收尾检查自然不再触发。
         // 不做忙碌/排队检查（收尾链时刻必然不忙；运行期间排队的消息等下一条
-        // 出队，与压缩无关）。失败按 skip：hook.failed 事件 + 日志，不连坐 run。
+        // 出队，与压缩无关）。
         if (!compactor.hasDeferredManual(sessionId)) return
         if (compactor.hasInFlight(sessionId)) await compactor.waitForSettled(sessionId, signal)
         const deferred = compactor.takeDeferredManual(sessionId)
         if (deferred === null) return
-        await compactor.compact(sessionId, sessions.readMessages(sessionId), "", config, runLlm, model, {
+        const outcome = await compactor.compact(sessionId, sessions.readMessages(sessionId), "", config, runLlm, model, {
           focus: deferred.focus,
           manual: true,
           phase: "manual",
-          budget,
+          budget: waterlines.budget,
         })
-        void compactionAfter("manual", "ok")
+        forwardOutcome(compactionAfter, "manual", outcome)
       }
     },
   }),
@@ -428,15 +436,15 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     position: "run-after",
     order: 20,
     description: "黄线水位触发的收尾压缩",
-    failure: "fatal",
+    failure: "skip",
     timeoutMs: Number.POSITIVE_INFINITY,
     makeHandler: (rt) => {
-      const { compactor, sessionId, sessions, contextOverhead, budget, atRatio, config, runLlm, model, signal, compactionAfter } = rt
-      return async ({ outcome }) => {
+      const { compactor, sessionId, sessions, contextOverhead, waterlines, config, runLlm, model, signal, compactionAfter } = rt
+      return async ({ outcome: runOutcome }) => {
         // aborted/error runs are not finalized (the former is being torn down,
         // the latter just failed); the cancellation marker suppresses a
         // user-cancelled compaction for this run.
-        if (outcome.stopReason === "aborted" || outcome.stopReason === "error" || compactor.cancelled(sessionId)) return
+        if (runOutcome.stopReason === "aborted" || runOutcome.stopReason === "error" || compactor.cancelled(sessionId)) return
         if (compactor.hasInFlight(sessionId)) {
           // 收尾撞在飞后台（预压没跑完 run 就结束了）：等它完成再判断——绝不
           // 并发第二个压缩。等待后走正常判断（auto 内部的活跃段细判自适应）。
@@ -447,14 +455,14 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
         }
         const postRunHistory = sessions.readMessages(sessionId)
         const overhead = contextOverhead()
-        if (estimateContextTokens(postRunHistory, undefined, overhead) < budget * atRatio) return
-        await compactor.auto(sessionId, postRunHistory, config, runLlm, model, {
+        if (!waterlines.exceedsFullHistory("at", estimateContextTokens(postRunHistory, undefined, overhead))) return
+        const outcome = await compactor.auto(sessionId, postRunHistory, config, runLlm, model, {
           phase: "post-run",
           signal,
           overheadTokens: overhead,
-          budget,
+          budget: waterlines.budget,
         })
-        void compactionAfter("post-run", "ok")
+        forwardOutcome(compactionAfter, "post-run", outcome)
       }
     },
   }),
@@ -522,9 +530,6 @@ export function makeBuiltinHooks(deps: BuiltinHookDeps): HookEntry[] {
     ...deps,
     childRun: deps.childRun === true,
     usageSessionId: deps.usageSessionId ?? deps.sessionId,
-    atRatio: deps.config.sessions.compactAtRatio ?? 0.8,
-    panicRatio: deps.config.sessions.compactPanicRatio ?? 0.9,
-    aheadRatio: deps.config.sessions.compactAheadRatio ?? 0.75,
     runCtx: () => (deps.runIdRef.current === undefined
       ? { sessionId: deps.sessionId }
       : { sessionId: deps.sessionId, runId: deps.runIdRef.current }),

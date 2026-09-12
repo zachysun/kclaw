@@ -51,6 +51,12 @@ export interface AppOptions {
    */
   run?: RunManager
   /**
+   * Delete/purge cascade for live BACKGROUND subagents of a deleted parent:
+   * the session routes call this before soft-deleting. Absent (tests) →
+   * deletion skips the cancellation half.
+   */
+  cancelBackgroundForParent?: (parentSessionId: string) => number
+  /**
    * MCP server status snapshot, exposed at `GET /mcp` (bearer-protected,
    * consumed by `kclaw mcp list`). Absent → the route returns an empty
    * server list.
@@ -165,7 +171,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   registerSkillRoutes(app, { paths })
   // 切会话写入：POST /sessions 是 CLI /clear、/new 与 web 新建会话的共同底层，
   // 记忆系统在装配时才挂 clear 触发（缺省不触发，行为与未装配记忆时一致）。
-  registerSessionRoutes(app, { sessions, config, run: opts.run, memory: opts.memory })
+  registerSessionRoutes(app, { sessions, config, run: opts.run, memory: opts.memory, cancelBackgroundForParent: opts.cancelBackgroundForParent })
   if (opts.attachmentsDir !== undefined) {
     registerAttachmentRoutes(app, { sessions, attachmentsDir: opts.attachmentsDir })
   }
@@ -194,7 +200,6 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
     attachmentsDir: opts.attachmentsDir,
     authTimeoutMs: opts.wsAuthTimeoutMs,
     heartbeatMs: opts.wsHeartbeatMs,
-    decidedRules: { home: paths.home, workspaceFallback: config.workspace },
   })
 
   if (opts.webDist !== undefined) {

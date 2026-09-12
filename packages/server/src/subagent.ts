@@ -84,29 +84,33 @@ export interface SubagentHost {
 export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
   const maxConcurrent = deps.config.subagents?.maxConcurrent ?? 4
   const maxBackground = deps.config.subagents?.maxBackground ?? 4
-  /** Live blocking child session ids per parent session (the per-run cap). */
-  const live = new Map<string, Set<string>>()
-  /** Live BACKGROUND child session ids per parent session (its own cap, its own lifecycle). */
-  const backgroundLive = new Map<string, Set<string>>()
+  /**
+   * Live children, one record per child session: its parent and the dispatch
+   * mode. The per-mode caps and the delete-cascade cancel scan this by
+   * parent+mode — a handful of entries at most (caps are 4+4), so a scan is
+   * free and every consumer reads the same source.
+   */
+  const live = new Map<string, { parentId: string; mode: "blocking" | "background" }>()
 
   const spawner: SubagentSpawner = async (req: SubagentSpawnRequest): Promise<SubagentSpawnResult> => {
     const parent = deps.sessions.meta(req.parentSessionId)
     if (parent === undefined) {
       return { status: "error", output: `subagent dispatch failed: parent session not found (${req.parentSessionId})` }
     }
-    const background = req.background === true
+    const mode = req.background === true ? "background" : "blocking"
+    const background = mode === "background"
     // Cap first: an over-cap dispatch must not even create a session. The two
     // budgets are counted separately (issue #22) so background tasks cannot
     // starve foreground dispatches (or vice versa).
-    const children =
-      background
-        ? (backgroundLive.get(req.parentSessionId) ?? backgroundLive.set(req.parentSessionId, new Set()).get(req.parentSessionId)!)
-        : (live.get(req.parentSessionId) ?? live.set(req.parentSessionId, new Set()).get(req.parentSessionId)!)
-    const cap = background ? maxBackground : maxConcurrent
-    if (children.size >= cap) {
+    let own = 0
+    for (const rec of live.values()) {
+      if (rec.parentId === req.parentSessionId && rec.mode === mode) own++
+    }
+    const cap = mode === "background" ? maxBackground : maxConcurrent
+    if (own >= cap) {
       return {
         status: "error",
-        output: background
+        output: mode === "background"
           ? `已达后台子代理并发上限（${maxBackground} 个同时运行）；等现有后台任务结束后再派，或改用阻塞模式`
           : `已达子代理并发上限（${maxConcurrent} 个同时运行）；等现有子代理结束后再派`,
       }
@@ -125,7 +129,7 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
       parent.mode ?? "default",
       req.parentSessionId,
     )
-    children.add(child.id)
+    live.set(child.id, { parentId: req.parentSessionId, mode })
     const who = label ?? child.id
 
     // Status + confirmation forwarding: one bus subscriber on the child channel.
@@ -206,13 +210,7 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
 
     const teardown = (): void => {
       deps.bus.unsubscribe(child.id, subscriber)
-      children.delete(child.id)
-      // Only THIS dispatch's own budget book clears — a blocking child
-      // finishing must not erase the background book (or vice versa), or the
-      // caps drift and cancelBackgroundForParent loses still-running children.
-      if (children.size === 0) {
-        ;(background ? backgroundLive : live).delete(req.parentSessionId)
-      }
+      live.delete(child.id)
     }
 
     // Parent-stop-child-stop is a BLOCKING-mode contract: aborting the parent
@@ -305,16 +303,17 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
   }
 
   const cancelBackgroundForParent = (parentSessionId: string): number => {
-    const ids = backgroundLive.get(parentSessionId)
-    if (ids === undefined) return 0
-    for (const id of ids) {
+    let count = 0
+    for (const [childId, rec] of live) {
+      if (rec.parentId !== parentSessionId || rec.mode !== "background") continue
+      count++
       try {
-        deps.getRun().cancel(id)
+        deps.getRun().cancel(childId)
       } catch {
         // daemon teardown — nothing left to cancel
       }
     }
-    return ids.size
+    return count
   }
 
   const collector: SubagentCollector = async (req) => {
