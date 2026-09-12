@@ -237,19 +237,38 @@ describe("toProviderMessages — v3", () => {
     expect(out[0]!.role).not.toBe("system")
   })
 
-  it("tokenBudget：大工具结果被预算挤掉，只保留装得下的最近几条", () => {
-    // 3 条工具结果各 100 字（estimateTokens ≈ 25），预算只装得下 2 条
+  it("tokenBudget：K 条保底之外，装不下的最旧结果被挤掉", () => {
+    // 3 条工具结果各 100 字（estimateTokens ≈ 25），基线 acc = 3（每条 tool_call args "{}" ≈ 1）；
+    // 预算 27 < 3 + 25 → 装不下任何非保底结果：最新 2 条保底保留，最旧的 1 条被挤掉
     const history = [...toolMsg("a".repeat(100)), ...toolMsg("b".repeat(100)), ...toolMsg("c".repeat(100))]
-    const out = toProviderMessages(history, 200, { tokenBudget: 60 })
+    const out = toProviderMessages(history, 200, { tokenBudget: 27 })
     const contents = out.filter((m) => m.role === "tool").map((m) => (m as { content: string }).content)
     const evicted = contents.filter((c) => c.startsWith("[此工具输出已省略"))
     expect(evicted.length).toBe(1) // 最旧的一条被挤掉
+    expect(contents[1]).toContain("b".repeat(100))
+    expect(contents[2]).toContain("c".repeat(100))
   })
 
   it("tokenBudget 装得下时不省略", () => {
     const history = [...toolMsg("x".repeat(50))]
     const out = toProviderMessages(history, 200, { tokenBudget: 10_000 })
     expect(out.some((m) => m.role === "tool" && !(m as { content: string }).content.startsWith("["))).toBe(true)
+  })
+
+  it("tokenBudget 为 0 时最新 2 条工具结果仍原文保留（保底可见性）", () => {
+    const history = [...toolMsg("a".repeat(100)), ...toolMsg("b".repeat(100)), ...toolMsg("c".repeat(100))]
+    const out = toProviderMessages(history, 200, { tokenBudget: 0 })
+    const contents = out.filter((m) => m.role === "tool").map((m) => (m as { content: string }).content)
+    expect(contents[0]).toContain("此工具输出已省略") // 最旧的被省略
+    expect(contents[1]).toContain("b".repeat(100)) // 最新 2 条保底
+    expect(contents[2]).toContain("c".repeat(100))
+  })
+
+  it("工具结果不足 K 条且预算为 0 时同样保底", () => {
+    const history = [...toolMsg("only".repeat(40))]
+    const out = toProviderMessages(history, 200, { tokenBudget: 0 })
+    const tool = out.find((m) => m.role === "tool") as { content: string }
+    expect(tool.content).toContain("only")
   })
 })
 
