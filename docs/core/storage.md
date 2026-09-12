@@ -35,7 +35,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `<home>/hooks/` | 用户钩子目录（每个文件是一个钩子，`export const hook` + default 函数；见 [hooks](./hooks.md)） | 用户手编；每个 run 重新扫描读取 |
 | `<home>/sessions/<id>/` | 每会话一个目录（events.jsonl + meta.json + queue.jsonl，分工见下节） | SessionStore（events.jsonl 是唯一真相、meta.json 是派生摘要、queue.jsonl 是运行态、整文件重写） |
 | `<home>/jobs.db` | 定时任务表 | JobScheduler |
-| `<home>/usage.db` | 每次 LLM 运行的 token 用量账本 | UsageStore |
+| `<home>/usage.db` | 每次 LLM 运行的 token 用量记录 | UsageStore |
 | `<home>/attachments/<id>/` | 附件外存目录（每会话一个子目录） | server 上传路由 `routes/attachments.ts`；运行时只读挂载 |
 | `<home>/spill/` | 工具输出溢出目录：exec / web_fetch 截断输出时，把捕获到的全量输出写到这里，给模型的截断视图附带 fs_read 定位行 | core `tools/spill.ts`（单文件上限 10 MiB，超出部分不保留）；目录在权限引擎 readRoots 内，`fs_read` 可直接读 |
 | `<home>/logs/` | 日志目录 | 预留：目录会创建，当前代码没有写入方 |
@@ -68,7 +68,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `web.tavilyApiKey` | `""` | web_search 工具的 Tavily 密钥 |
 | `web.timeoutMs` | `20000` | 每次网络抓取（搜索与网页）的 AbortSignal 超时，卡死的主机不能拖住一个 run |
 | `web.allowPrivateNetworks` | `false` | 设为 `true` 时豁免 web_fetch 对私网/回环目标的拒绝（SSRF 防护，例如允许抓取本机 Ollama 端点），由 run 装配传入工具 |
-| `usage.prices` | `{}` | 模型 → `{inputPerM?, outputPerM?}`：每百万 token 的美元单价，用量账本算成本用；没有价格条目的模型成本按 0 计 |
+| `usage.prices` | `{}` | 模型 → `{inputPerM?, outputPerM?}`：每百万 token 的美元单价，用量记录算成本用；没有价格条目的模型成本按 0 计 |
 | `mcp.servers` | `{}` | 外部 MCP server 配置表（stdio/http 两种形态），daemon 启动时据此装配 McpManager（见 [mcp](./mcp.md)） |
 | `exec.timeoutMs` / `maxOutputBytes` | `60000` / `102400`（100 KiB） | exec 工具的超时与输出截断上限 |
 | `sandbox.enabled` / `writeRoots` / `network` | `true` / `[]` / `"allow"` | exec 沙箱的整体开关、追加写白名单（realpath 形态）与沙箱内网络开关（deny 时 exec 子进程断网，web 工具不受影响），见 [sandbox](./sandbox.md)；可选字段仅为兼容旧配置文件 |
@@ -76,8 +76,10 @@ export function resolvePaths(home?: string): KclawPaths
 | `sessions.contextTokens` / `compactPackRatio` / `compactAheadRatio` / `compactAtRatio` / `compactPanicRatio` / `compactTargetRatio` / `toolResultKeep` | `128000` / `0.70` / `0.75` / `0.80` / `0.90` / `0.33` / `8` | 上下文压缩（见 [compaction](./compaction.md)）：token 预算、省略线（发送时工具输出省略的预算比例）、预压线（估算发送量达预算 × 0.75 且未过红线时在迭代边界派后台压缩）、黄线（估算发送量达预算 × 0.80 即触发收尾压缩）、红线（运行中占用达预算 × 0.90 时在迭代边界触发中途压缩）、压缩后保留部分的目标比例（预算 × 0.33）、发送时保留原文的最近工具结果条数。七个字段均可选，缺省值在读取处补齐（`contextTokens`/`compactPackRatio` 在 run 装配 core `executeRun`，`compactAheadRatio`/`compactPanicRatio` 与钩子侧的黄线复核在压缩内置钩子定义处，`compactAtRatio`/`compactTargetRatio` 也在压缩引擎 `Compactor` 读取） |
 | `sessions.toolLoopMaxRepeats` | `5` | 工具死循环守卫：同一工具调用（同名同参数）连续执行达 N 次后，该次结果附加 `<system-reminder kind="loop-guard">` 提醒模型换策略（跨工具回合计数，结果改变即重置）；`0` 关闭（见 [agent-loop](./agent-loop.md)） |
 | `sessions.defaultDisposition` | `"steer"` | 不带 disposition 的 send_message 的默认处置（见 [run-manager](../server/run-manager.md)）；单个会话可经 `meta.dispositionOverride` 覆盖 |
+| `sessions.askTimeoutMs` | `600000`（10 分钟） | ask_user_questions 工具等待用户回答的上限，超时按"未回答"落结果、run 继续（见 [tools](./tools.md)）；可选字段，缺省值在工具构建处补齐 |
 | `sessions.compactThreshold` / `compactKeep` | 无（废弃） | 旧版压缩的字段（当时是 40 条消息触发、保留 25 条），已废弃不生效：配置文件里写了不报错，但没有任何消费方 |
-| `subagents.maxConcurrent` | `4` | 每个主会话同时存活的子代理上限（按父会话计数，超限的派发立即返回 error、不建会话，见 [subagents](./subagents.md)）；可选字段，缺省值在 spawner 构建处补齐 |
+| `subagents.maxConcurrent` | `4` | 每个主会话同时存活的**阻塞**子代理上限（按父会话计数，超限的派发立即返回 error、不建会话，见 [subagents](./subagents.md)）；可选字段，缺省值在 spawner 构建处补齐 |
+| `subagents.maxBackground` | `4` | 每个主会话同时存活的**后台**子代理上限（`run_in_background` 派发，与阻塞上限分别计数、互不挤占；超限同样立即返回 error，见 [subagents](./subagents.md)）；可选字段，缺省值在 spawner 构建处补齐 |
 | `notify.channels` | `[]` | 定时任务终态通知渠道列表；为空即关闭（零开销）。条目 `{ name?, type, url, template? }`，`type` 三种：`bark`（POST JSON `{title, body}`）、`serverchan`（POST 表单 `title`+`desp`）、`webhook`（POST JSON，正文含 title/body 及全部 job 字段）。`template` 占位符：`{{job}}` `{{statusText}}` `{{status}}` `{{summary}}` `{{sessionId}}` `{{sessionUrl}}`，未知占位符渲染为空串 |
 | `notify.timeoutMs` | `10000` | 单次推送请求超时；推送失败只记日志、不重试 |
 | `hooks.timeoutMs` | `5000` | 单个钩子处理函数的执行预算（毫秒），超时按失败处理（用户钩子 skip、内置钩子 fatal，见 [hooks](./hooks.md)）；可选字段，缺省值在钩子链构建处补齐 |
@@ -141,7 +143,7 @@ export function readJsonl(file: string): unknown[]
 | `compaction?` | 分层压缩状态 `{ segments, top, upto }`（语义见 [compaction](./compaction.md)），由 `compaction` 事件推导（每次压缩把新段汇入 `segments`；`updateMeta` 不再直接改它） |
 | `compactedSummary?` / `compactedUpto?` | 旧版压缩的遗留字段——不再被清除，但运行侧读压缩视图时 `compaction` 优先（压缩引擎 `Compactor` 的 `compact` 里 `prev` 先读 `compaction`，见 [compaction](./compaction.md)）；两者并存没有功能影响 |
 | `dispositionOverride?` | 会话级发送处置覆盖（`"steer" \| "wait" \| "interrupt"`），优先于 `sessions.defaultDisposition`。服务端路由仍接受三个值的写入，但客户端当前只写 steer/wait——interrupt 在 Web 与 CLI 都是一次性动作、不写会话级覆盖，`"interrupt"` 值只会来自历史遗留（见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)） |
-| `systemBaseline?` | 冻结的系统提示词基线，双段独立 `{ stable: {text, frozenAt}, live?: {text, frozenAt} }`。作用：每 run 两段现算、与基线逐段比对——哪段文本变了就重冻结哪段（`frozenAt` 记录这份文本成为基线的时刻），没变的沿用基线，`system-before` / `system-after` 组装链只在至少一段变化时才跑（提示词缓存的稳定性策略，详见 [hooks](./hooks.md)）。推导规则：`system` 事件按段 upsert（legacy 单文本事件读作 stable）、`compaction` 事件清除（压缩改写了消息历史，缓存必然全量失效，正是重新装配的纪元边界），都不推进 `updatedAt` |
+| `systemBaseline?` | 冻结的系统提示词基线，双段独立 `{ stable: {text, frozenAt}, live?: {text, frozenAt} }`。作用：每 run 两段现算、与基线逐段比对——哪段文本变了就重冻结哪段（`frozenAt` 记录这份文本成为基线的时刻），没变的沿用基线，`system-before` / `system-after` 组装链只在至少一段变化时才跑（提示词缓存的稳定性策略，详见 [hooks](./hooks.md)）。推导规则：`system` 事件按段 upsert（legacy 单文本事件读作 stable）、`compaction` 事件清除（压缩改写了消息历史，缓存必然全量失效，正是基线重置的边界），都不推进 `updatedAt` |
 
 `Message`（`packages/core/src/protocol/messages.ts`）的基础字段是 `{ id, sessionId, role: "user" \| "assistant" \| "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因）。id 前缀 `msg_` / `ses_`，ULID 格式。会话的消息列表和压缩列表如今都是事件流的只读视图：`readMessages` 从事件流过滤出 `message` 事件、`readCompactions` 过滤出 `compaction` 事件，`readQueue` 读 `queue.jsonl`。
 
@@ -187,9 +189,9 @@ rules:
 
 ---
 
-## 用量账本（`storage/usage.ts`）
+## 用量记录（`storage/usage.ts`）
 
-`UsageStore` 是一张只追加、不修改的 SQLite 账本（`<home>/usage.db`，表 `usage` + `at` 列索引）：daemon 每结束一个 run 就记一行 `{sessionId, runId, model, inputTokens, outputTokens, at}`，行主键为 `u_<sessionId>_<runId>`。记账发出后不等结果：RunManager 调用它时包了 try/catch，记录失败只打一行日志，用量统计永远不影响 run 本身。
+`UsageStore` 是一张只追加、不修改的 SQLite 记录表（`<home>/usage.db`，表 `usage` + `at` 列索引）：daemon 每结束一个 run 就记一行 `{sessionId, runId, model, inputTokens, outputTokens, at}`，行主键为 `u_<sessionId>_<runId>`。记账发出后不等结果：RunManager 调用它时包了 try/catch，记录失败只打一行日志，用量统计永远不影响 run 本身。
 
 ```ts
 export interface UsageAgg { key: string; inputTokens: number; outputTokens: number; costUsd: number }

@@ -141,7 +141,7 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 
 ### subagent 工具（`tools/subagent.ts`）
 
-**subagent_run** `{task, label?, run_in_background?}`：派一个子代理执行一段自包含任务，阻塞等待其结题答复作为工具结果（完整机制、生命周期与结果整形见 [subagents](./subagents.md)）。执行器是薄壳——校验 `task` 非空字符串、`label` 与 `run_in_background` 为相应类型后调一次 spawner，会话创建/run 提交/状态转发都在 server 侧实现。`run_in_background: true` 时派发立即返回子会话 id（不阻塞父 run，生命周期挂到父**会话**而不是父 run——父 run 结束或中止不会取消它），子代理完成后父会话收到一条完成通知消息，届时用 `subagent_collect` 取完整答复。`risk: "safe"`：派出动作本身不碰敏感资源，子 run 自己的工具调用照常过自己的权限门；`concurrency: "parallel"`：一批多个 `subagent_run` 并发执行即并行路径。子代理的 `childSessionId` 经结果的 `data` 字段随块持久化（web 的"查看子代理轨迹"链接读它）。
+**subagent_run** `{task, label?, run_in_background?}`：派一个子代理执行一段自包含任务，默认阻塞等待其结题答复作为工具结果（完整机制、生命周期与结果整形见 [subagents](./subagents.md)）。执行器是薄壳——校验 `task` 非空字符串、`label` 与 `run_in_background` 为相应类型后调一次 spawner，会话创建/run 提交/状态转发都在 server 侧实现。`run_in_background: true` 时派发立即返回子会话 id（不阻塞父 run，生命周期挂到父**会话**而不是父 run——父 run 结束或中止不会取消它），子代理完成后父会话收到一条完成通知消息，届时用 `subagent_collect` 取完整答复。`risk: "safe"`：派出动作本身不碰敏感资源，子 run 自己的工具调用照常过自己的权限门；`concurrency: "parallel"`：一批多个 `subagent_run` 并发执行即并行路径。子代理的 `childSessionId` 经结果的 `data` 字段随块持久化（web 的"查看子代理审计"链接读它）。
 
 **subagent_collect** `{childSessionId}`：按子会话 id 取回后台子代理的最终结题答复（头尾截断，与阻塞结果同一形状）。只能取**本会话**派出的子代理——collector 校验 `parentSessionId` 归属，别人的子代理与未知 id 都是 error 结果。`risk: "safe"`、`concurrency: "parallel"`。
 

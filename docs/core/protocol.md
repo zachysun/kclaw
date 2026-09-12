@@ -194,7 +194,7 @@ export interface ConfirmationResolvedPayload {
 }
 
 // 运行中提问（ask_user_questions 工具，issue #21）：与确认共用同一个网关对象
-// （一个 broker 对象、两类挂起条目）。question.requested 发出后等待三方——
+// （一个 broker 对象、两类等待中的条目）。question.requested 发出后等待三方——
 // 人工回答 / 超时 / run 中止，谁先到算谁；中止不是回答（不发 resolved，与确认流同规则）。
 export interface QuestionSpec {
   text: string                      // 问题本身，自包含、可独立回答
@@ -261,7 +261,7 @@ export interface HookFailedPayload {
 
 ## 指令帧与会话事件（`wire.ts` / `session-events.ts`）
 
-`wire.ts` 定义 WS 的客户端→daemon 指令帧（`ClientCommand` 联合：auth / subscribe / unsubscribe / confirmation.resolve / send_message / queue.cancel / run.cancel / compaction.cancel）与 daemon→客户端的应答帧（各指令的 ack、`ErrorFrame`），合并为 `ServerFrame`；附件引用 `AttachmentRef{path,name,size,mimeType}` 与排队条目 `QueueEntry` 也在此（`session/store.ts` re-export 保持旧引用路径）。字段规则与报错文案不在类型里——它们的唯一实现是 server 的 `command-check.ts`（见 [realtime](../server/realtime.md)）。
+`wire.ts` 定义 WS 的客户端→daemon 指令帧（`ClientCommand` 联合：auth / subscribe / unsubscribe / confirmation.resolve / question.resolve / send_message / queue.cancel / run.cancel / compaction.cancel）与 daemon→客户端的应答帧（各指令的 ack、`ErrorFrame`），合并为 `ServerFrame`；附件引用 `AttachmentRef{path,name,size,mimeType}` 与排队条目 `QueueEntry` 也在此（`session/store.ts` re-export 保持旧引用路径）。字段规则与报错文案不在类型里——它们的唯一实现是 server 的 `command-check.ts`（见 [realtime](../server/realtime.md)）。
 
 `session-events.ts` 定义会话事件流（`events.jsonl`，`GET /sessions/:id/events` 的返回形状）的十三种事件类型：会话元数据五种（created/renamed/deleted/restored/set）+ `message` / `compaction` / `memory` / `system` / `sandbox.checked` + 运行档案三种（`run.started` / `run.ended` / `permission.decided`）。`session.created` 携带创建时固化的初始权限模式 `mode`（可选，旧流缺省 default）与可选 `parentSessionId`（子代理会话的父会话标识——引擎侧一切子代理特化从它派生，见 [subagents](./subagents.md)）；`session.set` 携带元数据的增量补丁（`model` / `mode`（会话权限模式）/ `disposition`，键出现在补丁里才发）；旧会话流里的 `readonly` 布尔字段是 legacy，读取时映射为 `mode`。`sandbox.checked` 是每 run 一条的沙箱状态审计（`{enabled, available, unavailableReason?}`），与 `system` 一样只写事件流、不进 bus 的 `EventType`——它们对外部的可见性由 `session.appended` 通知帧间接承载（订阅端收到后拉 `/events` 即见）。`run.started` / `run.ended` 每 run 成对出现，把该 run 的消息事件夹成一轮边界——失败 run 也落 `run.ended`（`stopReason:"error"` 带错误），起点的 run 必有终点留痕；`permission.decided` 记录每次落定的人工确认裁决（裁决、裁决者、工具身份），运行中被中止的确认不落（中止不是裁决）。`system` 事件是每 run 一条的双段系统提示词留痕：`stable`（人设基座 + 注入约定）与可选 `live`（认知 + 技能清单），legacy 单文本事件只带 `text`（读作 stable）。assistant 消息可携带可选 `latencyMs`（LLM 生成耗时毫秒，流成功完成时随 `usage` 一并持久化；旧消息与失败流缺省）。只放类型；运行时守卫（`isMessageEvent` 等）与 meta 投影（`applyEvent`）在 `session/events.ts`。
 
@@ -273,14 +273,14 @@ export interface HookFailedPayload {
 import { monotonicFactory } from "ulidx"
 const ulid = monotonicFactory()
 
-export type IdPrefix = "msg" | "ses" | "blk" | "call" | "evt" | "run" | "conf" | "mem" | "job" | "att"
+export type IdPrefix = "msg" | "ses" | "blk" | "call" | "evt" | "run" | "conf" | "mem" | "job" | "att" | "q"
 
 export function newId(prefix: IdPrefix): string {
   return `${prefix}_${ulid()}`     // 例: run_01J…，前缀 + 单调 ULID（按时间递增、可排序的唯一 ID）
 }
 ```
 
-10 个前缀的生成点：
+11 个前缀的生成点：
 
 | 前缀 | 生成点 |
 |------|--------|
@@ -293,6 +293,7 @@ export function newId(prefix: IdPrefix): string {
 | `mem` | 已声明、当前无生成点（旧版 note id 前缀，现版线/认知文件不用前缀 id，见下） |
 | `job` | `jobs/scheduler.ts` |
 | `att` | server 的上传路由（`routes/attachments.ts`，写入磁盘的文件名 `<att_…>__<原名>`） |
+| `q` | `tools/ask.ts` 的 ask_user_questions（每次提问的 questionId） |
 
 `call` 前缀已声明但当前无生成点——`callId` 由 provider 原样传入（OpenAI 的 tool_call id，缺失时 provider 合成 `call_idx_<index>`，见 `provider/openai-compat.ts`）。`mem` 前缀同 `call`：现在的代码里 `newId("mem")` 全仓无调用处（线/认知文件按 `topic`/`kind-name` 命名，不生成 mem_* id），保留声明仅为兼容阅读旧版的 note id（`mem_<ULID>`）。单调 ULID 保证同进程内 ID 按时间排序，日志/JSONL 天然有序。
 

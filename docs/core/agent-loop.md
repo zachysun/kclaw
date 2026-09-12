@@ -188,7 +188,7 @@ daemon 侧 `RunManager.cancel(sessionId)` 调 `AbortController.abort()`，循环
 ## 关联
 
 - [protocol](./protocol.md)：Message/Block/Event 的字段与事件全表
-- [compaction](./compaction.md)：上下文占用与五条水位线（省略/预压/黄/红/目标）、五个触发点（后台预压/收尾/运行中/溢出急救/手动）、预算驱动省略与 window 200 的分工
+- [compaction](./compaction.md)：上下文占用与五条阈值线（省略/预压/黄/红/目标）、五个触发点（后台预压/收尾/运行中/溢出急救/手动）、预算驱动省略与 window 200 的分工
 - [provider](./provider.md)：OpenAI 兼容流解析与 withRetry
 - [permissions](./permissions.md)：判定链与规则语法（allow/deny 的来源）
 - [skills](./skills.md)：技能点名隐式包装（`skill-wrap` 内置钩子 + `withLastUserText`）

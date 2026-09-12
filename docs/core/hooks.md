@@ -96,15 +96,15 @@ export default async (ctx) => {
 | 10 | `retry-notify` | llm-retry | skip | 把 provider 重试转成 `llm.failed {willRetry:true}` 事件 |
 | 10 | `steering-drain` | turn-boundary | fatal | 取走队列的引导缓冲并注入对话 |
 | 5 | `background-precompact` | compaction-check | skip | 预压区间的后台压缩派发（非阻塞，见 [compaction](./compaction.md) 机制四） |
-| 10 | `mid-run-panic` | compaction-check | skip | 红线水位触发的中途压缩判定（`null` = 不压）；先应用挂起的后台成果，遇在飞后台先等 |
-| 10 | `overflow-emergency` | overflow-rescue | skip | 超限急救压缩（换视图整次重发）；先掐掉在飞后台 |
+| 10 | `mid-run-panic` | compaction-check | skip | 红线阈值触发的中途压缩判定（`null` = 不压）；先应用暂存的后台成果，遇正在执行的后台压缩先等 |
+| 10 | `overflow-emergency` | overflow-rescue | skip | 超限急救压缩（换视图整次重发）；先掐掉正在执行的后台压缩 |
 | 10 | `usage-ledger` | run-after | skip | 记录本次 run 的用量 |
-| 15 | `manual-compact-flush` | run-after | skip | 冲刷运行忙时挂起的 /compact（在自动收尾压缩之前） |
-| 20 | `post-run-compaction` | run-after | fatal | 上下文到达黄线时触发的收尾压缩（估算前等在飞后台落定） |
-| 30 | `follow-check` | run-after | skip | 挂起记忆空闲检查（调度器补查） |
+| 15 | `manual-compact-flush` | run-after | skip | 冲刷运行忙时排队的 /compact（在自动收尾压缩之前） |
+| 20 | `post-run-compaction` | run-after | fatal | 上下文到达黄线时触发的收尾压缩（估算前等正在执行的后台压缩结束） |
+| 30 | `follow-check` | run-after | skip | 排一个记忆空闲检查（调度器补查） |
 | 10 | `system-materials` | system-before | skip | 收集 L2 认知与技能清单两个提示词段（即 live 段） |
 
-两个值得知道的次序：run-before 上 `memory-inject(10)` 只收集记忆 note，`user-message-land(20)` 统一把 job note（在前）与记忆 note 追加进消息、持久化并广播——这与改成钩子形态之前的块顺序、`note.emitted` 次序完全一致。system-after 上用户改写（默认 1000）排在前面，随后装配层把终稿（用户改写或原稿）按段冻结进基线并写 `system` 审计事件——**系统提示词的审计留痕不是钩子**：`system` 事件的双段写入（stable/live）由 run 装配层直接落盘（写失败即 run 失败），因为分段冻结需要 stable/live 两段文本，而它们位于钩子链之上（见 [run-manager](../server/run-manager.md) 装配第 11 步）。
+两个值得知道的次序：run-before 上 `memory-inject(10)` 只收集记忆 note，`user-message-land(20)` 统一把 job note（在前）与记忆 note 追加进消息、持久化并广播——这与改成钩子形态之前的块顺序、`note.emitted` 次序完全一致。system-after 上用户改写（默认 1000）排在前面，随后装配层把终稿（用户改写或原稿）按段冻结进基线并写 `system` 审计事件——**系统提示词的审计留痕不是钩子**：`system` 事件的双段写入（stable/live）由 run 装配层直接写入事件流（写失败即 run 失败），因为分段冻结需要 stable/live 两段文本，而它们位于钩子链之上（见 [run-manager](../server/run-manager.md) 装配第 11 步）。
 
 **子代理 run 的派生跳过**：会话 meta 带 `parentSessionId` 时，run 装配给内置钩子链带 `childRun: true`（同一个事实派生，无独立开关，见 [subagents](./subagents.md)），四个内置钩子直接让位——`memory-inject` 不检索不收集（子代理不注入记忆 note）、`autoname` 跳过（标题已带"子代理 · "前缀）、`follow-check` 不挂检查（子会话不进记忆的任何提取路径）、`system-materials` 返回空段（系统提示词整体换成精简的 `subagentSystemPrompt`，不带认知与技能清单）。`usage-ledger` 照常记账，但记到 `usageSessionId`（= 父会话 id）名下——子代理的 token 消耗归因到派它的主对话。
 
@@ -118,7 +118,7 @@ export default async (ctx) => {
 
 ## 与循环的关系
 
-位置在循环里的确切触发时机、每次触发的事件序、fatal 失败对应哪个错误码，见 [agent-loop](./agent-loop.md)；压缩两个决策位的水位规则见 [compaction](./compaction.md)；`hook.failed` 事件的 payload 见 [protocol](./protocol.md)。
+位置在循环里的确切触发时机、每次触发的事件序、fatal 失败对应哪个错误码，见 [agent-loop](./agent-loop.md)；压缩两个决策位的阈值规则见 [compaction](./compaction.md)；`hook.failed` 事件的 payload 见 [protocol](./protocol.md)。
 
 ## 关联
 

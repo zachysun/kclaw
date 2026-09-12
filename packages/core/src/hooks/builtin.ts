@@ -266,7 +266,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     makeHandler: (rt) => {
       const { compactor, sessionId, signal, sessions, contextOverhead, budget, aheadRatio, panicRatio, config, runLlm, model } = rt
       return () => {
-        // 预压线（ahead ≤ 估算水位 < 红线）且无在飞、无挂起成果时，在后台启动
+        // 预压线（ahead ≤ 估算水位 < 红线）且无在飞、无暂存成果时，在后台启动
         // 压缩：不阻塞下一次请求，成果由后续迭代边界应用（mid-run-panic）。
         // 水位已达红线的场景让位给 mid-run-panic 的同步路径。
         if (compactor.cancelled(sessionId) || signal.aborted) return
@@ -399,7 +399,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     name: "manual-compact-flush",
     position: "run-after",
     order: 15,
-    description: "冲刷挂起的 /compact（忙时登记，运行结束后执行）",
+    description: "冲刷排队的 /compact（忙时登记，运行结束后执行）",
     failure: "skip",
     timeoutMs: Number.POSITIVE_INFINITY,
     makeHandler: (rt) => {
@@ -462,7 +462,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     name: "follow-check",
     position: "run-after",
     order: 30,
-    description: "挂起记忆空闲检查（调度器补查）",
+    description: "排一个记忆空闲检查（调度器补查）",
     failure: "skip",
     makeHandler: (rt) => {
       const { childRun, config, memory, sessionId } = rt

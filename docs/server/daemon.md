@@ -85,13 +85,16 @@ new JobScheduler(paths.jobsDb)
 new UsageStore(paths.usageDb)       token 用量记录（SQLite，stop 时 close）
 defaultLlmFactory(config) + resolveModel(config)   见"provider 解析"
 new McpManager({servers})           仅当 config.mcp.servers 非空；否则 undefined（不装配）
-createSubagentSpawner({config, sessions, bus, getRun})
-                                    子代理派发后端（见 subagents.md）：getRun 是晚绑闭包——
+createSubagentHost({config, sessions, bus, getRun})
+                                    子代理宿主（见 subagents.md）：一次装配返回三件能力——
+                                    spawner（派发后端，阻塞与后台子代理各有一个并发计数）、collector
+                                    （后台子代理的结果收集）、cancelBackgroundForParent
+                                    （会话删除时级联取消在跑的后台子代理）。getRun 是晚绑闭包——
                                     spawner 要调 RunManager.cancel/submit，而 RunManager 的 deps
-                                    又要 spawner，构造顺序上先建 spawner、再建 manager、随后回填
+                                    又要 spawner，构造顺序上先建 host、再建 manager、随后回填
 new RunManager({...})               注入 usageStore、memory、
                                     extraTools: () => mcpManager.tools()（有管理器时）、
-                                    subagents: { spawner }；见 run-manager。
+                                    subagents: { spawner, collector, cancelBackgroundForParent }；见 run-manager。
                                     权限模式没有 daemon 级旗标——它是会话级事实（meta.mode），
                                     run 装配每 run 从会话 meta 读出（见 permissions/run-manager）
 createApp({home, token, stores, bus, run, mcp, attachmentsDir, usage, webDist, memory})

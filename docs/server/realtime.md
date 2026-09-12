@@ -104,7 +104,7 @@ export class EventBus {
   │── {"type":"subscribe","sessionId"} ───▶ bus.subscribe
   │◀── {"type":"subscribed","sessionId"} ── ack
   │◀── 事件帧（仅该 sessionId 的 + 广播的 job.*）
-  │── send_message / run.cancel / queue.cancel / confirmation.resolve / unsubscribe …
+  │── send_message / run.cancel / queue.cancel / confirmation.resolve / question.resolve / unsubscribe …
   │◀── 对应 ack / error 帧
   │── close ────────────────────────────▶ socket.on("close") → bus.unsubscribe(socket)
 ```
