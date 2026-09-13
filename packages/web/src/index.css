@@ -1,16 +1,61 @@
 /* ============================================================
    kclaw web shell — hand-written CSS, no framework.
-   Design language: a warm near-black canvas, one amber "agent
-   signal" used only where the agent is alive/working (selection,
-   running, primary action), monospace as the tool's native voice.
-   All colors/spacing/radii live in :root tokens; components only
-   reference tokens so the whole surface stays coherent.
+   Two themes on one token set, switched via <html data-theme>:
+   "phantom" (default) — high-contrast red/black with hard
+   italic slants and hazard-tape motifs, red reserved for where
+   the agent is alive/acting;
+   "amber" — the classic warm near-black look.
+   :root carries the shared structure and the phantom palette;
+   [data-theme="amber"] swaps the palette back; the phantom-only
+   decoration layer sits at the end of this file. Components only
+   reference tokens so both themes stay coherent.
    ============================================================ */
 
 :root {
   color-scheme: dark;
 
-  /* palette — warm neutrals + amber accent */
+  /* palette — paper white on near-black, red as the agent signal */
+  --bg: #0b0b0d;
+  --surface: #141416;
+  --surface-2: #1c1c1f;
+  --surface-3: #26262b;
+  --border: #26262b;
+  --border-strong: #3a3a42;
+  --text: #f2efe6;
+  --text-dim: #c6c2b8;
+  --muted: #8d897f;
+  --accent: #e4000f;           /* the agent signal — phantom red */
+  --accent-strong: #ff3348;    /* legible red for small text on black */
+  --accent-ink: #ffffff;       /* text on red fills */
+  --accent-dim: rgba(228, 0, 15, 0.14);
+  --success: #5fd068;
+  --success-dim: rgba(95, 208, 104, 0.12);
+  --danger: #ffd23f;           /* hazard yellow — red belongs to the agent */
+  --danger-dim: rgba(255, 210, 63, 0.1);
+  --warn: #ffd23f;
+
+  /* type — mono is the native voice; the phantom theme fronts titles with
+     an italic display face (system geometric sans, no webfont) */
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --font-ui: var(--font-mono);
+  --font-display: "Avenir Next", Futura, "Helvetica Neue", Arial, var(--font-mono);
+
+  /* scale — phantom cuts corners sharp */
+  --radius: 5px;
+  --radius-sm: 2px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --ease: 120ms ease;
+
+  /* semantic fills derived from the palette */
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-strong);
+}
+
+/* the classic warm look: same structure, softer palette and corners */
+html[data-theme="amber"] {
   --bg: #131518;
   --surface: #1a1d22;
   --surface-2: #21252c;
@@ -20,31 +65,17 @@
   --text: #e6e6e6;
   --text-dim: #b7bcc4;
   --muted: #8a9099;
-  --accent: #e0a44e;          /* the agent signal */
+  --accent: #e0a44e;
   --accent-strong: #f0b45f;
-  --accent-ink: #3a2c14;      /* text on accent fills */
+  --accent-ink: #3a2c14;
   --accent-dim: rgba(224, 164, 78, 0.13);
   --success: #7cb876;
   --success-dim: rgba(124, 184, 118, 0.12);
   --danger: #e07a6d;
   --danger-dim: rgba(224, 122, 109, 0.12);
   --warn: #d8a657;
-
-  /* type — mono is the native voice of a terminal-rooted agent */
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-  --font-ui: var(--font-mono);
-
-  /* scale */
   --radius: 8px;
   --radius-sm: 5px;
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --ease: 120ms ease;
-
-  /* semantic fills derived from the palette */
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
 }
 
@@ -77,6 +108,36 @@ body {
 ::selection {
   background: var(--accent);
   color: var(--accent-ink);
+}
+
+/* Scrollbars join the theme: hairline dark thumb, red on hover.
+   Firefox gets the two-property thin style; Chromium gets the webkit set. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 0;
+  border: 2px solid var(--bg);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* Respect reduced-motion: kill the pulse and transitions. */
@@ -149,7 +210,7 @@ button.danger {
 
 button.danger:hover:not(:disabled) {
   background: var(--danger);
-  color: #1a0d0b;
+  color: #141414;
   border-color: var(--danger);
 }
 
@@ -241,6 +302,7 @@ select:focus {
   color: var(--muted);
   border-radius: var(--radius-sm);
   padding: 5px 14px;
+  font-weight: 600;
 }
 
 .tab:hover:not(:disabled) {
@@ -255,7 +317,12 @@ select:focus {
   background: var(--surface-2);
 }
 
-/* daemon status — amber while connecting, green when healthy, red on error */
+.tab.active:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+/* daemon status — accent while connecting, green when healthy, danger on error */
 .status-dot {
   width: 10px;
   height: 10px;
@@ -275,6 +342,22 @@ select:focus {
 .status-dot.connecting {
   background: var(--accent);
   animation: pulse 1.2s ease-in-out infinite;
+}
+
+/* theme switch: a quiet two-state mark that warms up on hover */
+.theme-toggle {
+  font-size: 13px;
+  line-height: 1;
+  padding: 4px 10px;
+  color: var(--muted);
+  background: transparent;
+  border-color: var(--border);
+}
+
+.theme-toggle:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: transparent;
 }
 
 .sidebar-toggle {
@@ -343,7 +426,7 @@ select:focus {
 }
 
 .new-session:hover:not(:disabled) {
-  background: rgba(224, 164, 78, 0.22);
+  background: rgba(228, 0, 15, 0.22);
   border-color: var(--accent);
 }
 
@@ -374,7 +457,12 @@ select:focus {
   min-height: 20px;
 }
 
+/* The group header doubles as the fold toggle: a tree marker that points
+   down while open and right while folded. The rtl/ellipsis trick keeps the
+   path's TAIL visible (the distinguishing part of a directory path). */
 .workdir-group-name {
+  flex: 1;
+  min-width: 0;
   font-size: 12px;
   color: var(--accent);
   overflow: hidden;
@@ -382,19 +470,36 @@ select:focus {
   white-space: nowrap;
   direction: rtl;
   text-align: left;
-  flex: 1;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  cursor: pointer;
 }
 
 .workdir-group-name::before {
   content: "▸ ";
+  display: inline-block;
+  transition: transform var(--ease);
+}
+
+.workdir-group:not(.collapsed) .workdir-group-name::before {
+  transform: rotate(90deg);
 }
 
 .workdir-group-name.muted {
   color: var(--muted);
 }
 
-.workdir-group-name.muted::before {
-  content: "";
+/* session count on a folded header — the list is gone, the number stays */
+.group-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 6px;
+  line-height: 1.5;
 }
 
 .group-actions {
@@ -413,7 +518,7 @@ select:focus {
 }
 
 .group-new:hover:not(:disabled) {
-  background: rgba(224, 164, 78, 0.22);
+  background: rgba(228, 0, 15, 0.22);
 }
 
 .group-rename-trigger {
@@ -444,6 +549,7 @@ select:focus {
 
 .session-row {
   list-style: none;
+  position: relative;
 }
 
 .session-item {
@@ -451,7 +557,7 @@ select:focus {
   flex-direction: column;
   align-items: flex-start;
   width: 100%;
-  gap: 2px;
+  gap: 3px;
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -470,7 +576,7 @@ select:focus {
 .session-item.selected {
   border-color: var(--accent);
   background: var(--accent-dim);
-  box-shadow: inset 2px 0 0 var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .session-title {
@@ -478,11 +584,21 @@ select:focus {
   overflow-wrap: anywhere;
 }
 
+/* one meta line: where (tail-ellipsized) · when (right-aligned) */
+.session-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
 .session-workdir {
   font-size: 11px;
   color: var(--accent);
-  opacity: 0.85;
-  max-width: 100%;
+  opacity: 0.72;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -493,12 +609,41 @@ select:focus {
 .session-time {
   font-size: 11px;
   color: var(--muted);
+  flex-shrink: 0;
 }
 
+/* Row actions float over the card's top-right on hover (or keyboard focus
+   within the row) instead of living under every card as permanent noise.
+   The chip backdrop keeps the title underneath readable while overlaid. */
 .session-actions {
+  position: absolute;
+  top: 5px;
+  right: 5px;
   display: flex;
   gap: 4px;
-  margin-top: 2px;
+  padding: 2px 4px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--ease);
+}
+
+.session-row:hover .session-actions,
+.session-row:focus-within .session-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Touch has no hover: keep the buttons in their static slot below the card. */
+@media (hover: none) {
+  .session-actions {
+    position: static;
+    margin-top: 2px;
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .session-actions button {
@@ -712,7 +857,7 @@ select:focus {
   font-size: 11px;
   color: var(--accent);
   background: var(--accent-dim);
-  border: 1px solid rgba(224, 164, 78, 0.28);
+  border: 1px solid rgba(228, 0, 15, 0.4);
   border-radius: var(--radius-sm);
 }
 
@@ -786,7 +931,7 @@ select:focus {
 .message-user {
   align-self: flex-end;
   background: var(--accent-dim);
-  border-color: rgba(224, 164, 78, 0.28);
+  border-color: rgba(228, 0, 15, 0.4);
   border-bottom-right-radius: 2px;
 }
 
@@ -806,6 +951,237 @@ select:focus {
   margin: 0;
   white-space: pre-wrap;
   font-family: var(--font-mono);
+}
+
+/* Markdown-rendered assistant text: the container's pre-wrap (meant for raw
+   text) would show the source's blank lines as extra whitespace, so the
+   rendered flow goes back to normal. */
+.blk-text.md {
+  white-space: normal;
+}
+
+/* ---- markdown typography (assistant bubbles) ---- */
+
+.md > :first-child {
+  margin-top: 0;
+}
+
+.md > :last-child {
+  margin-bottom: 0;
+}
+
+.md p {
+  margin: 0.45em 0;
+}
+
+.md h1,
+.md h2,
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+  margin: 0.9em 0 0.35em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.md h1 {
+  font-size: 1.22em;
+}
+
+.md h2 {
+  font-size: 1.12em;
+}
+
+.md h3,
+.md h4 {
+  font-size: 1.03em;
+}
+
+.md h5,
+.md h6 {
+  font-size: 1em;
+  color: var(--text-dim);
+}
+
+.md ul,
+.md ol {
+  margin: 0.45em 0;
+  padding-left: 1.5em;
+}
+
+.md li {
+  margin: 0.2em 0;
+}
+
+.md li > ul,
+.md li > ol {
+  margin: 0.15em 0;
+}
+
+.md li::marker {
+  color: var(--muted);
+}
+
+.md blockquote {
+  margin: 0.5em 0;
+  padding: 0.1em 0 0.1em 0.9em;
+  border-left: 2px solid var(--accent);
+  color: var(--text-dim);
+}
+
+.md hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.9em 0;
+}
+
+.md a {
+  color: var(--accent-strong);
+  text-decoration: none;
+}
+
+.md a:hover {
+  text-decoration: underline;
+}
+
+.md img {
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+}
+
+.md table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.95em;
+}
+
+.md th,
+.md td {
+  border: 1px solid var(--border);
+  padding: 3px 9px;
+  text-align: left;
+}
+
+.md th {
+  background: var(--surface-2);
+  font-weight: 600;
+}
+
+/* GFM task list checkboxes align with the text instead of floating high. */
+.md li.task-list-item {
+  list-style: none;
+}
+
+.md li.task-list-item input[type="checkbox"] {
+  margin-right: 0.45em;
+  accent-color: var(--accent);
+}
+
+/* Fenced code block: a slightly darker well than the bubble, copy button as
+   a sibling of the <pre> so it never lands in the copied text. */
+.md-code {
+  position: relative;
+  margin: 0.5em 0;
+}
+
+.md-code pre {
+  margin: 0;
+  padding: 9px 12px;
+  background: #08080a;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.md-code pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+.code-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  font-size: 11px;
+  padding: 1px 8px;
+  opacity: 0;
+  background: var(--surface-3);
+}
+
+.md-code:hover .code-copy,
+.md-code:focus-within .code-copy {
+  opacity: 1;
+}
+
+/* ---- highlight.js token palette (warm, derived from the shell tokens:
+   amber keywords, sage strings, sand numbers, slate-blue names) ---- */
+
+.md .hljs-comment,
+.md .hljs-quote {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.md .hljs-keyword,
+.md .hljs-selector-tag,
+.md .hljs-literal,
+.md .hljs-section,
+.md .hljs-doctag,
+.md .hljs-type,
+.md .hljs-name,
+.md .hljs-strong {
+  color: var(--accent-strong);
+}
+
+.md .hljs-string,
+.md .hljs-regexp,
+.md .hljs-addition,
+.md .hljs-attribute,
+.md .hljs-meta .hljs-string {
+  color: var(--success);
+}
+
+.md .hljs-number,
+.md .hljs-symbol,
+.md .hljs-bullet,
+.md .hljs-variable,
+.md .hljs-template-variable,
+.md .hljs-link,
+.md .hljs-selector-attr {
+  color: var(--warn);
+}
+
+.md .hljs-title,
+.md .hljs-title.function_,
+.md .hljs-built_in,
+.md .hljs-class .hljs-title {
+  color: #6db4ff;
+}
+
+.md .hljs-attr,
+.md .hljs-property,
+.md .hljs-selector-class,
+.md .hljs-selector-id {
+  color: #c9a8ef;
+}
+
+.md .hljs-deletion {
+  color: var(--danger);
+}
+
+.md .hljs-emphasis {
+  font-style: italic;
+}
+
+.md .hljs-meta {
+  color: var(--text-dim);
 }
 
 .blk-note,
@@ -944,9 +1320,9 @@ select:focus {
   padding-left: var(--space-2);
 }
 
-/* the live agent: a pulsing amber line with a terminal cursor block */
+/* the live agent: a pulsing accent line with a terminal cursor block */
 .run-indicator {
-  color: var(--accent);
+  color: var(--accent-strong);
   font-size: 13px;
   font-family: var(--font-mono);
   display: flex;
@@ -1015,10 +1391,10 @@ select:focus {
   font-size: 13px;
 }
 
-/* inline confirmation card */
+/* inline confirmation card — the agent asking for permission */
 .confirm-card {
   border: 1px solid var(--warn);
-  background: rgba(216, 166, 87, 0.08);
+  background: var(--danger-dim);
   border-radius: var(--radius);
   padding: 10px 12px;
   font-size: 13px;
@@ -1454,7 +1830,7 @@ select:focus {
 
 .row-actions button.danger:hover:not(:disabled) {
   background: var(--danger);
-  color: #1a0d0b;
+  color: #141414;
 }
 
 .args-summary {
@@ -1735,6 +2111,43 @@ select:focus {
   letter-spacing: 0.06em;
 }
 
+/* numeric columns read right-aligned; mono digits are inherently tabular */
+.usage-view td.num,
+.data-table td.num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* the 分布 column: a pure-CSS bar scaled to the table's busiest row */
+.usage-bar-cell {
+  min-width: 140px;
+}
+
+.usage-bar-track {
+  display: block;
+  position: relative;
+  height: 8px;
+  background: var(--surface-2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.usage-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: var(--accent);
+}
+
+/* session rows show the human title; the raw id rides the tooltip */
+.usage-session-name {
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .usage-export {
   margin-left: var(--space-3);
   font-size: 12px;
@@ -1835,7 +2248,7 @@ select:focus {
 
 .memory-editor-actions button:last-child:hover:not(:disabled) {
   background: var(--danger);
-  color: #1a0d0b;
+  color: #141414;
 }
 
 @media (max-width: 700px) {
@@ -1854,8 +2267,10 @@ select:focus {
   position: sticky;
   top: 0;
   z-index: 50;
-  background: #7c2d12;
-  color: #fff;
+  background: var(--warn);
+  color: #141414;
+  font-weight: 700;
+  font-style: italic;
   text-align: center;
   padding: 6px 12px;
   font-size: 13px;
@@ -2119,4 +2534,145 @@ select:focus {
   font-style: normal;
   color: var(--accent, #6b8cff);
   margin-right: 6px;
+}
+
+/* ============================================================
+   Phantom theme decoration layer (html[data-theme="phantom"]).
+   Structure and colors come from tokens; this layer adds the
+   angled personality on top: skewed red tab cursor, italic
+   display titles dragging a red shadow, hazard tape where the
+   agent asks or runs. The amber theme simply skips all of it.
+   ============================================================ */
+
+html[data-theme="phantom"] .brand {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 800;
+  font-size: 17px;
+  letter-spacing: 0.03em;
+  /* misregistered-print offset: the logotype drags its red shadow */
+  text-shadow: 2px 2px 0 var(--accent);
+}
+
+html[data-theme="phantom"] .brand::before {
+  text-shadow: none;
+}
+
+/* The phantom-cursor tab: a hard red parallelogram with white type —
+   the one loud element in the bar. */
+html[data-theme="phantom"] .tab.active {
+  color: var(--accent-ink);
+  border-color: var(--accent);
+  background: var(--accent);
+  transform: skewX(-10deg);
+  box-shadow: 3px 3px 0 rgba(228, 0, 15, 0.3);
+}
+
+html[data-theme="phantom"] .tab.active:hover:not(:disabled) {
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+
+/* the live agent: an italic red line trailing a sliding hazard tape */
+html[data-theme="phantom"] .run-indicator {
+  font-style: italic;
+  font-weight: 700;
+  gap: 8px;
+}
+
+html[data-theme="phantom"] .run-indicator::after {
+  content: "";
+  width: 64px;
+  height: 9px;
+  background: repeating-linear-gradient(-45deg, var(--accent) 0 8px, transparent 8px 16px);
+  animation: tape-slide 0.7s linear infinite;
+}
+
+html[data-theme="phantom"] .run-indicator.compacting {
+  font-style: normal;
+}
+
+html[data-theme="phantom"] .run-indicator.compacting::after {
+  background: repeating-linear-gradient(-45deg, var(--border-strong) 0 8px, transparent 8px 16px);
+  animation: none;
+}
+
+/* the tape slides seamlessly: shift by one full stripe period */
+@keyframes tape-slide {
+  to {
+    background-position: 22.63px 0;
+  }
+}
+
+/* permission checkpoint = hazard tape across the card's top */
+html[data-theme="phantom"] .confirm-card {
+  border: 1px solid var(--border-strong);
+  border-top: 6px solid;
+  border-image: repeating-linear-gradient(-45deg, var(--warn) 0 10px, var(--bg) 10px 20px) 6;
+  background: var(--surface-2);
+}
+
+/* every filled action speaks in the italic voice */
+html[data-theme="phantom"] button.primary,
+html[data-theme="phantom"] .chat-composer button[type="submit"],
+html[data-theme="phantom"] .form-actions button[type="submit"],
+html[data-theme="phantom"] .memory-editor-actions button:first-child {
+  font-style: italic;
+  font-weight: 700;
+}
+
+/* the phantom slash: every page title is cut by a red mark */
+html[data-theme="phantom"] .view-title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 800;
+  font-size: 19px;
+  letter-spacing: 0.01em;
+}
+
+html[data-theme="phantom"] .view-title::before {
+  content: "// ";
+  color: var(--accent);
+}
+
+/* the gate is the cover page: oversized italic logotype over a tape bar */
+html[data-theme="phantom"] .token-gate {
+  margin-top: 16vh;
+}
+
+html[data-theme="phantom"] .token-gate h1 {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 800;
+  font-size: 44px;
+  margin: 0 0 2px;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  text-shadow: 3px 3px 0 var(--accent);
+}
+
+html[data-theme="phantom"] .token-gate h1::after {
+  content: "";
+  display: block;
+  width: 84px;
+  height: 6px;
+  margin-top: 10px;
+  background: repeating-linear-gradient(-45deg, var(--accent) 0 10px, transparent 10px 20px);
+}
+
+html[data-theme="phantom"] .token-gate button[type="submit"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+  font-style: italic;
+}
+
+html[data-theme="phantom"] .token-gate button[type="submit"]:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+html[data-theme="phantom"] .offline-banner {
+  font-style: italic;
 }

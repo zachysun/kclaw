@@ -20,6 +20,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react"
 import { bootstrapToken, clearToken, saveToken } from "./token.js"
+import { applyTheme, loadTheme, nextTheme, type ThemeName } from "./theme.js"
 import type { WsClient } from "./ws.js"
 import { useDaemonClients } from "./daemon-clients.js"
 import { ChatPanel } from "./chat/ChatPanel.js"
@@ -111,6 +112,9 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
   const { api, createWs, wsUrl } = useDaemonClients(token, onAuthExpired)
   const [status, setStatus] = useState<DaemonStatus>("connecting")
   const [tab, setTab] = useState<Tab>("chat")
+  // Shell theme (phantom/amber): index.html already set the attribute before
+  // first paint; this state mirrors it for the toggle and persists changes.
+  const [theme, setTheme] = useState<ThemeName>(loadTheme)
   const [sessions, setSessions] = useState<SessionMeta[] | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [messagesCache, setMessagesCache] = useState<Record<string, Message[]>>({})
@@ -233,6 +237,16 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
     setSidebarOpen(false)
     if (next === "audit") setAuditVisited(true)
     setTab(next)
+  }, [])
+
+  // Toggle the shell theme: applyTheme writes <html data-theme> (the CSS swap
+  // is pure tokens) and persists the choice.
+  const toggleTheme = useCallback((): void => {
+    setTheme((prev) => {
+      const next = nextTheme(prev)
+      applyTheme(next)
+      return next
+    })
   }, [])
 
   // memory.written 通知条点击：切到记忆页并把目标交给 MemoryView 自动打开。
@@ -397,6 +411,16 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
             权限
           </button>
         </nav>
+        <button
+          type="button"
+          className="theme-toggle"
+          data-testid="theme-toggle"
+          title={theme === "phantom" ? "切换到琥珀主题" : "切换到红黑主题"}
+          aria-label={theme === "phantom" ? "切换到琥珀主题" : "切换到红黑主题"}
+          onClick={toggleTheme}
+        >
+          {theme === "phantom" ? "◆" : "❚"}
+        </button>
         <span
           className={`status-dot ${status}`}
           data-testid="status-dot"
