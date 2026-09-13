@@ -129,14 +129,14 @@ describe("SkillsView", () => {
     await openReuseTab(container)
     // 两个区块：用户级技能目录（展开）与已安装插件（折叠）
     const sections = [...container.querySelectorAll(".skills-section-title")]
-    expect(sections.map((s) => s.textContent)).toEqual(["用户级技能目录", "已安装插件"])
+    expect(sections.map((s) => s.childNodes[0]!.textContent)).toEqual(["用户级技能目录", "已安装插件"])
     const agentSection = sections[0]!.closest(".skills-section")!
     const pluginSection = sections[1]!.closest(".skills-section")!
     const agentGroups = [...agentSection.querySelectorAll("details.discover-group")]
     const pluginGroups = [...pluginSection.querySelectorAll("details.discover-group")]
-    const agentGroupNames = agentGroups.map((d) => d.querySelector("summary")!.textContent)
+    const agentGroupNames = agentGroups.map((d) => d.querySelector(".group-label")!.textContent)
     expect(agentGroupNames).toEqual(["Claude Code（2）", "Codex（1）", "zCode（1）", "DeepSeek（1）"])
-    const pluginGroupNames = pluginGroups.map((d) => d.querySelector("summary")!.textContent)
+    const pluginGroupNames = pluginGroups.map((d) => d.querySelector(".group-label")!.textContent)
     expect(pluginGroupNames).toEqual(["superpowers（2）"])
     expect(agentGroups.every((d) => (d as HTMLDetailsElement).open)).toBe(true)
     expect(pluginGroups.every((d) => (d as HTMLDetailsElement).open)).toBe(false)
@@ -154,8 +154,37 @@ describe("SkillsView", () => {
     expect((filteredGroup as HTMLDetailsElement).open).toBe(true)
     expect(filteredGroup.querySelector('[data-testid="discover-grill"]')).toBeNull()
     // 用户级区在搜索无命中时整区消失
-    const sectionsAfter = [...container.querySelectorAll(".skills-section-title")].map((s) => s.textContent)
+    const sectionsAfter = [...container.querySelectorAll(".skills-section-title")].map((s) => s.childNodes[0]!.textContent)
     expect(sectionsAfter).toEqual(["已安装插件"])
+  })
+
+  it("plugin group titles carry origin agents and offer group-level reuse-all / unlink-all", async () => {
+    const api = fakeApi()
+    const { container } = await mount(api)
+    await openReuseTab(container)
+    const pluginGroup = [...container.querySelectorAll("details.discover-group")].find((d) => d.textContent!.includes("superpowers"))!
+    // 组标题带来源 agent（组内条目来源的并集）
+    expect(pluginGroup.querySelector(".group-origins")!.textContent).toBe("zCode")
+    // 组级按钮存在且可点
+    const reuseAll = pluginGroup.querySelector<HTMLElement>('[data-testid="group-reuse-superpowers"]')!
+    expect(reuseAll).not.toBeNull()
+    await act(async () => {
+      reuseAll.click()
+    })
+    await flush()
+    // 组内未复用无冲突的 tdd、grill 都被建链
+    expect(api.post).toHaveBeenCalledWith("/skills/links", { name: "tdd", target: "/plugins/tdd", agent: "zcode", tier: "all", workdir: undefined })
+    expect(api.post).toHaveBeenCalledWith("/skills/links", { name: "grill", target: "/plugins/grill", agent: "zcode", tier: "all", workdir: undefined })
+    // 区块级按钮：fake 的 links 记录不回写（tdd/grill 刚建链但记录里没有、
+    // docs 属用户级不在插件区块），区块级删除作用范围内无可删，del 不发生
+    const sectionUnlinkAll = container.querySelector<HTMLElement>('[data-testid="plugin-unlink-all"]')!
+    expect(sectionUnlinkAll).not.toBeNull()
+    const delCallsBefore = api.del.mock.calls.length
+    await act(async () => {
+      sectionUnlinkAll.click()
+    })
+    await flush()
+    expect(api.del).toHaveBeenCalledTimes(delCallsBefore)
   })
 
   it("built-in source missing shows neutral unused mark; custom source missing shows stale warning", async () => {

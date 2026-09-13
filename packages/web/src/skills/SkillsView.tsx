@@ -173,9 +173,8 @@ export function SkillsView({ api, notice }: {
     }
   }
 
-  const reuseAll = async (): Promise<void> => {
-    if (discovery === null) return
-    const candidates = discovery.skills.filter((s) => !s.reused && !s.conflict && !s.stale)
+  const reuseMany = async (label: string, items: DiscoveredSkill[]): Promise<void> => {
+    const candidates = items.filter((s) => !s.reused && !s.conflict && !s.stale)
     if (candidates.length === 0) {
       notice("没有可批量复用的技能（其余均已复用或存在冲突）")
       return
@@ -191,8 +190,30 @@ export function SkillsView({ api, notice }: {
       }
     }
     setBusy(false)
-    refreshAfterWrite(`批量复用完成：${ok}/${candidates.length}`)
+    refreshAfterWrite(`批量复用完成（${label}）：${ok}/${candidates.length}`)
   }
+
+  const unlinkMany = async (label: string, items: DiscoveredSkill[]): Promise<void> => {
+    const linked = items.filter((s) => linkNames.has(s.name))
+    if (linked.length === 0) {
+      notice(`${label}没有已复用的链接可删除`)
+      return
+    }
+    setBusy(true)
+    let ok = 0
+    for (const item of linked) {
+      try {
+        await api.del(`/skills/links/${encodeURIComponent(item.name)}${scopeQuery}`)
+        ok += 1
+      } catch {
+        // 单条失败不中断批量。
+      }
+    }
+    setBusy(false)
+    refreshAfterWrite(`批量删除完成（${label}）：${ok}/${linked.length}`)
+  }
+
+  const reuseAll = (): Promise<void> => reuseMany("全部", reusableRows)
 
   const addSource = async (): Promise<void> => {
     const dir = newSource.trim()
@@ -409,9 +430,15 @@ export function SkillsView({ api, notice }: {
                   )}
                   {pluginGroups.length > 0 && (
                     <div className="skills-section">
-                      <div className="skills-section-title">已安装插件</div>
+                      <div className="skills-section-title">
+                        已安装插件
+                        <span className="section-actions">
+                          <button type="button" data-testid="plugin-reuse-all" disabled={busy || !pluginGroups.some((g) => g.items.some((s) => !s.reused && !s.conflict && !s.stale))} onClick={() => void reuseMany("已安装插件", reusableRows.filter((s) => s.plugin !== undefined))}>全部复用</button>
+                          <button type="button" data-testid="plugin-unlink-all" disabled={busy || !pluginGroups.some((g) => g.items.some((s) => linkNames.has(s.name)))} onClick={() => void unlinkMany("已安装插件", reusableRows.filter((s) => s.plugin !== undefined))}>全部删除</button>
+                        </span>
+                      </div>
                       {pluginGroups.map((g) => (
-                        <DiscoveryGroup key={g.label} label={g.label} items={g.items} open={filtering} byName={body?.reusable?.name} busy={busy} linkNames={linkNames} onPreview={preview} onReuse={reuse} onUnlink={unlink} />
+                        <DiscoveryGroup key={g.label} label={g.label} items={g.items} open={filtering} byName={body?.reusable?.name} busy={busy} linkNames={linkNames} onPreview={preview} onReuse={reuse} onUnlink={unlink} onReuseAll={reuseMany} onUnlinkAll={unlinkMany} />
                       ))}
                     </div>
                   )}
@@ -441,11 +468,12 @@ export function SkillsView({ api, notice }: {
 }
 
 /**
- * 一个可折叠分组（区块内的 agent 组或插件组）：标题带计数，展开后是技能
- * 行（名字 / 状态或来源 / 两行截断的描述 / 复用开关）。open 是初始展开状
- * 态——搜索过滤时由父级强制展开，用户随后仍可手动收起。
+ * 一个可折叠分组（区块内的 agent 组或插件组）：标题带计数与来源 agent
+ * （组内条目来源的并集），插件组另配"全部复用 / 全部删除"组级批量按钮；
+ * 展开后是技能行（名字 / 状态或来源 / 两行截断的描述 / 复用开关）。open
+ * 是初始展开状态——搜索过滤时由父级强制展开，用户随后仍可手动收起。
  */
-function DiscoveryGroup({ label, items, open, byName, busy, linkNames, onPreview, onReuse, onUnlink }: {
+function DiscoveryGroup({ label, items, open, byName, busy, linkNames, onPreview, onReuse, onUnlink, onReuseAll, onUnlinkAll }: {
   label: string
   items: DiscoveredSkill[]
   open: boolean
@@ -455,10 +483,31 @@ function DiscoveryGroup({ label, items, open, byName, busy, linkNames, onPreview
   onPreview: (item: DiscoveredSkill) => void
   onReuse: (item: DiscoveredSkill) => void
   onUnlink: (name: string) => void
+  onReuseAll?: (label: string, items: DiscoveredSkill[]) => Promise<void>
+  onUnlinkAll?: (label: string, items: DiscoveredSkill[]) => Promise<void>
 }): React.ReactElement {
+  // 组内条目来源 agent 的并集（跨 agent 合并的条目标全部来源）。
+  const originLabels: string[] = []
+  for (const item of items) {
+    for (const a of item.sources) {
+      const shown = AGENT_LABEL[a] ?? a
+      if (!originLabels.includes(shown)) originLabels.push(shown)
+    }
+  }
+  const canReuse = items.some((s) => !s.reused && !s.conflict && !s.stale)
+  const canUnlink = items.some((s) => linkNames.has(s.name))
   return (
     <details className="discover-group" open={open}>
-      <summary>{label}<span className="muted">（{items.length}）</span></summary>
+      <summary>
+        <span className="group-label">{label}<span className="muted">（{items.length}）</span></span>
+        {onReuseAll !== undefined && originLabels.length > 0 && <span className="group-origins">{originLabels.join(" · ")}</span>}
+        {onReuseAll !== undefined && onUnlinkAll !== undefined && (
+          <span className="group-actions">
+            <button type="button" data-testid={`group-reuse-${label}`} disabled={busy || !canReuse} onClick={(e) => { e.preventDefault(); e.stopPropagation(); void onReuseAll(label, items) }}>全部复用</button>
+            <button type="button" data-testid={`group-unlink-${label}`} disabled={busy || !canUnlink} onClick={(e) => { e.preventDefault(); e.stopPropagation(); void onUnlinkAll(label, items) }}>全部删除</button>
+          </span>
+        )}
+      </summary>
       <ul>
         {items.map((item) => {
           const reusedHere = linkNames.has(item.name)
