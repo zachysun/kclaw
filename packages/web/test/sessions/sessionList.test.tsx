@@ -216,4 +216,32 @@ describe("SessionList", () => {
     expect(onDelete).toHaveBeenCalledWith("s1")
     unmount(root, container)
   })
+
+  it("folds a workdir group on header click: sessions hide, a count shows, and the set persists", () => {
+    const withDir = { ...session("s1", "项目会话", "t"), workdir: "/ws/project" }
+    const { container, root } = mount({ sessions: [withDir] })
+    // open by default
+    expect(container.querySelector('[data-testid="session-item-s1"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="group-count-/ws/project"]')).toBeNull()
+    act(() => click(container, "workdir-group-name-/ws/project"))
+    // folded: the row is gone, the count badge shows, storage carries the key
+    expect(container.querySelector('[data-testid="session-item-s1"]')).toBeNull()
+    expect(container.querySelector('[data-testid="group-count-/ws/project"]')?.textContent).toBe("1")
+    expect(container.querySelector('[data-testid="workdir-group-name-/ws/project"]')?.getAttribute("aria-expanded")).toBe("false")
+    expect(JSON.parse(localStorage.getItem("kclaw_collapsed_workdirs")!)).toEqual(["/ws/project"])
+    // clicking again unfolds
+    act(() => click(container, "workdir-group-name-/ws/project"))
+    expect(container.querySelector('[data-testid="session-item-s1"]')).not.toBeNull()
+    expect(JSON.parse(localStorage.getItem("kclaw_collapsed_workdirs")!)).toEqual([])
+    unmount(root, container)
+  })
+
+  it("restores folded groups from localStorage on mount", () => {
+    localStorage.setItem("kclaw_collapsed_workdirs", JSON.stringify(["/ws/project"]))
+    const withDir = { ...session("s1", "项目会话", "t"), workdir: "/ws/project" }
+    const { container, root } = mount({ sessions: [withDir] })
+    expect(container.querySelector('[data-testid="session-item-s1"]')).toBeNull()
+    expect(container.querySelector('[data-testid="group-count-/ws/project"]')?.textContent).toBe("1")
+    unmount(root, container)
+  })
 })
