@@ -95,10 +95,15 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 
 ### 探测（discovery.ts）
 
-- **来源**：四个内置约定目录——`~/.claude/skills`、`~/.codex/skills`、`~/.dsh/skills`（DeepSeek harness）、`~/.zcode/skills`——加上当前作用域旁挂文件里手工登记的 `extraSources` 目录。
-- **去重**：每个候选按 realpath 归一。同一份真实目录经多层软链接出现在多家（如 `.zcode` → `.claude` → `.cc-switch`）时只出一条，来源标签聚合。
+- **来源**：四个内置约定目录——`~/.claude/skills`、`~/.codex/skills`、`~/.dsh/skills`（DeepSeek harness）、`~/.zcode/skills`——加上当前作用域旁挂文件里手工登记的 `extraSources` 目录；以及**已安装插件的内置技能**——读 Claude Code（`~/.claude/plugins/installed_plugins.json`）与 zCode（`~/.zcode/cli/plugins/installed_plugins.json`）的插件安装清单，对每个已安装插件在当前版本的安装路径下枚举 `skills/<name>/SKILL.md` 与 `skills/<分类>/<name>/SKILL.md` 两种层级。清单文件两种形态都解析（zCode 平铺数组、Claude 按"插件@市场"分组的每项目条目，插件名取自键），缺失或损坏视为无插件技能，探测永不因清单报错。
+- **去重**：目录候选按 realpath 归一——同一份真实目录经多层软链接出现在多家（如 `.zcode` → `.claude` → `.cc-switch`）时只出一条，来源标签聚合。插件候选按"插件名 + 插件内路径"去重——同一插件装在两家时是两份独立的相同内容，合并为一条、来源聚合；与用户级目录同名的插件技能内容确实不同，保留两行。
+- **来源标签**：插件技能的来源标**插件名**（superpowers、mattpocock-skills）——这是用户认识的名字；用户级技能标 agent 名。
 - **状态标**：`reused`（该真实路径已被任一作用域的链接记录指向）、`conflict`（某自有技能占了同名但内容不同——同名同内容就是已复用）、`stale`（来源目录缺失或候选悬空）。任何失效都显示为状态而不是报错。
 - **预览安全**：SKILL.md 正文预览接口校验请求路径必须解析到一个已发现的候选（或位于已登记来源之下）——候选的真实目录通常在 agent 目录**外面**（那些目录里只有软链接），所以单靠"在来源之下"会拒掉发现列表给出的目标。校验双条件并存，接口不是任意文件读取。
+
+### 复用链接的版本语义
+
+复用插件的技能时，链接指向**创建当时的版本目录**。插件升级到新版本目录后，旧链接仍可用（旧版本目录还在磁盘上），但内容已过时——链接清单的每条记录带 `current` 标（目标仍是探测正在提供的版本之一），页面据此标"已过时"，取消后重新复用一次即切到新版。链接不自动跟随插件升级（那需要一层版本解析）；Codex 的 `.system` 内置技能目录不参与探测。
 
 ### 链接与档位（links.ts）
 
