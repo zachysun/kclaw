@@ -471,19 +471,21 @@ select:focus {
   min-height: 20px;
 }
 
-/* The group header doubles as the fold toggle: a tree marker that points
-   down while open and right while folded. The rtl/ellipsis trick keeps the
-   path's TAIL visible (the distinguishing part of a directory path). */
+/* The group header doubles as the fold toggle. The fold marker lives outside
+   the text flow (fixed at the left, never crowded out); the name itself
+   tail-ellipsizes — the rtl/ellipsis trick keeps the path's TAIL visible
+   (the distinguishing part of a directory path). The project name is the
+   sidebar's only bold white line — the section anchor; the theme accent
+   stays on the marker (interaction signal) and takes over the name on hover. */
 .workdir-group-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex: 1;
   min-width: 0;
-  font-size: 12px;
-  color: var(--accent);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl;
-  text-align: left;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
   background: none;
   border: none;
   border-radius: var(--radius-sm);
@@ -491,18 +493,35 @@ select:focus {
   cursor: pointer;
 }
 
-.workdir-group-name::before {
-  content: "▸ ";
-  display: inline-block;
+.fold-mark {
+  flex-shrink: 0;
+  color: var(--accent);
   transition: transform var(--ease);
 }
 
-.workdir-group:not(.collapsed) .workdir-group-name::before {
+.fold-mark::before {
+  content: "▸";
+}
+
+.workdir-group:not(.collapsed) .fold-mark {
   transform: rotate(90deg);
+}
+
+.group-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
 }
 
 .workdir-group-name.muted {
   color: var(--muted);
+}
+
+.workdir-group-name:not(.muted):hover {
+  color: var(--accent-strong);
 }
 
 /* session count on a folded header — the list is gone, the number stays */
@@ -535,7 +554,63 @@ select:focus {
   background: var(--accent-dim-strong);
 }
 
-.group-rename-trigger {
+/* ---- icon buttons + hover label bubbles ---- */
+
+/* icon-only buttons: the label lives in the hover bubble, not the layout */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.icon-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.icon-btn.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-dim);
+}
+
+/* the two hover bubbles: fixed-position siblings so the sidebar's scroll
+   container can't clip them; .icon-tip centers under the button,
+   .workdir-tip left-aligns under the group header (full workdir path) */
+.icon-tip,
+.workdir-tip {
+  position: fixed;
+  z-index: 35;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  pointer-events: none;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
+}
+
+.icon-tip {
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.workdir-tip {
+  padding: 4px 9px;
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+/* the group delete is a two-step armed button: plain while idle, the armed
+   state reuses button.danger so the commit click is unmistakable */
+.group-delete-trigger {
   font-size: 11px;
   padding: 2px 6px;
   flex-shrink: 0;
@@ -658,11 +733,6 @@ select:focus {
     opacity: 1;
     pointer-events: auto;
   }
-}
-
-.session-actions button {
-  font-size: 11px;
-  padding: 2px 8px;
 }
 
 .session-rename {
@@ -1417,19 +1487,6 @@ select:focus {
 .message:focus-within .msg-actions {
   opacity: 1;
   pointer-events: auto;
-}
-
-.msg-action {
-  flex: none;
-  padding: 0 6px;
-  font-size: 11px;
-  background: none;
-  border: none;
-  color: var(--text-dim);
-}
-
-.msg-action:hover:not(:disabled) {
-  color: var(--text);
 }
 
 /* The interrupted marker on a stopped half-reply */
@@ -3078,6 +3135,13 @@ html[data-theme="phantom"] .view-title {
 html[data-theme="phantom"] .view-title::before {
   content: "// ";
   color: var(--accent);
+}
+
+/* sidebar project headers share the display voice of the page titles */
+html[data-theme="phantom"] .workdir-group-name:not(.muted) {
+  font-family: var(--font-display);
+  font-style: italic;
+  letter-spacing: 0.01em;
 }
 
 /* the gate is the cover page: oversized italic logotype over a tape bar */

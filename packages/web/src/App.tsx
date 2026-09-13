@@ -330,6 +330,31 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
     [api, selectedId],
   )
 
+  // Soft-delete a whole project group: every session under the workdir goes
+  // to the trash. Deletes run concurrently; whatever succeeded leaves the
+  // list (the group disappears with it), failures surface in the notice.
+  const handleDeleteGroup = useCallback(
+    async (workdir: string): Promise<void> => {
+      setSessionNotice(null)
+      const ids = (sessions ?? []).filter((s) => s.workdir === workdir).map((s) => s.id)
+      const results = await Promise.allSettled(
+        ids.map((id) => api.del(`/sessions/${encodeURIComponent(id)}`)),
+      )
+      const deleted = new Set<string>()
+      let failures = 0
+      results.forEach((result, i) => {
+        if (result.status === "fulfilled") deleted.add(ids[i]!)
+        else failures += 1
+      })
+      if (deleted.size > 0) {
+        setSessions((prev) => (prev ?? []).filter((s) => !deleted.has(s.id)))
+        if (selectedId !== null && deleted.has(selectedId)) setSelectedId(null)
+      }
+      if (failures > 0) setSessionNotice(`${failures} 个会话删除失败,已删的会话在回收站`)
+    },
+    [api, sessions, selectedId],
+  )
+
   const chatActive = selectedId !== null && readyMessages !== null
 
   return (
@@ -440,6 +465,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
             onCreate={(workdir) => void handleCreateSession(workdir)}
             onRename={(id, title) => void handleRenameSession(id, title)}
             onDelete={(id) => void handleDeleteSession(id)}
+            onDeleteGroup={(workdir) => handleDeleteGroup(workdir)}
             onBrowse={browseDirs}
           />
           {sessionNotice !== null && (

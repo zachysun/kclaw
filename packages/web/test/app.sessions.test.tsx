@@ -410,4 +410,45 @@ describe("App (sessions + tabs)", () => {
     root.unmount()
     container.remove()
   })
+
+  it("deletes a project group: every session under the workdir is soft-deleted", async () => {
+    const inGroup = (id: string): SessionMeta => ({
+      ...session(id, `会话 ${id}`),
+      workdir: "/ws/project",
+    })
+    mockFetch(fetchMock, {
+      "GET /status": { body: { ok: true } },
+      "GET /sessions": { body: [inGroup("s1"), inGroup("s2"), session("s3", "别组会话")] },
+      "DELETE /sessions/s1": { body: {} },
+      "DELETE /sessions/s2": { body: {} },
+    })
+    localStorage.setItem("kclaw_token", "tok-1")
+    const { container, root } = mountApp()
+    await act(async () => {
+      root.render(<App />)
+    })
+    await flush()
+    await flush()
+    expect(container.querySelector('[data-testid="workdir-group-name-/ws/project"]')).not.toBeNull()
+
+    // Two-step arm: first click changes nothing on the wire.
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="group-delete-/ws/project"]') as HTMLButtonElement).click()
+    })
+    expect(fetchMock).not.toHaveBeenCalledWith("/sessions/s1", expect.objectContaining({ method: "DELETE" }))
+
+    // Second click soft-deletes both sessions of the group, nothing else.
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="group-delete-/ws/project"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(fetchMock).toHaveBeenCalledWith("/sessions/s1", expect.objectContaining({ method: "DELETE" }))
+    expect(fetchMock).toHaveBeenCalledWith("/sessions/s2", expect.objectContaining({ method: "DELETE" }))
+    expect(fetchMock).not.toHaveBeenCalledWith("/sessions/s3", expect.objectContaining({ method: "DELETE" }))
+    // The group disappears from the sidebar; the other session stays.
+    expect(container.querySelector('[data-testid="workdir-group-name-/ws/project"]')).toBeNull()
+    expect(container.querySelector('[data-testid="session-item-s3"]')).not.toBeNull()
+    root.unmount()
+    container.remove()
+  })
 })

@@ -11,13 +11,17 @@
  * (改名 → input + 保存/取消). Clicking the header folds/unfolds the group —
  * the folded set persists in localStorage (so it survives reloads) and a
  * folded header shows its session count. Each group header carries a ＋
- * button that creates a session directly in that directory; the top-level
+ * button that creates a session directly in that directory, plus 删除: a
+ * two-step armed button (first click shows 确认删除, second click commits)
+ * that soft-deletes every session in the group into the trash. The top-level
  * 选择工作目录 button opens the DirectoryPicker for a directory not in the
  * list yet — picking a path creates the session there. Sessions without a
  * workdir (old rows, job sessions) land in a muted "未指定工作目录" group.
  */
 import { useMemo, useState, type ChangeEvent } from "react"
 import type { FsBrowseResult, SessionMeta } from "../types.js"
+import { IconButton } from "../ui/IconButton.js"
+import { PencilIcon, TrashIcon } from "../ui/icons.js"
 import { DirectoryPicker } from "./DirectoryPicker.js"
 
 export interface SessionListProps {
@@ -33,6 +37,8 @@ export interface SessionListProps {
   onRename: (id: string, title: string) => void
   /** Escape a soft-delete request to the owner. */
   onDelete: (id: string) => void
+  /** Soft-delete every session under one workdir (the project group). */
+  onDeleteGroup: (workdir: string) => Promise<void>
   /** Fetch a directory listing for the workdir picker (no path = picker root). */
   onBrowse: (path?: string) => Promise<FsBrowseResult>
 }
@@ -90,6 +96,7 @@ export function SessionList({
   onCreate,
   onRename,
   onDelete,
+  onDeleteGroup,
   onBrowse,
 }: SessionListProps) {
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -98,6 +105,9 @@ export function SessionList({
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsedGroups)
   const [renamingGroup, setRenamingGroup] = useState<string | null>(null)
   const [groupDraft, setGroupDraft] = useState("")
+  const [deletingGroup, setDeletingGroup] = useState<string | null>(null)
+  const [deletePending, setDeletePending] = useState(false)
+  const [pathTip, setPathTip] = useState<{ text: string; top: number; left: number; maxWidth: number } | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerListing, setPickerListing] = useState<FsBrowseResult | null>(null)
   const [pickerLoading, setPickerLoading] = useState(false)
@@ -130,6 +140,39 @@ export function SessionList({
   const startGroupRename = (key: string) => {
     setRenamingGroup(key)
     setGroupDraft(workdirNames[key] ?? key)
+    setDeletingGroup(null)
+  }
+
+  /** Two-step arm: the first click arms the button, the second commits. */
+  const startGroupDelete = (key: string) => {
+    setDeletingGroup(key)
+    setDeletePending(false)
+  }
+
+  const commitGroupDelete = async (): Promise<void> => {
+    const key = deletingGroup
+    if (key === null || deletePending) return
+    setDeletePending(true)
+    try {
+      await onDeleteGroup(key)
+    } finally {
+      setDeletingGroup(null)
+      setDeletePending(false)
+    }
+  }
+
+  // The group label tail-ellipsizes long paths, so the full path only exists
+  // in a hover/focus tooltip. Fixed-positioned under the header (a CSS pseudo
+  // element would be clipped by the sidebar's scroll container); scroll or
+  // leaving the header dismisses it.
+  const showPathTip = (el: HTMLElement, text: string): void => {
+    const rect = el.getBoundingClientRect()
+    setPathTip({
+      text,
+      top: rect.bottom + 4,
+      left: rect.left,
+      maxWidth: Math.max(160, Math.min(360, window.innerWidth - rect.left - 8)),
+    })
   }
 
   const commitGroupRename = () => {
@@ -191,7 +234,7 @@ export function SessionList({
     key === "" ? "未指定工作目录" : (workdirNames[key] ?? key)
 
   return (
-    <div className="session-list" data-testid="session-list">
+    <div className="session-list" data-testid="session-list" onScrollCapture={() => setPathTip(null)}>
       <div className="sidebar-title">Sessions</div>
       <div className="new-session-controls">
         <button
@@ -218,11 +261,16 @@ export function SessionList({
                   type="button"
                   className={`workdir-group-name${key === "" ? " muted" : ""}`}
                   data-testid={`workdir-group-name-${key}`}
-                  title={key === "" ? undefined : key}
                   aria-expanded={!collapsed}
                   onClick={() => toggleGroup(key)}
+                  onMouseEnter={key === "" ? undefined : (event) => showPathTip(event.currentTarget, key)}
+                  onMouseLeave={() => setPathTip(null)}
+                  onMouseDown={() => setPathTip(null)}
+                  onFocus={key === "" ? undefined : (event) => showPathTip(event.currentTarget, key)}
+                  onBlur={() => setPathTip(null)}
                 >
-                  {groupLabel(key)}
+                  <span className="fold-mark" aria-hidden="true" />
+                  <span className="group-name-text">{groupLabel(key)}</span>
                 </button>
                 {collapsed && (
                   <span className="group-count" data-testid={`group-count-${key}`}>
@@ -240,14 +288,31 @@ export function SessionList({
                     >
                       ＋
                     </button>
-                    <button
-                      type="button"
-                      className="group-rename-trigger"
-                      data-testid={`group-rename-${key}`}
+                    <IconButton
+                      label="改名"
+                      icon={<PencilIcon />}
+                      testid={`group-rename-${key}`}
                       onClick={() => startGroupRename(key)}
-                    >
-                      改名
-                    </button>
+                    />
+                    {deletingGroup === key ? (
+                      <button
+                        type="button"
+                        className="group-delete-trigger danger"
+                        data-testid={`group-delete-${key}`}
+                        disabled={deletePending}
+                        onClick={() => void commitGroupDelete()}
+                      >
+                        {deletePending ? "删除中…" : "确认删除"}
+                      </button>
+                    ) : (
+                      <IconButton
+                        label="删除"
+                        danger
+                        icon={<TrashIcon />}
+                        testid={`group-delete-${key}`}
+                        onClick={() => startGroupDelete(key)}
+                      />
+                    )}
                   </span>
                 )}
               </div>
@@ -307,12 +372,19 @@ export function SessionList({
                         </span>
                       ) : (
                         <span className="session-actions">
-                          <button type="button" data-testid={`session-rename-${meta.id}`} onClick={() => startRename(meta)}>
-                            改名
-                          </button>
-                          <button type="button" data-testid={`session-delete-${meta.id}`} onClick={() => onDelete(meta.id)}>
-                            删除
-                          </button>
+                          <IconButton
+                            label="改名"
+                            icon={<PencilIcon />}
+                            testid={`session-rename-${meta.id}`}
+                            onClick={() => startRename(meta)}
+                          />
+                          <IconButton
+                            label="删除"
+                            danger
+                            icon={<TrashIcon />}
+                            testid={`session-delete-${meta.id}`}
+                            onClick={() => onDelete(meta.id)}
+                          />
                         </span>
                       )}
                     </li>
@@ -323,6 +395,16 @@ export function SessionList({
           )
         })}
       </ul>
+      {pathTip !== null && (
+        <div
+          className="workdir-tip"
+          data-testid="workdir-tip"
+          role="tooltip"
+          style={{ top: pathTip.top, left: pathTip.left, maxWidth: pathTip.maxWidth }}
+        >
+          {pathTip.text}
+        </div>
+      )}
       {pickerOpen && (
         <DirectoryPicker
           listing={pickerListing}

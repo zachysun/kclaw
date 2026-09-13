@@ -11,6 +11,8 @@ import { PERMISSION_MODES, type PermissionMode } from "@kclaw/core/permission-mo
 import type { AttachmentRef, ConfirmationDecision } from "@kclaw/core/protocol"
 import type { ChatState, ConfirmationCard, QuestionCard, RenderedBlock, RenderedMessage } from "./model.js"
 import { MarkdownText } from "./Markdown.js"
+import { IconButton } from "../ui/IconButton.js"
+import { PencilIcon, RefreshIcon } from "../ui/icons.js"
 
 /**
  * How a message enters a busy session: steer injects into the live
@@ -619,20 +621,20 @@ function MessageBubble({
       {(canEdit === true || canRegenerate === true) && (
         <span className="msg-actions">
           {canEdit === true && (
-            <button
-              type="button"
-              className="msg-action"
-              data-testid="msg-edit"
+            <IconButton
+              label="编辑"
+              icon={<PencilIcon />}
+              testid="msg-edit"
               onClick={() => onEditStart?.(firstRenderedText(message))}
-            >编辑</button>
+            />
           )}
           {canRegenerate === true && (
-            <button
-              type="button"
-              className="msg-action"
-              data-testid="msg-regenerate"
+            <IconButton
+              label="重新生成"
+              icon={<RefreshIcon />}
+              testid="msg-regenerate"
               onClick={() => onRegenerate?.()}
-            >重新生成</button>
+            />
           )}
         </span>
       )}

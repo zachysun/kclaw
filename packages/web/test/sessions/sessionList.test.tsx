@@ -30,6 +30,7 @@ function mount(overrides: Partial<SessionListProps>): { container: HTMLElement; 
     onCreate: () => {},
     onRename: () => {},
     onDelete: () => {},
+    onDeleteGroup: () => Promise.reject(new Error("onDeleteGroup not stubbed")),
     onBrowse: () => Promise.reject(new Error("onBrowse not stubbed")),
     ...overrides,
   }
@@ -214,6 +215,54 @@ describe("SessionList", () => {
     const { container, root } = mount({ sessions, onDelete })
     act(() => click(container, "session-delete-s1"))
     expect(onDelete).toHaveBeenCalledWith("s1")
+    unmount(root, container)
+  })
+
+  it("arms the group delete on the first click and commits on the second", async () => {
+    const onDeleteGroup = vi.fn(() => Promise.resolve())
+    const s1 = { ...session("s1", "会话一", "t"), workdir: "/ws/project" }
+    const { container, root } = mount({ sessions: [s1], onDeleteGroup })
+
+    // First click only arms the button — no deletion yet. Idle state is an
+    // icon button (label in the hover bubble), armed state is a text button.
+    const idle = container.querySelector('[data-testid="group-delete-/ws/project"]') as HTMLButtonElement
+    expect(idle.getAttribute("aria-label")).toBe("删除")
+    act(() => click(container, "group-delete-/ws/project"))
+    expect(onDeleteGroup).not.toHaveBeenCalled()
+    const armed = container.querySelector('[data-testid="group-delete-/ws/project"]') as HTMLButtonElement
+    expect(armed.textContent).toBe("确认删除")
+    expect(armed.className).toContain("danger")
+
+    // Second click commits with the workdir.
+    await act(async () => {
+      armed.click()
+    })
+    expect(onDeleteGroup).toHaveBeenCalledWith("/ws/project")
+    // The armed state resets after the commit (back to the icon button).
+    expect((container.querySelector('[data-testid="group-delete-/ws/project"]') as HTMLButtonElement).getAttribute("aria-label")).toBe("删除")
+    unmount(root, container)
+  })
+
+  it("shows the full workdir path in a hover bubble on the group header", () => {
+    const s1 = { ...session("s1", "会话一", "t"), workdir: "/ws/very/long/project/path" }
+    const { container, root } = mount({ sessions: [s1] })
+    const header = container.querySelector('[data-testid="workdir-group-name-/ws/very/long/project/path"]') as HTMLElement
+    act(() => {
+      header.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }))
+    })
+    const tip = container.querySelector('[data-testid="workdir-tip"]')
+    expect(tip?.textContent).toBe("/ws/very/long/project/path")
+    act(() => {
+      header.dispatchEvent(new MouseEvent("mouseout", { bubbles: true }))
+    })
+    expect(container.querySelector('[data-testid="workdir-tip"]')).toBeNull()
+    unmount(root, container)
+  })
+
+  it("shows no group delete on the unassigned workdir group", () => {
+    const s1 = session("s1", "无目录会话", "t")
+    const { container, root } = mount({ sessions: [s1] })
+    expect(container.querySelector('[data-testid="group-delete-"]')).toBeNull()
     unmount(root, container)
   })
 
