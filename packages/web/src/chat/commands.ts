@@ -118,13 +118,13 @@ export async function runWebCommand(parsed: ParsedSlash, ctx: WebCommandCtx): Pr
       // 模型经 skill_read 加载正文后照做——提示里带例子把这件事说明白。
       try {
         const q = ctx.workdir !== "" ? `?workdir=${encodeURIComponent(ctx.workdir)}` : ""
-        const rows = await ctx.api.get<Array<{ name: string; description: string; origin: string; visibility: string }>>(`/skills${q}`)
+        const rows = await ctx.api.get<Array<{ name: string; description: string; origin: string; visibility: string; plugin?: string }>>(`/skills${q}`)
         if (rows.length === 0) {
           ctx.notify("还没有技能。把技能目录放进 ~/.kclaw/skills/（全局）或工作区 .kclaw/skills/（项目）")
           return true
         }
         const list = rows
-          .map((r) => `${r.name}（${r.origin === "project" ? "项目" : "全局"}${r.visibility === "user-only" ? " · 仅用户" : ""}）`)
+          .map((r) => `${r.name}（${r.origin === "project" ? "项目" : "全局"}${r.plugin !== undefined ? ` · 来自插件 ${r.plugin}` : ""}${r.visibility === "user-only" ? " · 仅用户" : ""}）`)
           .join("、")
         ctx.notify(`已装技能：${list}。使用方式：在对话里直接说，例如「跑一下 ${rows[0]!.name}」，模型会加载该技能再执行；正文看顶部「技能」页`)
       } catch (err) {

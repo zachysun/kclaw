@@ -105,6 +105,8 @@ export function createSlashCompleter(getExtra: () => SlashCommandMeta[]): (line:
 export interface SkillCommandRow {
   name: string
   description: string
+  /** 复用链接技能所属的插件（自有技能无此字段）。 */
+  plugin?: string
 }
 
 /**
@@ -125,10 +127,11 @@ export async function refreshSkillCommands(registry: Map<string, SlashCommand>, 
     const name = typeof row?.name === "string" ? row.name : ""
     if (name === "" || registry.has(name)) continue
     const description = typeof row?.description === "string" ? row.description : ""
+    const described = row.plugin !== undefined ? `〔插件 ${row.plugin}〕${description}` : description
     registry.set(name, {
       name,
       usage: `/${name} [要求]`,
-      description,
+      description: described,
       surfaces: ["cli"],
       async run(args, c) {
         c.send(args.trim() === "" ? `/${name}` : `/${name} ${args}`)
@@ -451,6 +454,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
             description: string
             visibility: string
             origin: string
+            plugin?: string
           }>
           if (rows.length === 0) {
             ctx.print("（还没有技能。把技能目录放进 ~/.kclaw/skills/ 或工作区 .kclaw/skills/）")
@@ -461,7 +465,8 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
               .map((r) => {
                 const origin = r.origin === "project" ? "项目" : "全局"
                 const vis = r.visibility === "user-only" ? " · 仅用户" : ""
-                return `${r.name} · ${origin}${vis} · ${r.description}`
+                const plugin = r.plugin !== undefined ? ` · 来自插件 ${r.plugin}` : ""
+                return `${r.name} · ${origin}${plugin}${vis} · ${r.description}`
               })
               .join("\n"),
           )

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { BUILTIN_SOURCES, createSkillLink, discoveredTargetPaths, discoverSkills, previewSkillBody, readInstalledPlugins, resolveDiscoverySources, scanSkillDirs, writeLinksFile } from "../../src/skills/index.js"
+import { backfillPluginAttribution, BUILTIN_SOURCES, createSkillLink, discoveredTargetPaths, discoverSkills, previewSkillBody, readInstalledPlugins, readLinksFile, resolveDiscoverySources, scanSkillDirs, writeLinksFile } from "../../src/skills/index.js"
 
 const NO_BUILTIN: ReadonlyArray<{ agent: string; dir: string }> = []
 const NO_PLUGIN: ReadonlyArray<{ agent: string; home: string }> = []
@@ -142,23 +142,23 @@ describe("previewSkillBody", () => {
   })
 })
 
-describe("plugin skills", () => {
-  /** Fake one agent's plugin install: inventory file + versioned install tree. */
-  function makePlugin(home: string, agent: string, name: string, version: string, skills: Array<[string, string]>, id = name): string {
-    const installPath = join(home, "plugins", "cache", `${id}-market`, name, version)
-    for (const [rel, description] of skills) {
-      mkdirSync(join(installPath, "skills", rel), { recursive: true })
-      writeFileSync(join(installPath, "skills", rel, "SKILL.md"), `---\ndescription: ${description}\n---\n\n正文\n`)
-    }
-    const pluginsDir = join(home, "plugins")
-    mkdirSync(pluginsDir, { recursive: true })
-    const file = join(pluginsDir, "installed_plugins.json")
-    const list = existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")).plugins as unknown[]) : []
-    list.push({ id: `${name}@market`, name, installPath, version })
-    writeFileSync(file, JSON.stringify({ version: 1, plugins: list }))
-    return installPath
+/** Fake one agent's plugin install: inventory file + versioned install tree. */
+function makePlugin(home: string, agent: string, name: string, version: string, skills: Array<[string, string]>, id = name): string {
+  const installPath = join(home, "plugins", "cache", `${id}-market`, name, version)
+  for (const [rel, description] of skills) {
+    mkdirSync(join(installPath, "skills", rel), { recursive: true })
+    writeFileSync(join(installPath, "skills", rel, "SKILL.md"), `---\ndescription: ${description}\n---\n\n正文\n`)
   }
+  const pluginsDir = join(home, "plugins")
+  mkdirSync(pluginsDir, { recursive: true })
+  const file = join(pluginsDir, "installed_plugins.json")
+  const list = existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")).plugins as unknown[]) : []
+  list.push({ id: `${name}@market`, name, installPath, version })
+  writeFileSync(file, JSON.stringify({ version: 1, plugins: list }))
+  return installPath
+}
 
+describe("plugin skills", () => {
   it("reads the inventory tolerantly: missing and corrupt files yield no plugins", () => {
     const root = tempRoot()
     expect(readInstalledPlugins(join(root, "nope"), "claude")).toEqual([])
@@ -251,5 +251,32 @@ describe("plugin skills", () => {
     expect(discoveredTargetPaths({ skillsDir, builtin: NO_BUILTIN, pluginHomes: homes }).has(v1Skill)).toBe(false)
     const found = discoverSkills({ skillsDir, owned: [], builtin: NO_BUILTIN, pluginHomes: homes })
     expect(found.map((f) => [f.name, f.description])).toEqual([["tdd", "新版"]])
+  })
+})
+
+describe("backfillPluginAttribution", () => {
+  it("fills the plugin name for pre-attribution records whose target matches an installed plugin; idempotent", () => {
+    const root = tempRoot()
+    const skillsDir = join(root, "skills")
+    mkdirSync(skillsDir, { recursive: true })
+    const home = join(root, "agent-home")
+    const install = makePlugin(home, "zcode", "superpowers", "6.3.0", [["tdd", "旧记录"], ["own", "自有"]])
+    void install
+    // 一条旧格式记录指向插件技能、一条指向插件外的普通目录
+    const external = makeSkill(root, "plain", {})
+    writeLinksFile(skillsDir, {
+      links: [
+        { name: "tdd", target: join(install, "skills", "tdd"), agent: "zcode", tier: "all" },
+        { name: "plain", target: external, agent: "custom", tier: "all" },
+      ],
+      extraSources: [],
+    })
+    const patched = backfillPluginAttribution({ skillsDir, pluginHomes: [{ agent: "zcode", home }] })
+    expect(patched).toBe(1)
+    const links = readLinksFile(skillsDir).links
+    expect(links.find((l) => l.name === "tdd")?.plugin).toBe("superpowers")
+    expect(links.find((l) => l.name === "plain")?.plugin).toBeUndefined()
+    // 幂等：再跑一遍不再有补写
+    expect(backfillPluginAttribution({ skillsDir, pluginHomes: [{ agent: "zcode", home }] })).toBe(0)
   })
 })

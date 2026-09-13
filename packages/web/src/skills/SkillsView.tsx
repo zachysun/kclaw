@@ -25,6 +25,8 @@ interface SkillRow {
   description: string
   visibility: "all" | "user-only"
   origin: "global" | "project"
+  /** 复用链接技能所属的插件（自有技能无此字段）。 */
+  plugin?: string
 }
 
 interface DiscoveredSkill {
@@ -138,7 +140,7 @@ export function SkillsView({ api, notice }: {
   const reuse = async (item: DiscoveredSkill, tier: LinkRecord["tier"] = "all"): Promise<void> => {
     setBusy(true)
     try {
-      await api.post("/skills/links", { name: item.name, target: item.target, agent: item.sources[0] ?? "custom", tier, workdir: scope !== "" ? scope : undefined })
+      await api.post("/skills/links", { name: item.name, target: item.target, agent: item.sources[0] ?? "custom", tier, plugin: item.plugin, workdir: scope !== "" ? scope : undefined })
       setBody(null)
       refreshAfterWrite(`已复用 ${item.name}`)
     } catch (e) {
@@ -183,7 +185,7 @@ export function SkillsView({ api, notice }: {
     let ok = 0
     for (const item of candidates) {
       try {
-        await api.post("/skills/links", { name: item.name, target: item.target, agent: item.sources[0] ?? "custom", tier: "all", workdir: scope !== "" ? scope : undefined })
+        await api.post("/skills/links", { name: item.name, target: item.target, agent: item.sources[0] ?? "custom", tier: "all", plugin: item.plugin, workdir: scope !== "" ? scope : undefined })
         ok += 1
       } catch {
         // 单条失败不中断批量，结束后统一刷新并提示。
@@ -321,6 +323,7 @@ export function SkillsView({ api, notice }: {
                       <span className="skill-name">{r.name}</span>
                       <span className="skill-meta">
                         {r.origin === "project" ? "项目" : "全局"}
+                        {r.plugin !== undefined ? ` · 来自插件 ${r.plugin}` : ""}
                         {r.visibility === "user-only" ? " · 仅用户" : ""}
                       </span>
                       <span className="skill-desc clamp2">{r.description}</span>

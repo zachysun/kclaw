@@ -48,6 +48,9 @@ export interface SkillRecord {
   origin: "global" | "project"
   /** Absolute path of the winning skill directory. */
   dir: string
+  /** Set when this copy is a reuse link whose skill was bundled in an
+   * installed plugin — surfaces show "来自插件 <plugin>". Absent otherwise. */
+  plugin?: string
 }
 
 export function isSkillDirName(name: string): boolean {

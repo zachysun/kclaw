@@ -217,9 +217,14 @@ describe("skill reuse routes", () => {
 
     // 复用后 current=true；插件升级换版本目录后 current=false（过时）
     const target = join(install, "skills", "engineering", "tdd")
-    await app.inject({ method: "POST", url: "/skills/links", headers: auth, payload: { name: "tdd", target, agent: "zcode", tier: "all" } })
+    await app.inject({ method: "POST", url: "/skills/links", headers: auth, payload: { name: "tdd", target, agent: "zcode", tier: "all", plugin: "superpowers" } })
     const linksNow = await app.inject({ method: "GET", url: "/skills/links", headers: auth })
     expect((linksNow.json() as { links: { name: string; current: boolean }[] }).links[0]).toMatchObject({ name: "tdd", current: true })
+    // 归属说明贯穿用户面：清单与详情都带 plugin
+    const listed = await app.inject({ method: "GET", url: "/skills", headers: auth })
+    expect((listed.json() as { name: string; plugin?: string }[]).find((r) => r.name === "tdd")).toMatchObject({ plugin: "superpowers" })
+    const detail = await app.inject({ method: "GET", url: "/skills/tdd", headers: auth })
+    expect(detail.json()).toMatchObject({ name: "tdd", plugin: "superpowers" })
     writeInventory("7.0.0")
     const linksAfter = await app.inject({ method: "GET", url: "/skills/links", headers: auth })
     expect((linksAfter.json() as { links: { name: string; current: boolean }[] }).links[0]).toMatchObject({ name: "tdd", current: false })

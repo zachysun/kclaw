@@ -36,6 +36,9 @@ export interface LinkRecord {
   target: string
   agent: ReuseAgent
   tier: ReuseTier
+  /** Set when the reused skill was bundled in an installed plugin — shown
+   * wherever the skill appears ("来自插件 X"). Absent on older records. */
+  plugin?: string
 }
 
 export interface LinksFile {
@@ -81,6 +84,11 @@ export function readLinksFile(skillsDir: string): LinksFile {
               TIERS.includes((l as Record<string, unknown>).tier as ReuseTier) &&
               isSkillDirName((l as Record<string, unknown>).name as string),
           )
+          .map((l) => {
+            // plugin is advisory attribution: keep it when well-formed, drop
+            // it silently otherwise (older records legitimately lack it).
+            return typeof l.plugin === "string" && l.plugin !== "" ? { ...l, plugin: l.plugin } : { ...l, plugin: undefined }
+          })
       : []
     const extraSources: string[] = Array.isArray(obj.extraSources)
       ? obj.extraSources.filter((s): s is string => typeof s === "string" && s.trim() !== "").map((s) => s.trim())
@@ -112,7 +120,9 @@ const TIER_OVERWRITE: Record<ReuseTier, { disableModelInvocation: boolean; userI
  * global, matching the directory override direction). Matching is by
  * realpath of the skill directory against the record's target, so the tier
  * follows the linked content: an owned skill that merely shares the name is
- * left alone.
+ * left alone. The record's plugin attribution (when the reused skill was
+ * bundled in an installed plugin) rides along on the scan record so every
+ * surface listing the skill can say where it came from.
  */
 export function applyReuseTiers(skills: SkillRecord[], scopes: LinksFile[]): SkillRecord[] {
   if (scopes.every((f) => f.links.length === 0)) return skills
@@ -128,7 +138,7 @@ export function applyReuseTiers(skills: SkillRecord[], scopes: LinksFile[]): Ski
     if (dir === undefined) return s
     for (let i = scopes.length - 1; i >= 0; i--) {
       const hit = scopes[i]!.links.find((l) => real(l.target) === dir)
-      if (hit !== undefined) return { ...s, ...TIER_OVERWRITE[hit.tier] }
+      if (hit !== undefined) return { ...s, ...TIER_OVERWRITE[hit.tier], plugin: hit.plugin }
     }
     return s
   })
@@ -144,8 +154,8 @@ export type LinkOpResult = { ok: true } | { ok: false; error: string }
  * same content under the same name is also refused (already reused).
  * Missing scope directories are created recursively.
  */
-export function createSkillLink(opts: { skillsDir: string; name: string; target: string; agent: ReuseAgent; tier: ReuseTier }): LinkOpResult {
-  const { skillsDir, name, target, agent, tier } = opts
+export function createSkillLink(opts: { skillsDir: string; name: string; target: string; agent: ReuseAgent; tier: ReuseTier; plugin?: string }): LinkOpResult {
+  const { skillsDir, name, target, agent, tier, plugin } = opts
   if (!isSkillDirName(name)) return { ok: false, error: "invalid skill name" }
   const linkPath = join(skillsDir, name)
   let realTarget: string
@@ -172,7 +182,10 @@ export function createSkillLink(opts: { skillsDir: string; name: string; target:
   } catch (e) {
     return { ok: false, error: `symlink failed: ${String(e)}` }
   }
-  writeLinksFile(skillsDir, { ...file, links: [...file.links, { name, target: realTarget, agent, tier }] })
+  writeLinksFile(skillsDir, {
+    ...file,
+    links: [...file.links, plugin !== undefined ? { name, target: realTarget, agent, tier, plugin } : { name, target: realTarget, agent, tier }],
+  })
   return { ok: true }
 }
 

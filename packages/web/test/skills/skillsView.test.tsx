@@ -16,6 +16,7 @@ import { SkillsView } from "../../src/skills/SkillsView.js"
 const ROWS = [
   { name: "commit-helper", displayName: "commit-helper", description: "提交规范。", visibility: "all", origin: "global" },
   { name: "heavy-flow", displayName: "heavy-flow", description: "重流程。", visibility: "user-only", origin: "project" },
+  { name: "tdd", displayName: "tdd", description: "插件复用技能。", visibility: "all", origin: "global", plugin: "superpowers" },
 ]
 
 const DISCOVERY = {
@@ -100,6 +101,8 @@ describe("SkillsView", () => {
     expect(container.textContent).toContain("提交规范。")
     expect(container.textContent).toContain("heavy-flow")
     expect(container.textContent).toContain("仅用户")
+    // 插件复用技能在已装清单里带归属说明
+    expect(container.textContent).toContain("来自插件 superpowers")
     expect(container.querySelector('[data-testid="discover-pdf"]')).toBeNull()
     expect(container.querySelector('[data-testid="subtab-reuse"]')!.textContent).toContain("（3）")
   })
@@ -173,8 +176,8 @@ describe("SkillsView", () => {
     })
     await flush()
     // 组内未复用无冲突的 tdd、grill 都被建链
-    expect(api.post).toHaveBeenCalledWith("/skills/links", { name: "tdd", target: "/plugins/tdd", agent: "zcode", tier: "all", workdir: undefined })
-    expect(api.post).toHaveBeenCalledWith("/skills/links", { name: "grill", target: "/plugins/grill", agent: "zcode", tier: "all", workdir: undefined })
+    expect(api.post).toHaveBeenCalledWith("/skills/links", { name: "tdd", target: "/plugins/tdd", agent: "zcode", tier: "all", plugin: "superpowers", workdir: undefined })
+    expect(api.post).toHaveBeenCalledWith("/skills/links", { name: "grill", target: "/plugins/grill", agent: "zcode", tier: "all", plugin: "superpowers", workdir: undefined })
     // 区块级按钮：fake 的 links 记录不回写（tdd/grill 刚建链但记录里没有、
     // docs 属用户级不在插件区块），区块级删除作用范围内无可删，del 不发生
     const sectionUnlinkAll = container.querySelector<HTMLElement>('[data-testid="plugin-unlink-all"]')!
@@ -255,7 +258,7 @@ describe("SkillsView", () => {
     await flush()
     // 仅 pdf/tdd/grill 可批量复用（rival 冲突、ghost 失效、docs/parked 已复用）
     expect(api.post).toHaveBeenCalledWith("/skills/links", { name: "pdf", target: "/cc/pdf", agent: "claude", tier: "all", workdir: undefined })
-    expect(api.post).toHaveBeenCalledWith("/skills/links", { name: "tdd", target: "/plugins/tdd", agent: "zcode", tier: "all", workdir: undefined })
+    expect(api.post).toHaveBeenCalledWith("/skills/links", { name: "tdd", target: "/plugins/tdd", agent: "zcode", tier: "all", plugin: "superpowers", workdir: undefined })
     expect(api.post).not.toHaveBeenCalledWith(expect.objectContaining({ name: "rival" }))
   })
 

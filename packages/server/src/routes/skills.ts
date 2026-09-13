@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
 import {
   applyReuseTiers,
+  backfillPluginAttribution,
   createSkillLink,
   discoveredTargetPaths,
   discoverSkills,
@@ -68,7 +69,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     const { workdir } = req.query as { workdir?: string }
     return scan(workdir)
       .filter(isUserVisible)
-      .map((s) => ({ name: s.name, displayName: s.displayName, description: s.description, visibility: visibilityOf(s), origin: s.origin }))
+      .map((s) => ({ name: s.name, displayName: s.displayName, description: s.description, visibility: visibilityOf(s), origin: s.origin, plugin: s.plugin }))
   })
 
   app.get("/skills/:name", async (req, reply: FastifyReply) => {
@@ -78,7 +79,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     const skill = scan(workdir).find((s) => s.name === name)
     // user-invocable:false → 用户面视为不存在（404 与未知名字同响应，不泄露存在性）
     if (skill === undefined || !isUserVisible(skill)) return reply.code(404).send(NOT_FOUND)
-    return { name: skill.name, displayName: skill.displayName, description: skill.description, visibility: visibilityOf(skill), origin: skill.origin, content: skill.body }
+    return { name: skill.name, displayName: skill.displayName, description: skill.description, visibility: visibilityOf(skill), origin: skill.origin, plugin: skill.plugin, content: skill.body }
   })
 
   // ---- 复用管理面（写操作，均经持 token 鉴权中间件） ----------------------
@@ -87,6 +88,8 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     const { workdir } = req.query as { workdir?: string }
     const dir = writeScopeDir(workdir)
     if (dir === undefined) return reply.code(400).send({ error: "workdir must be an absolute path" })
+    // 旧记录（归属字段出现前建的）惰性回填：目标能匹配到已安装插件就补名。
+    backfillPluginAttribution({ skillsDir: dir, pluginHomes })
     const file = readLinksFile(dir)
     // current = 该链接的目标仍是探测正在提供的版本（realpath 命中）；插件
     // 升级换版本目录后旧链接仍可用但过时，页面据此刻"过时"标。
@@ -139,6 +142,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     const target = typeof body?.target === "string" ? body.target.trim() : ""
     const agent = typeof body?.agent === "string" && AGENTS.includes(body.agent as ReuseAgent) ? (body.agent as ReuseAgent) : "custom"
     const tier = typeof body?.tier === "string" && TIERS.includes(body.tier as ReuseTier) ? (body.tier as ReuseTier) : "all"
+    const plugin = typeof body?.plugin === "string" && body.plugin.trim() !== "" ? body.plugin.trim() : undefined
     const workdir = typeof body?.workdir === "string" ? body.workdir : undefined
     const dir = writeScopeDir(workdir)
     if (dir === undefined) return reply.code(400).send({ error: "workdir must be an absolute path" })
@@ -165,7 +169,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
         error: conflict ? `name already taken by a different skill: ${name}` : `already reused under this name: ${name}`,
       })
     }
-    const result = createSkillLink({ skillsDir: dir, name, target, agent, tier })
+    const result = createSkillLink({ skillsDir: dir, name, target, agent, tier, plugin })
     if (!result.ok) return reply.code(result.error.startsWith("already reused") ? 409 : 400).send({ error: result.error })
     reply.code(201)
     return { ok: true }
