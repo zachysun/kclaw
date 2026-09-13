@@ -176,6 +176,16 @@ describe("fs files route (workspace file listing for the mention drawer)", () =>
     expect([...body.files].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))).toEqual(body.files)
   })
 
+  it("in a git repo: non-ASCII filenames come back verbatim (no C-quote escaping)", async () => {
+    await writeFile(join(workspace, "说明文档.md"), "x")
+    git(workspace, ["init"])
+    git(workspace, ["add", "."])
+    git(workspace, ["commit", "-m", "init"])
+
+    const res = await app.inject({ method: "GET", url: `/fs/files?workdir=${encodeURIComponent(workspace)}`, headers: AUTH })
+    expect((res.json() as FilesBody).files).toEqual(["说明文档.md"])
+  })
+
   it("in a git repo: an index entry whose file was deleted does not appear", async () => {
     await writeFile(join(workspace, "a.ts"), "x")
     git(workspace, ["init"])

@@ -15,7 +15,7 @@ import { registerSkillRoutes } from "./routes/skills.js"
 import { registerAttachmentRoutes } from "./routes/attachments.js"
 import { registerJobRoutes } from "./routes/jobs.js"
 import { registerConfigRoutes } from "./routes/config.js"
-import { registerFsRoutes, registerFsFilesRoute } from "./routes/fs.js"
+import { registerFsRoutes } from "./routes/fs.js"
 import { registerUsageRoutes } from "./routes/usage.js"
 import { registerHookRoutes } from "./routes/hooks.js"
 
@@ -201,7 +201,6 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
 
   registerConfigRoutes(app, { config })
   registerFsRoutes(app, { workspace: config.workspace })
-  registerFsFilesRoute(app, { workspace: config.workspace })
   // 沉淀规则管理面：列表（含 git 跟踪状态）与删除，Web 权限页消费。
   registerPermissionsRoutes(app, { paths, workspaceFallback: config.workspace })
 
