@@ -19,6 +19,8 @@
  *   is persisted inside the run's `onUserMessage` hook so the bus carries
  *   run.started → message.created → note.emitted ×N → message.completed.
  */
+import { statSync } from "node:fs"
+import { basename } from "node:path"
 import {
   Compactor,
   ConfirmationBroker,
@@ -28,7 +30,9 @@ import {
   newBlockId,
   newId,
   newMessage,
+  type AttachmentBlock,
   type ConfirmationResolution,
+  type AttachmentRef,
   type EnqueueInput,
   type EventBus,
   type HookRegistry,
@@ -380,6 +384,68 @@ export class RunManager {
       { sessionId },
     ))
     return { ok: true, cancelled: cancelIds }
+  }
+
+  /**
+   * The edit & retry / regenerate orchestration entry: validate (session
+   * exists, not a child, idle, target = the last user message) → persist and
+   * broadcast the truncation → submit through the ordinary user-message path.
+   * Regenerate is the same path with text/attachments as-is. Truncation only
+   * happens on an idle session (no active run, no queue/steer entries, no
+   * in-flight compaction; a parked compaction result does not block — its
+   * coverage always ends before the truncation point) and only at the tail —
+   * history that already happened is never rewritten.
+   */
+  retry(sessionId: string, fromMessageId: string, text: string, attachments?: AttachmentRef[]): SubmitResult {
+    const { sessions, bus } = this.#deps
+    const meta = sessions.meta(sessionId)
+    if (meta === undefined) throw new Error("session not found")
+    if (meta.parentSessionId !== undefined) {
+      throw new Error("子代理会话不接收用户消息（只读；过程与结果见审计页）")
+    }
+    const queue = this.#queues.get(sessionId) ?? []
+    const steer = this.#steerBuf.get(sessionId) ?? []
+    if (this.#active.has(sessionId) || this.#drivers.has(sessionId) || queue.length > 0
+      || steer.length > 0 || this.#compactor.hasInFlight(sessionId)) {
+      throw new Error("会话忙：等当前运行和压缩结束、清空队列后再重试")
+    }
+    const lastUser = [...sessions.readMessages(sessionId)].reverse().find((m) => m.role === "user")
+    if (lastUser === undefined || lastUser.id !== fromMessageId) {
+      throw new Error("只能从最后一条用户消息重试")
+    }
+    // Attachments ride along unchanged (the editor only edits text): when the
+    // caller carries none, they are rebuilt from the discarded user message —
+    // upload-pipeline attachment blocks are always file-backed inside the
+    // session's attachments dir, so remounting restores them. A missing file
+    // surfaces through stat/mount as an honest retry failure.
+    const refs = attachments ?? this.#deriveAttachmentRefs(lastUser)
+    if (text.length === 0 && (refs === undefined || refs.length === 0)) {
+      throw new Error("重试内容为空（无文本也无附件）")
+    }
+    sessions.appendMessageTruncated(sessionId, { at: new Date().toISOString(), fromMessageId })
+    bus.emit(makeEvent("message.truncated", { fromMessageId }, { sessionId }))
+    return this.submit(sessionId, {
+      userText: text,
+      trigger: "user",
+      ...(refs !== undefined && refs.length > 0 ? { attachments: refs } : {}),
+    })
+  }
+
+  /** Rebuild the AttachmentRefs of a discarded user message from its attachment blocks. */
+  #deriveAttachmentRefs(origin: Message): AttachmentRef[] | undefined {
+    const blocks = origin.blocks.filter((b): b is AttachmentBlock => b.type === "attachment")
+    if (blocks.length === 0) return undefined
+    return blocks.map((b) => {
+      if (b.source.type !== "file") {
+        throw new Error(`该附件不是文件型，无法随重试重建：${b.name ?? b.mimeType}`)
+      }
+      return {
+        path: b.source.path,
+        name: b.name ?? basename(b.source.path),
+        size: statSync(b.source.path).size,
+        mimeType: b.mimeType,
+      }
+    })
   }
 
   /**

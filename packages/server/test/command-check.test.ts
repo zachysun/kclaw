@@ -299,3 +299,53 @@ describe("checkCommandFrame — unknown commands", () => {
     expect(checkCommandFrame({}, deps())).toEqual({ kind: "error", message: "unknown command: undefined" })
   })
 })
+
+describe("checkCommandFrame — message.retry", () => {
+  const retryFrame = (over: Record<string, unknown> = {}): object => ({
+    type: "message.retry", sessionId: SESSION, fromMessageId: "msg_1", text: "改后的问题", ...over,
+  })
+
+  it("errors when the run manager is unavailable", () => {
+    expect(checkCommandFrame(retryFrame(), deps({ hasRun: false }))).toEqual({
+      kind: "error",
+      message: "run manager not available",
+    })
+  })
+
+  it("requires a non-empty string sessionId, a non-empty string fromMessageId and a string text", () => {
+    expect(checkCommandFrame(retryFrame({ fromMessageId: "" }), deps())).toEqual({
+      kind: "error",
+      message: "message.retry requires a non-empty string sessionId, a non-empty string fromMessageId and a string text",
+    })
+    expect(checkCommandFrame(retryFrame({ text: 42 }), deps())).toEqual({
+      kind: "error",
+      message: "message.retry requires a non-empty string sessionId, a non-empty string fromMessageId and a string text",
+    })
+    expect(checkCommandFrame({ type: "message.retry", sessionId: SESSION }, deps())).toEqual({
+      kind: "error",
+      message: "message.retry requires a non-empty string sessionId, a non-empty string fromMessageId and a string text",
+    })
+  })
+
+  it("errors for an unknown session", () => {
+    expect(checkCommandFrame(retryFrame({ sessionId: "ses_none" }), deps())).toEqual({
+      kind: "error",
+      message: "session not found",
+    })
+  })
+
+  it("narrows a legal frame; empty text passes (pure-attachment rerun); attachments ride the send_message confinement", () => {
+    expect(checkCommandFrame(retryFrame(), deps())).toEqual({
+      kind: "command",
+      command: { type: "message.retry", sessionId: SESSION, fromMessageId: "msg_1", text: "改后的问题" },
+    })
+    expect(checkCommandFrame(retryFrame({ text: "" }), deps())).toEqual({
+      kind: "command",
+      command: { type: "message.retry", sessionId: SESSION, fromMessageId: "msg_1", text: "" },
+    })
+    expect(checkCommandFrame(retryFrame({ attachments: [{ path: "/etc/passwd", name: "p", size: 1, mimeType: "text/plain" }] }), deps())).toEqual({
+      kind: "error",
+      message: "message.retry attachments are invalid",
+    })
+  })
+})
