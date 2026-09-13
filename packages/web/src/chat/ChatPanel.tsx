@@ -109,6 +109,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   // 会话工作区内的文件清单：@ 文件点名的候选源，会话/工作目录变化重拉
   // （失败静默——抽屉没候选不碍聊天）。
   const [mentionFiles, setMentionFiles] = useState<readonly string[]>([])
+  const [mentionTruncated, setMentionTruncated] = useState(false)
   // 通知条的可点击动作（memory.written 跳转）：与 notice 同生命周期，输入即清。
   const [noticeAction, setNoticeAction] = useState<(() => void) | null>(null)
   // 发送处置：三选的当前选择，显式带在每条 send_message 上。
@@ -416,10 +417,11 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   useSilentFetch(
     () => {
       const q = workdir ? `?workdir=${encodeURIComponent(workdir)}` : ""
-      return api.get<{ files?: unknown }>(`/fs/files${q}`)
+      return api.get<{ files?: unknown; truncated?: unknown }>(`/fs/files${q}`)
     },
     (body) => {
       if (Array.isArray(body?.files)) setMentionFiles(body.files.filter((f): f is string => typeof f === "string"))
+      setMentionTruncated(body?.truncated === true)
     },
     [api, workdir],
   )
@@ -616,6 +618,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           compactions={compactions}
           extraCommands={skillRows.map((r) => skillCommandMeta(r.name, r.plugin !== undefined ? `〔插件 ${r.plugin}〕${r.description}` : r.description, "web"))}
           mentionFiles={mentionFiles}
+          mentionTruncated={mentionTruncated}
         />
       </div>
     </div>

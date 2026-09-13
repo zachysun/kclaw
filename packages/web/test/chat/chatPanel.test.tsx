@@ -63,6 +63,8 @@ interface ApiRoutes {
   skills?: Array<{ name: string; description: string; origin: string; visibility: string }>
   /** GET /fs/files fixture — the @ mention drawer's file list (default: []). */
   files?: string[]
+  /** GET /fs/files truncated flag (default: false). */
+  filesTruncated?: boolean
   /** Make GET /fs/files reject (the silent-failure path). */
   filesFail?: boolean
 }
@@ -73,7 +75,7 @@ function makeApi(getMessages: Message[], routes: ApiRoutes = {}): ApiClient & { 
       if (path === "/skills") return routes.skills ?? []
       if (path === "/fs/files") {
         if (routes.filesFail === true) throw new Error("fs down")
-        return { workdir: "/w", files: routes.files ?? [], truncated: false }
+        return { workdir: "/w", files: routes.files ?? [], truncated: routes.filesTruncated === true }
       }
       if (path.endsWith("/queue")) return routes.queue ?? []
       if (path === "/config") return routes.config ?? {}
@@ -187,6 +189,7 @@ async function mount(
     skills?: Array<{ name: string; description: string; origin: string; visibility: string }>
     /** GET /fs/files fixture (the @ mention drawer's file list). */
     files?: string[]
+    filesTruncated?: boolean
     /** Make the /fs/files pull reject (silent-failure path). */
     filesFail?: boolean
     /** memory.written 通知条点击的回调。 */
@@ -194,7 +197,7 @@ async function mount(
   } = {},
 ): Promise<Harness> {
   const sessionId = opts.sessionId ?? "s1"
-  const api = makeApi(opts.initialMessages ?? [], { queue: opts.queue, meta: opts.meta, config: opts.config, compactions: opts.compactions, compactionsFail: opts.compactionsFail, skills: opts.skills, files: opts.files, filesFail: opts.filesFail })
+  const api = makeApi(opts.initialMessages ?? [], { queue: opts.queue, meta: opts.meta, config: opts.config, compactions: opts.compactions, compactionsFail: opts.compactionsFail, skills: opts.skills, files: opts.files, filesTruncated: opts.filesTruncated, filesFail: opts.filesFail })
   const { sockets, socketFactory, createWs } = setup()
   const ws = createWs()
   const container = document.createElement("div")
@@ -1269,6 +1272,19 @@ describe("ChatPanel file mention source", () => {
       const options = h.container.querySelectorAll('[data-testid="file-option"]')
       expect(options).toHaveLength(2)
       expect(h.container.querySelector('[data-testid="slash-menu"]')?.textContent).toContain("@src/a.ts")
+    } finally {
+      h.unmount()
+    }
+  })
+
+  it("a server-side truncation shows the tail note in the drawer", async () => {
+    const h = await mount({ files: ["src/a.ts"], filesTruncated: true })
+    try {
+      await h.sockets[0]!.open()
+      const input = h.container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
+      typeInto(input, "@")
+      await flush()
+      expect(h.container.querySelector('[data-testid="mention-truncated"]')?.textContent).toContain("文件过多")
     } finally {
       h.unmount()
     }

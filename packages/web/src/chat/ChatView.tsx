@@ -125,6 +125,8 @@ export interface ChatViewProps {
   extraCommands?: SlashCommandMeta[]
   /** 会话工作区内的文件（GET /fs/files，失败静默为空）：@ 文件点名的候选源。 */
   mentionFiles?: readonly string[]
+  /** 文件清单在后端被截断（仓库过大）：抽屉尾部显示一行提示。 */
+  mentionTruncated?: boolean
   /**
    * A child session (meta.parentSessionId set) is read-only to the user: the
    * whole input area (model/mode selectors, attachments, composer) is replaced
@@ -133,7 +135,7 @@ export interface ChatViewProps {
   readOnly?: boolean
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, compactions, extraCommands, mentionFiles, readOnly }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Suggestion-menu state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -256,8 +258,9 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
   /** 文件候选里含空白的路径没法无歧义写进消息：抽屉里可见但禁选。 */
   const isDisabledFile = (item: ComposerCandidate): boolean => item.kind === "file" && /\s/.test(item.path)
 
-  /** Replace the trailing in-progress token with the chosen candidate plus a trailing space; the space closes the menu. */
+  /** Replace the trailing in-progress token with the chosen candidate plus a trailing space; the space closes the menu. A disabled file entry never completes. */
   const completeCandidate = (item: ComposerCandidate): void => {
+    if (isDisabledFile(item)) return
     setDraft(item.kind === "slash" ? replaceTrailingSlashToken(draft, item.meta.name) : replaceTrailingMentionToken(draft, item.path))
     setDismissed(true)
   }
@@ -293,8 +296,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
         setSel((active - 1 + completions.length) % completions.length)
       } else if (event.key === "Tab") {
         event.preventDefault()
-        const item = completions[active]!
-        if (!isDisabledFile(item)) completeCandidate(item)
+        completeCandidate(completions[active]!)
       } else if (event.key === "Escape") {
         setDismissed(true)
       }
@@ -541,13 +543,16 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
                     // mousedown so the input keeps focus (a click would blur it)
                     onMouseDown={(event) => {
                       event.preventDefault()
-                      if (!isDisabledFile(c)) completeCandidate(c)
+                      completeCandidate(c)
                     }}
                   >
                     <code>@{c.path}</code>
                   </button>
                 </li>
               ),
+            )}
+            {completions[0]!.kind === "file" && mentionTruncated === true && (
+              <li className="slash-note" data-testid="mention-truncated">文件过多，列表已截断</li>
             )}
           </ul>
         )}

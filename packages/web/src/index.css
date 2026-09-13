@@ -1815,6 +1815,14 @@ select:focus {
   opacity: 0.45;
 }
 
+/* Drawer tail note (e.g. the file list was truncated server-side). */
+.slash-note {
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  list-style: none;
+}
+
 /* /help command panel — same card language as .chat-notice. */
 .slash-help {
   border: 1px solid var(--border-strong);
