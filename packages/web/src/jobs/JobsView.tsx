@@ -117,7 +117,7 @@ export function JobsView({ api }: { api: ApiClient }) {
         <h3 className="form-title">{editingId === null ? "新建任务" : "编辑任务"}</h3>
         <div className="form-grid">
           <label>
-            name
+            任务名
             <input
               data-testid="job-name"
               value={form.name}
@@ -126,7 +126,7 @@ export function JobsView({ api }: { api: ApiClient }) {
             />
           </label>
           <label>
-            cron
+            cron 表达式
             <input
               data-testid="job-cron"
               value={form.cron}
@@ -135,7 +135,7 @@ export function JobsView({ api }: { api: ApiClient }) {
             />
           </label>
           <label className="form-full">
-            prompt
+            提示词
             <textarea
               data-testid="job-prompt"
               value={form.prompt}
@@ -151,7 +151,7 @@ export function JobsView({ api }: { api: ApiClient }) {
               disabled={editingId === null}
               onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
             />
-            enabled
+            启用
             {editingId === null && (
               <span className="form-hint" data-testid="job-enabled-hint">
                 新任务默认启用，创建后可切换
@@ -170,52 +170,64 @@ export function JobsView({ api }: { api: ApiClient }) {
           )}
         </div>
       </form>
-      <table className="data-table" data-testid="jobs-table">
-        <thead>
-          <tr>
-            <th>name</th>
-            <th>cron</th>
-            <th>enabled</th>
-            <th>nextRunAt</th>
-            <th>lastStatus</th>
-            <th>lastRunAt</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {jobs?.map((job) => (
-            <tr key={job.id} data-testid={`job-row-${job.id}`}>
-              <td>{job.name}</td>
-              <td><code>{job.cron}</code></td>
-              <td data-testid={`job-enabled-${job.id}`}>{job.enabled ? "启用" : "禁用"}</td>
-              <td>{job.nextRunAt}</td>
-              <td>{job.lastStatus ?? "—"}</td>
-              <td>{job.lastRunAt ?? "—"}</td>
-              <td className="row-actions">
-                <button type="button" data-testid={`job-edit-${job.id}`} onClick={() => startEdit(job)}>
-                  编辑
-                </button>
-                <button type="button" data-testid={`job-toggle-${job.id}`} onClick={() => void toggleEnabled(job)}>
-                  {job.enabled ? "禁用" : "启用"}
-                </button>
-                <button
-                  type="button"
-                  className="danger"
-                  data-testid={`job-delete-${job.id}`}
-                  onClick={() => void remove(job)}
-                >
-                  删除
-                </button>
-              </td>
+      {jobs !== null && jobs.length > 0 && (
+        <table className="data-table" data-testid="jobs-table">
+          <thead>
+            <tr>
+              <th>任务名</th>
+              <th>cron</th>
+              <th>启用</th>
+              <th>下次运行</th>
+              <th>上次状态</th>
+              <th>上次运行</th>
+              <th />
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {jobs.map((job) => (
+              <tr key={job.id} data-testid={`job-row-${job.id}`}>
+                <td>{job.name}</td>
+                <td><code>{job.cron}</code></td>
+                <td data-testid={`job-enabled-${job.id}`}>{job.enabled ? "启用" : "禁用"}</td>
+                <td>{formatIso(job.nextRunAt)}</td>
+                <td>{job.lastStatus ?? "—"}</td>
+                <td>{formatIso(job.lastRunAt)}</td>
+                <td className="row-actions">
+                  <button type="button" data-testid={`job-edit-${job.id}`} onClick={() => startEdit(job)}>
+                    编辑
+                  </button>
+                  <button type="button" data-testid={`job-toggle-${job.id}`} onClick={() => void toggleEnabled(job)}>
+                    {job.enabled ? "禁用" : "启用"}
+                  </button>
+                  <button
+                    type="button"
+                    className="danger"
+                    data-testid={`job-delete-${job.id}`}
+                    onClick={() => void remove(job)}
+                  >
+                    删除
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
       {jobs !== null && jobs.length === 0 && (
         <p className="muted table-empty" data-testid="jobs-empty">
-          还没有任务，创建一个开始。
+          还没有任务，在上方创建一个开始。
         </p>
       )}
     </div>
   )
+}
+
+/** Compact local time for schedule fields; em-dash for absent values. */
+function formatIso(iso: string | null | undefined): string {
+  if (iso === null || iso === undefined || iso === "") return "—"
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  const md = `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")}`
+  const hhmm = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
+  return `${md} ${hhmm}`
 }

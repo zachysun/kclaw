@@ -121,6 +121,11 @@ export function PermissionsView({ api, notice, workdir }: {
         <p className="muted">加载中…</p>
       ) : (
         <>
+          {data.project.path === data.global.path && (
+            <p className="muted" data-testid="perm-same-path-note">
+              当前会话的工作目录是用户主目录，项目档与全局档指向同一个文件。
+            </p>
+          )}
           {scopeBlock("global", data.global)}
           {scopeBlock("project", data.project)}
         </>
