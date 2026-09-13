@@ -21,6 +21,7 @@
   --surface-3: #26262b;
   --border: #26262b;
   --border-strong: #3a3a42;
+  --border-hover: #4a515c;
   --text: #f2efe6;
   --text-dim: #c6c2b8;
   --muted: #8d897f;
@@ -28,9 +29,12 @@
   --accent-strong: #ff3348;    /* legible red for small text on black */
   --accent-ink: #ffffff;       /* text on red fills */
   --accent-dim: rgba(228, 0, 15, 0.14);
+  --accent-border: rgba(228, 0, 15, 0.4);
+  --accent-dim-strong: rgba(228, 0, 15, 0.22);
   --success: #5fd068;
   --success-dim: rgba(95, 208, 104, 0.12);
   --danger: #ffd23f;           /* hazard yellow — red belongs to the agent */
+  --danger-ink: #141414;       /* text on danger fills */
   --danger-dim: rgba(255, 210, 63, 0.1);
   --warn: #ffd23f;
 
@@ -52,6 +56,12 @@
 
   /* semantic fills derived from the palette */
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-strong);
+
+  /* shared derived surfaces — identical across themes */
+  --code-well-bg: #08080a;     /* fenced code sits a step below the page bg */
+  --row-stripe: rgba(255, 255, 255, 0.015);
+  --hljs-name: #6db4ff;        /* code highlight: function/type names */
+  --hljs-attr: #c9a8ef;        /* code highlight: attributes/properties */
 }
 
 /* the classic warm look: same structure, softer palette and corners */
@@ -62,6 +72,7 @@ html[data-theme="amber"] {
   --surface-3: #2a2f37;
   --border: #2a2f37;
   --border-strong: #3a4048;
+  --border-hover: #4a515c;
   --text: #e6e6e6;
   --text-dim: #b7bcc4;
   --muted: #8a9099;
@@ -69,16 +80,18 @@ html[data-theme="amber"] {
   --accent-strong: #f0b45f;
   --accent-ink: #3a2c14;
   --accent-dim: rgba(224, 164, 78, 0.13);
+  --accent-border: rgba(224, 164, 78, 0.4);
+  --accent-dim-strong: rgba(224, 164, 78, 0.22);
   --success: #7cb876;
   --success-dim: rgba(124, 184, 118, 0.12);
   --danger: #e07a6d;
   --danger-dim: rgba(224, 122, 109, 0.12);
+  --danger-ink: #1a0d0b;
   --warn: #d8a657;
   --radius: 8px;
   --radius-sm: 5px;
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
 }
-
 * {
   box-sizing: border-box;
 }
@@ -178,7 +191,7 @@ button {
 
 button:hover:not(:disabled) {
   background: var(--surface-3);
-  border-color: #4a515c;
+  border-color: var(--border-hover);
 }
 
 button:active:not(:disabled) {
@@ -210,7 +223,7 @@ button.danger {
 
 button.danger:hover:not(:disabled) {
   background: var(--danger);
-  color: #141414;
+  color: var(--danger-ink);
   border-color: var(--danger);
 }
 
@@ -395,6 +408,7 @@ select:focus {
   padding: var(--space-4);
   overflow-y: auto;
   min-width: 0;
+  position: relative;
 }
 
 .view-title {
@@ -426,7 +440,7 @@ select:focus {
 }
 
 .new-session:hover:not(:disabled) {
-  background: rgba(228, 0, 15, 0.22);
+  background: var(--accent-dim-strong);
   border-color: var(--accent);
 }
 
@@ -518,7 +532,7 @@ select:focus {
 }
 
 .group-new:hover:not(:disabled) {
-  background: rgba(228, 0, 15, 0.22);
+  background: var(--accent-dim-strong);
 }
 
 .group-rename-trigger {
@@ -857,7 +871,7 @@ select:focus {
   font-size: 11px;
   color: var(--accent);
   background: var(--accent-dim);
-  border: 1px solid rgba(228, 0, 15, 0.4);
+  border: 1px solid var(--accent-border);
   border-radius: var(--radius-sm);
 }
 
@@ -931,7 +945,7 @@ select:focus {
 .message-user {
   align-self: flex-end;
   background: var(--accent-dim);
-  border-color: rgba(228, 0, 15, 0.4);
+  border-color: var(--accent-border);
   border-bottom-right-radius: 2px;
 }
 
@@ -1091,7 +1105,7 @@ select:focus {
 .md-code pre {
   margin: 0;
   padding: 9px 12px;
-  background: #08080a;
+  background: var(--code-well-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   overflow-x: auto;
@@ -1162,14 +1176,14 @@ select:focus {
 .md .hljs-title.function_,
 .md .hljs-built_in,
 .md .hljs-class .hljs-title {
-  color: #6db4ff;
+  color: var(--hljs-name);
 }
 
 .md .hljs-attr,
 .md .hljs-property,
 .md .hljs-selector-class,
 .md .hljs-selector-id {
-  color: #c9a8ef;
+  color: var(--hljs-attr);
 }
 
 .md .hljs-deletion {
@@ -1809,7 +1823,7 @@ select:focus {
 
 .data-table tr:nth-child(even) td,
 .usage-view tr:nth-child(even) td {
-  background: rgba(255, 255, 255, 0.015);
+  background: var(--row-stripe);
 }
 
 .row-actions {
@@ -1830,7 +1844,7 @@ select:focus {
 
 .row-actions button.danger:hover:not(:disabled) {
   background: var(--danger);
-  color: #141414;
+  color: var(--danger-ink);
 }
 
 .args-summary {
@@ -1853,6 +1867,24 @@ select:focus {
   overflow: hidden;
 }
 
+/* The chat pane mirrors the audit keep-alive: while the chat tab is visible,
+   .main stops being the scroller — the message log scrolls internally and
+   the composer stays pinned at the pane's bottom, so scrolling always ends
+   at the last message instead of trailing into empty page. */
+.main:has(.chat-host:not([hidden])) {
+  display: flex;
+  overflow: hidden;
+}
+
+/* :not([hidden]) keeps the UA's display:none in charge when the chat is
+   parked during tab switches. */
+.chat-host:not([hidden]) {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .audit-host {
   flex: 1;
   min-width: 0;
@@ -1861,9 +1893,11 @@ select:focus {
 }
 
 /* Tab keep-alive: hidden must NOT be display:none — Virtuoso needs real
-   layout to measure rows. Offscreen keeps geometry, drops interactivity. */
+   layout to measure rows. Offscreen pins the host to .main's box (same
+   geometry as when visible, zero scroll impact), drops interactivity. */
 .audit-host.offscreen {
   position: absolute;
+  inset: 0;
   visibility: hidden;
   pointer-events: none;
 }
@@ -2128,7 +2162,7 @@ select:focus {
   position: relative;
   height: 8px;
   background: var(--surface-2);
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 
@@ -2152,6 +2186,11 @@ select:focus {
   margin-left: var(--space-3);
   font-size: 12px;
   padding: 3px 10px;
+}
+
+.usage-export-error {
+  margin-left: var(--space-2);
+  color: var(--danger);
 }
 
 /* memory — 记忆管理页：左列清单 + 右列整文件编辑器 */
@@ -2248,7 +2287,7 @@ select:focus {
 
 .memory-editor-actions button:last-child:hover:not(:disabled) {
   background: var(--danger);
-  color: #141414;
+  color: var(--danger-ink);
 }
 
 @media (max-width: 700px) {
@@ -2268,7 +2307,7 @@ select:focus {
   top: 0;
   z-index: 50;
   background: var(--warn);
-  color: #141414;
+  color: var(--danger-ink);
   font-weight: 700;
   font-style: italic;
   text-align: center;
@@ -2532,7 +2571,7 @@ select:focus {
 /* The "auto-learned" marker on a decided rule (batch C). */
 .perm-source {
   font-style: normal;
-  color: var(--accent, #6b8cff);
+  color: var(--accent);
   margin-right: 6px;
 }
 

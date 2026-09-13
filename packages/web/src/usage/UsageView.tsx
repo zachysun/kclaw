@@ -24,6 +24,7 @@ export function UsageView({ api }: { api: ApiClient }) {
   const [bySession, setBySession] = useState<UsageBody | null>(null)
   const [sessions, setSessions] = useState<SessionMeta[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [exportFailed, setExportFailed] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -54,15 +55,22 @@ export function UsageView({ api }: { api: ApiClient }) {
   }, [sessions])
 
   const exportJson = (): void => {
-    api.get<UsageBody>("/usage?by=session").then((body) => {
-      const blob = new Blob([JSON.stringify(body, null, 2)], { type: "application/json" })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = "kclaw-usage.json"
-      a.click()
-      URL.revokeObjectURL(url)
-    })
+    api
+      .get<UsageBody>("/usage?by=session")
+      .then((body) => {
+        const blob = new Blob([JSON.stringify(body, null, 2)], { type: "application/json" })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement("a")
+        a.href = url
+        a.download = "kclaw-usage.json"
+        a.click()
+        URL.revokeObjectURL(url)
+        setExportFailed(false)
+      })
+      .catch(() => {
+        // The page stays usable; the failure surfaces next to the button.
+        setExportFailed(true)
+      })
   }
 
   const fmt = (n: number) => n.toLocaleString()
@@ -82,6 +90,7 @@ export function UsageView({ api }: { api: ApiClient }) {
       <p className="muted">
         总计: {daily === null ? "…" : `${fmt(daily.total.inputTokens)} 输入 / ${fmt(daily.total.outputTokens)} 输出 token${showDailyCost ? `，${fmtCost(daily.total.costUsd)}` : ""}`}
         <button className="usage-export" onClick={exportJson}>导出 JSON</button>
+        {exportFailed && <span className="usage-export-error">导出失败，请重试</span>}
       </p>
       <h4>按天</h4>
       <table data-testid="usage-day-table">

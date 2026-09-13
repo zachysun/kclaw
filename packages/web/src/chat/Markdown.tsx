@@ -7,7 +7,7 @@
  * button; links open in a new tab so a chat message never navigates away
  * from the live session.
  */
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { memo, useEffect, useRef, useState, type ReactNode } from "react"
 import ReactMarkdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
 import rehypeHighlight from "rehype-highlight"
@@ -17,19 +17,29 @@ const components: Components = {
   a: ({ node, ...rest }) => <a {...rest} target="_blank" rel="noreferrer" />,
 }
 
-export function MarkdownText({ text }: { text: string }) {
+// Module-level plugin lists: react-markdown rebuilds its processor on every
+// render, so new array identities here would defeat memoization downstream.
+const remarkPlugins = [remarkGfm]
+const rehypePlugins = [rehypeHighlight]
+
+/**
+ * memo is load-bearing: a streaming run re-renders the whole message list on
+ * every text delta, and each MarkdownText re-parses its full text — equal
+ * props must skip the parse entirely.
+ */
+export const MarkdownText = memo(function MarkdownText({ text }: { text: string }) {
   return (
     <div className="md" data-testid="blk-markdown">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight]}
+        remarkPlugins={remarkPlugins}
+        rehypePlugins={rehypePlugins}
         components={components}
       >
         {text}
       </ReactMarkdown>
     </div>
   )
-}
+})
 
 /**
  * One fenced code block. The wrapper div is what carries the copy button;

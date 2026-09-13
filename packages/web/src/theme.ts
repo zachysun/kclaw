@@ -27,6 +27,11 @@ export function loadTheme(): ThemeName {
 /** Apply to the document and persist; storage failures stay session-only. */
 export function applyTheme(theme: ThemeName): void {
   document.documentElement.dataset.theme = theme
+  // Keep the browser chrome (PWA window, mobile status bar) on the theme's
+  // canvas color.
+  document
+    .querySelector('meta[name="theme-color"]')
+    ?.setAttribute("content", theme === "phantom" ? "#0b0b0d" : "#131518")
   try {
     localStorage.setItem(THEME_KEY, theme)
   } catch {

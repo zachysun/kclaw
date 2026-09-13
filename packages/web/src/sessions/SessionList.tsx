@@ -43,9 +43,14 @@ const COLLAPSED_GROUPS_KEY = "kclaw_collapsed_workdirs"
 function loadWorkdirNames(): Record<string, string> {
   try {
     const parsed = JSON.parse(localStorage.getItem(WORKDIR_NAMES_KEY) ?? "{}") as unknown
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, string>)
-      : {}
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {}
+    // Validate the leaves too: a non-string value would reach JSX and crash
+    // the whole sidebar on render.
+    const names: Record<string, string> = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "string") names[key] = value
+    }
+    return names
   } catch {
     return {}
   }
