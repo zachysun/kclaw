@@ -10,6 +10,7 @@ import { parseSlashInput, replaceTrailingSlashToken, slashCompletions, SLASH_COM
 import { PERMISSION_MODES, type PermissionMode } from "@kclaw/core/permission-modes"
 import type { AttachmentRef, ConfirmationDecision } from "@kclaw/core/protocol"
 import type { ChatState, ConfirmationCard, QuestionCard, RenderedBlock, RenderedMessage } from "./model.js"
+import { MarkdownText } from "./Markdown.js"
 
 /**
  * How a message enters a busy session: steer injects into the live
@@ -523,15 +524,25 @@ function MessageBubble({ message, onOpenAudit }: { message: RenderedMessage; onO
   return (
     <div className={`message message-${message.role}`} data-testid={`msg-${message.role}`}>
       {streaming && <div className="msg-pending" data-testid="msg-pending">…</div>}
-      {message.blocks.map((block) => <BlockView key={block.blockId} block={block} onOpenAudit={onOpenAudit} />)}
+      {/* Only the assistant's side renders Markdown: the user's raw words stay
+          literal (a stray * or # in a typed message must not turn into markup). */}
+      {message.blocks.map((block) => (
+        <BlockView key={block.blockId} block={block} markdown={message.role === "assistant"} onOpenAudit={onOpenAudit} />
+      ))}
     </div>
   )
 }
 
-function BlockView({ block, onOpenAudit }: { block: RenderedBlock; onOpenAudit?: (sessionId: string) => void }) {
+function BlockView({ block, markdown, onOpenAudit }: { block: RenderedBlock; markdown: boolean; onOpenAudit?: (sessionId: string) => void }) {
   switch (block.kind) {
     case "text":
-      return <p className="blk-text" data-testid="blk-text">{block.text}</p>
+      return markdown ? (
+        <div className="blk-text md" data-testid="blk-text">
+          <MarkdownText text={block.text} />
+        </div>
+      ) : (
+        <p className="blk-text" data-testid="blk-text">{block.text}</p>
+      )
     case "thinking":
       return (
         <details className="blk-thinking" data-testid="blk-thinking">
