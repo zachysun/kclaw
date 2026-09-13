@@ -2613,6 +2613,17 @@ select:focus {
   overflow: hidden;
 }
 
+.skills-section {
+  margin-bottom: var(--space-3);
+}
+
+.skills-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin: var(--space-2) 0 var(--space-1);
+}
+
 .discover-group {
   border: 1px solid var(--border);
   border-radius: var(--radius);

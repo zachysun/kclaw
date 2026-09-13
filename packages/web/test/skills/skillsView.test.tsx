@@ -22,6 +22,7 @@ const DISCOVERY = {
   sources: [
     { agent: "claude", dir: "/home/.claude/skills", stale: false },
     { agent: "custom", dir: "/w/extra-skills", stale: true },
+    { agent: "dsh", dir: "/home/.dsh/skills", stale: true },
   ],
   skills: [
     { name: "pdf", displayName: "pdf", description: "PDF 处理。", target: "/cc/pdf", sources: ["claude"], reused: false, conflict: false, stale: false },
@@ -122,18 +123,24 @@ describe("SkillsView", () => {
     expect(container.textContent).toContain("# 提交规程")
   })
 
-  it("reuse tab groups discovery rows: plugin groups collapsed, agent groups open, searchable", async () => {
+  it("reuse tab splits discovery into two sections: agent dirs open, plugin groups collapsed, searchable", async () => {
     const api = fakeApi()
     const { container } = await mount(api)
     await openReuseTab(container)
-    // 用户级组展开：pdf 可见；插件组折叠：tdd 在 DOM 里（details 内容存在）但组标题分开
-    expect(container.textContent).toContain("Claude Code（2）")
-    expect(container.textContent).toContain("插件 superpowers（2）")
-    const pluginGroup = [...container.querySelectorAll("details.discover-group")].find((d) => d.textContent!.includes("superpowers"))!
-    expect((pluginGroup as HTMLDetailsElement).open).toBe(false)
-    const agentGroup = [...container.querySelectorAll("details.discover-group")].find((d) => d.textContent!.includes("Claude Code"))!
-    expect((agentGroup as HTMLDetailsElement).open).toBe(true)
-    // 搜索命中插件技能：未命中的条目被滤掉，命中组保留并强制展开。
+    // 两个区块：用户级技能目录（展开）与已安装插件（折叠）
+    const sections = [...container.querySelectorAll(".skills-section-title")]
+    expect(sections.map((s) => s.textContent)).toEqual(["用户级技能目录", "已安装插件"])
+    const agentSection = sections[0]!.closest(".skills-section")!
+    const pluginSection = sections[1]!.closest(".skills-section")!
+    const agentGroups = [...agentSection.querySelectorAll("details.discover-group")]
+    const pluginGroups = [...pluginSection.querySelectorAll("details.discover-group")]
+    const agentGroupNames = agentGroups.map((d) => d.querySelector("summary")!.textContent)
+    expect(agentGroupNames).toEqual(["Claude Code（2）", "Codex（1）", "zCode（1）", "DeepSeek（1）"])
+    const pluginGroupNames = pluginGroups.map((d) => d.querySelector("summary")!.textContent)
+    expect(pluginGroupNames).toEqual(["superpowers（2）"])
+    expect(agentGroups.every((d) => (d as HTMLDetailsElement).open)).toBe(true)
+    expect(pluginGroups.every((d) => (d as HTMLDetailsElement).open)).toBe(false)
+    // 搜索命中插件技能：命中组保留并强制展开，未命中条目被滤掉。
     // React 受控 input 必须经原生 value setter 触发（直接赋值不触发 onChange）。
     const input = container.querySelector<HTMLInputElement>('[data-testid="discover-search"]')!
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!
@@ -146,6 +153,20 @@ describe("SkillsView", () => {
     const filteredGroup = [...container.querySelectorAll("details.discover-group")].find((d) => d.textContent!.includes("superpowers"))!
     expect((filteredGroup as HTMLDetailsElement).open).toBe(true)
     expect(filteredGroup.querySelector('[data-testid="discover-grill"]')).toBeNull()
+    // 用户级区在搜索无命中时整区消失
+    const sectionsAfter = [...container.querySelectorAll(".skills-section-title")].map((s) => s.textContent)
+    expect(sectionsAfter).toEqual(["已安装插件"])
+  })
+
+  it("built-in source missing shows neutral unused mark; custom source missing shows stale warning", async () => {
+    const api = fakeApi()
+    const { container } = await mount(api)
+    await openReuseTab(container)
+    const badges = [...container.querySelectorAll(".skill-source")]
+    const dsh = badges.find((b) => b.textContent!.includes("DeepSeek"))!
+    const custom = badges.find((b) => b.textContent!.includes("自定义目录"))!
+    expect(dsh.textContent).toContain("（未使用）")
+    expect(custom.textContent).toContain("（已失效）")
   })
 
   it("reuse tab shows status marks and the links table with the outdated badge", async () => {

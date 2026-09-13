@@ -16,6 +16,7 @@
  * 生效，与 run 时注入同源同规则。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type React from "react"
 import type { ApiClient } from "../api.js"
 
 interface SkillRow {
@@ -224,23 +225,36 @@ export function SkillsView({ api, notice }: {
   const reusableRows = discovery?.skills ?? []
   const discoveredCount = reusableRows.filter((s) => !s.reused && !s.conflict && !s.stale).length
 
-  // 发现列表按来源分组：插件技能一组（默认折叠），用户级 agent 目录一组，
-  // 自定义目录一组。搜索词过滤名字与描述，命中时全部组展开。
-  const groups = useMemo(() => {
+  // 发现列表分两个区块，层级对齐心智模型：
+  //   「用户级技能目录」按 agent 分组（展开）——用户亲手放的技能；
+  //   「已安装插件」按插件分组（折叠）——插件带给你的技能。
+  // 搜索词过滤名字与描述，命中时全部组展开。
+  const filtering = search.trim() !== ""
+  const matches = (s: DiscoveredSkill): boolean => {
     const word = search.trim().toLowerCase()
-    const matches = (s: DiscoveredSkill): boolean =>
-      word === "" || s.name.toLowerCase().includes(word) || s.description.toLowerCase().includes(word) || (s.plugin ?? "").toLowerCase().includes(word)
-    const map = new Map<string, { label: string; defaultOpen: boolean; items: DiscoveredSkill[] }>()
+    return word === "" || s.name.toLowerCase().includes(word) || s.description.toLowerCase().includes(word) || (s.plugin ?? "").toLowerCase().includes(word)
+  }
+  const agentGroups = useMemo(() => {
+    const map = new Map<string, { label: string; items: DiscoveredSkill[] }>()
     for (const s of reusableRows) {
-      if (!matches(s)) continue
-      const key = s.plugin !== undefined ? `plugin:${s.plugin}` : `agent:${s.sources[0] ?? "custom"}`
+      if (s.plugin !== undefined || !matches(s)) continue
+      const key = s.sources[0] ?? "custom"
       const hit = map.get(key)
       if (hit !== undefined) hit.items.push(s)
-      else map.set(key, { label: s.plugin !== undefined ? `插件 ${s.plugin}` : AGENT_LABEL[s.sources[0] ?? "custom"] ?? s.sources[0] ?? "其他", defaultOpen: s.plugin === undefined, items: [s] })
+      else map.set(key, { label: AGENT_LABEL[key] ?? key, items: [s] })
     }
     return [...map.values()]
   }, [reusableRows, search])
-  const filtering = search.trim() !== ""
+  const pluginGroups = useMemo(() => {
+    const map = new Map<string, { label: string; items: DiscoveredSkill[] }>()
+    for (const s of reusableRows) {
+      if (s.plugin === undefined || !matches(s)) continue
+      const hit = map.get(s.plugin)
+      if (hit !== undefined) hit.items.push(s)
+      else map.set(s.plugin, { label: s.plugin, items: [s] })
+    }
+    return [...map.values()]
+  }, [reusableRows, search])
 
   return (
     <div className="skills-view" data-testid="skills-view">
@@ -354,15 +368,20 @@ export function SkillsView({ api, notice }: {
               </div>
               {discovery !== null && discovery.sources.length > 0 && (
                 <div className="skills-sources" data-testid="discovery-sources">
-                  {discovery.sources.map((s) => (
-                    <span key={s.dir} className={s.stale ? "skill-source stale" : "skill-source"} title={s.dir}>
-                      {AGENT_LABEL[s.agent] ?? s.agent}
-                      {s.stale ? "（已失效）" : ""}
-                      {s.agent === "custom" && (
-                        <button type="button" className="skill-source-del" aria-label={`移除 ${s.dir}`} disabled={busy} onClick={() => void removeSource(s.dir)}>×</button>
-                      )}
-                    </span>
-                  ))}
+                  {discovery.sources.map((s) => {
+                    // 内置目录不存在=没装那个 agent（中性"未使用"）；自定义
+                    // 目录不存在=登记过的目录消失了（警告"已失效"）。
+                    const note = !s.stale ? "" : s.agent === "custom" ? "（已失效）" : "（未使用）"
+                    return (
+                      <span key={s.dir} className={s.stale ? "skill-source stale" : "skill-source"} title={s.stale ? `${s.dir}（目录不存在）` : s.dir}>
+                        {AGENT_LABEL[s.agent] ?? s.agent}
+                        {note}
+                        {s.agent === "custom" && (
+                          <button type="button" className="skill-source-del" aria-label={`移除 ${s.dir}`} disabled={busy} onClick={() => void removeSource(s.dir)}>×</button>
+                        )}
+                      </span>
+                    )
+                  })}
                   <span className="skills-source-add">
                     <input
                       type="text"
@@ -376,51 +395,27 @@ export function SkillsView({ api, notice }: {
                   </span>
                 </div>
               )}
-              {groups.length === 0 ? (
+              {agentGroups.length === 0 && pluginGroups.length === 0 ? (
                 <p className="muted">{reusableRows.length === 0 ? "未发现可复用的技能。四家 agent 的用户级与插件技能都没有新内容，或都已在上方。" : "没有匹配的技能。"}</p>
               ) : (
-                groups.map((g) => (
-                  <details key={g.label} className="discover-group" open={filtering || g.defaultOpen}>
-                    <summary>{g.label}<span className="muted">（{g.items.length}）</span></summary>
-                    <ul>
-                      {g.items.map((item) => {
-                        const reusedHere = linkNames.has(item.name)
-                        const hint = item.stale ? "已失效" : item.conflict ? "与已有技能同名冲突" : item.reused && !reusedHere ? "已在其他作用域复用" : ""
-                        return (
-                          <li key={`${item.name}-${item.target}`}>
-                            <div
-                              data-testid={`discover-${item.name}`}
-                              className={body?.reusable?.name === item.name ? "skill-item discover active" : "skill-item discover"}
-                              role="button"
-                              tabIndex={0}
-                              onClick={() => void preview(item)}
-                              onKeyDown={(e) => { if (e.key === "Enter") void preview(item) }}
-                            >
-                              <span className="skill-name">{item.name}</span>
-                              <span className="skill-meta">{hint !== "" ? hint : item.sources.map((a) => AGENT_LABEL[a] ?? a).join(" · ")}</span>
-                              <span className="skill-desc clamp2">{item.stale ? "源目录或链接已失效" : item.description}</span>
-                              <span className="discover-actions">
-                                {item.reused && reusedHere ? (
-                                  <button type="button" data-testid={`unlink-${item.name}`} disabled={busy} onClick={(e) => { e.stopPropagation(); void unlink(item.name) }}>取消复用</button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    data-testid={`reuse-${item.name}`}
-                                    disabled={busy || item.stale || item.conflict}
-                                    title={item.conflict ? "先处理同名技能" : item.reused ? "该内容已在其他作用域复用，仍可在此再建链接" : ""}
-                                    onClick={(e) => { e.stopPropagation(); void reuse(item) }}
-                                  >
-                                    复用
-                                  </button>
-                                )}
-                              </span>
-                            </div>
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  </details>
-                ))
+                <>
+                  {agentGroups.length > 0 && (
+                    <div className="skills-section">
+                      <div className="skills-section-title">用户级技能目录</div>
+                      {agentGroups.map((g) => (
+                        <DiscoveryGroup key={g.label} label={g.label} items={g.items} open byName={body?.reusable?.name} busy={busy} linkNames={linkNames} onPreview={preview} onReuse={reuse} onUnlink={unlink} />
+                      ))}
+                    </div>
+                  )}
+                  {pluginGroups.length > 0 && (
+                    <div className="skills-section">
+                      <div className="skills-section-title">已安装插件</div>
+                      {pluginGroups.map((g) => (
+                        <DiscoveryGroup key={g.label} label={g.label} items={g.items} open={filtering} byName={body?.reusable?.name} busy={busy} linkNames={linkNames} onPreview={preview} onReuse={reuse} onUnlink={unlink} />
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </div>
             <div className="skills-body">
@@ -442,5 +437,65 @@ export function SkillsView({ api, notice }: {
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * 一个可折叠分组（区块内的 agent 组或插件组）：标题带计数，展开后是技能
+ * 行（名字 / 状态或来源 / 两行截断的描述 / 复用开关）。open 是初始展开状
+ * 态——搜索过滤时由父级强制展开，用户随后仍可手动收起。
+ */
+function DiscoveryGroup({ label, items, open, byName, busy, linkNames, onPreview, onReuse, onUnlink }: {
+  label: string
+  items: DiscoveredSkill[]
+  open: boolean
+  byName?: string
+  busy: boolean
+  linkNames: Set<string>
+  onPreview: (item: DiscoveredSkill) => void
+  onReuse: (item: DiscoveredSkill) => void
+  onUnlink: (name: string) => void
+}): React.ReactElement {
+  return (
+    <details className="discover-group" open={open}>
+      <summary>{label}<span className="muted">（{items.length}）</span></summary>
+      <ul>
+        {items.map((item) => {
+          const reusedHere = linkNames.has(item.name)
+          const hint = item.stale ? "已失效" : item.conflict ? "与已有技能同名冲突" : item.reused && !reusedHere ? "已在其他作用域复用" : ""
+          return (
+            <li key={`${item.name}-${item.target}`}>
+              <div
+                data-testid={`discover-${item.name}`}
+                className={byName === item.name ? "skill-item discover active" : "skill-item discover"}
+                role="button"
+                tabIndex={0}
+                onClick={() => onPreview(item)}
+                onKeyDown={(e) => { if (e.key === "Enter") onPreview(item) }}
+              >
+                <span className="skill-name">{item.name}</span>
+                <span className="skill-meta">{hint !== "" ? hint : item.sources.map((a) => AGENT_LABEL[a] ?? a).join(" · ")}</span>
+                <span className="skill-desc clamp2">{item.stale ? "源目录或链接已失效" : item.description}</span>
+                <span className="discover-actions">
+                  {item.reused && reusedHere ? (
+                    <button type="button" data-testid={`unlink-${item.name}`} disabled={busy} onClick={(e) => { e.stopPropagation(); onUnlink(item.name) }}>取消复用</button>
+                  ) : (
+                    <button
+                      type="button"
+                      data-testid={`reuse-${item.name}`}
+                      disabled={busy || item.stale || item.conflict}
+                      title={item.conflict ? "先处理同名技能" : item.reused ? "该内容已在其他作用域复用，仍可在此再建链接" : ""}
+                      onClick={(e) => { e.stopPropagation(); onReuse(item) }}
+                    >
+                      复用
+                    </button>
+                  )}
+                </span>
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+    </details>
   )
 }
