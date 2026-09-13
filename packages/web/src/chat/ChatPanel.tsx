@@ -97,7 +97,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   const [notice, setNotice] = useState<string | null>(null)
   // 已装用户可见技能：出现在斜杠菜单的动态命令（/技能名），会话切换重拉
   // （项目级技能跟会话工作目录）。拉取失败静默——菜单少几条不碍聊天。
-  const [skillRows, setSkillRows] = useState<Array<{ name: string; description: string; origin: string; visibility: string }>>([])
+  const [skillRows, setSkillRows] = useState<Array<{ name: string; description: string; origin: string; visibility: string; plugin?: string }>>([])
   // 通知条的可点击动作（memory.written 跳转）：与 notice 同生命周期，输入即清。
   const [noticeAction, setNoticeAction] = useState<(() => void) | null>(null)
   // 发送处置：三选的当前选择，显式带在每条 send_message 上。
@@ -389,7 +389,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   useSilentFetch(
     () => {
       const q = workdir ? `?workdir=${encodeURIComponent(workdir)}` : ""
-      return api.get<Array<{ name: string; description: string; origin: string; visibility: string }>>(`/skills${q}`)
+      return api.get<Array<{ name: string; description: string; origin: string; visibility: string; plugin?: string }>>(`/skills${q}`)
     },
     (rows) => {
       if (Array.isArray(rows)) setSkillRows(rows)
@@ -559,7 +559,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           readOnly={childSession}
           onCancelCompaction={handleCancelCompaction}
           compactions={compactions}
-          extraCommands={skillRows.map((r) => skillCommandMeta(r.name, r.description, "web"))}
+          extraCommands={skillRows.map((r) => skillCommandMeta(r.name, r.plugin !== undefined ? `〔插件 ${r.plugin}〕${r.description}` : r.description, "web"))}
         />
       </div>
     </div>

@@ -165,4 +165,25 @@ describe("applyReuseTiers", () => {
     expect(skills.find((s) => s.name === "pdf")?.userInvocable).toBe(false)
     expect(readFileSync(join(globalDir, ".links.json"), "utf8")).toContain('"tier": "off"')
   })
+
+  it("carries plugin attribution: create with plugin → record → scan record surfaces it", () => {
+    const root = tempRoot()
+    const skillsDir = join(root, "skills")
+    const external = makeSkill(root, "tdd", {})
+    expect(createSkillLink({ skillsDir, name: "tdd", target: external, agent: "zcode", tier: "all", plugin: "superpowers" })).toEqual({ ok: true })
+    const links = readLinksFile(skillsDir)
+    expect(links.links[0]).toMatchObject({ name: "tdd", plugin: "superpowers" })
+    // 旧格式记录（无 plugin 字段）照常读取，plugin 为 undefined
+    writeLinksFile(skillsDir, { links: [{ name: "tdd", target: external, agent: "zcode", tier: "all" }], extraSources: [] })
+    const legacy = applyReuseTiers(scanSkillDirs({ global: skillsDir }), [readLinksFile(skillsDir)])
+    expect(legacy.find((s) => s.name === "tdd")?.plugin).toBeUndefined()
+    // 新记录的归属随 realpath 匹配落到扫描结果上，自有技能不受影响
+    writeLinksFile(skillsDir, { links: [{ name: "tdd", target: external, agent: "zcode", tier: "all", plugin: "superpowers" }], extraSources: [] })
+    const owned = makeSkill(skillsDir, "commit-helper", {})
+    const skills = applyReuseTiers(scanSkillDirs({ global: skillsDir }), [readLinksFile(skillsDir)])
+    expect(skills.find((s) => s.name === "tdd")?.plugin).toBe("superpowers")
+    expect(skills.find((s) => s.name === "commit-helper")?.dir).toBe(owned)
+    expect(skills.find((s) => s.name === "commit-helper")?.plugin).toBeUndefined()
+    void owned
+  })
 })

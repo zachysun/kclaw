@@ -75,6 +75,8 @@
 
 模型如何知道该用哪个：系统提示词清单给出名字与一句话描述；`disable-model-invocation` 的技能不在清单里，但用户在对话里直接点名（"按 commit-helper 的规程办"）时模型仍能按名加载——这是该档位技能唯一合法的入口。
 
+清单之外还有一条自助发现通道：**`skill_list` 工具**（`{query?}`，与 `skill_read` 同族、同一份扫描结果，可见口径一致）——清单有字符预算、技能多时截断，子代理更是不注入清单，模型需要完整清单或按关键词找技能时调它（先 list 找到名字，再 skill_read 取正文）。
+
 ## 技能点名与隐式包装
 
 ### 点名检测（matchSkillInvocations）
@@ -114,6 +116,7 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 ```
 
 - `tier` 是复用技能的**可见档位**，四档与 frontmatter 两布尔一一对应：`all`（完全可见）/ `user`（仅用户，相当于 `disable-model-invocation: true`）/ `model`（仅模型，相当于 `user-invocable: false`）/ `off`（暂不启用，两边都隐藏、链接与 `skill_read` 仍有效）。外部 SKILL.md 属于别的 agent，不可改写——档位只能存在 kclaw 侧。
+- `plugin` 是归属说明（可选）：复用插件技能时记录所属插件名，跟随技能出现在所有用户面——技能页已装清单（"来自插件 X"）、CLI `/skill` 列表、两端的斜杠命令描述。模型面的系统提示词清单不带（模型只需内容，且省预算）。归属出现前建的旧记录由链接清单接口惰性回填：目标能匹配到已安装插件就自动补名。
 - **档位覆盖按 realpath 匹配**：合并扫描结果后，技能目录的 realpath 命中某条链接记录的 target 才套用档位；项目作用域的记录后应用、盖过全局（与目录覆盖同向）。只共享名字的自有技能不受影响——它该由发现列表的冲突标记提示。
 - 创建链接时目标必须是存在且含 SKILL.md 的目录，链接名必须是合法技能目录名；作用域目录缺失时递归创建；写入旁挂文件原子化（临时文件 + rename，0600）。
 - 旁挂文件缺失或损坏一律降级为空——它永远不阻塞技能加载主链路。
@@ -147,7 +150,7 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 
 ## 关联
 
-- [tools](./tools.md)：`skill_read` 在 14 个内置工具里的位置与注册
+- [tools](./tools.md)：`skill_read` 与 `skill_list` 在 15 个内置工具里的位置与注册
 - [hooks](./hooks.md)：`skill-wrap` 内置钩子（`llm-before` 位置的点名包装）与 `withLastUserText`
 - [agent-loop](./agent-loop.md)：`llm-before` 位置在循环里的触发时机
 - [run-manager](../server/run-manager.md)：系统提示词装配（基础 + 认知 + 技能清单）、技能目录每 run 扫描

@@ -18,7 +18,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "n
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { isSkillDirName, parseSkillFile, type SkillRecord } from "./index.js"
-import { readLinksFile, type LinksFile } from "./links.js"
+import { readLinksFile, writeLinksFile, type LinksFile } from "./links.js"
 
 export const BUILTIN_SOURCES: ReadonlyArray<{ agent: "claude" | "codex" | "dsh" | "zcode"; dir: string }> = [
   { agent: "claude", dir: join(homedir(), ".claude", "skills") },
@@ -230,6 +230,42 @@ function candidatesOfPlugin(plugin: InstalledPluginRef): Candidate[] {
 /** All installed plugins across the contributing agent homes. */
 function installedPlugins(homes: ReadonlyArray<{ agent: string; home: string }>): InstalledPluginRef[] {
   return homes.flatMap((h) => readInstalledPlugins(h.home, h.agent))
+}
+
+/**
+ * Backfill missing plugin attribution on reuse links: a record created
+ * before attribution existed (or without it) whose target resolves to a
+ * currently-installed plugin skill gets the plugin name written in. Idempotent
+ * and best-effort — returns how many records were patched.
+ */
+export function backfillPluginAttribution(opts: {
+  skillsDir: string
+  pluginHomes?: ReadonlyArray<{ agent: string; home: string }>
+}): number {
+  const file = readLinksFile(opts.skillsDir)
+  const missing = file.links.filter((l) => l.plugin === undefined)
+  if (missing.length === 0) return 0
+  const pluginOfTarget = new Map<string, string>()
+  for (const plugin of installedPlugins(opts.pluginHomes ?? PLUGIN_HOMES)) {
+    for (const cand of candidatesOfPlugin(plugin)) pluginOfTarget.set(cand.target!, plugin.name)
+  }
+  if (pluginOfTarget.size === 0) return 0
+  let patched = 0
+  const links = file.links.map((l) => {
+    if (l.plugin !== undefined) return l
+    let real: string | undefined
+    try {
+      real = realpathSync(l.target)
+    } catch {
+      return l
+    }
+    const plugin = pluginOfTarget.get(real)
+    if (plugin === undefined) return l
+    patched += 1
+    return { ...l, plugin }
+  })
+  if (patched > 0) writeLinksFile(opts.skillsDir, { ...file, links })
+  return patched
 }
 
 /**

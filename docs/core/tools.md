@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/tools/` 实现 14 个内置工具（11 个常驻 + 3 个按装配条件注册），并把它们装配成两份对齐的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
+`packages/core/src/tools/` 实现 15 个内置工具（12 个常驻 + 3 个按装配条件注册），并把它们装配成两份对齐的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
 
 ---
 
@@ -65,7 +65,7 @@ export function makeTool<N extends string>(
 
 ---
 
-## 14 个内置工具
+## 15 个内置工具
 
 | 名称 | 职责 | risk / concurrency |
 |------|------|--------------------|
@@ -80,11 +80,12 @@ export function makeTool<N extends string>(
 | `memory_search` | 全文检索记忆 | safe / parallel |
 | `session_search` | 全文检索当前会话已压缩的早期对话 | safe / parallel |
 | `skill_read` | 按名字加载一个技能（skill）的完整规程正文 | safe / parallel |
+| `skill_list` | 列出模型可见的技能（名字 + 描述），可选关键词过滤——系统提示词清单可能被截断、子代理没有清单，用来自助发现 | safe / parallel |
 | `subagent_run` | 派出一个子代理独立执行一段自包含任务（可后台），结题答复即工具结果 | safe / parallel |
 | `subagent_collect` | 按子会话 id 取回后台子代理的完整结题答复 | safe / parallel |
 | `ask_user_questions` | 向用户提出 1–5 个需要当场拍板的问题，回答即工具结果 | safe / parallel |
 
-前 11 个**常驻注册**（注册与否不随会话状态变化；唯一的可见性例外是 readonly 模式——装配把 risk 为 sensitive 的工具整个移出该 run 的模型工具面，见 [permissions](./permissions.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 装配了子代理派发后端时注册（子代理自己的 run 两者都不注册——单层委派、不能再派孙代理），`ask_user_questions` 每个 run 都注册（见下文各自的"注册是条件性的"说明）。
+前 12 个**常驻注册**（注册与否不随会话状态变化；唯一的可见性例外是 readonly 模式——装配把 risk 为 sensitive 的工具整个移出该 run 的模型工具面，见 [permissions](./permissions.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 装配了子代理派发后端时注册（子代理自己的 run 两者都不注册——单层委派、不能再派孙代理），`ask_user_questions` 每个 run 都注册（见下文各自的"注册是条件性的"说明）。
 
 ### exec（`tools/exec.ts`）
 
@@ -131,7 +132,9 @@ export function makeTool<N extends string>(
 
 ### skill 工具（`tools/skills.ts`）
 
-**skill_read** `{name}`：按名字加载一个技能（skill）的完整规程正文（`SKILL.md` 的 Markdown 正文，机制与字段见 [skills](./skills.md)）。safe + parallel——只读 daemon 每次 run 扫描过的技能目录，不碰工作目录本身；同名技能的项目级副本胜出（与 `scanSkillDirs` 的覆盖规则一致）。技能不在已扫描集合时报 `没有叫 <name> 的技能（可用技能见系统提示词列表，或 /skill 查看）`；正文为空报错不加载。
+**skill_read** `{name}`：按名字加载一个技能（skill）的完整规程正文（`SKILL.md` 的 Markdown 正文，机制与字段见 [skills](./skills.md)）。safe + parallel——只读 daemon 每次 run 扫描过的技能目录，不碰工作目录本身；同名技能的项目级副本胜出（与 `scanSkillDirs` 的覆盖规则一致）。技能不在已扫描集合时报 `没有叫 <name> 的技能（可用 skill_list 列出已装技能，或 /skill 查看）`；正文为空报错不加载。
+
+**skill_list** `{query?}`：列出模型可见的技能（每行 `名字: 描述`，按名字排序），`query` 可选——按名字与描述子串过滤（大小写不敏感）。可见口径与系统提示词清单一致（`disable-model-invocation` 的不出现）。存在的原因：提示词清单有字符预算、技能多时截断，子代理更是不注入清单——`skill_list` 是模型的自助发现入口（先 list 找到名字，再 skill_read 取正文）。safe + parallel，与 skill_read 同源同一份扫描结果。
 
 工具描述里带一句软性指引：优先用系统提示词"可用技能"列表里的技能，不在列表中的（`disable-model-invocation`）只有用户明确点名时才应加载——可见性规则骑在描述上、不是硬门禁，用户点名是隐藏档位的合法入口。
 

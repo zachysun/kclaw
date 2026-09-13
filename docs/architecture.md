@@ -52,7 +52,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 | `permissions/` | ConfigPermissionGate（权限判定）+ ConfirmationBroker（人工确认网关） |
 | `memory/` | MemorySystem：L1 项目情节 + L2 全局认知 + FTS5/向量索引（见 [memory](./core/memory.md)） |
 | `text/` | 三端共享的中文分词器与全文检索（FTS）辅助 |
-| `tools/` | 14 个内置工具（11 常驻 + 条件注册的子代理派发/取回与运行中提问） |
+| `tools/` | 15 个内置工具（12 常驻 + 条件注册的子代理派发/取回与运行中提问） |
 | `skills/` | 技能包解析、双作用域扫描、点名匹配、复用探测与软链接接入（见 [skills](./core/skills.md)） |
 | `jobs/` | JobScheduler（定时任务调度） |
 | `mcp/` | MCP（Model Context Protocol：给模型接入外部工具的开放协议）客户端管理器 |

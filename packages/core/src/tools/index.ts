@@ -17,7 +17,7 @@ import { createExecTool, type ExecSandboxSpawn } from "./exec.js"
 import { createFsTools } from "./fs.js"
 import { createMemoryTools } from "./memory.js"
 import { createSessionTools, type SessionSearchFn } from "./session.js"
-import { createSkillTools, SKILL_READ_DESCRIPTION } from "./skills.js"
+import { createSkillTools, SKILL_LIST_DESCRIPTION, SKILL_READ_DESCRIPTION } from "./skills.js"
 import { createSubagentTool, createSubagentCollectTool, SUBAGENT_RUN_DESCRIPTION, SUBAGENT_COLLECT_DESCRIPTION } from "./subagent.js"
 import type { SubagentCollector } from "../agent/subagent.js"
 import { createWebTools } from "./web.js"
@@ -212,7 +212,12 @@ export function createBuiltinTools(opts: {
     {
       name: "skill_read",
       tool: skill.skill_read,
-      def: def("skill_read", SKILL_READ_DESCRIPTION, { name: str("要加载哪个技能（目录名，见系统提示词的可用技能列表）") }, ["name"]),
+      def: def("skill_read", SKILL_READ_DESCRIPTION, { name: str("要加载哪个技能（目录名，见系统提示词的可用技能列表，或用 skill_list 查询）") }, ["name"]),
+    },
+    {
+      name: "skill_list",
+      tool: skill.skill_list,
+      def: def("skill_list", SKILL_LIST_DESCRIPTION, { query: str("可选：按名字与描述子串过滤（大小写不敏感）；缺省列出全部模型可见技能") }, []),
     },
   ]
 
