@@ -7,6 +7,7 @@
  */
 import { Fragment, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { parseSlashInput, replaceTrailingSlashToken, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
+import { fileMentionCompletions, replaceTrailingMentionToken } from "@kclaw/core/mentions"
 import { PERMISSION_MODES, type PermissionMode } from "@kclaw/core/permission-modes"
 import type { AttachmentRef, ConfirmationDecision } from "@kclaw/core/protocol"
 import type { ChatState, ConfirmationCard, QuestionCard, RenderedBlock, RenderedMessage } from "./model.js"
@@ -26,6 +27,14 @@ const DISPOSITIONS = ["steer", "wait", "interrupt"] as const
 
 /** An uploaded attachment pending on the next message (the protocol's AttachmentRef). */
 export type PendingAttachment = AttachmentRef
+
+/**
+ * One suggestion-menu entry: a slash command (builtin or installed skill) or
+ * a workspace file mention. Both share the composer drawer — the trailing
+ * word's first character picks the list (`/` commands, `@` files), so the
+ * two kinds never mix in one open menu.
+ */
+type ComposerCandidate = { kind: "slash"; meta: SlashCommandMeta } | { kind: "file"; path: string }
 
 /** Slash-menu geometry constants — must stay in sync with `.slash-menu` in index.css. */
 export const SLASH_MENU_MAX_HEIGHT = 280
@@ -114,6 +123,10 @@ export interface ChatViewProps {
   compactions?: CompactionRecordView[] | null
   /** 已装用户可见技能的动态命令（/技能名）：合并进建议菜单与 /help 面板（内置优先）。 */
   extraCommands?: SlashCommandMeta[]
+  /** 会话工作区内的文件（GET /fs/files，失败静默为空）：@ 文件点名的候选源。 */
+  mentionFiles?: readonly string[]
+  /** 文件清单在后端被截断（仓库过大）：抽屉尾部显示一行提示。 */
+  mentionTruncated?: boolean
   /**
    * A child session (meta.parentSessionId set) is read-only to the user: the
    * whole input area (model/mode selectors, attachments, composer) is replaced
@@ -122,9 +135,9 @@ export interface ChatViewProps {
   readOnly?: boolean
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, compactions, extraCommands, readOnly }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly }: ChatViewProps) {
   const [draft, setDraft] = useState("")
-  // Slash-suggestion state: Escape dismisses the menu until the draft changes;
+  // Suggestion-menu state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
   const [dismissed, setDismissed] = useState(false)
   const [sel, setSel] = useState(0)
@@ -133,7 +146,17 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
   // both confirm and Esc clear it.
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
 
-  const completions = dismissed ? [] : slashCompletions(draft, "web", extraCommands)
+  // 建议菜单候选（斜杠命令与 @ 文件点名共用一个抽屉）：正在输入的最后一个词
+  // 以 / 开头出命令、以 @ 开头出工作区文件，首字符互斥所以两类不同时出现。
+  const slashItems = dismissed ? [] : slashCompletions(draft, "web", extraCommands)
+  const fileItems =
+    dismissed || mentionFiles === undefined || mentionFiles.length === 0
+      ? []
+      : fileMentionCompletions(draft, mentionFiles)
+  const completions: ComposerCandidate[] =
+    slashItems.length > 0
+      ? slashItems.map((meta) => ({ kind: "slash" as const, meta }))
+      : fileItems.map((path) => ({ kind: "file" as const, path }))
   const active = Math.min(sel, Math.max(0, completions.length - 1))
 
   // 排队列表数据（Master 2026-08-30 改版）：view.queue 本身就是
@@ -232,9 +255,13 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
     submitDraft()
   }
 
-  /** Replace the trailing in-progress command word with the chosen command plus a trailing space; the space closes the menu. */
-  const complete = (name: string): void => {
-    setDraft(replaceTrailingSlashToken(draft, name))
+  /** 文件候选里含空白的路径没法无歧义写进消息：抽屉里可见但禁选。 */
+  const isDisabledFile = (item: ComposerCandidate): boolean => item.kind === "file" && /\s/.test(item.path)
+
+  /** Replace the trailing in-progress token with the chosen candidate plus a trailing space; the space closes the menu. A disabled file entry never completes. */
+  const completeCandidate = (item: ComposerCandidate): void => {
+    if (isDisabledFile(item)) return
+    setDraft(item.kind === "slash" ? replaceTrailingSlashToken(draft, item.meta.name) : replaceTrailingMentionToken(draft, item.path))
     setDismissed(true)
   }
 
@@ -244,14 +271,20 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault()
       // While the menu is open, Enter ACCEPTS the highlighted suggestion —
-      // submitting the raw draft would run a half-typed word ("没有这个命
-      // 令"). Only a draft whose trailing token already IS the complete
-      // command goes straight to the submit.
-      if (completions.length > 0 && draft.trim() !== `/${completions[active]!.name}`) {
-        complete(completions[active]!.name)
-      } else {
-        submitDraft()
+      // submitting the raw draft would run a half-typed word. Only a draft
+      // whose trailing token already IS the complete candidate goes straight
+      // to the submit; on a disabled file entry Enter does neither (the token
+      // cannot be completed and sending it raw would be broken).
+      if (completions.length > 0) {
+        const item = completions[active]!
+        if (isDisabledFile(item)) return
+        const finished = item.kind === "slash" ? `/${item.meta.name}` : `@${item.path}`
+        if (draft.trim() !== finished) {
+          completeCandidate(item)
+          return
+        }
       }
+      submitDraft()
       return
     }
     if (completions.length > 0) {
@@ -263,7 +296,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
         setSel((active - 1 + completions.length) % completions.length)
       } else if (event.key === "Tab") {
         event.preventDefault()
-        complete(completions[active]!.name)
+        completeCandidate(completions[active]!)
       } else if (event.key === "Escape") {
         setDismissed(true)
       }
@@ -477,25 +510,50 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
             className="slash-menu"
             data-testid="slash-menu"
             role="listbox"
-            aria-label="斜杠命令联想"
+            aria-label={completions[0]!.kind === "slash" ? "斜杠命令联想" : "文件联想"}
             style={menuMaxHeight !== undefined ? { maxHeight: menuMaxHeight } : undefined}
           >
-            {completions.map((c, i) => (
-              <li key={c.name} role="option" aria-selected={i === active} className={i === active ? "slash-option active" : "slash-option"}>
-                <button
-                  type="button"
-                  data-testid="slash-option"
-                  // mousedown so the input keeps focus (a click would blur it)
-                  onMouseDown={(event) => {
-                    event.preventDefault()
-                    complete(c.name)
-                  }}
+            {completions.map((c, i) =>
+              c.kind === "slash" ? (
+                <li key={`/${c.meta.name}`} role="option" aria-selected={i === active} className={i === active ? "slash-option active" : "slash-option"}>
+                  <button
+                    type="button"
+                    data-testid="slash-option"
+                    // mousedown so the input keeps focus (a click would blur it)
+                    onMouseDown={(event) => {
+                      event.preventDefault()
+                      completeCandidate(c)
+                    }}
+                  >
+                    <code>{c.meta.usage}</code>
+                    <span>{c.meta.description}</span>
+                  </button>
+                </li>
+              ) : (
+                <li
+                  key={`@${c.path}`}
+                  role="option"
+                  aria-selected={i === active}
+                  aria-disabled={isDisabledFile(c) || undefined}
+                  className={i === active ? "slash-option file-option active" : "slash-option file-option"}
                 >
-                  <code>{c.usage}</code>
-                  <span>{c.description}</span>
-                </button>
-              </li>
-            ))}
+                  <button
+                    type="button"
+                    data-testid="file-option"
+                    // mousedown so the input keeps focus (a click would blur it)
+                    onMouseDown={(event) => {
+                      event.preventDefault()
+                      completeCandidate(c)
+                    }}
+                  >
+                    <code>@{c.path}</code>
+                  </button>
+                </li>
+              ),
+            )}
+            {completions[0]!.kind === "file" && mentionTruncated === true && (
+              <li className="slash-note" data-testid="mention-truncated">文件过多，列表已截断</li>
+            )}
           </ul>
         )}
         <span className="composer-prompt" aria-hidden="true">❯</span>

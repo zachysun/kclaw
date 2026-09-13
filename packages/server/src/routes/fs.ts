@@ -1,4 +1,5 @@
-import { readdirSync, realpathSync, statSync, type Dirent } from "node:fs"
+import { readdirSync, realpathSync, statSync, existsSync, type Dirent } from "node:fs"
+import { spawnSync } from "node:child_process"
 import { homedir } from "node:os"
 import path from "node:path"
 import type { FastifyInstance } from "fastify"
@@ -37,25 +38,40 @@ function expandTilde(p: string): string {
  * workspace. Entries that vanish or turn unreadable mid-listing are skipped;
  * a missing/non-directory/unreadable target is a 400.
  */
+/**
+ * Shared query-dir resolution for both fs routes: `~`/`~/` expanded, realpath
+ * resolved, and required to be an existing directory — `{ error }` renders
+ * as the routes' 400.
+ */
+function resolveQueryDir(raw: string): { path: string } | { error: string } {
+  let resolved: string
+  try {
+    resolved = realpathSync(path.resolve(expandTilde(raw)))
+  } catch {
+    return { error: `path does not exist: ${raw}` }
+  }
+  try {
+    if (!statSync(resolved).isDirectory()) return { error: `not a directory: ${resolved}` }
+  } catch {
+    return { error: `path does not exist: ${resolved}` }
+  }
+  return { path: resolved }
+}
+
+/** Case-insensitive lexicographic order shared by every listing here. */
+function compareBase(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { sensitivity: "base" })
+}
+
 export function registerFsRoutes(app: FastifyInstance, opts: FsStores): void {
   app.get("/fs/browse", async (request, reply) => {
     const query = request.query as { path?: unknown }
     const raw =
       typeof query.path === "string" && query.path.trim() !== "" ? query.path.trim() : opts.workspace
 
-    let resolved: string
-    try {
-      resolved = realpathSync(path.resolve(expandTilde(raw)))
-    } catch {
-      return reply.code(400).send({ error: `path does not exist: ${raw}` })
-    }
-    try {
-      if (!statSync(resolved).isDirectory()) {
-        return reply.code(400).send({ error: `not a directory: ${resolved}` })
-      }
-    } catch {
-      return reply.code(400).send({ error: `path does not exist: ${resolved}` })
-    }
+    const dir = resolveQueryDir(raw)
+    if ("error" in dir) return reply.code(400).send({ error: dir.error })
+    const resolved = dir.path
 
     let entries: Dirent[]
     try {
@@ -80,7 +96,7 @@ export function registerFsRoutes(app: FastifyInstance, opts: FsStores): void {
         }
       }
     }
-    dirs.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))
+    dirs.sort(compareBase)
 
     const parent = path.dirname(resolved)
     const result: FsBrowseResult = {
@@ -88,6 +104,96 @@ export function registerFsRoutes(app: FastifyInstance, opts: FsStores): void {
       parent: parent === resolved ? null : parent,
       dirs,
     }
+    return result
+  })
+
+  registerFsFilesRoute(app, opts)
+}
+
+/** Listing cap for the mention drawer — keeps the payload and the UI bounded. */
+export const FILE_LIST_CAP = 5000
+
+/** Directories the non-git fallback scan never descends into. */
+const EXCLUDED_SCAN_DIRS = new Set([".git", ".kclaw", "node_modules"])
+
+/** Wire shape of `GET /fs/files` (the WebUI mention drawer's data source). */
+export interface FsFilesResult {
+  /** Canonical (symlink-resolved) workspace that was listed. */
+  workdir: string
+  /** Workspace-relative POSIX paths, files only, sorted case-insensitively. */
+  files: string[]
+  /** True when the listing was cut off at {@link FILE_LIST_CAP}. */
+  truncated: boolean
+}
+
+/**
+ * Files of one workspace for the mention drawer. A git repo answers with one
+ * `git ls-files -z -co --exclude-standard` — tracked plus untracked-but-not-
+ * ignored files, so git-ignored content never appears; NUL separation keeps
+ * non-ASCII filenames verbatim, and the existsSync pass drops index entries
+ * whose file was deleted. Outside a git repo (or when git is unavailable)
+ * the fallback is a recursive scan collecting regular files only, never
+ * descending into .git, .kclaw or node_modules (a readdir IS the on-disk
+ * truth, so no extra existsSync pass). Either way the result is sorted
+ * case-insensitively and capped at FILE_LIST_CAP.
+ */
+export function listWorkspaceFiles(dir: string): { files: string[]; truncated: boolean } {
+  let collected: string[]
+  let overflow = false
+  const git = spawnSync("git", ["-C", dir, "ls-files", "-z", "-co", "--exclude-standard"], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  })
+  if (git.status === 0 && typeof git.stdout === "string") {
+    collected = [...new Set(git.stdout.split("\0").filter((line) => line !== ""))].filter((f) => existsSync(path.join(dir, f)))
+    overflow = collected.length > FILE_LIST_CAP
+  } else {
+    collected = []
+    const walk = (rel: string, entries: Dirent[]): void => {
+      for (const entry of entries) {
+        if (collected.length >= FILE_LIST_CAP) {
+          overflow = true
+          return
+        }
+        if (entry.isDirectory()) {
+          if (EXCLUDED_SCAN_DIRS.has(entry.name)) continue
+          const childRel = rel === "" ? entry.name : `${rel}/${entry.name}`
+          try {
+            walk(childRel, readdirSync(path.join(dir, childRel), { withFileTypes: true }))
+          } catch {
+            // unreadable subtree — skip it, the rest still lists
+          }
+        } else if (entry.isFile()) {
+          collected.push(rel === "" ? entry.name : `${rel}/${entry.name}`)
+        }
+      }
+    }
+    try {
+      walk("", readdirSync(dir, { withFileTypes: true }))
+    } catch {
+      // unreadable root — an empty listing
+    }
+  }
+  collected.sort(compareBase)
+  return { files: collected.slice(0, FILE_LIST_CAP), truncated: overflow }
+}
+
+/**
+ * Register `GET /fs/files?workdir=<abs>` — the workspace file listing behind
+ * the WebUI mention drawer. Missing `workdir` falls back to the configured
+ * workspace; the target must be an existing directory (400 otherwise).
+ * Bearer-protected like every other API route.
+ */
+function registerFsFilesRoute(app: FastifyInstance, opts: FsStores): void {
+  app.get("/fs/files", async (request, reply) => {
+    const query = request.query as { workdir?: unknown }
+    const raw =
+      typeof query.workdir === "string" && query.workdir.trim() !== "" ? query.workdir.trim() : opts.workspace
+
+    const dir = resolveQueryDir(raw)
+    if ("error" in dir) return reply.code(400).send({ error: dir.error })
+
+    const result: FsFilesResult = { workdir: dir.path, ...listWorkspaceFiles(dir.path) }
     return result
   })
 }

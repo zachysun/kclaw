@@ -1807,6 +1807,22 @@ select:focus {
   font-size: 12px;
 }
 
+/* File mention entries: the code shows the @path; a disabled entry (a path
+   with whitespace cannot be written into the draft unambiguously) stays
+   visible but muted and unclickable. */
+.slash-option.file-option button[aria-disabled] {
+  cursor: default;
+  opacity: 0.45;
+}
+
+/* Drawer tail note (e.g. the file list was truncated server-side). */
+.slash-note {
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  list-style: none;
+}
+
 /* /help command panel — same card language as .chat-notice. */
 .slash-help {
   border: 1px solid var(--border-strong);

@@ -61,12 +61,22 @@ interface ApiRoutes {
   compactionsFail?: boolean
   /** GET /skills fixture — the dynamic slash-command source (default: []). */
   skills?: Array<{ name: string; description: string; origin: string; visibility: string }>
+  /** GET /fs/files fixture — the @ mention drawer's file list (default: []). */
+  files?: string[]
+  /** GET /fs/files truncated flag (default: false). */
+  filesTruncated?: boolean
+  /** Make GET /fs/files reject (the silent-failure path). */
+  filesFail?: boolean
 }
 
 function makeApi(getMessages: Message[], routes: ApiRoutes = {}): ApiClient & { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn> } {
   return {
     get: vi.fn(async (path: string) => {
       if (path === "/skills") return routes.skills ?? []
+      if (path === "/fs/files") {
+        if (routes.filesFail === true) throw new Error("fs down")
+        return { workdir: "/w", files: routes.files ?? [], truncated: routes.filesTruncated === true }
+      }
       if (path.endsWith("/queue")) return routes.queue ?? []
       if (path === "/config") return routes.config ?? {}
       if (path.endsWith("/messages")) return getMessages
@@ -177,12 +187,17 @@ async function mount(
     compactionsFail?: boolean
     /** GET /skills fixture (dynamic slash commands). */
     skills?: Array<{ name: string; description: string; origin: string; visibility: string }>
+    /** GET /fs/files fixture (the @ mention drawer's file list). */
+    files?: string[]
+    filesTruncated?: boolean
+    /** Make the /fs/files pull reject (silent-failure path). */
+    filesFail?: boolean
     /** memory.written 通知条点击的回调。 */
     onOpenMemoryWritten?: (info: MemoryWrittenInfo) => void
   } = {},
 ): Promise<Harness> {
   const sessionId = opts.sessionId ?? "s1"
-  const api = makeApi(opts.initialMessages ?? [], { queue: opts.queue, meta: opts.meta, config: opts.config, compactions: opts.compactions, compactionsFail: opts.compactionsFail, skills: opts.skills })
+  const api = makeApi(opts.initialMessages ?? [], { queue: opts.queue, meta: opts.meta, config: opts.config, compactions: opts.compactions, compactionsFail: opts.compactionsFail, skills: opts.skills, files: opts.files, filesTruncated: opts.filesTruncated, filesFail: opts.filesFail })
   const { sockets, socketFactory, createWs } = setup()
   const ws = createWs()
   const container = document.createElement("div")
@@ -1240,6 +1255,49 @@ describe("ChatPanel skill slash commands", () => {
       await sendText(h, "/help")
       const sends = h.sockets[0]!.sent.map((f) => JSON.parse(f) as { type?: string }).filter((f) => f.type === "send_message")
       expect(sends).toEqual([])
+    } finally {
+      h.unmount()
+    }
+  })
+})
+
+describe("ChatPanel file mention source", () => {
+  it("workspace files from GET /fs/files feed the @ mention drawer", async () => {
+    const h = await mount({ files: ["src/a.ts", "readme.md"] })
+    try {
+      await h.sockets[0]!.open()
+      const input = h.container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
+      typeInto(input, "@")
+      await flush()
+      const options = h.container.querySelectorAll('[data-testid="file-option"]')
+      expect(options).toHaveLength(2)
+      expect(h.container.querySelector('[data-testid="slash-menu"]')?.textContent).toContain("@src/a.ts")
+    } finally {
+      h.unmount()
+    }
+  })
+
+  it("a server-side truncation shows the tail note in the drawer", async () => {
+    const h = await mount({ files: ["src/a.ts"], filesTruncated: true })
+    try {
+      await h.sockets[0]!.open()
+      const input = h.container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
+      typeInto(input, "@")
+      await flush()
+      expect(h.container.querySelector('[data-testid="mention-truncated"]')?.textContent).toContain("文件过多")
+    } finally {
+      h.unmount()
+    }
+  })
+
+  it("a failing file listing stays silent (the drawer just has no candidates)", async () => {
+    const h = await mount({ filesFail: true })
+    try {
+      await h.sockets[0]!.open()
+      const input = h.container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
+      typeInto(input, "@")
+      await flush()
+      expect(h.container.querySelector('[data-testid="slash-menu"]')).toBeNull()
     } finally {
       h.unmount()
     }
