@@ -98,12 +98,21 @@ describe("JobsView", () => {
     const table = container.querySelector('[data-testid="jobs-table"]')!
     expect(table.textContent).toContain("早报")
     expect(table.textContent).toContain("0 9 * * *")
-    expect(table.textContent).toContain("2026-08-16T09:00:00.000Z")
     expect(table.textContent).toContain("备份")
     expect(table.textContent).toContain("ok") // lastStatus
-    expect(table.textContent).toContain("2026-08-15T08:00:00.000Z") // lastRunAt
     expect(container.querySelector('[data-testid="job-enabled-job_1"]')?.textContent).toContain("启用")
     expect(container.querySelector('[data-testid="job-enabled-job_2"]')?.textContent).toContain("禁用")
+    // Schedule times render in the compact local form (MM/DD HH:MM), derived
+    // here with local Date arithmetic so the assertion holds in any TZ.
+    const expectLocal = (iso: string): string => {
+      const d = new Date(iso)
+      const md = `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`
+      const hhmm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
+      return `${md} ${hhmm}`
+    }
+    expect(table.textContent).toContain(expectLocal("2026-08-16T09:00:00.000Z"))
+    expect(table.textContent).toContain(expectLocal("2026-08-15T08:00:00.000Z"))
+    expect(table.textContent).not.toContain("2026-08-16T09:00:00.000Z") // raw ISO never shown
     unmount(root, container)
   })
 

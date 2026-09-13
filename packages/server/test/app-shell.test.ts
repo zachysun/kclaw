@@ -50,9 +50,15 @@ describe("static shell exemption", () => {
     expect(asset.statusCode).toBe(200)
   })
 
-  it("other static-root files are NOT exempt (favicon stays authed)", async () => {
+  it("the favicon declared by index.html is exempt without a token", async () => {
     await writeFile(join(dist, "favicon.svg"), "<svg/>", "utf8")
     const res = await app.inject({ method: "GET", url: "/favicon.svg" })
+    expect(res.statusCode).toBe(200)
+  })
+
+  it("other static-root files are NOT exempt", async () => {
+    await writeFile(join(dist, "robots.txt"), "User-agent: *", "utf8")
+    const res = await app.inject({ method: "GET", url: "/robots.txt" })
     expect(res.statusCode).toBe(401)
   })
 

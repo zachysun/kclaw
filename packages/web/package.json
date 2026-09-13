@@ -14,7 +14,10 @@
     "@kclaw/core": "workspace:*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-virtuoso": "^4.18.13"
+    "react-markdown": "^10.1.0",
+    "react-virtuoso": "^4.18.13",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
