@@ -8,7 +8,7 @@
 export type {
   AgentEvent, AttachmentBlock, AttachmentSource, Block, Message, NoteBlock, NoteKind, Role,
   TextBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock, ToolStatus, Usage,
-  CompactionEvent, MemoryEvent, MessageEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
+  CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
   SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SystemEvent,
 } from "@kclaw/core/protocol"

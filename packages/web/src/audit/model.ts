@@ -8,14 +8,14 @@
  * incremental appends and full recomputes.
  */
 import type {
-  Block, CompactionEvent, MemoryEvent, MessageEvent, PermissionDecidedEvent, Role, RunEndedEvent, RunStartedEvent,
+  Block, CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, Role, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent, SessionEvent, SessionRenamedEvent,
   SessionRestoredEvent, SessionSetEvent, SystemEvent, ToolGrantReason, Usage,
 } from "../types.js"
 
 export type SessionMetaEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent
 
-export type AuditRowKind = "block" | "compaction" | "memory" | "system" | "sandbox" | "session" | "run" | "decision"
+export type AuditRowKind = "block" | "compaction" | "memory" | "system" | "sandbox" | "session" | "run" | "decision" | "truncation"
 
 /**
  * One flattened audit row. Block rows carry the owning message's role,
@@ -35,6 +35,7 @@ export type AuditRow =
   | { kind: "session"; key: string; index: number; event: SessionMetaEvent; at: string }
   | { kind: "run"; key: string; index: number; event: RunStartedEvent | RunEndedEvent; at: string }
   | { kind: "decision"; key: string; index: number; event: PermissionDecidedEvent; at: string }
+  | { kind: "truncation"; key: string; index: number; event: MessageTruncatedEvent; at: string }
 
 /**
  * Flatten the event stream into rows, one per rendered event. Message events
@@ -168,6 +169,9 @@ function flattenEventInto(
     case "permission.decided":
       rows.push({ kind: "decision", key: `${index}`, index, event, at: event.at })
       break
+    case "message.truncated":
+      rows.push({ kind: "truncation", key: `${index}`, index, event, at: event.at })
+      break
     case "session.created":
     case "session.renamed":
     case "session.deleted":
@@ -201,10 +205,10 @@ export interface AuditFilter {
   timeTo: string
 }
 
-export const ALL_KINDS: AuditRowKind[] = ["block", "compaction", "memory", "system", "sandbox", "session", "run", "decision"]
+export const ALL_KINDS: AuditRowKind[] = ["block", "compaction", "memory", "system", "sandbox", "session", "run", "decision", "truncation"]
 
 export const DEFAULT_FILTER: AuditFilter = {
-  kinds: { block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true },
+  kinds: { block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true },
   keyword: "",
   timePreset: "all",
   timeFrom: "",
@@ -253,6 +257,8 @@ export function rowSearchText(row: AuditRow): string {
       return runSummary(row.event)
     case "decision":
       return `${decisionSummary(row.event)} ${decisionFullContent(row.event)}`
+    case "truncation":
+      return `${truncationSummary(row.event)} ${row.event.fromMessageId}`
   }
 }
 
@@ -370,10 +376,20 @@ export function systemFullText(event: SystemEvent): string {
 /** One-line run-boundary summary: 运行开始 · trigger / 运行结束 · stopReason（+用量或失败原因）. */
 export function runSummary(event: RunStartedEvent | RunEndedEvent): string {
   if (event.type === "run.started") return `运行开始 · ${event.trigger}`
-  let s = `运行结束 · ${event.stopReason}`
+  let s = `运行结束 · ${stopReasonLabel(event.stopReason)}`
   if (event.error !== undefined) s += ` · ${event.error.code}: ${event.error.message}`
   else if (event.usage !== undefined) s += ` · ${fmtUsage(event.usage)}`
   return s
+}
+
+/** User-readable name for a run's terminal outcome: an abort is the user's intended stop; other reasons stay raw. */
+function stopReasonLabel(reason: RunEndedEvent["stopReason"]): string {
+  return reason === "aborted" ? "已中断" : reason
+}
+
+/** One-line truncation summary: 消息截断 · 从 <起点> 起退出对话视图. */
+export function truncationSummary(event: MessageTruncatedEvent): string {
+  return `消息截断 · 从 ${event.fromMessageId} 起作废（编辑重试/重新生成）`
 }
 
 /** One-line permission-decision summary: 权限 · 裁决 · 谁批的 · 工具名. */

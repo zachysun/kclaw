@@ -25,6 +25,8 @@ interface ViewOpts {
   /** 通知条与可点击动作（memory.written 跳转）。 */
   notice?: string | null
   noticeAction?: (() => void) | null
+  onStopRun?: () => void
+  onRetry?: (fromMessageId: string, text: string) => void
 }
 
 function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
@@ -46,6 +48,8 @@ function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
         onCancelQueued={opts.onCancelQueued}
         onCancelAllQueued={opts.onCancelAllQueued}
         onCancelCompaction={opts.onCancelCompaction}
+        onStopRun={opts.onStopRun}
+        onRetry={opts.onRetry}
         compactions={opts.compactions}
         notice={opts.notice}
         noticeAction={opts.noticeAction}
@@ -499,6 +503,85 @@ describe("audit-driven collapsed context bars (compactionBars)", () => {
     const h = mountView(messages, { compactions: records })
     expect(auditBars(h.container)).toHaveLength(1)
     expect(auditBars(h.container)[0]!.textContent).toContain("有效的记录")
+    h.unmount()
+  })
+})
+
+// ---------- stop button & retry affordances (issue #31) ----------
+
+describe("stop button & retry affordances", () => {
+  const two: Message[] = [
+    { id: "msg_a", sessionId: "s1", role: "user", blocks: [{ id: "b1", type: "text", text: "第一问" }], createdAt: "2026-08-15T00:00:00.000Z" },
+    { id: "msg_b", sessionId: "s1", role: "assistant", blocks: [{ id: "b2", type: "text", text: "第一答" }], createdAt: "2026-08-15T00:00:01.000Z" },
+  ]
+
+  it("idle: 编辑挂在最后一条用户气泡、重新生成挂在最后一条助手气泡，确认即重试", () => {
+    const onRetry = vi.fn()
+    const h = mountView(two, { onRetry })
+    expect(h.container.querySelector('[data-testid="msg-edit"]')).not.toBeNull()
+    expect(h.container.querySelector('[data-testid="msg-regenerate"]')).not.toBeNull()
+    act(() => {
+      ;(h.container.querySelector('[data-testid="msg-edit"]') as HTMLButtonElement).click()
+    })
+    const ta = h.container.querySelector('textarea[data-testid="msg-edit-input"]') as HTMLTextAreaElement
+    expect(ta.value).toBe("第一问")
+    act(() => {
+      ;(h.container.querySelector('[data-testid="msg-edit-confirm"]') as HTMLButtonElement).click()
+    })
+    expect(onRetry).toHaveBeenCalledWith("msg_a", "第一问")
+    h.unmount()
+  })
+
+  it("Esc 取消编辑不动视图；重新生成按原样文本重试", () => {
+    const onRetry = vi.fn()
+    const h = mountView(two, { onRetry })
+    act(() => {
+      ;(h.container.querySelector('[data-testid="msg-edit"]') as HTMLButtonElement).click()
+    })
+    const ta = h.container.querySelector('textarea[data-testid="msg-edit-input"]') as HTMLTextAreaElement
+    act(() => {
+      ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
+    })
+    expect(h.container.querySelector('[data-testid="msg-edit-input"]')).toBeNull()
+    expect(h.container.querySelectorAll('[data-testid="msg-edit"]').length).toBeGreaterThanOrEqual(1)
+    act(() => {
+      ;(h.container.querySelector('[data-testid="msg-regenerate"]') as HTMLButtonElement).click()
+    })
+    expect(onRetry).toHaveBeenCalledWith("msg_a", "第一问")
+    h.unmount()
+  })
+
+  it("running: 停止按钮渲染并触发 onStopRun；重试入口全部隐藏", () => {
+    const onStopRun = vi.fn()
+    const onRetry = vi.fn()
+    const h = mountView(two, { view: { runState: "running" }, onStopRun, onRetry })
+    const stop = h.container.querySelector('[data-testid="run-stop"]') as HTMLButtonElement
+    expect(stop).not.toBeNull()
+    expect(h.container.querySelector('[data-testid="msg-edit"]')).toBeNull()
+    expect(h.container.querySelector('[data-testid="msg-regenerate"]')).toBeNull()
+    act(() => {
+      stop.click()
+    })
+    expect(onStopRun).toHaveBeenCalledTimes(1)
+    h.unmount()
+  })
+
+  it("有排队消息或压缩中同样隐藏重试入口（会话空闲门）", () => {
+    const queued = mountView(two, {
+      view: { queue: [{ messageId: "m1", disposition: "wait", text: "排队" }] },
+      onRetry: vi.fn(),
+    })
+    expect(queued.container.querySelector('[data-testid="msg-edit"]')).toBeNull()
+    queued.unmount()
+    const compacting = mountView(two, { view: { compacting: true }, onRetry: vi.fn() })
+    expect(compacting.container.querySelector('[data-testid="msg-edit"]')).toBeNull()
+    compacting.unmount()
+  })
+
+  it("被中断的半截回复带已中断标记", () => {
+    const half = { ...two[1]!, stopReason: "aborted" } as Message
+    const h = mountView([two[0]!, half])
+    expect(h.container.querySelector('[data-testid="msg-aborted"]')?.textContent).toContain("已中断")
     h.unmount()
   })
 })

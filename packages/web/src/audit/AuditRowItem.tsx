@@ -9,7 +9,7 @@ import { memo } from "react"
 import type { AuditRow } from "./model.js"
 import {
   blockFullContent, blockSummary, blockTypeLabel, decisionFullContent, decisionSummary, fmtMs, fmtRowTime, fmtUsage,
-  memoryFullContent, memorySummary, rowTime, runSummary, sandboxFullContent, sandboxSummary,
+  memoryFullContent, memorySummary, rowTime, runSummary, sandboxFullContent, sandboxSummary, truncationSummary,
   sessionFullContent, sessionSummary, summarize, systemFullText,
 } from "./model.js"
 
@@ -69,6 +69,8 @@ function rowLabel(row: AuditRow): string {
       return "run"
     case "decision":
       return "permission"
+    case "truncation":
+      return "truncation"
   }
 }
 
@@ -92,6 +94,8 @@ function rowSummary(row: AuditRow): string {
       return runSummary(row.event)
     case "decision":
       return decisionSummary(row.event)
+    case "truncation":
+      return truncationSummary(row.event)
   }
 }
 
@@ -143,6 +147,8 @@ function rowFull(row: AuditRow): string {
       return JSON.stringify(row.event, null, 2)
     case "decision":
       return decisionFullContent(row.event)
+    case "truncation":
+      return JSON.stringify(row.event, null, 2)
   }
 }
 

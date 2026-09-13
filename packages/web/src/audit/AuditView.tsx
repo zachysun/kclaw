@@ -49,6 +49,7 @@ const KIND_LABELS: Record<AuditRowKind, string> = {
   session: "session",
   run: "run",
   decision: "permission",
+  truncation: "truncation",
 }
 
 const TIME_PRESETS: Array<{ value: TimePreset; label: string }> = [

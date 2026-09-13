@@ -760,3 +760,46 @@ describe("reconnect resend (issue #8)", () => {
     expect(dropped.messages).toHaveLength(0)
   })
 })
+
+describe("message.truncated（编辑重试/重新生成）", () => {
+  it("截断事件把起点起的服务端消息退出视图；本地乐观气泡不受影响", () => {
+    let s = initChat([
+      msg("msg_a", "user", [text("t1", "问一")]),
+      msg("msg_b", "assistant", [text("t2", "答一")]),
+      msg("msg_c", "user", [text("t3", "问二")]),
+      msg("msg_d", "assistant", [text("t4", "答二")]),
+    ])
+    // 重试的乐观回显（本地气泡）先进视图，截断事件随后到达
+    s = appendOptimisticUser(s, "问二改")
+    s = applyEvent(s, ev("message.truncated", { fromMessageId: "msg_c" }))
+    expect(s.messages.map((m) => m.id)).toEqual(["msg_a", "msg_b", expect.stringMatching(/^local-/) ])
+    expect(firstTextOf(s.messages[2]!)).toBe("问二改")
+    // 幂等：事件重放/重复到达不二次改变视图
+    const again = applyEvent(s, ev("message.truncated", { fromMessageId: "msg_c" }))
+    expect(again.messages.map((m) => m.id)).toEqual(s.messages.map((m) => m.id))
+  })
+
+  it("run 上下文里的新消息（id 晚于截断起点）照常进入视图", () => {
+    let s = initChat([
+      msg("msg_a", "user", [text("t1", "问一")]),
+      msg("msg_b", "assistant", [text("t2", "答一")]),
+    ])
+    s = applyEvent(s, ev("message.truncated", { fromMessageId: "msg_a" }))
+    expect(s.messages).toHaveLength(0)
+    // 重试产生的新一轮照常落位
+    s = applyEvent(s, ev("message.created", { message: msg("msg_new", "user", [text("t9", "问一改")]) }))
+    expect(s.messages.map((m) => m.id)).toEqual(["msg_new"])
+  })
+
+  it("被中断的助手消息（stopReason aborted）在视图里带 aborted 标记", () => {
+    const half = { ...msg("msg_half", "assistant", [text("t", "半截")]), stopReason: "aborted" }
+    let s = initChat([msg("msg_q", "user", [text("t0", "问")]), half as Message])
+    expect(s.messages[1]!.aborted).toBe(true)
+    expect(s.messages[0]!.aborted).toBeUndefined()
+    // 流式路径同样带标记：message.completed 全量校准
+    s = initChat([])
+    s = applyEvent(s, ev("message.created", { message: half }))
+    s = applyEvent(s, ev("message.completed", { message: half }))
+    expect(s.messages[0]!.aborted).toBe(true)
+  })
+})

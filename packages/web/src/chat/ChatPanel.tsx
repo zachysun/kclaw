@@ -87,6 +87,14 @@ function isQueuedSendAck(frame: unknown): frame is { type: "send_message_ack"; m
   )
 }
 
+/** The daemon's retry ack (message.retry): an idle retry always lands as a direct run. */
+function isRetryAck(frame: unknown): frame is { type: "message.retry_ack"; messageId: unknown } {
+  return (
+    typeof frame === "object" && frame !== null &&
+    (frame as { type?: unknown }).type === "message.retry_ack"
+  )
+}
+
 function errorFrameMessage(frame: unknown): string | null {
   const message = (frame as { message?: unknown }).message
   return typeof message === "string" ? message : null
@@ -235,7 +243,11 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
               updateView((v) => applyEvent(v, frame))
               // 空文本行 = 跨客户端排队的消息（本端无发送上下文）→ 拉快照补文本
               if (viewRef.current.queue.some((e) => e.text === "")) void refreshQueueText()
-            } else if (isQueuedSendAck(frame) && frame.queued === true) {
+            } else if (isQueuedSendAck(frame) || isRetryAck(frame)) {
+              // Both acks carry the server message identity; adopt it eagerly
+              // so the optimistic echo is pinned by id before its created event
+              // lands (a queued send renames the local row, an idle send or a
+              // retry renames the local bubble).
               const messageId = frame.messageId
               if (typeof messageId === "string") updateView((v) => adoptQueuedId(v, messageId))
             } else {
@@ -513,6 +525,32 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
   }, [sessionId])
 
+/** Stop the active run (run.cancel): the server persists the half reply with the interrupted marker. */
+  const handleStopRun = useCallback(() => {
+    try {
+      clientRef.current.send({ type: "run.cancel", sessionId })
+    } catch {
+      setNotice("连接不可用，请稍后重试")
+    }
+  }, [sessionId])
+
+/**
+   * Edit & retry / regenerate: send the message.retry frame and echo the
+   * optimistic bubble immediately; the discarded segment is removed by the
+   * incoming message.truncated event instead — an optimistic truncation would
+   * tear a hole in the view if the server rejects the retry. Attachments ride
+   * along server-side, rebuilt from the discarded message (the editor only
+   * edits text).
+   */
+  const handleRetry = useCallback((fromMessageId: string, text: string) => {
+    try {
+      clientRef.current.send({ type: "message.retry", sessionId, fromMessageId, text })
+      updateView((v) => appendOptimisticUser(v, text))
+    } catch {
+      setNotice("连接不可用，请稍后重试")
+    }
+  }, [sessionId, updateView])
+
   /** 三选切换：steer/wait 本地立即生效并写会话级覆盖（与 CLI /steer
    *  同一存储）；interrupt 是一次性——本地选中仅用于这一次发送、不写覆盖，
    *  发出后由 handleSend 切回基础处置。 */
@@ -558,6 +596,8 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           onOpenAudit={onOpenAudit}
           readOnly={childSession}
           onCancelCompaction={handleCancelCompaction}
+          onStopRun={handleStopRun}
+          onRetry={handleRetry}
           compactions={compactions}
           extraCommands={skillRows.map((r) => skillCommandMeta(r.name, r.plugin !== undefined ? `〔插件 ${r.plugin}〕${r.description}` : r.description, "web"))}
         />
