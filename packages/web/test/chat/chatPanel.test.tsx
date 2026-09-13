@@ -624,6 +624,29 @@ describe("ChatPanel", () => {
     h.unmount()
   })
 
+  it("oversized tool args render inside the scroll-clamped confirm-args block", async () => {
+    const h = await mount()
+    const hugeArgs = JSON.stringify({ path: "big.txt", content: "第X行：撑大审批卡的测试内容。".repeat(20000) })
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("confirmation.requested", {
+        confirmationId: "conf_huge",
+        toolCall: { id: "b9", type: "tool_call", callId: "c9", name: "fs_write", args: {}, argsJson: hugeArgs },
+        risk: "sensitive",
+        expiresAt: "2026-08-15T00:02:00.000Z",
+      }))
+    })
+    const card = h.container.querySelector('[data-testid="confirm-card"]')
+    expect(card).not.toBeNull()
+    // The clamp is CSS (max-height + overflow-y on .confirm-args); what the
+    // component seam locks is the structure the CSS depends on: args live in
+    // their own block, full text intact, resolve buttons still siblings of it.
+    const argsBlock = card!.querySelector(".confirm-args")
+    expect(argsBlock).not.toBeNull()
+    expect(argsBlock!.querySelector("code")!.textContent).toBe(hugeArgs)
+    expect(card!.querySelector('[data-testid="confirm-once"]')).not.toBeNull()
+    h.unmount()
+  })
+
   it("renders a question card and submits option + free-text answers", async () => {
     const h = await mount()
     await drive(() => {

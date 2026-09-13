@@ -1426,7 +1426,19 @@ select:focus {
   font-family: var(--font-mono);
 }
 
-.confirm-tool code {
+/* 工具参数原文可能是一整个文件的内容：限高内部滚动，卡片保持紧凑，
+   裁决按钮永远在视口内；anywhere 让无空格的长 token 也能折行。 */
+.confirm-args {
+  max-height: 9em;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  margin-bottom: 4px;
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.confirm-args code {
   background: transparent;
   padding: 0;
 }

@@ -603,7 +603,11 @@ function ConfirmationCardView({
   return (
     <div className="confirm-card" data-testid="confirm-card">
       <div className="confirm-title">Confirmation requested</div>
-      <div className="confirm-tool">⚡ {card.toolName} <code>{card.argsJson}</code></div>
+      <div className="confirm-tool">⚡ {card.toolName}</div>
+      {/* argsJson can carry a whole file's content — it must stay inside a
+          scroll-clamped block or the card swallows the chat pane and pushes
+          the resolve buttons out of the viewport. */}
+      <div className="confirm-args"><code>{card.argsJson}</code></div>
       <div className="confirm-meta">risk: {card.risk} · expires {card.expiresAt}</div>
       {card.noteText !== undefined && <div className="confirm-note">{card.noteText}</div>}
       <div className="confirm-actions">
