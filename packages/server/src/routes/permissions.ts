@@ -54,10 +54,16 @@ export function registerPermissionsRoutes(app: FastifyInstance, stores: Permissi
     if (typeof body.index !== "number" || !Number.isInteger(body.index) || body.index < 0) {
       return reply.code(400).send({ error: "index must be a non-negative integer" })
     }
+    // The WebUI sends the workspace as a query param (the same one the listing
+    // used), with only {scope, index} in the body — resolve the project scope
+    // from the query too, or deletes miss the file the list was read from.
+    const query = request.query as { workspace?: string } | undefined
+    const workspace =
+      typeof body.workspace === "string" && body.workspace !== "" ? body.workspace : query?.workspace ?? stores.workspaceFallback
     const target =
       body.scope === "global"
         ? globalDecidedRulesPath(stores.paths.home)
-        : projectDecidedRulesPath(typeof body.workspace === "string" && body.workspace !== "" ? body.workspace : stores.workspaceFallback)
+        : projectDecidedRulesPath(workspace)
     const removed = deleteDecidedRule(target, body.index)
     if (removed === undefined) return reply.code(404).send(NOT_FOUND)
     return { ok: true, removed }

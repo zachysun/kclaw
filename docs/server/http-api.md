@@ -162,7 +162,7 @@ interface Job {
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
 | GET | `/permissions/rules` | 两档规则清单 | `workspace?` 可选：项目档所在工作区，缺省回退 daemon 配置 `config.workspace` | `{global: {path, rules}, project: {path, tracked, ignored, rules}}`——每档 `rules` 为 `DecidedRuleEntry[]`（`{rule, decidedAt, origin:{tool, argsJson?, sessionId?}}`）；`project.ignored` 恒等于 `tracked`——项目档被 git 跟踪时两者为 `true` 且 `rules` 恒空（被忽略的规则不生效，UI 据此解释） |
-| DELETE | `/permissions/rules` | 删除单条规则 | `{scope: "global"\|"project", index: number, workspace?}`；scope 非法 400 `scope must be "global" or "project"`、index 非非负整数 400 `index must be a non-negative integer`；`workspace` 决定项目档路径，缺省回退 `config.workspace` | `{ok: true, removed}`（removed 为被删条目）；index 越界 404 `{error:"not found"}` |
+| DELETE | `/permissions/rules` | 删除单条规则 | `{scope: "global"\|"project", index: number}`，`workspace?` 可经 body 或 `?workspace=` 查询参数携带（body 优先；WebUI 走查询参数，与列表请求同一形状）；scope 非法 400 `scope must be "global" or "project"`、index 非非负整数 400 `index must be a non-negative integer`；`workspace` 决定项目档路径，缺省回退 `config.workspace` | `{ok: true, removed}`（removed 为被删条目）；index 越界 404 `{error:"not found"}` |
 
 两档文件路径：全局 `<home>/permissions.yaml`、项目 `<workspace>/.kclaw/permissions.yaml`（首次写入时自动创建 `.kclaw` 目录并追加 gitignore 条目）。
 

@@ -142,4 +142,42 @@ describe("permissions rules routes", () => {
     const after = await app.inject({ method: "GET", url: "/permissions/rules", headers: AUTH })
     expect((after.json() as RulesResponse).project.rules).toEqual([])
   })
+
+  it("DELETE /permissions/rules honors ?workspace= like the listing does (web client shape)", async () => {
+    // The WebUI reads the project list with ?workspace=<session workdir> and
+    // sends the SAME query on delete, with only {scope, index} in the body.
+    // The delete target must therefore resolve from the query too, or it
+    // lands on the daemon default workspace and misses (404) — or worse,
+    // deletes a same-index rule from the wrong file.
+    const other = mkdtempSync(join(tmpdir(), "kclaw-perm-other-"))
+    try {
+      appendDecidedRule(join(other, ".kclaw", "permissions.yaml"), {
+        rule: "fs_write:x",
+        decidedAt: "2026-09-06T00:00:00.000Z",
+        origin: { tool: "fs_write", argsJson: "{}" },
+      }, { workspace: other })
+      const listed = await app.inject({
+        method: "GET",
+        url: `/permissions/rules?workspace=${encodeURIComponent(other)}`,
+        headers: AUTH,
+      })
+      expect((listed.json() as RulesResponse).project.rules.map((r) => r.rule)).toEqual(["fs_write:x"])
+
+      const res = await app.inject({
+        method: "DELETE",
+        url: `/permissions/rules?workspace=${encodeURIComponent(other)}`,
+        headers: AUTH,
+        payload: { scope: "project", index: 0 },
+      })
+      expect(res.statusCode).toBe(200)
+      const after = await app.inject({
+        method: "GET",
+        url: `/permissions/rules?workspace=${encodeURIComponent(other)}`,
+        headers: AUTH,
+      })
+      expect((after.json() as RulesResponse).project.rules).toEqual([])
+    } finally {
+      rmSync(other, { recursive: true, force: true })
+    }
+  })
 })
