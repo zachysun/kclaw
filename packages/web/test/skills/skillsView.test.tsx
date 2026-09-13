@@ -1,8 +1,9 @@
 /**
  * SkillsView — 技能页测试。照 memoryView.test.tsx 的 fake-api 模式：
- * vi.fn 的 ApiClient，get 按路径返回裸数据。覆盖：已装清单 + 复用管理面
- * （scope 下拉 / 发现列表 / 复用与取消 / 档位单选 / 批量复用 / 预览）。
- * scope 默认全局；探测与链接数据加载失败静默降级，只有主清单失败走 notice。
+ * vi.fn 的 ApiClient，get 按路径返回裸数据。两个子页签：默认「已装技能」，
+ * 「从其他 agent 复用」页签承载发现列表（搜索/分组）、已建链接表格与批量
+ * 复用。scope 默认全局；探测与链接数据加载失败静默降级，只有主清单失败走
+ * notice。
  */
 import { describe, it, expect, vi } from "vitest"
 import { createRoot, type Root } from "react-dom/client"
@@ -28,11 +29,19 @@ const DISCOVERY = {
     { name: "ghost", displayName: "ghost", description: "", target: "", sources: ["codex"], reused: false, conflict: false, stale: true },
     { name: "docs", displayName: "docs", description: "已复用。", target: "/cc/docs", sources: ["zcode"], reused: true, conflict: false, stale: false },
     { name: "parked", displayName: "parked", description: "他处复用。", target: "/cc/parked", sources: ["dsh"], reused: true, conflict: false, stale: false },
+    { name: "tdd", displayName: "tdd", description: "插件技能。", target: "/plugins/tdd", sources: ["zcode"], plugin: "superpowers", reused: false, conflict: false, stale: false },
+    { name: "grill", displayName: "grill", description: "插件技能二。", target: "/plugins/grill", sources: ["zcode"], plugin: "superpowers", reused: false, conflict: false, stale: false },
   ],
   projectSources: [],
 }
 
-const LINKS = { links: [{ name: "docs", target: "/cc/docs", agent: "zcode", tier: "all" }], extraSources: ["/w/extra-skills"] }
+const LINKS = {
+  links: [
+    { name: "docs", target: "/cc/docs", agent: "zcode", tier: "all", current: true },
+    { name: "stale-link", target: "/plugins/old/tdd", agent: "zcode", tier: "off", current: false },
+  ],
+  extraSources: ["/w/extra-skills"],
+}
 
 function fakeApi(over: Record<string, unknown> = {}): ApiClient & Record<"get" | "post" | "patch" | "del", ReturnType<typeof vi.fn>> {
   return {
@@ -72,22 +81,26 @@ async function mount(api: ApiClient, notice = () => {}): Promise<{ container: HT
   return { container, root }
 }
 
+async function openReuseTab(container: HTMLElement): Promise<void> {
+  const tab = container.querySelector<HTMLElement>('[data-testid="subtab-reuse"]')!
+  await act(async () => {
+    tab.click()
+  })
+  await flush()
+}
+
 describe("SkillsView", () => {
-  it("lists owned skills and the reuse surface on the default global scope", async () => {
+  it("shows owned skills on the default tab and the reuse tab carries a badge", async () => {
     const api = fakeApi()
     const { container } = await mount(api)
     expect(api.get).toHaveBeenCalledWith("/skills")
-    expect(api.get).toHaveBeenCalledWith("/skills/discovery")
+    // 默认页签：已装清单，发现列表不可见
     expect(container.textContent).toContain("commit-helper")
     expect(container.textContent).toContain("提交规范。")
     expect(container.textContent).toContain("heavy-flow")
     expect(container.textContent).toContain("仅用户")
-    // 复用管理面：发现条目 + 状态标 + 来源聚合
-    expect(container.textContent).toContain("pdf")
-    expect(container.textContent).toContain("Claude Code")
-    expect(container.textContent).toContain("与已有技能同名冲突")
-    expect(container.textContent).toContain("已失效")
-    expect(container.textContent).toContain("已在其他作用域复用")
+    expect(container.querySelector('[data-testid="discover-pdf"]')).toBeNull()
+    expect(container.querySelector('[data-testid="subtab-reuse"]')!.textContent).toContain("（3）")
   })
 
   it("scope dropdown candidates come from session workdirs, deduplicated", async () => {
@@ -109,9 +122,47 @@ describe("SkillsView", () => {
     expect(container.textContent).toContain("# 提交规程")
   })
 
+  it("reuse tab groups discovery rows: plugin groups collapsed, agent groups open, searchable", async () => {
+    const api = fakeApi()
+    const { container } = await mount(api)
+    await openReuseTab(container)
+    // 用户级组展开：pdf 可见；插件组折叠：tdd 在 DOM 里（details 内容存在）但组标题分开
+    expect(container.textContent).toContain("Claude Code（2）")
+    expect(container.textContent).toContain("插件 superpowers（2）")
+    const pluginGroup = [...container.querySelectorAll("details.discover-group")].find((d) => d.textContent!.includes("superpowers"))!
+    expect((pluginGroup as HTMLDetailsElement).open).toBe(false)
+    const agentGroup = [...container.querySelectorAll("details.discover-group")].find((d) => d.textContent!.includes("Claude Code"))!
+    expect((agentGroup as HTMLDetailsElement).open).toBe(true)
+    // 搜索命中插件技能：未命中的条目被滤掉，命中组保留并强制展开。
+    // React 受控 input 必须经原生 value setter 触发（直接赋值不触发 onChange）。
+    const input = container.querySelector<HTMLInputElement>('[data-testid="discover-search"]')!
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!
+    await act(async () => {
+      setter.call(input, "tdd")
+      input.dispatchEvent(new Event("input", { bubbles: true }))
+    })
+    await flush()
+    expect(container.textContent).toContain("tdd")
+    const filteredGroup = [...container.querySelectorAll("details.discover-group")].find((d) => d.textContent!.includes("superpowers"))!
+    expect((filteredGroup as HTMLDetailsElement).open).toBe(true)
+    expect(filteredGroup.querySelector('[data-testid="discover-grill"]')).toBeNull()
+  })
+
+  it("reuse tab shows status marks and the links table with the outdated badge", async () => {
+    const api = fakeApi()
+    const { container } = await mount(api)
+    await openReuseTab(container)
+    expect(container.textContent).toContain("与已有技能同名冲突")
+    expect(container.textContent).toContain("已失效")
+    expect(container.textContent).toContain("已在其他作用域复用")
+    expect(container.querySelector('[data-testid="links-table"]')).not.toBeNull()
+    expect(container.textContent).toContain("已过时")
+  })
+
   it("clicking a discovered skill previews its body with a reuse action", async () => {
     const api = fakeApi()
     const { container } = await mount(api)
+    await openReuseTab(container)
     const item = container.querySelector<HTMLElement>('[data-testid="discover-pdf"]')!
     await act(async () => {
       item.click()
@@ -125,19 +176,20 @@ describe("SkillsView", () => {
   it("reusing posts a link with the scope and reloads", async () => {
     const api = fakeApi()
     const { container } = await mount(api)
+    await openReuseTab(container)
     const btn = container.querySelector<HTMLElement>('[data-testid="reuse-pdf"]')!
     await act(async () => {
       btn.click()
     })
     await flush()
     expect(api.post).toHaveBeenCalledWith("/skills/links", { name: "pdf", target: "/cc/pdf", agent: "claude", tier: "all", workdir: undefined })
-    // 复用后刷新发现列表与链接清单
     expect(api.get).toHaveBeenCalledWith("/skills/links")
   })
 
-  it("changing a link tier patches it and the batch action skips conflicted or reused rows", async () => {
+  it("changing a link tier patches it and the batch action skips conflicted, stale, reused rows", async () => {
     const api = fakeApi()
     const { container } = await mount(api)
+    await openReuseTab(container)
     const tier = container.querySelector<HTMLSelectElement>('[data-testid="tier-docs"]')!
     await act(async () => {
       tier.value = "off"
@@ -151,13 +203,16 @@ describe("SkillsView", () => {
       all.click()
     })
     await flush()
-    // 仅 pdf 可批量复用（rival 冲突、ghost 失效、docs 已复用）
+    // 仅 pdf/tdd/grill 可批量复用（rival 冲突、ghost 失效、docs/parked 已复用）
     expect(api.post).toHaveBeenCalledWith("/skills/links", { name: "pdf", target: "/cc/pdf", agent: "claude", tier: "all", workdir: undefined })
+    expect(api.post).toHaveBeenCalledWith("/skills/links", { name: "tdd", target: "/plugins/tdd", agent: "zcode", tier: "all", workdir: undefined })
+    expect(api.post).not.toHaveBeenCalledWith(expect.objectContaining({ name: "rival" }))
   })
 
   it("canceling a reuse deletes the link", async () => {
     const api = fakeApi()
     const { container } = await mount(api)
+    await openReuseTab(container)
     const btn = container.querySelector<HTMLElement>('[data-testid="unlink-docs"]')!
     await act(async () => {
       btn.click()
@@ -171,6 +226,7 @@ describe("SkillsView", () => {
     const { container } = await mount(api)
     expect(container.textContent).toContain("还没有技能")
     expect(container.textContent).toContain(".kclaw/skills")
+    await openReuseTab(container)
     expect(container.textContent).toContain("未发现可复用的技能")
   })
 

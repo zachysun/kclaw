@@ -18,7 +18,7 @@ beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), "kclaw-skillroute-"))
   workdir = mkdtempSync(join(tmpdir(), "kclaw-skillroute-ws-"))
   const sessions = new SessionStore(join(home, "sessions"))
-  app = await createApp({ home, token: "t", stores: { sessions }, builtinSources: [] })
+  app = await createApp({ home, token: "t", stores: { sessions }, builtinSources: [], pluginHomes: [{ agent: "zcode", home: join(home, "agent-home") }] })
 })
 afterEach(async () => { await app.close(); rmSync(home, { recursive: true, force: true }); rmSync(workdir, { recursive: true, force: true }) })
 
@@ -195,5 +195,33 @@ describe("skill reuse routes", () => {
     const projectLinks = await app.inject({ method: "GET", url: `/skills/links?workdir=${encodeURIComponent(workdir)}`, headers: auth })
     expect(projectLinks.statusCode).toBe(200)
     expect(projectLinks.json()).toEqual({ links: [], extraSources: [] })
+  })
+
+  it("discovers installed plugin skills and marks a version-bumped link outdated", async () => {
+    const pluginHome = join(home, "agent-home")
+    const install = join(pluginHome, "plugins", "cache", "mkt", "superpowers", "6.3.0")
+    mkdirSync(join(install, "skills", "engineering", "tdd"), { recursive: true })
+    writeFileSync(join(install, "skills", "engineering", "tdd", "SKILL.md"), "---\ndescription: 插件技能。\n---\n\n正文\n")
+    mkdirSync(join(pluginHome, "plugins"), { recursive: true })
+    const inventory = join(pluginHome, "plugins", "installed_plugins.json")
+    const writeInventory = (version: string): void => {
+      writeFileSync(inventory, JSON.stringify({ version: 1, plugins: [{ id: "superpowers@mkt", name: "superpowers", installPath: join(pluginHome, "plugins", "cache", "mkt", "superpowers", version), version }] }))
+    }
+    writeInventory("6.3.0")
+
+    // discovery 列出插件技能（含分类层），plugin 字段=插件名
+    const discovery = await app.inject({ method: "GET", url: "/skills/discovery", headers: auth })
+    const rows = (discovery.json() as { skills: { name: string; plugin?: string; sources: string[] }[] }).skills
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ name: "tdd", plugin: "superpowers", sources: ["zcode"] })
+
+    // 复用后 current=true；插件升级换版本目录后 current=false（过时）
+    const target = join(install, "skills", "engineering", "tdd")
+    await app.inject({ method: "POST", url: "/skills/links", headers: auth, payload: { name: "tdd", target, agent: "zcode", tier: "all" } })
+    const linksNow = await app.inject({ method: "GET", url: "/skills/links", headers: auth })
+    expect((linksNow.json() as { links: { name: string; current: boolean }[] }).links[0]).toMatchObject({ name: "tdd", current: true })
+    writeInventory("7.0.0")
+    const linksAfter = await app.inject({ method: "GET", url: "/skills/links", headers: auth })
+    expect((linksAfter.json() as { links: { name: string; current: boolean }[] }).links[0]).toMatchObject({ name: "tdd", current: false })
   })
 })
