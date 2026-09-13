@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createApp } from "../../src/app.js"
@@ -18,7 +18,7 @@ beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), "kclaw-skillroute-"))
   workdir = mkdtempSync(join(tmpdir(), "kclaw-skillroute-ws-"))
   const sessions = new SessionStore(join(home, "sessions"))
-  app = await createApp({ home, token: "t", stores: { sessions } })
+  app = await createApp({ home, token: "t", stores: { sessions }, builtinSources: [] })
 })
 afterEach(async () => { await app.close(); rmSync(home, { recursive: true, force: true }); rmSync(workdir, { recursive: true, force: true }) })
 
@@ -78,5 +78,122 @@ describe("GET /skills/:name", () => {
   it("rejects traversal-looking names", async () => {
     const res = await app.inject({ method: "GET", url: "/skills/..%2Fetc", headers: auth })
     expect([400, 404]).toContain(res.statusCode)
+  })
+})
+
+describe("skill reuse routes", () => {
+  const externalSkill = (root: string): string => {
+    const dir = join(root, "external", "pdf-real")
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, "SKILL.md"), "---\ndescription: 外部 PDF 技能。\n---\n\n外部正文\n")
+    return dir
+  }
+
+  it("discovery lists candidates from registered extra sources with dedup and origin labels", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kclaw-skillroute-ext-"))
+    try {
+      const external = externalSkill(root)
+      const agentA = join(root, "agent-a-skills")
+      const agentB = join(root, "agent-b-skills")
+      mkdirSync(agentA, { recursive: true })
+      mkdirSync(agentB, { recursive: true })
+      symlinkSync(external, join(agentA, "pdf"))
+      symlinkSync(join(agentA, "pdf"), join(agentB, "pdf"))
+      // 注册两个来源
+      for (const dir of [agentA, agentB]) {
+        const res = await app.inject({ method: "POST", url: "/skills/sources", headers: auth, payload: { dir } })
+        expect(res.statusCode).toBe(201)
+      }
+      const res = await app.inject({ method: "GET", url: "/skills/discovery", headers: auth })
+      expect(res.statusCode).toBe(200)
+      const body = res.json() as { sources: { agent: string; stale: boolean }[]; skills: { name: string; sources: string[]; reused: boolean }[] }
+      expect(body.sources.map((s) => s.agent)).toEqual(["custom", "custom"])
+      expect(body.skills).toHaveLength(1)
+      expect(body.skills[0]).toMatchObject({ name: "pdf", reused: false })
+      expect(body.skills[0]!.sources).toEqual(["custom"])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("create → tier overwrite in GET /skills → cancel round-trips", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kclaw-skillroute-ext-"))
+    try {
+      const external = externalSkill(root)
+      const created = await app.inject({ method: "POST", url: "/skills/links", headers: auth, payload: { name: "pdf", target: external, agent: "claude", tier: "off" } })
+      expect(created.statusCode).toBe(201)
+      // 档位 off：用户面与模型面都不出现
+      const listed = await app.inject({ method: "GET", url: "/skills", headers: auth })
+      expect((listed.json() as { name: string }[]).map((r) => r.name)).not.toContain("pdf")
+      // 改档位 → all → 出现
+      const patched = await app.inject({ method: "PATCH", url: "/skills/links/pdf", headers: auth, payload: { tier: "all" } })
+      expect(patched.statusCode).toBe(200)
+      const listed2 = await app.inject({ method: "GET", url: "/skills", headers: auth })
+      expect((listed2.json() as { name: string; visibility: string }[]).find((r) => r.name === "pdf")).toMatchObject({ visibility: "all" })
+      // 管理面记录不受可见性过滤影响
+      const links = await app.inject({ method: "GET", url: "/skills/links", headers: auth })
+      expect(links.json()).toMatchObject({ links: [{ name: "pdf", tier: "all", agent: "claude" }] })
+      // 取消复用
+      const removed = await app.inject({ method: "DELETE", url: "/skills/links/pdf", headers: auth })
+      expect(removed.statusCode).toBe(200)
+      const listed3 = await app.inject({ method: "GET", url: "/skills", headers: auth })
+      expect((listed3.json() as { name: string }[]).map((r) => r.name)).not.toContain("pdf")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("reused candidates show as reused in discovery; same-name-different-content creation is 409", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kclaw-skillroute-ext-"))
+    try {
+      const external = externalSkill(root)
+      const agentA = join(root, "agent-a-skills")
+      mkdirSync(agentA, { recursive: true })
+      symlinkSync(external, join(agentA, "pdf"))
+      await app.inject({ method: "POST", url: "/skills/sources", headers: auth, payload: { dir: agentA } })
+      await app.inject({ method: "POST", url: "/skills/links", headers: auth, payload: { name: "pdf", target: external, agent: "claude", tier: "all" } })
+      const discovery = await app.inject({ method: "GET", url: "/skills/discovery", headers: auth })
+      expect((discovery.json() as { skills: { name: string; reused: boolean }[] }).skills[0]).toMatchObject({ name: "pdf", reused: true })
+      // 重复复用同内容
+      const dup = await app.inject({ method: "POST", url: "/skills/links", headers: auth, payload: { name: "pdf", target: external, agent: "claude", tier: "all" } })
+      expect(dup.statusCode).toBe(409)
+      // 取消后，名字被同名自有技能占用 → 冲突
+      await app.inject({ method: "DELETE", url: "/skills/links/pdf", headers: auth })
+      writeSkill(join(home, "skills"), "pdf", "---\ndescription: 自有版。\n---\n\n自有正文\n")
+      const blocked = await app.inject({ method: "POST", url: "/skills/links", headers: auth, payload: { name: "pdf", target: external, agent: "claude", tier: "all" } })
+      expect(blocked.statusCode).toBe(409)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("preview serves discovered bodies and refuses out-of-tree paths", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kclaw-skillroute-ext-"))
+    try {
+      const external = externalSkill(root)
+      const agentA = join(root, "agent-a-skills")
+      mkdirSync(agentA, { recursive: true })
+      symlinkSync(external, join(agentA, "pdf"))
+      await app.inject({ method: "POST", url: "/skills/sources", headers: auth, payload: { dir: agentA } })
+      const ok = await app.inject({ method: "POST", url: "/skills/discovery/preview", headers: auth, payload: { path: external } })
+      expect(ok.statusCode).toBe(200)
+      expect(ok.json()).toMatchObject({ name: "pdf-real", body: expect.stringContaining("外部正文") })
+      const bad = await app.inject({ method: "POST", url: "/skills/discovery/preview", headers: auth, payload: { path: home } })
+      expect(bad.statusCode).toBe(404)
+      const missing = await app.inject({ method: "POST", url: "/skills/discovery/preview", headers: auth, payload: {} })
+      expect(missing.statusCode).toBe(400)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("rejects relative workdir on write routes and missing workdir stays global", async () => {
+    const rel = await app.inject({ method: "POST", url: "/skills/links", headers: auth, payload: { name: "x", target: "/tmp/y", workdir: "relative/path" } })
+    expect(rel.statusCode).toBe(400)
+    const relDel = await app.inject({ method: "DELETE", url: `/skills/links/x?workdir=${encodeURIComponent("relative/path")}`, headers: auth })
+    expect(relDel.statusCode).toBe(400)
+    const projectLinks = await app.inject({ method: "GET", url: `/skills/links?workdir=${encodeURIComponent(workdir)}`, headers: auth })
+    expect(projectLinks.statusCode).toBe(200)
+    expect(projectLinks.json()).toEqual({ links: [], extraSources: [] })
   })
 })

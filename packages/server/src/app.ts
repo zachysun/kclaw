@@ -57,6 +57,12 @@ export interface AppOptions {
    */
   cancelBackgroundForParent?: (parentSessionId: string) => number
   /**
+   * Built-in discovery sources for the /skills reuse routes (the four agent
+   * convention directories). Defaults to @kclaw/core's BUILTIN_SOURCES;
+   * tests inject an empty list to stay isolated from the real home.
+   */
+  builtinSources?: { agent: string; dir: string }[]
+  /**
    * MCP server status snapshot, exposed at `GET /mcp` (bearer-protected,
    * consumed by `kclaw mcp list`). Absent → the route returns an empty
    * server list.
@@ -176,7 +182,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   registerMemoryRoutes(app, { memory: opts.memory, config })
   registerHookRoutes(app, { hooks: opts.hooks })
   // /skills 路由族：只读技能管理面（CLI /skill 与 Web 技能页共用），无装配依赖。
-  registerSkillRoutes(app, { paths })
+  registerSkillRoutes(app, { paths, builtinSources: opts.builtinSources })
   // 切会话写入：POST /sessions 是 CLI /clear、/new 与 web 新建会话的共同底层，
   // 记忆系统在装配时才挂 clear 触发（缺省不触发，行为与未装配记忆时一致）。
   registerSessionRoutes(app, { sessions, config, run: opts.run, memory: opts.memory, cancelBackgroundForParent: opts.cancelBackgroundForParent })

@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/skills/` 实现技能包（skill）的解析、双作用域扫描与点名匹配；`packages/core/src/tools/skills.ts` 实现 `skill_read` 工具；系统提示词里的技能列表、点名的隐式包装在 run 装配（core `packages/core/src/agent/run-assembly.ts` 的 `executeRun`）每个 run 完成；只读管理入口在 `packages/server/src/routes/skills.ts`（CLI `/skill` 与 Web 技能页共用）。
+`packages/core/src/skills/` 实现技能包（skill）的解析、双作用域扫描与点名匹配（`index.ts`），以及技能复用——其他 coding agent 技能的探测与软链接接入（`discovery.ts`、`links.ts`）；`packages/core/src/tools/skills.ts` 实现 `skill_read` 工具；系统提示词里的技能列表、点名的隐式包装在 run 装配（core `packages/core/src/agent/run-assembly.ts` 的 `executeRun`）每个 run 完成；管理入口在 `packages/server/src/routes/skills.ts`（CLI `/skill` 与 Web 技能页共用）。
 
 技能是一种"把操作规程交给模型"的机制：一个技能是一个目录，里面放一份 `SKILL.md`（YAML 头部 + Markdown 正文），描述"遇到什么情况、照什么规程做"。它不写死在代码里——把目录放进约定位置、下一个会话轮次即生效；模型需要用到时按名字把全文加载进上下文，平时不占用。
 
@@ -18,6 +18,7 @@
 - **只改模型看到的输入**：技能点名的隐式包装是内置 `skill-wrap` 钩子（`llm-before` 位置，见 [hooks](./hooks.md)），只改写发给模型的那一份消息——持久化、事件流与聊天气泡保持用户原文（所见即所发）。
 - **每个 run 重新扫描，文件即真相**：技能目录在每次 run 开始时重新扫描（不存在则跳过、单条损坏只跳过该条，不拖垮整个 run），改动技能文件不用重启 daemon；`/skills` 管理路由同样每次请求重新扫描，与 run 同源同规则。
 - **用户面隐藏是"不存在"**：`user-invocable: false` 的技能对用户面完全不可见——列表不显示、点名 404，且 404 与"名字不存在"同响应（不向探测者泄露存在性），对齐 Claude Code"从 / 菜单隐藏"。
+- **复用是链接不是复制**：其他 coding agent（Claude Code、Codex、DeepSeek harness、zCode）的技能以软链接接入，内容不复制、仍由源目录维护，外部 SKILL.md 一字不动；复用元数据与可见档位存在 kclaw 侧的旁挂文件里（见下文"技能复用"）。
 
 ---
 
@@ -50,7 +51,9 @@
 - **全局**：`<home>/skills/`（`paths.skillsDir`，见 [storage](./storage.md)）；
 - **项目级**：会话工作目录下的 `.kclaw/skills/`（`<workdir>/.kclaw/skills`），作用域跟会话工作目录走。
 
-同名时**项目那份整体覆盖全局那份**。目录不可读 / 不存在时整体跳过；单条损坏（悬空的符号链接、扫描途中被删的目录）只跳过该条，不拖垮整个作用域。符号链接的技能目录穿透加载到目标。
+同名时**项目那份整体覆盖全局那份**。目录不可读 / 不存在时整体跳过；单条损坏（悬空的符号链接、扫描途中被删的目录）只跳过该条，不拖垮整个作用域。符号链接的技能目录穿透加载到目标——技能复用（软链接接入）就建立在这条行为上。
+
+合并之后，复用链接的可见档位按 realpath 覆盖两布尔（run 装配与 `/skills` 路由共用 `applyReuseTiers`，见下文"技能复用"），模型清单、点名匹配与用户接口看到的是同一份结果。
 
 ## 渐进披露的两层
 
@@ -86,18 +89,49 @@
 
 **仅 `trigger: "user"` 生效**：job 提示是 daemon 生成的内部指令，不参与点名。
 
+## 技能复用（软链接接入其他 agent 的技能）
+
+kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent 已有的技能：链接建在 kclaw 的技能目录里、指向外部技能目录，扫描器本就穿透符号链接加载，复用技能零改动进入全套机制（清单、点名包装、`skill_read`）。实现分两个模块（都在 `packages/core/src/skills/`）：`links.ts` 管链接与旁挂元数据，`discovery.ts` 管探测。
+
+### 探测（discovery.ts）
+
+- **来源**：四个内置约定目录——`~/.claude/skills`、`~/.codex/skills`、`~/.dsh/skills`（DeepSeek harness）、`~/.zcode/skills`——加上当前作用域旁挂文件里手工登记的 `extraSources` 目录。
+- **去重**：每个候选按 realpath 归一。同一份真实目录经多层软链接出现在多家（如 `.zcode` → `.claude` → `.cc-switch`）时只出一条，来源标签聚合。
+- **状态标**：`reused`（该真实路径已被任一作用域的链接记录指向）、`conflict`（某自有技能占了同名但内容不同——同名同内容就是已复用）、`stale`（来源目录缺失或候选悬空）。任何失效都显示为状态而不是报错。
+- **预览安全**：SKILL.md 正文预览接口校验请求路径必须解析到一个已发现的候选（或位于已登记来源之下）——候选的真实目录通常在 agent 目录**外面**（那些目录里只有软链接），所以单靠"在来源之下"会拒掉发现列表给出的目标。校验双条件并存，接口不是任意文件读取。
+
+### 链接与档位（links.ts）
+
+每个作用域一份旁挂文件：全局 `~/.kclaw/skills/.links.json`，项目级 `<workdir>/.kclaw/skills/.links.json`。点开头的文件名不在技能目录名的合法集合里，扫描器天然忽略。结构：
+
+```json
+{ "links": [{ "name": "pdf", "target": "/真实/技能目录", "agent": "claude", "tier": "all" }], "extraSources": ["/额外/探测目录"] }
+```
+
+- `tier` 是复用技能的**可见档位**，四档与 frontmatter 两布尔一一对应：`all`（完全可见）/ `user`（仅用户，相当于 `disable-model-invocation: true`）/ `model`（仅模型，相当于 `user-invocable: false`）/ `off`（暂不启用，两边都隐藏、链接与 `skill_read` 仍有效）。外部 SKILL.md 属于别的 agent，不可改写——档位只能存在 kclaw 侧。
+- **档位覆盖按 realpath 匹配**：合并扫描结果后，技能目录的 realpath 命中某条链接记录的 target 才套用档位；项目作用域的记录后应用、盖过全局（与目录覆盖同向）。只共享名字的自有技能不受影响——它该由发现列表的冲突标记提示。
+- 创建链接时目标必须是存在且含 SKILL.md 的目录，链接名必须是合法技能目录名；作用域目录缺失时递归创建；写入旁挂文件原子化（临时文件 + rename，0600）。
+- 旁挂文件缺失或损坏一律降级为空——它永远不阻塞技能加载主链路。
+- 删除只对真正的符号链接 `unlink`：同名位置已被真实目录占据（事后手工放入）时只清记录、不动磁盘。
+- **管理记录不受可见性过滤影响**：复用链接的清单直接从旁挂文件读取，不经过"用户不可见即 404"的过滤——否则档位设成 `model`（仅模型）后它在管理页消失、无法改回。管理面本身持 token 鉴权，不影响用户面"不泄露存在性"的语义。
+
 ## 管理入口与前端入口
 
-`/skills` 路由族（`packages/server/src/routes/skills.ts`，始终注册、无装配依赖）是只读管理入口：
+`/skills` 路由族（`packages/server/src/routes/skills.ts`，始终注册、无装配依赖）是技能管理入口，分只读与复用管理两半：
 
 - `GET /skills?workdir=`：用户可见技能列表 `{name, displayName, description, visibility, origin}`——`visibility` 是 `all`（模型+用户）或 `user-only`（被 `disable-model-invocation` 隐藏但仍用户可见），`origin` 是 `global` / `project`；
-- `GET /skills/:name?workdir=`：单个技能详情，带 `content`（SKILL.md 正文）。路径段先过白名单校验（拦目录穿越段）；`user-invocable: false` 的技能 404，与未知名字同响应。
+- `GET /skills/:name?workdir=`：单个技能详情，带 `content`（SKILL.md 正文）。路径段先过白名单校验（拦目录穿越段）；`user-invocable: false` 的技能 404，与未知名字同响应；
+- `GET /skills/discovery?workdir=`：探测结果 `{sources, skills, projectSources}`——发现列表（realpath 去重、来源聚合、`reused`/`conflict`/`stale` 标）与生效中的探测来源；
+- `POST /skills/discovery/preview`：请求体 `{path}`，返回候选 SKILL.md 正文 `{name, body}`（路径校验见上节）；
+- `POST /skills/links` / `PATCH /skills/links/:name` / `DELETE /skills/links/:name?workdir=`：建链接（同名冲突 409）、改档位、取消复用；请求体或 query 带 `workdir` 指定项目作用域（必须是绝对路径），缺省为全局；
+- `GET /skills/links?workdir=`：当前作用域的链接记录与 `extraSources`（直接读旁挂文件，不受可见性过滤影响）；
+- `POST /skills/sources` / `DELETE /skills/sources?dir=&workdir=`：登记 / 移除自定义探测目录。
 
 三个用户入口共用这套路由：
 
 - **CLI `/skill [名字]`**：无参列出已装技能（名字 / 作用域 / 可见性 / 描述，作用域跟会话工作目录）；带名字打印该技能的完整正文；
-- **Web 技能页**（只读 tab）：左栏清单、右栏正文，文件即真相、无编辑动作；
-- **技能即斜杠命令**：每个用户可见技能在 CLI 与 Web 两端自动注册成 `/<技能名> [要求]` 命令，命令发送用户原文（点名交给 daemon 检测）；内置命令名优先——与内置重名的技能命令被丢弃，自定义 `commands/*.md`（先注册）同样优先于技能。
+- **Web 技能页**：左栏已装技能清单、可复用技能清单（探测来源徽标 + 复用开关 + "全部复用"）、已建链接清单（四档可见档位单选 + 删除），右栏正文与预览；顶部作用域下拉（默认全局，候选来自会话列表的工作目录）切换全局与项目；
+- **技能即斜杠命令**：每个用户可见技能在 CLI 与 Web 两端自动注册成 `/<技能名> [要求]` 命令，命令发送用户原文（点名交给 daemon 检测）；内置命令名优先——与内置重名的技能命令被丢弃，自定义 `commands/*.md`（先注册）同样优先于技能。复用技能同样获得斜杠命令。
 
 ## 边界与出错
 

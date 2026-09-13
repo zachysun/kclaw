@@ -53,7 +53,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 | `memory/` | MemorySystem：L1 项目情节 + L2 全局认知 + FTS5/向量索引（见 [memory](./core/memory.md)） |
 | `text/` | 三端共享的中文分词器与全文检索（FTS）辅助 |
 | `tools/` | 14 个内置工具（11 常驻 + 条件注册的子代理派发/取回与运行中提问） |
-| `skills/` | 技能包解析、双作用域扫描、点名匹配（见 [skills](./core/skills.md)） |
+| `skills/` | 技能包解析、双作用域扫描、点名匹配、复用探测与软链接接入（见 [skills](./core/skills.md)） |
 | `jobs/` | JobScheduler（定时任务调度） |
 | `mcp/` | MCP（Model Context Protocol：给模型接入外部工具的开放协议）客户端管理器 |
 | `notify/` | 任务完成通知 |
@@ -185,7 +185,7 @@ run 的装配在 core 的 `executeRun`（`packages/core/src/agent/run-assembly.t
 - [agent-loop](./core/agent-loop.md)：run 生命周期状态机与工具回合
 - [daemon](./server/daemon.md)：daemon 装配序、有界 stop、pidfile 语义
 - [run-manager](./server/run-manager.md)：服务端侧的会话串行与确认网关
-- [http-api](./server/http-api.md)：44 条业务路由清单（含附件/用量/目录浏览/MCP 状态/记忆管理/技能/钩子/权限）
+- [http-api](./server/http-api.md)：52 条业务路由清单（含附件/用量/目录浏览/MCP 状态/记忆管理/技能与复用/钩子/权限）
 - [mcp](./core/mcp.md)：条件装配的 MCP 工具适配器
 - [skills](./core/skills.md)：技能包机制（渐进披露、双作用域、点名隐式包装）
 - [hooks](./core/hooks.md)：钩子系统（14 位置网格、HookChain 注册接口、用户文件装载、内置钩子清单）

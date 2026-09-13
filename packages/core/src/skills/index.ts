@@ -22,6 +22,9 @@ import type { Dirent } from "node:fs"
 import { join } from "node:path"
 import { parse } from "yaml"
 
+export * from "./links.js"
+export * from "./discovery.js"
+
 /** Combined description + when_to_use cap, aligned with Claude Code's listing. */
 const DESCRIPTION_MAX_CHARS = 1536
 

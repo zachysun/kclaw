@@ -31,7 +31,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `<home>/memory/global/` | L2 全局认知（persona.md、wiki/、rule/ 的 markdown，文件即真相） | MemorySystem / 用户手编 |
 | `<home>/memory/projects/<id>/` | L1 项目情节（`<topic>.md` 主题线、workdir.txt、MEMORY.md、state.json、vectors.db） | MemorySystem / 用户手编 |
 | `<home>/memory/notes/`、`<home>/memory/index.db` | 旧版记忆目录的遗留：前者是迁移输入（daemon 启动时读取后删除）、后者是旧版派生索引（已直接删除） | 仅 daemon 启动迁移（见 [memory](./memory.md)） |
-| `<home>/skills/` | 全局技能包目录（每个子目录是一个技能，含 `SKILL.md`；项目级技能在工作区 `.kclaw/skills/`，见 [skills](./skills.md)） | 用户手编；每个 run 重新扫描读取 |
+| `<home>/skills/` | 全局技能包目录（每个子目录是一个技能，含 `SKILL.md`；软链接穿透加载；`.links.json` 旁挂文件记录复用链接与自定义探测目录；项目级技能在工作区 `.kclaw/skills/`，见 [skills](./skills.md)） | 用户手编或经技能页复用写入；每个 run 重新扫描读取 |
 | `<home>/hooks/` | 用户钩子目录（每个文件是一个钩子，`export const hook` + default 函数；见 [hooks](./hooks.md)） | 用户手编；每个 run 重新扫描读取 |
 | `<home>/sessions/<id>/` | 每会话一个目录（events.jsonl + meta.json + queue.jsonl，分工见下节） | SessionStore（events.jsonl 是唯一真相、meta.json 是派生摘要、queue.jsonl 是运行态、整文件重写） |
 | `<home>/jobs.db` | 定时任务表 | JobScheduler |

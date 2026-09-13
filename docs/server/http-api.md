@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 44 个业务路由（健康/状态 2 个、会话 15 个、记忆 10 个、技能 2 个、钩子 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 1 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未装配时降级 503，技能组始终注册（无装配依赖），钩子组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则文件即真相，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 52 个业务路由（健康/状态 2 个、会话 15 个、记忆 10 个、技能 10 个、钩子 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 1 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未装配时降级 503，技能组始终注册（无装配依赖），钩子组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则文件即真相，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
@@ -138,12 +138,20 @@ interface Job {
 
 ### 技能（routes/skills.ts，始终注册）
 
-只读的技能管理接口（CLI `/skill` 与 Web 技能页、技能即斜杠命令的共同后端）。技能是文件即真相——`~/.kclaw/skills/`（全局）与工作区 `.kclaw/skills/`（项目级，覆盖全局）下的每个子目录一份 `SKILL.md`；机制与字段见 [skills](../core/skills.md)。每次请求**重新扫描**这两个作用域（与 run 时的注入同源同规则），`?workdir=` 指定项目级作用域（缺省无项目级）。
+技能管理接口（CLI `/skill` 与 Web 技能页、技能即斜杠命令的共同后端），分只读与复用管理两半。技能是文件即真相——`~/.kclaw/skills/`（全局）与工作区 `.kclaw/skills/`（项目级，覆盖全局）下的每个子目录一份 `SKILL.md`；机制、字段与复用链接见 [skills](../core/skills.md)。每次请求**重新扫描**这两个作用域（与 run 时的注入同源同规则），`?workdir=` 指定项目级作用域（缺省无项目级）。
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
 | GET | `/skills?workdir=` | 用户可见技能清单 | `workdir` 可选：会话工作目录，决定项目级技能作用域 | `{name, displayName, description, visibility, origin}[]`——`visibility` 为 `all`（模型+用户）或 `user-only`（被 `disable-model-invocation` 隐藏但仍用户可见）；`origin` 为 `global` / `project` |
 | GET | `/skills/:name?workdir=` | 单个技能详情（含正文） | 同上 | `{name, displayName, description, visibility, origin, content}`——`content` 是 `SKILL.md` 正文 |
+| GET | `/skills/discovery?workdir=` | 探测其他 agent 的可复用技能 | 同上 | `{sources, skills, projectSources}`——`sources` 是探测来源（含失效标），`skills` 是发现列表（realpath 去重、来源聚合、`reused`/`conflict`/`stale` 标），`projectSources` 是项目作用域自行登记的来源 |
+| POST | `/skills/discovery/preview` | 预览候选 SKILL.md 正文 | `{path}` | `{name, body}`；路径必须解析到已发现候选或位于已登记来源之下，否则 404 |
+| GET | `/skills/links?workdir=` | 当前作用域链接记录与自定义来源 | 同上 | `{links: {name, target, agent, tier}[], extraSources: string[]}`——直接读旁挂文件，不受用户可见性过滤影响 |
+| POST | `/skills/links` | 建复用链接（软链接 + 记录） | `{name, target, agent?, tier?, workdir?}` | 201 `{ok:true}`；同名冲突或已复用 409、目标不合法 400；`workdir` 必须绝对路径，缺省全局 |
+| PATCH | `/skills/links/:name` | 改复用技能的可见档位 | `{tier: all\|user\|model\|off, workdir?}` | `{ok:true}`；无记录 404、档位非法 400 |
+| DELETE | `/skills/links/:name?workdir=` | 取消复用（删链接 + 清记录） | query | `{ok:true}`；无记录 404 |
+| POST | `/skills/sources` | 登记自定义探测目录 | `{dir, workdir?}` | 201 `{ok:true}`；重复 409 |
+| DELETE | `/skills/sources?dir=&workdir=` | 移除自定义探测目录 | query | `{ok:true}`；无记录 404 |
 
 `:name` 路径段先过白名单校验（同 `/memory` 的 `isSafeSegment`），非法段 400 `invalid segment`。**`user-invocable: false` 的技能对用户面视为不存在**：列表不显示、点名 404——且与未知名字同响应（`{error:"not found"}`，不泄露存在性）。
 
