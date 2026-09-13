@@ -59,7 +59,7 @@ import type { ToolExecutor } from "./tools.js"
 import { createBuiltinTools, deriveToolFacts, dropSensitiveTools } from "../tools/index.js"
 import { makeEvent } from "../protocol/events.js"
 import { searchSessionEvents } from "../tools/session-search.js"
-import { matchSkillInvocations, scanSkillDirs, skillListPrompt, wrapSkillInvocations } from "../skills/index.js"
+import { applyReuseTiers, matchSkillInvocations, readLinksFile, scanSkillDirs, skillListPrompt, wrapSkillInvocations } from "../skills/index.js"
 import type { MemorySystem } from "../memory/system.js"
 import type { EventBus } from "../bus.js"
 import { HookChain, DEFAULT_HOOK_TIMEOUT_MS } from "../hooks/runner.js"
@@ -313,10 +313,16 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // 技能目录每 run 重扫（渐进披露第一层）：全局 + 会话工作目录的项目级，
   // 项目同名整目录覆盖。列表段追加进系统提示词，与 system 审计事件同文；
   // skill_read 工具持有同一份扫描结果（第二层，按需取正文）。
-  const skills = scanSkillDirs({
-    global: paths.skillsDir,
-    project: join(workspace, ".kclaw", "skills"),
-  })
+  // 复用技能（他方 agent 软链接接入）的可见档位在合并后按 realpath 覆盖
+  // frontmatter 两布尔——项目 scope 的档位后应用、盖过全局，与目录覆盖同向。
+  const projectSkillsDir = join(workspace, ".kclaw", "skills")
+  const skills = applyReuseTiers(
+    scanSkillDirs({
+      global: paths.skillsDir,
+      project: projectSkillsDir,
+    }),
+    [readLinksFile(paths.skillsDir), readLinksFile(projectSkillsDir)],
+  )
 
   // 技能点名的隐式包装（Master 2026-09-03）：用户消息里任意位置的 /技能名
   // 记号精确命中已装且用户可调用的技能时，只在发给模型的那份输入上追加

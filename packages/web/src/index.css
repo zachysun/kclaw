@@ -2512,6 +2512,151 @@ select:focus {
   font-size: 13px;
 }
 
+/* 复用管理面：scope 行、分段标题、来源徽标、发现条目与链接行 */
+
+.skills-scope-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.skills-scope {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.skills-scope select {
+  max-width: 280px;
+}
+
+.skills-reuse-all {
+  font-size: 12px;
+}
+
+.skills-list .skills-seg-title {
+  margin: var(--space-3) 0 var(--space-1);
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.skills-list .skills-seg-title:first-child {
+  margin-top: 0;
+}
+
+.skills-sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+
+.skill-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  max-width: 100%;
+}
+
+.skill-source.stale {
+  opacity: 0.55;
+}
+
+.skill-source-del {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.skills-source-add {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 1;
+  min-width: 180px;
+}
+
+.skills-source-add input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.skills-source-add button {
+  font-size: 12px;
+}
+
+.skills-list .skill-item.discover {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "name actions" "meta actions" "desc actions";
+  cursor: pointer;
+}
+
+.skills-list .skill-item.discover .skill-name { grid-area: name; }
+.skills-list .skill-item.discover .skill-meta { grid-area: meta; }
+.skills-list .skill-item.discover .skill-desc { grid-area: desc; }
+
+.discover-actions {
+  grid-area: actions;
+  align-self: center;
+}
+
+.discover-actions button,
+.link-actions button {
+  font-size: 12px;
+  padding: 2px var(--space-2);
+}
+
+.skills-list .link-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: default;
+}
+
+.skills-list .link-row .skill-meta {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.link-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+}
+
+.link-actions select {
+  font-size: 12px;
+}
+
+.skills-body h3 button {
+  margin-left: var(--space-2);
+  font-size: 12px;
+}
+
 /* --- permissions view（权限规则管理页） ------------------------------------- */
 
 .permissions-view {

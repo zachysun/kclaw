@@ -497,7 +497,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
           {tab === "usage" && <UsageView api={api} />}
           {tab === "trash" && <TrashView api={api} />}
           {tab === "memory" && <MemoryView api={api} notice={(t) => setSessionNotice(t)} openTarget={memoryTarget} onOpenConsumed={() => setMemoryTarget(null)} />}
-          {tab === "skills" && <SkillsView api={api} notice={(t) => setSessionNotice(t)} workdir={selectedMeta?.workdir} />}
+          {tab === "skills" && <SkillsView api={api} notice={(t) => setSessionNotice(t)} />}
           {tab === "permissions" && <PermissionsView api={api} notice={(t) => setSessionNotice(t)} workdir={selectedMeta?.workdir} />}
         </main>
       </div>
