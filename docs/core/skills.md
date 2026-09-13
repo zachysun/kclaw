@@ -75,6 +75,8 @@
 
 模型如何知道该用哪个：系统提示词清单给出名字与一句话描述；`disable-model-invocation` 的技能不在清单里，但用户在对话里直接点名（"按 commit-helper 的规程办"）时模型仍能按名加载——这是该档位技能唯一合法的入口。
 
+清单之外还有一条自助发现通道：**`skill_list` 工具**（`{query?}`，与 `skill_read` 同族、同一份扫描结果，可见口径一致）——清单有字符预算、技能多时截断，子代理更是不注入清单，模型需要完整清单或按关键词找技能时调它（先 list 找到名字，再 skill_read 取正文）。
+
 ## 技能点名与隐式包装
 
 ### 点名检测（matchSkillInvocations）
@@ -148,7 +150,7 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 
 ## 关联
 
-- [tools](./tools.md)：`skill_read` 在 14 个内置工具里的位置与注册
+- [tools](./tools.md)：`skill_read` 与 `skill_list` 在 15 个内置工具里的位置与注册
 - [hooks](./hooks.md)：`skill-wrap` 内置钩子（`llm-before` 位置的点名包装）与 `withLastUserText`
 - [agent-loop](./agent-loop.md)：`llm-before` 位置在循环里的触发时机
 - [run-manager](../server/run-manager.md)：系统提示词装配（基础 + 认知 + 技能清单）、技能目录每 run 扫描

@@ -186,7 +186,7 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
 | readRoots 读豁免 | 带 `path` 参数且 safe | fs_read、fs_list |
 | 规则匹配取 `command` 字段 | 带 `command` 参数（即命令类，走专属分支） | exec |
 
-**新工具因此零引擎改动**：按惯例把写参数命名为 `path`（或命令参数命名为 `command`）并声明 risk，待遇自动齐备——漏声明的缺省是最严待遇（不进 safeTools、无豁免，需确认）。未注册工具（模型幻觉调用不存在的名字）按同样最严缺省处理。结构约定优于名单：名单漏一个名字是漏洞，结构让新工具天然被覆盖。按当前 14 个内置工具的声明（见 [tools](./tools.md)）：
+**新工具因此零引擎改动**：按惯例把写参数命名为 `path`（或命令参数命名为 `command`）并声明 risk，待遇自动齐备——漏声明的缺省是最严待遇（不进 safeTools、无豁免，需确认）。未注册工具（模型幻觉调用不存在的名字）按同样最严缺省处理。结构约定优于名单：名单漏一个名字是漏洞，结构让新工具天然被覆盖。按当前 15 个内置工具的声明（见 [tools](./tools.md)）：
 
 - **safe（命中即自动放行）**：`fs_read`、`fs_list`、`web_search`、`web_fetch`、`memory_save`、`memory_search`、`session_search`、`skill_read`、`subagent_run`、`subagent_collect`、`ask_user_questions`——共 11 个，全是不改工作目录状态的 parallel 工具；
 - **sensitive（无 allow 规则命中必然 confirm）**：`exec`、`fs_write`、`fs_edit`——共 3 个。注意 fs_read/fs_list 虽是 safe，目标越界且不在 readRoots 内时仍进入 confirm（第 ③ 步）；MCP 适配器工具（见 [mcp](./mcp.md)）一律声明 sensitive。
@@ -280,7 +280,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 ## 关联
 
 - [agent-loop](./agent-loop.md)：确认的三方等待、note 块与 grantedBy 的写入现场
-- [tools](./tools.md)：risk/concurrency 元数据的来源与 14 个工具清单；exec 工具的沙箱注入参数
+- [tools](./tools.md)：risk/concurrency 元数据的来源与 15 个工具清单；exec 工具的沙箱注入参数
 - [sandbox](./sandbox.md)：exec 沙箱 provider 的平台布局与降级链
 - [storage](./storage.md)：decided-rules 文件的磁盘布局（会话容器之外）
 - [../server/run-manager.md](../server/run-manager.md)：gate + broker 的 daemon 侧装配
