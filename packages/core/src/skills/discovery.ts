@@ -18,7 +18,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "n
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { isSkillDirName, parseSkillFile, type SkillRecord } from "./index.js"
-import { readLinksFile, writeLinksFile, type LinksFile } from "./links.js"
+import { readLinksFile, suggestTier, writeLinksFile, type LinksFile } from "./links.js"
 
 export const BUILTIN_SOURCES: ReadonlyArray<{ agent: "claude" | "codex" | "dsh" | "zcode"; dir: string }> = [
   { agent: "claude", dir: join(homedir(), ".claude", "skills") },
@@ -99,6 +99,9 @@ export interface DiscoveredSkill {
   sources: string[]
   /** Set when the candidate is a skill bundled in an installed plugin. */
   plugin?: string
+  /** The tier matching the skill's own frontmatter visibility fields — the
+   * default for the reuse link's tier, preserving the author's intent. */
+  suggestedTier: "all" | "user" | "model" | "off"
   /** A links record (any scope) already points at this real directory. */
   reused: boolean
   /** Set when an owned skill holds the same name over different content. */
@@ -361,6 +364,7 @@ export function discoverSkills(opts: {
       target: cand.target!,
       sources: cand.sources,
       plugin: cand.plugin,
+      suggestedTier: parsed !== undefined ? suggestTier(parsed.disableModelInvocation, parsed.userInvocable) : "all",
       reused: reusedTargets.has(cand.target!),
       conflict: ownedReal !== undefined && ownedReal !== cand.target,
       stale: false,
@@ -373,6 +377,7 @@ export function discoverSkills(opts: {
       description: "",
       target: "",
       sources: cand.sources,
+      suggestedTier: "all",
       reused: false,
       conflict: false,
       stale: true,

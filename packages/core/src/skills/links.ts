@@ -21,7 +21,7 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
 import { realpathSync } from "node:fs"
 import { join } from "node:path"
-import { isSkillDirName, type SkillRecord } from "./index.js"
+import { isSkillDirName, parseSkillFile, type SkillRecord } from "./index.js"
 
 /** Visibility tier of a reused skill; mirrors the frontmatter 2×2. */
 export type ReuseTier = "all" | "user" | "model" | "off"
@@ -116,6 +116,25 @@ const TIER_OVERWRITE: Record<ReuseTier, { disableModelInvocation: boolean; userI
 }
 
 /**
+ * The tier matching a skill's own frontmatter visibility booleans — the
+ * inverse of TIER_OVERWRITE. A skill authored with `disable-model-invocation:
+ * true` MEANS "user-invocable only"; reusing it should default to that tier
+ * instead of blanket "all", so adoption preserves the author's intent until
+ * the user explicitly overrides it.
+ */
+export function suggestTier(disableModelInvocation: boolean, userInvocable: boolean): ReuseTier {
+  if (disableModelInvocation && userInvocable) return "user"
+  if (userInvocable) return "all"
+  return disableModelInvocation ? "off" : "model"
+}
+
+/** suggestTier over a raw SKILL.md: unparseable frontmatter degrades to "all". */
+function suggestTierFromSkill(raw: string): ReuseTier {
+  const parsed = parseSkillFile(raw, "candidate", "candidate", "global")
+  return parsed !== undefined ? suggestTier(parsed.disableModelInvocation, parsed.userInvocable) : "all"
+}
+
+/**
  * Apply reuse tiers to a merged scan result. Later scopes win (project over
  * global, matching the directory override direction). Matching is by
  * realpath of the skill directory against the record's target, so the tier
@@ -153,16 +172,23 @@ export type LinkOpResult = { ok: true } | { ok: false; error: string }
  * (realpath mismatch) is a conflict — the caller surfaces it as 409; the
  * same content under the same name is also refused (already reused).
  * Missing scope directories are created recursively.
+ *
+ * tier omitted → derived from the target's own frontmatter visibility
+ * fields (suggestTier): reusing a skill preserves the author's visibility
+ * intent unless the caller (user) explicitly picks a tier.
  */
-export function createSkillLink(opts: { skillsDir: string; name: string; target: string; agent: ReuseAgent; tier: ReuseTier; plugin?: string }): LinkOpResult {
-  const { skillsDir, name, target, agent, tier, plugin } = opts
+export function createSkillLink(opts: { skillsDir: string; name: string; target: string; agent: ReuseAgent; tier?: ReuseTier; plugin?: string }): LinkOpResult {
+  const { skillsDir, name, target, agent, plugin } = opts
   if (!isSkillDirName(name)) return { ok: false, error: "invalid skill name" }
   const linkPath = join(skillsDir, name)
   let realTarget: string
+  let tier: ReuseTier
   try {
     realTarget = realpathSync(target)
     if (!statSync(realTarget).isDirectory()) return { ok: false, error: "target is not a directory" }
-    if (!statSync(join(realTarget, "SKILL.md")).isFile()) return { ok: false, error: "target has no SKILL.md" }
+    const skillFile = join(realTarget, "SKILL.md")
+    if (!statSync(skillFile).isFile()) return { ok: false, error: "target has no SKILL.md" }
+    tier = opts.tier ?? suggestTierFromSkill(readFileSync(skillFile, "utf8"))
   } catch {
     return { ok: false, error: "target is not a readable skill directory" }
   }

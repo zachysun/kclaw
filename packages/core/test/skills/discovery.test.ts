@@ -61,6 +61,21 @@ describe("discoverSkills", () => {
     expect(found[0]).toMatchObject({ name: "docs", displayName: "docs", description: "真实目录", target: realpathSync(real), sources: ["custom"], reused: false, conflict: false, stale: false })
   })
 
+  it("suggests the tier matching the source frontmatter visibility fields", () => {
+    const root = tempRoot()
+    const skillsDir = join(root, "skills")
+    const source = join(root, "agent-skills")
+    mkdirSync(join(source, "user-only"), { recursive: true })
+    writeFileSync(join(source, "user-only", "SKILL.md"), "---\ndescription: 仅用户\ndisable-model-invocation: true\n---\n\n正文\n")
+    mkdirSync(join(source, "plain"), { recursive: true })
+    writeFileSync(join(source, "plain", "SKILL.md"), "---\ndescription: 无字段\n---\n\n正文\n")
+    writeLinksFile(skillsDir, { links: [], extraSources: [source] })
+
+    const found = discoverSkills({ skillsDir, owned: [], builtin: NO_BUILTIN, pluginHomes: NO_PLUGIN })
+    expect(found.find((f) => f.name === "user-only")).toMatchObject({ suggestedTier: "user" })
+    expect(found.find((f) => f.name === "plain")).toMatchObject({ suggestedTier: "all" })
+  })
+
   it("marks reused by realpath across scopes, and conflicts only on same-name-different-content", () => {
     const root = tempRoot()
     const skillsDir = join(root, "skills")

@@ -26,13 +26,13 @@ const DISCOVERY = {
     { agent: "dsh", dir: "/home/.dsh/skills", stale: true },
   ],
   skills: [
-    { name: "pdf", displayName: "pdf", description: "PDF 处理。", target: "/cc/pdf", sources: ["claude"], reused: false, conflict: false, stale: false },
-    { name: "rival", displayName: "rival", description: "同名冲突。", target: "/cc/rival", sources: ["claude"], reused: false, conflict: true, stale: false },
-    { name: "ghost", displayName: "ghost", description: "", target: "", sources: ["codex"], reused: false, conflict: false, stale: true },
-    { name: "docs", displayName: "docs", description: "已复用。", target: "/cc/docs", sources: ["zcode"], reused: true, conflict: false, stale: false },
-    { name: "parked", displayName: "parked", description: "他处复用。", target: "/cc/parked", sources: ["dsh"], reused: true, conflict: false, stale: false },
-    { name: "tdd", displayName: "tdd", description: "插件技能。", target: "/plugins/tdd", sources: ["zcode"], plugin: "superpowers", reused: false, conflict: false, stale: false },
-    { name: "grill", displayName: "grill", description: "插件技能二。", target: "/plugins/grill", sources: ["zcode"], plugin: "superpowers", reused: false, conflict: false, stale: false },
+    { name: "pdf", displayName: "pdf", description: "PDF 处理。", target: "/cc/pdf", sources: ["claude"], suggestedTier: "all", reused: false, conflict: false, stale: false },
+    { name: "rival", displayName: "rival", description: "同名冲突。", target: "/cc/rival", sources: ["claude"], suggestedTier: "all", reused: false, conflict: true, stale: false },
+    { name: "ghost", displayName: "ghost", description: "", target: "", sources: ["codex"], suggestedTier: "all", reused: false, conflict: false, stale: true },
+    { name: "docs", displayName: "docs", description: "已复用。", target: "/cc/docs", sources: ["zcode"], suggestedTier: "all", reused: true, conflict: false, stale: false },
+    { name: "parked", displayName: "parked", description: "他处复用。", target: "/cc/parked", sources: ["dsh"], suggestedTier: "all", reused: true, conflict: false, stale: false },
+    { name: "tdd", displayName: "tdd", description: "插件技能。", target: "/plugins/tdd", sources: ["zcode"], plugin: "superpowers", suggestedTier: "user", reused: false, conflict: false, stale: false },
+    { name: "grill", displayName: "grill", description: "插件技能二。", target: "/plugins/grill", sources: ["zcode"], plugin: "superpowers", suggestedTier: "all", reused: false, conflict: false, stale: false },
   ],
   projectSources: [],
 }
@@ -176,7 +176,7 @@ describe("SkillsView", () => {
     })
     await flush()
     // 组内未复用无冲突的 tdd、grill 都被建链
-    expect(api.post).toHaveBeenCalledWith("/skills/links", { name: "tdd", target: "/plugins/tdd", agent: "zcode", tier: "all", plugin: "superpowers", workdir: undefined })
+    expect(api.post).toHaveBeenCalledWith("/skills/links", { name: "tdd", target: "/plugins/tdd", agent: "zcode", tier: "user", plugin: "superpowers", workdir: undefined })
     expect(api.post).toHaveBeenCalledWith("/skills/links", { name: "grill", target: "/plugins/grill", agent: "zcode", tier: "all", plugin: "superpowers", workdir: undefined })
     // 区块级按钮：fake 的 links 记录不回写（tdd/grill 刚建链但记录里没有、
     // docs 属用户级不在插件区块），区块级删除作用范围内无可删，del 不发生
@@ -208,6 +208,8 @@ describe("SkillsView", () => {
     expect(container.textContent).toContain("与已有技能同名冲突")
     expect(container.textContent).toContain("已失效")
     expect(container.textContent).toContain("已在其他作用域复用")
+    // 源档位非"完全可见"的条目带提示（tdd 的源 frontmatter 是仅用户）
+    expect(container.textContent).toContain("源档位 仅用户")
     expect(container.querySelector('[data-testid="links-table"]')).not.toBeNull()
     expect(container.textContent).toContain("已过时")
   })
@@ -258,7 +260,7 @@ describe("SkillsView", () => {
     await flush()
     // 仅 pdf/tdd/grill 可批量复用（rival 冲突、ghost 失效、docs/parked 已复用）
     expect(api.post).toHaveBeenCalledWith("/skills/links", { name: "pdf", target: "/cc/pdf", agent: "claude", tier: "all", workdir: undefined })
-    expect(api.post).toHaveBeenCalledWith("/skills/links", { name: "tdd", target: "/plugins/tdd", agent: "zcode", tier: "all", plugin: "superpowers", workdir: undefined })
+    expect(api.post).toHaveBeenCalledWith("/skills/links", { name: "tdd", target: "/plugins/tdd", agent: "zcode", tier: "user", plugin: "superpowers", workdir: undefined })
     expect(api.post).not.toHaveBeenCalledWith(expect.objectContaining({ name: "rival" }))
   })
 

@@ -36,6 +36,8 @@ interface DiscoveredSkill {
   target: string
   sources: string[]
   plugin?: string
+  /** 源 SKILL.md 可见性字段映射出的档位——复用时的默认档位，尊重作者意图。 */
+  suggestedTier: "all" | "user" | "model" | "off"
   reused: boolean
   conflict: boolean
   stale: boolean
@@ -137,7 +139,7 @@ export function SkillsView({ api, notice }: {
     }
   }
 
-  const reuse = async (item: DiscoveredSkill, tier: LinkRecord["tier"] = "all"): Promise<void> => {
+  const reuse = async (item: DiscoveredSkill, tier: LinkRecord["tier"] = item.suggestedTier ?? "all"): Promise<void> => {
     setBusy(true)
     try {
       await api.post("/skills/links", { name: item.name, target: item.target, agent: item.sources[0] ?? "custom", tier, plugin: item.plugin, workdir: scope !== "" ? scope : undefined })
@@ -185,7 +187,7 @@ export function SkillsView({ api, notice }: {
     let ok = 0
     for (const item of candidates) {
       try {
-        await api.post("/skills/links", { name: item.name, target: item.target, agent: item.sources[0] ?? "custom", tier: "all", plugin: item.plugin, workdir: scope !== "" ? scope : undefined })
+        await api.post("/skills/links", { name: item.name, target: item.target, agent: item.sources[0] ?? "custom", tier: item.suggestedTier ?? "all", plugin: item.plugin, workdir: scope !== "" ? scope : undefined })
         ok += 1
       } catch {
         // 单条失败不中断批量，结束后统一刷新并提示。
@@ -456,7 +458,9 @@ export function SkillsView({ api, notice }: {
                   <h3>
                     {body.title}
                     {body.reusable !== undefined && !body.reusable.reused && (
-                      <button type="button" data-testid="reuse-preview" disabled={busy || body.reusable.conflict} onClick={() => void reuse(body.reusable!)}>复用此技能</button>
+                      <button type="button" data-testid="reuse-preview" disabled={busy || body.reusable.conflict} onClick={() => void reuse(body.reusable!)}>
+                        {body.reusable.suggestedTier !== "all" ? `按源档位复用（${TIER_LABEL[body.reusable.suggestedTier]}）` : "复用此技能"}
+                      </button>
                     )}
                   </h3>
                   <pre>{body.content}</pre>
@@ -526,7 +530,10 @@ function DiscoveryGroup({ label, items, open, byName, busy, linkNames, onPreview
                 onKeyDown={(e) => { if (e.key === "Enter") onPreview(item) }}
               >
                 <span className="skill-name">{item.name}</span>
-                <span className="skill-meta">{hint !== "" ? hint : item.sources.map((a) => AGENT_LABEL[a] ?? a).join(" · ")}</span>
+                <span className="skill-meta">
+                  {hint !== "" ? hint : item.sources.map((a) => AGENT_LABEL[a] ?? a).join(" · ")}
+                  {item.suggestedTier !== "all" ? ` · 源档位 ${TIER_LABEL[item.suggestedTier]}` : ""}
+                </span>
                 <span className="skill-desc clamp2">{item.stale ? "源目录或链接已失效" : item.description}</span>
                 <span className="discover-actions">
                   {item.reused && reusedHere ? (

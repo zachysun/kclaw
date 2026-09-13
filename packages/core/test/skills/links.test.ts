@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { applyReuseTiers, createSkillLink, readLinksFile, removeSkillLink, scanSkillDirs, setSkillLinkTier, writeLinksFile } from "../../src/skills/index.js"
+import { applyReuseTiers, createSkillLink, readLinksFile, removeSkillLink, scanSkillDirs, setSkillLinkTier, suggestTier, writeLinksFile } from "../../src/skills/index.js"
 
 const cleanups: string[] = []
 afterEach(() => {
@@ -185,5 +185,27 @@ describe("applyReuseTiers", () => {
     expect(skills.find((s) => s.name === "commit-helper")?.dir).toBe(owned)
     expect(skills.find((s) => s.name === "commit-helper")?.plugin).toBeUndefined()
     void owned
+  })
+})
+
+describe("suggestTier", () => {
+  it("maps the frontmatter visibility booleans to the matching tier (inverse of the overwrite)", () => {
+    expect(suggestTier(false, true)).toBe("all")
+    expect(suggestTier(true, true)).toBe("user")
+    expect(suggestTier(false, false)).toBe("model")
+    expect(suggestTier(true, false)).toBe("off")
+  })
+})
+
+describe("createSkillLink tier derivation", () => {
+  it("tier omitted → derived from the target's own frontmatter; explicit tier wins", () => {
+    const root = tempRoot()
+    const skillsDir = join(root, "skills")
+    const userOnly = makeSkill(root, "user-only", { frontmatter: "description: 仅用户\ndisable-model-invocation: true" })
+    expect(createSkillLink({ skillsDir, name: "user-only", target: userOnly, agent: "zcode", tier: undefined as never })).toEqual({ ok: true })
+    expect(readLinksFile(skillsDir).links.find((l) => l.name === "user-only")?.tier).toBe("user")
+    const explicit = makeSkill(root, "explicit", { frontmatter: "description: 仅用户\ndisable-model-invocation: true" })
+    expect(createSkillLink({ skillsDir, name: "explicit", target: explicit, agent: "zcode", tier: "all" })).toEqual({ ok: true })
+    expect(readLinksFile(skillsDir).links.find((l) => l.name === "explicit")?.tier).toBe("all")
   })
 })

@@ -141,7 +141,8 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     const name = typeof body?.name === "string" ? body.name : ""
     const target = typeof body?.target === "string" ? body.target.trim() : ""
     const agent = typeof body?.agent === "string" && AGENTS.includes(body.agent as ReuseAgent) ? (body.agent as ReuseAgent) : "custom"
-    const tier = typeof body?.tier === "string" && TIERS.includes(body.tier as ReuseTier) ? (body.tier as ReuseTier) : "all"
+    // tier 缺省交给 core：按目标 SKILL.md 自带的可见性字段推导（尊重作者意图）。
+    const tier = typeof body?.tier === "string" && TIERS.includes(body.tier as ReuseTier) ? (body.tier as ReuseTier) : undefined
     const plugin = typeof body?.plugin === "string" && body.plugin.trim() !== "" ? body.plugin.trim() : undefined
     const workdir = typeof body?.workdir === "string" ? body.workdir : undefined
     const dir = writeScopeDir(workdir)
