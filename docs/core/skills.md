@@ -116,6 +116,7 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 ```
 
 - `tier` 是复用技能的**可见档位**，四档与 frontmatter 两布尔一一对应：`all`（完全可见）/ `user`（仅用户，相当于 `disable-model-invocation: true`）/ `model`（仅模型，相当于 `user-invocable: false`）/ `off`（暂不启用，两边都隐藏、链接与 `skill_read` 仍有效）。外部 SKILL.md 属于别的 agent，不可改写——档位只能存在 kclaw 侧。
+- **档位缺省从源技能推断**：建链接不传 `tier` 时，按源 SKILL.md 的 frontmatter 可见性反推（`suggestTier`）——`disable-model-invocation: true` 的技能本来就是"仅用户可点名"（`user` 档），`user-invocable: false` 的推断为 `model` 档，两者都不设的才是 `all`；frontmatter 无法解析时回落 `all`。复用继承作者的可见性意图，用户显式选档位才覆盖。
 - `plugin` 是归属说明（可选）：复用插件技能时记录所属插件名，跟随技能出现在所有用户面——技能页已装清单（"来自插件 X"）、CLI `/skill` 列表、两端的斜杠命令描述。模型面的系统提示词清单不带（模型只需内容，且省预算）。归属出现前建的旧记录由链接清单接口惰性回填：目标能匹配到已安装插件就自动补名。
 - **档位覆盖按 realpath 匹配**：合并扫描结果后，技能目录的 realpath 命中某条链接记录的 target 才套用档位；项目作用域的记录后应用、盖过全局（与目录覆盖同向）。只共享名字的自有技能不受影响——它该由发现列表的冲突标记提示。
 - 创建链接时目标必须是存在且含 SKILL.md 的目录，链接名必须是合法技能目录名；作用域目录缺失时递归创建；写入旁挂文件原子化（临时文件 + rename，0600）。

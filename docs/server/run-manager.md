@@ -159,6 +159,25 @@ submit(sessionId, input)
 
 `position` 是该条在可执行队列中的序位（0 起）；steer 条目在缓冲区里、没有队列序位，故不带。事件序上 `message.queued` 在总线广播、`send_message_ack` 在命令通道回包，两条通路各自送达——客户端不应假设两者的先后（网络上 queued 可能先于 ack 到达）。
 
+### retry：编辑重试与重新生成
+
+`RunManager.retry(sessionId, fromMessageId, text, attachments?)`（`message.retry` 帧的服务端入口，WebUI 的「编辑」「重新生成」按钮共用）——校验通过后先写截断标记、再走普通 `submit` 路径：
+
+```
+retry(sessionId, fromMessageId, text, attachments?)
+  meta 存在性检查；子代理会话拒绝（只读）
+  空闲校验：无活动 run、无驱动器、队列空、steer 缓冲空、无进行中压缩
+    → 违反抛「会话忙：等当前运行和压缩结束、清空队列后再重试」
+    （parked 的后台压缩结果不阻塞——它的覆盖范围必在截断点之前）
+  fromMessageId 必须是最后一条 user 消息的 id → 否则抛「只能从最后一条用户消息重试」
+  附件：调用方不带时从被丢弃消息的附件块重建（仅文件型附件可重建）
+  无文本且无附件 → 抛「重试内容为空（无文本也无附件）」
+  appendMessageTruncated（events.jsonl 落一条 message.truncated）+ 广播 message.truncated
+  → submit(sessionId, { userText: text, trigger: "user", attachments? })
+```
+
+截断只发生在**空闲**会话上且只在**尾部**——已经发生过的历史永不改写。`message.truncated` 是唯一的可见性机制：事件流只追加这条标记、不改写任何历史行，聊天视图与 run 的 `readMessages` 从该消息起过滤（重试追加在其后的新消息不受旧起点约束；服务端与客户端经同一条广播收敛）。校验错误以 error 帧返回（无 ack），文案见 [realtime](./realtime.md)。
+
 ### 驱动器 #drive：每会话一个循环
 
 ```

@@ -207,7 +207,7 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
     writeRoots: []       # 追加写白名单（realpath 形式），如 npm 缓存目录
   ```
   沙箱启动失败或命令被沙箱拒绝 → exec 返回 error result（fail-closed，不降级裸跑）。可执行性探测用真实路径探测（如 `bwrap --die-with-parent true` 验证 user namespaces 真可用）。
-  - **审计**：run 装配在每次探测后向会话事件流写一条 `sandbox.checked` 审计事件（13 种会话事件之一，字段 `enabled`=config 开关 / `available`=探测结果 / `unavailableReason`=原因；主动关闭沙箱时 `available` 恒 false 且不带原因）。每 run 恰一条，只写入事件流不上总线、不进 meta 投影、不推进 updatedAt，写失败即 run 失败（与 `system` 审计事件同契约）——审计页可逐 run 回看"当时沙箱是什么状态"，配合 grantedBy / deny note 串成完整审计链（见 [webui](../web/webui.md)）。人工确认的裁决另有 `permission.decided` 事件留痕（裁决、裁决者、工具身份；中止不是裁决不落），与沙箱审计合起来构成完整的放行链路。
+  - **审计**：run 装配在每次探测后向会话事件流写一条 `sandbox.checked` 审计事件（14 种会话事件之一，字段 `enabled`=config 开关 / `available`=探测结果 / `unavailableReason`=原因；主动关闭沙箱时 `available` 恒 false 且不带原因）。每 run 恰一条，只写入事件流不上总线、不进 meta 投影、不推进 updatedAt，写失败即 run 失败（与 `system` 审计事件同契约）——审计页可逐 run 回看"当时沙箱是什么状态"，配合 grantedBy / deny note 串成完整审计链（见 [webui](../web/webui.md)）。人工确认的裁决另有 `permission.decided` 事件留痕（裁决、裁决者、工具身份；中止不是裁决不落），与沙箱审计合起来构成完整的放行链路。
 
 ### 8. 人工确认流程
 

@@ -58,7 +58,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 | `mcp/` | MCP（Model Context Protocol：给模型接入外部工具的开放协议）客户端管理器 |
 | `notify/` | 任务完成通知 |
 
-根级另有 `bus.ts`（EventBus，进程内事件分发）与 `client-http.ts`（CLI/WebUI 共享的 HTTP 请求基座：自动附带 Bearer token、提取错误信息、处理 204/空响应，经 `@kclaw/core/client-http` 子路径出口；不 import 任何 Node 专属模块，浏览器可以直接打包）。`sandbox/`（exec 工具的操作系统级沙箱：Seatbelt/bwrap 探测与包装，见 [sandbox](./core/sandbox.md)）是内部模块，不经入口导出，由 run 装配直接 import。
+根级另有 `bus.ts`（EventBus，进程内事件分发）与 `client-http.ts`（CLI/WebUI 共享的 HTTP 请求基座：自动附带 Bearer token、提取错误信息、处理 204/空响应，经 `@kclaw/core/client-http` 子路径出口；不 import 任何 Node 专属模块，浏览器可以直接打包）。`mentions.ts`（`@` 文件引用的纯函数层：提取、候选补全与模型侧包装文本，经 `@kclaw/core/mentions` 子路径出口；机制见 [file-mentions](./core/file-mentions.md)）同为浏览器可引用的纯模块。`sandbox/`（exec 工具的操作系统级沙箱：Seatbelt/bwrap 探测与包装，见 [sandbox](./core/sandbox.md)）是内部模块，不经入口导出，由 run 装配直接 import。
 
 **server**（入口 `packages/server/src/index.ts`）：`app.ts`（createApp 装配）、`daemon.ts`（launchDaemon）、`auth.ts`（token 鉴权）、`run.ts`（RunManager 队列状态机；单次 run 的装配在 core 的 `executeRun`）、`subagent.ts`（子代理派生：子会话创建、状态行与确认转发，见 [subagents](./core/subagents.md)）、`command-check.ts`（WS 命令帧的唯一校验点）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`（定时调度 tick）、`memory-scheduler.ts`（记忆的定时/跟随保底调度）、`routes/`（sessions/attachments/jobs/config/fs/usage/memory/skills/hooks/permissions 十组路由）。
 
@@ -126,10 +126,10 @@ run 的装配在 core 的 `executeRun`（`packages/core/src/agent/run-assembly.t
 1. 附件引用挂载为 attachment 块（多模态、内联文本、fs_read 提示三种形态）。
 2. 确定模型：`input.model` → 会话 meta → 默认配置，三级依次回落，条目名翻译成线上模型名。
 3. 记忆检索：拿用户文本的前 200 字符搜项目情节，取前 5 条，作为 note 块注入用户消息；另把 L2 全局认知拼进系统提示（见 [memory](./core/memory.md)）。
-4. 扫描技能目录（全局 `<home>/skills` + 工作区 `.kclaw/skills`），把可用技能清单追加进系统提示——此时系统提示分两段组装：**stable**（人设基座 + 注入约定，缓存冻结面）在前，**live**（全局认知 + 技能清单，低频变化面）在后；若消息里出现 `/技能名`（任意位置），生成一份改写后的模型视图文本（见 [skills](./core/skills.md)）。
+4. 扫描技能目录（全局 `<home>/skills` + 工作区 `.kclaw/skills`），把可用技能清单追加进系统提示——此时系统提示分两段组装：**stable**（人设基座 + 注入约定，缓存冻结面）在前，**live**（全局认知 + 技能清单，低频变化面）在后；若消息里出现 `/技能名` 或 `@路径`（任意位置，仅用户消息），把两者的包装文本合并成一份改写后的模型视图文本（见 [skills](./core/skills.md) 与 [file-mentions](./core/file-mentions.md)）。
 5. 读会话历史（在读之后才追加新用户消息）→ `createBuiltinTools`（含 skill_read）+ extraTools（MCP 工具）→ `ConfigPermissionGate`（readRoots 为附件目录；权限模式与已保存规则每个 run 都从会话 meta 和磁盘现读）。
 6. 进入 agent 循环 `runAgent(...)`（`packages/core/src/agent/loop.ts`）：
-   - `llm.stream(await buildMessages())`：`toProviderMessages(history, window=200)` 负责把历史组装成发往模型的请求（`agent/context.ts`）；llm-before 钩子链只能修改模型看到的输入（技能点名的包装就是内置的 skill-wrap 钩子，用 `withLastUserText` 锚定最后一条 user 消息）。
+   - `llm.stream(await buildMessages())`：`toProviderMessages(history, window=200)` 负责把历史组装成发往模型的请求（`agent/context.ts`）；llm-before 钩子链只能修改模型看到的输入（技能与 `@` 文件点名的合并包装就是内置的 skill-wrap 钩子，用 `withLastUserText` 锚定最后一条 user 消息）。
    - 模型流式返回 text / thinking / tool_call（各自经历 created → delta → …）。
    - 模型要求调用工具（`stopReason:"tool_use"`）→ 权限检查 `check(toolCall)`（`permissions/engine.ts`）。需要人工确认时，发出 confirmation.requested 事件，客户端弹确认框；用户的选择经 WS 帧 `{type:"confirmation.resolve", confirmationId, decision}` 回来，`ConfirmationBroker.resolve` 收到后循环继续（`core/src/permissions/broker.ts`）。
    - 执行工具：parallel 组并发、serial 组串行，产出 tool_result 块。

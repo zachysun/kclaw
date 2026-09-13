@@ -121,13 +121,13 @@ export function readJsonl(file: string): unknown[]
 
 每个会话一个目录 `<sessionsDir>/<id>/`，固定三个文件，由 `SessionStore`（`packages/core/src/session/store.ts`）统一管理。三个文件的分工：**events.jsonl 是唯一真相，meta.json 是从它推导出来的快速读取摘要，queue.jsonl 是运行态的排队消息。**
 
-- **`events.jsonl`（唯一真相）**：只追加的事件流，一行一个 `SessionEvent`（JSON 序列化），共 13 种事件——
+- **`events.jsonl`（唯一真相）**：只追加的事件流，一行一个 `SessionEvent`（JSON 序列化），共 14 种事件——
   - 会话生命周期 5 种：`session.created`（含创建时固化的初始权限模式 `mode`；子代理会话还带 `parentSessionId`）、`session.renamed`、`session.deleted`、`session.restored`、`session.set`（model / mode / disposition 的会话级设置；旧的 `readonly` 布尔字段是历史遗留，读取时映射为 mode）。
-  - 内容类 5 种：`message`（一条消息）、`compaction`（一次压缩的审计）、`memory`（一次记忆写入的审计）、`system`（一条系统提示词审计——每次对话运行落一条，携带 stable/live 两段拼装文本）、`sandbox.checked`（一条沙箱状态审计——每次对话运行探测后落一条 `{enabled, available, unavailableReason?}`）。
-  - 运行档案 3 种：`run.started` / `run.ended`（每 run 一对，把该 run 的消息事件夹成一轮边界；失败 run 也落 `run.ended`，起点必有终点）、`permission.decided`（每次人工确认裁决的留痕；被中止的确认不落）。<br>运行档案与 `system` / `sandbox.checked` 一样只写事件流、不进 meta 投影、不推进 `updatedAt`。
+  - 内容类 6 种：`message`（一条消息）、`message.truncated`（编辑重试/重新生成的截断标记——从 `fromMessageId` 起的所有消息退出对话视图；事件流只追加这条标记、不改写任何历史行，可见性是读取端投影）、`compaction`（一次压缩的审计）、`memory`（一次记忆写入的审计）、`system`（一条系统提示词审计——每次对话运行落一条，携带 stable/live 两段拼装文本）、`sandbox.checked`（一条沙箱状态审计——每次对话运行探测后落一条 `{enabled, available, unavailableReason?}`）。
+  - 运行档案 3 种：`run.started` / `run.ended`（每 run 一对，把该 run 的消息事件夹成一轮边界；失败 run 也落 `run.ended`，起点必有终点）、`permission.decided`（每次人工确认裁决的留痕；被中止的确认不落）。<br>运行档案与 `system` / `sandbox.checked` 一样只写事件流、不进 meta 投影、不推进 `updatedAt`。`message.truncated` 不同——它是用户可见的会话动作，会推进 `updatedAt`；且当截断起点越过压缩锚点（`compactedUpto` / `compaction.upto`）时，部分已压缩的历史被丢弃，压缩投影随之一并清除（摘要无法再代替被隐藏的消息；尾部截断——常规路径——不碰压缩投影）。
 
   所有写入都先追加事件，再把事件汇入 meta.json 摘要（见下）。
-- **`meta.json`（派生摘要）**：类型 `SessionMeta`，由事件流经 `applyEvent` 逐条推导得出。它是「摘要」而非真相：删除或损坏都能从事件流完整重建（`meta()` 发现缺失或损坏时自动 `rebuildMeta`）。崩溃恢复时允许它暂时落后于事件流（落后不会丢数据）；但落后不会被后续写入自动追平——`appendEvent` 先读当前摘要、只汇入新事件——只有 meta.json 缺失或损坏时才经 `rebuildMeta` 重放整条事件流。meta.json 整文件原子重写（`updateMeta` 合并 patch，`undefined` 键表示删除；`message` / `compaction` 事件会推进摘要的 `updatedAt`，`memory` / `system` / `sandbox.checked` 事件不推进——审计类事件不算会话「更新」）。两条特殊的推导规则：`system` 事件把全文 upsert 进摘要的 `systemBaseline`（系统提示词的冻结基线，见下文），`compaction` 事件把 `systemBaseline` 清除（压缩改写了消息历史，提示词缓存必然全部失效，正是重新装配、重新冻结的时机）。
+- **`meta.json`（派生摘要）**：类型 `SessionMeta`，由事件流经 `applyEvent` 逐条推导得出。它是「摘要」而非真相：删除或损坏都能从事件流完整重建（`meta()` 发现缺失或损坏时自动 `rebuildMeta`）。崩溃恢复时允许它暂时落后于事件流（落后不会丢数据）；但落后不会被后续写入自动追平——`appendEvent` 先读当前摘要、只汇入新事件——只有 meta.json 缺失或损坏时才经 `rebuildMeta` 重放整条事件流。meta.json 整文件原子重写（`updateMeta` 合并 patch，`undefined` 键表示删除；`message` / `message.truncated` / `compaction` 事件会推进摘要的 `updatedAt`，`memory` / `system` / `sandbox.checked` 事件不推进——审计类事件不算会话「更新」）。两条特殊的推导规则：`system` 事件把全文 upsert 进摘要的 `systemBaseline`（系统提示词的冻结基线，见下文），`compaction` 事件把 `systemBaseline` 清除（压缩改写了消息历史，提示词缓存必然全部失效，正是重新装配、重新冻结的时机）；`message.truncated` 在截断起点越过压缩锚点（`compactedUpto` / `compaction.upto`）时一并清除压缩投影（部分被压缩的历史已随截断丢弃，摘要不能再代替它们）。
 - **`queue.jsonl`（运行态）**：排队中的消息（`{ messageId, disposition, text, trigger, attachments?, note?, enqueuedAt }`，顺序即执行顺序，见 [run-manager](../server/run-manager.md) 的消息队列）。与事件流不同，`replaceQueue` 每次整文件重写、不是追加；不参与 meta.json。
 
 `meta.json` 的全部字段：
@@ -145,7 +145,7 @@ export function readJsonl(file: string): unknown[]
 | `dispositionOverride?` | 会话级发送处置覆盖（`"steer" \| "wait" \| "interrupt"`），优先于 `sessions.defaultDisposition`。服务端路由仍接受三个值的写入，但客户端当前只写 steer/wait——interrupt 在 Web 与 CLI 都是一次性动作、不写会话级覆盖，`"interrupt"` 值只会来自历史遗留（见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)） |
 | `systemBaseline?` | 冻结的系统提示词基线，双段独立 `{ stable: {text, frozenAt}, live?: {text, frozenAt} }`。作用：每 run 两段现算、与基线逐段比对——哪段文本变了就重冻结哪段（`frozenAt` 记录这份文本成为基线的时刻），没变的沿用基线，`system-before` / `system-after` 组装链只在至少一段变化时才跑（提示词缓存的稳定性策略，详见 [hooks](./hooks.md)）。推导规则：`system` 事件按段 upsert（legacy 单文本事件读作 stable）、`compaction` 事件清除（压缩改写了消息历史，缓存必然全量失效，正是基线重置的边界），都不推进 `updatedAt` |
 
-`Message`（`packages/core/src/protocol/messages.ts`）的基础字段是 `{ id, sessionId, role: "user" \| "assistant" \| "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因）。id 前缀 `msg_` / `ses_`，ULID 格式。会话的消息列表和压缩列表如今都是事件流的只读视图：`readMessages` 从事件流过滤出 `message` 事件、`readCompactions` 过滤出 `compaction` 事件，`readQueue` 读 `queue.jsonl`。
+`Message`（`packages/core/src/protocol/messages.ts`）的基础字段是 `{ id, sessionId, role: "user" \| "assistant" \| "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因）。id 前缀 `msg_` / `ses_`，ULID 格式。会话的消息列表和压缩列表如今都是事件流的只读视图：`readMessages` 从事件流过滤出 `message` 事件并按 `message.truncated` 标记隐藏被截断的消息（编辑重试/重新生成的过滤点，见下）、`readCompactions` 过滤出 `compaction` 事件，`readQueue` 读 `queue.jsonl`。
 
 崩溃容忍由两个策略函数承担（`packages/core/src/storage/jsonl.ts`），事件流与队列共用：
 
@@ -159,7 +159,7 @@ export function readJsonl(file: string): unknown[]
 
 1. agent 循环产出消息 → run 装配（core `executeRun`）的 `onMessage` 钩子调 `sessions.appendMessage(sessionId, m)`。
 2. `appendMessage` 经 `appendEvent` 往 events.jsonl 追加一条 `message` 事件：先 `repairTornTail`（末字节不是 `\n` 就按字节截断到上一个换行），再 `appendFileSync(JSON.stringify(event) + "\n")`，随后把事件汇入 meta.json 摘要（`applyEvent`）。
-3. 回读时 `readMessages` → 读全部事件后过滤出 `message` 事件：丢弃断尾行，逐行解析成 `Message` 数组，作为下次运行的历史（run 装配在追加用户消息**之前**读历史，避免同一条消息发送两次）。
+3. 回读时 `readMessages` 读全部事件后过滤出 `message` 事件，并**按 `message.truncated` 标记倒序收缩**：从流尾向前走，最近的截断标记就是"该消息之后第一个截断"，消息 id 不小于它即被丢弃（重试追加在标记之后的新消息不受旧起点约束）——这是唯一的过滤点，聊天视图、run 上下文组装、压缩与记忆提取全部继承同一份可见历史。`readMessages` 先丢弃断尾行，逐行解析成 `Message` 数组，作为下次运行的历史（run 装配在追加用户消息**之前**读历史，避免同一条消息发送两次）。
 
 ---
 

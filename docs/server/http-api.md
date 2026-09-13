@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 52 个业务路由（健康/状态 2 个、会话 15 个、记忆 10 个、技能 10 个、钩子 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 1 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未装配时降级 503，技能组始终注册（无装配依赖），钩子组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则文件即真相，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 53 个业务路由（健康/状态 2 个、会话 15 个、记忆 10 个、技能 10 个、钩子 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 2 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未装配时降级 503，技能组始终注册（无装配依赖），钩子组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则文件即真相，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
@@ -38,7 +38,7 @@
 | POST | `/sessions/:id/model` | 会话级模型切换（只影响此会话**之后**的 run，历史不动） | `{model?}`：provider 条目名（entry key，见 [run-manager](./run-manager.md) 的模型解析）或裸模型名；`""`/缺省清空回落默认；类型不对 400 `model must be a string`，条目不存在 400 `model not found: <name>` | `SessionMeta` |
 | POST | `/sessions/:id/mode` | 会话级权限模式切换（只影响此会话**之后**的 run，历史不动；机制见 [permissions](../core/permissions.md)） | `{mode: "readonly"\|"default"\|"acceptEdits"\|"trusted"\|"auto"}` 必填；非法值 400 `mode must be one of readonly \| default \| acceptEdits \| trusted \| auto` | `SessionMeta` |
 | GET | `/sessions/:id/messages` | 读全部消息（对话/断线恢复的数据源，ChatPanel 用） | — | `Message[]`（事件流投影视图——`readMessages` 从 events.jsonl 过滤 `message` 事件按事件序返回；**排队未执行的消息不在其中**，见 `/queue`） |
-| GET | `/sessions/:id/events` | 完整事件流（会话历史的唯一真相；审计页的单源数据） | `since?`：非负整数，只返回数组下标 `>= since` 的事件（流是 append-only——只追加、不修改，下标即稳定增量游标；缺省/0 = 全量；越界返回 `[]`；负数/非整数 400 `since must be a non-negative integer`）。带 `since` 时存储层走**尾部读**（`readEventsFrom`）：文件仍整体读入（无行偏移索引），但跳过的行不解析、不构建——增量拉取的开销随返回条数而非流总长走 | `SessionEvent[]`（append-only，按事件序；含 session.created / message / compaction / memory / system / sandbox.checked / run.started / run.ended / permission.decided 等全部 13 种事件，见 [storage](../core/storage.md)） |
+| GET | `/sessions/:id/events` | 完整事件流（会话历史的唯一真相；审计页的单源数据） | `since?`：非负整数，只返回数组下标 `>= since` 的事件（流是 append-only——只追加、不修改，下标即稳定增量游标；缺省/0 = 全量；越界返回 `[]`；负数/非整数 400 `since must be a non-negative integer`）。带 `since` 时存储层走**尾部读**（`readEventsFrom`）：文件仍整体读入（无行偏移索引），但跳过的行不解析、不构建——增量拉取的开销随返回条数而非流总长走 | `SessionEvent[]`（append-only，按事件序；含 session.created / message / message.truncated / compaction / memory / system / sandbox.checked / run.started / run.ended / permission.decided 等全部 14 种事件，见 [storage](../core/storage.md)） |
 | GET | `/sessions/:id/queue` | 排队消息快照：重连/刷新后校正客户端状态的全量依据 | — | `QueueEntry[]`（`queue.jsonl` 整文件读出，数组顺序即执行顺序；steer 条目排在可执行条目之后；空队列返回 `[]`） |
 | POST | `/sessions/:id/disposition` | 会话级发送处置覆盖（CLI `/steer`、`/wait` 与 Web 三选的 steer/wait 的持续生效存储；interrupt 在 Web 为一次性、CLI 为 `/interrupt` 一次性动作，均不写覆盖） | `{disposition: "steer"\|"wait"\|"interrupt"}` 必填；非法值 400 `disposition must be "steer", "wait" or "interrupt"` | `SessionMeta`（写入 `dispositionOverride`，优先于配置默认） |
 | GET | `/sessions/:id/compactions` | 压缩审计记录（事件流里 `compaction` 事件的只读视图） | — | `CompactionRecord[]`（从 events.jsonl 过滤 `compaction` 事件按事件序返回；无事件返回 `[]`） |
@@ -53,7 +53,7 @@ interface SessionMeta {
   id: string            // ses_<ULID>
   title: string
   createdAt: string     // ISO-8601
-  updatedAt: string     // message / compaction 等事件会刷新；memory / system 事件不推进
+  updatedAt: string     // message / message.truncated / compaction 等事件会刷新；memory / system 事件不推进
   jobId?: string        // 由定时任务创建的会话带此字段
   workdir?: string      // 会话级工作目录（run 以它覆盖全局 workspace）
   model?: string        // 会话级模型覆盖（缺省 → 守护进程默认模型）
@@ -189,9 +189,10 @@ interface Job {
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
 | GET | `/fs/browse` | 列出某目录的子目录（WebUI 工作目录选择器的数据源） | query `path`：绝对路径或 `~` 开头（与权限引擎同样的展开规则）；缺省列 `config.workspace` | `{path, parent, dirs}`——path 为符号链接解析后的规范绝对路径；parent 为父目录，文件系统根处为 null；dirs 只含子目录名、大小写不敏感排序。符号链接跟随解析（坏链跳过），macOS 的 `/tmp → private/tmp` 一类仍可导航 |
+| GET | `/fs/files` | 列出一个工作区的文件清单（WebUI 输入框 `@` 文件引用抽屉的数据源，机制见 [file-mentions](../core/file-mentions.md)） | query `workdir`：绝对路径或 `~` 开头（与 `/fs/browse` 同一 `resolveQueryDir` 解析）；缺省列 `config.workspace` | `{workdir, files, truncated}`——workdir 为符号链接解析后的规范路径；files 为工作区相对路径（POSIX 分隔、仅文件、大小写不敏感排序）；truncated 为清单是否在 5000 条上限处被截断。git 仓库走 `git ls-files -z -co --exclude-standard`（跟踪 + 未被 ignore 的未跟踪文件，NUL 分隔保中文名），非 git 回退递归扫描（不进入 `.git`/`.kclaw`/`node_modules`） |
 | GET | `/usage?by=day\|session\|model` | token/费用用量聚合 | `by` 三选一；无效值静默回落 `day` | `{by, buckets[], total}`——bucket/total 形状同为 `{key, inputTokens, outputTokens, costUsd}`，费用按 `config.usage.prices` 计价，未配置价格的模型计 0 |
 
-`/fs/browse` 的出错是三态 400：`path does not exist: <path>`、`not a directory: <path>`、`cannot read directory: <path>`。这个端点能列出本机任意目录——选择器的设计目的就是允许把工作目录设在任何地方，防线只有与其他 API 相同的 Bearer 鉴权。用量数据记录在一张 SQLite 账本里，数据来源见 [storage](../core/storage.md) 的用量账本一节。
+`/fs/browse` 与 `/fs/files` 的出错是三态 400：`path does not exist: <path>`、`not a directory: <path>`、`cannot read directory: <path>`。这两个端点能列出本机任意目录——浏览端点的设计目的就是允许把工作目录设在任何地方，防线只有与其他 API 相同的 Bearer 鉴权；文件清单端点按工作区收窄（`workdir` 必须是目录），但同样不校验目录归属。用量数据记录在一张 SQLite 账本里，数据来源见 [storage](../core/storage.md) 的用量账本一节。
 
 ### MCP 状态
 
@@ -212,6 +213,7 @@ interface Job {
 
 - `send_message` 增加可选 `disposition` 字段（`"steer"|"wait"|"interrupt"`；非法值 error 帧 `send_message disposition must be "steer", "wait" or "interrupt"`）。不带字段取会话覆盖 ?? 配置默认（**默认引导**——有意的行为变更，旧版为自动等待）。回包 `send_message_ack` 增加 `messageId` 与 `queued`（会话空闲直发 `queued:false`、不广播 `message.queued`；运行中按处置分流 `queued:true`）。会话忙时超限的 error 帧文案：`队列已满（10 条）`。
 - `queue.cancel`：`{sessionId, messageId?}`——带 id 取消该条（wait 随时、steer 注入前），不带则清空全部可取消条目。回 `queue.cancel_ack {sessionId, cancelled}`；失败为 error 帧：已注入 `已注入`（机器不删历史）、无此条目 `not found`。
+- `message.retry`：`{sessionId, fromMessageId, text, attachments?}`——编辑重试/重新生成的服务端入口（机制见 [run-manager](./run-manager.md)）：校验通过后先持久化并广播 `message.truncated {fromMessageId}`（从该消息起退出对话视图），再走普通用户消息路径提交；回 `message.retry_ack {sessionId, messageId, queued}`（与 send_message 同步决策的形状一致）。同步失败为 error 帧：`只能从最后一条用户消息重试`（fromMessageId 不是最后一条 user 消息）、`会话忙：等当前运行和压缩结束、清空队列后再重试`、`重试内容为空（无文本也无附件）`、子代理会话只读拒绝。
 - 三个新事件：`message.queued {messageId, disposition, position?}`（消息入队/入缓冲区时；position 是 wait/interrupt 的队列序位，steer 不适用；降级按实际处置报告）、`message.steered {messageId}`（steer 注入当前 run 的时刻，事件级 `runId` 标识注入的 run）、`message.queue_cancelled {messageId}` 或 `{all:true}`（单条取消/清空）。出队执行与注入仍用既有 `run.started` + `message.created` 表达，消息 id 与排队时相同——前端气泡原地升级，无需替换。
 
 **记忆写入事件 `memory.written`**：记忆写入管线每次实际写入磁盘时经总线广播，帧为 `memory.written {path, kind, topic?, scope?}`——`kind` 是 `"episode"`（项目情节，带 `topic` 线名）或 `"cognition"`（全局认知，带 `scope`），`path` 是写入文件的绝对路径；不带 `sessionId`（项目级事务）。它只作"已写入"的轻提示：CLI 用暗色一行显示 `已写入记忆: <path>`，web 在通知条显示同文案，都不驱动任何状态机。事件不带"记忆内容"，要看内容走上面的 `/memory` 路由。payload 定义见 [protocol](../core/protocol.md)。
@@ -222,7 +224,7 @@ web 的审计页（`packages/web/src/audit/AuditView.tsx`）演示了标准用�
 
 1. 会话选择跟随应用侧栏的全局选中（也支持 `?tab=audit&session=<id>` 深链）；
 2. `GET /sessions/:id/events?since=0` 获取该会话**完整事件流**（`SessionEvent[]`，append-only、按事件序）；
-3. 客户端按流序摊平成逐行审计：`message` 事件每条消息按块（block）摊平（role + 类型标签 + 摘要，点击展开完整块；assistant 消息的最后一块行上显示 token 用量与 LLM 耗时 `latencyMs`，tool_result 行显示执行耗时 `durationMs`），`compaction` 事件渲染成"压缩"行、`memory` 事件渲染成"记忆"行、`system` 事件渲染成"系统提示词"行（开头片段 + 字符数，点击展开全文——按稳定段/实时段两段展示，旧版单文本事件只显示一段；与相邻上一条文本不同标"已变化"）、`sandbox.checked` 事件渲染成"沙箱"行（可用 / 不可用（原因）/ 已关闭）、`run.started`/`run.ended` 渲染成"运行"行（触发来源 / 停止原因 + 用量，失败带错误，与消息事件夹出每轮边界）、`permission.decided` 渲染成"权限"行（裁决 + 裁决者 + 工具身份，展开看参数）、会话元数据事件（created/renamed/deleted/restored/set）渲染成轻量"会话"行——**十三种持久化事件全部渲染成行**；
+3. 客户端按流序摊平成逐行审计：`message` 事件每条消息按块（block）摊平（role + 类型标签 + 摘要，点击展开完整块；assistant 消息的最后一块行上显示 token 用量与 LLM 耗时 `latencyMs`，tool_result 行显示执行耗时 `durationMs`）、`message.truncated` 事件渲染成"截断"行（消息截断 · 从 `<起点>` 起退出对话视图，编辑重试/重新生成的留痕）、`compaction` 事件渲染成"压缩"行、`memory` 事件渲染成"记忆"行、`system` 事件渲染成"系统提示词"行（开头片段 + 字符数，点击展开全文——按稳定段/实时段两段展示，旧版单文本事件只显示一段；与相邻上一条文本不同标"已变化"）、`sandbox.checked` 事件渲染成"沙箱"行（可用 / 不可用（原因）/ 已关闭）、`run.started`/`run.ended` 渲染成"运行"行（触发来源 / 停止原因 + 用量，失败带错误，与消息事件夹出每轮边界）、`permission.decided` 渲染成"权限"行（裁决 + 裁决者 + 工具身份，展开看参数）、会话元数据事件（created/renamed/deleted/restored/set）渲染成轻量"会话"行——**十四种持久化事件全部渲染成行**；
 4. 实时增量：页面私有 ws 连接订阅会话，收到 `session.appended` 通知帧（存储层写入磁盘成功后发出，先写入磁盘再广播）即 `GET /sessions/:id/events?since=<已有条数>` 增量拉取，append-only 下标做游标、断线重连后重拉补齐。
 
 只读、不修改任何状态、无独立 `/audit` 路由——事件流（`events.jsonl`，一行一个事件的 append-only 文件）是审计的唯一事实来源，HTTP 只是它的读取窗口。tool 消息上的 `grantedBy`（每个工具调用的放行原因）随 `message` 事件一起返回，是"谁批准了这个操作"的审计依据。

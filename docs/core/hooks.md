@@ -26,7 +26,7 @@
 |------|------|-----|------|------|
 | `run-before` | 用户消息 `message.created` 之后、持久化之前 | `{ message }` | `Message` | 改写用户消息（内置：记忆检索 + 持久化 + 自动命名） |
 | `run-after` | `runAgent` 返回之后 | `{ outcome, model }` | 忽略 | 观察收尾（内置：用量记录、收尾压缩、跟随门禁） |
-| `llm-before` | 每次模型调用前、provider 视图装配后 | `{ messages }` | `ProviderMessage[]` | 改写模型视图（内置：技能点名包装） |
+| `llm-before` | 每次模型调用前、provider 视图装配后 | `{ messages }` | `ProviderMessage[]` | 改写模型视图（内置：技能与 `@` 文件点名的合并包装） |
 | `llm-after` | 一次模型调用完成后 | `{ usage, stopReason, latencyMs }` | 忽略 | 观察调用 |
 | `llm-retry` | provider 层重试时（withRetry 回调） | `{ attempt, error }` | 忽略 | 重试可见性（内置：转 `llm.failed {willRetry:true}`） |
 | `tool-before` | 工具执行前、权限裁决之前 | `{ toolCall }` | 忽略 | 观察 + 闸门：`failure:"deny"` 的钩子失败时该工具被拒绝（权限裁决本身保持引擎控制流） |
@@ -92,7 +92,7 @@ export default async (ctx) => {
 | 10 | `memory-inject` | run-before | skip | 检索记忆库、收集相关经历 note（收集不落位） |
 | 20 | `user-message-land` | run-before | fatal | 追加 job/记忆 note → `appendMessage` 持久化 → 逐块 `note.emitted` |
 | 30 | `autoname` | run-before | skip | 新会话首条消息的后台自动命名 |
-| 10 | `skill-wrap` | llm-before | skip | 技能点名的隐式包装（只改模型视图） |
+| 10 | `skill-wrap` | llm-before | skip | 技能与 `@` 文件点名的隐式包装（只改模型视图；run 装配把两份包装文本合并成一份 `llmUserText`） |
 | 10 | `retry-notify` | llm-retry | skip | 把 provider 重试转成 `llm.failed {willRetry:true}` 事件 |
 | 10 | `steering-drain` | turn-boundary | fatal | 取走队列的引导缓冲并注入对话 |
 | 5 | `background-precompact` | compaction-check | skip | 预压区间的后台压缩派发（非阻塞，见 [compaction](./compaction.md) 机制四） |

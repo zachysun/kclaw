@@ -182,6 +182,7 @@ Docs:
   - [agent-loop](docs/core/agent-loop.md) — the run loop
   - [client-http](docs/core/client-http.md) — the shared HTTP request layer (Bearer auth, JSON, error envelope)
   - [compaction](docs/core/compaction.md) — context compaction
+  - [file-mentions](docs/core/file-mentions.md) — @ file mentions in user messages
   - [hooks](docs/core/hooks.md) — the user hook system
   - [jobs](docs/core/jobs.md) — cron job scheduling
   - [mcp](docs/core/mcp.md) — MCP client integration
