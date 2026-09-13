@@ -277,13 +277,13 @@ export function resolveFileMentions(text: string, workspace: string): MentionRes
 
 /**
  * Compose the skill wrap and the file wrap into one model-facing text. Both
- * wraps are the user's message VERBATIM plus trailing instruction lines, so
- * the composition is: whichever wraps produced text, in skill-then-file
- * order, with the file wrap's lines taken from after its verbatim prefix.
+ * wraps keep the user's message VERBATIM with trailing instruction lines, so
+ * the composition appends the file wrap's lines (produced by calling
+ * wrapFileMentions with an empty message) after the skill wrap's text.
  * undefined = neither wrap matched, send the message as-is.
  */
-export function combineMentionTexts(userText: string, skillText: string | undefined, fileText: string | undefined): string | undefined {
-  if (fileText !== undefined) return (skillText ?? userText) + fileText.slice(userText.length)
+export function combineMentionTexts(userText: string, skillText: string | undefined, fileLines: string | undefined): string | undefined {
+  if (fileLines !== undefined) return (skillText ?? userText) + fileLines
   return skillText
 }
 
@@ -370,7 +370,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       ? combineMentionTexts(
           input.userText,
           wrapSkillInvocations(input.userText, matchSkillInvocations(input.userText, skills)),
-          wrapFileMentions(input.userText, resolveFileMentions(input.userText, workspace)),
+          wrapFileMentions("", resolveFileMentions(input.userText, workspace)),
         )
       : undefined
 

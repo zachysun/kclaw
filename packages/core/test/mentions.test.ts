@@ -1,8 +1,8 @@
 /**
  * File mention (`@path`) tests — the composer completion helpers, the raw-text
- * mention extractor and the model-facing implicit wrap. Boundary philosophy
- * matches skill mentions: an `@` preceded by ASCII alphanumerics (email
- * addresses) does not trigger, unspaced Chinese text does.
+ * mention extractor and the model-facing implicit wrap. Boundary: an `@`
+ * opens a mention only at line start or right after whitespace, so email
+ * addresses and punctuation-glued tokens stay out.
  */
 import { describe, it, expect } from "vitest"
 import { extractFileMentions, fileMentionCompletions, replaceTrailingMentionToken, wrapFileMentions } from "../src/mentions.js"
@@ -17,13 +17,11 @@ describe("extractFileMentions", () => {
     expect(extractFileMentions("@a.ts 和 @b.ts 与 @a.ts 再看 @b.ts")).toEqual(["a.ts", "b.ts"])
   })
 
-  it("does not trigger inside email addresses or digit runs", () => {
+  it("does not trigger inside email addresses, digit runs or punctuation glue", () => {
     expect(extractFileMentions("发到 a@b.com 就行")).toEqual([])
     expect(extractFileMentions("1@2")).toEqual([])
-  })
-
-  it("lets unspaced Chinese text through (skill-mention posture)", () => {
-    expect(extractFileMentions("看看@src/x.ts 这个文件")).toEqual(["src/x.ts"])
+    expect(extractFileMentions("看看@a.ts 这个文件")).toEqual([])
+    expect(extractFileMentions("(@a.ts)")).toEqual([])
   })
 
   it("ends the token at whitespace and at end of line", () => {

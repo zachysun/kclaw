@@ -56,8 +56,8 @@ describe("resolveFileMentions", () => {
     expect(resolveFileMentions("@dangling.ts", root)).toEqual([{ token: "dangling.ts", status: "missing" }])
   })
 
-  it("resolves unspaced Chinese text through to the file", () => {
-    expect(resolveFileMentions("看看@a.ts 这个", root)).toEqual([{ token: "a.ts", status: "ok" }])
+  it("resolves a mention after Chinese text through to the file", () => {
+    expect(resolveFileMentions("看看 @a.ts 这个", root)).toEqual([{ token: "a.ts", status: "ok" }])
   })
 })
 
@@ -70,10 +70,10 @@ describe("combineMentionTexts", () => {
 
   it("passes through a single wrap", () => {
     expect(combineMentionTexts(userText, "原文\n\n（技能行）", undefined)).toBe("原文\n\n（技能行）")
-    expect(combineMentionTexts(userText, undefined, "原文\n\n（文件行）")).toBe("原文\n\n（文件行）")
+    expect(combineMentionTexts(userText, undefined, "\n\n（文件行）")).toBe("原文\n\n（文件行）")
   })
 
-  it("appends the file wrap after the skill wrap without repeating the text", () => {
-    expect(combineMentionTexts(userText, "原文\n\n（技能行）", "原文\n\n（文件行）")).toBe("原文\n\n（技能行）\n\n（文件行）")
+  it("appends the file lines after the skill wrap", () => {
+    expect(combineMentionTexts(userText, "原文\n\n（技能行）", "\n\n（文件行）")).toBe("原文\n\n（技能行）\n\n（文件行）")
   })
 })

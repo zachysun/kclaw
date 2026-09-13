@@ -5,9 +5,10 @@
  * them through the `@kclaw/core/mentions` subpath without pulling in the
  * Node-bound main entry.
  *
- * Boundary philosophy matches skill mentions: an `@` whose preceding
- * character is ASCII alphanumeric does not trigger (email addresses stay
- * out), unspaced Chinese text does.
+ * Boundary: an `@` only opens a mention at line start or right after
+ * whitespace (email addresses stay out) — the same rule the composer drawer
+ * uses to open, so hand-typed and drawer-completed mentions behave
+ * identically.
  */
 
 /**
@@ -74,15 +75,17 @@ export function replaceTrailingMentionToken(draft: string, file: string): string
 
 /**
  * File mention tokens in a user message, at ANY position: every `@token`
- * whose preceding character is not ASCII alphanumeric (this keeps email
- * addresses out while letting unspaced Chinese text like "看看@src/x.ts"
- * through) runs from the `@` to the next whitespace. Duplicates collapse;
- * scan order is preserved. Pure syntax — existence and workspace-boundary
- * checks happen at run assembly, where the workspace is known.
+ * whose `@` sits at line start or right after whitespace (this keeps email
+ * addresses out) runs from the `@` to the next whitespace. Duplicates
+ * collapse; scan order is preserved. The same boundary drives the composer
+ * drawer (the word being typed starts with `@`), so hand-typed mentions and
+ * drawer-completed ones behave identically. Pure syntax — existence and
+ * workspace-boundary checks happen at run assembly, where the workspace is
+ * known.
  */
 export function extractFileMentions(text: string): string[] {
   const tokens: string[] = []
-  for (const m of text.matchAll(/(?<![A-Za-z0-9])@([^\s]+)/g)) {
+  for (const m of text.matchAll(/(?:^|(?<=\s))@([^\s]+)/g)) {
     const token = m[1]!
     if (!tokens.includes(token)) tokens.push(token)
   }
