@@ -839,3 +839,43 @@ describe("ws compaction.cancel", () => {
     expect(env.sessions.readMessages(session.id)).toEqual([]) // nothing ran
   })
 })
+
+describe("message.retry over the wire", () => {
+  it("acks with the new message id; the truncation event lands before the new run; a stale target is an error frame", async () => {
+    const llm: LlmClient = {
+      async *stream(): AsyncIterable<LlmStreamEvent> {
+        yield* textTurn("答案")
+      },
+    }
+    const { env, url } = await makeWsRun(llm)
+    const session = env.sessions.create("重试线上")
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await waitFor(frames, (f) => f.type === "subscribed")
+
+    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "第一问" }))
+    await frameOf(frames, "send_message_ack")
+    await eventOf(frames, "run.completed")
+
+    const q = env.sessions.readMessages(session.id).filter((m) => m.role === "user").at(-1)!
+    ws.send(JSON.stringify({ type: "message.retry", sessionId: session.id, fromMessageId: q.id, text: "第一问改" }))
+    const ack = await frameOf(frames, "message.retry_ack", 1, 1000)
+    expect(ack.sessionId).toBe(session.id)
+    expect(ack.messageId).toBeTypeOf("string")
+    expect(ack.queued).toBe(false)
+    // 截断广播先于新 run 的事件；旧一问一答退出视图，只剩新的一对
+    const truncIdx = frames.findIndex((f) => isAgentEvent(f) && f.type === "message.truncated")
+    expect(truncIdx).toBeGreaterThan(-1)
+    await eventOf(frames, "run.completed", 2)
+    const visible = env.sessions.readMessages(session.id)
+    expect(visible.map((m) => m.role)).toEqual(["user", "assistant"])
+    expect((visible[0]!.blocks[0] as { text?: string }).text).toBe("第一问改")
+
+    // 过期目标 = error frame，连接不断
+    ws.send(JSON.stringify({ type: "message.retry", sessionId: session.id, fromMessageId: "msg_stale", text: "x" }))
+    const err = await frameOf(frames, "error")
+    expect(String(err.message)).toContain("最后一条用户消息")
+  })
+})

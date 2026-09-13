@@ -79,6 +79,19 @@ export interface SendMessageFrame {
   attachments?: AttachmentRef[]
 }
 
+/**
+ * Edit & retry / regenerate: discard everything from `fromMessageId` (must be
+ * the session's last user message) and start a new run with `text`. Regenerate
+ * is the same frame with the original text and attachments.
+ */
+export interface MessageRetryFrame {
+  type: "message.retry"
+  sessionId: string
+  fromMessageId: string
+  text: string
+  attachments?: AttachmentRef[]
+}
+
 export interface QueueCancelFrame {
   type: "queue.cancel"
   sessionId: string
@@ -97,6 +110,7 @@ export type ClientCommand =
   | ConfirmationResolveFrame
   | QuestionResolveFrame
   | SendMessageFrame
+  | MessageRetryFrame
   | QueueCancelFrame
   | RunCancelFrame
   | CompactionCancelFrame
@@ -108,6 +122,7 @@ export interface UnsubscribedAck { type: "unsubscribed"; sessionId: string }
 export interface ConfirmationResolvedAck { type: "confirmation.resolved_ack"; confirmationId: string; ok: true }
 export interface QuestionResolvedAck { type: "question.resolved_ack"; questionId: string; ok: true }
 export interface SendMessageAck { type: "send_message_ack"; sessionId: string; messageId: string; queued: boolean }
+export interface MessageRetryAck { type: "message.retry_ack"; sessionId: string; messageId: string; queued: boolean }
 export interface QueueCancelAck { type: "queue.cancel_ack"; sessionId: string; cancelled: string[] }
 export interface RunCancelAck { type: "run_cancel_ack"; sessionId: string }
 export interface CompactionCancelAck { type: "compaction_cancel_ack"; sessionId: string; active: boolean }
@@ -121,6 +136,7 @@ export type ServerAck =
   | ConfirmationResolvedAck
   | QuestionResolvedAck
   | SendMessageAck
+  | MessageRetryAck
   | QueueCancelAck
   | RunCancelAck
   | CompactionCancelAck

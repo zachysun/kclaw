@@ -282,6 +282,21 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
           return send(socket, { type: "error", message: err instanceof Error ? err.message : String(err) })
         }
       }
+      case "message.retry": {
+        const run = opts.run
+        if (run === undefined) {
+          return send(socket, { type: "error", message: "run manager not available" })
+        }
+        const { sessionId, fromMessageId, text, attachments } = check.command
+        // Same shape as send_message: synchronous decision (truncation +
+        // submission) acked at once; the run itself streams over the bus.
+        try {
+          const r = run.retry(sessionId, fromMessageId, text, attachments)
+          return send(socket, { type: "message.retry_ack", sessionId, messageId: r.messageId, queued: r.queued })
+        } catch (err) {
+          return send(socket, { type: "error", message: err instanceof Error ? err.message : String(err) })
+        }
+      }
       case "queue.cancel": {
         const run = opts.run
         if (run === undefined) {

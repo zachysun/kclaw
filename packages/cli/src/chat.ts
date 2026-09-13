@@ -477,6 +477,9 @@ export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean
     case "message.queued":
     case "message.steered":
     case "message.queue_cancelled":
+    // Edit & retry / regenerate: the truncation broadcast only reshapes the
+    // webui chat view; the CLI has no retry entry and renders nothing.
+    case "message.truncated":
     // session.appended: the persistence announcement consumed by the webui
     // audit page (incremental refetch); the CLI renders nothing.
     case "session.appended":

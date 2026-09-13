@@ -12,6 +12,16 @@ export interface SessionDeletedEvent { type: "session.deleted"; at: string }
 export interface SessionRestoredEvent { type: "session.restored"; at: string }
 export interface SessionSetEvent { type: "session.set"; at: string; model?: string | null; /** @legacy pre-mode sessions; superseded by `mode` */ readonly?: boolean | null; mode?: import("../permissions/modes.js").PermissionMode | null; disposition?: "steer" | "wait" | "interrupt" | null }
 export type MessageEvent = { type: "message" } & Message
+/**
+ * Truncation marker for edit & retry / regenerate: everything from
+ * fromMessageId (the redone last user message) onward leaves the chat view.
+ * The stream only ever gains this marker — no history line is rewritten;
+ * visibility is a read-side projection (readMessages filtering, clients
+ * converging via the matching broadcast). Truncations stack: a later retry's
+ * start id always sorts after earlier ones (message ids are monotonic), so
+ * the marker applying to each message is the first one after it in the stream.
+ */
+export interface MessageTruncatedEvent { type: "message.truncated"; at: string; fromMessageId: string }
 export interface CompactionEvent { type: "compaction"; at: string; trigger: "manual" | "in-run" | "auto"; emergency?: true; focus?: string; from: string | null; upto: string; messages: number; segmentSummary: string; top: string }
 export interface MemoryEvent {
   type: "memory"; at: string
@@ -61,4 +71,4 @@ export interface PermissionDecidedEvent {
   tool: { callId: string; name: string; argsJson: string }
 }
 
-export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent | MessageEvent | CompactionEvent | MemoryEvent | SystemEvent | SandboxCheckedEvent | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent
+export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent | MessageEvent | MessageTruncatedEvent | CompactionEvent | MemoryEvent | SystemEvent | SandboxCheckedEvent | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent

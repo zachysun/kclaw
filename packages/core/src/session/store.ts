@@ -5,8 +5,8 @@ import type { Message } from "../protocol/messages.js"
 import type { CompactionRecord, CompactionState } from "./compaction.js"
 import { writeFileAtomic } from "../storage/atomic.js"
 import { appendJsonlLine, readJsonl, readJsonlFrom } from "../storage/jsonl.js"
-import { applyEvent, isCompactionEvent, isMessageEvent } from "./events.js"
-import type { PermissionDecidedEvent, RunEndedEvent, RunStartedEvent, SandboxCheckedEvent, SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent } from "./events.js"
+import { applyEvent, isCompactionEvent, isMessageEvent, isMessageTruncatedEvent } from "./events.js"
+import type { MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent, SandboxCheckedEvent, SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent } from "./events.js"
 import type { AttachmentRef, QueueEntry } from "../protocol/wire.js"
 import type { PermissionMode } from "../permissions/modes.js"
 
@@ -248,9 +248,41 @@ export class SessionStore {
     this.appendEvent(id, { type: "message", ...message })
   }
 
-  /** Load a session's messages (message events, oldest-first); missing stream yields []. */
+  /** Append one truncation marker (edit & retry / regenerate: messages from the start id leave the chat view); the projection's updatedAt follows the marker. */
+  appendMessageTruncated(id: string, event: Omit<MessageTruncatedEvent, "type">): void {
+    this.appendEvent(id, { type: "message.truncated", ...event })
+  }
+
+  /**
+   * Load a session's messages (message events, oldest-first); missing stream
+   * yields []. Truncation markers (edit & retry / regenerate) hide every
+   * message from their start id onward — the single filter point every
+   * consumer (chat view, run context assembly, compaction, memory extraction)
+   * inherits. The events themselves stay in the stream: the audit page reads
+   * them raw.
+   */
   readMessages(id: string): Message[] {
-    return this.readEvents(id).filter(isMessageEvent).map(({ type, ...m }) => m as Message)
+    const events = this.readEvents(id)
+    // A truncation marker only governs messages that appear BEFORE it in the
+    // stream (retry messages appended after it are not bound by the old start
+    // id). Walk backwards: the most recently popped marker is exactly "the
+    // first truncation after this message"; a message with id >= that start
+    // is discarded.
+    let cutoff: string | undefined
+    const out: Message[] = []
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i]!
+      if (isMessageTruncatedEvent(event)) {
+        cutoff = event.fromMessageId
+        continue
+      }
+      if (!isMessageEvent(event)) continue
+      if (cutoff === undefined || event.id < cutoff) {
+        const { type, ...m } = event
+        out.push(m as Message)
+      }
+    }
+    return out.reverse()
   }
 
   /** Append one compaction audit event. */

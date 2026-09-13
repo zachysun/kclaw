@@ -25,6 +25,7 @@
  */
 import type {
   AnyAgentEvent,
+  AssistantMessage,
   Block,
   ConfirmationRequestedPayload,
   MemoryWrittenPayload,
@@ -41,6 +42,9 @@ export type { Block, ConfirmationRequestedPayload, Message, QuestionRequestedPay
  * The alias keeps the renderer's historical name.
  */
 export type AgentEvent = AnyAgentEvent
+
+/** Id prefix of the client's own optimistic echoes (never server-persisted under it). */
+const LOCAL_ID_PREFIX = "local-"
 
 /** memory.written 的 payload（点击通知条跳转记忆页所需字段）——正本形状。 */
 export type MemoryWrittenInfo = MemoryWrittenPayload
@@ -84,6 +88,8 @@ export interface RenderedMessage {
   /** True between message.created and message.completed (streaming/persisting). */
   pending: boolean
   blocks: RenderedBlock[]
+  /** The assistant message was stopped (stopReason aborted): the half reply renders normally with an "interrupted" tail marker. */
+  aborted?: boolean
 }
 
 export interface ConfirmationCard {
@@ -173,7 +179,7 @@ export function mergeMessages(existing: RenderedMessage[], fresh: Message[]): Re
     fresh.filter((m) => m.role === "user").map((m) => firstUserText(m)),
   )
   const existing0 = existing.filter((m) =>
-    !(m.id.startsWith("local-") && m.pending && persistedTexts.has(firstRenderedUserText(m))),
+    !(m.id.startsWith(LOCAL_ID_PREFIX) && m.pending && persistedTexts.has(firstRenderedUserText(m))),
   )
   const merged = existing0.map((m) => freshById.get(m.id) ?? m)
   const known = new Set(existing0.map((m) => m.id))
@@ -226,10 +232,10 @@ export interface PendingSend {
 export function collectPendingSends(state: ChatState): PendingSend[] {
   const sends: PendingSend[] = []
   for (const e of state.queue) {
-    if (e.messageId.startsWith("local-")) sends.push({ text: e.text, disposition: e.disposition })
+    if (e.messageId.startsWith(LOCAL_ID_PREFIX)) sends.push({ text: e.text, disposition: e.disposition })
   }
   for (const m of state.messages) {
-    if (m.id.startsWith("local-") && m.pending && m.role === "user") {
+    if (m.id.startsWith(LOCAL_ID_PREFIX) && m.pending && m.role === "user") {
       sends.push({ text: firstRenderedUserText(m), disposition: "steer" })
     }
   }
@@ -250,7 +256,7 @@ export function undeliveredPendingSends(before: PendingSend[], after: ChatState)
   const known = new Set<string>()
   for (const e of after.queue) known.add(e.text)
   for (const m of after.messages) {
-    if (m.role === "user" && !m.id.startsWith("local-")) known.add(firstRenderedUserText(m))
+    if (m.role === "user" && !m.id.startsWith(LOCAL_ID_PREFIX)) known.add(firstRenderedUserText(m))
   }
   const seen = new Set<string>()
   const out: PendingSend[] = []
@@ -268,9 +274,9 @@ export function dropLocalPending(state: ChatState, texts: string[]): ChatState {
   return {
     ...state,
     messages: state.messages.filter(
-      (m) => !(m.id.startsWith("local-") && m.pending && m.role === "user" && dropped.has(firstRenderedUserText(m))),
+      (m) => !(m.id.startsWith(LOCAL_ID_PREFIX) && m.pending && m.role === "user" && dropped.has(firstRenderedUserText(m))),
     ),
-    queue: state.queue.filter((e) => !(e.messageId.startsWith("local-") && dropped.has(e.text))),
+    queue: state.queue.filter((e) => !(e.messageId.startsWith(LOCAL_ID_PREFIX) && dropped.has(e.text))),
   }
 }
 
@@ -298,7 +304,7 @@ function firstRenderedUserText(m: RenderedMessage): string {
  */
 export function appendOptimisticUser(state: ChatState, text: string): ChatState {
   const optimistic: RenderedMessage = {
-    id: `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    id: `${LOCAL_ID_PREFIX}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     role: "user",
     pending: true,
     blocks: [{ kind: "text", blockId: "local", text }],
@@ -306,18 +312,30 @@ export function appendOptimisticUser(state: ChatState, text: string): ChatState 
   return { ...state, messages: [...state.messages, optimistic] }
 }
 
+/**
+ * View-side truncation for edit & retry / regenerate: server messages from
+ * fromMessageId (the redone last user message) onward leave the view. Only
+ * server ids are affected — the local optimistic bubble that landed when the
+ * retry was confirmed stays. Pure and idempotent: the optimistic echo and the
+ * `message.truncated` event (and event replays) converge to the same view.
+ */
+export function truncateFrom(state: ChatState, fromMessageId: string): ChatState {
+  const messages = state.messages.filter((m) => m.id.startsWith(LOCAL_ID_PREFIX) || m.id < fromMessageId)
+  return messages.length === state.messages.length ? state : { ...state, messages }
+}
+
 /** Index of the optimistic twin of a server message (pending local- user bubble, same text); -1 when none. */
 function findOptimisticTwinIdx(state: ChatState, server: Message): number {
   if (server.role !== "user") return -1
   const text = firstUserText(server)
   return state.messages.findIndex(
-    (m) => m.id.startsWith("local-") && m.pending && firstRenderedUserText(m) === text,
+    (m) => m.id.startsWith(LOCAL_ID_PREFIX) && m.pending && firstRenderedUserText(m) === text,
   )
 }
 
 /** Index of the earliest still-pending optimistic (local-) user bubble; -1 when none. */
 function earliestPendingLocalIdx(messages: RenderedMessage[]): number {
-  return messages.findIndex((m) => m.id.startsWith("local-") && m.pending && m.role === "user")
+  return messages.findIndex((m) => m.id.startsWith(LOCAL_ID_PREFIX) && m.pending && m.role === "user")
 }
 
 /**
@@ -332,14 +350,14 @@ export function appendPendingQueueRow(state: ChatState, text: string, dispositio
     ...state,
     queue: [
       ...state.queue,
-      { messageId: `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, disposition, text },
+      { messageId: `${LOCAL_ID_PREFIX}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, disposition, text },
     ],
   }
 }
 
 /** Index of the earliest unconfirmed local- row in the queue; -1 when none. */
 function earliestPendingLocalRowIdx(queue: QueueEntryView[]): number {
-  return queue.findIndex((e) => e.messageId.startsWith("local-"))
+  return queue.findIndex((e) => e.messageId.startsWith(LOCAL_ID_PREFIX))
 }
 
 /**
@@ -414,6 +432,8 @@ export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
     }
     case "message.completed":
       return upsertMessage(state, renderMessage(event.payload.message, false))
+    case "message.truncated":
+      return truncateFrom(state, event.payload.fromMessageId)
     case "message.queued": {
       // Dedupe BEFORE adoption: an id we already track (ack renamed the local
       // row, or a recoverQueues replay racing an in-flight send) must not
@@ -525,7 +545,17 @@ export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
 }
 
 function renderMessage(msg: Message, pending: boolean): RenderedMessage {
-  return { id: msg.id, role: msg.role, pending, blocks: msg.blocks.map(renderBlock) }
+  // Message is the protocol's base shape; stopReason only exists on assistant
+  // messages, so the role narrowing reads it through the protocol's own
+  // AssistantMessage type.
+  const aborted = msg.role === "assistant" && (msg as AssistantMessage).stopReason === "aborted"
+  return {
+    id: msg.id,
+    role: msg.role,
+    pending,
+    blocks: msg.blocks.map(renderBlock),
+    ...(aborted ? { aborted: true } : {}),
+  }
 }
 
 function renderBlock(block: Block): RenderedBlock {

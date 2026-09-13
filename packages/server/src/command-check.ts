@@ -59,6 +59,7 @@ export function checkCommandFrame(frame: object, deps: CheckDeps): FrameCheck {
     attachments?: unknown
     disposition?: unknown
     messageId?: unknown
+    fromMessageId?: unknown
   }
 
   if (!deps.authenticated) {
@@ -161,6 +162,39 @@ export function checkCommandFrame(frame: object, deps: CheckDeps): FrameCheck {
         ...(refs.length > 0 ? { attachments: refs } : {}),
       }
       return { kind: "command", command }
+    }
+    case "message.retry": {
+      if (!deps.hasRun) {
+        return { kind: "error", message: "run manager not available" }
+      }
+      const { sessionId, fromMessageId, text, attachments } = msg
+      // text may be empty: a pure-attachment question is re-run with empty
+      // text; "no text AND no attachments" is rejected by the run manager,
+      // the only place that knows whether the redone turn carries attachments.
+      if (typeof sessionId !== "string" || sessionId.length === 0
+        || typeof fromMessageId !== "string" || fromMessageId.length === 0
+        || typeof text !== "string") {
+        return { kind: "error", message: "message.retry requires a non-empty string sessionId, a non-empty string fromMessageId and a string text" }
+      }
+      if (!deps.sessionExists(sessionId)) {
+        return { kind: "error", message: "session not found" }
+      }
+      // Same disk-read confinement as send_message: refs must live inside the
+      // session's own attachments dir.
+      const refs = parseAttachmentRefs(attachments, deps.attachmentsDir, sessionId)
+      if (refs === undefined) {
+        return { kind: "error", message: "message.retry attachments are invalid" }
+      }
+      return {
+        kind: "command",
+        command: {
+          type: "message.retry",
+          sessionId,
+          fromMessageId,
+          text,
+          ...(refs.length > 0 ? { attachments: refs } : {}),
+        },
+      }
     }
     case "queue.cancel": {
       if (!deps.hasRun) {

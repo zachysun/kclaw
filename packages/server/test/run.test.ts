@@ -2326,3 +2326,199 @@ describe("RunManager skill invocation wrap", () => {
     expect(seen).toContain("「/deploy」是在调用技能 deploy")
   })
 })
+
+// --- edit & retry / regenerate ----------------------------------------------
+
+describe("RunManager.retry（编辑重试/重新生成）", () => {
+  const userTexts = (req: LlmRequest): string[] =>
+    (req.messages.filter((m) => m.role === "user") as { content: string }[]).map((m) => m.content)
+
+  const textOf = (m: Message): string => (m.blocks[0] as { text?: string }).text ?? ""
+
+  /** 两轮普通对话后进入空闲；返回会话与最后一条用户消息。 */
+  async function twoTurns(llm: LlmClient) {
+    const { env, manager } = makeEnv(llm)
+    const session = env.sessions.create("重试会话")
+    await manager.enqueue(session.id, { userText: "第一问", trigger: "user" })
+    await manager.enqueue(session.id, { userText: "第二问", trigger: "user" })
+    const visible = env.sessions.readMessages(session.id)
+    const q2 = visible.filter((m) => m.role === "user").at(-1)!
+    return { env, manager, session, q2 }
+  }
+
+  it("编辑重试：截断落盘 + 新一轮以改后文本起跑，上下文不含被作废消息", async () => {
+    const reqs: LlmRequest[] = []
+    const { env, manager, session, q2 } = await twoTurns(
+      recordRequests(scriptClient([textTurn("第一答"), textTurn("第二答"), textTurn("第二答重")]), reqs),
+    )
+    const socket = new FakeSocket()
+    env.bus.subscribe(session.id, socket)
+
+    const r = manager.retry(session.id, q2.id, "第二问改")
+    expect(r.queued).toBe(false)
+    await r.outcome
+
+    // 视图：第一问答一保留；旧第二问答二退出；新用户消息是改后文本、新 id
+    const msgs = env.sessions.readMessages(session.id)
+    expect(msgs.map(textOf)).toEqual(["第一问", "第一答", "第二问改", "第二答重"])
+    expect(msgs[2]!.id).not.toBe(q2.id)
+
+    // 新一轮发给模型的请求：恰好是保留历史 + 改后文本
+    expect(userTexts(reqs.at(-1)!)).toEqual(["第一问", "第二问改"])
+
+    // 事件流只追加：4 条旧消息事件 + 截断事件 + 新一轮两条
+    const events = env.sessions.readEvents(session.id)
+    expect(events.filter((e) => e.type === "message")).toHaveLength(6)
+    const trunc = events.find((e) => e.type === "message.truncated")
+    expect(trunc !== undefined && "fromMessageId" in trunc && trunc.fromMessageId).toBe(q2.id)
+
+    // 总线：截断广播先于新一轮 run.started
+    const types = received(socket).map((e) => e.type)
+    const truncAt = types.indexOf("message.truncated")
+    expect(truncAt).toBeGreaterThan(-1)
+    expect(types.indexOf("run.started")).toBeGreaterThan(truncAt)
+  })
+
+  it("重新生成：不改文本原样重跑，旧回答退出上下文与视图", async () => {
+    const reqs: LlmRequest[] = []
+    const { env, manager, session, q2 } = await twoTurns(
+      recordRequests(scriptClient([textTurn("第一答"), textTurn("第二答"), textTurn("重新答")]), reqs),
+    )
+    const r = manager.retry(session.id, q2.id, "第二问")
+    await r.outcome
+    const msgs = env.sessions.readMessages(session.id)
+    expect(msgs.map(textOf)).toEqual(["第一问", "第一答", "第二问", "重新答"])
+    expect(userTexts(reqs.at(-1)!)).toEqual(["第一问", "第二问"])
+    expect(env.sessions.readEvents(session.id).filter((e) => e.type === "message")).toHaveLength(6)
+  })
+
+  it("会话忙时拒绝：活动 run 与排队消息都挡住重试", async () => {
+    let n = 0
+    const client: LlmClient = {
+      async *stream() {
+        n += 1
+        if (n === 1) yield* textTurn("第一答")
+        else if (n === 2) yield* textTurn("第二答")
+        else await new Promise<never>(() => {}) // the third turn hangs, holding the session busy
+      },
+    }
+    const { env, manager, session, q2 } = await twoTurns(client)
+    const socket = new FakeSocket()
+    env.bus.subscribe(session.id, socket)
+    const run = manager.enqueue(session.id, { userText: "挂着", trigger: "user" })
+    await waitForEvent(socket, "llm.started")
+    manager.enqueue(session.id, { userText: "排队中", trigger: "user", disposition: "wait" })
+    expect(() => manager.retry(session.id, q2.id, "改")).toThrow()
+    manager.cancel(session.id)
+    await run
+  })
+
+  it("在飞压缩挡住重试；压缩落定后重试照常", async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    let n = 0
+    const client: LlmClient = {
+      async *stream() {
+        n += 1
+        if (n === 1) {
+          yield* textTurnWithUsage("回答a", 10_000) // usage anchors over the line
+          return
+        }
+        if (n === 2) {
+          yield { type: "text_delta", delta: "段摘要A（进行中）" }
+          await gate // stand in for the seconds-long real summarizer call
+          return
+        }
+        yield* textTurn("总摘要A")
+      },
+    }
+    const { env, manager } = makeEnv(client, (c) => { c.sessions.contextTokens = 10 })
+    const session = env.sessions.create("压缩重试")
+    seedHistory(env.sessions, session.id, 2)
+    const socket = new FakeSocket()
+    env.bus.subscribe(session.id, socket)
+    const aP = manager.enqueue(session.id, { userText: "a", trigger: "user" })
+    await waitForEvent(socket, "compaction.started") // the post-run compaction is in flight
+    const q2 = env.sessions.readMessages(session.id).filter((m) => m.role === "user").at(-1)!
+    expect(() => manager.retry(session.id, q2.id, "改")).toThrow()
+    release()
+    await aP
+    // 压缩落定后会话空闲：重试照常走通（视图=2 对种子消息 + 重试新的一问一答；
+    // 旧 "a" 一轮已退出）
+    const r = manager.retry(session.id, q2.id, "a改")
+    await r.outcome
+    expect(env.sessions.readMessages(session.id).map((m) => m.role)).toEqual([
+      "user", "assistant", "user", "assistant", "user", "assistant",
+    ])
+  })
+
+  it("目标不合法即拒绝：不是最后一条用户消息、子代理会话、会话不存在", async () => {
+    const { env, manager, session } = await twoTurns(scriptClient([textTurn("答")]))
+    const q1 = env.sessions.readMessages(session.id).filter((m) => m.role === "user")[0]!
+    expect(() => manager.retry(session.id, q1.id, "改第一问")).toThrow()
+
+    const parent = env.sessions.create("父")
+    const child = env.sessions.create("子", undefined, undefined, "default", parent.id)
+    env.sessions.appendMessage(child.id, newMessage(child.id, "user", [{ id: "blk_c1", type: "text", text: "子问题" }]))
+    expect(() => manager.retry(child.id, "msg_whatever", "改")).toThrow()
+
+    expect(() => manager.retry("ses_none", "msg_whatever", "改")).toThrow()
+  })
+})
+
+describe("RunManager.retry 附件随重试原样带上", () => {
+  it("编辑重试不带 attachments 参数时，从被截断的原用户消息重建附件", async () => {
+    const { env, manager } = makeEnv(scriptClient([textTurn("答"), textTurn("答重")]))
+    const session = env.sessions.create("附件重试")
+    // 造一个真实附件文件（挂在会话附件目录内，与上传管线同源）
+    const attDir = join(env.paths.attachmentsDir, session.id)
+    mkdirSync(attDir, { recursive: true })
+    const attPath = join(attDir, "notes.txt")
+    writeFileSync(attPath, "附件正文")
+    const seeded = newMessage(session.id, "user", [
+      { id: "blk_q", type: "text", text: "带附件的问题" },
+      { id: "blk_a", type: "attachment", mimeType: "text/plain", name: "notes.txt", source: { type: "file", path: attPath } },
+    ])
+    env.sessions.appendMessage(session.id, seeded)
+    env.sessions.appendMessage(session.id, newAssistantMessage(session.id, "mock-model", [{ id: "blk_aa", type: "text", text: "旧的答" }], { inputTokens: 1, outputTokens: 1 }))
+
+    const r = manager.retry(session.id, seeded.id, "带附件的问题（改）")
+    await r.outcome
+    const msgs = env.sessions.readMessages(session.id)
+    expect(msgs.map((m) => m.role)).toEqual(["user", "assistant"])
+    const retryUser = msgs[0]!
+    expect((retryUser.blocks[0] as { text?: string }).text).toBe("带附件的问题（改）")
+    const att = retryUser.blocks[1] as { type: string; name?: string; text?: string; source?: { type: string; path: string } }
+    expect(att.type).toBe("attachment")
+    expect(att.name).toBe("notes.txt")
+    expect(att.text).toBe("附件正文")
+    expect(att.source?.type).toBe("file")
+  })
+
+  it("纯附件消息可以空文本重新生成；空文本且无附件才拒绝", async () => {
+    const { env, manager } = makeEnv(scriptClient([textTurn("答"), textTurn("答重")]))
+    const session = env.sessions.create("纯附件重试")
+    const attDir = join(env.paths.attachmentsDir, session.id)
+    mkdirSync(attDir, { recursive: true })
+    const attPath = join(attDir, "notes.txt")
+    writeFileSync(attPath, "附件正文")
+    const seeded = newMessage(session.id, "user", [
+      { id: "blk_a", type: "attachment", mimeType: "text/plain", name: "notes.txt", source: { type: "file", path: attPath } },
+    ])
+    env.sessions.appendMessage(session.id, seeded)
+    env.sessions.appendMessage(session.id, newAssistantMessage(session.id, "mock-model", [{ id: "blk_aa", type: "text", text: "旧的答" }], { inputTokens: 1, outputTokens: 1 }))
+
+    const r = manager.retry(session.id, seeded.id, "")
+    await r.outcome
+    const msgs = env.sessions.readMessages(session.id)
+    const retryUser = msgs[0]!
+    // 空文本块在前（引擎恒建文本块），附件随其后
+    expect((retryUser.blocks[0] as { text?: string }).text).toBe("")
+    expect((retryUser.blocks[1] as { type?: string }).type).toBe("attachment")
+
+    // 无附件消息的空文本重试仍然拒绝
+    const plain = newMessage(session.id, "user", [{ id: "blk_q2", type: "text", text: "下一个问题" }])
+    env.sessions.appendMessage(session.id, plain)
+    expect(() => manager.retry(session.id, plain.id, "")).toThrow()
+  })
+})

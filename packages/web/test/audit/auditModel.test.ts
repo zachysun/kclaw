@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
   appendEvents, appendRows, DEFAULT_FILTER, filterRows, flattenAudit, fmtMs, fmtRowTime, fmtUsage,
-  isAppendedFrame, jumpTarget, rowMatchesFilter,
+  isAppendedFrame, jumpTarget, rowMatchesFilter, rowSearchText,
 } from "../../src/audit/model.js"
 import type { AuditFilter, AuditRow } from "../../src/audit/model.js"
 import type {
@@ -138,7 +138,7 @@ function kindsFilter(off: AuditRow["kind"]): AuditFilter {
   return {
     ...DEFAULT_FILTER,
     kinds: {
-      block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true,
+      block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true,
       [off]: false,
     },
   }
@@ -337,3 +337,36 @@ describe("isAppendedFrame", () => {
     expect(isAppendedFrame("frame")).toBe(false)
   })
 })
+
+// ---------- 截断事件与已中断中文化（issue #31） ----------
+
+describe("audit truncation & aborted", () => {
+  const TRUNCATION = { type: "message.truncated" as const, at: "2026-09-08T10:06:00.000Z", fromMessageId: "msg_9" }
+
+  it("message.truncated 成为一行截断审计：摘要含起点与原因", () => {
+    const rows = flattenAudit([TRUNCATION]) as Extract<AuditRow, { kind: "truncation" }>[]
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.event.fromMessageId).toBe("msg_9")
+    expect(rowMatchesFilter(rows[0]!, { ...DEFAULT_FILTER, keyword: "msg_9" }, new Date())).toBe(true)
+  })
+
+  it("截断行随 kind 开关过滤（truncation 关掉即不可见）", () => {
+    const rows = flattenAudit([TRUNCATION])
+    const off: AuditFilter = { ...DEFAULT_FILTER, kinds: { ...DEFAULT_FILTER.kinds, truncation: false } }
+    expect(filterRows(rows, off, new Date())).toHaveLength(0)
+    expect(filterRows(rows, DEFAULT_FILTER, new Date())).toHaveLength(1)
+  })
+
+  it("run.ended 的 aborted 结局中文化为已中断；其他结局保持原文", () => {
+    const aborted = { type: "run.ended" as const, at: "2026-09-08T10:01:00.000Z", stopReason: "aborted" as const, usage: { inputTokens: 1, outputTokens: 2 } }
+    const endTurn = { type: "run.ended" as const, at: "2026-09-08T10:01:00.000Z", stopReason: "end_turn" as const }
+    const rows = flattenAudit([aborted, endTurn]) as Extract<AuditRow, { kind: "run" }>[]
+    expect(rows[0]!.kind === "run" && runSummaryOf(rows[0])).toContain("已中断")
+    expect(rows[1]!.kind === "run" && runSummaryOf(rows[1])).toContain("end_turn")
+  })
+})
+
+function runSummaryOf(row: Extract<AuditRow, { kind: "run" }>): string {
+  // 借 rowSearchText 拿摘要（与渲染组件同源），避免从组件层导入。
+  return rowSearchText(row)
+}

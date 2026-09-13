@@ -934,6 +934,7 @@ select:focus {
 }
 
 .message {
+  position: relative;
   max-width: 85%;
   border-radius: var(--radius);
   padding: 8px 12px;
@@ -1374,6 +1375,91 @@ select:focus {
 .compaction-cancel:hover:not(:disabled) {
   border-color: var(--danger);
   background: var(--danger-dim);
+}
+
+/* Stop button on the run indicator (run.cancel): halts the current run with no message attached */
+.run-stop {
+  flex: none;
+  margin-left: 4px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--danger);
+  background: none;
+  border-color: var(--border);
+}
+
+.run-stop:hover:not(:disabled) {
+  border-color: var(--danger);
+}
+
+/* Bubble hover actions (edit / regenerate): same language as the session-card hover buttons */
+.msg-actions {
+  position: absolute;
+  top: -10px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+  padding: 2px 4px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--ease);
+}
+
+/* The user bubble's accent tint needs the darker surface for readability */
+.message-user .msg-actions {
+  background: var(--surface-2);
+}
+
+.message:hover .msg-actions,
+.message:focus-within .msg-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.msg-action {
+  flex: none;
+  padding: 0 6px;
+  font-size: 11px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+}
+
+.msg-action:hover:not(:disabled) {
+  color: var(--text);
+}
+
+/* The interrupted marker on a stopped half-reply */
+.msg-aborted {
+  display: inline-block;
+  margin-top: 4px;
+  margin-right: 4px;
+  padding: 0 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+/* The in-place edit state of edit & retry: replaces the bubble body */
+.msg-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.msg-edit-input {
+  min-width: 260px;
+  resize: vertical;
+}
+
+.msg-edit-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
 }
 
 @keyframes blink {

@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { SessionStore } from "../../src/session/store.js"
 import { isSandboxCheckedEvent, isSystemEvent } from "../../src/session/events.js"
 import { newMessage } from "../../src/protocol/messages.js"
+import { newId } from "../../src/protocol/ids.js"
 import type { CompactionRecord } from "../../src/session/compaction.js"
 
 let dir: string
@@ -633,5 +634,86 @@ describe("SessionStore readEventsFrom (tail read)", () => {
   it("不存在的会话返回 []（与 readEvents 同语义）", () => {
     const s = new SessionStore(dir)
     expect(s.readEventsFrom("ses_none", 0)).toEqual([])
+  })
+})
+
+describe("SessionStore 截断（编辑重试/重新生成的读侧过滤）", () => {
+  const user = (sessionId: string, text: string) => newMessage(sessionId, "user", [{ id: newId("blk"), type: "text", text }])
+  const assistant = (sessionId: string, text: string) => newMessage(sessionId, "assistant", [{ id: newId("blk"), type: "text", text }])
+
+  it("截断把起点起的消息退出视图，事件流一字不改（追加一条截断事件）", () => {
+    const s = new SessionStore(dir)
+    const m = s.create()
+    const q1 = user(m.id, "问一")
+    const a1 = assistant(m.id, "答一")
+    const q2 = user(m.id, "问二")
+    const a2 = assistant(m.id, "答二")
+    for (const msg of [q1, a1, q2, a2]) s.appendMessage(m.id, msg)
+    s.appendMessageTruncated(m.id, { at: new Date().toISOString(), fromMessageId: q2.id })
+    expect(s.readMessages(m.id).map((x) => x.id)).toEqual([q1.id, a1.id])
+    const events = s.readEvents(m.id)
+    expect(events.filter((e) => e.type === "message")).toHaveLength(4)
+    expect(events.filter((e) => e.type === "message.truncated")).toHaveLength(1)
+  })
+
+  it("多次截断叠加：最新一次的起点决定可见范围，重试产生的新消息不受影响", () => {
+    const s = new SessionStore(dir)
+    const m = s.create()
+    const q1 = user(m.id, "q1")
+    const a1 = assistant(m.id, "a1")
+    s.appendMessage(m.id, q1)
+    s.appendMessage(m.id, a1)
+    s.appendMessageTruncated(m.id, { at: new Date().toISOString(), fromMessageId: q1.id })
+    // 重试后的新一轮：新消息 id 晚于截断起点，照常可见
+    const q2 = user(m.id, "q2")
+    const a2 = assistant(m.id, "a2")
+    s.appendMessage(m.id, q2)
+    s.appendMessage(m.id, a2)
+    expect(s.readMessages(m.id).map((x) => x.id)).toEqual([q2.id, a2.id])
+    // 第二次重试：从 q2 起作废 → 视图为空
+    s.appendMessageTruncated(m.id, { at: new Date().toISOString(), fromMessageId: q2.id })
+    expect(s.readMessages(m.id)).toEqual([])
+  })
+
+  it("投影：截断推进 updatedAt；起点在压缩锚点之后则压缩保留，越过锚点则压缩字段清除", async () => {
+    const s = new SessionStore(dir)
+    const m = s.create()
+    const q1 = user(m.id, "q1")
+    const a1 = assistant(m.id, "a1")
+    const q2 = user(m.id, "q2")
+    s.appendMessage(m.id, q1)
+    s.appendMessage(m.id, a1)
+    s.appendMessage(m.id, q2)
+    s.appendCompaction(m.id, {
+      at: new Date().toISOString(), trigger: "manual", from: null, upto: a1.id,
+      messages: 2, segmentSummary: "早期摘要", top: "一句话总览",
+    })
+    // 尾部截断（q2 起，锚点 a1 之后）：压缩保留
+    await new Promise((r) => setTimeout(r, 5))
+    const before = s.meta(m.id)!.updatedAt
+    s.appendMessageTruncated(m.id, { at: new Date().toISOString(), fromMessageId: q2.id })
+    const after = s.meta(m.id)!
+    expect(after.updatedAt > before).toBe(true)
+    expect(after.compaction?.upto).toBe(a1.id)
+    // 越锚点截断（a1 起）：压缩字段清除，updatedAt 继续推进
+    await new Promise((r) => setTimeout(r, 5))
+    s.appendMessageTruncated(m.id, { at: new Date().toISOString(), fromMessageId: a1.id })
+    const crossed = s.meta(m.id)!
+    expect(crossed.compaction).toBeUndefined()
+    expect(crossed.updatedAt > after.updatedAt).toBe(true)
+  })
+
+  it("投影可重建：rebuildMeta 对含截断事件的事件流给出同一投影", () => {
+    const s = new SessionStore(dir)
+    const m = s.create()
+    const q1 = user(m.id, "q1")
+    const a1 = assistant(m.id, "a1")
+    s.appendMessage(m.id, q1)
+    s.appendMessage(m.id, a1)
+    // 从 a1 起作废：起点之前的 q1 仍在视图
+    s.appendMessageTruncated(m.id, { at: new Date().toISOString(), fromMessageId: a1.id })
+    const rebuilt = s.rebuildMeta(m.id)!
+    expect(rebuilt.updatedAt).toBe(s.meta(m.id)!.updatedAt)
+    expect(s.readMessages(m.id).map((x) => x.id)).toEqual([q1.id])
   })
 })

@@ -93,8 +93,17 @@ export interface ChatViewProps {
   onCancelAllQueued?: () => void
   /** Open a subagent's audit view (the spawn row's link). */
   onOpenAudit?: (sessionId: string) => void
-  /** Cancel the in-flight automatic compaction (the indicator's 取消, compaction.cancel). */
+  /** Cancel the in-flight automatic compaction (the indicator's cancel button, compaction.cancel). */
   onCancelCompaction?: () => void
+  /** Stop the active run (the run indicator's stop button; the run.cancel frame). */
+  onStopRun?: () => void
+  /**
+   * Edit & retry / regenerate: rerun from the last user message (text = the
+   * edited or original text; attachments ride along server-side, rebuilt from
+   * the discarded message). The edit confirm and the regenerate button both
+   * land here.
+   */
+  onRetry?: (fromMessageId: string, text: string) => void
   /**
    * 压缩审计记录（GET /sessions/:id/compactions 的 UI 镜像，ChatPanel
    * 在会话选中时并行拉取）。null/undefined（未加载或拉取失败）→ 不渲染
@@ -111,13 +120,16 @@ export interface ChatViewProps {
   readOnly?: boolean
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, compactions, extraCommands, readOnly }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, compactions, extraCommands, readOnly }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Slash-suggestion state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
   const [dismissed, setDismissed] = useState(false)
   const [sel, setSel] = useState(0)
   const [helpOpen, setHelpOpen] = useState(false)
+  // In-place editor state of edit & retry, keyed by the bubble being edited;
+  // both confirm and Esc clear it.
+  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
 
   const completions = dismissed ? [] : slashCompletions(draft, "web", extraCommands)
   const active = Math.min(sel, Math.max(0, completions.length - 1))
@@ -129,6 +141,34 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
 
   // 审计折叠条；未加载/失败（null）→ 空数组。
   const auditBars = compactions == null ? [] : compactionBars(view.messages, compactions)
+
+  // Edit & retry / regenerate are available exactly while the session is
+  // idle (no run, no queue, no in-flight compaction); hidden while generating
+  // — stop first, then redo. Child sessions are read-only: never offered.
+  const idle = view.runState === "idle" && view.queue.length === 0 && view.compacting !== true
+  const canRetry = !readOnly && idle && onRetry !== undefined
+  const lastUserIdx = findLastIdx(view.messages, (m) => m.role === "user")
+  const lastAssistantIdx = findLastIdx(view.messages, (m) => m.role === "assistant")
+  const lastUser = lastUserIdx === -1 ? undefined : view.messages[lastUserIdx]!
+
+  /** Edit confirm: an empty text does not submit (same rule as the composer). */
+  const confirmEdit = (): void => {
+    if (editing === null) return
+    const text = editing.text.trim()
+    if (text === "") return
+    onRetry?.(editing.id, text)
+    setEditing(null)
+  }
+
+  /** Editor keys: Enter confirms, Shift+Enter breaks a line, Esc cancels (composer habits). */
+  const handleEditKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault()
+      confirmEdit()
+    } else if (event.key === "Escape") {
+      setEditing(null)
+    }
+  }
 
   /** 三选的方向键旋转（方向键+回车与点击皆可；回车/空格是按钮原生行为）。 */
   const handleTrioKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
@@ -267,7 +307,34 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
             {auditBars.filter((b) => b.insertIdx === idx).map((b) => (
               <AuditContextNote key={b.key} bar={b} />
             ))}
-            <MessageBubble message={message} onOpenAudit={onOpenAudit} />
+            {editing !== null && editing.id === message.id ? (
+              <div className="message message-user" data-testid="msg-editing">
+                <div className="msg-edit">
+                  <textarea
+                    className="msg-edit-input"
+                    data-testid="msg-edit-input"
+                    autoFocus
+                    value={editing.text}
+                    onChange={(event) => setEditing({ id: editing.id, text: event.target.value })}
+                    onKeyDown={handleEditKeyDown}
+                    rows={2}
+                  />
+                  <div className="msg-edit-actions">
+                    <button type="button" className="primary" data-testid="msg-edit-confirm" onClick={confirmEdit}>重试</button>
+                    <button type="button" data-testid="msg-edit-cancel" onClick={() => setEditing(null)}>取消</button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <MessageBubble
+                message={message}
+                onOpenAudit={onOpenAudit}
+                canEdit={canRetry && idx === lastUserIdx}
+                canRegenerate={canRetry && idx === lastAssistantIdx && lastUser !== undefined}
+                onEditStart={(text) => setEditing({ id: message.id, text })}
+                onRegenerate={lastUser === undefined ? undefined : () => onRetry?.(lastUser.id, firstRenderedText(lastUser))}
+              />
+            )}
           </Fragment>
         ))}
         {/* upto 是最后一条消息（收尾压缩后没有新消息）→ 折叠条挂在消息流末尾。 */}
@@ -278,6 +345,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
       {view.runState === "running" && (
         <div className="run-indicator" data-testid="run-indicator" aria-live="polite">
           running…
+          <button type="button" className="run-stop" data-testid="run-stop" onClick={() => onStopRun?.()}>停止</button>
         </div>
       )}
       {view.compacting === true && (
@@ -519,7 +587,23 @@ function AuditContextNote({ bar }: { bar: CompactionAuditBar }) {
   )
 }
 
-function MessageBubble({ message, onOpenAudit }: { message: RenderedMessage; onOpenAudit?: (sessionId: string) => void }) {
+function MessageBubble({
+  message,
+  onOpenAudit,
+  canEdit,
+  canRegenerate,
+  onEditStart,
+  onRegenerate,
+}: {
+  message: RenderedMessage
+  onOpenAudit?: (sessionId: string) => void
+  /** While the session is idle, the last user bubble offers the edit entry (session-card hover pattern). */
+  canEdit?: boolean
+  /** While the session is idle, the last assistant bubble offers regenerate (rerun the last user message as-is). */
+  canRegenerate?: boolean
+  onEditStart?: (currentText: string) => void
+  onRegenerate?: () => void
+}) {
   const streaming = message.pending && message.blocks.length === 0
   return (
     <div className={`message message-${message.role}`} data-testid={`msg-${message.role}`}>
@@ -529,8 +613,45 @@ function MessageBubble({ message, onOpenAudit }: { message: RenderedMessage; onO
       {message.blocks.map((block) => (
         <BlockView key={block.blockId} block={block} markdown={message.role === "assistant"} onOpenAudit={onOpenAudit} />
       ))}
+      {message.aborted === true && (
+        <span className="msg-aborted" data-testid="msg-aborted">已中断</span>
+      )}
+      {(canEdit === true || canRegenerate === true) && (
+        <span className="msg-actions">
+          {canEdit === true && (
+            <button
+              type="button"
+              className="msg-action"
+              data-testid="msg-edit"
+              onClick={() => onEditStart?.(firstRenderedText(message))}
+            >编辑</button>
+          )}
+          {canRegenerate === true && (
+            <button
+              type="button"
+              className="msg-action"
+              data-testid="msg-regenerate"
+              onClick={() => onRegenerate?.()}
+            >重新生成</button>
+          )}
+        </span>
+      )}
     </div>
   )
+}
+
+/** First text render's text of a rendered message ("" when absent). */
+function firstRenderedText(m: RenderedMessage): string {
+  const first = m.blocks.find((b) => b.kind === "text")
+  return first !== undefined && first.kind === "text" ? first.text : ""
+}
+
+/** Index of the last message matching pred; -1 when none. */
+function findLastIdx(messages: RenderedMessage[], pred: (m: RenderedMessage) => boolean): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (pred(messages[i]!)) return i
+  }
+  return -1
 }
 
 function BlockView({ block, markdown, onOpenAudit }: { block: RenderedBlock; markdown: boolean; onOpenAudit?: (sessionId: string) => void }) {
