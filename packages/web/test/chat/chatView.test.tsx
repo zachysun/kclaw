@@ -22,6 +22,8 @@ interface ViewOpts {
   onCancelCompaction?: () => void
   /** 压缩审计记录（GET /sessions/:id/compactions 的 UI 镜像）。 */
   compactions?: CompactionRecordView[] | null
+  /** @ 文件点名的候选源（会话工作区文件清单）。 */
+  mentionFiles?: readonly string[]
   /** 通知条与可点击动作（memory.written 跳转）。 */
   notice?: string | null
   noticeAction?: (() => void) | null
@@ -53,6 +55,7 @@ function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
         compactions={opts.compactions}
         notice={opts.notice}
         noticeAction={opts.noticeAction}
+        mentionFiles={opts.mentionFiles}
       />,
     )
   })
@@ -582,6 +585,111 @@ describe("stop button & retry affordances", () => {
     const half = { ...two[1]!, stopReason: "aborted" } as Message
     const h = mountView([two[0]!, half])
     expect(h.container.querySelector('[data-testid="msg-aborted"]')?.textContent).toContain("已中断")
+    h.unmount()
+  })
+})
+
+describe("ChatView file mention suggestions", () => {
+  const FILES = ["src/a.ts", "src/sub/b.ts", "readme.md", "my file.txt"]
+
+  it("opens the file menu for a trailing @ and lists workspace paths", () => {
+    const h = mountView([], { mentionFiles: FILES })
+    type(h.input(), "@")
+    const options = h.container.querySelectorAll('[data-testid="file-option"]')
+    expect(options).toHaveLength(4)
+    expect(menuText(h.container)).toContain("@src/a.ts")
+    expect(menuText(h.container)).not.toContain("/new") // the two menus never mix
+    h.unmount()
+  })
+
+  it("filters by the typed fragment", () => {
+    const h = mountView([], { mentionFiles: FILES })
+    type(h.input(), "@src/")
+    expect(h.container.querySelectorAll('[data-testid="file-option"]')).toHaveLength(2)
+    type(h.input(), "@zzz")
+    expect(h.container.querySelector('[data-testid="slash-menu"]')).toBeNull()
+    h.unmount()
+  })
+
+  it("completes with Tab: full path plus trailing space, menu closed", () => {
+    const h = mountView([], { mentionFiles: FILES })
+    type(h.input(), "看 @sr")
+    pressKey(h.input(), "Tab")
+    expect(h.input().value).toBe("看 @src/a.ts ")
+    expect(h.container.querySelector('[data-testid="slash-menu"]')).toBeNull()
+    h.unmount()
+  })
+
+  it("completes with Enter on an incomplete mention instead of sending", () => {
+    const h = mountView([], { mentionFiles: FILES })
+    type(h.input(), "看 @a")
+    pressKey(h.input(), "Enter")
+    expect(h.input().value).toBe("看 @src/a.ts ")
+    expect(h.onSend).not.toHaveBeenCalled()
+    h.unmount()
+  })
+
+  it("sends a bare hand-typed complete path straight through Enter (skill-menu rule)", () => {
+    const h = mountView([], { mentionFiles: FILES })
+    type(h.input(), "@src/a.ts")
+    pressKey(h.input(), "Enter")
+    expect(h.onSend).toHaveBeenCalledWith("@src/a.ts")
+    h.unmount()
+  })
+
+  it("completes a hand-typed complete path after other text (skill-menu rule)", () => {
+    const h = mountView([], { mentionFiles: FILES })
+    type(h.input(), "看 @src/a.ts")
+    pressKey(h.input(), "Enter")
+    expect(h.input().value).toBe("看 @src/a.ts ")
+    expect(h.onSend).not.toHaveBeenCalled()
+    h.unmount()
+  })
+
+  it("moves the selection with arrows among file candidates", () => {
+    const h = mountView([], { mentionFiles: FILES })
+    type(h.input(), "@")
+    pressKey(h.input(), "ArrowDown") // bare @ highlights the disabled path first; move past it
+    expect(h.container.querySelector('[aria-selected="true"]')?.textContent).toContain("readme.md")
+    h.unmount()
+  })
+
+  it("shows a space-containing path but keeps it unselectable", () => {
+    const h = mountView([], { mentionFiles: FILES })
+    type(h.input(), "@")
+    // Bare @ sorts the disabled path first, so it is the highlighted entry.
+    const disabled = h.container.querySelector('[aria-disabled="true"] [data-testid="file-option"]') as HTMLButtonElement
+    expect(disabled).not.toBeNull()
+    expect(disabled.textContent).toContain("@my file.txt")
+    // Enter on it does nothing at all: no completion, no send.
+    pressKey(h.input(), "Enter")
+    expect(h.input().value).toBe("@")
+    expect(h.onSend).not.toHaveBeenCalled()
+    // Tab does not complete it either.
+    pressKey(h.input(), "Tab")
+    expect(h.input().value).toBe("@")
+    // A click does not complete either.
+    act(() => {
+      disabled.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }))
+    })
+    expect(h.input().value).toBe("@")
+    h.unmount()
+  })
+
+  it("dismisses on Escape and reopens when the draft changes", () => {
+    const h = mountView([], { mentionFiles: FILES })
+    type(h.input(), "@")
+    pressKey(h.input(), "Escape")
+    expect(h.container.querySelector('[data-testid="slash-menu"]')).toBeNull()
+    type(h.input(), "@s")
+    expect(h.container.querySelector('[data-testid="slash-menu"]')).not.toBeNull()
+    h.unmount()
+  })
+
+  it("opens nothing without a file list (fetch failed or empty workspace)", () => {
+    const h = mountView()
+    type(h.input(), "@")
+    expect(h.container.querySelector('[data-testid="slash-menu"]')).toBeNull()
     h.unmount()
   })
 })
