@@ -29,8 +29,8 @@
  *   schedule never affects the run (both are fail-open hooks now, with a
  *   hook.failed event where the old code was silent).
  */
-import { readFileSync } from "node:fs"
-import { join } from "node:path"
+import { readFileSync, statSync } from "node:fs"
+import { join, resolve, sep } from "node:path"
 import type { AgentEvent, AnyAgentEvent } from "../protocol/events.js"
 import type { AttachmentBlock, NoteBlock, ToolCallBlock } from "../protocol/blocks.js"
 import { newBlockId } from "../protocol/blocks.js"
@@ -60,6 +60,7 @@ import { createBuiltinTools, deriveToolFacts, dropSensitiveTools } from "../tool
 import { makeEvent } from "../protocol/events.js"
 import { searchSessionEvents } from "../tools/session-search.js"
 import { applyReuseTiers, matchSkillInvocations, readLinksFile, scanSkillDirs, skillListPrompt, wrapSkillInvocations } from "../skills/index.js"
+import { extractFileMentions, wrapFileMentions, type MentionResolution } from "../mentions.js"
 import type { MemorySystem } from "../memory/system.js"
 import type { EventBus } from "../bus.js"
 import { HookChain, DEFAULT_HOOK_TIMEOUT_MS } from "../hooks/runner.js"
@@ -253,6 +254,40 @@ export function mountAttachments(refs: AttachmentRef[], attachmentsDir: string, 
 }
 
 /**
+ * Workspace resolution of the mention tokens extracted from a user message:
+ * each token resolves against the workspace root the same way the permission
+ * engine sees file paths (realpath, symlinks followed — an in-workspace link
+ * pointing outside escapes). ok = an existing regular file; missing = the
+ * path does not resolve to a file (deleted, never existed, or a directory);
+ * a token that escapes the workspace is dropped entirely — it stays plain
+ * text and produces no instruction line.
+ */
+export function resolveFileMentions(text: string, workspace: string): MentionResolution[] {
+  const root = realpathWithin(resolve(workspace))
+  return extractFileMentions(text).flatMap((token): MentionResolution[] => {
+    const resolved = realpathWithin(resolve(root, token))
+    if (resolved !== root && !resolved.startsWith(root + sep)) return []
+    try {
+      return statSync(resolved).isFile() ? [{ token, status: "ok" }] : [{ token, status: "missing" }]
+    } catch {
+      return [{ token, status: "missing" }]
+    }
+  })
+}
+
+/**
+ * Compose the skill wrap and the file wrap into one model-facing text. Both
+ * wraps are the user's message VERBATIM plus trailing instruction lines, so
+ * the composition is: whichever wraps produced text, in skill-then-file
+ * order, with the file wrap's lines taken from after its verbatim prefix.
+ * undefined = neither wrap matched, send the message as-is.
+ */
+export function combineMentionTexts(userText: string, skillText: string | undefined, fileText: string | undefined): string | undefined {
+  if (fileText !== undefined) return (skillText ?? userText) + fileText.slice(userText.length)
+  return skillText
+}
+
+/**
  * Execute one dequeued entry. The controller arrives pre-registered by the
  * queue's #executeEntry (before any await), so cancellation windows and
  * active-cleanup stay with the queue; this function only consumes its signal.
@@ -324,14 +359,19 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     [readLinksFile(paths.skillsDir), readLinksFile(projectSkillsDir)],
   )
 
-  // 技能点名的隐式包装（Master 2026-09-03）：用户消息里任意位置的 /技能名
-  // 记号精确命中已装且用户可调用的技能时，只在发给模型的那份输入上追加
-  // 一行调用指示——持久化、事件流与气泡保持原始文本（所见即所发）。
-  // 仅 trigger:user 生效：job 提示是 daemon 生成的内部指令，不参与点名。
-  // 内置 skill-wrap 钩子捕获这份预计算文本，在 llm-before 位置应用。
+  // 技能点名与文件点名的隐式包装（Master 2026-09-03 / 2026-09-13）：用户消
+  // 息里任意位置的 /技能名 精确命中已装且用户可调用的技能、@路径 解析为工作
+  // 区内的真实文件时，只在发给模型的那份输入上追加调用/读取指示——持久化、
+  // 事件流与气泡保持原始文本（所见即所发）。仅 trigger:user 生效：job 提示
+  // 是 daemon 生成的内部指令，不参与点名。内置 skill-wrap 钩子捕获这份预计
+  // 算文本，在 llm-before 位置应用。
   const llmUserText =
     input.trigger === "user"
-      ? wrapSkillInvocations(input.userText, matchSkillInvocations(input.userText, skills))
+      ? combineMentionTexts(
+          input.userText,
+          wrapSkillInvocations(input.userText, matchSkillInvocations(input.userText, skills)),
+          wrapFileMentions(input.userText, resolveFileMentions(input.userText, workspace)),
+        )
       : undefined
 
   // --- exec sandbox (batch A): one probe, two consumers --------------------
