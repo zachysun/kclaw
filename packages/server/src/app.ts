@@ -63,6 +63,12 @@ export interface AppOptions {
    */
   builtinSources?: { agent: string; dir: string }[]
   /**
+   * Agent homes whose installed plugins contribute bundled skills to the
+   * /skills discovery routes. Defaults to @kclaw/core's PLUGIN_HOMES; tests
+   * inject a fake home (or an empty list) to stay isolated.
+   */
+  pluginHomes?: { agent: string; home: string }[]
+  /**
    * MCP server status snapshot, exposed at `GET /mcp` (bearer-protected,
    * consumed by `kclaw mcp list`). Absent → the route returns an empty
    * server list.
@@ -182,7 +188,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   registerMemoryRoutes(app, { memory: opts.memory, config })
   registerHookRoutes(app, { hooks: opts.hooks })
   // /skills 路由族：只读技能管理面（CLI /skill 与 Web 技能页共用），无装配依赖。
-  registerSkillRoutes(app, { paths, builtinSources: opts.builtinSources })
+  registerSkillRoutes(app, { paths, builtinSources: opts.builtinSources, pluginHomes: opts.pluginHomes })
   // 切会话写入：POST /sessions 是 CLI /clear、/new 与 web 新建会话的共同底层，
   // 记忆系统在装配时才挂 clear 触发（缺省不触发，行为与未装配记忆时一致）。
   registerSessionRoutes(app, { sessions, config, run: opts.run, memory: opts.memory, cancelBackgroundForParent: opts.cancelBackgroundForParent })

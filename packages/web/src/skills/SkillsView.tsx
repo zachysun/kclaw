@@ -1,15 +1,22 @@
 /**
- * SkillsView — 技能页：左栏技能清单（名字 / 作用域 / 可见性标记 / 描述），
- * 右栏点开后的 SKILL.md 正文；外加技能复用管理面——顶部项目下拉（默认
- * 全局）切换 scope，探测其他 coding agent 的用户级技能目录列出可复用技
- * 能，一键建软链接接入（全局或项目级），已建链接的可见档位（完全可见/
- * 仅用户/仅模型/暂不启用）单选可改。技能本体仍是文件即真相；复用链接的
- * 元数据（目标/来源/档位）在服务端 .links.json，本页只经 /skills 路由族
- * 读写。user-invocable:false 的技能服务端当作不存在（列表与点名都不出
- * 现），复用链接的管理记录不受该过滤影响（否则"仅模型"档改不回）。
- * 项目级技能与复用的生效范围由 scope 下拉决定，与 run 时注入同源同规则。
+ * SkillsView — 技能页：两个子页签。
+ *
+ * 「已装技能」：左栏技能清单（名字 / 作用域 / 可见性标记 / 截断两行的描
+ * 述），右栏点开后的 SKILL.md 正文。user-invocable:false 的技能服务端已
+ * 当作不存在（列表与点名都不出现）。
+ *
+ * 「从其他 agent 复用」：复用管理面——顶部已建链接的紧凑表格（来源、四
+ * 档可见档位单选、删除；链接目标不再是探测正在提供的版本时标"过时"），
+ * 下方探测发现列表：搜索框 + 按来源分组折叠（用户级 agent 目录展开、插
+ * 件技能折叠），每条可预览正文、单个复用或批量复用。复用的元数据（目标/
+ * 来源/档位）在服务端 .links.json，外部 SKILL.md 一字不动；复用链接的管
+ * 理记录不受用户可见性过滤影响（否则"仅模型"档改不回）。
+ *
+ * 顶部作用域下拉（默认全局，候选来自会话列表的工作目录）对两个页签共同
+ * 生效，与 run 时注入同源同规则。
  */
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type React from "react"
 import type { ApiClient } from "../api.js"
 
 interface SkillRow {
@@ -26,6 +33,7 @@ interface DiscoveredSkill {
   description: string
   target: string
   sources: string[]
+  plugin?: string
   reused: boolean
   conflict: boolean
   stale: boolean
@@ -42,6 +50,8 @@ interface LinkRecord {
   target: string
   agent: string
   tier: "all" | "user" | "model" | "off"
+  /** false = 目标已不是探测正在提供的版本（插件升级过）——链接可用但过时。 */
+  current?: boolean
 }
 
 interface LinksPayload {
@@ -50,9 +60,11 @@ interface LinksPayload {
 }
 
 /** 复用来源与可见档位的中文标签（接口仍是服务端约定的小写枚举）。 */
-const AGENT_LABEL: Record<string, string> = { claude: "Claude Code", codex: "Codex", dsh: "DeepSeek", zcode: "zCode", custom: "自定义" }
+const AGENT_LABEL: Record<string, string> = { claude: "Claude Code", codex: "Codex", dsh: "DeepSeek", zcode: "zCode", custom: "自定义目录" }
 const TIER_LABEL: Record<LinkRecord["tier"], string> = { all: "完全可见", user: "仅用户", model: "仅模型", off: "暂不启用" }
 const TIERS: LinkRecord["tier"][] = ["all", "user", "model", "off"]
+
+type SubTab = "installed" | "reuse"
 
 export function SkillsView({ api, notice }: {
   api: ApiClient
@@ -68,11 +80,13 @@ export function SkillsView({ api, notice }: {
   // scope 为空串表示全局；项目下拉的候选从会话列表的 workdir 去重而来。
   const [scope, setScope] = useState("")
   const [workdirs, setWorkdirs] = useState<string[]>([])
+  const [subTab, setSubTab] = useState<SubTab>("installed")
   const [rows, setRows] = useState<SkillRow[] | null>(null)
   const [discovery, setDiscovery] = useState<DiscoveryPayload | null>(null)
   const [links, setLinks] = useState<LinksPayload | null>(null)
   const [body, setBody] = useState<{ title: string; content: string; reusable?: DiscoveredSkill } | null>(null)
   const [newSource, setNewSource] = useState("")
+  const [search, setSearch] = useState("")
   const [busy, setBusy] = useState(false)
 
   const scopeQuery = scope !== "" ? `?workdir=${encodeURIComponent(scope)}` : ""
@@ -159,9 +173,8 @@ export function SkillsView({ api, notice }: {
     }
   }
 
-  const reuseAll = async (): Promise<void> => {
-    if (discovery === null) return
-    const candidates = discovery.skills.filter((s) => !s.reused && !s.conflict && !s.stale)
+  const reuseMany = async (label: string, items: DiscoveredSkill[]): Promise<void> => {
+    const candidates = items.filter((s) => !s.reused && !s.conflict && !s.stale)
     if (candidates.length === 0) {
       notice("没有可批量复用的技能（其余均已复用或存在冲突）")
       return
@@ -177,8 +190,30 @@ export function SkillsView({ api, notice }: {
       }
     }
     setBusy(false)
-    refreshAfterWrite(`批量复用完成：${ok}/${candidates.length}`)
+    refreshAfterWrite(`批量复用完成（${label}）：${ok}/${candidates.length}`)
   }
+
+  const unlinkMany = async (label: string, items: DiscoveredSkill[]): Promise<void> => {
+    const linked = items.filter((s) => linkNames.has(s.name))
+    if (linked.length === 0) {
+      notice(`${label}没有已复用的链接可删除`)
+      return
+    }
+    setBusy(true)
+    let ok = 0
+    for (const item of linked) {
+      try {
+        await api.del(`/skills/links/${encodeURIComponent(item.name)}${scopeQuery}`)
+        ok += 1
+      } catch {
+        // 单条失败不中断批量。
+      }
+    }
+    setBusy(false)
+    refreshAfterWrite(`批量删除完成（${label}）：${ok}/${linked.length}`)
+  }
+
+  const reuseAll = (): Promise<void> => reuseMany("全部", reusableRows)
 
   const addSource = async (): Promise<void> => {
     const dir = newSource.trim()
@@ -211,6 +246,37 @@ export function SkillsView({ api, notice }: {
   const reusableRows = discovery?.skills ?? []
   const discoveredCount = reusableRows.filter((s) => !s.reused && !s.conflict && !s.stale).length
 
+  // 发现列表分两个区块，层级对齐心智模型：
+  //   「用户级技能目录」按 agent 分组（展开）——用户亲手放的技能；
+  //   「已安装插件」按插件分组（折叠）——插件带给你的技能。
+  // 搜索词过滤名字与描述，命中时全部组展开。
+  const filtering = search.trim() !== ""
+  const matches = (s: DiscoveredSkill): boolean => {
+    const word = search.trim().toLowerCase()
+    return word === "" || s.name.toLowerCase().includes(word) || s.description.toLowerCase().includes(word) || (s.plugin ?? "").toLowerCase().includes(word)
+  }
+  const agentGroups = useMemo(() => {
+    const map = new Map<string, { label: string; items: DiscoveredSkill[] }>()
+    for (const s of reusableRows) {
+      if (s.plugin !== undefined || !matches(s)) continue
+      const key = s.sources[0] ?? "custom"
+      const hit = map.get(key)
+      if (hit !== undefined) hit.items.push(s)
+      else map.set(key, { label: AGENT_LABEL[key] ?? key, items: [s] })
+    }
+    return [...map.values()]
+  }, [reusableRows, search])
+  const pluginGroups = useMemo(() => {
+    const map = new Map<string, { label: string; items: DiscoveredSkill[] }>()
+    for (const s of reusableRows) {
+      if (s.plugin === undefined || !matches(s)) continue
+      const hit = map.get(s.plugin)
+      if (hit !== undefined) hit.items.push(s)
+      else map.set(s.plugin, { label: s.plugin, items: [s] })
+    }
+    return [...map.values()]
+  }, [reusableRows, search])
+
   return (
     <div className="skills-view" data-testid="skills-view">
       <div className="skills-scope-row">
@@ -223,156 +289,262 @@ export function SkillsView({ api, notice }: {
             ))}
           </select>
         </label>
-        <button type="button" data-testid="reuse-all" className="skills-reuse-all" disabled={busy || discoveredCount === 0} onClick={() => void reuseAll()}>
-          全部复用{discoveredCount > 0 ? `（${discoveredCount}）` : ""}
-        </button>
         {busy && <span className="muted">处理中…</span>}
+        <div className="skills-subtabs" role="tablist">
+          <button type="button" role="tab" aria-selected={subTab === "installed"} data-testid="subtab-installed" className={subTab === "installed" ? "active" : ""} onClick={() => { setSubTab("installed"); setBody(null) }}>已装技能</button>
+          <button type="button" role="tab" aria-selected={subTab === "reuse"} data-testid="subtab-reuse" className={subTab === "reuse" ? "active" : ""} onClick={() => { setSubTab("reuse"); setBody(null) }}>
+            从其他 agent 复用{discoveredCount > 0 ? `（${discoveredCount}）` : ""}
+          </button>
+        </div>
       </div>
-      <div className="skills-list">
-        <h4 className="skills-seg-title">已装技能</h4>
-        {rows === null ? (
-          <p className="muted">加载中…</p>
-        ) : rows.length === 0 ? (
-          <p className="muted">
-            还没有技能。把技能目录放进 <code>~/.kclaw/skills/</code>（全局）或工作区的
-            <code>.kclaw/skills/</code>（本项目），或在下方从其他 coding agent 复用。
-          </p>
-        ) : (
-          <ul>
-            {rows.map((r) => (
-              <li key={r.name}>
-                <button
-                  type="button"
-                  data-testid={`skill-${r.name}`}
-                  className={body?.title === r.name && body.reusable === undefined ? "skill-item active" : "skill-item"}
-                  onClick={() => void open(r.name)}
-                >
-                  <span className="skill-name">{r.name}</span>
-                  <span className="skill-meta">
-                    {r.origin === "project" ? "项目" : "全局"}
-                    {r.visibility === "user-only" ? " · 仅用户" : ""}
-                  </span>
-                  <span className="skill-desc">{r.description}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
 
-        <h4 className="skills-seg-title">可复用技能<span className="muted">（来自其他 coding agent 的技能目录）</span></h4>
-        {discovery !== null && discovery.sources.length > 0 && (
-          <div className="skills-sources" data-testid="discovery-sources">
-            {discovery.sources.map((s) => (
-              <span key={s.dir} className={s.stale ? "skill-source stale" : "skill-source"} title={s.dir}>
-                {AGENT_LABEL[s.agent] ?? s.agent}
-                {s.stale ? "（已失效）" : ""}
-                {s.agent === "custom" && (
-                  <button type="button" className="skill-source-del" aria-label={`移除 ${s.dir}`} disabled={busy} onClick={() => void removeSource(s.dir)}>×</button>
-                )}
-              </span>
-            ))}
-            <span className="skills-source-add">
-              <input
-                type="text"
-                data-testid="source-input"
-                placeholder="添加探测目录（绝对路径）"
-                value={newSource}
-                onChange={(e) => setNewSource(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") void addSource() }}
-              />
-              <button type="button" data-testid="source-add" disabled={busy || newSource.trim() === ""} onClick={() => void addSource()}>添加</button>
-            </span>
+      {subTab === "installed" ? (
+        <div className="skills-panes">
+          <div className="skills-list">
+            {rows === null ? (
+              <p className="muted">加载中…</p>
+            ) : rows.length === 0 ? (
+              <p className="muted">
+                还没有技能。把技能目录放进 <code>~/.kclaw/skills/</code>（全局）或工作区的
+                <code>.kclaw/skills/</code>（本项目），或到「从其他 agent 复用」页签一键接入。
+              </p>
+            ) : (
+              <ul>
+                {rows.map((r) => (
+                  <li key={r.name}>
+                    <button
+                      type="button"
+                      data-testid={`skill-${r.name}`}
+                      className={body?.title === r.name && body.reusable === undefined ? "skill-item active" : "skill-item"}
+                      onClick={() => void open(r.name)}
+                    >
+                      <span className="skill-name">{r.name}</span>
+                      <span className="skill-meta">
+                        {r.origin === "project" ? "项目" : "全局"}
+                        {r.visibility === "user-only" ? " · 仅用户" : ""}
+                      </span>
+                      <span className="skill-desc clamp2">{r.description}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
-        )}
-        {reusableRows.length === 0 ? (
-          <p className="muted">未发现可复用的技能。四家 agent 的用户级技能目录没有内容，或都已在上方。</p>
-        ) : (
-          <ul>
-            {reusableRows.map((item) => {
-              const reusedHere = linkNames.has(item.name)
-              const hint = item.stale ? "已失效" : item.conflict ? "与已有技能同名冲突" : item.reused && !reusedHere ? "已在其他作用域复用" : ""
-              return (
-                <li key={`${item.name}-${item.target}`}>
-                  <div
-                    data-testid={`discover-${item.name}`}
-                    className={body?.reusable?.name === item.name ? "skill-item discover active" : "skill-item discover"}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => void preview(item)}
-                    onKeyDown={(e) => { if (e.key === "Enter") void preview(item) }}
-                  >
-                    <span className="skill-name">{item.name}</span>
-                    <span className="skill-meta">
-                      {item.sources.map((a) => AGENT_LABEL[a] ?? a).join(" · ")}
-                      {hint !== "" ? ` · ${hint}` : ""}
-                    </span>
-                    <span className="skill-desc">{item.stale ? "源目录或链接已失效" : item.description}</span>
-                    <span className="discover-actions">
-                      {item.reused && reusedHere ? (
-                        <button type="button" data-testid={`unlink-${item.name}`} disabled={busy} onClick={(e) => { e.stopPropagation(); void unlink(item.name) }}>取消复用</button>
-                      ) : (
-                        <button
-                          type="button"
-                          data-testid={`reuse-${item.name}`}
-                          disabled={busy || item.stale || item.conflict}
-                          title={item.conflict ? "先处理同名技能" : item.reused ? "该内容已在其他作用域复用，仍可在此再建链接" : ""}
-                          onClick={(e) => { e.stopPropagation(); void reuse(item) }}
+          <div className="skills-body">
+            {body === null ? (
+              <p className="muted">选择一个技能查看完整说明</p>
+            ) : (
+              <>
+                <h3>{body.title}</h3>
+                <pre>{body.content}</pre>
+              </>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="skills-reuse">
+          {links !== null && links.links.length > 0 && (
+            <div className="skills-links" data-testid="links-table">
+              <h4 className="skills-seg-title">已建链接<span className="muted">（复用技能的可见档位）</span></h4>
+              <table className="links-table">
+                <tbody>
+                  {links.links.map((l) => (
+                    <tr key={l.name} data-testid={`link-${l.name}`}>
+                      <td className="link-name">{l.name}</td>
+                      <td className="link-agent">{AGENT_LABEL[l.agent] ?? l.agent}{l.current === false ? <span className="link-outdated" title="插件已升级到新版本目录，此链接仍指向旧版本">已过时</span> : null}</td>
+                      <td className="link-actions">
+                        <select
+                          data-testid={`tier-${l.name}`}
+                          value={l.tier}
+                          disabled={busy}
+                          onChange={(e) => void setTier(l.name, e.target.value as LinkRecord["tier"])}
                         >
-                          复用
-                        </button>
-                      )}
-                    </span>
-                  </div>
-                </li>
-              )
-            })}
-          </ul>
-        )}
+                          {TIERS.map((t) => (
+                            <option key={t} value={t}>{TIER_LABEL[t]}</option>
+                          ))}
+                        </select>
+                        <button type="button" data-testid={`unlink-row-${l.name}`} disabled={busy} onClick={() => void unlink(l.name)}>删除</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
-        {links !== null && links.links.length > 0 && (
-          <>
-            <h4 className="skills-seg-title">已建链接<span className="muted">（复用技能的可见档位）</span></h4>
-            <ul>
-              {links.links.map((l) => (
-                <li key={l.name}>
-                  <div className="skill-item link-row" data-testid={`link-${l.name}`}>
-                    <span className="skill-name">{l.name}</span>
-                    <span className="skill-meta">{AGENT_LABEL[l.agent] ?? l.agent} · {l.target}</span>
-                    <span className="link-actions">
-                      <select
-                        data-testid={`tier-${l.name}`}
-                        value={l.tier}
-                        disabled={busy}
-                        onChange={(e) => void setTier(l.name, e.target.value as LinkRecord["tier"])}
-                      >
-                        {TIERS.map((t) => (
-                          <option key={t} value={t}>{TIER_LABEL[t]}</option>
-                        ))}
-                      </select>
-                      <button type="button" data-testid={`unlink-row-${l.name}`} disabled={busy} onClick={() => void unlink(l.name)}>删除</button>
-                    </span>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
-      </div>
-      <div className="skills-body">
-        {body === null ? (
-          <p className="muted">选择一个技能查看完整说明；点开可复用技能先预览正文</p>
-        ) : (
-          <>
-            <h3>
-              {body.title}
-              {body.reusable !== undefined && !body.reusable.reused && (
-                <button type="button" data-testid="reuse-preview" disabled={busy || body.reusable.conflict} onClick={() => void reuse(body.reusable!)}>复用此技能</button>
+          <div className="skills-panes">
+            <div className="skills-list">
+              <div className="skills-toolbar">
+                <input
+                  type="text"
+                  data-testid="discover-search"
+                  className="discover-search"
+                  placeholder={`搜索 ${reusableRows.length} 个可复用技能…`}
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+                <button type="button" data-testid="reuse-all" className="skills-reuse-all" disabled={busy || discoveredCount === 0} onClick={() => void reuseAll()}>
+                  全部复用{discoveredCount > 0 ? `（${discoveredCount}）` : ""}
+                </button>
+              </div>
+              {discovery !== null && discovery.sources.length > 0 && (
+                <div className="skills-sources" data-testid="discovery-sources">
+                  {discovery.sources.map((s) => {
+                    // 内置目录不存在=没装那个 agent（中性"未使用"）；自定义
+                    // 目录不存在=登记过的目录消失了（警告"已失效"）。
+                    const note = !s.stale ? "" : s.agent === "custom" ? "（已失效）" : "（未使用）"
+                    return (
+                      <span key={s.dir} className={s.stale ? "skill-source stale" : "skill-source"} title={s.stale ? `${s.dir}（目录不存在）` : s.dir}>
+                        {AGENT_LABEL[s.agent] ?? s.agent}
+                        {note}
+                        {s.agent === "custom" && (
+                          <button type="button" className="skill-source-del" aria-label={`移除 ${s.dir}`} disabled={busy} onClick={() => void removeSource(s.dir)}>×</button>
+                        )}
+                      </span>
+                    )
+                  })}
+                  <span className="skills-source-add">
+                    <input
+                      type="text"
+                      data-testid="source-input"
+                      placeholder="添加探测目录（绝对路径）"
+                      value={newSource}
+                      onChange={(e) => setNewSource(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") void addSource() }}
+                    />
+                    <button type="button" data-testid="source-add" disabled={busy || newSource.trim() === ""} onClick={() => void addSource()}>添加</button>
+                  </span>
+                </div>
               )}
-            </h3>
-            <pre>{body.content}</pre>
-          </>
-        )}
-      </div>
+              {agentGroups.length === 0 && pluginGroups.length === 0 ? (
+                <p className="muted">{reusableRows.length === 0 ? "未发现可复用的技能。四家 agent 的用户级与插件技能都没有新内容，或都已在上方。" : "没有匹配的技能。"}</p>
+              ) : (
+                <>
+                  {agentGroups.length > 0 && (
+                    <div className="skills-section">
+                      <div className="skills-section-title">用户级技能目录</div>
+                      {agentGroups.map((g) => (
+                        <DiscoveryGroup key={g.label} label={g.label} items={g.items} open byName={body?.reusable?.name} busy={busy} linkNames={linkNames} onPreview={preview} onReuse={reuse} onUnlink={unlink} />
+                      ))}
+                    </div>
+                  )}
+                  {pluginGroups.length > 0 && (
+                    <div className="skills-section">
+                      <div className="skills-section-title">
+                        已安装插件
+                        <span className="section-actions">
+                          <button type="button" data-testid="plugin-reuse-all" disabled={busy || !pluginGroups.some((g) => g.items.some((s) => !s.reused && !s.conflict && !s.stale))} onClick={() => void reuseMany("已安装插件", reusableRows.filter((s) => s.plugin !== undefined))}>全部复用</button>
+                          <button type="button" data-testid="plugin-unlink-all" disabled={busy || !pluginGroups.some((g) => g.items.some((s) => linkNames.has(s.name)))} onClick={() => void unlinkMany("已安装插件", reusableRows.filter((s) => s.plugin !== undefined))}>全部删除</button>
+                        </span>
+                      </div>
+                      {pluginGroups.map((g) => (
+                        <DiscoveryGroup key={g.label} label={g.label} items={g.items} open={filtering} byName={body?.reusable?.name} busy={busy} linkNames={linkNames} onPreview={preview} onReuse={reuse} onUnlink={unlink} onReuseAll={reuseMany} onUnlinkAll={unlinkMany} />
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            <div className="skills-body">
+              {body === null ? (
+                <p className="muted">点开一个技能先预览正文，再决定复用；档位在上方已建链接里调整</p>
+              ) : (
+                <>
+                  <h3>
+                    {body.title}
+                    {body.reusable !== undefined && !body.reusable.reused && (
+                      <button type="button" data-testid="reuse-preview" disabled={busy || body.reusable.conflict} onClick={() => void reuse(body.reusable!)}>复用此技能</button>
+                    )}
+                  </h3>
+                  <pre>{body.content}</pre>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+  )
+}
+
+/**
+ * 一个可折叠分组（区块内的 agent 组或插件组）：标题带计数与来源 agent
+ * （组内条目来源的并集），插件组另配"全部复用 / 全部删除"组级批量按钮；
+ * 展开后是技能行（名字 / 状态或来源 / 两行截断的描述 / 复用开关）。open
+ * 是初始展开状态——搜索过滤时由父级强制展开，用户随后仍可手动收起。
+ */
+function DiscoveryGroup({ label, items, open, byName, busy, linkNames, onPreview, onReuse, onUnlink, onReuseAll, onUnlinkAll }: {
+  label: string
+  items: DiscoveredSkill[]
+  open: boolean
+  byName?: string
+  busy: boolean
+  linkNames: Set<string>
+  onPreview: (item: DiscoveredSkill) => void
+  onReuse: (item: DiscoveredSkill) => void
+  onUnlink: (name: string) => void
+  onReuseAll?: (label: string, items: DiscoveredSkill[]) => Promise<void>
+  onUnlinkAll?: (label: string, items: DiscoveredSkill[]) => Promise<void>
+}): React.ReactElement {
+  // 组内条目来源 agent 的并集（跨 agent 合并的条目标全部来源）。
+  const originLabels: string[] = []
+  for (const item of items) {
+    for (const a of item.sources) {
+      const shown = AGENT_LABEL[a] ?? a
+      if (!originLabels.includes(shown)) originLabels.push(shown)
+    }
+  }
+  const canReuse = items.some((s) => !s.reused && !s.conflict && !s.stale)
+  const canUnlink = items.some((s) => linkNames.has(s.name))
+  return (
+    <details className="discover-group" open={open}>
+      <summary>
+        <span className="group-label">{label}<span className="muted">（{items.length}）</span></span>
+        {onReuseAll !== undefined && originLabels.length > 0 && <span className="group-origins">{originLabels.join(" · ")}</span>}
+        {onReuseAll !== undefined && onUnlinkAll !== undefined && (
+          <span className="group-actions">
+            <button type="button" data-testid={`group-reuse-${label}`} disabled={busy || !canReuse} onClick={(e) => { e.preventDefault(); e.stopPropagation(); void onReuseAll(label, items) }}>全部复用</button>
+            <button type="button" data-testid={`group-unlink-${label}`} disabled={busy || !canUnlink} onClick={(e) => { e.preventDefault(); e.stopPropagation(); void onUnlinkAll(label, items) }}>全部删除</button>
+          </span>
+        )}
+      </summary>
+      <ul>
+        {items.map((item) => {
+          const reusedHere = linkNames.has(item.name)
+          const hint = item.stale ? "已失效" : item.conflict ? "与已有技能同名冲突" : item.reused && !reusedHere ? "已在其他作用域复用" : ""
+          return (
+            <li key={`${item.name}-${item.target}`}>
+              <div
+                data-testid={`discover-${item.name}`}
+                className={byName === item.name ? "skill-item discover active" : "skill-item discover"}
+                role="button"
+                tabIndex={0}
+                onClick={() => onPreview(item)}
+                onKeyDown={(e) => { if (e.key === "Enter") onPreview(item) }}
+              >
+                <span className="skill-name">{item.name}</span>
+                <span className="skill-meta">{hint !== "" ? hint : item.sources.map((a) => AGENT_LABEL[a] ?? a).join(" · ")}</span>
+                <span className="skill-desc clamp2">{item.stale ? "源目录或链接已失效" : item.description}</span>
+                <span className="discover-actions">
+                  {item.reused && reusedHere ? (
+                    <button type="button" data-testid={`unlink-${item.name}`} disabled={busy} onClick={(e) => { e.stopPropagation(); onUnlink(item.name) }}>取消复用</button>
+                  ) : (
+                    <button
+                      type="button"
+                      data-testid={`reuse-${item.name}`}
+                      disabled={busy || item.stale || item.conflict}
+                      title={item.conflict ? "先处理同名技能" : item.reused ? "该内容已在其他作用域复用，仍可在此再建链接" : ""}
+                      onClick={(e) => { e.stopPropagation(); onReuse(item) }}
+                    >
+                      复用
+                    </button>
+                  )}
+                </span>
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+    </details>
   )
 }

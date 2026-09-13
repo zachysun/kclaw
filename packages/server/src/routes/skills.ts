@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from "fastify"
 import {
   applyReuseTiers,
   createSkillLink,
+  discoveredTargetPaths,
   discoverSkills,
   isModelVisible,
   isUserVisible,
@@ -41,8 +42,9 @@ function visibilityOf(s: SkillRecord): "all" | "user-only" {
  * 不受该过滤影响（否则"仅模型"档在页面上消失后无法改回；管理面本身持
  * token 鉴权）。
  */
-export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPaths; builtinSources?: { agent: string; dir: string }[] }): void {
+export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPaths; builtinSources?: { agent: string; dir: string }[]; pluginHomes?: { agent: string; home: string }[] }): void {
   const builtin = opts.builtinSources
+  const pluginHomes = opts.pluginHomes
   const projectSkillsDir = (workdir: string | undefined): string | undefined =>
     workdir !== undefined && workdir.trim() !== "" ? join(workdir, ".kclaw", "skills") : undefined
 
@@ -85,7 +87,20 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     const { workdir } = req.query as { workdir?: string }
     const dir = writeScopeDir(workdir)
     if (dir === undefined) return reply.code(400).send({ error: "workdir must be an absolute path" })
-    return { ...readLinksFile(dir) }
+    const file = readLinksFile(dir)
+    // current = 该链接的目标仍是探测正在提供的版本（realpath 命中）；插件
+    // 升级换版本目录后旧链接仍可用但过时，页面据此刻"过时"标。
+    const current = discoveredTargetPaths({ skillsDir: opts.paths.skillsDir, builtin, pluginHomes })
+    const links = file.links.map((l) => {
+      let real: string | undefined
+      try {
+        real = realpathSync(l.target)
+      } catch {
+        real = undefined
+      }
+      return { ...l, current: real !== undefined && current.has(real) }
+    })
+    return { links, extraSources: file.extraSources }
   })
 
   app.get("/skills/discovery", async (req) => {
@@ -97,6 +112,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
         skillsDir: opts.paths.skillsDir,
         owned: scan(workdir),
         builtin,
+        pluginHomes,
         // 项目 scope 里已建的链接也计入 reused 判定（探测锚在全局）
         extraLinksScopes: project !== undefined ? [readLinksFile(project)] : [],
       }),
