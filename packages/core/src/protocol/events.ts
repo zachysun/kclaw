@@ -7,6 +7,8 @@ export type EventType =
   // 生命周期
   | "run.started" | "run.completed" | "run.failed"
   | "message.created" | "message.completed"
+  // Edit & retry / regenerate: live broadcast of a persisted truncation (payload = the discarded range's start id)
+  | "message.truncated"
   | "job.started" | "job.completed" | "job.failed"
   | "session.appended"
   // 会话元数据
@@ -39,6 +41,7 @@ export interface RunCompletedPayload { stopReason: StopReason; usage: Usage }
 export interface RunFailedPayload { error: { code: string; message: string } }
 export interface MessageCreatedPayload { message: Message }
 export interface MessageCompletedPayload { message: Message }
+export interface MessageTruncatedPayload { fromMessageId: string }
 export interface JobStartedPayload { jobId: string }
 export interface JobCompletedPayload { jobId: string; summary: string }
 export interface JobFailedPayload { jobId: string; error: { code: string; message: string } }
@@ -120,6 +123,7 @@ export type EventPayloadMap = {
   "run.failed": RunFailedPayload
   "message.created": MessageCreatedPayload
   "message.completed": MessageCompletedPayload
+  "message.truncated": MessageTruncatedPayload
   "job.started": JobStartedPayload
   "job.completed": JobCompletedPayload
   "job.failed": JobFailedPayload

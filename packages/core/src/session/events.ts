@@ -1,5 +1,5 @@
 import type {
-  CompactionEvent, MemoryEvent, MessageEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
+  CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
   SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SessionEvent, SystemEvent,
 } from "../protocol/session-events.js"
@@ -10,12 +10,13 @@ import type { SessionMeta } from "./store.js"
 // guards and the meta projection — and re-exports the types for the Node
 // packages that historically imported them from here.
 export type {
-  CompactionEvent, MemoryEvent, MessageEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
+  CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
   SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SystemEvent,
 } from "../protocol/session-events.js"
 
 export function isMessageEvent(e: SessionEvent): e is MessageEvent { return e.type === "message" }
+export function isMessageTruncatedEvent(e: SessionEvent): e is MessageTruncatedEvent { return e.type === "message.truncated" }
 export function isCompactionEvent(e: SessionEvent): e is CompactionEvent { return e.type === "compaction" }
 export function isMemoryEvent(e: SessionEvent): e is MemoryEvent { return e.type === "memory" }
 export function isSystemEvent(e: SessionEvent): e is SystemEvent { return e.type === "system" }
@@ -64,6 +65,24 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
       break
     }
     case "message": next.updatedAt = event.createdAt; break
+    case "message.truncated": {
+      // Truncation (edit & retry / regenerate) is a user-visible session
+      // action and advances updatedAt. When the start id crosses the
+      // compaction anchor (message ids are monotonic, so string compare is
+      // creation order), part of the summarized history is discarded → the
+      // compaction projection is cleared with it (the summary can no longer
+      // stand in for hidden messages). A tail truncation — the regular path —
+      // leaves compaction untouched: the early summary and the remaining
+      // history both stay valid.
+      const anchor = next.compactedUpto ?? next.compaction?.upto
+      if (anchor !== undefined && event.fromMessageId <= anchor) {
+        delete next.compactedSummary
+        delete next.compactedUpto
+        delete next.compaction
+      }
+      next.updatedAt = event.at
+      break
+    }
     case "compaction": {
       const segments = [...(next.compaction?.segments ?? []), { upto: event.upto, summary: event.segmentSummary }]
       next.compaction = { segments, top: event.top, upto: event.upto }
