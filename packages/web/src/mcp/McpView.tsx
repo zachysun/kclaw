@@ -184,18 +184,20 @@ export function McpView({ api, notice }: {
       .split("\n")
       .map((l) => l.trim())
       .filter((l) => l !== "")
+    const env = pairsToRecord(form.envPairs)
+    const headers = pairsToRecord(form.headerPairs)
     const config =
       form.type === "stdio"
         ? {
             type: "stdio" as const,
             command: form.command,
             ...(args.length > 0 ? { args } : {}),
-            ...pairsToRecord(form.envPairs),
+            ...(env !== undefined ? { env } : {}),
           }
         : {
             type: "http" as const,
             url: form.url,
-            ...pairsToRecord(form.headerPairs),
+            ...(headers !== undefined ? { headers } : {}),
           }
     try {
       if (form.editing === null) {
