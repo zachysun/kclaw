@@ -37,7 +37,7 @@ function managerError(e: unknown): { code: number; error: string } {
 }
 
 interface NameParams {
-  name?: string
+  name: string
 }
 
 export function registerMcpRoutes(app: FastifyInstance, deps: McpRoutesDeps): void {
