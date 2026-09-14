@@ -15,6 +15,56 @@ export type McpServerConfig =
   | { type: "stdio"; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }
   | { type: "http"; url: string; headers?: Record<string, string>; enabled?: boolean }
 
+function isStringRecord(value: unknown): value is Record<string, string> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false
+  return Object.values(value).every((v) => typeof v === "string")
+}
+
+/**
+ * Runtime guard for untrusted McpServerConfig input (HTTP bodies, future
+ * importers): validates shape and required fields, returning a normalized
+ * config that only carries the fields actually present. Throws with a
+ * user-readable message on any violation.
+ */
+export function parseMcpServerConfig(input: unknown): McpServerConfig {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new Error("config must be an object")
+  }
+  const raw = input as Record<string, unknown>
+  const enabled = raw.enabled
+  if (enabled !== undefined && typeof enabled !== "boolean") throw new Error("enabled must be a boolean")
+  if (raw.type === "stdio") {
+    if (typeof raw.command !== "string" || raw.command.trim() === "") throw new Error("stdio config requires a command")
+    if (raw.args !== undefined && (!Array.isArray(raw.args) || !raw.args.every((a) => typeof a === "string"))) {
+      throw new Error("args must be an array of strings")
+    }
+    if (raw.env !== undefined && !isStringRecord(raw.env)) throw new Error("env must be a map of strings")
+    return {
+      type: "stdio",
+      command: raw.command,
+      ...(Array.isArray(raw.args) && raw.args.length > 0 ? { args: raw.args as string[] } : {}),
+      ...(isStringRecord(raw.env) && Object.keys(raw.env).length > 0 ? { env: raw.env } : {}),
+      ...(enabled !== undefined ? { enabled } : {}),
+    }
+  }
+  if (raw.type === "http") {
+    if (typeof raw.url !== "string" || raw.url.trim() === "") throw new Error("http config requires a url")
+    try {
+      new URL(raw.url)
+    } catch {
+      throw new Error(`invalid url: ${raw.url}`)
+    }
+    if (raw.headers !== undefined && !isStringRecord(raw.headers)) throw new Error("headers must be a map of strings")
+    return {
+      type: "http",
+      url: raw.url,
+      ...(isStringRecord(raw.headers) && Object.keys(raw.headers).length > 0 ? { headers: raw.headers } : {}),
+      ...(enabled !== undefined ? { enabled } : {}),
+    }
+  }
+  throw new Error('config.type must be "stdio" or "http"')
+}
+
 /** One tool exposed by a connected MCP server, under its prefixed name. */
 export interface McpToolEntry {
   name: string

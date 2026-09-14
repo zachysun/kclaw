@@ -18,6 +18,8 @@ import { registerConfigRoutes } from "./routes/config.js"
 import { registerFsRoutes } from "./routes/fs.js"
 import { registerUsageRoutes } from "./routes/usage.js"
 import { registerHookRoutes } from "./routes/hooks.js"
+import { registerMcpRoutes } from "./routes/mcp.js"
+import type { McpRoutesView } from "./routes/mcp.js"
 
 export interface AppOptions {
   /** kclaw home directory; the default SessionStore lives at <home>/sessions. */
@@ -69,11 +71,12 @@ export interface AppOptions {
    */
   pluginHomes?: { agent: string; home: string }[]
   /**
-   * MCP server status snapshot, exposed at `GET /mcp` (bearer-protected,
-   * consumed by `kclaw mcp list`). Absent → the route returns an empty
-   * server list.
+   * MCP manager view: the status snapshot at `GET /mcp` (consumed by
+   * `kclaw mcp list` and the WebUI MCP tab) plus the hot-config action
+   * routes. Absent → the snapshot returns an empty list and the action
+   * family answers 503.
    */
-  mcp?: { status(): { name: string; state: string; tools: { name: string }[]; lastError?: string }[] }
+  mcp?: McpRoutesView
   /**
    * The daemon's attachments dir (`<home>/attachments`): when set, the
    * session attachment routes are registered and the /ws send_message
@@ -208,7 +211,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
     registerUsageRoutes(app, { usage: opts.usage, config })
   }
 
-  app.get("/mcp", async () => ({ servers: opts.mcp?.status() ?? [] }))
+  registerMcpRoutes(app, { mcp: opts.mcp })
 
   const bus = opts.bus ?? new EventBus()
   app.decorate("bus", bus)
