@@ -8,7 +8,7 @@
  * loop).
  */
 import { isCancel, select } from "@clack/prompts"
-import { parseSlashInput, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
+import { MCP_STATE_LABELS, parseSlashInput, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
 import { isPermissionMode, PERMISSION_MODES, PERMISSION_MODE_CONFIRMATIONS } from "@kclaw/core"
 import type { AttachmentRef } from "@kclaw/core"
 import type { PermissionMode } from "@kclaw/core"
@@ -432,6 +432,40 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
         ctx.print(res.content)
       } catch (err) {
         ctx.print(`查看记忆失败: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    },
+  })
+
+  registry.set("mcp", {
+    ...meta("mcp"),
+    async run(args, ctx) {
+      const name = args.trim()
+      try {
+        const { servers } = (await ctx.client.request("GET", "/mcp")) as {
+          servers: Array<{ name: string; state: string; tools: { name: string; description?: string }[]; lastError?: string }>
+        }
+        if (servers.length === 0) {
+          ctx.print("还没有接入任何 MCP 服务器（配置 daemon 的 mcp.json）")
+          return
+        }
+        if (name !== "") {
+          const target = servers.find((s) => s.name === name)
+          if (target === undefined) {
+            ctx.print(`未知 MCP 服务器: ${name}（现有 ${servers.map((s) => s.name).join("、")}）`)
+            return
+          }
+          ctx.print(`${name}（${MCP_STATE_LABELS[target.state] ?? target.state}）· ${target.tools.length} 个工具`)
+          if (target.lastError !== undefined) ctx.print(`最近错误: ${target.lastError}`)
+          for (const t of target.tools) {
+            ctx.print(`  ${t.name}${t.description !== undefined && t.description !== "" ? ` — ${t.description}` : ""}`)
+          }
+          return
+        }
+        ctx.print(servers.map((s) => `${s.name} · ${MCP_STATE_LABELS[s.state] ?? s.state} · ${s.tools.length} 个工具${s.lastError !== undefined ? ` · ${s.lastError}` : ""}`).join("\n"))
+        const failed = servers.filter((s) => s.state === "failed").length
+        if (failed > 0) ctx.print(`${failed} 个失败（重连与配置管理用 WebUI 顶部「MCP」页）`)
+      } catch (err) {
+        ctx.print(`查看 MCP 状态失败: ${err instanceof Error ? err.message : String(err)}`)
       }
     },
   })

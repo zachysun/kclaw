@@ -69,7 +69,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `web.timeoutMs` | `20000` | 每次网络抓取（搜索与网页）的 AbortSignal 超时，卡死的主机不能拖住一个 run |
 | `web.allowPrivateNetworks` | `false` | 设为 `true` 时豁免 web_fetch 对私网/回环目标的拒绝（SSRF 防护，例如允许抓取本机 Ollama 端点），由 run 装配传入工具 |
 | `usage.prices` | `{}` | 模型 → `{inputPerM?, outputPerM?}`：每百万 token 的美元单价，用量记录算成本用；没有价格条目的模型成本按 0 计 |
-| `mcp.servers` | `{}` | 外部 MCP server 配置表（stdio/http 两种形态），daemon 启动时据此装配 McpManager（见 [mcp](./mcp.md)） |
+| `mcp.servers` | `{}` | 外部 MCP server 配置的遗留位置（stdio/http 两种形态），读取时与 `mcp.json` 按名合并（mcp.json 优先）；首次从 WebUI 保存后整节迁入 `mcp.json` 并从此文件摘除（见 [mcp](./mcp.md)） |
 | `exec.timeoutMs` / `maxOutputBytes` | `60000` / `102400`（100 KiB） | exec 工具的超时与输出截断上限 |
 | `sandbox.enabled` / `writeRoots` / `network` | `true` / `[]` / `"allow"` | exec 沙箱的整体开关、追加写白名单（realpath 形态）与沙箱内网络开关（deny 时 exec 子进程断网，web 工具不受影响），见 [sandbox](./sandbox.md)；可选字段仅为兼容旧配置文件 |
 | `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 周期清理用（见 [jobs](./jobs.md)） |

@@ -65,6 +65,8 @@ export interface ChatPanelProps {
   onOpenMemoryWritten?: (info: MemoryWrittenInfo) => void
   /** Open a subagent's audit view (the spawn row's link). */
   onOpenAudit?: (sessionId: string) => void
+  /** Jump to the MCP management tab — the /mcp command's clickable notice. */
+  onOpenMcp?: () => void
 }
 
 /** Max consecutive failed reconnects before giving up with a notice. */
@@ -100,7 +102,7 @@ function errorFrameMessage(frame: unknown): string | null {
   return typeof message === "string" ? message : null
 }
 
-export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten, onOpenAudit }: ChatPanelProps) {
+export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten, onOpenAudit, onOpenMcp }: ChatPanelProps) {
   const [view, setViewState] = useState<ChatState>(() => initChat(initialMessages))
   const [notice, setNotice] = useState<string | null>(null)
   // 已装用户可见技能：出现在斜杠菜单的动态命令（/技能名），会话切换重拉
@@ -459,8 +461,10 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
         sessionId,
         workdir: workdir ?? "",
         notify: setNotice,
+        notifyAction: (action) => setNoticeAction(() => action),
         createSession: onCreateSession,
         openSessions: onOpenSessions,
+        openMcp: onOpenMcp,
         switchModel: handleSwitchModel,
         setMode: (m) => setPermissionMode(m),
         models,
@@ -481,7 +485,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     } catch {
       setNotice("连接不可用，请稍后重试")
     }
-  }, [sessionId, pendingAttachments, api, onCreateSession, onOpenSessions, handleSwitchModel, models, currentModel, updateView, disposition, skillRows, sendMessageRaw])
+  }, [sessionId, pendingAttachments, api, onCreateSession, onOpenSessions, onOpenMcp, handleSwitchModel, models, currentModel, updateView, disposition, skillRows, sendMessageRaw])
 
   /** Upload dropped files and queue them for the next message. */
   const handleDrop = useCallback((event: React.DragEvent) => {

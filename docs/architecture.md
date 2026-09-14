@@ -60,11 +60,11 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 根级另有 `bus.ts`（EventBus，进程内事件分发）与 `client-http.ts`（CLI/WebUI 共享的 HTTP 请求基座：自动附带 Bearer token、提取错误信息、处理 204/空响应，经 `@kclaw/core/client-http` 子路径出口；不 import 任何 Node 专属模块，浏览器可以直接打包）。`mentions.ts`（`@` 文件引用的纯函数层：提取、候选补全与模型侧包装文本，经 `@kclaw/core/mentions` 子路径出口；机制见 [file-mentions](./core/file-mentions.md)）同为浏览器可引用的纯模块。`sandbox/`（exec 工具的操作系统级沙箱：Seatbelt/bwrap 探测与包装，见 [sandbox](./core/sandbox.md)）是内部模块，不经入口导出，由 run 装配直接 import。
 
-**server**（入口 `packages/server/src/index.ts`）：`app.ts`（createApp 装配）、`daemon.ts`（launchDaemon）、`auth.ts`（token 鉴权）、`run.ts`（RunManager 队列状态机；单次 run 的装配在 core 的 `executeRun`）、`subagent.ts`（子代理派生：子会话创建、状态行与确认转发，见 [subagents](./core/subagents.md)）、`command-check.ts`（WS 命令帧的唯一校验点）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`（定时调度 tick）、`memory-scheduler.ts`（记忆的定时/跟随保底调度）、`routes/`（sessions/attachments/jobs/config/fs/usage/memory/skills/hooks/permissions 十组路由）。
+**server**（入口 `packages/server/src/index.ts`）：`app.ts`（createApp 装配）、`daemon.ts`（launchDaemon）、`auth.ts`（token 鉴权）、`run.ts`（RunManager 队列状态机；单次 run 的装配在 core 的 `executeRun`）、`subagent.ts`（子代理派生：子会话创建、状态行与确认转发，见 [subagents](./core/subagents.md)）、`command-check.ts`（WS 命令帧的唯一校验点）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`（定时调度 tick）、`memory-scheduler.ts`（记忆的定时/跟随保底调度）、`routes/`（sessions/attachments/jobs/config/fs/usage/memory/skills/hooks/permissions/mcp 十一组路由）。
 
 **cli**（入口 `packages/cli/src/index.ts`）：commander 命令树（默认进 chat）；`chat.ts`（REPL 交互循环、渲染、@引用展开）、`client.ts`（KclawClient）、`daemon-ctl.ts`（daemon 探测/启动/停止）、`slash.ts`（slash 命令实现）、`file-refs.ts`（@文件引用）、`wizard.ts`（首次配置向导）、`provider-check.ts`（模型连通测试）、`web-cmd.ts`（`kclaw web` 子命令）。
 
-**web**（入口 `packages/web/src/main.tsx`）：九个视图（chat/sessions/jobs/audit/usage/trash/memory/skills/permissions）加 DirectoryPicker（目录选择器）、离线外壳（`sw.js`/manifest/OfflineBanner）、`ws.ts`（WS 客户端）、`token.ts`（token 引导）。
+**web**（入口 `packages/web/src/main.tsx`）：十个视图（chat/sessions/jobs/audit/usage/trash/memory/skills/permissions/mcp）加 DirectoryPicker（目录选择器）、离线外壳（`sw.js`/manifest/OfflineBanner）、`ws.ts`（WS 客户端）、`token.ts`（token 引导）。
 
 ---
 
@@ -75,11 +75,11 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 │  127.0.0.1:<port>  （port 写入 <home>/daemon.json）            │
 │  HTTP: /health /status /sessions* /attachments* /jobs*         │
 │        /memory* /permissions /skills /hooks /config            │
-│        /fs/browse /usage /mcp （Bearer）                        │
+│        /fs/browse /usage /mcp /mcp/servers*（Bearer）           │
 │  WS:   /ws（首帧 auth 或 ?token=；subscribe + 命令 + 事件流）   │
 │  常驻: RunManager（会话串行 run）· scheduler tick（默认 30s）   │
 │        · 记忆调度器（定时 + 跟随，默认 60s 扫）                 │
-│        · McpManager（仅当 mcp.servers 非空时装配，异步连接）    │
+│        · McpManager（恒定装配，异步连接；配置在 mcp.json）      │
 └────────────┬────────────────────────┬────────────────────────┘
              │ HTTP+WS                │ HTTP+WS
       ┌──────┴──────┐          ┌──────┴──────┐
@@ -98,7 +98,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 **如何停止。** 收到 SIGTERM/SIGINT 后走有界 stop（每一步默认 60 秒超时）；stop 失败时保留 daemon.json——进程还在运行，pid 文件必须如实反映。
 
-**状态全部在 `<home>`。** `<home>` 指 `KCLAW_HOME` 环境变量指定的目录，未设置时为 `~/.kclaw`（`resolvePaths`，`packages/core/src/storage/paths.ts`）。里面有：`config.yaml`、`AGENTS.md`、`token`、`daemon.json`、`permissions.yaml`（全局的已保存权限规则，见 [permissions](./core/permissions.md)）、`sessions/`、`memory/`（记忆库：`global/`（persona/wiki/rule 三类认知文件）+ `projects/<id>/`（主题线文件），各带 `vectors.db` 检索索引，见 [memory](./core/memory.md)）、`skills/`（全局技能包目录，项目级技能在工作区 `.kclaw/skills/`，见 [skills](./core/skills.md)）、`hooks/`（用户钩子目录，每个 run 重新扫描，见 [hooks](./core/hooks.md)）、`jobs.db`、`usage.db`、`attachments/`、`commands/`、`logs/`。
+**状态全部在 `<home>`。** `<home>` 指 `KCLAW_HOME` 环境变量指定的目录，未设置时为 `~/.kclaw`（`resolvePaths`，`packages/core/src/storage/paths.ts`）。里面有：`config.yaml`、`AGENTS.md`、`token`、`daemon.json`、`permissions.yaml`（全局的已保存权限规则，见 [permissions](./core/permissions.md)）、`mcp.json`（WebUI 管理的 MCP server 配置，兼容读取 config.yaml 的遗留 `mcp.servers` 节，见 [mcp](./core/mcp.md)）、`sessions/`、`memory/`（记忆库：`global/`（persona/wiki/rule 三类认知文件）+ `projects/<id>/`（主题线文件），各带 `vectors.db` 检索索引，见 [memory](./core/memory.md)）、`skills/`（全局技能包目录，项目级技能在工作区 `.kclaw/skills/`，见 [skills](./core/skills.md)）、`hooks/`（用户钩子目录，每个 run 重新扫描，见 [hooks](./core/hooks.md)）、`jobs.db`、`usage.db`、`attachments/`、`commands/`、`logs/`。
 
 ---
 

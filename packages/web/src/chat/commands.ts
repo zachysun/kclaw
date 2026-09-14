@@ -12,6 +12,7 @@
  */
 import { isPermissionMode, PERMISSION_MODES, PERMISSION_MODE_CONFIRMATIONS } from "@kclaw/core/permission-modes"
 import type { PermissionMode } from "@kclaw/core/permission-modes"
+import { MCP_STATE_LABELS } from "@kclaw/core/commands"
 import type { ParsedSlash } from "@kclaw/core/commands"
 import type { ApiClient } from "../api.js"
 
@@ -35,6 +36,14 @@ export interface WebCommandCtx {
   currentModel?: string
   /** 当前会话的工作目录（/memory save 触发手动写入的目标项目）。 */
   workdir: string
+  /** Jump to the MCP management tab (the /mcp summary's clickable action). Absent → plain notice. */
+  openMcp?(): void
+  /**
+   * Attach a click action to the notice currently being shown (the
+   * memory.written jump precedent). Optional — the dispatcher degrades to a
+   * plain notice when the panel does not support actions.
+   */
+  notifyAction?(action: () => void): void
 }
 
 /** Execute a parsed `/command`; false means the command is unknown. */
@@ -129,6 +138,40 @@ export async function runWebCommand(parsed: ParsedSlash, ctx: WebCommandCtx): Pr
         ctx.notify(`已装技能：${list}。使用方式：在对话里直接说，例如「跑一下 ${rows[0]!.name}」，模型会加载该技能再执行；正文看顶部「技能」页`)
       } catch (err) {
         ctx.notify(`查看技能失败: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      return true
+    }
+    case "mcp": {
+      const name = parsed.args.trim()
+      try {
+        const { servers } = await ctx.api.get<{ servers: Array<{ name: string; state: string; tools: { name: string }[]; lastError?: string }> }>("/mcp")
+        if (servers.length === 0) {
+          ctx.notify("还没有接入任何 MCP 服务器（添加用顶部「MCP」页）")
+          return true
+        }
+        if (name !== "") {
+          const target = servers.find((s) => s.name === name)
+          if (target === undefined) {
+            ctx.notify(`未知 MCP 服务器: ${name}（现有 ${servers.map((s) => s.name).join("、")}）`)
+            return true
+          }
+          ctx.notify(
+            target.tools.length === 0
+              ? `${name}（${MCP_STATE_LABELS[target.state] ?? target.state}）没有暴露工具`
+              : `${name}（${MCP_STATE_LABELS[target.state] ?? target.state}）的工具：${target.tools.map((t) => t.name).join("、")}`,
+          )
+          return true
+        }
+        const connected = servers.filter((s) => s.state === "connected").length
+        const failed = servers.filter((s) => s.state === "failed")
+        const parts = [`MCP：${connected}/${servers.length} 已连接`]
+        if (failed.length > 0) parts.push(`失败：${failed.map((f) => f.name).join("、")}`)
+        parts.push("详情看顶部「MCP」页")
+        ctx.notify(parts.join("，"))
+        const openMcp = ctx.openMcp
+        if (openMcp !== undefined) ctx.notifyAction?.(() => openMcp())
+      } catch (err) {
+        ctx.notify(`查看 MCP 状态失败: ${err instanceof Error ? err.message : String(err)}`)
       }
       return true
     }

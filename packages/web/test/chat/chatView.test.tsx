@@ -103,7 +103,7 @@ describe("ChatView slash suggestions", () => {
     const h = mountView()
     type(h.input(), "/")
     const options = h.container.querySelectorAll('[data-testid="slash-option"]')
-    expect(options).toHaveLength(9)
+    expect(options).toHaveLength(10)
     const text = menuText(h.container)
     expect(text).toContain("/new")
     expect(text).toContain("/compact")

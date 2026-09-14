@@ -33,11 +33,12 @@ import { AuditView } from "./audit/AuditView.js"
 import { MemoryView } from "./memory/MemoryView.js"
 import { SkillsView } from "./skills/SkillsView.js"
 import { PermissionsView } from "./permissions/PermissionsView.js"
+import { McpView } from "./mcp/McpView.js"
 import type { FsBrowseResult, SessionMeta } from "./types.js"
 
 type DaemonStatus = "connecting" | "connected" | "error"
 
-const TABS = ["chat", "jobs", "audit", "usage", "trash", "memory", "skills", "permissions"] as const
+const TABS = ["chat", "jobs", "audit", "usage", "trash", "memory", "skills", "permissions", "mcp"] as const
 type Tab = (typeof TABS)[number]
 
 /**
@@ -435,6 +436,14 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
           >
             权限
           </button>
+          <button
+            type="button"
+            className={tab === "mcp" ? "tab active" : "tab"}
+            data-testid="tab-mcp"
+            onClick={() => switchTab("mcp")}
+          >
+            MCP
+          </button>
         </nav>
         <button
           type="button"
@@ -499,6 +508,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
                   selectSession(childId)
                   switchTab("audit")
                 }}
+                onOpenMcp={() => switchTab("mcp")}
               />
             </div>
           )}
@@ -525,6 +535,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
           {tab === "memory" && <MemoryView api={api} notice={(t) => setSessionNotice(t)} openTarget={memoryTarget} onOpenConsumed={() => setMemoryTarget(null)} />}
           {tab === "skills" && <SkillsView api={api} notice={(t) => setSessionNotice(t)} />}
           {tab === "permissions" && <PermissionsView api={api} notice={(t) => setSessionNotice(t)} workdir={selectedMeta?.workdir} />}
+          {tab === "mcp" && <McpView api={api} notice={(t) => setSessionNotice(t)} />}
         </main>
       </div>
     </div>

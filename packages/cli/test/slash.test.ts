@@ -643,3 +643,64 @@ describe("/skill", () => {
     expect(printed.filter((t) => t.includes("查看技能失败") && t.includes("HTTP 503"))).toHaveLength(2)
   })
 })
+
+describe("/mcp", () => {
+  it("bare /mcp prints one line per server with state and tool count", async () => {
+    const fake = makeFakeCtx(async (_m, path) => {
+      if (path === "/mcp") {
+        return {
+          servers: [
+            { name: "fs", state: "connected", tools: [{ name: "mcp__fs__read" }, { name: "mcp__fs__write" }] },
+            { name: "remote", state: "failed", tools: [], lastError: "ECONNREFUSED" },
+          ],
+        }
+      }
+      throw new Error(`unexpected ${path}`)
+    })
+    const registry = createRegistry(fake.ctx)
+    await runOrHint({ command: "mcp", args: "" }, registry, fake.ctx)
+    const printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.some((t) => t.includes("fs · 已连接 · 2 个工具"))).toBe(true)
+    expect(printed.some((t) => t.includes("remote · 失败 · 0 个工具 · ECONNREFUSED"))).toBe(true)
+    expect(printed.some((t) => t.includes("1 个失败"))).toBe(true)
+  })
+
+  it("/mcp <name> prints that server's tools with descriptions", async () => {
+    const fake = makeFakeCtx(async (_m, path) => {
+      if (path === "/mcp") {
+        return {
+          servers: [{ name: "fs", state: "connected", tools: [{ name: "mcp__fs__read", description: "Read a file" }] }],
+        }
+      }
+      throw new Error(`unexpected ${path}`)
+    })
+    const registry = createRegistry(fake.ctx)
+    await runOrHint({ command: "mcp", args: "fs" }, registry, fake.ctx)
+    const printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.some((t) => t.includes("fs（已连接）· 1 个工具"))).toBe(true)
+    expect(printed.some((t) => t.includes("mcp__fs__read — Read a file"))).toBe(true)
+  })
+
+  it("handles the empty list and unknown names", async () => {
+    const empty = makeFakeCtx(async (_m, path) => (path === "/mcp" ? { servers: [] } : (() => { throw new Error(`unexpected ${path}`) })()))
+    const registry = createRegistry(empty.ctx)
+    await runOrHint({ command: "mcp", args: "" }, registry, empty.ctx)
+    expect(empty.print.mock.calls.map((c) => c[0] as string).some((t) => t.includes("还没有接入任何 MCP 服务器"))).toBe(true)
+
+    const known = makeFakeCtx(async (_m, path) =>
+      path === "/mcp" ? { servers: [{ name: "a", state: "connected", tools: [] }] } : (() => { throw new Error(`unexpected ${path}`) })(),
+    )
+    const registry2 = createRegistry(known.ctx)
+    await runOrHint({ command: "mcp", args: "ghost" }, registry2, known.ctx)
+    expect(known.print.mock.calls.map((c) => c[0] as string).some((t) => t.includes("未知 MCP 服务器: ghost"))).toBe(true)
+  })
+
+  it("request failures print a failure line and never reject", async () => {
+    const fake = makeFakeCtx(async () => {
+      throw new Error("HTTP 503")
+    })
+    const registry = createRegistry(fake.ctx)
+    await expect(runOrHint({ command: "mcp", args: "" }, registry, fake.ctx)).resolves.toBe(true)
+    expect(fake.print.mock.calls.map((c) => c[0] as string).some((t) => t.includes("查看 MCP 状态失败") && t.includes("HTTP 503"))).toBe(true)
+  })
+})

@@ -31,9 +31,11 @@ import {
   JobScheduler,
   MemorySystem,
   SessionStore,
+  consolidateMcpConfig,
   createEmbeddingClient,
   createOpenAiCompatClient,
   loadConfig,
+  loadMcpServers,
   createNotifier,
   makeEvent,
   McpManager,
@@ -300,16 +302,18 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // from /ws to it).
   const llm = (opts.llmFactory ?? defaultLlmFactory)(config)
   const model = resolveModel(config)
-  // MCP servers: a manager is built only when the config lists any; the
-  // per-run tools() read is live (reconnect recovery included). Connection
-  // failures are logged and never fatal — a broken server just yields no tools.
-  const mcpManager =
-    config.mcp !== undefined && Object.keys(config.mcp.servers ?? {}).length > 0
-      ? new McpManager({
-          servers: config.mcp.servers ?? {},
-          onError: (name, error) => console.error(`kclaw mcp ${name} error: ${error}`),
-        })
-      : undefined
+  // MCP: the manager is always assembled (an empty one costs nothing and
+  // keeps the management routes — adding the first server from the WebUI —
+  // alive). Servers come from the merged read (config.yaml legacy section +
+  // mcp.json, mcp.json winning); hot-config changes persist through the
+  // consolidation, which also strips the legacy section on first save.
+  // Connection failures are logged and never fatal — a broken server just
+  // yields no tools.
+  const mcpManager = new McpManager({
+    servers: loadMcpServers(paths),
+    onError: (name, error) => console.error(`kclaw mcp ${name} error: ${error}`),
+    persist: (servers) => consolidateMcpConfig(paths, servers),
+  })
   // Subagent dispatch: the spawner needs the RunManager (it submits/cancels
   // child runs) while the RunManager's engine deps need the spawner — a
   // late-bound getter breaks the cycle (dispatches only fire mid-run, long
@@ -342,8 +346,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     // auto mode induction (batch C): one per-process streak counter threaded
     // through every run's assembly; threshold 0 disables induction.
     autoLearn: { counter: new AutoLearnCounter(config.permissions.autoLearnThreshold ?? 3) },
-    ...(mcpManager !== undefined && { extraTools: () => mcpManager.tools() }),
-    // Retry visibility: with the DEFAULT
+    extraTools: () => mcpManager.tools(),    // Retry visibility: with the DEFAULT
     // composition every run builds its own retry-wrapped client carrying
     // that run's onRetry sink — retry events then carry the run's own
     // sessionId/runId even while sessions run concurrently on the shared
@@ -363,7 +366,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     bus,
     run,
     cancelBackgroundForParent: subagentHost.cancelBackgroundForParent,
-    mcp: mcpManager !== undefined ? { status: () => mcpManager.status() } : undefined,
+    mcp: mcpManager,
     attachmentsDir: paths.attachmentsDir,
     usage,
     webDist: resolveWebDist(opts.webDist),
