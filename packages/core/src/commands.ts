@@ -42,6 +42,7 @@ export const SLASH_COMMANDS: readonly SlashCommandMeta[] = [
   { name: "help", usage: "/help", description: "列出所有命令", surfaces: ["cli", "web"] },
   { name: "memory", usage: "/memory [save|项目 [线]]", description: "记忆：save 手动触发当前项目写入；列项目/主题线/线原文", surfaces: ["cli", "web"] },
   { name: "skill", usage: "/skill [名字]", description: "技能：列出已装技能（名字/作用域/描述）；带名字看该技能的完整说明", surfaces: ["cli", "web"] },
+  { name: "mcp", usage: "/mcp [服务器名]", description: "MCP：无参数显示各服务器连接概况；带名字看该服务器暴露的工具清单", surfaces: ["cli", "web"] },
   { name: "exit", usage: "/exit", description: "退出终端程序", surfaces: ["cli"] },
 ]
 
