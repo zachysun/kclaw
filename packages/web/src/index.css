@@ -3142,6 +3142,12 @@ select:focus {
   max-width: 100%;
 }
 
+.mcp-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-1);
+}
+
 .mcp-meta {
   display: flex;
   align-items: center;

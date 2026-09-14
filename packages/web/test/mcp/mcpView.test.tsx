@@ -126,3 +126,49 @@ describe("McpView", () => {
     expect(notices.some((n) => n.includes("boom"))).toBe(true)
   })
 })
+
+describe("McpView actions (toggle + reconnect)", () => {
+  it("offers disable on a connected server and enable on a disabled one", async () => {
+    const { container } = await mount(fakeApi())
+    const disable = container.querySelector('button[data-testid="mcp-toggle-filesystem"]')
+    expect(disable?.textContent).toBe("禁用")
+    const enable = container.querySelector('button[data-testid="mcp-toggle-off"]')
+    expect(enable?.textContent).toBe("启用")
+  })
+
+  it("sends the enable call and re-fetches on completion", async () => {
+    const api = fakeApi({ post: vi.fn(async () => ({ ok: true })) })
+    const { container } = await mount(api)
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-toggle-filesystem"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(api.post).toHaveBeenCalledWith("/mcp/servers/filesystem/enable", { enabled: false })
+    expect(api.get).toHaveBeenCalledTimes(2)
+  })
+
+  it("shows reconnect only for failed servers and calls the endpoint", async () => {
+    const api = fakeApi({ post: vi.fn(async () => ({ ok: true })) })
+    const { container } = await mount(api)
+    expect(container.querySelector('button[data-testid="mcp-reconnect-filesystem"]')).toBeNull()
+    expect(container.querySelector('button[data-testid="mcp-reconnect-remote"]')).not.toBeNull()
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-reconnect-remote"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(api.post).toHaveBeenCalledWith("/mcp/servers/remote/reconnect")
+    expect(api.get).toHaveBeenCalledTimes(2)
+  })
+
+  it("surfaces action failures through the notice without a reload", async () => {
+    const notices: string[] = []
+    const api = fakeApi({ post: vi.fn(async () => { throw new Error("503 no manager") }) })
+    const { container } = await mount(api, (t) => notices.push(t))
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-toggle-filesystem"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(notices.some((n) => n.includes("503 no manager"))).toBe(true)
+    expect(api.get).toHaveBeenCalledTimes(1)
+  })
+})

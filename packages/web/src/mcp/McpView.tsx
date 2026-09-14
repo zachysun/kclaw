@@ -73,6 +73,21 @@ export function McpView({ api, notice }: {
     })
   }
 
+  /** Run one action endpoint, then re-fetch; failures surface in the notice. */
+  const act = async (fn: () => Promise<unknown>): Promise<void> => {
+    try {
+      await fn()
+      await reload()
+    } catch (e) {
+      noticeRef.current(`操作失败: ${String(e)}`)
+    }
+  }
+
+  const setEnabled = (name: string, enabled: boolean): Promise<void> =>
+    act(() => api.post(`/mcp/servers/${encodeURIComponent(name)}/enable`, { enabled }))
+  const reconnect = (name: string): Promise<void> =>
+    act(() => api.post(`/mcp/servers/${encodeURIComponent(name)}/reconnect`))
+
   return (
     <div className="mcp-view" data-testid="mcp-view">
       <div className="mcp-head">
@@ -105,6 +120,20 @@ export function McpView({ api, notice }: {
                     {s.lastError}
                   </span>
                 )}
+                <span className="mcp-actions">
+                  {s.state === "failed" && (
+                    <button type="button" data-testid={`mcp-reconnect-${s.name}`} onClick={() => void reconnect(s.name)}>
+                      重连
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    data-testid={`mcp-toggle-${s.name}`}
+                    onClick={() => void setEnabled(s.name, s.config.enabled === false)}
+                  >
+                    {s.config.enabled === false ? "启用" : "禁用"}
+                  </button>
+                </span>
               </div>
               <div className="mcp-meta">
                 <code>{configSummary(s.config)}</code>
