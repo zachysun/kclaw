@@ -171,7 +171,7 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
   - 切换入口：CLI 的 Shift+Tab 循环与 `/mode` 命令、WebUI 的常驻选择器，最终都落到 `POST /sessions/:id/mode`（事件溯源写入：追加一条 `session.set` 事件进会话事件流并折进 meta 投影，`GET /sessions/:id/events` 可见，不做 WS 广播）；下一次 run 起生效。旧版 `POST /sessions/:id/readonly` 已移除，读兼容见下。
   - **legacy 读兼容**：投影 `meta.json` 里旧的 `readonly: true` 读出时映射为 `mode: "readonly"`（布尔删除）；事件流里旧的 `session.set {readonly}` 同样映射。写入端只产 `mode`。
   - daemon 级只读启动旗标（`--readonly`）已随本批移除：模式是会话级事实，宿主不再设全局上限。
-- **readRoots**：额外可读根列表。**safe 的路径参数工具**（按「带 `path` 参数且非 sensitive」派生——今天为 `fs_read`/`fs_list`）的目标落在其中任一根之内时不算越界（免确认）；写类工具永不豁免。daemon 装配传 `[<home>/attachments]`——上传的附件对会话而言就是"工作区的一部分"，模型用 fs_read 读取它无需逐次人工放行。
+- **readRoots**：额外可读根列表。**safe 的路径参数工具**（按「带 `path` 参数且非 sensitive」派生——今天为 `fs_read`/`fs_list`）的目标落在其中任一根之内时不算越界（免确认）；写类工具永不豁免。daemon 装配传 `[<home>/attachments, <home>/spill]`——上传的附件对会话而言就是"工作区的一部分"；spill 目录（上下文溢出落盘区）加入后，模型拿压缩定位行的 `fs_read` 提示去读溢出的原文时同样无需逐次人工放行。
 
 ### 6. 工具待遇怎么派生（引擎不持名单）
 
@@ -179,7 +179,7 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
 
 | 待遇 | 派生规则 | 今天的成员 |
 |------|----------|------------|
-| safeTools 自动放行 | `risk === "safe"` | fs_read、fs_list、web_search、web_fetch、memory_save、memory_search、session_search、skill_read、subagent_run、subagent_collect、ask_user_questions |
+| safeTools 自动放行 | `risk === "safe"` | fs_read、fs_list、web_search、web_fetch、memory_save、memory_search、session_search、skill_read、skill_list、subagent_run、subagent_collect、ask_user_questions |
 | readonly 无条件拒绝（且不进入只读 run 的模型工具面） | `risk === "sensitive"` | exec、fs_write、fs_edit |
 | 路径规范化双匹配（防拼写绕过） | 带 `path` 参数且 sensitive | fs_write、fs_edit |
 | 工作目录边界检查 | 带 `path` 参数 | fs_read、fs_list、fs_write、fs_edit |
@@ -188,7 +188,7 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
 
 **新工具因此零引擎改动**：按惯例把写参数命名为 `path`（或命令参数命名为 `command`）并声明 risk，待遇自动齐备——漏声明的缺省是最严待遇（不进 safeTools、无豁免，需确认）。未注册工具（模型幻觉调用不存在的名字）按同样最严缺省处理。结构约定优于名单：名单漏一个名字是漏洞，结构让新工具天然被覆盖。按当前 15 个内置工具的声明（见 [tools](./tools.md)）：
 
-- **safe（命中即自动放行）**：`fs_read`、`fs_list`、`web_search`、`web_fetch`、`memory_save`、`memory_search`、`session_search`、`skill_read`、`subagent_run`、`subagent_collect`、`ask_user_questions`——共 11 个，全是不改工作目录状态的 parallel 工具；
+- **safe（命中即自动放行）**：`fs_read`、`fs_list`、`web_search`、`web_fetch`、`memory_save`、`memory_search`、`session_search`、`skill_read`、`skill_list`、`subagent_run`、`subagent_collect`、`ask_user_questions`——共 12 个，全是不改工作目录状态的 parallel 工具；
 - **sensitive（无 allow 规则命中必然 confirm）**：`exec`、`fs_write`、`fs_edit`——共 3 个。注意 fs_read/fs_list 虽是 safe，目标越界且不在 readRoots 内时仍进入 confirm（第 ③ 步）；MCP 适配器工具（见 [mcp](./mcp.md)）一律声明 sensitive。
 
 ### 7. exec 沙箱（OS 层）

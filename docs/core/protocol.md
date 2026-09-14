@@ -66,7 +66,7 @@ role 与块的事实约定（由 agent 循环维护，非类型强制）：
 | role | 块类型 |
 |------|--------|
 | user | text / note / attachment |
-| assistant | thinking / text / tool_call |
+| assistant | thinking / text / tool_call / note（迭代达上限截断时追加一条 `kind: "system"` 的说明块） |
 | tool | tool_result / note |
 
 ---
@@ -135,11 +135,11 @@ export function makeEvent<T extends EventType>(
 ): AgentEvent<T>
 ```
 
-`EventType` 共 **39 种**，十一个分组：
+`EventType` 共 **40 种**，十一个分组：
 
 | 分组 | 事件 | 数量 |
 |------|------|------|
-| 生命周期 | `run.started` `run.completed` `run.failed` `message.created` `message.completed` `job.started` `job.completed` `job.failed` `session.appended` | 9 |
+| 生命周期 | `run.started` `run.completed` `run.failed` `message.created` `message.completed` `message.truncated` `job.started` `job.completed` `job.failed` `session.appended` | 10 |
 | 会话元数据 | `session.renamed` | 1 |
 | 流式 | `text.created/delta/completed` `thinking.created/delta/completed` `tool_call.created/delta/completed` `tool_result.created/delta/completed` `attachment.created` `attachment.completed` | 14 |
 | 模型调用 | `llm.started` `llm.completed` `llm.failed` | 3 |
@@ -159,6 +159,8 @@ export interface RunCompletedPayload { stopReason: StopReason; usage: Usage }
 export interface RunFailedPayload    { error: { code: string; message: string } }
 export interface JobCompletedPayload { jobId: string; summary: string }
 export interface SessionRenamedPayload { title: string }
+/** 截断通知：编辑重试/重新生成时广播，payload 为被重做的最后一条用户消息 id（见会话事件一节）。 */
+export interface MessageTruncatedPayload { fromMessageId: string }
 /** 持久化通知：一条会话事件已写入 events.jsonl（store 写入成功后发出，先写入后广播）。 */
 export interface SessionAppendedPayload { eventType: SessionEvent["type"] }
 
@@ -253,7 +255,7 @@ export interface HookFailedPayload {
 | `memory.written` | core 的 `MemoryPipeline`（`memory/pipeline.ts`，每次写入经装配的 emit 钩子广播；daemon 侧接钩子的点在 `server/daemon.ts`） |
 | `hook.failed` | core 钩子系统（`hooks/runner.ts` 的 skip 失败报告 + `hooks/registry.ts` 的装载失败去重报告；两处都经 run 装配/daemon 的总线扇出） |
 | `job.*` | server 的 `scheduler-tick.ts` |
-| `session.renamed` | server 的自动命名（`autoname.ts`：新标题写回 meta 后发出） |
+| `session.renamed` | core 的内置钩子 `autoname`（`hooks/builtin.ts` 的 run-before order 30 调 `session/autoname.ts`：新标题写回 meta 后发出） |
 | `session.appended` | core 的 `SessionStore`（`session/store.ts`：每个事件与其投影成功写入后经构造时注入的回调发出；daemon 装配时接 `EventBus`——先写入后广播，web 审计页据此增量拉取） |
 | `attachment.*` | 目前**已定义无发射方**——附件以 attachment 块随用户消息整体持久化与广播（`message.completed` 携带全量消息），不需要单独的块级事件流 |
 

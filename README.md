@@ -19,7 +19,7 @@ A locally resident personal agent: a single daemon owns all state; the CLI and W
    │           @kclaw/core (pure-library agent engine)          │
    │           ├─ run assembly: agent loop, tools, permissions  │
    │           ├─ confirmation broker: risky tools confirm      │
-   │           ├─ Event bus: 37 AgentEvent kinds                │
+   │           ├─ Event bus: 40 AgentEvent kinds                │
    │           └─ memory · compaction                           │
    │                          │                                 │
    └──────────────────────────┼─────────────────────────────────┘
@@ -68,7 +68,7 @@ The wizard ships DeepSeek / OpenAI / Ollama / custom templates; key input is hid
 
 - **Streaming chat**: the CLI REPL and the WebUI share the same experience — replies render as a stream, multi-turn and new sessions supported (example: asking "what is the largest file in `~/Downloads`" triggers the exec tool).
 - **Confirmation cards**: risky tools (exec, fs_edit, …) ask before executing with a four-way verdict (once / always-in-project / always-globally / reject); the "always" choices persist as rule files you can revoke from the WebUI "permissions" tab, and every decision is written to the audit log.
-- **Permission modes**: each session switches independently between readonly / default / accept-edits / trusted / auto (CLI Shift+Tab or `/mode`, WebUI always-on selector). readonly denies all writes; accept-edits skips confirmation for in-workspace file edits; trusted auto-approves everything inside the sandbox/workspace boundary and denies everything outside; auto inducts operations you keep approving with `once` into persistent rules.
+- **Permission modes**: each session switches independently between readonly / default / acceptEdits / trusted / auto (CLI Shift+Tab or `/mode`, WebUI always-on selector). readonly denies all writes; acceptEdits skips confirmation for in-workspace file edits; trusted auto-approves everything inside the sandbox/workspace boundary and denies everything outside; auto inducts operations you keep approving with `once` into persistent rules.
 - **Sessions**: every message is persisted as part of the session's event stream (`sessions/<id>/events.jsonl`); history can be resumed at any time.
 - **Memory**: after each turn, new messages are extracted into per-topic markdown thread files (with a derived FTS5 index); a later related question gets the matching episode injected as a note.
 - **Jobs**: cron-scheduled jobs (e.g. `0 9 * * *` for a daily briefing); the daemon opens a new session on schedule and logs results to audit.
@@ -99,6 +99,7 @@ The wizard ships DeepSeek / OpenAI / Ollama / custom templates; key input is hid
 | `kclaw daemon start \| stop \| status` | Daemon lifecycle (start is idempotent, writes `~/.kclaw/daemon.json`; stop sends SIGTERM) |
 | `kclaw status` | Alias of `daemon status` |
 | `kclaw jobs list` | List scheduled jobs (name/cron/enabled/nextRunAt/lastStatus) |
+| `kclaw mcp [list]` | List configured MCP servers with connection state and tool counts |
 
 Inside the REPL: `/exit` to quit, `/sessions` to list sessions, `/new <title>` for a new session; Ctrl+C cancels the current run.
 
@@ -106,7 +107,7 @@ Inside the REPL: `/exit` to quit, `/sessions` to list sessions, `/new <title>` f
 
 ## WebUI
 
-`packages/web` (React + Vite) is the daemon's official frontend; its build output is statically hosted by the daemon. Feature parity with the CLI (the same HTTP + WS API): streaming chat, confirmation cards, sessions, jobs, audit, memory, skills.
+`packages/web` (React + Vite) is the daemon's official frontend; its build output is statically hosted by the daemon. Feature parity with the CLI (the same HTTP + WS API): streaming chat, confirmation cards, sessions, jobs, audit, usage, trash, memory, skills, permissions, and MCP server management.
 
 The daily entry point is a single command:
 
@@ -140,7 +141,7 @@ providers:
 | `providers` | As above. When absent, the `KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY / KCLAW_LLM_MODEL` environment variables also work (config wins over env). Local Ollama works: `baseUrl: http://127.0.0.1:11434/v1`, `apiKey: ollama`. |
 | `workspace` | Sandbox root for file tools (fs_read/fs_edit, …); access outside it is denied. |
 | `permissions.allow / deny` | Prefix-matching rules (e.g. `exec:git *`): allow skips confirmation, deny rejects outright, everything else asks. |
-| `permissions.defaultMode` | Default permission mode for newly created sessions (`readonly` / `default` / `accept-edits` / `trusted` / `auto`), frozen into each session at creation; changing it only affects sessions created afterwards. |
+| `permissions.defaultMode` | Default permission mode for newly created sessions (`readonly` / `default` / `acceptEdits` / `trusted` / `auto`), frozen into each session at creation; changing it only affects sessions created afterwards. |
 | `exec.timeoutMs / maxOutputBytes` | Timeout and output truncation for the exec tool. |
 | `web.tavilyApiKey` | Optional; enables web_search. |
 | `web.timeoutMs` | Timeout for web tool requests (default 20000ms; both `web_search` and `web_fetch` are bound by it — a hung site no longer stalls the whole run). |

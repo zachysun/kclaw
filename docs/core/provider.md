@@ -160,6 +160,17 @@ null / 未知名 → end_turn
 - CLI 首次运行判定（`packages/cli/src/provider-check.ts` 的 `detectProviderStatus`）用同一套优先级输出三态：`config`（default 指向存在的条目）/ `env`（任一 `KCLAW_LLM_*` 非空）/ `missing`。
 - `providers.timeoutMs` 未配置时由 `loadConfig` 的默认值补齐为 `DEFAULT_LLM_TIMEOUT_MS`（120s）。
 
+### 7. 上下文窗口与输出上限（条目可选字段）
+
+每个 provider 条目还有两个可选数字字段，直接决定请求形状：
+
+| 字段 | 含义 | 缺省 |
+|------|------|------|
+| `contextWindow` | 该模型的上下文窗口（token 数）。有效值（正数）时，有效上下文预算取 `min(sessions.contextTokens ?? ∞, contextWindow)`——按更紧的那个算 | 无（回落 `sessions.contextTokens`，再回落 128000） |
+| `maxOutput` | 单次回复的输出上限（token 数）。声明后随每次请求作为 `max_tokens` 下发，模型单轮最多产出这么多 | 无（不随请求下发） |
+
+有效预算的解析集中在 `resolveContextTokens`（`packages/core/src/storage/config.ts`）一处——压缩的触发线、压缩器与组装时的省略预算全部经它取值，某个模型窗口更紧时会一起收紧，不会出现"压缩按 128000 算、模型实际只有 8 万"的错位。单次 run 的三级模型解析（`resolveRunModel`，同上文件）返回 `{model, entryKey, budget, maxOutput?}`：`model` 是发往 provider 的线上模型名（条目名 → 条目的 `.model`，匹配不到条目的名字原样通过），`budget` 即上述有效预算，`maxOutput` 有才带；两个调用方（run 装配与手动压缩路径）都走这一个函数，预算口径不可能分叉。模型条目解析的优先级与回落链见 [architecture](./architecture.md) 的数据流一节。
+
 ---
 
 ## 边界与出错

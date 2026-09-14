@@ -20,7 +20,7 @@ kclaw 是一个运行在本机的个人 AI 助手（agent）。整套系统只�
 
 **四、实时事件不持久化，持久化的是事件流。** WS 上推送的增量事件（text.delta、message.created 等）只用于实时刷新界面：不写入磁盘、断线不补发、不回放。会话真正的持久化形式是每个会话目录下的 events.jsonl 事件流（唯一真相，message / compaction / memory / system 等业务事件都记录在这里），以及由它推导出来的 meta.json 摘要（见 [storage](./core/storage.md)）。客户端断线恢复的办法：先用 HTTP 拉一次全量消息，再只订阅新事件（详见 [protocol](./core/protocol.md)）。
 
-**五、WebUI 是独立构建的静态产物。** `@kclaw/web` 的运行时依赖只有 react/react-dom、`@kclaw/core` 的两个纯数据出口，以及 react-virtuoso（审计页用的虚拟滚动列表库，见 [webui](./web/webui.md)）。两个纯数据出口是：`commands` 共享表（slash 命令的 name/usage 元数据，CLI 与 WebUI 读同一份，见 [extending](./extending.md)）和 `protocol` 子路径出口（线上数据形状的类型定义）。构建出的静态文件由 daemon 托管（`resolveWebDist` → `packages/web/dist`），不需要额外的文件服务器。
+**五、WebUI 是独立构建的静态产物。** `@kclaw/web` 的运行时依赖是 react/react-dom、`@kclaw/core` 的几个纯数据/纯类型子路径出口（`commands`、`protocol`、`mentions`、`client-http`、`permission-modes`），以及 react-virtuoso（审计页用的虚拟滚动列表库，见 [webui](./web/webui.md)）与 react-markdown 全家桶（对话页 Markdown 渲染）。`commands` 是 slash 命令的 name/usage 元数据共享表（CLI 与 WebUI 读同一份，见 [extending](./extending.md)），`protocol` 是线上数据形状的类型定义。构建出的静态文件由 daemon 托管（`resolveWebDist` → `packages/web/dist`），不需要额外的文件服务器。
 
 ---
 
@@ -35,7 +35,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
  └── @kclaw/web      客户端：React SPA（依赖 core 的 commands/protocol 子路径出口与 react-virtuoso，vite 独立构建）
 ```
 
-依赖方向唯一：core ← server、core ← cli。web 只依赖 core 的 `commands`/`protocol` 两个子路径出口（纯数据/纯类型，不含 agent 引擎）与 react-virtuoso；发布包 kclaw 只在构建期把 cli、server、web 的产物打包到一起。
+依赖方向唯一：core ← server、core ← cli。web 只依赖 core 的几个子路径出口（`commands`/`protocol`/`mentions`/`client-http`/`permission-modes`——纯数据/纯类型，不含 agent 引擎）、react-virtuoso 与 react-markdown 全家桶；发布包 kclaw 只在构建期把 cli、server、web 的产物打包到一起。
 
 ### 各包内部结构
 
@@ -185,8 +185,8 @@ run 的装配在 core 的 `executeRun`（`packages/core/src/agent/run-assembly.t
 - [agent-loop](./core/agent-loop.md)：run 生命周期状态机与工具回合
 - [daemon](./server/daemon.md)：daemon 装配序、有界 stop、pidfile 语义
 - [run-manager](./server/run-manager.md)：服务端侧的会话串行与确认网关
-- [http-api](./server/http-api.md)：52 条业务路由清单（含附件/用量/目录浏览/MCP 状态/记忆管理/技能与复用/钩子/权限）
-- [mcp](./core/mcp.md)：条件装配的 MCP 工具适配器
+- [http-api](./server/http-api.md)：58 条业务路由清单（含附件/用量/目录浏览/MCP 管理/记忆管理/技能与复用/钩子/权限）
+- [mcp](./core/mcp.md)：恒定装配的 MCP 工具适配器
 - [skills](./core/skills.md)：技能包机制（渐进披露、双作用域、点名隐式包装）
 - [hooks](./core/hooks.md)：钩子系统（14 位置网格、HookChain 注册接口、用户文件装载、内置钩子清单）
 - [storage](./core/storage.md)：`<home>` 布局、config 与 usage.db 用量记录

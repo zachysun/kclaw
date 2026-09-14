@@ -98,6 +98,7 @@ export function resolvePaths(home?: string): KclawPaths
 export interface KclawPaths {
   home: string; config: string; agentsMd: string
   skillsDir: string               // <home>/skills —— 全局技能包目录（见 skills.md）
+  hooksDir: string                // <home>/hooks —— 用户钩子目录（见 hooks.md）
   memoryDir: string; memoryNotesDir: string; memoryIndexDb: string
   sessionsDir: string; jobsDb: string; usageDb: string
   attachmentsDir: string; spillDir: string; logsDir: string

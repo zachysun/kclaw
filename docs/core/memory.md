@@ -2,7 +2,7 @@
 
 ## 职责
 
-`MemorySystem`（`packages/core/src/memory/system.ts`）是记忆系统的唯一服务端门面（单类不拆；30 个方法按四类消费方拆成四个窄接口 `MemoryQuery`/`MemoryTriggers`/`MemoryScheduleBook`/`MemoryAdmin`，调用方按需依赖其中一个面），它把三类文件级能力装配在一起：**L1 项目情节**（按项目分目录的主题线文件）、**L2 全局认知**（跨项目的画像/知识/规则文件）、以及两套**派生检索索引**（SQLite FTS5 全文索引 + 可选的向量索引）。一条记忆就是一份 markdown 文件，用户可以直接打开查看、修改、删除；索引永远只是派生物，删掉可以重建。
+`MemorySystem`（`packages/core/src/memory/system.ts`）是记忆系统的唯一服务端门面（单类不拆；31 个公共方法按四类消费方拆成四个窄接口 `MemoryQuery`/`MemoryTriggers`/`MemoryScheduleBook`/`MemoryAdmin`——共 29 个，另有接口外的 `stop()` 与 `migrateV1Notes()`，调用方按需依赖其中一个面），它把三类文件级能力装配在一起：**L1 项目情节**（按项目分目录的主题线文件）、**L2 全局认知**（跨项目的画像/知识/规则文件）、以及两套**派生检索索引**（SQLite FTS5 全文索引 + 可选的向量索引）。一条记忆就是一份 markdown 文件，用户可以直接打开查看、修改、删除；索引永远只是派生物，删掉可以重建。
 
 模型通过 `memory_save` / `memory_search` 两个工具读写（`packages/core/src/tools/memory.ts`）；run 装配（core `executeRun`）在每次 run 时做两级注入——L2 认知常驻系统提示、L1 情节作为 note 挂到用户消息上（见下文"检索与注入"）。daemon 的 `MemorySystem` 装配、旧版数据迁移、embedding 判定链都在 `packages/server/src/daemon.ts`。
 
@@ -102,7 +102,7 @@ updated: 2026-08-30
 
 ## 写入管线（MemoryPipeline）
 
-管线位于 `packages/core/src/memory/pipeline.ts`，对外只暴露一个入口 `runTrigger(workdir, trigger, sessionId?)`。一次触发做四件事：
+管线位于 `packages/core/src/memory/pipeline.ts`，写入的触发入口是 `runTrigger(workdir, trigger, sessionId?)`（另有 `runNightly`/`consolidate` 与索引重建等维护入口，见 [http-api](../server/http-api.md) 的 `/memory` 路由族）。一次触发做四件事：
 
 1. **选范围**：提取是**会话级**的——只看触发会话自己的增量窗口（"增量"以提取进度为界：每个会话记录一个"已提取到哪条消息"的标记，标记之后的消息才是新内容；该项目每个会话各有自己的提取进度标记。定时触发无显式归属，对该项目全部会话逐个补），见下节"提取进度标记与串行锁"；
 2. **提取**：无工具 LLM 调用，把范围渲染成逐行文本 + 现有主题线清单（MEMORY.md 表格），交给固定 system 提示的提取器（`EXTRACT_SYSTEM_PROMPT`），要求只输出 JSON `{"actions":[...]}`。每个动作的字段名固定：判别字段 `op` 取 `append`（接到已有线）/`update`（修正已有线某小节）/`new-thread`（开新线）三值；**每个动作必填非空 `file`**（线文件名，kebab-case，`new-thread` 也不例外）与 `content`；`update` 额外带 `section`，`new-thread` 额外带 `thread`/`title`；允许显式 `status:"inactive"`（明确的完成结论）；噪音直接跳过，无值得记的内容输出 `{"actions":[]}`。prompt 内含完整 JSON 示例。**线的身份唯一以 `file` 为准**：写入磁盘时 frontmatter `topic` 一律取 `file`，模型交回的 `thread` 字段仅兼容保留、不参与身份——否则文件名与内部 topic 分裂，MEMORY.md 行按 topic 显示、读/改/删按文件名定位，清单点开即 404；

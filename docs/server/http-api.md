@@ -142,8 +142,8 @@ interface Job {
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
-| GET | `/skills?workdir=` | 用户可见技能清单 | `workdir` 可选：会话工作目录，决定项目级技能作用域 | `{name, displayName, description, visibility, origin}[]`——`visibility` 为 `all`（模型+用户）或 `user-only`（被 `disable-model-invocation` 隐藏但仍用户可见）；`origin` 为 `global` / `project` |
-| GET | `/skills/:name?workdir=` | 单个技能详情（含正文） | 同上 | `{name, displayName, description, visibility, origin, content}`——`content` 是 `SKILL.md` 正文 |
+| GET | `/skills?workdir=` | 用户可见技能清单 | `workdir` 可选：会话工作目录，决定项目级技能作用域 | `{name, displayName, description, visibility, origin, plugin}[]`——`visibility` 为 `all`（模型+用户）或 `user-only`（被 `disable-model-invocation` 隐藏但仍用户可见）；`origin` 为 `global` / `project`；`plugin` 为可选的来源插件名（插件自带的技能才带） |
+| GET | `/skills/:name?workdir=` | 单个技能详情（含正文） | 同上 | `{name, displayName, description, visibility, origin, plugin, content}`——`content` 是 `SKILL.md` 正文 |
 | GET | `/skills/discovery?workdir=` | 探测其他 agent 的可复用技能 | 同上 | `{sources, skills, projectSources}`——`sources` 是探测来源（含失效标），`skills` 是发现列表（realpath 去重、来源聚合、`reused`/`conflict`/`stale` 标、插件技能带 `plugin` 名），`projectSources` 是项目作用域自行登记的来源 |
 | POST | `/skills/discovery/preview` | 预览候选 SKILL.md 正文 | `{path}` | `{name, body}`；路径必须解析到已发现候选或位于已登记来源之下，否则 404 |
 | GET | `/skills/links?workdir=` | 当前作用域链接记录与自定义来源 | 同上 | `{links: {name, target, agent, tier, current}[], extraSources: string[]}`——直接读旁挂文件，不受用户可见性过滤影响；`current` 为 false 表示目标已不是探测正在提供的版本（插件升级过，链接可用但过时） |
@@ -212,7 +212,7 @@ interface Job {
 | 方法 | 路径 | 用途 |
 |------|------|------|
 | GET | `/ws` | WebSocket（建立后可双向收发消息的长连接）升级端点；HTTP 鉴权豁免，连接内首帧认证，协议见 [realtime](./realtime.md) |
-| GET | `/`、`/assets/*` | 仅当 `webDist` 已配置时由 `@fastify/static` 托管构建产物；外壳三路径加 PWA 静态文件（`/manifest.webmanifest`、`/sw.js`、`/icon-192.png`、`/icon-512.png`、`/favicon.ico`）免鉴权，其余静态文件仍需 Bearer |
+| GET | `/`、`/assets/*` | 仅当 `webDist` 已配置时由 `@fastify/static` 托管构建产物；外壳三路径加 PWA 静态文件（`/manifest.webmanifest`、`/sw.js`、`/icon-192.png`、`/icon-512.png`、`/favicon.svg`、`/favicon.ico`）免鉴权，其余静态文件仍需 Bearer |
 
 **队列相关的 WS 命令与事件**（完整帧语义见 [realtime](./realtime.md) 与 [run-manager](./run-manager.md)）：
 
