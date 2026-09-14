@@ -14,6 +14,12 @@ import { McpView } from "../../src/mcp/McpView.js"
 const SNAPSHOT = {
   servers: [
     {
+      name: "existing",
+      config: { type: "stdio", command: "run", env: { TOKEN: "s3cret" } },
+      state: "connected",
+      tools: [],
+    },
+    {
       name: "filesystem",
       config: { type: "stdio", command: "npx -y srv" },
       state: "connected",
@@ -170,5 +176,121 @@ describe("McpView actions (toggle + reconnect)", () => {
     await flush()
     expect(notices.some((n) => n.includes("503 no manager"))).toBe(true)
     expect(api.get).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("McpView form (add / edit / delete)", () => {
+  async function openAdd(container: HTMLElement): Promise<void> {
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-add"]') as HTMLButtonElement).click()
+    })
+  }
+
+  function typeInto(container: HTMLElement, testid: string, value: string): void {
+    const el = container.querySelector(`[data-testid="${testid}"]`) as HTMLInputElement | HTMLTextAreaElement
+    const proto = el instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement : window.HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(proto.prototype, "value")!.set!
+    act(() => {
+      setter.call(el, value)
+      el.dispatchEvent(new Event("input", { bubbles: true }))
+    })
+  }
+
+  it("adds a stdio server through the form", async () => {
+    const api = fakeApi({ post: vi.fn(async () => ({ ok: true })) })
+    const { container } = await mount(api)
+    await openAdd(container)
+    expect(container.querySelector('[data-testid="mcp-form"]')).not.toBeNull()
+    typeInto(container, "mcp-form-name", "new-srv")
+    typeInto(container, "mcp-form-command", "npx -y srv")
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-form-submit"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(api.post).toHaveBeenCalledWith("/mcp/servers", {
+      name: "new-srv",
+      config: { type: "stdio", command: "npx -y srv" },
+    })
+    expect(api.get).toHaveBeenCalledTimes(2)
+    // form closes after a successful save
+    expect(container.querySelector('[data-testid="mcp-form"]')).toBeNull()
+  })
+
+  it("switches to http fields and carries headers through", async () => {
+    const api = fakeApi({ post: vi.fn(async () => ({ ok: true })) })
+    const { container } = await mount(api)
+    await openAdd(container)
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-form-type-http"]') as HTMLButtonElement).click()
+    })
+    typeInto(container, "mcp-form-name", "remote")
+    typeInto(container, "mcp-form-url", "https://x.test/mcp")
+    // add one header pair
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-form-headers-add"]') as HTMLButtonElement).click()
+    })
+    typeInto(container, "mcp-form-headers-key-0", "Authorization")
+    typeInto(container, "mcp-form-headers-value-0", "Bearer k")
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-form-submit"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(api.post).toHaveBeenCalledWith("/mcp/servers", {
+      name: "remote",
+      config: { type: "http", url: "https://x.test/mcp", headers: { Authorization: "Bearer k" } },
+    })
+  })
+
+  it("edits an existing server with plaintext echo of env", async () => {
+    const api = fakeApi({ patch: vi.fn(async () => ({ ok: true })) })
+    const { container } = await mount(api)
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-edit-existing"]') as HTMLButtonElement).click()
+    })
+    const nameInput = container.querySelector('[data-testid="mcp-form-name"]') as HTMLInputElement
+    expect(nameInput.value).toBe("existing")
+    expect(nameInput.disabled).toBe(true)
+    expect((container.querySelector('[data-testid="mcp-form-command"]') as HTMLInputElement).value).toBe("run")
+    // env echoes back in plaintext
+    expect((container.querySelector('[data-testid="mcp-form-env-key-0"]') as HTMLInputElement).value).toBe("TOKEN")
+    expect((container.querySelector('[data-testid="mcp-form-env-value-0"]') as HTMLInputElement).value).toBe("s3cret")
+    typeInto(container, "mcp-form-command", "run2")
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-form-submit"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(api.patch).toHaveBeenCalledWith("/mcp/servers/existing", {
+      config: { type: "stdio", command: "run2", env: { TOKEN: "s3cret" } },
+    })
+  })
+
+  it("keeps the form open and shows the error when the API rejects", async () => {
+    const api = fakeApi({
+      post: vi.fn(async () => {
+        throw new Error("MCP server already exists: x")
+      }),
+    })
+    const { container } = await mount(api)
+    await openAdd(container)
+    typeInto(container, "mcp-form-name", "x")
+    typeInto(container, "mcp-form-command", "c")
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-form-submit"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(container.querySelector('[data-testid="mcp-form"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="mcp-form-error"]')?.textContent).toContain("already exists")
+    expect(api.get).toHaveBeenCalledTimes(1)
+  })
+
+  it("deletes a server and re-fetches", async () => {
+    const api = fakeApi({ del: vi.fn(async () => ({ ok: true })) })
+    const { container } = await mount(api)
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-delete-existing"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(api.del).toHaveBeenCalledWith("/mcp/servers/existing")
+    expect(api.get).toHaveBeenCalledTimes(2)
   })
 })
