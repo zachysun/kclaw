@@ -312,3 +312,47 @@ describe("McpManager hot config methods", () => {
     await manager.stop()
   })
 })
+
+describe("McpManager review fixes", () => {
+  it("reconnect during a backoff window cancels the pending retry instead of racing it", async () => {
+    let attempts = 0
+    let failNext = false
+    const harness = fakeServerHarness()
+    const manager = new McpManager({
+      servers: { flaky: { type: "stdio", command: "unused" } },
+      transportFactory: () => {
+        attempts++
+        if (failNext) throw new Error("down")
+        return harness.transportFactory()
+      },
+      backoffBaseMs: 40,
+      backoffCapMs: 40,
+      connectTimeoutMs: 500,
+    })
+    await manager.start()
+    expect(manager.status()[0].state).toBe("connected")
+
+    // Kill the server side; the backoff attempt fires ~40ms later and fails
+    // (failNext), landing the server in "failed" with the NEXT retry timer
+    // already pending — the window the WebUI's reconnect button shows in.
+    failNext = true
+    await harness.serverTransports[0]!.close()
+    const deadline = Date.now() + 2000
+    while (Date.now() < deadline && manager.status()[0]!.state !== "failed") {
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    expect(manager.status()[0]!.state).toBe("failed")
+    const attemptsInWindow = attempts
+
+    failNext = false
+    manager.reconnect("flaky")
+    await manager.flush()
+    expect(manager.status()[0]!.state).toBe("connected")
+
+    // The cancelled backoff timer must NOT fire: exactly one more attempt
+    // than the window had, ever.
+    await new Promise((r) => setTimeout(r, 120))
+    expect(attempts).toBe(attemptsInWindow + 1)
+    await manager.stop()
+  })
+})

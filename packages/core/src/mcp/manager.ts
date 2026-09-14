@@ -235,13 +235,21 @@ export class McpManager {
    * One manual connect attempt for a failed/never-connected server. Never
    * schedules the backoff loop behind itself — a server the user just
    * retried settles in connected or failed, and further attempts are the
-   * user's call. Throws for unknown names, refuses disabled servers, and
-   * no-ops servers already connected or connecting.
+   * user's call. A pending backoff timer is cancelled: without this the
+   * loop's next try would fire behind the manual one and race the same
+   * state object with two concurrent connects (the loser's client leaks,
+   * the winner gets clobbered by the loser's transport-close callback).
+   * Throws for unknown names, refuses disabled servers, and no-ops servers
+   * already connected or connecting.
    */
   reconnect(name: string): void {
     const state = this.mustGet(name)
     if (state.config.enabled === false) throw new Error(`MCP server ${name} is disabled`)
     if (state.state === "connected" || state.state === "connecting") return
+    if (state.reconnectTimer !== undefined) {
+      clearTimeout(state.reconnectTimer)
+      state.reconnectTimer = undefined
+    }
     void this.connect(state, false)
   }
 
@@ -378,9 +386,11 @@ export class McpManager {
   private async connectServer(s: ServerState, retry: boolean): Promise<void> {
     if (s.stopped) return
     s.state = "connecting"
+    let client: InstanceType<typeof Client> | undefined
+    let transport: ReturnType<typeof this.buildTransport> | undefined
     try {
-      const transport = this.buildTransport(s)
-      const client = new Client({ name: "kclaw", version: clientVersion() }, { capabilities: {} })
+      transport = this.buildTransport(s)
+      client = new Client({ name: "kclaw", version: clientVersion() }, { capabilities: {} })
       transport.onclose = () => this.handleTransportClose(s)
       await this.raceTimeout(client.connect(transport))
       if (s.stopped) {
@@ -407,13 +417,19 @@ export class McpManager {
       s.hadSession = true
       s.lastError = undefined
     } catch (err) {
-      // Tear down whatever half-connected client we may hold.
-      if (s.client) {
-        s.client.onclose = undefined
-        await s.client.close().catch(() => {})
-        s.client = undefined
-        s.transport = undefined
+      // Tear down whatever half-connected client this attempt may hold —
+      // including one the timeout race left unassigned: a connect that
+      // timed out keeps running underneath, so its close callback must be
+      // detached (it would otherwise clobber the NEXT attempt's connection
+      // when the abandoned transport eventually dies) and the client closed
+      // (a stdio child process would leak per timed-out attempt).
+      if (transport !== undefined) transport.onclose = undefined
+      if (client !== undefined) {
+        client.onclose = undefined
+        await client.close().catch(() => {})
       }
+      s.client = undefined
+      s.transport = undefined
       const message = (err as Error).message
       s.state = "failed"
       s.lastError = message

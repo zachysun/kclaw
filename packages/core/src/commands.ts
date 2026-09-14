@@ -51,6 +51,14 @@ export interface ParsedSlash {
   args: string
 }
 
+/** 中文连接状态标签（WebUI MCP 栏与双端 /mcp 摘要共用）。 */
+export const MCP_STATE_LABELS: Readonly<Record<string, string>> = {
+  connected: "已连接",
+  connecting: "连接中",
+  disabled: "已禁用",
+  failed: "失败",
+}
+
 /** Parse `/command args`; non-slash input (plain messages) returns null. */
 export function parseSlashInput(input: string): ParsedSlash | null {
   if (!input.startsWith("/")) return null

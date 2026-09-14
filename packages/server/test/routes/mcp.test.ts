@@ -169,3 +169,38 @@ describe("mcp routes", () => {
     expect(reconnect.statusCode).toBe(503)
   })
 })
+
+describe("mcp routes review fixes", () => {
+  let home: string
+  let app: FastifyInstance
+
+  beforeEach(async () => {
+    home = mkdtempSync(join(tmpdir(), "kclaw-mcp-rv-"))
+    app = await createApp({ home, token: "t1", stores: { config: structuredClone(defaultConfig) }, mcp: fakeManager() })
+  })
+
+  afterEach(async () => {
+    await app.close()
+    rmSync(home, { recursive: true, force: true })
+  })
+
+  it("trims the name before storing and rejects names outside the safe charset", async () => {
+    const trimmed = await app.inject({
+      method: "POST",
+      url: "/mcp/servers",
+      headers: AUTH,
+      payload: { name: "  spaced  ", config: { type: "stdio", command: "x" } },
+    })
+    expect(trimmed.statusCode).toBe(200)
+    expect((trimmed.json() as { servers: McpServerStatus[] }).servers.map((s) => s.name)).toContain("spaced")
+
+    const weird = await app.inject({
+      method: "POST",
+      url: "/mcp/servers",
+      headers: AUTH,
+      payload: { name: "my server.v2", config: { type: "stdio", command: "x" } },
+    })
+    expect(weird.statusCode).toBe(400)
+    expect((weird.json() as { error: string }).error).toContain("letters, digits")
+  })
+})

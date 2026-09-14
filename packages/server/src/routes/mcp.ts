@@ -28,6 +28,14 @@ export interface McpRoutesDeps {
 
 const NOT_FOUND = { error: "not found" }
 
+/**
+ * Server names become part of model-facing tool ids (`mcp__<name>__tool`),
+ * so a name outside this set would produce tool definitions many providers
+ * reject. Entries that predate the UI (config.yaml / mcp.json) are never
+ * re-validated — only new names entering through the API are.
+ */
+const NAME_PATTERN = /^[A-Za-z0-9_-]+$/
+
 /** Map a manager rejection to its HTTP status by message class. */
 function managerError(e: unknown): { code: number; error: string } {
   const message = (e as Error).message
@@ -49,6 +57,10 @@ export function registerMcpRoutes(app: FastifyInstance, deps: McpRoutesDeps): vo
     if (typeof body?.name !== "string" || body.name.trim() === "") {
       return reply.code(400).send({ error: "name is required" })
     }
+    const name = body.name.trim()
+    if (!NAME_PATTERN.test(name)) {
+      return reply.code(400).send({ error: "name may only contain letters, digits, '_' and '-'" })
+    }
     let config: McpServerConfig
     try {
       config = parseMcpServerConfig(body.config)
@@ -56,7 +68,7 @@ export function registerMcpRoutes(app: FastifyInstance, deps: McpRoutesDeps): vo
       return reply.code(400).send({ error: (e as Error).message })
     }
     try {
-      deps.mcp.addServer(body.name, config)
+      deps.mcp.addServer(name, config)
     } catch (e) {
       const mapped = managerError(e)
       return reply.code(mapped.code).send({ error: mapped.error })

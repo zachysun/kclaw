@@ -294,3 +294,20 @@ describe("McpView form (add / edit / delete)", () => {
     expect(api.get).toHaveBeenCalledTimes(2)
   })
 })
+
+describe("McpView form review fix", () => {
+  it("saving an edit to a disabled server keeps enabled:false", async () => {
+    const api = fakeApi({ patch: vi.fn(async () => ({ ok: true })) })
+    const { container } = await mount(api)
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-edit-off"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-form-submit"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(api.patch).toHaveBeenCalledWith("/mcp/servers/off", {
+      config: { type: "stdio", command: "unused", enabled: false },
+    })
+  })
+})

@@ -12,6 +12,7 @@
  */
 import { isPermissionMode, PERMISSION_MODES, PERMISSION_MODE_CONFIRMATIONS } from "@kclaw/core/permission-modes"
 import type { PermissionMode } from "@kclaw/core/permission-modes"
+import { MCP_STATE_LABELS } from "@kclaw/core/commands"
 import type { ParsedSlash } from "@kclaw/core/commands"
 import type { ApiClient } from "../api.js"
 
@@ -142,7 +143,6 @@ export async function runWebCommand(parsed: ParsedSlash, ctx: WebCommandCtx): Pr
     }
     case "mcp": {
       const name = parsed.args.trim()
-      const STATE_LABELS: Record<string, string> = { connected: "已连接", connecting: "连接中", disabled: "已禁用", failed: "失败" }
       try {
         const { servers } = await ctx.api.get<{ servers: Array<{ name: string; state: string; tools: { name: string }[]; lastError?: string }> }>("/mcp")
         if (servers.length === 0) {
@@ -157,8 +157,8 @@ export async function runWebCommand(parsed: ParsedSlash, ctx: WebCommandCtx): Pr
           }
           ctx.notify(
             target.tools.length === 0
-              ? `${name}（${STATE_LABELS[target.state] ?? target.state}）没有暴露工具`
-              : `${name}（${STATE_LABELS[target.state] ?? target.state}）的工具：${target.tools.map((t) => t.name).join("、")}`,
+              ? `${name}（${MCP_STATE_LABELS[target.state] ?? target.state}）没有暴露工具`
+              : `${name}（${MCP_STATE_LABELS[target.state] ?? target.state}）的工具：${target.tools.map((t) => t.name).join("、")}`,
           )
           return true
         }

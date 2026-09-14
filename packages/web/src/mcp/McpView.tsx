@@ -8,6 +8,7 @@
  * plaintext by design (local single-user product behind token auth).
  */
 import { useCallback, useEffect, useRef, useState } from "react"
+import { MCP_STATE_LABELS } from "@kclaw/core/commands"
 import type { ApiClient } from "../api.js"
 
 interface McpToolEntry {
@@ -24,13 +25,6 @@ interface McpServerStatus {
   state: McpState
   tools: McpToolEntry[]
   lastError?: string
-}
-
-const STATE_LABELS: Record<McpState, string> = {
-  connected: "已连接",
-  connecting: "连接中",
-  disabled: "已禁用",
-  failed: "失败",
 }
 
 /** One-line config summary: the command for stdio, the URL for http. */
@@ -55,10 +49,16 @@ interface FormState {
   envPairs: Pair[]
   url: string
   headerPairs: Pair[]
+  /**
+   * Carried through from the entry being edited (the toggle lives on the
+   * card, not in the form) — without this, saving an edit to a disabled
+   * server would silently re-enable it.
+   */
+  enabled: boolean
 }
 
 function emptyForm(): FormState {
-  return { editing: null, name: "", type: "stdio", command: "", argsText: "", envPairs: [], url: "", headerPairs: [] }
+  return { editing: null, name: "", type: "stdio", command: "", argsText: "", envPairs: [], url: "", headerPairs: [], enabled: true }
 }
 
 /** Prefill from an existing snapshot entry (plaintext echo of env/headers). */
@@ -77,6 +77,7 @@ function formFromStatus(s: McpServerStatus): FormState {
     envPairs: pairs(c.env),
     url: typeof c.url === "string" ? c.url : "",
     headerPairs: pairs(c.headers),
+    enabled: s.config.enabled !== false,
   }
 }
 
@@ -186,6 +187,7 @@ export function McpView({ api, notice }: {
       .filter((l) => l !== "")
     const env = pairsToRecord(form.envPairs)
     const headers = pairsToRecord(form.headerPairs)
+    const enabled = form.enabled ? {} : { enabled: false }
     const config =
       form.type === "stdio"
         ? {
@@ -193,11 +195,13 @@ export function McpView({ api, notice }: {
             command: form.command,
             ...(args.length > 0 ? { args } : {}),
             ...(env !== undefined ? { env } : {}),
+            ...enabled,
           }
         : {
             type: "http" as const,
             url: form.url,
             ...(headers !== undefined ? { headers } : {}),
+            ...enabled,
           }
     try {
       if (form.editing === null) {
@@ -323,7 +327,7 @@ export function McpView({ api, notice }: {
               <div className="mcp-server-head">
                 <span className="mcp-name">{s.name}</span>
                 <span className={`mcp-state ${s.state}`} data-testid={`mcp-state-${s.name}`}>
-                  {STATE_LABELS[s.state]}
+                  {MCP_STATE_LABELS[s.state]}
                 </span>
                 {s.lastError !== undefined && (
                   <span className="mcp-error" data-testid={`mcp-error-${s.name}`} title={s.lastError}>
