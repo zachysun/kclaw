@@ -41,6 +41,13 @@ export interface McpManagerOptions {
   backoffCapMs?: number
   connectTimeoutMs?: number // default 10000
   onError?: (name: string, error: string) => void
+  /**
+   * Persist config changes made through the hot methods (add/update/remove/
+   * setEnabled). The daemon wires this to the mcp.json consolidation; the
+   * manager itself stays storage-agnostic. A throwing persist is logged,
+   * never propagated — the in-memory change already happened.
+   */
+  persist?: (servers: Record<string, McpServerConfig>) => void
 }
 
 /** Client version advertised during MCP initialization (read from package.json, "0.0.0" fallback). */
@@ -87,29 +94,148 @@ export class McpManager {
   private readonly backoffBaseMs: number
   private readonly backoffCapMs: number
   private readonly connectTimeoutMs: number
+  /** Connect attempts in flight, for flush(). */
+  private readonly inFlight = new Set<Promise<void>>()
 
   constructor(private readonly opts: McpManagerOptions) {
     this.backoffBaseMs = opts.backoffBaseMs ?? 1000
     this.backoffCapMs = opts.backoffCapMs ?? 60_000
     this.connectTimeoutMs = opts.connectTimeoutMs ?? 10_000
     for (const [name, config] of Object.entries(opts.servers)) {
-      this.servers.set(name, {
-        name,
-        config,
-        state: config.enabled === false ? "disabled" : "connecting",
-        tools: [],
-        toolSchemas: new Map(),
-        attempts: 0,
-        hadSession: false,
-        stopped: false,
-      })
+      this.servers.set(name, this.freshState(name, config))
+    }
+  }
+
+  private freshState(name: string, config: McpServerConfig): ServerState {
+    return {
+      name,
+      config,
+      state: config.enabled === false ? "disabled" : "connecting",
+      tools: [],
+      toolSchemas: new Map(),
+      attempts: 0,
+      hadSession: false,
+      stopped: false,
     }
   }
 
   /** Connect all enabled servers (each independent; failures recorded, never throw). */
   async start(): Promise<void> {
     const enabled = [...this.servers.values()].filter((s) => s.state !== "disabled")
-    await Promise.allSettled(enabled.map((s) => this.connectServer(s, false)))
+    await Promise.allSettled(enabled.map((s) => this.connect(s, false)))
+  }
+
+  /** Await every in-flight connect attempt (tests; optional route-side use). */
+  async flush(): Promise<void> {
+    await Promise.allSettled([...this.inFlight])
+  }
+
+  /**
+   * Add a server and connect it in the background (immediate return; the
+   * snapshot picks the outcome up on the next read). Throws on a blank or
+   * duplicate name.
+   */
+  addServer(name: string, config: McpServerConfig): void {
+    if (name.trim() === "") throw new Error("MCP server name must not be empty")
+    if (this.servers.has(name)) throw new Error(`MCP server already exists: ${name}`)
+    const state = this.freshState(name, config)
+    this.servers.set(name, state)
+    this.persist()
+    if (state.state !== "disabled") void this.connect(state, false)
+  }
+
+  /**
+   * Replace a server's config: the old connection is retired and, when
+   * enabled, a fresh one is started in the background. Throws for an unknown
+   * name.
+   */
+  updateServer(name: string, config: McpServerConfig): void {
+    const old = this.mustGet(name)
+    this.retire(old)
+    const state = this.freshState(name, config)
+    this.servers.set(name, state)
+    this.persist()
+    if (state.state !== "disabled") void this.connect(state, false)
+  }
+
+  /** Drop a server entirely: disconnect, cancel its reconnect loop, forget it. */
+  removeServer(name: string): void {
+    const state = this.mustGet(name)
+    this.retire(state)
+    this.servers.delete(name)
+    this.persist()
+  }
+
+  /**
+   * Flip the persistent enabled flag with a hot transition. Disabling
+   * retires the live connection; enabling starts a single connect attempt.
+   * Same-value calls are no-ops (no reconnect churn).
+   */
+  setEnabled(name: string, enabled: boolean): void {
+    const old = this.mustGet(name)
+    if (enabled === (old.config.enabled !== false)) return
+    this.retire(old)
+    const state = this.freshState(name, { ...old.config, enabled })
+    this.servers.set(name, state)
+    this.persist()
+    if (enabled) void this.connect(state, false)
+  }
+
+  /**
+   * One manual connect attempt for a failed/never-connected server. Never
+   * schedules the backoff loop behind itself — a server the user just
+   * retried settles in connected or failed, and further attempts are the
+   * user's call. Throws for unknown names, refuses disabled servers, and
+   * no-ops servers already connected or connecting.
+   */
+  reconnect(name: string): void {
+    const state = this.mustGet(name)
+    if (state.config.enabled === false) throw new Error(`MCP server ${name} is disabled`)
+    if (state.state === "connected" || state.state === "connecting") return
+    void this.connect(state, false)
+  }
+
+  private mustGet(name: string): ServerState {
+    const state = this.servers.get(name)
+    if (!state) throw new Error(`unknown MCP server: ${name}`)
+    return state
+  }
+
+  /**
+   * Retire a state object: every async path out of it (transport close,
+   * backoff timer, in-flight connect) short-circuits on `stopped`, so an
+   * update/remove/disable can safely swap in a fresh state under the same
+   * name without the old object's callbacks landing on the new one.
+   */
+  private retire(state: ServerState): void {
+    state.stopped = true
+    if (state.reconnectTimer) {
+      clearTimeout(state.reconnectTimer)
+      state.reconnectTimer = undefined
+    }
+    if (state.client) {
+      state.client.onclose = undefined
+      void state.client.close().catch(() => {})
+      state.client = undefined
+      state.transport = undefined
+    }
+  }
+
+  private persist(): void {
+    try {
+      this.opts.persist?.(Object.fromEntries([...this.servers.values()].map((s) => [s.name, s.config])))
+    } catch (e) {
+      console.error(`kclaw mcp config persist failed: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  /** Track a connect attempt so flush() can await it. */
+  private connect(state: ServerState, retry: boolean): Promise<void> {
+    const p = this.connectServer(state, retry).finally(() => {
+      this.inFlight.delete(p)
+    })
+    this.inFlight.add(p)
+    return p
   }
 
   /** Current snapshot (for GET /mcp and kclaw mcp list). */
@@ -268,7 +394,7 @@ export class McpManager {
     s.attempts += 1
     s.reconnectTimer = setTimeout(() => {
       s.reconnectTimer = undefined
-      void this.connectServer(s, true)
+      void this.connect(s, true)
     }, delay)
   }
 

@@ -135,3 +135,180 @@ describe("McpManager", () => {
     await manager.stop()
   })
 })
+
+describe("McpManager hot config methods", () => {
+  it("addServer connects and persists", async () => {
+    const harness = fakeServerHarness()
+    const persisted: Array<Record<string, McpServerConfig>> = []
+    const manager = new McpManager({ ...managerOpts({}, harness), persist: (s) => persisted.push(s) })
+    manager.addServer("late", { type: "stdio", command: "unused" })
+    await manager.flush()
+
+    expect(manager.status().map((s) => s.name)).toEqual(["late"])
+    expect(manager.status()[0].state).toBe("connected")
+    expect(manager.tools().executors.has("mcp__late__echo")).toBe(true)
+    expect(persisted.at(-1)).toEqual({ late: { type: "stdio", command: "unused" } })
+    await manager.stop()
+  })
+
+  it("addServer with enabled:false never connects and lands disabled", async () => {
+    const harness = fakeServerHarness()
+    const manager = new McpManager(managerOpts({}, harness))
+    manager.addServer("off", { type: "stdio", command: "unused", enabled: false })
+    await manager.flush()
+    expect(harness.calls).toHaveLength(0)
+    expect(manager.status()[0].state).toBe("disabled")
+    await manager.stop()
+  })
+
+  it("addServer rejects blank and duplicate names", () => {
+    const harness = fakeServerHarness()
+    const manager = new McpManager(managerOpts({ dup: { type: "stdio", command: "unused" } }, harness))
+    expect(() => manager.addServer("  ", { type: "stdio", command: "x" })).toThrow(/name/)
+    expect(() => manager.addServer("dup", { type: "stdio", command: "x" })).toThrow(/already exists/)
+  })
+
+  it("removeServer tears the connection down and drops it from status", async () => {
+    const harness = fakeServerHarness()
+    const manager = new McpManager(managerOpts({ gone: { type: "stdio", command: "unused" } }, harness))
+    await manager.start()
+    manager.removeServer("gone")
+    await manager.flush()
+    expect(manager.status()).toEqual([])
+    // the retired transport's close must not schedule a reconnect
+    expect(manager.status()).toEqual([])
+    await manager.stop()
+  })
+
+  it("removeServer throws for an unknown name", () => {
+    const harness = fakeServerHarness()
+    const manager = new McpManager(managerOpts({}, harness))
+    expect(() => manager.removeServer("nope")).toThrow(/unknown MCP server/)
+  })
+
+  it("updateServer reconnects with the new config", async () => {
+    const seenConfigs: McpServerConfig[] = []
+    const harness = fakeServerHarness()
+    const manager = new McpManager({
+      ...managerOpts({ srv: { type: "stdio", command: "old" } }, harness),
+      transportFactory: (_name, cfg) => {
+        seenConfigs.push(cfg)
+        return harness.transportFactory()
+      },
+    })
+    await manager.start()
+    manager.updateServer("srv", { type: "stdio", command: "new" })
+    await manager.flush()
+
+    const status = manager.status()[0]
+    expect(status.state).toBe("connected")
+    expect(status.config).toEqual({ type: "stdio", command: "new" })
+    expect(seenConfigs.at(-1)).toEqual({ type: "stdio", command: "new" })
+    await manager.stop()
+  })
+
+  it("setEnabled false disables a connected server, true brings it back", async () => {
+    const harness = fakeServerHarness()
+    const persisted: Array<Record<string, McpServerConfig>> = []
+    const manager = new McpManager({
+      ...managerOpts({ fl: { type: "stdio", command: "unused" } }, harness),
+      persist: (s) => persisted.push(s),
+    })
+    await manager.start()
+    manager.setEnabled("fl", false)
+    await manager.flush()
+    expect(manager.status()[0].state).toBe("disabled")
+    expect(manager.tools().executors.size).toBe(0)
+    expect(persisted.at(-1)?.fl.enabled).toBe(false)
+
+    manager.setEnabled("fl", true)
+    await manager.flush()
+    expect(manager.status()[0].state).toBe("connected")
+    expect(manager.tools().executors.size).toBe(2)
+    await manager.stop()
+  })
+
+  it("setEnabled to the current value is a no-op and does not reconnect", async () => {
+    const harness = fakeServerHarness()
+    const manager = new McpManager(managerOpts({ fl: { type: "stdio", command: "unused" } }, harness))
+    await manager.start()
+    const connectsBefore = harness.calls.length
+    manager.setEnabled("fl", true)
+    await manager.flush()
+    expect(harness.calls.length).toBe(connectsBefore)
+    await manager.stop()
+  })
+
+  it("reconnect revives a server that failed at startup", async () => {
+    let shouldFail = true
+    const harness = fakeServerHarness()
+    const manager = new McpManager({
+      ...managerOpts({ late: { type: "stdio", command: "unused" } }, harness),
+      transportFactory: (name, cfg) => {
+        if (shouldFail) throw new Error("spawn enoent")
+        return harness.transportFactory()
+      },
+    })
+    await manager.start()
+    expect(manager.status()[0].state).toBe("failed")
+
+    shouldFail = false
+    manager.reconnect("late")
+    await manager.flush()
+    expect(manager.status()[0].state).toBe("connected")
+    expect(manager.status()[0].lastError).toBeUndefined()
+    await manager.stop()
+  })
+
+  it("reconnect records the failure but stays one-shot", async () => {
+    let attempts = 0
+    const manager = new McpManager({
+      servers: { late: { type: "stdio", command: "unused" } },
+      transportFactory: () => {
+        attempts++
+        throw new Error("still broken")
+      },
+      backoffBaseMs: 1,
+      connectTimeoutMs: 200,
+    })
+    await manager.start()
+    expect(manager.status()[0].state).toBe("failed")
+    const attemptsAfterStart = attempts
+    manager.reconnect("late")
+    await manager.flush()
+    expect(manager.status()[0].state).toBe("failed")
+    expect(manager.status()[0].lastError).toContain("still broken")
+    // one-shot: no backoff loop scheduled behind the manual attempt
+    expect(attempts).toBe(attemptsAfterStart + 1)
+    await manager.stop()
+  })
+
+  it("reconnect refuses disabled servers and no-ops connected ones", async () => {
+    const harness = fakeServerHarness()
+    const manager = new McpManager(managerOpts({ off: { type: "stdio", command: "unused", enabled: false } }, harness))
+    await manager.start()
+    expect(() => manager.reconnect("off")).toThrow(/disabled/)
+
+    const live = fakeServerHarness()
+    const manager2 = new McpManager(managerOpts({ up: { type: "stdio", command: "unused" } }, live))
+    await manager2.start()
+    const calls = live.calls.length
+    manager2.reconnect("up")
+    await manager2.flush()
+    expect(live.calls.length).toBe(calls)
+    await manager.stop()
+    await manager2.stop()
+  })
+
+  it("status reflects a removed server's name never colliding with fresh state", async () => {
+    const harness = fakeServerHarness()
+    const manager = new McpManager(managerOpts({ a: { type: "stdio", command: "unused" } }, harness))
+    await manager.start()
+    manager.removeServer("a")
+    manager.addServer("a", { type: "stdio", command: "unused" })
+    await manager.flush()
+    expect(manager.status()).toHaveLength(1)
+    expect(manager.status()[0].state).toBe("connected")
+    await manager.stop()
+  })
+})
