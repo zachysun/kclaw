@@ -84,7 +84,8 @@ new MemorySystem({memoryDir, sessions, config, resolveLlm, embed, emit})
 new JobScheduler(paths.jobsDb)
 new UsageStore(paths.usageDb)       token 用量记录（SQLite，stop 时 close）
 defaultLlmFactory(config) + resolveModel(config)   见"provider 解析"
-new McpManager({servers})           仅当 config.mcp.servers 非空；否则 undefined（不装配）
+new McpManager({servers, persist})  恒定装配：servers=mcp.json 与 config.yaml
+                                    遗留节的合并读，persist 接归拢落盘
 createSubagentHost({config, sessions, bus, getRun})
                                     子代理宿主（见 subagents.md）：一次装配返回三件能力——
                                     spawner（派发后端，阻塞与后台子代理各有一个并发计数）、collector

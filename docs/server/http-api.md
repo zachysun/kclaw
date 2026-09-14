@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 53 个业务路由（健康/状态 2 个、会话 15 个、记忆 10 个、技能 10 个、钩子 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 2 个、用量 1 个、MCP 状态 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`），`GET /mcp` 内联在 app.ts；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未装配时降级 503，技能组始终注册（无装配依赖），钩子组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则文件即真相，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 58 个业务路由（健康/状态 2 个、会话 15 个、记忆 10 个、技能 10 个、钩子 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 2 个、用量 1 个、MCP 管理 6 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`、`mcp.ts`）；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未装配时降级 503，技能组始终注册（无装配依赖），钩子组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则文件即真相，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
@@ -11,7 +11,7 @@
 - **404 显式可判别**：会话/任务路由先查存在性（`sessions.meta(id)` / `jobs.get(id)`），不存在返回 `404 {error:"session not found"|"job not found"}`，不依赖异常路径。
 - **配置接口只读且脱敏**：API key 永远掩码返回，没有写回路由——修改配置通过文件（config.yaml）进行，daemon 重启后生效。
 - **消息审计没有专门路由，压缩审计有只读视图**：审计页（web 的 `AuditView`）没有独立 `/audit` 路由——它由 `GET /sessions/:id/events`（该会话完整事件流，`?since=` 增量游标）单源读取 + 页面私有 ws 订阅（`session.appended` 通知帧驱动增量拉取）组合而成，会话选择跟随应用侧栏的全局选中。压缩审计不同——手动压缩刻意不产生消息，纯靠消息流看不到它的痕迹，因此 `GET /sessions/:id/compactions` 作为事件流里 `compaction` 事件的只读视图存在（见 [compaction](../core/compaction.md)）。
-- **可选能力按注入条件注册**：附件路由只在传入 `attachmentsDir` 时注册、用量路由只在传入 `UsageStore` 时注册——能力未装配就没有这些路径，而不是"注册了但报错"；`GET /mcp` 则始终存在，daemon 未装配 McpManager 时返回空 server 列表。技能组与记忆组同为始终注册，但语义不同：记忆组未装配 `MemorySystem` 时降级 503，技能组没有装配依赖（技能是文件即真相，每次请求重新扫描），始终正常工作。
+- **可选能力按注入条件注册**：附件路由只在传入 `attachmentsDir` 时注册、用量路由只在传入 `UsageStore` 时注册——能力未装配就没有这些路径，而不是"注册了但报错"；MCP 组始终注册，`GET /mcp` 在 daemon 未装配 McpManager 时返回空 server 列表，动作端点此时回答 503。技能组与记忆组同为始终注册，但语义不同：记忆组未装配 `MemorySystem` 时降级 503，技能组没有装配依赖（技能是文件即真相，每次请求重新扫描），始终正常工作。
 
 ## 路由清单
 
@@ -194,13 +194,18 @@ interface Job {
 
 `/fs/browse` 与 `/fs/files` 的出错是三态 400：`path does not exist: <path>`、`not a directory: <path>`、`cannot read directory: <path>`。这两个端点能列出本机任意目录——浏览端点的设计目的就是允许把工作目录设在任何地方，防线只有与其他 API 相同的 Bearer 鉴权；文件清单端点按工作区收窄（`workdir` 必须是目录），但同样不校验目录归属。用量数据记录在一张 SQLite 账本里，数据来源见 [storage](../core/storage.md) 的用量账本一节。
 
-### MCP 状态
+### MCP 管理
 
-| 方法 | 路径 | 用途 | 响应 |
+| 方法 | 路径 | 用途 | 请求/响应 |
 |------|------|------|------|
 | GET | `/mcp` | MCP server 连接状态快照 | `{servers: [{name, state, tools: {name}[], config, lastError?}]}`（`config` 为该 server 的 `McpServerConfig`，含地址等） |
+| POST | `/mcp/servers` | 新增一个 server 并后台连接 | 请求 `{name, config}`；名字限定字母/数字/下划线/连字符（会进模型可见的工具名）；返回 `{ok, servers}`；名字重复 409、形状非法 400 |
+| PATCH | `/mcp/servers/:name` | 整体替换一个 server 的配置并重连 | 请求 `{config}`；名字未知 404 |
+| DELETE | `/mcp/servers/:name` | 删除一个 server（断开并遗忘） | 返回 `{ok, servers}`；名字未知 404 |
+| POST | `/mcp/servers/:name/enable` | 启停开关（持久、热生效） | 请求 `{enabled: boolean}`；禁用即断开、启用即发起一次连接 |
+| POST | `/mcp/servers/:name/reconnect` | 对失败/掉线的 server 手动发起一次连接 | 一次性尝试、不在背后排退避；对已连接的 server 是无操作；对禁用中的 server 400 |
 
-路由始终注册；daemon 未装配 McpManager（`mcp.servers` 为空）时 `servers` 为空数组。消费方是 CLI 的 `kclaw mcp [list]` 命令；连接状态机见 [mcp](../core/mcp.md)。
+路由始终注册；daemon 未装配 McpManager 时 `GET /mcp` 的 `servers` 为空数组、全部动作端点回答 503。任何一次保存动作（增删改启停）都会把全部 server 归拢进 daemon 主目录的 `mcp.json`，并从 config.yaml 摘除遗留的 `mcp.servers` 节（其余内容原样保留）；消费方是 WebUI 的 MCP 页、双端的 `/mcp` 命令与 CLI 的 `kclaw mcp [list]`。连接状态机见 [mcp](../core/mcp.md)。
 
 ### WS 与静态托管
 
