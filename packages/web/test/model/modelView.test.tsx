@@ -228,7 +228,7 @@ describe("ModelView", () => {
 
   it("shows the empty state without entries", async () => {
     const api = fakeApi()
-    api.get = vi.fn(async (path: string) => (path === "/providers" ? { default: "", entries: {}, presets: SNAPSHOT.presets } : []))
+    api.get = vi.fn(async (path: string) => (path === "/providers" ? { default: "", entries: {}, presets: SNAPSHOT.presets } : [])) as unknown as FakeApi["get"]
     const { container } = await mount(api)
     expect(q(container, "model-empty").textContent).toContain("还没有配置任何 provider 条目")
   })
@@ -238,7 +238,7 @@ describe("ModelView", () => {
     api.post = vi.fn(async (path: string) => {
       if (path === "/providers") throw new Error("provider entry \"ds\" already exists")
       return { ok: true, models: MODELS }
-    })
+    }) as unknown as FakeApi["post"]
     const { container } = await mount(api)
     await act(async () => {
       q(container, "model-add").click()
