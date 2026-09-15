@@ -113,11 +113,6 @@ export function PermissionsView({ api, notice, workdir }: {
 
   return (
     <div className="permissions-view" data-testid="permissions-view">
-      <p className="muted perm-intro">
-        这些规则来自审批确认里选择「总是允许」的操作（auto 模式下反复放行的操作会自动沉淀，标注「自动学习」）：项目档存工作区的
-        <code>.kclaw/permissions.yaml</code>（自动加入 .gitignore），全局档存
-        <code>~/.kclaw/permissions.yaml</code>。删除即收回自动放行。
-      </p>
       {data === null ? (
         <p className="muted">加载中…</p>
       ) : (

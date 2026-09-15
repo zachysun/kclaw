@@ -221,11 +221,6 @@ export function McpView({ api, notice }: {
   return (
     <div className="mcp-view" data-testid="mcp-view">
       <div className="mcp-head">
-        <p className="muted mcp-intro">
-          这些是 daemon 全局接入的 MCP 服务器（所有会话共享）。配置保存在 daemon 的
-          <code>mcp.json</code>；config.yaml 里的旧 <code>mcp.servers</code> 节在首次保存后自动迁入。
-          MCP 工具一律按敏感待遇处理（每次调用需确认），readonly 模式下不暴露给模型。
-        </p>
         <button type="button" data-testid="mcp-add" onClick={() => { setFormError(null); setForm(emptyForm()) }}>
           添加服务器
         </button>

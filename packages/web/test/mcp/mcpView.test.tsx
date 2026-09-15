@@ -91,8 +91,6 @@ describe("McpView", () => {
     // config summary lines
     expect(container.textContent).toContain("npx -y srv")
     expect(container.textContent).toContain("https://x.test/mcp")
-    // the readonly note is always visible
-    expect(container.textContent).toContain("readonly")
   })
 
   it("expands a server into its tool list with sensitive badges", async () => {

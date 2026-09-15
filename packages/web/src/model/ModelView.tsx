@@ -237,9 +237,6 @@ export function ModelView({ api, notice }: {
   return (
     <div className="model-view" data-testid="model-view">
       <div className="model-head">
-        <p className="muted model-intro">
-          对话页模型下拉里的名字就是这里的条目名；改动保存后下一个回合即生效，不用重启。
-        </p>
         <button type="button" data-testid="model-add" onClick={() => { setFormError(null); setForm(emptyForm()) }}>
           添加条目
         </button>

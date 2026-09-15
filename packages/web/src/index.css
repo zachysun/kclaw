@@ -3039,10 +3039,6 @@ select:focus {
   gap: var(--space-4);
 }
 
-.perm-intro code {
-  font-size: 12px;
-}
-
 .perm-scope {
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -3120,15 +3116,6 @@ select:focus {
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
-}
-
-.mcp-head .mcp-intro {
-  flex: 1;
-  margin: 0;
-}
-
-.mcp-intro code {
-  font-size: 12px;
 }
 
 .mcp-refresh {
@@ -3354,15 +3341,6 @@ select:focus {
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
-}
-
-.model-head .model-intro {
-  flex: 1;
-  margin: 0;
-}
-
-.model-intro code {
-  font-size: 12px;
 }
 
 .model-refresh {
