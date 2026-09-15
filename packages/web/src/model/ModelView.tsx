@@ -238,9 +238,7 @@ export function ModelView({ api, notice }: {
     <div className="model-view" data-testid="model-view">
       <div className="model-head">
         <p className="muted model-intro">
-          这些是 daemon 全局的 LLM provider 条目：一个条目 = 一个端点 + 一个模型，每个条目独立建连，
-          会话切到某条目即走它的端点与模型（对话页模型下拉里的名字就是这里的条目名）。
-          配置保存在 daemon 的 <code>config.json</code>，改动对下一个回合生效。
+          对话页模型下拉里的名字就是这里的条目名；改动保存后下一个回合即生效，不用重启。
         </p>
         <button type="button" data-testid="model-add" onClick={() => { setFormError(null); setForm(emptyForm()) }}>
           添加条目
