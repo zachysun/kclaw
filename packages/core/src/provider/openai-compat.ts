@@ -74,7 +74,10 @@ export function createOpenAiCompatClient(opts: {
       try {
         res = await doFetch(`${opts.baseUrl.replace(/\/$/, "")}/chat/completions`, {
           method: "POST",
-          headers: { "content-type": "application/json", authorization: `Bearer ${opts.apiKey}` },
+          headers: {
+            "content-type": "application/json",
+            ...(opts.apiKey === "" ? {} : { authorization: `Bearer ${opts.apiKey}` }),
+          },
           body: JSON.stringify({
             model: req.model,
             messages: toApiMessages(req),
@@ -141,7 +144,7 @@ export function createOpenAiCompatClient(opts: {
   }
 }
 
-async function* sseDataLines(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+export async function* sseDataLines(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buf = ""
