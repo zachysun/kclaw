@@ -751,10 +751,61 @@ select:focus {
   padding: 2px 8px;
 }
 
-.sidebar-notice {
-  margin-top: var(--space-3);
+/* ---- global toast stack ---- */
+
+/* Floating feedback layer: fixed top-right over the content area, above the
+   header so notices are visible no matter which tab (or sidebar state) the
+   user is on. Both themes read the same variables. */
+.toast-stack {
+  position: fixed;
+  top: 44px;
+  right: 16px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: min(420px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  appearance: none;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
   font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  animation: toast-in 0.18s ease-out;
+}
+
+.toast.error {
+  border-color: var(--danger);
   color: var(--danger);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
 }
 
 /* ---- workdir directory picker ---- */

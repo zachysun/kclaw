@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { ApiClient } from "../api.js"
 import type { MemoryWrittenInfo } from "../chat/model.js"
+import type { NoticeFn } from "../toast.js"
 
 interface ProjectRow { id: string; workdir: string; threads: number; lastActivity: string }
 interface ThreadRow { topic: string; title: string; status: string; updated: string }
@@ -16,7 +17,7 @@ interface CogRow { kind: "persona" | "wiki" | "rule"; name: string; path: string
 
 export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
   api: ApiClient
-  notice: (text: string) => void
+  notice: NoticeFn
   /** 写入通知的跳转目标：切换到记忆页后自动打开对应线/认知文件，消费后置空。 */
   openTarget?: MemoryWrittenInfo | null
   onOpenConsumed?: () => void
@@ -39,8 +40,8 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
   const [dirtyPath, setDirtyPath] = useState<string | null>(null) // 保存目标（thread 或 cognition 的 PATCH 路径）
 
   const reloadProjects = useCallback(() => {
-    api.get<ProjectRow[]>("/memory/projects").then(setProjects).catch((e) => noticeRef.current(`加载项目失败: ${String(e)}`))
-    api.get<CogRow[]>("/memory/global").then(setCogs).catch((e) => noticeRef.current(`加载全局认知失败: ${String(e)}`))
+    api.get<ProjectRow[]>("/memory/projects").then(setProjects).catch((e) => noticeRef.current(`加载项目失败: ${String(e)}`, "error"))
+    api.get<CogRow[]>("/memory/global").then(setCogs).catch((e) => noticeRef.current(`加载全局认知失败: ${String(e)}`, "error"))
   }, [api])
 
   useEffect(() => { reloadProjects() }, [reloadProjects])
@@ -73,7 +74,7 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
       const { content } = await api.get<{ content: string }>(`/memory/threads/${encodeURIComponent(pid)}/${encodeURIComponent(topic)}`)
       setDraft(content); setDirtyPath(`/memory/threads/${encodeURIComponent(pid)}/${encodeURIComponent(topic)}`)
       setThreadTopic(topic)
-    } catch (e) { notice(`读取线失败: ${String(e)}`) }
+    } catch (e) { notice(`读取线失败: ${String(e)}`, "error") }
   }
 
   const openCog = async (kind: CogRow["kind"], name: string): Promise<void> => {
@@ -81,7 +82,7 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
       const { content } = await api.get<{ content: string }>(`/memory/global/${kind}/${encodeURIComponent(name)}`)
       setDraft(content); setDirtyPath(`/memory/global/${kind}/${encodeURIComponent(name)}`)
       setCogTarget({ kind, name })
-    } catch (e) { notice(`读取认知文件失败: ${String(e)}`) }
+    } catch (e) { notice(`读取认知文件失败: ${String(e)}`, "error") }
   }
 
   const save = async (): Promise<void> => {

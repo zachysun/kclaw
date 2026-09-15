@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { ApiClient } from "../api.js"
+import type { NoticeFn } from "../toast.js"
 
 interface RuleRow {
   rule: string
@@ -43,7 +44,7 @@ function shortTime(iso: string): string {
 
 export function PermissionsView({ api, notice, workdir }: {
   api: ApiClient
-  notice: (text: string) => void
+  notice: NoticeFn
   /** The current session's workdir: the project scope's read range; unknown → global only. */
   workdir?: string
 }) {
@@ -60,7 +61,7 @@ export function PermissionsView({ api, notice, workdir }: {
   const query = workdir !== undefined && workdir !== "" ? `?workspace=${encodeURIComponent(workdir)}` : ""
 
   const reload = useCallback(() => {
-    api.get<RulesPayload>(`/permissions/rules${query}`).then(setData).catch((e) => noticeRef.current(`加载权限规则失败: ${String(e)}`))
+    api.get<RulesPayload>(`/permissions/rules${query}`).then(setData).catch((e) => noticeRef.current(`加载权限规则失败: ${String(e)}`, "error"))
   }, [api, query])
 
   useEffect(() => { reload() }, [reload])
@@ -70,7 +71,7 @@ export function PermissionsView({ api, notice, workdir }: {
       await api.del(`/permissions/rules${query}`, { scope, index })
       reload()
     } catch (e) {
-      notice(`删除规则失败: ${String(e)}`)
+      notice(`删除规则失败: ${String(e)}`, "error")
     }
   }
 

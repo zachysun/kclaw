@@ -35,6 +35,7 @@ import { SkillsView } from "./skills/SkillsView.js"
 import { PermissionsView } from "./permissions/PermissionsView.js"
 import { McpView } from "./mcp/McpView.js"
 import { ModelView } from "./model/ModelView.js"
+import { ToastStack, useToasts } from "./toast.js"
 import type { FsBrowseResult, SessionMeta } from "./types.js"
 
 type DaemonStatus = "connecting" | "connected" | "error"
@@ -120,7 +121,9 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
   const [sessions, setSessions] = useState<SessionMeta[] | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [messagesCache, setMessagesCache] = useState<Record<string, Message[]>>({})
-  const [sessionNotice, setSessionNotice] = useState<string | null>(null)
+  // 全局 toast 栈：侧栏操作结果与管理页回执统一落这里（内容区右上角浮层，
+  // 自动消失、点击即消），不再堆在侧栏底部。
+  const { toasts, notify, dismiss } = useToasts()
   // memory.written 通知条点击后的跳转目标：切到记忆页并自动打开对应文件。
   const [memoryTarget, setMemoryTarget] = useState<MemoryWrittenInfo | null>(null)
   // Mobile-only: the sidebar slides in as a drawer behind this flag (desktop
@@ -176,7 +179,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
       .catch(() => {
         if (!cancelled) {
           setSessions([])
-          setSessionNotice("加载会话列表失败")
+          notify("加载会话列表失败", "error")
         }
       })
     return () => {
@@ -263,16 +266,15 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
   // and the ws subscribe — the new empty conversation becomes the active one.
   const createAndSelectSession = useCallback(
     async (body: Record<string, unknown>): Promise<void> => {
-      setSessionNotice(null)
       try {
         const meta = await api.post<SessionMeta>("/sessions", body)
         setSessions((prev) => [meta, ...(prev ?? [])])
         setSelectedId(meta.id)
       } catch (err) {
-        setSessionNotice(err instanceof Error ? err.message : "创建会话失败")
+        notify(err instanceof Error ? err.message : "创建会话失败", "error")
       }
     },
-    [api],
+    [api, notify],
   )
 
   const handleCreateSession = useCallback(
@@ -306,30 +308,28 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
 
   const handleRenameSession = useCallback(
     async (id: string, title: string): Promise<void> => {
-      setSessionNotice(null)
       try {
         const meta = await api.patch<SessionMeta>(`/sessions/${encodeURIComponent(id)}`, { title })
         setSessions((prev) => (prev ?? []).map((s) => (s.id === id ? meta : s)))
       } catch (err) {
-        setSessionNotice(err instanceof Error ? err.message : "重命名失败")
+        notify(err instanceof Error ? err.message : "重命名失败", "error")
       }
     },
-    [api],
+    [api, notify],
   )
 
   // Soft-delete (the server marks the session deleted; it moves to the trash).
   const handleDeleteSession = useCallback(
     async (id: string): Promise<void> => {
-      setSessionNotice(null)
       try {
         await api.del(`/sessions/${encodeURIComponent(id)}`)
         setSessions((prev) => (prev ?? []).filter((s) => s.id !== id))
         if (selectedId === id) setSelectedId(null)
       } catch (err) {
-        setSessionNotice(err instanceof Error ? err.message : "删除失败")
+        notify(err instanceof Error ? err.message : "删除失败", "error")
       }
     },
-    [api, selectedId],
+    [api, selectedId, notify],
   )
 
   // Soft-delete a whole project group: every session under the workdir goes
@@ -337,7 +337,6 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
   // list (the group disappears with it), failures surface in the notice.
   const handleDeleteGroup = useCallback(
     async (workdir: string): Promise<void> => {
-      setSessionNotice(null)
       const ids = (sessions ?? []).filter((s) => s.workdir === workdir).map((s) => s.id)
       const results = await Promise.allSettled(
         ids.map((id) => api.del(`/sessions/${encodeURIComponent(id)}`)),
@@ -352,9 +351,9 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
         setSessions((prev) => (prev ?? []).filter((s) => !deleted.has(s.id)))
         if (selectedId !== null && deleted.has(selectedId)) setSelectedId(null)
       }
-      if (failures > 0) setSessionNotice(`${failures} 个会话删除失败,已删的会话在回收站`)
+      if (failures > 0) notify(`${failures} 个会话删除失败,已删的会话在回收站`, "error")
     },
-    [api, sessions, selectedId],
+    [api, sessions, selectedId, notify],
   )
 
   const chatActive = selectedId !== null && readyMessages !== null
@@ -486,11 +485,6 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
             onDeleteGroup={(workdir) => handleDeleteGroup(workdir)}
             onBrowse={browseDirs}
           />
-          {sessionNotice !== null && (
-            <p className="sidebar-notice" data-testid="session-notice" role="alert">
-              {sessionNotice}
-            </p>
-          )}
         </aside>
         {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
         <main className="main">
@@ -541,13 +535,14 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
           )}
           {tab === "usage" && <UsageView api={api} />}
           {tab === "trash" && <TrashView api={api} />}
-          {tab === "memory" && <MemoryView api={api} notice={(t) => setSessionNotice(t)} openTarget={memoryTarget} onOpenConsumed={() => setMemoryTarget(null)} />}
-          {tab === "skills" && <SkillsView api={api} notice={(t) => setSessionNotice(t)} />}
-          {tab === "permissions" && <PermissionsView api={api} notice={(t) => setSessionNotice(t)} workdir={selectedMeta?.workdir} />}
-          {tab === "mcp" && <McpView api={api} notice={(t) => setSessionNotice(t)} />}
-          {tab === "model" && <ModelView api={api} notice={(t) => setSessionNotice(t)} />}
+          {tab === "memory" && <MemoryView api={api} notice={notify} openTarget={memoryTarget} onOpenConsumed={() => setMemoryTarget(null)} />}
+          {tab === "skills" && <SkillsView api={api} notice={notify} />}
+          {tab === "permissions" && <PermissionsView api={api} notice={notify} workdir={selectedMeta?.workdir} />}
+          {tab === "mcp" && <McpView api={api} notice={notify} />}
+          {tab === "model" && <ModelView api={api} notice={notify} />}
         </main>
       </div>
+      <ToastStack toasts={toasts} onDismiss={dismiss} />
     </div>
   )
 }

@@ -12,6 +12,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { ApiClient } from "../api.js"
+import type { NoticeFn } from "../toast.js"
 
 type ApiFormat = "openai" | "anthropic"
 
@@ -96,7 +97,7 @@ function isPresetName(name: string, presets: ProviderPreset[]): boolean {
 
 export function ModelView({ api, notice }: {
   api: ApiClient
-  notice: (text: string) => void
+  notice: NoticeFn
 }) {
   // notice goes through a ref: App passes an inline arrow that is a fresh
   // reference each render; depending on `notice` would refetch on every parent
@@ -116,7 +117,7 @@ export function ModelView({ api, notice }: {
     return api
       .get<ProvidersSnapshot>("/providers")
       .then(setSnap)
-      .catch((e) => noticeRef.current(`加载 provider 配置失败: ${String(e)}`))
+      .catch((e) => noticeRef.current(`加载 provider 配置失败: ${String(e)}`, "error"))
   }, [api])
 
   useEffect(() => {
@@ -129,7 +130,7 @@ export function ModelView({ api, notice }: {
       await fn()
       await reload()
     } catch (e) {
-      noticeRef.current(`操作失败: ${String(e)}`)
+      noticeRef.current(`操作失败: ${String(e)}`, "error")
     }
   }
 
@@ -140,7 +141,7 @@ export function ModelView({ api, notice }: {
       const r = await api.post<{ ok: boolean; models?: string[]; error?: string }>("/providers/models", payload)
       return r.models ?? []
     } catch (e) {
-      noticeRef.current(`连接验证失败: ${String(e)}`)
+      noticeRef.current(`连接验证失败: ${String(e)}`, "error")
       return null
     } finally {
       setProbing(null)

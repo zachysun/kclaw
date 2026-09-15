@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { MCP_STATE_LABELS } from "@kclaw/core/commands"
 import type { ApiClient } from "../api.js"
+import type { NoticeFn } from "../toast.js"
 
 interface McpToolEntry {
   name: string
@@ -127,7 +128,7 @@ function KeyValueEditor({ pairs, keyTestid, valueTestid, addTestid, onChange }: 
 
 export function McpView({ api, notice }: {
   api: ApiClient
-  notice: (text: string) => void
+  notice: NoticeFn
 }) {
   // notice goes through a ref: App passes an inline arrow that is a fresh
   // reference each render; depending on `notice` would refetch on every parent
@@ -146,7 +147,7 @@ export function McpView({ api, notice }: {
     return api
       .get<{ servers: McpServerStatus[] }>("/mcp")
       .then((r) => setServers(r.servers))
-      .catch((e) => noticeRef.current(`加载 MCP 状态失败: ${String(e)}`))
+      .catch((e) => noticeRef.current(`加载 MCP 状态失败: ${String(e)}`, "error"))
   }, [api])
 
   useEffect(() => {
@@ -168,7 +169,7 @@ export function McpView({ api, notice }: {
       await fn()
       await reload()
     } catch (e) {
-      noticeRef.current(`操作失败: ${String(e)}`)
+      noticeRef.current(`操作失败: ${String(e)}`, "error")
     }
   }
 

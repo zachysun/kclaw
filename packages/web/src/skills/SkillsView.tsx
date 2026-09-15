@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type React from "react"
 import type { ApiClient } from "../api.js"
+import type { NoticeFn } from "../toast.js"
 
 interface SkillRow {
   name: string
@@ -72,7 +73,7 @@ type SubTab = "installed" | "reuse"
 
 export function SkillsView({ api, notice }: {
   api: ApiClient
-  notice: (text: string) => void
+  notice: NoticeFn
 }) {
   // notice 走 ref：App 传内联箭头，每次父组件重渲染都是新引用；若 reload 依赖
   // notice，停留本页会反复拉取（MemoryView 曾犯过的同类审查问题，同款防御）。
@@ -108,7 +109,7 @@ export function SkillsView({ api, notice }: {
   }, [api])
 
   const reload = useCallback(() => {
-    api.get<SkillRow[]>(`/skills${scopeQuery}`).then(setRows).catch((e) => noticeRef.current(`加载技能失败: ${String(e)}`))
+    api.get<SkillRow[]>(`/skills${scopeQuery}`).then(setRows).catch((e) => noticeRef.current(`加载技能失败: ${String(e)}`, "error"))
     // 复用管理面的三份数据失败都走行内降级，不打扰主清单的 notice。
     api.get<DiscoveryPayload>(`/skills/discovery${scopeQuery}`).then(setDiscovery).catch(() => setDiscovery(null))
     api.get<LinksPayload>(`/skills/links${scopeQuery}`).then(setLinks).catch(() => setLinks(null))
@@ -125,7 +126,7 @@ export function SkillsView({ api, notice }: {
       const res = await api.get<{ name: string; content: string }>(`/skills/${encodeURIComponent(name)}${scopeQuery}`)
       setBody({ title: res.name, content: res.content })
     } catch (e) {
-      notice(`读取技能失败: ${String(e)}`)
+      notice(`读取技能失败: ${String(e)}`, "error")
     }
   }
 
@@ -146,7 +147,7 @@ export function SkillsView({ api, notice }: {
       setBody(null)
       refreshAfterWrite(`已复用 ${item.name}`)
     } catch (e) {
-      notice(`复用失败: ${String(e)}`)
+      notice(`复用失败: ${String(e)}`, "error")
     } finally {
       setBusy(false)
     }
@@ -158,7 +159,7 @@ export function SkillsView({ api, notice }: {
       await api.del(`/skills/links/${encodeURIComponent(name)}${scopeQuery}`)
       refreshAfterWrite(`已取消复用 ${name}`)
     } catch (e) {
-      notice(`取消复用失败: ${String(e)}`)
+      notice(`取消复用失败: ${String(e)}`, "error")
     } finally {
       setBusy(false)
     }
@@ -170,7 +171,7 @@ export function SkillsView({ api, notice }: {
       await api.patch(`/skills/links/${encodeURIComponent(name)}`, { tier, workdir: scope !== "" ? scope : undefined })
       reload()
     } catch (e) {
-      notice(`改档位失败: ${String(e)}`)
+      notice(`改档位失败: ${String(e)}`, "error")
       reload()
     } finally {
       setBusy(false)
@@ -228,7 +229,7 @@ export function SkillsView({ api, notice }: {
       setNewSource("")
       reload()
     } catch (e) {
-      notice(`添加探测目录失败: ${String(e)}`)
+      notice(`添加探测目录失败: ${String(e)}`, "error")
     } finally {
       setBusy(false)
     }
@@ -240,7 +241,7 @@ export function SkillsView({ api, notice }: {
       await api.del(`/skills/sources${scopeQuery}${scopeQuery === "" ? "?" : "&"}dir=${encodeURIComponent(dir)}`)
       reload()
     } catch (e) {
-      notice(`移除探测目录失败: ${String(e)}`)
+      notice(`移除探测目录失败: ${String(e)}`, "error")
     } finally {
       setBusy(false)
     }

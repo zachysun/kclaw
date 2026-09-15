@@ -103,6 +103,6 @@ describe("PermissionsView", () => {
       ;(container.querySelector('button[data-testid="perm-delete-project-0"]') as HTMLButtonElement).click()
     })
     await flush()
-    expect(notice).toHaveBeenCalledWith(expect.stringContaining("删除规则失败"))
+    expect(notice).toHaveBeenCalledWith(expect.stringContaining("删除规则失败"), "error")
   })
 })
