@@ -47,7 +47,7 @@ import {
   HookRegistry,
   AutoLearnCounter,
 } from "@kclaw/core"
-import type { KclawConfig, LlmClient } from "@kclaw/core"
+import type { EmbeddingClient, KclawConfig, LlmClient } from "@kclaw/core"
 import { loadOrCreateToken } from "./auth.js"
 import { EventBus } from "@kclaw/core"
 import { RunManager } from "./run.js"
@@ -222,6 +222,32 @@ export function defaultLlmFactory(
   )
 }
 
+/**
+ * Hot-reloadable embedding client: re-resolves the configured entry per call
+ * (signature-checked, so unchanged entries reuse the client) — Model-tab edits
+ * reach the vector path without a restart. Whether the vector path exists at
+ * all is still decided once at launch (the embeddings model and the entry's
+ * protocol are not hot-swappable: an anthropic-format entry has no embeddings
+ * API and stays disabled).
+ */
+function createHotEmbedClient(cfg: KclawConfig, providerName: string, model: string): EmbeddingClient {
+  let sig = ""
+  let client: EmbeddingClient | undefined
+  return {
+    async embed(texts: string[]): Promise<Float32Array[]> {
+      const entry = (providerName !== "" ? cfg.providers.entries[providerName] : undefined)
+        ?? cfg.providers.entries[cfg.providers.default]
+      if (entry === undefined) throw new Error("embedding provider entry not found")
+      const next = `${entry.baseUrl}|${entry.apiKey}|${cfg.providers.timeoutMs}`
+      if (client === undefined || sig !== next) {
+        client = createEmbeddingClient({ baseUrl: entry.baseUrl, apiKey: entry.apiKey, model, timeoutMs: cfg.providers.timeoutMs })
+        sig = next
+      }
+      return client.embed(texts)
+    },
+  }
+}
+
 /** True when `pid` is a live process (signal 0 probe). */
 function pidAlive(pid: number): boolean {
   try {
@@ -295,7 +321,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       // serve chat but never the vector path.
       console.error("kclaw memory: embedding provider is an anthropic-format entry (no embeddings API), vector path disabled")
     } else if (entry !== undefined) {
-      embed = createEmbeddingClient({ baseUrl: entry.baseUrl, apiKey: entry.apiKey, model: embedCfg.model, timeoutMs: config.providers.timeoutMs })
+      embed = createHotEmbedClient(config, embedCfg.provider, embedCfg.model)
     } else {
       console.error("kclaw memory: embedding provider not found, vector path disabled")
     }
@@ -313,12 +339,14 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     },
   })
   // 记忆系统唯一门面：embed/emit/迁移/对账在此一次性装配。
-  // resolveLlm 惰性引用下方 llm/model（触发发生在 launch 后，TDZ 无碍）。
+  // resolveLlm 惰性引用下方 llmForEntry（触发发生在 launch 后，TDZ 无碍）：
+  // 回落客户端每调用现解，签名缓存让未变更的条目零成本复用——Model 页
+  // 改动对记忆提取同样热生效。测试注入的 llmFactory 保持原样直用。
   const memory = new MemorySystem({
     memoryDir: paths.memoryDir,
     sessions,
     config,
-    resolveLlm: () => ({ llm, model }),
+    resolveLlm: () => ({ llm: opts.llmFactory !== undefined ? llm : withRetry(llmForEntry()), model: resolveModel(config) }),
     embed,
     emit: (e) => bus.emit(makeEvent("memory.written", { path: e.path, kind: e.kind, ...(e.topic !== undefined ? { topic: e.topic } : {}), ...(e.scope !== undefined ? { scope: e.scope } : {}) })),
   })
@@ -333,8 +361,8 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // internal ConfirmationBroker (createApp routes confirmation.resolve frames
   // from /ws to it).
   // Per-entry clients for runs (each entry owns its endpoint — see
-  // createEntryLlmFactory); the launch client resolves the default entry and
-  // stays the fallback for paths outside runs (memory extraction's default).
+  // createEntryLlmFactory); memory extraction's default path re-resolves
+  // through the same factory per call, so entry edits hot-apply there too.
   const llmForEntry = createEntryLlmFactory(config)
   const llm = opts.llmFactory !== undefined ? opts.llmFactory(config) : withRetry(llmForEntry())
   const model = resolveModel(config)

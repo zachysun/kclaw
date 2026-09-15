@@ -660,6 +660,29 @@ describe("RunManager.enqueue", () => {
     expect(requests.at(-1)!.system).toContain("<system-reminder>")
   })
 
+  it("resolves the default model from the entry's current value at run time", async () => {
+    // capturing client: records the request, answers with a final text turn
+    const requests: Parameters<LlmClient["stream"]>[0][] = []
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        requests.push(req)
+        yield { type: "text_delta", delta: "好" }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+      },
+    }
+    const { env, manager } = makeEnv(llm)
+    const session = env.sessions.create("热更会话")
+
+    await manager.enqueue(session.id, { userText: "第一轮", trigger: "user" })
+    expect(requests[0]!.model).toBe("mock-model")
+
+    // Model-tab equivalent: the entry's model field mutates in place — the
+    // next run picks it up without a manager rebuild.
+    env.config.providers.entries.mock!.model = "mock-model-v2"
+    await manager.enqueue(session.id, { userText: "第二轮", trigger: "user" })
+    expect(requests.at(-1)!.model).toBe("mock-model-v2")
+  })
+
   it("aborts a hanging run: cancel() → outcome stopReason aborted", async () => {
     const { env, manager } = makeEnv(hangingClient())
     const session = env.sessions.create("取消会话")

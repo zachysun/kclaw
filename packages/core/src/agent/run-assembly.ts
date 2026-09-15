@@ -662,7 +662,10 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       })
       .catch(() => { /* retry visibility must not break the retry itself */ })
   }
-  const defaultModel = engine.deps.model ?? config.providers.entries[config.providers.default]?.model ?? ""
+  // Default model line: the default entry's CURRENT model wins (Model-tab
+  // edits hot-apply); the launch-resolved deps.model only backs env-only
+  // setups with no configured entry.
+  const defaultModel = config.providers.entries[config.providers.default]?.model || engine.deps.model || ""
   const rawModel = input.model ?? sessionMeta?.model ?? defaultModel
   // Entry metadata for this run: the wire model (entry names resolve to the
   // entry's `.model`), the budget (contextWindow cap via resolveContextTokens)

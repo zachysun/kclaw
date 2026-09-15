@@ -11,7 +11,7 @@
  */
 import type { FastifyInstance } from "fastify"
 import type { KclawConfig, KclawPaths, ProviderApiFormat, ProviderEntry } from "@kclaw/core"
-import { fetchProviderModels, parseProviderEntry, PROVIDER_PRESETS } from "@kclaw/core"
+import { fetchProviderModels, parseProviderEntry, PROVIDER_PRESETS, resolveProviderFormat } from "@kclaw/core"
 import { saveConfig } from "@kclaw/core"
 import { maskSecret } from "./config.js"
 
@@ -138,7 +138,7 @@ export function registerProvidersRoutes(app: FastifyInstance, deps: ProvidersRou
     if (typeof body?.name === "string" && body.name !== "") {
       const entry = deps.config.providers.entries[body.name]
       if (entry === undefined) return reply.code(404).send({ error: `unknown provider entry: ${body.name}` })
-      format = body.format === "openai" || body.format === "anthropic" ? body.format : entry.format ?? "openai"
+      format = body.format === "openai" || body.format === "anthropic" ? body.format : resolveProviderFormat(entry)
       baseUrl = typeof body.baseUrl === "string" && body.baseUrl.trim() !== "" ? body.baseUrl.trim() : entry.baseUrl
       apiKey = typeof body.apiKey === "string" && body.apiKey !== "" ? body.apiKey : entry.apiKey
     } else {

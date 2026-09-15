@@ -1,6 +1,6 @@
 import type { ProviderApiFormat } from "../storage/config.js"
 import { ANTHROPIC_VERSION, anthropicEndpoint } from "./anthropic.js"
-import { DEFAULT_LLM_TIMEOUT_MS } from "./openai-compat.js"
+import { DEFAULT_LLM_TIMEOUT_MS, llmHttpError, rethrowClassified } from "./openai-compat.js"
 
 /**
  * List the model ids a provider endpoint serves: the models-list request the
@@ -33,8 +33,7 @@ export async function fetchProviderModels(opts: {
   try {
     res = await doFetch(url, { headers, signal })
   } catch (err) {
-    if (signal.aborted) throw new Error(`llm http timeout after ${timeoutMs}ms`)
-    throw err
+    rethrowClassified(err, signal, timeoutMs)
   }
   if (!res.ok) {
     let text = ""
@@ -43,7 +42,7 @@ export async function fetchProviderModels(opts: {
     } catch {
       void 0
     }
-    throw new Error(`llm http ${res.status}: ${text}`)
+    throw llmHttpError(res.status, text)
   }
   let body: unknown
   try {

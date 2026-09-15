@@ -30,11 +30,12 @@ const MODELS = ["deepseek-chat", "deepseek-reasoner"]
 
 type FakeApi = ApiClient & { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn>; patch: ReturnType<typeof vi.fn>; del: ReturnType<typeof vi.fn> }
 
-function fakeApi(over: { sessions?: Array<{ model?: string }>; post?: ReturnType<typeof vi.fn> } = {}): FakeApi {
+function fakeApi(over: { sessions?: Array<{ model?: string }>; config?: Record<string, unknown>; post?: ReturnType<typeof vi.fn> } = {}): FakeApi {
   return {
     get: vi.fn(async (path: string) => {
       if (path === "/providers") return SNAPSHOT
       if (path === "/sessions") return over.sessions ?? []
+      if (path === "/config") return over.config ?? {}
       throw new Error(`unexpected ${path}`)
     }),
     post: over.post ?? vi.fn(async (path: string) => {
@@ -224,6 +225,40 @@ describe("ModelView", () => {
     })
     await flush()
     expect(api.post).toHaveBeenCalledWith("/providers/claude/default")
+  })
+
+  it("warns on delete when memory extractModel/embedding references the entry", async () => {
+    const api = fakeApi({ config: { memory: { extractModel: "claude", embedding: { provider: "" } } } })
+    const { container } = await mount(api)
+    await act(async () => {
+      q(container, "model-delete-claude").click()
+    })
+    await flush()
+    const warning = q(container, "model-warning-claude").textContent
+    expect(warning).toContain("记忆提取或向量检索")
+    expect(warning).not.toContain("个会话")
+    expect(api.del).not.toHaveBeenCalled()
+    await act(async () => {
+      q(container, "model-delete-confirm-claude").click()
+    })
+    await flush()
+    expect(api.del).toHaveBeenCalledWith("/providers/claude")
+  })
+
+  it("refuses a preset entry whose mandatory API key is blank", async () => {
+    const api = fakeApi()
+    const { container } = await mount(api)
+    await act(async () => {
+      q(container, "model-add").click()
+    })
+    selectValue(q(container, "model-form-preset") as HTMLSelectElement, "deepseek")
+    typeValue(q(container, "model-form-name") as HTMLInputElement, "ds2")
+    typeValue(q(container, "model-form-model") as HTMLInputElement, "m")
+    await act(async () => {
+      q(container, "model-form-submit").click()
+    })
+    expect(q(container, "model-form-error").textContent).toContain("需要 API Key")
+    expect(api.post).not.toHaveBeenCalledWith("/providers", expect.anything())
   })
 
   it("shows the empty state without entries", async () => {

@@ -1,6 +1,6 @@
 import type { ContentPart, LlmClient, LlmRequest, LlmStreamEvent } from "./types.js"
 import type { StopReason, Usage } from "../protocol/messages.js"
-import { DEFAULT_LLM_TIMEOUT_MS, sseDataLines } from "./openai-compat.js"
+import { DEFAULT_LLM_TIMEOUT_MS, llmHttpError, rethrowClassified, sseDataLines } from "./openai-compat.js"
 
 /** Value of the mandatory anthropic-version header on every Messages API call. */
 export const ANTHROPIC_VERSION = "2023-06-01"
@@ -115,11 +115,6 @@ function normalizeStop(raw: string | null | undefined): StopReason {
   return STOP_REASONS[raw] ?? "end_turn"
 }
 
-function rethrowClassified(err: unknown, signal: AbortSignal, timeoutMs: number): never {
-  if (signal.aborted) throw new Error(`llm http timeout after ${timeoutMs}ms`)
-  throw err
-}
-
 /**
  * Streaming client for the Anthropic Messages wire format (x-api-key +
  * anthropic-version headers, content-block streaming). Same timeout/retry
@@ -160,7 +155,7 @@ export function createAnthropicClient(opts: {
           if (signal.aborted) throw new Error(`llm http timeout after ${timeoutMs}ms`)
           void err
         }
-        throw new Error(`llm http ${res.status}: ${text}`)
+        throw llmHttpError(res.status, text)
       }
       let usage: Usage = { inputTokens: 0, outputTokens: 0 }
       let finish: string | null = null

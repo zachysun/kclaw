@@ -110,7 +110,7 @@ export function ModelView({ api, notice }: {
   const [form, setForm] = useState<FormState | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [probing, setProbing] = useState<string | null>(null)
-  const [confirmDelete, setConfirmDelete] = useState<{ name: string; usedBy: number } | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<{ name: string; usedBy: number; memoryRefs: boolean } | null>(null)
 
   const reload = useCallback((): Promise<void> => {
     return api
@@ -166,16 +166,25 @@ export function ModelView({ api, notice }: {
   }
 
   const remove = async (name: string): Promise<void> => {
-    // Master's ruling: warn about referencing sessions but never block.
+    // Deletion is never blocked by usage. Sessions and memory references are
+    // advisory: referencing sessions fall back to the default model on their
+    // next run, and memory extraction/embedding degrade the same way.
     let usedBy = 0
+    let memoryRefs = false
     try {
       const metas = await api.get<Array<{ model?: string }>>("/sessions")
       usedBy = metas.filter((m) => m.model === name).length
     } catch {
       // sessions listing is advisory only — proceed with the plain delete
     }
-    if (usedBy > 0) {
-      setConfirmDelete({ name, usedBy })
+    try {
+      const cfg = await api.get<{ memory?: { extractModel?: string; embedding?: { provider?: string } } }>("/config")
+      memoryRefs = cfg.memory?.extractModel === name || cfg.memory?.embedding?.provider === name
+    } catch {
+      // config read is advisory too
+    }
+    if (usedBy > 0 || memoryRefs) {
+      setConfirmDelete({ name, usedBy, memoryRefs })
       return
     }
     await act(() => api.del(`/providers/${encodeURIComponent(name)}`))
@@ -188,6 +197,15 @@ export function ModelView({ api, notice }: {
 
   const submitForm = async (): Promise<void> => {
     if (form === null) return
+    // Presets with a mandatory key (everything except the authOptional ones,
+    // i.e. Ollama) refuse a blank key at create time; custom entries stay
+    // permissive — keyless self-hosted endpoints are a legitimate shape.
+    const preset = (snap?.presets ?? []).find((p) => p.id === form.presetId)
+    if (form.editing === null && form.mode === "preset" && preset !== undefined
+      && preset.authOptional !== true && form.apiKey === "") {
+      setFormError(`${preset.label} 需要 API Key`)
+      return
+    }
     const entry: Record<string, unknown> = {
       format: form.format,
       baseUrl: form.baseUrl.trim(),
@@ -461,7 +479,8 @@ export function ModelView({ api, notice }: {
               </div>
               {confirmDelete?.name === name && (
                 <p className="model-warning" data-testid={`model-warning-${name}`}>
-                  {confirmDelete.usedBy} 个会话正在使用该条目，删除后这些会话将回落默认模型。
+                  {confirmDelete.usedBy > 0 && `${confirmDelete.usedBy} 个会话正在使用该条目，删除后这些会话将回落默认模型。`}
+                  {confirmDelete.memoryRefs && "记忆提取或向量检索正在使用该条目，删除后将回落默认端点。"}
                   <button type="button" data-testid={`model-delete-confirm-${name}`} onClick={() => void confirmRemove(name)}>
                     确认删除
                   </button>
