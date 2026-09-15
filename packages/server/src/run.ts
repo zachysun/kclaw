@@ -102,7 +102,7 @@ export interface RunManagerDeps {
    * The daemon sets it for its default composition; injected test factories
    * (plain script clients) leave it unset and use `llm` as before.
    */
-  llmForRun?: (onRetry: LlmRetrySink) => LlmClient
+  llmForRun?: (onRetry: LlmRetrySink, entryKey?: string) => LlmClient
   /**
    * Per-name executor overrides for tests/adapters:
    * merged OVER the builtin tools after construction (defs stay the
