@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync,
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { resolvePaths } from "../../src/storage/paths.js"
+import { loadConfig, saveConfig } from "../../src/storage/config.js"
 import {
   consolidateMcpConfig,
   loadMcpJson,
@@ -105,6 +106,18 @@ describe("loadMcpServers merged read", () => {
       remote: http,
     })
   })
+
+  it("reads the legacy section from config.json once that file exists", () => {
+    const paths = resolvePaths(home)
+    writeFileSync(paths.config, legacyYaml)
+    saveConfig(paths, loadConfig(paths)) // migrate: config.json is now authoritative
+    expect(existsSync(paths.config)).toBe(false)
+    saveMcpJson(mcpConfigPath(home), { remote: http })
+    expect(loadMcpServers(paths)).toEqual({
+      filesystem: { type: "stdio", command: "npx", enabled: true },
+      remote: http,
+    })
+  })
 })
 
 describe("removeLegacyMcpSection", () => {
@@ -200,5 +213,17 @@ describe("consolidateMcpConfig", () => {
     const once = readFileSync(paths.config, "utf8")
     consolidateMcpConfig(paths, { filesystem: stdio })
     expect(readFileSync(paths.config, "utf8")).toBe(once)
+  })
+
+  it("strips a legacy mcp section that reached config.json (deleted servers cannot resurrect)", () => {
+    const paths = resolvePaths(home)
+    const cfg = loadConfig(paths)
+    cfg.mcp = { servers: { filesystem: stdio } }
+    saveConfig(paths, cfg) // config.json now carries the legacy section
+    consolidateMcpConfig(paths, { remote: http }) // UI saved a set WITHOUT filesystem
+
+    expect(loadMcpJson(mcpConfigPath(home))).toEqual({ remote: http })
+    expect(JSON.parse(readFileSync(paths.configJson, "utf8")).mcp).toBeUndefined()
+    expect(loadMcpServers(paths)).toEqual({ remote: http })
   })
 })

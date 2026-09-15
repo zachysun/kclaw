@@ -1,17 +1,18 @@
 /**
  * MCP server configuration storage. The management surface is a dedicated
  * `<home>/mcp.json` (JSON, 0600) — editable by the WebUI without ever
- * rewriting the hand-written config.yaml. The legacy `mcp.servers` section in
- * config.yaml keeps working forever for users who never touch the UI: reads
- * merge both sources by server name (mcp.json wins), and the one-way
- * consolidation — triggered by any UI save — moves everything into mcp.json
- * and strips the section from config.yaml with text-precise edits, so hand
- * written comments and key order elsewhere in the file survive untouched.
+ * rewriting the config file. The legacy `mcp.servers` section keeps working
+ * for users who never touch the UI: reads merge both sources by server name
+ * (mcp.json wins), and the one-way consolidation — triggered by any UI save —
+ * moves everything into mcp.json and strips the section from the config file
+ * (text-precise edits in the yaml layout, a whole-file rewrite in the json
+ * one), so a server deleted through the UI can never resurrect from a stale
+ * config section.
  */
-import { readFileSync, statSync } from "node:fs"
+import { existsSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
-import { parse } from "yaml"
 import { writeFileAtomic } from "./atomic.js"
+import { loadConfig, saveConfig } from "./config.js"
 import type { KclawPaths } from "./paths.js"
 import type { McpServerConfig } from "../mcp/manager.js"
 
@@ -49,40 +50,37 @@ export function saveMcpJson(filePath: string, servers: Record<string, McpServerC
 }
 
 /**
- * Merged read across both sources: config.yaml `mcp.servers` (legacy) and
- * mcp.json. Same-name entries resolve to the mcp.json form. config.yaml that
- * cannot be parsed throws here just as it does for the daemon at startup —
- * silently dropping a broken config could silently drop MCP tools.
+ * Merged read across both sources: the config file's `mcp.servers` (legacy,
+ * read through loadConfig so it follows config.json once that file exists)
+ * and mcp.json. Same-name entries resolve to the mcp.json form. A config
+ * file that cannot be parsed throws here just as it does for the daemon at
+ * startup — silently dropping a broken config could silently drop MCP tools.
  */
 export function loadMcpServers(paths: KclawPaths): Record<string, McpServerConfig> {
-  let raw: string
-  try {
-    raw = readFileSync(paths.config, "utf8")
-  } catch {
-    raw = "" // no config.yaml — the legacy source is empty
-  }
-  let legacy: Record<string, McpServerConfig> = {}
-  if (raw !== "") {
-    let file: { mcp?: { servers?: Record<string, McpServerConfig> } } | null
-    try {
-      file = parse(raw)
-    } catch (err) {
-      throw new Error(`invalid yaml in ${paths.config}: ${(err as Error).message}`)
-    }
-    legacy = file?.mcp?.servers ?? {}
-  }
+  const legacy = loadConfig(paths).mcp?.servers ?? {}
   const managed = loadMcpJson(mcpConfigPath(paths.home))
   return { ...legacy, ...managed }
 }
 
 /**
  * Persist the full server set as the managed source of truth: everything is
- * written into mcp.json and the legacy config.yaml section is stripped (a
- * no-op once it is gone). Idempotent — every UI save runs through here.
+ * written into mcp.json and the legacy section is stripped from whichever
+ * config layout is on disk (a no-op once it is gone). Idempotent — every UI
+ * save runs through here.
  */
 export function consolidateMcpConfig(paths: KclawPaths, servers: Record<string, McpServerConfig>): void {
   saveMcpJson(mcpConfigPath(paths.home), servers)
   removeLegacyMcpSection(paths.config)
+  removeLegacyJsonMcpSection(paths)
+}
+
+/** Strip `mcp.servers` from config.json (the section survives only in mcp.json). */
+function removeLegacyJsonMcpSection(paths: KclawPaths): void {
+  if (!existsSync(paths.configJson)) return
+  const config = loadConfig(paths)
+  if (config.mcp === undefined || Object.keys(config.mcp.servers ?? {}).length === 0) return
+  delete config.mcp
+  saveConfig(paths, config)
 }
 
 /**
