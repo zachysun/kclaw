@@ -206,7 +206,9 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 
 - **签名缓存热生效**：工厂按条目名缓存一个槽位，签名 = `format|baseUrl|apiKey|timeoutMs`。Model 页的增删改直接改 daemon 的内存配置并落盘——签名变了下个 run 自动重建客户端，**无需重启**；改回原值也能命中缓存。
 - **每次 run 包一层新重试**：缓存的是裸客户端；`withRetry` 在每次 `llmForRun` 调用时现包，重试回调才归属当次 run（`llm.failed` 事件带对的上文）。
-- **记忆提取同语义**：`memory.extractModel` 命中条目名时走该条目自己的客户端与线上模型名；命中不了则按裸模型名发往主模型端点（见 [memory](./memory.md)）。
+- **记忆提取同语义**：`memory.extractModel` 命中条目名时走该条目自己的客户端与线上模型名；命中不了则按裸模型名发往主模型端点——回落客户端也每调用经同一工厂现解，默认条目的改动同样热生效（见 [memory](./memory.md)）。
+- **向量路同步热更**：embedding 客户端按同一签名规则现解（`createHotEmbedClient`），换 key/换地址下条记忆向量就吃到；向量路是否启用（embeddings model 与条目协议判定）仍是启动时一次定死。
+- **默认模型行也吃热更**：run 装配与手动压缩路径的默认模型取默认条目**当前**的 `.model`，启动时解析的 `deps.model` 只兜底没有条目、纯环境变量的安装。
 
 ### 6b. 模型列表探测（probe，兼作连接验证）
 
