@@ -1,8 +1,9 @@
 /**
  * Provider configuration triage: decides how provider settings will be
  * sourced, the branch point for the first-run wizard and the chat entry.
- * Priority: a config.yaml whose providers.default names an
- * existing entry wins; otherwise any non-empty KCLAW_LLM_* env var; else
+ * Priority: a config.json whose providers.default names an
+ * existing entry wins (a pre-json config.yaml reads the same while
+ * config.json is absent); otherwise any non-empty KCLAW_LLM_* env var; else
  * nothing is configured. Paths come from core's own resolvePaths (the real
  * KclawPaths shape, home et al.) so the resolution can never drift from the
  * daemon's — its mkdir side effect merely pre-creates the home tree any
