@@ -73,6 +73,32 @@ export function writeThreadFile(
   return next
 }
 
+/** Heading cap: keeps `## date · heading` lines scannable and index keys short. */
+export const HEADING_CAP = 40
+
+/** Shorten a heading candidate to its first non-empty line; lines beyond the
+ *  cap are cut at the last sentence or clause mark inside the cap. */
+export function capHeading(text: string): string {
+  const line = text.split("\n").find((l) => l.trim() !== "")?.trim() ?? ""
+  if (line.length <= HEADING_CAP) return line
+  const head = line.slice(0, HEADING_CAP)
+  const cut = Math.max(...["。", "！", "？", "；", "，"].map((m) => head.lastIndexOf(m)))
+  return cut > 0 ? head.slice(0, cut + 1) : head
+}
+
+/**
+ * Section heading: the first candidate that survives capping wins; a numeric
+ * suffix disambiguates collisions so index keys (`topic#date#heading`) stay
+ * unique and update matching stays unambiguous within the file.
+ */
+export function sectionHeading(candidates: string[], existing: readonly ThreadSection[]): string {
+  const base = candidates.map(capHeading).find((h) => h !== "") ?? "记录"
+  if (!existing.some((s) => s.heading === base)) return base
+  let n = 2
+  while (existing.some((s) => s.heading === `${base}（${n}）`)) n++
+  return `${base}（${n}）`
+}
+
 export function appendSection(tf: ThreadFile, section: ThreadSection): ThreadFile {
   return { ...tf, sections: [...tf.sections, section], updated: today() }
 }
@@ -80,7 +106,7 @@ export function appendSection(tf: ThreadFile, section: ThreadSection): ThreadFil
 /** 修正已有情节：就地改写该小节，不另开小节；找不到时退化为追加。 */
 export function updateSection(tf: ThreadFile, heading: string, newBody: string): ThreadFile {
   const idx = tf.sections.findIndex((s) => s.heading === heading)
-  if (idx === -1) return appendSection(tf, { date: today(), heading, body: newBody })
+  if (idx === -1) return appendSection(tf, { date: today(), heading: sectionHeading([heading, newBody], tf.sections), body: newBody })
   const sections = tf.sections.slice()
   sections[idx] = { ...sections[idx]!, body: newBody }
   return { ...tf, sections, updated: today() }

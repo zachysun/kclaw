@@ -44,6 +44,45 @@ describe("runTrigger", () => {
     expect(existsSync(join(dirnameOf(written[0]!), "MEMORY.md"))).toBe(true)
   })
 
+  it("append headings stay short: model title wins, no-title falls back to a capped prefix, collisions get suffixed", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    seedMessages(meta.id, ["记住，我只听得懂人话"])
+    const longBody = "用户把工作目录改名成了新路径，旧路径的记忆库因此成了孤儿，希望有个显式入口列出这些目录，确认后删除，避免越积越多。"
+    let call = 0
+    const replies = [
+      JSON.stringify({ actions: [{ file: "user-pref", op: "new-thread", thread: "user-pref", title: "用户偏好通俗语言", content: "用户明确表示只听得懂人话，要求直白朴素。" }] }),
+      JSON.stringify({ actions: [{ file: "user-pref", op: "append", content: longBody }] }),
+      JSON.stringify({ actions: [{ file: "user-pref", op: "append", title: "孤儿记忆清理诉求", content: "用户希望孤儿记忆目录可以显式清理。" }] }),
+      JSON.stringify({ actions: [{ file: "user-pref", op: "append", title: "孤儿记忆清理诉求", content: "用户再次确认要清理孤儿目录。" }] }),
+    ]
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
+      resolveLlm: () => ({
+        llm: {
+          async *stream(): AsyncIterable<LlmStreamEvent> {
+            yield { type: "text_delta", delta: replies[Math.min(call++, replies.length - 1)]! }
+            yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+          },
+        },
+        model: "test",
+      }),
+    })
+    await pipe.runTrigger(WORKDIR, "immediate", meta.id)
+    for (const text of ["追加第一条消息", "追加的第二条", "第三条"]) {
+      seedMessages(meta.id, [text])
+      await pipe.runTrigger(WORKDIR, "interval")
+    }
+    const threadPath = join(root, "memory", "projects", projectIdFor(WORKDIR), "user-pref.md")
+    const tf = parseThreadFile(readFileSync(threadPath, "utf8"))!
+    expect(tf.sections).toHaveLength(4)
+    // 无 title 的 append：标题是正文封顶前缀，绝不再全文复读
+    expect(tf.sections[1]!.heading.length).toBeLessThanOrEqual(40)
+    expect(longBody.startsWith(tf.sections[1]!.heading)).toBe(true)
+    // 带 title 的 append：直接用模型标题
+    expect(tf.sections[2]!.heading).toBe("孤儿记忆清理诉求")
+    // 同题撞名：序号后缀消歧，索引键不互覆
+    expect(tf.sections[3]!.heading).toBe("孤儿记忆清理诉求（2）")
+  })
+
   it("advances the interval watermark; second trigger with no new messages writes nothing", async () => {
     const meta = sessions.create("s", undefined, WORKDIR)
     seedMessages(meta.id, ["一次性内容"])
