@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync, existsSync 
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { resolvePaths } from "../../src/storage/paths.js"
-import { loadConfig, saveConfig, defaultConfig, resolveContextTokens, resolveRunModel } from "../../src/storage/config.js"
+import { loadConfig, saveConfig, defaultConfig, resolveContextTokens, resolveRunModel, resolveProviderFormat } from "../../src/storage/config.js"
 import type { KclawConfig } from "../../src/storage/config.js"
 import { writeFileAtomic } from "../../src/storage/atomic.js"
 
@@ -257,10 +257,73 @@ describe("writeFileAtomic", () => {
     expect(readFileSync(file, "utf8")).toBe("new-content")
     expect(existsSync(`${file}.tmp`)).toBe(false)
   })
-  it("saveConfig writes config.yaml with mode 0600", () => {
+  it("saveConfig writes config.json with mode 0600", () => {
     const paths = resolvePaths(home)
     saveConfig(paths, loadConfig(paths))
-    expect(statSync(paths.config).mode & 0o777).toBe(0o600)
+    expect(statSync(paths.configJson).mode & 0o777).toBe(0o600)
+  })
+})
+
+describe("config.json storage", () => {
+  it("exposes configJson in the path layout", () => {
+    expect(resolvePaths(home).configJson).toBe(join(home, "config.json"))
+  })
+
+  it("roundtrips as JSON and prefers config.json over a coexisting config.yaml", () => {
+    const paths = resolvePaths(home)
+    saveConfig(paths, { ...structuredClone(defaultConfig), exec: { timeoutMs: 4321, maxOutputBytes: 1 } })
+    writeFileSync(paths.config, "exec:\n  timeoutMs: 9999\n")
+    const cfg = loadConfig(paths)
+    expect(cfg.exec.timeoutMs).toBe(4321) // config.json wins
+    expect(JSON.parse(readFileSync(paths.configJson, "utf8")).exec.timeoutMs).toBe(4321)
+  })
+
+  it("reads a pre-json config.yaml when config.json is absent", () => {
+    const paths = resolvePaths(home)
+    writeFileSync(paths.config, "exec:\n  timeoutMs: 5555\n")
+    expect(loadConfig(paths).exec.timeoutMs).toBe(5555)
+  })
+
+  it("first saveConfig retires config.yaml as config.yaml.bak; later saves leave it alone", () => {
+    const paths = resolvePaths(home)
+    writeFileSync(paths.config, "exec:\n  timeoutMs: 7777\n")
+    saveConfig(paths, loadConfig(paths)) // loaded from yaml → persisted as json
+    expect(existsSync(paths.config)).toBe(false)
+    expect(readFileSync(`${paths.config}.bak`, "utf8")).toContain("timeoutMs: 7777")
+    expect(JSON.parse(readFileSync(paths.configJson, "utf8")).exec.timeoutMs).toBe(7777)
+    writeFileSync(`${paths.config}.bak`, "tampered")
+    saveConfig(paths, loadConfig(paths))
+    expect(readFileSync(`${paths.config}.bak`, "utf8")).toBe("tampered") // rename is first-write only
+  })
+
+  it("saveConfig without a legacy yaml writes json and renames nothing", () => {
+    const paths = resolvePaths(home)
+    saveConfig(paths, structuredClone(defaultConfig))
+    expect(existsSync(`${paths.config}.bak`)).toBe(false)
+  })
+
+  it("throws on unparseable config.json; an empty one yields defaults", () => {
+    const paths = resolvePaths(home)
+    writeFileSync(paths.configJson, "{ not json")
+    expect(() => loadConfig(paths)).toThrow(/invalid json/)
+    writeFileSync(paths.configJson, "   \n")
+    expect(loadConfig(paths)).toEqual(defaultConfig)
+  })
+
+  it("treats a format-less entry as openai (resolveProviderFormat)", () => {
+    const paths = resolvePaths(home)
+    writeFileSync(paths.config, [
+      "providers:",
+      "  default: ds",
+      "  entries:",
+      "    ds:",
+      "      baseUrl: https://api.deepseek.com/v1",
+      "      apiKey: sk-x",
+      "      model: deepseek-chat",
+    ].join("\n"))
+    const cfg = loadConfig(paths)
+    expect(cfg.providers.entries.ds!.format).toBeUndefined()
+    expect(resolveProviderFormat(cfg.providers.entries.ds!)).toBe("openai")
   })
 })
 

@@ -6,7 +6,9 @@ import { join } from "node:path"
 export interface KclawPaths {
   /** Root data directory. Resolution order: explicit param > KCLAW_HOME env > ~/.kclaw */
   home: string
-  /** ~/.kclaw/config.yaml — provider/permissions/memory settings */
+  /** ~/.kclaw/config.json — the config file (provider/permissions/memory settings) */
+  configJson: string
+  /** ~/.kclaw/config.yaml — pre-json location, read only while config.json is absent */
   config: string
   /** ~/.kclaw/AGENTS.md — agent persona injected into the system prompt */
   agentsMd: string
@@ -46,13 +48,14 @@ function envHome(): string | undefined {
 
 /**
  * Resolve the kclaw directory layout and create the directory tree.
- * Parent dirs are created with mkdirSync(recursive); files (config.yaml,
+ * Parent dirs are created with mkdirSync(recursive); files (config.json,
  * jobs.db, ...) are only path strings and are not created here.
  */
 export function resolvePaths(home?: string): KclawPaths {
   const root = home ?? envHome() ?? join(homedir(), ".kclaw")
   const paths: KclawPaths = {
     home: root,
+    configJson: join(root, "config.json"),
     config: join(root, "config.yaml"),
     agentsMd: join(root, "AGENTS.md"),
     skillsDir: join(root, "skills"),
