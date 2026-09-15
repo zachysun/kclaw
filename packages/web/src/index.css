@@ -3289,6 +3289,196 @@ select:focus {
 }
 
 /* ============================================================
+   Model view (provider management tab).
+   ============================================================ */
+
+.model-view {
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.model-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.model-head .model-intro {
+  flex: 1;
+  margin: 0;
+}
+
+.model-intro code {
+  font-size: 12px;
+}
+
+.model-refresh {
+  white-space: nowrap;
+}
+
+.model-entries {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.model-entry {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.model-entry-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.model-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.model-default {
+  font-size: 12px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.model-format {
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  color: var(--muted);
+}
+
+.model-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-1);
+}
+
+.model-warning {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger, #c0392b);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.model-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.model-meta code {
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.model-limits {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.model-form {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.model-form-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.model-form-row label,
+.model-form > label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+
+.model-form input,
+.model-form select {
+  font: inherit;
+  font-size: 13px;
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+}
+
+.model-form input[readonly] {
+  color: var(--muted);
+}
+
+.model-form-source {
+  display: inline-flex;
+  gap: 0;
+}
+
+.model-form-source button.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.model-form-source button:first-child {
+  border-radius: var(--radius) 0 0 var(--radius);
+}
+
+.model-form-source button:last-child {
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.model-advanced {
+  font-size: 13px;
+}
+
+.model-advanced summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.model-form-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger, #c0392b);
+  word-break: break-all;
+}
+
+.model-form-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* ============================================================
    Phantom theme decoration layer (html[data-theme="phantom"]).
    Structure and colors come from tokens; this layer adds the
    angled personality on top: skewed red tab cursor, italic
