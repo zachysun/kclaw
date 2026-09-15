@@ -5,6 +5,8 @@ import { estimateTokens } from "../session/compaction.js"
 import type { KclawConfig } from "../storage/config.js"
 import { writeFileAtomic } from "../storage/atomic.js"
 import type { LlmClient } from "../provider/types.js"
+import { createProviderClient } from "../provider/factory.js"
+import { withRetry } from "../provider/retry.js"
 import type { SessionStore } from "../session/store.js"
 import { MemoryLayout, projectIdFor } from "./layout.js"
 import { WriteLedger } from "./ledger.js"
@@ -156,9 +158,16 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     }
     this.#pipeline = new MemoryPipeline(opts.memoryDir, opts.sessions, {
       resolveLlm: () => {
-        // extractModel 回落主模型的解析集中在这里，resolveLlm 只调一次
+        // extractModel 的解析集中在这里，resolveLlm 只调一次：空串回落主模型；
+        // 命中 provider 条目时走该条目自己的端点（条目名不能当线上模型名发出去）；
+        // 其余值是裸线上模型名，发往主模型端点。
         const { llm, model } = this.#resolveLlm()
-        return { llm, model: this.#config.memory.extractModel || model }
+        const raw = this.#config.memory.extractModel
+        if (raw === "") return { llm, model }
+        const entry = this.#config.providers.entries[raw]
+        if (entry === undefined) return { llm, model: raw }
+        const client = createProviderClient({ entry, timeoutMs: this.#config.providers.timeoutMs })
+        return { llm: withRetry(client), model: entry.model }
       },
       embed: opts.embed, emit: opts.emit, audit: this.#audit, log: this.#log, now: this.#now,
       threadInactiveDays: opts.config.memory.threadInactiveDays,

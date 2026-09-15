@@ -125,7 +125,7 @@ async function mcpAction(home: string): Promise<void> {
   const body = (await client.request("GET", "/mcp")) as { servers?: Array<{ name: string; state: string; tools: { name: string }[]; lastError?: string }> }
   const servers = body.servers ?? []
   if (servers.length === 0) {
-    process.stdout.write("未配置 MCP server（daemon 的 mcp.json 或 config.yaml 的 mcp.servers 为空）\n")
+    process.stdout.write("未配置 MCP server（daemon 的 mcp.json 或配置文件的 mcp.servers 为空）\n")
     return
   }
   for (const s of servers) {

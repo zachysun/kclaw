@@ -2,13 +2,13 @@
 
 ## 职责
 
-`packages/cli` 的首次运行链路包含三个模块：`src/provider-check.ts` 的 `detectProviderStatus` 判定模型配置的来源（决定是否进入向导）；`src/wizard.ts` 的 `runWizard` 是 30 秒配置向导（选模板 → 输入 key → 连通测试 → 写 config.yaml）；`src/web-cmd.ts` 的 `webAction` 实现 `kclaw web`（确保 daemon 在运行、携带 token 打开浏览器）。加上 `src/index.ts` 入口的 Node >= 22 版本检查，共同构成首次执行 `kclaw` 能顺利使用的全部路径。
+`packages/cli` 的首次运行链路包含三个模块：`src/provider-check.ts` 的 `detectProviderStatus` 判定模型配置的来源（决定是否进入向导）；`src/wizard.ts` 的 `runWizard` 是 30 秒配置向导（选模板 → 输入 key → 连通测试 → 写 config.json）；`src/web-cmd.ts` 的 `webAction` 实现 `kclaw web`（确保 daemon 在运行、携带 token 打开浏览器）。加上 `src/index.ts` 入口的 Node >= 22 版本检查，共同构成首次执行 `kclaw` 能顺利使用的全部路径。
 
 ## 设计决策
 
-- **判定优先级：config > env > missing**：`config.yaml` 里 `providers.default` 指向一个存在的条目即视为已配置；否则任一非空的 `KCLAW_LLM_*` 环境变量视为已配置；两者都缺失才判定为 "missing"（触发向导）。与 daemon 侧 `resolveProviderEndpoint` 的解析规则同向：config 优先、env 补缺。
+- **判定优先级：config > env > missing**：`config.json` 里 `providers.default` 指向一个存在的条目即视为已配置（`config.json` 出现前的旧 `config.yaml` 兼容读取，判定相同）；否则任一非空的 `KCLAW_LLM_*` 环境变量视为已配置；两者都缺失才判定为 "missing"（触发向导）。与 daemon 侧 `resolveProviderEndpoint` 的解析规则同向：config 优先、env 补缺。
 - **路径解析复用 core**：`detectProviderStatus` 与向导都用 `@kclaw/core` 的 `resolvePaths`/`loadConfig`/`saveConfig`（真实的 `KclawPaths` 形状），不自建替代实现，CLI 侧的路径解析永远不会与 daemon 发生漂移（其 mkdir 副作用只是提前创建 home 目录树，任何 kclaw 调用本来也会创建）。
-- **向导是验证环节不是必经之路**：只在 "missing" 且 stdout 是 TTY 时启动；取消（Ctrl+C 等）或"重试？→否"都直接静默退出，**文件系统零改动**——绝不写入不完整的 config.yaml。
+- **向导是验证环节不是必经之路**：只在 "missing" 且 stdout 是 TTY 时启动；取消（Ctrl+C 等）或"重试？→否"都直接静默退出，**文件系统零改动**——绝不写入不完整的 config.json。
 - **连通测试用最小请求**：一次 `max_tokens: 1` 的补全请求，验证 key、model、baseUrl 三项组合可用，不浪费 token。
 - **key 文件权限 0600**：`saveConfig` 本身就是原子写（`writeFileAtomic`：临时文件写入后 rename，mode 直接 0600）；向导保存后再 `chmodSync(paths.config, 0o600)` 是双保险——若该文件此前以更宽权限存在也一并收紧。API key 持久化在这个文件里，仅属主可读写。
 - **`kclaw web` 不向用户展示 token**：URL 带 token 只用于浏览器一次交接，终端打印的地址刻意去掉 `?token=` 部分（用户能看见/分享的是不带 token 的 URL）。
@@ -61,7 +61,7 @@ export function detectProviderStatus(home: string): ProviderStatus
 
 "重试？→ 是"回到上表对应的步骤，"否"或取消 → `已退出，未做任何修改`，返回 `"aborted"`。
 
-**成功收尾**：`loadConfig` 读旧配置 → `saveConfig` 合并写入 `{providers: {default: tpl.id, entries: {...旧, [tpl.id]: entry}}}`（其余配置原样保留；原子写、mode 0600）→ `chmodSync(paths.config, 0o600)`（双保险）→ `已写入 config.yaml，开始对话`，返回 `"configured"`，`chatAction` 继续进入 REPL。
+**成功收尾**：`loadConfig` 读旧配置 → `saveConfig` 合并写入 `{providers: {default: tpl.id, entries: {...旧, [tpl.id]: entry}}}`（其余配置原样保留；原子写、mode 0600；首次写入会把仍在的旧 `config.yaml` 改名为 `config.yaml.bak` 弃用，此后 `config.json` 是唯一配置）→ `chmodSync(paths.config, 0o600)`（双保险）→ `已写入 config.json，开始对话`，返回 `"configured"`，`chatAction` 继续进入 REPL。
 
 ## kclaw web（packages/cli/src/web-cmd.ts）
 
@@ -100,7 +100,7 @@ if (major < 22) {
 
 ## 边界与出错
 
-- **向导不修改 config.yaml 之外的任何文件**：中途任何取消点都返回 `"aborted"` 且无文件写入。
+- **向导不修改 config.json 之外的任何文件**（成功保存时旧 `config.yaml` 改名为 `config.yaml.bak` 除外）：中途任何取消点都返回 `"aborted"` 且无文件写入。
 - **非交互终端没有向导**：只打印一行指引，面向脚本/CI 场景（脚本/CI 场景不应出现交互式提问）。
 - **连通测试超时 20s**：`AbortSignal.timeout` 中止请求，status 记为 null → 按 network 类报错。
 - **`kclaw web` 无浏览器命令的平台**：Windows 等 `openCommandFor` 返回 null 的平台退化为打印 URL（token 完整可见，用户自行打开）。

@@ -34,11 +34,12 @@ import { MemoryView } from "./memory/MemoryView.js"
 import { SkillsView } from "./skills/SkillsView.js"
 import { PermissionsView } from "./permissions/PermissionsView.js"
 import { McpView } from "./mcp/McpView.js"
+import { ModelView } from "./model/ModelView.js"
 import type { FsBrowseResult, SessionMeta } from "./types.js"
 
 type DaemonStatus = "connecting" | "connected" | "error"
 
-const TABS = ["chat", "jobs", "audit", "usage", "trash", "memory", "skills", "permissions", "mcp"] as const
+const TABS = ["chat", "jobs", "audit", "usage", "trash", "memory", "skills", "permissions", "mcp", "model"] as const
 type Tab = (typeof TABS)[number]
 
 /**
@@ -444,6 +445,14 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
           >
             MCP
           </button>
+          <button
+            type="button"
+            className={tab === "model" ? "tab active" : "tab"}
+            data-testid="tab-model"
+            onClick={() => switchTab("model")}
+          >
+            Model
+          </button>
         </nav>
         <button
           type="button"
@@ -536,6 +545,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
           {tab === "skills" && <SkillsView api={api} notice={(t) => setSessionNotice(t)} />}
           {tab === "permissions" && <PermissionsView api={api} notice={(t) => setSessionNotice(t)} workdir={selectedMeta?.workdir} />}
           {tab === "mcp" && <McpView api={api} notice={(t) => setSessionNotice(t)} />}
+          {tab === "model" && <ModelView api={api} notice={(t) => setSessionNotice(t)} />}
         </main>
       </div>
     </div>

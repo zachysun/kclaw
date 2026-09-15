@@ -93,7 +93,7 @@ HTTP 接口（`packages/server/src/routes/jobs.ts`，均需 Bearer token）：
 
 ### 回收站 30 天自动清理
 
-tick 的第二步 `sessions.purgeExpired(purgeTtlMs)`：把 `deletedAt` 距今 ≥ 保留期的软删除会话整目录删除。保留期来自 `config.yaml` 的 `sessions.recycleBinTtlMs`（见 [storage](./storage.md)），默认 `30 * 24 * 60 * 60 * 1000`（30 天）；tick 自己的默认值 `DEFAULT_RECYCLE_BIN_TTL_MS` 同为 30 天，daemon 启动时总是传入配置值。清理失败只记日志，不影响 interval。
+tick 的第二步 `sessions.purgeExpired(purgeTtlMs)`：把 `deletedAt` 距今 ≥ 保留期的软删除会话整目录删除。保留期来自 `config.json` 的 `sessions.recycleBinTtlMs`（见 [storage](./storage.md)），默认 `30 * 24 * 60 * 60 * 1000`（30 天）；tick 自己的默认值 `DEFAULT_RECYCLE_BIN_TTL_MS` 同为 30 天，daemon 启动时总是传入配置值。清理失败只记日志，不影响 interval。
 
 ---
 

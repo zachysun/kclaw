@@ -109,7 +109,7 @@ updated: 2026-08-30
 3. **写入**：逐条应用动作（追加/改写/开线），期间不阻塞地广播 `memory.written` 事件（见"事件"）；
 4. **收尾**：推进提取进度、扫描时间自动收束（见"生命周期"）、顺带内化检查、重建项目索引与 MEMORY.md。
 
-提取用的模型取 `memory.extractModel`，为空回落主对话模型。校验与提示词的分工：**模型只从 `EXTRACT_SYSTEM_PROMPT` 认识 JSON 结构，字段名必须与写入校验逐字一致**（教训：早期提示词未点名 `op`/`file`，真实模型交回 `type` 判别 + 缺 `file`，动作全被丢弃）。响应不是合法 JSON 或解析结果非 `actions` 数组时**整批放弃**、只打日志，不做部分写入；单个动作字段不合法（缺 `file`/`content`、`op` 非三值）则**只丢该条**、其余照常写入。提取进度的推进要区分两种情况：**LLM 调用抛错（提取失败）提取进度不推进**，下一次触发重试同一范围；而**调用成功但动作被丢光（格式不合法）提取进度照常推进**——这段消息不会自动重试，属已知取舍（丢弃的来源是模型输出不合规，重试大概率同样不合规）。
+提取用的模型取 `memory.extractModel`，为空回落主对话模型；名字命中 provider 条目时走该条目自己的端点与协议（`createProviderClient` + 条目的 `model`），裸模型名走主端点（见 [provider](./provider.md)）。校验与提示词的分工：**模型只从 `EXTRACT_SYSTEM_PROMPT` 认识 JSON 结构，字段名必须与写入校验逐字一致**（教训：早期提示词未点名 `op`/`file`，真实模型交回 `type` 判别 + 缺 `file`，动作全被丢弃）。响应不是合法 JSON 或解析结果非 `actions` 数组时**整批放弃**、只打日志，不做部分写入；单个动作字段不合法（缺 `file`/`content`、`op` 非三值）则**只丢该条**、其余照常写入。提取进度的推进要区分两种情况：**LLM 调用抛错（提取失败）提取进度不推进**，下一次触发重试同一范围；而**调用成功但动作被丢光（格式不合法）提取进度照常推进**——这段消息不会自动重试，属已知取舍（丢弃的来源是模型输出不合规，重试大概率同样不合规）。
 
 ### 五触发
 
@@ -236,7 +236,7 @@ score = fused × 1/(1 + 距今天数/30)      // 时效因子：30 天衰减一�
 | `memory.write.manual` | `true` | 手动触发开关：`/memory save`（CLI/web）走 `POST /memory/trigger-manual` 触发写入；`false` 时该路由返回 400 |
 | `memory.write.intervalMinutes` | `30` | 定时保底触发的间隔分钟数（`0` = 关闭） |
 | `memory.write.idleMinutes` | `10` | 跟随门禁的空闲分钟数（`0` = 关闭） |
-| `memory.extractModel` | `""` | 提取/内化用的模型，空 = 回落主对话模型 |
+| `memory.extractModel` | `""` | 提取/内化用的模型，空 = 回落主对话模型；名字命中 provider 条目时用该条目自己的端点与协议（见 [provider](./provider.md)） |
 | `memory.threadInactiveDays` | `14` | 线多少天无新情节自动转 inactive |
 | `memory.consolidate` | `true` | 内化开关（收束顺带与夜间闲时共用） |
 | `memory.consolidateHour` | `3` | 夜间闲时内化的本地小时（0-23；负值关闭） |

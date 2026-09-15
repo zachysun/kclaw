@@ -102,7 +102,7 @@ export interface RunManagerDeps {
    * The daemon sets it for its default composition; injected test factories
    * (plain script clients) leave it unset and use `llm` as before.
    */
-  llmForRun?: (onRetry: LlmRetrySink) => LlmClient
+  llmForRun?: (onRetry: LlmRetrySink, entryKey?: string) => LlmClient
   /**
    * Per-name executor overrides for tests/adapters:
    * merged OVER the builtin tools after construction (defs stay the
@@ -471,7 +471,10 @@ export class RunManager {
     const meta = sessions.meta(sessionId)
     if (meta === undefined) throw new Error("session not found")
     const history = sessions.readMessages(sessionId)
-    const defaultModel = this.#deps.model ?? config.providers.entries[config.providers.default]?.model ?? ""
+    // Default model line: the default entry's CURRENT model wins (Model-tab
+    // edits hot-apply), the launch-resolved deps.model only backs env-only
+    // setups with no entry.
+    const defaultModel = config.providers.entries[config.providers.default]?.model || this.#deps.model || ""
     const { model, budget } = resolveRunModel(config, meta.model ?? defaultModel)
     const out = await this.#compactor.compact(sessionId, history, "", config, llm, model, {
       focus,

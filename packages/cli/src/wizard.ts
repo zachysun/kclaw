@@ -122,8 +122,10 @@ export async function runWizard(home: string): Promise<"configured" | "aborted">
         ...cfg,
         providers: { ...cfg.providers, default: tpl.id, entries: { ...cfg.providers.entries, [tpl.id]: entry } },
       })
-      chmodSync(paths.config, 0o600) // saveConfig 设不了 mode；key 落盘必须 0600
-      p.outro("已写入 config.yaml，开始对话")
+      // Belt and braces: writeFileAtomic already sets 0600; the explicit
+      // chmod keeps the guarantee independent of the atomic-write path.
+      chmodSync(paths.configJson, 0o600)
+      p.outro("已写入 config.json，开始对话")
       return "configured"
     }
     const reason = classifyProbeError(status, body)

@@ -162,10 +162,13 @@ export interface RunEngineDeps {
    * withRetry composition) then surface as `llm.failed {willRetry:true}`
    * events carrying THIS run's sessionId/runId, even while other sessions
    * run concurrently against the same endpoint. Takes precedence over `llm`.
+   * `entryKey` is the run's resolved provider entry (see resolveRunModel):
+   * non-default entries own their endpoint, so the factory builds the
+   * matching client; unknown/empty keys fall back to the daemon default.
    * The daemon sets it for its default composition; injected test factories
    * (plain script clients) leave it unset and use `llm` as before.
    */
-  llmForRun?: (onRetry: LlmRetrySink) => LlmClient
+  llmForRun?: (onRetry: LlmRetrySink, entryKey?: string) => LlmClient
   /**
    * Per-name executor overrides for tests/adapters:
    * merged OVER the builtin tools after construction (defs stay the
@@ -659,14 +662,19 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       })
       .catch(() => { /* retry visibility must not break the retry itself */ })
   }
-  const runLlm = engine.deps.llmForRun?.(onLlmRetry) ?? engine.deps.llm
-  const defaultModel = engine.deps.model ?? config.providers.entries[config.providers.default]?.model ?? ""
+  // Default model line: the default entry's CURRENT model wins (Model-tab
+  // edits hot-apply); the launch-resolved deps.model only backs env-only
+  // setups with no configured entry.
+  const defaultModel = config.providers.entries[config.providers.default]?.model || engine.deps.model || ""
   const rawModel = input.model ?? sessionMeta?.model ?? defaultModel
   // Entry metadata for this run: the wire model (entry names resolve to the
   // entry's `.model`), the budget (contextWindow cap via resolveContextTokens)
   // feeds every compaction line and the packing budget; maxOutput rides each
   // request as max_tokens.
-  const { model, budget, maxOutput } = resolveRunModel(config, rawModel)
+  const { model, entryKey, budget, maxOutput } = resolveRunModel(config, rawModel)
+  // The client resolves AFTER the entry: every entry owns its endpoint, so
+  // llmForRun needs the resolved entry key to build the matching client.
+  const runLlm = engine.deps.llmForRun?.(onLlmRetry, entryKey) ?? engine.deps.llm
   // Waterlines resolved once for this run's budget: the request-assembly
   // omission budget reads the pack line here; the compaction trigger hooks get
   // the full schedule via the chain deps. The packing budget is DECOUPLED from

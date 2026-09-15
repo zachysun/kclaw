@@ -256,7 +256,7 @@ describe("default llmFactory", () => {
       async () => {
         const config = loadConfig(resolvePaths(home)) // defaults: empty providers
         await expect(launchDaemon({ home, config })).rejects.toThrow(
-          "no llm provider configured: set providers in config.yaml or KCLAW_LLM_* env",
+          "no llm provider configured: set providers in config.json or KCLAW_LLM_BASE_URL env",
         )
       },
     )

@@ -20,6 +20,7 @@ import { registerUsageRoutes } from "./routes/usage.js"
 import { registerHookRoutes } from "./routes/hooks.js"
 import { registerMcpRoutes } from "./routes/mcp.js"
 import type { McpRoutesView } from "./routes/mcp.js"
+import { registerProvidersRoutes } from "./routes/providers.js"
 
 export interface AppOptions {
   /** kclaw home directory; the default SessionStore lives at <home>/sessions. */
@@ -203,6 +204,8 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   registerJobRoutes(app, { jobs })
 
   registerConfigRoutes(app, { config })
+  // Provider 管理面：Model 顶栏消费（快照 + 增删改/设默认/模型探测热生效）。
+  registerProvidersRoutes(app, { config, paths })
   registerFsRoutes(app, { workspace: config.workspace })
   // 沉淀规则管理面：列表（含 git 跟踪状态）与删除，Web 权限页消费。
   registerPermissionsRoutes(app, { paths, workspaceFallback: config.workspace })

@@ -12,7 +12,7 @@
 ## 接口
 
 ```ts
-export interface SandboxConfig {          // config.yaml 的 sandbox: 节
+export interface SandboxConfig {          // config.json 的 sandbox 节
   enabled: boolean                        // 整体开关，默认 true
   writeRoots: string[]                    // 追加写白名单（realpath 形态），默认 []
 }
@@ -59,14 +59,17 @@ bwrap 不可用 → 不可用（回落人工确认）
 
 ## 配置
 
-```yaml
-sandbox:
-  enabled: true        # 默认开
-  writeRoots: []       # 追加写白名单（realpath 形式），如 ~/.npm 缓存目录
-  network: allow       # allow | deny；deny 时 exec 子进程断网（web 工具不受影响）
+```json
+{
+  "sandbox": {
+    "enabled": true,
+    "writeRoots": [],
+    "network": "allow"
+  }
+}
 ```
 
-daemon 级基础设施配置（非会话偏好），不进会话 meta。npm 等工具在沙箱内需要可写缓存：把 `npm_config_cache` 指到工作区或临时目录，或把缓存路径加进 `writeRoots` 白名单。
+各值即默认值：`enabled` 整体开关，默认开；`writeRoots` 追加写白名单（realpath 形式），如 npm 缓存目录；`network` 取 `allow | deny`，deny 时 exec 子进程断网（web 工具不受影响）。daemon 级基础设施配置（非会话偏好），不进会话 meta。npm 等工具在沙箱内需要可写缓存：把 `npm_config_cache` 指到工作区或临时目录，或把缓存路径加进 `writeRoots` 白名单。
 
 ## 测试策略
 

@@ -27,7 +27,7 @@ kclaw chat    # 首次运行进入配置向导：选 provider → 粘贴 key →
 kclaw web     # 浏览器打开 WebUI（带 token，自动登录）
 ```
 
-向导内置 DeepSeek / OpenAI / Ollama / 自定义模板，key 输入不回显，测通后写入 `~/.kclaw/config.yaml`（权限 0600）。daemon 无需单独启动：`kclaw chat` / `kclaw web` 发现它不在时会自动启动。
+向导内置 DeepSeek / OpenAI / Ollama / 自定义模板，key 输入不回显，测通后写入 `~/.kclaw/config.json`（权限 0600）。daemon 无需单独启动：`kclaw chat` / `kclaw web` 发现它不在时会自动启动。
 
 ---
 

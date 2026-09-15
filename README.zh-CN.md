@@ -24,7 +24,7 @@
    │                          │                                 │
    └──────────────────────────┼─────────────────────────────────┘
                               ▼
-   ~/.kclaw/  config.yaml · AGENTS.md · token · daemon.json
+   ~/.kclaw/  config.json · AGENTS.md · token · daemon.json
               sessions/<id>/events.jsonl（对话真相，唯一权威）
               memory/（markdown 主题线 + 派生 FTS5/向量索引）
               jobs.db · attachments/ · logs/
@@ -54,7 +54,7 @@ kclaw chat    # 首次运行进入配置向导：选 provider → 粘贴 key →
 kclaw web     # 浏览器打开 WebUI（带 token，自动登录）
 ```
 
-向导内置 DeepSeek / OpenAI / Ollama / 自定义模板，key 输入不回显，测试通过后写入 `~/.kclaw/config.yaml`（权限 0600）。不走向导时，也可以手动修改配置或使用环境变量，见「配置要点」。
+向导内置 DeepSeek / OpenAI / Ollama / 自定义模板，key 输入不回显，测试通过后写入 `~/.kclaw/config.json`（权限 0600）。不走向导时，也可以手动修改配置或使用环境变量，见「配置要点」。
 
 > [!TIP]
 > 第一次使用 kclaw？可跟随 [完整上手教程](./docs/tutorial.md)，从安装一直覆盖到定时任务与 WebUI。
@@ -84,7 +84,7 @@ kclaw web     # 浏览器打开 WebUI（带 token，自动登录）
 | `no llm provider configured` | 模型未配置：执行一次 `kclaw chat` 进入配置向导，或按「配置要点」手动编写 config / 环境变量 |
 | 页面打不开 / 401 | daemon 重启后端口可能变化（用 `kclaw daemon status` 查当前端口，或直接 `kclaw web`）；token 不变，无需重新获取 |
 | 高危操作没有确认弹框 | 命令命中了 `permissions.allow` 白名单（配置要点见下） |
-| 数据在哪 | 全部在 `~/.kclaw/`：config.yaml · token · daemon.json · sessions/ · memory/ · jobs.db · logs/ |
+| 数据在哪 | 全部在 `~/.kclaw/`：config.json · token · daemon.json · sessions/ · memory/ · jobs.db · logs/ |
 
 ---
 
@@ -121,19 +121,26 @@ kclaw web    # 自动启动 daemon（如需要），带 token 打开浏览器
 
 ---
 
-## 配置要点（`~/.kclaw/config.yaml`）
+## 配置要点（`~/.kclaw/config.json`）
 
 配置向导写入的就是这个文件，手写形式如下：
 
-```yaml
-providers:
-  default: my-provider
-  entries:
-    my-provider:
-      baseUrl: https://api.example.com/v1   # 任意 OpenAI 兼容端点
-      apiKey: sk-...
-      model: some-model
+```json
+{
+  "providers": {
+    "default": "my-provider",
+    "entries": {
+      "my-provider": {
+        "baseUrl": "https://api.example.com/v1",
+        "apiKey": "sk-...",
+        "model": "some-model"
+      }
+    }
+  }
+}
 ```
+
+`baseUrl` 可为任意 OpenAI 兼容端点。旧版 `config.yaml`（`config.json` 出现前的配置格式）在 `config.json` 缺席时仍被兼容读取，已有旧配置照常运行；首次程序写入（向导或 WebUI 保存）落在 `config.json`，并把仍在的旧 `config.yaml` 改名为 `config.yaml.bak` 弃用，此后不再读取。
 
 | 字段 | 说明 |
 |------|------|

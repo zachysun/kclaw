@@ -49,9 +49,14 @@ export const DEFAULT_LLM_TIMEOUT_MS = 120_000
  * timeout signal fired is reported as the `llm http timeout` message (the
  * retry contract in retry.ts matches on it); everything else rethrows as-is.
  */
-function rethrowClassified(err: unknown, signal: AbortSignal, timeoutMs: number): never {
+export function rethrowClassified(err: unknown, signal: AbortSignal, timeoutMs: number): never {
   if (signal.aborted) throw new Error(`llm http timeout after ${timeoutMs}ms`)
   throw err
+}
+
+/** The one error shape for non-ok provider responses, shared by both formats and the probe. */
+export function llmHttpError(status: number, text: string): Error {
+  return new Error(`llm http ${status}: ${text}`)
 }
 
 export function createOpenAiCompatClient(opts: {
@@ -74,7 +79,10 @@ export function createOpenAiCompatClient(opts: {
       try {
         res = await doFetch(`${opts.baseUrl.replace(/\/$/, "")}/chat/completions`, {
           method: "POST",
-          headers: { "content-type": "application/json", authorization: `Bearer ${opts.apiKey}` },
+          headers: {
+            "content-type": "application/json",
+            ...(opts.apiKey === "" ? {} : { authorization: `Bearer ${opts.apiKey}` }),
+          },
           body: JSON.stringify({
             model: req.model,
             messages: toApiMessages(req),
@@ -100,7 +108,7 @@ export function createOpenAiCompatClient(opts: {
           if (signal.aborted) throw new Error(`llm http timeout after ${timeoutMs}ms`)
           void err
         }
-        throw new Error(`llm http ${res.status}: ${text}`)
+        throw llmHttpError(res.status, text)
       }
       const startedTools = new Map<number, string | null>() // index -> callId
       let finish: string | null = null
@@ -141,7 +149,7 @@ export function createOpenAiCompatClient(opts: {
   }
 }
 
-async function* sseDataLines(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+export async function* sseDataLines(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buf = ""

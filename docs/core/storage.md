@@ -2,16 +2,17 @@
 
 ## 职责
 
-`packages/core/src/storage/` 是所有持久化（把数据写入磁盘长期保存）的基础：`paths.ts` 解析 kclaw 的根目录与目录树（`KCLAW_HOME` 环境变量可整体重定向）；`config.ts` 读写 `config.yaml`（用户配置与默认值深合并）；`jsonl.ts` 提供 JSONL 文件（一行一个 JSON 对象的文本格式）的追加、读取与崩溃修复，是会话事件流 `events.jsonl`（唯一真相）与运行态队列 `queue.jsonl` 的底层。会话目录结构与 `meta.json` 由 `SessionStore`（`packages/core/src/session/store.ts`）负责；`daemon.json` 和 `token` 两个文件由 server 侧产生，本文一并说明用途。
+`packages/core/src/storage/` 是所有持久化（把数据写入磁盘长期保存）的基础：`paths.ts` 解析 kclaw 的根目录与目录树（`KCLAW_HOME` 环境变量可整体重定向）；`config.ts` 读写 `config.json`（用户配置与默认值深合并；升级前遗留的 `config.yaml` 仍可读，首次写入后弃用）；`jsonl.ts` 提供 JSONL 文件（一行一个 JSON 对象的文本格式）的追加、读取与崩溃修复，是会话事件流 `events.jsonl`（唯一真相）与运行态队列 `queue.jsonl` 的底层。会话目录结构与 `meta.json` 由 `SessionStore`（`packages/core/src/session/store.ts`）负责；`daemon.json` 和 `token` 两个文件由 server 侧产生，本文一并说明用途。
 
 ---
 
 ## 设计决策
 
 - **单一根目录容纳全部状态。** 配置、会话、记忆、任务、附件、日志全在同一个根目录下，根目录可以整体重定向——解析顺序是：显式参数 > `KCLAW_HOME` 环境变量 > `~/.kclaw`。环境变量的空白字符串视为未设置：用 `??` 判断时，空串会被当成有效值，导致所有路径变成相对当前目录而不是回退到 `~/.kclaw`；这条规则来自一次实际故障的修正（`envHome()`）。
-- **只建目录，不建文件。** `resolvePaths` 用 `mkdirSync(recursive)` 创建目录树，但 `config.yaml`、`jobs.db` 等文件只是路径字符串，不在这里创建——文件由各自的所有者在首次写入时产生（`SessionStore`/`MemorySystem`/`JobScheduler` 的构造函数建目录并初始化自己的数据库）。
+- **只建目录，不建文件。** `resolvePaths` 用 `mkdirSync(recursive)` 创建目录树，但 `config.json`、`jobs.db` 等文件只是路径字符串，不在这里创建——文件由各自的所有者在首次写入时产生（`SessionStore`/`MemorySystem`/`JobScheduler` 的构造函数建目录并初始化自己的数据库）。
 - **配置深合并，默认值永不被污染。** `loadConfig` 把文件内容深合并到默认值上，且两个分支都从 `structuredClone(defaultConfig)` 开始——否则返回值会与导出的 `defaultConfig` 共享嵌套引用，调用方任意一处 `cfg.permissions.allow.push()` 都会改掉进程级的默认值。合并规则（`deepMerge`）：普通对象按键递归合并，数组与标量整体替换，`undefined` 跳过，两个输入都不被修改。
-- **配置无效时报错，而不是静默回退。** `config.yaml` 解析失败直接抛错（`invalid yaml in <path>: ...`），文件内容不是对象映射也抛错。不做静默回退——悄悄改用默认值意味着用户配置的权限规则在无提示的情况下失效，比启动失败更危险。文件缺失或内容为空则返回默认值，这是首次使用的正常路径。
+- **配置无效时报错，而不是静默回退。** `config.json` 解析失败直接抛错（`invalid json in <path>: ...`），文件内容不是对象映射也抛错；兼容读的 `config.yaml` 同理（`invalid yaml in ...`）。不做静默回退——悄悄改用默认值意味着用户配置的权限规则在无提示的情况下失效，比启动失败更危险。文件缺失或内容为空则返回默认值，这是首次使用的正常路径。
+- **`config.json` 是权威配置文件，`config.yaml` 只作升级兼容。** 读取顺序：`config.json` 存在就按 JSON 解析；不存在才读遗留的 `config.yaml`，升级后的家目录在首次写入前保持原样可用。首次写 `config.json` 时把仍在的 `config.yaml` 改名为 `config.yaml.bak`——改名而非删除，手工整理过的内容不丢，同时保证旧文件不再被当成第二个配置源读回来。
 - **会话事件流只追加，且容忍崩溃。** 事件只追加、从不改写历史行（运行态队列 `queue.jsonl` 是例外——整文件重写，见下文）。崩溃可能留下的残缺是「最后一行只写了一半」（torn line，断尾行）：读取时丢弃断尾行（崩溃产物，最多丢一条事件）；写新行之前先修复断尾，否则新行会拼接在半行后面，读取时两条会一起被丢弃。
 
 ---
@@ -25,7 +26,7 @@ export function resolvePaths(home?: string): KclawPaths
 
 | 路径 | 用途 | 写入方 |
 |------|------|--------|
-| `<home>/config.yaml` | 全部配置（见下节） | CLI 向导 `saveConfig`；用户手编 |
+| `<home>/config.json` | 全部配置（见下节）；首次写入时把遗留的 `config.yaml` 改名为 `config.yaml.bak` 弃用 | CLI 向导与 WebUI Model 页的 provider 管理路由（均经 `saveConfig`）；用户手编 |
 | `<home>/permissions.yaml` | 全局权限规则——在人工确认里选「总是允许」后保存下来的收紧 allow 规则；项目档在工作区 `.kclaw/permissions.yaml`（见下文「保存的权限规则」一节） | run 装配的确认缝合层（`packages/core/src/agent/run-assembly.ts` 的 `resolveConfirmation`，global 裁决时写入）；用户手编亦可 |
 | `<home>/AGENTS.md` | agent 人格设定，非空则作为系统提示的一部分（stable 段基座）；每次运行拼装的完整系统提示以 `system` 事件按 stable/live 两段全量记录 | 用户手编；daemon 启动时读 |
 | `<home>/memory/global/` | L2 全局认知（persona.md、wiki/、rule/ 的 markdown，文件即真相） | MemorySystem / 用户手编 |
@@ -46,14 +47,14 @@ export function resolvePaths(home?: string): KclawPaths
 
 ---
 
-## config.yaml 全量字段
+## config.json 全量字段
 
 `KclawConfig`（`packages/core/src/storage/config.ts`）与 `defaultConfig` 默认值：
 
 | 字段 | 默认值 | 含义与消费方 |
 |------|--------|--------------|
 | `providers.default` | `""` | 默认 provider 名，指向 entries 里的一条 |
-| `providers.entries` | `{}` | `Record<名, { baseUrl, apiKey, model, contextWindow?, maxOutput? }>`；daemon 启动时解析（config 优先，`KCLAW_LLM_BASE_URL` / `KCLAW_LLM_API_KEY` / `KCLAW_LLM_MODEL` 环境变量补空）。`contextWindow` 参与压缩预算的 min 解析、`maxOutput` 随请求下发 max_tokens（见 [compaction](./compaction.md)） |
+| `providers.entries` | `{}` | `Record<名, { format?, baseUrl, apiKey, model, contextWindow?, maxOutput? }>`。一个条目是一个可直连的端点加它服务的那个模型：`format` 选 API 协议（`openai` = OpenAI 兼容 chat-completions，缺省；`anthropic` = Anthropic Messages，见 [provider](./provider.md)），`baseUrl` 是端点根、`apiKey` 为空表示端点免鉴权（不发鉴权头）、`model` 是请求里下发的模型 id。daemon 启动时解析默认条目（config 优先，`KCLAW_LLM_BASE_URL` / `KCLAW_LLM_API_KEY` / `KCLAW_LLM_MODEL` 环境变量补空）。`contextWindow` 参与压缩预算的 min 解析、`maxOutput` 随请求下发 max_tokens（见 [compaction](./compaction.md)） |
 | `providers.timeoutMs` | `120000` | 单次 LLM 请求超时（`DEFAULT_LLM_TIMEOUT_MS`）；可选字段仅为兼容旧配置文件 |
 | `permissions.allow` / `deny` | `[]` / `["exec:sudo*", "exec:rm -rf*"]` | 权限规则，见 [permissions](./permissions.md) |
 | `permissions.confirmTimeoutMs` | `120000` | 人工确认的等待上限，超时按拒绝处理 |
@@ -85,9 +86,9 @@ export function resolvePaths(home?: string): KclawPaths
 | `hooks.timeoutMs` | `5000` | 单个钩子处理函数的执行预算（毫秒），超时按失败处理（用户钩子 skip、内置钩子 fatal，见 [hooks](./hooks.md)）；可选字段，缺省值在钩子链构建处补齐 |
 | `workspace` | `process.cwd()` | 工具的工作目录；daemon 的 cwd 由启动方决定，单个会话可经 `meta.workdir` 覆盖 |
 
-读（`loadConfig(paths)`）：文件缺失或为空 → 返回默认值的克隆；YAML 语法错误或非映射结构 → 抛错；其余 → `deepMerge(默认值克隆, 文件内容)`。**没有结构校验**：多余字段原样保留，字段类型写错要到消费方使用时才暴露。
+读（`loadConfig(paths)`）：`config.json` 存在 → 按 JSON 解析；否则存在遗留 `config.yaml` → 按 YAML 解析（升级兼容）；两者都缺失或内容为空 → 返回默认值的克隆。解析失败抛错（`invalid json/yaml in <path>: ...`），内容不是对象映射也抛错；其余 → `deepMerge(默认值克隆, 文件内容)`。**没有结构校验**：多余字段原样保留，字段类型写错要到消费方使用时才暴露。
 
-写（`saveConfig(paths, config)`）：把 config 整个序列化成 YAML，整文件原子重写——`writeFileAtomic(paths.config, stringify(config), 0o600)`（`storage/atomic.ts`：先写 `<path>.tmp` 再 rename，POSIX 同目录 rename 是原子的；文件权限 0600，因为里面含明文 API key）。CLI 向导保存后仍保留一次显式 `chmodSync(0o600)`，双保险（见 [onboarding](../cli/onboarding.md)）。
+写（`saveConfig(paths, config)`）：把 config 整个序列化成 JSON，整文件原子重写——`writeFileAtomic(paths.configJson, JSON.stringify(config, null, 2) + "\n", 0o600)`（`storage/atomic.ts`：先写 `<path>.tmp` 再 rename，POSIX 同目录 rename 是原子的；文件权限 0600，因为里面含明文 API key）。首次写入会把仍在的 `config.yaml` 改名为 `config.yaml.bak`，此后 `config.json` 是唯一配置源。CLI 向导保存后仍保留一次显式 `chmodSync(0o600)`，双保险（见 [onboarding](../cli/onboarding.md)）。
 
 ---
 
@@ -186,7 +187,7 @@ rules:
     source: "auto"                 # 可选：auto 模式归纳（缺省/缺失 = 人工「总是允许」）
 ```
 
-文件权限 0600、`writeFileAtomic` 原子写入；程序**从不写 config.yaml**（config.yaml 保持纯手写）。`source` 字段区分规则的两种来源——人工选「总是允许」（manual，缺省）与 auto 模式连续 `once` 裁决后的自动归纳（auto，见 [permissions](./permissions.md) 第 5 节）——它只是溯源标记，规则引擎不读它，加载与生效路径和手工规则完全一致。每个 run 由 `loadDecidedRulesForRun` 读入并合并成规则串数组传给权限 gate：全局档总是加载；项目档只在工作区已定义、文件存在且**未被 git 跟踪**时加载（`isGitTracked` 用 `git ls-files --error-unmatch` 探测，被 git 跟踪即整体忽略并在 daemon 日志告警——防止克隆来的仓库夹带一份预授权清单）。删掉文件里的条目（或整个文件）即收回授权，对下一个 run 立即生效。管理入口：`GET`/`DELETE /permissions/rules`（见 [http-api](../server/http-api.md)）与 WebUI「权限」页。
+文件权限 0600、`writeFileAtomic` 原子写入。沉淀规则只落在这两个 permissions.yaml；配置文件（`config.json`）的写入只发生在 CLI 向导与 Model 页 provider 管理路由（均经 `saveConfig`），规则的增删与配置文件互不相干。`source` 字段区分规则的两种来源——人工选「总是允许」（manual，缺省）与 auto 模式连续 `once` 裁决后的自动归纳（auto，见 [permissions](./permissions.md) 第 5 节）——它只是溯源标记，规则引擎不读它，加载与生效路径和手工规则完全一致。每个 run 由 `loadDecidedRulesForRun` 读入并合并成规则串数组传给权限 gate：全局档总是加载；项目档只在工作区已定义、文件存在且**未被 git 跟踪**时加载（`isGitTracked` 用 `git ls-files --error-unmatch` 探测，被 git 跟踪即整体忽略并在 daemon 日志告警——防止克隆来的仓库夹带一份预授权清单）。删掉文件里的条目（或整个文件）即收回授权，对下一个 run 立即生效。管理入口：`GET`/`DELETE /permissions/rules`（见 [http-api](../server/http-api.md)）与 WebUI「权限」页。
 
 ---
 
