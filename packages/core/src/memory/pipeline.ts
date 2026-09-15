@@ -10,6 +10,7 @@ import { MemoryLayout } from "./layout.js"
 import { WriteLedger } from "./ledger.js"
 import {
   parseThreadFile, renderMemoryMd, writeThreadFile, appendSection, updateSection,
+  capHeading, sectionHeading,
   type ThreadFile,
 } from "./threads.js"
 import { VectorIndex, type IndexEntry } from "./indexer.js"
@@ -66,9 +67,9 @@ export const EXTRACT_SYSTEM_PROMPT = [
   "- op：动作类型，只能取 \"append\"、\"update\"、\"new-thread\" 之一（判别字段名是 op，不是 type）。",
   "- file：目标线文件名（kebab-case、不含 .md），每个动作必填；new-thread 时它就是新线的文件名。",
   "- content：情节正文，每个动作必填。",
-  "- update 动作额外带 section（要修正的小节短标题）；new-thread 动作额外带 thread（kebab-case 短名）与 title（人可读标题）。",
+  "- title（一句话短标题，30 字以内）：每个动作必填；new-thread 时它同时是线的显示名。update 动作额外带 section（要修正的小节短标题）；new-thread 动作额外带 thread（kebab-case 短名）。",
   "- 判断某条线这段对话之后再无下文迹象（如明确的完成结论）时，给该动作加 status:\"inactive\"。",
-  "完整示例：{\"actions\":[{\"op\":\"new-thread\",\"file\":\"user-pref-plain-language\",\"thread\":\"user-pref-plain-language\",\"title\":\"用户偏好通俗语言\",\"content\":\"用户自称小白，要求所有解释都用通俗语言。\"}]}",
+  "完整示例：{\"actions\":[{\"op\":\"new-thread\",\"file\":\"user-pref-plain-language\",\"thread\":\"user-pref-plain-language\",\"title\":\"用户偏好通俗语言\",\"content\":\"用户自称小白，要求所有解释都用通俗语言。\"},{\"op\":\"append\",\"file\":\"user-pref-plain-language\",\"title\":\"通俗语言偏好扩展到代码示例\",\"content\":\"用户补充：技术文档里的代码示例也要配大白话说明。\"}]}",
   "情节要有叙事要素（做了什么/结果/说了什么/有何要求），不要孤立的一句话事实；能接上已有线就对该线的 file 做 append/update，接不上才 new-thread。",
   "已有主题线里已记录过的内容不要重复记录；append/update 只落这段消息里出现的新信息，同一经历的转述不算新信息。",
   "区分说话人：只有用户消息里的话才算用户的表态；助手自己的复述、确认，以及记忆检索结果里的内容，都不算用户的新经历或新要求。",
@@ -115,11 +116,6 @@ function readDirSafe(dir: string): string[] {
   } catch {
     return []
   }
-}
-
-/** 情节正文的首个非空行（节选小节标题用）。 */
-function firstLineTitle(content: string): string {
-  return content.split("\n").find((l) => l.trim() !== "")?.trim() ?? ""
 }
 
 /** 把一条主题线渲染成内化提示里的情节正文。 */
@@ -338,10 +334,10 @@ export class MemoryPipeline {
       // 模型交回的 thread 字段与 file 不一致时曾把两者写劈，清单点开即 404。
       // thread 字段仅作兼容保留，不再参与身份。
       const tf = writeThreadFile(path, (tf) => tf, () => ({
-        topic: action.file, title: action.title ?? action.file,
+        topic: action.file, title: capHeading(action.title ?? "") || action.file,
         status: action.status ?? "active", created: date, updated: date, sections: [],
       }))
-      writeThreadFile(path, (t) => appendSection({ ...t, title: t.title || (action.title ?? t.topic) }, { date, heading: action.title ?? action.file, body: action.content }), () => tf)
+      writeThreadFile(path, (t) => appendSection({ ...t, title: t.title || (action.title ?? t.topic) }, { date, heading: sectionHeading([action.title ?? "", action.file], t.sections), body: action.content }), () => tf)
       this.#deps.emit?.({ type: "memory.written", path, kind: "episode", topic: action.file })
       this.#audit({ trigger, kind: "episode", op: action.op, topic: action.file, sessionId })
       return
@@ -355,7 +351,7 @@ export class MemoryPipeline {
     }
     const currentIsInactive = parseThreadFile(raw)?.status === "inactive"
     if (action.op === "append") {
-      writeThreadFile(path, (tf) => appendSection(tf, { date, heading: firstLineTitle(action.content), body: action.content }), () => { throw new Error("unreachable") })
+      writeThreadFile(path, (tf) => appendSection(tf, { date, heading: sectionHeading([action.title ?? "", action.content], tf.sections), body: action.content }), () => { throw new Error("unreachable") })
     } else {
       writeThreadFile(path, (tf) => updateSection(tf, action.section ?? "", action.content), () => { throw new Error("unreachable") })
     }

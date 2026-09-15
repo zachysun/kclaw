@@ -81,7 +81,7 @@ updated: 2026-08-30
 （追加的新情节）
 ```
 
-- frontmatter 字段：`topic`（线名，即文件名去 `.md`）、`title`（人可读一句话）、`status`（`active`/`inactive`）、`created`/`updated`（日期）。`## YYYY-MM-DD · 标题` 起始新小节，标题取自情节正文首行。
+- frontmatter 字段：`topic`（线名，即文件名去 `.md`）、`title`（人可读一句话）、`status`（`active`/`inactive`）、`created`/`updated`（日期）。`## YYYY-MM-DD · 标题` 起始新小节，标题取提取动作的 `title`，缺省回落情节正文首行——一律截断到 40 字封顶（超长在句读处收刀），与本文件已有小节撞名时加序号后缀，索引键 `主题#日期#标题` 因此不互覆。
 - 解析宽容：首行不是 `---`、frontmatter 未闭合或 yaml 解析失败的文件视为"不是线文件"（不进索引、不参与检索）；`status` 非 `inactive` 一律按 `active` 读。
 - 追加（`appendSection`）：新建小节不覆盖历史；修正（`updateSection`）：就地改写指定小节、找不到时退化为追加。
 
@@ -105,7 +105,7 @@ updated: 2026-08-30
 管线位于 `packages/core/src/memory/pipeline.ts`，写入的触发入口是 `runTrigger(workdir, trigger, sessionId?)`（另有 `runNightly`/`consolidate` 与索引重建等维护入口，见 [http-api](../server/http-api.md) 的 `/memory` 路由族）。一次触发做四件事：
 
 1. **选范围**：提取是**会话级**的——只看触发会话自己的增量窗口（"增量"以提取进度为界：每个会话记录一个"已提取到哪条消息"的标记，标记之后的消息才是新内容；该项目每个会话各有自己的提取进度标记。定时触发无显式归属，对该项目全部会话逐个补），见下节"提取进度标记与串行锁"；
-2. **提取**：无工具 LLM 调用，把范围渲染成逐行文本 + 现有主题线清单（MEMORY.md 表格），交给固定 system 提示的提取器（`EXTRACT_SYSTEM_PROMPT`），要求只输出 JSON `{"actions":[...]}`。每个动作的字段名固定：判别字段 `op` 取 `append`（接到已有线）/`update`（修正已有线某小节）/`new-thread`（开新线）三值；**每个动作必填非空 `file`**（线文件名，kebab-case，`new-thread` 也不例外）与 `content`；`update` 额外带 `section`，`new-thread` 额外带 `thread`/`title`；允许显式 `status:"inactive"`（明确的完成结论）；噪音直接跳过，无值得记的内容输出 `{"actions":[]}`。prompt 内含完整 JSON 示例。**线的身份唯一以 `file` 为准**：写入磁盘时 frontmatter `topic` 一律取 `file`，模型交回的 `thread` 字段仅兼容保留、不参与身份——否则文件名与内部 topic 分裂，MEMORY.md 行按 topic 显示、读/改/删按文件名定位，清单点开即 404；
+2. **提取**：无工具 LLM 调用，把范围渲染成逐行文本 + 现有主题线清单（MEMORY.md 表格），交给固定 system 提示的提取器（`EXTRACT_SYSTEM_PROMPT`），要求只输出 JSON `{"actions":[...]}`。每个动作的字段名固定：判别字段 `op` 取 `append`（接到已有线）/`update`（修正已有线某小节）/`new-thread`（开新线）三值；**每个动作必填非空 `file`**（线文件名，kebab-case，`new-thread` 也不例外）、`content` 与 `title`（一句话短标题，30 字以内，小节标题的来源）；`update` 额外带 `section`，`new-thread` 额外带 `thread`；允许显式 `status:"inactive"`（明确的完成结论）；噪音直接跳过，无值得记的内容输出 `{"actions":[]}`。prompt 内含完整 JSON 示例。**线的身份唯一以 `file` 为准**：写入磁盘时 frontmatter `topic` 一律取 `file`，模型交回的 `thread` 字段仅兼容保留、不参与身份——否则文件名与内部 topic 分裂，MEMORY.md 行按 topic 显示、读/改/删按文件名定位，清单点开即 404；
 3. **写入**：逐条应用动作（追加/改写/开线），期间不阻塞地广播 `memory.written` 事件（见"事件"）；
 4. **收尾**：推进提取进度、扫描时间自动收束（见"生命周期"）、顺带内化检查、重建项目索引与 MEMORY.md。
 
