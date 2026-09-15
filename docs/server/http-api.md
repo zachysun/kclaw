@@ -122,13 +122,13 @@ interface Job {
 | 方法 | 路径 | 用途 | 请求/响应 |
 |------|------|------|------|
 | GET | `/providers` | Model 页快照：条目（key 掩码）+ 默认条目 + 内置预设目录 | `{default, entries, presets}`；`entries` 形状同 `config.providers.entries` 但 apiKey 已掩码 |
-| POST | `/providers` | 新增一个条目 | 请求 `{name, entry}`；名字限定字母/数字/下划线/连字符（会话 meta 与 `/model` 命令按名引用）；`entry` 经 `parseProviderEntry` 校验（format 必须是 `openai`/`anthropic`，baseUrl 须 http(s)，model 必填，apiKey 可空）；重复 409、形状非法 400；返回 `{ok, default, entries, presets}` |
+| POST | `/providers` | 新增一个条目 | 请求 `{name, entry}`；名字限定字母/数字/下划线/连字符（会话 meta 与 `/model` 命令按名引用）；`entry` 经 `parseProviderEntry` 校验（format 必须是 `openai`/`anthropic`，baseUrl 须 http(s)，model 必填，apiKey 可空，`contextWindow`/`maxOutput` 声明时必须为正数）；重复 409、形状非法 400；返回 `{ok, default, entries, presets}` |
 | PATCH | `/providers/:name` | 整体替换一个条目 | 请求 `{entry}`；`apiKey` 为空 = 保留存量密钥（UI 只有掩码值）；名字未知 404 |
 | DELETE | `/providers/:name` | 删除一个条目 | 默认条目 409（先切默认再删）；被会话引用**不阻断**（引用方下个 run 回落默认条目，WebUI 删除前自行提示）；名字未知 404 |
 | POST | `/providers/:name/default` | 把该条目设为默认 | 名字未知 404 |
-| POST | `/providers/models` | 模型列表探测（兼作连接验证） | 请求 `{name}`（用存量条目的真实密钥探测，`format`/`baseUrl`/`apiKey` 字段可逐项覆盖——编辑表单的草稿值探测）或 `{format, baseUrl, apiKey?}`（新建表单直探）；成功 `{ok: true, models: string[]}`，端点不可达 502 `{ok: false, error}` |
+| POST | `/providers/models` | 模型列表探测（兼作连接验证） | 请求 `{name}`（用存量条目的真实密钥探测，`format`/`baseUrl`/`apiKey` 字段可逐项覆盖——编辑表单的草稿值探测）或 `{format, baseUrl, apiKey?}`（新建表单直探）；成功 `{ok: true, models: string[]}`，探测失败（端点不可达、密钥错误、响应形状不对等一律）502 `{ok: false, error}` |
 
-所有变更路由直接改 daemon 的内存配置——**下一个 run 即热生效**（run 客户端按条目签名缓存，配置一变自动重建）——并经 `saveConfig` 落盘：首次写落在 `config.json` 并把仍在的旧 `config.yaml` 改名 `config.yaml.bak` 弃用，此后每次写都是 config.json 的整文件原子重写（0600，密钥明文只在盘上）。没有审计事件（全局配置面，与 MCP 管理同判）。消费方是 WebUI 的 Model 页。
+所有变更路由直接改 daemon 的内存配置——**下一个 run 即热生效**（run 客户端按条目签名缓存，配置一变自动重建）——并经 `saveConfig` 落盘：首次写落在 `config.json` 并把仍在的旧 `config.yaml` 改名 `config.yaml.bak` 弃用，此后每次写都是 config.json 的整文件原子重写（0600，密钥明文只在盘上）；落盘失败只记日志不回滚——内存里的改动已经生效，下次写入会再试。没有审计事件（全局配置面，与 MCP 管理同判）。消费方是 WebUI 的 Model 页。
 
 ### 记忆（routes/memory.ts，底座 `MemorySystem`）
 
@@ -211,11 +211,11 @@ interface Job {
 
 | 方法 | 路径 | 用途 | 请求/响应 |
 |------|------|------|------|
-| GET | `/mcp` | MCP server 连接状态快照 | `{servers: [{name, state, tools: {name}[], config, lastError?}]}`（`config` 为该 server 的 `McpServerConfig`，含地址等） |
-| POST | `/mcp/servers` | 新增一个 server 并后台连接 | 请求 `{name, config}`；名字限定字母/数字/下划线/连字符（会进模型可见的工具名）；返回 `{ok, servers}`；名字重复 409、形状非法 400 |
+| GET | `/mcp` | MCP server 连接状态快照 | `{servers: [{name, state, tools: {name, server, originalName, description}[], config, lastError?}]}`（`config` 为该 server 的 `McpServerConfig`，含地址等；`tools` 里的 `server` 是所属 server 名、`originalName` 是远端原名、`description` 供工具清单与 `/mcp <名字>` 展示） |
+| POST | `/mcp/servers` | 新增一个 server 并后台连接 | 请求 `{name, config}`；名字限定字母/数字/下划线/连字符（会进模型可见的工具名）；名字缺失/为空 400（`name is required`）；返回 `{ok, servers}`；名字重复 409、形状非法 400 |
 | PATCH | `/mcp/servers/:name` | 整体替换一个 server 的配置并重连 | 请求 `{config}`；名字未知 404 |
 | DELETE | `/mcp/servers/:name` | 删除一个 server（断开并遗忘） | 返回 `{ok, servers}`；名字未知 404 |
-| POST | `/mcp/servers/:name/enable` | 启停开关（持久、热生效） | 请求 `{enabled: boolean}`；禁用即断开、启用即发起一次连接 |
+| POST | `/mcp/servers/:name/enable` | 启停开关（持久、热生效） | 请求 `{enabled: boolean}`；非布尔 400（`enabled must be a boolean`）；禁用即断开、启用即发起一次连接 |
 | POST | `/mcp/servers/:name/reconnect` | 对失败/掉线的 server 手动发起一次连接 | 一次性尝试、不在背后排退避；对已连接的 server 是无操作；对禁用中的 server 400 |
 
 路由始终注册；daemon 未装配 McpManager 时 `GET /mcp` 的 `servers` 为空数组、全部动作端点回答 503。任何一次保存动作（增删改启停）都会把全部 server 归拢进 daemon 主目录的 `mcp.json`，并从磁盘上实际在用的配置布局摘除遗留的 `mcp.servers` 节（config.json 为整文件重写、尚未迁移的 config.yaml 为行级编辑，其余内容原样保留）；消费方是 WebUI 的 MCP 页、双端的 `/mcp` 命令与 CLI 的 `kclaw mcp [list]`。连接状态机见 [mcp](../core/mcp.md)。

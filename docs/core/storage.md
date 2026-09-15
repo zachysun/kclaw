@@ -86,9 +86,9 @@ export function resolvePaths(home?: string): KclawPaths
 | `hooks.timeoutMs` | `5000` | 单个钩子处理函数的执行预算（毫秒），超时按失败处理（用户钩子 skip、内置钩子 fatal，见 [hooks](./hooks.md)）；可选字段，缺省值在钩子链构建处补齐 |
 | `workspace` | `process.cwd()` | 工具的工作目录；daemon 的 cwd 由启动方决定，单个会话可经 `meta.workdir` 覆盖 |
 
-读（`loadConfig(paths)`）：`config.json` 存在 → 按 JSON 解析；否则存在遗留 `config.yaml` → 按 YAML 解析（升级兼容）；两者都缺失或内容为空 → 返回默认值的克隆。解析失败抛错（`invalid json/yaml in <path>: ...`），内容不是对象映射也抛错；其余 → `deepMerge(默认值克隆, 文件内容)`。**没有结构校验**：多余字段原样保留，字段类型写错要到消费方使用时才暴露。
+读（`loadConfig(paths)`）：`config.json` 存在 → 按 JSON 解析；否则存在遗留 `config.yaml` → 按 YAML 解析（升级兼容）；两者都缺失或内容为空 → 返回默认值的克隆。解析失败抛错（`invalid json/yaml in <path>: ...`），内容不是对象映射也抛错；其余 → `deepMerge(默认值克隆, 文件内容)`。**除两处外没有结构校验**：`permissions.defaultMode` 非五档时回落 `"default"` 并告警、压缩水位线四线经 `validateWaterlineConfig` 校验（见 [permissions](./permissions.md) 与 [compaction](./compaction.md)）；其余字段不校验——多余字段原样保留，字段类型写错要到消费方使用时才暴露。
 
-写（`saveConfig(paths, config)`）：把 config 整个序列化成 JSON，整文件原子重写——`writeFileAtomic(paths.configJson, JSON.stringify(config, null, 2) + "\n", 0o600)`（`storage/atomic.ts`：先写 `<path>.tmp` 再 rename，POSIX 同目录 rename 是原子的；文件权限 0600，因为里面含明文 API key）。首次写入会把仍在的 `config.yaml` 改名为 `config.yaml.bak`，此后 `config.json` 是唯一配置源。CLI 向导保存后仍保留一次显式 `chmodSync(0o600)`，双保险（见 [onboarding](../cli/onboarding.md)）。
+写（`saveConfig(paths, config)`）：把**深合并后的整份 config**（含全部默认字段，首次生成的 `config.json` 不是用户最小集）序列化成 JSON，整文件原子重写——`writeFileAtomic(paths.configJson, JSON.stringify(config, null, 2) + "\n", 0o600)`（`storage/atomic.ts`：先写 `<path>.tmp` 再 rename，POSIX 同目录 rename 是原子的；文件权限 0600，因为里面含明文 API key）。首次写入会把仍在的 `config.yaml` 改名为 `config.yaml.bak`，此后 `config.json` 是唯一配置源。CLI 向导保存后仍保留一次显式 `chmodSync(0o600)`，双保险（见 [onboarding](../cli/onboarding.md)）。
 
 ---
 

@@ -96,6 +96,8 @@ export function withRetry(client: LlmClient, opts?: {
 
 内置预设（`PROVIDER_PRESETS`，WebUI Model 页的"预设"来源）：`openai`（https://api.openai.com/v1）、`anthropic`（https://api.anthropic.com）、`deepseek`（https://api.deepseek.com/v1，openai 格式）、`ollama`（http://localhost:11434/v1，openai 格式，可免密钥）。预设写死 baseUrl 与格式，用户只填 API key。
 
+条目校验（`parseProviderEntry`）除 format/baseUrl/apiKey/model 外，还要求 `contextWindow`/`maxOutput` 声明时必须是正数，否则抛 `"<key> must be a positive number"`——新增/编辑条目经此校验，WebUI 把它转成表单内的错误。
+
 daemon 侧的装配（`packages/server/src/daemon.ts`）：
 
 ```ts
@@ -207,12 +209,12 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 - **签名缓存热生效**：工厂按条目名缓存一个槽位，签名 = `format|baseUrl|apiKey|timeoutMs`。Model 页的增删改直接改 daemon 的内存配置并落盘——签名变了下个 run 自动重建客户端，**无需重启**；改回原值也能命中缓存。
 - **每次 run 包一层新重试**：缓存的是裸客户端；`withRetry` 在每次 `llmForRun` 调用时现包，重试回调才归属当次 run（`llm.failed` 事件带对的上文）。
 - **记忆提取同语义**：`memory.extractModel` 命中条目名时走该条目自己的客户端与线上模型名；命中不了则按裸模型名发往主模型端点——回落客户端也每调用经同一工厂现解，默认条目的改动同样热生效（见 [memory](./memory.md)）。
-- **向量路同步热更**：embedding 客户端按同一签名规则现解（`createHotEmbedClient`），换 key/换地址下条记忆向量就吃到；向量路是否启用（embeddings model 与条目协议判定）仍是启动时一次定死。
+- **向量路同步热更**：embedding 客户端按 `baseUrl|apiKey|timeoutMs` 签名现解（`createHotEmbedClient`，daemon 内私有），换 key/换地址下条记忆向量就吃到；向量路是否启用（embeddings model 与条目协议判定）仍是启动时一次定死。
 - **默认模型行也吃热更**：run 装配与手动压缩路径的默认模型取默认条目**当前**的 `.model`，启动时解析的 `deps.model` 只兜底没有条目、纯环境变量的安装。
 
 ### 6b. 模型列表探测（probe，兼作连接验证）
 
-`fetchProviderModels` 向端点要模型清单：openai 格式 `GET {base}/models`（Bearer），anthropic 格式 `GET {base}/v1/models`（x-api-key + anthropic-version，URL 规则与消息端点一致）；apiKey 为空不发鉴权头。返回去重后的模型 id 列表；HTTP 错误抛 `llm http <status>`，响应形状不对抛可读错误。WebUI Model 页用它做两件事：表单里的"拉取模型列表"（填充模型下拉）与条目卡片的"验证"按钮（清单拉到了 = URL 和 key 都对）。
+`fetchProviderModels` 向端点要模型清单：openai 格式 `GET {base}/models`（apiKey 非空才带 Bearer 头），anthropic 格式 `GET {base}/v1/models`（x-api-key + anthropic-version，URL 规则与消息端点一致；与消息端点不同，探测这里 apiKey 为空也照发空 x-api-key 头）。返回去重后的模型 id 列表；HTTP 错误抛 `llm http <status>`，响应形状不对抛可读错误。WebUI Model 页用它做两件事：表单里的"拉取模型列表"（填充模型下拉）与条目卡片的"验证"按钮（清单拉到了 = URL 和 key 都对）。
 
 ### 7. 上下文窗口与输出上限（条目可选字段）
 

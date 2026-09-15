@@ -81,7 +81,7 @@ updated: 2026-08-30
 （追加的新情节）
 ```
 
-- frontmatter 字段：`topic`（线名，即文件名去 `.md`）、`title`（人可读一句话）、`status`（`active`/`inactive`）、`created`/`updated`（日期）。`## YYYY-MM-DD · 标题` 起始新小节，标题取提取动作的 `title`，缺省回落情节正文首行——一律截断到 40 字封顶（超长在句读处收刀），与本文件已有小节撞名时加序号后缀，索引键 `主题#日期#标题` 因此不互覆。
+- frontmatter 字段：`topic`（线名，即文件名去 `.md`）、`title`（人可读一句话，仅在开新线时写入）、`status`（`active`/`inactive`）、`created`/`updated`（日期）。`## YYYY-MM-DD · 标题` 起始新小节，标题取提取动作的 `title`，缺省时 `append`/`update` 回落情节正文首行、`new-thread` 回落线文件名——一律截断到 40 字封顶（超长在句读处收刀），与本文件已有小节撞名时加序号后缀，索引键 `主题#日期#标题` 因此不互覆。
 - 解析宽容：首行不是 `---`、frontmatter 未闭合或 yaml 解析失败的文件视为"不是线文件"（不进索引、不参与检索）；`status` 非 `inactive` 一律按 `active` 读。
 - 追加（`appendSection`）：新建小节不覆盖历史；修正（`updateSection`）：就地改写指定小节、找不到时退化为追加。
 
@@ -271,7 +271,7 @@ daemon 启动时按固定顺序做一次旧版目录 → 现结构的迁移与�
 ```
 
 - `episode` 事件带 `topic`（线名），`cognition` 事件带 `scope`（新认知的 scope）；
-- 事件不带 `sessionId`（项目级事务）；订阅端（CLI / web）把它当成"已写入"的轻提示，不驱动任何状态机——CLI 用暗色一行显示 `已写入记忆: <path>`，web 通知条显示同文案；web 的通知条**可点击**，跳转记忆页并自动打开对应文件（`episode` 按 `scope+topic` 打开线、`cognition` 按 path 打开认知文件）。
+- 事件不带 `sessionId`（项目级事务）；订阅端（CLI / web）把它当成"已写入"的轻提示，不驱动任何状态机——CLI 用暗色一行显示 `已写入记忆: <path>`，web 通知条显示同文案；web 的通知条**可点击**，跳转记忆页——`cognition` 事件按 path 反推 kind/name 自动打开对应认知文件；`episode` 事件不携带 `scope`（形状里只有 `topic`），而前端打开线文件的分支依赖 `scope` 字段，目前不会触发——点击只完成跳转，线文件不会自动打开。
 
 ### 事件流里的 memory 事件（审计）
 

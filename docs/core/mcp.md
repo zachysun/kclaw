@@ -111,7 +111,7 @@ export class McpManager {
   removeServer(name: string): void                           // 断开、清定时器、遗忘
   setEnabled(name: string, enabled: boolean): void           // 持久启停开关；同值调用不做任何事
   reconnect(name: string): void                              // 手动一次性连接；取消挂着的退避定时器
-  flush(): Promise<void>                                     // 等待全部在飞连接尝试结束（测试与路由用）
+  flush(): Promise<void>                                     // 等待全部在飞连接尝试结束（测试用；路由视图接口预留）
 }
 ```
 
