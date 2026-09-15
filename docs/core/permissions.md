@@ -9,7 +9,7 @@
 ## 设计决策
 
 - **三档输出、顺序短路**：判定链每一步都可能直接返回，后续不再看。会话模式 `readonly` 最优先——sensitive 工具在 readonly 下无条件拒绝，连白名单都不到达；其后顺序为 deny 黑名单 → allow 白名单（命中且目标不逃逸工作区）→ **沉淀规则命中（learned，目标不逃逸）** → 模式 `acceptEdits` 的工作区内写放行 → 工作目录越界检查 → safeTools → 会话级授权 → confirm。deny 永远先于放行：一条命中黑名单的调用无论白名单如何配置都不会执行；白名单也只在目标仍位于工作区内（按 realpath 判定，见第 4 节）时才优先于越界检查——经符号链接逃逸出工作区的目标回落 confirm，不因 allow 规则放行。
-- **规则是扁平字符串，不是结构化对象**：`"exec:git *"` 这类前缀通配规则写在 `config.yaml` 里，人和模型都可读可写；编译只做一次切分，匹配用无正则的回溯算法。
+- **规则是扁平字符串，不是结构化对象**：`"exec:git *"` 这类前缀通配规则写在 `config.json` 里，人和模型都可读可写；编译只做一次切分，匹配用无正则的回溯算法。
 - **匹配对象按工具提取**：exec 匹配命令字符串、写文件工具匹配路径、其余工具匹配整个参数的 JSON 文本——规则作用于"该调用要执行的动作"，而不是原始参数对象。
 - **路径规则双向匹配**：规则同时按原始形态和规范化形态（`~` 展开 + 相对工作目录解析）测试，同一文件以不同写法（`~/.ssh/x` / `.ssh/x` / `/Users/u/.ssh/x`）均不能绕过 deny。
 - **越界访问必须过人**：文件工具的目标一旦离开会话工作目录，即使工具本身是 safe（如 fs_read）也转为 confirm——"只读"不能作为读取任意系统文件的许可。沉淀规则与 acceptEdits 同样不豁免逃逸：两者的放行都以目标仍在工作区内为前提。
@@ -73,15 +73,19 @@ export class ConfigPermissionGate implements PermissionGate {
 
 配置来源（`packages/core/src/storage/config.ts`）：
 
-```yaml
-permissions:
-  allow: []                          # 默认空
-  deny: ["exec:sudo*", "exec:rm -rf*"]
-  confirmTimeoutMs: 120000           # 确认等待上限，默认 120s
-  sessionGrants: true                # 会话内"本次允许"记忆是否生效（run 级）
-  defaultMode: default               # 新会话的初始权限模式（创建时固化为 meta.mode；缺省 default）
-  # autoLearnThreshold: 3            # auto 模式归纳阈值（默认 3，0 关闭），见第 5 节
+```json
+{
+  "permissions": {
+    "allow": [],
+    "deny": ["exec:sudo*", "exec:rm -rf*"],
+    "confirmTimeoutMs": 120000,
+    "sessionGrants": true,
+    "defaultMode": "default"
+  }
+}
 ```
+
+各值即默认值：`allow` 默认空；`confirmTimeoutMs` 是确认等待上限（默认 120s）；`sessionGrants` 控制会话内"本次允许"记忆是否生效（run 级）；`defaultMode` 是新会话的初始权限模式（创建时固化为 meta.mode）；可选字段 `autoLearnThreshold` 设 auto 模式归纳阈值（默认 3，0 关闭），见第 5 节。
 
 ---
 
@@ -200,13 +204,16 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
   - Linux bubblewrap（无特权 user namespaces）——整个根只读挂载、`~/.kclaw` 用 tmpfs 遮蔽（读不到凭据）、`/tmp` 与工作区可写、`--die-with-parent --new-session` 保证 exec 超时进程组 kill 能波及整棵进程树；网络默认允许（不加 `--unshare-net`），`sandbox.network: "deny"` 时加 `--unshare-net` 断网（见 [sandbox](./sandbox.md)）。
   - 降级链：bwrap → **不可用**（回落人工确认，fail-closed——绝不让命令裸跑）。Landlock 保底是后续项：纯 Node 无法发起 `landlock_create_ruleset` syscall，也没有成熟 CLI 包装。
 - **判定联动（`sandboxedTools`）**：run 装配探测一次沙箱可用性，同源喂给两个消费方——exec 工具的实际包装器（可用的才注入）与 gate 的**实际被包裹的工具集**输入（`sandboxedTools`，今天只有 exec；集合非空即沙箱可用，gate 不再单独收可用性布尔）。因此 "sandboxed" 放行的命令必然真被沙箱包住；反之沙箱不可用时 exec 维持 confirm，不会出现"放了行却裸跑"的错配。`default` 与 `acceptEdits` 模式下，被包裹的命令类工具无规则命中时由沙箱顶替人工（reason `sandboxed`）；trusted 模式下未包裹的命令类工具（schema 带 `command` 字段的适配器等）直接被 deny，绝不顶着"已沙箱化"的名头放行。readonly 的短路依旧最优先，deny/allow/沉淀规则/会话授权也都先于它。沙箱**启用但探测不可用**时，exec 回落的确认请求会带一条说明（`noteText`："exec 沙箱不可用，本次操作需人工确认"，CLI 暗色一行、WebUI 卡片注明，见第 8 节）；用户主动 `sandbox.enabled: false` 关闭沙箱时不带说明——那是刻意决定，不需要解释。
-- **配置**（`config.yaml` 的 `sandbox:` 节，daemon 级，默认开）：
-  ```yaml
-  sandbox:
-    enabled: true        # 整体开关
-    writeRoots: []       # 追加写白名单（realpath 形式），如 npm 缓存目录
+- **配置**（`config.json` 的 `sandbox` 节，daemon 级，默认开）：
+  ```json
+  {
+    "sandbox": {
+      "enabled": true,
+      "writeRoots": []
+    }
+  }
   ```
-  沙箱启动失败或命令被沙箱拒绝 → exec 返回 error result（fail-closed，不降级裸跑）。可执行性探测用真实路径探测（如 `bwrap --die-with-parent true` 验证 user namespaces 真可用）。
+  `writeRoots` 是追加写白名单（realpath 形式），如 npm 缓存目录。沙箱启动失败或命令被沙箱拒绝 → exec 返回 error result（fail-closed，不降级裸跑）。可执行性探测用真实路径探测（如 `bwrap --die-with-parent true` 验证 user namespaces 真可用）。
   - **审计**：run 装配在每次探测后向会话事件流写一条 `sandbox.checked` 审计事件（14 种会话事件之一，字段 `enabled`=config 开关 / `available`=探测结果 / `unavailableReason`=原因；主动关闭沙箱时 `available` 恒 false 且不带原因）。每 run 恰一条，只写入事件流不上总线、不进 meta 投影、不推进 updatedAt，写失败即 run 失败（与 `system` 审计事件同契约）——审计页可逐 run 回看"当时沙箱是什么状态"，配合 grantedBy / deny note 串成完整审计链（见 [webui](../web/webui.md)）。人工确认的裁决另有 `permission.decided` 事件留痕（裁决、裁决者、工具身份；中止不是裁决不落），与沙箱审计合起来构成完整的放行链路。
 
 ### 8. 人工确认流程
@@ -240,7 +247,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 
 人工在确认里选"总是允许"后，一条**收紧的 allow 规则**保存为 YAML 文件（`packages/core/src/storage/decided-rules.ts`；"沉淀规则"即这些由人工批准或 auto 归纳积累下来的规则，判定链里 reason 为 `"learned"`），下一个 run 起由 gate 的 `decidedRules` 输入加载（判定链第 ②' 步）：
 
-- **两个文件，各自独立**：项目档 `<workspace>/.kclaw/permissions.yaml`（裁决所属会话的工作目录）、全局档 `~/.kclaw/permissions.yaml`。config.yaml 保持纯手写，程序从不写它。
+- **两个文件，各自独立**：项目档 `<workspace>/.kclaw/permissions.yaml`（裁决所属会话的工作目录）、全局档 `~/.kclaw/permissions.yaml`。沉淀规则只落在上面两个文件，主配置文件 `config.json` 不参与。
 - **每条带出处**（`DecidedRuleEntry`）：`rule`（收紧后的规则）、`decidedAt`（ISO 时刻）、`origin`（触发裁决的工具名、原始参数 JSON、会话 id）、`source`（可选——`"auto"` 表示 auto 模式归纳，缺省即 `"manual"`，兼容没有该字段的旧文件）。文件 0600 权限，原子写入。
 - **规则收紧（`narrowDecidedRule`）**：exec 按"首词 + 子命令前缀"收紧——`git push origin main` 落成 `exec:git push*`，`git fetch` 落成 `exec:git fetch*`（两词命令保留前两词 + 前缀）；**单词命令精确形态**（`ls` 落成 `exec:ls`）；链式命令只取第一段；命令 token 折叠为 basename（`/bin/rm -rf build` → `exec:rm -rf*`）。路径写类工具落 **realpath 精确路径**（`fs_write:/w/proj/a.md`，只放行这一个文件）；其余工具落工具级规则（如 `mcp__srv__do`）。收紧的原则是宁紧勿松：人批准的是那一条命令，不是一个命令族（前缀形态是可用性折衷——覆盖 `git push origin main` 与 `git push origin dev` 这类同族变体，代价是 `git push --force` 这类带旗标变体也会被前缀放行；拒绝的是更宽的命令族）。
 - **项目文件本地专属（防御三件套）**：保存时自动把 `.kclaw/permissions.yaml` 追加进工作区 `.gitignore`；已被 git 跟踪的项目规则文件**整体忽略**（`loadDecidedRulesForRun` 检测 `git ls-files`，tracked 即不加载并在 daemon 日志告警）——克隆来的仓库无法夹带一份预授权清单；文档（本节）写明该行为。管理页（WebUI 权限页）对 git 跟踪的项目档显示"已被跟踪、规则不生效"的提示（`GET /permissions/rules` 返回 `tracked`/`ignored` 字段，两者恒等，规则列表恒空）。

@@ -65,7 +65,8 @@ export function bearerMatches(header: string | undefined, token: string): boolea
 ```
 resolvePaths(home)                  建目录树（core/storage/paths.ts）
 acquireDaemonSlot                   wx 独占认领 <home>/daemon.json：占位 {port:0, pid, startedAt, starting:true}
-loadConfig(paths)                   config.yaml 深合并默认值
+loadConfig(paths)                   config.json 深合并默认值（旧 config.yaml 在
+                                    config.json 缺席时兼容读取）
 loadOrCreateToken(paths.home)       读/生成 <home>/token
 new EventBus()                      总线先于 store 构造：store 的写入完成通知回调要发
                                     session.appended 总线帧（先写入后广播，审计页等
@@ -83,9 +84,13 @@ new MemorySystem({memoryDir, sessions, config, resolveLlm, embed, emit})
                                     reconcile()（全部项目库 + 全局库重建索引，向量后台补算）
 new JobScheduler(paths.jobsDb)
 new UsageStore(paths.usageDb)       token 用量记录（SQLite，stop 时 close）
-defaultLlmFactory(config) + resolveModel(config)   见"provider 解析"
-new McpManager({servers, persist})  恒定装配：servers=mcp.json 与 config.yaml
-                                    遗留节的合并读，persist 接归拢落盘
+createEntryLlmFactory(config) + resolveModel(config)   见"provider 解析"；
+                                    前者是按条目建连的带缓存工厂，启动客户端
+                                    与每 run 的 llmForRun 都出自它
+new McpManager({servers, persist})  恒定装配：servers=mcp.json 与配置文件
+                                    （config.json 或未迁移的 config.yaml）遗留节的
+                                    合并读，persist 接归拢落盘；装配后从内存配置
+                                    删除遗留 mcp 节，防止后续保存把已删 server 复活
 createSubagentHost({config, sessions, bus, getRun})
                                     子代理宿主（见 subagents.md）：一次装配返回三件能力——
                                     spawner（派发后端，阻塞与后台子代理各有一个并发计数）、collector
@@ -118,9 +123,11 @@ return { port, token, pid, stop }
 
 1. `config.providers.entries[config.providers.default]` 条目里的 `baseUrl` / `apiKey` / `model` 优先；
 2. 条目留空的字段由环境变量补：`KCLAW_LLM_BASE_URL`、`KCLAW_LLM_API_KEY`、`KCLAW_LLM_MODEL`（`valueOrEnv`：配置值非空则用配置，否则用环境变量，再否则空串）；
-3. `baseUrl` 或 `apiKey` 仍为空 → 抛 `no llm provider configured: set providers in config.yaml or KCLAW_LLM_* env`；`model` 为空 → 抛 `no llm model configured: …`。
+3. `baseUrl` 仍为空 → 抛 `no llm provider configured: set providers in config.json or KCLAW_LLM_BASE_URL env`（apiKey 可为空——免密钥端点合法）；`model` 为空 → 抛 `no llm model configured: …`。
 
-抛错发生在 `launchDaemon` 内部，daemon 从未 listen；第一步认领的占位 daemon.json 留在原处（pid 存活时挡住后续启动，pid 退出后被回收重认领）——CLI 的 `ensureDaemon` 轮询 5s 后报"daemon did not become healthy"。`defaultLlmFactory` 用解析出的端点构造 `createOpenAiCompatClient({baseUrl, apiKey, timeoutMs: cfg.providers.timeoutMs})`（单请求超时默认 120s）再包一层 `withRetry`（瞬时错误重试，最多 3 次尝试）。
+抛错发生在 `launchDaemon` 内部，daemon 从未 listen；第一步认领的占位 daemon.json 留在原处（pid 存活时挡住后续启动，pid 退出后被回收重认领）——CLI 的 `ensureDaemon` 轮询 5s 后报"daemon did not become healthy"。
+
+**run 客户端按条目解析**：每个 run 的客户端由 `llmForRun(onRetry, entryKey)` 给出，`entryKey` 来自 `resolveRunModel`（run 装配先解析条目、再建客户端）。`createEntryLlmFactory` 返回的工厂按条目名缓存裸客户端，签名 = `format|baseUrl|apiKey|timeoutMs`——条目缺失回落默认条目、连默认条目都没有则回落环境变量端点（openai 格式）。签名变了下个 run 自动重建：Model 页的增删改热生效于下一个 run，无需重启。`withRetry` 由 `llmForRun` 每次现包（重试回调归属当次 run）；`format` 经 `createProviderClient` 选协议（openai → `createOpenAiCompatClient`，anthropic → `createAnthropicClient`，机制见 [provider](../core/provider.md)）。
 
 ## 鉴权设计
 

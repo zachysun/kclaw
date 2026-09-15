@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/mcp/manager.ts` 的 `McpManager` 把外部 MCP server 的工具接入 kclaw。MCP（Model Context Protocol，模型上下文协议）是模型调用外部工具的事实标准；一个 MCP server 可以是本地子进程，也可以是一个 HTTP 服务，它对外声明自己提供哪些工具。`McpManager` 按合并读到的 server 配置（管理面 `mcp.json`，加上 config.yaml 里遗留的 `mcp.servers` 节，见下文"配置"）去连接这些 server，把它们声明的工具包装成 kclaw 自己的工具接口（`ToolExecutor`/`ToolDefinition`，见 [tools](./tools.md)）交给 agent 循环使用，连接断开后按指数退避自动重连；配置的增删改和启停也可以在 daemon 运行中通过管理方法热生效。
+`packages/core/src/mcp/manager.ts` 的 `McpManager` 把外部 MCP server 的工具接入 kclaw。MCP（Model Context Protocol，模型上下文协议）是模型调用外部工具的事实标准；一个 MCP server 可以是本地子进程，也可以是一个 HTTP 服务，它对外声明自己提供哪些工具。`McpManager` 按合并读到的 server 配置（管理面 `mcp.json`，加上配置文件里遗留的 `mcp.servers` 节，见下文"配置"）去连接这些 server，把它们声明的工具包装成 kclaw 自己的工具接口（`ToolExecutor`/`ToolDefinition`，见 [tools](./tools.md)）交给 agent 循环使用，连接断开后按指数退避自动重连；配置的增删改和启停也可以在 daemon 运行中通过管理方法热生效。
 
 kclaw 在这个过程中只扮演 MCP **客户端**：它去调用别人的 server，不把自己的工具通过 MCP 暴露出去。
 
@@ -11,7 +11,7 @@ kclaw 在这个过程中只扮演 MCP **客户端**：它去调用别人的 serv
 ## 设计决策
 
 - **配置驱动，零代码接入**：在配置文件里写几行就能接入一个 server，不需要写任何代码。daemon 恒定构建管理器（一个空的管理器没有任何连接，开销为零）——这样"从 WebUI 添加第一个 server"的管理面永远可用。
-- **配置管理面独立于手写的 config.yaml**：WebUI 增删改的配置写进 daemon 主目录的 `mcp.json`（JSON 格式，与常见 MCP 客户端的习惯一致），config.yaml 保持纯手写、永不被程序重写。config.yaml 里遗留的 `mcp.servers` 节继续生效；任何一次从 WebUI 保存都会把全部 server 归拢进 `mcp.json`，并把 config.yaml 里那个节用行级编辑摘掉（其余内容——包括注释——逐字节保留）。从不用 WebUI 的用户不受任何影响。
+- **配置管理面独立于手写的配置文件**：WebUI 增删改的配置写进 daemon 主目录的 `mcp.json`（JSON 格式，与常见 MCP 客户端的习惯一致），不动 `config.json` 里的其他内容。配置文件里遗留的 `mcp.servers` 节继续生效（在 `config.json` 里，或在 `config.json` 出现前仍被兼容读取的旧 `config.yaml` 里）；任何一次从 WebUI 保存都会把全部 server 归拢进 `mcp.json`，并把该节从磁盘上实际使用的那种布局里摘掉（yaml 布局做行级编辑，其余内容——包括注释——逐字节保留；json 布局整文件重写）。从不用 WebUI 的用户不受任何影响。
 - **一个 server 失败不影响其他部分**：`start()` 用 `Promise.allSettled` 并发连接所有 server，某个 server 连不上时只记录到它自己的状态和 `lastError` 字段，不会抛异常——所以一个配置坏了的 server 既不会阻断 daemon 启动，也不会影响其他 server。
 - **从未连上过的 server 不自动重试**：自动重连循环只对"曾经连上过"的 server 生效（内部用 `hadSession` 标记）。启动时就失败的 server（比如命令拼错、进程起不来）会停在 `"failed"` 状态等人处理，而不是永远在后台空转重试；WebUI 的 MCP 栏提供手动重连按钮（管理方法 `reconnect`），一次点击就是一次连接尝试，不会在背后排进退避循环。
 - **热方法换新状态对象**：增删改启停（`addServer`/`updateServer`/`removeServer`/`setEnabled`）都会为该 server 造一个全新的状态对象、把旧对象整体退役（旧对象上的在飞连接回调、重连定时器全部短路），保证旧配置的回调永远不会落到新配置的状态上。`reconnect` 是例外——它只是对同一个状态对象取消挂着的退避定时器后发起一次连接，不换对象。
@@ -21,7 +21,7 @@ kclaw 在这个过程中只扮演 MCP **客户端**：它去调用别人的 serv
 
 ---
 
-## 配置（管理面 mcp.json + 兼容 config.yaml）
+## 配置（管理面 mcp.json + 配置文件的遗留节）
 
 管理面文件是 daemon 主目录下的 `mcp.json`（权限 0600，原子写）：
 
@@ -44,16 +44,21 @@ kclaw 在这个过程中只扮演 MCP **客户端**：它去调用别人的 serv
 }
 ```
 
-config.yaml 里的遗留写法继续有效（读取时两处按名字合并，`mcp.json` 里的同名条目优先）：
+配置文件里的遗留写法继续有效（`config.json` 中的 `mcp.servers` 节，或 `config.json` 出现前旧 `config.yaml` 里的同一节——兼容读取；两处按名字合并，`mcp.json` 里的同名条目优先）：
 
-```yaml
-mcp:
-  servers:
-    filesystem:
-      type: stdio
-      command: npx
-      args: ["-y", "@modelcontextprotocol/server-filesystem"]
-      env: {FOO: bar}                # 可选；enabled: false 表示保留配置但不连接
+```json
+{
+  "mcp": {
+    "servers": {
+      "filesystem": {
+        "type": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+        "env": { "FOO": "bar" }
+      }
+    }
+  }
+}
 ```
 
 两种传输形态对应的字段：
@@ -63,7 +68,7 @@ mcp:
 | `stdio` | `{type, command, args?, env?, enabled?}` | 在本地拉起一个子进程，通过标准输入输出与之通信 |
 | `http` | `{type, url, headers?, enabled?}` | 连接一个 streamable HTTP 端点 |
 
-`enabled === false` 的条目停留在 `"disabled"` 状态，永远不会发起连接。读写函数收在 core 的 `storage/mcp-config.ts`：`loadMcpServers`（合并读）、`consolidateMcpConfig`（归拢写 + 摘除 config.yaml 旧节）。
+`enabled === false` 的条目停留在 `"disabled"` 状态，永远不会发起连接。读写函数收在 core 的 `storage/mcp-config.ts`：`loadMcpServers`（合并读）、`consolidateMcpConfig`（归拢写 + 从磁盘上实际使用的布局摘除旧节）。
 
 ---
 
@@ -132,7 +137,7 @@ MCP 协议要求客户端报告自己的名字和版本，这里固定为 `{name
 
 ### daemon、WebUI 与 CLI 在哪里用到它
 
-- daemon（`packages/server/src/daemon.ts`）：恒定构建管理器（配置来自合并读，`persist` 回调接到 `consolidateMcpConfig`——WebUI 的每次保存都经过这里落盘并摘除 config.yaml 旧节）；启动监听之后用 `void mcpManager.start()` 触发连接、不等它完成就开始对外服务，晚连上的 server 从下一轮 run 起可用；停止序列中有一站负责关闭管理器。RunManager 把上面提到的 `extraTools` 函数作为依赖传给 core `executeRun`，由后者在每个 run 求值并注入这些工具（见 [run-manager](../server/run-manager.md)）。
+- daemon（`packages/server/src/daemon.ts`）：恒定构建管理器（配置来自合并读，`persist` 回调接到 `consolidateMcpConfig`——WebUI 的每次保存都经过这里落盘并从配置文件摘除旧节）；启动监听之后用 `void mcpManager.start()` 触发连接、不等它完成就开始对外服务，晚连上的 server 从下一轮 run 起可用；停止序列中有一站负责关闭管理器。RunManager 把上面提到的 `extraTools` 函数作为依赖传给 core `executeRun`，由后者在每个 run 求值并注入这些工具（见 [run-manager](../server/run-manager.md)）。
 - HTTP 接口（见 [http-api](../server/http-api.md)）：`GET /mcp` 返回 `{servers: status()}`（没装配管理器时是空列表）；`POST /mcp/servers`（新增）、`PATCH|DELETE /mcp/servers/:name`（改/删）、`POST /mcp/servers/:name/enable`（启停）、`POST /mcp/servers/:name/reconnect`（重连）是 WebUI MCP 栏的管理面，任何保存动作都会触发一次归拢。
 - WebUI 顶栏「MCP」页消费快照与管理接口：状态卡片、工具清单展开、启停开关、重连按钮和增删改表单；`/mcp` 斜杠命令显示一句话概况并可点击跳到该页。CLI 会话内 `/mcp` 打印状态一览（`/mcp <名字>` 看某 server 的工具清单），进程级的 `kclaw mcp [list]` 子命令保持不变，两者并存。
 
@@ -153,4 +158,4 @@ MCP 协议要求客户端报告自己的名字和版本，这里固定为 `{name
 - [permissions](./permissions.md)：sensitive 工具如何走向 confirm
 - [run-manager](../server/run-manager.md)：`extraTools` 的每 run 注入现场
 - [http-api](../server/http-api.md)：`GET /mcp` 与 `/mcp/servers` 管理路由族
-- [storage](./storage.md)：`mcp.json` 的读写与 config.yaml 旧节的摘除迁移
+- [storage](./storage.md)：`mcp.json` 的读写与配置文件遗留节的摘除

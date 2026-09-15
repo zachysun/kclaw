@@ -25,7 +25,7 @@ npm i -g ./packages/kclaw   # 把聚合包安装为全局 kclaw 命令
 kclaw chat
 ```
 
-尚未配置模型、且在交互式终端里运行时，`kclaw chat` 会进入一个 30 秒左右的配置向导。向导只做一件事：把模型配置写入 `~/.kclaw/config.yaml`，完成后以后不再出现。
+尚未配置模型、且在交互式终端里运行时，`kclaw chat` 会进入一个 30 秒左右的配置向导。向导只做一件事：把模型配置写入 `~/.kclaw/config.json`，完成后以后不再出现。
 
 ### 路线一：DeepSeek 模板（粘贴 key）
 
@@ -50,7 +50,7 @@ kclaw chat
 
 选「否」或按 Ctrl+C 都会正常退出，不写入任何文件；下次 `kclaw chat` 会重新进入向导。
 
-不走向导时，可手动编写 `~/.kclaw/config.yaml`，或设置 `KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY / KCLAW_LLM_MODEL` 环境变量，格式见 [README](../README.zh-CN.md) 的「配置要点」一节。
+不走向导时，可手动编写 `~/.kclaw/config.json`，或设置 `KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY / KCLAW_LLM_MODEL` 环境变量，格式见 [README](../README.zh-CN.md) 的「配置要点」一节。
 
 ## 3. 第一轮对话
 
@@ -175,7 +175,7 @@ token 的处理：页面获取 token 后存入浏览器本地存储并从地址�
 
 ```text
 ~/.kclaw/
-├── config.yaml      # 模型配置（向导写的就是它）
+├── config.json      # 模型配置（向导写的就是它）
 ├── AGENTS.md        # agent 人设，会注入系统提示词
 ├── token            # 访问凭证
 ├── daemon.json      # daemon 运行信息（端口、pid）
@@ -187,6 +187,8 @@ token 的处理：页面获取 token 后存入浏览器本地存储并从地址�
 ├── commands/        # 自定义 slash 命令（*.md）
 └── logs/            # 日志
 ```
+
+目录里若还有旧版的 `config.yaml`（`config.json` 出现前的配置格式），它仍被兼容读取，已有旧配置也能照常运行；任一程序写入（向导或 WebUI 保存）后 `config.json` 成为正式配置，旧文件改名为 `config.yaml.bak` 弃用。
 
 > [!TIP]
 > 备份或迁移 kclaw，复制这个目录即可。

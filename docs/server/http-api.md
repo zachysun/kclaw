@@ -2,14 +2,14 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 58 个业务路由（健康/状态 2 个、会话 15 个、记忆 10 个、技能 10 个、钩子 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、目录浏览 2 个、用量 1 个、MCP 管理 6 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`、`mcp.ts`）；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未装配时降级 503，技能组始终注册（无装配依赖），钩子组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则文件即真相，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权钩子加 64 个业务路由（健康/状态 2 个、会话 15 个、记忆 10 个、技能 10 个、钩子 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、provider 管理 6 个、目录浏览 2 个、用量 1 个、MCP 管理 6 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`providers.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`、`mcp.ts`）；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未装配时降级 503，技能组始终注册（无装配依赖），钩子组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则文件即真相，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
 - **鉴权由一个钩子统一处理**：`preHandler` 比对 `Authorization: Bearer <token>`（恒时比较），失败统一 `401 {error:"unauthorized"}`。豁免只有 `/health`、`/ws`、静态外壳三种（设计理由见 [daemon](./daemon.md) 的鉴权设计一节）。
 - **错误形状统一为 `{error: string}`**：会话/任务两个路由分组（scope）注册了 `setErrorHandler`，把 Fastify 的 body 解析错误（非法 JSON、空 body）也归一成这个形状；其余分组未注册（body 解析错误走 Fastify 默认形状 `{statusCode, error, message}`），客户端需兼容两种。客户端的共享 HTTP 基座（`@kclaw/core/client-http`）正是从这个 `error` 字段提取错误消息、取不到退回 `HTTP <status>`，见 [client-http](../core/client-http.md)。
 - **404 显式可判别**：会话/任务路由先查存在性（`sessions.meta(id)` / `jobs.get(id)`），不存在返回 `404 {error:"session not found"|"job not found"}`，不依赖异常路径。
-- **配置接口只读且脱敏**：API key 永远掩码返回，没有写回路由——修改配置通过文件（config.yaml）进行，daemon 重启后生效。
+- **配置读面只读且脱敏，写面收在 provider 管理族**：`GET /config` 的 API key 永远掩码返回；改 provider 配置走 `/providers` 路由族（上一节）——改动热生效于下个 run 并落盘 `config.json`，其余配置节仍以手编配置文件为真相。
 - **消息审计没有专门路由，压缩审计有只读视图**：审计页（web 的 `AuditView`）没有独立 `/audit` 路由——它由 `GET /sessions/:id/events`（该会话完整事件流，`?since=` 增量游标）单源读取 + 页面私有 ws 订阅（`session.appended` 通知帧驱动增量拉取）组合而成，会话选择跟随应用侧栏的全局选中。压缩审计不同——手动压缩刻意不产生消息，纯靠消息流看不到它的痕迹，因此 `GET /sessions/:id/compactions` 作为事件流里 `compaction` 事件的只读视图存在（见 [compaction](../core/compaction.md)）。
 - **可选能力按注入条件注册**：附件路由只在传入 `attachmentsDir` 时注册、用量路由只在传入 `UsageStore` 时注册——能力未装配就没有这些路径，而不是"注册了但报错"；MCP 组始终注册，`GET /mcp` 在 daemon 未装配 McpManager 时返回空 server 列表，动作端点此时回答 503。技能组与记忆组同为始终注册，但语义不同：记忆组未装配 `MemorySystem` 时降级 503，技能组没有装配依赖（技能是文件即真相，每次请求重新扫描），始终正常工作。
 
@@ -115,7 +115,20 @@ interface Job {
 |------|------|------|------|
 | GET | `/config` | 读当前配置（脱敏副本） | `KclawConfig`，所有 provider 条目的 `apiKey` 与 `web.tavilyApiKey` 掩码 |
 
-脱敏规则（`sanitizeConfig` + `maskSecret`）：先 `structuredClone` 深拷贝再改（原对象保持不变），掩码为 `"***" + 末 4 字符`（不足 4 字符则纯 `"***"`，空串同）。其余字段原样返回。没有对应的写路由。
+脱敏规则（`sanitizeConfig` + `maskSecret`）：先 `structuredClone` 深拷贝再改（原对象保持不变），掩码为 `"***" + 末 4 字符`（不足 4 字符则纯 `"***"`，空串同）。其余字段原样返回。`GET /config` 本身只读；配置的写面在下面的 provider 管理族。
+
+### Provider 管理（routes/providers.ts）
+
+| 方法 | 路径 | 用途 | 请求/响应 |
+|------|------|------|------|
+| GET | `/providers` | Model 页快照：条目（key 掩码）+ 默认条目 + 内置预设目录 | `{default, entries, presets}`；`entries` 形状同 `config.providers.entries` 但 apiKey 已掩码 |
+| POST | `/providers` | 新增一个条目 | 请求 `{name, entry}`；名字限定字母/数字/下划线/连字符（会话 meta 与 `/model` 命令按名引用）；`entry` 经 `parseProviderEntry` 校验（format 必须是 `openai`/`anthropic`，baseUrl 须 http(s)，model 必填，apiKey 可空）；重复 409、形状非法 400；返回 `{ok, default, entries, presets}` |
+| PATCH | `/providers/:name` | 整体替换一个条目 | 请求 `{entry}`；`apiKey` 为空 = 保留存量密钥（UI 只有掩码值）；名字未知 404 |
+| DELETE | `/providers/:name` | 删除一个条目 | 默认条目 409（先切默认再删）；被会话引用**不阻断**（引用方下个 run 回落默认条目，WebUI 删除前自行提示）；名字未知 404 |
+| POST | `/providers/:name/default` | 把该条目设为默认 | 名字未知 404 |
+| POST | `/providers/models` | 模型列表探测（兼作连接验证） | 请求 `{name}`（用存量条目的真实密钥探测，`format`/`baseUrl`/`apiKey` 字段可逐项覆盖——编辑表单的草稿值探测）或 `{format, baseUrl, apiKey?}`（新建表单直探）；成功 `{ok: true, models: string[]}`，端点不可达 502 `{ok: false, error}` |
+
+所有变更路由直接改 daemon 的内存配置——**下一个 run 即热生效**（run 客户端按条目签名缓存，配置一变自动重建）——并经 `saveConfig` 落盘：首次写落在 `config.json` 并把仍在的旧 `config.yaml` 改名 `config.yaml.bak` 弃用，此后每次写都是 config.json 的整文件原子重写（0600，密钥明文只在盘上）。没有审计事件（全局配置面，与 MCP 管理同判）。消费方是 WebUI 的 Model 页。
 
 ### 记忆（routes/memory.ts，底座 `MemorySystem`）
 
@@ -205,7 +218,7 @@ interface Job {
 | POST | `/mcp/servers/:name/enable` | 启停开关（持久、热生效） | 请求 `{enabled: boolean}`；禁用即断开、启用即发起一次连接 |
 | POST | `/mcp/servers/:name/reconnect` | 对失败/掉线的 server 手动发起一次连接 | 一次性尝试、不在背后排退避；对已连接的 server 是无操作；对禁用中的 server 400 |
 
-路由始终注册；daemon 未装配 McpManager 时 `GET /mcp` 的 `servers` 为空数组、全部动作端点回答 503。任何一次保存动作（增删改启停）都会把全部 server 归拢进 daemon 主目录的 `mcp.json`，并从 config.yaml 摘除遗留的 `mcp.servers` 节（其余内容原样保留）；消费方是 WebUI 的 MCP 页、双端的 `/mcp` 命令与 CLI 的 `kclaw mcp [list]`。连接状态机见 [mcp](../core/mcp.md)。
+路由始终注册；daemon 未装配 McpManager 时 `GET /mcp` 的 `servers` 为空数组、全部动作端点回答 503。任何一次保存动作（增删改启停）都会把全部 server 归拢进 daemon 主目录的 `mcp.json`，并从磁盘上实际在用的配置布局摘除遗留的 `mcp.servers` 节（config.json 为整文件重写、尚未迁移的 config.yaml 为行级编辑，其余内容原样保留）；消费方是 WebUI 的 MCP 页、双端的 `/mcp` 命令与 CLI 的 `kclaw mcp [list]`。连接状态机见 [mcp](../core/mcp.md)。
 
 ### WS 与静态托管
 

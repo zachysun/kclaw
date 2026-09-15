@@ -27,7 +27,7 @@
 | `kclaw daemon stop` | 发 SIGTERM 终止 daemon，轮询至 `/health` 不可访问后删除 `daemon.json`；返回 "stopped" 或 "daemon not running" |
 | `kclaw daemon status` / `kclaw status` | 报告状态：`not running`，或 `running (pid <pid>, port <port>, uptime <n>s)` |
 | `kclaw jobs list` | 列定时任务（连接过程中自动启动 daemon），五列表格：name/cron/enabled/nextRunAt/lastStatus |
-| `kclaw mcp [list]` | 经 `GET /mcp` 逐行打印 MCP server：`<名字>  <状态>  <N> 个工具[ 错误: <lastError>]`；空列表打印 "未配置 MCP server（daemon 的 mcp.json 或 config.yaml 的 mcp.servers 为空）" |
+| `kclaw mcp [list]` | 经 `GET /mcp` 逐行打印 MCP server：`<名字>  <状态>  <N> 个工具[ 错误: <lastError>]`；空列表打印 "未配置 MCP server（daemon 的 mcp.json 或配置文件的 mcp.servers 为空）" |
 | `kclaw web` | 浏览器打开 WebUI（见 [onboarding](./onboarding.md)） |
 
 程序级选项：`--home <dir>`（默认 `KCLAW_HOME ?? ~/.kclaw`）；`--version` 从 `packages/cli/package.json` 运行时读取。

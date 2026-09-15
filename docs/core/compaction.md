@@ -358,7 +358,7 @@ llm.stream({ system: <人格>, messages: [
 
 ## 配置
 
-`config.yaml` 的 `sessions` 段（`packages/core/src/storage/config.ts`；缺省值在读取处补齐）：
+`config.json` 的 `sessions` 段（`packages/core/src/storage/config.ts`；缺省值在读取处补齐）：
 
 | 字段 | 默认 | 含义 |
 |------|------|------|

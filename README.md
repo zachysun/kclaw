@@ -24,7 +24,7 @@ A locally resident personal agent: a single daemon owns all state; the CLI and W
    │                          │                                 │
    └──────────────────────────┼─────────────────────────────────┘
                               ▼
-   ~/.kclaw/  config.yaml · AGENTS.md · token · daemon.json
+   ~/.kclaw/  config.json · AGENTS.md · token · daemon.json
               sessions/<id>/events.jsonl (the conversation truth)
               memory/ (markdown threads + derived FTS5/vector index)
               jobs.db · attachments/ · logs/
@@ -54,7 +54,7 @@ kclaw chat    # first run enters the setup wizard: pick provider → paste key �
 kclaw web     # open the WebUI in your browser (carries the token, auto sign-in)
 ```
 
-The wizard ships DeepSeek / OpenAI / Ollama / custom templates; key input is hidden; after a successful probe it writes `~/.kclaw/config.yaml` (mode 0600). You can also skip the wizard and edit the config by hand or use environment variables — see "Configuration".
+The wizard ships DeepSeek / OpenAI / Ollama / custom templates; key input is hidden; after a successful probe it writes `~/.kclaw/config.json` (mode 0600). You can also skip the wizard and edit the config by hand or use environment variables — see "Configuration".
 
 > [!TIP]
 > New to kclaw? Follow the step-by-step tutorial (in Chinese): [中文上手教程](./docs/tutorial.md) — from installation through jobs to the WebUI.
@@ -84,7 +84,7 @@ The wizard ships DeepSeek / OpenAI / Ollama / custom templates; key input is hid
 | `no llm provider configured` | No model configured: run `kclaw chat` once for the setup wizard, or write config / env vars by hand per "Configuration" |
 | Page won't open / 401 | The port may change on each daemon start (check the current port with `kclaw daemon status`, or run `kclaw web` directly); the token stays the same across restarts, no need to re-fetch it |
 | No confirmation prompt on a risky action | The command matched the `permissions.allow` whitelist (see "Configuration" below) |
-| Where is my data | All under `~/.kclaw/`: config.yaml · token · daemon.json · sessions/ · memory/ · jobs.db · logs/ |
+| Where is my data | All under `~/.kclaw/`: config.json · token · daemon.json · sessions/ · memory/ · jobs.db · logs/ |
 
 ---
 
@@ -122,19 +122,26 @@ Alternative (manual token): the port is in the daemon startup output or `kclaw d
 
 ---
 
-## Configuration (`~/.kclaw/config.yaml`)
+## Configuration (`~/.kclaw/config.json`)
 
 The setup wizard writes exactly this file; a handwritten example looks like:
 
-```yaml
-providers:
-  default: my-provider
-  entries:
-    my-provider:
-      baseUrl: https://api.example.com/v1   # any OpenAI-compatible endpoint
-      apiKey: sk-...
-      model: some-model
+```json
+{
+  "providers": {
+    "default": "my-provider",
+    "entries": {
+      "my-provider": {
+        "baseUrl": "https://api.example.com/v1",
+        "apiKey": "sk-...",
+        "model": "some-model"
+      }
+    }
+  }
+}
 ```
+
+`baseUrl` may point at any OpenAI-compatible endpoint. A pre-JSON `config.yaml` is still read while `config.json` is absent, so an existing setup keeps working; the first program write (wizard or WebUI) lands in `config.json` and renames a leftover `config.yaml` to `config.yaml.bak`, which is no longer read.
 
 | Field | Description |
 |-------|-------------|
