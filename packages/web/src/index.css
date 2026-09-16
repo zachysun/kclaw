@@ -1527,6 +1527,18 @@ select:focus {
   font-size: 13px;
 }
 
+.chat-readonly-hint .return-parent {
+  margin-left: var(--space-3);
+  font-size: 12px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+
+.chat-readonly-hint .return-parent:hover {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
 .blk-tool-result pre {
   margin: 4px 0 0;
   white-space: pre-wrap;

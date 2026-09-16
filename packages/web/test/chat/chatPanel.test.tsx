@@ -194,6 +194,8 @@ async function mount(
     filesFail?: boolean
     /** memory.written 通知条点击的回调。 */
     onOpenMemoryWritten?: (info: MemoryWrittenInfo) => void
+    /** 只读子会话页「返回主会话」按钮的回调。 */
+    onReturnToParent?: (parentId: string) => void
   } = {},
 ): Promise<Harness> {
   const sessionId = opts.sessionId ?? "s1"
@@ -215,6 +217,7 @@ async function mount(
         onCreateSession={opts.onCreateSession ?? (async () => {})}
         onOpenSessions={opts.onOpenSessions ?? (() => {})}
         onOpenMemoryWritten={opts.onOpenMemoryWritten}
+        onReturnToParent={opts.onReturnToParent}
       />,
     )
   })
@@ -773,6 +776,27 @@ describe("ChatPanel", () => {
     })
     expect(h.api.post).toHaveBeenCalledWith("/sessions/s1/mode", { mode: "acceptEdits" })
     expect(select.value).toBe("acceptEdits")
+    h.unmount()
+  })
+
+  it("a read-only child page offers the return-to-parent button wired to the callback", async () => {
+    const onReturnToParent = vi.fn()
+    const h = await mount({ meta: { parentSessionId: "lead-1" }, onReturnToParent })
+    await flush()
+    const btn = h.container.querySelector('[data-testid="return-to-parent"]') as HTMLButtonElement
+    expect(btn).not.toBeNull()
+    expect(btn.textContent).toContain("返回主会话")
+    await act(async () => {
+      btn.click()
+    })
+    expect(onReturnToParent).toHaveBeenCalledWith("lead-1")
+    h.unmount()
+  })
+
+  it("a lead session (no parent) renders no return-to-parent button", async () => {
+    const h = await mount({ meta: {} })
+    await flush()
+    expect(h.container.querySelector('[data-testid="return-to-parent"]')).toBeNull()
     h.unmount()
   })
 

@@ -69,6 +69,9 @@ export interface ChatPanelProps {
   onOpenAudit?: (sessionId: string) => void
   /** Jump to the MCP management tab — the /mcp command's clickable notice. */
   onOpenMcp?: () => void
+  /** Switch the global selection to the given session — the read-only child
+   * page's「返回主会话」button (the child never appears in the sidebar). */
+  onReturnToParent?: (parentId: string) => void
 }
 
 /** Max consecutive failed reconnects before giving up with a notice. */
@@ -104,7 +107,7 @@ function errorFrameMessage(frame: unknown): string | null {
   return typeof message === "string" ? message : null
 }
 
-export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten, onOpenAudit, onOpenMcp }: ChatPanelProps) {
+export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten, onOpenAudit, onOpenMcp, onReturnToParent }: ChatPanelProps) {
   const [view, setViewState] = useState<ChatState>(() => initChat(initialMessages))
   const [notice, setNotice] = useState<string | null>(null)
   // 已装用户可见技能：出现在斜杠菜单的动态命令（/技能名），会话切换重拉
@@ -402,9 +405,15 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("default")
   // Child sessions (meta.parentSessionId set) are read-only: the composer is
   // replaced by a hint. Reset on session switch so a failed meta pull never
-  // carries the previous session's verdict over.
+  // carries the previous session's verdict over. The parent id powers the
+  // hint's「返回主会话」button — a member/child session never appears in the
+  // sidebar, so without it there is no visible way back to the lead.
   const [childSession, setChildSession] = useState(false)
-  useEffect(() => setChildSession(false), [sessionId])
+  const [childParentId, setChildParentId] = useState<string | null>(null)
+  useEffect(() => {
+    setChildSession(false)
+    setChildParentId(null)
+  }, [sessionId])
   useSilentFetch(
     () =>
       Promise.all([
@@ -412,7 +421,9 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
         api.get<{ sessions?: { defaultDisposition?: unknown } }>("/config"),
       ]),
     ([meta, cfg]) => {
-      setChildSession(typeof meta.parentSessionId === "string" && meta.parentSessionId !== "")
+      const parentId = typeof meta.parentSessionId === "string" && meta.parentSessionId !== "" ? meta.parentSessionId : null
+      setChildSession(parentId !== null)
+      setChildParentId(parentId)
       // 会话级覆盖只可能是 steer/wait（interrupt 已不再写 sticky，见
       // handleSetDisposition；历史遗留的 "interrupt" 覆盖按 steer 回退）。
       const override = meta.dispositionOverride
@@ -714,6 +725,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           onCancelAllQueued={() => handleCancelQueued()}
           onOpenAudit={onOpenAudit}
           readOnly={childSession}
+          onReturnToParent={onReturnToParent !== undefined && childParentId !== null ? () => onReturnToParent(childParentId) : undefined}
           onCancelCompaction={handleCancelCompaction}
           onStopRun={handleStopRun}
           onRetry={handleRetry}

@@ -511,6 +511,7 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
                   selectSession(childId)
                   switchTab("audit")
                 }}
+                onReturnToParent={selectSession}
                 onOpenMcp={() => switchTab("mcp")}
               />
             </div>

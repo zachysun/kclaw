@@ -135,6 +135,9 @@ export interface ChatViewProps {
    * by one hint line; the server's submit also rejects user-triggered posts.
    */
   readOnly?: boolean
+  /** Back to the parent session — the read-only hint's button (a child never
+   * appears in the sidebar, so this is the only visible way back). */
+  onReturnToParent?: () => void
   /**
    * Agent-team panel wiring: the panel payload plus the
    * composer target. Undefined/null panel = this session has no team →
@@ -149,7 +152,7 @@ export interface ChatViewProps {
   }
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, team }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Suggestion-menu state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -530,8 +533,15 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
         // Child sessions are read-only (spec pin: treat the subagent as a
         // tool): no composer, one hint line pointing at the audit page; the
         // server-side submit rejects user-triggered posts as the backstop.
+        // The child never appears in the sidebar — the button is the only
+        // visible way back to the parent.
         <div className="chat-readonly-hint" data-testid="subagent-readonly-hint">
           子代理会话只读——它的过程与结题答复在审计页查看
+          {onReturnToParent !== undefined && (
+            <button type="button" className="return-parent" data-testid="return-to-parent" onClick={onReturnToParent}>
+              ← 返回主会话
+            </button>
+          )}
         </div>
       ) : (
         <form className="chat-composer" ref={composerRef} onSubmit={submit}>
