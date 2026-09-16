@@ -699,3 +699,33 @@ function removeQuestion(state: ChatState, questionId: string): ChatState {
   if (pending.length === state.pendingQuestions.length) return state
   return { ...state, pendingQuestions: pending }
 }
+
+/**
+ * 团队收信箱投递进会话的用户消息识别与拆解：投递文本是 `【来自 发件人】`
+ * 分段（可多条拼接），首次投递还带 `<system-reminder kind="team-identity">`
+ * 身份前缀。命中即由聊天页渲染成 agent 一侧的折叠条（原文照在，模型侧不变）。
+ * 普通用户消息（无标头）返回 null。
+ */
+export interface TeamMailParse {
+  entries: Array<{ from: string; text: string }>
+}
+
+const TEAM_IDENTITY_PREFIX = /^<system-reminder kind="team-identity">[\s\S]*?<\/system-reminder>\s*/
+
+export function parseTeamMail(raw: string): TeamMailParse | null {
+  const body = raw.replace(TEAM_IDENTITY_PREFIX, "")
+  if (!body.includes("【来自 ")) return null
+  // 标头只在行首认（正文里引用「【来自 …】」字样不算分段）
+  const header = /^【来自 ([^】]*)】\n?/gm
+  const marks: Array<{ from: string; start: number; end: number }> = []
+  let match: RegExpExecArray | null
+  while ((match = header.exec(body)) !== null) {
+    marks.push({ from: match[1]!.trim(), start: match.index, end: header.lastIndex })
+  }
+  if (marks.length === 0) return null
+  const entries = marks.map((mark, i) => ({
+    from: mark.from,
+    text: body.slice(mark.end, i + 1 < marks.length ? marks[i + 1]!.start : body.length).trim(),
+  }))
+  return { entries }
+}

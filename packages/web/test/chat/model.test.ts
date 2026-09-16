@@ -22,6 +22,7 @@ import {
   appendOptimisticUser,
 } from "../../src/chat/model.js"
 import type { CompactionPhase, NoteKind } from "@kclaw/core/protocol"
+import { parseTeamMail } from "../../src/chat/model.js"
 
 function msg(id: string, role: "user" | "assistant" | "tool", blocks: Block[]): Message {
   return { id, sessionId: "s1", role, blocks, createdAt: "2026-08-15T00:00:00.000Z" }
@@ -801,5 +802,36 @@ describe("message.truncated（编辑重试/重新生成）", () => {
     s = applyEvent(s, ev("message.created", { message: half }))
     s = applyEvent(s, ev("message.completed", { message: half }))
     expect(s.messages[0]!.aborted).toBe(true)
+  })
+})
+
+describe("parseTeamMail（组员来信识别）", () => {
+  it("普通用户消息不命中", () => {
+    expect(parseTeamMail("帮我看看这个报错")).toBeNull()
+    expect(parseTeamMail("【说明】这不是来信")).toBeNull()
+  })
+
+  it("单条来信：剥掉身份前缀，拆出发件人与正文", () => {
+    const raw = '<system-reminder kind="team-identity">你是 agent team「crew」的组员 builder；以下消息来自你的收信箱。</system-reminder>\n\n【来自 组长】\n请开始解析 if 语句'
+    const mail = parseTeamMail(raw)
+    expect(mail).not.toBeNull()
+    expect(mail!.entries).toEqual([{ from: "组长", text: "请开始解析 if 语句" }])
+  })
+
+  it("多条拼接来信（组长收信箱）：逐条拆解", () => {
+    const raw = "【来自 组员 builder】\n任务 #1 已完成\n\n【来自 组员 tester】\n测试全部通过"
+    const mail = parseTeamMail(raw)
+    expect(mail!.entries).toEqual([
+      { from: "组员 builder", text: "任务 #1 已完成" },
+      { from: "组员 tester", text: "测试全部通过" },
+    ])
+  })
+
+  it("正文里再出现【来自 字样不会把后面的内容吞进上一位发件人", () => {
+    const raw = "【来自 组员 builder】\n完成。引用了【来自 组长】的指示字样但没有新分段头"
+    const mail = parseTeamMail(raw)
+    // 只认段首标头：第一个标头之后没有第二个段首（引用在正文中段）
+    expect(mail!.entries).toHaveLength(1)
+    expect(mail!.entries[0]!.text).toContain("引用了【来自 组长】的指示")
   })
 })

@@ -771,19 +771,46 @@ select:focus {
 
 .toast {
   pointer-events: auto;
-  appearance: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   border: 1px solid var(--border-strong);
   background: var(--surface-2);
   color: var(--text);
-  font: inherit;
   font-size: 12px;
   line-height: 1.5;
   text-align: left;
-  padding: 8px 12px;
+  padding: 8px 8px 8px 12px;
   border-radius: 6px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
-  cursor: pointer;
   animation: toast-in 0.18s ease-out;
+}
+
+.toast-text {
+  appearance: none;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+}
+
+.toast-close {
+  appearance: none;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: 1.2;
+  padding: 0 2px;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.toast-close:hover {
+  opacity: 1;
 }
 
 .toast.error {
@@ -1416,9 +1443,56 @@ select:focus {
   font-family: var(--font-mono);
 }
 
+.blk-tool-call summary {
+  cursor: pointer;
+}
+
 .blk-tool-call code {
   background: transparent;
   padding: 0;
+}
+
+/* 展开后的完整参数：滚动限高，整文件写入也不能撑爆聊天页 */
+.blk-tool-call-args {
+  display: block;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ---- 团队来信（agent 一侧折叠条，不占用户气泡） ---- */
+
+.message-mail {
+  align-self: flex-start;
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  border-bottom-left-radius: 2px;
+}
+
+.msg-team-mail {
+  font-size: 13px;
+}
+
+.msg-team-mail summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.mail-entry {
+  margin-top: 6px;
+}
+
+.mail-from {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.mail-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 2px 0 0;
+  font: inherit;
 }
 
 .blk-tool-result {
