@@ -81,7 +81,6 @@ export function resolvePaths(home?: string): KclawPaths
 | `sessions.compactThreshold` / `compactKeep` | 无（废弃） | 旧版压缩的字段（当时是 40 条消息触发、保留 25 条），已废弃不生效：配置文件里写了不报错，但没有任何消费方 |
 | `subagents.maxConcurrent` | `4` | 每个主会话同时存活的**阻塞**子代理上限（按父会话计数，超限的派发立即返回 error、不建会话，见 [subagents](./subagents.md)）；可选字段，缺省值在 spawner 构建处补齐 |
 | `subagents.maxBackground` | `4` | 每个主会话同时存活的**后台**子代理上限（`run_in_background` 派发，与阻塞上限分别计数、互不挤占；超限同样立即返回 error，见 [subagents](./subagents.md)）；可选字段，缺省值在 spawner 构建处补齐 |
-| `team.stateDir` | `".agent-teams"` | agent 团队状态目录名（工作区下；目录布局与全部 team 键见 [agent-team](./agent-team.md)） |
 | `team.maxMembers` | `8` | 团队组员名单上限（含失败的招募） |
 | `team.maxActive` | `4` | 同时运行的组员上限；满员时新信在收信箱排队等空闲边投递 |
 | `team.mailbox.maxUnreadPerTarget` / `maxMessageBytes` | `64` / `65536` | 单个收信箱未读上限 / 单条信字节上限，超限投递方收到 error 结果 |

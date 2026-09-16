@@ -8,24 +8,27 @@
 
 - **协作以任务为中心，不以对话为中心**：组员之间不互相对话（收信箱只允许 组长→组员 / 组员→组长），一切协同落在任务板的状态上（认领、依赖、结题）。这是刻意收窄——自由群聊会让多 agent 的上下文互相污染，任务板的 CAS（compare-and-swap，写入前核对版本号、不一致就拒绝）才是可靠的协作面。
 - **组员是持久子会话**：`parentSessionId` 指向组长，因此复用子会话的一切基建（列表默认隐藏、用量归组、记忆提取排除），但不继承子代理的两条限制——组员的 run 不随父会话停止而停止（见下），也不在派发后销毁。
-- **收信箱是持久化的投递队列**：消息先写进 `<workspace>/.agent-teams/<teamId>/team/inbox/<名字>.jsonl`，再渲染成目标的一次 run。`pending`（未投递）→ `delivered`（已投）的翻转发生在**输入真正落进目标会话历史之后**（监听该 run 的第一条 `message.created`）——崩溃窗口里最坏是重投一次，永远不会丢（at-least-once，至少一次投递）。
+- **收信箱是持久化的投递队列**：消息先写进收信人的收信箱文件（`<workspace>/.kclaw/teams/<队名>/inboxes/<名字>.json`），再渲染成目标的一次 run。`pending`（未投递）→ `delivered`（已投）的翻转发生在**输入真正落进目标会话历史之后**（监听该 run 的第一条 `message.created`）——崩溃窗口里最坏是重投一次，永远不会丢（at-least-once，至少一次投递）。
 - **运行模型没有级联停止**：唤醒只来自三个来源——组员收信箱有信、用户点名说话、自动派活。除此之外组员空闲待命，不存在"组长停了组员跟着停"；停止永远是逐个的（用户在成员卡上停某一个，或 CLI 对该成员会话发 `run.cancel`）。唯一的例外是删除/清除组长会话：那是数据生命周期（级联删子会话），顺手取消还在跑的组员 run。
-- **审计真相在目录，事件流只留痕**：任务、名单、收信箱的真相都是团队目录里的 JSON/JSONL 文件；`team/*` 七种审计事件追加在**组长的**事件流上供审计页回放，每条带 `version` 字段（当前为 1，由宿主统一注入），写入是尽力而为（失败降为一条警告，团队操作本身照常），不进 meta 投影、不推进 `updatedAt`。
+- **审计真相在目录，事件流只留痕**：任务、名单、收信箱的真相都是 `.kclaw/` 团队目录里的 JSON 文件；`team/*` 七种审计事件追加在**组长的**事件流上供审计页回放，每条带 `version` 字段（当前为 1，由宿主统一注入），写入是尽力而为（失败降为一条警告，团队操作本身照常），不进 meta 投影、不推进 `updatedAt`。
 
 ## 团队目录（真相所在）
 
 ```
-<workspace>/.agent-teams/<teamId>/
-  team.json            # TeamRecord：teamId、名字、leadSessionId（身份反查的锚点）
-  team/members.json    # 组员名单：名字、子会话 id、状态、模型快照、失败原因
-  team/inbox/<名字>.jsonl   # 收信箱（组长的是 lead.jsonl）：一行一条 MailboxEntry
-  task/board.json      # 任务 id 计数器（nextId，永不复用）
-  task/<id>.json       # TaskSnapshot 全量快照：主题/详情/状态/认领人/依赖/attempt/revision
+<workspace>/.kclaw/teams/<队名>/
+  config.json              # 团队记录 + 组员名单：teamId（即队名）、名字、leadSessionId、members
+  inboxes/team-lead.json   # 组长的收信箱
+  inboxes/<名字>.json      # 每个组员一个收信箱：{"version":1,"entries":[...]} 单个 JSON 文件
+<workspace>/.kclaw/tasks/<队名>/
+  task-<id>.json           # TaskSnapshot 全量快照：主题/详情/状态/认领人/依赖/attempt/revision
+  current_tasks/<id>-<slug>.txt   # 进行中任务的锁文件（任务 id、主题、认领人、attemptId、认领时间）
 ```
 
-`teamId` **就是组长会话 id**——一个会话只属一个队，天然唯一，反查时目录名即团队标识。建队时把 `.agent-teams/` 尽力追加进工作区 `.gitignore`（已有条目则不动）。`config.team.stateDir` 可改目录名。
+`teamId` **就是队名**（目录名的锚点），在工作区内唯一；同一队名删除归档后可复用，任务 id 用「现存最大值 + 1」派生、永不复用。队名来自建队时的显式起名，缺省从会话标题派生（`team-2`、`team-3` 顺延去重）；名字会成为目录名，只收字母数字（任何文字都行，中文可以）加连字符，最长 32 字符，撞了已存在的队会响亮报错。建队时把 `.kclaw/` 尽力追加进工作区 `.gitignore`（已有条目则不动）。
 
-**身份反查**：团队宿主 `find()` 扫描目录——`team.json.leadSessionId` 命中即组长、`members.json` 的子会话 id 命中即对应组员。run 装配在每次 run 前调用一次 `facade.describeSession(sessionId)`，拿到的身份决定这个 run 的一切团队特化。查询结果为 null 时分两种：子会话与 job 会话拿不到任何团队工具；**主线会话拿到一个"预备组长"身份**——七个工具都在表面上的 `create_team` 由此可达，其余团队动作会被 facade 以响亮的冲突报错拒绝（队还不存在）。崩溃遗留的 provisioning（招募中途断电）在组长下次被探测时按磁盘真相结算成 active / failed。
+**current_tasks 锁**是"这条任务正在被执行"的可见投影：任务进入 in_progress 时写锁文件，到达终态或改主题时移除；宿主加载团队目录时做一次对账（`reconcileLocks`）——清掉任务文件已经不认的残留锁，为还在进行中的任务补写锁，崩溃遗留的锁就是一次被中断执行的痕迹。
+
+**身份反查**：团队宿主 `find()` 扫描 `.kclaw/teams/`（跳过 dot 开头的归档目录）——`config.json.leadSessionId` 命中即组长、`members` 里的子会话 id 命中即对应组员。run 装配在每次 run 前调用一次 `facade.describeSession(sessionId)`，拿到的身份决定这个 run 的一切团队特化。查询结果为 null 时分两种：子会话与 job 会话拿不到任何团队工具；**主线会话拿到一个"预备组长"身份**——七个工具都在表面上的 `create_team` 由此可达，其余团队动作会被 facade 以响亮的冲突报错拒绝（队还不存在）。崩溃遗留的 provisioning（招募中途断电）在组长下次被探测时按磁盘真相结算成 active / failed。
 
 ## 身份与提示词
 
@@ -61,7 +64,7 @@
 
 - 组员在跑时，WebUI 成员卡显示「停止」——对**组员自己的会话**发 `run.cancel`，组长照常不受影响。
 - 组长被停止不会波及组员（没有父停子停）。
-- `DELETE /sessions/:id`（软删）与 `POST /sessions/:id/purge` 在级联删子会话的同时，先取消该队还在跑的组员 run（`cancelMembersForLead`），再把团队目录整体归档到 `.agent-teams/archive/<teamId>/`（记录与轨迹仍可查；重名追加时间戳后缀）——这是数据生命周期的一部分，不是运行模型的级联停止。
+- `DELETE /sessions/:id`（软删）与 `POST /sessions/:id/purge` 在级联删子会话的同时，先取消该队还在跑的组员 run（`cancelMembersForLead`），再把团队目录与任务目录整体移进各自父目录下的 `.archive/<队名>-<时间戳>/`（记录与轨迹仍可查；重名追加时间戳后缀）——这是数据生命周期的一部分，不是运行模型的级联停止。
 - **一人一任务**：存储层在认领与改派两处强制「一个组员同时最多一条进行中任务」，第二次认领或把进行中任务改派给持有别的任务的人都会被响亮拒绝。
 
 ## 用户面
@@ -75,7 +78,6 @@
 
 | 键 | 缺省 | 说明 |
 |----|------|------|
-| `team.stateDir` | `".agent-teams"` | 团队状态目录名（工作区下） |
 | `team.maxMembers` | `8` | 名单上限（含失败的招募） |
 | `team.maxActive` | `4` | 同时运行的组员上限；满员时新信排队等空闲边 |
 | `team.mailbox.maxUnreadPerTarget` | `64` | 单个收信箱未读上限，超限投递方收到响亮报错 |
