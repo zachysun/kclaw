@@ -67,30 +67,7 @@ export function makeTool<N extends string>(
 
 ## 22 个内置工具
 
-| 名称 | 职责 | risk / concurrency |
-|------|------|--------------------|
-| `exec` | 在工作目录执行 shell 命令 | sensitive / serial |
-| `fs_read` | 读工作目录内 UTF-8 文本文件（≤1 MiB） | safe / parallel |
-| `fs_list` | 列目录 | safe / parallel |
-| `fs_write` | 新建/覆写文件（自动建父目录） | sensitive / serial |
-| `fs_edit` | 字面替换文件中恰好一处文本 | sensitive / serial |
-| `web_search` | Tavily 搜索 | safe / parallel |
-| `web_fetch` | 抓取网页正文 | safe / parallel |
-| `memory_save` | 写入长期记忆 | safe / parallel |
-| `memory_search` | 全文检索记忆 | safe / parallel |
-| `session_search` | 全文检索当前会话已压缩的早期对话 | safe / parallel |
-| `skill_read` | 按名字加载一个技能（skill）的完整规程正文 | safe / parallel |
-| `skill_list` | 列出模型可见的技能（名字 + 描述），可选关键词过滤——系统提示词清单可能被截断、子代理没有清单，用来自助发现 | safe / parallel |
-| `subagent_run` | 派出一个子代理独立执行一段自包含任务（可后台），结题答复即工具结果 | safe / parallel |
-| `subagent_collect` | 按子会话 id 取回后台子代理的完整结题答复 | safe / parallel |
-| `ask_user_questions` | 向用户提出 1–5 个需要当场拍板的问题，回答即工具结果 | safe / parallel |
-| `create_team` | 建立本会话的 agent 团队并使本会话成为组长 | safe / serial |
-| `spawn_teammate` | 招募一个组员（持久子会话 + 模型快照 + 初始任务走收信箱） | safe / serial |
-| `send_message` | 给组长或组员写信（经持久收信箱投递） | safe / parallel |
-| `list_agents` | 列出组员名单（状态、忙闲、当前任务） | safe / parallel |
-| `task_create` | 在团队任务板上建任务（依赖、指派） | safe / serial |
-| `task_update` | 按 revision 更新任务状态/认领（CAS 比对再交换） | safe / serial |
-| `task_list` | 列出任务板全貌 | safe / parallel |
+完整清单（名称、一句话职责、risk / concurrency、条件注册与表面收窄规则）陈列在 [reference/tools](../reference/tools.md)：常驻 12 个（exec、fs 四件、web 两件、memory 两件、session_search、skill 两件）+ 条件注册 10 个（子代理 2、团队 7、提问 1）。下面按实现文件分组说明各家的机制。
 
 前 12 个**常驻注册**（注册与否不随会话状态变化；可见性例外有两个——readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型工具面，见 [permissions](./permissions.md)；子代理 run 会裁掉 `memory_save`，见 [subagents](./subagents.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 装配了子代理派发后端时注册（子代理自己的 run 两者都不注册——单层委派、不能再派孙代理），`ask_user_questions` 每个 run 都注册，七个团队工具只在会话属于某个团队时注册且**表面按身份收缩**——组长拿全套，组员没有 `create_team`/`spawn_teammate`（见下文与 [agent-team](./agent-team.md)）。
 

@@ -67,7 +67,7 @@
 }
 ```
 
-`EventType` 共 **40 种**（`packages/core/src/protocol/events.ts`；十一个语义分组的完整表见 [protocol](../core/protocol.md)），按投递方式分两组：
+`EventType` 共 **40 种**（`packages/core/src/protocol/events.ts`；逐事件 payload 的陈列见 [reference/events](../reference/events.md)），按投递方式分两组：
 
 | 分组 | 事件 | 投递 |
 |------|------|------|

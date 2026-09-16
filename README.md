@@ -215,5 +215,7 @@ Docs:
   - [onboarding](docs/cli/onboarding.md) — first-run experience (provider detection / wizard / web command)
 - web/ (browser client)
   - [webui](docs/web/webui.md) — views, token bootstrap, the WS client
+- reference/ (enumeration quick-reference, in Chinese)
+  - [reference index](docs/reference/README.md) — value-by-value listings sourced from the code: events, session events, wire frames, messages, blocks, tools, hooks, misc enums
 - [extending — extension guide](docs/extending.md): which files to change when adding a new feature
 - [tutorial](docs/tutorial.md): hands-on walkthrough for first-time users (in Chinese, 中文上手教程)

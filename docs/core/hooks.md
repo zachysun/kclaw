@@ -22,6 +22,8 @@
 
 ## 位置网格（14 个）
 
+值与契约的陈列正本见 [reference/hooks](../reference/hooks.md)（ctx / 返回类型 / 改写性 / 内置钩子清单）。
+
 | 位置 | 时机 | ctx | 返回 | 语义 |
 |------|------|-----|------|------|
 | `run-before` | 用户消息 `message.created` 之后、持久化之前 | `{ message }` | `Message` | 改写用户消息（内置：记忆检索 + 持久化 + 自动命名） |
@@ -85,7 +87,7 @@ export default async (ctx) => {
 
 ## 内置钩子（builtin.ts）
 
-由引擎原本写死在循环与装配里的行为改造而来，行为零变化由既有测试保证。order 即执行次序：
+由引擎原本写死在循环与装配里的行为改造而来，行为零变化由既有测试保证。order 即执行次序（与位置的运行时清单同出于 `BUILTIN_HOOK_SPECS` 单一真相，纯值陈列见 [reference/hooks](../reference/hooks.md)）：
 
 | order | 名字 | 位置 | failure | 行为 |
 |-------|------|------|---------|------|
