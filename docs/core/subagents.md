@@ -63,6 +63,8 @@ spawner 在子频道挂一个普通 bus 订阅者（EventBus 接受任何 `{send
 - `DELETE /sessions/:id`（软删）与 `POST /sessions/:id/purge`（永久删除）都**级联**到其全部子会话——删主对话连着删它的子代理轨迹，不留孤儿。
 - Web 对话页的 `subagent_run` 工具结果行渲染"查看子代理审计"链接：工具结果的 `data.childSessionId`（随持久化块写入事件流）驱动，点击即选中该子会话并切到审计 tab——审计页本来就跟随全局选中会话。子会话对用户**只读**：ChatPanel 对子会话隐藏输入区（send/权限选择器都不渲染），`RunManager.submit` 在服务端再拦一道、拒绝 user 触发的提交——审计页可以看它的一切，但不能插话。
 
+**与 agent 团队的交界**：团队组员也是 `parentSessionId` 指向组长的持久子会话，上面的一切基建（列表隐藏、用量归组、级联删除）原样适用。两条刻意不同：组员不随"父停"而停——运行模型的唤醒与停止语义在 [agent-team](./agent-team.md)（组长被停止不会波及组员，停止永远逐个）；组员 run 的消息由团队收信箱以 `trigger: "team"` 投递，绕过 user 触发的只读拒绝。
+
 ## 配置
 
 | 键 | 缺省 | 说明 |

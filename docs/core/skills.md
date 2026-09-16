@@ -151,7 +151,7 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 
 ## 关联
 
-- [tools](./tools.md)：`skill_read` 与 `skill_list` 在 15 个内置工具里的位置与注册
+- [tools](./tools.md)：`skill_read` 与 `skill_list` 在 22 个内置工具里的位置与注册
 - [hooks](./hooks.md)：`skill-wrap` 内置钩子（`llm-before` 位置的点名包装）与 `withLastUserText`
 - [agent-loop](./agent-loop.md)：`llm-before` 位置在循环里的触发时机
 - [run-manager](../server/run-manager.md)：系统提示词装配（基础 + 认知 + 技能清单）、技能目录每 run 扫描
