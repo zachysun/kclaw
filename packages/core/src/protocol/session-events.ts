@@ -5,6 +5,7 @@
  * the guards and the meta projection (applyEvent) live in session/events.ts.
  */
 import type { Message, StopReason, Usage } from "./messages.js"
+import type { TaskSnapshot } from "./team.js"
 
 export interface SessionCreatedEvent { type: "session.created"; at: string; title: string; workdir?: string; jobId?: string; /** 创建时固化的权限模式快照（config permissions.defaultMode）；缺省 default。 */ mode?: import("../permissions/modes.js").PermissionMode; /** 父会话（subagent 派生关系）：设置即子会话——列表默认过滤、记忆提取排除、用量归组到父。 */ parentSessionId?: string }
 export interface SessionRenamedEvent { type: "session.renamed"; at: string; title: string }
@@ -49,7 +50,7 @@ export interface SandboxCheckedEvent {
 /** 一次对话运行的起点留痕（每 run 一条，与消息事件夹出一轮的边界）。 */
 export interface RunStartedEvent {
   type: "run.started"; at: string
-  trigger: "user" | "job" | "agent"
+  trigger: "user" | "job" | "agent" | "team"
 }
 /**
  * 一次对话运行的终点留痕（每 run 恰一条，与 run.started 成对）。stopReason
@@ -71,4 +72,24 @@ export interface PermissionDecidedEvent {
   tool: { callId: string; name: string; argsJson: string }
 }
 
-export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent | MessageEvent | MessageTruncatedEvent | CompactionEvent | MemoryEvent | SystemEvent | SandboxCheckedEvent | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent
+// ---- Team audit events (the team/* family) ----
+// Trail only: the state truth lives in the team directory
+// (<workspace>/.agent-teams/<teamId>/); these events exist so the audit page
+// can render the coordination timeline on the lead's stream. They never touch
+// the meta projection, a write failure degrades to a warning (the team
+// operation itself proceeds), and none of them advances updatedAt. Every
+// event carries a schema `version` (injected by the team host) so recorded
+// trails stay interpretable as the payloads evolve.
+
+export interface TeamCreatedEvent { type: "team.created"; version: 1; at: string; teamId: string; name: string }
+export interface TeamMemberProvisionedEvent { type: "team.member.provisioned"; version: 1; at: string; teamId: string; member: string; sessionId?: string; model?: string }
+export interface TeamMemberSettledEvent { type: "team.member.settled"; version: 1; at: string; teamId: string; member: string; status: "active" | "failed"; reason?: string }
+export interface TeamMessageQueuedEvent { type: "team.message.queued"; version: 1; at: string; teamId: string; id: string; from: string; to: string; textPreview: string }
+export interface TeamMessageDeliveredEvent { type: "team.message.delivered"; version: 1; at: string; teamId: string; id: string; to: string }
+export interface TeamTaskCreatedEvent { type: "team.task.created"; version: 1; at: string; teamId: string; task: TaskSnapshot }
+export interface TeamTaskUpdatedEvent { type: "team.task.updated"; version: 1; at: string; teamId: string; task: TaskSnapshot }
+
+/** The team/* audit family. */
+export type TeamAuditEvent = TeamCreatedEvent | TeamMemberProvisionedEvent | TeamMemberSettledEvent | TeamMessageQueuedEvent | TeamMessageDeliveredEvent | TeamTaskCreatedEvent | TeamTaskUpdatedEvent
+
+export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent | MessageEvent | MessageTruncatedEvent | CompactionEvent | MemoryEvent | SystemEvent | SandboxCheckedEvent | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent | TeamAuditEvent

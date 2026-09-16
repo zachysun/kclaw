@@ -165,6 +165,29 @@ export interface KclawConfig {
     /** Live BACKGROUND subagents allowed per parent session (issue #22), counted separately from maxConcurrent. Default 4. */
     maxBackground?: number
   }
+  /**
+   * Agent team. Optional only because
+   * older config files predate it; defaults in defaultConfig. Invalid values
+   * fall back per-field with one warning (parseConfig).
+   */
+  team?: {
+    /** Team-state directory name under the workspace. Default ".agent-teams". */
+    stateDir?: string
+    /** Roster cap, failed spawns included. Default 8. */
+    maxMembers?: number
+    /** Concurrently running members (idle members are free). Default 4. */
+    maxActive?: number
+    mailbox?: {
+      /** Unread entries allowed per inbox; over-cap sends fail loudly. Default 64. */
+      maxUnreadPerTarget?: number
+      /** Single-message byte cap. Default 65536. */
+      maxMessageBytes?: number
+    }
+    taskBoard?: {
+      /** Total tasks (terminal states included); over-cap creation fails loudly. Default 64. */
+      maxTasks?: number
+    }
+  }
   workspace: string
 }
 
@@ -188,6 +211,13 @@ export const defaultConfig: KclawConfig = {
   usage: { prices: {} },
   mcp: { servers: {} },
   subagents: { maxConcurrent: 4, maxBackground: 4 },
+  team: {
+    stateDir: ".agent-teams",
+    maxMembers: 8,
+    maxActive: 4,
+    mailbox: { maxUnreadPerTarget: 64, maxMessageBytes: 65536 },
+    taskBoard: { maxTasks: 64 },
+  },
   workspace: process.cwd(),
 }
 
@@ -274,7 +304,65 @@ function parseConfig(raw: string, path: string, format: "json" | "yaml"): KclawC
   // (target < ahead < at < panic) fall back to the module defaults with one
   // warning; the pack line is validated independently (decoupled by design).
   validateWaterlineConfig(merged.sessions)
+  validateTeamConfig(merged)
   return merged
+}
+
+/**
+ * Team section validation: a non-mapping section falls back wholesale; a
+ * negative/zero number or a multi-segment stateDir falls back per field,
+ * each with one warning (the waterline style — never throw, never silently
+ * keep a value that would break the team directory layout).
+ */
+function validateTeamConfig(merged: KclawConfig): void {
+  const team = merged.team
+  if (team === undefined) return
+  const fallback = () => {
+    console.warn("kclaw config: team section is not a mapping; falling back to defaults")
+    merged.team = structuredClone(defaultConfig.team)
+  }
+  if (!isPlainObject(team)) {
+    fallback()
+    return
+  }
+  const positiveInt = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value > 0
+  if (team.stateDir !== undefined && (typeof team.stateDir !== "string" || team.stateDir.trim() === "" || team.stateDir.includes("/") || team.stateDir.includes("\\"))) {
+    console.warn(`kclaw config: team.stateDir ${JSON.stringify(team.stateDir)} is invalid; falling back to ".agent-teams"`)
+    team.stateDir = ".agent-teams"
+  }
+  for (const [label, value, reset] of [
+    ["team.maxMembers", team.maxMembers, 8],
+    ["team.maxActive", team.maxActive, 4],
+  ] as const) {
+    if (value !== undefined && !positiveInt(value)) {
+      console.warn(`kclaw config: ${label} ${String(value)} is invalid; falling back to ${reset}`)
+      ;(team as { maxMembers?: number; maxActive?: number })[label === "team.maxMembers" ? "maxMembers" : "maxActive"] = reset
+    }
+  }
+  if (team.mailbox !== undefined) {
+    if (!isPlainObject(team.mailbox)) {
+      console.warn("kclaw config: team.mailbox is not a mapping; falling back to defaults")
+      team.mailbox = { maxUnreadPerTarget: 64, maxMessageBytes: 65536 }
+    } else {
+      if (team.mailbox.maxUnreadPerTarget !== undefined && !positiveInt(team.mailbox.maxUnreadPerTarget)) {
+        console.warn(`kclaw config: team.mailbox.maxUnreadPerTarget ${String(team.mailbox.maxUnreadPerTarget)} is invalid; falling back to 64`)
+        team.mailbox.maxUnreadPerTarget = 64
+      }
+      if (team.mailbox.maxMessageBytes !== undefined && !positiveInt(team.mailbox.maxMessageBytes)) {
+        console.warn(`kclaw config: team.mailbox.maxMessageBytes ${String(team.mailbox.maxMessageBytes)} is invalid; falling back to 65536`)
+        team.mailbox.maxMessageBytes = 65536
+      }
+    }
+  }
+  if (team.taskBoard !== undefined) {
+    if (!isPlainObject(team.taskBoard)) {
+      console.warn("kclaw config: team.taskBoard is not a mapping; falling back to defaults")
+      team.taskBoard = { maxTasks: 64 }
+    } else if (team.taskBoard.maxTasks !== undefined && !positiveInt(team.taskBoard.maxTasks)) {
+      console.warn(`kclaw config: team.taskBoard.maxTasks ${String(team.taskBoard.maxTasks)} is invalid; falling back to 64`)
+      team.taskBoard.maxTasks = 64
+    }
+  }
 }
 
 /**

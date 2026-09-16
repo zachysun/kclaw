@@ -1,7 +1,7 @@
 import type {
   CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
-  SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SessionEvent, SystemEvent,
+  SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SessionEvent, SystemEvent, TeamAuditEvent,
 } from "../protocol/session-events.js"
 import type { SessionMeta } from "./store.js"
 
@@ -12,7 +12,7 @@ import type { SessionMeta } from "./store.js"
 export type {
   CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
-  SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SystemEvent,
+  SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SystemEvent, TeamAuditEvent,
 } from "../protocol/session-events.js"
 
 export function isMessageEvent(e: SessionEvent): e is MessageEvent { return e.type === "message" }
@@ -112,6 +112,13 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
     case "run.started":
     case "run.ended":
     case "permission.decided": break // 审计事件：只留痕，不动投影
+    case "team.created":
+    case "team.member.provisioned":
+    case "team.member.settled":
+    case "team.message.queued":
+    case "team.message.delivered":
+    case "team.task.created":
+    case "team.task.updated": break // 团队审计事件：真相在团队目录，事件只留痕，不动投影
     default: {
       const unhandled: never = event
       void unhandled

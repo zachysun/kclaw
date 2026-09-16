@@ -30,7 +30,7 @@ export interface QueueEntry {
   messageId: string                       // 分配即固定；出队执行时用同一 id 构建 Message
   disposition: SendDisposition
   text: string
-  trigger: "user" | "job" | "agent"          // 还原触发源（job 的 note/触发语义在出队执行时需要；agent = subagent 派生的子 run）
+  trigger: "user" | "job" | "agent" | "team"  // 还原触发源（job 的 note/触发语义在出队执行时需要；agent = subagent 派生的子 run；team = 团队收信箱投递/派活，按常规处置走 steer 注入）
   attachments?: AttachmentRef[]
   note?: string                           // job 来源说明
   enqueuedAt: string                      // ISO-8601
@@ -77,6 +77,10 @@ export interface SendMessageFrame {
   text: string
   disposition?: SendDisposition
   attachments?: AttachmentRef[]
+  /** Agent team targeted send: the member name to deliver to. Absent = the
+   * session itself (the lead). The message also lands in the lead's history
+   * with a forwarding marker, per the team spec's user-to-member path. */
+  target?: string
 }
 
 /**
