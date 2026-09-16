@@ -157,13 +157,13 @@ describe("ModelView", () => {
     })
   })
 
-  it("edits an entry: name frozen, blank key stays blank in the payload, fetch rides the stored key", async () => {
+  it("edits an entry: name stays editable (blank keeps it), blank key stays blank in the payload, fetch rides the stored key", async () => {
     const api = fakeApi()
     const { container } = await mount(api)
     await act(async () => {
       q(container, "model-edit-ds").click()
     })
-    expect((q(container, "model-form-name") as HTMLInputElement).disabled).toBe(true)
+    expect((q(container, "model-form-name") as HTMLInputElement).disabled).toBe(false)
     expect((q(container, "model-form-key") as HTMLInputElement).placeholder).toContain("留空保持不变")
     await act(async () => {
       q(container, "model-form-fetch").click()
@@ -171,7 +171,7 @@ describe("ModelView", () => {
     await flush()
     // 编辑态：按名字探测（存量密钥），地址/格式用表单当前值覆盖
     expect(api.post).toHaveBeenCalledWith("/providers/models", { name: "ds", format: "openai", baseUrl: "https://api.deepseek.com/v1" })
-    // 拉到列表后模型字段变下拉，选一个再保存
+    // 拉到列表后模型字段变下拉，选一个再保存；名字没改 → payload 不带 name
     selectValue(q(container, "model-form-model-select") as HTMLSelectElement, "deepseek-reasoner")
     await act(async () => {
       q(container, "model-form-submit").click()
@@ -180,6 +180,26 @@ describe("ModelView", () => {
     expect(api.patch).toHaveBeenCalledWith("/providers/ds", {
       entry: { format: "openai", baseUrl: "https://api.deepseek.com/v1", apiKey: "", model: "deepseek-reasoner" },
     })
+  })
+
+  it("renames an entry on edit: the patch carries the new name and the chat page hears about it", async () => {
+    const api = fakeApi()
+    const { container } = await mount(api)
+    const changed: string[] = []
+    window.addEventListener("kclaw:providers-changed", () => changed.push("x"))
+    await act(async () => {
+      q(container, "model-edit-claude").click()
+    })
+    typeValue(q(container, "model-form-name") as HTMLInputElement, "claude-2")
+    await act(async () => {
+      q(container, "model-form-submit").click()
+    })
+    await flush()
+    expect(api.patch).toHaveBeenCalledWith("/providers/claude", {
+      name: "claude-2",
+      entry: { format: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "", model: "claude-sonnet-4", contextWindow: 200000 },
+    })
+    expect(changed).toHaveLength(1)
   })
 
   it("verify posts the name probe and reports success via the notice", async () => {

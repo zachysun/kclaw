@@ -16,6 +16,7 @@ import { parseSlashInput, skillCommandMeta } from "@kclaw/core/commands"
 import { isPermissionMode, type PermissionMode } from "@kclaw/core/permission-modes"
 import type { ConfirmationDecision } from "@kclaw/core/protocol"
 import { ApiError, type ApiClient } from "../api.js"
+import { PROVIDERS_CHANGED } from "../events.js"
 import { WsAuthError, type WsClient } from "../ws.js"
 import {
   adoptQueuedId,
@@ -367,11 +368,20 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   const [models, setModels] = useState<string[]>([])
   const [currentModel, setCurrentModel] = useState<string | undefined>(sessionModel)
 
-  useSilentFetch(
-    () => api.get<{ providers?: { entries?: Record<string, unknown> } }>("/config"),
-    (cfg) => setModels(Object.keys(cfg.providers?.entries ?? {})),
-    [api],
-  )
+  // Provider entries feed the model selector. This panel stays mounted across
+  // tab switches, so it rereads /config whenever a provider mutation happens
+  // (ModelView fires the event) — a freshly added entry is selectable at once.
+  const refreshModels = useCallback((): void => {
+    api
+      .get<{ providers?: { entries?: Record<string, unknown> } }>("/config")
+      .then((cfg) => setModels(Object.keys(cfg.providers?.entries ?? {})))
+      .catch(() => undefined)
+  }, [api])
+  useEffect(() => {
+    refreshModels()
+    window.addEventListener(PROVIDERS_CHANGED, refreshModels)
+    return () => window.removeEventListener(PROVIDERS_CHANGED, refreshModels)
+  }, [refreshModels])
 
   const handleSwitchModel = useCallback((name: string) => {
     api
