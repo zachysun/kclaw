@@ -50,6 +50,7 @@ const KIND_LABELS: Record<AuditRowKind, string> = {
   run: "run",
   decision: "permission",
   truncation: "truncation",
+  team: "team",
 }
 
 const TIME_PRESETS: Array<{ value: TimePreset; label: string }> = [

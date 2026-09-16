@@ -1759,6 +1759,242 @@ select:focus {
   color: var(--danger);
 }
 
+/* agent team — the in-chat panel: member cards on top, the shared task
+   board below. Folded state shows just the one-line head. */
+.team-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  margin-bottom: var(--space-3);
+}
+
+.team-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 8px 12px;
+  cursor: pointer;
+  font-weight: 600;
+  list-style: none;
+}
+
+.team-panel-head::-webkit-details-marker {
+  display: none;
+}
+
+.team-panel-head::before {
+  content: "▸";
+  color: var(--accent);
+  margin-right: 6px;
+}
+
+.team-panel[open] .team-panel-head::before {
+  content: "▾";
+}
+
+.team-panel-meta {
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.team-panel-body {
+  border-top: 1px solid var(--border);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.team-members {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.team-member-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.team-member-card:hover {
+  background: var(--surface-2);
+}
+
+.team-member-card.active {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+}
+
+.team-member-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  min-width: 96px;
+}
+
+.team-member-sub {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.team-member-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.team-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
+  text-transform: none;
+}
+
+.team-badge.provisioning {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--danger-dim);
+}
+
+.team-badge.busy {
+  color: var(--accent-strong);
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+}
+
+.team-badge.failed {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.team-talk,
+.team-stop,
+.team-trail {
+  font-size: 11px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+
+.team-talk.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.team-stop:hover {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.team-trail:hover {
+  border-color: var(--border-hover);
+  color: var(--text);
+}
+
+.team-board-stats {
+  display: flex;
+  gap: var(--space-3);
+  font-size: 12px;
+  color: var(--muted);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.team-board-empty {
+  font-size: 12px;
+  padding: var(--space-2) 0;
+}
+
+.team-task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.team-task-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: 3px 0;
+  border-bottom: 1px solid var(--row-stripe);
+  font-size: 13px;
+}
+
+.team-task-row:last-child {
+  border-bottom: none;
+}
+
+.team-task-subject {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.team-task-meta {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.team-task-completed .team-task-subject {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.team-task-in_progress .team-task-subject {
+  color: var(--accent-strong);
+}
+
+.team-task-failed .team-task-subject {
+  color: var(--danger);
+}
+
+/* the "→ 组员 X" chip in the composer while talking to a member */
+.team-target-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--accent-strong);
+  white-space: nowrap;
+  align-self: center;
+}
+
+.team-target-chip button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  color: var(--accent-strong);
+}
+
+.team-target-chip button:hover {
+  color: var(--text);
+}
+
 /* composer — the prompt line: amber ❯ then the input */
 .chat-composer {
   position: relative;

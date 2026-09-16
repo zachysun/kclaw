@@ -12,6 +12,7 @@ import { PERMISSION_MODES, type PermissionMode } from "@kclaw/core/permission-mo
 import type { AttachmentRef, ConfirmationDecision } from "@kclaw/core/protocol"
 import type { ChatState, ConfirmationCard, QuestionCard, RenderedBlock, RenderedMessage } from "./model.js"
 import { MarkdownText } from "./Markdown.js"
+import { TeamPanelCard, type TeamPanelData } from "./TeamPanel.js"
 import { IconButton } from "../ui/IconButton.js"
 import { PencilIcon, RefreshIcon } from "../ui/icons.js"
 
@@ -128,14 +129,26 @@ export interface ChatViewProps {
   /** 文件清单在后端被截断（仓库过大）：抽屉尾部显示一行提示。 */
   mentionTruncated?: boolean
   /**
-   * A child session (meta.parentSessionId set) is read-only to the user: the
+   * A child session (meta.parentSessionId set) is read-only: the
    * whole input area (model/mode selectors, attachments, composer) is replaced
    * by one hint line; the server's submit also rejects user-triggered posts.
    */
   readOnly?: boolean
+  /**
+   * Agent-team panel wiring: the panel payload plus the
+   * composer target. Undefined/null panel = this session has no team →
+   * nothing rendered. `target` shows the "→ 组员名" chip; onTalkTo(null)
+   * clears it back to the lead.
+   */
+  team?: {
+    panel: TeamPanelData
+    target: string | null
+    onTalkTo: (name: string | null) => void
+    onStopMember: (sessionId: string) => void
+  }
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, team }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Suggestion-menu state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -337,6 +350,15 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
         </div>
       )}
       <div className="chat-log" data-testid="chat-log">
+        {team !== undefined && (
+          <TeamPanelCard
+            panel={team.panel}
+            target={team.target}
+            onTalkTo={team.onTalkTo}
+            onStopMember={team.onStopMember}
+            onOpenAudit={onOpenAudit}
+          />
+        )}
         {view.messages.map((message, idx) => (
           <Fragment key={message.id}>
             {auditBars.filter((b) => b.insertIdx === idx).map((b) => (
@@ -505,6 +527,12 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
         </div>
       ) : (
         <form className="chat-composer" ref={composerRef} onSubmit={submit}>
+        {team !== undefined && team.target !== null && (
+          <div className="team-target-chip" data-testid="team-target-chip">
+            → 组员 {team.target}
+            <button type="button" data-testid="team-target-clear" aria-label="切回对组长说话" onClick={() => team.onTalkTo(null)}>×</button>
+          </div>
+        )}
         {completions.length > 0 && (
           <ul
             className="slash-menu"
