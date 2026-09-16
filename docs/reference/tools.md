@@ -55,6 +55,8 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | 子代理的 run（`childRun`） | 删 `memory_save`（记忆是主线的职责）；永不带 `subagent_run`（单层委派） |
 | readonly 权限模式 | 删全部 sensitive 工具（`exec` / `fs_write` / `fs_edit`）——可见性收窄，权限闸门仍是边界 |
 
+团队工具的注册条件按身份分化：`lead` 身份（含未建队的主线会话——"预备组长"，见 [agent-team](../core/agent-team.md)）注册全部七个；`member` 身份注册 `send_message` / `list_agents` / `task_*` 五个（不含建队/招募）；不在团队里的会话（job 会话、非组员的子代理会话）一个都没有。
+
 ## MCP 工具
 
 外部 MCP server 的工具不在此清单：每个 run 经 RunManager 的 `extraTools` 动态注入，名字与 schema 来自 server 侧（见 [mcp](../core/mcp.md)）。

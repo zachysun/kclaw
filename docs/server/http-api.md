@@ -32,9 +32,9 @@
 | GET | `/sessions` | 会话列表（updatedAt 新的在前） | 查询参数 `deleted=true` 返回回收站会话；缺省只返回未删除会话。两种情况都**不含子代理会话**（meta 带 `parentSessionId` 的会话不是列表一等公民），`children=true` 才列出（给定父的子代理排查用，见 [subagents](../core/subagents.md)） | `SessionMeta[]` |
 | GET | `/sessions/:id` | 读单个会话元数据 | — | `SessionMeta` |
 | PATCH | `/sessions/:id` | 改名 | `{title?}`（非空字符串；body 里的 `workdir` 被解析但**不生效**，只有 title 传给 `updateMeta`） | `SessionMeta` |
-| DELETE | `/sessions/:id` | 软删除（移入回收站，标记 `deleted`/`deletedAt`）；**先取消该会话在跑的后台子代理与团队组员 run**，再级联软删其全部子代理会话（不留孤儿，见 [subagents](../core/subagents.md)、[agent-team](../core/agent-team.md)） | — | `SessionMeta` |
+| DELETE | `/sessions/:id` | 软删除（移入回收站，标记 `deleted`/`deletedAt`）；**先取消该会话在跑的后台子代理与团队组员 run**，再级联软删其全部子代理会话（不留孤儿，见 [subagents](../core/subagents.md)、[agent-team](../core/agent-team.md)）；若本会话是组长，团队目录随之一并归档（见 agent-team） | — | `SessionMeta` |
 | POST | `/sessions/:id/restore` | 从回收站恢复（清除 `deleted`/`deletedAt`） | — | `SessionMeta` |
-| POST | `/sessions/:id/purge` | 永久删除（整个会话目录删除）；**先取消该会话在跑的后台子代理与团队组员 run**，再级联永久删除其全部子代理会话 | — | `{ok: true}` |
+| POST | `/sessions/:id/purge` | 永久删除（整个会话目录删除）；**先取消该会话在跑的后台子代理与团队组员 run**，再级联永久删除其全部子代理会话；团队目录同样归档 | — | `{ok: true}` |
 | POST | `/sessions/:id/model` | 会话级模型切换（只影响此会话**之后**的 run，历史不动） | `{model?}`：provider 条目名（entry key，见 [run-manager](./run-manager.md) 的模型解析）或裸模型名；`""`/缺省清空回落默认；类型不对 400 `model must be a string`，条目不存在 400 `model not found: <name>` | `SessionMeta` |
 | POST | `/sessions/:id/mode` | 会话级权限模式切换（只影响此会话**之后**的 run，历史不动；机制见 [permissions](../core/permissions.md)） | `{mode: "readonly"\|"default"\|"acceptEdits"\|"trusted"\|"auto"}` 必填；非法值 400 `mode must be one of readonly \| default \| acceptEdits \| trusted \| auto` | `SessionMeta` |
 | GET | `/sessions/:id/team` | agent 团队面板数据（机制见 [agent-team](../core/agent-team.md)） | — | `{team, identity: "lead"\|"member", members, tasks}`（团队、本会话身份、组员名单含忙闲与当前任务、任务板快照）；会话不在任何团队 404 |
@@ -124,7 +124,7 @@ interface Job {
 |------|------|------|------|
 | GET | `/providers` | Model 页快照：条目（key 掩码）+ 默认条目 + 内置预设目录 | `{default, entries, presets}`；`entries` 形状同 `config.providers.entries` 但 apiKey 已掩码 |
 | POST | `/providers` | 新增一个条目 | 请求 `{name, entry}`；名字限定字母/数字/下划线/连字符（会话 meta 与 `/model` 命令按名引用）；`entry` 经 `parseProviderEntry` 校验（format 必须是 `openai`/`anthropic`，baseUrl 须 http(s)，model 必填，apiKey 可空，`contextWindow`/`maxOutput` 声明时必须为正数）；重复 409、形状非法 400；返回 `{ok, default, entries, presets}` |
-| PATCH | `/providers/:name` | 整体替换一个条目 | 请求 `{entry}`；`apiKey` 为空 = 保留存量密钥（UI 只有掩码值）；名字未知 404 |
+| PATCH | `/providers/:name` | 整体替换一个条目，可同时改名 | 请求 `{entry}`，可带 `{name}`（新名字，与旧名不同即改名）；`apiKey` 为空 = 保留存量密钥（UI 只有掩码值）；改名时把条目键整体迁移，`providers.default` 与记忆提取/向量检索的引用（`memory.extractModel`、`memory.embedding.provider`）一并跟随；会话级引用保留旧名（下个 run 回落默认条目，与删除同语义）；名字未知 404、改名目标已存在 409 |
 | DELETE | `/providers/:name` | 删除一个条目 | 默认条目 409（先切默认再删）；被会话引用**不阻断**（引用方下个 run 回落默认条目，WebUI 删除前自行提示）；名字未知 404 |
 | POST | `/providers/:name/default` | 把该条目设为默认 | 名字未知 404 |
 | POST | `/providers/models` | 模型列表探测（兼作连接验证） | 请求 `{name}`（用存量条目的真实密钥探测，`format`/`baseUrl`/`apiKey` 字段可逐项覆盖——编辑表单的草稿值探测）或 `{format, baseUrl, apiKey?}`（新建表单直探）；成功 `{ok: true, models: string[]}`，探测失败（端点不可达、密钥错误、响应形状不对等一律）502 `{ok: false, error}` |

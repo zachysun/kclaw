@@ -85,6 +85,8 @@ export function resolvePaths(home?: string): KclawPaths
 | `team.maxActive` | `4` | 同时运行的组员上限；满员时新信在收信箱排队等空闲边投递 |
 | `team.mailbox.maxUnreadPerTarget` / `maxMessageBytes` | `64` / `65536` | 单个收信箱未读上限 / 单条信字节上限，超限投递方收到 error 结果 |
 | `team.taskBoard.maxTasks` | `64` | 任务板总量上限（含终态任务），超限建任务报错 |
+
+团队协作的状态目录在工作区 `.kclaw/teams/<队名>/`（团队记录 + 组员名单 + 收信箱）与 `.kclaw/tasks/<队名>/`（任务快照 + 进行中锁），与项目档权限规则共用 `.kclaw` 根；目录结构、对账与崩溃恢复语义见 [agent-team](./agent-team.md)。
 | `notify.channels` | `[]` | 定时任务终态通知渠道列表；为空即关闭（零开销）。条目 `{ name?, type, url, template? }`，`type` 三种：`bark`（POST JSON `{title, body}`）、`serverchan`（POST 表单 `title`+`desp`）、`webhook`（POST JSON，正文含 title/body 及全部 job 字段）。`template` 占位符：`{{job}}` `{{statusText}}` `{{status}}` `{{summary}}` `{{sessionId}}` `{{sessionUrl}}`，未知占位符渲染为空串 |
 | `notify.timeoutMs` | `10000` | 单次推送请求超时；推送失败只记日志、不重试 |
 | `hooks.timeoutMs` | `5000` | 单个钩子处理函数的执行预算（毫秒），超时按失败处理（用户钩子 skip、内置钩子 fatal，见 [hooks](./hooks.md)）；可选字段，缺省值在钩子链构建处补齐 |

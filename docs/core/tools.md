@@ -140,7 +140,7 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 
 ### team 工具（`tools/team.ts`）
 
-七个工具都是团队宿主 facade（server 侧）的薄壳：校验参数类型 → 调 facade → 把返回值整形为工具结果，协作机制本身（目录、收信箱、任务板、投递）见 [agent-team](./agent-team.md)。**`create_team`** 建队并使本会话成为组长（一个会话只属一个队，重复建队是 error 结果）；**`spawn_teammate`** `{name, task?, role?, model?}` 招募组员——名字 `[a-z][a-z0-9-]{0,31}`、保留名 `lead`，建持久子会话并固化模型快照；**`send_message`** `{to, text}` 写信（组员的缺省目标是组长），超长/超限是响亮的 error 结果；**`list_agents`** 列名单；**`task_create` / `task_update` / `task_list`** 操作任务板，`task_update` 必须回传 `expected_revision` 做比对再交换（CAS），认领未认领任务时自动填自己的名字。全部 `risk: "safe"`——动作只写团队目录，不碰工作区；改状态类（建队/招募/建任务/改任务）是 `serial`（同一批调用里不与别的工具重叠）。注册**条件性且按身份收缩**：非团队会话一个都没有；组员的面不含 `create_team`/`spawn_teammate`（不能建队、不能招募——团队不递归）。
+七个工具都是团队宿主 facade（server 侧）的薄壳：校验参数类型 → 调 facade → 把返回值整形为工具结果，协作机制本身（目录、收信箱、任务板、投递）见 [agent-team](./agent-team.md)。**`create_team`** 建队并使本会话成为组长（一个会话只属一个队，重复建队是 error 结果）；**`spawn_teammate`** `{name, task, role?, model?}` 招募组员——名字 `[a-z][a-z0-9-]{0,31}`、保留名 `lead`，`task` 是必填的初始任务，建持久子会话并固化模型快照；**`send_message`** `{to?, text}` 写信（组员的缺省目标是组长、可不填 `to`；组长必须显式指名收件人），超长/超限是响亮的 error 结果；**`list_agents`** 列名单；**`task_create` / `task_update` / `task_list`** 操作任务板，`task_update` 必须回传 `expected_revision` 做比对再交换（CAS），认领未认领任务时自动填自己的名字。全部 `risk: "safe"`——动作只写团队目录，不碰工作区；改状态类（建队/招募/建任务/改任务）是 `serial`（同一批调用里不与别的工具重叠）。注册**条件性且按身份收缩**：不在团队里的会话（job 会话、非组员的子代理会话）一个都没有；组员的面不含 `create_team`/`spawn_teammate`（不能建队、不能招募——团队不递归）。
 
 ---
 
