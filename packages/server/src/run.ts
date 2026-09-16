@@ -49,6 +49,7 @@ import {
   type SessionStore,
   type SubagentCollector,
   type SubagentSpawner,
+  type TeamFacade,
   type ToolDefinition,
   type ToolExecutor,
   type UsageStore,
@@ -130,6 +131,12 @@ export interface RunManagerDeps {
     spawner: SubagentSpawner
     collector?: SubagentCollector
   }
+  /**
+   * Agent team: flows into every run's engine deps — the
+   * assembly probes the facade once per run for the session's team identity
+   * (lead protocol + full tool surface / member persona + member surface).
+   */
+  team?: { facade: TeamFacade }
   /** Per-run token ledger (optional; recording failures are swallowed). */
   usageStore?: UsageStore
   /**

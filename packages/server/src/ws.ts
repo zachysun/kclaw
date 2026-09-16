@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify"
 import type { SessionStore } from "@kclaw/core"
 import type { EventBus } from "@kclaw/core"
 import type { RunManager } from "./run.js"
+import type { TeamHost } from "./team.js"
 import { tokenEquals } from "./auth.js"
 import { checkCommandFrame } from "./command-check.js"
 import type { ConfirmationActor } from "@kclaw/core"
@@ -32,6 +33,12 @@ export interface WsOptions {
    * ("run manager not available").
    */
   run?: RunManager
+  /**
+   * The team host (agent-team): when set, a `send_message` carrying a
+   * `target` (a member name) is delivered through the team mailbox instead
+   * of a plain run on the session.
+   */
+  team?: TeamHost
   /**
    * Pre-auth timeout in ms: a connection that has not authenticated when it
    * fires is closed with 4002. Test-injection seam — the daemon runs on the
@@ -198,7 +205,7 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
     opts.bus.connect(socket)
   }
 
-  socket.on("message", (raw) => {
+  socket.on("message", async (raw) => {
     let frame: unknown
     try {
       frame = JSON.parse(frameText(raw))
@@ -268,7 +275,21 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
         if (run === undefined) {
           return send(socket, { type: "error", message: "run manager not available" })
         }
-        const { sessionId, text, disposition, attachments } = check.command
+        const { sessionId, text, disposition, attachments, target } = check.command
+        // Team-targeted send: through the mailbox to one member (the session
+        // must be the team lead); the ack carries the mailbox entry id.
+        if (target !== undefined) {
+          const team = opts.team
+          if (team === undefined) {
+            return send(socket, { type: "error", message: "team host not available" })
+          }
+          try {
+            const r = await team.deliverUserToMember(sessionId, target, text)
+            return send(socket, { type: "send_message_ack", sessionId, messageId: r.id, queued: false })
+          } catch (err) {
+            return send(socket, { type: "error", message: err instanceof Error ? err.message : String(err) })
+          }
+        }
         // submit 同步决策：成功立即 ack（携带 messageId/queued），失败 error frame（无 ack）。
         // run 本身由驱动器异步执行，进度走 bus。
         try {
