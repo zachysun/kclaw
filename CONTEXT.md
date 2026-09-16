@@ -106,7 +106,7 @@ _Avoid_: 看板系统、任务列表（指 Claude Code 语境时除外）
 _Avoid_: 重试次数
 
 **Team Directory（团队目录）**:
-一支团队的全部持久状态所在的工作区目录 `.agent-teams/<teamId>/`：`team/` 放成员名单与收信箱，`task/` 放任务快照。
+一支团队的全部持久状态所在的工作区目录：`.kclaw/teams/<队名>/` 放团队记录、成员名单与收信箱，`.kclaw/tasks/<队名>/` 放任务快照与执行锁。
 _Avoid_: 状态目录、TeamStore
 
 ### 界面
