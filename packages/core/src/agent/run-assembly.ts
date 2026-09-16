@@ -54,6 +54,8 @@ import type { PermissionGate, RunOutcome } from "./loop.js"
 import { runAgent } from "./loop.js"
 import { assembleSystemPrompt } from "./system-prompt.js"
 import { subagentSystemPrompt, type SubagentCollector, type SubagentSpawner } from "./subagent.js"
+import { teamLeadProtocol, teamMemberSystemPrompt } from "../team/prompt.js"
+import type { TeamFacade, TeamIdentity } from "../team/facade.js"
 import type { SessionSearchFn } from "../tools/session.js"
 import type { ToolExecutor } from "./tools.js"
 import { createBuiltinTools, deriveToolFacts, dropSensitiveTools } from "../tools/index.js"
@@ -90,7 +92,8 @@ export type LlmRetrySink = (info: { attempt: number; error: unknown }) => void
  */
 export interface EnqueueInput {
   userText: string
-  trigger: "user" | "job" | "agent"
+  /** team = 团队收信箱投递/任务派活（引擎或宿主发起）：不走技能/文件点名包装，处置按提交方显式声明（常规派活=steer）。 */
+  trigger: "user" | "job" | "agent" | "team"
   /**
    * Per-run model override (a job's configured model, or a client-forced
    * one). Priority per run: input.model > session meta model > daemon
@@ -191,6 +194,15 @@ export interface RunEngineDeps {
    * session meta's parentSessionId, not this flag).
    */
   subagents?: { spawner: SubagentSpawner; collector?: SubagentCollector }
+  /**
+   * Agent team: the server-side team facade. When set,
+   * every run probes it once for the session's team identity — lead gets the
+   * lead protocol plus the full team tool surface, a member runs the member
+   * persona with the member surface, no team changes nothing. The facade
+   * lives with the daemon (it spawns sessions and dispatches runs); core
+   * only programs against the interface.
+   */
+  team?: { facade: TeamFacade }
   /** Per-run token ledger (optional; recording failures are swallowed). */
   usageStore?: UsageStore
   /**
@@ -306,6 +318,19 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // source of child identity — lean prompt, narrow tool surface, hook
   // skippings and usage attribution all derive from it (issue #16).
   const childRun = sessionMeta?.parentSessionId !== undefined
+  // Team identity probe: one query per run — the host's facade answers
+  // lead / member(name) / none from the team directory. A mainline session
+  // with no team yet still gets a provisional lead identity so the team
+  // surface (create_team first) is reachable — every other team action hits
+  // the facade's loud conflict until the team exists. Child runs and job
+  // sessions register no team tools at all.
+  const teamIdentity =
+    engine.deps.team === undefined
+      ? null
+      : (await engine.deps.team.facade.describeSession(sessionId)) ??
+        (childRun || input.trigger === "job"
+          ? null
+          : { role: "lead" as const, teamId: "", sessionId })
 
   // 用户 hooks 每 run 现扫：改文件下一轮生效（与技能同心智）。新装载失败经
   // registry 去重后发一次 hook.failed(load) 事件。
@@ -444,6 +469,9 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       emit: (type, payload) => busEmit(makeEvent(type, payload, eventCtx())),
     },
     ...(childRun ? { childRun: true } : {}),
+    ...(engine.deps.team !== undefined && teamIdentity !== null
+      ? { team: { facade: engine.deps.team.facade, identity: teamIdentity } }
+      : {}),
   })
   // test/adapter seam: per-name executor overrides on top of the
   // builtins; toolDefs stay the builtins' — an override replaces behavior,
@@ -735,7 +763,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     chain,
     sessions,
     sessionId,
-    base: childRun ? subagentSystemPrompt(workspace) : systemPrompt(paths.agentsMd),
+    base: resolveBasePrompt({ childRun, team: teamIdentity, workspace, agentsMd: paths.agentsMd }),
     baseline: sessionMeta?.systemBaseline,
     toolDefs,
   })
@@ -840,4 +868,24 @@ function systemPrompt(agentsMd: string): string {
     // missing/unreadable AGENTS.md → default persona
   }
   return DEFAULT_SYSTEM_PROMPT
+}
+
+/**
+ * Base-persona selection (the stable segment's head, agent-team): a member
+ * runs the lean member template, the lead appends the team protocol to the
+ * mainline persona — the baseline comparison re-freezes the changed stable
+ * segment, so the protocol hot-applies on the first run after create_team —
+ * a plain subagent child keeps the subagent template, everyone else gets the
+ * mainline persona unchanged.
+ */
+export function resolveBasePrompt(opts: {
+  childRun: boolean
+  team: TeamIdentity | null
+  workspace: string
+  agentsMd: string
+}): string {
+  if (opts.team?.role === "member") return teamMemberSystemPrompt(opts.workspace, opts.team.name)
+  const main = systemPrompt(opts.agentsMd)
+  if (opts.team?.role === "lead") return `${main}\n\n${teamLeadProtocol()}`
+  return opts.childRun ? subagentSystemPrompt(opts.workspace) : main
 }

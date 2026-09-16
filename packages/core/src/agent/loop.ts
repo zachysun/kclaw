@@ -32,7 +32,7 @@ export interface RunInput {
   history: Message[]
   system: string
   userText: string
-  trigger?: "user" | "job" | "agent"
+  trigger?: "user" | "job" | "agent" | "team"
   /**
    * Pre-built user message for this run (daemon-side composition): when set,
    * the loop uses it verbatim instead of synthesizing one from `userText`
