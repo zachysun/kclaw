@@ -12,7 +12,7 @@
  *   model claims it with task_update (attempt minted by the store's CAS).
  * - the panel route serves the whole team view; non-team sessions 404.
  * - delete cascade: cancelMembersForLead stops a running member and the team
- *   directory is archived under `.agent-teams/archive/`.
+ *   directory is archived under `.kclaw/teams/.archive/`.
  * - delivery is marked only on target-side land; a second send while the
  *   first input is still in flight never renders the same entry twice.
  * - crash recovery: an idle member holding an in_progress task gets one
@@ -126,7 +126,7 @@ async function makeTeamEnv(llm: LlmClient, teamCfg?: KclawConfig["team"]): Promi
       return managerRef
     },
   })
-  const manager = new RunManager({ config, paths, sessions, memory: makeMemoryFake(), bus, llm, workspace, team: { facade: host.facade } })
+  const manager = new RunManager({ config, paths, sessions, memory: makeMemoryFake(), bus, llm, workspace, team: { facade: host.facade }, onSessionIdle: (id) => host.pump(id) })
   managerRef = manager
   const app = await createApp({ home, token: TOKEN, stores: { sessions, config, paths }, bus, run: manager, team: host })
   apps.push(app)
@@ -139,8 +139,12 @@ function makeMemoryFake(): MemorySystem {
   return { searchEpisodes: async () => [], cognitionPrompt: () => "" } as unknown as MemorySystem
 }
 
-function teamDir(workspace: string): string {
-  return join(workspace, ".agent-teams")
+function teamsRoot(workspace: string): string {
+  return join(workspace, ".kclaw", "teams")
+}
+
+function tasksRoot(workspace: string): string {
+  return join(workspace, ".kclaw", "tasks")
 }
 
 describe("team host", () => {
@@ -148,8 +152,8 @@ describe("team host", () => {
     const { sessions, host, workspace } = await makeTeamEnv(scriptedLlm(endTurn("ok")))
     const lead = sessions.create("组长", undefined, workspace)
     const created = await host.facade.createTeam(lead.id, "crew")
-    expect(created.teamId).toBe(lead.id)
-    const record = JSON.parse(readFileSync(join(teamDir(workspace), created.teamId, "team.json"), "utf8")) as Record<string, unknown>
+    expect(created.teamId).toBe("crew")
+    const record = JSON.parse(readFileSync(join(teamsRoot(workspace), "crew", "config.json"), "utf8")) as Record<string, unknown>
     expect(record.leadSessionId).toBe(lead.id)
     expect(record.name).toBe("crew")
     expect(await host.facade.describeSession(lead.id)).toEqual({ role: "lead", teamId: created.teamId, sessionId: lead.id })
@@ -157,6 +161,16 @@ describe("team host", () => {
     const events = sessions.readEvents(lead.id).filter((e) => e.type.startsWith("team."))
     expect(events.some((e) => e.type === "team.created")).toBe(true)
     await expect(host.facade.createTeam(lead.id)).rejects.toThrow(/already belongs to a team/)
+  })
+
+  it("a second team with the same name in the workspace is refused (names are the directories)", async () => {
+    const llm = scriptedLlm(endTurn("ok"))
+    const { sessions, host, workspace } = await makeTeamEnv(llm)
+    const lead = sessions.create("组长", undefined, workspace)
+    const other = sessions.create("别组组长", undefined, workspace)
+    await host.facade.createTeam(lead.id, "crew")
+    await expect(host.facade.createTeam(other.id, "crew")).rejects.toThrow(/already in use/)
+    await expect(host.facade.createTeam(other.id, "has space")).rejects.toThrow(/invalid team name/)
   })
 
   it("spawn_teammate provisions a persistent child, delivers the initial task and runs it", async () => {
@@ -226,7 +240,7 @@ describe("team host", () => {
       const snapshot = host.facade.taskList({ role: "lead", teamId, sessionId: lead.id })
       return snapshot.then((r) => r.tasks[0]?.status === "in_progress" && r.tasks[0]?.assignee === "builder")
     })
-    const board = JSON.parse(readFileSync(join(teamDir(workspace), teamId, "task", "1.json"), "utf8")) as Record<string, unknown>
+    const board = JSON.parse(readFileSync(join(tasksRoot(workspace), teamId, "task-1.json"), "utf8")) as Record<string, unknown>
     expect(board.attempt).toBe(1)
     expect(typeof board.attemptId).toBe("string")
     // The dispatch text reached the member's run input.
@@ -252,7 +266,7 @@ describe("team host", () => {
     expect(panel.tasks).toHaveLength(1)
     // Directory stays out of the workspace's version control.
     const gitignore = readFileSync(join(workspace, ".gitignore"), "utf8")
-    expect(gitignore).toContain(".agent-teams/")
+    expect(gitignore).toContain(".kclaw/")
   })
 
   it("the delete cascade cancels a running member (no parent-stop at runtime, only at deletion)", async () => {
@@ -344,17 +358,18 @@ describe("team host", () => {
     await sleep(200) // let trailing idle-edge pumps settle before teardown
   })
 
-  it("deleting the lead archives the team directory under .agent-teams/archive/", async () => {
+  it("deleting the lead archives the team under .kclaw/{teams,tasks}/.archive/", async () => {
     const llm = scriptedLlm(endTurn("ok"))
     const { sessions, host, workspace, app } = await makeTeamEnv(llm)
     const lead = sessions.create("组长", undefined, workspace)
     const { teamId } = await host.facade.createTeam(lead.id)
-    expect(existsSync(join(teamDir(workspace), teamId))).toBe(true)
+    expect(existsSync(join(teamsRoot(workspace), teamId))).toBe(true)
     const res = await app.inject({ method: "DELETE", url: `/sessions/${lead.id}`, headers: { authorization: `Bearer ${TOKEN}` } })
     expect(res.statusCode).toBe(200)
-    expect(existsSync(join(teamDir(workspace), teamId))).toBe(false)
-    expect(existsSync(join(teamDir(workspace), "archive", teamId))).toBe(true)
-    const record = JSON.parse(readFileSync(join(teamDir(workspace), "archive", teamId, "team.json"), "utf8")) as Record<string, unknown>
+    expect(existsSync(join(teamsRoot(workspace), teamId))).toBe(false)
+    expect(existsSync(join(teamsRoot(workspace), ".archive", teamId))).toBe(true)
+    expect(existsSync(join(tasksRoot(workspace), ".archive", teamId))).toBe(true)
+    const record = JSON.parse(readFileSync(join(teamsRoot(workspace), ".archive", teamId, "config.json"), "utf8")) as Record<string, unknown>
     expect(record.leadSessionId).toBe(lead.id)
   })
 
@@ -385,6 +400,37 @@ describe("team host", () => {
     const bbb = userRuns.filter((m) => m.blocks.some((b) => b.type === "text" && b.text.includes("BBB-marker")))
     expect(aaa).toHaveLength(1)
     expect(bbb).toHaveLength(1)
+  })
+
+  it("a member report arriving during the lead's own chat run is delivered once, after it settles", async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    let call = 0
+    const llm: LlmClient = {
+      async *stream(): AsyncIterable<LlmStreamEvent> {
+        call++
+        if (call === 2) await gate // the lead's user chat run parks mid-stream
+        yield { type: "text_delta", delta: "done" }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+      },
+    }
+    const { sessions, host, manager, workspace } = await makeTeamEnv(llm)
+    const lead = sessions.create("组长", undefined, workspace)
+    const { teamId } = await host.facade.createTeam(lead.id)
+    const spawned = await host.facade.spawnTeammate({ role: "lead", teamId, sessionId: lead.id }, { name: "builder", task: "就位" })
+    await until(() => sessions.readMessages(spawned.sessionId).length >= 2) // the spawn-mail run settled
+    // The lead's own user chat run never passes through the team host — the
+    // host's dispatch ledger cannot see it (the old double-delivery window).
+    manager.submit(lead.id, { userText: "帮我看看这个", trigger: "user", disposition: "steer" })
+    await until(() => sessions.readMessages(lead.id).some((m) => m.blocks.some((b) => b.type === "text" && b.text.includes("帮我看看"))))
+    await host.facade.sendMessage({ role: "member", teamId, sessionId: spawned.sessionId, name: "builder" }, { to: { kind: "lead" }, text: "REPORT-marker" })
+    await sleep(150) // a busy lead must not take the dispatch now
+    expect(sessions.readMessages(lead.id).some((m) => m.blocks.some((b) => b.type === "text" && b.text.includes("REPORT-marker")))).toBe(false)
+    release()
+    await until(() => sessions.readMessages(lead.id).some((m) => m.role === "user" && m.blocks.some((b) => b.type === "text" && b.text.includes("REPORT-marker"))))
+    await sleep(250) // trailing idle edges settle
+    const reports = sessions.readMessages(lead.id).filter((m) => m.role === "user" && m.blocks.some((b) => b.type === "text" && b.text.includes("REPORT-marker")))
+    expect(reports).toHaveLength(1)
   })
 
   it("a fresh mainline session (no team yet) still carries the lead protocol — create_team stays reachable", async () => {

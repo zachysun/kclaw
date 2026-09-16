@@ -74,7 +74,8 @@ export interface PermissionDecidedEvent {
 
 // ---- Team audit events (the team/* family) ----
 // Trail only: the state truth lives in the team directory
-// (<workspace>/.agent-teams/<teamId>/); these events exist so the audit page
+// (<workspace>/.kclaw/teams/<team-name>/ and .kclaw/tasks/<team-name>/);
+// these events exist so the audit page
 // can render the coordination timeline on the lead's stream. They never touch
 // the meta projection, a write failure degrades to a warning (the team
 // operation itself proceeds), and none of them advances updatedAt. Every

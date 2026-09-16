@@ -1,27 +1,32 @@
 /**
  * Team directory store — the single state truth for one agent team, on disk
- * at `<workspace>/<stateDir>/<teamId>/`:
+ * under the workspace's `.kclaw/` (the same root the permissions decided
+ * rules use):
  *
- *   team.json              team record
- *   team/members.json      the member list (whole-file atomic rewrite)
- *   team/inbox/<name>.jsonl one inbox per recipient, append + status rewrite
- *   task/board.json        task-id counter
- *   task/<id>.json         one full task snapshot per file
+ *   .kclaw/teams/<team-name>/config.json        team record + member list
+ *   .kclaw/teams/<team-name>/inboxes/           one JSON inbox per recipient
+ *     team-lead.json                              (the lead's)
+ *     <member>.json                               (one per member)
+ *   .kclaw/tasks/<team-name>/task-<id>.json     one full task snapshot per file
+ *   .kclaw/tasks/<team-name>/current_tasks/     one lock file per executing task
  *
- * Semantics: atomic writes (tmp + rename) so a crash can
- * never truncate a file; every mutation runs under an in-process mutex (one
- * daemon = one writer); CAS on task revision; attempt/attemptId late-write
- * protection; "pending inbox entries = undelivered" is the crash-recovery
- * contract. Identity rules (who may claim/assign/transition) live in the
- * facade layer; the store enforces mechanics only.
+ * Semantics: atomic writes (tmp + rename) so a crash can never truncate a
+ * file; every mutation runs under an in-process mutex (one daemon = one
+ * writer); task ids are never reused (next = max existing + 1); CAS on task
+ * revision; attempt/attemptId late-write protection; "pending inbox entries =
+ * undelivered" is the crash-recovery contract. A current_tasks lock is the
+ * visible projection of "this task is executing": created when work starts,
+ * removed at a terminal state, reconciled against the task files when the
+ * store is first loaded (a leftover lock marks an interrupted execution).
+ * Identity rules (who may claim/assign/transition) live in the facade layer;
+ * the store enforces mechanics only.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { writeFileAtomic } from "../storage/atomic.js"
 import { newId } from "../protocol/ids.js"
-import { appendJsonlLine, readJsonl } from "../storage/jsonl.js"
 import type {
-  MailboxEntry, MailboxStatus, TaskSnapshot, TaskStatus, TeamMember, TeamMemberList, TeamMemberStatus, TeamRecord, TeamSenderKind,
+  MailboxEntry, TaskSnapshot, TaskStatus, TeamMember, TeamMemberList, TeamMemberStatus, TeamRecord,
 } from "../protocol/team.js"
 
 /** The effective limits one store enforces (resolved from config by the host). */
@@ -39,11 +44,36 @@ export class TeamConflictError extends Error {}
 
 const MEMBER_NAME = /^[a-z][a-z0-9-]{0,31}$/
 const RESERVED_NAMES = new Set(["lead"])
-const TEAM_FILE = "team.json"
-const MEMBERS_FILE = "members.json"
-const BOARD_FILE = "board.json"
-const INBOX_DIR = "inbox"
+/** Team names become directory names: letters/numbers (any script) + hyphen. */
+const TEAM_NAME = /^[\p{L}\p{N}][\p{L}\p{N}-]{0,31}$/u
+const TEAMS_DIR = "teams"
+const TASKS_DIR = "tasks"
+const ARCHIVE_DIR = ".archive"
+const CONFIG_FILE = "config.json"
+const INBOXES_DIR = "inboxes"
+const CURRENT_TASKS_DIR = "current_tasks"
 const LEAD_INBOX = "lead"
+const LEAD_INBOX_FILE = "team-lead.json"
+
+/** config.json: the team record and the member list in one file. */
+export interface TeamConfigFile extends TeamRecord {
+  members: TeamMember[]
+}
+
+/** One inbox file: the full entry trail, pending entries first-class. */
+interface InboxFile {
+  version: 1
+  entries: MailboxEntry[]
+}
+
+/** The current_tasks lock payload (what/who/which attempt, and since when). */
+interface TaskLock {
+  taskId: number
+  subject: string
+  assignee: string | null
+  attemptId: string | null
+  claimedAt: string
+}
 
 /** Whole-file atomic replace with parent-dir guarantee (small state files). */
 function writeJsonAtomic(path: string, value: unknown): void {
@@ -62,19 +92,22 @@ export function isValidMemberName(name: string): boolean {
   return MEMBER_NAME.test(name) && !RESERVED_NAMES.has(name)
 }
 
-/** Create the on-disk skeleton for a new team (idempotent per fresh teamId). */
-export function initTeamDirectory(teamDir: string, record: TeamRecord): void {
-  mkdirSync(join(teamDir, "team", INBOX_DIR), { recursive: true })
-  mkdirSync(join(teamDir, "task"), { recursive: true })
-  writeJsonAtomic(join(teamDir, TEAM_FILE), record)
-  writeJsonAtomic(join(teamDir, "team", MEMBERS_FILE), { version: 1, members: [] } satisfies TeamMemberList)
-  writeJsonAtomic(join(teamDir, "task", BOARD_FILE), { version: 1, nextId: 1 })
+export function isValidTeamName(name: string): boolean {
+  return TEAM_NAME.test(name)
+}
+
+/** Create the on-disk skeleton for a new team (the name must be free). */
+export function initTeamDirectory(kclawDir: string, teamName: string, record: TeamRecord): void {
+  mkdirSync(join(kclawDir, TEAMS_DIR, teamName, INBOXES_DIR), { recursive: true })
+  mkdirSync(join(kclawDir, TASKS_DIR, teamName, CURRENT_TASKS_DIR), { recursive: true })
+  writeJsonAtomic(join(kclawDir, TEAMS_DIR, teamName, CONFIG_FILE), { ...record, members: [] } satisfies TeamConfigFile)
+  writeJsonAtomic(join(kclawDir, TEAMS_DIR, teamName, INBOXES_DIR, LEAD_INBOX_FILE), { version: 1, entries: [] } satisfies InboxFile)
 }
 
 /**
  * Keep the team state directory out of version control (local runtime
- * state, the .kclaw/ precedent): ensure a `.agent-teams/` style ignore line
- * exists in the workspace .gitignore. Best-effort; missing .gitignore is
+ * state, the permissions decided-rules precedent): ensure the ignore line
+ * exists in the workspace .gitignore. Best-effort; a missing .gitignore is
  * created.
  */
 export function ensureWorkspaceIgnore(workspaceRoot: string, dirName: string): void {
@@ -95,13 +128,30 @@ export function ensureWorkspaceIgnore(workspaceRoot: string, dirName: string): v
   }
 }
 
+/** Lock files carry a readable subject slug (CJK included, path-hostile chars out). */
+function taskSlug(subject: string): string {
+  const slug = subject
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[/\\:*?"<>|#[\]]/g, "")
+    .replace(/-+/g, "-")
+    .slice(0, 40)
+    .replace(/^-|-$/g, "")
+  return slug === "" ? "task" : slug
+}
+
 export class TeamStore {
+  /** `.kclaw/teams/<team-name>` — record, members and inboxes. */
   readonly teamDir: string
+  /** `.kclaw/tasks/<team-name>` — task files and current_tasks locks. */
+  readonly tasksDir: string
   private readonly limits: TeamLimits
   private chain: Promise<unknown> = Promise.resolve()
+  private reconciled = false
 
-  constructor(teamDir: string, limits: TeamLimits) {
-    this.teamDir = teamDir
+  constructor(kclawDir: string, readonly name: string, limits: TeamLimits) {
+    this.teamDir = join(kclawDir, TEAMS_DIR, name)
+    this.tasksDir = join(kclawDir, TASKS_DIR, name)
     this.limits = limits
   }
 
@@ -112,20 +162,28 @@ export class TeamStore {
     return run
   }
 
-  // ---- team record ----
+  // ---- team record + members (config.json) ----
 
-  record(): TeamRecord | null {
-    return readJsonOrNull<TeamRecord>(join(this.teamDir, TEAM_FILE))
+  private configPath(): string {
+    return join(this.teamDir, CONFIG_FILE)
   }
 
-  // ---- member list ----
+  private readConfig(): TeamConfigFile | null {
+    return readJsonOrNull<TeamConfigFile>(this.configPath())
+  }
 
-  private membersPath(): string {
-    return join(this.teamDir, "team", MEMBERS_FILE)
+  private writeConfig(config: TeamConfigFile): void {
+    writeJsonAtomic(this.configPath(), config)
+  }
+
+  record(): TeamRecord | null {
+    const config = this.readConfig()
+    if (config === null) return null
+    return { version: 1, teamId: config.teamId, name: config.name, leadSessionId: config.leadSessionId, createdAt: config.createdAt }
   }
 
   readMembers(): TeamMemberList {
-    return readJsonOrNull<TeamMemberList>(this.membersPath()) ?? { version: 1, members: [] }
+    return { version: 1, members: this.readConfig()?.members ?? [] }
   }
 
   memberByName(name: string): TeamMember | null {
@@ -140,18 +198,20 @@ export class TeamStore {
    * Provisioning transaction, step 1: reserve the name (format, reserved
    * words, duplicates, member-list cap — failed spawns included; failures
    * stay visible on the list) and append the entry as `provisioning`. The
-   * session is created after this record is on disk.
+   * session is created after this record is on disk; the member's inbox
+   * file is created empty here so the layout stays complete.
    */
   async provisionMember(req: { name: string; role?: string; model?: string }): Promise<TeamMember> {
     return this.locked(() => {
       if (!isValidMemberName(req.name)) {
         throw new TeamConflictError(`invalid member name "${req.name}" (lowercase letters/digits/hyphen, must start with a letter, "lead" is reserved)`)
       }
-      const list = this.readMembers()
-      if (list.members.some((m) => m.name === req.name)) {
+      const config = this.readConfig()
+      if (config === null) throw new TeamConflictError("team config.json is missing")
+      if (config.members.some((m) => m.name === req.name)) {
         throw new TeamConflictError(`member name "${req.name}" is taken (names are never reused)`)
       }
-      if (list.members.length >= this.limits.maxMembers) {
+      if (config.members.length >= this.limits.maxMembers) {
         throw new TeamConflictError(`member list is full (cap ${this.limits.maxMembers}, failed spawns included)`)
       }
       const member: TeamMember = {
@@ -162,7 +222,9 @@ export class TeamStore {
         model: req.model,
         createdAt: new Date().toISOString(),
       }
-      writeJsonAtomic(this.membersPath(), { version: 1, members: [...list.members, member] } satisfies TeamMemberList)
+      this.writeConfig({ ...config, members: [...config.members, member] })
+      mkdirSync(join(this.teamDir, INBOXES_DIR), { recursive: true })
+      this.writeInbox(req.name, [])
       return member
     })
   }
@@ -170,13 +232,14 @@ export class TeamStore {
   /** Provisioning, step 2: attach the created child session (still provisioning). */
   async attachMemberSession(name: string, sessionId: string): Promise<TeamMember> {
     return this.locked(() => {
-      const list = this.readMembers()
-      const member = list.members.find((m) => m.name === name)
+      const config = this.readConfig()
+      if (config === null) throw new TeamConflictError("team config.json is missing")
+      const member = config.members.find((m) => m.name === name)
       if (member === undefined || member.status !== "provisioning") {
         throw new TeamConflictError(`member "${name}" is not provisioning`)
       }
       member.sessionId = sessionId
-      writeJsonAtomic(this.membersPath(), list)
+      this.writeConfig(config)
       return member
     })
   }
@@ -184,27 +247,32 @@ export class TeamStore {
   /** Terminal transition: active (initial inbox accepted) or failed (with reason). */
   async settleMember(name: string, status: Extract<TeamMemberStatus, "active" | "failed">, reason?: string): Promise<TeamMember> {
     return this.locked(() => {
-      const list = this.readMembers()
-      const member = list.members.find((m) => m.name === name)
+      const config = this.readConfig()
+      if (config === null) throw new TeamConflictError("team config.json is missing")
+      const member = config.members.find((m) => m.name === name)
       if (member === undefined || member.status !== "provisioning") {
         throw new TeamConflictError(`member "${name}" is not pending settlement`)
       }
       member.status = status
       member.settledAt = new Date().toISOString()
       if (reason !== undefined) member.failReason = reason
-      writeJsonAtomic(this.membersPath(), list)
+      this.writeConfig(config)
       return member
     })
   }
 
-  // ---- inboxes ----
+  // ---- inboxes (one JSON file per recipient) ----
 
   private inboxPath(to: string): string {
-    return join(this.teamDir, "team", INBOX_DIR, `${to}.jsonl`)
+    return join(this.teamDir, INBOXES_DIR, to === LEAD_INBOX ? LEAD_INBOX_FILE : `${to}.json`)
   }
 
   readInbox(to: string): MailboxEntry[] {
-    return readJsonl(this.inboxPath(to)) as MailboxEntry[]
+    return readJsonOrNull<InboxFile>(this.inboxPath(to))?.entries ?? []
+  }
+
+  private writeInbox(to: string, entries: MailboxEntry[]): void {
+    writeJsonAtomic(this.inboxPath(to), { version: 1, entries } satisfies InboxFile)
   }
 
   pendingInbox(to: string): MailboxEntry[] {
@@ -229,8 +297,8 @@ export class TeamStore {
         throw new TeamConflictError(`inbox of "${entry.to}" is full (${this.limits.maxUnreadPerTarget} unread)`)
       }
       const full: MailboxEntry = { ...entry, id: newId("tm"), status: "pending", at: new Date().toISOString() }
-      mkdirSync(join(this.teamDir, "team", INBOX_DIR), { recursive: true })
-      appendJsonlLine(this.inboxPath(entry.to), full)
+      mkdirSync(join(this.teamDir, INBOXES_DIR), { recursive: true })
+      this.writeInbox(entry.to, [...this.readInbox(entry.to), full])
       return full
     })
   }
@@ -245,42 +313,33 @@ export class TeamStore {
   /** Flip a rendered batch to delivered in one locked rewrite (at-least-once delivery: the host marks after submit acceptance). */
   async markDeliveredMany(to: string, ids: string[]): Promise<void> {
     return this.locked(() => {
-      const entries = this.readInbox(to)
-      const set = new Set(ids)
-      let changed = false
-      for (const e of entries) {
-        if (set.has(e.id) && e.status === "pending") {
-          e.status = "delivered"
-          e.deliveredAt = new Date().toISOString()
-          changed = true
-        }
-      }
-      if (changed) writeFileAtomic(this.inboxPath(to), renderedInbox(entries), 0o644)
+      this.flipDelivered(to, ids)
     })
   }
 
   /** Same flip without the mutex — for the host's locked compound operations. */
   markDeliveredSync(to: string, id: string): void {
+    this.flipDelivered(to, [id])
+  }
+
+  private flipDelivered(to: string, ids: string[]): void {
     const entries = this.readInbox(to)
+    const set = new Set(ids)
     let changed = false
     for (const e of entries) {
-      if (e.id === id && e.status === "pending") {
+      if (set.has(e.id) && e.status === "pending") {
         e.status = "delivered"
         e.deliveredAt = new Date().toISOString()
         changed = true
       }
     }
-    if (changed) writeFileAtomic(this.inboxPath(to), renderedInbox(entries), 0o644)
+    if (changed) this.writeInbox(to, entries)
   }
 
-  // ---- task board ----
+  // ---- task board (one snapshot file per task) ----
 
   private taskPath(id: number): string {
-    return join(this.teamDir, "task", `${id}.json`)
-  }
-
-  private boardPath(): string {
-    return join(this.teamDir, "task", BOARD_FILE)
+    return join(this.tasksDir, `task-${id}.json`)
   }
 
   task(id: number): TaskSnapshot | null {
@@ -288,12 +347,11 @@ export class TeamStore {
   }
 
   listTasks(): TaskSnapshot[] {
-    const dir = join(this.teamDir, "task")
-    if (!existsSync(dir)) return []
+    if (!existsSync(this.tasksDir)) return []
     const out: TaskSnapshot[] = []
-    for (const name of readdirSync(dir)) {
-      if (!/^\d+\.json$/.test(name)) continue
-      const task = readJsonOrNull<TaskSnapshot>(join(dir, name))
+    for (const name of readdirSync(this.tasksDir)) {
+      if (!/^task-\d+\.json$/.test(name)) continue
+      const task = readJsonOrNull<TaskSnapshot>(join(this.tasksDir, name))
       if (task !== null) out.push(task)
     }
     return out.sort((a, b) => a.id - b.id)
@@ -301,8 +359,9 @@ export class TeamStore {
 
   /**
    * Create a task: existence-checked dependencies (the fresh id cannot close
-   * a cycle — it has no incoming edges yet), monotonic id from the board,
-   * revision 1. Not dispatch-ready until claimed.
+   * a cycle — it has no incoming edges yet), monotonic id derived from the
+   * existing files (ids are never reused), revision 1. Not dispatch-ready
+   * until claimed.
    */
   async createTask(req: { subject: string; detail?: string; dependencies?: number[]; assignee?: string | null }): Promise<TaskSnapshot> {
     return this.locked(() => {
@@ -316,13 +375,13 @@ export class TeamStore {
           throw new TeamConflictError(`dependency #${dep} does not exist`)
         }
       }
-      const board = readJsonOrNull<{ version: 1; nextId: number }>(this.boardPath()) ?? { version: 1, nextId: 1 }
-      if (board.nextId > Number.MAX_SAFE_INTEGER - 1_000_000) {
+      const nextId = tasks.length === 0 ? 1 : Math.max(...tasks.map((t) => t.id)) + 1
+      if (nextId > Number.MAX_SAFE_INTEGER - 1_000_000) {
         throw new TeamConflictError("task id space exhausted (ids are never reused)")
       }
       const now = new Date().toISOString()
       const task: TaskSnapshot = {
-        id: board.nextId,
+        id: nextId,
         subject: req.subject,
         detail: req.detail ?? "",
         status: "pending",
@@ -333,8 +392,6 @@ export class TeamStore {
         createdAt: now,
         updatedAt: now,
       }
-      board.nextId += 1
-      writeJsonAtomic(this.boardPath(), board)
       writeJsonAtomic(this.taskPath(task.id), task)
       return task
     })
@@ -345,7 +402,9 @@ export class TeamStore {
    * transitions an in_progress task (or reassigns it), the caller must echo
    * the current attemptId — a superseded executor's late write therefore
    * cannot clobber the successor's result. Claim/retry shapes increment the
-   * attempt and mint a fresh attemptId.
+   * attempt and mint a fresh attemptId. The current_tasks lock follows the
+   * task: written when work starts (or the executor changes), removed at a
+   * terminal state.
    */
   updateTask(req: {
     id: number
@@ -430,6 +489,11 @@ export class TeamStore {
       next.revision = task.revision + 1
       next.updatedAt = new Date().toISOString()
       writeJsonAtomic(this.taskPath(next.id), next)
+
+      const wasRunning = task.status === "in_progress"
+      const isRunning = next.status === "in_progress"
+      if (wasRunning && (!isRunning || task.subject !== next.subject)) this.removeLock(task.id, task.subject)
+      if (isRunning) this.writeLock(next)
       return next
     })
   }
@@ -445,10 +509,60 @@ export class TeamStore {
   heldTask(memberName: string): TaskSnapshot | null {
     return this.listTasks().find((t) => t.status === "in_progress" && t.assignee === memberName) ?? null
   }
-}
 
-function renderedInbox(entries: MailboxEntry[]): string {
-  return entries.map((e) => JSON.stringify(e) + "\n").join("")
+  // ---- current_tasks locks ----
+
+  private lockPath(id: number, subject: string): string {
+    return join(this.tasksDir, CURRENT_TASKS_DIR, `${id}-${taskSlug(subject)}.txt`)
+  }
+
+  private writeLock(task: TaskSnapshot): void {
+    mkdirSync(join(this.tasksDir, CURRENT_TASKS_DIR), { recursive: true })
+    const lock: TaskLock = {
+      taskId: task.id,
+      subject: task.subject,
+      assignee: task.assignee,
+      attemptId: task.attemptId ?? null,
+      claimedAt: task.updatedAt,
+    }
+    writeJsonAtomic(this.lockPath(task.id, task.subject), lock)
+  }
+
+  private removeLock(id: number, subject: string): void {
+    try {
+      rmSync(this.lockPath(id, subject))
+    } catch {
+      // already gone — the goal state is reached
+    }
+  }
+
+  /**
+   * Crash reconciliation for the current_tasks locks, run once when the host
+   * first loads the store: drop locks whose task is not executing (or whose
+   * name no longer matches), then write a fresh lock for every executing
+   * task. A leftover lock after a daemon restart marks an interrupted
+   * execution — exactly what the resume nudge looks for.
+   */
+  reconcileLocks(): void {
+    if (this.reconciled) return
+    this.reconciled = true
+    const dir = join(this.tasksDir, CURRENT_TASKS_DIR)
+    const running = new Map(this.listTasks().filter((t) => t.status === "in_progress").map((t) => [t.id, t]))
+    if (existsSync(dir)) {
+      for (const name of readdirSync(dir)) {
+        const id = Number(/^(\d+)-/.exec(name)?.[1])
+        const task = Number.isFinite(id) && id > 0 ? running.get(id) : undefined
+        if (task === undefined || `${task.id}-${taskSlug(task.subject)}.txt` !== name) {
+          try {
+            rmSync(join(dir, name))
+          } catch {
+            // best-effort cleanup
+          }
+        }
+      }
+    }
+    for (const task of running.values()) this.writeLock(task)
+  }
 }
 
 /** DFS: does any of `from` reach `target` through the dependency edges? */

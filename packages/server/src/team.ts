@@ -4,7 +4,7 @@
  *
  * Responsibilities:
  * - discovery: map a session id to its team identity by scanning the lead's
- *   workspace `.agent-teams/` directory (team.json records the lead; the
+ *   workspace `.kclaw/teams/` directories (config.json records the lead; the
  *   member list maps member sessions);
  * - lifecycle: create_team materializes the directory; spawn_teammate runs
  *   the provisioning transaction (reserve the name → create the child
@@ -36,6 +36,7 @@ import { join } from "node:path"
 import {
   ensureWorkspaceIgnore,
   initTeamDirectory,
+  isValidTeamName,
   makeEvent,
   newBlockId,
   newId,
@@ -79,9 +80,17 @@ export interface TeamHost {
    * record and trails stay inspectable; best-effort rename, a name collision
    * gets a timestamp suffix). */
   archiveTeamForLead(leadSessionId: string): boolean
+  /** Idle edge from the run manager: a session just finished all its traffic
+   * (team dispatch OR a user chat run — the latter never passes through this
+   * host, so this is the only signal that a busy lead/member freed up). */
+  pump(sessionId: string): void
 }
 
-const STATE_DIR = ".agent-teams"
+/** Team state lives under the workspace's `.kclaw/` (the permissions
+ * decided-rules root): `teams/<name>/` for record + inboxes, `tasks/<name>/`
+ * for the task files and current_tasks locks. */
+const KCLAW_DIR = ".kclaw"
+const ARCHIVE = ".archive"
 const LEAD_INBOX = "lead"
 
 /** Omit that distributes over unions (plain Omit collapses union key sets). */
@@ -96,8 +105,7 @@ export function createTeamHost(deps: TeamHostDeps): TeamHost {
     maxMessageBytes: config.team?.mailbox?.maxMessageBytes ?? 65_536,
     maxTasks: config.team?.taskBoard?.maxTasks ?? 64,
   }
-  const stateDir = config.team?.stateDir ?? STATE_DIR
-  /** TeamStore cache keyed by absolute team directory (constructors are pure). */
+  /** TeamStore cache keyed by absolute teams/ directory (constructors are pure). */
   const stores = new Map<string, TeamStore>()
   /** Members with a live run — the busy observation and the idle edge both read it. */
   const running = new Set<string>()
@@ -111,12 +119,13 @@ export function createTeamHost(deps: TeamHostDeps): TeamHost {
   let offerEpoch = 0
   const offered = new Map<string, { task: number; epoch: number }>()
 
-  const storeFor = (workspace: string, teamId: string): TeamStore => {
-    const dir = join(workspace, stateDir, teamId)
-    let store = stores.get(dir)
+  const storeFor = (workspace: string, teamName: string): TeamStore => {
+    const key = join(workspace, KCLAW_DIR, "teams", teamName)
+    let store = stores.get(key)
     if (store === undefined) {
-      store = new TeamStore(dir, limits)
-      stores.set(dir, store)
+      store = new TeamStore(join(workspace, KCLAW_DIR), teamName, limits)
+      store.reconcileLocks() // once per daemon: settle leftover current_tasks locks
+      stores.set(key, store)
     }
     return store
   }
@@ -134,20 +143,21 @@ export function createTeamHost(deps: TeamHostDeps): TeamHost {
     const workspace = meta.workdir ?? config.workspace
     let entries: string[]
     try {
-      entries = readdirSync(join(workspace, stateDir))
+      entries = readdirSync(join(workspace, KCLAW_DIR, "teams"))
     } catch {
       return null
     }
-    for (const teamId of entries) {
-      const store = storeFor(workspace, teamId)
+    for (const teamName of entries) {
+      if (teamName.startsWith(".")) continue // .archive and friends
+      const store = storeFor(workspace, teamName)
       const record = store.record()
       if (record === null) continue
       if (record.leadSessionId === sessionId) {
-        return { identity: { role: "lead", teamId, sessionId }, store, record }
+        return { identity: { role: "lead", teamId: teamName, sessionId }, store, record }
       }
       const member = store.memberBySession(sessionId)
       if (member !== null && member.sessionId === sessionId && member.status !== "failed") {
-        return { identity: { role: "member", teamId, sessionId, name: member.name }, store, record }
+        return { identity: { role: "member", teamId: teamName, sessionId, name: member.name }, store, record }
       }
     }
     return null
@@ -372,13 +382,15 @@ export function createTeamHost(deps: TeamHostDeps): TeamHost {
    */
   const deliverPendingMail = (found: Found, member: TeamMember): void => {
     if (runningMembers() >= limits.maxActive) return
-    // A busy member is never dispatched into: its run's input would only land
-    // after the current run settles, past the point where this dispatch's
-    // land-watcher dies — the idle edge (this run's settle) delivers instead.
-    if (running.has(member.name)) return
+    // A busy member is never dispatched into (busy = live run, driver or
+    // queued entries — the run manager holds the whole truth, not this
+    // host's dispatch ledger): its run's input would only land after the
+    // current traffic settles, past the point where this dispatch's
+    // land-watcher dies. The idle edge (onSessionIdle → pump) delivers instead.
+    if (member.sessionId === "" || deps.getRun().busy(member.sessionId)) return
     const inFlightFor = inFlight.get(member.name)
     const pending = inFlightFor === undefined ? found.store.pendingInbox(member.name) : found.store.pendingInbox(member.name).filter((e) => !inFlightFor.has(e.id))
-    if (member.sessionId === "" || pending.length === 0 || member.status !== "active") return
+    if (pending.length === 0 || member.status !== "active") return
     const ids = pending.map((e) => e.id)
     for (const id of ids) markInFlight(member.name, id)
     const firstRun = sessions.readMessages(member.sessionId).length === 0
@@ -397,7 +409,10 @@ export function createTeamHost(deps: TeamHostDeps): TeamHost {
    * the report waits for an idle edge, same as member mail.
    */
   const flushLeadInbox = (found: Found): void => {
-    if (running.has(LEAD_INBOX)) return
+    // A busy lead never takes a dispatch: the entry would queue behind the
+    // live run and land after this dispatch's land-watcher died (the mail
+    // would render twice). It waits here for the idle edge (pump below).
+    if (deps.getRun().busy(found.record.leadSessionId)) return
     const pending = found.store.pendingInbox(LEAD_INBOX)
     const inFlightFor = inFlight.get(LEAD_INBOX)
     const fresh = inFlightFor === undefined ? pending : pending.filter((e) => !inFlightFor.has(e.id))
@@ -424,7 +439,7 @@ export function createTeamHost(deps: TeamHostDeps): TeamHost {
     for (const m of found.store.readMembers().members) {
       if (runningMembers() >= limits.maxActive) return
       if (m.status !== "active" || m.sessionId === "") continue
-      if (running.has(m.name)) continue
+      if (deps.getRun().busy(m.sessionId)) continue
       // Deferred mail first — the mail wake IS the run (a task offer on top
       // would only queue behind unread mail anyway).
       if (found.store.unreadCount(m.name) > 0) {
@@ -484,29 +499,42 @@ export function createTeamHost(deps: TeamHostDeps): TeamHost {
       return found.identity
     },
 
-    async createTeam(leadSessionId, name) {
+    async createTeam(leadSessionId, requestedName) {
       if (find(leadSessionId) !== null) {
         throw new TeamConflictError("this session already belongs to a team (one team per session)")
       }
       const meta = sessions.meta(leadSessionId)
       if (meta === undefined) throw new TeamConflictError("lead session not found")
       const workspace = meta.workdir ?? config.workspace
-      // teamId IS the lead session id — one team per session makes it
-      // naturally unique, and every reverse lookup stays a plain directory
-      // name (no second id space to reconcile).
-      const teamId = leadSessionId
+      // The team name IS the teamId and the directory anchor: teams/<name>/
+      // — unique per workspace, so two teams can never share one.
+      const explicit = requestedName?.trim()
+      let teamName: string
+      if (explicit !== undefined && explicit !== "") {
+        if (!isValidTeamName(explicit)) {
+          throw new TeamConflictError(`invalid team name "${explicit}" (letters/numbers/hyphen, starts with a letter or number, no spaces)`)
+        }
+        teamName = explicit
+      } else {
+        const base = isValidTeamName(meta.title) ? meta.title : "team"
+        teamName = base
+        for (let i = 2; existsSync(join(workspace, KCLAW_DIR, "teams", teamName)); i++) teamName = `${base}-${i}`
+      }
+      if (existsSync(join(workspace, KCLAW_DIR, "teams", teamName))) {
+        throw new TeamConflictError(`team name "${teamName}" is already in use in this workspace`)
+      }
       const record: TeamRecord = {
         version: 1,
-        teamId,
-        name: name?.trim() !== "" && name !== undefined ? name.trim() : meta.title || "team",
+        teamId: teamName,
+        name: teamName,
         leadSessionId,
         createdAt: new Date().toISOString(),
       }
-      initTeamDirectory(join(workspace, stateDir, teamId), record)
-      ensureWorkspaceIgnore(workspace, stateDir)
-      const found: Found = { identity: { role: "lead", teamId, sessionId: leadSessionId }, store: storeFor(workspace, teamId), record }
-      audit(found, { type: "team.created", teamId, name: record.name })
-      return { teamId, name: record.name }
+      initTeamDirectory(join(workspace, KCLAW_DIR), teamName, record)
+      ensureWorkspaceIgnore(workspace, KCLAW_DIR)
+      const found: Found = { identity: { role: "lead", teamId: teamName, sessionId: leadSessionId }, store: storeFor(workspace, teamName), record }
+      audit(found, { type: "team.created", teamId: teamName, name: record.name })
+      return { teamId: teamName, name: record.name }
     },
 
     async spawnTeammate(lead, req) {
@@ -653,6 +681,10 @@ export function createTeamHost(deps: TeamHostDeps): TeamHost {
       const entry = await deliverToMember(found, member, { kind: "user" }, text)
       return { id: entry.id }
     },
+    pump(sessionId) {
+      const found = find(sessionId)
+      if (found !== null) pumpIdle(found)
+    },
     cancelMembersForLead(leadSessionId) {
       const found = find(leadSessionId)
       if (found === null || found.identity.role !== "lead") return 0
@@ -672,19 +704,24 @@ export function createTeamHost(deps: TeamHostDeps): TeamHost {
       if (found === null || found.identity.role !== "lead") return false
       const meta = sessions.meta(leadSessionId)
       const workspace = meta?.workdir ?? config.workspace
-      const src = join(workspace, stateDir, found.record.teamId)
-      if (!existsSync(src)) return false
+      const name = found.record.teamId
+      const sources = [join(workspace, KCLAW_DIR, "teams", name), join(workspace, KCLAW_DIR, "tasks", name)]
+      if (!sources.some((src) => existsSync(src))) return false
       try {
-        const archiveDir = join(workspace, stateDir, "archive")
-        mkdirSync(archiveDir, { recursive: true })
-        let dest = join(archiveDir, found.record.teamId)
-        if (existsSync(dest)) dest = `${dest}-${Date.now()}`
-        renameSync(src, dest)
+        for (const [index, src] of sources.entries()) {
+          if (!existsSync(src)) continue
+          const root = index === 0 ? "teams" : "tasks"
+          const archiveDir = join(workspace, KCLAW_DIR, root, ARCHIVE)
+          mkdirSync(archiveDir, { recursive: true })
+          let dest = join(archiveDir, name)
+          if (existsSync(dest)) dest = `${dest}-${Date.now()}`
+          renameSync(src, dest)
+        }
       } catch (err) {
         console.error("kclaw team: archiving the team directory failed:", err)
         return false
       }
-      stores.delete(src)
+      stores.delete(join(workspace, KCLAW_DIR, "teams", name))
       return true
     },
   }

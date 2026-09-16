@@ -171,8 +171,6 @@ export interface KclawConfig {
    * fall back per-field with one warning (parseConfig).
    */
   team?: {
-    /** Team-state directory name under the workspace. Default ".agent-teams". */
-    stateDir?: string
     /** Roster cap, failed spawns included. Default 8. */
     maxMembers?: number
     /** Concurrently running members (idle members are free). Default 4. */
@@ -212,7 +210,6 @@ export const defaultConfig: KclawConfig = {
   mcp: { servers: {} },
   subagents: { maxConcurrent: 4, maxBackground: 4 },
   team: {
-    stateDir: ".agent-teams",
     maxMembers: 8,
     maxActive: 4,
     mailbox: { maxUnreadPerTarget: 64, maxMessageBytes: 65536 },
@@ -310,9 +307,9 @@ function parseConfig(raw: string, path: string, format: "json" | "yaml"): KclawC
 
 /**
  * Team section validation: a non-mapping section falls back wholesale; a
- * negative/zero number or a multi-segment stateDir falls back per field,
- * each with one warning (the waterline style — never throw, never silently
- * keep a value that would break the team directory layout).
+ * negative/zero number falls back per field, each with one warning (the
+ * waterline style — never throw, never silently keep a value that would
+ * break the team limits).
  */
 function validateTeamConfig(merged: KclawConfig): void {
   const team = merged.team
@@ -326,10 +323,6 @@ function validateTeamConfig(merged: KclawConfig): void {
     return
   }
   const positiveInt = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value > 0
-  if (team.stateDir !== undefined && (typeof team.stateDir !== "string" || team.stateDir.trim() === "" || team.stateDir.includes("/") || team.stateDir.includes("\\"))) {
-    console.warn(`kclaw config: team.stateDir ${JSON.stringify(team.stateDir)} is invalid; falling back to ".agent-teams"`)
-    team.stateDir = ".agent-teams"
-  }
   for (const [label, value, reset] of [
     ["team.maxMembers", team.maxMembers, 8],
     ["team.maxActive", team.maxActive, 4],

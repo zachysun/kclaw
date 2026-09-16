@@ -1,6 +1,7 @@
 /**
  * Agent team domain shapes — the pure, browser-safe canon for the team
- * directory (`<workspace>/.agent-teams/<teamId>/`), the team audit events
+ * directory (`<workspace>/.kclaw/teams/<team-name>/` and
+ * `<workspace>/.kclaw/tasks/<team-name>/`), the team audit events
  * (session-events.ts) and the team facade (core/src/team). Types and pure
  * data only — no Node APIs — so the browser build can import them through
  * the `@kclaw/core/protocol` subpath (the session-events precedent).
@@ -10,7 +11,7 @@
  * busy/idle is a derived observation and never persisted in the list. */
 export type TeamMemberStatus = "provisioning" | "active" | "failed"
 
-/** One member-list entry (team/members.json). */
+/** One member-list entry (config.json `members`). */
 export interface TeamMember {
   name: string
   /** Child session id; empty until provisioning has created the session. */
@@ -36,7 +37,7 @@ export type TeamSenderKind = "lead" | "member" | "user"
 
 export type MailboxStatus = "pending" | "delivered"
 
-/** One inbox entry (team/inbox/<name>.jsonl). "pending = undelivered" is the
+/** One inbox entry (inboxes/<name>.json). "pending = undelivered" is the
  * crash-recovery contract: entries still pending after a restart get
  * redelivered in file order. */
 export interface MailboxEntry {
@@ -53,7 +54,7 @@ export interface MailboxEntry {
 
 export type TaskStatus = "pending" | "in_progress" | "completed" | "failed" | "cancelled"
 
-/** A task is a full snapshot (team/task/<id>.json); every update rewrites the
+/** A task is a full snapshot (tasks/<team-name>/task-<id>.json); every update rewrites the
  * whole file guarded by a monotonic revision (compare-and-swap). */
 export interface TaskSnapshot {
   id: number
@@ -74,13 +75,7 @@ export interface TaskSnapshot {
   updatedAt: string
 }
 
-/** Task-id counter (team/task/board.json). Ids are never reused. */
-export interface TaskBoardIndex {
-  version: 1
-  nextId: number
-}
-
-/** Team record (team.json). */
+/** Team record (the non-members part of teams/<team-name>/config.json). */
 export interface TeamRecord {
   version: 1
   teamId: string

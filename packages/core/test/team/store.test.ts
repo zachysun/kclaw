@@ -1,20 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { initTeamDirectory, ensureWorkspaceIgnore, TeamStore, TeamConflictError, isValidMemberName } from "../../src/team/store.js"
+import { initTeamDirectory, ensureWorkspaceIgnore, TeamStore, TeamConflictError, isValidMemberName, isValidTeamName } from "../../src/team/store.js"
 
 let workspace: string
-let teamDir: string
+let kclawDir: string
 let store: TeamStore
 
 const limits = { maxMembers: 3, maxActive: 4, maxUnreadPerTarget: 2, maxMessageBytes: 1000, maxTasks: 4 }
+const TEAM = "test-team"
 
 beforeEach(() => {
   workspace = mkdtempSync(join(tmpdir(), "kclaw-team-"))
-  teamDir = join(workspace, ".agent-teams", "ses_lead")
-  initTeamDirectory(teamDir, { version: 1, teamId: "ses_lead", name: "test-team", leadSessionId: "ses_lead", createdAt: "2026-09-16T00:00:00Z" })
-  store = new TeamStore(teamDir, limits)
+  kclawDir = join(workspace, ".kclaw")
+  initTeamDirectory(kclawDir, TEAM, { version: 1, teamId: TEAM, name: TEAM, leadSessionId: "ses_lead", createdAt: "2026-09-16T00:00:00Z" })
+  store = new TeamStore(kclawDir, TEAM, limits)
 })
 
 afterEach(() => {
@@ -22,26 +23,41 @@ afterEach(() => {
 })
 
 describe("team directory skeleton", () => {
-  it("creates the team/task layout and the record", () => {
-    expect(existsSync(join(teamDir, "team.json"))).toBe(true)
-    expect(existsSync(join(teamDir, "team", "members.json"))).toBe(true)
-    expect(existsSync(join(teamDir, "task", "board.json"))).toBe(true)
+  it("creates the teams/tasks layout and the record", () => {
+    expect(existsSync(join(kclawDir, "teams", TEAM, "config.json"))).toBe(true)
+    expect(existsSync(join(kclawDir, "teams", TEAM, "inboxes", "team-lead.json"))).toBe(true)
+    expect(existsSync(join(kclawDir, "tasks", TEAM, "current_tasks"))).toBe(true)
+    const config = JSON.parse(readFileSync(join(kclawDir, "teams", TEAM, "config.json"), "utf8")) as { members: unknown[]; leadSessionId: string }
+    expect(config.leadSessionId).toBe("ses_lead")
+    expect(config.members).toEqual([])
     expect(store.record()?.leadSessionId).toBe("ses_lead")
+    expect(store.teamDir).toBe(join(kclawDir, "teams", TEAM))
+    expect(store.tasksDir).toBe(join(kclawDir, "tasks", TEAM))
+  })
+
+  it("team names become directory names: letters/numbers (any script) + hyphen", () => {
+    expect(isValidTeamName("crew")).toBe(true)
+    expect(isValidTeamName("解析组")).toBe(true)
+    expect(isValidTeamName("crew-2")).toBe(true)
+    expect(isValidTeamName("has space")).toBe(false)
+    expect(isValidTeamName("a/b")).toBe(false)
+    expect(isValidTeamName(".hidden")).toBe(false)
+    expect(isValidTeamName("x".repeat(40))).toBe(false)
   })
 
   it("ensureWorkspaceIgnore appends the ignore line once and creates a missing .gitignore", () => {
-    ensureWorkspaceIgnore(workspace, ".agent-teams")
-    ensureWorkspaceIgnore(workspace, ".agent-teams")
+    ensureWorkspaceIgnore(workspace, ".kclaw")
+    ensureWorkspaceIgnore(workspace, ".kclaw")
     const content = readFileSync(join(workspace, ".gitignore"), "utf8")
-    expect(content.match(/\.agent-teams\//g)).toHaveLength(1)
+    expect(content.match(/\.kclaw\//g)).toHaveLength(1)
   })
 
   it("ensureWorkspaceIgnore keeps existing lines", () => {
     writeFileSync(join(workspace, ".gitignore"), "node_modules/\ndist/\n", "utf8")
-    ensureWorkspaceIgnore(workspace, ".agent-teams")
+    ensureWorkspaceIgnore(workspace, ".kclaw")
     const content = readFileSync(join(workspace, ".gitignore"), "utf8")
     expect(content).toContain("node_modules/")
-    expect(content).toContain(".agent-teams/")
+    expect(content).toContain(".kclaw/")
   })
 })
 
@@ -56,8 +72,9 @@ describe("member list", () => {
     expect(isValidMemberName("x".repeat(40))).toBe(false)
   })
 
-  it("provision → attach → settle makes a member active", async () => {
+  it("provision → attach → settle makes a member active and creates the inbox file", async () => {
     await store.provisionMember({ name: "researcher", role: "research", model: "prov/model-a" })
+    expect(existsSync(join(kclawDir, "teams", TEAM, "inboxes", "researcher.json"))).toBe(true)
     await store.attachMemberSession("researcher", "ses_child")
     const member = await store.settleMember("researcher", "active")
     expect(member.status).toBe("active")
@@ -95,6 +112,8 @@ describe("inbox", () => {
     expect(store.readInbox("researcher")[0]?.status).toBe("delivered")
     expect(store.readInbox("researcher")[0]?.deliveredAt).toBeDefined()
     expect(store.pendingInbox("lead")).toHaveLength(1)
+    // one JSON file per recipient; the lead's is team-lead.json
+    expect(readdirSync(join(kclawDir, "teams", TEAM, "inboxes")).sort()).toEqual(["researcher.json", "team-lead.json"])
   })
 
   it("unread cap and byte cap reject loudly", async () => {
@@ -112,6 +131,7 @@ describe("task board", () => {
     expect(second.id).toBe(first.id + 1)
     expect(second.status).toBe("pending")
     expect(second.assignee).toBeNull()
+    expect(existsSync(join(kclawDir, "tasks", TEAM, `task-${first.id}.json`))).toBe(true)
     await expect(store.createTask({ subject: "x", dependencies: [99] })).rejects.toThrow(/does not exist/)
   })
 
@@ -147,9 +167,9 @@ describe("task board", () => {
     const retried = await store.updateTask({ id: task.id, expectedRevision: failed.revision, status: "in_progress" })
     expect(retried.attempt).toBe(2)
     expect(retried.attemptId).not.toBe(claimed.attemptId)
-    await expect(store.updateTask({ id: task.id, expectedRevision: retried.revision, status: "pending" })).rejects.toThrow(/illegal transition/)
-    const done = await store.updateTask({ id: task.id, expectedRevision: retried.revision, attemptId: retried.attemptId, status: "completed" })
-    await expect(store.updateTask({ id: task.id, expectedRevision: done.revision, status: "in_progress" })).rejects.toThrow(/illegal transition/)
+    await expect(store.updateTask({ id: retried.id, expectedRevision: retried.revision, status: "pending" })).rejects.toThrow(/illegal transition/)
+    const done = await store.updateTask({ id: retried.id, expectedRevision: retried.revision, attemptId: retried.attemptId, status: "completed" })
+    await expect(store.updateTask({ id: done.id, expectedRevision: done.revision, status: "in_progress" })).rejects.toThrow(/illegal transition/)
   })
 
   it("claim requires an assignee; assignee must be on the member list", async () => {
@@ -208,5 +228,53 @@ describe("task board", () => {
     await store.updateTask({ id: a.id, expectedRevision: claimed.revision, attemptId: claimed.attemptId, status: "completed" })
     expect(store.readyTasks().map((t) => t.id)).toEqual([b.id]) // unlocked
     expect(store.heldTask("worker")).toBeNull()
+  })
+})
+
+describe("current_tasks locks", () => {
+  it("a lock appears when work starts and disappears at a terminal state", async () => {
+    await store.provisionMember({ name: "a" })
+    const task = await store.createTask({ subject: "parse if statement" })
+    const lockDir = join(kclawDir, "tasks", TEAM, "current_tasks")
+    const claimed = await store.updateTask({ id: task.id, expectedRevision: task.revision, status: "in_progress", assignee: "a" })
+    const lockName = `${task.id}-parse-if-statement.txt`
+    expect(readdirSync(lockDir)).toEqual([lockName])
+    const lock = JSON.parse(readFileSync(join(lockDir, lockName), "utf8")) as { taskId: number; assignee: string | null; attemptId: string | null }
+    expect(lock.taskId).toBe(task.id)
+    expect(lock.assignee).toBe("a")
+    expect(lock.attemptId).toBe(claimed.attemptId)
+    await store.updateTask({ id: task.id, expectedRevision: claimed.revision, attemptId: claimed.attemptId, status: "completed" })
+    expect(readdirSync(lockDir)).toEqual([])
+  })
+
+  it("a rename while in_progress moves the lock; a retry recreates it", async () => {
+    await store.provisionMember({ name: "a" })
+    const task = await store.createTask({ subject: "旧主题" })
+    const lockDir = join(kclawDir, "tasks", TEAM, "current_tasks")
+    const claimed = await store.updateTask({ id: task.id, expectedRevision: task.revision, status: "in_progress", assignee: "a" })
+    // the slug keeps CJK; just assert the id prefix is there
+    expect(readdirSync(lockDir)[0]).toMatch(new RegExp(`^${task.id}-`))
+    const renamed = await store.updateTask({ id: task.id, expectedRevision: claimed.revision, subject: "new topic" })
+    expect(readdirSync(lockDir)).toEqual([`${task.id}-new-topic.txt`])
+    const failed = await store.updateTask({ id: task.id, expectedRevision: renamed.revision, attemptId: renamed.attemptId, status: "failed" })
+    expect(readdirSync(lockDir)).toEqual([])
+    await store.updateTask({ id: task.id, expectedRevision: failed.revision, status: "in_progress" })
+    expect(readdirSync(lockDir).length).toBe(1)
+  })
+
+  it("reconcileLocks drops stale locks and restores missing ones", async () => {
+    await store.provisionMember({ name: "a" })
+    const running = await store.createTask({ subject: "still running" })
+    const pending = await store.createTask({ subject: "not claimed" })
+    const claimed = await store.updateTask({ id: running.id, expectedRevision: running.revision, status: "in_progress", assignee: "a" })
+    const lockDir = join(kclawDir, "tasks", TEAM, "current_tasks")
+    // simulate a crash: the executed task lost its lock, a pending task has a leftover one
+    rmSync(join(lockDir, `${running.id}-still-running.txt`))
+    writeFileSync(join(lockDir, `${pending.id}-not-claimed.txt`), "{}\n", "utf8")
+    const fresh = new TeamStore(kclawDir, TEAM, limits) // a restarted daemon loads the store anew
+    fresh.reconcileLocks()
+    expect(readdirSync(lockDir)).toEqual([`${running.id}-still-running.txt`])
+    const lock = JSON.parse(readFileSync(join(lockDir, `${running.id}-still-running.txt`), "utf8")) as { attemptId: string | null }
+    expect(lock.attemptId).toBe(claimed.attemptId)
   })
 })

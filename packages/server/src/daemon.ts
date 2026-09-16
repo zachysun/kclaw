@@ -418,6 +418,9 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       collector: subagentHost.collector,
     },
     team: { facade: teamHost.facade },
+    // Idle edge: a user chat run never passes through startRun, so the team
+    // host only learns that a busy lead/member freed up from this hook.
+    onSessionIdle: (sessionId) => teamHost.pump(sessionId),
     // auto mode induction (batch C): one per-process streak counter threaded
     // through every run's assembly; threshold 0 disables induction.
     autoLearn: { counter: new AutoLearnCounter(config.permissions.autoLearnThreshold ?? 3) },
