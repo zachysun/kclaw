@@ -138,7 +138,11 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       .get<unknown>(`/sessions/${encodeURIComponent(sid)}/team`)
       .then((raw) => {
         const panel = toTeamPanel(raw)
-        if (panel !== null && teamSessionRef.current === sid) setTeamPanel(panel)
+        // The panel is the LEAD's coordination view (组长（我）+ talk/stop
+        // controls): a member's own read-only session must not render it, so
+        // a member identity clears the panel just like a 404 would.
+        const leadPanel = panel !== null && panel.identity === "lead" ? panel : null
+        if (teamSessionRef.current === sid) setTeamPanel(leadPanel)
       })
       .catch((err: unknown) => {
         // 404 = 该会话不在任何团队里（普通会话常态）；其余失败静默——面板

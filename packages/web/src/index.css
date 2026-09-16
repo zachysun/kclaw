@@ -956,6 +956,10 @@ select:focus {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  /* A flex item's auto min-width would let one wide unbreakable line (a long
+     code argument, say) push the whole chat past the viewport — which also
+     shoved the absolutely-positioned team panel out of sight. */
+  min-width: 0;
   gap: var(--space-3);
   /* Anchors the floating team panel (position:absolute looks up to here). */
   position: relative;
@@ -1076,7 +1080,9 @@ select:focus {
 .chat-log {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
