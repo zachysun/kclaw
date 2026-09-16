@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/tools/` 实现 15 个内置工具（12 个常驻 + 3 个按装配条件注册），并把它们装配成两份对齐的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
+`packages/core/src/tools/` 实现 22 个内置工具（12 个常驻 + 10 个按装配条件注册），并把它们装配成两份对齐的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
 
 ---
 
@@ -65,7 +65,7 @@ export function makeTool<N extends string>(
 
 ---
 
-## 15 个内置工具
+## 22 个内置工具
 
 | 名称 | 职责 | risk / concurrency |
 |------|------|--------------------|
@@ -84,8 +84,15 @@ export function makeTool<N extends string>(
 | `subagent_run` | 派出一个子代理独立执行一段自包含任务（可后台），结题答复即工具结果 | safe / parallel |
 | `subagent_collect` | 按子会话 id 取回后台子代理的完整结题答复 | safe / parallel |
 | `ask_user_questions` | 向用户提出 1–5 个需要当场拍板的问题，回答即工具结果 | safe / parallel |
+| `create_team` | 建立本会话的 agent 团队并使本会话成为组长 | safe / serial |
+| `spawn_teammate` | 招募一个组员（持久子会话 + 模型快照 + 初始任务走收信箱） | safe / serial |
+| `send_message` | 给组长或组员写信（经持久收信箱投递） | safe / parallel |
+| `list_agents` | 列出组员名单（状态、忙闲、当前任务） | safe / parallel |
+| `task_create` | 在团队任务板上建任务（依赖、指派） | safe / serial |
+| `task_update` | 按 revision 更新任务状态/认领（CAS 比对再交换） | safe / serial |
+| `task_list` | 列出任务板全貌 | safe / parallel |
 
-前 12 个**常驻注册**（注册与否不随会话状态变化；可见性例外有两个——readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型工具面，见 [permissions](./permissions.md)；子代理 run 会裁掉 `memory_save`，见 [subagents](./subagents.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 装配了子代理派发后端时注册（子代理自己的 run 两者都不注册——单层委派、不能再派孙代理），`ask_user_questions` 每个 run 都注册（见下文各自的"注册是条件性的"说明）。
+前 12 个**常驻注册**（注册与否不随会话状态变化；可见性例外有两个——readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型工具面，见 [permissions](./permissions.md)；子代理 run 会裁掉 `memory_save`，见 [subagents](./subagents.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 装配了子代理派发后端时注册（子代理自己的 run 两者都不注册——单层委派、不能再派孙代理），`ask_user_questions` 每个 run 都注册，七个团队工具只在会话属于某个团队时注册且**表面按身份收缩**——组长拿全套，组员没有 `create_team`/`spawn_teammate`（见下文与 [agent-team](./agent-team.md)）。
 
 ### exec（`tools/exec.ts`）
 
@@ -154,6 +161,10 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 
 **ask_user_questions** `{questions: [{text, options?, multiSelect?}]}`：向用户提出 1–5 个需要当场拍板的问题（选项单选/多选或自由文本），等待用户回答后把答案文本作为工具结果返回（每个问题一行 `N. <问题>\n   → <回答>`；选项题按选项文案拼接、自由题按输入文本，未回答显示"（未回答）"；应答按问题序对齐，缺位补空、越位丢弃）。描述里带一条软性指引：只在关键分叉点用——信息缺失会导致方案走偏、或不可逆操作前必须用户拍板时；能从上下文或文件里推断的信息不要问。等待走与人工确认**同一个**三方竞速（`racePending`，`permissions/broker.ts`）：人工回答 / `sessions.askTimeoutMs` 超时（默认 10 分钟）/ run 中止，谁先到算谁——超时是合法结局（返回 `ok`，附"用户未在限时内回答，不要重复调用，基于合理假设继续"的说明，模型必须学会处理空回答），中止不是（错误结果、不发 `question.resolved`，与确认流的规则一致）。`risk: "safe"`：提问本身不碰敏感资源；`concurrency: "parallel"`。
 
+### team 工具（`tools/team.ts`）
+
+七个工具都是团队宿主 facade（server 侧）的薄壳：校验参数类型 → 调 facade → 把返回值整形为工具结果，协作机制本身（目录、收信箱、任务板、投递）见 [agent-team](./agent-team.md)。**`create_team`** 建队并使本会话成为组长（一个会话只属一个队，重复建队是 error 结果）；**`spawn_teammate`** `{name, task?, role?, model?}` 招募组员——名字 `[a-z][a-z0-9-]{0,31}`、保留名 `lead`，建持久子会话并固化模型快照；**`send_message`** `{to, text}` 写信（组员的缺省目标是组长），超长/超限是响亮的 error 结果；**`list_agents`** 列名单；**`task_create` / `task_update` / `task_list`** 操作任务板，`task_update` 必须回传 `expected_revision` 做比对再交换（CAS），认领未认领任务时自动填自己的名字。全部 `risk: "safe"`——动作只写团队目录，不碰工作区；改状态类（建队/招募/建任务/改任务）是 `serial`（同一批调用里不与别的工具重叠）。注册**条件性且按身份收缩**：非团队会话一个都没有；组员的面不含 `create_team`/`spawn_teammate`（不能建队、不能招募——团队不递归）。
+
 ---
 
 ## callId 配对生命周期
@@ -194,5 +205,6 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 - [compaction](./compaction.md)：session_search 检索的索引来源（压缩段）与工具输出省略
 - [skills](./skills.md)：skill_read 背后的技能包机制（渐进披露、双作用域、点名包装）
 - [subagents](./subagents.md)：subagent_run / subagent_collect 背后的子会话生命周期、并发上限、后台模式与结果整形
+- [agent-team](./agent-team.md)：team 工具背后的团队目录、收信箱投递、任务板与身份收缩
 - [permissions](./permissions.md)：ask_user_questions 与人工确认共用的三方竞速网关（`racePending`）
 - [mcp](./mcp.md)：同一 ToolExecutor 契约的另一种工具来源

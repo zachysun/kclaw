@@ -81,6 +81,10 @@ export function resolvePaths(home?: string): KclawPaths
 | `sessions.compactThreshold` / `compactKeep` | 无（废弃） | 旧版压缩的字段（当时是 40 条消息触发、保留 25 条），已废弃不生效：配置文件里写了不报错，但没有任何消费方 |
 | `subagents.maxConcurrent` | `4` | 每个主会话同时存活的**阻塞**子代理上限（按父会话计数，超限的派发立即返回 error、不建会话，见 [subagents](./subagents.md)）；可选字段，缺省值在 spawner 构建处补齐 |
 | `subagents.maxBackground` | `4` | 每个主会话同时存活的**后台**子代理上限（`run_in_background` 派发，与阻塞上限分别计数、互不挤占；超限同样立即返回 error，见 [subagents](./subagents.md)）；可选字段，缺省值在 spawner 构建处补齐 |
+| `team.maxMembers` | `8` | 团队组员名单上限（含失败的招募） |
+| `team.maxActive` | `4` | 同时运行的组员上限；满员时新信在收信箱排队等空闲边投递 |
+| `team.mailbox.maxUnreadPerTarget` / `maxMessageBytes` | `64` / `65536` | 单个收信箱未读上限 / 单条信字节上限，超限投递方收到 error 结果 |
+| `team.taskBoard.maxTasks` | `64` | 任务板总量上限（含终态任务），超限建任务报错 |
 | `notify.channels` | `[]` | 定时任务终态通知渠道列表；为空即关闭（零开销）。条目 `{ name?, type, url, template? }`，`type` 三种：`bark`（POST JSON `{title, body}`）、`serverchan`（POST 表单 `title`+`desp`）、`webhook`（POST JSON，正文含 title/body 及全部 job 字段）。`template` 占位符：`{{job}}` `{{statusText}}` `{{status}}` `{{summary}}` `{{sessionId}}` `{{sessionUrl}}`，未知占位符渲染为空串 |
 | `notify.timeoutMs` | `10000` | 单次推送请求超时；推送失败只记日志、不重试 |
 | `hooks.timeoutMs` | `5000` | 单个钩子处理函数的执行预算（毫秒），超时按失败处理（用户钩子 skip、内置钩子 fatal，见 [hooks](./hooks.md)）；可选字段，缺省值在钩子链构建处补齐 |
@@ -123,10 +127,11 @@ export function readJsonl(file: string): unknown[]
 
 每个会话一个目录 `<sessionsDir>/<id>/`，固定三个文件，由 `SessionStore`（`packages/core/src/session/store.ts`）统一管理。三个文件的分工：**events.jsonl 是唯一真相，meta.json 是从它推导出来的快速读取摘要，queue.jsonl 是运行态的排队消息。**
 
-- **`events.jsonl`（唯一真相）**：只追加的事件流，一行一个 `SessionEvent`（JSON 序列化），共 14 种事件——
+- **`events.jsonl`（唯一真相）**：只追加的事件流，一行一个 `SessionEvent`（JSON 序列化），共 21 种事件——
   - 会话生命周期 5 种：`session.created`（含创建时固化的初始权限模式 `mode`；子代理会话还带 `parentSessionId`）、`session.renamed`、`session.deleted`、`session.restored`、`session.set`（model / mode / disposition 的会话级设置；旧的 `readonly` 布尔字段是历史遗留，读取时映射为 mode）。
   - 内容类 6 种：`message`（一条消息）、`message.truncated`（编辑重试/重新生成的截断标记——从 `fromMessageId` 起的所有消息退出对话视图；事件流只追加这条标记、不改写任何历史行，可见性是读取端投影）、`compaction`（一次压缩的审计）、`memory`（一次记忆写入的审计）、`system`（一条系统提示词审计——每次对话运行落一条，携带 stable/live 两段拼装文本）、`sandbox.checked`（一条沙箱状态审计——每次对话运行探测后落一条 `{enabled, available, unavailableReason?}`）。
   - 运行档案 3 种：`run.started` / `run.ended`（每 run 一对，把该 run 的消息事件夹成一轮边界；失败 run 也落 `run.ended`，起点必有终点）、`permission.decided`（每次人工确认裁决的留痕；被中止的确认不落）。<br>运行档案与 `system` / `sandbox.checked` 一样只写事件流、不进 meta 投影、不推进 `updatedAt`。`message.truncated` 不同——它是用户可见的会话动作，会推进 `updatedAt`；且当截断起点越过压缩锚点（`compactedUpto` / `compaction.upto`）时，部分已压缩的历史被丢弃，压缩投影随之一并清除（摘要无法再代替被隐藏的消息；尾部截断——常规路径——不碰压缩投影）。
+  - 协作 7 种（`team.created` / `team.member.provisioned` / `team.member.settled` / `team.message.queued` / `team.message.delivered` / `team.task.created` / `team.task.updated`）：agent 团队协作的审计留痕，只追加在**组长**的事件流上（真相在团队目录，见 [agent-team](./agent-team.md)）；尽力而为（写失败降为警告、团队操作照常），与运行档案一样不进投影、不推进 `updatedAt`。
 
   所有写入都先追加事件，再把事件汇入 meta.json 摘要（见下）。
 - **`meta.json`（派生摘要）**：类型 `SessionMeta`，由事件流经 `applyEvent` 逐条推导得出。它是「摘要」而非真相：删除或损坏都能从事件流完整重建（`meta()` 发现缺失或损坏时自动 `rebuildMeta`）。崩溃恢复时允许它暂时落后于事件流（落后不会丢数据）；但落后不会被后续写入自动追平——`appendEvent` 先读当前摘要、只汇入新事件——只有 meta.json 缺失或损坏时才经 `rebuildMeta` 重放整条事件流。meta.json 整文件原子重写（`updateMeta` 合并 patch，`undefined` 键表示删除；`message` / `message.truncated` / `compaction` 事件会推进摘要的 `updatedAt`，`memory` / `system` / `sandbox.checked` 事件不推进——审计类事件不算会话「更新」）。两条特殊的推导规则：`system` 事件把全文 upsert 进摘要的 `systemBaseline`（系统提示词的冻结基线，见下文），`compaction` 事件把 `systemBaseline` 清除（压缩改写了消息历史，提示词缓存必然全部失效，正是重新装配、重新冻结的时机）；`message.truncated` 在截断起点越过压缩锚点（`compactedUpto` / `compaction.upto`）时一并清除压缩投影（部分被压缩的历史已随截断丢弃，摘要不能再代替它们）。

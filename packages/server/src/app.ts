@@ -7,6 +7,7 @@ import type { KclawConfig, KclawPaths, HookRegistry, MemorySystem, UsageStore } 
 import { bearerMatches } from "./auth.js"
 import { EventBus } from "@kclaw/core"
 import type { RunManager } from "./run.js"
+import type { TeamHost } from "./team.js"
 import { registerWsRoutes } from "./ws.js"
 import { registerSessionRoutes } from "./routes/sessions.js"
 import { registerPermissionsRoutes } from "./routes/permissions.js"
@@ -59,6 +60,12 @@ export interface AppOptions {
    * deletion skips the cancellation half.
    */
   cancelBackgroundForParent?: (parentSessionId: string) => number
+  /**
+   * The team host (agent-team): `GET /sessions/:id/team` reads the panel
+   * view, the ws `send_message` target path delivers through the mailbox,
+   * and the delete/purge cascade cancels still-running member runs.
+   */
+  team?: TeamHost
   /**
    * Built-in discovery sources for the /skills reuse routes (the four agent
    * convention directories). Defaults to @kclaw/core's BUILTIN_SOURCES;
@@ -195,7 +202,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   registerSkillRoutes(app, { paths, builtinSources: opts.builtinSources, pluginHomes: opts.pluginHomes })
   // 切会话写入：POST /sessions 是 CLI /clear、/new 与 web 新建会话的共同底层，
   // 记忆系统在装配时才挂 clear 触发（缺省不触发，行为与未装配记忆时一致）。
-  registerSessionRoutes(app, { sessions, config, run: opts.run, memory: opts.memory, cancelBackgroundForParent: opts.cancelBackgroundForParent })
+  registerSessionRoutes(app, { sessions, config, run: opts.run, memory: opts.memory, cancelBackgroundForParent: opts.cancelBackgroundForParent, team: opts.team })
   if (opts.attachmentsDir !== undefined) {
     registerAttachmentRoutes(app, { sessions, attachmentsDir: opts.attachmentsDir })
   }
@@ -223,6 +230,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
     token: opts.token,
     sessions,
     run: opts.run,
+    team: opts.team,
     attachmentsDir: opts.attachmentsDir,
     authTimeoutMs: opts.wsAuthTimeoutMs,
     heartbeatMs: opts.wsHeartbeatMs,

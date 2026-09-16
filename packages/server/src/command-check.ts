@@ -58,6 +58,7 @@ export function checkCommandFrame(frame: object, deps: CheckDeps): FrameCheck {
     text?: unknown
     attachments?: unknown
     disposition?: unknown
+    target?: unknown
     messageId?: unknown
     fromMessageId?: unknown
   }
@@ -134,13 +135,18 @@ export function checkCommandFrame(frame: object, deps: CheckDeps): FrameCheck {
       if (!deps.hasRun) {
         return { kind: "error", message: "run manager not available" }
       }
-      const { sessionId, text, attachments, disposition } = msg
+      const { sessionId, text, attachments, disposition, target } = msg
       if (typeof sessionId !== "string" || sessionId.length === 0
         || typeof text !== "string" || text.length === 0) {
         return { kind: "error", message: "send_message requires a non-empty string sessionId and a non-empty string text" }
       }
       if (disposition !== undefined && disposition !== "steer" && disposition !== "wait" && disposition !== "interrupt") {
         return { kind: "error", message: 'send_message disposition must be "steer", "wait" or "interrupt"' }
+      }
+      // `target` aims the message at one team member (agent-team): the session
+      // must be the team lead. Validation of the name itself is the host's.
+      if (target !== undefined && (typeof target !== "string" || target.length === 0)) {
+        return { kind: "error", message: "send_message target must be a non-empty string (a member name)" }
       }
       if (!deps.sessionExists(sessionId)) {
         return { kind: "error", message: "session not found" }
@@ -159,6 +165,7 @@ export function checkCommandFrame(frame: object, deps: CheckDeps): FrameCheck {
         sessionId,
         text,
         ...(disposition !== undefined ? { disposition } : {}),
+        ...(target !== undefined ? { target } : {}),
         ...(refs.length > 0 ? { attachments: refs } : {}),
       }
       return { kind: "command", command }

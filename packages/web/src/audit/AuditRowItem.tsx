@@ -10,7 +10,7 @@ import type { AuditRow } from "./model.js"
 import {
   blockFullContent, blockSummary, blockTypeLabel, decisionFullContent, decisionSummary, fmtMs, fmtRowTime, fmtUsage,
   memoryFullContent, memorySummary, rowTime, runSummary, sandboxFullContent, sandboxSummary, truncationSummary,
-  sessionFullContent, sessionSummary, summarize, systemFullText,
+  sessionFullContent, sessionSummary, summarize, systemFullText, teamFullContent, teamSummary,
 } from "./model.js"
 
 export interface AuditRowItemProps {
@@ -71,6 +71,8 @@ function rowLabel(row: AuditRow): string {
       return "permission"
     case "truncation":
       return "truncation"
+    case "team":
+      return "team"
   }
 }
 
@@ -96,6 +98,8 @@ function rowSummary(row: AuditRow): string {
       return decisionSummary(row.event)
     case "truncation":
       return truncationSummary(row.event)
+    case "team":
+      return teamSummary(row.event)
   }
 }
 
@@ -149,6 +153,8 @@ function rowFull(row: AuditRow): string {
       return decisionFullContent(row.event)
     case "truncation":
       return JSON.stringify(row.event, null, 2)
+    case "team":
+      return teamFullContent(row.event)
   }
 }
 

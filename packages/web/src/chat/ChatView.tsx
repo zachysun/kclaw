@@ -11,7 +11,9 @@ import { fileMentionCompletions, replaceTrailingMentionToken } from "@kclaw/core
 import { PERMISSION_MODES, type PermissionMode } from "@kclaw/core/permission-modes"
 import type { AttachmentRef, ConfirmationDecision } from "@kclaw/core/protocol"
 import type { ChatState, ConfirmationCard, QuestionCard, RenderedBlock, RenderedMessage } from "./model.js"
+import { parseTeamMail, type TeamMailParse } from "./model.js"
 import { MarkdownText } from "./Markdown.js"
+import { TeamPanelCard, type TeamPanelData } from "./TeamPanel.js"
 import { IconButton } from "../ui/IconButton.js"
 import { PencilIcon, RefreshIcon } from "../ui/icons.js"
 
@@ -128,14 +130,29 @@ export interface ChatViewProps {
   /** 文件清单在后端被截断（仓库过大）：抽屉尾部显示一行提示。 */
   mentionTruncated?: boolean
   /**
-   * A child session (meta.parentSessionId set) is read-only to the user: the
+   * A child session (meta.parentSessionId set) is read-only: the
    * whole input area (model/mode selectors, attachments, composer) is replaced
    * by one hint line; the server's submit also rejects user-triggered posts.
    */
   readOnly?: boolean
+  /** Back to the parent session — the read-only hint's button (a child never
+   * appears in the sidebar, so this is the only visible way back). */
+  onReturnToParent?: () => void
+  /**
+   * Agent-team panel wiring: the panel payload plus the
+   * composer target. Undefined/null panel = this session has no team →
+   * nothing rendered. `target` shows the "→ 组员名" chip; onTalkTo(null)
+   * clears it back to the lead.
+   */
+  team?: {
+    panel: TeamPanelData
+    target: string | null
+    onTalkTo: (name: string | null) => void
+    onStopMember: (sessionId: string) => void
+  }
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Suggestion-menu state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -307,6 +324,18 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
 
   return (
     <div className="chat" data-testid="chat-view">
+      {/* The team panel floats over the chat area's top-right corner (outside
+          the scrolling log): pinned to the message stream it scrolled out of
+          sight with any history. The whole panel folds to a summary chip. */}
+      {team !== undefined && (
+        <TeamPanelCard
+          panel={team.panel}
+          target={team.target}
+          onTalkTo={team.onTalkTo}
+          onStopMember={team.onStopMember}
+          onOpenAudit={onOpenAudit}
+        />
+      )}
       {view.error !== undefined && (
         <div className="chat-error" data-testid="chat-error" role="alert">
           {view.error}
@@ -414,37 +443,41 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
       {view.pendingQuestions.map((card) => (
         <QuestionCardView key={card.questionId} card={card} onAnswer={onAnswerQuestion} />
       ))}
-      {!readOnly && (models !== undefined && models.length > 0 && onSwitchModel !== undefined) && (
-        <div className="composer-row" data-testid="model-selector-row">
-          <label>模型</label>
-          <select
-            className="model-select"
-            data-testid="model-select"
-            value={sessionModel ?? ""}
-            onChange={(e) => onSwitchModel(e.target.value)}
-          >
-            <option value="">默认</option>
-            {models.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
-        </div>
-      )}
-      {!readOnly && onSwitchMode !== undefined && (
-        // Always-on permission mode selector (session-scoped, next run
-        // effective): readonly denies writes/exec, default confirms
-        // out-of-bounds actions, accept-edits skips confirmation for
-        // in-workspace file writes.
-        <div className="composer-row" data-testid="mode-selector-row">
-          <label>权限</label>
-          <select
-            className="mode-select"
-            data-testid="mode-select"
-            value={mode ?? "default"}
-            onChange={(e) => onSwitchMode(e.target.value as PermissionMode)}
-          >
-            {PERMISSION_MODES.map((m) => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-          </select>
+      {!readOnly && (models !== undefined && models.length > 0 && onSwitchModel !== undefined || onSwitchMode !== undefined) && (
+        <div className="composer-selectors" data-testid="composer-selectors">
+          {models !== undefined && models.length > 0 && onSwitchModel !== undefined && (
+            <div className="composer-row" data-testid="model-selector-row">
+              <label>模型</label>
+              <select
+                className="model-select"
+                data-testid="model-select"
+                value={sessionModel ?? ""}
+                onChange={(e) => onSwitchModel(e.target.value)}
+              >
+                <option value="">默认</option>
+                {models.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+          )}
+          {onSwitchMode !== undefined && (
+            // Always-on permission mode selector (session-scoped, next run
+            // effective): readonly denies writes/exec, default confirms
+            // out-of-bounds actions, accept-edits skips confirmation for
+            // in-workspace file writes.
+            <div className="composer-row" data-testid="mode-selector-row">
+              <label>权限</label>
+              <select
+                className="mode-select"
+                data-testid="mode-select"
+                value={mode ?? "default"}
+                onChange={(e) => onSwitchMode(e.target.value as PermissionMode)}
+              >
+                {PERMISSION_MODES.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
       )}
       {!readOnly && pendingAttachments.length > 0 && (
@@ -500,11 +533,24 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
         // Child sessions are read-only (spec pin: treat the subagent as a
         // tool): no composer, one hint line pointing at the audit page; the
         // server-side submit rejects user-triggered posts as the backstop.
+        // The child never appears in the sidebar — the button is the only
+        // visible way back to the parent.
         <div className="chat-readonly-hint" data-testid="subagent-readonly-hint">
           子代理会话只读——它的过程与结题答复在审计页查看
+          {onReturnToParent !== undefined && (
+            <button type="button" className="return-parent" data-testid="return-to-parent" onClick={onReturnToParent}>
+              ← 返回主会话
+            </button>
+          )}
         </div>
       ) : (
         <form className="chat-composer" ref={composerRef} onSubmit={submit}>
+        {team !== undefined && team.target !== null && (
+          <div className="team-target-chip" data-testid="team-target-chip">
+            → 组员 {team.target}
+            <button type="button" data-testid="team-target-clear" aria-label="切回对组长说话" onClick={() => team.onTalkTo(null)}>×</button>
+          </div>
+        )}
         {completions.length > 0 && (
           <ul
             className="slash-menu"
@@ -665,14 +711,24 @@ function MessageBubble({
   onRegenerate?: () => void
 }) {
   const streaming = message.pending && message.blocks.length === 0
+  // 组员来信（团队收信箱投递的用户消息）不渲染成用户气泡：改为 agent 一侧的
+  // 折叠条，点开看原文——模型收到什么不变，只是聊天页的画法。
+  const mail = message.role === "user" ? parseTeamMail(firstRenderedText(message)) : null
   return (
-    <div className={`message message-${message.role}`} data-testid={`msg-${message.role}`}>
+    <div
+      className={`message message-${message.role}${mail !== null ? " message-mail" : ""}`}
+      data-testid={`msg-${message.role}`}
+    >
       {streaming && <div className="msg-pending" data-testid="msg-pending">…</div>}
       {/* Only the assistant's side renders Markdown: the user's raw words stay
           literal (a stray * or # in a typed message must not turn into markup). */}
-      {message.blocks.map((block) => (
-        <BlockView key={block.blockId} block={block} markdown={message.role === "assistant"} onOpenAudit={onOpenAudit} />
-      ))}
+      {mail !== null ? (
+        <TeamMailView mail={mail} />
+      ) : (
+        message.blocks.map((block) => (
+          <BlockView key={block.blockId} block={block} markdown={message.role === "assistant"} onOpenAudit={onOpenAudit} />
+        ))
+      )}
       {message.aborted === true && (
         <span className="msg-aborted" data-testid="msg-aborted">已中断</span>
       )}
@@ -706,6 +762,30 @@ function firstRenderedText(m: RenderedMessage): string {
   return first !== undefined && first.kind === "text" ? first.text : ""
 }
 
+/** 组员来信折叠条：agent 一侧的窄条，摘要是发件人列表，展开看原文。 */
+function TeamMailView({ mail }: { mail: TeamMailParse }): React.ReactElement {
+  const senders = [...new Set(mail.entries.map((e) => e.from))].join("、")
+  return (
+    <details className="msg-team-mail" data-testid="msg-team-mail">
+      <summary>
+        📥 {mail.entries.length === 1 ? `收到来自 ${senders} 的来信` : `收到 ${mail.entries.length} 条来信（${senders}）`}
+      </summary>
+      {mail.entries.map((e, i) => (
+        <div key={i} className="mail-entry">
+          <div className="mail-from">【来自 {e.from}】</div>
+          <pre className="mail-text">{e.text}</pre>
+        </div>
+      ))}
+    </details>
+  )
+}
+
+/** Single-line preview: collapse whitespace, cap at 80 chars (full args open on click). */
+function oneLine(text: string): string {
+  const collapsed = text.replace(/\s+/g, " ").trim()
+  return collapsed.length > 80 ? `${collapsed.slice(0, 80)}…` : collapsed
+}
+
 /** Index of the last message matching pred; -1 when none. */
 function findLastIdx(messages: RenderedMessage[], pred: (m: RenderedMessage) => boolean): number {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -734,10 +814,16 @@ function BlockView({ block, markdown, onOpenAudit }: { block: RenderedBlock; mar
     case "note":
       return <span className="blk-note" data-testid="blk-note">[note] {block.text}</span>
     case "tool_call":
+      // Collapsed by default: the summary line is the tool name plus a
+      // one-line args preview; the full argsJson opens on click (clamped —
+      // a whole-file write must not swallow the chat pane).
       return (
-        <div className="blk-tool-call" data-testid="blk-tool-call">
-          ⚡ {block.name} <code>{block.argsJson}</code>
-        </div>
+        <details className="blk-tool-call" data-testid="blk-tool-call">
+          <summary>
+            ⚡ {block.name} <code>{oneLine(block.argsJson)}</code>
+          </summary>
+          <code className="blk-tool-call-args">{block.argsJson}</code>
+        </details>
       )
     case "tool_result": {
       // A subagent dispatch row: the live status (streamed into output) is the

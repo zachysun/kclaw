@@ -94,6 +94,61 @@ describe("providers routes", () => {
     expect(missing.statusCode).toBe(404)
   })
 
+  it("PATCH renames an entry: the key moves, the default pointer and memory refs follow", async () => {
+    const res = await app.inject({
+      method: "PATCH", url: "/providers/ds", headers: AUTH,
+      payload: { name: "deepseek", entry: { format: "openai", baseUrl: "https://api.deepseek.com/v1", apiKey: "", model: "deepseek-chat" } },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().default).toBe("deepseek")
+    const persisted = JSON.parse(readFileSync(join(home, "config.json"), "utf8"))
+    expect(persisted.providers.entries.ds).toBeUndefined()
+    expect(persisted.providers.entries.deepseek.apiKey).toBe("sk-secret-key") // blank key still keeps the stored one
+    expect(persisted.providers.default).toBe("deepseek")
+
+    const dupe = await app.inject({
+      method: "PATCH", url: "/providers/deepseek", headers: AUTH,
+      payload: { name: "deepseek", entry: { format: "openai", baseUrl: "https://x", apiKey: "k", model: "m" } },
+    })
+    expect(dupe.statusCode).toBe(200) // same name = plain update, no rename
+
+    const conflict = await app.inject({
+      method: "POST", url: "/providers", headers: AUTH,
+      payload: { name: "other", entry: { format: "openai", baseUrl: "https://x", apiKey: "k", model: "m" } },
+    })
+    expect(conflict.statusCode).toBe(200)
+    const clash = await app.inject({
+      method: "PATCH", url: "/providers/other", headers: AUTH,
+      payload: { name: "deepseek", entry: { format: "openai", baseUrl: "https://x", apiKey: "k", model: "m" } },
+    })
+    expect(clash.statusCode).toBe(409)
+    const bad = await app.inject({
+      method: "PATCH", url: "/providers/other", headers: AUTH,
+      payload: { name: "bad name!", entry: { format: "openai", baseUrl: "https://x", apiKey: "k", model: "m" } },
+    })
+    expect(bad.statusCode).toBe(400)
+  })
+
+  it("a rename follows the memory extraction/embedding references", async () => {
+    await app.close()
+    app = await createApp({
+      home, token: "t1",
+      stores: {
+        config: makeConfig((cfg) => {
+          cfg.memory = { ...structuredClone(defaultConfig.memory), extractModel: "ds", embedding: { provider: "ds", model: "x" } }
+        }),
+      },
+    })
+    const res = await app.inject({
+      method: "PATCH", url: "/providers/ds", headers: AUTH,
+      payload: { name: "deepseek", entry: { format: "openai", baseUrl: "https://api.deepseek.com/v1", apiKey: "", model: "deepseek-chat" } },
+    })
+    expect(res.statusCode).toBe(200)
+    const persisted = JSON.parse(readFileSync(join(home, "config.json"), "utf8"))
+    expect(persisted.memory.extractModel).toBe("deepseek")
+    expect(persisted.memory.embedding.provider).toBe("deepseek")
+  })
+
   it("DELETE removes an entry but guards the default", async () => {
     const guarded = await app.inject({ method: "DELETE", url: "/providers/ds", headers: AUTH })
     expect(guarded.statusCode).toBe(409)

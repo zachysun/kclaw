@@ -1,7 +1,8 @@
 /**
  * Provider management routes: the Model-tab snapshot (GET /providers —
  * entries with masked keys plus the built-in presets) and the hot-config
- * action family (create/update/delete/set-default/model-probe). Mutations
+ * action family (create/update/rename/delete/set-default/model-probe).
+ * Mutations
  * apply to the daemon's shared in-memory config immediately — the next run
  * resolves its entry through it — and persist through saveConfig, whose
  * first write lands in config.json and retires a legacy config.yaml.
@@ -85,18 +86,39 @@ export function registerProvidersRoutes(app: FastifyInstance, deps: ProvidersRou
     return { ok: true, ...snapshot(deps) }
   })
 
+  // PATCH updates the entry and may also rename it (body `name`): the entry
+  // key moves, and config-level references follow — the default pointer and
+  // the memory extraction/embedding provider. Session references keep the old
+  // name by design (they fall back to the default on their next run, the
+  // delete semantics).
   app.patch("/providers/:name", async (request, reply) => {
     const { name } = request.params as NameParams
     const existing = deps.config.providers.entries[name]
     if (existing === undefined) return reply.code(404).send({ error: `unknown provider entry: ${name}` })
-    const body = request.body as { entry?: unknown } | null | undefined
+    const body = request.body as { name?: unknown; entry?: unknown } | null | undefined
+    let target = name
+    if (typeof body?.name === "string" && body.name.trim() !== "" && body.name.trim() !== name) {
+      target = body.name.trim()
+      if (!NAME_PATTERN.test(target)) {
+        return reply.code(400).send({ error: "name may only contain letters, digits, '_' and '-'" })
+      }
+      if (deps.config.providers.entries[target] !== undefined) {
+        return reply.code(409).send({ error: `provider entry "${target}" already exists` })
+      }
+    }
     let entry: ProviderEntry
     try {
       entry = parseProviderEntry(body?.entry)
     } catch (e) {
       return reply.code(400).send({ error: (e as Error).message })
     }
-    deps.config.providers.entries[name] = mergeEntry(existing, entry)
+    if (target !== name) {
+      delete deps.config.providers.entries[name]
+      if (deps.config.providers.default === name) deps.config.providers.default = target
+      if (deps.config.memory?.extractModel === name) deps.config.memory.extractModel = target
+      if (deps.config.memory?.embedding?.provider === name) deps.config.memory.embedding.provider = target
+    }
+    deps.config.providers.entries[target] = mergeEntry(existing, entry)
     persist(deps)
     return { ok: true, ...snapshot(deps) }
   })

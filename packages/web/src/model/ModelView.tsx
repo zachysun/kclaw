@@ -12,6 +12,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { ApiClient } from "../api.js"
+import { emitProvidersChanged } from "../events.js"
 import type { NoticeFn } from "../toast.js"
 
 type ApiFormat = "openai" | "anthropic"
@@ -128,6 +129,7 @@ export function ModelView({ api, notice }: {
   const act = async (fn: () => Promise<unknown>): Promise<void> => {
     try {
       await fn()
+      emitProvidersChanged() // the chat page's model selector rereads /config on this
       await reload()
     } catch (e) {
       noticeRef.current(`操作失败: ${String(e)}`, "error")
@@ -221,8 +223,10 @@ export function ModelView({ api, notice }: {
       if (form.editing === null) {
         await api.post("/providers", { name: form.name.trim(), entry })
       } else {
-        await api.patch(`/providers/${encodeURIComponent(form.editing)}`, { entry })
+        const name = form.name.trim()
+        await api.patch(`/providers/${encodeURIComponent(form.editing)}`, { entry, ...(name !== "" && name !== form.editing ? { name } : {}) })
       }
+      emitProvidersChanged()
       setForm(null)
       setFormError(null)
       await reload()
@@ -309,7 +313,6 @@ export function ModelView({ api, notice }: {
               <input
                 data-testid="model-form-name"
                 value={form.name}
-                disabled={form.editing !== null}
                 placeholder="会话与命令里用的条目名"
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
               />

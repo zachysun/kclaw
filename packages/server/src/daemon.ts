@@ -52,6 +52,7 @@ import { loadOrCreateToken } from "./auth.js"
 import { EventBus } from "@kclaw/core"
 import { RunManager } from "./run.js"
 import { createSubagentHost } from "./subagent.js"
+import { createTeamHost } from "./team.js"
 import { startSchedulerTick } from "./scheduler-tick.js"
 import { startMemoryScheduler } from "./memory-scheduler.js"
 import { createApp } from "./app.js"
@@ -387,15 +388,20 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // late-bound getter breaks the cycle (dispatches only fire mid-run, long
   // after both sides exist).
   let runRef: RunManager | undefined
+  const getRun = (): RunManager => {
+    if (runRef === undefined) throw new Error("run manager not ready")
+    return runRef
+  }
   const subagentHost = createSubagentHost({
     config,
     sessions,
     bus,
-    getRun: () => {
-      if (runRef === undefined) throw new Error("run manager not ready")
-      return runRef
-    },
+    getRun,
   })
+  // Agent team: the facade needs the RunManager (member dispatch) while the
+  // RunManager's engine deps need the facade (identity probe per run) — the
+  // same late-bound getter breaks the cycle.
+  const teamHost = createTeamHost({ config, sessions, bus, getRun })
   const run = new RunManager({
     config,
     paths,
@@ -411,6 +417,10 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       spawner: subagentHost.spawner,
       collector: subagentHost.collector,
     },
+    team: { facade: teamHost.facade },
+    // Idle edge: a user chat run never passes through startRun, so the team
+    // host only learns that a busy lead/member freed up from this hook.
+    onSessionIdle: (sessionId) => teamHost.pump(sessionId),
     // auto mode induction (batch C): one per-process streak counter threaded
     // through every run's assembly; threshold 0 disables induction.
     autoLearn: { counter: new AutoLearnCounter(config.permissions.autoLearnThreshold ?? 3) },
@@ -434,6 +444,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     bus,
     run,
     cancelBackgroundForParent: subagentHost.cancelBackgroundForParent,
+    team: teamHost,
     mcp: mcpManager,
     attachmentsDir: paths.attachmentsDir,
     usage,

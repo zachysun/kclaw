@@ -1,6 +1,7 @@
 import type { FastifyError, FastifyInstance } from "fastify"
 import { isPermissionMode, PERMISSION_MODES, type KclawConfig, type MemorySystem, type SessionStore } from "@kclaw/core"
 import type { RunManager } from "../run.js"
+import type { TeamHost } from "../team.js"
 
 /** Store dependencies for the session routes (injected by createApp). */
 export interface SessionStores {
@@ -21,6 +22,11 @@ export interface SessionStores {
    * delete/purge skip the cancellation half.
    */
   cancelBackgroundForParent?: (parentSessionId: string) => number
+  /**
+   * The team host: `GET /sessions/:id/team` serves the panel
+   * view; the delete/purge cascade cancels the team's still-running members.
+   */
+  team?: TeamHost
 }
 
 const NOT_FOUND = { error: "session not found" } as const
@@ -117,6 +123,10 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       // (issue #22) — the soft-delete cascade below then removes their
       // sessions, so nothing keeps running orphaned.
       stores.cancelBackgroundForParent?.(id)
+      stores.team?.cancelMembersForLead(id)
+      // The team directory is data too: archive it with the cascade so the
+      // record and trails stay inspectable after the lead is gone.
+      stores.team?.archiveTeamForLead(id)
       // Cascade: a parent's children (subagent sessions) are soft-deleted with
       // it — no orphans in the recycle bin. Already-deleted children keep
       // their original deletedAt (listByParent includes them; skip those).
@@ -139,6 +149,8 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       // their parent); then the purge cascade (children are soft-deleted with
       // their parent, so both die together here).
       stores.cancelBackgroundForParent?.(id)
+      stores.team?.cancelMembersForLead(id)
+      stores.team?.archiveTeamForLead(id)
       for (const child of stores.sessions.listByParent(id)) {
         stores.sessions.purge(child.id)
       }
@@ -158,6 +170,18 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
         return reply.code(400).send({ error: `mode must be one of ${PERMISSION_MODES.join(" | ")}` })
       }
       return stores.sessions.updateMeta(id, { mode: body.mode })
+    })
+
+    // Team panel: one read for the whole team view — record,
+    // member summaries (busy/current task derived), the task board. Works for
+    // lead AND member sessions; anything else answers 404 (no team).
+    scope.get("/sessions/:id/team", async (request, reply) => {
+      const { id } = request.params as { id: string }
+      if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
+      if (stores.team === undefined) return reply.code(503).send({ error: "team host not available" })
+      const panel = await stores.team.panel(id)
+      if (panel === null) return reply.code(404).send({ error: "session belongs to no team" })
+      return panel
     })
 
     scope.get("/sessions/:id", async (request, reply) => {

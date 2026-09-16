@@ -19,7 +19,7 @@
    │           @kclaw/core（纯库 agent 引擎）                    │
    │           ├─ run 装配：agent 循环、工具、权限               │
    │           ├─ 确认网关：高危工具先确认再执行                 │
-   │           ├─ 事件总线：37 种 AgentEvent                    │
+   │           ├─ 事件总线：40 种 AgentEvent                    │
    │           └─ 记忆 · 上下文压缩                             │
    │                          │                                 │
    └──────────────────────────┼─────────────────────────────────┘
@@ -72,6 +72,7 @@ kclaw web     # 浏览器打开 WebUI（带 token，自动登录）
 - **会话**：对话以事件流写入 `sessions/<id>/events.jsonl`（会话真相），可随时恢复历史会话。
 - **记忆**：每轮结束后自动把新消息提取、按主题沉淀为 markdown 情节线（FTS5 索引为派生物）；之后相关提问命中情节，以 note 形式注入上下文。
 - **任务**：cron 定时任务（如 `0 9 * * *` 每日早报），到点 daemon 自动创建新会话执行，结果写入审计。
+- **agent 团队**：主会话可建队并招募组员（各自是持久子会话），任务板分工协作（认领/依赖/结题），人随时对任一成员说话或逐个停止；协作真相落在工作区 `.agent-teams/` 目录，全程审计可查。
 - **审计**：权限决策全程留痕，WebUI「审计」页可查。
 
 ---
@@ -186,6 +187,7 @@ pnpm test        # 全部包 vitest（cli/server 快速验证需先 pnpm build�
 - [architecture — 全局总纲](docs/architecture.md)：模块地图、进程模型、数据流，其余各篇的入口
 - core/（agent 引擎，纯库）
   - [agent-loop](docs/core/agent-loop.md) — run 的运行循环
+  - [agent-team](docs/core/agent-team.md) — agent 团队（组长 + 组员、收信箱投递、任务板）
   - [client-http](docs/core/client-http.md) — 共享 HTTP 请求基座（Bearer 鉴权、JSON、错误信封）
   - [compaction](docs/core/compaction.md) — 上下文压缩
   - [hooks](docs/core/hooks.md) — 用户钩子系统

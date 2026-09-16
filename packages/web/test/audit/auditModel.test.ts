@@ -138,7 +138,7 @@ function kindsFilter(off: AuditRow["kind"]): AuditFilter {
   return {
     ...DEFAULT_FILTER,
     kinds: {
-      block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true,
+      block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true, team: true,
       [off]: false,
     },
   }
@@ -370,3 +370,51 @@ function runSummaryOf(row: Extract<AuditRow, { kind: "run" }>): string {
   // 借 rowSearchText 拿摘要（与渲染组件同源），避免从组件层导入。
   return rowSearchText(row)
 }
+
+// ---------- team/* 事件（agent-team 审计行） ----------
+
+const TASK = {
+  id: 3, subject: "实现登录页", detail: "按设计稿实现", status: "in_progress" as const,
+  assignee: "alice" as string | null, dependencies: [1, 2] as number[], attempt: 2, revision: 5,
+  createdAt: "2026-09-08T10:00:00.000Z", updatedAt: "2026-09-08T10:03:00.000Z",
+}
+
+describe("team 审计行", () => {
+  it("七种 team/* 事件各成一行，摘要与全文按类型渲染", () => {
+    const events: SessionEvent[] = [
+      { type: "team.created", version: 1 as const, at: "2026-09-08T10:00:00.000Z", teamId: "team_1", name: "登录攻坚" },
+      { type: "team.member.provisioned", version: 1 as const, at: "2026-09-08T10:00:10.000Z", teamId: "team_1", member: "alice", sessionId: "s2", model: "deepseek/deepseek-chat" },
+      { type: "team.member.settled", version: 1 as const, at: "2026-09-08T10:00:20.000Z", teamId: "team_1", member: "bob", status: "failed", reason: "模型不可用" },
+      { type: "team.message.queued", version: 1 as const, at: "2026-09-08T10:01:00.000Z", teamId: "team_1", id: "mail_1", from: "lead", to: "alice", textPreview: "去做任务 #3" },
+      { type: "team.message.delivered", version: 1 as const, at: "2026-09-08T10:01:05.000Z", teamId: "team_1", id: "mail_1", to: "alice" },
+      { type: "team.task.created", version: 1 as const, at: "2026-09-08T10:01:10.000Z", teamId: "team_1", task: { ...TASK, status: "pending" as const, assignee: null, attempt: 0, revision: 1 } },
+      { type: "team.task.updated", version: 1 as const, at: "2026-09-08T10:02:00.000Z", teamId: "team_1", task: TASK },
+    ]
+    const rows = flattenAudit(events) as Extract<AuditRow, { kind: "team" }>[]
+    expect(rows).toHaveLength(7)
+    expect(rows.every((r) => r.kind === "team")).toBe(true)
+    // 摘要（与渲染组件同源走 rowSearchText 的摘要部分）
+    const texts = rows.map((r) => rowSearchText(r))
+    expect(texts[0]).toContain("建团「登录攻坚」")
+    expect(texts[1]).toContain("招募组员 alice")
+    expect(texts[2]).toContain("组员 bob → failed（模型不可用）")
+    expect(texts[3]).toContain("收信 lead → alice：去做任务 #3")
+    expect(texts[4]).toContain("送达 alice")
+    expect(texts[5]).toContain("任务 #3「实现登录页」创建")
+    expect(texts[6]).toContain("任务 #3「实现登录页」→ in_progress（alice）")
+    // 全文：任务事件展开任务快照，其余 JSON.stringify 整事件
+    expect(texts[6]).toContain('"attempt": 2')
+    expect(texts[0]).toContain("team_1")
+  })
+
+  it("team 行随 kind 开关过滤；keyword 命中摘要文本", () => {
+    const events: SessionEvent[] = [
+      { type: "team.created", version: 1 as const, at: "2026-09-08T10:00:00.000Z", teamId: "team_1", name: "登录攻坚" },
+    ]
+    const rows = flattenAudit(events)
+    const off: AuditFilter = { ...DEFAULT_FILTER, kinds: { ...DEFAULT_FILTER.kinds, team: false } }
+    expect(filterRows(rows, off, new Date())).toHaveLength(0)
+    expect(filterRows(rows, { ...DEFAULT_FILTER, keyword: "登录攻坚" }, new Date())).toHaveLength(1)
+    expect(filterRows(rows, { ...DEFAULT_FILTER, keyword: "不存在的词" }, new Date())).toHaveLength(0)
+  })
+})

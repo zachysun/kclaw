@@ -771,19 +771,46 @@ select:focus {
 
 .toast {
   pointer-events: auto;
-  appearance: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   border: 1px solid var(--border-strong);
   background: var(--surface-2);
   color: var(--text);
-  font: inherit;
   font-size: 12px;
   line-height: 1.5;
   text-align: left;
-  padding: 8px 12px;
+  padding: 8px 8px 8px 12px;
   border-radius: 6px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
-  cursor: pointer;
   animation: toast-in 0.18s ease-out;
+}
+
+.toast-text {
+  appearance: none;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+}
+
+.toast-close {
+  appearance: none;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: 1.2;
+  padding: 0 2px;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.toast-close:hover {
+  opacity: 1;
 }
 
 .toast.error {
@@ -929,7 +956,13 @@ select:focus {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  /* A flex item's auto min-width would let one wide unbreakable line (a long
+     code argument, say) push the whole chat past the viewport — which also
+     shoved the absolutely-positioned team panel out of sight. */
+  min-width: 0;
   gap: var(--space-3);
+  /* Anchors the floating team panel (position:absolute looks up to here). */
+  position: relative;
 }
 
 .chat-error {
@@ -1047,7 +1080,9 @@ select:focus {
 .chat-log {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -1416,9 +1451,56 @@ select:focus {
   font-family: var(--font-mono);
 }
 
+.blk-tool-call summary {
+  cursor: pointer;
+}
+
 .blk-tool-call code {
   background: transparent;
   padding: 0;
+}
+
+/* 展开后的完整参数：滚动限高，整文件写入也不能撑爆聊天页 */
+.blk-tool-call-args {
+  display: block;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ---- 团队来信（agent 一侧折叠条，不占用户气泡） ---- */
+
+.message-mail {
+  align-self: flex-start;
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  border-bottom-left-radius: 2px;
+}
+
+.msg-team-mail {
+  font-size: 13px;
+}
+
+.msg-team-mail summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.mail-entry {
+  margin-top: 6px;
+}
+
+.mail-from {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.mail-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 2px 0 0;
+  font: inherit;
 }
 
 .blk-tool-result {
@@ -1443,6 +1525,18 @@ select:focus {
   padding: 10px 12px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.chat-readonly-hint .return-parent {
+  margin-left: var(--space-3);
+  font-size: 12px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+
+.chat-readonly-hint .return-parent:hover {
+  border-color: var(--accent);
+  color: var(--accent-strong);
 }
 
 .blk-tool-result pre {
@@ -1714,6 +1808,15 @@ select:focus {
   background: var(--accent-dim);
 }
 
+/* Model + permission selectors share one row (Master: vertical stacking
+   wasted a second line for two short controls). */
+.composer-selectors {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-4);
+}
+
 .composer-row {
   display: flex;
   align-items: center;
@@ -1757,6 +1860,274 @@ select:focus {
 
 .attachment-chip button:hover {
   color: var(--danger);
+}
+
+/* agent team — the in-chat panel: member cards on top, the shared task
+   board below. Folded state shows just the one-line head. */
+/* The team panel floats over the chat area's top-right corner, outside the
+   scrolling log (pinned to the message stream it scrolled out of sight).
+   Collapsed it shrinks to its summary chip; expanded it is a fixed-width
+   card with an internally scrolling body. */
+.team-panel {
+  position: absolute;
+  top: 4px;
+  right: 12px;
+  z-index: 30;
+  width: fit-content;
+  max-width: calc(100% - 24px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 35%);
+}
+
+.team-panel[open] {
+  display: flex;
+  flex-direction: column;
+  width: 340px;
+  max-height: min(62vh, 560px);
+}
+
+.team-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  padding: 8px 12px;
+  cursor: pointer;
+  font-weight: 600;
+  list-style: none;
+  white-space: nowrap;
+}
+
+.team-panel-head::-webkit-details-marker {
+  display: none;
+}
+
+.team-panel-head::before {
+  content: "▸";
+  color: var(--accent);
+  margin-right: 6px;
+}
+
+.team-panel[open] .team-panel-head::before {
+  content: "▾";
+}
+
+.team-panel-meta {
+  font-size: 12px;
+  font-weight: 400;
+  margin-left: auto;
+}
+
+.team-panel-body {
+  border-top: 1px solid var(--border);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.team-members {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.team-member-card {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px var(--space-3);
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.team-member-card:hover {
+  background: var(--surface-2);
+}
+
+.team-member-card.active {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+}
+
+.team-member-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  min-width: 96px;
+}
+
+.team-member-sub {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.team-member-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.team-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
+  text-transform: none;
+}
+
+.team-badge.provisioning {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--danger-dim);
+}
+
+.team-badge.busy {
+  color: var(--accent-strong);
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+}
+
+.team-badge.failed {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.team-talk,
+.team-stop,
+.team-trail {
+  font-size: 11px;
+  padding: 1px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.team-talk.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.team-stop:hover {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.team-trail:hover {
+  border-color: var(--border-hover);
+  color: var(--text);
+}
+
+.team-board-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--space-3);
+  font-size: 12px;
+  color: var(--muted);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.team-board-stats span {
+  white-space: nowrap;
+}
+
+.team-board-empty {
+  font-size: 12px;
+  padding: var(--space-2) 0;
+}
+
+.team-task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.team-task-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 var(--space-3);
+  padding: 3px 0;
+  border-bottom: 1px solid var(--row-stripe);
+  font-size: 13px;
+}
+
+.team-task-row:last-child {
+  border-bottom: none;
+}
+
+.team-task-subject {
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.team-task-meta {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.team-task-completed .team-task-subject {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.team-task-in_progress .team-task-subject {
+  color: var(--accent-strong);
+}
+
+.team-task-failed .team-task-subject {
+  color: var(--danger);
+}
+
+/* the "→ 组员 X" chip in the composer while talking to a member */
+.team-target-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--accent-strong);
+  white-space: nowrap;
+  align-self: center;
+}
+
+.team-target-chip button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  color: var(--accent-strong);
+}
+
+.team-target-chip button:hover {
+  color: var(--text);
 }
 
 /* composer — the prompt line: amber ❯ then the input */

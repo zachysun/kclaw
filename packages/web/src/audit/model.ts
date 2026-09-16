@@ -10,12 +10,12 @@
 import type {
   Block, CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, Role, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent, SessionEvent, SessionRenamedEvent,
-  SessionRestoredEvent, SessionSetEvent, SystemEvent, ToolGrantReason, Usage,
+  SessionRestoredEvent, SessionSetEvent, SystemEvent, TeamAuditEvent, ToolGrantReason, Usage,
 } from "../types.js"
 
 export type SessionMetaEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent
 
-export type AuditRowKind = "block" | "compaction" | "memory" | "system" | "sandbox" | "session" | "run" | "decision" | "truncation"
+export type AuditRowKind = "block" | "compaction" | "memory" | "system" | "sandbox" | "session" | "run" | "decision" | "truncation" | "team"
 
 /**
  * One flattened audit row. Block rows carry the owning message's role,
@@ -36,6 +36,7 @@ export type AuditRow =
   | { kind: "run"; key: string; index: number; event: RunStartedEvent | RunEndedEvent; at: string }
   | { kind: "decision"; key: string; index: number; event: PermissionDecidedEvent; at: string }
   | { kind: "truncation"; key: string; index: number; event: MessageTruncatedEvent; at: string }
+  | { kind: "team"; key: string; index: number; event: TeamAuditEvent; at: string }
 
 /**
  * Flatten the event stream into rows, one per rendered event. Message events
@@ -172,6 +173,15 @@ function flattenEventInto(
     case "message.truncated":
       rows.push({ kind: "truncation", key: `${index}`, index, event, at: event.at })
       break
+    case "team.created":
+    case "team.member.provisioned":
+    case "team.member.settled":
+    case "team.message.queued":
+    case "team.message.delivered":
+    case "team.task.created":
+    case "team.task.updated":
+      rows.push({ kind: "team", key: `${index}`, index, event, at: event.at })
+      break
     case "session.created":
     case "session.renamed":
     case "session.deleted":
@@ -205,10 +215,10 @@ export interface AuditFilter {
   timeTo: string
 }
 
-export const ALL_KINDS: AuditRowKind[] = ["block", "compaction", "memory", "system", "sandbox", "session", "run", "decision", "truncation"]
+export const ALL_KINDS: AuditRowKind[] = ["block", "compaction", "memory", "system", "sandbox", "session", "run", "decision", "truncation", "team"]
 
 export const DEFAULT_FILTER: AuditFilter = {
-  kinds: { block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true },
+  kinds: { block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true, team: true },
   keyword: "",
   timePreset: "all",
   timeFrom: "",
@@ -259,6 +269,8 @@ export function rowSearchText(row: AuditRow): string {
       return `${decisionSummary(row.event)} ${decisionFullContent(row.event)}`
     case "truncation":
       return `${truncationSummary(row.event)} ${row.event.fromMessageId}`
+    case "team":
+      return `${teamSummary(row.event)} ${teamFullContent(row.event)}`
   }
 }
 
@@ -520,5 +532,42 @@ export function blockFullContent(block: Block): string {
       return block.output
     case "attachment":
       return JSON.stringify(block.source, null, 2)
+  }
+}
+
+// ---------- 团队（agent-team）事件 ----------
+
+/** team/* 事件的单行摘要（审计页团队行）。 */
+export function teamSummary(event: TeamAuditEvent): string {
+  switch (event.type) {
+    case "team.created":
+      return `建团「${event.name}」`
+    case "team.member.provisioned":
+      return `招募组员 ${event.member}`
+    case "team.member.settled":
+      return `组员 ${event.member} → ${event.status}${event.reason !== undefined ? `（${event.reason}）` : ""}`
+    case "team.message.queued":
+      return `收信 ${event.from} → ${event.to}：${event.textPreview}`
+    case "team.message.delivered":
+      return `送达 ${event.to}`
+    case "team.task.created":
+      return `任务 #${event.task.id}「${event.task.subject}」创建${event.task.assignee !== null ? `（指派 ${event.task.assignee}）` : ""}`
+    case "team.task.updated":
+      return `任务 #${event.task.id}「${event.task.subject}」→ ${event.task.status}${event.task.assignee !== null ? `（${event.task.assignee}）` : ""}`
+  }
+}
+
+/** team/* 事件的完整展开内容（审计行点击后的 pre）。 */
+export function teamFullContent(event: TeamAuditEvent): string {
+  switch (event.type) {
+    case "team.created":
+    case "team.member.provisioned":
+    case "team.member.settled":
+    case "team.message.queued":
+    case "team.message.delivered":
+      return JSON.stringify(event, null, 2)
+    case "team.task.created":
+    case "team.task.updated":
+      return JSON.stringify(event.task, null, 2)
   }
 }

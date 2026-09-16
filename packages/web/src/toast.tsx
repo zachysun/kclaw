@@ -2,9 +2,10 @@
  * Global toast stack — the one place transient feedback lands (sidebar action
  * results, management-tab confirmations, load failures). Toasts appear
  * top-right over the content area (near where the triggering control lives),
- * auto-dismiss after a few seconds, and can be clicked away early; errors
- * linger longer and carry a distinct tone. Replaces the old bottom-of-sidebar
- * notice bar, which piled every notice into one hard-to-notice spot.
+ * auto-dismiss after a few seconds, and can be closed early — via the ×
+ * button or by clicking the text; errors linger longer and carry a distinct
+ * tone. Replaces the old bottom-of-sidebar notice bar, which piled every
+ * notice into one hard-to-notice spot.
  */
 import { useCallback, useEffect, useRef, useState } from "react"
 
@@ -47,21 +48,21 @@ export function useToasts(): {
 
 function Toast({ item, onDismiss }: { item: ToastItem; onDismiss: (id: number) => void }): React.ReactElement {
   // One timer per toast, owned by its own component: mount starts it, the
-  // dismiss (auto or click) unmounts and clears it.
+  // dismiss (auto, × or text click) unmounts and clears it.
   useEffect(() => {
     const timer = setTimeout(() => onDismiss(item.id), DISMISS_MS[item.tone])
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the item is fixed for this component's lifetime
   }, [item.id])
   return (
-    <button
-      type="button"
-      className={`toast ${item.tone}`}
-      data-testid={`toast-${item.id}`}
-      onClick={() => onDismiss(item.id)}
-    >
-      {item.text}
-    </button>
+    <div className={`toast ${item.tone}`} data-testid={`toast-${item.id}`}>
+      <button type="button" className="toast-text" onClick={() => onDismiss(item.id)}>
+        {item.text}
+      </button>
+      <button type="button" className="toast-close" data-testid={`toast-close-${item.id}`} aria-label="关闭通知" onClick={() => onDismiss(item.id)}>
+        ×
+      </button>
+    </div>
   )
 }
 

@@ -95,7 +95,7 @@ export interface BuiltinHookDeps {
   runIdRef: { current?: string }
   // user-message-land / autoname inputs (former onUserMessage closure state)
   jobNotes: NoteBlock[]
-  trigger: "user" | "job" | "agent"
+  trigger: "user" | "job" | "agent" | "team"
   /**
    * Subagent child run (the session's parentSessionId is set): the run is a
    * dispatched executor's only turn — memory injection, autoname, the follow

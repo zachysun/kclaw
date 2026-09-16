@@ -32,9 +32,8 @@ function mount(): { container: HTMLElement; root: Root; api: ReturnType<typeof u
 }
 
 function toastTexts(container: HTMLElement): string[] {
-  // .toast (class, not the data-testid prefix — that would also match the
-  // toast-stack container itself).
-  return [...container.querySelectorAll(".toast")].map((el) => el.textContent ?? "")
+  // .toast-text only — the .toast container would also pick up the × close button
+  return [...container.querySelectorAll(".toast-text")].map((el) => el.textContent ?? "")
 }
 
 describe("ToastStack", () => {
@@ -75,15 +74,31 @@ describe("ToastStack", () => {
     container.remove()
   })
 
-  it("clicking a toast dismisses it early", () => {
+  it("clicking the toast text dismisses it early", () => {
     vi.useFakeTimers()
     const { container, root, api } = mount()
     act(() => {
       api.notify("点我消失")
     })
-    const toast = container.querySelector(".toast") as HTMLButtonElement
+    const text = container.querySelector(".toast-text") as HTMLButtonElement
     act(() => {
-      toast.click()
+      text.click()
+    })
+    expect(container.querySelector("[data-testid='toast-stack']")).toBeNull()
+    root.unmount()
+    container.remove()
+  })
+
+  it("the × close button dismisses the toast", () => {
+    vi.useFakeTimers()
+    const { container, root, api } = mount()
+    act(() => {
+      api.notify("记忆写入完成")
+    })
+    const close = container.querySelector(".toast-close") as HTMLButtonElement
+    expect(close).not.toBeNull()
+    act(() => {
+      close.click()
     })
     expect(container.querySelector("[data-testid='toast-stack']")).toBeNull()
     root.unmount()

@@ -6,7 +6,7 @@ import type { CompactionRecord, CompactionState } from "./compaction.js"
 import { writeFileAtomic } from "../storage/atomic.js"
 import { appendJsonlLine, readJsonl, readJsonlFrom } from "../storage/jsonl.js"
 import { applyEvent, isCompactionEvent, isMessageEvent, isMessageTruncatedEvent } from "./events.js"
-import type { MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent, SandboxCheckedEvent, SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent } from "./events.js"
+import type { MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent, SandboxCheckedEvent, SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent, TeamAuditEvent } from "./events.js"
 import type { AttachmentRef, QueueEntry } from "../protocol/wire.js"
 import type { PermissionMode } from "../permissions/modes.js"
 
@@ -322,6 +322,11 @@ export class SessionStore {
   /** Append one permission-decision audit event（每次人工确认的裁决留痕; 中止不是裁决，不落）; the projection stays untouched (不推进 updatedAt)。 */
   appendPermissionDecided(id: string, event: Omit<PermissionDecidedEvent, "type">): void {
     this.appendEvent(id, { type: "permission.decided", ...event })
+  }
+
+  /** Append one team audit event（team/* 族：真相在团队目录，事件只留痕）; the projection stays untouched (不推进 updatedAt)。 */
+  appendTeamAudit(id: string, event: TeamAuditEvent): void {
+    this.appendEvent(id, event)
   }
 
   /**

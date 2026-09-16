@@ -72,6 +72,7 @@ The wizard ships DeepSeek / OpenAI / Ollama / custom templates; key input is hid
 - **Sessions**: every message is persisted as part of the session's event stream (`sessions/<id>/events.jsonl`); history can be resumed at any time.
 - **Memory**: after each turn, new messages are extracted into per-topic markdown thread files (with a derived FTS5 index); a later related question gets the matching episode injected as a note.
 - **Jobs**: cron-scheduled jobs (e.g. `0 9 * * *` for a daily briefing); the daemon opens a new session on schedule and logs results to audit.
+- **Agent team**: a lead session can create a team and recruit members (each a persistent child session); work is coordinated through a shared task board (claim / dependencies / completion), you can talk to any member or stop them one by one, and all coordination lives in the workspace's `.agent-teams/` directory with a full audit trail.
 - **Audit**: permission decisions leave a full trail, viewable in the WebUI "audit" tab.
 
 ---
@@ -188,6 +189,7 @@ Docs:
 - [architecture — the big picture](docs/architecture.md): module map, process model, data flow; the entry point to every other doc
 - core/ (agent engine, pure library)
   - [agent-loop](docs/core/agent-loop.md) — the run loop
+  - [agent-team](docs/core/agent-team.md) — agent teams (lead + members, mailbox delivery, task board)
   - [client-http](docs/core/client-http.md) — the shared HTTP request layer (Bearer auth, JSON, error envelope)
   - [compaction](docs/core/compaction.md) — context compaction
   - [file-mentions](docs/core/file-mentions.md) — @ file mentions in user messages

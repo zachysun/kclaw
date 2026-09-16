@@ -1,0 +1,280 @@
+import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { initTeamDirectory, ensureWorkspaceIgnore, TeamStore, TeamConflictError, isValidMemberName, isValidTeamName } from "../../src/team/store.js"
+
+let workspace: string
+let kclawDir: string
+let store: TeamStore
+
+const limits = { maxMembers: 3, maxActive: 4, maxUnreadPerTarget: 2, maxMessageBytes: 1000, maxTasks: 4 }
+const TEAM = "test-team"
+
+beforeEach(() => {
+  workspace = mkdtempSync(join(tmpdir(), "kclaw-team-"))
+  kclawDir = join(workspace, ".kclaw")
+  initTeamDirectory(kclawDir, TEAM, { version: 1, teamId: TEAM, name: TEAM, leadSessionId: "ses_lead", createdAt: "2026-09-16T00:00:00Z" })
+  store = new TeamStore(kclawDir, TEAM, limits)
+})
+
+afterEach(() => {
+  rmSync(workspace, { recursive: true, force: true })
+})
+
+describe("team directory skeleton", () => {
+  it("creates the teams/tasks layout and the record", () => {
+    expect(existsSync(join(kclawDir, "teams", TEAM, "config.json"))).toBe(true)
+    expect(existsSync(join(kclawDir, "teams", TEAM, "inboxes", "team-lead.json"))).toBe(true)
+    expect(existsSync(join(kclawDir, "tasks", TEAM, "current_tasks"))).toBe(true)
+    const config = JSON.parse(readFileSync(join(kclawDir, "teams", TEAM, "config.json"), "utf8")) as { members: unknown[]; leadSessionId: string }
+    expect(config.leadSessionId).toBe("ses_lead")
+    expect(config.members).toEqual([])
+    expect(store.record()?.leadSessionId).toBe("ses_lead")
+    expect(store.teamDir).toBe(join(kclawDir, "teams", TEAM))
+    expect(store.tasksDir).toBe(join(kclawDir, "tasks", TEAM))
+  })
+
+  it("team names become directory names: letters/numbers (any script) + hyphen", () => {
+    expect(isValidTeamName("crew")).toBe(true)
+    expect(isValidTeamName("解析组")).toBe(true)
+    expect(isValidTeamName("crew-2")).toBe(true)
+    expect(isValidTeamName("has space")).toBe(false)
+    expect(isValidTeamName("a/b")).toBe(false)
+    expect(isValidTeamName(".hidden")).toBe(false)
+    expect(isValidTeamName("x".repeat(40))).toBe(false)
+  })
+
+  it("ensureWorkspaceIgnore appends the ignore line once and creates a missing .gitignore", () => {
+    ensureWorkspaceIgnore(workspace, ".kclaw")
+    ensureWorkspaceIgnore(workspace, ".kclaw")
+    const content = readFileSync(join(workspace, ".gitignore"), "utf8")
+    expect(content.match(/\.kclaw\//g)).toHaveLength(1)
+  })
+
+  it("ensureWorkspaceIgnore keeps existing lines", () => {
+    writeFileSync(join(workspace, ".gitignore"), "node_modules/\ndist/\n", "utf8")
+    ensureWorkspaceIgnore(workspace, ".kclaw")
+    const content = readFileSync(join(workspace, ".gitignore"), "utf8")
+    expect(content).toContain("node_modules/")
+    expect(content).toContain(".kclaw/")
+  })
+})
+
+describe("member list", () => {
+  it("validates names: format, reserved word", () => {
+    expect(isValidMemberName("researcher")).toBe(true)
+    expect(isValidMemberName("web-dev")).toBe(true)
+    expect(isValidMemberName("Lead")).toBe(false)
+    expect(isValidMemberName("lead")).toBe(false)
+    expect(isValidMemberName("2fast")).toBe(false)
+    expect(isValidMemberName("has space")).toBe(false)
+    expect(isValidMemberName("x".repeat(40))).toBe(false)
+  })
+
+  it("provision → attach → settle makes a member active and creates the inbox file", async () => {
+    await store.provisionMember({ name: "researcher", role: "research", model: "prov/model-a" })
+    expect(existsSync(join(kclawDir, "teams", TEAM, "inboxes", "researcher.json"))).toBe(true)
+    await store.attachMemberSession("researcher", "ses_child")
+    const member = await store.settleMember("researcher", "active")
+    expect(member.status).toBe("active")
+    expect(member.sessionId).toBe("ses_child")
+    expect(member.model).toBe("prov/model-a")
+    expect(store.memberByName("researcher")?.status).toBe("active")
+    expect(store.memberBySession("ses_child")?.name).toBe("researcher")
+  })
+
+  it("failed settlement keeps the name and the member-list slot (names never reused)", async () => {
+    await store.provisionMember({ name: "doomed" })
+    await store.settleMember("doomed", "failed", "provider exploded")
+    expect(store.memberByName("doomed")?.failReason).toBe("provider exploded")
+    await expect(store.provisionMember({ name: "doomed" })).rejects.toThrow(TeamConflictError)
+  })
+
+  it("duplicate names and the member-list cap fail loudly (failed spawns included)", async () => {
+    await store.provisionMember({ name: "a" })
+    await expect(store.provisionMember({ name: "a" })).rejects.toThrow(TeamConflictError)
+    await store.provisionMember({ name: "b" })
+    await store.provisionMember({ name: "c" })
+    await store.settleMember("c", "failed", "boom")
+    await expect(store.provisionMember({ name: "d" })).rejects.toThrow(/full/) // cap counts failed entries
+  })
+})
+
+describe("inbox", () => {
+  it("enqueue appends pending; markDelivered flips in place; unread counts pending", async () => {
+    const first = await store.enqueueMail({ from: { kind: "lead" }, to: "researcher", type: "text", text: "hello" })
+    await store.enqueueMail({ from: { kind: "member", name: "researcher" }, to: "lead", type: "text", text: "done" })
+    expect(store.unreadCount("researcher")).toBe(1)
+    expect(first.status).toBe("pending")
+    await store.markDelivered("researcher", first.id)
+    expect(store.unreadCount("researcher")).toBe(0)
+    expect(store.readInbox("researcher")[0]?.status).toBe("delivered")
+    expect(store.readInbox("researcher")[0]?.deliveredAt).toBeDefined()
+    expect(store.pendingInbox("lead")).toHaveLength(1)
+    // one JSON file per recipient; the lead's is team-lead.json
+    expect(readdirSync(join(kclawDir, "teams", TEAM, "inboxes")).sort()).toEqual(["researcher.json", "team-lead.json"])
+  })
+
+  it("unread cap and byte cap reject loudly", async () => {
+    await store.enqueueMail({ from: { kind: "lead" }, to: "a", type: "text", text: "1" })
+    await store.enqueueMail({ from: { kind: "lead" }, to: "a", type: "text", text: "2" })
+    await expect(store.enqueueMail({ from: { kind: "lead" }, to: "a", type: "text", text: "3" })).rejects.toThrow(/full/)
+    await expect(store.enqueueMail({ from: { kind: "lead" }, to: "b", type: "text", text: "x".repeat(1001) })).rejects.toThrow(/byte cap/)
+  })
+})
+
+describe("task board", () => {
+  it("create assigns monotonic ids and validates dependencies", async () => {
+    const first = await store.createTask({ subject: "survey", detail: "read the code" })
+    const second = await store.createTask({ subject: "implement", dependencies: [first.id] })
+    expect(second.id).toBe(first.id + 1)
+    expect(second.status).toBe("pending")
+    expect(second.assignee).toBeNull()
+    expect(existsSync(join(kclawDir, "tasks", TEAM, `task-${first.id}.json`))).toBe(true)
+    await expect(store.createTask({ subject: "x", dependencies: [99] })).rejects.toThrow(/does not exist/)
+  })
+
+  it("task cap fails loudly", async () => {
+    for (let i = 0; i < limits.maxTasks; i++) await store.createTask({ subject: `t${i}` })
+    await expect(store.createTask({ subject: "over" })).rejects.toThrow(/full/)
+  })
+
+  it("claim → complete with attempt echo; stale attemptId is rejected", async () => {
+    const task = await store.createTask({ subject: "work" })
+    await store.provisionMember({ name: "a" }) // assignee must be on the list
+    const claimed = await store.updateTask({ id: task.id, expectedRevision: task.revision, status: "in_progress", assignee: "a" })
+    // late write from a superseded executor: wrong attemptId cannot complete
+    await expect(store.updateTask({ id: task.id, expectedRevision: claimed.revision, attemptId: "tma_stale", status: "completed" }))
+      .rejects.toThrow(/attemptId/)
+    const done = await store.updateTask({ id: task.id, expectedRevision: claimed.revision, attemptId: claimed.attemptId, status: "completed" })
+    expect(done.status).toBe("completed")
+    expect(done.attemptId).toBe(claimed.attemptId) // terminal keeps the finishing attempt
+  })
+
+  it("CAS: a stale expectedRevision is rejected", async () => {
+    const task = await store.createTask({ subject: "work" })
+    await store.updateTask({ id: task.id, expectedRevision: task.revision, subject: "renamed" })
+    await expect(store.updateTask({ id: task.id, expectedRevision: task.revision, subject: "lost update" }))
+      .rejects.toThrow(/changed under you/)
+  })
+
+  it("transition legality: terminal states are final, failed can restart with a new attempt", async () => {
+    const task = await store.createTask({ subject: "work" })
+    await store.provisionMember({ name: "a" })
+    const claimed = await store.updateTask({ id: task.id, expectedRevision: task.revision, status: "in_progress", assignee: "a" })
+    const failed = await store.updateTask({ id: task.id, expectedRevision: claimed.revision, attemptId: claimed.attemptId, status: "failed" })
+    const retried = await store.updateTask({ id: task.id, expectedRevision: failed.revision, status: "in_progress" })
+    expect(retried.attempt).toBe(2)
+    expect(retried.attemptId).not.toBe(claimed.attemptId)
+    await expect(store.updateTask({ id: retried.id, expectedRevision: retried.revision, status: "pending" })).rejects.toThrow(/illegal transition/)
+    const done = await store.updateTask({ id: retried.id, expectedRevision: retried.revision, attemptId: retried.attemptId, status: "completed" })
+    await expect(store.updateTask({ id: done.id, expectedRevision: done.revision, status: "in_progress" })).rejects.toThrow(/illegal transition/)
+  })
+
+  it("claim requires an assignee; assignee must be on the member list", async () => {
+    const task = await store.createTask({ subject: "work" })
+    await expect(store.updateTask({ id: task.id, expectedRevision: task.revision, status: "in_progress" })).rejects.toThrow(/without an assignee/)
+    await expect(store.updateTask({ id: task.id, expectedRevision: task.revision, assignee: "ghost", status: "in_progress" })).rejects.toThrow(/member list/)
+  })
+
+  it("one unfinished task per member: a second claim and a reassignment onto a busy member are rejected", async () => {
+    await store.provisionMember({ name: "a" })
+    await store.provisionMember({ name: "b" })
+    const first = await store.createTask({ subject: "first" })
+    const second = await store.createTask({ subject: "second" })
+    await store.updateTask({ id: first.id, expectedRevision: first.revision, status: "in_progress", assignee: "a" })
+    // a claiming a second task is rejected…
+    await expect(store.updateTask({ id: second.id, expectedRevision: second.revision, status: "in_progress", assignee: "a" }))
+      .rejects.toThrow(/one unfinished task per member/)
+    // …and the lead reassigning the in_progress task onto busy b is rejected too…
+    await store.updateTask({ id: second.id, expectedRevision: second.revision, status: "in_progress", assignee: "b" })
+    const firstNow = store.task(first.id)!
+    await expect(store.updateTask({ id: first.id, expectedRevision: firstNow.revision, assignee: "b" }))
+      .rejects.toThrow(/one unfinished task per member/)
+    // …while re-asserting the same assignee on the same task stays legal.
+    const secondNow = store.task(second.id)!
+    const same = await store.updateTask({ id: second.id, expectedRevision: secondNow.revision, assignee: "b" })
+    expect(same.assignee).toBe("b")
+    // once a holds nothing (task completed via attempt echo), a fresh claim goes through.
+    const firstHeld = store.task(first.id)!
+    const done = await store.updateTask({ id: first.id, expectedRevision: firstHeld.revision, attemptId: firstHeld.attemptId, status: "completed" })
+    expect(done.status).toBe("completed")
+    const third = await store.createTask({ subject: "third" })
+    await store.updateTask({ id: third.id, expectedRevision: third.revision, status: "in_progress", assignee: "a" })
+    expect(store.heldTask("a")?.id).toBe(third.id)
+  })
+
+  it("dependency edits detect cycles", async () => {
+    const a = await store.createTask({ subject: "a" })
+    const b = await store.createTask({ subject: "b", dependencies: [a.id] })
+    const c = await store.createTask({ subject: "c", dependencies: [b.id] })
+    await expect(store.updateTask({ id: a.id, expectedRevision: a.revision, dependencies: [c.id] })).rejects.toThrow(/cycle/)
+    await expect(store.updateTask({ id: a.id, expectedRevision: a.revision, dependencies: [a.id] })).rejects.toThrow(/cannot depend on itself/)
+    // legal edit: independent task gains a dep
+    const d = await store.createTask({ subject: "d" })
+    const updated = await store.updateTask({ id: d.id, expectedRevision: d.revision, dependencies: [c.id] })
+    expect(updated.dependencies).toEqual([c.id])
+  })
+
+  it("readyTasks gates on unclaimed + completed deps; heldTask finds the owner's task", async () => {
+    await store.provisionMember({ name: "worker" })
+    const a = await store.createTask({ subject: "a" })
+    const b = await store.createTask({ subject: "b", dependencies: [a.id] })
+    expect(store.readyTasks().map((t) => t.id)).toEqual([a.id])
+    const claimed = await store.updateTask({ id: a.id, expectedRevision: a.revision, status: "in_progress", assignee: "worker" })
+    expect(store.readyTasks().map((t) => t.id)).toEqual([]) // b blocked by a
+    expect(store.heldTask("worker")?.id).toBe(a.id)
+    await store.updateTask({ id: a.id, expectedRevision: claimed.revision, attemptId: claimed.attemptId, status: "completed" })
+    expect(store.readyTasks().map((t) => t.id)).toEqual([b.id]) // unlocked
+    expect(store.heldTask("worker")).toBeNull()
+  })
+})
+
+describe("current_tasks locks", () => {
+  it("a lock appears when work starts and disappears at a terminal state", async () => {
+    await store.provisionMember({ name: "a" })
+    const task = await store.createTask({ subject: "parse if statement" })
+    const lockDir = join(kclawDir, "tasks", TEAM, "current_tasks")
+    const claimed = await store.updateTask({ id: task.id, expectedRevision: task.revision, status: "in_progress", assignee: "a" })
+    const lockName = `${task.id}-parse-if-statement.txt`
+    expect(readdirSync(lockDir)).toEqual([lockName])
+    const lock = JSON.parse(readFileSync(join(lockDir, lockName), "utf8")) as { taskId: number; assignee: string | null; attemptId: string | null }
+    expect(lock.taskId).toBe(task.id)
+    expect(lock.assignee).toBe("a")
+    expect(lock.attemptId).toBe(claimed.attemptId)
+    await store.updateTask({ id: task.id, expectedRevision: claimed.revision, attemptId: claimed.attemptId, status: "completed" })
+    expect(readdirSync(lockDir)).toEqual([])
+  })
+
+  it("a rename while in_progress moves the lock; a retry recreates it", async () => {
+    await store.provisionMember({ name: "a" })
+    const task = await store.createTask({ subject: "旧主题" })
+    const lockDir = join(kclawDir, "tasks", TEAM, "current_tasks")
+    const claimed = await store.updateTask({ id: task.id, expectedRevision: task.revision, status: "in_progress", assignee: "a" })
+    // the slug keeps CJK; just assert the id prefix is there
+    expect(readdirSync(lockDir)[0]).toMatch(new RegExp(`^${task.id}-`))
+    const renamed = await store.updateTask({ id: task.id, expectedRevision: claimed.revision, subject: "new topic" })
+    expect(readdirSync(lockDir)).toEqual([`${task.id}-new-topic.txt`])
+    const failed = await store.updateTask({ id: task.id, expectedRevision: renamed.revision, attemptId: renamed.attemptId, status: "failed" })
+    expect(readdirSync(lockDir)).toEqual([])
+    await store.updateTask({ id: task.id, expectedRevision: failed.revision, status: "in_progress" })
+    expect(readdirSync(lockDir).length).toBe(1)
+  })
+
+  it("reconcileLocks drops stale locks and restores missing ones", async () => {
+    await store.provisionMember({ name: "a" })
+    const running = await store.createTask({ subject: "still running" })
+    const pending = await store.createTask({ subject: "not claimed" })
+    const claimed = await store.updateTask({ id: running.id, expectedRevision: running.revision, status: "in_progress", assignee: "a" })
+    const lockDir = join(kclawDir, "tasks", TEAM, "current_tasks")
+    // simulate a crash: the executed task lost its lock, a pending task has a leftover one
+    rmSync(join(lockDir, `${running.id}-still-running.txt`))
+    writeFileSync(join(lockDir, `${pending.id}-not-claimed.txt`), "{}\n", "utf8")
+    const fresh = new TeamStore(kclawDir, TEAM, limits) // a restarted daemon loads the store anew
+    fresh.reconcileLocks()
+    expect(readdirSync(lockDir)).toEqual([`${running.id}-still-running.txt`])
+    const lock = JSON.parse(readFileSync(join(lockDir, `${running.id}-still-running.txt`), "utf8")) as { attemptId: string | null }
+    expect(lock.attemptId).toBe(claimed.attemptId)
+  })
+})

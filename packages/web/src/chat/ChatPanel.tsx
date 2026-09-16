@@ -16,6 +16,7 @@ import { parseSlashInput, skillCommandMeta } from "@kclaw/core/commands"
 import { isPermissionMode, type PermissionMode } from "@kclaw/core/permission-modes"
 import type { ConfirmationDecision } from "@kclaw/core/protocol"
 import { ApiError, type ApiClient } from "../api.js"
+import { PROVIDERS_CHANGED } from "../events.js"
 import { WsAuthError, type WsClient } from "../ws.js"
 import {
   adoptQueuedId,
@@ -37,6 +38,7 @@ import {
 import { useSilentFetch } from "../daemon-clients.js"
 import { runWebCommand } from "./commands.js"
 import { ChatView, type CompactionRecordView, type Disposition, type PendingAttachment } from "./ChatView.js"
+import type { TeamPanelData } from "./TeamPanel.js"
 
 export interface ChatPanelProps {
   sessionId: string
@@ -67,6 +69,9 @@ export interface ChatPanelProps {
   onOpenAudit?: (sessionId: string) => void
   /** Jump to the MCP management tab — the /mcp command's clickable notice. */
   onOpenMcp?: () => void
+  /** Switch the global selection to the given session — the read-only child
+   * page's「返回主会话」button (the child never appears in the sidebar). */
+  onReturnToParent?: (parentId: string) => void
 }
 
 /** Max consecutive failed reconnects before giving up with a notice. */
@@ -102,7 +107,7 @@ function errorFrameMessage(frame: unknown): string | null {
   return typeof message === "string" ? message : null
 }
 
-export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten, onOpenAudit, onOpenMcp }: ChatPanelProps) {
+export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten, onOpenAudit, onOpenMcp, onReturnToParent }: ChatPanelProps) {
   const [view, setViewState] = useState<ChatState>(() => initChat(initialMessages))
   const [notice, setNotice] = useState<string | null>(null)
   // 已装用户可见技能：出现在斜杠菜单的动态命令（/技能名），会话切换重拉
@@ -116,6 +121,41 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   const [noticeAction, setNoticeAction] = useState<(() => void) | null>(null)
   // 发送处置：三选的当前选择，显式带在每条 send_message 上。
   const [disposition, setDisposition] = useState<Disposition>("steer")
+  // Agent team：面板数据（GET /sessions/:id/team；无团队 = null，不渲染）与
+  // composer 的说话目标（null = 对组长）。目标保持 sticky——连续对同一组员
+  // 说话不用每次重选，点组长卡或 chip 上的 × 切回。
+  const [teamPanel, setTeamPanel] = useState<TeamPanelData | null>(null)
+  const [teamTarget, setTeamTarget] = useState<string | null>(null)
+  const teamPanelRef = useRef<TeamPanelData | null>(null)
+  teamPanelRef.current = teamPanel
+  // 面板拉取的在飞防抖与会话归属（迟到的响应不许落进新会话的 state）。
+  const teamFetchBusy = useRef(false)
+  const teamSessionRef = useRef(sessionId)
+
+  /** 团队面板数据：GET /sessions/:id/team，404（无团队）= null。 */
+  const refreshTeam = useCallback((): void => {
+    if (teamFetchBusy.current) return
+    teamFetchBusy.current = true
+    const sid = sessionId
+    api
+      .get<unknown>(`/sessions/${encodeURIComponent(sid)}/team`)
+      .then((raw) => {
+        const panel = toTeamPanel(raw)
+        // The panel is the LEAD's coordination view (组长（我）+ talk/stop
+        // controls): a member's own read-only session must not render it, so
+        // a member identity clears the panel just like a 404 would.
+        const leadPanel = panel !== null && panel.identity === "lead" ? panel : null
+        if (teamSessionRef.current === sid) setTeamPanel(leadPanel)
+      })
+      .catch((err: unknown) => {
+        // 404 = 该会话不在任何团队里（普通会话常态）；其余失败静默——面板
+        // 保留旧数据，下一轮帧或定时器再刷。会话已切换的迟到响应丢弃。
+        if (err instanceof ApiError && err.status === 404 && teamSessionRef.current === sid) setTeamPanel(null)
+      })
+      .finally(() => {
+        teamFetchBusy.current = false
+      })
+  }, [api, sessionId])
   // 一次性 interrupt 的复位基准：点「中断」
   // 不写会话级覆盖，这条发完切回该档——中断是瞬时意图，不做成模式（与 CLI
   // /interrupt 对齐，避免跨客户端"来一条、断一条"）。
@@ -249,6 +289,15 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
               updateView((v) => applyEvent(v, frame))
               // 空文本行 = 跨客户端排队的消息（本端无发送上下文）→ 拉快照补文本
               if (viewRef.current.queue.some((e) => e.text === "")) void refreshQueueText()
+              // 团队面板跟随运行帧刷新：组长建团/派活/组员消息进出都会落在
+              // 这几类帧上；组员自己的 run 帧不走本会话的流，由下面的定时
+              // 轮询兜底。无团队时帧不触发拉取（面板为 null，切会话时已拉过）。
+              if (
+                (frame.type === "run.started" || frame.type === "run.completed" || frame.type === "run.failed" || frame.type === "message.created" || frame.type === "message.completed") &&
+                teamPanelRef.current !== null
+              ) {
+                refreshTeam()
+              }
             } else if (isQueuedSendAck(frame) || isRetryAck(frame)) {
               // Both acks carry the server message identity; adopt it eagerly
               // so the optimistic echo is pinned by id before its created event
@@ -320,17 +369,26 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       cancelled = true
       client.close()
     }
-  }, [sessionId, api, ws, createWs, onSessionRenamed])
+  }, [sessionId, api, ws, createWs, onSessionRenamed, refreshTeam])
 
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
   const [models, setModels] = useState<string[]>([])
   const [currentModel, setCurrentModel] = useState<string | undefined>(sessionModel)
 
-  useSilentFetch(
-    () => api.get<{ providers?: { entries?: Record<string, unknown> } }>("/config"),
-    (cfg) => setModels(Object.keys(cfg.providers?.entries ?? {})),
-    [api],
-  )
+  // Provider entries feed the model selector. This panel stays mounted across
+  // tab switches, so it rereads /config whenever a provider mutation happens
+  // (ModelView fires the event) — a freshly added entry is selectable at once.
+  const refreshModels = useCallback((): void => {
+    api
+      .get<{ providers?: { entries?: Record<string, unknown> } }>("/config")
+      .then((cfg) => setModels(Object.keys(cfg.providers?.entries ?? {})))
+      .catch(() => undefined)
+  }, [api])
+  useEffect(() => {
+    refreshModels()
+    window.addEventListener(PROVIDERS_CHANGED, refreshModels)
+    return () => window.removeEventListener(PROVIDERS_CHANGED, refreshModels)
+  }, [refreshModels])
 
   const handleSwitchModel = useCallback((name: string) => {
     api
@@ -347,9 +405,15 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("default")
   // Child sessions (meta.parentSessionId set) are read-only: the composer is
   // replaced by a hint. Reset on session switch so a failed meta pull never
-  // carries the previous session's verdict over.
+  // carries the previous session's verdict over. The parent id powers the
+  // hint's「返回主会话」button — a member/child session never appears in the
+  // sidebar, so without it there is no visible way back to the lead.
   const [childSession, setChildSession] = useState(false)
-  useEffect(() => setChildSession(false), [sessionId])
+  const [childParentId, setChildParentId] = useState<string | null>(null)
+  useEffect(() => {
+    setChildSession(false)
+    setChildParentId(null)
+  }, [sessionId])
   useSilentFetch(
     () =>
       Promise.all([
@@ -357,7 +421,9 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
         api.get<{ sessions?: { defaultDisposition?: unknown } }>("/config"),
       ]),
     ([meta, cfg]) => {
-      setChildSession(typeof meta.parentSessionId === "string" && meta.parentSessionId !== "")
+      const parentId = typeof meta.parentSessionId === "string" && meta.parentSessionId !== "" ? meta.parentSessionId : null
+      setChildSession(parentId !== null)
+      setChildParentId(parentId)
       // 会话级覆盖只可能是 steer/wait（interrupt 已不再写 sticky，见
       // handleSetDisposition；历史遗留的 "interrupt" 覆盖按 steer 回退）。
       const override = meta.dispositionOverride
@@ -428,20 +494,46 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     [api, workdir],
   )
 
+  // 会话切换：说话目标归位（新会话从"对组长"开始），面板立即拉一次；
+  // 有团队后 5s 轮询兜底——组员侧的忙闲、任务认领不发本会话的流，只有
+  // 面板轮询能看到（在飞防抖让轮询天然串行）。
+  useEffect(() => {
+    teamSessionRef.current = sessionId
+    setTeamTarget(null)
+    refreshTeam()
+  }, [refreshTeam])
+  const hasTeam = teamPanel !== null
+  useEffect(() => {
+    if (!hasTeam) return
+    const timer = setInterval(refreshTeam, 5000)
+    return () => clearInterval(timer)
+  }, [hasTeam, refreshTeam])
+  // 目标组员被移除/改名后失效：面板刷新发现名单里没有他了就切回组长，
+  // 否则下一次发送会撞上 daemon 的"未知组员"错误帧。
+  useEffect(() => {
+    if (teamTarget !== null && teamPanel !== null && !teamPanel.members.some((m) => m.name === teamTarget)) {
+      setTeamTarget(null)
+    }
+  }, [teamPanel, teamTarget])
+
   /**
    * The raw send path shared by handleSend and the post-reconnect resend
    * (issue #8): one send_message frame plus the optimistic echo (queued row
    * when busy, pending bubble when idle) — and nothing else: no slash
    * parsing, no attachment/disposition state changes.
    */
-  const sendMessageRaw = useCallback((text: string, sendDisposition: Disposition, attachments: PendingAttachment[]) => {
+  const sendMessageRaw = useCallback((text: string, sendDisposition: Disposition, attachments: PendingAttachment[], target?: string | null) => {
     clientRef.current.send({
       type: "send_message",
       sessionId,
       text,
       disposition: sendDisposition,
       ...(attachments.length > 0 ? { attachments } : {}),
+      ...(target !== undefined && target !== null ? { target } : {}),
     })
+    // 定向给组员的发送不做乐观回显：daemon 会把这条消息落进组长历史并以
+    // message.created 广播回来，本端再叠本地行就是双份。
+    if (target !== undefined && target !== null) return
     updateView((v) =>
       v.runState === "running" || v.compacting === true
         ? appendPendingQueueRow(v, text, sendDisposition)
@@ -474,8 +566,10 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
     try {
       const attachments = [...pendingAttachments]
-      sendMessageRaw(text, disposition, attachments)
+      sendMessageRaw(text, disposition, attachments, teamTarget)
       setPendingAttachments([])
+      // 定向发送立即刷一次面板（组员即将被唤醒）；普通发送交给帧驱动。
+      if (teamTarget !== null) refreshTeam()
       // 一次性 interrupt：这条带 interrupt
       // 发出后即切回基础处置，三选不停在「中断」档——否则 sticky 到所有客户端，
       // 后续任何普通消息都会先掐 run（"来一条、断一条"）。
@@ -485,7 +579,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     } catch {
       setNotice("连接不可用，请稍后重试")
     }
-  }, [sessionId, pendingAttachments, api, onCreateSession, onOpenSessions, onOpenMcp, handleSwitchModel, models, currentModel, updateView, disposition, skillRows, sendMessageRaw])
+  }, [sessionId, pendingAttachments, api, onCreateSession, onOpenSessions, onOpenMcp, handleSwitchModel, models, currentModel, updateView, disposition, skillRows, sendMessageRaw, teamTarget, refreshTeam])
 
   /** Upload dropped files and queue them for the next message. */
   const handleDrop = useCallback((event: React.DragEvent) => {
@@ -555,6 +649,21 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
   }, [sessionId])
 
+  /** 停掉一个组员正在跑的轮（成员卡上的「停止」）：run.cancel 打到组员自己的
+   * 会话上。团队运行模型没有级联停止，逐个停是唯一的停止路径。 */
+  const handleStopMember = useCallback((memberSessionId: string) => {
+    try {
+      clientRef.current.send({ type: "run.cancel", sessionId: memberSessionId })
+    } catch {
+      setNotice("连接不可用，请稍后重试")
+    }
+  }, [])
+
+  /** 点选说话：成员卡切 composer 目标，null = 切回组长。 */
+  const handleTalkTo = useCallback((name: string | null) => {
+    setTeamTarget(name)
+  }, [])
+
 /**
    * Edit & retry / regenerate: send the message.retry frame and echo the
    * optimistic bubble immediately; the discarded segment is removed by the
@@ -616,6 +725,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           onCancelAllQueued={() => handleCancelQueued()}
           onOpenAudit={onOpenAudit}
           readOnly={childSession}
+          onReturnToParent={onReturnToParent !== undefined && childParentId !== null ? () => onReturnToParent(childParentId) : undefined}
           onCancelCompaction={handleCancelCompaction}
           onStopRun={handleStopRun}
           onRetry={handleRetry}
@@ -623,6 +733,12 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           extraCommands={skillRows.map((r) => skillCommandMeta(r.name, r.plugin !== undefined ? `〔插件 ${r.plugin}〕${r.description}` : r.description, "web"))}
           mentionFiles={mentionFiles}
           mentionTruncated={mentionTruncated}
+          team={teamPanel === null ? undefined : {
+            panel: teamPanel,
+            target: teamTarget,
+            onTalkTo: handleTalkTo,
+            onStopMember: handleStopMember,
+          }}
         />
       </div>
     </div>
@@ -634,6 +750,19 @@ function authNotice(err: unknown, fallback: string): string {
   if (err instanceof ApiError && err.status === 401) return "认证已失效，请刷新页面重新输入 token"
   if (err instanceof WsAuthError) return "认证已失效，请刷新页面重新输入 token"
   return fallback
+}
+
+/**
+ * 面板响应的形状校验：不是团队面板（缺 team 标识或 members/tasks 数组）
+ * 就当没有——渲染层直接解构这些字段，畸形响应宁可静默不渲染。
+ */
+function toTeamPanel(raw: unknown): TeamPanelData | null {
+  if (typeof raw !== "object" || raw === null) return null
+  const r = raw as Record<string, unknown>
+  const team = (typeof r.team === "object" && r.team !== null ? r.team : {}) as Record<string, unknown>
+  if (typeof team.teamId !== "string" || typeof team.name !== "string") return null
+  if (!Array.isArray(r.members) || !Array.isArray(r.tasks)) return null
+  return raw as TeamPanelData
 }
 
 /**

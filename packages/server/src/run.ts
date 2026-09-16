@@ -49,6 +49,7 @@ import {
   type SessionStore,
   type SubagentCollector,
   type SubagentSpawner,
+  type TeamFacade,
   type ToolDefinition,
   type ToolExecutor,
   type UsageStore,
@@ -130,6 +131,21 @@ export interface RunManagerDeps {
     spawner: SubagentSpawner
     collector?: SubagentCollector
   }
+  /**
+   * Agent team: flows into every run's engine deps — the
+   * assembly probes the facade once per run for the session's team identity
+   * (lead protocol + full tool surface / member persona + member surface).
+   */
+  team?: { facade: TeamFacade }
+  /**
+   * Idle edge for sessions the team host cannot see through its own dispatch
+   * ledger — a user's chat run never passes through the host's startRun, so
+   * without this hook a member's report arriving mid-conversation would sit
+   * in the lead's inbox until some later team run happened to settle. Called
+   * once when a session's queue drains (every run settle funnels through the
+   * driver). Optional (tests without the team host omit it).
+   */
+  onSessionIdle?: (sessionId: string) => void
   /** Per-run token ledger (optional; recording failures are swallowed). */
   usageStore?: UsageStore
   /**
@@ -229,6 +245,16 @@ export class RunManager {
   /** The confirmation gateway this manager's runs answer through (WS/CLI verdicts land here). */
   get broker(): ConfirmationBroker {
     return this.#broker
+  }
+
+  /**
+   * Whether the session has a live run, a driver mid-drain, or queued
+   * entries. The team host's delivery gate reads this instead of its own
+   * dispatch ledger: a user's chat run (and any queue traffic) never passes
+   * through startRun, so only the manager knows the whole truth.
+   */
+  busy(sessionId: string): boolean {
+    return this.#active.has(sessionId) || this.#drivers.has(sessionId) || (this.#queues.get(sessionId)?.length ?? 0) > 0
   }
 
   /**
@@ -564,6 +590,14 @@ export class RunManager {
         }
       } finally {
         stopped = true
+        // Idle edge: the queue drained (or the driver died) — the team host
+        // flushes deferred mail here because a session this busy never
+        // accepted a dispatch while entries were pending.
+        try {
+          this.#deps.onSessionIdle?.(sessionId)
+        } catch {
+          // a broken idle hook must not kill the driver's exit path
+        }
       }
     })()
     // 循环自身的意外错误只日志一次；循环 promise 绝不裸拒绝（unhandled rejection）。
