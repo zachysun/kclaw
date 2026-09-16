@@ -20,6 +20,7 @@ import { createSessionTools, type SessionSearchFn } from "./session.js"
 import { createSkillTools, SKILL_LIST_DESCRIPTION, SKILL_READ_DESCRIPTION } from "./skills.js"
 import { createSubagentTool, createSubagentCollectTool, SUBAGENT_RUN_DESCRIPTION, SUBAGENT_COLLECT_DESCRIPTION } from "./subagent.js"
 import type { SubagentCollector } from "../agent/subagent.js"
+import { createTeamToolEntries } from "./team.js"
 import { createWebTools } from "./web.js"
 
 export { createAskUserQuestionsTool, ASK_USER_QUESTIONS_DESCRIPTION, type QuestionEventEmitter } from "./ask.js"
@@ -30,6 +31,7 @@ export { createSessionTools, type SessionSearchFn } from "./session.js"
 export { searchSessionEvents, type SessionHit } from "./session-search.js"
 export { createSkillTools, SKILL_READ_DESCRIPTION } from "./skills.js"
 export { createSubagentTool, createSubagentCollectTool, SUBAGENT_RUN_DESCRIPTION, SUBAGENT_COLLECT_DESCRIPTION } from "./subagent.js"
+export { createTeamToolEntries, CREATE_TEAM_DESCRIPTION, SPAWN_TEAMMATE_DESCRIPTION } from "./team.js"
 export { createWebTools } from "./web.js"
 
 /** A string property with a model-facing description. */
@@ -72,6 +74,15 @@ export function createBuiltinTools(opts: {
    * runs included (forwarded cards follow the confirmation precedent).
    */
   ask?: { broker: ConfirmationBroker; timeoutMs?: number; emit: QuestionEventEmitter }
+  /**
+   * Agent team surface: when set, the team tools join the registry wired to
+   * this facade and identity. The assembly resolves the identity (lead or
+   * named member) from the team host before constructing; a job session —
+   * or any session outside a team — simply leaves this absent. Member
+   * identities never carry create_team / spawn_teammate (enforced inside
+   * createTeamToolEntries).
+   */
+  team?: { facade: import("../team/facade.js").TeamFacade; identity: import("../team/facade.js").TeamIdentity }
   /**
    * True for a subagent's own run: the surface drops `memory_save` (memory
    * stays a mainline responsibility) and `subagent_run` (single-level
@@ -256,6 +267,9 @@ export function createBuiltinTools(opts: {
         ),
       })
     }
+  }
+  if (opts.team !== undefined) {
+    surface.push(...createTeamToolEntries(opts.team.facade, opts.team.identity))
   }
   if (opts.ask !== undefined) {
     surface.push({
