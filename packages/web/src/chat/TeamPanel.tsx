@@ -1,10 +1,13 @@
 /**
- * TeamPanelCard — the in-chat agent-team panel: member
- * cards on top (lifecycle badge, busy/idle, current task, per-member stop),
- * the shared task board below (status/owner/dependency badges + segment
- * stats). Presentational only: data arrives via props, actions escape as
- * callbacks (点选说话 / 逐个停止 / 审计跳转). Rendered by ChatView when the
- * session's team panel payload exists; no team → nothing rendered at all.
+ * TeamPanelCard — the agent-team panel floating over the chat area's
+ * top-right corner (outside the scrolling log, so it stays visible while
+ * reading history): member cards on top (lifecycle badge, busy/idle, current
+ * task, per-member stop), the shared task board below (status/owner/
+ * dependency badges + segment stats). The whole panel folds to its summary
+ * chip (preference kept in localStorage). Presentational only: data arrives
+ * via props, actions escape as callbacks (点选说话 / 逐个停止 / 审计跳转).
+ * Rendered by ChatView when the session's team panel payload exists; no
+ * team → nothing rendered at all.
  */
 import { useState } from "react"
 
@@ -55,8 +58,29 @@ const TASK_STATUS: Record<TeamTaskView["status"], string> = {
   cancelled: "已取消",
 }
 
+/** Fold preference survives reloads and session switches (a floating panel
+ * the user collapsed should stay collapsed). */
+const FOLD_KEY = "kclaw_team_panel_open"
+
+function initialOpen(): boolean {
+  try {
+    return window.localStorage.getItem(FOLD_KEY) !== "0"
+  } catch {
+    return true
+  }
+}
+
 export function TeamPanelCard({ panel, target, onTalkTo, onStopMember, onOpenAudit }: TeamPanelCardProps) {
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(initialOpen)
+  const toggle = (): void =>
+    setOpen((v) => {
+      try {
+        window.localStorage.setItem(FOLD_KEY, v ? "0" : "1")
+      } catch {
+        // storage unavailable (private mode) — the fold just won't persist
+      }
+      return !v
+    })
   const stats = countByStatus(panel.tasks)
   const working = panel.members.filter((m) => m.busy === true).length
   return (
@@ -66,7 +90,7 @@ export function TeamPanelCard({ panel, target, onTalkTo, onStopMember, onOpenAud
         data-testid="team-panel-toggle"
         onClick={(e) => {
           e.preventDefault()
-          setOpen((v) => !v)
+          toggle()
         }}
       >
         <span>团队 {panel.team.name}</span>

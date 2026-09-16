@@ -321,6 +321,18 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
 
   return (
     <div className="chat" data-testid="chat-view">
+      {/* The team panel floats over the chat area's top-right corner (outside
+          the scrolling log): pinned to the message stream it scrolled out of
+          sight with any history. The whole panel folds to a summary chip. */}
+      {team !== undefined && (
+        <TeamPanelCard
+          panel={team.panel}
+          target={team.target}
+          onTalkTo={team.onTalkTo}
+          onStopMember={team.onStopMember}
+          onOpenAudit={onOpenAudit}
+        />
+      )}
       {view.error !== undefined && (
         <div className="chat-error" data-testid="chat-error" role="alert">
           {view.error}
@@ -351,15 +363,6 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
         </div>
       )}
       <div className="chat-log" data-testid="chat-log">
-        {team !== undefined && (
-          <TeamPanelCard
-            panel={team.panel}
-            target={team.target}
-            onTalkTo={team.onTalkTo}
-            onStopMember={team.onStopMember}
-            onOpenAudit={onOpenAudit}
-          />
-        )}
         {view.messages.map((message, idx) => (
           <Fragment key={message.id}>
             {auditBars.filter((b) => b.insertIdx === idx).map((b) => (
@@ -437,37 +440,41 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
       {view.pendingQuestions.map((card) => (
         <QuestionCardView key={card.questionId} card={card} onAnswer={onAnswerQuestion} />
       ))}
-      {!readOnly && (models !== undefined && models.length > 0 && onSwitchModel !== undefined) && (
-        <div className="composer-row" data-testid="model-selector-row">
-          <label>模型</label>
-          <select
-            className="model-select"
-            data-testid="model-select"
-            value={sessionModel ?? ""}
-            onChange={(e) => onSwitchModel(e.target.value)}
-          >
-            <option value="">默认</option>
-            {models.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
-        </div>
-      )}
-      {!readOnly && onSwitchMode !== undefined && (
-        // Always-on permission mode selector (session-scoped, next run
-        // effective): readonly denies writes/exec, default confirms
-        // out-of-bounds actions, accept-edits skips confirmation for
-        // in-workspace file writes.
-        <div className="composer-row" data-testid="mode-selector-row">
-          <label>权限</label>
-          <select
-            className="mode-select"
-            data-testid="mode-select"
-            value={mode ?? "default"}
-            onChange={(e) => onSwitchMode(e.target.value as PermissionMode)}
-          >
-            {PERMISSION_MODES.map((m) => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-          </select>
+      {!readOnly && (models !== undefined && models.length > 0 && onSwitchModel !== undefined || onSwitchMode !== undefined) && (
+        <div className="composer-selectors" data-testid="composer-selectors">
+          {models !== undefined && models.length > 0 && onSwitchModel !== undefined && (
+            <div className="composer-row" data-testid="model-selector-row">
+              <label>模型</label>
+              <select
+                className="model-select"
+                data-testid="model-select"
+                value={sessionModel ?? ""}
+                onChange={(e) => onSwitchModel(e.target.value)}
+              >
+                <option value="">默认</option>
+                {models.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+          )}
+          {onSwitchMode !== undefined && (
+            // Always-on permission mode selector (session-scoped, next run
+            // effective): readonly denies writes/exec, default confirms
+            // out-of-bounds actions, accept-edits skips confirmation for
+            // in-workspace file writes.
+            <div className="composer-row" data-testid="mode-selector-row">
+              <label>权限</label>
+              <select
+                className="mode-select"
+                data-testid="mode-select"
+                value={mode ?? "default"}
+                onChange={(e) => onSwitchMode(e.target.value as PermissionMode)}
+              >
+                {PERMISSION_MODES.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
       )}
       {!readOnly && pendingAttachments.length > 0 && (
