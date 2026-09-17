@@ -1,96 +1,27 @@
 /* ============================================================
    kclaw web shell — hand-written CSS, no framework.
-   Two themes on one token set, switched via <html data-theme>:
-   "phantom" (default) — high-contrast red/black with hard
-   italic slants and hazard-tape motifs, red reserved for where
-   the agent is alive/acting;
-   "amber" — the classic warm near-black look.
-   :root carries the shared structure and the phantom palette;
-   [data-theme="amber"] swaps the palette back; the phantom-only
-   decoration layer sits at the end of this file. Components only
-   reference tokens so both themes stay coherent.
+   N themes on one shared token set, switched via <html data-theme>.
+   One theme = one stylesheet in ./themes/ (palette, color-scheme,
+   radii, focus ring, decorations); the theme list is derived from
+   those filenames (theme.ts), so adding a theme never touches this
+   file. The default theme's file owns `:root`, so unknown/corrupt
+   stored values fall back to the default look. Components only
+   reference tokens.
    ============================================================ */
 
 :root {
-  color-scheme: dark;
-
-  /* palette — paper white on near-black, red as the agent signal */
-  --bg: #0b0b0d;
-  --surface: #141416;
-  --surface-2: #1c1c1f;
-  --surface-3: #26262b;
-  --border: #26262b;
-  --border-strong: #3a3a42;
-  --border-hover: #4a515c;
-  --text: #f2efe6;
-  --text-dim: #c6c2b8;
-  --muted: #8d897f;
-  --accent: #e4000f;           /* the agent signal — phantom red */
-  --accent-strong: #ff3348;    /* legible red for small text on black */
-  --accent-ink: #ffffff;       /* text on red fills */
-  --accent-dim: rgba(228, 0, 15, 0.14);
-  --accent-border: rgba(228, 0, 15, 0.4);
-  --accent-dim-strong: rgba(228, 0, 15, 0.22);
-  --success: #5fd068;
-  --success-dim: rgba(95, 208, 104, 0.12);
-  --danger: #ffd23f;           /* hazard yellow — red belongs to the agent */
-  --danger-ink: #141414;       /* text on danger fills */
-  --danger-dim: rgba(255, 210, 63, 0.1);
-  --warn: #ffd23f;
-
-  /* type — mono is the native voice; the phantom theme fronts titles with
-     an italic display face (system geometric sans, no webfont) */
+  /* type — mono is the native voice; per-theme display faces live
+     in the theme files */
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --font-ui: var(--font-mono);
-  --font-display: "Avenir Next", Futura, "Helvetica Neue", Arial, var(--font-mono);
 
-  /* scale — phantom cuts corners sharp */
-  --radius: 5px;
-  --radius-sm: 2px;
+  /* scale — shared spacing rhythm and easing */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 24px;
   --ease: 120ms ease;
-
-  /* semantic fills derived from the palette */
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-strong);
-
-  /* shared derived surfaces — identical across themes */
-  --code-well-bg: #08080a;     /* fenced code sits a step below the page bg */
-  --row-stripe: rgba(255, 255, 255, 0.015);
-  --hljs-name: #6db4ff;        /* code highlight: function/type names */
-  --hljs-attr: #c9a8ef;        /* code highlight: attributes/properties */
-}
-
-/* the classic warm look: same structure, softer palette and corners */
-html[data-theme="amber"] {
-  --bg: #131518;
-  --surface: #1a1d22;
-  --surface-2: #21252c;
-  --surface-3: #2a2f37;
-  --border: #2a2f37;
-  --border-strong: #3a4048;
-  --border-hover: #4a515c;
-  --text: #e6e6e6;
-  --text-dim: #b7bcc4;
-  --muted: #8a9099;
-  --accent: #e0a44e;
-  --accent-strong: #f0b45f;
-  --accent-ink: #3a2c14;
-  --accent-dim: rgba(224, 164, 78, 0.13);
-  --accent-border: rgba(224, 164, 78, 0.4);
-  --accent-dim-strong: rgba(224, 164, 78, 0.22);
-  --success: #7cb876;
-  --success-dim: rgba(124, 184, 118, 0.12);
-  --danger: #e07a6d;
-  --danger-dim: rgba(224, 122, 109, 0.12);
-  --danger-ink: #1a0d0b;
-  --warn: #d8a657;
-  --radius: 8px;
-  --radius-sm: 5px;
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
 }
 * {
   box-sizing: border-box;
@@ -357,20 +288,11 @@ select:focus {
   animation: pulse 1.2s ease-in-out infinite;
 }
 
-/* theme switch: a quiet two-state mark that warms up on hover */
-.theme-toggle {
-  font-size: 13px;
-  line-height: 1;
-  padding: 4px 10px;
-  color: var(--muted);
-  background: transparent;
-  border-color: var(--border);
-}
-
-.theme-toggle:hover:not(:disabled) {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: transparent;
+/* theme switch: a compact dropdown fed by the theme registry */
+.theme-select {
+  max-width: 92px;
+  padding: 4px 8px;
+  font-size: 12px;
 }
 
 .sidebar-toggle {
@@ -590,7 +512,7 @@ select:focus {
   border-radius: var(--radius-sm);
   color: var(--text);
   pointer-events: none;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 3px 10px rgba(var(--shadow-rgb), 0.3);
 }
 
 .icon-tip {
@@ -782,7 +704,7 @@ select:focus {
   text-align: left;
   padding: 8px 8px 8px 12px;
   border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 4px 16px rgba(var(--shadow-rgb), 0.45);
   animation: toast-in 0.18s ease-out;
 }
 
@@ -840,7 +762,7 @@ select:focus {
 .picker-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -857,7 +779,7 @@ select:focus {
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 12px 32px rgba(var(--shadow-rgb), 0.45);
 }
 
 .picker-title {
@@ -1756,7 +1678,7 @@ select:focus {
 
 .confirm-actions button:first-child:hover:not(:disabled) {
   background: var(--success);
-  color: #0d1a0c;
+  color: var(--success-ink);
 }
 
 /* Question cards (ask_user_questions): the agent asking, not warning —
@@ -1878,7 +1800,7 @@ select:focus {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: 0 4px 16px rgb(0 0 0 / 35%);
+  box-shadow: 0 4px 16px rgba(var(--shadow-rgb), 0.35);
 }
 
 .team-panel[open] {
@@ -2191,7 +2113,7 @@ select:focus {
   background: var(--surface-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 8px 24px rgba(var(--shadow-rgb), 0.4);
   max-height: 280px;
   overflow-y: auto;
 }
@@ -2682,7 +2604,7 @@ select:focus {
   border: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--text);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 4px 16px rgba(var(--shadow-rgb), 0.35);
 }
 
 .audit-latest-fab:hover {
@@ -2926,7 +2848,7 @@ select:focus {
     transform: translateX(-100%);
     transition: transform 180ms ease;
     background: var(--surface);
-    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
+    box-shadow: 4px 0 24px rgba(var(--shadow-rgb), 0.4);
   }
 
   .sidebar.open {
@@ -2936,7 +2858,7 @@ select:focus {
   .sidebar-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.45);
+    background: var(--overlay-soft);
     z-index: 25;
   }
 
@@ -3533,12 +3455,12 @@ select:focus {
 }
 
 .mcp-state.connected {
-  color: var(--ok, #3a9b5c);
+  color: var(--success);
   border-color: currentColor;
 }
 
 .mcp-state.failed {
-  color: var(--danger, #c0392b);
+  color: var(--danger);
   border-color: currentColor;
 }
 
@@ -3636,7 +3558,7 @@ select:focus {
 .mcp-form-error {
   margin: 0;
   font-size: 12px;
-  color: var(--danger, #c0392b);
+  color: var(--danger);
   word-break: break-all;
 }
 
@@ -3774,7 +3696,7 @@ select:focus {
 .model-warning {
   margin: 0;
   font-size: 12px;
-  color: var(--danger, #c0392b);
+  color: var(--danger);
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -3869,159 +3791,11 @@ select:focus {
 .model-form-error {
   margin: 0;
   font-size: 12px;
-  color: var(--danger, #c0392b);
+  color: var(--danger);
   word-break: break-all;
 }
 
 .model-form-actions {
   display: flex;
   gap: var(--space-2);
-}
-
-/* ============================================================
-   Phantom theme decoration layer (html[data-theme="phantom"]).
-   Structure and colors come from tokens; this layer adds the
-   angled personality on top: skewed red tab cursor, italic
-   display titles dragging a red shadow, hazard tape where the
-   agent asks or runs. The amber theme simply skips all of it.
-   ============================================================ */
-
-html[data-theme="phantom"] .brand {
-  font-family: var(--font-display);
-  font-style: italic;
-  font-weight: 800;
-  font-size: 17px;
-  letter-spacing: 0.03em;
-  /* misregistered-print offset: the logotype drags its red shadow */
-  text-shadow: 2px 2px 0 var(--accent);
-}
-
-html[data-theme="phantom"] .brand::before {
-  text-shadow: none;
-}
-
-/* The phantom-cursor tab: a hard red parallelogram with white type —
-   the one loud element in the bar. */
-html[data-theme="phantom"] .tab.active {
-  color: var(--accent-ink);
-  border-color: var(--accent);
-  background: var(--accent);
-  transform: skewX(-10deg);
-  box-shadow: 3px 3px 0 rgba(228, 0, 15, 0.3);
-}
-
-html[data-theme="phantom"] .tab.active:hover:not(:disabled) {
-  color: var(--accent-ink);
-  background: var(--accent);
-}
-
-/* the live agent: an italic red line trailing a sliding hazard tape */
-html[data-theme="phantom"] .run-indicator {
-  font-style: italic;
-  font-weight: 700;
-  gap: 8px;
-}
-
-html[data-theme="phantom"] .run-indicator::after {
-  content: "";
-  width: 64px;
-  height: 9px;
-  background: repeating-linear-gradient(-45deg, var(--accent) 0 8px, transparent 8px 16px);
-  animation: tape-slide 0.7s linear infinite;
-}
-
-html[data-theme="phantom"] .run-indicator.compacting {
-  font-style: normal;
-}
-
-html[data-theme="phantom"] .run-indicator.compacting::after {
-  background: repeating-linear-gradient(-45deg, var(--border-strong) 0 8px, transparent 8px 16px);
-  animation: none;
-}
-
-/* the tape slides seamlessly: shift by one full stripe period */
-@keyframes tape-slide {
-  to {
-    background-position: 22.63px 0;
-  }
-}
-
-/* permission checkpoint = hazard tape across the card's top */
-html[data-theme="phantom"] .confirm-card {
-  border: 1px solid var(--border-strong);
-  border-top: 6px solid;
-  border-image: repeating-linear-gradient(-45deg, var(--warn) 0 10px, var(--bg) 10px 20px) 6;
-  background: var(--surface-2);
-}
-
-/* every filled action speaks in the italic voice */
-html[data-theme="phantom"] button.primary,
-html[data-theme="phantom"] .chat-composer button[type="submit"],
-html[data-theme="phantom"] .form-actions button[type="submit"],
-html[data-theme="phantom"] .memory-editor-actions button:first-child {
-  font-style: italic;
-  font-weight: 700;
-}
-
-/* the phantom slash: every page title is cut by a red mark */
-html[data-theme="phantom"] .view-title {
-  font-family: var(--font-display);
-  font-style: italic;
-  font-weight: 800;
-  font-size: 19px;
-  letter-spacing: 0.01em;
-}
-
-html[data-theme="phantom"] .view-title::before {
-  content: "// ";
-  color: var(--accent);
-}
-
-/* sidebar project headers share the display voice of the page titles */
-html[data-theme="phantom"] .workdir-group-name:not(.muted) {
-  font-family: var(--font-display);
-  font-style: italic;
-  letter-spacing: 0.01em;
-}
-
-/* the gate is the cover page: oversized italic logotype over a tape bar */
-html[data-theme="phantom"] .token-gate {
-  margin-top: 16vh;
-}
-
-html[data-theme="phantom"] .token-gate h1 {
-  font-family: var(--font-display);
-  font-style: italic;
-  font-weight: 800;
-  font-size: 44px;
-  margin: 0 0 2px;
-  letter-spacing: 0.02em;
-  color: var(--text);
-  text-shadow: 3px 3px 0 var(--accent);
-}
-
-html[data-theme="phantom"] .token-gate h1::after {
-  content: "";
-  display: block;
-  width: 84px;
-  height: 6px;
-  margin-top: 10px;
-  background: repeating-linear-gradient(-45deg, var(--accent) 0 10px, transparent 10px 20px);
-}
-
-html[data-theme="phantom"] .token-gate button[type="submit"] {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-ink);
-  font-weight: 700;
-  font-style: italic;
-}
-
-html[data-theme="phantom"] .token-gate button[type="submit"]:hover:not(:disabled) {
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
-}
-
-html[data-theme="phantom"] .offline-banner {
-  font-style: italic;
 }

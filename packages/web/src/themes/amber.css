@@ -1,0 +1,38 @@
+/* ============================================================
+   amber — the classic warm near-black look: same structure, softer
+   palette and corners. Values not declared here (code well, row
+   stripes, code highlights, shadows, overlays) are inherited from
+   the dark baseline in the default theme's :root.
+   ============================================================ */
+
+html[data-theme="amber"] {
+  color-scheme: dark;
+
+  --bg: #131518;
+  --surface: #1a1d22;
+  --surface-2: #21252c;
+  --surface-3: #2a2f37;
+  --border: #2a2f37;
+  --border-strong: #3a4048;
+  --border-hover: #4a515c;
+  --text: #e6e6e6;
+  --text-dim: #b7bcc4;
+  --muted: #8a9099;
+  --accent: #e0a44e;
+  --accent-strong: #f0b45f;
+  --accent-ink: #3a2c14;
+  --accent-dim: rgba(224, 164, 78, 0.13);
+  --accent-border: rgba(224, 164, 78, 0.4);
+  --accent-dim-strong: rgba(224, 164, 78, 0.22);
+  --success: #7cb876;
+  --success-dim: rgba(124, 184, 118, 0.12);
+  --danger: #e07a6d;
+  --danger-dim: rgba(224, 122, 109, 0.12);
+  --danger-ink: #1a0d0b;
+  --warn: #d8a657;
+
+  --radius: 8px;
+  --radius-sm: 5px;
+
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+}

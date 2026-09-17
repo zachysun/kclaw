@@ -10,11 +10,15 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <title>kclaw</title>
     <script>
-      // Set the theme before the stylesheet loads so the first paint is
-      // always the right one (phantom is the default when nothing stored).
+      // Apply the stored theme before the stylesheet loads so the first paint
+      // is always the right one. The stored value is applied as-is — the theme
+      // list lives in the stylesheets (one file per theme), so this script
+      // never changes when themes are added. An unknown value matches no theme
+      // block and renders the default palette via the default theme's :root
+      // until the app applies a validated choice on mount.
       try {
         var t = localStorage.getItem("kclaw_theme")
-        document.documentElement.dataset.theme = t === "amber" ? "amber" : "phantom"
+        document.documentElement.dataset.theme = t || "phantom"
       } catch (e) {
         document.documentElement.dataset.theme = "phantom"
       }

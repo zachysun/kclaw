@@ -135,4 +135,30 @@ describe("App", () => {
     expect(reload).toHaveBeenCalledTimes(1)
     unmount(root, container)
   })
+
+  it("lists every registered theme in the switcher and applies the selection", async () => {
+    localStorage.setItem("kclaw_token", "tok-1")
+    const { container, root } = mount()
+    await act(async () => {
+      root.render(<App />)
+    })
+    await act(async () => {}) // flush the /status fetch + state update
+    const select = container.querySelector('select[data-testid="theme-select"]') as HTMLSelectElement
+    expect(select).not.toBeNull()
+    const labels = Array.from(select.options).map((o) => o.textContent)
+    expect(labels).toContain("红黑")
+    expect(labels).toContain("琥珀")
+    expect(labels).toContain("纸白")
+    expect(select.value).toBe("phantom")
+    // Selecting a theme applies it (attribute + persistence), like the
+    // native change event would.
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")!.set!
+    await act(async () => {
+      setter.call(select, "paper")
+      select.dispatchEvent(new Event("change", { bubbles: true }))
+    })
+    expect(document.documentElement.dataset.theme).toBe("paper")
+    expect(localStorage.getItem("kclaw_theme")).toBe("paper")
+    unmount(root, container)
+  })
 })
