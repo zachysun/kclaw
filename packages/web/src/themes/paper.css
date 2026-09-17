@@ -1,0 +1,53 @@
+/* ============================================================
+   paper — the light theme: warm ivory paper, ink text, cinnabar
+   red as the agent signal (seal-stamp red on paper). Warn/danger
+   go dark amber / burnt orange so they stay legible on light, and
+   the derived surfaces (code well, stripes, highlights, shadows,
+   overlays) take lighter values than the dark baseline.
+   ============================================================ */
+
+html[data-theme="paper"] {
+  color-scheme: light;
+
+  /* palette — ink on warm ivory, cinnabar as the agent signal */
+  --bg: #edeae1;
+  --surface: #f6f4ec;
+  --surface-2: #fdfcf7;
+  --surface-3: #e3dfd2;
+  --border: #d9d4c6;
+  --border-strong: #bdb7a5;
+  --border-hover: #a49d87;
+  --text: #201d16;
+  --text-dim: #4c473b;
+  --muted: #6e6857;
+  --accent: #c8392f;           /* cinnabar — the agent signal */
+  --accent-strong: #a92c23;    /* legible cinnabar for small text on paper */
+  --accent-ink: #ffffff;       /* text on cinnabar fills */
+  --accent-dim: rgba(200, 57, 47, 0.1);
+  --accent-border: rgba(200, 57, 47, 0.35);
+  --accent-dim-strong: rgba(200, 57, 47, 0.16);
+  --success: #2e7d3a;
+  --success-dim: rgba(46, 125, 58, 0.1);
+  --danger: #ad470b;           /* burnt orange — red belongs to the agent */
+  --danger-ink: #ffffff;       /* text on danger fills */
+  --danger-dim: rgba(173, 71, 11, 0.1);
+  --warn: #8f6410;             /* dark amber legible on paper */
+
+  /* soft corners like amber */
+  --radius: 8px;
+  --radius-sm: 5px;
+
+  /* semantic fills derived from the palette */
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-strong);
+
+  /* light derived surfaces — the dark baseline lives in the default
+     theme's :root; a light theme overrides every one of these */
+  --code-well-bg: #e4e0d2;
+  --row-stripe: rgba(32, 29, 22, 0.03);
+  --hljs-name: #1a5fa6;        /* code highlight: function/type names */
+  --hljs-attr: #7c3aad;        /* code highlight: attributes/properties */
+  --success-ink: #ffffff;
+  --shadow-rgb: 82, 74, 56;    /* warm dark tint instead of pure black */
+  --overlay: rgba(82, 74, 56, 0.35);
+  --overlay-soft: rgba(82, 74, 56, 0.25);
+}

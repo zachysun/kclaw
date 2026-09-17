@@ -18,6 +18,7 @@ const THEME_KEY = "kclaw_theme"
 export const THEME_META = {
   phantom: { label: "红黑", themeColor: "#0b0b0d" },
   amber: { label: "琥珀", themeColor: "#131518" },
+  paper: { label: "纸白", themeColor: "#edeae1" },
 } as const
 
 export type ThemeName = keyof typeof THEME_META
