@@ -60,6 +60,35 @@ function makeHome(): string {
   return home
 }
 
+/** Grab a free TCP port from the OS and release it (same pattern as the onRetry test). */
+async function freePort(): Promise<number> {
+  const srv = createServer()
+  await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve))
+  const port = (srv.address() as AddressInfo).port
+  // Bounded release: a transiently wedged close must not park the test. The
+  // handle is unref'd so a stuck close can neither hang the suite nor hold
+  // the worker alive; the port is ours to hand out either way.
+  await Promise.race([
+    new Promise<void>((resolve) => srv.close(() => resolve)),
+    new Promise<void>((resolve) => setTimeout(resolve, 2_000).unref()),
+  ])
+  srv.unref()
+  return port
+}
+
+/** Wait for a spawned child to exit, collecting stderr. */
+function waitExit(child: ChildProcess): Promise<{ code: number | null; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    let stderr = ""
+    child.stderr!.setEncoding("utf8")
+    child.stderr!.on("data", (chunk: string) => {
+      stderr += chunk
+    })
+    child.once("exit", (code) => resolve({ code, stderr }))
+    child.once("error", reject)
+  })
+}
+
 /** Defaults plus a mock provider entry (run.test.ts pattern). */
 function makeConfig(home: string): KclawConfig {
   const config = loadConfig(resolvePaths(home))
@@ -216,6 +245,49 @@ describe("daemon slot exclusivity", () => {
 
     const daemon = await launchMock(home, makeConfig(home))
     await daemon.stop()
+  })
+})
+
+// --- fixed port ------------------------------------------------------------------
+
+describe("fixed port", () => {
+  it("config.server.port pins the listen port and daemon.json records it", async () => {
+    const home = makeHome()
+    const config = makeConfig(home)
+    config.server = { port: await freePort() }
+    const daemon = await launchMock(home, config)
+    expect(daemon.port).toBe(config.server.port)
+    expect((await fetch(`http://127.0.0.1:${daemon.port}/health`)).status).toBe(200)
+    const pidfile = JSON.parse(readFileSync(join(home, "daemon.json"), "utf8")) as { port: number }
+    expect(pidfile.port).toBe(config.server.port)
+    await daemon.stop()
+  })
+
+  it("an explicit opts.port wins over config.server.port", async () => {
+    const home = makeHome()
+    const config = makeConfig(home)
+    config.server = { port: await freePort() }
+    const override = await freePort()
+    const daemon = await launchMock(home, config, { port: override })
+    expect(daemon.port).toBe(override)
+    await daemon.stop()
+  })
+
+  it("a pinned port already in use fails loudly and releases the claimed slot", async () => {
+    const home = makeHome()
+    const config = makeConfig(home)
+    const blocker = createServer()
+    await new Promise<void>((resolve) => blocker.listen(0, "127.0.0.1", resolve))
+    const port = (blocker.address() as AddressInfo).port
+    try {
+      config.server = { port }
+      await expect(launchMock(home, config)).rejects.toThrow(/port \d+ is already in use/)
+      // the placeholder pidfile is released: the next launch must not trip
+      // over a live-but-deaf pid left behind by our failed attempt
+      expect(existsSync(join(home, "daemon.json"))).toBe(false)
+    } finally {
+      blocker.close()
+    }
   })
 })
 
@@ -442,6 +514,75 @@ describe("bin/kclaw-server.mjs", () => {
       })
     }
   }, 120_000)
+
+  /** Spawn the bin with the env a default home needs (LLM via KCLAW_LLM_*). */
+  function spawnBin(args: string[]): ChildProcess {
+    const child = spawn(process.execPath, [BIN, ...args], {
+      env: {
+        ...process.env,
+        KCLAW_LLM_BASE_URL: "http://127.0.0.1:1", // client construction never connects
+        KCLAW_LLM_API_KEY: "bin-key",
+        KCLAW_LLM_MODEL: "bin-model",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+    children.push(child)
+    return child
+  }
+
+  it(
+    "binds a --port pinned port and reports exactly it on readiness",
+    async () => {
+      const home = makeHome()
+      const port = await freePort()
+      const child = spawnBin(["--home", home, "--port", String(port)])
+
+      const readyLine = await new Promise<string>((resolve, reject) => {
+        let buf = ""
+        const timer = setTimeout(() => reject(new Error("bin did not report readiness")), 15_000)
+        child.stdout!.setEncoding("utf8")
+        child.stdout!.on("data", (chunk: string) => {
+          buf += chunk
+          const nl = buf.indexOf("\n")
+          if (nl !== -1) {
+            clearTimeout(timer)
+            resolve(buf.slice(0, nl))
+          }
+        })
+        child.once("exit", (code) => reject(new Error(`bin exited early (code ${code})`)))
+        child.once("error", reject)
+      })
+
+      expect((JSON.parse(readyLine) as { port: number }).port).toBe(port)
+
+      const code = await new Promise<number | null>((resolve) => {
+        child.once("exit", (c) => resolve(c))
+        child.kill("SIGTERM")
+      })
+      expect(code).toBe(0)
+    },
+    30_000,
+  )
+
+  it("exits 1 with a one-line stderr on a non-integer --port", async () => {
+    const { code, stderr } = await waitExit(spawnBin(["--home", makeHome(), "--port", "abc"]))
+    expect(code).toBe(1)
+    expect(stderr).toContain('invalid --port "abc"')
+  })
+
+  it("exits 1 with a friendly line when the --port port is already in use", async () => {
+    const blocker = createServer()
+    await new Promise<void>((resolve) => blocker.listen(0, "127.0.0.1", resolve))
+    const port = (blocker.address() as AddressInfo).port
+    try {
+      const { code, stderr } = await waitExit(spawnBin(["--home", makeHome(), "--port", String(port)]))
+      expect(code).toBe(1)
+      expect(stderr).toContain("already in use")
+      expect(stderr).not.toContain("at ") // one line, not a stack trace
+    } finally {
+      blocker.close()
+    }
+  })
 
   it(
     "prints {port} on ready and exits 0 on SIGTERM",

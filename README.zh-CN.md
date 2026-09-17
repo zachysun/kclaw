@@ -83,7 +83,7 @@ kclaw web     # 浏览器打开 WebUI（带 token，自动登录）
 |------|-----------|
 | `command not found: kclaw` | 本地安装那步没做，或 npm 全局 bin 目录不在 PATH——在仓库里执行 `npm i -g ./packages/kclaw`，再用 `npm config get prefix` 查看安装位置 |
 | `no llm provider configured` | 模型未配置：执行一次 `kclaw chat` 进入配置向导，或按「配置要点」手动编写 config / 环境变量 |
-| 页面打不开 / 401 | daemon 重启后端口可能变化（用 `kclaw daemon status` 查当前端口，或直接 `kclaw web`）；token 不变，无需重新获取 |
+| 页面打不开 / 401 | daemon 重启后端口可能变化（用 `kclaw daemon status` 查当前端口，或直接 `kclaw web`）；在配置文件里配 `server.port` 钉住固定端口可让地址稳定。token 不变，无需重新获取 |
 | 高危操作没有确认弹框 | 命令命中了 `permissions.allow` 白名单（配置要点见下） |
 | 数据在哪 | 全部在 `~/.kclaw/`：config.json · token · daemon.json · sessions/ · memory/ · jobs.db · logs/ |
 

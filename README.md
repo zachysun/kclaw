@@ -83,7 +83,7 @@ The wizard ships DeepSeek / OpenAI / Ollama / custom templates; key input is hid
 |---------|-------------|
 | `command not found: kclaw` | The local install step was skipped, or npm's global bin directory is not on PATH — from the repo run `npm i -g ./packages/kclaw` and check the install location with `npm config get prefix` |
 | `no llm provider configured` | No model configured: run `kclaw chat` once for the setup wizard, or write config / env vars by hand per "Configuration" |
-| Page won't open / 401 | The port may change on each daemon start (check the current port with `kclaw daemon status`, or run `kclaw web` directly); the token stays the same across restarts, no need to re-fetch it |
+| Page won't open / 401 | The port may change on each daemon start (check the current port with `kclaw daemon status`, or run `kclaw web` directly); pin `server.port` in the config file to make the URL stable. The token stays the same across restarts, no need to re-fetch it |
 | No confirmation prompt on a risky action | The command matched the `permissions.allow` whitelist (see "Configuration" below) |
 | Where is my data | All under `~/.kclaw/`: config.json · token · daemon.json · sessions/ · memory/ · jobs.db · logs/ |
 

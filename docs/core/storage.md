@@ -85,6 +85,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `team.maxActive` | `4` | 同时运行的组员上限；满员时新信在收信箱排队等空闲边投递 |
 | `team.mailbox.maxUnreadPerTarget` / `maxMessageBytes` | `64` / `65536` | 单个收信箱未读上限 / 单条信字节上限，超限投递方收到 error 结果 |
 | `team.taskBoard.maxTasks` | `64` | 任务板总量上限（含终态任务），超限建任务报错 |
+| `server.port` | 无（临时端口） | daemon 的固定监听端口（1-65535）：钉住后 WebUI 地址跨重启稳定，不配则每次启动由操作系统分配临时端口（历史默认）。bin 的 `--port` 旗标优先于此字段；钉住的端口被占用是硬错误（报一行原因退出，绝不静默换端口——地址悄悄漂移正是钉端口要消灭的），非法值回落临时端口并告警。见 [daemon](../server/daemon.md) |
 
 团队协作的状态目录在工作区 `.kclaw/teams/<队名>/`（团队记录 + 组员名单 + 收信箱）与 `.kclaw/tasks/<队名>/`（任务快照 + 进行中锁），与项目档权限规则共用 `.kclaw` 根；目录结构、对账与崩溃恢复语义见 [agent-team](./agent-team.md)。
 | `notify.channels` | `[]` | 定时任务终态通知渠道列表；为空即关闭（零开销）。条目 `{ name?, type, url, template? }`，`type` 三种：`bark`（POST JSON `{title, body}`）、`serverchan`（POST 表单 `title`+`desp`）、`webhook`（POST JSON，正文含 title/body 及全部 job 字段）。`template` 占位符：`{{job}}` `{{statusText}}` `{{status}}` `{{summary}}` `{{sessionId}}` `{{sessionUrl}}`，未知占位符渲染为空串 |
@@ -230,7 +231,7 @@ HTTP 出口与展示见 [http-api](../server/http-api.md) 的 `GET /usage` 与 [
 ## 边界与出错
 
 - **meta.json 原子写**：`writeMeta` 经 `writeFileAtomic`（临时文件 + rename）写入，meta.json 本身不会被截断；崩溃最坏残留一个 `<meta.json>.tmp` 孤儿文件，不影响读取。
-- **config 无结构校验**：见上文；写错类型（如 `confirmTimeoutMs: "30s"`）要到运行时才以意外方式失败。
+- **config 校验是分字段的，不是整体 schema**：文件级语法错（JSON/YAML 解析失败、根不是映射）启动即抛错；少数进事件流或影响存亡的字段在加载时逐字段校验（`permissions.defaultMode`、压缩水位线整组、`team.*`、`server.port`——非法值回落默认并告警一行）；其余字段不做结构校验，写错类型要到运行时的读取处才以意外方式失败。
 - **SQLite 未开 WAL**：jobs.db、记忆的 `vectors.db`（每项目 + 全局各一个）与 usage.db 都用默认日志模式。单 daemon 进程同步访问（better-sqlite3）下安全；多进程并发写同一个 home 是明确不支持的用法。进程内的同一个 vectors.db 也只有 MemoryPipeline 一个连接（检索方借用句柄）。
 - **KCLAW_HOME 只在 `resolvePaths` 读取一次**：核心层不缓存，但各调用方持有自己的解析结果；daemon 启动后改环境变量不影响已创建的路径。
 
