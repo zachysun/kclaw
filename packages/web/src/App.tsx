@@ -20,7 +20,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react"
 import { bootstrapToken, clearToken, saveToken } from "./token.js"
-import { applyTheme, loadTheme, nextTheme, type ThemeName } from "./theme.js"
+import { applyTheme, isThemeName, loadTheme, themeOptions, type ThemeName } from "./theme.js"
 import type { WsClient } from "./ws.js"
 import { useDaemonClients } from "./daemon-clients.js"
 import { ChatPanel } from "./chat/ChatPanel.js"
@@ -57,6 +57,15 @@ function unionById(prev: Message[], fresh: Message[]): Message[] {
 export function App() {
   const [token, setToken] = useState<string | null>(() => bootstrapToken())
 
+  // Shell theme: index.html already applied the stored value before first
+  // paint; this state mirrors it. The effect re-applies on mount and on every
+  // change — correcting the attribute and the meta color to a legal value
+  // after any hand-edited storage — and applyTheme persists the choice.
+  const [theme, setTheme] = useState<ThemeName>(loadTheme)
+  useEffect(() => {
+    applyTheme(theme)
+  }, [theme])
+
   // 401 re-entry: any API 401 — the mount-time status
   // ping or any later call — clears the stale token and re-renders the token
   // form. Without this a reload would re-bootstrap the SAME stale token and
@@ -67,7 +76,7 @@ export function App() {
   }, [])
 
   if (token === null) return <TokenForm />
-  return <MainShell token={token} onAuthExpired={handleAuthExpired} />
+  return <MainShell token={token} onAuthExpired={handleAuthExpired} theme={theme} onThemeChange={setTheme} />
 }
 
 /** Shown when no token is stored: paste the daemon token to continue. */
@@ -108,16 +117,23 @@ function TokenForm() {
 }
 
 /** Main shell: header with tabs + daemon status, sidebar, and the tab body. */
-function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () => void }) {
+function MainShell({
+  token,
+  onAuthExpired,
+  theme,
+  onThemeChange,
+}: {
+  token: string
+  onAuthExpired: () => void
+  theme: ThemeName
+  onThemeChange: (theme: ThemeName) => void
+}) {
   // onUnauthorized is shared by every call this instance makes (the shell's
   // own pings/pulls plus the tab views) — a 401 anywhere re-enters the token
   // form instead of surfacing a dead "refresh" notice.
   const { api, createWs, wsUrl } = useDaemonClients(token, onAuthExpired)
   const [status, setStatus] = useState<DaemonStatus>("connecting")
   const [tab, setTab] = useState<Tab>("chat")
-  // Shell theme (phantom/amber): index.html already set the attribute before
-  // first paint; this state mirrors it for the toggle and persists changes.
-  const [theme, setTheme] = useState<ThemeName>(loadTheme)
   const [sessions, setSessions] = useState<SessionMeta[] | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [messagesCache, setMessagesCache] = useState<Record<string, Message[]>>({})
@@ -242,16 +258,6 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
     setSidebarOpen(false)
     if (next === "audit") setAuditVisited(true)
     setTab(next)
-  }, [])
-
-  // Toggle the shell theme: applyTheme writes <html data-theme> (the CSS swap
-  // is pure tokens) and persists the choice.
-  const toggleTheme = useCallback((): void => {
-    setTheme((prev) => {
-      const next = nextTheme(prev)
-      applyTheme(next)
-      return next
-    })
   }, [])
 
   // memory.written 通知条点击：切到记忆页并把目标交给 MemoryView 自动打开。
@@ -453,16 +459,22 @@ function MainShell({ token, onAuthExpired }: { token: string; onAuthExpired: () 
             Model
           </button>
         </nav>
-        <button
-          type="button"
-          className="theme-toggle"
-          data-testid="theme-toggle"
-          title={theme === "phantom" ? "切换到琥珀主题" : "切换到红黑主题"}
-          aria-label={theme === "phantom" ? "切换到琥珀主题" : "切换到红黑主题"}
-          onClick={toggleTheme}
+        <select
+          className="theme-select"
+          data-testid="theme-select"
+          aria-label="界面主题"
+          value={theme}
+          onChange={(e) => {
+            const next = e.target.value
+            if (isThemeName(next)) onThemeChange(next)
+          }}
         >
-          {theme === "phantom" ? "◆" : "❚"}
-        </button>
+          {themeOptions().map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
         <span
           className={`status-dot ${status}`}
           data-testid="status-dot"

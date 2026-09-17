@@ -1,0 +1,206 @@
+/* ============================================================
+   phantom — the default theme: high-contrast red/black with hard
+   italic slants and hazard-tape motifs; red is reserved for where
+   the agent is alive/acting.
+   The selector pair owns `:root`: this palette doubles as the
+   fallback for unknown/corrupt stored themes (index.html applies
+   storage as-is; an unknown value matches no theme block and lands
+   here). The shared dark values of the derived surfaces (code
+   well, stripes, highlights, shadows, overlays) also live here —
+   other dark themes inherit them, light themes override.
+   ============================================================ */
+
+:root,
+html[data-theme="phantom"] {
+  color-scheme: dark;
+
+  /* palette — paper white on near-black, red as the agent signal */
+  --bg: #0b0b0d;
+  --surface: #141416;
+  --surface-2: #1c1c1f;
+  --surface-3: #26262b;
+  --border: #26262b;
+  --border-strong: #3a3a42;
+  --border-hover: #4a515c;
+  --text: #f2efe6;
+  --text-dim: #c6c2b8;
+  --muted: #8d897f;
+  --accent: #e4000f;           /* the agent signal — phantom red */
+  --accent-strong: #ff3348;    /* legible red for small text on black */
+  --accent-ink: #ffffff;       /* text on red fills */
+  --accent-dim: rgba(228, 0, 15, 0.14);
+  --accent-border: rgba(228, 0, 15, 0.4);
+  --accent-dim-strong: rgba(228, 0, 15, 0.22);
+  --success: #5fd068;
+  --success-dim: rgba(95, 208, 104, 0.12);
+  --danger: #ffd23f;           /* hazard yellow — red belongs to the agent */
+  --danger-ink: #141414;       /* text on danger fills */
+  --danger-dim: rgba(255, 210, 63, 0.1);
+  --warn: #ffd23f;
+
+  /* phantom cuts corners sharp and fronts titles with an italic
+     display face (system geometric sans, no webfont) */
+  --radius: 5px;
+  --radius-sm: 2px;
+  --font-display: "Avenir Next", Futura, "Helvetica Neue", Arial, var(--font-mono);
+
+  /* semantic fills derived from the palette */
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-strong);
+
+  /* shared dark derived surfaces — identical across the dark themes */
+  --code-well-bg: #08080a;     /* fenced code sits a step below the page bg */
+  --row-stripe: rgba(255, 255, 255, 0.015);
+  --hljs-name: #6db4ff;        /* code highlight: function/type names */
+  --hljs-attr: #c9a8ef;        /* code highlight: attributes/properties */
+  --success-ink: #0d1a0c;      /* text on success fills */
+  --shadow-rgb: 0, 0, 0;       /* shadow/overlay tint, per-theme */
+  --overlay: rgba(0, 0, 0, 0.6);
+  --overlay-soft: rgba(0, 0, 0, 0.45);
+}
+
+/* ============================================================
+   Phantom decoration layer: the angled personality on top of the
+   tokens — skewed red tab cursor, italic display titles dragging a
+   red shadow, hazard tape where the agent asks or runs. The other
+   themes simply skip all of it.
+   ============================================================ */
+
+html[data-theme="phantom"] .brand {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 800;
+  font-size: 17px;
+  letter-spacing: 0.03em;
+  /* misregistered-print offset: the logotype drags its red shadow */
+  text-shadow: 2px 2px 0 var(--accent);
+}
+
+html[data-theme="phantom"] .brand::before {
+  text-shadow: none;
+}
+
+/* The phantom-cursor tab: a hard red parallelogram with white type —
+   the one loud element in the bar. */
+html[data-theme="phantom"] .tab.active {
+  color: var(--accent-ink);
+  border-color: var(--accent);
+  background: var(--accent);
+  transform: skewX(-10deg);
+  box-shadow: 3px 3px 0 rgba(228, 0, 15, 0.3);
+}
+
+html[data-theme="phantom"] .tab.active:hover:not(:disabled) {
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+
+/* the live agent: an italic red line trailing a sliding hazard tape */
+html[data-theme="phantom"] .run-indicator {
+  font-style: italic;
+  font-weight: 700;
+  gap: 8px;
+}
+
+html[data-theme="phantom"] .run-indicator::after {
+  content: "";
+  width: 64px;
+  height: 9px;
+  background: repeating-linear-gradient(-45deg, var(--accent) 0 8px, transparent 8px 16px);
+  animation: tape-slide 0.7s linear infinite;
+}
+
+html[data-theme="phantom"] .run-indicator.compacting {
+  font-style: normal;
+}
+
+html[data-theme="phantom"] .run-indicator.compacting::after {
+  background: repeating-linear-gradient(-45deg, var(--border-strong) 0 8px, transparent 8px 16px);
+  animation: none;
+}
+
+/* the tape slides seamlessly: shift by one full stripe period */
+@keyframes tape-slide {
+  to {
+    background-position: 22.63px 0;
+  }
+}
+
+/* permission checkpoint = hazard tape across the card's top */
+html[data-theme="phantom"] .confirm-card {
+  border: 1px solid var(--border-strong);
+  border-top: 6px solid;
+  border-image: repeating-linear-gradient(-45deg, var(--warn) 0 10px, var(--bg) 10px 20px) 6;
+  background: var(--surface-2);
+}
+
+/* every filled action speaks in the italic voice */
+html[data-theme="phantom"] button.primary,
+html[data-theme="phantom"] .chat-composer button[type="submit"],
+html[data-theme="phantom"] .form-actions button[type="submit"],
+html[data-theme="phantom"] .memory-editor-actions button:first-child {
+  font-style: italic;
+  font-weight: 700;
+}
+
+/* the phantom slash: every page title is cut by a red mark */
+html[data-theme="phantom"] .view-title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 800;
+  font-size: 19px;
+  letter-spacing: 0.01em;
+}
+
+html[data-theme="phantom"] .view-title::before {
+  content: "// ";
+  color: var(--accent);
+}
+
+/* sidebar project headers share the display voice of the page titles */
+html[data-theme="phantom"] .workdir-group-name:not(.muted) {
+  font-family: var(--font-display);
+  font-style: italic;
+  letter-spacing: 0.01em;
+}
+
+/* the gate is the cover page: oversized italic logotype over a tape bar */
+html[data-theme="phantom"] .token-gate {
+  margin-top: 16vh;
+}
+
+html[data-theme="phantom"] .token-gate h1 {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 800;
+  font-size: 44px;
+  margin: 0 0 2px;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  text-shadow: 3px 3px 0 var(--accent);
+}
+
+html[data-theme="phantom"] .token-gate h1::after {
+  content: "";
+  display: block;
+  width: 84px;
+  height: 6px;
+  margin-top: 10px;
+  background: repeating-linear-gradient(-45deg, var(--accent) 0 10px, transparent 10px 20px);
+}
+
+html[data-theme="phantom"] .token-gate button[type="submit"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+  font-style: italic;
+}
+
+html[data-theme="phantom"] .token-gate button[type="submit"]:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+html[data-theme="phantom"] .offline-banner {
+  font-style: italic;
+}
