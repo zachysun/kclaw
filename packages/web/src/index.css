@@ -2604,7 +2604,7 @@ select:focus {
   border: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--text);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 4px 16px rgba(var(--shadow-rgb), 0.35);
 }
 
 .audit-latest-fab:hover {
