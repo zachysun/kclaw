@@ -428,3 +428,42 @@ describe("resolveRunModel", () => {
     expect(r.maxOutput).toBeUndefined()
   })
 })
+
+describe("server.port", () => {
+  it("merges a valid port from the config file and survives a saveConfig roundtrip", () => {
+    const paths = resolvePaths(home)
+    writeFileSync(paths.config, "server:\n  port: 48213\n")
+    const cfg = loadConfig(resolvePaths(home))
+    expect(cfg.server?.port).toBe(48213)
+    saveConfig(paths, cfg)
+    expect(loadConfig(resolvePaths(home)).server?.port).toBe(48213)
+  })
+  it("falls an out-of-range/non-integer port back to unset (ephemeral) with a warning", () => {
+    const paths = resolvePaths(home)
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      for (const bad of ["0", "-1", "70000", "abc", "1.5"]) {
+        writeFileSync(paths.config, `server:\n  port: ${bad}\n`)
+        const cfg = loadConfig(resolvePaths(home))
+        expect(cfg.server?.port).toBeUndefined()
+        expect(warn).toHaveBeenCalledTimes(1)
+        expect(warn.mock.calls[0]![0]).toContain("server.port")
+        warn.mockClear()
+      }
+    } finally {
+      warn.mockRestore()
+    }
+  })
+  it("falls a non-mapping server section back wholesale with a warning", () => {
+    const paths = resolvePaths(home)
+    writeFileSync(paths.config, "server: 3\n")
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const cfg = loadConfig(resolvePaths(home))
+      expect(cfg.server).toBeUndefined()
+      expect(warn).toHaveBeenCalledOnce()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})

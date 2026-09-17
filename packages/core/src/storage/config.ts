@@ -186,6 +186,20 @@ export interface KclawConfig {
       maxTasks?: number
     }
   }
+  /**
+   * Daemon server. Optional only because older config files predate it;
+   * an absent port keeps the historical behavior (an OS-assigned ephemeral
+   * port per launch). Invalid values fall back per-field with one warning
+   * (parseConfig).
+   */
+  server?: {
+    /**
+     * Fixed listen port for the daemon (1-65535). Pinning it keeps the
+     * WebUI URL stable across daemon restarts; unset = an ephemeral port
+     * per launch. An explicit --port flag on the server bin wins over this.
+     */
+    port?: number
+  }
   workspace: string
 }
 
@@ -302,7 +316,27 @@ function parseConfig(raw: string, path: string, format: "json" | "yaml"): KclawC
   // warning; the pack line is validated independently (decoupled by design).
   validateWaterlineConfig(merged.sessions)
   validateTeamConfig(merged)
+  validateServerConfig(merged)
   return merged
+}
+
+/**
+ * Server section validation (team style): a non-mapping section falls back
+ * wholesale; a port outside 1-65535 falls back to unset (the ephemeral-port
+ * default), each with one warning. Never throws.
+ */
+function validateServerConfig(merged: KclawConfig): void {
+  const server = merged.server
+  if (server === undefined) return
+  if (!isPlainObject(server)) {
+    console.warn("kclaw config: server section is not a mapping; falling back to defaults")
+    delete merged.server
+    return
+  }
+  if (server.port !== undefined && !(typeof server.port === "number" && Number.isInteger(server.port) && server.port >= 1 && server.port <= 65535)) {
+    console.warn(`kclaw config: server.port ${String(server.port)} is invalid; falling back to an ephemeral port`)
+    delete server.port
+  }
 }
 
 /**

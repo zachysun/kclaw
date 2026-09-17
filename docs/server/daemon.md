@@ -7,7 +7,7 @@
 ## 设计决策
 
 - **只绑回环地址**：`HOST = "127.0.0.1"`（本机回环地址，外部网络访问不到）。daemon 不做网络隔离，安全完全交给 token；绑回环保证其他机器无法连接。
-- **默认临时端口**：`port: 0`（让操作系统分配一个空闲端口），真实端口 listen 成功后从 `app.server.address()` 读出并写入 `daemon.json`。客户端通过文件发现端口，不依赖约定端口。
+- **端口三级优先级，钉死是显式选择**：listen 端口取 `--port` 旗标 ?? 配置文件 `server.port` ?? `0`（让操作系统分配一个空闲临时端口，历史上的默认行为）。真实端口 listen 成功后从 `app.server.address()` 读出并写入 `daemon.json`，客户端通过文件发现端口。钉住固定端口后 WebUI 地址跨重启稳定；钉住的端口被占用是**硬错误**（退出并报一行原因，绝不静默回落临时端口——地址悄悄漂移正是钉端口要消灭的东西），listen 失败时同步释放占位 daemon.json，下次启动不会看到僵尸 pid。
 - **daemon.json 是独占占位，启动第一步就认领**：装配开始即以 `wx` 原子创建占位 `{port: 0, pid, startedAt, starting: true}`（并发第二个启动者拿到 EEXIST，看到存活 pid 即拒绝"daemon already running"；死 pid 的残留被回收重认领）；listen 成功后回填真实 `{port, pid, startedAt}`（同一 startedAt，`starting` 移除），此时文件才指向可用端口。`launchDaemon` resolve 时 daemon 已在服务并在调度。CLI 侧以"文件出现且 `/health` 可访问"作为就绪判据。
 - **token 是 daemon 的稳定身份**：`<home>/token` 首次启动时生成（UUID，文件权限 0600，仅属主可读写），重启复用，stop 不删除；仅 daemon.json 会被删除。因此 CLI/WebUI 保存的 token 在 daemon 重启后仍然有效。
 - **鉴权是"每路由必带 Bearer"加白名单豁免**：一个 `preHandler` 钩子拦截全部路由，只有三处豁免——`/health`、`/ws`、静态 WebUI 外壳（见下）。豁免列表是封闭集合，新增路由默认受保护。
@@ -33,7 +33,7 @@ export interface LaunchDaemonOptions {
   home?: string                    // KCLAW_HOME ?? ~/.kclaw
   config?: KclawConfig             // 默认 loadConfig(resolvePaths(home))
   llmFactory?: (cfg: KclawConfig) => LlmClient   // 默认按 provider 解析规则构造
-  port?: number                    // 默认 0（临时端口）
+  port?: number                    // 显式覆盖（bin 的 --port 旗标）?? 配置 server.port ?? 0（临时端口）
   schedulerIntervalMs?: number     // 默认 30s
   stopTimeoutMs?: number           // 默认 60s；测试注入 50ms
   webDist?: string                 // 静态托管的 WebUI 目录
@@ -58,7 +58,7 @@ export function bearerMatches(header: string | undefined, token: string): boolea
 
 ## 启动流程
 
-入口链：`packages/server/bin/kclaw-server.mjs`（package.json 的 `bin` 入口）→ `import { launchDaemon } from "../dist/index.js"` → `launchDaemon({ home })`。home 解析：`--home <dir>`（或 `--home=<dir>`）优先，否则 `resolvePaths` 内部使用 `KCLAW_HOME` env ?? `~/.kclaw`。bin 脚本就绪后向 stdout 输出一行 `{"port":<port>}`，CLI 与测试以此行为就绪信号。
+入口链：`packages/server/bin/kclaw-server.mjs`（package.json 的 `bin` 入口）→ `import { launchDaemon } from "../dist/index.js"` → `launchDaemon({ home, port })`。home 解析：`--home <dir>`（或 `--home=<dir>`）优先，否则 `resolvePaths` 内部使用 `KCLAW_HOME` env ?? `~/.kclaw`。端口解析：`--port <n>`（或 `--port=<n>`）优先，0 是合法值（强制临时端口，压过配置）；旗标缺席时由 `launchDaemon` 读配置 `server.port`，再缺席才用临时端口。`--port` 非整数或越界（0-65535 之外）报一行错退出 1；launch 失败（配置不可解析、钉住的端口被占用等）同样是一行 stderr 加退出 1，不裸抛堆栈。bin 脚本就绪后向 stdout 输出一行 `{"port":<port>}`，CLI 与测试以此行为就绪信号。
 
 `launchDaemon` 的装配序（每步失败都让整个启动 reject，daemon 不会半启动）：
 
@@ -106,7 +106,9 @@ new RunManager({...})               注入 usageStore、memory、
 createApp({home, token, stores, bus, run, mcp, attachmentsDir, usage, webDist, memory})
                                     Fastify 应用（见 http-api）；attachmentsDir/usage 传入时
                                     对应的附件与用量路由才注册，mcp 提供 /mcp 的快照，memory 供 /memory 路由族
-await app.listen({ port: opts.port ?? 0, host: "127.0.0.1" })   ← port 默认 0（临时端口），可经 LaunchDaemonOptions.port 覆盖
+await app.listen({ port: listenPort, host: "127.0.0.1" })   ← listenPort = opts.port ?? config.server?.port ?? 0；
+                                    钉住的端口被占（EADDRINUSE）是硬错误：释放占位 daemon.json
+                                    后抛一行原因，不静默回落临时端口
 port = app.server.address().port
 writeFileSync(<home>/daemon.json, {port, pid, startedAt})   ← 回填占位（同 startedAt、starting 移除）；listen 之后、tick 之前
 createNotifier(notify.channels)     ← 仅当 notify.channels 非空时创建；空则 undefined，tick 完全不推送

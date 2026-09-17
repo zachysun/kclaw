@@ -88,7 +88,7 @@ export function withStopTimeout<T>(p: Promise<T>, timeoutMs: number, step: strin
 
 /** Handle over one launched daemon. */
 export interface Daemon {
-  /** The port actually bound (an ephemeral port when launched with 0). */
+  /** The port actually bound (an ephemeral port when nothing pinned one). */
   port: number
   /** Bearer token the app requires (loaded from/created in `<home>/token`). */
   token: string
@@ -105,7 +105,11 @@ export interface LaunchDaemonOptions {
   config?: KclawConfig
   /** LlmClient factory; default resolves the config default provider (env fallback). */
   llmFactory?: (cfg: KclawConfig) => LlmClient
-  /** Port to bind; default 0 (ephemeral). */
+  /**
+   * Port to bind. Precedence: this explicit override (the server bin's
+   * --port flag) ?? config `server.port` ?? 0 (an ephemeral port per
+   * launch — the historical behavior).
+   */
   port?: number
   /** Scheduler tick cadence; default 30s. */
   schedulerIntervalMs?: number
@@ -256,6 +260,21 @@ function pidAlive(pid: number): boolean {
     return true
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== "ESRCH"
+  }
+}
+
+/**
+ * Undo a claim this process still owns (the placeholder pidfile carries our
+ * pid): used when the listen after the claim fails, so the next launch sees
+ * a clean home instead of a live-but-deaf pid. A pidfile rewritten by some
+ * other process in between is left alone.
+ */
+function releaseClaimedSlot(daemonJson: string, pid: number): void {
+  try {
+    const holder = JSON.parse(readFileSync(daemonJson, "utf8")) as { pid?: unknown }
+    if (holder.pid === pid) rmSync(daemonJson, { force: true })
+  } catch {
+    // unreadable/already gone — nothing of ours to release
   }
 }
 
@@ -452,7 +471,25 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     memory, // /memory 路由消费（管理界面）
     hooks: hookRegistry, // GET /hooks 管理面
   })
-  await app.listen({ port: opts.port ?? 0, host: HOST })
+  // Port precedence: explicit override (bin --port) ?? config server.port ??
+  // ephemeral. A pinned port that is taken is a hard error — silently falling
+  // back to an ephemeral port would change the WebUI URL, the exact drift a
+  // pinned port exists to prevent.
+  const listenPort = opts.port ?? config.server?.port ?? 0
+  try {
+    await app.listen({ port: listenPort, host: HOST })
+  } catch (err) {
+    // The slot was claimed (placeholder daemon.json carrying our pid) before
+    // the listen; release it so the next launch sees no live-but-deaf pid.
+    releaseClaimedSlot(join(paths.home, "daemon.json"), process.pid)
+    if ((err as { code?: string }).code === "EADDRINUSE") {
+      throw new Error(
+        `port ${listenPort} is already in use — free it or change the configured port (server.port in the config file, or the --port flag)`,
+        { cause: err },
+      )
+    }
+    throw err
+  }
   const address = app.server.address()
   const port = typeof address === "object" && address !== null ? address.port : (opts.port ?? 0)
 
