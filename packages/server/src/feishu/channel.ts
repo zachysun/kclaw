@@ -254,7 +254,9 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
     void transport.reactTyping(m.messageId).catch(() => undefined)
 
     let sessionId = bindings.get(m.openId)
-    if (sessionId === undefined || sessions.meta(sessionId) === undefined) {
+    // 与 start() 的加载判断一致：软删（回收站）的会话同样作废重绑，
+    // 否则消息会跑进一个随时可能被清理扫描硬删的目录
+    if (sessionId === undefined || sessions.meta(sessionId) === undefined || sessions.meta(sessionId)!.deleted) {
       sessionId = bindSession(m.openId)
     }
 
@@ -265,9 +267,8 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
     }
     if (/^\/stop$/i.test(text)) {
       const r = run.stopAndClear(sessionId)
-      const line = r.aborted
-        ? `已停止当前回复${r.dropped > 0 ? `，丢弃排队消息 ${r.dropped} 条` : ""}。`
-        : "当前没有进行中的回复。"
+      const dropped = r.dropped > 0 ? `，丢弃排队消息 ${r.dropped} 条` : ""
+      const line = r.aborted ? `已停止当前回复${dropped}。` : dropped !== "" ? `当前没有进行中的回复${dropped}。` : "当前没有进行中的回复。"
       void transport.replyText(m.openId, line).catch(() => undefined)
       return
     }

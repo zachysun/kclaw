@@ -236,6 +236,53 @@ describe("feishu channel", () => {
     expect(mainMessages(env)).toHaveLength(1)
   })
 
+  it("rebinds when the bound session is soft-deleted mid-flight", async () => {
+    llmQueue.push(textTurn("旧会话"), textTurn("新会话"))
+    env = await makeScriptedEnv()
+    env.transport.inbound("ou_master", "一")
+    await until(() => env.transport.finishes.length > 0, "first run")
+    const boundId = mainMessages(env)[0]!
+
+    // User deletes the bound session in the WebUI (soft delete) without
+    // restarting the daemon — the next message must NOT run in the recycle bin.
+    env.sessions.delete(boundId)
+
+    env.transport.inbound("ou_master", "二")
+    await until(() => env.transport.finishes.length >= 2, "second run")
+    const live = mainMessages(env)
+    expect(live).toHaveLength(1)
+    expect(live[0]).not.toBe(boundId)
+    // The second reply must have landed in the fresh session.
+    const freshMsgs = env.sessions.readMessages(live[0]!).map((m: { blocks: Array<{ type: string; text?: string }> }) =>
+      m.blocks.filter((b) => b.type === "text").map((b) => b.text ?? "").join(""),
+    )
+    expect(freshMsgs.some((t: string) => t.includes("新会话"))).toBe(true)
+  })
+
+  it("replies with the refusal reason when the queue is full", { timeout: 20_000 }, async () => {
+    // Pre-created deferred: release() must work even if it fires before the
+    // first stream() call assigns its await side.
+    let release!: () => void
+    const gated = new Promise<void>((r) => { release = r })
+    // Hold an active run so every further message queues; then fill the queue.
+    let held = 0
+    const llm: LlmClient = {
+      async *stream(): AsyncIterable<LlmStreamEvent> {
+        held++
+        if (held === 1) await gated
+        yield* textTurn("占位")
+      },
+    }
+    env = await makeEnv(llm)
+    env.transport.inbound("ou_master", "占住")
+    await until(() => env.manager.busy(topSessionId(env)), "run active")
+    // QUEUE_LIMIT=10: the 11th submit hits `queue >= 10` and is refused.
+    for (let i = 0; i < 11; i++) env.transport.inbound("ou_master", `排队${i}`)
+    await until(() => env.transport.replies.some((r) => r.text.includes("消息未受理") && r.text.includes("队列已满")), "refusal receipt")
+    release()
+    await until(() => !env.manager.busy(topSessionId(env)), "session idle")
+  })
+
   it("runs consecutive messages strictly in sent order (busy → wait queue)", async () => {
     llmQueue.push(textTurn("答一"), textTurn("答二"))
     env = await makeScriptedEnv()

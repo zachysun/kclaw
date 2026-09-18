@@ -69,6 +69,9 @@ export const DEFAULT_SCHEDULER_INTERVAL_MS = 30_000
 /** Default deadline for each `stop()` teardown step. */
 export const DEFAULT_STOP_TIMEOUT_MS = 60_000
 
+/** Hard bound on the Feishu channel's start (websocket handshake included). */
+export const FEISHU_START_TIMEOUT_MS = 15_000
+
 /**
  * Race one daemon-stop step against a deadline: `tick.stop()`
  * awaits every tracked job run and `app.close()` awaits every connection, so
@@ -525,14 +528,24 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // reconnecting clients are corrected wholesale by GET /queue.
   run.recoverQueues()
 
-  // Feishu channel (#45): opt-in via ~/.kclaw/feishu.json (enabled). A failed
-  // start never blocks the daemon — the log carries the reason and the rest
-  // of kclaw works untouched.
+  const tick = startSchedulerTick({ scheduler: jobs, run, bus, sessions, intervalMs: opts.schedulerIntervalMs ?? DEFAULT_SCHEDULER_INTERVAL_MS, purgeTtlMs: config.sessions.recycleBinTtlMs, notifier, webBase: `http://${HOST}:${port}`, defaultMode: config.permissions.defaultMode })
+  // 记忆调度器：定时 + 跟随补查。workdirs = 全部有会话的
+  // 项目（去重）；daemon 重启后首次 sweep 会补查落盘的挂起跟随检查。
+  const memoryTick = startMemoryScheduler({
+    system: memory, sessions, config,
+    workdirs: () => Array.from(new Set(sessions.list().map((m) => m.workdir ?? config.workspace))),
+  })
+
+  // Feishu channel (#45): opt-in via ~/.kclaw/feishu.json (enabled). Started
+  // AFTER the schedulers and awaited under a hard bound so a hanging
+  // websocket handshake (bad DNS/proxy) can never delay daemon readiness;
+  // a failed start never blocks the daemon either.
+  let feishuAttempt: FeishuChannel | undefined
   try {
     const feishuConfig = loadFeishuConfig(paths.home)
     if (feishuConfig.enabled) {
       const { createRealFeishuTransport } = await import("./feishu/real-transport.js")
-      feishuChannel = createFeishuChannel({
+      feishuAttempt = createFeishuChannel({
         transport: createRealFeishuTransport(feishuConfig),
         config: feishuConfig,
         run,
@@ -541,20 +554,15 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
         home: paths.home,
         log: (line) => console.error(`kclaw feishu: ${line}`),
       })
-      await feishuChannel.start()
+      await withStopTimeout(feishuAttempt.start(), FEISHU_START_TIMEOUT_MS, "feishu channel start")
+      feishuChannel = feishuAttempt
     }
   } catch (err) {
     console.error(`kclaw feishu channel failed to start: ${err instanceof Error ? err.message : String(err)}`)
+    // 半启动状态也要拆干净：总线订阅不清理会留下喂空转的僵尸
+    await feishuAttempt?.stop().catch(() => undefined)
     feishuChannel = undefined
   }
-
-  const tick = startSchedulerTick({ scheduler: jobs, run, bus, sessions, intervalMs: opts.schedulerIntervalMs ?? DEFAULT_SCHEDULER_INTERVAL_MS, purgeTtlMs: config.sessions.recycleBinTtlMs, notifier, webBase: `http://${HOST}:${port}`, defaultMode: config.permissions.defaultMode })
-  // 记忆调度器：定时 + 跟随补查。workdirs = 全部有会话的
-  // 项目（去重）；daemon 重启后首次 sweep 会补查落盘的挂起跟随检查。
-  const memoryTick = startMemoryScheduler({
-    system: memory, sessions, config,
-    workdirs: () => Array.from(new Set(sessions.list().map((m) => m.workdir ?? config.workspace))),
-  })
   const stopTimeoutMs = opts.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS
 
   let stopped = false

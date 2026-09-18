@@ -117,6 +117,9 @@ export function createRealFeishuTransport(
         // 白名单第二道防线（第一道在频道逻辑里，可在假传输上测试）
         policy: { dmMode: "allowlist", dmAllowlist: config.allowlist },
         loggerLevel: LoggerLevel.error,
+        // 握手必须有死线：DNS/代理/防火墙故障时缺省可以无限挂起，
+        // 而 connect() 要等第一次握手成功才 resolve
+        handshakeTimeoutMs: 10_000,
       })
       channel.on({
         message: (msg) => {

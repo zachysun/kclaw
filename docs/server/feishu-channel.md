@@ -47,7 +47,7 @@
 
 **审批卡**：绑定会话上的 `confirmation.requested` 渲染为"批准（仅本次）/拒绝"两键卡片；按钮按下经普通确认网关落裁决——批准即 `once`、拒绝即 `reject`，审计的裁决来源 `by` 记 `feishu`（与 cli/web 同级，见 [permissions](../core/permissions.md)）。裁决若已被别处（WebUI/CLI/超时）处理，broker 里这条确认已不存在，卡片就地改为"已失效"。卡片只在确认存续期间有效，超时按既有超时语义（拒绝）处理。
 
-**出站剥离器**：所有发往飞书的正文先过 `stripOutboundText`——`<system-reminder>` 注入标记（成对的剥对、悬空的开标签剥到结尾）绝不外发；批注块与思考块内容按构造就进不了出站路径（只有 assistant 的文本块参与渲染）。
+**出站剥离器**：终稿 markdown 先过 `stripOutboundText` 再上卡——`<system-reminder>` 注入标记（成对的剥对、悬空的开标签剥到结尾）绝不出现在终稿；批注块与思考块内容按构造就进不了出站路径（只有 assistant 的文本块参与渲染）。流式增量不做逐段剥离（注入标记可能被切片劈开，逐段剥不干净），终稿一定干净。
 
 ## 传输接缝
 
