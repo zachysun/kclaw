@@ -61,7 +61,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 根级另有 `bus.ts`（EventBus，进程内事件分发）与 `client-http.ts`（CLI/WebUI 共享的 HTTP 请求基座：自动附带 Bearer token、提取错误信息、处理 204/空响应，经 `@kclaw/core/client-http` 子路径出口；不 import 任何 Node 专属模块，浏览器可以直接打包）。`mentions.ts`（`@` 文件引用的纯函数层：提取、候选补全与模型侧包装文本，经 `@kclaw/core/mentions` 子路径出口；机制见 [file-mentions](./core/file-mentions.md)）同为浏览器可引用的纯模块。`sandbox/`（exec 工具的操作系统级沙箱：Seatbelt/bwrap 探测与包装，见 [sandbox](./core/sandbox.md)）是内部模块，不经入口导出，由 run 装配直接 import。
 
-**server**（入口 `packages/server/src/index.ts`）：`app.ts`（createApp 装配）、`daemon.ts`（launchDaemon）、`auth.ts`（token 鉴权）、`run.ts`（RunManager 队列状态机；单次 run 的装配在 core 的 `executeRun`）、`subagent.ts`（子代理派生：子会话创建、状态行与确认转发，见 [subagents](./core/subagents.md)）、`team.ts`（团队宿主：身份反查、收信箱投递、自动派活、面板，见 [agent-team](./core/agent-team.md)）、`command-check.ts`（WS 命令帧的唯一校验点）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`（定时调度 tick）、`memory-scheduler.ts`（记忆的定时/跟随保底调度）、`routes/`（sessions/attachments/jobs/config/fs/usage/memory/skills/hooks/permissions/mcp 十一组路由）。
+**server**（入口 `packages/server/src/index.ts`）：`app.ts`（createApp 装配）、`daemon.ts`（launchDaemon）、`auth.ts`（token 鉴权）、`run.ts`（RunManager 队列状态机；单次 run 的装配在 core 的 `executeRun`）、`subagent.ts`（子代理派生：子会话创建、状态行与确认转发，见 [subagents](./core/subagents.md)）、`team.ts`（团队宿主：身份反查、收信箱投递、自动派活、面板，见 [agent-team](./core/agent-team.md)）、`command-check.ts`（WS 命令帧的唯一校验点）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`（定时调度 tick）、`memory-scheduler.ts`（记忆的定时/跟随保底调度）、`feishu/`（飞书频道：频道逻辑 + 传输接缝 + SDK 薄壳，见 [feishu-channel](./server/feishu-channel.md)）、`routes/`（sessions/attachments/jobs/config/fs/usage/memory/skills/hooks/permissions/mcp 十一组路由）。
 
 **cli**（入口 `packages/cli/src/index.ts`）：commander 命令树（默认进 chat）；`chat.ts`（REPL 交互循环、渲染、@引用展开）、`client.ts`（KclawClient）、`daemon-ctl.ts`（daemon 探测/启动/停止）、`slash.ts`（slash 命令实现）、`file-refs.ts`（@文件引用）、`wizard.ts`（首次配置向导）、`provider-check.ts`（模型连通测试）、`web-cmd.ts`（`kclaw web` 子命令）。
 
@@ -99,7 +99,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 **如何停止。** 收到 SIGTERM/SIGINT 后走有界 stop（每一步默认 60 秒超时）；stop 失败时保留 daemon.json——进程还在运行，pid 文件必须如实反映。
 
-**状态全部在 `<home>`。** `<home>` 指 `KCLAW_HOME` 环境变量指定的目录，未设置时为 `~/.kclaw`（`resolvePaths`，`packages/core/src/storage/paths.ts`）。里面有：`config.json`、`AGENTS.md`、`token`、`daemon.json`、`permissions.yaml`（全局的已保存权限规则，见 [permissions](./core/permissions.md)）、`mcp.json`（WebUI 管理的 MCP server 配置，兼容读取配置文件里遗留的 `mcp.servers` 节，见 [mcp](./core/mcp.md)）、`sessions/`、`memory/`（记忆库：`global/`（persona/wiki/rule 三类认知文件）+ `projects/<id>/`（主题线文件），各带 `vectors.db` 检索索引，见 [memory](./core/memory.md)）、`skills/`（全局技能包目录，项目级技能在工作区 `.kclaw/skills/`，见 [skills](./core/skills.md)）、`hooks/`（用户钩子目录，每个 run 重新扫描，见 [hooks](./core/hooks.md)）、`jobs.db`、`usage.db`、`attachments/`、`commands/`、`logs/`。
+**状态全部在 `<home>`。** `<home>` 指 `KCLAW_HOME` 环境变量指定的目录，未设置时为 `~/.kclaw`（`resolvePaths`，`packages/core/src/storage/paths.ts`）。里面有：`config.json`、`AGENTS.md`、`token`、`daemon.json`、`permissions.yaml`（全局的已保存权限规则，见 [permissions](./core/permissions.md)）、`mcp.json`（WebUI 管理的 MCP server 配置，兼容读取配置文件里遗留的 `mcp.servers` 节，见 [mcp](./core/mcp.md)）、`feishu.json` 与 `feishu-state.json`（飞书频道的配置与绑定状态，见 [feishu-channel](./server/feishu-channel.md)）、`sessions/`、`memory/`（记忆库：`global/`（persona/wiki/rule 三类认知文件）+ `projects/<id>/`（主题线文件），各带 `vectors.db` 检索索引，见 [memory](./core/memory.md)）、`skills/`（全局技能包目录，项目级技能在工作区 `.kclaw/skills/`，见 [skills](./core/skills.md)）、`hooks/`（用户钩子目录，每个 run 重新扫描，见 [hooks](./core/hooks.md)）、`jobs.db`、`usage.db`、`attachments/`、`commands/`、`logs/`。
 
 ---
 
@@ -186,6 +186,7 @@ run 的装配在 core 的 `executeRun`（`packages/core/src/agent/run-assembly.t
 - [agent-loop](./core/agent-loop.md)：run 生命周期状态机与工具回合
 - [daemon](./server/daemon.md)：daemon 装配序、有界 stop、pidfile 语义
 - [run-manager](./server/run-manager.md)：服务端侧的会话串行与确认网关
+- [feishu-channel](./server/feishu-channel.md)：飞书 IM 接入（长连接、四态卡片、审批卡、命令）
 - [http-api](./server/http-api.md)：65 条业务路由清单（含附件/用量/目录浏览/MCP 管理/记忆管理/技能与复用/钩子/权限/团队面板）
 - [mcp](./core/mcp.md)：恒定装配的 MCP 工具适配器
 - [agent-team](./core/agent-team.md)：agent 团队（组长 + 组员、收信箱投递、任务板协作）

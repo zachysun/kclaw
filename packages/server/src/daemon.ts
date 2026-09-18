@@ -52,6 +52,9 @@ import { loadOrCreateToken } from "./auth.js"
 import { EventBus } from "@kclaw/core"
 import { RunManager } from "./run.js"
 import { createSubagentHost } from "./subagent.js"
+import type { FeishuChannel } from "./feishu/channel.js"
+import { createFeishuChannel } from "./feishu/channel.js"
+import { loadFeishuConfig } from "./feishu/config.js"
 import { createTeamHost } from "./team.js"
 import { startSchedulerTick } from "./scheduler-tick.js"
 import { startMemoryScheduler } from "./memory-scheduler.js"
@@ -65,6 +68,9 @@ export const DEFAULT_SCHEDULER_INTERVAL_MS = 30_000
 
 /** Default deadline for each `stop()` teardown step. */
 export const DEFAULT_STOP_TIMEOUT_MS = 60_000
+
+/** Hard bound on the Feishu channel's start (websocket handshake included). */
+export const FEISHU_START_TIMEOUT_MS = 15_000
 
 /**
  * Race one daemon-stop step against a deadline: `tick.stop()`
@@ -411,11 +417,15 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     if (runRef === undefined) throw new Error("run manager not ready")
     return runRef
   }
+  // Feishu channel: created after the RunManager exists (it needs run/sessions/
+  // bus); the subagent host holds a forwarder so the settle push works either way.
+  let feishuChannel: FeishuChannel | undefined
   const subagentHost = createSubagentHost({
     config,
     sessions,
     bus,
     getRun,
+    onBackgroundSettled: (info) => feishuChannel?.onBackgroundSettled(info),
   })
   // Agent team: the facade needs the RunManager (member dispatch) while the
   // RunManager's engine deps need the facade (identity probe per run) — the
@@ -525,6 +535,34 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     system: memory, sessions, config,
     workdirs: () => Array.from(new Set(sessions.list().map((m) => m.workdir ?? config.workspace))),
   })
+
+  // Feishu channel (#45): opt-in via ~/.kclaw/feishu.json (enabled). Started
+  // AFTER the schedulers and awaited under a hard bound so a hanging
+  // websocket handshake (bad DNS/proxy) can never delay daemon readiness;
+  // a failed start never blocks the daemon either.
+  let feishuAttempt: FeishuChannel | undefined
+  try {
+    const feishuConfig = loadFeishuConfig(paths.home)
+    if (feishuConfig.enabled) {
+      const { createRealFeishuTransport } = await import("./feishu/real-transport.js")
+      feishuAttempt = createFeishuChannel({
+        transport: createRealFeishuTransport(feishuConfig),
+        config: feishuConfig,
+        run,
+        sessions,
+        bus,
+        home: paths.home,
+        log: (line) => console.error(`kclaw feishu: ${line}`),
+      })
+      await withStopTimeout(feishuAttempt.start(), FEISHU_START_TIMEOUT_MS, "feishu channel start")
+      feishuChannel = feishuAttempt
+    }
+  } catch (err) {
+    console.error(`kclaw feishu channel failed to start: ${err instanceof Error ? err.message : String(err)}`)
+    // 半启动状态也要拆干净：总线订阅不清理会留下喂空转的僵尸
+    await feishuAttempt?.stop().catch(() => undefined)
+    feishuChannel = undefined
+  }
   const stopTimeoutMs = opts.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS
 
   let stopped = false
@@ -546,6 +584,9 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       // re-fire: the job fires again at its next scheduled time.
       await withStopTimeout(tick.stop(), stopTimeoutMs, "scheduler tick")
       await withStopTimeout(memoryTick.stop(), stopTimeoutMs, "memory scheduler")
+      if (feishuChannel !== undefined) {
+        await withStopTimeout(feishuChannel.stop(), stopTimeoutMs, "feishu channel")
+      }
       if (mcpManager !== undefined) {
         await withStopTimeout(mcpManager.stop(), stopTimeoutMs, "mcp stop")
       }

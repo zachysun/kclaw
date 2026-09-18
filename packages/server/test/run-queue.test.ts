@@ -330,6 +330,68 @@ describe("wake budget (#44)", () => {
   })
 })
 
+describe("stopAndClear (/stop seam, #45)", () => {
+  /** 名为 gate 的工具：进入即报到、只在 abort 时返回（真实工具的 abort 响应形态）。 */
+  const stuckGateTool = (): { tool: ToolExecutor; entered: Promise<void> } => {
+    let notifyEntered!: () => void
+    const entered = new Promise<void>((r) => (notifyEntered = r))
+    const tool: ToolExecutor = {
+      name: "gate", risk: "safe", concurrency: "parallel",
+      async execute(_args, ctx) {
+        notifyEntered()
+        await new Promise<void>((resolve) => {
+          if (ctx.signal?.aborted === true) return resolve()
+          ctx.signal?.addEventListener("abort", () => resolve(), { once: true })
+        })
+        return { status: "ok", output: "" }
+      },
+    }
+    return { tool, entered }
+  }
+
+  it("aborts the active run and drops the queue, reporting both counts; dropped outcomes settle", async () => {
+    const gate = makeGate()
+    const { tool, entered } = stuckGateTool()
+    const mgr = managerWith({ llm: gateLlm(gate, false), tools: new Map([["gate", tool]]) })
+    const meta = sessions.create("主线", undefined, "/w")
+    const active = mgr.submit(meta.id, { userText: "占位", trigger: "user" })
+    await entered
+    const a = mgr.submit(meta.id, { userText: "q1", trigger: "user", disposition: "wait" })
+    const b = mgr.submit(meta.id, { userText: "q2", trigger: "user", disposition: "wait" })
+    const r = mgr.stopAndClear(meta.id)
+    expect(r).toEqual({ aborted: true, dropped: 2 })
+    expect((await active.outcome).stopReason).toBe("aborted")
+    // 被丢弃条目的 outcome 必须落定（拒绝），不能悬挂
+    await expect(a.outcome).rejects.toThrow("已取消")
+    await expect(b.outcome).rejects.toThrow("已取消")
+    expect(mgr.queue(meta.id)).toHaveLength(0)
+    expect(mgr.busy(meta.id)).toBe(false)
+  })
+
+  it("drops pending steer entries too — they would never be injected after the abort", async () => {
+    const gate = makeGate()
+    const { tool, entered } = stuckGateTool()
+    const mgr = managerWith({ llm: gateLlm(gate, false), tools: new Map([["gate", tool]]) })
+    const meta = sessions.create("主线", undefined, "/w")
+    const active = mgr.submit(meta.id, { userText: "占位", trigger: "user" })
+    await entered
+    const s = mgr.submit(meta.id, { userText: "补充", trigger: "user", disposition: "steer" })
+    const r = mgr.stopAndClear(meta.id)
+    expect(r).toEqual({ aborted: true, dropped: 1 })
+    // steer 条目的 outcome 搭活动 run 的车：run 被中止，它随车落定为 aborted
+    expect((await active.outcome).stopReason).toBe("aborted")
+    expect((await s.outcome).stopReason).toBe("aborted")
+    expect(mgr.queue(meta.id)).toHaveLength(0)
+    expect(sessions.readMessages(meta.id).some((m: { id: string }) => m.id === s.messageId)).toBe(false)
+  })
+
+  it("on an idle session it is a no-op: nothing aborted, nothing dropped", async () => {
+    const meta = sessions.create("主线", undefined, "/w")
+    await manager.enqueue(meta.id, { userText: "早前的轮", trigger: "user" })
+    expect(manager.stopAndClear(meta.id)).toEqual({ aborted: false, dropped: 0 })
+  })
+})
+
 describe("steer", () => {
   it("injects at the iteration boundary with created+steered and the same id", async () => {
     const gate = makeGate()

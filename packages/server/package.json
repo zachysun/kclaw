@@ -19,6 +19,7 @@
     "@fastify/static": "^9.3.0",
     "@fastify/websocket": "^11.3.0",
     "@kclaw/core": "workspace:*",
+    "@larksuiteoapi/node-sdk": "^1.74.0",
     "fastify": "^5.0.0"
   },
   "devDependencies": {
