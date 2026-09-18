@@ -69,7 +69,7 @@ export interface ConfirmationRequestedPayload {
 export interface ConfirmationResolvedPayload {
   confirmationId: string
   decision: "once" | "project" | "global" | "reject" | "timeout"
-  by: "cli" | "web" | "timeout"
+  by: "cli" | "web" | "feishu" | "timeout"
 }
 
 /** One question the model asks the user mid-run (ask_user_questions). */
@@ -91,7 +91,7 @@ export interface QuestionResolvedPayload {
   questionId: string
   /** Per-question answers in ask order; absent when nobody answered (timeout). */
   answers?: string[][]
-  by: "cli" | "web" | "timeout"
+  by: "cli" | "web" | "feishu" | "timeout"
 }
 
 export interface NoteEmittedPayload { messageId: string; block: NoteBlock }

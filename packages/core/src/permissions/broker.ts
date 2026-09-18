@@ -56,8 +56,8 @@ export function raceConfirmation(
   return racePending(p, ms, signal)
 }
 
-/** Who answered a confirmation (v1 is single-user CLI; "web" is retained for the UI). */
-export type ConfirmationActor = "cli" | "web"
+/** Who answered a confirmation (single user; one value per surface). */
+export type ConfirmationActor = "cli" | "web" | "feishu"
 
 interface PendingEntry<R, V> {
   record: R

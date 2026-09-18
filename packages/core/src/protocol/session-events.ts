@@ -68,7 +68,7 @@ export interface PermissionDecidedEvent {
   type: "permission.decided"; at: string
   confirmationId: string
   decision: "once" | "project" | "global" | "reject" | "timeout"
-  by: "cli" | "web" | "timeout"
+  by: "cli" | "web" | "feishu" | "timeout"
   tool: { callId: string; name: string; argsJson: string }
 }
 
