@@ -103,7 +103,9 @@ export class RunManager {
   get broker(): ConfirmationBroker
   submit(sessionId: string, input: EnqueueInput): SubmitResult
                         // 同步决策去向：空闲直发；steer+活动 run → 入缓冲区；
-                        // 其余入队（interrupt 伴随对活动 run 的 abort）；队列满抛错
+                        // 其余入队（interrupt 伴随对活动 run 的 abort）。
+                        // 拒绝抛错：主会话连续机器唤醒超预算先抛 WakeBudgetExhaustedError
+                        //（先于队列满检查，语义见 subagents.md）；队列满抛 Error
   enqueue(sessionId: string, input: EnqueueInput): Promise<RunOutcome>
                         // 兼容包装 = submit().outcome（job tick 等旧调用方不变）
   queue(sessionId: string): QueueEntry[]

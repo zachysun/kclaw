@@ -552,6 +552,9 @@ describe("subagent background mode", () => {
     const collected = await host.collector({ parentSessionId: parent.id, childSessionId: childId })
     expect(collected.status).toBe("ok")
     expect(collected.output).toBe("调研结论：一切正常")
+    // 收尾排空：消化 run 的收尾钩子（用量落库）晚于回复文本可见，
+    // 等 session 彻底空闲再结束，避免与 afterEach 的 rmSync 竞争。
+    await until(() => !manager.busy(parent.id), "session idle")
   })
 
   it("collect is gated to the parent's own children and reports unknown ids", async () => {
@@ -588,10 +591,15 @@ describe("subagent background mode", () => {
 
     // The child may not have produced its answer yet — collect says so, not an error.
     const early = await host.collector({ parentSessionId: parent.id, childSessionId: childId })
-    if (early.status === "ok" && early.output.includes("还没有可收集的答复")) return
-    // If the child already finished (scheduling), the answer is there instead.
-    expect(early.output).toContain("终于完成")
-    await until(() => sessions.readMessages(childId).some((m) => m.role === "assistant"), "child answer")
+    if (early.status === "ok" && early.output.includes("还没有可收集的答复")) {
+      await until(() => sessions.readMessages(childId).some((m) => m.role === "assistant"), "child answer")
+    } else {
+      // If the child already finished (scheduling), the answer is there instead.
+      expect(early.output).toContain("终于完成")
+    }
+    // 收尾排空：子 run 落定后完成回投会向父会话提交消化 run，两个会话都要
+    // 空闲（收尾钩子的用量落库晚于消息可见，同 rmSync 竞争防护）。
+    await until(() => !manager.busy(childId) && !manager.busy(parent.id), "both idle")
   })
 
   it("cancelBackgroundForParent stops live background children when the parent dies; a settled child notifies '未正常完成'", async () => {
@@ -627,6 +635,8 @@ describe("subagent background mode", () => {
       const last = msgs.at(-1)
       return last !== undefined && last.blocks.some((b) => b.type === "text" && (b as { text: string }).text.includes("未正常完成"))
     }, "failure delivery", 8_000)
+    // 收尾排空：被取消子 run 的收尾钩子可能晚于投递消息可见（同 rmSync 竞争防护）。
+    await until(() => !manager.busy(childId), "child settled")
   }, 20_000)
 
   it("前台子代理完成不清掉后台记录：两种模式各记各的账", async () => {
@@ -669,6 +679,8 @@ describe("subagent background mode", () => {
     }, "failure delivery", 8_000)
     // 收尾后账本彻底清空
     expect(host.cancelBackgroundForParent(parent.id)).toBe(0)
+    // 收尾排空：被取消子 run 的收尾钩子可能晚于账本清账（同 rmSync 竞争防护）。
+    await until(() => !manager.busy(sessions.listByParent(parent.id)[0]!.id), "child settled")
   }, 20_000)
 })
 
@@ -724,6 +736,8 @@ describe("background completion delivery", () => {
     expect(report).toContain("最终结论：一切正常")
     expect((delivered.blocks.find((b) => b.type === "note") as { kind: string }).kind).toBe("subagent")
     expect(allEvents.filter((e) => e.type === "run.started" && e.sessionId === parent.id)).toHaveLength(3)
+    // 收尾排空：等消化 run 的收尾钩子走完（同 rmSync 竞争防护）。
+    await until(() => !manager.busy(parent.id), "session idle")
   })
 
   it("falls back to the legacy notice when the queue is full", async () => {
@@ -753,7 +767,9 @@ describe("background completion delivery", () => {
 
     const holder = manager.submit(parent.id, { userText: "占位", trigger: "user" })
     await until(() => parentCalls >= 3, "holder run in flight")
-    for (let i = 0; i < 10; i++) manager.submit(parent.id, { userText: `q${i}`, trigger: "user", disposition: "wait" })
+    // 收集并在断言后排空：测试结束时不得有仍在写的 run，否则与 afterEach 的 rmSync 竞争。
+    const outcomes = []
+    for (let i = 0; i < 10; i++) outcomes.push(manager.submit(parent.id, { userText: `q${i}`, trigger: "user", disposition: "wait" }).outcome)
     expect(manager.queue(parent.id)).toHaveLength(10)
 
     // The delivery attempt hits the queue cap and degrades to the legacy
@@ -773,6 +789,7 @@ describe("background completion delivery", () => {
 
     releaseHolder()
     await holder.outcome
+    await Promise.all(outcomes)
   })
 
   it("falls back to the legacy notice when the wake budget is exhausted", async () => {

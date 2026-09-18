@@ -317,7 +317,9 @@ export class RunManager {
       throw new Error(`队列已满（${RunManager.QUEUE_LIMIT} 条）`)
     }
     // 走到这里 = 提交被接受：预算在接受时计数（排队也算——拒绝发生在门口，
-    // 计数发生在进门，与回退兜底的判定点一致）。
+    // 计数发生在进门，与回退兜底的判定点一致）。已接受未执行的积压条目不追溯：
+    // 后续清零只解锁新的接受，最坏见「积压数 + WAKE_BUDGET」次机器 run，
+    // 总量受队列上限约束。
     if (input.trigger === "agent" && meta.parentSessionId === undefined) {
       this.#wakeBudgets.set(sessionId, (this.#wakeBudgets.get(sessionId) ?? 0) + 1)
     }

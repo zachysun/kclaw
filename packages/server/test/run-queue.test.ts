@@ -273,6 +273,61 @@ describe("wake budget (#44)", () => {
     // semantics belong to MAIN sessions only.
     for (let i = 0; i < 5; i++) await manager.enqueue(child.id, { userText: `c${i}`, trigger: "agent" })
   })
+
+  it("a queued user entry does not reset the budget — the reset happens when its run STARTS", async () => {
+    // 护栏：清零点在 #executeEntry（用户输入到达模型），不在 submit 接受时。
+    // 若有人把清零挪到 submit，下面 a4 的拒绝就会消失。
+    const gate = makeGate()
+    const mgr = managerWith({ llm: gateLlm(gate, true), tools: new Map([["gate", gateTool(gate)]]) })
+    const meta = sessions.create("主线")
+    const outcomes: Promise<RunOutcome>[] = []
+    // Active run held at the gate tool so every later submission queues.
+    const active = mgr.submit(meta.id, { userText: "占位", trigger: "user" })
+    await gate.toolEntered
+    for (const t of ["a1", "a2"]) {
+      outcomes.push(mgr.submit(meta.id, { userText: t, trigger: "agent", disposition: "wait" }).outcome)
+    }
+    // The user entry joins the wait queue but has NOT started — the counter
+    // still reads 2, so a3 passes and a4 is refused.
+    outcomes.push(mgr.submit(meta.id, { userText: "人在排队", trigger: "user", disposition: "wait" }).outcome)
+    outcomes.push(mgr.submit(meta.id, { userText: "a3", trigger: "agent", disposition: "wait" }).outcome)
+    expect(() => mgr.submit(meta.id, { userText: "a4", trigger: "agent", disposition: "wait" }))
+      .toThrow(WakeBudgetExhaustedError)
+    // Drain: the queued user run starts and resets the counter; the queued
+    // agent runs were counted at acceptance and execute without re-counting.
+    gate.releaseTool()
+    gate.releaseLlm()
+    await Promise.all([active.outcome, ...outcomes])
+    await mgr.enqueue(meta.id, { userText: "a4", trigger: "agent" })
+  })
+
+  it("draining a steer injection resets the budget", async () => {
+    // 护栏：#drainSteer 是两个清零点之一（用户补充到达模型）。预算在活动 run
+    // 存续期间被机器报告填满后，steer 注入边界清零，新的投递重新被接受。
+    const gate = makeGate()
+    const mgr = managerWith({ llm: gateLlm(gate, true), tools: new Map([["gate", gateTool(gate)]]) })
+    const meta = sessions.create("主线")
+    const outcomes: Promise<RunOutcome>[] = []
+    const active = mgr.submit(meta.id, { userText: "占位", trigger: "user" })
+    await gate.toolEntered
+    for (const t of ["a1", "a2", "a3"]) {
+      outcomes.push(mgr.submit(meta.id, { userText: t, trigger: "agent", disposition: "wait" }).outcome)
+    }
+    expect(() => mgr.submit(meta.id, { userText: "a4", trigger: "agent", disposition: "wait" }))
+      .toThrow(WakeBudgetExhaustedError)
+    // The user steer rides the ACTIVE run; the reset lands at the iteration
+    // boundary when it is injected — before the wait queue ever drains.
+    const s = mgr.submit(meta.id, { userText: "转向：换个方向", trigger: "user", disposition: "steer" })
+    expect(s.disposition).toBe("steer")
+    gate.releaseTool()
+    gate.releaseLlm()
+    await active.outcome
+    await Promise.all(outcomes)
+    // The injection happened, and the previously refused submission passes now.
+    const injected = sessions.readMessages(meta.id).find((m: { id: string }) => m.id === s.messageId)
+    expect(injected).toBeDefined()
+    await mgr.enqueue(meta.id, { userText: "a4", trigger: "agent" })
+  })
 })
 
 describe("steer", () => {
