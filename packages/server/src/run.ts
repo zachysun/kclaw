@@ -420,9 +420,11 @@ export class RunManager {
       const queue = this.#queues.get(sessionId) ?? []
       const qIdx = queue.findIndex((n) => n.entry.messageId === messageId)
       if (qIdx >= 0) {
-        queue.splice(qIdx, 1)
+        const [node] = queue.splice(qIdx, 1)
         this.#queues.set(sessionId, queue)
         cancelIds.push(messageId)
+        // 被取消条目的 outcome 必须落定：调用方（enqueue 兼容层）在等它
+        node?.reject(new Error("排队消息已取消"))
       } else {
         const buf = this.#steerBuf.get(sessionId) ?? []
         const bIdx = buf.findIndex((e) => e.messageId === messageId)
@@ -438,7 +440,10 @@ export class RunManager {
           : { ok: false, reason: "not_found" }
       }
     } else {
-      for (const n of this.#queues.get(sessionId) ?? []) cancelIds.push(n.entry.messageId)
+      for (const n of this.#queues.get(sessionId) ?? []) {
+        cancelIds.push(n.entry.messageId)
+        n.reject(new Error("排队消息已取消"))
+      }
       this.#queues.delete(sessionId)
       for (const e of this.#steerBuf.get(sessionId) ?? []) cancelIds.push(e.messageId)
       this.#steerBuf.delete(sessionId)
@@ -450,6 +455,18 @@ export class RunManager {
       { sessionId },
     ))
     return { ok: true, cancelled: cancelIds }
+  }
+
+  /**
+   * The /stop seam (IM channel): abort the ACTIVE run AND drop everything
+   * still pending (wait queue + steer buffer). The plain interrupt disposition
+   * only preempts the head — queue entries would keep running after it, which
+   * is not a stop. Returns the counts for the user-facing receipt.
+   */
+  stopAndClear(sessionId: string): { aborted: boolean; dropped: number } {
+    const aborted = this.cancel(sessionId)
+    const cleared = this.queueCancel(sessionId)
+    return { aborted, dropped: cleared.ok ? cleared.cancelled.length : 0 }
   }
 
   /**
