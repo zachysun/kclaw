@@ -64,12 +64,23 @@ const STATUS_EXCERPT_CHARS = 80
 /** Chars of the child answer carried by a background completion notice. */
 const NOTICE_EXCERPT_CHARS = 400
 
+/** 后台子代理落定的通知载荷（完成回投后由宿主发出；IM 频道转发为推送卡）。 */
+export interface BackgroundSettlement {
+  parentId: string
+  childId: string
+  who: string
+  ok: boolean
+  excerpt: string
+}
+
 export interface SubagentHostDeps {
   config: KclawConfig
   sessions: SessionStore
   bus: EventBus
   /** Late-bound: the spawner is wired into RunManager's deps before the manager exists. */
   getRun: () => RunManager
+  /** 可选：后台子代理落定（投递或回退）后的回调；daemon 用它接 IM 推送。 */
+  onBackgroundSettled?: (info: BackgroundSettlement) => void
 }
 
 /** What the daemon wires: the spawner, the collector, and the delete-cascade cancel. */
@@ -319,6 +330,7 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
     } catch (err) {
       legacyNotice(parentId, childId, who, outcome, err)
     }
+    deps.onBackgroundSettled?.({ parentId, childId, who, ok, excerpt: answer })
   }
 
   /**

@@ -52,6 +52,9 @@ import { loadOrCreateToken } from "./auth.js"
 import { EventBus } from "@kclaw/core"
 import { RunManager } from "./run.js"
 import { createSubagentHost } from "./subagent.js"
+import type { FeishuChannel } from "./feishu/channel.js"
+import { createFeishuChannel } from "./feishu/channel.js"
+import { loadFeishuConfig } from "./feishu/config.js"
 import { createTeamHost } from "./team.js"
 import { startSchedulerTick } from "./scheduler-tick.js"
 import { startMemoryScheduler } from "./memory-scheduler.js"
@@ -411,11 +414,15 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     if (runRef === undefined) throw new Error("run manager not ready")
     return runRef
   }
+  // Feishu channel: created after the RunManager exists (it needs run/sessions/
+  // bus); the subagent host holds a forwarder so the settle push works either way.
+  let feishuChannel: FeishuChannel | undefined
   const subagentHost = createSubagentHost({
     config,
     sessions,
     bus,
     getRun,
+    onBackgroundSettled: (info) => feishuChannel?.onBackgroundSettled(info),
   })
   // Agent team: the facade needs the RunManager (member dispatch) while the
   // RunManager's engine deps need the facade (identity probe per run) — the
@@ -518,6 +525,29 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // reconnecting clients are corrected wholesale by GET /queue.
   run.recoverQueues()
 
+  // Feishu channel (#45): opt-in via ~/.kclaw/feishu.json (enabled). A failed
+  // start never blocks the daemon — the log carries the reason and the rest
+  // of kclaw works untouched.
+  try {
+    const feishuConfig = loadFeishuConfig(paths.home)
+    if (feishuConfig.enabled) {
+      const { createRealFeishuTransport } = await import("./feishu/real-transport.js")
+      feishuChannel = createFeishuChannel({
+        transport: createRealFeishuTransport(feishuConfig),
+        config: feishuConfig,
+        run,
+        sessions,
+        bus,
+        home: paths.home,
+        log: (line) => console.error(`kclaw feishu: ${line}`),
+      })
+      await feishuChannel.start()
+    }
+  } catch (err) {
+    console.error(`kclaw feishu channel failed to start: ${err instanceof Error ? err.message : String(err)}`)
+    feishuChannel = undefined
+  }
+
   const tick = startSchedulerTick({ scheduler: jobs, run, bus, sessions, intervalMs: opts.schedulerIntervalMs ?? DEFAULT_SCHEDULER_INTERVAL_MS, purgeTtlMs: config.sessions.recycleBinTtlMs, notifier, webBase: `http://${HOST}:${port}`, defaultMode: config.permissions.defaultMode })
   // 记忆调度器：定时 + 跟随补查。workdirs = 全部有会话的
   // 项目（去重）；daemon 重启后首次 sweep 会补查落盘的挂起跟随检查。
@@ -546,6 +576,9 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       // re-fire: the job fires again at its next scheduled time.
       await withStopTimeout(tick.stop(), stopTimeoutMs, "scheduler tick")
       await withStopTimeout(memoryTick.stop(), stopTimeoutMs, "memory scheduler")
+      if (feishuChannel !== undefined) {
+        await withStopTimeout(feishuChannel.stop(), stopTimeoutMs, "feishu channel")
+      }
       if (mcpManager !== undefined) {
         await withStopTimeout(mcpManager.stop(), stopTimeoutMs, "mcp stop")
       }
