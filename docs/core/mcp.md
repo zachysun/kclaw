@@ -15,7 +15,7 @@ kclaw 在这个过程中只扮演 MCP **客户端**：它去调用别人的 serv
 - **一个 server 失败不影响其他部分**：`start()` 用 `Promise.allSettled` 并发连接所有 server，某个 server 连不上时只记录到它自己的状态和 `lastError` 字段，不会抛异常——所以一个配置坏了的 server 既不会阻断 daemon 启动，也不会影响其他 server。
 - **从未连上过的 server 不自动重试**：自动重连循环只对"曾经连上过"的 server 生效（内部用 `hadSession` 标记）。启动时就失败的 server（比如命令拼错、进程起不来）会停在 `"failed"` 状态等人处理，而不是永远在后台空转重试；WebUI 的 MCP 栏提供手动重连按钮（管理方法 `reconnect`），一次点击就是一次连接尝试，不会在背后排进退避循环。
 - **热方法换新状态对象**：增删改启停（`addServer`/`updateServer`/`removeServer`/`setEnabled`）都会为该 server 造一个全新的状态对象、把旧对象整体退役（旧对象上的在飞连接回调、重连定时器全部短路），保证旧配置的回调永远不会落到新配置的状态上。`reconnect` 是例外——它只是对同一个状态对象取消挂着的退避定时器后发起一次连接，不换对象。
-- **每个 run 开始时重新读一遍工具列表**：daemon 交给 RunManager 的不是一份静态工具表，而是一个函数（`extraTools: () => mcpManager.tools()`），每轮 run 开始时才求值。某个 server 在两轮 run 之间上线或掉线（或被热方法改了配置），下一轮请求立刻反映最新情况，不用重启 daemon。
+- **每个 run 开始时重新读一遍工具列表**：daemon 交给 RunManager 的是一个函数（`extraTools: () => mcpManager.tools()`），每轮 run 开始时才求值。某个 server 在两轮 run 之间上线或掉线（或被热方法改了配置），下一轮请求立刻反映最新情况，不用重启 daemon。
 - **工具名加前缀，避免冲突**：来自 MCP 的工具统一命名为 `mcp__<server>__<tool>`（例如 `mcp__filesystem__read_file`），不同 server 的同名工具、以及与内置工具之间靠前缀天然分开。万一仍与内置工具撞名，适配器的实现覆盖内置的那个，并打一行日志说明。经 API 新增的 server 名字限定为字母、数字、下划线和连字符（名字会进模型可见的工具名）；配置文件里手写的存量名字不做追溯校验。
 - **权限与调度一律按最保守处理**：kclaw 看不到外部工具内部做了什么，所以把它们的每个工具都标记为 `"sensitive"`（每次调用都经过权限网关，默认要人工确认）和 `"serial"`（不与其他工具并发执行）——宁可多打扰用户，也不放开。
 
