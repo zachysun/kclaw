@@ -221,7 +221,7 @@ retry(sessionId, fromMessageId, text, attachments?)
     - `onMessage`：assistant/tool 消息持久化（用户消息的持久化由 run-before 链的 `user-message-land` 负责，不经这里）。
 13. **run-after 链**：`runAgent` 返回后串行跑收尾链——内置 `usage-ledger(10)`（有 usageStore 就记一行用量，失败仅日志；子代理 run 记到父会话名下——`usageSessionId` = `meta.parentSessionId ?? 自身`）→ 任何排其后的用户/注入条目 → 内置 `manual-compact-flush(15)`（运行忙时排队的 /compact 在这里冲刷：取排队的 focus，直调 `Compactor.compact({manual:true, phase:"manual"})`；没有暂存就零开销跳过）→ 内置 `post-run-compaction(20)`（stopReason 非 `aborted`/`error` 且上下文占用 ≥ `预算 × compactAtRatio` 时 `compactor.auto({phase:"post-run", signal})`；估算前有正在执行的后台压缩则先等它结束——等来的成果多半已把占用压回线以下。fatal：压缩失败传播为条目级失败；await 它，发生在活动登记清除前——驱动器串行化让压缩期间新消息排队，手动 /compact 此时也被"会话活跃"条件自然排到下一轮）→ 内置 `follow-check(30)`（`config.memory.write.idleMinutes > 0` 时排一个跟随检查，写入该项目 `state.json`，daemon 重启后由记忆调度器补查；子代理 run 不挂；失败静默）。最后 `#executeEntry` 在 finally 里清理 `#active`/`#activeOutcomes` 中属于本 run 的登记（仍是自己才删，防止误删后继 run 的）。
 
-调度心跳的 job run 使用同一入口：`run.enqueue(session.id, {userText: job.prompt, trigger: "job", note: "本会话由定时任务「<name>」触发"})`（`packages/server/src/scheduler-tick.ts`），job 触发的 run 跳过自动命名。
+调度心跳的 job run 使用同一入口：`run.enqueue(session.id, {userText: job.prompt, trigger: "job", note: {kind: "job", text: "本会话由定时任务「<name>」触发"}})`（`packages/server/src/scheduler-tick.ts`），job 触发的 run 跳过自动命名。
 
 ### 引导注入口（#drainSteer）与 steer 的一生
 

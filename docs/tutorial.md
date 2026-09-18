@@ -50,7 +50,7 @@ kclaw chat
 
 选「否」或按 Ctrl+C 都会正常退出，不写入任何文件；下次 `kclaw chat` 会重新进入向导。
 
-不走向导时，可手动编写 `~/.kclaw/config.json`，或设置 `KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY / KCLAW_LLM_MODEL` 环境变量，格式见 [README](../README.zh-CN.md) 的「配置要点」一节。
+不走向导时，可手动编写 `~/.kclaw/config.json`，或设置 `KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY / KCLAW_LLM_MODEL` 环境变量，格式见 [README](../README.zh-CN.md) 的「配置」一节。
 
 ## 3. 第一轮对话
 
@@ -154,7 +154,7 @@ kclaw web
 
 token 的处理：页面获取 token 后存入浏览器本地存储并从地址栏清除，之后刷新无需重新登录；终端打印的地址是去掉 token 的版本，可以放心复制。
 
-界面是左侧会话栏加八个页面：
+界面是左侧会话栏加十个页面：
 
 | 页面 | 用来做什么 |
 |------|-----------|
@@ -166,6 +166,8 @@ token 的处理：页面获取 token 后存入浏览器本地存储并从地址�
 | 记忆 | 记忆塔管理：项目情节 / 全局认知的查看与整文件编辑 |
 | 技能 | 已装技能的清单与 SKILL.md 正文（只读） |
 | 权限 | 沉淀下来的权限规则（全局档与项目档）的查看与删除 |
+| MCP | 已配置的 MCP 服务器管理：连接状态、启停、重连、增删改（机制见 [mcp](./core/mcp.md)） |
+| Model | 模型服务管理：多个 API 端点条目、默认条目切换、连通验证（机制见 [provider](./core/provider.md)） |
 
 左侧会话栏里的会话按工作目录分组；顶部"＋ 选择工作目录新建会话"选一个目录，就在那里建一个新会话，组与单个会话都可以改名、删除。WebUI 与 CLI 功能对等，选择哪一个仅取决于使用习惯。
 
@@ -202,10 +204,10 @@ kclaw daemon status   # 查看状态（kclaw status 是同一命令的别名）
 
 之后执行 `kclaw chat` 或 `kclaw web`，daemon 会自动重新启动。
 
-遇到 `command not found: kclaw`、页面 401、端口对不上等问题，先查阅 [README](../README.zh-CN.md) 的「常见问题」表。
+遇到 `command not found: kclaw`，回 [README](../README.zh-CN.md) 的「安装」一节核对步骤；页面 401 或端口对不上，多半出在 token 与 daemon.json 上，见 [daemon](./server/daemon.md) 的鉴权与端口两节。
 
 ## 9. 下一步
 
-- **配置要点**（[README](../README.zh-CN.md)「配置要点」一节）：`workspace` 限定文件工具的活动范围；`permissions.allow` 可以让某些命令跳过确认（如 `exec:git *`）；`exec.timeoutMs` 控制命令超时；`~/.kclaw/AGENTS.md` 定义 agent 人设。
+- **配置全表**（[storage](./core/storage.md)）：`workspace` 限定文件工具的活动范围；`permissions.allow` 可以让某些命令跳过确认（如 `exec:git *`）；`exec.timeoutMs` 控制命令超时；`~/.kclaw/AGENTS.md` 定义 agent 人设。模型 provider 的配置见 [README](../README.zh-CN.md) 的「配置」一节。
 - **扩展指南**（[extending](./extending.md)）：为 kclaw 增加新功能时的切入点。
 - **架构总纲**（[architecture](./architecture.md)）：阅读内部实现时的入口文档。
