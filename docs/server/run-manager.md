@@ -115,8 +115,13 @@ export class RunManager {
     | { ok: true; cancelled: string[] }
     | { ok: false; reason: "not_found" | "injected" }
                         // 排队取消：wait 随时、steer 注入前可取消；
-                        // 不带 id = 清空全部可取消条目并广播 {all:true}
+                        // 不带 id = 清空全部可取消条目并广播 {all:true}；
+                        // 被取消 wait 条目的 outcome 以拒绝落定（调用方不悬挂）
   cancel(sessionId: string): boolean   // 只中止当前 run；false = 无活跃 run
+  stopAndClear(sessionId: string): { aborted: boolean; dropped: number }
+                        // /stop 组合口（IM 频道用）：cancel + queueCancel 全清，
+                        // 返回"是否中止了活跃 run"与"丢弃条数"；普通 interrupt
+                        // 处置只插队头不清队列，做不成"停止"（见 feishu-channel.md）
   recoverQueues(): void                // daemon 启动恢复：queue.jsonl 整体重排，steer/interrupt 降级 wait
   cancelCompaction(sessionId: string): boolean
                                         // 取消进行中的自动压缩：写会话级取消标记 + 取消压缩用的
@@ -266,6 +271,8 @@ steer 条目被 `submit` 放进 `#steerBuf` 后，目标 run 在**迭代边界**
 
 - **带 messageId**：先查可执行队列（wait 条目随时可取消），再查 steer 缓冲（注入前可取消——长工具批次期间注入窗口可达数分钟，此间条目占用着共享上限的名额）。命中即从内存与 queue.jsonl 删除、广播 `message.queue_cancelled {messageId}`、回 `{ok:true, cancelled:[id]}`；都不在时按 `#injectedIds` 区分两种失败：近期已注入 → `{ok:false, reason:"injected"}`（已进事件流历史，机器不删历史），否则 `{ok:false, reason:"not_found"}`。ws 层把两者分别映射为错误文案 `已注入` 与 `not found`。
 - **不带 messageId**：清空全部可取消条目（全部 wait + 全部未注入 steer），广播 `message.queue_cancelled {all:true}`。
+
+被取消的 wait 条目其 `outcome` promise 以拒绝（`排队消息已取消`）落定——`enqueue()` 兼容层的调用方在等它，静默丢弃会让 promise 永远悬挂；steer 条目没有独立的 outcome（搭活动 run 的车），随活动 run 的终态自然落定。
 
 `queue.cancel` 与注入取走在同一 daemon 进程的同一个线程内天然互斥（先到先得）：取消先到则条目被删、注入再也取不到；注入先到则条目已登记 `#injectedIds`、取消请求得到 `injected`。
 

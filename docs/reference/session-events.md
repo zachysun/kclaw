@@ -44,7 +44,7 @@ export type SessionEvent =
 |------|------|
 | `run.started` | `at`、`trigger`（user/job/agent/team）——每 run 一条 |
 | `run.ended` | `at`、`stopReason`、`usage?`（正常终点的全程累计）、`error?`（stopReason 为 error 时）——每 run 恰一条，失败 run 也落 |
-| `permission.decided` | `at`、`confirmationId`、`decision`（once/project/global/reject/timeout）、`by`（cli/web/timeout）、`tool { callId, name, argsJson }`——每次裁决一条 |
+| `permission.decided` | `at`、`confirmationId`、`decision`（once/project/global/reject/timeout）、`by`（cli/web/feishu/timeout）、`tool { callId, name, argsJson }`——每次裁决一条 |
 
 ### 记忆（1 种）
 

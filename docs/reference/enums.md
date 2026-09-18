@@ -39,7 +39,7 @@
 | `reject` | 拒绝 |
 | `timeout` | 无人裁决等到超时（等待方产生，不是客户端发的） |
 
-来源 `by`（3 值）：`cli` / `web` / `timeout`。
+来源 `by`（4 值）：`cli` / `web` / `feishu` / `timeout`（`feishu` 来自飞书频道的审批卡）。
 
 ## 排队处置 SendDisposition（3 值）
 

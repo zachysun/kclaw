@@ -236,7 +236,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 - 人工裁决是**四选一**（`ConfirmationDecision = "once" | "project" | "global" | "reject"`）：仅本次、总是（本项目）、总是（全局）、拒绝。CLI 的确认提示是 @clack 四项选择（`--yes`/`--no` 脚本旗标分别映射 once/reject）；WebUI 是确认卡上的四个按钮。
 - 确认网关 `ConfirmationBroker`（`packages/core/src/permissions/broker.ts`）：
   - 登记：run 装配（core `executeRun`）的包装 gate，confirm 判定一出就在 broker 登记（携带 toolCall、risk、会话 id）。
-  - 裁决：CLI/Web 经 WS `confirmation.resolve` 帧调 `broker.resolve(id, decision, by)`（`by` 默认 `"cli"`，WebUI 帧带 `client:"web"`）。裁决返回布尔——unknown/stale id 落空。
+  - 裁决：CLI/Web 经 WS `confirmation.resolve` 帧调 `broker.resolve(id, decision, by)`（`by` 默认 `"cli"`，WebUI 帧带 `client:"web"`）。裁决返回布尔——unknown/stale id 落空。飞书频道的审批卡不走 WS，直接调同一个 `broker.resolve`（`by:"feishu"`，见 [feishu-channel](../server/feishu-channel.md)）。
   - 一次人工裁决的全部后果都收在 run 装配（core `run-assembly.ts`）的 `resolveConfirmation` 一处：`project`/`global` 的沉淀规则写文件、审计留痕、`once` 授权、auto 归纳。这个缝合层握有工具调用快照与本次 run 的工作目录，也看得到每一种结局（超时与 abort 都到不了 WS 层）。WS 入口只做三步——认领裁决方（`cli`/`web`）→ `broker.resolve` → 回执。`once`/`reject`/未知 id 不写任何文件；写文件失败只记日志，裁决照常生效（项目档的目标工作目录就是本次 run 的工作目录）。
   - **auto 模式归纳在装配层（不在 WS 入口）**：run 装配（core `run-assembly.ts`）的 `resolveConfirmation` wrapper 能看到**每一种**裁决结局——`once`/`reject` 经网关、**超时**在共享的等待计时内自行到期——这是 WS 命令分发层做不到的（超时永不产生 resolve 帧）。当裁决所属会话的模式是 `auto`（用 run 启动时的快照，不是 resolve 时刻的实时值，避免切模式竞态）时：`once` 裁决先喂给 `AutoLearnCounter`（core 纯内存类，键 = `sessionId + 收紧键`，按会话隔离，见第 5 节 auto 档）——跨过阈值即保存一条 `source:"auto"` 的项目档规则（尽力而为，写失败只记日志不打断 run）；`reject` **或超时**清零该键计数；abort（run 取消）不是拒绝、不碰计数。同一个包装里，`once` 裁决还会把收紧规则写入**本次 run 的授权存储**（`grants.grant`，见第 11 节）——auto 模式下 gate 不消费它，属死写，无副作用。判定链与规则引擎完全不知道 auto 的存在——归纳发生在裁决侧，规则保存后由既有机制生效。WS 入口不参与归纳。
   - broker **不发事件、不设内部超时**——事件归循环，计时归循环与装配侧的同一套计时机制；两处用同一超时值计时保证视图一致。

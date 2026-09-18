@@ -94,7 +94,7 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 | `llm.completed` | `usage`、`stopReason`、`latencyMs` |
 | `llm.failed` | `error { code, message }`、`willRetry` |
 | `confirmation.requested` | `confirmationId`、`toolCall`、`risk`（safe/sensitive）、`expiresAt`、`noteText?`（给人工看的原因） |
-| `confirmation.resolved` | `confirmationId`、`decision`（once/project/global/reject/timeout）、`by`（cli/web/timeout） |
+| `confirmation.resolved` | `confirmationId`、`decision`（once/project/global/reject/timeout）、`by`（cli/web/feishu/timeout） |
 | `question.requested` | `questionId`、`questions`（QuestionSpec 数组，1–5 个）、`expiresAt`、`noteText?` |
 | `question.resolved` | `questionId`、`answers?`（string[][]，超时缺省）、`by` |
 | `note.emitted` | `messageId`、`block`（NoteBlock） |
