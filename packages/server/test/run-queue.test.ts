@@ -10,7 +10,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { EventBus, SessionStore, defaultConfig, resolvePaths } from "@kclaw/core"
 import type { LlmClient, LlmStreamEvent, QueueEntry, RunOutcome, ToolExecutor } from "@kclaw/core"
-import { RunManager } from "../src/run.js"
+import { RunManager, WakeBudgetExhaustedError } from "../src/run.js"
 import { endTurnLlm } from "./helpers/scripted-llm.js"
 import { gateLlm, gateTool, makeGate } from "./helpers/gate.js"
 
@@ -242,6 +242,36 @@ describe("submit / driver", () => {
     expect(failed!.payload.error?.message).toContain(bad.messageId)
     // 驱动器没有停转：坏条目失败后队列清空、字段删除
     expect(sessions.readQueue(meta.id)).toHaveLength(0)
+  })
+})
+
+describe("wake budget (#44)", () => {
+  it("three agent-triggered submissions pass; the fourth is refused with WakeBudgetExhaustedError", async () => {
+    const meta = sessions.create("主线")
+    for (let i = 0; i < 3; i++) await manager.enqueue(meta.id, { userText: `auto${i}`, trigger: "agent" })
+    expect(() => manager.submit(meta.id, { userText: "auto4", trigger: "agent" })).toThrow(WakeBudgetExhaustedError)
+  })
+
+  it("a user run start resets the budget; a job run does not", async () => {
+    const meta = sessions.create("主线")
+    await manager.enqueue(meta.id, { userText: "a1", trigger: "agent" })
+    await manager.enqueue(meta.id, { userText: "a2", trigger: "agent" })
+    await manager.enqueue(meta.id, { userText: "job1", trigger: "job" })
+    // The job run is machine-originated: the budget stays at 2, so a third
+    // agent submission is still accepted and a fourth is refused.
+    await manager.enqueue(meta.id, { userText: "a3", trigger: "agent" })
+    expect(() => manager.submit(meta.id, { userText: "a4", trigger: "agent" })).toThrow(WakeBudgetExhaustedError)
+    // A real user run resets the counter.
+    await manager.enqueue(meta.id, { userText: "人在了", trigger: "user" })
+    await manager.enqueue(meta.id, { userText: "a5", trigger: "agent" })
+  })
+
+  it("agent submissions to child sessions do not consume the budget", async () => {
+    const parent = sessions.create("主线")
+    const child = sessions.create("子代理 · c", undefined, undefined, "default", parent.id)
+    // The dispatch path submits to children with trigger "agent"; budget
+    // semantics belong to MAIN sessions only.
+    for (let i = 0; i < 5; i++) await manager.enqueue(child.id, { userText: `c${i}`, trigger: "agent" })
   })
 })
 

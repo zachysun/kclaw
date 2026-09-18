@@ -177,6 +177,19 @@ export interface SubmitResult {
 export type { LlmRetrySink } from "@kclaw/core"
 
 /**
+ * Thrown by submit when a machine-originated (trigger "agent") submission
+ * exceeds the session's anti-loop wake budget (#44). The subagent host's
+ * completion delivery catches this and falls back to the legacy notice —
+ * the completion is degraded, never silently lost.
+ */
+export class WakeBudgetExhaustedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "WakeBudgetExhaustedError"
+  }
+}
+
+/**
  * One in-memory queue node: the persisted entry plus its settle plumbing.
  * `entry` is what lands in queue.jsonl ；outcome 在本条 run 结束时
  * 以其 RunOutcome settle（wait/interrupt 为本条 run，steer 不建 node）。
@@ -208,6 +221,14 @@ export class RunManager {
   /** 每会话排队 + steer 缓冲合计上限；先写死，不做配置项。 */
   static readonly QUEUE_LIMIT = 10
 
+  /**
+   * 防自循环唤醒预算（#44）：每会话连续 agent 触发的自动唤醒上限。
+   * 计数在提交被接受时 +1，只有真实的用户输入真正到达模型时清零
+   * （用户 run 开始 / steer 注入排空）。定时任务同属机器来源，不清零。
+   * 仅内存：daemon 重启自然清零。
+   */
+  static readonly WAKE_BUDGET = 3
+
   readonly #deps: RunManagerDeps
   /** 每会话可执行条目（wait/interrupt），数组顺序即执行顺序。 */
   readonly #queues = new Map<string, QueueNode[]>()
@@ -219,6 +240,8 @@ export class RunManager {
   readonly #active = new Map<string, AbortController>()
   /** 活动 run 的 outcome：steer 的参考 outcome / 降级时序。 */
   readonly #activeOutcomes = new Map<string, Promise<RunOutcome>>()
+  /** 每会话已消耗的机器唤醒数（#wakeBudgets 的值域 0..WAKE_BUDGET）。 */
+  readonly #wakeBudgets = new Map<string, number>()
   /**
    * 压缩引擎（core Compactor，card ① 迁入）：两段摘要调用、事件对、审计写盘
    * 与每会话取消状态都在那里；本类只转发 cancelCompaction 并在 run 钩子里调用。
@@ -273,6 +296,16 @@ export class RunManager {
     if (input.trigger === "user" && meta.parentSessionId !== undefined) {
       throw new Error("子代理会话不接收用户消息（只读；过程与结果见审计页）")
     }
+    // 防自循环预算（#44）：agent 触发 = 机器自动唤醒。检查先于队列上限
+    // （原型定序：预算耗尽的拒绝语义优先）；子会话不参与——它的 agent 提交
+    // 是派发器独占驱动的子 run，预算语义属于主会话。
+    if (input.trigger === "agent" && meta.parentSessionId === undefined) {
+      if ((this.#wakeBudgets.get(sessionId) ?? 0) >= RunManager.WAKE_BUDGET) {
+        throw new WakeBudgetExhaustedError(
+          `连续机器唤醒已达上限（${RunManager.WAKE_BUDGET} 次），拒绝本次自动投递`,
+        )
+      }
+    }
     // 处置解析链：显式 > 会话覆盖 > 配置默认；job/agent 触发固定 wait
     // （无人值守的排队行为必须可预测；agent 子 run 由派发器独占驱动）。
     const disposition = input.trigger === "job" || input.trigger === "agent"
@@ -282,6 +315,11 @@ export class RunManager {
     const steer = this.#steerBuf.get(sessionId) ?? []
     if (queue.length + steer.length >= RunManager.QUEUE_LIMIT) {
       throw new Error(`队列已满（${RunManager.QUEUE_LIMIT} 条）`)
+    }
+    // 走到这里 = 提交被接受：预算在接受时计数（排队也算——拒绝发生在门口，
+    // 计数发生在进门，与回退兜底的判定点一致）。
+    if (input.trigger === "agent" && meta.parentSessionId === undefined) {
+      this.#wakeBudgets.set(sessionId, (this.#wakeBudgets.get(sessionId) ?? 0) + 1)
     }
     const entry: QueueEntry = {
       messageId: input.messageId ?? newId("msg"),
@@ -663,6 +701,10 @@ export class RunManager {
     const controller = new AbortController()
     this.#active.set(sessionId, controller)
     const entry = node.entry
+    // 用户 run 真正开跑 = 真实用户输入到达模型：防自循环预算在此清零
+    // （#44 原型定案——清零不能发生在提交时，排在其后的机器条目会借它
+    // 提前解锁，两次用户发言之间的唤醒上限就失守了）。
+    if (entry.trigger === "user") this.#wakeBudgets.delete(sessionId)
     const input: EnqueueInput = {
       userText: entry.text,
       trigger: entry.trigger,
@@ -705,7 +747,9 @@ export class RunManager {
       const m = newMessage(sessionId, "user", [
         { id: newBlockId(), type: "text", text: e.text },
         ...(e.attachments ? mountAttachments(e.attachments, this.#deps.paths.attachmentsDir, sessionId) : []),
-        ...(e.note !== undefined ? [{ id: newBlockId(), type: "note", kind: "job", text: e.note } satisfies NoteBlock] : []),
+        ...(e.note !== undefined
+          ? [{ id: newBlockId(), type: "note", kind: e.note.kind, text: e.note.text } satisfies NoteBlock]
+          : []),
       ])
       m.id = e.messageId
       return m
@@ -713,6 +757,8 @@ export class RunManager {
     this.#steerBuf.set(sessionId, [])
     this.#persistQueue(sessionId) // 从 queue.jsonl 移除这些条目
     for (const e of buf) this.#markInjected(e.messageId)
+    // 注入 = 用户插话真正进入对话：与用户 run 开跑同为预算清零点（#44）。
+    this.#wakeBudgets.delete(sessionId)
     return msgs
   }
 

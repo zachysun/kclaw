@@ -485,13 +485,15 @@ async function until(pred: () => boolean, what: string, timeoutMs = 5_000): Prom
 }
 
 describe("subagent background mode", () => {
-  it("dispatches immediately, the parent run finishes first, and a completion notice lands without a run", async () => {
+  it("dispatches immediately, the parent run finishes first, and the completion delivery starts a new run", async () => {
     // Parent and child turns are served SEPARATELY (keyed on the lean child
     // prompt) — a global script would be a scheduling race now that the child
-    // runs concurrently with its parent's remainder.
+    // runs concurrently with its parent's remainder. The third parent entry
+    // serves the delivery run: the report arrives as a new user turn (#44).
     const parentScript = [
       spawnBackgroundTurn("call_1", "慢慢调研", "crawler"),
       textTurn("已派出，先干别的"),
+      textTurn("收到报告，结论正常"),
     ]
     const childScript = [textTurn("调研结论：一切正常")]
     let parentCalls = 0
@@ -518,27 +520,35 @@ describe("subagent background mode", () => {
     const childId = result.data!.childSessionId!
     expect(sessions.meta(childId)!.parentSessionId).toBe(parent.id)
 
-    // The child still runs to completion AFTER the parent run has ended.
+    // The child still runs to completion AFTER the parent run has ended…
     await until(() => sessions.readMessages(childId).some((m) => m.role === "assistant"), "child answer")
 
-    // The completion notice: one assistant message with a system note on the parent.
-    await until(() => sessions.readMessages(parent.id).some((m) => m.role === "assistant" && m.id !== parentMsgs.find((x) => x.role === "assistant")?.id), "notice message")
-    const notice = sessions.readMessages(parent.id).filter((m) => m.role === "assistant").at(-1)!
-    const note = notice.blocks[0]! as { type: string; kind: string; text: string }
-    expect(note.type).toBe("note")
-    expect(note.kind).toBe("system")
-    expect(note.text).toContain("后台子代理「crawler」已完成")
-    expect(note.text).toContain("调研结论：一切正常")
-    expect(note.text).toContain(`childSessionId: ${childId}`)
+    // …and its report is DELIVERED as a new user turn carrying the full
+    // answer plus a subagent provenance note (machine-originated, #44).
+    const userTextOf = (m: { role: string; blocks: Array<{ type: string; text?: string }> }): string =>
+      m.blocks.filter((b) => b.type === "text").map((b) => b.text ?? "").join("\n")
+    await until(() => sessions.readMessages(parent.id).some((m) => m.role === "user" && userTextOf(m).includes("慢慢调研")), "delivery message")
+    const delivered = sessions.readMessages(parent.id).filter((m) => m.role === "user").at(-1)!
+    const report = userTextOf(delivered)
+    expect(report).toContain("后台子代理「crawler」已完成")
+    expect(report).toContain("任务:慢慢调研")
+    expect(report).toContain("调研结论：一切正常")
+    const note = delivered.blocks.find((b) => b.type === "note") as { kind: string; text: string }
+    expect(note.kind).toBe("subagent")
+    expect(note.text).toContain("非用户发言")
 
-    // The notice was announced on the parent channel (message.created/completed)…
-    const created = allEvents.filter((e) => e.type === "message.created" && e.sessionId === parent.id)
-    expect(created.some((e) => e.payload.message.id === notice.id)).toBe(true)
-    expect(allEvents.some((e) => e.type === "message.completed" && e.sessionId === parent.id && e.payload.message.id === notice.id)).toBe(true)
-    // …but it triggered NO run: the parent started exactly one run (the user's).
-    expect(allEvents.filter((e) => e.type === "run.started" && e.sessionId === parent.id)).toHaveLength(1)
+    // The digest run answered…
+    await until(() => {
+      const last = sessions.readMessages(parent.id).filter((m) => m.role === "assistant").at(-1)
+      return last !== undefined && last.blocks.some((b) => b.type === "text" && (b as { text: string }).text.includes("收到报告"))
+    }, "digest reply")
+    // …and the parent ran exactly twice: the user's run + the delivery run
+    // (the delivery itself carried the "agent" trigger).
+    const starts = allEvents.filter((e) => e.type === "run.started" && e.sessionId === parent.id)
+    expect(starts).toHaveLength(2)
+    expect(starts.some((e) => (e.payload as { trigger: string }).trigger === "agent")).toBe(true)
 
-    // Collect now returns the child's full answer.
+    // Collect still returns the child's full answer (drill-in, unchanged).
     const collected = await host.collector({ parentSessionId: parent.id, childSessionId: childId })
     expect(collected.status).toBe("ok")
     expect(collected.output).toBe("调研结论：一切正常")
@@ -610,12 +620,13 @@ describe("subagent background mode", () => {
     await until(() => sessions.readMessages(childId).length > 0, "child run started")
 
     expect(host.cancelBackgroundForParent(parent.id)).toBe(1)
-    // Give the outcome a beat to settle, then check the failure notice.
+    // Give the outcome a beat to settle, then check the failure delivery (#44:
+    // the report lands as a user turn, however the child ended).
     await until(() => {
-      const msgs = sessions.readMessages(parent.id).filter((m) => m.role === "assistant")
+      const msgs = sessions.readMessages(parent.id).filter((m) => m.role === "user")
       const last = msgs.at(-1)
-      return last !== undefined && last.blocks[0]!.type === "note" && (last.blocks[0] as { text: string }).text.includes("未正常完成")
-    }, "failure notice", 8_000)
+      return last !== undefined && last.blocks.some((b) => b.type === "text" && (b as { text: string }).text.includes("未正常完成"))
+    }, "failure delivery", 8_000)
   }, 20_000)
 
   it("前台子代理完成不清掉后台记录：两种模式各记各的账", async () => {
@@ -652,13 +663,153 @@ describe("subagent background mode", () => {
     // 前台已收尾；后台仍在册——级联取消恰好找到它并终结
     expect(host.cancelBackgroundForParent(parent.id)).toBe(1)
     await until(() => {
-      const msgs = sessions.readMessages(parent.id).filter((m) => m.role === "assistant")
+      const msgs = sessions.readMessages(parent.id).filter((m) => m.role === "user")
       const last = msgs.at(-1)
-      return last !== undefined && last.blocks[0]!.type === "note" && (last.blocks[0] as { text: string }).text.includes("未正常完成")
-    }, "failure notice", 8_000)
+      return last !== undefined && last.blocks.some((b) => b.type === "text" && (b as { text: string }).text.includes("未正常完成"))
+    }, "failure delivery", 8_000)
     // 收尾后账本彻底清空
     expect(host.cancelBackgroundForParent(parent.id)).toBe(0)
   }, 20_000)
+})
+
+// --- background completion delivery (#44) --------------------------------------
+
+describe("background completion delivery", () => {
+  it("queues the report while the parent is busy; it runs after the current run ends", async () => {
+    // The child's completion is gated so the report arrives while a later
+    // parent run (itself held on a gate) is ACTIVE — the delivery must queue
+    // and start only when that run settles.
+    let releaseChild!: () => void
+    const childGate = new Promise<void>((r) => (releaseChild = r))
+    let releaseHolder!: () => void
+    const holderGate = new Promise<void>((r) => (releaseHolder = r))
+    let parentCalls = 0
+    const llm: LlmClient = {
+      async *stream(req) {
+        if (req.system.includes("子代理")) {
+          await childGate
+          yield* textTurn("最终结论：一切正常")
+          return
+        }
+        parentCalls++
+        if (parentCalls === 1) yield* spawnBackgroundTurn("call_1", "排队调研", "q")
+        else if (parentCalls === 2) yield* textTurn("已派出")
+        else if (parentCalls === 3) { await holderGate; yield* textTurn("占位结束") }
+        else yield* textTurn("报告已消化")
+      },
+    }
+    const { sessions, manager, allEvents } = makeEnv(llm)
+    const parent = sessions.create("主线")
+
+    const first = await manager.enqueue(parent.id, { userText: "后台排队调研", trigger: "user" })
+    expect(first.stopReason).toBe("end_turn")
+
+    // Hold a second run ACTIVE, then let the child finish underneath it.
+    const holder = manager.submit(parent.id, { userText: "占位", trigger: "user" })
+    await until(() => parentCalls >= 3, "holder run in flight")
+    releaseChild()
+    await until(() => manager.queue(parent.id).some((e) => e.trigger === "agent"), "delivery queued")
+    expect(allEvents.filter((e) => e.type === "run.started" && e.sessionId === parent.id)).toHaveLength(2)
+
+    releaseHolder()
+    await holder.outcome
+    await until(() => {
+      const last = sessions.readMessages(parent.id).filter((m) => m.role === "assistant").at(-1)
+      return last !== undefined && last.blocks.some((b) => b.type === "text" && (b as { text: string }).text.includes("报告已消化"))
+    }, "digest reply")
+    // The delivered report is a user turn with the subagent provenance note.
+    const delivered = sessions.readMessages(parent.id).filter((m) => m.role === "user").at(-1)!
+    const report = delivered.blocks.filter((b) => b.type === "text").map((b) => (b as { text: string }).text).join("\n")
+    expect(report).toContain("后台子代理「q」已完成")
+    expect(report).toContain("最终结论：一切正常")
+    expect((delivered.blocks.find((b) => b.type === "note") as { kind: string }).kind).toBe("subagent")
+    expect(allEvents.filter((e) => e.type === "run.started" && e.sessionId === parent.id)).toHaveLength(3)
+  })
+
+  it("falls back to the legacy notice when the queue is full", async () => {
+    let releaseChild!: () => void
+    const childGate = new Promise<void>((r) => (releaseChild = r))
+    let releaseHolder!: () => void
+    const holderGate = new Promise<void>((r) => (releaseHolder = r))
+    let parentCalls = 0
+    const llm: LlmClient = {
+      async *stream(req) {
+        if (req.system.includes("子代理")) {
+          await childGate
+          yield* textTurn("满载结论")
+          return
+        }
+        parentCalls++
+        if (parentCalls === 1) yield* spawnBackgroundTurn("call_1", "满载任务", "full")
+        else if (parentCalls === 2) yield* textTurn("已派出")
+        else { await holderGate; yield* textTurn("占位结束") }
+      },
+    }
+    const { sessions, manager, allEvents } = makeEnv(llm)
+    const parent = sessions.create("主线")
+
+    const first = await manager.enqueue(parent.id, { userText: "后台满载", trigger: "user" })
+    expect(first.stopReason).toBe("end_turn")
+
+    const holder = manager.submit(parent.id, { userText: "占位", trigger: "user" })
+    await until(() => parentCalls >= 3, "holder run in flight")
+    for (let i = 0; i < 10; i++) manager.submit(parent.id, { userText: `q${i}`, trigger: "user", disposition: "wait" })
+    expect(manager.queue(parent.id)).toHaveLength(10)
+
+    // The delivery attempt hits the queue cap and degrades to the legacy
+    // shell-message + system note — the completion is never silently lost.
+    releaseChild()
+    await until(() => {
+      const msgs = sessions.readMessages(parent.id).filter((m) => m.role === "assistant")
+      const last = msgs.at(-1)
+      return last !== undefined && last.blocks[0]!.type === "note" && (last.blocks[0] as { text: string }).text.includes("队列已满")
+    }, "queue-full fallback notice", 8_000)
+    const noticeText = (sessions.readMessages(parent.id).filter((m) => m.role === "assistant").at(-1)!.blocks[0] as { text: string }).text
+    expect(noticeText).toContain("满载结论")
+    expect(noticeText).toContain("subagent_collect")
+    expect(noticeText).toContain("回退")
+    // No new run: the fallback is a notice, not a turn.
+    expect(allEvents.filter((e) => e.type === "run.started" && e.sessionId === parent.id)).toHaveLength(2)
+
+    releaseHolder()
+    await holder.outcome
+  })
+
+  it("falls back to the legacy notice when the wake budget is exhausted", async () => {
+    let releaseChild!: () => void
+    const childGate = new Promise<void>((r) => (releaseChild = r))
+    let parentCalls = 0
+    const llm: LlmClient = {
+      async *stream(req) {
+        if (req.system.includes("子代理")) {
+          await childGate
+          yield* textTurn("预算结论")
+          return
+        }
+        parentCalls++
+        if (parentCalls === 1) yield* spawnBackgroundTurn("call_1", "预算任务", "loop")
+        else yield* textTurn("好")
+      },
+    }
+    const { sessions, manager, allEvents } = makeEnv(llm)
+    const parent = sessions.create("主线")
+
+    const first = await manager.enqueue(parent.id, { userText: "后台预算", trigger: "user" })
+    expect(first.stopReason).toBe("end_turn")
+
+    // Three direct machine submissions burn the budget (each runs to end_turn).
+    for (let i = 0; i < 3; i++) await manager.enqueue(parent.id, { userText: `自动唤醒${i}`, trigger: "agent" })
+    expect(allEvents.filter((e) => e.type === "run.started" && e.sessionId === parent.id)).toHaveLength(4)
+
+    // The fourth machine wake — the child's real completion — is refused.
+    releaseChild()
+    await until(() => {
+      const msgs = sessions.readMessages(parent.id).filter((m) => m.role === "assistant")
+      const last = msgs.at(-1)
+      return last !== undefined && last.blocks[0]!.type === "note" && (last.blocks[0] as { text: string }).text.includes("连续机器唤醒")
+    }, "budget fallback notice", 8_000)
+    expect(allEvents.filter((e) => e.type === "run.started" && e.sessionId === parent.id)).toHaveLength(4)
+  })
 })
 
 describe("subagent background card forwarding", () => {
@@ -699,12 +850,12 @@ describe("subagent background card forwarding", () => {
     expect((card!.payload as { noteText?: string }).noteText).toContain("来自子代理 bg-runner")
     expect((card!.payload as { toolCall: { name: string } }).toolCall.name).toBe("exec")
 
-    // Approving lets the background child finish; the completion notice follows.
+    // Approving lets the background child finish; the completion delivery follows.
     expect(manager.broker.resolve((card!.payload as { confirmationId: string }).confirmationId, "once", "web")).toBe(true)
     await until(() => {
-      const msgs = sessions.readMessages(parent.id).filter((m) => m.role === "assistant")
+      const msgs = sessions.readMessages(parent.id).filter((m) => m.role === "user")
       const last = msgs.at(-1)
-      return last !== undefined && last.blocks[0]!.type === "note" && (last.blocks[0] as { text: string }).text.includes("已完成")
-    }, "completion notice", 8_000)
+      return last !== undefined && last.blocks.some((b) => b.type === "text" && (b as { text: string }).text.includes("已完成"))
+    }, "completion delivery", 8_000)
   }, 15_000)
 })

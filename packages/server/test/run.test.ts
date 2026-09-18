@@ -207,7 +207,7 @@ describe("RunManager.enqueue", () => {
     await manager.enqueue(session.id, {
       userText: "执行任务",
       trigger: "job",
-      note: "本会话由定时任务「早报」触发",
+      note: { kind: "job", text: "本会话由定时任务「早报」触发" },
     })
 
     const [user] = env.sessions.readMessages(session.id)
@@ -232,7 +232,7 @@ describe("RunManager.enqueue", () => {
     await manager.enqueue(session.id, {
       userText: "上海",
       trigger: "job",
-      note: "本会话由定时任务「早报」触发",
+      note: { kind: "job", text: "本会话由定时任务「早报」触发" },
     })
 
     // wire order: run.started → message.created(user SKELETON) →
