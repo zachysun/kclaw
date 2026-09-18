@@ -5,6 +5,86 @@ All notable changes to kclaw are documented in this file. The format is based on
 [semantic versioning](https://semver.org/) — note that the 0.x series makes no
 compatibility promises.
 
+## [0.3.0] - 2026-09-19
+
+### Added
+
+- **Agent teams** — a lead session can create a persistent team and recruit
+  teammates (each an independent session) through seven team tools
+  (`create_team`, `spawn_teammate`, `send_message`, `list_agents`,
+  `task_create`, `task_update`, `task_list`). Coordination runs through a
+  point-to-point mailbox and a shared task board; team state lives under the
+  workspace's `.kclaw/teams/` and `.kclaw/tasks/` directories and survives
+  across runs. The WebUI shows an in-chat team panel (lead view) with
+  per-member stop and targeted sends, plus a return-to-parent button on the
+  read-only child pages.
+- **Feishu (Lark) IM channel** — opt-in channel via `~/.kclaw/feishu.json`:
+  allowlisted users each bind one persistent session in DM; consecutive
+  messages are consumed strictly in send order; every run mirrors to a Feishu
+  interactive card (thinking → streaming → final markdown); tool confirmations
+  render as approve/reject cards settled as actor `feishu`; `/new`, `/stop`
+  and `/help` work inside the chat; job results and background-subagent
+  completions are pushed to the primary user. A failed channel start never
+  blocks the daemon.
+- **Model provider management** — a WebUI "Model" tab to manage LLM providers:
+  create and edit entries in both the OpenAI-compatible and Anthropic Messages
+  formats (with presets and a connectivity probe), rename entries with every
+  reference following, and hot-reload the provider used by runs, memory
+  extraction, and embeddings. Config storage moved to `~/.kclaw/config.json`
+  (a legacy `config.yaml` is still read; the first write keeps a `.bak`).
+- **MCP management** — a WebUI MCP tab: connection status, per-server
+  enable/disable (hot), reconnect, and add/edit/delete; MCP server config
+  moved to `~/.kclaw/mcp.json` with a text-precise migration of the legacy
+  config section; a `/mcp` slash command in both the CLI REPL and the WebUI.
+- **Background subagents** — `subagent_run` with `run_in_background: true`
+  returns immediately with the child session id; the finished report is
+  delivered back into the parent session as a new run. An anti-self-loop wake
+  budget caps consecutive agent-triggered auto-wakes at 3 per session and is
+  reset only by real user input.
+- **Stop, edit & retry, regenerate** — a stop button cancels the in-flight
+  reply (and drops queued messages); an edited message resubmits with its
+  original attachments; regenerate re-asks the same input. Truncated replies
+  are marked and filtered from retry input; audit rows show truncations.
+- **@ file mentions** — typing `@` in the composer opens a drawer of
+  workspace files (git-tracked, NUL-safe listing); mentioned files travel as
+  fs_read hints attached to the message.
+- **Skill reuse** — skills already installed by other coding agents (Claude
+  Code, …) are discovered and reused via symlinks under four visibility
+  tiers; plugin-bundled skills are discovered as well; a `skill_list` tool
+  gives the model self-service discovery.
+- **ask_user_questions tool** — the model can ask the user structured
+  multiple-choice questions mid-run; CLI prompt and WebUI card, with a
+  10-minute default timeout. An aborted wait is never misreported as a
+  timeout-deny.
+- **Five-waterline compaction** — context management by five ratios of the
+  effective budget: 0.70 pack omission budget, 0.75 background
+  pre-compaction, 0.80 post-run compaction, 0.90 mid-run forced compaction,
+  0.33 post-compaction target; `/compact` defers to the next run boundary.
+  The newest 2 tool results are always kept verbatim under the omission
+  budget.
+- **Two-segment system prompt** — a frozen stable segment plus a live
+  segment; the assembled prompt is persisted per run in the session archive,
+  alongside run boundaries and permission decisions.
+- **WebUI overhaul** — assistant messages render as markdown with code
+  highlight and copy; pluggable theme registry (phantom dark default, amber
+  classic, paper light); sidebar workdir folding; toast notifications;
+  readable usage tables; a Chinese jobs page.
+- **Pinned daemon port** — `kclaw --port` or `server.port` pins the listen
+  port for a stable URL (default still random; an occupied pin is a hard
+  error).
+
+### Fixed
+
+- Memory section headings no longer echo the full note body: extraction must
+  produce a short title (≤30 chars, sentence-cut), with deduped headings on
+  collision.
+- In readonly mode, sensitive tools are now absent from the model's surface
+  entirely — calling one reports an unknown tool instead of a denied note.
+- Oversized tool arguments no longer stretch confirmation cards
+  (height-clamped).
+- Queue semantics on cancel: dropped queued messages now settle their
+  outcomes (rejected) instead of leaving submitters hanging.
+
 ## [0.2.0] - 2026-09-10
 
 ### Added
