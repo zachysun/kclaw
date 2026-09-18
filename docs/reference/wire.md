@@ -12,6 +12,9 @@ export type SendDisposition = "steer" | "wait" | "interrupt"
 
 export interface AttachmentRef { path: string; name: string; size: number; mimeType: string }
 
+/** 机器来源说明：随队列条目落成用户消息上的 note 块（kind 见 blocks.md NoteKind）。 */
+export interface QueueNote { kind: NoteKind; text: string }
+
 /** One persisted queue entry in queue.jsonl. */
 export interface QueueEntry {
   messageId: string
@@ -19,7 +22,7 @@ export interface QueueEntry {
   text: string
   trigger: "user" | "job" | "agent" | "team"
   attachments?: AttachmentRef[]
-  note?: string
+  note?: QueueNote
   enqueuedAt: string
 }
 

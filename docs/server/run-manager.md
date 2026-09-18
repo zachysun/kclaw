@@ -68,10 +68,11 @@ export interface RunManagerDeps {
 
 export interface EnqueueInput {
   userText: string
-  trigger: "user" | "job" | "agent"
+  trigger: "user" | "job" | "agent" | "team"
   model?: string       // 本 run 的模型覆盖（job 配置的模型或客户端强制）；缺席 → 会话 meta → 默认
   attachments?: AttachmentRef[]  // 挂到用户消息上的附件引用（调用方已校验，这里防御性复验）
-  note?: string        // job 来源行，落在用户消息的 kind:"job" note 块
+  note?: QueueNote     // 机器来源说明（结构化：kind + text），落在用户消息的同 kind note 块
+                       // job 触发=定时任务来源行；subagent kind=后台完成回投的"非用户发言"声明
   disposition?: "steer" | "wait" | "interrupt"
                         // 单次显式处置（层级最高）；缺省 = 会话覆盖 ?? 配置默认；
                         // trigger:"job" 与 "agent" 固定 wait，不读默认
