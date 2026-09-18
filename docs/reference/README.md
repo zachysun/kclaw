@@ -7,7 +7,7 @@
 | 篇目 | 陈列内容 | 真相源 |
 |------|----------|--------|
 | [messages](./messages.md) | 消息类型（Role 3）、停止原因（StopReason 7 + 归一化映射）、放行原因（GrantedBy 8） | `core/src/protocol/messages.ts` |
-| [blocks](./blocks.md) | 内容块（6 种）、note 种类（5 种）、附件来源（3 种）、role × 块约定 | `core/src/protocol/blocks.ts` |
+| [blocks](./blocks.md) | 内容块（6 种）、note 种类（6 种）、附件来源（3 种）、role × 块约定 | `core/src/protocol/blocks.ts` |
 | [events](./events.md) | 总线事件（EventType 40 种，含分组与 payload）、事件信封 | `core/src/protocol/events.ts` |
 | [session-events](./session-events.md) | 持久化会话事件（events.jsonl 的 21 种类型） | `core/src/protocol/session-events.ts` |
 | [wire](./wire.md) | WS 指令帧（10 种）、应答帧（9 种 + error）、排队处置（3 种） | `core/src/protocol/wire.ts` |

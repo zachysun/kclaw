@@ -498,7 +498,7 @@ export function blockTypeLabel(block: Block): string {
     case "tool_result":
       return "tool_result"
     case "note":
-      return `note:${block.kind}` // 具体类型可见（job/memory/system/timeout/denied），审计页不用展开就能分辨来源
+      return `note:${block.kind}` // 具体类型可见（job/memory/system/timeout/denied/subagent），审计页不用展开就能分辨来源
     case "attachment":
       return "attachment"
   }

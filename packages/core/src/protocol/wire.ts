@@ -8,6 +8,7 @@
  * precedent).
  */
 import type { AgentEvent } from "./events.js"
+import type { NoteKind } from "./blocks.js"
 
 /** How a send_message rides the queue: steer injects, wait queues, interrupt preempts. */
 export type SendDisposition = "steer" | "wait" | "interrupt"
@@ -25,6 +26,18 @@ export interface AttachmentRef {
   mimeType: string
 }
 
+/**
+ * The structured provenance note riding a queue entry onto its user message
+ * (as a note block right after the text): WHO asked for this run, when the
+ * requester was not the user. `kind:"job"` = the scheduler's per-job line;
+ * `kind:"subagent"` = a background completion delivery declaring that the
+ * message is machine-originated, not user speech.
+ */
+export interface QueueNote {
+  kind: NoteKind
+  text: string
+}
+
 /** One persisted queue entry in queue.jsonl 。 */
 export interface QueueEntry {
   messageId: string                       // 分配即固定；出队执行时用同一 id 构建 Message
@@ -32,7 +45,7 @@ export interface QueueEntry {
   text: string
   trigger: "user" | "job" | "agent" | "team"  // 还原触发源（job 的 note/触发语义在出队执行时需要；agent = subagent 派生的子 run；team = 团队收信箱投递/派活，按常规处置走 steer 注入）
   attachments?: AttachmentRef[]
-  note?: string                           // job 来源说明
+  note?: QueueNote                        // 机器来源说明（readQueue 把结构化前的 string 旧形归一为 kind:"job"）
   enqueuedAt: string                      // ISO-8601
 }
 

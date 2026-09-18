@@ -20,10 +20,13 @@
  * Background mode adds three pieces, all keyed by the parent session:
  * - an immediate tool result (child session id + label), the child keeps
  *   running past the parent run's end;
- * - a completion notice — one assistant message carrying a system note
- *   (label, truncated summary, collect hint) appended to the parent session
- *   and announced via message.created/completed WITHOUT triggering a run —
- *   so the next turn naturally sees it;
+ * - a completion DELIVERY (#44): when the child settles, its report enters
+ *   the parent through RunManager.submit (trigger "agent") — a real new run
+ *   that digests the full answer and replies, on every surface at once. The
+ *   report message carries a kind:"subagent" note declaring it
+ *   machine-originated. If submit refuses (queue full / wake budget
+ *   exhausted) the delivery degrades to the legacy shell assistant message +
+ *   system note, so a completion is never silently lost;
  * - `cancelBackgroundForParent` for the delete/purge cascade (the routes
  *   call it before soft-deleting, so nothing keeps running orphaned).
  *
@@ -229,7 +232,7 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
           ...(parent.model !== undefined && parent.model !== "" ? { model: parent.model } : {}),
         })
         void submitted.outcome
-          .then((outcome) => notifyBackgroundDone(req.parentSessionId, child.id, who, outcome))
+          .then((outcome) => deliverCompletion(req.parentSessionId, child.id, who, req.task, outcome))
           .catch((err: unknown) => {
             deps.sessions.meta(req.parentSessionId) !== undefined &&
               console.error(`kclaw subagent background (${who}) outcome lost:`, err)
@@ -245,7 +248,7 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
       }
       return {
         status: "ok",
-        output: `已在后台派出子代理「${who}」（会话 ${child.id}）。它会独立运行，不受本次对话结束影响；完成后这里会收到一条完成通知，届时可用 subagent_collect（childSessionId: ${child.id}）取完整答复。`,
+        output: `已在后台派出子代理「${who}」（会话 ${child.id}）。它会独立运行，不受本次对话结束影响；完成后结题报告会自动投递回本会话并触发新一轮分析，届时可用 subagent_collect（childSessionId: ${child.id}）按需取完整答复。`,
         childSessionId: child.id,
       }
     }
@@ -283,18 +286,57 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
     }
   }
 
-  /** The completion notice: one system-note message on the parent session, no run. */
-  const notifyBackgroundDone = (parentId: string, childId: string, who: string, outcome: RunOutcome): void => {
-    // The parent may have been deleted while the child ran — nothing to notify.
+  /**
+   * The completion delivery (#44): the report enters the parent through the
+   * ordinary submit door (trigger "agent", forced wait) as a NEW run —
+   * queueing/audit/compaction/permissions all apply with zero special-casing.
+   * The report template: status line, the original task, then the full
+   * (head+tail truncated) answer; the machine-originated identity rides the
+   * kind:"subagent" note, not the body. On refusal (queue full / wake budget
+   * exhausted) the delivery degrades to the legacy notice with the reason —
+   * a completion is never silently lost.
+   */
+  const deliverCompletion = (parentId: string, childId: string, who: string, task: string, outcome: RunOutcome): void => {
+    // The parent may have been deleted while the child ran — nothing to deliver.
     const meta = deps.sessions.meta(parentId)
     if (meta === undefined || meta.deleted) return
+    const ok = outcome.stopReason === "end_turn"
+    const answer = truncateAnswer(answerOf(outcome))
+    const statusLine = ok
+      ? `后台子代理「${who}」已完成（会话 ${childId}）。`
+      : `后台子代理「${who}」未正常完成（${outcome.stopReason}，会话 ${childId}）。`
+    const report = [
+      statusLine,
+      `任务:${task}`,
+      ...(answer === "" ? [] : [ok ? answer : `已有产出:\n${answer}`]),
+    ].join("\n")
+    try {
+      deps.getRun().submit(parentId, {
+        userText: report,
+        trigger: "agent",
+        note: { kind: "subagent", text: "本消息为后台子代理完成回投，非用户发言" },
+      })
+    } catch (err) {
+      legacyNotice(parentId, childId, who, outcome, err)
+    }
+  }
+
+  /**
+   * The legacy notice: one system-note assistant message on the parent
+   * session, no run. Only reached as the delivery's fallback (queue full /
+   * wake budget exhausted) — the refusal reason is recorded in the note.
+   */
+  const legacyNotice = (parentId: string, childId: string, who: string, outcome: RunOutcome, err: unknown): void => {
+    const meta = deps.sessions.meta(parentId)
+    if (meta === undefined || meta.deleted) return
+    const reason = err instanceof Error ? err.message : String(err)
     const answer = answerOf(outcome)
     const summary = answer === "" ? "" : excerptLong(answer)
     const text = outcome.stopReason === "end_turn"
       ? `后台子代理「${who}」已完成（会话 ${childId}）。结果摘要：${summary === "" ? "（未给出结题答复）" : summary}。完整答复可用 subagent_collect 工具获取（childSessionId: ${childId}）。`
       : `后台子代理「${who}」未正常完成（${outcome.stopReason}，会话 ${childId}）${summary === "" ? "" : `。已有产出：${summary}`}。可用 subagent_collect 查看它已产出的内容（childSessionId: ${childId}）。`
     const message = newMessage(parentId, "assistant", [
-      { id: newBlockId(), type: "note", kind: "system", text },
+      { id: newBlockId(), type: "note", kind: "system", text: `${text}（自动投递被拒：${reason}；回退为通知）` },
     ])
     deps.sessions.appendMessage(parentId, message)
     // Announce on the parent channel so open views refresh; no run is started.

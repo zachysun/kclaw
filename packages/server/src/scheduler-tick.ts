@@ -153,7 +153,7 @@ export function startSchedulerTick(deps: SchedulerTickDeps): SchedulerTickHandle
         userText: job.prompt,
         trigger: "job",
         ...(job.model !== undefined && job.model !== "" ? { model: job.model } : {}),
-        note: `本会话由定时任务「${job.name}」触发`,
+        note: { kind: "job", text: `本会话由定时任务「${job.name}」触发` },
       })
       if (outcome.stopReason !== "error") {
         scheduler.markRun(job.id, "ok", now())

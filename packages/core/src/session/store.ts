@@ -331,10 +331,15 @@ export class SessionStore {
 
   /**
    * Read a session's persisted message queue (queue.jsonl), oldest-first;
-   * a missing/empty file yields [].
+   * a missing/empty file yields []. Entries written before the note became
+   * structured (#44) carry a plain string — normalized to kind:"job" here so
+   * consumers see one shape.
    */
   readQueue(id: string): QueueEntry[] {
-    return readJsonl(this.queuePath(id)) as QueueEntry[]
+    const entries = readJsonl(this.queuePath(id)) as QueueEntry[]
+    return entries.map((e) =>
+      typeof e.note === "string" ? { ...e, note: { kind: "job" as const, text: e.note } } : e,
+    )
   }
 
   /**
