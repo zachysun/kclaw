@@ -248,6 +248,14 @@ describe("queue persistence", () => {
     store.replaceQueue(meta.id, [])
     expect(store.readQueue(meta.id)).toEqual([])
   })
+  it("readQueue 归一化旧形 string note 为 kind:job（#44 结构化之前的队列文件）", () => {
+    const store = new SessionStore(dir)
+    const meta = store.create("旧形")
+    const legacy = { messageId: "msg_old", disposition: "wait" as const, text: "hi", trigger: "user" as const, note: "本会话由定时任务「日报」触发", enqueuedAt: new Date().toISOString() }
+    store.replaceQueue(meta.id, [legacy as unknown as { messageId: string; disposition: "wait"; text: string; trigger: "user"; enqueuedAt: string }])
+    const read = store.readQueue(meta.id)
+    expect(read[0]!.note).toEqual({ kind: "job", text: "本会话由定时任务「日报」触发" })
+  })
   it("queue 不经过 updateMeta：写 dispositionOverride 不影响 queue.jsonl", () => {
     const store = new SessionStore(dir)
     const meta = store.create("q")

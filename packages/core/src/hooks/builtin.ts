@@ -93,8 +93,9 @@ export interface BuiltinHookDeps {
   busEmit: (e: AgentEvent) => void
   /** runId becomes known after run.started; closures read it lazily. */
   runIdRef: { current?: string }
-  // user-message-land / autoname inputs (former onUserMessage closure state)
-  jobNotes: NoteBlock[]
+  // user-message-land / autoname inputs (former onUserMessage closure state):
+  // machine-originated provenance notes (job / subagent) riding the input message
+  inputNotes: NoteBlock[]
   trigger: "user" | "job" | "agent" | "team"
   /**
    * Subagent child run (the session's parentSessionId is set): the run is a
@@ -191,15 +192,15 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     description: "补齐任务来源 note 并持久化用户消息",
     failure: "fatal",
     makeHandler: (rt) => {
-      const { jobNotes, memoryNotes, sessions, sessionId, runCtx, busEmit } = rt
+      const { inputNotes, memoryNotes, sessions, sessionId, runCtx, busEmit } = rt
       return ({ message }) => {
         // Notes become part of the message BEFORE it is persisted and
         // completed; persist first, then announce — wire order stays
         // created → note.emitted ×N → completed, job notes before memory notes.
-        message.blocks.push(...jobNotes, ...memoryNotes)
+        message.blocks.push(...inputNotes, ...memoryNotes)
         sessions.appendMessage(sessionId, message)
         const noteCtx = runCtx()
-        for (const block of [...jobNotes, ...memoryNotes]) {
+        for (const block of [...inputNotes, ...memoryNotes]) {
           busEmit(makeEvent("note.emitted", { messageId: message.id, block }, noteCtx))
         }
         return message

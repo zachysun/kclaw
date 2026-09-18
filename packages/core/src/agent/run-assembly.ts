@@ -36,7 +36,7 @@ import type { AttachmentBlock, NoteBlock, ToolCallBlock } from "../protocol/bloc
 import { newBlockId } from "../protocol/blocks.js"
 import type { Message } from "../protocol/messages.js"
 import { newMessage } from "../protocol/messages.js"
-import type { AttachmentRef } from "../protocol/wire.js"
+import type { AttachmentRef, QueueNote } from "../protocol/wire.js"
 import type { LlmClient, ToolDefinition } from "../provider/types.js"
 import type { KclawConfig } from "../storage/config.js"
 import { defaultConfig, resolveContextTokens, resolveRunModel } from "../storage/config.js"
@@ -107,11 +107,13 @@ export interface EnqueueInput {
    */
   attachments?: AttachmentRef[]
   /**
-   * Job provenance note: when the scheduler fires a job, the tick
-   * passes the 「本会话由定时任务…」 line here and it lands as a kind:"job"
-   * note block right after the text block on the user message.
+   * Machine-originated provenance note: lands as a note block right after
+   * the text block on the user message. The scheduler passes its
+   * 「本会话由定时任务…」 line as kind:"job"; a background completion
+   * delivery (#44) passes its identity declaration as kind:"subagent" —
+   * the model must be able to tell machine input from user speech.
    */
-  note?: string
+  note?: QueueNote
   /** 单次显式处置（层级最高）；缺省 = 会话覆盖 ?? 配置默认；job 触发强制 wait。 */
   disposition?: "steer" | "wait" | "interrupt"
   /** 内部：出队执行时传入的预分配消息 id（ws 层不传）。 */
@@ -363,10 +365,10 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // the wire order stays
   // run.started → message.created → note.emitted ×N → message.completed.
   const history = sessions.readMessages(sessionId)
-  const jobNotes: NoteBlock[] =
+  const inputNotes: NoteBlock[] =
     input.note === undefined
       ? []
-      : [{ id: newBlockId(), type: "note", kind: "job", text: input.note }]
+      : [{ id: newBlockId(), type: "note", kind: input.note.kind, text: input.note.text }]
   const userMessage = newMessage(sessionId, "user", [
     { id: newBlockId(), type: "text", text: input.userText },
     ...mountAttachments(input.attachments ?? [], paths.attachmentsDir, sessionId),
@@ -737,7 +739,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     usageStore: engine.deps.usageStore,
     busEmit,
     runIdRef: { get current() { return runId } },
-    jobNotes,
+    inputNotes,
     trigger: input.trigger,
     llmUserText,
     drainSteer: handoff.drainSteer,

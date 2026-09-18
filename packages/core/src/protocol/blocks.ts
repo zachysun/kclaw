@@ -27,7 +27,7 @@ export interface ToolResultBlock {
   durationMs: number
 }
 
-export type NoteKind = "system" | "job" | "memory" | "timeout" | "denied"
+export type NoteKind = "system" | "job" | "memory" | "timeout" | "denied" | "subagent"
 
 export interface NoteBlock {
   id: BlockId
