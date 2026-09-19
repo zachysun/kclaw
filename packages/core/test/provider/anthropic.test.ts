@@ -88,6 +88,7 @@ describe("anthropic client", () => {
     })
     expect(captured!.url).toBe("https://api.anthropic.com/v1/messages")
     expect(captured!.headers.get("x-api-key")).toBe("sk-a")
+    expect(captured!.headers.get("authorization")).toBe("Bearer sk-a")
     expect(captured!.headers.get("anthropic-version")).toBe(ANTHROPIC_VERSION)
     const body = await captured!.json()
     expect(body.system).toBe("be brief\n\nextra persona")
@@ -116,6 +117,7 @@ describe("anthropic client", () => {
     })
     expect(captured!.url).toBe("https://proxy.example.com/v1/messages")
     expect(captured!.headers.get("x-api-key")).toBeNull() // empty key → no auth header
+    expect(captured!.headers.get("authorization")).toBeNull()
     expect((await captured!.json()).max_tokens).toBe(1024)
   })
 

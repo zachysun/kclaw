@@ -18,7 +18,7 @@ describe("fetchProviderModels", () => {
     expect(models).toEqual(["b", "a"])
   })
 
-  it("anthropic format: GET {base}/v1/models with x-api-key + anthropic-version", async () => {
+  it("anthropic format: GET {base}/v1/models with x-api-key + Bearer + anthropic-version", async () => {
     let captured: Request | undefined
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       captured = new Request(input, init)
@@ -27,7 +27,19 @@ describe("fetchProviderModels", () => {
     const models = await fetchProviderModels({ format: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-a", fetchImpl })
     expect(captured!.url).toBe("https://api.anthropic.com/v1/models")
     expect(captured!.headers.get("x-api-key")).toBe("sk-a")
+    expect(captured!.headers.get("authorization")).toBe("Bearer sk-a")
     expect(models).toEqual(["claude-sonnet-4"])
+  })
+
+  it("anthropic format with empty apiKey sends no auth header", async () => {
+    let captured: Request | undefined
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      captured = new Request(input, init)
+      return jsonResponse({ data: [] })
+    }) as unknown as typeof fetch
+    await fetchProviderModels({ format: "anthropic", baseUrl: "http://localhost:11434", apiKey: "", fetchImpl })
+    expect(captured!.headers.get("x-api-key")).toBeNull()
+    expect(captured!.headers.get("authorization")).toBeNull()
   })
 
   it("empty apiKey sends no auth header", async () => {
@@ -71,7 +83,7 @@ describe("probeProviderChat", () => {
     expect(payload.stream).toBe(false)
   })
 
-  it("anthropic format: POST {base}/v1/messages with x-api-key + anthropic-version and block content", async () => {
+  it("anthropic format: POST {base}/v1/messages with x-api-key + Bearer + anthropic-version and block content", async () => {
     let captured: Request | undefined
     let capturedBody = ""
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -82,6 +94,7 @@ describe("probeProviderChat", () => {
     await probeProviderChat({ format: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-a", model: "claude-sonnet-4", fetchImpl })
     expect(captured!.url).toBe("https://api.anthropic.com/v1/messages")
     expect(captured!.headers.get("x-api-key")).toBe("sk-a")
+    expect(captured!.headers.get("authorization")).toBe("Bearer sk-a")
     expect(captured!.headers.get("anthropic-version")).toBe("2023-06-01")
     const payload = JSON.parse(capturedBody) as { messages: Array<{ content: Array<{ type: string; text: string }> }>; max_tokens: number }
     expect(payload.messages).toEqual([{ role: "user", content: [{ type: "text", text: "hi" }] }])

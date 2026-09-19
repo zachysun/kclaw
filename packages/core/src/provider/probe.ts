@@ -7,7 +7,10 @@ import { DEFAULT_LLM_TIMEOUT_MS, llmHttpError, rethrowClassified } from "./opena
  * Model tab uses both for the model picker and as its connection test (a
  * successful list is the cheapest proof the URL + key work). OpenAI-format
  * bases authenticate with Bearer; Anthropic-format bases with x-api-key +
- * anthropic-version. An empty apiKey sends no auth header (local runtimes).
+ * anthropic-version plus Authorization: Bearer carrying the same key — some
+ * Anthropic-compatible gateways only read Bearer on their models route, while
+ * the official API prefers x-api-key when both are present. An empty apiKey
+ * sends no auth header (local runtimes).
  */
 export async function fetchProviderModels(opts: {
   format: ProviderApiFormat
@@ -23,8 +26,11 @@ export async function fetchProviderModels(opts: {
     : `${opts.baseUrl.replace(/\/$/, "")}/models`
   const headers: Record<string, string> = {}
   if (opts.format === "anthropic") {
-    headers["x-api-key"] = opts.apiKey
     headers["anthropic-version"] = ANTHROPIC_VERSION
+    if (opts.apiKey !== "") {
+      headers["x-api-key"] = opts.apiKey
+      headers.authorization = `Bearer ${opts.apiKey}`
+    }
   } else if (opts.apiKey !== "") {
     headers.authorization = `Bearer ${opts.apiKey}`
   }
@@ -65,9 +71,9 @@ const PROBE_TIMEOUT_MS = 20_000
  * One-shot minimal chat completion (1 token) that proves a model name works
  * on top of a working URL + key — the models-list probe cannot check the
  * model itself. Format-aware like {@link fetchProviderModels}: Bearer for
- * OpenAI-compatible bases, x-api-key + anthropic-version for Anthropic
- * bases (an empty apiKey sends no auth header). Never throws: a failed probe
- * is a result, with status null meaning the request never landed.
+ * OpenAI-compatible bases; x-api-key + anthropic-version + Bearer for
+ * Anthropic bases (an empty apiKey sends no auth header). Never throws: a
+ * failed probe is a result, with status null meaning the request never landed.
  */
 export async function probeProviderChat(opts: {
   format: ProviderApiFormat
@@ -86,7 +92,10 @@ export async function probeProviderChat(opts: {
   const headers: Record<string, string> = { "content-type": "application/json" }
   if (isAnthropic) {
     headers["anthropic-version"] = ANTHROPIC_VERSION
-    if (opts.apiKey !== "") headers["x-api-key"] = opts.apiKey
+    if (opts.apiKey !== "") {
+      headers["x-api-key"] = opts.apiKey
+      headers.authorization = `Bearer ${opts.apiKey}`
+    }
   } else if (opts.apiKey !== "") {
     headers.authorization = `Bearer ${opts.apiKey}`
   }

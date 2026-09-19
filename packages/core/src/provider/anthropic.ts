@@ -117,9 +117,12 @@ function normalizeStop(raw: string | null | undefined): StopReason {
 
 /**
  * Streaming client for the Anthropic Messages wire format (x-api-key +
- * anthropic-version headers, content-block streaming). Same timeout/retry
- * contract as the OpenAI-compatible client: the abort fires at timeoutMs and
- * any post-abort failure is reclassified as the `llm http timeout` message.
+ * anthropic-version headers, content-block streaming). The same key is also
+ * sent as Authorization: Bearer — Anthropic-compatible gateways differ in
+ * which header they read, and the official API prefers x-api-key when both
+ * are present. Same timeout/retry contract as the OpenAI-compatible client:
+ * the abort fires at timeoutMs and any post-abort failure is reclassified as
+ * the `llm http timeout` message.
  */
 export function createAnthropicClient(opts: {
   baseUrl: string
@@ -139,7 +142,9 @@ export function createAnthropicClient(opts: {
           headers: {
             "content-type": "application/json",
             "anthropic-version": ANTHROPIC_VERSION,
-            ...(opts.apiKey === "" ? {} : { "x-api-key": opts.apiKey }),
+            ...(opts.apiKey === ""
+              ? {}
+              : { "x-api-key": opts.apiKey, authorization: `Bearer ${opts.apiKey}` }),
           },
           body: JSON.stringify(toAnthropicPayload(req)),
           signal,

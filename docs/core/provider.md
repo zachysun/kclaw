@@ -132,7 +132,7 @@ export function createProviderResolver(cfg: KclawConfig, fetchImpl?: typeof fetc
 - assistant 的 `toolCalls` 转成 `tool_use` 块（`{id: callId, name, input: JSON.parse(argsJson)}`，解析失败按 `{}`）；content 为空且无 toolCalls 的空 assistant 轮整个丢弃（API 拒收空 content）。
 - 连续的 tool 结果消息合并成**一条** user 消息里的多个 `{"type":"tool_result","tool_use_id":…,"content":…}` 块（API 规定 tool_result 只能出现在 user 轮）。
 - 工具定义转 `{name, description, input_schema: parameters}`；`max_tokens` 必填——条目未声明 `maxOutput` 时用 `ANTHROPIC_DEFAULT_MAX_TOKENS`（8192）。
-- 请求体 `stream: true`；URL 规则见 `anthropicEndpoint`：baseUrl 以 `/v1` 结尾则直接拼路径，否则插入 `/v1`（官方裸域与中转带版本两种都支持）；鉴权用 `x-api-key` + `anthropic-version: 2023-06-01` 头，apiKey 为空时不发。
+- 请求体 `stream: true`；URL 规则见 `anthropicEndpoint`：baseUrl 以 `/v1` 结尾则直接拼路径，否则插入 `/v1`（官方裸域与中转带版本两种都支持）；鉴权用 `x-api-key` + `anthropic-version: 2023-06-01` 头，同一个 key 还会以 `Authorization: Bearer` 再发一份——各家 Anthropic 兼容网关认的头不一样（官方两个头都在时优先 `x-api-key`，火山方舟 coding 端点只读 Bearer），两个都发两边都能过。apiKey 为空时两种头都不发。
 
 ### 2. 流式解析（SSE 循环，两格式各自的映射）
 
@@ -215,7 +215,7 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 
 ### 6b. 模型列表检测（probe，兼作连接验证）
 
-`fetchProviderModels` 向端点要模型清单：openai 格式 `GET {base}/models`（apiKey 非空才带 Bearer 头），anthropic 格式 `GET {base}/v1/models`（x-api-key + anthropic-version，URL 规则与消息端点一致；与消息端点不同，检测这里 apiKey 为空也照发空 x-api-key 头）。返回去重后的模型 id 列表；HTTP 错误抛 `llm http <status>`，响应形状不对抛可读错误。WebUI Model 页用它做两件事：表单里的"拉取模型列表"（填充模型下拉）与条目卡片的"验证"按钮（清单拉到了 = URL 和 key 都对）。
+`fetchProviderModels` 向端点要模型清单：openai 格式 `GET {base}/models`（apiKey 非空才带 Bearer 头），anthropic 格式 `GET {base}/v1/models`（鉴权头与消息端点一致：x-api-key + Bearer + anthropic-version，apiKey 为空时不发；URL 规则也一致）。返回去重后的模型 id 列表；HTTP 错误抛 `llm http <status>`，响应形状不对抛可读错误。WebUI Model 页用它做两件事：表单里的"拉取模型列表"（填充模型下拉）与条目卡片的"验证"按钮（清单拉到了 = URL 和 key 都对）。
 
 模型名本身的验证走 `probeProviderChat`（1-token 补全探测）：openai 格式 `POST {base}/chat/completions`，anthropic 格式 `POST {base}/v1/messages`，20 秒超时；它不抛异常而是返回 `{status, body}`（status 为 null = 请求根本没到达），调用方按状态码分类失败原因。CLI 首次运行向导用它做连通测试（见 [onboarding](../cli/onboarding.md)）。
 

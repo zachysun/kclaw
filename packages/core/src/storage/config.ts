@@ -11,7 +11,9 @@ import { validateWaterlineConfig } from "../session/waterlines.js"
 /**
  * Wire API format a provider entry speaks. "openai" is the OpenAI-compatible
  * chat-completions protocol (also what DeepSeek/Ollama speak); "anthropic" is
- * the Anthropic Messages protocol (x-api-key + anthropic-version headers).
+ * the Anthropic Messages protocol (x-api-key + anthropic-version headers,
+ * with the same key also sent as Authorization: Bearer for gateways that
+ * only read Bearer).
  */
 export type ProviderApiFormat = "openai" | "anthropic"
 
