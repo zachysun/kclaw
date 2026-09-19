@@ -70,7 +70,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `web.timeoutMs` | `20000` | 每次网络抓取（搜索与网页）的 AbortSignal 超时，卡死的主机不能拖住一个 run |
 | `web.allowPrivateNetworks` | `false` | 设为 `true` 时豁免 web_fetch 对私网/回环目标的拒绝（SSRF 防护，例如允许抓取本机 Ollama 端点），由 run 组装传入工具 |
 | `usage.prices` | `{}` | 模型 → `{inputPerM?, outputPerM?}`：每百万 token 的美元单价，用量记录算成本用；没有价格条目的模型成本按 0 计 |
-| `mcp.servers` | `{}` | 外部 MCP server 配置的遗留位置（stdio/http 两种形态），读取时与 `mcp.json` 按名合并（mcp.json 优先）；首次从 WebUI 保存后整节迁入 `mcp.json` 并从此文件移除（见 [mcp](./mcp.md)） |
+| `mcp.servers` | `{}` | 外部 MCP server 配置的遗留位置（stdio/http 两种形态），读取时与 `mcp.json` 按名合并（mcp.json 优先）；写入配置文件时本节一律被摘除——`mcp.json` 是唯一管理源，任何 `saveConfig` 都不会把 server 写回配置文件（见 [mcp](./mcp.md)） |
 | `exec.timeoutMs` / `maxOutputBytes` | `60000` / `102400`（100 KiB） | exec 工具的超时与输出截断上限 |
 | `sandbox.enabled` / `writeRoots` / `network` | `true` / `[]` / `"allow"` | exec 沙箱的整体开关、追加写白名单（realpath 形态）与沙箱内网络开关（deny 时 exec 子进程断网，web 工具不受影响），见 [sandbox](./sandbox.md)；可选字段仅为兼容旧配置文件 |
 | `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 周期清理用（见 [jobs](./jobs.md)） |
@@ -95,7 +95,7 @@ export function resolvePaths(home?: string): KclawPaths
 
 读（`loadConfig(paths)`）：`config.json` 存在 → 按 JSON 解析；否则存在遗留 `config.yaml` → 按 YAML 解析（升级兼容）；两者都缺失或内容为空 → 返回默认值的克隆。解析失败抛错（`invalid json/yaml in <path>: ...`），内容不是对象映射也抛错；其余 → `deepMerge(默认值克隆, 文件内容)`。**除两处外没有结构校验**：`permissions.defaultMode` 非五档时回退到 `"default"` 并告警、压缩阈值线四线经 `validateWaterlineConfig` 校验（见 [permissions](./permissions.md) 与 [compaction](./compaction.md)）；其余字段不校验——多余字段原样保留，字段类型写错要到使用方使用时才暴露。
 
-写（`saveConfig(paths, config)`）：把**深合并后的整份 config**（含全部默认字段，首次生成的 `config.json` 不是用户最小集）序列化成 JSON，整文件原子重写——`writeFileAtomic(paths.configJson, JSON.stringify(config, null, 2) + "\n", 0o600)`（`storage/atomic.ts`：先写 `<path>.tmp` 再 rename，POSIX 同目录 rename 是原子的；文件权限 0600，因为里面含明文 API key）。首次写入会把仍在的 `config.yaml` 改名为 `config.yaml.bak`，此后 `config.json` 是唯一配置源。CLI wizard 保存后仍保留一次显式 `chmodSync(0o600)`，双保险（见 [onboarding](../cli/onboarding.md)）。
+写（`saveConfig(paths, config)`）：把**深合并后的整份 config**（含全部默认字段，首次生成的 `config.json` 不是用户最小集）序列化成 JSON，整文件原子重写——`writeFileAtomic(paths.configJson, JSON.stringify(config, null, 2) + "\n", 0o600)`（`storage/atomic.ts`：先写 `<path>.tmp` 再 rename，POSIX 同目录 rename 是原子的；文件权限 0600，因为里面含明文 API key）。序列化前会摘除遗留的 `mcp` 节：MCP server 的唯一管理源是 `mcp.json`，配置文件里那节只在读取时兼容，任何保存都不会把它写回去（防止复活已删的 server）。首次写入会把仍在的 `config.yaml` 改名为 `config.yaml.bak`，此后 `config.json` 是唯一配置源。CLI wizard 保存后仍保留一次显式 `chmodSync(0o600)`，双保险（见 [onboarding](../cli/onboarding.md)）。
 
 ---
 
@@ -115,6 +115,21 @@ export interface KclawPaths {
 // packages/core/src/storage/config.ts
 export function loadConfig(paths: KclawPaths): KclawConfig
 export function saveConfig(paths: KclawPaths, config: KclawConfig): void
+export function renameProviderEntry(config: KclawConfig, from: string, to: string): void
+// 条目改名统一入口：挪动 entries 的键，并把 PROVIDER_ENTRY_REFERENCES 里
+// 指向旧名的配置级引用（providers.default、memory.extractModel、
+// memory.embedding.provider）一并改写；会话级引用保持旧名、下个 run 回落默认条目
+
+// packages/core/src/storage/config-notifier.ts
+export type ConfigSection = "providers" | "mcp" | "channels"
+export interface ConfigNotifier {
+  publish(section: ConfigSection): void
+  subscribe(section: ConfigSection, listener: () => void): () => void
+}
+export function createConfigNotifier(): ConfigNotifier
+// 配置分节变更的进程内通知：provider 管理路由在持久化后 publish("providers")，
+// 长命消费者（daemon 的 resolver）订阅后清自己的缓存。同步、逐监听者隔离
+//（一个监听者抛错不影响其余），mcp/channels 是留给其他子系统的占位取值
 
 // packages/core/src/storage/jsonl.ts
 export function repairTornTail(file: string): void

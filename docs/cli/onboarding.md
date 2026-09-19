@@ -48,7 +48,7 @@ export function detectProviderStatus(home: string): ProviderStatus
 2. **baseurl**（仅 custom）：文本输入，裁掉末尾斜杠，空值报错并重新输入。
 3. **key**：`p.password` 隐藏输入（不回显）；ollama 不经过这步。
 4. **model**：文本输入，空则用模板默认；然后构造 `buildProviderEntry(t, apiKey, model)` → `{ baseUrl, apiKey, model }` → 连通测试。
-5. **连通测试**（`probe`）：`POST {baseUrl}/chat/completions`，body `{ model, messages: [{role:"user", content:"hi"}], max_tokens: 1, stream: false }`，`AbortSignal.timeout(20_000)`。成功（HTTP < 400）→ 写配置收尾；失败 → 分类报错 + 重试确认。
+5. **连通测试**（core `probeProviderChat`）：`POST {baseUrl}/chat/completions`，body `{ model, messages: [{role:"user", content:"hi"}], max_tokens: 1, stream: false }`，20 秒超时；不抛异常而是返回 `{status, body}`（status 为 null = 请求没到达），与 provider 管理面共用同一探测实现（机制见 [provider](../core/provider.md)）。成功（HTTP < 400）→ 写配置收尾；失败 → 分类报错 + 重试确认。
 
 **失败按三类报错**（`classifyProbeError` → `REASON`）：
 

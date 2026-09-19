@@ -98,14 +98,15 @@ export function withRetry(client: LlmClient, opts?: {
 
 条目校验（`parseProviderEntry`）除 format/baseUrl/apiKey/model 外，还要求 `contextWindow`/`maxOutput` 声明时必须是正数，否则抛 `"<key> must be a positive number"`——新增/编辑条目经此校验，WebUI 把它转成表单内的错误。
 
-daemon 侧的组装（`packages/server/src/daemon.ts`）：
+解析函数在 core（`packages/core/src/provider/resolve.ts`），daemon 组装时建一个共享 resolver 实例（`packages/server/src/daemon.ts`）：
 
 ```ts
+// core
 export function resolveProviderEndpoint(cfg: KclawConfig): { baseUrl: string; apiKey: string }
 export function resolveModel(cfg: KclawConfig): string
-export function createEntryLlmFactory(cfg: KclawConfig): (entryKey?: string) => LlmClient
-export function defaultLlmFactory(cfg: KclawConfig, onRetry?, entryKey?): LlmClient
-// createEntryLlmFactory：按条目建连的带缓存工厂——见"端点与模型解析"一节
+export function createProviderResolver(cfg: KclawConfig, fetchImpl?: typeof fetch): ProviderResolver
+// ProviderResolver：llm(entryKey?) / embed(providerName, model) / invalidate()
+// createProviderResolver：按条目建连的带缓存解析器——见"端点与模型解析"一节
 ```
 
 ---
@@ -189,9 +190,9 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 
 7 个值中的 `aborted` 与 `error` 永远不来自 provider：前者由循环在各取消检查点打上，后者标记流彻底失败的消息。归一化让 `runAgent` 的分派逻辑只认这 7 个值，与具体 provider 的用词解耦。
 
-### 6. 端点与模型解析（daemon 侧，config 优先于环境变量）
+### 6. 端点与模型解析（config 优先于环境变量）
 
-**启动校验**：`resolveProviderEndpoint` / `resolveModel`（`packages/server/src/daemon.ts`）在启动时做一次 fail-fast 校验，经 `valueOrEnv` 实现——config 条目的值非空就用它，为空再看环境变量：
+**启动校验**：`resolveProviderEndpoint` / `resolveModel`（core `provider/resolve.ts`）在 daemon 启动时做一次 fail-fast 校验，经 `valueOrEnv` 实现——config 条目的值非空就用它，为空再看环境变量：
 
 | 项 | config 来源 | 环境变量 |
 |----|-------------|----------|
@@ -204,17 +205,19 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 - CLI 首次运行判定（`packages/cli/src/provider-check.ts` 的 `detectProviderStatus`）用同一套优先级输出三态：`config`（default 指向存在的条目）/ `env`（任一 `KCLAW_LLM_*` 非空）/ `missing`。
 - `providers.timeoutMs` 未配置时由 `loadConfig` 的默认值补齐为 `DEFAULT_LLM_TIMEOUT_MS`（120s）。
 
-**按条目建连**（`createEntryLlmFactory`）：每个 run 的客户端由 `llmForRun(onRetry, entryKey)` 给出，`entryKey` 来自 `resolveRunModel` 的解析结果（run 组装先解析条目、再建客户端）。工厂的取值链：条目命中 → 该条目的 format 决定协议实现（`createProviderClient`）；条目缺失（key 为空或不存在）→ 回退到默认条目；连默认条目都没有 → 回退到环境变量端点（openai 格式）。
+**按条目建连**（`createProviderResolver`）：daemon 启动时建一个 resolver，run 客户端、记忆提取与向量路都出自它。每个 run 的客户端由 `llmForRun(onRetry, entryKey)` 给出，`entryKey` 来自 `resolveRunModel` 的解析结果（run 组装先解析条目、再建客户端）。取值链：条目命中 → 该条目的 format 决定协议实现（`createProviderClient`）；条目缺失（key 为空或不存在）→ 回退到默认条目；连默认条目都没有 → 回退到环境变量端点（openai 格式）。
 
-- **签名缓存热生效**：工厂按条目名缓存一个槽位，签名 = `format|baseUrl|apiKey|timeoutMs`。Model 页的增删改直接改 daemon 的内存配置并持久化——签名变了下个 run 自动重建客户端，**无需重启**；改回原值也能命中缓存。
+- **缓存与热生效**：resolver 按条目名缓存裸客户端，签名 = `format|baseUrl|apiKey|timeoutMs`。Model 页的增删改直接改 daemon 的内存配置并持久化，随后经 ConfigNotifier 发布 `providers` 变更（见 [storage](./storage.md)），resolver 订阅后**整体清空缓存**，下个 run 自动重建，**无需重启**；签名检查保留为优化，两次通知之间的字段改动也能即时重建。
 - **每次 run 包一层新重试**：缓存的是裸客户端；`withRetry` 在每次 `llmForRun` 调用时现包，重试回调才归属当次 run（`llm.failed` 事件带对的上文）。
-- **记忆提取同语义**：`memory.extractModel` 命中条目名时走该条目自己的客户端与线上模型名；命中不了则按裸模型名发往主模型端点（回退），客户端也每次调用经同一工厂现解，默认条目的改动同样热生效（见 [memory](./memory.md)）。
-- **向量路同步热更**：embedding 客户端按 `baseUrl|apiKey|timeoutMs` 签名现解（`createHotEmbedClient`，daemon 内私有），换 key/换地址下条记忆向量就吃到；向量路是否启用（embeddings model 与条目协议判定）仍是启动时一次定死。
+- **记忆提取同语义**：`memory.extractModel` 命中条目名时走该条目自己的客户端与线上模型名；命中不了则按裸模型名发往主模型端点（回退）。daemon 给 MemorySystem 注入 `resolveEntryLlm`，条目客户端与 run 客户端同源（同一 resolver 的缓存与热生效，见 [memory](./memory.md)）。
+- **向量路同步热更**：embedding 客户端由 resolver 的 `embed(providerName, model)` 给出（按 `baseUrl|apiKey|timeoutMs` 签名现解），换 key/换地址下条记忆向量就吃到；向量路是否启用（embeddings model 与条目协议判定）仍是启动时一次定死。
 - **默认模型行也支持热更**：run 组装与手动压缩路径的默认模型取默认条目**当前**的 `.model`，启动时解析的 `deps.model` 只在"没有配置条目、纯环境变量"的安装里作回退。
 
 ### 6b. 模型列表检测（probe，兼作连接验证）
 
 `fetchProviderModels` 向端点要模型清单：openai 格式 `GET {base}/models`（apiKey 非空才带 Bearer 头），anthropic 格式 `GET {base}/v1/models`（x-api-key + anthropic-version，URL 规则与消息端点一致；与消息端点不同，检测这里 apiKey 为空也照发空 x-api-key 头）。返回去重后的模型 id 列表；HTTP 错误抛 `llm http <status>`，响应形状不对抛可读错误。WebUI Model 页用它做两件事：表单里的"拉取模型列表"（填充模型下拉）与条目卡片的"验证"按钮（清单拉到了 = URL 和 key 都对）。
+
+模型名本身的验证走 `probeProviderChat`（1-token 补全探测）：openai 格式 `POST {base}/chat/completions`，anthropic 格式 `POST {base}/v1/messages`，20 秒超时；它不抛异常而是返回 `{status, body}`（status 为 null = 请求根本没到达），调用方按状态码分类失败原因。CLI 首次运行向导用它做连通测试（见 [onboarding](../cli/onboarding.md)）。
 
 ### 7. 上下文窗口与输出上限（条目可选字段）
 
@@ -243,5 +246,5 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 - [agent-loop](./agent-loop.md)：处理 `LlmStreamEvent` 的一侧
 - [tools](./tools.md)：`ToolDefinition` 的生产方与 `argsJson` 的最终解析方
 - [protocol](./protocol.md)：`StopReason` / `Usage` 的定义
-- [../server/daemon.md](../server/daemon.md)：`resolveProviderEndpoint` / `createEntryLlmFactory` 所在的组装现场
+- [../server/daemon.md](../server/daemon.md)：共享 resolver 的组装现场（创建实例并订阅配置变更通知）
 - [../server/http-api.md](../server/http-api.md)：`/providers` 管理路由族（Model 页的处理面）
