@@ -11,8 +11,8 @@
  * default on their next run, which the WebUI surfaces as a confirm note.
  */
 import type { FastifyInstance } from "fastify"
-import type { KclawConfig, KclawPaths, ProviderApiFormat, ProviderEntry } from "@kclaw/core"
-import { fetchProviderModels, parseProviderEntry, PROVIDER_PRESETS, resolveProviderFormat } from "@kclaw/core"
+import type { ConfigNotifier, KclawConfig, KclawPaths, ProviderApiFormat, ProviderEntry } from "@kclaw/core"
+import { fetchProviderModels, parseProviderEntry, PROVIDER_PRESETS, renameProviderEntry, resolveProviderFormat } from "@kclaw/core"
 import { saveConfig } from "@kclaw/core"
 import { maskSecret } from "./config.js"
 
@@ -20,6 +20,12 @@ export interface ProvidersRoutesDeps {
   /** The daemon's shared in-memory config; mutations hot-apply to next runs. */
   config: KclawConfig
   paths: KclawPaths
+  /**
+   * Config-section notifier: every mutation publishes "providers" after
+   * persisting so cache-holding consumers (the provider client resolver)
+   * drop their state. Absent (bare apps) → no publish.
+   */
+  notifier?: ConfigNotifier
 }
 
 /** Names are entry keys referenced by session meta, jobs, and slash commands. */
@@ -42,12 +48,18 @@ function snapshot(deps: ProvidersRoutesDeps): {
   return { default: deps.config.providers.default, entries, presets: PROVIDER_PRESETS }
 }
 
-/** Persist after a mutation; the in-memory change is already live either way. */
+/**
+ * Persist after a mutation; the in-memory change is already live either way.
+ * The publish happens regardless of the save outcome — the in-memory config
+ * did change, so caches must not outlive the mutation they reflect.
+ */
 function persist(deps: ProvidersRoutesDeps): void {
   try {
     saveConfig(deps.paths, deps.config)
   } catch (e) {
     console.error(`kclaw providers: failed to persist config: ${(e as Error).message}`)
+  } finally {
+    deps.notifier?.publish("providers")
   }
 }
 
@@ -113,10 +125,11 @@ export function registerProvidersRoutes(app: FastifyInstance, deps: ProvidersRou
       return reply.code(400).send({ error: (e as Error).message })
     }
     if (target !== name) {
-      delete deps.config.providers.entries[name]
-      if (deps.config.providers.default === name) deps.config.providers.default = target
-      if (deps.config.memory?.extractModel === name) deps.config.memory.extractModel = target
-      if (deps.config.memory?.embedding?.provider === name) deps.config.memory.embedding.provider = target
+      try {
+        renameProviderEntry(deps.config, name, target)
+      } catch (e) {
+        return reply.code(409).send({ error: (e as Error).message })
+      }
     }
     deps.config.providers.entries[target] = mergeEntry(existing, entry)
     persist(deps)

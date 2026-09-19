@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AddressInfo } from "node:net"
 import { defaultConfig } from "@kclaw/core"
-import type { KclawConfig } from "@kclaw/core"
+import type { ConfigNotifier, KclawConfig } from "@kclaw/core"
 import { createApp } from "../../src/index.js"
 import type { FastifyInstance } from "fastify"
 
@@ -225,5 +225,31 @@ describe("providers routes", () => {
       })
       expect(unknown.statusCode).toBe(404)
     })
+  })
+})
+
+describe("providers config-change notification", () => {
+  it("every mutation publishes the providers section after persisting", async () => {
+    const published: string[] = []
+    const configNotifier: ConfigNotifier = {
+      publish: (section) => published.push(section),
+      subscribe: () => () => undefined,
+    }
+    const notifierHome = mkdtempSync(join(tmpdir(), "kclaw-providers-notify-"))
+    const notifierApp = await createApp({ home: notifierHome, token: "t1", stores: { config: makeConfig() }, configNotifier })
+    try {
+    const inject = (method: "POST" | "PATCH" | "DELETE", url: string, payload?: unknown) =>
+      notifierApp.inject({ method, url, headers: AUTH, payload })
+    await inject("POST", "/providers", { name: "gpt", entry: { format: "openai", baseUrl: "https://api.openai.com/v1", apiKey: "k", model: "gpt-4o" } })
+    await inject("PATCH", "/providers/gpt", { entry: { format: "openai", baseUrl: "https://api.openai.com/v1", apiKey: "", model: "gpt-4o-mini" } })
+    await inject("POST", "/providers/ds/default")
+    await inject("DELETE", "/providers/gpt")
+    // 失败的请求（校验 4xx）不发：in-memory config 未变
+    await inject("POST", "/providers", { name: "bad name!", entry: {} })
+    expect(published).toEqual(["providers", "providers", "providers", "providers"])
+    } finally {
+      await notifierApp.close()
+      rmSync(notifierHome, { recursive: true, force: true })
+    }
   })
 })

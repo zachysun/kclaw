@@ -32,14 +32,14 @@ import {
   MemorySystem,
   SessionStore,
   consolidateMcpConfig,
-  createEmbeddingClient,
-  createOpenAiCompatClient,
-  createProviderClient,
+  createConfigNotifier,
+  createProviderResolver,
   loadConfig,
   loadMcpServers,
   createNotifier,
   makeEvent,
   McpManager,
+  resolveModel,
   resolvePaths,
   resolveProviderFormat,
   UsageStore,
@@ -58,6 +58,10 @@ import { createTeamHost } from "./team.js"
 import { startSchedulerTick } from "./scheduler-tick.js"
 import { startMemoryScheduler } from "./memory-scheduler.js"
 import { createApp } from "./app.js"
+
+// Endpoint/model resolution moved to @kclaw/core (the provider resolver
+// needs it); re-exported here for API continuity.
+export { resolveModel, resolveProviderEndpoint } from "@kclaw/core"
 
 /** The daemon only ever binds loopback (127.0.0.1). */
 const HOST = "127.0.0.1"
@@ -145,78 +149,11 @@ export function resolveWebDist(optsWebDist: string | undefined): string | undefi
   return existsSync(candidate) ? candidate : undefined
 }
 
-/** `value` when non-empty, else the env var, else "" (config wins, env falls back). */
-function valueOrEnv(value: string | undefined, envName: string): string {
-  if (value !== undefined && value !== "") return value
-  const fromEnv = process.env[envName]
-  return fromEnv !== undefined && fromEnv !== "" ? fromEnv : ""
-}
-
-/**
- * The default provider endpoint for the daemon: the config's default provider
- * entry, with KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY filling in what the entry
- * leaves empty. A still-missing baseUrl is a launch error, not a silent
- * half-configured daemon; an empty apiKey is legal (keyless local runtimes
- * get no auth header).
- */
-export function resolveProviderEndpoint(cfg: KclawConfig): { baseUrl: string; apiKey: string } {
-  const entry = cfg.providers.entries[cfg.providers.default]
-  const baseUrl = valueOrEnv(entry?.baseUrl, "KCLAW_LLM_BASE_URL")
-  const apiKey = valueOrEnv(entry?.apiKey, "KCLAW_LLM_API_KEY")
-  if (baseUrl === "") {
-    throw new Error("no llm provider configured: set providers in config.json or KCLAW_LLM_BASE_URL env")
-  }
-  return { baseUrl, apiKey }
-}
-
-/**
- * The model string for the daemon's runs: the provider entry's model, falling
- * back to KCLAW_LLM_MODEL. Separate from {@link resolveProviderEndpoint} so a
- * test llmFactory still needs a model (RunManager sends one on every request)
- * without needing a reachable endpoint.
- */
-export function resolveModel(cfg: KclawConfig): string {
-  const entry = cfg.providers.entries[cfg.providers.default]
-  const model = valueOrEnv(entry?.model, "KCLAW_LLM_MODEL")
-  if (model === "") {
-    throw new Error("no llm model configured: set providers.<name>.model in config.json or KCLAW_LLM_MODEL env")
-  }
-  return model
-}
-
-/**
- * Per-entry client factory with signature-keyed caching: every provider entry
- * owns its endpoint, so the run's resolved entry key picks the client (raw,
- * un-retried — callers wrap in withRetry per run to carry their own retry
- * sink). The cache holds one slot per entry key; a changed entry (format,
- * baseUrl, apiKey, or the global timeout) changes the signature and rebuilds,
- * which is how Model-tab edits hot-apply to the next run. No configured entry
- * (empty key, nothing set) falls back to the KCLAW_LLM_* env endpoint.
- */
-export function createEntryLlmFactory(cfg: KclawConfig): (entryKey?: string) => LlmClient {
-  const cache = new Map<string, { sig: string; client: LlmClient }>()
-  return (entryKey?: string) => {
-    const entry = (entryKey !== undefined ? cfg.providers.entries[entryKey] : undefined)
-      ?? cfg.providers.entries[cfg.providers.default]
-    if (entry === undefined) {
-      const { baseUrl, apiKey } = resolveProviderEndpoint(cfg)
-      return createOpenAiCompatClient({ baseUrl, apiKey, timeoutMs: cfg.providers.timeoutMs })
-    }
-    const sig = `${resolveProviderFormat(entry)}|${entry.baseUrl}|${entry.apiKey}|${cfg.providers.timeoutMs}`
-    const key = entryKey ?? ""
-    const hit = cache.get(key)
-    if (hit !== undefined && hit.sig === sig) return hit.client
-    const client = createProviderClient({ entry, timeoutMs: cfg.providers.timeoutMs })
-    cache.set(key, { sig, client })
-    return client
-  }
-}
-
 /**
  * One-shot default composition (launch client and tests): the entry-resolved
  * client wrapped in transient-error retry (3 attempts). Per-run retry wiring
- * goes through {@link createEntryLlmFactory} so the cache is shared across
- * runs instead of rebuilt per call.
+ * goes through the daemon's shared ProviderResolver (llmForRun) instead, so
+ * the client cache is shared across runs instead of rebuilt per call.
  */
 export function defaultLlmFactory(
   cfg: KclawConfig,
@@ -224,35 +161,9 @@ export function defaultLlmFactory(
   entryKey?: string,
 ): LlmClient {
   return withRetry(
-    createEntryLlmFactory(cfg)(entryKey),
+    createProviderResolver(cfg).llm(entryKey),
     onRetry === undefined ? {} : { onRetry },
   )
-}
-
-/**
- * Hot-reloadable embedding client: re-resolves the configured entry per call
- * (signature-checked, so unchanged entries reuse the client) — Model-tab edits
- * reach the vector path without a restart. Whether the vector path exists at
- * all is still decided once at launch (the embeddings model and the entry's
- * protocol are not hot-swappable: an anthropic-format entry has no embeddings
- * API and stays disabled).
- */
-function createHotEmbedClient(cfg: KclawConfig, providerName: string, model: string): EmbeddingClient {
-  let sig = ""
-  let client: EmbeddingClient | undefined
-  return {
-    async embed(texts: string[]): Promise<Float32Array[]> {
-      const entry = (providerName !== "" ? cfg.providers.entries[providerName] : undefined)
-        ?? cfg.providers.entries[cfg.providers.default]
-      if (entry === undefined) throw new Error("embedding provider entry not found")
-      const next = `${entry.baseUrl}|${entry.apiKey}|${cfg.providers.timeoutMs}`
-      if (client === undefined || sig !== next) {
-        client = createEmbeddingClient({ baseUrl: entry.baseUrl, apiKey: entry.apiKey, model, timeoutMs: cfg.providers.timeoutMs })
-        sig = next
-      }
-      return client.embed(texts)
-    },
-  }
 }
 
 /** True when `pid` is a live process (signal 0 probe). */
@@ -323,6 +234,16 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   const config = opts.config ?? loadConfig(paths)
   const token = loadOrCreateToken(paths.home)
 
+  // Provider client resolver: one instance per daemon owns the entry client
+  // caches (runs, memory extraction, the vector path all resolve through it).
+  // The provider routes publish config-section changes through the notifier
+  // after persisting; the resolver drops its caches wholesale, and the
+  // signature checks remain as an optimization only.
+  const configNotifier = createConfigNotifier()
+  const providerResolver = createProviderResolver(config)
+  configNotifier.subscribe("providers", () => providerResolver.invalidate())
+  const llmForEntry = (entryKey?: string): LlmClient => providerResolver.llm(entryKey)
+
   // The bus is built before the store: the store's post-append callback emits
   // the session.appended bus frame (audit-page subscribers use it to refetch
   // the stream incrementally — persisted before announced, no race).
@@ -333,7 +254,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // embedding 判定链：model 空 → 不构造客户端（向量路关闭）；provider 名
   // 缺省取 default provider entry；entry 不存在则向量路关闭并告警（不致命）。
   const embedCfg = config.memory.embedding
-  let embed: ReturnType<typeof createEmbeddingClient> | undefined
+  let embed: EmbeddingClient | undefined
   if (embedCfg.model !== "") {
     const entry = embedCfg.provider !== ""
       ? config.providers.entries[embedCfg.provider]
@@ -343,7 +264,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       // serve chat but never the vector path.
       console.error("kclaw memory: embedding provider is an anthropic-format entry (no embeddings API), vector path disabled")
     } else if (entry !== undefined) {
-      embed = createHotEmbedClient(config, embedCfg.provider, embedCfg.model)
+      embed = providerResolver.embed(embedCfg.provider, embedCfg.model)
     } else {
       console.error("kclaw memory: embedding provider not found, vector path disabled")
     }
@@ -361,14 +282,15 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     },
   })
   // 记忆系统唯一门面：embed/emit/迁移/对账在此一次性装配。
-  // resolveLlm 惰性引用下方 llmForEntry（触发发生在 launch 后，TDZ 无碍）：
-  // 回落客户端每调用现解，签名缓存让未变更的条目零成本复用——Model 页
+  // resolveLlm 引用上方 llmForEntry：回落走共享 resolver（未变更条目零成本
+  // 复用），extractModel 命中条目走 resolveEntryLlm 同源解析——Model 页
   // 改动对记忆提取同样热生效。测试注入的 llmFactory 保持原样直用。
   const memory = new MemorySystem({
     memoryDir: paths.memoryDir,
     sessions,
     config,
     resolveLlm: () => ({ llm: opts.llmFactory !== undefined ? llm : withRetry(llmForEntry()), model: resolveModel(config) }),
+    resolveEntryLlm: (entryKey) => llmForEntry(entryKey),
     embed,
     emit: (e) => bus.emit(makeEvent("memory.written", { path: e.path, kind: e.kind, ...(e.topic !== undefined ? { topic: e.topic } : {}), ...(e.scope !== undefined ? { scope: e.scope } : {}) })),
   })
@@ -382,10 +304,8 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // resolveConfirmation stays undefined: WS/CLI verdicts reach the RunManager's
   // internal ConfirmationBroker (createApp routes confirmation.resolve frames
   // from /ws to it).
-  // Per-entry clients for runs (each entry owns its endpoint — see
-  // createEntryLlmFactory); memory extraction's default path re-resolves
-  // through the same factory per call, so entry edits hot-apply there too.
-  const llmForEntry = createEntryLlmFactory(config)
+  // Launch client: the default entry through the shared resolver, wrapped in
+  // transient-error retry. An injected llmFactory (tests) replaces it whole.
   const llm = opts.llmFactory !== undefined ? opts.llmFactory(config) : withRetry(llmForEntry())
   const model = resolveModel(config)
   // MCP: the manager is always assembled (an empty one costs nothing and
@@ -402,7 +322,8 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   })
   // The manager owns MCP state from here (mcp.json is the managed source):
   // drop the legacy section from the in-memory config so a later provider
-  // save can never write a deleted server back into config.json.
+  // save can never write a deleted server back (saveConfig strips it at the
+  // write layer too) and the GET /config snapshot stays legacy-free.
   delete config.mcp
   // Subagent dispatch: the spawner needs the RunManager (it submits/cancels
   // child runs) while the RunManager's engine deps need the spawner — a
@@ -480,6 +401,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     home: paths.home,
     token,
     stores: { sessions, jobs, config, paths },
+    configNotifier,
     bus,
     run,
     cancelBackgroundForParent: subagentHost.cancelBackgroundForParent,
