@@ -114,8 +114,10 @@ export function createRealFeishuTransport(
         appId: config.appId,
         appSecret: config.appSecret,
         transport: "websocket",
-        // 白名单第二道防线（第一道在频道逻辑里，可在假传输上测试）
-        policy: { dmMode: "allowlist", dmAllowlist: config.allowlist },
+        // DM 拦截统一在频道层：被拒消息要在那里记录待加白发件人（管理页
+        // 一键加白依赖它）。SDK 侧若设 allowlist 模式，被拒消息到不了频道
+        // 逻辑——空白名单时等于全拦，管理页永远看不到待加白条目。
+        policy: { dmMode: "open" },
         loggerLevel: LoggerLevel.error,
         // 握手必须有死线：DNS/代理/防火墙故障时缺省可以无限挂起，
         // 而 connect() 要等第一次握手成功才 resolve
