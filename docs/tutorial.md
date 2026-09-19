@@ -50,7 +50,7 @@ kclaw chat
 
 选「否」或按 Ctrl+C 都会正常退出，不写入任何文件；下次 `kclaw chat` 会重新进入 wizard。
 
-不走 wizard 时，可手动编写 `~/.kclaw/config.json`，或设置 `KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY / KCLAW_LLM_MODEL` 环境变量，格式见 [README](../README.zh-CN.md) 的「配置」一节。
+不走 wizard 时，可手动编写 `~/.kclaw/config.json`，或设置 `KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY / KCLAW_LLM_MODEL` 环境变量，字段说明见 [storage](./core/storage.md) 的「config.json 全量字段」一节。
 
 ## 3. 第一轮对话
 
@@ -209,6 +209,6 @@ kclaw daemon status   # 查看状态（kclaw status 是同一命令的别名）
 
 ## 9. 下一步
 
-- **配置全表**（[storage](./core/storage.md)）：`workspace` 限定文件工具的活动范围；`permissions.allow` 可以让某些命令跳过确认（如 `exec:git *`）；`exec.timeoutMs` 控制命令超时；`~/.kclaw/AGENTS.md` 定义 agent 人设。模型 provider 的配置见 [README](../README.zh-CN.md) 的「配置」一节。
+- **配置全表**（[storage](./core/storage.md)）：`workspace` 限定文件工具的活动范围；`permissions.allow` 可以让某些命令跳过确认（如 `exec:git *`）；`exec.timeoutMs` 控制命令超时；`~/.kclaw/AGENTS.md` 定义 agent 人设。模型 provider 的配置见 [storage](./core/storage.md) 的「config.json 全量字段」一节。
 - **扩展指南**（[extending](./extending.md)）：为 kclaw 增加新功能时的切入点。
 - **架构总览**（[architecture](./architecture.md)）：阅读内部实现时的入口文档。
