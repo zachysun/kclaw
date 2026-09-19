@@ -1,8 +1,9 @@
 /**
  * ~/.kclaw/feishu.json — the Feishu channel's own config, deliberately NOT in
  * config.yaml: app_secret must not mix into the main config's backup/sync
- * paths. Read-only here (the file is hand-edited; no management UI in v1);
- * restart to apply. The loader tightens the file mode to 0600 best effort.
+ * paths. Written by the admin page (save = persist + hot restart) and still
+ * readable as a hand-edited file. The loader tightens the file mode to 0600
+ * best effort.
  */
 import { readFileSync, writeFileSync, renameSync, statSync, chmodSync, existsSync } from "node:fs"
 import { join } from "node:path"
@@ -18,6 +19,37 @@ export interface FeishuConfig {
 }
 
 export const FEISHU_CONFIG_FILE = "feishu.json"
+
+export function saveFeishuConfig(home: string, config: FeishuConfig): void {
+  const path = join(home, FEISHU_CONFIG_FILE)
+  const disk = {
+    enabled: config.enabled,
+    app_id: config.appId,
+    app_secret: config.appSecret,
+    allowlist: config.allowlist,
+    ...(config.primaryOpenId !== undefined ? { primaryOpenId: config.primaryOpenId } : {}),
+  }
+  const tmp = `${path}.tmp`
+  writeFileSync(tmp, `${JSON.stringify(disk, null, 2)}\n`, { mode: 0o600 })
+  renameSync(tmp, path)
+}
+
+/** A non-allowlisted sender we silently dropped, kept for one-click allowlisting. */
+export interface PendingSender {
+  openId: string
+  /** How many messages were dropped in total. */
+  count: number
+  /** Last drop, epoch ms. */
+  lastSeen: number
+}
+
+export const PENDING_SENDERS_CAP = 20
+
+/** Keep the newest entries, newest first; the cap is fixed to bound the file. */
+export function normalizePendingSenders(list: PendingSender[]): PendingSender[] {
+  const byRecency = [...list].sort((a, b) => b.lastSeen - a.lastSeen)
+  return byRecency.slice(0, PENDING_SENDERS_CAP)
+}
 
 export function loadFeishuConfig(home: string): FeishuConfig {
   const path = join(home, FEISHU_CONFIG_FILE)
@@ -48,21 +80,29 @@ export function loadFeishuConfig(home: string): FeishuConfig {
   return { enabled, appId, appSecret, allowlist, ...(primaryOpenId !== undefined ? { primaryOpenId } : {}) }
 }
 
-/** Bindings 状态文件（open_id → 常驻会话），由频道写入；与手编的 feishu.json 分开放。 */
+/** Channel runtime state (open_id → persistent session, plus pending senders). */
 export const FEISHU_STATE_FILE = "feishu-state.json"
 
 export interface FeishuState {
   bindings: Record<string, string>
+  /** Non-allowlisted senders seen since the list was last cleared. */
+  pendingSenders: PendingSender[]
 }
 
 export function loadFeishuState(home: string): FeishuState {
   const path = join(home, FEISHU_STATE_FILE)
-  if (!existsSync(path)) return { bindings: {} }
+  if (!existsSync(path)) return { bindings: {}, pendingSenders: [] }
   try {
     const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<FeishuState>
-    return { bindings: raw.bindings ?? {} }
+    const pending = Array.isArray(raw.pendingSenders)
+      ? raw.pendingSenders.filter(
+          (p): p is PendingSender =>
+            typeof p?.openId === "string" && p.openId !== "" && typeof p?.count === "number" && typeof p?.lastSeen === "number",
+        )
+      : []
+    return { bindings: raw.bindings ?? {}, pendingSenders: normalizePendingSenders(pending) }
   } catch {
-    return { bindings: {} }
+    return { bindings: {}, pendingSenders: [] }
   }
 }
 

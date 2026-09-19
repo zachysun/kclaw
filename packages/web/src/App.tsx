@@ -35,12 +35,13 @@ import { SkillsView } from "./skills/SkillsView.js"
 import { PermissionsView } from "./permissions/PermissionsView.js"
 import { McpView } from "./mcp/McpView.js"
 import { ModelView } from "./model/ModelView.js"
+import { ChannelView } from "./channel/ChannelView.js"
 import { ToastStack, useToasts } from "./toast.js"
 import type { FsBrowseResult, SessionMeta } from "./types.js"
 
 type DaemonStatus = "connecting" | "connected" | "error"
 
-const TABS = ["chat", "jobs", "audit", "usage", "trash", "memory", "skills", "permissions", "mcp", "model"] as const
+const TABS = ["chat", "jobs", "audit", "usage", "trash", "memory", "skills", "permissions", "mcp", "model", "channel"] as const
 type Tab = (typeof TABS)[number]
 
 /**
@@ -458,6 +459,14 @@ function MainShell({
           >
             Model
           </button>
+          <button
+            type="button"
+            className={tab === "channel" ? "tab active" : "tab"}
+            data-testid="tab-channel"
+            onClick={() => switchTab("channel")}
+          >
+            IM Channel
+          </button>
         </nav>
         <select
           className="theme-select"
@@ -553,6 +562,7 @@ function MainShell({
           {tab === "permissions" && <PermissionsView api={api} notice={notify} workdir={selectedMeta?.workdir} />}
           {tab === "mcp" && <McpView api={api} notice={notify} />}
           {tab === "model" && <ModelView api={api} notice={notify} />}
+          {tab === "channel" && <ChannelView api={api} notice={notify} />}
         </main>
       </div>
       <ToastStack toasts={toasts} onDismiss={dismiss} />

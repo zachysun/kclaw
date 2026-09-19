@@ -21,6 +21,8 @@ import { registerUsageRoutes } from "./routes/usage.js"
 import { registerHookRoutes } from "./routes/hooks.js"
 import { registerMcpRoutes } from "./routes/mcp.js"
 import type { McpRoutesView } from "./routes/mcp.js"
+import { registerChannelRoutes } from "./routes/channel.js"
+import type { ChannelRoutesView } from "./routes/channel.js"
 import { registerProvidersRoutes } from "./routes/providers.js"
 
 export interface AppOptions {
@@ -85,6 +87,12 @@ export interface AppOptions {
    * family answers 503.
    */
   mcp?: McpRoutesView
+  /**
+   * Feishu channel manager view: the config/status snapshot at `GET /channel`
+   * (the WebUI IM Channel tab) plus the hot-config action routes. Absent →
+   * the snapshot reports disabled and the action family answers 503.
+   */
+  channel?: ChannelRoutesView
   /**
    * The daemon's attachments dir (`<home>/attachments`): when set, the
    * session attachment routes are registered and the /ws send_message
@@ -222,6 +230,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   }
 
   registerMcpRoutes(app, { mcp: opts.mcp })
+  registerChannelRoutes(app, { channel: opts.channel })
 
   const bus = opts.bus ?? new EventBus()
   app.decorate("bus", bus)

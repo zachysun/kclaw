@@ -16,8 +16,14 @@ import { join } from "node:path"
 import type { AnyAgentEvent, EventBus, SessionStore } from "@kclaw/core"
 import type { RunManager } from "../run.js"
 import type { BackgroundSettlement } from "../subagent.js"
-import type { FeishuConfig } from "./config.js"
-import { FEISHU_STATE_FILE, loadFeishuState, saveFeishuState } from "./config.js"
+import type { FeishuConfig, PendingSender } from "./config.js"
+import {
+  FEISHU_STATE_FILE,
+  PENDING_SENDERS_CAP,
+  loadFeishuState,
+  normalizePendingSenders,
+  saveFeishuState,
+} from "./config.js"
 import type { FeishuTransport, OutboundCard } from "./transport.js"
 import { stripOutboundText } from "./strip.js"
 
@@ -37,6 +43,10 @@ export interface FeishuChannel {
   stop(): Promise<void>
   /** Wired by the daemon to the subagent host's completion delivery. */
   onBackgroundSettled(info: BackgroundSettlement): void
+  /** Non-allowlisted senders seen so far (newest first), for the admin page. */
+  pendingSenders(): PendingSender[]
+  /** Remove one pending sender (e.g. after it was allowlisted). */
+  clearPendingSender(openId: string): void
 }
 
 /** Per-run mirror state on a bound session. */
@@ -69,14 +79,37 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
   const views = new Map<string, RunView>()
   /** confirmationId → our approval card. */
   const pending = new Map<string, PendingApproval>()
+  /** Non-allowlisted senders (open_id → count/lastSeen); persisted for the admin page. */
+  const rejected = new Map<string, { count: number; lastSeen: number }>()
   let started = false
 
   const persist = (): void => {
     try {
-      saveFeishuState(deps.home, { bindings: Object.fromEntries(bindings) })
+      saveFeishuState(deps.home, {
+        bindings: Object.fromEntries(bindings),
+        pendingSenders: pendingSenders(),
+      })
     } catch (err) {
       log(`feishu: ${statePath} 写入失败：${err instanceof Error ? err.message : String(err)}`)
     }
+  }
+
+  const pendingSenders = (): PendingSender[] =>
+    normalizePendingSenders([...rejected].map(([openId, r]) => ({ openId, count: r.count, lastSeen: r.lastSeen })))
+
+  /**
+   * The sender learns nothing (still no reply of any kind); only our own
+   * records grow, so the admin page can allowlist with one click. The cap
+   * applies to memory and file alike (newest entries win).
+   */
+  const recordRejectedSender = (openId: string): void => {
+    const prev = rejected.get(openId)
+    rejected.set(openId, { count: (prev?.count ?? 0) + 1, lastSeen: Date.now() })
+    if (rejected.size > PENDING_SENDERS_CAP) {
+      const oldest = [...rejected].sort((a, b) => a[1].lastSeen - b[1].lastSeen)
+      for (const [id] of oldest.slice(0, rejected.size - PENDING_SENDERS_CAP)) rejected.delete(id)
+    }
+    persist()
   }
 
   const bindSession = (openId: string): string => {
@@ -247,8 +280,12 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
   }
 
   const onMessage = (m: { openId: string; messageId: string; text: string }): void => {
+    // 停止后迟到的回调不再触碰内存表——否则会用旧通道的绑定覆盖
+    // 新通道刚写入的状态文件
+    if (!started) return
     if (!config.allowlist.includes(m.openId)) {
       log(`feishu: 忽略非白名单发件人 ${m.openId}`)
+      recordRejectedSender(m.openId)
       return
     }
     void transport.reactTyping(m.messageId).catch(() => undefined)
@@ -292,7 +329,11 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
   }
 
   const onCardAction = (a: { openId: string; value: string }): void => {
-    if (!config.allowlist.includes(a.openId)) return
+    if (!started) return
+    if (!config.allowlist.includes(a.openId)) {
+      recordRejectedSender(a.openId)
+      return
+    }
     const m = /^(confirm|reject):(.+)$/.exec(a.value)
     if (m === null) return
     const [, verb, confirmationId] = m
@@ -321,6 +362,8 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
       bySession.set(sessionId, openId)
       bus.subscribe(sessionId, socket)
     }
+    // Rejected senders outlive restarts so the admin page keeps its list.
+    for (const p of state.pendingSenders) rejected.set(p.openId, { count: p.count, lastSeen: p.lastSeen })
     bus.connect(socket)
     await transport.start({ onMessage, onCardAction })
   }
@@ -339,5 +382,14 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
     )
   }
 
-  return { start, stop, onBackgroundSettled }
+  return {
+    start,
+    stop,
+    onBackgroundSettled,
+    pendingSenders,
+    clearPendingSender: (openId) => {
+      if (!rejected.delete(openId)) return
+      persist()
+    },
+  }
 }
