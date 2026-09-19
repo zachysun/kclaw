@@ -543,7 +543,7 @@ export function teamSummary(event: TeamAuditEvent): string {
     case "team.created":
       return `建团「${event.name}」`
     case "team.member.provisioned":
-      return `招募组员 ${event.member}`
+      return `添加组员 ${event.member}`
     case "team.member.settled":
       return `组员 ${event.member} → ${event.status}${event.reason !== undefined ? `（${event.reason}）` : ""}`
     case "team.message.queued":

@@ -433,7 +433,7 @@ export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean
     // dim 一行警告，带钩子名与位置；phase load 表示装载期失败。
     case "hook.failed": {
       const p = ev.payload
-      line(dim(`⚠ 钩子 ${p.hook} 失败（${p.position}${p.phase === "load" ? " 装载" : ""}）：${p.error}`), ctx)
+      line(dim(`⚠ hook ${p.hook} 失败（${p.position}${p.phase === "load" ? " 装载" : ""}）：${p.error}`), ctx)
       return false
     }
     case "run.failed":

@@ -396,7 +396,7 @@ describe("team 审计行", () => {
     // 摘要（与渲染组件同源走 rowSearchText 的摘要部分）
     const texts = rows.map((r) => rowSearchText(r))
     expect(texts[0]).toContain("建团「登录攻坚」")
-    expect(texts[1]).toContain("招募组员 alice")
+    expect(texts[1]).toContain("添加组员 alice")
     expect(texts[2]).toContain("组员 bob → failed（模型不可用）")
     expect(texts[3]).toContain("收信 lead → alice：去做任务 #3")
     expect(texts[4]).toContain("送达 alice")

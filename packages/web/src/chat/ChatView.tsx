@@ -434,7 +434,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
       )}
       {view.hookFailure !== undefined && view.hookFailure !== null && (
         <div className="hook-failure" data-testid="hook-failure" aria-live="polite">
-          钩子 {view.hookFailure.hook} 失败（{view.hookFailure.position}）：{view.hookFailure.error}
+          hook {view.hookFailure.hook} 失败（{view.hookFailure.position}）：{view.hookFailure.error}
         </div>
       )}
       {view.pendingConfirmations.map((card) => (
