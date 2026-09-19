@@ -44,7 +44,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 | 子目录 | 内容 |
 |--------|------|
 | `protocol/` | 消息、块、事件、WS 指令帧、会话事件、ID 的类型定义——线上数据形状的权威来源，经 `@kclaw/core/protocol` 子路径出口供三端引用 |
-| `provider/` | OpenAI 兼容的模型客户端，带重试 |
+| `provider/` | OpenAI 兼容与 Anthropic Messages 两种协议的模型客户端，带重试、内置预设目录与统一的端点/模型解析（resolver，见 [provider](./core/provider.md)） |
 | `agent/` | agent 循环、上下文组装、工具契约、单次 run 的组装（`run-assembly.ts` 的 `executeRun`） |
 | `hooks/` | hook 系统：14 个挂载位置、HookChain 注册接口、用户文件装载、内置 hook（见 [hooks](./core/hooks.md)） |
 | `storage/` | 路径解析、配置读取、JSONL（每行一条 JSON 的文本文件）读写；含用量记录 `usage.ts` 与已保存权限规则 `decided-rules.ts` |
@@ -61,11 +61,11 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 根级另有 `bus.ts`（EventBus，进程内事件分发）与 `client-http.ts`（CLI/WebUI 共享的 HTTP 请求基座：自动附带 Bearer token、提取错误信息、处理 204/空响应，经 `@kclaw/core/client-http` 子路径出口；不 import 任何 Node 专属模块，浏览器可以直接打包）。`mentions.ts`（`@` 文件引用的纯函数层：提取、候选补全与模型侧包装文本，经 `@kclaw/core/mentions` 子路径出口；机制见 [file-mentions](./core/file-mentions.md)）同为浏览器可引用的纯模块。`sandbox/`（exec 工具的操作系统级沙箱：Seatbelt/bwrap 检测与包装，见 [sandbox](./core/sandbox.md)）是内部模块，不经入口导出，由 run 组装直接 import。
 
-**server**（入口 `packages/server/src/index.ts`）：`app.ts`（createApp 组装）、`daemon.ts`（launchDaemon）、`auth.ts`（token 鉴权）、`run.ts`（RunManager 队列状态机；单次 run 的组装在 core 的 `executeRun`）、`subagent.ts`（subagent 派生：子会话创建、状态行与确认转发，见 [subagents](./core/subagents.md)）、`team.ts`（团队宿主：身份反查、收信箱投递、自动派活、面板，见 [agent-team](./core/agent-team.md)）、`command-check.ts`（WS 命令帧的唯一校验点）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`（定时调度 tick）、`memory-scheduler.ts`（记忆的定时/跟随保底调度）、`feishu/`（飞书频道：频道逻辑 + 传输接入口 + SDK 薄壳，见 [feishu-channel](./server/feishu-channel.md)）、`routes/`（sessions/attachments/jobs/config/fs/usage/memory/skills/hooks/permissions/mcp 十一组路由）。
+**server**（入口 `packages/server/src/index.ts`）：`app.ts`（createApp 组装）、`daemon.ts`（launchDaemon）、`auth.ts`（token 鉴权）、`run.ts`（RunManager 队列状态机；单次 run 的组装在 core 的 `executeRun`）、`subagent.ts`（subagent 派生：子会话创建、状态行与确认转发，见 [subagents](./core/subagents.md)）、`team.ts`（团队宿主：身份反查、收信箱投递、自动派活、面板，见 [agent-team](./core/agent-team.md)）、`command-check.ts`（WS 命令帧的唯一校验点）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`（定时调度 tick）、`memory-scheduler.ts`（记忆的定时/跟随保底调度）、`feishu/`（飞书频道：频道逻辑 + 传输接入口 + SDK 薄壳，见 [feishu-channel](./server/feishu-channel.md)）、`routes/`（sessions/attachments/jobs/config/providers/fs/usage/memory/skills/hooks/permissions/mcp/channel 十三组路由）。
 
-**cli**（入口 `packages/cli/src/index.ts`）：commander 命令树（默认进 chat）；`chat.ts`（REPL 交互循环、渲染、@引用展开）、`client.ts`（KclawClient）、`daemon-ctl.ts`（daemon 检测/启动/停止）、`slash.ts`（slash 命令实现）、`file-refs.ts`（@文件引用）、`wizard.ts`（首次配置 wizard）、`provider-check.ts`（模型连通测试）、`web-cmd.ts`（`kclaw web` 子命令）。
+**cli**（入口 `packages/cli/src/index.ts`）：commander 命令树（默认进 chat）；`chat.ts`（REPL 交互循环、渲染、@引用展开）、`client.ts`（KclawClient）、`daemon-ctl.ts`（daemon 检测/启动/停止）、`slash.ts`（slash 命令实现）、`file-refs.ts`（@文件引用）、`wizard.ts`（首次配置 wizard）、`provider-check.ts`（模型配置来源判定：config/env/missing 三态，决定是否进入 wizard）、`web-cmd.ts`（`kclaw web` 子命令）。
 
-**web**（入口 `packages/web/src/main.tsx`）：十个视图（chat/sessions/jobs/audit/usage/trash/memory/skills/permissions/mcp）加 DirectoryPicker（目录选择器）、离线外壳（`sw.js`/manifest/OfflineBanner）、`ws.ts`（WS 客户端）、`token.ts`（token 引导）。
+**web**（入口 `packages/web/src/main.tsx`）：十一个视图（chat/jobs/audit/usage/trash/memory/skills/permissions/mcp/model/channel）加 DirectoryPicker（目录选择器）、离线外壳（`sw.js`/manifest/OfflineBanner）、`ws.ts`（WS 客户端）、`token.ts`（token 引导）。
 
 ---
 
