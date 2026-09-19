@@ -71,6 +71,6 @@
 
 ## 启用步骤
 
-推荐走 WebUI 顶栏「IM Channel」页（页面内置同样的指引）：注册飞书组织（免费）→ 开放平台建**自建应用** → 开通最小权限：收单聊消息 `im:message.p2p_msg:readonly`、发消息与卡片 `im:message:send_as_bot`、表情回执 `im:message.reactions:write_only` → 事件订阅选**长连接模式** → 页面填 `app_id`/`app_secret` 保存 → 在飞书给机器人发一条消息（它不回复你），在「待加白发件人」里点「加白」→ 把「推送接收人」选成自己。
+推荐走 WebUI 顶栏「IM Channel」页（页面内置同样的指引）：注册飞书组织（免费）→ 开放平台建**自建应用** → 开通最小权限：收单聊消息 `im:message.p2p_msg:readonly`、发消息与卡片 `im:message:send_as_bot`、表情回执 `im:message.reactions:write_only` → 事件与回调页把订阅方式切到**长连接模式**，并在事件订阅设置里**添加事件** `im.message.receive_v1`（开权限不等于订阅事件，两个开关缺一不可）→ **创建版本并发布**（未发布的自建应用不推送任何事件）→ 页面填 `app_id`/`app_secret` 保存 → 在飞书给机器人发一条消息（它不回复你），在「待加白发件人」里点「加白」→ 把「推送接收人」选成自己。
 
 手工路径也保留：写 `~/.kclaw/feishu.json`（enabled=true）→ 重启 daemon；open_id 需在开发者后台调试台查询。
