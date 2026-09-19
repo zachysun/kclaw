@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/cli` 是 daemon 的终端客户端。`src/index.ts` 用 commander 组命令树并做入口分发；`src/chat.ts` 的 `runChat` 是交互式对话 REPL（REPL：read-eval-print loop，逐行读取输入、处理、打印结果、再等待下一行的交互循环）；`src/slash.ts` 是 REPL 内 `/` 命令的注册表机制（含 `<home>/commands/*.md` 的自定义命令加载与"已装技能即斜杠命令"的动态注册）；`src/file-refs.ts` 把消息里的 `@路径` 引用展开成内联文本或按需读取提示；`src/client.ts` 的 `KclawClient` 封装对 daemon 的 HTTP 与 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）两种调用。首次运行判定、配置向导与 `kclaw web` 见 [onboarding](./onboarding.md)。CLI 不持有业务状态，随时退出，daemon 不受影响。
+`packages/cli` 是 daemon 的终端客户端。`src/index.ts` 用 commander 组命令树并做入口分发；`src/chat.ts` 的 `runChat` 是交互式对话 REPL（REPL：read-eval-print loop，逐行读取输入、处理、打印结果、再等待下一行的交互循环）；`src/slash.ts` 是 REPL 内 `/` 命令的注册表机制（含 `<home>/commands/*.md` 的自定义命令加载与"已装技能即斜杠命令"的动态注册）；`src/file-refs.ts` 把消息里的 `@路径` 引用展开成内联文本或按需读取提示；`src/client.ts` 的 `KclawClient` 封装对 daemon 的 HTTP 与 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）两种调用。首次运行判定、配置 wizard 与 `kclaw web` 见 [onboarding](./onboarding.md)。CLI 不持有业务状态，随时退出，daemon 不受影响。
 
 ## 设计决策
 
@@ -13,14 +13,14 @@
 - **连接即自动启动 daemon**：`KclawClient.connect` 读 `<home>/daemon.json`、探活 `/health`，不健康就先 `ensureDaemon` 再重读——任何命令在冷机器上直接可用，用户不需要先知道 daemon 的存在。
 - **Node >= 22 是启动门槛**：解析 argv 之前检查 `process.versions.node` 主版本，不满足则打印一行错误并 `process.exit(1)`，避免旧运行时报出难懂的语法/API 错误（详见 [onboarding](./onboarding.md)）。
 - **表格输出零依赖**：`jobs list` 的表格是纯字符串对齐（`renderJobsTable`：按列宽 `padEnd`，两空格列间隔），不引入表格库；列头同时充当空列表时的输出。
-- **运行中发送不阻塞输入行，处置随每条发送显式携带**：发送与渲染由常驻帧泵（`startPump`——一个持续读取 socket 帧并分发给当前渲染的后台循环）接管，每次 `startRender` 递增渲染代际、旧渲染静默退场——run 中途照样能继续输入（`/interrupt`、忙时直发都依赖它）。每条 `send_message` 显式带 `disposition`（当前会话处置模式），模式由 `/steer`/`/wait` 切换、存会话级覆盖（与 Web 三选同源）；`interrupt` 是一次性动作，不做成模式（做成模式有"切了忘改回、接连中断 run"的误伤风险）。
-- **颜色只在 TTY 下生效**（TTY：终端这类交互式字符设备）：`dim`/`red` 输出 ANSI 转义序列（终端控制字符，用于改颜色/亮度），管道/重定向时输出纯文本，保证脚本经管道消费到纯文本。
+- **运行中发送不阻塞输入行，处置随每条发送显式附带**：发送与渲染由常驻帧泵（`startPump`，一个持续读取 socket 帧并分发给当前渲染的后台循环）接管，每次 `startRender` 递增渲染代际、旧渲染静默停止，run 中途照样能继续输入（`/interrupt`、忙时直发都依赖它）。每条 `send_message` 显式带 `disposition`（当前会话处置模式），模式由 `/steer`/`/wait` 切换、存会话级覆盖（与 Web 三选同源）；`interrupt` 是一次性动作，不做成模式（做成模式有"切了忘改回、接连中断 run"的误伤风险）。
+- **颜色只在 TTY 下生效**（TTY：终端这类交互式字符设备）：`dim`/`red` 输出 ANSI 转义序列（终端控制字符，用于改颜色/亮度），管道/重定向时输出纯文本，保证脚本经管道处理到纯文本。
 
 ## 命令表（packages/cli/src/index.ts）
 
 | 命令 | 行为 |
 |------|------|
-| `kclaw`（默认动作）/ `kclaw chat` | 进入 chat REPL（首次运行先执行 provider 判定与向导，见 [onboarding](./onboarding.md)） |
+| `kclaw`（默认动作）/ `kclaw chat` | 进入 chat REPL（首次运行先执行 provider 判定与 wizard，见 [onboarding](./onboarding.md)） |
 | `kclaw --session <id>` | 恢复指定会话；列表中查不到该 id 时报 "session not found" |
 | `kclaw --think` | REPL 显示 thinking 增量（暗色 `· ` 前缀，默认隐藏） |
 | `kclaw daemon start` | 确保 daemon 在运行（不在则启动），打印 pid 与端口；已在运行则打印 "daemon already running" |
@@ -82,7 +82,7 @@ export interface SlashCtx {
   sendInterrupt(text: string): void  // 一次性中断发送：带 interrupt 处置的 send_message（/interrupt 展开成这个）
   queueSnapshot?(): Promise<Array<{ messageId: string; disposition: string; text: string }>>
                                      // 读 GET /queue 的便捷包装（/queue 列表与排队计数用）
-  commandsDir?: string              // 自定义命令目录（<home>/commands，*.md）；缺省不加载
+  commandsDir?: string              // 自定义命令目录（<home>/commands，*.md）；默认不加载
 }
 export interface SlashCommand {
   name: string
@@ -101,17 +101,17 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 
 1. **建连**：`KclawClient.connect` → `resolveSessionId`（无 `--session` 时 `POST /sessions {workdir: cwd}` 新建，否则在 `GET /sessions` 里校验存在）→ `openSubscribed`：开 WS、发 `{type:"subscribe", sessionId}`、等 `subscribed` 确认（5s 内没等到，或收到 error 帧，直接报错关闭）。
 2. **读行**：`node:readline` 逐行读（刻意不用 @clack 的文本框：增量需直接 `process.stdout.write`，管道 stdin 也需逐行工作）。每行先过 `dispatch`：`/` 开头的按命令处理；普通消息发送前先做一遍 **`@路径` 引用展开**。展开流程：先调 `GET /sessions/:id` 拿到会话的工作目录（daemon 一时连不上就退回用进程 cwd，别让一次网络失败卡死输入循环）；然后 `expandFileRefs` 找出消息里每个 `@token`，相对 cwd 解析路径并经 realpath 校验，要求必须落在这个工作目录之内。对每个通过检查的文件按大小分两种处理：小的文本文件把正文直接内联进消息（格式为 `[来自 @路径]` + 正文，超过 8192 字符（8 KiB）截断并加 `\n…[已截断]`）；大文件或非文本文件则在消息末尾加一行提示 `[文件 @路径（N 字节）已引用，可用 fs_read 读取 <绝对路径>]`，内容由模型之后自己读。任何一个 token 越界、不存在或不是文件，整条消息就不发送，只打印一行 `引用失败: <原因>`。
-3. **发送与渲染**（`renderRun`）：发 `{type:"send_message", sessionId, text, disposition, attachments?}`——`disposition` 必带，取当前会话处置模式（`/steer`/`/wait` 切换，或 `/interrupt` 一次性注入；初始值 = 会话覆盖 `dispositionOverride` > 配置 `sessions.defaultDisposition` > steer）。之前用 `/attach` 上传累积的待发附件随这条帧一起发出，发完立即清空附件队列。发送与渲染**不阻塞输入行**：常驻帧泵（`startPump`）读取 socket 帧并分发给当前渲染，每次发送经 `startRender` 递增 `renderEpoch` 接手后续帧流的渲染，旧渲染静默退场——所以 run 中途还能继续输入（`/interrupt` 和忙时发送都依赖它）。按帧渲染直到 run 终态：
+3. **发送与渲染**（`renderRun`）：发 `{type:"send_message", sessionId, text, disposition, attachments?}`——`disposition` 必带，取当前会话处置模式（`/steer`/`/wait` 切换，或 `/interrupt` 一次性注入；初始值 = 会话覆盖 `dispositionOverride` > 配置 `sessions.defaultDisposition` > steer）。之前用 `/attach` 上传累积的待发附件随这条帧一起发出，发完立即清空附件队列。发送与渲染**不阻塞输入行**：常驻帧泵（`startPump`）读取 socket 帧并分发给当前渲染，每次发送经 `startRender` 递增 `renderEpoch` 接手后续帧流的渲染，旧渲染静默停止，run 中途还能继续输入（`/interrupt` 和忙时发送都依赖它）。按帧渲染直到 run 终态：
    - `text.delta` 原样写出（自带换行控制：`ensureLineStart` 保证块之间换行）；`thinking.delta` 仅 `--think` 时暗色输出。
    - `tool_call.completed` → `⚡ <name> <args>`，args 是紧凑 JSON、截断到 60 字符。
    - `tool_result.completed` → `↳ <status> (<n>ms) <output>`，输出压空白后取前 80 字符；`tool_result.delta` 不做实时渲染（completed 行已带摘要）。
    - `message.queued`（我的消息）→ 暗色 `已排队（第 N 位）`（`position+1`）或 `已进入引导缓冲`（steer 无 position）；`message.steered`（我的消息）→ 暗色 `已注入`——我的消息身份从 `send_message_ack` 的 `messageId` 学到，终点以"我的消息被看到（`message.created`/`message.steered`）之后的第一个 `run.completed`"判定，前一个 run 的终态不会错收我的渲染。
    - `confirmation.requested` → `⚠ <name> <argsJson> · 风险 <risk> · 过期 <expiresAt>`（带 `noteText` 时紧随一行暗色说明，如 exec 沙箱不可用），按 yes/no/ask 三种模式收集决定（ask 时暂停 readline、@clack 出确认框、恢复 readline）；ask 是**四项选择**——`允许（仅本次）` / `总是允许（本项目）` / `总是允许（全局）` / `拒绝`（`--yes`/`--no` 隐藏选项分别映射 once/reject；取消同样按拒绝），回发 `{type:"confirmation.resolve", confirmationId, decision}`（不带 `client` 字段 → 服务端记 "cli"）。"总是允许"会把一条收紧后的放行规则写入磁盘，之后同形操作不再询问（见 [permissions](../core/permissions.md) 的"沉淀规则"一节）。
-   - `question.requested`（ask_user_questions 工具）→ `❓ N 个问题待回答`（带 `noteText` 时附一行说明，如"来自子代理 X"），每题按选项（方向键 + 回车单选/多选）或自由文本（输入一行）收集，全部答完回发 `{type:"question.resolve", questionId, answers}`（每题一个字符串数组，未回答的题为空数组）。等待期间运行暂停，超时（默认 10 分钟）后工具以"用户未在限时内回答"收场（机制见 [tools](../core/tools.md)）。
+   - `question.requested`（ask_user_questions 工具）→ `❓ N 个问题待回答`（带 `noteText` 时附一行说明，如"来自 subagent X"），每题按选项（方向键 + 回车单选/多选）或自由文本（输入一行）收集，全部答完回发 `{type:"question.resolve", questionId, answers}`（每题一个字符串数组，未回答的题为空数组）。等待期间运行暂停，超时（默认 10 分钟）后工具以"用户未在限时内回答"收场（机制见 [tools](../core/tools.md)）。
    - `note.emitted` → 暗色 `[note] <text>`（记忆注入、job 来源等系统 note 每条一行）；`message.created/completed` 刻意不渲染（readline 已回显用户输入，再渲染会重复）。
-   - `compaction.started` → 暗色 `[正在压缩早期对话…]` 一行（收尾压缩发生在 `run.completed` 之后、中途/急救压缩发生在运行中的迭代边界——都有这行提示，摘要调用的数秒不是静默空窗）；`compaction.completed` → 按 `result` 三分支：`ok` 打暗色 `✱ 早期对话已压缩为 N 段，保留最近 M 条原文（早期细节可用 session_search 检索）`、`failed` 打暗色 `✱ 压缩失败，本轮继续（稍后自动重试）`、`cancelled` 打暗色 `✱ 压缩已取消`——事件只在真正发生压缩时发一次，天然是"每次压缩一条"的告知，与 WebUI 的折叠块同一去重语义（见 [compaction](../core/compaction.md)）。
+   - `compaction.started` → 暗色 `[正在压缩早期对话…]` 一行（收尾压缩发生在 `run.completed` 之后、中途/急救压缩发生在运行中的迭代边界，都有这行提示，摘要调用的数秒不是静默空窗）；`compaction.completed` → 按 `result` 三分支：`ok` 打暗色 `✱ 早期对话已压缩为 N 段，保留最近 M 条原文（早期细节可用 session_search 检索）`、`failed` 打暗色 `✱ 压缩失败，本轮继续（稍后自动重试）`、`cancelled` 打暗色 `✱ 压缩已取消`。事件只在真正发生压缩时发一次，天然是"每次压缩一条"的告知，与 WebUI 的折叠块同一去重语义（见 [compaction](../core/compaction.md)）。
    - `memory.written`（广播，不带 sessionId）→ 暗色一行 `已写入记忆: <path>`，提示记忆已写入；它与 run 生命周期无关，只是轻提示（见 [memory](../core/memory.md)）。
-   - `hook.failed` → 暗色一行 `⚠ 钩子 <名字> 失败（<位置>[ 装载]）：<原因>`——用户钩子失败不伤 run，但失败必须可见（机制见 [hooks](../core/hooks.md)）。
+   - `hook.failed` → 暗色一行 `⚠ 钩子 <名字> 失败（<位置>[ 装载]）：<原因>`，hook 失败不伤 run，但失败必须可见（机制见 [hooks](../core/hooks.md)）。
    - `run.completed`/`run.failed`/error 帧 → 结束本轮等待。
 4. **Ctrl+C 逐级升级**（readline 在待输行为空时把 Ctrl+C 转成 `"SIGINT"` 事件，`sigints` 计数只增不减）：第一次在 run 进行中 → 发 `{type:"run.cancel"}`（run 随后经正常渲染路径以 `stopReason:"aborted"` 结束），并查排队数，非空则提示"还有 N 条排队消息，再按一次 Ctrl+C 清空"；第一次空闲 → 同样查排队数，非空提示清空、为空提示"再按一次 Ctrl+C 退出"；第二次 → 队列非空则发 `{type:"queue.cancel"}` 清空全部可取消条目并提示"队列已清空，再按一次 Ctrl+C 退出"，队列为空直接退出；第三次 → 关闭 socket、关闭 readline、`process.exit(130)`。
 
@@ -119,11 +119,11 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 
 - **重连**（`reconnect`）：socket 意外关闭时重新 `KclawClient.connect`（daemon 已终止时重新启动一个）、重新订阅、`GET /sessions/:id/messages` 全量拉取一次进行对齐（不重放渲染），打印 `[reconnected]`；重连失败打印 `[连接断开，重连失败 — 输入 /exit 退出]` 并放弃。
 - **重发规则**：一条发送中的消息只有当**一帧都没观察到**（连 `send_message_ack` 都没有）才会在重连后重发——零帧说明消息从未到达存活的 daemon（ws 库对已关闭的 socket 静默丢帧、只在连接中才同步抛错，两者都等价于"未送达"）。观察到任何一帧即视为已送达，中途断线绝不重发：run 可能已在服务端排队，重发会导致同一消息被执行两次。
-- **120s 静默看门狗**：重连后观察到的帧带 `POST_RECONNECT_SILENCE_MS = 120_000` 的不活动超时——daemon 已终止的 run 永远不会完成，REPL 不可无限等待；超时打印提示后回到提示符。重连前的等待不加人为上限（`nextFrame` 对非有限超时直接跳过等待：node 会把 `setTimeout(fn, Infinity)` 钳到 1ms，反而会截断仍在运行的 run）。
+- **120s 静默看门狗**：重连后观察到的帧带 `POST_RECONNECT_SILENCE_MS = 120_000` 的不活动超时，已终止的 run 永远不会完成，REPL 不可无限等待；超时打印提示后回到提示符。重连前的等待不加人为上限（`nextFrame` 对非有限超时直接跳过等待：node 会把 `setTimeout(fn, Infinity)` 钳到 1ms，反而会截断仍在运行的 run）。
 
 ### 权限模式：提示符徽章与 Shift+Tab 循环
 
-提示符随会话权限模式变化：`default` 是裸 `> `；非默认模式前缀徽章 `[readonly] > ` / `[acceptEdits] > ` / `[trusted] > ` / `[auto] > `（run 进行中按下时徽章保持旧值，从下一次 run 起生效）。Shift+Tab 按 `PERMISSION_MODES` 顺序（readonly → default → acceptEdits → trusted → auto，严格在前）循环切换：`POST /sessions/:id/mode {mode}` 成功后更新本地镜像与提示符并打印 `权限模式: <模式>（Shift+Tab 继续切换）`，失败静默（徽章保持）。模式在 run 中切换同样落到下一次 run——daemon 的权限 gate 每 run 从会话 meta 读取。
+提示符随会话权限模式变化：`default` 是裸 `> `；非默认模式前缀徽章 `[readonly] > ` / `[acceptEdits] > ` / `[trusted] > ` / `[auto] > `（run 进行中按下时徽章保持旧值，从下一次 run 起生效）。Shift+Tab 按 `PERMISSION_MODES` 顺序（readonly → default → acceptEdits → trusted → auto，严格在前）循环切换：`POST /sessions/:id/mode {mode}` 成功后更新本地镜像与提示符并打印 `权限模式: <模式>（Shift+Tab 继续切换）`，失败静默（徽章保持）。模式在 run 中切换同样落到下一次 run，daemon 的权限 gate 每 run 从会话 meta 读取。
 
 ## slash 命令机制（packages/cli/src/slash.ts）
 
@@ -146,12 +146,12 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 | `/wait` | 同 `/steer`，处置为 wait：运行中发送的消息排队，当前 run 结束后执行 |
 | `/interrupt <消息>` | 一次性动作（不是模式）：带 interrupt 处置发送这条消息——服务端立即中止当前 run 并把消息插到队首执行；无参数时打印用法提示（纯中断用 Ctrl+C） |
 | `/queue [cancel <n\|all>]` | 不带参数时 `GET /sessions/:id/queue` 列出排队消息（`序号. 处置 文本`），空则"（队列为空）"；`cancel <n>` 按序号取消该条（发 `queue.cancel` 帧），`cancel all` 清空全部；读取失败打印 `读取队列失败: …` |
-| `/memory [save\|项目 [线]]` | 记忆命令（见 [memory](../core/memory.md)）：`save` 手动触发当前项目的手动写入（`POST /memory/trigger-manual`，工作目录取 CLI 启动目录，处理归属会话（缺省回落项目最近活动会话）自上次提取位置以来的新消息，成功打印 `已触发手动写入…`）；无 save 参数时是只读查看——无参列项目（`GET /memory/projects`）；指定项目列该项目的主题线（`GET /memory/projects/:id`）；再指定一条线打印线文件原文（`GET /memory/threads/:project/:topic`）；各级读取失败打印对应错误 |
+| `/memory [save\|项目 [线]]` | 记忆命令（见 [memory](../core/memory.md)）：`save` 手动触发当前项目的手动写入（`POST /memory/trigger-manual`，工作目录取 CLI 启动目录，处理归属会话（默认回退到项目最近活动会话）自上次提取位置以来的新消息，成功打印 `已触发手动写入…`）；无 save 参数时是只读查看——无参列项目（`GET /memory/projects`）；指定项目列该项目的主题线（`GET /memory/projects/:id`）；再指定一条线打印线文件原文（`GET /memory/threads/:project/:topic`）；各级读取失败打印对应错误 |
 | `/skill [名字]` | 技能命令（机制见 [skills](../core/skills.md)）：无参列出已装技能（`名字 · 全局\|项目 · [仅用户] · 描述`，作用域跟会话工作目录，经 `GET /skills?workdir=`）；带名字打印该技能的 `SKILL.md` 完整正文（`GET /skills/:name?workdir=`）；没有技能时提示 `（还没有技能。把技能目录放进 ~/.kclaw/skills/ 或工作区 .kclaw/skills/）`；失败打印 `查看技能失败: …` |
 | `/mcp [服务器名]` | MCP 状态一览（机制见 [mcp](../core/mcp.md)）：无参打印每个 server 一行（`名字 · 状态 · N 个工具[ · 最近错误]`，读 `GET /mcp` 快照），有失败项时附一行提示（重连与配置管理用 WebUI 的 MCP 页）；带名字打印该 server 的状态与工具清单（每工具一行 `mcp__<server>__<tool> — 描述`）；没有接入任何 server、名字未知、请求失败都打印对应提示行 |
 
-- **技能即斜杠命令**：每个已装且用户可见的技能自动注册成 `/<技能名> [要求]` 命令（`refreshSkillCommands`，启动时与每次切会话后各重拉一次，尽力而为：daemon 不可达则没有技能命令，内置命令——含 `/skill`——照常可用）。命令发送**用户原文**（要求写在命令后面时原样拼接进消息），点名交给 daemon 检测、正文仍经 `skill_read` 加载——`disable-model-invocation` 的技能由此获得手动入口。内置名优先：与内置命令重名的技能命令被丢弃；自定义 `commands/*.md`（先注册）同样优先于技能。命令名不出现在注册表里时 Tab 补全也能提示（见上文 Tab 补全）。
-- 自定义命令：`ctx.commandsDir`（daemon 装配为 `<home>/commands`）目录下的每个 `*.md` 文件注册成一个命令——文件名就是命令名，文件内容是一段提示词模板；执行命令时，模板里的 `{{args}}` 替换成命令参数，然后经 `ctx.send(text)` 作为普通消息发出。与内置命令重名的文件不生效，打印一行警告。
+- **技能即斜杠命令**：每个已装且用户可见的技能自动注册成 `/<技能名> [要求]` 命令（`refreshSkillCommands`，启动时与每次切会话后各重拉一次，尽力而为：daemon 不可达则没有技能命令，内置命令（含 `/skill`）照常可用）。命令发送**用户原文**（要求写在命令后面时原样拼接进消息），是否调用技能由 daemon 检测、正文仍经 `skill_read` 加载——`disable-model-invocation` 的技能由此获得手动入口。内置名优先：与内置命令重名的技能命令被丢弃；自定义 `commands/*.md`（先注册）同样优先于技能。命令名不出现在注册表里时 Tab 补全也能提示（见上文 Tab 补全）。
+- 自定义命令：`ctx.commandsDir`（daemon 组装为 `<home>/commands`）目录下的每个 `*.md` 文件注册成一个命令——文件名就是命令名，文件内容是一段提示词模板；执行命令时，模板里的 `{{args}}` 替换成命令参数，然后经 `ctx.send(text)` 作为普通消息发出。与内置命令重名的文件不生效，打印一行警告。
 - `switchSession` 在**同一 socket** 上发 `unsubscribe`（旧会话）+ `subscribe`（新会话），同时清空待发附件（附件是会话级的，换会话不带走）；`SlashCtx` 的 `client`/`sessionId` 是 getter，命令执行时看到的总是重连/切换后的当前值。
 
 ## 边界与出错
@@ -166,11 +166,11 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 
 ## 关联
 
-- [onboarding](./onboarding.md)：首次运行判定、配置向导、`kclaw web`、Node 版本检查
-- [daemon](../server/daemon.md)：daemon 探测/启动/停止的另一侧契约（`daemon-ctl.ts` 详解）
+- [onboarding](./onboarding.md)：首次运行判定、配置 wizard、`kclaw web`、Node 版本检查
+- [daemon](../server/daemon.md)：daemon 检测/启动/停止的另一侧契约（`daemon-ctl.ts` 详解）
 - [realtime](../server/realtime.md)：`/ws` 帧协议与订阅语义、断线恢复规则总述
 - [client-http](../core/client-http.md)：`request`/`uploadAttachment` 背后的共享 HTTP 请求基座
 - [run-manager](../server/run-manager.md)：`send_message`/`run.cancel`/确认在服务端的后续
 - [http-api](../server/http-api.md)：slash 命令、`jobs list`、`mcp list` 背后的 REST 端点
 - [mcp](../core/mcp.md)：`kclaw mcp [list]` 展示的状态快照与 `mcp__<server>__<tool>` 命名
-- [skills](../core/skills.md)：`/skill` 命令与技能即斜杠命令背后的技能包机制
+- [skills](../core/skills.md)：`/skill` 命令与技能即斜杠命令背后的技能机制

@@ -1,8 +1,8 @@
 # session-events — 持久化会话事件清单（21 种）
 
-> 真相源：`packages/core/src/protocol/session-events.ts`（运行时守卫与 meta 投影在 `core/src/session/events.ts`）。存储布局见 [storage](../core/storage.md)，读取接口 `GET /sessions/:id/events` 见 [http-api](../server/http-api.md)。
+> 权威来源：`packages/core/src/protocol/session-events.ts`（运行时守卫与 meta 投影在 `core/src/session/events.ts`）。存储布局见 [storage](../core/storage.md)，读取接口 `GET /sessions/:id/events` 见 [http-api](../server/http-api.md)。
 
-`events.jsonl` 每行一条 `SessionEvent`，是会话的唯一真相；`meta.json` 是它投影出来的快照。与[总线事件](./events.md)的区别：这些事件持久化、只追加、不改写历史行。
+`events.jsonl` 每行一条 `SessionEvent`，是会话的唯一权威数据；`meta.json` 是它投影出来的快照。与[总线事件](./events.md)的区别：这些事件持久化、只追加、不改写历史行。
 
 ## 核心源码
 
@@ -22,7 +22,7 @@ export type SessionEvent =
 
 | 类型 | 字段 |
 |------|------|
-| `session.created` | `at`、`title`、`workdir?`、`jobId?`、`mode?`（创建时固化的权限模式快照，旧流缺省 default）、`parentSessionId?`（子代理派生关系） |
+| `session.created` | `at`、`title`、`workdir?`、`jobId?`、`mode?`（创建时固化的权限模式快照，旧流默认 default）、`parentSessionId?`（subagent 派生关系） |
 | `session.renamed` | `at`、`title` |
 | `session.deleted` | `at` |
 | `session.restored` | `at` |
@@ -35,7 +35,7 @@ export type SessionEvent =
 | `message` | Message 全量（`{ type: "message" } & Message`） |
 | `message.truncated` | `at`、`fromMessageId`（从它起的消息退出对话视图；读取端投影过滤） |
 | `compaction` | `at`、`trigger`（manual/in-run/auto）、`emergency?`、`focus?`、`from`、`upto`、`messages`、`segmentSummary`、`top` |
-| `system` | `at`、`stable`、`live?`（双段系统提示词留痕，每 run 一条）、`text?`（legacy 单文本，读作 stable） |
+| `system` | `at`、`stable`、`live?`（双段系统提示词记录，每 run 一条）、`text?`（legacy 单文本，读作 stable） |
 | `sandbox.checked` | `at`、`enabled`、`available`、`unavailableReason?`（每 run 一条，不进投影） |
 
 ### 运行档案（3 种）
@@ -54,7 +54,7 @@ export type SessionEvent =
 
 ### 团队协作（7 种，TeamAuditEvent）
 
-只追加在组长的事件流上；协作状态真相在团队目录（`.kclaw/teams|tasks/<队名>/`），事件仅审计留痕；每条带 `version`（当前 1），不进 meta 投影、不推进 updatedAt，写失败降级为警告。
+只追加在组长的事件流上；协作状态以团队目录为准（`.kclaw/teams|tasks/<队名>/`），事件仅作审计记录；每条带 `version`（当前 1），不进 meta 投影、不推进 updatedAt，写失败降级为警告。
 
 | 类型 | 字段 |
 |------|------|

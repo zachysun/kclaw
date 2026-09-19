@@ -25,7 +25,7 @@ npm i -g ./packages/kclaw   # 把聚合包安装为全局 kclaw 命令
 kclaw chat
 ```
 
-尚未配置模型、且在交互式终端里运行时，`kclaw chat` 会进入一个 30 秒左右的配置向导。向导只做一件事：把模型配置写入 `~/.kclaw/config.json`，完成后以后不再出现。
+尚未配置模型、且在交互式终端里运行时，`kclaw chat` 会进入一个 30 秒左右的配置 wizard。wizard 只做一件事：把模型配置写入 `~/.kclaw/config.json`，完成后不再出现。
 
 ### 路线一：DeepSeek 模板（粘贴 key）
 
@@ -38,7 +38,7 @@ kclaw chat
 
 选模板 `Ollama (local)`：接口地址已预填本机 `http://127.0.0.1:11434/v1`，key 这一步直接跳过，只输入模型名——填入前面 `ollama pull` 下载的那个名字（不确定时可先执行 `ollama list` 查看），其余步骤相同。
 
-### 向导失败的处理
+### wizard 失败的处理
 
 连通测试失败时，kclaw 将错误归为三类，以一句说明文字提示原因，并询问是否重试；重试回到对应步骤：
 
@@ -48,9 +48,9 @@ kclaw chat
 | 模型名不对（404/400） | 服务端不识别该模型名 | Ollama 用 `ollama list` 核对；DeepSeek 直接回车使用默认值 |
 | 连不上服务端 | 请求未送达 | 网络是否可用、接口地址是否正确（Ollama 需先启动） |
 
-选「否」或按 Ctrl+C 都会正常退出，不写入任何文件；下次 `kclaw chat` 会重新进入向导。
+选「否」或按 Ctrl+C 都会正常退出，不写入任何文件；下次 `kclaw chat` 会重新进入 wizard。
 
-不走向导时，可手动编写 `~/.kclaw/config.json`，或设置 `KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY / KCLAW_LLM_MODEL` 环境变量，格式见 [README](../README.zh-CN.md) 的「配置」一节。
+不走 wizard 时，可手动编写 `~/.kclaw/config.json`，或设置 `KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY / KCLAW_LLM_MODEL` 环境变量，格式见 [README](../README.zh-CN.md) 的「配置」一节。
 
 ## 3. 第一轮对话
 
@@ -94,7 +94,7 @@ REPL 里用 `/` 开头的命令管理会话：
 | `/steer` `/wait` | 切换本会话的默认发送处置（引导正在进行的回复 / 排队等当前回复结束后执行） |
 | `/interrupt <消息>` | 以「中断」方式发送：立即停掉正在进行的回复，把这条消息插到最前执行 |
 | `/queue` | 查看排队中的消息（`cancel <序号>` 取消某条，`cancel all` 清空） |
-| `/memory` | 查看记忆塔：列出项目，或进一步查看某个项目的主题线、某条线的全文 |
+| `/memory` | 查看记忆系统：列出项目，或进一步查看某个项目的主题线、某条线的全文 |
 | `/help` | 列出所有可用命令（输错命令时会提示查阅） |
 | `/exit` | 退出 REPL |
 
@@ -112,14 +112,14 @@ REPL 里用 `/` 开头的命令管理会话：
 记住：我住在上海，习惯用中文回复
 ```
 
-agent 会把这条信息写进记忆塔的 markdown 文件（`~/.kclaw/memory/` 下，「塔」指它的两层结构：当前项目的**项目情节**存在 `projects/<项目id>/<主题>.md`，跨项目的长期偏好会进一步内化——也就是整理成不依赖单个项目的全局认知，如 `global/persona.md`）；全文检索索引是派生的 `vectors.db`（SQLite FTS5 + 向量，删掉可重建）。详细机制见 [memory](./core/memory.md)。
+agent 会把这条信息写进记忆系统的 markdown 文件（`~/.kclaw/memory/` 下，分两层：当前项目的**项目情节**存在 `projects/<项目id>/<主题>.md`，跨项目的长期偏好会进一步沉淀——也就是整理成不依赖单个项目的全局认知，如 `global/persona.md`）；全文检索索引是派生的 `vectors.db`（SQLite FTS5 + 向量，删掉可重建）。详细机制见 [memory](./core/memory.md)。
 
 验证跨会话生效：
 
 1. `/clear` 创建一个新会话。
 2. 问：`我住哪？`
 
-agent 每轮回复前都会先检索相关记忆，因此即使更换了会话，它也应知道用户住在上海。要查看、修改、删除某条记忆，可以在 WebUI 的「记忆」页点开编辑/删除，或直接编辑/删除对应的 `.md` 文件——daemon 下次启动（或下一次写入）时会重新整理索引。
+agent 每轮回复前都会先检索相关记忆，因此即使更换了会话，它也应知道用户住在上海。要查看、修改、删除某条记忆，可以在 WebUI 的「记忆」页点开编辑/删除，或直接编辑/删除对应的 `.md` 文件，下次启动（或下一次写入）时会重新整理索引。
 
 ## 6. 定时任务
 
@@ -160,10 +160,10 @@ token 的处理：页面获取 token 后存入浏览器本地存储并从地址�
 |------|-----------|
 | 对话 | 与 CLI 相同的流式对话和确认卡片；切换到别的页面时对话不中断。文件可直接拖进聊天区，随下一条消息发送 |
 | 任务 | 定时任务的增删改、启用开关、执行结果（上一节用的就是它） |
-| 审计 | 会话事件流的逐行回看：消息与工具调用、压缩、记忆写入、每轮运行的起止、权限裁决等全部留痕（最新在最下面） |
+| 审计 | 会话事件流的逐行回看：消息与工具调用、压缩、记忆写入、每轮运行的起止、权限裁决等全部留有记录（最新在最下面） |
 | 用量 | token 用量与费用统计：按天、按会话两张表，可导出 JSON |
 | 回收站 | 被删除的会话，可恢复或彻底删除 |
-| 记忆 | 记忆塔管理：项目情节 / 全局认知的查看与整文件编辑 |
+| 记忆 | 记忆系统管理：项目情节 / 全局认知的查看与整文件编辑 |
 | 技能 | 已装技能的清单与 SKILL.md 正文（只读） |
 | 权限 | 沉淀下来的权限规则（全局档与项目档）的查看与删除 |
 | MCP | 已配置的 MCP 服务器管理：连接状态、启停、重连、增删改（机制见 [mcp](./core/mcp.md)） |
@@ -177,12 +177,12 @@ token 的处理：页面获取 token 后存入浏览器本地存储并从地址�
 
 ```text
 ~/.kclaw/
-├── config.json      # 模型配置（向导写的就是它）
+├── config.json      # 模型配置（wizard 写的就是它）
 ├── AGENTS.md        # agent 人设，会注入系统提示词
 ├── token            # 访问凭证
 ├── daemon.json      # daemon 运行信息（端口、pid）
-├── sessions/        # 每个会话一个目录：events.jsonl 完整事件流（真相）+ meta.json 投影 + queue.jsonl 排队
-├── memory/          # 记忆塔：global/（全局认知）+ projects/<项目id>/（项目情节），含 vectors.db 检索索引
+├── sessions/        # 每个会话一个目录：events.jsonl 完整事件流（权威数据）+ meta.json 投影 + queue.jsonl 排队
+├── memory/          # 记忆系统：global/（全局认知）+ projects/<项目id>/（项目情节），含 vectors.db 检索索引
 ├── jobs.db          # 定时任务
 ├── usage.db         # token 用量记录
 ├── attachments/     # 附件（WebUI/CLI 上传的文件保存在这里）
@@ -190,7 +190,7 @@ token 的处理：页面获取 token 后存入浏览器本地存储并从地址�
 └── logs/            # 日志
 ```
 
-目录里若还有旧版的 `config.yaml`（`config.json` 出现前的配置格式），它仍被兼容读取，已有旧配置也能照常运行；任一程序写入（向导或 WebUI 保存）后 `config.json` 成为正式配置，旧文件改名为 `config.yaml.bak` 弃用。
+目录里若还有旧版的 `config.yaml`（`config.json` 出现前的配置格式），它仍被兼容读取，已有旧配置也能照常运行；任一程序写入（wizard 或 WebUI 保存）后 `config.json` 成为正式配置，旧文件改名为 `config.yaml.bak` 留作备份。
 
 > [!TIP]
 > 备份或迁移 kclaw，复制这个目录即可。
@@ -210,4 +210,4 @@ kclaw daemon status   # 查看状态（kclaw status 是同一命令的别名）
 
 - **配置全表**（[storage](./core/storage.md)）：`workspace` 限定文件工具的活动范围；`permissions.allow` 可以让某些命令跳过确认（如 `exec:git *`）；`exec.timeoutMs` 控制命令超时；`~/.kclaw/AGENTS.md` 定义 agent 人设。模型 provider 的配置见 [README](../README.zh-CN.md) 的「配置」一节。
 - **扩展指南**（[extending](./extending.md)）：为 kclaw 增加新功能时的切入点。
-- **架构总纲**（[architecture](./architecture.md)）：阅读内部实现时的入口文档。
+- **架构总览**（[architecture](./architecture.md)）：阅读内部实现时的入口文档。

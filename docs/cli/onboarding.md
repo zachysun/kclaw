@@ -2,15 +2,15 @@
 
 ## 职责
 
-`packages/cli` 的首次运行链路包含三个模块：`src/provider-check.ts` 的 `detectProviderStatus` 判定模型配置的来源（决定是否进入向导）；`src/wizard.ts` 的 `runWizard` 是 30 秒配置向导（选模板 → 输入 key → 连通测试 → 写 config.json）；`src/web-cmd.ts` 的 `webAction` 实现 `kclaw web`（确保 daemon 在运行、携带 token 打开浏览器）。加上 `src/index.ts` 入口的 Node >= 22 版本检查，共同构成首次执行 `kclaw` 能顺利使用的全部路径。
+`packages/cli` 的首次运行链路包含三个模块：`src/provider-check.ts` 的 `detectProviderStatus` 判定模型配置的来源（决定是否进入 wizard）；`src/wizard.ts` 的 `runWizard` 是 30 秒配置 wizard（选模板 → 输入 key → 连通测试 → 写 config.json）；`src/web-cmd.ts` 的 `webAction` 实现 `kclaw web`（确保 daemon 在运行、附带 token 打开浏览器）。加上 `src/index.ts` 入口的 Node >= 22 版本检查，共同构成首次执行 `kclaw` 能顺利使用的全部路径。
 
 ## 设计决策
 
-- **判定优先级：config > env > missing**：`config.json` 里 `providers.default` 指向一个存在的条目即视为已配置（`config.json` 出现前的旧 `config.yaml` 兼容读取，判定相同）；否则任一非空的 `KCLAW_LLM_*` 环境变量视为已配置；两者都缺失才判定为 "missing"（触发向导）。与 daemon 侧 `resolveProviderEndpoint` 的解析规则同向：config 优先、env 补缺。
-- **路径解析复用 core**：`detectProviderStatus` 与向导都用 `@kclaw/core` 的 `resolvePaths`/`loadConfig`/`saveConfig`（真实的 `KclawPaths` 形状），不自建替代实现，CLI 侧的路径解析永远不会与 daemon 发生漂移（其 mkdir 副作用只是提前创建 home 目录树，任何 kclaw 调用本来也会创建）。
-- **向导是验证环节不是必经之路**：只在 "missing" 且 stdout 是 TTY 时启动；取消（Ctrl+C 等）或"重试？→否"都直接静默退出，**文件系统零改动**——绝不写入不完整的 config.json。
+- **判定优先级：config > env > missing**：`config.json` 里 `providers.default` 指向一个存在的条目即视为已配置（`config.json` 出现前的旧 `config.yaml` 兼容读取，判定相同）；否则任一非空的 `KCLAW_LLM_*` 环境变量视为已配置；两者都缺失才判定为 "missing"（触发 wizard）。与 daemon 侧 `resolveProviderEndpoint` 的解析规则同向：config 优先、env 补缺。
+- **路径解析复用 core**：`detectProviderStatus` 与 wizard 都用 `@kclaw/core` 的 `resolvePaths`/`loadConfig`/`saveConfig`（真实的 `KclawPaths` 形状），不自建替代实现，CLI 侧的路径解析永远不会与 daemon 发生漂移（其 mkdir 副作用只是提前创建 home 目录树，任何 kclaw 调用本来也会创建）。
+- **wizard 是验证环节不是必经之路**：只在 "missing" 且 stdout 是 TTY 时启动；取消（Ctrl+C 等）或"重试？→否"都直接静默退出，**文件系统零改动**——绝不写入不完整的 config.json。
 - **连通测试用最小请求**：一次 `max_tokens: 1` 的补全请求，验证 key、model、baseUrl 三项组合可用，不浪费 token。
-- **key 文件权限 0600**：`saveConfig` 本身就是原子写（`writeFileAtomic`：临时文件写入后 rename，mode 直接 0600）；向导保存后再 `chmodSync(paths.config, 0o600)` 是双保险——若该文件此前以更宽权限存在也一并收紧。API key 持久化在这个文件里，仅属主可读写。
+- **key 文件权限 0600**：`saveConfig` 本身就是原子写（`writeFileAtomic`：临时文件写入后 rename，mode 直接 0600）；wizard 保存后再 `chmodSync(paths.config, 0o600)` 是双保险——若该文件此前以更宽权限存在也一并收紧。API key 持久化在这个文件里，仅属主可读写。
 - **`kclaw web` 不向用户展示 token**：URL 带 token 只用于浏览器一次交接，终端打印的地址刻意去掉 `?token=` 部分（用户能看见/分享的是不带 token 的 URL）。
 
 ## provider 判定（packages/cli/src/provider-check.ts）
@@ -31,7 +31,7 @@ export function detectProviderStatus(home: string): ProviderStatus
 - `"missing"` + TTY → `runWizard(home)`；返回 `"aborted"` 时静默返回（不写入任何文件），`"configured"` 时继续进入 chat。
 - `"missing"` + 非 TTY（管道/CI）→ 打印一行指引并退出：`no llm provider configured — run 'kclaw chat' in a terminal to run the setup wizard, see README`。
 
-## 向导流程（packages/cli/src/wizard.ts）
+## wizard 流程（packages/cli/src/wizard.ts）
 
 四个模板（`PROVIDER_TEMPLATES`）：
 
@@ -84,7 +84,7 @@ export async function webAction(home: string): Promise<void>
 
 浏览器侧的接收：WebUI 启动时把 `?token=` 存进 localStorage 并从地址栏清除（`bootstrapToken`，见 [webui](../web/webui.md)）。
 
-## Node >= 22 版本检查（packages/cli/src/index.ts)
+## Node >= 22 版本检查（packages/cli/src/index.ts）
 
 `invokedAsMain`（作为入口执行）时，在 `program.parseAsync` **之前**检查：
 
@@ -100,15 +100,15 @@ if (major < 22) {
 
 ## 边界与出错
 
-- **向导不修改 config.json 之外的任何文件**（成功保存时旧 `config.yaml` 改名为 `config.yaml.bak` 除外）：中途任何取消点都返回 `"aborted"` 且无文件写入。
-- **非交互终端没有向导**：只打印一行指引，面向脚本/CI 场景（脚本/CI 场景不应出现交互式提问）。
+- **wizard 不修改 config.json 之外的任何文件**（成功保存时旧 `config.yaml` 改名为 `config.yaml.bak` 除外）：中途任何取消点都返回 `"aborted"` 且无文件写入。
+- **非交互终端没有 wizard**：只打印一行指引，面向脚本/CI 场景（脚本/CI 场景不应出现交互式提问）。
 - **连通测试超时 20s**：`AbortSignal.timeout` 中止请求，status 记为 null → 按 network 类报错。
 - **`kclaw web` 无浏览器命令的平台**：Windows 等 `openCommandFor` 返回 null 的平台退化为打印 URL（token 完整可见，用户自行打开）。
 - **token 文件缺失**：`ensureDaemon` 启动的 launch 会创建 `<home>/token`，所以 `webAction` 读它时必然存在；daemon 已在运行时该文件同样存在（token 跨重启复用，见 [daemon](../server/daemon.md)）。
 
 ## 关联
 
-- [cli](./cli.md)：向导之后的 REPL、命令树全貌
+- [cli](./cli.md)：wizard 之后的 REPL、命令树全貌
 - [provider](../core/provider.md)：配置写入后 daemon 如何用它构造 LLM 客户端
-- [daemon](../server/daemon.md)：`ensureDaemon` 的探测/启动细节、token 的生成与复用
+- [daemon](../server/daemon.md)：`ensureDaemon` 的检测/启动细节、token 的生成与复用
 - [webui](../web/webui.md)：`?token=` 握手在浏览器侧的接收

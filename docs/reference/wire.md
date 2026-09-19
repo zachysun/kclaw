@@ -1,6 +1,6 @@
 # wire — WS 指令帧与应答帧清单
 
-> 真相源：`packages/core/src/protocol/wire.ts`。字段校验规则与报错文案见 [realtime](../server/realtime.md)（server 的 `command-check.ts`）。
+> 权威来源：`packages/core/src/protocol/wire.ts`。字段校验规则与报错文案见 [realtime](../server/realtime.md)（server 的 `command-check.ts`）。
 
 WS 连接上双向传输的帧。客户端 → daemon 是指令帧（`ClientCommand`），daemon → 客户端是应答帧（`ServerAck`）、总线[事件](./events.md)或 error 帧，合并为 `ServerFrame`。
 
@@ -12,7 +12,7 @@ export type SendDisposition = "steer" | "wait" | "interrupt"
 
 export interface AttachmentRef { path: string; name: string; size: number; mimeType: string }
 
-/** 机器来源说明：随队列条目落成用户消息上的 note 块（kind 见 blocks.md NoteKind）。 */
+/** 机器来源说明：随队列条目落到用户消息上的 note 块（kind 见 blocks.md NoteKind）。 */
 export interface QueueNote { kind: NoteKind; text: string }
 
 /** One persisted queue entry in queue.jsonl. */
@@ -44,7 +44,7 @@ export type ServerFrame = AgentEvent | ServerAck | ErrorFrame
 | `unsubscribe` | `sessionId` | 取消订阅 |
 | `send_message` | `sessionId`、`text`、`disposition?`、`attachments?`、`target?` | 发消息；`target` 是团队组员名（带它时改走组员收信箱投递，不经本会话 run） |
 | `message.retry` | `sessionId`、`fromMessageId`、`text`、`attachments?` | 编辑重试/重新生成：从 fromMessageId（须为最后一条 user 消息）截断重跑 |
-| `queue.cancel` | `sessionId`、`messageId?` | 取消排队条目；messageId 缺省 = 清空全部可取消条目 |
+| `queue.cancel` | `sessionId`、`messageId?` | 取消排队条目；messageId 默认 = 清空全部可取消条目 |
 | `confirmation.resolve` | `confirmationId`、`decision`、`client?` | 人工确认裁决（decision 四值，见下） |
 | `question.resolve` | `questionId`、`answers`、`client?` | 回答运行中提问（answers 为 string[][]，按提问顺序） |
 | `run.cancel` | `sessionId` | 停止当前 run |

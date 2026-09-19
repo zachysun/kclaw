@@ -8,7 +8,7 @@
 2. 解析流式响应
 3. 给整个请求加超时
 4. 对临时性失败做带退避的重试
-5. 提供内置供应商预设目录与模型列表探测（供 WebUI 的 Model 页消费）
+5. 提供内置供应商预设目录与模型列表检测（供 WebUI 的 Model 页处理）
 
 不读配置、不感知进程模型：每个 provider 条目（`providers.entries` 的一项 = 一个端点 + 一个模型）的 baseUrl/apiKey/model/格式由 daemon 侧负责（见下文"端点与模型解析"）。
 
@@ -16,13 +16,13 @@
 
 ## 设计决策
 
-- **每个条目是一种协议 + 一个真实端点**：条目的 `format` 字段（`openai | anthropic`，缺省 `openai`）决定请求怎么发；每个条目拥有自己的 baseUrl/apiKey——会话切到某条目就是真正换供应商，而不是把模型名发给默认端点。`createProviderClient`（factory.ts）是唯一的按格式选实现点，新增协议只能在这里接线。
-- **openai 格式的适用面**：任何提供 OpenAI 兼容 `/chat/completions` 端点的服务（OpenAI、DeepSeek、Ollama、各类中转、本地模型网关）都无需单独适配；差异全部留在 baseUrl 指向的端点上。
+- **每个条目是一种协议 + 一个真实端点**：条目的 `format` 字段（`openai | anthropic`，默认 `openai`）决定请求怎么发；每个条目拥有自己的 baseUrl/apiKey——会话切到某条目就是真正换供应商，而不是把模型名发给默认端点。`createProviderClient`（factory.ts）是唯一的按格式选实现点，新增协议只能在这里接线。
+- **openai 格式的适用范围**：任何提供 OpenAI 兼容 `/chat/completions` 端点的服务（OpenAI、DeepSeek、Ollama、各类中转、本地模型网关）都无需单独适配；差异全部留在 baseUrl 指向的端点上。
 - **core 与传输解耦**：`agent/loop.ts` 只依赖 `LlmClient` 这个 async iterable 接口，不知道 fetch、SSE（Server-Sent Events：服务器通过 HTTP 持续推送文本行的流式格式）的存在；测试注入假 client 即可完整运行整个循环。
 - **超时覆盖整个请求**：`AbortSignal.timeout` 同时约束"等响应头"和"读流式响应体"两个阶段——停滞的 provider 流（无响应头、或响应体中途停止）不可能使一个 run 永久停滞。
-- **超时与 HTTP 错误共用一套消息格式**：失败统一抛成 `llm http <status>` 或 `llm http timeout after <n>ms` 字符串，`retry.ts` 用正则识别——分类方（openai-compat）与消费方（retry）靠这个消息约定耦合，改任何一侧都要保持同步。
-- **重试封装在 client 内部，不在循环层**：`runAgent` 调一次 `stream()` 就是完整的一次"可能含内部重试"的调用；循环层再重试会形成双重重试。重试经 `withRetry` 的 `onRetry` 回调对外可见——daemon 把它接到循环的 `onLlmRetry` 钩子，转成 `llm.failed {willRetry:true}` 事件（见 [agent-loop](./agent-loop.md)）。
-- **已产出事件绝不重试**：流已产出过事件即说明消费方可能已收到，重试会造成输出重复——此时错误直接抛出。
+- **超时与 HTTP 错误共用一套消息格式**：失败统一抛成 `llm http <status>` 或 `llm http timeout after <n>ms` 字符串，`retry.ts` 用正则识别——分类方（openai-compat）与使用方（retry）靠这个消息约定耦合，改任何一侧都要保持同步。
+- **重试封装在 client 内部，不在循环层**：`runAgent` 调一次 `stream()` 就是完整的一次"可能含内部重试"的调用；循环层再重试会形成双重重试。重试经 `withRetry` 的 `onRetry` 回调对外可见，把它接到循环的 `onLlmRetry` hook，转成 `llm.failed {willRetry:true}` 事件（见 [agent-loop](./agent-loop.md)）。
+- **已产出事件绝不重试**：流已产出过事件即说明使用方可能已收到，重试会造成输出重复——此时错误直接抛出。
 - **参数原文不动**：工具调用的参数以原始 JSON 字符串（`argsJson`）透传，不在 provider 层解析；解析失败的处理属于循环层。（例外：anthropic 格式要把参数变成 Messages API 的 `tool_use.input` 对象，请求侧做一次 `JSON.parse`，解析失败按空对象。）
 - **多模态按协议整形**：user 消息的 `content` 允许是数组（文本段 + `image_url` 图片段）。openai 格式原样放进请求体；anthropic 格式把 `data:` URL 解成 base64 source 块、http(s) URL 解成 url source 块——是否真能"看懂"图片由模型决定，协议层不解释。
 
@@ -61,7 +61,7 @@ export type LlmStreamEvent =
   | { type: "message_done"; stopReason: StopReason; usage: Usage }
 ```
 
-两个协议实现 + 一个按条目选择实现 + 一个探测（组合使用）：
+两个协议实现 + 一个按条目选择实现 + 一个检测（组合使用）：
 
 ```ts
 // packages/core/src/provider/openai-compat.ts
@@ -72,7 +72,7 @@ export function createOpenAiCompatClient(opts: {
 
 // packages/core/src/provider/anthropic.ts
 export const ANTHROPIC_VERSION = "2023-06-01"          // anthropic-version 头的值
-export const ANTHROPIC_DEFAULT_MAX_TOKENS = 8192      // Messages API 必填 max_tokens 的缺省
+export const ANTHROPIC_DEFAULT_MAX_TOKENS = 8192      // Messages API 必填 max_tokens 的默认
 export function createAnthropicClient(opts: { baseUrl: string; apiKey: string; fetchImpl?: typeof fetch; timeoutMs?: number }): LlmClient
 
 // packages/core/src/provider/factory.ts — 按条目 format 选实现（唯一选择点）
@@ -82,7 +82,7 @@ export function createProviderClient(opts: { entry: ProviderEntry; timeoutMs?: n
 export const PROVIDER_PRESETS: readonly ProviderPreset[]
 export function parseProviderEntry(input: unknown): ProviderEntry
 
-// packages/core/src/provider/probe.ts — 模型列表探测（兼作连接验证）
+// packages/core/src/provider/probe.ts — 模型列表检测（兼作连接验证）
 export function fetchProviderModels(opts: { format: ProviderApiFormat; baseUrl: string; apiKey: string; fetchImpl?: typeof fetch; timeoutMs?: number }): Promise<string[]>
 
 // packages/core/src/provider/retry.ts
@@ -98,7 +98,7 @@ export function withRetry(client: LlmClient, opts?: {
 
 条目校验（`parseProviderEntry`）除 format/baseUrl/apiKey/model 外，还要求 `contextWindow`/`maxOutput` 声明时必须是正数，否则抛 `"<key> must be a positive number"`——新增/编辑条目经此校验，WebUI 把它转成表单内的错误。
 
-daemon 侧的装配（`packages/server/src/daemon.ts`）：
+daemon 侧的组装（`packages/server/src/daemon.ts`）：
 
 ```ts
 export function resolveProviderEndpoint(cfg: KclawConfig): { baseUrl: string; apiKey: string }
@@ -131,7 +131,7 @@ export function defaultLlmFactory(cfg: KclawConfig, onRetry?, entryKey?): LlmCli
 - assistant 的 `toolCalls` 转成 `tool_use` 块（`{id: callId, name, input: JSON.parse(argsJson)}`，解析失败按 `{}`）；content 为空且无 toolCalls 的空 assistant 轮整个丢弃（API 拒收空 content）。
 - 连续的 tool 结果消息合并成**一条** user 消息里的多个 `{"type":"tool_result","tool_use_id":…,"content":…}` 块（API 规定 tool_result 只能出现在 user 轮）。
 - 工具定义转 `{name, description, input_schema: parameters}`；`max_tokens` 必填——条目未声明 `maxOutput` 时用 `ANTHROPIC_DEFAULT_MAX_TOKENS`（8192）。
-- 请求体 `stream: true`；URL 规则见 `anthropicEndpoint`：baseUrl 以 `/v1` 结尾则直接拼路径，否则插入 `/v1`（官方裸域与中转带版本两种习惯都吃）；鉴权用 `x-api-key` + `anthropic-version: 2023-06-01` 头，apiKey 为空时不发。
+- 请求体 `stream: true`；URL 规则见 `anthropicEndpoint`：baseUrl 以 `/v1` 结尾则直接拼路径，否则插入 `/v1`（官方裸域与中转带版本两种都支持）；鉴权用 `x-api-key` + `anthropic-version: 2023-06-01` 头，apiKey 为空时不发。
 
 ### 2. 流式解析（SSE 循环，两格式各自的映射）
 
@@ -141,9 +141,9 @@ openai 格式每个 chunk 的映射：
 
 - `delta.reasoning_content` → `thinking_delta`（推理文本）；
 - `delta.content` → `text_delta`；
-- `chunk.usage` → 记为 `{inputTokens: prompt_tokens, outputTokens: completion_tokens}`，缺省按 0；
+- `chunk.usage` → 记为 `{inputTokens: prompt_tokens, outputTokens: completion_tokens}`，默认按 0；
 - `choices[0].finish_reason` → 记下，流结束时装进 `message_done`；
-- `delta.tool_calls[]`：一个 index 的**第一帧**（带 `id` 或 `function.name` 的那个）发 `tool_call_started`（无 id 时用 `call_idx_${index}` 代替 callId，name 缺省空串）；后续帧的 `function.arguments` 片段逐个发 `tool_call_delta`。
+- `delta.tool_calls[]`：一个 index 的**第一帧**（带 `id` 或 `function.name` 的那个）发 `tool_call_started`（无 id 时用 `call_idx_${index}` 代替 callId，name 默认空串）；后续帧的 `function.arguments` 片段逐个发 `tool_call_delta`。
 
 undefined、null、`""` 三种"无内容"情况统一跳过——这保证"完全没有参数流的调用"（arguments 从未出现）也能存活，循环层将其按 `{}` 解析。
 
@@ -185,13 +185,13 @@ content_filter→ content_filter  stop_sequence   → stop_sequence
 null / 未知名 → end_turn
 ```
 
-anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_tokens` / `tool_use` / `stop_sequence` 直通），仅 `refusal` 映射为 `content_filter`，未知值回落 `end_turn`。
+anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_tokens` / `tool_use` / `stop_sequence` 直通），仅 `refusal` 映射为 `content_filter`，未知值回退到 `end_turn`。
 
 7 个值中的 `aborted` 与 `error` 永远不来自 provider：前者由循环在各取消检查点打上，后者标记流彻底失败的消息。归一化让 `runAgent` 的分派逻辑只认这 7 个值，与具体 provider 的用词解耦。
 
 ### 6. 端点与模型解析（daemon 侧，config 优先于环境变量）
 
-**启动闸门**：`resolveProviderEndpoint` / `resolveModel`（`packages/server/src/daemon.ts`）在启动时做一次 fail-fast 校验，经 `valueOrEnv` 实现——config 条目的值非空就用它，为空再看环境变量：
+**启动校验**：`resolveProviderEndpoint` / `resolveModel`（`packages/server/src/daemon.ts`）在启动时做一次 fail-fast 校验，经 `valueOrEnv` 实现——config 条目的值非空就用它，为空再看环境变量：
 
 | 项 | config 来源 | 环境变量 |
 |----|-------------|----------|
@@ -204,28 +204,28 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 - CLI 首次运行判定（`packages/cli/src/provider-check.ts` 的 `detectProviderStatus`）用同一套优先级输出三态：`config`（default 指向存在的条目）/ `env`（任一 `KCLAW_LLM_*` 非空）/ `missing`。
 - `providers.timeoutMs` 未配置时由 `loadConfig` 的默认值补齐为 `DEFAULT_LLM_TIMEOUT_MS`（120s）。
 
-**按条目建连**（`createEntryLlmFactory`）：每个 run 的客户端由 `llmForRun(onRetry, entryKey)` 给出，`entryKey` 来自 `resolveRunModel` 的解析结果（run 装配先解析条目、再建客户端）。工厂的取值链：条目命中 → 该条目的 format 决定协议实现（`createProviderClient`）；条目缺失（key 为空或不存在）→ 回落默认条目；连默认条目都没有 → 回落环境变量端点（openai 格式）。
+**按条目建连**（`createEntryLlmFactory`）：每个 run 的客户端由 `llmForRun(onRetry, entryKey)` 给出，`entryKey` 来自 `resolveRunModel` 的解析结果（run 组装先解析条目、再建客户端）。工厂的取值链：条目命中 → 该条目的 format 决定协议实现（`createProviderClient`）；条目缺失（key 为空或不存在）→ 回退到默认条目；连默认条目都没有 → 回退到环境变量端点（openai 格式）。
 
-- **签名缓存热生效**：工厂按条目名缓存一个槽位，签名 = `format|baseUrl|apiKey|timeoutMs`。Model 页的增删改直接改 daemon 的内存配置并落盘——签名变了下个 run 自动重建客户端，**无需重启**；改回原值也能命中缓存。
+- **签名缓存热生效**：工厂按条目名缓存一个槽位，签名 = `format|baseUrl|apiKey|timeoutMs`。Model 页的增删改直接改 daemon 的内存配置并持久化——签名变了下个 run 自动重建客户端，**无需重启**；改回原值也能命中缓存。
 - **每次 run 包一层新重试**：缓存的是裸客户端；`withRetry` 在每次 `llmForRun` 调用时现包，重试回调才归属当次 run（`llm.failed` 事件带对的上文）。
-- **记忆提取同语义**：`memory.extractModel` 命中条目名时走该条目自己的客户端与线上模型名；命中不了则按裸模型名发往主模型端点——回落客户端也每调用经同一工厂现解，默认条目的改动同样热生效（见 [memory](./memory.md)）。
+- **记忆提取同语义**：`memory.extractModel` 命中条目名时走该条目自己的客户端与线上模型名；命中不了则按裸模型名发往主模型端点（回退），客户端也每次调用经同一工厂现解，默认条目的改动同样热生效（见 [memory](./memory.md)）。
 - **向量路同步热更**：embedding 客户端按 `baseUrl|apiKey|timeoutMs` 签名现解（`createHotEmbedClient`，daemon 内私有），换 key/换地址下条记忆向量就吃到；向量路是否启用（embeddings model 与条目协议判定）仍是启动时一次定死。
-- **默认模型行也吃热更**：run 装配与手动压缩路径的默认模型取默认条目**当前**的 `.model`，启动时解析的 `deps.model` 只兜底没有条目、纯环境变量的安装。
+- **默认模型行也支持热更**：run 组装与手动压缩路径的默认模型取默认条目**当前**的 `.model`，启动时解析的 `deps.model` 只在"没有配置条目、纯环境变量"的安装里作回退。
 
-### 6b. 模型列表探测（probe，兼作连接验证）
+### 6b. 模型列表检测（probe，兼作连接验证）
 
-`fetchProviderModels` 向端点要模型清单：openai 格式 `GET {base}/models`（apiKey 非空才带 Bearer 头），anthropic 格式 `GET {base}/v1/models`（x-api-key + anthropic-version，URL 规则与消息端点一致；与消息端点不同，探测这里 apiKey 为空也照发空 x-api-key 头）。返回去重后的模型 id 列表；HTTP 错误抛 `llm http <status>`，响应形状不对抛可读错误。WebUI Model 页用它做两件事：表单里的"拉取模型列表"（填充模型下拉）与条目卡片的"验证"按钮（清单拉到了 = URL 和 key 都对）。
+`fetchProviderModels` 向端点要模型清单：openai 格式 `GET {base}/models`（apiKey 非空才带 Bearer 头），anthropic 格式 `GET {base}/v1/models`（x-api-key + anthropic-version，URL 规则与消息端点一致；与消息端点不同，检测这里 apiKey 为空也照发空 x-api-key 头）。返回去重后的模型 id 列表；HTTP 错误抛 `llm http <status>`，响应形状不对抛可读错误。WebUI Model 页用它做两件事：表单里的"拉取模型列表"（填充模型下拉）与条目卡片的"验证"按钮（清单拉到了 = URL 和 key 都对）。
 
 ### 7. 上下文窗口与输出上限（条目可选字段）
 
 每个 provider 条目还有两个可选数字字段，直接决定请求形状：
 
-| 字段 | 含义 | 缺省 |
+| 字段 | 含义 | 默认 |
 |------|------|------|
-| `contextWindow` | 该模型的上下文窗口（token 数）。有效值（正数）时，有效上下文预算取 `min(sessions.contextTokens ?? ∞, contextWindow)`——按更紧的那个算 | 无（回落 `sessions.contextTokens`，再回落 128000） |
+| `contextWindow` | 该模型的上下文窗口（token 数）。有效值（正数）时，有效上下文 budget 取 `min(sessions.contextTokens ?? ∞, contextWindow)`——按更紧的那个算 | 无（回退到 `sessions.contextTokens`，再回退到 128000） |
 | `maxOutput` | 单次回复的输出上限（token 数）。声明后随每次请求作为 `max_tokens` 下发，模型单轮最多产出这么多 | 无（不随请求下发） |
 
-有效预算的解析集中在 `resolveContextTokens`（`packages/core/src/storage/config.ts`）一处——压缩的触发线、压缩器与组装时的省略预算全部经它取值，某个模型窗口更紧时会一起收紧，不会出现"压缩按 128000 算、模型实际只有 8 万"的错位。单次 run 的三级模型解析（`resolveRunModel`，同上文件）返回 `{model, entryKey, budget, maxOutput?}`：`model` 是发往 provider 的线上模型名（条目名 → 条目的 `.model`，匹配不到条目的名字原样通过），`budget` 即上述有效预算，`maxOutput` 有才带；两个调用方（run 装配与手动压缩路径）都走这一个函数，预算口径不可能分叉。模型条目解析的优先级与回落链见 [architecture](./architecture.md) 的数据流一节。
+有效 budget 的解析集中在 `resolveContextTokens`（`packages/core/src/storage/config.ts`）一处——压缩的触发线、压缩器与组装时的省略 budget 全部经它取值，某个模型窗口更紧时会一起收紧，不会出现"压缩按 128000 算、模型实际只有 8 万"的错位。单次 run 的三级模型解析（`resolveRunModel`，同上文件）返回 `{model, entryKey, budget, maxOutput?}`：`model` 是发往 provider 的线上模型名（条目名 → 条目的 `.model`，匹配不到条目的名字原样通过），`budget` 即上述有效budget，`maxOutput` 有才带；两个调用方（run 组装与手动压缩路径）都走这一个函数，budget 口径不可能分叉。模型条目解析的优先级与回退链见 [architecture](./architecture.md) 的数据流一节。
 
 ---
 
@@ -240,8 +240,8 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 
 ## 关联
 
-- [agent-loop](./agent-loop.md)：消费 `LlmStreamEvent` 的一侧
+- [agent-loop](./agent-loop.md)：处理 `LlmStreamEvent` 的一侧
 - [tools](./tools.md)：`ToolDefinition` 的生产方与 `argsJson` 的最终解析方
 - [protocol](./protocol.md)：`StopReason` / `Usage` 的定义
-- [../server/daemon.md](../server/daemon.md)：`resolveProviderEndpoint` / `createEntryLlmFactory` 所在的装配现场
-- [../server/http-api.md](../server/http-api.md)：`/providers` 管理路由族（Model 页的消费面）
+- [../server/daemon.md](../server/daemon.md)：`resolveProviderEndpoint` / `createEntryLlmFactory` 所在的组装现场
+- [../server/http-api.md](../server/http-api.md)：`/providers` 管理路由族（Model 页的处理面）

@@ -1,6 +1,6 @@
 # events — 总线事件清单（40 种）
 
-> 真相源：`packages/core/src/protocol/events.ts`（payload 接口同文件）。投递与订阅机制见 [realtime](../server/realtime.md)，设计取舍见 [protocol](../core/protocol.md)。
+> 权威来源：`packages/core/src/protocol/events.ts`（payload 接口同文件）。投递与订阅机制见 [realtime](../server/realtime.md)，设计取舍见 [protocol](../core/protocol.md)。
 
 这些事件经 `EventBus`（`core/src/bus.ts`）在 WS 上广播：带 `sessionId` 的发给订阅该会话的连接，不带 `sessionId` 的是广播（发给全部已连接 socket）。实时事件不持久化、不回放；持久化的是 [会话事件](./session-events.md)。
 
@@ -47,7 +47,7 @@ export type AgentEvent<T extends EventType = EventType> = {
   payload: EventPayloadMap[T]
 }
 
-/** 分布式判别联合：三端客户端 switch (e.type) 时用它逐案收窄 payload。 */
+/** 分布式判别联合：三端客户端 switch (e.type) 时用它逐 case 区分 payload。 */
 export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 ```
 
@@ -89,14 +89,14 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 | `tool_call.delta` | `messageId`、`blockId`、`delta`（args 的 JSON 片段） |
 | `tool_result.created` / `tool_result.completed` | BlockPayload |
 | `tool_result.delta` | `messageId`、`callId`、`delta`（按 callId 而非 blockId） |
-| `attachment.created` / `attachment.completed` | BlockPayload（当前已定义无发射方，附件随 message.completed 整体携带） |
+| `attachment.created` / `attachment.completed` | BlockPayload（当前已定义无发射方，附件随 message.completed 整体附带） |
 | `llm.started` | `model`、`attempt` |
 | `llm.completed` | `usage`、`stopReason`、`latencyMs` |
 | `llm.failed` | `error { code, message }`、`willRetry` |
 | `confirmation.requested` | `confirmationId`、`toolCall`、`risk`（safe/sensitive）、`expiresAt`、`noteText?`（给人工看的原因） |
 | `confirmation.resolved` | `confirmationId`、`decision`（once/project/global/reject/timeout）、`by`（cli/web/feishu/timeout） |
 | `question.requested` | `questionId`、`questions`（QuestionSpec 数组，1–5 个）、`expiresAt`、`noteText?` |
-| `question.resolved` | `questionId`、`answers?`（string[][]，超时缺省）、`by` |
+| `question.resolved` | `questionId`、`answers?`（string[][]，超时默认）、`by` |
 | `note.emitted` | `messageId`、`block`（NoteBlock） |
 | `memory.written` | `path`、`kind`（episode/cognition）、`topic?`、`scope?`（不带 sessionId，项目级广播） |
 | `message.queued` | `messageId`、`disposition`（steer/wait/interrupt）、`position?`（wait/interrupt 的队列序位） |
@@ -106,19 +106,19 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 | `compaction.completed` | `segments`、`kept`、`phase`、`result`（ok/failed/cancelled；非 ok 时前两值为 0） |
 | `hook.failed` | `hook`、`position`、`error`、`phase`（load/run） |
 
-QuestionSpec：`{ text, options?, multiSelect? }` —— options 存在时从选项里选，缺省自由文本。
+QuestionSpec：`{ text, options?, multiSelect? }` —— options 存在时从选项里选，默认自由文本。
 
 ## 发射方
 
 | 事件 | 发射方 |
 |------|--------|
 | run / message / 流式 / llm / confirmation / note / message.steered | core 的 agent 循环（`agent/loop.ts`） |
-| question.requested / question.resolved | `ask_user_questions` 工具执行器（`tools/ask.ts`，经装配的 emit 钩子） |
+| question.requested / question.resolved | `ask_user_questions` 工具执行器（`tools/ask.ts`，经组装的 emit hook） |
 | message.queued / message.queue_cancelled | server 的 RunManager（`server/src/run.ts`） |
 | compaction.started / compaction.completed | core 压缩引擎 `Compactor`（`session/compactor.ts`） |
-| memory.written | core 的 MemoryPipeline（`memory/pipeline.ts`，经装配的 emit 钩子） |
-| hook.failed | core 钩子系统（`hooks/runner.ts` 执行失败 + `hooks/registry.ts` 装载失败） |
+| memory.written | core 的 MemoryPipeline（`memory/pipeline.ts`，经组装的 emit hook） |
+| hook.failed | core hook 系统（`hooks/runner.ts` 执行失败 + `hooks/registry.ts` 装载失败） |
 | job.* | server 的 `scheduler-tick.ts` |
-| session.renamed | 内置钩子 `autoname`（经 `session/autoname.ts`） |
+| session.renamed | 内置 hook `autoname`（经 `session/autoname.ts`） |
 | session.appended | core 的 SessionStore（`session/store.ts`，每个事件写入成功后） |
 | attachment.* | 已定义、当前无发射方 |
