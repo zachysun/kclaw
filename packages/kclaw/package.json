@@ -4,9 +4,16 @@
   "description": "Local resident personal agent: one daemon owns all state; CLI and WebUI are its clients.",
   "type": "module",
   "license": "MIT",
-  "engines": { "node": ">=22" },
-  "bin": { "kclaw": "app/cli/cli.js" },
-  "files": ["app", "README.md"],
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "kclaw": "app/cli/cli.js"
+  },
+  "files": [
+    "app",
+    "README.md"
+  ],
   "scripts": {
     "build": "node build.mjs",
     "test": "node --test",
@@ -16,6 +23,7 @@
     "@clack/prompts": "^1.7.0",
     "@fastify/static": "^9.3.0",
     "@fastify/websocket": "^11.3.0",
+    "@larksuiteoapi/node-sdk": "^1.74.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@mozilla/readability": "^0.6.0",
     "better-sqlite3": "^13.0.3",

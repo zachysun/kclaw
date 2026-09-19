@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权 hook 加 65 个业务路由（健康/状态 2 个、会话 16 个、记忆 10 个、技能 10 个、hook 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、provider 管理 6 个、目录浏览 2 个、用量 1 个、MCP 管理 6 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`providers.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`、`mcp.ts`）；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未组装时降级 503，技能组始终注册（无组装依赖），hook 组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则以文件为准，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权 hook 加 69 个业务路由（健康/状态 2 个、会话 16 个、记忆 10 个、技能 10 个、hook 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、provider 管理 6 个、目录浏览 2 个、用量 1 个、MCP 管理 6 个、IM Channel 管理 4 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`providers.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`、`mcp.ts`、`channel.ts`）；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未组装时降级 503，技能组始终注册（无组装依赖），hook 组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则以文件为准，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
@@ -220,6 +220,17 @@ interface Job {
 | POST | `/mcp/servers/:name/reconnect` | 对失败/掉线的 server 手动发起一次连接 | 一次性尝试、不在背后排退避；对已连接的 server 是无操作；对禁用中的 server 400 |
 
 路由始终注册；daemon 未组装 McpManager 时 `GET /mcp` 的 `servers` 为空数组、全部动作端点回答 503。任何一次保存动作（增删改启停）都会把全部 server 归拢进 daemon 主目录的 `mcp.json`，并从磁盘上实际在用的配置布局移除遗留的 `mcp.servers` 节（config.json 为整文件重写、尚未迁移的 config.yaml 为行级编辑，其余内容原样保留）；使用方是 WebUI 的 MCP 页、双端的 `/mcp` 命令与 CLI 的 `kclaw mcp [list]`。连接状态机见 [mcp](../core/mcp.md)。
+
+### IM Channel 管理
+
+| 方法 | 路径 | 用途 | 关键字段 |
+|---|---|---|---|
+| GET | `/channel` | 飞书频道配置与状态快照（WebUI「IM Channel」页） | `{config: {enabled, appId, appSecretSet, allowlist, primaryOpenId?}, status: {state: "disabled"/"running"/"error", error?}, pendingSenders: [{openId, count, lastSeen}]}`；`appSecretSet` 只表"是否已设置"，secret 内容不出现在任何响应里 |
+| POST | `/channel/config` | 保存配置并热重启通道（不重启 daemon） | 请求 `{enabled, appId, appSecret?, allowlist, primaryOpenId?}`；`appSecret` 为空/缺省即保持已存值；校验失败（enabled 缺凭据、推送接收人不在白名单）400；返回保存后的新快照 |
+| POST | `/channel/test` | 用草稿凭据验证飞书应用身份（换一次 access token），不落盘 | 请求 `{appId, appSecret?}`；secret 留空时用已存值；返回 `{ok, error?}` |
+| POST | `/channel/allowlist/:openId` | 一键加白：open_id 写入白名单并热重启，同时清除对应待加白记录 | 幂等（已在白名单则不重启）；返回新快照 |
+
+路由始终注册；daemon 未组装频道管理器时 `GET /channel` 返回未启用快照、动作端点回答 503（与 MCP 组同款）。机制、热重启语义与待加白说明见 [feishu-channel](./feishu-channel.md)。
 
 ### WS 与静态托管
 

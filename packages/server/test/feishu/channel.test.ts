@@ -188,6 +188,59 @@ describe("feishu channel", () => {
     expect(env.transport.replies).toHaveLength(0)
   })
 
+  it("records rejected senders (message and card action) for the admin page, still silent", async () => {
+    env = await makeScriptedEnv()
+
+    env.transport.inbound("ou_stranger", "你好")
+    await new Promise((r) => setTimeout(r, 20))
+    env.transport.inbound("ou_stranger", "再试一次")
+    env.transport.cardAction("ou_other", "confirm:x")
+    await new Promise((r) => setTimeout(r, 20))
+
+    const recorded = env.channel.pendingSenders()
+    expect(recorded.map((p) => p.openId)).toEqual(["ou_other", "ou_stranger"]) // newest first
+    const stranger = recorded.find((p) => p.openId === "ou_stranger")!
+    expect(stranger.count).toBe(2)
+    expect(stranger.lastSeen).toBeGreaterThan(0)
+
+    // Persisted for the admin page across restarts, alongside bindings.
+    const state = JSON.parse(readFileSync(join(env.home, "feishu-state.json"), "utf8")) as {
+      pendingSenders: Array<{ openId: string; count: number }>
+    }
+    expect(state.pendingSenders).toContainEqual(expect.objectContaining({ openId: "ou_stranger", count: 2 }))
+
+    // Silence is untouched: no reply, no reaction, no card, no submit.
+    expect(env.transport.replies).toHaveLength(0)
+    expect(env.transport.reactions).toHaveLength(0)
+    expect(env.transport.cards).toHaveLength(0)
+    expect(mainMessages(env)).toHaveLength(0)
+
+    // Clearing (after allowlisting) removes it and persists the removal.
+    env.channel.clearPendingSender("ou_stranger")
+    expect(env.channel.pendingSenders().map((p) => p.openId)).toEqual(["ou_other"])
+    const after = JSON.parse(readFileSync(join(env.home, "feishu-state.json"), "utf8")) as {
+      pendingSenders: Array<{ openId: string }>
+    }
+    expect(after.pendingSenders.map((p) => p.openId)).toEqual(["ou_other"])
+
+    // After stop, a late transport callback must not touch the state file
+    // (it would overwrite the next channel's bindings with stale memory).
+    const stateBefore = readFileSync(join(env.home, "feishu-state.json"), "utf8")
+    await env.channel.stop()
+    env.transport.inbound("ou_late", "迟到消息")
+    await new Promise((r) => setTimeout(r, 20))
+    expect(env.channel.pendingSenders().map((p) => p.openId)).toEqual(["ou_other"])
+    expect(readFileSync(join(env.home, "feishu-state.json"), "utf8")).toBe(stateBefore)
+  })
+
+  it("allowlisted senders never enter the pending list", async () => {
+    llmQueue.push(textTurn("回复"))
+    env = await makeScriptedEnv()
+    env.transport.inbound("ou_master", "你好")
+    await until(() => env.transport.finishes.length > 0, "run settled")
+    expect(env.channel.pendingSenders()).toEqual([])
+  })
+
   it("binds a persistent session on first message and mirrors the run as cards", async () => {
     llmQueue.push(textTurn("回复正文"))
     env = await makeScriptedEnv()
