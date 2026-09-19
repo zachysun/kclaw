@@ -49,6 +49,11 @@ await build({
     "fastify",
     "@fastify/static",
     "@fastify/websocket",
+    // CJS package: bundling it into an ESM output breaks its require("util")
+    // etc. ("Dynamic require of ... is not supported") — and the daemon only
+    // loads it dynamically when the Feishu channel starts. Keep it external;
+    // it is declared in dependencies so runtime resolution finds it.
+    "@larksuiteoapi/node-sdk",
     "ws",
     "better-sqlite3",
     "cron-parser",
