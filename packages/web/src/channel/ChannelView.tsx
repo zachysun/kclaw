@@ -309,7 +309,7 @@ export function ChannelView({ api, notice }: {
         <summary>接入指引：从零到机器人可用</summary>
         <ol>
           <li>注册一个飞书组织（免费，个人手机号即可），在<a href="https://open.feishu.cn/" target="_blank" rel="noreferrer">开放平台</a>创建「企业自建应用」。</li>
-          <li>在「权限管理」开通最小权限三项：收单聊消息 <code>im:message.p2p_msg:readonly</code>、发消息与卡片 <code>im:message:send_as_bot</code>、表情回执 <code>im:message.reactions:write_only</code>。</li>
+          <li>在「权限管理」开通四项权限：收单聊消息 <code>im:message.p2p_msg:readonly</code>、发消息与卡片 <code>im:message:send_as_bot</code>、表情回执 <code>im:message.reactions:write_only</code>、卡片实体读写 <code>cardkit:card:write</code>（流式卡片必需，搜 <code>cardkit</code>）。</li>
           <li>在「事件与回调」里做两件事：把订阅方式切换为<b>长连接</b>（无需公网 IP、无需端口、无需验证令牌），并在「事件订阅设置」里<b>添加事件</b> <code>im.message.receive_v1</code>（接收消息 v2）——开权限不等于订阅事件，两个开关缺一不可。</li>
           <li>在「凭证与基础信息」拿到 App ID 与 App Secret，填到上面并保存。</li>
           <li>在飞书里给机器人发一条消息——它不会回复你，但你的 open_id 会出现在「待加白发件人」里，点「加白」即可开始使用。</li>
