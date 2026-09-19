@@ -48,10 +48,9 @@ kclaw chat
 - **权限与沙箱**：共5种权限模式：readonly（写与命令全拒）、default（逐次审批）、acceptEdits（允许在工作区内写文件）、trusted（沙箱与工作区内无须确认）、auto（根据用户的多次审批行为判断，当前基于规则）。审批可选“仅此一次” / “本项目” / “全局”通过，下次同类操作自动放行。
 - **Subagent**：两种类型：(1) 阻塞式挂起，lead agent 需等待；(2) 后台执行，期间 lead agent 可以执行其他任务，当subagent 完成任务后会通知lead agent. Subagent是独立会话，继承 lead agent 的工作目录，使用精简的系统提示词，只拿任务描述、不带 lead agent 的消息历史。
 - **Agent Team**：lead 与 teammates 各自是独立会话，通过 mailbox 进行点对点通信，支持任务看板。
-- **IM Channel**：当前支持接入飞书。
+- **IM Channel**：当前支持接入飞书Bot.
 
 ---
-
 
 ## 常用命令
 
@@ -68,39 +67,6 @@ kclaw chat
 CLI 内：`/exit` 退出、`/sessions` 列会话、`/new <title>` 新建会话；Ctrl+C 取消当前 run。
 
 ---
-
-
-## 配置（`~/.kclaw/config.json`）
-
-以下为模型配置：
-
-```json
-{
-  "providers": {
-    "default": "my-provider",
-    "entries": {
-      "my-provider": {
-        "baseUrl": "https://api.example.com/v1",
-        "apiKey": "sk-...",
-        "model": "some-model"
-      }
-    }
-  }
-}
-```
-
-| 字段 | 说明 |
-|------|------|
-| `providers.default` | 默认使用的 provider |
-| `format` | 接口协议：`openai`（OpenAI 兼容）或 `anthropic`，不填则为 `openai` |
-| `baseUrl` | 接口地址 |
-| `apiKey` | API key |
-| `model` | 模型名 |
-| `contextWindow` | 可选，模型上下文窗口 |
-| `maxOutput` | 可选，单次回复的输出上限 |
-
----
-
 
 ## 开发
 
@@ -121,7 +87,7 @@ pnpm typecheck   # 全部包 tsc --noEmit
 pnpm test        # 全部包 vitest（cli/server 快速验证需先 pnpm build）
 ```
 
-文档：
+## 文档
 
 - [architecture](docs/architecture.md)：整体架构
 - core/

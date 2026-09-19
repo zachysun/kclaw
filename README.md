@@ -48,7 +48,7 @@ kclaw chat
 - **Permissions & sandbox**: five permission modes: readonly (all writes and commands denied), default (each risky action confirmed one by one), acceptEdits (file writes inside the workspace allowed), trusted (no confirmation inside the sandbox and workspace), auto (judged from the user's repeated approval behavior; currently rule-based). An approval can be granted "just this once" / "for this project" / "globally"; the next similar operation is then allowed automatically.
 - **Subagent**: two types: (1) blocking — the lead agent waits for the result; (2) background — the lead agent can keep working in the meantime and is notified when the subagent finishes. A subagent is an independent session: it inherits the lead agent's working directory, uses a lean system prompt, and receives only the task description, not the lead agent's message history.
 - **Agent team**: the lead and the teammates are each independent sessions, communicating point-to-point via mailboxes, with a shared task board.
-- **IM channel**: Feishu (Lark) is currently supported.
+- **IM channel**: a Feishu (Lark) bot is currently supported.
 
 ---
 
@@ -69,39 +69,6 @@ Inside the REPL: `/exit` to quit, `/sessions` to list sessions, `/new <title>` f
 
 ---
 
-
-## Configuration (`~/.kclaw/config.json`)
-
-Model configuration:
-
-```json
-{
-  "providers": {
-    "default": "my-provider",
-    "entries": {
-      "my-provider": {
-        "baseUrl": "https://api.example.com/v1",
-        "apiKey": "sk-...",
-        "model": "some-model"
-      }
-    }
-  }
-}
-```
-
-| Field | Description |
-|-------|-------------|
-| `providers.default` | The default provider entry |
-| `format` | API protocol: `openai` (OpenAI-compatible) or `anthropic`; defaults to `openai` when omitted |
-| `baseUrl` | API endpoint URL |
-| `apiKey` | API key |
-| `model` | Model name |
-| `contextWindow` | Optional: the model's context window |
-| `maxOutput` | Optional: max output tokens per reply |
-
----
-
-
 ## Development
 
 monorepo (pnpm workspace):
@@ -121,7 +88,7 @@ pnpm typecheck   # tsc --noEmit for every package
 pnpm test        # vitest for every package (cli/server quick checks need pnpm build first)
 ```
 
-Docs:
+## Docs
 
 - [architecture](docs/architecture.md): overall architecture
 - core/
