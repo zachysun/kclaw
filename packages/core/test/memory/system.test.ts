@@ -265,3 +265,39 @@ describe("memory events in session stream ", () => {
     expect(memoryEvents.some((e) => e.trigger === "manual" && e.kind === "episode")).toBe(true)
   })
 })
+
+describe("resolveEntryLlm 注入", () => {
+  it("extractModel 命中条目时走注入的条目客户端解析（不新建裸客户端）", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    sessions.appendMessage(meta.id, { id: "m1", sessionId: meta.id, role: "user", blocks: [{ id: "b", type: "text", text: "重连风暴修好了" }], createdAt: new Date().toISOString() })
+    const calls: string[] = []
+    const cfg = structuredClone(defaultConfig)
+    cfg.providers = {
+      default: "main",
+      entries: {
+        main: { format: "openai", baseUrl: "https://main", apiKey: "k1", model: "m1" },
+        sub: { format: "openai", baseUrl: "https://sub", apiKey: "k2", model: "m2" },
+      },
+      timeoutMs: 1000,
+    }
+    cfg.memory.extractModel = "sub"
+    const sys = new MemorySystem({
+      memoryDir: join(root, "memory"),
+      sessions,
+      config: cfg,
+      resolveLlm: () => {
+        calls.push("main")
+        return { llm: scriptedLlm(["{\"actions\":[]}"]), model: "m1" }
+      },
+      resolveEntryLlm: (key) => {
+        calls.push(key)
+        return scriptedLlm([JSON.stringify({ actions: [{ file: "ws", op: "new-thread", thread: "ws", title: "重连线", content: "指数退避消灭了重连风暴" }] })])
+      },
+    })
+    await sys.triggerManual(WORKDIR)
+    // pipeline 的 resolveLlm 包装总是先物化回落客户端（main），条目命中后改走注入的 sub
+    expect(calls).toEqual(["main", "sub"])
+    const hits = await sys.searchAll("重连风暴", 10)
+    expect(hits.length).toBeGreaterThan(0)
+  })
+})

@@ -3,7 +3,7 @@ import Fastify from "fastify"
 import fastifyStatic from "@fastify/static"
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import { JobScheduler, SessionStore, loadConfig, resolvePaths } from "@kclaw/core"
-import type { KclawConfig, KclawPaths, HookRegistry, MemorySystem, UsageStore } from "@kclaw/core"
+import type { KclawConfig, KclawPaths, ConfigNotifier, HookRegistry, MemorySystem, UsageStore } from "@kclaw/core"
 import { bearerMatches } from "./auth.js"
 import { EventBus } from "@kclaw/core"
 import type { RunManager } from "./run.js"
@@ -30,6 +30,13 @@ export interface AppOptions {
   home: string
   /** Bearer token required on every route except /health. */
   token: string
+  /**
+   * Config-section change notifier: the provider routes publish after they
+   * persist, so long-lived consumers (the daemon's provider client resolver)
+   * can follow the live config. Absent (bare apps) → mutation routes skip
+   * the publish.
+   */
+  configNotifier?: ConfigNotifier
   /** Optional store overrides for tests and composition. */
   stores?: {
     sessions?: SessionStore
@@ -220,7 +227,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
 
   registerConfigRoutes(app, { config })
   // Provider 管理面：Model 顶栏消费（快照 + 增删改/设默认/模型探测热生效）。
-  registerProvidersRoutes(app, { config, paths })
+  registerProvidersRoutes(app, { config, paths, notifier: opts.configNotifier })
   registerFsRoutes(app, { workspace: config.workspace })
   // 沉淀规则管理面：列表（含 git 跟踪状态）与删除，Web 权限页消费。
   registerPermissionsRoutes(app, { paths, workspaceFallback: config.workspace })

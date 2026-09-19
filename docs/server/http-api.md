@@ -129,7 +129,7 @@ interface Job {
 | POST | `/providers/:name/default` | 把该条目设为默认 | 名字未知 404 |
 | POST | `/providers/models` | 模型列表检测（兼作连接验证） | 请求 `{name}`（用存量条目的真实密钥检测，`format`/`baseUrl`/`apiKey` 字段可逐项覆盖——编辑表单的草稿值检测）或 `{format, baseUrl, apiKey?}`（新建表单直探）；成功 `{ok: true, models: string[]}`，检测失败（端点不可达、密钥错误、响应形状不对等一律）502 `{ok: false, error}` |
 
-所有变更路由直接改 daemon 的内存配置（**下一个 run 即热生效**，run 客户端按条目签名缓存，配置一变自动重建）并经 `saveConfig` 持久化：首次写落在 `config.json` 并把仍在的旧 `config.yaml` 改名 `config.yaml.bak` 弃用，此后每次写都是 config.json 的整文件原子重写（0600，密钥明文只在盘上）；持久化失败只记日志不回滚——内存里的改动已经生效，下次写入会再试。没有审计事件（全局配置面，与 MCP 管理同判）。使用方是 WebUI 的 Model 页。
+所有变更路由直接改 daemon 的内存配置（**下一个 run 即热生效**：持久化后经 ConfigNotifier 发布 `providers` 变更，daemon 的客户端解析器整体清空缓存；条目签名检查保留为优化）并经 `saveConfig` 持久化：首次写落在 `config.json` 并把仍在的旧 `config.yaml` 改名 `config.yaml.bak` 弃用，此后每次写都是 config.json 的整文件原子重写（0600，密钥明文只在盘上），遗留的 `mcp` 节在序列化前一律摘除（mcp.json 是唯一管理源）；持久化失败只记日志不回滚，但变更通知照发——内存里的改动已经生效，缓存不能停留在旧值上，下次写入会再试。条目改名（PATCH 带 `name`）经 `renameProviderEntry` 统一挪键并改写配置级引用（默认指针与记忆提取/embedding 条目）。没有审计事件（全局配置面，与 MCP 管理同判）。使用方是 WebUI 的 Model 页。
 
 ### 记忆（routes/memory.ts，底层 `MemorySystem`）
 

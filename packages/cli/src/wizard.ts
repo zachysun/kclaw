@@ -17,7 +17,7 @@
  * baseUrl input step for it before the key step.
  */
 import * as p from "@clack/prompts"
-import { saveConfig, loadConfig, resolvePaths } from "@kclaw/core"
+import { probeProviderChat, saveConfig, loadConfig, resolvePaths } from "@kclaw/core"
 import { chmodSync } from "node:fs"
 
 export interface Template {
@@ -45,21 +45,6 @@ export function classifyProbeError(status: number | null, message: string): "key
   if (status === 404) return "model"
   if (status === 400 && /model/i.test(message)) return "model"
   return "unknown"
-}
-
-/** Minimal completion to verify key + model. Returns HTTP status (null = request never landed) and body text. */
-async function probe(baseUrl: string, apiKey: string, model: string): Promise<{ status: number | null; body: string }> {
-  try {
-    const res = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ model, messages: [{ role: "user", content: "hi" }], max_tokens: 1, stream: false }),
-      signal: AbortSignal.timeout(20_000),
-    })
-    return { status: res.status, body: (await res.text()).slice(0, 200) }
-  } catch {
-    return { status: null, body: "" }
-  }
 }
 
 const REASON: Record<"key" | "network" | "model" | "unknown", string> = {
@@ -113,7 +98,7 @@ export async function runWizard(home: string): Promise<"configured" | "aborted">
     if (!model) { p.log.error("模型名不能为空"); continue }
     const entry = buildProviderEntry(tpl, apiKey, model)
     const s = p.spinner(); s.start("测试连通…")
-    const { status, body } = await probe(entry.baseUrl, entry.apiKey, entry.model)
+    const { status, body } = await probeProviderChat({ format: "openai", baseUrl: entry.baseUrl, apiKey: entry.apiKey, model: entry.model })
     s.stop(status !== null && status < 400 ? "连通成功" : "连通失败")
     if (status !== null && status < 400) {
       const paths = resolvePaths(home)

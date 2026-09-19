@@ -84,9 +84,10 @@ new MemorySystem({memoryDir, sessions, config, resolveLlm, embed, emit})
                                     reconcile()（全部项目库 + 全局库重建索引，向量后台补算）
 new JobScheduler(paths.jobsDb)
 new UsageStore(paths.usageDb)       token 用量记录（SQLite，stop 时 close）
-createEntryLlmFactory(config) + resolveModel(config)   见"provider 解析"；
-                                    前者是按条目建连的带缓存工厂，启动客户端
-                                    与每 run 的 llmForRun 都出自它
+createProviderResolver(config) + resolveModel(config)  见"provider 解析"；
+                                    resolver 按条目建连并缓存客户端（llm/embed 两个缓存），
+                                    启动客户端与每 run 的 llmForRun 都出自它；
+                                    订阅 providers 配置变更通知，收到即整体清空缓存
 new McpManager({servers, persist})  恒定组装：servers=mcp.json 与配置文件
                                     （config.json 或未迁移的 config.yaml）遗留节的
                                     合并读，persist 接归拢持久化；组装后从内存配置
@@ -103,9 +104,10 @@ new RunManager({...})               注入 usageStore、memory、
                                     subagents: { spawner, collector, cancelBackgroundForParent }；见 run-manager。
                                     权限模式没有 daemon 级旗标——它是会话级事实（meta.mode），
                                     run 组装每 run 从会话 meta 读出（见 permissions/run-manager）
-createApp({home, token, stores, bus, run, mcp, attachmentsDir, usage, webDist, memory})
+createApp({home, token, stores, bus, run, mcp, configNotifier, attachmentsDir, usage, webDist, memory})
                                     Fastify 应用（见 http-api）；attachmentsDir/usage 传入时
-                                    对应的附件与用量路由才注册，mcp 提供 /mcp 的快照，memory 供 /memory 路由族
+                                    对应的附件与用量路由才注册，mcp 提供 /mcp 的快照，memory 供 /memory 路由族；
+                                    configNotifier 交给 provider 路由，改动持久化后发布
 await app.listen({ port: listenPort, host: "127.0.0.1" })   ← listenPort = opts.port ?? config.server?.port ?? 0；
                                     钉住的端口被占（EADDRINUSE）是硬错误：释放占位 daemon.json
                                     后抛一行原因，不静默回退到临时端口
@@ -126,7 +128,7 @@ return { port, token, pid, stop }
 
 ### provider 解析（缺失时的行为）
 
-`resolveProviderEndpoint(cfg)` / `resolveModel(cfg)`（`daemon.ts` 导出）按同一优先级取值：
+`resolveProviderEndpoint(cfg)` / `resolveModel(cfg)`（core `provider/resolve.ts`，daemon 一并转发导出）按同一优先级取值：
 
 1. `config.providers.entries[config.providers.default]` 条目里的 `baseUrl` / `apiKey` / `model` 优先；
 2. 条目留空的字段由环境变量补：`KCLAW_LLM_BASE_URL`、`KCLAW_LLM_API_KEY`、`KCLAW_LLM_MODEL`（`valueOrEnv`：配置值非空则用配置，否则用环境变量，再否则空串）；
@@ -134,7 +136,7 @@ return { port, token, pid, stop }
 
 抛错发生在 `launchDaemon` 内部，daemon 从未 listen；第一步认领的占位 daemon.json 留在原处（pid 存活时挡住后续启动，pid 退出后被回收重认领）——CLI 的 `ensureDaemon` 轮询 5s 后报"daemon did not become healthy"。
 
-**run 客户端按条目解析**：每个 run 的客户端由 `llmForRun(onRetry, entryKey)` 给出，`entryKey` 来自 `resolveRunModel`（run 组装先解析条目、再建客户端）。`createEntryLlmFactory` 返回的工厂按条目名缓存裸客户端，签名 = `format|baseUrl|apiKey|timeoutMs`——条目缺失回退到默认条目、连默认条目都没有则回退到环境变量端点（openai 格式）。签名变了下个 run 自动重建：Model 页的增删改热生效于下一个 run，无需重启。`withRetry` 由 `llmForRun` 每次现包（重试回调归属当次 run）；`format` 经 `createProviderClient` 选协议（openai → `createOpenAiCompatClient`，anthropic → `createAnthropicClient`，机制见 [provider](../core/provider.md)）。
+**run 客户端按条目解析**：每个 run 的客户端由 `llmForRun(onRetry, entryKey)` 给出，`entryKey` 来自 `resolveRunModel`（run 组装先解析条目、再建客户端）。daemon 的共享 resolver（`createProviderResolver`）按条目名缓存裸客户端，签名 = `format|baseUrl|apiKey|timeoutMs`——条目缺失回退到默认条目、连默认条目都没有则回退到环境变量端点（openai 格式）。Model 页的增删改持久化后经 ConfigNotifier 发布 `providers` 变更，resolver 收到即整体清空缓存，下个 run 自动重建（签名检查保留为优化）：热生效于下一个 run，无需重启。`withRetry` 由 `llmForRun` 每次现包（重试回调归属当次 run）；`format` 经 `createProviderClient` 选协议（openai → `createOpenAiCompatClient`，anthropic → `createAnthropicClient`，机制见 [provider](../core/provider.md)）。
 
 ## 鉴权设计
 

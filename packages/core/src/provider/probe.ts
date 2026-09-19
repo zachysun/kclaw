@@ -57,3 +57,57 @@ export async function fetchProviderModels(opts: {
     .filter((id): id is string => typeof id === "string" && id !== "")
   return [...new Set(ids)]
 }
+
+/** Probes are user-facing checks (the first-run wizard): a short timeout, not the client default. */
+const PROBE_TIMEOUT_MS = 20_000
+
+/**
+ * One-shot minimal chat completion (1 token) that proves a model name works
+ * on top of a working URL + key — the models-list probe cannot check the
+ * model itself. Format-aware like {@link fetchProviderModels}: Bearer for
+ * OpenAI-compatible bases, x-api-key + anthropic-version for Anthropic
+ * bases (an empty apiKey sends no auth header). Never throws: a failed probe
+ * is a result, with status null meaning the request never landed.
+ */
+export async function probeProviderChat(opts: {
+  format: ProviderApiFormat
+  baseUrl: string
+  apiKey: string
+  model: string
+  fetchImpl?: typeof fetch
+  timeoutMs?: number
+}): Promise<{ status: number | null; body: string }> {
+  const doFetch = opts.fetchImpl ?? fetch
+  const timeoutMs = opts.timeoutMs ?? PROBE_TIMEOUT_MS
+  const isAnthropic = opts.format === "anthropic"
+  const url = isAnthropic
+    ? anthropicEndpoint(opts.baseUrl, "/messages")
+    : `${opts.baseUrl.replace(/\/$/, "")}/chat/completions`
+  const headers: Record<string, string> = { "content-type": "application/json" }
+  if (isAnthropic) {
+    headers["anthropic-version"] = ANTHROPIC_VERSION
+    if (opts.apiKey !== "") headers["x-api-key"] = opts.apiKey
+  } else if (opts.apiKey !== "") {
+    headers.authorization = `Bearer ${opts.apiKey}`
+  }
+  const payload = isAnthropic
+    ? { model: opts.model, messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }], max_tokens: 1 }
+    : { model: opts.model, messages: [{ role: "user", content: "hi" }], max_tokens: 1, stream: false }
+  try {
+    const res = await doFetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    let text = ""
+    try {
+      text = await res.text()
+    } catch {
+      void 0
+    }
+    return { status: res.status, body: text.slice(0, 200) }
+  } catch {
+    return { status: null, body: "" }
+  }
+}
