@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync, existsSync 
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { resolvePaths } from "../../src/storage/paths.js"
-import { loadConfig, saveConfig, defaultConfig, resolveContextTokens, resolveRunModel, resolveProviderFormat } from "../../src/storage/config.js"
+import { loadConfig, saveConfig, defaultConfig, resolveContextTokens, resolveRunModel, resolveProviderFormat, renameProviderEntry, PROVIDER_ENTRY_REFERENCES } from "../../src/storage/config.js"
 import type { KclawConfig } from "../../src/storage/config.js"
 import { writeFileAtomic } from "../../src/storage/atomic.js"
 
@@ -465,5 +465,67 @@ describe("server.port", () => {
     } finally {
       warn.mockRestore()
     }
+  })
+})
+
+describe("saveConfig strips the legacy mcp section", () => {
+  it("writes no mcp key; the in-memory config keeps its section", () => {
+    const paths = resolvePaths(home)
+    const cfg = structuredClone(defaultConfig)
+    ;(cfg as { mcp?: { servers?: Record<string, unknown> } }).mcp = { servers: { fs: { command: "npx" } } }
+    saveConfig(paths, cfg)
+    const onDisk = JSON.parse(readFileSync(paths.configJson, "utf8")) as { mcp?: unknown }
+    expect(onDisk.mcp).toBeUndefined()
+    expect(cfg.mcp).toBeDefined()
+  })
+})
+
+describe("renameProviderEntry", () => {
+  function cfgWith(over?: (cfg: KclawConfig) => void): KclawConfig {
+    const cfg = structuredClone(defaultConfig)
+    cfg.providers = {
+      default: "main",
+      entries: {
+        main: { format: "openai", baseUrl: "https://main", apiKey: "k1", model: "m1" },
+        other: { format: "openai", baseUrl: "https://other", apiKey: "k2", model: "m2" },
+      },
+      timeoutMs: 1000,
+    }
+    over?.(cfg)
+    return cfg
+  }
+
+  it("moves the entry and rewrites every config-level reference", () => {
+    const cfg = cfgWith((c) => {
+      c.memory.extractModel = "main"
+      c.memory.embedding = { provider: "main", model: "e" }
+    })
+    renameProviderEntry(cfg, "main", "renamed")
+    expect(Object.keys(cfg.providers.entries)).toEqual(["other", "renamed"])
+    expect(cfg.providers.default).toBe("renamed")
+    expect(cfg.memory.extractModel).toBe("renamed")
+    expect(cfg.memory.embedding!.provider).toBe("renamed")
+  })
+
+  it("leaves values that are not the renamed entry alone (bare model names)", () => {
+    const cfg = cfgWith((c) => {
+      c.memory.extractModel = "some-bare-model"
+      c.memory.embedding = { provider: "main", model: "e" }
+    })
+    renameProviderEntry(cfg, "main", "renamed")
+    expect(cfg.memory.extractModel).toBe("some-bare-model")
+    expect(cfg.memory.embedding!.provider).toBe("renamed")
+  })
+
+  it("rejects unknown sources and conflicting targets without mutating", () => {
+    const cfg = cfgWith()
+    expect(() => renameProviderEntry(cfg, "ghost", "x")).toThrow("unknown provider entry: ghost")
+    expect(() => renameProviderEntry(cfg, "main", "other")).toThrow('provider entry "other" already exists')
+    expect(Object.keys(cfg.providers.entries)).toEqual(["main", "other"])
+    expect(cfg.providers.default).toBe("main")
+  })
+
+  it("reference registry covers the three config slots (canary for new ones)", () => {
+    expect(PROVIDER_ENTRY_REFERENCES.length).toBe(3)
   })
 })

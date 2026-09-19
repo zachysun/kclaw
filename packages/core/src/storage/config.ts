@@ -397,11 +397,52 @@ function validateTeamConfig(merged: KclawConfig): void {
  * apiKey plaintext). The first write retires a still-present config.yaml by
  * renaming it to config.yaml.bak: from then on config.json is authoritative
  * and the stale yaml must not read as a live second source.
+ *
+ * The legacy `mcp` section is stripped before serializing: MCP servers live
+ * in ~/.kclaw/mcp.json (the managed source), the config section survives
+ * only as a read-compat input at load time and must never be written back
+ * (a save could otherwise resurrect deleted servers).
  */
 export function saveConfig(paths: KclawPaths, config: KclawConfig): void {
   const firstJsonWrite = !existsSync(paths.configJson)
-  writeFileAtomic(paths.configJson, JSON.stringify(config, null, 2) + "\n", 0o600)
+  const { mcp: _legacyMcp, ...persisted } = config
+  writeFileAtomic(paths.configJson, JSON.stringify(persisted, null, 2) + "\n", 0o600)
   if (firstJsonWrite) retireLegacyYaml(paths)
+}
+
+/**
+ * The config locations that can name a provider entry (rename and delete
+ * must keep them consistent). Each reference is an accessor pair over the
+ * config object; a reference whose current value is the old entry name is
+ * rewritten to the new one, any other value (a bare model name, another
+ * entry, empty) is left alone.
+ */
+export const PROVIDER_ENTRY_REFERENCES: ReadonlyArray<{
+  get: (config: KclawConfig) => string | undefined
+  set: (config: KclawConfig, name: string) => void
+}> = [
+  { get: (c) => c.providers.default, set: (c, name) => { c.providers.default = name } },
+  { get: (c) => c.memory?.extractModel, set: (c, name) => { if (c.memory !== undefined) c.memory.extractModel = name } },
+  { get: (c) => c.memory?.embedding?.provider, set: (c, name) => { if (c.memory?.embedding !== undefined) c.memory.embedding.provider = name } },
+]
+
+/**
+ * Move the entry keyed `from` to `to` and rewrite every
+ * {@link PROVIDER_ENTRY_REFERENCES} location pointing at it. Session-level
+ * references (session meta, jobs, slash commands) keep the old name by
+ * design — they fall back to the default entry on their next run, the same
+ * semantics as deletion.
+ */
+export function renameProviderEntry(config: KclawConfig, from: string, to: string): void {
+  if (from === to) return
+  if (config.providers.entries[from] === undefined) throw new Error(`unknown provider entry: ${from}`)
+  if (config.providers.entries[to] !== undefined) throw new Error(`provider entry "${to}" already exists`)
+  const entry = config.providers.entries[from]
+  delete config.providers.entries[from]
+  config.providers.entries[to] = entry
+  for (const ref of PROVIDER_ENTRY_REFERENCES) {
+    if (ref.get(config) === from) ref.set(config, to)
+  }
 }
 
 function retireLegacyYaml(paths: KclawPaths): void {

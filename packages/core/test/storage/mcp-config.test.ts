@@ -112,6 +112,12 @@ describe("loadMcpServers merged read", () => {
     writeFileSync(paths.config, legacyYaml)
     saveConfig(paths, loadConfig(paths)) // migrate: config.json is now authoritative
     expect(existsSync(paths.config)).toBe(false)
+    // saveConfig strips the mcp section at the write layer (mcp.json is the
+    // managed source), so the legacy read below targets a config.json written
+    // by hand or by an older version.
+    const pathsJson = JSON.parse(readFileSync(paths.configJson, "utf8")) as Record<string, unknown>
+    pathsJson.mcp = { servers: { filesystem: { type: "stdio", command: "npx", enabled: true } } }
+    writeFileSync(paths.configJson, JSON.stringify(pathsJson, null, 2))
     saveMcpJson(mcpConfigPath(home), { remote: http })
     expect(loadMcpServers(paths)).toEqual({
       filesystem: { type: "stdio", command: "npx", enabled: true },

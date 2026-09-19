@@ -120,6 +120,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
   readonly #sessions: SessionStore
   readonly #config: KclawConfig
   readonly #resolveLlm: () => { llm: LlmClient; model: string }
+  readonly #resolveEntryLlm?: (entryKey: string) => LlmClient
   readonly #embed?: EmbeddingClient
   readonly #emit?: (e: MemoryWrittenEvent) => void
   readonly #log: (m: string) => void
@@ -134,6 +135,11 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     config: KclawConfig
     /** 每次触发时解析提取模型用的 llm 与 model（回落主模型）。 */
     resolveLlm: () => { llm: LlmClient; model: string }
+    /**
+     * extractModel 命中 provider 条目时解析该条目客户端的钩子（daemon 注入
+     * 签名缓存的 resolver，条目编辑热生效）；缺省每调用现建客户端。
+     */
+    resolveEntryLlm?: (entryKey: string) => LlmClient
     /** embedding 客户端（判定链通过时由装配方构造注入；缺省 = 向量路关闭）。 */
     embed?: EmbeddingClient
     emit?: (e: MemoryWrittenEvent) => void
@@ -144,6 +150,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     this.#sessions = opts.sessions
     this.#config = opts.config
     this.#resolveLlm = opts.resolveLlm
+    this.#resolveEntryLlm = opts.resolveEntryLlm
     this.#embed = opts.embed
     this.#emit = opts.emit
     this.#log = opts.log ?? ((m) => console.error(m))
@@ -166,7 +173,9 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
         if (raw === "") return { llm, model }
         const entry = this.#config.providers.entries[raw]
         if (entry === undefined) return { llm, model: raw }
-        const client = createProviderClient({ entry, timeoutMs: this.#config.providers.timeoutMs })
+        const client = this.#resolveEntryLlm !== undefined
+          ? this.#resolveEntryLlm(raw)
+          : createProviderClient({ entry, timeoutMs: this.#config.providers.timeoutMs })
         return { llm: withRetry(client), model: entry.model }
       },
       embed: opts.embed, emit: opts.emit, audit: this.#audit, log: this.#log, now: this.#now,
