@@ -17,7 +17,7 @@
 - **选中会话时每次都重新拉取，缓存只追加不覆盖**：每次选中一个会话（包括重新选回刚才那个）都会 `GET /sessions/:id/messages` 拉一遍全量消息。拉到的结果用 `unionById` 按 id 合并进按会话缓存的列表：已见过的消息以缓存里的为准，新出现的 id 追加到尾部——因为缓存的快照可能落后于服务端（别的连接在往里写），但不会超前。合并进来的结果再由 `ChatPanel` 用 `mergeMessages` 融进当前正在直播的视图，而不是整个重置视图，这样切走再切回不会丢掉正在流式输出的气泡。
 - **reducer 是纯函数**：`model.ts` 的 `applyEvent(state, event) → 新 state`，每次转换返回新对象；单个畸形帧只记日志，不中断事件循环（否则表现为断线，诱发无谓的重连）。
 - **响应式外壳**：桌面端侧栏常驻；窄屏侧栏收成抽屉，点顶栏 ☰ 打开、点背板或切换 tab 关闭。视觉设计集中在 CSS 变量里（design tokens），**一套主题一个样式文件**（`packages/web/src/themes/` 下每主题一份，调色板、color-scheme、圆角、焦点环与主题专属装饰全在自己文件里），主题清单由构建期从文件名派生、显示名与浏览器栏颜色在主题模块一行一套登记——新增主题即"一个文件 + 一行注册"。**phantom**（默认）是近黑画布 + 红色强调 + 黄色警示的高对比配色，agent 活动信号（daemon 连接状态点、回复进行时的脉冲光标行、输入框提示符）用红色，直角小圆角，且带斜体标题、斜切标签、危险条纹带等专属装饰层；**amber** 是暖黑画布 + 琥珀强调的经典观感；**paper** 是象牙白纸面 + 墨色文字 + 朱砂强调的浅色观感。phantom 的样式文件以 `:root` 选择器开头，未知/损坏的主题值没有专属块命中、自然回退到这套默认配色。顶栏下拉切换（默认档排最前），选择存进 localStorage 键 `kclaw_theme`；`index.html` 头部有一段内联脚本在样式表加载前把存储值原样写到 `<html data-theme>` 上（不认识主题清单，因此加主题不用改它），刷新页面不闪错主题；应用挂载时统一再应用一次，把属性与浏览器栏颜色纠正到合法值。主题注册表的完整机制（含"如何新增一套主题"）见 [themes](./themes.md)。
-- **全局 toast 浮层**（`toast.tsx` 的 `useToasts` + `ToastStack`）：侧栏会话操作的**失败**（新建/改名/删除/删组，红色档；成功路径不提示）与五个管理页（记忆/技能/权限/MCP/Model）的操作回执（成功为 info、失败为红色 error 档）统一落在**内容区右上角的浮层**——不占布局、贴着顶栏下方，任何 tab 都看得见；一条自动消失（info 6 秒、error 9 秒）、点击文本或右侧 × 都立即消、至多同时 4 条（新的挤掉最老的）。与对话页输入框上方的通知条分工：通知条是**对话上下文内**的一次性提示（输入即清、可带跳转动作），toast 是**全局操作**的回执。
+- **全局 toast 浮层**（`toast.tsx` 的 `useToasts` + `ToastStack`）：侧栏会话操作的**失败**（新建/改名/删除/删组，红色档；成功路径不提示）与六个管理页（记忆/技能/权限/MCP/Model/IM Channel）的操作回执（成功为 info、失败为红色 error 档）统一落在**内容区右上角的浮层**——不占布局、贴着顶栏下方，任何 tab 都看得见；一条自动消失（info 6 秒、error 9 秒）、点击文本或右侧 × 都立即消、至多同时 4 条（新的挤掉最老的）。与对话页输入框上方的通知条分工：通知条是**对话上下文内**的一次性提示（输入即清、可带跳转动作），toast 是**全局操作**的回执。
 
 ## 构建与托管
 
@@ -58,7 +58,7 @@ export function bootstrapToken(): string | null
 
 ## 视图（App.tsx 布局）
 
-顶栏（品牌 + ☰ 抽屉按钮〔窄屏〕+ 十个 tab：对话/任务/审计/用量/回收站/记忆/技能/权限/MCP/Model + 主题下拉（列出注册表的全部主题，默认档排最前，选中即切换并存 localStorage，见上文"响应式外壳"）+ daemon 状态点，挂载时 GET `/status` 检测，`connecting/connected/error` 三态）、左侧会话栏、右侧 tab 内容：
+顶栏（品牌 + ☰ 抽屉按钮〔窄屏〕+ 十一个 tab：对话/任务/审计/用量/回收站/记忆/技能/权限/MCP/Model/IM Channel + 主题下拉（列出注册表的全部主题，默认档排最前，选中即切换并存 localStorage，见上文"响应式外壳"）+ daemon 状态点，挂载时 GET `/status` 检测，`connecting/connected/error` 三态）、左侧会话栏、右侧 tab 内容：
 
 | 视图 | 组件 | 职责 |
 |------|------|------|
@@ -73,6 +73,8 @@ export function bootstrapToken(): string | null
 | 权限（tab） | `permissions/PermissionsView.tsx` | 沉淀规则的管理页（机制见 [permissions](../core/permissions.md)）：`GET /permissions/rules`（项目档带 `?workspace=` 当前会话 workdir）拉**全局 + 项目**两档规则卡，每档标题 + 文件路径（`~/.kclaw/permissions.yaml` / `<workspace>/.kclaw/permissions.yaml`）；项目档被 git 跟踪时显示"该文件已被 git 跟踪，为防仓库预埋授权，其中的规则不会生效"；两档路径相同（会话工作目录即用户主目录）时附一行说明："当前会话的工作目录是用户主目录，项目档与全局档指向同一个文件"。每条规则显示 rule 原文 + 来源徽标（auto 模式自动归纳的规则标「自动学习」）+ 决策时间（本地时区）+ 会话 id，行内删除按钮（`DELETE /permissions/rules`，body `{scope, index}`，无确认弹窗、删后重拉）；空档显示"还没有沉淀的规则"（项目档被跟踪时显示"（未读取）"）。纯只读展示：文件本身仍可直接手工编辑，本页只是同一数据的易读视图 |
 | MCP（tab） | `mcp/McpView.tsx` | MCP 服务器管理页（机制见 [mcp](../core/mcp.md)），全局视图、不依赖选中会话：进页拉取 `GET /mcp` 快照 + 手动刷新按钮（无轮询无直播）。每个 server 一张卡片——名字、连接状态徽标（已连接/连接中/已禁用/失败）、最近错误、配置摘要行（stdio 显示命令、http 显示 URL）、启用/禁用开关（`POST /mcp/servers/:name/enable`，热生效且持久）、失败状态下的重连按钮（一次性连接尝试）、编辑与删除；工具数按钮展开该 server 暴露的工具清单（`mcp__<server>__<tool>` 全名 + 描述 + 固定的 sensitive 徽标）。「添加服务器」打开表单（stdio/http 类型切换：stdio 填命令/每行一个参数/env 键值对，http 填 URL/headers 键值对；env 与 headers 明文回显；编辑时名字锁定），保存走 `POST /mcp/servers` 或 `PATCH`，服务端校验错误显示在表单内；首次保存后配置文件里遗留的 `mcp.servers` 节自动迁入 `mcp.json`（配置文件现在是 `config.json`；尚未迁移的旧 `config.yaml` 同样被兼容处理）。没有 server 时显示空态 |
 | Model（tab） | `model/ModelView.tsx` | LLM provider 管理页（机制见 [provider](../core/provider.md)，路由见 [http-api](../server/http-api.md)），全局视图、不依赖选中会话：进页拉取 `GET /providers` 快照 + 手动刷新按钮（无轮询无直播）。每个条目一张卡片：名字、「默认」徽标（默认条目不显示设默认按钮）、接口格式徽标（OpenAI 格式/Anthropic 格式）、端点与模型 id 摘要行（掩码后的 apiKey 同行显示）、可选的上下文窗口/输出上限标注。操作四个：验证（`POST /providers/models {name}`，模型清单拉到即端点与密钥可用，结果落 toast 浮层）、设为默认（非默认条目显示）、编辑、删除。删除是两步的：点击后并行检查 `GET /sessions` 引用该条目的会话数与 `GET /config` 里记忆提取/向量检索是否指向该条目（`memory.extractModel`/`memory.embedding.provider`），任一命中就显示对应警告行（「N 个会话正在使用该条目，删除后这些会话将回退到默认模型」/「记忆提取或向量检索正在使用该条目，删除后将回退到默认端点。」）、确认后才真删；两者都未命中直删。引用只提示不阻断（被引用方下个 run 自动回退到默认条目；默认条目本身服务端拒绝删除（409，需先切换默认）。「添加条目」打开表单，来源二选一：预设（内置 OpenAI/Anthropic/DeepSeek/Ollama）baseUrl 与接口格式写死、只填 API key，免密钥端点可留空）或自定义（接口格式下拉 + 手填 API 地址/密钥/模型 ID）；「拉取模型列表」按钮检测端点，成功后模型字段变成下拉（可切回手动输入）；高级区折叠着可选的上下文窗口与输出上限两个数字字段；编辑态名字可改（保存即重命名：providers 的键、默认条目指向与记忆提取/向量检索的引用一并跟随，改名结果经窗口事件即时反映到对话页的模型选择器）、密钥留空 = 保存量（掩码值上不了请求线）。表单校验错误显示在表单内，操作错误落 toast 浮层（红色档）；没有条目时显示空态 |
+
+| IM Channel（tab） | `channel/ChannelView.tsx` | 飞书频道管理页（机制与启用步骤见 [feishu-channel](../server/feishu-channel.md)，路由见 [http-api](../server/http-api.md)），全局视图、不依赖选中会话：顶部连接状态徽标（运行中/未启用/出错，出错带原因）+ 手动刷新（无轮询）。配置表单常显：启用开关、App ID、App Secret 密码框（快照只回「已设置」徽标、不回 secret 内容，留空 = 保持已存值）、open_id 白名单标签编辑（输入添加、逐项移除）、推送接收人下拉（白名单成员，可选）。保存走 `POST /channel/config`（服务端校验失败显示在表单内；成功即热重启通道，无需重启 daemon）、「测试连接」走 `POST /channel/test` 用草稿凭据验真不落盘。「待加白发件人」区列出被白名单拒绝的来信发件人（open_id + 次数 + 最近时间；对外仍完全静默，不存消息正文），一键加白走 `POST /channel/allowlist/:openId`。底部折叠接入指引（建自建应用 → 最小权限 → 长连接模式 → 保存凭据 → 发消息加白） |
 
 会话数据流：挂载时 `GET /sessions`（服务端按 updatedAt 降序）；**每次**选中会话都 `GET /sessions/:id/messages` 全量拉取并经 `unionById` 按会话 id 并入缓存（`messagesCache`）——只追加未知 id，不覆盖已有条目；缓存保证传给 ChatPanel 的数组引用稳定。
 

@@ -26,7 +26,7 @@ export interface Daemon {
   port: number        // 实际绑定的端口（0 启动时为临时端口）
   token: string       // app 要求的 Bearer token（<home>/token）
   pid: number         // 本进程 pid，即 daemon.json 里记录的
-  stop(): Promise<void>   // 有界拆除：tick → 记忆调度器 → 飞书频道（启用时）→ mcp → app → memory → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
+  stop(): Promise<void>   // 有界拆除：tick → 记忆调度器 → 飞书频道管理器（未启用时为 no-op）→ mcp → app → memory → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
 }
 
 export interface LaunchDaemonOptions {
@@ -116,9 +116,10 @@ void mcpManager.start()             ← 恒定组装，恒执行；不阻塞就�
 run.recoverQueues()                 崩溃恢复：queue.jsonl 整体重排，steer/interrupt 降级 wait（见 run-manager）
 startSchedulerTick({...})           立即一次检查 + 每 30s 一次（deps 附带 notifier 与 webBase=`http://127.0.0.1:<port>`，用于推送中的 `?session=` 链接）
 startMemoryScheduler({...})         记忆调度器：定时 + 跟随保底触发（默认 60s 扫一次，见 memory.md）
-feishu 频道启动（opt-in）           ← 仅 ~/.kclaw/feishu.json enabled 时；在两个调度器之后启动，
-                                    有 15s 上限（FEISHU_START_TIMEOUT_MS）——挂起的握手不拖累
-                                    daemon；失败报一行错误并拆掉半启动状态，daemon 照常服务
+feishu 频道管理器启动（opt-in）     ← 仅 ~/.kclaw/feishu.json enabled 时建通道；在两个调度器之后启动，
+                                    有 15s 上限——挂起的握手不拖累 daemon；失败记入管理器错误状态
+                                    （IM Channel 页可见）并拆掉半启动状态，daemon 照常服务。
+                                    管理器恒定组装（未启用零成本），保存配置即热重启通道
                                     （机制见 feishu-channel.md）
 return { port, token, pid, stop }
 ```
@@ -173,8 +174,8 @@ bin 脚本注册信号处理：SIGTERM/SIGINT → `shutdown()`（`stopping` 标�
 withStopTimeout(tick.stop(), 60s)   // 停心跳；tick.stop 会 await 所有进行中的 job run
 withStopTimeout(memoryTick.stop(), 60s)
                                     // 停记忆调度器（定时 + 跟随保底）
-withStopTimeout(feishuChannel.stop(), 60s)
-                                    // 停飞书频道（仅启用时；断开长连接与总线订阅）
+withStopTimeout(feishuManager.stop(), 60s)
+                                    // 停飞书频道（未启用时为 no-op；断开长连接与总线订阅）
 withStopTimeout(mcpManager.stop(), 60s)
                                     // 断开全部 MCP server（恒定组装，恒有此步；幂等）
 withStopTimeout(app.close(), 60s)   // 关服务器；app.close 会 await 所有连接
