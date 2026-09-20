@@ -19,13 +19,14 @@ function fakeManager(initial: Record<string, McpServerConfig> = {}) {
       return [...servers.entries()].map(([name, config]) => ({
         name,
         config,
+        scope: "global",
         state: config.enabled === false ? "disabled" : "connected",
         tools: [{ name: `mcp__${name}__tool`, server: name, originalName: "tool", description: "d" }],
       }))
     },
     async flush(): Promise<void> {},
-    addServer(name: string, config: McpServerConfig): void {
-      calls.push(`add:${name}`)
+    addServer(name: string, config: McpServerConfig, layer: string = "global"): void {
+      calls.push(`add:${name}:${layer}`)
       if (name === "dupe") throw new Error(`MCP server already exists: ${name}`)
       servers.set(name, config)
     },
@@ -80,7 +81,43 @@ describe("mcp routes", () => {
     expect(body.servers).toHaveLength(1)
     expect(body.servers[0].name).toBe("existing")
     expect(body.servers[0].config).toEqual({ type: "stdio", command: "run" })
+    expect(body.servers[0].scope).toBe("global")
     expect(body.servers[0].tools[0].name).toBe("mcp__existing__tool")
+  })
+
+  it("POST /mcp/servers defaults to the global layer and forwards an explicit project layer", async () => {
+    const view = fakeManager()
+    await app.close()
+    app = await buildApp(view)
+
+    const def = await app.inject({
+      method: "POST",
+      url: "/mcp/servers",
+      headers: AUTH,
+      payload: { name: "g1", config: { type: "stdio", command: "x" } },
+    })
+    expect(def.statusCode).toBe(200)
+    expect(view.calls).toContain("add:g1:global")
+
+    const project = await app.inject({
+      method: "POST",
+      url: "/mcp/servers",
+      headers: AUTH,
+      payload: { name: "p1", config: { type: "stdio", command: "x" }, layer: "project" },
+    })
+    expect(project.statusCode).toBe(200)
+    expect(view.calls).toContain("add:p1:project")
+  })
+
+  it("POST /mcp/servers rejects an unknown layer with 400", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/mcp/servers",
+      headers: AUTH,
+      payload: { name: "a", config: { type: "stdio", command: "x" }, layer: "workspace" },
+    })
+    expect(res.statusCode).toBe(400)
+    expect((res.json() as { error: string }).error).toContain("layer")
   })
 
   it("POST /mcp/servers creates a server and returns the snapshot", async () => {
