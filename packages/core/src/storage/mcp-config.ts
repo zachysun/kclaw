@@ -9,16 +9,25 @@
  * one), so a server deleted through the UI can never resurrect from a stale
  * config section.
  */
-import { existsSync, readFileSync, statSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { writeFileAtomic } from "./atomic.js"
 import { loadConfig, saveConfig } from "./config.js"
+import { isGitTracked } from "./decided-rules.js"
 import type { KclawPaths } from "./paths.js"
 import type { McpServerConfig } from "../mcp/manager.js"
 
 /** <home>/mcp.json — the UI-managed MCP server config file. */
 export function mcpConfigPath(home: string): string {
   return join(home, "mcp.json")
+}
+
+/** Workspace-relative form of the project MCP config file (gitignore / git output). */
+export const PROJECT_MCP_REL = join(".kclaw", "mcp.json")
+
+/** <workspace>/.kclaw/mcp.json — the project-scope MCP config file. */
+export function projectMcpConfigPath(workspace: string): string {
+  return join(workspace, PROJECT_MCP_REL)
 }
 
 interface McpConfigFile {
@@ -47,6 +56,47 @@ export function loadMcpJson(filePath: string): Record<string, McpServerConfig> {
 /** Write mcp.json (atomic replace, 0600 — env/headers may hold secrets). */
 export function saveMcpJson(filePath: string, servers: Record<string, McpServerConfig>): void {
   writeFileAtomic(filePath, JSON.stringify({ servers }, null, 2) + "\n", 0o600)
+}
+
+/**
+ * Project-scope read: the same never-throws contract as loadMcpJson (missing
+ * or wrong-shaped file → {}; corrupt → warning + {}), plus the birth-defense
+ * companion: a git-tracked project file is ignored with a warning — a cloned
+ * repository must not ship a config whose stdio entries execute local
+ * processes on connect (same motive as the decided-rules defense).
+ */
+export function loadProjectMcpServers(workspace: string): Record<string, McpServerConfig> {
+  const filePath = projectMcpConfigPath(workspace)
+  if (!existsSync(filePath)) return {}
+  if (isGitTracked(workspace, PROJECT_MCP_REL)) {
+    console.error(
+      `kclaw: ignoring git-tracked project MCP config ${filePath} ` +
+        "(project MCP config is local-only; remove it from git or delete the file)",
+    )
+    return {}
+  }
+  return loadMcpJson(filePath)
+}
+
+/**
+ * Birth defenses before the first project write (mirrors appendDecidedRule):
+ * the `.kclaw` dir is created and `.kclaw/mcp.json` is appended to the
+ * workspace .gitignore — both idempotent; the file is local-only and
+ * env/headers may hold secrets.
+ */
+function ensureProjectMcpDefenses(workspace: string): void {
+  mkdirSync(join(workspace, ".kclaw"), { recursive: true })
+  const gitignore = join(workspace, ".gitignore")
+  const existing = existsSync(gitignore) ? readFileSync(gitignore, "utf8") : ""
+  if (existing.split("\n").map((l) => l.trim()).includes(PROJECT_MCP_REL)) return
+  const sep = existing !== "" && !existing.endsWith("\n") ? "\n" : ""
+  appendFileSync(gitignore, `${sep}${PROJECT_MCP_REL}\n`)
+}
+
+/** Write the project file (atomic, 0600); runs the birth defenses first. */
+export function saveProjectMcpJson(workspace: string, servers: Record<string, McpServerConfig>): void {
+  ensureProjectMcpDefenses(workspace)
+  saveMcpJson(projectMcpConfigPath(workspace), servers)
 }
 
 /**

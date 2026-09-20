@@ -47,7 +47,7 @@ async function waitUntil(pred: () => boolean, timeoutMs = 3000): Promise<void> {
 
 function managerOpts(servers: Record<string, McpServerConfig>, harness: ReturnType<typeof fakeServerHarness>) {
   return {
-    servers,
+    servers: { global: servers },
     transportFactory: (_name: string, _cfg: McpServerConfig) => harness.transportFactory(),
     backoffBaseMs: 1,
     backoffCapMs: 4,
@@ -121,7 +121,7 @@ describe("McpManager", () => {
 
   it("start never rejects on a failing server", async () => {
     const manager = new McpManager({
-      servers: { bad: { type: "stdio", command: "unused" } },
+      servers: { global: { bad: { type: "stdio", command: "unused" } } },
       transportFactory: () => {
         throw new Error("no transport for you")
       },
@@ -139,15 +139,15 @@ describe("McpManager", () => {
 describe("McpManager hot config methods", () => {
   it("addServer connects and persists", async () => {
     const harness = fakeServerHarness()
-    const persisted: Array<Record<string, McpServerConfig>> = []
-    const manager = new McpManager({ ...managerOpts({}, harness), persist: (s) => persisted.push(s) })
+    const persisted: Array<{ scope: string; servers: Record<string, McpServerConfig> }> = []
+    const manager = new McpManager({ ...managerOpts({}, harness), persist: (scope, s) => persisted.push({ scope, servers: s }) })
     manager.addServer("late", { type: "stdio", command: "unused" })
     await manager.flush()
 
     expect(manager.status().map((s) => s.name)).toEqual(["late"])
     expect(manager.status()[0].state).toBe("connected")
     expect(manager.tools().executors.has("mcp__late__echo")).toBe(true)
-    expect(persisted.at(-1)).toEqual({ late: { type: "stdio", command: "unused" } })
+    expect(persisted.at(-1)).toEqual({ scope: "global", servers: { late: { type: "stdio", command: "unused" } } })
     await manager.stop()
   })
 
@@ -209,17 +209,18 @@ describe("McpManager hot config methods", () => {
 
   it("setEnabled false disables a connected server, true brings it back", async () => {
     const harness = fakeServerHarness()
-    const persisted: Array<Record<string, McpServerConfig>> = []
+    const persisted: Array<{ scope: string; servers: Record<string, McpServerConfig> }> = []
     const manager = new McpManager({
       ...managerOpts({ fl: { type: "stdio", command: "unused" } }, harness),
-      persist: (s) => persisted.push(s),
+      persist: (scope, s) => persisted.push({ scope, servers: s }),
     })
     await manager.start()
     manager.setEnabled("fl", false)
     await manager.flush()
     expect(manager.status()[0].state).toBe("disabled")
     expect(manager.tools().executors.size).toBe(0)
-    expect(persisted.at(-1)?.fl.enabled).toBe(false)
+    expect(persisted.at(-1)?.scope).toBe("global")
+    expect(persisted.at(-1)?.servers.fl.enabled).toBe(false)
 
     manager.setEnabled("fl", true)
     await manager.flush()
@@ -263,7 +264,7 @@ describe("McpManager hot config methods", () => {
   it("reconnect records the failure but stays one-shot", async () => {
     let attempts = 0
     const manager = new McpManager({
-      servers: { late: { type: "stdio", command: "unused" } },
+      servers: { global: { late: { type: "stdio", command: "unused" } } },
       transportFactory: () => {
         attempts++
         throw new Error("still broken")
@@ -313,13 +314,250 @@ describe("McpManager hot config methods", () => {
   })
 })
 
+describe("McpManager two layers (project scope)", () => {
+  it("project entries override global same-name entries; global-only entries stay global", async () => {
+    const harness = fakeServerHarness()
+    const manager = new McpManager({
+      ...managerOpts({ weather: { type: "stdio", command: "global-cmd" } }, harness),
+      servers: {
+        global: { weather: { type: "stdio", command: "global-cmd" } },
+        project: { weather: { type: "stdio", command: "project-cmd" } },
+      },
+    })
+    await manager.start()
+    const weather = manager.status().find((s) => s.name === "weather")!
+    expect(weather.scope).toBe("project")
+    expect(weather.config).toEqual({ type: "stdio", command: "project-cmd" })
+    expect(weather.state).toBe("connected")
+    await manager.stop()
+  })
+
+  it("an absent project layer degrades to today's single-layer behavior", async () => {
+    const harness = fakeServerHarness()
+    const manager = new McpManager(managerOpts({ a: { type: "stdio", command: "x" } }, harness))
+    await manager.start()
+    expect(manager.status().map((s) => `${s.name}:${s.scope}:${s.state}`).sort()).toEqual(["a:global:connected"])
+    await manager.stop()
+  })
+
+  it("addServer targets the requested layer and persists that layer's FULL entry set (shadowed entries included)", async () => {
+    const harness = fakeServerHarness()
+    const persisted: Array<{ scope: string; servers: Record<string, McpServerConfig> }> = []
+    const manager = new McpManager({
+      ...managerOpts({ alpha: { type: "stdio", command: "a" }, beta: { type: "stdio", command: "b" } }, harness),
+      servers: {
+        global: { alpha: { type: "stdio", command: "a" }, beta: { type: "stdio", command: "b" } },
+        project: { alpha: { type: "stdio", command: "project-a" } },
+      },
+      persist: (scope, servers) => persisted.push({ scope, servers }),
+    })
+    await manager.start()
+    manager.updateServer("beta", { type: "stdio", command: "b2" }) // global-layer action while alpha is shadowed
+    const last = persisted.at(-1)!
+    expect(last.scope).toBe("global")
+    // I1: consolidation rewrites the whole file — a dropped shadowed entry would erase it
+    expect(last.servers.alpha).toEqual({ type: "stdio", command: "a" })
+    expect(last.servers.beta).toEqual({ type: "stdio", command: "b2" })
+    await manager.stop()
+  })
+
+  it("addServer rejects a name occupied by the other layer, naming the layer", async () => {
+    const harness = fakeServerHarness()
+    const manager = new McpManager({
+      ...managerOpts({ dup: { type: "stdio", command: "x" } }, harness),
+      servers: { global: { dup: { type: "stdio", command: "x" } } },
+    })
+    await manager.start()
+    expect(() => manager.addServer("dup", { type: "stdio", command: "y" }, "project")).toThrow(/global/)
+    expect(() => manager.addServer("dup", { type: "stdio", command: "y" }, "global")).toThrow(/already exists/)
+    expect(manager.status()).toHaveLength(1)
+    await manager.stop()
+  })
+
+  it("removing a project entry resurfaces the shadowed global entry immediately (snapshot-visible)", async () => {
+    const harness = fakeServerHarness()
+    const persisted: Array<{ scope: string; servers: Record<string, McpServerConfig> }> = []
+    const manager = new McpManager({
+      ...managerOpts({}, harness),
+      servers: {
+        global: { weather: { type: "stdio", command: "global-cmd" } },
+        project: { weather: { type: "stdio", command: "project-cmd" } },
+      },
+      persist: (scope, servers) => persisted.push({ scope, servers }),
+    })
+    await manager.start()
+    expect(manager.status()[0]!.scope).toBe("project")
+
+    manager.removeServer("weather")
+    await manager.flush()
+    const weather = manager.status()[0]!
+    // no file watch required: the delete itself restores the global entry
+    expect(weather.scope).toBe("global")
+    expect(weather.config).toEqual({ type: "stdio", command: "global-cmd" })
+    expect(weather.state).toBe("connected")
+    // persist lands in the project layer only; the global file is untouched
+    expect(persisted.at(-1)).toEqual({ scope: "project", servers: {} })
+    // a follow-up reconcile (the watcher firing on the rewritten file) is a no-op
+    manager.reconcile({})
+    expect(manager.status()[0]!.scope).toBe("global")
+    await manager.stop()
+  })
+
+  it("updateServer and setEnabled keep the entry in its own layer", async () => {
+    const harness = fakeServerHarness()
+    const persisted: Array<{ scope: string; servers: Record<string, McpServerConfig> }> = []
+    const manager = new McpManager({
+      ...managerOpts({}, harness),
+      servers: {
+        global: { g: { type: "stdio", command: "g" } },
+        project: { p: { type: "stdio", command: "p" } },
+      },
+      persist: (scope, servers) => persisted.push({ scope, servers }),
+    })
+    await manager.start()
+    manager.updateServer("p", { type: "stdio", command: "p2" })
+    manager.setEnabled("g", false)
+    await manager.flush()
+    expect(manager.status().find((s) => s.name === "p")!.config).toEqual({ type: "stdio", command: "p2" })
+    expect(manager.status().find((s) => s.name === "g")!.state).toBe("disabled")
+    const scopes = persisted.slice(-2).map((e) => e.scope)
+    expect(scopes).toEqual(["project", "global"])
+    await manager.stop()
+  })
+})
+
+describe("McpManager reconcile (project file watch)", () => {
+  function layered(harness: ReturnType<typeof fakeServerHarness>, opts: { global?: Record<string, McpServerConfig>; project?: Record<string, McpServerConfig>; persist?: (scope: string, servers: Record<string, McpServerConfig>) => void } = {}) {
+    return new McpManager({
+      ...managerOpts(opts.global ?? {}, harness),
+      servers: { global: opts.global ?? {}, project: opts.project ?? {} },
+      transportFactory: (_name: string, _cfg: McpServerConfig) => harness.transportFactory(),
+      backoffBaseMs: 1,
+      backoffCapMs: 4,
+      connectTimeoutMs: 1000,
+      ...(opts.persist !== undefined ? { persist: opts.persist } : {}),
+    })
+  }
+
+  it("adds a new project entry and connects it", async () => {
+    const harness = fakeServerHarness()
+    const manager = layered(harness, { global: { g: { type: "stdio", command: "g" } } })
+    await manager.start()
+    manager.reconcile({ fresh: { type: "stdio", command: "f" } })
+    await manager.flush()
+    const fresh = manager.status().find((s) => s.name === "fresh")!
+    expect(fresh.scope).toBe("project")
+    expect(fresh.state).toBe("connected")
+    await manager.stop()
+  })
+
+  it("reconnects with the new config when a project entry changes", async () => {
+    const harness = fakeServerHarness()
+    const manager = layered(harness, { project: { p: { type: "stdio", command: "old" } } })
+    await manager.start()
+    manager.reconcile({ p: { type: "stdio", command: "new" } })
+    await manager.flush()
+    const p = manager.status().find((s) => s.name === "p")!
+    expect(p.config).toEqual({ type: "stdio", command: "new" })
+    expect(p.state).toBe("connected")
+    await manager.stop()
+  })
+
+  it("treats an unchanged project entry as a no-op (deep-equal, key order irrelevant)", async () => {
+    const harness = fakeServerHarness()
+    const manager = layered(harness, { project: { p: { type: "stdio", command: "same", args: ["-y"] } } })
+    await manager.start()
+    const connectsBefore = harness.calls.length
+    // different key order must still read as equal
+    manager.reconcile({ p: { args: ["-y"], type: "stdio", command: "same" } })
+    await manager.flush()
+    expect(harness.calls.length).toBe(connectsBefore)
+    expect(manager.status().find((s) => s.name === "p")!.config).toEqual({ type: "stdio", command: "same", args: ["-y"] })
+    await manager.stop()
+  })
+
+  it("restores the global entry when a project entry disappears", async () => {
+    const harness = fakeServerHarness()
+    const manager = layered(harness, {
+      global: { weather: { type: "stdio", command: "global-cmd" } },
+      project: { weather: { type: "stdio", command: "project-cmd" } },
+    })
+    await manager.start()
+    manager.reconcile({})
+    await manager.flush()
+    const weather = manager.status()[0]!
+    expect(weather.scope).toBe("global")
+    expect(weather.config).toEqual({ type: "stdio", command: "global-cmd" })
+    expect(weather.state).toBe("connected")
+    await manager.stop()
+  })
+
+  it("flips the scope without reconnecting when the resurfaced global config equals the project one", async () => {
+    const harness = fakeServerHarness()
+    const manager = layered(harness, {
+      global: { weather: { type: "stdio", command: "same" } },
+      project: { weather: { type: "stdio", command: "same" } },
+    })
+    await manager.start()
+    expect(manager.status()[0]!.scope).toBe("project")
+    const connectsBefore = harness.calls.length
+    manager.reconcile({})
+    await manager.flush()
+    const weather = manager.status()[0]!
+    expect(weather.scope).toBe("global")
+    expect(weather.state).toBe("connected")
+    expect(harness.calls.length).toBe(connectsBefore) // no reconnect churn
+    await manager.stop()
+  })
+
+  it("removes an entry that exists in neither layer afterwards", async () => {
+    const harness = fakeServerHarness()
+    const manager = layered(harness, { project: { gone: { type: "stdio", command: "g" } } })
+    await manager.start()
+    manager.reconcile({})
+    await manager.flush()
+    expect(manager.status()).toEqual([])
+    await manager.stop()
+  })
+
+  it("lets a hand-edited project file shadow a global entry (file semantics)", async () => {
+    const harness = fakeServerHarness()
+    const manager = layered(harness, { global: { weather: { type: "stdio", command: "global-cmd" } } })
+    await manager.start()
+    expect(manager.status()[0]!.scope).toBe("global")
+    manager.reconcile({ weather: { type: "stdio", command: "project-cmd" } })
+    await manager.flush()
+    const weather = manager.status()[0]!
+    expect(weather.scope).toBe("project")
+    expect(weather.config).toEqual({ type: "stdio", command: "project-cmd" })
+    await manager.stop()
+  })
+
+  it("never persists from reconcile (the files are the source; the manager follows)", async () => {
+    const harness = fakeServerHarness()
+    const persisted: Array<{ scope: string; servers: Record<string, McpServerConfig> }> = []
+    const manager = layered(harness, {
+      global: { weather: { type: "stdio", command: "g" } },
+      project: { p: { type: "stdio", command: "p" } },
+      persist: (scope, servers) => persisted.push({ scope, servers }),
+    })
+    await manager.start()
+    persisted.length = 0
+    manager.reconcile({ weather: { type: "stdio", command: "p2" } })
+    manager.reconcile({})
+    await manager.flush()
+    expect(persisted).toEqual([])
+    await manager.stop()
+  })
+})
+
 describe("McpManager review fixes", () => {
   it("reconnect during a backoff window cancels the pending retry instead of racing it", async () => {
     let attempts = 0
     let failNext = false
     const harness = fakeServerHarness()
     const manager = new McpManager({
-      servers: { flaky: { type: "stdio", command: "unused" } },
+      servers: { global: { flaky: { type: "stdio", command: "unused" } } },
       transportFactory: () => {
         attempts++
         if (failNext) throw new Error("down")

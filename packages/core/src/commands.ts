@@ -59,6 +59,12 @@ export const MCP_STATE_LABELS: Readonly<Record<string, string>> = {
   failed: "失败",
 }
 
+/** 中文来源层标签（两层 MCP 配置：全局层 / 项目层），双端 /mcp 摘要共用。 */
+export const MCP_SCOPE_LABELS: Readonly<Record<string, string>> = {
+  global: "全局",
+  project: "项目",
+}
+
 /** Parse `/command args`; non-slash input (plain messages) returns null. */
 export function parseSlashInput(input: string): ParsedSlash | null {
   if (!input.startsWith("/")) return null
