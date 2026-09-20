@@ -13,7 +13,7 @@
 - **鉴权是"每路由必带 Bearer"加白名单豁免**：一个 `preHandler` hook 拦截全部路由，只有三处豁免——`/health`、`/ws`、静态 WebUI 外壳（见下）。豁免列表是封闭集合，新增路由默认受保护。
 - **有界停止**：`stop()` 的每一步（停调度、关服务器）有独立超时（默认 60s）。超时则 `stop()` reject、daemon.json **保留**——进程仍在运行，指向它的文件必须与事实一致；虚报"已停止"会诱发双 daemon、job 双触发。
 - **provider 缺失是硬错误**：组装期就抛错终止，不启动一个"半配置"的 daemon。
-- **MCP 恒定组装，且连接不阻塞启动**：无论配置文件里有没有 server，daemon 都构建一个 `McpManager`（空的管理器没有任何连接、开销为零，管理路由因此永远可用，从 WebUI 添加第一个 server 不需要先改配置）。`mcpManager.start()` 在监听开始之后才调用、并且不等它完成，daemon 照常宣布就绪对外服务，各 server 在后台陆续连上，连上多少就从下一轮 run 起贡献多少工具。连接失败只打一行日志，永远不会拖垮 daemon。
+- **MCP 恒定组装，且连接不阻塞启动**：无论配置文件里有没有 server，daemon 都构建一个 `McpManager`（空的管理器没有任何连接、开销为零，管理路由因此永远可用，从 WebUI 添加第一个 server 不需要先改配置）。配置来自两层（全局层 = 配置文件遗留 `mcp.servers` 节与 `<home>/mcp.json` 合并；项目层 = 工作区 `.kclaw/mcp.json`），项目文件由独立的 watch 监视、手工编辑热生效（见 [mcp](../core/mcp.md)）。`mcpManager.start()` 在监听开始之后才调用、并且不等它完成，daemon 照常宣布就绪对外服务，各 server 在后台陆续连上，连上多少就从下一轮 run 起贡献多少工具。连接失败只打一行日志，永远不会拖垮 daemon。
 
 ## 接口
 
@@ -26,7 +26,7 @@ export interface Daemon {
   port: number        // 实际绑定的端口（0 启动时为临时端口）
   token: string       // app 要求的 Bearer token（<home>/token）
   pid: number         // 本进程 pid，即 daemon.json 里记录的
-  stop(): Promise<void>   // 有界拆除：tick → 记忆调度器 → 飞书频道管理器（未启用时为 no-op）→ mcp → app → memory → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
+  stop(): Promise<void>   // 有界拆除：tick → 记忆调度器 → 飞书频道管理器（未启用时为 no-op）→ 项目 MCP watch → mcp → app → memory → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
 }
 
 export interface LaunchDaemonOptions {
@@ -88,10 +88,21 @@ createProviderResolver(config) + resolveModel(config)  见"provider 解析"；
                                     resolver 按条目建连并缓存客户端（llm/embed 两个缓存），
                                     启动客户端与每 run 的 llmForRun 都出自它；
                                     订阅 providers 配置变更通知，收到即整体清空缓存
-new McpManager({servers, persist})  恒定组装：servers=mcp.json 与配置文件
-                                    （config.json 或未迁移的 config.yaml）遗留节的
-                                    合并读，persist 接归拢持久化；组装后从内存配置
+createProjectMcpWatch(workspace, () => mcpManager.reconcile(loadProjectMcpServers(workspace)))
+                                    项目层文件 watch：监视工作区 `.kclaw/mcp.json`，
+                                    手工编辑防抖后经 reconcile 重排生效集（热生效）。
+                                    两阶段挂载（先 watch 工作区顶层等 `.kclaw` 出现、再切
+                                    `.kclaw` watch）；起不来只告警降级、不致命
+new McpManager({servers, persist})  恒定组装：servers = { global: loadMcpServers(paths),
+                                    project: loadProjectMcpServers(workspace) }——全局层
+                                    （mcp.json 与配置文件遗留节合并读，mcp.json 优先）+
+                                    项目层（工作区 `.kclaw/mcp.json`，缺失/损坏/git 跟踪
+                                    均读作 {}）；persist 按层分发：global 接归拢持久化
+                                    （写 mcp.json + 移除配置文件遗留节），project 接
+                                    saveProjectMcpJson + 补挂 watch；组装后从内存配置
                                     删除遗留 mcp 节，防止后续保存把已删 server 复活
+projectMcpWatch.ensure()            挂上项目 watch：工作区还没有 .kclaw 时先 watch
+                                    顶层等它出现（项目层首次写入时会再调一次补挂）
 createSubagentHost({config, sessions, bus, getRun})
                                     subagent 宿主（见 subagents.md）：一次组装返回三件能力——
                                     spawner（派发后端，阻塞与后台 subagent 各有一个并发计数）、collector
@@ -178,6 +189,8 @@ withStopTimeout(memoryTick.stop(), 60s)
                                     // 停记忆调度器（定时 + 跟随保底）
 withStopTimeout(feishuManager.stop(), 60s)
                                     // 停飞书频道（未启用时为 no-op；断开长连接与总线订阅）
+projectMcpWatch.close()             // 停项目 MCP 文件 watch（丢弃挂着的防抖回调，
+                                    // 不让 reconcile 与下面的管理器拆除竞速）
 withStopTimeout(mcpManager.stop(), 60s)
                                     // 断开全部 MCP server（恒定组装，恒有此步；幂等）
 withStopTimeout(app.close(), 60s)   // 关服务器；app.close 会 await 所有连接

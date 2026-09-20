@@ -212,14 +212,14 @@ interface Job {
 
 | 方法 | 路径 | 用途 | 请求/响应 |
 |------|------|------|------|
-| GET | `/mcp` | MCP server 连接状态快照 | `{servers: [{name, state, tools: {name, server, originalName, description}[], config, lastError?}]}`（`config` 为该 server 的 `McpServerConfig`，含地址等；`tools` 里的 `server` 是所属 server 名、`originalName` 是远端原名、`description` 供工具清单与 `/mcp <名字>` 展示） |
-| POST | `/mcp/servers` | 新增一个 server 并后台连接 | 请求 `{name, config}`；名字限定字母/数字/下划线/连字符（会进模型可见的工具名）；名字缺失/为空 400（`name is required`）；返回 `{ok, servers}`；名字重复 409、形状非法 400 |
-| PATCH | `/mcp/servers/:name` | 整体替换一个 server 的配置并重连 | 请求 `{config}`；名字未知 404 |
-| DELETE | `/mcp/servers/:name` | 删除一个 server（断开并遗忘） | 返回 `{ok, servers}`；名字未知 404 |
+| GET | `/mcp` | MCP server 连接状态快照 | `{servers: [{name, state, scope, tools: {name, server, originalName, description}[], config, lastError?}]}`（`scope` 为该条目的来源层 `"global" | "project"`（两层配置见 [mcp](../core/mcp.md)）；`config` 为该 server 的 `McpServerConfig`，含地址等；`tools` 里的 `server` 是所属 server 名、`originalName` 是远端原名、`description` 供工具清单与 `/mcp <名字>` 展示） |
+| POST | `/mcp/servers` | 新增一个 server 并后台连接 | 请求 `{name, config, layer?}`；`layer` 为 `"global" | "project"`、缺省 global（新增条目的目标层，编辑不改层）；名字限定字母/数字/下划线/连字符（会进模型可见的工具名）；名字缺失/为空 400（`name is required`）；返回 `{ok, servers}`；名字重复（两层中任一占用）409、形状非法 400 |
+| PATCH | `/mcp/servers/:name` | 整体替换一个 server 的配置并重连 | 请求 `{config}`；条目留在它自己的层（项目层条目改完仍写回项目文件）；名字未知 404 |
+| DELETE | `/mcp/servers/:name` | 删除一个 server（断开并遗忘） | 返回 `{ok, servers}`；删除的是项目条目且全局层有同名条目时，全局条目立即恢复生效；名字未知 404 |
 | POST | `/mcp/servers/:name/enable` | 启停开关（持久、热生效） | 请求 `{enabled: boolean}`；非布尔 400（`enabled must be a boolean`）；禁用即断开、启用即发起一次连接 |
 | POST | `/mcp/servers/:name/reconnect` | 对失败/掉线的 server 手动发起一次连接 | 一次性尝试、不在背后排退避；对已连接的 server 是无操作；对禁用中的 server 400 |
 
-路由始终注册；daemon 未组装 McpManager 时 `GET /mcp` 的 `servers` 为空数组、全部动作端点回答 503。任何一次保存动作（增删改启停）都会把全部 server 归拢进 daemon 主目录的 `mcp.json`，并从磁盘上实际在用的配置布局移除遗留的 `mcp.servers` 节（config.json 为整文件重写、尚未迁移的 config.yaml 为行级编辑，其余内容原样保留）；使用方是 WebUI 的 MCP 页、双端的 `/mcp` 命令与 CLI 的 `kclaw mcp [list]`。连接状态机见 [mcp](../core/mcp.md)。
+路由始终注册；daemon 未组装 McpManager 时 `GET /mcp` 的 `servers` 为空数组、全部动作端点回答 503。任何一次保存动作（增删改启停）都会把变更持久化到**拥有它的那层**：全局层归拢进 daemon 主目录的 `mcp.json` 并从磁盘上实际在用的配置布局移除遗留的 `mcp.servers` 节（config.json 为整文件重写、尚未迁移的 config.yaml 为行级编辑，其余内容原样保留），项目层写回工作区 `.kclaw/mcp.json`；使用方是 WebUI 的 MCP 页、双端的 `/mcp` 命令与 CLI 的 `kclaw mcp [list]`。连接状态机与两层合并规则见 [mcp](../core/mcp.md)。
 
 ### IM Channel 管理
 

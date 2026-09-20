@@ -28,6 +28,7 @@ export function resolvePaths(home?: string): KclawPaths
 |------|------|--------|
 | `<home>/config.json` | 全部配置（见下节）；首次写入时把遗留的 `config.yaml` 改名为 `config.yaml.bak` 弃用 | CLI wizard 与 WebUI Model 页的 provider 管理路由（均经 `saveConfig`）；用户手写 |
 | `<home>/permissions.yaml` | 全局权限规则——在人工确认里选「总是允许」后保存下来的收紧 allow 规则；项目档在工作区 `.kclaw/permissions.yaml`（见下文「保存的权限规则」一节） | run 组装的 `resolveConfirmation`（`packages/core/src/agent/run-assembly.ts`，global 裁决时写入）；用户手写亦可 |
+| `<home>/mcp.json` | 全局层的 MCP server 配置（WebUI 的 MCP 页增删改落在这里）；项目层在工作区 `.kclaw/mcp.json`（见 [mcp](./mcp.md) 与下文「项目层 mcp.json」一节） | daemon 的 McpManager persist（global 归拢写）；用户手写亦可 |
 | `<home>/AGENTS.md` | agent 人格设定，非空则作为系统提示的一部分（stable 段基座）；每次运行拼装的完整系统提示以 `system` 事件按 stable/live 两段全量记录 | 用户手写；daemon 启动时读 |
 | `<home>/memory/global/` | L2 全局认知（persona.md、wiki/、rule/ 的 markdown，以文件为准） | MemorySystem / 用户手写 |
 | `<home>/memory/projects/<id>/` | L1 项目情节（`<topic>.md` 主题线、workdir.txt、MEMORY.md、state.json、vectors.db） | MemorySystem / 用户手写 |
@@ -70,7 +71,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `web.timeoutMs` | `20000` | 每次网络抓取（搜索与网页）的 AbortSignal 超时，卡死的主机不能拖住一个 run |
 | `web.allowPrivateNetworks` | `false` | 设为 `true` 时豁免 web_fetch 对私网/回环目标的拒绝（SSRF 防护，例如允许抓取本机 Ollama 端点），由 run 组装传入工具 |
 | `usage.prices` | `{}` | 模型 → `{inputPerM?, outputPerM?}`：每百万 token 的美元单价，用量记录算成本用；没有价格条目的模型成本按 0 计 |
-| `mcp.servers` | `{}` | 外部 MCP server 配置的遗留位置（stdio/http 两种形态），读取时与 `mcp.json` 按名合并（mcp.json 优先）；写入配置文件时本节一律被摘除——`mcp.json` 是唯一管理源，任何 `saveConfig` 都不会把 server 写回配置文件（见 [mcp](./mcp.md)） |
+| `mcp.servers` | `{}` | 外部 MCP server 配置的遗留位置（stdio/http 两种形态），读取时与 `mcp.json` 按名合并进全局层（`mcp.json` 优先）；写入配置文件时本节一律被摘除——MCP server 的唯一管理源是全局层 `mcp.json` 与项目层 `.kclaw/mcp.json`，任何 `saveConfig` 都不会把 server 写回配置文件（见 [mcp](./mcp.md)） |
 | `exec.timeoutMs` / `maxOutputBytes` | `60000` / `102400`（100 KiB） | exec 工具的超时与输出截断上限 |
 | `sandbox.enabled` / `writeRoots` / `network` | `true` / `[]` / `"allow"` | exec 沙箱的整体开关、追加写白名单（realpath 形态）与沙箱内网络开关（deny 时 exec 子进程断网，web 工具不受影响），见 [sandbox](./sandbox.md)；可选字段仅为兼容旧配置文件 |
 | `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 周期清理用（见 [jobs](./jobs.md)） |
@@ -211,6 +212,18 @@ rules:
 ```
 
 文件权限 0600、`writeFileAtomic` 原子写入。沉淀规则只落在这两个 permissions.yaml；配置文件（`config.json`）的写入只发生在 CLI wizard 与 Model 页 provider 管理路由（均经 `saveConfig`），规则的增删与配置文件互不相干。`source` 字段区分规则的两种来源：人工选「总是允许」记 `manual`（默认），auto 模式连续 `once` 裁决后的自动归纳记 `auto`（见 [permissions](./permissions.md) 第 5 节）。它只是溯源标记，规则引擎不读它，加载与生效路径和手工规则完全一致。每个 run 由 `loadDecidedRulesForRun` 读入并合并成规则串数组传给权限 gate：全局档总是加载；项目档只在工作区已定义、文件存在且**未被 git 跟踪**时加载（`isGitTracked` 用 `git ls-files --error-unmatch` 检测，被 git 跟踪即整体忽略并在 daemon 日志告警——防止克隆来的仓库夹带一份预授权清单）。删掉文件里的条目（或整个文件）即收回授权，对下一个 run 立即生效。管理入口：`GET`/`DELETE /permissions/rules`（见 [http-api](../server/http-api.md)）与 WebUI「权限」页。
+
+---
+
+## 项目层 mcp.json（`storage/mcp-config.ts`）
+
+项目层的 MCP server 配置落在工作区 `.kclaw/mcp.json`，与全局层 `mcp.json` 按名合并（展开顺序 global < project，同名条目项目层整体覆盖，见 [mcp](./mcp.md)）：
+
+- **读**（`loadProjectMcpServers(workspace)`）：文件缺失或形状不对读作 `{}`（与全局 `loadMcpJson` 同一永不抛错契约，损坏文件告警后忽略）；**被 git 跟踪时整体忽略并告警**——克隆来的仓库不能自带一份会在连接时执行本地进程的 MCP 配置（与 decided-rules 的 `isGitTracked` 防御同一动机，复用同一个检测函数）。
+- **写**（`saveProjectMcpJson(workspace, servers)`）：0600 原子写；首次写入前跑出生防御（`ensureProjectMcpDefenses`）——建 `.kclaw` 目录、把 `.kclaw/mcp.json` 追加进工作区 `.gitignore`（幂等），文件从此本地私有。
+- **热生效**：daemon 用 `createProjectMcpWatch` 监视 `.kclaw/mcp.json`，手工编辑经 `McpManager.reconcile` 重新对齐生效集（机制见 [mcp](./mcp.md) 与 [daemon](../server/daemon.md)）。
+
+全局层的归拢写（`consolidateMcpConfig`）与配置文件遗留 `mcp.servers` 节的移除见上文 config.json 一节。
 
 ---
 
