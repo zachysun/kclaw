@@ -7,39 +7,14 @@
  * chip (preference kept in localStorage). Presentational only: data arrives
  * via props, actions escape as callbacks (点选说话 / 逐个停止 / 审计跳转).
  * Rendered by ChatView when the session's team panel payload exists; no
- * team → nothing rendered at all.
+ * team → nothing rendered at all. Payload types are the protocol canon
+ * (@kclaw/core/protocol) — no hand-copied mirrors here.
  */
 import { useState } from "react"
-
-export interface TeamMemberView {
-  name: string
-  status: "provisioning" | "active" | "failed"
-  busy?: boolean
-  role?: string
-  model?: string
-  failReason?: string
-  sessionId?: string
-  currentTask?: string
-}
-
-export interface TeamTaskView {
-  id: number
-  subject: string
-  status: "pending" | "in_progress" | "completed" | "failed" | "cancelled"
-  assignee: string | null
-  dependencies: number[]
-  attempt: number
-}
-
-export interface TeamPanelData {
-  team: { teamId: string; name: string; leadSessionId: string }
-  identity: "lead" | "member"
-  members: TeamMemberView[]
-  tasks: TeamTaskView[]
-}
+import type { AgentSummary, TaskSnapshot, TeamPanel } from "@kclaw/core/protocol"
 
 export interface TeamPanelCardProps {
-  panel: TeamPanelData
+  panel: TeamPanel
   /** The member the composer currently talks to (null = the lead). */
   target: string | null
   /** 点选说话：切 composer 目标（成员名；null = 切回组长）。 */
@@ -50,7 +25,7 @@ export interface TeamPanelCardProps {
   onOpenAudit?: (sessionId: string) => void
 }
 
-const TASK_STATUS: Record<TeamTaskView["status"], string> = {
+const TASK_STATUS: Record<TaskSnapshot["status"], string> = {
   pending: "待办",
   in_progress: "进行中",
   completed: "已完成",
@@ -192,7 +167,7 @@ function memberClass(name: string | null, target: string | null): string {
   return (name ?? null) === target ? "team-member-card active" : "team-member-card"
 }
 
-function MemberBadge({ member }: { member: TeamMemberView }) {
+function MemberBadge({ member }: { member: AgentSummary }) {
   if (member.status === "provisioning") return <span className="team-badge provisioning">生成中</span>
   if (member.status === "failed") return <span className="team-badge failed">失败</span>
   return member.busy === true
@@ -200,7 +175,7 @@ function MemberBadge({ member }: { member: TeamMemberView }) {
     : <span className="team-badge idle">待命</span>
 }
 
-function countByStatus(tasks: TeamTaskView[]): Record<TeamTaskView["status"], number> {
+function countByStatus(tasks: TaskSnapshot[]): Record<TaskSnapshot["status"], number> {
   const out = { pending: 0, in_progress: 0, completed: 0, failed: 0, cancelled: 0 }
   for (const t of tasks) out[t.status] += 1
   return out

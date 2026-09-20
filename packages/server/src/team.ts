@@ -163,6 +163,18 @@ export function createTeamHost(deps: TeamHostDeps): TeamHost {
     return null
   }
 
+  /**
+   * The one identity touchpoint for callers that answer to a session (the
+   * facade probe, the panel): resolve via find() and — when the session is
+   * the team's lead — run the lead's crash-reconciliation touch. Lead-ness
+   * is judged NOWHERE else: every consumer branches on this verdict.
+   */
+  const resolve = async (sessionId: string): Promise<Found | null> => {
+    const found = find(sessionId)
+    if (found !== null && found.identity.role === "lead") await reconcile(found)
+    return found
+  }
+
   /** Team audit events land on the LEAD session's stream (audit-only; the
    * truth is the directory). The schema version is injected here so every
    * producer stays uniform. */
@@ -493,9 +505,8 @@ export function createTeamHost(deps: TeamHostDeps): TeamHost {
 
   const facade: TeamFacade = {
     async describeSession(sessionId) {
-      const found = find(sessionId)
+      const found = await resolve(sessionId)
       if (found === null) return null
-      if (found.identity.role === "lead") await reconcile(found)
       return found.identity
     },
 
@@ -649,9 +660,8 @@ export function createTeamHost(deps: TeamHostDeps): TeamHost {
   return {
     facade,
     async panel(sessionId) {
-      const found = find(sessionId)
+      const found = await resolve(sessionId)
       if (found === null) return null
-      if (found.identity.role === "lead") await reconcile(found)
       return {
         team: found.record,
         identity: found.identity.role,

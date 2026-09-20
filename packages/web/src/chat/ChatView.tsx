@@ -13,7 +13,8 @@ import type { AttachmentRef, ConfirmationDecision } from "@kclaw/core/protocol"
 import type { ChatState, ConfirmationCard, QuestionCard, RenderedBlock, RenderedMessage } from "./model.js"
 import { parseTeamMail, type TeamMailParse } from "./model.js"
 import { MarkdownText } from "./Markdown.js"
-import { TeamPanelCard, type TeamPanelData } from "./TeamPanel.js"
+import { TeamPanelCard } from "./TeamPanel.js"
+import type { TeamPanel } from "@kclaw/core/protocol"
 import { IconButton } from "../ui/IconButton.js"
 import { PencilIcon, RefreshIcon } from "../ui/icons.js"
 
@@ -145,7 +146,7 @@ export interface ChatViewProps {
    * clears it back to the lead.
    */
   team?: {
-    panel: TeamPanelData
+    panel: TeamPanel
     target: string | null
     onTalkTo: (name: string | null) => void
     onStopMember: (sessionId: string) => void

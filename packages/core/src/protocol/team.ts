@@ -83,3 +83,27 @@ export interface TeamRecord {
   leadSessionId: string
   createdAt: string
 }
+
+/** One member-list entry as the panel and listAgents surface it: the stored
+ * TeamMember plus the derived runtime observation (busy) and the subject of
+ * the task it currently holds. */
+export interface AgentSummary {
+  name: string
+  status: TeamMemberStatus
+  /** Derived runtime observation — true while the member has a live run. */
+  busy?: boolean
+  role?: string
+  model?: string
+  failReason?: string
+  sessionId?: string
+  /** Subject of the in_progress task the member currently holds. */
+  currentTask?: string
+}
+
+/** The `GET /sessions/:id/team` payload: the whole team view in one read. */
+export interface TeamPanel {
+  team: TeamRecord
+  identity: "lead" | "member"
+  members: AgentSummary[]
+  tasks: TaskSnapshot[]
+}

@@ -7,7 +7,8 @@
 import { describe, it, expect, vi } from "vitest"
 import { createRoot, type Root } from "react-dom/client"
 import { act } from "react"
-import { TeamPanelCard, type TeamPanelData } from "../../src/chat/TeamPanel.js"
+import { TeamPanelCard } from "../../src/chat/TeamPanel.js"
+import type { TeamPanel } from "@kclaw/core/protocol"
 import { ChatView } from "../../src/chat/ChatView.js"
 import { ChatPanel } from "../../src/chat/ChatPanel.js"
 import { initChat, type Message } from "../../src/chat/model.js"
@@ -16,8 +17,8 @@ import { ApiError, type ApiClient } from "../../src/api.js"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const PANEL: TeamPanelData = {
-  team: { teamId: "team_1", name: "登录攻坚", leadSessionId: "s1" },
+const PANEL: TeamPanel = {
+  team: { version: 1, teamId: "team_1", name: "登录攻坚", leadSessionId: "s1", createdAt: "2026-09-20T00:00:00.000Z" },
   identity: "lead",
   members: [
     { name: "alice", status: "active", busy: true, role: "前端", model: "deepseek/deepseek-chat", sessionId: "s2", currentTask: "实现登录页" },
@@ -25,15 +26,15 @@ const PANEL: TeamPanelData = {
     { name: "carol", status: "failed", failReason: "模型不可用", sessionId: "s4" },
   ],
   tasks: [
-    { id: 3, subject: "实现登录页", status: "in_progress", assignee: "alice", dependencies: [1], attempt: 2 },
-    { id: 4, subject: "写样式", status: "pending", assignee: null, dependencies: [], attempt: 0 },
-    { id: 1, subject: "拆需求", status: "completed", assignee: null, dependencies: [], attempt: 1 },
+    { id: 3, subject: "实现登录页", detail: "", status: "in_progress", assignee: "alice", dependencies: [1], attempt: 2, revision: 3, createdAt: "2026-09-20T00:00:00.000Z", updatedAt: "2026-09-20T00:00:00.000Z" },
+    { id: 4, subject: "写样式", detail: "", status: "pending", assignee: null, dependencies: [], attempt: 0, revision: 1, createdAt: "2026-09-20T00:00:00.000Z", updatedAt: "2026-09-20T00:00:00.000Z" },
+    { id: 1, subject: "拆需求", detail: "", status: "completed", assignee: null, dependencies: [], attempt: 1, revision: 2, createdAt: "2026-09-20T00:00:00.000Z", updatedAt: "2026-09-20T00:00:00.000Z" },
   ],
 }
 
 // ---------- TeamPanelCard ----------
 
-function mountPanel(panel: TeamPanelData, target: string | null = null) {
+function mountPanel(panel: TeamPanel, target: string | null = null) {
   const onTalkTo = vi.fn()
   const onStopMember = vi.fn()
   const onOpenAudit = vi.fn()

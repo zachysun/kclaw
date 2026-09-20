@@ -10,7 +10,7 @@ Event（瞬时，不持久化）──记录为──▶ Message（持久化单�
 
 server 与 CLI/WebUI 之间传输的就是这些类型：JSONL（每行一条 JSON 的文本文件）里每行一条 `Message`，WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）事件流里每帧一个 `AgentEvent`，daemon 不翻译、不改写。
 
-**权威类型与出口**：这六份文件是全部线上数据形状的唯一类型出处。除 core 主入口外，它们经 `package.json` 的子路径出口 `@kclaw/core/protocol` 对外发布——纯类型与纯函数、不含任何 Node API，浏览器构建（WebUI）直接 `import type` 引用而不会把 Node 绑定的主入口打进包里（`@kclaw/core/commands` 是同一先例）。三端约定：不手抄镜像，一律引用这份权威定义；web/cli 的事件处理 switch 以 `default: const unhandled: never = event` 断言收尾，core 新增事件类型而处理端未表态时编译失败。
+**权威类型与出口**：这七份文件是全部线上数据形状的唯一类型出处。除 core 主入口外，它们经 `package.json` 的子路径出口 `@kclaw/core/protocol` 对外发布——纯类型与纯函数、不含任何 Node API，浏览器构建（WebUI）直接 `import type` 引用而不会把 Node 绑定的主入口打进包里（`@kclaw/core/commands` 是同一先例）。三端约定：不手抄镜像，一律引用这份权威定义；web/cli 的事件处理 switch 以 `default: const unhandled: never = event` 断言收尾，core 新增事件类型而处理端未表态时编译失败。
 
 本页讲这组类型的机制与设计取舍；逐值陈列（每个枚举值、每种帧、每个工具的清单）在 [reference](../reference/README.md)——文档需要罗列这些值时引用那边，不另抄一份。
 
@@ -71,6 +71,12 @@ export function makeEvent<T extends EventType>(
 `wire.ts` 定义 WS 的客户端→daemon 指令帧（`ClientCommand` 联合，十种）与 daemon→客户端的应答帧（各指令的 ack、`ErrorFrame`），合并为 `ServerFrame`；附件引用 `AttachmentRef{path,name,size,mimeType}` 与排队条目 `QueueEntry` 也在此（`session/store.ts` re-export 保持旧引用路径）。逐帧字段、排队处置三值与 ack 形状的陈列见 [reference/wire](../reference/wire.md)。字段规则与报错文案不在类型里——它们的唯一实现是 server 的 `command-check.ts`（见 [realtime](../server/realtime.md)）。
 
 `session-events.ts` 定义会话事件流（`events.jsonl`，`GET /sessions/:id/events` 的返回形状）的二十一种事件类型，逐类型字段的陈列见 [reference/session-events](../reference/session-events.md)。要点：`message.truncated` 是编辑重试/重新生成的截断标记：附带 `fromMessageId`（被重做的最后一条用户消息），从它起的所有消息退出对话视图。事件流只追加这条标记、不改写任何历史行，可见性是读取端投影（`readMessages` 过滤，客户端经同名广播收敛）。截断可以叠加：重试消息的起始 id 单调递增，先于消息出现的标记决定它是否可见。`session.created` 附带创建时固化的初始权限模式 `mode`（可选，旧流默认 default）与可选 `parentSessionId`（subagent 会话的父会话标识，引擎侧一切 subagent 特化从它派生，见 [subagents](./subagents.md)）；`session.set` 附带元数据的增量补丁（`model` / `mode`（会话权限模式）/ `disposition`，键出现在补丁里才发）；旧会话流里的 `readonly` 布尔字段是 legacy，读取时映射为 `mode`。`sandbox.checked` 是每 run 一条的沙箱状态审计（`{enabled, available, unavailableReason?}`），与 `system` 一样只写事件流、不进 bus 的 `EventType`，对外部的可见性由 `session.appended` 通知帧间接承载（订阅端收到后拉 `/events` 即见）。`run.started` / `run.ended` 每 run 成对出现，把该 run 的消息事件夹成一轮边界，失败 run 也落 `run.ended`（`stopReason:"error"` 带错误），起点的 run 必有终点记录；`permission.decided` 记录每次落定的人工确认裁决（裁决、裁决者、工具身份），运行中被中止的确认不落（中止不是裁决）。`system` 事件是每 run 一条的双段系统提示词记录：`stable`（人设基座 + 注入约定）与可选 `live`（认知 + 技能清单），legacy 单文本事件只带 `text`（读作 stable）。`team/*` 七种只追加在组长的流上（协作记录以团队目录为准，事件仅作审计记录），每条带 `version` 字段（当前为 1，由团队宿主统一注入），尽力而为、不进投影。assistant 消息可附带可选 `latencyMs`（LLM 生成耗时毫秒，流成功完成时随 `usage` 一并持久化；旧消息与失败流没有）。只放类型；运行时守卫（`isMessageEvent` 等）与 meta 投影（`applyEvent`）在 `session/events.ts`。
+
+---
+
+## 团队域类型（`team.ts`）
+
+`team.ts` 是 agent team 的域类型正本：组员名单条目 `TeamMember`（生命周期 `provisioning → active | failed`，忙闲是运行时观察、不落盘）、收信箱条目 `MailboxEntry`（`pending → delivered`，"仍 pending 即未送达"是崩溃后重投的依据）、任务快照 `TaskSnapshot`（全量快照，单调 `revision` 做写入前核对）、团队记录 `TeamRecord`，以及两个对外投影——`AgentSummary`（组员条目加派生的忙闲与当前任务，面板与花名册共用）和 `TeamPanel`（`GET /sessions/:id/team` 的一次性整读载荷）。团队身份判定与收发机制见 [agent-team](./agent-team.md)。
 
 ---
 
