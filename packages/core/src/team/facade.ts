@@ -14,7 +14,11 @@
  *   - send_message: sender identity is fixed by the caller's identity —
  *     impersonation is impossible by construction.
  */
-import type { TaskSnapshot, TeamRecord, TeamSenderKind } from "../protocol/team.js"
+import type { AgentSummary, TaskSnapshot, TeamPanel, TeamSenderKind } from "../protocol/team.js"
+
+// The panel/list payload types are the browser-safe canon (protocol/team);
+// re-exported here so facade consumers keep their single import site.
+export type { AgentSummary, TeamPanel } from "../protocol/team.js"
 
 /** The caller's team identity, resolved by the run assembly from the session. */
 export type TeamIdentity =
@@ -25,19 +29,6 @@ export type TeamIdentity =
 export interface SendTarget {
   kind: TeamSenderKind
   name?: string
-}
-
-export interface AgentSummary {
-  name: string
-  status: "provisioning" | "active" | "failed"
-  /** Derived runtime observation — true while the member has a live run. */
-  busy?: boolean
-  role?: string
-  model?: string
-  failReason?: string
-  sessionId?: string
-  /** Subject of the in_progress task the member currently holds. */
-  currentTask?: string
 }
 
 export interface TeamTaskCreateRequest {
@@ -85,12 +76,4 @@ export interface TeamFacade {
   taskCreate(identity: TeamIdentity, req: TeamTaskCreateRequest): Promise<TaskSnapshot>
   taskUpdate(identity: TeamIdentity, req: TeamTaskUpdateRequest): Promise<TaskSnapshot>
   taskList(identity: TeamIdentity): Promise<{ tasks: TaskSnapshot[] }>
-}
-
-/** The `GET /sessions/:id/team` payload: the whole team view in one read. */
-export interface TeamPanel {
-  team: TeamRecord
-  identity: "lead" | "member"
-  members: AgentSummary[]
-  tasks: TaskSnapshot[]
 }
