@@ -94,6 +94,29 @@ describe("pendingSenders state", () => {
     }))
     expect(loadFeishuState(home).pendingSenders).toEqual([{ openId: "ou_ok", count: 1, lastSeen: 7 }])
   })
+
+  it("round-trips pendingApprovals and tolerates junk approval entries", () => {
+    saveFeishuState(home, {
+      bindings: { ou_1: "s1" },
+      pendingSenders: [],
+      pendingApprovals: { conf_1: { cardId: "om_card", openId: "ou_1" } },
+    })
+    expect(loadFeishuState(home).pendingApprovals).toEqual({ conf_1: { cardId: "om_card", openId: "ou_1" } })
+
+    writeFileSync(join(home, "feishu-state.json"), JSON.stringify({
+      bindings: { ou_1: "s1" },
+      pendingSenders: [],
+      pendingApprovals: { conf_ok: { cardId: "om_a", openId: "ou_1" }, conf_empty: { cardId: "", openId: "ou_1" }, junk: "x", conf_partial: { cardId: "om_b" } },
+    }))
+    expect(loadFeishuState(home).pendingApprovals).toEqual({ conf_ok: { cardId: "om_a", openId: "ou_1" } })
+  })
+
+  it("omits pendingApprovals when empty and drops the field on legacy files", () => {
+    saveFeishuState(home, { bindings: {}, pendingSenders: [] })
+    const disk = JSON.parse(readFileSync(join(home, "feishu-state.json"), "utf8")) as Record<string, unknown>
+    expect("pendingApprovals" in disk).toBe(false)
+    expect(loadFeishuState(home).pendingApprovals).toBeUndefined()
+  })
 })
 
 describe("normalizePendingSenders", () => {
