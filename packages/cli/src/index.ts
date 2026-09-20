@@ -21,6 +21,7 @@ import { readFileSync, realpathSync } from "node:fs"
 import { pathToFileURL } from "node:url"
 import { Command, Option } from "commander"
 import type { Job } from "@kclaw/core"
+import { MCP_SCOPE_LABELS } from "@kclaw/core/commands"
 import { KclawClient } from "./client.js"
 import { runChat } from "./chat.js"
 import { daemonStatus, defaultHome, ensureDaemon, stopDaemon } from "./daemon-ctl.js"
@@ -119,10 +120,10 @@ async function jobsListAction(home: string): Promise<void> {
   process.stdout.write(`${renderJobsTable(jobs)}\n`)
 }
 
-/** `kclaw mcp [list]`: one line per configured MCP server (state + tool count). */
+/** `kclaw mcp [list]`: one line per configured MCP server (source layer + state + tool count). */
 async function mcpAction(home: string): Promise<void> {
   const client = await KclawClient.connect(home)
-  const body = (await client.request("GET", "/mcp")) as { servers?: Array<{ name: string; state: string; tools: { name: string }[]; lastError?: string }> }
+  const body = (await client.request("GET", "/mcp")) as { servers?: Array<{ name: string; state: string; scope?: string; tools: { name: string }[]; lastError?: string }> }
   const servers = body.servers ?? []
   if (servers.length === 0) {
     process.stdout.write("未配置 MCP server（daemon 的 mcp.json 或配置文件的 mcp.servers 为空）\n")
@@ -130,7 +131,9 @@ async function mcpAction(home: string): Promise<void> {
   }
   for (const s of servers) {
     const error = s.lastError === undefined ? "" : ` 错误: ${s.lastError}`
-    process.stdout.write(`${s.name}  ${s.state}  ${s.tools.length} 个工具${error}\n`)
+    // scope 缺席（对旧 daemon）读作全局层：两层化之前所有条目都在全局。
+    const scope = MCP_SCOPE_LABELS[s.scope ?? "global"] ?? "全局"
+    process.stdout.write(`${s.name}  [${scope}]  ${s.state}  ${s.tools.length} 个工具${error}\n`)
   }
 }
 

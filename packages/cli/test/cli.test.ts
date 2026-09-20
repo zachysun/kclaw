@@ -441,6 +441,7 @@ describe("kclaw mcp", () => {
     expect(out).toContain("broken")
     expect(out).toContain("failed")
     expect(out).toContain("0 个工具")
+    expect(out).toContain("全局") // source-layer label: the project layer is absent here
     await runCli(["daemon", "stop"], h)
   }, 20_000)
 })

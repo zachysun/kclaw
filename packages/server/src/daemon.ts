@@ -36,6 +36,8 @@ import {
   createProviderResolver,
   loadConfig,
   loadMcpServers,
+  loadProjectMcpServers,
+  saveProjectMcpJson,
   createNotifier,
   makeEvent,
   McpManager,
@@ -49,6 +51,7 @@ import {
 } from "@kclaw/core"
 import type { EmbeddingClient, KclawConfig, LlmClient } from "@kclaw/core"
 import { loadOrCreateToken } from "./auth.js"
+import { createProjectMcpWatch } from "./project-mcp-watch.js"
 import { EventBus } from "@kclaw/core"
 import { RunManager } from "./run.js"
 import { createSubagentHost } from "./subagent.js"
@@ -310,16 +313,37 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   const model = resolveModel(config)
   // MCP: the manager is always assembled (an empty one costs nothing and
   // keeps the management routes — adding the first server from the WebUI —
-  // alive). Servers come from the merged read (config.yaml legacy section +
-  // mcp.json, mcp.json winning); hot-config changes persist through the
-  // consolidation, which also strips the legacy section on first save.
-  // Connection failures are logged and never fatal — a broken server just
-  // yields no tools.
+  // alive). Servers come from the two config layers: global (config.yaml
+  // legacy section merged with ~/.kclaw/mcp.json, mcp.json winning) and the
+  // project file (<workspace>/.kclaw/mcp.json, missing/corrupt/git-tracked
+  // all read as {} in the storage loader); the manager expands them
+  // global < project with whole-entry override. Hot-config changes persist
+  // per layer: global → the consolidation (which also strips the legacy
+  // section on first save), project → the project file. Connection failures
+  // are logged and never fatal — a broken server just yields no tools.
+  const workspace = config.workspace
+  // Project-file watch: hand edits to <workspace>/.kclaw/mcp.json
+  // hot-reload through reconcile. Two-stage attach (workspace top level
+  // until `.kclaw` appears, then the `.kclaw` watch) lives in
+  // project-mcp-watch.ts; a watch that cannot start logs once and degrades —
+  // hand edits then apply on restart, never fatal.
+  const projectMcpWatch = createProjectMcpWatch(workspace, () =>
+    mcpManager.reconcile(loadProjectMcpServers(workspace)),
+  )
+
   const mcpManager = new McpManager({
-    servers: loadMcpServers(paths),
+    servers: { global: loadMcpServers(paths), project: loadProjectMcpServers(workspace) },
     onError: (name, error) => console.error(`kclaw mcp ${name} error: ${error}`),
-    persist: (servers) => consolidateMcpConfig(paths, servers),
+    persist: (scope, servers) => {
+      if (scope === "project") {
+        saveProjectMcpJson(workspace, servers)
+        projectMcpWatch.ensure() // the first project write creates .kclaw — attach the watcher now
+      } else {
+        consolidateMcpConfig(paths, servers)
+      }
+    },
   })
+  projectMcpWatch.ensure()
   // The manager owns MCP state from here (mcp.json is the managed source):
   // drop the legacy section from the in-memory config so a later provider
   // save can never write a deleted server back (saveConfig strips it at the
@@ -497,6 +521,8 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       await withStopTimeout(tick.stop(), stopTimeoutMs, "scheduler tick")
       await withStopTimeout(memoryTick.stop(), stopTimeoutMs, "memory scheduler")
       await withStopTimeout(feishuManager.stop(), stopTimeoutMs, "feishu channel")
+      // project-file watcher first: no reconcile can race the manager teardown
+      projectMcpWatch.close()
       if (mcpManager !== undefined) {
         await withStopTimeout(mcpManager.stop(), stopTimeoutMs, "mcp stop")
       }

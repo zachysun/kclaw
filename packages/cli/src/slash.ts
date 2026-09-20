@@ -8,7 +8,7 @@
  * loop).
  */
 import { isCancel, select } from "@clack/prompts"
-import { MCP_STATE_LABELS, parseSlashInput, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
+import { MCP_SCOPE_LABELS, MCP_STATE_LABELS, parseSlashInput, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
 import { isPermissionMode, PERMISSION_MODES, PERMISSION_MODE_CONFIRMATIONS } from "@kclaw/core"
 import type { AttachmentRef } from "@kclaw/core"
 import type { PermissionMode } from "@kclaw/core"
@@ -442,8 +442,10 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
       const name = args.trim()
       try {
         const { servers } = (await ctx.client.request("GET", "/mcp")) as {
-          servers: Array<{ name: string; state: string; tools: { name: string; description?: string }[]; lastError?: string }>
+          servers: Array<{ name: string; state: string; scope?: string; tools: { name: string; description?: string }[]; lastError?: string }>
         }
+        // scope 缺席（对旧 daemon）读作全局层：两层化之前所有条目都在全局。
+        const scopeLabel = (s: { scope?: string }): string => MCP_SCOPE_LABELS[s.scope ?? "global"] ?? "全局"
         if (servers.length === 0) {
           ctx.print("还没有接入任何 MCP 服务器（配置 daemon 的 mcp.json）")
           return
@@ -454,14 +456,14 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
             ctx.print(`未知 MCP 服务器: ${name}（现有 ${servers.map((s) => s.name).join("、")}）`)
             return
           }
-          ctx.print(`${name}（${MCP_STATE_LABELS[target.state] ?? target.state}）· ${target.tools.length} 个工具`)
+          ctx.print(`${name}（${MCP_STATE_LABELS[target.state] ?? target.state}）· ${scopeLabel(target)} · ${target.tools.length} 个工具`)
           if (target.lastError !== undefined) ctx.print(`最近错误: ${target.lastError}`)
           for (const t of target.tools) {
             ctx.print(`  ${t.name}${t.description !== undefined && t.description !== "" ? ` — ${t.description}` : ""}`)
           }
           return
         }
-        ctx.print(servers.map((s) => `${s.name} · ${MCP_STATE_LABELS[s.state] ?? s.state} · ${s.tools.length} 个工具${s.lastError !== undefined ? ` · ${s.lastError}` : ""}`).join("\n"))
+        ctx.print(servers.map((s) => `${s.name} · ${MCP_STATE_LABELS[s.state] ?? s.state} · ${scopeLabel(s)} · ${s.tools.length} 个工具${s.lastError !== undefined ? ` · ${s.lastError}` : ""}`).join("\n"))
         const failed = servers.filter((s) => s.state === "failed").length
         if (failed > 0) ctx.print(`${failed} 个失败（重连与配置管理用 WebUI 顶部「MCP」页）`)
       } catch (err) {
