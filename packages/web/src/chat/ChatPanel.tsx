@@ -38,7 +38,7 @@ import {
 import { useSilentFetch } from "../daemon-clients.js"
 import { runWebCommand } from "./commands.js"
 import { ChatView, type CompactionRecordView, type Disposition, type PendingAttachment } from "./ChatView.js"
-import type { TeamPanelData } from "./TeamPanel.js"
+import type { TeamPanel } from "@kclaw/core/protocol"
 
 export interface ChatPanelProps {
   sessionId: string
@@ -124,9 +124,9 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   // Agent team：面板数据（GET /sessions/:id/team；无团队 = null，不渲染）与
   // composer 的说话目标（null = 对组长）。目标保持 sticky——连续对同一组员
   // 说话不用每次重选，点组长卡或 chip 上的 × 切回。
-  const [teamPanel, setTeamPanel] = useState<TeamPanelData | null>(null)
+  const [teamPanel, setTeamPanel] = useState<TeamPanel | null>(null)
   const [teamTarget, setTeamTarget] = useState<string | null>(null)
-  const teamPanelRef = useRef<TeamPanelData | null>(null)
+  const teamPanelRef = useRef<TeamPanel | null>(null)
   teamPanelRef.current = teamPanel
   // 面板拉取的在飞防抖与会话归属（迟到的响应不许落进新会话的 state）。
   const teamFetchBusy = useRef(false)
@@ -756,13 +756,13 @@ function authNotice(err: unknown, fallback: string): string {
  * 面板响应的形状校验：不是团队面板（缺 team 标识或 members/tasks 数组）
  * 就当没有——渲染层直接解构这些字段，畸形响应宁可静默不渲染。
  */
-function toTeamPanel(raw: unknown): TeamPanelData | null {
+function toTeamPanel(raw: unknown): TeamPanel | null {
   if (typeof raw !== "object" || raw === null) return null
   const r = raw as Record<string, unknown>
   const team = (typeof r.team === "object" && r.team !== null ? r.team : {}) as Record<string, unknown>
   if (typeof team.teamId !== "string" || typeof team.name !== "string") return null
   if (!Array.isArray(r.members) || !Array.isArray(r.tasks)) return null
-  return raw as TeamPanelData
+  return raw as TeamPanel
 }
 
 /**
