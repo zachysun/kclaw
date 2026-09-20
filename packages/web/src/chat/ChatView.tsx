@@ -549,7 +549,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
         {team !== undefined && team.target !== null && (
           <div className="team-target-chip" data-testid="team-target-chip">
             → 组员 {team.target}
-            <button type="button" data-testid="team-target-clear" aria-label="切回对组长说话" onClick={() => team.onTalkTo(null)}>×</button>
+            <button type="button" data-testid="team-target-clear" aria-label="切回对组长对话" onClick={() => team.onTalkTo(null)}>×</button>
           </div>
         )}
         {completions.length > 0 && (
@@ -617,7 +617,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
             onDraftChange?.()
           }}
           onKeyDown={handleKeyDown}
-          placeholder="Type a message…"
+          placeholder="输入消息…"
           autoFocus
         />
         {view.runState === "running" && (
@@ -631,7 +631,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
             ))}
           </div>
         )}
-        <button type="submit" data-testid="send-button">Send</button>
+        <button type="submit" data-testid="send-button">发送</button>
         </form>
       )}
     </div>
@@ -870,13 +870,13 @@ function ConfirmationCardView({
 }) {
   return (
     <div className="confirm-card" data-testid="confirm-card">
-      <div className="confirm-title">Confirmation requested</div>
+      <div className="confirm-title">需要确认</div>
       <div className="confirm-tool">⚡ {card.toolName}</div>
       {/* argsJson can carry a whole file's content — it must stay inside a
           scroll-clamped block or the card swallows the chat pane and pushes
           the resolve buttons out of the viewport. */}
       <div className="confirm-args"><code>{card.argsJson}</code></div>
-      <div className="confirm-meta">risk: {card.risk} · expires {card.expiresAt}</div>
+      <div className="confirm-meta">风险 {card.risk} · 过期 {card.expiresAt}</div>
       {card.noteText !== undefined && <div className="confirm-note">{card.noteText}</div>}
       <div className="confirm-actions">
         <button data-testid="confirm-once" onClick={() => onResolve(card.confirmationId, "once")}>仅本次</button>
@@ -913,7 +913,7 @@ function QuestionCardView({
   return (
     <div className="question-card" data-testid="question-card">
       <div className="confirm-title">问题待回答</div>
-      <div className="confirm-meta">expires {card.expiresAt}</div>
+      <div className="confirm-meta">过期 {card.expiresAt}</div>
       {card.noteText !== undefined && <div className="confirm-note">{card.noteText}</div>}
       {card.questions.map((q, i) => (
         <div key={i} className="question-item" data-testid={`question-item-${i}`}>

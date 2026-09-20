@@ -224,12 +224,12 @@ async function openSubscribed(client: KclawClient, sessionId: string): Promise<W
   const next = await Promise.race([
     ws.frames[Symbol.asyncIterator]().next(),
     new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("no subscribed ack within 5s")), SUBSCRIBE_ACK_MS),
+      setTimeout(() => reject(new Error("5 秒内没有收到订阅回执")), SUBSCRIBE_ACK_MS),
     ),
   ])
   if (next.done || next.value.type !== "subscribed") {
     ws.close()
-    const message = next.done ? "socket closed before subscribing" : String(next.value.message ?? "subscribe rejected")
+    const message = next.done ? "socket 在订阅前就关闭了" : String(next.value.message ?? "订阅被拒绝")
     throw new Error(message)
   }
   return ws
@@ -595,7 +595,7 @@ async function reconnect(ctx: ChatCtx): Promise<boolean> {
       line(dim("[reconnected]"), ctx)
       return true
     } catch {
-      line(red("[连接断开，重连失败 — 输入 /exit 退出]"), ctx)
+      line(red("[连接断开，重连失败。输入 /exit 退出]"), ctx)
       return false
     } finally {
       ctx.reconnecting = undefined

@@ -99,8 +99,8 @@ function TokenForm() {
     <div className="token-gate">
       <h1>kclaw</h1>
       <p className="muted">
-        This instance is protected by a bearer token. Paste the token from
-        your daemon — run <code>kclaw web</code>, or read <code>~/.kclaw/token</code>.
+        本实例由 daemon 的 token（bearer token）保护。在终端跑 <code>kclaw web</code>
+        可直接登录；token 存放在 <code>~/.kclaw/token</code>。
       </p>
       <form onSubmit={submit}>
         <input
@@ -111,7 +111,7 @@ function TokenForm() {
           onChange={(event) => setValue(event.target.value)}
           autoFocus
         />
-        <button type="submit">Connect</button>
+        <button type="submit">连接</button>
       </form>
     </div>
   )
@@ -539,7 +539,7 @@ function MainShell({
           )}
           {tab === "chat" && !chatActive && (
             <p className="muted" data-testid="chat-empty">
-              {selectedId === null ? "No session selected." : "加载会话中…"}
+              {selectedId === null ? "未选择会话" : "加载会话中…"}
             </p>
           )}
           {tab === "jobs" && <JobsView api={api} />}

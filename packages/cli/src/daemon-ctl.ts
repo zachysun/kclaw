@@ -96,7 +96,7 @@ export function resolveServerBin(): string {
     const parent = dirname(dir)
     if (parent === dir) {
       throw new Error(
-        `kclaw-server bin not found above ${dir} — the CLI expects a repo checkout with packages/server next to packages/cli`,
+        `在 ${dir} 上层找不到 kclaw-server 可执行文件：CLI 按仓库结构查找（packages/server 须与 packages/cli 同级）`,
       )
     }
     dir = parent
@@ -165,8 +165,8 @@ export async function ensureDaemon(home: string): Promise<EnsureResult> {
     const recovered = await waitForHealthy(home)
     if (recovered !== undefined) return { info: recovered, spawned: false }
     throw new Error(
-      `daemon pid ${existing.pid} is alive but not answering on port ${existing.port}; ` +
-        `kill it (kill ${existing.pid}) or remove ${join(home, "daemon.json")}, then retry`,
+      `daemon 进程（pid ${existing.pid}）还在但不响应端口 ${existing.port}：` +
+        `先结束它（kill ${existing.pid}）或删除 ${join(home, "daemon.json")}，再重试`,
     )
   }
 
@@ -179,8 +179,8 @@ export async function ensureDaemon(home: string): Promise<EnsureResult> {
   const info = await waitForHealthy(home)
   if (info === undefined) {
     throw new Error(
-      `daemon did not become healthy within ${POLL_TIMEOUT_MS}ms — try 'kclaw daemon status' ` +
-        `and check that packages/server is built (pnpm -C packages/server build)`,
+      `daemon 在 ${POLL_TIMEOUT_MS}ms 内没有就绪：试试 'kclaw daemon status'，` +
+        `并确认 packages/server 已构建（pnpm -C packages/server build）`,
     )
   }
   return { info, spawned: true }
@@ -220,7 +220,7 @@ export async function stopDaemon(home: string): Promise<StopResult> {
   }
 
   if (await probeHealth(info.port)) {
-    throw new Error(`stop failed: daemon still responding on port ${info.port} (pid ${info.pid})`)
+    throw new Error(`停止失败：daemon 仍在响应端口 ${info.port}（pid ${info.pid}）`)
   }
 
   rmSync(join(home, "daemon.json"), { force: true })

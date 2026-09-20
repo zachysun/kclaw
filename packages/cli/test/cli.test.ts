@@ -355,7 +355,7 @@ describe("non-positive pid in daemon.json", () => {
 
 describe("stop failure: daemon still responding", () => {
   it(
-    "exit 1, stderr 'stop failed: daemon still responding on port N (pid M)', daemon.json kept",
+    "exit 1, stderr '停止失败：daemon 仍在响应端口 N（pid M）', daemon.json kept",
     async () => {
       const home = makeHome()
 
@@ -390,7 +390,7 @@ describe("stop failure: daemon still responding", () => {
         const res = await runCli(["daemon", "stop"], home)
         expect(res.exitCode).toBe(1)
         expect(res.stderr).toContain(
-          `stop failed: daemon still responding on port ${port} (pid ${stub.pid})`,
+          `停止失败：daemon 仍在响应端口 ${port}（pid ${stub.pid}）`,
         )
         // the pidfile is KEPT: it still points at the live process
         expect(existsSync(join(home, "daemon.json"))).toBe(true)

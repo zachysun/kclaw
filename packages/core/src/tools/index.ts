@@ -228,7 +228,7 @@ export function createBuiltinTools(opts: {
     {
       name: "skill_list",
       tool: skill.skill_list,
-      def: def("skill_list", SKILL_LIST_DESCRIPTION, { query: str("可选：按名字与描述子串过滤（大小写不敏感）；缺省列出全部模型可见技能") }, []),
+      def: def("skill_list", SKILL_LIST_DESCRIPTION, { query: str("可选：按名字与描述子串过滤（大小写不敏感）；不传则列出全部模型可见技能") }, []),
     },
   ]
 

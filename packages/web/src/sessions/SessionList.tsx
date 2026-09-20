@@ -235,7 +235,7 @@ export function SessionList({
 
   return (
     <div className="session-list" data-testid="session-list" onScrollCapture={() => setPathTip(null)}>
-      <div className="sidebar-title">Sessions</div>
+      <div className="sidebar-title">会话</div>
       <div className="new-session-controls">
         <button
           type="button"
