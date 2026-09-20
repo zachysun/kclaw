@@ -23,7 +23,7 @@ export function OfflineBanner(): React.JSX.Element | null {
   if (!offline) return null
   return (
     <div className="offline-banner" data-testid="offline-banner" role="status">
-      离线 — 当前显示缓存的界面，重连后自动恢复
+      离线：当前显示缓存的界面，重连后自动恢复
     </div>
   )
 }

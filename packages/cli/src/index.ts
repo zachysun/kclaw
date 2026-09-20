@@ -145,7 +145,7 @@ async function chatAction(home: string, options: Record<string, unknown>): Promi
       const r = await runWizard(home)
       if (r === "aborted") return
     } else {
-      process.stdout.write("no llm provider configured — run `kclaw chat` in a terminal to run the setup wizard, see README\n")
+      process.stdout.write("尚未配置模型 provider：请在终端运行 `kclaw chat` 完成配置向导，详见 README\n")
       return
     }
   }
@@ -161,46 +161,46 @@ async function chatAction(home: string, options: Record<string, unknown>): Promi
 const program = new Command()
 program
   .name("kclaw")
-  .description("CLI for the kclaw daemon")
+  .description("kclaw daemon 的命令行工具")
   .version(readVersion())
-  .option("--home <dir>", "kclaw home directory", defaultHome())
+  .option("--home <dir>", "kclaw 主目录", defaultHome())
   // Chat options live on the program so BOTH invocations parse them:
   // `kclaw --session X` (default action) and `kclaw chat --session X`
   // (optsWithGlobals merges program options into the subcommand).
-  .option("--session <id>", "chat: resume this session instead of creating one")
-  .option("--think", "chat: stream thinking deltas (dim)")
-  .addOption(new Option("--yes", "chat: auto-approve confirmations (tests & scripting)").hideHelp())
-  .addOption(new Option("--no", "chat: auto-deny confirmations (tests & scripting)").hideHelp())
+  .option("--session <id>", "chat：恢复指定会话而不是新建")
+  .option("--think", "chat：流式显示思考过程（暗色）")
+  .addOption(new Option("--yes", "chat：自动批准确认（测试与脚本用）").hideHelp())
+  .addOption(new Option("--no", "chat：自动拒绝确认（测试与脚本用）").hideHelp())
   .action(run(chatAction))
 
 program
   .command("chat")
-  .description("interactive chat (the default when no subcommand is given)")
+  .description("交互式对话（不带子命令时的默认行为）")
   .action(run(chatAction))
 
-const daemon = program.command("daemon").description("daemon lifecycle")
-daemon.command("start").description("ensure the daemon is running (spawn it when it is not)").action(run(startAction))
-daemon.command("stop").description("stop the daemon (SIGTERM, then clean the pidfile)").action(run(stopAction))
-daemon.command("status").description("report whether the daemon is running, and where").action(run(statusAction))
+const daemon = program.command("daemon").description("daemon 生命周期管理")
+daemon.command("start").description("确保 daemon 在运行（没在运行就拉起）").action(run(startAction))
+daemon.command("stop").description("停止 daemon（先 SIGTERM，再清理 pid 文件）").action(run(stopAction))
+daemon.command("status").description("查看 daemon 是否在运行及运行位置").action(run(statusAction))
 
-program.command("status").description("alias of 'daemon status'").action(run(statusAction))
+program.command("status").description("等价于 daemon status").action(run(statusAction))
 
 program
   .command("mcp")
-  .description("list configured MCP servers and their tool counts (alias: kclaw mcp list)")
-  .argument("[list]", "print the server list (the only subcommand)")
+  .description("列出已配置的 MCP server 与各自的工具数量（别名：kclaw mcp list）")
+  .argument("[list]", "打印 server 列表（唯一的子命令）")
   .action(run(mcpAction))
 
 program
   .command("web")
-  .description("open the WebUI in your browser (starts the daemon if needed)")
+  .description("在浏览器打开 WebUI（daemon 没在运行会先拉起）")
   .action(run(webAction))
 
 program
   .command("jobs")
-  .description("scheduled jobs")
+  .description("定时任务")
   .command("list")
-  .description("list jobs (auto-starts the daemon when it is not running)")
+  .description("列出任务（daemon 没在运行会自动拉起）")
   .action(run(jobsListAction))
 
 // Only parse argv when this module is the executed entry (direct
@@ -223,7 +223,7 @@ if (invokedAsMain) {
   // runtime never gets as far as a confusing syntax/API error.
   const [major] = process.versions.node.split(".").map(Number)
   if (major < 22) {
-    console.error(`kclaw requires Node >= 22 (you are on ${process.versions.node})`)
+    console.error(`kclaw 需要 Node >= 22（当前版本 ${process.versions.node}）`)
     process.exit(1)
   }
   await program.parseAsync(process.argv)

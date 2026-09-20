@@ -86,7 +86,7 @@ function readToken(home: string): string {
   try {
     return readFileSync(join(home, "token"), "utf8").trim()
   } catch {
-    throw new Error(`no token file in ${home} — start the daemon first ('kclaw daemon start')`)
+    throw new Error(`${home} 下没有 token 文件：先启动 daemon（'kclaw daemon start'）`)
   }
 }
 
@@ -113,7 +113,7 @@ export class KclawClient {
       await ensureDaemon(h)
       info = readDaemonJson(h)
       if (info === undefined) {
-        throw new Error(`daemon started but ${join(h, "daemon.json")} is missing`)
+        throw new Error(`daemon 已启动，但 ${join(h, "daemon.json")} 不存在`)
       }
     }
 
@@ -123,7 +123,7 @@ export class KclawClient {
     // concurrent respawn (ensureDaemon already saw it healthy once).
     const deadline = Date.now() + CONNECT_RETRY_MS
     while (!(await probeHealth(info.port))) {
-      if (Date.now() >= deadline) throw new Error(`daemon on port ${info.port} stopped answering`)
+      if (Date.now() >= deadline) throw new Error(`端口 ${info.port} 上的 daemon 停止了响应`)
       await new Promise((resolve) => setTimeout(resolve, 250))
     }
     return client
@@ -155,7 +155,7 @@ export class KclawClient {
     const opened = new Promise<void>((resolve, reject) => {
       socket.once("open", () => resolve())
       socket.once("error", (err: Error) => reject(err))
-      socket.once("close", () => reject(new Error("websocket closed before opening")))
+      socket.once("close", () => reject(new Error("websocket 在建立前就关闭了")))
     })
     socket.on("message", (raw: unknown) => {
       try {

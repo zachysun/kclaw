@@ -84,7 +84,7 @@ export function TeamPanelCard({ panel, target, onTalkTo, onStopMember, onOpenAud
                 data-testid="team-talk-lead"
                 onClick={() => onTalkTo(null)}
               >
-                {target === null ? "对话中" : "说话"}
+                {target === null ? "对话中" : "进入对话"}
               </button>
             </span>
           </div>
@@ -108,7 +108,7 @@ export function TeamPanelCard({ panel, target, onTalkTo, onStopMember, onOpenAud
                     data-testid={`team-talk-${m.name}`}
                     onClick={() => onTalkTo(m.name)}
                   >
-                    {target === m.name ? "对话中" : "说话"}
+                    {target === m.name ? "对话中" : "进入对话"}
                   </button>
                 )}
                 {m.busy === true && m.sessionId !== undefined && (

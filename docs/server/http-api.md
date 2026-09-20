@@ -226,7 +226,7 @@ interface Job {
 | 方法 | 路径 | 用途 | 关键字段 |
 |---|---|---|---|
 | GET | `/channel` | 飞书频道配置与状态快照（WebUI「IM Channel」页） | `{config: {enabled, appId, appSecretSet, allowlist, primaryOpenId?}, status: {state: "disabled"/"running"/"error", error?}, pendingSenders: [{openId, count, lastSeen}]}`；`appSecretSet` 只表"是否已设置"，secret 内容不出现在任何响应里 |
-| POST | `/channel/config` | 保存配置并热重启通道（不重启 daemon） | 请求 `{enabled, appId, appSecret?, allowlist, primaryOpenId?}`；`appSecret` 为空/缺省即保持已存值；校验失败（enabled 缺凭据、推送接收人不在白名单）400；返回保存后的新快照 |
+| POST | `/channel/config` | 保存配置并热重启通道（不重启 daemon） | 请求 `{enabled, appId, appSecret?, allowlist, primaryOpenId?}`；`appSecret` 为空即保持已存值；校验失败（enabled 缺凭据、推送接收人不在白名单）400；返回保存后的新快照 |
 | POST | `/channel/test` | 用草稿凭据验证飞书应用身份（换一次 access token），不落盘 | 请求 `{appId, appSecret?}`；secret 留空时用已存值；返回 `{ok, error?}` |
 | POST | `/channel/allowlist/:openId` | 一键加白：open_id 写入白名单并热重启，同时清除对应待加白记录 | 幂等（已在白名单则不重启）；返回新快照 |
 

@@ -118,7 +118,7 @@ export function saveConfig(paths: KclawPaths, config: KclawConfig): void
 export function renameProviderEntry(config: KclawConfig, from: string, to: string): void
 // 条目改名统一入口：挪动 entries 的键，并把 PROVIDER_ENTRY_REFERENCES 里
 // 指向旧名的配置级引用（providers.default、memory.extractModel、
-// memory.embedding.provider）一并改写；会话级引用保持旧名、下个 run 回落默认条目
+// memory.embedding.provider）一并改写；会话级引用保持旧名、下个 run 改用默认条目
 
 // packages/core/src/storage/config-notifier.ts
 export type ConfigSection = "providers" | "mcp" | "channels"

@@ -390,7 +390,7 @@ export function ModelView({ api, notice }: {
                   type="number"
                   min={1}
                   value={form.contextWindow}
-                  placeholder="token，缺省不限"
+                  placeholder="token，留空则不限"
                   onChange={(e) => setForm({ ...form, contextWindow: e.target.value })}
                 />
               </label>
@@ -401,7 +401,7 @@ export function ModelView({ api, notice }: {
                   type="number"
                   min={1}
                   value={form.maxOutput}
-                  placeholder="token，缺省供应商默认"
+                  placeholder="token，留空则用供应商默认"
                   onChange={(e) => setForm({ ...form, maxOutput: e.target.value })}
                 />
               </label>
@@ -478,8 +478,8 @@ export function ModelView({ api, notice }: {
               </div>
               {confirmDelete?.name === name && (
                 <p className="model-warning" data-testid={`model-warning-${name}`}>
-                  {confirmDelete.usedBy > 0 && `${confirmDelete.usedBy} 个会话正在使用该条目，删除后这些会话将回落默认模型。`}
-                  {confirmDelete.memoryRefs && "记忆提取或向量检索正在使用该条目，删除后将回落默认端点。"}
+                  {confirmDelete.usedBy > 0 && `${confirmDelete.usedBy} 个会话正在使用该条目，删除后这些会话将改用默认模型。`}
+                  {confirmDelete.memoryRefs && "记忆提取或向量检索正在使用该条目，删除后将改用默认端点。"}
                   <button type="button" data-testid={`model-delete-confirm-${name}`} onClick={() => void confirmRemove(name)}>
                     确认删除
                   </button>
