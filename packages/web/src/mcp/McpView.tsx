@@ -1,8 +1,9 @@
 /**
  * McpView — MCP server management tab: the daemon-wide status snapshot
- * (name, connection state, last error) with per-server expandable tool
- * lists, plus the management actions (enable/disable, reconnect, and the
- * add/edit/delete form). Fetch-on-entry with a manual refresh button —
+ * (name, source-layer badge, connection state, last error) with per-server
+ * expandable tool lists, plus the management actions (enable/disable,
+ * reconnect, and the add/edit/delete form — new entries pick a target
+ * layer, global by default). Fetch-on-entry with a manual refresh button —
  * no polling, no live updates. Data comes from GET /mcp; actions ride the
  * /mcp/servers family and re-fetch on completion. env/headers echo back in
  * plaintext by design (local single-user product behind token auth).
@@ -20,9 +21,12 @@ interface McpToolEntry {
 
 type McpState = "connected" | "connecting" | "disabled" | "failed"
 
+type McpScope = "global" | "project"
+
 interface McpServerStatus {
   name: string
   config: { type: "stdio" | "http"; enabled?: boolean }
+  scope: McpScope
   state: McpState
   tools: McpToolEntry[]
   lastError?: string
@@ -44,6 +48,11 @@ interface FormState {
   editing: string | null
   name: string
   type: "stdio" | "http"
+  /**
+   * Target layer for a NEW entry (the choice only exists at creation — an
+   * edit acts on the effective entry and stays in its own layer).
+   */
+  layer: McpScope
   command: string
   /** One argument per line. */
   argsText: string
@@ -59,7 +68,7 @@ interface FormState {
 }
 
 function emptyForm(): FormState {
-  return { editing: null, name: "", type: "stdio", command: "", argsText: "", envPairs: [], url: "", headerPairs: [], enabled: true }
+  return { editing: null, name: "", type: "stdio", layer: "global", command: "", argsText: "", envPairs: [], url: "", headerPairs: [], enabled: true }
 }
 
 /** Prefill from an existing snapshot entry (plaintext echo of env/headers). */
@@ -73,6 +82,7 @@ function formFromStatus(s: McpServerStatus): FormState {
     editing: s.name,
     name: s.name,
     type: c.type === "http" ? "http" : "stdio",
+    layer: s.scope,
     command: typeof c.command === "string" ? c.command : "",
     argsText: Array.isArray(c.args) ? (c.args as string[]).join("\n") : "",
     envPairs: pairs(c.env),
@@ -206,7 +216,7 @@ export function McpView({ api, notice }: {
           }
     try {
       if (form.editing === null) {
-        await api.post("/mcp/servers", { name: form.name.trim(), config })
+        await api.post("/mcp/servers", { name: form.name.trim(), config, layer: form.layer })
       } else {
         await api.patch(`/mcp/servers/${encodeURIComponent(form.editing)}`, { config })
       }
@@ -255,6 +265,16 @@ export function McpView({ api, notice }: {
                 http
               </button>
             </span>
+            {form.editing === null && (
+              <span className="mcp-form-type">
+                <button type="button" className={form.layer === "global" ? "active" : ""} data-testid="mcp-form-layer-global" onClick={() => setForm({ ...form, layer: "global" })}>
+                  全局
+                </button>
+                <button type="button" className={form.layer === "project" ? "active" : ""} data-testid="mcp-form-layer-project" onClick={() => setForm({ ...form, layer: "project" })}>
+                  项目
+                </button>
+              </span>
+            )}
           </div>
           {form.type === "stdio" ? (
             <>
@@ -322,6 +342,9 @@ export function McpView({ api, notice }: {
             <li key={s.name} className="mcp-server" data-testid={`mcp-server-${s.name}`}>
               <div className="mcp-server-head">
                 <span className="mcp-name">{s.name}</span>
+                <span className="mcp-scope" data-testid={`mcp-scope-${s.name}`}>
+                  {s.scope === "project" ? "项目" : "全局"}
+                </span>
                 <span className={`mcp-state ${s.state}`} data-testid={`mcp-state-${s.name}`}>
                   {MCP_STATE_LABELS[s.state]}
                 </span>

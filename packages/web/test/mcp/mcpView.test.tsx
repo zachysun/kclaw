@@ -16,12 +16,14 @@ const SNAPSHOT = {
     {
       name: "existing",
       config: { type: "stdio", command: "run", env: { TOKEN: "s3cret" } },
+      scope: "global",
       state: "connected",
       tools: [],
     },
     {
       name: "filesystem",
       config: { type: "stdio", command: "npx -y srv" },
+      scope: "project",
       state: "connected",
       tools: [
         { name: "mcp__filesystem__read", originalName: "read", description: "Read a file" },
@@ -31,6 +33,7 @@ const SNAPSHOT = {
     {
       name: "remote",
       config: { type: "http", url: "https://x.test/mcp" },
+      scope: "global",
       state: "failed",
       lastError: "connect ECONNREFUSED",
       tools: [],
@@ -38,6 +41,7 @@ const SNAPSHOT = {
     {
       name: "off",
       config: { type: "stdio", command: "unused", enabled: false },
+      scope: "global",
       state: "disabled",
       tools: [],
     },
@@ -88,6 +92,9 @@ describe("McpView", () => {
     expect(container.querySelector('[data-testid="mcp-state-off"]')?.textContent).toBe("已禁用")
     expect(container.querySelector('[data-testid="mcp-error-remote"]')?.textContent).toContain("ECONNREFUSED")
     expect(container.querySelector('[data-testid="mcp-error-filesystem"]')).toBeNull()
+    // source-layer badges
+    expect(container.querySelector('[data-testid="mcp-scope-filesystem"]')?.textContent).toBe("项目")
+    expect(container.querySelector('[data-testid="mcp-scope-existing"]')?.textContent).toBe("全局")
     // config summary lines
     expect(container.textContent).toContain("npx -y srv")
     expect(container.textContent).toContain("https://x.test/mcp")
@@ -194,7 +201,7 @@ describe("McpView form (add / edit / delete)", () => {
     })
   }
 
-  it("adds a stdio server through the form", async () => {
+  it("adds a stdio server through the form (default layer: global)", async () => {
     const api = fakeApi({ post: vi.fn(async () => ({ ok: true })) })
     const { container } = await mount(api)
     await openAdd(container)
@@ -208,10 +215,41 @@ describe("McpView form (add / edit / delete)", () => {
     expect(api.post).toHaveBeenCalledWith("/mcp/servers", {
       name: "new-srv",
       config: { type: "stdio", command: "npx -y srv" },
+      layer: "global",
     })
     expect(api.get).toHaveBeenCalledTimes(2)
     // form closes after a successful save
     expect(container.querySelector('[data-testid="mcp-form"]')).toBeNull()
+  })
+
+  it("creates into the project layer when the form selects it", async () => {
+    const api = fakeApi({ post: vi.fn(async () => ({ ok: true })) })
+    const { container } = await mount(api)
+    await openAdd(container)
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-form-layer-project"]') as HTMLButtonElement).click()
+    })
+    typeInto(container, "mcp-form-name", "proj-srv")
+    typeInto(container, "mcp-form-command", "npx -y proj")
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-form-submit"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(api.post).toHaveBeenCalledWith("/mcp/servers", {
+      name: "proj-srv",
+      config: { type: "stdio", command: "npx -y proj" },
+      layer: "project",
+    })
+  })
+
+  it("hides the layer choice when editing an existing entry", async () => {
+    const api = fakeApi({ patch: vi.fn(async () => ({ ok: true })) })
+    const { container } = await mount(api)
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-edit-existing"]') as HTMLButtonElement).click()
+    })
+    expect(container.querySelector('[data-testid="mcp-form-layer-project"]')).toBeNull()
+    expect(container.querySelector('[data-testid="mcp-form-layer-global"]')).toBeNull()
   })
 
   it("switches to http fields and carries headers through", async () => {
@@ -236,6 +274,7 @@ describe("McpView form (add / edit / delete)", () => {
     expect(api.post).toHaveBeenCalledWith("/mcp/servers", {
       name: "remote",
       config: { type: "http", url: "https://x.test/mcp", headers: { Authorization: "Bearer k" } },
+      layer: "global",
     })
   })
 

@@ -3446,6 +3446,14 @@ select:focus {
   font-size: 14px;
 }
 
+.mcp-scope {
+  font-size: 12px;
+  border-radius: 999px;
+  padding: 1px 8px;
+  color: var(--accent, var(--text));
+  background: color-mix(in srgb, var(--accent, var(--text)) 12%, transparent);
+}
+
 .mcp-state {
   font-size: 12px;
   border: 1px solid var(--border);
