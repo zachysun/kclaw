@@ -6,6 +6,8 @@ dist/
 docs/superpowers/
 .superpowers/
 
+.zcode/
+
 # runtime artifacts that must never live in the source tree
 packages/core/attachments/
 packages/core/logs/
