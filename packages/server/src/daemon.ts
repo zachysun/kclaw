@@ -323,46 +323,84 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // are logged and never fatal — a broken server just yields no tools.
   const workspace = config.workspace
   // Project-file watch: hand edits to <workspace>/.kclaw/mcp.json
-  // hot-reload through reconcile. The watcher attaches lazily — the .kclaw
-  // dir normally does not exist until the first project write creates it
-  // (birth defenses), so a missing dir at startup is the normal case:
-  // silently skipped, retried after every project persist. A watch that
-  // cannot start (or errors later) logs once and degrades: hand edits then
-  // apply on restart, never fatal.
+  // hot-reload through reconcile. Two-stage attach — the daemon watches the
+  // workspace top level until `.kclaw` appears (creating it at startup would
+  // drop an empty dir into every workspace), then switches to the `.kclaw`
+  // watch; a project-layer persist attaches the inner watch directly (the
+  // birth defenses just created the dir). A watch that cannot start (or
+  // errors later) logs once and degrades: hand edits then apply on restart,
+  // never fatal.
   let projectMcpWatcher: FSWatcher | undefined
+  let workspaceWatch: FSWatcher | undefined
   let projectMcpWatchFailed = false
   let projectMcpWatchDebounce: NodeJS.Timeout | undefined
+  const PROJECT_MCP_DIR = join(workspace, ".kclaw")
   const PROJECT_MCP_WATCH_DEBOUNCE_MS = 250
 
-  function ensureProjectMcpWatch(): void {
-    if (projectMcpWatcher !== undefined || projectMcpWatchFailed) return
-    const dir = join(workspace, ".kclaw")
-    if (!existsSync(dir)) return
+  function scheduleProjectMcpReconcile(): void {
+    if (projectMcpWatchDebounce !== undefined) return
+    projectMcpWatchDebounce = setTimeout(() => {
+      projectMcpWatchDebounce = undefined
+      try {
+        mcpManager.reconcile(loadProjectMcpServers(workspace))
+      } catch (e) {
+        console.error(`kclaw mcp project config reload failed: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }, PROJECT_MCP_WATCH_DEBOUNCE_MS)
+  }
+
+  function degradeProjectMcpWatch(stage: string, error: unknown): void {
+    console.error(`kclaw mcp project config watch ${stage} (${error instanceof Error ? error.message : String(error)}); hand edits apply on restart`)
+    projectMcpWatcher?.close()
+    projectMcpWatcher = undefined
+    workspaceWatch?.close()
+    workspaceWatch = undefined
+    projectMcpWatchFailed = true
+  }
+
+  /** Watch <workspace>/.kclaw itself (the dir must exist); idempotent. */
+  function attachInnerProjectMcpWatch(): void {
+    if (projectMcpWatchFailed || projectMcpWatcher !== undefined) return
     try {
-      projectMcpWatcher = watch(dir, (_event, filename) => {
+      projectMcpWatcher = watch(PROJECT_MCP_DIR, (_event, filename) => {
         // Atomic writes fire rename events for both mcp.json.tmp and
         // mcp.json; a null filename (some platforms) also re-reads — cheap,
         // reconcile is idempotent.
         if (filename !== null && filename !== "mcp.json") return
-        if (projectMcpWatchDebounce !== undefined) return
-        projectMcpWatchDebounce = setTimeout(() => {
-          projectMcpWatchDebounce = undefined
-          try {
-            mcpManager.reconcile(loadProjectMcpServers(workspace))
-          } catch (e) {
-            console.error(`kclaw mcp project config reload failed: ${e instanceof Error ? e.message : String(e)}`)
-          }
-        }, PROJECT_MCP_WATCH_DEBOUNCE_MS)
+        scheduleProjectMcpReconcile()
       })
-      projectMcpWatcher.on("error", (e) => {
-        console.error(`kclaw mcp project config watch failed (${e instanceof Error ? e.message : String(e)}); hand edits apply on restart`)
-        projectMcpWatcher?.close()
-        projectMcpWatcher = undefined
-        projectMcpWatchFailed = true
-      })
+      projectMcpWatcher.on("error", (e) => degradeProjectMcpWatch("failed", e))
+      // the inner watch covers everything the outer one was waiting for
+      workspaceWatch?.close()
+      workspaceWatch = undefined
     } catch (e) {
-      console.error(`kclaw mcp project config watch unavailable (${e instanceof Error ? e.message : String(e)}); hand edits apply on restart`)
-      projectMcpWatchFailed = true
+      degradeProjectMcpWatch("unavailable", e)
+    }
+  }
+
+  function ensureProjectMcpWatch(): void {
+    if (projectMcpWatchFailed) return
+    if (existsSync(PROJECT_MCP_DIR)) {
+      attachInnerProjectMcpWatch()
+      return
+    }
+    if (workspaceWatch !== undefined || projectMcpWatcher !== undefined) return
+    try {
+      // Workspace top level until `.kclaw` shows up (non-recursive: only
+      // top-level entries are reported, so the event rate stays trivial).
+      workspaceWatch = watch(workspace, (_event, filename) => {
+        if (filename !== ".kclaw") return
+        workspaceWatch?.close()
+        workspaceWatch = undefined
+        attachInnerProjectMcpWatch()
+        // The inner watch registered AFTER the mkdir-to-first-write burst:
+        // whatever already landed in mcp.json is invisible to it, so read
+        // the file once now (reconcile is idempotent).
+        if (projectMcpWatcher !== undefined) scheduleProjectMcpReconcile()
+      })
+      workspaceWatch.on("error", (e) => degradeProjectMcpWatch("failed", e))
+    } catch (e) {
+      degradeProjectMcpWatch("unavailable", e)
     }
   }
 
@@ -559,6 +597,8 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       // project-file watcher first: no reconcile can race the manager teardown
       projectMcpWatcher?.close()
       projectMcpWatcher = undefined
+      workspaceWatch?.close()
+      workspaceWatch = undefined
       if (projectMcpWatchDebounce !== undefined) {
         clearTimeout(projectMcpWatchDebounce)
         projectMcpWatchDebounce = undefined
