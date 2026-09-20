@@ -200,10 +200,12 @@ export function createFeishuManager(deps: FeishuManagerDeps): FeishuManager {
       return
     }
     // Channel down: nobody holds the in-memory view, patch the file directly.
+    // Spread (not rebuild) so fields the channel owns — e.g. pendingApprovals —
+    // survive this pendingSenders-only edit.
     const state = loadFeishuState(deps.home)
     const filtered = state.pendingSenders.filter((p) => p.openId !== openId)
     if (filtered.length !== state.pendingSenders.length) {
-      saveFeishuState(deps.home, { bindings: state.bindings, pendingSenders: filtered })
+      saveFeishuState(deps.home, { ...state, pendingSenders: filtered })
     }
   }
 

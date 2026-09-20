@@ -83,10 +83,47 @@ export function loadFeishuConfig(home: string): FeishuConfig {
 /** Channel runtime state (open_id → persistent session, plus pending senders). */
 export const FEISHU_STATE_FILE = "feishu-state.json"
 
+/**
+ * An approval card this channel sent whose verdict is still outstanding,
+ * persisted so the buttons keep working across a hot restart (admin save /
+ * allowlist add rebuilds the channel): after a restart a click resolves
+ * through the broker if the confirmation is still alive, or marks the card
+ * invalid when it is not.
+ */
+export interface PendingApproval {
+  cardId: string
+  openId: string
+}
+
+/**
+ * Who writes this file: the channel rewrites it whole from its in-memory
+ * view whenever its state changes — and only while started (the started
+ * guard drops late transport callbacks of a stopped instance, so a dying
+ * channel can never overwrite its successor's state). The manager patches
+ * it directly only while the channel is down (nobody holds a live view
+ * then), its mutations run serialized on the manager's queue, and both
+ * sides are read-modify-write over the same file. Those three facts
+ * together are the no-interleave argument; keep them true when touching
+ * either writer.
+ */
 export interface FeishuState {
   bindings: Record<string, string>
   /** Non-allowlisted senders seen since the list was last cleared. */
   pendingSenders: PendingSender[]
+  /** confirmationId → the approval card tracking it. Absent in older files. */
+  pendingApprovals?: Record<string, PendingApproval>
+}
+
+function normalizePendingApprovals(raw: unknown): Record<string, PendingApproval> | undefined {
+  if (raw === undefined || raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined
+  const out: Record<string, PendingApproval> = {}
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    const entry = value as Partial<PendingApproval> | null | undefined
+    if (id !== "" && typeof entry?.cardId === "string" && entry.cardId !== "" && typeof entry.openId === "string" && entry.openId !== "") {
+      out[id] = { cardId: entry.cardId, openId: entry.openId }
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 export function loadFeishuState(home: string): FeishuState {
@@ -100,7 +137,12 @@ export function loadFeishuState(home: string): FeishuState {
             typeof p?.openId === "string" && p.openId !== "" && typeof p?.count === "number" && typeof p?.lastSeen === "number",
         )
       : []
-    return { bindings: raw.bindings ?? {}, pendingSenders: normalizePendingSenders(pending) }
+    const pendingApprovals = normalizePendingApprovals(raw.pendingApprovals)
+    return {
+      bindings: raw.bindings ?? {},
+      pendingSenders: normalizePendingSenders(pending),
+      ...(pendingApprovals !== undefined ? { pendingApprovals } : {}),
+    }
   } catch {
     return { bindings: {}, pendingSenders: [] }
   }

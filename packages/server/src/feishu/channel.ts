@@ -16,7 +16,7 @@ import { join } from "node:path"
 import type { AnyAgentEvent, EventBus, SessionStore } from "@kclaw/core"
 import type { RunManager } from "../run.js"
 import type { BackgroundSettlement } from "../subagent.js"
-import type { FeishuConfig, PendingSender } from "./config.js"
+import type { FeishuConfig, PendingApproval, PendingSender } from "./config.js"
 import {
   FEISHU_STATE_FILE,
   PENDING_SENDERS_CAP,
@@ -59,12 +59,6 @@ interface RunView {
   pendingDeltas: string[]
 }
 
-/** A confirmation card we sent and are still tracking. */
-interface PendingApproval {
-  cardId: string
-  openId: string
-}
-
 const ARGS_PREVIEW_CHARS = 300
 
 export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
@@ -77,7 +71,7 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
   const bySession = new Map<string, string>()
   /** runId → mirror state. */
   const views = new Map<string, RunView>()
-  /** confirmationId → our approval card. */
+  /** confirmationId → our approval card; persisted so clicks survive restarts. */
   const pending = new Map<string, PendingApproval>()
   /** Non-allowlisted senders (open_id → count/lastSeen); persisted for the admin page. */
   const rejected = new Map<string, { count: number; lastSeen: number }>()
@@ -85,9 +79,12 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
 
   const persist = (): void => {
     try {
+      const approvals: Record<string, PendingApproval> = {}
+      for (const [id, entry] of pending) approvals[id] = entry
       saveFeishuState(deps.home, {
         bindings: Object.fromEntries(bindings),
         pendingSenders: pendingSenders(),
+        ...(Object.keys(approvals).length > 0 ? { pendingApprovals: approvals } : {}),
       })
     } catch (err) {
       log(`feishu: ${statePath} 写入失败：${err instanceof Error ? err.message : String(err)}`)
@@ -232,7 +229,10 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
             risk,
             ...(noteText !== undefined ? { noteText } : {}),
           })
-          .then((cardId) => { pending.set(confirmationId, { cardId, openId }) })
+          .then((cardId) => {
+            pending.set(confirmationId, { cardId, openId })
+            persist()
+          })
           .catch(() => undefined)
         return
       }
@@ -242,6 +242,7 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
         const entry = pending.get(e.payload.confirmationId)
         if (entry === undefined) return
         pending.delete(e.payload.confirmationId)
+        persist()
         void transport.updateCard(entry.cardId, {
           kind: "approval-settled", confirmationId: e.payload.confirmationId, outcome: "invalid",
         }).catch(() => undefined)
@@ -342,6 +343,7 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
     const decision = verb === "confirm" ? "once" : "reject"
     const ok = run.broker.resolve(confirmationId, decision, "feishu")
     pending.delete(confirmationId)
+    persist()
     const outcome = !ok ? "invalid" : verb === "confirm" ? "approved" : "rejected"
     void transport
       .updateCard(entry.cardId, { kind: "approval-settled", confirmationId, outcome })
@@ -364,6 +366,11 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
     }
     // Rejected senders outlive restarts so the admin page keeps its list.
     for (const p of state.pendingSenders) rejected.set(p.openId, { count: p.count, lastSeen: p.lastSeen })
+    // Approval cards too: after a hot restart a click resolves through the
+    // broker if the confirmation is still alive, or lands as invalid.
+    for (const [confirmationId, entry] of Object.entries(state.pendingApprovals ?? {})) {
+      pending.set(confirmationId, entry)
+    }
     bus.connect(socket)
     await transport.start({ onMessage, onCardAction })
   }
@@ -372,6 +379,19 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
     if (!started) return
     started = false
     bus.unsubscribe(socket)
+    // 重启不能把在飞的镜像卡冻在半截：趁传输还活着，逐张补一个诚实的
+    // 终稿。run 本身还在 daemon 里继续，断掉的只是这张镜像卡。
+    const note = "（通道重启，本轮中断；完整回复可在 WebUI 查看）"
+    for (const [, view] of views) {
+      const send = view.streamCardId !== undefined
+        ? transport.finishStream(view.streamCardId, note)
+        : view.thinkingCardId !== undefined
+          ? transport.updateCard(view.thinkingCardId, { kind: "complete", markdown: note })
+          : undefined
+      send?.catch(() => undefined)
+    }
+    views.clear()
+    persist()
     await transport.stop()
   }
 
