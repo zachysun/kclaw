@@ -39,6 +39,12 @@ export interface TransportHandlers {
  * Lifecycle: start() connects and begins delivering inbound events; stop()
  * disconnects. Every outbound call is idempotent-ish and may throw — the
  * channel catches and degrades (a failed card must never kill a run).
+ *
+ * Delivery contract: implementations MUST hand EVERY direct message to
+ * onMessage — no transport-side allowlist filtering. The channel enforces
+ * the allowlist itself so rejected senders get recorded for the admin
+ * page's one-click allowlisting; the real transport runs the SDK with
+ * dmMode "open" for exactly this reason (see real-transport.ts).
  */
 export interface FeishuTransport {
   start(handlers: TransportHandlers): Promise<void>

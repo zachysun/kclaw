@@ -198,7 +198,9 @@ describe("feishu channel", () => {
     await new Promise((r) => setTimeout(r, 20))
 
     const recorded = env.channel.pendingSenders()
-    expect(recorded.map((p) => p.openId)).toEqual(["ou_other", "ou_stranger"]) // newest first
+    // 顺序不断言：两条记录可能落进同一毫秒，稳定排序的先后就不定；
+    // “最新在前”的排序归 normalizePendingSenders 自己的测试管（离散时间戳）
+    expect([...recorded.map((p) => p.openId)].sort()).toEqual(["ou_other", "ou_stranger"])
     const stranger = recorded.find((p) => p.openId === "ou_stranger")!
     expect(stranger.count).toBe(2)
     expect(stranger.lastSeen).toBeGreaterThan(0)
@@ -287,6 +289,35 @@ describe("feishu channel", () => {
     await channel2.stop()
 
     expect(mainMessages(env)).toHaveLength(1)
+  })
+
+  it("settles in-flight run cards with an interrupted final when the channel stops", async () => {
+    const gate: { open?: () => void } = {}
+    const llm: LlmClient = {
+      async *stream(): AsyncIterable<LlmStreamEvent> {
+        await new Promise<void>((resolve) => { gate.open = resolve })
+        yield* textTurn("不该到达")
+      },
+    }
+    env = await makeEnv(llm)
+    env.transport.inbound("ou_master", "长任务")
+    await until(() => env.transport.cards.some((c) => c.card.kind === "thinking"), "thinking card")
+    // sendCard 已返回卡片 id（视图登记是它的 .then 微任务），等它落地再停
+    await new Promise((r) => setTimeout(r, 20))
+    await until(() => readNonChildBusy(env), "run active")
+
+    await env.channel.stop()
+
+    // 卡片拿到诚实的终稿，而不是永远停在「思考中…」；无流卡 → 走 updateCard
+    await until(() => env.transport.cardUpdates.length > 0, "interrupted final")
+    const final = env.transport.cardUpdates[0]!
+    expect(final.card.kind).toBe("complete")
+    expect((final.card as Extract<OutboundCard, { kind: "complete" }>).markdown).toContain("WebUI")
+    expect(env.transport.finishes).toHaveLength(0)
+
+    // 收尾：放行挂着的 run（结果不再镜像），让会话落回空闲
+    gate.open!()
+    await until(() => !readNonChildBusy(env), "run settled")
   })
 
   it("rebinds when the bound session is soft-deleted mid-flight", async () => {
@@ -442,6 +473,64 @@ describe("feishu channel", () => {
     env.transport.cardAction("ou_master", `confirm:${approval.confirmationId}`)
     await until(() => env.transport.cardUpdates.some((u) =>
       u.card.kind === "approval-settled" && u.card.outcome === "invalid"), "invalid marking")
+  })
+
+  it("approval cards survive a hot restart: the click still resolves", async () => {
+    llmQueue.push(execTurn("c1", "echo hi"), textTurn("批准后继续"))
+    env = await makeScriptedEnv()
+    env.transport.inbound("ou_master", "跑个命令")
+    await until(() => env.transport.cards.some((c) => c.card.kind === "approval"), "approval card")
+    const approval = env.transport.cards.find((c) => c.card.kind === "approval")!
+      .card as Extract<OutboundCard, { kind: "approval" }>
+
+    // 审批卡已落盘（requested 即持久化），热重启后按钮有人认领
+    const state = JSON.parse(readFileSync(join(env.home, "feishu-state.json"), "utf8")) as {
+      pendingApprovals?: Record<string, { cardId: string; openId: string }>
+    }
+    expect(state.pendingApprovals?.[approval.confirmationId])
+      .toEqual({ cardId: expect.any(String), openId: "ou_master" })
+
+    // 热重启形态：旧实例 stop、新实例 start（同一 home、同一 manager/bus）
+    await env.channel.stop()
+    const transport2 = new FakeTransport()
+    const channel2 = createFeishuChannel({
+      transport: transport2, config: CONFIG, run: env.manager, sessions: env.sessions,
+      bus: env.bus, home: env.home, log: () => undefined,
+    })
+    await channel2.start()
+
+    transport2.cardAction("ou_master", `confirm:${approval.confirmationId}`)
+    await until(() => transport2.cardUpdates.some((u) =>
+      u.card.kind === "approval-settled" && u.card.outcome === "approved"), "approved after restart")
+    await until(() => !readNonChildBusy(env), "run finished after approval")
+    await channel2.stop()
+  })
+
+  it("an approval click after the confirmation settled while the channel was down marks the card invalid", async () => {
+    llmQueue.push(execTurn("c1", "echo hi"), textTurn("继续"))
+    env = await makeScriptedEnv()
+    env.transport.inbound("ou_master", "跑个命令")
+    await until(() => env.transport.cards.some((c) => c.card.kind === "approval"), "approval card")
+    const approval = env.transport.cards.find((c) => c.card.kind === "approval")!
+      .card as Extract<OutboundCard, { kind: "approval" }>
+
+    // 通道先停（守护进程重启窗口），裁决发生在停机期间（如 WebUI）
+    await env.channel.stop()
+    expect(env.manager.broker.resolve(approval.confirmationId, "reject", "cli")).toBe(true)
+
+    const transport2 = new FakeTransport()
+    const channel2 = createFeishuChannel({
+      transport: transport2, config: CONFIG, run: env.manager, sessions: env.sessions,
+      bus: env.bus, home: env.home, log: () => undefined,
+    })
+    await channel2.start()
+
+    // 重启后在旧卡上再点：确认已不存在 → 卡片标记为已失效
+    transport2.cardAction("ou_master", `confirm:${approval.confirmationId}`)
+    await until(() => transport2.cardUpdates.some((u) =>
+      u.card.kind === "approval-settled" && u.card.outcome === "invalid"), "invalid after restart")
+    await until(() => !readNonChildBusy(env), "run settled")
+    await channel2.stop()
   })
 
   it("ignores card actions from non-allowlisted senders", async () => {
