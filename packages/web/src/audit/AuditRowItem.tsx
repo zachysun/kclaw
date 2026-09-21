@@ -9,7 +9,7 @@ import { memo } from "react"
 import type { AuditRow } from "./model.js"
 import {
   blockFullContent, blockSummary, blockTypeLabel, decisionFullContent, decisionSummary, fmtMs, fmtRowTime, fmtUsage,
-  memoryFullContent, memorySummary, rowTime, runSummary, sandboxFullContent, sandboxSummary, truncationSummary,
+  memoryFullContent, memorySummary, rowTime, runSummary, sandboxFullContent, sandboxSummary, skillSummary, truncationSummary,
   sessionFullContent, sessionSummary, summarize, systemFullText, teamFullContent, teamSummary,
 } from "./model.js"
 
@@ -73,6 +73,8 @@ function rowLabel(row: AuditRow): string {
       return "truncation"
     case "team":
       return "team"
+    case "skill":
+      return "skill"
   }
 }
 
@@ -100,6 +102,8 @@ function rowSummary(row: AuditRow): string {
       return truncationSummary(row.event)
     case "team":
       return teamSummary(row.event)
+    case "skill":
+      return skillSummary(row.event)
   }
 }
 
@@ -155,6 +159,8 @@ function rowFull(row: AuditRow): string {
       return JSON.stringify(row.event, null, 2)
     case "team":
       return teamFullContent(row.event)
+    case "skill":
+      return JSON.stringify(row.event, null, 2)
   }
 }
 

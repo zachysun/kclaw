@@ -1,5 +1,5 @@
 /**
- * SkillsView — 技能页：两个子页签。
+ * SkillsView — 技能页：三个子页签。
  *
  * 「已装技能」：左栏技能清单（名字 / 作用域 / 可见性标记 / 截断两行的描
  * 述），右栏点开后的 SKILL.md 正文。user-invocable:false 的技能服务端已
@@ -12,7 +12,12 @@
  * 来源/档位）在服务端 .links.json，外部 SKILL.md 一字不动；复用链接的管
  * 理记录不受用户可见性过滤影响（否则"仅模型"档改不回）。
  *
- * 顶部作用域下拉（默认全局，候选来自会话列表的工作目录）对两个页签共同
+ * 「提案」（技能进化，提案制）：后台提炼/skill_create 产出的待确认技能变
+ * 更全部落在这里，未经确认绝不进入技能目录。列表按状态展示，操作随状态
+ * 显隐：待确认可采纳/驳回，已采纳可回退（并显示采纳后的调用次数），已驳
+ * 回/已回退可删除。提案自带 workdir/scope，与顶部作用域下拉无关。
+ *
+ * 顶部作用域下拉（默认全局，候选来自会话列表的工作目录）对前两个页签共同
  * 生效，与 run 时注入同源同规则。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -64,12 +69,40 @@ interface LinksPayload {
   extraSources: string[]
 }
 
+/** 提案行（GET /skills/proposals）：完整提案字段 + applied 时的用量口径。 */
+interface ProposalRow {
+  id: string
+  status: "proposed" | "applied" | "rejected" | "reverted"
+  kind: "new" | "revise"
+  name: string
+  scope: "global" | "project"
+  workdir?: string
+  title: string
+  rationale: string
+  changes?: string
+  content: string
+  /** revise：提案时看到的正文（对照展示）。 */
+  baseline?: string
+  /** revise：apply 覆盖前的真实正文（回退源）。 */
+  snapshot?: string
+  source: "follow" | "skill_create"
+  sourceSessionId: string
+  createdAt: string
+  decidedAt?: string
+  appliedAt?: string
+  usage?: number
+}
+
 /** 复用来源与可见档位的中文标签（接口仍是服务端约定的小写枚举）。 */
 const AGENT_LABEL: Record<string, string> = { claude: "Claude Code", codex: "Codex", dsh: "DeepSeek", zcode: "zCode", custom: "自定义目录" }
 const TIER_LABEL: Record<LinkRecord["tier"], string> = { all: "完全可见", user: "仅用户", model: "仅模型", off: "暂不启用" }
 const TIERS: LinkRecord["tier"][] = ["all", "user", "model", "off"]
 
-type SubTab = "installed" | "reuse"
+const PROPOSAL_STATUS_LABEL: Record<ProposalRow["status"], string> = { proposed: "待确认", applied: "已采纳", rejected: "已驳回", reverted: "已回退" }
+const PROPOSAL_KIND_LABEL: Record<ProposalRow["kind"], string> = { new: "新增", revise: "修订" }
+const PROPOSAL_SCOPE_LABEL: Record<ProposalRow["scope"], string> = { global: "全局", project: "项目" }
+
+type SubTab = "installed" | "reuse" | "proposals"
 
 export function SkillsView({ api, notice }: {
   api: ApiClient
@@ -89,6 +122,8 @@ export function SkillsView({ api, notice }: {
   const [rows, setRows] = useState<SkillRow[] | null>(null)
   const [discovery, setDiscovery] = useState<DiscoveryPayload | null>(null)
   const [links, setLinks] = useState<LinksPayload | null>(null)
+  const [proposals, setProposals] = useState<ProposalRow[] | null>(null)
+  const [proposalId, setProposalId] = useState<string | null>(null)
   const [body, setBody] = useState<{ title: string; content: string; reusable?: DiscoveredSkill } | null>(null)
   const [newSource, setNewSource] = useState("")
   const [search, setSearch] = useState("")
@@ -113,6 +148,11 @@ export function SkillsView({ api, notice }: {
     // 复用管理面的三份数据失败都走行内降级，不打扰主清单的 notice。
     api.get<DiscoveryPayload>(`/skills/discovery${scopeQuery}`).then(setDiscovery).catch(() => setDiscovery(null))
     api.get<LinksPayload>(`/skills/links${scopeQuery}`).then(setLinks).catch(() => setLinks(null))
+    // 提案面：全局数据（提案自带 workdir/scope），拉取失败行内降级。
+    api
+      .get<{ proposals: ProposalRow[] }>("/skills/proposals")
+      .then((r) => setProposals(r.proposals))
+      .catch(() => setProposals(null))
   }, [api, scopeQuery])
   useEffect(() => { reload() }, [reload])
 
@@ -251,6 +291,40 @@ export function SkillsView({ api, notice }: {
   const reusableRows = discovery?.skills ?? []
   const discoveredCount = reusableRows.filter((s) => !s.reused && !s.conflict && !s.stale).length
 
+  // ---- 提案面（技能进化） --------------------------------------------------
+  const proposalRows = proposals ?? []
+  const pendingCount = proposalRows.filter((p) => p.status === "proposed").length
+  const selectedProposal = proposalRows.find((p) => p.id === proposalId) ?? null
+
+  const proposalAction = async (p: ProposalRow, op: "apply" | "reject" | "revert"): Promise<void> => {
+    setBusy(true)
+    try {
+      const res = await api.post<{ ok: boolean; warning?: string }>(`/skills/proposals/${encodeURIComponent(p.id)}/${op}`, {})
+      if (res.warning !== undefined) notice(res.warning) // 非致命提示（如全局提案被某项目同名技能遮蔽）
+      const verb = op === "apply" ? "已采纳" : op === "reject" ? "已驳回" : "已回退"
+      refreshAfterWrite(`提案 ${p.name} ${verb}`)
+    } catch (e) {
+      notice(`操作失败: ${String(e)}`, "error")
+      reload()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const removeProposal = async (p: ProposalRow): Promise<void> => {
+    setBusy(true)
+    try {
+      await api.del(`/skills/proposals/${encodeURIComponent(p.id)}`)
+      setProposalId(null)
+      refreshAfterWrite(`已删除提案 ${p.name}`)
+    } catch (e) {
+      notice(`删除失败: ${String(e)}`, "error")
+      reload()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   // 发现列表分两个区块，层级对齐心智模型：
   //   「用户级技能目录」按 agent 分组（展开）——用户亲手放的技能；
   //   「已安装插件」按插件分组（折叠）——插件带给你的技能。
@@ -300,6 +374,9 @@ export function SkillsView({ api, notice }: {
           <button type="button" role="tab" aria-selected={subTab === "reuse"} data-testid="subtab-reuse" className={subTab === "reuse" ? "active" : ""} onClick={() => { setSubTab("reuse"); setBody(null) }}>
             从其他 agent 复用{discoveredCount > 0 ? `（${discoveredCount}）` : ""}
           </button>
+          <button type="button" role="tab" aria-selected={subTab === "proposals"} data-testid="subtab-proposals" className={subTab === "proposals" ? "active" : ""} onClick={() => { setSubTab("proposals"); setBody(null) }}>
+            提案{pendingCount > 0 ? `（${pendingCount} 待确认）` : ""}
+          </button>
         </div>
       </div>
 
@@ -344,6 +421,104 @@ export function SkillsView({ api, notice }: {
                 <h3>{body.title}</h3>
                 <pre>{body.content}</pre>
               </>
+            )}
+          </div>
+        </div>
+      ) : subTab === "proposals" ? (
+        <div className="skills-panes" data-testid="proposals-pane">
+          <div className="skills-list">
+            {proposalRows.length === 0 ? (
+              <p className="muted">
+                还没有提案。开启技能进化（配置 skills.evolution.enabled）后，用了技能的会话会在空闲时提炼经验形成提案；
+                对话里模型也可通过 skill_create 主动提案。提案只是候选，未经你确认不会进入技能目录。
+              </p>
+            ) : (
+              <ul>
+                {proposalRows.map((p) => (
+                  <li key={p.id}>
+                    <button
+                      type="button"
+                      data-testid={`proposal-${p.id}`}
+                      className={proposalId === p.id ? "skill-item active" : "skill-item"}
+                      onClick={() => setProposalId(p.id)}
+                    >
+                      <span className="skill-name">{p.name}</span>
+                      <span className="skill-meta">
+                        {PROPOSAL_STATUS_LABEL[p.status]}
+                        {" · "}
+                        {PROPOSAL_KIND_LABEL[p.kind]} · {PROPOSAL_SCOPE_LABEL[p.scope]}
+                        {p.kind === "revise" ? ` · ${p.name}` : ""}
+                        {p.usage !== undefined ? ` · 被调用 ${p.usage} 次` : ""}
+                      </span>
+                      <span className="skill-desc clamp2">{p.rationale !== "" ? p.rationale : p.title}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="skills-body">
+            {selectedProposal === null ? (
+              <p className="muted">选择一个提案查看详情；待确认的提案在此采纳或驳回，已采纳的可回退</p>
+            ) : (
+              (() => {
+                const p = selectedProposal
+                const metaBits = [
+                  PROPOSAL_STATUS_LABEL[p.status],
+                  `来源：${p.source === "follow" ? "空闲提炼" : "模型 skill_create"}`,
+                  `落点：${PROPOSAL_SCOPE_LABEL[p.scope]}${p.workdir !== undefined ? `（${p.workdir}）` : ""}`,
+                  `创建于 ${p.createdAt}`,
+                ]
+                return (
+                  <>
+                    <h3>
+                      {p.title}
+                      {p.status === "proposed" && (
+                        <span className="section-actions">
+                          <button type="button" data-testid="proposal-apply" disabled={busy} onClick={() => void proposalAction(p, "apply")}>采纳</button>
+                          <button type="button" data-testid="proposal-reject" disabled={busy} onClick={() => void proposalAction(p, "reject")}>驳回</button>
+                        </span>
+                      )}
+                      {p.status === "applied" && (
+                        <span className="section-actions">
+                          <button type="button" data-testid="proposal-revert" disabled={busy} onClick={() => void proposalAction(p, "revert")}>回退</button>
+                          <span className="muted">采纳后被调用 {p.usage ?? 0} 次</span>
+                        </span>
+                      )}
+                      {(p.status === "rejected" || p.status === "reverted") && (
+                        <span className="section-actions">
+                          <button type="button" data-testid="proposal-remove" disabled={busy} onClick={() => void removeProposal(p)}>删除</button>
+                        </span>
+                      )}
+                    </h3>
+                    <p className="muted">{metaBits.join(" · ")}</p>
+                    {p.rationale !== "" && (
+                      <p>
+                        <strong>为什么提案：</strong>
+                        {p.rationale}
+                      </p>
+                    )}
+                    {p.changes !== undefined && p.changes !== "" && (
+                      <p>
+                        <strong>改了哪里：</strong>
+                        {p.changes}
+                      </p>
+                    )}
+                    {/* 修订提案的对照视图：提案时看到的正文 vs 提案内容；applied
+                        后对照改为回退快照（apply 前一刻的真实正文）。 */}
+                    {(p.baseline !== undefined || p.snapshot !== undefined) && (
+                      <details className="proposal-baseline" open>
+                        <summary>{p.snapshot !== undefined ? "回退快照（apply 前的正文）" : "当前正文（对照）"}</summary>
+                        <pre>{p.snapshot ?? p.baseline}</pre>
+                      </details>
+                    )}
+                    <details className="proposal-content" open>
+                      <summary>提案内容（完整 SKILL.md）</summary>
+                      <pre>{p.content}</pre>
+                    </details>
+                  </>
+                )
+              })()
             )}
           </div>
         </div>

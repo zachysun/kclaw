@@ -10,7 +10,7 @@ export type {
   TextBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock, ToolStatus, Usage,
   CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
-  SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SystemEvent,
+  SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SkillEvent, SystemEvent,
   TeamAuditEvent, TeamCreatedEvent, TeamMemberProvisionedEvent, TeamMemberSettledEvent,
   TeamMessageDeliveredEvent, TeamMessageQueuedEvent, TeamTaskCreatedEvent, TeamTaskUpdatedEvent,
 } from "@kclaw/core/protocol"

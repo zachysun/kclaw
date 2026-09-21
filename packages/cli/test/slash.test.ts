@@ -706,3 +706,49 @@ describe("/mcp", () => {
     expect(fake.print.mock.calls.map((c) => c[0] as string).some((t) => t.includes("查看 MCP 状态失败") && t.includes("HTTP 503"))).toBe(true)
   })
 })
+
+describe("/skill proposals（技能提案，只读）", () => {
+  const PROPOSALS = {
+    proposals: [
+      { id: "1730000000000-deploy-postmortem", status: "proposed", kind: "new", name: "deploy-postmortem", scope: "project", workdir: "/w/kclaw", title: "复盘模板", rationale: "部署后总要做复盘", content: "---\ndescription: 复盘\n---\n步骤", createdAt: "2026-09-21T00:00:00.000Z" },
+      { id: "1730000000001-runbook", status: "applied", kind: "revise", name: "deploy-runbook", scope: "global", title: "t", rationale: "", content: "V2", createdAt: "2026-09-21T00:00:00.000Z", appliedAt: "2026-09-21T01:00:00.000Z", usage: 3 },
+    ],
+  }
+
+  function fake(): ReturnType<typeof makeFakeCtx> {
+    return makeFakeCtx(async (_m, path) => {
+      if (path === `/sessions/${"ses_start"}`) return { workdir: "/w/kclaw" }
+      if (path === "/skills/proposals") return PROPOSALS
+      if (path === `/skills/proposals/${PROPOSALS.proposals[0]!.id}`) return PROPOSALS.proposals[0]
+      throw new Error(`unexpected ${path}`)
+    })
+  }
+
+  it("lists proposals with status/kind/scope/usage", async () => {
+    const f = fake()
+    const registry = createRegistry(f.ctx)
+    await runOrHint({ command: "skill", args: "proposals" }, registry, f.ctx)
+    const printed = f.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.some((t) => t.includes("deploy-postmortem") && t.includes("待确认"))).toBe(true)
+    expect(printed.some((t) => t.includes("deploy-runbook") && t.includes("已采纳") && t.includes("被调用 3 次"))).toBe(true)
+  })
+
+  it("proposal <id> prints the full detail including content", async () => {
+    const f = fake()
+    const registry = createRegistry(f.ctx)
+    await runOrHint({ command: "skill", args: `proposal ${PROPOSALS.proposals[0]!.id}` }, registry, f.ctx)
+    const printed = f.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.some((t) => t.includes("为什么：部署后总要做复盘") && t.includes("复盘\n---\n步骤"))).toBe(true)
+  })
+
+  it("empty proposal list prints the placeholder", async () => {
+    const f = makeFakeCtx(async (_m, path) => {
+      if (path === `/sessions/${"ses_start"}`) return { workdir: "/w/kclaw" }
+      if (path === "/skills/proposals") return { proposals: [] }
+      throw new Error(`unexpected ${path}`)
+    })
+    const registry = createRegistry(f.ctx)
+    await runOrHint({ command: "skill", args: "proposals" }, registry, f.ctx)
+    expect(f.print.mock.calls.some((c) => (c[0] as string).includes("还没有技能提案"))).toBe(true)
+  })
+})
