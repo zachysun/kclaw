@@ -124,12 +124,25 @@ export function SkillsView({ api, notice }: {
   const [links, setLinks] = useState<LinksPayload | null>(null)
   const [proposals, setProposals] = useState<ProposalRow[] | null>(null)
   const [proposalId, setProposalId] = useState<string | null>(null)
+  // 状态筛选走服务端 ?status=（路由已支持）；种类筛选是本地过滤（数据量小）。
+  const [proposalStatus, setProposalStatus] = useState<"all" | ProposalRow["status"]>("all")
+  const [proposalKind, setProposalKind] = useState<"all" | ProposalRow["kind"]>("all")
   const [body, setBody] = useState<{ title: string; content: string; reusable?: DiscoveredSkill } | null>(null)
   const [newSource, setNewSource] = useState("")
   const [search, setSearch] = useState("")
   const [busy, setBusy] = useState(false)
 
   const scopeQuery = scope !== "" ? `?workdir=${encodeURIComponent(scope)}` : ""
+  const proposalQuery = proposalStatus === "all" ? "" : `?status=${proposalStatus}`
+
+  const reloadProposals = useCallback(() => {
+    // 提案面：全局数据（提案自带 workdir/scope），拉取失败行内降级。
+    api
+      .get<{ proposals: ProposalRow[] }>(`/skills/proposals${proposalQuery}`)
+      .then((r) => setProposals(r.proposals))
+      .catch(() => setProposals(null))
+  }, [api, proposalQuery])
+  useEffect(() => { reloadProposals() }, [reloadProposals])
 
   useEffect(() => {
     // 会话 workdir 集合只影响下拉候选，拉取失败静默（下拉退化为仅全局）。
@@ -148,12 +161,8 @@ export function SkillsView({ api, notice }: {
     // 复用管理面的三份数据失败都走行内降级，不打扰主清单的 notice。
     api.get<DiscoveryPayload>(`/skills/discovery${scopeQuery}`).then(setDiscovery).catch(() => setDiscovery(null))
     api.get<LinksPayload>(`/skills/links${scopeQuery}`).then(setLinks).catch(() => setLinks(null))
-    // 提案面：全局数据（提案自带 workdir/scope），拉取失败行内降级。
-    api
-      .get<{ proposals: ProposalRow[] }>("/skills/proposals")
-      .then((r) => setProposals(r.proposals))
-      .catch(() => setProposals(null))
-  }, [api, scopeQuery])
+    reloadProposals()
+  }, [api, scopeQuery, reloadProposals])
   useEffect(() => { reload() }, [reload])
 
   const refreshAfterWrite = useCallback((message: string) => {
@@ -292,9 +301,18 @@ export function SkillsView({ api, notice }: {
   const discoveredCount = reusableRows.filter((s) => !s.reused && !s.conflict && !s.stale).length
 
   // ---- 提案面（技能进化） --------------------------------------------------
-  const proposalRows = proposals ?? []
-  const pendingCount = proposalRows.filter((p) => p.status === "proposed").length
-  const selectedProposal = proposalRows.find((p) => p.id === proposalId) ?? null
+  // 行列表 = 服务端状态筛选结果再做本地种类过滤；角标按服务端返回全集算。
+  const proposalRows = (proposals ?? []).filter((p) => proposalKind === "all" || p.kind === proposalKind)
+  const pendingCount = (proposals ?? []).filter((p) => p.status === "proposed").length
+  const selectedProposal = proposalRows.find((p) => p.id === proposalId) ?? (proposalKind === "all" ? (proposals ?? []).find((p) => p.id === proposalId) ?? null : null)
+
+  /** 项目落点的展示尾段：多项目时区分落点（全局无 workdir）。 */
+  const workdirTail = (wd: string | undefined): string => {
+    if (wd === undefined || wd === "") return ""
+    return wd.split("/").filter(Boolean).pop() ?? wd
+  }
+  /** ISO → "YYYY-MM-DD HH:mm"（列表行足够，不需要秒）。 */
+  const shortTime = (iso: string): string => iso.slice(0, 16).replace("T", " ")
 
   const proposalAction = async (p: ProposalRow, op: "apply" | "reject" | "revert"): Promise<void> => {
     setBusy(true)
@@ -427,10 +445,33 @@ export function SkillsView({ api, notice }: {
       ) : subTab === "proposals" ? (
         <div className="skills-panes" data-testid="proposals-pane">
           <div className="skills-list">
+            <div className="skills-toolbar">
+              <select
+                data-testid="proposal-status-filter"
+                value={proposalStatus}
+                onChange={(e) => setProposalStatus(e.target.value as typeof proposalStatus)}
+              >
+                <option value="all">全部状态</option>
+                {(["proposed", "applied", "rejected", "reverted"] as const).map((s) => (
+                  <option key={s} value={s}>{PROPOSAL_STATUS_LABEL[s]}</option>
+                ))}
+              </select>
+              <select
+                data-testid="proposal-kind-filter"
+                value={proposalKind}
+                onChange={(e) => setProposalKind(e.target.value as typeof proposalKind)}
+              >
+                <option value="all">全部种类</option>
+                {(["new", "revise"] as const).map((k) => (
+                  <option key={k} value={k}>{PROPOSAL_KIND_LABEL[k]}</option>
+                ))}
+              </select>
+            </div>
             {proposalRows.length === 0 ? (
               <p className="muted">
-                还没有提案。开启技能进化（配置 skills.evolution.enabled）后，用了技能的会话会在空闲时提炼经验形成提案；
-                对话里模型也可通过 skill_create 主动提案。提案只是候选，未经你确认不会进入技能目录。
+                {proposals !== null && (proposals ?? []).length > 0
+                  ? "没有匹配筛选条件的提案。"
+                  : "还没有提案。开启技能进化（配置 skills.evolution.enabled）后，用了技能的会话会在空闲时提炼经验形成提案；对话里模型也可通过 skill_create 主动提案。提案只是候选，未经你确认不会进入技能目录。"}
               </p>
             ) : (
               <ul>
@@ -446,8 +487,9 @@ export function SkillsView({ api, notice }: {
                       <span className="skill-meta">
                         {PROPOSAL_STATUS_LABEL[p.status]}
                         {" · "}
-                        {PROPOSAL_KIND_LABEL[p.kind]} · {PROPOSAL_SCOPE_LABEL[p.scope]}
-                        {p.kind === "revise" ? ` · ${p.name}` : ""}
+                        {PROPOSAL_KIND_LABEL[p.kind]} · {p.scope === "project" ? `项目（${workdirTail(p.workdir)}）` : PROPOSAL_SCOPE_LABEL[p.scope]}
+                        {" · "}
+                        {shortTime(p.createdAt)}
                         {p.usage !== undefined ? ` · 被调用 ${p.usage} 次` : ""}
                       </span>
                       <span className="skill-desc clamp2">{p.rationale !== "" ? p.rationale : p.title}</span>

@@ -2,8 +2,9 @@
  * SkillsView — 技能页测试。照 memoryView.test.tsx 的 fake-api 模式：
  * vi.fn 的 ApiClient，get 按路径返回裸数据。两个子页签：默认「已装技能」，
  * 「从其他 agent 复用」页签承载发现列表（搜索/分组）、已建链接表格与批量
- * 复用。scope 默认全局；探测与链接数据加载失败静默降级，只有主清单失败走
- * notice。
+ * 复用，「提案」页签承载技能进化的治理面（角标、按状态显隐的操作按钮、
+ * 修订对照、warning toast）。scope 默认全局；探测与链接数据加载失败静默
+ * 降级，只有主清单失败走 notice。
  */
 import { describe, it, expect, vi } from "vitest"
 import { createRoot, type Root } from "react-dom/client"
@@ -45,6 +46,20 @@ const LINKS = {
   extraSources: ["/w/extra-skills"],
 }
 
+const PROPOSALS = [
+  {
+    id: "1730000000000-new-kit", status: "proposed", kind: "new", name: "new-kit", scope: "project", workdir: "/w/proj",
+    title: "新技能", rationale: "反复出现的做法", content: "---\ndescription: d\n---\n新正文", source: "follow", sourceSessionId: "s1",
+    createdAt: "2026-09-21T08:30:00.000Z",
+  },
+  {
+    id: "1730000000001-old-kit", status: "applied", kind: "revise", name: "old-kit", scope: "global",
+    title: "old-kit", rationale: "", changes: "改了第 2 步", content: "V2 正文", baseline: "V1 正文",
+    source: "skill_create", sourceSessionId: "s1", createdAt: "2026-09-21T07:00:00.000Z",
+    decidedAt: "2026-09-21T07:10:00.000Z", appliedAt: "2026-09-21T07:10:00.000Z", usage: 4,
+  },
+]
+
 function fakeApi(over: Record<string, unknown> = {}): ApiClient & Record<"get" | "post" | "patch" | "del", ReturnType<typeof vi.fn>> {
   return {
     get: vi.fn(async (path: string) => {
@@ -52,6 +67,7 @@ function fakeApi(over: Record<string, unknown> = {}): ApiClient & Record<"get" |
       if (path === "/skills") return ROWS
       if (path === "/skills/discovery") return DISCOVERY
       if (path === "/skills/links") return LINKS
+      if (path === "/skills/proposals") return { proposals: PROPOSALS }
       if (path === "/skills/commit-helper") return { name: "commit-helper", content: "# 提交规程\n\n一行标题。" }
       throw new Error(`unexpected ${path}`)
     }),
@@ -68,7 +84,10 @@ function fakeApi(over: Record<string, unknown> = {}): ApiClient & Record<"get" |
 
 async function flush(): Promise<void> {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    // setImmediate 与 React act 收尾用的 enqueueTask 同源（node timers）：
+    // 等 flush 内的 promise 落定要走同一条宏任务通道，否则下一个 act 进场
+    // 会撞上前一个 act 未排空的队列（overlapping act，后续 render 被丢弃）。
+    await new Promise((resolve) => setImmediate(resolve))
   })
 }
 
@@ -297,5 +316,104 @@ describe("SkillsView", () => {
     const notice = vi.fn()
     await mount(api, notice)
     expect(notice.mock.calls.some(([t]) => String(t).includes("加载技能失败"))).toBe(true)
+  })
+})
+
+describe("SkillsView proposals tab（提案面）", () => {
+  async function openProposalsTab(container: HTMLElement): Promise<void> {
+    const tab = container.querySelector<HTMLElement>('[data-testid="subtab-proposals"]')!
+    await act(async () => {
+      tab.click()
+    })
+    await flush()
+  }
+
+  async function pickSelect(container: HTMLElement, testid: string, value: string): Promise<void> {
+    const select = container.querySelector<HTMLSelectElement>(`[data-testid="${testid}"]`)!
+    await act(async () => {
+      select.value = value
+      select.dispatchEvent(new Event("change", { bubbles: true }))
+    })
+    await flush()
+  }
+
+  it("badge counts pending proposals; rows show status/kind/scope tail/time/usage; kind filter narrows", async () => {
+    const api = fakeApi()
+    const { container } = await mount(api)
+    // 角标：仅 1 条待确认
+    expect(container.querySelector('[data-testid="subtab-proposals"]')!.textContent).toContain("（1 待确认）")
+    await openProposalsTab(container)
+    expect(api.get).toHaveBeenCalledWith("/skills/proposals")
+    // 行内：状态 + 种类 + 项目尾段 + 创建时间 + applied 用量
+    expect(container.textContent).toContain("待确认")
+    expect(container.textContent).toContain("新增 · 项目（proj）")
+    expect(container.textContent).toContain("2026-09-21 08:30")
+    expect(container.textContent).toContain("被调用 4 次")
+    // 种类筛选（本地过滤）：只看修订
+    await pickSelect(container, "proposal-kind-filter", "revise")
+    expect(container.querySelector('[data-testid="proposal-1730000000000-new-kit"]')).toBeNull()
+    expect(container.querySelector('[data-testid="proposal-1730000000001-old-kit"]')).not.toBeNull()
+    // 状态筛选走服务端 ?status= 参数
+    await pickSelect(container, "proposal-status-filter", "applied")
+    expect(api.get).toHaveBeenCalledWith("/skills/proposals?status=applied")
+  })
+
+  it("proposed rows offer apply/reject hitting POST; applied rows offer revert with usage", async () => {
+    const api = fakeApi()
+    const { container } = await mount(api)
+    await openProposalsTab(container)
+    // proposed：采纳/驳回可见
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="proposal-1730000000000-new-kit"]')!.click()
+    })
+    await flush()
+    expect(container.querySelector('[data-testid="proposal-apply"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="proposal-reject"]')).not.toBeNull()
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="proposal-apply"]')!.click()
+    })
+    await flush()
+    expect(api.post).toHaveBeenCalledWith("/skills/proposals/1730000000000-new-kit/apply", {})
+    // applied：回退 + 用量，无采纳/驳回
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="proposal-1730000000001-old-kit"]')!.click()
+    })
+    await flush()
+    expect(container.querySelector('[data-testid="proposal-revert"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="proposal-apply"]')).toBeNull()
+    expect(container.textContent).toContain("采纳后被调用 4 次")
+  })
+
+  it("revise detail renders the baseline and candidate content side by side", async () => {
+    const api = fakeApi()
+    const { container } = await mount(api)
+    await openProposalsTab(container)
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="proposal-1730000000001-old-kit"]')!.click()
+    })
+    await flush()
+    expect(container.textContent).toContain("当前正文（对照）")
+    expect(container.textContent).toContain("提案内容（完整 SKILL.md）")
+    expect(container.textContent).toContain("V1 正文")
+    expect(container.textContent).toContain("V2 正文")
+    expect(container.textContent).toContain("改了第 2 步")
+  })
+
+  it("apply warning surfaces as a notice", async () => {
+    const api = fakeApi({
+      post: vi.fn(async (path: string) => (path === "/skills/discovery/preview" ? { name: "pdf", body: "" } : { ok: true, warning: "项目 /w/proj 存在同名技能，将在该项目遮蔽全局版本" })),
+    })
+    const notice = vi.fn()
+    const { container } = await mount(api, notice)
+    await openProposalsTab(container)
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="proposal-1730000000000-new-kit"]')!.click()
+    })
+    await flush()
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="proposal-apply"]')!.click()
+    })
+    await flush()
+    expect(notice.mock.calls.some(([t]) => String(t).includes("遮蔽全局版本"))).toBe(true)
   })
 })
