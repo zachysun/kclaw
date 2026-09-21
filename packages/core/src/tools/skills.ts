@@ -42,7 +42,9 @@ function visible(skills: SkillRecord[]): SkillRecord[] {
 /**
  * `create` 在位才注册 skill_create（daemon 组装时传；裸引擎测试不传）：
  * enabled=false 时模型调用得到固定关闭文案，enabled=true 时走提案面
- * （kind/scope 系统推导）。serial：提案写同一目录，串行避免无谓的竞态。
+ * （kind/scope 系统推导）。safe + parallel（spec 实现决策口径）：提案文件
+ * 是 writeFileAtomic 原子写的独立文件，同名冲突由 create 的随机后缀化解，
+ * 并发调用安全。
  */
 export function createSkillTools(skills: SkillRecord[], create?: {
   enabled: boolean
@@ -78,7 +80,7 @@ export function createSkillTools(skills: SkillRecord[], create?: {
 
   if (create === undefined) return { skill_read, skill_list }
 
-  const skill_create = makeTool("skill_create", "safe", "serial", async (args) => {
+  const skill_create = makeTool("skill_create", "safe", "parallel", async (args) => {
     if (!create.enabled) return { status: "error", output: SKILL_CREATE_CLOSED_MSG }
     const name = requireString(args, "name")
     const content = requireString(args, "content")
