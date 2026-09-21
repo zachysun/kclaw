@@ -17,7 +17,7 @@ import { createExecTool, type ExecSandboxSpawn } from "./exec.js"
 import { createFsTools } from "./fs.js"
 import { createMemoryTools } from "./memory.js"
 import { createSessionTools, type SessionSearchFn } from "./session.js"
-import { createSkillTools, SKILL_LIST_DESCRIPTION, SKILL_READ_DESCRIPTION } from "./skills.js"
+import { createSkillTools, SKILL_CREATE_DESCRIPTION, SKILL_LIST_DESCRIPTION, SKILL_READ_DESCRIPTION } from "./skills.js"
 import { createSubagentTool, createSubagentCollectTool, SUBAGENT_RUN_DESCRIPTION, SUBAGENT_COLLECT_DESCRIPTION } from "./subagent.js"
 import type { SubagentCollector } from "../agent/subagent.js"
 import { createTeamToolEntries } from "./team.js"
@@ -59,6 +59,12 @@ export function createBuiltinTools(opts: {
   sessionSearch?: SessionSearchFn
   /** Skills scanned for this run (progressive disclosure's on-demand half). */
   skills?: SkillRecord[]
+  /**
+   * skill_create（提案制技能进化）的模型面：在位才注册该工具。daemon 组装
+   * 时传（enabled 随 config；propose 指向 skillsEvolution 的提案面）；裸引擎
+   * 测试省略。enabled=false 时调用得到固定关闭文案。
+   */
+  skillCreate?: { enabled: boolean; sessionId: string; propose: import("../skills/evolution.js").SkillEvolutionTriggers["propose"] }
   /**
    * Subagent dispatch (mainline runs only): when set, `subagent_run` joins the
    * registry wired to this spawner. Absent → no dispatch tool (tests, and
@@ -110,7 +116,7 @@ export function createBuiltinTools(opts: {
   })
   const memory = createMemoryTools(opts.memoryCtx)
   const session = createSessionTools(opts.sessionSearch)
-  const skill = createSkillTools(opts.skills ?? [])
+  const skill = createSkillTools(opts.skills ?? [], opts.skillCreate)
 
   const entries: Array<{ name: string; tool: ToolExecutor; def: ToolDefinition }> = [
     {
@@ -230,6 +236,26 @@ export function createBuiltinTools(opts: {
       tool: skill.skill_list,
       def: def("skill_list", SKILL_LIST_DESCRIPTION, { query: str("可选：按名字与描述子串过滤（大小写不敏感）；不传则列出全部模型可见技能") }, []),
     },
+    // skill_create 仅在组装传入 skillCreate 时存在（提案制功能面；默认关闭的
+    // 安装里模型根本看不到这个工具）。
+    ...(skill.skill_create === undefined
+      ? []
+      : [
+          {
+            name: "skill_create",
+            tool: skill.skill_create,
+            def: def(
+              "skill_create",
+              SKILL_CREATE_DESCRIPTION,
+              {
+                name: str("技能目录名：小写字母、数字、连字符（如 deploy-runbook）"),
+                content: str("完整的 SKILL.md 文件内容：YAML frontmatter（含 description）+ Markdown 正文"),
+                rationale: str("可选：为什么这段经验值得沉淀为技能"),
+              },
+              ["name", "content"],
+            ),
+          },
+        ]),
   ]
 
   // Subagent surface rules (issue #16): a child run drops memory_save (memory

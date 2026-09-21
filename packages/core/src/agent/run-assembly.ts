@@ -62,6 +62,7 @@ import { createBuiltinTools, deriveToolFacts, dropSensitiveTools } from "../tool
 import { makeEvent } from "../protocol/events.js"
 import { searchSessionEvents } from "../tools/session-search.js"
 import { applyReuseTiers, matchSkillInvocations, readLinksFile, scanSkillDirs, skillListPrompt, wrapSkillInvocations } from "../skills/index.js"
+import type { SkillEvolutionScheduleBook, SkillEvolutionTriggers } from "../skills/evolution.js"
 import { extractFileMentions, wrapFileMentions, type MentionResolution } from "../mentions.js"
 import type { MemorySystem } from "../memory/system.js"
 import type { EventBus } from "../bus.js"
@@ -219,6 +220,13 @@ export interface RunEngineDeps {
    * instead of writing files).
    */
   extraHooks?: HookEntry[]
+  /**
+   * 技能进化（提案制）：daemon 注入的完整系统（调度簿记 + 提炼/提案两个面）。
+   * run 收尾钩子 skill-follow-check（order 40）消费簿记面做粗查排检查；工具
+   * 面 skill_create 消费 propose。config 未开启时钩子直接跳过，工具拿到固定
+   * 关闭文案；该 dep 缺席（裸引擎测试）则两者都不在面里。
+   */
+  skillsEvolution?: SkillEvolutionScheduleBook & SkillEvolutionTriggers
 }
 
 /** What the queue hands the engine alongside one dequeued entry. */
@@ -453,6 +461,16 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     web: { timeoutMs: config.web.timeoutMs, allowPrivateNetworks: config.web.allowPrivateNetworks, spillDir: paths.spillDir },
     sessionSearch: buildSessionSearch(engine.deps, sessionId),
     skills,
+    ...(engine.deps.skillsEvolution === undefined
+      ? {}
+      : {
+          skillCreate: {
+            enabled: config.skills?.evolution?.enabled === true,
+            sessionId,
+            propose: (sid: string, input: { name: string; content: string; rationale?: string }) =>
+              engine.deps.skillsEvolution!.propose(sid, input),
+          },
+        }),
     ...(engine.deps.subagents !== undefined && !childRun
       ? {
           subagent: {
@@ -744,6 +762,8 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     llmUserText,
     drainSteer: handoff.drainSteer,
     skillList: skillListPrompt(skills),
+    skillNames: skills.map((s) => s.name),
+    ...(engine.deps.skillsEvolution === undefined ? {} : { skillsEvolution: engine.deps.skillsEvolution }),
     contextOverhead: () => contextOverheadRef.current,
     ...(childRun ? { childRun: true } : {}),
     usageSessionId: sessionMeta?.parentSessionId ?? sessionId,

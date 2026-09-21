@@ -45,6 +45,7 @@ import type { SessionStore } from "../session/store.js"
 import type { Compactor } from "../session/compactor.js"
 import type { KclawConfig } from "../storage/config.js"
 import type { MemoryQuery, MemoryScheduleBook } from "../memory/system.js"
+import type { SkillEvolutionScheduleBook } from "../skills/evolution.js"
 import type { UsageStore } from "../storage/usage.js"
 import { withLastUserText } from "../agent/context.js"
 import type { HookEntry, HookContextMap, HookPosition, HookResultMap } from "./types.js"
@@ -112,6 +113,13 @@ export interface BuiltinHookDeps {
   drainSteer: () => Message[]
   // system-materials input: the model-facing skill listing (per-run scan)
   skillList: string
+  /** 本次 run 技能扫描的目录名集合（skill-follow-check 粗查的 /记号 匹配集）。 */
+  skillNames?: readonly string[]
+  /**
+   * 技能进化的调度簿记面（提案制）：在位且 config.skills.evolution 开启时，
+   * skill-follow-check（run-after 40）做零成本粗查，卷入技能才排空闲检查。
+   */
+  skillsEvolution?: SkillEvolutionScheduleBook
   /**
    * Fixed per-request overhead in estimated tokens (assembled system prompt +
    * wire tool schemas). Lazy getter: hooks register before the system prompt
@@ -484,6 +492,28 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
           } catch {
             // a failed follow-gate schedule never affects the run
           }
+        }
+      }
+    },
+  }),
+  spec({
+    name: "skill-follow-check",
+    position: "run-after",
+    order: 40,
+    description: "排一个技能提炼空闲检查（提案制；未启用即跳过）",
+    failure: "skip",
+    makeHandler: (rt) => {
+      const { childRun, config, skillsEvolution, skillNames, sessionId } = rt
+      return () => {
+        // 与记忆 follow 门禁同向：子会话不排检查（记忆隔离）。子会话的增量
+        // 不会被漏看——粗查读的是全项目各会话的未处理增量（含子会话）。
+        if (childRun) return
+        const evo = config.skills?.evolution
+        if (skillsEvolution === undefined || evo?.enabled !== true || (evo.idleMinutes ?? 0) <= 0) return
+        try {
+          skillsEvolution.considerFollowCheck(sessionId, new Date().toISOString(), skillNames ?? [])
+        } catch {
+          // a failed coarse check never affects the run
         }
       }
     },
