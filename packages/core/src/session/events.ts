@@ -1,7 +1,7 @@
 import type {
   CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
-  SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SessionEvent, SystemEvent, TeamAuditEvent,
+  SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SessionEvent, SkillEvent, SystemEvent, TeamAuditEvent,
 } from "../protocol/session-events.js"
 import type { SessionMeta } from "./store.js"
 
@@ -12,13 +12,14 @@ import type { SessionMeta } from "./store.js"
 export type {
   CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
-  SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SystemEvent, TeamAuditEvent,
+  SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SkillEvent, SystemEvent, TeamAuditEvent,
 } from "../protocol/session-events.js"
 
 export function isMessageEvent(e: SessionEvent): e is MessageEvent { return e.type === "message" }
 export function isMessageTruncatedEvent(e: SessionEvent): e is MessageTruncatedEvent { return e.type === "message.truncated" }
 export function isCompactionEvent(e: SessionEvent): e is CompactionEvent { return e.type === "compaction" }
 export function isMemoryEvent(e: SessionEvent): e is MemoryEvent { return e.type === "memory" }
+export function isSkillEvent(e: SessionEvent): e is SkillEvent { return e.type === "skill" }
 export function isSystemEvent(e: SessionEvent): e is SystemEvent { return e.type === "system" }
 export function isSandboxCheckedEvent(e: SessionEvent): e is SandboxCheckedEvent { return e.type === "sandbox.checked" }
 export function isRunStartedEvent(e: SessionEvent): e is RunStartedEvent { return e.type === "run.started" }
@@ -93,6 +94,7 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
       break
     }
     case "memory": break // 不更新任何投影字段（含 updatedAt）
+    case "skill": break // 技能提案审计事件：只留痕（真相在 .proposals/ 文件），不动投影
     case "system":
       // 审计留痕即基线写入口：每次 run 的系统提示词全量事件按段 upsert 冻结
       // 基线（提示词缓存纪律）。两段独立比对——哪段文本变了就重冻结哪段，
