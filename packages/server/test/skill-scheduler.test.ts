@@ -22,6 +22,8 @@ afterEach(() => { rmSync(root, { recursive: true, force: true }) })
 interface FakeCheck { sessionId: string; endTurnAt: string }
 
 function fakeSystem(over: Record<string, unknown> = {}) {
+  // 真会话 id：调度器会对 meta 缺失的检查无条件清理，检查必须指向存在会话。
+  const sid = sessions.create("t", undefined, "/w/kclaw").id
   const checks: FakeCheck[] = []
   const sys = {
     considerFollowCheck: vi.fn(() => ({ involved: false, names: [] })),
@@ -34,6 +36,8 @@ function fakeSystem(over: Record<string, unknown> = {}) {
     lastActivity: vi.fn(() => ""),
     /** 测试用例借这里放检查（模拟 run 钩子已排的账）。 */
     checks,
+    /** 真实存在的会话 id（meta 缺失清理用例需要"不存在"的 id，另行手写）。 */
+    sid,
   }
   return Object.assign(sys, over)
 }
@@ -60,12 +64,12 @@ describe("startSkillScheduler", () => {
     const sys = fakeSystem({
       lastActivity: vi.fn(() => "2026-08-29T09:59:00Z"), // 早于 endTurnAt：无新活动
     })
-    sys.checks.push({ sessionId: "ses_a", endTurnAt: "2026-08-29T10:00:00Z" })
+    sys.checks.push({ sessionId: sys.sid, endTurnAt: "2026-08-29T10:00:00Z" })
     const handle = start(sys)
     await tick()
     await handle.stop()
-    expect(sys.triggerFollow).toHaveBeenCalledWith("/w/kclaw", "ses_a")
-    expect(sys.clearFollowCheck).toHaveBeenCalledWith("/w/kclaw", "ses_a")
+    expect(sys.triggerFollow).toHaveBeenCalledWith("/w/kclaw", sys.sid)
+    expect(sys.clearFollowCheck).toHaveBeenCalledWith("/w/kclaw", sys.sid)
     expect(sys.checks).toHaveLength(0)
   })
 
@@ -77,7 +81,7 @@ describe("startSkillScheduler", () => {
       lastActivity: vi.fn(() => ""),
       triggerFollow: vi.fn(() => new Promise<void>((res, rej) => { settle = (err) => (err === undefined ? res() : rej(err)) })),
     })
-    sys.checks.push({ sessionId: "ses_a", endTurnAt: "2026-08-29T10:00:00Z" })
+    sys.checks.push({ sessionId: sys.sid, endTurnAt: "2026-08-29T10:00:00Z" })
     const handle = start(sys)
     await tick() // 首扫触发，挂起中
     expect(sys.triggerFollow).toHaveBeenCalledTimes(1)
@@ -90,7 +94,7 @@ describe("startSkillScheduler", () => {
     settle?.(undefined) // 重试成功 → 成功才清
     await tick()
     await handle.stop()
-    expect(sys.clearFollowCheck).toHaveBeenCalledWith("/w/kclaw", "ses_a")
+    expect(sys.clearFollowCheck).toHaveBeenCalledWith("/w/kclaw", sys.sid)
     expect(sys.checks).toHaveLength(0)
   })
 
@@ -99,7 +103,7 @@ describe("startSkillScheduler", () => {
       lastActivity: vi.fn(() => ""),
       triggerFollow: vi.fn(async () => { throw new Error("still broken") }),
     })
-    sys.checks.push({ sessionId: "ses_a", endTurnAt: "2026-08-29T10:00:00Z" })
+    sys.checks.push({ sessionId: sys.sid, endTurnAt: "2026-08-29T10:00:00Z" })
     const logs: string[] = []
     const handle = start(sys, enabledConfig(), new Date("2026-08-29T10:11:00Z"), (m) => logs.push(m))
     await tick(); await tick()
@@ -116,7 +120,7 @@ describe("startSkillScheduler", () => {
       lastActivity: vi.fn(() => ""),
       triggerFollow: vi.fn(() => new Promise<void>((res) => { release = res })),
     })
-    sys.checks.push({ sessionId: "ses_a", endTurnAt: "2026-08-29T10:00:00Z" })
+    sys.checks.push({ sessionId: sys.sid, endTurnAt: "2026-08-29T10:00:00Z" })
     const handle = start(sys)
     await tick() // 首扫触发，promise 挂起
     expect(sys.triggerFollow).toHaveBeenCalledTimes(1)
@@ -124,22 +128,34 @@ describe("startSkillScheduler", () => {
     expect(sys.triggerFollow).toHaveBeenCalledTimes(1)
     release?.()
     await handle.stop()
-    expect(sys.clearFollowCheck).toHaveBeenCalledWith("/w/kclaw", "ses_a")
+    expect(sys.clearFollowCheck).toHaveBeenCalledWith("/w/kclaw", sys.sid)
+  })
+
+  it("unconditionally clears a check whose session no longer exists (meta missing)", async () => {
+    const sys = fakeSystem({ lastActivity: vi.fn(() => "") })
+    // ses_gone 从未在 sessions 里创建：检查指向已删/不存在的会话
+    sys.checks.push({ sessionId: "ses_gone", endTurnAt: "2026-08-29T10:00:00Z" })
+    const handle = start(sys)
+    await tick()
+    await handle.stop()
+    expect(sys.clearFollowCheck).toHaveBeenCalledWith("/w/kclaw", "ses_gone")
+    expect(sys.triggerFollow).not.toHaveBeenCalled()
+    expect(sys.checks).toHaveLength(0)
   })
 
   it("newer activity supersedes the check: cleared without triggering (I-1)", async () => {
     const sys = fakeSystem({ lastActivity: vi.fn(() => "2026-08-29T10:30:00Z") })
-    sys.checks.push({ sessionId: "ses_a", endTurnAt: "2026-08-29T10:00:00Z" })
+    sys.checks.push({ sessionId: sys.sid, endTurnAt: "2026-08-29T10:00:00Z" })
     const handle = start(sys)
     await tick()
     await handle.stop()
-    expect(sys.clearFollowCheck).toHaveBeenCalledWith("/w/kclaw", "ses_a")
+    expect(sys.clearFollowCheck).toHaveBeenCalledWith("/w/kclaw", sys.sid)
     expect(sys.triggerFollow).not.toHaveBeenCalled()
   })
 
   it("enabled=false or idleMinutes=0 consumes nothing", async () => {
     const sys = fakeSystem()
-    sys.checks.push({ sessionId: "ses_a", endTurnAt: "2026-08-29T10:00:00Z" })
+    sys.checks.push({ sessionId: sys.sid, endTurnAt: "2026-08-29T10:00:00Z" })
     const off = structuredClone(defaultConfig) // 默认 enabled=false
     const h1 = start(sys, off)
     await tick()
@@ -156,7 +172,7 @@ describe("startSkillScheduler", () => {
 
   it("idle window not yet elapsed: check stays pending (no trigger, no clear)", async () => {
     const sys = fakeSystem({ lastActivity: vi.fn(() => "") })
-    sys.checks.push({ sessionId: "ses_a", endTurnAt: "2026-08-29T10:00:00Z" })
+    sys.checks.push({ sessionId: sys.sid, endTurnAt: "2026-08-29T10:00:00Z" })
     // now 距 end_turn 5 分钟 < idleMinutes=10
     const handle = start(sys, enabledConfig(), new Date("2026-08-29T10:05:00Z"))
     await tick()

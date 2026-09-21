@@ -58,6 +58,12 @@ export function startSkillScheduler(deps: {
         if (stopped) return
         const key = `${workdir}|${check.sessionId}`
         if (busy.has(key)) continue
+        // 会话已删（meta 缺失）的挂起检查无条件清掉：归属会话没了，检查没有
+        // 继续存在的意义，空跑一次提炼只剩噪音（判据同 memory 系统的先例）。
+        if (deps.sessions.meta(check.sessionId) === undefined) {
+          deps.system.clearFollowCheck(workdir, check.sessionId)
+          continue
+        }
         const activity = deps.system.lastActivity(workdir)
         if (activity !== "" && Date.parse(activity) > Date.parse(check.endTurnAt)) {
           // I-1：end_turn 后已有更新活动——旧锚点被取代；新 run 收尾的粗查
