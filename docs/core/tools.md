@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/tools/` 实现 22 个内置工具（12 个常驻 + 10 个按组装条件注册），并把它们组装成两份对齐的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
+`packages/core/src/tools/` 实现 23 个内置工具（12 个常驻 + 11 个按组装条件注册），并把它们组装成两份对齐的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
 
 ---
 
@@ -65,11 +65,11 @@ export function makeTool<N extends string>(
 
 ---
 
-## 22 个内置工具
+## 23 个内置工具
 
-完整清单（名称、一句话职责、risk / concurrency、条件注册与工具面收缩规则）陈列在 [reference/tools](../reference/tools.md)：常驻 12 个（exec、fs 四件、web 两件、memory 两件、session_search、skill 两件）+ 条件注册 10 个（subagent 2、团队 7、提问 1）。下面按实现文件分组说明各家的机制。
+完整清单（名称、一句话职责、risk / concurrency、条件注册与工具面收缩规则）陈列在 [reference/tools](../reference/tools.md)：常驻 12 个（exec、fs 四件、web 两件、memory 两件、session_search、skill 两件）+ 条件注册 11 个（subagent 2、skill_create 1、团队 7、提问 1）。下面按实现文件分组说明各家的机制。
 
-前 12 个**常驻注册**（注册与否不随会话状态变化；可见性例外有两个——readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型工具面，见 [permissions](./permissions.md)；subagent run 会裁掉 `memory_save`，见 [subagents](./subagents.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 组装了 subagent 派发后端时注册（subagent 自己的 run 两者都不注册，单层委派、不能再派下一级 subagent）；`ask_user_questions` 每个 run 都注册；七个团队工具只在会话属于某个团队时注册，且**工具面按身份收缩**：组长拿全套，组员没有 `create_team`/`spawn_teammate`（见下文与 [agent-team](./agent-team.md)）。
+前 12 个**常驻注册**（注册与否不随会话状态变化；可见性例外有两个——readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型工具面，见 [permissions](./permissions.md)；subagent run 会裁掉 `memory_save`，见 [subagents](./subagents.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 组装了 subagent 派发后端时注册（subagent 自己的 run 两者都不注册，单层委派、不能再派下一级 subagent）；`skill_create` 仅在 daemon 组装了技能进化系统时注册（`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案，机制见 [skills](./skills.md)）；`ask_user_questions` 每个 run 都注册；七个团队工具只在会话属于某个团队时注册，且**工具面按身份收缩**：组长拿全套，组员没有 `create_team`/`spawn_teammate`（见下文与 [agent-team](./agent-team.md)）。
 
 ### exec（`tools/exec.ts`）
 
@@ -121,6 +121,8 @@ export function makeTool<N extends string>(
 **skill_list** `{query?}`：列出模型可见的技能（每行 `- 名字: 描述`，按名字排序），`query` 可选，按名字与描述子串过滤（大小写不敏感）。可见口径与系统提示词清单一致（`disable-model-invocation` 的不出现）。存在的原因：提示词清单有字符 budget、技能多时截断，subagent 更是不注入清单。`skill_list` 是模型的自助发现入口（先 list 找到名字，再 skill_read 取正文）。safe + parallel，与 skill_read 同源同一份扫描结果。
 
 工具描述里带一句软性指引：优先用系统提示词"可用技能"列表里的技能，不在列表中的（`disable-model-invocation`）只有用户明确指名时才应加载——可见性规则骑在描述上、不是硬门禁，用户指名是隐藏档位的合法入口。
+
+**skill_create** `{name, content, rationale?}`：把一段可复用的经验当场固化为技能提案（提案制，机制见 [skills](./skills.md) 的"技能进化"一节）。safe + parallel——提案文件是 `writeFileAtomic` 原子写的独立文件，同名冲突由随机后缀化解，并发调用安全。只在 daemon 组装了技能进化系统时注册（run 组装传入 `skillCreate` 选项）；`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案（"技能提案未开启（skills.evolution.enabled=false）…"）。`name` 不过 `isSkillDirName`、`content` 超 64KB、目标是复用链接技能均报错。**kind/scope 由系统推导**（模型不给这两个参数）：项目副本命中 → `project` + 当前会话 workdir；仅全局命中 → `global`；未装 → `new` + `project`。写提案文件 + 一条 `skill` 审计事件，回复"已记录提案…待用户在 WebUI 审阅确认"，不谎报生效。
 
 ### 与 skill 机制的衔接
 

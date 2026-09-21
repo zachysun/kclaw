@@ -104,17 +104,18 @@ export default async (ctx) => {
 | 15 | `manual-compact-flush` | run-after | skip | 冲刷运行忙时排队的 /compact（在自动收尾压缩之前） |
 | 20 | `post-run-compaction` | run-after | skip | 上下文到达黄线时触发的收尾压缩（估算前等正在执行的后台压缩结束；压缩失败只记日志，不影响 run 收尾） |
 | 30 | `follow-check` | run-after | skip | 排一个记忆空闲检查（调度器补查） |
+| 40 | `skill-follow-check` | run-after | skip | 技能进化的零成本粗查：范围内卷入技能（skill_read/skill_list 工具块或 `/点名`）才排提炼空闲检查；`skills.evolution` 未启用或 `idleMinutes<=0` 时直接跳过 |
 | 10 | `system-materials` | system-before | skip | 收集 L2 认知与技能清单两个提示词段（即 live 段） |
 
 两个值得知道的次序：run-before 上 `memory-inject(10)` 只收集记忆 note，`user-message-land(20)` 统一把 job note（在前）与记忆 note 追加进消息、持久化并广播，块顺序与 `note.emitted` 次序保持稳定。system-after 上用户改写（默认 1000）排在前面，随后组装层把终稿（用户改写或原稿）按段冻结进基线并写 `system` 审计事件。**系统提示词的审计记录不是 hook**：`system` 事件的双段写入（stable/live）由 run 组装层直接写入事件流（写失败即 run 失败），因为分段冻结需要 stable/live 两段文本，而它们位于 hook 链之上（见 [run-manager](../server/run-manager.md) 组装第 11 步）。
 
-**subagent run 的派生跳过**：会话 meta 带 `parentSessionId` 时，run 组装给内置 hook 链带 `childRun: true`（同一个事实派生，无独立开关，见 [subagents](./subagents.md)），四个内置 hook 直接停用：`memory-inject` 不检索不收集（subagent 不注入记忆 note）、`autoname` 跳过（标题已带"subagent · "前缀）、`follow-check` 不挂检查（子会话不进记忆的任何提取路径）、`system-materials` 返回空段（系统提示词整体换成精简的 `subagentSystemPrompt`，不带认知与技能清单）。`usage-ledger` 照常记录，但记到 `usageSessionId`（= 父会话 id）名下，subagent 的 token 消耗归因到派它的主对话。
+**subagent run 的派生跳过**：会话 meta 带 `parentSessionId` 时，run 组装给内置 hook 链带 `childRun: true`（同一个事实派生，无独立开关，见 [subagents](./subagents.md)），五个内置 hook 直接停用：`memory-inject` 不检索不收集（subagent 不注入记忆 note）、`autoname` 跳过（标题已带"subagent · "前缀）、`follow-check` 不挂检查（子会话不进记忆的任何提取路径）、`skill-follow-check` 不排（子会话不自己排技能提炼检查，其技能使用由同项目后续主干 run 的粗查覆盖）、`system-materials` 返回空段（系统提示词整体换成精简的 `subagentSystemPrompt`，不带认知与技能清单）。`usage-ledger` 照常记录，但记到 `usageSessionId`（= 父会话 id）名下，subagent 的 token 消耗归因到派它的主对话。
 
 ---
 
 ## 管理接口
 
-`GET /hooks`（`packages/server/src/routes/hooks.ts`，Bearer 保护）返回 `{ builtin, user }`：`builtin` 是 14 条内置 hook 定义（名字/位置/描述/failure，不依赖运行态，从 `BUILTIN_HOOK_SPECS` 唯一定义来源投影而来）；`user` 是 `HookRegistry.list()` 的用户侧视图（健康、禁用、装载失败三类都在，失败条目 `position:"?"` 且带 `error` 原因）。CLI 与 WebUI 的 hook 管理页共用这份只读快照。
+`GET /hooks`（`packages/server/src/routes/hooks.ts`，Bearer 保护）返回 `{ builtin, user }`：`builtin` 是 15 条内置 hook 定义（名字/位置/描述/failure，不依赖运行态，从 `BUILTIN_HOOK_SPECS` 唯一定义来源投影而来）；`user` 是 `HookRegistry.list()` 的用户侧视图（健康、禁用、装载失败三类都在，失败条目 `position:"?"` 且带 `error` 原因）。CLI 与 WebUI 的 hook 管理页共用这份只读快照。
 
 ---
 
