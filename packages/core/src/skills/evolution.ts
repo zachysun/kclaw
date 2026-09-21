@@ -41,6 +41,7 @@ import type { Message } from "../protocol/messages.js"
 import type { SkillEvent } from "../session/events.js"
 import { WriteLedger, type FollowCheck } from "../memory/ledger.js"
 import { projectIdFor } from "../memory/layout.js"
+import { linkedSkillNames } from "./links.js"
 import { isSkillDirName } from "./names.js"
 import { ProposalStore, type SkillProposal, type SkillProposalResult } from "./proposals.js"
 
@@ -452,18 +453,5 @@ function collectInvolvedNames(m: Message, installed: ReadonlySet<string>, out: S
         if (installed.has(name)) out.add(name)
       }
     }
-  }
-}
-
-/** 目录的复用链接名集合（.links.json 缺失/损坏 → 空；sidecar 不阻塞提炼）。 */
-function linkedSkillNames(skillsDir: string): string[] {
-  try {
-    const raw = JSON.parse(readFileSync(join(skillsDir, ".links.json"), "utf8")) as { links?: unknown }
-    const links = Array.isArray(raw?.links) ? raw.links : []
-    return links
-      .filter((l): l is { name: string } => typeof l === "object" && l !== null && typeof (l as { name?: unknown }).name === "string")
-      .map((l) => l.name)
-  } catch {
-    return []
   }
 }

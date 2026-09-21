@@ -399,6 +399,22 @@ describe("governance and usage telemetry", () => {
     expect(evo.applyProposal(ghost.ok ? ghost.proposal.id : "").ok).toBe(false)
   })
 
+  it("apply of a revise proposal warns when the live content drifted from baseline", async () => {
+    installSkill(skillsDir, "drift-kit", "部署规程 V1")
+    const meta = sessions.create("s", undefined, WORKDIR)
+    const { client } = fakeLlm([])
+    const evo = system(client)
+    const r = evo.propose(meta.id, { name: "drift-kit", content: "部署规程 V2" })
+    expect(r.ok).toBe(true)
+    // 第三方在提案后改了正文：apply 不阻止，但响应带漂移提示
+    writeFileSync(join(skillsDir, "drift-kit", "SKILL.md"), "部署规程 V1-被别人改过")
+    const applied = evo.applyProposal(r.ok ? r.proposal.id : "")
+    expect(applied.ok).toBe(true)
+    expect(applied.warning).toContain("已被改动")
+    expect(readFileSync(join(skillsDir, "drift-kit", "SKILL.md"), "utf8")).toContain("V2")
+    expect(evo.getProposal(r.ok ? r.proposal.id : "")?.snapshot).toContain("被别人改过")
+  })
+
   it("apply of a global proposal warns when a known project has the same-named skill (shadowing)", async () => {
     // 项目里已有同名技能，提炼 LLM 仍给出 scope=global 的 new 提案：
     // apply 应当成功（全局落点为空），但带遮蔽警告（项目副本整目录覆盖全局）。

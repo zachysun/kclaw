@@ -118,6 +118,18 @@ describe("governance actions", () => {
     expect((await app.inject({ method: "DELETE", url: `/skills/proposals/${p.id}`, headers: auth })).statusCode).toBe(409)
   })
 
+  it("apply of a drifted revise proposal returns a warning; the response passes it through", async () => {
+    installSkill(join(home, "skills"), "drift-kit", "V1")
+    const meta = sessions.create("s", undefined, workdir)
+    const r = evo.propose(meta.id, { name: "drift-kit", content: "V2" })
+    if (!r.ok) throw new Error(r.error)
+    // 提案后第三方改了正文 → apply 照常成功但带 warning，路由透传
+    writeFileSync(join(home, "skills", "drift-kit", "SKILL.md"), "V1-被别人改过")
+    const res = await app.inject({ method: "POST", url: `/skills/proposals/${r.proposal.id}/apply`, headers: auth })
+    expect(res.statusCode).toBe(200)
+    expect((res.json() as { ok: boolean; warning?: string }).warning).toContain("已被改动")
+  })
+
   it("revert of an applied new proposal removes the skill dir", async () => {
     const p = makeProposal()
     await app.inject({ method: "POST", url: `/skills/proposals/${p.id}/apply`, headers: auth })

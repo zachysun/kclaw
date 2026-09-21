@@ -17,6 +17,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { writeFileAtomic } from "../storage/atomic.js"
+import { linkedSkillNames } from "./links.js"
 import { isSkillDirName } from "./names.js"
 
 export interface SkillProposal {
@@ -130,20 +131,22 @@ export class ProposalStore {
     return p
   }
 
-  /** proposed → applied：new 建目录写文件；revise 先存快照再覆盖。 */
-  apply(id: string, opts: { at?: string; /**
-    * scope=global 时的遮蔽检查候选（daemon 传入其已知的项目技能目录）：
-    * 任一目录已有同名技能 → apply 照常成功（全局落点确实为空），但结果带
-    * warning——项目副本整目录覆盖全局，该项目将看不到全局版。
-    */ shadowDirs?: string[] } = {}): SkillProposalResult {
+  /**
+   * proposed → applied：new 建目录写文件；revise 先存快照再覆盖。返回值可带
+   * 非致命 warning（拼接为一条）：revise 的现正文与提案时 baseline 不一致
+   * （第三方改动过，apply 以提案内容覆盖）；scope=global 且某已知项目目录
+   * 有同名技能（项目副本将遮蔽全局版，shadowDirs 由调用方传入候选）。
+   */
+  apply(id: string, opts: { at?: string; shadowDirs?: string[] } = {}): SkillProposalResult {
     const p = this.get(id)
     if (p === undefined) return { ok: false, error: "提案不存在" }
     if (p.status !== "proposed") return { ok: false, error: `非法迁移 ${p.status} → applied`, conflict: true }
     const root = this.#resolveDir(p.scope, p.workdir)
-    if (readLinksFileSafe(root).some((n) => n === p.name)) {
+    if (linkedSkillNames(root).includes(p.name)) {
       return { ok: false, error: `目标是复用链接技能，由源目录维护：${p.name}`, conflict: true }
     }
     const target = join(root, p.name, "SKILL.md")
+    const warnings: string[] = []
     if (p.kind === "new") {
       if (existsSync(target)) return { ok: false, error: `同名技能已存在：${p.name}`, conflict: true }
       mkdirSync(join(root, p.name), { recursive: true })
@@ -151,6 +154,11 @@ export class ProposalStore {
     } else {
       if (!existsSync(target)) return { ok: false, error: `修订目标已不存在：${p.name}`, conflict: true }
       const current = readFileSync(target, "utf8")
+      // 提案后正文已被第三方改动：不阻止 apply（决策权在用户按下的那一刻），
+      // 但必须提示——覆盖的是提案内容，不是用户上次看到的那份。
+      if (p.baseline !== undefined && p.baseline !== current) {
+        warnings.push("提案后正文已被改动，本次生效以提案内容覆盖")
+      }
       // 回滚快照 = 覆盖前的真实正文（可能与提案时的 baseline 有漂移——revert
       // 恢复的是 apply 前一刻的状态，不是提案时看到的状态）。
       p.snapshot = current
@@ -164,10 +172,10 @@ export class ProposalStore {
     if (p.scope === "global") {
       const shadow = (opts.shadowDirs ?? []).find((d) => existsSync(join(d, p.name, "SKILL.md")))
       if (shadow !== undefined) {
-        return { ok: true, proposal: p, warning: `项目 ${shadow} 存在同名技能，将在该项目遮蔽全局版本` }
+        warnings.push(`项目 ${shadow} 存在同名技能，将在该项目遮蔽全局版本`)
       }
     }
-    return { ok: true, proposal: p }
+    return warnings.length === 0 ? { ok: true, proposal: p } : { ok: true, proposal: p, warning: warnings.join("；") }
   }
 
   /** proposed → rejected：只改状态，文件保留（日后可手动清理或重新捡起）。 */
@@ -208,18 +216,5 @@ export class ProposalStore {
     }
     rmSync(this.#path(p.id), { force: true })
     return { ok: true, proposal: p }
-  }
-}
-
-/** 落点目录的复用链接名集合；.links.json 缺失/损坏 → 空（sidecar 不阻塞治理）。 */
-function readLinksFileSafe(skillsDir: string): string[] {
-  try {
-    const raw = JSON.parse(readFileSync(join(skillsDir, ".links.json"), "utf8")) as { links?: unknown }
-    const links = Array.isArray(raw?.links) ? raw.links : []
-    return links
-      .filter((l): l is { name: string } => typeof l === "object" && l !== null && typeof (l as { name?: unknown }).name === "string")
-      .map((l) => l.name)
-  } catch {
-    return []
   }
 }
