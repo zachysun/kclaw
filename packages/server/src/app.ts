@@ -3,7 +3,7 @@ import Fastify from "fastify"
 import fastifyStatic from "@fastify/static"
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import { JobScheduler, SessionStore, loadConfig, resolvePaths } from "@kclaw/core"
-import type { KclawConfig, KclawPaths, ConfigNotifier, HookRegistry, MemorySystem, UsageStore } from "@kclaw/core"
+import type { KclawConfig, KclawPaths, ConfigNotifier, HookRegistry, MemorySystem, SkillEvolutionAdmin, UsageStore } from "@kclaw/core"
 import { bearerMatches } from "./auth.js"
 import { EventBus } from "@kclaw/core"
 import type { RunManager } from "./run.js"
@@ -121,6 +121,11 @@ export interface AppOptions {
    */
   hooks?: HookRegistry
   /**
+   * 技能进化的治理面：/skills/proposals 路由族消费（列表/详情 + apply/
+   * reject/revert/remove）。Absent → 提案路由族整体 503（裸 app/测试）。
+   */
+  skillsEvolution?: SkillEvolutionAdmin
+  /**
    * Test-injection seam for the /ws pre-auth timeout (maps to WsOptions
    * `authTimeoutMs`); production defaults live in ws.ts.
    */
@@ -213,8 +218,9 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   // /memory 路由族：无 memory 装配时全部 503，不影响既有路由。
   registerMemoryRoutes(app, { memory: opts.memory, config })
   registerHookRoutes(app, { hooks: opts.hooks })
-  // /skills 路由族：只读技能管理面（CLI /skill 与 Web 技能页共用），无装配依赖。
-  registerSkillRoutes(app, { paths, builtinSources: opts.builtinSources, pluginHomes: opts.pluginHomes })
+  // /skills 路由族：只读技能管理面（CLI /skill 与 Web 技能页共用），无装配依赖；
+  // 提案子路由族（技能进化）有装配才可用，否则 503。
+  registerSkillRoutes(app, { paths, builtinSources: opts.builtinSources, pluginHomes: opts.pluginHomes, skillsEvolution: opts.skillsEvolution })
   // 切会话写入：POST /sessions 是 CLI /clear、/new 与 web 新建会话的共同底层，
   // 记忆系统在装配时才挂 clear 触发（缺省不触发，行为与未装配记忆时一致）。
   registerSessionRoutes(app, { sessions, config, run: opts.run, memory: opts.memory, cancelBackgroundForParent: opts.cancelBackgroundForParent, team: opts.team })

@@ -47,6 +47,8 @@ import {
   type RunEngine,
   type RunOutcome,
   type SessionStore,
+  type SkillEvolutionScheduleBook,
+  type SkillEvolutionTriggers,
   type SubagentCollector,
   type SubagentSpawner,
   type TeamFacade,
@@ -154,6 +156,12 @@ export interface RunManagerDeps {
    * hooks omit it).
    */
   hooks?: HookRegistry
+  /**
+   * 技能进化（提案制）：流入每个 run 的 engine deps——run 收尾钩子消费
+   * 簿记面（粗查排检查），skill_create 工具消费提案面。daemon 组装时注入；
+   * 测试省略。
+   */
+  skillsEvolution?: SkillEvolutionScheduleBook & SkillEvolutionTriggers
 }
 
 /** One queued run request lives in core now (the engine's input shape). */
