@@ -229,7 +229,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     const { dir, workdir } = req.query as { dir?: string; workdir?: string }
     const scopeDir = writeScopeDir(workdir)
     if (scopeDir === undefined) return reply.code(400).send({ error: "workdir must be an absolute path" })
-    if (typeof dir !== "string" || dir.trim() === "") return reply.code(404).send({ error: "dir is required" })
+    if (typeof dir !== "string" || dir.trim() === "") return reply.code(400).send({ error: "dir is required" })
     const result = removeDiscoverySource({ skillsDir: scopeDir, dir: dir.trim() })
     if (!result.ok) return reply.code(404).send({ error: result.error })
     return { ok: true }
@@ -237,12 +237,12 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
 
   // ---- 提案面（技能进化，治理写操作均经持 token 鉴权中间件） ---------------
 
-  /** 提案行：完整字段 + applied 提案的用量口径（Web 列表直接展示）。 */
-  const proposalRow = (evo: SkillEvolutionAdmin, id: string): (SkillProposal & { usage?: number }) | undefined => {
-    const p = evo.getProposal(id)
-    if (p === undefined) return undefined
-    return { ...p, ...(p.appliedAt !== undefined ? { usage: evo.proposalUsage(id) } : {}) }
-  }
+  /** 提案行：完整字段 + applied 提案的用量口径（Web 列表直接展示）。直接吃
+   * listProposals() 的行，避免按 id 逐条 get 造成的整目录反复重读。 */
+  const proposalRowOf = (evo: SkillEvolutionAdmin, p: SkillProposal): SkillProposal & { usage?: number } => ({
+    ...p,
+    ...(p.appliedAt !== undefined ? { usage: evo.proposalUsage(p.id) } : {}),
+  })
 
   app.get("/skills/proposals", async (req, reply: FastifyReply) => {
     const evo = requireEvolution(reply)
@@ -252,7 +252,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     const filtered = status === "proposed" || status === "applied" || status === "rejected" || status === "reverted"
       ? all.filter((p) => p.status === status)
       : all
-    return { proposals: filtered.map((p) => proposalRow(evo, p.id)) }
+    return { proposals: filtered.map((p) => proposalRowOf(evo, p)) }
   })
 
   app.get("/skills/proposals/:id", async (req, reply: FastifyReply) => {
@@ -260,9 +260,9 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     if (evo === undefined) return
     const { id } = req.params as { id: string }
     if (!isSafeSegment(id)) return reply.code(400).send({ error: "invalid segment" })
-    const row = proposalRow(evo, id)
-    if (row === undefined) return reply.code(404).send(NOT_FOUND)
-    return row
+    const p = evo.getProposal(id)
+    if (p === undefined) return reply.code(404).send(NOT_FOUND)
+    return proposalRowOf(evo, p)
   })
 
   /** apply|reject|revert 共用体：非法迁移/冲突 → 409（core 判定，路由映射状态码）。 */
