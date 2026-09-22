@@ -1,10 +1,8 @@
-import { existsSync, readFileSync, renameSync } from "node:fs"
-import { parse } from "yaml"
+import { readFileSync } from "node:fs"
 import { writeFileAtomic } from "./atomic.js"
 import { DEFAULT_LLM_TIMEOUT_MS } from "../provider/openai-compat.js"
 import type { KclawPaths } from "./paths.js"
 import type { NotifyChannel } from "../notify/notify.js"
-import type { McpServerConfig } from "../mcp/manager.js"
 import { isPermissionMode, type PermissionMode } from "../permissions/modes.js"
 import { validateWaterlineConfig } from "../session/waterlines.js"
 
@@ -19,29 +17,29 @@ export type ProviderApiFormat = "openai" | "anthropic"
 
 /** One provider entry: a reachable endpoint plus the single model it serves. */
 export interface ProviderEntry {
-  /** Absent in entries written before the field existed; reads as "openai". */
+  /** Omitted means "openai". */
   format?: ProviderApiFormat
   baseUrl: string
   apiKey: string
   model: string
-  /** 模型上下文窗口（token）。配置后压缩预算取 min(会话 contextTokens, 此值)；缺省不设上限。 */
+  /** 模型上下文窗口（token）。配置后压缩预算取 min(会话 contextTokens, 此值)；不写则不设上限。 */
   contextWindow?: number
-  /** 单次回复的输出上限（token）。配置后随请求下发 max_tokens；缺省沿用供应商默认。 */
+  /** 单次回复的输出上限（token）。配置后随请求下发 max_tokens；不写则沿用供应商默认。 */
   maxOutput?: number
 }
 
-/** Entries may omit `format` (pre-field files); everything downstream reads through this. */
+/** Entries may omit `format`; everything downstream reads through this. */
 export function resolveProviderFormat(entry: ProviderEntry): ProviderApiFormat {
   return entry.format ?? "openai"
 }
 
-/** `sandbox:` section of config.yaml (daemon-level). */
+/** `sandbox:` section of the config file (daemon-level). */
 export interface SandboxConfig {
   enabled: boolean
   /** Extra realpath write roots (e.g. the npm cache dir). */
   writeRoots: string[]
   /**
-   * 沙箱内网络开关（`"allow" | "deny"`，缺省 `"allow"` 保持既有行为）。deny 时
+   * 沙箱内网络开关（`"allow" | "deny"`，默认 `"allow"`）。deny 时
    * exec 子进程不可建出站/入站连接（Seatbelt `deny network-outbound/inbound`、
    * bwrap `--unshare-net`）；web_search/web_fetch 在 daemon 进程内执行、不走
    * exec 子进程，不受此开关影响。
@@ -56,23 +54,22 @@ export interface KclawConfig {
     /**
      * Per-request llm timeout the daemon passes to the provider client:
      * bounds the fetch AND the SSE body so a hung provider
-     * stream can never park a run forever. Optional only because older
-     * config.yaml files predate it; defaults to 120s (defaultConfig).
+     * stream can never park a run forever. Defaults to 120s (defaultConfig).
      */
     timeoutMs?: number
   }
-  permissions: { allow: string[]; deny: string[]; confirmTimeoutMs: number; sessionGrants: boolean; autoLearnThreshold?: number; /** 新会话的初始权限模式（创建时固化为 meta.mode）。缺省 "default"。 */ defaultMode?: PermissionMode }
+  permissions: { allow: string[]; deny: string[]; confirmTimeoutMs: number; sessionGrants: boolean; autoLearnThreshold?: number; /** 新会话的初始权限模式（创建时固化为 meta.mode）。默认 "default"。 */ defaultMode?: PermissionMode }
   memory: {
     write: { immediate: boolean; manual: boolean; intervalMinutes: number; idleMinutes: number }
-    /** 提取与内化用的模型；空 = 回落主对话模型。 */
+    /** 提取与沉淀用的模型；空 = 回退到主对话模型。 */
     extractModel: string
     /** 线多少天无新情节转 inactive。 */
     threadInactiveDays: number
-    /** 内化开关。 */
+    /** 沉淀开关。 */
     consolidate: boolean
     /**
-     * 夜间闲时内化的本地小时（0-23；负值 = 关闭）。调度器在本地时间过了该点后
-     * 对每个项目做一次夜间内化（daemon 凌晨未开则开机后补跑）；仍受 consolidate
+     * 夜间闲时沉淀的本地小时（0-23；负值 = 关闭）。调度器在本地时间过了该点后
+     * 对每个项目做一次夜间沉淀（daemon 凌晨未开则开机后补跑）；仍受 consolidate
      * 总开关管。默认 3（凌晨 3 点）。
      */
     consolidateHour: number
@@ -80,23 +77,19 @@ export interface KclawConfig {
     embedding: { provider: string; model: string }
     /** 每轮注入（认知常驻 + 情节检索）token 上限。 */
     injectTokenBudget: number
-    /** @deprecated v1 字段（被四触发取代），仅容忍存在，读处一律忽略。 */
-    autoExtract?: boolean
   }
   web: {
     tavilyApiKey: string
     /**
      * AbortSignal timeout applied to every web tool fetch (search + page
-     * fetch), so a hung host can never park a run forever. Optional only
-     * because older config files predate it; defaults to 20s
-     * (defaultConfig).
+     * fetch), so a hung host can never park a run forever. Defaults to
+     * 20s (defaultConfig).
      */
     timeoutMs?: number
     /**
      * Opt out of web_fetch's private/loopback target denial (SSRF guard):
      * true allows fetching e.g. http://127.0.0.1:11434 (a local Ollama
-     * endpoint). Optional only because older config files predate it;
-     * defaults to false (defaultConfig).
+     * endpoint). Defaults to false (defaultConfig).
      */
     allowPrivateNetworks?: boolean
   }
@@ -107,22 +100,14 @@ export interface KclawConfig {
    * and `acceptEdits` modes auto-pass sandboxable exec commands (grantedBy
    * "sandboxed") and every exec runs inside the sandbox: workspace + tmp
    * writable, home read-only with ~/.kclaw masked. Unavailable sandbox falls
-   * back to manual confirmation (fail-closed — never a bare run). Optional
-   * only because older config files predate it; defaults to enabled with
-   * no extra write roots (defaultConfig).
+   * back to manual confirmation (fail-closed — never a bare run). Defaults
+   * to enabled with no extra write roots (defaultConfig).
    */
   sandbox?: SandboxConfig
-  /**
-   * Hook 系统。可选仅因老配置文件早于它；
-   * 缺省按读点的 ?? 默认值执行。
-   */
+  /** Hook 系统。不写时各取读取处的 ?? 默认值。 */
   hooks?: { /** 单个 hook 处理器的时限（毫秒）；超时按失败处理（fail-open）。 */ timeoutMs?: number }
   sessions: {
     recycleBinTtlMs: number
-    /** DEPRECATED (v1 compaction, inert): compact at N messages. */
-    compactThreshold?: number
-    /** DEPRECATED (v1 compaction, inert): keep newest N messages verbatim. */
-    compactKeep?: number
     /** Context token budget. Default 128000 (resolveContextTokens applies it). */
     contextTokens?: number
     /** Compaction waterlines (ratios of the budget): defaults and the target < ahead < at < panic ordering are owned by the waterlines module, which also validates them at load time. */
@@ -133,11 +118,11 @@ export interface KclawConfig {
     compactPackRatio?: number
     /** Tool results kept verbatim in the provider view. Default 8 (read site applies it). */
     toolResultKeep?: number
-    /** 工具死循环守卫：同一工具调用（同名同参数）连续执行 N 次后，向该次结果附加换策略提醒。0 = 关闭；缺省 5（读取处兜底）。 */
+    /** 工具死循环守卫：同一工具调用（同名同参数）连续执行 N 次后，向该次结果附加换策略提醒。0 = 关闭；默认 5（读取处保底）。 */
     toolLoopMaxRepeats?: number
-    /** 不带 disposition 的 send_message 取"会话覆盖 ?? 此默认"。缺省 "steer"。 */
+    /** 不带 disposition 的 send_message 取"会话覆盖 ?? 此默认"。默认 "steer"。 */
     defaultDisposition?: "steer" | "wait" | "interrupt"
-    /** ask_user_questions 的等待上限（毫秒）。缺省 600000（10 分钟）。 */
+    /** ask_user_questions 的等待上限（毫秒）。默认 600000（10 分钟）。 */
     askTimeoutMs?: number
   }
   /**
@@ -148,18 +133,12 @@ export interface KclawConfig {
   notify: { channels: NotifyChannel[]; timeoutMs?: number }
   /**
    * Token cost pricing (USD per 1M tokens per model) for the usage view.
-   * Optional only because older config files predate it; empty map =
-   * tokens shown, cost 0.
+   * An empty map = tokens shown, cost 0.
    */
   usage?: { prices?: Record<string, { inputPerM?: number; outputPerM?: number }> }
   /**
-   * External MCP servers. Optional only because older config.yaml files
-   * predate it; defaults to an empty server map (defaultConfig).
-   */
-  mcp?: { servers?: Record<string, McpServerConfig> }
-  /**
-   * Subagent delegation (issue #16). Optional only because older config.yaml
-   * files predate it; defaults to maxConcurrent 4 (defaultConfig).
+   * Subagent delegation (issue #16). Defaults to maxConcurrent 4
+   * (defaultConfig).
    */
   subagents?: {
     /** Live subagents allowed per parent run at once; an over-cap spawn returns an immediate error result. */
@@ -168,9 +147,8 @@ export interface KclawConfig {
     maxBackground?: number
   }
   /**
-   * Agent team. Optional only because
-   * older config files predate it; defaults in defaultConfig. Invalid values
-   * fall back per-field with one warning (parseConfig).
+   * Agent team. Defaults in defaultConfig. Invalid values fall back
+   * per-field with one warning (parseConfig).
    */
   team?: {
     /** Roster cap, failed spawns included. Default 8. */
@@ -190,9 +168,8 @@ export interface KclawConfig {
   }
   /**
    * Skill packages (the same `<home>/skills` the run assembly scans).
-   * Optional only because older config files predate it; defaults in
-   * defaultConfig. Invalid values fall back per-field with one warning
-   * (parseConfig, team style).
+   * Defaults in defaultConfig. Invalid values fall back per-field with
+   * one warning (parseConfig, team style).
    */
   skills?: {
     /**
@@ -215,10 +192,9 @@ export interface KclawConfig {
     }
   }
   /**
-   * Daemon server. Optional only because older config files predate it;
-   * an absent port keeps the historical behavior (an OS-assigned ephemeral
-   * port per launch). Invalid values fall back per-field with one warning
-   * (parseConfig).
+   * Daemon server. Defaults in defaultConfig; an absent port means an
+   * OS-assigned ephemeral port per launch. Invalid values fall back
+   * per-field with one warning (parseConfig).
    */
   server?: {
     /**
@@ -249,7 +225,6 @@ export const defaultConfig: KclawConfig = {
   sessions: { recycleBinTtlMs: 30 * 24 * 60 * 60 * 1000, defaultDisposition: "steer" as const },
   notify: { channels: [], timeoutMs: 10_000 },
   usage: { prices: {} },
-  mcp: { servers: {} },
   subagents: { maxConcurrent: 4, maxBackground: 4 },
   team: {
     maxMembers: 8,
@@ -282,20 +257,16 @@ function deepMerge<T>(defaults: T, override: unknown): T {
 }
 
 /**
- * Load the config file, deep-merged over defaults. config.json is the
- * config file; while it is absent, the pre-json config.yaml is read so an
- * upgraded home keeps working until the first write lands in config.json.
- * A missing or empty file yields the defaults; an unparseable file throws
- * (silently falling back could drop the user's permission rules).
+ * Load the config file, deep-merged over defaults. A missing or empty file
+ * yields the defaults; an unparseable file throws (silently falling back
+ * could drop the user's permission rules).
  *
  * The returned config never shares references with defaultConfig:
  * the merge starts from a clone, so callers may mutate the result freely.
  */
 export function loadConfig(paths: KclawPaths): KclawConfig {
   const json = readIfPresent(paths.configJson)
-  if (json !== undefined) return parseConfig(json, paths.configJson, "json")
-  const legacy = readIfPresent(paths.config)
-  if (legacy !== undefined) return parseConfig(legacy, paths.config, "yaml")
+  if (json !== undefined) return parseConfig(json, paths.configJson)
   return structuredClone(defaultConfig)
 }
 
@@ -307,25 +278,16 @@ function readIfPresent(path: string): string | undefined {
   }
 }
 
-function parseConfig(raw: string, path: string, format: "json" | "yaml"): KclawConfig {
+function parseConfig(raw: string, path: string): KclawConfig {
   let file: unknown
   try {
-    if (format === "json") {
-      file = raw.trim() === "" ? null : JSON.parse(raw)
-    } else {
-      file = parse(raw)
-    }
+    file = raw.trim() === "" ? null : JSON.parse(raw)
   } catch (err) {
-    throw new Error(`invalid ${format} in ${path}: ${(err as Error).message}`)
+    throw new Error(`invalid json in ${path}: ${(err as Error).message}`)
   }
   if (file === null || file === undefined) return structuredClone(defaultConfig)
   if (!isPlainObject(file)) {
-    throw new Error(`invalid config in ${path}: expected a ${format} mapping`)
-  }
-  // 首次读到 v1 遗留字段记日志说明已忽略（不改字段、不改行为，只提示）。
-  const legacyAutoExtract = (file as { memory?: { autoExtract?: unknown } }).memory?.autoExtract
-  if (legacyAutoExtract !== undefined) {
-    console.warn("kclaw config: memory.autoExtract is deprecated (v1) and ignored; use memory.write.* instead")
+    throw new Error(`invalid config in ${path}: expected a json mapping`)
   }
   const merged = deepMerge(structuredClone(defaultConfig), file)
   // permissions.defaultMode 会进事件流（session.created 的 mode 字段），必须严格校验；
@@ -457,20 +419,11 @@ function validateTeamConfig(merged: KclawConfig): void {
 
 /**
  * Serialize config to config.json (atomic whole-file rewrite; 0600 — holds
- * apiKey plaintext). The first write retires a still-present config.yaml by
- * renaming it to config.yaml.bak: from then on config.json is authoritative
- * and the stale yaml must not read as a live second source.
- *
- * The legacy `mcp` section is stripped before serializing: MCP servers live
- * in ~/.kclaw/mcp.json (the managed source), the config section survives
- * only as a read-compat input at load time and must never be written back
- * (a save could otherwise resurrect deleted servers).
+ * apiKey plaintext). MCP servers live in ~/.kclaw/mcp.json and are never
+ * written here.
  */
 export function saveConfig(paths: KclawPaths, config: KclawConfig): void {
-  const firstJsonWrite = !existsSync(paths.configJson)
-  const { mcp: _legacyMcp, ...persisted } = config
-  writeFileAtomic(paths.configJson, JSON.stringify(persisted, null, 2) + "\n", 0o600)
-  if (firstJsonWrite) retireLegacyYaml(paths)
+  writeFileAtomic(paths.configJson, JSON.stringify(config, null, 2) + "\n", 0o600)
 }
 
 /**
@@ -505,15 +458,6 @@ export function renameProviderEntry(config: KclawConfig, from: string, to: strin
   config.providers.entries[to] = entry
   for (const ref of PROVIDER_ENTRY_REFERENCES) {
     if (ref.get(config) === from) ref.set(config, to)
-  }
-}
-
-function retireLegacyYaml(paths: KclawPaths): void {
-  try {
-    renameSync(paths.config, `${paths.config}.bak`)
-    console.error("kclaw config: legacy config.yaml retired as config.yaml.bak (config.json is the config file now)")
-  } catch {
-    // No legacy file (or the rename failed) — config.json is authoritative either way.
   }
 }
 

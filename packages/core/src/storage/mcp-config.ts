@@ -1,20 +1,13 @@
 /**
  * MCP server configuration storage. The management surface is a dedicated
  * `<home>/mcp.json` (JSON, 0600) — editable by the WebUI without ever
- * rewriting the config file. The legacy `mcp.servers` section keeps working
- * for users who never touch the UI: reads merge both sources by server name
- * (mcp.json wins), and the one-way consolidation — triggered by any UI save —
- * moves everything into mcp.json and strips the section from the config file
- * (text-precise edits in the yaml layout, a whole-file rewrite in the json
- * one), so a server deleted through the UI can never resurrect from a stale
- * config section.
+ * rewriting the config file — plus a per-workspace project file at
+ * `<workspace>/.kclaw/mcp.json` (local-only, gitignore-guarded).
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { writeFileAtomic } from "./atomic.js"
-import { loadConfig, saveConfig } from "./config.js"
 import { isGitTracked } from "./decided-rules.js"
-import type { KclawPaths } from "./paths.js"
 import type { McpServerConfig } from "../mcp/manager.js"
 
 /** <home>/mcp.json — the UI-managed MCP server config file. */
@@ -97,97 +90,4 @@ function ensureProjectMcpDefenses(workspace: string): void {
 export function saveProjectMcpJson(workspace: string, servers: Record<string, McpServerConfig>): void {
   ensureProjectMcpDefenses(workspace)
   saveMcpJson(projectMcpConfigPath(workspace), servers)
-}
-
-/**
- * Merged read across both sources: the config file's `mcp.servers` (legacy,
- * read through loadConfig so it follows config.json once that file exists)
- * and mcp.json. Same-name entries resolve to the mcp.json form. A config
- * file that cannot be parsed throws here just as it does for the daemon at
- * startup — silently dropping a broken config could silently drop MCP tools.
- */
-export function loadMcpServers(paths: KclawPaths): Record<string, McpServerConfig> {
-  const legacy = loadConfig(paths).mcp?.servers ?? {}
-  const managed = loadMcpJson(mcpConfigPath(paths.home))
-  return { ...legacy, ...managed }
-}
-
-/**
- * Persist the full server set as the managed source of truth: everything is
- * written into mcp.json and the legacy section is stripped from whichever
- * config layout is on disk (a no-op once it is gone). Idempotent — every UI
- * save runs through here.
- */
-export function consolidateMcpConfig(paths: KclawPaths, servers: Record<string, McpServerConfig>): void {
-  saveMcpJson(mcpConfigPath(paths.home), servers)
-  removeLegacyMcpSection(paths.config)
-  removeLegacyJsonMcpSection(paths)
-}
-
-/** Strip `mcp.servers` from config.json (the section survives only in mcp.json). */
-function removeLegacyJsonMcpSection(paths: KclawPaths): void {
-  if (!existsSync(paths.configJson)) return
-  const config = loadConfig(paths)
-  if (config.mcp === undefined || Object.keys(config.mcp.servers ?? {}).length === 0) return
-  delete config.mcp
-  saveConfig(paths, config)
-}
-
-/**
- * A top-level `mcp:` line: bare mapping header (with optional trailing
- * comment), or a whole flow-style section on one line. Indented keys under
- * other sections never match (the regex anchors at column zero).
- */
-const TOP_MCP_LINE = /^mcp\s*:(\s*\{.*\})?\s*(#.*)?$/
-
-/**
- * Remove the top-level `mcp` section from config.yaml with line-precise
- * edits: the section's lines are dropped, everything else — comments, blank
- * lines, key order — is preserved byte-for-byte. Returns "removed" or
- * "absent" (no top-level mcp line, or no file).
- */
-export function removeLegacyMcpSection(configPath: string): "removed" | "absent" {
-  let raw: string
-  try {
-    raw = readFileSync(configPath, "utf8")
-  } catch {
-    return "absent"
-  }
-  const lines = raw.split("\n")
-  const out: string[] = []
-  let removed = false
-  let i = 0
-  while (i < lines.length) {
-    const line = lines[i]
-    if (TOP_MCP_LINE.test(line)) {
-      removed = true
-      i++
-      // Swallow indented lines (section body). A blank line belongs to the
-      // section only while more indented lines follow; otherwise it is the
-      // separator before the next top-level key and stays.
-      while (i < lines.length) {
-        const l = lines[i]
-        if (l.trim() === "") {
-          let j = i
-          while (j < lines.length && lines[j].trim() === "") j++
-          if (j < lines.length && /^[ \t]/.test(lines[j])) {
-            i = j
-            continue
-          }
-          break
-        }
-        if (/^[ \t]/.test(l)) {
-          i++
-          continue
-        }
-        break
-      }
-      continue
-    }
-    out.push(line)
-    i++
-  }
-  if (!removed) return "absent"
-  writeFileAtomic(configPath, out.join("\n"), statSync(configPath).mode & 0o777)
-  return "removed"
 }

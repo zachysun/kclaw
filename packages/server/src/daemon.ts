@@ -31,13 +31,14 @@ import {
   JobScheduler,
   MemorySystem,
   SessionStore,
-  consolidateMcpConfig,
   createConfigNotifier,
   createProviderResolver,
   makeExtractLlmResolver,
   loadConfig,
-  loadMcpServers,
+  loadMcpJson,
   loadProjectMcpServers,
+  mcpConfigPath,
+  saveMcpJson,
   saveProjectMcpJson,
   createNotifier,
   makeEvent,
@@ -287,7 +288,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       }
     },
   })
-  // 记忆系统唯一门面：embed/emit/迁移/对账在此一次性装配。
+  // 记忆系统唯一门面：embed/emit/对账在此一次性装配。
   // resolveLlm 引用上方 llmForEntry：回落走共享 resolver（未变更条目零成本
   // 复用），extractModel 命中条目走 resolveEntryLlm 同源解析——Model 页
   // 改动对记忆提取同样热生效。测试注入的 llmFactory 保持原样直用。
@@ -300,9 +301,6 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     embed,
     emit: (e) => bus.emit(makeEvent("memory.written", { path: e.path, kind: e.kind, ...(e.topic !== undefined ? { topic: e.topic } : {}), ...(e.scope !== undefined ? { scope: e.scope } : {}) })),
   })
-  // v1 一次性迁移 + 对账 + v1 派生物 index.db 删除（v2 结构直接重建）。
-  if (existsSync(paths.memoryNotesDir)) memory.migrateV1Notes(paths.memoryNotesDir)
-  rmSync(join(paths.memoryDir, "index.db"), { force: true })
   memory.reconcile()
   const jobs = new JobScheduler(paths.jobsDb)
   const usage = new UsageStore(paths.usageDb)
@@ -349,23 +347,18 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   )
 
   const mcpManager = new McpManager({
-    servers: { global: loadMcpServers(paths), project: loadProjectMcpServers(workspace) },
+    servers: { global: loadMcpJson(mcpConfigPath(paths.home)), project: loadProjectMcpServers(workspace) },
     onError: (name, error) => console.error(`kclaw mcp ${name} error: ${error}`),
     persist: (scope, servers) => {
       if (scope === "project") {
         saveProjectMcpJson(workspace, servers)
         projectMcpWatch.ensure() // the first project write creates .kclaw — attach the watcher now
       } else {
-        consolidateMcpConfig(paths, servers)
+        saveMcpJson(mcpConfigPath(paths.home), servers)
       }
     },
   })
   projectMcpWatch.ensure()
-  // The manager owns MCP state from here (mcp.json is the managed source):
-  // drop the legacy section from the in-memory config so a later provider
-  // save can never write a deleted server back (saveConfig strips it at the
-  // write layer too) and the GET /config snapshot stays legacy-free.
-  delete config.mcp
   // Subagent dispatch: the spawner needs the RunManager (it submits/cancels
   // child runs) while the RunManager's engine deps need the spawner — a
   // late-bound getter breaks the cycle (dispatches only fire mid-run, long

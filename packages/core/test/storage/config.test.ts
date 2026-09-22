@@ -11,14 +11,18 @@ let home: string
 beforeEach(() => { home = mkdtempSync(join(tmpdir(), "kclaw-test-")) })
 afterEach(() => { rmSync(home, { recursive: true, force: true }) })
 
+/** Write a config.json with the given section values (partial deep object). */
+function writeConfig(values: Record<string, unknown>, dir = home): void {
+  writeFileSync(join(dir, "config.json"), JSON.stringify(values))
+}
+
 describe("resolvePaths", () => {
   it("creates directory tree and exposes the layout", () => {
     const p = resolvePaths(home)
-    expect(p.config).toBe(join(home, "config.yaml"))
-    expect(p.memoryNotesDir).toBe(join(home, "memory", "notes"))
+    expect(p.configJson).toBe(join(home, "config.json"))
     expect(p.sessionsDir).toBe(join(home, "sessions"))
     expect(p.jobsDb).toBe(join(home, "jobs.db"))
-    for (const d of [p.memoryNotesDir, p.sessionsDir, p.logsDir]) {
+    for (const d of [p.sessionsDir, p.logsDir]) {
       expect(() => readFileSync(d)).toThrow() // 是目录不是文件
     }
   })
@@ -43,13 +47,7 @@ describe("loadConfig / saveConfig", () => {
   })
   it("deep-merges file over defaults", () => {
     const paths = resolvePaths(home)
-    writeFileSync(paths.config, [
-      "permissions:",
-      "  allow:",
-      "    - 'exec:git status'",
-      "exec:",
-      "  timeoutMs: 5000",
-    ].join("\n"))
+    writeConfig({ permissions: { allow: ["exec:git status"] }, exec: { timeoutMs: 5000 } })
     const cfg = loadConfig(paths)
     expect(cfg.permissions.allow).toEqual(["exec:git status"])
     expect(cfg.permissions.deny).toEqual(defaultConfig.permissions.deny) // 未覆盖保留默认
@@ -67,27 +65,21 @@ describe("loadConfig / saveConfig", () => {
     const paths = resolvePaths(home)
     expect(defaultConfig.providers.timeoutMs).toBe(120_000)
     expect(loadConfig(paths).providers.timeoutMs).toBe(120_000) // absent in file → default
-    writeFileSync(paths.config, ["providers:", "  timeoutMs: 5000"].join("\n"))
+    writeConfig({ providers: { timeoutMs: 5000 } })
     expect(loadConfig(paths).providers.timeoutMs).toBe(5000) // 覆盖保留其余默认
     expect(loadConfig(paths).providers.default).toBe("")
   })
-  it("keeps v2 compaction fields optional; legacy fields still parse without error", () => {
+  it("keeps compaction fields optional (contextTokens alone is valid)", () => {
     const paths = resolvePaths(home)
-    writeFileSync(paths.config, [
-      "sessions:",
-      "  compactThreshold: 99",
-      "  compactKeep: 9",
-      "  contextTokens: 200000",
-    ].join("\n"))
+    writeConfig({ sessions: { contextTokens: 200000 } })
     const cfg = loadConfig(paths)
     expect(cfg.sessions.contextTokens).toBe(200_000)
     expect(cfg.sessions.compactAtRatio).toBeUndefined()
-    expect(cfg.sessions.compactThreshold).toBe(99) // tolerated, inert
   })
   it("falls invalid waterlines back to defaults with a warning (value out of range)", () => {
     const paths = resolvePaths(home)
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
-    writeFileSync(paths.config, ["sessions:", "  compactAtRatio: 1.5"].join("\n"))
+    writeConfig({ sessions: { compactAtRatio: 1.5 } })
     const cfg = loadConfig(paths)
     expect(warn).toHaveBeenCalledTimes(1)
     expect(warn.mock.calls[0]![0]).toContain("compact{Target,At,Ahead,Panic}Ratio")
@@ -97,7 +89,7 @@ describe("loadConfig / saveConfig", () => {
   it("falls inverted waterline order back to defaults (ahead ≥ panic empties the pre-compaction window)", () => {
     const paths = resolvePaths(home)
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
-    writeFileSync(paths.config, ["sessions:", "  compactAheadRatio: 0.95"].join("\n"))
+    writeConfig({ sessions: { compactAheadRatio: 0.95 } })
     const cfg = loadConfig(paths)
     expect(warn).toHaveBeenCalledTimes(1)
     expect(cfg.sessions.compactAheadRatio).toBeUndefined()
@@ -106,7 +98,7 @@ describe("loadConfig / saveConfig", () => {
   it("validates compactPackRatio independently of the trigger group", () => {
     const paths = resolvePaths(home)
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
-    writeFileSync(paths.config, ["sessions:", "  compactPackRatio: -1", "  compactAtRatio: 0.85"].join("\n"))
+    writeConfig({ sessions: { compactPackRatio: -1, compactAtRatio: 0.85 } })
     const cfg = loadConfig(paths)
     expect(warn).toHaveBeenCalledTimes(1)
     expect(warn.mock.calls[0]![0]).toContain("compactPackRatio")
@@ -116,14 +108,15 @@ describe("loadConfig / saveConfig", () => {
   it("keeps a valid custom waterline configuration untouched", () => {
     const paths = resolvePaths(home)
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
-    writeFileSync(paths.config, [
-      "sessions:",
-      "  compactTargetRatio: 0.2",
-      "  compactAheadRatio: 0.5",
-      "  compactAtRatio: 0.7",
-      "  compactPanicRatio: 0.95",
-      "  compactPackRatio: 0.4",
-    ].join("\n"))
+    writeConfig({
+      sessions: {
+        compactTargetRatio: 0.2,
+        compactAheadRatio: 0.5,
+        compactAtRatio: 0.7,
+        compactPanicRatio: 0.95,
+        compactPackRatio: 0.4,
+      },
+    })
     const cfg = loadConfig(paths)
     expect(warn).not.toHaveBeenCalled()
     expect(cfg.sessions.compactAtRatio).toBe(0.7)
@@ -132,30 +125,28 @@ describe("loadConfig / saveConfig", () => {
   it("does not share nested references with defaultConfig", () => {
     const pristine = structuredClone(defaultConfig)
     const paths = resolvePaths(home)
-    writeFileSync(paths.config, ["exec:", "  timeoutMs: 5000"].join("\n"))
+    writeConfig({ exec: { timeoutMs: 5000 } })
     const cfg = loadConfig(paths)
     cfg.permissions.allow.push("x")
     expect(cfg.permissions).not.toBe(defaultConfig.permissions) // 覆盖段外不共享嵌套引用
     expect(defaultConfig).toEqual(pristine) // 原地修改不污染 defaultConfig
-    rmSync(paths.config)
+    rmSync(paths.configJson)
     const fresh = loadConfig(paths)
     expect(fresh.permissions.allow).toEqual([])
     expect(fresh.permissions.allow).not.toContain("x")
     expect(fresh).toEqual(pristine)
   })
-  it("sessions.defaultDisposition defaults to steer and merges from yaml", () => {
+  it("sessions.defaultDisposition defaults to steer and merges from the file", () => {
     expect(defaultConfig.sessions.defaultDisposition).toBe("steer")
-    const home = mkdtempSync(join(tmpdir(), "kclaw-cfg-"))
-    writeFileSync(join(home, "config.yaml"), "sessions:\n  defaultDisposition: wait\n")
+    writeConfig({ sessions: { defaultDisposition: "wait" } })
     expect(loadConfig(resolvePaths(home)).sessions.defaultDisposition).toBe("wait")
   })
-  it("permissions.defaultMode defaults to default, merges from yaml, and rejects bad values with a warning", () => {
+  it("permissions.defaultMode defaults to default, merges from the file, and rejects bad values with a warning", () => {
     expect(defaultConfig.permissions.defaultMode).toBe("default")
-    const home = mkdtempSync(join(tmpdir(), "kclaw-cfg-"))
-    writeFileSync(join(home, "config.yaml"), "permissions:\n  defaultMode: readonly\n")
+    writeConfig({ permissions: { defaultMode: "readonly" } })
     expect(loadConfig(resolvePaths(home)).permissions.defaultMode).toBe("readonly")
     // 非法值（要进事件流的字段必须严格校验）回落 default 并警告
-    writeFileSync(join(home, "config.yaml"), "permissions:\n  defaultMode: bogus\n")
+    writeConfig({ permissions: { defaultMode: "bogus" } })
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     try {
       const cfg = loadConfig(resolvePaths(home))
@@ -165,9 +156,8 @@ describe("loadConfig / saveConfig", () => {
       warn.mockRestore()
     }
   })
-  it("permissions 整节非对象（YAML 空节）按默认节整体回落并警告，不裸抛", () => {
-    const home = mkdtempSync(join(tmpdir(), "kclaw-cfg-"))
-    writeFileSync(join(home, "config.yaml"), "permissions:\n") // 解析为 null
+  it("permissions 整节非对象（null 节）按默认节整体回落并警告，不裸抛", () => {
+    writeConfig({ permissions: null })
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     try {
       const cfg = loadConfig(resolvePaths(home))
@@ -178,13 +168,7 @@ describe("loadConfig / saveConfig", () => {
     }
   })
   it("defaultMode 非法时只重置该字段，不丢用户已有的 allow/deny", () => {
-    const home = mkdtempSync(join(tmpdir(), "kclaw-cfg-"))
-    writeFileSync(join(home, "config.yaml"), [
-      "permissions:",
-      "  defaultMode: bogus",
-      "  deny:",
-      "    - exec:rm -rf*",
-    ].join("\n"))
+    writeConfig({ permissions: { defaultMode: "bogus", deny: ["exec:rm -rf*"] } })
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     try {
       const cfg = loadConfig(resolvePaths(home))
@@ -211,41 +195,17 @@ describe("memory config", () => {
     })
   })
 
-  it("deep-merges user values over defaults and ignores legacy autoExtract", () => {
-    const home = mkdtempSync(join(tmpdir(), "kclaw-cfg-"))
-    writeFileSync(join(home, "config.yaml"), [
-      "memory:",
-      "  autoExtract: true",
-      "  write:",
-      "    intervalMinutes: 15",
-      "  embedding:",
-      "    model: text-embedding-3-small",
-      "",
-    ].join("\n"))
+  it("deep-merges user values over defaults", () => {
+    writeConfig({
+      memory: {
+        write: { intervalMinutes: 15 },
+        embedding: { model: "text-embedding-3-small" },
+      },
+    })
     const cfg = loadConfig(resolvePaths(home))
     expect(cfg.memory.write.intervalMinutes).toBe(15)
     expect(cfg.memory.write.immediate).toBe(true) // untouched default
     expect(cfg.memory.embedding.model).toBe("text-embedding-3-small")
-    expect((cfg.memory as Record<string, unknown>).autoExtract).toBe(true) // 读处兜底忽略，字段不进类型
-  })
-
-  it("logs a warning when legacy memory.autoExtract is present, silent when absent", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
-    try {
-      const withLegacy = mkdtempSync(join(tmpdir(), "kclaw-cfg-"))
-      writeFileSync(join(withLegacy, "config.yaml"), "memory:\n  autoExtract: true\n")
-      loadConfig(resolvePaths(withLegacy))
-      expect(warn).toHaveBeenCalled()
-      expect(warn.mock.calls.some((c) => String(c[0]).includes("autoExtract"))).toBe(true)
-
-      warn.mockClear()
-      const clean = mkdtempSync(join(tmpdir(), "kclaw-cfg-"))
-      writeFileSync(join(clean, "config.yaml"), "memory:\n  write:\n    intervalMinutes: 7\n")
-      loadConfig(resolvePaths(clean))
-      expect(warn).not.toHaveBeenCalled()
-    } finally {
-      warn.mockRestore()
-    }
   })
 })
 
@@ -269,37 +229,12 @@ describe("config.json storage", () => {
     expect(resolvePaths(home).configJson).toBe(join(home, "config.json"))
   })
 
-  it("roundtrips as JSON and prefers config.json over a coexisting config.yaml", () => {
+  it("roundtrips as JSON", () => {
     const paths = resolvePaths(home)
     saveConfig(paths, { ...structuredClone(defaultConfig), exec: { timeoutMs: 4321, maxOutputBytes: 1 } })
-    writeFileSync(paths.config, "exec:\n  timeoutMs: 9999\n")
     const cfg = loadConfig(paths)
-    expect(cfg.exec.timeoutMs).toBe(4321) // config.json wins
+    expect(cfg.exec.timeoutMs).toBe(4321)
     expect(JSON.parse(readFileSync(paths.configJson, "utf8")).exec.timeoutMs).toBe(4321)
-  })
-
-  it("reads a pre-json config.yaml when config.json is absent", () => {
-    const paths = resolvePaths(home)
-    writeFileSync(paths.config, "exec:\n  timeoutMs: 5555\n")
-    expect(loadConfig(paths).exec.timeoutMs).toBe(5555)
-  })
-
-  it("first saveConfig retires config.yaml as config.yaml.bak; later saves leave it alone", () => {
-    const paths = resolvePaths(home)
-    writeFileSync(paths.config, "exec:\n  timeoutMs: 7777\n")
-    saveConfig(paths, loadConfig(paths)) // loaded from yaml → persisted as json
-    expect(existsSync(paths.config)).toBe(false)
-    expect(readFileSync(`${paths.config}.bak`, "utf8")).toContain("timeoutMs: 7777")
-    expect(JSON.parse(readFileSync(paths.configJson, "utf8")).exec.timeoutMs).toBe(7777)
-    writeFileSync(`${paths.config}.bak`, "tampered")
-    saveConfig(paths, loadConfig(paths))
-    expect(readFileSync(`${paths.config}.bak`, "utf8")).toBe("tampered") // rename is first-write only
-  })
-
-  it("saveConfig without a legacy yaml writes json and renames nothing", () => {
-    const paths = resolvePaths(home)
-    saveConfig(paths, structuredClone(defaultConfig))
-    expect(existsSync(`${paths.config}.bak`)).toBe(false)
   })
 
   it("throws on unparseable config.json; an empty one yields defaults", () => {
@@ -312,15 +247,14 @@ describe("config.json storage", () => {
 
   it("treats a format-less entry as openai (resolveProviderFormat)", () => {
     const paths = resolvePaths(home)
-    writeFileSync(paths.config, [
-      "providers:",
-      "  default: ds",
-      "  entries:",
-      "    ds:",
-      "      baseUrl: https://api.deepseek.com/v1",
-      "      apiKey: sk-x",
-      "      model: deepseek-chat",
-    ].join("\n"))
+    writeConfig({
+      providers: {
+        default: "ds",
+        entries: {
+          ds: { baseUrl: "https://api.deepseek.com/v1", apiKey: "sk-x", model: "deepseek-chat" },
+        },
+      },
+    })
     const cfg = loadConfig(paths)
     expect(cfg.providers.entries.ds!.format).toBeUndefined()
     expect(resolveProviderFormat(cfg.providers.entries.ds!)).toBe("openai")
@@ -432,7 +366,7 @@ describe("resolveRunModel", () => {
 describe("server.port", () => {
   it("merges a valid port from the config file and survives a saveConfig roundtrip", () => {
     const paths = resolvePaths(home)
-    writeFileSync(paths.config, "server:\n  port: 48213\n")
+    writeConfig({ server: { port: 48213 } })
     const cfg = loadConfig(resolvePaths(home))
     expect(cfg.server?.port).toBe(48213)
     saveConfig(paths, cfg)
@@ -442,8 +376,8 @@ describe("server.port", () => {
     const paths = resolvePaths(home)
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     try {
-      for (const bad of ["0", "-1", "70000", "abc", "1.5"]) {
-        writeFileSync(paths.config, `server:\n  port: ${bad}\n`)
+      for (const bad of [0, -1, 70000, "abc", 1.5]) {
+        writeConfig({ server: { port: bad } })
         const cfg = loadConfig(resolvePaths(home))
         expect(cfg.server?.port).toBeUndefined()
         expect(warn).toHaveBeenCalledTimes(1)
@@ -456,7 +390,7 @@ describe("server.port", () => {
   })
   it("falls a non-mapping server section back wholesale with a warning", () => {
     const paths = resolvePaths(home)
-    writeFileSync(paths.config, "server: 3\n")
+    writeConfig({ server: 3 })
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     try {
       const cfg = loadConfig(resolvePaths(home))
@@ -465,18 +399,6 @@ describe("server.port", () => {
     } finally {
       warn.mockRestore()
     }
-  })
-})
-
-describe("saveConfig strips the legacy mcp section", () => {
-  it("writes no mcp key; the in-memory config keeps its section", () => {
-    const paths = resolvePaths(home)
-    const cfg = structuredClone(defaultConfig)
-    ;(cfg as { mcp?: { servers?: Record<string, unknown> } }).mcp = { servers: { fs: { command: "npx" } } }
-    saveConfig(paths, cfg)
-    const onDisk = JSON.parse(readFileSync(paths.configJson, "utf8")) as { mcp?: unknown }
-    expect(onDisk.mcp).toBeUndefined()
-    expect(cfg.mcp).toBeDefined()
   })
 })
 
@@ -536,13 +458,7 @@ describe("skills.evolution config", () => {
   })
 
   it("deep-merges user values over defaults", () => {
-    writeFileSync(join(home, "config.yaml"), [
-      "skills:",
-      "  evolution:",
-      "    enabled: true",
-      "    idleMinutes: 5",
-      "",
-    ].join("\n"))
+    writeConfig({ skills: { evolution: { enabled: true, idleMinutes: 5 } } })
     const cfg = loadConfig(resolvePaths(home))
     expect(cfg.skills?.evolution).toEqual({ enabled: true, idleMinutes: 5 })
   })
@@ -550,26 +466,14 @@ describe("skills.evolution config", () => {
   it("falls back per field with a warning on invalid values; idleMinutes 0 is legal", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     try {
-      writeFileSync(join(home, "config.yaml"), [
-        "skills:",
-        "  evolution:",
-        "    enabled: yes-please",
-        "    idleMinutes: -3",
-        "",
-      ].join("\n"))
+      writeConfig({ skills: { evolution: { enabled: "yes-please", idleMinutes: -3 } } })
       const cfg = loadConfig(resolvePaths(home))
       expect(cfg.skills?.evolution?.enabled).toBe(false)
       expect(cfg.skills?.evolution?.idleMinutes).toBe(10)
       expect(warn.mock.calls.filter((c) => String(c[0]).includes("skills.evolution")).length).toBe(2)
 
       warn.mockClear()
-      writeFileSync(join(home, "config.yaml"), [
-        "skills:",
-        "  evolution:",
-        "    enabled: true",
-        "    idleMinutes: 0",
-        "",
-      ].join("\n"))
+      writeConfig({ skills: { evolution: { enabled: true, idleMinutes: 0 } } })
       const zero = loadConfig(resolvePaths(home))
       expect(zero.skills?.evolution).toEqual({ enabled: true, idleMinutes: 0 })
       expect(warn).not.toHaveBeenCalled()
@@ -581,7 +485,7 @@ describe("skills.evolution config", () => {
   it("falls back wholesale when the section is not a mapping", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     try {
-      writeFileSync(join(home, "config.yaml"), "skills: nope\n")
+      writeConfig({ skills: "nope" })
       const cfg = loadConfig(resolvePaths(home))
       expect(cfg.skills).toEqual({ evolution: { enabled: true, idleMinutes: 10 } })
     } finally {

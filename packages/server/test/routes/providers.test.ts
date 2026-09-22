@@ -67,16 +67,6 @@ describe("providers routes", () => {
     expect(bad.statusCode).toBe(400)
   })
 
-  it("first mutation retires a legacy config.yaml as config.yaml.bak", async () => {
-    writeFileSync(join(home, "config.yaml"), "# hand-tuned\nexec:\n  timeoutMs: 5000\n")
-    await app.inject({
-      method: "POST", url: "/providers", headers: AUTH,
-      payload: { name: "gpt", entry: { format: "openai", baseUrl: "https://api.openai.com/v1", apiKey: "k", model: "gpt-4o" } },
-    })
-    expect(existsSync(join(home, "config.yaml"))).toBe(false)
-    expect(readFileSync(join(home, "config.yaml.bak"), "utf8")).toContain("timeoutMs: 5000")
-  })
-
   it("PATCH updates an entry and a blank apiKey keeps the stored key", async () => {
     const res = await app.inject({
       method: "PATCH", url: "/providers/ds", headers: AUTH,

@@ -8,8 +8,6 @@ export interface KclawPaths {
   home: string
   /** ~/.kclaw/config.json — the config file (provider/permissions/memory settings) */
   configJson: string
-  /** ~/.kclaw/config.yaml — pre-json location, read only while config.json is absent */
-  config: string
   /** ~/.kclaw/AGENTS.md — agent persona injected into the system prompt */
   agentsMd: string
   /** ~/.kclaw/skills/<skill-name>/SKILL.md — global skill packages */
@@ -18,10 +16,6 @@ export interface KclawPaths {
   hooksDir: string
   /** ~/.kclaw/memory */
   memoryDir: string
-  /** ~/.kclaw/memory/notes — one markdown file per memory note */
-  memoryNotesDir: string
-  /** ~/.kclaw/memory/index.db — SQLite FTS5 index, rebuildable from notes */
-  memoryIndexDb: string
   /** ~/.kclaw/sessions/<session-id>/ */
   sessionsDir: string
   /** ~/.kclaw/jobs.db — scheduled job state */
@@ -56,13 +50,10 @@ export function resolvePaths(home?: string): KclawPaths {
   const paths: KclawPaths = {
     home: root,
     configJson: join(root, "config.json"),
-    config: join(root, "config.yaml"),
     agentsMd: join(root, "AGENTS.md"),
     skillsDir: join(root, "skills"),
     hooksDir: join(root, "hooks"),
     memoryDir: join(root, "memory"),
-    memoryNotesDir: join(root, "memory", "notes"),
-    memoryIndexDb: join(root, "memory", "index.db"),
     sessionsDir: join(root, "sessions"),
     jobsDb: join(root, "jobs.db"),
     usageDb: join(root, "usage.db"),
@@ -70,7 +61,7 @@ export function resolvePaths(home?: string): KclawPaths {
     spillDir: join(root, "spill"),
     logsDir: join(root, "logs"),
   }
-  for (const dir of [paths.memoryNotesDir, paths.sessionsDir, paths.attachmentsDir, paths.spillDir, paths.logsDir]) {
+  for (const dir of [paths.sessionsDir, paths.attachmentsDir, paths.spillDir, paths.logsDir]) {
     mkdirSync(dir, { recursive: true })
   }
   return paths
