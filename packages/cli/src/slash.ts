@@ -462,10 +462,9 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
       const name = args.trim()
       try {
         const { servers } = (await ctx.client.request("GET", "/mcp")) as {
-          servers: Array<{ name: string; state: string; scope?: string; tools: { name: string; description?: string }[]; lastError?: string }>
+          servers: Array<{ name: string; state: string; scope: string; tools: { name: string; description?: string }[]; lastError?: string }>
         }
-        // scope 缺席（对旧 daemon）读作全局层：两层化之前所有条目都在全局。
-        const scopeLabel = (s: { scope?: string }): string => MCP_SCOPE_LABELS[s.scope ?? "global"] ?? "全局"
+        const scopeLabel = (s: { scope: string }): string => MCP_SCOPE_LABELS[s.scope] ?? "全局"
         if (servers.length === 0) {
           ctx.print("还没有接入任何 MCP 服务器（配置 daemon 的 mcp.json）")
           return

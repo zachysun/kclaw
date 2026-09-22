@@ -564,7 +564,7 @@ export class MemoryPipeline {
     const result = writeCognitionFile(path, kind, name,
       (cf) => {
         if (action.op === "append") return { ...cf, body: `${cf.body}${cf.body === "" ? "" : "\n\n"}${withSource}`, updated: todayOf(this.#now()) }
-        return { ...cf, body: action.content, updated: todayOf(this.#now()) } // rewrite：就地改写不保留旧版
+        return { ...cf, body: action.content, updated: todayOf(this.#now()) } // rewrite：就地改写不保留原文
       },
       () => ({ kind, name, title: name, scope: "global", created: todayOf(this.#now()), updated: todayOf(this.#now()), body: isAppend ? "" : withSource }))
     this.#deps.emit?.({ type: "memory.written", path, kind: "cognition", scope: result.scope })

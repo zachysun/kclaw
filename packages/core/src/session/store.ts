@@ -355,7 +355,7 @@ export class SessionStore {
       projection = applyEvent(projection, event)
     }
 
-    // 显式清除 deleted 时投影不保留 deleted/deletedAt 键（与旧版 meta 形状一致）
+    // 显式清除 deleted 时投影不保留 deleted/deletedAt 键
     if ("deleted" in patch && patch.deleted !== true) {
       delete projection.deleted
       delete projection.deletedAt

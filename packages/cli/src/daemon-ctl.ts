@@ -234,11 +234,14 @@ export interface DaemonStatusResult {
   info?: DaemonInfo
   /** Present when running: whole seconds since daemon.json `startedAt`. */
   uptimeSec?: number
+  /** Present when running and `/status` answers: the daemon's own version. */
+  daemonVersion?: string
 }
 
 /**
  * Is a daemon serving `home`? Healthy daemon.json → running with port, pid
- * and uptime; anything else (no file, stale file, dead port) → not running.
+ * and uptime (plus the daemon's own version from `/status` when it answers);
+ * anything else (no file, stale file, dead port) → not running.
  */
 export async function daemonStatus(home: string): Promise<DaemonStatusResult> {
   const info = readDaemonJson(home)
@@ -247,5 +250,21 @@ export async function daemonStatus(home: string): Promise<DaemonStatusResult> {
   const uptimeSec = Number.isNaN(startedAtMs)
     ? 0
     : Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000))
-  return { running: true, info, uptimeSec }
+  return { running: true, info, uptimeSec, daemonVersion: await probeDaemonVersion(info.port, home) }
+}
+
+/** Version reported by the daemon's `/status`, when it answers. Never throws. */
+async function probeDaemonVersion(port: number, home: string): Promise<string | undefined> {
+  try {
+    const token = readFileSync(join(home, "token"), "utf8").trim()
+    const res = await fetch(`http://${HOST}:${port}/status`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    })
+    if (!res.ok) return undefined
+    const version = ((await res.json()) as { version?: string }).version
+    return typeof version === "string" && version.length > 0 ? version : undefined
+  } catch {
+    return undefined
+  }
 }

@@ -132,6 +132,14 @@ describe("kclaw daemon lifecycle (built CLI)", () => {
       expect(res.stdout).toContain("running")
       expect(portFrom(res.stdout)).toBe(daemonJson(home).port)
 
+      // Same checkout built both: the daemon's /status version matches the
+      // CLI's, so the version shows inline and no mismatch hint prints.
+      const cliVersion = JSON.parse(
+        readFileSync(join(CLI_ROOT, "package.json"), "utf8"),
+      ) as { version: string }
+      expect(res.stdout).toContain(`v${cliVersion.version}`)
+      expect(res.stdout).not.toContain("不一致")
+
       const alias = await runCli(["status"], home)
       expect(alias.exitCode).toBe(0)
       // Uptime is inherently non-deterministic (the two runs may straddle a

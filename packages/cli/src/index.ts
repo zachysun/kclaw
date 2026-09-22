@@ -108,9 +108,20 @@ async function statusAction(home: string): Promise<void> {
     process.stdout.write("not running\n")
     return
   }
+  const daemonVersion =
+    status.daemonVersion !== undefined ? `, v${status.daemonVersion}` : ""
   process.stdout.write(
-    `running (pid ${status.info.pid}, port ${status.info.port}, uptime ${status.uptimeSec}s)\n`,
+    `running (pid ${status.info.pid}, port ${status.info.port}${daemonVersion}, uptime ${status.uptimeSec}s)\n`,
   )
+  // The daemon serves a build snapshot; a mismatch means it was not built
+  // from this checkout (or predates the latest build) — the classic "fixed
+  // but still broken" trap.
+  if (status.daemonVersion !== undefined && status.daemonVersion !== readVersion()) {
+    process.stdout.write(
+      `daemon（v${status.daemonVersion}）与 CLI（v${readVersion()}）版本不一致：` +
+        `两者不是同一次构建的产物，重新 pnpm build 并重启 daemon 以吃到最新代码\n`,
+    )
+  }
 }
 
 async function jobsListAction(home: string): Promise<void> {
@@ -123,7 +134,7 @@ async function jobsListAction(home: string): Promise<void> {
 /** `kclaw mcp [list]`: one line per configured MCP server (source layer + state + tool count). */
 async function mcpAction(home: string): Promise<void> {
   const client = await KclawClient.connect(home)
-  const body = (await client.request("GET", "/mcp")) as { servers?: Array<{ name: string; state: string; scope?: string; tools: { name: string }[]; lastError?: string }> }
+  const body = (await client.request("GET", "/mcp")) as { servers?: Array<{ name: string; state: string; scope: string; tools: { name: string }[]; lastError?: string }> }
   const servers = body.servers ?? []
   if (servers.length === 0) {
     process.stdout.write("未配置 MCP server（daemon 的 mcp.json 为空）\n")
@@ -131,8 +142,7 @@ async function mcpAction(home: string): Promise<void> {
   }
   for (const s of servers) {
     const error = s.lastError === undefined ? "" : ` 错误: ${s.lastError}`
-    // scope 缺席（对旧 daemon）读作全局层：两层化之前所有条目都在全局。
-    const scope = MCP_SCOPE_LABELS[s.scope ?? "global"] ?? "全局"
+    const scope = MCP_SCOPE_LABELS[s.scope] ?? "全局"
     process.stdout.write(`${s.name}  [${scope}]  ${s.state}  ${s.tools.length} 个工具${error}\n`)
   }
 }

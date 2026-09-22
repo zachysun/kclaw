@@ -203,7 +203,7 @@ export class WakeBudgetExhaustedError extends Error {
  * 以其 RunOutcome settle（wait/interrupt 为本条 run，steer 不建 node）。
  * `model` 是仅存于内存的入队时 per-run 覆盖（QueueEntry 不含 model，出队时
  * 在此还原——现状行为：job 的配置模型与调用方强制模型不因排队而丢失；
- * steer 降级路径无此附加，因旧实现本无 steer，无从保留）。
+ * steer 降级路径无此附加：steer 不建队列节点，没有可还原的模型覆盖）。
  */
 interface QueueNode {
   entry: QueueEntry
@@ -720,8 +720,8 @@ export class RunManager {
   }
 
   /**
-   * 执行一条出队条目：登记活动 controller（在任何 await 之前，
-   * 消除旧实现的取消注册窗口）、记录活动 outcome 供 steer 参考，结束后清理。
+   * 执行一条出队条目：在任何 await 之前登记活动 controller（取消注册无窗口）、
+   * 记录活动 outcome 供 steer 参考，结束后清理。
    * 入队时的 per-run model 覆盖从 node 还原（内存附加，见 QueueNode）。
    */
   async #executeEntry(sessionId: string, node: QueueNode): Promise<RunOutcome> {
