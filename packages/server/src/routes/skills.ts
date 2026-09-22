@@ -265,7 +265,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     return proposalRowOf(evo, p)
   })
 
-  /** apply|reject|revert 共用体：非法迁移/冲突 → 409（core 判定，路由映射状态码）。 */
+  /** apply|reject|revert 共用体：非法流转/冲突 → 409（core 判定，路由映射状态码）。 */
   for (const op of ["apply", "reject", "revert"] as const) {
     app.post(`/skills/proposals/:id/${op}`, async (req, reply: FastifyReply) => {
       const evo = requireEvolution(reply)

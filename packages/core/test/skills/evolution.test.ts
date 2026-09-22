@@ -390,7 +390,7 @@ describe("governance and usage telemetry", () => {
     expect(evo.getProposal(rev.ok ? rev.proposal.id : "")?.snapshot).toContain("V1")
     expect(evo.revertProposal(rev.ok ? rev.proposal.id : "").ok).toBe(true)
     expect(readFileSync(join(skillsDir, "deploy-runbook", "SKILL.md"), "utf8")).toContain("V1")
-    // 非法迁移：proposed 不可删；rejected 不可再 reject/apply
+    // 非法流转：proposed 不可删；rejected 不可再 reject/apply
     const ghost = evo.propose(meta.id, { name: "ghost-two", content: "x" })
     expect(ghost.ok).toBe(true)
     expect(evo.removeProposal(ghost.ok ? ghost.proposal.id : "").ok).toBe(false)

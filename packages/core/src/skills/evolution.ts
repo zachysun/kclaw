@@ -97,7 +97,7 @@ export interface SkillEvolutionTriggers {
   propose(sessionId: string, input: { name: string; content: string; rationale?: string }): SkillProposalResult
 }
 
-/** 治理面：server 路由消费（非法迁移/冲突由 store 判定，路由映射 409）。 */
+/** 治理面：server 路由消费（非法流转/冲突由 store 判定，路由映射 409）。 */
 export interface SkillEvolutionAdmin {
   listProposals(): SkillProposal[]
   getProposal(id: string): SkillProposal | undefined

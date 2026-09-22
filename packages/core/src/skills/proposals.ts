@@ -140,7 +140,7 @@ export class ProposalStore {
   apply(id: string, opts: { at?: string; shadowDirs?: string[] } = {}): SkillProposalResult {
     const p = this.get(id)
     if (p === undefined) return { ok: false, error: "提案不存在" }
-    if (p.status !== "proposed") return { ok: false, error: `非法迁移 ${p.status} → applied`, conflict: true }
+    if (p.status !== "proposed") return { ok: false, error: `非法流转 ${p.status} → applied`, conflict: true }
     const root = this.#resolveDir(p.scope, p.workdir)
     if (linkedSkillNames(root).includes(p.name)) {
       return { ok: false, error: `目标是复用链接技能，由源目录维护：${p.name}`, conflict: true }
@@ -182,7 +182,7 @@ export class ProposalStore {
   reject(id: string, opts: { at?: string } = {}): SkillProposalResult {
     const p = this.get(id)
     if (p === undefined) return { ok: false, error: "提案不存在" }
-    if (p.status !== "proposed") return { ok: false, error: `非法迁移 ${p.status} → rejected`, conflict: true }
+    if (p.status !== "proposed") return { ok: false, error: `非法流转 ${p.status} → rejected`, conflict: true }
     p.status = "rejected"
     p.decidedAt = opts.at ?? new Date().toISOString()
     this.#save(p)
@@ -193,10 +193,10 @@ export class ProposalStore {
   revert(id: string, opts: { at?: string } = {}): SkillProposalResult {
     const p = this.get(id)
     if (p === undefined) return { ok: false, error: "提案不存在" }
-    if (p.status !== "applied") return { ok: false, error: `非法迁移 ${p.status} → reverted`, conflict: true }
+    if (p.status !== "applied") return { ok: false, error: `非法流转 ${p.status} → reverted`, conflict: true }
     const root = this.#resolveDir(p.scope, p.workdir)
     if (p.kind === "revise") {
-      if (p.snapshot === undefined) return { ok: false, error: "提案缺少回滚快照（applied 于旧版本产生）" }
+      if (p.snapshot === undefined) return { ok: false, error: "提案缺少回滚快照，无法回滚" }
       writeFileAtomic(join(root, p.name, "SKILL.md"), p.snapshot)
     } else {
       rmSync(join(root, p.name), { recursive: true, force: true }) // 只删该技能目录本身
