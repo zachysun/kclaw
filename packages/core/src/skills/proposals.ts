@@ -20,6 +20,14 @@ import { writeFileAtomic } from "../storage/atomic.js"
 import { linkedSkillNames } from "./links.js"
 import { isSkillDirName } from "./names.js"
 
+/** Proposal content cap: 64 KiB of UTF-8. The single authority — both write
+ * paths (skill_create tool and the follow extraction) check through it. */
+export const MAX_SKILL_CONTENT_BYTES = 64 * 1024
+
+export function isOverSkillContentCap(content: string): boolean {
+  return Buffer.byteLength(content, "utf8") > MAX_SKILL_CONTENT_BYTES
+}
+
 export interface SkillProposal {
   /** File name minus .json. */
   id: string
@@ -56,6 +64,11 @@ export interface SkillProposal {
 export type SkillProposalResult =
   | { ok: true; proposal: SkillProposal; /** Non-fatal apply notice (e.g. a same-named project skill will shadow the global one). */ warning?: string }
   | { ok: false; error: string; /** true = an expected governance conflict (409 for the routes); false/absent = not found / broken state. */ conflict?: boolean }
+
+/** Wire row for proposal listings: the full proposal plus, on applied ones,
+ * the usage count (skill_read calls since apply). The named shape the
+ * routes layer serves and web/cli consume — no hand-copied mirrors. */
+export type SkillProposalRow = SkillProposal & { usage?: number }
 
 export interface ProposalStoreDeps {
   proposalsDir: string
@@ -121,6 +134,7 @@ export class ProposalStore {
   create(fields: Omit<SkillProposal, "id" | "status" | "createdAt">): SkillProposal {
     if (!isSkillDirName(fields.name)) throw new Error(`invalid skill dir name: ${fields.name}`)
     if (fields.content === "") throw new Error("proposal content must not be empty")
+    if (isOverSkillContentCap(fields.content)) throw new Error("proposal content exceeds the 64KiB cap")
     if (fields.scope === "project" && (fields.workdir === undefined || fields.workdir === "")) {
       throw new Error("scope=project requires workdir")
     }

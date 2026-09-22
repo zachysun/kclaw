@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { defaultConfig } from "@kclaw/core"
+import { defaultConfig, McpError } from "@kclaw/core"
 import type { McpServerConfig, McpServerStatus } from "@kclaw/core"
 import { createApp } from "../../src/index.js"
 import type { FastifyInstance } from "fastify"
@@ -27,29 +27,29 @@ function fakeManager(initial: Record<string, McpServerConfig> = {}) {
     async flush(): Promise<void> {},
     addServer(name: string, config: McpServerConfig, layer: string = "global"): void {
       calls.push(`add:${name}:${layer}`)
-      if (name === "dupe") throw new Error(`MCP server already exists: ${name}`)
+      if (name === "dupe") throw new McpError("conflict", `MCP server already exists: ${name}`)
       servers.set(name, config)
     },
     updateServer(name: string, config: McpServerConfig): void {
       calls.push(`update:${name}`)
-      if (!servers.has(name)) throw new Error(`unknown MCP server: ${name}`)
+      if (!servers.has(name)) throw new McpError("not-found", `unknown MCP server: ${name}`)
       servers.set(name, config)
     },
     removeServer(name: string): void {
       calls.push(`remove:${name}`)
-      if (!servers.has(name)) throw new Error(`unknown MCP server: ${name}`)
+      if (!servers.has(name)) throw new McpError("not-found", `unknown MCP server: ${name}`)
       servers.delete(name)
     },
     setEnabled(name: string, enabled: boolean): void {
       calls.push(`enable:${name}:${enabled}`)
-      if (!servers.has(name)) throw new Error(`unknown MCP server: ${name}`)
+      if (!servers.has(name)) throw new McpError("not-found", `unknown MCP server: ${name}`)
       const old = servers.get(name)!
       servers.set(name, { ...old, enabled } as McpServerConfig)
     },
     reconnect(name: string): void {
       calls.push(`reconnect:${name}`)
-      if (!servers.has(name)) throw new Error(`unknown MCP server: ${name}`)
-      if (servers.get(name)!.enabled === false) throw new Error(`MCP server ${name} is disabled`)
+      if (!servers.has(name)) throw new McpError("not-found", `unknown MCP server: ${name}`)
+      if (servers.get(name)!.enabled === false) throw new McpError("invalid", `MCP server ${name} is disabled`)
     },
   }
   return view

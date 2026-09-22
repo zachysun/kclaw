@@ -173,7 +173,14 @@ export function applyReuseTiers(skills: SkillRecord[], scopes: LinksFile[]): Ski
   })
 }
 
-export type LinkOpResult = { ok: true } | { ok: false; error: string }
+/**
+ * Machine-readable failure class: conflict → 409, not-found → 404, invalid
+ * → 400 at the routes layer. The mapping runs on this code, never on message
+ * text — wording may change freely without moving status codes.
+ */
+export type LinkErrorCode = "conflict" | "not-found" | "invalid"
+
+export type LinkOpResult = { ok: true } | { ok: false; error: string; code: LinkErrorCode }
 
 /**
  * Create a reuse symlink plus its sidecar record. The link name must be a
@@ -189,24 +196,24 @@ export type LinkOpResult = { ok: true } | { ok: false; error: string }
  */
 export function createSkillLink(opts: { skillsDir: string; name: string; target: string; agent: ReuseAgent; tier?: ReuseTier; plugin?: string }): LinkOpResult {
   const { skillsDir, name, target, agent, plugin } = opts
-  if (!isSkillDirName(name)) return { ok: false, error: "invalid skill name" }
+  if (!isSkillDirName(name)) return { ok: false, error: "invalid skill name", code: "invalid" }
   const linkPath = join(skillsDir, name)
   let realTarget: string
   let tier: ReuseTier
   try {
     realTarget = realpathSync(target)
-    if (!statSync(realTarget).isDirectory()) return { ok: false, error: "target is not a directory" }
+    if (!statSync(realTarget).isDirectory()) return { ok: false, error: "target is not a directory", code: "invalid" }
     const skillFile = join(realTarget, "SKILL.md")
-    if (!statSync(skillFile).isFile()) return { ok: false, error: "target has no SKILL.md" }
+    if (!statSync(skillFile).isFile()) return { ok: false, error: "target has no SKILL.md", code: "invalid" }
     tier = opts.tier ?? suggestTierFromSkill(readFileSync(skillFile, "utf8"))
   } catch {
-    return { ok: false, error: "target is not a readable skill directory" }
+    return { ok: false, error: "target is not a readable skill directory", code: "invalid" }
   }
   try {
     if (lstatSync(linkPath).isSymbolicLink() && realpathSync(linkPath) === realTarget) {
-      return { ok: false, error: "already reused under this name" }
+      return { ok: false, error: "already reused under this name", code: "conflict" }
     }
-    return { ok: false, error: "name already taken by a different skill" }
+    return { ok: false, error: "name already taken by a different skill", code: "conflict" }
   } catch {
     // linkPath does not exist — the free case, fall through to creation.
   }
@@ -216,7 +223,7 @@ export function createSkillLink(opts: { skillsDir: string; name: string; target:
     mkdirSync(skillsDir, { recursive: true })
     symlinkSync(realTarget, linkPath)
   } catch (e) {
-    return { ok: false, error: `symlink failed: ${String(e)}` }
+    return { ok: false, error: `symlink failed: ${String(e)}`, code: "invalid" }
   }
   writeLinksFile(skillsDir, {
     ...file,
@@ -233,10 +240,10 @@ export function createSkillLink(opts: { skillsDir: string; name: string; target:
  */
 export function removeSkillLink(opts: { skillsDir: string; name: string }): LinkOpResult {
   const { skillsDir, name } = opts
-  if (!isSkillDirName(name)) return { ok: false, error: "invalid skill name" }
+  if (!isSkillDirName(name)) return { ok: false, error: "invalid skill name", code: "invalid" }
   const file = readLinksFile(skillsDir)
   const kept = file.links.filter((l) => l.name !== name)
-  if (kept.length === file.links.length) return { ok: false, error: "no such link record" }
+  if (kept.length === file.links.length) return { ok: false, error: "no such link record", code: "not-found" }
   const linkPath = join(skillsDir, name)
   try {
     if (lstatSync(linkPath).isSymbolicLink()) unlinkSync(linkPath)
@@ -250,24 +257,24 @@ export function removeSkillLink(opts: { skillsDir: string; name: string }): Link
 /** Update one link record's visibility tier. */
 export function setSkillLinkTier(opts: { skillsDir: string; name: string; tier: ReuseTier }): LinkOpResult {
   const { skillsDir, name, tier } = opts
-  if (!isSkillDirName(name)) return { ok: false, error: "invalid skill name" }
+  if (!isSkillDirName(name)) return { ok: false, error: "invalid skill name", code: "invalid" }
   const file = readLinksFile(skillsDir)
-  if (!file.links.some((l) => l.name === name)) return { ok: false, error: "no such link record" }
+  if (!file.links.some((l) => l.name === name)) return { ok: false, error: "no such link record", code: "not-found" }
   writeLinksFile(skillsDir, { ...file, links: file.links.map((l) => (l.name === name ? { ...l, tier } : l)) })
   return { ok: true }
 }
 
 export function addDiscoverySource(opts: { skillsDir: string; dir: string }): LinkOpResult {
-  if (!opts.dir.trim().startsWith("/")) return { ok: false, error: "source must be an absolute path" }
+  if (!opts.dir.trim().startsWith("/")) return { ok: false, error: "source must be an absolute path", code: "invalid" }
   const file = readLinksFile(opts.skillsDir)
-  if (file.extraSources.includes(opts.dir)) return { ok: false, error: "source already registered" }
+  if (file.extraSources.includes(opts.dir)) return { ok: false, error: "source already registered", code: "conflict" }
   writeLinksFile(opts.skillsDir, { ...file, extraSources: [...file.extraSources, opts.dir] })
   return { ok: true }
 }
 
 export function removeDiscoverySource(opts: { skillsDir: string; dir: string }): LinkOpResult {
   const file = readLinksFile(opts.skillsDir)
-  if (!file.extraSources.includes(opts.dir)) return { ok: false, error: "no such source" }
+  if (!file.extraSources.includes(opts.dir)) return { ok: false, error: "no such source", code: "not-found" }
   writeLinksFile(opts.skillsDir, { ...file, extraSources: file.extraSources.filter((s) => s !== opts.dir) })
   return { ok: true }
 }

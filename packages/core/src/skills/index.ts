@@ -22,7 +22,7 @@ import type { Dirent } from "node:fs"
 import { join } from "node:path"
 import { parse } from "yaml"
 // 本模块内部也要用（export * 只做再导出，不把名字引入本模块作用域）。
-import { isSkillDirName } from "./names.js"
+import { isSkillDirName, SKILL_MENTION_REGEX } from "./names.js"
 
 export * from "./links.js"
 export * from "./discovery.js"
@@ -166,15 +166,14 @@ export function isModelVisible(s: SkillRecord): boolean {
 
 /**
  * Slash-style skill mentions in a user message, at ANY position: every
- * `/<name>` token whose preceding character is not ASCII alphanumeric (this
- * keeps `com/test` URL fragments out while letting unspaced Chinese text
- * like "帮我/test" through) matches an installed, user-invocable skill by
- * exact directory name. Duplicates collapse; scan order is preserved.
+ * `/<name>` token matching SKILL_MENTION_REGEX (shared with the evolution
+ * coarse check) matches an installed, user-invocable skill by exact
+ * directory name. Duplicates collapse; scan order is preserved.
  */
 export function matchSkillInvocations(text: string, skills: readonly SkillRecord[]): SkillRecord[] {
   const invocable = new Map(skills.filter(isUserVisible).map((s) => [s.name, s]))
   const matched: SkillRecord[] = []
-  for (const m of text.matchAll(/(?<![A-Za-z0-9])\/([a-z0-9]+(?:-[a-z0-9]+)*)/g)) {
+  for (const m of text.matchAll(SKILL_MENTION_REGEX)) {
     const skill = invocable.get(m[1]!)
     if (skill !== undefined && !matched.includes(skill)) matched.push(skill)
   }

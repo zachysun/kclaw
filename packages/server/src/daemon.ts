@@ -66,10 +66,6 @@ import { startMemoryScheduler } from "./memory-scheduler.js"
 import { startSkillScheduler } from "./skill-scheduler.js"
 import { createApp } from "./app.js"
 
-// Endpoint/model resolution moved to @kclaw/core (the provider resolver
-// needs it); re-exported here for API continuity.
-export { resolveModel, resolveProviderEndpoint } from "@kclaw/core"
-
 /** The daemon only ever binds loopback (127.0.0.1). */
 const HOST = "127.0.0.1"
 
@@ -328,14 +324,13 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   })
   // MCP: the manager is always assembled (an empty one costs nothing and
   // keeps the management routes — adding the first server from the WebUI —
-  // alive). Servers come from the two config layers: global (config.yaml
-  // legacy section merged with ~/.kclaw/mcp.json, mcp.json winning) and the
-  // project file (<workspace>/.kclaw/mcp.json, missing/corrupt/git-tracked
-  // all read as {} in the storage loader); the manager expands them
-  // global < project with whole-entry override. Hot-config changes persist
-  // per layer: global → the consolidation (which also strips the legacy
-  // section on first save), project → the project file. Connection failures
-  // are logged and never fatal — a broken server just yields no tools.
+  // alive). Servers come from the two config layers: the global file
+  // (~/.kclaw/mcp.json) and the project file (<workspace>/.kclaw/mcp.json,
+  // missing/corrupt/git-tracked all read as {} in the storage loader); the
+  // manager expands them global < project with whole-entry override.
+  // Hot-config changes persist per layer: global → the global file,
+  // project → the project file. Connection failures are logged and never
+  // fatal — a broken server just yields no tools.
   const workspace = config.workspace
   // Project-file watch: hand edits to <workspace>/.kclaw/mcp.json
   // hot-reload through reconcile. Two-stage attach (workspace top level

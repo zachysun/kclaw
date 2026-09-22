@@ -18,6 +18,7 @@
  */
 import type { KclawConfig, SessionStore } from "@kclaw/core"
 import type { SkillEvolutionScheduleBook, SkillEvolutionTriggers } from "@kclaw/core"
+import { resolveEvolutionGate } from "@kclaw/core"
 import { followGateDue } from "./memory-scheduler.js"
 
 const DEFAULT_SCAN_MS = 60_000
@@ -49,9 +50,9 @@ export function startSkillScheduler(deps: {
   let timer: ReturnType<typeof setInterval> | undefined
 
   async function sweep(): Promise<void> {
-    const evo = deps.config.skills?.evolution
-    if (evo?.enabled !== true || (evo.idleMinutes ?? 0) <= 0) return
-    const idleMinutes = evo.idleMinutes ?? 0
+    const gate = resolveEvolutionGate(deps.config)
+    if (!gate.enabled || gate.idleMinutes <= 0) return
+    const idleMinutes = gate.idleMinutes
     for (const workdir of deps.workdirs()) {
       if (stopped) return
       for (const check of deps.system.pendingFollowChecks(workdir)) {
