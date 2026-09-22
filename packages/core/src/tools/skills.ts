@@ -32,7 +32,7 @@ export const SKILL_CREATE_DESCRIPTION =
 
 /** 功能关闭时的固定文案（照 memory_save 的 immediate 关闭先例）。 */
 export const SKILL_CREATE_CLOSED_MSG =
-  "技能提案未开启（skills.evolution.enabled=false）：本功能默认关闭，由用户在配置中开启后可用"
+  "技能提案未开启（skills.evolution.enabled=false）：在配置中将 skills.evolution.enabled 设为 true 后可用"
 
 /** Same visibility口径 as the prompt listing: model-invisible skills stay hidden. */
 function visible(skills: SkillRecord[]): SkillRecord[] {

@@ -531,8 +531,8 @@ describe("renameProviderEntry", () => {
 })
 
 describe("skills.evolution config", () => {
-  it("exposes the expected defaults (feature off)", () => {
-    expect(defaultConfig.skills).toEqual({ evolution: { enabled: false, idleMinutes: 10 } })
+  it("exposes the expected defaults (feature on)", () => {
+    expect(defaultConfig.skills).toEqual({ evolution: { enabled: true, idleMinutes: 10 } })
   })
 
   it("deep-merges user values over defaults", () => {
@@ -583,7 +583,7 @@ describe("skills.evolution config", () => {
     try {
       writeFileSync(join(home, "config.yaml"), "skills: nope\n")
       const cfg = loadConfig(resolvePaths(home))
-      expect(cfg.skills).toEqual({ evolution: { enabled: false, idleMinutes: 10 } })
+      expect(cfg.skills).toEqual({ evolution: { enabled: true, idleMinutes: 10 } })
     } finally {
       warn.mockRestore()
     }

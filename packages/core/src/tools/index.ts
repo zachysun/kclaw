@@ -236,7 +236,7 @@ export function createBuiltinTools(opts: {
       tool: skill.skill_list,
       def: def("skill_list", SKILL_LIST_DESCRIPTION, { query: str("可选：按名字与描述子串过滤（大小写不敏感）；不传则列出全部模型可见技能") }, []),
     },
-    // skill_create 仅在组装传入 skillCreate 时存在（提案制功能面；默认关闭的
+    // skill_create 仅在组装传入 skillCreate 时存在（提案制功能面；功能关闭的
     // 安装里模型根本看不到这个工具）。
     ...(skill.skill_create === undefined
       ? []

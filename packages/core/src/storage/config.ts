@@ -197,13 +197,13 @@ export interface KclawConfig {
   skills?: {
     /**
      * Skill evolution (proposal-based self-improvement). `enabled: false`
-     * (the default) means the feature is fully inert: no follow checks are
-     * scheduled, the scheduler consumes nothing, and the skill_create tool
-     * answers with a fixed closed-message. Existing proposal files stay
-     * listable either way.
+     * means the feature is fully inert: no follow checks are scheduled, the
+     * scheduler consumes nothing, and the skill_create tool answers with a
+     * fixed closed-message. Existing proposal files stay listable either
+     * way.
      */
     evolution?: {
-      /** Master switch. Default false. */
+      /** Master switch. Default true. */
       enabled?: boolean
       /**
        * Idle window (minutes) after a run ends before the extraction check
@@ -257,7 +257,7 @@ export const defaultConfig: KclawConfig = {
     mailbox: { maxUnreadPerTarget: 64, maxMessageBytes: 65536 },
     taskBoard: { maxTasks: 64 },
   },
-  skills: { evolution: { enabled: false, idleMinutes: 10 } },
+  skills: { evolution: { enabled: true, idleMinutes: 10 } },
   workspace: process.cwd(),
 }
 
