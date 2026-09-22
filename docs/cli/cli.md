@@ -25,12 +25,12 @@
 | `kclaw --think` | REPL 显示 thinking 增量（暗色 `· ` 前缀，默认隐藏） |
 | `kclaw daemon start` | 确保 daemon 在运行（不在则启动），打印 pid 与端口；已在运行则打印 "daemon already running" |
 | `kclaw daemon stop` | 发 SIGTERM 终止 daemon，轮询至 `/health` 不可访问后删除 `daemon.json`；返回 "stopped" 或 "daemon not running" |
-| `kclaw daemon status` / `kclaw status` | 报告状态：`not running`，或 `running (pid <pid>, port <port>, uptime <n>s)` |
+| `kclaw daemon status` / `kclaw status` | 报告状态：`not running`，或 `running (pid <pid>, port <port>, v<版本>, uptime <n>s)`；daemon 报出的版本与 CLI 自身不一致时追加一行提示（两者不是同一次构建的产物，重新 `pnpm build` 并重启 daemon） |
 | `kclaw jobs list` | 列定时任务（连接过程中自动启动 daemon），五列表格：name/cron/enabled/nextRunAt/lastStatus |
-| `kclaw mcp [list]` | 经 `GET /mcp` 逐行打印 MCP server：`<名字>  [来源层]  <状态>  <N> 个工具[ 错误: <lastError>]`（来源层为 `全局` 或 `项目`，来自快照的 `scope` 字段；旧 daemon 无此字段时读作全局）；空列表打印 "未配置 MCP server（daemon 的 mcp.json 或配置文件的 mcp.servers 为空）" |
+| `kclaw mcp [list]` | 经 `GET /mcp` 逐行打印 MCP server：`<名字>  [来源层]  <状态>  <N> 个工具[ 错误: <lastError>]`（来源层为 `全局` 或 `项目`，来自快照的 `scope` 字段）；空列表打印 "未配置 MCP server（daemon 的 mcp.json 为空）" |
 | `kclaw web` | 浏览器打开 WebUI（见 [onboarding](./onboarding.md)） |
 
-程序级选项：`--home <dir>`（默认 `KCLAW_HOME ?? ~/.kclaw`）；`--version` 从 `packages/cli/package.json` 运行时读取。
+程序级选项：`--home <dir>`（默认 `KCLAW_HOME ?? ~/.kclaw`）；`--version` 运行时从所在包的 package.json 读取（聚合安装形态即聚合包版本）。
 
 ## 接口
 

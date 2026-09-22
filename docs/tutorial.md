@@ -203,6 +203,8 @@ kclaw daemon status   # 查看状态（kclaw status 是同一命令的别名）
 
 之后执行 `kclaw chat` 或 `kclaw web`，daemon 会自动重新启动。
 
+升级版本 = 拉新代码重复上面的安装步骤后重启 daemon。`kclaw daemon status` 会显示运行中 daemon 的版本号，与 CLI 版本不一致时会提示你重新构建并重启。版本定版与发布流程见 [release](./release.md)。
+
 遇到 `command not found: kclaw`，回 [README](../README.zh-CN.md) 的「安装」一节核对步骤；页面 401 或端口对不上，多半出在 token 与 daemon.json 上，见 [daemon](./server/daemon.md) 的鉴权与端口两节。
 
 ## 9. 下一步

@@ -119,4 +119,5 @@ pnpm test        # vitest for every package (cli/server quick checks need pnpm b
 - web/ (the browser client)
   - [webui](docs/web/webui.md): the web UI
 - [extending](docs/extending.md): guide for adding new features
+- [release](docs/release.md): versioning, the tag-driven release flow, and CI
 - [tutorial](docs/tutorial.md): the hands-on tutorial
