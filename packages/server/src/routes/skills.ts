@@ -18,6 +18,8 @@ import {
   type KclawPaths,
   type ReuseAgent,
   type ReuseTier,
+  type SkillEvolutionAdmin,
+  type SkillProposal,
   type SkillRecord,
 } from "@kclaw/core"
 import { realpathSync } from "node:fs"
@@ -43,9 +45,18 @@ function visibilityOf(s: SkillRecord): "all" | "user-only" {
  * 不受该过滤影响（否则"仅模型"档在页面上消失后无法改回；管理面本身持
  * token 鉴权）。
  */
-export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPaths; builtinSources?: { agent: string; dir: string }[]; pluginHomes?: { agent: string; home: string }[] }): void {
+export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPaths; builtinSources?: { agent: string; dir: string }[]; pluginHomes?: { agent: string; home: string }[]; skillsEvolution?: SkillEvolutionAdmin }): void {
   const builtin = opts.builtinSources
   const pluginHomes = opts.pluginHomes
+  const evolution = opts.skillsEvolution
+  /** 提案路由族的守卫：无装配（裸 app/测试）503，不影响既有 /skills 路由。 */
+  const requireEvolution = (reply: FastifyReply): SkillEvolutionAdmin | undefined => {
+    if (evolution === undefined) {
+      void reply.code(503).send({ error: "skill evolution is not assembled" })
+      return undefined
+    }
+    return evolution
+  }
   const projectSkillsDir = (workdir: string | undefined): string | undefined =>
     workdir !== undefined && workdir.trim() !== "" ? join(workdir, ".kclaw", "skills") : undefined
 
@@ -221,6 +232,61 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     if (typeof dir !== "string" || dir.trim() === "") return reply.code(400).send({ error: "dir is required" })
     const result = removeDiscoverySource({ skillsDir: scopeDir, dir: dir.trim() })
     if (!result.ok) return reply.code(404).send({ error: result.error })
+    return { ok: true }
+  })
+
+  // ---- 提案面（技能进化，治理写操作均经持 token 鉴权中间件） ---------------
+
+  /** 提案行：完整字段 + applied 提案的用量口径（Web 列表直接展示）。直接吃
+   * listProposals() 的行，避免按 id 逐条 get 造成的整目录反复重读。 */
+  const proposalRowOf = (evo: SkillEvolutionAdmin, p: SkillProposal): SkillProposal & { usage?: number } => ({
+    ...p,
+    ...(p.appliedAt !== undefined ? { usage: evo.proposalUsage(p.id) } : {}),
+  })
+
+  app.get("/skills/proposals", async (req, reply: FastifyReply) => {
+    const evo = requireEvolution(reply)
+    if (evo === undefined) return
+    const { status } = req.query as { status?: string }
+    const all = evo.listProposals()
+    const filtered = status === "proposed" || status === "applied" || status === "rejected" || status === "reverted"
+      ? all.filter((p) => p.status === status)
+      : all
+    return { proposals: filtered.map((p) => proposalRowOf(evo, p)) }
+  })
+
+  app.get("/skills/proposals/:id", async (req, reply: FastifyReply) => {
+    const evo = requireEvolution(reply)
+    if (evo === undefined) return
+    const { id } = req.params as { id: string }
+    if (!isSafeSegment(id)) return reply.code(400).send({ error: "invalid segment" })
+    const p = evo.getProposal(id)
+    if (p === undefined) return reply.code(404).send(NOT_FOUND)
+    return proposalRowOf(evo, p)
+  })
+
+  /** apply|reject|revert 共用体：非法迁移/冲突 → 409（core 判定，路由映射状态码）。 */
+  for (const op of ["apply", "reject", "revert"] as const) {
+    app.post(`/skills/proposals/:id/${op}`, async (req, reply: FastifyReply) => {
+      const evo = requireEvolution(reply)
+      if (evo === undefined) return
+      const { id } = req.params as { id: string }
+      if (!isSafeSegment(id)) return reply.code(400).send({ error: "invalid segment" })
+      const r = op === "apply" ? evo.applyProposal(id) : op === "reject" ? evo.rejectProposal(id) : evo.revertProposal(id)
+      // 失败只有两类：提案不存在（无 conflict → 404）与治理冲突（conflict → 409）。
+      if (!r.ok) return reply.code(r.conflict === true ? 409 : 404).send({ error: r.error })
+      return { ok: true, ...(r.warning !== undefined ? { warning: r.warning } : {}) }
+    })
+  }
+
+  app.delete("/skills/proposals/:id", async (req, reply: FastifyReply) => {
+    const evo = requireEvolution(reply)
+    if (evo === undefined) return
+    const { id } = req.params as { id: string }
+    if (!isSafeSegment(id)) return reply.code(400).send({ error: "invalid segment" })
+    const r = evo.removeProposal(id)
+    // 仅 rejected/reverted 可删（conflict → 409）；提案不存在 → 404。
+    if (!r.ok) return reply.code(r.conflict === true ? 409 : 404).send({ error: r.error })
     return { ok: true }
   })
 }

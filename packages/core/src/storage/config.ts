@@ -189,6 +189,32 @@ export interface KclawConfig {
     }
   }
   /**
+   * Skill packages (the same `<home>/skills` the run assembly scans).
+   * Optional only because older config files predate it; defaults in
+   * defaultConfig. Invalid values fall back per-field with one warning
+   * (parseConfig, team style).
+   */
+  skills?: {
+    /**
+     * Skill evolution (proposal-based self-improvement). `enabled: false`
+     * means the feature is fully inert: no follow checks are scheduled, the
+     * scheduler consumes nothing, and the skill_create tool answers with a
+     * fixed closed-message. Existing proposal files stay listable either
+     * way.
+     */
+    evolution?: {
+      /** Master switch. Default true. */
+      enabled?: boolean
+      /**
+       * Idle window (minutes) after a run ends before the extraction check
+       * may fire, independent of memory.write.idleMinutes. 0 disables the
+       * delayed follow-up entirely (skill_create stays the only proposal
+       * path). Negative/non-integer falls back to 10 with a warning.
+       */
+      idleMinutes?: number
+    }
+  }
+  /**
    * Daemon server. Optional only because older config files predate it;
    * an absent port keeps the historical behavior (an OS-assigned ephemeral
    * port per launch). Invalid values fall back per-field with one warning
@@ -231,6 +257,7 @@ export const defaultConfig: KclawConfig = {
     mailbox: { maxUnreadPerTarget: 64, maxMessageBytes: 65536 },
     taskBoard: { maxTasks: 64 },
   },
+  skills: { evolution: { enabled: true, idleMinutes: 10 } },
   workspace: process.cwd(),
 }
 
@@ -318,8 +345,42 @@ function parseConfig(raw: string, path: string, format: "json" | "yaml"): KclawC
   // warning; the pack line is validated independently (decoupled by design).
   validateWaterlineConfig(merged.sessions)
   validateTeamConfig(merged)
+  validateSkillsConfig(merged)
   validateServerConfig(merged)
   return merged
+}
+
+/**
+ * Skills section validation (team style): a non-mapping section (or
+ * evolution sub-section) falls back wholesale; a non-boolean enabled or a
+ * negative/non-integer idleMinutes falls back per field, each with one
+ * warning. idleMinutes 0 is MEANINGFUL (it disables the delayed follow-up
+ * while keeping skill_create), so the validity window is >= 0 — only
+ * negative and fractional values are invalid. Never throws.
+ */
+function validateSkillsConfig(merged: KclawConfig): void {
+  const skills = merged.skills
+  if (skills === undefined) return
+  if (!isPlainObject(skills)) {
+    console.warn("kclaw config: skills section is not a mapping; falling back to defaults")
+    merged.skills = structuredClone(defaultConfig.skills)
+    return
+  }
+  const evolution = skills.evolution
+  if (evolution === undefined) return
+  if (!isPlainObject(evolution)) {
+    console.warn("kclaw config: skills.evolution section is not a mapping; falling back to defaults")
+    skills.evolution = { enabled: false, idleMinutes: 10 }
+    return
+  }
+  if (evolution.enabled !== undefined && typeof evolution.enabled !== "boolean") {
+    console.warn(`kclaw config: skills.evolution.enabled ${String(evolution.enabled)} is invalid; falling back to false`)
+    evolution.enabled = false
+  }
+  if (evolution.idleMinutes !== undefined && !(typeof evolution.idleMinutes === "number" && Number.isInteger(evolution.idleMinutes) && evolution.idleMinutes >= 0)) {
+    console.warn(`kclaw config: skills.evolution.idleMinutes ${String(evolution.idleMinutes)} is invalid; falling back to 10`)
+    evolution.idleMinutes = 10
+  }
 }
 
 /**

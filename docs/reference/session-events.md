@@ -1,4 +1,4 @@
-# session-events — 持久化会话事件清单（21 种）
+# session-events — 持久化会话事件清单（22 种）
 
 > 权威来源：`packages/core/src/protocol/session-events.ts`（运行时守卫与 meta 投影在 `core/src/session/events.ts`）。存储布局见 [storage](../core/storage.md)，读取接口 `GET /sessions/:id/events` 见 [http-api](../server/http-api.md)。
 
@@ -11,7 +11,7 @@ export type SessionEvent =
   | SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent
   | SessionRestoredEvent | SessionSetEvent
   | MessageEvent | MessageTruncatedEvent | CompactionEvent
-  | MemoryEvent | SystemEvent | SandboxCheckedEvent
+  | MemoryEvent | SkillEvent | SystemEvent | SandboxCheckedEvent
   | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent
   | TeamAuditEvent
 ```
@@ -51,6 +51,14 @@ export type SessionEvent =
 | 类型 | 字段 |
 |------|------|
 | `memory` | `at`、`trigger`（7 种，见 [enums](./enums.md)）、`kind`（episode/cognition）、`op`（8 种，见 [enums](./enums.md)）、`topic?`、`file?`、`scope?`、`source?` |
+
+### 技能提案（1 种，SkillEvent）
+
+技能进化（提案制）的全部写路径留痕：提案的产生与治理状态迁移各落一条。只留痕——不进 meta 投影、不推进 `updatedAt`（与 memory 事件同约定），真相在 `<skillsDir>/.proposals/` 的提案文件。
+
+| 类型 | 字段 |
+|------|------|
+| `skill` | `at`、`op`（proposed/applied/rejected/reverted/deleted）、`kind`（new/revise）、`name`、`scope`（global/project）、`source`（follow/skill_create/admin） |
 
 ### 团队协作（7 种，TeamAuditEvent）
 

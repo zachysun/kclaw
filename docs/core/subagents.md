@@ -55,7 +55,7 @@ spawner 在子频道挂一个普通 bus 订阅者（EventBus 接受任何 `{send
 
 ## 内置 hook 跳过（引擎侧派生）
 
-`parentSessionId` 存在时，组装给 hook 链带 `childRun: true`，四个内置 hook 直接跳过：`memory-inject`（不注入记忆 note）、`autoname`（不自动命名，标题已带"subagent · "前缀）、`follow-check`（不挂记忆检查）、`system-materials`（系统提示词不带认知与技能清单段——subagent 提示词刻意精简，将来要补材料就改 `subagentSystemPrompt` 模板）。系统提示词整体换成 `subagentSystemPrompt(workspace)`：subagent 身份、工作区、"任务即唯一指令、不要反问"、权限规则一致、结题答复是全部产出，五句话，不带 AGENTS.md 人设。
+`parentSessionId` 存在时，组装给 hook 链带 `childRun: true`，五个内置 hook 直接跳过：`memory-inject`（不注入记忆 note）、`autoname`（不自动命名，标题已带"subagent · "前缀）、`follow-check`（不挂记忆检查）、`skill-follow-check`（不排技能提炼检查——subagent 的技能使用由同项目后续主干 run 的粗查覆盖，见 [skills](./skills.md)）、`system-materials`（系统提示词不带认知与技能清单段——subagent 提示词刻意精简，将来要补材料就改 `subagentSystemPrompt` 模板）。系统提示词整体换成 `subagentSystemPrompt(workspace)`：subagent 身份、工作区、"任务即唯一指令、不要反问"、权限规则一致、结题答复是全部产出，五句话，不带 AGENTS.md 人设。
 
 ## 会话可见性与级联删除
 

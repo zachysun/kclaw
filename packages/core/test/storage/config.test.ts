@@ -529,3 +529,63 @@ describe("renameProviderEntry", () => {
     expect(PROVIDER_ENTRY_REFERENCES.length).toBe(3)
   })
 })
+
+describe("skills.evolution config", () => {
+  it("exposes the expected defaults (feature on)", () => {
+    expect(defaultConfig.skills).toEqual({ evolution: { enabled: true, idleMinutes: 10 } })
+  })
+
+  it("deep-merges user values over defaults", () => {
+    writeFileSync(join(home, "config.yaml"), [
+      "skills:",
+      "  evolution:",
+      "    enabled: true",
+      "    idleMinutes: 5",
+      "",
+    ].join("\n"))
+    const cfg = loadConfig(resolvePaths(home))
+    expect(cfg.skills?.evolution).toEqual({ enabled: true, idleMinutes: 5 })
+  })
+
+  it("falls back per field with a warning on invalid values; idleMinutes 0 is legal", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      writeFileSync(join(home, "config.yaml"), [
+        "skills:",
+        "  evolution:",
+        "    enabled: yes-please",
+        "    idleMinutes: -3",
+        "",
+      ].join("\n"))
+      const cfg = loadConfig(resolvePaths(home))
+      expect(cfg.skills?.evolution?.enabled).toBe(false)
+      expect(cfg.skills?.evolution?.idleMinutes).toBe(10)
+      expect(warn.mock.calls.filter((c) => String(c[0]).includes("skills.evolution")).length).toBe(2)
+
+      warn.mockClear()
+      writeFileSync(join(home, "config.yaml"), [
+        "skills:",
+        "  evolution:",
+        "    enabled: true",
+        "    idleMinutes: 0",
+        "",
+      ].join("\n"))
+      const zero = loadConfig(resolvePaths(home))
+      expect(zero.skills?.evolution).toEqual({ enabled: true, idleMinutes: 0 })
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it("falls back wholesale when the section is not a mapping", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      writeFileSync(join(home, "config.yaml"), "skills: nope\n")
+      const cfg = loadConfig(resolvePaths(home))
+      expect(cfg.skills).toEqual({ evolution: { enabled: true, idleMinutes: 10 } })
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})

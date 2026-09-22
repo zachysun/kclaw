@@ -5,8 +5,7 @@ import { estimateTokens } from "../session/compaction.js"
 import type { KclawConfig } from "../storage/config.js"
 import { writeFileAtomic } from "../storage/atomic.js"
 import type { LlmClient } from "../provider/types.js"
-import { createProviderClient } from "../provider/factory.js"
-import { withRetry } from "../provider/retry.js"
+import { makeExtractLlmResolver } from "../provider/extract-model.js"
 import type { SessionStore } from "../session/store.js"
 import { MemoryLayout, projectIdFor } from "./layout.js"
 import { WriteLedger } from "./ledger.js"
@@ -164,20 +163,14 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
       this.#sessions.appendEvent(id, { type: "memory", at: at ?? this.#now().toISOString(), ...rest } as MemoryEvent)
     }
     this.#pipeline = new MemoryPipeline(opts.memoryDir, opts.sessions, {
-      resolveLlm: () => {
-        // extractModel 的解析集中在这里，resolveLlm 只调一次：空串回落主模型；
-        // 命中 provider 条目时走该条目自己的端点（条目名不能当线上模型名发出去）；
-        // 其余值是裸线上模型名，发往主模型端点。
-        const { llm, model } = this.#resolveLlm()
-        const raw = this.#config.memory.extractModel
-        if (raw === "") return { llm, model }
-        const entry = this.#config.providers.entries[raw]
-        if (entry === undefined) return { llm, model: raw }
-        const client = this.#resolveEntryLlm !== undefined
-          ? this.#resolveEntryLlm(raw)
-          : createProviderClient({ entry, timeoutMs: this.#config.providers.timeoutMs })
-        return { llm: withRetry(client), model: entry.model }
-      },
+      // extractModel 解析链抽成共享 helper（makeExtractLlmResolver）供记忆与
+      // 技能进化两套提取器共用；行为与原内联实现逐字一致（空串回落主模型、
+      // 条目命中走条目端点、其余按裸线上模型名发往主端点）。
+      resolveLlm: makeExtractLlmResolver({
+        config: this.#config,
+        resolveLlm: () => this.#resolveLlm(),
+        ...(this.#resolveEntryLlm !== undefined ? { resolveEntryLlm: this.#resolveEntryLlm } : {}),
+      }),
       embed: opts.embed, emit: opts.emit, audit: this.#audit, log: this.#log, now: this.#now,
       threadInactiveDays: opts.config.memory.threadInactiveDays,
       consolidateEnabled: opts.config.memory.consolidate,

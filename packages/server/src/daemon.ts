@@ -34,6 +34,7 @@ import {
   consolidateMcpConfig,
   createConfigNotifier,
   createProviderResolver,
+  makeExtractLlmResolver,
   loadConfig,
   loadMcpServers,
   loadProjectMcpServers,
@@ -44,6 +45,7 @@ import {
   resolveModel,
   resolvePaths,
   resolveProviderFormat,
+  SkillEvolutionSystem,
   UsageStore,
   withRetry,
   HookRegistry,
@@ -60,6 +62,7 @@ import { createFeishuManager } from "./feishu/manager.js"
 import { createTeamHost } from "./team.js"
 import { startSchedulerTick } from "./scheduler-tick.js"
 import { startMemoryScheduler } from "./memory-scheduler.js"
+import { startSkillScheduler } from "./skill-scheduler.js"
 import { createApp } from "./app.js"
 
 // Endpoint/model resolution moved to @kclaw/core (the provider resolver
@@ -311,6 +314,20 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // transient-error retry. An injected llmFactory (tests) replaces it whole.
   const llm = opts.llmFactory !== undefined ? opts.llmFactory(config) : withRetry(llmForEntry())
   const model = resolveModel(config)
+  // 技能进化（提案制）：提炼模型与记忆提取走同一条解析链（extractModel 命中
+  // 条目走条目端点，Model 页改动同样热生效）。构造交给 RunManager（run 收尾
+  // 钩子 + skill_create 工具面）与 skill 调度器（检查消费端）。
+  const skillsEvolution = new SkillEvolutionSystem({
+    skillsDir: paths.skillsDir,
+    sessions,
+    config,
+    resolveLlm: makeExtractLlmResolver({
+      config,
+      resolveLlm: () => (opts.llmFactory !== undefined ? { llm, model } : { llm: withRetry(llmForEntry()), model }),
+      resolveEntryLlm: (entryKey) => llmForEntry(entryKey),
+    }),
+    log: (m) => console.error(m),
+  })
   // MCP: the manager is always assembled (an empty one costs nothing and
   // keeps the management routes — adding the first server from the WebUI —
   // alive). Servers come from the two config layers: global (config.yaml
@@ -383,6 +400,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     model,
     usageStore: usage,
     hooks: hookRegistry,
+    skillsEvolution,
     subagents: {
       spawner: subagentHost.spawner,
       collector: subagentHost.collector,
@@ -437,6 +455,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     webDist: resolveWebDist(opts.webDist),
     memory, // /memory 路由消费（管理界面）
     hooks: hookRegistry, // GET /hooks 管理面
+    skillsEvolution, // /skills/proposals 提案治理面（技能进化）
   })
   // Port precedence: explicit override (bin --port) ?? config server.port ??
   // ephemeral. A pinned port that is taken is a hard error — silently falling
@@ -492,6 +511,12 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     system: memory, sessions, config,
     workdirs: () => Array.from(new Set(sessions.list().map((m) => m.workdir ?? config.workspace))),
   })
+  // 技能调度器：跟随检查消费端（成功才清 + 重试上限）。关闭配置下一个 sweep
+  // 直接返回，检查停留在账本里不动（功能重开后继续消费）。
+  const skillTick = startSkillScheduler({
+    system: skillsEvolution, sessions, config,
+    workdirs: () => Array.from(new Set(sessions.list().map((m) => m.workdir ?? config.workspace))),
+  })
 
   // Feishu channel (#45, managed since #46): opt-in via ~/.kclaw/feishu.json
   // (enabled). Started AFTER the schedulers under the manager's own hard
@@ -520,6 +545,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       // re-fire: the job fires again at its next scheduled time.
       await withStopTimeout(tick.stop(), stopTimeoutMs, "scheduler tick")
       await withStopTimeout(memoryTick.stop(), stopTimeoutMs, "memory scheduler")
+      await withStopTimeout(skillTick.stop(), stopTimeoutMs, "skill scheduler")
       await withStopTimeout(feishuManager.stop(), stopTimeoutMs, "feishu channel")
       // project-file watcher first: no reconcile can race the manager teardown
       projectMcpWatch.close()

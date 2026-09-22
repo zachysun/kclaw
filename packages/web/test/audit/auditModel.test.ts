@@ -138,7 +138,7 @@ function kindsFilter(off: AuditRow["kind"]): AuditFilter {
   return {
     ...DEFAULT_FILTER,
     kinds: {
-      block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true, team: true,
+      block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true, team: true, skill: true,
       [off]: false,
     },
   }
@@ -416,5 +416,30 @@ describe("team 审计行", () => {
     expect(filterRows(rows, off, new Date())).toHaveLength(0)
     expect(filterRows(rows, { ...DEFAULT_FILTER, keyword: "登录攻坚" }, new Date())).toHaveLength(1)
     expect(filterRows(rows, { ...DEFAULT_FILTER, keyword: "不存在的词" }, new Date())).toHaveLength(0)
+  })
+})
+
+// ---------- skill 事件（技能进化审计行） ----------
+
+describe("skill 审计行", () => {
+  it("skill 事件成一行，摘要带 op/kind/name/scope/source", () => {
+    const events: SessionEvent[] = [
+      { type: "skill", at: "2026-09-08T10:00:00.000Z", op: "proposed", kind: "new", name: "deploy-postmortem", scope: "project", source: "follow" },
+      { type: "skill", at: "2026-09-08T10:05:00.000Z", op: "applied", kind: "revise", name: "deploy-runbook", scope: "global", source: "admin" },
+    ]
+    const rows = flattenAudit(events) as Extract<AuditRow, { kind: "skill" }>[]
+    expect(rows).toHaveLength(2)
+    expect(rows.every((r) => r.kind === "skill")).toBe(true)
+    expect(rowSearchText(rows[0]!)).toContain("技能提案：新增 deploy-postmortem（项目 · 来源 空闲提炼）")
+    expect(rowSearchText(rows[1]!)).toContain("技能采纳：修订 deploy-runbook（全局 · 来源 人工操作）")
+  })
+
+  it("skill 行随 kind 开关过滤", () => {
+    const events: SessionEvent[] = [
+      { type: "skill", at: "2026-09-08T10:00:00.000Z", op: "proposed", kind: "new", name: "x", scope: "project", source: "follow" },
+    ]
+    const rows = flattenAudit(events)
+    expect(filterRows(rows, kindsFilter("skill"), new Date())).toHaveLength(0)
+    expect(filterRows(rows, { ...DEFAULT_FILTER, keyword: "x" }, new Date())).toHaveLength(1)
   })
 })

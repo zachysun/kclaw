@@ -72,6 +72,22 @@ export interface PermissionDecidedEvent {
   tool: { callId: string; name: string; argsJson: string }
 }
 
+/**
+ * 技能提案审计事件（skill/* 家族，现状唯一的技能写路径留痕）：提案的产生
+ * 与治理状态迁移各落一条。真相在 <skillsDir>/.proposals/ 的提案文件，事件
+ * 只留痕——不进 meta 投影、不推进 updatedAt（与 memory 事件同约定）。归属：
+ * follow/skill_create = 来源会话；admin（路由治理动作）= 项目最近活动会话
+ * （scope=project）或最近全局会话（scope=global），无会话则跳过。
+ */
+export interface SkillEvent {
+  type: "skill"; at: string
+  op: "proposed" | "applied" | "rejected" | "reverted" | "deleted"
+  kind: "new" | "revise"
+  name: string
+  scope: "global" | "project"
+  source: "follow" | "skill_create" | "admin"
+}
+
 // ---- Team audit events (the team/* family) ----
 // Trail only: the state truth lives in the team directory
 // (<workspace>/.kclaw/teams/<team-name>/ and .kclaw/tasks/<team-name>/);
@@ -93,4 +109,4 @@ export interface TeamTaskUpdatedEvent { type: "team.task.updated"; version: 1; a
 /** The team/* audit family. */
 export type TeamAuditEvent = TeamCreatedEvent | TeamMemberProvisionedEvent | TeamMemberSettledEvent | TeamMessageQueuedEvent | TeamMessageDeliveredEvent | TeamTaskCreatedEvent | TeamTaskUpdatedEvent
 
-export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent | MessageEvent | MessageTruncatedEvent | CompactionEvent | MemoryEvent | SystemEvent | SandboxCheckedEvent | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent | TeamAuditEvent
+export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent | MessageEvent | MessageTruncatedEvent | CompactionEvent | MemoryEvent | SkillEvent | SystemEvent | SandboxCheckedEvent | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent | TeamAuditEvent

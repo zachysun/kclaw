@@ -109,6 +109,26 @@ export interface SkillCommandRow {
   plugin?: string
 }
 
+/** 提案行的 CLI 子集（GET /skills/proposals 返回的 UI 相关字段）。 */
+interface ProposalWire {
+  id: string
+  status: "proposed" | "applied" | "rejected" | "reverted"
+  kind: "new" | "revise"
+  name: string
+  scope: "global" | "project"
+  workdir?: string
+  title: string
+  rationale: string
+  changes?: string
+  content: string
+  createdAt: string
+  appliedAt?: string
+  /** applied 提案的用量口径（路由在 applied 时附带）。 */
+  usage?: number
+}
+
+const PROPOSAL_STATUS: Record<ProposalWire["status"], string> = { proposed: "待确认", applied: "已采纳", rejected: "已驳回", reverted: "已回退" }
+
 /**
  * Register every installed, user-visible skill as a first-class slash command:
  * `/skill-name [要求]` sends the RAW text — the daemon detects the /name token
@@ -506,6 +526,41 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
               })
               .join("\n"),
           )
+          return
+        }
+        // 提案子命令（只读）：/skill proposals 列表；/skill proposal <id> 详情。
+        // 治理动作（采纳/驳回/回退/删除）只在 WebUI 技能页的「提案」页签。
+        if (name === "proposals") {
+          const { proposals } = (await ctx.client.request("GET", "/skills/proposals")) as { proposals: ProposalWire[] }
+          if (proposals.length === 0) {
+            ctx.print("（还没有技能提案。开启 skills.evolution 后，用了技能的会话会在空闲时提炼经验形成提案）")
+            return
+          }
+          ctx.print(
+            proposals
+              .map((p) => `${p.id} · ${PROPOSAL_STATUS[p.status] ?? p.status} · ${p.kind === "new" ? "新增" : "修订"} ${p.name} · ${p.scope === "global" ? "全局" : "项目"}${p.usage !== undefined ? ` · 被调用 ${p.usage} 次` : ""}`)
+              .join("\n"),
+          )
+          return
+        }
+        if (name.startsWith("proposal ")) {
+          const id = name.slice("proposal ".length).trim()
+          if (id === "") {
+            ctx.print("用法：/skill proposal <id>（id 见 /skill proposals）")
+            return
+          }
+          const p = (await ctx.client.request("GET", `/skills/proposals/${encodeURIComponent(id)}`)) as ProposalWire
+          const lines = [
+            `${p.id}`,
+            `${PROPOSAL_STATUS[p.status] ?? p.status} · ${p.kind === "new" ? "新增" : "修订"} · ${p.scope === "global" ? "全局" : `项目（${p.workdir ?? "?"}）`}`,
+            `标题：${p.title}`,
+            p.rationale !== "" ? `为什么：${p.rationale}` : undefined,
+            p.changes !== undefined && p.changes !== "" ? `改动：${p.changes}` : undefined,
+            `创建于 ${p.createdAt}${p.appliedAt !== undefined ? ` · 采纳于 ${p.appliedAt}` : ""}${p.usage !== undefined ? ` · 采纳后被调用 ${p.usage} 次` : ""}`,
+            "—— 提案内容（完整 SKILL.md）——",
+            p.content,
+          ].filter((l): l is string => l !== undefined)
+          ctx.print(lines.join("\n"))
           return
         }
         const res = (await ctx.client.request("GET", `/skills/${encodeURIComponent(name)}${workdir}`)) as { content: string }

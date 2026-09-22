@@ -21,15 +21,17 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import type { Dirent } from "node:fs"
 import { join } from "node:path"
 import { parse } from "yaml"
+// 本模块内部也要用（export * 只做再导出，不把名字引入本模块作用域）。
+import { isSkillDirName } from "./names.js"
 
 export * from "./links.js"
 export * from "./discovery.js"
+export * from "./names.js"
+export * from "./proposals.js"
+export * from "./evolution.js"
 
 /** Combined description + when_to_use cap, aligned with Claude Code's listing. */
 const DESCRIPTION_MAX_CHARS = 1536
-
-/** Directory names the Agent Skills format allows for a skill. */
-const SKILL_DIR_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/
 
 export interface SkillRecord {
   /** Directory name — the unique identity and the skill_read key. */
@@ -53,11 +55,9 @@ export interface SkillRecord {
   plugin?: string
 }
 
-export function isSkillDirName(name: string): boolean {
-  return SKILL_DIR_NAME.test(name) && name.length <= 64
-}
+// isSkillDirName / SKILL_DIR_NAME live in ./names.js (leaf module, re-exported
+// above) so sibling modules can validate names without cycling through here.
 
-/** First non-empty paragraph of the body, for skills without a description. */
 function firstParagraph(body: string): string {
   for (const para of body.split(/\n\s*\n/)) {
     const t = para.trim()

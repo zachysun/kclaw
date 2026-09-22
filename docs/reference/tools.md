@@ -1,4 +1,4 @@
-# tools — 内置工具清单（22 个）
+# tools — 内置工具清单（23 个）
 
 > 权威来源：`packages/core/src/tools/index.ts`（注册表）与 `tools/` 下各实现文件。机制见 [tools](../core/tools.md)，权限判定链见 [permissions](../core/permissions.md)。
 
@@ -31,7 +31,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `skill_read` | 按名字加载一个技能的完整规程正文 | safe | parallel |
 | `skill_list` | 列出模型可见的技能（可按关键词过滤） | safe | parallel |
 
-## 条件注册工具（10 个）
+## 条件注册工具（11 个）
 
 只在对应能力被组装进 run 时加入注册表：
 
@@ -39,6 +39,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 |------|--------|------|-------------|----------|
 | `subagent_run` | 派 subagent 独立执行自包含任务（可后台） | safe | parallel | 主线 run 且组装了派发器（daemon 恒有；子会话没有） |
 | `subagent_collect` | 按子会话 id 取回后台 subagent 的结题答复 | safe | parallel | 同上，且组装了收集器 |
+| `skill_create` | 把一段经验固化为技能提案（提案制，不经确认不生效） | safe | parallel | daemon 组装了技能进化系统（恒有）；`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案 |
 | `create_team` | 建立本会话的 agent 团队、本会话成为组长 | safe | serial | 仅组长身份 |
 | `spawn_teammate` | 添加一个组员（持久子会话 + 模型快照） | safe | serial | 仅组长身份 |
 | `send_message` | 给组长或组员写信（经持久收信箱投递） | safe | parallel | 团队身份（组长或组员） |

@@ -34,7 +34,7 @@ export type HookPosition =
 | `system-before` | `{ base }` | `string[]` | 追加位：提示词段落（多 hook 累积） |
 | `system-after` | `{ system }` | `string` | 改写位：提示词终稿 |
 
-## 内置 hook（14 个）
+## 内置 hook（15 个）
 
 order = 同位置内的执行次序（升序）：
 
@@ -53,11 +53,12 @@ order = 同位置内的执行次序（升序）：
 | `manual-compact-flush` | run-after | 15 | skip | 冲刷运行忙时排队的 /compact（不限时） |
 | `post-run-compaction` | run-after | 20 | skip | 黄线阈值的收尾压缩（不限时） |
 | `follow-check` | run-after | 30 | skip | 排一个记忆空闲检查 |
+| `skill-follow-check` | run-after | 40 | skip | 技能进化的零成本粗查：卷入技能才排提炼空闲检查（未启用即跳过） |
 | `system-materials` | system-before | 10 | skip | 收集认知与技能清单两个提示词段（live 段） |
 
 `compaction-after` 位置没有静态内置条目：压缩 hook 经 `compactionAfter` 回调把结果（applied→ok / failed / cancelled，declined 静默）转发到该位置的链上。
 
-subagent run（`childRun`）的派生跳过：`memory-inject` 不检索、`autoname` 跳过、`follow-check` 不挂、`system-materials` 返回空段。
+subagent run（`childRun`）的派生跳过：`memory-inject` 不检索、`autoname` 跳过、`follow-check` 不挂、`skill-follow-check` 不排、`system-materials` 返回空段。
 
 ## HookMeta 字段
 

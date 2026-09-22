@@ -26,7 +26,7 @@ export interface Daemon {
   port: number        // 实际绑定的端口（0 启动时为临时端口）
   token: string       // app 要求的 Bearer token（<home>/token）
   pid: number         // 本进程 pid，即 daemon.json 里记录的
-  stop(): Promise<void>   // 有界拆除：tick → 记忆调度器 → 飞书频道管理器（未启用时为 no-op）→ 项目 MCP watch → mcp → app → memory → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
+  stop(): Promise<void>   // 有界拆除：tick → 记忆调度器 → 技能调度器 → 飞书频道管理器（未启用时为 no-op）→ 项目 MCP watch → mcp → app → memory → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
 }
 
 export interface LaunchDaemonOptions {
@@ -88,6 +88,12 @@ createProviderResolver(config) + resolveModel(config)  见"provider 解析"；
                                     resolver 按条目建连并缓存客户端（llm/embed 两个缓存），
                                     启动客户端与每 run 的 llmForRun 都出自它；
                                     订阅 providers 配置变更通知，收到即整体清空缓存
+new SkillEvolutionSystem({skillsDir, sessions, config, resolveLlm, log})
+                                    技能进化系统（提案制，见 skills.md）：提炼模型经
+                                    makeExtractLlmResolver 与记忆提取走同一条解析链
+                                    （extractModel 命中条目走条目端点，Model 页改动同样
+                                    热生效）；构造后交给 RunManager（run 收尾钩子 +
+                                    skill_create 工具面）与 skill 调度器（检查消费端）
 createProjectMcpWatch(workspace, () => mcpManager.reconcile(loadProjectMcpServers(workspace)))
                                     项目层文件 watch：监视工作区 `.kclaw/mcp.json`，
                                     手工编辑防抖后经 reconcile 重排生效集（热生效）。
@@ -110,14 +116,16 @@ createSubagentHost({config, sessions, bus, getRun})
                                     （会话删除时级联取消在跑的后台 subagent）。getRun 是晚绑闭包——
                                     spawner 要调 RunManager.cancel/submit，而 RunManager 的 deps
                                     又要 spawner，构造顺序上先建 host、再建 manager、随后回填
-new RunManager({...})               注入 usageStore、memory、
+new RunManager({...})               注入 usageStore、memory、skillsEvolution（run 收尾钩子
+                                    与 skill_create 工具面的来源，见 skills.md）、
                                     extraTools: () => mcpManager.tools()（恒定组装，见上）、
                                     subagents: { spawner, collector, cancelBackgroundForParent }；见 run-manager。
                                     权限模式没有 daemon 级旗标——它是会话级事实（meta.mode），
                                     run 组装每 run 从会话 meta 读出（见 permissions/run-manager）
-createApp({home, token, stores, bus, run, mcp, configNotifier, attachmentsDir, usage, webDist, memory})
+createApp({home, token, stores, bus, run, mcp, configNotifier, attachmentsDir, usage, webDist, memory, skillsEvolution})
                                     Fastify 应用（见 http-api）；attachmentsDir/usage 传入时
-                                    对应的附件与用量路由才注册，mcp 提供 /mcp 的快照，memory 供 /memory 路由族；
+                                    对应的附件与用量路由才注册，mcp 提供 /mcp 的快照，memory 供 /memory 路由族，
+                                    skillsEvolution 供 /skills/proposals 提案治理路由族（未装配时该族 503）；
                                     configNotifier 交给 provider 路由，改动持久化后发布
 await app.listen({ port: listenPort, host: "127.0.0.1" })   ← listenPort = opts.port ?? config.server?.port ?? 0；
                                     钉住的端口被占（EADDRINUSE）是硬错误：释放占位 daemon.json
@@ -129,6 +137,9 @@ void mcpManager.start()             ← 恒定组装，恒执行；不阻塞就�
 run.recoverQueues()                 崩溃恢复：queue.jsonl 整体重排，steer/interrupt 降级 wait（见 run-manager）
 startSchedulerTick({...})           立即一次检查 + 每 30s 一次（deps 附带 notifier 与 webBase=`http://127.0.0.1:<port>`，用于推送中的 `?session=` 链接）
 startMemoryScheduler({...})         记忆调度器：定时 + 跟随保底触发（默认 60s 扫一次，见 memory.md）
+startSkillScheduler({...})          技能调度器：跟随检查消费端（默认 60s 扫一次，成功才清检查 +
+                                    连败 3 次放弃；enabled:false 或 idleMinutes:0 时 sweep 直接返回，
+                                    检查停留在账本里，功能重开后继续消费，见 skills.md）
 feishu 频道管理器启动（opt-in）     ← 仅 ~/.kclaw/feishu.json enabled 时建通道；在两个调度器之后启动，
                                     有 15s 上限——挂起的握手不拖累 daemon；失败记入管理器错误状态
                                     （IM Channel 页可见）并拆掉半启动状态，daemon 照常服务。
@@ -187,6 +198,8 @@ bin 脚本注册信号处理：SIGTERM/SIGINT → `shutdown()`（`stopping` 标�
 withStopTimeout(tick.stop(), 60s)   // 停心跳；tick.stop 会 await 所有进行中的 job run
 withStopTimeout(memoryTick.stop(), 60s)
                                     // 停记忆调度器（定时 + 跟随保底）
+withStopTimeout(skillTick.stop(), 60s)
+                                    // 停技能调度器（await 所有进行中的提炼）
 withStopTimeout(feishuManager.stop(), 60s)
                                     // 停飞书频道（未启用时为 no-op；断开长连接与总线订阅）
 projectMcpWatch.close()             // 停项目 MCP 文件 watch（丢弃挂着的防抖回调，

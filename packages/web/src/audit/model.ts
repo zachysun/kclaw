@@ -10,12 +10,12 @@
 import type {
   Block, CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, Role, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent, SessionEvent, SessionRenamedEvent,
-  SessionRestoredEvent, SessionSetEvent, SystemEvent, TeamAuditEvent, ToolGrantReason, Usage,
+  SessionRestoredEvent, SessionSetEvent, SkillEvent, SystemEvent, TeamAuditEvent, ToolGrantReason, Usage,
 } from "../types.js"
 
 export type SessionMetaEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent
 
-export type AuditRowKind = "block" | "compaction" | "memory" | "system" | "sandbox" | "session" | "run" | "decision" | "truncation" | "team"
+export type AuditRowKind = "block" | "compaction" | "memory" | "system" | "sandbox" | "session" | "run" | "decision" | "truncation" | "team" | "skill"
 
 /**
  * One flattened audit row. Block rows carry the owning message's role,
@@ -37,6 +37,7 @@ export type AuditRow =
   | { kind: "decision"; key: string; index: number; event: PermissionDecidedEvent; at: string }
   | { kind: "truncation"; key: string; index: number; event: MessageTruncatedEvent; at: string }
   | { kind: "team"; key: string; index: number; event: TeamAuditEvent; at: string }
+  | { kind: "skill"; key: string; index: number; event: SkillEvent; at: string }
 
 /**
  * Flatten the event stream into rows, one per rendered event. Message events
@@ -182,6 +183,9 @@ function flattenEventInto(
     case "team.task.updated":
       rows.push({ kind: "team", key: `${index}`, index, event, at: event.at })
       break
+    case "skill":
+      rows.push({ kind: "skill", key: `${index}`, index, event, at: event.at })
+      break
     case "session.created":
     case "session.renamed":
     case "session.deleted":
@@ -215,10 +219,10 @@ export interface AuditFilter {
   timeTo: string
 }
 
-export const ALL_KINDS: AuditRowKind[] = ["block", "compaction", "memory", "system", "sandbox", "session", "run", "decision", "truncation", "team"]
+export const ALL_KINDS: AuditRowKind[] = ["block", "compaction", "memory", "system", "sandbox", "session", "run", "decision", "truncation", "team", "skill"]
 
 export const DEFAULT_FILTER: AuditFilter = {
-  kinds: { block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true, team: true },
+  kinds: { block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true, team: true, skill: true },
   keyword: "",
   timePreset: "all",
   timeFrom: "",
@@ -271,6 +275,8 @@ export function rowSearchText(row: AuditRow): string {
       return `${truncationSummary(row.event)} ${row.event.fromMessageId}`
     case "team":
       return `${teamSummary(row.event)} ${teamFullContent(row.event)}`
+    case "skill":
+      return skillSummary(row.event)
   }
 }
 
@@ -570,4 +576,13 @@ export function teamFullContent(event: TeamAuditEvent): string {
     case "team.task.updated":
       return JSON.stringify(event.task, null, 2)
   }
+}
+
+/** skill 事件的单行摘要（技能进化审计行：op/kind/name/scope）。 */
+export function skillSummary(event: SkillEvent): string {
+  const opLabel: Record<SkillEvent["op"], string> = { proposed: "提案", applied: "采纳", rejected: "驳回", reverted: "回退", deleted: "删除" }
+  const kindLabel: Record<SkillEvent["kind"], string> = { new: "新增", revise: "修订" }
+  const scopeLabel: Record<SkillEvent["scope"], string> = { global: "全局", project: "项目" }
+  const sourceLabel: Record<SkillEvent["source"], string> = { follow: "空闲提炼", skill_create: "skill_create", admin: "人工操作" }
+  return `技能${opLabel[event.op]}：${kindLabel[event.kind]} ${event.name}（${scopeLabel[event.scope]} · 来源 ${sourceLabel[event.source]}）`
 }

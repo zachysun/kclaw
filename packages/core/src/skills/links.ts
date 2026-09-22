@@ -108,6 +108,16 @@ export function writeLinksFile(skillsDir: string, file: LinksFile): void {
   renameSync(tmp, target)
 }
 
+/**
+ * The names currently held by reuse links in this scope (a missing or corrupt
+ * sidecar degrades to empty, same tolerance as readLinksFile). Shared by the
+ * skill-evolution faces: a proposal must not target a reuse link — its
+ * content is maintained in the source directory, not here.
+ */
+export function linkedSkillNames(skillsDir: string): string[] {
+  return readLinksFile(skillsDir).links.map((l) => l.name)
+}
+
 const TIER_OVERWRITE: Record<ReuseTier, { disableModelInvocation: boolean; userInvocable: boolean }> = {
   all: { disableModelInvocation: false, userInvocable: true },
   user: { disableModelInvocation: true, userInvocable: true },
