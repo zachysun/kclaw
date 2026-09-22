@@ -9,28 +9,10 @@
  * plaintext by design (local single-user product behind token auth).
  */
 import { useCallback, useEffect, useRef, useState } from "react"
-import { MCP_STATE_LABELS } from "@kclaw/core/commands"
+import { MCP_SCOPE_LABELS, MCP_STATE_LABELS } from "@kclaw/core/commands"
+import type { McpScope, McpServerStatus } from "@kclaw/core/protocol"
 import type { ApiClient } from "../api.js"
 import type { NoticeFn } from "../toast.js"
-
-interface McpToolEntry {
-  name: string
-  originalName: string
-  description: string
-}
-
-type McpState = "connected" | "connecting" | "disabled" | "failed"
-
-type McpScope = "global" | "project"
-
-interface McpServerStatus {
-  name: string
-  config: { type: "stdio" | "http"; enabled?: boolean }
-  scope: McpScope
-  state: McpState
-  tools: McpToolEntry[]
-  lastError?: string
-}
 
 /** One-line config summary: the command for stdio, the URL for http. */
 function configSummary(config: McpServerStatus["config"]): string {
@@ -343,7 +325,7 @@ export function McpView({ api, notice }: {
               <div className="mcp-server-head">
                 <span className="mcp-name">{s.name}</span>
                 <span className="mcp-scope" data-testid={`mcp-scope-${s.name}`}>
-                  {s.scope === "project" ? "项目" : "全局"}
+                  {MCP_SCOPE_LABELS[s.scope]}
                 </span>
                 <span className={`mcp-state ${s.state}`} data-testid={`mcp-state-${s.name}`}>
                   {MCP_STATE_LABELS[s.state]}

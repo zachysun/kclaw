@@ -61,7 +61,7 @@ import type { ToolExecutor } from "./tools.js"
 import { createBuiltinTools, deriveToolFacts, dropSensitiveTools } from "../tools/index.js"
 import { makeEvent } from "../protocol/events.js"
 import { searchSessionEvents } from "../tools/session-search.js"
-import { applyReuseTiers, matchSkillInvocations, readLinksFile, scanSkillDirs, skillListPrompt, wrapSkillInvocations } from "../skills/index.js"
+import { applyReuseTiers, matchSkillInvocations, projectSkillsDir, readLinksFile, resolveEvolutionGate, scanSkillDirs, skillListPrompt, wrapSkillInvocations } from "../skills/index.js"
 import type { SkillEvolutionScheduleBook, SkillEvolutionTriggers } from "../skills/evolution.js"
 import { extractFileMentions, wrapFileMentions, type MentionResolution } from "../mentions.js"
 import type { MemorySystem } from "../memory/system.js"
@@ -388,13 +388,13 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // skill_read 工具持有同一份扫描结果（第二层，按需取正文）。
   // 复用技能（他方 agent 软链接接入）的可见档位在合并后按 realpath 覆盖
   // frontmatter 两布尔——项目 scope 的档位后应用、盖过全局，与目录覆盖同向。
-  const projectSkillsDir = join(workspace, ".kclaw", "skills")
+  const projectDir = projectSkillsDir(workspace)
   const skills = applyReuseTiers(
     scanSkillDirs({
       global: paths.skillsDir,
-      project: projectSkillsDir,
+      project: projectDir,
     }),
-    [readLinksFile(paths.skillsDir), readLinksFile(projectSkillsDir)],
+    [readLinksFile(paths.skillsDir), readLinksFile(projectDir)],
   )
 
   // 技能点名与文件点名的隐式包装（Master 2026-09-03 / 2026-09-13）：用户消
@@ -465,7 +465,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       ? {}
       : {
           skillCreate: {
-            enabled: config.skills?.evolution?.enabled === true,
+            enabled: resolveEvolutionGate(config).enabled,
             sessionId,
             propose: (sid: string, input: { name: string; content: string; rationale?: string }) =>
               engine.deps.skillsEvolution!.propose(sid, input),

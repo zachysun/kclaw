@@ -12,7 +12,7 @@
  */
 import type { FastifyInstance } from "fastify"
 import type { McpScope, McpServerConfig, McpServerStatus } from "@kclaw/core"
-import { parseMcpServerConfig } from "@kclaw/core"
+import { McpError, parseMcpServerConfig } from "@kclaw/core"
 
 /** What the routes need from the manager (the McpManager surface in practice). */
 export interface McpRoutesView {
@@ -39,12 +39,13 @@ const NOT_FOUND = { error: "not found" }
  */
 const NAME_PATTERN = /^[A-Za-z0-9_-]+$/
 
-/** Map a manager rejection to its HTTP status by message class. */
+/** Map a manager rejection to its HTTP status by its error code. */
 function managerError(e: unknown): { code: number; error: string } {
-  const message = (e as Error).message
-  if (message.startsWith("unknown MCP server")) return { code: 404, error: message }
-  if (message.includes("already exists")) return { code: 409, error: message }
-  return { code: 400, error: message }
+  const err = e as Error
+  if (err instanceof McpError) {
+    return { code: err.code === "not-found" ? 404 : err.code === "conflict" ? 409 : 400, error: err.message }
+  }
+  return { code: 400, error: err.message }
 }
 
 interface NameParams {

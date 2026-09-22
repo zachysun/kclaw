@@ -1,5 +1,6 @@
 import type { ContentPart, LlmClient, LlmRequest, LlmStreamEvent } from "./types.js"
 import type { StopReason, Usage } from "../protocol/messages.js"
+import type { ProviderApiFormat } from "../storage/config.js"
 import { DEFAULT_LLM_TIMEOUT_MS, llmHttpError, rethrowClassified, sseDataLines } from "./openai-compat.js"
 
 /** Value of the mandatory anthropic-version header on every Messages API call. */
@@ -21,6 +22,38 @@ export const ANTHROPIC_DEFAULT_MAX_TOKENS = 8192
 export function anthropicEndpoint(baseUrl: string, path: string): string {
   const base = baseUrl.replace(/\/$/, "")
   return base.endsWith("/v1") ? `${base}${path}` : `${base}/v1${path}`
+}
+
+/**
+ * Per-format request policy, shared by the streaming clients AND the probes
+ * so an auth-semantics change lands exactly once (the dual-header fix had to
+ * touch three hand-kept copies before this existed).
+ */
+
+/**
+ * Auth headers for one format: Bearer for OpenAI-compatible bases;
+ * anthropic-version plus x-api-key + Bearer for Anthropic bases — the
+ * official API prefers x-api-key when both are present, while some
+ * Anthropic-compatible gateways only read Bearer on their models route. An
+ * empty apiKey sends no auth header (local runtimes). content-type is NOT
+ * included; callers add it per request shape.
+ */
+export function formatAuthHeaders(format: ProviderApiFormat, apiKey: string): Record<string, string> {
+  if (format === "anthropic") {
+    return {
+      "anthropic-version": ANTHROPIC_VERSION,
+      ...(apiKey === "" ? {} : { "x-api-key": apiKey, authorization: `Bearer ${apiKey}` }),
+    }
+  }
+  return apiKey === "" ? {} : { authorization: `Bearer ${apiKey}` }
+}
+
+/**
+ * Endpoint URL for one format: Anthropic bases get the /v1 tolerance
+ * (anthropicEndpoint), OpenAI-compatible bases concatenate the path.
+ */
+export function formatEndpoint(format: ProviderApiFormat, baseUrl: string, path: string): string {
+  return format === "anthropic" ? anthropicEndpoint(baseUrl, path) : `${baseUrl.replace(/\/$/, "")}${path}`
 }
 
 function toContentBlock(part: ContentPart): Record<string, unknown> {
@@ -141,10 +174,7 @@ export function createAnthropicClient(opts: {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            "anthropic-version": ANTHROPIC_VERSION,
-            ...(opts.apiKey === ""
-              ? {}
-              : { "x-api-key": opts.apiKey, authorization: `Bearer ${opts.apiKey}` }),
+            ...formatAuthHeaders("anthropic", opts.apiKey),
           },
           body: JSON.stringify(toAnthropicPayload(req)),
           signal,

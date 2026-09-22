@@ -12,6 +12,7 @@ import { MCP_SCOPE_LABELS, MCP_STATE_LABELS, parseSlashInput, slashCompletions, 
 import { isPermissionMode, PERMISSION_MODES, PERMISSION_MODE_CONFIRMATIONS } from "@kclaw/core"
 import type { AttachmentRef } from "@kclaw/core"
 import type { PermissionMode } from "@kclaw/core"
+import type { SkillProposalRow } from "@kclaw/core/protocol"
 import type { KclawClient } from "./client.js"
 
 /** Everything a registered command may reach at run time (a view over the chat loop's live state). */
@@ -109,23 +110,14 @@ export interface SkillCommandRow {
   plugin?: string
 }
 
-/** 提案行的 CLI 子集（GET /skills/proposals 返回的 UI 相关字段）。 */
-interface ProposalWire {
-  id: string
-  status: "proposed" | "applied" | "rejected" | "reverted"
-  kind: "new" | "revise"
-  name: string
-  scope: "global" | "project"
-  workdir?: string
-  title: string
-  rationale: string
-  changes?: string
-  content: string
-  createdAt: string
-  appliedAt?: string
-  /** applied 提案的用量口径（路由在 applied 时附带）。 */
-  usage?: number
-}
+/**
+ * 提案行的 CLI 渲染子集：从 protocol 正本 Pick 派生（GET /skills/proposals
+ * 返回的 UI 相关字段）。正本字段改名时这里编译期报错，不再静默漂移。
+ */
+type ProposalWire = Pick<
+  SkillProposalRow,
+  "id" | "status" | "kind" | "name" | "scope" | "workdir" | "title" | "rationale" | "changes" | "content" | "createdAt" | "appliedAt" | "usage"
+>
 
 const PROPOSAL_STATUS: Record<ProposalWire["status"], string> = { proposed: "待确认", applied: "已采纳", rejected: "已驳回", reverted: "已回退" }
 

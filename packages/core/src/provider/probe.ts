@@ -1,16 +1,13 @@
 import type { ProviderApiFormat } from "../storage/config.js"
-import { ANTHROPIC_VERSION, anthropicEndpoint } from "./anthropic.js"
+import { formatAuthHeaders, formatEndpoint } from "./anthropic.js"
 import { DEFAULT_LLM_TIMEOUT_MS, llmHttpError, rethrowClassified } from "./openai-compat.js"
 
 /**
  * List the model ids a provider endpoint serves: the models-list request the
  * Model tab uses both for the model picker and as its connection test (a
- * successful list is the cheapest proof the URL + key work). OpenAI-format
- * bases authenticate with Bearer; Anthropic-format bases with x-api-key +
- * anthropic-version plus Authorization: Bearer carrying the same key — some
- * Anthropic-compatible gateways only read Bearer on their models route, while
- * the official API prefers x-api-key when both are present. An empty apiKey
- * sends no auth header (local runtimes).
+ * successful list is the cheapest proof the URL + key work). Auth and URL
+ * policy come from formatAuthHeaders/formatEndpoint (the shared per-format
+ * source).
  */
 export async function fetchProviderModels(opts: {
   format: ProviderApiFormat
@@ -21,19 +18,8 @@ export async function fetchProviderModels(opts: {
 }): Promise<string[]> {
   const doFetch = opts.fetchImpl ?? fetch
   const timeoutMs = opts.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS
-  const url = opts.format === "anthropic"
-    ? anthropicEndpoint(opts.baseUrl, "/models")
-    : `${opts.baseUrl.replace(/\/$/, "")}/models`
-  const headers: Record<string, string> = {}
-  if (opts.format === "anthropic") {
-    headers["anthropic-version"] = ANTHROPIC_VERSION
-    if (opts.apiKey !== "") {
-      headers["x-api-key"] = opts.apiKey
-      headers.authorization = `Bearer ${opts.apiKey}`
-    }
-  } else if (opts.apiKey !== "") {
-    headers.authorization = `Bearer ${opts.apiKey}`
-  }
+  const url = formatEndpoint(opts.format, opts.baseUrl, "/models")
+  const headers: Record<string, string> = formatAuthHeaders(opts.format, opts.apiKey)
   const signal = AbortSignal.timeout(timeoutMs)
   let res: Response
   try {
@@ -70,10 +56,9 @@ const PROBE_TIMEOUT_MS = 20_000
 /**
  * One-shot minimal chat completion (1 token) that proves a model name works
  * on top of a working URL + key — the models-list probe cannot check the
- * model itself. Format-aware like {@link fetchProviderModels}: Bearer for
- * OpenAI-compatible bases; x-api-key + anthropic-version + Bearer for
- * Anthropic bases (an empty apiKey sends no auth header). Never throws: a
- * failed probe is a result, with status null meaning the request never landed.
+ * model itself. Format-aware like {@link fetchProviderModels} (auth and URL
+ * policy from the shared helpers). Never throws: a failed probe is a
+ * result, with status null meaning the request never landed.
  */
 export async function probeProviderChat(opts: {
   format: ProviderApiFormat
@@ -86,18 +71,14 @@ export async function probeProviderChat(opts: {
   const doFetch = opts.fetchImpl ?? fetch
   const timeoutMs = opts.timeoutMs ?? PROBE_TIMEOUT_MS
   const isAnthropic = opts.format === "anthropic"
-  const url = isAnthropic
-    ? anthropicEndpoint(opts.baseUrl, "/messages")
-    : `${opts.baseUrl.replace(/\/$/, "")}/chat/completions`
-  const headers: Record<string, string> = { "content-type": "application/json" }
-  if (isAnthropic) {
-    headers["anthropic-version"] = ANTHROPIC_VERSION
-    if (opts.apiKey !== "") {
-      headers["x-api-key"] = opts.apiKey
-      headers.authorization = `Bearer ${opts.apiKey}`
-    }
-  } else if (opts.apiKey !== "") {
-    headers.authorization = `Bearer ${opts.apiKey}`
+  const url = formatEndpoint(
+    opts.format,
+    opts.baseUrl,
+    isAnthropic ? "/messages" : "/chat/completions",
+  )
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    ...formatAuthHeaders(opts.format, opts.apiKey),
   }
   const payload = isAnthropic
     ? { model: opts.model, messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }], max_tokens: 1 }

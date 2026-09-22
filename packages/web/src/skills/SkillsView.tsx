@@ -24,6 +24,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type React from "react"
 import type { ApiClient } from "../api.js"
 import type { NoticeFn } from "../toast.js"
+import type { SkillProposalRow } from "@kclaw/core/protocol"
 
 interface SkillRow {
   name: string
@@ -69,38 +70,17 @@ interface LinksPayload {
   extraSources: string[]
 }
 
-/** 提案行（GET /skills/proposals）：完整提案字段 + applied 时的用量口径。 */
-interface ProposalRow {
-  id: string
-  status: "proposed" | "applied" | "rejected" | "reverted"
-  kind: "new" | "revise"
-  name: string
-  scope: "global" | "project"
-  workdir?: string
-  title: string
-  rationale: string
-  changes?: string
-  content: string
-  /** revise：提案时看到的正文（对照展示）。 */
-  baseline?: string
-  /** revise：apply 覆盖前的真实正文（回退源）。 */
-  snapshot?: string
-  source: "follow" | "skill_create"
-  sourceSessionId: string
-  createdAt: string
-  decidedAt?: string
-  appliedAt?: string
-  usage?: number
-}
-
 /** 复用来源与可见档位的中文标签（接口仍是服务端约定的小写枚举）。 */
 const AGENT_LABEL: Record<string, string> = { claude: "Claude Code", codex: "Codex", dsh: "DeepSeek", zcode: "zCode", custom: "自定义目录" }
 const TIER_LABEL: Record<LinkRecord["tier"], string> = { all: "完全可见", user: "仅用户", model: "仅模型", off: "暂不启用" }
 const TIERS: LinkRecord["tier"][] = ["all", "user", "model", "off"]
 
-const PROPOSAL_STATUS_LABEL: Record<ProposalRow["status"], string> = { proposed: "待确认", applied: "已采纳", rejected: "已驳回", reverted: "已回退" }
-const PROPOSAL_KIND_LABEL: Record<ProposalRow["kind"], string> = { new: "新增", revise: "修订" }
-const PROPOSAL_SCOPE_LABEL: Record<ProposalRow["scope"], string> = { global: "全局", project: "项目" }
+/** 提案行（GET /skills/proposals）：形状即 protocol 正本 SkillProposalRow
+ * （完整提案字段 + applied 时的用量口径），本地不再手抄镜像。 */
+
+const PROPOSAL_STATUS_LABEL: Record<SkillProposalRow["status"], string> = { proposed: "待确认", applied: "已采纳", rejected: "已驳回", reverted: "已回退" }
+const PROPOSAL_KIND_LABEL: Record<SkillProposalRow["kind"], string> = { new: "新增", revise: "修订" }
+const PROPOSAL_SCOPE_LABEL: Record<SkillProposalRow["scope"], string> = { global: "全局", project: "项目" }
 
 type SubTab = "installed" | "reuse" | "proposals"
 
@@ -122,11 +102,11 @@ export function SkillsView({ api, notice }: {
   const [rows, setRows] = useState<SkillRow[] | null>(null)
   const [discovery, setDiscovery] = useState<DiscoveryPayload | null>(null)
   const [links, setLinks] = useState<LinksPayload | null>(null)
-  const [proposals, setProposals] = useState<ProposalRow[] | null>(null)
+  const [proposals, setProposals] = useState<SkillProposalRow[] | null>(null)
   const [proposalId, setProposalId] = useState<string | null>(null)
   // 状态筛选走服务端 ?status=（路由已支持）；种类筛选是本地过滤（数据量小）。
-  const [proposalStatus, setProposalStatus] = useState<"all" | ProposalRow["status"]>("all")
-  const [proposalKind, setProposalKind] = useState<"all" | ProposalRow["kind"]>("all")
+  const [proposalStatus, setProposalStatus] = useState<"all" | SkillProposalRow["status"]>("all")
+  const [proposalKind, setProposalKind] = useState<"all" | SkillProposalRow["kind"]>("all")
   const [body, setBody] = useState<{ title: string; content: string; reusable?: DiscoveredSkill } | null>(null)
   const [newSource, setNewSource] = useState("")
   const [search, setSearch] = useState("")
@@ -138,7 +118,7 @@ export function SkillsView({ api, notice }: {
   const reloadProposals = useCallback(() => {
     // 提案面：全局数据（提案自带 workdir/scope），拉取失败行内降级。
     api
-      .get<{ proposals: ProposalRow[] }>(`/skills/proposals${proposalQuery}`)
+      .get<{ proposals: SkillProposalRow[] }>(`/skills/proposals${proposalQuery}`)
       .then((r) => setProposals(r.proposals))
       .catch(() => setProposals(null))
   }, [api, proposalQuery])
@@ -320,7 +300,7 @@ export function SkillsView({ api, notice }: {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
   }
 
-  const proposalAction = async (p: ProposalRow, op: "apply" | "reject" | "revert"): Promise<void> => {
+  const proposalAction = async (p: SkillProposalRow, op: "apply" | "reject" | "revert"): Promise<void> => {
     setBusy(true)
     try {
       const res = await api.post<{ ok: boolean; warning?: string }>(`/skills/proposals/${encodeURIComponent(p.id)}/${op}`, {})
@@ -337,7 +317,7 @@ export function SkillsView({ api, notice }: {
     }
   }
 
-  const removeProposal = async (p: ProposalRow): Promise<void> => {
+  const removeProposal = async (p: SkillProposalRow): Promise<void> => {
     setBusy(true)
     try {
       await api.del(`/skills/proposals/${encodeURIComponent(p.id)}`)

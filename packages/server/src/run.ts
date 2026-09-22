@@ -558,7 +558,7 @@ export class RunManager {
       this.#compactor.deferManual(sessionId, focus)
       return { queued: true, message: "已排队：当前运行结束后自动压缩" }
     }
-    const { config, sessions, llm } = this.#deps
+    const { config, sessions } = this.#deps
     const meta = sessions.meta(sessionId)
     if (meta === undefined) throw new Error("session not found")
     const history = sessions.readMessages(sessionId)
@@ -566,7 +566,11 @@ export class RunManager {
     // edits hot-apply), the launch-resolved deps.model only backs env-only
     // setups with no entry.
     const defaultModel = config.providers.entries[config.providers.default]?.model || this.#deps.model || ""
-    const { model, budget } = resolveRunModel(config, meta.model ?? defaultModel)
+    const { model, entryKey, budget } = resolveRunModel(config, meta.model ?? defaultModel)
+    // Same client wiring as in-run compaction (run-assembly): fetch through
+    // the shared resolver so Model-tab edits hot-apply here too; the
+    // launch-resolved deps.llm only backs injected-llmFactory test setups.
+    const llm = this.#deps.llmForRun?.(() => {}, entryKey) ?? this.#deps.llm
     const out = await this.#compactor.compact(sessionId, history, "", config, llm, model, {
       focus,
       manual: true,

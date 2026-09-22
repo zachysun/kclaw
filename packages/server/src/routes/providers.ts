@@ -2,13 +2,12 @@
  * Provider management routes: the Model-tab snapshot (GET /providers —
  * entries with masked keys plus the built-in presets) and the hot-config
  * action family (create/update/rename/delete/set-default/model-probe).
- * Mutations
- * apply to the daemon's shared in-memory config immediately — the next run
- * resolves its entry through it — and persist through saveConfig, whose
- * first write lands in config.json and retires a legacy config.yaml.
- * Delete guards only the default entry (switch first); an entry still
- * referenced by sessions may be deleted — those sessions fall back to the
- * default on their next run, which the WebUI surfaces as a confirm note.
+ * Mutations apply to the daemon's shared in-memory config immediately — the
+ * next run resolves its entry through it — and persist through saveConfig
+ * to config.json. Delete guards only the default entry (switch first); an
+ * entry still referenced by sessions may be deleted — those sessions fall
+ * back to the default on their next run, which the WebUI surfaces as a
+ * confirm note.
  */
 import type { FastifyInstance } from "fastify"
 import type { ConfigNotifier, KclawConfig, KclawPaths, ProviderApiFormat, ProviderEntry } from "@kclaw/core"

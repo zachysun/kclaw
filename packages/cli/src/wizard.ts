@@ -9,34 +9,59 @@
  * Paths come from core's resolvePaths (the real KclawPaths shape, home et
  * al.) — never a hand-rolled stand-in — so resolution cannot drift from the
  * daemon's; its mkdir side effect merely pre-creates the home tree any
- * kclaw invocation creates anyway. saveConfig itself does NOT set a file
- * mode (plain writeFileSync → 0o666 & umask), so the wizard chmods
- * config.json to 0o600 right after saving — API keys live in that file.
+ * kclaw invocation creates anyway. saveConfig persists through
+ * writeFileAtomic which already sets 0600; the wizard re-chmods anyway as
+ * belt and braces — API keys live in that file.
+ *
+ * The template menu derives from core's PROVIDER_PRESETS (the format +
+ * baseUrl canon shared with the Model tab) plus wizard-only extras
+ * (defaultModel suggestions, the custom template); the probe and the saved
+ * entry carry the preset's wire format, so Anthropic-format providers are
+ * configurable from the first run too.
  *
  * The custom template has no baseUrl of its own, so the flow inserts a
  * baseUrl input step for it before the key step.
  */
 import * as p from "@clack/prompts"
-import { probeProviderChat, saveConfig, loadConfig, resolvePaths } from "@kclaw/core"
+import { findProviderPreset, probeProviderChat, saveConfig, loadConfig, resolvePaths } from "@kclaw/core"
 import { chmodSync } from "node:fs"
 
 export interface Template {
-  id: "deepseek" | "openai" | "ollama" | "custom"
+  id: "deepseek" | "openai" | "anthropic" | "ollama" | "custom"
   label: string
+  format: "openai" | "anthropic"
   baseUrl?: string
   defaultModel?: string
   skipKey?: boolean
 }
 
+/** Model-name suggestions per template (the model step's placeholder). */
+const DEFAULT_MODELS: Partial<Record<Template["id"], string>> = {
+  deepseek: "deepseek-chat",
+  openai: "gpt-4o-mini",
+  anthropic: "claude-sonnet-4-5",
+}
+
+/** Wizard menu order (deepseek first — the common first-run choice here). */
+const WIZARD_TEMPLATE_IDS = ["deepseek", "openai", "anthropic", "ollama"] as const
+
 export const PROVIDER_TEMPLATES: Template[] = [
-  { id: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com", defaultModel: "deepseek-chat" },
-  { id: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", defaultModel: "gpt-4o-mini" },
-  { id: "ollama", label: "Ollama (local)", baseUrl: "http://127.0.0.1:11434/v1", skipKey: true },
-  { id: "custom", label: "Custom OpenAI-compatible endpoint" },
+  ...WIZARD_TEMPLATE_IDS.map((id): Template => {
+    const preset = findProviderPreset(id)!
+    return {
+      id,
+      label: preset.label,
+      format: preset.format,
+      baseUrl: preset.baseUrl,
+      ...(preset.authOptional === true ? { skipKey: true } : {}),
+      ...(DEFAULT_MODELS[id] !== undefined ? { defaultModel: DEFAULT_MODELS[id] } : {}),
+    }
+  }),
+  { id: "custom", label: "Custom OpenAI-compatible endpoint", format: "openai" },
 ]
 
 export function buildProviderEntry(t: Template, apiKey: string, model: string) {
-  return { baseUrl: t.baseUrl ?? "", apiKey: t.skipKey ? "ollama" : apiKey, model }
+  return { format: t.format, baseUrl: t.baseUrl ?? "", apiKey: t.skipKey ? "ollama" : apiKey, model }
 }
 
 export function classifyProbeError(status: number | null, message: string): "key" | "network" | "model" | "unknown" {
@@ -98,7 +123,7 @@ export async function runWizard(home: string): Promise<"configured" | "aborted">
     if (!model) { p.log.error("模型名不能为空"); continue }
     const entry = buildProviderEntry(tpl, apiKey, model)
     const s = p.spinner(); s.start("测试连通…")
-    const { status, body } = await probeProviderChat({ format: "openai", baseUrl: entry.baseUrl, apiKey: entry.apiKey, model: entry.model })
+    const { status, body } = await probeProviderChat({ format: tpl.format, baseUrl: entry.baseUrl, apiKey: entry.apiKey, model: entry.model })
     s.stop(status !== null && status < 400 ? "连通成功" : "连通失败")
     if (status !== null && status < 400) {
       const paths = resolvePaths(home)

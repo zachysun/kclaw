@@ -45,7 +45,7 @@ import type { SessionStore } from "../session/store.js"
 import type { Compactor } from "../session/compactor.js"
 import type { KclawConfig } from "../storage/config.js"
 import type { MemoryQuery, MemoryScheduleBook } from "../memory/system.js"
-import type { SkillEvolutionScheduleBook } from "../skills/evolution.js"
+import { resolveEvolutionGate, type SkillEvolutionScheduleBook } from "../skills/evolution.js"
 import type { UsageStore } from "../storage/usage.js"
 import { withLastUserText } from "../agent/context.js"
 import type { HookEntry, HookContextMap, HookPosition, HookResultMap } from "./types.js"
@@ -508,8 +508,8 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
         // 与记忆 follow 门禁同向：子会话不排检查（记忆隔离）。子会话的增量
         // 不会被漏看——粗查读的是全项目各会话的未处理增量（含子会话）。
         if (childRun) return
-        const evo = config.skills?.evolution
-        if (skillsEvolution === undefined || evo?.enabled !== true || (evo.idleMinutes ?? 0) <= 0) return
+        const gate = resolveEvolutionGate(config)
+        if (skillsEvolution === undefined || !gate.enabled || gate.idleMinutes <= 0) return
         try {
           skillsEvolution.considerFollowCheck(sessionId, new Date().toISOString(), skillNames ?? [])
         } catch {

@@ -8,6 +8,7 @@ import {
   isModelVisible,
   isUserVisible,
   previewSkillBody,
+  projectSkillsDir,
   readLinksFile,
   removeDiscoverySource,
   removeSkillLink,
@@ -20,10 +21,10 @@ import {
   type ReuseTier,
   type SkillEvolutionAdmin,
   type SkillProposal,
+  type SkillProposalRow,
   type SkillRecord,
 } from "@kclaw/core"
 import { realpathSync } from "node:fs"
-import { join } from "node:path"
 
 const NOT_FOUND = { error: "not found" } as const
 
@@ -57,11 +58,12 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     }
     return evolution
   }
-  const projectSkillsDir = (workdir: string | undefined): string | undefined =>
-    workdir !== undefined && workdir.trim() !== "" ? join(workdir, ".kclaw", "skills") : undefined
+  /** 项目技能目录的请求侧包装：query 里的 workdir 可缺省/为空。 */
+  const projectDirOf = (workdir: string | undefined): string | undefined =>
+    workdir !== undefined && workdir.trim() !== "" ? projectSkillsDir(workdir) : undefined
 
   const scan = (workdir: string | undefined): SkillRecord[] => {
-    const project = projectSkillsDir(workdir)
+    const project = projectDirOf(workdir)
     return applyReuseTiers(
       scanSkillDirs({ global: opts.paths.skillsDir, project }),
       [readLinksFile(opts.paths.skillsDir), project !== undefined ? readLinksFile(project) : { links: [], extraSources: [] }],
@@ -73,7 +75,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     if (workdir === undefined || workdir.trim() === "") return opts.paths.skillsDir
     const wd = workdir.trim()
     if (!wd.startsWith("/")) return undefined
-    return join(wd, ".kclaw", "skills")
+    return projectSkillsDir(wd)
   }
 
   app.get("/skills", async (req) => {
@@ -119,7 +121,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
 
   app.get("/skills/discovery", async (req) => {
     const { workdir } = req.query as { workdir?: string }
-    const project = projectSkillsDir(workdir)
+    const project = projectDirOf(workdir)
     return {
       sources: resolveDiscoverySources(opts.paths.skillsDir, builtin),
       skills: discoverSkills({
@@ -182,7 +184,8 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
       })
     }
     const result = createSkillLink({ skillsDir: dir, name, target, agent, tier, plugin })
-    if (!result.ok) return reply.code(result.error.startsWith("already reused") ? 409 : 400).send({ error: result.error })
+    // 状态码映射吃 core 的 code，不嗅探错误文案。
+    if (!result.ok) return reply.code(result.code === "conflict" ? 409 : 400).send({ error: result.error })
     reply.code(201)
     return { ok: true }
   })
@@ -197,7 +200,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     if (!isSafeSegment(name)) return reply.code(400).send({ error: "invalid segment" })
     if (typeof tier !== "string" || !TIERS.includes(tier as ReuseTier)) return reply.code(400).send({ error: "tier must be one of all|user|model|off" })
     const result = setSkillLinkTier({ skillsDir: dir, name, tier: tier as ReuseTier })
-    if (!result.ok) return reply.code(result.error === "no such link record" ? 404 : 400).send({ error: result.error })
+    if (!result.ok) return reply.code(result.code === "not-found" ? 404 : 400).send({ error: result.error })
     return { ok: true }
   })
 
@@ -208,7 +211,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     if (dir === undefined) return reply.code(400).send({ error: "workdir must be an absolute path" })
     if (!isSafeSegment(name)) return reply.code(400).send({ error: "invalid segment" })
     const result = removeSkillLink({ skillsDir: dir, name })
-    if (!result.ok) return reply.code(result.error === "no such link record" ? 404 : 400).send({ error: result.error })
+    if (!result.ok) return reply.code(result.code === "not-found" ? 404 : 400).send({ error: result.error })
     return { ok: true }
   })
 
@@ -220,7 +223,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     if (scopeDir === undefined) return reply.code(400).send({ error: "workdir must be an absolute path" })
     if (dir === "" || !dir.startsWith("/")) return reply.code(400).send({ error: "dir must be an absolute path" })
     const result = addDiscoverySource({ skillsDir: scopeDir, dir })
-    if (!result.ok) return reply.code(409).send({ error: result.error })
+    if (!result.ok) return reply.code(result.code === "conflict" ? 409 : 400).send({ error: result.error })
     reply.code(201)
     return { ok: true }
   })
@@ -231,7 +234,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     if (scopeDir === undefined) return reply.code(400).send({ error: "workdir must be an absolute path" })
     if (typeof dir !== "string" || dir.trim() === "") return reply.code(400).send({ error: "dir is required" })
     const result = removeDiscoverySource({ skillsDir: scopeDir, dir: dir.trim() })
-    if (!result.ok) return reply.code(404).send({ error: result.error })
+    if (!result.ok) return reply.code(result.code === "not-found" ? 404 : 400).send({ error: result.error })
     return { ok: true }
   })
 
@@ -239,7 +242,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
 
   /** 提案行：完整字段 + applied 提案的用量口径（Web 列表直接展示）。直接吃
    * listProposals() 的行，避免按 id 逐条 get 造成的整目录反复重读。 */
-  const proposalRowOf = (evo: SkillEvolutionAdmin, p: SkillProposal): SkillProposal & { usage?: number } => ({
+  const proposalRowOf = (evo: SkillEvolutionAdmin, p: SkillProposal): SkillProposalRow => ({
     ...p,
     ...(p.appliedAt !== undefined ? { usage: evo.proposalUsage(p.id) } : {}),
   })

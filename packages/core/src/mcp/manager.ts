@@ -19,6 +19,22 @@ export type McpServerConfig =
 export type McpScope = "global" | "project"
 
 /**
+ * Manager rejections carry a machine-readable class: the routes layer maps
+ * not-found → 404, conflict → 409, invalid → 400 instead of sniffing the
+ * message text (wording may change freely without moving status codes).
+ */
+export type McpErrorCode = "not-found" | "conflict" | "invalid"
+
+export class McpError extends Error {
+  readonly code: McpErrorCode
+  constructor(code: McpErrorCode, message: string) {
+    super(message)
+    this.name = "McpError"
+    this.code = code
+  }
+}
+
+/**
  * Key-order-insensitive deep equality (hand-edited files rarely keep the
  * key order of an in-memory-constructed object). Arrays compare by index.
  */
@@ -247,12 +263,12 @@ export class McpManager {
    * for a shadowed occupancy).
    */
   addServer(name: string, config: McpServerConfig, layer: McpScope = "global"): void {
-    if (name.trim() === "") throw new Error("MCP server name must not be empty")
+    if (name.trim() === "") throw new McpError("invalid", "MCP server name must not be empty")
     const inGlobal = this.globalEntries.has(name)
     const inProject = this.projectEntries.has(name)
     if (inGlobal || inProject) {
       const held = [inGlobal ? "global" : null, inProject ? "project" : null].filter(Boolean).join(" + ")
-      throw new Error(`MCP server already exists (${held} scope): ${name}`)
+      throw new McpError("conflict", `MCP server already exists (${held} scope): ${name}`)
     }
     const state = this.freshState(name, config, layer)
     this.servers.set(name, state)
@@ -395,7 +411,7 @@ export class McpManager {
    */
   reconnect(name: string): void {
     const state = this.mustGet(name)
-    if (state.config.enabled === false) throw new Error(`MCP server ${name} is disabled`)
+    if (state.config.enabled === false) throw new McpError("invalid", `MCP server ${name} is disabled`)
     if (state.state === "connected" || state.state === "connecting") return
     if (state.reconnectTimer !== undefined) {
       clearTimeout(state.reconnectTimer)
@@ -406,7 +422,7 @@ export class McpManager {
 
   private mustGet(name: string): ServerState {
     const state = this.servers.get(name)
-    if (!state) throw new Error(`unknown MCP server: ${name}`)
+    if (!state) throw new McpError("not-found", `unknown MCP server: ${name}`)
     return state
   }
 

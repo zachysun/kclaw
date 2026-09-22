@@ -42,13 +42,11 @@ import type { SkillEvent } from "../session/events.js"
 import { WriteLedger, type FollowCheck } from "../memory/ledger.js"
 import { projectIdFor } from "../memory/layout.js"
 import { linkedSkillNames } from "./links.js"
-import { isSkillDirName } from "./names.js"
-import { ProposalStore, type SkillProposal, type SkillProposalResult } from "./proposals.js"
+import { isSkillDirName, projectSkillsDir, SKILL_MENTION_REGEX } from "./names.js"
+import { isOverSkillContentCap, ProposalStore, type SkillProposal, type SkillProposalResult } from "./proposals.js"
 
 /** Max proposals the extractor may produce per batch (excess dropped + logged). */
 const MAX_PROPOSALS_PER_BATCH = 3
-/** skill_create content cap: 64 KiB of UTF-8. */
-export const MAX_SKILL_CONTENT_BYTES = 64 * 1024
 
 /**
  * 提炼器固定文案。字段名与 parseProposalItems 的校验逐字一致——模型只从
@@ -120,6 +118,22 @@ export interface SkillEvolutionDeps {
   now?: () => Date
 }
 
+/**
+ * Evolution gate：`skills.evolution` 配置的唯一读法——enabled 严格为 true
+ * 才算开，idleMinutes 默认 0。"开启" = enabled 且 idleMinutes > 0；run 收尾
+ * 钩子、server 调度器与 skill_create 组装三处都经这里判定，语义改动只改
+ * 这一处。
+ */
+export interface EvolutionGate {
+  enabled: boolean
+  idleMinutes: number
+}
+
+export function resolveEvolutionGate(config: KclawConfig): EvolutionGate {
+  const evo = config.skills?.evolution
+  return { enabled: evo?.enabled === true, idleMinutes: evo?.idleMinutes ?? 0 }
+}
+
 export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEvolutionTriggers, SkillEvolutionAdmin {
   readonly #skillsDir: string
   readonly #sessions: SessionStore
@@ -138,7 +152,7 @@ export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEv
     this.#now = deps.now ?? (() => new Date())
     this.#store = new ProposalStore({
       proposalsDir: this.#proposalsDir,
-      resolveDir: (scope, workdir) => (scope === "global" ? this.#skillsDir : join(workdir ?? this.#config.workspace, ".kclaw", "skills")),
+      resolveDir: (scope, workdir) => (scope === "global" ? this.#skillsDir : projectSkillsDir(workdir ?? this.#config.workspace)),
       log: this.#log,
     })
   }
@@ -164,9 +178,10 @@ export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEv
       .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))[0]?.id
   }
 
-  /** 全局最近活动会话（global 提案 admin 事件归属）。 */
+  /** 全局最近活动会话（global 提案 admin 事件归属；排序口径与项目侧一致）。 */
   #recentGlobalSessionId(): string | undefined {
-    return this.#sessions.list().find((m) => m.parentSessionId === undefined)?.id
+    return this.#sessions.list().filter((m) => m.parentSessionId === undefined)
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))[0]?.id
   }
 
   /** 项目全部会话（含子会话——观察盲区正是要覆盖的对象，刻意不排除）。 */
@@ -264,11 +279,11 @@ export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEv
     if (!isSkillDirName(input.name)) {
       return { ok: false, error: `技能名不合法（小写字母/数字/连字符，≤64 字符）：${input.name}` }
     }
-    if (Buffer.byteLength(input.content, "utf8") > MAX_SKILL_CONTENT_BYTES) {
+    if (isOverSkillContentCap(input.content)) {
       return { ok: false, error: "content 超过 64KB 上限" }
     }
     const workdir = this.#workdirOf(sessionId)
-    const projectDir = join(workdir, ".kclaw", "skills")
+    const projectDir = projectSkillsDir(workdir)
     // kind/scope 系统推导：项目副本命中 → project + 当前会话 workdir；仅全局
     // 命中 → global；未装 → new，一律 project（影响面小的方向）。
     const scope = existsSync(join(projectDir, input.name, "SKILL.md"))
@@ -331,7 +346,7 @@ export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEv
     if (p === undefined) return { ok: false, error: "提案不存在" }
     // 遮蔽检查候选：daemon 已知的全部项目技能目录（项目副本整目录覆盖全局）。
     const shadowDirs = p.scope === "global"
-      ? [...new Set(this.#sessions.list().map((m) => m.workdir).filter((w): w is string => typeof w === "string" && w !== ""))].map((w) => join(w, ".kclaw", "skills"))
+      ? [...new Set(this.#sessions.list().map((m) => m.workdir).filter((w): w is string => typeof w === "string" && w !== ""))].map(projectSkillsDir)
       : []
     const r = this.#store.apply(id, { at: this.#nowISO(), shadowDirs })
     if (r.ok) this.#adminAudit(r.proposal, "applied")
@@ -397,7 +412,7 @@ export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEv
     }
     const capped = items.slice(0, MAX_PROPOSALS_PER_BATCH)
     if (items.length > capped.length) this.#log(`kclaw skills extract: proposals capped ${capped.length}/${items.length}`)
-    const projectDir = join(workdir, ".kclaw", "skills")
+    const projectDir = projectSkillsDir(workdir)
     const out: Array<Omit<SkillProposal, "id" | "status" | "createdAt" | "source" | "sourceSessionId">> = []
     for (const item of capped) {
       if (typeof item !== "object" || item === null) { this.#log("kclaw skills extract: dropping malformed proposal"); continue }
@@ -407,6 +422,12 @@ export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEv
       const content = typeof x.content === "string" ? x.content : ""
       if (kind === undefined || !isSkillDirName(name) || content === "") {
         this.#log(`kclaw skills extract: dropping malformed proposal (kind=${String(x.kind)} name=${name})`)
+        continue
+      }
+      // 同一条 cap 规则覆盖两条写入路径（skill_create 侧显式报错，这里按
+      // 逐条容错丢弃），ProposalStore.create 里另有防御性 throw。
+      if (isOverSkillContentCap(content)) {
+        this.#log(`kclaw skills extract: dropping over-cap proposal: ${name}`)
         continue
       }
       const scope = x.scope === "global" || x.scope === "project" ? x.scope : "project" // 回退影响面小的方向
@@ -432,10 +453,10 @@ export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEv
 
 /**
  * 卷入判定（纯读）：assistant 消息的 skill_read/skill_list 工具调用块，或
- * user 消息文本里命中已装技能名的 /记号。/记号 正则与 matchSkillInvocations
- * 同源，但匹配集合是全部已装技能名——那边按 user-invocable 档位过滤（渐进
- * 披露的用户面口径），观察面刻意更宽：user-invocable:false 的技能被点名
- * 同样是"卷入"。
+ * user 消息文本里命中已装技能名的 /记号。/记号 正则即 SKILL_MENTION_REGEX
+ * （与 matchSkillInvocations 共用同一常量），但匹配集合是全部已装技能名——
+ * 那边按 user-invocable 档位过滤（渐进披露的用户面口径），观察面刻意更宽：
+ * user-invocable:false 的技能被点名同样是"卷入"。
  */
 function collectInvolvedNames(m: Message, installed: ReadonlySet<string>, out: Set<string>): void {
   if (m.role === "assistant") {
@@ -448,7 +469,7 @@ function collectInvolvedNames(m: Message, installed: ReadonlySet<string>, out: S
   } else if (m.role === "user") {
     for (const b of m.blocks) {
       if (b.type !== "text" || typeof b.text !== "string") continue
-      for (const match of b.text.matchAll(/(?<![A-Za-z0-9])\/([a-z0-9]+(?:-[a-z0-9]+)*)/g)) {
+      for (const match of b.text.matchAll(SKILL_MENTION_REGEX)) {
         const name = match[1]!
         if (installed.has(name)) out.add(name)
       }

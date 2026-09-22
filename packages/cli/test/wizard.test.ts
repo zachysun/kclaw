@@ -9,17 +9,27 @@
  * exercised by the smoke run.
  */
 import { describe, it, expect } from "vitest"
+import { PROVIDER_PRESETS } from "@kclaw/core"
 import { PROVIDER_TEMPLATES, buildProviderEntry, classifyProbeError } from "../src/wizard.js"
 
 describe("PROVIDER_TEMPLATES", () => {
-  it("offers deepseek/openai/ollama/custom in that order", () => {
-    expect(PROVIDER_TEMPLATES.map((t) => t.id)).toEqual(["deepseek", "openai", "ollama", "custom"])
+  it("offers deepseek/openai/anthropic/ollama/custom in that order", () => {
+    expect(PROVIDER_TEMPLATES.map((t) => t.id)).toEqual(["deepseek", "openai", "anthropic", "ollama", "custom"])
   })
   it("built-ins carry baseUrl; ollama skips the key; custom defers baseUrl to the user", () => {
     const byId = Object.fromEntries(PROVIDER_TEMPLATES.map((t) => [t.id, t]))
-    expect(byId.deepseek!.baseUrl).toBe("https://api.deepseek.com")
+    expect(byId.deepseek!.baseUrl).toBe("https://api.deepseek.com/v1")
     expect(byId.ollama!.skipKey).toBe(true)
     expect(byId.custom!.baseUrl).toBeUndefined()
+  })
+  it("built-in format and baseUrl stay derived from core's preset canon (no second catalog)", () => {
+    for (const t of PROVIDER_TEMPLATES) {
+      if (t.id === "custom") continue
+      const preset = PROVIDER_PRESETS.find((p) => p.id === t.id)
+      expect(preset, `preset ${t.id} exists in core`).toBeDefined()
+      expect(t.format).toBe(preset!.format)
+      expect(t.baseUrl).toBe(preset!.baseUrl)
+    }
   })
 })
 
@@ -27,11 +37,15 @@ describe("buildProviderEntry", () => {
   it("fills template fields", () => {
     const t = PROVIDER_TEMPLATES.find((x) => x.id === "deepseek")!
     expect(buildProviderEntry(t, "sk-1", "deepseek-chat"))
-      .toEqual({ baseUrl: "https://api.deepseek.com", apiKey: "sk-1", model: "deepseek-chat" })
+      .toEqual({ format: "openai", baseUrl: "https://api.deepseek.com/v1", apiKey: "sk-1", model: "deepseek-chat" })
   })
   it("ollama uses placeholder key", () => {
     const t = PROVIDER_TEMPLATES.find((x) => x.id === "ollama")!
     expect(buildProviderEntry(t, "", "llama3").apiKey).toBe("ollama")
+  })
+  it("anthropic carries the anthropic wire format", () => {
+    const t = PROVIDER_TEMPLATES.find((x) => x.id === "anthropic")!
+    expect(buildProviderEntry(t, "sk-ant", "claude-sonnet-4-5").format).toBe("anthropic")
   })
 })
 
