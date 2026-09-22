@@ -191,10 +191,8 @@ token 的处理：页面获取 token 后存入浏览器本地存储并从地址�
 └── logs/            # 日志
 ```
 
-目录里若还有旧版的 `config.yaml`（`config.json` 出现前的配置格式），它仍被兼容读取，已有旧配置也能照常运行；任一程序写入（wizard 或 WebUI 保存）后 `config.json` 成为正式配置，旧文件改名为 `config.yaml.bak` 留作备份。
-
 > [!TIP]
-> 备份或迁移 kclaw，复制这个目录即可。
+> 备份或搬家时，复制这个目录即可。
 
 daemon 是后台常驻进程，停止方式如下：
 

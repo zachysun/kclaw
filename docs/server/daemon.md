@@ -7,13 +7,13 @@
 ## 设计决策
 
 - **只绑回环地址**：`HOST = "127.0.0.1"`（本机回环地址，外部网络访问不到）。daemon 不做网络隔离，安全完全交给 token；绑回环保证其他机器无法连接。
-- **端口三级优先级，钉死是显式选择**：listen 端口取 `--port` 旗标 ?? 配置文件 `server.port` ?? `0`（让操作系统分配一个空闲临时端口，历史上的默认行为）。真实端口 listen 成功后从 `app.server.address()` 读出并写入 `daemon.json`，客户端通过文件发现端口。固定端口后 WebUI 地址跨重启稳定；钉住的端口被占用是**硬错误**（退出并报一行原因，绝不静默回退到临时端口——地址悄悄漂移正是固定端口要消灭的东西），listen 失败时同步释放占位 daemon.json，下次启动不会看到僵尸 pid。
+- **端口三级优先级，固定端口是显式选择**：listen 端口取 `--port` 旗标 ?? 配置文件 `server.port` ?? `0`（让操作系统分配一个空闲临时端口）。真实端口 listen 成功后从 `app.server.address()` 读出并写入 `daemon.json`，客户端通过文件发现端口。固定端口后 WebUI 地址跨重启稳定；固定端口被占用是**硬错误**（退出并报一行原因，绝不静默回退到临时端口——地址悄悄漂移正是固定端口要消灭的东西），listen 失败时同步释放占位 daemon.json，下次启动不会看到僵尸 pid。
 - **daemon.json 是独占占位，启动第一步就认领**：组装开始即以 `wx` 原子创建占位 `{port: 0, pid, startedAt, starting: true}`（并发第二个启动者拿到 EEXIST，看到存活 pid 即拒绝"daemon already running"；死 pid 的残留被回收重认领）；listen 成功后回填真实 `{port, pid, startedAt}`（同一 startedAt，`starting` 移除），此时文件才指向可用端口。`launchDaemon` resolve 时 daemon 已在服务并在调度。CLI 侧以"文件出现且 `/health` 可访问"作为就绪判据。
 - **token 是 daemon 的稳定身份**：`<home>/token` 首次启动时生成（UUID，文件权限 0600，仅属主可读写），重启复用，stop 不删除；仅 daemon.json 会被删除。因此 CLI/WebUI 保存的 token 在 daemon 重启后仍然有效。
 - **鉴权是"每路由必带 Bearer"加白名单豁免**：一个 `preHandler` hook 拦截全部路由，只有三处豁免——`/health`、`/ws`、静态 WebUI 外壳（见下）。豁免列表是封闭集合，新增路由默认受保护。
 - **有界停止**：`stop()` 的每一步（停调度、关服务器）有独立超时（默认 60s）。超时则 `stop()` reject、daemon.json **保留**——进程仍在运行，指向它的文件必须与事实一致；虚报"已停止"会诱发双 daemon、job 双触发。
 - **provider 缺失是硬错误**：组装期就抛错终止，不启动一个"半配置"的 daemon。
-- **MCP 恒定组装，且连接不阻塞启动**：无论配置文件里有没有 server，daemon 都构建一个 `McpManager`（空的管理器没有任何连接、开销为零，管理路由因此永远可用，从 WebUI 添加第一个 server 不需要先改配置）。配置来自两层（全局层 = 配置文件遗留 `mcp.servers` 节与 `<home>/mcp.json` 合并；项目层 = 工作区 `.kclaw/mcp.json`），项目文件由独立的 watch 监视、手工编辑热生效（见 [mcp](../core/mcp.md)）。`mcpManager.start()` 在监听开始之后才调用、并且不等它完成，daemon 照常宣布就绪对外服务，各 server 在后台陆续连上，连上多少就从下一轮 run 起贡献多少工具。连接失败只打一行日志，永远不会拖垮 daemon。
+- **MCP 恒定组装，且连接不阻塞启动**：无论配置文件里有没有 server，daemon 都构建一个 `McpManager`（空的管理器没有任何连接、开销为零，管理路由因此永远可用，从 WebUI 添加第一个 server 不需要先改配置）。配置来自两层（全局层 = `<home>/mcp.json`；项目层 = 工作区 `.kclaw/mcp.json`），项目文件由独立的 watch 监视、手工编辑热生效（见 [mcp](../core/mcp.md)）。`mcpManager.start()` 在监听开始之后才调用、并且不等它完成，daemon 照常宣布就绪对外服务，各 server 在后台陆续连上，连上多少就从下一轮 run 起贡献多少工具。连接失败只打一行日志，永远不会拖垮 daemon。
 
 ## 接口
 
@@ -58,15 +58,14 @@ export function bearerMatches(header: string | undefined, token: string): boolea
 
 ## 启动流程
 
-入口链：`packages/server/bin/kclaw-server.mjs`（package.json 的 `bin` 入口）→ `import { launchDaemon } from "../dist/index.js"` → `launchDaemon({ home, port })`。home 解析：`--home <dir>`（或 `--home=<dir>`）优先，否则 `resolvePaths` 内部使用 `KCLAW_HOME` env ?? `~/.kclaw`。端口解析：`--port <n>`（或 `--port=<n>`）优先，0 是合法值（强制临时端口，压过配置）；旗标缺席时由 `launchDaemon` 读配置 `server.port`，再缺席才用临时端口。`--port` 非整数或越界（0-65535 之外）报一行错退出 1；launch 失败（配置不可解析、钉住的端口被占用等）同样是一行 stderr 加退出 1，不裸抛堆栈。bin 脚本就绪后向 stdout 输出一行 `{"port":<port>}`，CLI 与测试以此行为就绪信号。
+入口链：`packages/server/bin/kclaw-server.mjs`（package.json 的 `bin` 入口）→ `import { launchDaemon } from "../dist/index.js"` → `launchDaemon({ home, port })`。home 解析：`--home <dir>`（或 `--home=<dir>`）优先，否则 `resolvePaths` 内部使用 `KCLAW_HOME` env ?? `~/.kclaw`。端口解析：`--port <n>`（或 `--port=<n>`）优先，0 是合法值（强制临时端口，压过配置）；旗标缺席时由 `launchDaemon` 读配置 `server.port`，再缺席才用临时端口。`--port` 非整数或越界（0-65535 之外）报一行错退出 1；launch 失败（配置不可解析、固定端口被占用等）同样是一行 stderr 加退出 1，不裸抛堆栈。bin 脚本就绪后向 stdout 输出一行 `{"port":<port>}`，CLI 与测试以此行为就绪信号。
 
 `launchDaemon` 的组装序（每步失败都让整个启动 reject，daemon 不会半启动）：
 
 ```
 resolvePaths(home)                  建目录树（core/storage/paths.ts）
 acquireDaemonSlot                   wx 独占认领 <home>/daemon.json：占位 {port:0, pid, startedAt, starting:true}
-loadConfig(paths)                   config.json 深合并默认值（旧 config.yaml 在
-                                    config.json 缺席时兼容读取）
+loadConfig(paths)                   config.json 深合并默认值
 loadOrCreateToken(paths.home)       读/生成 <home>/token
 new EventBus()                      总线先于 store 构造：store 的写入完成通知回调要发
                                     session.appended 总线帧（先写入后广播，审计页等
@@ -78,9 +77,7 @@ new SessionStore(paths.sessionsDir, onAppended)
 embedding 判定链（memory.embedding） model 非空才构造 embedding 客户端（见 memory.md 判定链）；
                                     构造在 EventBus/SessionStore 之后、MemorySystem 之前，赋给下方 memory
 new MemorySystem({memoryDir, sessions, config, resolveLlm, embed, emit})
-                                    记忆系统统一入口（见 memory.md）；组装后立即三件事：
-                                    migrateV1Notes（notes/*.md 三路分流并入 persona/rule/wiki，删 notes/）
-                                    rmSync index.db（旧版派生索引直接删）
+                                    记忆系统统一入口（见 memory.md）；组装后立即做：
                                     reconcile()（全部项目库 + 全局库重建索引，向量后台补算）
 new JobScheduler(paths.jobsDb)
 new UsageStore(paths.usageDb)       token 用量记录（SQLite，stop 时 close）
@@ -101,12 +98,11 @@ createProjectMcpWatch(workspace, () => mcpManager.reconcile(loadProjectMcpServer
                                     `.kclaw` watch）；起不来只告警降级、不致命
 new McpManager({servers, persist})  恒定组装：servers = { global: loadMcpServers(paths),
                                     project: loadProjectMcpServers(workspace) }——全局层
-                                    （mcp.json 与配置文件遗留节合并读，mcp.json 优先）+
+                                    （全局层读 <home>/mcp.json）+
                                     项目层（工作区 `.kclaw/mcp.json`，缺失/损坏/git 跟踪
                                     均读作 {}）；persist 按层分发：global 接归拢持久化
-                                    （写 mcp.json + 移除配置文件遗留节），project 接
+                                    （写 mcp.json），project 接
                                     saveProjectMcpJson + 补挂 watch；组装后从内存配置
-                                    删除遗留 mcp 节，防止后续保存把已删 server 复活
 projectMcpWatch.ensure()            挂上项目 watch：工作区还没有 .kclaw 时先 watch
                                     顶层等它出现（项目层首次写入时会再调一次补挂）
 createSubagentHost({config, sessions, bus, getRun})
@@ -125,10 +121,10 @@ new RunManager({...})               注入 usageStore、memory、skillsEvolution
 createApp({home, token, stores, bus, run, mcp, configNotifier, attachmentsDir, usage, webDist, memory, skillsEvolution})
                                     Fastify 应用（见 http-api）；attachmentsDir/usage 传入时
                                     对应的附件与用量路由才注册，mcp 提供 /mcp 的快照，memory 供 /memory 路由族，
-                                    skillsEvolution 供 /skills/proposals 提案治理路由族（未装配时该族 503）；
+                                    skillsEvolution 供 /skills/proposals 提案治理路由族（未组装时该族 503）；
                                     configNotifier 交给 provider 路由，改动持久化后发布
 await app.listen({ port: listenPort, host: "127.0.0.1" })   ← listenPort = opts.port ?? config.server?.port ?? 0；
-                                    钉住的端口被占（EADDRINUSE）是硬错误：释放占位 daemon.json
+                                    固定端口被占（EADDRINUSE）是硬错误：释放占位 daemon.json
                                     后抛一行原因，不静默回退到临时端口
 port = app.server.address().port
 writeFileSync(<home>/daemon.json, {port, pid, startedAt})   ← 回填占位（同 startedAt、starting 移除）；listen 之后、tick 之前
@@ -139,7 +135,7 @@ startSchedulerTick({...})           立即一次检查 + 每 30s 一次（deps �
 startMemoryScheduler({...})         记忆调度器：定时 + 跟随保底触发（默认 60s 扫一次，见 memory.md）
 startSkillScheduler({...})          技能调度器：跟随检查消费端（默认 60s 扫一次，成功才清检查 +
                                     连败 3 次放弃；enabled:false 或 idleMinutes:0 时 sweep 直接返回，
-                                    检查停留在账本里，功能重开后继续消费，见 skills.md）
+                                    检查停留在检查表里，功能重开后继续消费，见 skills.md）
 feishu 频道管理器启动（opt-in）     ← 仅 ~/.kclaw/feishu.json enabled 时建通道；在两个调度器之后启动，
                                     有 15s 上限——挂起的握手不拖累 daemon；失败记入管理器错误状态
                                     （IM Channel 页可见）并拆掉半启动状态，daemon 照常服务。
@@ -203,7 +199,7 @@ withStopTimeout(skillTick.stop(), 60s)
 withStopTimeout(feishuManager.stop(), 60s)
                                     // 停飞书频道（未启用时为 no-op；断开长连接与总线订阅）
 projectMcpWatch.close()             // 停项目 MCP 文件 watch（丢弃挂着的防抖回调，
-                                    // 不让 reconcile 与下面的管理器拆除竞速）
+                                    // reconcile 不与下面的管理器拆除并发执行）
 withStopTimeout(mcpManager.stop(), 60s)
                                     // 断开全部 MCP server（恒定组装，恒有此步；幂等）
 withStopTimeout(app.close(), 60s)   // 关服务器；app.close 会 await 所有连接

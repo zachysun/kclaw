@@ -84,7 +84,7 @@
 | `interval` | 调度器定时补扫（项目全部会话逐个补增量） |
 | `follow` | 调度器补查 run 结束时挂起的空闲检查 |
 | `nightly` | 夜间闲时沉淀（每日 consolidateHour） |
-| `admin` | 管理面对记忆文件的改写 / 删除 |
+| `admin` | 管理接口对记忆文件的改写 / 删除 |
 
 **op（8 值，实际操作）**：`append` / `update` / `new-thread` / `rewrite` / `create` / `overwrite` / `delete` / `inactivate`。
 

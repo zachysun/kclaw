@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/storage/` 是所有持久化（把数据写入磁盘长期保存）的基础：`paths.ts` 解析 kclaw 的根目录与目录树（`KCLAW_HOME` 环境变量可整体重定向）；`config.ts` 读写 `config.json`（用户配置与默认值深合并；升级前遗留的 `config.yaml` 仍可读，首次写入后弃用）；`jsonl.ts` 提供 JSONL 文件（一行一个 JSON 对象的文本格式）的追加、读取与崩溃修复，是会话事件流 `events.jsonl`（唯一权威数据）与运行态队列 `queue.jsonl` 的底层。会话目录结构与 `meta.json` 由 `SessionStore`（`packages/core/src/session/store.ts`）负责；`daemon.json` 和 `token` 两个文件由 server 侧产生，本文一并说明用途。
+`packages/core/src/storage/` 是所有持久化（把数据写入磁盘长期保存）的基础：`paths.ts` 解析 kclaw 的根目录与目录树（`KCLAW_HOME` 环境变量可整体重定向）；`config.ts` 读写 `config.json`（用户配置与默认值深合并）；`jsonl.ts` 提供 JSONL 文件（一行一个 JSON 对象的文本格式）的追加、读取与崩溃修复，是会话事件流 `events.jsonl`（唯一权威数据）与运行态队列 `queue.jsonl` 的底层。会话目录结构与 `meta.json` 由 `SessionStore`（`packages/core/src/session/store.ts`）负责；`daemon.json` 和 `token` 两个文件由 server 侧产生，本文一并说明用途。
 
 ---
 
@@ -11,8 +11,8 @@
 - **单一根目录容纳全部状态。** 配置、会话、记忆、任务、附件、日志全在同一个根目录下，根目录可以整体重定向——解析顺序是：显式参数 > `KCLAW_HOME` 环境变量 > `~/.kclaw`。环境变量的空白字符串视为未设置：用 `??` 判断时，空串会被当成有效值，导致所有路径变成相对当前目录而不是回退到 `~/.kclaw`；这条规则来自一次实际故障的修正（`envHome()`）。
 - **只建目录，不建文件。** `resolvePaths` 用 `mkdirSync(recursive)` 创建目录树，但 `config.json`、`jobs.db` 等文件只是路径字符串，不在这里创建——文件由各自的所有者在首次写入时产生（`SessionStore`/`MemorySystem`/`JobScheduler` 的构造函数建目录并初始化自己的数据库）。
 - **配置深合并，默认值永不被污染。** `loadConfig` 把文件内容深合并到默认值上，且两个分支都从 `structuredClone(defaultConfig)` 开始——否则返回值会与导出的 `defaultConfig` 共享嵌套引用，调用方任意一处 `cfg.permissions.allow.push()` 都会改掉进程级的默认值。合并规则（`deepMerge`）：普通对象按键递归合并，数组与标量整体替换，`undefined` 跳过，两个输入都不被修改。
-- **配置无效时报错，而不是静默回退。** `config.json` 解析失败直接抛错（`invalid json in <path>: ...`），文件内容不是对象映射也抛错；兼容读的 `config.yaml` 同理（`invalid yaml in ...`）。不做静默回退——悄悄改用默认值意味着用户配置的权限规则在无提示的情况下失效，比启动失败更危险。文件缺失或内容为空则返回默认值，这是首次使用的正常路径。
-- **`config.json` 是权威配置文件，`config.yaml` 只作升级兼容。** 读取顺序：`config.json` 存在就按 JSON 解析；不存在才读遗留的 `config.yaml`，升级后的家目录在首次写入前保持原样可用。首次写 `config.json` 时把仍在的 `config.yaml` 改名为 `config.yaml.bak`——改名而非删除，手工整理过的内容不丢，同时保证旧文件不再被当成第二个配置源读回来。
+- **配置无效时报错，而不是静默回退。** `config.json` 解析失败直接抛错（`invalid json in <path>: ...`），文件内容不是对象映射也抛错。不做静默回退——悄悄改用默认值意味着用户配置的权限规则在无提示的情况下失效，比启动失败更危险。文件缺失或内容为空则返回默认值，这是首次使用的正常路径。
+- **`config.json` 是唯一配置文件。** 读取只认 `config.json`；写入（CLI wizard、WebUI 保存）也只落 `config.json`，权限 0600（含明文 API key）。
 - **会话事件流只追加，且兼容崩溃。** 事件只追加、从不改写历史行（运行态队列 `queue.jsonl` 是例外——整文件重写，见下文）。崩溃可能留下的残缺是「最后一行只写了一半」（torn line，断尾行）：读取时丢弃断尾行（崩溃产物，最多丢一条事件）；写新行之前先修复断尾，否则新行会拼接在半行后面，读取时两条会一起被丢弃。
 
 ---
@@ -26,13 +26,12 @@ export function resolvePaths(home?: string): KclawPaths
 
 | 路径 | 用途 | 写入方 |
 |------|------|--------|
-| `<home>/config.json` | 全部配置（见下节）；首次写入时把遗留的 `config.yaml` 改名为 `config.yaml.bak` 弃用 | CLI wizard 与 WebUI Model 页的 provider 管理路由（均经 `saveConfig`）；用户手写 |
+| `<home>/config.json` | 全部配置（见下节） | CLI wizard 与 WebUI Model 页的 provider 管理路由（均经 `saveConfig`）；用户手写 |
 | `<home>/permissions.yaml` | 全局权限规则——在人工确认里选「总是允许」后保存下来的收紧 allow 规则；项目档在工作区 `.kclaw/permissions.yaml`（见下文「保存的权限规则」一节） | run 组装的 `resolveConfirmation`（`packages/core/src/agent/run-assembly.ts`，global 裁决时写入）；用户手写亦可 |
 | `<home>/mcp.json` | 全局层的 MCP server 配置（WebUI 的 MCP 页增删改落在这里）；项目层在工作区 `.kclaw/mcp.json`（见 [mcp](./mcp.md) 与下文「项目层 mcp.json」一节） | daemon 的 McpManager persist（global 归拢写）；用户手写亦可 |
 | `<home>/AGENTS.md` | agent 人格设定，非空则作为系统提示的一部分（stable 段基座）；每次运行拼装的完整系统提示以 `system` 事件按 stable/live 两段全量记录 | 用户手写；daemon 启动时读 |
 | `<home>/memory/global/` | L2 全局认知（persona.md、wiki/、rule/ 的 markdown，以文件为准） | MemorySystem / 用户手写 |
 | `<home>/memory/projects/<id>/` | L1 项目情节（`<topic>.md` 主题线、workdir.txt、MEMORY.md、state.json、vectors.db） | MemorySystem / 用户手写 |
-| `<home>/memory/notes/`、`<home>/memory/index.db` | 旧版记忆目录的遗留：前者是迁移输入（daemon 启动时读取后删除）、后者是旧版派生索引（已直接删除） | 仅 daemon 启动迁移（见 [memory](./memory.md)） |
 | `<home>/skills/` | 全局技能目录（每个子目录是一个技能，含 `SKILL.md`；软链接穿透加载；`.links.json` 旁挂文件记录复用链接与自定义检测目录；项目级技能在工作区 `.kclaw/skills/`，见 [skills](./skills.md)） | 用户手写或经技能页复用写入；每个 run 重新扫描读取 |
 | `<home>/hooks/` | 用户 hook 目录（每个文件是一个 hook，`export const hook` + default 函数；见 [hooks](./hooks.md)） | 用户手写；每个 run 重新扫描读取 |
 | `<home>/sessions/<id>/` | 每会话一个目录（events.jsonl + meta.json + queue.jsonl，分工见下节） | SessionStore（events.jsonl 是唯一权威数据、meta.json 是派生摘要、queue.jsonl 是运行态、整文件重写） |
@@ -56,7 +55,7 @@ export function resolvePaths(home?: string): KclawPaths
 |------|--------|--------------|
 | `providers.default` | `""` | 默认 provider 名，指向 entries 里的一条 |
 | `providers.entries` | `{}` | `Record<名, { format?, baseUrl, apiKey, model, contextWindow?, maxOutput? }>`。一个条目是一个可直连的端点加它服务的那个模型：`format` 选 API 协议（`openai` = OpenAI 兼容 chat-completions，默认；`anthropic` = Anthropic Messages，见 [provider](./provider.md)），`baseUrl` 是端点根、`apiKey` 为空表示端点免鉴权（不发鉴权头）、`model` 是请求里下发的模型 id。daemon 启动时解析默认条目（config 优先，`KCLAW_LLM_BASE_URL` / `KCLAW_LLM_API_KEY` / `KCLAW_LLM_MODEL` 环境变量补空）。`contextWindow` 参与压缩 budget 的 min 解析、`maxOutput` 随请求下发 max_tokens（见 [compaction](./compaction.md)） |
-| `providers.timeoutMs` | `120000` | 单次 LLM 请求超时（`DEFAULT_LLM_TIMEOUT_MS`）；可选字段仅为兼容旧配置文件 |
+| `providers.timeoutMs` | `120000` | 单次 LLM 请求超时（`DEFAULT_LLM_TIMEOUT_MS`） |
 | `permissions.allow` / `deny` | `[]` / `["exec:sudo*", "exec:rm -rf*"]` | 权限规则，见 [permissions](./permissions.md) |
 | `permissions.confirmTimeoutMs` | `120000` | 人工确认的等待上限，超时按拒绝处理 |
 | `permissions.sessionGrants` | `true` | 会话内「仅本次允许」的记忆是否生效（run 级，见 [permissions](./permissions.md) 第 11 节） |
@@ -66,20 +65,17 @@ export function resolvePaths(home?: string): KclawPaths
 | `memory.extractModel` / `threadInactiveDays` / `consolidate` / `consolidateHour` | `""` / `14` / `true` / `3` | 提取/沉淀用的模型（空则回退到主对话模型）、主题线闲置多少天自动转 inactive、沉淀开关、夜间闲时沉淀的本地小时（负值关闭） |
 | `memory.embedding.{provider, model}` | `""` / `""` | 向量检索：`model` 为空则向量这条路整体关闭（只用 BM25 关键词检索）；provider 为空回退到 default 条目 |
 | `memory.injectTokenBudget` | `1000` | 每轮 L2 认知常驻注入的 token 上限（只约束常驻注入；L1 情节前 5 条全量注入不受此限） |
-| `memory.autoExtract` | 无（废弃） | 旧版字段，已被五触发取代，不再生效：配置文件里写了不报错，但读取处一律忽略 |
 | `web.tavilyApiKey` | `""` | web_search 工具的 Tavily 密钥 |
 | `web.timeoutMs` | `20000` | 每次网络抓取（搜索与网页）的 AbortSignal 超时，卡死的主机不能拖住一个 run |
 | `web.allowPrivateNetworks` | `false` | 设为 `true` 时豁免 web_fetch 对私网/回环目标的拒绝（SSRF 防护，例如允许抓取本机 Ollama 端点），由 run 组装传入工具 |
 | `usage.prices` | `{}` | 模型 → `{inputPerM?, outputPerM?}`：每百万 token 的美元单价，用量记录算成本用；没有价格条目的模型成本按 0 计 |
-| `mcp.servers` | `{}` | 外部 MCP server 配置的遗留位置（stdio/http 两种形态），读取时与 `mcp.json` 按名合并进全局层（`mcp.json` 优先）；写入配置文件时本节一律被摘除——MCP server 的唯一管理源是全局层 `mcp.json` 与项目层 `.kclaw/mcp.json`，任何 `saveConfig` 都不会把 server 写回配置文件（见 [mcp](./mcp.md)） |
 | `exec.timeoutMs` / `maxOutputBytes` | `60000` / `102400`（100 KiB） | exec 工具的超时与输出截断上限 |
-| `sandbox.enabled` / `writeRoots` / `network` | `true` / `[]` / `"allow"` | exec 沙箱的整体开关、追加写白名单（realpath 形态）与沙箱内网络开关（deny 时 exec 子进程断网，web 工具不受影响），见 [sandbox](./sandbox.md)；可选字段仅为兼容旧配置文件 |
+| `sandbox.enabled` / `writeRoots` / `network` | `true` / `[]` / `"allow"` | exec 沙箱的整体开关、追加写白名单（realpath 形态）与沙箱内网络开关（deny 时 exec 子进程断网，web 工具不受影响），见 [sandbox](./sandbox.md) |
 | `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 周期清理用（见 [jobs](./jobs.md)） |
 | `sessions.contextTokens` / `compactPackRatio` / `compactAheadRatio` / `compactAtRatio` / `compactPanicRatio` / `compactTargetRatio` / `toolResultKeep` | `128000` / `0.70` / `0.75` / `0.80` / `0.90` / `0.33` / `8` | 上下文压缩（见 [compaction](./compaction.md)）：token budget、省略线（发送时工具输出省略的 budget 比例）、预压线（估算发送量达 budget × 0.75 且未过红线时在迭代边界派后台压缩）、黄线（估算发送量达 budget × 0.80 即触发收尾压缩）、红线（运行中占用达 budget × 0.90 时在迭代边界触发中途压缩）、压缩后保留部分的目标比例（ budget × 0.33）、发送时保留原文的最近工具结果条数。七个字段均可选：默认值、加载校验与" budget × 比例 → 绝对 token 阈值"的解析集中在压缩阈值线模块 `session/waterlines.ts`——触发四线（预压/黄/红/目标）越出 (0,1] 或次序不满足"目标 < 预压 < 黄 < 红"整组回退到默认并告警，省略线单独校验、独立回退到默认；每次 run 由 `resolveWaterlines` 解析出绝对阈值供触发 hook 与压缩引擎使用（`contextTokens` 的读取在 `resolveContextTokens`） |
 | `sessions.toolLoopMaxRepeats` | `5` | 工具死循环守卫：同一工具调用（同名同参数）连续执行达 N 次后，该次结果附加 `<system-reminder kind="loop-guard">` 提醒模型换策略（跨工具回合计数，结果改变即重置）；`0` 关闭（见 [agent-loop](./agent-loop.md)） |
 | `sessions.defaultDisposition` | `"steer"` | 不带 disposition 的 send_message 的默认处置（见 [run-manager](../server/run-manager.md)）；单个会话可经 `meta.dispositionOverride` 覆盖 |
 | `sessions.askTimeoutMs` | `600000`（10 分钟） | ask_user_questions 工具等待用户回答的上限，超时按"未回答"落结果、run 继续（见 [tools](./tools.md)）；可选字段，默认值在工具构建处补齐 |
-| `sessions.compactThreshold` / `compactKeep` | 无（废弃） | 旧版压缩的字段（当时是 40 条消息触发、保留 25 条），已废弃不生效：配置文件里写了不报错，但没有任何使用方 |
 | `subagents.maxConcurrent` | `4` | 每个主会话同时存活的**阻塞**subagent 上限（按父会话计数，超限的派发立即返回 error、不建会话，见 [subagents](./subagents.md)）；可选字段，默认值在 spawner 构建处补齐 |
 | `subagents.maxBackground` | `4` | 每个主会话同时存活的**后台**subagent 上限（`run_in_background` 派发，与阻塞上限分别计数、互不挤占；超限同样立即返回 error，见 [subagents](./subagents.md)）；可选字段，默认值在 spawner 构建处补齐 |
 | `team.maxMembers` | `8` | 团队组员名单上限（含失败的添加） |
@@ -94,9 +90,9 @@ export function resolvePaths(home?: string): KclawPaths
 | `hooks.timeoutMs` | `5000` | 单个 hook 处理函数的执行 budget（毫秒），超时按失败处理（用户 hook skip、内置 hook fatal，见 [hooks](./hooks.md)）；可选字段，默认值在 hook 链构建处补齐 |
 | `workspace` | `process.cwd()` | 工具的工作目录；daemon 的 cwd 由启动方决定，单个会话可经 `meta.workdir` 覆盖 |
 
-读（`loadConfig(paths)`）：`config.json` 存在 → 按 JSON 解析；否则存在遗留 `config.yaml` → 按 YAML 解析（升级兼容）；两者都缺失或内容为空 → 返回默认值的克隆。解析失败抛错（`invalid json/yaml in <path>: ...`），内容不是对象映射也抛错；其余 → `deepMerge(默认值克隆, 文件内容)`。**除两处外没有结构校验**：`permissions.defaultMode` 非五档时回退到 `"default"` 并告警、压缩阈值线四线经 `validateWaterlineConfig` 校验（见 [permissions](./permissions.md) 与 [compaction](./compaction.md)）；其余字段不校验——多余字段原样保留，字段类型写错要到使用方使用时才暴露。
+读（`loadConfig(paths)`）：`config.json` 存在 → 按 JSON 解析；缺失或内容为空 → 返回默认值的克隆。解析失败抛错（`invalid json in <path>: ...`），内容不是对象映射也抛错；其余 → `deepMerge(默认值克隆, 文件内容)`。**除两处外没有结构校验**：`permissions.defaultMode` 非五档时回退到 `"default"` 并告警、压缩阈值线四线经 `validateWaterlineConfig` 校验（见 [permissions](./permissions.md) 与 [compaction](./compaction.md)）；其余字段不校验——多余字段原样保留，字段类型写错要到使用方使用时才暴露。
 
-写（`saveConfig(paths, config)`）：把**深合并后的整份 config**（含全部默认字段，首次生成的 `config.json` 不是用户最小集）序列化成 JSON，整文件原子重写——`writeFileAtomic(paths.configJson, JSON.stringify(config, null, 2) + "\n", 0o600)`（`storage/atomic.ts`：先写 `<path>.tmp` 再 rename，POSIX 同目录 rename 是原子的；文件权限 0600，因为里面含明文 API key）。序列化前会摘除遗留的 `mcp` 节：MCP server 的唯一管理源是 `mcp.json`，配置文件里那节只在读取时兼容，任何保存都不会把它写回去（防止复活已删的 server）。首次写入会把仍在的 `config.yaml` 改名为 `config.yaml.bak`，此后 `config.json` 是唯一配置源。CLI wizard 保存后仍保留一次显式 `chmodSync(0o600)`，双保险（见 [onboarding](../cli/onboarding.md)）。
+写（`saveConfig(paths, config)`）：把**深合并后的整份 config**（含全部默认字段，首次生成的 `config.json` 不是用户最小集）序列化成 JSON，整文件原子重写——`writeFileAtomic(paths.configJson, JSON.stringify(config, null, 2) + "\n", 0o600)`（`storage/atomic.ts`：先写 `<path>.tmp` 再 rename，POSIX 同目录 rename 是原子的；文件权限 0600，因为里面含明文 API key）。MCP server 不经 `saveConfig` 写入——唯一管理源是全局层 `mcp.json` 与项目层 `.kclaw/mcp.json`（见 [mcp](./mcp.md)）。CLI wizard 保存后仍保留一次显式 `chmodSync(0o600)`，双保险（见 [onboarding](../cli/onboarding.md)）。
 
 ---
 
@@ -138,7 +134,7 @@ export function appendJsonlLine(file: string, value: unknown): void
 export function readJsonl(file: string): unknown[]
 ```
 
-`KclawPaths` 每个字段的用途见上文目录树。`memoryDir` 是记忆系统的根（MemorySystem 在它下面建 `global/` 与 `projects/`，见 [memory](./memory.md)）；`memoryNotesDir` / `memoryIndexDb` 是旧版记忆目录的遗留路径，启动时把 `notes/` 当作迁移输入读取后删除、`index.db` 直接删除，两者都不再有写入方。
+`KclawPaths` 每个字段的用途见上文目录树。`memoryDir` 是记忆系统的根（MemorySystem 在它下面建 `global/` 与 `projects/`，见 [memory](./memory.md)）。
 
 ---
 
@@ -147,13 +143,13 @@ export function readJsonl(file: string): unknown[]
 每个会话一个目录 `<sessionsDir>/<id>/`，固定三个文件，由 `SessionStore`（`packages/core/src/session/store.ts`）统一管理。三个文件的分工：**events.jsonl 是唯一权威数据，meta.json 是从它推导出来的快速读取摘要，queue.jsonl 是运行态的排队消息。**
 
 - **`events.jsonl`（唯一权威数据）**：只追加的事件流，一行一个 `SessionEvent`（JSON 序列化），共 22 种事件——
-  - 会话生命周期 5 种：`session.created`（含创建时固化的初始权限模式 `mode`；subagent 会话还带 `parentSessionId`）、`session.renamed`、`session.deleted`、`session.restored`、`session.set`（model / mode / disposition 的会话级设置；旧的 `readonly` 布尔字段是历史遗留，读取时映射为 mode）。
-  - 内容类 7 种：`message`（一条消息）、`message.truncated`（编辑重试/重新生成的截断标记：从 `fromMessageId` 起的所有消息退出对话视图；事件流只追加这条标记、不改写任何历史行，可见性是读取端投影）、`compaction`（一次压缩的审计）、`memory`（一次记忆写入的审计）、`skill`（一条技能提案审计——提案的产生与治理状态迁移各落一条，只留痕、真相在 `.proposals/` 的提案文件，见 [skills](./skills.md)）、`system`（一条系统提示词审计，每次对话运行落一条，附带 stable/live 两段拼装文本）、`sandbox.checked`（一条沙箱状态审计——每次对话运行检测后落一条 `{enabled, available, unavailableReason?}`）。
-  - 运行档案 3 种：`run.started` / `run.ended`（每 run 一对，把该 run 的消息事件夹成一轮边界；失败 run 也落 `run.ended`，起点必有终点）、`permission.decided`（每次人工确认裁决的记录；被中止的确认不落）。<br>运行档案与 `system` / `sandbox.checked` 一样只写事件流、不进 meta 投影、不推进 `updatedAt`。`message.truncated` 不同（它是用户可见的会话动作，会推进 `updatedAt`；且当截断起点越过压缩锚点（`compactedUpto` / `compaction.upto`）时，部分已压缩的历史被丢弃，压缩投影随之一并清除（摘要无法再代替被隐藏的消息；尾部截断）常规路径——不碰压缩投影）。
+  - 会话生命周期 5 种：`session.created`（含创建时固化的初始权限模式 `mode`；subagent 会话还带 `parentSessionId`）、`session.renamed`、`session.deleted`、`session.restored`、`session.set`（model / mode / disposition 的会话级设置）。
+  - 内容类 7 种：`message`（一条消息）、`message.truncated`（编辑重试/重新生成的截断标记：从 `fromMessageId` 起的所有消息退出对话视图；事件流只追加这条标记、不改写任何历史行，可见性是读取端投影）、`compaction`（一次压缩的审计）、`memory`（一次记忆写入的审计）、`skill`（一条技能提案审计——提案的产生与治理状态流转各落一条，只做记录、权威数据在 `.proposals/` 的提案文件，见 [skills](./skills.md)）、`system`（一条系统提示词审计，每次对话运行落一条，附带 stable/live 两段拼装文本）、`sandbox.checked`（一条沙箱状态审计——每次对话运行检测后落一条 `{enabled, available, unavailableReason?}`）。
+  - 运行档案 3 种：`run.started` / `run.ended`（每 run 一对，把该 run 的消息事件夹成一轮边界；失败 run 也落 `run.ended`，起点必有终点）、`permission.decided`（每次人工确认裁决的记录；被中止的确认不落）。<br>运行档案与 `system` / `sandbox.checked` 一样只写事件流、不进 meta 投影、不推进 `updatedAt`。`message.truncated` 不同（它是用户可见的会话动作，会推进 `updatedAt`；且当截断起点越过压缩锚点（`compaction.upto`）时，部分已压缩的历史被丢弃，压缩投影随之一并清除（摘要无法再代替被隐藏的消息；尾部截断）常规路径——不碰压缩投影）。
   - 协作 7 种（`team.created` / `team.member.provisioned` / `team.member.settled` / `team.message.queued` / `team.message.delivered` / `team.task.created` / `team.task.updated`）：agent 团队协作的审计记录，只追加在**组长**的事件流上（以团队目录为准，见 [agent-team](./agent-team.md)）；尽力而为（写失败降为警告、团队操作照常），与运行档案一样不进投影、不推进 `updatedAt`。
 
   所有写入都先追加事件，再把事件汇入 meta.json 摘要（见下）。
-- **`meta.json`（派生摘要）**：类型 `SessionMeta`，由事件流经 `applyEvent` 逐条推导得出。它是「摘要」而非权威数据：删除或损坏都能从事件流完整重建（`meta()` 发现缺失或损坏时自动 `rebuildMeta`）。崩溃恢复时允许它暂时落后于事件流（落后不会丢数据）；但落后不会被后续写入自动追平（`appendEvent` 先读当前摘要、只汇入新事件）。只有 meta.json 缺失或损坏时才经 `rebuildMeta` 重放整条事件流。meta.json 整文件原子重写（`updateMeta` 合并 patch，`undefined` 键表示删除；`message` / `message.truncated` / `compaction` 事件会推进摘要的 `updatedAt`，`memory` / `skill` / `system` / `sandbox.checked` 事件不推进——审计类事件不算会话「更新」）。两条特殊的推导规则：`system` 事件把全文 upsert 进摘要的 `systemBaseline`（系统提示词的冻结基线，见下文），`compaction` 事件把 `systemBaseline` 清除（压缩改写了消息历史，提示词缓存必然全部失效，正是重新组装、重新冻结的时机）；`message.truncated` 在截断起点越过压缩锚点（`compactedUpto` / `compaction.upto`）时一并清除压缩投影（部分被压缩的历史已随截断丢弃，摘要不能再代替它们）。
+- **`meta.json`（派生摘要）**：类型 `SessionMeta`，由事件流经 `applyEvent` 逐条推导得出。它是「摘要」而非权威数据：删除或损坏都能从事件流完整重建（`meta()` 发现缺失或损坏时自动 `rebuildMeta`）。崩溃恢复时允许它暂时落后于事件流（落后不会丢数据）；但落后不会被后续写入自动追平（`appendEvent` 先读当前摘要、只汇入新事件）。只有 meta.json 缺失或损坏时才经 `rebuildMeta` 重放整条事件流。meta.json 整文件原子重写（`updateMeta` 合并 patch，`undefined` 键表示删除；`message` / `message.truncated` / `compaction` 事件会推进摘要的 `updatedAt`，`memory` / `skill` / `system` / `sandbox.checked` 事件不推进——审计类事件不算会话「更新」）。两条特殊的推导规则：`system` 事件把全文 upsert 进摘要的 `systemBaseline`（系统提示词的冻结基线，见下文），`compaction` 事件把 `systemBaseline` 清除（压缩改写了消息历史，提示词缓存必然全部失效，正是重新组装、重新冻结的时机）；`message.truncated` 在截断起点越过压缩锚点（`compaction.upto`）时一并清除压缩投影（部分被压缩的历史已随截断丢弃，摘要不能再代替它们）。
 - **`queue.jsonl`（运行态）**：排队中的消息（`{ messageId, disposition, text, trigger, attachments?, note?, enqueuedAt }`，顺序即执行顺序，见 [run-manager](../server/run-manager.md) 的消息队列）。与事件流不同，`replaceQueue` 每次整文件重写、不是追加；不参与 meta.json。
 
 `meta.json` 的全部字段：
@@ -164,12 +160,11 @@ export function readJsonl(file: string): unknown[]
 | `jobId?` | 创建本会话的定时任务；普通会话没有 |
 | `workdir?` | 会话的工作目录覆盖 |
 | `model?` | 会话级模型覆盖；空或默认回退到 daemon 默认 |
-| `mode?` | 会话权限模式，`"readonly" \| "default" \| "acceptEdits" \| "trusted" \| "auto"` 五档，默认 default。旧的 `readonly` 布尔字段读出时映射为 `mode:"readonly"` 并删除布尔键，写入端只写 `mode`（见 [permissions](./permissions.md)） |
+| `mode?` | 会话权限模式，`"readonly" \| "default" \| "acceptEdits" \| "trusted" \| "auto"` 五档，默认 default（见 [permissions](./permissions.md)） |
 | `parentSessionId?` | subagent 会话的父会话标识；普通会话没有。引擎侧一切 subagent 特化行为都从它派生（见 [subagents](./subagents.md)） |
 | `compaction?` | 分层压缩状态 `{ segments, top, upto }`（语义见 [compaction](./compaction.md)），由 `compaction` 事件推导（每次压缩把新段汇入 `segments`；`updateMeta` 不再直接改它） |
-| `compactedSummary?` / `compactedUpto?` | 旧版压缩的遗留字段——不再被清除，但运行侧读压缩视图时 `compaction` 优先（压缩引擎 `Compactor` 的 `compact` 里 `prev` 先读 `compaction`，见 [compaction](./compaction.md)）；两者并存没有功能影响 |
-| `dispositionOverride?` | 会话级发送处置覆盖（`"steer" \| "wait" \| "interrupt"`），优先于 `sessions.defaultDisposition`。服务端路由仍接受三个值的写入，但客户端当前只写 steer/wait——interrupt 在 Web 与 CLI 都是一次性动作、不写会话级覆盖，`"interrupt"` 值只会来自历史遗留（见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)） |
-| `systemBaseline?` | 冻结的系统提示词基线，双段独立 `{ stable: {text, frozenAt}, live?: {text, frozenAt} }`。作用：每 run 两段现算、与基线逐段比对——哪段文本变了就重冻结哪段（`frozenAt` 记录这份文本成为基线的时刻），没变的沿用基线，`system-before` / `system-after` 组装链只在至少一段变化时才跑（提示词缓存的稳定性策略，详见 [hooks](./hooks.md)）。推导规则：`system` 事件按段 upsert（legacy 单文本事件读作 stable）、`compaction` 事件清除（压缩改写了消息历史，缓存必然全量失效，正是基线重置的边界），都不推进 `updatedAt` |
+| `dispositionOverride?` | 会话级发送处置覆盖（`"steer" \| "wait" \| "interrupt"`），优先于 `sessions.defaultDisposition`。服务端路由接受三个值的写入；Web 与 CLI 的 interrupt 都是一次性动作、不写会话级覆盖（见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)） |
+| `systemBaseline?` | 冻结的系统提示词基线，双段独立 `{ stable: {text, frozenAt}, live?: {text, frozenAt} }`。作用：每 run 两段现算、与基线逐段比对——哪段文本变了就重冻结哪段（`frozenAt` 记录这份文本成为基线的时刻），没变的沿用基线，`system-before` / `system-after` 组装链只在至少一段变化时才跑（提示词缓存的稳定性策略，详见 [hooks](./hooks.md)）。推导规则：`system` 事件按段 upsert、`compaction` 事件清除（压缩改写了消息历史，缓存必然全量失效，正是基线重置的边界），都不推进 `updatedAt` |
 
 `Message`（`packages/core/src/protocol/messages.ts`）的基础字段是 `{ id, sessionId, role: "user" \| "assistant" \| "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因）。id 前缀 `msg_` / `ses_`，ULID 格式。会话的消息列表和压缩列表如今都是事件流的只读视图：`readMessages` 从事件流过滤出 `message` 事件并按 `message.truncated` 标记隐藏被截断的消息（编辑重试/重新生成的过滤点，见下）、`readCompactions` 过滤出 `compaction` 事件，`readQueue` 读 `queue.jsonl`。
 
@@ -223,7 +218,6 @@ rules:
 - **写**（`saveProjectMcpJson(workspace, servers)`）：0600 原子写；首次写入前跑出生防御（`ensureProjectMcpDefenses`）——建 `.kclaw` 目录、把 `.kclaw/mcp.json` 追加进工作区 `.gitignore`（幂等），文件从此本地私有。
 - **热生效**：daemon 用 `createProjectMcpWatch` 监视 `.kclaw/mcp.json`，手工编辑经 `McpManager.reconcile` 重新对齐生效集（机制见 [mcp](./mcp.md) 与 [daemon](../server/daemon.md)）。
 
-全局层的归拢写（`consolidateMcpConfig`）与配置文件遗留 `mcp.servers` 节的移除见上文 config.json 一节。
 
 ---
 
@@ -269,6 +263,6 @@ HTTP 出口与展示见 [http-api](../server/http-api.md) 的 `GET /usage` 与 [
 
 - [jobs](./jobs.md)：jobs.db 的表结构与轮询
 - [compaction](./compaction.md)：压缩状态的存放位置（meta.compaction 摘要 + 事件流里的 compaction 事件）与压缩配置字段
-- [memory](./memory.md)：memory 目录的两层塔布局（文件是权威数据、vectors.db 是派生物）与旧版迁移
+- [memory](./memory.md)：memory 目录的两层塔布局（文件是权威数据、vectors.db 是派生物）
 - [protocol](./protocol.md)：Message / Block 的完整定义（message 事件的内容就是一个 Message）
 - [daemon](../server/daemon.md)：daemon.json 的写入时机与停机流程、token 的鉴权链路

@@ -6,7 +6,7 @@
 
 ## 设计决策
 
-- **判定优先级：config > env > missing**：`config.json` 里 `providers.default` 指向一个存在的条目即视为已配置（`config.json` 出现前的旧 `config.yaml` 兼容读取，判定相同）；否则任一非空的 `KCLAW_LLM_*` 环境变量视为已配置；两者都缺失才判定为 "missing"（触发 wizard）。与 daemon 侧 `resolveProviderEndpoint` 的解析规则同向：config 优先、env 补缺。
+- **判定优先级：config > env > missing**：`config.json` 里 `providers.default` 指向一个存在的条目即视为已配置；否则任一非空的 `KCLAW_LLM_*` 环境变量视为已配置；两者都缺失才判定为 "missing"（触发 wizard）。与 daemon 侧 `resolveProviderEndpoint` 的解析规则同向：config 优先、env 补缺。
 - **路径解析复用 core**：`detectProviderStatus` 与 wizard 都用 `@kclaw/core` 的 `resolvePaths`/`loadConfig`/`saveConfig`（真实的 `KclawPaths` 形状），不自建替代实现，CLI 侧的路径解析永远不会与 daemon 发生漂移（其 mkdir 副作用只是提前创建 home 目录树，任何 kclaw 调用本来也会创建）。
 - **wizard 是验证环节不是必经之路**：只在 "missing" 且 stdout 是 TTY 时启动；取消（Ctrl+C 等）或"重试？→否"都直接静默退出，**文件系统零改动**——绝不写入不完整的 config.json。
 - **连通测试用最小请求**：一次 `max_tokens: 1` 的补全请求，验证 key、model、baseUrl 三项组合可用，不浪费 token。
@@ -48,7 +48,7 @@ export function detectProviderStatus(home: string): ProviderStatus
 2. **baseurl**（仅 custom）：文本输入，裁掉末尾斜杠，空值报错并重新输入。
 3. **key**：`p.password` 隐藏输入（不回显）；ollama 不经过这步。
 4. **model**：文本输入，空则用模板默认；然后构造 `buildProviderEntry(t, apiKey, model)` → `{ baseUrl, apiKey, model }` → 连通测试。
-5. **连通测试**（core `probeProviderChat`）：`POST {baseUrl}/chat/completions`，body `{ model, messages: [{role:"user", content:"hi"}], max_tokens: 1, stream: false }`，20 秒超时；不抛异常而是返回 `{status, body}`（status 为 null = 请求没到达），与 provider 管理面共用同一探测实现（机制见 [provider](../core/provider.md)）。成功（HTTP < 400）→ 写配置收尾；失败 → 分类报错 + 重试确认。
+5. **连通测试**（core `probeProviderChat`）：`POST {baseUrl}/chat/completions`，body `{ model, messages: [{role:"user", content:"hi"}], max_tokens: 1, stream: false }`，20 秒超时；不抛异常而是返回 `{status, body}`（status 为 null = 请求没到达），与 provider 管理接口共用同一探测实现（机制见 [provider](../core/provider.md)）。成功（HTTP < 400）→ 写配置收尾；失败 → 分类报错 + 重试确认。
 
 **失败按三类报错**（`classifyProbeError` → `REASON`）：
 
@@ -96,7 +96,7 @@ if (major < 22) {
 }
 ```
 
-放在解析前的目的是让旧版本运行时在报出难懂的语法/API 错误之前就得到一行明确的提示。库引用（`import "@kclaw/cli"`）不经过这段。
+放在解析前的目的是让过低的 Node 运行时在报出难懂的语法/API 错误之前就得到一行明确的提示。库引用（`import "@kclaw/cli"`）不经过这段。
 
 ## 边界与出错
 

@@ -2,11 +2,9 @@
 
 ## 职责
 
-`MemorySystem`（`packages/core/src/memory/system.ts`）是记忆系统的唯一服务端入口（单类不拆；31 个公共方法按四类使用方拆成四个窄接口 `MemoryQuery`/`MemoryTriggers`/`MemoryScheduleBook`/`MemoryAdmin`——共 29 个，另有接口外的 `stop()` 与 `migrateV1Notes()`，调用方按需依赖其中一个面），它把三类文件级能力组装在一起：**L1 项目情节**（按项目分目录的主题线文件）、**L2 全局认知**（跨项目的画像/知识/规则文件）、以及两套**派生检索索引**（SQLite FTS5 全文索引 + 可选的向量索引）。一条记忆就是一份 markdown 文件，用户可以直接打开查看、修改、删除；索引永远只是派生物，删掉可以重建。
+`MemorySystem`（`packages/core/src/memory/system.ts`）是记忆系统的唯一服务端入口（单类不拆；30 个公共方法按四类使用方拆成四个窄接口 `MemoryQuery`/`MemoryTriggers`/`MemoryScheduleBook`/`MemoryAdmin`——共 29 个，另有接口外的 `stop()`，调用方按需依赖其中一个面），它把三类文件级能力组装在一起：**L1 项目情节**（按项目分目录的主题线文件）、**L2 全局认知**（跨项目的画像/知识/规则文件）、以及两套**派生检索索引**（SQLite FTS5 全文索引 + 可选的向量索引）。一条记忆就是一份 markdown 文件，用户可以直接打开查看、修改、删除；索引永远只是派生物，删掉可以重建。
 
-模型通过 `memory_save` / `memory_search` 两个工具读写（`packages/core/src/tools/memory.ts`）；run 组装（core `executeRun`）在每次 run 时做两级注入——L2 认知常驻系统提示、L1 情节作为 note 挂到用户消息上（见下文"检索与注入"）。daemon 的 `MemorySystem` 组装、旧版数据迁移、embedding 判定链都在 `packages/server/src/daemon.ts`。
-
-v1 格式的旧数据（`memory/notes/*.md` + 单库 `memory/index.db`）由 daemon 启动时自动迁移，见文末"迁移说明"。
+模型通过 `memory_save` / `memory_search` 两个工具读写（`packages/core/src/tools/memory.ts`）；run 组装（core `executeRun`）在每次 run 时做两级注入——L2 认知常驻系统提示、L1 情节作为 note 挂到用户消息上（见下文"检索与注入"）。daemon 的 `MemorySystem` 组装与 embedding 判定链都在 `packages/server/src/daemon.ts`。
 
 ## 三层塔
 
@@ -144,7 +142,7 @@ pipeline 位于 `packages/core/src/memory/pipeline.ts`，写入的触发入口�
 }
 ```
 
-- **提取进度标记（watermark）每会话各记一份**：`{sessionId → {interval, follow}}`，值是该会话内最后一条已提取消息的 id；定时/跟随触发从该会话两个标记中较靠后的那个取增量（`WriteLedger.later`），任一触发先跑到，另一个都不再重复提取；标记指向的消息已被删除（会话截断等）时按"更旧"处理——`since` 退化为该会话全量，**宁可重提取不可漏提取**。旧版项目级进度标记（顶层 `interval`/`follow` 两个 `{sessionId, messageId}`）**不迁移**（遵循"历史数据不迁移"的一贯做法）：读到即视作空文件，首次触发对老会话全量重扫一遍，重复由提取去重 + 合并写入吸收。
+- **提取进度标记（watermark）每会话各记一份**：`{sessionId → {interval, follow}}`，值是该会话内最后一条已提取消息的 id；定时/跟随触发从该会话两个标记中较靠后的那个取增量（`WriteLedger.later`），任一触发先跑到，另一个都不再重复提取；标记指向的消息已被删除（会话截断等）时按"更旧"处理——`since` 退化为该会话全量，**宁可重提取不可漏提取**。
 - `nightlyBaseline`（UTC 日期）是夜间沉淀的判据基线（pipeline 读写）；`nightlyLastRun`（本地日期）是夜间沉淀的防同日重跑标记（调度器读写）——两个时区各管各的，见"沉淀"节。
 - **串行锁**：项目级（`MemoryPipeline` 对同一项目维护一个 promise 链（`#locks`），同项目的触发（含沉淀）排队执行，避免两个触发并发读写同一批线文件）；全局级则在写 L2 认知文件时再套一层模块级全局锁（`withL2Lock`），跨项目并发沉淀撞同一认知文件也串行化。调度器的每次扫描本身不等待触发完成（发出后不等待结果 + 防重入）。
 
@@ -161,7 +159,7 @@ pipeline 位于 `packages/core/src/memory/pipeline.ts`，写入的触发入口�
 - `target:"wiki"` + `name`：领域知识，一个资源一个文件；
 - `target:"rule"` + `name`：用户规则，清单式，每条规则一个小节。
 
-新增用 `op:"append"`/`op:"create"`，已有认知被新经历印证的不动、与新经历不一致的就地改写（`op:"rewrite"`，不保留旧版）；每条新认知附来源注释 `<!-- 来源：<topic>#<date> -->`。解析校验：`target` 必须是三值之一、`wiki`/`rule` 必带非空 `name`，不合法的动作在解析层丢弃并记日志（`dropping malformed cognition action (target=…)`）——`#applyCognitionAction` 拿 `target` 拼目录路径，放行任意字符串会写出索引读不到的垃圾文件。`target:"skill"` 预留、当前未实现（解析层即丢弃，`#applyCognitionAction` 内保留防御分支）。拿不准落 `global` 还是项目时**倾向 global、宁小勿大**。沉淀受 `memory.consolidate` 开关（默认 true）控制（停用顺带与夜间闲时两路共用）；LLM 调用失败只打日志、不影响 run。除这两条自动路径外，`MemorySystem.consolidate(workdir, topic)` 也暴露了手动沉淀入口（目前同样无路由/工具暴露）。
+新增用 `op:"append"`/`op:"create"`，已有认知被新经历印证的不动、与新经历不一致的就地改写（`op:"rewrite"`，不保留原文）；每条新认知附来源注释 `<!-- 来源：<topic>#<date> -->`。解析校验：`target` 必须是三值之一、`wiki`/`rule` 必带非空 `name`，不合法的动作在解析层丢弃并记日志（`dropping malformed cognition action (target=…)`）——`#applyCognitionAction` 拿 `target` 拼目录路径，放行任意字符串会写出索引读不到的垃圾文件。`target:"skill"` 预留、当前未实现（解析层即丢弃，`#applyCognitionAction` 内保留防御分支）。拿不准落 `global` 还是项目时**倾向 global、宁小勿大**。沉淀受 `memory.consolidate` 开关（默认 true）控制（停用顺带与夜间闲时两路共用）；LLM 调用失败只打日志、不影响 run。除这两条自动路径外，`MemorySystem.consolidate(workdir, topic)` 也暴露了手动沉淀入口（目前同样无路由/工具暴露）。
 
 ## 检索与注入
 
@@ -243,15 +241,10 @@ score = fused × 1/(1 + 距今天数/30)      // 时效因子：30 天衰减一�
 | `memory.embedding.provider` | `""` | embedding 的 provider 条目名，空 = 回退到 default 条目 |
 | `memory.embedding.model` | `""` | embedding 模型名，空 = 向量路整体关闭（纯 BM25） |
 | `memory.injectTokenBudget` | `1000` | L2 认知常驻注入的 token 上限（只约束常驻注入；L1 情节 top-5 全量注入不受此限） |
-| `memory.autoExtract` | 无（废弃） | 不再生效：配置文件里写了不报错，读取处一律忽略 |
 
-## 迁移说明
+## 启动对齐
 
-daemon 启动时按固定顺序做一次旧版目录 → 现结构的迁移与索引对齐（`daemon.ts`）：
-
-1. **旧版 notes 三路分流**（`migrateV1Notes`）：`<home>/memory/notes/*.md` 逐条解析，正文含 `偏好/喜欢/希望` 的并入 `global/persona.md`、含 `必须/不要/决定` 的并入 `global/rule/general.md`、其余并入 `global/wiki/misc.md`（都是追加合并写）；不可解析的 note 跳过并打日志。迁移后整个 `notes/` 目录被删除。幂等——目录不存在或没有 `.md` 文件时直接返回。
-2. **删除旧版派生索引**：`rmSync(<home>/memory/index.db)`（现版结构直接重建，旧索引无用）。
-3. **全库对齐**（`memory.reconcile`）：对每个项目库重建 FTS 索引 + 后台补算向量，对全局库同样处理；单个项目/全局库处理失败只打日志跳过，不阻塞 daemon 启动。
+daemon 启动时做一次全库对齐（`daemon.ts` 调 `memory.reconcile`）：对每个项目库重建 FTS 索引 + 后台补算向量，对全局库同样处理；单个项目/全局库处理失败只打日志跳过，不阻塞 daemon 启动。
 
 ## 管理界面
 
@@ -304,7 +297,7 @@ daemon 启动时按固定顺序做一次旧版目录 → 现结构的迁移与�
 ## 关联
 
 - [tools](./tools.md)：memory 工具在工具体系中的位置（safe/parallel 的含义）
-- [storage](./storage.md)：`KclawPaths.memoryDir` 的位置与迁移前的 v1 目录（`memory/notes/`、`memory/index.db` 现为迁移输入/被删除对象）
+- [storage](./storage.md)：`KclawPaths.memoryDir` 的位置与 memory 目录布局
 - [agent-loop](./agent-loop.md)：note 块如何随消息持久化并发出 `note.emitted`
 - [compaction](./compaction.md)：共享的消息渲染与压缩摘要输入、会话检索（session_search）
 - [protocol](./protocol.md)：`memory.written` 事件的 payload 形状

@@ -103,7 +103,7 @@ export function makeTool<N extends string>(
 
 是 `MemorySystem` 的薄封装（主题线 markdown 为准、FTS5 + 向量为派生索引，见 [memory](./memory.md)）。
 
-- **memory_save** `{text}`：text 是"要记内容的提示"（旧版的 `tags` 已删，多余字段忽略）；当场触发 `system.triggerImmediate` 处理当前这轮对话：真有提取批次（该会话自上次提取位置起有未处理的新消息）时输出 `已触发记忆写入（处理当前这轮对话）`，没有增量时如实输出 `该轮没有需要沉淀的新内容`（不谎报写入，记忆重复写入事故的教训）；`memory.write.immediate=false` 时返回 `立即写入已关闭（memory.write.immediate=false），该内容将在后台定时/跟随触发时沉淀`，此时不写入，内容留给后台触发时处理。
+- **memory_save** `{text}`：text 是"要记内容的提示"（多余字段忽略）；当场触发 `system.triggerImmediate` 处理当前这轮对话：真有提取批次（该会话自上次提取位置起有未处理的新消息）时输出 `已触发记忆写入（处理当前这轮对话）`，没有增量时如实输出 `该轮没有需要沉淀的新内容`（不谎报写入，记忆重复写入事故的教训）；`memory.write.immediate=false` 时返回 `立即写入已关闭（memory.write.immediate=false），该内容将在后台定时/跟随触发时沉淀`，此时不写入，内容留给后台触发时处理。
 - **memory_search** `{query, limit?}`：`system.searchAll` 跨**全部**项目库 + 全局库的混合检索（关键词 + 向量，打分见 [memory](./memory.md)），`limit` 默认 5、最大 20；每个命中一行 `- [经历|认知] [scope] 正文`（scope 如 `project:<id>` / `global`），无命中输出 `（没有相关记忆）`。
 
 两个工具 safe + parallel：只访问记忆目录与索引，不修改工作目录本身（"parallel" 只表示调度器不强制排序）。

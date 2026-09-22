@@ -22,7 +22,7 @@
 
 ## 位置网格（14 个）
 
-值与契约的陈列正本见 [reference/hooks](../reference/hooks.md)（ctx / 返回类型 / 改写性 / 内置 hook 清单）。
+值与契约的陈列见 [reference/hooks](../reference/hooks.md)（ctx / 返回类型 / 改写性 / 内置 hook 清单）。
 
 | 位置 | 时机 | ctx | 返回 | 语义 |
 |------|------|-----|------|------|

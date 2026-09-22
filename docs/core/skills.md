@@ -122,7 +122,7 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 - 创建链接时目标必须是存在且含 SKILL.md 的目录，链接名必须是合法技能目录名；作用域目录缺失时递归创建；写入旁挂文件原子化（临时文件 + rename，0600）。
 - 旁挂文件缺失或损坏一律降级为空——它永远不阻塞技能加载主链路。
 - 删除只对真正的符号链接 `unlink`：同名位置已被真实目录占据（事后手工放入）时只清记录、不动磁盘。
-- **管理记录不受可见性过滤影响**：复用链接的清单直接从旁挂文件读取，不经过"用户不可见即 404"的过滤——否则档位设成 `model`（仅模型）后它在管理页消失、无法改回。管理面本身持 token 鉴权，不影响用户面"不泄露存在性"的语义。
+- **管理记录不受可见性过滤影响**：复用链接的清单直接从旁挂文件读取，不经过"用户不可见即 404"的过滤——否则档位设成 `model`（仅模型）后它在管理页消失、无法改回。管理接口本身持 token 鉴权，不影响用户面"不泄露存在性"的语义。
 
 ## 技能进化（提案制）
 
@@ -143,19 +143,19 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 
 两条路径，共同点是都只产生提案文件、不碰生效技能：
 
-**run 收尾粗查（内置 hook `skill-follow-check`，`run-after` order 40）**。每个 run 结束时（任何 stopReason）做一次**零成本、零 LLM** 的纯读检查：范围 = 该项目全部会话（**含 subagent 会话**，刻意不排除——观察盲区正是要覆盖的对象）各自的未提取增量；卷入判定 = 范围内任一消息满足之一——assistant 消息的 `tool_call` 块名字是 `skill_read` 或 `skill_list`，或 user 消息文本命中已装技能名的 `/记号`（正则与 `matchSkillInvocations` 同源，但匹配集合是**全部已装技能名**，不受 user-invocable 档位过滤——被隐藏的技能被点名同样是"卷入"）。未卷入：不排检查、不动增量进度，一次 LLM 都不调。卷入：把 `{sessionId, endTurnAt}` 写进该项目的账本（同会话重复排 = 刷新锚点）。功能关闭（`enabled !== true`）或 `idleMinutes <= 0` 时钩子直接返回；子会话 run 不排（subagent 自己不排，它的使用由同项目后续任一主干 run 的粗查统一覆盖——粗查范围含子会话增量）。
+**run 收尾粗查（内置 hook `skill-follow-check`，`run-after` order 40）**。每个 run 结束时（任何 stopReason）做一次**零成本、零 LLM** 的纯读检查：范围 = 该项目全部会话（**含 subagent 会话**，刻意不排除——观察盲区正是要覆盖的对象）各自的未提取增量；卷入判定 = 范围内任一消息满足之一——assistant 消息的 `tool_call` 块名字是 `skill_read` 或 `skill_list`，或 user 消息文本命中已装技能名的 `/记号`（正则与 `matchSkillInvocations` 同源，但匹配集合是**全部已装技能名**，不受 user-invocable 档位过滤——被隐藏的技能被点名同样是"卷入"）。未卷入：不排检查、不动增量进度，一次 LLM 都不调。卷入：把 `{sessionId, endTurnAt}` 写进该项目的检查表（同会话重复排 = 刷新锚点）。功能关闭（`enabled !== true`）或 `idleMinutes <= 0` 时钩子直接返回；子会话 run 不排（subagent 自己不排，它的使用由同项目后续任一主干 run 的粗查统一覆盖——粗查范围含子会话增量）。
 
 **延迟补查（`skill-scheduler.ts`，默认每 60s 扫一次）**。sweep 照记忆调度器按 workdir 循环挂起检查，空闲门禁复用记忆侧同一纯函数 `followGateDue`：`end_turn` 后 `idleMinutes` 内项目无新活动才触发。额外规则：
 
 - **成功才清检查**：提炼成功 resolve 才清；失败保留检查，下个 sweep 重试同一范围（记忆侧"先清后触发"靠 interval 兜扫补失败重试，技能侧没有兜扫，先清会丢批次）；
 - **同一检查连败 3 次放弃**：清除该检查并记日志（`MAX_ATTEMPTS`，内存按 `workdir|sessionId` 计数，daemon 重启归零后照常补查再试）；
-- **会话已删的检查无条件清掉**：`sessions.meta` 缺失的挂起检查没有活动可判、也没有提炼对象，不清会在账本里永久堆积；
+- **会话已删的检查无条件清掉**：`sessions.meta` 缺失的挂起检查没有活动可判、也没有提炼对象，不清会在检查表里永久堆积；
 - **end_turn 后有新活动的检查清掉**：旧锚点已被新活动取代，新 run 收尾的粗查若仍卷入会重排；
-- `enabled: false` 或 `idleMinutes: 0` 时 sweep 直接返回，检查停留在账本里不动，功能重开后继续消费；daemon 重启后首次 sweep 补查已保存的检查。
+- `enabled: false` 或 `idleMinutes: 0` 时 sweep 直接返回，检查停留在检查表里不动，功能重开后继续消费；daemon 重启后首次 sweep 补查已保存的检查。
 
 ### 提炼 pipeline（triggerFollow）
 
-- **范围**：该项目全部会话（含 subagent 会话）各自增量，逐会话处理——单会话失败不阻塞其他会话（有失败时整体 reject，水位保留，下个 sweep 重试同一范围，全部成功才 resolve）；
+- **范围**：该项目全部会话（含 subagent 会话）各自增量，逐会话处理——单会话失败不阻塞其他会话（有失败时整体 reject，增量进度保留，下个 sweep 重试同一范围，全部成功才 resolve）；
 - **渲染**：照记忆提炼的 `renderSegment`（含工具块——`skill_read` 的 `tool_result` 就是技能正文，提炼模型能看到"读了什么、之后做了什么"）；
 - **提炼模型**：解析复用 `memory.extractModel` 的同一条链（`makeExtractLlmResolver` 共享 helper，记忆与技能两套提取器共用，行为不变：空串回退主模型、provider 条目命中走条目端点、其余按裸线上模型名发往主端点），不新增模型配置字段；
 - **输出契约**：JSON `{ proposals: [...] }`，单次至多 3 条（超出丢弃并 log）；每条字段 `kind`（new/revise）、`name`、`scope`（global/project）、`title`、`rationale`、`changes`（revise 必填，改了哪里、为什么）、`content`（含 frontmatter 的完整 SKILL.md）。单条校验失败（名字不过 `isSkillDirName`、content 为空、kind 非法）丢弃该条并 log；`scope` 非法回退 `"project"`（影响面小的方向）；`revise` 的目标不存在、或目标是复用链接技能（按 scope 读 `.links.json` 命中名字）时丢弃该条并 log；
@@ -193,13 +193,13 @@ interface SkillProposal {
 
 ### 治理状态机
 
-迁移只经路由（core 判定、路由映射 409）：
+状态流转只经路由（core 判定、路由映射 409）：
 
-| 操作 | 迁移 | 行为 | 冲突（409） |
+| 操作 | 流转 | 行为 | 冲突（409） |
 |------|------|------|-------------|
-| `apply` | proposed → applied | `new` 在落点目录建 `<name>/SKILL.md`；`revise` 先读现正文存进提案文件 `snapshot`，再用 `content` 覆盖写 | 目标已存在同名技能（new）、修订目标已不存在（revise）、目标是复用链接技能；非法迁移 |
-| `revert` | applied → reverted | `revise` 把 `snapshot` 写回目标文件；`new` 删除已生效的技能目录（只删该技能目录本身） | 非法迁移；修订提案缺 `snapshot`（applied 于旧版本产生） |
-| `reject` | proposed → rejected | 只改状态，文件保留 | 非法迁移 |
+| `apply` | proposed → applied | `new` 在落点目录建 `<name>/SKILL.md`；`revise` 先读现正文存进提案文件 `snapshot`，再用 `content` 覆盖写 | 目标已存在同名技能（new）、修订目标已不存在（revise）、目标是复用链接技能；非法流转 |
+| `revert` | applied → reverted | `revise` 把 `snapshot` 写回目标文件；`new` 删除已生效的技能目录（只删该技能目录本身） | 非法流转；修订提案缺 `snapshot` |
+| `reject` | proposed → rejected | 只改状态，文件保留 | 非法流转 |
 | `remove` | rejected/reverted → 删除 | 删提案文件（文件也可手动删） | 非 rejected/reverted 状态 |
 
 - **写入落点**：`scope=global` 写 `~/.kclaw/skills/<name>/SKILL.md`，`scope=project` 写 `<workdir>/.kclaw/skills/<name>/SKILL.md`。生效路径就是每轮重扫（见上文"每个 run 重新扫描"），下一轮对话自动吃到，无需任何热加载；
@@ -216,7 +216,7 @@ interface SkillProposal {
 
 ### skill 审计事件
 
-`SessionEvent` 新增 `skill` 家族（`protocol/session-events.ts`），技能的**全部写路径**留痕：
+`SessionEvent` 新增 `skill` 家族（`protocol/session-events.ts`），技能的**全部写路径**都各落一条事件：
 
 ```ts
 interface SkillEvent {
@@ -229,7 +229,7 @@ interface SkillEvent {
 }
 ```
 
-归属会话：`follow` / `skill_create` = 来源会话；`admin`（路由治理动作：apply/reject/revert/remove）照记忆 admin 先例——`scope=project` 落该 workdir 最近活动会话、`scope=global` 落最近全局会话，无会话则跳过。事件只留痕：不进 meta 投影、不推进 `updatedAt`（与 memory 事件同约定），真相在 `.proposals/` 的提案文件。
+归属会话：`follow` / `skill_create` = 来源会话；`admin`（路由治理动作：apply/reject/revert/remove）照记忆 admin 先例——`scope=project` 落该 workdir 最近活动会话、`scope=global` 落最近全局会话，无会话则跳过。事件只做记录：不进 meta 投影、不推进 `updatedAt`（与 memory 事件同约定），权威数据在 `.proposals/` 的提案文件。
 
 ### 前端入口
 
@@ -238,7 +238,7 @@ interface SkillEvent {
 
 ## 管理入口与前端入口
 
-`/skills` 路由族（`packages/server/src/routes/skills.ts`）是技能管理入口，分只读、复用管理与提案治理三半。只读与复用管理始终注册、无组装依赖；提案路由族（技能进化）有装配才可用，未装配（裸 app/测试）时整体 503，不影响既有路由：
+`/skills` 路由族（`packages/server/src/routes/skills.ts`）是技能管理入口，分只读、复用管理与提案治理三半。只读与复用管理始终注册、无组装依赖；提案路由族（技能进化）组装后才可用，未组装（裸 app/测试）时整体 503，不影响既有路由：
 
 - `GET /skills?workdir=`：用户可见技能列表 `{name, displayName, description, visibility, origin}`——`visibility` 是 `all`（模型+用户）或 `user-only`（被 `disable-model-invocation` 隐藏但仍用户可见），`origin` 是 `global` / `project`；
 - `GET /skills/:name?workdir=`：单个技能详情，带 `content`（SKILL.md 正文）。路径段先过白名单校验（拦目录穿越段）；`user-invocable: false` 的技能 404，与未知名字同响应；

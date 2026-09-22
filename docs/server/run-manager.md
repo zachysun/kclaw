@@ -11,7 +11,7 @@
 - **三种处置只决定消息何时被模型看到**：steer 注入正在跑的对话（在迭代边界注入，即模型完成一轮输出、要发起下一轮请求之间的间隙；不产生新 run）；wait 留在队列等当前 run 结束后出队；interrupt 立即中止当前 run 并插队首。三条路径最终都写进 JSONL，消息 id 在入队时预分配（`entry.messageId`）、出队/注入执行时用同一 id 构建消息，前端气泡从"排队态"原地升级。处置生效层级：单次请求显式指定 > 会话级覆盖（`SessionMeta.dispositionOverride`，CLI `/steer`/`/wait` 与 Web 三选的 steer/wait 写入；interrupt 是一次性动作、Web 与 CLI 均不写覆盖）> 配置默认 `sessions.defaultDisposition`（默认 steer）。
 - **steer 缓冲与降级**：steer 消息不进执行队列，进当前 run 的 steering 缓冲区；run 在迭代边界经 `turn-boundary` 位置的 hook 链（内置 `steering-drain`）取走全部缓冲消息注入。会话**完全空闲**（无活动 run、无可执行条目、无驱动器）时消息不降级、直接开跑（`queued:false`，不广播 `message.queued`）；只有"队列/驱动器在转但无活动 run"时 steer 才降级为 wait 入队并按 wait 报告（`message.queued {disposition:"wait", position}`）。若 run 在取走缓冲前结束（end_turn/aborted/failed 任何原因），残余条目在驱动器的下一拍自动降级为 wait、按原顺序并入队尾——消息绝不丢，队列里可执行的只有 wait 与 interrupt。
 - **注入的取走是先构建后变更**（不变量）：`#drainSteer` 先在局部把全部缓冲条目构建成 user Message（附件挂载可能失败——越界、文件被删），全部成功后才清空缓冲、重写 queue.jsonl 并把 id 登记进 `#injectedIds`（有界集合，容量 `QUEUE_LIMIT×2`，用于把排队取消请求区分为 `injected`（已进事件流历史，机器不删历史）与 `not_found`）；任一构建失败即整体不动，异常抛给循环走 `run.failed "steering_failed"`。
-- **job 消息固定 wait 且同受上限约束**：服务器内部的入队（job tick 的通知消息）按 wait 处置、不读 `defaultDisposition`——job 的语义是"当前的事忙完后轮到我"，没有"引导正在跑的 run"的诉求。上限对 job 一视同仁：会话排满时 job tick 的消息同样吃 `队列已满` 错误。**这是有意的行为变更**（旧实现忙时无界排队，见文末行为变更清单）。
+- **job 消息固定 wait 且同受上限约束**：服务器内部的入队（job tick 的通知消息）按 wait 处置、不读 `defaultDisposition`——job 的语义是"当前的事忙完后轮到我"，没有"引导正在跑的 run"的诉求。上限对 job 一视同仁：会话排满时 job tick 的消息同样吃 `队列已满` 错误。
 - **用户消息由引擎预制**：以纯 text 骨架（先建只含一个文本块的消息，note 块随后补全）经 `RunInput.userMessage` 传入，循环原样使用且不重复持久化；note 块（job 来源 + 记忆）由 run-before hook 链（内置 `memory-inject` 收集 → `user-message-land` 统一追加）补全——事件序固定为 `run.started → message.created → note.emitted ×N → message.completed`，且持久化先于 note 事件（事件反映已持久化状态）。附件挂载同样在骨架构建时完成；越界路径在 `mountAttachments` 里抛错终止整条 run。
 - **历史在追加用户消息之前读**：`runAgent` 自己会把用户消息拼在 `history` 之后（`[...input.history, userMsg]`），若 history 已含它会向 provider 重复发送同一段文本。
 - **broker 只负责登记与汇合裁决，不发事件、不管理超时**：`confirmation.requested`/`confirmation.resolved` 由 agent 循环发（`packages/core/src/agent/loop.ts`），broker 若再发即造成线上重复；超时裁决也由循环的 `raceConfirmation` 完成。broker 的 `expiresAt` 只是登记信息。
@@ -20,15 +20,15 @@
 - **模型解析：每 run 一次，三级优先级**：本轮用哪个模型，按 `input.model`（job 配置的模型或客户端指定的）→ 会话 meta 的 `model`（POST `/sessions/:id/model` 写入的那个）→ daemon 默认模型的顺序取第一个非空的。取到的值再经 `resolveEntry` 做一次翻译：如果它是 config 里 provider 条目的名字（比如 `deepseek`），就换成该条目配置的线上模型名（比如 `deepseek-chat`）；如果本来就是一个直接的 API 模型名则原样通过。解析发生在每个 run 开始时，所以改完会话模型后下一次 run 即生效。
 - **附件挂载：按文件类型分三种处理**：`mountAttachments` 把用户上传的文件转成用户消息上的 attachment 块。文本类文件（MIME 为 `text/*` 或扩展名是常见文本类型）且不超过 64KiB 时，读出正文内联进消息（超过 8192 字符截断并加 `\n…[已截断]`）；图片且不超过 5MiB 时转成 base64 内嵌（作为多模态内容段发给模型）；其余文件只在块里放 `{type:"file", path}` 路径信息，模型需要内容时自己用 fs_read 读。安全上有两道检查：ws 层在校验 send_message 帧时查过一次路径，这里再用 `realpathWithin` 复核一遍——引用越出本会话附件目录就直接抛错、终止整条 run。
 - **用量记录失败不影响 run**：run 正常结束后向 `usageStore.record` 记一行（会话 id/run id/模型/输入输出 token/时刻）。这行代码包在 try/catch 里，失败只打 `kclaw usage record failed:` 日志；daemon 没注入 usageStore 时整个步骤跳过。
-- **记忆写入在 core 侧，run 路径只留注入与检查排期**：旧版的"run 结束后服务端发出即忘的自动提取"（`config.memory.autoExtract`）已移除——写入 pipeline 整体移入 core 的 `MemoryPipeline`（`packages/core/src/memory/pipeline.ts`），由五触发驱动（`memory_save` 工具的 immediate、`/memory save` 的手动 manual、新建会话路由的 clear、定时 interval、跟随 follow，机制见 [memory](../core/memory.md)）。run 路径（core `executeRun`）只承担三件事：每次 run 的两级注入（L2 认知常驻系统提示 + L1 情节 note，见组装第 4 步）；给 `createBuiltinTools` 传入 `memoryCtx.immediateEnabled = config.memory.write.immediate`（决定 `memory_save` 工具是否当场触发写入）；run 收尾时排一个跟随检查（`idleMinutes > 0` 时 `memory.scheduleFollowCheck`，写入 `<projectDir>/state.json`，daemon 重启后由记忆调度器补查，见下文组装第 13 步）。
-- **上下文压缩（token 触发的分层摘要，五个触发点）**：压缩不再发生在发送路径上——引擎直接以全量 `history` 起 run，用户发消息永远零压缩等待。五个触发点由 run 路径编排（机制细节与数据格式见 [compaction](../core/compaction.md)）：
+- **记忆写入在 core 侧，run 路径只留注入与检查排期**：写入 pipeline 整体在 core 的 `MemoryPipeline`（`packages/core/src/memory/pipeline.ts`），由五触发驱动（`memory_save` 工具的 immediate、`/memory save` 的手动 manual、新建会话路由的 clear、定时 interval、跟随 follow，机制见 [memory](../core/memory.md)）。run 路径（core `executeRun`）只承担三件事：每次 run 的两级注入（L2 认知常驻系统提示 + L1 情节 note，见组装第 4 步）；给 `createBuiltinTools` 传入 `memoryCtx.immediateEnabled = config.memory.write.immediate`（决定 `memory_save` 工具是否当场触发写入）；run 收尾时排一个跟随检查（`idleMinutes > 0` 时 `memory.scheduleFollowCheck`，写入 `<projectDir>/state.json`，daemon 重启后由记忆调度器补查，见下文组装第 13 步）。
+- **上下文压缩（token 触发的分层摘要，五个触发点）**：压缩不发生在发送路径上：引擎直接以全量 `history` 起 run，用户发消息永远零压缩等待。五个触发点由 run 路径编排（机制细节与数据格式见 [compaction](../core/compaction.md)）：
   - **后台预压**：`compaction-check` 位置的内置 hook `background-precompact`（排在 `mid-run-panic` 之前）在每个迭代边界检查：上下文占用进入 [预压线, 红线) 区间且没有正在执行的压缩、无暂存结果、无取消标记时，`compactor.background(...)` 非阻塞派一次后台压缩（`Compactor.background` 登记为正在执行后立即返回，摘要调用在后台跑，不挂 run 的中止信号）。成功后结果先写入元数据、视图暂存，由下一次迭代边界的 `mid-run-panic` 取用。
   - **收尾压缩**（主路径）：`runAgent` 返回且 stopReason 非 `aborted`/`error` 时，用 `estimateContextTokens(readMessages(sessionId))` 估算上下文占用（锚定最后一条助手消息记录的真实 `usage.inputTokens`，锚之前的内容天然不计入，它们不在上一次请求里，所以直接对全量历史读数即可），上下文占用 ≥ `budget × (compactAtRatio ?? 0.80)` 就 `compactor.auto({phase:"post-run", signal})`。它在 `executeRun` 内 await、位于 token 用量记录之后（会话驱动器的串行化保证压缩期间新到的消息排队等待、不会并发写会话元数据；这窗口内收到的手动 /compact 也被"会话活跃"条件自然排队，下一轮 run 的收尾链冲刷）。估算前若还有正在执行的后台压缩，先等它结束（循环已结束、没有下一次请求可应用暂存视图，取走丢弃即可，元数据已附带同一结果）再读数；等待后走正常黄线判断，auto 内部的活跃段细粒度判断自适应：后台结果已把活跃段打下去时它自然不再压。
-  - **中途压缩**：`compaction-check` 位置的内置 hook `mid-run-panic`（见 [hooks](../core/hooks.md)）在每轮迭代边界触发。hook 内先查取消标记与 run 的中止信号（任一命中返回 null 不压，暂存的后台结果也留到下一次运行再应用），未命中再取暂存的后台结果：有就直接采用为新压缩视图（占用多半已降回线以下，不再压第二次），然后算上下文占用：≥ `budget × (compactPanicRatio ?? 0.90)` 才进入压的分支。若此刻有正在执行的后台压缩则先等它结束，再按暂存视图的分界重估活跃段（重估读数受旧锚点影响偏高，安全方向），仍超红线才同步压（活跃段切不出边界就放弃硬压、应用暂存结果），否则直接应用暂存结果；压缩成功返回新的压缩视图 `{ upto, top }`，循环从下一次请求起应用（`upto` 之前原文不再发、压缩摘要项垫在 `messages[0]`）；失败返回 null、运行不补救继续。
+  - **中途压缩**：`compaction-check` 位置的内置 hook `mid-run-panic`（见 [hooks](../core/hooks.md)）在每轮迭代边界触发。hook 内先查取消标记与 run 的中止信号（任一命中返回 null 不压，暂存的后台结果也留到下一次运行再应用），未命中再取暂存的后台结果：有就直接采用为新压缩视图（占用多半已降回线以下，不再压第二次），然后算上下文占用：≥ `budget × (compactPanicRatio ?? 0.90)` 才进入压的分支。若此刻有正在执行的后台压缩则先等它结束，再按暂存视图的分界重估活跃段（重估读数受已有锚点影响偏高，安全方向），仍超红线才同步压（活跃段切不出边界就放弃硬压、应用暂存结果），否则直接应用暂存结果；压缩成功返回新的压缩视图 `{ upto, top }`，循环从下一次请求起应用（`upto` 之前原文不再发、压缩摘要项垫在 `messages[0]`）；失败返回 null、运行不补救继续。
   - **超限急救**：`overflow-rescue` 位置的内置 hook `overflow-emergency` 在流式调用抛出上下文超限错误且零输出时触发：不看上下文占用，"已经爆了"就是事实。救援等不得：先 `compactor.abortInFlight` 掐掉正在执行的后台压缩并等它结束（被掐的结果丢弃，原文无损；不用 `cancel`，它的取消标记会压制紧随其后的急救本身），再 `compactor.auto({phase:"in-run", emergency:true, signal})`；成功则循环整次请求静默重发一次（最多一次），仍失败才走报错路径。
   - **手动 /compact**：`compactSession` 直调 core `Compactor.compact({manual:true, phase:"manual"})`，跳过触发线；会话忙时不拒绝而是排队，运行结束的收尾链先冲刷它（见下文第 13 步），已有排队消息时仍拒绝。
   - `Compactor.auto`（core `session/compactor.ts`）是收尾/中途/超限三路的共用组装：为每次压缩建独立 AbortController 并登记在一张"正在进行中"的表里（后台预压也登记同一张表，`waitForSettled` 供同步路径等待），run 的中止信号联动过去（run 中止时顺带取消同步压缩），run 结束时清理；压缩自身的摘要调用经 `collectStreamText` 带 `{ signal }`，取消信号触发时抛出 → `Compactor.compact` 走 cancelled 分支。`cancelCompaction`（WebUI 指示行取消按钮 → WS 帧 `compaction.cancel`）写会话级取消标记并取消正在进行的压缩（含后台预压）；标记在每次 run 组装（`executeRun`）开头清除，只压制本次运行内的自动压缩。
-  - `Compactor.compact` 内部：按 `SessionMeta.compaction.upto` 切出 active 历史（旧会话退回读 `compactedUpto`，标记在历史里找不到视为无标记），上下文占用过线后由 `chooseBoundary` 选出分界：从最新往回累加到 budget × `compactTargetRatio`（默认 0.33）为止，起点再对齐到最近的用户消息（保证段与保留部分都是完整轮次）。压缩是两次无 tools 的 `collectStreamText` 调用（复用本轮 `runLlm` 与解析出的 model，`Compactor.auto` 内 await）：新段经 `renderSegment` 生成固定五栏的段摘要，再与旧总摘要归并出新总摘要；**两次全部成功后**追加一条 `compaction` 事件（这是 `meta.compaction` 与压缩审计的唯一写入点，事件投影据此维护 `{ segments, top, upto }`，`trigger` 按 `manual`/`in-run`/`auto` 三值、超限急救带 `emergency`）。旧版压缩的遗留字段 `compactedSummary`/`compactedUpto` 不再主动删除（有 `meta.compaction` 后即被屏蔽、无实际作用）。事件：上下文占用过线且边界已定先发 `compaction.started {phase}`，之后无论成败/取消必发 `compaction.completed {segments, kept, phase, result}`（失败/取消时 segments/kept 为 0）；占用未过线则两个事件都不发。摘要调用或事件写入失败时 `Compactor.compact` 记一行 `kclaw compaction (<阶段>) failed:` 日志并以 failed 结果回答（`Compactor.auto` 把结果原样转发给触发 hook）。运行照常继续，下一次过线重新触发。总摘要不再挂 note，而是经循环的压缩视图以压缩摘要项进请求（见 [compaction](../core/compaction.md) 的"注入"）。
+  - `Compactor.compact` 内部：按 `SessionMeta.compaction.upto` 切出 active 历史（标记在历史里找不到视为无标记），上下文占用过线后由 `chooseBoundary` 选出分界：从最新往回累加到 budget × `compactTargetRatio`（默认 0.33）为止，起点再对齐到最近的用户消息（保证段与保留部分都是完整轮次）。压缩是两次无 tools 的 `collectStreamText` 调用（复用本轮 `runLlm` 与解析出的 model，`Compactor.auto` 内 await）：新段经 `renderSegment` 生成固定五栏的段摘要，再与旧总摘要归并出新总摘要；**两次全部成功后**追加一条 `compaction` 事件（这是 `meta.compaction` 与压缩审计的唯一写入点，事件投影据此维护 `{ segments, top, upto }`，`trigger` 按 `manual`/`in-run`/`auto` 三值、超限急救带 `emergency`）。事件：上下文占用过线且边界已定先发 `compaction.started {phase}`，之后无论成败/取消必发 `compaction.completed {segments, kept, phase, result}`（失败/取消时 segments/kept 为 0）；占用未过线则两个事件都不发。摘要调用或事件写入失败时 `Compactor.compact` 记一行 `kclaw compaction (<阶段>) failed:` 日志并以 failed 结果回答（`Compactor.auto` 把结果原样转发给触发 hook）。运行照常继续，下一次过线重新触发。总摘要不再挂 note，而是经循环的压缩视图以压缩摘要项进请求（见 [compaction](../core/compaction.md) 的"注入"）。
 
 ## 接口
 
@@ -263,7 +263,7 @@ steer 条目被 `submit` 放进 `#steerBuf` 后，目标 run 在**迭代边界**
 
 `cancel(sessionId)` 只做一件事：`#active` 有 controller → `abort()`、返回 true；没有 → false（ws 层回 `no active run`）。abort 后循环在下一个检查点以 `run.completed {stopReason:"aborted"}` 终止（不是 run.failed），确认等待中的 abort 不算超时拒绝。ack（`run_cancel_ack`）在处理完成后立即返回，终态事件随后经总线到达。
 
-**改后的语义：仅中止当前 run，不连带排队消息**。排队中的 wait 条目原封不动，当前 run 停止后由驱动器照常出队执行；排队消息的取消一律走 `queueCancel`。旧实现"出队即取消"的 `#cancelQueued` 标记机制已删除（有意的行为变更，见文末清单）——CLI 的三段 Ctrl+C、Web 的"当前回复停止"都建立在这个窄语义上。
+**改后的语义：仅中止当前 run，不连带排队消息**。排队中的 wait 条目原封不动，当前 run 停止后由驱动器照常出队执行；排队消息的取消一律走 `queueCancel`。CLI 的三段 Ctrl+C、Web 的"当前回复停止"都建立在这个窄语义上。
 
 ### queueCancel：排队取消
 
@@ -310,15 +310,6 @@ daemon 启动时对每个 queue.jsonl 非空的会话调用：整体重排为内
 - **自动命名没有去重锁**：同一会话两次快速入队理论上可能并发两次命名，写回前的重读校验保证只有第一次生效（后到的发现标题已不是默认值即放弃）。
 - **`resolveConfirmation` 测试注入点优先于 broker**：设置了它 broker 就只剩登记职责——生产路径不设置。
 - **压缩与用量记录失败都不影响 run 的结果**：自动压缩的摘要调用或 meta 写入失败时以 failed 结果回答、运行照常继续（事件 `completed {result:"failed"}`；`kclaw compaction (<阶段>) failed:` 日志）；段索引写入与审计追加失败只留一行日志、压缩照常生效；用量记录失败只留一行日志（`kclaw usage record failed:`）；跟随检查排期失败静默（不打印、不阻塞）。以上任何一种失败 run 都照常返回 outcome。
-
-## 有意的行为变更
-
-队列机制上线时改变了四处既有行为，均为设计决定而非缺陷：
-
-1. **`run.cancel` 只保留"中止当前 run"一个语义**：不再连带取消排队消息（旧实现 `#cancelQueued` 的"出队即取消"机制删除）。排队消息的取消一律走 `queue.cancel`（WS 命令 / CLI `/queue cancel` / Web 气泡取消按钮）。
-2. **旧客户端的默认处置从"自动等待"变为"默认引导"**：不带 `disposition` 字段的 `send_message` 取会话覆盖 ?? `sessions.defaultDisposition`（默认 steer）。旧版在会话忙时新消息自动排队等待；现在默认注入正在跑的 run（会话空闲时两种处置等价，行为不变）。
-3. **job tick 消息同受队列上限约束**：旧实现在会话忙时无界排队；现在 job tick 的通知消息固定按 wait 入队，会话排满（10 条）时同样被拒。上限是有意设置的阻塞点：满了就明确报错，而不是无限积压。
-4. **CLI 运行中输入的行立即按当前处置发送**：不再等当前 run 的提示符回归——运行中回车即发（steer 注入 / wait 排队 / `/interrupt` 中断），界面呈现由实时事件流驱动。
 
 ## 关联
 

@@ -26,7 +26,7 @@ export type SessionEvent =
 | `session.renamed` | `at`、`title` |
 | `session.deleted` | `at` |
 | `session.restored` | `at` |
-| `session.set` | `at`、`model?`、`readonly?`（legacy，读取时映射为 mode）、`mode?`、`disposition?`（键出现才发） |
+| `session.set` | `at`、`model?`、`mode?`、`disposition?`（键出现才发） |
 
 ### 消息与运行（5 种）
 
@@ -35,7 +35,7 @@ export type SessionEvent =
 | `message` | Message 全量（`{ type: "message" } & Message`） |
 | `message.truncated` | `at`、`fromMessageId`（从它起的消息退出对话视图；读取端投影过滤） |
 | `compaction` | `at`、`trigger`（manual/in-run/auto）、`emergency?`、`focus?`、`from`、`upto`、`messages`、`segmentSummary`、`top` |
-| `system` | `at`、`stable`、`live?`（双段系统提示词记录，每 run 一条）、`text?`（legacy 单文本，读作 stable） |
+| `system` | `at`、`stable`、`live?`（双段系统提示词记录，每 run 一条） |
 | `sandbox.checked` | `at`、`enabled`、`available`、`unavailableReason?`（每 run 一条，不进投影） |
 
 ### 运行档案（3 种）
@@ -54,7 +54,7 @@ export type SessionEvent =
 
 ### 技能提案（1 种，SkillEvent）
 
-技能进化（提案制）的全部写路径留痕：提案的产生与治理状态迁移各落一条。只留痕——不进 meta 投影、不推进 `updatedAt`（与 memory 事件同约定），真相在 `<skillsDir>/.proposals/` 的提案文件。
+技能进化（提案制）的全部写路径都各落一条事件：提案的产生与治理状态流转各一条。只做记录——不进 meta 投影、不推进 `updatedAt`（与 memory 事件同约定），权威数据在 `<skillsDir>/.proposals/` 的提案文件。
 
 | 类型 | 字段 |
 |------|------|

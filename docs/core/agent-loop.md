@@ -52,7 +52,7 @@ export interface AgentDeps {
   tokenBudget?: number                // 请求 budget（token 数）：驱动工具输出省略/历史逐出（见 compaction.md 机制二）
   hooks: HookRunner                   // hook 链：循环的行为挂载点全部以此为准（见 hooks.md）。
                                       // 各位置的 fatal 抛错沿 hooks.run 传播，由循环既有的 catch 路径接管，
-                                      // 错误码与迁移前一致（user_message_failed / steering_failed / …）
+                                      // 错误码照旧（user_message_failed / steering_failed / …）
   onEvent(e: AgentEvent): void
   onMessage(m: Message): void
 }

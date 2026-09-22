@@ -67,9 +67,7 @@ export interface CompactionState { segments: CompactionSegment[]; top: string; u
 | `top` | 总摘要 |
 | `upto` | 总分界：这条消息之前（含它）都已压缩，之后的是保留部分（等于末段的 `upto`） |
 
-段的消息范围由相邻两个 `upto` 界定：第一段从会话开头（或旧格式升级点）到 `segments[0].upto`，其后每段从前一段的 `upto` 之后到本段 `upto`（`segmentRanges` 负责映射）。分界必须用消息 id，不得用序号——存储里消息没有序号，只有全局唯一 id。分界 id 在历史里找不到时（事件流被手动改过、消息被删），该分界及更早的段作废：作废点之后全部按原文处理，`session_search` 对找不到 `upto` 的压缩段直接跳过（不误扫整条流）。
-
-**旧格式兼容**：meta 没有 `compaction` 但有旧字段 `compactedSummary`/`compactedUpto` 的会话，读取时把旧摘要当作总摘要的起点（`top` = 旧摘要，`segments` 为空），保留部分仍按旧 `compactedUpto` 分界。`compactedSummary`/`compactedUpto` 不再被清除，但运行侧读压缩视图时 `compaction` 优先（run.ts 的 `prev` 先读 `compaction`，见 [storage](./storage.md)），两者并存无功能影响。不写迁移脚本；升级之前的会话没有 `compaction` 事件，`session_search` 返回"无可检索内容"——直到第一次压缩（只影响老会话）。
+段的消息范围由相邻两个 `upto` 界定：第一段从会话开头到 `segments[0].upto`，其后每段从前一段的 `upto` 之后到本段 `upto`（`segmentRanges` 负责映射）。分界必须用消息 id，不得用序号——存储里消息没有序号，只有全局唯一 id。分界 id 在历史里找不到时（事件流被手动改过、消息被删），该分界及更早的段作废：作废点之后全部按原文处理，`session_search` 对找不到 `upto` 的压缩段直接跳过（不误扫整条流）。
 
 ### 压缩审计（compaction 事件）
 
@@ -81,7 +79,7 @@ export interface CompactionRecord {
   trigger: "auto" | "in-run" | "manual"   // 收尾 / 运行中 / 手动
   emergency?: true      // 超限急救的标记；仅自动压缩可能附带
   focus?: string        // 手动压缩时用户给的重点说明
-  from: string | null   // 被压缩段的第一条消息 id；null = 从会话开头（或旧格式升级点）起
+  from: string | null   // 被压缩段的第一条消息 id；null = 从会话开头起
   upto: string          // 被压缩段覆盖到的最后一条消息 id
   messages: number      // 被压缩段内的消息条数
   segmentSummary: string  // 本次生成的段摘要
@@ -371,8 +369,6 @@ llm.stream({ system: <人格>, messages: [
 | `toolResultKeep` | `8` | 发送时保留工具结果原文的**最多条数**（ budget 驱动省略的条数上限） |
 
 模型条目侧的两个可选字段（`providers.entries.<key>`）：`contextWindow` 是该模型的上下文窗口，作为 budget 上限参与 `resolveContextTokens` 的 min 解析；`maxOutput` 是单次回复的输出上限，run 组装经 agent 循环随每个请求下发为 `max_tokens`（默认不下发，沿用供应商默认）。
-
-废弃：`compactThreshold`（旧版 40 条触发）与 `compactKeep`（旧版保留 25 条）。配置文件里存在时不报错，但不再起作用。
 
 ---
 

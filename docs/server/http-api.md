@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权 hook 加 75 个业务路由（健康/状态 2 个、会话 16 个、记忆 10 个、技能 16 个、hook 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、provider 管理 6 个、目录浏览 2 个、用量 1 个、MCP 管理 6 个、IM Channel 管理 4 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`providers.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`、`mcp.ts`、`channel.ts`）；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未组装时降级 503，技能组始终注册（只读与复用管理无组装依赖；提案治理子路由族有装配才可用、未装配整体 503），hook 组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则以文件为准，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权 hook 加 75 个业务路由（健康/状态 2 个、会话 16 个、记忆 10 个、技能 16 个、hook 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、provider 管理 6 个、目录浏览 2 个、用量 1 个、MCP 管理 6 个、IM Channel 管理 4 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`providers.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`、`mcp.ts`、`channel.ts`）；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未组装时降级 503，技能组始终注册（只读与复用管理无组装依赖；提案治理子路由族组装后才可用、未组装整体 503），hook 组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则以文件为准，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
@@ -58,10 +58,9 @@ interface SessionMeta {
   jobId?: string        // 由定时任务创建的会话带此字段
   workdir?: string      // 会话级工作目录（run 以它覆盖全局 workspace）
   model?: string        // 会话级模型覆盖（默认 → 守护进程默认模型）
-  mode?: "readonly" | "default" | "acceptEdits" | "trusted" | "auto"   // 会话权限模式（默认 default）；旧 readonly 布尔是 legacy，读取时映射为 mode
+  mode?: "readonly" | "default" | "acceptEdits" | "trusted" | "auto"   // 会话权限模式（默认 default）
   deleted?: boolean
   deletedAt?: string
-  compactedSummary?: string   // 旧版压缩遗留：不再清除，被 compaction 覆盖（见 compaction.md）
   compactedUpto?: string
   compaction?: { segments: { upto: string; summary: string }[]; top: string; upto: string }
                               // 分层压缩状态（由 compaction 事件投影），字段语义见 compaction.md
@@ -129,7 +128,7 @@ interface Job {
 | POST | `/providers/:name/default` | 把该条目设为默认 | 名字未知 404 |
 | POST | `/providers/models` | 模型列表检测（兼作连接验证） | 请求 `{name}`（用存量条目的真实密钥检测，`format`/`baseUrl`/`apiKey` 字段可逐项覆盖——编辑表单的草稿值检测）或 `{format, baseUrl, apiKey?}`（新建表单直探）；成功 `{ok: true, models: string[]}`，检测失败（端点不可达、密钥错误、响应形状不对等一律）502 `{ok: false, error}` |
 
-所有变更路由直接改 daemon 的内存配置（**下一个 run 即热生效**：持久化后经 ConfigNotifier 发布 `providers` 变更，daemon 的客户端解析器整体清空缓存；条目签名检查保留为优化）并经 `saveConfig` 持久化：首次写落在 `config.json` 并把仍在的旧 `config.yaml` 改名 `config.yaml.bak` 弃用，此后每次写都是 config.json 的整文件原子重写（0600，密钥明文只在盘上），遗留的 `mcp` 节在序列化前一律摘除（mcp.json 是唯一管理源）；持久化失败只记日志不回滚，但变更通知照发——内存里的改动已经生效，缓存不能停留在旧值上，下次写入会再试。条目改名（PATCH 带 `name`）经 `renameProviderEntry` 统一挪键并改写配置级引用（默认指针与记忆提取/embedding 条目）。没有审计事件（全局配置面，与 MCP 管理同判）。使用方是 WebUI 的 Model 页。
+所有变更路由直接改 daemon 的内存配置（**下一个 run 即热生效**：持久化后经 ConfigNotifier 发布 `providers` 变更，daemon 的客户端解析器整体清空缓存；条目签名检查保留为优化）并经 `saveConfig` 持久化：每次写都是 config.json 的整文件原子重写（0600，密钥明文只在盘上；MCP server 不经此写入，mcp.json 是唯一管理源）；持久化失败只记日志不回滚，但变更通知照发——内存里的改动已经生效，缓存不能停留在旧值上，下次写入会再试。条目改名（PATCH 带 `name`）经 `renameProviderEntry` 统一挪键并改写配置级引用（默认指针与记忆提取/embedding 条目）。没有审计事件（全局配置面，与 MCP 管理同判）。使用方是 WebUI 的 Model 页。
 
 ### 记忆（routes/memory.ts，底层 `MemorySystem`）
 
@@ -169,15 +168,15 @@ interface Job {
 
 `:name` 路径段先过白名单校验（同 `/memory` 的 `isSafeSegment`），非法段 400 `invalid segment`。**`user-invocable: false` 的技能对用户面视为不存在**：列表不显示、按名调用返回 404——且与未知名字同响应（`{error:"not found"}`，不泄露存在性）。
 
-**提案治理路由族**（技能进化，`registerSkillRoutes` 的 opts 带 `skillsEvolution` 时注册；未装配时整体 503 `skill evolution is not assembled`，不影响上面的既有路由）。治理写操作均经全局 token 鉴权中间件。机制见 [skills](../core/skills.md) 的"技能进化"一节。
+**提案治理路由族**（技能进化，`registerSkillRoutes` 的 opts 带 `skillsEvolution` 时注册；未组装时整体 503 `skill evolution is not assembled`，不影响上面的既有路由）。治理写操作均经全局 token 鉴权中间件。机制见 [skills](../core/skills.md) 的"技能进化"一节。
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
-| GET | `/skills/proposals?status=` | 提案列表（applied 项带用量） | `status` 可选：proposed/applied/rejected/reverted，缺省返回全部 | `{proposals: [完整 SkillProposal 字段 + applied 项带 usage（采纳后 skill_read 次数）]}`；单个损坏提案文件跳过，不拖垮列表 |
+| GET | `/skills/proposals?status=` | 提案列表（applied 项带用量） | `status` 可选：proposed/applied/rejected/reverted，默认返回全部 | `{proposals: [完整 SkillProposal 字段 + applied 项带 usage（采纳后 skill_read 次数）]}`；单个损坏提案文件跳过，不拖垮列表 |
 | GET | `/skills/proposals/:id` | 单个提案详情 | — | 完整 SkillProposal（applied 带 `usage`）；不存在 404；路径段先过 `isSafeSegment` |
 | POST | `/skills/proposals/:id/apply` | 确认提案（proposed → applied） | — | `{ok:true}`，可带非致命 `warning`（修订的现正文与提案时 baseline 不一致、或全局新增将被他项目同名技能遮蔽）；非法迁移/同名冲突/目标是复用链接技能 409、不存在 404 |
-| POST | `/skills/proposals/:id/reject` | 驳回提案（proposed → rejected，只改状态） | — | `{ok:true}`；非法迁移 409、不存在 404 |
-| POST | `/skills/proposals/:id/revert` | 回退已采纳提案（applied → reverted：修订写回快照、新增删技能目录） | — | `{ok:true}`；非法迁移 409、不存在 404 |
+| POST | `/skills/proposals/:id/reject` | 驳回提案（proposed → rejected，只改状态） | — | `{ok:true}`；非法流转 409、不存在 404 |
+| POST | `/skills/proposals/:id/revert` | 回退已采纳提案（applied → reverted：修订写回快照、新增删技能目录） | — | `{ok:true}`；非法流转 409、不存在 404 |
 | DELETE | `/skills/proposals/:id` | 删除提案文件（仅 rejected/reverted 可删） | — | `{ok:true}`；其余状态 409、不存在 404 |
 
 ### hook（routes/hooks.ts，始终注册）
@@ -224,13 +223,13 @@ interface Job {
 | 方法 | 路径 | 用途 | 请求/响应 |
 |------|------|------|------|
 | GET | `/mcp` | MCP server 连接状态快照 | `{servers: [{name, state, scope, tools: {name, server, originalName, description}[], config, lastError?}]}`（`scope` 为该条目的来源层 `"global" | "project"`（两层配置见 [mcp](../core/mcp.md)）；`config` 为该 server 的 `McpServerConfig`，含地址等；`tools` 里的 `server` 是所属 server 名、`originalName` 是远端原名、`description` 供工具清单与 `/mcp <名字>` 展示） |
-| POST | `/mcp/servers` | 新增一个 server 并后台连接 | 请求 `{name, config, layer?}`；`layer` 为 `"global" | "project"`、缺省 global（新增条目的目标层，编辑不改层）；名字限定字母/数字/下划线/连字符（会进模型可见的工具名）；名字缺失/为空 400（`name is required`）；返回 `{ok, servers}`；名字重复（两层中任一占用）409、形状非法 400 |
+| POST | `/mcp/servers` | 新增一个 server 并后台连接 | 请求 `{name, config, layer?}`；`layer` 为 `"global" | "project"`、默认 global（新增条目的目标层，编辑不改层）；名字限定字母/数字/下划线/连字符（会进模型可见的工具名）；名字缺失/为空 400（`name is required`）；返回 `{ok, servers}`；名字重复（两层中任一占用）409、形状非法 400 |
 | PATCH | `/mcp/servers/:name` | 整体替换一个 server 的配置并重连 | 请求 `{config}`；条目留在它自己的层（项目层条目改完仍写回项目文件）；名字未知 404 |
 | DELETE | `/mcp/servers/:name` | 删除一个 server（断开并遗忘） | 返回 `{ok, servers}`；删除的是项目条目且全局层有同名条目时，全局条目立即恢复生效；名字未知 404 |
 | POST | `/mcp/servers/:name/enable` | 启停开关（持久、热生效） | 请求 `{enabled: boolean}`；非布尔 400（`enabled must be a boolean`）；禁用即断开、启用即发起一次连接 |
 | POST | `/mcp/servers/:name/reconnect` | 对失败/掉线的 server 手动发起一次连接 | 一次性尝试、不在背后排退避；对已连接的 server 是无操作；对禁用中的 server 400 |
 
-路由始终注册；daemon 未组装 McpManager 时 `GET /mcp` 的 `servers` 为空数组、全部动作端点回答 503。任何一次保存动作（增删改启停）都会把变更持久化到**拥有它的那层**：全局层归拢进 daemon 主目录的 `mcp.json` 并从磁盘上实际在用的配置布局移除遗留的 `mcp.servers` 节（config.json 为整文件重写、尚未迁移的 config.yaml 为行级编辑，其余内容原样保留），项目层写回工作区 `.kclaw/mcp.json`；使用方是 WebUI 的 MCP 页、双端的 `/mcp` 命令与 CLI 的 `kclaw mcp [list]`。连接状态机与两层合并规则见 [mcp](../core/mcp.md)。
+路由始终注册；daemon 未组装 McpManager 时 `GET /mcp` 的 `servers` 为空数组、全部动作端点回答 503。任何一次保存动作（增删改启停）都会把变更持久化到**拥有它的那层**：全局层写 daemon 主目录的 `mcp.json`，项目层写回工作区 `.kclaw/mcp.json`；使用方是 WebUI 的 MCP 页、双端的 `/mcp` 命令与 CLI 的 `kclaw mcp [list]`。连接状态机与两层合并规则见 [mcp](../core/mcp.md)。
 
 ### IM Channel 管理
 
@@ -238,7 +237,7 @@ interface Job {
 |---|---|---|---|
 | GET | `/channel` | 飞书频道配置与状态快照（WebUI「IM Channel」页） | `{config: {enabled, appId, appSecretSet, allowlist, primaryOpenId?}, status: {state: "disabled"/"running"/"error", error?}, pendingSenders: [{openId, count, lastSeen}]}`；`appSecretSet` 只表"是否已设置"，secret 内容不出现在任何响应里 |
 | POST | `/channel/config` | 保存配置并热重启通道（不重启 daemon） | 请求 `{enabled, appId, appSecret?, allowlist, primaryOpenId?}`；`appSecret` 为空即保持已存值；校验失败（enabled 缺凭据、推送接收人不在白名单）400；返回保存后的新快照 |
-| POST | `/channel/test` | 用草稿凭据验证飞书应用身份（换一次 access token），不落盘 | 请求 `{appId, appSecret?}`；secret 留空时用已存值；返回 `{ok, error?}` |
+| POST | `/channel/test` | 用草稿凭据验证飞书应用身份（换一次 access token），不写入文件 | 请求 `{appId, appSecret?}`；secret 留空时用已存值；返回 `{ok, error?}` |
 | POST | `/channel/allowlist/:openId` | 一键加白：open_id 写入白名单并热重启，同时清除对应待加白记录 | 幂等（已在白名单则不重启）；返回新快照 |
 
 路由始终注册；daemon 未组装频道管理器时 `GET /channel` 返回未启用快照、动作端点回答 503（与 MCP 组同款）。机制、热重启语义与待加白说明见 [feishu-channel](./feishu-channel.md)。
@@ -252,7 +251,7 @@ interface Job {
 
 **队列相关的 WS 命令与事件**（完整帧语义见 [realtime](./realtime.md) 与 [run-manager](./run-manager.md)）：
 
-- `send_message` 增加可选 `disposition` 字段（`"steer"|"wait"|"interrupt"`；非法值 error 帧 `send_message disposition must be "steer", "wait" or "interrupt"`）。不带字段取会话覆盖 ?? 配置默认（**默认引导**——有意的行为变更，旧版为自动等待）。回包 `send_message_ack` 增加 `messageId` 与 `queued`（会话空闲直发 `queued:false`、不广播 `message.queued`；运行中按处置分流 `queued:true`）。会话忙时超限的 error 帧文案：`队列已满（10 条）`。
+- `send_message` 增加可选 `disposition` 字段（`"steer"|"wait"|"interrupt"`；非法值 error 帧 `send_message disposition must be "steer", "wait" or "interrupt"`）。不带字段取会话覆盖 ?? 配置默认（**默认引导**）。回包 `send_message_ack` 增加 `messageId` 与 `queued`（会话空闲直发 `queued:false`、不广播 `message.queued`；运行中按处置分流 `queued:true`）。会话忙时超限的 error 帧文案：`队列已满（10 条）`。
 - `queue.cancel`：`{sessionId, messageId?}`——带 id 取消该条（wait 随时、steer 注入前），不带则清空全部可取消条目。回 `queue.cancel_ack {sessionId, cancelled}`；失败为 error 帧：已注入 `已注入`（机器不删历史）、无此条目 `not found`。
 - `message.retry`：`{sessionId, fromMessageId, text, attachments?}`——编辑重试/重新生成的服务端入口（机制见 [run-manager](./run-manager.md)）：校验通过后先持久化并广播 `message.truncated {fromMessageId}`（从该消息起退出对话视图），再走普通用户消息路径提交；回 `message.retry_ack {sessionId, messageId, queued}`（与 send_message 同步决策的形状一致）。同步失败为 error 帧：`只能从最后一条用户消息重试`（fromMessageId 不是最后一条 user 消息）、`会话忙：等当前运行和压缩结束、清空队列后再重试`、`重试内容为空（无文本也无附件）`、subagent 会话只读拒绝。
 - 三个新事件：`message.queued {messageId, disposition, position?}`（消息入队/入缓冲区时；position 是 wait/interrupt 的队列序位，steer 不适用；降级按实际处置报告）、`message.steered {messageId}`（steer 注入当前 run 的时刻，事件级 `runId` 标识注入的 run）、`message.queue_cancelled {messageId}` 或 `{all:true}`（单条取消/清空）。出队执行与注入仍用既有 `run.started` + `message.created` 表达，消息 id 与排队时相同——前端气泡原地升级，无需替换。
@@ -265,7 +264,7 @@ web 的审计页（`packages/web/src/audit/AuditView.tsx`）演示了标准用�
 
 1. 会话选择跟随应用侧栏的全局选中（也支持 `?tab=audit&session=<id>` 深链）；
 2. `GET /sessions/:id/events?since=0` 获取该会话**完整事件流**（`SessionEvent[]`，append-only、按事件序）；
-3. 客户端按流序摊平成逐行审计：`message` 事件每条消息按块（block）摊平（role + 类型标签 + 摘要，点击展开完整块；assistant 消息的最后一块行上显示 token 用量与 LLM 耗时 `latencyMs`，tool_result 行显示执行耗时 `durationMs`）、`message.truncated` 事件渲染成"截断"行（消息截断 · 从 `<起点>` 起退出对话视图，编辑重试/重新生成的记录）、`compaction` 事件渲染成"压缩"行、`memory` 事件渲染成"记忆"行、`skill` 事件渲染成"技能"行（技能提案的产生/采纳/驳回/回退/删除各一行，点击展开完整事件字段，见 [skills](../core/skills.md)）、`system` 事件渲染成"系统提示词"行（开头片段 + 字符数，点击展开全文，按稳定段/实时段两段展示，旧版单文本事件只显示一段；与相邻上一条文本不同标"已变化"）、`sandbox.checked` 事件渲染成"沙箱"行（可用 / 不可用（原因）/ 已关闭）、`run.started`/`run.ended` 渲染成"运行"行（触发来源 / 停止原因 + 用量，失败带错误，与消息事件夹出每轮边界）、`permission.decided` 渲染成"权限"行（裁决 + 裁决者 + 工具身份，展开看参数）、会话元数据事件（created/renamed/deleted/restored/set）渲染成轻量"会话"行，`team.*` 七种事件渲染成"team"行（建团/添加/组员状态/收信/送达/任务创建/任务状态的摘要，点击展开完整内容）。**二十二种持久化事件全部渲染成行**；
+3. 客户端按流序摊平成逐行审计：`message` 事件每条消息按块（block）摊平（role + 类型标签 + 摘要，点击展开完整块；assistant 消息的最后一块行上显示 token 用量与 LLM 耗时 `latencyMs`，tool_result 行显示执行耗时 `durationMs`）、`message.truncated` 事件渲染成"截断"行（消息截断 · 从 `<起点>` 起退出对话视图，编辑重试/重新生成的记录）、`compaction` 事件渲染成"压缩"行、`memory` 事件渲染成"记忆"行、`skill` 事件渲染成"技能"行（技能提案的产生/采纳/驳回/回退/删除各一行，点击展开完整事件字段，见 [skills](../core/skills.md)）、`system` 事件渲染成"系统提示词"行（开头片段 + 字符数，点击展开全文，按稳定段/实时段两段展示；与相邻上一条文本不同标"已变化"）、`sandbox.checked` 事件渲染成"沙箱"行（可用 / 不可用（原因）/ 已关闭）、`run.started`/`run.ended` 渲染成"运行"行（触发来源 / 停止原因 + 用量，失败带错误，与消息事件夹出每轮边界）、`permission.decided` 渲染成"权限"行（裁决 + 裁决者 + 工具身份，展开看参数）、会话元数据事件（created/renamed/deleted/restored/set）渲染成轻量"会话"行，`team.*` 七种事件渲染成"team"行（建团/添加/组员状态/收信/送达/任务创建/任务状态的摘要，点击展开完整内容）。**二十二种持久化事件全部渲染成行**；
 4. 实时增量：页面私有 ws 连接订阅会话，收到 `session.appended` 通知帧（存储层写入磁盘成功后发出，先写入磁盘再广播）即 `GET /sessions/:id/events?since=<已有条数>` 增量拉取，append-only 下标做游标、断线重连后重拉补齐。
 
 只读、不修改任何状态、无独立 `/audit` 路由——事件流（`events.jsonl`，一行一个事件的 append-only 文件）是审计的唯一事实来源，HTTP 只是它的读取窗口。tool 消息上的 `grantedBy`（每个工具调用的放行原因）随 `message` 事件一起返回，是"谁批准了这个操作"的审计依据。

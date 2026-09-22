@@ -99,7 +99,7 @@ export class ConfigPermissionGate implements PermissionGate {
 
 **exec 的接续符拆分是引号感知的**（`splitSubcommands`）：`;`/`|`/`&&`/换行在单引号内完全惰性、在双引号内不再拆分（`echo "a;b"` 是一段）；命令替换开拢符 `$( ` 与反引号在双引号内**仍然拆**——shell 在双引号里也会执行它们。有歧义的角落一律过拆不过漏拆：deny 会扫到每一段，allow/会话授权则照旧"跨拼接不生效"。聚合短旗标在 token 层展开（`-rf` → `-r -f`；仅纯字母主体，`-d,`/`--force` 保持整体）。
 
-**deny 的双路匹配**（`#execDenyHit`）：legacy 字符串 glob（所有既有规则的行为逐字节保留）**或** token 集合覆盖（`denyTokenCover`）任一命中即黑名单。token 路径把旗标换序盲区补上：`exec:rm -rf*` 同样拦下 `rm -r -f x` 与 `rm -f -r /bin/x`（头部 basename 相等/前缀 + 规则旗标 token 逐个在命令 token 多重集里找得到，顺序无关）。**token 路径是 deny 专属**，它只会扩大匹配面，用在 allow/沉淀规则/会话授权上就是把用户没批过的命令形态自动放行（fail-open：出错时放行，安全上的危险方向），所以放行侧永远只走 legacy 字符串匹配（旗标换序的命令会再确认一次，这是有意的保守）。
+**deny 的双路匹配**（`#execDenyHit`）：字符串 glob 匹配**或** token 集合覆盖（`denyTokenCover`）任一命中即黑名单。token 路径把旗标换序盲区补上：`exec:rm -rf*` 同样拦下 `rm -r -f x` 与 `rm -f -r /bin/x`（头部 basename 相等/前缀 + 规则旗标 token 逐个在命令 token 多重集里找得到，顺序无关）。**token 路径是 deny 专属**，它只会扩大匹配面，用在 allow/沉淀规则/会话授权上就是把用户没批过的命令形态自动放行（fail-open：出错时放行，安全上的危险方向），所以放行侧永远只走字符串 glob 匹配（旗标换序的命令会再确认一次，这是有意的保守）。
 
 `extractArg` 决定规则比对哪段字符串；每个工具取哪段，由**按 risk 推导处理**（见下节）决定：
 
@@ -158,7 +158,7 @@ trusted 不查询 allow / 沉淀规则 / 会话授权——边界内本就全放
 - **allow 命中不豁免逃逸**：白名单规则命中（词面路径匹配）但目标经符号链接（symlink）逃逸出工作区（realpath 形式）时，**不再直接放行**，退回到本步的越界确认——一条 `fs_write:link/**` 规则不会放行 `link/secret.txt`（若 `link` 指向工作区外的目录），越界目标对 allow 规则一律不生效，只能走确认或人工在会话中授权。这是有意收紧：allow 的授权范围不超出工作区边界。
 - safe 工具不豁免：fs_read/fs_list 越界同样要人确认——唯一例外是 `readRoots`（见下节）。
 - 工作目录本身允许（`resolved === root`，如对根目录 fs_list）。
-- 工作目录未设置时不做该检查（legacy 行为）；daemon 侧的取值是会话元数据的 `workdir`，默认回退 `config.workspace`（run 组装 core `executeRun`）。
+- 工作目录未设置时不做该检查；daemon 侧的取值是会话元数据的 `workdir`，默认回退 `config.workspace`（run 组装 core `executeRun`）。
 
 exec 没有可判定的"目标路径"——命令可以以任何方式访问文件系统，所以对 exec **没有越界精确判定**，处理策略是：命中 deny/allow 之外，若 exec 沙箱可用则整条命令在沙箱内自动放行（见第 7 节），否则 confirm，由人工审视命令本身。
 
@@ -166,15 +166,14 @@ exec 没有可判定的"目标路径"——命令可以以任何方式访问文�
 
 gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
 
-- **mode（会话权限模式）**：`PERMISSION_MODES = ["readonly" | "default" | "acceptEdits" | "trusted" | "auto"]` 五档，存在会话元数据 `meta.mode`，默认 `default`；daemon 创建的新会话（HTTP `POST /sessions` 与任务调度建会话）把 `config.permissions.defaultMode` 的当前值**固化为初始 mode**（事件流 `session.created` 带 `mode` 字段，旧流无该字段则读时默认 default），改 config 默认只影响之后新建的会话；run 组装每 run 从会话 meta 读出传入 gate。各档语义：
+- **mode（会话权限模式）**：`PERMISSION_MODES = ["readonly" | "default" | "acceptEdits" | "trusted" | "auto"]` 五档，存在会话元数据 `meta.mode`，默认 `default`；daemon 创建的新会话（HTTP `POST /sessions` 与任务调度建会话）把 `config.permissions.defaultMode` 的当前值**固化为初始 mode**（事件流 `session.created` 带 `mode` 字段），改 config 默认只影响之后新建的会话；run 组装每 run 从会话 meta 读出传入 gate。各档语义：
   - *readonly*：**risk 为 sensitive 的工具**（由 risk 直接派生，引擎不持名单，今天恰为 `fs_write`/`fs_edit`/`exec` 三个）在判定链第 ⓪ 步直接拒绝：reason `"readonly"`、note 文案 `只读模式（readonly）`，工具得到 error result 并随 tool 消息落一个 `kind:"denied"` note；读、web 与 memory 工具不受影响。短路排在一切规则之前：白名单里的 `allow: exec:*` 在只读下同样不执行：这个模式承诺的是零写入风险。在此之上，只读 run 的组装还会把这些工具（连同同样声明 sensitive 的 MCP 适配器工具）整个移出模型工具面，模型看到的清单里根本没有它们；第 ⓪ 步因此只剩保底意义，只有当模型从残留上下文里执意调用一个不可见的名字时才会触发，循环直接按 `unknown tool` 报错，不产生 denied note。可见性与 gate 用同一份 risk 事实（都从注册表派生），两者不会漂移。
   - *default*：默认档，判定链照常走（本节其余内容描述的就是它）。
   - *acceptEdits*：工作区内的文件写入免逐次确认——判定链第 ②'' 步对**路径写类工具**（带 `path` 参数且 sensitive）的目标做工作区内检查，通过即 `allow {reason:"accept_edits"}`；越界目标与 exec 等命令类工具不受益，仍走 confirm。
   - *trusted*：免审档，沙箱与工作区边界内的操作全部自动放行、不弹确认；边界外（exec 无法沙箱化、越界、无沙箱保护的 sensitive 工具）一律拒绝（fail-closed，见第 2 节「trusted 分支」）。前提是 exec 沙箱可用（`config.sandbox.enabled` 默认开）：沙箱不可用或未启用时，trusted 下的 exec 直接 deny，免审档没有人工确认这道防线，拒绝是唯一安全出路。
   - *auto*：判定链与 default 相同，额外叠加**规则归纳**：auto 会话里同一个操作（同一收紧键）被连续 `once` 批准 N 次（`config.permissions.autoLearnThreshold`，默认 3，0 关闭）后，自动把该操作保存为一条 `source:"auto"` 的项目档规则（保存位置与手动"总是允许"相同，下个 run 起生效）；任何一次 `reject` **或超时**清零该键的计数："拒绝"（含沉默的超时拒绝）是明确信号，不许被更早的放行覆盖。计数在进程内、**键按会话隔离**（跨会话的批准互不叠加；daemon 重启即清零，跨会话持久化是文档化后续项）；`project`/`global` 裁决不参与计数（那是显式的"总是允许"，无需归纳）；沙箱自动放行的调用也从不计数。归纳只针对人工裁决。**auto 模式不处理 run 级会话授权**（见第 11 节）：run 级免询会吞掉同一 run 内的重复确认、让归纳看不见连续的人工放行，所以即使 sessionGrants 开启、授权存储已就位，auto 会话仍逐次确认直到归纳落定。auto 模式本身不自动放行任何东西，它只是把反复的人工批准变成规则。
-  - 切换入口：CLI 的 Shift+Tab 循环与 `/mode` 命令、WebUI 的常驻选择器，最终都落到 `POST /sessions/:id/mode`（事件溯源写入：追加一条 `session.set` 事件进会话事件流并折进 meta 投影，`GET /sessions/:id/events` 可见，不做 WS 广播）；下一次 run 起生效。旧版 `POST /sessions/:id/readonly` 已移除，读兼容见下。
-  - **legacy 读兼容**：投影 `meta.json` 里旧的 `readonly: true` 读出时映射为 `mode: "readonly"`（布尔删除）；事件流里旧的 `session.set {readonly}` 同样映射。写入端只产 `mode`。
-  - daemon 级只读启动旗标（`--readonly`）已随本批移除：模式是会话级事实，宿主不再设全局上限。
+  - 切换入口：CLI 的 Shift+Tab 循环与 `/mode` 命令、WebUI 的常驻选择器，最终都落到 `POST /sessions/:id/mode`（事件溯源写入：追加一条 `session.set` 事件进会话事件流并折进 meta 投影，`GET /sessions/:id/events` 可见，不做 WS 广播）；下一次 run 起生效。
+  - 模式是会话级事实：daemon 不设宿主级全局上限。
 - **readRoots**：额外可读根列表。**safe 的路径参数工具**（按「带 `path` 参数且非 sensitive」派生，今天为 `fs_read`/`fs_list`）的目标落在其中任一根之内时不算越界（免确认）；写类工具永不豁免。daemon 组装传 `[<home>/attachments, <home>/spill]`，上传的附件对会话而言就是"工作区的一部分"；spill 目录（上下文溢出持久化区）加入后，模型拿压缩定位行的 `fs_read` 提示去读溢出的原文时同样无需逐次人工放行。
 
 ### 6. 工具的处理方式怎么派生（引擎不持名单）
@@ -248,7 +247,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 人工在确认里选"总是允许"后，一条**收紧的 allow 规则**保存为 YAML 文件（`packages/core/src/storage/decided-rules.ts`；"沉淀规则"即这些由人工批准或 auto 归纳积累下来的规则，判定链里 reason 为 `"learned"`），下一个 run 起由 gate 的 `decidedRules` 输入加载（判定链第 ②' 步）：
 
 - **两个文件，各自独立**：项目档 `<workspace>/.kclaw/permissions.yaml`（裁决所属会话的工作目录）、全局档 `~/.kclaw/permissions.yaml`。沉淀规则只落在上面两个文件，主配置文件 `config.json` 不参与。
-- **每条带出处**（`DecidedRuleEntry`）：`rule`（收紧后的规则）、`decidedAt`（ISO 时刻）、`origin`（触发裁决的工具名、原始参数 JSON、会话 id）、`source`（可选——`"auto"` 表示 auto 模式归纳，默认即 `"manual"`，兼容没有该字段的旧文件）。文件 0600 权限，原子写入。
+- **每条带出处**（`DecidedRuleEntry`）：`rule`（收紧后的规则）、`decidedAt`（ISO 时刻）、`origin`（触发裁决的工具名、原始参数 JSON、会话 id）、`source`（可选——`"auto"` 表示 auto 模式归纳，不写即 `"manual"`）。文件 0600 权限，原子写入。
 - **规则收紧（`narrowDecidedRule`）**：exec 按"首词 + 子命令前缀"收紧：`git push origin main` 落成 `exec:git push*`，`git fetch` 落成 `exec:git fetch*`（两词命令保留前两词 + 前缀）；**单词命令精确形态**（`ls` 落成 `exec:ls`）；链式命令只取第一段；命令 token 折叠为 basename（`/bin/rm -rf build` → `exec:rm -rf*`）。路径写类工具落 **realpath 精确路径**（`fs_write:/w/proj/a.md`，只放行这一个文件）；其余工具落工具级规则（如 `mcp__srv__do`）。收紧的原则是宁紧勿松：人批准的是那一条命令，不是一个命令族（前缀形态是可用性折衷，覆盖 `git push origin main` 与 `git push origin dev` 这类同族变体，代价是 `git push --force` 这类带旗标变体也会被前缀放行；拒绝的是更宽的命令族）。
 - **项目文件本地专属（防御三件套）**：保存时自动把 `.kclaw/permissions.yaml` 追加进工作区 `.gitignore`；已被 git 跟踪的项目规则文件**整体忽略**（`loadDecidedRulesForRun` 检测 `git ls-files`，tracked 即不加载并在 daemon 日志告警）——克隆来的仓库无法夹带一份预授权清单；文档（本节）写明该行为。管理页（WebUI 权限页）对 git 跟踪的项目档显示"已被跟踪、规则不生效"的提示（`GET /permissions/rules` 返回 `tracked`/`ignored` 字段，两者恒等，规则列表恒空）。
 - **每 run 加载（`loadDecidedRulesForRun`）**：run 组装时读两档文件合并为规则串数组传 gate；删除文件里的条目（或整个文件）即收回授权，对下一个 run 立即生效。管理入口：WebUI「权限」页（`GET /permissions/rules` 列表、`DELETE /permissions/rules` 单条删除，项目档支持 `?workspace=` 指定）。

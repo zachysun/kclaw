@@ -1,6 +1,6 @@
 # hooks — hook 位置与内置 hook 清单
 
-> 权威来源：`packages/core/src/hooks/types.ts`（位置与契约）、`hooks/positions.ts`（运行时清单）、`hooks/builtin.ts`（内置 hook 唯一定义来源 `BUILTIN_HOOK_SPECS`，管理面 `BUILTIN_HOOK_DEFINITIONS` 由它投影）。机制见 [hooks](../core/hooks.md)。
+> 权威来源：`packages/core/src/hooks/types.ts`（位置与契约）、`hooks/positions.ts`（运行时清单）、`hooks/builtin.ts`（内置 hook 唯一定义来源 `BUILTIN_HOOK_SPECS`，管理接口用的 `BUILTIN_HOOK_DEFINITIONS` 由它投影）。机制见 [hooks](../core/hooks.md)。
 
 ## HookPosition（14 个）
 
@@ -68,7 +68,7 @@ subagent run（`childRun`）的派生跳过：`memory-inject` 不检索、`auton
 |------|------|------|
 | `name` | string | 内置 = 功能名；用户 = 文件基名（身份） |
 | `position` | HookPosition | 挂载位置 |
-| `description?` | string | 描述（管理面显示） |
+| `description?` | string | 描述（管理页显示） |
 | `enabled` | boolean | 是否启用 |
 | `order` | number | 同位置内升序执行；用户 hook 默认 1000（落在内置 10–99 之后） |
 | `failure` | `"fatal" \| "skip" \| "deny"` | 失败策略（见下） |
