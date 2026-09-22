@@ -156,7 +156,8 @@ describe("startSkillScheduler", () => {
   it("enabled=false or idleMinutes=0 consumes nothing", async () => {
     const sys = fakeSystem()
     sys.checks.push({ sessionId: sys.sid, endTurnAt: "2026-08-29T10:00:00Z" })
-    const off = structuredClone(defaultConfig) // 默认 enabled=false
+    const off = structuredClone(defaultConfig) // 显式关闭（默认已是开启）
+    off.skills!.evolution!.enabled = false
     const h1 = start(sys, off)
     await tick()
     await h1.stop()
