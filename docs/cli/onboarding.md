@@ -33,22 +33,25 @@ export function detectProviderStatus(home: string): ProviderStatus
 
 ## wizard 流程（packages/cli/src/wizard.ts）
 
-四个模板（`PROVIDER_TEMPLATES`）：
+模板菜单来自 core 的 `PROVIDER_PRESETS`（与 WebUI Model 页共用的同一份预设目录）加上一个自定义项：
 
-| id | label | baseUrl | 默认 model | skipKey |
-|----|-------|---------|-----------|---------|
-| `deepseek` | DeepSeek | `https://api.deepseek.com` | `deepseek-chat` | |
-| `openai` | OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` | |
-| `ollama` | Ollama (local) | `http://127.0.0.1:11434/v1` | | 是（key 固定填 `"ollama"`） |
-| `custom` | Custom OpenAI-compatible endpoint | 无（需输入） | | |
+| id | label | format | baseUrl | 默认 model | skipKey |
+|----|-------|--------|---------|-----------|---------|
+| `deepseek` | DeepSeek | openai | `https://api.deepseek.com/v1` | `deepseek-chat` | |
+| `openai` | OpenAI | openai | `https://api.openai.com/v1` | `gpt-4o-mini` | |
+| `anthropic` | Anthropic | anthropic | `https://api.anthropic.com` | `claude-sonnet-4-5` | |
+| `ollama` | Ollama (local) | openai | `http://localhost:11434/v1` | | 是（key 固定填 `"ollama"`） |
+| `custom` | Custom OpenAI-compatible endpoint | openai | 无（需输入） | | |
+
+`format` 决定探测与保存条目的线上协议（openai 走 OpenAI 兼容的 `/chat/completions`，anthropic 走 Anthropic Messages API）。预设里写死格式与 baseUrl，用户只需填 key 与模型，Anthropic 格式的 provider 首次运行就能配（机制见 [provider](../core/provider.md)）。
 
 步骤机（`step: "template" | "baseurl" | "key" | "model"`）：
 
-1. **template**：@clack 单选四模板；custom（无 baseUrl）进入 baseurl 步，ollama（skipKey）跳过 key 直达 model，其余进入 key。
+1. **template**：@clack 单选五模板；custom（无 baseUrl）进入 baseurl 步，ollama（skipKey）跳过 key 直达 model，其余进入 key。
 2. **baseurl**（仅 custom）：文本输入，裁掉末尾斜杠，空值报错并重新输入。
 3. **key**：`p.password` 隐藏输入（不回显）；ollama 不经过这步。
 4. **model**：文本输入，空则用模板默认；然后构造 `buildProviderEntry(t, apiKey, model)` → `{ baseUrl, apiKey, model }` → 连通测试。
-5. **连通测试**（core `probeProviderChat`）：`POST {baseUrl}/chat/completions`，body `{ model, messages: [{role:"user", content:"hi"}], max_tokens: 1, stream: false }`，20 秒超时；不抛异常而是返回 `{status, body}`（status 为 null = 请求没到达），与 provider 管理接口共用同一探测实现（机制见 [provider](../core/provider.md)）。成功（HTTP < 400）→ 写配置收尾；失败 → 分类报错 + 重试确认。
+5. **连通测试**（core `probeProviderChat`）：按模板的 `format` 探测——openai 格式 `POST {baseUrl}/chat/completions`，body `{ model, messages: [{role:"user", content:"hi"}], max_tokens: 1, stream: false }`；anthropic 格式 `POST {baseUrl}/v1/messages`，body 为对应的 Messages 形态。20 秒超时；不抛异常而是返回 `{status, body}`（status 为 null = 请求没到达），与 provider 管理接口共用同一探测实现（机制见 [provider](../core/provider.md)）。成功（HTTP < 400）→ 写配置收尾；失败 → 分类报错 + 重试确认。
 
 **失败按三类报错**（`classifyProbeError` → `REASON`）：
 
@@ -61,7 +64,7 @@ export function detectProviderStatus(home: string): ProviderStatus
 
 "重试？→ 是"回到上表对应的步骤，"否"或取消 → `已退出，未做任何修改`，返回 `"aborted"`。
 
-**成功收尾**：`loadConfig` 读旧配置 → `saveConfig` 合并写入 `{providers: {default: tpl.id, entries: {...旧, [tpl.id]: entry}}}`（其余配置原样保留；原子写、mode 0600；首次写入会把仍在的旧 `config.yaml` 改名为 `config.yaml.bak` 弃用，此后 `config.json` 是唯一配置）→ `chmodSync(paths.config, 0o600)`（双保险）→ `已写入 config.json，开始对话`，返回 `"configured"`，`chatAction` 继续进入 REPL。
+**成功收尾**：`loadConfig` 读旧配置 → `saveConfig` 合并写入 `{providers: {default: tpl.id, entries: {...旧, [tpl.id]: entry}}}`（其余配置原样保留；原子写、mode 0600）→ `chmodSync(paths.config, 0o600)`（双保险）→ `已写入 config.json，开始对话`，返回 `"configured"`，`chatAction` 继续进入 REPL。
 
 ## kclaw web（packages/cli/src/web-cmd.ts）
 
@@ -100,7 +103,7 @@ if (major < 22) {
 
 ## 边界与出错
 
-- **wizard 不修改 config.json 之外的任何文件**（成功保存时旧 `config.yaml` 改名为 `config.yaml.bak` 除外）：中途任何取消点都返回 `"aborted"` 且无文件写入。
+- **wizard 不修改 config.json 之外的任何文件**：中途任何取消点都返回 `"aborted"` 且无文件写入。
 - **非交互终端没有 wizard**：只打印一行指引，面向脚本/CI 场景（脚本/CI 场景不应出现交互式提问）。
 - **连通测试超时 20s**：`AbortSignal.timeout` 中止请求，status 记为 null → 按 network 类报错。
 - **`kclaw web` 无浏览器命令的平台**：Windows 等 `openCommandFor` 返回 null 的平台退化为打印 URL（token 完整可见，用户自行打开）。

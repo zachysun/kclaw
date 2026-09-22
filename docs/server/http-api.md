@@ -61,7 +61,6 @@ interface SessionMeta {
   mode?: "readonly" | "default" | "acceptEdits" | "trusted" | "auto"   // 会话权限模式（默认 default）
   deleted?: boolean
   deletedAt?: string
-  compactedUpto?: string
   compaction?: { segments: { upto: string; summary: string }[]; top: string; upto: string }
                               // 分层压缩状态（由 compaction 事件投影），字段语义见 compaction.md
   dispositionOverride?: "steer" | "wait" | "interrupt"

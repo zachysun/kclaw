@@ -223,7 +223,7 @@ rmSync(<home>/daemon.json)          // 只有全部成功才删
 - **stop 后 token 仍在**：`<home>/token` 是 daemon 的身份，不是某次运行的临时凭证；重装/换 token 需手动删文件。
 - **stale daemon.json 在启动时自愈**：`acquireDaemonSlot` 见到死 pid 的残留文件即删除并重新 `wx` 认领；存活 pid 则拒绝启动。运行中失效的发现（health 检测、respawn 决策）仍在 CLI 侧（见上文 ensureDaemon/stopDaemon）。
 - **`/health` 无鉴权，因此也没有信息泄露控制**：它只返回 `{ok:true}`，不暴露版本/端口/pid；`/status`（version、uptimeSec）受鉴权保护。
-- **配置文件损坏即启动失败**：`loadConfig` 对无法解析的 YAML 直接抛错（静默退回默认值会丢掉用户的权限规则），daemon 不启动。
+- **配置文件损坏即启动失败**：`loadConfig` 对无法解析的 JSON 直接抛错（静默退回默认值会丢掉用户的权限规则），daemon 不启动。
 - **bin 假定构建产物存在**：`kclaw-server.mjs` import 的是 `../dist/index.js`，packages/server 未构建时启动直接失败（CLI 的错误信息里提示 `pnpm -C packages/server build`）。
 - **MCP server 挂了不牵连 daemon**：连接/调用失败只进状态与日志（`kclaw mcp <name> error: …`），该 server 的工具从下一次 run 起消失，其余功能不受影响（见 [mcp](../core/mcp.md)）。
 

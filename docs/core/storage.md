@@ -253,7 +253,7 @@ HTTP 出口与展示见 [http-api](../server/http-api.md) 的 `GET /usage` 与 [
 ## 边界与出错
 
 - **meta.json 原子写**：`writeMeta` 经 `writeFileAtomic`（临时文件 + rename）写入，meta.json 本身不会被截断；崩溃最坏残留一个 `<meta.json>.tmp` 临时文件，不影响读取。
-- **config 校验是分字段的，不是整体 schema**：文件级语法错（JSON/YAML 解析失败、根不是映射）启动即抛错；少数进事件流或影响存亡的字段在加载时逐字段校验（`permissions.defaultMode`、压缩阈值线整组、`team.*`、`server.port`——非法值回退到默认并告警一行）；其余字段不做结构校验，写错类型要到运行时的读取处才以意外方式失败。
+- **config 校验是分字段的，不是整体 schema**：文件级语法错（JSON 解析失败、根不是映射）启动即抛错；少数进事件流或影响存亡的字段在加载时逐字段校验（`permissions.defaultMode`、压缩阈值线整组、`team.*`、`server.port`——非法值回退到默认并告警一行）；其余字段不做结构校验，写错类型要到运行时的读取处才以意外方式失败。
 - **SQLite 未开 WAL**：jobs.db、记忆的 `vectors.db`（每项目 + 全局各一个）与 usage.db 都用默认日志模式。单 daemon 进程同步访问（better-sqlite3）下安全；多进程并发写同一个 home 是明确不支持的用法。进程内的同一个 vectors.db 也只有 MemoryPipeline 一个连接（检索方借用句柄）。
 - **KCLAW_HOME 只在 `resolvePaths` 读取一次**：核心层不缓存，但各调用方持有自己的解析结果；daemon 启动后改环境变量不影响已创建的路径。
 

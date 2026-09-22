@@ -126,17 +126,17 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 
 ## 技能进化（提案制）
 
-技能进化是"让技能库随使用变好"的机制：一轮对话（run）里卷入过的技能（被 `skill_read` 读取、被 `skill_list` 列出、被用户 `/点名`）在对话结束并空闲一段时间后，由系统自动提炼成**技能提案**（一份待确认的技能新增/修订建议），写进 `<skillsDir>/.proposals/`（点开头的目录，技能扫描器不认，见上文的目录名规则），绝不触碰已生效的技能。提案在 WebUI 技能页的「提案」页签里人工审阅：确认即写入技能目录、下一轮对话自动吃到；可驳回；已确认的可回退。对话中模型也可经 `skill_create` 工具当场发起提案，走同一个审阅状态机。整个功能在 config 中可开关，默认关闭。
+技能进化是"让技能库随使用变好"的机制：一轮对话（run）里卷入过的技能（被 `skill_read` 读取、被 `skill_list` 列出、被用户 `/点名`）在对话结束并空闲一段时间后，由系统自动提炼成**技能提案**（一份待确认的技能新增/修订建议），写进 `<skillsDir>/.proposals/`（点开头的目录，技能扫描器不认，见上文的目录名规则），绝不触碰已生效的技能。提案在 WebUI 技能页的「提案」页签里人工审阅：确认即写入技能目录、下一轮对话自动吃到；可驳回；已确认的可回退。对话中模型也可经 `skill_create` 工具当场发起提案，走同一个审阅状态机。整个功能在 config 中可开关，默认开启。
 
 状态机：`proposed → applied | rejected`，`applied → reverted`；`rejected` / `reverted` 保留在磁盘上可手动清理。核心实现在 `packages/core/src/skills/proposals.ts`（提案存取与治理）与 `evolution.ts`（提炼 pipeline 与调度簿记），服务端消费端在 `packages/server/src/skill-scheduler.ts`。
 
 ### 配置（skills.evolution）
 
-`KclawConfig.skills.evolution`（可选节，老配置文件兼容）：
+`KclawConfig.skills.evolution`（可选节，不写时取默认值）：
 
 | 字段 | 默认 | 说明 |
 |------|------|------|
-| `skills.evolution.enabled` | `false` | 总开关。`false` 时功能完全惰性：run 收尾不排检查、调度器不消费、`skill_create` 返回固定关闭文案；已有的提案文件无论开关状态都可列表查看 |
+| `skills.evolution.enabled` | `true` | 总开关。`false` 时功能完全惰性：run 收尾不排检查、调度器不消费、`skill_create` 返回固定关闭文案；已有的提案文件无论开关状态都可列表查看 |
 | `skills.evolution.idleMinutes` | `10` | run 结束后到提炼检查可触发的空闲窗口分钟数，与 `memory.write.idleMinutes` 互不牵动。`0` 视为关闭延迟补查（此时只剩 `skill_create` 一条提案路径）。负数/非整数按字段回退默认并警告 |
 
 ### 提炼时机
@@ -158,7 +158,7 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 - **范围**：该项目全部会话（含 subagent 会话）各自增量，逐会话处理——单会话失败不阻塞其他会话（有失败时整体 reject，增量进度保留，下个 sweep 重试同一范围，全部成功才 resolve）；
 - **渲染**：照记忆提炼的 `renderSegment`（含工具块——`skill_read` 的 `tool_result` 就是技能正文，提炼模型能看到"读了什么、之后做了什么"）；
 - **提炼模型**：解析复用 `memory.extractModel` 的同一条链（`makeExtractLlmResolver` 共享 helper，记忆与技能两套提取器共用，行为不变：空串回退主模型、provider 条目命中走条目端点、其余按裸线上模型名发往主端点），不新增模型配置字段；
-- **输出契约**：JSON `{ proposals: [...] }`，单次至多 3 条（超出丢弃并 log）；每条字段 `kind`（new/revise）、`name`、`scope`（global/project）、`title`、`rationale`、`changes`（revise 必填，改了哪里、为什么）、`content`（含 frontmatter 的完整 SKILL.md）。单条校验失败（名字不过 `isSkillDirName`、content 为空、kind 非法）丢弃该条并 log；`scope` 非法回退 `"project"`（影响面小的方向）；`revise` 的目标不存在、或目标是复用链接技能（按 scope 读 `.links.json` 命中名字）时丢弃该条并 log；
+- **输出契约**：JSON `{ proposals: [...] }`，单次至多 3 条（超出丢弃并 log）；每条字段 `kind`（new/revise）、`name`、`scope`（global/project）、`title`、`rationale`、`changes`（revise 必填，改了哪里、为什么）、`content`（含 frontmatter 的完整 SKILL.md）。单条校验失败（名字不过 `isSkillDirName`、content 为空、content 超 64KB、kind 非法）丢弃该条并 log；`scope` 非法回退 `"project"`（影响面小的方向）；`revise` 的目标不存在、或目标是复用链接技能（按 scope 读 `.links.json` 命中名字）时丢弃该条并 log；
 - **产出 0 条 = 安静结束**：不落文件、不发事件（"判断没有值得提的"是正常结局，照 `memory_save` 诚实空回复的精神）；
 - **推进规则与记忆一致**：提炼调用异常 → 不推进、下次补查重试同一范围；拿到合法 JSON（无论 0 条还是 N 条）→ 推进各会话增量进度（JSON 不可解析按放弃处理并推进的既有取舍）；
 - **每条产出**：写提案文件（`status: "proposed"`，`kind: "revise"` 时带 `baseline`）+ 一条 `skill` 审计事件（见下）。
