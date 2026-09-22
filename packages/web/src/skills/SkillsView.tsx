@@ -161,8 +161,9 @@ export function SkillsView({ api, notice }: {
     // 复用管理面的三份数据失败都走行内降级，不打扰主清单的 notice。
     api.get<DiscoveryPayload>(`/skills/discovery${scopeQuery}`).then(setDiscovery).catch(() => setDiscovery(null))
     api.get<LinksPayload>(`/skills/links${scopeQuery}`).then(setLinks).catch(() => setLinks(null))
-    reloadProposals()
-  }, [api, scopeQuery, reloadProposals])
+    // 提案面不挂在这里：它有自己的 effect 与写后刷新（reloadProposals），避免
+    // proposalQuery 变化连带主清单三份数据重拉、挂载时提案重复请求。
+  }, [api, scopeQuery])
   useEffect(() => { reload() }, [reload])
 
   const refreshAfterWrite = useCallback((message: string) => {
@@ -311,8 +312,13 @@ export function SkillsView({ api, notice }: {
     if (wd === undefined || wd === "") return ""
     return wd.split("/").filter(Boolean).pop() ?? wd
   }
-  /** ISO → "YYYY-MM-DD HH:mm"（列表行足够，不需要秒）。 */
-  const shortTime = (iso: string): string => iso.slice(0, 16).replace("T", " ")
+  /** ISO → 本地时区 "YYYY-MM-DD HH:mm"（列表行足够，不需要秒）。 */
+  const shortTime = (iso: string): string => {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return iso
+    const pad = (n: number) => String(n).padStart(2, "0")
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
 
   const proposalAction = async (p: ProposalRow, op: "apply" | "reject" | "revert"): Promise<void> => {
     setBusy(true)
@@ -320,7 +326,9 @@ export function SkillsView({ api, notice }: {
       const res = await api.post<{ ok: boolean; warning?: string }>(`/skills/proposals/${encodeURIComponent(p.id)}/${op}`, {})
       if (res.warning !== undefined) notice(res.warning) // 非致命提示（如全局提案被某项目同名技能遮蔽）
       const verb = op === "apply" ? "已采纳" : op === "reject" ? "已驳回" : "已回退"
-      refreshAfterWrite(`提案 ${p.name} ${verb}`)
+      notice(`提案 ${p.name} ${verb}`)
+      reload()
+      reloadProposals()
     } catch (e) {
       notice(`操作失败: ${String(e)}`, "error")
       reload()
@@ -334,7 +342,8 @@ export function SkillsView({ api, notice }: {
     try {
       await api.del(`/skills/proposals/${encodeURIComponent(p.id)}`)
       setProposalId(null)
-      refreshAfterWrite(`已删除提案 ${p.name}`)
+      notice(`已删除提案 ${p.name}`)
+      reloadProposals()
     } catch (e) {
       notice(`删除失败: ${String(e)}`, "error")
       reload()
@@ -509,7 +518,7 @@ export function SkillsView({ api, notice }: {
                   PROPOSAL_STATUS_LABEL[p.status],
                   `来源：${p.source === "follow" ? "空闲提炼" : "模型 skill_create"}`,
                   `落点：${PROPOSAL_SCOPE_LABEL[p.scope]}${p.workdir !== undefined ? `（${p.workdir}）` : ""}`,
-                  `创建于 ${p.createdAt}`,
+                  `创建于 ${shortTime(p.createdAt)}`,
                 ]
                 return (
                   <>
