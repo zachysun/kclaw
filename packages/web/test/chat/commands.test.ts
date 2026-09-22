@@ -19,7 +19,7 @@ function makeCtx(): WebCommandCtx & {
 } {
   return {
     api: {
-      get: vi.fn(async () => ({ readonly: true, model: "gpt-5" })),
+      get: vi.fn(async () => ({ mode: "default", model: "gpt-5" })),
       post: vi.fn(async () => ({ message: "压缩了 3 段，剩 4 条原文消息" })),
     },
     sessionId: "s1",

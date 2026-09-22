@@ -416,15 +416,12 @@ describe("kclaw mcp", () => {
   it("lists a failing configured server with its error", async () => {
     const h = makeHome()
     writeFileSync(
-      join(h, "config.yaml"),
-      [
-        'mcp:',
-        '  servers:',
-        '    broken:',
-        '      type: stdio',
-        '      command: "/nonexistent/kclaw-mcp-nowhere"',
-        '',
-      ].join("\n"),
+      join(h, "mcp.json"),
+      JSON.stringify(
+        { servers: { broken: { type: "stdio", command: "/nonexistent/kclaw-mcp-nowhere" } } },
+        null,
+        2,
+      ),
     )
     await runCli(["daemon", "start"], h)
     // The manager may still be "connecting" a beat after readiness: poll

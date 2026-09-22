@@ -228,7 +228,10 @@ const home = homes[0]!
 // bwrap) sandboxable exec auto-passes instead of confirming, so the shared
 // home turns the sandbox off — it is exercised by core's provider tests.
 mkdirSync(home, { recursive: true })
-writeFileSync(join(home, "config.yaml"), ["sandbox:", "  enabled: false", "  writeRoots: []", ""].join("\n"))
+writeFileSync(
+  join(home, "config.json"),
+  JSON.stringify({ sandbox: { enabled: false, writeRoots: [] } }, null, 2),
+)
 
 /** Run the built CLI (bare or with args) against a home + the mock provider. */
 function runChatCli(args: string[], input: string, cwdHome: string = home) {

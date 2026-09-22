@@ -144,9 +144,7 @@ function rowFull(row: AuditRow): string {
     case "memory":
       return memoryFullContent(row.event)
     case "system":
-      return row.event.text !== undefined
-        ? row.event.text
-        : `【稳定段】\n${row.event.stable}\n\n【实时段】\n${row.event.live ?? ""}`
+      return `【稳定段】\n${row.event.stable}\n\n【实时段】\n${row.event.live ?? ""}`
     case "sandbox":
       return sandboxFullContent(row.event)
     case "session":

@@ -2,16 +2,16 @@
  * First-run provider wizard: when detectProviderStatus reports
  * "missing" and stdout is a TTY, `kclaw chat` hands over to runWizard — a
  * 30-second select→key→model flow that probes the endpoint with a 1-token
- * completion and, only on success, writes config.yaml. Every cancel or
+ * completion and, only on success, writes config.json. Every cancel or
  * "重试？→否" bails out WITHOUT touching the filesystem (no partial
- * config.yaml is ever written).
+ * config.json is ever written).
  *
  * Paths come from core's resolvePaths (the real KclawPaths shape, home et
  * al.) — never a hand-rolled stand-in — so resolution cannot drift from the
  * daemon's; its mkdir side effect merely pre-creates the home tree any
  * kclaw invocation creates anyway. saveConfig itself does NOT set a file
  * mode (plain writeFileSync → 0o666 & umask), so the wizard chmods
- * config.yaml to 0o600 right after saving — API keys live in that file.
+ * config.json to 0o600 right after saving — API keys live in that file.
  *
  * The custom template has no baseUrl of its own, so the flow inserts a
  * baseUrl input step for it before the key step.

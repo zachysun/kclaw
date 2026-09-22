@@ -517,7 +517,7 @@ describe("AuditView (audit)", () => {
   it("renders system events as 系统提示词 rows with a truncated snippet and char count", async () => {
     const longText = "系统提示词全文".repeat(30)
     const api = makeApi()
-    staticStream(api, [systemEvent({ text: longText })])
+    staticStream(api, [systemEvent({ stable: longText })])
 
     const { container, root } = await mount(api)
     const row = container.querySelector('[data-testid="system-row-0"]')
@@ -534,10 +534,10 @@ describe("AuditView (audit)", () => {
   it("does not badge the first system row and badges a changed later one (across interleaved rows)", async () => {
     const api = makeApi()
     staticStream(api, [
-      systemEvent({ text: "第一版系统提示词", at: "2026-08-19T10:06:00.000Z" }),
-      systemEvent({ text: "第一版系统提示词", at: "2026-08-19T10:06:30.000Z" }),
+      systemEvent({ stable: "第一版系统提示词", at: "2026-08-19T10:06:00.000Z" }),
+      systemEvent({ stable: "第一版系统提示词", at: "2026-08-19T10:06:30.000Z" }),
       messageEvent({ id: "m1", blocks: [{ id: "b1", type: "text", text: "中间的对话" }], createdAt: "2026-08-19T10:07:00.000Z" }),
-      systemEvent({ text: "第二版系统提示词", at: "2026-08-19T11:06:00.000Z" }),
+      systemEvent({ stable: "第二版系统提示词", at: "2026-08-19T11:06:00.000Z" }),
     ])
 
     const { container, root } = await mount(api)
@@ -552,7 +552,7 @@ describe("AuditView (audit)", () => {
   it("expands a system row on click to reveal the full prompt text", async () => {
     const longText = "系统提示词全文".repeat(30)
     const api = makeApi()
-    staticStream(api, [systemEvent({ text: longText })])
+    staticStream(api, [systemEvent({ stable: longText })])
 
     const { container, root } = await mount(api)
     await act(async () => {

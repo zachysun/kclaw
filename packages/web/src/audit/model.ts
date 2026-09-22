@@ -382,12 +382,8 @@ export function sandboxFullContent(event: SandboxCheckedEvent): string {
   return lines.join("\n")
 }
 
-/**
- * The system prompt text the model actually saw: legacy single-text events
- * carry it in `text`; split events compose it from stable + live segments.
- */
+/** The system prompt text the model actually saw, composed from stable + live segments. */
 export function systemFullText(event: SystemEvent): string {
-  if (event.text !== undefined) return event.text
   return [event.stable, event.live].filter((s) => s !== undefined && s !== "").join("\n\n")
 }
 
@@ -453,7 +449,6 @@ export function sessionSummary(event: SessionMetaEvent): string {
       if (event.model !== undefined) bits.push(`模型 ${event.model === null ? "（恢复默认）" : event.model}`)
       if (event.mode !== undefined) bits.push(`模式 ${event.mode === null ? "（清除）" : event.mode}`)
       if (event.disposition !== undefined) bits.push(`排队 ${event.disposition === null ? "（清除）" : event.disposition}`)
-      if (event.readonly === true) bits.push("只读")
       return bits.join(" · ")
     }
   }
@@ -472,7 +467,6 @@ export function sessionFullContent(event: SessionMetaEvent): string {
     if (event.model !== undefined) lines.push(`model: ${String(event.model)}`)
     if (event.mode !== undefined) lines.push(`mode: ${String(event.mode)}`)
     if (event.disposition !== undefined) lines.push(`disposition: ${String(event.disposition)}`)
-    if (event.readonly !== undefined) lines.push(`readonly: ${String(event.readonly)}`)
   }
   return lines.join("\n")
 }

@@ -1,8 +1,8 @@
 /**
  * detectProviderStatus: the triage the first-run wizard
- * and the chat entry will branch on — "config" when config.yaml carries a
+ * and the chat entry will branch on — "config" when config.json carries a
  * resolvable providers.default entry, "env" when any KCLAW_LLM_* env var is
- * set, "missing" otherwise. Goes through the public path only: config.yaml
+ * set, "missing" otherwise. Goes through the public path only: config.json
  * is written to a temp home, no internals are mocked. loadConfig treats a
  * missing file as defaults (providers.default: ""), which must fall through
  * to the env check rather than report "config".
@@ -30,8 +30,10 @@ describe("detectProviderStatus", () => {
     try { expect(detectProviderStatus(home)).toBe("env") } finally { delete process.env.KCLAW_LLM_API_KEY }
   })
   it("config when providers.default entry exists", () => {
-    writeFileSync(join(home, "config.yaml"),
-      "providers:\n  default: p1\n  entries:\n    p1:\n      baseUrl: http://x\n      apiKey: k\n      model: m\n")
+    writeFileSync(
+      join(home, "config.json"),
+      JSON.stringify({ providers: { default: "p1", entries: { p1: { baseUrl: "http://x", apiKey: "k", model: "m" } } } }),
+    )
     ENV_KEYS.forEach((k) => delete process.env[k])
     expect(detectProviderStatus(home)).toBe("config")
   })
