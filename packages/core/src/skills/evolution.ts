@@ -76,7 +76,7 @@ export const SKILL_EXTRACT_SYSTEM_PROMPT = [
 export interface SkillEvolutionScheduleBook {
   /**
    * run 收尾粗查（纯读、零 LLM）：范围 = 该项目全部会话（含子会话）各自的
-   * 增量；卷入任一技能才排检查（同会话重复排=锚点刷新），未卷入不动水位。
+   * 增量；卷入任一技能才排检查（同会话重复排=锚点刷新），未卷入不动增量进度。
    */
   considerFollowCheck(sessionId: string, endTurnAt: string, installedNames: readonly string[]): { involved: boolean; names: string[] }
   pendingFollowChecks(workdir: string): FollowCheck[]
@@ -89,7 +89,7 @@ export interface SkillEvolutionScheduleBook {
 export interface SkillEvolutionTriggers {
   /**
    * 补查提炼：逐会话增量各调一次提炼 LLM；拿到合法 JSON（含 0 条）即推进
-   * 该会话水位，单会话失败不阻塞其他会话——有失败时整体 reject（水位保留，
+   * 该会话增量进度，单会话失败不阻塞其他会话，有失败时整体 reject（增量进度保留，
    * 调度器下个 sweep 重试同一范围），全部成功才 resolve。
    */
   triggerFollow(workdir: string, sessionId: string): Promise<void>
@@ -205,7 +205,7 @@ export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEv
         collectInvolvedNames(m, installed, involved)
       }
     }
-    if (involved.size === 0) return { involved: false, names: [] } // 不排检查、不动水位、零 LLM
+    if (involved.size === 0) return { involved: false, names: [] } // 不排检查、不动增量进度、零 LLM
     this.#ledgerForWrite(workdir).scheduleFollowCheck(sessionId, endTurnAt)
     return { involved: true, names: [...involved] }
   }
