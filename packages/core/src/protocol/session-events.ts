@@ -7,11 +7,11 @@
 import type { Message, StopReason, Usage } from "./messages.js"
 import type { TaskSnapshot } from "./team.js"
 
-export interface SessionCreatedEvent { type: "session.created"; at: string; title: string; workdir?: string; jobId?: string; /** 创建时固化的权限模式快照（config permissions.defaultMode）；缺省 default。 */ mode?: import("../permissions/modes.js").PermissionMode; /** 父会话（subagent 派生关系）：设置即子会话——列表默认过滤、记忆提取排除、用量归组到父。 */ parentSessionId?: string }
+export interface SessionCreatedEvent { type: "session.created"; at: string; title: string; workdir?: string; jobId?: string; /** 创建时固化的权限模式快照（config permissions.defaultMode）；不写时 default。 */ mode?: import("../permissions/modes.js").PermissionMode; /** 父会话（subagent 派生关系）：设置即子会话——列表默认过滤、记忆提取排除、用量归组到父。 */ parentSessionId?: string }
 export interface SessionRenamedEvent { type: "session.renamed"; at: string; title: string }
 export interface SessionDeletedEvent { type: "session.deleted"; at: string }
 export interface SessionRestoredEvent { type: "session.restored"; at: string }
-export interface SessionSetEvent { type: "session.set"; at: string; model?: string | null; /** @legacy pre-mode sessions; superseded by `mode` */ readonly?: boolean | null; mode?: import("../permissions/modes.js").PermissionMode | null; disposition?: "steer" | "wait" | "interrupt" | null }
+export interface SessionSetEvent { type: "session.set"; at: string; model?: string | null; mode?: import("../permissions/modes.js").PermissionMode | null; disposition?: "steer" | "wait" | "interrupt" | null }
 export type MessageEvent = { type: "message" } & Message
 /**
  * Truncation marker for edit & retry / regenerate: everything from
@@ -32,12 +32,12 @@ export interface MemoryEvent {
   topic?: string; file?: string; scope?: string; source?: string
 }
 /**
- * 系统提示词全量留痕（每 run 一条）。双段结构：stable（人设基座 + 注入约定，
+ * 系统提示词全量记录（每 run 一条）。双段结构：stable（人设基座 + 注入约定，
  * 缓存冻结面）在前，live（认知 + 技能清单，低频变化面）在后——前缀缓存按
- * 从头逐字节相同匹配，live 变化只从变化点起失效。legacy 单文本事件只带
- * text（读作 stable）；新事件恒带 stable，live 仅在非空时携带。
+ * 从头逐字节相同匹配，live 变化只从变化点起失效。stable 恒有，live 仅在
+ * 非空时携带。
  */
-export interface SystemEvent { type: "system"; at: string; stable: string; live?: string; /** @legacy pre-split single-text events; reads back as the stable segment */ text?: string }
+export interface SystemEvent { type: "system"; at: string; stable: string; live?: string }
 export interface SandboxCheckedEvent {
   type: "sandbox.checked"; at: string
   /** config 是否开启沙箱（sandbox.enabled）。 */

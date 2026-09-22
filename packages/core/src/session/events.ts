@@ -52,11 +52,6 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
       if (event.mode !== undefined) {
         if (event.mode === null) delete next.mode
         else next.mode = event.mode
-      } else if (event.readonly !== undefined) {
-        // Legacy boolean events from pre-mode streams: readonly maps onto the
-        // mode axis (true → "readonly", false/null → fall back to default).
-        if (event.readonly === true) next.mode = "readonly"
-        else delete next.mode
       }
       if (event.disposition !== undefined) {
         if (event.disposition === null) delete next.dispositionOverride
@@ -75,10 +70,8 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
       // stand in for hidden messages). A tail truncation — the regular path —
       // leaves compaction untouched: the early summary and the remaining
       // history both stay valid.
-      const anchor = next.compactedUpto ?? next.compaction?.upto
+      const anchor = next.compaction?.upto
       if (anchor !== undefined && event.fromMessageId <= anchor) {
-        delete next.compactedSummary
-        delete next.compactedUpto
         delete next.compaction
       }
       next.updatedAt = event.at
@@ -99,10 +92,9 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
       // 审计留痕即基线写入口：每次 run 的系统提示词全量事件按段 upsert 冻结
       // 基线（提示词缓存纪律）。两段独立比对——哪段文本变了就重冻结哪段，
       // 另一段基线原样保留（frozenAt 记录的是"这份文本成为基线的时刻"，
-      // 不是"最后一次审计的时刻"；那去事件流里看）。legacy 单文本事件读作
-      // stable 段。基线外字段与 updatedAt 一律不动。
+      // 不是"最后一次审计的时刻"；那去事件流里看）。基线外字段与 updatedAt 一律不动。
       {
-        const stableText = event.stable ?? event.text ?? ""
+        const stableText = event.stable
         const liveText = event.live ?? ""
         const baseline = next.systemBaseline ?? { stable: { text: "", frozenAt: event.at } }
         if (baseline.stable.text !== stableText) baseline.stable = { text: stableText, frozenAt: event.at }

@@ -32,11 +32,8 @@ export class WriteLedger {
     if (existsSync(statePath)) {
       try {
         const raw = JSON.parse(readFileSync(statePath, "utf8")) as Partial<LedgerState>
-        // 旧版项目级水位（{interval:{sessionId,messageId},…}）不迁移（历史数据
-        // 不迁移先例）：整体视作空账本，首次触发全量重扫，重复由提取去重 + 合并写兜底。
-        const legacy = raw.watermarks !== undefined && !isSessionKeyed(raw.watermarks)
         this.#state = {
-          watermarks: legacy ? {} : raw.watermarks ?? {},
+          watermarks: raw.watermarks ?? {},
           followChecks: raw.followChecks ?? [],
           intervalLastRun: raw.intervalLastRun,
           nightlyBaseline: raw.nightlyBaseline,
@@ -136,9 +133,4 @@ export class WriteLedger {
     if (idx === -1) return messages.slice()
     return messages.slice(idx + 1)
   }
-}
-
-/** 新结构按 sessionId 键（ses_ 前缀）；旧结构顶层只有 interval/follow 两个键。 */
-function isSessionKeyed(watermarks: Record<string, unknown>): boolean {
-  return !("interval" in watermarks || "follow" in watermarks)
 }

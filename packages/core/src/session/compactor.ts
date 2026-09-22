@@ -313,10 +313,7 @@ export class Compactor {
   ): Promise<CompactionOutcome> {
     const { sessions } = this.#deps
     const meta = sessions.meta(sessionId)
-    const prev: CompactionState | undefined = meta?.compaction ??
-      (meta?.compactedSummary !== undefined && meta.compactedUpto !== undefined
-        ? { segments: [], top: meta.compactedSummary, upto: meta.compactedUpto }
-        : undefined)
+    const prev: CompactionState | undefined = meta?.compaction
     const prevIdx = prev === undefined ? -1 : history.findIndex((m) => m.id === prev.upto)
     const active = prevIdx >= 0 ? history.slice(prevIdx + 1) : history
 
@@ -395,8 +392,8 @@ export class Compactor {
           trigger: manual ? "manual" : phase === "in-run" ? "in-run" : "auto",
           ...(opts.emergency === true ? { emergency: true } : {}),
           ...(opts.focus === undefined ? {} : { focus: opts.focus }),
-          // null = the span starts at session start (or the legacy upgrade
-          // point) — only a continuation compaction has a real first id.
+          // null = the span starts at session start; only a continuation
+          // compaction has a real first id.
           from: prevIdx >= 0 ? seg[0]!.id : null,
           upto,
           messages: seg.length,

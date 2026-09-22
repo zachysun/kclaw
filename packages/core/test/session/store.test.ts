@@ -157,20 +157,6 @@ describe("SessionStore", () => {
     expect(store.list().map((m) => m.id)).toContain(meta.id)
   })
 
-  it("updateMeta persists compaction fields and clearing with undefined removes them", () => {
-    const store = new SessionStore(dir)
-    const meta = store.create("t")
-    store.updateMeta(meta.id, { compactedSummary: "sum of history", compactedUpto: "msg_1" })
-    const back = store.meta(meta.id)!
-    expect(back.compactedSummary).toBe("sum of history")
-    expect(back.compactedUpto).toBe("msg_1")
-    store.updateMeta(meta.id, { compactedSummary: undefined })
-    const cleared = store.meta(meta.id)!
-    expect(cleared.compactedSummary).toBeUndefined()
-    expect("compactedSummary" in cleared).toBe(false)
-    expect(cleared.compactedUpto).toBe("msg_1") // untouched field survives
-  })
-
   it("compaction state is event-sourced via appendCompaction, not via updateMeta", () => {
     const store = new SessionStore(dir)
     const meta = store.create("压缩会话")
@@ -247,14 +233,6 @@ describe("queue persistence", () => {
     expect(store.readQueue(meta.id)).toEqual([entry])
     store.replaceQueue(meta.id, [])
     expect(store.readQueue(meta.id)).toEqual([])
-  })
-  it("readQueue 归一化旧形 string note 为 kind:job（#44 结构化之前的队列文件）", () => {
-    const store = new SessionStore(dir)
-    const meta = store.create("旧形")
-    const legacy = { messageId: "msg_old", disposition: "wait" as const, text: "hi", trigger: "user" as const, note: "本会话由定时任务「日报」触发", enqueuedAt: new Date().toISOString() }
-    store.replaceQueue(meta.id, [legacy as unknown as { messageId: string; disposition: "wait"; text: string; trigger: "user"; enqueuedAt: string }])
-    const read = store.readQueue(meta.id)
-    expect(read[0]!.note).toEqual({ kind: "job", text: "本会话由定时任务「日报」触发" })
   })
   it("queue 不经过 updateMeta：写 dispositionOverride 不影响 queue.jsonl", () => {
     const store = new SessionStore(dir)
@@ -375,22 +353,6 @@ describe("SessionStore event sourcing", () => {
     // 审计事件不进投影：含 updatedAt 在内的所有投影字段逐字段一致
     const after = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
     expect(after).toEqual(before)
-  })
-
-  it("旧版单段 systemBaseline 的 meta.json 读时归一化为 stable 段（live 缺省，下一 run 装配补齐）", () => {
-    const store = new SessionStore(dir)
-    const meta = store.create("t")
-    // 直接写旧形状投影（pre-split 产物）
-    const metaPath = join(dir, meta.id, "meta.json")
-    const legacy = JSON.parse(readFileSync(metaPath, "utf8"))
-    legacy.systemBaseline = { text: "旧单段全文", frozenAt: "2026-01-01T00:00:00.000Z" }
-    writeFileSync(metaPath, JSON.stringify(legacy))
-    const normalized = store.meta(meta.id)!
-    expect(normalized.systemBaseline).toEqual({
-      stable: { text: "旧单段全文", frozenAt: "2026-01-01T00:00:00.000Z" },
-    })
-    expect("live" in normalized.systemBaseline!).toBe(false)
-    expect("text" in normalized.systemBaseline!).toBe(false)
   })
 
   it("appendRunStarted / appendRunEnded / appendPermissionDecided 写审计事件：字段完整、投影穿透（updatedAt 不动）", () => {
@@ -528,24 +490,6 @@ describe("SessionStore event sourcing", () => {
     const rebuilt = store.rebuildMeta(meta.id)!
     expect(rebuilt.mode).toBeUndefined()
     expect("mode" in rebuilt).toBe(false)
-  })
-
-  it("legacy meta.json readonly:true reads back as mode:'readonly' and writes drop the boolean", () => {
-    const store = new SessionStore(dir)
-    const meta = store.create("t")
-    // 手写一个旧投影：readonly 布尔、无 mode
-    const legacyPath = join(dir, meta.id, "meta.json")
-    const legacy = JSON.parse(readFileSync(legacyPath, "utf8"))
-    delete legacy.mode
-    legacy.readonly = true
-    writeFileSync(legacyPath, JSON.stringify(legacy))
-    expect(store.meta(meta.id)!.mode).toBe("readonly")
-    expect("readonly" in store.meta(meta.id)!).toBe(false)
-    // 之后经 updateMeta 正常切档：只写 mode 字段
-    store.updateMeta(meta.id, { mode: "default" })
-    const after = JSON.parse(readFileSync(legacyPath, "utf8"))
-    expect(after.mode).toBe("default")
-    expect("readonly" in after).toBe(false)
   })
 
   it("setting model works and does not touch unrelated overrides (set is per-present-key)", () => {

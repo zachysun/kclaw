@@ -1092,29 +1092,6 @@ describe("RunManager context compaction", () => {
     expect(assistantTexts.slice(-2)).toEqual(["回答a", "回答b"])
   })
 
-  it("upgrades a legacy compactedSummary session: old summary seeds the top (post-run)", async () => {
-    const reqs: LlmRequest[] = []
-    const { env, manager } = makeEnv(
-      recordRequests(scriptClient([textTurnWithUsage("主回复", 10_000), textTurn("段摘要N"), textTurn("总摘要N")]), reqs),
-      (c) => { c.sessions.contextTokens = 10 },
-    )
-    const session = env.sessions.create("旧格式")
-    const seeded = seedHistory(env.sessions, session.id, 2)
-    env.sessions.updateMeta(session.id, { compactedSummary: "旧总摘要", compactedUpto: seeded[0]!.id })
-
-    await manager.enqueue(session.id, { userText: "新问题", trigger: "user" })
-
-    const meta = env.sessions.meta(session.id)
-    expect(meta!.compaction!.top).toBe("总摘要N")
-    // legacy fields are no longer cleared by compaction: they linger in meta but stay shadowed —
-    // prev reads meta.compaction first, so the next compaction seeds from
-    // the compaction event, not these stale keys.
-    expect(meta!.compactedSummary).toBe("旧总摘要")
-    expect(meta!.compactedUpto).toBe(seeded[0]!.id)
-    // the merge input seeded from the legacy top (the third call: main → seg → merge)
-    expect((reqs[2]!.messages[0]!.content as string)).toContain("旧总摘要")
-  })
-
   it("a failing post-run summarizer: full history was already sent, completed(result:failed), no meta", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     try {

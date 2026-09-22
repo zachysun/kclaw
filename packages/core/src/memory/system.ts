@@ -1,6 +1,5 @@
 import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { join } from "node:path"
-import { parse } from "yaml"
 import { estimateTokens } from "../session/compaction.js"
 import type { KclawConfig } from "../storage/config.js"
 import { writeFileAtomic } from "../storage/atomic.js"
@@ -94,17 +93,6 @@ function todayOf(date: Date): string {
   return date.toISOString().slice(0, 10)
 }
 
-/** 解析 v1 记忆 note（yaml frontmatter + 正文）；非 note 文件返回 undefined。 */
-function parseV1Note(content: string): { text: string } | undefined {
-  const lines = content.split("\n")
-  if (lines[0] !== "---") return undefined
-  const end = lines.indexOf("---", 1)
-  if (end === -1) return undefined
-  try { parse(lines.slice(1, end).join("\n")) } catch { return undefined }
-  const text = lines.slice(end + 1).join("\n").replace(/^\n+/, "").replace(/\n+$/, "")
-  return { text }
-}
-
 interface CogFile { kind: CogKind; name: string; title: string; body: string; scope: string }
 
 interface ScoredHit { key: string; topic: string; title: string; date: string; text: string; score: number }
@@ -112,7 +100,7 @@ interface ScoredHit { key: string; topic: string; title: string; date: string; t
 /**
  * MemorySystem —— 记忆系统的唯一 server 侧门面。装配 L1 情节管线 + L2 认知库，
  * 方法面按四拨消费方分面（MemoryQuery / MemoryTriggers / MemoryScheduleBook /
- * MemoryAdmin，卡⑤）；对账迁移（reconcile / migrateV1Notes）与停机（stop）只归 daemon。
+ * MemoryAdmin，卡⑤）；对账（reconcile）与停机（stop）只归 daemon。
  */
 export class MemorySystem implements MemoryQuery, MemoryTriggers, MemoryScheduleBook, MemoryAdmin {
   readonly #layout: MemoryLayout
@@ -494,40 +482,6 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     } catch (err) {
       this.#log(`kclaw memory reconcile: global skipped: ${String(err)}`)
     }
-  }
-
-  /** 旧 notes 三路分流，幂等：偏好→persona、规则→rule/general、其余→wiki/misc；迁移后删 notes/。 */
-  migrateV1Notes(notesDir: string): void {
-    if (!existsSync(notesDir)) return
-    const files = readDirSafe(notesDir).filter((f) => f.endsWith(".md"))
-    // M-1：空 notes 目录（resolvePaths 恒建）不产生迁移日志噪音，直接返回。
-    if (files.length === 0) return
-    this.#log(`memory v1 migration: ${files.length} notes`)
-    const globalDir = this.#layout.globalDir
-    const today = todayOf(this.#now())
-    const appendTo = (kind: CogKind, name: string, text: string): void => {
-      // create 回调返回空 body：writeCognitionFile 对新建文件执行 mutate(create())，
-      // append 分支统一在 mutate 里拼文本，避免首条重复
-      writeCognitionFile(cognitionPath(globalDir, kind, name), kind, name,
-        (cf) => ({ ...cf, body: `${cf.body}${cf.body === "" ? "" : "\n\n"}${text}`, updated: today }),
-        () => ({ kind, name, title: name, scope: "global", created: today, updated: today, body: "" }))
-    }
-    for (const f of files) {
-      const note = parseV1Note(readFileSafe(join(notesDir, f)) ?? "")
-      if (note === undefined) {
-        this.#log(`memory v1 migration: skipped unparseable note ${f}`)
-        continue
-      }
-      if (/偏好|喜欢|希望/.test(note.text)) appendTo("persona", "persona", note.text)
-      else if (/必须|不要|决定/.test(note.text)) appendTo("rule", "general", note.text)
-      else appendTo("wiki", "misc", note.text)
-    }
-    // v1 只写 .md，但目录里若有其它对象会随 rmSync 一并删除——补一条警告，不无痕消失（M-5）。
-    for (const e of readdirSync(notesDir, { withFileTypes: true })) {
-      if (e.isFile() && e.name.endsWith(".md")) continue
-      this.#log(`memory v1 migration: skipping non-md ${e.name}`)
-    }
-    rmSync(notesDir, { recursive: true, force: true })
   }
 
   // ---- 管理界面（routes/web/cli 消费） ----

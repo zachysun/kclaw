@@ -10,7 +10,7 @@
  * landed on the tool message.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import { mkdtempSync, rmSync, readdirSync } from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -126,10 +126,6 @@ describe("integration smoke", () => {
 
     // 3) event sequence ends with run.completed
     expect(events[events.length - 1]!.type).toBe("run.completed")
-
-    // 4) memory notes dir untouched by the run (no note files created)
-    const noteFiles = readdirSync(paths.memoryNotesDir).filter((f) => f.endsWith(".md"))
-    expect(noteFiles).toEqual([])
   })
 
   it("routes an unlisted tool call through confirmation and records it as confirmed", async () => {

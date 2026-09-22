@@ -71,25 +71,7 @@ describe("applyEvent", () => {
     expect(untouched.mode).toBe("readonly")
   })
 
-  it("session.set legacy readonly 布尔映射到 mode（旧事件流兼容）", () => {
-    const ro = applyEvent(base, { type: "session.set", at: "a", readonly: true })
-    expect(ro.mode).toBe("readonly")
-    expect("readonly" in ro).toBe(false)
-    const off = applyEvent(ro, { type: "session.set", at: "b", readonly: false })
-    expect(off.mode).toBeUndefined()
-    expect("mode" in off).toBe(false)
-    // mode 优先于 legacy readonly（新事件写 mode）
-    const both = applyEvent(off, { type: "session.set", at: "c", mode: "default", readonly: true })
-    expect(both.mode).toBe("default")
-  })
-
   it("system 双段逐段 upsert：不刷 updatedAt、基线外字段不动；段文本未变保留 frozenAt；compaction 清除基线", () => {
-    // legacy 单文本事件读作 stable 段
-    const legacy = applyEvent(base, { type: "system", at: "2026-01-04T00:00:00.000Z", text: "单段全文" })
-    expect(legacy.systemBaseline).toEqual({
-      stable: { text: "单段全文", frozenAt: "2026-01-04T00:00:00.000Z" },
-      live: { text: "", frozenAt: "2026-01-04T00:00:00.000Z" },
-    })
     // 双段事件：逐段冻结
     const meta = applyEvent(base, {
       type: "system", at: "2026-01-04T00:00:00.000Z",

@@ -66,39 +66,6 @@ describe("cognitionPrompt (L2 常驻注入)", () => {
   })
 })
 
-describe("migrateV1Notes", () => {
-  it("routes preference/rule/fact notes into persona/rule/wiki and deletes notes/", () => {
-    const notesDir = join(root, "notes")
-    mkdirSync(notesDir, { recursive: true })
-    writeFileSync(join(notesDir, "mem_1.md"), `---\nid: mem_1\ntags: []\ncreated: 2026-01-01\nupdated: 2026-01-01\nsource: model\n---\n\n用户偏好深色主题\n`)
-    writeFileSync(join(notesDir, "mem_2.md"), `---\nid: mem_2\n---\n\n发布前必须跑全量测试\n`)
-    writeFileSync(join(notesDir, "mem_3.md"), `---\nid: mem_3\n---\n\n家里有一只猫\n`)
-    const sys = makeSystem()
-    sys.migrateV1Notes(notesDir)
-    expect(readFileSync(join(root, "memory", "global", "persona.md"), "utf8")).toContain("深色主题")
-    expect(readFileSync(join(root, "memory", "global", "rule", "general.md"), "utf8")).toContain("全量测试")
-    expect(readFileSync(join(root, "memory", "global", "wiki", "misc.md"), "utf8")).toContain("一只猫")
-    // 首条不重复（writeCognitionFile 的 create/append 双拼守卫）
-    expect(readFileSync(join(root, "memory", "global", "persona.md"), "utf8").match(/深色主题/g)?.length).toBe(1)
-    expect(existsSync(notesDir)).toBe(false)
-    // 幂等：notes 不存在再跑无事可做
-    expect(() => sys.migrateV1Notes(notesDir)).not.toThrow()
-  })
-  it("logs non-md leftovers before deleting notes dir", () => {
-    const notesDir = join(root, "notes")
-    mkdirSync(notesDir, { recursive: true })
-    writeFileSync(join(notesDir, "mem_1.md"), `---\nid: mem_1\n---\n\n偏好深色\n`)
-    writeFileSync(join(notesDir, "random.txt"), "not a note")
-    mkdirSync(join(notesDir, "subdir"))
-    const logs: string[] = []
-    const sys = makeSystem({ log: (m) => logs.push(m) })
-    sys.migrateV1Notes(notesDir)
-    // 非 .md 对象随目录一并删除前要有警告日志，不无痕消失
-    expect(logs.some((l) => l.includes("non-md random.txt"))).toBe(true)
-    expect(logs.some((l) => l.includes("non-md subdir"))).toBe(true)
-    expect(existsSync(notesDir)).toBe(false)
-  })
-})
 
 describe("search preserves reconciled vectors ", () => {
   it("reindex during search does not wipe project vectors (dual-path fusion intact)", async () => {

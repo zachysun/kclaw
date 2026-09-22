@@ -29,19 +29,11 @@ export interface SessionMeta {
   parentSessionId?: string
   /** Per-session model override (empty/absent → daemon default). */
   model?: string
-  /**
-   * Session permission mode (absent → "default"). Supersedes the legacy
-   * `readonly` boolean: a projected `readonly: true` reads back as
-   * `mode: "readonly"` (see normalize below and session.set handling).
-   */
+  /** Session permission mode (absent → "default"). */
   mode?: PermissionMode
   deleted?: boolean
   deletedAt?: string
-  /** Rolling compaction summary of messages before `compactedUpto` (context compaction). */
-  compactedSummary?: string
-  /** Last message id covered by `compactedSummary`; history after it is the active window. */
-  compactedUpto?: string
-  /** layered compaction state; absent on fresh/legacy sessions. */
+  /** Layered compaction state, maintained by compaction events. */
   compaction?: CompactionState
   /**
    * 冻结的系统提示词基线（提示词缓存纪律），双段独立冻结：stable（人设基座
@@ -59,28 +51,6 @@ export interface SessionMeta {
 const META_FILE = "meta.json"
 const EVENTS_FILE = "events.jsonl"
 const QUEUE_FILE = "queue.jsonl"
-
-/**
- * Read-time migration of pre-mode projections: a legacy `readonly: true`
- * surfaces as `mode: "readonly"`; the boolean itself is dropped so writes
- * only ever produce the new field. New sessions are untouched.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function normalizeLegacyMeta(m: any): SessionMeta {
-  if (m !== null && typeof m === "object") {
-    if (m.readonly === true) {
-      if (m.mode === undefined) m.mode = "readonly"
-      delete m.readonly
-    }
-    // Pre-split single-text system baseline reads back as the stable segment
-    // (live absent — the next run's assembly fills and freezes it).
-    const baseline = m.systemBaseline
-    if (baseline && typeof baseline.text === "string") {
-      m.systemBaseline = { stable: { text: baseline.text, frozenAt: baseline.frozenAt } }
-    }
-  }
-  return m as SessionMeta
-}
 
 /**
  * Event-sourced append-only JSONL session persistence: each session lives in
@@ -237,7 +207,7 @@ export class SessionStore {
   /** Read one session's projection (meta.json); when missing/corrupt, rebuild it from the event stream. */
   meta(id: string): SessionMeta | undefined {
     try {
-      return normalizeLegacyMeta(JSON.parse(readFileSync(this.metaPath(id), "utf8")) as SessionMeta)
+      return JSON.parse(readFileSync(this.metaPath(id), "utf8")) as SessionMeta
     } catch {
       return this.rebuildMeta(id)
     }
@@ -329,17 +299,9 @@ export class SessionStore {
     this.appendEvent(id, event)
   }
 
-  /**
-   * Read a session's persisted message queue (queue.jsonl), oldest-first;
-   * a missing/empty file yields []. Entries written before the note became
-   * structured (#44) carry a plain string — normalized to kind:"job" here so
-   * consumers see one shape.
-   */
+  /** Read a session's persisted message queue (queue.jsonl), oldest-first; a missing/empty file yields []. */
   readQueue(id: string): QueueEntry[] {
-    const entries = readJsonl(this.queuePath(id)) as QueueEntry[]
-    return entries.map((e) =>
-      typeof e.note === "string" ? { ...e, note: { kind: "job" as const, text: e.note } } : e,
-    )
+    return readJsonl(this.queuePath(id)) as QueueEntry[]
   }
 
   /**
@@ -352,15 +314,13 @@ export class SessionStore {
   }
 
   /**
-   * Merge `patch` into the session. Metadata fields (title/model/readonly/
+   * Merge `patch` into the session. Metadata fields (title/model/mode/
    * dispositionOverride/deleted/deletedAt) become session.* events, appended
-   * to the stream before the projection is rewritten — model/readonly/
+   * to the stream before the projection is rewritten — model/mode/
    * dispositionOverride are fully event-driven: setting OR clearing emits a
-   * `session.set` event (patch 值 undefined → 事件里 null = 清除)。Only
-   * run-state fields (compactedSummary/compactedUpto) are merged straight
-   * into the projection (undefined clears; no clearing event exists for
-   * them). compaction is projection-maintained by the compaction event,
-   * never merged here. Returns the newest projection.
+   * `session.set` event (patch 值 undefined → 事件里 null = 清除)。compaction
+   * is projection-maintained by the compaction event, never merged here.
+   * Returns the newest projection.
    */
   updateMeta(id: string, patch: Partial<SessionMeta>): SessionMeta {
     const current = this.meta(id)
@@ -393,17 +353,6 @@ export class SessionStore {
     for (const event of events) {
       this.appendEvent(id, event)
       projection = applyEvent(projection, event)
-    }
-
-    // 仅剩运行态字段（compactedSummary/compactedUpto）直接合并投影（undefined 即清除）；
-    // 它们没有对应的清除事件，属 legacy 行为。model/readonly/dispositionOverride 已完全
-    // 事件化（session.set，含 null 清除），不再走这里。compaction 由 compaction 事件
-    // 投影（applyEvent）维护，updateMeta 不直接合并（run.ts 只 appendCompaction）。
-    for (const k of ["compactedSummary", "compactedUpto"] as const) {
-      if (!(k in patch)) continue
-      const value = patch[k]
-      if (value === undefined) delete (projection as unknown as Record<string, unknown>)[k]
-      else (projection as unknown as Record<string, unknown>)[k] = value
     }
 
     // 显式清除 deleted 时投影不保留 deleted/deletedAt 键（与旧版 meta 形状一致）

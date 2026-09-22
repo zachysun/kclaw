@@ -110,12 +110,11 @@ export interface McpServerStatus {
 export interface McpManagerOptions {
   /**
    * The two config layers, already read by the caller (storage defenses
-   * applied there): global = legacy `mcp.servers` merged with
-   * `~/.kclaw/mcp.json`; project = `<workspace>/.kclaw/mcp.json`. Expansion
-   * order is global < project — a same-name project entry overrides the
-   * global one wholesale (whole-entry override, no field-level merge), and
-   * the shadowed global entry is RETAINED for persistence (the global file
-   * keeps its copy).
+   * applied there): global = `~/.kclaw/mcp.json`; project =
+   * `<workspace>/.kclaw/mcp.json`. Expansion order is global < project — a
+   * same-name project entry overrides the global one wholesale (whole-entry
+   * override, no field-level merge), and the shadowed global entry is
+   * RETAINED for persistence (the global file keeps its copy).
    */
   servers: { global: Record<string, McpServerConfig>; project?: Record<string, McpServerConfig> }
   /** Test seam: build a transport for a server (defaults to stdio/http by config type). */
