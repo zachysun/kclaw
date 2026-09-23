@@ -91,7 +91,7 @@ export interface CompactionRecord {
 
 ### 会话检索（session_search）
 
-压缩段没有独立的检索索引（旧 `index.db` / `SegmentIndex` 已删除）——`session_search` 每次调用现读事件流、按相邻压缩段的 `upto` 取增量段区间做朴素文本匹配，详见下文"会话检索（session_search）"一节。
+压缩段没有独立的检索索引——`session_search` 每次调用现读事件流、按相邻压缩段的 `upto` 取增量段区间做朴素文本匹配，详见下文"会话检索（session_search）"一节。
 
 ---
 

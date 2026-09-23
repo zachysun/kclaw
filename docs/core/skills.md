@@ -136,7 +136,7 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 
 | 字段 | 默认 | 说明 |
 |------|------|------|
-| `skills.evolution.enabled` | `true` | 总开关。`false` 时功能完全惰性：run 收尾不排检查、调度器不消费、`skill_create` 返回固定关闭文案；已有的提案文件无论开关状态都可列表查看 |
+| `skills.evolution.enabled` | `true` | 总开关。`false` 时功能完全惰性：run 收尾不排检查、调度器不消费、`skill_create` 返回固定关闭文案；已有的提案文件无论开关状态都可列表查看。非布尔值按字段回退 `false` 并警告 |
 | `skills.evolution.idleMinutes` | `10` | run 结束后到提炼检查可触发的空闲窗口分钟数，与 `memory.write.idleMinutes` 互不牵动。`0` 视为关闭延迟补查（此时只剩 `skill_create` 一条提案路径）。负数/非整数按字段回退默认并警告 |
 
 ### 提炼时机
@@ -212,7 +212,7 @@ interface SkillProposal {
 
 ### skill_create 工具
 
-`skill_create {name, content, rationale?}`（`tools/skills.ts`）：模型在对话中把经验当场固化为提案的入口，`safe` + `parallel`（提案文件是 `writeFileAtomic` 原子写的独立文件，同名冲突由随机后缀化解，并发调用安全）。只在 daemon 组装了技能进化系统时注册（run 组装传入 `skillCreate` 选项；裸引擎测试不传）；`enabled: false` 时工具仍在、调用返回固定关闭文案（"技能提案未开启…"）。`name` 不过 `isSkillDirName`、`content` 超 64KB、目标是复用链接技能均报错。**kind/scope 由系统推导，模型不给这两个参数**：项目副本命中 → `project` + 当前会话 workdir（缺失回退 daemon workspace）；仅全局命中 → `global`；未装 → `new` + `project`（影响面小的方向）。已装目标自动定 `revise` 并带 `baseline`。写提案文件 + 审计事件，回复"已记录提案（新增/修订 `<name>`），待用户在技能页审阅确认"，不谎报生效。
+`skill_create {name, content, rationale?}`（`tools/skills.ts`）：模型在对话中把经验当场固化为提案的入口，`safe` + `parallel`（提案文件是 `writeFileAtomic` 原子写的独立文件，同名冲突由随机后缀化解，并发调用安全）。只在 daemon 组装了技能进化系统时注册（run 组装传入 `skillCreate` 选项；裸引擎测试不传）；`enabled: false` 时工具仍在、调用返回固定关闭文案（"技能提案未开启…"）。`name` 不过 `isSkillDirName`、`content` 超 64KB、目标是复用链接技能均报错。**kind/scope 由系统推导，模型不给这两个参数**：项目副本命中 → `project` + 当前会话 workdir（缺失回退 daemon workspace）；仅全局命中 → `global`；未装 → `new` + `project`（影响面小的方向）。已装目标自动定 `revise` 并带 `baseline`。写提案文件 + 审计事件，回复`技能提案已登记（<id>，新增|修订 · 全局|项目落点）：尚未生效，待用户在 WebUI 审阅确认`，不谎报生效。
 
 ### skill 审计事件
 
@@ -229,7 +229,7 @@ interface SkillEvent {
 }
 ```
 
-归属会话：`follow` / `skill_create` = 来源会话；`admin`（路由治理动作：apply/reject/revert/remove）照记忆 admin 先例——`scope=project` 落该 workdir 最近活动会话、`scope=global` 落最近全局会话，无会话则跳过。事件只做记录：不进 meta 投影、不推进 `updatedAt`（与 memory 事件同约定），权威数据在 `.proposals/` 的提案文件。
+归属会话：`follow` / `skill_create` = 来源会话；`admin`（路由治理动作：apply/reject/revert/remove）照记忆 admin 先例——`scope=project` 落该 workdir 最近活动会话、`scope=global` 落最近活动会话（两种都按 `updatedAt` 排序取最新、排除子会话），无会话则跳过。事件只做记录：不进 meta 投影、不推进 `updatedAt`（与 memory 事件同约定），权威数据在 `.proposals/` 的提案文件。
 
 ### 前端入口
 

@@ -173,7 +173,7 @@ interface Job {
 |------|------|------|------|------|
 | GET | `/skills/proposals?status=` | 提案列表（applied 项带用量） | `status` 可选：proposed/applied/rejected/reverted，默认返回全部 | `{proposals: [完整 SkillProposal 字段 + applied 项带 usage（采纳后 skill_read 次数）]}`；单个损坏提案文件跳过，不拖垮列表 |
 | GET | `/skills/proposals/:id` | 单个提案详情 | — | 完整 SkillProposal（applied 带 `usage`）；不存在 404；路径段先过 `isSafeSegment` |
-| POST | `/skills/proposals/:id/apply` | 确认提案（proposed → applied） | — | `{ok:true}`，可带非致命 `warning`（修订的现正文与提案时 baseline 不一致、或全局新增将被他项目同名技能遮蔽）；非法迁移/同名冲突/目标是复用链接技能 409、不存在 404 |
+| POST | `/skills/proposals/:id/apply` | 确认提案（proposed → applied） | — | `{ok:true}`，可带非致命 `warning`（修订的现正文与提案时 baseline 不一致、或全局新增将被他项目同名技能遮蔽）；非法流转/同名冲突/目标是复用链接技能 409、不存在 404 |
 | POST | `/skills/proposals/:id/reject` | 驳回提案（proposed → rejected，只改状态） | — | `{ok:true}`；非法流转 409、不存在 404 |
 | POST | `/skills/proposals/:id/revert` | 回退已采纳提案（applied → reverted：修订写回快照、新增删技能目录） | — | `{ok:true}`；非法流转 409、不存在 404 |
 | DELETE | `/skills/proposals/:id` | 删除提案文件（仅 rejected/reverted 可删） | — | `{ok:true}`；其余状态 409、不存在 404 |
