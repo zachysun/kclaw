@@ -31,6 +31,13 @@ function escapeClosingTag(text: string, tag: string): string {
   return text.replaceAll(`</${tag}>`, `<\\/${tag}>`)
 }
 
+/** 摘要注入消息里固定模板部分（PREAMBLE、标签行、收尾提示）的 token 开销，
+ *  模块加载时估一次。压缩后上下文的等效 token 记账 = 保留尾估算 + 总摘要
+ *  token + 本常量。 */
+export const SUMMARY_WRAPPER_TOKENS = estimateTokens(
+  [SUMMARY_PREAMBLE, `<${SUMMARY_TAG}>`, `</${SUMMARY_TAG}>`, SUMMARY_SEARCH_HINT].join("\n"),
+)
+
 /**
  * 省略预算再紧也无条件保留的最新工具结果条数。省略占位符指示"重新调用
  * 获取"，若当轮输出也被省略，重调的新结果同样被省略，模型对工具彻底

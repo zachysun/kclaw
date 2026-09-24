@@ -17,6 +17,7 @@ import { TeamPanelCard } from "./TeamPanel.js"
 import type { TeamPanel } from "@kclaw/core/protocol"
 import { IconButton } from "../ui/IconButton.js"
 import { PencilIcon, RefreshIcon } from "../ui/icons.js"
+import { fmtTokens } from "../audit/model.js"
 
 /**
  * How a message enters a busy session: steer injects into the live
@@ -651,6 +652,10 @@ export interface CompactionRecordView {
   trigger: string
   /** 超限紧急压缩标记（审计用途，暂不参与渲染）。 */
   emergency?: boolean
+  /** 压缩前活跃段上下文 token（旧记录缺失）。 */
+  tokensBefore?: number
+  /** 压缩后等效上下文 token（旧记录缺失）。 */
+  tokensAfter?: number
 }
 
 /** One audit-driven collapsed context bar to render. */
@@ -661,6 +666,8 @@ export interface CompactionAuditBar {
   /** 第 N 次压缩（记录序号 + 1）。 */
   segments: number
   summary: string
+  /** 本次压缩的 token 变化（旧记录缺失）。 */
+  tokens?: { before: number; after: number }
 }
 
 /**
@@ -677,16 +684,22 @@ export function compactionBars(
     const segments = ordinal + 1
     const uptoIdx = messages.findIndex((m) => m.id === record.upto)
     if (uptoIdx === -1) return
-    bars.push({ key: `compaction-${ordinal}-${record.upto}`, insertIdx: uptoIdx + 1, segments, summary: record.segmentSummary })
+    const tokens = record.tokensBefore !== undefined && record.tokensAfter !== undefined
+      ? { before: record.tokensBefore, after: record.tokensAfter }
+      : undefined
+    bars.push({ key: `compaction-${ordinal}-${record.upto}`, insertIdx: uptoIdx + 1, segments, summary: record.segmentSummary, tokens })
   })
   return bars
 }
 
 /** Audit-driven collapsed <details>, summary-only body (审计记录无 kept 数据). */
 function AuditContextNote({ bar }: { bar: CompactionAuditBar }) {
+  const tokens = bar.tokens !== undefined
+    ? ` · ${fmtTokens(bar.tokens.before)} → ${fmtTokens(bar.tokens.after)} token`
+    : ""
   return (
     <details className="ctx-note" data-testid="ctx-note-audit">
-      <summary>模型上下文：早期对话已压缩为 {bar.segments} 段（点击展开）</summary>
+      <summary>模型上下文：早期对话已压缩为 {bar.segments} 段{tokens}（点击展开）</summary>
       <div className="ctx-note-body">
         <p className="ctx-note-summary">{bar.summary}</p>
       </div>

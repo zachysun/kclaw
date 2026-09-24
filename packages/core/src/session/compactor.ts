@@ -18,10 +18,11 @@ import type { AgentEvent, CompactionPhase } from "../protocol/events.js"
 import { makeEvent } from "../protocol/events.js"
 import type { Message } from "../protocol/messages.js"
 import type { LlmClient } from "../provider/types.js"
-import { collectStreamText } from "../provider/collect.js"
+import { collectStreamResult } from "../provider/collect.js"
 import type { KclawConfig } from "../storage/config.js"
 import type { ActiveSummary, CompactionState } from "./compaction.js"
-import { chooseBoundary, emergencyBoundary, estimateContextTokens, extractSpillLocators, renderSegment } from "./compaction.js"
+import { chooseBoundary, emergencyBoundary, estimateContextTokens, estimateSpanTokens, estimateTokens, extractSpillLocators, renderSegment } from "./compaction.js"
+import { SUMMARY_WRAPPER_TOKENS } from "../agent/context.js"
 import { resolveWaterlines } from "./waterlines.js"
 import type { SessionStore } from "./store.js"
 
@@ -362,12 +363,13 @@ export class Compactor {
       const seg = active.slice(0, boundary.keepFrom)
       const body = renderSegment(seg)
       const focusLine = opts.focus === undefined ? "" : `\n\n用户特别要求重点保留：${opts.focus}`
-      const segmentSummary = await collectStreamText(runLlm, {
+      const segmentResult = await collectStreamResult(runLlm, {
         model,
         system: SEGMENT_SUMMARY_PROMPT,
         messages: [{ role: "user", content: body + focusLine }],
         tools: [],
       }, { signal: opts.signal })
+      const segmentSummary = segmentResult.text
       // Spill pointers survive STRUCTURALLY: the segment summary and the top
       // summary carry the locator lines regardless of what the summarizer
       // wrote — after compaction the full copies stay reachable (fs_read),
@@ -376,13 +378,31 @@ export class Compactor {
       const locators = extractSpillLocators(seg)
       const summaryWithPointers = appendLocators(segmentSummary, locators)
       const mergeInput = prev === undefined ? summaryWithPointers : `${prev.top}\n\n新的段摘要：\n${summaryWithPointers}`
-      const top = await collectStreamText(runLlm, {
+      const topResult = await collectStreamResult(runLlm, {
         model,
         system: MERGE_SUMMARY_PROMPT,
         messages: [{ role: "user", content: mergeInput + focusLine }],
         tools: [],
       }, { signal: opts.signal })
+      const top = topResult.text
       const topWithPointers = appendLocators(top, locators)
+
+      // Token-aware audit figures. BEFORE anchors on the last real request
+      // (same ruler as the yellow-line trigger check); AFTER is what the next
+      // request will carry: kept tail + fixed overhead + the injected top
+      // summary. The top's own size is a REAL number when the provider
+      // reported usage (same model, same tokenizer); otherwise it falls back
+      // to the text estimate. The kept tail is per-message estimated on
+      // purpose — it has never been sent as a request of its own, so the
+      // anchor would count history that compaction just removed.
+      const tokensBefore = estimateContextTokens(active, userText, opts.overheadTokens)
+      const topTokens = topResult.usage !== undefined && topResult.usage.outputTokens > 0
+        ? topResult.usage.outputTokens
+        : estimateTokens(topWithPointers)
+      const tokensAfter = estimateSpanTokens(active.slice(boundary.keepFrom))
+        + (opts.overheadTokens ?? 0)
+        + topTokens
+        + SUMMARY_WRAPPER_TOKENS
 
       const upto = seg[seg.length - 1]!.id
       const nextSegments = [...(prev?.segments ?? []), { upto, summary: summaryWithPointers }]
@@ -399,6 +419,8 @@ export class Compactor {
           messages: seg.length,
           segmentSummary: summaryWithPointers,
           top: topWithPointers,
+          tokensBefore,
+          tokensAfter,
         })
       } catch (err) {
         console.error(`kclaw compaction audit (${sessionId}) append failed:`, err)

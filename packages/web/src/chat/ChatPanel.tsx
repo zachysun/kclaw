@@ -771,7 +771,13 @@ function toTeamPanel(raw: unknown): TeamPanel | null {
  */
 function toCompactionRecordView(entry: unknown): CompactionRecordView[] {
   if (typeof entry !== "object" || entry === null) return []
-  const { upto, segmentSummary, trigger, emergency } = entry as Record<string, unknown>
+  const { upto, segmentSummary, trigger, emergency, tokensBefore, tokensAfter } = entry as Record<string, unknown>
   if (typeof upto !== "string" || typeof segmentSummary !== "string" || typeof trigger !== "string") return []
-  return [{ upto, segmentSummary, trigger, ...(emergency === true ? { emergency: true } : {}) }]
+  return [{
+    upto,
+    segmentSummary,
+    trigger,
+    ...(emergency === true ? { emergency: true } : {}),
+    ...(typeof tokensBefore === "number" && typeof tokensAfter === "number" ? { tokensBefore, tokensAfter } : {}),
+  }]
 }

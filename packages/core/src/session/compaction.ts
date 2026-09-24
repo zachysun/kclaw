@@ -40,7 +40,11 @@ function messageText(m: Message): string {
 export function estimateContextTokens(active: Message[], extraText?: string, overheadTokens?: number): number {
   let anchorIdx = -1
   for (let i = active.length - 1; i >= 0; i--) {
-    if (active[i]!.role === "assistant") { anchorIdx = i; break }
+    const m = active[i]!
+    // usage 为 0 的 assistant 是被中断的流（无 message_done）——当锚点会把
+    // 估算砍到近零，偏小是危险方向（水位线晚触发）。跳过它找更早的真实
+    // 请求；找不到则走无锚点路径。
+    if (m.role === "assistant" && (m as AssistantMessage).usage.inputTokens > 0) { anchorIdx = i; break }
   }
   // anchorIdx only ever points at an assistant message, and assistant
   // messages always carry usage — the downcast is safe.
@@ -50,6 +54,18 @@ export function estimateContextTokens(active: Message[], extraText?: string, ove
   if (extraText !== undefined) sum += estimateTokens(extraText)
   if (anchorIdx < 0 && overheadTokens !== undefined) sum += overheadTokens
   return base + sum
+}
+
+/**
+ * Per-message estimate WITHOUT the request anchor. For spans that have never
+ * been sent as a full request on their own (e.g. the kept tail after a
+ * compaction): anchoring there would be wrong — an assistant's inputTokens
+ * counts everything from the session start, not just the tail.
+ */
+export function estimateSpanTokens(messages: Message[]): number {
+  let sum = 0
+  for (const m of messages) sum += estimateTokens(messageText(m))
+  return sum
 }
 
 /** One compacted segment: covers history up to (including) message `upto`. */
@@ -73,6 +89,15 @@ export interface CompactionRecord {
   messages: number
   segmentSummary: string
   top: string
+  /** 压缩前活跃段上下文 token：锚定最后一次真实请求的 inputTokens（含
+   *  system/工具定义），锚点后消息逐条估算。会话尚无任何回复时无锚点，
+   *  固定开销按调用方传入的估算计（空闲手动压缩传系统提示词基线估算，
+   *  不含工具 schema；会话从未运行过则两端口径一同缺失）。 */
+  tokensBefore?: number
+  /** 压缩后等效上下文 token：保留尾逐条估算 + system/工具定义开销估算 +
+   *  总摘要 token（优先生成调用的真实 outputTokens，缺失回退文本估算）+
+   *  注入模板常量。 */
+  tokensAfter?: number
 }
 
 /**

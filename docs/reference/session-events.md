@@ -34,7 +34,7 @@ export type SessionEvent =
 |------|------|
 | `message` | Message 全量（`{ type: "message" } & Message`） |
 | `message.truncated` | `at`、`fromMessageId`（从它起的消息退出对话视图；读取端投影过滤） |
-| `compaction` | `at`、`trigger`（manual/in-run/auto）、`emergency?`、`focus?`、`from`、`upto`、`messages`、`segmentSummary`、`top` |
+| `compaction` | `at`、`trigger`（manual/in-run/auto）、`emergency?`、`focus?`、`from`、`upto`、`messages`、`segmentSummary`、`top`、`tokensBefore?`、`tokensAfter?`（压缩前/后上下文 token，口径见 [compaction](../core/compaction.md)；旧记录无此二字段） |
 | `system` | `at`、`stable`、`live?`（双段系统提示词记录，每 run 一条） |
 | `sandbox.checked` | `at`、`enabled`、`available`、`unavailableReason?`（每 run 一条，不进投影） |
 

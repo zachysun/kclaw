@@ -84,10 +84,20 @@ export interface CompactionRecord {
   messages: number      // 被压缩段内的消息条数
   segmentSummary: string  // 本次生成的段摘要
   top: string           // 归并后的新总摘要
+  tokensBefore?: number // 压缩前活跃段上下文 token（口径见下节）
+  tokensAfter?: number  // 压缩后等效上下文 token（口径见下节）
 }
 ```
 
 压缩失败不记录（失败等于压缩没发生，无审计对象）。读取走 `readCompactions` / `GET /sessions/:id/compactions`（从事件流过滤 `compaction` 事件的只读投影视图），无事件返回 `[]`。
+
+### token 记账口径
+
+两个可选数字字段记录"从多少 token 压到多少 token"，能取真值处取真值：
+
+- **`tokensBefore`（压缩前）**：锚定活跃段内最后一次真实请求的 `usage.inputTokens`（system 提示词与工具定义开销已含在内），锚点之后的消息逐条估算——与黄线触发判定同一把尺。被中断的回复（无 `message_done`、usage 为 0）不作锚点。
+- **`tokensAfter`（压缩后等效）**：保留尾逐条估算（保留尾从未作为独立请求发过，无真值可锚）+ system/工具定义开销估算 + 总摘要 token + 注入模板常量。其中总摘要 token 优先取归并摘要调用返回的真实 `outputTokens`（同模型同 tokenizer；provider 未报 usage 时回退文本估算）。
+- 例外口径：空闲时的手动压缩没有 run 装配上下文，固定开销取持久化的系统提示词基线估算（工具 schema 不在其中，`tokensAfter` 因此略偏小）；会话从未跑过任何 run 时两端口径一同缺失该开销。压缩后首个请求的实测 `inputTokens` 是更真的"压缩后"值，但它含新用户消息且事后才存在，不回填历史事件。
 
 ### 会话检索（session_search）
 

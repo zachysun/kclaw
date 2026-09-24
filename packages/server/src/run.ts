@@ -57,6 +57,7 @@ import {
   type UsageStore,
   type AutoLearnCounter,
   resolveRunModel,
+  estimateTokens,
 } from "@kclaw/core"
 
 export interface RunManagerDeps {
@@ -571,11 +572,18 @@ export class RunManager {
     // the shared resolver so Model-tab edits hot-apply here too; the
     // launch-resolved deps.llm only backs injected-llmFactory test setups.
     const llm = this.#deps.llmForRun?.(() => {}, entryKey) ?? this.#deps.llm
+    // 空闲手动压缩没有 run 装配上下文（contextOverhead 只在 run 内存在），
+    // 固定开销退而取持久化的系统提示词基线估算——工具 schema 不在其中，
+    // tokensAfter 因此略偏小；会话尚无任何 run 时无基线，X/Y 一并缺开销。
+    const baseline = meta.systemBaseline
+    const overheadTokens = baseline === undefined ? undefined
+      : estimateTokens(baseline.stable.text + (baseline.live?.text ?? ""))
     const out = await this.#compactor.compact(sessionId, history, "", config, llm, model, {
       focus,
       manual: true,
       phase: "manual",
       budget,
+      ...(overheadTokens !== undefined ? { overheadTokens } : {}),
     })
     // A failed manual compaction surfaces to the HTTP caller exactly as any
     // other compaction failure: the error rethrown (the completed event and

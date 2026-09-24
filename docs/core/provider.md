@@ -156,6 +156,8 @@ anthropic 格式每个 SSE 事件的映射：
 - `message_delta` → 记下 `stop_reason` 与 `usage.output_tokens`；
 - `message_stop` → 结束；`error` 事件 → 抛 `llm anthropic <type>: <message>`；`ping` 忽略。
 
+两家的 `inputTokens` 口径一致："当次请求发出去的全部输入 token"。OpenAI 的 `prompt_tokens` 本身是总量（含自动缓存命中的部分）；Anthropic 侧 kclaw 未发 `cache_control`（没有显式 prompt caching），`input_tokens` 即完整输入。**将来时陷阱**：哪天开启 Anthropic 显式缓存，缓存读写 token 会单列为 `cache_creation_input_tokens` / `cache_read_input_tokens`、**不并入** `input_tokens`——届时适配器必须三字段加总，否则 assistant 消息的 usage 锚点与压缩 token 记账（见 [compaction](./compaction.md)）会系统性偏低。
+
 ### 3. 超时终止
 
 `AbortSignal.timeout(timeoutMs)`（默认 `DEFAULT_LLM_TIMEOUT_MS = 120_000`，也是 `config.json` 里 `providers.timeoutMs` 的默认值）在两个协议实现里同样生效于三个位置，任何一处因超时中断（以"信号是否已触发"判断，不看错误形状）都改抛成同一条消息：

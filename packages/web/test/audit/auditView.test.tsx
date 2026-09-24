@@ -514,6 +514,30 @@ describe("AuditView (audit)", () => {
     unmount(root, container)
   })
 
+  it("shows the token drop on compaction rows; legacy records without figures stay plain", async () => {
+    const api = makeApi()
+    staticStream(api, [
+      compactionEvent({ tokensBefore: 94_238, tokensAfter: 31_520 }),
+      compactionEvent({ at: "2026-08-19T10:02:30.000Z" }),
+    ])
+
+    const { container, root } = await mount(api)
+    const summary = (i: number): string =>
+      container.querySelector(`[data-testid="compaction-row-${i}"]`)?.textContent ?? ""
+    expect(summary(0)).toContain("94.2k → 31.5k token")
+    expect(summary(1)).not.toContain("token")
+    // 展开区带完整数字与口径说明
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="compaction-row-0"]') as HTMLButtonElement).click()
+    })
+    const full = container.querySelector('[data-testid="audit-full-0"]')
+    expect(full).not.toBeNull()
+    expect(full!.textContent).toContain("94,238")
+    expect(full!.textContent).toContain("31,520")
+    expect(full!.textContent).toContain("锚定最后一次真实请求")
+    unmount(root, container)
+  })
+
   it("renders system events as 系统提示词 rows with a truncated snippet and char count", async () => {
     const longText = "系统提示词全文".repeat(30)
     const api = makeApi()

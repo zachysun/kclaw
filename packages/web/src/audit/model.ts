@@ -338,6 +338,11 @@ export function fmtUsage(u: Usage): string {
   return `入 ${u.inputTokens.toLocaleString()} · 出 ${u.outputTokens.toLocaleString()}`
 }
 
+/** Token count for compact display: 94.2k / 942. */
+export function fmtTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+}
+
 /** Today → HH:MM:SS; otherwise MM-DD HH:MM (local time). */
 export function fmtRowTime(iso: string, now = new Date()): string {
   const d = new Date(iso)

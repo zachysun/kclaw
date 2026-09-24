@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { newAssistantMessage, newMessage } from "../../src/protocol/messages.js"
-import { estimateContextTokens, estimateTokens } from "../../src/session/compaction.js"
+import { estimateContextTokens, estimateSpanTokens, estimateTokens } from "../../src/session/compaction.js"
 import { chooseBoundary, emergencyBoundary, extractSpillLocators, renderSegment, segmentRanges } from "../../src/session/compaction.js"
 
 function hist(...roles: Array<"user" | "assistant">): Array<ReturnType<typeof newMessage>> {
@@ -45,6 +45,40 @@ describe("estimateContextTokens", () => {
     const withAnchor = estimateContextTokens([u, a], undefined, 7_000)
     expect(withAnchor).toBeGreaterThanOrEqual(10_000)
     expect(withAnchor).toBeLessThan(10_000 + 100)
+  })
+
+  it("skips aborted assistants (usage 0) as anchors and falls back to an earlier real request", () => {
+    const u1 = newMessage("s", "user", [{ id: "b1", type: "text", text: "问".repeat(400) }])
+    const a1 = newAssistantMessage("s", "m1", [{ id: "b2", type: "text", text: "答" }])
+    a1.usage = { inputTokens: 10_000, outputTokens: 5 }
+    const u2 = newMessage("s", "user", [{ id: "b3", type: "text", text: "再问" }])
+    // 被中断的流没有 message_done，usage 落 0——它不是任何真实请求的体积
+    const a2 = newAssistantMessage("s", "m2", [{ id: "b4", type: "text", text: "答" }])
+    a2.usage = { inputTokens: 0, outputTokens: 0 }
+    const est = estimateContextTokens([u1, a1, u2, a2])
+    // 锚点必须是 a1 的 10_000；若 0 值 a2 当了锚点，估算会跌到两位数
+    expect(est).toBeGreaterThanOrEqual(10_000)
+    expect(est).toBeLessThan(10_000 + 100)
+  })
+
+  it("treats an all-aborted history as anchor-less (overhead applies)", () => {
+    const u = newMessage("s", "user", [{ id: "b1", type: "text", text: "你好" }])
+    const a = newAssistantMessage("s", "m", [{ id: "b2", type: "text", text: "答" }])
+    a.usage = { inputTokens: 0, outputTokens: 0 }
+    expect(estimateContextTokens([u, a], undefined, 7_000)).toBeGreaterThanOrEqual(7_000)
+  })
+})
+
+describe("estimateSpanTokens", () => {
+  it("sums per-message estimates with no anchor semantics", () => {
+    const u1 = newMessage("s", "user", [{ id: "b1", type: "text", text: "问".repeat(100) }])
+    const a1 = newAssistantMessage("s", "m", [{ id: "b2", type: "text", text: "答" }])
+    a1.usage = { inputTokens: 10_000, outputTokens: 5 }
+    const u2 = newMessage("s", "user", [{ id: "b3", type: "text", text: "问".repeat(100) }])
+    const span = estimateSpanTokens([u1, a1, u2])
+    // 纯逐条估算（2 * 75 + 1）：绝不包含锚点的 10_000
+    expect(span).toBeGreaterThan(140)
+    expect(span).toBeLessThan(200)
   })
 })
 

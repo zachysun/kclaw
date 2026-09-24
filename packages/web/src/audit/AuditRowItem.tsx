@@ -8,7 +8,7 @@
 import { memo } from "react"
 import type { AuditRow } from "./model.js"
 import {
-  blockFullContent, blockSummary, blockTypeLabel, decisionFullContent, decisionSummary, fmtMs, fmtRowTime, fmtUsage,
+  blockFullContent, blockSummary, blockTypeLabel, decisionFullContent, decisionSummary, fmtMs, fmtRowTime, fmtTokens, fmtUsage,
   memoryFullContent, memorySummary, rowTime, runSummary, sandboxFullContent, sandboxSummary, skillSummary, truncationSummary,
   sessionFullContent, sessionSummary, summarize, systemFullText, teamFullContent, teamSummary,
 } from "./model.js"
@@ -140,7 +140,7 @@ function rowFull(row: AuditRow): string {
     case "block":
       return blockFullContent(row.block)
     case "compaction":
-      return `段摘要：\n${row.record.segmentSummary}\n\n总摘要：\n${row.record.top}`
+      return `${tokensLine(row.record)}段摘要：\n${row.record.segmentSummary}\n\n总摘要：\n${row.record.top}`
     case "memory":
       return memoryFullContent(row.event)
     case "system":
@@ -169,5 +169,15 @@ function compactionSummary(record: Extract<AuditRow, { kind: "compaction" }>["re
       : record.trigger === "in-run"
         ? "自动（运行中）"
         : "自动（收尾）"
-  return `${trigger}${record.emergency === true ? "·超限急救" : ""} · ${record.from ?? "会话开头"} – ${record.upto} · ${record.messages} 条`
+  const tokens = record.tokensBefore !== undefined && record.tokensAfter !== undefined
+    ? ` · ${fmtTokens(record.tokensBefore)} → ${fmtTokens(record.tokensAfter)} token`
+    : ""
+  return `${trigger}${record.emergency === true ? "·超限急救" : ""}${tokens} · ${record.from ?? "会话开头"} – ${record.upto} · ${record.messages} 条`
+}
+
+/** 展开区的 token 口径说明行（旧记录无数字时为空）。 */
+function tokensLine(record: Extract<AuditRow, { kind: "compaction" }>["record"]): string {
+  if (record.tokensBefore === undefined || record.tokensAfter === undefined) return ""
+  return `压缩前 ${record.tokensBefore.toLocaleString()} token → 压缩后 ${record.tokensAfter.toLocaleString()} token\n` +
+    "（压缩前锚定最后一次真实请求；压缩后含保留尾与固定开销的估算、总摘要的真实 token）\n\n"
 }
