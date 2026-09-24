@@ -377,6 +377,33 @@ describe("ChatPanel", () => {
     }
   })
 
+  it("passes token figures through to the audit bar when the record carries them", async () => {
+    const h = await mount({
+      initialMessages: [
+        msg("m1", "user", [{ id: "b1", type: "text", text: "问题一" }]),
+        msg("m2", "assistant", [{ id: "b2", type: "text", text: "回答一" }]),
+      ],
+      compactions: [{
+        at: "2026-08-30T00:00:01.000Z",
+        trigger: "auto",
+        from: "m0",
+        upto: "m1",
+        messages: 2,
+        segmentSummary: "第一段：聊了环境搭建",
+        top: "总摘要",
+        tokensBefore: 94_238,
+        tokensAfter: 31_520,
+      }],
+    })
+    try {
+      const bars = h.container.querySelectorAll('[data-testid="ctx-note-audit"]')
+      expect(bars).toHaveLength(1)
+      expect(bars[0]!.textContent).toContain("94.2k → 31.5k token")
+    } finally {
+      h.unmount()
+    }
+  })
+
   it("a failed compactions pull stays silent: no audit bars, no notice, no error", async () => {
     const h = await mount({
       initialMessages: [msg("m1", "user", [{ id: "b1", type: "text", text: "hi" }])],

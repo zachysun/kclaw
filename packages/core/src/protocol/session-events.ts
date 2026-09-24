@@ -23,7 +23,7 @@ export type MessageEvent = { type: "message" } & Message
  * the marker applying to each message is the first one after it in the stream.
  */
 export interface MessageTruncatedEvent { type: "message.truncated"; at: string; fromMessageId: string }
-export interface CompactionEvent { type: "compaction"; at: string; trigger: "manual" | "in-run" | "auto"; emergency?: true; focus?: string; from: string | null; upto: string; messages: number; segmentSummary: string; top: string }
+export interface CompactionEvent { type: "compaction"; at: string; trigger: "manual" | "in-run" | "auto"; emergency?: true; focus?: string; from: string | null; upto: string; messages: number; segmentSummary: string; top: string; /** 压缩前活跃段上下文 token（口径见 CompactionRecord.tokensBefore）。 */ tokensBefore?: number; /** 压缩后等效上下文 token（口径见 CompactionRecord.tokensAfter）。 */ tokensAfter?: number }
 export interface MemoryEvent {
   type: "memory"; at: string
   trigger: "immediate" | "manual" | "interval" | "follow" | "clear" | "nightly" | "admin"

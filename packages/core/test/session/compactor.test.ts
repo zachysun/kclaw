@@ -8,6 +8,8 @@ import { newMessage, newAssistantMessage } from "../../src/protocol/messages.js"
 import type { LlmClient, LlmRequest, LlmStreamEvent } from "../../src/provider/types.js"
 import type { KclawConfig } from "../../src/storage/config.js"
 import type { AgentEvent } from "../../src/protocol/events.js"
+import { estimateSpanTokens, estimateTokens } from "../../src/session/compaction.js"
+import { SUMMARY_WRAPPER_TOKENS } from "../../src/agent/context.js"
 
 // 压缩的结构化 spill 指针：摘要器 mock 不回显任何路径，但段摘要与总摘要必须
 // 携带 locator 行——指针由代码保证，不依赖提示词纪律。
@@ -86,6 +88,56 @@ describe("Compactor 结构化 spill 指针", () => {
       }
       expect(calls).toHaveLength(2)
       expect(events.some((e) => e.type === "compaction.completed")).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("Compactor token 记账", () => {
+  it("tokensBefore 锚定真实请求；tokensAfter = 保留尾估算 + 真值摘要 token + 注入模板", async () => {
+    const { dir, sessions, compactor, config } = makeEnv()
+    try {
+      const session = sessions.create("token 会话")
+      const history = historyWithSpill(session.id)
+      for (const m of history) sessions.appendMessage(session.id, m)
+
+      // stubSummarizer 的 message_done 带 outputTokens: 5 → 总摘要走真值分支
+      const out = await compactor.compact(session.id, history, "", config, stubSummarizer([]), "mock-model")
+      expect(out.status).toBe("applied")
+      if (out.status !== "applied") return
+
+      const [record] = sessions.readCompactions(session.id)
+      // a3.usage.inputTokens = 3000 是唯一真锚点且其后无消息 → X 精确等于它
+      expect(record.tokensBefore).toBe(3_000)
+      // Y = 保留尾逐条估算 + 真值 5 + 模板常量（overheadTokens 未传不另计）
+      expect(record.tokensAfter).toBe(estimateSpanTokens(out.active) + 5 + SUMMARY_WRAPPER_TOKENS)
+      expect(record.tokensAfter!).toBeLessThan(record.tokensBefore!)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("provider 未报 usage 时总摘要回退文本估算", async () => {
+    const { dir, sessions, compactor, config } = makeEnv()
+    try {
+      const session = sessions.create("回退会话")
+      const history = historyWithSpill(session.id)
+      for (const m of history) sessions.appendMessage(session.id, m)
+
+      const noUsageLlm: LlmClient = {
+        async *stream(req): AsyncIterable<LlmStreamEvent> {
+          const isMerge = (req.system ?? "").includes("归并")
+          yield { type: "text_delta", delta: isMerge ? "## 关键事实\n（归并摘要）" : "## 关键事实\n（段摘要）" }
+          yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 0, outputTokens: 0 } }
+        },
+      }
+      const out = await compactor.compact(session.id, history, "", config, noUsageLlm, "mock-model")
+      expect(out.status).toBe("applied")
+      if (out.status !== "applied") return
+
+      const [record] = sessions.readCompactions(session.id)
+      expect(record.tokensAfter).toBe(estimateSpanTokens(out.active) + estimateTokens(record.top) + SUMMARY_WRAPPER_TOKENS)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

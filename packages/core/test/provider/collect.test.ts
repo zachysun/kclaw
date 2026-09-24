@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { collectStreamText } from "../../src/provider/collect.js"
+import { collectStreamResult, collectStreamText } from "../../src/provider/collect.js"
 import type { LlmClient, LlmRequest, LlmStreamEvent } from "../../src/provider/types.js"
 
 function fakeLlm(events: LlmStreamEvent[] | Error): LlmClient {
@@ -52,5 +52,25 @@ describe("collectStreamText", () => {
     const p = collectStreamText(llm, { model: "m", system: "", messages: [], tools: [] }, { signal: controller.signal })
     controller.abort()
     await expect(p).rejects.toThrow()
+  })
+})
+
+describe("collectStreamResult", () => {
+  it("returns the text and the message_done usage", async () => {
+    const llm = fakeLlm([
+      { type: "text_delta", delta: "摘要" },
+      { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 800, outputTokens: 120 } },
+    ])
+    await expect(collectStreamResult(llm, req)).resolves.toEqual({
+      text: "摘要",
+      usage: { inputTokens: 800, outputTokens: 120 },
+    })
+  })
+
+  it("usage stays undefined when the stream ends without message_done", async () => {
+    const llm = fakeLlm([{ type: "text_delta", delta: "x" }])
+    const res = await collectStreamResult(llm, req)
+    expect(res.text).toBe("x")
+    expect(res.usage).toBeUndefined()
   })
 })

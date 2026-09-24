@@ -443,6 +443,8 @@ describe("audit-driven collapsed context bars (compactionBars)", () => {
     ({ id, sessionId: "s1", role: "assistant" as const, blocks: [{ id: `${id}-b`, type: "text" as const, text: t }], createdAt: "2026-08-30T00:00:00.000Z" })
   const rec = (upto: string, segmentSummary: string): CompactionRecordView =>
     ({ upto, segmentSummary, trigger: "auto" })
+  const recWithTokens = (upto: string, segmentSummary: string, before: number, after: number): CompactionRecordView =>
+    ({ upto, segmentSummary, trigger: "auto", tokensBefore: before, tokensAfter: after })
 
   const auditBars = (container: HTMLElement) =>
     [...container.querySelectorAll('[data-testid="ctx-note-audit"]')] as HTMLElement[]
@@ -490,6 +492,25 @@ describe("audit-driven collapsed context bars (compactionBars)", () => {
     const log = h.container.querySelector('[data-testid="chat-log"]')!
     // upto 是最后一条消息 → 折叠条挂在消息流末尾（chat-log 的最后一个子节点）。
     expect(log.lastElementChild!.getAttribute("data-testid")).toBe("ctx-note-audit")
+    h.unmount()
+  })
+
+  it("maps token figures onto the bar; records without them keep the plain summary", () => {
+    const messages = [u("m0", "问题一"), a("m1", "回答一")]
+    const records = [
+      recWithTokens("m1", "带数字的段摘要", 94_238, 31_520),
+      { upto: "m1", segmentSummary: "旧记录", trigger: "auto" },
+    ]
+    // 纯函数：token 变化原样映射，缺失时不产生 tokens 字段。
+    const bars = compactionBars(rendered(messages), records)
+    expect(bars).toHaveLength(2)
+    expect(bars[0]!.tokens).toEqual({ before: 94_238, after: 31_520 })
+    expect(bars[1]!.tokens).toBeUndefined()
+
+    const h = mountView(messages, { compactions: records })
+    const [withTokens, legacy] = auditBars(h.container)
+    expect(withTokens!.textContent).toContain("94.2k → 31.5k token")
+    expect(legacy!.textContent).not.toContain("token")
     h.unmount()
   })
 

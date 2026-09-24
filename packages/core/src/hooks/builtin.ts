@@ -364,7 +364,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     failure: "skip",
     timeoutMs: Number.POSITIVE_INFINITY,
     makeHandler: (rt) => {
-      const { compactor, sessionId, sessions, config, runLlm, model, signal, compactionAfter } = rt
+      const { compactor, sessionId, sessions, config, runLlm, model, signal, contextOverhead, waterlines, compactionAfter } = rt
       return async () => {
         // No watermark check — "it already overflowed" is a fact. Abort after
         // the await → null (the resend would be torn down at the next
@@ -380,6 +380,8 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
           phase: "in-run",
           emergency: true,
           signal,
+          overheadTokens: contextOverhead(),
+          budget: waterlines.budget,
         })
         forwardOutcome(compactionAfter, "in-run", outcome)
         return outcome.status === "applied" ? { upto: outcome.upto, top: outcome.top } : null
@@ -420,7 +422,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     failure: "skip",
     timeoutMs: Number.POSITIVE_INFINITY,
     makeHandler: (rt) => {
-      const { compactor, sessionId, signal, sessions, config, runLlm, model, waterlines, compactionAfter } = rt
+      const { compactor, sessionId, signal, sessions, config, runLlm, model, waterlines, contextOverhead, compactionAfter } = rt
       return async () => {
         // 冲刷挂起的 /compact（会话忙时登记的）：在自动收尾压缩之前执行——
         // 用户显式意图优先，压完水位落回，自动收尾检查自然不再触发。
@@ -435,6 +437,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
           manual: true,
           phase: "manual",
           budget: waterlines.budget,
+          overheadTokens: contextOverhead(),
         })
         forwardOutcome(compactionAfter, "manual", outcome)
       }
