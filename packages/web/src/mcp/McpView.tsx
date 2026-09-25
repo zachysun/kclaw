@@ -3,10 +3,14 @@
  * (name, source-layer badge, connection state, last error) with per-server
  * expandable tool lists, plus the management actions (enable/disable,
  * reconnect, and the add/edit/delete form — new entries pick a target
- * layer, global by default). Fetch-on-entry with a manual refresh button —
- * no polling, no live updates. Data comes from GET /mcp; actions ride the
- * /mcp/servers family and re-fetch on completion. env/headers echo back in
- * plaintext by design (local single-user product behind token auth).
+ * layer, global by default). Fetch on entry, then poll every 2s while the
+ * tab is visible so connection-state flips (connecting → connected/failed)
+ * show up without user action; hidden tabs skip the fetch, the poll fails
+ * quiet (no toast spam — only entry/manual/action-triggered fetches
+ * surface errors), and the refresh button stays for an explicit reload.
+ * Actions ride the /mcp/servers family and re-fetch on completion. env/
+ * headers echo back in plaintext by design (local single-user product
+ * behind token auth).
  */
 import { useCallback, useEffect, useRef, useState } from "react"
 import { MCP_SCOPE_LABELS, MCP_STATE_LABELS } from "@kclaw/core/commands"
@@ -135,15 +139,25 @@ export function McpView({ api, notice }: {
   const [form, setForm] = useState<FormState | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
 
-  const reload = useCallback((): Promise<void> => {
+  /** Quiet=true skips the failure toast — background polls must not spam. */
+  const reload = useCallback((opts?: { quiet?: boolean }): Promise<void> => {
     return api
       .get<{ servers: McpServerStatus[] }>("/mcp")
       .then((r) => setServers(r.servers))
-      .catch((e) => noticeRef.current(`加载 MCP 状态失败: ${String(e)}`, "error"))
+      .catch((e) => {
+        if (opts?.quiet !== true) noticeRef.current(`加载 MCP 状态失败: ${String(e)}`, "error")
+      })
   }, [api])
 
   useEffect(() => {
     void reload()
+    // Poll while mounted so daemon-side state flips reach the page without a
+    // manual refresh; a hidden tab skips the fetch (no wasted requests while
+    // the user is looking elsewhere).
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void reload({ quiet: true })
+    }, 2000)
+    return () => clearInterval(timer)
   }, [reload])
 
   const toggleExpand = (name: string): void => {

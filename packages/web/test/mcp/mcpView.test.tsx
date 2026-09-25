@@ -332,6 +332,74 @@ describe("McpView form (add / edit / delete)", () => {
   })
 })
 
+describe("McpView background polling", () => {
+  /** Render under fake timers: mount()/flush() rely on real setTimeout. */
+  async function mountFakeTimers(api: ApiClient, notice: (text: string) => void = (): void => {}): Promise<{ container: HTMLElement; root: Root }> {
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    await act(async () => {
+      root.render(<McpView api={api} notice={notice} />)
+    })
+    return { container, root }
+  }
+
+  it("polls every 2s while the tab is visible and stops when hidden or unmounted", async () => {
+    vi.useFakeTimers()
+    try {
+      const api = fakeApi()
+      const { root } = await mountFakeTimers(api)
+      expect(api.get).toHaveBeenCalledTimes(1) // entry fetch
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000)
+      })
+      expect(api.get).toHaveBeenCalledTimes(2)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000)
+      })
+      expect(api.get).toHaveBeenCalledTimes(4)
+      const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden")
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6000)
+      })
+      expect(api.get).toHaveBeenCalledTimes(4) // hidden tab: no fetches
+      visibility.mockRestore()
+      await act(async () => {
+        root.unmount()
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6000)
+      })
+      expect(api.get).toHaveBeenCalledTimes(4) // unmounted: interval cleared
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("background poll failures stay quiet (no toast)", async () => {
+    vi.useFakeTimers()
+    try {
+      let calls = 0
+      const api = fakeApi({
+        get: vi.fn(async () => {
+          calls += 1
+          if (calls > 1) throw new Error("daemon gone")
+          return SNAPSHOT
+        }),
+      })
+      const notices: string[] = []
+      const { container } = await mountFakeTimers(api, (t) => notices.push(t))
+      expect(container.textContent).toContain("filesystem") // entry fetch still renders
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000)
+      }) // two failing background polls
+      expect(notices).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe("McpView form review fix", () => {
   it("saving an edit to a disabled server keeps enabled:false", async () => {
     const api = fakeApi({ patch: vi.fn(async () => ({ ok: true })) })
