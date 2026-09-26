@@ -337,4 +337,4 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 ## MCP 工具
 
-外部 MCP server 的工具不在此清单：每个 run 经 RunManager 的 `extraTools` 动态注入，名字与 schema 来自 server 侧（见 [mcp](../core/mcp.md)）。
+外部 MCP server 的工具不在此清单：每个 run 经 RunManager 的 `extraTools(workdir)` 动态注入（取该会话工作目录所在项目组的工具面），名字与 schema 来自 server 侧（见 [mcp](../core/mcp.md)）。

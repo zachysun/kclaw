@@ -11,7 +11,7 @@
 - **404 显式可判别**：会话/任务路由先查存在性（`sessions.meta(id)` / `jobs.get(id)`），不存在返回 `404 {error:"session not found"|"job not found"}`，不依赖异常路径。
 - **配置读面只读且脱敏，写面收在 provider 管理族**：`GET /config` 的 API key 永远掩码返回；改 provider 配置走 `/providers` 路由族（上一节）——改动热生效于下个 run 并持久化 `config.json`，其余配置节仍以手写配置文件为准。
 - **消息审计没有专门路由，压缩审计有只读视图**：审计页（web 的 `AuditView`）没有独立 `/audit` 路由（它由 `GET /sessions/:id/events`（该会话完整事件流，`?since=` 增量游标）单源读取 + 页面私有 ws 订阅（`session.appended` 通知帧驱动增量拉取）组合而成，会话选择跟随应用侧栏的全局选中）。压缩审计不同：手动压缩刻意不产生消息，纯靠消息流看不到它的痕迹，因此 `GET /sessions/:id/compactions` 作为事件流里 `compaction` 事件的只读视图存在（见 [compaction](../core/compaction.md)）。
-- **可选能力按注入条件注册**：附件路由只在传入 `attachmentsDir` 时注册、用量路由只在传入 `UsageStore` 时注册——能力未组装就没有这些路径，而不是"注册了但报错"；MCP 组始终注册，`GET /mcp` 在 daemon 未组装 McpManager 时返回空 server 列表，动作端点此时回答 503。技能组与记忆组同为始终注册，但语义不同：记忆组未组装 `MemorySystem` 时降级 503，技能组没有组装依赖（技能是以文件为准，每次请求重新扫描），始终正常工作。
+- **可选能力按注入条件注册**：附件路由只在传入 `attachmentsDir` 时注册、用量路由只在传入 `UsageStore` 时注册——能力未组装就没有这些路径，而不是"注册了但报错"；MCP 组始终注册，`GET /mcp` 在 daemon 未组装 McpManager 时返回空组列表，动作端点此时回答 503。技能组与记忆组同为始终注册，但语义不同：记忆组未组装 `MemorySystem` 时降级 503，技能组没有组装依赖（技能是以文件为准，每次请求重新扫描），始终正常工作。
 
 ## 路由清单
 
@@ -219,16 +219,18 @@ interface Job {
 
 ### MCP 管理
 
+所有动作端点都显式带组定位：`group` 为 `"global"` 或项目工作目录路径，缺失或形状非法 400（`group is required ("global" or a project workdir path)`）、未知组 404。跨组允许同名，组内才查重。
+
 | 方法 | 路径 | 用途 | 请求/响应 |
 |------|------|------|------|
-| GET | `/mcp` | MCP server 连接状态快照 | `{servers: [{name, state, scope, tools: {name, server, originalName, description}[], config, lastError?}]}`（`scope` 为该条目的来源层 `"global" | "project"`（两层配置见 [mcp](../core/mcp.md)）；`config` 为该 server 的 `McpServerConfig`，含地址等；`tools` 里的 `server` 是所属 server 名、`originalName` 是远端原名、`description` 供工具清单与 `/mcp <名字>` 展示） |
-| POST | `/mcp/servers` | 新增一个 server 并后台连接 | 请求 `{name, config, layer?}`；`layer` 为 `"global" | "project"`、默认 global（新增条目的目标层，编辑不改层）；名字限定字母/数字/下划线/连字符（会进模型可见的工具名）；名字缺失/为空 400（`name is required`）；返回 `{ok, servers}`；名字重复（两层中任一占用）409、形状非法 400 |
-| PATCH | `/mcp/servers/:name` | 整体替换一个 server 的配置并重连 | 请求 `{config}`；条目留在它自己的层（项目层条目改完仍写回项目文件）；名字未知 404 |
-| DELETE | `/mcp/servers/:name` | 删除一个 server（断开并遗忘） | 返回 `{ok, servers}`；删除的是项目条目且全局层有同名条目时，全局条目立即恢复生效；名字未知 404 |
-| POST | `/mcp/servers/:name/enable` | 启停开关（持久、热生效） | 请求 `{enabled: boolean}`；非布尔 400（`enabled must be a boolean`）；禁用即断开、启用即发起一次连接 |
-| POST | `/mcp/servers/:name/reconnect` | 对失败/掉线的 server 手动发起一次连接 | 一次性尝试、不在背后排退避；对已连接的 server 是无操作；对禁用中的 server 400 |
+| GET | `/mcp` | 分组快照：各组内 server 的连接状态 | `{groups: [{id, servers: [{name, state, group, tools: {name, server, originalName, description}[], config, lastError?}]}], mainWorkspace}`（`global` 组恒在最前、项目组按路径排序；`state` 含惰性常态 `disconnected`；`tools` 里的 `server` 是所属 server 名、`originalName` 是远端原名、`description` 供工具清单与 `/mcp <名字>` 展示；`mainWorkspace` 是 daemon 主工作目录，作为新增条目的默认目标组）；连接是惰性的：快照不触发连接，只有 run 用到对应项目的工具或手动 connect 才会连（见 [mcp](../core/mcp.md)） |
+| POST | `/mcp/servers` | 新增一个 server（enabled 则后台连接） | 请求 `{name, config, group}`；名字限定字母/数字/下划线/连字符（会进模型可见的工具名）；名字缺失/为空 400（`name is required`）、形状非法 400、组内重名 409；返回 `{ok, groups}` |
+| PATCH | `/mcp/servers/:name` | 整体替换配置，可选原子换组 | 请求 `{group, config, toGroup?}`；条目留在 `group` 组写回对应文件；带 `toGroup` 时移动到目标组（目标组已有同名条目则先拒绝 409，不变更原条目）；名字未知 404 |
+| DELETE | `/mcp/servers/:name?group=<group>` | 删除一个 server（断开并遗忘） | 组走 query（DELETE 不读 body）；返回 `{ok, groups}`；名字未知 404 |
+| POST | `/mcp/servers/:name/enable` | 启停开关（持久、热生效） | 请求 `{group, enabled: boolean}`；非布尔 400（`enabled must be a boolean`）；禁用即断开、启用即后台连接 |
+| POST | `/mcp/servers/:name/connect` | 对未连接/失败的 server 手动发起一次连接 | 请求 `{group}`；一次性尝试、不在背后排退避（自动重连另有上限，见 [mcp](../core/mcp.md)）；对已连接的 server 是无操作；对禁用中的 server 400；活跃连接数已达上限 409 |
 
-路由始终注册；daemon 未组装 McpManager 时 `GET /mcp` 的 `servers` 为空数组、全部动作端点回答 503。任何一次保存动作（增删改启停）都会把变更持久化到**拥有它的那层**：全局层写 daemon 主目录的 `mcp.json`，项目层写回工作区 `.kclaw/mcp.json`；使用方是 WebUI 的 MCP 页、双端的 `/mcp` 命令与 CLI 的 `kclaw mcp [list]`。连接状态机与两层合并规则见 [mcp](../core/mcp.md)。
+路由始终注册；daemon 未组装 McpManager 时 `GET /mcp` 的 `groups` 为空数组、全部动作端点回答 503。任何一次保存动作（增删改启停）都会把变更持久化到**所属组**：`global` 组写 daemon 主目录的 `mcp.json`，项目组写回该项目 `.kclaw/mcp.json`；使用方是 WebUI 的 MCP 页、双端的 `/mcp` 命令与 CLI 的 `kclaw mcp [list]`。连接状态机、组概念与惰性连接规则见 [mcp](../core/mcp.md)。
 
 ### IM Channel 管理
 
