@@ -146,10 +146,15 @@ describe("runWebCommand /mcp", () => {
   it("shows a one-line summary with a clickable jump for a bare /mcp", async () => {
     const ctx = makeCtx()
     vi.mocked(ctx.api.get).mockResolvedValueOnce({
-      servers: [
-        { name: "a", state: "connected", tools: [{ name: "mcp__a__t" }] },
-        { name: "b", state: "connected", tools: [] },
-        { name: "c", state: "failed", tools: [], lastError: "x" },
+      groups: [
+        {
+          id: "global",
+          servers: [
+            { name: "a", state: "connected", group: "global", tools: [{ name: "mcp__a__t" }] },
+            { name: "b", state: "connected", group: "global", tools: [] },
+            { name: "c", state: "failed", group: "global", tools: [], lastError: "x" },
+          ],
+        },
       ],
     })
     expect(await runWebCommand({ command: "mcp", args: "" }, ctx)).toBe(true)
@@ -167,7 +172,7 @@ describe("runWebCommand /mcp", () => {
   it("lists one server's tools for /mcp <name>", async () => {
     const ctx = makeCtx()
     vi.mocked(ctx.api.get).mockResolvedValueOnce({
-      servers: [{ name: "fs", state: "connected", tools: [{ name: "mcp__fs__read" }, { name: "mcp__fs__write" }] }],
+      groups: [{ id: "global", servers: [{ name: "fs", state: "connected", group: "global", tools: [{ name: "mcp__fs__read" }, { name: "mcp__fs__write" }] }] }],
     })
     expect(await runWebCommand({ command: "mcp", args: "fs" }, ctx)).toBe(true)
     expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("mcp__fs__read、mcp__fs__write"))
@@ -176,12 +181,12 @@ describe("runWebCommand /mcp", () => {
 
   it("handles the empty-list and unknown-name cases", async () => {
     const ctx = makeCtx()
-    vi.mocked(ctx.api.get).mockResolvedValueOnce({ servers: [] })
+    vi.mocked(ctx.api.get).mockResolvedValueOnce({ groups: [] })
     expect(await runWebCommand({ command: "mcp", args: "" }, ctx)).toBe(true)
     expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("还没有接入"))
 
     const ctx2 = makeCtx()
-    vi.mocked(ctx2.api.get).mockResolvedValueOnce({ servers: [{ name: "a", state: "connected", tools: [] }] })
+    vi.mocked(ctx2.api.get).mockResolvedValueOnce({ groups: [{ id: "global", servers: [{ name: "a", state: "connected", group: "global", tools: [] }] }] })
     expect(await runWebCommand({ command: "mcp", args: "ghost" }, ctx2)).toBe(true)
     expect(ctx2.notify).toHaveBeenCalledWith(expect.stringContaining("未知 MCP 服务器"))
   })

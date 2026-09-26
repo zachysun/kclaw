@@ -1,7 +1,9 @@
 /**
  * McpView — MCP 服务器管理页测试。照 permissionsView.test.tsx 的 fake-api
- * 模式：vi.fn 的 ApiClient，get 按路径返回快照。覆盖：状态列表渲染、
- * 工具清单展开、手动刷新、空态、加载失败提示。
+ * 模式：vi.fn 的 ApiClient，get 按路径返回快照。覆盖：分组渲染（全局 +
+ * 项目组）、组折叠、状态徽标与连接按钮、动作携带组定位、目标下拉（默认
+ * 当前会话目录）、编辑换层（toGroup）、删除带组、手动刷新、空态、加载失
+ * 败提示、后台轮询静默。
  */
 import { describe, it, expect, vi } from "vitest"
 import { createRoot, type Root } from "react-dom/client"
@@ -11,41 +13,67 @@ import { McpView } from "../../src/mcp/McpView.js"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+const PROJ_A = "/tmp/proj-a"
+const PROJ_B = "/tmp/proj-b"
+
 const SNAPSHOT = {
-  servers: [
+  groups: [
     {
-      name: "existing",
-      config: { type: "stdio", command: "run", env: { TOKEN: "s3cret" } },
-      scope: "global",
-      state: "connected",
-      tools: [],
-    },
-    {
-      name: "filesystem",
-      config: { type: "stdio", command: "npx -y srv" },
-      scope: "project",
-      state: "connected",
-      tools: [
-        { name: "mcp__filesystem__read", originalName: "read", description: "Read a file" },
-        { name: "mcp__filesystem__write", originalName: "write", description: "" },
+      id: "global",
+      servers: [
+        {
+          name: "existing",
+          config: { type: "stdio", command: "run", env: { TOKEN: "s3cret" } },
+          group: "global",
+          state: "disconnected",
+          tools: [],
+        },
+        {
+          name: "remote",
+          config: { type: "http", url: "https://x.test/mcp" },
+          group: "global",
+          state: "failed",
+          lastError: "connect ECONNREFUSED",
+          tools: [],
+        },
+        {
+          name: "off",
+          config: { type: "stdio", command: "unused", enabled: false },
+          group: "global",
+          state: "disabled",
+          tools: [],
+        },
       ],
     },
     {
-      name: "remote",
-      config: { type: "http", url: "https://x.test/mcp" },
-      scope: "global",
-      state: "failed",
-      lastError: "connect ECONNREFUSED",
-      tools: [],
+      id: PROJ_A,
+      servers: [
+        {
+          name: "filesystem",
+          config: { type: "stdio", command: "npx -y srv" },
+          group: PROJ_A,
+          state: "connected",
+          tools: [
+            { name: "mcp__filesystem__read", originalName: "read", description: "Read a file" },
+            { name: "mcp__filesystem__write", originalName: "write", description: "" },
+          ],
+        },
+      ],
     },
     {
-      name: "off",
-      config: { type: "stdio", command: "unused", enabled: false },
-      scope: "global",
-      state: "disabled",
-      tools: [],
+      id: PROJ_B,
+      servers: [
+        {
+          name: "filesystem",
+          config: { type: "stdio", command: "b-srv" },
+          group: PROJ_B,
+          state: "connecting",
+          tools: [],
+        },
+      ],
     },
   ],
+  mainWorkspace: PROJ_A,
 }
 
 function fakeApi(over: Record<string, unknown> = {}): ApiClient & { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn>; patch: ReturnType<typeof vi.fn>; del: ReturnType<typeof vi.fn> } {
@@ -70,34 +98,60 @@ async function flush(): Promise<void> {
   })
 }
 
-async function mount(api: ApiClient, notice: (text: string) => void = (): void => {}): Promise<{ container: HTMLElement; root: Root }> {
+async function mount(api: ApiClient, notice: (text: string) => void = (): void => {}, sessionWorkdir?: string): Promise<{ container: HTMLElement; root: Root }> {
   const container = document.createElement("div")
   document.body.appendChild(container)
   const root = createRoot(container)
   await act(async () => {
-    root.render(<McpView api={api} notice={notice} />)
+    root.render(<McpView api={api} notice={notice} sessionWorkdir={sessionWorkdir} />)
   })
   await flush()
   return { container, root }
 }
 
-describe("McpView", () => {
-  it("renders server names, states, errors and config summaries", async () => {
+describe("McpView grouped snapshot", () => {
+  it("renders one section per group (global first) with per-entry states and errors", async () => {
     const api = fakeApi()
     const { container } = await mount(api)
     expect(api.get).toHaveBeenCalledWith("/mcp")
-    expect(container.textContent).toContain("filesystem")
-    expect(container.querySelector('[data-testid="mcp-state-filesystem"]')?.textContent).toBe("已连接")
+    // groups in snapshot order, group labels localized
+    const ids = [...container.querySelectorAll(".mcp-group")].map((el) => el.getAttribute("data-testid"))
+    expect(ids).toEqual([`mcp-group-global`, `mcp-group-${PROJ_A}`, `mcp-group-${PROJ_B}`])
+    expect(container.querySelector('[data-testid="mcp-fold-global"]')?.textContent).toContain("全局")
+    expect(container.querySelector(`[data-testid="mcp-fold-${PROJ_A}"]`)?.textContent).toContain(PROJ_A)
+    // entry counts
+    expect(container.querySelector('[data-testid="mcp-fold-global"]')?.textContent).toContain("3 个条目")
+    // states
+    expect(container.querySelector('[data-testid="mcp-state-existing"]')?.textContent).toBe("未连接")
     expect(container.querySelector('[data-testid="mcp-state-remote"]')?.textContent).toBe("失败")
     expect(container.querySelector('[data-testid="mcp-state-off"]')?.textContent).toBe("已禁用")
     expect(container.querySelector('[data-testid="mcp-error-remote"]')?.textContent).toContain("ECONNREFUSED")
-    expect(container.querySelector('[data-testid="mcp-error-filesystem"]')).toBeNull()
-    // source-layer badges
-    expect(container.querySelector('[data-testid="mcp-scope-filesystem"]')?.textContent).toBe("项目")
-    expect(container.querySelector('[data-testid="mcp-scope-existing"]')?.textContent).toBe("全局")
     // config summary lines
     expect(container.textContent).toContain("npx -y srv")
     expect(container.textContent).toContain("https://x.test/mcp")
+  })
+
+  it("scopes same-name entries to their group section", async () => {
+    const { container } = await mount(fakeApi())
+    const inA = container.querySelector(`[data-testid="mcp-group-${PROJ_A}"]`)
+    const inB = container.querySelector(`[data-testid="mcp-group-${PROJ_B}"]`)
+    expect(inA?.querySelector('[data-testid="mcp-state-filesystem"]')?.textContent).toBe("已连接")
+    expect(inB?.querySelector('[data-testid="mcp-state-filesystem"]')?.textContent).toBe("连接中")
+    expect(inA?.querySelector('[data-testid="mcp-state-filesystem"]')).not.toBe(inB?.querySelector('[data-testid="mcp-state-filesystem"]'))
+  })
+
+  it("folds and unfolds a group", async () => {
+    const { container } = await mount(fakeApi())
+    const group = container.querySelector(`[data-testid="mcp-group-${PROJ_A}"]`)!
+    expect(group.querySelector('[data-testid="mcp-server-filesystem"]')).not.toBeNull()
+    await act(async () => {
+      ;(group.querySelector(`button[data-testid="mcp-fold-${PROJ_A}"]`) as HTMLButtonElement).click()
+    })
+    expect(group.querySelector('[data-testid="mcp-server-filesystem"]')).toBeNull()
+    await act(async () => {
+      ;(group.querySelector(`button[data-testid="mcp-fold-${PROJ_A}"]`) as HTMLButtonElement).click()
+    })
+    expect(group.querySelector('[data-testid="mcp-server-filesystem"]')).not.toBeNull()
   })
 
   it("expands a server into its tool list with sensitive badges", async () => {
@@ -125,7 +179,7 @@ describe("McpView", () => {
   })
 
   it("shows an empty state when no servers are configured", async () => {
-    const api = fakeApi({ get: vi.fn(async () => ({ servers: [] })) })
+    const api = fakeApi({ get: vi.fn(async () => ({ groups: [{ id: "global", servers: [] }], mainWorkspace: "/tmp/main" })) })
     const { container } = await mount(api)
     expect(container.querySelector('[data-testid="mcp-empty"]')).not.toBeNull()
   })
@@ -138,36 +192,44 @@ describe("McpView", () => {
   })
 })
 
-describe("McpView actions (toggle + reconnect)", () => {
-  it("offers disable on a connected server and enable on a disabled one", async () => {
+describe("McpView actions (toggle / connect / delete carry the group)", () => {
+  it("offers 连接 on a disconnected entry, 重试 on a failed one, neither on connected", async () => {
     const { container } = await mount(fakeApi())
-    const disable = container.querySelector('button[data-testid="mcp-toggle-filesystem"]')
-    expect(disable?.textContent).toBe("禁用")
-    const enable = container.querySelector('button[data-testid="mcp-toggle-off"]')
-    expect(enable?.textContent).toBe("启用")
+    expect(container.querySelector('button[data-testid="mcp-connect-existing"]')?.textContent).toBe("连接")
+    expect(container.querySelector('button[data-testid="mcp-connect-remote"]')?.textContent).toBe("重试")
+    expect(container.querySelector('button[data-testid="mcp-connect-filesystem"]')).toBeNull()
   })
 
-  it("sends the enable call and re-fetches on completion", async () => {
+  it("sends the connect probe with the entry's group", async () => {
+    const api = fakeApi({ post: vi.fn(async () => ({ ok: true })) })
+    const { container } = await mount(api)
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-connect-existing"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(api.post).toHaveBeenCalledWith("/mcp/servers/existing/connect", { group: "global" })
+    expect(api.get).toHaveBeenCalledTimes(2)
+  })
+
+  it("sends the enable call with the entry's group", async () => {
     const api = fakeApi({ post: vi.fn(async () => ({ ok: true })) })
     const { container } = await mount(api)
     await act(async () => {
       ;(container.querySelector('button[data-testid="mcp-toggle-filesystem"]') as HTMLButtonElement).click()
     })
     await flush()
-    expect(api.post).toHaveBeenCalledWith("/mcp/servers/filesystem/enable", { enabled: false })
+    expect(api.post).toHaveBeenCalledWith(`/mcp/servers/filesystem/enable`, { group: PROJ_A, enabled: false })
     expect(api.get).toHaveBeenCalledTimes(2)
   })
 
-  it("shows reconnect only for failed servers and calls the endpoint", async () => {
-    const api = fakeApi({ post: vi.fn(async () => ({ ok: true })) })
+  it("deletes with the group as a query parameter", async () => {
+    const api = fakeApi({ del: vi.fn(async () => ({ ok: true })) })
     const { container } = await mount(api)
-    expect(container.querySelector('button[data-testid="mcp-reconnect-filesystem"]')).toBeNull()
-    expect(container.querySelector('button[data-testid="mcp-reconnect-remote"]')).not.toBeNull()
     await act(async () => {
-      ;(container.querySelector('button[data-testid="mcp-reconnect-remote"]') as HTMLButtonElement).click()
+      ;(container.querySelector('button[data-testid="mcp-delete-filesystem"]') as HTMLButtonElement).click()
     })
     await flush()
-    expect(api.post).toHaveBeenCalledWith("/mcp/servers/remote/reconnect")
+    expect(api.del).toHaveBeenCalledWith(`/mcp/servers/filesystem?group=${encodeURIComponent(PROJ_A)}`)
     expect(api.get).toHaveBeenCalledTimes(2)
   })
 
@@ -184,7 +246,7 @@ describe("McpView actions (toggle + reconnect)", () => {
   })
 })
 
-describe("McpView form (add / edit / delete)", () => {
+describe("McpView form (add / edit / move / delete)", () => {
   async function openAdd(container: HTMLElement): Promise<void> {
     await act(async () => {
       ;(container.querySelector('button[data-testid="mcp-add"]') as HTMLButtonElement).click()
@@ -201,11 +263,51 @@ describe("McpView form (add / edit / delete)", () => {
     })
   }
 
-  it("adds a stdio server through the form (default layer: global)", async () => {
+  function selectOption(container: HTMLElement, testid: string, value: string): void {
+    const el = container.querySelector(`[data-testid="${testid}"]`) as HTMLSelectElement
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")!.set!
+      setter.call(el, value)
+      el.dispatchEvent(new Event("change", { bubbles: true }))
+    })
+  }
+
+  it("defaults the target to the selected session's workdir", async () => {
+    const api = fakeApi()
+    const { container } = await mount(api, () => {}, PROJ_A)
+    await openAdd(container)
+    const select = container.querySelector('[data-testid="mcp-form-group"]') as HTMLSelectElement
+    expect(select.value).toBe(PROJ_A)
+  })
+
+  it("falls back to the daemon workspace, then global, when no session is selected", async () => {
+    const api = fakeApi()
+    const { container } = await mount(api)
+    await openAdd(container)
+    expect((container.querySelector('[data-testid="mcp-form-group"]') as HTMLSelectElement).value).toBe(PROJ_A)
+
+    const noMain = fakeApi({ get: vi.fn(async () => ({ groups: [{ id: "global", servers: [] }], mainWorkspace: "" })) })
+    const { container: c2 } = await mount(noMain)
+    await openAdd(c2)
+    expect((c2.querySelector('[data-testid="mcp-form-group"]') as HTMLSelectElement).value).toBe("global")
+  })
+
+  it("keeps the session workdir as the default even when the client snapshot predates its group", async () => {
+    const api = fakeApi()
+    const fresh = "/tmp/fresh-proj"
+    const { container } = await mount(api, () => {}, fresh)
+    await openAdd(container)
+    const select = container.querySelector('[data-testid="mcp-form-group"]') as HTMLSelectElement
+    expect(select.value).toBe(fresh)
+    // the fresh group is offered as an option even though the snapshot doesn't list it yet
+    expect([...select.options].some((o) => o.value === fresh)).toBe(true)
+  })
+
+  it("adds a stdio server into the chosen group", async () => {
     const api = fakeApi({ post: vi.fn(async () => ({ ok: true })) })
     const { container } = await mount(api)
     await openAdd(container)
-    expect(container.querySelector('[data-testid="mcp-form"]')).not.toBeNull()
+    selectOption(container, "mcp-form-group", PROJ_A)
     typeInto(container, "mcp-form-name", "new-srv")
     typeInto(container, "mcp-form-command", "npx -y srv")
     await act(async () => {
@@ -215,41 +317,11 @@ describe("McpView form (add / edit / delete)", () => {
     expect(api.post).toHaveBeenCalledWith("/mcp/servers", {
       name: "new-srv",
       config: { type: "stdio", command: "npx -y srv" },
-      layer: "global",
+      group: PROJ_A,
     })
     expect(api.get).toHaveBeenCalledTimes(2)
     // form closes after a successful save
     expect(container.querySelector('[data-testid="mcp-form"]')).toBeNull()
-  })
-
-  it("creates into the project layer when the form selects it", async () => {
-    const api = fakeApi({ post: vi.fn(async () => ({ ok: true })) })
-    const { container } = await mount(api)
-    await openAdd(container)
-    await act(async () => {
-      ;(container.querySelector('button[data-testid="mcp-form-layer-project"]') as HTMLButtonElement).click()
-    })
-    typeInto(container, "mcp-form-name", "proj-srv")
-    typeInto(container, "mcp-form-command", "npx -y proj")
-    await act(async () => {
-      ;(container.querySelector('button[data-testid="mcp-form-submit"]') as HTMLButtonElement).click()
-    })
-    await flush()
-    expect(api.post).toHaveBeenCalledWith("/mcp/servers", {
-      name: "proj-srv",
-      config: { type: "stdio", command: "npx -y proj" },
-      layer: "project",
-    })
-  })
-
-  it("hides the layer choice when editing an existing entry", async () => {
-    const api = fakeApi({ patch: vi.fn(async () => ({ ok: true })) })
-    const { container } = await mount(api)
-    await act(async () => {
-      ;(container.querySelector('button[data-testid="mcp-edit-existing"]') as HTMLButtonElement).click()
-    })
-    expect(container.querySelector('[data-testid="mcp-form-layer-project"]')).toBeNull()
-    expect(container.querySelector('[data-testid="mcp-form-layer-global"]')).toBeNull()
   })
 
   it("switches to http fields and carries headers through", async () => {
@@ -274,11 +346,11 @@ describe("McpView form (add / edit / delete)", () => {
     expect(api.post).toHaveBeenCalledWith("/mcp/servers", {
       name: "remote",
       config: { type: "http", url: "https://x.test/mcp", headers: { Authorization: "Bearer k" } },
-      layer: "global",
+      group: PROJ_A,
     })
   })
 
-  it("edits an existing server with plaintext echo of env", async () => {
+  it("edits an entry in place with plaintext env echo (no toGroup when the target is unchanged)", async () => {
     const api = fakeApi({ patch: vi.fn(async () => ({ ok: true })) })
     const { container } = await mount(api)
     await act(async () => {
@@ -297,7 +369,26 @@ describe("McpView form (add / edit / delete)", () => {
     })
     await flush()
     expect(api.patch).toHaveBeenCalledWith("/mcp/servers/existing", {
+      group: "global",
       config: { type: "stdio", command: "run2", env: { TOKEN: "s3cret" } },
+    })
+  })
+
+  it("moving an entry to another group sends toGroup", async () => {
+    const api = fakeApi({ patch: vi.fn(async () => ({ ok: true })) })
+    const { container } = await mount(api)
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-edit-filesystem"]') as HTMLButtonElement).click()
+    })
+    selectOption(container, "mcp-form-group", PROJ_B)
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-form-submit"]') as HTMLButtonElement).click()
+    })
+    await flush()
+    expect(api.patch).toHaveBeenCalledWith("/mcp/servers/filesystem", {
+      group: PROJ_A,
+      toGroup: PROJ_B,
+      config: { type: "stdio", command: "npx -y srv" },
     })
   })
 
@@ -320,26 +411,31 @@ describe("McpView form (add / edit / delete)", () => {
     expect(api.get).toHaveBeenCalledTimes(1)
   })
 
-  it("deletes a server and re-fetches", async () => {
-    const api = fakeApi({ del: vi.fn(async () => ({ ok: true })) })
+  it("saving an edit to a disabled server keeps enabled:false", async () => {
+    const api = fakeApi({ patch: vi.fn(async () => ({ ok: true })) })
     const { container } = await mount(api)
     await act(async () => {
-      ;(container.querySelector('button[data-testid="mcp-delete-existing"]') as HTMLButtonElement).click()
+      ;(container.querySelector('button[data-testid="mcp-edit-off"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      ;(container.querySelector('button[data-testid="mcp-form-submit"]') as HTMLButtonElement).click()
     })
     await flush()
-    expect(api.del).toHaveBeenCalledWith("/mcp/servers/existing")
-    expect(api.get).toHaveBeenCalledTimes(2)
+    expect(api.patch).toHaveBeenCalledWith("/mcp/servers/off", {
+      group: "global",
+      config: { type: "stdio", command: "unused", enabled: false },
+    })
   })
 })
 
 describe("McpView background polling", () => {
   /** Render under fake timers: mount()/flush() rely on real setTimeout. */
-  async function mountFakeTimers(api: ApiClient, notice: (text: string) => void = (): void => {}): Promise<{ container: HTMLElement; root: Root }> {
+  async function mountFakeTimers(api: ApiClient, notice: (text: string) => void = (): void => {}, sessionWorkdir?: string): Promise<{ container: HTMLElement; root: Root }> {
     const container = document.createElement("div")
     document.body.appendChild(container)
     const root = createRoot(container)
     await act(async () => {
-      root.render(<McpView api={api} notice={notice} />)
+      root.render(<McpView api={api} notice={notice} sessionWorkdir={sessionWorkdir} />)
     })
     return { container, root }
   }
@@ -397,22 +493,5 @@ describe("McpView background polling", () => {
     } finally {
       vi.useRealTimers()
     }
-  })
-})
-
-describe("McpView form review fix", () => {
-  it("saving an edit to a disabled server keeps enabled:false", async () => {
-    const api = fakeApi({ patch: vi.fn(async () => ({ ok: true })) })
-    const { container } = await mount(api)
-    await act(async () => {
-      ;(container.querySelector('button[data-testid="mcp-edit-off"]') as HTMLButtonElement).click()
-    })
-    await act(async () => {
-      ;(container.querySelector('button[data-testid="mcp-form-submit"]') as HTMLButtonElement).click()
-    })
-    await flush()
-    expect(api.patch).toHaveBeenCalledWith("/mcp/servers/off", {
-      config: { type: "stdio", command: "unused", enabled: false },
-    })
   })
 })
