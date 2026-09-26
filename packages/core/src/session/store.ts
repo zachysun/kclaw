@@ -198,10 +198,14 @@ export class SessionStore {
     return this.list().filter((m) => m.jobId === jobId)
   }
 
+  /** Every session projection including the recycle bin (workdir-union consumers, the purge cascade). */
+  allMetas(): SessionMeta[] {
+    return [...this.list(), ...this.list({ deleted: true })]
+  }
+
   /** Sessions (recycle-bin view included) spawned by `parentSessionId`, for the delete/purge cascade. */
   listByParent(parentSessionId: string): SessionMeta[] {
-    return [...this.list(), ...this.list({ deleted: true })]
-      .filter((m) => m.parentSessionId === parentSessionId)
+    return this.allMetas().filter((m) => m.parentSessionId === parentSessionId)
   }
 
   /** Read one session's projection (meta.json); when missing/corrupt, rebuild it from the event stream. */

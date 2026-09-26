@@ -183,13 +183,14 @@ export interface RunEngineDeps {
    */
   tools?: Map<string, ToolExecutor>
   /**
-   * Live adapter tools (e.g. the MCP manager): a FUNCTION evaluated per run,
-   * so connections that come up or drop between runs (or mid-reconnect)
-   * are reflected in the next LLM request. Defs are appended to the
-   * builtin defs; a name collision with a builtin logs once and the
-   * adapter's executor wins (schema follows the executor).
+   * Live adapter tools (e.g. the MCP manager): a FUNCTION of the run's
+   * workspace, evaluated per run — the MCP use-view (and its lazy
+   * connections) follows the session's project, and connections that come
+   * up or drop between runs are reflected in the next LLM request. Defs
+   * are appended to the builtin defs; a name collision with a builtin logs
+   * once and the adapter's executor wins (schema follows the executor).
    */
-  extraTools?: () => { executors: Map<string, ToolExecutor>; defs: ToolDefinition[] }
+  extraTools?: (workdir: string) => { executors: Map<string, ToolExecutor>; defs: ToolDefinition[] }
   /**
    * Subagent dispatch (issue #16): the server-side spawner. When set,
    * mainline runs gain the `subagent_run` builtin tool; the child run's own
@@ -499,10 +500,11 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   if (engine.deps.tools !== undefined) {
     for (const [name, executor] of engine.deps.tools) tools.set(name, executor)
   }
-  // Live adapter tools (MCP manager): defs appended, executor wins on a
-  // name collision with a log line (schema follows the executor).
+  // Live adapter tools (MCP manager): the view follows the run's workspace;
+  // defs appended, executor wins on a name collision with a log line
+  // (schema follows the executor).
   if (engine.deps.extraTools !== undefined) {
-    const extra = engine.deps.extraTools()
+    const extra = engine.deps.extraTools(workspace)
     for (const [name, executor] of extra.executors) {
       if (tools.has(name)) console.error(`kclaw tool name collision: ${name} (adapter overrides builtin)`)
       tools.set(name, executor)

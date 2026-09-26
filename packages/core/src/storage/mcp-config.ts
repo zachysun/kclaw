@@ -8,7 +8,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { writeFileAtomic } from "./atomic.js"
 import { isGitTracked } from "./decided-rules.js"
-import type { McpServerConfig } from "../mcp/manager.js"
+import type { McpServerConfig } from "../mcp/types.js"
 
 /** <home>/mcp.json — the UI-managed MCP server config file. */
 export function mcpConfigPath(home: string): string {
