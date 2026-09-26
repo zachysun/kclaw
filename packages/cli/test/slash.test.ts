@@ -645,14 +645,22 @@ describe("/skill", () => {
 })
 
 describe("/mcp", () => {
-  it("bare /mcp prints one line per server with state, source layer and tool count", async () => {
+  it("bare /mcp prints per-group sections with state and tool count", async () => {
     const fake = makeFakeCtx(async (_m, path) => {
       if (path === "/mcp") {
         return {
-          servers: [
-            { name: "fs", state: "connected", tools: [{ name: "mcp__fs__read" }, { name: "mcp__fs__write" }] },
-            { name: "remote", state: "failed", tools: [], lastError: "ECONNREFUSED" },
-            { name: "proj", state: "connected", scope: "project", tools: [] },
+          groups: [
+            {
+              id: "global",
+              servers: [
+                { name: "fs", state: "connected", group: "global", tools: [{ name: "mcp__fs__read" }, { name: "mcp__fs__write" }] },
+                { name: "remote", state: "failed", group: "global", tools: [], lastError: "ECONNREFUSED" },
+              ],
+            },
+            {
+              id: "/tmp/proj-a",
+              servers: [{ name: "proj", state: "connected", group: "/tmp/proj-a", tools: [] }],
+            },
           ],
         }
       }
@@ -661,9 +669,11 @@ describe("/mcp", () => {
     const registry = createRegistry(fake.ctx)
     await runOrHint({ command: "mcp", args: "" }, registry, fake.ctx)
     const printed = fake.print.mock.calls.map((c) => c[0] as string)
-    expect(printed.some((t) => t.includes("fs · 已连接 · 全局 · 2 个工具"))).toBe(true)
-    expect(printed.some((t) => t.includes("remote · 失败 · 全局 · 0 个工具 · ECONNREFUSED"))).toBe(true)
-    expect(printed.some((t) => t.includes("proj · 已连接 · 项目 · 0 个工具"))).toBe(true)
+    expect(printed.some((t) => t.includes("【全局】"))).toBe(true)
+    expect(printed.some((t) => t.includes("【/tmp/proj-a】"))).toBe(true)
+    expect(printed.some((t) => t.includes("fs · 已连接 · 2 个工具"))).toBe(true)
+    expect(printed.some((t) => t.includes("remote · 失败 · 0 个工具 · ECONNREFUSED"))).toBe(true)
+    expect(printed.some((t) => t.includes("proj · 已连接 · 0 个工具"))).toBe(true)
     expect(printed.some((t) => t.includes("1 个失败"))).toBe(true)
   })
 
@@ -671,7 +681,9 @@ describe("/mcp", () => {
     const fake = makeFakeCtx(async (_m, path) => {
       if (path === "/mcp") {
         return {
-          servers: [{ name: "fs", state: "connected", tools: [{ name: "mcp__fs__read", description: "Read a file" }] }],
+          groups: [
+            { id: "global", servers: [{ name: "fs", state: "connected", group: "global", tools: [{ name: "mcp__fs__read", description: "Read a file" }] }] },
+          ],
         }
       }
       throw new Error(`unexpected ${path}`)
@@ -679,18 +691,38 @@ describe("/mcp", () => {
     const registry = createRegistry(fake.ctx)
     await runOrHint({ command: "mcp", args: "fs" }, registry, fake.ctx)
     const printed = fake.print.mock.calls.map((c) => c[0] as string)
-    expect(printed.some((t) => t.includes("fs（已连接）· 全局 · 1 个工具"))).toBe(true)
+    expect(printed.some((t) => t.includes("fs（已连接）· 1 个工具"))).toBe(true)
     expect(printed.some((t) => t.includes("mcp__fs__read — Read a file"))).toBe(true)
   })
 
+  it("/mcp <name> disambiguates same names across groups by prefixing the project", async () => {
+    const fake = makeFakeCtx(async (_m, path) => {
+      if (path === "/mcp") {
+        return {
+          groups: [
+            { id: "global", servers: [{ name: "weather", state: "connected", group: "global", tools: [] }] },
+            { id: "/tmp/proj-a", servers: [{ name: "weather", state: "failed", group: "/tmp/proj-a", tools: [], lastError: "boom" }] },
+          ],
+        }
+      }
+      throw new Error(`unexpected ${path}`)
+    })
+    const registry = createRegistry(fake.ctx)
+    await runOrHint({ command: "mcp", args: "weather" }, registry, fake.ctx)
+    const printed = fake.print.mock.calls.map((c) => c[0] as string)
+    expect(printed.some((t) => t.includes("weather（已连接）· 0 个工具"))).toBe(true)
+    expect(printed.some((t) => t.includes("/tmp/proj-a · weather（失败）· 0 个工具"))).toBe(true)
+    expect(printed.some((t) => t.includes("最近错误: boom"))).toBe(true)
+  })
+
   it("handles the empty list and unknown names", async () => {
-    const empty = makeFakeCtx(async (_m, path) => (path === "/mcp" ? { servers: [] } : (() => { throw new Error(`unexpected ${path}`) })()))
+    const empty = makeFakeCtx(async (_m, path) => (path === "/mcp" ? { groups: [] } : (() => { throw new Error(`unexpected ${path}`) })()))
     const registry = createRegistry(empty.ctx)
     await runOrHint({ command: "mcp", args: "" }, registry, empty.ctx)
     expect(empty.print.mock.calls.map((c) => c[0] as string).some((t) => t.includes("还没有接入任何 MCP 服务器"))).toBe(true)
 
     const known = makeFakeCtx(async (_m, path) =>
-      path === "/mcp" ? { servers: [{ name: "a", state: "connected", tools: [] }] } : (() => { throw new Error(`unexpected ${path}`) })(),
+      path === "/mcp" ? { groups: [{ id: "global", servers: [{ name: "a", state: "connected", group: "global", tools: [] }] }] } : (() => { throw new Error(`unexpected ${path}`) })(),
     )
     const registry2 = createRegistry(known.ctx)
     await runOrHint({ command: "mcp", args: "ghost" }, registry2, known.ctx)

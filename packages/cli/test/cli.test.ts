@@ -421,7 +421,7 @@ describe("kclaw mcp", () => {
     await runCli(["daemon", "stop"], h)
   })
 
-  it("lists a failing configured server with its error", async () => {
+  it("boots lazy (未连接), and a manual connect probe settles the failure", async () => {
     const h = makeHome()
     writeFileSync(
       join(h, "mcp.json"),
@@ -432,10 +432,24 @@ describe("kclaw mcp", () => {
       ),
     )
     await runCli(["daemon", "start"], h)
-    // The manager may still be "connecting" a beat after readiness: poll
-    // until the spawn failure settles into "failed".
-    await new Promise((r) => setTimeout(r, 500))
-    let out = ""
+    let out = (await runCli(["mcp"], h)).stdout
+    expect(out).toContain("broken")
+    expect(out).toContain("disconnected") // lazy model: nothing connects at boot (raw state, like the old list)
+    expect(out).toContain("0 个工具")
+    expect(out).toContain("全局")
+
+    // Manual probe through the daemon API (the WebUI 连接 button's endpoint)
+    const daemonJson = JSON.parse(readFileSync(join(h, "daemon.json"), "utf8")) as { port: number }
+    const token = readFileSync(join(h, "token"), "utf8").trim()
+    const probe = await fetch(`http://127.0.0.1:${daemonJson.port}/mcp/servers/broken/connect`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ group: "global" }),
+    })
+    expect(probe.status).toBe(200)
+
+    // the spawn failure settles into "failed" with its error
+    out = ""
     for (let i = 0; i < 10; i++) {
       const res = await runCli(["mcp"], h)
       expect(res.exitCode).toBe(0)
@@ -443,10 +457,8 @@ describe("kclaw mcp", () => {
       if (out.includes("failed")) break
       await new Promise((r) => setTimeout(r, 300))
     }
-    expect(out).toContain("broken")
     expect(out).toContain("failed")
-    expect(out).toContain("0 个工具")
-    expect(out).toContain("全局") // source-layer label: the project layer is absent here
+    expect(out).toContain("错误")
     await runCli(["daemon", "stop"], h)
   }, 20_000)
 })
