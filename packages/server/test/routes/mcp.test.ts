@@ -102,6 +102,55 @@ describe("mcp routes", () => {
     expect(body.groups[0].servers[0].tools[0].name).toBe("mcp__existing__tool")
   })
 
+  it("masks env/header values on the way out and keeps a stored secret when the field comes back blank", async () => {
+    const view = fakeManager({
+      stdio: { type: "stdio", command: "run", env: { API_TOKEN: "super-secret-token" } },
+      http: { type: "http", url: "https://x.test/mcp", headers: { Authorization: "Bearer abcdefgh" } },
+    })
+    await app.close()
+    app = await buildApp(view)
+
+    const res = await app.inject({ method: "GET", url: "/mcp", headers: AUTH })
+    const body = res.json() as McpSnapshot
+    const byName = (n: string): McpServerConfig => body.groups[0].servers.find((s) => s.name === n)!.config
+    // keys stay visible, values are masked (the provider apiKey rule)
+    expect(byName("stdio")).toMatchObject({ env: { API_TOKEN: "***oken" } })
+    expect(byName("http")).toMatchObject({ headers: { Authorization: "***efgh" } })
+    expect(JSON.stringify(body)).not.toContain("super-secret-token")
+    expect(JSON.stringify(body)).not.toContain("Bearer abcdefgh")
+
+    // Editing with the secret field left blank keeps the stored value.
+    const kept = await app.inject({
+      method: "PATCH",
+      url: "/mcp/servers/stdio",
+      headers: AUTH,
+      payload: { group: "global", config: { type: "stdio", command: "run2", env: { API_TOKEN: "" } } },
+    })
+    expect(kept.statusCode).toBe(200)
+    expect(view.status().groups[0].servers.find((s) => s.name === "stdio")!.config).toEqual({
+      type: "stdio",
+      command: "run2",
+      env: { API_TOKEN: "super-secret-token" },
+    })
+
+    // A typed value replaces it; dropping the key removes it.
+    const replaced = await app.inject({
+      method: "PATCH",
+      url: "/mcp/servers/http",
+      headers: AUTH,
+      payload: { group: "global", config: { type: "http", url: "https://x.test/mcp", headers: { Authorization: "Bearer new" } } },
+    })
+    expect(replaced.statusCode).toBe(200)
+    expect(view.status().groups[0].servers.find((s) => s.name === "http")!.config).toEqual({
+      type: "http",
+      url: "https://x.test/mcp",
+      headers: { Authorization: "Bearer new" },
+    })
+
+    // The action responses are masked too (they carry the same snapshot).
+    expect(JSON.stringify(replaced.json())).not.toContain("Bearer new")
+  })
+
   it("POST /mcp/servers forwards the explicit group", async () => {
     const view = fakeManager()
     await app.close()

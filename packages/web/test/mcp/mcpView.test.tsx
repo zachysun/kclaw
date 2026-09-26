@@ -23,7 +23,7 @@ const SNAPSHOT = {
       servers: [
         {
           name: "existing",
-          config: { type: "stdio", command: "run", env: { TOKEN: "s3cret" } },
+          config: { type: "stdio", command: "run", env: { TOKEN: "***cret" } },
           group: "global",
           state: "disconnected",
           tools: [],
@@ -350,7 +350,7 @@ describe("McpView form (add / edit / move / delete)", () => {
     })
   })
 
-  it("edits an entry in place with plaintext env echo (no toGroup when the target is unchanged)", async () => {
+  it("edits an entry in place with the secret masked (blank keeps the stored value)", async () => {
     const api = fakeApi({ patch: vi.fn(async () => ({ ok: true })) })
     const { container } = await mount(api)
     await act(async () => {
@@ -360,9 +360,13 @@ describe("McpView form (add / edit / move / delete)", () => {
     expect(nameInput.value).toBe("existing")
     expect(nameInput.disabled).toBe(true)
     expect((container.querySelector('[data-testid="mcp-form-command"]') as HTMLInputElement).value).toBe("run")
-    // env echoes back in plaintext
-    expect((container.querySelector('[data-testid="mcp-form-env-key-0"]') as HTMLInputElement).value).toBe("TOKEN")
-    expect((container.querySelector('[data-testid="mcp-form-env-value-0"]') as HTMLInputElement).value).toBe("s3cret")
+    // the secret never reaches the client: the value field is blank and the
+    // mask rides in the placeholder, so leaving it alone submits "" (keep).
+    const envKey = container.querySelector('[data-testid="mcp-form-env-key-0"]') as HTMLInputElement
+    const envValue = container.querySelector('[data-testid="mcp-form-env-value-0"]') as HTMLInputElement
+    expect(envKey.value).toBe("TOKEN")
+    expect(envValue.value).toBe("")
+    expect(envValue.placeholder).toContain("***cret")
     typeInto(container, "mcp-form-command", "run2")
     await act(async () => {
       ;(container.querySelector('button[data-testid="mcp-form-submit"]') as HTMLButtonElement).click()
@@ -370,7 +374,7 @@ describe("McpView form (add / edit / move / delete)", () => {
     await flush()
     expect(api.patch).toHaveBeenCalledWith("/mcp/servers/existing", {
       group: "global",
-      config: { type: "stdio", command: "run2", env: { TOKEN: "s3cret" } },
+      config: { type: "stdio", command: "run2", env: { TOKEN: "" } },
     })
   })
 

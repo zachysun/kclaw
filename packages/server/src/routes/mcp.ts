@@ -11,11 +11,18 @@
  * hook — the daemon wires "global" to mcp.json and each workdir to that
  * project's file. Without a manager assembly the actions answer 503 (the
  * /memory precedent) while the snapshot stays an empty group list.
+ *
+ * Secrets never leave unmasked: stdio `env` and http `headers` values are
+ * masked on the way out (keys stay visible, the provider apiKey rule), and
+ * a blank value on the way in means "keep the stored one" — the client only
+ * ever holds the mask, so blank is how an edit preserves a secret. Dropping
+ * the row removes the key.
  */
 import type { FastifyInstance } from "fastify"
 import type { McpServerConfig } from "@kclaw/core"
 import { McpError, isGroupId, parseMcpServerConfig } from "@kclaw/core"
 import type { McpSnapshot } from "@kclaw/core/protocol"
+import { maskSecret } from "./config.js"
 
 /** What the routes need from the manager (the McpManager surface in practice). */
 export interface McpRoutesView {
@@ -59,9 +66,60 @@ interface NameParams {
   name: string
 }
 
+/** The two secret-bearing config fields, masked out and merged back the same way. */
+const SECRET_FIELDS = ["env", "headers"] as const
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+/** Mask stdio `env` / http `headers` values; keys stay visible. */
+function maskConfig(config: McpServerConfig): McpServerConfig {
+  const out = { ...config } as Record<string, unknown>
+  for (const field of SECRET_FIELDS) {
+    const rec = out[field]
+    if (!isStringRecord(rec)) continue
+    out[field] = Object.fromEntries(Object.entries(rec).map(([k, v]) => [k, maskSecret(v)]))
+  }
+  return out as McpServerConfig
+}
+
+/** The wire snapshot: every group's entries with their secret values masked. */
+function wireGroups(deps: McpRoutesDeps): McpSnapshot["groups"] {
+  return (deps.mcp?.status().groups ?? []).map((g) => ({
+    id: g.id,
+    servers: g.servers.map((s) => ({ ...s, config: maskConfig(s.config) })),
+  }))
+}
+
+/** The stored (unmasked) config of one entry, or undefined. */
+function storedConfig(deps: McpRoutesDeps, group: string, name: string): McpServerConfig | undefined {
+  return deps.mcp?.status().groups.find((g) => g.id === group)?.servers.find((s) => s.name === name)?.config
+}
+
+/**
+ * Blank env/header values mean "unchanged": the client holds only the mask,
+ * so a blank field keeps the stored secret for that key (the provider
+ * apiKey rule). A blank on a key the stored entry doesn't have stays blank
+ * as typed; omitting the key drops it.
+ */
+function mergeStoredSecrets(incoming: McpServerConfig, stored: McpServerConfig | undefined): McpServerConfig {
+  const out = { ...incoming } as Record<string, unknown>
+  for (const field of SECRET_FIELDS) {
+    const rec = out[field]
+    if (!isStringRecord(rec)) continue
+    const prevRaw = (stored as Record<string, unknown> | undefined)?.[field]
+    const prev = isStringRecord(prevRaw) ? prevRaw : undefined
+    out[field] = Object.fromEntries(
+      Object.entries(rec).map(([k, v]) => [k, v === "" && prev?.[k] !== undefined ? prev[k] : v]),
+    )
+  }
+  return out as McpServerConfig
+}
+
 export function registerMcpRoutes(app: FastifyInstance, deps: McpRoutesDeps): void {
   app.get("/mcp", async () => ({
-    groups: deps.mcp?.status().groups ?? [],
+    groups: wireGroups(deps),
     mainWorkspace: deps.mainWorkspace ?? "",
   }))
 
@@ -90,7 +148,7 @@ export function registerMcpRoutes(app: FastifyInstance, deps: McpRoutesDeps): vo
       const mapped = managerError(e)
       return reply.code(mapped.code).send({ error: mapped.error })
     }
-    return { ok: true, groups: deps.mcp.status().groups }
+    return { ok: true, groups: wireGroups(deps) }
   })
 
   app.patch("/mcp/servers/:name", async (request, reply) => {
@@ -112,12 +170,12 @@ export function registerMcpRoutes(app: FastifyInstance, deps: McpRoutesDeps): vo
       return reply.code(400).send({ error: (e as Error).message })
     }
     try {
-      deps.mcp.updateServer(group, name, config, toGroup)
+      deps.mcp.updateServer(group, name, mergeStoredSecrets(config, storedConfig(deps, group, name)), toGroup)
     } catch (e) {
       const mapped = managerError(e)
       return reply.code(mapped.code).send({ error: mapped.error })
     }
-    return { ok: true, groups: deps.mcp.status().groups }
+    return { ok: true, groups: wireGroups(deps) }
   })
 
   app.delete("/mcp/servers/:name", async (request, reply) => {
@@ -133,7 +191,7 @@ export function registerMcpRoutes(app: FastifyInstance, deps: McpRoutesDeps): vo
       const mapped = managerError(e)
       return reply.code(mapped.code).send({ error: mapped.error })
     }
-    return { ok: true, groups: deps.mcp.status().groups }
+    return { ok: true, groups: wireGroups(deps) }
   })
 
   app.post("/mcp/servers/:name/enable", async (request, reply) => {
@@ -153,7 +211,7 @@ export function registerMcpRoutes(app: FastifyInstance, deps: McpRoutesDeps): vo
       const mapped = managerError(e)
       return reply.code(mapped.code).send({ error: mapped.error })
     }
-    return { ok: true, groups: deps.mcp.status().groups }
+    return { ok: true, groups: wireGroups(deps) }
   })
 
   app.post("/mcp/servers/:name/connect", async (request, reply) => {
@@ -169,6 +227,6 @@ export function registerMcpRoutes(app: FastifyInstance, deps: McpRoutesDeps): vo
       const mapped = managerError(e)
       return reply.code(mapped.code).send({ error: mapped.error })
     }
-    return { ok: true, groups: deps.mcp.status().groups }
+    return { ok: true, groups: wireGroups(deps) }
   })
 }

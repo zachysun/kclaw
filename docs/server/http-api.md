@@ -223,9 +223,9 @@ interface Job {
 
 | 方法 | 路径 | 用途 | 请求/响应 |
 |------|------|------|------|
-| GET | `/mcp` | 分组快照：各组内 server 的连接状态 | `{groups: [{id, servers: [{name, state, group, tools: {name, server, originalName, description}[], config, lastError?}]}], mainWorkspace}`（`global` 组恒在最前、项目组按路径排序；`state` 含惰性常态 `disconnected`；`tools` 里的 `server` 是所属 server 名、`originalName` 是远端原名、`description` 供工具清单与 `/mcp <名字>` 展示；`mainWorkspace` 是 daemon 主工作目录，作为新增条目的默认目标组）；连接是惰性的：快照不触发连接，只有 run 用到对应项目的工具或手动 connect 才会连（见 [mcp](../core/mcp.md)） |
+| GET | `/mcp` | 分组快照：各组内 server 的连接状态 | `{groups: [{id, servers: [{name, state, group, tools: {name, server, originalName, description}[], config, lastError?}]}], mainWorkspace}`（`global` 组恒在最前、项目组按路径排序；`state` 含惰性常态 `disconnected`；`tools` 里的 `server` 是所属 server 名、`originalName` 是远端原名、`description` 供工具清单与 `/mcp <名字>` 展示；`mainWorkspace` 是 daemon 主工作目录，作为新增条目的默认目标组）；stdio `env` 与 http `headers` 的值掩码成 `***` + 末 4 位（键名可见，与 `/config` 的 API key 同一规则）；连接是惰性的：快照不触发连接，只有 run 用到对应项目的工具或手动 connect 才会连（见 [mcp](../core/mcp.md)） |
 | POST | `/mcp/servers` | 新增一个 server（enabled 则后台连接） | 请求 `{name, config, group}`；名字限定字母/数字/下划线/连字符（会进模型可见的工具名）；名字缺失/为空 400（`name is required`）、形状非法 400、组内重名 409；返回 `{ok, groups}` |
-| PATCH | `/mcp/servers/:name` | 整体替换配置，可选原子换组 | 请求 `{group, config, toGroup?}`；条目留在 `group` 组写回对应文件；带 `toGroup` 时移动到目标组（目标组已有同名条目则先拒绝 409，不变更原条目）；名字未知 404 |
+| PATCH | `/mcp/servers/:name` | 整体替换配置，可选原子换组 | 请求 `{group, config, toGroup?}`；条目留在 `group` 组写回对应文件；带 `toGroup` 时移动到目标组（目标组已有同名条目则先拒绝 409，不变更原条目）；名字未知 404；`env`/`headers` 里留空的键保持已存值（客户端只持有掩码），删掉该键即移除 |
 | DELETE | `/mcp/servers/:name?group=<group>` | 删除一个 server（断开并遗忘） | 组走 query（DELETE 不读 body）；返回 `{ok, groups}`；名字未知 404 |
 | POST | `/mcp/servers/:name/enable` | 启停开关（持久、热生效） | 请求 `{group, enabled: boolean}`；非布尔 400（`enabled must be a boolean`）；禁用即断开、启用即后台连接 |
 | POST | `/mcp/servers/:name/connect` | 对未连接/失败的 server 手动发起一次连接 | 请求 `{group}`；一次性尝试、不在背后排退避（自动重连另有上限，见 [mcp](../core/mcp.md)）；对已连接的 server 是无操作；对禁用中的 server 400；活跃连接数已达上限 409 |

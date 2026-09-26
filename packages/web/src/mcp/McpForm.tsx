@@ -3,8 +3,11 @@
  * submit/error surface; the parent supplies the entry to prefill (or an
  * empty form with a default target group) plus the target-group options.
  * Saving an edit with a changed target group moves the entry across groups
- * (PATCH toGroup — the manager applies it atomically). env/headers echo
- * back in plaintext by design (local single-user product behind token auth).
+ * (PATCH toGroup — the manager applies it atomically). Secrets stay masked:
+ * the snapshot only carries masked env/header values, so an edit shows them
+ * as placeholders with an EMPTY input — leaving a field blank keeps the
+ * stored value (the provider apiKey rule), typing replaces it, and removing
+ * the row drops the key.
  */
 import { useState } from "react"
 import { mcpGroupLabel } from "@kclaw/core/commands"
@@ -14,6 +17,8 @@ import type { ApiClient } from "../api.js"
 interface Pair {
   key: string
   value: string
+  /** Masked stored value (edit only): rendered as the placeholder hint. */
+  masked?: string
 }
 
 export interface McpFormState {
@@ -43,12 +48,12 @@ export function emptyForm(group: string): McpFormState {
   return { editing: null, editGroup: null, name: "", type: "stdio", group, command: "", argsText: "", envPairs: [], url: "", headerPairs: [], enabled: true }
 }
 
-/** Prefill from an existing snapshot entry (plaintext echo of env/headers). */
+/** Prefill from an existing snapshot entry (masked secret values show as placeholders). */
 export function formFromStatus(s: McpServerStatus): McpFormState {
   const c = s.config as Record<string, unknown>
   const pairs = (rec: unknown): Pair[] =>
     rec !== undefined && typeof rec === "object" && !Array.isArray(rec)
-      ? Object.entries(rec as Record<string, string>).map(([key, value]) => ({ key, value }))
+      ? Object.entries(rec as Record<string, string>).map(([key, masked]) => ({ key, value: "", masked }))
       : []
   return {
     editing: s.name,
@@ -94,7 +99,7 @@ function KeyValueEditor({ pairs, keyTestid, valueTestid, addTestid, onChange }: 
           <input
             data-testid={`${valueTestid}-${i}`}
             value={p.value}
-            placeholder="值"
+            placeholder={p.masked !== undefined ? `${p.masked}（留空保持）` : "值"}
             onChange={(e) => onChange(pairs.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))}
           />
           <button type="button" aria-label="删除此行" onClick={() => onChange(pairs.filter((_, j) => j !== i))}>
