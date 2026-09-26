@@ -27,7 +27,7 @@
 | `kclaw daemon stop` | 发 SIGTERM 终止 daemon，轮询至 `/health` 不可访问后删除 `daemon.json`；返回 "stopped" 或 "daemon not running" |
 | `kclaw daemon status` / `kclaw status` | 报告状态：`not running`，或 `running (pid <pid>, port <port>, v<版本>, uptime <n>s)`；daemon 报出的版本与 CLI 自身不一致时追加一行提示（两者不是同一次构建的产物，重新 `pnpm build` 并重启 daemon） |
 | `kclaw jobs list` | 列定时任务（连接过程中自动启动 daemon），五列表格：name/cron/enabled/nextRunAt/lastStatus |
-| `kclaw mcp [list]` | 经 `GET /mcp` 逐行打印 MCP server：`<名字>  [来源层]  <状态>  <N> 个工具[ 错误: <lastError>]`（来源层为 `全局` 或 `项目`，来自快照的 `scope` 字段）；空列表打印 "未配置 MCP server（daemon 的 mcp.json 为空）" |
+| `kclaw mcp [list]` | 经 `GET /mcp` 按组打印 MCP server：每组先一行组头 `【全局】` 或 `【<工作目录路径>】`，组内每行 `  <名字>  <状态>  <N> 个工具[ 错误: <lastError>]`（状态为原始枚举串）；空配置打印 "未配置 MCP server（全局 mcp.json 与各项目 .kclaw/mcp.json 均为空）" |
 | `kclaw web` | 浏览器打开 WebUI（见 [onboarding](./onboarding.md)） |
 
 程序级选项：`--home <dir>`（默认 `KCLAW_HOME ?? ~/.kclaw`）；`--version` 运行时从所在包的 package.json 读取（聚合安装形态即聚合包版本）。
@@ -148,7 +148,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 | `/queue [cancel <n\|all>]` | 不带参数时 `GET /sessions/:id/queue` 列出排队消息（`序号. 处置 文本`），空则"（队列为空）"；`cancel <n>` 按序号取消该条（发 `queue.cancel` 帧），`cancel all` 清空全部；读取失败打印 `读取队列失败: …` |
 | `/memory [save\|项目 [线]]` | 记忆命令（见 [memory](../core/memory.md)）：`save` 手动触发当前项目的手动写入（`POST /memory/trigger-manual`，工作目录取 CLI 启动目录，处理归属会话（默认回退到项目最近活动会话）自上次提取位置以来的新消息，成功打印 `已触发手动写入…`）；无 save 参数时是只读查看——无参列项目（`GET /memory/projects`）；指定项目列该项目的主题线（`GET /memory/projects/:id`）；再指定一条线打印线文件原文（`GET /memory/threads/:project/:topic`）；各级读取失败打印对应错误 |
 | `/skill [名字\|proposals\|proposal <id>]` | 技能命令（机制见 [skills](../core/skills.md)）：无参列出已装技能（`名字 · 全局\|项目 · [仅用户] · 描述`，作用域跟会话工作目录，经 `GET /skills?workdir=`）；带名字打印该技能的 `SKILL.md` 完整正文（`GET /skills/:name?workdir=`）；`proposals` 列出技能提案（`GET /skills/proposals`，每行 `id · 状态（待确认/已采纳/已驳回/已回退） · 新增\|修订 名字 · 全局\|项目[ · 被调用 N 次]`，空时提示"还没有技能提案…"）；`proposal <id>` 打印提案详情与完整提案正文（`GET /skills/proposals/:id`）；提案治理操作（采纳/驳回/回退/删除）在 WebUI 技能页，CLI 只读；没有技能时提示 `（还没有技能。把技能目录放进 ~/.kclaw/skills/ 或工作区 .kclaw/skills/）`；失败打印 `查看技能失败: …` |
-| `/mcp [服务器名]` | MCP 状态一览（机制见 [mcp](../core/mcp.md)）：无参打印每个 server 一行（`名字 · 状态 · 来源层（全局\|项目） · N 个工具[ · 最近错误]`，读 `GET /mcp` 快照），有失败项时附一行提示（重连与配置管理用 WebUI 的 MCP 页）；带名字打印该 server 的状态、来源层与工具清单（每工具一行 `mcp__<server>__<tool> — 描述`）；没有接入任何 server、名字未知、请求失败都打印对应提示行 |
+| `/mcp [服务器名]` | MCP 状态一览（机制见 [mcp](../core/mcp.md)）：无参按组打印（组头 `【全局】`/`【<路径>】`，组内每行 `名字 · 状态 · N 个工具[ · 最近错误]`，读 `GET /mcp` 快照），有失败项时附一行提示（连接与配置管理用 WebUI 的 MCP 页）；带名字打印该 server 的状态行与工具清单（每工具一行 `mcp__<server>__<tool> — 描述`；跨组同名逐条打印，项目组条目带 `<路径> · ` 前缀）；没有接入任何 server、名字未知、请求失败都打印对应提示行 |
 
 - **技能即斜杠命令**：每个已装且用户可见的技能自动注册成 `/<技能名> [要求]` 命令（`refreshSkillCommands`，启动时与每次切会话后各重拉一次，尽力而为：daemon 不可达则没有技能命令，内置命令（含 `/skill`）照常可用）。命令发送**用户原文**（要求写在命令后面时原样拼接进消息），是否调用技能由 daemon 检测、正文仍经 `skill_read` 加载——`disable-model-invocation` 的技能由此获得手动入口。内置名优先：与内置命令重名的技能命令被丢弃；自定义 `commands/*.md`（先注册）同样优先于技能。命令名不出现在注册表里时 Tab 补全也能提示（见上文 Tab 补全）。
 - 自定义命令：`ctx.commandsDir`（daemon 组装为 `<home>/commands`）目录下的每个 `*.md` 文件注册成一个命令——文件名就是命令名，文件内容是一段提示词模板；执行命令时，模板里的 `{{args}}` 替换成命令参数，然后经 `ctx.send(text)` 作为普通消息发出。与内置命令重名的文件不生效，打印一行警告。

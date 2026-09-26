@@ -560,7 +560,7 @@ function MainShell({
           {tab === "memory" && <MemoryView api={api} notice={notify} openTarget={memoryTarget} onOpenConsumed={() => setMemoryTarget(null)} />}
           {tab === "skills" && <SkillsView api={api} notice={notify} />}
           {tab === "permissions" && <PermissionsView api={api} notice={notify} workdir={selectedMeta?.workdir} />}
-          {tab === "mcp" && <McpView api={api} notice={notify} />}
+          {tab === "mcp" && <McpView api={api} notice={notify} sessionWorkdir={selectedMeta?.workdir} />}
           {tab === "model" && <ModelView api={api} notice={notify} />}
           {tab === "channel" && <ChannelView api={api} notice={notify} />}
         </main>

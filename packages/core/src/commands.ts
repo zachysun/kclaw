@@ -55,14 +55,14 @@ export interface ParsedSlash {
 export const MCP_STATE_LABELS: Readonly<Record<string, string>> = {
   connected: "已连接",
   connecting: "连接中",
+  disconnected: "未连接",
   disabled: "已禁用",
   failed: "失败",
 }
 
-/** 中文来源层标签（两层 MCP 配置：全局层 / 项目层），双端 /mcp 摘要共用。 */
-export const MCP_SCOPE_LABELS: Readonly<Record<string, string>> = {
-  global: "全局",
-  project: "项目",
+/** 中文组标签：全局组显示「全局」，项目组显示目录路径（双端 /mcp 摘要共用）。 */
+export function mcpGroupLabel(group: string): string {
+  return group === "global" ? "全局" : group
 }
 
 /** Parse `/command args`; non-slash input (plain messages) returns null. */

@@ -13,7 +13,7 @@
 - **鉴权是"每路由必带 Bearer"加白名单豁免**：一个 `preHandler` hook 拦截全部路由，只有三处豁免——`/health`、`/ws`、静态 WebUI 外壳（见下）。豁免列表是封闭集合，新增路由默认受保护。
 - **有界停止**：`stop()` 的每一步（停调度、关服务器）有独立超时（默认 60s）。超时则 `stop()` reject、daemon.json **保留**——进程仍在运行，指向它的文件必须与事实一致；虚报"已停止"会诱发双 daemon、job 双触发。
 - **provider 缺失是硬错误**：组装期就抛错终止，不启动一个"半配置"的 daemon。
-- **MCP 恒定组装，且连接不阻塞启动**：无论配置文件里有没有 server，daemon 都构建一个 `McpManager`（空的管理器没有任何连接、开销为零，管理路由因此永远可用，从 WebUI 添加第一个 server 不需要先改配置）。配置来自两层（全局层 = `<home>/mcp.json`；项目层 = 工作区 `.kclaw/mcp.json`），项目文件由独立的 watch 监视、手工编辑热生效（见 [mcp](../core/mcp.md)）。`mcpManager.start()` 在监听开始之后才调用、并且不等它完成，daemon 照常宣布就绪对外服务，各 server 在后台陆续连上，连上多少就从下一轮 run 起贡献多少工具。连接失败只打一行日志，永远不会拖垮 daemon。
+- **MCP 恒定组装，且启动零连接**：无论配置文件里有没有 server，daemon 都构建一个 `McpManager`（空的管理器没有任何连接、开销为零，管理路由因此永远可用，从 WebUI 添加第一个 server 不需要先改配置）。配置来自全局 `~/.kclaw/mcp.json` 加**每个已知项目**的 `.kclaw/mcp.json`（项目集合 = daemon 主工作目录 + 全部会话记录里出现过的工作目录，daemon 启动时现算，运行中新建会话即时挂载；不靠任何清单文件，与技能同源——放好配置文件即生效）。连接是惰性的：启动与配置变更都不发起连接，run 用到某项目的工具、或用户手动 connect 时才按需连接（见 [mcp](../core/mcp.md)）。连接失败只打一行日志，永远不会拖垮 daemon。
 
 ## 接口
 
@@ -26,7 +26,7 @@ export interface Daemon {
   port: number        // 实际绑定的端口（0 启动时为临时端口）
   token: string       // app 要求的 Bearer token（<home>/token）
   pid: number         // 本进程 pid，即 daemon.json 里记录的
-  stop(): Promise<void>   // 有界拆除：tick → 记忆调度器 → 技能调度器 → 飞书频道管理器（未启用时为 no-op）→ 项目 MCP watch → mcp → app → memory → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
+  stop(): Promise<void>   // 有界拆除：tick → 记忆调度器 → 技能调度器 → 飞书频道管理器（未启用时为 no-op）→ 项目发现（mcpProjects）→ mcp → app → memory → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
 }
 
 export interface LaunchDaemonOptions {
@@ -91,20 +91,24 @@ new SkillEvolutionSystem({skillsDir, sessions, config, resolveLlm, log})
                                     （extractModel 命中条目走条目端点，Model 页改动同样
                                     热生效）；构造后交给 RunManager（run 收尾钩子 +
                                     skill_create 工具面）与 skill 调度器（检查消费端）
-createProjectMcpWatch(workspace, () => mcpManager.reconcile(loadProjectMcpServers(workspace)))
-                                    项目层文件 watch：监视工作区 `.kclaw/mcp.json`，
-                                    手工编辑防抖后经 reconcile 重排生效集（热生效）。
-                                    两阶段挂载（先 watch 工作区顶层等 `.kclaw` 出现、再切
-                                    `.kclaw` watch）；起不来只告警降级、不致命
-new McpManager({servers, persist})  恒定组装：servers = { global: loadMcpServers(paths),
-                                    project: loadProjectMcpServers(workspace) }——全局层
-                                    （全局层读 <home>/mcp.json）+
-                                    项目层（工作区 `.kclaw/mcp.json`，缺失/损坏/git 跟踪
-                                    均读作 {}）；persist 按层分发：global 接归拢持久化
-                                    （写 mcp.json），project 接
-                                    saveProjectMcpJson + 补挂 watch；组装后从内存配置
-projectMcpWatch.ensure()            挂上项目 watch：工作区还没有 .kclaw 时先 watch
-                                    顶层等它出现（项目层首次写入时会再调一次补挂）
+createMcpProjects({workspace, manager, allMetas, loadEntries})
+                                    项目发现与热生效（见 mcp.md）：项目集合 = 主工作目录 +
+                                    全部会话 meta（含回收站）的 workdir 并集，启动时
+                                    sync() 一次对齐（挂缺失、退出无会话项目，60s 一次），
+                                    并从 SessionStore 的 session.created 回调即时 mount
+                                    新项目；每目录挂一个两阶段项目 watch（先 watch 项目
+                                    顶层等 `.kclaw` 出现、再切 `.kclaw` watch），手工编辑
+                                    防抖后经 reconcileProject 热生效；起不来只告警降级、
+                                    不致命
+new McpManager({globalServers, projects, persist, extra})
+                                    恒定组装：globalServers = <home>/mcp.json 的条目；
+                                    projects = 每个已知项目 `.kclaw/mcp.json` 的条目
+                                    （缺失/损坏/git 跟踪均读作 {}）；persist 按组分发：
+                                    "global" 接归拢持久化（写 mcp.json），其余组接
+                                    saveProjectMcpJson；extra 带 transportFactory 与
+                                    惰性参数（空闲回收 TTL、重试上限、连接上限），
+                                    组装后零连接——连接由 run 的工具取用或手动 connect
+                                    按需发起
 createSubagentHost({config, sessions, bus, getRun})
                                     subagent 宿主（见 subagents.md）：一次组装返回三件能力——
                                     spawner（派发后端，阻塞与后台 subagent 各有一个并发计数）、collector
@@ -114,13 +118,16 @@ createSubagentHost({config, sessions, bus, getRun})
                                     又要 spawner，构造顺序上先建 host、再建 manager、随后回填
 new RunManager({...})               注入 usageStore、memory、skillsEvolution（run 收尾钩子
                                     与 skill_create 工具面的来源，见 skills.md）、
-                                    extraTools: () => mcpManager.tools()（恒定组装，见上）、
+                                    extraTools: (workdir) => mcpManager.toolsFor(workdir)
+                                    （恒定组装，见上；每 run 按会话工作目录取用，惰性
+                                    连接由 toolsFor 内部 kick）、
                                     subagents: { spawner, collector, cancelBackgroundForParent }；见 run-manager。
                                     权限模式没有 daemon 级旗标——它是会话级事实（meta.mode），
                                     run 组装每 run 从会话 meta 读出（见 permissions/run-manager）
-createApp({home, token, stores, bus, run, mcp, configNotifier, attachmentsDir, usage, webDist, memory, skillsEvolution})
+createApp({home, token, stores, bus, run, mcp, mainWorkspace, configNotifier, attachmentsDir, usage, webDist, memory, skillsEvolution})
                                     Fastify 应用（见 http-api）；attachmentsDir/usage 传入时
-                                    对应的附件与用量路由才注册，mcp 提供 /mcp 的快照，memory 供 /memory 路由族，
+                                    对应的附件与用量路由才注册，mcp 提供 /mcp 的分组快照，mainWorkspace
+                                    随快照回显（新增条目的默认目标组），memory 供 /memory 路由族，
                                     skillsEvolution 供 /skills/proposals 提案治理路由族（未组装时该族 503）；
                                     configNotifier 交给 provider 路由，改动持久化后发布
 await app.listen({ port: listenPort, host: "127.0.0.1" })   ← listenPort = opts.port ?? config.server?.port ?? 0；
@@ -129,7 +136,8 @@ await app.listen({ port: listenPort, host: "127.0.0.1" })   ← listenPort = opt
 port = app.server.address().port
 writeFileSync(<home>/daemon.json, {port, pid, startedAt})   ← 回填占位（同 startedAt、starting 移除）；listen 之后、tick 之前
 createNotifier(notify.channels)     ← 仅当 notify.channels 非空时创建；空则 undefined，tick 完全不推送
-void mcpManager.start()             ← 恒定组装，恒执行；不阻塞就绪，连接随后陆续建立
+void mcpManager.start()             ← 恒定组装，恒执行；只启动空闲回收的扫描定时器
+                                    （默认 60s 一次，连接本就为零，见 mcp.md）
 run.recoverQueues()                 崩溃恢复：queue.jsonl 整体重排，steer/interrupt 降级 wait（见 run-manager）
 startSchedulerTick({...})           立即一次检查 + 每 30s 一次（deps 附带 notifier 与 webBase=`http://127.0.0.1:<port>`，用于推送中的 `?session=` 链接）
 startMemoryScheduler({...})         记忆调度器：定时 + 跟随保底触发（默认 60s 扫一次，见 memory.md）
@@ -198,8 +206,8 @@ withStopTimeout(skillTick.stop(), 60s)
                                     // 停技能调度器（await 所有进行中的提炼）
 withStopTimeout(feishuManager.stop(), 60s)
                                     // 停飞书频道（未启用时为 no-op；断开长连接与总线订阅）
-projectMcpWatch.close()             // 停项目 MCP 文件 watch（丢弃挂着的防抖回调，
-                                    // reconcile 不与下面的管理器拆除并发执行）
+mcpProjects?.close()                // 停项目发现（关闭全部项目文件 watch，丢弃挂着的
+                                    // 防抖回调；reconcile 不与下面的管理器拆除并发执行）
 withStopTimeout(mcpManager.stop(), 60s)
                                     // 断开全部 MCP server（恒定组装，恒有此步；幂等）
 withStopTimeout(app.close(), 60s)   // 关服务器；app.close 会 await 所有连接
@@ -225,13 +233,13 @@ rmSync(<home>/daemon.json)          // 只有全部成功才删
 - **`/health` 无鉴权，因此也没有信息泄露控制**：它只返回 `{ok:true}`，不暴露版本/端口/pid；`/status`（version、uptimeSec）受鉴权保护。
 - **配置文件损坏即启动失败**：`loadConfig` 对无法解析的 JSON 直接抛错（静默退回默认值会丢掉用户的权限规则），daemon 不启动。
 - **bin 假定构建产物存在**：`kclaw-server.mjs` import 的是 `../dist/index.js`，packages/server 未构建时启动直接失败（CLI 的错误信息里提示 `pnpm -C packages/server build`）。
-- **MCP server 挂了不牵连 daemon**：连接/调用失败只进状态与日志（`kclaw mcp <name> error: …`），该 server 的工具从下一次 run 起消失，其余功能不受影响（见 [mcp](../core/mcp.md)）。
+- **MCP server 挂了不牵连 daemon**：连接/调用失败只进状态与日志（`kclaw mcp <name> error: …`，项目条目带组前缀 `kclaw mcp <路径> · <name> error: …`），该 server 的工具从下一次 run 起消失，其余功能不受影响（见 [mcp](../core/mcp.md)）。
 
 ## 关联
 
 - [http-api](./http-api.md)：鉴权 hook 之下的全部路由
 - [realtime](./realtime.md)：/ws 的连接鉴权与事件广播
 - [run-manager](./run-manager.md)：launchDaemon 组装出的 RunManager 与调度心跳
-- [mcp](../core/mcp.md)：恒定组装的 McpManager 与 `/mcp` 快照的数据源
+- [mcp](../core/mcp.md)：恒定组装的 McpManager（全局 + 各项目分组）与 `/mcp` 快照的数据源
 - [storage](../core/storage.md)：`<home>` 目录布局、config 加载与 usage.db
 - [architecture](../architecture.md)：daemon 在进程模型中的位置

@@ -1,18 +1,32 @@
 /**
- * McpView — MCP server management tab: the daemon-wide status snapshot
- * (name, source-layer badge, connection state, last error) with per-server
- * expandable tool lists, plus the management actions (enable/disable,
- * reconnect, and the add/edit/delete form — new entries pick a target
- * layer, global by default). Fetch-on-entry with a manual refresh button —
- * no polling, no live updates. Data comes from GET /mcp; actions ride the
- * /mcp/servers family and re-fetch on completion. env/headers echo back in
- * plaintext by design (local single-user product behind token auth).
+ * McpView — MCP server management tab, grouped by ownership: one "全局"
+ * group shared by every project, then one section per known project
+ * workdir. Entries sit inside their group (the section header carries the
+ * ownership), each with its connection state, last error, expandable tool
+ * list and the management actions. The lazy daemon rests entries in
+ * "未连接"; such entries (and failed ones) offer a manual 连接 probe.
+ * Add/edit forms pick the target group from a dropdown — new entries
+ * default to the selected session's workdir (fallback: the daemon's main
+ * workspace), an edit can move the entry across groups (PATCH toGroup).
+ * Fetch on entry, then poll every 2s while the tab is visible so
+ * connection-state flips show up without user action; hidden tabs skip the
+ * fetch, the poll fails quiet (no toast spam — only entry/manual/action-
+ * triggered fetches surface errors), and the refresh button stays for an
+ * explicit reload.
  */
 import { useCallback, useEffect, useRef, useState } from "react"
-import { MCP_SCOPE_LABELS, MCP_STATE_LABELS } from "@kclaw/core/commands"
-import type { McpScope, McpServerStatus } from "@kclaw/core/protocol"
+import { MCP_STATE_LABELS, mcpGroupLabel } from "@kclaw/core/commands"
+import type { McpGroupStatus, McpServerStatus } from "@kclaw/core/protocol"
 import type { ApiClient } from "../api.js"
 import type { NoticeFn } from "../toast.js"
+import { McpForm, emptyForm, formFromStatus } from "./McpForm.js"
+import type { McpFormState } from "./McpForm.js"
+
+/** GET /mcp response: the grouped snapshot plus the fallback target. */
+interface McpSnapshotResponse {
+  groups: McpGroupStatus[]
+  mainWorkspace: string
+}
 
 /** One-line config summary: the command for stdio, the URL for http. */
 function configSummary(config: McpServerStatus["config"]): string {
@@ -20,107 +34,27 @@ function configSummary(config: McpServerStatus["config"]): string {
   return typeof c.command === "string" ? c.command : typeof c.url === "string" ? c.url : ""
 }
 
-interface Pair {
-  key: string
-  value: string
+/**
+ * Default creation target: the selected session's project, else the daemon
+ * workspace, else global. The session workdir only applies when the
+ * snapshot already knows it: a directory whose project file IS the global
+ * file never becomes a group (the server skips it), and preferring it
+ * unconditionally would 404 the save. A brand-new project's group appears
+ * in the snapshot within one 2s poll.
+ */
+function defaultGroup(snapshot: McpSnapshotResponse | null, sessionWorkdir?: string): string {
+  const ids = new Set(snapshot?.groups.map((g) => g.id) ?? [])
+  if (sessionWorkdir !== undefined && ids.has(sessionWorkdir)) return sessionWorkdir
+  const main = snapshot?.mainWorkspace ?? ""
+  if (main !== "" && ids.has(main)) return main
+  return "global"
 }
 
-interface FormState {
-  /** Server name being edited; null = a new entry. */
-  editing: string | null
-  name: string
-  type: "stdio" | "http"
-  /**
-   * Target layer for a NEW entry (the choice only exists at creation — an
-   * edit acts on the effective entry and stays in its own layer).
-   */
-  layer: McpScope
-  command: string
-  /** One argument per line. */
-  argsText: string
-  envPairs: Pair[]
-  url: string
-  headerPairs: Pair[]
-  /**
-   * Carried through from the entry being edited (the toggle lives on the
-   * card, not in the form) — without this, saving an edit to a disabled
-   * server would silently re-enable it.
-   */
-  enabled: boolean
-}
-
-function emptyForm(): FormState {
-  return { editing: null, name: "", type: "stdio", layer: "global", command: "", argsText: "", envPairs: [], url: "", headerPairs: [], enabled: true }
-}
-
-/** Prefill from an existing snapshot entry (plaintext echo of env/headers). */
-function formFromStatus(s: McpServerStatus): FormState {
-  const c = s.config as Record<string, unknown>
-  const pairs = (rec: unknown): Pair[] =>
-    rec !== undefined && typeof rec === "object" && !Array.isArray(rec)
-      ? Object.entries(rec as Record<string, string>).map(([key, value]) => ({ key, value }))
-      : []
-  return {
-    editing: s.name,
-    name: s.name,
-    type: c.type === "http" ? "http" : "stdio",
-    layer: s.scope,
-    command: typeof c.command === "string" ? c.command : "",
-    argsText: Array.isArray(c.args) ? (c.args as string[]).join("\n") : "",
-    envPairs: pairs(c.env),
-    url: typeof c.url === "string" ? c.url : "",
-    headerPairs: pairs(c.headers),
-    enabled: s.config.enabled !== false,
-  }
-}
-
-function pairsToRecord(pairs: Pair[]): Record<string, string> | undefined {
-  const rec: Record<string, string> = {}
-  for (const p of pairs) {
-    if (p.key.trim() !== "") rec[p.key.trim()] = p.value
-  }
-  return Object.keys(rec).length > 0 ? rec : undefined
-}
-
-/** Key-value rows (env / headers): inline add, edit, remove. */
-function KeyValueEditor({ pairs, keyTestid, valueTestid, addTestid, onChange }: {
-  pairs: Pair[]
-  keyTestid: string
-  valueTestid: string
-  addTestid: string
-  onChange: (pairs: Pair[]) => void
-}): React.ReactElement {
-  return (
-    <div className="mcp-kv">
-      {pairs.map((p, i) => (
-        <span key={i} className="mcp-kv-row">
-          <input
-            data-testid={`${keyTestid}-${i}`}
-            value={p.key}
-            placeholder="名称"
-            onChange={(e) => onChange(pairs.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))}
-          />
-          <input
-            data-testid={`${valueTestid}-${i}`}
-            value={p.value}
-            placeholder="值"
-            onChange={(e) => onChange(pairs.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))}
-          />
-          <button type="button" aria-label="删除此行" onClick={() => onChange(pairs.filter((_, j) => j !== i))}>
-            ×
-          </button>
-        </span>
-      ))}
-      <button type="button" data-testid={addTestid} onClick={() => onChange([...pairs, { key: "", value: "" }])}>
-        添加一行
-      </button>
-    </div>
-  )
-}
-
-export function McpView({ api, notice }: {
+export function McpView({ api, notice, sessionWorkdir }: {
   api: ApiClient
   notice: NoticeFn
+  /** The selected session's workdir — the default target for new entries. */
+  sessionWorkdir?: string
 }) {
   // notice goes through a ref: App passes an inline arrow that is a fresh
   // reference each render; depending on `notice` would refetch on every parent
@@ -129,28 +63,49 @@ export function McpView({ api, notice }: {
   useEffect(() => {
     noticeRef.current = notice
   })
+  const sessionWorkdirRef = useRef(sessionWorkdir)
+  sessionWorkdirRef.current = sessionWorkdir
 
-  const [servers, setServers] = useState<McpServerStatus[] | null>(null)
+  const [snapshot, setSnapshot] = useState<McpSnapshotResponse | null>(null)
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
-  const [form, setForm] = useState<FormState | null>(null)
-  const [formError, setFormError] = useState<string | null>(null)
+  const [formSeed, setFormSeed] = useState<McpFormState | null>(null)
 
-  const reload = useCallback((): Promise<void> => {
+  /** Quiet=true skips the failure toast — background polls must not spam. */
+  const reload = useCallback((opts?: { quiet?: boolean }): Promise<void> => {
     return api
-      .get<{ servers: McpServerStatus[] }>("/mcp")
-      .then((r) => setServers(r.servers))
-      .catch((e) => noticeRef.current(`加载 MCP 状态失败: ${String(e)}`, "error"))
+      .get<McpSnapshotResponse>("/mcp")
+      .then((r) => setSnapshot(r))
+      .catch((e) => {
+        if (opts?.quiet !== true) noticeRef.current(`加载 MCP 状态失败: ${String(e)}`, "error")
+      })
   }, [api])
 
   useEffect(() => {
     void reload()
+    // Poll while mounted so daemon-side state flips reach the page without a
+    // manual refresh; a hidden tab skips the fetch (no wasted requests while
+    // the user is looking elsewhere).
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void reload({ quiet: true })
+    }, 2000)
+    return () => clearInterval(timer)
   }, [reload])
 
-  const toggleExpand = (name: string): void => {
+  const toggleFold = (id: string): void => {
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const toggleExpand = (key: string): void => {
     setExpanded((prev) => {
       const next = new Set(prev)
-      if (next.has(name)) next.delete(name)
-      else next.add(name)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
       return next
     })
   }
@@ -165,225 +120,127 @@ export function McpView({ api, notice }: {
     }
   }
 
-  const setEnabled = (name: string, enabled: boolean): Promise<void> =>
-    act(() => api.post(`/mcp/servers/${encodeURIComponent(name)}/enable`, { enabled }))
-  const reconnect = (name: string): Promise<void> =>
-    act(() => api.post(`/mcp/servers/${encodeURIComponent(name)}/reconnect`))
-  const remove = (name: string): Promise<void> =>
-    act(() => api.del(`/mcp/servers/${encodeURIComponent(name)}`))
+  const setEnabled = (group: string, name: string, enabled: boolean): Promise<void> =>
+    act(() => api.post(`/mcp/servers/${encodeURIComponent(name)}/enable`, { group, enabled }))
+  const connectProbe = (group: string, name: string): Promise<void> =>
+    act(() => api.post(`/mcp/servers/${encodeURIComponent(name)}/connect`, { group }))
+  const remove = (group: string, name: string): Promise<void> =>
+    act(() => api.del(`/mcp/servers/${encodeURIComponent(name)}?group=${encodeURIComponent(group)}`))
 
-  const submitForm = async (): Promise<void> => {
-    if (form === null) return
-    const args = form.argsText
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l !== "")
-    const env = pairsToRecord(form.envPairs)
-    const headers = pairsToRecord(form.headerPairs)
-    const enabled = form.enabled ? {} : { enabled: false }
-    const config =
-      form.type === "stdio"
-        ? {
-            type: "stdio" as const,
-            command: form.command,
-            ...(args.length > 0 ? { args } : {}),
-            ...(env !== undefined ? { env } : {}),
-            ...enabled,
-          }
-        : {
-            type: "http" as const,
-            url: form.url,
-            ...(headers !== undefined ? { headers } : {}),
-            ...enabled,
-          }
-    try {
-      if (form.editing === null) {
-        await api.post("/mcp/servers", { name: form.name.trim(), config, layer: form.layer })
-      } else {
-        await api.patch(`/mcp/servers/${encodeURIComponent(form.editing)}`, { config })
-      }
-      setForm(null)
-      setFormError(null)
-      await reload()
-    } catch (e) {
-      setFormError(String(e))
-    }
-  }
+  const groups = snapshot?.groups ?? []
 
   return (
     <div className="mcp-view" data-testid="mcp-view">
       <div className="mcp-head">
-        <button type="button" data-testid="mcp-add" onClick={() => { setFormError(null); setForm(emptyForm()) }}>
+        <button
+          type="button"
+          data-testid="mcp-add"
+          onClick={() => setFormSeed(emptyForm(defaultGroup(snapshot, sessionWorkdirRef.current)))}
+        >
           添加服务器
         </button>
         <button type="button" className="mcp-refresh" data-testid="mcp-refresh" onClick={() => void reload()}>
           刷新
         </button>
       </div>
-      {form !== null && (
-        <form
-          className="mcp-form"
-          data-testid="mcp-form"
-          onSubmit={(e) => {
-            e.preventDefault()
-            void submitForm()
+      {formSeed !== null && (
+        <McpForm
+          api={api}
+          groupIds={groups.map((g) => g.id)}
+          initial={formSeed}
+          onSaved={() => {
+            setFormSeed(null)
+            void reload()
           }}
-        >
-          <div className="mcp-form-row">
-            <label>
-              名称
-              <input
-                data-testid="mcp-form-name"
-                value={form.name}
-                disabled={form.editing !== null}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-              />
-            </label>
-            <span className="mcp-form-type">
-              <button type="button" className={form.type === "stdio" ? "active" : ""} data-testid="mcp-form-type-stdio" onClick={() => setForm({ ...form, type: "stdio" })}>
-                stdio
-              </button>
-              <button type="button" className={form.type === "http" ? "active" : ""} data-testid="mcp-form-type-http" onClick={() => setForm({ ...form, type: "http" })}>
-                http
-              </button>
-            </span>
-            {form.editing === null && (
-              <span className="mcp-form-type">
-                <button type="button" className={form.layer === "global" ? "active" : ""} data-testid="mcp-form-layer-global" onClick={() => setForm({ ...form, layer: "global" })}>
-                  全局
-                </button>
-                <button type="button" className={form.layer === "project" ? "active" : ""} data-testid="mcp-form-layer-project" onClick={() => setForm({ ...form, layer: "project" })}>
-                  项目
-                </button>
-              </span>
-            )}
-          </div>
-          {form.type === "stdio" ? (
-            <>
-              <label>
-                命令
-                <input data-testid="mcp-form-command" value={form.command} onChange={(e) => setForm({ ...form, command: e.target.value })} />
-              </label>
-              <label>
-                参数（每行一个）
-                <textarea data-testid="mcp-form-args" rows={2} value={form.argsText} onChange={(e) => setForm({ ...form, argsText: e.target.value })} />
-              </label>
-              <KeyValueEditor
-                pairs={form.envPairs}
-                keyTestid="mcp-form-env-key"
-                valueTestid="mcp-form-env-value"
-                addTestid="mcp-form-env-add"
-                onChange={(envPairs) => setForm({ ...form, envPairs })}
-              />
-            </>
-          ) : (
-            <>
-              <label>
-                URL
-                <input data-testid="mcp-form-url" value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} />
-              </label>
-              <KeyValueEditor
-                pairs={form.headerPairs}
-                keyTestid="mcp-form-headers-key"
-                valueTestid="mcp-form-headers-value"
-                addTestid="mcp-form-headers-add"
-                onChange={(headerPairs) => setForm({ ...form, headerPairs })}
-              />
-            </>
-          )}
-          {formError !== null && (
-            <p className="mcp-form-error" data-testid="mcp-form-error">
-              {formError}
-            </p>
-          )}
-          <div className="mcp-form-actions">
-            <button type="submit" data-testid="mcp-form-submit">
-              保存
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setForm(null)
-                setFormError(null)
-              }}
-            >
-              取消
-            </button>
-          </div>
-        </form>
+          onCancel={() => setFormSeed(null)}
+        />
       )}
-      {servers === null ? (
+      {snapshot === null ? (
         <p className="muted">加载中…</p>
-      ) : servers.length === 0 ? (
+      ) : groups.every((g) => g.servers.length === 0) ? (
         <p className="muted" data-testid="mcp-empty">
           还没有接入任何 MCP 服务器。
         </p>
       ) : (
-        <ul className="mcp-servers">
-          {servers.map((s) => (
-            <li key={s.name} className="mcp-server" data-testid={`mcp-server-${s.name}`}>
-              <div className="mcp-server-head">
-                <span className="mcp-name">{s.name}</span>
-                <span className="mcp-scope" data-testid={`mcp-scope-${s.name}`}>
-                  {MCP_SCOPE_LABELS[s.scope]}
-                </span>
-                <span className={`mcp-state ${s.state}`} data-testid={`mcp-state-${s.name}`}>
-                  {MCP_STATE_LABELS[s.state]}
-                </span>
-                {s.lastError !== undefined && (
-                  <span className="mcp-error" data-testid={`mcp-error-${s.name}`} title={s.lastError}>
-                    {s.lastError}
-                  </span>
-                )}
-                <span className="mcp-actions">
-                  {s.state === "failed" && (
-                    <button type="button" data-testid={`mcp-reconnect-${s.name}`} onClick={() => void reconnect(s.name)}>
-                      重连
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    data-testid={`mcp-toggle-${s.name}`}
-                    onClick={() => void setEnabled(s.name, s.config.enabled === false)}
-                  >
-                    {s.config.enabled === false ? "启用" : "禁用"}
-                  </button>
-                  <button type="button" data-testid={`mcp-edit-${s.name}`} onClick={() => { setFormError(null); setForm(formFromStatus(s)) }}>
-                    编辑
-                  </button>
-                  <button type="button" data-testid={`mcp-delete-${s.name}`} onClick={() => void remove(s.name)}>
-                    删除
-                  </button>
-                </span>
-              </div>
-              <div className="mcp-meta">
-                <code>{configSummary(s.config)}</code>
-                {s.tools.length > 0 && (
-                  <button
-                    type="button"
-                    data-testid={`mcp-expand-${s.name}`}
-                    onClick={() => toggleExpand(s.name)}
-                  >
-                    {expanded.has(s.name) ? "收起工具" : `工具（${s.tools.length}）`}
-                  </button>
-                )}
-              </div>
-              {expanded.has(s.name) && (
-                <ul className="mcp-tools" data-testid={`mcp-tools-${s.name}`}>
-                  {s.tools.map((t) => (
-                    <li key={t.name}>
-                      <code>{t.name}</code>
-                      {t.description !== "" && <span className="mcp-tool-desc">{t.description}</span>}
-                      <em className="mcp-sensitive" data-testid="mcp-sensitive">
-                        sensitive
-                      </em>
-                    </li>
-                  ))}
+        groups.map((g) => {
+          const isFolded = collapsed.has(g.id)
+          return (
+            <section key={g.id} className="mcp-group" data-testid={`mcp-group-${g.id}`}>
+              <button type="button" className="mcp-group-head" data-testid={`mcp-fold-${g.id}`} onClick={() => toggleFold(g.id)}>
+                <span className="mcp-fold-mark">{isFolded ? "▸" : "▾"}</span>
+                <span className="mcp-group-label">{mcpGroupLabel(g.id)}</span>
+                <span className="mcp-group-count">{g.servers.length} 个条目</span>
+              </button>
+              {!isFolded && g.servers.length > 0 && (
+                <ul className="mcp-servers">
+                  {g.servers.map((s) => {
+                    const key = `${g.id}\u0000${s.name}`
+                    return (
+                      <li key={s.name} className="mcp-server" data-testid={`mcp-server-${s.name}`}>
+                        <div className="mcp-server-head">
+                          <span className="mcp-name">{s.name}</span>
+                          <span className={`mcp-state ${s.state}`} data-testid={`mcp-state-${s.name}`}>
+                            {MCP_STATE_LABELS[s.state] ?? s.state}
+                          </span>
+                          {s.lastError !== undefined && (
+                            <span className="mcp-error" data-testid={`mcp-error-${s.name}`} title={s.lastError}>
+                              {s.lastError}
+                            </span>
+                          )}
+                          <span className="mcp-actions">
+                            {(s.state === "disconnected" || s.state === "failed") && (
+                              <button type="button" data-testid={`mcp-connect-${s.name}`} onClick={() => void connectProbe(g.id, s.name)}>
+                                {s.state === "failed" ? "重试" : "连接"}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              data-testid={`mcp-toggle-${s.name}`}
+                              onClick={() => void setEnabled(g.id, s.name, s.config.enabled === false)}
+                            >
+                              {s.config.enabled === false ? "启用" : "禁用"}
+                            </button>
+                            <button type="button" data-testid={`mcp-edit-${s.name}`} onClick={() => setFormSeed(formFromStatus(s))}>
+                              编辑
+                            </button>
+                            <button type="button" data-testid={`mcp-delete-${s.name}`} onClick={() => void remove(g.id, s.name)}>
+                              删除
+                            </button>
+                          </span>
+                        </div>
+                        <div className="mcp-meta">
+                          <code>{configSummary(s.config)}</code>
+                          {s.tools.length > 0 && (
+                            <button
+                              type="button"
+                              data-testid={`mcp-expand-${s.name}`}
+                              onClick={() => toggleExpand(key)}
+                            >
+                              {expanded.has(key) ? "收起工具" : `工具（${s.tools.length}）`}
+                            </button>
+                          )}
+                        </div>
+                        {expanded.has(key) && (
+                          <ul className="mcp-tools" data-testid={`mcp-tools-${s.name}`}>
+                            {s.tools.map((t) => (
+                              <li key={t.name}>
+                                <code>{t.name}</code>
+                                {t.description !== "" && <span className="mcp-tool-desc">{t.description}</span>}
+                                <em className="mcp-sensitive" data-testid="mcp-sensitive">
+                                  sensitive
+                                </em>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </li>
+                    )
+                  })}
                 </ul>
               )}
-            </li>
-          ))}
-        </ul>
+            </section>
+          )
+        })
       )}
     </div>
   )

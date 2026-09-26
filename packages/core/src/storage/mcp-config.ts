@@ -5,10 +5,10 @@
  * `<workspace>/.kclaw/mcp.json` (local-only, gitignore-guarded).
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { writeFileAtomic } from "./atomic.js"
 import { isGitTracked } from "./decided-rules.js"
-import type { McpServerConfig } from "../mcp/manager.js"
+import type { McpServerConfig } from "../mcp/types.js"
 
 /** <home>/mcp.json — the UI-managed MCP server config file. */
 export function mcpConfigPath(home: string): string {
@@ -21,6 +21,20 @@ export const PROJECT_MCP_REL = join(".kclaw", "mcp.json")
 /** <workspace>/.kclaw/mcp.json — the project-scope MCP config file. */
 export function projectMcpConfigPath(workspace: string): string {
   return join(workspace, PROJECT_MCP_REL)
+}
+
+/**
+ * True when the workdir's project config file would BE the global file —
+ * the shape where the daemon home sits inside the project (workspace =
+ * the user's home directory). Such a project layer cannot exist
+ * independently: both groups would read, persist and watch the same file,
+ * so a global edit "leaks" into the project and back. Callers must skip
+ * the directory entirely (no project group, no watch); lexical path
+ * identity is the test — symlinked spellings of the same dir are out of
+ * scope.
+ */
+export function projectMcpCollidesWithGlobal(workdir: string, home: string): boolean {
+  return resolve(projectMcpConfigPath(workdir)) === resolve(mcpConfigPath(home))
 }
 
 interface McpConfigFile {

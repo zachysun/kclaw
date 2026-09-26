@@ -3395,8 +3395,9 @@ select:focus {
 }
 
 /* ============================================================
-   MCP tab: server snapshot cards with state badges, expandable
-   tool lists, and the add/edit form.
+   MCP tab: grouped snapshot (全局 + one section per project),
+   per-entry state badges, expandable tool lists, add/edit form
+   with a target-group dropdown.
    ============================================================ */
 .mcp-view {
   max-width: 760px;
@@ -3415,10 +3416,45 @@ select:focus {
   white-space: nowrap;
 }
 
+.mcp-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mcp-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: none;
+  background: none;
+  padding: var(--space-1) 0;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+}
+
+.mcp-fold-mark {
+  width: 1em;
+  color: var(--muted);
+}
+
+.mcp-group-label {
+  font-weight: 600;
+  /* project groups are absolute paths; let them wrap instead of overflowing */
+  word-break: break-all;
+}
+
+.mcp-group-count {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .mcp-servers {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0 0 0 var(--space-4);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -3444,14 +3480,6 @@ select:focus {
 .mcp-name {
   font-weight: 600;
   font-size: 14px;
-}
-
-.mcp-scope {
-  font-size: 12px;
-  border-radius: 999px;
-  padding: 1px 8px;
-  color: var(--accent, var(--text));
-  background: color-mix(in srgb, var(--accent, var(--text)) 12%, transparent);
 }
 
 .mcp-state {

@@ -95,9 +95,9 @@ export interface CompactionRecord {
 
 两个可选数字字段记录"从多少 token 压到多少 token"，能取真值处取真值：
 
-- **`tokensBefore`（压缩前）**：锚定活跃段内最后一次真实请求的 `usage.inputTokens`（system 提示词与工具定义开销已含在内），锚点之后的消息逐条估算——与黄线触发判定同一把尺。被中断的回复（无 `message_done`、usage 为 0）不作锚点。
+- **`tokensBefore`（压缩前）**：锚定活跃段内最后一次真实请求的 `usage.inputTokens`（system 提示词与工具定义开销已含在内），锚点之后的消息逐条估算，与黄线触发判定同一把尺。被中断的回复（无 `message_done`、usage 为 0）不作锚点。
 - **`tokensAfter`（压缩后等效）**：保留尾逐条估算（保留尾从未作为独立请求发过，无真值可锚）+ system/工具定义开销估算 + 总摘要 token + 注入模板常量。其中总摘要 token 优先取归并摘要调用返回的真实 `outputTokens`（同模型同 tokenizer；provider 未报 usage 时回退文本估算）。
-- 例外口径：空闲时的手动压缩没有 run 装配上下文，固定开销取持久化的系统提示词基线估算（工具 schema 不在其中，`tokensAfter` 因此略偏小）；会话从未跑过任何 run 时两端口径一同缺失该开销。压缩后首个请求的实测 `inputTokens` 是更真的"压缩后"值，但它含新用户消息且事后才存在，不回填历史事件。
+- 例外口径：空闲时的手动压缩不在 run 组装里，固定开销取持久化的系统提示词基线估算（工具 schema 不在其中，`tokensAfter` 因此略偏小）；会话从未跑过任何 run 时没有基线，两个数字都缺这笔开销。压缩后首个请求的实测 `inputTokens` 是更真的"压缩后"值，但它含新用户消息且事后才存在，不回填历史事件。
 
 ### 会话检索（session_search）
 
@@ -154,7 +154,7 @@ export interface CompactionRecord {
 
 急救有独立的强制分界保底（`emergencyBoundary`，`session/compaction.ts`）：急救通常发生在压缩后的首请求或单轮工具输出暴涨时，`active` 里可能没有助手锚点、固定开销全漏计，`chooseBoundary` 据此可能找不到边界——此时不看 budget，直接退守最小可行上下文：只保留最近一轮用户轮次（最后一条 user 消息及其之后的整轮），更早的全部压掉；整个 `active` 只有一轮时返回无可压缩。
 
-五条线的分工（默认值）：省略线（`compactPackRatio`，0.70）在每次构造请求时免费削掉装不下的旧工具输出；预压线（`compactAheadRatio`，0.75）到线就派后台压缩，前台无感；黄线（`compactAtRatio`，0.80）配收尾压缩：一次压缩就把保留部分压到 budget 的三分之一（`compactTargetRatio` 默认 0.33），余量已够；红线（`compactPanicRatio`，0.90）配中途压缩，防运行内部工具输出累积把占用推向 budget，也是后台压缩的触发上限（占用已过红线就直接同步压，不再绕后台）。压完留 33%，意味着之后要再积累约 1.27 倍 budget 的新对话才到预压线（压缩要花两次模型调用，不能太频繁）；运行内更细粒度的膨胀由机制三在每次构造请求时按省略线自动省略，红线是它之上的保险。五条线的默认值、加载校验与" budget × 比例 → 绝对 token 阈值"的解析集中在压缩阈值线模块（`session/waterlines.ts` 的 `resolveWaterlines`）：配置加载时校验：触发四线（预压/黄/红/目标）越出 (0,1] 或次序不满足"目标 < 预压 < 黄 < 红"就整组回退到默认并告警，省略线单独校验、独立回退到默认；每次 run 解析出绝对阈值，触发 hook 与压缩引擎读同一份。
+五条线的分工（默认值）：省略线（`compactPackRatio`，0.70）在每次构造请求时顺带削掉装不下的旧工具输出；预压线（`compactAheadRatio`，0.75）到线就派后台压缩，前台无感；黄线（`compactAtRatio`，0.80）配收尾压缩：一次压缩就把保留部分压到 budget 的三分之一（`compactTargetRatio` 默认 0.33），余量已够；红线（`compactPanicRatio`，0.90）配中途压缩，防运行内部工具输出累积把占用推向 budget，也是后台压缩的触发上限（占用已过红线就直接同步压，不再绕后台）。压完留 33%，意味着之后要再积累约 1.27 倍 budget 的新对话才到预压线（压缩要花两次模型调用，不能太频繁）；运行内更细粒度的膨胀由机制三在每次构造请求时按省略线自动省略，红线是它之上的保险。五条线的默认值、加载校验与"budget × 比例 → 绝对 token 阈值"的解析集中在压缩阈值线模块（`session/waterlines.ts` 的 `resolveWaterlines`）：配置加载时校验：触发四线（预压/黄/红/目标）越出 (0,1] 或次序不满足"目标 < 预压 < 黄 < 红"就整组回退到默认并告警，省略线单独校验、独立回退到默认；每次 run 解析出绝对阈值，触发 hook 与压缩引擎读同一份。
 
 自动压缩可以取消：WebUI 压缩指示行的"取消"按钮发 WS 帧 `compaction.cancel`，服务端中止正在执行的摘要调用（含后台预压），并写一个会话级取消标记。本次运行内后续的自动压缩（中途、收尾、后台预压，以及超限急救，都走自动压缩的共用组装入口 `Compactor.auto`）在标记存在时一律不开工；下一次运行开始时标记清除、恢复正常压缩（服务端细节见 [run-manager](../server/run-manager.md) 的 `cancelCompaction`）。运行被用户中止时正在执行的后台压缩**不**随之中止：它的结果照常写入元数据，下次运行直接受益；daemon 退出时它被掐断，等于没发生。手动 /compact 不检查取消标记、与自动压缩互不干涉，WebUI 对手动阶段也不渲染取消按钮（`cancelCompaction` 不作用于手动压缩）。
 
@@ -205,7 +205,7 @@ m1  m2  m3 │ m4  m5  m6  m7 │ m8 … m12
 
 ```markdown
 ## 关键事实
-- 用户在开发 kclaw 的上下文压缩机制，方案是" budget + 分段摘要 + 工具输出省略"三层
+- 用户在开发 kclaw 的上下文压缩机制，方案是"budget + 分段摘要 + 工具输出省略"三层
 - 会话存储是 JSONL，消息只有全局唯一 id，没有序号
 
 ## 用户偏好与约定
@@ -260,7 +260,7 @@ llm.stream({ system: <人格>, messages: [
 
 ---
 
-## 机制三：工具输出省略（ budget 驱动）
+## 机制三：工具输出省略（budget 驱动）
 
 位置在 `toProviderMessages`（`packages/core/src/agent/context.ts`）——所有发给模型供应商的请求都经它构造。两个可选参数共同决定哪些工具结果保留原文：`opts.toolResultKeep` 是**条数上限**（server 从配置 `sessions.toolResultKeep` 读值、默认 8，经 agent 循环的 `deps.toolResultKeep` 传入），`opts.tokenBudget` 是**省略 budget**（run 组装传入省略线扣除固定开销后的余额：budget × `compactPackRatio` − 系统提示词与工具定义的估算值）。不传时行为完全不变（全部保留）。
 
@@ -376,7 +376,7 @@ llm.stream({ system: <人格>, messages: [
 | `compactAtRatio` | `0.80` | 黄线：收尾压缩触发线 |
 | `compactPanicRatio` | `0.90` | 红线：中途压缩触发线 |
 | `compactTargetRatio` | `0.33` | 压缩后保留部分的目标大小（占 budget 比例） |
-| `toolResultKeep` | `8` | 发送时保留工具结果原文的**最多条数**（ budget 驱动省略的条数上限） |
+| `toolResultKeep` | `8` | 发送时保留工具结果原文的**最多条数**（budget 驱动省略的条数上限） |
 
 模型条目侧的两个可选字段（`providers.entries.<key>`）：`contextWindow` 是该模型的上下文窗口，作为 budget 上限参与 `resolveContextTokens` 的 min 解析；`maxOutput` 是单次回复的输出上限，run 组装经 agent 循环随每个请求下发为 `max_tokens`（默认不下发，沿用供应商默认）。
 

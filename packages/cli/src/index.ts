@@ -21,7 +21,7 @@ import { readFileSync, realpathSync } from "node:fs"
 import { pathToFileURL } from "node:url"
 import { Command, Option } from "commander"
 import type { Job } from "@kclaw/core"
-import { MCP_SCOPE_LABELS } from "@kclaw/core/commands"
+import { mcpGroupLabel } from "@kclaw/core/commands"
 import type { McpServerStatus } from "@kclaw/core/protocol"
 import { KclawClient } from "./client.js"
 import { runChat } from "./chat.js"
@@ -132,21 +132,24 @@ async function jobsListAction(home: string): Promise<void> {
   process.stdout.write(`${renderJobsTable(jobs)}\n`)
 }
 
-/** `kclaw mcp [list]`: one line per configured MCP server (source layer + state + tool count). */
+/** `kclaw mcp [list]`: grouped lines per configured MCP server (group header, then name/state/tool count). */
 async function mcpAction(home: string): Promise<void> {
   const client = await KclawClient.connect(home)
   const body = (await client.request("GET", "/mcp")) as {
-    servers?: Array<Pick<McpServerStatus, "name" | "state" | "scope" | "tools" | "lastError">>
+    groups?: Array<{ id: string; servers: Array<Pick<McpServerStatus, "name" | "state" | "group" | "tools" | "lastError">> }>
   }
-  const servers = body.servers ?? []
-  if (servers.length === 0) {
-    process.stdout.write("未配置 MCP server（daemon 的 mcp.json 为空）\n")
+  const groups = body.groups ?? []
+  if (groups.every((g) => g.servers.length === 0)) {
+    process.stdout.write("未配置 MCP server（全局 mcp.json 与各项目 .kclaw/mcp.json 均为空）\n")
     return
   }
-  for (const s of servers) {
-    const error = s.lastError === undefined ? "" : ` 错误: ${s.lastError}`
-    const scope = MCP_SCOPE_LABELS[s.scope] ?? "全局"
-    process.stdout.write(`${s.name}  [${scope}]  ${s.state}  ${s.tools.length} 个工具${error}\n`)
+  for (const g of groups) {
+    if (g.servers.length === 0) continue
+    process.stdout.write(`【${mcpGroupLabel(g.id)}】\n`)
+    for (const s of g.servers) {
+      const error = s.lastError === undefined ? "" : ` 错误: ${s.lastError}`
+      process.stdout.write(`  ${s.name}  ${s.state}  ${s.tools.length} 个工具${error}\n`)
+    }
   }
 }
 

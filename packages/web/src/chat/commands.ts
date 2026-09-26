@@ -144,22 +144,26 @@ export async function runWebCommand(parsed: ParsedSlash, ctx: WebCommandCtx): Pr
     case "mcp": {
       const name = parsed.args.trim()
       try {
-        const { servers } = await ctx.api.get<{ servers: Array<{ name: string; state: string; tools: { name: string }[]; lastError?: string }> }>("/mcp")
+        const { groups } = await ctx.api.get<{ groups: Array<{ id: string; servers: Array<{ name: string; state: string; group: string; tools: { name: string }[]; lastError?: string }> }> }>("/mcp")
+        const servers = groups.flatMap((g) => g.servers)
         if (servers.length === 0) {
           ctx.notify("还没有接入任何 MCP 服务器（添加用顶部「MCP」页）")
           return true
         }
         if (name !== "") {
-          const target = servers.find((s) => s.name === name)
-          if (target === undefined) {
+          const targets = servers.filter((s) => s.name === name)
+          if (targets.length === 0) {
             ctx.notify(`未知 MCP 服务器: ${name}（现有 ${servers.map((s) => s.name).join("、")}）`)
             return true
           }
-          ctx.notify(
-            target.tools.length === 0
-              ? `${name}（${MCP_STATE_LABELS[target.state] ?? target.state}）没有暴露工具`
-              : `${name}（${MCP_STATE_LABELS[target.state] ?? target.state}）的工具：${target.tools.map((t) => t.name).join("、")}`,
-          )
+          for (const target of targets) {
+            const prefix = target.group === "global" ? "" : `${target.group} · `
+            ctx.notify(
+              target.tools.length === 0
+                ? `${prefix}${name}（${MCP_STATE_LABELS[target.state] ?? target.state}）没有暴露工具`
+                : `${prefix}${name}（${MCP_STATE_LABELS[target.state] ?? target.state}）的工具：${target.tools.map((t) => t.name).join("、")}`,
+            )
+          }
           return true
         }
         const connected = servers.filter((s) => s.state === "connected").length

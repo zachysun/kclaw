@@ -52,7 +52,7 @@ describe("createApp auth + endpoints", () => {
     expect(body.uptimeSec).toBeGreaterThanOrEqual(0)
   })
 
-  it("GET /mcp without the mcp seam returns an empty server list", async () => {
+  it("GET /mcp without the mcp seam returns an empty group list", async () => {
     app = await createApp({ home: tmpdir(), token: "t1" })
     const res = await app.inject({
       method: "GET",
@@ -60,7 +60,7 @@ describe("createApp auth + endpoints", () => {
       headers: { authorization: "Bearer t1" },
     })
     expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual({ servers: [] })
+    expect(res.json()).toEqual({ groups: [], mainWorkspace: "" })
   })
 
   it("GET /mcp surfaces the injected status snapshot", async () => {
@@ -68,10 +68,17 @@ describe("createApp auth + endpoints", () => {
       home: tmpdir(),
       token: "t1",
       mcp: {
-        status: () => [
-          { name: "files", state: "connected", tools: [{ name: "mcp__files__read" }] },
-          { name: "broken", state: "failed", tools: [], lastError: "boom" },
-        ],
+        status: () => ({
+          groups: [
+            {
+              id: "global",
+              servers: [
+                { name: "files", group: "global", state: "connected", tools: [{ name: "mcp__files__read" }] },
+                { name: "broken", group: "global", state: "failed", tools: [], lastError: "boom" },
+              ],
+            },
+          ],
+        }),
       },
     })
     const res = await app.inject({
@@ -80,10 +87,11 @@ describe("createApp auth + endpoints", () => {
       headers: { authorization: "Bearer t1" },
     })
     expect(res.statusCode).toBe(200)
-    const body = res.json() as { servers: Array<{ name: string; state: string }> }
-    expect(body.servers).toHaveLength(2)
-    expect(body.servers[0]).toMatchObject({ name: "files", state: "connected" })
-    expect(body.servers[1]).toMatchObject({ name: "broken", state: "failed", lastError: "boom" })
+    const body = res.json() as { groups: Array<{ id: string; servers: Array<{ name: string; state: string }> }> }
+    expect(body.groups).toHaveLength(1)
+    expect(body.groups[0].servers).toHaveLength(2)
+    expect(body.groups[0].servers[0]).toMatchObject({ name: "files", state: "connected" })
+    expect(body.groups[0].servers[1]).toMatchObject({ name: "broken", state: "failed", lastError: "boom" })
   })
 
   it("GET /mcp requires the bearer token", async () => {

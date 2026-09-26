@@ -137,7 +137,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 |------|------|------|------|
 | `text` | string | 是 | 一句话说明这轮有什么值得沉淀（仅作提示用途） |
 
-- 当场触发当前会话的记忆写入管线，处理的是当前整轮消息；`text` 本身不直接写入记忆。
+- 当场触发当前会话的记忆写入 pipeline，处理的是当前整轮消息；`text` 本身不直接写入记忆。
 - 配置 `memory.write.immediate: false` 时返回固定错误文案（写入改由后台定时/跟随触发完成）。
 - 本轮没有新增内容时如实返回"该轮没有需要沉淀的新内容"，不谎报写入。
 
@@ -337,4 +337,4 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 ## MCP 工具
 
-外部 MCP server 的工具不在此清单：每个 run 经 RunManager 的 `extraTools` 动态注入，名字与 schema 来自 server 侧（见 [mcp](../core/mcp.md)）。
+外部 MCP server 的工具不在此清单：每个 run 经 RunManager 的 `extraTools(workdir)` 动态注入（取该会话工作目录所在项目组的工具面），名字与 schema 来自 server 侧（见 [mcp](../core/mcp.md)）。

@@ -88,12 +88,14 @@ export interface AppOptions {
    */
   pluginHomes?: { agent: string; home: string }[]
   /**
-   * MCP manager view: the status snapshot at `GET /mcp` (consumed by
+   * MCP manager view: the grouped status snapshot at `GET /mcp` (consumed by
    * `kclaw mcp list` and the WebUI MCP tab) plus the hot-config action
-   * routes. Absent → the snapshot returns an empty list and the action
-   * family answers 503.
+   * routes. Absent → the snapshot returns an empty group list and the
+   * action family answers 503.
    */
   mcp?: McpRoutesView
+  /** The daemon's own workspace, echoed in the MCP snapshot as the fallback target for new entries. */
+  mainWorkspace?: string
   /**
    * Feishu channel manager view: the config/status snapshot at `GET /channel`
    * (the WebUI IM Channel tab) plus the hot-config action routes. Absent →
@@ -242,7 +244,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
     registerUsageRoutes(app, { usage: opts.usage, config })
   }
 
-  registerMcpRoutes(app, { mcp: opts.mcp })
+  registerMcpRoutes(app, { mcp: opts.mcp, mainWorkspace: opts.mainWorkspace })
   registerChannelRoutes(app, { channel: opts.channel })
 
   const bus = opts.bus ?? new EventBus()
