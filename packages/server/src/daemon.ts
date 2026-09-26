@@ -55,7 +55,7 @@ import {
 } from "@kclaw/core"
 import type { EmbeddingClient, KclawConfig, LlmClient, McpServerConfig } from "@kclaw/core"
 import { loadOrCreateToken } from "./auth.js"
-import { createMcpProjects } from "./mcp-projects.js"
+import { createMcpProjects, collectProjectDirs } from "./mcp-projects.js"
 import { EventBus } from "@kclaw/core"
 import { RunManager } from "./run.js"
 import { createSubagentHost } from "./subagent.js"
@@ -343,11 +343,11 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // fatal — a broken server just yields no tools.
   const workspace = config.workspace
   const initialProjects: Record<string, Record<string, McpServerConfig>> = {}
-  const projectDirs = new Set<string>([workspace])
-  for (const meta of sessions.allMetas()) {
-    if (meta.workdir !== undefined) projectDirs.add(meta.workdir)
-  }
-  for (const dir of projectDirs) {
+  // collectProjectDirs skips directories whose project file would BE the
+  // global file (daemon home inside the project — the workspace-is-home
+  // shape): that project layer cannot exist independently, so it never
+  // mounts, never persists and never watches the global file.
+  for (const dir of collectProjectDirs({ workspace, allMetas: () => sessions.allMetas(), home: paths.home })) {
     initialProjects[dir] = loadProjectMcpServers(dir)
   }
   const mcpManager = new McpManager({
@@ -373,6 +373,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     manager: mcpManager,
     allMetas: () => sessions.allMetas(),
     loadEntries: (dir) => loadProjectMcpServers(dir),
+    home: paths.home,
   })
   mcpProjects.sync()
   // Subagent dispatch: the spawner needs the RunManager (it submits/cancels

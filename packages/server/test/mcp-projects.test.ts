@@ -1,8 +1,9 @@
 import { afterAll, describe, expect, it } from "vitest"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createMcpProjects } from "../src/mcp-projects.js"
+import { GLOBAL_GROUP, McpManager, loadMcpJson, loadProjectMcpServers, mcpConfigPath, saveMcpJson } from "@kclaw/core"
+import { createMcpProjects, collectProjectDirs } from "../src/mcp-projects.js"
 
 /** Recording fake manager: the calls list doubles as the assertion surface. */
 function fakeManagerLog() {
@@ -98,5 +99,74 @@ describe("mcp-projects discovery", () => {
 
   afterAll(() => {
     rmSync(root, { recursive: true, force: true })
+  })
+})
+
+/**
+ * The alias bug: when a project workdir's `.kclaw/mcp.json` IS the global
+ * file (daemon workspace = the home directory), the project watch saw every
+ * global persist write and reconciled the project group from it — disabling
+ * a global entry flipped the same-named project entry too. The project
+ * layer for such a directory must not exist at all.
+ *
+ * fs.watch EVENT behavior stays out of scope (the standing boundary): the
+ * bleed path is driven through sync(), the same read → reconcileProject
+ * call the watcher's debounced callback makes.
+ */
+describe("mcp-projects × global file alias", () => {
+  it("never mounts a project whose config file is the global mcp.json, so a global disable cannot leak into it", async () => {
+    const ws = mkdtempSync(join(tmpdir(), "kclaw-mcp-alias-"))
+    // The daemon-home shape: <workspace>/.kclaw is home, so the workspace's
+    // project file and the global file are the same path.
+    const home = join(ws, ".kclaw")
+    mkdirSync(home, { recursive: true })
+    const globalFile = mcpConfigPath(home)
+    writeFileSync(globalFile, JSON.stringify({ servers: { ctx7: { type: "http", url: "https://x.test/mcp" } } }))
+    const projA = join(ws, "proj-a")
+    mkdirSync(join(projA, ".kclaw"), { recursive: true })
+    writeFileSync(join(projA, ".kclaw", "mcp.json"), JSON.stringify({ servers: { local: { type: "stdio", command: "a" } } }))
+
+    try {
+      // The daemon assembles the manager from collectProjectDirs — the same
+      // decision the discovery drives — so the aliased directory never
+      // becomes a project group in the first place.
+      const dirs = collectProjectDirs({ workspace: ws, allMetas: () => [{ workdir: ws }, { workdir: projA }], home })
+      expect(dirs).toEqual([projA])
+      const initialProjects: Record<string, ReturnType<typeof loadProjectMcpServers>> = {}
+      for (const dir of dirs) initialProjects[dir] = loadProjectMcpServers(dir)
+      const manager = new McpManager({
+        globalServers: loadMcpJson(globalFile),
+        projects: initialProjects,
+        persist: (group, servers) => {
+          if (group === GLOBAL_GROUP) saveMcpJson(globalFile, servers)
+          else saveProjectMcpJson(group, servers)
+        },
+      })
+      const controller = createMcpProjects({
+        workspace: ws,
+        manager,
+        allMetas: () => [{ workdir: ws }, { workdir: projA }],
+        loadEntries: (dir) => loadProjectMcpServers(dir),
+        home,
+        syncIntervalMs: 0,
+      })
+      controller.sync()
+
+      manager.setEnabled(GLOBAL_GROUP, "ctx7", false)
+      // The watcher's debounced reconcile is a sync() under the hood; drive
+      // it by hand so no fs.watch event is needed.
+      controller.sync()
+
+      const ids = manager.status().groups.map((g) => g.id)
+      expect(ids).not.toContain(ws)
+      const globalCtx7 = manager.status().groups.find((g) => g.id === GLOBAL_GROUP)!.servers.find((s) => s.name === "ctx7")!
+      expect(globalCtx7.state).toBe("disabled")
+      const local = manager.status().groups.find((g) => g.id === projA)!.servers.find((s) => s.name === "local")!
+      expect(local.config.enabled).not.toBe(false)
+      controller.close()
+      await manager.stop()
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
   })
 })

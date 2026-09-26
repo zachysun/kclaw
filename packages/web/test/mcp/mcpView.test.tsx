@@ -292,15 +292,15 @@ describe("McpView form (add / edit / move / delete)", () => {
     expect((c2.querySelector('[data-testid="mcp-form-group"]') as HTMLSelectElement).value).toBe("global")
   })
 
-  it("keeps the session workdir as the default even when the client snapshot predates its group", async () => {
+  it("never defaults to a session workdir the snapshot doesn't know (a group the server won't mount)", async () => {
     const api = fakeApi()
     const fresh = "/tmp/fresh-proj"
     const { container } = await mount(api, () => {}, fresh)
     await openAdd(container)
     const select = container.querySelector('[data-testid="mcp-form-group"]') as HTMLSelectElement
-    expect(select.value).toBe(fresh)
-    // the fresh group is offered as an option even though the snapshot doesn't list it yet
-    expect([...select.options].some((o) => o.value === fresh)).toBe(true)
+    // Not a known group → fall back to the daemon workspace, which is known.
+    expect(select.value).toBe(PROJ_A)
+    expect([...select.options].some((o) => o.value === fresh)).toBe(false)
   })
 
   it("adds a stdio server into the chosen group", async () => {

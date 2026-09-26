@@ -460,6 +460,35 @@ describe("McpManager grouped actions", () => {
     await manager.stop()
   })
 
+  it("disabling the global entry leaves the same-named project entry enabled and connected", async () => {
+    const harness = fakeServerHarness()
+    const persisted: Array<{ group: string; servers: Record<string, McpServerConfig> }> = []
+    const manager = makeManager({
+      harness,
+      global: { fs: { type: "stdio", command: "g" } },
+      projects: { [DIR_A]: { fs: { type: "stdio", command: "p" } } },
+      persist: (group, servers) => persisted.push({ group, servers: structuredClone(servers) }),
+    })
+    // Connect both same-name entries: the project one via the view (it wins
+    // the shadow), the global one via an explicit connect.
+    manager.toolsFor(DIR_A)
+    await manager.flush()
+    manager.connect(GLOBAL_GROUP, "fs")
+    await manager.flush()
+    expect(stateOf(manager, GLOBAL_GROUP, "fs")).toBe("connected")
+    expect(stateOf(manager, DIR_A, "fs")).toBe("connected")
+
+    manager.setEnabled(GLOBAL_GROUP, "fs", false)
+    await manager.flush()
+
+    expect(stateOf(manager, GLOBAL_GROUP, "fs")).toBe("disabled")
+    expect(stateOf(manager, DIR_A, "fs")).toBe("connected")
+    expect(persisted.filter((p) => p.group === DIR_A)).toHaveLength(0)
+    const projectConfig = manager.status().groups.find((g) => g.id === DIR_A)!.servers[0]!.config
+    expect(projectConfig.enabled).not.toBe(false)
+    await manager.stop()
+  })
+
   it("move is atomic: same-name target refuses up front, both groups persist, a pure move stays lazy", async () => {
     const harness = fakeServerHarness()
     const persisted: Array<{ group: string; servers: Record<string, McpServerConfig> }> = []

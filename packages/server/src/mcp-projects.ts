@@ -13,6 +13,7 @@
  * createProjectMcpWatch and is never fatal.
  */
 import type { McpServerConfig } from "@kclaw/core"
+import { projectMcpCollidesWithGlobal } from "@kclaw/core"
 import { createProjectMcpWatch } from "./project-mcp-watch.js"
 
 export interface McpProjectsDeps {
@@ -28,8 +29,25 @@ export interface McpProjectsDeps {
   allMetas(): Array<{ workdir?: string }>
   /** Read one project's entries (storage defenses applied inside). */
   loadEntries(workdir: string): Record<string, McpServerConfig>
+  /** The daemon home: a project whose config file IS the global mcp.json is skipped. */
+  home?: string
   /** Sync cadence; the timer is owned here and cleared by close(). */
   syncIntervalMs?: number
+}
+
+/**
+ * The project-directory set, shared with the daemon's manager assembly so
+ * both sides see the same thing: the workspace plus every session-recorded
+ * workdir, minus any directory whose project config file would be the
+ * global file itself (daemon home inside the project) — that project layer
+ * cannot exist independently and stays unmounted.
+ */
+export function collectProjectDirs(deps: Pick<McpProjectsDeps, "workspace" | "allMetas" | "home">): string[] {
+  const wanted = new Set<string>([deps.workspace])
+  for (const meta of deps.allMetas()) {
+    if (meta.workdir !== undefined) wanted.add(meta.workdir)
+  }
+  return [...wanted].filter((dir) => deps.home === undefined || !projectMcpCollidesWithGlobal(dir, deps.home))
 }
 
 export function createMcpProjects(deps: McpProjectsDeps): {
@@ -42,6 +60,7 @@ export function createMcpProjects(deps: McpProjectsDeps): {
   let timer: NodeJS.Timeout | undefined
 
   function mount(workdir: string): void {
+    if (deps.home !== undefined && projectMcpCollidesWithGlobal(workdir, deps.home)) return
     if (known.has(workdir)) return
     known.add(workdir)
     deps.manager.ensureProject(workdir, deps.loadEntries(workdir))
@@ -63,10 +82,7 @@ export function createMcpProjects(deps: McpProjectsDeps): {
 
   /** One pass: mount every wanted workdir, unmount projects nobody references. */
   function sync(): void {
-    const wanted = new Set<string>([deps.workspace])
-    for (const meta of deps.allMetas()) {
-      if (meta.workdir !== undefined) wanted.add(meta.workdir)
-    }
+    const wanted = new Set(collectProjectDirs(deps))
     for (const workdir of wanted) {
       if (!known.has(workdir)) mount(workdir)
     }

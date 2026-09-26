@@ -36,14 +36,15 @@ function configSummary(config: McpServerStatus["config"]): string {
 
 /**
  * Default creation target: the selected session's project, else the daemon
- * workspace, else global. The session workdir is preferred even when the
- * client snapshot predates its group — the daemon mounts the project as
- * soon as the session is created, so the POST resolves server-side; the
- * stale snapshot only means the dropdown is missing one option.
+ * workspace, else global. The session workdir only applies when the
+ * snapshot already knows it: a directory whose project file IS the global
+ * file never becomes a group (the server skips it), and preferring it
+ * unconditionally would 404 the save. A brand-new project's group appears
+ * in the snapshot within one 2s poll.
  */
 function defaultGroup(snapshot: McpSnapshotResponse | null, sessionWorkdir?: string): string {
-  if (sessionWorkdir !== undefined && sessionWorkdir !== "") return sessionWorkdir
   const ids = new Set(snapshot?.groups.map((g) => g.id) ?? [])
+  if (sessionWorkdir !== undefined && ids.has(sessionWorkdir)) return sessionWorkdir
   const main = snapshot?.mainWorkspace ?? ""
   if (main !== "" && ids.has(main)) return main
   return "global"
@@ -127,14 +128,6 @@ export function McpView({ api, notice, sessionWorkdir }: {
     act(() => api.del(`/mcp/servers/${encodeURIComponent(name)}?group=${encodeURIComponent(group)}`))
 
   const groups = snapshot?.groups ?? []
-  // Offer the selected session's workdir even when the client snapshot
-  // predates its group (the daemon mounts it on session.created; the next
-  // poll adds it to the list).
-  const sessionDir = sessionWorkdirRef.current
-  const groupIds =
-    sessionDir !== undefined && sessionDir !== "" && !groups.some((g) => g.id === sessionDir)
-      ? [...groups.map((g) => g.id), sessionDir]
-      : groups.map((g) => g.id)
 
   return (
     <div className="mcp-view" data-testid="mcp-view">
@@ -153,7 +146,7 @@ export function McpView({ api, notice, sessionWorkdir }: {
       {formSeed !== null && (
         <McpForm
           api={api}
-          groupIds={groupIds}
+          groupIds={groups.map((g) => g.id)}
           initial={formSeed}
           onSaved={() => {
             setFormSeed(null)
