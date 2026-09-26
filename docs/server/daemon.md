@@ -100,13 +100,13 @@ createMcpProjects({workspace, manager, allMetas, loadEntries})
                                     顶层等 `.kclaw` 出现、再切 `.kclaw` watch），手工编辑
                                     防抖后经 reconcileProject 热生效；起不来只告警降级、
                                     不致命
-new McpManager({globalServers, projects, persist, extra})
+new McpManager({globalServers, projects, onError, persist})
                                     恒定组装：globalServers = <home>/mcp.json 的条目；
                                     projects = 每个已知项目 `.kclaw/mcp.json` 的条目
-                                    （缺失/损坏/git 跟踪均读作 {}）；persist 按组分发：
-                                    "global" 接归拢持久化（写 mcp.json），其余组接
-                                    saveProjectMcpJson；extra 带 transportFactory 与
-                                    惰性参数（空闲回收 TTL、重试上限、连接上限），
+                                    （缺失/损坏/git 跟踪均读作 {}）；onError 把连接失败
+                                    打一行日志；persist 按组分发："global" 写 mcp.json，
+                                    其余组接 saveProjectMcpJson；空闲回收 TTL、重试
+                                    上限、连接上限等参数取构造默认值（见 mcp.md），
                                     组装后零连接——连接由 run 的工具取用或手动 connect
                                     按需发起
 createSubagentHost({config, sessions, bus, getRun})
