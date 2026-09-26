@@ -115,13 +115,14 @@ export interface RunManagerDeps {
    */
   tools?: Map<string, ToolExecutor>
   /**
-   * Live adapter tools (e.g. the MCP manager): a FUNCTION evaluated per run,
-   * so connections that come up or drop between runs (or mid-reconnect)
-   * are reflected in the next LLM request. Defs are appended to the
-   * builtin defs; a name collision with a builtin logs once and the
-   * adapter's executor wins (schema follows the executor).
+   * Live adapter tools (e.g. the MCP manager): a FUNCTION of the run's
+   * workspace, evaluated per run — each project gets its own MCP use-view
+   * (and lazy connections), and connections that come up or drop between
+   * runs (or mid-reconnect) are reflected in the next LLM request. Defs are
+   * appended to the builtin defs; a name collision with a builtin logs once
+   * and the adapter's executor wins (schema follows the executor).
    */
-  extraTools?: () => { executors: Map<string, ToolExecutor>; defs: ToolDefinition[] }
+  extraTools?: (workdir: string) => { executors: Map<string, ToolExecutor>; defs: ToolDefinition[] }
   /**
    * Subagent dispatch (issue #16): the daemon's spawner implementation
    * (server/src/subagent.ts). Flows into every mainline run's assembly as the

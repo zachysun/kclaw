@@ -28,6 +28,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
+  GLOBAL_GROUP,
   JobScheduler,
   MemorySystem,
   SessionStore,
@@ -52,9 +53,9 @@ import {
   HookRegistry,
   AutoLearnCounter,
 } from "@kclaw/core"
-import type { EmbeddingClient, KclawConfig, LlmClient } from "@kclaw/core"
+import type { EmbeddingClient, KclawConfig, LlmClient, McpServerConfig } from "@kclaw/core"
 import { loadOrCreateToken } from "./auth.js"
-import { createProjectMcpWatch } from "./project-mcp-watch.js"
+import { createMcpProjects } from "./mcp-projects.js"
 import { EventBus } from "@kclaw/core"
 import { RunManager } from "./run.js"
 import { createSubagentHost } from "./subagent.js"
@@ -250,9 +251,16 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // The bus is built before the store: the store's post-append callback emits
   // the session.appended bus frame (audit-page subscribers use it to refetch
   // the stream incrementally — persisted before announced, no race).
+  // A session.created with a fresh workdir also mounts that project's MCP
+  // layer immediately (mcp-projects discovery; late-bound — the manager is
+  // assembled further down).
   const bus = new EventBus()
+  let mcpProjects: ReturnType<typeof createMcpProjects> | undefined
   const sessions = new SessionStore(paths.sessionsDir, (sessionId, event) => {
     bus.emit(makeEvent("session.appended", { eventType: event.type }, { sessionId }))
+    if (event.type === "session.created" && event.workdir !== undefined) {
+      mcpProjects?.mount(event.workdir)
+    }
   })
   // embedding 判定链：model 空 → 不构造客户端（向量路关闭）；provider 名
   // 缺省取 default provider entry；entry 不存在则向量路关闭并告警（不致命）。
@@ -324,36 +332,49 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   })
   // MCP: the manager is always assembled (an empty one costs nothing and
   // keeps the management routes — adding the first server from the WebUI —
-  // alive). Servers come from the two config layers: the global file
-  // (~/.kclaw/mcp.json) and the project file (<workspace>/.kclaw/mcp.json,
-  // missing/corrupt/git-tracked all read as {} in the storage loader); the
-  // manager expands them global < project with whole-entry override.
-  // Hot-config changes persist per layer: global → the global file,
-  // project → the project file. Connection failures are logged and never
+  // alive). Lazy model: boot connects nothing. Each project (workdir) gets
+  // its own layer from <workdir>/.kclaw/mcp.json; the global layer comes
+  // from ~/.kclaw/mcp.json and is shared by every project. The initial
+  // project set is the union of workdirs the session records mention
+  // (soft-deleted included) plus the daemon workspace — no scanning, no
+  // persisted list. Hot-config changes persist per group: global → the
+  // global file, a workdir → that project's file (first write creates
+  // .kclaw + gitignore there). Connection failures are logged and never
   // fatal — a broken server just yields no tools.
   const workspace = config.workspace
-  // Project-file watch: hand edits to <workspace>/.kclaw/mcp.json
-  // hot-reload through reconcile. Two-stage attach (workspace top level
-  // until `.kclaw` appears, then the `.kclaw` watch) lives in
-  // project-mcp-watch.ts; a watch that cannot start logs once and degrades —
-  // hand edits then apply on restart, never fatal.
-  const projectMcpWatch = createProjectMcpWatch(workspace, () =>
-    mcpManager.reconcile(loadProjectMcpServers(workspace)),
-  )
-
+  const initialProjects: Record<string, Record<string, McpServerConfig>> = {}
+  const projectDirs = new Set<string>([workspace])
+  for (const meta of sessions.allMetas()) {
+    if (meta.workdir !== undefined) projectDirs.add(meta.workdir)
+  }
+  for (const dir of projectDirs) {
+    initialProjects[dir] = loadProjectMcpServers(dir)
+  }
   const mcpManager = new McpManager({
-    servers: { global: loadMcpJson(mcpConfigPath(paths.home)), project: loadProjectMcpServers(workspace) },
-    onError: (name, error) => console.error(`kclaw mcp ${name} error: ${error}`),
-    persist: (scope, servers) => {
-      if (scope === "project") {
-        saveProjectMcpJson(workspace, servers)
-        projectMcpWatch.ensure() // the first project write creates .kclaw — attach the watcher now
-      } else {
+    globalServers: loadMcpJson(mcpConfigPath(paths.home)),
+    projects: initialProjects,
+    onError: (group, name, error) =>
+      console.error(`kclaw mcp ${group === GLOBAL_GROUP ? name : `${group} · ${name}`} error: ${error}`),
+    persist: (group, servers) => {
+      if (group === GLOBAL_GROUP) {
         saveMcpJson(mcpConfigPath(paths.home), servers)
+      } else {
+        saveProjectMcpJson(group, servers)
       }
     },
   })
-  projectMcpWatch.ensure()
+  // Discovery: mounts the two-stage file watch per known project (hand
+  // edits hot-reload through reconcile), mounts projects created later via
+  // the session-store hook above, and periodically drops projects whose
+  // sessions are all gone (purge) — the file stays, the project returns
+  // with its next session.
+  mcpProjects = createMcpProjects({
+    workspace,
+    manager: mcpManager,
+    allMetas: () => sessions.allMetas(),
+    loadEntries: (dir) => loadProjectMcpServers(dir),
+  })
+  mcpProjects.sync()
   // Subagent dispatch: the spawner needs the RunManager (it submits/cancels
   // child runs) while the RunManager's engine deps need the spawner — a
   // late-bound getter breaks the cycle (dispatches only fire mid-run, long
@@ -400,7 +421,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     // auto mode induction (batch C): one per-process streak counter threaded
     // through every run's assembly; threshold 0 disables induction.
     autoLearn: { counter: new AutoLearnCounter(config.permissions.autoLearnThreshold ?? 3) },
-    extraTools: () => mcpManager.tools(),    // Retry visibility: with the DEFAULT
+    extraTools: (workdir) => mcpManager.toolsFor(workdir),    // Retry visibility: with the DEFAULT
     // composition every run builds its own retry-wrapped client carrying
     // that run's onRetry sink — retry events then carry the run's own
     // sessionId/runId even while sessions run concurrently on the shared
@@ -437,6 +458,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     cancelBackgroundForParent: subagentHost.cancelBackgroundForParent,
     team: teamHost,
     mcp: mcpManager,
+    mainWorkspace: workspace,
     channel: feishuManager,
     attachmentsDir: paths.attachmentsDir,
     usage,
@@ -535,8 +557,8 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       await withStopTimeout(memoryTick.stop(), stopTimeoutMs, "memory scheduler")
       await withStopTimeout(skillTick.stop(), stopTimeoutMs, "skill scheduler")
       await withStopTimeout(feishuManager.stop(), stopTimeoutMs, "feishu channel")
-      // project-file watcher first: no reconcile can race the manager teardown
-      projectMcpWatch.close()
+      // project-file watchers first: no reconcile can race the manager teardown
+      mcpProjects?.close()
       if (mcpManager !== undefined) {
         await withStopTimeout(mcpManager.stop(), stopTimeoutMs, "mcp stop")
       }
