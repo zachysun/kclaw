@@ -216,6 +216,7 @@ rules:
 
 - **读**（`loadProjectMcpServers(workspace)`）：文件缺失或形状不对读作 `{}`（与全局 `loadMcpJson` 同一永不抛错契约，损坏文件告警后忽略）；**被 git 跟踪时整体忽略并告警**——克隆来的仓库不能自带一份会在连接时执行本地进程的 MCP 配置（与 decided-rules 的 `isGitTracked` 防御同一动机，复用同一个检测函数）。
 - **写**（`saveProjectMcpJson(workspace, servers)`）：0600 原子写；首次写入前跑出生防御（`ensureProjectMcpDefenses`）——建 `.kclaw` 目录、把 `.kclaw/mcp.json` 追加进工作区 `.gitignore`（幂等），文件从此本地私有。
+- **同路径判断**（`projectMcpCollidesWithGlobal(workdir, home)`）：daemon 主目录嵌在某个项目里时（工作目录就是用户主目录的形态），该项目的 `.kclaw/mcp.json` 与全局 `mcp.json` 是同一个文件。这样的目录没有独立的项目层：daemon 的项目发现与组装用这个函数把它整体排除，不挂项目组、不挂 watch，两层才不会读写同一份文件互相污染（见 [mcp](./mcp.md)）。
 - **热生效**：daemon 的项目发现模块对每个已知项目各挂一个两阶段文件 watch，手工编辑经 `McpManager.reconcileProject` 重新对齐该项目组（机制见 [mcp](./mcp.md) 与 [daemon](../server/daemon.md)）。
 
 

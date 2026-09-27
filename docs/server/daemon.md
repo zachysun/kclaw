@@ -13,7 +13,7 @@
 - **鉴权是"每路由必带 Bearer"加白名单豁免**：一个 `preHandler` hook 拦截全部路由，只有三处豁免——`/health`、`/ws`、静态 WebUI 外壳（见下）。豁免列表是封闭集合，新增路由默认受保护。
 - **有界停止**：`stop()` 的每一步（停调度、关服务器）有独立超时（默认 60s）。超时则 `stop()` reject、daemon.json **保留**——进程仍在运行，指向它的文件必须与事实一致；虚报"已停止"会诱发双 daemon、job 双触发。
 - **provider 缺失是硬错误**：组装期就抛错终止，不启动一个"半配置"的 daemon。
-- **MCP 恒定组装，且启动零连接**：无论配置文件里有没有 server，daemon 都构建一个 `McpManager`（空的管理器没有任何连接、开销为零，管理路由因此永远可用，从 WebUI 添加第一个 server 不需要先改配置）。配置来自全局 `~/.kclaw/mcp.json` 加**每个已知项目**的 `.kclaw/mcp.json`（项目集合 = daemon 主工作目录 + 全部会话记录里出现过的工作目录，daemon 启动时现算，运行中新建会话即时挂载；不靠任何清单文件，与技能同源——放好配置文件即生效）。连接是惰性的：启动与配置变更都不发起连接，run 用到某项目的工具、或用户手动 connect 时才按需连接（见 [mcp](../core/mcp.md)）。连接失败只打一行日志，永远不会拖垮 daemon。
+- **MCP 恒定组装，且启动零连接**：无论配置文件里有没有 server，daemon 都构建一个 `McpManager`（空的管理器没有任何连接、开销为零，管理路由因此永远可用，从 WebUI 添加第一个 server 不需要先改配置）。配置来自全局 `~/.kclaw/mcp.json` 加**每个已知项目**的 `.kclaw/mcp.json`（项目集合 = daemon 主工作目录 + 全部会话记录里出现过的工作目录，daemon 启动时现算，运行中新建会话即时挂载；不靠任何清单文件，与技能同源，放好配置文件即生效。唯一例外：daemon 主目录嵌在某个项目里时，该项目的配置文件与全局 `mcp.json` 是同一个路径，两层无法独立存在，这样的目录不挂项目组，见 [mcp](../core/mcp.md)）。连接是惰性的：启动与配置变更都不发起连接，run 用到某项目的工具、或用户手动 connect 时才按需连接（见 [mcp](../core/mcp.md)）。连接失败只打一行日志，永远不会拖垮 daemon。
 
 ## 接口
 
@@ -91,10 +91,12 @@ new SkillEvolutionSystem({skillsDir, sessions, config, resolveLlm, log})
                                     （extractModel 命中条目走条目端点，Model 页改动同样
                                     热生效）；构造后交给 RunManager（run 收尾钩子 +
                                     skill_create 工具面）与 skill 调度器（检查消费端）
-createMcpProjects({workspace, manager, allMetas, loadEntries})
+createMcpProjects({workspace, manager, allMetas, loadEntries, home})
                                     项目发现与热生效（见 mcp.md）：项目集合 = 主工作目录 +
-                                    全部会话 meta（含回收站）的 workdir 并集，启动时
-                                    sync() 一次对齐（挂缺失、退出无会话项目，60s 一次），
+                                    全部会话 meta（含回收站）的 workdir 并集，减去项目
+                                    配置文件与全局 mcp.json 同路径的目录（home 用于排除
+                                    这个形态：两层共用一个文件，项目层无法独立存在），
+                                    启动时 sync() 一次对齐（挂缺失、退出无会话项目，60s 一次），
                                     并从 SessionStore 的 session.created 回调即时 mount
                                     新项目；每目录挂一个两阶段项目 watch（先 watch 项目
                                     顶层等 `.kclaw` 出现、再切 `.kclaw` watch），手工编辑
