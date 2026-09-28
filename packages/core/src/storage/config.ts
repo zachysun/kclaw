@@ -192,6 +192,15 @@ export interface KclawConfig {
     }
   }
   /**
+   * /goal goal loop (issue #47). The ONLY knob is the judge's provider entry
+   * key: empty = each goal session judges on its own session model. Loop
+   * caps are code constants (goal/limits.ts), not config.
+   */
+  goals?: {
+    /** Provider entry key for the goal judge; "" = the session's own model line. */
+    judge?: string
+  }
+  /**
    * Daemon server. Defaults in defaultConfig; an absent port means an
    * OS-assigned ephemeral port per launch. Invalid values fall back
    * per-field with one warning (parseConfig).
@@ -233,6 +242,7 @@ export const defaultConfig: KclawConfig = {
     taskBoard: { maxTasks: 64 },
   },
   skills: { evolution: { enabled: true, idleMinutes: 10 } },
+  goals: { judge: "" },
   workspace: process.cwd(),
 }
 
@@ -309,7 +319,29 @@ function parseConfig(raw: string, path: string): KclawConfig {
   validateTeamConfig(merged)
   validateSkillsConfig(merged)
   validateServerConfig(merged)
+  validateGoalsConfig(merged)
   return merged
+}
+
+/**
+ * Goals section validation (team style): a non-mapping section falls back
+ * wholesale; a non-string judge resets to "" (judge on the session model),
+ * each with one warning. Unknown entry keys are NOT rejected here — the
+ * entry may be added later; resolution at judge time falls back to the
+ * session model when the key matches nothing. Never throws.
+ */
+function validateGoalsConfig(merged: KclawConfig): void {
+  const goals = merged.goals
+  if (goals === undefined) return
+  if (!isPlainObject(goals)) {
+    console.warn("kclaw config: goals section is not a mapping; falling back to defaults")
+    merged.goals = { judge: "" }
+    return
+  }
+  if (goals.judge !== undefined && typeof goals.judge !== "string") {
+    console.warn(`kclaw config: goals.judge ${String(goals.judge)} is invalid; falling back to the session model`)
+    goals.judge = ""
+  }
 }
 
 /**
@@ -440,6 +472,7 @@ export const PROVIDER_ENTRY_REFERENCES: ReadonlyArray<{
   { get: (c) => c.providers.default, set: (c, name) => { c.providers.default = name } },
   { get: (c) => c.memory?.extractModel, set: (c, name) => { if (c.memory !== undefined) c.memory.extractModel = name } },
   { get: (c) => c.memory?.embedding?.provider, set: (c, name) => { if (c.memory?.embedding !== undefined) c.memory.embedding.provider = name } },
+  { get: (c) => c.goals?.judge, set: (c, name) => { if (c.goals !== undefined) c.goals.judge = name } },
 ]
 
 /**

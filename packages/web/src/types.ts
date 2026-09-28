@@ -13,7 +13,9 @@ export type {
   SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SkillEvent, SystemEvent,
   TeamAuditEvent, TeamCreatedEvent, TeamMemberProvisionedEvent, TeamMemberSettledEvent,
   TeamMessageDeliveredEvent, TeamMessageQueuedEvent, TeamTaskCreatedEvent, TeamTaskUpdatedEvent,
+  GoalEvent, GoalSetEvent, GoalClearedEvent, GoalCheckedEvent,
 } from "@kclaw/core/protocol"
+export type { GoalGateOutcome, GoalJudgeResult, GoalSnapshot, GoalState, GoalStopReason, GoalVerdict } from "@kclaw/core/protocol"
 // The core canon names this GrantedBy; the web UI's historical name stays.
 export type { GrantedBy as ToolGrantReason } from "@kclaw/core/protocol"
 

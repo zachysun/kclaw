@@ -50,6 +50,7 @@ const KIND_LABELS: Record<AuditRowKind, string> = {
   run: "run",
   decision: "permission",
   truncation: "truncation",
+  goal: "goal",
   team: "team",
   skill: "skill",
 }

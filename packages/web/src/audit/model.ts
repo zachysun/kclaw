@@ -11,11 +11,12 @@ import type {
   Block, CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, Role, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent, SessionEvent, SessionRenamedEvent,
   SessionRestoredEvent, SessionSetEvent, SkillEvent, SystemEvent, TeamAuditEvent, ToolGrantReason, Usage,
+  GoalEvent, GoalSetEvent, GoalCheckedEvent, GoalSnapshot,
 } from "../types.js"
 
 export type SessionMetaEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent
 
-export type AuditRowKind = "block" | "compaction" | "memory" | "system" | "sandbox" | "session" | "run" | "decision" | "truncation" | "team" | "skill"
+export type AuditRowKind = "block" | "compaction" | "memory" | "system" | "sandbox" | "session" | "run" | "decision" | "truncation" | "team" | "skill" | "goal"
 
 /**
  * One flattened audit row. Block rows carry the owning message's role,
@@ -38,6 +39,7 @@ export type AuditRow =
   | { kind: "truncation"; key: string; index: number; event: MessageTruncatedEvent; at: string }
   | { kind: "team"; key: string; index: number; event: TeamAuditEvent; at: string }
   | { kind: "skill"; key: string; index: number; event: SkillEvent; at: string }
+  | { kind: "goal"; key: string; index: number; event: GoalEvent; at: string }
 
 /**
  * Flatten the event stream into rows, one per rendered event. Message events
@@ -186,6 +188,11 @@ function flattenEventInto(
     case "skill":
       rows.push({ kind: "skill", key: `${index}`, index, event, at: event.at })
       break
+    case "goal.set":
+    case "goal.cleared":
+    case "goal.checked":
+      rows.push({ kind: "goal", key: `${index}`, index, event, at: event.at })
+      break
     case "session.created":
     case "session.renamed":
     case "session.deleted":
@@ -219,10 +226,10 @@ export interface AuditFilter {
   timeTo: string
 }
 
-export const ALL_KINDS: AuditRowKind[] = ["block", "compaction", "memory", "system", "sandbox", "session", "run", "decision", "truncation", "team", "skill"]
+export const ALL_KINDS: AuditRowKind[] = ["block", "compaction", "memory", "system", "sandbox", "session", "run", "decision", "truncation", "team", "skill", "goal"]
 
 export const DEFAULT_FILTER: AuditFilter = {
-  kinds: { block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true, team: true, skill: true },
+  kinds: { block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true, team: true, skill: true, goal: true },
   keyword: "",
   timePreset: "all",
   timeFrom: "",
@@ -277,6 +284,8 @@ export function rowSearchText(row: AuditRow): string {
       return `${teamSummary(row.event)} ${teamFullContent(row.event)}`
     case "skill":
       return skillSummary(row.event)
+    case "goal":
+      return `${goalSummary(row.event)} ${goalFullContent(row.event)}`
   }
 }
 
@@ -543,6 +552,59 @@ export function blockFullContent(block: Block): string {
 // ---------- 团队（agent-team）事件 ----------
 
 /** team/* 事件的单行摘要（审计页团队行）。 */
+/** goal/* 事件的单行摘要（目标循环审计行：变更/移除/每轮判定）。 */
+export function goalSummary(event: GoalEvent): string {
+  switch (event.type) {
+    case "goal.set": {
+      const opLabel: Record<GoalSetEvent["op"], string> = { create: "设定", edit: "改写", pause: "暂停", resume: "恢复", state: "状态迁移" }
+      const stateLabel: Record<GoalSnapshot["state"], string> = { active: "进行中", paused: "已暂停", blocked: "待裁决", complete: "已终态" }
+      const stopNote = event.goal.stoppedReason !== undefined ? ` · ${goalStopReasonLabel(event.goal.stoppedReason)}` : ""
+      return `目标${opLabel[event.op]}：${summarize(event.goal.text, 40)} → ${stateLabel[event.goal.state]}${stopNote}（第 ${event.goal.totalRounds} 轮 · ${fmtTokens(event.goal.tokensUsed)} token）`
+    }
+    case "goal.cleared":
+      return `移除目标（原状态 ${event.hadState}）`
+    case "goal.checked": {
+      if (event.judgeError !== undefined) {
+        return `第 ${event.round} 轮判定失败（${event.judgeError.kind === "parse" ? "解析" : "传输"}）：${summarize(event.judgeError.message, 60)}`
+      }
+      const gateLine = event.gates.length > 0
+        ? `门 ${event.gates.every((g) => g.ok) ? "全过" : "有失败"} · `
+        : ""
+      if (event.verdict === undefined) return `第 ${event.round} 轮：${gateLine}验收未过，判定短路`
+      const verdictLabel: Record<NonNullable<GoalCheckedEvent["verdict"]>, string> = { not_met: "未达成", met: "已达成", impossible: "不可能" }
+      return `第 ${event.round} 轮判定 ${verdictLabel[event.verdict]}：${summarize(event.reason ?? "", 60)}${gateLine ? `（${gateLine}）` : ""}`
+    }
+  }
+}
+
+/** goal/* 事件的完整展开内容（审计行点击后的 pre）。 */
+export function goalFullContent(event: GoalEvent): string {
+  switch (event.type) {
+    case "goal.set":
+      return JSON.stringify(event.goal, null, 2)
+    case "goal.cleared":
+    case "goal.checked":
+      return JSON.stringify(event, null, 2)
+  }
+}
+
+/** 停止/终态原因码的中文标签（快照与审计共用）。 */
+export function goalStopReasonLabel(reason: Exclude<GoalSnapshot["stoppedReason"], undefined>): string {
+  const labels: Record<Exclude<GoalSnapshot["stoppedReason"], undefined>, string> = {
+    met: "已达成",
+    impossible: "不可能达成",
+    "round-limit": "连续轮数达上限",
+    "budget-limit": "token 预算耗尽",
+    "gate-exhausted": "验收连续失败",
+    "no-progress": "连续无进展",
+    permission: "确认超时待裁决",
+    "judge-failed": "判定器失败",
+    "run-error": "运行出错",
+    "user-stop": "用户停止",
+  }
+  return labels[reason]
+}
+
 export function teamSummary(event: TeamAuditEvent): string {
   switch (event.type) {
     case "team.created":

@@ -48,6 +48,7 @@ kclaw chat
 - **权限与沙箱**：共5种权限模式：readonly（写与命令全拒）、default（逐次审批）、acceptEdits（允许在工作区内写文件）、trusted（沙箱与工作区内无须确认）、auto（根据用户的多次审批行为判断，当前基于规则）。审批可选“仅此一次” / “本项目” / “全局”通过，下次同类操作自动放行。
 - **Subagent**：两种类型：(1) 阻塞式挂起，lead agent 需等待；(2) 后台执行，期间 lead agent 可以执行其他任务，当subagent 完成任务后会通知lead agent. Subagent是独立会话，继承 lead agent 的工作目录，使用精简的系统提示词，只拿任务描述、不带 lead agent 的消息历史。
 - **Agent Team**：lead 与 teammates 各自是独立会话，通过 mailbox 进行点对点通信，支持任务看板。
+- **Goal 循环**：给会话设一个可验证的目标（`/goal <目标> verify: <命令>`），daemon 自主多轮推进；每轮 run 边界由沙箱内执行的验收命令加独立判定器 LLM（严格三值裁决：未达成 / 达成 / 不可能）决定续跑或停止，并有连续轮数、生命周期 token 预算、无进展与连败熔断等机械上限保底。
 - **IM Channel**：当前支持接入飞书Bot.
 
 ---
@@ -95,6 +96,7 @@ pnpm test        # 全部包 vitest（cli/server 快速验证需先 pnpm build�
   - [agent-team](docs/core/agent-team.md)：Agent Team（Lead + Teammates、Mailbox、Task Board）
   - [client-http](docs/core/client-http.md)：共享 HTTP 请求底座
   - [compaction](docs/core/compaction.md)：上下文压缩
+  - [goal](docs/core/goal.md)：/goal 自主目标循环
   - [hooks](docs/core/hooks.md)：Hooks
   - [jobs](docs/core/jobs.md)：定时任务调度
   - [mcp](docs/core/mcp.md)：MCP 接入

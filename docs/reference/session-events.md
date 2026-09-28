@@ -1,4 +1,4 @@
-# session-events — 持久化会话事件清单（22 种）
+# session-events — 持久化会话事件清单（25 种）
 
 > 权威来源：`packages/core/src/protocol/session-events.ts`（运行时守卫与 meta 投影在 `core/src/session/events.ts`）。存储布局见 [storage](../core/storage.md)，读取接口 `GET /sessions/:id/events` 见 [http-api](../server/http-api.md)。
 
@@ -13,7 +13,7 @@ export type SessionEvent =
   | MessageEvent | MessageTruncatedEvent | CompactionEvent
   | MemoryEvent | SkillEvent | SystemEvent | SandboxCheckedEvent
   | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent
-  | TeamAuditEvent
+  | TeamAuditEvent | GoalEvent
 ```
 
 ## 逐类型字段
@@ -42,7 +42,7 @@ export type SessionEvent =
 
 | 类型 | 字段 |
 |------|------|
-| `run.started` | `at`、`trigger`（user/job/agent/team）——每 run 一条 |
+| `run.started` | `at`、`trigger`（user/job/agent/team/goal）——每 run 一条 |
 | `run.ended` | `at`、`stopReason`、`usage?`（正常终点的全程累计）、`error?`（stopReason 为 error 时）——每 run 恰一条，失败 run 也落 |
 | `permission.decided` | `at`、`confirmationId`、`decision`（once/project/global/reject/timeout）、`by`（cli/web/feishu/timeout）、`tool { callId, name, argsJson }`——每次裁决一条 |
 
@@ -75,3 +75,13 @@ export type SessionEvent =
 | `team.task.updated` | `version`、`at`、`teamId`、`task`（TaskSnapshot 全量） |
 
 TaskSnapshot 的字段（`protocol/team.ts`）：`id`、`subject`、`detail`、`status`、`assignee`（null = 未认领）、`dependencies`、`attempt`、`attemptId?`、`revision`、`createdAt`、`updatedAt`。
+
+### 目标循环（3 种，GoalEvent）
+
+`/goal` 目标循环的全部写路径（机制见 [goal](../core/goal.md)）。`goal.set` 进 meta 投影（写 `meta.goal`）并推进 updatedAt；`goal.checked`/`goal.cleared` 只审计——不进投影、不推进 updatedAt。循环是否自续（armed）是进程内开关，不在事件流里（见 [ADR-0002](../adr/0002-goal-armed-is-process-local.md)）。
+
+| 类型 | 字段 |
+|------|------|
+| `goal.set` | `at`、`op`（create/edit/pause/resume/state）、`goal`（GoalSnapshot 全量：`text`、`acceptance`、`state`、`setAt`、`rounds`、`totalRounds`、`tokensUsed`、`stoppedReason?`、`stoppedAt?`、`stoppedNote?`、`lastJudgeAt?`、`lastJudgeVerdict?`、`lastJudgeReason?`、`lastJudgeProgress?`） |
+| `goal.checked` | `at`、`round`、`gates`（GoalGateOutcome[]：`command`、`ok`、`exitCode?`、`outputTail`）、`verdict?`、`reason?`、`progress?`、`judgeError?`（`{kind: parse\|transport, message}`）、`tokens?`（判定器本轮用量）——每轮检查一条；门失败短路时无 verdict，判定器失败时只有 judgeError |
+| `goal.cleared` | `at`、`hadState`（移除前的状态） |

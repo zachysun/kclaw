@@ -2,7 +2,7 @@
 
 > 权威来源分散，每节开头标注。这篇收的是不属于前几篇主题的小枚举；消息 / 块 / 事件 / 帧 / 工具 / hook 的清单见同目录其余各篇。
 
-## 运行触发源（4 值）
+## 运行触发源（5 值）
 
 权威来源：`core/src/protocol/events.ts`（RunStartedPayload）、`protocol/wire.ts`（QueueEntry）、`protocol/session-events.ts`（run.started）。
 
@@ -12,6 +12,35 @@
 | `job` | 定时任务触发 |
 | `agent` | subagent 派生的子 run |
 | `team` | 团队收信箱投递 / 派活 |
+| `goal` | 目标循环自动续跑（`/goal`，处置固定 wait，机制见 [goal](../core/goal.md)） |
+
+## 目标状态与停止原因（GoalState 4 值 / GoalStopReason 10 值）
+
+权威来源：`core/src/goal/types.ts`。目标循环（`/goal`）的状态机与终止原因码，机制见 [goal](../core/goal.md)。
+
+GoalState：
+
+| 值 | 含义 |
+|----|------|
+| `active` | 循环在跑：空闲边缘自动检查并续跑 |
+| `paused` | 停摆（用户暂停/停止或机械原因），resume 恢复 |
+| `blocked` | 等一次人工裁决（连续确认超时），resume 恢复 |
+| `complete` | 终态（met/impossible），只能 clear 或改写目标 |
+
+GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余非终态 → paused）：
+
+| 值 | 含义 |
+|----|------|
+| `met` | 判定器裁决达成（→complete） |
+| `impossible` | 判定器裁决当前条件下无法达成（→complete） |
+| `round-limit` | 连续自续 10 轮未达成（发一条消息清零计数可继续） |
+| `budget-limit` | 生命周期 token 预算（2,000,000）耗尽，收尾轮完成后停止 |
+| `gate-exhausted` | 验收命令连续 3 轮未通过 |
+| `no-progress` | 判定器连续 3 轮判无进展 |
+| `permission` | 连续 2 轮出现确认超时（→blocked，等人工裁决） |
+| `judge-failed` | 判定器连续失败熔断（解析 3 次 / 传输 5 次）或检查流程故障 |
+| `run-error` | 上一轮运行出错（不自动重试，等用户） |
+| `user-stop` | 用户主动停止（同时掐活跃 run 与清空队列） |
 
 ## 权限模式 PermissionMode（5 值）
 

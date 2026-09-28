@@ -2,6 +2,7 @@ import type { FastifyError, FastifyInstance } from "fastify"
 import { isPermissionMode, PERMISSION_MODES, type KclawConfig, type MemorySystem, type SessionStore } from "@kclaw/core"
 import type { RunManager } from "../run.js"
 import type { TeamHost } from "../team.js"
+import type { GoalLoopHost } from "../goal-loop.js"
 
 /** Store dependencies for the session routes (injected by createApp). */
 export interface SessionStores {
@@ -27,6 +28,12 @@ export interface SessionStores {
    * view; the delete/purge cascade cancels the team's still-running members.
    */
   team?: TeamHost
+  /**
+   * The goal loop host (issue #47): drives the /sessions/:id/goal family
+   * (view/set/pause/resume/stop/clear). Missing (bare apps/tests) → the
+   * family answers 503.
+   */
+  goal?: GoalLoopHost
 }
 
 const NOT_FOUND = { error: "session not found" } as const
@@ -274,5 +281,91 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       }
       return stores.sessions.updateMeta(id, { dispositionOverride: d })
     })
+
+    // ---- /goal route family (issue #47) ----
+    // The loop host drives everything; these routes are the control surface.
+    // Host-level validation errors (empty text, sandbox unavailable for
+    // acceptance commands, terminal-state refusals) map to 400 with the
+    // message; a missing host (bare app) maps the whole family to 503.
+
+    // View: snapshot + derived counters + armed. `{goal: null}` = no goal.
+    scope.get("/sessions/:id/goal", async (request, reply) => {
+      const { id } = request.params as { id: string }
+      if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
+      if (stores.goal === undefined) return reply.code(503).send({ error: "goal loop not available" })
+      return { goal: stores.goal.view(id) ?? null }
+    })
+
+    // Set or edit the goal: {text, acceptance?: string[]}. Creating arms the
+    // loop and fires round 1 (queued as wait when the session is busy).
+    scope.post("/sessions/:id/goal", async (request, reply) => {
+      const { id } = request.params as { id: string }
+      if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
+      if (stores.goal === undefined) return reply.code(503).send({ error: "goal loop not available" })
+      const body = (request.body ?? {}) as { text?: unknown; acceptance?: unknown }
+      if (typeof body.text !== "string" || body.text.trim() === "") {
+        return reply.code(400).send({ error: "text must be a non-empty string" })
+      }
+      if (body.acceptance !== undefined && !isStringArray(body.acceptance)) {
+        return reply.code(400).send({ error: "acceptance must be an array of strings" })
+      }
+      try {
+        const goal = stores.goal.set(id, { text: body.text, acceptance: body.acceptance ?? [] })
+        return { goal, view: stores.goal.view(id) }
+      } catch (e) {
+        return reply.code(400).send({ error: e instanceof Error ? e.message : String(e) })
+      }
+    })
+
+    scope.post("/sessions/:id/goal/pause", async (request, reply) => {
+      const { id } = request.params as { id: string }
+      if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
+      if (stores.goal === undefined) return reply.code(503).send({ error: "goal loop not available" })
+      try {
+        return { goal: stores.goal.pause(id) }
+      } catch (e) {
+        return reply.code(400).send({ error: e instanceof Error ? e.message : String(e) })
+      }
+    })
+
+    scope.post("/sessions/:id/goal/resume", async (request, reply) => {
+      const { id } = request.params as { id: string }
+      if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
+      if (stores.goal === undefined) return reply.code(503).send({ error: "goal loop not available" })
+      try {
+        return { goal: stores.goal.resume(id) }
+      } catch (e) {
+        return reply.code(400).send({ error: e instanceof Error ? e.message : String(e) })
+      }
+    })
+
+    // Stop the loop AND the live run: aborts the active run, drops queued
+    // entries, persists paused(user-stop).
+    scope.post("/sessions/:id/goal/stop", async (request, reply) => {
+      const { id } = request.params as { id: string }
+      if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
+      if (stores.goal === undefined) return reply.code(503).send({ error: "goal loop not available" })
+      try {
+        return stores.goal.userStop(id)
+      } catch (e) {
+        return reply.code(400).send({ error: e instanceof Error ? e.message : String(e) })
+      }
+    })
+
+    scope.delete("/sessions/:id/goal", async (request, reply) => {
+      const { id } = request.params as { id: string }
+      if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
+      if (stores.goal === undefined) return reply.code(503).send({ error: "goal loop not available" })
+      try {
+        const cleared = stores.goal.clear(id)
+        return { ok: true, ...cleared }
+      } catch (e) {
+        return reply.code(400).send({ error: e instanceof Error ? e.message : String(e) })
+      }
+    })
   })
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((v) => typeof v === "string")
 }

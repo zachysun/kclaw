@@ -90,6 +90,7 @@ export function createOpenAiCompatClient(opts: {
             stream: true,
             stream_options: { include_usage: true },
             ...(req.maxTokens !== undefined ? { max_tokens: req.maxTokens } : {}),
+            ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
           }),
           signal,
         })

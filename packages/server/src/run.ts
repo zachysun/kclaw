@@ -316,9 +316,10 @@ export class RunManager {
         )
       }
     }
-    // 处置解析链：显式 > 会话覆盖 > 配置默认；job/agent 触发固定 wait
-    // （无人值守的排队行为必须可预测；agent 子 run 由派发器独占驱动）。
-    const disposition = input.trigger === "job" || input.trigger === "agent"
+    // 处置解析链：显式 > 会话覆盖 > 配置默认；job/agent/goal 触发固定 wait
+    // （无人值守的排队行为必须可预测；agent 子 run 由派发器独占驱动；goal
+    // 自续轮由消费器排队驱动，用户中途输入 steer 注入当前 run 的语义不变）。
+    const disposition = input.trigger === "job" || input.trigger === "agent" || input.trigger === "goal"
       ? "wait"
       : input.disposition ?? meta.dispositionOverride ?? config.sessions.defaultDisposition ?? "steer"
     const queue = this.#queues.get(sessionId) ?? []
@@ -743,8 +744,10 @@ export class RunManager {
     const entry = node.entry
     // 用户 run 真正开跑 = 真实用户输入到达模型：防自循环预算在此清零
     // （#44 原型定案——清零不能发生在提交时，排在其后的机器条目会借它
-    // 提前解锁，两次用户发言之间的唤醒上限就失守了）。
-    if (entry.trigger === "user") this.#wakeBudgets.delete(sessionId)
+    // 提前解锁，两次用户发言之间的唤醒上限就失守了）。goal 自续轮同样
+    // 清零：目标循环本身有九条独立停止条件（goal-loop.ts），不需要也不
+    // 应该再吃 #44 的预算——否则长目标里 subagent 投递会先被卡死。
+    if (entry.trigger === "user" || entry.trigger === "goal") this.#wakeBudgets.delete(sessionId)
     const input: EnqueueInput = {
       userText: entry.text,
       trigger: entry.trigger,

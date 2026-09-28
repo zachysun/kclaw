@@ -12,12 +12,12 @@
  */
 import { isPermissionMode, PERMISSION_MODES, PERMISSION_MODE_CONFIRMATIONS } from "@kclaw/core/permission-modes"
 import type { PermissionMode } from "@kclaw/core/permission-modes"
-import { MCP_STATE_LABELS } from "@kclaw/core/commands"
+import { MCP_STATE_LABELS, parseGoalCommandArgs } from "@kclaw/core/commands"
 import type { ParsedSlash } from "@kclaw/core/commands"
 import type { ApiClient } from "../api.js"
 
 export interface WebCommandCtx {
-  api: Pick<ApiClient, "get" | "post">
+  api: Pick<ApiClient, "get" | "post" | "del">
   sessionId: string
   /** Show a command result or hint in the panel's notice area. */
   notify(text: string): void
@@ -44,6 +44,10 @@ export interface WebCommandCtx {
    * plain notice when the panel does not support actions.
    */
   notifyAction?(action: () => void): void
+  /** 当前目标视图（无目标 = null；面板不在时 undefined）——/goal status 消费。 */
+  goal?: { goal: { state: string; stoppedReason?: string; text: string }; derived: { rounds: number; totalRounds: number } } | null
+  /** 目标动作后刷新面板（set 之外的动作面板状态由 REST 响应驱动）。 */
+  refreshGoal?(): void
 }
 
 /** Execute a parsed `/command`; false means the command is unknown. */
@@ -176,6 +180,50 @@ export async function runWebCommand(parsed: ParsedSlash, ctx: WebCommandCtx): Pr
         if (openMcp !== undefined) ctx.notifyAction?.(() => openMcp())
       } catch (err) {
         ctx.notify(`查看 MCP 状态失败: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      return true
+    }
+    case "goal": {
+      // /goal <描述> [verify: 命令]… 设定；status/stop/pause/resume/clear 动作。
+      // 动作与设定都走 REST；面板（浮动卡）随后刷新，通知条只给一句话回执。
+      const parsedGoal = parseGoalCommandArgs(parsed.args)
+      const base = `/sessions/${encodeURIComponent(ctx.sessionId)}/goal`
+      try {
+        if (parsedGoal.kind === "empty" || (parsedGoal.kind === "action" && parsedGoal.action === "status")) {
+          if (ctx.goal === undefined || ctx.goal === null) {
+            ctx.notify("本会话还没有目标。用法：/goal <目标描述>（可加 verify: <验收命令>）；动作：stop/pause/resume/clear")
+            return true
+          }
+          const g = ctx.goal
+          const stateLabel: Record<string, string> = { active: "进行中", paused: "已暂停", blocked: "待裁决", complete: "已终态" }
+          ctx.notify(
+            `目标（${stateLabel[g.goal.state] ?? g.goal.state}）：${g.goal.text} · 连续第 ${g.derived.rounds} 轮 · 累计 ${g.derived.totalRounds} 轮${g.goal.stoppedReason !== undefined ? ` · 停止原因 ${g.goal.stoppedReason}` : ""}`,
+          )
+          return true
+        }
+        if (parsedGoal.kind === "action") {
+          if (parsedGoal.action === "stop") {
+            const r = await ctx.api.post<{ aborted: boolean; dropped: number }>(`${base}/stop`)
+            ctx.notify(`目标循环已停止${r.aborted ? "（已中止当前运行）" : ""}${r.dropped > 0 ? `（清掉 ${r.dropped} 条排队消息）` : ""}`)
+          } else if (parsedGoal.action === "clear") {
+            await ctx.api.del(base)
+            ctx.notify("目标已移除")
+          } else {
+            await ctx.api.post(`${base}/${parsedGoal.action}`)
+            ctx.notify(parsedGoal.action === "pause" ? "目标循环已暂停（活跃运行不打断）" : "目标循环已恢复")
+          }
+          ctx.refreshGoal?.()
+          return true
+        }
+        await ctx.api.post(base, { text: parsedGoal.text, acceptance: parsedGoal.acceptance })
+        ctx.notify(
+          parsedGoal.acceptance.length > 0
+            ? `目标已设定（${parsedGoal.acceptance.length} 条验收命令），循环开始`
+            : "目标已设定（无验收命令，判定器只看对话证据），循环开始",
+        )
+        ctx.refreshGoal?.()
+      } catch (err) {
+        ctx.notify(`目标操作失败: ${err instanceof Error ? err.message : String(err)}`)
       }
       return true
     }

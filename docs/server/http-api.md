@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权 hook 加 75 个业务路由（健康/状态 2 个、会话 16 个、记忆 10 个、技能 16 个、hook 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、provider 管理 6 个、目录浏览 2 个、用量 1 个、MCP 管理 6 个、IM Channel 管理 4 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`providers.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`、`mcp.ts`、`channel.ts`）；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未组装时降级 503，技能组始终注册（只读与复用管理无组装依赖；提案治理子路由族组装后才可用、未组装整体 503），hook 组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则以文件为准，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权 hook 加 81 个业务路由（健康/状态 2 个、会话 22 个、记忆 10 个、技能 16 个、hook 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、provider 管理 6 个、目录浏览 2 个、用量 1 个、MCP 管理 6 个、IM Channel 管理 4 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`providers.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`、`mcp.ts`、`channel.ts`）；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未组装时降级 503，技能组始终注册（只读与复用管理无组装依赖；提案治理子路由族组装后才可用、未组装整体 503），hook 组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则以文件为准，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
@@ -39,13 +39,19 @@
 | POST | `/sessions/:id/mode` | 会话级权限模式切换（只影响此会话**之后**的 run，历史不动；机制见 [permissions](../core/permissions.md)） | `{mode: "readonly"\|"default"\|"acceptEdits"\|"trusted"\|"auto"}` 必填；非法值 400 `mode must be one of readonly \| default \| acceptEdits \| trusted \| auto` | `SessionMeta` |
 | GET | `/sessions/:id/team` | agent 团队面板数据（机制见 [agent-team](../core/agent-team.md)） | — | `{team, identity: "lead"\|"member", members, tasks}`（团队、本会话身份、组员名单含忙闲与当前任务、任务板快照）；会话不在任何团队 404 |
 | GET | `/sessions/:id/messages` | 读全部消息（对话/断线恢复的数据源，ChatPanel 用） | — | `Message[]`（事件流投影视图——`readMessages` 从 events.jsonl 过滤 `message` 事件按事件序返回；**排队未执行的消息不在其中**，见 `/queue`） |
-| GET | `/sessions/:id/events` | 完整事件流（会话历史的唯一权威数据；审计页的单源数据） | `since?`：非负整数，只返回数组下标 `>= since` 的事件（流是 append-only：只追加、不修改，下标即稳定增量游标；默认/0 = 全量；越界返回 `[]`；负数/非整数 400 `since must be a non-negative integer`）。带 `since` 时存储层走**尾部读**（`readEventsFrom`）：文件仍整体读入（无行偏移索引），但跳过的行不解析、不构建，增量拉取的开销随返回条数而非流总长走 | `SessionEvent[]`（append-only，按事件序；含 session.created / message / message.truncated / compaction / memory / skill / system / sandbox.checked / run.started / run.ended / permission.decided / team.* 等全部 22 种事件，见 [storage](../core/storage.md)） |
+| GET | `/sessions/:id/events` | 完整事件流（会话历史的唯一权威数据；审计页的单源数据） | `since?`：非负整数，只返回数组下标 `>= since` 的事件（流是 append-only：只追加、不修改，下标即稳定增量游标；默认/0 = 全量；越界返回 `[]`；负数/非整数 400 `since must be a non-negative integer`）。带 `since` 时存储层走**尾部读**（`readEventsFrom`）：文件仍整体读入（无行偏移索引），但跳过的行不解析、不构建，增量拉取的开销随返回条数而非流总长走 | `SessionEvent[]`（append-only，按事件序；含 session.created / message / message.truncated / compaction / memory / skill / system / sandbox.checked / run.started / run.ended / permission.decided / team.* / goal.* 等全部 25 种事件，见 [storage](../core/storage.md)） |
 | GET | `/sessions/:id/queue` | 排队消息快照：重连/刷新后校正客户端状态的全量依据 | — | `QueueEntry[]`（`queue.jsonl` 整文件读出，数组顺序即执行顺序；steer 条目排在可执行条目之后；空队列返回 `[]`） |
 | POST | `/sessions/:id/disposition` | 会话级发送处置覆盖（CLI `/steer`、`/wait` 与 Web 三选的 steer/wait 的持续生效存储；interrupt 在 Web 为一次性、CLI 为 `/interrupt` 一次性动作，均不写覆盖） | `{disposition: "steer"\|"wait"\|"interrupt"}` 必填；非法值 400 `disposition must be "steer", "wait" or "interrupt"` | `SessionMeta`（写入 `dispositionOverride`，优先于配置默认） |
 | GET | `/sessions/:id/compactions` | 压缩审计记录（事件流里 `compaction` 事件的只读视图） | — | `CompactionRecord[]`（从 events.jsonl 过滤 `compaction` 事件按事件序返回；无事件返回 `[]`） |
 | POST | `/sessions/:id/compact` | 手动压缩：跳过触发线立即压缩一次（机制见 [compaction](../core/compaction.md)） | `{focus?}`：可选非空字符串，作为重点说明进入两次摘要调用；空串/非字符串 400 `focus must be a non-empty string` | `{message: string, queued?: boolean}`：成功 `压缩了 N 段，剩 X 条原文消息`；无可压缩内容 `无可压缩内容`；会话忙时排队 `{queued: true, message: "已排队：当前运行结束后自动压缩"}` |
+| GET | `/sessions/:id/goal` | 目标循环视图（`/goal`，机制见 [goal](../core/goal.md)） | — | `{goal: GoalView \| null}`（快照 + 派生计数 + armed + 机械上限当前值；无目标 `null`） |
+| POST | `/sessions/:id/goal` | 设定或改写目标：create 立即起跑第一轮，edit 重新起跑（计数沿旧周期继续） | `{text}` 非空字符串必填；`acceptance?: string[]` 验收命令（字符串数组）。文本空/类型不对 400；host 校验失败（子会话、验收命令需要沙箱而沙箱不可用）400 带原因 | `{goal: GoalSnapshot, view: GoalView}` |
+| POST | `/sessions/:id/goal/pause` | 用户暂停（停自续，活跃 run 不动） | — | `{goal: GoalSnapshot}` |
+| POST | `/sessions/:id/goal/resume` | 恢复（armed + 立即检查；空闲则马上续跑）；终态（complete）会话 400 | — | `{goal: GoalSnapshot}` |
+| POST | `/sessions/:id/goal/stop` | 用户停止：同时中止活跃 run、清空排队、paused(user-stop) | — | `{goal, aborted, dropped}`（是否中止了活跃 run、清掉的排队条数） |
+| DELETE | `/sessions/:id/goal` | 移除目标（撤销排队中的 goal 轮，删除 `meta.goal`） | — | `{ok: true, hadState}`（移除前状态） |
 
-`:id` 不存在时上述全部返回 `404 {error:"session not found"}`；body 校验失败返回 400（如 `title must be a non-empty string`）。compact 的额外路径：会话活跃不拒绝而是**排队**（200 `{queued: true, message: "已排队：当前运行结束后自动压缩"}`，运行结束的收尾链自动冲刷）；队列非空仍拒绝 409 `还有 N 条排队消息，先处理或取消`（排队消息会连开多个 run，压缩窗口无法预期）；RunManager 未组装时 503。
+`:id` 不存在时上述全部返回 `404 {error:"session not found"}`；body 校验失败返回 400（如 `title must be a non-empty string`）。compact 的额外路径：会话活跃不拒绝而是**排队**（200 `{queued: true, message: "已排队：当前运行结束后自动压缩"}`，运行结束的收尾链自动冲刷）；队列非空仍拒绝 409 `还有 N 条排队消息，先处理或取消`（排队消息会连开多个 run，压缩窗口无法预期）；RunManager 未组装时 503。goal 路由族未组装 goal host 时（`createApp` 无 `opts.goal`，常见于测试）整体 503 `goal loop not available`。
 
 `SessionMeta` 字段（`packages/core/src/session/store.ts`）：
 
@@ -65,6 +71,10 @@ interface SessionMeta {
                               // 分层压缩状态（由 compaction 事件投影），字段语义见 compaction.md
   dispositionOverride?: "steer" | "wait" | "interrupt"
                               // 会话级发送处置覆盖（POST /disposition 写入；优先于 sessions.defaultDisposition）
+  parentSessionId?: string  // subagent 会话的父会话（普通会话没有，见 subagents.md）
+  systemBaseline?: { stable: { text: string; frozenAt: string }; live?: { text: string; frozenAt: string } }
+                              // 冻结的系统提示词基线（缓存纪律，system 事件投影 / compaction 事件清除，见 hooks.md）
+  goal?: GoalSnapshot        // 会话级目标快照（/goal；goal.set 全量替换、goal.cleared 删除，见 goal.md）
 }
 ```
 
@@ -265,7 +275,7 @@ web 的审计页（`packages/web/src/audit/AuditView.tsx`）演示了标准用�
 
 1. 会话选择跟随应用侧栏的全局选中（也支持 `?tab=audit&session=<id>` 深链）；
 2. `GET /sessions/:id/events?since=0` 获取该会话**完整事件流**（`SessionEvent[]`，append-only、按事件序）；
-3. 客户端按流序摊平成逐行审计：`message` 事件每条消息按块（block）摊平（role + 类型标签 + 摘要，点击展开完整块；assistant 消息的最后一块行上显示 token 用量与 LLM 耗时 `latencyMs`，tool_result 行显示执行耗时 `durationMs`）、`message.truncated` 事件渲染成"截断"行（消息截断 · 从 `<起点>` 起退出对话视图，编辑重试/重新生成的记录）、`compaction` 事件渲染成"压缩"行、`memory` 事件渲染成"记忆"行、`skill` 事件渲染成"技能"行（技能提案的产生/采纳/驳回/回退/删除各一行，点击展开完整事件字段，见 [skills](../core/skills.md)）、`system` 事件渲染成"系统提示词"行（开头片段 + 字符数，点击展开全文，按稳定段/实时段两段展示；与相邻上一条文本不同标"已变化"）、`sandbox.checked` 事件渲染成"沙箱"行（可用 / 不可用（原因）/ 已关闭）、`run.started`/`run.ended` 渲染成"运行"行（触发来源 / 停止原因 + 用量，失败带错误，与消息事件夹出每轮边界）、`permission.decided` 渲染成"权限"行（裁决 + 裁决者 + 工具身份，展开看参数）、会话元数据事件（created/renamed/deleted/restored/set）渲染成轻量"会话"行，`team.*` 七种事件渲染成"team"行（建团/添加/组员状态/收信/送达/任务创建/任务状态的摘要，点击展开完整内容）。**二十二种持久化事件全部渲染成行**；
+3. 客户端按流序摊平成逐行审计：`message` 事件每条消息按块（block）摊平（role + 类型标签 + 摘要，点击展开完整块；assistant 消息的最后一块行上显示 token 用量与 LLM 耗时 `latencyMs`，tool_result 行显示执行耗时 `durationMs`）、`message.truncated` 事件渲染成"截断"行（消息截断 · 从 `<起点>` 起退出对话视图，编辑重试/重新生成的记录）、`compaction` 事件渲染成"压缩"行、`memory` 事件渲染成"记忆"行、`skill` 事件渲染成"技能"行（技能提案的产生/采纳/驳回/回退/删除各一行，点击展开完整事件字段，见 [skills](../core/skills.md)）、`system` 事件渲染成"系统提示词"行（开头片段 + 字符数，点击展开全文，按稳定段/实时段两段展示；与相邻上一条文本不同标"已变化"）、`sandbox.checked` 事件渲染成"沙箱"行（可用 / 不可用（原因）/ 已关闭）、`run.started`/`run.ended` 渲染成"运行"行（触发来源 / 停止原因 + 用量，失败带错误，与消息事件夹出每轮边界）、`permission.decided` 渲染成"权限"行（裁决 + 裁决者 + 工具身份，展开看参数）、会话元数据事件（created/renamed/deleted/restored/set）渲染成轻量"会话"行，`team.*` 七种事件渲染成"team"行（建团/添加/组员状态/收信/送达/任务创建/任务状态的摘要，点击展开完整内容）、`goal.*` 三种渲染成"goal"行（设定/改写/暂停/恢复/状态迁移与每轮判定的一句话摘要，点击展开完整快照）。**二十五种持久化事件全部渲染成行**；
 4. 实时增量：页面私有 ws 连接订阅会话，收到 `session.appended` 通知帧（存储层写入磁盘成功后发出，先写入磁盘再广播）即 `GET /sessions/:id/events?since=<已有条数>` 增量拉取，append-only 下标做游标、断线重连后重拉补齐。
 
 只读、不修改任何状态、无独立 `/audit` 路由——事件流（`events.jsonl`，一行一个事件的 append-only 文件）是审计的唯一事实来源，HTTP 只是它的读取窗口。tool 消息上的 `grantedBy`（每个工具调用的放行原因）随 `message` 事件一起返回，是"谁批准了这个操作"的审计依据。

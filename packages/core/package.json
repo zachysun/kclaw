@@ -10,7 +10,8 @@
     "./mentions": "./dist/mentions.js",
     "./client-http": "./dist/client-http.js",
     "./protocol": "./dist/protocol/index.js",
-    "./permission-modes": "./dist/permissions/modes.js"
+    "./permission-modes": "./dist/permissions/modes.js",
+    "./sandbox": "./dist/sandbox/provider.js"
   },
   "scripts": {
     "test": "vitest run",

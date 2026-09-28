@@ -94,7 +94,7 @@ export type LlmRetrySink = (info: { attempt: number; error: unknown }) => void
 export interface EnqueueInput {
   userText: string
   /** team = 团队收信箱投递/任务派活（引擎或宿主发起）：不走技能/文件点名包装，处置按提交方显式声明（常规派活=steer）。 */
-  trigger: "user" | "job" | "agent" | "team"
+  trigger: "user" | "job" | "agent" | "team" | "goal"
   /**
    * Per-run model override (a job's configured model, or a client-forced
    * one). Priority per run: input.model > session meta model > daemon

@@ -50,7 +50,7 @@ export interface SandboxCheckedEvent {
 /** 一次对话运行的起点留痕（每 run 一条，与消息事件夹出一轮的边界）。 */
 export interface RunStartedEvent {
   type: "run.started"; at: string
-  trigger: "user" | "job" | "agent" | "team"
+  trigger: "user" | "job" | "agent" | "team" | "goal"
 }
 /**
  * 一次对话运行的终点留痕（每 run 恰一条，与 run.started 成对）。stopReason
@@ -109,4 +109,37 @@ export interface TeamTaskUpdatedEvent { type: "team.task.updated"; version: 1; a
 /** The team/* audit family. */
 export type TeamAuditEvent = TeamCreatedEvent | TeamMemberProvisionedEvent | TeamMemberSettledEvent | TeamMessageQueuedEvent | TeamMessageDeliveredEvent | TeamTaskCreatedEvent | TeamTaskUpdatedEvent
 
-export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent | MessageEvent | MessageTruncatedEvent | CompactionEvent | MemoryEvent | SkillEvent | SystemEvent | SandboxCheckedEvent | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent | TeamAuditEvent
+// ---- /goal events (issue #47) ----
+// goal.set 携带变更后的完整快照（所有变更形态经 op 区分）；goal.cleared
+// 整体移除；goal.checked 只留痕（判定器调用与验收输出，不进 meta 投影、
+// 不推进 updatedAt——与 skill/memory 审计事件同约定）。快照类型见
+// @kclaw/core/goal（GoalSnapshot）。
+
+export interface GoalSetEvent {
+  type: "goal.set"; at: string
+  /** 变更形态：create=设定；edit=改文本/验收；pause/resume=用户暂停恢复；state=消费器驱动的状态迁移（终态/守卫暂停）。 */
+  op: "create" | "edit" | "pause" | "resume" | "state"
+  goal: import("../goal/types.js").GoalSnapshot
+}
+export interface GoalClearedEvent { type: "goal.cleared"; at: string; hadState: import("../goal/types.js").GoalState }
+/**
+ * 一轮判定留痕（每轮至多一条）：验收门输出 + 判定器裁决（或失败原因）。
+ * gates 全过才有 verdict；判定器解析/传输失败时 judgeError 记录归类
+ * 与摘要（熔断计数的依据在消费器内存里，事件只留痕）。
+ */
+export interface GoalCheckedEvent {
+  type: "goal.checked"; at: string
+  /** 本轮序号（自续轮生命周期计数）。 */
+  round: number
+  gates: import("../goal/types.js").GoalGateOutcome[]
+  verdict?: import("../goal/types.js").GoalVerdict
+  reason?: string
+  progress?: string
+  judgeError?: { kind: "parse" | "transport"; message: string }
+  /** 判定器本次调用的 token 用量（重试轮合并计）。 */
+  tokens?: { inputTokens: number; outputTokens: number }
+}
+
+export type GoalEvent = GoalSetEvent | GoalClearedEvent | GoalCheckedEvent
+
+export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent | MessageEvent | MessageTruncatedEvent | CompactionEvent | MemoryEvent | SkillEvent | SystemEvent | SandboxCheckedEvent | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent | TeamAuditEvent | GoalEvent
