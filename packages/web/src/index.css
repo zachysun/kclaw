@@ -1790,13 +1790,24 @@ select:focus {
    scrolling log (pinned to the message stream it scrolled out of sight).
    Collapsed it shrinks to its summary chip; expanded it is a fixed-width
    card with an internally scrolling body. */
-.team-panel {
+.chat-float-panels {
   position: absolute;
   top: 4px;
   right: 12px;
   z-index: 30;
-  width: fit-content;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
   max-width: calc(100% - 24px);
+  pointer-events: none;
+}
+
+.team-panel,
+.goal-panel {
+  pointer-events: auto;
+  width: fit-content;
+  max-width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
@@ -1808,6 +1819,141 @@ select:focus {
   flex-direction: column;
   width: 340px;
   max-height: min(62vh, 560px);
+}
+
+.goal-panel[open] {
+  display: flex;
+  flex-direction: column;
+  width: 340px;
+  max-height: min(62vh, 560px);
+}
+
+.goal-panel-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 6px 12px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  list-style: none;
+  white-space: nowrap;
+}
+
+.goal-panel-head::-webkit-details-marker {
+  display: none;
+}
+
+.goal-panel-head::before {
+  content: "▸";
+  color: var(--accent);
+  margin-right: 6px;
+}
+
+.goal-panel[open] .goal-panel-head::before {
+  content: "▾";
+}
+
+.goal-panel-head.goal-state-active::after {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok, #3fb950);
+  margin-left: 2px;
+}
+
+.goal-panel-body {
+  border-top: 1px solid var(--border);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  overflow-y: auto;
+  min-height: 0;
+  font-size: 13px;
+}
+
+.goal-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.goal-acceptance {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.goal-acceptance code {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.goal-counters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px var(--space-3);
+  font-size: 12px;
+}
+
+.goal-judge {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-left: 3px solid var(--accent);
+  padding-left: var(--space-2);
+}
+
+.goal-judge-verdict {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.goal-stopped-note {
+  color: var(--warn, #d29922);
+  font-size: 12px;
+}
+
+.goal-actions,
+.goal-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.goal-actions button,
+.goal-edit-actions button {
+  font-size: 12px;
+  padding: 3px 10px;
+}
+
+.goal-actions .goal-stop {
+  color: var(--danger, #f85149);
+}
+
+.goal-actions .goal-clear {
+  color: var(--muted, inherit);
+}
+
+.goal-edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.goal-edit textarea {
+  width: 100%;
+  resize: vertical;
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2, var(--surface));
+  color: inherit;
 }
 
 .team-panel-head {

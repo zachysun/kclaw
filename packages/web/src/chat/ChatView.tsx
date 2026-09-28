@@ -14,6 +14,7 @@ import type { ChatState, ConfirmationCard, QuestionCard, RenderedBlock, Rendered
 import { parseTeamMail, type TeamMailParse } from "./model.js"
 import { MarkdownText } from "./Markdown.js"
 import { TeamPanelCard } from "./TeamPanel.js"
+import { GoalPanelCard, type GoalWebView } from "./GoalPanel.js"
 import type { TeamPanel } from "@kclaw/core/protocol"
 import { IconButton } from "../ui/IconButton.js"
 import { PencilIcon, RefreshIcon } from "../ui/icons.js"
@@ -152,9 +153,21 @@ export interface ChatViewProps {
     onTalkTo: (name: string | null) => void
     onStopMember: (sessionId: string) => void
   }
+  /**
+   * /goal 目标循环面板（issue #47）：视图存在即渲染浮动卡（与团队卡同
+   * 挂载位）。动作全部经回调上抛（ChatPanel 发 REST 后刷新视图）。
+   */
+  goal?: {
+    view: GoalWebView
+    onPause: () => void
+    onResume: () => void
+    onStop: () => void
+    onClear: () => void
+    onEdit: (text: string, acceptance: string[]) => void
+  }
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Suggestion-menu state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -329,14 +342,30 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
       {/* The team panel floats over the chat area's top-right corner (outside
           the scrolling log): pinned to the message stream it scrolled out of
           sight with any history. The whole panel folds to a summary chip. */}
-      {team !== undefined && (
-        <TeamPanelCard
-          panel={team.panel}
-          target={team.target}
-          onTalkTo={team.onTalkTo}
-          onStopMember={team.onStopMember}
-          onOpenAudit={onOpenAudit}
-        />
+      {/* Floating cards (team + goal) stack in one column at the chat
+          area's top-right corner, outside the scrolling log. */}
+      {(team !== undefined || goal !== undefined) && (
+        <div className="chat-float-panels">
+          {team !== undefined && (
+            <TeamPanelCard
+              panel={team.panel}
+              target={team.target}
+              onTalkTo={team.onTalkTo}
+              onStopMember={team.onStopMember}
+              onOpenAudit={onOpenAudit}
+            />
+          )}
+          {goal !== undefined && (
+            <GoalPanelCard
+              view={goal.view}
+              onPause={goal.onPause}
+              onResume={goal.onResume}
+              onStop={goal.onStop}
+              onClear={goal.onClear}
+              onEdit={goal.onEdit}
+            />
+          )}
+        </div>
       )}
       {view.error !== undefined && (
         <div className="chat-error" data-testid="chat-error" role="alert">

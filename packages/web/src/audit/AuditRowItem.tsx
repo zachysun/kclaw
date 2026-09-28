@@ -11,6 +11,7 @@ import {
   blockFullContent, blockSummary, blockTypeLabel, decisionFullContent, decisionSummary, fmtMs, fmtRowTime, fmtTokens, fmtUsage,
   memoryFullContent, memorySummary, rowTime, runSummary, sandboxFullContent, sandboxSummary, skillSummary, truncationSummary,
   sessionFullContent, sessionSummary, summarize, systemFullText, teamFullContent, teamSummary,
+  goalFullContent, goalSummary,
 } from "./model.js"
 
 export interface AuditRowItemProps {
@@ -75,6 +76,8 @@ function rowLabel(row: AuditRow): string {
       return "team"
     case "skill":
       return "skill"
+    case "goal":
+      return "goal"
   }
 }
 
@@ -104,6 +107,8 @@ function rowSummary(row: AuditRow): string {
       return teamSummary(row.event)
     case "skill":
       return skillSummary(row.event)
+    case "goal":
+      return goalSummary(row.event)
   }
 }
 
@@ -159,6 +164,8 @@ function rowFull(row: AuditRow): string {
       return teamFullContent(row.event)
     case "skill":
       return JSON.stringify(row.event, null, 2)
+    case "goal":
+      return goalFullContent(row.event)
   }
 }
 

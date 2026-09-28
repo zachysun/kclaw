@@ -38,6 +38,7 @@ import {
 import { useSilentFetch } from "../daemon-clients.js"
 import { runWebCommand } from "./commands.js"
 import { ChatView, type CompactionRecordView, type Disposition, type PendingAttachment } from "./ChatView.js"
+import type { GoalWebView } from "./GoalPanel.js"
 import type { TeamPanel } from "@kclaw/core/protocol"
 
 export interface ChatPanelProps {
@@ -156,6 +157,39 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
         teamFetchBusy.current = false
       })
   }, [api, sessionId])
+  // /goal 目标循环视图（GET /sessions/:id/goal；goal:null = 无目标，不渲染）。
+  // 拉取时机：会话切换、goal.* 追加帧（判定/状态迁移的即时刻画）、动作后
+  // 手动刷新；armed+active 时 5s 轮询兜底（判定器在 daemon 侧异步推进，
+  // 不发本会话的流，轮询是面板跟上进度的唯一途径；armed=false 的重启后
+  // 待恢复态不轮询——没有会变化的东西）。
+  const [goalView, setGoalView] = useState<GoalWebView | null>(null)
+  const goalFetchBusy = useRef(false)
+  const goalSessionRef = useRef(sessionId)
+  const refreshGoal = useCallback((): void => {
+    if (goalFetchBusy.current) return
+    goalFetchBusy.current = true
+    const sid = sessionId
+    api
+      .get<{ goal: GoalWebView | null }>(`/sessions/${encodeURIComponent(sid)}/goal`)
+      .then((body) => {
+        if (goalSessionRef.current === sid) setGoalView(body.goal ?? null)
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        goalFetchBusy.current = false
+      })
+  }, [api, sessionId])
+  useEffect(() => {
+    goalSessionRef.current = sessionId
+    setGoalView(null)
+    refreshGoal()
+  }, [refreshGoal, sessionId])
+  useEffect(() => {
+    if (goalView?.goal.state !== "active" || goalView.armed !== true) return
+    const timer = setInterval(refreshGoal, 5000)
+    return () => clearInterval(timer)
+  }, [goalView, refreshGoal])
+
   // 一次性 interrupt 的复位基准：点「中断」
   // 不写会话级覆盖，这条发完切回该档——中断是瞬时意图，不做成模式（与 CLI
   // /interrupt 对齐，避免跨客户端"来一条、断一条"）。
@@ -289,6 +323,11 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
               updateView((v) => applyEvent(v, frame))
               // 空文本行 = 跨客户端排队的消息（本端无发送上下文）→ 拉快照补文本
               if (viewRef.current.queue.some((e) => e.text === "")) void refreshQueueText()
+              // goal.* 追加帧 = 目标快照/判定变化：面板立即刷新（比 5s 轮询快）。
+              if (frame.type === "session.appended") {
+                const eventType = (frame.payload as { eventType?: unknown }).eventType
+                if (typeof eventType === "string" && eventType.startsWith("goal.")) refreshGoal()
+              }
               // 团队面板跟随运行帧刷新：组长建团/派活/组员消息进出都会落在
               // 这几类帧上；组员自己的 run 帧不走本会话的流，由下面的定时
               // 轮询兜底。无团队时帧不触发拉取（面板为 null，切会话时已拉过）。
@@ -369,7 +408,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       cancelled = true
       client.close()
     }
-  }, [sessionId, api, ws, createWs, onSessionRenamed, refreshTeam])
+  }, [sessionId, api, ws, createWs, onSessionRenamed, refreshTeam, refreshGoal])
 
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
   const [models, setModels] = useState<string[]>([])
@@ -561,6 +600,8 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
         setMode: (m) => setPermissionMode(m),
         models,
         currentModel,
+        goal: goalView,
+        refreshGoal,
       })
       return
     }
@@ -579,7 +620,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     } catch {
       setNotice("连接不可用，请稍后重试")
     }
-  }, [sessionId, pendingAttachments, api, onCreateSession, onOpenSessions, onOpenMcp, handleSwitchModel, models, currentModel, updateView, disposition, skillRows, sendMessageRaw, teamTarget, refreshTeam])
+  }, [sessionId, pendingAttachments, api, onCreateSession, onOpenSessions, onOpenMcp, handleSwitchModel, models, currentModel, updateView, disposition, skillRows, sendMessageRaw, teamTarget, refreshTeam, goalView, refreshGoal])
 
   /** Upload dropped files and queue them for the next message. */
   const handleDrop = useCallback((event: React.DragEvent) => {
@@ -696,6 +737,40 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       .catch((err: unknown) => setNotice(`处置切换失败: ${err instanceof Error ? err.message : String(err)}`))
   }, [api, sessionId])
 
+  /** /goal 面板动作：全部走 REST，成功后刷新视图，失败进通知条。 */
+  const goalPost = useCallback(
+    (path: string, body?: unknown): void => {
+      api
+        .post(`/sessions/${encodeURIComponent(sessionId)}/goal${path}`, body)
+        .then(() => refreshGoal())
+        .catch((err: unknown) => setNotice(`目标操作失败: ${err instanceof Error ? err.message : String(err)}`))
+    },
+    [api, sessionId, refreshGoal],
+  )
+  const handleGoalPause = useCallback((): void => goalPost("/pause"), [goalPost])
+  const handleGoalResume = useCallback((): void => goalPost("/resume"), [goalPost])
+  const handleGoalStop = useCallback((): void => {
+    api
+      .post<{ aborted: boolean; dropped: number }>(`/sessions/${encodeURIComponent(sessionId)}/goal/stop`)
+      .then((r: { aborted: boolean; dropped: number }) => {
+        setNotice(`目标循环已停止${r.aborted ? "（已中止当前运行）" : ""}${r.dropped > 0 ? `（清掉 ${r.dropped} 条排队消息）` : ""}`)
+        refreshGoal()
+      })
+      .catch((err: unknown) => setNotice(`目标操作失败: ${err instanceof Error ? err.message : String(err)}`))
+  }, [api, sessionId, refreshGoal])
+  const handleGoalClear = useCallback((): void => {
+    api
+      .del(`/sessions/${encodeURIComponent(sessionId)}/goal`)
+      .then(() => {
+        setGoalView(null)
+      })
+      .catch((err: unknown) => setNotice(`目标操作失败: ${err instanceof Error ? err.message : String(err)}`))
+  }, [api, sessionId])
+  const handleGoalEdit = useCallback(
+    (text: string, acceptance: string[]): void => goalPost("", { text, acceptance }),
+    [goalPost],
+  )
+
   const clearNotice = useCallback((): void => {
     setNotice(null)
     setNoticeAction(null)
@@ -738,6 +813,14 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
             target: teamTarget,
             onTalkTo: handleTalkTo,
             onStopMember: handleStopMember,
+          }}
+          goal={goalView === null ? undefined : {
+            view: goalView,
+            onPause: handleGoalPause,
+            onResume: handleGoalResume,
+            onStop: handleGoalStop,
+            onClear: handleGoalClear,
+            onEdit: handleGoalEdit,
           }}
         />
       </div>
