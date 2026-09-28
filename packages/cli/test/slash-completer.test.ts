@@ -26,6 +26,7 @@ describe("slashCompleter", () => {
       "/mode",
       "/attach",
       "/compact",
+    "/goal",
       "/steer",
       "/wait",
       "/interrupt",

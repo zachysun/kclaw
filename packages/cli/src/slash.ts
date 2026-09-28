@@ -8,7 +8,7 @@
  * loop).
  */
 import { isCancel, select } from "@clack/prompts"
-import { MCP_STATE_LABELS, mcpGroupLabel, parseSlashInput, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
+import { MCP_STATE_LABELS, mcpGroupLabel, parseGoalCommandArgs, parseSlashInput, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
 import { isPermissionMode, PERMISSION_MODES, PERMISSION_MODE_CONFIRMATIONS } from "@kclaw/core"
 import type { AttachmentRef } from "@kclaw/core"
 import type { PermissionMode } from "@kclaw/core"
@@ -339,6 +339,53 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
         ctx.print(res.message ?? "已压缩")
       } catch (e) {
         ctx.print(`压缩失败: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    },
+  })
+
+  registry.set("goal", {
+    ...meta("goal"),
+    async run(args, ctx) {
+      const parsed = parseGoalCommandArgs(args)
+      const base = `/sessions/${ctx.sessionId}/goal`
+      try {
+        if (parsed.kind === "empty" || (parsed.kind === "action" && parsed.action === "status")) {
+          const body = (await ctx.client.request("GET", base)) as
+            | { goal: { goal: { state: string; text: string; stoppedReason?: string; stoppedNote?: string; acceptance: string[] }; derived: { rounds: number; totalRounds: number; tokensUsed: number } } | null }
+            | null
+          const view = body?.goal ?? null
+          if (view === null) {
+            ctx.print("本会话还没有目标。用法：/goal <目标描述>（可加 verify: <验收命令>，可多条）；动作：/goal stop|pause|resume|clear")
+            return
+          }
+          const stateLabel: Record<string, string> = { active: "进行中", paused: "已暂停", blocked: "待裁决", complete: "已终态" }
+          ctx.print(`目标（${stateLabel[view.goal.state] ?? view.goal.state}）：${view.goal.text}`)
+          ctx.print(`连续第 ${view.derived.rounds} 轮 · 累计 ${view.derived.totalRounds} 轮 · token ${view.derived.tokensUsed}`)
+          if (view.goal.acceptance.length > 0) ctx.print(`验收命令：${view.goal.acceptance.map((c) => `「${c}」`).join(" ")}`)
+          if (view.goal.stoppedNote !== undefined) ctx.print(view.goal.stoppedNote)
+          return
+        }
+        if (parsed.kind === "action") {
+          if (parsed.action === "stop") {
+            const r = (await ctx.client.request("POST", `${base}/stop`)) as { aborted: boolean; dropped: number }
+            ctx.print(`目标循环已停止${r.aborted ? "（已中止当前运行）" : ""}${r.dropped > 0 ? `（清掉 ${r.dropped} 条排队消息）` : ""}`)
+          } else if (parsed.action === "clear") {
+            await ctx.client.request("DELETE", base)
+            ctx.print("目标已移除")
+          } else {
+            await ctx.client.request("POST", `${base}/${parsed.action}`)
+            ctx.print(parsed.action === "pause" ? "目标循环已暂停（活跃运行不打断）" : "目标循环已恢复")
+          }
+          return
+        }
+        await ctx.client.request("POST", base, { text: parsed.text, acceptance: parsed.acceptance })
+        ctx.print(
+          parsed.acceptance.length > 0
+            ? `目标已设定（${parsed.acceptance.length} 条验收命令），循环开始`
+            : "目标已设定（无验收命令，判定器只看对话证据），循环开始",
+        )
+      } catch (e) {
+        ctx.print(`目标操作失败: ${e instanceof Error ? e.message : String(e)}`)
       }
     },
   })
