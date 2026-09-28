@@ -5,6 +5,51 @@ All notable changes to kclaw are documented in this file. The format is based on
 [semantic versioning](https://semver.org/) — note that the 0.x series makes no
 compatibility promises.
 
+## [0.4.0] - 2026-09-28
+
+### Added
+
+- **Project-scoped MCP servers** — MCP server configs now have two layers: a global
+  layer in `~/.kclaw/mcp.json` and a per-project layer in the workspace's
+  `.kclaw/mcp.json` (a same-name project entry overrides the global one wholesale).
+  Projects are discovered from session records, and a server connects lazily — only
+  when a session in its project actually runs. The WebUI MCP tab groups servers by
+  project with per-project sections and a movable add/edit form, the CLI prints the
+  same grouping, and env/header secret values are masked in every API response.
+- **Compaction token awareness** — compaction events record the context token counts
+  before and after each compaction, and the audit page shows them, so you can see
+  what each compaction actually saved.
+- **Daemon version reporting** — `kclaw daemon status` shows the running daemon's
+  version inline and prints a hint when it differs from the CLI's own version (the
+  daemon is running an older build and needs a rebuild plus a restart).
+- **Downloadable release archives** — pushing a `v*` tag now runs consistency checks
+  and the full test suite, then publishes a GitHub Release with an installable
+  tarball of the aggregate package and release notes taken from this changelog. CI
+  gained a node 24 leg alongside 22 and skips docs-only pushes.
+
+### Changed
+
+- **Skill evolution is on by default** — proposal-based skill evolution no longer
+  needs an explicit opt-in, and the proposals tab gains row metadata plus status and
+  kind filters.
+- **config.json is the only config file** — a legacy `config.yaml` is no longer read,
+  and writes no longer keep a `.bak` copy. Session, memory, and queue storage dropped
+  their pre-event-sourcing fallbacks together with the obsolete event fields
+  (`readonly`, `text`, `compactedSummary`); event streams written by older builds are
+  not migrated — the 0.x series makes no compatibility promises.
+
+### Fixed
+
+- Correctness fixes from an architecture review: hook definitions now have a single
+  source of truth, provider resolution and the memory facade own their edge cases,
+  and a few small behavior slips were corrected.
+- An MCP project layer whose config file resolves to the global `mcp.json` is no
+  longer mounted as a project (it would shadow itself).
+- Follow-up memory checks pointing at deleted sessions are cleared unconditionally
+  instead of piling up.
+- `skill_create` runs in parallel again, per the skill-evolution spec.
+
+
 ## [0.3.0] - 2026-09-19
 
 ### Added
