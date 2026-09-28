@@ -82,7 +82,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `team.maxActive` | `4` | 同时运行的组员上限；满员时新信在收信箱排队等空闲边投递 |
 | `team.mailbox.maxUnreadPerTarget` / `maxMessageBytes` | `64` / `65536` | 单个收信箱未读上限 / 单条信字节上限，超限投递方收到 error 结果 |
 | `team.taskBoard.maxTasks` | `64` | 任务板总量上限（含终态任务），超限建任务报错 |
-| `goals.judge` | `""` | `/goal` 判定器使用的 provider 条目名（见 [goal](./goal.md)），空 = 回退会话模型线（会话级 model → 默认条目）；循环的机械上限（轮数/token 预算等）是代码内常量，不进 config |
+| `goals.judge` | `""` | `/goal` 判定器使用的 provider 条目名（见 [goal](./goal.md)），空 = 回退会话模型线（会话级 model → 默认条目）；循环的机械上限（轮数/token budget 等）是代码内常量，不进 config |
 | `server.port` | 无（临时端口） | daemon 的固定监听端口（1-65535）：固定后 WebUI 地址跨重启稳定，不配则每次启动由操作系统分配临时端口。bin 的 `--port` 旗标优先于此字段；固定端口被占用是硬错误（报一行原因退出，绝不静默换端口——地址悄悄漂移正是固定端口要消灭的），非法值回退到临时端口并告警。见 [daemon](../server/daemon.md) |
 
 | `notify.channels` | `[]` | 定时任务终态通知渠道列表；为空即关闭（零开销）。条目 `{ name?, type, url, template? }`，`type` 三种：`bark`（POST JSON `{title, body}`）、`serverchan`（POST 表单 `title`+`desp`）、`webhook`（POST JSON，正文含 title/body 及全部 job 字段）。`template` 占位符：`{{job}}` `{{statusText}}` `{{status}}` `{{summary}}` `{{sessionId}}` `{{sessionUrl}}`，未知占位符渲染为空串 |
@@ -148,7 +148,7 @@ export function readJsonl(file: string): unknown[]
   - 内容类 7 种：`message`（一条消息）、`message.truncated`（编辑重试/重新生成的截断标记：从 `fromMessageId` 起的所有消息退出对话视图；事件流只追加这条标记、不改写任何历史行，可见性是读取端投影）、`compaction`（一次压缩的审计）、`memory`（一次记忆写入的审计）、`skill`（一条技能提案审计——提案的产生与治理状态流转各落一条，只做记录、权威数据在 `.proposals/` 的提案文件，见 [skills](./skills.md)）、`system`（一条系统提示词审计，每次对话运行落一条，附带 stable/live 两段拼装文本）、`sandbox.checked`（一条沙箱状态审计——每次对话运行检测后落一条 `{enabled, available, unavailableReason?}`）。
   - 运行档案 3 种：`run.started` / `run.ended`（每 run 一对，把该 run 的消息事件夹成一轮边界；失败 run 也落 `run.ended`，起点必有终点）、`permission.decided`（每次人工确认裁决的记录；被中止的确认不落）。<br>运行档案与 `system` / `sandbox.checked` 一样只写事件流、不进 meta 投影、不推进 `updatedAt`。`message.truncated` 不同（它是用户可见的会话动作，会推进 `updatedAt`；且当截断起点越过压缩锚点（`compaction.upto`）时，部分已压缩的历史被丢弃，压缩投影随之一并清除（摘要无法再代替被隐藏的消息；尾部截断）常规路径——不碰压缩投影）。
   - 协作 7 种（`team.created` / `team.member.provisioned` / `team.member.settled` / `team.message.queued` / `team.message.delivered` / `team.task.created` / `team.task.updated`）：agent 团队协作的审计记录，只追加在**组长**的事件流上（以团队目录为准，见 [agent-team](./agent-team.md)）；尽力而为（写失败降为警告、团队操作照常），与运行档案一样不进投影、不推进 `updatedAt`。
-  - 目标循环 3 种（`goal.set` / `goal.checked` / `goal.cleared`）：`/goal` 目标循环的全部写路径（见 [goal](./goal.md)）。`goal.set`（快照全量替换，含 create/edit/pause/resume/state 五种 op）与 `goal.cleared` 进 meta 投影（写/删 `goal` 字段）并推进 `updatedAt`；`goal.checked`（每轮检查的验收输出 + 判定裁决留痕）只审计，不进投影、不推进 `updatedAt`。
+  - 目标循环 3 种（`goal.set` / `goal.checked` / `goal.cleared`）：`/goal` 目标循环的全部写路径（见 [goal](./goal.md)）。`goal.set`（快照全量替换，含 create/edit/pause/resume/state 五种 op）与 `goal.cleared` 进 meta 投影（写/删 `goal` 字段）并推进 `updatedAt`；`goal.checked`（每轮检查的验收输出 + 判定裁决记录）只审计，不进投影、不推进 `updatedAt`。
 
   所有写入都先追加事件，再把事件汇入 meta.json 摘要（见下）。
 - **`meta.json`（派生摘要）**：类型 `SessionMeta`，由事件流经 `applyEvent` 逐条推导得出。它是「摘要」而非权威数据：删除或损坏都能从事件流完整重建（`meta()` 发现缺失或损坏时自动 `rebuildMeta`）。崩溃恢复时允许它暂时落后于事件流（落后不会丢数据）；但落后不会被后续写入自动追平（`appendEvent` 先读当前摘要、只汇入新事件）。只有 meta.json 缺失或损坏时才经 `rebuildMeta` 重放整条事件流。meta.json 整文件原子重写（`updateMeta` 合并 patch，`undefined` 键表示删除；`message` / `message.truncated` / `compaction` / `goal.set` / `goal.cleared` 事件会推进摘要的 `updatedAt`，`memory` / `skill` / `system` / `sandbox.checked` / `goal.checked` 事件不推进——审计类事件不算会话「更新」）。两条特殊的推导规则：`system` 事件把全文 upsert 进摘要的 `systemBaseline`（系统提示词的冻结基线，见下文），`compaction` 事件把 `systemBaseline` 清除（压缩改写了消息历史，提示词缓存必然全部失效，正是重新组装、重新冻结的时机）；`message.truncated` 在截断起点越过压缩锚点（`compaction.upto`）时一并清除压缩投影（部分被压缩的历史已随截断丢弃，摘要不能再代替它们）。
