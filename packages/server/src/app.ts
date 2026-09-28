@@ -8,6 +8,7 @@ import { bearerMatches } from "./auth.js"
 import { EventBus } from "@kclaw/core"
 import type { RunManager } from "./run.js"
 import type { TeamHost } from "./team.js"
+import type { GoalLoopHost } from "./goal-loop.js"
 import { registerWsRoutes } from "./ws.js"
 import { registerSessionRoutes } from "./routes/sessions.js"
 import { registerPermissionsRoutes } from "./routes/permissions.js"
@@ -75,6 +76,12 @@ export interface AppOptions {
    * and the delete/purge cascade cancels still-running member runs.
    */
   team?: TeamHost
+  /**
+   * The goal loop host (issue #47): the /sessions/:id/goal route family
+   * reads views and drives set/pause/resume/stop/clear through it. Absent
+   * (bare apps/tests) → the family answers 503.
+   */
+  goal?: GoalLoopHost
   /**
    * Built-in discovery sources for the /skills reuse routes (the four agent
    * convention directories). Defaults to @kclaw/core's BUILTIN_SOURCES;
@@ -225,7 +232,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   registerSkillRoutes(app, { paths, builtinSources: opts.builtinSources, pluginHomes: opts.pluginHomes, skillsEvolution: opts.skillsEvolution })
   // 切会话写入：POST /sessions 是 CLI /clear、/new 与 web 新建会话的共同底层，
   // 记忆系统在装配时才挂 clear 触发（缺省不触发，行为与未装配记忆时一致）。
-  registerSessionRoutes(app, { sessions, config, run: opts.run, memory: opts.memory, cancelBackgroundForParent: opts.cancelBackgroundForParent, team: opts.team })
+  registerSessionRoutes(app, { sessions, config, run: opts.run, memory: opts.memory, cancelBackgroundForParent: opts.cancelBackgroundForParent, team: opts.team, goal: opts.goal })
   if (opts.attachmentsDir !== undefined) {
     registerAttachmentRoutes(app, { sessions, attachmentsDir: opts.attachmentsDir })
   }

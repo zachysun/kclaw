@@ -62,6 +62,7 @@ import { createSubagentHost } from "./subagent.js"
 import type { FeishuChannel } from "./feishu/channel.js"
 import { createFeishuManager } from "./feishu/manager.js"
 import { createTeamHost } from "./team.js"
+import { GoalLoopHost } from "./goal-loop.js"
 import { startSchedulerTick } from "./scheduler-tick.js"
 import { startMemoryScheduler } from "./memory-scheduler.js"
 import { startSkillScheduler } from "./skill-scheduler.js"
@@ -399,6 +400,22 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // RunManager's engine deps need the facade (identity probe per run) — the
   // same late-bound getter breaks the cycle.
   const teamHost = createTeamHost({ config, sessions, bus, getRun })
+  // /goal 循环主机（issue #47）：与 team host 同一空闲边缘。armed 是进程
+  // 内开关——daemon 重启后目标快照还在（meta.goal），但循环不自动续，用户
+  // 显式 resume 才重新起跑（ADR-0002）。判定器模型线走 config.goals.judge
+  // 命中的条目（Model 页热生效链），缺省回退会话模型线。
+  const goalHost = new GoalLoopHost({
+    config,
+    sessions,
+    getRun,
+    usage,
+    model,
+    // 注入 llmFactory（测试）时判定器与运行共用注入客户端（memory.resolveLlm
+    // 同款约定）；生产走共享条目解析链，Model 页改动对判定器热生效。
+    resolveEntryLlm: (entryKey) => (opts.llmFactory !== undefined ? llm : llmForEntry(entryKey)),
+    home: paths.home,
+    log: (line) => console.error(`kclaw goal: ${line}`),
+  })
   const run = new RunManager({
     config,
     paths,
@@ -417,8 +434,14 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     },
     team: { facade: teamHost.facade },
     // Idle edge: a user chat run never passes through startRun, so the team
-    // host only learns that a busy lead/member freed up from this hook.
-    onSessionIdle: (sessionId) => teamHost.pump(sessionId),
+    // host only learns that a busy lead/member freed up from this hook. The
+    // goal host rides the same edge: every drained queue is a judging point
+    // for armed goal sessions (it re-checks busy/queue itself, so a team
+    // pump that refilled the queue just makes it skip).
+    onSessionIdle: (sessionId) => {
+      teamHost.pump(sessionId)
+      goalHost.onIdle(sessionId)
+    },
     // auto mode induction (batch C): one per-process streak counter threaded
     // through every run's assembly; threshold 0 disables induction.
     autoLearn: { counter: new AutoLearnCounter(config.permissions.autoLearnThreshold ?? 3) },
@@ -458,6 +481,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     run,
     cancelBackgroundForParent: subagentHost.cancelBackgroundForParent,
     team: teamHost,
+    goal: goalHost, // /sessions/:id/goal 路由族（issue #47）
     mcp: mcpManager,
     mainWorkspace: workspace,
     channel: feishuManager,
@@ -557,6 +581,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       await withStopTimeout(tick.stop(), stopTimeoutMs, "scheduler tick")
       await withStopTimeout(memoryTick.stop(), stopTimeoutMs, "memory scheduler")
       await withStopTimeout(skillTick.stop(), stopTimeoutMs, "skill scheduler")
+      await withStopTimeout(goalHost.dispose(), stopTimeoutMs, "goal loop")
       await withStopTimeout(feishuManager.stop(), stopTimeoutMs, "feishu channel")
       // project-file watchers first: no reconcile can race the manager teardown
       mcpProjects?.close()
