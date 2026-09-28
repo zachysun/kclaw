@@ -97,7 +97,7 @@ export interface BuiltinHookDeps {
   // user-message-land / autoname inputs (former onUserMessage closure state):
   // machine-originated provenance notes (job / subagent) riding the input message
   inputNotes: NoteBlock[]
-  trigger: "user" | "job" | "agent" | "team"
+  trigger: "user" | "job" | "agent" | "team" | "goal"
   /**
    * Subagent child run (the session's parentSessionId is set): the run is a
    * dispatched executor's only turn — memory injection, autoname, the follow

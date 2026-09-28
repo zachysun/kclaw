@@ -115,6 +115,7 @@ function toAnthropicPayload(req: LlmRequest): Record<string, unknown> {
     messages,
     tools: req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
     max_tokens: req.maxTokens ?? ANTHROPIC_DEFAULT_MAX_TOKENS,
+    ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
     stream: true,
   }
 }

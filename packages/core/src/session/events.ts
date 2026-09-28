@@ -2,6 +2,7 @@ import type {
   CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
   SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SessionEvent, SkillEvent, SystemEvent, TeamAuditEvent,
+  GoalCheckedEvent, GoalClearedEvent, GoalSetEvent,
 } from "../protocol/session-events.js"
 import type { SessionMeta } from "./store.js"
 
@@ -13,6 +14,7 @@ export type {
   CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
   SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SkillEvent, SystemEvent, TeamAuditEvent,
+  GoalCheckedEvent, GoalClearedEvent, GoalSetEvent,
 } from "../protocol/session-events.js"
 
 export function isMessageEvent(e: SessionEvent): e is MessageEvent { return e.type === "message" }
@@ -113,6 +115,17 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
     case "team.message.delivered":
     case "team.task.created":
     case "team.task.updated": break // 团队审计事件：真相在团队目录，事件只留痕，不动投影
+    case "goal.set":
+      // 快照全量替换（事件携带变更后的完整形态）；目标变更对用户可见，
+      // 推进 updatedAt（同 session.set 的口径）。
+      next.goal = event.goal
+      next.updatedAt = event.at
+      break
+    case "goal.cleared":
+      delete next.goal
+      next.updatedAt = event.at
+      break
+    case "goal.checked": break // 判定审计事件：只留痕，不动投影（真相快照在 goal.set 链上）
     default: {
       const unhandled: never = event
       void unhandled

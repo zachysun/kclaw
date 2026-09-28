@@ -447,8 +447,8 @@ describe("renameProviderEntry", () => {
     expect(cfg.providers.default).toBe("main")
   })
 
-  it("reference registry covers the three config slots (canary for new ones)", () => {
-    expect(PROVIDER_ENTRY_REFERENCES.length).toBe(3)
+  it("reference registry covers the four config slots (canary for new ones)", () => {
+    expect(PROVIDER_ENTRY_REFERENCES.length).toBe(4)
   })
 })
 

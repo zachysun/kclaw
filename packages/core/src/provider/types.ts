@@ -29,6 +29,12 @@ export interface LlmRequest {
   messages: ProviderMessage[]
   tools: ToolDefinition[]
   maxTokens?: number
+  /**
+   * Sampling temperature pass-through. Interactive runs leave it unset
+   * (provider default); the goal judge (issue #47) pins 0 for stable
+   * verdicts. Clients that cannot express it ignore the field.
+   */
+  temperature?: number
 }
 
 export type LlmStreamEvent =

@@ -7,6 +7,8 @@ import { writeFileAtomic } from "../storage/atomic.js"
 import { appendJsonlLine, readJsonl, readJsonlFrom } from "../storage/jsonl.js"
 import { applyEvent, isCompactionEvent, isMessageEvent, isMessageTruncatedEvent } from "./events.js"
 import type { MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent, SandboxCheckedEvent, SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent, TeamAuditEvent } from "./events.js"
+import type { GoalCheckedEvent, GoalClearedEvent, GoalSetEvent } from "./events.js"
+import type { GoalSnapshot } from "../goal/types.js"
 import type { AttachmentRef, QueueEntry } from "../protocol/wire.js"
 import type { PermissionMode } from "../permissions/modes.js"
 
@@ -46,6 +48,13 @@ export interface SessionMeta {
   systemBaseline?: { stable: { text: string; frozenAt: string }; live?: { text: string; frozenAt: string } }
   /** 会话级处置覆盖（/steer /wait、Web 三选）：优先于 sessions.defaultDisposition。 */
   dispositionOverride?: "steer" | "wait" | "interrupt"
+  /**
+   * 会话级目标快照（issue #47 /goal）：goal.set 事件全量替换、goal.cleared
+   * 删除——事件流唯一真相，投影只跟随。终态（complete）后仍保留在 meta 里
+   * 供展示，直到用户 clear。进程内的自续开关（armed）不持久化：重启后目标
+   * 还在但不会自动续跑（ADR-0002）。
+   */
+  goal?: GoalSnapshot
 }
 
 const META_FILE = "meta.json"
@@ -301,6 +310,21 @@ export class SessionStore {
   /** Append one team audit event（team/* 族：真相在团队目录，事件只留痕）; the projection stays untouched (不推进 updatedAt)。 */
   appendTeamAudit(id: string, event: TeamAuditEvent): void {
     this.appendEvent(id, event)
+  }
+
+  /** Append one goal snapshot mutation（goal.set：快照全量替换进投影，推进 updatedAt）。 */
+  appendGoalSet(id: string, event: Omit<GoalSetEvent, "type">): void {
+    this.appendEvent(id, { type: "goal.set", ...event })
+  }
+
+  /** Append one goal removal（goal.cleared：投影删除 goal，推进 updatedAt）。 */
+  appendGoalCleared(id: string, event: Omit<GoalClearedEvent, "type">): void {
+    this.appendEvent(id, { type: "goal.cleared", ...event })
+  }
+
+  /** Append one goal-check audit event（每轮判定至多一条；验收输出+裁决或失败）; the projection stays untouched (不推进 updatedAt)。 */
+  appendGoalChecked(id: string, event: Omit<GoalCheckedEvent, "type">): void {
+    this.appendEvent(id, { type: "goal.checked", ...event })
   }
 
   /** Read a session's persisted message queue (queue.jsonl), oldest-first; a missing/empty file yields []. */
