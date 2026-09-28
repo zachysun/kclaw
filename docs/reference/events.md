@@ -70,7 +70,7 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 
 | 事件 | payload 字段 |
 |------|--------------|
-| `run.started` | `trigger`（user/job/agent/team） |
+| `run.started` | `trigger`（user/job/agent/team/goal） |
 | `run.completed` | `stopReason`、`usage`（全程累计） |
 | `run.failed` | `error { code, message }` |
 | `message.created` | `message`（Message 全量） |

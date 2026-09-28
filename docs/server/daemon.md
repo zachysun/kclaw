@@ -26,7 +26,7 @@ export interface Daemon {
   port: number        // 实际绑定的端口（0 启动时为临时端口）
   token: string       // app 要求的 Bearer token（<home>/token）
   pid: number         // 本进程 pid，即 daemon.json 里记录的
-  stop(): Promise<void>   // 有界拆除：tick → 记忆调度器 → 技能调度器 → 飞书频道管理器（未启用时为 no-op）→ 项目发现（mcpProjects）→ mcp → app → memory → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
+  stop(): Promise<void>   // 有界拆除：tick → 记忆调度器 → 技能调度器 → goal 循环（等检查落定）→ 飞书频道管理器（未启用时为 no-op）→ 项目发现（mcpProjects）→ mcp → app → memory → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
 }
 
 export interface LaunchDaemonOptions {
@@ -118,6 +118,12 @@ createSubagentHost({config, sessions, bus, getRun})
                                     （会话删除时级联取消在跑的后台 subagent）。getRun 是晚绑闭包——
                                     spawner 要调 RunManager.cancel/submit，而 RunManager 的 deps
                                     又要 spawner，构造顺序上先建 host、再建 manager、随后回填
+createTeamHost / new GoalLoopHost   团队宿主（见 agent-team.md）与 /goal 循环主机
+                                    （见 goal.md）——同一晚绑 getRun 约定；goal host 的
+                                    判定器走 config.goals.judge 条目解析链（注入 llmFactory
+                                    的测试与运行客户端共用注入实现）；两 host 挂 RunManager
+                                    的同一空闲边缘（onSessionIdle：team pump → goal 检查），
+                                    goal 检查自查忙闲，team 刚投递的下一轮只会让它跳过
 new RunManager({...})               注入 usageStore、memory、skillsEvolution（run 收尾钩子
                                     与 skill_create 工具面的来源，见 skills.md）、
                                     extraTools: (workdir) => mcpManager.toolsFor(workdir)
@@ -126,11 +132,12 @@ new RunManager({...})               注入 usageStore、memory、skillsEvolution
                                     subagents: { spawner, collector, cancelBackgroundForParent }；见 run-manager。
                                     权限模式没有 daemon 级旗标——它是会话级事实（meta.mode），
                                     run 组装每 run 从会话 meta 读出（见 permissions/run-manager）
-createApp({home, token, stores, bus, run, mcp, mainWorkspace, configNotifier, attachmentsDir, usage, webDist, memory, skillsEvolution})
+createApp({home, token, stores, bus, run, mcp, mainWorkspace, configNotifier, attachmentsDir, usage, webDist, memory, skillsEvolution, goal})
                                     Fastify 应用（见 http-api）；attachmentsDir/usage 传入时
                                     对应的附件与用量路由才注册，mcp 提供 /mcp 的分组快照，mainWorkspace
                                     随快照回显（新增条目的默认目标组），memory 供 /memory 路由族，
-                                    skillsEvolution 供 /skills/proposals 提案治理路由族（未组装时该族 503）；
+                                    skillsEvolution 供 /skills/proposals 提案治理路由族（未组装时该族 503），
+                                    goal 供 /sessions/:id/goal 路由族（未组装时整体 503）；
                                     configNotifier 交给 provider 路由，改动持久化后发布
 await app.listen({ port: listenPort, host: "127.0.0.1" })   ← listenPort = opts.port ?? config.server?.port ?? 0；
                                     固定端口被占（EADDRINUSE）是硬错误：释放占位 daemon.json
@@ -206,6 +213,9 @@ withStopTimeout(memoryTick.stop(), 60s)
                                     // 停记忆调度器（定时 + 跟随保底）
 withStopTimeout(skillTick.stop(), 60s)
                                     // 停技能调度器（await 所有进行中的提炼）
+withStopTimeout(goalHost.dispose(), 60s)
+                                    // 等进行中的 goal 检查落定（判定器调用可能还在飞；
+                                    // 循环不自动续跑——重启后等用户 resume，见 goal.md）
 withStopTimeout(feishuManager.stop(), 60s)
                                     // 停飞书频道（未启用时为 no-op；断开长连接与总线订阅）
 mcpProjects?.close()                // 停项目发现（关闭全部项目文件 watch，丢弃挂着的

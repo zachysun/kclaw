@@ -48,6 +48,7 @@ kclaw chat
 - **Permissions & sandbox**: five permission modes: readonly (all writes and commands denied), default (each risky action confirmed one by one), acceptEdits (file writes inside the workspace allowed), trusted (no confirmation inside the sandbox and workspace), auto (judged from the user's repeated approval behavior; currently rule-based). An approval can be granted "just this once" / "for this project" / "globally"; the next similar operation is then allowed automatically.
 - **Subagent**: two types: (1) blocking — the lead agent waits for the result; (2) background — the lead agent can keep working in the meantime and is notified when the subagent finishes. A subagent is an independent session: it inherits the lead agent's working directory, uses a lean system prompt, and receives only the task description, not the lead agent's message history.
 - **Agent team**: the lead and the teammates are each independent sessions, communicating point-to-point via mailboxes, with a shared task board.
+- **Goal loop**: set a verifiable goal on a session (`/goal <goal> verify: <command>`); the daemon keeps driving rounds on its own — sandboxed acceptance commands plus an independent judge LLM (strict three-value verdict: not_met / met / impossible) decide at each run boundary whether to continue, with hard caps (consecutive rounds, lifetime token budget, no-progress and failure breakers) as the safety net.
 - **IM channel**: a Feishu (Lark) bot is currently supported.
 
 ---
@@ -96,6 +97,7 @@ pnpm test        # vitest for every package (cli/server quick checks need pnpm b
   - [agent-team](docs/core/agent-team.md): agent teams (lead + teammates, mailbox, task board)
   - [client-http](docs/core/client-http.md): the shared HTTP request layer
   - [compaction](docs/core/compaction.md): context compaction
+  - [goal](docs/core/goal.md): the /goal autonomous goal loop
   - [hooks](docs/core/hooks.md): the hook system
   - [jobs](docs/core/jobs.md): cron job scheduling
   - [mcp](docs/core/mcp.md): MCP integration
