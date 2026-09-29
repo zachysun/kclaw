@@ -58,6 +58,7 @@
 import { isCancel, select, multiselect, text } from "@clack/prompts"
 import { isPermissionMode, PERMISSION_MODES } from "@kclaw/core"
 import type { AnyAgentEvent, ConfirmationDecision, ConfirmationRequestedPayload, MessageQueuedPayload, PermissionMode, QuestionRequestedPayload } from "@kclaw/core"
+import { parseSendDisposition, resolveSendDisposition } from "@kclaw/core/protocol"
 import { join } from "node:path"
 import { createInterface, type Interface as RlInterface } from "node:readline"
 import { KclawClient } from "./client.js"
@@ -744,19 +745,19 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
   process.stdout.write(`kclaw · session ${sessionId}\n`)
   process.stdout.write(dim(`输入消息，/ 命令可用（Tab 补全），/exit 退出，Ctrl+C 取消当前 run\n`))
 
-  // 初始发送处置：会话 meta 的 dispositionOverride 优先，其次配置
-  // 默认，最后 steer。interrupt 覆盖原样带在本地状态里（回车直发会带上它，
-  // 服务端按一次性动作入队）；刚连上的 daemon 不可达时回落 steer。
+  // 初始发送处置（链正本在 core protocol/wire.ts）：会话覆盖 > 配置默认 >
+  // steer。interrupt 覆盖原样带在本地状态里（回车直发会带上它，服务端按
+  // 一次性动作入队）；刚连上的 daemon 不可达时回落 steer。
   const resolveInitialDisposition = async (): Promise<"steer" | "wait" | "interrupt"> => {
     try {
       const [meta, cfg] = await Promise.all([
-        client.request("GET", `/sessions/${sessionId}`) as Promise<{ dispositionOverride?: string }>,
-        client.request("GET", "/config") as Promise<{ sessions?: { defaultDisposition?: string } }>,
+        client.request("GET", `/sessions/${sessionId}`) as Promise<{ dispositionOverride?: unknown }>,
+        client.request("GET", "/config") as Promise<{ sessions?: { defaultDisposition?: unknown } }>,
       ])
-      if (meta.dispositionOverride === "interrupt") return "interrupt"
-      if (meta.dispositionOverride === "steer" || meta.dispositionOverride === "wait") return meta.dispositionOverride
-      const fallback = cfg.sessions?.defaultDisposition
-      return fallback === "wait" || fallback === "interrupt" ? fallback : "steer"
+      return resolveSendDisposition({
+        override: parseSendDisposition(meta.dispositionOverride),
+        configDefault: parseSendDisposition(cfg.sessions?.defaultDisposition),
+      })
     } catch {
       return "steer"
     }

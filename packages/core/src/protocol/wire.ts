@@ -13,6 +13,27 @@ import type { NoteKind } from "./blocks.js"
 /** How a send_message rides the queue: steer injects, wait queues, interrupt preempts. */
 export type SendDisposition = "steer" | "wait" | "interrupt"
 
+/** Parse an external disposition string (REST/JSON payload); anything else is undefined. */
+export function parseSendDisposition(value: unknown): SendDisposition | undefined {
+  return value === "steer" || value === "wait" || value === "interrupt" ? value : undefined
+}
+
+/**
+ * The disposition precedence chain — the queue's contract, single-sourced:
+ * an explicit per-send choice wins, then the session-level override, then
+ * the config default, then steer. The server's enqueue path resolves
+ * exactly this; clients use it for their initial selection, narrowing the
+ * inputs where their UI policy differs (e.g. the web never PRESELECTS the
+ * one-shot interrupt) instead of re-deriving the chain.
+ */
+export function resolveSendDisposition(parts: {
+  explicit?: SendDisposition
+  override?: SendDisposition
+  configDefault?: SendDisposition
+}): SendDisposition {
+  return parts.explicit ?? parts.override ?? parts.configDefault ?? "steer"
+}
+
 /**
  * A reference to an uploaded attachment file (the daemon mounts it as an
  * attachment block). One canonical shape for the three former hand-copies:

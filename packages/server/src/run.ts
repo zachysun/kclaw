@@ -42,6 +42,7 @@ import {
   resolveRunModelLine,
   estimateTokens,
 } from "@kclaw/core"
+import { resolveSendDisposition } from "@kclaw/core/protocol"
 
 /**
  * The manager's constructor view of the engine deps: RunEngineDeps
@@ -221,12 +222,17 @@ export class RunManager {
         )
       }
     }
-    // 处置解析链：显式 > 会话覆盖 > 配置默认；job/agent/goal 触发固定 wait
-    // （无人值守的排队行为必须可预测；agent 子 run 由派发器独占驱动；goal
-    // 自续轮由消费器排队驱动，用户中途输入 steer 注入当前 run 的语义不变）。
+    // 处置解析链（正本在 core protocol/wire.ts）：显式 > 会话覆盖 > 配置
+    // 默认；job/agent/goal 触发固定 wait（无人值守的排队行为必须可预测；
+    // agent 子 run 由派发器独占驱动；goal 自续轮由消费器排队驱动，用户中
+    // 途输入 steer 注入当前 run 的语义不变）。
     const disposition = input.trigger === "job" || input.trigger === "agent" || input.trigger === "goal"
       ? "wait"
-      : input.disposition ?? meta.dispositionOverride ?? config.sessions.defaultDisposition ?? "steer"
+      : resolveSendDisposition({
+          explicit: input.disposition,
+          override: meta.dispositionOverride,
+          configDefault: config.sessions.defaultDisposition,
+        })
     const queue = this.#queues.get(sessionId) ?? []
     const steer = this.#steerBuf.get(sessionId) ?? []
     if (queue.length + steer.length >= RunManager.QUEUE_LIMIT) {
