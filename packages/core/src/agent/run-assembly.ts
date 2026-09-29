@@ -521,6 +521,11 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // snapshot.
   if (sessionMeta?.mode === "readonly") dropSensitiveTools(tools, toolDefs)
 
+  // 发送面工具清单按名排序（code point 序，确定性）：MCP 连接恢复/重连后
+  // 视图迭代序可能变化，而 tools 在请求前缀的最前面，顺序一变整个 prompt
+  // cache 前缀失效。只排 wire 面（toolDefs）；executor 的 Map 顺序无关，不动。
+  toolDefs.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+
   // --- permission wiring (config gate + confirmation gateway) ---
   const pendingConfirmations = new Map<string, ToolCallBlock>()
 
@@ -818,7 +823,9 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       signal: controller.signal,
       llmAttempt: () => llmAttempt,
       hooks: chain,
-      toolResultKeep: config.sessions.toolResultKeep ?? 8,
+      // 0 = 不按条数省略（默认）：中段历史的逐字节稳定是 prompt cache 命中
+      // 的前提；显式配置 N≥1 的用户保留旧的滚动省略行为。
+      toolResultKeep: config.sessions.toolResultKeep ?? 0,
       loopMaxRepeats: config.sessions.toolLoopMaxRepeats,
       // 省略预算（省略线值）透传给打包台：预算装不下的工具输出以省略占位符发送；
       // 固定开销（系统提示词 + 工具定义）先行扣除，打包台只裁决消息内容

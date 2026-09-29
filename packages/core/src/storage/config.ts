@@ -116,7 +116,7 @@ export interface KclawConfig {
     compactPanicRatio?: number
     compactAheadRatio?: number
     compactPackRatio?: number
-    /** Tool results kept verbatim in the provider view. Default 8 (read site applies it). */
+    /** Tool results kept verbatim in the provider view. 0 = no count-based eviction (default). */
     toolResultKeep?: number
     /** 工具死循环守卫：同一工具调用（同名同参数）连续执行 N 次后，向该次结果附加换策略提醒。0 = 关闭；默认 5（读取处保底）。 */
     toolLoopMaxRepeats?: number

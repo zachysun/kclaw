@@ -649,6 +649,44 @@ describe("executeRun × usage 缓存字段链路", () => {
     expect((seen as { cacheReadTokens?: number }).cacheReadTokens).toBeUndefined()
   })
 
+  it("发给模型的工具清单按名排序（MCP 重连乱序不再击穿缓存前缀）", async () => {
+    const requests: Array<{ tools: Array<{ name: string }> }> = []
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        requests.push(req as unknown as { tools: Array<{ name: string }> })
+        yield { type: "text_delta", delta: "done" }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+      },
+    }
+    // 模拟两次 MCP 连接返回不同的视图迭代序：同名工具集合、不同顺序。
+    const orders = [
+      ["zed_tool", "alpha_tool", "mid_tool", "bash"],
+      ["bash", "mid_tool", "zed_tool", "alpha_tool"],
+    ]
+    let n = 0
+    const { engine, sessionId } = makeEngine({ llm })
+    engine.deps.extraTools = () => {
+      const order = orders[Math.min(n++, orders.length - 1)]!
+      return {
+        executors: new Map(order.map((name) => [name, {
+          risk: "safe", concurrency: "serial",
+          async execute() { return { status: "ok" as const, output: "ran" } },
+        }] as const)),
+        defs: order.map((name) => ({ name, description: `tool ${name}`, parameters: { type: "object" } })),
+      }
+    }
+    await executeRun(engine, handoff(sessionId, "第一轮"))
+    await executeRun(engine, handoff(sessionId, "第二轮（模拟重连后不同视图序）"))
+    expect(requests.length).toBe(2)
+    for (const req of requests) {
+      const names = req.tools.map((t) => t.name)
+      // 全量发送面（内置 + extra）按名 code point 序排列
+      expect(names).toEqual([...names].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)))
+    }
+    // 两次连接顺序不同，但发送面 tools 逐字节一致
+    expect(JSON.stringify(requests[1]!.tools)).toBe(JSON.stringify(requests[0]!.tools))
+  })
+
   it("链路级：loop → run-after → usage-ledger → SQLite 行打通（缺字段 run 写 NULL，带字段 run 落值）", async () => {
     const usageStore = new UsageStore(join(home, "usage.db"))
     let call = 0
