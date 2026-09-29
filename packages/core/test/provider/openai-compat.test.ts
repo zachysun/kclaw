@@ -36,6 +36,35 @@ describe("openai-compat client", () => {
     ])
   })
 
+  it("reads prompt_tokens_details.cached_tokens into cacheReadTokens; no write metric exists", async () => {
+    const fetchImpl = (async () => sseResponse([
+      { choices: [{ delta: { content: "ok" } }] },
+      {
+        choices: [{ delta: {}, finish_reason: "stop" }],
+        usage: { prompt_tokens: 100, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 80 } },
+      },
+    ])) as typeof fetch
+    const events = await collect(createOpenAiCompatClient({ baseUrl: "https://x", apiKey: "k", fetchImpl }))
+    // inputTokens stays the total prompt_tokens (already includes the cached part).
+    expect(events.at(-1)).toEqual({
+      type: "message_done",
+      stopReason: "end_turn",
+      usage: { inputTokens: 100, outputTokens: 2, cacheReadTokens: 80 },
+    })
+  })
+
+  it("keeps cache fields undefined (not 0) when usage carries no prompt_tokens_details", async () => {
+    const fetchImpl = (async () => sseResponse([
+      { choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: 2 } },
+    ])) as typeof fetch
+    const events = await collect(createOpenAiCompatClient({ baseUrl: "https://x", apiKey: "k", fetchImpl }))
+    expect(events.at(-1)).toEqual({
+      type: "message_done",
+      stopReason: "end_turn",
+      usage: { inputTokens: 5, outputTokens: 2 },
+    })
+  })
+
   it("maps reasoning_content to thinking_delta", async () => {
     const fetchImpl = (async () => sseResponse([
       { choices: [{ delta: { reasoning_content: "thinking..." } }] },

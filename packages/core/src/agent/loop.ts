@@ -210,7 +210,22 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
   }
 
   const all: Message[] = [...input.history, userMsg]
-  const totalUsage: Usage = { inputTokens: 0, outputTokens: 0 }
+  // 缓存字段初始 0（空和）；任一次调用缺该字段即翻成 undefined 并锁定——
+  // 后续再有值也不恢复，保证"所有调用都携带才求和"。
+  const totalUsage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+  // run.completed 事件统一从这里发射：缓存字段仅在 run 级聚合非 undefined
+  // 时携带（缺省 = 未知，事件流不出现显式 0）。
+  const emitRunCompleted = (stopReason: StopReason): void => {
+    emit(makeEvent("run.completed", {
+      stopReason,
+      usage: {
+        inputTokens: totalUsage.inputTokens,
+        outputTokens: totalUsage.outputTokens,
+        ...(totalUsage.cacheReadTokens !== undefined ? { cacheReadTokens: totalUsage.cacheReadTokens } : {}),
+        ...(totalUsage.cacheWriteTokens !== undefined ? { cacheWriteTokens: totalUsage.cacheWriteTokens } : {}),
+      },
+    }, ctx))
+  }
   // 压缩视图（运行起点来自 input.compaction，之后可被 compaction-check /
   // overflow-rescue 位置的钩子替换）：生效时 upto（含）之前的原文不再发送，
   // 脉络项由 toProviderMessages 垫在 messages[0]。all 里的原文不动——
@@ -239,7 +254,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
   // toProviderMessages on the next run, which some providers reject. A partial
   // message from a mid-stream abort takes the post-stream path instead.
   const finishAborted = (): RunOutcome => {
-    emit(makeEvent("run.completed", { stopReason: "aborted", usage: totalUsage }, ctx))
+    emitRunCompleted("aborted")
     return { stopReason: "aborted", totalUsage, messages: all }
   }
 
@@ -358,6 +373,12 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
     if (deps.signal?.aborted) stopReason = "aborted"
     totalUsage.inputTokens += usage.inputTokens
     totalUsage.outputTokens += usage.outputTokens
+    // 缓存字段字段级聚合：本次 run 的所有调用都携带该字段才求和；任一次缺失
+    // → run 级该字段 undefined（宁记未知，不把"不知道"混成 0 或部分和）。
+    if (usage.cacheReadTokens === undefined) totalUsage.cacheReadTokens = undefined
+    else if (totalUsage.cacheReadTokens !== undefined) totalUsage.cacheReadTokens += usage.cacheReadTokens
+    if (usage.cacheWriteTokens === undefined) totalUsage.cacheWriteTokens = undefined
+    else if (totalUsage.cacheWriteTokens !== undefined) totalUsage.cacheWriteTokens += usage.cacheWriteTokens
     // A failed call is terminated by llm.failed, not llm.completed — the
     // degenerate created→delta→completed triple only completes what streamed.
     if (streamError === undefined) {
@@ -365,7 +386,9 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       assistant.latencyMs = latencyMs
       emit(makeEvent("llm.completed", { usage, stopReason, latencyMs }, ctx))
       void deps.hooks.run("llm-after", {
-        usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens },
+        // 透传整个 Usage（含缓存字段）——这是外部钩子的协议面，收窄会让
+        // 外部永远见不到缓存指标。
+        usage,
         stopReason,
         latencyMs,
       }).catch(() => { /* llm-after has no fatal builtins; observation must not disturb the run */ })
@@ -467,7 +490,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
     }
 
     if (stopReason === "end_turn") {
-      emit(makeEvent("run.completed", { stopReason, usage: totalUsage }, ctx))
+      emitRunCompleted(stopReason)
       return { stopReason, totalUsage, messages: all }
     }
 
@@ -521,7 +544,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
 
     // max_tokens / stop_sequence / content_filter / aborted, or a tool_use
     // with no calls at all — terminate the run.
-    emit(makeEvent("run.completed", { stopReason, usage: totalUsage }, ctx))
+    emitRunCompleted(stopReason)
     return { stopReason, totalUsage, messages: all }
   }
 

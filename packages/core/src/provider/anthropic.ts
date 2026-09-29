@@ -122,7 +122,14 @@ function toAnthropicPayload(req: LlmRequest): Record<string, unknown> {
 
 interface AnthropicSseEvent {
   type?: string
-  message?: { usage?: { input_tokens?: number; output_tokens?: number } }
+  message?: {
+    usage?: {
+      input_tokens?: number
+      output_tokens?: number
+      cache_creation_input_tokens?: number
+      cache_read_input_tokens?: number
+    }
+  }
   index?: number
   content_block?: { type?: string; id?: string; name?: string }
   delta?: {
@@ -132,7 +139,12 @@ interface AnthropicSseEvent {
     partial_json?: string
     stop_reason?: string
   }
-  usage?: { output_tokens?: number }
+  usage?: {
+    output_tokens?: number
+    input_tokens?: number
+    cache_creation_input_tokens?: number
+    cache_read_input_tokens?: number
+  }
   error?: { type?: string; message?: string }
 }
 
@@ -193,16 +205,25 @@ export function createAnthropicClient(opts: {
         }
         throw llmHttpError(res.status, text)
       }
-      let usage: Usage = { inputTokens: 0, outputTokens: 0 }
+      // Usage fields kept separately so message_delta can last-wins any of
+      // them; inputTokens always re-sums to the documented identity
+      // non-cached + cache-read + cache-write (docs/core/provider.md).
+      // Undefined cache fields stay undefined: an endpoint without cache
+      // metrics is UNKNOWN, not zero.
+      let baseInput = 0
+      let cacheWrite: number | undefined
+      let cacheRead: number | undefined
+      let outputTokens = 0
       let finish: string | null = null
       try {
         for await (const line of sseDataLines(res.body)) {
           const ev = JSON.parse(line) as AnthropicSseEvent
           if (ev.type === "message_start") {
-            usage = {
-              inputTokens: ev.message?.usage?.input_tokens ?? 0,
-              outputTokens: ev.message?.usage?.output_tokens ?? 0,
-            }
+            const u = ev.message?.usage
+            baseInput = u?.input_tokens ?? 0
+            cacheWrite = u?.cache_creation_input_tokens
+            cacheRead = u?.cache_read_input_tokens
+            outputTokens = u?.output_tokens ?? 0
           } else if (ev.type === "content_block_start") {
             if (ev.content_block?.type === "tool_use") {
               yield {
@@ -221,7 +242,12 @@ export function createAnthropicClient(opts: {
             }
           } else if (ev.type === "message_delta") {
             if (ev.delta?.stop_reason != null) finish = ev.delta.stop_reason
-            if (ev.usage?.output_tokens != null) usage = { ...usage, outputTokens: ev.usage.output_tokens }
+            if (ev.usage != null) {
+              if (ev.usage.output_tokens != null) outputTokens = ev.usage.output_tokens
+              if (ev.usage.input_tokens != null) baseInput = ev.usage.input_tokens
+              if (ev.usage.cache_creation_input_tokens != null) cacheWrite = ev.usage.cache_creation_input_tokens
+              if (ev.usage.cache_read_input_tokens != null) cacheRead = ev.usage.cache_read_input_tokens
+            }
           } else if (ev.type === "message_stop") {
             break
           } else if (ev.type === "error") {
@@ -230,6 +256,12 @@ export function createAnthropicClient(opts: {
         }
       } catch (err) {
         rethrowClassified(err, signal, timeoutMs)
+      }
+      const usage: Usage = {
+        inputTokens: baseInput + (cacheWrite ?? 0) + (cacheRead ?? 0),
+        outputTokens,
+        ...(cacheRead !== undefined ? { cacheReadTokens: cacheRead } : {}),
+        ...(cacheWrite !== undefined ? { cacheWriteTokens: cacheWrite } : {}),
       }
       yield { type: "message_done", stopReason: normalizeStop(finish), usage }
     },

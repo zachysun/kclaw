@@ -14,7 +14,11 @@ interface ChatDelta {
 
 interface ChatChunk {
   choices?: Array<{ delta?: ChatDelta; finish_reason?: string | null }>
-  usage?: { prompt_tokens?: number; completion_tokens?: number }
+  usage?: {
+    prompt_tokens?: number
+    completion_tokens?: number
+    prompt_tokens_details?: { cached_tokens?: number }
+  }
 }
 
 function toApiMessages(req: LlmRequest): Array<Record<string, unknown>> {
@@ -120,7 +124,15 @@ export function createOpenAiCompatClient(opts: {
           const chunk: ChatChunk = JSON.parse(line)
           const delta = chunk.choices?.[0]?.delta
           if (chunk.usage) {
-            usage = { inputTokens: chunk.usage.prompt_tokens ?? 0, outputTokens: chunk.usage.completion_tokens ?? 0 }
+            // prompt_tokens already includes the cached part, so inputTokens
+            // stays the total. cached_tokens is the only cache metric this
+            // wire format has — no write side. Absent details = unknown, not 0.
+            const cached = chunk.usage.prompt_tokens_details?.cached_tokens
+            usage = {
+              inputTokens: chunk.usage.prompt_tokens ?? 0,
+              outputTokens: chunk.usage.completion_tokens ?? 0,
+              ...(cached !== undefined ? { cacheReadTokens: cached } : {}),
+            }
           }
           if (chunk.choices?.[0]?.finish_reason != null) finish = chunk.choices[0].finish_reason
           // Explicit emptiness checks: undefined, null and "" all carry no

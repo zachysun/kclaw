@@ -74,6 +74,71 @@ describe("runAgent tool message grantedBy", () => {
   })
 })
 
+describe("runAgent usage 缓存字段链路", () => {
+  const TOOL_WITH_CACHE: LlmStreamEvent[] = [
+    { type: "tool_call_started", index: 0, callId: "call_1", name: "exec" },
+    { type: "tool_call_delta", index: 0, delta: '{"command":"ls"}' },
+    {
+      type: "message_done", stopReason: "tool_use",
+      usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 6, cacheWriteTokens: 3 },
+    },
+  ]
+  const FINAL_NO_CACHE: LlmStreamEvent[] = [
+    { type: "text_delta", delta: "done" },
+    { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 5, outputTokens: 1 } },
+  ]
+  const FINAL_WITH_CACHE: LlmStreamEvent[] = [
+    { type: "text_delta", delta: "done" },
+    {
+      type: "message_done", stopReason: "end_turn",
+      usage: { inputTokens: 8, outputTokens: 1, cacheReadTokens: 4, cacheWriteTokens: 2 },
+    },
+  ]
+
+  it("llm-after 钩子收到的 usage 透传缓存字段（不再收窄成两字段）", async () => {
+    let seen: unknown
+    await runAgent(
+      { sessionId: "s", history: [], system: "", userText: "go" },
+      {
+        llm: scriptClient([FINAL_WITH_CACHE]),
+        model: "m",
+        hooks: chainOf(hook("watch", "llm-after", (ctx) => { seen = ctx.usage })),
+        onEvent: () => {}, onMessage: () => {},
+      } as Parameters<typeof runAgent>[1],
+    )
+    expect(seen).toEqual({ inputTokens: 8, outputTokens: 1, cacheReadTokens: 4, cacheWriteTokens: 2 })
+  })
+
+  it("totalUsage 字段级聚合：所有调用都携带时求和", async () => {
+    const { outcome } = await runWith2([TOOL_WITH_CACHE, FINAL_WITH_CACHE])
+    expect(outcome.totalUsage).toEqual({ inputTokens: 18, outputTokens: 3, cacheReadTokens: 10, cacheWriteTokens: 5 })
+  })
+
+  it("totalUsage 字段级聚合：任一次调用缺字段 → run 级该字段 undefined（不是 NaN 也不是部分和）", async () => {
+    const { outcome } = await runWith2([TOOL_WITH_CACHE, FINAL_NO_CACHE])
+    expect(outcome.totalUsage.inputTokens).toBe(15)
+    expect(outcome.totalUsage.outputTokens).toBe(3)
+    expect(outcome.totalUsage.cacheReadTokens).toBeUndefined()
+    expect(outcome.totalUsage.cacheWriteTokens).toBeUndefined()
+    expect(Number.isNaN(outcome.totalUsage.cacheReadTokens as unknown as number)).toBe(false)
+  })
+
+  async function runWith2(script: LlmStreamEvent[][]) {
+    const outcome = await runAgent(
+      { sessionId: "s", history: [], system: "", userText: "go" },
+      {
+        llm: scriptClient(script),
+        model: "m",
+        hooks: chainOf(),
+        onEvent: () => {},
+        onMessage: () => {},
+        tools: new Map([["exec", EXEC]]),
+      } as Parameters<typeof runAgent>[1],
+    )
+    return { outcome }
+  }
+})
+
 describe("runAgent default window", () => {
   it("default window is 200: a 100-message history is sent whole", async () => {
     const history = Array.from({ length: 100 }, (_, i) =>
