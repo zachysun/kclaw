@@ -627,7 +627,7 @@ describe("executeRun × usage 缓存字段链路", () => {
       async *stream(): AsyncIterable<LlmStreamEvent> {
         call++
         if (call === 1) {
-          yield { type: "tool_call_started", index: 0, callId: "call_1", name: "exec" }
+          yield { type: "tool_call_started", index: 0, callId: "call_1", name: "probe" }
           yield { type: "tool_call_delta", index: 0, delta: "{}" }
           yield {
             type: "message_done", stopReason: "tool_use",
@@ -642,8 +642,11 @@ describe("executeRun × usage 缓存字段链路", () => {
     const extra: HookEntry[] = [
       hook("watch-total", "run-after", (ctx) => { seen = ctx.outcome.totalUsage }, { failure: "skip" }),
     ]
-    const exec: ToolExecutor = { risk: "sensitive", concurrency: "serial", async execute() { return { status: "ok", output: "ran" } } }
-    const { engine, sessionId } = makeEngine({ llm, extraHooks: extra, tools: new Map([["exec", exec]]) })
+    // safe + non-"exec" name: keeps the permission gate out of the loop — this
+    // test is about the usage chain, and an "exec"-named sensitive tool parks
+    // on manual confirmation where no sandbox provider exists (CI linux).
+    const probe: ToolExecutor = { risk: "safe", concurrency: "serial", async execute() { return { status: "ok", output: "ran" } } }
+    const { engine, sessionId } = makeEngine({ llm, extraHooks: extra, tools: new Map([["probe", probe]]) })
     await executeRun(engine, handoff(sessionId))
     expect(seen).toEqual({ inputTokens: 14, outputTokens: 3 })
     expect((seen as { cacheReadTokens?: number }).cacheReadTokens).toBeUndefined()
@@ -694,7 +697,7 @@ describe("executeRun × usage 缓存字段链路", () => {
       async *stream(): AsyncIterable<LlmStreamEvent> {
         call++
         if (call === 1) {
-          yield { type: "tool_call_started", index: 0, callId: "call_1", name: "exec" }
+          yield { type: "tool_call_started", index: 0, callId: "call_1", name: "probe" }
           yield { type: "tool_call_delta", index: 0, delta: "{}" }
           // 第一次调用缺缓存字段（GLM 等端点形态）
           yield { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 10, outputTokens: 2 } }
@@ -704,11 +707,12 @@ describe("executeRun × usage 缓存字段链路", () => {
         }
       },
     }
-    const exec: ToolExecutor = { risk: "sensitive", concurrency: "serial", async execute() { return { status: "ok", output: "ran" } } }
+    // safe + non-"exec" name: same CI-sandbox reason as the test above.
+    const probe: ToolExecutor = { risk: "safe", concurrency: "serial", async execute() { return { status: "ok", output: "ran" } } }
     const { engine, sessionId } = makeEngine({
       llm,
       usageStore,
-      tools: new Map([["exec", exec]]),
+      tools: new Map([["probe", probe]]),
     })
     const s1 = sessionId
     await executeRun(engine, handoff(s1))
