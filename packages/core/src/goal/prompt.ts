@@ -11,6 +11,20 @@ import { GOAL_GATE_EXHAUSTED, GOAL_JUDGE_MAX_TOKENS } from "./limits.js"
 /** 判定器允许的输出 token 上限（请求组装处消费）。 */
 export const judgeMaxTokens = GOAL_JUDGE_MAX_TOKENS
 
+/**
+ * 判定器"无进展"的标记串：判定器 system 提示词的输出契约（没有进展
+ * 就写这个字）与循环消费侧的无进展检测共用同一常量。改这个字必须两端
+ * 一起变，此处是唯一出处。
+ */
+export const NO_PROGRESS_MARK = "无"
+
+/** progress 字段是否标记为无进展（缺失/空白/恰好是标记串）。 */
+export function noProgressMarked(progress: string | undefined): boolean {
+  if (progress === undefined) return true
+  const t = progress.trim()
+  return t === "" || t === NO_PROGRESS_MARK
+}
+
 /** 闭合标签逃逸：证据里出现的 `</goal-...>` 会被打散，防提示词提前收口。 */
 function escapeClosingTags(text: string): string {
   return text.replace(/<\/(goal-[\w-]+)>/g, "<\\$1>")
@@ -39,7 +53,7 @@ export function judgeSystemPrompt(): string {
     "3. impossible 要慎用：拿不准就用 not_met，让下一轮继续。",
     "",
     "输出契约：只输出一个 JSON 对象，不要任何其他文字、代码围栏或解释：",
-    '{"verdict":"not_met|met|impossible","reason":"一句话说明依据","progress":"一句话概括本轮进展，没有进展就写无"}',
+    `{"verdict":"not_met|met|impossible","reason":"一句话说明依据","progress":"一句话概括本轮进展，没有进展就写${NO_PROGRESS_MARK}"}`,
     "",
     "reason 与 progress 用中文，各不超过 120 字。",
   ].join("\n")

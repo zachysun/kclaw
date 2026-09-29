@@ -57,7 +57,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 | `jobs/` | JobScheduler（定时任务调度） |
 | `mcp/` | MCP（Model Context Protocol：给模型接入外部工具的开放协议）客户端管理器 |
 | `team/` | agent 团队的存储（TeamStore：团队目录/收信箱/任务板）与提示词（见 [agent-team](./core/agent-team.md)） |
-| `goal/` | /goal 目标循环的领域模块：快照类型、机械上限常量、判定器与验收门、三组注入提示词（消费器在 server 的 goal-loop.ts，见 [goal](./core/goal.md)） |
+| `goal/` | /goal 目标循环的领域模块：快照类型、机械上限常量、判定器与验收门、三组注入提示词、事件派生纯函数（derive.ts）与轮决策纯函数（check.ts：九条停止条件与续跑/收尾判定）（消费器在 server 的 goal-loop.ts，见 [goal](./core/goal.md)） |
 | `notify/` | 任务完成通知 |
 
 根级另有 `bus.ts`（EventBus，进程内事件分发）与 `client-http.ts`（CLI/WebUI 共享的 HTTP 请求基座：自动附带 Bearer token、提取错误信息、处理 204/空响应，经 `@kclaw/core/client-http` 子路径出口；不 import 任何 Node 专属模块，浏览器可以直接打包）。`mentions.ts`（`@` 文件引用的纯函数层：提取、候选补全与模型侧包装文本，经 `@kclaw/core/mentions` 子路径出口；机制见 [file-mentions](./core/file-mentions.md)）同为浏览器可引用的纯模块。`sandbox/`（exec 工具的操作系统级沙箱：Seatbelt/bwrap 检测与包装，见 [sandbox](./core/sandbox.md)）是内部模块，不经入口导出，由 run 组装直接 import。

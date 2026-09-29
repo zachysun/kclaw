@@ -12,10 +12,14 @@ export type {
   GoalGateOutcome,
   GoalJudgeErrorKind,
   GoalJudgeError,
+  DerivedLoop,
 } from "./types.js"
 export { judgeGoal, buildEvidenceWindow } from "./judge.js"
 export type { JudgeGoalInput, JudgeGoalOutput } from "./judge.js"
 export { runAcceptanceGates } from "./gate.js"
+export { deriveGoalLoop } from "./derive.js"
+export { goalPreGateGuard, decideGoalRound } from "./check.js"
+export type { GoalRoundDecision } from "./check.js"
 export {
   firstRoundUserText,
   continuationUserText,
@@ -25,6 +29,8 @@ export {
   goalLoopNote,
   judgeSystemPrompt,
   judgeUserContent,
+  NO_PROGRESS_MARK,
+  noProgressMarked,
 } from "./prompt.js"
 export {
   GOAL_MAX_ROUNDS,

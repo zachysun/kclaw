@@ -1,6 +1,6 @@
 # goal — 目标循环（/goal）
 
-> 权威来源：`packages/core/src/goal/`（领域模块：类型/上限/提示词/判定器/验收门）+ `packages/server/src/goal-loop.ts`（daemon 侧驱动主机 `GoalLoopHost`）。HTTP 路由族见 [http-api](../server/http-api.md)，持久化事件见 [session-events](../reference/session-events.md)。
+> 权威来源：`packages/core/src/goal/`（领域模块：类型/上限/提示词/判定器/验收门/事件派生/轮决策）+ `packages/server/src/goal-loop.ts`（daemon 侧驱动主机 `GoalLoopHost`：只做副作用编排——执行验收门、调判定器、写事件、按 core 给出的决策入队或停摆）。HTTP 路由族见 [http-api](../server/http-api.md)，持久化事件见 [session-events](../reference/session-events.md)。
 
 ## 它是什么
 
@@ -24,7 +24,7 @@
   → goal.set(create) 事件 + armed + 第一轮入队（trigger:"goal"，固定 wait）
   → run 正常执行（工具循环、权限判定、沙箱，与普通 run 完全同一套）
   → 队列排空（RunManager 的空闲边缘 onSessionIdle，与 team host 同一挂载点）
-  → GoalLoopHost 一轮检查（#check，互斥）：
+  → GoalLoopHost 一轮检查（#check，互斥；九条停止条件与续跑决策是纯函数，在 core/goal 的 check.ts）：
       ① 上一轮 run 出错        → paused(run-error)，不自动重试
       ② 连续 2 轮确认超时       → blocked(permission)，等人来
       ③ 验收门（有命令才跑）    → 失败短路判定器，直接进分支
@@ -78,7 +78,7 @@
 | `goal.checked` | 每轮检查一条：轮位、各验收门结果、判定裁决（verdict/reason/progress）或判定器错误、判定器 token；不进 meta 投影、不推进 updatedAt，纯审计 |
 | `goal.cleared` | 移除目标时一条，`hadState` 记移除前的状态 |
 
-`GoalLoopHost.#derive` 从最近一次 `goal.set(op:create)` 起单次前向扫描：`run.started(trigger:"goal")` 计轮、`run.ended.usage` 与 `goal.checked.tokens` 累计 token、run 边界配对出确认超时、尾部 `goal.checked` 回溯出四类连败（同性质连续累积，任何不同性质的检查断开计数）。快照（`meta.goal`）里的 `rounds`/`totalRounds`/`tokensUsed` 是检查时刻同步进去的展示缓存，权威数据是事件流。
+`core/goal` 的 `deriveGoalLoop`（host 侧 `#derive` 只负责读事件流，读流失败按空事件派生全零）从最近一次 `goal.set(op:create)` 起单次前向扫描：`run.started(trigger:"goal")` 计轮、`run.ended.usage` 与 `goal.checked.tokens` 累计 token、run 边界配对出确认超时、尾部 `goal.checked` 回溯出四类连败（同性质连续累积，任何不同性质的检查断开计数）。快照（`meta.goal`）里的 `rounds`/`totalRounds`/`tokensUsed` 是检查时刻同步进去的展示缓存，权威数据是事件流。
 
 **armed 是进程内开关**（`GoalRuntime.armed`）：daemon 重启后目标快照还在（meta.goal），但循环**不自动续**——目标循环是"当时授权这台 daemon 自主花钱"的语义，重启即收回，用户显式 resume 才重新起跑。设计取舍见 [ADR-0002](../adr/0002-goal-armed-is-process-local.md)。
 

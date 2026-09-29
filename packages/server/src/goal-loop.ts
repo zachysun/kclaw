@@ -13,27 +13,32 @@
  * 快照里的计数字段是检查时刻的投影缓存，展示用。
  */
 import {
-  continuationUserText,
+  decideGoalRound,
+  deriveGoalLoop,
   firstRoundUserText,
-  gateFailureUserText,
   goalLoopNote,
+  goalPreGateGuard,
   judgeGoal,
-  judgeUnavailableUserText,
   runAcceptanceGates,
-  windDownUserText,
-  GOAL_APPROVAL_TIMEOUT_ROUNDS,
-  GOAL_GATE_EXHAUSTED,
-  GOAL_JUDGE_PARSE_BREAKER,
-  GOAL_JUDGE_TRANSPORT_BREAKER,
   GOAL_MAX_ROUNDS,
-  GOAL_NO_PROGRESS_LIMIT,
   GOAL_TOKEN_BUDGET,
 } from "@kclaw/core"
-import type { GoalGateOutcome, GoalJudgeResult, GoalSnapshot, GoalStopReason, LlmClient, QueueNote, SessionStore, UsageStore, KclawConfig } from "@kclaw/core"
-import { resolveRunModel } from "@kclaw/core"
+import type {
+  DerivedLoop,
+  EnqueueInput,
+  GoalGateOutcome,
+  GoalJudgeResult,
+  GoalSnapshot,
+  GoalStopReason,
+  LlmClient,
+  QueueNote,
+  SessionStore,
+  UsageStore,
+  KclawConfig,
+} from "@kclaw/core"
+import { resolveRunModelLine } from "@kclaw/core"
 import { createExecSandbox } from "@kclaw/core/sandbox"
-import type { GoalCheckedEvent, SessionEvent } from "@kclaw/core/protocol"
-import type { RunManager } from "./run.js"
+import type { SessionEvent } from "@kclaw/core/protocol"
 import { createTracker } from "./host-kit.js"
 
 /** 进程内运行时：armed 是 ADR-0002 的核心（重启后目标在、循环不续）。 */
@@ -45,40 +50,32 @@ interface GoalRuntime {
   lastEnqueuedMessageId?: string
 }
 
-/** 检查时刻从事件流派生的循环状态（单次前向扫描的产物）。 */
-export interface DerivedLoop {
-  /** 生命周期自续轮数（自 goal.set create 起）。 */
-  totalRounds: number
-  /** 连续自续轮数（user 触发的 run 断开）。 */
-  rounds: number
-  /** 生命周期 token 消耗（run 用量 + 判定器用量）。 */
-  tokensUsed: number
-  /** 判定器连续判无进展的次数。 */
-  noProgressStreak: number
-  /** 验收门连续失败轮数。 */
-  gateFailStreak: number
-  /** 连续解析失败的判定次数。 */
-  parseFails: number
-  /** 连续传输失败的判定次数。 */
-  transportFails: number
-  /** 连续含确认超时的 run 数。 */
-  approvalTimeoutStreak: number
-  /** 最后一个完成的 run（无 run 时 undefined）。 */
-  lastRun: { trigger: string; stopReason: string } | undefined
+/**
+ * host 消费的 RunManager 切片：测试假对象实现这一面即可，不必手搓整个
+ * RunManager（真 RunManager 结构满足本接口，daemon 原样传入）。
+ */
+export interface GoalRunQueue {
+  busy(sessionId: string): boolean
+  queue(sessionId: string): readonly unknown[]
+  submit(sessionId: string, input: EnqueueInput): { messageId: string }
+  stopAndClear(sessionId: string): { aborted: boolean; dropped: number }
+  queueCancel(sessionId: string, messageId?: string): unknown
 }
 
 export interface GoalLoopDeps {
   config: KclawConfig
   sessions: SessionStore
   /** Late-bound RunManager getter（构造早于 RunManager，调用都在启动之后）。 */
-  getRun: () => RunManager
+  getRun: () => GoalRunQueue
   usage: UsageStore
-  /** daemon 启动时解析的默认模型串（compactSession 同款回落基底）。 */
+  /** daemon 启动时解析的默认模型串（compactSession 同款回退基底）。 */
   model: string
   /** provider 条目客户端解析（daemon 的 providerResolver.llm）。 */
   resolveEntryLlm: (entryKey?: string) => LlmClient
   /** 沙箱 home（~/.kclaw）。 */
   home: string
+  /** 时钟接缝（时间敏感逻辑可注假时钟测试；缺省真实时间）。 */
+  now?: () => Date
   log?: (message: string) => void
 }
 
@@ -91,8 +88,7 @@ export interface GoalView {
   limits: { maxRounds: number; tokenBudget: number }
 }
 
-/** 判定器无进展的标记串（提示词约定：没有进展就写「无」）。 */
-const NO_PROGRESS_MARK = "无"
+/** 判定器无进展的标记串正本在 core/goal prompt.ts（与判定提示词共用）。 */
 
 export class GoalLoopHost {
   readonly #deps: GoalLoopDeps
@@ -115,6 +111,10 @@ export class GoalLoopHost {
 
   #log(message: string): void {
     this.#deps.log?.(message)
+  }
+
+  #now(): Date {
+    return this.#deps.now?.() ?? new Date()
   }
 
   /** 快照当前值（无目标/无会话返回 undefined）。 */
@@ -156,7 +156,7 @@ export class GoalLoopHost {
       }
     }
     const existing = meta.goal
-    const now = new Date().toISOString()
+    const now = this.#now().toISOString()
     const isCreate = existing === undefined
     const goal: GoalSnapshot = isCreate
       ? { text, acceptance, state: "active", setAt: now, rounds: 0, totalRounds: 0, tokensUsed: 0 }
@@ -185,7 +185,7 @@ export class GoalLoopHost {
   /** 用户暂停：停自续（活跃 run 不动——用户可另行停止）。 */
   pause(sessionId: string): GoalSnapshot {
     const goal = this.#requireGoal(sessionId, "pause")
-    const now = new Date().toISOString()
+    const now = this.#now().toISOString()
     const next: GoalSnapshot = { ...goal, state: "paused" }
     this.#deps.sessions.appendGoalSet(sessionId, { at: now, op: "pause", goal: next })
     this.#runtime(sessionId).armed = false
@@ -197,7 +197,7 @@ export class GoalLoopHost {
     const goal = this.snapshot(sessionId)
     if (goal === undefined) throw new Error("本会话没有目标")
     if (goal.state === "complete") throw new Error("目标已终态（达成/不可能），只能 clear 或改写")
-    const now = new Date().toISOString()
+    const now = this.#now().toISOString()
     const next: GoalSnapshot = { ...goal, state: "active", stoppedReason: undefined, stoppedAt: undefined, stoppedNote: undefined }
     this.#deps.sessions.appendGoalSet(sessionId, { at: now, op: "resume", goal: next })
     const rt = this.#runtime(sessionId)
@@ -214,7 +214,7 @@ export class GoalLoopHost {
     const { aborted, dropped } = this.#deps.getRun().stopAndClear(sessionId)
     let next = goal
     if (goal.state !== "complete") {
-      const now = new Date().toISOString()
+      const now = this.#now().toISOString()
       next = { ...goal, state: "paused", stoppedReason: "user-stop", stoppedAt: now, stoppedNote: "用户停止了目标循环" }
       this.#deps.sessions.appendGoalSet(sessionId, { at: now, op: "pause", goal: next })
     }
@@ -232,7 +232,7 @@ export class GoalLoopHost {
     if (rt?.lastEnqueuedMessageId !== undefined) {
       this.#deps.getRun().queueCancel(sessionId, rt.lastEnqueuedMessageId)
     }
-    this.#deps.sessions.appendGoalCleared(sessionId, { at: new Date().toISOString(), hadState: goal.state })
+    this.#deps.sessions.appendGoalCleared(sessionId, { at: this.#now().toISOString(), hadState: goal.state })
     this.#runtimes.delete(sessionId)
     return { hadState: goal.state }
   }
@@ -274,11 +274,11 @@ export class GoalLoopHost {
   }
 
   /**
-   * 一轮检查（九条停止条件在此汇合）：派生计数 → run 出错/确认超时守卫
-   * → 验收门 → 判定器 → 裁决分支（终态/无进展/预算/轮数上限/熔断）→
-   * 续跑。互斥由 rt.judging 保证；判定器 await 之后重新校验 armed 与快
-   * 照状态（用户可能在等待期间 stop/pause/clear——审计照留，状态机只在
-   * 仍 active 时推进）。
+   * 一轮检查（副作用编排；九条停止条件与续跑决策的芯在 core/goal 的
+   * check.ts）：派生计数 → 门前守卫 → 验收门 → 判定器 → 决策执行
+   * （终态/停摆/收尾轮/续跑入队）。互斥由 rt.judging 保证；判定器 await
+   * 之后重新校验 armed 与快照状态（用户可能在等待期间 stop/pause/clear
+   * ——审计照留，状态机只在仍 active 时推进）。
    */
   async #check(sessionId: string): Promise<void> {
     const { sessions, getRun, config, usage } = this.#deps
@@ -292,14 +292,11 @@ export class GoalLoopHost {
       const loop = this.#derive(sessionId)
       const alive = (): boolean => rt.armed && this.snapshot(sessionId)?.state === "active"
 
-      // ① 上一轮 run 出错：不自动重试，等用户。
-      if (loop.lastRun !== undefined && loop.lastRun.stopReason === "error") {
-        this.#persistStop(sessionId, loop, "run-error", "上一轮运行出错，目标循环暂停（不自动重试）")
-        return
-      }
-      // ② 确认超时连败：循环被人工裁决卡住，转 blocked 等用户。
-      if (loop.approvalTimeoutStreak >= GOAL_APPROVAL_TIMEOUT_ROUNDS) {
-        this.#persistStop(sessionId, loop, "permission", `连续 ${loop.approvalTimeoutStreak} 轮出现确认超时（无人在场裁决），目标循环暂停`)
+      // 停止条件①②（门执行前的守卫）与③-⑨的裁决芯在 core/goal
+      //（goalPreGateGuard / decideGoalRound），这里只执行副作用。
+      const guard = goalPreGateGuard(loop)
+      if (guard !== undefined) {
+        this.#persistStop(sessionId, loop, guard.reason, guard.note)
         return
       }
       // ③ 验收门（短路判定器：失败输出即下一轮的修正指引）。
@@ -322,10 +319,10 @@ export class GoalLoopHost {
           gates,
           messages: sessions.readMessages(sessionId),
         })
-        // 审计与用量无条件落：判定已花掉的 token 不能因用户中途停摆而失踪。
+        // 审计与用量无条件写：判定已花掉的 token 不能因用户中途停摆而失踪。
         if (judged.ok) {
           sessions.appendGoalChecked(sessionId, {
-            at: new Date().toISOString(),
+            at: this.#now().toISOString(),
             round,
             gates,
             verdict: judged.result.verdict,
@@ -335,92 +332,35 @@ export class GoalLoopHost {
           })
           usage.record({
             sessionId,
-            runId: `goal-judge-${round}-${Date.now()}`,
+            runId: `goal-judge-${round}-${this.#now().getTime()}`,
             model: judge.model,
             inputTokens: judged.result.tokens.inputTokens,
             outputTokens: judged.result.tokens.outputTokens,
-            at: new Date().toISOString(),
+            at: this.#now().toISOString(),
           })
         } else {
-          sessions.appendGoalChecked(sessionId, { at: new Date().toISOString(), round, gates, judgeError: judged.error })
+          sessions.appendGoalChecked(sessionId, { at: this.#now().toISOString(), round, gates, judgeError: judged.error })
         }
       } else {
-        sessions.appendGoalChecked(sessionId, { at: new Date().toISOString(), round, gates })
+        sessions.appendGoalChecked(sessionId, { at: this.#now().toISOString(), round, gates })
       }
       if (!alive()) return
 
-      // ④ 裁决分支。
-      if (judged !== undefined && judged.ok) {
-        const result = judged.result
-        const tokensUsed = loop.tokensUsed + result.tokens.inputTokens + result.tokens.outputTokens
-        const withJudge: DerivedLoop = { ...loop, tokensUsed }
-        if (result.verdict === "met") {
-          this.#persistComplete(sessionId, withJudge, "met", result)
-          return
-        }
-        if (result.verdict === "impossible") {
-          this.#persistComplete(sessionId, withJudge, "impossible", result)
-          return
-        }
-        const noProgress = result.progress === undefined || result.progress.trim() === "" || result.progress.trim() === NO_PROGRESS_MARK
-        const noProgStreak = noProgress ? loop.noProgressStreak + 1 : 0
-        const guarded: DerivedLoop = { ...withJudge, noProgressStreak: noProgStreak }
-        this.#refreshCounters(sessionId, guarded, result)
-        // 收尾轮已跑过判定：无论进展如何，预算终停（met 已在上面返回）。
-        if (rt.windDownPending) {
-          rt.windDownPending = false
-          this.#persistStop(sessionId, guarded, "budget-limit", `目标生命周期 token 预算（${GOAL_TOKEN_BUDGET}）已耗尽，收尾轮完成`)
-          return
-        }
-        if (noProgStreak >= GOAL_NO_PROGRESS_LIMIT) {
-          this.#persistStop(sessionId, guarded, "no-progress", `判定器连续 ${noProgStreak} 轮未见进展`)
-          return
-        }
-        const cont = this.#continueDecision(sessionId, rt, guarded, loop.rounds)
-        if (cont) return
-        this.#enqueueRound(sessionId, { ...goal, totalRounds: loop.totalRounds }, continuationUserText({ ...goal, totalRounds: loop.totalRounds }, result, gates), round)
+      // ④⑤ 裁决分支与判定器/门失败分支：决策与注入文本由 decideGoalRound 给出。
+      const decision = decideGoalRound({ goal, loop, gates, judged, windDownPending: rt.windDownPending })
+      if (decision.kind === "complete") {
+        this.#persistComplete(sessionId, decision.loop, decision.reason, decision.judged)
         return
       }
-
-      // ⑤ 判定器失败 / 门失败分支（都不再消耗判定 token）。
-      const gateStreak = gateFailed ? loop.gateFailStreak + 1 : loop.gateFailStreak
-      const parseFails = judged !== undefined && !judged.ok && judged.error.kind === "parse" ? loop.parseFails + 1 : loop.parseFails
-      const transportFails = judged !== undefined && !judged.ok && judged.error.kind === "transport" ? loop.transportFails + 1 : loop.transportFails
-      const mixed: DerivedLoop = { ...loop, gateFailStreak: gateStreak, parseFails, transportFails }
-      if (gateFailed) {
-        if (gateStreak >= GOAL_GATE_EXHAUSTED) {
-          this.#persistStop(sessionId, mixed, "gate-exhausted", `验收命令连续 ${gateStreak} 轮未通过`)
-          return
-        }
-        this.#refreshCounters(sessionId, mixed)
-        if (rt.windDownPending) {
-          rt.windDownPending = false
-          this.#persistStop(sessionId, mixed, "budget-limit", `目标生命周期 token 预算（${GOAL_TOKEN_BUDGET}）已耗尽，收尾轮完成`)
-          return
-        }
-        const cont = this.#continueDecision(sessionId, rt, mixed, loop.rounds)
-        if (cont) return
-        this.#enqueueRound(sessionId, { ...goal, totalRounds: loop.totalRounds }, gateFailureUserText(goal, gates, gateStreak), round)
+      if (decision.kind === "stop") {
+        if (decision.refreshFirst) this.#refreshCounters(sessionId, decision.loop, decision.judge)
+        this.#persistStop(sessionId, decision.loop, decision.reason, decision.note)
         return
       }
-      // 判定器失败：熔断判定 + fail-open 续跑。
-      const breaker =
-        parseFails >= GOAL_JUDGE_PARSE_BREAKER || transportFails >= GOAL_JUDGE_TRANSPORT_BREAKER
-      this.#refreshCounters(sessionId, mixed)
-      if (breaker) {
-        const error = judged !== undefined && !judged.ok ? judged.error : undefined
-        this.#persistStop(sessionId, mixed, "judge-failed", `判定器连续失败已熔断（${error?.message ?? "未知错误"}）`)
-        return
-      }
-      if (rt.windDownPending) {
-        rt.windDownPending = false
-        this.#persistStop(sessionId, mixed, "budget-limit", `目标生命周期 token 预算（${GOAL_TOKEN_BUDGET}）已耗尽，收尾轮完成`)
-        return
-      }
-      const cont = this.#continueDecision(sessionId, rt, mixed, loop.rounds)
-      if (cont) return
-      const error = judged !== undefined && !judged.ok ? judged.error : { kind: "parse" as const, message: "unknown" }
-      this.#enqueueRound(sessionId, { ...goal, totalRounds: loop.totalRounds }, judgeUnavailableUserText(goal, error.kind, error.kind === "parse" ? parseFails : transportFails), round)
+      // 非终态：先写回计数（与判定摘要），预算超限的收尾轮置标记后入队。
+      this.#refreshCounters(sessionId, decision.loop, decision.judge)
+      if (decision.kind === "winddown") rt.windDownPending = true
+      this.#enqueueRound(sessionId, { ...goal, totalRounds: loop.totalRounds }, decision.injection, decision.enqueueRound)
     } catch (err) {
       // 检查自身故障不静默：停摆并说明，用户可 resume 重试。
       this.#log(`check failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`)
@@ -435,37 +375,13 @@ export class GoalLoopHost {
     }
   }
 
-  /**
-   * 续跑前的公共闸门（预算/轮数上限，判定器失败与裁决分支共用）：
-   * 预算超限 → 标记收尾轮并入队 wrap-up（返回 true = 已处理）；
-   * 连续轮数达上限 → round-limit 停摆（true）；否则 false 继续入队。
-   */
-  #continueDecision(sessionId: string, rt: GoalRuntime, loop: DerivedLoop, consecutiveRounds: number): boolean {
-    if (loop.tokensUsed >= GOAL_TOKEN_BUDGET) {
-      rt.windDownPending = true
-      const goal = this.snapshot(sessionId)
-      if (goal !== undefined) {
-        this.#enqueueRound(sessionId, { ...goal, totalRounds: loop.totalRounds }, windDownUserText(goal), loop.totalRounds + 1)
-      }
-      return true
-    }
-    if (consecutiveRounds + 1 > GOAL_MAX_ROUNDS) {
-      this.#persistStop(sessionId, loop, "round-limit", `连续自续 ${GOAL_MAX_ROUNDS} 轮未达成（发一条消息可重置计数并继续）`)
-      return true
-    }
-    return false
-  }
-
-  /** 判定器客户端与模型线：config.goals.judge 命中条目优先，否则会话模型线。 */
+  /** 判定器客户端与模型线：config.goals.judge 命中条目优先，否则会话模型线（与 run 组装同一优先级链）。 */
   #judgeClient(sessionModel: string | undefined): { llm: LlmClient; model: string } {
     const { config, resolveEntryLlm } = this.#deps
     const judgeKey = config.goals?.judge ?? ""
-    if (judgeKey !== "" && config.providers.entries[judgeKey] !== undefined) {
-      const resolved = resolveRunModel(config, judgeKey)
-      return { llm: resolveEntryLlm(resolved.entryKey), model: resolved.model }
-    }
-    const defaultModel = config.providers.entries[config.providers.default]?.model || this.#deps.model || ""
-    const resolved = resolveRunModel(config, sessionModel ?? defaultModel)
+    const resolved = judgeKey !== "" && config.providers.entries[judgeKey] !== undefined
+      ? resolveRunModelLine(config, { inputModel: judgeKey })
+      : resolveRunModelLine(config, { sessionModel, launchModel: this.#deps.model })
     return { llm: resolveEntryLlm(resolved.entryKey), model: resolved.model }
   }
 
@@ -487,7 +403,7 @@ export class GoalLoopHost {
     const goal = this.snapshot(sessionId)
     if (goal === undefined) return
     const state = reason === "permission" ? "blocked" : "paused"
-    const now = new Date().toISOString()
+    const now = this.#now().toISOString()
     const next: GoalSnapshot = {
       ...goal,
       state,
@@ -507,7 +423,7 @@ export class GoalLoopHost {
   #persistComplete(sessionId: string, loop: DerivedLoop, reason: "met" | "impossible", judged: GoalJudgeResult): void {
     const goal = this.snapshot(sessionId)
     if (goal === undefined) return
-    const now = new Date().toISOString()
+    const now = this.#now().toISOString()
     const next: GoalSnapshot = {
       ...goal,
       state: "complete",
@@ -533,7 +449,7 @@ export class GoalLoopHost {
   #refreshCounters(sessionId: string, loop: DerivedLoop, judge?: GoalJudgeResult): void {
     const goal = this.snapshot(sessionId)
     if (goal === undefined) return
-    const now = new Date().toISOString()
+    const now = this.#now().toISOString()
     const next: GoalSnapshot = {
       ...goal,
       rounds: loop.rounds,
@@ -552,101 +468,16 @@ export class GoalLoopHost {
   }
 
   /**
-   * 事件派生：一次前向扫描 goal.set(create) 之后的所有事件。run 边界配
-   * 对出 {trigger, stopReason, 含确认超时}；goal.checked 派生判定/门连
-   * 败与用量。尾部连败回溯规则：同性质的检查连续累积，任何不同性质的
-   * 检查（成功裁决/另一类失败/门通过）都断开计数。
+   * 事件派生（纯函数在 core/goal 的 derive.ts：一次前向扫描 goal.set(create)
+   * 之后的所有事件）。这里只负责读事件流；读流失败按空事件派生（全零回退）。
    */
   #derive(sessionId: string): DerivedLoop {
-    const zero: DerivedLoop = {
-      totalRounds: 0, rounds: 0, tokensUsed: 0, noProgressStreak: 0, gateFailStreak: 0,
-      parseFails: 0, transportFails: 0, approvalTimeoutStreak: 0, lastRun: undefined,
-    }
     let events: SessionEvent[]
     try {
       events = this.#deps.sessions.readEvents(sessionId)
     } catch {
-      return zero
+      return deriveGoalLoop([])
     }
-    let createIdx = -1
-    for (let i = events.length - 1; i >= 0; i--) {
-      const e = events[i]!
-      if (e.type === "goal.set" && e.op === "create") {
-        createIdx = i
-        break
-      }
-    }
-    if (createIdx === -1) return zero
-    const runs: Array<{ trigger: string; stopReason: string; timeout: boolean }> = []
-    let currentRun: { trigger: string; timeout: boolean } | undefined
-    const checks: GoalCheckedEvent[] = []
-    let totalRounds = 0
-    let tokensUsed = 0
-    for (let i = createIdx + 1; i < events.length; i++) {
-      const e = events[i]!
-      if (e.type === "run.started") {
-        currentRun = { trigger: e.trigger, timeout: false }
-        if (e.trigger === "goal") totalRounds++
-      } else if (e.type === "permission.decided") {
-        if (currentRun !== undefined && e.decision === "timeout") currentRun.timeout = true
-      } else if (e.type === "run.ended") {
-        if (currentRun !== undefined) {
-          runs.push({ trigger: currentRun.trigger, stopReason: e.stopReason, timeout: currentRun.timeout })
-          currentRun = undefined
-        }
-        if (e.usage !== undefined) tokensUsed += e.usage.inputTokens + e.usage.outputTokens
-      } else if (e.type === "goal.checked") {
-        checks.push(e)
-        if (e.tokens !== undefined) tokensUsed += e.tokens.inputTokens + e.tokens.outputTokens
-      }
-    }
-    let rounds = 0
-    for (let i = runs.length - 1; i >= 0; i--) {
-      if (runs[i]!.trigger === "goal") rounds++
-      else if (runs[i]!.trigger === "user") break
-    }
-    let approvalTimeoutStreak = 0
-    for (let i = runs.length - 1; i >= 0; i--) {
-      if (runs[i]!.timeout) approvalTimeoutStreak++
-      else break
-    }
-    // 尾部连败回溯：mode 记录最尾部检查的性质，此后只有同性质才累计。
-    let mode: "gate" | "noprogress" | "parse" | "transport" | undefined
-    let noProgressStreak = 0
-    let gateFailStreak = 0
-    let parseFails = 0
-    let transportFails = 0
-    for (let i = checks.length - 1; i >= 0; i--) {
-      const c = checks[i]!
-      if (c.judgeError !== undefined) {
-        const kind = c.judgeError.kind
-        if (mode === undefined) mode = kind
-        if (mode === kind && kind === "parse") parseFails++
-        else if (mode === kind && kind === "transport") transportFails++
-        else break
-        continue
-      }
-      if (c.verdict === undefined) {
-        // 无裁决 = 门失败短路留下的检查。
-        if (mode === undefined) mode = "gate"
-        if (mode === "gate" && c.gates.some((g) => !g.ok)) gateFailStreak++
-        else break
-        continue
-      }
-      if (
-        c.verdict === "not_met" &&
-        (c.progress === undefined || c.progress.trim() === "" || c.progress.trim() === NO_PROGRESS_MARK)
-      ) {
-        if (mode === undefined) mode = "noprogress"
-        if (mode === "noprogress") noProgressStreak++
-        else break
-        continue
-      }
-      break
-    }
-    const lastRun = runs.length > 0
-      ? { trigger: runs[runs.length - 1]!.trigger, stopReason: runs[runs.length - 1]!.stopReason }
-      : undefined
-    return { totalRounds, rounds, tokensUsed, noProgressStreak, gateFailStreak, parseFails, transportFails, approvalTimeoutStreak, lastRun }
+    return deriveGoalLoop(events)
   }
 }
