@@ -88,7 +88,9 @@ export function createProviderResolver(cfg: KclawConfig, fetchImpl?: typeof fetc
       const { baseUrl, apiKey } = resolveProviderEndpoint(cfg)
       return createOpenAiCompatClient({ baseUrl, apiKey, timeoutMs: cfg.providers.timeoutMs, fetchImpl })
     }
-    const sig = `${resolveProviderFormat(entry)}|${entry.baseUrl}|${entry.apiKey}|${cfg.providers.timeoutMs}`
+    // promptCache participates in the signature so flipping the flag rebuilds
+    // the client — and with it any in-instance "markers rejected" verdict.
+    const sig = `${resolveProviderFormat(entry)}|${entry.baseUrl}|${entry.apiKey}|${cfg.providers.timeoutMs}|${entry.promptCache ?? "auto"}`
     const key = entryKey ?? ""
     const hit = llmCache.get(key)
     if (hit !== undefined && hit.sig === sig) return hit.client

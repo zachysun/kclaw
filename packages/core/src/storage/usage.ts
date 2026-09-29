@@ -10,19 +10,37 @@ export interface UsageRow {
   model: string
   inputTokens: number
   outputTokens: number
+  /** Prompt-cache read tokens; omitted = the provider reported no metric. */
+  cacheReadTokens?: number
+  /** Prompt-cache write tokens; omitted = the provider reported no metric. */
+  cacheWriteTokens?: number
   at: string // ISO-8601
 }
 
-/** Aggregation bucket: key is the day (local), session or model. */
+/**
+ * Aggregation bucket: key is the day (local), session or model. The cache
+ * fields are `number | null` — null means NO row in the bucket carried the
+ * metric (unknown, displayed as "—", never as 0); a number is the sum of the
+ * known values (rows without the metric contribute nothing, they don't reset
+ * the sum).
+ */
 export interface UsageAgg {
   key: string
   inputTokens: number
   outputTokens: number
+  cacheReadTokens: number | null
+  cacheWriteTokens: number | null
   costUsd: number
 }
 
 /** Price table: USD per 1M tokens per model. Missing entries cost 0. */
-export type UsagePrices = Record<string, { inputPerM?: number; outputPerM?: number }>
+export type UsagePrices = Record<string, {
+  inputPerM?: number
+  outputPerM?: number
+  /** Cached-token prices: present → rows WITH cache data cost via the split formula. */
+  cacheReadPerM?: number
+  cacheWritePerM?: number
+}>
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS usage (
@@ -32,6 +50,8 @@ CREATE TABLE IF NOT EXISTS usage (
   model TEXT NOT NULL,
   input_tokens INTEGER NOT NULL,
   output_tokens INTEGER NOT NULL,
+  cache_read_tokens INTEGER,
+  cache_write_tokens INTEGER,
   at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS usage_at ON usage(at);
@@ -44,13 +64,38 @@ interface UsageDbRow {
   model: string
   input_tokens: number
   output_tokens: number
+  cache_read_tokens: number | null
+  cache_write_tokens: number | null
   at: string
 }
 
-/** Cost of a row's tokens under `prices` (USD; missing entries cost 0). */
-export function costUsd(row: { inputTokens: number; outputTokens: number }, model: string, prices: UsagePrices): number {
+/**
+ * Cost of a row's tokens under `prices` (USD; missing entries cost 0). When
+ * the model declares cache prices AND the row carries any cache metric, cost
+ * splits per class: non-cached input (= inputTokens − known cache fields),
+ * cache read, cache write, output; a missing cache field counts as 0 tokens
+ * (an OpenAI-compatible row has only cacheRead — gating on BOTH fields would
+ * bill cached_tokens at full input price forever). Rows without cache data
+ * (and old rows) bill total input at the input price — no discount guessing.
+ */
+export function costUsd(
+  row: { inputTokens: number; outputTokens: number; cacheReadTokens?: number | null; cacheWriteTokens?: number | null },
+  model: string,
+  prices: UsagePrices,
+): number {
   const p = prices[model]
   if (p === undefined) return 0
+  const hasCachePrices = p.cacheReadPerM !== undefined || p.cacheWritePerM !== undefined
+  const hasCacheData = (row.cacheReadTokens ?? null) !== null || (row.cacheWriteTokens ?? null) !== null
+  if (hasCachePrices && hasCacheData) {
+    const read = row.cacheReadTokens ?? 0
+    const write = row.cacheWriteTokens ?? 0
+    const nonCachedInput = row.inputTokens - read - write
+    return (nonCachedInput / 1_000_000) * (p.inputPerM ?? 0)
+      + (read / 1_000_000) * (p.cacheReadPerM ?? 0)
+      + (write / 1_000_000) * (p.cacheWritePerM ?? 0)
+      + (row.outputTokens / 1_000_000) * (p.outputPerM ?? 0)
+  }
   return (row.inputTokens / 1_000_000) * (p.inputPerM ?? 0) + (row.outputTokens / 1_000_000) * (p.outputPerM ?? 0)
 }
 
@@ -75,6 +120,15 @@ export class UsageStore {
     mkdirSync(dirname(dbPath), { recursive: true })
     this.db = new Database(dbPath)
     this.db.exec(SCHEMA)
+    // Pre-existing DBs (created before the cache columns) get them via ALTER;
+    // CREATE TABLE IF NOT EXISTS does not extend an existing table.
+    const cols = this.db.prepare("PRAGMA table_info(usage)").all() as Array<{ name: string }>
+    if (!cols.some((c) => c.name === "cache_read_tokens")) {
+      this.db.exec("ALTER TABLE usage ADD COLUMN cache_read_tokens INTEGER")
+    }
+    if (!cols.some((c) => c.name === "cache_write_tokens")) {
+      this.db.exec("ALTER TABLE usage ADD COLUMN cache_write_tokens INTEGER")
+    }
   }
 
   /** Close the underlying db (daemon stop). */
@@ -85,10 +139,20 @@ export class UsageStore {
   record(row: Omit<UsageRow, "id">): void {
     this.db
       .prepare(
-        `INSERT INTO usage (id, session_id, run_id, model, input_tokens, output_tokens, at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO usage (id, session_id, run_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(`u_${row.sessionId}_${row.runId}`, row.sessionId, row.runId, row.model, row.inputTokens, row.outputTokens, row.at)
+      .run(
+        `u_${row.sessionId}_${row.runId}`,
+        row.sessionId,
+        row.runId,
+        row.model,
+        row.inputTokens,
+        row.outputTokens,
+        row.cacheReadTokens ?? null,
+        row.cacheWriteTokens ?? null,
+        row.at,
+      )
   }
 
   /** Aggregate by day | session | model over [from, to); cost via the price table. */
@@ -99,14 +163,28 @@ export class UsageStore {
     to?: Date,
   ): UsageAgg[] {
     const rows = this.selectRows(from, to)
-    const buckets = new Map<string, { inputTokens: number; outputTokens: number; costUsd: number }>()
+    const buckets = new Map<string, { inputTokens: number; outputTokens: number; cacheReadTokens: number | null; cacheWriteTokens: number | null; costUsd: number }>()
     for (const r of rows) {
       const key = by === "day" ? localDay(r.at) : by === "session" ? r.session_id : r.model
-      const b = buckets.get(key) ?? { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+      const b = buckets.get(key) ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: null, cacheWriteTokens: null, costUsd: 0 }
       b.inputTokens += r.input_tokens
       b.outputTokens += r.output_tokens
+      // Bucket cache semantics: null stays null until a row WITH the metric
+      // arrives, then sums the known values (unknown rows are skipped, not
+      // coerced to 0 — "no data" must never display as "0 hits").
+      if (r.cache_read_tokens !== null) b.cacheReadTokens = (b.cacheReadTokens ?? 0) + r.cache_read_tokens
+      if (r.cache_write_tokens !== null) b.cacheWriteTokens = (b.cacheWriteTokens ?? 0) + r.cache_write_tokens
       // Cost sums per ROW (each row's own model price), whatever the bucket key.
-      b.costUsd += costUsd({ inputTokens: r.input_tokens, outputTokens: r.output_tokens }, r.model, prices)
+      b.costUsd += costUsd(
+        {
+          inputTokens: r.input_tokens,
+          outputTokens: r.output_tokens,
+          cacheReadTokens: r.cache_read_tokens,
+          cacheWriteTokens: r.cache_write_tokens,
+        },
+        r.model,
+        prices,
+      )
       buckets.set(key, b)
     }
     return [...buckets.entries()]
@@ -115,17 +193,30 @@ export class UsageStore {
   }
 
   /** Totals over [from, to). */
-  total(prices: UsagePrices, from?: Date, to?: Date): { inputTokens: number; outputTokens: number; costUsd: number } {
+  total(prices: UsagePrices, from?: Date, to?: Date): { inputTokens: number; outputTokens: number; cacheReadTokens: number | null; cacheWriteTokens: number | null; costUsd: number } {
     const rows = this.selectRows(from, to)
     let inputTokens = 0
     let outputTokens = 0
+    let cacheReadTokens: number | null = null
+    let cacheWriteTokens: number | null = null
     let cost = 0
     for (const r of rows) {
       inputTokens += r.input_tokens
       outputTokens += r.output_tokens
-      cost += costUsd({ inputTokens: r.input_tokens, outputTokens: r.output_tokens }, r.model, prices)
+      if (r.cache_read_tokens !== null) cacheReadTokens = (cacheReadTokens ?? 0) + r.cache_read_tokens
+      if (r.cache_write_tokens !== null) cacheWriteTokens = (cacheWriteTokens ?? 0) + r.cache_write_tokens
+      cost += costUsd(
+        {
+          inputTokens: r.input_tokens,
+          outputTokens: r.output_tokens,
+          cacheReadTokens: r.cache_read_tokens,
+          cacheWriteTokens: r.cache_write_tokens,
+        },
+        r.model,
+        prices,
+      )
     }
-    return { inputTokens, outputTokens, costUsd: cost }
+    return { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd: cost }
   }
 
   private selectRows(from?: Date, to?: Date): UsageDbRow[] {

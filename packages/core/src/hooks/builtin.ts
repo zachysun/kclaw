@@ -406,6 +406,9 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
             model,
             inputTokens: outcome.totalUsage.inputTokens,
             outputTokens: outcome.totalUsage.outputTokens,
+            // 缓存字段缺省 = 未知 → 写 NULL，与"没命中"区分。
+            ...(outcome.totalUsage.cacheReadTokens !== undefined ? { cacheReadTokens: outcome.totalUsage.cacheReadTokens } : {}),
+            ...(outcome.totalUsage.cacheWriteTokens !== undefined ? { cacheWriteTokens: outcome.totalUsage.cacheWriteTokens } : {}),
             at: new Date().toISOString(),
           })
         } catch (err) {

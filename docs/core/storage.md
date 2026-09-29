@@ -68,7 +68,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `web.tavilyApiKey` | `""` | web_search 工具的 Tavily 密钥 |
 | `web.timeoutMs` | `20000` | 每次网络抓取（搜索与网页）的 AbortSignal 超时，卡死的主机不能拖住一个 run |
 | `web.allowPrivateNetworks` | `false` | 设为 `true` 时豁免 web_fetch 对私网/回环目标的拒绝（SSRF 防护，例如允许抓取本机 Ollama 端点），由 run 组装传入工具 |
-| `usage.prices` | `{}` | 模型 → `{inputPerM?, outputPerM?}`：每百万 token 的美元单价，用量记录算成本用；没有价格条目的模型成本按 0 计 |
+| `usage.prices` | `{}` | 模型 → `{inputPerM?, outputPerM?, cacheReadPerM?, cacheWritePerM?}`：每百万 token 的美元单价，用量记录算成本用；没有价格条目的模型成本按 0 计；缓存价缺省时该模型即使有缓存数据也按 input 单价对总输入计（不猜折扣） |
 | `exec.timeoutMs` / `maxOutputBytes` | `60000` / `102400`（100 KiB） | exec 工具的超时与输出截断上限 |
 | `sandbox.enabled` / `writeRoots` / `network` | `true` / `[]` / `"allow"` | exec 沙箱的整体开关、追加写白名单（realpath 形态）与沙箱内网络开关（deny 时 exec 子进程断网，web 工具不受影响），见 [sandbox](./sandbox.md) |
 | `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 周期清理用（见 [jobs](./jobs.md)） |
@@ -227,21 +227,22 @@ rules:
 
 ## 用量记录（`storage/usage.ts`）
 
-`UsageStore` 是一张只追加、不修改的 SQLite 记录表（`<home>/usage.db`，表 `usage` + `at` 列索引）：daemon 每结束一个 run 就记一行 `{sessionId, runId, model, inputTokens, outputTokens, at}`，行主键为 `u_<sessionId>_<runId>`。记录发出后不等结果：RunManager 调用它时包了 try/catch，记录失败只打一行日志，用量统计永远不影响 run 本身。
+`UsageStore` 是一张只追加、不修改的 SQLite 记录表（`<home>/usage.db`，表 `usage` + `at` 列索引）：daemon 每结束一个 run 就记一行 `{sessionId, runId, model, inputTokens, outputTokens, cacheReadTokens?, cacheWriteTokens?, at}`，行主键为 `u_<sessionId>_<runId>`。两个缓存列（`cache_read_tokens`/`cache_write_tokens`）可空：NULL = 供应商未返回该指标（**未知**，不是没命中）；旧库经启动时 `PRAGMA table_info(usage)` 检列 + `ALTER TABLE ADD COLUMN` 迁移（先例：jobs 表的 model 列），新建库 SCHEMA 直接含列。记录发出后不等结果：RunManager 调用它时包了 try/catch，记录失败只打一行日志，用量统计永远不影响 run 本身。
 
 ```ts
-export interface UsageAgg { key: string; inputTokens: number; outputTokens: number; costUsd: number }
+export interface UsageAgg { key: string; inputTokens: number; outputTokens: number; cacheReadTokens: number | null; cacheWriteTokens: number | null; costUsd: number }
 
 class UsageStore {
   record(row: Omit<UsageRow, "id">): void
   aggregate(by: "day" | "session" | "model", prices, from?, to?): UsageAgg[]
-  total(prices, from?, to?): { inputTokens; outputTokens; costUsd }
+  total(prices, from?, to?): { inputTokens; outputTokens; cacheReadTokens: number | null; cacheWriteTokens: number | null; costUsd }
   close(): void
 }
 ```
 
 - **三种聚合口径**：`day`（按 `at` 的本地日历日 `YYYY-MM-DD`）、`session`（按 sessionId）、`model`（按模型名）；时间区间 `[from, to)` 对 ISO 格式的 `at` 字符串做比较，结果按 key 升序。
-- **成本公式**（`costUsd(row, model, prices)`）：`(input/1e6)·inputPerM + (output/1e6)·outputPerM`，价格来自 `config.usage.prices`（美元 / 百万 token）；**模型没有价格条目时成本恒为 0**（token 数照常显示）。每组成本逐行累加——每行用它自己模型的价格，即使分组键是日期或会话。
+- **成本公式**（`costUsd(row, model, prices)`）：基式 `(input/1e6)·inputPerM + (output/1e6)·outputPerM`，价格来自 `config.usage.prices`（美元 / 百万 token）；**模型没有价格条目时成本恒为 0**（token 数照常显示）。模型价目带 `cacheReadPerM`/`cacheWritePerM` 且该行**任一**缓存字段非 NULL 时走分列式：`非缓存输入·inputPerM + 读·cacheReadPerM + 写·cacheWritePerM + 输出·outputPerM`（非缓存输入 = `inputTokens − 已知缓存字段之和`；缺失的缓存字段按 0 token 参与——OpenAI 兼容行只有 cacheRead，若按"两字段都非 NULL"门控会让 cached_tokens 永远按 input 全价计费）。两字段全 NULL 的行（含旧行）沿用基式按 input 单价对总输入计，不猜折扣。每组成本逐行累加——每行用它自己模型的价格，即使分组键是日期或会话。
+- **bucket 级 NULL 语义**：`aggregate`/`total` 的缓存字段类型 `number | null`——桶内所有行该列皆 NULL → `null`（未知，页面与 JSON 显示 "—"，不得显示 0 或命中率 0%；端点不返回缓存指标是常态而非边角）；行内混合 → 已知值之和（无值行跳过，不把未知吞成 0）。
 
 HTTP 出口与展示见 [http-api](../server/http-api.md) 的 `GET /usage` 与 [webui](../web/webui.md) 的用量页。
 

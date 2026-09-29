@@ -83,7 +83,10 @@ export function toProviderMessages(
 
   const evict = new Set<string>()
   const keep = opts?.toolResultKeep
-  const capped = keep !== undefined ? results.slice(0, keep) : results
+  // 条数省略语义：undefined 与 0 都 = 不按条数省略（0 是缓存稳定性的默认——
+  // 每轮翻写中段历史会反复击穿 prompt cache 前缀，见 docs/core/compaction.md）；
+  // >0 = 保留最新 N 条完整、更旧的按条数省略。预算省略（tokenBudget）独立生效。
+  const capped = keep !== undefined && keep > 0 ? results.slice(0, keep) : results
   for (const r of results.slice(capped.length)) evict.add(r.callId) // 条数上限（原语义，现为上限而非固定数）
 
   if (opts?.tokenBudget !== undefined && capped.length > 0) {

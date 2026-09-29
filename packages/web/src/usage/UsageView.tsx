@@ -10,13 +10,27 @@ import { useEffect, useMemo, useState } from "react"
 import type { ApiClient } from "../api.js"
 import type { SessionMeta } from "../types.js"
 
-interface UsageBucket { key: string; inputTokens: number; outputTokens: number; costUsd: number }
-interface UsageBody { by: string; buckets: UsageBucket[]; total: { inputTokens: number; outputTokens: number; costUsd: number } }
+interface UsageBucket {
+  key: string
+  inputTokens: number
+  outputTokens: number
+  /** null = 该桶没有任何行携带缓存指标（未知），不是 0。 */
+  cacheReadTokens: number | null
+  cacheWriteTokens: number | null
+  costUsd: number
+}
+interface UsageBody { by: string; buckets: UsageBucket[]; total: { inputTokens: number; outputTokens: number; cacheReadTokens: number | null; cacheWriteTokens: number | null; costUsd: number } }
 
 /** A cost column only earns its place when at least one cent shows up. */
 function hasCost(body: UsageBody | null): boolean {
   if (body === null) return false
   return body.total.costUsd > 0 || body.buckets.some((b) => b.costUsd > 0)
+}
+
+/** 缓存读 / 输入总量；缓存读未知（null）时返回 null，显示 "—"。 */
+function hitRate(b: UsageBucket): string | null {
+  if (b.cacheReadTokens === null) return null
+  return `${Math.round((b.cacheReadTokens / Math.max(1, b.inputTokens)) * 100)}%`
 }
 
 export function UsageView({ api }: { api: ApiClient }) {
@@ -96,7 +110,8 @@ export function UsageView({ api }: { api: ApiClient }) {
       <table data-testid="usage-day-table">
         <thead>
           <tr>
-            <th>日期</th><th>输入</th><th>输出</th><th>合计</th><th>分布</th>
+            <th>日期</th><th>输入</th><th>输出</th><th>合计</th>
+            <th>缓存读</th><th>缓存写</th><th>命中率</th><th>分布</th>
             {showDailyCost && <th>费用</th>}
           </tr>
         </thead>
@@ -107,6 +122,9 @@ export function UsageView({ api }: { api: ApiClient }) {
               <td className="num">{fmt(b.inputTokens)}</td>
               <td className="num">{fmt(b.outputTokens)}</td>
               <td className="num">{fmt(total(b))}</td>
+              <td className="num">{b.cacheReadTokens === null ? "—" : fmt(b.cacheReadTokens)}</td>
+              <td className="num">{b.cacheWriteTokens === null ? "—" : fmt(b.cacheWriteTokens)}</td>
+              <td className="num">{hitRate(b) ?? "—"}</td>
               <td className="usage-bar-cell" title={`${fmt(total(b))} token`}>
                 <span className="usage-bar-track">
                   <span className="usage-bar" style={{ width: `${(total(b) / maxOf(daily)) * 100}%` }} />
@@ -121,7 +139,8 @@ export function UsageView({ api }: { api: ApiClient }) {
       <table data-testid="usage-session-table">
         <thead>
           <tr>
-            <th>会话</th><th>输入</th><th>输出</th><th>合计</th><th>分布</th>
+            <th>会话</th><th>输入</th><th>输出</th><th>合计</th>
+            <th>缓存读</th><th>缓存写</th><th>命中率</th><th>分布</th>
             {showSessionCost && <th>费用</th>}
           </tr>
         </thead>
@@ -132,6 +151,9 @@ export function UsageView({ api }: { api: ApiClient }) {
               <td className="num">{fmt(b.inputTokens)}</td>
               <td className="num">{fmt(b.outputTokens)}</td>
               <td className="num">{fmt(total(b))}</td>
+              <td className="num">{b.cacheReadTokens === null ? "—" : fmt(b.cacheReadTokens)}</td>
+              <td className="num">{b.cacheWriteTokens === null ? "—" : fmt(b.cacheWriteTokens)}</td>
+              <td className="num">{hitRate(b) ?? "—"}</td>
               <td className="usage-bar-cell" title={`${fmt(total(b))} token`}>
                 <span className="usage-bar-track">
                   <span className="usage-bar" style={{ width: `${(total(b) / maxOf(bySession)) * 100}%` }} />

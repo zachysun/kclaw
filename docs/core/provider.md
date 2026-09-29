@@ -135,6 +135,7 @@ export function createProviderResolver(cfg: KclawConfig, fetchImpl?: typeof fetc
 - assistant 的 `toolCalls` 转成 `tool_use` 块（`{id: callId, name, input: JSON.parse(argsJson)}`，解析失败按 `{}`）；content 为空且无 toolCalls 的空 assistant 轮整个丢弃（API 拒收空 content）。
 - 连续的 tool 结果消息合并成**一条** user 消息里的多个 `{"type":"tool_result","tool_use_id":…,"content":…}` 块（API 规定 tool_result 只能出现在 user 轮）。
 - 工具定义转 `{name, description, input_schema: parameters}`；`max_tokens` 必填——条目未声明 `maxOutput` 时用 `ANTHROPIC_DEFAULT_MAX_TOKENS`（8192）。
+- **prompt-cache 断点**：请求带 `promptCache` 字段且条目未配置 `promptCache: "off"` 时，在供应商前缀求值序（tools → system → messages）上布三个 `cache_control: {type:"ephemeral"}` 断点（默认 5m TTL，无 1h 档）：① tools 数组最后一项的 **tool 对象顶层**（与 `name`/`input_schema` 平级，不落入 `input_schema` 内部；tools 为空跳过）；② `system` 末尾——字符串挂不了标记，转单元素 `[{"type":"text","text":…,"cache_control":…}]` 块数组（空串跳过）；③ 最后一条消息的最后一个 content block（工具循环中即最新合并的 `tool_result` 块；messages 为空跳过）。断点每轮随"最新内容"后移，这是设计本意：标记只指定快照点，不是缓存内容本体。3 断点 ≤ Anthropic 4 断点上限，无需超限丢弃。请求不带 `promptCache`（或配置关闭）时 payload 与不加标记的形态逐字节一致。
 - 请求体 `stream: true`；URL 规则见 `anthropicEndpoint`：baseUrl 以 `/v1` 结尾则直接拼路径，否则插入 `/v1`（官方裸域与中转带版本两种都支持）；鉴权用 `x-api-key` + `anthropic-version: 2023-06-01` 头，同一个 key 还会以 `Authorization: Bearer` 再发一份——各家 Anthropic 兼容网关认的头不一样（官方两个头都在时优先 `x-api-key`，火山方舟 coding 端点只读 Bearer），两个都发两边都能过。apiKey 为空时两种头都不发。
 
 ### 2. 流式解析（SSE 循环，两格式各自的映射）
@@ -153,13 +154,17 @@ undefined、null、`""` 三种"无内容"情况统一跳过——这保证"完�
 
 anthropic 格式每个 SSE 事件的映射：
 
-- `message_start` → 记下 `message.usage.input_tokens`（含初始 output）；
+- `message_start` → 记下 `message.usage.input_tokens`（含初始 output）与 `cache_creation_input_tokens` / `cache_read_input_tokens`（端点未返回时保持缺省 = 未知，不是 0）；
 - `content_block_start`（`tool_use`）→ 发 `tool_call_started`（index 即块序号，无 id 时用 `call_idx_${index}` 代替）；
 - `content_block_delta`：`text_delta` → `text_delta`；`thinking_delta` → `thinking_delta`；`input_json_delta` → `tool_call_delta`（`partial_json` 原样透传）；`signature_delta` 忽略；
-- `message_delta` → 记下 `stop_reason` 与 `usage.output_tokens`；
+- `message_delta` → 记下 `stop_reason`；`usage` 的各字段按字段级 last-wins 合并（`output_tokens` / `input_tokens` / 两个缓存字段各自独立更新）；
 - `message_stop` → 结束；`error` 事件 → 抛 `llm anthropic <type>: <message>`；`ping` 忽略。
 
-两家的 `inputTokens` 口径一致："当次请求发出去的全部输入 token"。OpenAI 的 `prompt_tokens` 本身是总量（含自动缓存命中的部分）；Anthropic 侧 kclaw 未发 `cache_control`（没有显式 prompt caching），`input_tokens` 即完整输入。**将来时陷阱**：哪天开启 Anthropic 显式缓存，缓存读写 token 会单列为 `cache_creation_input_tokens` / `cache_read_input_tokens`、**不并入** `input_tokens`，届时适配器必须三字段加总，否则 assistant 消息的 usage 锚点与压缩的 token 统计（见 [compaction](./compaction.md)）会系统性偏低。
+两家的 `inputTokens` 口径一致："当次请求发出去的全部输入 token"，且满足恒等式 **inputTokens = 非缓存输入 + cacheReadTokens + cacheWriteTokens**。OpenAI 的 `prompt_tokens` 本身就是总量（含自动缓存命中部分），`cached_tokens`（`prompt_tokens_details`）单独读出为 `cacheReadTokens`，OpenAI 协议没有写指标、`cacheWriteTokens` 保持缺省。Anthropic 的 `input_tokens` 只是非缓存输入，适配器**三字段加总**（`input_tokens + cache_creation_input_tokens + cache_read_input_tokens`）得出 `inputTokens`——漏加总会让 assistant 消息的 usage 锚点与压缩的 token 统计（见 [compaction](./compaction.md)）系统性偏低。缓存字段端点未返回时保持缺省（未知），读侧必须容忍缺省、不得当 0。
+
+### 2b. 缓存标记的兼容退避（两格式同款）
+
+条目配置 `promptCache: "auto"`（默认）时请求带缓存标记（Anthropic `cache_control` 断点 / OpenAI `prompt_cache_key`，主循环恒传 `promptCache.key = sessionId`）。端点对陌生字段回 **400** 时（401/403/429 不在列——认证与限流不是 schema 问题）：剥掉全部缓存标记原样重试一次；重试成功后在该客户端实例内记住"该端点不支持缓存标记"的裁决，后续请求直接发无标记版本（省一次注定失败的往返）；重试仍 400 则抛原始 `llm http 400` 走既有失败路径。剥除重试静默进行，只有一行 `console.error` 记录裁决，不发额外事件。客户端实例即条目生命周期（resolver 按条目签名缓存、配置变更重建），`promptCache` 配置参与签名——改配置即重建实例、裁决随之重置。`withRetry` 只认 429/5xx/timeout/网络错，400 本就不在其列，两层重试互不重叠。
 
 ### 3. 超时终止
 

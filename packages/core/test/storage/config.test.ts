@@ -76,6 +76,24 @@ describe("loadConfig / saveConfig", () => {
     expect(cfg.sessions.contextTokens).toBe(200_000)
     expect(cfg.sessions.compactAtRatio).toBeUndefined()
   })
+  it("falls an invalid provider promptCache value back to auto with a warning; a valid off is kept", () => {
+    const paths = resolvePaths(home)
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    writeConfig({
+      providers: {
+        default: "glm",
+        entries: {
+          glm: { baseUrl: "https://x", apiKey: "k", model: "m", promptCache: "yes-please" },
+          strict: { baseUrl: "https://y", apiKey: "k", model: "m", promptCache: "off" },
+        },
+      },
+    })
+    const cfg = loadConfig(paths)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]![0]).toContain("providers.entries.glm.promptCache")
+    expect(cfg.providers.entries.glm!.promptCache).toBeUndefined() // back to auto (undefined)
+    expect(cfg.providers.entries.strict!.promptCache).toBe("off") // valid value kept
+  })
   it("falls invalid waterlines back to defaults with a warning (value out of range)", () => {
     const paths = resolvePaths(home)
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})

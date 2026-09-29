@@ -74,9 +74,11 @@ interface AnthropicOutMessage {
  * Map the internal request to a Messages API payload: system-role messages
  * fold into the top-level `system`, tool results merge into one user message
  * (the API takes tool_result blocks inside user turns), and empty assistant
- * turns are dropped (the API rejects empty content).
+ * turns are dropped (the API rejects empty content). With `cacheMarkers` the
+ * three prompt-cache breakpoints are placed on top; without it the payload is
+ * byte-identical to the pre-cache shape (the marker-free retry relies on that).
  */
-function toAnthropicPayload(req: LlmRequest): Record<string, unknown> {
+function toAnthropicPayload(req: LlmRequest, cacheMarkers: boolean): Record<string, unknown> {
   const systemParts = [req.system]
   const messages: AnthropicOutMessage[] = []
   const pushToolResult = (toolUseId: string, content: string): void => {
@@ -109,7 +111,7 @@ function toAnthropicPayload(req: LlmRequest): Record<string, unknown> {
       pushToolResult(m.toolCallId, m.content)
     }
   }
-  return {
+  const payload: Record<string, unknown> = {
     model: req.model,
     system: systemParts.join("\n\n"),
     messages,
@@ -118,11 +120,55 @@ function toAnthropicPayload(req: LlmRequest): Record<string, unknown> {
     ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
     stream: true,
   }
+  if (cacheMarkers) applyAnthropicCacheBreakpoints(payload)
+  return payload
+}
+
+/** The ephemeral 5m breakpoint value (default TTL; no 1h tier). */
+const CACHE_CONTROL = { type: "ephemeral" }
+
+/**
+ * Three prompt-cache breakpoints (tools → system → messages, the API's
+ * prefix evaluation order):
+ * 1. the LAST tool object's TOP level (sibling of name/description/input_schema
+ *    — never inside input_schema); empty tools skip;
+ * 2. the end of the system block — the joined string cannot carry the marker,
+ *    so it becomes a single-element text block array; empty system skips;
+ * 3. the last content block of the last message — in a tool loop that is the
+ *    newest merged tool_result; empty messages skip.
+ * The markers sit on the newest content each request, so they MOVE one turn
+ * later each round — by design; they designate snapshot points, they are not
+ * part of the cached content.
+ */
+function applyAnthropicCacheBreakpoints(payload: {
+  system?: unknown
+  messages?: Array<{ content: Array<Record<string, unknown>> }>
+  tools?: Array<Record<string, unknown>>
+}): void {
+  const tools = payload.tools
+  if (Array.isArray(tools) && tools.length > 0) tools[tools.length - 1]!.cache_control = CACHE_CONTROL
+  if (typeof payload.system === "string" && payload.system !== "") {
+    payload.system = [{ type: "text", text: payload.system, cache_control: CACHE_CONTROL }]
+  }
+  const messages = payload.messages
+  if (Array.isArray(messages) && messages.length > 0) {
+    const last = messages[messages.length - 1]!
+    if (Array.isArray(last.content) && last.content.length > 0) {
+      last.content[last.content.length - 1]!.cache_control = CACHE_CONTROL
+    }
+  }
 }
 
 interface AnthropicSseEvent {
   type?: string
-  message?: { usage?: { input_tokens?: number; output_tokens?: number } }
+  message?: {
+    usage?: {
+      input_tokens?: number
+      output_tokens?: number
+      cache_creation_input_tokens?: number
+      cache_read_input_tokens?: number
+    }
+  }
   index?: number
   content_block?: { type?: string; id?: string; name?: string }
   delta?: {
@@ -132,7 +178,12 @@ interface AnthropicSseEvent {
     partial_json?: string
     stop_reason?: string
   }
-  usage?: { output_tokens?: number }
+  usage?: {
+    output_tokens?: number
+    input_tokens?: number
+    cache_creation_input_tokens?: number
+    cache_read_input_tokens?: number
+  }
   error?: { type?: string; message?: string }
 }
 
@@ -157,29 +208,56 @@ function normalizeStop(raw: string | null | undefined): StopReason {
  * are present. Same timeout/retry contract as the OpenAI-compatible client:
  * the abort fires at timeoutMs and any post-abort failure is reclassified as
  * the `llm http timeout` message.
+ *
+ * Cache markers: when the entry allows it (promptCacheEnabled !== false) and
+ * the request carries `promptCache`, the payload carries the three
+ * cache_control breakpoints. A 400 (a schema rejection — never 401/403/429)
+ * strips the markers and retries once; success remembers the verdict in this
+ * client instance (i.e. per provider entry), so later requests skip the
+ * markers without the round-trip. The retry is silent except for one
+ * console.error line and emits no extra events.
  */
 export function createAnthropicClient(opts: {
   baseUrl: string
   apiKey: string
   fetchImpl?: typeof fetch
   timeoutMs?: number
+  /** Entry-level opt-out (config promptCache:"off"); undefined = allowed. */
+  promptCacheEnabled?: boolean
 }): LlmClient {
   const doFetch = opts.fetchImpl ?? fetch
   const timeoutMs = opts.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS
+  // "this endpoint rejects cache markers" verdict, per client instance =
+  // per provider entry lifetime (resolver rebuilds on config change).
+  let cacheMarkersRejected = false
   return {
     async *stream(req: LlmRequest): AsyncIterable<LlmStreamEvent> {
       const signal = AbortSignal.timeout(timeoutMs)
-      let res: Response
-      try {
-        res = await doFetch(anthropicEndpoint(opts.baseUrl, "/messages"), {
+      const wantCache = opts.promptCacheEnabled !== false && req.promptCache !== undefined && !cacheMarkersRejected
+      const post = (body: string): Promise<Response> =>
+        doFetch(anthropicEndpoint(opts.baseUrl, "/messages"), {
           method: "POST",
           headers: {
             "content-type": "application/json",
             ...formatAuthHeaders("anthropic", opts.apiKey),
           },
-          body: JSON.stringify(toAnthropicPayload(req)),
+          body,
           signal,
         })
+      let res: Response
+      try {
+        res = await post(JSON.stringify(toAnthropicPayload(req, wantCache)))
+        // Schema-level rejection → strip the markers and retry once. Not on
+        // 401/403/429: auth/ratelimit failures are not schema problems.
+        if (res.status === 400 && wantCache) {
+          console.error("kclaw anthropic: endpoint rejected cache_control markers (400); retrying without them")
+          const retry = await post(JSON.stringify(toAnthropicPayload(req, false)))
+          // Remember the verdict only when the retry succeeded: a retry that
+          // still fails points at a non-marker cause (bad model name etc.) and
+          // must not silently disable markers for this entry.
+          if (retry.ok) cacheMarkersRejected = true
+          res = retry
+        }
       } catch (err) {
         rethrowClassified(err, signal, timeoutMs)
       }
@@ -193,16 +271,25 @@ export function createAnthropicClient(opts: {
         }
         throw llmHttpError(res.status, text)
       }
-      let usage: Usage = { inputTokens: 0, outputTokens: 0 }
+      // Usage fields kept separately so message_delta can last-wins any of
+      // them; inputTokens always re-sums to the documented identity
+      // non-cached + cache-read + cache-write (docs/core/provider.md).
+      // Undefined cache fields stay undefined: an endpoint without cache
+      // metrics is UNKNOWN, not zero.
+      let baseInput = 0
+      let cacheWrite: number | undefined
+      let cacheRead: number | undefined
+      let outputTokens = 0
       let finish: string | null = null
       try {
         for await (const line of sseDataLines(res.body)) {
           const ev = JSON.parse(line) as AnthropicSseEvent
           if (ev.type === "message_start") {
-            usage = {
-              inputTokens: ev.message?.usage?.input_tokens ?? 0,
-              outputTokens: ev.message?.usage?.output_tokens ?? 0,
-            }
+            const u = ev.message?.usage
+            baseInput = u?.input_tokens ?? 0
+            cacheWrite = u?.cache_creation_input_tokens
+            cacheRead = u?.cache_read_input_tokens
+            outputTokens = u?.output_tokens ?? 0
           } else if (ev.type === "content_block_start") {
             if (ev.content_block?.type === "tool_use") {
               yield {
@@ -221,7 +308,12 @@ export function createAnthropicClient(opts: {
             }
           } else if (ev.type === "message_delta") {
             if (ev.delta?.stop_reason != null) finish = ev.delta.stop_reason
-            if (ev.usage?.output_tokens != null) usage = { ...usage, outputTokens: ev.usage.output_tokens }
+            if (ev.usage != null) {
+              if (ev.usage.output_tokens != null) outputTokens = ev.usage.output_tokens
+              if (ev.usage.input_tokens != null) baseInput = ev.usage.input_tokens
+              if (ev.usage.cache_creation_input_tokens != null) cacheWrite = ev.usage.cache_creation_input_tokens
+              if (ev.usage.cache_read_input_tokens != null) cacheRead = ev.usage.cache_read_input_tokens
+            }
           } else if (ev.type === "message_stop") {
             break
           } else if (ev.type === "error") {
@@ -230,6 +322,12 @@ export function createAnthropicClient(opts: {
         }
       } catch (err) {
         rethrowClassified(err, signal, timeoutMs)
+      }
+      const usage: Usage = {
+        inputTokens: baseInput + (cacheWrite ?? 0) + (cacheRead ?? 0),
+        outputTokens,
+        ...(cacheRead !== undefined ? { cacheReadTokens: cacheRead } : {}),
+        ...(cacheWrite !== undefined ? { cacheWriteTokens: cacheWrite } : {}),
       }
       yield { type: "message_done", stopReason: normalizeStop(finish), usage }
     },

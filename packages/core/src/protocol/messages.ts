@@ -7,7 +7,21 @@ export type StopReason =
   | "end_turn" | "tool_use" | "max_tokens" | "stop_sequence"
   | "content_filter" | "aborted" | "error"
 
-export interface Usage { inputTokens: number; outputTokens: number }
+/**
+ * Token usage of one LLM call. `inputTokens` is the TOTAL input: on Anthropic
+ * it sums non-cached + cache-read + cache-write; on OpenAI-compatible
+ * endpoints prompt_tokens already is that total. The cache fields are
+ * OPTIONAL and absent = UNKNOWN (an endpoint that reports no cache metrics),
+ * never 0 — readers must not collapse the two.
+ */
+export interface Usage {
+  inputTokens: number
+  outputTokens: number
+  /** Tokens served from the prompt cache (Anthropic cache_read_input_tokens / OpenAI cached_tokens). */
+  cacheReadTokens?: number
+  /** Tokens written to the prompt cache (Anthropic cache_creation_input_tokens; OpenAI has no write metric). */
+  cacheWriteTokens?: number
+}
 
 export interface Message {
   id: string

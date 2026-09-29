@@ -36,6 +36,35 @@ describe("openai-compat client", () => {
     ])
   })
 
+  it("reads prompt_tokens_details.cached_tokens into cacheReadTokens; no write metric exists", async () => {
+    const fetchImpl = (async () => sseResponse([
+      { choices: [{ delta: { content: "ok" } }] },
+      {
+        choices: [{ delta: {}, finish_reason: "stop" }],
+        usage: { prompt_tokens: 100, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 80 } },
+      },
+    ])) as typeof fetch
+    const events = await collect(createOpenAiCompatClient({ baseUrl: "https://x", apiKey: "k", fetchImpl }))
+    // inputTokens stays the total prompt_tokens (already includes the cached part).
+    expect(events.at(-1)).toEqual({
+      type: "message_done",
+      stopReason: "end_turn",
+      usage: { inputTokens: 100, outputTokens: 2, cacheReadTokens: 80 },
+    })
+  })
+
+  it("keeps cache fields undefined (not 0) when usage carries no prompt_tokens_details", async () => {
+    const fetchImpl = (async () => sseResponse([
+      { choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: 2 } },
+    ])) as typeof fetch
+    const events = await collect(createOpenAiCompatClient({ baseUrl: "https://x", apiKey: "k", fetchImpl }))
+    expect(events.at(-1)).toEqual({
+      type: "message_done",
+      stopReason: "end_turn",
+      usage: { inputTokens: 5, outputTokens: 2 },
+    })
+  })
+
   it("maps reasoning_content to thinking_delta", async () => {
     const fetchImpl = (async () => sseResponse([
       { choices: [{ delta: { reasoning_content: "thinking..." } }] },
@@ -181,5 +210,87 @@ describe("openai-compat client", () => {
       { type: "text_delta", delta: "Hel你lo" },
       { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } },
     ])
+  })
+})
+
+describe("openai-compat prompt_cache_key", () => {
+  function captureBodies(statuses: number[]): { bodies: Array<Record<string, unknown>>; fetchCalls: () => number; fetchImpl: typeof fetch } {
+    const bodies: Array<Record<string, unknown>> = []
+    let calls = 0
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const status = statuses[Math.min(calls++, statuses.length - 1)]!
+      bodies.push(JSON.parse(String(init?.body)))
+      if (status !== 200) return new Response("upstream exploded", { status })
+      return sseResponse([{ choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }])
+    }) as unknown as typeof fetch
+    return { bodies, fetchCalls: () => calls, fetchImpl }
+  }
+
+  it("sends prompt_cache_key when the request opts in; absent request field → no key", async () => {
+    const { bodies, fetchImpl } = captureBodies([200, 200])
+    await collect(createOpenAiCompatClient({ baseUrl: "https://x", apiKey: "k", fetchImpl }), {
+      model: "m", system: "s", messages: [], tools: [], promptCache: { key: "ses_abc" },
+    })
+    expect(bodies[0]!.prompt_cache_key).toBe("ses_abc")
+    await collect(createOpenAiCompatClient({ baseUrl: "https://x", apiKey: "k", fetchImpl }), {
+      model: "m", system: "s", messages: [], tools: [],
+    })
+    expect(bodies[1]).not.toHaveProperty("prompt_cache_key")
+  })
+
+  it("truncates the key to 64 code points", async () => {
+    const { bodies, fetchImpl } = captureBodies([200])
+    const longKey = "ses_" + "日".repeat(70) // 70 CJK code points → beyond the 64 cap
+    await collect(createOpenAiCompatClient({ baseUrl: "https://x", apiKey: "k", fetchImpl }), {
+      model: "m", system: "s", messages: [], tools: [], promptCache: { key: longKey },
+    })
+    const key = bodies[0]!.prompt_cache_key as string
+    expect([...key]).toHaveLength(64)
+    expect(key).toBe([...longKey].slice(0, 64).join(""))
+  })
+
+  it("entry configured off (promptCacheEnabled: false) suppresses the key", async () => {
+    const { bodies, fetchImpl } = captureBodies([200])
+    await collect(createOpenAiCompatClient({ baseUrl: "https://x", apiKey: "k", fetchImpl, promptCacheEnabled: false }), {
+      model: "m", system: "s", messages: [], tools: [], promptCache: { key: "ses_abc" },
+    })
+    expect(bodies[0]).not.toHaveProperty("prompt_cache_key")
+  })
+
+  it("strips the key and retries once on 400, then remembers the verdict", async () => {
+    const { bodies, fetchCalls, fetchImpl } = captureBodies([400, 200, 200])
+    const REQ = { model: "m", system: "s", messages: [], tools: [], promptCache: { key: "ses_abc" } }
+    const client = createOpenAiCompatClient({ baseUrl: "https://x", apiKey: "k", fetchImpl })
+    await collect(client, REQ)
+    expect(fetchCalls()).toBe(2)
+    expect(bodies[0]!.prompt_cache_key).toBe("ses_abc")
+    expect(bodies[1]).not.toHaveProperty("prompt_cache_key")
+    await collect(client, REQ)
+    expect(fetchCalls()).toBe(3)
+    expect(bodies[2]).not.toHaveProperty("prompt_cache_key")
+  })
+
+  it("a 400 after the key-free retry surfaces the original llm http 400 and does NOT remember the verdict", async () => {
+    const { bodies, fetchCalls, fetchImpl } = captureBodies([400, 400, 400, 400])
+    const REQ = { model: "m", system: "s", messages: [], tools: [], promptCache: { key: "ses_abc" } }
+    const client = createOpenAiCompatClient({ baseUrl: "https://x", apiKey: "k", fetchImpl })
+    await expect(collect(client, REQ)).rejects.toThrow("llm http 400")
+    // A still-failing retry points at a non-key cause (bad model name etc.):
+    // the verdict is not remembered, so the next request sends the key again.
+    await expect(collect(client, REQ)).rejects.toThrow("llm http 400")
+    expect(fetchCalls()).toBe(4)
+    expect(bodies[0]!.prompt_cache_key).toBe("ses_abc")
+    expect(bodies[1]).not.toHaveProperty("prompt_cache_key")
+    expect(bodies[2]!.prompt_cache_key).toBe("ses_abc")
+    expect(bodies[3]).not.toHaveProperty("prompt_cache_key")
+  })
+
+  it("does NOT strip on 429 (rate limiting is not a schema problem)", async () => {
+    const { bodies, fetchCalls, fetchImpl } = captureBodies([429])
+    await expect(collect(createOpenAiCompatClient({ baseUrl: "https://x", apiKey: "k", fetchImpl }), {
+      model: "m", system: "s", messages: [], tools: [], promptCache: { key: "ses_abc" },
+    })).rejects.toThrow("llm http 429")
+    expect(fetchCalls()).toBe(1)
+    expect(bodies[0]!.prompt_cache_key).toBe("ses_abc")
   })
 })

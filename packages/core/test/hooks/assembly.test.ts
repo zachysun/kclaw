@@ -17,7 +17,9 @@ import { MemorySystem } from "../../src/memory/system.js"
 import { ConfirmationBroker } from "../../src/permissions/broker.js"
 import { HookRegistry } from "../../src/hooks/registry.js"
 import { loadConfig, resolvePaths } from "../../src/storage/index.js"
+import { UsageStore } from "../../src/storage/usage.js"
 import type { LlmClient, LlmStreamEvent } from "../../src/provider/types.js"
+import type { ToolExecutor } from "../../src/agent/tools.js"
 import type { HookEntry } from "../../src/hooks/types.js"
 import { chainOf, hook } from "../agent/hook-utils.js"
 
@@ -595,6 +597,139 @@ describe("executeRun × v4 水位线", () => {
     expect(completedIdx).toBeGreaterThan(bus.events.findIndex((e) => e.type === "run.completed"))
     expect(summaryRequests.length).toBe(2)
     expect(mainRequests.length).toBe(1)
+  })
+})
+
+describe("executeRun × usage 缓存字段链路", () => {
+  it("run-after 链收到的 totalUsage 携带缓存字段（run 级聚合非 undefined 时）", async () => {
+    let seen: unknown
+    const llm: LlmClient = {
+      async *stream(): AsyncIterable<LlmStreamEvent> {
+        yield { type: "text_delta", delta: "done" }
+        yield {
+          type: "message_done", stopReason: "end_turn",
+          usage: { inputTokens: 8, outputTokens: 1, cacheReadTokens: 5, cacheWriteTokens: 2 },
+        }
+      },
+    }
+    const extra: HookEntry[] = [
+      hook("watch-total", "run-after", (ctx) => { seen = ctx.outcome.totalUsage }, { failure: "skip" }),
+    ]
+    const { engine, sessionId } = makeEngine({ llm, extraHooks: extra })
+    await executeRun(engine, handoff(sessionId))
+    expect(seen).toEqual({ inputTokens: 8, outputTokens: 1, cacheReadTokens: 5, cacheWriteTokens: 2 })
+  })
+
+  it("run 级聚合缺字段的调用后，run-after 的 totalUsage 不携带该字段", async () => {
+    let seen: unknown
+    let call = 0
+    const llm: LlmClient = {
+      async *stream(): AsyncIterable<LlmStreamEvent> {
+        call++
+        if (call === 1) {
+          yield { type: "tool_call_started", index: 0, callId: "call_1", name: "exec" }
+          yield { type: "tool_call_delta", index: 0, delta: "{}" }
+          yield {
+            type: "message_done", stopReason: "tool_use",
+            usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 6 },
+          }
+        } else {
+          yield { type: "text_delta", delta: "done" }
+          yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 4, outputTokens: 1 } }
+        }
+      },
+    }
+    const extra: HookEntry[] = [
+      hook("watch-total", "run-after", (ctx) => { seen = ctx.outcome.totalUsage }, { failure: "skip" }),
+    ]
+    const exec: ToolExecutor = { risk: "sensitive", concurrency: "serial", async execute() { return { status: "ok", output: "ran" } } }
+    const { engine, sessionId } = makeEngine({ llm, extraHooks: extra, tools: new Map([["exec", exec]]) })
+    await executeRun(engine, handoff(sessionId))
+    expect(seen).toEqual({ inputTokens: 14, outputTokens: 3 })
+    expect((seen as { cacheReadTokens?: number }).cacheReadTokens).toBeUndefined()
+  })
+
+  it("发给模型的工具清单按名排序（MCP 重连乱序不再击穿缓存前缀）", async () => {
+    const requests: Array<{ tools: Array<{ name: string }> }> = []
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        requests.push(req as unknown as { tools: Array<{ name: string }> })
+        yield { type: "text_delta", delta: "done" }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+      },
+    }
+    // 模拟两次 MCP 连接返回不同的视图迭代序：同名工具集合、不同顺序。
+    const orders = [
+      ["zed_tool", "alpha_tool", "mid_tool", "bash"],
+      ["bash", "mid_tool", "zed_tool", "alpha_tool"],
+    ]
+    let n = 0
+    const { engine, sessionId } = makeEngine({ llm })
+    engine.deps.extraTools = () => {
+      const order = orders[Math.min(n++, orders.length - 1)]!
+      return {
+        executors: new Map(order.map((name) => [name, {
+          risk: "safe", concurrency: "serial",
+          async execute() { return { status: "ok" as const, output: "ran" } },
+        }] as const)),
+        defs: order.map((name) => ({ name, description: `tool ${name}`, parameters: { type: "object" } })),
+      }
+    }
+    await executeRun(engine, handoff(sessionId, "第一轮"))
+    await executeRun(engine, handoff(sessionId, "第二轮（模拟重连后不同视图序）"))
+    expect(requests.length).toBe(2)
+    for (const req of requests) {
+      const names = req.tools.map((t) => t.name)
+      // 全量发送面（内置 + extra）按名 code point 序排列
+      expect(names).toEqual([...names].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)))
+    }
+    // 两次连接顺序不同，但发送面 tools 逐字节一致
+    expect(JSON.stringify(requests[1]!.tools)).toBe(JSON.stringify(requests[0]!.tools))
+  })
+
+  it("链路级：loop → run-after → usage-ledger → SQLite 行打通（缺字段 run 写 NULL，带字段 run 落值）", async () => {
+    const usageStore = new UsageStore(join(home, "usage.db"))
+    let call = 0
+    const llm: LlmClient = {
+      async *stream(): AsyncIterable<LlmStreamEvent> {
+        call++
+        if (call === 1) {
+          yield { type: "tool_call_started", index: 0, callId: "call_1", name: "exec" }
+          yield { type: "tool_call_delta", index: 0, delta: "{}" }
+          // 第一次调用缺缓存字段（GLM 等端点形态）
+          yield { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 10, outputTokens: 2 } }
+        } else {
+          yield { type: "text_delta", delta: "done" }
+          yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 4, outputTokens: 1 } }
+        }
+      },
+    }
+    const exec: ToolExecutor = { risk: "sensitive", concurrency: "serial", async execute() { return { status: "ok", output: "ran" } } }
+    const { engine, sessionId } = makeEngine({
+      llm,
+      usageStore,
+      tools: new Map([["exec", exec]]),
+    })
+    const s1 = sessionId
+    await executeRun(engine, handoff(s1))
+    // 第二个 run：所有调用都携带缓存字段
+    const llm2: LlmClient = {
+      async *stream(): AsyncIterable<LlmStreamEvent> {
+        yield { type: "text_delta", delta: "done" }
+        yield {
+          type: "message_done", stopReason: "end_turn",
+          usage: { inputTokens: 8, outputTokens: 1, cacheReadTokens: 5, cacheWriteTokens: 2 },
+        }
+      },
+    }
+    const engine2 = { ...engine, deps: { ...engine.deps, llm: llm2 } }
+    await executeRun(engine2, handoff(s1))
+
+    const buckets = usageStore.aggregate("session", {})
+    expect(buckets).toHaveLength(1)
+    // run1 缺字段 → NULL；run2 带字段 → 已知值之和
+    expect(buckets[0]).toMatchObject({ inputTokens: 22, outputTokens: 4, cacheReadTokens: 5, cacheWriteTokens: 2 })
+    usageStore.close()
   })
 })
 

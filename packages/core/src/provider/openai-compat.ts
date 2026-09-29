@@ -14,7 +14,11 @@ interface ChatDelta {
 
 interface ChatChunk {
   choices?: Array<{ delta?: ChatDelta; finish_reason?: string | null }>
-  usage?: { prompt_tokens?: number; completion_tokens?: number }
+  usage?: {
+    prompt_tokens?: number
+    completion_tokens?: number
+    prompt_tokens_details?: { cached_tokens?: number }
+  }
 }
 
 function toApiMessages(req: LlmRequest): Array<Record<string, unknown>> {
@@ -59,15 +63,38 @@ export function llmHttpError(status: number, text: string): Error {
   return new Error(`llm http ${status}: ${text}`)
 }
 
+/**
+ * OpenAI prompt_cache_key is capped at 64 code points (codex's discipline;
+ * kclaw session ids are 30 chars so this is pure defense for odd keys).
+ */
+function truncateCacheKey(key: string): string {
+  return [...key].slice(0, 64).join("")
+}
+
+/**
+ * OpenAI-compatible chat-completions client. Same timeout/retry contract as
+ * the Anthropic client. Cache routing: when the entry allows it
+ * (promptCacheEnabled !== false) and the request carries `promptCache.key`,
+ * the body carries `prompt_cache_key` so the provider shards both requests of
+ * a session onto the same cache. A 400 (a schema rejection — never
+ * 401/403/429) strips the key and retries once; success remembers the verdict
+ * in this client instance (= per provider entry), so later requests skip the
+ * field without the round-trip. Silent except one console.error line.
+ */
 export function createOpenAiCompatClient(opts: {
   baseUrl: string
   apiKey: string
   fetchImpl?: typeof fetch
   /** Per-request timeout via AbortSignal.timeout; default {@link DEFAULT_LLM_TIMEOUT_MS}. */
   timeoutMs?: number
+  /** Entry-level opt-out (config promptCache:"off"); undefined = allowed. */
+  promptCacheEnabled?: boolean
 }): LlmClient {
   const doFetch = opts.fetchImpl ?? fetch
   const timeoutMs = opts.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS
+  // "this endpoint rejects prompt_cache_key" verdict, per client instance =
+  // per provider entry lifetime (resolver rebuilds on config change).
+  let cacheKeyRejected = false
   return {
     async *stream(req: LlmRequest): AsyncIterable<LlmStreamEvent> {
       // A hung provider stream (no headers, or a stalled SSE body) must never
@@ -75,25 +102,42 @@ export function createOpenAiCompatClient(opts: {
       // re-classified below so withRetry sees it as transient. The signal is
       // checked (not the error shape) so any abort → timeout classification.
       const signal = AbortSignal.timeout(timeoutMs)
-      let res: Response
-      try {
-        res = await doFetch(`${opts.baseUrl.replace(/\/$/, "")}/chat/completions`, {
+      const wantCacheKey = opts.promptCacheEnabled !== false && req.promptCache?.key !== undefined && !cacheKeyRejected
+      const post = (body: string): Promise<Response> =>
+        doFetch(`${opts.baseUrl.replace(/\/$/, "")}/chat/completions`, {
           method: "POST",
           headers: {
             "content-type": "application/json",
             ...(opts.apiKey === "" ? {} : { authorization: `Bearer ${opts.apiKey}` }),
           },
-          body: JSON.stringify({
-            model: req.model,
-            messages: toApiMessages(req),
-            tools: req.tools.map((t) => ({ type: "function", function: t })),
-            stream: true,
-            stream_options: { include_usage: true },
-            ...(req.maxTokens !== undefined ? { max_tokens: req.maxTokens } : {}),
-            ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
-          }),
+          body,
           signal,
         })
+      const bodyOf = (withKey: boolean): string => JSON.stringify({
+        model: req.model,
+        messages: toApiMessages(req),
+        tools: req.tools.map((t) => ({ type: "function", function: t })),
+        stream: true,
+        stream_options: { include_usage: true },
+        // Fixed key position keeps the serialized field order deterministic.
+        ...(withKey ? { prompt_cache_key: truncateCacheKey(req.promptCache!.key!) } : {}),
+        ...(req.maxTokens !== undefined ? { max_tokens: req.maxTokens } : {}),
+        ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+      })
+      let res: Response
+      try {
+        res = await post(bodyOf(wantCacheKey))
+        // Schema-level rejection → strip the key and retry once. Not on
+        // 401/403/429: auth/ratelimit failures are not schema problems.
+        if (res.status === 400 && wantCacheKey) {
+          console.error("kclaw openai-compat: endpoint rejected prompt_cache_key (400); retrying without it")
+          const retry = await post(bodyOf(false))
+          // Remember the verdict only when the retry succeeded: a retry that
+          // still fails points at a non-key cause (bad model name etc.) and
+          // must not silently disable the cache key for this entry.
+          if (retry.ok) cacheKeyRejected = true
+          res = retry
+        }
       } catch (err) {
         rethrowClassified(err, signal, timeoutMs)
       }
@@ -120,7 +164,15 @@ export function createOpenAiCompatClient(opts: {
           const chunk: ChatChunk = JSON.parse(line)
           const delta = chunk.choices?.[0]?.delta
           if (chunk.usage) {
-            usage = { inputTokens: chunk.usage.prompt_tokens ?? 0, outputTokens: chunk.usage.completion_tokens ?? 0 }
+            // prompt_tokens already includes the cached part, so inputTokens
+            // stays the total. cached_tokens is the only cache metric this
+            // wire format has — no write side. Absent details = unknown, not 0.
+            const cached = chunk.usage.prompt_tokens_details?.cached_tokens
+            usage = {
+              inputTokens: chunk.usage.prompt_tokens ?? 0,
+              outputTokens: chunk.usage.completion_tokens ?? 0,
+              ...(cached !== undefined ? { cacheReadTokens: cached } : {}),
+            }
           }
           if (chunk.choices?.[0]?.finish_reason != null) finish = chunk.choices[0].finish_reason
           // Explicit emptiness checks: undefined, null and "" all carry no

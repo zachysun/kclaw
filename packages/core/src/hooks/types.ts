@@ -8,7 +8,7 @@
  * same chain (hooks/runner.ts). Nothing in this module imports the agent loop
  * — the loop depends on these types, never the reverse.
  */
-import type { Message, ThinkingBlock, ToolCallBlock, ToolResultBlock } from "../protocol/index.js"
+import type { Message, ThinkingBlock, ToolCallBlock, ToolResultBlock, Usage } from "../protocol/index.js"
 import type { ProviderMessage } from "../provider/types.js"
 import type { ActiveSummary } from "../session/compaction.js"
 
@@ -44,13 +44,22 @@ export interface HookContextMap {
   "run-before": { message: Message }
   /** run 结束（runAgent 已返回）。返回值忽略。 */
   "run-after": {
-    outcome: { stopReason: string; totalUsage: { inputTokens: number; outputTokens: number } }
+    outcome: {
+      stopReason: string
+      totalUsage: {
+        inputTokens: number
+        outputTokens: number
+        /** 仅 run 内所有 LLM 调用都携带该字段时出现；缺省 = 未知。 */
+        cacheReadTokens?: number
+        cacheWriteTokens?: number
+      }
+    }
     model: string
   }
   /** 每次 LLM 调用前（模型视图已装配）。返回 ProviderMessage[] = 改写生效。 */
   "llm-before": { messages: ProviderMessage[] }
-  /** 一次 LLM 调用完成。返回值忽略。 */
-  "llm-after": { usage: { inputTokens: number; outputTokens: number }; stopReason: string; latencyMs: number }
+  /** 一次 LLM 调用完成（usage 整体透传，含缓存字段，缺省 = 未知）。返回值忽略。 */
+  "llm-after": { usage: Usage; stopReason: string; latencyMs: number }
   /** provider 层重试（withRetry 回调）。返回值忽略。 */
   "llm-retry": { attempt: number; error: string }
   /** 工具执行前、权限裁决之前。观察位；声明 failure:"deny" 的钩子失败时本次调用被拒绝（fail-closed 自选档）。返回值忽略。 */

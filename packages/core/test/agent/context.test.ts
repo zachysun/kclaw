@@ -193,6 +193,31 @@ describe("toProviderMessages tool-result eviction", () => {
     const out = toProviderMessages(msgs, 50, { toolResultKeep: 8 })
     expect(out.find((m) => m.role === "tool")!.content).toContain("一的完整输出")
   })
+
+  it("toolResultKeep 0 means NO count-based eviction: every result is sent verbatim（缓存前缀稳定的新默认）", () => {
+    const msgs = [...big("一", "c1", "fs_read"), ...big("二", "c2", "exec"), ...big("三", "c3", "fs_read")]
+    const out = toProviderMessages(msgs, 50, { toolResultKeep: 0 })
+    const tools = out.filter((m) => m.role === "tool")
+    expect(tools.length).toBe(3)
+    expect(tools[0]!.content).toContain("一的完整输出")
+    expect(tools[1]!.content).toContain("二的完整输出")
+    expect(tools[2]!.content).toContain("三的完整输出")
+  })
+
+  it("undefined keeps everything (unchanged), and the token budget still evicts under keep 0", () => {
+    const msgs = [...big("一", "c1", "fs_read"), ...big("二", "c2", "exec"), ...big("三", "c3", "fs_read")]
+    for (const keep of [undefined, 0]) {
+      const out = toProviderMessages(msgs, 50, { ...(keep === undefined ? {} : { toolResultKeep: keep }) })
+      const tools = out.filter((m) => m.role === "tool")
+      expect(tools.every((m) => !m.content.includes("已省略"))).toBe(true)
+    }
+    // 省略线照旧：预算装不下的旧结果仍以占位符发送（GUARANTEED_TOOL_RESULTS
+    // 保底最新的两条，其余被预算省略）。
+    const budgeted = toProviderMessages(msgs, 50, { toolResultKeep: 0, tokenBudget: 1 })
+    const budgetTools = budgeted.filter((m) => m.role === "tool")
+    expect(budgetTools[0]!.content).toContain("已省略")
+    expect(budgetTools.at(-1)!.content).toContain("三的完整输出")
+  })
 })
 
 describe("toProviderMessages — v3", () => {
