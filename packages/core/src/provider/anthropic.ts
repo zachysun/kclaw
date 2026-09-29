@@ -250,9 +250,13 @@ export function createAnthropicClient(opts: {
         // Schema-level rejection → strip the markers and retry once. Not on
         // 401/403/429: auth/ratelimit failures are not schema problems.
         if (res.status === 400 && wantCache) {
-          cacheMarkersRejected = true
-          console.error("kclaw anthropic: endpoint rejected cache_control markers (400); retrying without them and remembering the verdict for this entry")
-          res = await post(JSON.stringify(toAnthropicPayload(req, false)))
+          console.error("kclaw anthropic: endpoint rejected cache_control markers (400); retrying without them")
+          const retry = await post(JSON.stringify(toAnthropicPayload(req, false)))
+          // Remember the verdict only when the retry succeeded: a retry that
+          // still fails points at a non-marker cause (bad model name etc.) and
+          // must not silently disable markers for this entry.
+          if (retry.ok) cacheMarkersRejected = true
+          res = retry
         }
       } catch (err) {
         rethrowClassified(err, signal, timeoutMs)

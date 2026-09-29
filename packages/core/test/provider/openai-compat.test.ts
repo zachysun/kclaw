@@ -270,6 +270,21 @@ describe("openai-compat prompt_cache_key", () => {
     expect(bodies[2]).not.toHaveProperty("prompt_cache_key")
   })
 
+  it("a 400 after the key-free retry surfaces the original llm http 400 and does NOT remember the verdict", async () => {
+    const { bodies, fetchCalls, fetchImpl } = captureBodies([400, 400, 400, 400])
+    const REQ = { model: "m", system: "s", messages: [], tools: [], promptCache: { key: "ses_abc" } }
+    const client = createOpenAiCompatClient({ baseUrl: "https://x", apiKey: "k", fetchImpl })
+    await expect(collect(client, REQ)).rejects.toThrow("llm http 400")
+    // A still-failing retry points at a non-key cause (bad model name etc.):
+    // the verdict is not remembered, so the next request sends the key again.
+    await expect(collect(client, REQ)).rejects.toThrow("llm http 400")
+    expect(fetchCalls()).toBe(4)
+    expect(bodies[0]!.prompt_cache_key).toBe("ses_abc")
+    expect(bodies[1]).not.toHaveProperty("prompt_cache_key")
+    expect(bodies[2]!.prompt_cache_key).toBe("ses_abc")
+    expect(bodies[3]).not.toHaveProperty("prompt_cache_key")
+  })
+
   it("does NOT strip on 429 (rate limiting is not a schema problem)", async () => {
     const { bodies, fetchCalls, fetchImpl } = captureBodies([429])
     await expect(collect(createOpenAiCompatClient({ baseUrl: "https://x", apiKey: "k", fetchImpl }), {

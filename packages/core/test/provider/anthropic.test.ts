@@ -288,9 +288,18 @@ describe("anthropic cache breakpoints (prompt_cache channel)", () => {
     expect(JSON.stringify(bodies[0])).toContain("cache_control")
   })
 
-  it("a 400 after the marker-free retry surfaces the original llm http 400", async () => {
-    const { fetchImpl } = captureBodies([400, 400])
-    await expect(collect(createAnthropicClient({ baseUrl: "https://x", apiKey: "k", fetchImpl }), CACHE_REQ))
-      .rejects.toThrow("llm http 400")
+  it("a 400 after the marker-free retry surfaces the original llm http 400 and does NOT remember the verdict", async () => {
+    const { bodies, fetchCalls, fetchImpl } = captureBodies([400, 400, 400, 400])
+    const client = createAnthropicClient({ baseUrl: "https://x", apiKey: "k", fetchImpl })
+    await expect(collect(client, CACHE_REQ)).rejects.toThrow("llm http 400")
+    // A still-failing retry points at a non-marker cause (bad model name etc.):
+    // the verdict is not remembered, so the next request tries the markers
+    // again before stripping.
+    await expect(collect(client, CACHE_REQ)).rejects.toThrow("llm http 400")
+    expect(fetchCalls()).toBe(4)
+    expect(JSON.stringify(bodies[0])).toContain("cache_control")
+    expect(JSON.stringify(bodies[1])).not.toContain("cache_control")
+    expect(JSON.stringify(bodies[2])).toContain("cache_control")
+    expect(JSON.stringify(bodies[3])).not.toContain("cache_control")
   })
 })

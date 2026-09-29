@@ -130,9 +130,13 @@ export function createOpenAiCompatClient(opts: {
         // Schema-level rejection → strip the key and retry once. Not on
         // 401/403/429: auth/ratelimit failures are not schema problems.
         if (res.status === 400 && wantCacheKey) {
-          cacheKeyRejected = true
-          console.error("kclaw openai-compat: endpoint rejected prompt_cache_key (400); retrying without it and remembering the verdict for this entry")
-          res = await post(bodyOf(false))
+          console.error("kclaw openai-compat: endpoint rejected prompt_cache_key (400); retrying without it")
+          const retry = await post(bodyOf(false))
+          // Remember the verdict only when the retry succeeded: a retry that
+          // still fails points at a non-key cause (bad model name etc.) and
+          // must not silently disable the cache key for this entry.
+          if (retry.ok) cacheKeyRejected = true
+          res = retry
         }
       } catch (err) {
         rethrowClassified(err, signal, timeoutMs)
