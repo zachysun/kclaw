@@ -1,18 +1,20 @@
 /**
- * 记忆调度器：定时 + 跟随两种兜底触发的宿主。
+ * 记忆调度器：定时 + 跟随两种保底触发的宿主。
  *
  * - 定时：每扫一次，对每个 workdir 判断距上次 interval 触发是否 ≥ intervalMinutes
  *   （上次时间存 <projectDir>/state.json 的 intervalLastRun；经 MemorySystem 直通读写）。
  * - 跟随：RunManager 在每个 run 结束（任何 stopReason）时调 system.scheduleFollowCheck
  *   （daemon 装配钩子，见 run.ts）；scheduler 扫到 due 的检查执行 triggerFollow 并 clear。
- *   挂起检查经 WriteLedger 落盘，daemon 重启后由首次 sweep 补查。
+ *   挂起检查经 WriteLedger 写盘，daemon 重启后由首次 sweep 补查。
  * - 夜间内化：本地时间过了 consolidateHour（默认凌晨 3 点）且该项目今天（本地日期）
  *   未跑过则触发 triggerNightly；daemon 凌晨未开时开机后首个 sweep 补跑。触发发起后
  *   立即记日期（即便失败也推进，与 interval 的 M-2 取舍一致）：防重入优先，失败次日再试。
  *
- * 手动/立刻不入此调度器（memory_save 工具与 /memory save 直接触发）。
+ * 定时器骨架（首扫 + interval + 在飞记账 + 停机等待）在 host-kit，本文件
+ * 只剩记忆域逻辑。手动/立刻不入此调度器（memory_save 工具与 /memory save 直接触发）。
  */
 import type { KclawConfig, MemoryScheduleBook, MemoryTriggers, SessionStore } from "@kclaw/core"
+import { followGateDue, startIntervalHost } from "./host-kit.js"
 
 const DEFAULT_SCAN_MS = 60_000
 
@@ -20,19 +22,6 @@ const DEFAULT_SCAN_MS = 60_000
 function localDate(d: Date): string {
   const p = (n: number): string => String(n).padStart(2, "0")
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
-
-/**
- * 跟随门禁判定（纯函数）：end_turn 之后 idleMinutes 内无新活动 → due。
- * 空活动记录（无会话）视作"end_turn 即最后活动"，保证重启后可补查。
- */
-export function followGateDue(
-  endTurnAt: string, nowISO: string,
-  opts: { idleMinutes: number; lastActivityAt: string },
-): boolean {
-  const end = Date.parse(endTurnAt)
-  const activity = opts.lastActivityAt === "" ? end : Date.parse(opts.lastActivityAt)
-  return Date.parse(nowISO) - end >= opts.idleMinutes * 60_000 && activity <= end
 }
 
 export interface MemorySchedulerHandle { stop(): Promise<void> }
@@ -54,71 +43,59 @@ export function startMemoryScheduler(deps: {
 }): MemorySchedulerHandle {
   const log = deps.log ?? ((m) => console.error(m))
   const now = deps.now ?? (() => new Date())
-  const intervalMs = deps.intervalMs ?? DEFAULT_SCAN_MS
-  const inFlight = new Set<Promise<void>>()
-  let stopped = false
-  let timer: ReturnType<typeof setInterval> | undefined
-
-  async function sweep(): Promise<void> {
-    const cfg = deps.config.memory
-    for (const workdir of deps.workdirs()) {
-      if (stopped) return
-      // 定时（intervalMinutes=0 关闭）
-      if (cfg.write.intervalMinutes > 0) {
-        const last = deps.system.intervalLastRun(workdir)
-        if (last === undefined || now().getTime() - Date.parse(last) >= cfg.write.intervalMinutes * 60_000) {
-          // 定时触发无显式归属会话：pipeline 对该项目全部会话逐个补增量，
-          // 各批次的落盘事件挂各自的来源会话。
-          const p = deps.system.triggerInterval(workdir).catch((e) => log(`kclaw memory interval failed: ${String(e)}`))
-          inFlight.add(p); void p.finally(() => inFlight.delete(p))
-          // markIntervalRun 在触发发起后立即推进（即便失败也推进，M-2 取舍）：interval
-          // 语义是"至少每 intervalMinutes 兜底扫一次"，失败后下个整周期再试，避免同项目
-          // 每次扫描都重试同一失败批次；防重入优先于失败重试。
-          deps.system.markIntervalRun(workdir, now().toISOString())
+  const handle = startIntervalHost({
+    label: "memory scheduler",
+    intervalMs: deps.intervalMs ?? DEFAULT_SCAN_MS,
+    onError: (err) => log(`kclaw memory sweep failed: ${String(err)}`),
+    async sweep(host) {
+      const cfg = deps.config.memory
+      for (const workdir of deps.workdirs()) {
+        if (host.stopped) return
+        // 定时（intervalMinutes=0 关闭）
+        if (cfg.write.intervalMinutes > 0) {
+          const last = deps.system.intervalLastRun(workdir)
+          if (last === undefined || now().getTime() - Date.parse(last) >= cfg.write.intervalMinutes * 60_000) {
+            // 定时触发无显式归属会话：pipeline 对该项目全部会话逐个补增量，
+            // 各批次的写入事件挂各自的来源会话。
+            host.track(deps.system.triggerInterval(workdir).catch((e) => log(`kclaw memory interval failed: ${String(e)}`)))
+            // markIntervalRun 在触发发起后立即推进（即便失败也推进，M-2 取舍）：interval
+            // 语义是"至少每 intervalMinutes 保底扫一次"，失败后下个整周期再试，避免同项目
+            // 每次扫描都重试同一失败批次；防重入优先于失败重试。
+            deps.system.markIntervalRun(workdir, now().toISOString())
+          }
         }
-      }
-      // 跟随（idleMinutes=0 关闭）：补查该项目的挂起检查（含 daemon 重启恢复）
-      if (cfg.write.idleMinutes > 0) {
-        for (const check of deps.system.pendingFollowChecks(workdir)) {
-          const activity = deps.system.lastActivity(workdir)
-          if (followGateDue(check.endTurnAt, now().toISOString(), { idleMinutes: cfg.write.idleMinutes, lastActivityAt: activity })) {
-            deps.system.clearFollowCheck(workdir, check.sessionId)
-            // 跟随触发的归属会话 = 发起该检查的会话（check.sessionId）。
-            const p = deps.system.triggerFollow(workdir, check.sessionId).catch((e) => log(`kclaw memory follow failed: ${String(e)}`))
-            inFlight.add(p); void p.finally(() => inFlight.delete(p))
-          } else if (activity !== "" && Date.parse(activity) > Date.parse(check.endTurnAt)) {
-            // I-1：门禁不过但 end_turn 之后已有更新活动（用户切到别的会话继续对话、
-            // 或该项目又跑了一轮）——该检查的锚点已被新活动取代，语义上旧检查让位
-            // 直接清掉，防止
-            // state.json 里 followChecks 无界增长。
-            deps.system.clearFollowCheck(workdir, check.sessionId)
+        // 跟随（idleMinutes=0 关闭）：补查该项目的挂起检查（含 daemon 重启恢复）
+        if (cfg.write.idleMinutes > 0) {
+          for (const check of deps.system.pendingFollowChecks(workdir)) {
+            const activity = deps.system.lastActivity(workdir)
+            if (host.stopped) return
+            if (followGateDue(check.endTurnAt, now().toISOString(), { idleMinutes: cfg.write.idleMinutes, lastActivityAt: activity })) {
+              deps.system.clearFollowCheck(workdir, check.sessionId)
+              // 跟随触发的归属会话 = 发起该检查的会话（check.sessionId）。
+              host.track(deps.system.triggerFollow(workdir, check.sessionId).catch((e) => log(`kclaw memory follow failed: ${String(e)}`)))
+            } else if (activity !== "" && Date.parse(activity) > Date.parse(check.endTurnAt)) {
+              // I-1：门禁不过但 end_turn 之后已有更新活动（用户切到别的会话继续对话、
+              // 或该项目又跑了一轮）——该检查的锚点已被新活动取代，语义上旧检查停用，
+              // 直接清掉，防止 state.json 里 followChecks 无界增长。
+              deps.system.clearFollowCheck(workdir, check.sessionId)
+            }
+          }
+        }
+        // 夜间内化（consolidateHour 负值关闭；pipeline 内部再受 memory.consolidate 总开关管）：
+        // 本地时间过了 consolidateHour 且该项目今天（本地日期）未跑则触发——daemon 凌晨
+        // 未开时，开机后首个 sweep 补跑。日期由 markNightlyRun 记本地日期（防同日重跑），
+        // 内化判据基线由 pipeline 记 UTC 日期（与线文件 updated 同源），两个时区各管各的。
+        if (cfg.consolidateHour >= 0) {
+          const t = now()
+          if (t.getHours() >= cfg.consolidateHour && deps.system.nightlyLastRun(workdir) !== localDate(t)) {
+            // 夜间内化无显式归属会话时，memory 事件记到项目最近活动会话名下
+            // （判据唯一正本在 core：system.recentSessionId）。
+            host.track(deps.system.triggerNightly(workdir, deps.system.recentSessionId(workdir)).catch((e) => log(`kclaw memory nightly failed: ${String(e)}`)))
+            deps.system.markNightlyRun(workdir, localDate(t))
           }
         }
       }
-      // 夜间内化（consolidateHour 负值关闭；pipeline 内部再受 memory.consolidate 总开关管）：
-      // 本地时间过了 consolidateHour 且该项目今天（本地日期）未跑则触发——daemon 凌晨
-      // 未开时，开机后首个 sweep 补跑。日期由 markNightlyRun 记本地日期（防同日重跑），
-      // 内化判据基线由 pipeline 记 UTC 日期（与线文件 updated 同源），两个时区各管各的。
-      if (cfg.consolidateHour >= 0) {
-        const t = now()
-        if (t.getHours() >= cfg.consolidateHour && deps.system.nightlyLastRun(workdir) !== localDate(t)) {
-          // 夜间内化无显式归属会话时，memory 事件落到项目最近活动会话名下
-          // （判据唯一真身在 core：system.recentSessionId）。
-          const p = deps.system.triggerNightly(workdir, deps.system.recentSessionId(workdir)).catch((e) => log(`kclaw memory nightly failed: ${String(e)}`))
-          inFlight.add(p); void p.finally(() => inFlight.delete(p))
-          deps.system.markNightlyRun(workdir, localDate(t))
-        }
-      }
-    }
-  }
-
-  void sweep()
-  timer = setInterval(() => void sweep(), intervalMs)
-  return {
-    async stop(): Promise<void> {
-      stopped = true
-      if (timer !== undefined) clearInterval(timer)
-      await Promise.allSettled([...inFlight])
     },
-  }
+  })
+  return { stop: () => handle.stop() }
 }

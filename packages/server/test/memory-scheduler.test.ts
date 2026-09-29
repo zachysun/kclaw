@@ -114,8 +114,8 @@ describe("startMemoryScheduler", () => {
   })
 
   it("follow gate: end_turn schedules a check; new activity before idleMinutes cancels it", async () => {
-    // 集成级：跟随门禁逻辑做成纯函数 followGateDue 导出单测（见实现），这里测判定函数
-    const { followGateDue } = await import("../src/memory-scheduler.js")
+    // 集成级：跟随门禁逻辑做成纯函数 followGateDue 导出单测（host-kit），这里测判定函数
+    const { followGateDue } = await import("../src/host-kit.js")
     const endTurnAt = "2026-08-29T10:00:00Z"
     // 新活动发生在 end_turn 之后（idle 窗口内）→ 取消（not due）
     expect(followGateDue(endTurnAt, "2026-08-29T10:05:00Z", { idleMinutes: 10, lastActivityAt: "2026-08-29T10:04:00Z" })).toBe(false)

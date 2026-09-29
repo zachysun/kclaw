@@ -34,6 +34,7 @@ import { resolveRunModel } from "@kclaw/core"
 import { createExecSandbox } from "@kclaw/core/sandbox"
 import type { GoalCheckedEvent, SessionEvent } from "@kclaw/core/protocol"
 import type { RunManager } from "./run.js"
+import { createTracker } from "./host-kit.js"
 
 /** 进程内运行时：armed 是 ADR-0002 的核心（重启后目标在、循环不续）。 */
 interface GoalRuntime {
@@ -96,8 +97,8 @@ const NO_PROGRESS_MARK = "无"
 export class GoalLoopHost {
   readonly #deps: GoalLoopDeps
   readonly #runtimes = new Map<string, GoalRuntime>()
-  /** 进行中的检查（stop() 等待它们落定）。 */
-  readonly #inFlight = new Set<Promise<void>>()
+  /** 进行中的检查（stop() 等待它们落定；记账骨架见 host-kit）。 */
+  readonly #inFlight = createTracker()
 
   constructor(deps: GoalLoopDeps) {
     this.#deps = deps
@@ -246,17 +247,15 @@ export class GoalLoopHost {
     if (!rt.armed || rt.judging) return
     const goal = this.snapshot(sessionId)
     if (goal === undefined || goal.state !== "active") return
-    const p = this.#check(sessionId)
-      .catch(() => {})
-      .finally(() => {
-        this.#inFlight.delete(p)
-      })
-    this.#inFlight.add(p)
+    this.#inFlight.track(
+      this.#check(sessionId)
+        .catch(() => {}),
+    )
   }
 
   /** daemon 停机：等所有进行中的检查落定（判定调用可能还在飞）。 */
   async dispose(): Promise<void> {
-    await Promise.allSettled([...this.#inFlight])
+    await this.#inFlight.settleAll()
   }
 
   #sandbox(workdir: string | undefined) {

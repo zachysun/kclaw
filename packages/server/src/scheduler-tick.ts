@@ -19,11 +19,13 @@
  *   still-settling one.
  * - A tick that throws (scheduler.claimDue, or the guards around one job)
  *   is logged and dropped: the interval must survive its own failures (v1).
+ *   The timer/in-flight skeleton itself lives in host-kit.
  */
 import { makeEvent } from "@kclaw/core"
 import type { Job, JobScheduler, Message, Notifier, PermissionMode, SessionMeta, SessionStore, TextBlock } from "@kclaw/core"
 import type { EventBus } from "@kclaw/core"
 import type { RunManager } from "./run.js"
+import { startIntervalHost, type IntervalHost } from "./host-kit.js"
 
 /** Default cadence (30s polling). */
 const DEFAULT_INTERVAL_MS = 30_000
@@ -67,8 +69,8 @@ export interface SchedulerTickHandle {
 const SUMMARY_MAX_CHARS = 500
 
 /**
- * The text of the LAST assistant message, its text blocks joined. This is
- * the "what did the job say" summary pushed on the ok path; "" when the run
+ * The text of the LAST assistant message, its text blocks joined. This is the
+ * "what did the job say" summary pushed on the ok path; "" when the run
  * produced no assistant message.
  */
 function lastAssistantText(messages: Message[]): string {
@@ -92,32 +94,15 @@ export function startSchedulerTick(deps: SchedulerTickDeps): SchedulerTickHandle
 
   /** Job ids with a run in flight; a due job already here is skipped this tick. */
   const inFlight = new Set<string>()
-  /** Not-yet-settled job-run promises; `stop` awaits a snapshot of this. */
-  const tracked: Promise<void>[] = []
-  let stopped = false
-  let timer: ReturnType<typeof setInterval> | undefined
-
-  /** Remember a fire-and-forget job run until it settles (bounded growth). */
-  function track(p: Promise<void>): void {
-    tracked.push(p)
-    void p.then(
-      () => detach(),
-      () => detach(),
-    )
-    function detach(): void {
-      const i = tracked.indexOf(p)
-      if (i !== -1) tracked.splice(i, 1)
-    }
-  }
 
   /**
    * Push the terminal-state payload through the injected notifier. Fire and
    * forget under track(): notifyJobFinished never rejects, and stop() awaits
    * pending pushes alongside the job runs. No notifier dep → no push at all.
    */
-  function push(job: Job, status: "ok" | "error", summary: string, session: SessionMeta | undefined): void {
+  function push(host: IntervalHost, job: Job, status: "ok" | "error", summary: string, session: SessionMeta | undefined): void {
     if (notifier === undefined) return
-    track(
+    host.track(
       notifier.notifyJobFinished({
         jobId: job.id,
         jobName: job.name,
@@ -130,14 +115,14 @@ export function startSchedulerTick(deps: SchedulerTickDeps): SchedulerTickHandle
   }
 
   /** Record a failed fire and broadcast job.failed. */
-  function fail(job: Job, message: string, session: SessionMeta | undefined): void {
+  function fail(host: IntervalHost, job: Job, message: string, session: SessionMeta | undefined): void {
     scheduler.markRun(job.id, "error", now(), message)
     bus.emit(makeEvent("job.failed", { jobId: job.id, error: { code: "job_failed", message } }))
-    push(job, "error", message, session)
+    push(host, job, "error", message, session)
   }
 
   /** Fire one due job: session → job.started → run → markRun + job.completed/failed. */
-  async function fireJob(job: Job): Promise<void> {
+  async function fireJob(host: IntervalHost, job: Job): Promise<void> {
     inFlight.add(job.id)
     let session: SessionMeta | undefined // hoisted: fail() pushes its handle
     try {
@@ -158,22 +143,22 @@ export function startSchedulerTick(deps: SchedulerTickDeps): SchedulerTickHandle
       if (outcome.stopReason !== "error") {
         scheduler.markRun(job.id, "ok", now())
         bus.emit(makeEvent("job.completed", { jobId: job.id, summary: outcome.stopReason }))
-        push(job, "ok", lastAssistantText(outcome.messages), session)
+        push(host, job, "ok", lastAssistantText(outcome.messages), session)
       } else {
         // the loop surfaced the provider failure as stopReason "error"; the
         // outcome carries no message of its own, so the reason is the record
-        fail(job, outcome.stopReason, session)
+        fail(host, job, outcome.stopReason, session)
       }
     } catch (err) {
       // enqueue throwing before/inside the run: same recording, the error's own message
-      fail(job, err instanceof Error ? err.message : String(err), session)
+      fail(host, job, err instanceof Error ? err.message : String(err), session)
     } finally {
       inFlight.delete(job.id) // ALWAYS: a settled (or never-started) run frees the slot
     }
   }
 
   /** One pass: claim due jobs (claiming advances nextRunAt), fire each not already in flight, sequentially. */
-  async function tick(): Promise<void> {
+  async function tick(host: IntervalHost): Promise<void> {
     let due: Job[]
     try {
       due = scheduler.claimDue(now())
@@ -183,10 +168,10 @@ export function startSchedulerTick(deps: SchedulerTickDeps): SchedulerTickHandle
       return
     }
     for (const job of due) {
-      if (stopped) return
+      if (host.stopped) return
       if (inFlight.has(job.id)) continue
-      const p = fireJob(job)
-      track(p)
+      const p = fireJob(host, job)
+      host.track(p)
       // jobs are rare: sequential await is fine. fireJob settles its own
       // outcomes; this catch guards its guards (e.g. a throwing markRun) so
       // one bad job can never end the interval either.
@@ -204,18 +189,10 @@ export function startSchedulerTick(deps: SchedulerTickDeps): SchedulerTickHandle
     }
   }
 
-  // one immediate check, then the interval
-  void tick()
-  timer = setInterval(() => void tick(), intervalMs)
-
-  return {
-    async stop(): Promise<void> {
-      stopped = true
-      if (timer !== undefined) {
-        clearInterval(timer)
-        timer = undefined
-      }
-      await Promise.allSettled([...tracked]) // bounded: settled promises self-detach
-    },
-  }
+  const handle = startIntervalHost({
+    label: "scheduler tick",
+    intervalMs,
+    sweep: (host) => tick(host),
+  })
+  return { stop: () => handle.stop() }
 }
