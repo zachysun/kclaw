@@ -262,11 +262,11 @@ llm.stream({ system: <人格>, messages: [
 
 ## 机制三：工具输出省略（budget 驱动）
 
-位置在 `toProviderMessages`（`packages/core/src/agent/context.ts`）——所有发给模型供应商的请求都经它构造。两个可选参数共同决定哪些工具结果保留原文：`opts.toolResultKeep` 是**条数上限**（server 从配置 `sessions.toolResultKeep` 读值、默认 8，经 agent 循环的 `deps.toolResultKeep` 传入），`opts.tokenBudget` 是**省略 budget**（run 组装传入省略线扣除固定开销后的余额：budget × `compactPackRatio` − 系统提示词与工具定义的估算值）。不传时行为完全不变（全部保留）。
+位置在 `toProviderMessages`（`packages/core/src/agent/context.ts`）——所有发给模型供应商的请求都经它构造。两个可选参数共同决定哪些工具结果保留原文：`opts.toolResultKeep` 是**条数上限**（server 从配置 `sessions.toolResultKeep` 读值、默认 0 = 不按条数省略，经 agent 循环的 `deps.toolResultKeep` 传入），`opts.tokenBudget` 是**省略 budget**（run 组装传入省略线扣除固定开销后的余额：budget × `compactPackRatio` − 系统提示词与工具定义的估算值）。不传时行为完全不变（全部保留）。
 
 每次构造请求时分两步筛：
 
-1. **条数上限**：从最新消息往前数，最近 8 个（`toolResultKeep`）工具结果进入候选，更早的直接换成占位符。这一步挡住的是极端长寿运行，40 次工具调用的输出不可能都留着。
+1. **条数上限**：`toolResultKeep > 0` 时从最新消息往前数，最近 N 个工具结果进入候选，更早的直接换成占位符——挡住极端长寿运行。**默认 0（不按条数省略）**：这一步整体跳过、全部原文发送。原默认 8 会让每来一个新结果就把按条数第 9 新的旧结果翻写成占位符——中段历史每轮改写一次、其后 prompt cache 前缀全部失效（实测相邻请求复用率从 100% 跌到 ~33%），2026-09 起默认关闭换取前缀逐字节稳定；显式配置 N≥1 保留旧的滚动省略行为，显式配置 0 的旧语义（"全部省略"）变更为"不按条数省略"。
 2. **budget 装入**：先算基线：窗口内所有非工具结果内容（文本、thinking、note、工具调用参数、内联附件正文）的估算值，加上第 1 步已挤掉的结果按每条约 30 token 的占位成本；系统提示与工具定义的固定开销不在基线里，它们已从省略 budget 中预先扣除（见上）。然后从最新往回逐条处理候选结果：**最新的 2 条无条件保留原文**：保底可见性，省略占位符指示"重新调用获取"，若当轮输出也被省略，重调的新结果同样被省略，模型会对工具彻底致盲、绕着占位符打转；其余的逐条把估算值往基线上加，装得下的保留原文，装不下的换成占位符（各条独立判断，前面装不下不影响后面更旧的条目的去留）。
 
 占位符是一行文字：
@@ -376,7 +376,7 @@ llm.stream({ system: <人格>, messages: [
 | `compactAtRatio` | `0.80` | 黄线：收尾压缩触发线 |
 | `compactPanicRatio` | `0.90` | 红线：中途压缩触发线 |
 | `compactTargetRatio` | `0.33` | 压缩后保留部分的目标大小（占 budget 比例） |
-| `toolResultKeep` | `8` | 发送时保留工具结果原文的**最多条数**（budget 驱动省略的条数上限） |
+| `toolResultKeep` | `0` | 发送时保留工具结果原文的**最多条数**（budget 驱动省略的条数上限）；`0` = 不按条数省略（默认，保 prompt cache 前缀稳定），`N≥1` = 滚动省略旧行为 |
 
 模型条目侧的两个可选字段（`providers.entries.<key>`）：`contextWindow` 是该模型的上下文窗口，作为 budget 上限参与 `resolveContextTokens` 的 min 解析；`maxOutput` 是单次回复的输出上限，run 组装经 agent 循环随每个请求下发为 `max_tokens`（默认不下发，沿用供应商默认）。
 

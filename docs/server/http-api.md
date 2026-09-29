@@ -223,7 +223,7 @@ interface Job {
 |------|------|------|------|------|
 | GET | `/fs/browse` | 列出某目录的子目录（WebUI 工作目录选择器的数据源） | query `path`：绝对路径或 `~` 开头（与权限引擎同样的展开规则）；默认列 `config.workspace` | `{path, parent, dirs}`——path 为符号链接解析后的规范绝对路径；parent 为父目录，文件系统根处为 null；dirs 只含子目录名、大小写不敏感排序。符号链接跟随解析（坏链跳过），macOS 的 `/tmp → private/tmp` 一类仍可导航 |
 | GET | `/fs/files` | 列出一个工作区的文件清单（WebUI 输入框 `@` 文件引用抽屉的数据源，机制见 [file-mentions](../core/file-mentions.md)） | query `workdir`：绝对路径或 `~` 开头（与 `/fs/browse` 同一 `resolveQueryDir` 解析）；默认列 `config.workspace` | `{workdir, files, truncated}`——workdir 为符号链接解析后的规范路径；files 为工作区相对路径（POSIX 分隔、仅文件、大小写不敏感排序）；truncated 为清单是否在 5000 条上限处被截断。git 仓库走 `git ls-files -z -co --exclude-standard`（跟踪 + 未被 ignore 的未跟踪文件，NUL 分隔保中文名），非 git 回退递归扫描（不进入 `.git`/`.kclaw`/`node_modules`） |
-| GET | `/usage?by=day\|session\|model` | token/费用用量聚合 | `by` 三选一；无效值静默回退到 `day` | `{by, buckets[], total}`——bucket/total 形状同为 `{key, inputTokens, outputTokens, costUsd}`，费用按 `config.usage.prices` 计价，未配置价格的模型计 0 |
+| GET | `/usage?by=day\|session\|model` | token/费用用量聚合 | `by` 三选一；无效值静默回退到 `day` | `{by, buckets[], total}`——bucket/total 形状同为 `{key, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd}`；两个缓存字段 `number \| null`，**null = 桶内没有任何行携带该指标（未知）**——供应商不返回缓存指标是常态，消费方应显示 "—" 而非 0；费用按 `config.usage.prices` 计价（模型带缓存价目且行内有缓存数据时按非缓存输入/读/写/输出分列），未配置价格的模型计 0 |
 
 `/fs/browse` 与 `/fs/files` 的出错是三态 400：`path does not exist: <path>`、`not a directory: <path>`、`cannot read directory: <path>`。这两个端点能列出本机任意目录——浏览端点的设计目的就是允许把工作目录设在任何地方，防线只有与其他 API 相同的 Bearer 鉴权；文件清单端点限制在工作区内（`workdir` 必须是目录），但同样不校验目录归属。用量数据记录在一张 SQLite 表里，数据来源见 [storage](../core/storage.md) 的用量记录一节。
 
