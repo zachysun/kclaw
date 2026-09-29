@@ -38,7 +38,8 @@ import {
 import { useSilentFetch } from "../daemon-clients.js"
 import { runWebCommand } from "./commands.js"
 import { ChatView, type CompactionRecordView, type Disposition, type PendingAttachment } from "./ChatView.js"
-import type { GoalWebView } from "./GoalPanel.js"
+import type { GoalView, GoalViewResponse } from "@kclaw/core/protocol"
+import { parseSendDisposition, resolveSendDisposition } from "@kclaw/core/protocol"
 import type { TeamPanel } from "@kclaw/core/protocol"
 
 export interface ChatPanelProps {
@@ -168,7 +169,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   // 手动刷新；armed+active 时 5s 轮询兜底（判定器在 daemon 侧异步推进，
   // 不发本会话的流，轮询是面板跟上进度的唯一途径；armed=false 的重启后
   // 待恢复态不轮询——没有会变化的东西）。
-  const [goalView, setGoalView] = useState<GoalWebView | null>(null)
+  const [goalView, setGoalView] = useState<GoalView | null>(null)
   const goalFetchBusy = useRef(false)
   const goalSessionRef = useRef(sessionId)
   const refreshGoal = useCallback((): void => {
@@ -176,7 +177,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     goalFetchBusy.current = true
     const sid = sessionId
     api
-      .get<{ goal: GoalWebView | null }>(`/sessions/${encodeURIComponent(sid)}/goal`)
+      .get<GoalViewResponse>(`/sessions/${encodeURIComponent(sid)}/goal`)
       .then((body) => {
         if (goalSessionRef.current === sid) setGoalView(body.goal ?? null)
       })
@@ -445,10 +446,13 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       .catch((err: unknown) => setNotice(`模型切换失败: ${err instanceof Error ? err.message : String(err)}`))
   }, [api, sessionId])
 
-  // Initial send disposition (same source as CLI chat): the session meta's
-  // dispositionOverride wins, then the config default, then steer. An
-  // unreachable daemon (old versions lack this route/field) silently keeps
-  // steer. The same response also syncs the session's permission mode
+  // Initial send disposition (chain canon in core protocol/wire.ts): the
+  // session meta's dispositionOverride wins, then the config default, then
+  // steer. An unreachable daemon (old versions lack this route/field)
+  // silently keeps steer. The UI deliberately never PRESELECTS interrupt
+  // (one-shot, no longer written sticky — a historical "interrupt" override
+  // falls through to the next link), so both inputs drop it before the
+  // chain. The same response also syncs the session's permission mode
   // (missing mode field → default).
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("default")
   // Child sessions (meta.parentSessionId set) are read-only: the composer is
@@ -472,18 +476,14 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       const parentId = typeof meta.parentSessionId === "string" && meta.parentSessionId !== "" ? meta.parentSessionId : null
       setChildSession(parentId !== null)
       setChildParentId(parentId)
-      // 会话级覆盖只可能是 steer/wait（interrupt 已不再写 sticky，见
-      // handleSetDisposition；历史遗留的 "interrupt" 覆盖按 steer 回退）。
-      const override = meta.dispositionOverride
-      if (override === "steer" || override === "wait") {
-        baseDispositionRef.current = override
-        setDisposition(override)
-      } else {
-        const fallback = cfg.sessions?.defaultDisposition
-        const base = fallback === "wait" ? "wait" : "steer"
-        baseDispositionRef.current = base
-        setDisposition(base)
-      }
+      const override = parseSendDisposition(meta.dispositionOverride)
+      const fallback = parseSendDisposition(cfg.sessions?.defaultDisposition)
+      const base = resolveSendDisposition({
+        override: override === "interrupt" ? undefined : override,
+        configDefault: fallback === "interrupt" ? undefined : fallback,
+      })
+      baseDispositionRef.current = base
+      setDisposition(base)
       setPermissionMode(isPermissionMode(meta.mode) ? meta.mode : "default")
     },
     [api, sessionId],

@@ -386,6 +386,11 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     if (runRef === undefined) throw new Error("run manager not ready")
     return runRef
   }
+  // Resident-host teardown registry: each host registers right where it is
+  // constructed; stop() walks the list under the shared deadline. Order =
+  // construction order — the entries are independent (no host's stop awaits
+  // another host's work), so a new host is one registration line.
+  const hostStops: Array<[label: string, stop: () => Promise<void>]> = []
   // Feishu channel: created after the RunManager exists (it needs run/sessions/
   // bus); the subagent host holds a forwarder so the settle push works either way.
   let feishuChannel: FeishuChannel | undefined
@@ -416,6 +421,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     home: paths.home,
     log: (line) => console.error(`kclaw goal: ${line}`),
   })
+  hostStops.push(["goal loop", () => goalHost.dispose()])
   const run = new RunManager({
     config,
     paths,
@@ -540,18 +546,21 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   run.recoverQueues()
 
   const tick = startSchedulerTick({ scheduler: jobs, run, bus, sessions, intervalMs: opts.schedulerIntervalMs ?? DEFAULT_SCHEDULER_INTERVAL_MS, purgeTtlMs: config.sessions.recycleBinTtlMs, notifier, webBase: `http://${HOST}:${port}`, defaultMode: config.permissions.defaultMode })
+  hostStops.push(["scheduler tick", () => tick.stop()])
   // 记忆调度器：定时 + 跟随补查。workdirs = 全部有会话的
-  // 项目（去重）；daemon 重启后首次 sweep 会补查落盘的挂起跟随检查。
+  // 项目（去重）；daemon 重启后首次 sweep 会补查写入的挂起跟随检查。
   const memoryTick = startMemoryScheduler({
     system: memory, sessions, config,
     workdirs: () => Array.from(new Set(sessions.list().map((m) => m.workdir ?? config.workspace))),
   })
+  hostStops.push(["memory scheduler", () => memoryTick.stop()])
   // 技能调度器：跟随检查消费端（成功才清 + 重试上限）。关闭配置下一个 sweep
   // 直接返回，检查停留在账本里不动（功能重开后继续消费）。
   const skillTick = startSkillScheduler({
     system: skillsEvolution, sessions, config,
     workdirs: () => Array.from(new Set(sessions.list().map((m) => m.workdir ?? config.workspace))),
   })
+  hostStops.push(["skill scheduler", () => skillTick.stop()])
 
   // Feishu channel (#45, managed since #46): opt-in via ~/.kclaw/feishu.json
   // (enabled). Started AFTER the schedulers under the manager's own hard
@@ -578,10 +587,9 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       // tolerates partial runs; each claimed occurrence already had
       // next_run_at advanced at claim time, so the killed run does not
       // re-fire: the job fires again at its next scheduled time.
-      await withStopTimeout(tick.stop(), stopTimeoutMs, "scheduler tick")
-      await withStopTimeout(memoryTick.stop(), stopTimeoutMs, "memory scheduler")
-      await withStopTimeout(skillTick.stop(), stopTimeoutMs, "skill scheduler")
-      await withStopTimeout(goalHost.dispose(), stopTimeoutMs, "goal loop")
+      for (const [label, stop] of hostStops) {
+        await withStopTimeout(stop(), stopTimeoutMs, label)
+      }
       await withStopTimeout(feishuManager.stop(), stopTimeoutMs, "feishu channel")
       // project-file watchers first: no reconcile can race the manager teardown
       mcpProjects?.close()

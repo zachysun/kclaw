@@ -6,9 +6,11 @@
  * list and the management actions. The lazy daemon rests entries in
  * "未连接"; such entries (and failed ones) offer a manual 连接 probe.
  * Add/edit forms pick the target group from a dropdown — new entries
- * default to the selected session's workdir (fallback: the daemon's main
- * workspace), an edit can move the entry across groups (PATCH toGroup).
- * Fetch on entry, then poll every 2s while the tab is visible so
+ * default to the server-computed defaultGroup (the selected session's
+ * workdir when the daemon knows it, else its workspace, else global; the
+ * rule lives server-side, the fetch just carries the session workdir as a
+ * query parameter), an edit can move the entry across groups (PATCH
+ * toGroup). Fetch on entry, then poll every 2s while the tab is visible so
  * connection-state flips show up without user action; hidden tabs skip the
  * fetch, the poll fails quiet (no toast spam — only entry/manual/action-
  * triggered fetches surface errors), and the refresh button stays for an
@@ -16,38 +18,16 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react"
 import { MCP_STATE_LABELS, mcpGroupLabel } from "@kclaw/core/commands"
-import type { McpGroupStatus, McpServerStatus } from "@kclaw/core/protocol"
+import type { McpServerStatus, McpSnapshotResponse } from "@kclaw/core/protocol"
 import type { ApiClient } from "../api.js"
 import type { NoticeFn } from "../toast.js"
 import { McpForm, emptyForm, formFromStatus } from "./McpForm.js"
 import type { McpFormState } from "./McpForm.js"
 
-/** GET /mcp response: the grouped snapshot plus the fallback target. */
-interface McpSnapshotResponse {
-  groups: McpGroupStatus[]
-  mainWorkspace: string
-}
-
 /** One-line config summary: the command for stdio, the URL for http. */
 function configSummary(config: McpServerStatus["config"]): string {
   const c = config as Record<string, unknown>
   return typeof c.command === "string" ? c.command : typeof c.url === "string" ? c.url : ""
-}
-
-/**
- * Default creation target: the selected session's project, else the daemon
- * workspace, else global. The session workdir only applies when the
- * snapshot already knows it: a directory whose project file IS the global
- * file never becomes a group (the server skips it), and preferring it
- * unconditionally would 404 the save. A brand-new project's group appears
- * in the snapshot within one 2s poll.
- */
-function defaultGroup(snapshot: McpSnapshotResponse | null, sessionWorkdir?: string): string {
-  const ids = new Set(snapshot?.groups.map((g) => g.id) ?? [])
-  if (sessionWorkdir !== undefined && ids.has(sessionWorkdir)) return sessionWorkdir
-  const main = snapshot?.mainWorkspace ?? ""
-  if (main !== "" && ids.has(main)) return main
-  return "global"
 }
 
 export function McpView({ api, notice, sessionWorkdir }: {
@@ -73,8 +53,12 @@ export function McpView({ api, notice, sessionWorkdir }: {
 
   /** Quiet=true skips the failure toast — background polls must not spam. */
   const reload = useCallback((opts?: { quiet?: boolean }): Promise<void> => {
+    // The session workdir rides along so the server can compute the default
+    // creation target (its rule, its group ids — the client never mirrors it).
+    const workdir = sessionWorkdirRef.current
+    const path = workdir !== undefined ? `/mcp?workdir=${encodeURIComponent(workdir)}` : "/mcp"
     return api
-      .get<McpSnapshotResponse>("/mcp")
+      .get<McpSnapshotResponse>(path)
       .then((r) => setSnapshot(r))
       .catch((e) => {
         if (opts?.quiet !== true) noticeRef.current(`加载 MCP 状态失败: ${String(e)}`, "error")
@@ -135,7 +119,7 @@ export function McpView({ api, notice, sessionWorkdir }: {
         <button
           type="button"
           data-testid="mcp-add"
-          onClick={() => setFormSeed(emptyForm(defaultGroup(snapshot, sessionWorkdirRef.current)))}
+          onClick={() => setFormSeed(emptyForm(snapshot?.defaultGroup ?? "global"))}
         >
           添加服务器
         </button>

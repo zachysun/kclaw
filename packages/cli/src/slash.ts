@@ -12,7 +12,7 @@ import { MCP_STATE_LABELS, mcpGroupLabel, parseGoalCommandArgs, parseSlashInput,
 import { isPermissionMode, PERMISSION_MODES, PERMISSION_MODE_CONFIRMATIONS } from "@kclaw/core"
 import type { AttachmentRef } from "@kclaw/core"
 import type { PermissionMode } from "@kclaw/core"
-import type { SkillProposalRow } from "@kclaw/core/protocol"
+import type { GoalViewResponse, McpSnapshotResponse, SkillProposalRow } from "@kclaw/core/protocol"
 import type { KclawClient } from "./client.js"
 
 /** Everything a registered command may reach at run time (a view over the chat loop's live state). */
@@ -350,9 +350,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
       const base = `/sessions/${ctx.sessionId}/goal`
       try {
         if (parsed.kind === "empty" || (parsed.kind === "action" && parsed.action === "status")) {
-          const body = (await ctx.client.request("GET", base)) as
-            | { goal: { goal: { state: string; text: string; stoppedReason?: string; stoppedNote?: string; acceptance: string[] }; derived: { rounds: number; totalRounds: number; tokensUsed: number } } | null }
-            | null
+          const body = (await ctx.client.request("GET", base)) as GoalViewResponse | null
           const view = body?.goal ?? null
           if (view === null) {
             ctx.print("本会话还没有目标。用法：/goal <目标描述>（可加 verify: <验收命令>，可多条）；动作：/goal stop|pause|resume|clear")
@@ -500,9 +498,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
     async run(args, ctx) {
       const name = args.trim()
       try {
-        const { groups } = (await ctx.client.request("GET", "/mcp")) as {
-          groups: Array<{ id: string; servers: Array<{ name: string; state: string; group: string; tools: { name: string; description?: string }[]; lastError?: string }> }>
-        }
+        const { groups } = (await ctx.client.request("GET", "/mcp")) as McpSnapshotResponse
         const all = groups.flatMap((g) => g.servers)
         if (all.length === 0) {
           ctx.print("还没有接入任何 MCP 服务器（配置全局 mcp.json 或各项目的 .kclaw/mcp.json）")

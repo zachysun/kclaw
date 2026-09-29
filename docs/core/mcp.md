@@ -11,7 +11,7 @@ kclaw 在这个过程中只扮演 MCP **客户端**：它去调用别人的 serv
 ## 设计决策
 
 - **配置驱动，零代码接入**：在配置文件里写几行就能接入一个 server，不需要写任何代码。daemon 恒定构建管理器（一个空的管理器没有任何连接，开销为零）——这样"从 WebUI 添加第一个 server"的管理入口永远可用。
-- **每个项目（工作目录）各有自己的 MCP 层**：组（group）是条目归属与连接归属的统一键——`"global"`（全局组，跨项目共享）或一个工作目录路径（项目组，文件为该目录下的 `.kclaw/mcp.json`）。不同项目可以有同名的 server，互不干扰；与侧栏分组、记忆、权限规则同一个领域身份（原始工作目录，不做 git 根归一化）。
+- **每个项目（工作目录）各有自己的 MCP 层**：组（group）是条目归属与连接归属的统一键——`"global"`（全局组，跨项目共享）或一个工作目录路径（项目组，文件为该目录下的 `.kclaw/mcp.json`）。项目组 id 是工作目录的**规范身份**（core `resolveProjectIdentity`：词法解析成绝对路径，尾部斜杠、`.`/`..` 片段、相对拼写都归一到同一 id；不做符号链接 realpath，也不做 git 根归一化）——同一目录的不同写法只挂一个组，发现边界（会话记录、daemon 工作区、挂载调用）与查找边界（`toolsFor(workdir)`、快照）都过这一条规则。不同项目可以有同名的 server，互不干扰。
 - **取用视图按项目合并**：某项目一轮 run 看到的工具 = 全局组条目 + 该项目组条目的并集，同名时**项目组整体覆盖**（whole-entry override，字段级不合并）。遮蔽只发生在取用视图——两层各连各的连接，被遮蔽的全局条目在其他项目照常可用；项目组里一个 `enabled: false` 的同名条目会在该项目屏蔽全局条目（既不用项目配置，也不用全局的）。
 - **连接惰性**：daemon 启动时一条不连。每轮 run 组装时求值 `toolsFor(workdir)`：视图里缺失的连接在后台建立（工具从下一轮 run 起可用），已连接的直接贡献工具；同一个项目连续干活复用同一条连接，没有重复握手。从未被任何项目取用的条目保持 `"disconnected"` 状态。
 - **空闲回收**：每条连接记最近使用时间（取用与每次工具调用都会刷新），后台周期扫描（60 秒）断开空闲超过 TTL（10 分钟）的连接——不干活时不留活进程。回收后的条目回到 `"disconnected"`，下次取用自动重连。
@@ -181,7 +181,7 @@ daemon 用 `packages/server/src/mcp-projects.ts` 的 `createMcpProjects` 管理�
 ### daemon、WebUI 与 CLI 在哪里用到它
 
 - daemon（`packages/server/src/daemon.ts`）：恒定构建管理器（初始项目组来自会话记录并集，`persist` 回调按组分发——`"global"` 接到 `saveMcpJson`，工作目录接到 `saveProjectMcpJson`）；`createMcpProjects` 负责发现与每目录文件监视；启动监听之后 `void mcpManager.start()` 只启动扫描（不连任何 server）。RunManager 把 `extraTools(workdir)` 函数作为依赖传给 core `executeRun`，由后者以会话工作目录求值并注入工具（见 [run-manager](../server/run-manager.md)）。停止序列中先关全部监视（不遗留挂着的防抖回调）再关管理器。
-- HTTP 接口（见 [http-api](../server/http-api.md)）：`GET /mcp` 返回分组快照 `{groups: [...], mainWorkspace}`（没组装管理器时是空组列表）；`POST /mcp/servers`（新增，`group` 必填）、`PATCH /mcp/servers/:name`（改/换组，`group` 必填、可选 `toGroup` 即原子换组）、`DELETE /mcp/servers/:name?group=`、`POST /mcp/servers/:name/enable`、`POST /mcp/servers/:name/connect`（手动连接探测）是 WebUI MCP 页的管理动作，任何保存动作都会触发一次对应组的持久化。缺组/组形状不对是 400，未知组是 404。
+- HTTP 接口（见 [http-api](../server/http-api.md)）：`GET /mcp` 返回分组快照 `{groups: [...], mainWorkspace, defaultGroup}`（没组装管理器时是空组列表）；带 `?workdir=<会话工作目录>` 时服务端算好 `defaultGroup`——新增条目的默认目标组（会话目录在快照中已知则用它，否则 daemon 工作区，再否则全局；规则只在服务端，客户端不镜像）；`POST /mcp/servers`（新增，`group` 必填）、`PATCH /mcp/servers/:name`（改/换组，`group` 必填、可选 `toGroup` 即原子换组）、`DELETE /mcp/servers/:name?group=`、`POST /mcp/servers/:name/enable`、`POST /mcp/servers/:name/connect`（手动连接探测）是 WebUI MCP 页的管理动作，任何保存动作都会触发一次对应组的持久化。缺组/组形状不对是 400，未知组是 404。
 - WebUI 顶栏「MCP」页按组渲染快照：全局组在前、每个项目组一节（可折叠），条目卡片带连接状态徽标与最近错误；未连接/失败的条目提供手动连接按钮（失败条目的按钮显示"重试"）；添加表单的目标是"全局/目录"下拉，默认目标依次取当前选中会话的工作目录（快照里已有这个组才生效；不在快照里的目录不会成为组，选它保存会 404）、daemon 主工作区、全局；编辑表单可改目标组，变更即走原子换组。CLI 会话内 `/mcp` 按组打印状态一览（`/mcp <名字>` 看某 server 的工具清单，跨组同名会带项目路径区分），进程级的 `kclaw mcp [list]` 子命令同样按组输出，两者并存。
 
 ---

@@ -31,116 +31,36 @@ import {
   newId,
   newMessage,
   type AttachmentBlock,
-  type ConfirmationResolution,
   type AttachmentRef,
   type EnqueueInput,
-  type EventBus,
-  type HookRegistry,
-  type KclawConfig,
-  type KclawPaths,
-  type LlmClient,
-  type LlmRetrySink,
-  type MemorySystem,
   type Message,
   type NoteBlock,
   type QueueEntry,
   type RunEngine,
+  type RunEngineDeps,
   type RunOutcome,
-  type SessionStore,
-  type SkillEvolutionScheduleBook,
-  type SkillEvolutionTriggers,
-  type SubagentCollector,
-  type SubagentSpawner,
-  type TeamFacade,
-  type ToolDefinition,
-  type ToolExecutor,
-  type UsageStore,
-  type AutoLearnCounter,
-  resolveRunModel,
+  resolveRunModelLine,
   estimateTokens,
 } from "@kclaw/core"
+import { resolveSendDisposition } from "@kclaw/core/protocol"
 
-export interface RunManagerDeps {
-  config: KclawConfig
-  paths: KclawPaths
-  sessions: SessionStore
-  memory: MemorySystem
-  bus: EventBus
-  llm: LlmClient
-  workspace: string
+/**
+ * The manager's constructor view of the engine deps: RunEngineDeps
+ * (core/src/agent/run-assembly.ts — the single declaration every field's
+ * doc comment lives in) minus the broker — the manager guarantees one
+ * exists: injected, or a fresh internal broker exposed as `manager.broker`
+ * (the daemon hands the RunManager to createApp via its `run` option, which
+ * routes confirmation.resolve frames to it) — minus the engine-only test
+ * seams, plus the queue-side idle edge the engine never sees.
+ */
+export type RunManagerDeps = Omit<RunEngineDeps, "broker" | "extraHooks"> & {
   /**
-   * Model string sent to the provider: the daemon resolves it once
-   * — provider entry, KCLAW_LLM_MODEL env fallback — because an env-only
-   * provider would otherwise leave the config-derived model empty. Optional
-   * for backwards compatibility: when omitted, the default provider's
-   * config model is used as before (empty string when unconfigured).
-   */
-  model?: string
-  /**
-   * Confirmation gateway: pending confirmations register here when
-   * the gate issues them, and WS/CLI verdicts settle through it. Missing → a
-   * fresh internal broker, exposed as `manager.broker` (the daemon hands the
+   * Injected confirmation gateway; omitted → the manager constructs a fresh
+   * internal broker, exposed as `manager.broker` (the daemon hands the
    * RunManager to createApp via its `run` option, which routes
    * confirmation.resolve frames to this broker).
    */
   broker?: ConfirmationBroker
-  /**
-   * Direct resolver override for tests. Takes precedence over the broker when
-   * set — the daemon path relies on the broker alone.
-   */
-  resolveConfirmation?: (confirmationId: string) => Promise<ConfirmationResolution>
-  /**
-   * Auto-mode induction (batch C): the per-process streak counter, threaded
-   * into every run's assembly (see RunEngineDeps.autoLearn). One instance per
-   * daemon; keys are session-scoped at the assembly seam. Absent → auto mode
-   * keeps the default decision chain without induction (tests).
-   */
-  autoLearn?: { counter: AutoLearnCounter }
-  /**
-   * Retry-visible llm per run: when set, EVERY
-   * run builds its own client through this factory, receiving that run's
-   * retry sink as `onRetry` — provider-level retries (the daemon's default
-   * withRetry composition) then surface as `llm.failed {willRetry:true}`
-   * events carrying THIS run's sessionId/runId, even while other sessions
-   * run concurrently against the same endpoint. Takes precedence over `llm`.
-   * The daemon sets it for its default composition; injected test factories
-   * (plain script clients) leave it unset and use `llm` as before.
-   */
-  llmForRun?: (onRetry: LlmRetrySink, entryKey?: string) => LlmClient
-  /**
-   * Per-name executor overrides for tests/adapters:
-   * merged OVER the builtin tools after construction (defs stay the
-   * builtins'), so a test can swap one executor — e.g. for one that throws —
-   * without rebuilding the toolset.
-   */
-  tools?: Map<string, ToolExecutor>
-  /**
-   * Live adapter tools (e.g. the MCP manager): a FUNCTION of the run's
-   * workspace, evaluated per run — each project gets its own MCP use-view
-   * (and lazy connections), and connections that come up or drop between
-   * runs (or mid-reconnect) are reflected in the next LLM request. Defs are
-   * appended to the builtin defs; a name collision with a builtin logs once
-   * and the adapter's executor wins (schema follows the executor).
-   */
-  extraTools?: (workdir: string) => { executors: Map<string, ToolExecutor>; defs: ToolDefinition[] }
-  /**
-   * Subagent dispatch (issue #16): the daemon's spawner implementation
-   * (server/src/subagent.ts). Flows into every mainline run's assembly as the
-   * `subagent_run` builtin; child runs never see it. `collector` (issue #22)
-   * adds `subagent_collect` next to it. The delete/purge cascade cancels
-   * through the host directly (the daemon wires the route option), not
-   * through the run manager.
-   */
-  subagents?: {
-    spawner: SubagentSpawner
-    collector?: SubagentCollector
-  }
-  /**
-   * Agent team: flows into every run's engine deps — the
-   * assembly probes the facade once per run for the session's team identity
-   * (lead protocol + full tool surface / member persona + member surface).
-   */
-  team?: { facade: TeamFacade }
   /**
    * Idle edge for sessions the team host cannot see through its own dispatch
    * ledger — a user's chat run never passes through the host's startRun, so
@@ -150,20 +70,6 @@ export interface RunManagerDeps {
    * driver). Optional (tests without the team host omit it).
    */
   onSessionIdle?: (sessionId: string) => void
-  /** Per-run token ledger (optional; recording failures are swallowed). */
-  usageStore?: UsageStore
-  /**
-   * User-hook registry: refreshed per run by the engine and
-   * snapshotted into every run's hook chain. Optional (tests without user
-   * hooks omit it).
-   */
-  hooks?: HookRegistry
-  /**
-   * 技能进化（提案制）：流入每个 run 的 engine deps——run 收尾钩子消费
-   * 簿记面（粗查排检查），skill_create 工具消费提案面。daemon 组装时注入；
-   * 测试省略。
-   */
-  skillsEvolution?: SkillEvolutionScheduleBook & SkillEvolutionTriggers
 }
 
 /** One queued run request lives in core now (the engine's input shape). */
@@ -316,12 +222,17 @@ export class RunManager {
         )
       }
     }
-    // 处置解析链：显式 > 会话覆盖 > 配置默认；job/agent/goal 触发固定 wait
-    // （无人值守的排队行为必须可预测；agent 子 run 由派发器独占驱动；goal
-    // 自续轮由消费器排队驱动，用户中途输入 steer 注入当前 run 的语义不变）。
+    // 处置解析链（正本在 core protocol/wire.ts）：显式 > 会话覆盖 > 配置
+    // 默认；job/agent/goal 触发固定 wait（无人值守的排队行为必须可预测；
+    // agent 子 run 由派发器独占驱动；goal 自续轮由消费器排队驱动，用户中
+    // 途输入 steer 注入当前 run 的语义不变）。
     const disposition = input.trigger === "job" || input.trigger === "agent" || input.trigger === "goal"
       ? "wait"
-      : input.disposition ?? meta.dispositionOverride ?? config.sessions.defaultDisposition ?? "steer"
+      : resolveSendDisposition({
+          explicit: input.disposition,
+          override: meta.dispositionOverride,
+          configDefault: config.sessions.defaultDisposition,
+        })
     const queue = this.#queues.get(sessionId) ?? []
     const steer = this.#steerBuf.get(sessionId) ?? []
     if (queue.length + steer.length >= RunManager.QUEUE_LIMIT) {
@@ -565,11 +476,12 @@ export class RunManager {
     const meta = sessions.meta(sessionId)
     if (meta === undefined) throw new Error("session not found")
     const history = sessions.readMessages(sessionId)
-    // Default model line: the default entry's CURRENT model wins (Model-tab
-    // edits hot-apply), the launch-resolved deps.model only backs env-only
-    // setups with no entry.
-    const defaultModel = config.providers.entries[config.providers.default]?.model || this.#deps.model || ""
-    const { model, entryKey, budget } = resolveRunModel(config, meta.model ?? defaultModel)
+    // Same model-line precedence as in-run compaction (run-assembly):
+    // resolveRunModelLine owns the chain.
+    const { model, entryKey, budget } = resolveRunModelLine(config, {
+      sessionModel: meta.model,
+      launchModel: this.#deps.model,
+    })
     // Same client wiring as in-run compaction (run-assembly): fetch through
     // the shared resolver so Model-tab edits hot-apply here too; the
     // launch-resolved deps.llm only backs injected-llmFactory test setups.

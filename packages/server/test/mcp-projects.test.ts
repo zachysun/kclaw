@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, it } from "vitest"
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { GLOBAL_GROUP, McpManager, loadMcpJson, loadProjectMcpServers, mcpConfigPath, saveMcpJson } from "@kclaw/core"
+import { join, resolve } from "node:path"
+import { GLOBAL_GROUP, McpManager, loadMcpJson, loadProjectMcpServers, mcpConfigPath, saveMcpJson, saveProjectMcpJson } from "@kclaw/core"
 import { createMcpProjects, collectProjectDirs } from "../src/mcp-projects.js"
 
 /** Recording fake manager: the calls list doubles as the assertion surface. */
@@ -95,6 +95,34 @@ describe("mcp-projects discovery", () => {
     controller.close()
     controller.close()
     expect(true).toBe(true)
+  })
+
+  it("different spellings of one directory mount a single project (canonical identity)", () => {
+    const { calls, manager } = fakeManagerLog()
+    const controller = createMcpProjects({
+      workspace,
+      manager,
+      // Trailing slash and dot-segment spellings of projA, plus one relative
+      // spelling: all canonicalize to the same group identity.
+      allMetas: () => [{ workdir: projA }, { workdir: `${projA}/` }, { workdir: join(root, "a", "..", "a") }],
+      loadEntries: () => ({}),
+      syncIntervalMs: 0,
+    })
+    controller.sync()
+    expect(calls.filter((c) => c.startsWith(`ensure:${projA}`))).toHaveLength(1)
+    // mount() canonicalizes too — the session-store hook can pass any spelling.
+    controller.mount(`${projA}/`)
+    expect(calls.filter((c) => c.startsWith(`ensure:${projA}`))).toHaveLength(1)
+    controller.close()
+  })
+
+  it("collectProjectDirs canonicalizes every spelling (a relative workdir still lands as an absolute group id)", () => {
+    const rel = "kclaw-rel-spelling"
+    const dirs = collectProjectDirs({ workspace: `${workspace}/`, allMetas: () => [{ workdir: projA }, { workdir: rel }] })
+    expect(dirs).toContain(workspace)
+    expect(dirs).toContain(projA)
+    expect(dirs).toContain(resolve(rel))
+    expect(dirs.every((d) => d.startsWith("/"))).toBe(true)
   })
 
   afterAll(() => {

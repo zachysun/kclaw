@@ -83,6 +83,31 @@ export interface GoalJudgeResult {
   tokens: Usage
 }
 
+/**
+ * 检查时刻从事件流派生的循环状态（derive.ts 一次前向扫描的产物）。
+ * 计数不是快照缓存：每次检查现算，快照里的同名字段只是展示投影。
+ */
+export interface DerivedLoop {
+  /** 生命周期自续轮数（自 goal.set create 起）。 */
+  totalRounds: number
+  /** 连续自续轮数（user 触发的 run 断开）。 */
+  rounds: number
+  /** 生命周期 token 消耗（run 用量 + 判定器用量）。 */
+  tokensUsed: number
+  /** 判定器连续判无进展的次数。 */
+  noProgressStreak: number
+  /** 验收门连续失败轮数。 */
+  gateFailStreak: number
+  /** 连续解析失败的判定次数。 */
+  parseFails: number
+  /** 连续传输失败的判定次数。 */
+  transportFails: number
+  /** 连续含确认超时的 run 数。 */
+  approvalTimeoutStreak: number
+  /** 最后一个完成的 run（无 run 时 undefined）。 */
+  lastRun: { trigger: string; stopReason: string } | undefined
+}
+
 /** 一条验收命令的执行结果（goal.checked 事件与判定提示词共用）。 */
 export interface GoalGateOutcome {
   command: string

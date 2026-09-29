@@ -13,7 +13,7 @@ import { join } from "node:path"
 import { SessionStore, loadConfig, resolvePaths, UsageStore } from "@kclaw/core"
 import type { KclawConfig, LlmClient, LlmStreamEvent } from "@kclaw/core"
 import { GoalLoopHost } from "../src/goal-loop.js"
-import type { RunManager } from "../src/run.js"
+import type { GoalRunQueue } from "../src/goal-loop.js"
 import { GOAL_MAX_ROUNDS, GOAL_TOKEN_BUDGET } from "@kclaw/core"
 
 let dir: string
@@ -45,10 +45,10 @@ interface Submitted {
   note?: { kind: string; text: string }
 }
 
-/** 假 RunManager：只实现 host 消费的面（记录 submit，恒不忙）。 */
-function fakeRun(): { run: RunManager; submitted: Submitted[]; stopped: number } {
+/** 假 run 切片：只实现 GoalRunQueue 的面（记录 submit/stopAndClear，恒不忙）。 */
+function fakeRun(): { run: GoalRunQueue; submitted: Submitted[]; stopCalls: () => number } {
   const submitted: Submitted[] = []
-  const state = { stopped: 0 }
+  let stopped = 0
   const run = {
     busy: () => false,
     queue: () => [],
@@ -57,12 +57,12 @@ function fakeRun(): { run: RunManager; submitted: Submitted[]; stopped: number }
       return { messageId: `m_${submitted.length}`, queued: false, disposition: "wait" as const }
     },
     stopAndClear: () => {
-      state.stopped += 1
+      stopped += 1
       return { aborted: true, dropped: 0 }
     },
     queueCancel: () => ({ ok: true as const, cancelled: [] }),
-  } as unknown as RunManager
-  return { run, submitted, ...state } as { run: RunManager; submitted: Submitted[]; stopped: number }
+  }
+  return { run, submitted, stopCalls: () => stopped }
 }
 
 interface Harness {
@@ -70,6 +70,7 @@ interface Harness {
   host: GoalLoopHost
   llm: LlmClient & { calls: number }
   submitted: () => Submitted[]
+  stopCalls: () => number
   sessionId: string
   config: KclawConfig
 }
@@ -78,7 +79,7 @@ function makeHarness(judgeScript: string[]): Harness {
   const sessions = new SessionStore(join(dir, "s"))
   const config = loadConfig(resolvePaths(join(dir, "home")))
   config.sandbox = { enabled: false, writeRoots: [] }
-  const { run, submitted } = fakeRun()
+  const { run, submitted, stopCalls } = fakeRun()
   const llm = judgeClient(judgeScript)
   const usage = new UsageStore(join(dir, "usage.db"))
   const host = new GoalLoopHost({
@@ -91,7 +92,7 @@ function makeHarness(judgeScript: string[]): Harness {
     home: join(dir, "home"),
   })
   const meta = sessions.create("目标会话")
-  return { sessions, host, llm, submitted: () => submitted, sessionId: meta.id, config }
+  return { sessions, host, llm, submitted: () => submitted, stopCalls, sessionId: meta.id, config }
 }
 
 /** 模拟一轮 run 完成（引擎的落盘动作）并驱动检查到落定。 */
@@ -255,14 +256,13 @@ describe("GoalLoopHost", () => {
 
   it("userStop aborts the run, persists user-stop and disarms", async () => {
     const h = makeHarness([])
-    const { run } = fakeRun()
-    // 换一个能记录 stopAndClear 的 run 引用：直接再建 harness 太重，这里用 host 的 deps 不可达——
-    // 改为验证状态面：stop 的持久化与 armed。
-    void run
     h.host.set(h.sessionId, { text: "目标", acceptance: [] })
     const r = h.host.userStop(h.sessionId)
     expect(r.goal).toMatchObject({ state: "paused", stoppedReason: "user-stop" })
     expect(h.host.view(h.sessionId)!.armed).toBe(false)
+    // run 切片的 stopAndClear 真被调用，返回值原样透传。
+    expect(h.stopCalls()).toBe(1)
+    expect(r).toMatchObject({ aborted: true, dropped: 0 })
   })
 
   it("clear removes the goal and drops the queued round", async () => {

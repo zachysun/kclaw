@@ -7,11 +7,32 @@
  * it without pulling the Node-bound main entry (the @kclaw/core/commands
  * precedent).
  */
-import type { AgentEvent } from "./events.js"
+import type { AgentEvent, RunTrigger } from "./events.js"
 import type { NoteKind } from "./blocks.js"
 
 /** How a send_message rides the queue: steer injects, wait queues, interrupt preempts. */
 export type SendDisposition = "steer" | "wait" | "interrupt"
+
+/** Parse an external disposition string (REST/JSON payload); anything else is undefined. */
+export function parseSendDisposition(value: unknown): SendDisposition | undefined {
+  return value === "steer" || value === "wait" || value === "interrupt" ? value : undefined
+}
+
+/**
+ * The disposition precedence chain — the queue's contract, single-sourced:
+ * an explicit per-send choice wins, then the session-level override, then
+ * the config default, then steer. The server's enqueue path resolves
+ * exactly this; clients use it for their initial selection, narrowing the
+ * inputs where their UI policy differs (e.g. the web never PRESELECTS the
+ * one-shot interrupt) instead of re-deriving the chain.
+ */
+export function resolveSendDisposition(parts: {
+  explicit?: SendDisposition
+  override?: SendDisposition
+  configDefault?: SendDisposition
+}): SendDisposition {
+  return parts.explicit ?? parts.override ?? parts.configDefault ?? "steer"
+}
 
 /**
  * A reference to an uploaded attachment file (the daemon mounts it as an
@@ -43,7 +64,7 @@ export interface QueueEntry {
   messageId: string                       // 分配即固定；出队执行时用同一 id 构建 Message
   disposition: SendDisposition
   text: string
-  trigger: "user" | "job" | "agent" | "team" | "goal"  // 还原触发源（job 的 note/触发语义在出队执行时需要；agent = subagent 派生的子 run；team = 团队收信箱投递/派活，按常规处置走 steer 注入；goal = 目标循环自续轮，与 job 同强制 wait，连跑计数在消费器）
+  trigger: RunTrigger  // 还原触发源（job 的 note/触发语义在出队执行时需要；agent = subagent 派生的子 run；team = 团队收信箱投递/派活，按常规处置走 steer 注入；goal = 目标循环自续轮，与 job 同强制 wait，连跑计数在消费器）
   attachments?: AttachmentRef[]
   note?: QueueNote                        // 机器来源说明
   enqueuedAt: string                      // ISO-8601

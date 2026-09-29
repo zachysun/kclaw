@@ -6,6 +6,7 @@
  */
 import { GLOBAL_GROUP } from "./types.js"
 import type { McpServerConfig } from "./types.js"
+import { resolveProjectIdentity } from "./identity.js"
 
 /** One entry as the use-view sees it: the config plus the group owning it. */
 export interface ViewEntry {
@@ -15,6 +16,15 @@ export interface ViewEntry {
   group: string
 }
 
+/**
+ * Group keys are canonical project identities (identity.ts): "global" passes
+ * through, any workdir spelling resolves to its absolute form, so lookups
+ * survive however the caller spelled the directory.
+ */
+function groupKey(group: string): string {
+  return group === GLOBAL_GROUP ? group : resolveProjectIdentity(group)
+}
+
 export class McpGroupStore {
   /** "global" first, then one map per project workdir. */
   readonly #groups = new Map<string, Map<string, McpServerConfig>>()
@@ -22,12 +32,12 @@ export class McpGroupStore {
   constructor(initial: { global: Record<string, McpServerConfig>; projects?: Record<string, Record<string, McpServerConfig>> }) {
     this.#groups.set(GLOBAL_GROUP, new Map(Object.entries(initial.global)))
     for (const [workdir, entries] of Object.entries(initial.projects ?? {})) {
-      this.#groups.set(workdir, new Map(Object.entries(entries)))
+      this.addProject(workdir, entries)
     }
   }
 
   has(group: string): boolean {
-    return this.#groups.has(group)
+    return this.#groups.has(groupKey(group))
   }
 
   /** All group ids: "global" first, projects sorted by path (stable snapshots). */
@@ -37,7 +47,7 @@ export class McpGroupStore {
   }
 
   entries(group: string): Record<string, McpServerConfig> {
-    return Object.fromEntries(this.#groups.get(group) ?? [])
+    return Object.fromEntries(this.#groups.get(groupKey(group)) ?? [])
   }
 
   /** Requires an existing group; overwrites silently (callers check conflicts). */
@@ -54,14 +64,15 @@ export class McpGroupStore {
 
   /** Mount a project group (idempotent: an existing group keeps its entries). */
   addProject(workdir: string, entries: Record<string, McpServerConfig>): void {
-    if (this.#groups.has(workdir)) return
-    this.#groups.set(workdir, new Map(Object.entries(entries)))
+    const key = groupKey(workdir)
+    if (this.#groups.has(key)) return
+    this.#groups.set(key, new Map(Object.entries(entries)))
   }
 
   /** Unmount a project group; the global group and unknown groups are no-ops. */
   dropProject(workdir: string): void {
     if (workdir === GLOBAL_GROUP) return
-    this.#groups.delete(workdir)
+    this.#groups.delete(groupKey(workdir))
   }
 
   /**
@@ -71,12 +82,13 @@ export class McpGroupStore {
    * An unknown workdir degrades to the global view alone.
    */
   viewFor(workdir: string): ViewEntry[] {
+    const key = groupKey(workdir)
     const view = new Map<string, ViewEntry>()
     for (const [name, config] of this.#groups.get(GLOBAL_GROUP) ?? []) {
       view.set(name, { name, config, group: GLOBAL_GROUP })
     }
-    for (const [name, config] of this.#groups.get(workdir) ?? []) {
-      view.set(name, { name, config, group: workdir })
+    for (const [name, config] of this.#groups.get(key) ?? []) {
+      view.set(name, { name, config, group: key })
     }
     return [...view.values()]
   }

@@ -537,3 +537,19 @@ export function resolveRunModel(
     ...(entry?.maxOutput === undefined ? {} : { maxOutput: entry.maxOutput }),
   }
 }
+
+/**
+ * A run's raw model with its full precedence: an explicit per-run model >
+ * the session's model > the default entry's CURRENT model (Model-tab edits
+ * hot-apply) > the launch-resolved model (backs env-only setups with no
+ * configured entry) > "". Feeds resolveRunModel, so run assembly and the
+ * manual compact path apply the same chain and can never disagree on the
+ * raw model, entry key or budget.
+ */
+export function resolveRunModelLine(
+  config: KclawConfig,
+  overrides: { inputModel?: string; sessionModel?: string; launchModel?: string },
+): { model: string; entryKey: string; budget: number; maxOutput?: number } {
+  const fallback = config.providers.entries[config.providers.default]?.model || overrides.launchModel || ""
+  return resolveRunModel(config, overrides.inputModel ?? overrides.sessionModel ?? fallback)
+}
