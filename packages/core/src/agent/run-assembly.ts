@@ -39,7 +39,7 @@ import { newMessage } from "../protocol/messages.js"
 import type { AttachmentRef, QueueNote } from "../protocol/wire.js"
 import type { LlmClient, ToolDefinition } from "../provider/types.js"
 import type { KclawConfig } from "../storage/config.js"
-import { defaultConfig, resolveContextTokens, resolveRunModel } from "../storage/config.js"
+import { defaultConfig, resolveContextTokens, resolveRunModelLine } from "../storage/config.js"
 import type { KclawPaths } from "../storage/paths.js"
 import type { UsageStore } from "../storage/usage.js"
 import type { SessionStore } from "../session/store.js"
@@ -712,16 +712,16 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       })
       .catch(() => { /* retry visibility must not break the retry itself */ })
   }
-  // Default model line: the default entry's CURRENT model wins (Model-tab
-  // edits hot-apply); the launch-resolved deps.model only backs env-only
-  // setups with no configured entry.
-  const defaultModel = config.providers.entries[config.providers.default]?.model || engine.deps.model || ""
-  const rawModel = input.model ?? sessionMeta?.model ?? defaultModel
   // Entry metadata for this run: the wire model (entry names resolve to the
-  // entry's `.model`), the budget (contextWindow cap via resolveContextTokens)
-  // feeds every compaction line and the packing budget; maxOutput rides each
-  // request as max_tokens.
-  const { model, entryKey, budget, maxOutput } = resolveRunModel(config, rawModel)
+  // entry's `.model`; the precedence chain over per-run/session/default/
+  // launch models lives in resolveRunModelLine), the budget (contextWindow
+  // cap via resolveContextTokens) feeds every compaction line and the packing
+  // budget; maxOutput rides each request as max_tokens.
+  const { model, entryKey, budget, maxOutput } = resolveRunModelLine(config, {
+    inputModel: input.model,
+    sessionModel: sessionMeta?.model,
+    launchModel: engine.deps.model,
+  })
   // The client resolves AFTER the entry: every entry owns its endpoint, so
   // llmForRun needs the resolved entry key to build the matching client.
   const runLlm = engine.deps.llmForRun?.(onLlmRetry, entryKey) ?? engine.deps.llm
