@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it } from "vitest"
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { GLOBAL_GROUP, McpManager, loadMcpJson, loadProjectMcpServers, mcpConfigPath, saveMcpJson } from "@kclaw/core"
+import { GLOBAL_GROUP, McpManager, loadMcpJson, loadProjectMcpServers, mcpConfigPath, saveMcpJson, saveProjectMcpJson } from "@kclaw/core"
 import { createMcpProjects, collectProjectDirs } from "../src/mcp-projects.js"
 
 /** Recording fake manager: the calls list doubles as the assertion surface. */
