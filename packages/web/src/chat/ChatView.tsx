@@ -9,12 +9,12 @@ import { Fragment, useLayoutEffect, useRef, useState, type FormEvent, type Keybo
 import { parseSlashInput, replaceTrailingSlashToken, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
 import { fileMentionCompletions, replaceTrailingMentionToken } from "@kclaw/core/mentions"
 import { PERMISSION_MODES, type PermissionMode } from "@kclaw/core/permission-modes"
-import type { AttachmentRef, ConfirmationDecision } from "@kclaw/core/protocol"
+import type { AttachmentRef, ConfirmationDecision, GoalView } from "@kclaw/core/protocol"
 import type { ChatState, ConfirmationCard, QuestionCard, RenderedBlock, RenderedMessage } from "./model.js"
 import { parseTeamMail, type TeamMailParse } from "./model.js"
 import { MarkdownText } from "./Markdown.js"
 import { TeamPanelCard } from "./TeamPanel.js"
-import { GoalPanelCard, type GoalWebView } from "./GoalPanel.js"
+import { GoalPanelCard } from "./GoalPanel.js"
 import type { TeamPanel } from "@kclaw/core/protocol"
 import { IconButton } from "../ui/IconButton.js"
 import { PencilIcon, RefreshIcon } from "../ui/icons.js"
@@ -160,7 +160,7 @@ export interface ChatViewProps {
    * 挂载位）。动作全部经回调上抛（ChatPanel 发 REST 后刷新视图）。
    */
   goal?: {
-    view: GoalWebView
+    view: GoalView
     onPause: () => void
     onResume: () => void
     onStop: () => void

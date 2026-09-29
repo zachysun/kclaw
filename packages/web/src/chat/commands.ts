@@ -14,6 +14,7 @@ import { isPermissionMode, PERMISSION_MODES, PERMISSION_MODE_CONFIRMATIONS } fro
 import type { PermissionMode } from "@kclaw/core/permission-modes"
 import { MCP_STATE_LABELS, parseGoalCommandArgs } from "@kclaw/core/commands"
 import type { ParsedSlash } from "@kclaw/core/commands"
+import type { McpSnapshotResponse } from "@kclaw/core/protocol"
 import type { ApiClient } from "../api.js"
 
 export interface WebCommandCtx {
@@ -148,7 +149,7 @@ export async function runWebCommand(parsed: ParsedSlash, ctx: WebCommandCtx): Pr
     case "mcp": {
       const name = parsed.args.trim()
       try {
-        const { groups } = await ctx.api.get<{ groups: Array<{ id: string; servers: Array<{ name: string; state: string; group: string; tools: { name: string }[]; lastError?: string }> }> }>("/mcp")
+        const { groups } = await ctx.api.get<McpSnapshotResponse>("/mcp")
         const servers = groups.flatMap((g) => g.servers)
         if (servers.length === 0) {
           ctx.notify("还没有接入任何 MCP 服务器（添加用顶部「MCP」页）")

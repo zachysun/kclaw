@@ -18,19 +18,11 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react"
 import { MCP_STATE_LABELS, mcpGroupLabel } from "@kclaw/core/commands"
-import type { McpGroupStatus, McpServerStatus } from "@kclaw/core/protocol"
+import type { McpServerStatus, McpSnapshotResponse } from "@kclaw/core/protocol"
 import type { ApiClient } from "../api.js"
 import type { NoticeFn } from "../toast.js"
 import { McpForm, emptyForm, formFromStatus } from "./McpForm.js"
 import type { McpFormState } from "./McpForm.js"
-
-/** GET /mcp response: the grouped snapshot plus the server-computed defaults. */
-interface McpSnapshotResponse {
-  groups: McpGroupStatus[]
-  mainWorkspace: string
-  /** Where a new entry lands by default (the server owns the fallback rule). */
-  defaultGroup: string
-}
 
 /** One-line config summary: the command for stdio, the URL for http. */
 function configSummary(config: McpServerStatus["config"]): string {

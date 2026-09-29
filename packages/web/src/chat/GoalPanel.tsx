@@ -7,22 +7,10 @@
  * 编辑入口在这里）。纯展示组件：数据经 props 进、动作经回调出。
  */
 import { useState } from "react"
-import type { GoalSnapshot } from "@kclaw/core/protocol"
-
-/** GET /sessions/:id/goal 的 goal 视图形状（server GoalView 的 UI 子集）。 */
-export interface GoalWebView {
-  goal: GoalSnapshot
-  derived: {
-    rounds: number
-    totalRounds: number
-    tokensUsed: number
-  }
-  armed: boolean
-  limits: { maxRounds: number; tokenBudget: number }
-}
+import type { GoalSnapshot, GoalView } from "@kclaw/core/protocol"
 
 export interface GoalPanelCardProps {
-  view: GoalWebView
+  view: GoalView
   /** 暂停（active 时可用）。 */
   onPause: () => void
   /** 恢复（paused/blocked 时可用）。 */

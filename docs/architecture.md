@@ -43,7 +43,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 | 子目录 | 内容 |
 |--------|------|
-| `protocol/` | 消息、块、事件、WS 指令帧、会话事件、ID 的类型定义——线上数据形状的权威来源，经 `@kclaw/core/protocol` 子路径出口供三端引用 |
+| `protocol/` | 消息、块、事件、WS 指令帧、会话事件、ID、MCP 与 goal 的 REST 信封（GET /mcp 的 `McpSnapshotResponse`、GET /sessions/:id/goal 的 `GoalViewResponse`）的类型定义——线上数据形状的权威来源，经 `@kclaw/core/protocol` 子路径出口供三端引用 |
 | `provider/` | OpenAI 兼容与 Anthropic Messages 两种协议的模型客户端，带重试、内置预设目录与统一的端点/模型解析（resolver，见 [provider](./core/provider.md)） |
 | `agent/` | agent 循环、上下文组装、工具契约、单次 run 的组装（`run-assembly.ts` 的 `executeRun`） |
 | `hooks/` | hook 系统：14 个挂载位置、HookChain 注册接口、用户文件装载、内置 hook（见 [hooks](./core/hooks.md)） |

@@ -38,7 +38,7 @@ import {
 import { useSilentFetch } from "../daemon-clients.js"
 import { runWebCommand } from "./commands.js"
 import { ChatView, type CompactionRecordView, type Disposition, type PendingAttachment } from "./ChatView.js"
-import type { GoalWebView } from "./GoalPanel.js"
+import type { GoalView, GoalViewResponse } from "@kclaw/core/protocol"
 import type { TeamPanel } from "@kclaw/core/protocol"
 
 export interface ChatPanelProps {
@@ -168,7 +168,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   // 手动刷新；armed+active 时 5s 轮询兜底（判定器在 daemon 侧异步推进，
   // 不发本会话的流，轮询是面板跟上进度的唯一途径；armed=false 的重启后
   // 待恢复态不轮询——没有会变化的东西）。
-  const [goalView, setGoalView] = useState<GoalWebView | null>(null)
+  const [goalView, setGoalView] = useState<GoalView | null>(null)
   const goalFetchBusy = useRef(false)
   const goalSessionRef = useRef(sessionId)
   const refreshGoal = useCallback((): void => {
@@ -176,7 +176,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     goalFetchBusy.current = true
     const sid = sessionId
     api
-      .get<{ goal: GoalWebView | null }>(`/sessions/${encodeURIComponent(sid)}/goal`)
+      .get<GoalViewResponse>(`/sessions/${encodeURIComponent(sid)}/goal`)
       .then((body) => {
         if (goalSessionRef.current === sid) setGoalView(body.goal ?? null)
       })

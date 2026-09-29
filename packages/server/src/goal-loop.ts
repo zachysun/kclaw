@@ -38,7 +38,7 @@ import type {
 } from "@kclaw/core"
 import { resolveRunModelLine } from "@kclaw/core"
 import { createExecSandbox } from "@kclaw/core/sandbox"
-import type { SessionEvent } from "@kclaw/core/protocol"
+import type { GoalView, SessionEvent } from "@kclaw/core/protocol"
 import { createTracker } from "./host-kit.js"
 
 /** 进程内运行时：armed 是 ADR-0002 的核心（重启后目标在、循环不续）。 */
@@ -77,15 +77,6 @@ export interface GoalLoopDeps {
   /** 时钟接缝（时间敏感逻辑可注假时钟测试；缺省真实时间）。 */
   now?: () => Date
   log?: (message: string) => void
-}
-
-/** 路由/命令消费的只读视图：快照 + 派生计数 + 进程内开关状态。 */
-export interface GoalView {
-  goal: GoalSnapshot
-  derived: DerivedLoop
-  armed: boolean
-  /** 机械上限的当前值（前端展示"第 N/M 轮"用）。 */
-  limits: { maxRounds: number; tokenBudget: number }
 }
 
 /** 判定器无进展的标记串正本在 core/goal prompt.ts（与判定提示词共用）。 */

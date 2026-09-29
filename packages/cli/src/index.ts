@@ -22,7 +22,7 @@ import { pathToFileURL } from "node:url"
 import { Command, Option } from "commander"
 import type { Job } from "@kclaw/core"
 import { mcpGroupLabel } from "@kclaw/core/commands"
-import type { McpServerStatus } from "@kclaw/core/protocol"
+import type { McpSnapshotResponse } from "@kclaw/core/protocol"
 import { KclawClient } from "./client.js"
 import { runChat } from "./chat.js"
 import { daemonStatus, defaultHome, ensureDaemon, stopDaemon } from "./daemon-ctl.js"
@@ -135,10 +135,8 @@ async function jobsListAction(home: string): Promise<void> {
 /** `kclaw mcp [list]`: grouped lines per configured MCP server (group header, then name/state/tool count). */
 async function mcpAction(home: string): Promise<void> {
   const client = await KclawClient.connect(home)
-  const body = (await client.request("GET", "/mcp")) as {
-    groups?: Array<{ id: string; servers: Array<Pick<McpServerStatus, "name" | "state" | "group" | "tools" | "lastError">> }>
-  }
-  const groups = body.groups ?? []
+  const body = (await client.request("GET", "/mcp")) as McpSnapshotResponse
+  const groups = body.groups
   if (groups.every((g) => g.servers.length === 0)) {
     process.stdout.write("未配置 MCP server（全局 mcp.json 与各项目 .kclaw/mcp.json 均为空）\n")
     return
