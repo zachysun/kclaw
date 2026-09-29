@@ -2,8 +2,8 @@
  * McpView — MCP 服务器管理页测试。照 permissionsView.test.tsx 的 fake-api
  * 模式：vi.fn 的 ApiClient，get 按路径返回快照。覆盖：分组渲染（全局 +
  * 项目组）、组折叠、状态徽标与连接按钮、动作携带组定位、目标下拉（默认
- * 当前会话目录）、编辑换层（toGroup）、删除带组、手动刷新、空态、加载失
- * 败提示、后台轮询静默。
+ * 目标来自服务端 defaultGroup，会话目录以查询参数随行）、编辑换层
+ * （toGroup）、删除带组、手动刷新、空态、加载失败提示、后台轮询静默。
  */
 import { describe, it, expect, vi } from "vitest"
 import { createRoot, type Root } from "react-dom/client"
@@ -74,12 +74,13 @@ const SNAPSHOT = {
     },
   ],
   mainWorkspace: PROJ_A,
+  defaultGroup: PROJ_A,
 }
 
 function fakeApi(over: Record<string, unknown> = {}): ApiClient & { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn>; patch: ReturnType<typeof vi.fn>; del: ReturnType<typeof vi.fn> } {
   return {
     get: vi.fn(async (path: string) => {
-      if (path === "/mcp") return SNAPSHOT
+      if (path === "/mcp" || path.startsWith("/mcp?")) return SNAPSHOT
       throw new Error(`unexpected ${path}`)
     }),
     post: vi.fn(async () => ({})),
@@ -272,9 +273,10 @@ describe("McpView form (add / edit / move / delete)", () => {
     })
   }
 
-  it("defaults the target to the selected session's workdir", async () => {
+  it("sends the session workdir as a query param and defaults the target to the server defaultGroup", async () => {
     const api = fakeApi()
     const { container } = await mount(api, () => {}, PROJ_A)
+    expect(api.get).toHaveBeenCalledWith(`/mcp?workdir=${encodeURIComponent(PROJ_A)}`)
     await openAdd(container)
     const select = container.querySelector('[data-testid="mcp-form-group"]') as HTMLSelectElement
     expect(select.value).toBe(PROJ_A)
@@ -283,22 +285,24 @@ describe("McpView form (add / edit / move / delete)", () => {
   it("falls back to the daemon workspace, then global, when no session is selected", async () => {
     const api = fakeApi()
     const { container } = await mount(api)
+    expect(api.get).toHaveBeenCalledWith("/mcp")
     await openAdd(container)
     expect((container.querySelector('[data-testid="mcp-form-group"]') as HTMLSelectElement).value).toBe(PROJ_A)
 
-    const noMain = fakeApi({ get: vi.fn(async () => ({ groups: [{ id: "global", servers: [] }], mainWorkspace: "" })) })
+    const noMain = fakeApi({ get: vi.fn(async () => ({ groups: [{ id: "global", servers: [] }], mainWorkspace: "", defaultGroup: "global" })) })
     const { container: c2 } = await mount(noMain)
     await openAdd(c2)
     expect((c2.querySelector('[data-testid="mcp-form-group"]') as HTMLSelectElement).value).toBe("global")
   })
 
-  it("never defaults to a session workdir the snapshot doesn't know (a group the server won't mount)", async () => {
+  it("uses the server defaultGroup when the session workdir isn't a known group (the server skipped it)", async () => {
     const api = fakeApi()
     const fresh = "/tmp/fresh-proj"
     const { container } = await mount(api, () => {}, fresh)
+    // The unknown workdir rides along; the server answers with its fallback.
+    expect(api.get).toHaveBeenCalledWith(`/mcp?workdir=${encodeURIComponent(fresh)}`)
     await openAdd(container)
     const select = container.querySelector('[data-testid="mcp-form-group"]') as HTMLSelectElement
-    // Not a known group → fall back to the daemon workspace, which is known.
     expect(select.value).toBe(PROJ_A)
     expect([...select.options].some((o) => o.value === fresh)).toBe(false)
   })

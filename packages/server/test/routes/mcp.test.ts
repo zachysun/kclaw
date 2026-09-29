@@ -89,17 +89,43 @@ describe("mcp routes", () => {
     rmSync(home, { recursive: true, force: true })
   })
 
-  it("GET /mcp returns the grouped snapshot with config and the main workspace", async () => {
+  it("GET /mcp returns the grouped snapshot with config, the main workspace and the server-computed defaultGroup", async () => {
     const res = await app.inject({ method: "GET", url: "/mcp", headers: AUTH })
     expect(res.statusCode).toBe(200)
-    const body = res.json() as McpSnapshot & { mainWorkspace: string }
+    const body = res.json() as McpSnapshot & { mainWorkspace: string; defaultGroup: string }
     expect(body.mainWorkspace).toBe("/tmp/main")
+    // No session workdir, main workspace not a group here → global.
+    expect(body.defaultGroup).toBe("global")
     expect(body.groups).toHaveLength(1)
     expect(body.groups[0].id).toBe("global")
     expect(body.groups[0].servers[0].name).toBe("existing")
     expect(body.groups[0].servers[0].config).toEqual({ type: "stdio", command: "run" })
     expect(body.groups[0].servers[0].group).toBe("global")
     expect(body.groups[0].servers[0].tools[0].name).toBe("mcp__existing__tool")
+  })
+
+  it("GET /mcp?workdir= resolves the default creation target server-side (any spelling)", async () => {
+    const view = fakeManager()
+    // A snapshot that knows the project group and the daemon workspace.
+    view.status = (): McpSnapshot => ({
+      groups: [
+        { id: "global", servers: [] },
+        { id: DIR, servers: [] },
+        { id: "/tmp/main", servers: [] },
+      ],
+    })
+    await app.close()
+    app = await buildApp(view)
+
+    const byQuery = async (url: string): Promise<string> =>
+      ((await app.inject({ method: "GET", url, headers: AUTH })).json() as { defaultGroup: string }).defaultGroup
+
+    // Session workdir wins when the snapshot knows it — spellings canonicalize.
+    expect(await byQuery(`/mcp?workdir=${encodeURIComponent(DIR)}`)).toBe(DIR)
+    expect(await byQuery(`/mcp?workdir=${encodeURIComponent(`${DIR}/`)}`)).toBe(DIR)
+    // Unknown workdir falls back to the daemon workspace, then global.
+    expect(await byQuery(`/mcp?workdir=${encodeURIComponent("/tmp/unknown")}`)).toBe("/tmp/main")
+    expect(await byQuery("/mcp")).toBe("/tmp/main")
   })
 
   it("masks env/header values on the way out and keeps a stored secret when the field comes back blank", async () => {
@@ -307,7 +333,7 @@ describe("mcp routes", () => {
     app = await buildApp(undefined)
     const list = await app.inject({ method: "GET", url: "/mcp", headers: AUTH })
     expect(list.statusCode).toBe(200)
-    expect(list.json()).toEqual({ groups: [], mainWorkspace: "/tmp/main" })
+    expect(list.json()).toEqual({ groups: [], mainWorkspace: "/tmp/main", defaultGroup: "global" })
 
     const post = await app.inject({ method: "POST", url: "/mcp/servers", headers: AUTH, payload: { name: "a", config: { type: "stdio", command: "x" }, group: "global" } })
     expect(post.statusCode).toBe(503)

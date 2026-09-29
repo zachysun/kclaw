@@ -60,7 +60,7 @@ describe("createApp auth + endpoints", () => {
       headers: { authorization: "Bearer t1" },
     })
     expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual({ groups: [], mainWorkspace: "" })
+    expect(res.json()).toEqual({ groups: [], mainWorkspace: "", defaultGroup: "global" })
   })
 
   it("GET /mcp surfaces the injected status snapshot", async () => {

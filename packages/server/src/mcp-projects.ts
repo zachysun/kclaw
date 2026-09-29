@@ -13,7 +13,7 @@
  * createProjectMcpWatch and is never fatal.
  */
 import type { McpServerConfig } from "@kclaw/core"
-import { projectMcpCollidesWithGlobal } from "@kclaw/core"
+import { projectMcpCollidesWithGlobal, resolveProjectIdentity } from "@kclaw/core"
 import { createProjectMcpWatch } from "./project-mcp-watch.js"
 
 export interface McpProjectsDeps {
@@ -40,12 +40,15 @@ export interface McpProjectsDeps {
  * both sides see the same thing: the workspace plus every session-recorded
  * workdir, minus any directory whose project config file would be the
  * global file itself (daemon home inside the project) — that project layer
- * cannot exist independently and stays unmounted.
+ * cannot exist independently and stays unmounted. Every directory comes out
+ * as its canonical identity (resolveProjectIdentity), so different spellings
+ * of one directory mount one project, and a relative spelling never shows up
+ * as a group id the action routes would reject.
  */
 export function collectProjectDirs(deps: Pick<McpProjectsDeps, "workspace" | "allMetas" | "home">): string[] {
-  const wanted = new Set<string>([deps.workspace])
+  const wanted = new Set<string>([resolveProjectIdentity(deps.workspace)])
   for (const meta of deps.allMetas()) {
-    if (meta.workdir !== undefined) wanted.add(meta.workdir)
+    if (meta.workdir !== undefined) wanted.add(resolveProjectIdentity(meta.workdir))
   }
   return [...wanted].filter((dir) => deps.home === undefined || !projectMcpCollidesWithGlobal(dir, deps.home))
 }
@@ -57,17 +60,21 @@ export function createMcpProjects(deps: McpProjectsDeps): {
 } {
   const known = new Set<string>()
   const watches = new Map<string, { ensure: () => void; close: () => void }>()
+  /** Canonical identity of the workspace — always mounted, never dropped. */
+  const workspaceId = resolveProjectIdentity(deps.workspace)
   let timer: NodeJS.Timeout | undefined
 
+  /** Mount one project; the workdir canonicalizes to the group identity. */
   function mount(workdir: string): void {
-    if (deps.home !== undefined && projectMcpCollidesWithGlobal(workdir, deps.home)) return
-    if (known.has(workdir)) return
-    known.add(workdir)
-    deps.manager.ensureProject(workdir, deps.loadEntries(workdir))
-    const watch = createProjectMcpWatch(workdir, () => {
-      deps.manager.reconcileProject(workdir, deps.loadEntries(workdir))
+    const dir = resolveProjectIdentity(workdir)
+    if (deps.home !== undefined && projectMcpCollidesWithGlobal(dir, deps.home)) return
+    if (known.has(dir)) return
+    known.add(dir)
+    deps.manager.ensureProject(dir, deps.loadEntries(dir))
+    const watch = createProjectMcpWatch(dir, () => {
+      deps.manager.reconcileProject(dir, deps.loadEntries(dir))
     })
-    watches.set(workdir, watch)
+    watches.set(dir, watch)
     watch.ensure()
   }
 
@@ -87,7 +94,7 @@ export function createMcpProjects(deps: McpProjectsDeps): {
       if (!known.has(workdir)) mount(workdir)
     }
     for (const workdir of [...known]) {
-      if (workdir !== deps.workspace && !wanted.has(workdir)) unmount(workdir)
+      if (workdir !== workspaceId && !wanted.has(workdir)) unmount(workdir)
     }
   }
 

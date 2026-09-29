@@ -20,7 +20,7 @@
  */
 import type { FastifyInstance } from "fastify"
 import type { McpServerConfig } from "@kclaw/core"
-import { McpError, isGroupId, parseMcpServerConfig } from "@kclaw/core"
+import { GLOBAL_GROUP, McpError, isGroupId, parseMcpServerConfig, resolveProjectIdentity } from "@kclaw/core"
 import type { McpSnapshot } from "@kclaw/core/protocol"
 import { maskSecret } from "./config.js"
 
@@ -118,10 +118,27 @@ function mergeStoredSecrets(incoming: McpServerConfig, stored: McpServerConfig |
 }
 
 export function registerMcpRoutes(app: FastifyInstance, deps: McpRoutesDeps): void {
-  app.get("/mcp", async () => ({
-    groups: wireGroups(deps),
-    mainWorkspace: deps.mainWorkspace ?? "",
-  }))
+  app.get("/mcp", async (request) => {
+    const groups = wireGroups(deps)
+    const rawMain = deps.mainWorkspace ?? ""
+    const mainWorkspace = rawMain === "" ? "" : resolveProjectIdentity(rawMain)
+    // The default creation target is decided HERE, not mirrored by clients:
+    // the selected session's workdir when the snapshot knows it (a directory
+    // the server won't mount — the global-file alias — never becomes a
+    // group), else the daemon workspace when that is a group, else global.
+    // Both candidates canonicalize through the same identity rule as the
+    // group ids, so spelling drift cannot miss the membership check.
+    const ids = new Set(groups.map((g) => g.id))
+    const raw = (request.query as { workdir?: unknown } | undefined)?.workdir
+    const sessionWorkdir = typeof raw === "string" && raw !== "" ? resolveProjectIdentity(raw) : undefined
+    const defaultGroup =
+      sessionWorkdir !== undefined && ids.has(sessionWorkdir)
+        ? sessionWorkdir
+        : ids.has(mainWorkspace)
+          ? mainWorkspace
+          : GLOBAL_GROUP
+    return { groups, mainWorkspace, defaultGroup }
+  })
 
   app.post("/mcp/servers", async (request, reply) => {
     if (deps.mcp === undefined) return reply.code(503).send({ error: "mcp not assembled" })
