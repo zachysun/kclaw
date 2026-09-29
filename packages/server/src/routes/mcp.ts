@@ -27,7 +27,6 @@ import { maskSecret } from "./config.js"
 /** What the routes need from the manager (the McpManager surface in practice). */
 export interface McpRoutesView {
   status(): McpSnapshot
-  flush(): Promise<void>
   addServer(group: string, name: string, config: McpServerConfig): void
   updateServer(group: string, name: string, config: McpServerConfig, toGroup?: string): void
   removeServer(group: string, name: string): void

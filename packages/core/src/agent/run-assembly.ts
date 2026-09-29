@@ -31,7 +31,7 @@
  */
 import { readFileSync, statSync } from "node:fs"
 import { join, resolve, sep } from "node:path"
-import type { AgentEvent, AnyAgentEvent } from "../protocol/events.js"
+import type { AgentEvent, AnyAgentEvent, RunTrigger } from "../protocol/events.js"
 import type { AttachmentBlock, NoteBlock, ToolCallBlock } from "../protocol/blocks.js"
 import { newBlockId } from "../protocol/blocks.js"
 import type { Message } from "../protocol/messages.js"
@@ -94,7 +94,7 @@ export type LlmRetrySink = (info: { attempt: number; error: unknown }) => void
 export interface EnqueueInput {
   userText: string
   /** team = 团队收信箱投递/任务派活（引擎或宿主发起）：不走技能/文件点名包装，处置按提交方显式声明（常规派活=steer）。 */
-  trigger: "user" | "job" | "agent" | "team" | "goal"
+  trigger: RunTrigger
   /**
    * Per-run model override (a job's configured model, or a client-forced
    * one). Priority per run: input.model > session meta model > daemon

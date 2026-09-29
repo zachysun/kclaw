@@ -38,7 +38,6 @@ function fakeManager(initial: Record<string, McpServerConfig> = {}) {
         ],
       }
     },
-    async flush(): Promise<void> {},
     addServer(group: string, name: string, config: McpServerConfig): void {
       calls.push(`add:${group}:${name}`)
       if (name === "dupe") throw new McpError("conflict", `MCP server already exists: ${name}`)

@@ -7,7 +7,7 @@ import {
   newMessage, newAssistantMessage, newToolMessage,
   type Message, type StopReason, type Usage, type GrantedBy,
 } from "../protocol/messages.js"
-import { makeEvent, type AgentEvent } from "../protocol/events.js"
+import { makeEvent, type AgentEvent, type RunTrigger } from "../protocol/events.js"
 import type { LlmClient, LlmStreamEvent, ProviderMessage, ToolDefinition } from "../provider/types.js"
 import { isContextOverflowError } from "../provider/overflow.js"
 import type { ActiveSummary } from "../session/compaction.js"
@@ -32,7 +32,7 @@ export interface RunInput {
   history: Message[]
   system: string
   userText: string
-  trigger?: "user" | "job" | "agent" | "team" | "goal"
+  trigger?: RunTrigger
   /**
    * Pre-built user message for this run (daemon-side composition): when set,
    * the loop uses it verbatim instead of synthesizing one from `userText`

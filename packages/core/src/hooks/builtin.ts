@@ -34,7 +34,7 @@
  */
 import { newBlockId } from "../protocol/blocks.js"
 import type { NoteBlock } from "../protocol/blocks.js"
-import { makeEvent, type AgentEvent } from "../protocol/index.js"
+import { makeEvent, type AgentEvent, type RunTrigger } from "../protocol/index.js"
 import type { Message } from "../protocol/messages.js"
 import type { LlmClient } from "../provider/types.js"
 import { estimateContextTokens, type ActiveSummary } from "../session/compaction.js"
@@ -97,7 +97,7 @@ export interface BuiltinHookDeps {
   // user-message-land / autoname inputs (former onUserMessage closure state):
   // machine-originated provenance notes (job / subagent) riding the input message
   inputNotes: NoteBlock[]
-  trigger: "user" | "job" | "agent" | "team" | "goal"
+  trigger: RunTrigger
   /**
    * Subagent child run (the session's parentSessionId is set): the run is a
    * dispatched executor's only turn — memory injection, autoname, the follow

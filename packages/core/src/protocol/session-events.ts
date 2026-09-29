@@ -5,6 +5,7 @@
  * the guards and the meta projection (applyEvent) live in session/events.ts.
  */
 import type { Message, StopReason, Usage } from "./messages.js"
+import type { RunTrigger } from "./events.js"
 import type { TaskSnapshot } from "./team.js"
 
 export interface SessionCreatedEvent { type: "session.created"; at: string; title: string; workdir?: string; jobId?: string; /** 创建时固化的权限模式快照（config permissions.defaultMode）；不写时 default。 */ mode?: import("../permissions/modes.js").PermissionMode; /** 父会话（subagent 派生关系）：设置即子会话——列表默认过滤、记忆提取排除、用量归组到父。 */ parentSessionId?: string }
@@ -50,7 +51,7 @@ export interface SandboxCheckedEvent {
 /** 一次对话运行的起点留痕（每 run 一条，与消息事件夹出一轮的边界）。 */
 export interface RunStartedEvent {
   type: "run.started"; at: string
-  trigger: "user" | "job" | "agent" | "team" | "goal"
+  trigger: RunTrigger
 }
 /**
  * 一次对话运行的终点留痕（每 run 恰一条，与 run.started 成对）。stopReason
