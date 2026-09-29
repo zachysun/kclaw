@@ -264,7 +264,7 @@ daemon 启动时做一次全库对齐（`daemon.ts` 调 `memory.reconcile`）：
 ```
 
 - `episode` 事件带 `topic`（线名），`cognition` 事件带 `scope`（新认知的 scope）；
-- 事件不带 `sessionId`（项目级事务）；订阅端（CLI / web）把它当成"已写入"的轻提示，不驱动任何状态机。CLI 用暗色一行显示 `已写入记忆: <path>`，web 通知条显示同文案；web 的通知条**可点击**，跳转记忆页。`cognition` 事件按 path 反推 kind/name 自动打开对应认知文件；`episode` 事件不附带 `scope`（形状里只有 `topic`），而前端打开线文件的分支依赖 `scope` 字段，目前不会触发——点击只完成跳转，线文件不会自动打开。
+- 事件不带 `sessionId`（项目级事务）；订阅端（CLI / web）把它当成"已写入"的轻提示，不驱动任何状态机。CLI 用暗色一行显示 `已写入记忆: <path>`，web 通知条显示同文案；web 的通知条**可点击**，跳转记忆页并随即清掉通知。`cognition` 事件按 path 反推 kind/name 自动打开对应认知文件；`episode` 事件不附带 `scope`（形状里只有 `topic`），而前端打开线文件的分支依赖 `scope` 字段，目前不会触发——点击只完成跳转，线文件不会自动打开。
 
 ### 事件流里的 memory 事件（审计）
 

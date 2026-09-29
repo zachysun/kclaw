@@ -305,6 +305,40 @@ describe("ChatPanel", () => {
     await act(async () => { btn.click() })
     expect(onOpenMemoryWritten).toHaveBeenCalledTimes(1)
     expect(onOpenMemoryWritten).toHaveBeenCalledWith({ path: "/global/persona/persona.md", kind: "cognition", scope: "global" })
+    // 跳转动作消费了通知：点击后通知条随即消失（不必再打字）。
+    expect(h.container.querySelector('[data-testid="chat-notice"]')).toBeNull()
+    h.unmount()
+  })
+
+  it("dismisses the notice via the × button without typing", async () => {
+    const h = await mount()
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("memory.written", { path: "persona.md", kind: "persona", scope: "global" }))
+    })
+    expect(h.container.querySelector('[data-testid="chat-notice"]')).not.toBeNull()
+    await act(async () => {
+      ;(h.container.querySelector('[data-testid="chat-notice-close"]') as HTMLButtonElement).click()
+    })
+    expect(h.container.querySelector('[data-testid="chat-notice"]')).toBeNull()
+    h.unmount()
+  })
+
+  it("clears the notice when the user switches to another session", async () => {
+    const h = await mount({ sessionId: "s1" })
+    await drive(() => {
+      pushFrame(h.sockets[0]!, ev("memory.written", { path: "persona.md", kind: "persona", scope: "global" }))
+    })
+    expect(h.container.querySelector('[data-testid="chat-notice"]')).not.toBeNull()
+    // 切到另一个会话：上一条会话的通知不属于新语境，随视图一起清掉。真实
+    // App 切会话会换一个新的 per-session ws client（复用旧 client 会被重连
+    // 循环当成断线，重新连上后设"已重连"通知）。
+    await act(async () => {
+      h.root.render(
+        <ChatPanel sessionId="s2" api={h.apiProp} ws={h.createWs()} createWs={h.createWs} initialMessages={[]} onCreateSession={async () => {}} onOpenSessions={() => {}} />,
+      )
+    })
+    await flush()
+    expect(h.container.querySelector('[data-testid="chat-notice"]')).toBeNull()
     h.unmount()
   })
 

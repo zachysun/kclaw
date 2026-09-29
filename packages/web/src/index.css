@@ -896,12 +896,39 @@ select:focus {
 }
 
 .chat-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   border: 1px solid var(--border-strong);
   background: var(--surface-2);
   border-radius: var(--radius);
   padding: 6px 12px;
   color: var(--text-dim);
   margin-bottom: var(--space-2);
+}
+
+/* 文本与可点击通知按钮都占满剩余宽度，关闭按钮贴右 */
+.chat-notice-text,
+.chat-notice-link {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+}
+
+/* 关闭按钮：贴边的裸 ×（与 attachment-chip 的移除按钮同款视觉） */
+.chat-notice-close {
+  flex: none;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  color: var(--muted);
+}
+
+.chat-notice-close:hover {
+  color: var(--danger);
 }
 
 /* ---- send-message queue ---- */

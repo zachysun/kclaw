@@ -214,7 +214,7 @@ withStopTimeout(memoryTick.stop(), 60s)
 withStopTimeout(skillTick.stop(), 60s)
                                     // 停技能调度器（await 所有进行中的提炼）
 withStopTimeout(goalHost.dispose(), 60s)
-                                    // 等进行中的 goal 检查落定（判定器调用可能还在飞；
+                                    // 等进行中的 goal 检查落定（判定器调用可能尚未返回；
                                     // 循环不自动续跑——重启后等用户 resume，见 goal.md）
 withStopTimeout(feishuManager.stop(), 60s)
                                     // 停飞书频道（未启用时为 no-op；断开长连接与总线订阅）

@@ -34,7 +34,7 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 | `met` | 判定器裁决达成（→complete） |
 | `impossible` | 判定器裁决当前条件下无法达成（→complete） |
 | `round-limit` | 连续自续 10 轮未达成（发一条消息清零计数可继续） |
-| `budget-limit` | 生命周期 token 预算（2,000,000）耗尽，收尾轮完成后停止 |
+| `budget-limit` | 生命周期 token budget（2,000,000）耗尽，收尾轮完成后停止 |
 | `gate-exhausted` | 验收命令连续 3 轮未通过 |
 | `no-progress` | 判定器连续 3 轮判无进展 |
 | `permission` | 连续 2 轮出现确认超时（→blocked，等人工裁决） |

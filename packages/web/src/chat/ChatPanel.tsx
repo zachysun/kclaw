@@ -118,8 +118,14 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   // （失败静默——抽屉没候选不碍聊天）。
   const [mentionFiles, setMentionFiles] = useState<readonly string[]>([])
   const [mentionTruncated, setMentionTruncated] = useState(false)
-  // 通知条的可点击动作（memory.written 跳转）：与 notice 同生命周期，输入即清。
+  // 通知条的可点击动作（memory.written 跳转）：与 notice 同生命周期。
   const [noticeAction, setNoticeAction] = useState<(() => void) | null>(null)
+  // 通知条的三条清除路径共用：输入即清（onDraftChange）、× 关闭、点击跳转
+  // 后即清；切换会话也走它（见 sessionRef effect）。
+  const clearNotice = useCallback((): void => {
+    setNotice(null)
+    setNoticeAction(null)
+  }, [])
   // 发送处置：三选的当前选择，显式带在每条 send_message 上。
   const [disposition, setDisposition] = useState<Disposition>("steer")
   // Agent team：面板数据（GET /sessions/:id/team；无团队 = null，不渲染）与
@@ -219,8 +225,11 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     } else {
       sessionRef.current = sessionId
       updateView(() => initChat(initialMessages))
+      // 换会话即换语境：上一条会话的通知（重连结果、操作失败等）不属于
+      // 新会话，随视图一起清掉。
+      clearNotice()
     }
-  }, [sessionId, initialMessages, updateView])
+  }, [sessionId, initialMessages, updateView, clearNotice])
 
   useEffect(() => {
     let cancelled = false
@@ -771,11 +780,6 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     [goalPost],
   )
 
-  const clearNotice = useCallback((): void => {
-    setNotice(null)
-    setNoticeAction(null)
-  }, [])
-
   return (
     <div className="chat-panel">
       <div className="chat-panel-inner" data-testid="chat-panel" onDragOver={(e) => e.preventDefault()} onDrop={handleDrop}>
@@ -793,6 +797,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           onSwitchMode={handleSwitchMode}
           notice={notice}
           noticeAction={noticeAction}
+          onDismissNotice={clearNotice}
           onDraftChange={clearNotice}
           disposition={disposition}
           onSetDisposition={handleSetDisposition}

@@ -99,6 +99,8 @@ export interface ChatViewProps {
    * Present → the notice renders as a button; absent → plain text.
    */
   noticeAction?: (() => void) | null
+  /** Dismiss the notice (the × on the notice bar; typing clears it too). */
+  onDismissNotice?: () => void
   /** The current send disposition (the trio's selection; the owner resolves it from meta/config). */
   disposition?: Disposition
   /** Select the trio — the owner writes the sticky override and carries it on sends. */
@@ -167,7 +169,7 @@ export interface ChatViewProps {
   }
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDismissNotice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Suggestion-menu state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -524,13 +526,21 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
       {notice !== undefined && notice !== null && notice !== "" && (
         <div className="chat-notice" data-testid="chat-notice" role="status">
           {noticeAction !== undefined && noticeAction !== null ? (
-            // 可点击通知（写入通知）：点击执行跳转动作，其余通知保持纯文本。
-            <button type="button" data-testid="chat-notice-action" className="chat-notice-link" onClick={() => noticeAction()}>
+            // 可点击通知（写入通知）：点击执行跳转并关掉通知条；其余通知为
+            // 纯文本 + 关闭按钮（错误类通知不自动消失，用户看完了手动关）。
+            <button type="button" data-testid="chat-notice-action" className="chat-notice-link" onClick={() => { noticeAction(); onDismissNotice?.() }}>
               {notice}
             </button>
           ) : (
-            notice
+            <span className="chat-notice-text">{notice}</span>
           )}
+          <button
+            type="button"
+            className="chat-notice-close"
+            data-testid="chat-notice-close"
+            aria-label="关闭通知"
+            onClick={() => onDismissNotice?.()}
+          >×</button>
         </div>
       )}
       {queuedRows.length > 0 && (

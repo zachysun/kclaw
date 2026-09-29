@@ -23,13 +23,13 @@
 用户设目标（POST /sessions/:id/goal 或 /goal 命令）
   → goal.set(create) 事件 + armed + 第一轮入队（trigger:"goal"，固定 wait）
   → run 正常执行（工具循环、权限判定、沙箱，与普通 run 完全同一套）
-  → 队列排空（RunManager 的空闲边缘 onSessionIdle，与 team host 同一接缝）
+  → 队列排空（RunManager 的空闲边缘 onSessionIdle，与 team host 同一挂载点）
   → GoalLoopHost 一轮检查（#check，互斥）：
       ① 上一轮 run 出错        → paused(run-error)，不自动重试
       ② 连续 2 轮确认超时       → blocked(permission)，等人来
       ③ 验收门（有命令才跑）    → 失败短路判定器，直接进分支
       ④ 判定器（独立 LLM）      → met/impossible → complete；
-                                  not_met → 无进展检查 → 预算/轮数 → 续跑
+                                  not_met → 无进展检查 → budget/轮数 → 续跑
       ⑤ 判定器失败/门失败       → 连败熔断或 fail-open 续跑
   → 续跑 = 再入队一轮 goal run（用户文本带判定意见/验收输出）
 ```
@@ -85,7 +85,7 @@
 ## 与相邻系统的交互
 
 - **排队**：goal 轮的 trigger 是 `"goal"`（`run.started` 触发源第五种），处置固定 `wait`（与 job/agent 同款——无人值守的排队行为必须可预测），用户中途输入按自己的处置照常 steer 注入当前 run。
-- **唤醒预算**（两次用户发言之间的机器唤醒上限）：goal 轮开跑时同样清零该预算——目标循环自身有九条独立停止条件，不再叠加这份预算，否则长目标里 subagent 投递会先被卡死。
+- **唤醒 budget**（两次用户发言之间的机器唤醒上限）：goal 轮开跑时同样清零——目标循环自身有九条独立停止条件，不再叠加这份上限，否则长目标里 subagent 投递会先被卡死。
 - **subagent 会话**（`parentSessionId` 非空）不能设目标（只读会话）。
 - **提示词注入**沿用 XML 标签约定：首轮 `<goal-start>`、续跑 `<goal-continue round=N>`、收尾 `<goal-wrapup>`（闭合标签逃逸防提示词注入）；goal 轮的用户消息带 `note(kind:"goal")` 出处行。
 - **审计**：goal 事件在审计页渲染成 "goal" 行（设定/检查/移除各一句话摘要，点击展开完整快照与裁决）。

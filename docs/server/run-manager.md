@@ -76,7 +76,7 @@ export interface EnqueueInput {
                        // job 触发=定时任务来源行；subagent kind=后台完成回投的"非用户发言"声明
   disposition?: "steer" | "wait" | "interrupt"
                         // 单次显式处置（层级最高）；默认 = 会话覆盖 ?? 配置默认；
-                        // trigger:"job" 与 "agent" 与 "goal" 固定 wait，不读默认
+                        // trigger:"job"/"agent"/"goal" 固定 wait，不读默认
   messageId?: string   // 内部：驱动器出队执行时传入的预分配消息 id（ws 层不传）
 }
 
