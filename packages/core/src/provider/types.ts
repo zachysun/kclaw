@@ -35,6 +35,15 @@ export interface LlmRequest {
    * verdicts. Clients that cannot express it ignore the field.
    */
   temperature?: number
+  /**
+   * Prompt-cache routing hint. ABSENT = the request carries no cache markers
+   * at all — the payload stays byte-identical to the pre-cache shape (one-shot
+   * helper calls: compaction summaries, goal judge, autoname). Present, the
+   * Anthropic adapter places its cache_control breakpoints and the
+   * OpenAI-compatible adapter sends prompt_cache_key=key — unless the provider
+   * entry opted out via config (promptCache:"off"; config wins over the field).
+   */
+  promptCache?: { key?: string }
 }
 
 export type LlmStreamEvent =

@@ -191,3 +191,106 @@ describe("anthropic client", () => {
       .rejects.toThrow("llm anthropic overloaded_error: Overloaded")
   })
 })
+
+describe("anthropic cache breakpoints (prompt_cache channel)", () => {
+  function captureBodies(statuses: number[]): { bodies: Array<Record<string, unknown>>; fetchCalls: () => number; fetchImpl: typeof fetch } {
+    const bodies: Array<Record<string, unknown>> = []
+    let calls = 0
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const status = statuses[Math.min(calls++, statuses.length - 1)]!
+      bodies.push(JSON.parse(String(init?.body)))
+      if (status !== 200) return new Response('{"error":{"type":"invalid_request_error"}}', { status })
+      return sseResponse([{ type: "message_stop" }])
+    }) as unknown as typeof fetch
+    return { bodies, fetchCalls: () => calls, fetchImpl }
+  }
+
+  const TOOLS = [
+    { name: "zeta", description: "z", parameters: { type: "object", properties: { q: { type: "string" } } } },
+    { name: "alpha", description: "a", parameters: { type: "object" } },
+  ]
+  const MSGS = [
+    { role: "user" as const, content: "hi" },
+    { role: "assistant" as const, content: null, toolCalls: [{ callId: "t1", name: "alpha", argsJson: "{}" }] },
+    { role: "tool" as const, toolCallId: "t1", content: "out1" },
+  ]
+  const CACHE_REQ: LlmRequest = {
+    model: "claude-sonnet-4", system: "be brief", messages: MSGS, tools: TOOLS,
+    promptCache: { key: "ses_x" },
+  }
+
+  it("places exactly three breakpoints: last tool top-level, system as a single block array, last message's last block", async () => {
+    const { bodies, fetchImpl } = captureBodies([200])
+    await collect(createAnthropicClient({ baseUrl: "https://x", apiKey: "k", fetchImpl }), CACHE_REQ)
+    const body = bodies[0]!
+    // tools: on the TOOL object top level (sibling of name/description/input_schema), not inside input_schema
+    const lastTool = body.tools.at(-1) as Record<string, unknown>
+    expect(lastTool.cache_control).toEqual({ type: "ephemeral" })
+    expect((lastTool.input_schema as Record<string, unknown>).cache_control).toBeUndefined()
+    // system: string → single-element block array with the marker on the block
+    expect(body.system).toEqual([{ type: "text", text: "be brief", cache_control: { type: "ephemeral" } }])
+    // messages: the last block of the last message (a merged tool_result here)
+    const lastMsg = body.messages.at(-1) as { content: Array<Record<string, unknown>> }
+    expect(lastMsg.content.at(-1)!.type).toBe("tool_result")
+    expect(lastMsg.content.at(-1)!.cache_control).toEqual({ type: "ephemeral" })
+    expect(JSON.stringify(body).match(/cache_control/g)).toHaveLength(3)
+  })
+
+  it("absent promptCache → payload byte-identical to the legacy shape: string system, no markers anywhere", async () => {
+    const { bodies, fetchImpl } = captureBodies([200])
+    await collect(createAnthropicClient({ baseUrl: "https://x", apiKey: "k", fetchImpl }), {
+      model: "claude-sonnet-4", system: "be brief", messages: MSGS, tools: TOOLS,
+    })
+    const body = bodies[0]!
+    expect(body.system).toBe("be brief")
+    expect(JSON.stringify(body)).not.toContain("cache_control")
+    expect(JSON.stringify(body)).not.toContain("prompt_cache_key")
+  })
+
+  it("entry configured off (promptCacheEnabled: false) suppresses markers even when the request opts in", async () => {
+    const { bodies, fetchImpl } = captureBodies([200])
+    await collect(createAnthropicClient({ baseUrl: "https://x", apiKey: "k", fetchImpl, promptCacheEnabled: false }), CACHE_REQ)
+    expect(bodies[0]!.system).toBe("be brief")
+    expect(JSON.stringify(bodies[0]!)).not.toContain("cache_control")
+  })
+
+  it("skips breakpoints for empty tools / empty system / empty messages", async () => {
+    const { bodies, fetchImpl } = captureBodies([200])
+    await collect(createAnthropicClient({ baseUrl: "https://x", apiKey: "k", fetchImpl }), {
+      model: "m", system: "", messages: [], tools: [], promptCache: { key: "k" },
+    })
+    const body = bodies[0]!
+    expect(body.system).toBe("")
+    expect(body.tools).toEqual([])
+    expect(body.messages).toEqual([])
+    expect(JSON.stringify(body)).not.toContain("cache_control")
+  })
+
+  it("strips markers and retries once on 400, then remembers the verdict for later requests", async () => {
+    const { bodies, fetchCalls, fetchImpl } = captureBodies([400, 200, 200])
+    const client = createAnthropicClient({ baseUrl: "https://x", apiKey: "k", fetchImpl })
+    await collect(client, CACHE_REQ)
+    expect(fetchCalls()).toBe(2)
+    expect(JSON.stringify(bodies[0])).toContain("cache_control")
+    expect(JSON.stringify(bodies[1])).not.toContain("cache_control")
+    expect(bodies[1]!.system).toBe("be brief") // stripped retry = legacy shape byte-for-byte
+    // the verdict persists per client instance: no retry on the next request
+    await collect(client, CACHE_REQ)
+    expect(fetchCalls()).toBe(3)
+    expect(JSON.stringify(bodies[2])).not.toContain("cache_control")
+  })
+
+  it("does NOT strip on 401 (auth is not a schema problem)", async () => {
+    const { bodies, fetchCalls, fetchImpl } = captureBodies([401])
+    await expect(collect(createAnthropicClient({ baseUrl: "https://x", apiKey: "bad", fetchImpl }), CACHE_REQ))
+      .rejects.toThrow("llm http 401")
+    expect(fetchCalls()).toBe(1)
+    expect(JSON.stringify(bodies[0])).toContain("cache_control")
+  })
+
+  it("a 400 after the marker-free retry surfaces the original llm http 400", async () => {
+    const { fetchImpl } = captureBodies([400, 400])
+    await expect(collect(createAnthropicClient({ baseUrl: "https://x", apiKey: "k", fetchImpl }), CACHE_REQ))
+      .rejects.toThrow("llm http 400")
+  })
+})

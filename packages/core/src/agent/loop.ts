@@ -310,6 +310,10 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
           messages: await buildMessages(),
           tools: deps.toolDefs ?? [],
           ...(deps.maxTokens === undefined ? {} : { maxTokens: deps.maxTokens }),
+          // 主循环恒传：同会话请求路由到同一缓存分片（子代理经同一路径，
+          // 自然用自己的 sessionId，不继承父会话）。一次性辅助调用不经
+          // runAgent，缺省该字段即零缓存标记。
+          promptCache: { key: input.sessionId },
         }), deps.signal)) {
           // Abort checkpoint: stop consuming the stream the moment the signal fires.
           if (deps.signal?.aborted) break

@@ -19,7 +19,14 @@ export function createProviderClient(opts: {
   fetchImpl?: typeof fetch
 }): LlmClient {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS
-  const base = { baseUrl: opts.entry.baseUrl, apiKey: opts.entry.apiKey, timeoutMs, ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}) }
+  const base = {
+    baseUrl: opts.entry.baseUrl,
+    apiKey: opts.entry.apiKey,
+    timeoutMs,
+    // Cache markers flow unless the entry opted out (promptCache:"off").
+    promptCacheEnabled: opts.entry.promptCache !== "off",
+    ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
+  }
   if (resolveProviderFormat(opts.entry) === "anthropic") return createAnthropicClient(base)
   return createOpenAiCompatClient(base)
 }

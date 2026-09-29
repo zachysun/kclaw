@@ -26,6 +26,14 @@ export interface ProviderEntry {
   contextWindow?: number
   /** 单次回复的输出上限（token）。配置后随请求下发 max_tokens；不写则沿用供应商默认。 */
   maxOutput?: number
+  /**
+   * Prompt-cache markers（"auto" | "off"，缺省 auto）。auto：请求带
+   * promptCache 时适配器加缓存标记（Anthropic cache_control 断点 /
+   * OpenAI prompt_cache_key）；off：即使请求带该字段也不加（可疑端点的
+   * 显式退路，如对陌生字段回 400 的网关）。端点运行时回 400 还有适配器
+   * 内的剥除重试与裁决记忆兜底，本配置是不等 400 的主动关闭。
+   */
+  promptCache?: "auto" | "off"
 }
 
 /** Entries may omit `format`; everything downstream reads through this. */
@@ -316,11 +324,26 @@ function parseConfig(raw: string, path: string): KclawConfig {
   // (target < ahead < at < panic) fall back to the module defaults with one
   // warning; the pack line is validated independently (decoupled by design).
   validateWaterlineConfig(merged.sessions)
+  validateProviderEntries(merged)
   validateTeamConfig(merged)
   validateSkillsConfig(merged)
   validateServerConfig(merged)
   validateGoalsConfig(merged)
   return merged
+}
+
+/**
+ * Provider entry promptCache validation (waterline style): a value outside
+ * "auto" | "off" falls back to auto (delete = undefined) with one warning per
+ * entry. Never throws; unknown keys stay untouched.
+ */
+function validateProviderEntries(merged: KclawConfig): void {
+  for (const [name, entry] of Object.entries(merged.providers.entries)) {
+    if (entry.promptCache !== undefined && entry.promptCache !== "auto" && entry.promptCache !== "off") {
+      console.warn(`kclaw config: providers.entries.${name}.promptCache ${String(entry.promptCache)} is invalid; falling back to "auto"`)
+      entry.promptCache = undefined
+    }
+  }
 }
 
 /**

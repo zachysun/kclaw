@@ -95,6 +95,23 @@ describe("runAgent usage 缓存字段链路", () => {
     },
   ]
 
+  it("每个 LLM 请求恒带 promptCache.key = sessionId（子代理经同一路径自然用自己的会话 id）", async () => {
+    const requests: Array<Parameters<LlmClient["stream"]>[0]> = []
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        requests.push(req)
+        yield* FINAL_WITH_CACHE
+      },
+    }
+    await runAgent(
+      { sessionId: "ses_cache01", history: [], system: "", userText: "go" },
+      {
+        llm, model: "m", hooks: chainOf(), onEvent: () => {}, onMessage: () => {},
+      } as Parameters<typeof runAgent>[1],
+    )
+    expect(requests[0]!.promptCache).toEqual({ key: "ses_cache01" })
+  })
+
   it("llm-after 钩子收到的 usage 透传缓存字段（不再收窄成两字段）", async () => {
     let seen: unknown
     await runAgent(

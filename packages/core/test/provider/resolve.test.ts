@@ -110,6 +110,25 @@ describe("createProviderResolver", () => {
     expect(resolver.llm()).not.toBe(first)
   })
 
+  it("promptCache:off suppresses prompt_cache_key; the default (auto) sends it; changing the flag rebuilds the client", async () => {
+    const captured: Array<Record<string, unknown>> = []
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      captured.push(JSON.parse(String(init?.body)))
+      return sseResponse()
+    }) as unknown as typeof fetch
+    const REQ_WITH_KEY = { ...REQ, promptCache: { key: "ses_x" } }
+    const cfg = makeConfig((c) => { c.providers.entries.a!.promptCache = "off" })
+    const resolver = createProviderResolver(cfg, fetchImpl)
+    const offClient = resolver.llm("a")
+    for await (const _ of offClient.stream(REQ_WITH_KEY)) void _
+    expect(captured[0]).not.toHaveProperty("prompt_cache_key")
+    // config change off → default(auto): the sig changes, the client rebuilds
+    delete cfg.providers.entries.a!.promptCache
+    expect(resolver.llm("a")).not.toBe(offClient)
+    for await (const _ of resolver.llm("a").stream(REQ_WITH_KEY)) void _
+    expect(captured[1]!.prompt_cache_key).toBe("ses_x")
+  })
+
   it("the named entry serves the request; an unknown key falls back to the default entry", async () => {
     const cfg = makeConfig()
     const { fetch, requests } = recordingFetch()

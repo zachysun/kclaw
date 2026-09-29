@@ -74,9 +74,11 @@ interface AnthropicOutMessage {
  * Map the internal request to a Messages API payload: system-role messages
  * fold into the top-level `system`, tool results merge into one user message
  * (the API takes tool_result blocks inside user turns), and empty assistant
- * turns are dropped (the API rejects empty content).
+ * turns are dropped (the API rejects empty content). With `cacheMarkers` the
+ * three prompt-cache breakpoints are placed on top; without it the payload is
+ * byte-identical to the pre-cache shape (the marker-free retry relies on that).
  */
-function toAnthropicPayload(req: LlmRequest): Record<string, unknown> {
+function toAnthropicPayload(req: LlmRequest, cacheMarkers: boolean): Record<string, unknown> {
   const systemParts = [req.system]
   const messages: AnthropicOutMessage[] = []
   const pushToolResult = (toolUseId: string, content: string): void => {
@@ -109,7 +111,7 @@ function toAnthropicPayload(req: LlmRequest): Record<string, unknown> {
       pushToolResult(m.toolCallId, m.content)
     }
   }
-  return {
+  const payload: Record<string, unknown> = {
     model: req.model,
     system: systemParts.join("\n\n"),
     messages,
@@ -117,6 +119,43 @@ function toAnthropicPayload(req: LlmRequest): Record<string, unknown> {
     max_tokens: req.maxTokens ?? ANTHROPIC_DEFAULT_MAX_TOKENS,
     ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
     stream: true,
+  }
+  if (cacheMarkers) applyAnthropicCacheBreakpoints(payload)
+  return payload
+}
+
+/** The ephemeral 5m breakpoint value (default TTL; no 1h tier). */
+const CACHE_CONTROL = { type: "ephemeral" }
+
+/**
+ * Three prompt-cache breakpoints (tools → system → messages, the API's
+ * prefix evaluation order):
+ * 1. the LAST tool object's TOP level (sibling of name/description/input_schema
+ *    — never inside input_schema); empty tools skip;
+ * 2. the end of the system block — the joined string cannot carry the marker,
+ *    so it becomes a single-element text block array; empty system skips;
+ * 3. the last content block of the last message — in a tool loop that is the
+ *    newest merged tool_result; empty messages skip.
+ * The markers sit on the newest content each request, so they MOVE one turn
+ * later each round — by design; they designate snapshot points, they are not
+ * part of the cached content.
+ */
+function applyAnthropicCacheBreakpoints(payload: {
+  system?: unknown
+  messages?: Array<{ content: Array<Record<string, unknown>> }>
+  tools?: Array<Record<string, unknown>>
+}): void {
+  const tools = payload.tools
+  if (Array.isArray(tools) && tools.length > 0) tools[tools.length - 1]!.cache_control = CACHE_CONTROL
+  if (typeof payload.system === "string" && payload.system !== "") {
+    payload.system = [{ type: "text", text: payload.system, cache_control: CACHE_CONTROL }]
+  }
+  const messages = payload.messages
+  if (Array.isArray(messages) && messages.length > 0) {
+    const last = messages[messages.length - 1]!
+    if (Array.isArray(last.content) && last.content.length > 0) {
+      last.content[last.content.length - 1]!.cache_control = CACHE_CONTROL
+    }
   }
 }
 
@@ -169,29 +208,52 @@ function normalizeStop(raw: string | null | undefined): StopReason {
  * are present. Same timeout/retry contract as the OpenAI-compatible client:
  * the abort fires at timeoutMs and any post-abort failure is reclassified as
  * the `llm http timeout` message.
+ *
+ * Cache markers: when the entry allows it (promptCacheEnabled !== false) and
+ * the request carries `promptCache`, the payload carries the three
+ * cache_control breakpoints. A 400 (a schema rejection — never 401/403/429)
+ * strips the markers and retries once; success remembers the verdict in this
+ * client instance (i.e. per provider entry), so later requests skip the
+ * markers without the round-trip. The retry is silent except for one
+ * console.error line and emits no extra events.
  */
 export function createAnthropicClient(opts: {
   baseUrl: string
   apiKey: string
   fetchImpl?: typeof fetch
   timeoutMs?: number
+  /** Entry-level opt-out (config promptCache:"off"); undefined = allowed. */
+  promptCacheEnabled?: boolean
 }): LlmClient {
   const doFetch = opts.fetchImpl ?? fetch
   const timeoutMs = opts.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS
+  // "this endpoint rejects cache markers" verdict, per client instance =
+  // per provider entry lifetime (resolver rebuilds on config change).
+  let cacheMarkersRejected = false
   return {
     async *stream(req: LlmRequest): AsyncIterable<LlmStreamEvent> {
       const signal = AbortSignal.timeout(timeoutMs)
-      let res: Response
-      try {
-        res = await doFetch(anthropicEndpoint(opts.baseUrl, "/messages"), {
+      const wantCache = opts.promptCacheEnabled !== false && req.promptCache !== undefined && !cacheMarkersRejected
+      const post = (body: string): Promise<Response> =>
+        doFetch(anthropicEndpoint(opts.baseUrl, "/messages"), {
           method: "POST",
           headers: {
             "content-type": "application/json",
             ...formatAuthHeaders("anthropic", opts.apiKey),
           },
-          body: JSON.stringify(toAnthropicPayload(req)),
+          body,
           signal,
         })
+      let res: Response
+      try {
+        res = await post(JSON.stringify(toAnthropicPayload(req, wantCache)))
+        // Schema-level rejection → strip the markers and retry once. Not on
+        // 401/403/429: auth/ratelimit failures are not schema problems.
+        if (res.status === 400 && wantCache) {
+          cacheMarkersRejected = true
+          console.error("kclaw anthropic: endpoint rejected cache_control markers (400); retrying without them and remembering the verdict for this entry")
+          res = await post(JSON.stringify(toAnthropicPayload(req, false)))
+        }
       } catch (err) {
         rethrowClassified(err, signal, timeoutMs)
       }
