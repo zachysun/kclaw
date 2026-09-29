@@ -27,6 +27,7 @@ interface ViewOpts {
   /** 通知条与可点击动作（memory.written 跳转）。 */
   notice?: string | null
   noticeAction?: (() => void) | null
+  onDismissNotice?: () => void
   onStopRun?: () => void
   onRetry?: (fromMessageId: string, text: string) => void
 }
@@ -55,6 +56,7 @@ function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
         compactions={opts.compactions}
         notice={opts.notice}
         noticeAction={opts.noticeAction}
+        onDismissNotice={opts.onDismissNotice}
         mentionFiles={opts.mentionFiles}
       />,
     )
@@ -432,6 +434,25 @@ describe("clickable notice (memory.written 跳转)", () => {
     expect(btn).not.toBeNull()
     act(() => { btn.click() })
     expect(action).toHaveBeenCalledTimes(1)
+    h.unmount()
+  })
+  it("dismisses the notice via the × button", () => {
+    const dismiss = vi.fn()
+    const h = mountView([], { notice: "已重连", onDismissNotice: dismiss })
+    const close = h.container.querySelector('[data-testid="chat-notice-close"]') as HTMLButtonElement
+    expect(close).not.toBeNull()
+    act(() => { close.click() })
+    expect(dismiss).toHaveBeenCalledTimes(1)
+    h.unmount()
+  })
+  it("clears the notice after the click action fires (jump consumed it)", () => {
+    const action = vi.fn()
+    const dismiss = vi.fn()
+    const h = mountView([], { notice: "已写入记忆: /m/p.md", noticeAction: action, onDismissNotice: dismiss })
+    const btn = h.container.querySelector('[data-testid="chat-notice-action"]') as HTMLButtonElement
+    act(() => { btn.click() })
+    expect(action).toHaveBeenCalledTimes(1)
+    expect(dismiss).toHaveBeenCalledTimes(1)
     h.unmount()
   })
 })
