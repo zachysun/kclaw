@@ -154,13 +154,13 @@ undefined、null、`""` 三种"无内容"情况统一跳过——这保证"完�
 
 anthropic 格式每个 SSE 事件的映射：
 
-- `message_start` → 记下 `message.usage.input_tokens`（含初始 output）与 `cache_creation_input_tokens` / `cache_read_input_tokens`（端点未返回时保持缺省 = 未知，不是 0）；
+- `message_start` → 记下 `message.usage.input_tokens`（含初始 output）与 `cache_creation_input_tokens` / `cache_read_input_tokens`（端点未返回时字段不出现 = 未知，不是 0）；
 - `content_block_start`（`tool_use`）→ 发 `tool_call_started`（index 即块序号，无 id 时用 `call_idx_${index}` 代替）；
 - `content_block_delta`：`text_delta` → `text_delta`；`thinking_delta` → `thinking_delta`；`input_json_delta` → `tool_call_delta`（`partial_json` 原样透传）；`signature_delta` 忽略；
 - `message_delta` → 记下 `stop_reason`；`usage` 的各字段按字段级 last-wins 合并（`output_tokens` / `input_tokens` / 两个缓存字段各自独立更新）；
 - `message_stop` → 结束；`error` 事件 → 抛 `llm anthropic <type>: <message>`；`ping` 忽略。
 
-两家的 `inputTokens` 口径一致："当次请求发出去的全部输入 token"，且满足恒等式 **inputTokens = 非缓存输入 + cacheReadTokens + cacheWriteTokens**。OpenAI 的 `prompt_tokens` 本身就是总量（含自动缓存命中部分），`cached_tokens`（`prompt_tokens_details`）单独读出为 `cacheReadTokens`，OpenAI 协议没有写指标、`cacheWriteTokens` 保持缺省。Anthropic 的 `input_tokens` 只是非缓存输入，适配器**三字段加总**（`input_tokens + cache_creation_input_tokens + cache_read_input_tokens`）得出 `inputTokens`——漏加总会让 assistant 消息的 usage 锚点与压缩的 token 统计（见 [compaction](./compaction.md)）系统性偏低。缓存字段端点未返回时保持缺省（未知），读侧必须容忍缺省、不得当 0。
+两家的 `inputTokens` 口径一致："当次请求发出去的全部输入 token"，且满足恒等式 **inputTokens = 非缓存输入 + cacheReadTokens + cacheWriteTokens**。OpenAI 的 `prompt_tokens` 本身就是总量（含自动缓存命中部分），`cached_tokens`（`prompt_tokens_details`）单独读出为 `cacheReadTokens`，OpenAI 协议没有写指标、`cacheWriteTokens` 不出现。Anthropic 的 `input_tokens` 只是非缓存输入，适配器**三字段加总**（`input_tokens + cache_creation_input_tokens + cache_read_input_tokens`）得出 `inputTokens`——漏加总会让 assistant 消息的 usage 锚点与压缩的 token 统计（见 [compaction](./compaction.md)）系统性偏低。缓存字段端点未返回时字段不出现（未知），读侧必须兼容缺字段、不得当 0。
 
 ### 2b. 缓存标记的兼容退避（两格式同款）
 

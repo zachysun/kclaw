@@ -145,7 +145,7 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 
 **run 收尾粗查（内置 hook `skill-follow-check`，`run-after` order 40）**。每个 run 结束时（任何 stopReason）做一次**零成本、零 LLM** 的纯读检查：范围 = 该项目全部会话（**含 subagent 会话**，刻意不排除——观察盲区正是要覆盖的对象）各自的未提取增量；卷入判定 = 范围内任一消息满足之一——assistant 消息的 `tool_call` 块名字是 `skill_read` 或 `skill_list`，或 user 消息文本命中已装技能名的 `/记号`（正则与 `matchSkillInvocations` 同源，但匹配集合是**全部已装技能名**，不受 user-invocable 档位过滤——被隐藏的技能被点名同样是"卷入"）。未卷入：不排检查、不动增量进度，一次 LLM 都不调。卷入：把 `{sessionId, endTurnAt}` 写进该项目的检查表（同会话重复排 = 刷新锚点）。功能关闭（`enabled !== true`）或 `idleMinutes <= 0` 时钩子直接返回；子会话 run 不排（subagent 自己不排，它的使用由同项目后续任一主干 run 的粗查统一覆盖——粗查范围含子会话增量）。
 
-**延迟补查（`skill-scheduler.ts`，默认每 60s 扫一次；定时器与在飞记账骨架在 `host-kit.ts`）**。sweep 照记忆调度器按 workdir 循环挂起检查，空闲门禁复用与记忆调度器同一纯函数 `followGateDue`（`host-kit.ts`）：`end_turn` 后 `idleMinutes` 内项目无新活动才触发。额外规则：
+**延迟补查（`skill-scheduler.ts`，默认每 60s 扫一次；定时器与进行中任务记账骨架在 `host-kit.ts`）**。sweep 照记忆调度器按 workdir 循环挂起检查，空闲门禁复用与记忆调度器同一纯函数 `followGateDue`（`host-kit.ts`）：`end_turn` 后 `idleMinutes` 内项目无新活动才触发。额外规则：
 
 - **成功才清检查**：提炼成功 resolve 才清；失败保留检查，下个 sweep 重试同一范围（记忆侧"先清后触发"靠 interval 兜扫补失败重试，技能侧没有兜扫，先清会丢批次）；
 - **同一检查连败 3 次放弃**：清除该检查并记日志（`MAX_ATTEMPTS`，内存按 `workdir|sessionId` 计数，daemon 重启归零后照常补查再试）；

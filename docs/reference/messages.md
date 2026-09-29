@@ -11,7 +11,12 @@ export type StopReason =
   | "end_turn" | "tool_use" | "max_tokens" | "stop_sequence"
   | "content_filter" | "aborted" | "error"
 
-export interface Usage { inputTokens: number; outputTokens: number }
+export interface Usage {
+  inputTokens: number        // 当次请求发出的全部输入 token（Anthropic 三字段加总；OpenAI 的 prompt_tokens 本就是总量）
+  outputTokens: number
+  cacheReadTokens?: number   // 从 prompt cache 读出的 token；字段不出现 = 未知，不是 0
+  cacheWriteTokens?: number  // 写入 prompt cache 的 token（OpenAI 协议没有写指标，恒不出现）
+}
 
 export interface Message {
   id: string
