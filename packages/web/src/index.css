@@ -2237,6 +2237,16 @@ select:focus {
   padding: 6px 10px;
 }
 
+/* 会话用量状态条：输入框下方一行灰色小字（in/out 累计 + cache 命中率）。
+   只读仪表，不响应交互；明细在用量页。 */
+.session-usage-strip {
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 0 6px;
+  user-select: none;
+}
+
 .chat-composer:focus-within {
   border-color: var(--accent);
 }

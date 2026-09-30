@@ -38,6 +38,7 @@ import {
 import { useSilentFetch } from "../daemon-clients.js"
 import { runWebCommand } from "./commands.js"
 import { ChatView, type CompactionRecordView, type Disposition, type PendingAttachment } from "./ChatView.js"
+import { SessionUsageStrip } from "./SessionUsageStrip.js"
 import type { GoalView, GoalViewResponse } from "@kclaw/core/protocol"
 import { parseSendDisposition, resolveSendDisposition } from "@kclaw/core/protocol"
 import type { TeamPanel } from "@kclaw/core/protocol"
@@ -121,6 +122,9 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   const [mentionTruncated, setMentionTruncated] = useState(false)
   // 通知条的可点击动作（memory.written 跳转）：与 notice 同生命周期。
   const [noticeAction, setNoticeAction] = useState<(() => void) | null>(null)
+  // 会话用量状态条的刷新拍子：每收尾一个 run +1，驱动 SessionUsageStrip
+  // 重拉 /usage（run-after 钩子先写 usage 表，run.completed 帧后到，无竞态）。
+  const [usageTick, setUsageTick] = useState(0)
   // 通知条的三条清除路径共用：输入即清（onDraftChange）、× 关闭、点击跳转
   // 后即清；切换会话也走它（见 sessionRef effect）。
   const clearNotice = useCallback((): void => {
@@ -347,6 +351,8 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
               ) {
                 refreshTeam()
               }
+              // 运行收尾 → 会话用量状态条刷一次（失败 run 同样记 usage）。
+              if (frame.type === "run.completed" || frame.type === "run.failed") setUsageTick((t) => t + 1)
             } else if (isQueuedSendAck(frame) || isRetryAck(frame)) {
               // Both acks carry the server message identity; adopt it eagerly
               // so the optimistic echo is pinned by id before its created event
@@ -827,6 +833,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
             onClear: handleGoalClear,
             onEdit: handleGoalEdit,
           }}
+          usage={<SessionUsageStrip api={api} sessionId={sessionId} refreshKey={usageTick} />}
         />
       </div>
     </div>

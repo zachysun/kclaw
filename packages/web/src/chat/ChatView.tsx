@@ -5,7 +5,7 @@
  * draft); expansion/collapse uses native <details> elements, so thinking folds
  * by default and tool_result cards expand to their full output without JS.
  */
-import { Fragment, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
+import { Fragment, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react"
 import { parseSlashInput, replaceTrailingSlashToken, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
 import { fileMentionCompletions, replaceTrailingMentionToken } from "@kclaw/core/mentions"
 import { PERMISSION_MODES, type PermissionMode } from "@kclaw/core/permission-modes"
@@ -167,9 +167,15 @@ export interface ChatViewProps {
     onClear: () => void
     onEdit: (text: string, acceptance: string[]) => void
   }
+  /**
+   * 会话用量状态条（SessionUsageStrip）：渲染在输入框下方、chat-host 最底
+   * 部的一行灰色小字。取数与刷新节奏归所有方（ChatPanel），本组件只负责
+   * 摆放。缺省不渲染。
+   */
+  usage?: ReactNode
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDismissNotice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDismissNotice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal, usage }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Suggestion-menu state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -674,6 +680,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
         <button type="submit" data-testid="send-button">发送</button>
         </form>
       )}
+      {usage}
     </div>
   )
 }
