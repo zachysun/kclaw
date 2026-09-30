@@ -125,6 +125,7 @@ export function createProviderResolver(cfg: KclawConfig, fetchImpl?: typeof fetc
 - assistant 的 `content === null` 时字段整个省略；`toolCalls` 转成 `tool_calls: [{id: callId, type:"function", function:{name, arguments: argsJson}}]`——`argsJson` 原样作为 `arguments` 传回。
 - tool 消息转成 `{role:"tool", tool_call_id: callId, content}`。
 - 请求体固定 `stream: true` 与 `stream_options: {include_usage: true}`（最后一个 chunk 会带 token 用量）；URL 为 `baseUrl` 去掉一个尾部 `/` 后拼 `/chat/completions`；鉴权用 `Authorization: Bearer <apiKey>` 头（Bearer 是 HTTP 标准认证方案，格式为令牌置于 Bearer 关键字之后）——apiKey 为空时不发鉴权头（Ollama 等免密钥端点）。
+- **`prompt_cache_key`**：请求带 `promptCache.key` 且条目未配置 `promptCache: "off"` 时，请求体带这个键（值截断到 64 码点，供应商用它做缓存分片路由）；字段在请求体里的位置固定，序列化字节序稳定。不带该字段（或配置关闭、端点回 400 后已记住裁决）时请求体没有这个键，与加缓存标记前的形态逐字节一致；端点回 400 时的退避见 2b 节。
 
 ### 1b. 请求归一化（anthropic 格式，`toAnthropicPayload`）
 
@@ -217,7 +218,7 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 
 **按条目建连**（`createProviderResolver`）：daemon 启动时建一个 resolver，run 客户端、记忆提取与向量路都出自它。每个 run 的客户端由 `llmForRun(onRetry, entryKey)` 给出，`entryKey` 来自 `resolveRunModel` 的解析结果（run 组装先解析条目、再建客户端）。取值链：条目命中 → 该条目的 format 决定协议实现（`createProviderClient`）；条目缺失（key 为空或不存在）→ 回退到默认条目；连默认条目都没有 → 回退到环境变量端点（openai 格式）。
 
-- **缓存与热生效**：resolver 按条目名缓存裸客户端，签名 = `format|baseUrl|apiKey|timeoutMs`。Model 页的增删改直接改 daemon 的内存配置并持久化，随后经 ConfigNotifier 发布 `providers` 变更（见 [storage](./storage.md)），resolver 订阅后**整体清空缓存**，下个 run 自动重建，**无需重启**；签名检查保留为优化，两次通知之间的字段改动也能即时重建。
+- **缓存与热生效**：resolver 按条目名缓存裸客户端，签名 = `format|baseUrl|apiKey|timeoutMs|promptCache`（`promptCache` 参与签名，改开关即重建实例、2b 节的"端点不支持缓存标记"裁决随之重置）。Model 页的增删改直接改 daemon 的内存配置并持久化，随后经 ConfigNotifier 发布 `providers` 变更（见 [storage](./storage.md)），resolver 订阅后**整体清空缓存**，下个 run 自动重建，**无需重启**；签名检查保留为优化，两次通知之间的字段改动也能即时重建。
 - **每次 run 包一层新重试**：缓存的是裸客户端；`withRetry` 在每次 `llmForRun` 调用时现包，重试回调才归属当次 run（`llm.failed` 事件带对的上文）。
 - **记忆提取同语义**：`memory.extractModel` 命中条目名时走该条目自己的客户端与线上模型名；命中不了则按裸模型名发往主模型端点（回退）。daemon 给 MemorySystem 注入 `resolveEntryLlm`，条目客户端与 run 客户端同源（同一 resolver 的缓存与热生效，见 [memory](./memory.md)）。
 - **向量路同步热更**：embedding 客户端由 resolver 的 `embed(providerName, model)` 给出（按 `baseUrl|apiKey|timeoutMs` 签名现解），换 key/换地址下条记忆向量就吃到；向量路是否启用（embeddings model 与条目协议判定）仍是启动时一次定死。
@@ -229,14 +230,15 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 
 模型名本身的验证走 `probeProviderChat`（1-token 补全探测）：openai 格式 `POST {base}/chat/completions`，anthropic 格式 `POST {base}/v1/messages`，20 秒超时；它不抛异常而是返回 `{status, body}`（status 为 null = 请求根本没到达），调用方按状态码分类失败原因。CLI 首次运行向导用它做连通测试（见 [onboarding](../cli/onboarding.md)）。
 
-### 7. 上下文窗口与输出上限（条目可选字段）
+### 7. 上下文窗口、输出上限与缓存标记开关（条目可选字段）
 
-每个 provider 条目还有两个可选数字字段，直接决定请求形状：
+每个 provider 条目还有三个可选字段，直接决定请求形状：
 
 | 字段 | 含义 | 默认 |
 |------|------|------|
 | `contextWindow` | 该模型的上下文窗口（token 数）。有效值（正数）时，有效上下文 budget 取 `min(sessions.contextTokens ?? ∞, contextWindow)`——按更紧的那个算 | 无（回退到 `sessions.contextTokens`，再回退到 128000） |
 | `maxOutput` | 单次回复的输出上限（token 数）。声明后随每次请求作为 `max_tokens` 下发，模型单轮最多产出这么多 | 无（不随请求下发） |
+| `promptCache` | 提示词缓存标记开关：`auto` 按请求的 `promptCache` 字段加缓存标记，`off` 即使请求带也不加（对陌生字段回 400 的端点的显式退路）；标记布点见上文 1/1b 节，端点回 400 的自动退避见 2b 节。配置值不是这两个枚举之一时告警并按 `auto` 处理 | `auto` |
 
 有效 budget 的解析集中在 `resolveContextTokens`（`packages/core/src/storage/config.ts`）一处——压缩的触发线、压缩器与组装时的省略 budget 全部经它取值，某个模型窗口更紧时会一起收紧，不会出现"压缩按 128000 算、模型实际只有 8 万"的错位。模型行解析分两层（同上文件）：`resolveRunModelLine` 收拢优先级链（显式 run 模型 → 会话模型 → 默认条目当前模型 → daemon 启动时解析的模型），`resolveRunModel` 负责条目解析并返回 `{model, entryKey, budget, maxOutput?}`：`model` 是发往 provider 的线上模型名（条目名 → 条目的 `.model`，匹配不到条目的名字原样通过），`budget` 即上述有效budget，`maxOutput` 有才带；两个调用方（run 组装与手动压缩路径）都走 `resolveRunModelLine`，优先级与 budget 口径不可能分叉。模型条目解析的优先级与回退链见 [architecture](../architecture.md) 的数据流一节。
 

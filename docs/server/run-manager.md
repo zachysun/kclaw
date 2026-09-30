@@ -34,7 +34,7 @@
 
 ```ts
 // packages/server/src/run.ts（RunManagerDeps 从引擎的 RunEngineDeps 派生：字段语义
-// 注释的正本在 core/src/agent/run-assembly.ts，server 不再复制声明；EnqueueInput、
+// 以 core/src/agent/run-assembly.ts 的注释为准，server 不再复制声明；EnqueueInput、
 // LlmRetrySink、AttachmentRef 等输入形状也在 @kclaw/core，见下）
 export type RunManagerDeps = Omit<RunEngineDeps, "broker" | "extraHooks"> & {
   broker?: ConfirmationBroker          // 注入的确认网关；不注入 → 内部新建，暴露为 manager.broker
@@ -181,7 +181,7 @@ retry(sessionId, fromMessageId, text, attachments?)
 
 ### #executeEntry → executeRun（core）：一次 run 的组装
 
-队列侧的 `#executeEntry` 出队后构造 `RunHandoff { sessionId, input, controller, drainSteer }`，调 core 的 `executeRun(engine, handoff)`（`packages/core/src/agent/run-assembly.ts`）——以下组装步骤都在那里发生（`engine = { deps, compactor }`，deps 的声明正本就是引擎自己的 RunEngineDeps，manager 转发时把 broker 补成必填的已解析网关）：
+队列侧的 `#executeEntry` 出队后构造 `RunHandoff { sessionId, input, controller, drainSteer }`，调 core 的 `executeRun(engine, handoff)`（`packages/core/src/agent/run-assembly.ts`）——以下组装步骤都在那里发生（`engine = { deps, compactor }`，deps 的权威声明就是引擎自己的 RunEngineDeps，manager 转发时把 broker 补成必填的已解析网关）：
 
 1. **工作目录**：`sessionMeta.workdir ?? deps.workspace`——会话级覆盖全局。
 2. **用户 hook 重扫**：`engine.deps.hooks`（daemon 级 `HookRegistry`）`refresh()` 重扫 `~/.kclaw/hooks/`——"放文件，下一轮生效"（与技能目录扫描同一套思路，机制见 [hooks](../core/hooks.md)）；新装载失败经 registry 按"文件名+mtime+错误"去重后发一次 `hook.failed {phase:"load"}` 事件。

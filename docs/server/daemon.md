@@ -26,7 +26,7 @@ export interface Daemon {
   port: number        // 实际绑定的端口（0 启动时为临时端口）
   token: string       // app 要求的 Bearer token（<home>/token）
   pid: number         // 本进程 pid，即 daemon.json 里记录的
-  stop(): Promise<void>   // 有界拆除：tick → 记忆调度器 → 技能调度器 → goal 循环（等检查落定）→ 飞书频道管理器（未启用时为 no-op）→ 项目发现（mcpProjects）→ mcp → app → memory → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
+  stop(): Promise<void>   // 有界拆除：goal 循环（等进行中的检查落定）→ tick → 记忆调度器 → 技能调度器（这四个常驻主机的停机按构造序注册、stop 时逐项限时执行）→ 飞书频道管理器（未启用时为 no-op）→ 项目发现（mcpProjects）→ mcp → app → memory → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
 }
 
 export interface LaunchDaemonOptions {
