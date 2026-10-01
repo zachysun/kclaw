@@ -12,15 +12,15 @@ kclaw 是一个运行在本机的个人 AI 助手（agent）。整套系统只�
 
 五个决定塑造了整个系统的形状。
 
-**一、单 daemon，多客户端。** CLI 随时可以退出，daemon 不受影响；定时任务在没有客户端连接时照常执行。daemon 是唯一保存状态的地方，客户端不持久化（写入磁盘长期保存）任何业务状态。
+**单 daemon，多客户端。** CLI 随时可以退出，daemon 不受影响；定时任务在没有客户端连接时照常执行。daemon 是唯一保存状态的地方，客户端不持久化（写入磁盘长期保存）任何业务状态。
 
-**二、core 是纯库。** `@kclaw/core` 不依赖 fastify、ws、commander 中的任何一个框架，也不知道 HTTP 和 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）的存在。它需要的外部能力全部由调用方注入：模型调用（`deps.llm`）、工具执行、事件出口（`deps.onEvent`）、持久化（`deps.onMessage`）。因此整个 agent 循环可以用假的依赖（mock）离线测试。
+**core 是纯库。** `@kclaw/core` 不依赖 fastify、ws、commander 中的任何一个框架，也不知道 HTTP 和 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）的存在。它需要的外部能力全部由调用方注入：模型调用（`deps.llm`）、工具执行、事件出口（`deps.onEvent`）、持久化（`deps.onMessage`）。因此整个 agent 循环可以用假的依赖（mock）离线测试。
 
-**三、daemon 只监听本机回环地址。** 回环地址（loopback）是 127.0.0.1，只有本机进程能连上，外部网络访问不到。监听地址在 `packages/server/src/daemon.ts` 与 `packages/cli/src/daemon-ctl.ts` 里各自写死为 `HOST = "127.0.0.1"`；监听端口优先级从高到低：server bin 的 `--port` 旗标 > 配置文件 `server.port` > `0`（让操作系统分配一个空闲临时端口）——固定端口后 WebUI 地址跨重启不变，被占用是硬错误（退出报一行原因，绝不静默换端口）。实际端口与进程号写入 `<home>/daemon.json`。客户端每次请求都带上 `<home>/token` 文件里的 Bearer token（放在 HTTP `Authorization` 请求头里的访问令牌）完成鉴权。详见 [daemon](./server/daemon.md)。
+**daemon 只监听本机回环地址。** 回环地址（loopback）是 127.0.0.1，只有本机进程能连上，外部网络访问不到。监听地址在 `packages/server/src/daemon.ts` 与 `packages/cli/src/daemon-ctl.ts` 里各自写死为 `HOST = "127.0.0.1"`；监听端口优先级从高到低：server bin 的 `--port` 旗标 > 配置文件 `server.port` > `0`（让操作系统分配一个空闲临时端口）——固定端口后 WebUI 地址跨重启不变，被占用是硬错误（退出报一行原因，绝不静默换端口）。实际端口与进程号写入 `<home>/daemon.json`。客户端每次请求都带上 `<home>/token` 文件里的 Bearer token（放在 HTTP `Authorization` 请求头里的访问令牌）完成鉴权。详见 [daemon](./server/daemon.md)。
 
-**四、实时事件不持久化，持久化的是事件流。** WS 上推送的增量事件（text.delta、message.created 等）只用于实时刷新界面：不写入磁盘、断线不补发、不回放。会话真正的持久化形式是每个会话目录下的 events.jsonl 事件流（唯一权威数据，message / compaction / memory / system 等业务事件都记录在这里），以及由它推导出来的 meta.json 摘要（见 [storage](./core/storage.md)）。客户端断线恢复的办法：先用 HTTP 拉一次全量消息，再只订阅新事件（详见 [protocol](./core/protocol.md)）。
+**实时事件不持久化，持久化的是事件流。** WS 上推送的增量事件（text.delta、message.created 等）只用于实时刷新界面：不写入磁盘、断线不补发、不回放。会话真正的持久化形式是每个会话目录下的 events.jsonl 事件流（唯一权威数据，message / compaction / memory / system 等业务事件都记录在这里），以及由它推导出来的 meta.json 摘要（见 [storage](./core/storage.md)）。客户端断线恢复的办法：先用 HTTP 拉一次全量消息，再只订阅新事件（详见 [protocol](./core/protocol.md)）。
 
-**五、WebUI 是独立构建的静态产物。** `@kclaw/web` 的运行时依赖是 react/react-dom、`@kclaw/core` 的几个纯数据/纯类型子路径出口（`commands`、`protocol`、`mentions`、`client-http`、`permission-modes`），以及 react-virtuoso（审计页用的虚拟滚动列表库，见 [webui](./web/webui.md)）与 react-markdown 全家桶（对话页 Markdown 渲染）。`commands` 是 slash 命令的 name/usage 元数据共享表（CLI 与 WebUI 读同一份，见 [extending](./extending.md)），`protocol` 是线上数据形状的类型定义。构建出的静态文件由 daemon 托管（`resolveWebDist` → `packages/web/dist`），不需要额外的文件服务器。
+**WebUI 是独立构建的静态产物。** `@kclaw/web` 的运行时依赖是 react/react-dom、`@kclaw/core` 的几个纯数据/纯类型子路径出口（`commands`、`protocol`、`mentions`、`client-http`、`permission-modes`），以及 react-virtuoso（审计页用的虚拟滚动列表库，见 [webui](./web/webui.md)）与 react-markdown 全家桶（对话页 Markdown 渲染）。`commands` 是 slash 命令的 name/usage 元数据共享表（CLI 与 WebUI 读同一份，见 [extending](./extending.md)），`protocol` 是线上数据形状的类型定义。构建出的静态文件由 daemon 托管（`resolveWebDist` → `packages/web/dist`），不需要额外的文件服务器。
 
 ---
 
