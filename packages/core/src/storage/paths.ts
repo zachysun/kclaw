@@ -8,6 +8,8 @@ export interface KclawPaths {
   home: string
   /** ~/.kclaw/config.json — the config file (provider/permissions/memory settings) */
   configJson: string
+  /** ~/.kclaw/credentials.json — provider apiKeys / tavily key (0600, split from config.json) */
+  credentialsJson: string
   /** ~/.kclaw/AGENTS.md — agent persona injected into the system prompt */
   agentsMd: string
   /** ~/.kclaw/skills/<skill-name>/SKILL.md — global skill packages */
@@ -22,6 +24,8 @@ export interface KclawPaths {
   jobsDb: string
   /** Per-run token usage ledger (<home>/usage.db). */
   usageDb: string
+  /** Cross-session message full-text index (<home>/search.db, FTS5). */
+  searchDb: string
   /** ~/.kclaw/attachments/<session-id>/ — large attachment spillover */
   attachmentsDir: string
   /** ~/.kclaw/spill — full tool output kept readable when the model view truncates */
@@ -50,6 +54,7 @@ export function resolvePaths(home?: string): KclawPaths {
   const paths: KclawPaths = {
     home: root,
     configJson: join(root, "config.json"),
+    credentialsJson: join(root, "credentials.json"),
     agentsMd: join(root, "AGENTS.md"),
     skillsDir: join(root, "skills"),
     hooksDir: join(root, "hooks"),
@@ -57,6 +62,7 @@ export function resolvePaths(home?: string): KclawPaths {
     sessionsDir: join(root, "sessions"),
     jobsDb: join(root, "jobs.db"),
     usageDb: join(root, "usage.db"),
+    searchDb: join(root, "search.db"),
     attachmentsDir: join(root, "attachments"),
     spillDir: join(root, "spill"),
     logsDir: join(root, "logs"),

@@ -53,7 +53,9 @@ describe("providers routes", () => {
     expect(res.json().entries.gpt.apiKey).toBe("***enai")
 
     const persisted = JSON.parse(readFileSync(join(home, "config.json"), "utf8"))
-    expect(persisted.providers.entries.gpt.apiKey).toBe("sk-openai") // disk keeps the real key
+    expect(persisted.providers.entries.gpt.apiKey).toBe("") // config.json carries no secret
+    const creds = JSON.parse(readFileSync(join(home, "credentials.json"), "utf8"))
+    expect(creds.providers.gpt.apiKey).toBe("sk-openai") // the real key lives in the 0600 credentials file
 
     const dupe = await app.inject({
       method: "POST", url: "/providers", headers: AUTH,
@@ -75,7 +77,9 @@ describe("providers routes", () => {
     expect(res.statusCode).toBe(200)
     const persisted = JSON.parse(readFileSync(join(home, "config.json"), "utf8"))
     expect(persisted.providers.entries.ds.model).toBe("deepseek-reasoner")
-    expect(persisted.providers.entries.ds.apiKey).toBe("sk-secret-key")
+    expect(persisted.providers.entries.ds.apiKey).toBe("") // blank key keeps the stored one, now in credentials.json
+    const creds = JSON.parse(readFileSync(join(home, "credentials.json"), "utf8"))
+    expect(creds.providers.ds.apiKey).toBe("sk-secret-key")
 
     const missing = await app.inject({
       method: "PATCH", url: "/providers/nope", headers: AUTH,
@@ -93,8 +97,10 @@ describe("providers routes", () => {
     expect(res.json().default).toBe("deepseek")
     const persisted = JSON.parse(readFileSync(join(home, "config.json"), "utf8"))
     expect(persisted.providers.entries.ds).toBeUndefined()
-    expect(persisted.providers.entries.deepseek.apiKey).toBe("sk-secret-key") // blank key still keeps the stored one
+    expect(persisted.providers.entries.deepseek.apiKey).toBe("") // blank key still keeps the stored one
     expect(persisted.providers.default).toBe("deepseek")
+    const creds = JSON.parse(readFileSync(join(home, "credentials.json"), "utf8"))
+    expect(creds.providers.deepseek.apiKey).toBe("sk-secret-key") // the key moved with the rename
 
     const dupe = await app.inject({
       method: "PATCH", url: "/providers/deepseek", headers: AUTH,

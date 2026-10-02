@@ -242,6 +242,68 @@ describe("writeFileAtomic", () => {
   })
 })
 
+describe("credentials split (credentials.json)", () => {
+  const configWithSecrets = (): KclawConfig => {
+    const cfg = structuredClone(defaultConfig)
+    cfg.providers.entries["main"] = { name: "main", format: "openai", baseUrl: "https://api.test", apiKey: "sk-live-123", model: "m1" }
+    cfg.web.tavilyApiKey = "tavily-key-xyz"
+    return cfg
+  }
+
+  it("saveConfig moves secrets into credentials.json (0600) and blanks them in config.json", () => {
+    const paths = resolvePaths(home)
+    saveConfig(paths, configWithSecrets())
+    const raw = JSON.parse(readFileSync(paths.configJson, "utf8"))
+    expect(raw.providers.entries["main"].apiKey).toBe("")
+    expect(raw.web.tavilyApiKey).toBe("")
+    expect(readFileSync(paths.configJson, "utf8")).not.toContain("sk-live-123")
+    const creds = JSON.parse(readFileSync(paths.credentialsJson, "utf8"))
+    expect(creds.providers["main"].apiKey).toBe("sk-live-123")
+    expect(creds.web.tavilyApiKey).toBe("tavily-key-xyz")
+    expect(statSync(paths.credentialsJson).mode & 0o777).toBe(0o600)
+  })
+
+  it("loadConfig merges credentials.json over config.json and roundtrips", () => {
+    const paths = resolvePaths(home)
+    saveConfig(paths, configWithSecrets())
+    const cfg = loadConfig(paths)
+    expect(cfg.providers.entries["main"]!.apiKey).toBe("sk-live-123")
+    expect(cfg.web.tavilyApiKey).toBe("tavily-key-xyz")
+  })
+
+  it("inline config.json keys still apply until the credentials file has a value (pre-split files)", () => {
+    const paths = resolvePaths(home)
+    writeConfig({ providers: { entries: { main: { name: "main", format: "openai", baseUrl: "https://api.test", apiKey: "sk-inline", model: "m1" } } } })
+    // 无凭据文件：内联 key 生效
+    expect(loadConfig(paths).providers.entries["main"]!.apiKey).toBe("sk-inline")
+    // 凭据文件有值：凭据优先（config.json 内联值被覆盖）
+    writeFileSync(paths.credentialsJson, JSON.stringify({ providers: { main: { apiKey: "sk-from-creds" } } }))
+    expect(loadConfig(paths).providers.entries["main"]!.apiKey).toBe("sk-from-creds")
+    // 下次保存把内联 key 迁走
+    saveConfig(paths, loadConfig(paths))
+    expect(JSON.parse(readFileSync(paths.configJson, "utf8")).providers.entries.main.apiKey).toBe("")
+  })
+
+  it("saveConfig drops deleted providers' keys from credentials.json", () => {
+    const paths = resolvePaths(home)
+    saveConfig(paths, configWithSecrets())
+    const next = loadConfig(paths)
+    delete next.providers.entries["main"]
+    saveConfig(paths, next)
+    const creds = JSON.parse(readFileSync(paths.credentialsJson, "utf8"))
+    expect(creds.providers?.["main"]).toBeUndefined()
+  })
+
+  it("ignores an unparseable credentials.json with a warning (config.json values still apply)", () => {
+    const paths = resolvePaths(home)
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    writeFileSync(paths.credentialsJson, "{ not json")
+    expect(loadConfig(resolvePaths(home))).toEqual(defaultConfig)
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+})
+
 describe("config.json storage", () => {
   it("exposes configJson in the path layout", () => {
     expect(resolvePaths(home).configJson).toBe(join(home, "config.json"))
@@ -470,9 +532,12 @@ describe("renameProviderEntry", () => {
   })
 })
 
-describe("skills.evolution config", () => {
-  it("exposes the expected defaults (feature on)", () => {
-    expect(defaultConfig.skills).toEqual({ evolution: { enabled: true, idleMinutes: 10 } })
+describe("skills config (evolution + curator)", () => {
+  it("exposes the expected defaults (both features on)", () => {
+    expect(defaultConfig.skills).toEqual({
+      evolution: { enabled: true, idleMinutes: 10 },
+      curator: { enabled: true, staleDays: 14, archiveDays: 30, hour: 4 },
+    })
   })
 
   it("deep-merges user values over defaults", () => {
@@ -505,7 +570,10 @@ describe("skills.evolution config", () => {
     try {
       writeConfig({ skills: "nope" })
       const cfg = loadConfig(resolvePaths(home))
-      expect(cfg.skills).toEqual({ evolution: { enabled: true, idleMinutes: 10 } })
+      expect(cfg.skills).toEqual({
+        evolution: { enabled: true, idleMinutes: 10 },
+        curator: { enabled: true, staleDays: 14, archiveDays: 30, hour: 4 },
+      })
     } finally {
       warn.mockRestore()
     }
