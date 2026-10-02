@@ -7,6 +7,31 @@ import type { PermissionDecision, PermissionGate } from "../agent/loop.js"
 import type { KclawConfig } from "../storage/config.js"
 import type { PermissionMode } from "./modes.js"
 
+/**
+ * Built-in sensitive-file basenames (basename globs): credentials and key
+ * material whose CONTENT must not slide into model context or audit streams
+ * through a safe/auto-approved path. A fs call hitting one of these names
+ * goes to a human even though the tool itself is "safe" — unless an explicit
+ * allow/learned rule (or a run-scoped once-approval) covers it. Replaced
+ * wholesale by config `permissions.sensitiveFiles` when set.
+ */
+export const DEFAULT_SENSITIVE_FILES = [
+  ".env",
+  ".env.*",
+  "*.env",
+  "*.pem",
+  "*.key",
+  "id_rsa",
+  "id_rsa.*",
+  "id_ed25519",
+  "id_ed25519.*",
+  "*.p12",
+  "*.pfx",
+  "*.kdbx",
+  "credentials.json",
+  "credentials*.json",
+]
+
 /** A compiled permission rule: bare tool name, or tool name plus arg glob. */
 export interface CompiledRule {
   tool: string
@@ -60,6 +85,35 @@ function ruleMatches(rule: CompiledRule, tool: string, arg: string): boolean {
   if (rule.tool !== tool) return false
   if (rule.argGlob === undefined) return true
   return globMatch(rule.argGlob, arg)
+}
+
+/** Rule sources already warned about this process (one line per name, ever). */
+const warnedRuleTools = new Set<string>()
+
+/**
+ * The tool prefix of a rule source ("exec:rm *" → "exec"). Everything before
+ * the first ":" is the tool name; a rule without one is a bare tool name.
+ */
+function ruleToolPrefix(source: string): string {
+  const i = source.indexOf(":")
+  return i === -1 ? source : source.slice(0, i)
+}
+
+/**
+ * deepseek-harness's knownNames discipline: a rule whose tool prefix matches
+ * no registered tool can never fire, so report it as a typo ("you
+ * misspelled") instead of letting it sit silently dead. Warned once per
+ * process per name; MCP adapters are covered because toolFacts carries them.
+ */
+function collectRuleNameWarnings(sources: string[], knownTools: Set<string>): string[] {
+  const out: string[] = []
+  for (const source of sources) {
+    const tool = ruleToolPrefix(source)
+    if (tool === "" || knownTools.has(tool) || warnedRuleTools.has(tool)) continue
+    warnedRuleTools.add(tool)
+    out.push(tool)
+  }
+  return out
 }
 
 /**
@@ -529,6 +583,8 @@ export class ConfigPermissionGate implements PermissionGate {
   readonly #sandboxAvailable: boolean
   readonly #sandboxUnavailableNote: string | undefined
   readonly #sandboxedTools: ReadonlySet<string>
+  readonly #ruleNameWarnings: string[]
+  readonly #sensitiveFiles: string[]
 
   constructor(cfg: KclawConfig["permissions"], opts: ConfigPermissionGateOptions = {}) {
     this.#allow = cfg.allow.map(compileRule)
@@ -545,6 +601,37 @@ export class ConfigPermissionGate implements PermissionGate {
     this.#sandboxAvailable = (opts.sandboxedTools?.size ?? 0) > 0
     this.#sandboxUnavailableNote = opts.sandboxUnavailableNote
     this.#sandboxedTools = opts.sandboxedTools ?? new Set()
+    this.#sensitiveFiles = cfg.sensitiveFiles ?? DEFAULT_SENSITIVE_FILES
+    this.#ruleNameWarnings = collectRuleNameWarnings(
+      [...cfg.allow, ...cfg.deny, ...(opts.decidedRules ?? [])],
+      new Set(this.#profiles.keys()),
+    )
+  }
+
+  /**
+   * The sensitive-file basename hit for a call's `path` arg (if any). Matches
+   * the file NAME only (`.env` in any directory), never the content — the
+   * point is catching credentials-shaped targets before a safe/auto-allowed
+   * fs tool reads or writes them. Returns the matched pattern for the note.
+   */
+  #sensitiveHit(args: unknown): string | undefined {
+    const p = (args as { path?: unknown } | null | undefined)?.path
+    if (typeof p !== "string" || p === "") return undefined
+    const resolved = expandTilde(p)
+    const base = path.basename(resolved)
+    for (const pattern of this.#sensitiveFiles) {
+      if (globMatch(pattern, base)) return pattern
+    }
+    return undefined
+  }
+
+  /**
+   * Rule sources whose tool prefix matches no registered tool — a typo'd
+   * name means the rule silently never fires. Warned once per process per
+   * name; MCP adapters are covered because toolFacts carries them.
+   */
+  ruleNameWarnings(): string[] {
+    return [...this.#ruleNameWarnings]
   }
 
   /** A compiled command rule vs one normalized sub-command (other tools' rules never cover this one). */
@@ -691,8 +778,13 @@ export class ConfigPermissionGate implements PermissionGate {
     // auto-approved while the target stays inside the workspace; escaped
     // targets fall through to the boundary check. exec (command-arg) never
     // reaches this branch. AcceptEdits therefore cannot authorize anything
-    // beyond the workspace.
-    if (this.#mode === "acceptEdits" && profile.pathAware && !escapesWorkspace(profile, toolCall.args, this.#workspace, this.#readRoots)) {
+    // beyond the workspace — and never auto-writes a sensitive file (.env,
+    // keys): those go to a human even in acceptEdits.
+    if (
+      this.#mode === "acceptEdits" && profile.pathAware
+      && !escapesWorkspace(profile, toolCall.args, this.#workspace, this.#readRoots)
+      && this.#sensitiveHit(toolCall.args) === undefined
+    ) {
       return { type: "allow", reason: "accept_edits" }
     }
     // Out-of-workspace path access is not auto-approved: even a "safe" tool
@@ -701,11 +793,26 @@ export class ConfigPermissionGate implements PermissionGate {
     if (escapesWorkspace(profile, toolCall.args, this.#workspace, this.#readRoots)) {
       return { type: "confirm", confirmationId: this.#newConfirmationId() }
     }
-    if (this.#safeTools.has(tool)) {
+    // "Safe" tools are auto-approved UNTIL they target a sensitive file —
+    // reading .env or a private key must reach a human even though fs_read
+    // is risk-safe (its content would otherwise slide into context and the
+    // audit stream silently).
+    if (this.#safeTools.has(tool) && this.#sensitiveHit(toolCall.args) === undefined) {
       return { type: "allow", reason: "safe" }
     }
     if (this.#sessionGrantsEnabled && this.#mode !== "auto" && this.#grants?.hasMatch(tool, arg, this.#workspace, profile)) {
       return { type: "allow", reason: "session_grant" }
+    }
+    // Sensitive-file confirmation (after grants, so a once-approval in this
+    // run still silences the repeat): the gate's own ask, carrying which
+    // pattern hit. Explicit allow/learned rules above still outrank it.
+    const sensitivePattern = this.#sensitiveHit(toolCall.args)
+    if (sensitivePattern !== undefined) {
+      return {
+        type: "confirm",
+        confirmationId: this.#newConfirmationId(),
+        noteText: `命中敏感文件规则（${sensitivePattern}）：确认后才读取或写入`,
+      }
     }
     return { type: "confirm", confirmationId: this.#newConfirmationId() }
   }
