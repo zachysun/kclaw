@@ -11,6 +11,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { createRequire } from "node:module"
+import { closeSync, mkdirSync, openSync, writeSync } from "node:fs"
+import { join } from "node:path"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import { McpError, configsEqual } from "./types.js"
 import type { McpConnState, McpServerConfig, McpToolEntry } from "./types.js"
@@ -23,6 +25,53 @@ function clientVersion(): string {
     return pkg.version ?? "0.0.0"
   } catch {
     return "0.0.0"
+  }
+}
+
+/** Per-connection stderr log ceiling; past it the drain keeps consuming but writes nothing. */
+const MCP_STDERR_LOG_CAP = 1_000_000
+
+/**
+ * Drain a piped stdio server stderr into <logDir>/<server>.log (0600). The
+ * file is opened fresh per connect (one connection's stderr per file, no
+ * unbounded growth across reconnects) and the fd closes when the child's
+ * stderr ends — the SDK pipes the child stream into the PassThrough the
+ * caller reads here, so process exit ends it. All failures are silent: this
+ * is diagnostics, never a connection concern.
+ */
+function drainStderrToLog(transport: StdioClientTransport, server: string, logDir: string): void {
+  try {
+    mkdirSync(logDir, { recursive: true })
+    const stream = transport.stderr
+    if (stream === null) return
+    const file = join(logDir, `${server.replace(/[^\w.-]/g, "_")}.log`)
+    const fd = openSync(file, "w", 0o600)
+    let written = 0
+    let closed = false
+    const close = (): void => {
+      if (closed) return
+      closed = true
+      try {
+        closeSync(fd)
+      } catch {
+        // already closed
+      }
+    }
+    stream.on("data", (chunk: Buffer | string) => {
+      if (closed || written >= MCP_STDERR_LOG_CAP) return
+      const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk
+      const view = buf.length > MCP_STDERR_LOG_CAP - written ? buf.subarray(0, MCP_STDERR_LOG_CAP - written) : buf
+      try {
+        written += writeSync(fd, view)
+      } catch {
+        written = MCP_STDERR_LOG_CAP // disk trouble: stop writing, keep draining
+      }
+    })
+    stream.on("end", close)
+    stream.on("close", close)
+    stream.on("error", close)
+  } catch {
+    // best-effort diagnostics only
   }
 }
 
@@ -58,6 +107,14 @@ export interface ConnectionPoolOptions {
   maxConnections?: number // default 64
   /** Bounded reconnect attempts before settling in "failed". */
   maxReconnectAttempts?: number // default 10
+  /**
+   * Directory for per-server stderr diagnostics (<home>/logs/mcp). When set,
+   * a stdio server's stderr is piped into <dir>/<server>.log (capped, fresh
+   * per connect). When unset the stderr is discarded. Either way the child
+   * NEVER inherits the daemon's own stderr fd — that inheritance is exactly
+   * the descriptor leak this option closes.
+   */
+  stderrLogDir?: string
   onError?: (group: string, name: string, error: string) => void
 }
 
@@ -248,7 +305,18 @@ export class ConnectionPool {
   #buildTransport(record: ConnectionRecord): Transport {
     if (this.#opts.transportFactory) return this.#opts.transportFactory(record.name, record.config)
     if (record.config.type === "stdio") {
-      return new StdioClientTransport({ command: record.config.command, args: record.config.args, env: record.config.env })
+      // FD isolation: the SDK's default is stderr: "inherit", which hands the
+      // child the daemon's own fd 2 (terminal in the foreground, /dev/null
+      // under the respawned daemon). Pipe it into a capped per-server log
+      // when a log dir is wired, discard otherwise; a bare "pipe" with no
+      // reader would deadlock a chatty server on the OS pipe buffer, so the
+      // drain below is unconditional whenever piping is on.
+      if (this.#opts.stderrLogDir === undefined) {
+        return new StdioClientTransport({ command: record.config.command, args: record.config.args, env: record.config.env, stderr: "ignore" })
+      }
+      const transport = new StdioClientTransport({ command: record.config.command, args: record.config.args, env: record.config.env, stderr: "pipe" })
+      drainStderrToLog(transport, record.name, this.#opts.stderrLogDir)
+      return transport
     }
     return new StreamableHTTPClientTransport(new URL(record.config.url), {
       requestInit: { headers: record.config.headers },
