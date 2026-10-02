@@ -804,7 +804,7 @@ describe("ws compaction.cancel", () => {
     ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "执行一下" }))
     await frameOf(frames, "send_message_ack")
     const started = await eventOf(frames, "compaction.started") // the compaction is parked on the gate
-    expect(started.payload).toEqual({ phase: "in-run" })
+    expect(started.payload).toEqual({ phase: "in-run", trigger: "in-run" })
 
     ws.send(JSON.stringify({ type: "compaction.cancel", sessionId: session.id }))
     expect(await frameOf(frames, "compaction_cancel_ack")).toEqual({

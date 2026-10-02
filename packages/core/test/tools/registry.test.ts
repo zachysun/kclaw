@@ -29,7 +29,7 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 const ALL_TOOLS = [
   "exec", "fs_read", "fs_list", "fs_write", "fs_edit",
   "web_search", "web_fetch", "memory_save", "memory_search",
-  "session_search", "skill_read", "skill_list",
+  "session_search", "history_search", "skill_read", "skill_list",
 ]
 
 /** required arrays per tool (task brief); checked as sets. */
@@ -44,6 +44,7 @@ const REQUIRED: Record<string, string[]> = {
   memory_save: ["text"],
   memory_search: ["query"],
   session_search: ["query"],
+  history_search: ["query"],
   skill_read: ["name"],
   skill_list: [],
 }

@@ -64,7 +64,7 @@ describe("team tool surface", () => {
       expect(tools.get(name)!.risk).toBe("safe")
     }
     expect(tools.has("memory_save")).toBe(true)
-    expect(tools).toHaveLength(12 + 7)
+    expect(tools).toHaveLength(13 + 7)
     expect(toolDefs.map((d) => d.name).sort()).toEqual([...tools.keys()].sort())
   })
 
@@ -77,7 +77,7 @@ describe("team tool surface", () => {
     for (const name of TEAM_TOOLS.filter((n) => n !== "create_team" && n !== "spawn_teammate")) {
       expect(tools.has(name), name).toBe(true)
     }
-    expect(tools).toHaveLength(12 + 5)
+    expect(tools).toHaveLength(13 + 5)
   })
 
   it("a real member run (child session) also drops memory_save", () => {
@@ -86,7 +86,7 @@ describe("team tool surface", () => {
     const { tools } = build({ facade, identity: member }, true)
     expect(tools.has("memory_save")).toBe(false)
     expect(tools.has("subagent_run")).toBe(false)
-    expect(tools).toHaveLength(11 + 5)
+    expect(tools).toHaveLength(12 + 5)
   })
 })
 

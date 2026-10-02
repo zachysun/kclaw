@@ -3,7 +3,7 @@ import Fastify from "fastify"
 import fastifyStatic from "@fastify/static"
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import { JobScheduler, SessionStore, loadConfig, resolvePaths } from "@kclaw/core"
-import type { KclawConfig, KclawPaths, ConfigNotifier, HookRegistry, MemorySystem, SkillEvolutionAdmin, UsageStore } from "@kclaw/core"
+import type { KclawConfig, KclawPaths, ConfigNotifier, HistorySearchFn, HookRegistry, MemorySystem, SkillEvolutionAdmin, UsageStore } from "@kclaw/core"
 import { bearerMatches } from "./auth.js"
 import { EventBus } from "@kclaw/core"
 import type { RunManager } from "./run.js"
@@ -17,6 +17,7 @@ import { registerSkillRoutes } from "./routes/skills.js"
 import { registerAttachmentRoutes } from "./routes/attachments.js"
 import { registerJobRoutes } from "./routes/jobs.js"
 import { registerConfigRoutes } from "./routes/config.js"
+import { registerSearchRoutes } from "./routes/search.js"
 import { registerFsRoutes } from "./routes/fs.js"
 import { registerUsageRoutes } from "./routes/usage.js"
 import { registerHookRoutes } from "./routes/hooks.js"
@@ -117,6 +118,12 @@ export interface AppOptions {
   attachmentsDir?: string
   /** Token ledger for `GET /usage`; absent → the route returns empty buckets. */
   usage?: UsageStore
+  /**
+   * Cross-session message search data face (index + title resolution +
+   * trash filtering, the same fn the history_search tool consumes).
+   * Absent (bare apps/tests) → GET /search answers 503.
+   */
+  historySearch?: HistorySearchFn
   /**
    * The daemon's MemorySystem facade, injected for the memory management
    * routes — the /memory route family lives in the daemon assembly,
@@ -241,6 +248,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   registerJobRoutes(app, { jobs })
 
   registerConfigRoutes(app, { config })
+  registerSearchRoutes(app, { historySearch: opts.historySearch })
   // Provider 管理面：Model 顶栏消费（快照 + 增删改/设默认/模型探测热生效）。
   registerProvidersRoutes(app, { config, paths, notifier: opts.configNotifier })
   registerFsRoutes(app, { workspace: config.workspace })

@@ -35,6 +35,8 @@ import {
   createConfigNotifier,
   createProviderResolver,
   makeExtractLlmResolver,
+  HistorySearchIndex,
+  type HistorySearchFn,
   loadConfig,
   loadMcpJson,
   loadProjectMcpServers,
@@ -66,6 +68,7 @@ import { GoalLoopHost } from "./goal-loop.js"
 import { startSchedulerTick } from "./scheduler-tick.js"
 import { startMemoryScheduler } from "./memory-scheduler.js"
 import { startSkillScheduler } from "./skill-scheduler.js"
+import { startSkillCurator } from "./skill-curator.js"
 import { createApp } from "./app.js"
 
 /** The daemon only ever binds loopback (127.0.0.1). */
@@ -257,10 +260,22 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // assembled further down).
   const bus = new EventBus()
   let mcpProjects: ReturnType<typeof createMcpProjects> | undefined
+  // 跨会话原始消息检索索引：写路径挂在 store 的 post-append 回调上（与总线
+  // 同一接缝，best-effort——索引失败绝不干扰 run）；存量会话由启动后的
+  // 后台回填补齐（per-session 幂等）。purge 掉的会话在检索渲染时按 meta
+  // 缺失过滤，事件路径的 session.deleted 也即时清行。
+  const historyIndex = HistorySearchIndex.open(paths.searchDb)
   const sessions = new SessionStore(paths.sessionsDir, (sessionId, event) => {
     bus.emit(makeEvent("session.appended", { eventType: event.type }, { sessionId }))
     if (event.type === "session.created" && event.workdir !== undefined) {
       mcpProjects?.mount(event.workdir)
+    }
+    try {
+      if (event.type === "message") historyIndex.recordMessage(sessionId, event)
+      else if (event.type === "message.truncated") historyIndex.recordTruncation(sessionId, event.fromMessageId)
+      else if (event.type === "session.deleted") historyIndex.removeSession(sessionId)
+    } catch {
+      // 索引是可重建的投影，写失败只降级检索新鲜度
     }
   })
   // embedding 判定链：model 空 → 不构造客户端（向量路关闭）；provider 名
@@ -297,14 +312,29 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // resolveLlm 引用上方 llmForEntry：回落走共享 resolver（未变更条目零成本
   // 复用），extractModel 命中条目走 resolveEntryLlm 同源解析——Model 页
   // 改动对记忆提取同样热生效。测试注入的 llmFactory 保持原样直用。
+  // 杂活模型基座：主模型对的单点解析（llmFactory 注入直用，否则共享
+  // resolver + 重试包装），记忆提取、技能进化与 run 侧杂活（标题/压缩）
+  // 共用同一条 extractModel 解析链。
+  const extractBaseLlm = (): { llm: LlmClient; model: string } => ({
+    llm: opts.llmFactory !== undefined ? llm : withRetry(llmForEntry()),
+    model: resolveModel(config),
+  })
+  const resolveEntryLlm = (entryKey: string): LlmClient => llmForEntry(entryKey)
+  const resolveExtractLlm = makeExtractLlmResolver({ config, resolveLlm: extractBaseLlm, resolveEntryLlm })
   const memory = new MemorySystem({
     memoryDir: paths.memoryDir,
     sessions,
     config,
-    resolveLlm: () => ({ llm: opts.llmFactory !== undefined ? llm : withRetry(llmForEntry()), model: resolveModel(config) }),
-    resolveEntryLlm: (entryKey) => llmForEntry(entryKey),
+    resolveLlm: extractBaseLlm,
+    resolveEntryLlm,
     embed,
-    emit: (e) => bus.emit(makeEvent("memory.written", { path: e.path, kind: e.kind, ...(e.topic !== undefined ? { topic: e.topic } : {}), ...(e.scope !== undefined ? { scope: e.scope } : {}) })),
+    emit: (e) => bus.emit(makeEvent("memory.written", {
+      path: e.path,
+      kind: e.kind,
+      ...(e.topic !== undefined ? { topic: e.topic } : {}),
+      ...(e.scope !== undefined ? { scope: e.scope } : {}),
+      ...(e.trigger !== undefined ? { trigger: e.trigger } : {}),
+    })),
   })
   memory.reconcile()
   const jobs = new JobScheduler(paths.jobsDb)
@@ -324,11 +354,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     skillsDir: paths.skillsDir,
     sessions,
     config,
-    resolveLlm: makeExtractLlmResolver({
-      config,
-      resolveLlm: () => (opts.llmFactory !== undefined ? { llm, model } : { llm: withRetry(llmForEntry()), model }),
-      resolveEntryLlm: (entryKey) => llmForEntry(entryKey),
-    }),
+    resolveLlm: resolveExtractLlm,
     log: (m) => console.error(m),
   })
   // MCP: the manager is always assembled (an empty one costs nothing and
@@ -354,6 +380,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   const mcpManager = new McpManager({
     globalServers: loadMcpJson(mcpConfigPath(paths.home)),
     projects: initialProjects,
+    stderrLogDir: join(paths.logsDir, "mcp"),
     onError: (group, name, error) =>
       console.error(`kclaw mcp ${group === GLOBAL_GROUP ? name : `${group} · ${name}`} error: ${error}`),
     persist: (group, servers) => {
@@ -422,6 +449,26 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     log: (line) => console.error(`kclaw goal: ${line}`),
   })
   hostStops.push(["goal loop", () => goalHost.dispose()])
+  // history_search 数据面：检索 + 标题解析 + 回收站/已清除会话过滤（meta
+  // 缺失或 deleted 的命中直接丢弃——索引行的清理跟随事件，purge 级联兜底）。
+  const historySearch: HistorySearchFn = async (query, opts = {}) => {
+    const hits = historyIndex.search(query, opts.limit ?? 5, opts.sessionId)
+    return hits
+      .map((hit) => ({ hit, meta: sessions.meta(hit.sessionId) }))
+      .filter((r): r is { hit: ReturnType<typeof historyIndex.search>[number]; meta: NonNullable<typeof r.meta> } => r.meta !== undefined && r.meta.deleted !== true)
+      .map(({ hit, meta }) => ({ sessionId: hit.sessionId, title: meta.title, role: hit.role, at: hit.at, excerpt: hit.text }))
+  }
+  // 启动后后台回填存量会话（per-session 幂等；serving 不等它）。
+  void (async () => {
+    try {
+      const metas = sessions.list()
+      const n = historyIndex.backfill(metas.map((m) => ({ sessionId: m.id, messages: sessions.readMessages(m.id) })))
+      if (n > 0) console.error(`kclaw history search: indexed ${n} messages across ${metas.length} sessions`)
+    } catch (err) {
+      console.error("kclaw history search backfill failed:", err)
+    }
+  })()
+  hostStops.push(["history search index", async () => historyIndex.close()])
   const run = new RunManager({
     config,
     paths,
@@ -434,6 +481,8 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     usageStore: usage,
     hooks: hookRegistry,
     skillsEvolution,
+    resolveExtractLlm,
+    historySearch,
     subagents: {
       spawner: subagentHost.spawner,
       collector: subagentHost.collector,
@@ -493,6 +542,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     channel: feishuManager,
     attachmentsDir: paths.attachmentsDir,
     usage,
+    historySearch, // GET /search 跨会话检索（与 history_search 工具同一数据面）
     webDist: resolveWebDist(opts.webDist),
     memory, // /memory 路由消费（管理界面）
     hooks: hookRegistry, // GET /hooks 管理面
@@ -561,6 +611,9 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     workdirs: () => Array.from(new Set(sessions.list().map((m) => m.workdir ?? config.workspace))),
   })
   hostStops.push(["skill scheduler", () => skillTick.stop()])
+  // 技能 curator：每日闲时扫描（stale 标记 + 归档，只动 AI 自建的全局技能）。
+  const curatorTick = startSkillCurator({ config, skillsDir: paths.skillsDir })
+  hostStops.push(["skill curator", () => curatorTick.stop()])
 
   // Feishu channel (#45, managed since #46): opt-in via ~/.kclaw/feishu.json
   // (enabled). Started AFTER the schedulers under the manager's own hard
