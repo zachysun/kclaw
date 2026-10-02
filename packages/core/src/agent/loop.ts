@@ -130,6 +130,37 @@ function errorResult(callId: string, output: string): ToolResultBlock {
   return { id: newBlockId(), type: "tool_result", callId, status: "error", output, durationMs: 0 }
 }
 
+/**
+ * Closest known name for an unknown-tool call (case-insensitive edit
+ * distance ≤ 2): turns a bare "unknown tool" into a self-correcting hint so
+ * the model can retry with a real tool instead of guessing again.
+ */
+function closestToolName(name: string, known: string[]): string | undefined {
+  const a = name.toLowerCase()
+  let best: string | undefined
+  let bestDist = Number.POSITIVE_INFINITY
+  for (const k of known) {
+    const b = k.toLowerCase()
+    // Classic DP levenshtein over two short strings.
+    const prev = new Array<number>(b.length + 1)
+    const cur = new Array<number>(b.length + 1)
+    for (let j = 0; j <= b.length; j++) prev[j] = j
+    for (let i = 1; i <= a.length; i++) {
+      cur[0] = i
+      for (let j = 1; j <= b.length; j++) {
+        cur[j] = Math.min(prev[j]! + 1, cur[j - 1]! + 1, prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1))
+      }
+      for (let j = 0; j <= b.length; j++) prev[j] = cur[j]!
+    }
+    const d = prev[b.length]!
+    if (d < bestDist) {
+      bestDist = d
+      best = k
+    }
+  }
+  return best !== undefined && bestDist <= 2 ? best : undefined
+}
+
 function errorMessage(err: unknown): string {
   return String((err as { message?: string } | null | undefined)?.message ?? err)
 }
@@ -431,9 +462,15 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
         // parse-failure path too, carrying the raw (unparseable) block.
         emit(makeEvent("tool_call.completed", { messageId: assistant.id, block: call }, ctx))
       }
-      // Unknown tool names likewise never execute.
+      // Unknown tool names likewise never execute. When a defined tool is
+      // lexically close, point at it — the model can self-correct instead of
+      // guessing a second time.
       if (!entry.result && !(deps.tools?.has(call.name) ?? false)) {
-        entry.result = errorResult(call.callId, `unknown tool: ${call.name}`)
+        const closest = closestToolName(call.name, (deps.toolDefs ?? []).map((d) => d.name))
+        entry.result = errorResult(
+          call.callId,
+          closest === undefined ? `unknown tool: ${call.name}` : `unknown tool: ${call.name} (closest available: ${closest})`,
+        )
       }
       entries.push(entry)
     }

@@ -7,7 +7,9 @@
  *   counted, and the final output carries a `...[dropped N bytes]...` marker.
  * - On timeout the whole process group gets SIGKILL (`detached: true` makes
  *   the child a group leader, so `kill(-pid)` also reaps shell descendants
- *   like `sleep`); partial output is still returned.
+ *   like `sleep`); a short grace window still collects the exit and the
+ *   output buffered before the kill, and partial output is returned either
+ *   way.
  * - Output larger than `maxOutputBytes` keeps the accumulated head and drops
  *   the tail, finishing with a byte-counted `...[dropped N bytes]...` marker
  *   (truncateMiddle only micro-trims the head's <=1-chunk overshoot).
@@ -20,6 +22,8 @@ import { spillLocatorLine, spillToolOutput, SPILL_MAX_BYTES } from "./spill.js"
 
 const DEFAULT_TIMEOUT_MS = 60_000
 const DEFAULT_MAX_OUTPUT_BYTES = 100 * 1024
+/** After a timeout kill, how long "close" may take to deliver the exit + tail output. */
+const EXEC_TIMEOUT_GRACE_MS = 2_000
 
 /**
  * The minimal spawn surface the exec tool needs from a sandbox wrapper:
@@ -29,7 +33,7 @@ const DEFAULT_MAX_OUTPUT_BYTES = 100 * 1024
  * allowance and a sandboxed spawn are always the same source.
  */
 export interface ExecSandboxSpawn {
-  spawn(command: string, opts: { cwd: string }): ChildProcess
+  spawn(command: string, opts: { cwd: string; env?: Record<string, string> }): ChildProcess
 }
 
 /**
@@ -61,6 +65,11 @@ export function createExecTool(opts: {
   sandbox?: ExecSandboxSpawn
   /** Full-output spill dir (<home>/spill); undefined = truncation drops data as before. */
   spillDir?: string
+  /**
+   * Extra environment variables layered over the inherited process env
+   * (session identity: KCLAW_SESSION_ID etc.). Absent = inherit unchanged.
+   */
+  env?: Record<string, string>
 }): ToolExecutor & { name: "exec" } {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES
@@ -96,11 +105,19 @@ export function createExecTool(opts: {
         let spillBytes = 0
         const spillWired = opts.spillDir !== undefined
 
+        // Merged once for both spawn paths: the sandbox wrapper forwards the
+        // environment verbatim, so `env` here is the child's COMPLETE
+        // environment (undefined = inherit process.env unchanged). The cast
+        // narrows process.env's `string | undefined` index type — spawn
+        // itself accepts undefined-valued entries, but the sandbox seam is
+        // declared with plain string values.
+        const childEnv = opts.env === undefined ? undefined : { ...process.env, ...opts.env } as Record<string, string>
         const child = opts.sandbox
-          ? opts.sandbox.spawn(command, { cwd: opts.workspace })
+          ? opts.sandbox.spawn(command, { cwd: opts.workspace, ...(childEnv === undefined ? {} : { env: childEnv }) })
           : spawn(command, {
               shell: true,
               cwd: opts.workspace,
+              ...(childEnv === undefined ? {} : { env: childEnv }),
               // Own process group on POSIX so a timeout kill reaches shell
               // descendants, not just the immediate child.
               detached: process.platform !== "win32",
@@ -172,9 +189,16 @@ export function createExecTool(opts: {
         timer = setTimeout(() => {
           timedOut = true
           killAll()
-          finish({
-            status: "error",
-            output: `command timed out after ${timeoutMs}ms\n${capped()}`,
+          // Timeout is not a silent discard: after the SIGKILL, give the
+          // process a short grace window so "close" can deliver the exit and
+          // everything still buffered in the pipes (waiter gives up, the
+          // child's final words are still collected).
+          const grace = setTimeout(() => {
+            finish({ status: "error", output: `command timed out after ${timeoutMs}ms\n${capped()}` })
+          }, EXEC_TIMEOUT_GRACE_MS)
+          child.once("close", () => {
+            clearTimeout(grace)
+            finish({ status: "error", output: `command timed out after ${timeoutMs}ms\n${capped()}` })
           })
         }, timeoutMs)
 
