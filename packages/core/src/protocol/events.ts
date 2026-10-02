@@ -48,7 +48,7 @@ export interface MessageTruncatedPayload { fromMessageId: string }
 export interface JobStartedPayload { jobId: string }
 export interface JobCompletedPayload { jobId: string; summary: string }
 export interface JobFailedPayload { jobId: string; error: { code: string; message: string } }
-export interface SessionRenamedPayload { title: string }
+export interface SessionRenamedPayload { title: string; /** 触发来源：auto = autoname 生成，manual = 用户改名（旧事件缺省按 manual）。 */ source?: "auto" | "manual" }
 
 /** Persist notice: one session event has been written to events.jsonl. Emitted by the store after a successful append — persisted BEFORE announced, so consumers can incrementally refetch safely. */
 export interface SessionAppendedPayload { eventType: SessionEvent["type"] }
@@ -99,8 +99,8 @@ export interface QuestionResolvedPayload {
 
 export interface NoteEmittedPayload { messageId: string; block: NoteBlock }
 
-/** 记忆写入广播：项目级事务，不携带 sessionId（跨项目/定时路径无会话归属）。 */
-export interface MemoryWrittenPayload { path: string; kind: "episode" | "cognition"; topic?: string; scope?: string }
+/** 记忆写入广播：项目级事务，不携带 sessionId（跨项目/定时路径无会话归属）。trigger 与持久化 MemoryEvent 的 trigger 同口径。 */
+export interface MemoryWrittenPayload { path: string; kind: "episode" | "cognition"; topic?: string; scope?: string; trigger?: "immediate" | "manual" | "interval" | "follow" | "clear" | "nightly" | "admin" }
 
 export interface MessageQueuedPayload {
   messageId: string
@@ -112,10 +112,10 @@ export interface MessageQueueCancelledPayload { messageId?: string; all?: boolea
 
 /** v3: 压缩触发阶段——post-run = run 前预压缩，in-run = 迭代边界中途压缩，manual = 手动。 */
 export type CompactionPhase = "in-run" | "post-run" | "manual"
-/** 压缩实际开始（预算过线且边界已定，即将调用摘要器）。 */
-export interface CompactionStartedPayload { phase: CompactionPhase }
+/** 压缩实际开始（预算过线且边界已定，即将调用摘要器）。trigger 与持久化 CompactionEvent 的 trigger 同口径。 */
+export interface CompactionStartedPayload { phase: CompactionPhase; trigger?: "manual" | "in-run" | "auto" }
 /** 压缩结束（每次 started 必有配对 completed）：新累计段数与压缩后保留的原文消息条数；非 ok 时 segments/kept 为 0。 */
-export interface CompactionCompletedPayload { segments: number; kept: number; phase: CompactionPhase; result: "ok" | "failed" | "cancelled" }
+export interface CompactionCompletedPayload { segments: number; kept: number; phase: CompactionPhase; result: "ok" | "failed" | "cancelled"; trigger?: "manual" | "in-run" | "auto"; emergency?: boolean }
 
 /** hook 系统：一个用户 hook 的装载或执行失败。 */
 export interface HookFailedPayload { hook: string; position: string; error: string; phase: "load" | "run" }

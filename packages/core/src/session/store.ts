@@ -350,7 +350,7 @@ export class SessionStore {
    * is projection-maintained by the compaction event, never merged here.
    * Returns the newest projection.
    */
-  updateMeta(id: string, patch: Partial<SessionMeta>): SessionMeta {
+  updateMeta(id: string, patch: Partial<SessionMeta>, opts: { renameSource?: "auto" | "manual" } = {}): SessionMeta {
     const current = this.meta(id)
     if (current === undefined) throw new Error(`session not found: ${id}`)
     const now = new Date().toISOString()
@@ -358,7 +358,7 @@ export class SessionStore {
     // 元数据字段 → 事件（仅当有确定的新值且确实发生变化）
     const events: SessionEvent[] = []
     if (patch.title !== undefined && patch.title !== current.title) {
-      events.push({ type: "session.renamed", at: now, title: patch.title })
+      events.push({ type: "session.renamed", at: now, title: patch.title, source: opts.renameSource ?? "manual" })
     }
     // model/mode/dispositionOverride：键出现在 patch 即发 session.set 事件，
     // 值 undefined 映射为 null（= 清除）。投影只由事件推进，重建时不复活已清除的覆盖。

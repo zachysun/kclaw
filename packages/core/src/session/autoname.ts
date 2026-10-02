@@ -5,8 +5,11 @@ import type { SessionStore } from "./store.js"
 
 export interface AutonameDeps {
   sessions: SessionStore
-  llm: LlmClient
-  model: string
+  /**
+   * 杂活模型通道：标题生成走 extractModel 解析链（缺省主模型），声明时才
+   * 解析。与压缩摘要共用同一 resolver 形状。
+   */
+  resolveLlm: () => { llm: LlmClient; model: string }
   titleFor?: (firstText: string) => Promise<string>
   /** Optional event sink: a successful rename is announced as session.renamed. */
   emit?: (e: AgentEvent) => void
@@ -18,14 +21,17 @@ export function scheduleAutoname(deps: AutonameDeps, sessionId: string, firstTex
   if (meta === undefined || meta.title !== "新会话") return Promise.resolve()
   return (async () => {
     try {
-      const title = await (deps.titleFor ?? ((t: string) => defaultTitle(deps.llm, deps.model, t)))(firstText)
+      const title = await (deps.titleFor ?? ((t: string) => {
+        const { llm, model } = deps.resolveLlm()
+        return defaultTitle(llm, model, t)
+      }))(firstText)
       const t = title.trim().slice(0, 30)
       if (t === "") return
       // 写回前重读 meta：生成标题期间用户可能已手动改名，此时不覆盖
       const current = deps.sessions.meta(sessionId)
       if (current === undefined || current.title !== "新会话") return
-      deps.sessions.updateMeta(sessionId, { title: t })
-      deps.emit?.(makeEvent("session.renamed", { title: t }, { sessionId }))
+      deps.sessions.updateMeta(sessionId, { title: t }, { renameSource: "auto" })
+      deps.emit?.(makeEvent("session.renamed", { title: t, source: "auto" }, { sessionId }))
     } catch {
       // 失败静默，保持无标题
     }

@@ -9,7 +9,7 @@ import type { RunTrigger } from "./events.js"
 import type { TaskSnapshot } from "./team.js"
 
 export interface SessionCreatedEvent { type: "session.created"; at: string; title: string; workdir?: string; jobId?: string; /** 创建时固化的权限模式快照（config permissions.defaultMode）；不写时 default。 */ mode?: import("../permissions/modes.js").PermissionMode; /** 父会话（subagent 派生关系）：设置即子会话——列表默认过滤、记忆提取排除、用量归组到父。 */ parentSessionId?: string }
-export interface SessionRenamedEvent { type: "session.renamed"; at: string; title: string }
+export interface SessionRenamedEvent { type: "session.renamed"; at: string; title: string; /** 触发来源：auto = autoname 生成，manual = 用户改名；旧事件无此字段按 manual 理解。 */ source?: "auto" | "manual" }
 export interface SessionDeletedEvent { type: "session.deleted"; at: string }
 export interface SessionRestoredEvent { type: "session.restored"; at: string }
 export interface SessionSetEvent { type: "session.set"; at: string; model?: string | null; mode?: import("../permissions/modes.js").PermissionMode | null; disposition?: "steer" | "wait" | "interrupt" | null }

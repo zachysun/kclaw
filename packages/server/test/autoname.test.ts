@@ -24,7 +24,7 @@ describe("scheduleAutoname", () => {
     const sessions = tempSessions()
     const meta = sessions.create() // 标题默认"新会话"
     await scheduleAutoname(
-      { sessions, llm: {} as never, model: "m", titleFor: async () => "生成的标题" },
+      { sessions, resolveLlm: () => ({ llm: {} as never, model: "m" }), titleFor: async () => "生成的标题" },
       meta.id, "你好",
     )
     expect(sessions.meta(meta.id)?.title).toBe("生成的标题")
@@ -37,8 +37,7 @@ describe("scheduleAutoname", () => {
     await scheduleAutoname(
       {
         sessions,
-        llm: {} as never,
-        model: "m",
+        resolveLlm: () => ({ llm: {} as never, model: "m" }),
         titleFor: async () => "生成的标题",
         emit: (e) => emitted.push({ type: e.type, sessionId: e.sessionId, title: (e.payload as { title: string }).title }),
       },
@@ -54,8 +53,7 @@ describe("scheduleAutoname", () => {
     await scheduleAutoname(
       {
         sessions,
-        llm: {} as never,
-        model: "m",
+        resolveLlm: () => ({ llm: {} as never, model: "m" }),
         titleFor: async () => "不该覆盖",
         emit: (e) => emitted.push(e),
       },
@@ -68,7 +66,7 @@ describe("scheduleAutoname", () => {
     const sessions = tempSessions()
     const meta = sessions.create("手动标题")
     await scheduleAutoname(
-      { sessions, llm: {} as never, model: "m", titleFor: async () => "不该覆盖" },
+      { sessions, resolveLlm: () => ({ llm: {} as never, model: "m" }), titleFor: async () => "不该覆盖" },
       meta.id, "你好",
     )
     expect(sessions.meta(meta.id)?.title).toBe("手动标题")
@@ -82,8 +80,7 @@ describe("scheduleAutoname", () => {
     const pending = scheduleAutoname(
       {
         sessions,
-        llm: {} as never,
-        model: "m",
+        resolveLlm: () => ({ llm: {} as never, model: "m" }),
         titleFor: async () => {
           await gate // 挂起，模拟标题生成耗时
           return "生成的标题"

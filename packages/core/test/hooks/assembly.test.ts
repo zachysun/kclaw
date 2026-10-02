@@ -476,6 +476,33 @@ describe("executeRun × v4 水位线", () => {
     expect(bus.events.some((e) => e.type === "compaction.started" && e.payload.phase === "in-run")).toBe(true)
   })
 
+  it("压缩摘要走杂活通道：resolveExtractLlm 接管摘要调用", async () => {
+    const base = loadConfig(resolvePaths(home))
+    const cfg = { ...base, sessions: { ...base.sessions, contextTokens: 1000 } }
+    const { llm, summaryRequests } = waterlineLlm({ mainTurns: 1, anchor: 950 })
+    const extractRequests: unknown[] = []
+    const extractLlm: LlmClient = {
+      async *stream(req) {
+        extractRequests.push(req)
+        yield { type: "text_delta", delta: "杂活通道摘要" }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 10, outputTokens: 5 } }
+      },
+    }
+    const { engine, sessions, sessionId } = makeEngine({
+      llm,
+      config: cfg,
+      resolveExtractLlm: () => ({ llm: extractLlm, model: "extract-model" }),
+    })
+    seedTurns(sessions, sessionId, 3)
+    const outcome = await executeRun(engine, handoff(sessionId, "x".repeat(500)))
+    expect(outcome.stopReason).toBe("end_turn")
+    // 摘要调用被 extract 通道接走：主客户端没见过摘要请求，摘要正文出自杂活客户端
+    expect(summaryRequests).toHaveLength(0)
+    expect(extractRequests.length).toBeGreaterThanOrEqual(1)
+    const record = sessions.readEvents(sessionId).find((e) => e.type === "compaction") as { segmentSummary: string }
+    expect(record.segmentSummary).toContain("杂活通道摘要")
+  })
+
   it("红线撞在飞后台：等它落定（不并发第二个压缩），落定后应用挂起成果", async () => {
     // 锚点 780 → 950：边界 1 水位 0.78 落预压区间 kick 后台（摘要卡 gate）；
     // 边界 2 水位 0.95 过红线 → mid-run-panic 等在飞后台，绝不并发第二个
