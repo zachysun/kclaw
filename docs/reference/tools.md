@@ -175,10 +175,11 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 |------|------|------|------|
 | `query` | string | 是 | 要在全部历史会话的原始消息里找什么（关键词，中文友好） |
 | `limit` | integer | 否 | 返回条数上限，范围 1–20，不传取 5 |
-| `session_id` | string | 否 | 只检索这一个会话 |
+| `session_id` | string | 否 | 只检索这一个会话（见下方已知缺陷） |
 
 - 数据面是 `~/.kclaw/search.db`（SQLite FTS5，中文按二字元切分），daemon 边收到消息边写入，消息被编辑重试截断、会话删除时同步镜像清理，启动时对缺失的旧会话补一次回填。
-- 每条命中返回原文（会话标题、角色、时间）；没有命中返回"（没有匹配的历史消息）"；数据面未组装（独立 core 场景）返回"（历史检索不可用）"。
+- 每条命中一行原文（会话标题、角色、时间，行尾带 `（session: <会话id>）`）；没有命中返回 `(没有匹配的历史消息)`；数据面未组装（独立 core 场景）返回 `(历史检索不可用)`。
+- 已知缺陷：schema 声明的是蛇形 `session_id`，执行器当前读的是驼峰 `sessionId`，按 schema 传参时该过滤不生效（检索本身正常，只是不收窄）。修复前不要依赖这个参数；修复后删除本条。
 - 同一份数据经 HTTP `GET /search?q=` 暴露给 WebUI（见 [http-api](../server/http-api.md)）。
 
 ### skill_read
@@ -231,7 +232,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `task` | string | 是 | 自包含的任务描述（子会话看不到本对话的任何内容，路径、约束、定义都要写全） |
 | `label` | string | 否 | 展示用短名，出现在状态行与确认卡里 |
 | `role` | string | 否 | 角色补充说明（如"只做代码评审的审查员"），追加进子会话系统提示词的"角色补充"节，最长 2000 字符 |
-| `tools` | string[] | 否 | 工具白名单：只保留列出的内置工具（名字不存在则忽略），只收窄不放大；不传继承全部 |
+| `tools` | string[] | 否 | 工具白名单：只保留列出的工具（内置与 MCP 适配器工具都在收窄范围内，白名单外的名字忽略），只收窄不放大；不传继承全部 |
 | `run_in_background` | boolean | 否 | true = 立即返回子会话 id，完成后有通知、用 subagent_collect 取结果；不传取 false（阻塞等结题） |
 
 - 子会话不能回话、不能提问、不能再派 subagent（单层委派）。

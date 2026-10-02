@@ -12,7 +12,7 @@
 - **只建目录，不建文件。** `resolvePaths` 用 `mkdirSync(recursive)` 创建目录树，但 `config.json`、`jobs.db` 等文件只是路径字符串，不在这里创建——文件由各自的所有者在首次写入时产生（`SessionStore`/`MemorySystem`/`JobScheduler` 的构造函数建目录并初始化自己的数据库）。
 - **配置深合并，默认值永不被污染。** `loadConfig` 把文件内容深合并到默认值上，且两个分支都从 `structuredClone(defaultConfig)` 开始——否则返回值会与导出的 `defaultConfig` 共享嵌套引用，调用方任意一处 `cfg.permissions.allow.push()` 都会改掉进程级的默认值。合并规则（`deepMerge`）：普通对象按键递归合并，数组与标量整体替换，`undefined` 跳过，两个输入都不被修改。
 - **配置无效时报错，而不是静默回退。** `config.json` 解析失败直接抛错（`invalid json in <path>: ...`），文件内容不是对象映射也抛错。不做静默回退——悄悄改用默认值意味着用户配置的权限规则在无提示的情况下失效，比启动失败更危险。文件缺失或内容为空则返回默认值，这是首次使用的正常路径。
-- **`config.json` 是唯一的形态配置文件，密钥另存 `credentials.json`。** 读取只认 `config.json`；写入（CLI wizard、WebUI 保存）也只落 `config.json`，权限 0600。密钥类字段（provider 条目的 `apiKey`、`web.tavilyApiKey`）经 `saveConfig` 时**不落 config.json**——它们写进同目录的 `credentials.json`（0600），config.json 里留空串。`credentials.json` 的形状：`{ providers: { <条目名>: { apiKey } }, web: { tavilyApiKey? } }`。`loadConfig` 读入 config 后把凭据文件里的值合并回来；同一条目两边都有值时**凭据文件优先**（config 内联 key 只是首次保存前的迁移回落；条目已删除的孤儿引用忽略）。凭据文件损坏时警告并当空文件处理（不挡启动）。`saveConfig` **始终**重写凭据文件（含空对象）：provider 删除后它的 key 必须同时离开磁盘，不能留一份陈旧文件继续生效。
+- **`config.json` 是唯一的形态配置文件，密钥另存 `credentials.json`。** 读取只认 `config.json`；写入（CLI wizard、WebUI 保存）也只写 `config.json`，权限 0600。密钥类字段（provider 条目的 `apiKey`、`web.tavilyApiKey`）经 `saveConfig` 时**不写入 config.json**——它们写进同目录的 `credentials.json`（0600），config.json 里留空串。`credentials.json` 的形状：`{ providers: { <条目名>: { apiKey } }, web: { tavilyApiKey? } }`。`loadConfig` 读入 config 后把凭据文件里的值合并回来；同一条目两边都有值时**凭据文件优先**（config 内联 key 只是首次保存前的过渡读法，下一次保存就搬进凭据文件；指向已删除条目的引用忽略）。凭据文件损坏时警告并当空文件处理（不挡启动）。`saveConfig` **始终**重写凭据文件（含空对象）：provider 删除后它的 key 必须同时离开磁盘，不能留一份陈旧文件继续生效。
 - **会话事件流只追加，且兼容崩溃。** 事件只追加、从不改写历史行（运行态队列 `queue.jsonl` 是例外——整文件重写，见下文）。崩溃可能留下的残缺是「最后一行只写了一半」（torn line，断尾行）：读取时丢弃断尾行（崩溃产物，最多丢一条事件）；写新行之前先修复断尾，否则新行会拼接在半行后面，读取时两条会一起被丢弃。
 
 ---
@@ -26,7 +26,7 @@ export function resolvePaths(home?: string): KclawPaths
 
 | 路径 | 用途 | 写入方 |
 |------|------|--------|
-| `<home>/config.json` | 全部形态配置（见下节；密钥字段恒为空串） | CLI wizard 与 WebUI Model 页的 provider 管理路由（均经 `saveConfig`）；用户手写 |
+| `<home>/config.json` | 全部形态配置（见下节；密钥字段保存后恒为空串） | CLI wizard 与 WebUI Model 页的 provider 管理路由（均经 `saveConfig`）；用户手写 |
 | `<home>/credentials.json` | 密钥文件（0600）：provider 条目 apiKey 与 web.tavilyApiKey 的实际存放处，`loadConfig` 合并回内存配置 | `saveConfig`（每次保存配置时重写）；用户手写亦可 |
 | `<home>/permissions.yaml` | 全局权限规则——在人工确认里选「总是允许」后保存下来的收紧 allow 规则；项目档在工作区 `.kclaw/permissions.yaml`（见下文「保存的权限规则」一节） | run 组装的 `resolveConfirmation`（`packages/core/src/agent/run-assembly.ts`，global 裁决时写入）；用户手写亦可 |
 | `<home>/mcp.json` | 全局组（所有项目共享）的 MCP server 配置（WebUI 的 MCP 页增删改落在这里）；各项目自己的配置在 `<项目>/.kclaw/mcp.json`（见 [mcp](./mcp.md) 与下文「项目 mcp.json」一节） | daemon 的 McpManager persist（global 组归拢写）；用户手写亦可 |
@@ -40,8 +40,8 @@ export function resolvePaths(home?: string): KclawPaths
 | `<home>/usage.db` | 每次 LLM 运行的 token 用量记录 | UsageStore |
 | `<home>/attachments/<id>/` | 附件外存目录（每会话一个子目录） | server 上传路由 `routes/attachments.ts`；运行时只读挂载 |
 | `<home>/spill/` | 工具输出溢出目录：exec / web_fetch 截断输出时，把捕获到的全量输出写到这里，给模型的截断视图附带 fs_read 定位行 | core `tools/spill.ts`（单文件上限 10 MiB，超出部分不保留）；目录在权限引擎 readRoots 内，`fs_read` 可直接读 |
-| `<home>/logs/` | 日志目录；当前写入方是 MCP：stdio server 的 stderr 抽干写入 `logs/mcp/<server>.log`（0600，单文件封顶 1 MiB，见 [mcp](./mcp.md)） | McpManager（`stderrLogDir`） |
-| `<home>/search.db` | 跨会话消息全文索引（SQLite FTS5，`history_search` 与 `GET /search` 的数据面，见 [tools](./tools.md)） | HistorySearchIndex（daemon 装配，随消息实时写入 + 启动回填） |
+| `<home>/logs/` | 日志目录；当前写入方是 MCP：stdio server 的 stderr 抽干写入 `logs/mcp/<server>.log`（0600，单文件封顶 1 MB（1,000,000 字节），见 [mcp](./mcp.md)） | McpManager（`stderrLogDir`） |
+| `<home>/search.db` | 跨会话消息全文索引（SQLite FTS5，`history_search` 与 `GET /search` 的数据面，见 [tools](./tools.md)） | HistorySearchIndex（daemon 组装，随消息实时写入 + 启动回填） |
 | `<home>/daemon.json` | daemon 存活标识（server 侧） | `launchDaemon` |
 | `<home>/token` | daemon 鉴权 token（server 侧） | `loadOrCreateToken` |
 
@@ -96,7 +96,7 @@ export function resolvePaths(home?: string): KclawPaths
 
 读（`loadConfig(paths)`）：`config.json` 存在 → 按 JSON 解析；缺失或内容为空 → 返回默认值的克隆。解析失败抛错（`invalid json in <path>: ...`），内容不是对象映射也抛错；其余 → `deepMerge(默认值克隆, 文件内容)`，随后合并 `credentials.json` 里的密钥（见设计决策：凭据文件优先）。**除三处外没有结构校验**：`permissions.defaultMode` 非五档时回退到 `"default"` 并告警、压缩阈值线四线经 `validateWaterlineConfig` 校验（见 [permissions](./permissions.md) 与 [compaction](./compaction.md)）、skills 两节（evolution/curator）逐字段校验回退；其余字段不校验——多余字段原样保留，字段类型写错要到使用方使用时才暴露。
 
-写（`saveConfig(paths, config)`）：把**深合并后的整份 config**（含全部默认字段，首次生成的 `config.json` 不是用户最小集）拆成两份落盘——密钥字段（provider apiKey、tavilyApiKey）先写进 `credentials.json`（0600），其余整文件原子重写到 `config.json`（密钥位置留空串）；凭据文件**始终**重写（含空对象，provider 删除后 key 同步离开磁盘）。两份都走 `writeFileAtomic`（`storage/atomic.ts`：先写 `<path>.tmp` 再 rename，POSIX 同目录 rename 是原子的）。MCP server 不经 `saveConfig` 写入——唯一管理源是全局 `mcp.json` 与各项目的 `.kclaw/mcp.json`（见 [mcp](./mcp.md)）。CLI wizard 保存后仍保留一次显式 `chmodSync(0o600)`，双保险（见 [onboarding](../cli/onboarding.md)）。
+写（`saveConfig(paths, config)`）：把**深合并后的整份 config**（含全部默认字段，首次生成的 `config.json` 不是用户最小集）拆成两份写入：密钥字段（provider apiKey、tavilyApiKey）先写进 `credentials.json`（0600），其余整文件原子重写到 `config.json`（密钥位置留空串）；凭据文件**始终**重写（含空对象，provider 删除后 key 同步离开磁盘）。两份都走 `writeFileAtomic`（`storage/atomic.ts`：先写 `<path>.tmp` 再 rename，POSIX 同目录 rename 是原子的）。MCP server 不经 `saveConfig` 写入——唯一管理源是全局 `mcp.json` 与各项目的 `.kclaw/mcp.json`（见 [mcp](./mcp.md)）。CLI wizard 保存后仍保留一次显式 `chmodSync(0o600)`，双保险（见 [onboarding](../cli/onboarding.md)）。
 
 ---
 
@@ -105,12 +105,20 @@ export function resolvePaths(home?: string): KclawPaths
 ```ts
 // packages/core/src/storage/paths.ts
 export interface KclawPaths {
-  home: string; config: string; agentsMd: string
+  home: string                    // 根目录：显式参数 > KCLAW_HOME env > ~/.kclaw
+  configJson: string              // <home>/config.json —— 形态配置
+  credentialsJson: string         // <home>/credentials.json —— 密钥文件（0600，与 config.json 分家）
+  agentsMd: string                // <home>/AGENTS.md
   skillsDir: string               // <home>/skills —— 全局技能目录（见 skills.md）
   hooksDir: string                // <home>/hooks —— 用户 hook 目录（见 hooks.md）
-  memoryDir: string; memoryNotesDir: string; memoryIndexDb: string
-  sessionsDir: string; jobsDb: string; usageDb: string
-  attachmentsDir: string; spillDir: string; logsDir: string
+  memoryDir: string               // <home>/memory
+  sessionsDir: string             // <home>/sessions（每会话一个子目录）
+  jobsDb: string                  // <home>/jobs.db
+  usageDb: string                 // <home>/usage.db
+  searchDb: string                // <home>/search.db —— 跨会话消息全文索引（SQLite FTS5）
+  attachmentsDir: string          // <home>/attachments（每会话一个子目录）
+  spillDir: string                // <home>/spill
+  logsDir: string                 // <home>/logs
 }
 
 // packages/core/src/storage/config.ts

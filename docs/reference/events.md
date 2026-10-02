@@ -80,7 +80,7 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 | `job.completed` | `jobId`、`summary` |
 | `job.failed` | `jobId`、`error { code, message }` |
 | `session.appended` | `eventType`（刚写入 events.jsonl 的会话事件类型；先写入后广播） |
-| `session.renamed` | `title`、`source?`（auto=自动命名；缺省 manual=用户或路由改名） |
+| `session.renamed` | `title`、`source?`（auto=自动命名；不传视为 manual=用户或路由改名） |
 | `text.created` / `text.completed` | `messageId`、`block`（BlockPayload） |
 | `text.delta` | `messageId`、`blockId`、`delta` |
 | `thinking.created` / `thinking.completed` | BlockPayload 同上 |
