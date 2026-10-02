@@ -80,7 +80,7 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 | `job.completed` | `jobId`、`summary` |
 | `job.failed` | `jobId`、`error { code, message }` |
 | `session.appended` | `eventType`（刚写入 events.jsonl 的会话事件类型；先写入后广播） |
-| `session.renamed` | `title` |
+| `session.renamed` | `title`、`source?`（auto=自动命名；缺省 manual=用户或路由改名） |
 | `text.created` / `text.completed` | `messageId`、`block`（BlockPayload） |
 | `text.delta` | `messageId`、`blockId`、`delta` |
 | `thinking.created` / `thinking.completed` | BlockPayload 同上 |
@@ -98,12 +98,12 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 | `question.requested` | `questionId`、`questions`（QuestionSpec 数组，1–5 个）、`expiresAt`、`noteText?` |
 | `question.resolved` | `questionId`、`answers?`（string[][]，超时默认）、`by` |
 | `note.emitted` | `messageId`、`block`（NoteBlock） |
-| `memory.written` | `path`、`kind`（episode/cognition）、`topic?`、`scope?`（不带 sessionId，项目级广播） |
+| `memory.written` | `path`、`kind`（episode/cognition）、`topic?`、`scope?`、`trigger?`（与持久化 MemoryEvent 同口径；不带 sessionId，项目级广播） |
 | `message.queued` | `messageId`、`disposition`（steer/wait/interrupt）、`position?`（wait/interrupt 的队列序位） |
 | `message.steered` | `messageId`（事件级 runId 标识注入的 run） |
 | `message.queue_cancelled` | `messageId?`、`all?` |
-| `compaction.started` | `phase`（in-run/post-run/manual） |
-| `compaction.completed` | `segments`、`kept`、`phase`、`result`（ok/failed/cancelled；非 ok 时前两值为 0） |
+| `compaction.started` | `phase`（in-run/post-run/manual）、`trigger`（auto/manual/in-run） |
+| `compaction.completed` | `segments`、`kept`、`phase`、`result`（ok/failed/cancelled；非 ok 时前两值为 0）、`trigger`（auto/manual/in-run；非 ok 不带）、`emergency?`（急救压缩且成功时为 true） |
 | `hook.failed` | `hook`、`position`、`error`、`phase`（load/run） |
 
 QuestionSpec：`{ text, options?, multiSelect? }` —— options 存在时从选项里选，默认自由文本。

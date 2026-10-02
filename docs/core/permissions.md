@@ -8,7 +8,8 @@
 
 ## 设计决策
 
-- **三档输出、顺序短路**：判定链每一步都可能直接返回，后续不再看。会话模式 `readonly` 最优先：sensitive 工具在 readonly 下无条件拒绝，连白名单都不到达；其后顺序为 deny 黑名单 → allow 白名单（命中且目标不逃逸工作区）→ **沉淀规则命中（learned，目标不逃逸）** → 模式 `acceptEdits` 的工作区内写放行 → 工作目录越界检查 → safeTools → 会话级授权 → confirm。deny 永远先于放行：一条命中黑名单的调用无论白名单如何配置都不会执行；白名单也只在目标仍位于工作区内（按 realpath 判定，见第 4 节）时才优先于越界检查。经符号链接逃逸出工作区的目标回退到 confirm，不因 allow 规则放行。
+- **三档输出、顺序短路**：判定链每一步都可能直接返回，后续不再看。会话模式 `readonly` 最优先：sensitive 工具在 readonly 下无条件拒绝，连白名单都不到达；其后顺序为 deny 黑名单 → allow 白名单（命中且目标不逃逸工作区）→ **沉淀规则命中（learned，目标不逃逸）** → 模式 `acceptEdits` 的工作区内写放行（目标命中敏感文件名单时不放行，见第 12 节）→ 工作目录越界检查 → safeTools（同样被敏感文件守卫挡住）→ 会话级授权 → **敏感文件确认** → confirm。deny 永远先于放行：一条命中黑名单的调用无论白名单如何配置都不会执行；白名单也只在目标仍位于工作区内（按 realpath 判定，见第 4 节）时才优先于越界检查。经符号链接逃逸出工作区的目标回退到 confirm，不因 allow 规则放行。
+- **敏感文件默认询问**：凭据形态的目标（`.env`、私钥等，见第 12 节）即使在 safe 工具与 acceptEdits 下也转人工确认——"只读"或"自动接受编辑"不能作为读取密钥的许可。显式 allow/learned 规则与本 run 内的 once 批准仍优先于它。
 - **规则是扁平字符串，不是结构化对象**：`"exec:git *"` 这类前缀通配规则写在 `config.json` 里，人和模型都可读可写；编译只做一次切分，匹配用无正则的回溯算法。
 - **匹配对象按工具提取**：exec 匹配命令字符串、写文件工具匹配路径、其余工具匹配整个参数的 JSON 文本——规则作用于"该调用要执行的动作"，而不是原始参数对象。
 - **路径规则双向匹配**：规则同时按原始形态和规范化形态（`~` 展开 + 相对工作目录解析）测试，同一文件以不同写法（`~/.ssh/x` / `.ssh/x` / `/Users/u/.ssh/x`）均不能绕过 deny。
@@ -121,10 +122,11 @@ readonly 模式还有一道更早的关口：**组装期就移除 sensitive 工�
 ① deny 规则命中        → deny {reason:"blacklist", noteText:"规则命中黑名单: <原规则>"}
 ② allow 规则命中且目标不逃逸工作区 → allow {reason:"whitelist"}（命中但经符号链接逃逸出工作区 → 落到 ③）
 ②' 沉淀规则命中且目标不逃逸工作区 → allow {reason:"learned"}（逃逸 → 落到 ③）
-②'' 模式 acceptEdits 且路径写类工具目标在工作区内 → allow {reason:"accept_edits"}
+②'' 模式 acceptEdits 且路径写类工具目标在工作区内且不命中敏感文件名单 → allow {reason:"accept_edits"}（命中敏感文件或逃逸 → 落到 ③）
 ③ 越界检查（文件工具）  → confirm（见下，即使工具是 safe）
-④ safeTools 含该工具    → allow {reason:"safe"}
+④ safeTools 含该工具且不命中敏感文件名单 → allow {reason:"safe"}（命中敏感文件 → 落到 ⑤'）
 ⑤ sessionGrants 开启且授权命中 → allow {reason:"session_grant"}
+⑤' 敏感文件名单命中   → confirm {noteText:"命中敏感文件规则（<模式>）：确认后才读取或写入"}
 ⑥ 以上全不中            → confirm，签发新 conf_ id
 ```
 
@@ -182,17 +184,17 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
 
 | 处理方式 | 派生规则 | 今天的成员 |
 |------|----------|------------|
-| safeTools 自动放行 | `risk === "safe"` | fs_read、fs_list、web_search、web_fetch、memory_save、memory_search、session_search、skill_read、skill_list、subagent_run、subagent_collect、ask_user_questions |
+| safeTools 自动放行 | `risk === "safe"` | fs_read、fs_list、web_search、web_fetch、memory_save、memory_search、session_search、history_search、skill_read、skill_list、subagent_run、subagent_collect、ask_user_questions |
 | readonly 无条件拒绝（且不进入只读 run 的模型工具面） | `risk === "sensitive"` | exec、fs_write、fs_edit |
 | 路径规范化双匹配（防拼写绕过） | 带 `path` 参数且 sensitive | fs_write、fs_edit |
 | 工作目录边界检查 | 带 `path` 参数 | fs_read、fs_list、fs_write、fs_edit |
 | readRoots 读豁免 | 带 `path` 参数且 safe | fs_read、fs_list |
 | 规则匹配取 `command` 字段 | 带 `command` 参数（即命令类，走专属分支） | exec |
 
-**新工具因此零引擎改动**：按惯例把写参数命名为 `path`（或命令参数命名为 `command`）并声明 risk，处理方式自动齐备——漏声明的默认是最严处理（不进 safeTools、无豁免，需确认）。未注册工具（模型幻觉调用不存在的名字）按同样最严默认处理。结构约定优于名单：名单漏一个名字是漏洞，结构让新工具天然被覆盖。按当前 23 个内置工具的声明（见 [tools](./tools.md)）：
+**新工具因此零引擎改动**：按惯例把写参数命名为 `path`（或命令参数命名为 `command`）并声明 risk，处理方式自动齐备——漏声明的默认是最严处理（不进 safeTools、无豁免，需确认）。未注册工具（模型幻觉调用不存在的名字）按同样最严默认处理。结构约定优于名单：名单漏一个名字是漏洞，结构让新工具天然被覆盖。按当前 24 个内置工具的声明（见 [tools](./tools.md)）：
 
-- **safe（命中即自动放行）**：`fs_read`、`fs_list`、`web_search`、`web_fetch`、`memory_save`、`memory_search`、`session_search`、`skill_read`、`skill_list`、`subagent_run`、`subagent_collect`、`ask_user_questions`、`create_team`、`spawn_teammate`、`send_message`、`list_agents`、`task_create`、`task_update`、`task_list`——共 19 个，全是不改工作目录状态的工具；
-- **sensitive（无 allow 规则命中必然 confirm）**：`exec`、`fs_write`、`fs_edit`——共 3 个。注意 fs_read/fs_list 虽是 safe，目标越界且不在 readRoots 内时仍进入 confirm（第 ③ 步）；MCP 适配器工具（见 [mcp](./mcp.md)）一律声明 sensitive。团队工具只在会话属于某个团队时注册（12 个常驻工具之外的条件面），safe 名单按实际注册面派生。
+- **safe（命中即自动放行）**：`fs_read`、`fs_list`、`web_search`、`web_fetch`、`memory_save`、`memory_search`、`session_search`、`history_search`、`skill_read`、`skill_list`、`subagent_run`、`subagent_collect`、`ask_user_questions`、`create_team`、`spawn_teammate`、`send_message`、`list_agents`、`task_create`、`task_update`、`task_list`——共 20 个，全是不改工作目录状态的工具；
+- **sensitive（无 allow 规则命中必然 confirm）**：`exec`、`fs_write`、`fs_edit`——共 3 个。注意 fs_read/fs_list 虽是 safe，目标越界且不在 readRoots 内时仍进入 confirm（第 ③ 步）、目标命中敏感文件名单时同样转 confirm（第 ⑤' 步）；MCP 适配器工具（见 [mcp](./mcp.md)）一律声明 sensitive。团队工具只在会话属于某个团队时注册（13 个常驻工具之外的条件面），safe 名单按实际注册面派生。
 
 ### 7. exec 沙箱（OS 层）
 
@@ -265,6 +267,14 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 
 **auto 模式例外**：gate 在 `auto` 会话里跳过授权咨询（无论存储是否已就位）。auto 的契约是从人工确认中学习，run 级免询会吞掉同一 run 内的重复确认、破坏「连续 N 次 once → 归纳」（含单 run 内 N 次的情形），auto 下重复调用仍逐次确认，直到归纳落定。组装层的写入保持无条件（auto 模式下是死写，无害），判定收敛在 gate（模式语义归引擎）。
 
+### 12. 敏感文件默认询问（sensitiveFiles）
+
+凭据形态的文件默认转人工确认，即使工具本身是 safe（fs_read 读密钥）或模式是 acceptEdits（自动写 `.env`）：匹配对象是目标路径的**文件名**（basename，`.env` 在任何目录都命中），不读内容。默认名单（`permissions.engine.ts` 的 `DEFAULT_SENSITIVE_FILES`）：`.env`、`.env.*`、`*.env`、`*.pem`、`*.key`、`id_rsa`/`id_rsa.*`、`id_ed25519`/`id_ed25519.*`、`*.p12`、`*.pfx`、`*.kdbx`、`credentials.json`、`credentials*.json`；配置 `permissions.sensitiveFiles` 整体替换默认名单。
+
+链上三处守卫（见第 2 节判定链）：acceptEdits 放行与 safeTools 自动放行各带一道"不命中名单"前提，grants 之后有独立的敏感文件 confirm 层（noteText 带命中的具体模式）。优先级保持：显式 deny/allow/learned 规则在它之上（用户写了 `allow: fs_read:.env` 就是明确放行）；本 run 内对该调用的一次 `once` 批准也使后续重复调用安静（SessionGrants 在敏感文件层之前）。
+
+配套一条规则名体检：gate 记录"规则的工具前缀在注册表（含 MCP 适配器）里不存在"的条目，组装层经 `ruleNameWarnings()` 取走并打印——手滑写错工具名的规则从此不再静默失效（同进程同名单只警告一次）。
+
 ---
 
 ## 边界与出错
@@ -287,7 +297,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 ## 关联
 
 - [agent-loop](./agent-loop.md)：确认的三方等待、note 块与 grantedBy 的写入现场
-- [tools](./tools.md)：risk/concurrency 元数据的来源与 23 个内置工具清单；exec 工具的沙箱注入参数
+- [tools](./tools.md)：risk/concurrency 元数据的来源与 24 个内置工具清单；exec 工具的沙箱注入参数
 - [sandbox](./sandbox.md)：exec 沙箱 provider 的平台布局与降级链
 - [storage](./storage.md)：decided-rules 文件的磁盘布局（会话容器之外）
 - [../server/run-manager.md](../server/run-manager.md)：gate + broker 的 daemon 侧组装

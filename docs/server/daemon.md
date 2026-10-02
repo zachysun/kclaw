@@ -153,6 +153,12 @@ startMemoryScheduler({...})         记忆调度器：定时 + 跟随保底触�
 startSkillScheduler({...})          技能调度器：跟随检查消费端（默认 60s 扫一次，成功才清检查 +
                                     连败 3 次放弃；enabled:false 或 idleMinutes:0 时 sweep 直接返回，
                                     检查停留在检查表里，功能重开后继续消费，见 skills.md）
+startSkillCurator({...})            技能 curator 调度：每日本地时间过 skills.curator.hour（默认凌晨 4 点）
+                                    后首扫（lastRun 本地日期判重），标记陈旧与归档 AI 自建技能
+                                    （见 skills.md 的 curator 一节）
+HistorySearchIndex.open(search.db)  跨会话消息全文索引：bus 订阅实时写入（message → 收录、
+                                    message.truncated → 镜像截断、session.deleted → 清除），启动后
+                                    后台回填存量会话（幂等）；server 关闭时一并 close（见 tools.md）
 feishu 频道管理器启动（opt-in）     ← 仅 ~/.kclaw/feishu.json enabled 时建通道；在两个调度器之后启动，
                                     有 15s 上限——挂起的握手不拖累 daemon；失败记入管理器错误状态
                                     （IM Channel 页可见）并拆掉半启动状态，daemon 照常服务。

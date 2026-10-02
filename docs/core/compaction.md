@@ -236,11 +236,11 @@ m1  m2  m3 │ m4  m5  m6  m7 │ m8 … m12
 
 **溢出存盘指针结构化保留**：两次摘要调用之外，压缩引擎另把本次被压段里全部 `[完整输出已存盘: <路径>]` 定位行**结构性地**追加进段摘要与总摘要（对旧总摘要去重，归并继承的指针不重复记）。定位行不靠提示词自觉、由代码保证存活：压缩后全量副本仍可经 `fs_read` 读回；长内容本身永不内联进摘要，把体积搬进摘要只是换个每次请求都要付钱的地方。
 
-两次调用都使用主对话模型、不带工具、用 `collectStreamResult` 收集结果，流里 `message_done` 的真实输出 token 一并带回（总摘要 token 统计的取值来源，见"token 统计口径"）；自动路径传入取消信号（`collectStreamResult` 支持中止，信号触发时抛出、已收集的部分作废）。**两次调用全部成功之后才写任何数据**——写入动作是追加一条 `compaction` 事件（同时投影 `meta.compaction`）：摘要调用失败则本次压缩以 failed 结果作废（等价于压缩没发生，回退按全量历史继续）；事件追加失败只记日志、不回退已成功的压缩（见"边界与出错"）。手动压缩传入的重点说明以一行 `用户特别要求重点保留：{focus}` 追加到两次调用的用户消息末尾。
+两次调用的模型走**杂活通道**（与记忆提取、会话自动命名同一条）：daemon 按 `memory.extractModel` 解析——名字命中 provider 条目时走该条目自己的端点与协议，空或裸模型名回落主对话模型。解析在确认要压缩**之后**才求值（declined 路径零成本）。调用不带工具、用 `collectStreamResult` 收集结果，流里 `message_done` 的真实输出 token 一并带回（总摘要 token 统计的取值来源，见"token 统计口径"）；自动路径传入取消信号（`collectStreamResult` 支持中止，信号触发时抛出、已收集的部分作废）。**两次调用全部成功之后才写任何数据**——写入动作是追加一条 `compaction` 事件（同时投影 `meta.compaction`）：摘要调用失败则本次压缩以 failed 结果作废（等价于压缩没发生，回退按全量历史继续）；事件追加失败只记日志、不回退已成功的压缩（见"边界与出错"）。手动压缩传入的重点说明以一行 `用户特别要求重点保留：{focus}` 追加到两次调用的用户消息末尾。
 
 ### 过程可见性
 
-压缩要花数秒的模型调用，期间若不发事件，客户端看到的就是无解释的停顿。因此确定要压缩时（占用过线且边界已定）向总线发 `compaction.started`（payload 只有 `phase`，标记本次压缩属于收尾/中途/手动哪个阶段），meta 与审计写入磁盘后发 `compaction.completed`（payload 为累计段数、保留条数、phase 与 `result`）。**`started` 一旦发出，`completed` 必达**，无论接下来发生什么：成功是 `result:"ok"`；摘要调用或写入磁盘抛错是 `result:"failed"`；取消信号触发是 `result:"cancelled"`（此时 segments/kept 为 0）。budget 未过线、压缩没有开始，则两个事件都不发——客户端永远不会看到没有配对结束的开始。
+压缩要花数秒的模型调用，期间若不发事件，客户端看到的就是无解释的停顿。因此确定要压缩时（占用过线且边界已定）向总线发 `compaction.started`（payload 为 `phase` 与 `trigger`：trigger 是 `auto`/`in-run`/`manual` 三值，与审计记录同口径——手动即 manual、运行中即 in-run、其余收尾路径即 auto），meta 与审计写入磁盘后发 `compaction.completed`（payload 为累计段数、保留条数、phase、`result`、同样的 `trigger`；急救压缩成功时额外带 `emergency: true`，非 ok 结果不带这两个扩展字段）。**`started` 一旦发出，`completed` 必达**，无论接下来发生什么：成功是 `result:"ok"`；摘要调用或写入磁盘抛错是 `result:"failed"`；取消信号触发是 `result:"cancelled"`（此时 segments/kept 为 0）。budget 未过线、压缩没有开始，则两个事件都不发——客户端永远不会看到没有配对结束的开始。
 
 两个客户端都依赖这套保证。CLI 对 `completed` 按 `result` 分三支：`ok` 打一行灰字 `✱ 早期对话已压缩为 N 段，保留最近 M 条原文（早期细节可用 session_search 检索）`，`failed` 打 `✱ 压缩失败，本轮继续（稍后自动重试）`，`cancelled` 打 `✱ 压缩已取消`；`started` 打 `[正在压缩早期对话…]`。WebUI 以 `compacting` 标志驱动"正在压缩早期对话…"指示行，`completed` 无论什么 `result` 都清掉标志（必达语义让清除无条件成立），指示行上带"取消"按钮；`run.started`/`run.completed`/`run.failed` 也兼作保底清除条件（防御异常断线）。
 

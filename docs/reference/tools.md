@@ -1,4 +1,4 @@
-# tools — 内置工具清单（23 个）
+# tools — 内置工具清单（24 个）
 
 > 权威来源：`packages/core/src/tools/index.ts`（注册表：执行器与模型侧 JSON Schema 成对声明）与 `tools/` 下各实现文件（参数校验与行为）。机制见 [tools](../core/tools.md)，权限判定链见 [permissions](../core/permissions.md)。
 
@@ -21,7 +21,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - 整数参数只收整数，超出范围按上下限截取（不是报错），不传取条目标注的默认值。
 - 模型多传的未知字段一律忽略。
 
-## 常驻工具（12 个）
+## 常驻工具（13 个）
 
 每个 run 都注册（childRun 例外见下）：
 
@@ -37,6 +37,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `memory_save` | 立即把当前轮对话沉淀进长期记忆 | safe | parallel |
 | `memory_search` | 跨项目经历与全局认知的混合检索 | safe | parallel |
 | `session_search` | 全文检索本会话已被压缩的早期对话 | safe | parallel |
+| `history_search` | 全文检索全部历史会话的原始消息（含未压缩部分） | safe | parallel |
 | `skill_read` | 按名字加载一个技能的完整规程正文 | safe | parallel |
 | `skill_list` | 列出模型可见的技能（可按关键词过滤） | safe | parallel |
 
@@ -52,8 +53,9 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 - stdout 与 stderr 合并返回。
 - 输出上限由配置 `exec.maxOutputBytes` 决定（默认 100 KiB）：超限保留头部，结尾带 `...[dropped N bytes]...` 丢弃标记；配置了 spill 目录时完整输出同时写入 `<home>/spill`，返回里附一条 fs_read 定位行，模型可自己读回全量。
-- 超时由配置 `exec.timeoutMs` 决定（默认 60 秒）：到时整个进程组被 SIGKILL（shell 的子孙进程一起结束），返回错误并附带已产生的部分输出。
+- 超时由配置 `exec.timeoutMs` 决定（默认 60 秒）：到时整个进程组被 SIGKILL（shell 的子孙进程一起结束），返回错误并附带已产生的部分输出。SIGKILL 之后留 2 秒宽限等 close 事件：子进程的退出信息与管道里已缓冲的尾部输出仍被收集完才收尾（超时是出错返回，不是静默丢弃）。
 - 退出码非 0 返回错误，输出以 `exit code N` 开头。
+- 每次执行注入两个环境变量：`KCLAW_SESSION_ID`（当前会话 id）与 `KCLAW_WORKSPACE`（工作目录），供命令行工具自识别；其余环境继承 daemon 进程。
 
 ### fs_read
 
@@ -165,6 +167,20 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - 全文检索本会话已被压缩的早期对话（中文友好）。
 - 每条命中返回段摘要和匹配位置的原文片段；没有可检索内容时返回 `(无可检索内容)`。
 
+### history_search
+
+`safe` · `parallel`。与 `session_search` 互补：那个检索压缩摘要，这个检索所有会话的原始消息全文（user/assistant 的文本块，工具输出不收）。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `query` | string | 是 | 要在全部历史会话的原始消息里找什么（关键词，中文友好） |
+| `limit` | integer | 否 | 返回条数上限，范围 1–20，不传取 5 |
+| `session_id` | string | 否 | 只检索这一个会话 |
+
+- 数据面是 `~/.kclaw/search.db`（SQLite FTS5，中文按二字元切分），daemon 边收到消息边写入，消息被编辑重试截断、会话删除时同步镜像清理，启动时对缺失的旧会话补一次回填。
+- 每条命中返回原文（会话标题、角色、时间）；没有命中返回"（没有匹配的历史消息）"；数据面未组装（独立 core 场景）返回"（历史检索不可用）"。
+- 同一份数据经 HTTP `GET /search?q=` 暴露给 WebUI（见 [http-api](../server/http-api.md)）。
+
 ### skill_read
 
 `safe` · `parallel`。
@@ -214,6 +230,8 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 |------|------|------|------|
 | `task` | string | 是 | 自包含的任务描述（子会话看不到本对话的任何内容，路径、约束、定义都要写全） |
 | `label` | string | 否 | 展示用短名，出现在状态行与确认卡里 |
+| `role` | string | 否 | 角色补充说明（如"只做代码评审的审查员"），追加进子会话系统提示词的"角色补充"节，最长 2000 字符 |
+| `tools` | string[] | 否 | 工具白名单：只保留列出的内置工具（名字不存在则忽略），只收窄不放大；不传继承全部 |
 | `run_in_background` | boolean | 否 | true = 立即返回子会话 id，完成后有通知、用 subagent_collect 取结果；不传取 false（阻塞等结题） |
 
 - 子会话不能回话、不能提问、不能再派 subagent（单层委派）。

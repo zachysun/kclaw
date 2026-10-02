@@ -181,7 +181,7 @@ daemon 侧 `RunManager.cancel(sessionId)` 调 `AbortController.abort()`，循环
 ## 边界与出错
 
 - **provider 彻底失败**：`withRetry` 耗尽后 `stream()` 抛错 → 部分内容以 `stopReason:"error"` 持久化 → 悬空 tool_call 合成 `"llm call failed before execution"` 结果配对持久化（防下轮 400）→ `llm.failed` + `run.failed` → resolve（不 reject）。
-- **参数解析失败 / 未知工具**：不执行、不进入权限检查；error result（`"invalid tool args json"` / `"unknown tool: <name>"`）随 tool 消息持久化，循环继续。
+- **参数解析失败 / 未知工具**：不执行、不进入权限检查；error result（`"invalid tool args json"` / `"unknown tool: <name>"`）随 tool 消息持久化，循环继续。未知工具名会做一次相近名提示：在已注册工具名里找编辑距离 ≤2 的最近者（大小写不敏感，`closestToolName`），命中时错误文案变为 `"unknown tool: <name> (closest available: <最近名>)"`——模型拼错工具名时下一轮直接换对，不再盲猜第二次。
 - **迭代耗尽**：最后一次迭代若仍是 `tool_use`，先在该 assistant 消息上附加 `kind:"system"` 截断 note（"已达最大迭代次数（25）…"）再持久化，然后 `run.failed {code:"max_iterations"}`——用户和下一轮模型均可看到中断原因。
 - **hook 失败**：run-before 链的 fatal 抛错或持久化抛错 → `run.failed {code:"user_message_failed"}`，resolve `stopReason:"error"`；用户 hook 失败时的行为自行声明（skip 跳过 / deny 否决所在环节），失败只发 `hook.failed` 事件不伤 run（见 [hooks](./hooks.md)）。
 - **工具执行器契约**：`ToolExecutor.execute` 应吞掉一切异常返回 `{status:"error", output}`（内置工具由 `shared.ts` 的包装保证）；循环对执行器抛异常（Promise 拒绝）也统一转为 error result（保证异常也产出结果）。执行 ctx 带可选 `signal`（父 run 的中止信号）与 `onOutput`（部分输出的流式回传）。

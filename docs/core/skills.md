@@ -139,6 +139,15 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 | `skills.evolution.enabled` | `true` | 总开关。`false` 时功能完全惰性：run 收尾不排检查、调度器不消费、`skill_create` 返回固定关闭文案；已有的提案文件无论开关状态都可列表查看。非布尔值按字段回退 `false` 并警告 |
 | `skills.evolution.idleMinutes` | `10` | run 结束后到提炼检查可触发的空闲窗口分钟数，与 `memory.write.idleMinutes` 互不牵动。`0` 视为关闭延迟补查（此时只剩 `skill_create` 一条提案路径）。负数/非整数按字段回退默认并警告 |
 
+`KclawConfig.skills.curator`（可选节，curator 巡检，见上文"curator：老化的下半场"）：
+
+| 字段 | 默认 | 说明 |
+|------|------|------|
+| `skills.curator.enabled` | `true` | curator 总开关；`false` 时既不扫描也不归档，已归档的技能不自动恢复 |
+| `skills.curator.staleDays` | `14` | 闲置多少天后在 `state.json` 标记陈旧 |
+| `skills.curator.archiveDays` | `30` | 闲置多少天后把技能目录移动进 `.archive/` |
+| `skills.curator.hour` | `4` | 每日巡检的本地小时（过了该点且今天未跑则执行） |
+
 ### 提炼时机
 
 两条路径，共同点是都只产生提案文件、不碰生效技能：
@@ -210,6 +219,21 @@ interface SkillProposal {
 
 口径 = `appliedAt` 之后全部会话事件流里 `skill_read` 的 `tool_call` 块（`args.name` 等于提案技能名）的次数。`skill_list` 是发现通道不计入使用；用户 `/记号` 点名经隐式包装最终也落到 `skill_read`（见上文"技能调用与隐式包装"），天然计入。现算不建索引、不持久化——个人 daemon 的会话规模下列表页现算可接受。
 
+提案列表的现算计数之外，curator 还维护一份**持久的**使用记录（见下节）：`~/.kclaw/skills/.curator/usage.json`（0600），`skill_read` 每次命中按 `global:<名字>` / `project:<名字>` 记 count 与 lastUsedAt，写入尽力而为、失败静默（遥测永远不变成工具错误）。
+
+### curator：老化的下半场（闲时巡检）
+
+提案制管生（`skill_create` → 提案 → apply），curator 管老：模型自建的技能若长期没人用，自动走"标记陈旧 → 归档"两步，不需要用户记得清理。实现分两层：核心扫描在 `core/src/skills/curator.ts`（纯函数 `curateGlobalSkills`），调度宿主在 `server/src/skill-curator.ts`（每日一次）。
+
+- **调度**：本地时间过了 `skills.curator.hour`（默认凌晨 4 点）且今天未跑过则执行；daemon 凌晨没开则开机后首个扫描节拍补跑。上次运行日期存 `<skillsDir>/.curator/lastRun`（本地日期判重）。只扫**全局**技能目录——项目技能跟着仓库走、归用户管。
+- **资格刻意收窄**：只动 **agent 自建**的技能（`.proposals/` 里 applied 的 `kind:"new"` 提案名，或 SKILL.md frontmatter 显式 `agent-created: true`）。用户手写的技能、复用链接（指向外部源目录的软链接）、frontmatter `pinned: true` 的技能永不触碰。
+- **闲置时长**：`usage.json` 里该技能的 lastUsedAt；从没被用过则取技能目录的 mtime（建目录时间）。`idleDays = 距今的天数`。
+- **两步老化**：闲置 ≥ `staleDays`（默认 14）→ `state.json` 记 `staleSince`（纯标记，SKILL.md 不改写，模型看到的东西零变化）；闲置 ≥ `archiveDays`（默认 30）→ 技能目录**移动**到 `<skillsDir>/.archive/<名字>-<时间戳>/`。是移动不是删除：恢复 = `mv` 回来。扫描器忽略点目录，归档即刻从所有清单消失而文件都在盘上。归档时同步清理指向旧位置的复用链接（连同 `.links.json` 里的记录）。
+- **曾经闲置又复用**：lastUsedAt 变新后 idleDays 回落，`state.json` 里的 stale 标记自动清除。
+- **失败不致命**：单个技能归档失败记日志继续扫下一个；扫描整体由调度宿主接住，curator 出错不影响 daemon。
+
+配置节 `skills.curator`（默认全开，见下文配置表）。
+
 ### skill_create 工具
 
 `skill_create {name, content, rationale?}`（`tools/skills.ts`）：模型在对话中把经验当场固化为提案的入口，`safe` + `parallel`（提案文件是 `writeFileAtomic` 原子写的独立文件，同名冲突由随机后缀化解，并发调用安全）。只在 daemon 组装了技能进化系统时注册（run 组装传入 `skillCreate` 选项；裸引擎测试不传）；`enabled: false` 时工具仍在、调用返回固定关闭文案（"技能提案未开启…"）。`name` 不过 `isSkillDirName`、`content` 超 64KB、目标是复用链接技能均报错。**kind/scope 由系统推导，模型不给这两个参数**：项目副本命中 → `project` + 当前会话 workdir（缺失回退 daemon workspace）；仅全局命中 → `global`；未装 → `new` + `project`（影响面小的方向）。已装目标自动定 `revise` 并带 `baseline`。写提案文件 + 审计事件，回复`技能提案已登记（<id>，新增|修订 · 全局|项目落点）：尚未生效，待用户在 WebUI 审阅确认`，不谎报生效。
@@ -266,7 +290,7 @@ interface SkillEvent {
 
 ## 关联
 
-- [tools](./tools.md)：`skill_read` / `skill_list` / `skill_create` 在 23 个内置工具里的位置与注册
+- [tools](./tools.md)：`skill_read` / `skill_list` / `skill_create` 在 24 个内置工具里的位置与注册
 - [hooks](./hooks.md)：`skill-wrap` 内置 hook（`llm-before` 位置的指定包装）、`skill-follow-check`（`run-after` 的提炼粗查）与 `withLastUserText`
 - [agent-loop](./agent-loop.md)：`llm-before` 位置在循环里的触发时机
 - [run-manager](../server/run-manager.md)：系统提示词组装（基础 + 认知 + 技能清单）、技能目录每 run 扫描

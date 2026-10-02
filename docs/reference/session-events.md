@@ -23,7 +23,7 @@ export type SessionEvent =
 | 类型 | 字段 |
 |------|------|
 | `session.created` | `at`、`title`、`workdir?`、`jobId?`、`mode?`（创建时固化的权限模式快照，旧流默认 default）、`parentSessionId?`（subagent 派生关系） |
-| `session.renamed` | `at`、`title` |
+| `session.renamed` | `at`、`title`、`source?`（auto=自动命名，缺省 manual） |
 | `session.deleted` | `at` |
 | `session.restored` | `at` |
 | `session.set` | `at`、`model?`、`mode?`、`disposition?`（键出现才发） |

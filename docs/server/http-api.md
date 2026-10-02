@@ -227,6 +227,14 @@ interface Job {
 
 `/fs/browse` 与 `/fs/files` 的出错是三态 400：`path does not exist: <path>`、`not a directory: <path>`、`cannot read directory: <path>`。这两个端点能列出本机任意目录——浏览端点的设计目的就是允许把工作目录设在任何地方，防线只有与其他 API 相同的 Bearer 鉴权；文件清单端点限制在工作区内（`workdir` 必须是目录），但同样不校验目录归属。用量数据记录在一张 SQLite 表里，数据来源见 [storage](../core/storage.md) 的用量记录一节。
 
+### 检索（routes/search.ts，仅当注入 `historySearch` 时注册）
+
+跨会话原始消息的全文检索（`history_search` 工具同源数据面的人类窗口，机制见 [tools](../core/tools.md) 的 history 工具一节）。未组装检索后端（独立 app/测试）时 503 `history search unavailable`。
+
+| 方法 | 路径 | 用途 | 请求 | 响应 |
+|------|------|------|------|------|
+| GET | `/search` | 全文检索全部历史会话的原始消息（user/assistant 文本块；回收站与已清除会话的命中被过滤） | query `q` 必填非空（否则 400 `query parameter q is required`）；`limit` 可选整数 1–20（默认 10，越界/非整数 400）；`sessionId` 可选非空字符串，收窄到单个会话 | `{hits: [{sessionId, title, role, at, excerpt}]}`——title 为会话标题，excerpt 为命中消息的原文；按 bm25 相关度排序 |
+
 ### MCP 管理
 
 所有动作端点都显式带组定位：`group` 为 `"global"` 或项目工作目录路径，缺失或形状非法 400（`group is required ("global" or a project workdir path)`）、未知组 404。跨组允许同名，组内才查重。
