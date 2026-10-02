@@ -25,6 +25,7 @@ export const SUBAGENT_RUN_DESCRIPTION = [
   "Dispatch a subagent: an independent short-lived agent session that executes ONE task autonomously and returns its final answer as this tool's result.",
   "Use it for context-heavy work (codebase sweeps, research, multi-step verification) so the process never floods this conversation; the child cannot talk back, ask questions, or spawn further subagents.",
   "Issue several subagent_run calls in one batch to run independent tasks in parallel. `task` must be self-contained: the child sees nothing of this conversation, so include every path, constraint and definition it needs. `label` is a short display name.",
+  "Optionally specialize the child: `role` appends a per-task identity to its system prompt, and `tools` restricts its toolset (read-only exploration: ['fs_read','fs_list','fs_edit'] without fs_write/exec — a narrower toolset never widens permissions).",
   "For long-running tasks set run_in_background: true — the call returns the child session id immediately and keeps this conversation free; a completion notice arrives as a message here, and subagent_collect fetches the full answer afterwards.",
 ].join(" ")
 
@@ -38,10 +39,12 @@ export function createSubagentTool(spawner: SubagentSpawner, parentSessionId: st
     risk: "safe",
     concurrency: "parallel",
     async execute(args, ctx) {
-      const { task, label, run_in_background } = (args ?? {}) as {
+      const { task, label, run_in_background, role, tools } = (args ?? {}) as {
         task?: unknown
         label?: unknown
         run_in_background?: unknown
+        role?: unknown
+        tools?: unknown
       }
       if (typeof task !== "string" || task.trim() === "") {
         return { status: "error", output: "invalid args: task must be a non-empty string" }
@@ -52,10 +55,19 @@ export function createSubagentTool(spawner: SubagentSpawner, parentSessionId: st
       if (run_in_background !== undefined && typeof run_in_background !== "boolean") {
         return { status: "error", output: "invalid args: run_in_background must be a boolean" }
       }
+      if (role !== undefined && (typeof role !== "string" || role.trim() === "")) {
+        return { status: "error", output: "invalid args: role must be a non-empty string" }
+      }
+      if (tools !== undefined && (!Array.isArray(tools) || tools.some((t) => typeof t !== "string" || t.trim() === ""))) {
+        return { status: "error", output: "invalid args: tools must be an array of non-empty tool names" }
+      }
+      const allowList = Array.isArray(tools) ? tools.map((t) => (t as string).trim()).slice(0, 40) : undefined
       const req: SubagentSpawnRequest = {
         parentSessionId,
         task,
         ...(label === undefined ? {} : { label }),
+        ...(role === undefined ? {} : { role: (role as string).trim().slice(0, 2000) }),
+        ...(allowList === undefined || allowList.length === 0 ? {} : { toolAllow: allowList }),
         ...(run_in_background === true ? { background: true } : {}),
         // The abort signal only rides blocking dispatches: a background
         // child's lifecycle attaches to the parent SESSION, so ending or

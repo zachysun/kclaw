@@ -17,6 +17,7 @@ import { createExecTool, type ExecSandboxSpawn } from "./exec.js"
 import { createFsTools } from "./fs.js"
 import { createMemoryTools } from "./memory.js"
 import { createSessionTools, type SessionSearchFn } from "./session.js"
+import { createHistoryTool, HISTORY_SEARCH_DESCRIPTION, type HistorySearchFn } from "./history.js"
 import { createSkillTools, SKILL_CREATE_DESCRIPTION, SKILL_LIST_DESCRIPTION, SKILL_READ_DESCRIPTION } from "./skills.js"
 import { createSubagentTool, createSubagentCollectTool, SUBAGENT_RUN_DESCRIPTION, SUBAGENT_COLLECT_DESCRIPTION } from "./subagent.js"
 import type { SubagentCollector } from "../agent/subagent.js"
@@ -28,6 +29,7 @@ export { createExecTool, truncateMiddle } from "./exec.js"
 export { createFsTools } from "./fs.js"
 export { createMemoryTools } from "./memory.js"
 export { createSessionTools, type SessionSearchFn } from "./session.js"
+export { createHistoryTool, HISTORY_SEARCH_DESCRIPTION, type HistorySearchFn } from "./history.js"
 export { searchSessionEvents, type SessionHit } from "./session-search.js"
 export { createSkillTools, SKILL_READ_DESCRIPTION } from "./skills.js"
 export { createSubagentTool, createSubagentCollectTool, SUBAGENT_RUN_DESCRIPTION, SUBAGENT_COLLECT_DESCRIPTION } from "./subagent.js"
@@ -55,10 +57,20 @@ export function createBuiltinTools(opts: {
   memoryCtx: { system: Pick<MemoryTriggers, "triggerImmediate"> & Pick<MemoryQuery, "searchAll">; sessionId: string; workdir: string; immediateEnabled: boolean }
   tavilyApiKey: string
   exec?: Partial<{ timeoutMs: number; maxOutputBytes: number; sandbox: ExecSandboxSpawn; spillDir: string }>
+  /**
+   * Session identity injected into the exec child environment
+   * (KCLAW_SESSION_ID / KCLAW_WORKSPACE). Absent = exec inherits the daemon
+   * environment unchanged.
+   */
+  sessionId?: string
   web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean; spillDir: string }>
   sessionSearch?: SessionSearchFn
+  /** 跨会话原始消息检索（history_search 的数据面）；缺省返回固定不可用文案。 */
+  historySearch?: HistorySearchFn
   /** Skills scanned for this run (progressive disclosure's on-demand half). */
   skills?: SkillRecord[]
+  /** skill_read 使用遥测（curator 生命数据）；缺省不记。 */
+  recordSkillUse?: (name: string, origin: "global" | "project") => void
   /**
    * skill_create（提案制技能进化）的模型面：在位才注册该工具。daemon 组装
    * 时传（enabled 随 config；propose 指向 skillsEvolution 的提案面）；裸引擎
@@ -105,6 +117,9 @@ export function createBuiltinTools(opts: {
     // actually available — single source with the gate's sandboxedTools set.
     sandbox: opts.exec?.sandbox,
     spillDir: opts.exec?.spillDir,
+    ...(opts.sessionId === undefined
+      ? {}
+      : { env: { KCLAW_SESSION_ID: opts.sessionId, KCLAW_WORKSPACE: opts.workspace } }),
   })
   const fs = createFsTools({ workspace: opts.workspace })
   const web = createWebTools({
@@ -116,7 +131,8 @@ export function createBuiltinTools(opts: {
   })
   const memory = createMemoryTools(opts.memoryCtx)
   const session = createSessionTools(opts.sessionSearch)
-  const skill = createSkillTools(opts.skills ?? [], opts.skillCreate)
+  const history = createHistoryTool(opts.historySearch)
+  const skill = createSkillTools(opts.skills ?? [], opts.skillCreate, opts.recordSkillUse)
 
   const entries: Array<{ name: string; tool: ToolExecutor; def: ToolDefinition }> = [
     {
@@ -227,6 +243,20 @@ export function createBuiltinTools(opts: {
       ),
     },
     {
+      name: "history_search",
+      tool: history.history_search,
+      def: def(
+        "history_search",
+        HISTORY_SEARCH_DESCRIPTION,
+        {
+          query: str("要在全部历史会话的原始消息里找什么（关键词，中文友好）"),
+          limit: int(1, 20),
+          session_id: str("可选：只检索这一个会话"),
+        },
+        ["query"],
+      ),
+    },
+    {
       name: "skill_read",
       tool: skill.skill_read,
       def: def("skill_read", SKILL_READ_DESCRIPTION, { name: str("要加载哪个技能（目录名，见系统提示词的可用技能列表，或用 skill_list 查询）") }, ["name"]),
@@ -277,6 +307,8 @@ export function createBuiltinTools(opts: {
           task: str("Self-contained task description — the child sees nothing of this conversation"),
           label: str("Short display name shown in status lines and confirmation cards"),
           run_in_background: { type: "boolean", description: "True = return the child session id immediately; the completion notice arrives later and subagent_collect fetches the answer (default false = wait for the result here)" },
+          role: str("Optional role supplement for the child's system prompt: who it is for THIS task (e.g. '只读代码侦探，定位调用链'). Plain text, a few sentences at most"),
+          tools: { type: "array", items: { type: "string" }, description: "Optional tool allowlist for the child (exact tool names, e.g. ['fs_read','fs_list']). Narrowing only — omitted tools vanish from the child. Empty/absent = the child gets the full default surface" },
         },
         ["task"],
       ),

@@ -241,6 +241,8 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
           trigger: "agent",
           disposition: "wait",
           ...(parent.model !== undefined && parent.model !== "" ? { model: parent.model } : {}),
+          ...(req.role === undefined ? {} : { subagentRole: req.role }),
+          ...(req.toolAllow === undefined ? {} : { subagentToolAllow: req.toolAllow }),
         })
         void submitted.outcome
           .then((outcome) => deliverCompletion(req.parentSessionId, child.id, who, req.task, outcome))
@@ -283,6 +285,8 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
         // The parent's session-level model override rides along (resolved the
         // same way a mainline run resolves it).
         ...(parent.model !== undefined && parent.model !== "" ? { model: parent.model } : {}),
+        ...(req.role === undefined ? {} : { subagentRole: req.role }),
+        ...(req.toolAllow === undefined ? {} : { subagentToolAllow: req.toolAllow }),
       }).outcome
       return shapeResult(outcome, child.id, who)
     } catch (err) {
