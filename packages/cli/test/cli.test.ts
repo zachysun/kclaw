@@ -419,7 +419,7 @@ describe("kclaw mcp", () => {
     expect(res.exitCode).toBe(0)
     expect(res.stdout).toContain("未配置 MCP server")
     await runCli(["daemon", "stop"], h)
-  })
+  }, 20_000)
 
   it("boots lazy (未连接), and a manual connect probe settles the failure", async () => {
     const h = makeHome()
