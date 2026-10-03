@@ -25,8 +25,8 @@ export function createHistoryTool(search?: HistorySearchFn): { "history_search":
   const history_search = makeTool("history_search", "safe", "parallel", async (args) => {
     const query = requireString(args, "query")
     const limit = optInt(args, "limit", DEFAULT_LIMIT, 1, MAX_LIMIT)
-    const rawSession = (args as { sessionId?: unknown } | undefined)?.sessionId
-    if (rawSession !== undefined && typeof rawSession !== "string") throw new ToolError("sessionId 必须是字符串")
+    const rawSession = (args as { session_id?: unknown } | undefined)?.session_id
+    if (rawSession !== undefined && typeof rawSession !== "string") throw new ToolError("session_id 必须是字符串")
     if (search === undefined) return { status: "ok", output: "(历史检索不可用)" }
     try {
       const hits = await search(query, { limit, ...(typeof rawSession === "string" && rawSession !== "" ? { sessionId: rawSession } : {}) })

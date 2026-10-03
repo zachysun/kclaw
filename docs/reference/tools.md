@@ -175,11 +175,10 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 |------|------|------|------|
 | `query` | string | 是 | 要在全部历史会话的原始消息里找什么（关键词，中文友好） |
 | `limit` | integer | 否 | 返回条数上限，范围 1–20，不传取 5 |
-| `session_id` | string | 否 | 只检索这一个会话（见下方已知缺陷） |
+| `session_id` | string | 否 | 只检索这一个会话 |
 
 - 数据面是 `~/.kclaw/search.db`（SQLite FTS5，中文按二字元切分），daemon 边收到消息边写入，消息被编辑重试截断、会话删除时同步镜像清理，启动时对缺失的旧会话补一次回填。
 - 每条命中一行原文（会话标题、角色、时间，行尾带 `（session: <会话id>）`）；没有命中返回 `(没有匹配的历史消息)`；数据面未组装（独立 core 场景）返回 `(历史检索不可用)`。
-- 已知缺陷：schema 声明的是蛇形 `session_id`，执行器当前读的是驼峰 `sessionId`，按 schema 传参时该过滤不生效（检索本身正常，只是不收窄）。修复前不要依赖这个参数；修复后删除本条。
 - 同一份数据经 HTTP `GET /search?q=` 暴露给 WebUI（见 [http-api](../server/http-api.md)）。
 
 ### skill_read
