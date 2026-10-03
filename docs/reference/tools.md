@@ -231,7 +231,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `task` | string | 是 | 自包含的任务描述（子会话看不到本对话的任何内容，路径、约束、定义都要写全） |
 | `label` | string | 否 | 展示用短名，出现在状态行与确认卡里 |
 | `role` | string | 否 | 角色补充说明（如"只做代码评审的审查员"），追加进子会话系统提示词的"角色补充"节，最长 2000 字符 |
-| `tools` | string[] | 否 | 工具白名单：只保留列出的工具（内置与 MCP 适配器工具都在收窄范围内，白名单外的名字忽略），只收窄不放大；不传继承全部 |
+| `tools` | string[] | 否 | 工具白名单：只保留列出的工具（内置与 MCP 适配器工具都会被过滤，白名单外的名字忽略），只能减少不能增加；不传继承全部 |
 | `run_in_background` | boolean | 否 | true = 立即返回子会话 id，完成后有通知、用 subagent_collect 取结果；不传取 false（阻塞等结题） |
 
 - 子会话不能回话、不能提问、不能再派 subagent（单层委派）。

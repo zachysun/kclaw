@@ -226,7 +226,7 @@ interface SkillProposal {
 提案制管生（`skill_create` → 提案 → apply），curator 管老：模型自建的技能若长期没人用，自动走"标记陈旧 → 归档"两步，不需要用户记得清理。实现分两层：核心扫描在 `core/src/skills/curator.ts`（纯函数 `curateGlobalSkills`），调度宿主在 `server/src/skill-curator.ts`（每日一次）。
 
 - **调度**：本地时间过了 `skills.curator.hour`（默认凌晨 4 点）且今天未跑过则执行；daemon 凌晨没开则开机后首个扫描节拍补跑。上次运行日期存 `<skillsDir>/.curator/lastRun`（本地日期判重）。只扫**全局**技能目录——项目技能跟着仓库走、归用户管。
-- **资格刻意收窄**：只动 **agent 自建**的技能（`.proposals/` 里 applied 的 `kind:"new"` 提案名，或 SKILL.md frontmatter 显式 `agent-created: true`）。用户手写的技能、复用链接（指向外部源目录的软链接）、frontmatter `pinned: true` 的技能永不触碰。
+- **资格刻意限定**：只动 **agent 自建**的技能（`.proposals/` 里 applied 的 `kind:"new"` 提案名，或 SKILL.md frontmatter 显式 `agent-created: true`）。用户手写的技能、复用链接（指向外部源目录的软链接）、frontmatter `pinned: true` 的技能永不触碰。
 - **闲置时长**：`usage.json` 里该技能的 lastUsedAt；从没被用过则取技能目录的 mtime（目录内容最后一次变动的时间）。`idleDays = 距今的天数`。
 - **两步老化**：闲置 ≥ `staleDays`（默认 14）→ `state.json` 记 `staleSince`（纯标记，SKILL.md 不改写，模型看到的东西零变化）；闲置 ≥ `archiveDays`（默认 30）→ 技能目录**移动**到 `<skillsDir>/.archive/<名字>-<时间戳>/`。是移动不是删除：恢复 = `mv` 回来。扫描器忽略点目录，归档即刻从所有清单消失而文件都在盘上。归档时同步清理指向旧位置的复用链接（连同 `.links.json` 里的记录）。
 - **曾经闲置又复用**：lastUsedAt 变新后 idleDays 重新变小，`state.json` 里的 stale 标记自动清除。

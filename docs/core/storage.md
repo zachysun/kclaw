@@ -63,7 +63,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `permissions.sessionGrants` | `true` | 会话内「仅本次允许」的记忆是否生效（run 级，见 [permissions](./permissions.md) 第 11 节） |
 | `permissions.autoLearnThreshold` | `3` | auto 模式的归纳阈值：同一操作被连续 `once` 批准多少次后，自动保存为项目档规则；`0` 关闭归纳（auto 模式的判定链保留） |
 | `permissions.defaultMode` | `"default"` | 新会话的初始权限模式。daemon 创建的新会话（HTTP `POST /sessions` 与定时任务调度建会话）在创建时固化为 `meta.mode`；改这个值只影响之后新建的会话。非法值回退到 `"default"` 并告警 |
-| `permissions.sensitiveFiles` | 引擎默认名单 | 敏感文件 glob 名单（命中即转人工确认，见 [permissions](./permissions.md) 第 12 节）：`.env`、`.env.*`、`*.env`、`*.pem`、`*.key`、`id_rsa*`、`id_ed25519*`、`*.p12`、`*.pfx`、`*.kdbx`、`credentials*.json`；设置时**整体替换**默认名单 |
+| `permissions.sensitiveFiles` | 引擎默认名单 | 敏感文件 glob 名单（命中即转人工确认，见 [permissions](./permissions.md) 第 12 节）：`.env`、`.env.*`、`*.env`、`*.pem`、`*.key`、`id_rsa`/`id_rsa.*`、`id_ed25519`/`id_ed25519.*`、`*.p12`、`*.pfx`、`*.kdbx`、`credentials.json`、`credentials*.json`；设置时**整体替换**默认名单 |
 | `memory.write.{immediate, manual, intervalMinutes, idleMinutes}` | `true` / `true` / `30` / `10` | 记忆写入的触发开关（五个触发器：immediate/manual/clear/interval/follow；clear 挂在 `POST /sessions` 上，无独立开关）：immediate = `memory_save` 工具当场触发；manual = 手动触发开关（`/memory save`（CLI/web）走 `POST /memory/trigger-manual`，为 `false` 时该路由返回 400）；intervalMinutes = 定时保底间隔（0 关闭）；idleMinutes = 跟随触发的空闲分钟数（0 关闭）。完整语义见 [memory](./memory.md) |
 | `memory.extractModel` / `threadInactiveDays` / `consolidate` / `consolidateHour` | `""` / `14` / `true` / `3` | 提取/沉淀用的模型（空则回退到主对话模型）、主题线闲置多少天自动转 inactive、沉淀开关、夜间闲时沉淀的本地小时（负值关闭） |
 | `memory.embedding.{provider, model}` | `""` / `""` | 向量检索：`model` 为空则向量这条路整体关闭（只用 BM25 关键词检索）；provider 为空回退到 default 条目 |

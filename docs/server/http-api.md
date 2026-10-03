@@ -233,7 +233,7 @@ interface Job {
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
-| GET | `/search` | 全文检索全部历史会话的原始消息（user/assistant 文本块；回收站与已清除会话的命中被过滤） | query `q` 必填非空（否则 400 `query parameter q is required`）；`limit` 可选整数 1–20（默认 10，越界/非整数 400）；`sessionId` 可选非空字符串，收窄到单个会话 | `{hits: [{sessionId, title, role, at, excerpt}]}`——title 为会话标题，excerpt 为命中消息的原文；按 bm25 相关度排序 |
+| GET | `/search` | 全文检索全部历史会话的原始消息（user/assistant 文本块；回收站与已清除会话的命中被过滤） | query `q` 必填非空（否则 400 `query parameter q is required`）；`limit` 可选整数 1–20（默认 10，越界/非整数 400）；`sessionId` 可选非空字符串，限定到单个会话 | `{hits: [{sessionId, title, role, at, excerpt}]}`——title 为会话标题，excerpt 为命中消息的原文；按 bm25 相关度排序 |
 
 ### MCP 管理
 

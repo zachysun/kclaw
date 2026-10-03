@@ -121,7 +121,7 @@ export function makeTool<N extends string>(
 
 ### history 工具（`tools/history.ts`）
 
-**history_search** `{query, limit?, session_id?}`：全文检索**全部历史会话**的原始消息（user/assistant 的文本块；工具输出与 note 不收），与 session_search 互补——那个找本会话被压缩的摘要段，这个找任何会话的原文（包括从未压缩的近期消息）。数据面是 `~/.kclaw/search.db`（SQLite FTS5 全文索引，中文按二字元切分，机制见 [storage](./storage.md)）；server 注入 `historySearch` 检索函数，缺席时工具仍注册、返回固定不可用文案（与 session_search 同一套路）。每条命中一行原文（带会话标题、角色、时间），`limit` 默认 5、最大 20，`session_id` 可选收窄到单个会话。safe + parallel。同一份数据经 HTTP `GET /search?q=` 暴露给 WebUI（见 [http-api](../server/http-api.md)）。
+**history_search** `{query, limit?, session_id?}`：全文检索**全部历史会话**的原始消息（user/assistant 的文本块；工具输出与 note 不收），与 session_search 互补——那个找本会话被压缩的摘要段，这个找任何会话的原文（包括从未压缩的近期消息）。数据面是 `~/.kclaw/search.db`（SQLite FTS5 全文索引，中文按二字元切分，机制见 [storage](./storage.md)）；server 注入 `historySearch` 检索函数，缺席时工具仍注册、返回固定不可用文案（与 session_search 同一套路）。每条命中一行原文（带会话标题、角色、时间），`limit` 默认 5、最大 20，`session_id` 可选限定到单个会话。safe + parallel。同一份数据经 HTTP `GET /search?q=` 暴露给 WebUI（见 [http-api](../server/http-api.md)）。
 
 ### skill 工具（`tools/skills.ts`）
 
@@ -139,7 +139,7 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 
 ### subagent 工具（`tools/subagent.ts`）
 
-**subagent_run** `{task, label?, role?, tools?, run_in_background?}`：派一个 subagent 执行一段自包含任务，默认阻塞等待其结题答复作为工具结果（完整机制、生命周期与结果整形见 [subagents](./subagents.md)）。执行器是薄壳：校验 `task` 非空字符串、`label` 与 `run_in_background` 为相应类型、`role` 非空字符串（trim 后截 2000 字符）、`tools` 为字符串数组（元素 trim 后不得为空串，空串或非字符串整次报错；超过 40 个截取前 40）后调一次 spawner，会话创建/run 提交/状态转发都在 server 侧实现。`role` 是给子会话的角色补充（如"只做代码评审的审查员"），追加进子会话系统提示词；`tools` 是工具白名单，只收窄子会话的工具面、不放大（白名单外的名字忽略）。`run_in_background: true` 时派发立即返回子会话 id（不阻塞父 run，生命周期挂到父**会话**而不是父 run，父 run 结束或中止不会取消它），subagent 完成后结题报告自动投递回父会话、开启新一轮分析（投递被拒时降级为通知；机制见 [subagents](./subagents.md)），`subagent_collect` 作按需取答复的补充手段。`risk: "safe"`：派出动作本身不碰敏感资源，子 run 自己的工具调用照常过自己的权限门；`concurrency: "parallel"`：一批多个 `subagent_run` 并发执行即并行路径。subagent 的 `childSessionId` 经结果的 `data` 字段随块持久化（web 的"查看 subagent 审计"链接读它）。
+**subagent_run** `{task, label?, role?, tools?, run_in_background?}`：派一个 subagent 执行一段自包含任务，默认阻塞等待其结题答复作为工具结果（完整机制、生命周期与结果整形见 [subagents](./subagents.md)）。执行器是薄壳：校验 `task` 非空字符串、`label` 与 `run_in_background` 为相应类型、`role` 非空字符串（trim 后截 2000 字符）、`tools` 为字符串数组（元素 trim 后不得为空串，空串或非字符串整次报错；超过 40 个截取前 40）后调一次 spawner，会话创建/run 提交/状态转发都在 server 侧实现。`role` 是给子会话的角色补充（如"只做代码评审的审查员"），追加进子会话系统提示词；`tools` 是工具白名单，只减少子会话可用的工具、不会增加（白名单外的名字忽略）。`run_in_background: true` 时派发立即返回子会话 id（不阻塞父 run，生命周期挂到父**会话**而不是父 run，父 run 结束或中止不会取消它），subagent 完成后结题报告自动投递回父会话、开启新一轮分析（投递被拒时降级为通知；机制见 [subagents](./subagents.md)），`subagent_collect` 作按需取答复的补充手段。`risk: "safe"`：派出动作本身不碰敏感资源，子 run 自己的工具调用照常过自己的权限门；`concurrency: "parallel"`：一批多个 `subagent_run` 并发执行即并行路径。subagent 的 `childSessionId` 经结果的 `data` 字段随块持久化（web 的"查看 subagent 审计"链接读它）。
 
 **subagent_collect** `{childSessionId}`：按子会话 id 取回后台 subagent 的最终结题答复（头尾截断，与阻塞结果同一形状）。只能取**本会话**派出的 subagent——collector 校验 `parentSessionId` 归属，别人的 subagent 与未知 id 都是 error 结果。`risk: "safe"`、`concurrency: "parallel"`。
 
