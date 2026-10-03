@@ -23,6 +23,7 @@ kclaw 在这个过程中只扮演 MCP **客户端**：它去调用别人的 serv
 - **热方法换新状态对象**：新增、改配置、启停与换组（`addServer`/`updateServer`/`setEnabled`）都会为该条目造一个全新的状态对象、把旧对象整体废弃（旧对象上的进行中的连接回调、重连定时器全部短路），保证旧配置的回调永远不会落到新配置的状态上；`removeServer` 断开并直接遗忘，不留新对象。两个例外：`connect` 只是对同一个状态对象取消挂着的退避定时器后发起一次连接，不换对象；`updateServer` 同组且配置一字未改时是无操作（活连接原样保留，与对账跳过 deep-equal 条目同一语义）。
 - **每个 run 开始时重新求值工具视图**：daemon 交给 RunManager 的是一个函数（`extraTools: (workdir) => mcpManager.toolsFor(workdir)`），每轮 run 开始时才求值，且入参是该会话的工作目录。某个 server 在两轮 run 之间上线或掉线（或被热方法改了配置），下一轮请求立刻反映最新情况，不用重启 daemon。
 - **工具名加前缀，避免冲突**：来自 MCP 的工具统一命名为 `mcp__<server>__<tool>`（例如 `mcp__filesystem__read_file`）。同一项目的视图内名字唯一（同名已被遮蔽规则消解）；不同项目可以有同名 server——它们出现在不同项目的工具面里，互不见面。与内置工具撞名时，适配器的实现覆盖内置的那个，并打一行日志说明。经 API 新增的 server 名字限定为字母、数字、下划线和连字符（名字会进模型可见的工具名）。
+- **stdio 子进程的 stderr 与 daemon 隔离**：MCP SDK 默认让子进程继承 daemon 的 stderr（前台是终端、respawn 后是 /dev/null）——server 的诊断输出会直接漏进 daemon 的输出流，还长期攥着 daemon 的文件描述符。daemon 组装时传入日志目录（`<home>/logs/mcp`），stdio 传输改用管道并把 stderr 抽干写入 `<日志目录>/<server 名>.log`（0600，封顶 1 MB（1,000,000 字节），每次连接重新打开文件（重连即截断重写，不会跨重连无限增长），写满即停笔但继续抽干，防管道缓冲塞死子进程；文件描述符随流关闭释放）。没传日志目录（独立 core 场景）时 stderr 直接丢弃（`"ignore"`），同样不进 daemon 的输出流。失败全程静默——这是诊断通道，不是连接的一部分。
 - **权限与调度一律按最保守处理**：kclaw 看不到外部工具内部做了什么，所以把它们的每个工具都标记为 `"sensitive"`（每次调用都经过权限网关，默认要人工确认）和 `"serial"`（不与其他工具并发执行）——宁可多打扰用户，也不放开。
 
 ---
@@ -112,6 +113,7 @@ export class McpManager {
     sweepIntervalMs?: number      // 默认 60_000，后台扫描周期
     maxConnections?: number       // 默认 64，活连接上限
     maxReconnectAttempts?: number // 默认 10，退避重试上限
+    stderrLogDir?: string         // stdio server 的 stderr 日志目录（daemon 传 <home>/logs/mcp，见上文）；缺席时 stderr 直接丢弃
     onError?(group: string, name: string, error: string): void
     persist?(group: string, servers: Record<string, McpServerConfig>): void
     // persist：热方法改配置后的持久化回调，携带变更的组 + 该组完整条目集。

@@ -94,7 +94,7 @@ describe("Compactor 调度状态机", () => {
     const history = seedHistory(sessions, session.id)
     const { compactor, config, llm } = await setup(sessions)
 
-    expect(compactor.background(session.id, history, config, llm.client, "m")).toBe(true)
+    expect(compactor.background(session.id, history, config, () => ({ llm: llm.client, model: "m" }))).toBe(true)
     expect(compactor.hasInFlight(session.id)).toBe(true)
     expect(compactor.parked(session.id)).toBe(false)
 
@@ -115,14 +115,14 @@ describe("Compactor 调度状态机", () => {
     const history = seedHistory(sessions, session.id)
     const { compactor, config, llm } = await setup(sessions)
 
-    expect(compactor.background(session.id, history, config, llm.client, "m")).toBe(true)
-    expect(compactor.background(session.id, history, config, llm.client, "m")).toBe(false)
+    expect(compactor.background(session.id, history, config, () => ({ llm: llm.client, model: "m" }))).toBe(true)
+    expect(compactor.background(session.id, history, config, () => ({ llm: llm.client, model: "m" }))).toBe(false)
 
     llm.release()
     await vi.waitFor(() => expect(llm.calls.filter(isSummaryCall).length).toBeGreaterThanOrEqual(2))
     llm.release()
     await vi.waitFor(() => expect(compactor.parked(session.id)).toBe(true))
-    expect(compactor.background(session.id, history, config, llm.client, "m")).toBe(false)
+    expect(compactor.background(session.id, history, config, () => ({ llm: llm.client, model: "m" }))).toBe(false)
   })
 
   it("取消标记压制后台压缩；清除后恢复", async () => {
@@ -132,9 +132,9 @@ describe("Compactor 调度状态机", () => {
     const { compactor, config, llm } = await setup(sessions)
 
     compactor.cancel(session.id)
-    expect(compactor.background(session.id, history, config, llm.client, "m")).toBe(false)
+    expect(compactor.background(session.id, history, config, () => ({ llm: llm.client, model: "m" }))).toBe(false)
     compactor.clearCancelled(session.id)
-    expect(compactor.background(session.id, history, config, llm.client, "m")).toBe(true)
+    expect(compactor.background(session.id, history, config, () => ({ llm: llm.client, model: "m" }))).toBe(true)
   })
 
   it("被取消的在飞后台：完成时不挂起成果", async () => {
@@ -144,7 +144,7 @@ describe("Compactor 调度状态机", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     const { compactor, config, llm } = await setup(sessions)
 
-    expect(compactor.background(session.id, history, config, llm.client, "m")).toBe(true)
+    expect(compactor.background(session.id, history, config, () => ({ llm: llm.client, model: "m" }))).toBe(true)
     compactor.cancel(session.id) // abort 在飞 + 标记
     llm.release()
     await vi.waitFor(() => expect(compactor.hasInFlight(session.id)).toBe(false))
@@ -160,7 +160,7 @@ describe("Compactor 调度状态机", () => {
     const { compactor, config, llm } = await setup(sessions)
 
     llm.failNext()
-    expect(compactor.background(session.id, history, config, llm.client, "m")).toBe(true)
+    expect(compactor.background(session.id, history, config, () => ({ llm: llm.client, model: "m" }))).toBe(true)
     llm.release()
     await vi.waitFor(() => expect(compactor.hasInFlight(session.id)).toBe(false))
     expect(compactor.parked(session.id)).toBe(false)
@@ -175,7 +175,7 @@ describe("Compactor 调度状态机", () => {
 
     await expect(compactor.waitForSettled(session.id)).resolves.toBeUndefined()
 
-    compactor.background(session.id, history, config, llm.client, "m")
+    compactor.background(session.id, history, config, () => ({ llm: llm.client, model: "m" }))
     let settled = false
     void compactor.waitForSettled(session.id).then(() => { settled = true })
     await new Promise((r) => setTimeout(r, 10))
@@ -193,7 +193,7 @@ describe("Compactor 调度状态机", () => {
     const { compactor, config, llm } = await setup(sessions)
 
     // 后台完成 → 挂起（upto 落在 a0）
-    compactor.background(session.id, history, config, llm.client, "m")
+    compactor.background(session.id, history, config, () => ({ llm: llm.client, model: "m" }))
     llm.release()
     await vi.waitFor(() => expect(llm.calls.filter(isSummaryCall).length).toBeGreaterThanOrEqual(2))
     await vi.waitFor(() => expect(compactor.parked(session.id)).toBe(true))
@@ -201,7 +201,7 @@ describe("Compactor 调度状态机", () => {
     // 新内容追加后同步压缩（经 auto，manual 免水位细判）：挂起成果被作废，
     // 同步压缩自己的视图（基于含挂起成果的 meta）生效
     seedHistory(sessions, session.id, 6)
-    const view = await compactor.auto(session.id, sessions.readMessages(session.id), config, llm.client, "m", { manual: true })
+    const view = await compactor.auto(session.id, sessions.readMessages(session.id), config, () => ({ llm: llm.client, model: "m" }), { manual: true })
     expect(view.status).toBe("applied")
     expect(compactor.takeParked(session.id)).toBeNull()
   })
@@ -213,7 +213,7 @@ describe("Compactor 调度状态机", () => {
     const { compactor, config, llm } = await setup(sessions)
 
     // 后台完成 → 挂起
-    compactor.background(session.id, history, config, llm.client, "m")
+    compactor.background(session.id, history, config, () => ({ llm: llm.client, model: "m" }))
     llm.release()
     await vi.waitFor(() => expect(llm.calls.filter(isSummaryCall).length).toBeGreaterThanOrEqual(2))
     await vi.waitFor(() => expect(compactor.parked(session.id)).toBe(true))
@@ -221,7 +221,7 @@ describe("Compactor 调度状态机", () => {
     // 同步压缩在过小的历史上跑（估算 < 黄线）→ declined 结局，
     // 什么都没写：挂起成果仍是最新视图，不得被入口顺手清掉
     const tiny = [newMessage(session.id, "user", [{ id: "btiny", type: "text", text: "小" }])]
-    const out = await compactor.compact(session.id, tiny, "", config, llm.client, "m", { phase: "post-run" })
+    const out = await compactor.compact(session.id, tiny, "", config, () => ({ llm: llm.client, model: "m" }), { phase: "post-run" })
     expect(out.status).toBe("declined")
     expect(compactor.parked(session.id)).toBe(true)
   })
@@ -232,7 +232,7 @@ describe("Compactor 调度状态机", () => {
     const history = seedHistory(sessions, session.id)
     const { compactor, config, llm } = await setup(sessions)
 
-    expect(compactor.background(session.id, history, config, llm.client, "m")).toBe(true)
+    expect(compactor.background(session.id, history, config, () => ({ llm: llm.client, model: "m" }))).toBe(true)
     expect(compactor.abortInFlight(session.id)).toBe(true)
     expect(compactor.cancelled(session.id)).toBe(false) // 与 cancel() 的分界：不写标记
     llm.release() // 被掐的调用走取消分支收场
@@ -240,7 +240,7 @@ describe("Compactor 调度状态机", () => {
     expect(compactor.parked(session.id)).toBe(false)
 
     // cancel() 的标记会压制下一次开工；abortInFlight 没写 → 立刻能再 kick
-    expect(compactor.background(session.id, history, config, llm.client, "m")).toBe(true)
+    expect(compactor.background(session.id, history, config, () => ({ llm: llm.client, model: "m" }))).toBe(true)
     llm.release()
     await vi.waitFor(() => expect(compactor.parked(session.id)).toBe(true))
   })
@@ -270,8 +270,8 @@ describe("Compactor 调度状态机", () => {
     const llm1 = gatedClient()
     const llm2 = gatedClient()
 
-    expect(compactor.background(s1.id, h1, config, llm1.client, "m")).toBe(true)
-    expect(compactor.background(s2.id, h2, config, llm2.client, "m")).toBe(true, "各自在飞，互不干扰")
+    expect(compactor.background(s1.id, h1, config, () => ({ llm: llm1.client, model: "m" }))).toBe(true)
+    expect(compactor.background(s2.id, h2, config, () => ({ llm: llm2.client, model: "m" }))).toBe(true, "各自在飞，互不干扰")
     expect(compactor.hasInFlight(s1.id)).toBe(true)
     expect(compactor.hasInFlight(s2.id)).toBe(true)
 

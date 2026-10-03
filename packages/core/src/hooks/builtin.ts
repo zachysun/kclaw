@@ -83,6 +83,12 @@ export interface BuiltinHookDeps {
   runLlm: LlmClient
   model: string
   /**
+   * 杂活模型通道（autoname/压缩摘要等后台 LLM 调用）：extractModel 解析链，
+   * daemon 注入（与记忆提取同源）。缺省回落 {runLlm, model} 主模型对——
+   * 裸引擎测试与旧装配无需接线。
+   */
+  resolveExtractLlm?: () => { llm: LlmClient; model: string }
+  /**
    * Waterline thresholds resolved once for this run's budget (absolute token
    * values from resolveWaterlines): compaction trigger decisions read this
    * instead of re-deriving from config, so a per-model contextWindow tightens
@@ -141,6 +147,14 @@ interface HookRuntime extends BuiltinHookDeps {
   runCtx: () => { sessionId: string; runId?: string }
   /** Notes collected by memory-inject(10), appended by user-message-land(20). */
   memoryNotes: NoteBlock[]
+}
+
+/**
+ * 杂活模型 resolver：优先走 extractModel 通道，未接线回落主模型对。autoname
+ * 与五个压缩钩子共用，保证"后台杂活"的模型选择只有一个出处。
+ */
+function extractLlmResolver(rt: HookRuntime): () => { llm: LlmClient; model: string } {
+  return rt.resolveExtractLlm ?? (() => ({ llm: rt.runLlm, model: rt.model }))
 }
 
 /** One builtin hook: metadata + a handler factory bound to the run's runtime. */
@@ -222,13 +236,13 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     description: "新会话首条消息的后台自动命名",
     failure: "skip",
     makeHandler: (rt) => {
-      const { trigger, sessions, runLlm, model, busEmit, sessionId } = rt
+      const { trigger, sessions, busEmit, sessionId } = rt
       return ({ message }) => {
         // Only human-sent turns autoname: job notes are daemon-composed and
         // subagent children get their title at spawn time (label/task).
         if (trigger !== "user") return
         void scheduleAutoname(
-          { sessions, llm: runLlm, model, emit: busEmit },
+          { sessions, resolveLlm: extractLlmResolver(rt), emit: busEmit },
           sessionId, textOf(message),
         )
       }
@@ -296,7 +310,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
         const overhead = contextOverhead()
         const level = estimateContextTokens(history, undefined, overhead)
         if (!waterlines.exceedsFullHistory("ahead", level) || waterlines.exceedsFullHistory("panic", level)) return
-        compactor.background(sessionId, history, config, runLlm, model, {
+        compactor.background(sessionId, history, config, extractLlmResolver(rt), {
           overheadTokens: overhead,
           budget: waterlines.budget,
         })
@@ -343,7 +357,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
             return settled
           }
         }
-        const outcome = await compactor.auto(sessionId, history, config, runLlm, model, {
+        const outcome = await compactor.auto(sessionId, history, config, extractLlmResolver(rt), {
           phase: "in-run",
           signal,
           overheadTokens: overhead,
@@ -376,7 +390,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
           compactor.abortInFlight(sessionId)
           await compactor.waitForSettled(sessionId)
         }
-        const outcome = await compactor.auto(sessionId, sessions.readMessages(sessionId), config, runLlm, model, {
+        const outcome = await compactor.auto(sessionId, sessions.readMessages(sessionId), config, extractLlmResolver(rt), {
           phase: "in-run",
           emergency: true,
           signal,
@@ -435,7 +449,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
         if (compactor.hasInFlight(sessionId)) await compactor.waitForSettled(sessionId, signal)
         const deferred = compactor.takeDeferredManual(sessionId)
         if (deferred === null) return
-        const outcome = await compactor.compact(sessionId, sessions.readMessages(sessionId), "", config, runLlm, model, {
+        const outcome = await compactor.compact(sessionId, sessions.readMessages(sessionId), "", config, extractLlmResolver(rt), {
           focus: deferred.focus,
           manual: true,
           phase: "manual",
@@ -471,7 +485,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
         const postRunHistory = sessions.readMessages(sessionId)
         const overhead = contextOverhead()
         if (!waterlines.exceedsFullHistory("at", estimateContextTokens(postRunHistory, undefined, overhead))) return
-        const outcome = await compactor.auto(sessionId, postRunHistory, config, runLlm, model, {
+        const outcome = await compactor.auto(sessionId, postRunHistory, config, extractLlmResolver(rt), {
           phase: "post-run",
           signal,
           overheadTokens: overhead,

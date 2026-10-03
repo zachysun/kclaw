@@ -29,6 +29,7 @@ export * from "./discovery.js"
 export * from "./names.js"
 export * from "./proposals.js"
 export * from "./evolution.js"
+export * from "./curator.js"
 
 /** Combined description + when_to_use cap, aligned with Claude Code's listing. */
 const DESCRIPTION_MAX_CHARS = 1536

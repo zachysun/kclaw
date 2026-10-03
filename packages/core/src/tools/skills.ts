@@ -45,12 +45,15 @@ function visible(skills: SkillRecord[]): SkillRecord[] {
  * （kind/scope 系统推导）。safe + parallel（spec 实现决策口径）：提案文件
  * 是 writeFileAtomic 原子写的独立文件，同名冲突由 create 的随机后缀化解，
  * 并发调用安全。
+ *
+ * `recordUse` 在位时 skill_read 落一条使用遥测（curator 的生命数据）；
+ * 缺省不记（裸引擎测试）。
  */
 export function createSkillTools(skills: SkillRecord[], create?: {
   enabled: boolean
   sessionId: string
   propose: SkillEvolutionTriggers["propose"]
-}): {
+}, recordUse?: (name: string, origin: "global" | "project") => void): {
   skill_read: ToolExecutor & { name: "skill_read" }
   skill_list: ToolExecutor & { name: "skill_list" }
   skill_create?: ToolExecutor & { name: "skill_create" }
@@ -62,6 +65,7 @@ export function createSkillTools(skills: SkillRecord[], create?: {
     const skill = matches.find((s) => s.origin === "project") ?? matches[0]
     if (skill === undefined) throw new ToolError(`没有叫 ${name} 的技能（可用 skill_list 列出已装技能，或 /skill 查看）`)
     if (skill.body.trim() === "") throw new ToolError(`技能 ${name} 没有正文`)
+    recordUse?.(skill.name, skill.origin)
     return { status: "ok", output: skill.body }
   })
 

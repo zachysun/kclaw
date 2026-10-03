@@ -56,6 +56,25 @@ describe("ConfigPermissionGate", () => {
     expect(await g.check(tc("mystery", { path: "/etc/passwd", command: "anything" }))).toMatchObject({ type: "confirm" })
   })
 
+  it("flags rules naming unregistered tools as likely typos (knownNames discipline)", () => {    // A typo'd prefix can never fire; the gate reports it instead of staying
+    // silently dead. The typo name is test-unique: the warning dedupes per
+    // process, so a second gate with the same name stays quiet.
+    const typo = `fs_reed_${Date.now()}`
+    const g = new ConfigPermissionGate(
+      { ...CFG, allow: [], deny: [`${typo}:x*`] },
+      { toolFacts: BUILTIN_FACTS, safeTools: new Set() },
+    )
+    expect(g.ruleNameWarnings()).toContain(typo)
+    const again = new ConfigPermissionGate(
+      { ...CFG, allow: [], deny: [`${typo}:y*`] },
+      { toolFacts: BUILTIN_FACTS, safeTools: new Set() },
+    )
+    expect(again.ruleNameWarnings()).not.toContain(typo)
+    // Registered prefixes never warn.
+    const ok = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set() })
+    expect(ok.ruleNameWarnings()).toEqual([])
+  })
+
   it("deny short-circuits without confirmation", async () => {
     const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set(["fs_read"]) })
     const d = await g.check(tc("exec", { command: "sudo rm x" }))
@@ -218,6 +237,47 @@ describe("ConfigPermissionGate", () => {
     })
     const d = await gate.check(tc("fs_read", { path: "/projects/x/notes/a.md" }))
     expect(d).toMatchObject({ type: "allow", reason: "safe" })
+  })
+  it("敏感文件不吃 safe 免审：.env 读取进确认并带命中说明", async () => {
+    const gate = new ConfigPermissionGate({ allow: [], deny: [], sessionGrants: false } as never, { toolFacts: BUILTIN_FACTS,
+      workspace: "/projects/x",
+      safeTools: new Set(["fs_read", "fs_list"]),
+      newConfirmationId: () => "conf_1",
+    })
+    // 工作区内 .env（basename 命中，子目录同样拦）
+    const hit = await gate.check(tc("fs_read", { path: "/projects/x/.env" }))
+    expect(hit.type).toBe("confirm")
+    expect(hit.type === "confirm" && hit.noteText?.includes(".env")).toBe(true)
+    await expect(gate.check(tc("fs_read", { path: "config/.env.local" }))).resolves.toMatchObject({ type: "confirm" })
+    // 普通文件不受影响
+    await expect(gate.check(tc("fs_read", { path: "/projects/x/notes/a.md" }))).resolves.toMatchObject({ type: "allow", reason: "safe" })
+    // 用户显式放行（bare allow 规则覆盖一切 fs_read）仍最优先
+    const allowed = new ConfigPermissionGate({ allow: ["fs_read"], deny: [], sessionGrants: false } as never, { toolFacts: BUILTIN_FACTS,
+      workspace: "/projects/x",
+      safeTools: new Set(["fs_read"]),
+      newConfirmationId: () => "conf_1",
+    })
+    await expect(allowed.check(tc("fs_read", { path: "/projects/x/.env" }))).resolves.toMatchObject({ type: "allow", reason: "whitelist" })
+  })
+  it("acceptEdits 不能自动写敏感文件", async () => {
+    const gate = new ConfigPermissionGate({ allow: [], deny: [], sessionGrants: false } as never, { toolFacts: BUILTIN_FACTS,
+      workspace: "/projects/x",
+      safeTools: new Set(),
+      mode: "acceptEdits",
+      newConfirmationId: () => "conf_1",
+    })
+    await expect(gate.check(tc("fs_write", { path: "/projects/x/.env", content: "A=1" }))).resolves.toMatchObject({ type: "confirm" })
+    await expect(gate.check(tc("fs_write", { path: "/projects/x/a.txt", content: "x" }))).resolves.toMatchObject({ type: "allow", reason: "accept_edits" })
+  })
+  it("config 可整体替换敏感文件清单", async () => {
+    const gate = new ConfigPermissionGate({ allow: [], deny: [], sessionGrants: false, sensitiveFiles: ["secrets.yaml"] } as never, { toolFacts: BUILTIN_FACTS,
+      workspace: "/projects/x",
+      safeTools: new Set(["fs_read"]),
+      newConfirmationId: () => "conf_1",
+    })
+    await expect(gate.check(tc("fs_read", { path: "/projects/x/secrets.yaml" }))).resolves.toMatchObject({ type: "confirm" })
+    // 内置清单被替换：.env 不再命中
+    await expect(gate.check(tc("fs_read", { path: "/projects/x/.env" }))).resolves.toMatchObject({ type: "allow", reason: "safe" })
   })
   it("workspace 未设时跳过越界检查（保持旧行为）", async () => {
     const gate = new ConfigPermissionGate({ allow: [], deny: [], sessionGrants: false } as never, { toolFacts: BUILTIN_FACTS,

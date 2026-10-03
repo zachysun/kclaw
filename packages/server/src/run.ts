@@ -33,6 +33,7 @@ import {
   type AttachmentBlock,
   type AttachmentRef,
   type EnqueueInput,
+  type LlmClient,
   type Message,
   type NoteBlock,
   type QueueEntry,
@@ -116,6 +117,9 @@ export class WakeBudgetExhaustedError extends Error {
 interface QueueNode {
   entry: QueueEntry
   model?: string
+  /** 子代理派发携带（subagent_run 的 role/toolAllow）；内存还原用，不进 queue.jsonl。 */
+  subagentRole?: string
+  subagentToolAllow?: string[]
   resolve(o: RunOutcome): void
   reject(e: unknown): void
   outcome: Promise<RunOutcome>
@@ -259,6 +263,8 @@ export class RunManager {
     if (idle) {
       const node = makeNode(entry)
       if (input.model !== undefined) node.model = input.model // 内存还原用（现状行为）
+      if (input.subagentRole !== undefined) node.subagentRole = input.subagentRole
+      if (input.subagentToolAllow !== undefined) node.subagentToolAllow = input.subagentToolAllow
       this.#queues.set(sessionId, [node]) // 直发条目也由驱动器托管（settle 后的 steer 降级才有人接）
       this.#drive(sessionId)
       return { messageId: entry.messageId, queued: false, disposition, outcome: node.outcome }
@@ -278,6 +284,8 @@ export class RunManager {
     const atHead = effective === "interrupt"
     const node = makeNode({ ...entry, disposition: effective })
     if (input.model !== undefined) node.model = input.model // 内存还原用（现状行为）
+    if (input.subagentRole !== undefined) node.subagentRole = input.subagentRole
+    if (input.subagentToolAllow !== undefined) node.subagentToolAllow = input.subagentToolAllow
     if (atHead) {
       queue.unshift(node)
       if (this.#active.has(sessionId)) this.#active.get(sessionId)!.abort() // 中断伴随 abort
@@ -482,17 +490,19 @@ export class RunManager {
       sessionModel: meta.model,
       launchModel: this.#deps.model,
     })
-    // Same client wiring as in-run compaction (run-assembly): fetch through
-    // the shared resolver so Model-tab edits hot-apply here too; the
-    // launch-resolved deps.llm only backs injected-llmFactory test setups.
-    const llm = this.#deps.llmForRun?.(() => {}, entryKey) ?? this.#deps.llm
+    // Same client wiring as in-run compaction (run-assembly): the extract
+    // channel resolves the compaction model (extractModel hits route to that
+    // entry's endpoint); the launch-resolved deps.llm only backs
+    // injected-llmFactory test setups without the wiring.
+    const resolveLlm = this.#deps.resolveExtractLlm
+      ?? ((): { llm: LlmClient; model: string } => ({ llm: this.#deps.llmForRun?.(() => {}, entryKey) ?? this.#deps.llm, model }))
     // 空闲手动压缩没有 run 装配上下文（contextOverhead 只在 run 内存在），
     // 固定开销退而取持久化的系统提示词基线估算——工具 schema 不在其中，
     // tokensAfter 因此略偏小；会话尚无任何 run 时无基线，X/Y 一并缺开销。
     const baseline = meta.systemBaseline
     const overheadTokens = baseline === undefined ? undefined
       : estimateTokens(baseline.stable.text + (baseline.live?.text ?? ""))
-    const out = await this.#compactor.compact(sessionId, history, "", config, llm, model, {
+    const out = await this.#compactor.compact(sessionId, history, "", config, resolveLlm, {
       focus,
       manual: true,
       phase: "manual",
@@ -664,6 +674,8 @@ export class RunManager {
       userText: entry.text,
       trigger: entry.trigger,
       ...(node.model !== undefined ? { model: node.model } : {}),
+      ...(node.subagentRole !== undefined ? { subagentRole: node.subagentRole } : {}),
+      ...(node.subagentToolAllow !== undefined ? { subagentToolAllow: node.subagentToolAllow } : {}),
       ...(entry.attachments !== undefined && entry.attachments.length > 0 ? { attachments: entry.attachments } : {}),
       ...(entry.note !== undefined ? { note: entry.note } : {}),
       messageId: entry.messageId,

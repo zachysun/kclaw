@@ -259,6 +259,42 @@ describe("subagent dispatch (integration)", () => {
     expect(statusDeltas.length).toBeGreaterThan(0)
   })
 
+  it("role and tool allowlist reach the child run: prompt carries the role, surface narrows to the allowlist", async () => {
+    const requests: LlmRequest[] = []
+    const inner = scriptClient([
+      // parent: spawn with role + tools args
+      [
+        { type: "tool_call_started", index: 0, callId: "call_1", name: "subagent_run" },
+        { type: "tool_call_delta", index: 0, delta: JSON.stringify({ task: "读配置", role: "只读侦探", tools: ["fs_read", "fs_list"] }) },
+        { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 1, outputTokens: 2 } },
+      ],
+      textTurn("读取完成"),
+      textTurn("派发结束"),
+    ])
+    const llm: LlmClient = {
+      async *stream(req) {
+        requests.push(req)
+        yield* inner.stream(req)
+      },
+    }
+    const { sessions, manager } = makeEnv(llm)
+    const parent = sessions.create("主线", undefined, undefined, "default")
+    const outcome = await manager.enqueue(parent.id, { userText: "派个只读子代理", trigger: "user" })
+    expect(outcome.stopReason).toBe("end_turn")
+
+    const child = sessions.listByParent(parent.id)[0]!
+    const childReq = requests[1]!
+    // role 拼进了子会话系统提示词的独立小节
+    expect(childReq.system).toContain("# 角色补充")
+    expect(childReq.system).toContain("只读侦探")
+    // wire 面收窄：只留白名单内工具，exec/fs_write 等全部消失
+    const childToolNames = childReq.tools.map((t) => t.name)
+    expect(childToolNames).toEqual(expect.arrayContaining(["fs_read", "fs_list"]))
+    expect(childToolNames).not.toContain("exec")
+    expect(childToolNames).not.toContain("fs_write")
+    expect(childToolNames).not.toContain("subagent_run")
+  })
+
   it("forwards child confirmations to the parent channel, labeled, and they resolve via the broker", async () => {
     const requests: LlmRequest[] = []
     const inner = scriptClient([

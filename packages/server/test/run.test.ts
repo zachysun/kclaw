@@ -979,7 +979,7 @@ describe("RunManager context compaction", () => {
     const startedIdx = types.indexOf("compaction.started")
     expect(startedIdx).toBeGreaterThanOrEqual(0)
     expect(startedIdx).toBeGreaterThan(types.indexOf("run.completed"))
-    expect(events[startedIdx]!.payload).toEqual({ phase: "post-run" })
+    expect(events[startedIdx]!.payload).toEqual({ phase: "post-run", trigger: "auto" })
     // both summarizer calls follow the main request
     expect(reqs[1]!.tools).toEqual([])
     expect(reqs[1]!.system).toContain("对话摘要器")
@@ -994,7 +994,7 @@ describe("RunManager context compaction", () => {
     expect(env.sessions.readCompactions(session.id)).toHaveLength(1)
     // completed: ok result, real counts (4 seeded messages compacted, the turn kept)
     const okCompleted = events.find((e) => e.type === "compaction.completed")
-    expect(okCompleted!.payload).toEqual({ segments: 1, kept: 2, phase: "post-run", result: "ok" })
+    expect(okCompleted!.payload).toEqual({ segments: 1, kept: 2, phase: "post-run", result: "ok", trigger: "auto" })
   })
 
   it("second compaction merges the previous top into the new one", async () => {
@@ -1116,7 +1116,7 @@ describe("RunManager context compaction", () => {
       // completed — failure reports result "failed" with zeroed counters. The
       // failure logs exactly once inside the Compactor, tagged with the phase.
       const events = received(socket)
-      expect(events.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "post-run" }])
+      expect(events.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "post-run", trigger: "auto" }])
       const completed = events.find((e) => e.type === "compaction.completed")
       expect(completed).toBeDefined()
       expect(completed!.payload).toEqual({ segments: 0, kept: 0, phase: "post-run", result: "failed" })
@@ -1270,7 +1270,7 @@ describe("RunManager context compaction", () => {
       await expect(manager.compactSession(session.id)).rejects.toThrow("手动摘要挂了")
 
       const events = received(socket)
-      expect(events.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "manual" }])
+      expect(events.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "manual", trigger: "manual" }])
       const completed = events.find((e) => e.type === "compaction.completed")
       expect(completed).toBeDefined()
       expect(completed!.payload).toEqual({ segments: 0, kept: 0, phase: "manual", result: "failed" })
@@ -1319,7 +1319,7 @@ describe("RunManager context compaction", () => {
     const outcome = await run
     expect(outcome.stopReason).toBe("end_turn") // the run itself had already finished
     const events = received(socket)
-    expect(events.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "post-run" }])
+    expect(events.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "post-run", trigger: "auto" }])
     const completed = events.find((e) => e.type === "compaction.completed")
     expect(completed).toBeDefined()
     expect(completed!.payload).toEqual({ segments: 0, kept: 0, phase: "post-run", result: "cancelled" })
@@ -1352,9 +1352,9 @@ describe("RunManager context compaction", () => {
     expect(records).toHaveLength(1)
     expect(records[0]).toMatchObject({ trigger: "in-run", emergency: true, upto: seeded[1]!.id, top: "总摘要E" })
     const events = received(socket)
-    expect(events.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "in-run" }])
+    expect(events.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "in-run", trigger: "in-run" }])
     expect(events.find((e) => e.type === "compaction.completed")!.payload).toEqual({
-      segments: 1, kept: 3, phase: "in-run", result: "ok",
+      segments: 1, kept: 3, phase: "in-run", result: "ok", trigger: "in-run", emergency: true,
     })
     // the retry went out over the swapped view: thread item first, early
     // verbatim text before upto gone, and the retry was silent (one llm.started)
@@ -1404,7 +1404,7 @@ describe("RunManager context compaction", () => {
     expect(records[0]).toMatchObject({ trigger: "in-run", emergency: true, from: null, upto: a1.id, messages: 2 })
     const events = received(socket)
     expect(events.find((e) => e.type === "compaction.completed")!.payload).toEqual({
-      segments: 1, kept: 1, phase: "in-run", result: "ok",
+      segments: 1, kept: 1, phase: "in-run", result: "ok", trigger: "in-run", emergency: true,
     })
     // the retry went out over the compacted view: thread item first, seeded
     // verbatim text gone, only the fresh user turn remains
@@ -1444,9 +1444,9 @@ describe("RunManager context compaction", () => {
     const startedIdx = types.indexOf("compaction.started")
     expect(startedIdx).toBeGreaterThanOrEqual(0)
     expect(startedIdx).toBeLessThan(types.indexOf("run.completed"))
-    expect(events[startedIdx]!.payload).toEqual({ phase: "in-run" })
+    expect(events[startedIdx]!.payload).toEqual({ phase: "in-run", trigger: "in-run" })
     expect(events.find((e) => e.type === "compaction.completed")!.payload).toEqual({
-      segments: 1, kept: 3, phase: "in-run", result: "ok",
+      segments: 1, kept: 3, phase: "in-run", result: "ok", trigger: "in-run",
     })
     // the request BEFORE the compaction carried the full verbatim history…
     expect(reqs[0]!.messages[0]!.role).not.toBe("system")
@@ -1510,7 +1510,7 @@ describe("RunManager context compaction", () => {
 
     expect((await run1).stopReason).toBe("end_turn")
     const events1 = received(socket)
-    expect(events1.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "in-run" }])
+    expect(events1.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "in-run", trigger: "in-run" }])
     expect(events1.find((e) => e.type === "compaction.completed")!.payload).toEqual({
       segments: 0, kept: 0, phase: "in-run", result: "cancelled",
     })
@@ -1525,7 +1525,7 @@ describe("RunManager context compaction", () => {
     expect((await run2).stopReason).toBe("end_turn")
     const events2 = received(socket)
     const started = events2.filter((e) => e.type === "compaction.started")
-    expect(started.map((e) => e.payload)).toEqual([{ phase: "in-run" }, { phase: "post-run" }])
+    expect(started.map((e) => e.payload)).toEqual([{ phase: "in-run", trigger: "in-run" }, { phase: "post-run", trigger: "auto" }])
     expect(events2.filter((e) => e.type === "compaction.completed").at(-1)!.payload).toMatchObject({
       phase: "post-run", result: "ok",
     })

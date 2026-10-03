@@ -148,6 +148,24 @@ describe("runAgent tool turn", () => {
     expect(outcome.stopReason).toBe("end_turn")
   })
 
+  it("suggests the closest real tool name for a near-miss call", async () => {
+    const search: ToolExecutor = {
+      risk: "safe", concurrency: "parallel",
+      async execute(args) { return { status: "ok", output: JSON.stringify(args) } },
+    }
+    const script: LlmStreamEvent[][] = [[
+      ...toolCallStream(0, "call_typo", "searh", "{}"),
+    ], FINAL]
+    const { messages } = await run({
+      tools: new Map([["search", search]]),
+      toolDefs: [{ name: "search", description: "search", parameters: { type: "object" } }],
+      llm: scriptClient(script),
+    })
+    const results = messages[2].blocks as Array<{ type: string; output: string }>
+    expect(results[0]!.output).toContain("unknown tool: searh")
+    expect(results[0]!.output).toContain("closest available: search")
+  })
+
   it("emits tool_call.completed with the raw block when args json is malformed", async () => {
     const events: AgentEvent[] = []
     const messages: Message[] = []

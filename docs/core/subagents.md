@@ -2,7 +2,7 @@
 
 ## 职责
 
-subagent 是主对话的模型**自主派出**的短命执行单元：调用 `subagent_run` 工具、给出一段自包含的任务描述，daemon 为它开一个**独立子会话**跑完整个任务，结束时把结题答复（subagent 最后一条回复的全文）作为工具结果送回主对话。过程文本（工具输出、中间思考）不进主对话的上下文，subagent 的第一动机是**上下文隔离**；同一批工具调用里发多个 `subagent_run` 即**并行**执行互不相关的任务，是第二动机。按角色特化（预置人设的专职 subagent）明确不在当前范围。长任务可以**后台派发**（`run_in_background: true`）：派发立即返回子会话 id、不阻塞父 run，subagent 完成后结题报告**自动投递回主会话**、触发新一轮分析（见下文"后台模式"）。
+subagent 是主对话的模型**自主派出**的短命执行单元：调用 `subagent_run` 工具、给出一段自包含的任务描述，daemon 为它开一个**独立子会话**跑完整个任务，结束时把结题答复（subagent 最后一条回复的全文）作为工具结果送回主对话。过程文本（工具输出、中间思考）不进主对话的上下文，subagent 的第一动机是**上下文隔离**；同一批工具调用里发多个 `subagent_run` 即**并行**执行互不相关的任务，是第二动机。派发时可带 `role`（角色补充，拼进子会话系统提示词）与 `tools`（工具白名单）做轻量特化——预置人设库、跨会话复用的角色档案不在当前范围。长任务可以**后台派发**（`run_in_background: true`）：派发立即返回子会话 id、不阻塞父 run，subagent 完成后结题报告**自动投递回主会话**、触发新一轮分析（见下文"后台模式"）。
 
 三个模块分担职责：`packages/core/src/agent/subagent.ts` 放两侧共享的契约（`SubagentSpawner` 接口、subagent 系统提示词、答复截断/标题助手）；`packages/core/src/tools/subagent.ts` 是模型可见的工具执行器（薄壳：校验参数后调一次 spawner）；`packages/server/src/subagent.ts` 是 daemon 侧的 spawner 实现（真会话、真 run 提交、状态与确认转发）。
 
@@ -16,6 +16,8 @@ subagent 是主对话的模型**自主派出**的短命执行单元：调用 `su
 
 - **单层委派**：子 run 的工具面**不注册** `subagent_run` 与 `subagent_collect`（也没有 `memory_save`，见记忆隔离）——subagent 不能再派 subagent，防递归失控。
 
+- **角色与工具白名单（每次派发可选）**：`subagent_run` 接受 `role`（角色补充说明）与 `tools`（工具白名单）。`role` 经 spawner 进入子 run 组装，追加进子会话系统提示词末尾的"# 角色补充"节（trim 后截 2000 字符）——任务里写不清的立场、口径、边界（如"只做评审，不改代码"）放这里。`tools` 在子 run 组装期过滤工具面：白名单外的执行器与 schema 同步剔除，且权限门的 safeTools 与注册事实由过滤后的面派生（构造在其后）——白名单**只收窄、结构上不可能放大**权限；名单外的名字忽略，空数组视为未限制（避免误派一个零工具的子会话）。两者随 submit → 队列 → 出队的链路全程携带（队列节点内存还原，不进持久化队列文件）。
+
 - **权限不放宽**：子 run 有自己的权限门，冻结父会话创建时的 `mode`；敏感操作照常请求人工确认。确认卡片经 spawner **转发到父会话频道**（用户正看着的地方），`noteText` 前缀"来自 subagent `<label 或会话 id>`"；裁决仍由全局 broker 按 `confirmationId` 统一处理，任何客户端答都行。Web 与 CLI 无需改动就能收到卡片。可见性同样继承：父会话为 readonly 时，子 run 的工具面按同一规则移除（sensitive 工具不可见），见 [permissions](./permissions.md)。
 
 - **父停子停**：工具执行器把父 run 的 abort 信号递给 spawner，spawner 监听到中止即 `run.cancel(child)`——子 run 在下一个检查点停下，派发以 error 结果（"随主任务中止而停止"，附中止前产出）结束。
@@ -25,11 +27,13 @@ subagent 是主对话的模型**自主派出**的短命执行单元：调用 `su
 ## 生命周期（一次派发）
 
 ```
-主对话模型发起 subagent_run {task, label?}
+主对话模型发起 subagent_run {task, label?, role?, tools?}
   → spawner：查父会话 → 并发上限检查（超限直接 error，不建会话）
   → 建子会话（标题"subagent · <label|task 头 40 字>"，继承父 workdir/mode，
     parentSessionId 落 meta；父的会话级模型覆盖随行）
-  → 订阅子频道（状态行 + 确认转发）→ submit(task, trigger:"agent", disposition:"wait")
+  → 订阅子频道（状态行 + 确认转发）→ submit(task, trigger:"agent", disposition:"wait",
+    role/tools 随 EnqueueInput 全程携带)
+  → 子 run 组装：role 拼进系统提示词，tools 过滤工具面（gate 由过滤后的面派生）
   → 子 run 跑完（正常/中止/出错）
   → 拆订阅、清并发计数 → 结果整形回工具结果
 ```

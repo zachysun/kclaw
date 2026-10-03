@@ -103,7 +103,7 @@ updated: 2026-08-30
 pipeline 位于 `packages/core/src/memory/pipeline.ts`，写入的触发入口是 `runTrigger(workdir, trigger, sessionId?)`（另有 `runNightly`/`consolidate` 与索引重建等维护入口，见 [http-api](../server/http-api.md) 的 `/memory` 路由族）。一次触发做四件事：
 
 1. **选范围**：提取是**会话级**的——只看触发会话自己的增量窗口（"增量"以提取进度为界：每个会话记录一个"已提取到哪条消息"的标记，标记之后的消息才是新内容；该项目每个会话各有自己的提取进度标记。定时触发无显式归属，对该项目全部会话逐个补），见下节"提取进度标记与串行锁"；
-2. **提取**：无工具 LLM 调用，把范围渲染成逐行文本 + 现有主题线清单（MEMORY.md 表格），交给固定 system 提示的提取器（`EXTRACT_SYSTEM_PROMPT`），要求只输出 JSON `{"actions":[...]}`。每个动作的字段名固定：判别字段 `op` 取 `append`（接到已有线）/`update`（修正已有线某小节）/`new-thread`（开新线）三值；**每个动作必填非空 `file`**（线文件名，kebab-case，`new-thread` 也不例外）、`content` 与 `title`（一句话短标题，30 字以内，小节标题的来源）；`update` 额外带 `section`，`new-thread` 额外带 `thread`；允许显式 `status:"inactive"`（明确的完成结论）；噪音直接跳过，无值得记的内容输出 `{"actions":[]}`。prompt 内含完整 JSON 示例。**线的身份唯一以 `file` 为准**：写入磁盘时 frontmatter `topic` 一律取 `file`，模型交回的 `thread` 字段仅兼容保留、不参与身份——否则文件名与内部 topic 分裂，MEMORY.md 行按 topic 显示、读/改/删按文件名定位，清单点开即 404；
+2. **提取**：无工具 LLM 调用，把范围渲染成逐行文本 + 现有主题线清单（MEMORY.md 表格），交给固定 system 提示的提取器（`EXTRACT_SYSTEM_PROMPT`），要求只输出 JSON `{"actions":[...]}`。每个动作的字段名固定：判别字段 `op` 取 `append`（接到已有线）/`update`（修正已有线某小节）/`new-thread`（开新线）三值；**每个动作必填非空 `file`**（线文件名，kebab-case，`new-thread` 也不例外）、`content` 与 `title`（一句话短标题，30 字以内，小节标题的来源）；`update` 额外带 `section`，`new-thread` 额外带 `thread`；允许显式 `status:"inactive"`（明确的完成结论）；**负面清单**（prompt 固定条目，三类不记为经验）：一次性的环境故障（网络抖动、服务暂时 5xx——不是持久事实）、对工具或方法的负面断言（某次失败不等于"X 不可用/不行"，记了会让以后自缚手脚）、没走通的尝试（不许包装成可靠工作流，只有走通并验证过的做法才值得记）；噪音直接跳过，无值得记的内容输出 `{"actions":[]}`。prompt 内含完整 JSON 示例。**线的身份唯一以 `file` 为准**：写入磁盘时 frontmatter `topic` 一律取 `file`，模型交回的 `thread` 字段仅兼容保留、不参与身份——否则文件名与内部 topic 分裂，MEMORY.md 行按 topic 显示、读/改/删按文件名定位，清单点开即 404；
 3. **写入**：逐条应用动作（追加/改写/开线），期间不阻塞地广播 `memory.written` 事件（见"事件"）；
 4. **收尾**：推进提取进度、闲置线在扫描时自动停用（见"生命周期"）、顺带沉淀检查、重建项目索引与 MEMORY.md。
 
@@ -260,10 +260,11 @@ daemon 启动时做一次全库对齐（`daemon.ts` 调 `memory.reconcile`）：
 
 ```ts
 { type: "memory.written", path: string,
-  kind: "episode" | "cognition", topic?: string, scope?: string }
+  kind: "episode" | "cognition", topic?: string, scope?: string,
+  trigger?: "immediate" | "manual" | "interval" | "follow" | "clear" | "nightly" | "admin" }
 ```
 
-- `episode` 事件带 `topic`（线名），`cognition` 事件带 `scope`（新认知的 scope）；
+- `episode` 事件带 `topic`（线名），`cognition` 事件带 `scope`（新认知的 scope）；`trigger` 标明这次写入由哪个触发器带来（与事件流 memory 审计同口径），订阅端可用于区分"刚聊完的即时沉淀"与"后台定时批次"；
 - 事件不带 `sessionId`（项目级事务）；订阅端（CLI / web）把它当成"已写入"的轻提示，不驱动任何状态机。CLI 用暗色一行显示 `已写入记忆: <path>`，web 通知条显示同文案；web 的通知条**可点击**，跳转记忆页并随即清掉通知。`cognition` 事件按 path 反推 kind/name 自动打开对应认知文件；`episode` 事件不附带 `scope`（形状里只有 `topic`），而前端打开线文件的分支依赖 `scope` 字段，目前不会触发——点击只完成跳转，线文件不会自动打开。
 
 ### 事件流里的 memory 事件（审计）

@@ -26,7 +26,7 @@ export interface Daemon {
   port: number        // 实际绑定的端口（0 启动时为临时端口）
   token: string       // app 要求的 Bearer token（<home>/token）
   pid: number         // 本进程 pid，即 daemon.json 里记录的
-  stop(): Promise<void>   // 有界拆除：goal 循环（等进行中的检查落定）→ tick → 记忆调度器 → 技能调度器（这四个常驻主机的停机按构造序注册、stop 时逐项限时执行）→ 飞书频道管理器（未启用时为 no-op）→ 项目发现（mcpProjects）→ mcp → app → memory → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
+  stop(): Promise<void>   // 有界拆除：六个常驻宿主按构造序逐项限时执行（goal 循环 → 历史检索索引 → 调度心跳 → 记忆调度器 → 技能调度器 → 技能 curator）→ 飞书频道管理器（未启用时为 no-op）→ 项目发现（mcpProjects）→ mcp → app → memory → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
 }
 
 export interface LaunchDaemonOptions {
@@ -70,9 +70,17 @@ loadOrCreateToken(paths.home)       读/生成 <home>/token
 new EventBus()                      总线先于 store 构造：store 的写入完成通知回调要发
                                     session.appended 总线帧（先写入后广播，审计页等
                                     订阅方据此增量拉取事件流——见 realtime/protocol）
+HistorySearchIndex.open(paths.searchDb)
+                                    跨会话消息全文索引（数据面与回填见 tools.md 与
+                                    storage.md）：open 在 store 之前，镜像三事件
+                                    （message → 收录、message.truncated → 镜像截断、
+                                    session.deleted → 清行）挂在下方 store 的事件
+                                    追加回调上，启动组装期对存量会话同步回填一次
+                                    （幂等）；停机时经 hostStops close
 new SessionStore(paths.sessionsDir, onAppended)
                                     store 构造时注入写入完成通知回调：每个事件（含投影）
-                                    成功写入 events.jsonl 后发 session.appended
+                                    成功写入 events.jsonl 后发 session.appended，
+                                    并顺路喂历史检索索引的镜像写入
                                     （通知抛错被吞掉，写成功不被通知连累）
 embedding 判定链（memory.embedding） model 非空才构造 embedding 客户端（见 memory.md 判定链）；
                                     构造在 EventBus/SessionStore 之后、MemorySystem 之前，赋给下方 memory
@@ -102,10 +110,12 @@ createMcpProjects({workspace, manager, allMetas, loadEntries, home})
                                     顶层等 `.kclaw` 出现、再切 `.kclaw` watch），手工编辑
                                     防抖后经 reconcileProject 热生效；起不来只告警降级、
                                     不致命
-new McpManager({globalServers, projects, onError, persist})
+new McpManager({globalServers, projects, stderrLogDir, onError, persist})
                                     恒定组装：globalServers = <home>/mcp.json 的条目；
                                     projects = 每个已知项目 `.kclaw/mcp.json` 的条目
-                                    （缺失/损坏/git 跟踪均读作 {}）；onError 把连接失败
+                                    （缺失/损坏/git 跟踪均读作 {}）；stderrLogDir =
+                                    <home>/logs/mcp（stdio server 的 stderr 逐台
+                                    写入 <server>.log，见 mcp.md）；onError 把连接失败
                                     打一行日志；persist 按组分发："global" 写 mcp.json，
                                     其余组接 saveProjectMcpJson；空闲回收 TTL、重试
                                     上限、连接上限等参数取构造默认值（见 mcp.md），
@@ -126,18 +136,24 @@ createTeamHost / new GoalLoopHost   团队宿主（见 agent-team.md）与 /goal
                                     goal 检查自查忙闲，team 刚投递的下一轮只会让它跳过
 new RunManager({...})               注入 usageStore、memory、skillsEvolution（run 收尾钩子
                                     与 skill_create 工具面的来源，见 skills.md）、
+                                    resolveExtractLlm（杂活模型解析链：手动压缩与
+                                    压缩/自动命名/记忆提取共用 makeExtractLlmResolver
+                                    的产物，见 compaction.md）、
+                                    historySearch（history_search 工具与 GET /search
+                                    的检索函数）、
                                     extraTools: (workdir) => mcpManager.toolsFor(workdir)
                                     （恒定组装，见上；每 run 按会话工作目录取用，惰性
                                     连接由 toolsFor 内部 kick）、
                                     subagents: { spawner, collector, cancelBackgroundForParent }；见 run-manager。
                                     权限模式没有 daemon 级旗标——它是会话级事实（meta.mode），
                                     run 组装每 run 从会话 meta 读出（见 permissions/run-manager）
-createApp({home, token, stores, bus, run, mcp, mainWorkspace, configNotifier, attachmentsDir, usage, webDist, memory, skillsEvolution, goal})
+createApp({home, token, stores, bus, run, mcp, mainWorkspace, configNotifier, attachmentsDir, usage, webDist, memory, skillsEvolution, goal, historySearch})
                                     Fastify 应用（见 http-api）；attachmentsDir/usage 传入时
                                     对应的附件与用量路由才注册，mcp 提供 /mcp 的分组快照，mainWorkspace
                                     随快照回显（新增条目的默认目标组），memory 供 /memory 路由族，
                                     skillsEvolution 供 /skills/proposals 提案治理路由族（未组装时该族 503），
-                                    goal 供 /sessions/:id/goal 路由族（未组装时整体 503）；
+                                    goal 供 /sessions/:id/goal 路由族（未组装时整体 503），
+                                    historySearch 供 GET /search（未注入时 503）；
                                     configNotifier 交给 provider 路由，改动持久化后发布
 await app.listen({ port: listenPort, host: "127.0.0.1" })   ← listenPort = opts.port ?? config.server?.port ?? 0；
                                     固定端口被占（EADDRINUSE）是硬错误：释放占位 daemon.json
@@ -153,7 +169,10 @@ startMemoryScheduler({...})         记忆调度器：定时 + 跟随保底触�
 startSkillScheduler({...})          技能调度器：跟随检查消费端（默认 60s 扫一次，成功才清检查 +
                                     连败 3 次放弃；enabled:false 或 idleMinutes:0 时 sweep 直接返回，
                                     检查停留在检查表里，功能重开后继续消费，见 skills.md）
-feishu 频道管理器启动（opt-in）     ← 仅 ~/.kclaw/feishu.json enabled 时建通道；在两个调度器之后启动，
+startSkillCurator({...})            技能 curator 调度：每日本地时间过 skills.curator.hour（默认凌晨 4 点）
+                                    后首扫（lastRun 本地日期判重），标记陈旧与归档 AI 自建技能
+                                    （见 skills.md 的 curator 一节）
+feishu 频道管理器启动（opt-in）     ← 仅 ~/.kclaw/feishu.json enabled 时建通道；在各调度器与宿主之后启动，
                                     有 15s 上限——挂起的握手不拖累 daemon；失败记入管理器错误状态
                                     （IM Channel 页可见）并拆掉半启动状态，daemon 照常服务。
                                     管理器恒定组装（未启用零成本），保存配置即热重启通道
@@ -205,17 +224,22 @@ app.addHook("preHandler", async (request, reply) => {
 
 bin 脚本注册信号处理：SIGTERM/SIGINT → `shutdown()`（`stopping` 标志防重入）→ `daemon.stop()` → 正常停止，exit 0；`stop()` 抛错（某步超时）则记录 stderr，exit 1。
 
-`stop()` 的拆除序与启动相反，每步有界：
+`stop()` 的拆除序：常驻宿主按注册序逐项限时执行，其余步骤与启动相反，每步有界：
 
 ```
+// 先按构造序逐项限时执行 hostStops（goal → 历史检索索引 → 心跳 → 记忆 → 技能 → curator）：
+withStopTimeout(goalHost.dispose(), 60s)
+                                    // 等进行中的 goal 检查落定（判定器调用可能尚未返回；
+                                    // 循环不自动续跑——重启后等用户 resume，见 goal.md）
+withStopTimeout(historyIndex.close(), 60s)
+                                    // 关 search.db（历史检索索引）
 withStopTimeout(tick.stop(), 60s)   // 停心跳；tick.stop 会 await 所有进行中的 job run
 withStopTimeout(memoryTick.stop(), 60s)
                                     // 停记忆调度器（定时 + 跟随保底）
 withStopTimeout(skillTick.stop(), 60s)
                                     // 停技能调度器（await 所有进行中的提炼）
-withStopTimeout(goalHost.dispose(), 60s)
-                                    // 等进行中的 goal 检查落定（判定器调用可能尚未返回；
-                                    // 循环不自动续跑——重启后等用户 resume，见 goal.md）
+withStopTimeout(curatorTick.stop(), 60s)
+                                    // 停技能 curator 宿主（见 skills.md 的 curator 一节）
 withStopTimeout(feishuManager.stop(), 60s)
                                     // 停飞书频道（未启用时为 no-op；断开长连接与总线订阅）
 mcpProjects?.close()                // 停项目发现（关闭全部项目文件 watch，丢弃挂着的

@@ -46,6 +46,38 @@ describe("subagent_run executor", () => {
     expect(result).toEqual({ status: "ok", output: "共 3 处", data: { childSessionId: "ses_child" } })
   })
 
+  it("carries role/toolAllow to the spawner; empty tools array means unrestricted", async () => {
+    const seen: Array<Partial<SubagentSpawnRequest>> = []
+    const spawner = vi.fn(async (req: SubagentSpawnRequest) => {
+      seen.push(req)
+      return ok("done")
+    })
+    const tool = createSubagentTool(spawner, "ses_p")
+    await tool.execute({ task: "t", role: "只读侦探", tools: ["fs_read", " fs_list "] }, { onOutput: () => undefined })
+    expect(seen[0]!.role).toBe("只读侦探")
+    expect(seen[0]!.toolAllow).toEqual(["fs_read", "fs_list"])
+    // 空数组 = 未限制：不携带 toolAllow
+    await tool.execute({ task: "t", tools: [] }, { onOutput: () => undefined })
+    expect(seen[1]!.toolAllow).toBeUndefined()
+    // 非 string 数组元素 → 参数错误，不派发
+    const r = await tool.execute({ task: "t", tools: [42] }, { onOutput: () => undefined })
+    expect(r.status).toBe("error")
+    expect(spawner).toHaveBeenCalledTimes(2)
+  })
+
+  it("role supplement is appended to the lean prompt as its own section (head-capped)", () => {
+    const withRole = subagentSystemPrompt("/ws", "只读代码侦探")
+    expect(withRole).toContain("子代理")
+    expect(withRole).toContain("# 角色补充")
+    expect(withRole).toContain("只读代码侦探")
+    const long = "长".repeat(3000)
+    const capped = subagentSystemPrompt("/ws", long)
+    expect(capped).toContain("长".repeat(2000))
+    expect(capped).not.toContain("长".repeat(2001))
+    // 无 role 时模板不变
+    expect(subagentSystemPrompt("/ws")).not.toContain("# 角色补充")
+  })
+
   it("forwards the run's abort signal to the spawner (parent stop → child stop)", async () => {
     let sawSignal: AbortSignal | undefined
     const spawner = vi.fn(async (req: SubagentSpawnRequest) => {

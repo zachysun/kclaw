@@ -34,6 +34,17 @@ describe("exec tool", () => {
     expect(r.status).toBe("error")
     expect(r.output).toMatch(/exit code 3/)
   })
+  it("injects session env vars over the inherited environment", async () => {
+    const tool = createExecTool({ workspace: ws, env: { KCLAW_SESSION_ID: "ses_test123", KCLAW_WORKSPACE: ws } })
+    const r = await run(tool, "echo $KCLAW_SESSION_ID $KCLAW_WORKSPACE")
+    expect(r.status).toBe("ok")
+    expect(r.output).toContain("ses_test123")
+    expect(r.output).toContain(ws)
+    // PATH survives: inherited vars are still present
+    const r2 = await run(tool, "echo $PATH")
+    expect(r2.status).toBe("ok")
+    expect(r2.output).not.toContain("undefined")
+  })
   it("times out and reports partial output", async () => {
     const tool = createExecTool({ workspace: ws, timeoutMs: 150 })
     const r = await run(tool, "echo started && sleep 5")
@@ -101,6 +112,22 @@ describe("exec tool with an injected sandbox", () => {
     expect(r.status).toBe("ok")
     expect(r.output).toContain("done")
     expect(sb.calls).toEqual(["ls flag.txt && echo done"])
+  })
+
+  it("forwards the merged session env through the sandbox wrapper", async () => {
+    let seenEnv: NodeJS.ProcessEnv | undefined
+    const sb = {
+      spawn(command: string, opts: { cwd: string; env?: Record<string, string> }) {
+        seenEnv = opts.env
+        return spawn(command, { shell: true, cwd: opts.cwd, ...(opts.env === undefined ? {} : { env: opts.env }) })
+      },
+    }
+    const tool = createExecTool({ workspace: ws, sandbox: sb, env: { KCLAW_SESSION_ID: "ses_sb" } })
+    const r = await run(tool, "echo $KCLAW_SESSION_ID")
+    expect(r.status).toBe("ok")
+    expect(r.output).toContain("ses_sb")
+    expect(seenEnv?.PATH).toBeDefined()
+    expect(seenEnv?.KCLAW_SESSION_ID).toBe("ses_sb")
   })
 
   it("sandbox spawn failure surfaces as an error result (fail-closed, no bare run)", async () => {

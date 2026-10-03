@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权 hook 加 81 个业务路由（健康/状态 2 个、会话 22 个、记忆 10 个、技能 16 个、hook 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、provider 管理 6 个、目录浏览 2 个、用量 1 个、MCP 管理 6 个、IM Channel 管理 4 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`providers.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`、`mcp.ts`、`channel.ts`）；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未组装时降级 503，技能组始终注册（只读与复用管理无组装依赖；提案治理子路由族组装后才可用、未组装整体 503），hook 组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则以文件为准，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权 hook 加 82 个业务路由（健康/状态 2 个、会话 22 个、记忆 10 个、技能 16 个、hook 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、provider 管理 6 个、目录浏览 2 个、用量 1 个、MCP 管理 6 个、IM Channel 管理 4 个、检索 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`providers.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`、`mcp.ts`、`channel.ts`、`search.ts`）；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未组装时降级 503，技能组始终注册（只读与复用管理无组装依赖；提案治理子路由族组装后才可用、未组装整体 503），hook 组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则以文件为准，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
@@ -226,6 +226,14 @@ interface Job {
 | GET | `/usage?by=day\|session\|model` | token/费用用量聚合 | `by` 三选一；无效值静默回退到 `day` | `{by, buckets[], total}`——bucket/total 形状同为 `{key, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd}`；两个缓存字段 `number \| null`，**null = 桶内没有任何行携带该指标（未知）**——供应商不返回缓存指标是常态，消费方应显示 "—" 而非 0；费用按 `config.usage.prices` 计价（模型带缓存价目且行内有缓存数据时按非缓存输入/读/写/输出分列），未配置价格的模型计 0 |
 
 `/fs/browse` 与 `/fs/files` 的出错是三态 400：`path does not exist: <path>`、`not a directory: <path>`、`cannot read directory: <path>`。这两个端点能列出本机任意目录——浏览端点的设计目的就是允许把工作目录设在任何地方，防线只有与其他 API 相同的 Bearer 鉴权；文件清单端点限制在工作区内（`workdir` 必须是目录），但同样不校验目录归属。用量数据记录在一张 SQLite 表里，数据来源见 [storage](../core/storage.md) 的用量记录一节。
+
+### 检索（routes/search.ts，始终注册）
+
+跨会话原始消息的全文检索（`history_search` 工具同源数据面的人类窗口，机制见 [tools](../core/tools.md) 的 history 工具一节）。路由始终注册；未注入 `historySearch`（独立 app/测试）时 503 `history search unavailable`。
+
+| 方法 | 路径 | 用途 | 请求 | 响应 |
+|------|------|------|------|------|
+| GET | `/search` | 全文检索全部历史会话的原始消息（user/assistant 文本块；回收站与已清除会话的命中被过滤） | query `q` 必填非空（否则 400 `query parameter q is required`）；`limit` 可选整数 1–20（默认 10，越界/非整数 400）；`sessionId` 可选非空字符串，收窄到单个会话 | `{hits: [{sessionId, title, role, at, excerpt}]}`——title 为会话标题，excerpt 为命中消息的原文；按 bm25 相关度排序 |
 
 ### MCP 管理
 

@@ -4,6 +4,7 @@ import { DEFAULT_LLM_TIMEOUT_MS } from "../provider/openai-compat.js"
 import type { KclawPaths } from "./paths.js"
 import type { NotifyChannel } from "../notify/notify.js"
 import { isPermissionMode, type PermissionMode } from "../permissions/modes.js"
+import { DEFAULT_SENSITIVE_FILES } from "../permissions/engine.js"
 import { validateWaterlineConfig } from "../session/waterlines.js"
 
 /**
@@ -66,7 +67,22 @@ export interface KclawConfig {
      */
     timeoutMs?: number
   }
-  permissions: { allow: string[]; deny: string[]; confirmTimeoutMs: number; sessionGrants: boolean; autoLearnThreshold?: number; /** 新会话的初始权限模式（创建时固化为 meta.mode）。默认 "default"。 */ defaultMode?: PermissionMode }
+  permissions: {
+    allow: string[]
+    deny: string[]
+    confirmTimeoutMs: number
+    sessionGrants: boolean
+    autoLearnThreshold?: number
+    /** 新会话的初始权限模式（创建时固化为 meta.mode）。默认 "default"。 */
+    defaultMode?: PermissionMode
+    /**
+     * 敏感文件名模式（basename glob，如 ".env*"、"*.pem"）：fs 类工具命中
+     * 这些文件时不吃 safe/acceptEdits 免审，一律走确认；显式 allow/learned
+     * 规则与 run 内 once 批准仍可放行。设置即整体替换内置清单（内置清单见
+     * permissions/engine.ts 的 DEFAULT_SENSITIVE_FILES）。
+     */
+    sensitiveFiles?: string[]
+  }
   memory: {
     write: { immediate: boolean; manual: boolean; intervalMinutes: number; idleMinutes: number }
     /** 提取与沉淀用的模型；空 = 回退到主对话模型。 */
@@ -198,6 +214,21 @@ export interface KclawConfig {
        */
       idleMinutes?: number
     }
+    /**
+     * 技能 curator（学习循环的生命周期半场）：按使用遥测对"AI 自建"的全局
+     * 技能做 stale 标记与归档。归档 = 整目录移入 <skillsDir>/.archive/
+     * （移动不是删除，可随时移回）；用户手写技能、pin 技能与复用链接豁免。
+     */
+    curator?: {
+      /** Master switch. Default true. */
+      enabled?: boolean
+      /** 连续未使用多少天后标记 stale。默认 14。 */
+      staleDays?: number
+      /** 连续未使用多少天后移入 .archive/。默认 30。 */
+      archiveDays?: number
+      /** 每日扫描的小时（本地时间，过了即扫、每日一次）。默认 4；负值关闭。 */
+      hour?: number
+    }
   }
   /**
    * /goal goal loop (issue #47). The ONLY knob is the judge's provider entry
@@ -226,7 +257,7 @@ export interface KclawConfig {
 
 export const defaultConfig: KclawConfig = {
   providers: { default: "", entries: {}, timeoutMs: DEFAULT_LLM_TIMEOUT_MS },
-  permissions: { allow: [], deny: ["exec:sudo*", "exec:rm -rf*"], confirmTimeoutMs: 120_000, sessionGrants: true, defaultMode: "default" },
+  permissions: { allow: [], deny: ["exec:sudo*", "exec:rm -rf*"], confirmTimeoutMs: 120_000, sessionGrants: true, defaultMode: "default", sensitiveFiles: DEFAULT_SENSITIVE_FILES },
   memory: {
     write: { immediate: true, manual: true, intervalMinutes: 30, idleMinutes: 10 },
     extractModel: "",
@@ -249,7 +280,7 @@ export const defaultConfig: KclawConfig = {
     mailbox: { maxUnreadPerTarget: 64, maxMessageBytes: 65536 },
     taskBoard: { maxTasks: 64 },
   },
-  skills: { evolution: { enabled: true, idleMinutes: 10 } },
+  skills: { evolution: { enabled: true, idleMinutes: 10 }, curator: { enabled: true, staleDays: 14, archiveDays: 30, hour: 4 } },
   goals: { judge: "" },
   workspace: process.cwd(),
 }
@@ -277,15 +308,50 @@ function deepMerge<T>(defaults: T, override: unknown): T {
 /**
  * Load the config file, deep-merged over defaults. A missing or empty file
  * yields the defaults; an unparseable file throws (silently falling back
- * could drop the user's permission rules).
+ * could drop the user's permission rules). credentials.json (0600) is then
+ * merged OVER the result: provider apiKeys and the tavily key live there
+ * since the credentials split; a key still present inline in config.json
+ * (pre-migration) applies only when the credentials file has none.
  *
  * The returned config never shares references with defaultConfig:
  * the merge starts from a clone, so callers may mutate the result freely.
  */
 export function loadConfig(paths: KclawPaths): KclawConfig {
   const json = readIfPresent(paths.configJson)
-  if (json !== undefined) return parseConfig(json, paths.configJson)
-  return structuredClone(defaultConfig)
+  const config = json !== undefined ? parseConfig(json, paths.configJson) : structuredClone(defaultConfig)
+  return applyCredentials(config, readCredentials(paths))
+}
+
+/** credentials.json 的形状：provider 条目的 apiKey 与 web 检索的 tavily key。 */
+export interface CredentialsFile {
+  providers?: Record<string, { apiKey?: string }>
+  web?: { tavilyApiKey?: string }
+}
+
+function readCredentials(paths: KclawPaths): CredentialsFile {
+  const raw = readIfPresent(paths.credentialsJson)
+  if (raw === undefined) return {}
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return isPlainObject(parsed) ? (parsed as CredentialsFile) : {}
+  } catch (err) {
+    console.warn(`kclaw credentials: ignoring unparseable ${paths.credentialsJson}: ${(err as Error).message}`)
+    return {}
+  }
+}
+
+function applyCredentials(config: KclawConfig, creds: CredentialsFile): KclawConfig {
+  // 凭据文件优先：同一条目两边都有值时 credentials.json 赢——config.json
+  // 里的内联 apiKey 只是首次保存前的迁移回落。条目不存在的孤儿引用忽略。
+  if (typeof creds.web?.tavilyApiKey === "string" && creds.web.tavilyApiKey !== "") {
+    config.web.tavilyApiKey = creds.web.tavilyApiKey
+  }
+  for (const [name, entry] of Object.entries(creds.providers ?? {})) {
+    if (config.providers.entries[name] !== undefined && typeof entry?.apiKey === "string" && entry.apiKey !== "") {
+      config.providers.entries[name]!.apiKey = entry.apiKey
+    }
+  }
+  return config
 }
 
 function readIfPresent(path: string): string | undefined {
@@ -384,19 +450,46 @@ function validateSkillsConfig(merged: KclawConfig): void {
     return
   }
   const evolution = skills.evolution
-  if (evolution === undefined) return
-  if (!isPlainObject(evolution)) {
-    console.warn("kclaw config: skills.evolution section is not a mapping; falling back to defaults")
-    skills.evolution = { enabled: false, idleMinutes: 10 }
+  if (evolution !== undefined) {
+    if (!isPlainObject(evolution)) {
+      console.warn("kclaw config: skills.evolution section is not a mapping; falling back to defaults")
+      skills.evolution = { enabled: false, idleMinutes: 10 }
+    } else {
+      if (evolution.enabled !== undefined && typeof evolution.enabled !== "boolean") {
+        console.warn(`kclaw config: skills.evolution.enabled ${String(evolution.enabled)} is invalid; falling back to false`)
+        evolution.enabled = false
+      }
+      if (evolution.idleMinutes !== undefined && !(typeof evolution.idleMinutes === "number" && Number.isInteger(evolution.idleMinutes) && evolution.idleMinutes >= 0)) {
+        console.warn(`kclaw config: skills.evolution.idleMinutes ${String(evolution.idleMinutes)} is invalid; falling back to 10`)
+        evolution.idleMinutes = 10
+      }
+    }
+  }
+  const curator = skills.curator
+  if (curator === undefined) return
+  if (!isPlainObject(curator)) {
+    console.warn("kclaw config: skills.curator section is not a mapping; falling back to defaults")
+    skills.curator = structuredClone(defaultConfig.skills!.curator)
     return
   }
-  if (evolution.enabled !== undefined && typeof evolution.enabled !== "boolean") {
-    console.warn(`kclaw config: skills.evolution.enabled ${String(evolution.enabled)} is invalid; falling back to false`)
-    evolution.enabled = false
+  if (curator.enabled !== undefined && typeof curator.enabled !== "boolean") {
+    console.warn(`kclaw config: skills.curator.enabled ${String(curator.enabled)} is invalid; falling back to true`)
+    curator.enabled = true
   }
-  if (evolution.idleMinutes !== undefined && !(typeof evolution.idleMinutes === "number" && Number.isInteger(evolution.idleMinutes) && evolution.idleMinutes >= 0)) {
-    console.warn(`kclaw config: skills.evolution.idleMinutes ${String(evolution.idleMinutes)} is invalid; falling back to 10`)
-    evolution.idleMinutes = 10
+  for (const key of ["staleDays", "archiveDays"] as const) {
+    if (curator[key] !== undefined && !(typeof curator[key] === "number" && Number.isInteger(curator[key]) && (curator[key] as number) > 0)) {
+      console.warn(`kclaw config: skills.curator.${key} ${String(curator[key])} is invalid; falling back to the default`)
+      delete curator[key]
+    }
+  }
+  if (curator.hour !== undefined && !(typeof curator.hour === "number" && Number.isInteger(curator.hour) && curator.hour >= 0 && curator.hour <= 23)) {
+    // 负值 = 关闭是 memory.consolidateHour 的语义，这里取同款：非法整数才回默认
+    if (typeof curator.hour === "number" && curator.hour < 0) {
+      // 合法的关闭表达：保留
+    } else {
+      console.warn(`kclaw config: skills.curator.hour ${String(curator.hour)} is invalid; falling back to the default`)
+      delete curator.hour
+    }
   }
 }
 
@@ -473,12 +566,32 @@ function validateTeamConfig(merged: KclawConfig): void {
 }
 
 /**
- * Serialize config to config.json (atomic whole-file rewrite; 0600 — holds
- * apiKey plaintext). MCP servers live in ~/.kclaw/mcp.json and are never
- * written here.
+ * Serialize config to config.json (atomic whole-file rewrite; 0600) with the
+ * credentials split: apiKeys and the tavily key go to credentials.json
+ * (0600, written FIRST so a config.json failure can't orphan them), and the
+ * corresponding config.json fields are persisted as empty strings. Reading
+ * accepts both locations (credentials wins), so a pre-split config.json with
+ * inline keys keeps working until the next save migrates it. MCP servers
+ * live in ~/.kclaw/mcp.json and are never written here.
  */
 export function saveConfig(paths: KclawPaths, config: KclawConfig): void {
-  writeFileAtomic(paths.configJson, JSON.stringify(config, null, 2) + "\n", 0o600)
+  const persisted: KclawConfig = structuredClone(config)
+  const credentials: CredentialsFile = {}
+  if (persisted.web.tavilyApiKey !== "") {
+    credentials.web = { tavilyApiKey: persisted.web.tavilyApiKey }
+    persisted.web.tavilyApiKey = ""
+  }
+  for (const [name, entry] of Object.entries(persisted.providers.entries)) {
+    if (entry.apiKey !== "") {
+      credentials.providers ??= {}
+      credentials.providers[name] = { apiKey: entry.apiKey }
+      entry.apiKey = ""
+    }
+  }
+  // 始终重写凭据文件（含空对象）：provider 删除后其 key 必须同时离开磁盘，
+  // 不能留上一份陈旧文件继续生效。
+  writeFileAtomic(paths.credentialsJson, JSON.stringify(credentials, null, 2) + "\n", 0o600)
+  writeFileAtomic(paths.configJson, JSON.stringify(persisted, null, 2) + "\n", 0o600)
 }
 
 /**

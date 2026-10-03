@@ -59,6 +59,8 @@ export interface McpManagerOptions {
   maxConnections?: number
   /** Bounded reconnect attempts before settling in "failed" (default 10). */
   maxReconnectAttempts?: number
+  /** Per-server stderr diagnostics dir (see ConnectionPoolOptions.stderrLogDir). */
+  stderrLogDir?: string
   onError?: (group: string, name: string, error: string) => void
   /**
    * Persist one group's FULL entry set after a hot mutation. The daemon
@@ -88,6 +90,7 @@ export class McpManager {
       connectTimeoutMs: opts.connectTimeoutMs,
       maxConnections: opts.maxConnections,
       maxReconnectAttempts: opts.maxReconnectAttempts,
+      ...(opts.stderrLogDir === undefined ? {} : { stderrLogDir: opts.stderrLogDir }),
       onError: opts.onError,
     })
     this.#persistHook = opts.persist

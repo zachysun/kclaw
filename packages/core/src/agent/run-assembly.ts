@@ -58,10 +58,10 @@ import { teamLeadProtocol, teamMemberSystemPrompt } from "../team/prompt.js"
 import type { TeamFacade, TeamIdentity } from "../team/facade.js"
 import type { SessionSearchFn } from "../tools/session.js"
 import type { ToolExecutor } from "./tools.js"
-import { createBuiltinTools, deriveToolFacts, dropSensitiveTools } from "../tools/index.js"
+import { createBuiltinTools, deriveToolFacts, dropSensitiveTools, type HistorySearchFn } from "../tools/index.js"
 import { makeEvent } from "../protocol/events.js"
 import { searchSessionEvents } from "../tools/session-search.js"
-import { applyReuseTiers, matchSkillInvocations, projectSkillsDir, readLinksFile, resolveEvolutionGate, scanSkillDirs, skillListPrompt, wrapSkillInvocations } from "../skills/index.js"
+import { applyReuseTiers, matchSkillInvocations, projectSkillsDir, readLinksFile, recordSkillUse, resolveEvolutionGate, scanSkillDirs, skillListPrompt, wrapSkillInvocations } from "../skills/index.js"
 import type { SkillEvolutionScheduleBook, SkillEvolutionTriggers } from "../skills/evolution.js"
 import { extractFileMentions, wrapFileMentions, type MentionResolution } from "../mentions.js"
 import type { MemorySystem } from "../memory/system.js"
@@ -117,6 +117,12 @@ export interface EnqueueInput {
   note?: QueueNote
   /** 单次显式处置（层级最高）；缺省 = 会话覆盖 ?? 配置默认；job 触发强制 wait。 */
   disposition?: "steer" | "wait" | "interrupt"
+  /**
+   * 子代理派发携带（subagent_run 的 role/toolAllow，仅 agent 触发的子会话
+   * 消费）：role 拼进子会话系统提示词；toolAllow 只收窄运行面与 wire 面。
+   */
+  subagentRole?: string
+  subagentToolAllow?: string[]
   /** 内部：出队执行时传入的预分配消息 id（ws 层不传）。 */
   messageId?: string
 }
@@ -175,6 +181,16 @@ export interface RunEngineDeps {
    * (plain script clients) leave it unset and use `llm` as before.
    */
   llmForRun?: (onRetry: LlmRetrySink, entryKey?: string) => LlmClient
+  /**
+   * 杂活模型通道：标题生成与压缩摘要等后台 LLM 调用走 extractModel 解析链
+   * （daemon 与记忆提取/技能进化同源注入）。缺省由 builtin 钩子回落主模型。
+   */
+  resolveExtractLlm?: () => { llm: LlmClient; model: string }
+  /**
+   * 跨会话原始消息检索（history_search 的数据面）：daemon 注入（索引 +
+   * 标题解析 + 回收站过滤都在宿主侧）。缺省时工具返回固定不可用文案。
+   */
+  historySearch?: HistorySearchFn
   /**
    * Per-name executor overrides for tests/adapters:
    * merged OVER the builtin tools after construction (defs stay the
@@ -412,6 +428,13 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
           wrapFileMentions("", resolveFileMentions(input.userText, workspace)),
         )
       : undefined
+  // 隐式包装的点名同样是"用了这个技能"：与 skill_read 一样落使用遥测，
+  // curator 的生命数据因此覆盖两条消费路径。
+  if (llmUserText !== undefined) {
+    for (const skill of matchSkillInvocations(input.userText, skills)) {
+      recordSkillUse(paths.skillsDir, skill.origin, skill.name)
+    }
+  }
 
   // --- exec sandbox (batch A): one probe, two consumers --------------------
   // `available` gates BOTH the exec tool's actual wrapper and the permission
@@ -446,6 +469,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
 
   const { tools, toolDefs } = createBuiltinTools({
     workspace,
+    sessionId,
     memoryCtx: {
       system: memory,
       sessionId,
@@ -461,7 +485,9 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     },
     web: { timeoutMs: config.web.timeoutMs, allowPrivateNetworks: config.web.allowPrivateNetworks, spillDir: paths.spillDir },
     sessionSearch: buildSessionSearch(engine.deps, sessionId),
+    ...(engine.deps.historySearch === undefined ? {} : { historySearch: engine.deps.historySearch }),
     skills,
+    recordSkillUse: (name, origin) => recordSkillUse(paths.skillsDir, origin, name),
     ...(engine.deps.skillsEvolution === undefined
       ? {}
       : {
@@ -521,6 +547,20 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // snapshot.
   if (sessionMeta?.mode === "readonly") dropSensitiveTools(tools, toolDefs)
 
+  // 子代理工具白名单（subagent_run 的 tools 参数，经 EnqueueInput 到这里）：
+  // 只收窄——白名单外的一切执行器与 schema 同步剔除，gate 的 safeTools 与
+  // 注册事实由过滤后的面派生（在其后构造，天然一致），因此白名单不可能
+  // 放大权限。未知名字忽略；空数组视为未限制（避免误派一个零工具的子代理）。
+  const toolAllow = childRun && input.subagentToolAllow !== undefined && input.subagentToolAllow.length > 0
+    ? new Set(input.subagentToolAllow)
+    : undefined
+  if (toolAllow !== undefined) {
+    for (const name of [...tools.keys()]) {
+      if (!toolAllow.has(name)) tools.delete(name)
+    }
+    toolDefs.splice(0, toolDefs.length, ...toolDefs.filter((d) => toolAllow.has(d.name)))
+  }
+
   // 发送面工具清单按名排序（code point 序，确定性）：MCP 连接恢复/重连后
   // 视图迭代序可能变化，而 tools 在请求前缀的最前面，顺序一变整个 prompt
   // cache 前缀失效。只排 wire 面（toolDefs）；executor 的 Map 顺序无关，不动。
@@ -571,6 +611,11 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     grants,
   })
   const confirmTimeoutMs = config.permissions.confirmTimeoutMs
+  // A permission rule naming an unregistered tool can never fire — surface
+  // the typo once (the gate dedupes per process) instead of staying silent.
+  for (const w of baseGate.ruleNameWarnings()) {
+    console.warn(`kclaw: permission rule references unknown tool "${w}" (rule can never match)`)
+  }
   const broker = engine.deps.broker
   const gate: PermissionGate = {
     async check(toolCall) {
@@ -760,6 +805,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     signal: controller.signal,
     runLlm,
     model,
+    ...(engine.deps.resolveExtractLlm === undefined ? {} : { resolveExtractLlm: engine.deps.resolveExtractLlm }),
     waterlines,
     usageStore: engine.deps.usageStore,
     busEmit,
@@ -792,7 +838,13 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     chain,
     sessions,
     sessionId,
-    base: resolveBasePrompt({ childRun, team: teamIdentity, workspace, agentsMd: paths.agentsMd }),
+    base: resolveBasePrompt({
+      childRun,
+      team: teamIdentity,
+      workspace,
+      agentsMd: paths.agentsMd,
+      ...(childRun && input.subagentRole !== undefined ? { subagentRole: input.subagentRole } : {}),
+    }),
     baseline: sessionMeta?.systemBaseline,
     toolDefs,
   })
@@ -921,9 +973,11 @@ export function resolveBasePrompt(opts: {
   team: TeamIdentity | null
   workspace: string
   agentsMd: string
+  /** 子代理角色补充（subagent_run 的 role）：拼进子会话模板的独立小节。 */
+  subagentRole?: string
 }): string {
   if (opts.team?.role === "member") return teamMemberSystemPrompt(opts.workspace, opts.team.name)
   const main = systemPrompt(opts.agentsMd)
   if (opts.team?.role === "lead") return `${main}\n\n${teamLeadProtocol()}`
-  return opts.childRun ? subagentSystemPrompt(opts.workspace) : main
+  return opts.childRun ? subagentSystemPrompt(opts.workspace, opts.subagentRole) : main
 }

@@ -218,8 +218,7 @@ export class Compactor {
     sessionId: string,
     history: Message[],
     config: KclawConfig,
-    runLlm: LlmClient,
-    model: string,
+    resolveLlm: () => { llm: LlmClient; model: string },
     opts: { overheadTokens?: number; budget?: number } = {},
   ): boolean {
     if (this.#cancelled.has(sessionId)) return false
@@ -228,7 +227,7 @@ export class Compactor {
     this.#inFlight.set(sessionId, ctrl)
     void (async () => {
       try {
-        const out = await this.compact(sessionId, history, "", config, runLlm, model, {
+        const out = await this.compact(sessionId, history, "", config, resolveLlm, {
           phase: "in-run",
           background: true,
           signal: ctrl.signal,
@@ -261,8 +260,7 @@ export class Compactor {
     sessionId: string,
     history: Message[],
     config: KclawConfig,
-    llm: LlmClient,
-    model: string,
+    resolveLlm: () => { llm: LlmClient; model: string },
     opts: { phase: CompactionPhase; signal?: AbortSignal; emergency?: boolean; overheadTokens?: number; budget?: number },
   ): Promise<CompactionOutcome> {
     if (this.#cancelled.has(sessionId) || opts.signal?.aborted === true) return { status: "cancelled" }
@@ -271,7 +269,7 @@ export class Compactor {
     const onAbort = (): void => { ctrl.abort() }
     opts.signal?.addEventListener("abort", onAbort, { once: true })
     try {
-      return await this.compact(sessionId, history, "", config, llm, model, {
+      return await this.compact(sessionId, history, "", config, resolveLlm, {
         phase: opts.phase,
         signal: ctrl.signal,
         ...(opts.emergency === true ? { emergency: true } : {}),
@@ -308,8 +306,7 @@ export class Compactor {
     history: Message[],
     userText: string,
     config: KclawConfig,
-    runLlm: LlmClient,
-    model: string,
+    resolveLlm: () => { llm: LlmClient; model: string },
     opts: { focus?: string; manual?: boolean; background?: boolean; phase?: CompactionPhase; signal?: AbortSignal; emergency?: boolean; overheadTokens?: number; budget?: number } = {},
   ): Promise<CompactionOutcome> {
     const { sessions } = this.#deps
@@ -357,7 +354,14 @@ export class Compactor {
     // run.started — the pre-run compaction is otherwise a silent multi-second
     // gap between send and the first run event. From here on a paired
     // completed is guaranteed, whatever happens next.
-    this.#deps.emit(makeEvent("compaction.started", { phase }, { sessionId }))
+    this.#deps.emit(makeEvent("compaction.started", {
+      phase,
+      trigger: manual ? "manual" : phase === "in-run" ? "in-run" : "auto",
+    }, { sessionId }))
+
+    // 杂活模型通道：摘要调用走 resolveLlm（extractModel 命中条目走条目端点），
+    // 声明后才解析——declined 路径零成本。
+    const { llm: runLlm, model } = resolveLlm()
 
     try {
       const seg = active.slice(0, boundary.keepFrom)
@@ -426,7 +430,14 @@ export class Compactor {
         console.error(`kclaw compaction audit (${sessionId}) append failed:`, err)
       }
       this.#deps.emit(
-        makeEvent("compaction.completed", { segments: nextSegments.length, kept: active.length - boundary.keepFrom, phase, result: "ok" }, { sessionId }),
+        makeEvent("compaction.completed", {
+          segments: nextSegments.length,
+          kept: active.length - boundary.keepFrom,
+          phase,
+          result: "ok",
+          trigger: manual ? "manual" : phase === "in-run" ? "in-run" : "auto",
+          ...(opts.emergency === true ? { emergency: true } : {}),
+        }, { sessionId }),
       )
       // Success supersedes any parked background result — only here, not at
       // entry: this compaction's view is based on meta that already contains

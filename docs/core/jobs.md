@@ -79,7 +79,7 @@ SQLite 表结构与之一一对应（`enabled` 存 0/1，驼峰字段转下划�
 
 ### 会话命名
 
-job 会话的标题在创建时就定为 `job.name`，而自动命名（`scheduleAutoname`，core `packages/core/src/session/autoname.ts`）只对 `trigger !== "job"` 的运行触发，job 会话的标题永远不会被自动改名覆盖。
+job 会话的标题在创建时就定为 `job.name`，而自动命名（`scheduleAutoname`，core `packages/core/src/session/autoname.ts`）只对 `trigger === "user"` 的运行触发，job 会话的标题永远不会被自动改名覆盖。
 
 ### 启用 / 停用 / 删除
 

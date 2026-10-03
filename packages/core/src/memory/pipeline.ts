@@ -36,6 +36,8 @@ export interface MemoryWrittenEvent {
   kind: "episode" | "cognition"
   topic?: string
   scope?: string
+  /** 触发原因（与持久化 MemoryEvent.trigger 同口径），总线广播与审计共用。 */
+  trigger?: MemoryAudit["trigger"]
 }
 
 /** 记忆落盘通知：pipeline 在每次写入后回调，at 由 pipeline 补；
@@ -73,6 +75,7 @@ export const EXTRACT_SYSTEM_PROMPT = [
   "情节要有叙事要素（做了什么/结果/说了什么/有何要求），不要孤立的一句话事实；能接上已有线就对该线的 file 做 append/update，接不上才 new-thread。",
   "已有主题线里已记录过的内容不要重复记录；append/update 只落这段消息里出现的新信息，同一经历的转述不算新信息。",
   "区分说话人：只有用户消息里的话才算用户的表态；助手自己的复述、确认，以及记忆检索结果里的内容，都不算用户的新经历或新要求。",
+  "以下三类不要记为经验：一次性的环境故障（网络抖动、服务暂时 5xx——不是持久事实）；对工具或方法的负面断言（某次失败不等于\"X 不可用/不行\"，记了会让以后自缚手脚）；没走通的尝试（不许包装成可靠工作流，只有走通并验证过的做法才值得记）。",
   "噪音（寒暄、与长期记忆无关的过程性内容）直接跳过。无值得记的内容输出 {\"actions\":[]}。只输出 JSON，不要输出任何其他文字。",
 ].join("\n")
 
@@ -338,7 +341,7 @@ export class MemoryPipeline {
         status: action.status ?? "active", created: date, updated: date, sections: [],
       }))
       writeThreadFile(path, (t) => appendSection({ ...t, title: t.title || (action.title ?? t.topic) }, { date, heading: sectionHeading([action.title ?? "", action.file], t.sections), body: action.content }), () => tf)
-      this.#deps.emit?.({ type: "memory.written", path, kind: "episode", topic: action.file })
+      this.#deps.emit?.({ type: "memory.written", path, kind: "episode", topic: action.file, trigger })
       this.#audit({ trigger, kind: "episode", op: action.op, topic: action.file, sessionId })
       return
     }
@@ -361,7 +364,7 @@ export class MemoryPipeline {
     } else if (action.status === "active" || currentIsInactive) {
       writeThreadFile(path, (tf) => ({ ...tf, status: "active" }), () => { throw new Error("unreachable") }) // inactive → active 复活
     }
-    this.#deps.emit?.({ type: "memory.written", path, kind: "episode", topic: action.file })
+    this.#deps.emit?.({ type: "memory.written", path, kind: "episode", topic: action.file, trigger })
     this.#audit({ trigger, kind: "episode", op: action.op, topic: action.file, sessionId })
   }
 
@@ -567,7 +570,7 @@ export class MemoryPipeline {
         return { ...cf, body: action.content, updated: todayOf(this.#now()) } // rewrite：就地改写不保留原文
       },
       () => ({ kind, name, title: name, scope: "global", created: todayOf(this.#now()), updated: todayOf(this.#now()), body: isAppend ? "" : withSource }))
-    this.#deps.emit?.({ type: "memory.written", path, kind: "cognition", scope: result.scope })
+    this.#deps.emit?.({ type: "memory.written", path, kind: "cognition", scope: result.scope, trigger })
     this.#audit({ trigger, kind: "cognition", op: action.op, file: `${kind}/${name}`, scope: result.scope, source: action.source || source, sessionId })
     await this.#reindexGlobal()
   }

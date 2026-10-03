@@ -71,7 +71,7 @@ describe("Compactor 结构化 spill 指针", () => {
       for (const m of history) sessions.appendMessage(session.id, m)
       const calls: LlmRequest[] = []
 
-      const out = await compactor.compact(session.id, history, "", config, stubSummarizer(calls), "mock-model")
+      const out = await compactor.compact(session.id, history, "", config, () => ({ llm: stubSummarizer(calls), model: "mock-model" }))
       expect(out.status).toBe("applied")
 
       const [record] = sessions.readCompactions(session.id)
@@ -103,7 +103,7 @@ describe("Compactor token 记账", () => {
       for (const m of history) sessions.appendMessage(session.id, m)
 
       // stubSummarizer 的 message_done 带 outputTokens: 5 → 总摘要走真值分支
-      const out = await compactor.compact(session.id, history, "", config, stubSummarizer([]), "mock-model")
+      const out = await compactor.compact(session.id, history, "", config, () => ({ llm: stubSummarizer([]), model: "mock-model" }))
       expect(out.status).toBe("applied")
       if (out.status !== "applied") return
 
@@ -132,7 +132,7 @@ describe("Compactor token 记账", () => {
           yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 0, outputTokens: 0 } }
         },
       }
-      const out = await compactor.compact(session.id, history, "", config, noUsageLlm, "mock-model")
+      const out = await compactor.compact(session.id, history, "", config, () => ({ llm: noUsageLlm, model: "mock-model" }))
       expect(out.status).toBe("applied")
       if (out.status !== "applied") return
 

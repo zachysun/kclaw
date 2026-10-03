@@ -101,6 +101,8 @@ export function withRetry(client: LlmClient, opts?: {
 
 条目校验（`parseProviderEntry`）除 format/baseUrl/apiKey/model 外，还要求 `contextWindow`/`maxOutput` 声明时必须是正数，否则抛 `"<key> must be a positive number"`——新增/编辑条目经此校验，WebUI 把它转成表单内的错误。
 
+**apiKey 实际存放在 `~/.kclaw/credentials.json`**（0600，形状 `{ providers: { <条目名>: { apiKey } }, web: { tavilyApiKey? } }`）：`saveConfig` 把密钥从 config.json 分流到这份凭据文件、config.json 里留空串；`loadConfig` 再合并回内存配置（同一条目两边都有值时凭据文件优先）。解析链（resolver、`resolveProviderEndpoint`、模型拉取）看到的都是合并后的值，对分流无感——只有直接手读 config.json 才需要知道这层（详见 [storage](./storage.md)）。
+
 解析函数在 core（`packages/core/src/provider/resolve.ts`），daemon 组装时建一个共享 resolver 实例（`packages/server/src/daemon.ts`）：
 
 ```ts

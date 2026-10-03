@@ -37,8 +37,13 @@ export interface ExecSandbox {
   readonly available: boolean
   /** Why the sandbox is unavailable; undefined while available. */
   readonly unavailableReason?: string
-  /** Spawn `command` (a shell command line) inside the sandbox. */
-  spawn(command: string, opts: { cwd: string }): ChildProcess
+  /**
+   * Spawn `command` (a shell command line) inside the sandbox. `env` (when
+   * given) is the child's COMPLETE environment — the exec tool merges the
+   * session identity vars over process.env before calling; undefined =
+   * inherit the daemon's environment.
+   */
+  spawn(command: string, opts: { cwd: string; env?: Record<string, string> }): ChildProcess
 }
 
 /** Locate an executable on PATH (used for bwrap probing). */
@@ -176,6 +181,9 @@ export function createExecSandbox(
         const profile = seatbeltProfile({ workspace: workspaceFor(opts.cwd), home, writeRoots: cfg.writeRoots, tmpDirs, network })
         return spawn(SEATBELT_BIN, ["-p", profile, "/bin/sh", "-c", command], {
           cwd: opts.cwd,
+          // The exec tool passes the COMPLETE child environment (session
+          // identity vars merged over process.env); undefined = inherit.
+          ...(opts.env === undefined ? {} : { env: opts.env }),
           // Own process group so the exec tool's timeout kill(-pid) reaches
           // the sandbox and everything it spawned (sandbox-exec execs the
           // shell in place, same pid/group).
@@ -197,7 +205,7 @@ export function createExecSandbox(
       available: true,
       spawn(command, opts) {
         const args = bwrapArgs({ workspace: workspaceFor(opts.cwd), home, writeRoots: cfg.writeRoots, command, network })
-        return spawn(bwrap, args, { cwd: opts.cwd, detached: true })
+        return spawn(bwrap, args, { cwd: opts.cwd, ...(opts.env === undefined ? {} : { env: opts.env }), detached: true })
       },
     }
   }
