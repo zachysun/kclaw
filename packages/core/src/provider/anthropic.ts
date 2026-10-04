@@ -2,6 +2,7 @@ import type { ContentPart, LlmClient, LlmRequest, LlmStreamEvent } from "./types
 import type { StopReason, Usage } from "../protocol/messages.js"
 import type { ProviderApiFormat } from "../storage/config.js"
 import { DEFAULT_LLM_TIMEOUT_MS, llmHttpError, rethrowClassified, sseDataLines } from "./openai-compat.js"
+import { createCacheMarkerPolicy } from "./cache-markers.js"
 
 /** Value of the mandatory anthropic-version header on every Messages API call. */
 export const ANTHROPIC_VERSION = "2023-06-01"
@@ -209,13 +210,10 @@ function normalizeStop(raw: string | null | undefined): StopReason {
  * the abort fires at timeoutMs and any post-abort failure is reclassified as
  * the `llm http timeout` message.
  *
- * Cache markers: when the entry allows it (promptCacheEnabled !== false) and
- * the request carries `promptCache`, the payload carries the three
- * cache_control breakpoints. A 400 (a schema rejection — never 401/403/429)
- * strips the markers and retries once; success remembers the verdict in this
- * client instance (i.e. per provider entry), so later requests skip the
- * markers without the round-trip. The retry is silent except for one
- * console.error line and emits no extra events.
+ * Cache markers: when the entry allows it and the request carries
+ * `promptCache`, the payload carries the three cache_control breakpoints;
+ * rejection handling (400 → strip and retry once, verdict remembered per
+ * entry) follows the shared policy in cache-markers.ts.
  */
 export function createAnthropicClient(opts: {
   baseUrl: string
@@ -227,13 +225,11 @@ export function createAnthropicClient(opts: {
 }): LlmClient {
   const doFetch = opts.fetchImpl ?? fetch
   const timeoutMs = opts.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS
-  // "this endpoint rejects cache markers" verdict, per client instance =
-  // per provider entry lifetime (resolver rebuilds on config change).
-  let cacheMarkersRejected = false
+  const cacheMarkers = createCacheMarkerPolicy({ promptCacheEnabled: opts.promptCacheEnabled })
   return {
     async *stream(req: LlmRequest): AsyncIterable<LlmStreamEvent> {
       const signal = AbortSignal.timeout(timeoutMs)
-      const wantCache = opts.promptCacheEnabled !== false && req.promptCache !== undefined && !cacheMarkersRejected
+      const wantCache = cacheMarkers.wanted(req.promptCache !== undefined)
       const post = (body: string): Promise<Response> =>
         doFetch(anthropicEndpoint(opts.baseUrl, "/messages"), {
           method: "POST",
@@ -244,20 +240,15 @@ export function createAnthropicClient(opts: {
           body,
           signal,
         })
+      const buildBody = (marked: boolean): string => JSON.stringify(toAnthropicPayload(req, marked))
       let res: Response
       try {
-        res = await post(JSON.stringify(toAnthropicPayload(req, wantCache)))
-        // Schema-level rejection → strip the markers and retry once. Not on
-        // 401/403/429: auth/ratelimit failures are not schema problems.
-        if (res.status === 400 && wantCache) {
-          console.error("kclaw anthropic: endpoint rejected cache_control markers (400); retrying without them")
-          const retry = await post(JSON.stringify(toAnthropicPayload(req, false)))
-          // Remember the verdict only when the retry succeeded: a retry that
-          // still fails points at a non-marker cause (bad model name etc.) and
-          // must not silently disable markers for this entry.
-          if (retry.ok) cacheMarkersRejected = true
-          res = retry
-        }
+        res = await cacheMarkers.send({
+          wanted: wantCache,
+          post,
+          buildBody,
+          rejectedLogLine: "kclaw anthropic: endpoint rejected cache_control markers (400); retrying without them",
+        })
       } catch (err) {
         rethrowClassified(err, signal, timeoutMs)
       }
