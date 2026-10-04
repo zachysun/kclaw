@@ -32,11 +32,12 @@
  */
 import { existsSync, mkdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
-import { collectStreamText } from "../provider/collect.js"
+import { collectStreamResult } from "../provider/collect.js"
 import type { LlmClient } from "../provider/types.js"
 import { renderSegment } from "../session/compaction.js"
 import type { SessionStore } from "../session/store.js"
 import type { KclawConfig } from "../storage/config.js"
+import type { ChoreUsageRecorder } from "../storage/usage.js"
 import type { Message } from "../protocol/messages.js"
 import type { SkillEvent } from "../session/events.js"
 import { WriteLedger, type FollowCheck } from "../memory/ledger.js"
@@ -116,6 +117,8 @@ export interface SkillEvolutionDeps {
   resolveLlm: () => { llm: LlmClient; model: string }
   log?: (m: string) => void
   now?: () => Date
+  /** 杂活记账：提炼调用的 usage 回调（daemon 注入；缺省不记）。 */
+  recordChoreUsage?: ChoreUsageRecorder
 }
 
 /**
@@ -142,6 +145,7 @@ export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEv
   readonly #store: ProposalStore
   readonly #log: (m: string) => void
   readonly #now: () => Date
+  readonly #recordChoreUsage?: ChoreUsageRecorder
 
   constructor(deps: SkillEvolutionDeps) {
     this.#skillsDir = deps.skillsDir
@@ -150,6 +154,7 @@ export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEv
     this.#resolveLlm = deps.resolveLlm
     this.#log = deps.log ?? ((m) => console.error(m))
     this.#now = deps.now ?? (() => new Date())
+    this.#recordChoreUsage = deps.recordChoreUsage
     this.#store = new ProposalStore({
       proposalsDir: this.#proposalsDir,
       resolveDir: (scope, workdir) => (scope === "global" ? this.#skillsDir : projectSkillsDir(workdir ?? this.#config.workspace)),
@@ -254,12 +259,14 @@ export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEv
       let raw: string
       try {
         const { llm, model } = this.#resolveLlm()
-        raw = await collectStreamText(llm, {
+        const extractResult = await collectStreamResult(llm, {
           model,
           system: SKILL_EXTRACT_SYSTEM_PROMPT,
           messages: [{ role: "user", content: renderSegment(range) }],
           tools: [],
         })
+        raw = extractResult.text
+        this.#recordChoreUsage?.({ chore: "skill", sessionId: row.id, model, usage: extractResult.usage })
       } catch (err) {
         this.#log(`kclaw skills extract failed for ${row.id} (watermark not advanced): ${String(err)}`)
         failed = true

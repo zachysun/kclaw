@@ -177,6 +177,7 @@ export class RunManager {
     this.#compactor = new Compactor({
       sessions: deps.sessions,
       emit: (e) => deps.bus.emit(e),
+      ...(deps.recordChoreUsage !== undefined ? { recordChoreUsage: deps.recordChoreUsage } : {}),
     })
     this.#broker = deps.broker ?? new ConfirmationBroker()
     this.#engine = {

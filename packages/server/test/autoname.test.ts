@@ -97,9 +97,37 @@ describe("scheduleAutoname", () => {
 })
 
 describe("defaultTitle", () => {
-  it("defaultTitle 用流拼接文本生成标题", async () => {
-    const llm = { stream: async function* () { yield { type: "text_delta", delta: "你好" } } } as never
-    const title = await defaultTitle(llm as never, "m", "用户消息")
+  it("defaultTitle 用流拼接文本生成标题，并把 message_done 的 usage 带回来", async () => {
+    const llm = {
+      stream: async function* () {
+        yield { type: "text_delta", delta: "你好" }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 3, outputTokens: 2 } }
+      },
+    } as never
+    const { title, usage } = await defaultTitle(llm as never, "m", "用户消息")
     expect(title).toBe("你好")
+    expect(usage).toEqual({ inputTokens: 3, outputTokens: 2 })
+  })
+
+  it("默认标题通道把 usage 交给 recordChoreUsage（titleFor 注入时不记）", async () => {
+    const sessions = tempSessions()
+    const meta = sessions.create()
+    const recorded: Array<{ chore: string; sessionId?: string; model: string; usage?: unknown }> = []
+    const llm = {
+      stream: async function* () {
+        yield { type: "text_delta", delta: "生成的标题" }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 7, outputTokens: 1 } }
+      },
+    } as never
+    await scheduleAutoname(
+      {
+        sessions,
+        resolveLlm: () => ({ llm, model: "m" }),
+        recordChoreUsage: (r) => recorded.push(r),
+      },
+      meta.id, "你好",
+    )
+    expect(sessions.meta(meta.id)?.title).toBe("生成的标题")
+    expect(recorded).toEqual([{ chore: "autoname", sessionId: meta.id, model: "m", usage: { inputTokens: 7, outputTokens: 1 } }])
   })
 })

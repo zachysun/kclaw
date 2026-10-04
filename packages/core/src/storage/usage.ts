@@ -1,6 +1,7 @@
 import Database from "better-sqlite3"
 import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
+import type { Usage } from "../protocol/messages.js"
 
 /** One recorded LLM run's token usage (per-run row). */
 export interface UsageRow {
@@ -16,6 +17,26 @@ export interface UsageRow {
   cacheWriteTokens?: number
   at: string // ISO-8601
 }
+
+/** Which background chore a usage row belongs to (the runId's prefix). */
+export type ChoreKind = "compaction" | "autoname" | "memory" | "skill"
+
+/**
+ * Metering seam for background chore LLM calls (compaction summaries, session
+ * autoname, memory extract/consolidate, skill evolution): call sites that
+ * already receive the provider's usage hand it here with their kind. The
+ * daemon implements it as a UsageStore row (runId prefixed by the chore,
+ * goal-judge rows keep their own shape); omitted (tests, bare engine) = the
+ * spend stays unrecorded.
+ */
+export type ChoreUsageRecorder = (r: {
+  chore: ChoreKind
+  /** Attributed session; undefined → the daemon skips the row (no owner). */
+  sessionId?: string
+  model: string
+  /** Absent (stream aborted mid-way) → nothing to bill. */
+  usage?: Usage
+}) => void
 
 /**
  * Aggregation bucket: key is the day (local), session or model. The cache

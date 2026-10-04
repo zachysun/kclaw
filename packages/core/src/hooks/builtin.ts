@@ -46,7 +46,7 @@ import type { Compactor } from "../session/compactor.js"
 import type { KclawConfig } from "../storage/config.js"
 import type { MemoryQuery, MemoryScheduleBook } from "../memory/system.js"
 import { resolveEvolutionGate, type SkillEvolutionScheduleBook } from "../skills/evolution.js"
-import type { UsageStore } from "../storage/usage.js"
+import type { ChoreUsageRecorder, UsageStore } from "../storage/usage.js"
 import { withLastUserText } from "../agent/context.js"
 import type { HookEntry, HookContextMap, HookPosition, HookResultMap } from "./types.js"
 
@@ -88,6 +88,11 @@ export interface BuiltinHookDeps {
    * 裸引擎测试与旧装配无需接线。
    */
   resolveExtractLlm?: () => { llm: LlmClient; model: string }
+  /**
+   * Chore metering for this run's background LLM calls (autoname; compaction
+   * meters inside the Compactor). Optional — omitted = unrecorded.
+   */
+  recordChoreUsage?: ChoreUsageRecorder
   /**
    * Waterline thresholds resolved once for this run's budget (absolute token
    * values from resolveWaterlines): compaction trigger decisions read this
@@ -242,7 +247,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
         // subagent children get their title at spawn time (label/task).
         if (trigger !== "user") return
         void scheduleAutoname(
-          { sessions, resolveLlm: extractLlmResolver(rt), emit: busEmit },
+          { sessions, resolveLlm: extractLlmResolver(rt), emit: busEmit, recordChoreUsage: rt.recordChoreUsage },
           sessionId, textOf(message),
         )
       }

@@ -41,7 +41,7 @@ import type { LlmClient, ToolDefinition } from "../provider/types.js"
 import type { KclawConfig } from "../storage/config.js"
 import { defaultConfig, resolveContextTokens, resolveRunModelLine } from "../storage/config.js"
 import type { KclawPaths } from "../storage/paths.js"
-import type { UsageStore } from "../storage/usage.js"
+import type { ChoreUsageRecorder, UsageStore } from "../storage/usage.js"
 import type { SessionStore } from "../session/store.js"
 import type { Compactor } from "../session/compactor.js"
 import { resolveWaterlines } from "../session/waterlines.js"
@@ -225,6 +225,12 @@ export interface RunEngineDeps {
   team?: { facade: TeamFacade }
   /** Per-run token ledger (optional; recording failures are swallowed). */
   usageStore?: UsageStore
+  /**
+   * Chore metering for the run's background LLM calls (compaction summaries,
+   * autoname): forwarded to the Compactor and the builtin hooks. Optional
+   * (tests and bare engines omit it — the spend stays unrecorded).
+   */
+  recordChoreUsage?: ChoreUsageRecorder
   /**
    * User hook registry: the daemon-scoped bookkeeping for
    * ~/.kclaw/hooks files. Refreshed per run; its snapshot joins the run's
@@ -808,6 +814,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     ...(engine.deps.resolveExtractLlm === undefined ? {} : { resolveExtractLlm: engine.deps.resolveExtractLlm }),
     waterlines,
     usageStore: engine.deps.usageStore,
+    recordChoreUsage: engine.deps.recordChoreUsage,
     busEmit,
     runIdRef: { get current() { return runId } },
     inputNotes,

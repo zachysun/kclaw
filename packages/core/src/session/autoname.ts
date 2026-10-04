@@ -1,6 +1,9 @@
 import type { AgentEvent } from "../protocol/events.js"
 import { makeEvent } from "../protocol/events.js"
+import type { Usage } from "../protocol/messages.js"
 import type { LlmClient } from "../provider/types.js"
+import { collectStreamResult } from "../provider/collect.js"
+import type { ChoreUsageRecorder } from "../storage/usage.js"
 import type { SessionStore } from "./store.js"
 
 export interface AutonameDeps {
@@ -13,6 +16,8 @@ export interface AutonameDeps {
   titleFor?: (firstText: string) => Promise<string>
   /** Optional event sink: a successful rename is announced as session.renamed. */
   emit?: (e: AgentEvent) => void
+  /** Chore metering: the default title call's usage lands here (optional). */
+  recordChoreUsage?: ChoreUsageRecorder
 }
 
 export function scheduleAutoname(deps: AutonameDeps, sessionId: string, firstText: string): Promise<void> {
@@ -21,9 +26,11 @@ export function scheduleAutoname(deps: AutonameDeps, sessionId: string, firstTex
   if (meta === undefined || meta.title !== "新会话") return Promise.resolve()
   return (async () => {
     try {
-      const title = await (deps.titleFor ?? ((t: string) => {
+      const title = await (deps.titleFor ?? (async (t: string) => {
         const { llm, model } = deps.resolveLlm()
-        return defaultTitle(llm, model, t)
+        const r = await defaultTitle(llm, model, t)
+        deps.recordChoreUsage?.({ chore: "autoname", sessionId, model, usage: r.usage })
+        return r.title
       }))(firstText)
       const t = title.trim().slice(0, 30)
       if (t === "") return
@@ -38,15 +45,13 @@ export function scheduleAutoname(deps: AutonameDeps, sessionId: string, firstTex
   })()
 }
 
-export async function defaultTitle(llm: LlmClient, model: string, firstText: string): Promise<string> {
-  let out = ""
-  for await (const ev of llm.stream({
+/** Generate a session title from the conversation's first message. */
+export async function defaultTitle(llm: LlmClient, model: string, firstText: string): Promise<{ title: string; usage?: Usage }> {
+  const r = await collectStreamResult(llm, {
     model,
     system: "你是标题生成助手，只输出一个不超过30字的会话标题。",
     messages: [{ role: "user", content: `给这段对话起一个不超过30字的标题：\n${firstText}` }],
     tools: [],
-  })) {
-    if (ev.type === "text_delta") out += ev.delta
-  }
-  return out.trim()
+  })
+  return { title: r.text.trim(), usage: r.usage }
 }

@@ -1,9 +1,10 @@
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import type { LlmClient } from "../provider/types.js"
-import { collectStreamText } from "../provider/collect.js"
+import { collectStreamResult } from "../provider/collect.js"
 import { renderSegment } from "../session/compaction.js"
 import type { Message } from "../protocol/messages.js"
+import type { ChoreUsageRecorder } from "../storage/usage.js"
 import type { SessionStore } from "../session/store.js"
 import type { MemoryEvent } from "../session/events.js"
 import { MemoryLayout } from "./layout.js"
@@ -58,6 +59,8 @@ export interface PipelineDeps {
   threadInactiveDays?: number
   /** 内化开关：缺省开；由 MemorySystem 从 config 传入。 */
   consolidateEnabled?: boolean
+  /** 杂活记账：提取/内化调用的 usage 回调（daemon 注入；缺省不记）。 */
+  recordChoreUsage?: ChoreUsageRecorder
 }
 
 /** 提取器固定文案。字段名必须与 #extract 的校验逐字一致——模型
@@ -244,7 +247,7 @@ export class MemoryPipeline {
       batches += 1
       let actions: ExtractAction[]
       try {
-        actions = await this.#extract(projectId, range)
+        actions = await this.#extract(projectId, row.id, range)
       } catch (err) {
         this.#log(`kclaw memory extract failed for ${row.id} (watermark not advanced): ${String(err)}`)
         continue
@@ -289,19 +292,21 @@ export class MemoryPipeline {
     else ledger.advanceAll(sessionId, last.id)
   }
 
-  async #extract(projectId: string, range: Message[]): Promise<ExtractAction[]> {
+  async #extract(projectId: string, sessionId: string, range: Message[]): Promise<ExtractAction[]> {
     const memoryMdPath = join(this.#layout.projectDir(projectId), "MEMORY.md")
     let threadsTable = ""
     try { threadsTable = readFileSync(memoryMdPath, "utf8") } catch { /* 尚无索引表 */ }
     let raw: string
     try {
       const { llm, model } = this.#deps.resolveLlm()
-      raw = await collectStreamText(llm, {
+      const extractResult = await collectStreamResult(llm, {
         model,
         system: EXTRACT_SYSTEM_PROMPT,
         messages: [{ role: "user", content: `${renderSegment(range)}\n\n--- 已有主题线 ---\n${threadsTable || "（暂无）"}` }],
         tools: [],
       })
+      raw = extractResult.text
+      this.#deps.recordChoreUsage?.({ chore: "memory", sessionId, model, usage: extractResult.usage })
     } catch (err) {
       this.#log(`kclaw memory extract failed (watermark not advanced): ${String(err)}`)
       throw err // 抛出走锁内 catch：水位不推进，下次触发重试同一范围
@@ -522,12 +527,16 @@ export class MemoryPipeline {
       let raw: string
       try {
         const { llm, model } = this.#deps.resolveLlm()
-        raw = await collectStreamText(llm, {
+        const consolidateResult = await collectStreamResult(llm, {
           model,
           system: CONSOLIDATE_SYSTEM_PROMPT,
           messages: [{ role: "user", content: `主题线 ${tf.topic}（${tf.title}）的情节：\n\n${renderThreadBody(tf)}\n\n--- 现有认知 ---\n${existing}` }],
           tools: [],
         })
+        raw = consolidateResult.text
+        if (sessionId !== undefined) {
+          this.#deps.recordChoreUsage?.({ chore: "memory", sessionId, model, usage: consolidateResult.usage })
+        }
       } catch (err) {
         this.#log(`kclaw memory consolidate failed for ${tf.topic}: ${String(err)}`)
         return
