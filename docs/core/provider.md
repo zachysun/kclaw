@@ -20,7 +20,7 @@
 - **openai 格式的适用范围**：任何提供 OpenAI 兼容 `/chat/completions` 端点的服务（OpenAI、DeepSeek、Ollama、各类中转、本地模型网关）都无需单独适配；差异全部留在 baseUrl 指向的端点上。
 - **core 与传输解耦**：`agent/loop.ts` 只依赖 `LlmClient` 这个 async iterable 接口，不知道 fetch、SSE（Server-Sent Events：服务器通过 HTTP 持续推送文本行的流式格式）的存在；测试注入假 client 即可完整运行整个循环。
 - **超时覆盖整个请求**：`AbortSignal.timeout` 同时约束"等响应头"和"读流式响应体"两个阶段——停滞的 provider 流（无响应头、或响应体中途停止）不可能使一个 run 永久停滞。
-- **超时与 HTTP 错误共用一套消息格式**：失败统一抛成 `llm http <status>` 或 `llm http timeout after <n>ms` 字符串，`retry.ts` 用正则识别——分类方（openai-compat）与使用方（retry）靠这个消息约定耦合，改任何一侧都要保持同步。
+- **超时与 HTTP 错误共用一套消息格式**：失败统一抛成 `llm http <status>` 或 `llm http timeout after <n>ms` 字符串，`retry.ts` 用正则识别——分类方（`provider/http.ts`，两家 client 与探活共用的 HTTP 层）与使用方（retry）靠这个消息约定耦合，改任何一侧都要保持同步。
 - **重试封装在 client 内部，不在循环层**：`runAgent` 调一次 `stream()` 就是完整的一次"可能含内部重试"的调用；循环层再重试会形成双重重试。重试经 `withRetry` 的 `onRetry` 回调对外可见，把它接到循环的 `onLlmRetry` hook，转成 `llm.failed {willRetry:true}` 事件（见 [agent-loop](./agent-loop.md)）。
 - **已产出事件绝不重试**：流已产出过事件即说明使用方可能已收到，重试会造成输出重复——此时错误直接抛出。
 - **参数原文不动**：工具调用的参数以原始 JSON 字符串（`argsJson`）透传，不在 provider 层解析；解析失败的处理属于循环层。（例外：anthropic 格式要把参数变成 Messages API 的 `tool_use.input` 对象，请求侧做一次 `JSON.parse`，解析失败按空对象。）
@@ -167,7 +167,7 @@ anthropic 格式每个 SSE 事件的映射：
 
 ### 2b. 缓存标记的兼容退避（两格式同款）
 
-条目配置 `promptCache: "auto"`（默认）时请求带缓存标记（Anthropic `cache_control` 断点 / OpenAI `prompt_cache_key`，主循环恒传 `promptCache.key = sessionId`）。端点对陌生字段回 **400** 时（401/403/429 不在列——认证与限流不是 schema 问题）：剥掉全部缓存标记原样重试一次；重试成功后在该客户端实例内记住"该端点不支持缓存标记"的裁决，后续请求直接发无标记版本（省一次注定失败的往返）；重试仍 400 则抛原始 `llm http 400` 走既有失败路径。剥除重试静默进行，只有一行 `console.error` 记录裁决，不发额外事件。客户端实例即条目生命周期（resolver 按条目签名缓存、配置变更重建），`promptCache` 配置参与签名——改配置即重建实例、裁决随之重置。`withRetry` 只认 429/5xx/timeout/网络错，400 本就不在其列，两层重试互不重叠。
+条目配置 `promptCache: "auto"`（默认）时请求带缓存标记（Anthropic `cache_control` 断点 / OpenAI `prompt_cache_key`，主循环恒传 `promptCache.key = sessionId`）。端点对陌生字段回 **400** 时（401/403/429 不在列——认证与限流不是 schema 问题）：剥掉全部缓存标记原样重试一次；重试成功后在该客户端实例内记住"该端点不支持缓存标记"的裁决，后续请求直接发无标记版本（省一次注定失败的往返）；重试仍 400 则抛原始 `llm http 400` 走既有失败路径。剥除重试静默进行，只有一行 `console.error` 记录裁决，不发额外事件。客户端实例即条目生命周期（resolver 按条目签名缓存、配置变更重建），`promptCache` 配置参与签名——改配置即重建实例、裁决随之重置。`withRetry` 只认 429/5xx/timeout/网络错，400 本就不在其列，两层重试互不重叠。这份"开标记 → 被拒 → 剥标重试一次 → 重试成功才记裁决"的有状态协议单源在 `provider/cache-markers.ts`，两家 client 只提供各自的标记布点与请求序列化。
 
 ### 3. 超时终止
 

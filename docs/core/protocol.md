@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/protocol/` 定义贯穿全系统的数据模型，六个文件按粒度分层：`messages.ts`（持久化单位；持久化 = 写入磁盘长期保存）、`blocks.ts`（消息内结构化片段）、`events.ts`（瞬时广播）、`wire.ts`（WS 指令帧与应答帧）、`session-events.ts`（会话事件流的持久化事件类型）、`ids.ts`（ID 体系）。三层按生命周期划分：
+`packages/core/src/protocol/` 定义贯穿全系统的数据模型，按粒度分层：核心生命周期 `messages.ts`（持久化单位；持久化 = 写入磁盘长期保存，另带 `mergeUsage`——run 内 usage 折叠的单一出处）、`blocks.ts`（消息内结构化片段）、`events.ts`（瞬时广播）、`wire.ts`（WS 指令帧与应答帧）、`session-events.ts`（会话事件流的持久化事件类型）、`ids.ts`（ID 体系），领域形状 `team.ts`（团队域）、`mcp.ts`（MCP 快照）、`skills.ts`（技能提案）、`goal.ts`（/goal 视图）、`usage.ts`（`GET /usage` 的响应形状）。三层按生命周期划分：
 
 ```
 Event（瞬时，不持久化）──记录为──▶ Message（持久化单位）──内含──▶ Block（结构化片段）
@@ -10,7 +10,7 @@ Event（瞬时，不持久化）──记录为──▶ Message（持久化单�
 
 server 与 CLI/WebUI 之间传输的就是这些类型：JSONL（每行一条 JSON 的文本文件）里每行一条 `Message`，WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）事件流里每帧一个 `AgentEvent`，daemon 不翻译、不改写。
 
-**权威类型与出口**：这七份文件是全部线上数据形状的唯一类型出处。除 core 主入口外，它们经 `package.json` 的子路径出口 `@kclaw/core/protocol` 对外发布——纯类型与纯函数、不含任何 Node API，浏览器构建（WebUI）直接 `import type` 引用而不会把 Node 绑定的主入口打进包里（`@kclaw/core/commands` 是同一先例）。三端约定：不手抄镜像，一律引用这份权威定义；web/cli 的事件处理 switch 以 `default: const unhandled: never = event` 断言收尾，core 新增事件类型而处理端未表态时编译失败。
+**权威类型与出口**：这些文件是全部线上数据形状的唯一类型出处。除 core 主入口外，它们经 `package.json` 的子路径出口 `@kclaw/core/protocol` 对外发布——纯类型与纯函数、不含任何 Node API，浏览器构建（WebUI）直接 `import type` 引用而不会把 Node 绑定的主入口打进包里（`@kclaw/core/commands` 是同一先例）。三端约定：不手抄镜像，一律引用这份权威定义；web/cli 的事件处理 switch 以 `default: const unhandled: never = event` 断言收尾，core 新增事件类型而处理端未表态时编译失败。
 
 本页讲这组类型的机制与设计取舍；逐值陈列（每个枚举值、每种帧、每个工具的清单）在 [reference](../reference/README.md)——文档需要罗列这些值时引用那边，不另抄一份。
 
