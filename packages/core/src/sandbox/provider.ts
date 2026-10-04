@@ -32,18 +32,27 @@ import { join, resolve } from "node:path"
 import { realpathWithin } from "../permissions/engine.js"
 import type { SandboxConfig } from "../storage/config.js"
 
-/** The spawn surface the exec tool consumes (minimal by design). */
-export interface ExecSandbox {
+/**
+ * The spawn contract the exec tool consumes from a sandbox wrapper. THE
+ * CARRIED INVARIANT: the returned ChildProcess must be a process-group /
+ * session leader (`detached: true` on a plain spawn; bwrap's
+ * `--new-session --die-with-parent` in the wrapper) — the exec tool's
+ * timeout kills the tree with `process.kill(-pid)`, which only reaches
+ * shell descendants when the child leads its own group. A spawn that skips
+ * this fails SILENTLY: the kill reaps the shell alone and grandchildren
+ * keep running. `env` (when given) is the child's COMPLETE environment —
+ * the exec tool merges the session identity vars over process.env before
+ * calling; undefined = inherit the daemon's environment.
+ */
+export interface ExecSandboxSpawn {
+  spawn(command: string, opts: { cwd: string; env?: Record<string, string> }): ChildProcess
+}
+
+/** The full sandbox surface: the spawn contract + availability probing. */
+export interface ExecSandbox extends ExecSandboxSpawn {
   readonly available: boolean
   /** Why the sandbox is unavailable; undefined while available. */
   readonly unavailableReason?: string
-  /**
-   * Spawn `command` (a shell command line) inside the sandbox. `env` (when
-   * given) is the child's COMPLETE environment — the exec tool merges the
-   * session identity vars over process.env before calling; undefined =
-   * inherit the daemon's environment.
-   */
-  spawn(command: string, opts: { cwd: string; env?: Record<string, string> }): ChildProcess
 }
 
 /** Locate an executable on PATH (used for bwrap probing). */
