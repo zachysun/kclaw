@@ -1,6 +1,5 @@
 import type { ProviderApiFormat } from "../storage/config.js"
-import { formatAuthHeaders, formatEndpoint } from "./anthropic.js"
-import { DEFAULT_LLM_TIMEOUT_MS, llmHttpError, rethrowClassified } from "./openai-compat.js"
+import { DEFAULT_LLM_TIMEOUT_MS, formatAuthHeaders, formatEndpoint, llmHttpError, rethrowClassified } from "./http.js"
 
 /**
  * List the model ids a provider endpoint serves: the models-list request the

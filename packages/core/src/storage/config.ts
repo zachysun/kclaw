@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
 import { writeFileAtomic } from "./atomic.js"
-import { DEFAULT_LLM_TIMEOUT_MS } from "../provider/openai-compat.js"
+import { DEFAULT_LLM_TIMEOUT_MS } from "../provider/http.js"
 import type { KclawPaths } from "./paths.js"
 import type { NotifyChannel } from "../notify/notify.js"
 import { isPermissionMode, type PermissionMode } from "../permissions/modes.js"
