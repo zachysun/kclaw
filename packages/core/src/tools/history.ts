@@ -14,9 +14,19 @@ import { makeTool, optInt, requireString, ToolError } from "./shared.js"
 export const HISTORY_SEARCH_DESCRIPTION =
   "跨会话检索全部历史对话的原始消息（按关键词全文匹配，返回命中会话、说话人与摘录）。记忆系统只保留沉淀后的事实；想找回某次对话里说过的原话、给过的路径或决定（如\"上次怎么修的 X\"）时用本工具。可选 session_id 限定单个会话。"
 
+/** Tool 面的默认条数（HTTP 面的默认 10 是另一处显式声明，各面自持）。 */
 const DEFAULT_LIMIT = 5
-const MAX_LIMIT = 20
 
+/**
+ * 两个调用面（history_search 工具、GET /search 路由）共用的 limit 上限：
+ * 上限单源在这里，默认值各面自持，谁也不会越过这条线。
+ */
+export const HISTORY_SEARCH_MAX_LIMIT = 20
+
+/**
+ * 检索数据面：工具、HTTP 路由与宿主过滤共用同一个函数类型。limit 由调用
+ * 方显式传入（不传时数据面回落 5），上限即 HISTORY_SEARCH_MAX_LIMIT。
+ */
 export interface HistorySearchFn {
   (query: string, opts?: { limit?: number; sessionId?: string }): Promise<Array<{ sessionId: string; title: string; role: "user" | "assistant"; at: string; excerpt: string }>>
 }
@@ -24,7 +34,7 @@ export interface HistorySearchFn {
 export function createHistoryTool(search?: HistorySearchFn): { "history_search": ToolExecutor & { name: "history_search" } } {
   const history_search = makeTool("history_search", "safe", "parallel", async (args) => {
     const query = requireString(args, "query")
-    const limit = optInt(args, "limit", DEFAULT_LIMIT, 1, MAX_LIMIT)
+    const limit = optInt(args, "limit", DEFAULT_LIMIT, 1, HISTORY_SEARCH_MAX_LIMIT)
     const rawSession = (args as { session_id?: unknown } | undefined)?.session_id
     if (rawSession !== undefined && typeof rawSession !== "string") throw new ToolError("session_id 必须是字符串")
     if (search === undefined) return { status: "ok", output: "(历史检索不可用)" }

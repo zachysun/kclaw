@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify"
+import { HISTORY_SEARCH_MAX_LIMIT } from "@kclaw/core"
 import type { HistorySearchFn } from "@kclaw/core"
 
 export interface SearchRouteDeps {
@@ -25,8 +26,8 @@ export function registerSearchRoutes(app: FastifyInstance, deps: SearchRouteDeps
     if (typeof q !== "string" || q.trim() === "") {
       return reply.code(400).send({ error: "query parameter q is required" })
     }
-    if (limit !== undefined && (!/^\d+$/.test(String(limit)) || Number(limit) < 1 || Number(limit) > 20)) {
-      return reply.code(400).send({ error: "limit must be an integer in [1, 20]" })
+    if (limit !== undefined && (!/^\d+$/.test(String(limit)) || Number(limit) < 1 || Number(limit) > HISTORY_SEARCH_MAX_LIMIT)) {
+      return reply.code(400).send({ error: `limit must be an integer in [1, ${HISTORY_SEARCH_MAX_LIMIT}]` })
     }
     if (sessionId !== undefined && (typeof sessionId !== "string" || sessionId.trim() === "")) {
       return reply.code(400).send({ error: "sessionId must be a non-empty string" })

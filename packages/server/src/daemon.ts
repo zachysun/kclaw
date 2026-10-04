@@ -61,6 +61,7 @@ import { createMcpProjects, collectProjectDirs } from "./mcp-projects.js"
 import { EventBus } from "@kclaw/core"
 import { RunManager } from "./run.js"
 import { createChoreUsageRecorder } from "./chore-usage.js"
+import { createHistorySearch } from "./history-search.js"
 import { createSubagentHost } from "./subagent.js"
 import type { FeishuChannel } from "./feishu/channel.js"
 import { createFeishuManager } from "./feishu/manager.js"
@@ -459,15 +460,9 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     log: (line) => console.error(`kclaw goal: ${line}`),
   })
   hostStops.push(["goal loop", () => goalHost.dispose()])
-  // history_search 数据面：检索 + 标题解析 + 回收站/已清除会话过滤（meta
-  // 缺失或 deleted 的命中直接丢弃——索引行的清理跟随事件，purge 级联兜底）。
-  const historySearch: HistorySearchFn = async (query, opts = {}) => {
-    const hits = historyIndex.search(query, opts.limit ?? 5, opts.sessionId)
-    return hits
-      .map((hit) => ({ hit, meta: sessions.meta(hit.sessionId) }))
-      .filter((r): r is { hit: ReturnType<typeof historyIndex.search>[number]; meta: NonNullable<typeof r.meta> } => r.meta !== undefined && r.meta.deleted !== true)
-      .map(({ hit, meta }) => ({ sessionId: hit.sessionId, title: meta.title, role: hit.role, at: hit.at, excerpt: hit.text }))
-  }
+  // history_search 数据面（具名工厂 history-search.ts）：检索 + 标题解析 +
+  // 回收站过滤（"已删除/不存在的会话不命中"不变量在那里有独立测试面）。
+  const historySearch: HistorySearchFn = createHistorySearch({ index: historyIndex, sessions })
   // 启动后后台回填存量会话（per-session 幂等；serving 不等它）。
   void (async () => {
     try {
