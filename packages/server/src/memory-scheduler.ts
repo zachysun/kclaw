@@ -14,15 +14,9 @@
  * 只剩记忆域逻辑。手动/立刻不入此调度器（memory_save 工具与 /memory save 直接触发）。
  */
 import type { KclawConfig, MemoryScheduleBook, MemoryTriggers, SessionStore } from "@kclaw/core"
-import { followGateDue, startIntervalHost } from "./host-kit.js"
+import { dailyGateDue, followGateDue, localDate, startIntervalHost } from "./host-kit.js"
 
 const DEFAULT_SCAN_MS = 60_000
-
-/** 本地日期 YYYY-MM-DD（夜间内化防同日重跑的判重键；与触发判定同用本地时间）。 */
-function localDate(d: Date): string {
-  const p = (n: number): string => String(n).padStart(2, "0")
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
 
 export interface MemorySchedulerHandle { stop(): Promise<void> }
 
@@ -85,9 +79,11 @@ export function startMemoryScheduler(deps: {
         // 本地时间过了 consolidateHour 且该项目今天（本地日期）未跑则触发——daemon 凌晨
         // 未开时，开机后首个 sweep 补跑。日期由 markNightlyRun 记本地日期（防同日重跑），
         // 内化判据基线由 pipeline 记 UTC 日期（与线文件 updated 同源），两个时区各管各的。
-        if (cfg.consolidateHour >= 0) {
+        {
           const t = now()
-          if (t.getHours() >= cfg.consolidateHour && deps.system.nightlyLastRun(workdir) !== localDate(t)) {
+          // 每日过点门禁在 host-kit（dailyGateDue）：时刻判定 + 本地日期判重
+          // 单源（consolidateHour 负值关闭）。
+          if (dailyGateDue(t, cfg.consolidateHour, deps.system.nightlyLastRun(workdir))) {
             // 夜间内化无显式归属会话时，memory 事件记到项目最近活动会话名下
             // （判据唯一正本在 core：system.recentSessionId）。
             host.track(deps.system.triggerNightly(workdir, deps.system.recentSessionId(workdir)).catch((e) => log(`kclaw memory nightly failed: ${String(e)}`)))

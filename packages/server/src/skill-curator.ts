@@ -11,15 +11,9 @@ import { readFileSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { KclawConfig } from "@kclaw/core"
 import { curateGlobalSkills, type CuratorConfig, type CuratorReport } from "@kclaw/core"
-import { startIntervalHost } from "./host-kit.js"
+import { dailyGateDue, localDate, startIntervalHost } from "./host-kit.js"
 
 const DEFAULT_SCAN_MS = 60_000
-
-/** 本地日期 YYYY-MM-DD（每日一次的判重键；与触发判定同用本地时间）。 */
-function localDate(d: Date): string {
-  const p = (n: number): string => String(n).padStart(2, "0")
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
 
 function lastRunDate(skillsDir: string): string | undefined {
   try {
@@ -57,11 +51,11 @@ export function startSkillCurator(deps: {
     onError: (err) => log(`kclaw skill curator sweep failed: ${String(err)}`),
     async sweep() {
       const curator = resolveCuratorConfig(deps.config)
-      if (!curator.enabled || curator.hour < 0) return
+      if (!curator.enabled) return
       const t = now()
-      const today = localDate(t)
-      if (t.getHours() < curator.hour || lastRunDate(deps.skillsDir) === today) return
-      markLastRun(deps.skillsDir, today)
+      // 每日过点门禁在 host-kit（dailyGateDue）：时刻判定 + 本地日期判重单源。
+      if (!dailyGateDue(t, curator.hour, lastRunDate(deps.skillsDir))) return
+      markLastRun(deps.skillsDir, localDate(t))
       const report: CuratorReport = curateGlobalSkills(deps.skillsDir, curator, t)
       if (report.stale.length > 0) {
         log(`kclaw skill curator: marked stale (≥${curator.staleDays}d idle): ${report.stale.join(", ")}`)
