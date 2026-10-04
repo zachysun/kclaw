@@ -11,6 +11,7 @@ import type { ApiClient } from "../api.js"
 import type { SessionMeta } from "../types.js"
 
 import type { UsageAgg, UsageBody } from "@kclaw/core/protocol"
+import { hitRate } from "../usage/format.js"
 
 /** A cost column only earns its place when at least one cent shows up. */
 function hasCost(body: UsageBody | null): boolean {
@@ -18,11 +19,6 @@ function hasCost(body: UsageBody | null): boolean {
   return body.total.costUsd > 0 || body.buckets.some((b) => b.costUsd > 0)
 }
 
-/** 缓存读 / 输入总量；缓存读未知（null）时返回 null，显示 "—"。 */
-function hitRate(b: UsageAgg): string | null {
-  if (b.cacheReadTokens === null) return null
-  return `${Math.round((b.cacheReadTokens / Math.max(1, b.inputTokens)) * 100)}%`
-}
 
 export function UsageView({ api }: { api: ApiClient }) {
   const [daily, setDaily] = useState<UsageBody | null>(null)
