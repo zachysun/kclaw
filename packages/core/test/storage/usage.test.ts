@@ -143,6 +143,30 @@ describe("costUsd 缓存价目", () => {
   })
 })
 
+describe("UsageStore aggregate/total share one fold", () => {
+  it("total equals the sum of the session buckets (same cache NULL semantics)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "usage-fold-"))
+    try {
+      const store = new UsageStore(join(dir, "usage.db"))
+      const at = new Date().toISOString()
+      store.record({ sessionId: "ses_a", runId: "r1", model: "m", inputTokens: 10, outputTokens: 5, cacheReadTokens: 4, at })
+      store.record({ sessionId: "ses_a", runId: "r2", model: "m", inputTokens: 20, outputTokens: 6, at })
+      store.record({ sessionId: "ses_b", runId: "r3", model: "m", inputTokens: 30, outputTokens: 7, cacheWriteTokens: 2, at })
+      const buckets = store.aggregate("session", PRICES)
+      const total = store.total(PRICES)
+      expect(total.inputTokens).toBe(buckets.reduce((n, b) => n + b.inputTokens, 0))
+      expect(total.outputTokens).toBe(buckets.reduce((n, b) => n + b.outputTokens, 0))
+      expect(total.costUsd).toBeCloseTo(buckets.reduce((n, b) => n + b.costUsd, 0), 10)
+      // null stays null when NO row carried the metric — never a 0 sum.
+      const a = buckets.find((b) => b.key === "ses_a")!
+      expect(a.cacheReadTokens).toBe(4)
+      expect(a.cacheWriteTokens).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 /** Local date string for a Date (mirrors the store's bucket key). */
 function localDayKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`

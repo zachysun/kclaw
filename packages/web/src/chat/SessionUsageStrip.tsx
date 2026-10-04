@@ -9,15 +9,7 @@
 import { useEffect, useState } from "react"
 import type { ApiClient } from "../api.js"
 
-interface UsageBucket {
-  key: string
-  inputTokens: number
-  outputTokens: number
-  cacheReadTokens: number | null
-  cacheWriteTokens: number | null
-  costUsd: number
-}
-interface UsageBody { by: string; buckets: UsageBucket[]; total: unknown }
+import type { UsageAgg, UsageBody } from "@kclaw/core/protocol"
 
 /** 紧凑 token 数：980 / 14.2k / 3.1M——一行小字放不下 toLocaleString。 */
 export function fmtCompact(n: number): string {
@@ -30,7 +22,7 @@ export function fmtCompact(n: number): string {
 }
 
 /** 缓存读 / 输入总量（inputTokens 恒等式 = 非缓存 + 缓存写 + 缓存读）。 */
-export function hitRateText(bucket: UsageBucket | undefined): string {
+export function hitRateText(bucket: UsageAgg | undefined): string {
   if (bucket === undefined || bucket.cacheReadTokens === null) return "—"
   return `${Math.round((bucket.cacheReadTokens / Math.max(1, bucket.inputTokens)) * 100)}%`
 }
@@ -41,7 +33,7 @@ export function SessionUsageStrip({ api, sessionId, refreshKey }: {
   /** 父组件每次 run 收尾时 +1；0 = 只在挂载/切会话时拉一次。 */
   refreshKey: number
 }) {
-  const [bucket, setBucket] = useState<UsageBucket | undefined>(undefined)
+  const [bucket, setBucket] = useState<UsageAgg | undefined>(undefined)
   useEffect(() => {
     let alive = true
     api.get<UsageBody>("/usage?by=session")

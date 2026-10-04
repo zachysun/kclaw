@@ -929,14 +929,8 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   await chain.run("run-after", {
     outcome: {
       stopReason: outcome.stopReason,
-      // 缓存字段仅在 run 级聚合非 undefined 时携带；漏带则 usage-ledger
-      // 写出的永远是 NULL，事件流有字段而表里没有。
-      totalUsage: {
-        inputTokens: outcome.totalUsage.inputTokens,
-        outputTokens: outcome.totalUsage.outputTokens,
-        ...(outcome.totalUsage.cacheReadTokens !== undefined ? { cacheReadTokens: outcome.totalUsage.cacheReadTokens } : {}),
-        ...(outcome.totalUsage.cacheWriteTokens !== undefined ? { cacheWriteTokens: outcome.totalUsage.cacheWriteTokens } : {}),
-      },
+      // Usage 正本直传：缓存字段 undefined = 未知，usage-ledger 写 NULL。
+      totalUsage: outcome.totalUsage,
     },
     model,
   })

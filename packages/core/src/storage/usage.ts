@@ -2,6 +2,7 @@ import Database from "better-sqlite3"
 import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
 import type { Usage } from "../protocol/messages.js"
+import type { UsageAgg, UsageTotal } from "../protocol/usage.js"
 
 /** One recorded LLM run's token usage (per-run row). */
 export interface UsageRow {
@@ -37,22 +38,6 @@ export type ChoreUsageRecorder = (r: {
   /** Absent (stream aborted mid-way) → nothing to bill. */
   usage?: Usage
 }) => void
-
-/**
- * Aggregation bucket: key is the day (local), session or model. The cache
- * fields are `number | null` — null means NO row in the bucket carried the
- * metric (unknown, displayed as "—", never as 0); a number is the sum of the
- * known values (rows without the metric contribute nothing, they don't reset
- * the sum).
- */
-export interface UsageAgg {
-  key: string
-  inputTokens: number
-  outputTokens: number
-  cacheReadTokens: number | null
-  cacheWriteTokens: number | null
-  costUsd: number
-}
 
 /** Price table: USD per 1M tokens per model. Missing entries cost 0. */
 export type UsagePrices = Record<string, {
@@ -183,19 +168,43 @@ export class UsageStore {
     from?: Date,
     to?: Date,
   ): UsageAgg[] {
-    const rows = this.selectRows(from, to)
+    const keyOf = by === "day"
+      ? (r: UsageDbRow) => localDay(r.at)
+      : by === "session" ? (r: UsageDbRow) => r.session_id : (r: UsageDbRow) => r.model
+    const buckets = this.foldRows(this.selectRows(from, to), prices, keyOf)
+    return [...buckets.entries()]
+      .map(([key, b]) => ({ key, ...b }))
+      .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+  }
+
+  /** Totals over [from, to). */
+  total(prices: UsagePrices, from?: Date, to?: Date): UsageTotal {
+    // One implicit bucket over the whole range — same fold, same cache
+    // semantics, no second hand-kept copy of the walk.
+    const buckets = this.foldRows(this.selectRows(from, to), prices, () => "total")
+    return buckets.get("total") ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: null, cacheWriteTokens: null, costUsd: 0 }
+  }
+
+  /**
+   * The one bucket fold both aggregations share: numeric fields sum; a cache
+   * field stays null until a row WITH the metric arrives, then sums the known
+   * values (unknown rows are skipped, not coerced to 0 — "no data" must never
+   * display as "0 hits"). Cost sums per ROW (each row's own model price),
+   * whatever the bucket key.
+   */
+  private foldRows(
+    rows: UsageDbRow[],
+    prices: UsagePrices,
+    keyOf: (r: UsageDbRow) => string,
+  ): Map<string, { inputTokens: number; outputTokens: number; cacheReadTokens: number | null; cacheWriteTokens: number | null; costUsd: number }> {
     const buckets = new Map<string, { inputTokens: number; outputTokens: number; cacheReadTokens: number | null; cacheWriteTokens: number | null; costUsd: number }>()
     for (const r of rows) {
-      const key = by === "day" ? localDay(r.at) : by === "session" ? r.session_id : r.model
+      const key = keyOf(r)
       const b = buckets.get(key) ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: null, cacheWriteTokens: null, costUsd: 0 }
       b.inputTokens += r.input_tokens
       b.outputTokens += r.output_tokens
-      // Bucket cache semantics: null stays null until a row WITH the metric
-      // arrives, then sums the known values (unknown rows are skipped, not
-      // coerced to 0 — "no data" must never display as "0 hits").
       if (r.cache_read_tokens !== null) b.cacheReadTokens = (b.cacheReadTokens ?? 0) + r.cache_read_tokens
       if (r.cache_write_tokens !== null) b.cacheWriteTokens = (b.cacheWriteTokens ?? 0) + r.cache_write_tokens
-      // Cost sums per ROW (each row's own model price), whatever the bucket key.
       b.costUsd += costUsd(
         {
           inputTokens: r.input_tokens,
@@ -208,36 +217,7 @@ export class UsageStore {
       )
       buckets.set(key, b)
     }
-    return [...buckets.entries()]
-      .map(([key, b]) => ({ key, ...b }))
-      .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
-  }
-
-  /** Totals over [from, to). */
-  total(prices: UsagePrices, from?: Date, to?: Date): { inputTokens: number; outputTokens: number; cacheReadTokens: number | null; cacheWriteTokens: number | null; costUsd: number } {
-    const rows = this.selectRows(from, to)
-    let inputTokens = 0
-    let outputTokens = 0
-    let cacheReadTokens: number | null = null
-    let cacheWriteTokens: number | null = null
-    let cost = 0
-    for (const r of rows) {
-      inputTokens += r.input_tokens
-      outputTokens += r.output_tokens
-      if (r.cache_read_tokens !== null) cacheReadTokens = (cacheReadTokens ?? 0) + r.cache_read_tokens
-      if (r.cache_write_tokens !== null) cacheWriteTokens = (cacheWriteTokens ?? 0) + r.cache_write_tokens
-      cost += costUsd(
-        {
-          inputTokens: r.input_tokens,
-          outputTokens: r.output_tokens,
-          cacheReadTokens: r.cache_read_tokens,
-          cacheWriteTokens: r.cache_write_tokens,
-        },
-        r.model,
-        prices,
-      )
-    }
-    return { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd: cost }
+    return buckets
   }
 
   private selectRows(from?: Date, to?: Date): UsageDbRow[] {

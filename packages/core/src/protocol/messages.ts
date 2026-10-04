@@ -23,6 +23,42 @@ export interface Usage {
   cacheWriteTokens?: number
 }
 
+/**
+ * Field-level usage merge, used wherever per-call usages fold into one run
+ * total: numeric fields sum; a cache field absent from ANY input poisons the
+ * result's field to undefined (unknown — never a partial sum, never 0, so a
+ * run across mixed cache-reporting endpoints never displays a fake hit rate).
+ * The inputTokens identity (non-cached + cache-read + cache-write) stays the
+ * callers' invariant (docs/core/provider.md).
+ */
+export function mergeUsage(...usages: Array<Usage | undefined>): Usage {
+  let inputTokens = 0
+  let outputTokens = 0
+  let readSum = 0
+  let readSeen = false
+  let readPoisoned = false
+  let writeSum = 0
+  let writeSeen = false
+  let writePoisoned = false
+  for (const u of usages) {
+    if (u === undefined) continue
+    inputTokens += u.inputTokens
+    outputTokens += u.outputTokens
+    if (u.cacheReadTokens === undefined) readPoisoned = true
+    else { readSum += u.cacheReadTokens; readSeen = true }
+    if (u.cacheWriteTokens === undefined) writePoisoned = true
+    else { writeSum += u.cacheWriteTokens; writeSeen = true }
+  }
+  const cacheReadTokens = readPoisoned || !readSeen ? undefined : readSum
+  const cacheWriteTokens = writePoisoned || !writeSeen ? undefined : writeSum
+  return {
+    inputTokens,
+    outputTokens,
+    ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
+    ...(cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
+  }
+}
+
 export interface Message {
   id: string
   sessionId: string

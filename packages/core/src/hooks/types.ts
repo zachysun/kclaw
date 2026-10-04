@@ -42,17 +42,12 @@ export type HookPosition =
 export interface HookContextMap {
   /** 用户消息入场（message.created 与 completed 之间）。返回 Message = 改写生效。 */
   "run-before": { message: Message }
-  /** run 结束（runAgent 已返回）。返回值忽略。 */
+  /** run 结束（runAgent 已返回）。返回值忽略。totalUsage 即 protocol 的 Usage
+   *  正本：缓存字段仅 run 内所有 LLM 调用都携带时出现，缺省 = 未知。 */
   "run-after": {
     outcome: {
       stopReason: string
-      totalUsage: {
-        inputTokens: number
-        outputTokens: number
-        /** 仅 run 内所有 LLM 调用都携带该字段时出现；缺省 = 未知。 */
-        cacheReadTokens?: number
-        cacheWriteTokens?: number
-      }
+      totalUsage: Usage
     }
     model: string
   }
