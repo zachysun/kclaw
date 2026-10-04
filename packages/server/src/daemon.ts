@@ -506,7 +506,8 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     // auto mode induction (batch C): one per-process streak counter threaded
     // through every run's assembly; threshold 0 disables induction.
     autoLearn: { counter: new AutoLearnCounter(config.permissions.autoLearnThreshold ?? 3) },
-    extraTools: (workdir) => mcpManager.toolsFor(workdir),    // Retry visibility: with the DEFAULT
+    extraTools: (workdir) => mcpManager.toolsFor(workdir),
+    // Retry visibility: with the DEFAULT
     // composition every run builds its own retry-wrapped client carrying
     // that run's onRetry sink — retry events then carry the run's own
     // sessionId/runId even while sessions run concurrently on the shared

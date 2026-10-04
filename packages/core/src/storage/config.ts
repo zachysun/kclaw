@@ -79,7 +79,7 @@ export interface KclawConfig {
      * 敏感文件名模式（basename glob，如 ".env*"、"*.pem"）：fs 类工具命中
      * 这些文件时不吃 safe/acceptEdits 免审，一律走确认；显式 allow/learned
      * 规则与 run 内 once 批准仍可放行。设置即整体替换内置清单（内置清单见
-     * permissions/engine.ts 的 DEFAULT_SENSITIVE_FILES）。
+     * permissions/sensitive-files.ts 的 DEFAULT_SENSITIVE_FILES）。
      */
     sensitiveFiles?: string[]
   }

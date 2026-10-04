@@ -20,15 +20,21 @@ export function createChoreUsageRecorder(usage: UsageSink): ChoreUsageRecorder {
     const u = r.usage
     if (r.sessionId === undefined || r.sessionId === "") return
     if (u === undefined || (u.inputTokens === 0 && u.outputTokens === 0)) return
-    usage.record({
-      sessionId: r.sessionId,
-      runId: `${r.chore}-${randomUUID()}`,
-      model: r.model,
-      inputTokens: u.inputTokens,
-      outputTokens: u.outputTokens,
-      ...(u.cacheReadTokens !== undefined ? { cacheReadTokens: u.cacheReadTokens } : {}),
-      ...(u.cacheWriteTokens !== undefined ? { cacheWriteTokens: u.cacheWriteTokens } : {}),
-      at: new Date().toISOString(),
-    })
+    // 记账绝不反噬业务（UsageStore 自己的承诺，usage-ledger 同款）：库故障
+    // 只打一行日志，压缩/命名/记忆/技能照常。
+    try {
+      usage.record({
+        sessionId: r.sessionId,
+        runId: `${r.chore}-${randomUUID()}`,
+        model: r.model,
+        inputTokens: u.inputTokens,
+        outputTokens: u.outputTokens,
+        ...(u.cacheReadTokens !== undefined ? { cacheReadTokens: u.cacheReadTokens } : {}),
+        ...(u.cacheWriteTokens !== undefined ? { cacheWriteTokens: u.cacheWriteTokens } : {}),
+        at: new Date().toISOString(),
+      })
+    } catch (err) {
+      console.error(`kclaw usage: chore ${r.chore} record failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 }
