@@ -71,7 +71,9 @@ export function McpView({ api, notice, sessionWorkdir }: {
     // manual refresh; a hidden tab skips the fetch (no wasted requests while
     // the user is looking elsewhere).
     const timer = setInterval(() => {
-      if (document.visibilityState === "visible") void reload({ quiet: true })
+      // globalThis guard: a tick already queued when the environment tears
+      // down (jsdom in tests) must not throw on the missing document.
+      if (globalThis.document?.visibilityState === "visible") void reload({ quiet: true })
     }, 2000)
     return () => clearInterval(timer)
   }, [reload])
