@@ -5,6 +5,61 @@ All notable changes to kclaw are documented in this file. The format is based on
 [semantic versioning](https://semver.org/) — note that the 0.x series makes no
 compatibility promises.
 
+## [0.5.0] - 2026-10-05
+
+### Added
+
+- **`/goal` goal loop** — a verifiable goal loop: `/goal <target>` snapshots the
+  objective, every run is judged against it by an independent judge call, and
+  acceptance gates decide when the loop is done. The WebUI gets a floating goal
+  panel and audit rows, the CLI gets the `/goal` slash command, and the loop is
+  driven by a `/sessions/:id/goal` route family.
+- **`history_search` tool** — full-text search across every historical session's
+  raw messages (user and assistant text; tool output excluded), backed by a
+  SQLite FTS5 index with Chinese bigram tokenization. Complements
+  `session_search`, which only finds compacted summary segments. The same index
+  serves a `GET /search` endpoint for the WebUI.
+- **Prompt caching** — provider requests now carry cache markers: Anthropic
+  cache-control breakpoints, an OpenAI-compatible cache key, and a per-entry
+  opt-out whose 400s are retried once with markers stripped. The request prefix
+  is kept stable (tools sorted by name, rolling omission off by default), and
+  the usage view gains cache read/write and hit-rate columns.
+- **Skill curator** — a default-on aging pass for installed skills: unused for
+  14 days a skill is marked stale, unused for 30 days its directory is moved to
+  `.archive/` (archived skills never reactivate on their own). Configurable via
+  `skills.curator`.
+- **Session usage strip** — a compact strip under the composer shows cumulative
+  input/output tokens for the session and the cache hit rate.
+- **Exec sandbox hardening** — sandboxed commands get env injection, a grace
+  window after SIGKILL before cleanup, and a closest-tool hint when a named
+  tool does not exist.
+- **Dismissible chat notice bar** — the chat page's notice bar can be dismissed.
+
+### Changed
+
+- **Credentials live in `credentials.json`** — API keys (provider `apiKey` and
+  `web.tavilyApiKey`) are no longer written into `config.json`; they go to a
+  same-directory credentials file (0600) and are merged back on load. An inline
+  key in config.json works only until the next save moves it over.
+- **Sensitive files ask by default** — the permission gate now asks for
+  confirmation on a default list of sensitive file globs (`.env*`, `*.pem`,
+  `id_rsa`, `credentials.json`, …); setting `permissions.sensitiveFiles`
+  replaces the list wholesale.
+- **Lightweight auxiliary LLM channel** — compaction summaries and automatic
+  session naming can run on a separate, cheaper model entry instead of the
+  main one.
+- **Subagent role prompts and tool allowlists** — spawned subagents can be
+  given a role prompt and restricted to an explicit tool list.
+
+### Fixed
+
+- Correctness and single-sourcing fixes from the architecture review: one
+  disposition precedence chain, one MCP project-group identity, named REST
+  envelopes, and a shared host skeleton for daemon services.
+- The strip-retry verdict is only remembered when the retry succeeds, and stdio
+  MCP server stderr no longer mixes into the daemon's own log stream.
+
+
 ## [0.4.0] - 2026-09-28
 
 ### Added
