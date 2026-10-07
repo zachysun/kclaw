@@ -17,11 +17,16 @@ export interface SandboxConfig {          // config.json 的 sandbox 节
   writeRoots: string[]                    // 追加写白名单（realpath 形态），默认 []
 }
 
-export interface ExecSandbox {
-  readonly available: boolean
-  readonly unavailableReason?: string     // 不可用原因（可用时无）
+export interface ExecSandboxSpawn {      // spawn 契约；组首不变量写在 interface 文档里
   spawn(command: string, opts: { cwd: string; env?: Record<string, string> }): ChildProcess
   // env（可选）= 子进程的完整环境；不传 = 原样继承 daemon 环境
+  // 返回的子进程必须是进程组组长（detached / bwrap --new-session --die-with-parent），
+  // 否则 exec 工具超时时的 kill(-pid) 只杀掉 shell 本体，孙进程静默漏网
+}
+
+export interface ExecSandbox extends ExecSandboxSpawn {
+  readonly available: boolean
+  readonly unavailableReason?: string     // 不可用原因（可用时无）
 }
 
 export function createExecSandbox(
@@ -30,7 +35,7 @@ export function createExecSandbox(
 ): ExecSandbox
 ```
 
-exec 工具处理的最小面（`tools/exec.ts` 的 `ExecSandboxSpawn`）只有 `spawn`；`createExecSandbox` 的返回值同时满足它（可用时）与 gate 侧的被包装工具集。
+exec 工具消费的 spawn 契约（`ExecSandboxSpawn`）与沙箱面（`ExecSandbox`）都声明在 `sandbox/provider.ts` 一处，`tools/exec.ts` import 使用；`createExecSandbox` 的返回值同时满足两者（可用时）。组首不变量（超时杀整棵进程树的承重约定）是契约文档的一部分，换实现的人从接口上就能看到。
 
 ## 平台布局
 

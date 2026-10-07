@@ -60,6 +60,8 @@ import { loadOrCreateToken } from "./auth.js"
 import { createMcpProjects, collectProjectDirs } from "./mcp-projects.js"
 import { EventBus } from "@kclaw/core"
 import { RunManager } from "./run.js"
+import { createChoreUsageRecorder } from "./chore-usage.js"
+import { createHistorySearch } from "./history-search.js"
 import { createSubagentHost } from "./subagent.js"
 import type { FeishuChannel } from "./feishu/channel.js"
 import { createFeishuManager } from "./feishu/manager.js"
@@ -315,6 +317,11 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // 杂活模型基座：主模型对的单点解析（llmFactory 注入直用，否则共享
   // resolver + 重试包装），记忆提取、技能进化与 run 侧杂活（标题/压缩）
   // 共用同一条 extractModel 解析链。
+  // 杂活记账（goal 判定器记账的推广）：压缩/命名/记忆/技能四条后台通道的
+  // LLM 花费进同一张用量表，runId 以通道名为前缀；无归属会话或 usage 缺失
+  // 的调用不记。
+  const usage = new UsageStore(paths.usageDb)
+  const recordChoreUsage = createChoreUsageRecorder(usage)
   const extractBaseLlm = (): { llm: LlmClient; model: string } => ({
     llm: opts.llmFactory !== undefined ? llm : withRetry(llmForEntry()),
     model: resolveModel(config),
@@ -327,6 +334,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     config,
     resolveLlm: extractBaseLlm,
     resolveEntryLlm,
+    recordChoreUsage,
     embed,
     emit: (e) => bus.emit(makeEvent("memory.written", {
       path: e.path,
@@ -338,7 +346,6 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   })
   memory.reconcile()
   const jobs = new JobScheduler(paths.jobsDb)
-  const usage = new UsageStore(paths.usageDb)
 
   // resolveConfirmation stays undefined: WS/CLI verdicts reach the RunManager's
   // internal ConfirmationBroker (createApp routes confirmation.resolve frames
@@ -356,6 +363,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     config,
     resolveLlm: resolveExtractLlm,
     log: (m) => console.error(m),
+    recordChoreUsage,
   })
   // MCP: the manager is always assembled (an empty one costs nothing and
   // keeps the management routes — adding the first server from the WebUI —
@@ -443,21 +451,18 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     usage,
     model,
     // 注入 llmFactory（测试）时判定器与运行共用注入客户端（memory.resolveLlm
-    // 同款约定）；生产走共享条目解析链，Model 页改动对判定器热生效。
-    resolveEntryLlm: (entryKey) => (opts.llmFactory !== undefined ? llm : llmForEntry(entryKey)),
+    // 同款约定）；生产走共享条目解析链并包 withRetry——judge.ts 的注释承诺
+    // "provider 客户端自带 withRetry"，与 extract 链同一装配约定。瞬时故障
+    // 在此消化，不再直接吃判定器传输连败计数（熔断只数真正打到判定层的失败）。
+    // Model 页改动对判定器热生效。
+    resolveEntryLlm: (entryKey) => (opts.llmFactory !== undefined ? llm : withRetry(llmForEntry(entryKey))),
     home: paths.home,
     log: (line) => console.error(`kclaw goal: ${line}`),
   })
   hostStops.push(["goal loop", () => goalHost.dispose()])
-  // history_search 数据面：检索 + 标题解析 + 回收站/已清除会话过滤（meta
-  // 缺失或 deleted 的命中直接丢弃——索引行的清理跟随事件，purge 级联兜底）。
-  const historySearch: HistorySearchFn = async (query, opts = {}) => {
-    const hits = historyIndex.search(query, opts.limit ?? 5, opts.sessionId)
-    return hits
-      .map((hit) => ({ hit, meta: sessions.meta(hit.sessionId) }))
-      .filter((r): r is { hit: ReturnType<typeof historyIndex.search>[number]; meta: NonNullable<typeof r.meta> } => r.meta !== undefined && r.meta.deleted !== true)
-      .map(({ hit, meta }) => ({ sessionId: hit.sessionId, title: meta.title, role: hit.role, at: hit.at, excerpt: hit.text }))
-  }
+  // history_search 数据面（具名工厂 history-search.ts）：检索 + 标题解析 +
+  // 回收站过滤（"已删除/不存在的会话不命中"不变量在那里有独立测试面）。
+  const historySearch: HistorySearchFn = createHistorySearch({ index: historyIndex, sessions })
   // 启动后后台回填存量会话（per-session 幂等；serving 不等它）。
   void (async () => {
     try {
@@ -479,6 +484,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     workspace: config.workspace,
     model,
     usageStore: usage,
+    recordChoreUsage,
     hooks: hookRegistry,
     skillsEvolution,
     resolveExtractLlm,
@@ -500,7 +506,8 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     // auto mode induction (batch C): one per-process streak counter threaded
     // through every run's assembly; threshold 0 disables induction.
     autoLearn: { counter: new AutoLearnCounter(config.permissions.autoLearnThreshold ?? 3) },
-    extraTools: (workdir) => mcpManager.toolsFor(workdir),    // Retry visibility: with the DEFAULT
+    extraTools: (workdir) => mcpManager.toolsFor(workdir),
+    // Retry visibility: with the DEFAULT
     // composition every run builds its own retry-wrapped client carrying
     // that run's onRetry sink — retry events then carry the run's own
     // sessionId/runId even while sessions run concurrently on the shared

@@ -9,8 +9,28 @@
  * 漏成 unhandled rejection）。
  *
  * followGateDue 是两个跟随检查调度器（记忆、技能进化）共用的空闲门禁
- * 纯函数，放在这里避免宿主之间横向 import。
+ * 纯函数，放在这里避免宿主之间横向 import。dailyGateDue 同理：skill
+ * curator 与记忆夜间内化共用的"每日过点一次"门禁（时刻判定 + 本地日期
+ * 判重），进度标记的落盘位置由各宿主自留（.curator/lastRun 与 state.json
+ * 的 nightlyLastRun 是有意的两处存储）。
  */
+
+/** 本地日期 YYYY-MM-DD（每日一次门禁的判重键；与触发判定同用本地时间）。 */
+export function localDate(d: Date): string {
+  const p = (n: number): string => String(n).padStart(2, "0")
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+/**
+ * 每日过点门禁（纯函数）：本地时刻过了 hour 且今天（本地日期）未跑 → due。
+ * hour < 0 = 该任务关闭。上次运行日期由调用方读取、触发发起后由调用方
+ * 标记（标记时机各宿主自持：防重入优先于失败重试）。
+ */
+export function dailyGateDue(now: Date, hour: number, lastRunDate: string | undefined): boolean {
+  if (hour < 0) return false
+  if (now.getHours() < hour) return false
+  return lastRunDate !== localDate(now)
+}
 
 /**
  * 跟随门禁判定（纯函数）：end_turn 之后 idleMinutes 内无新活动 → due。

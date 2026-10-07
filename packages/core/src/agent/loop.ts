@@ -4,7 +4,7 @@ import {
   type TextBlock, type ThinkingBlock, type ToolCallBlock, type ToolResultBlock, type NoteBlock, type Block,
 } from "../protocol/blocks.js"
 import {
-  newMessage, newAssistantMessage, newToolMessage,
+  newMessage, newAssistantMessage, newToolMessage, mergeUsage,
   type Message, type StopReason, type Usage, type GrantedBy,
 } from "../protocol/messages.js"
 import { makeEvent, type AgentEvent, type RunTrigger } from "../protocol/events.js"
@@ -242,8 +242,9 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
 
   const all: Message[] = [...input.history, userMsg]
   // 缓存字段初始 0（空和）；任一次调用缺该字段即翻成 undefined 并锁定——
-  // 后续再有值也不恢复，保证"所有调用都携带才求和"。
-  const totalUsage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+  // 后续再有值也不恢复，保证"所有调用都携带才求和"。折叠语义单源在
+  // protocol 的 mergeUsage。
+  let totalUsage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
   // run.completed 事件统一从这里发射：缓存字段仅在 run 级聚合非 undefined
   // 时携带（缺省 = 未知，事件流不出现显式 0）。
   const emitRunCompleted = (stopReason: StopReason): void => {
@@ -406,14 +407,9 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
     // stamp the current assistant message here and fall through to the terminal
     // path below (message.completed + run.completed with stopReason "aborted").
     if (deps.signal?.aborted) stopReason = "aborted"
-    totalUsage.inputTokens += usage.inputTokens
-    totalUsage.outputTokens += usage.outputTokens
-    // 缓存字段字段级聚合：本次 run 的所有调用都携带该字段才求和；任一次缺失
-    // → run 级该字段 undefined（宁记未知，不把"不知道"混成 0 或部分和）。
-    if (usage.cacheReadTokens === undefined) totalUsage.cacheReadTokens = undefined
-    else if (totalUsage.cacheReadTokens !== undefined) totalUsage.cacheReadTokens += usage.cacheReadTokens
-    if (usage.cacheWriteTokens === undefined) totalUsage.cacheWriteTokens = undefined
-    else if (totalUsage.cacheWriteTokens !== undefined) totalUsage.cacheWriteTokens += usage.cacheWriteTokens
+    // 字段级聚合：本次 run 的所有调用都携带该字段才求和；任一次缺失 → run
+    // 级该字段 undefined（宁记未知，不把"不知道"混成 0 或部分和）。
+    totalUsage = mergeUsage(totalUsage, usage)
     // A failed call is terminated by llm.failed, not llm.completed — the
     // degenerate created→delta→completed triple only completes what streamed.
     if (streamError === undefined) {

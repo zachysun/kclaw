@@ -10,16 +10,8 @@ import { useEffect, useMemo, useState } from "react"
 import type { ApiClient } from "../api.js"
 import type { SessionMeta } from "../types.js"
 
-interface UsageBucket {
-  key: string
-  inputTokens: number
-  outputTokens: number
-  /** null = 该桶没有任何行携带缓存指标（未知），不是 0。 */
-  cacheReadTokens: number | null
-  cacheWriteTokens: number | null
-  costUsd: number
-}
-interface UsageBody { by: string; buckets: UsageBucket[]; total: { inputTokens: number; outputTokens: number; cacheReadTokens: number | null; cacheWriteTokens: number | null; costUsd: number } }
+import type { UsageAgg, UsageBody } from "@kclaw/core/protocol"
+import { hitRate } from "../usage/format.js"
 
 /** A cost column only earns its place when at least one cent shows up. */
 function hasCost(body: UsageBody | null): boolean {
@@ -27,11 +19,6 @@ function hasCost(body: UsageBody | null): boolean {
   return body.total.costUsd > 0 || body.buckets.some((b) => b.costUsd > 0)
 }
 
-/** 缓存读 / 输入总量；缓存读未知（null）时返回 null，显示 "—"。 */
-function hitRate(b: UsageBucket): string | null {
-  if (b.cacheReadTokens === null) return null
-  return `${Math.round((b.cacheReadTokens / Math.max(1, b.inputTokens)) * 100)}%`
-}
 
 export function UsageView({ api }: { api: ApiClient }) {
   const [daily, setDaily] = useState<UsageBody | null>(null)
@@ -89,7 +76,7 @@ export function UsageView({ api }: { api: ApiClient }) {
 
   const fmt = (n: number) => n.toLocaleString()
   const fmtCost = (c: number) => `$${c.toFixed(4)}`
-  const total = (b: UsageBucket) => b.inputTokens + b.outputTokens
+  const total = (b: UsageAgg) => b.inputTokens + b.outputTokens
   const maxOf = (body: UsageBody | null): number =>
     Math.max(1, ...(body?.buckets.map(total) ?? [0]))
 

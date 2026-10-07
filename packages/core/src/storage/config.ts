@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs"
 import { writeFileAtomic } from "./atomic.js"
-import { DEFAULT_LLM_TIMEOUT_MS } from "../provider/openai-compat.js"
+import { DEFAULT_LLM_TIMEOUT_MS } from "../provider/http.js"
 import type { KclawPaths } from "./paths.js"
 import type { NotifyChannel } from "../notify/notify.js"
 import { isPermissionMode, type PermissionMode } from "../permissions/modes.js"
-import { DEFAULT_SENSITIVE_FILES } from "../permissions/engine.js"
+import { DEFAULT_SENSITIVE_FILES } from "../permissions/sensitive-files.js"
 import { validateWaterlineConfig } from "../session/waterlines.js"
 
 /**
@@ -79,7 +79,7 @@ export interface KclawConfig {
      * 敏感文件名模式（basename glob，如 ".env*"、"*.pem"）：fs 类工具命中
      * 这些文件时不吃 safe/acceptEdits 免审，一律走确认；显式 allow/learned
      * 规则与 run 内 once 批准仍可放行。设置即整体替换内置清单（内置清单见
-     * permissions/engine.ts 的 DEFAULT_SENSITIVE_FILES）。
+     * permissions/sensitive-files.ts 的 DEFAULT_SENSITIVE_FILES）。
      */
     sensitiveFiles?: string[]
   }
@@ -340,16 +340,58 @@ function readCredentials(paths: KclawPaths): CredentialsFile {
   }
 }
 
+/**
+ * 凭据字段位置声明——"哪些字段是凭据"的单一出处，读（credentials.json
+ * 覆盖 config.json）与写（config.json 搬出并留空串占位）两侧共用。新增
+ * 凭据字段 = 在这里加一个位置，两侧自动一致；漏一处曾经意味着密钥静默
+ * 留在（或回到）config.json。
+ */
+interface CredentialLocation {
+  /** 从凭据文档读覆盖值（undefined = 未设）。 */
+  readCreds(f: CredentialsFile): string | undefined
+  /** 非空凭据值写入 config（apply 侧；不存在的位置忽略）。 */
+  writeConfig(c: KclawConfig, v: string): void
+  /** 非空值搬进凭据文档并把 config 留成空串占位（save 侧）。 */
+  collect(c: KclawConfig, f: CredentialsFile): void
+}
+
+const WEB_TAVILY_KEY: CredentialLocation = {
+  readCreds: (f) => f.web?.tavilyApiKey,
+  writeConfig: (c, v) => { c.web.tavilyApiKey = v },
+  collect: (c, f) => {
+    if (c.web.tavilyApiKey === "") return
+    f.web ??= {}
+    f.web.tavilyApiKey = c.web.tavilyApiKey
+    c.web.tavilyApiKey = ""
+  },
+}
+
+/** providers.entries[].apiKey：按条目名展开的映射位（两个方向共用同一模板）。 */
+function providerEntryLocation(name: string): CredentialLocation {
+  return {
+    readCreds: (f) => f.providers?.[name]?.apiKey,
+    writeConfig: (c, v) => {
+      const entry = c.providers.entries[name]
+      if (entry === undefined) return // 条目不存在的孤儿引用忽略
+      entry.apiKey = v
+    },
+    collect: (c, f) => {
+      const entry = c.providers.entries[name]
+      if (entry === undefined || entry.apiKey === "") return
+      f.providers ??= {}
+      f.providers[name] = { apiKey: entry.apiKey }
+      entry.apiKey = ""
+    },
+  }
+}
+
 function applyCredentials(config: KclawConfig, creds: CredentialsFile): KclawConfig {
   // 凭据文件优先：同一条目两边都有值时 credentials.json 赢——config.json
   // 里的内联 apiKey 只是首次保存前的迁移回落。条目不存在的孤儿引用忽略。
-  if (typeof creds.web?.tavilyApiKey === "string" && creds.web.tavilyApiKey !== "") {
-    config.web.tavilyApiKey = creds.web.tavilyApiKey
-  }
-  for (const [name, entry] of Object.entries(creds.providers ?? {})) {
-    if (config.providers.entries[name] !== undefined && typeof entry?.apiKey === "string" && entry.apiKey !== "") {
-      config.providers.entries[name]!.apiKey = entry.apiKey
-    }
+  const locations = [WEB_TAVILY_KEY, ...Object.keys(creds.providers ?? {}).map(providerEntryLocation)]
+  for (const loc of locations) {
+    const v = loc.readCreds(creds)
+    if (typeof v === "string" && v !== "") loc.writeConfig(config, v)
   }
   return config
 }
@@ -577,17 +619,10 @@ function validateTeamConfig(merged: KclawConfig): void {
 export function saveConfig(paths: KclawPaths, config: KclawConfig): void {
   const persisted: KclawConfig = structuredClone(config)
   const credentials: CredentialsFile = {}
-  if (persisted.web.tavilyApiKey !== "") {
-    credentials.web = { tavilyApiKey: persisted.web.tavilyApiKey }
-    persisted.web.tavilyApiKey = ""
-  }
-  for (const [name, entry] of Object.entries(persisted.providers.entries)) {
-    if (entry.apiKey !== "") {
-      credentials.providers ??= {}
-      credentials.providers[name] = { apiKey: entry.apiKey }
-      entry.apiKey = ""
-    }
-  }
+  // 字段位置与 applyCredentials 同源（CredentialLocation）：新增凭据字段两侧
+  // 自动一致。
+  const locations = [WEB_TAVILY_KEY, ...Object.keys(persisted.providers.entries).map(providerEntryLocation)]
+  for (const loc of locations) loc.collect(persisted, credentials)
   // 始终重写凭据文件（含空对象）：provider 删除后其 key 必须同时离开磁盘，
   // 不能留上一份陈旧文件继续生效。
   writeFileAtomic(paths.credentialsJson, JSON.stringify(credentials, null, 2) + "\n", 0o600)

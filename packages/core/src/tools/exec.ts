@@ -19,22 +19,12 @@ import { spawn, type ChildProcess } from "node:child_process"
 import type { Readable } from "node:stream"
 import type { ToolExecutor } from "../agent/tools.js"
 import { spillLocatorLine, spillToolOutput, SPILL_MAX_BYTES } from "./spill.js"
+import type { ExecSandboxSpawn } from "../sandbox/provider.js"
 
 const DEFAULT_TIMEOUT_MS = 60_000
 const DEFAULT_MAX_OUTPUT_BYTES = 100 * 1024
 /** After a timeout kill, how long "close" may take to deliver the exit + tail output. */
 const EXEC_TIMEOUT_GRACE_MS = 2_000
-
-/**
- * The minimal spawn surface the exec tool needs from a sandbox wrapper:
- * given a shell command line, produce a ChildProcess that runs it inside the
- * sandbox. The real provider (sandbox/provider.ts) supplies this; the run
- * assembly wires it only when the sandbox is available, so a "sandboxed"
- * allowance and a sandboxed spawn are always the same source.
- */
-export interface ExecSandboxSpawn {
-  spawn(command: string, opts: { cwd: string; env?: Record<string, string> }): ChildProcess
-}
 
 /**
  * Clamp a string to `maxBytes` by keeping the first and last maxBytes/2

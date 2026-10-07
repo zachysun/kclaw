@@ -16,6 +16,7 @@ import { parseCognitionFile, cognitionPath, writeCognitionFile } from "./cogniti
 import type { CogKind } from "./cognition.js"
 import type { VectorIndex } from "./indexer.js"
 import { normalizeFtsRank, fusedScore, recencyFactor } from "./scoring.js"
+import type { ChoreUsageRecorder } from "../storage/usage.js"
 import type { EmbeddingClient } from "./embeddings.js"
 import { cosine } from "./embeddings.js"
 
@@ -132,6 +133,8 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     emit?: (e: MemoryWrittenEvent) => void
     log?: (msg: string) => void
     now?: () => Date
+    /** 杂活记账：提取/内化的 LLM 花费回调（daemon 注入；缺省不记）。 */
+    recordChoreUsage?: ChoreUsageRecorder
   }) {
     this.#layout = new MemoryLayout(opts.memoryDir)
     this.#sessions = opts.sessions
@@ -160,6 +163,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
         ...(this.#resolveEntryLlm !== undefined ? { resolveEntryLlm: this.#resolveEntryLlm } : {}),
       }),
       embed: opts.embed, emit: opts.emit, audit: this.#audit, log: this.#log, now: this.#now,
+      ...(opts.recordChoreUsage !== undefined ? { recordChoreUsage: opts.recordChoreUsage } : {}),
       threadInactiveDays: opts.config.memory.threadInactiveDays,
       consolidateEnabled: opts.config.memory.consolidate,
     })

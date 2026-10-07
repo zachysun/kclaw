@@ -1,5 +1,7 @@
 import type { LlmClient, LlmRequest, LlmStreamEvent } from "./types.js"
 import { normalizeFinishReason } from "./normalize.js"
+import { createCacheMarkerPolicy } from "./cache-markers.js"
+import { DEFAULT_LLM_TIMEOUT_MS, formatAuthHeaders, llmHttpError, rethrowClassified, sseDataLines } from "./http.js"
 import type { Usage } from "../protocol/messages.js"
 
 interface ChatDelta {
@@ -42,28 +44,6 @@ function toApiMessages(req: LlmRequest): Array<Record<string, unknown>> {
 }
 
 /**
- * Whole-request llm timeout: covers the fetch (headers) AND the body stream —
- * undici errors pending body reads when the request signal aborts. Also the
- * default for `KclawConfig.providers.timeoutMs` (storage/config.ts).
- */
-export const DEFAULT_LLM_TIMEOUT_MS = 120_000
-
-/**
- * Abort classification for the stream's guarded awaits: any failure after the
- * timeout signal fired is reported as the `llm http timeout` message (the
- * retry contract in retry.ts matches on it); everything else rethrows as-is.
- */
-export function rethrowClassified(err: unknown, signal: AbortSignal, timeoutMs: number): never {
-  if (signal.aborted) throw new Error(`llm http timeout after ${timeoutMs}ms`)
-  throw err
-}
-
-/** The one error shape for non-ok provider responses, shared by both formats and the probe. */
-export function llmHttpError(status: number, text: string): Error {
-  return new Error(`llm http ${status}: ${text}`)
-}
-
-/**
  * OpenAI prompt_cache_key is capped at 64 code points (codex's discipline;
  * kclaw session ids are 30 chars so this is pure defense for odd keys).
  */
@@ -73,13 +53,11 @@ function truncateCacheKey(key: string): string {
 
 /**
  * OpenAI-compatible chat-completions client. Same timeout/retry contract as
- * the Anthropic client. Cache routing: when the entry allows it
- * (promptCacheEnabled !== false) and the request carries `promptCache.key`,
- * the body carries `prompt_cache_key` so the provider shards both requests of
- * a session onto the same cache. A 400 (a schema rejection — never
- * 401/403/429) strips the key and retries once; success remembers the verdict
- * in this client instance (= per provider entry), so later requests skip the
- * field without the round-trip. Silent except one console.error line.
+ * the Anthropic client. Cache routing: when the entry allows it and the
+ * request carries `promptCache.key`, the body carries `prompt_cache_key` so
+ * the provider shards both requests of a session onto the same cache;
+ * rejection handling (400 → strip and retry once, verdict remembered per
+ * entry) follows the shared policy in cache-markers.ts.
  */
 export function createOpenAiCompatClient(opts: {
   baseUrl: string
@@ -92,9 +70,7 @@ export function createOpenAiCompatClient(opts: {
 }): LlmClient {
   const doFetch = opts.fetchImpl ?? fetch
   const timeoutMs = opts.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS
-  // "this endpoint rejects prompt_cache_key" verdict, per client instance =
-  // per provider entry lifetime (resolver rebuilds on config change).
-  let cacheKeyRejected = false
+  const cacheKey = createCacheMarkerPolicy({ promptCacheEnabled: opts.promptCacheEnabled })
   return {
     async *stream(req: LlmRequest): AsyncIterable<LlmStreamEvent> {
       // A hung provider stream (no headers, or a stalled SSE body) must never
@@ -102,42 +78,36 @@ export function createOpenAiCompatClient(opts: {
       // re-classified below so withRetry sees it as transient. The signal is
       // checked (not the error shape) so any abort → timeout classification.
       const signal = AbortSignal.timeout(timeoutMs)
-      const wantCacheKey = opts.promptCacheEnabled !== false && req.promptCache?.key !== undefined && !cacheKeyRejected
+      const wantCacheKey = cacheKey.wanted(req.promptCache?.key !== undefined)
       const post = (body: string): Promise<Response> =>
         doFetch(`${opts.baseUrl.replace(/\/$/, "")}/chat/completions`, {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            ...(opts.apiKey === "" ? {} : { authorization: `Bearer ${opts.apiKey}` }),
+            ...formatAuthHeaders("openai", opts.apiKey),
           },
           body,
           signal,
         })
-      const bodyOf = (withKey: boolean): string => JSON.stringify({
+      const buildBody = (marked: boolean): string => JSON.stringify({
         model: req.model,
         messages: toApiMessages(req),
         tools: req.tools.map((t) => ({ type: "function", function: t })),
         stream: true,
         stream_options: { include_usage: true },
         // Fixed key position keeps the serialized field order deterministic.
-        ...(withKey ? { prompt_cache_key: truncateCacheKey(req.promptCache!.key!) } : {}),
+        ...(marked ? { prompt_cache_key: truncateCacheKey(req.promptCache!.key!) } : {}),
         ...(req.maxTokens !== undefined ? { max_tokens: req.maxTokens } : {}),
         ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
       })
       let res: Response
       try {
-        res = await post(bodyOf(wantCacheKey))
-        // Schema-level rejection → strip the key and retry once. Not on
-        // 401/403/429: auth/ratelimit failures are not schema problems.
-        if (res.status === 400 && wantCacheKey) {
-          console.error("kclaw openai-compat: endpoint rejected prompt_cache_key (400); retrying without it")
-          const retry = await post(bodyOf(false))
-          // Remember the verdict only when the retry succeeded: a retry that
-          // still fails points at a non-key cause (bad model name etc.) and
-          // must not silently disable the cache key for this entry.
-          if (retry.ok) cacheKeyRejected = true
-          res = retry
-        }
+        res = await cacheKey.send({
+          wanted: wantCacheKey,
+          post,
+          buildBody,
+          rejectedLogLine: "kclaw openai-compat: endpoint rejected prompt_cache_key (400); retrying without it",
+        })
       } catch (err) {
         rethrowClassified(err, signal, timeoutMs)
       }
@@ -202,19 +172,3 @@ export function createOpenAiCompatClient(opts: {
   }
 }
 
-export async function* sseDataLines(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
-  const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buf = ""
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buf += decoder.decode(value, { stream: true })
-    let idx: number
-    while ((idx = buf.indexOf("\n")) >= 0) {
-      const line = buf.slice(0, idx).replace(/\r$/, "")
-      buf = buf.slice(idx + 1)
-      if (line.startsWith("data:")) yield line.slice(5).trim()
-    }
-  }
-}

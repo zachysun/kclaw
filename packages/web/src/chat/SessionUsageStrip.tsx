@@ -9,31 +9,8 @@
 import { useEffect, useState } from "react"
 import type { ApiClient } from "../api.js"
 
-interface UsageBucket {
-  key: string
-  inputTokens: number
-  outputTokens: number
-  cacheReadTokens: number | null
-  cacheWriteTokens: number | null
-  costUsd: number
-}
-interface UsageBody { by: string; buckets: UsageBucket[]; total: unknown }
-
-/** 紧凑 token 数：980 / 14.2k / 3.1M——一行小字放不下 toLocaleString。 */
-export function fmtCompact(n: number): string {
-  if (n < 1000) return String(n)
-  if (n < 1_000_000) {
-    const k = n / 1000
-    return `${k >= 100 ? Math.round(k) : Math.round(k * 10) / 10}k`
-  }
-  return `${Math.round((n / 1_000_000) * 10) / 10}M`
-}
-
-/** 缓存读 / 输入总量（inputTokens 恒等式 = 非缓存 + 缓存写 + 缓存读）。 */
-export function hitRateText(bucket: UsageBucket | undefined): string {
-  if (bucket === undefined || bucket.cacheReadTokens === null) return "—"
-  return `${Math.round((bucket.cacheReadTokens / Math.max(1, bucket.inputTokens)) * 100)}%`
-}
+import type { UsageAgg, UsageBody } from "@kclaw/core/protocol"
+import { fmtCompact, hitRateText } from "../usage/format.js"
 
 export function SessionUsageStrip({ api, sessionId, refreshKey }: {
   api: ApiClient
@@ -41,7 +18,7 @@ export function SessionUsageStrip({ api, sessionId, refreshKey }: {
   /** 父组件每次 run 收尾时 +1；0 = 只在挂载/切会话时拉一次。 */
   refreshKey: number
 }) {
-  const [bucket, setBucket] = useState<UsageBucket | undefined>(undefined)
+  const [bucket, setBucket] = useState<UsageAgg | undefined>(undefined)
   useEffect(() => {
     let alive = true
     api.get<UsageBody>("/usage?by=session")

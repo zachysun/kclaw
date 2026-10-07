@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify"
 import type { KclawConfig, UsagePrices, UsageStore } from "@kclaw/core"
+import type { UsageBody } from "@kclaw/core/protocol"
 
 /** Dependencies for the usage routes (injected by createApp). */
 export interface UsageStores {
@@ -19,10 +20,11 @@ export function registerUsageRoutes(app: FastifyInstance, opts: UsageStores): vo
     const by = (request.query as Record<string, unknown>).by
     const key = typeof by === "string" && BY.has(by) ? (by as "day" | "session" | "model") : "day"
     const prices: UsagePrices = opts.config.usage?.prices ?? {}
-    return {
+    const body: UsageBody = {
       by: key,
       buckets: opts.usage.aggregate(key, prices),
       total: opts.usage.total(prices),
     }
+    return body
   })
 }

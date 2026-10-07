@@ -3,7 +3,7 @@ import { resolveProviderFormat } from "../storage/config.js"
 import type { LlmClient } from "./types.js"
 import { createOpenAiCompatClient } from "./openai-compat.js"
 import { createAnthropicClient } from "./anthropic.js"
-import { DEFAULT_LLM_TIMEOUT_MS } from "./openai-compat.js"
+import { DEFAULT_LLM_TIMEOUT_MS } from "./http.js"
 
 /**
  * Build the client for one provider entry: the entry's wire format picks the

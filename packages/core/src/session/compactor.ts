@@ -25,6 +25,7 @@ import { chooseBoundary, emergencyBoundary, estimateContextTokens, estimateSpanT
 import { SUMMARY_WRAPPER_TOKENS } from "../agent/context.js"
 import { resolveWaterlines } from "./waterlines.js"
 import type { SessionStore } from "./store.js"
+import type { ChoreUsageRecorder } from "../storage/usage.js"
 
 /**
  * Append spill locator lines to a summary, deduped against lines it already
@@ -54,6 +55,8 @@ export interface CompactorDeps {
    * problem — the Compactor fires and forgets, same as the RunManager did.
    */
   emit: (e: AgentEvent) => void
+  /** Chore metering: the two summarizer calls' usage lands here (optional). */
+  recordChoreUsage?: ChoreUsageRecorder
 }
 
 /**
@@ -373,6 +376,7 @@ export class Compactor {
         messages: [{ role: "user", content: body + focusLine }],
         tools: [],
       }, { signal: opts.signal })
+      this.#deps.recordChoreUsage?.({ chore: "compaction", sessionId, model, usage: segmentResult.usage })
       const segmentSummary = segmentResult.text
       // Spill pointers survive STRUCTURALLY: the segment summary and the top
       // summary carry the locator lines regardless of what the summarizer
@@ -388,6 +392,7 @@ export class Compactor {
         messages: [{ role: "user", content: mergeInput + focusLine }],
         tools: [],
       }, { signal: opts.signal })
+      this.#deps.recordChoreUsage?.({ chore: "compaction", sessionId, model, usage: topResult.usage })
       const top = topResult.text
       const topWithPointers = appendLocators(top, locators)
 

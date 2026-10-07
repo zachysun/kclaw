@@ -238,9 +238,10 @@ rules:
 
 ## 用量记录（`storage/usage.ts`）
 
-`UsageStore` 是一张只追加、不修改的 SQLite 记录表（`<home>/usage.db`，表 `usage` + `at` 列索引）：daemon 每结束一个 run 就记一行 `{sessionId, runId, model, inputTokens, outputTokens, cacheReadTokens?, cacheWriteTokens?, at}`，行主键为 `u_<sessionId>_<runId>`。两个缓存列（`cache_read_tokens`/`cache_write_tokens`）可空：NULL = 供应商未返回该指标（**未知**，不是没命中）；旧库经启动时 `PRAGMA table_info(usage)` 检列 + `ALTER TABLE ADD COLUMN` 迁移（先例：jobs 表的 model 列），新建库 SCHEMA 直接含列。记录发出后不等结果：RunManager 调用它时包了 try/catch，记录失败只打一行日志，用量统计永远不影响 run 本身。
+`UsageStore` 是一张只追加、不修改的 SQLite 记录表（`<home>/usage.db`，表 `usage` + `at` 列索引）：daemon 每结束一个 run 就记一行 `{sessionId, runId, model, inputTokens, outputTokens, cacheReadTokens?, cacheWriteTokens?, at}`，行主键为 `u_<sessionId>_<runId>`。除 run 本体（usage-ledger 钩子）与 /goal 判定器（runId 前缀 `goal-judge-`）外，四条后台杂活通道也把花费记进同一张表：压缩摘要（每次压缩两段调用）、会话自动命名、记忆提取与内化、技能提炼，runId 以通道名为前缀（`compaction-`/`autoname-`/`memory-`/`skill-`）；无归属会话、流中断（拿不到 usage）或全零 token 的调用不记。两个缓存列（`cache_read_tokens`/`cache_write_tokens`）可空：NULL = 供应商未返回该指标（**未知**，不是没命中）；旧库经启动时 `PRAGMA table_info(usage)` 检列 + `ALTER TABLE ADD COLUMN` 迁移（先例：jobs 表的 model 列），新建库 SCHEMA 直接含列。记录失败不影响业务本身：写入是同步调用，调用方自己接住错误。run 本体的记录在 usage-ledger 内建钩子里包了 try/catch，四条后台杂活的记录在 server 的 chore-usage.ts 里同样包了 try/catch，usage.db 故障（磁盘满、文件损坏）时只打一行错误日志，run 照常收尾，后台杂活照常进行。
 
 ```ts
+// UsageAgg / UsageTotal / UsageBody（GET /usage 响应）的类型出处是 protocol/usage.ts
 export interface UsageAgg { key: string; inputTokens: number; outputTokens: number; cacheReadTokens: number | null; cacheWriteTokens: number | null; costUsd: number }
 
 class UsageStore {

@@ -41,7 +41,7 @@ import type { LlmClient, ToolDefinition } from "../provider/types.js"
 import type { KclawConfig } from "../storage/config.js"
 import { defaultConfig, resolveContextTokens, resolveRunModelLine } from "../storage/config.js"
 import type { KclawPaths } from "../storage/paths.js"
-import type { UsageStore } from "../storage/usage.js"
+import type { ChoreUsageRecorder, UsageStore } from "../storage/usage.js"
 import type { SessionStore } from "../session/store.js"
 import type { Compactor } from "../session/compactor.js"
 import { resolveWaterlines } from "../session/waterlines.js"
@@ -225,6 +225,12 @@ export interface RunEngineDeps {
   team?: { facade: TeamFacade }
   /** Per-run token ledger (optional; recording failures are swallowed). */
   usageStore?: UsageStore
+  /**
+   * Chore metering for the run's background LLM calls (compaction summaries,
+   * autoname): forwarded to the Compactor and the builtin hooks. Optional
+   * (tests and bare engines omit it — the spend stays unrecorded).
+   */
+  recordChoreUsage?: ChoreUsageRecorder
   /**
    * User hook registry: the daemon-scoped bookkeeping for
    * ~/.kclaw/hooks files. Refreshed per run; its snapshot joins the run's
@@ -808,6 +814,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     ...(engine.deps.resolveExtractLlm === undefined ? {} : { resolveExtractLlm: engine.deps.resolveExtractLlm }),
     waterlines,
     usageStore: engine.deps.usageStore,
+    recordChoreUsage: engine.deps.recordChoreUsage,
     busEmit,
     runIdRef: { get current() { return runId } },
     inputNotes,
@@ -922,14 +929,8 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   await chain.run("run-after", {
     outcome: {
       stopReason: outcome.stopReason,
-      // 缓存字段仅在 run 级聚合非 undefined 时携带；漏带则 usage-ledger
-      // 写出的永远是 NULL，事件流有字段而表里没有。
-      totalUsage: {
-        inputTokens: outcome.totalUsage.inputTokens,
-        outputTokens: outcome.totalUsage.outputTokens,
-        ...(outcome.totalUsage.cacheReadTokens !== undefined ? { cacheReadTokens: outcome.totalUsage.cacheReadTokens } : {}),
-        ...(outcome.totalUsage.cacheWriteTokens !== undefined ? { cacheWriteTokens: outcome.totalUsage.cacheWriteTokens } : {}),
-      },
+      // Usage 正本直传：缓存字段 undefined = 未知，usage-ledger 写 NULL。
+      totalUsage: outcome.totalUsage,
     },
     model,
   })

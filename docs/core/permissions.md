@@ -269,7 +269,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 
 ### 12. 敏感文件默认询问（sensitiveFiles）
 
-凭据形态的文件默认转人工确认，即使工具本身是 safe（fs_read 读密钥）或模式是 acceptEdits（自动写 `.env`）：匹配对象是目标路径的**文件名**（basename，`.env` 在任何目录都命中），不读内容。默认名单（`permissions.engine.ts` 的 `DEFAULT_SENSITIVE_FILES`）：`.env`、`.env.*`、`*.env`、`*.pem`、`*.key`、`id_rsa`/`id_rsa.*`、`id_ed25519`/`id_ed25519.*`、`*.p12`、`*.pfx`、`*.kdbx`、`credentials.json`、`credentials*.json`；配置 `permissions.sensitiveFiles` 整体替换默认名单。
+凭据形态的文件默认转人工确认，即使工具本身是 safe（fs_read 读密钥）或模式是 acceptEdits（自动写 `.env`）：匹配对象是目标路径的**文件名**（basename，`.env` 在任何目录都命中），不读内容。默认名单（`permissions/sensitive-files.ts` 的 `DEFAULT_SENSITIVE_FILES`）：`.env`、`.env.*`、`*.env`、`*.pem`、`*.key`、`id_rsa`/`id_rsa.*`、`id_ed25519`/`id_ed25519.*`、`*.p12`、`*.pfx`、`*.kdbx`、`credentials.json`、`credentials*.json`；配置 `permissions.sensitiveFiles` 整体替换默认名单。
 
 链上三处守卫（见第 2 节判定链）：acceptEdits 放行与 safeTools 自动放行各带一道"不命中名单"前提，grants 之后有独立的敏感文件 confirm 层（noteText 带命中的具体模式）。优先级保持：显式 deny/allow/learned 规则在它之上（用户写了 `allow: fs_read` 这类工具级规则就是明确放行；fs_read 的规则匹配对象是整个参数 JSON 串，想按文件放行得写 `fs_read:*env*` 这样的通配形态）；本 run 内对该调用的一次 `once` 批准也使后续重复调用安静（SessionGrants 在敏感文件层之前）。
 
