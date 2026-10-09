@@ -44,7 +44,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 | 子目录 | 内容 |
 |--------|------|
 | `protocol/` | 消息、块、事件、WS 指令帧、会话事件、ID、MCP、goal 与 usage 的 REST 响应类型（GET /mcp 的 `McpSnapshotResponse`、GET /sessions/:id/goal 的 `GoalViewResponse`、GET /usage 的 `UsageBody`）的定义——线上数据形状的权威来源，经 `@kclaw/core/protocol` 子路径出口供三端引用 |
-| `provider/` | OpenAI 兼容与 Anthropic Messages 两种协议的模型客户端，带重试、内置预设目录与统一的端点/模型解析（resolver，见 [provider](./core/provider.md)） |
+| `provider/` | OpenAI 兼容与 Anthropic Messages 两种协议的模型客户端，带重试、内置预设目录与统一的端点/模型解析（resolver，见 [provider](./core/provider.md)）；两种线格式的全部知识（类型、鉴权头、URL 规则、embeddings 能力位、探活请求形状）单源在 `formats.ts` 的 wire-format 注册表 |
 | `agent/` | agent 循环、上下文组装、工具契约、单次 run 的组装（`run-assembly.ts` 的 `executeRun`） |
 | `hooks/` | hook 系统：14 个挂载位置、HookChain 注册接口、用户文件装载、内置 hook（见 [hooks](./core/hooks.md)） |
 | `storage/` | 路径解析、配置读取、JSONL（每行一条 JSON 的文本文件）读写；含用量记录 `usage.ts` 与已保存权限规则 `decided-rules.ts` |
@@ -60,7 +60,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 | `goal/` | /goal 目标循环的领域模块：快照类型、机械上限常量、判定器与验收门、三组注入提示词、事件派生纯函数（derive.ts）与轮决策纯函数（check.ts：九条停止条件与续跑/收尾判定）（消费器在 server 的 goal-loop.ts，见 [goal](./core/goal.md)） |
 | `notify/` | 任务完成通知 |
 
-根级另有 `bus.ts`（EventBus，进程内事件分发）与 `client-http.ts`（CLI/WebUI 共享的 HTTP 请求基座：自动附带 Bearer token、提取错误信息、处理 204/空响应，经 `@kclaw/core/client-http` 子路径出口；不 import 任何 Node 专属模块，浏览器可以直接打包）。`mentions.ts`（`@` 文件引用的纯函数层：提取、候选补全与模型侧包装文本，经 `@kclaw/core/mentions` 子路径出口；机制见 [file-mentions](./core/file-mentions.md)）同为浏览器可引用的纯模块。`sandbox/`（exec 工具的操作系统级沙箱：Seatbelt/bwrap 检测与包装，见 [sandbox](./core/sandbox.md)）是内部模块，不经入口导出，由 run 组装直接 import。
+根级另有 `bus.ts`（EventBus，进程内事件分发）与 `client-http.ts`（CLI/WebUI 共享的 HTTP 请求基座：自动附带 Bearer token、提取错误信息、处理 204/空响应，经 `@kclaw/core/client-http` 子路径出口；不 import 任何 Node 专属模块，浏览器可以直接打包）。`mentions.ts`（`@` 文件引用的纯函数层：提取、候选补全与模型侧包装文本，经 `@kclaw/core/mentions` 子路径出口；机制见 [file-mentions](./core/file-mentions.md)）与 `provider/formats.ts`（LLM 线格式注册表：格式类型与校验、鉴权头、端点 URL、embeddings 能力位、探活请求形状，经 `@kclaw/core/provider-formats` 子路径出口；WebUI 的 Model 页与 CLI 首跑向导经它单源消费）同为浏览器可引用的纯模块。`sandbox/`（exec 工具的操作系统级沙箱：Seatbelt/bwrap 检测与包装，见 [sandbox](./core/sandbox.md)）是内部模块，不经入口导出，由 run 组装直接 import。
 
 **server**（入口 `packages/server/src/index.ts`）：`app.ts`（createApp 组装）、`daemon.ts`（launchDaemon）、`auth.ts`（token 鉴权）、`run.ts`（RunManager 队列状态机；单次 run 的组装在 core 的 `executeRun`）、`subagent.ts`（subagent 派生：子会话创建、状态行与确认转发，见 [subagents](./core/subagents.md)）、`team.ts`（团队宿主：身份反查、收信箱投递、自动派活、面板，见 [agent-team](./core/agent-team.md)）、`goal-loop.ts`（/goal 目标循环主机：空闲边缘驱动、验收门、判定器与续跑，见 [goal](./core/goal.md)）、`command-check.ts`（WS 命令帧的唯一校验点）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`（定时调度 tick）、`memory-scheduler.ts`（记忆的定时/跟随保底调度）、`skill-scheduler.ts`（技能进化的跟随检查消费端，见 [skills](./core/skills.md)）、`skill-curator.ts`（技能 curator 的每日闲时扫描宿主：陈旧标记与归档，见 [skills](./core/skills.md)）、`host-kit.ts`（常驻宿主共享骨架：定时宿主的"立即首扫 + interval + 进行中任务记录 + 停机等待"，与两调度器共用的空闲门禁 `followGateDue`、skill curator 与记忆夜间内化共用的每日过点门禁 `dailyGateDue`；goal 循环等无定时器宿主只用其中的进行中记录）、`mcp-projects.ts`（项目发现：从会话记录现算已知项目集合、逐项目挂两阶段配置 watch、60s 对齐一次，见 [mcp](./core/mcp.md)）、`project-mcp-watch.ts`（项目层 mcp.json 的两阶段文件监视，与 mcp-projects 配套）、`history-search.ts`（history_search 工具与 `/search` 路由共用的检索数据面：索引召回 + 标题解析 + 回收站过滤）、`chore-usage.ts`（后台杂活 LLM 花费的用量记账）、`feishu/`（飞书频道：频道逻辑 + 传输接入口 + SDK 薄壳，见 [feishu-channel](./server/feishu-channel.md)）、`routes/`（sessions/attachments/jobs/config/providers/fs/usage/memory/skills/hooks/permissions/mcp/channel 十三组路由）。
 

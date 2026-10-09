@@ -10,7 +10,8 @@ import { DEFAULT_LLM_TIMEOUT_MS } from "./http.js"
  * protocol implementation (OpenAI-compatible chat completions vs Anthropic
  * Messages). This is the single construction point every per-entry client
  * path — run clients, memory extraction, the launch default — resolves
- * through, so a new format can only be wired in one place.
+ * through. Wire-format knowledge (auth/URL/probe/capability) lives in the
+ * formats registry; this branch only maps format id to adapter constructor.
  */
 export function createProviderClient(opts: {
   entry: ProviderEntry

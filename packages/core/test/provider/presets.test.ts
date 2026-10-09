@@ -23,7 +23,7 @@ describe("parseProviderEntry", () => {
 
   it("throws readable errors on bad input", () => {
     expect(() => parseProviderEntry(null)).toThrow("must be an object")
-    expect(() => parseProviderEntry({ ...ok, format: "grpc" })).toThrow('must be "openai" or "anthropic"')
+    expect(() => parseProviderEntry({ ...ok, format: "grpc" })).toThrow('must be one of "openai", "anthropic"')
     expect(() => parseProviderEntry({ ...ok, baseUrl: "" })).toThrow("baseUrl is required")
     expect(() => parseProviderEntry({ ...ok, baseUrl: "ftp://x" })).toThrow("must start with http")
     expect(() => parseProviderEntry({ ...ok, model: "  " })).toThrow("model is required")

@@ -1,12 +1,11 @@
-import type { ProviderApiFormat } from "../storage/config.js"
-import { DEFAULT_LLM_TIMEOUT_MS, formatAuthHeaders, formatEndpoint, llmHttpError, rethrowClassified } from "./http.js"
+import { DEFAULT_LLM_TIMEOUT_MS, llmHttpError, rethrowClassified } from "./http.js"
+import { PROVIDER_WIRE_FORMATS, type ProviderApiFormat } from "./formats.js"
 
 /**
  * List the model ids a provider endpoint serves: the models-list request the
  * Model tab uses both for the model picker and as its connection test (a
  * successful list is the cheapest proof the URL + key work). Auth and URL
- * policy come from formatAuthHeaders/formatEndpoint (the shared per-format
- * source).
+ * policy come from the wire-format registry entry.
  */
 export async function fetchProviderModels(opts: {
   format: ProviderApiFormat
@@ -17,8 +16,9 @@ export async function fetchProviderModels(opts: {
 }): Promise<string[]> {
   const doFetch = opts.fetchImpl ?? fetch
   const timeoutMs = opts.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS
-  const url = formatEndpoint(opts.format, opts.baseUrl, "/models")
-  const headers: Record<string, string> = formatAuthHeaders(opts.format, opts.apiKey)
+  const fmt = PROVIDER_WIRE_FORMATS[opts.format]
+  const url = fmt.endpoint(opts.baseUrl, "/models")
+  const headers: Record<string, string> = fmt.authHeaders(opts.apiKey)
   const signal = AbortSignal.timeout(timeoutMs)
   let res: Response
   try {
@@ -55,9 +55,9 @@ const PROBE_TIMEOUT_MS = 20_000
 /**
  * One-shot minimal chat completion (1 token) that proves a model name works
  * on top of a working URL + key — the models-list probe cannot check the
- * model itself. Format-aware like {@link fetchProviderModels} (auth and URL
- * policy from the shared helpers). Never throws: a failed probe is a
- * result, with status null meaning the request never landed.
+ * model itself. Request path and payload come from the wire-format
+ * registry's probeRequest. Never throws: a failed probe is a result, with
+ * status null meaning the request never landed.
  */
 export async function probeProviderChat(opts: {
   format: ProviderApiFormat
@@ -69,19 +69,14 @@ export async function probeProviderChat(opts: {
 }): Promise<{ status: number | null; body: string }> {
   const doFetch = opts.fetchImpl ?? fetch
   const timeoutMs = opts.timeoutMs ?? PROBE_TIMEOUT_MS
-  const isAnthropic = opts.format === "anthropic"
-  const url = formatEndpoint(
-    opts.format,
-    opts.baseUrl,
-    isAnthropic ? "/messages" : "/chat/completions",
-  )
+  const fmt = PROVIDER_WIRE_FORMATS[opts.format]
+  const probe = fmt.probeRequest(opts.model)
+  const url = fmt.endpoint(opts.baseUrl, probe.path)
   const headers: Record<string, string> = {
     "content-type": "application/json",
-    ...formatAuthHeaders(opts.format, opts.apiKey),
+    ...fmt.authHeaders(opts.apiKey),
   }
-  const payload = isAnthropic
-    ? { model: opts.model, messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }], max_tokens: 1 }
-    : { model: opts.model, messages: [{ role: "user", content: "hi" }], max_tokens: 1, stream: false }
+  const payload = probe.payload
   try {
     const res = await doFetch(url, {
       method: "POST",

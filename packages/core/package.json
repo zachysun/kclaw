@@ -11,6 +11,7 @@
     "./client-http": "./dist/client-http.js",
     "./protocol": "./dist/protocol/index.js",
     "./permission-modes": "./dist/permissions/modes.js",
+    "./provider-formats": "./dist/provider/formats.js",
     "./sandbox": "./dist/sandbox/provider.js"
   },
   "scripts": {

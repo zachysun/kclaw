@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs"
 import { writeFileAtomic } from "./atomic.js"
 import { DEFAULT_LLM_TIMEOUT_MS } from "../provider/http.js"
+import { resolveFormat, type ProviderApiFormat } from "../provider/formats.js"
 import type { KclawPaths } from "./paths.js"
 import type { NotifyChannel } from "../notify/notify.js"
 import { isPermissionMode, type PermissionMode } from "../permissions/modes.js"
@@ -8,15 +9,10 @@ import { DEFAULT_SENSITIVE_FILES } from "../permissions/sensitive-files.js"
 import { validateWaterlineConfig } from "../session/waterlines.js"
 
 /**
- * Wire API format a provider entry speaks. "openai" is the OpenAI-compatible
- * chat-completions protocol (also what DeepSeek/Ollama speak); "anthropic" is
- * the Anthropic Messages protocol (x-api-key + anthropic-version headers,
- * with the same key also sent as Authorization: Bearer for gateways that
- * only read Bearer).
+ * One provider entry: a reachable endpoint plus the single model it serves.
+ * The `format` wire-protocol union and its knowledge live in the
+ * provider/formats registry.
  */
-export type ProviderApiFormat = "openai" | "anthropic"
-
-/** One provider entry: a reachable endpoint plus the single model it serves. */
 export interface ProviderEntry {
   /** Omitted means "openai". */
   format?: ProviderApiFormat
@@ -37,9 +33,9 @@ export interface ProviderEntry {
   promptCache?: "auto" | "off"
 }
 
-/** Entries may omit `format`; everything downstream reads through this. */
+/** Entries may omit `format`; everything downstream reads through this (delegates to the registry's {@link resolveFormat}). */
 export function resolveProviderFormat(entry: ProviderEntry): ProviderApiFormat {
-  return entry.format ?? "openai"
+  return resolveFormat(entry.format)
 }
 
 /** `sandbox:` section of the config file (daemon-level). */

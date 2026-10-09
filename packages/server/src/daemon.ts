@@ -49,6 +49,7 @@ import {
   resolveModel,
   resolvePaths,
   resolveProviderFormat,
+  PROVIDER_WIRE_FORMATS,
   SkillEvolutionSystem,
   UsageStore,
   withRetry,
@@ -288,10 +289,11 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     const entry = embedCfg.provider !== ""
       ? config.providers.entries[embedCfg.provider]
       : config.providers.entries[config.providers.default]
-    if (entry !== undefined && resolveProviderFormat(entry) === "anthropic") {
-      // Anthropic has no embeddings endpoint: an anthropic-format entry can
-      // serve chat but never the vector path.
-      console.error("kclaw memory: embedding provider is an anthropic-format entry (no embeddings API), vector path disabled")
+    if (entry !== undefined && !PROVIDER_WIRE_FORMATS[resolveProviderFormat(entry)].hasEmbeddings) {
+      // A format without an embeddings API (Anthropic Messages) can serve
+      // chat but never the vector path — the capability flag lives in the
+      // wire-format registry.
+      console.error("kclaw memory: embedding provider's wire format has no embeddings API, vector path disabled")
     } else if (entry !== undefined) {
       embed = providerResolver.embed(embedCfg.provider, embedCfg.model)
     } else {

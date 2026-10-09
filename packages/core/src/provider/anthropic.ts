@@ -1,8 +1,8 @@
 import type { ContentPart, LlmClient, LlmRequest, LlmStreamEvent } from "./types.js"
 import type { StopReason, Usage } from "../protocol/messages.js"
-import { anthropicEndpoint, DEFAULT_LLM_TIMEOUT_MS, llmHttpError, rethrowClassified, sseDataLines } from "./http.js"
+import { DEFAULT_LLM_TIMEOUT_MS, llmHttpError, rethrowClassified, sseDataLines } from "./http.js"
 import { createCacheMarkerPolicy } from "./cache-markers.js"
-import { formatAuthHeaders } from "./http.js"
+import { PROVIDER_WIRE_FORMATS } from "./formats.js"
 
 /**
  * The Messages API requires max_tokens; when the entry declares no maxOutput
@@ -183,12 +183,13 @@ export function createAnthropicClient(opts: {
     async *stream(req: LlmRequest): AsyncIterable<LlmStreamEvent> {
       const signal = AbortSignal.timeout(timeoutMs)
       const wantCache = cacheMarkers.wanted(req.promptCache !== undefined)
+      const anthropic = PROVIDER_WIRE_FORMATS.anthropic
       const post = (body: string): Promise<Response> =>
-        doFetch(anthropicEndpoint(opts.baseUrl, "/messages"), {
+        doFetch(anthropic.endpoint(opts.baseUrl, "/messages"), {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            ...formatAuthHeaders("anthropic", opts.apiKey),
+            ...anthropic.authHeaders(opts.apiKey),
           },
           body,
           signal,

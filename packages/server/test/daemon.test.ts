@@ -7,7 +7,7 @@
  * falls back) is exercised without HTTP, and the bin/kclaw-server.mjs entry
  * is exercised for real in a spawned process (SIGTERM → clean exit 0).
  */
-import { describe, it, expect, afterEach, beforeAll } from "vitest"
+import { describe, it, expect, afterEach, beforeAll, vi } from "vitest"
 import { spawn, execFileSync } from "node:child_process"
 import type { ChildProcess } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -158,6 +158,23 @@ describe("launchDaemon", () => {
     expect(pidfile.port).toBe(daemon.port)
     expect(pidfile.pid).toBe(process.pid)
     expect(typeof pidfile.startedAt).toBe("string")
+  })
+
+  it("disables the vector path with one warning when the embedding entry's format has no embeddings API", async () => {
+    const home = makeHome()
+    const config = makeConfig(home)
+    config.providers.entries.ant = { format: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "k", model: "claude-x" }
+    config.memory.embedding = { provider: "ant", model: "text-embedding-3-small" }
+    const errors: string[] = []
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      errors.push(args.join(" "))
+    })
+    try {
+      await launchMock(home, config)
+      expect(errors.some((line) => line.includes("no embeddings API"))).toBe(true)
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it("reuses the token file across launches in the same home (and keeps it after stop)", async () => {

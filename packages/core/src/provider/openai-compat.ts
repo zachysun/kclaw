@@ -1,7 +1,8 @@
 import type { LlmClient, LlmRequest, LlmStreamEvent } from "./types.js"
 import { normalizeFinishReason } from "./normalize.js"
 import { createCacheMarkerPolicy } from "./cache-markers.js"
-import { DEFAULT_LLM_TIMEOUT_MS, formatAuthHeaders, llmHttpError, rethrowClassified, sseDataLines } from "./http.js"
+import { DEFAULT_LLM_TIMEOUT_MS, llmHttpError, rethrowClassified, sseDataLines } from "./http.js"
+import { PROVIDER_WIRE_FORMATS } from "./formats.js"
 import type { Usage } from "../protocol/messages.js"
 
 interface ChatDelta {
@@ -80,11 +81,11 @@ export function createOpenAiCompatClient(opts: {
       const signal = AbortSignal.timeout(timeoutMs)
       const wantCacheKey = cacheKey.wanted(req.promptCache?.key !== undefined)
       const post = (body: string): Promise<Response> =>
-        doFetch(`${opts.baseUrl.replace(/\/$/, "")}/chat/completions`, {
+        doFetch(PROVIDER_WIRE_FORMATS.openai.endpoint(opts.baseUrl, "/chat/completions"), {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            ...formatAuthHeaders("openai", opts.apiKey),
+            ...PROVIDER_WIRE_FORMATS.openai.authHeaders(opts.apiKey),
           },
           body,
           signal,
