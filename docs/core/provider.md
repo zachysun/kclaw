@@ -223,7 +223,7 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 - **缓存与热生效**：resolver 按条目名缓存裸客户端，签名 = `format|baseUrl|apiKey|timeoutMs|promptCache`（`promptCache` 参与签名，改开关即重建实例、2b 节的"端点不支持缓存标记"裁决随之重置）。Model 页的增删改直接改 daemon 的内存配置并持久化，随后经 ConfigNotifier 发布 `providers` 变更（见 [storage](./storage.md)），resolver 订阅后**整体清空缓存**，下个 run 自动重建，**无需重启**；签名检查保留为优化，两次通知之间的字段改动也能即时重建。
 - **每次 run 包一层新重试**：缓存的是裸客户端；`withRetry` 在每次 `llmForRun` 调用时现包，重试回调才归属当次 run（`llm.failed` 事件带对的上文）。
 - **记忆提取同语义**：`memory.extractModel` 命中条目名时走该条目自己的客户端与线上模型名；命中不了则按裸模型名发往主模型端点（回退）。daemon 给 MemorySystem 注入 `resolveEntryLlm`，条目客户端与 run 客户端同源（同一 resolver 的缓存与热生效，见 [memory](./memory.md)）。
-- **向量路同步热更**：embedding 客户端由 resolver 的 `embed(providerName, model)` 给出（按 `baseUrl|apiKey|timeoutMs` 签名现解），换 key/换地址下条记忆向量就吃到；向量路是否启用（embeddings model 与条目协议判定）仍是启动时一次定死。
+- **向量路同步热更**：embedding 客户端由 resolver 的 `embed(providerName, model)` 给出（按 `baseUrl|apiKey|timeoutMs` 签名现解），换 key/换地址下条记忆向量就吃到；向量路是否启用（embeddings model 是否配置与条目格式的 embeddings 能力，判定链见 [memory](./memory.md)）仍是启动时一次定死。
 - **默认模型行也支持热更**：run 组装与手动压缩路径的默认模型取默认条目**当前**的 `.model`，启动时解析的 `deps.model` 只在"没有配置条目、纯环境变量"的安装里作回退。
 
 ### 6b. 模型列表检测（probe，兼作连接验证）
