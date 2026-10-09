@@ -11,7 +11,7 @@
  */
 import type { FastifyInstance } from "fastify"
 import type { ConfigNotifier, KclawConfig, KclawPaths, ProviderApiFormat, ProviderEntry } from "@kclaw/core"
-import { fetchProviderModels, parseProviderEntry, PROVIDER_PRESETS, renameProviderEntry, resolveProviderFormat } from "@kclaw/core"
+import { fetchProviderModels, isProviderApiFormat, parseProviderEntry, PROVIDER_PRESETS, PROVIDER_WIRE_FORMAT_IDS, renameProviderEntry, resolveProviderFormat } from "@kclaw/core"
 import { saveConfig } from "@kclaw/core"
 import { maskSecret } from "./config.js"
 
@@ -172,12 +172,12 @@ export function registerProvidersRoutes(app: FastifyInstance, deps: ProvidersRou
     if (typeof body?.name === "string" && body.name !== "") {
       const entry = deps.config.providers.entries[body.name]
       if (entry === undefined) return reply.code(404).send({ error: `unknown provider entry: ${body.name}` })
-      format = body.format === "openai" || body.format === "anthropic" ? body.format : resolveProviderFormat(entry)
+      format = isProviderApiFormat(body.format) ? body.format : resolveProviderFormat(entry)
       baseUrl = typeof body.baseUrl === "string" && body.baseUrl.trim() !== "" ? body.baseUrl.trim() : entry.baseUrl
       apiKey = typeof body.apiKey === "string" && body.apiKey !== "" ? body.apiKey : entry.apiKey
     } else {
-      if (body?.format !== "openai" && body?.format !== "anthropic") {
-        return reply.code(400).send({ error: 'format must be "openai" or "anthropic"' })
+      if (!isProviderApiFormat(body?.format)) {
+        return reply.code(400).send({ error: `format must be one of ${PROVIDER_WIRE_FORMAT_IDS.map((id) => `"${id}"`).join(", ")}` })
       }
       if (typeof body?.baseUrl !== "string" || body.baseUrl.trim() === "") {
         return reply.code(400).send({ error: "baseUrl is required" })

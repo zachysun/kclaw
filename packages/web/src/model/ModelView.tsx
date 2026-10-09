@@ -11,11 +11,12 @@
  * means "keep the stored key" (honored server-side).
  */
 import { useCallback, useEffect, useRef, useState } from "react"
+import { PROVIDER_WIRE_FORMAT_IDS, resolveFormat, type ProviderApiFormat } from "@kclaw/core/provider-formats"
 import type { ApiClient } from "../api.js"
 import { emitProvidersChanged } from "../events.js"
 import type { NoticeFn } from "../toast.js"
 
-type ApiFormat = "openai" | "anthropic"
+type ApiFormat = ProviderApiFormat
 
 interface ProviderEntryView {
   format?: ApiFormat
@@ -42,7 +43,13 @@ interface ProvidersSnapshot {
 
 const FORMAT_LABELS: Record<ApiFormat, string> = { openai: "OpenAI 格式", anthropic: "Anthropic 格式" }
 
-const entryFormat = (e: ProviderEntryView): ApiFormat => e.format ?? "openai"
+/** Custom-form option wording (longer than the badge labels above); keys exhaust the registry ids. */
+const FORMAT_OPTIONS: Record<ApiFormat, string> = {
+  openai: "OpenAI 兼容（DeepSeek/Ollama 等）",
+  anthropic: "Anthropic Messages",
+}
+
+const entryFormat = (e: ProviderEntryView): ApiFormat => resolveFormat(e.format)
 
 interface FormState {
   /** Entry name being edited; null = a new entry. */
@@ -302,8 +309,9 @@ export function ModelView({ api, notice }: {
                 value={form.format}
                 onChange={(e) => setForm({ ...form, format: e.target.value as ApiFormat, models: null })}
               >
-                <option value="openai">OpenAI 兼容（DeepSeek/Ollama 等）</option>
-                <option value="anthropic">Anthropic Messages</option>
+                {PROVIDER_WIRE_FORMAT_IDS.map((id) => (
+                  <option key={id} value={id}>{FORMAT_OPTIONS[id]}</option>
+                ))}
               </select>
             </label>
           )}

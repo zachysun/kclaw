@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { createAnthropicClient, ANTHROPIC_DEFAULT_MAX_TOKENS } from "../../src/provider/anthropic.js"
-import { ANTHROPIC_VERSION } from "../../src/provider/http.js"
+import { ANTHROPIC_VERSION } from "../../src/provider/formats.js"
 import type { LlmRequest } from "../../src/provider/types.js"
 
 function sseResponse(events: object[]): Response {

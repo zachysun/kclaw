@@ -1,4 +1,5 @@
-import type { ProviderApiFormat, ProviderEntry } from "../storage/config.js"
+import type { ProviderEntry } from "../storage/config.js"
+import { expectProviderApiFormat, type ProviderApiFormat } from "./formats.js"
 
 /**
  * Built-in provider presets: well-known endpoints the Model tab offers so a
@@ -35,10 +36,7 @@ export function parseProviderEntry(input: unknown): ProviderEntry {
     throw new Error("provider entry must be an object")
   }
   const raw = input as Record<string, unknown>
-  const format = raw.format === undefined ? "openai" : raw.format
-  if (format !== "openai" && format !== "anthropic") {
-    throw new Error(`provider format must be "openai" or "anthropic", got ${JSON.stringify(format)}`)
-  }
+  const format = raw.format === undefined ? "openai" : expectProviderApiFormat(raw.format)
   const baseUrl = requireNonEmptyString(raw.baseUrl, "baseUrl")
   if (!/^https?:\/\//.test(baseUrl)) {
     throw new Error("baseUrl must start with http:// or https://")

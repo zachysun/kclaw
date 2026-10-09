@@ -24,12 +24,13 @@
  */
 import * as p from "@clack/prompts"
 import { findProviderPreset, probeProviderChat, saveConfig, loadConfig, resolvePaths } from "@kclaw/core"
+import type { ProviderApiFormat } from "@kclaw/core"
 import { chmodSync } from "node:fs"
 
 export interface Template {
   id: "deepseek" | "openai" | "anthropic" | "ollama" | "custom"
   label: string
-  format: "openai" | "anthropic"
+  format: ProviderApiFormat
   baseUrl?: string
   defaultModel?: string
   skipKey?: boolean
