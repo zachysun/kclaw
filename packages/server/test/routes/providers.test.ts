@@ -177,8 +177,11 @@ describe("providers routes", () => {
   describe("POST /providers/models probe", () => {
     let server: Server
     let base: string
+    let probedPaths: string[]
     beforeEach(async () => {
-      server = createServer((_req, res) => {
+      probedPaths = []
+      server = createServer((req, res) => {
+        probedPaths.push(req.url ?? "")
         res.writeHead(200, { "content-type": "application/json" })
         res.end(JSON.stringify({ data: [{ id: "mock-a" }, { id: "mock-b" }] }))
       })
@@ -209,6 +212,27 @@ describe("providers routes", () => {
       })
       expect(bad.statusCode).toBe(502)
       expect(bad.json().ok).toBe(false)
+    })
+
+    it("lets a valid body.format override the stored entry's format; an invalid one falls back to it", async () => {
+      // Stored as anthropic on a bare base: the fallback inserts /v1, the
+      // openai override does not — the two shapes prove which format served.
+      await app.inject({
+        method: "POST", url: "/providers", headers: AUTH,
+        payload: { name: "ant", entry: { format: "anthropic", baseUrl: base, apiKey: "k", model: "claude-x" } },
+      })
+      const overridden = await app.inject({
+        method: "POST", url: "/providers/models", headers: AUTH,
+        payload: { name: "ant", format: "openai" },
+      })
+      expect(overridden.statusCode).toBe(200)
+      expect(probedPaths[0]).toBe("/models")
+      const fallback = await app.inject({
+        method: "POST", url: "/providers/models", headers: AUTH,
+        payload: { name: "ant", format: "grpc" },
+      })
+      expect(fallback.statusCode).toBe(200)
+      expect(probedPaths[1]).toBe("/v1/models")
     })
 
     it("rejects malformed probes", async () => {
