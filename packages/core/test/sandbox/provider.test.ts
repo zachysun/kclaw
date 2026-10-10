@@ -54,7 +54,7 @@ describe("seatbeltProfile", () => {
     // file rules untouched
     expect(p).toContain("(allow file-read*)")
     expect(p).toContain("(deny file-write*)")
-    // 缺省（undefined）等价 allow
+    // 默认（undefined）等价 allow
     const def = seatbeltProfile({ workspace: "/w", home: "/h", writeRoots: [], tmpDirs: [] })
     expect(def).toContain("(allow network*)")
   })

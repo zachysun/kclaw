@@ -55,7 +55,7 @@ describe("subagent memory isolation", () => {
   it("interval sweep extracts the mainline session and never the child", async () => {
     const main = sessions.create("主线", undefined, WORKDIR)
     const child = sessions.create("子代理 · 扫描", undefined, WORKDIR, "default", main.id)
-    seed(main.id, "主线敲定了用 SQLite 存用量台账")
+    seed(main.id, "主线敲定了用 SQLite 存用量记录")
     seed(child.id, "子代理过程文本：翻了 30 个文件看到很多 TODO")
 
     const { system, prompts } = recordingExtractor()

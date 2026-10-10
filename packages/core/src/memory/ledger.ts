@@ -15,9 +15,9 @@ interface LedgerState {
   followChecks: FollowCheck[]
   /** 最近一次定时触发的墙钟时间（ISO；scheduler 判节拍用）。 */
   intervalLastRun?: string
-  /** 夜间内化判据基线（UTC YYYY-MM-DD，与线文件 updated 同源；pipeline 读写）。 */
+  /** 夜间沉淀判据基线（UTC YYYY-MM-DD，与线文件 updated 同源；pipeline 读写）。 */
   nightlyBaseline?: string
-  /** 最近一次夜间内化触发的本地日期（YYYY-MM-DD，scheduler 防同日重跑）。 */
+  /** 最近一次夜间沉淀触发的本地日期（YYYY-MM-DD，scheduler 防同日重跑）。 */
   nightlyLastRun?: string
 }
 
@@ -40,7 +40,7 @@ export class WriteLedger {
           nightlyLastRun: raw.nightlyLastRun,
         }
       } catch {
-        // 损坏的账本视作空账本：全量重扫（重复提取由合并写兜底）
+        // 损坏的记录视作空记录：全量重扫（重复提取由合并写保底）
       }
     }
   }
@@ -91,7 +91,7 @@ export class WriteLedger {
     this.#flush()
   }
 
-  /** 夜间内化判据基线（UTC 日期）；从未跑过 → undefined（首跑只内化当天线）。 */
+  /** 夜间沉淀判据基线（UTC 日期）；从未跑过 → undefined（首跑只沉淀当天线）。 */
   getNightlyBaseline(): string | undefined {
     return this.#state.nightlyBaseline
   }
@@ -101,7 +101,7 @@ export class WriteLedger {
     this.#flush()
   }
 
-  /** 最近一次夜间内化触发的本地日期（YYYY-MM-DD）；从未触发过 → undefined。 */
+  /** 最近一次夜间沉淀触发的本地日期（YYYY-MM-DD）；从未触发过 → undefined。 */
   getNightlyLastRun(): string | undefined {
     return this.#state.nightlyLastRun
   }

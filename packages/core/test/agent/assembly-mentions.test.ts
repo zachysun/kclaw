@@ -120,7 +120,7 @@ describe("executeRun file mention wiring (end to end)", () => {
       config,
       resolveLlm: () => ({ llm, model: "test-model" }),
     })
-    const sessionId = sessions.create("点名").id
+    const sessionId = sessions.create("指名").id
     const engine: RunEngine = {
       deps: {
         config,

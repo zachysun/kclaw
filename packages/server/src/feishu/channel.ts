@@ -182,7 +182,7 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
           .startStream(openId, "")
           .then((id) => {
             view.streamCardId = id
-            // 冲刷卡片 id 返回前到达的增量（流式事件的到达不等人）
+            // 缓冲卡片 id 返回前到达的增量（流式事件的到达不等人）
             const backlog = view.pendingDeltas.splice(0)
             for (const d of backlog) void transport.appendStream(id, d).catch(() => undefined)
           })
@@ -379,7 +379,7 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
     if (!started) return
     started = false
     bus.unsubscribe(socket)
-    // 重启不能把在飞的镜像卡冻在半截：趁传输还活着，逐张补一个诚实的
+    // 重启不能把进行中的镜像卡冻在半截：趁传输还活着，逐张补一个诚实的
     // 终稿。run 本身还在 daemon 里继续，断掉的只是这张镜像卡。
     const note = "（通道重启，本轮中断；完整回复可在 WebUI 查看）"
     for (const [, view] of views) {

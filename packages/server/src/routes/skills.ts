@@ -40,8 +40,8 @@ function visibilityOf(s: SkillRecord): "all" | "user-only" {
  * /skills 路由族：技能管理面（CLI /skill 与 Web 技能页的共同后端）。
  * 每次请求现扫全局 <home>/skills + 可选 workdir 的 .kclaw/skills（项目级
  * 覆盖全局），与 run 时的注入同源同规则；复用技能（软链接接入）的可见
- * 档位由 .links.json 按 realpath 覆盖，与 run 装配共用同一覆盖函数。
- * user-invocable:false 的技能对用户面不存在（列表不显示、点名 404，对齐
+ * 档位由 .links.json 按 realpath 覆盖，与 run 组装共用同一覆盖函数。
+ * user-invocable:false 的技能对用户面不存在（列表不显示、指名 404，对齐
  * Claude Code"从 / 菜单隐藏"）；复用链接的管理记录直接从 .links.json 读，
  * 不受该过滤影响（否则"仅模型"档在页面上消失后无法改回；管理面本身持
  * token 鉴权）。
@@ -50,7 +50,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
   const builtin = opts.builtinSources
   const pluginHomes = opts.pluginHomes
   const evolution = opts.skillsEvolution
-  /** 提案路由族的守卫：无装配（裸 app/测试）503，不影响既有 /skills 路由。 */
+  /** 提案路由族的守卫：无组装（裸 app/测试）503，不影响既有 /skills 路由。 */
   const requireEvolution = (reply: FastifyReply): SkillEvolutionAdmin | undefined => {
     if (evolution === undefined) {
       void reply.code(503).send({ error: "skill evolution is not assembled" })
@@ -58,7 +58,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     }
     return evolution
   }
-  /** 项目技能目录的请求侧包装：query 里的 workdir 可缺省/为空。 */
+  /** 项目技能目录的请求侧包装：query 里的 workdir 可默认/为空。 */
   const projectDirOf = (workdir: string | undefined): string | undefined =>
     workdir !== undefined && workdir.trim() !== "" ? projectSkillsDir(workdir) : undefined
 
@@ -154,7 +154,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     const name = typeof body?.name === "string" ? body.name : ""
     const target = typeof body?.target === "string" ? body.target.trim() : ""
     const agent = typeof body?.agent === "string" && AGENTS.includes(body.agent as ReuseAgent) ? (body.agent as ReuseAgent) : "custom"
-    // tier 缺省交给 core：按目标 SKILL.md 自带的可见性字段推导（尊重作者意图）。
+    // tier 默认交给 core：按目标 SKILL.md 自带的可见性字段推导（尊重作者意图）。
     const tier = typeof body?.tier === "string" && TIERS.includes(body.tier as ReuseTier) ? (body.tier as ReuseTier) : undefined
     const plugin = typeof body?.plugin === "string" && body.plugin.trim() !== "" ? body.plugin.trim() : undefined
     const workdir = typeof body?.workdir === "string" ? body.workdir : undefined

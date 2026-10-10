@@ -1,5 +1,5 @@
 /**
- * /goal 循环的机械上限（issue #47）。全部是代码内常量（QUEUE_LIMIT/
+ * /goal 循环的硬性上限（issue #47）。全部是代码内常量（QUEUE_LIMIT/
  * WAKE_BUDGET 先例：不自续进 config）；唯一可配项是判定器用的 provider
  * 条目（config.goals.judge，走 Model 页热生效链）。调整这里的值 =
  * 改行为不是改契约，不需要配置面。
@@ -41,7 +41,7 @@ export const GOAL_EVIDENCE_WINDOW_CHARS = 24_000
 /** 验收命令单条输出进入证据的尾部字符上限。 */
 export const GOAL_GATE_OUTPUT_TAIL_CHARS = 2000
 
-/** 验收命令执行超时（毫秒）——沙箱内进程也要有死线。 */
+/** 验收命令执行超时（毫秒）——沙箱内进程也要有超时上限。 */
 export const GOAL_GATE_TIMEOUT_MS = 60_000
 
 /** 判定器输出上限（token）：理由+进展的宽松额度。 */

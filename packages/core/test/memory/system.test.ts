@@ -39,7 +39,7 @@ describe("cognitionPrompt (L2 常驻注入)", () => {
     sys.writeCognition("persona", "persona", "Master 偏好中文。")
     sys.writeCognition("rule", "general", "始终中文回复。")           // global
     sys.writeCognition("wiki", "dev-machine", "开发机是 macOS。")      // global
-    // 项目专属规则：手工放置 scope 文件（模拟内化产物）
+    // 项目专属规则：手工放置 scope 文件（模拟沉淀产物）
     const projId = projectIdFor(WORKDIR)
     const otherId = projectIdFor(OTHER)
     writeFileSync(join(root, "memory", "global", "rule", "kclaw.md"), `---\ntitle: kclaw 项目规则\nscope: project:${projId}\ncreated: 2026-08-01\nupdated: 2026-08-01\n---\n\nkclaw 必须 TDD\n`)
@@ -78,7 +78,7 @@ describe("search preserves reconciled vectors ", () => {
       resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "ws", op: "new-thread", thread: "ws", title: "重连线", content: "指数退避消灭了重连风暴" }] })]), model: "m" }),
     })
     await sys.triggerManual(WORKDIR)
-    sys.reconcile() // 补算向量（fire-and-forget：等一拍让补算落盘）
+    sys.reconcile() // 补算向量（fire-and-forget：等一拍让补算写入）
     await new Promise((r) => setTimeout(r, 0))
     const dbPath = join(root, "memory", "projects", projectIdFor(WORKDIR), "vectors.db")
     const before = new VectorIndex(dbPath)
@@ -187,7 +187,7 @@ describe("memory events in session stream ", () => {
     const sys = makeSystem({
       resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "ws", op: "new-thread", thread: "ws", title: "重连线", content: "指数退避消灭了重连风暴" }] })]), model: "m" }),
     })
-    await sys.triggerInterval(WORKDIR) // 不带 sessionId → 回落项目最近活动会话
+    await sys.triggerInterval(WORKDIR) // 不带 sessionId → 回退项目最近活动会话
     const memoryEvents = sessions.readEvents(meta.id).filter(isMemoryEvent)
     expect(memoryEvents.some((e) => e.trigger === "interval" && e.kind === "episode" && e.op === "new-thread")).toBe(true)
   })
@@ -262,7 +262,7 @@ describe("resolveEntryLlm 注入", () => {
       },
     })
     await sys.triggerManual(WORKDIR)
-    // pipeline 的 resolveLlm 包装总是先物化回落客户端（main），条目命中后改走注入的 sub
+    // pipeline 的 resolveLlm 包装总是先物化回退客户端（main），条目命中后改走注入的 sub
     expect(calls).toEqual(["main", "sub"])
     const hits = await sys.searchAll("重连风暴", 10)
     expect(hits.length).toBeGreaterThan(0)

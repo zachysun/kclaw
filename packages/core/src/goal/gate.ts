@@ -76,7 +76,7 @@ export async function runAcceptanceGates(
         command,
         ok: false,
         exitCode: null,
-        outputTail: `验收门未执行：沙箱不可用（${sandbox.unavailableReason ?? "未知原因"}）`,
+        outputTail: `验收命令未执行：沙箱不可用（${sandbox.unavailableReason ?? "未知原因"}）`,
       })
       continue
     }

@@ -1,7 +1,7 @@
 /**
  * Compactor 的压缩调度状态机（v4 水位线批次）：后台压缩（预压线触发的
  * 非阻塞路径）、挂起成果的交接（完成即挂起 / 迭代边界应用 / 同步压缩作废）、
- * 挂起 /compact 的登记与冲刷、等待者（"等、称、再决定"）与取消语义。
+ * 挂起 /compact 的登记与执行、等待者（"等、称、再决定"）与取消语义。
  *
  * 这些规则先经 prototype-compaction-scheduler.mjs 的 18 场景推演验证，
  * 再按原样落进 Compactor——本文件的场景与 prototype 一一对应。
@@ -80,7 +80,7 @@ function makeCompactor(sessions: SessionStore) {
   return { compactor, events, config }
 }
 
-/** background + gated client 的装配：kick 后立即返回，测试 release 放行摘要调用。 */
+/** background + gated client 的组装：kick 后立即返回，测试 release 放行摘要调用。 */
 async function setup(sessions: SessionStore) {
   const { compactor, events, config } = makeCompactor(sessions)
   const llm = gatedClient()
@@ -88,7 +88,7 @@ async function setup(sessions: SessionStore) {
 }
 
 describe("Compactor 调度状态机", () => {
-  it("后台压缩正流：kick→在飞→放行两次摘要→挂起→取走即清", async () => {
+  it("后台压缩正流：kick→进行中→放行两次摘要→挂起→取走即清", async () => {
     const sessions = new SessionStore(join(home, "s"))
     const session = sessions.create("正流")
     const history = seedHistory(sessions, session.id)
@@ -109,7 +109,7 @@ describe("Compactor 调度状态机", () => {
     expect(compactor.takeParked(session.id)).toBeNull()
   })
 
-  it("防重入：在飞或有挂起成果时 kick 被拒", async () => {
+  it("防重入：进行中或有挂起成果时 kick 被拒", async () => {
     const sessions = new SessionStore(join(home, "s"))
     const session = sessions.create("防重入")
     const history = seedHistory(sessions, session.id)
@@ -137,7 +137,7 @@ describe("Compactor 调度状态机", () => {
     expect(compactor.background(session.id, history, config, () => ({ llm: llm.client, model: "m" }))).toBe(true)
   })
 
-  it("被取消的在飞后台：完成时不挂起成果", async () => {
+  it("被取消的进行中后台：完成时不挂起成果", async () => {
     const sessions = new SessionStore(join(home, "s"))
     const session = sessions.create("被取消")
     const history = seedHistory(sessions, session.id)
@@ -145,7 +145,7 @@ describe("Compactor 调度状态机", () => {
     const { compactor, config, llm } = await setup(sessions)
 
     expect(compactor.background(session.id, history, config, () => ({ llm: llm.client, model: "m" }))).toBe(true)
-    compactor.cancel(session.id) // abort 在飞 + 标记
+    compactor.cancel(session.id) // abort 进行中 + 标记
     llm.release()
     await vi.waitFor(() => expect(compactor.hasInFlight(session.id)).toBe(false))
     expect(compactor.parked(session.id)).toBe(false)
@@ -167,7 +167,7 @@ describe("Compactor 调度状态机", () => {
     errorSpy.mockRestore()
   })
 
-  it("waitForSettled：无在飞立即返回；在飞时挂起等待、完成放行", async () => {
+  it("waitForSettled：无进行中立即返回；进行中时挂起等待、完成放行", async () => {
     const sessions = new SessionStore(join(home, "s"))
     const session = sessions.create("等待")
     const history = seedHistory(sessions, session.id)
@@ -206,7 +206,7 @@ describe("Compactor 调度状态机", () => {
     expect(compactor.takeParked(session.id)).toBeNull()
   })
 
-  it("同步压缩没写成（水位细判拦下）不丢挂起成果：兜底仍可用", async () => {
+  it("同步压缩没写成（水位细判拦下）不丢挂起成果：保底仍可用", async () => {
     const sessions = new SessionStore(join(home, "s"))
     const session = sessions.create("不成不丢")
     const history = seedHistory(sessions, session.id)
@@ -226,7 +226,7 @@ describe("Compactor 调度状态机", () => {
     expect(compactor.parked(session.id)).toBe(true)
   })
 
-  it("abortInFlight 掐在飞但不写取消标记（急救清场专用）：后续压缩照常开工", async () => {
+  it("abortInFlight 掐进行中但不写取消标记（急救清场专用）：后续压缩照常开工", async () => {
     const sessions = new SessionStore(join(home, "s"))
     const session = sessions.create("急救清场")
     const history = seedHistory(sessions, session.id)
@@ -260,7 +260,7 @@ describe("Compactor 调度状态机", () => {
     expect(compactor.takeDeferredManual(session.id)).toEqual({})
   })
 
-  it("多会话隔离：一个会话的在飞/挂起不影响另一个", async () => {
+  it("多会话隔离：一个会话的进行中/挂起不影响另一个", async () => {
     const sessions = new SessionStore(join(home, "s"))
     const s1 = sessions.create("会话一")
     const s2 = sessions.create("会话二")
@@ -271,7 +271,7 @@ describe("Compactor 调度状态机", () => {
     const llm2 = gatedClient()
 
     expect(compactor.background(s1.id, h1, config, () => ({ llm: llm1.client, model: "m" }))).toBe(true)
-    expect(compactor.background(s2.id, h2, config, () => ({ llm: llm2.client, model: "m" }))).toBe(true, "各自在飞，互不干扰")
+    expect(compactor.background(s2.id, h2, config, () => ({ llm: llm2.client, model: "m" }))).toBe(true, "各自进行中，互不干扰")
     expect(compactor.hasInFlight(s1.id)).toBe(true)
     expect(compactor.hasInFlight(s2.id)).toBe(true)
 
@@ -288,7 +288,7 @@ describe("Compactor 调度状态机", () => {
     const sessions = new SessionStore(paths.sessionsDir)
     const session = sessions.create("配置同源")
     const config = loadConfig(paths)
-    expect(config.sessions.compactAtRatio).toBeUndefined() // 缺省在读取处兜底
+    expect(config.sessions.compactAtRatio).toBeUndefined() // 默认在读取处保底
     expect(config.sessions.compactAheadRatio).toBeUndefined()
     expect(config.sessions.compactPackRatio).toBeUndefined()
   })

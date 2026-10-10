@@ -130,7 +130,7 @@ export interface ChatViewProps {
   compactions?: CompactionRecordView[] | null
   /** 已装用户可见技能的动态命令（/技能名）：合并进建议菜单与 /help 面板（内置优先）。 */
   extraCommands?: SlashCommandMeta[]
-  /** 会话工作区内的文件（GET /fs/files，失败静默为空）：@ 文件点名的候选源。 */
+  /** 会话工作区内的文件（GET /fs/files，失败静默为空）：@ 文件指定的候选源。 */
   mentionFiles?: readonly string[]
   /** 文件清单在后端被截断（仓库过大）：抽屉尾部显示一行提示。 */
   mentionTruncated?: boolean
@@ -170,7 +170,7 @@ export interface ChatViewProps {
   /**
    * 会话用量状态条（SessionUsageStrip）：渲染在输入框下方、chat-host 最底
    * 部的一行灰色小字。取数与刷新节奏归所有方（ChatPanel），本组件只负责
-   * 摆放。缺省不渲染。
+   * 摆放。默认不渲染。
    */
   usage?: ReactNode
 }
@@ -186,7 +186,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
   // both confirm and Esc clear it.
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
 
-  // 建议菜单候选（斜杠命令与 @ 文件点名共用一个抽屉）：正在输入的最后一个词
+  // 建议菜单候选（斜杠命令与 @ 文件指定共用一个抽屉）：正在输入的最后一个词
   // 以 / 开头出命令、以 @ 开头出工作区文件，首字符互斥所以两类不同时出现。
   const slashItems = dismissed ? [] : slashCompletions(draft, "web", extraCommands)
   const fileItems =

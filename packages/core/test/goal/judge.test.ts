@@ -1,5 +1,5 @@
 /**
- * 判定器接缝测试（issue #47）：证据窗口构建 + judgeGoal 的解析/重试/
+ * 判定器接入口测试（issue #47）：证据窗口构建 + judgeGoal 的解析/重试/
  * 传输分类。全部用假 LlmClient（脚本流），不碰网络。
  */
 import { describe, it, expect } from "vitest"

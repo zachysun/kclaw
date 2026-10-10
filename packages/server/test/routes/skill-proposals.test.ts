@@ -1,6 +1,6 @@
 /**
- * /skills/proposals 路由族：无装配 503、列表（含 status 过滤与 applied 用量）、
- * 详情、apply|reject|revert（409 冲突 / 404 缺失）、删除限制。装配用真
+ * /skills/proposals 路由族：无组装 503、列表（含 status 过滤与 applied 用量）、
+ * 详情、apply|reject|revert（409 冲突 / 404 缺失）、删除限制。组装用真
  * SkillEvolutionSystem（临时目录 + 真文件），提案经系统 API 造出。
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest"

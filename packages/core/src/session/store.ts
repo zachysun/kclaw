@@ -38,11 +38,11 @@ export interface SessionMeta {
   /** Layered compaction state, maintained by compaction events. */
   compaction?: CompactionState
   /**
-   * 冻结的系统提示词基线（提示词缓存纪律），双段独立冻结：stable（人设基座
+   * 冻结的系统提示词基线（提示词缓存纪律），双段独立冻结：stable（人设基础文本
    * + 注入约定）在前不变，live（认知 + 技能清单）变化即时生效——前缀缓存按
    * 从头逐字节相同匹配，live 变化只失效变化点之后。段级 frozenAt 记录该段
    * 文本成为基线的时刻。下一次压缩清除此字段后随首个 system 审计事件重新
-   * 固化（纪元边界=缓存冷启动，零额外成本）。
+   * 固化（基线重置点=缓存冷启动，零额外成本）。
    * 投影由事件推进：system 事件逐段 upsert、compaction 事件清除——事件流唯一真相。
    */
   systemBaseline?: { stable: { text: string; frozenAt: string }; live?: { text: string; frozenAt: string } }
@@ -282,17 +282,17 @@ export class SessionStore {
     }
   }
 
-  /** Append one system audit event (每 run 一条，双段全量留痕); the projection's only effect is per-segment upserting the frozen system baseline (不推进 updatedAt)。 */
+  /** Append one system audit event (每 run 一条，双段全量记录); the projection's only effect is per-segment upserting the frozen system baseline (不推进 updatedAt)。 */
   appendSystem(id: string, event: Omit<SystemEvent, "type">): void {
     this.appendEvent(id, { type: "system", ...event })
   }
 
-  /** Append one sandbox audit event (每 run 一条，run 装配探测后立即落盘); the projection stays untouched (不推进 updatedAt)。 */
+  /** Append one sandbox audit event (每 run 一条，run 组装时检测沙箱后立即写入); the projection stays untouched (不推进 updatedAt)。 */
   appendSandboxChecked(id: string, event: Omit<SandboxCheckedEvent, "type">): void {
     this.appendEvent(id, { type: "sandbox.checked", ...event })
   }
 
-  /** Append one run-boundary audit event（run 起点/终点留痕，与消息事件夹出一轮边界）; the projection stays untouched (不推进 updatedAt)。 */
+  /** Append one run-boundary audit event（run 起点/终点记录，与消息事件夹出一轮边界）; the projection stays untouched (不推进 updatedAt)。 */
   appendRunStarted(id: string, event: Omit<RunStartedEvent, "type">): void {
     this.appendEvent(id, { type: "run.started", ...event })
   }
@@ -302,12 +302,12 @@ export class SessionStore {
     this.appendEvent(id, { type: "run.ended", ...event })
   }
 
-  /** Append one permission-decision audit event（每次人工确认的裁决留痕; 中止不是裁决，不落）; the projection stays untouched (不推进 updatedAt)。 */
+  /** Append one permission-decision audit event（每次人工确认的裁决记录; 中止不是裁决，不落）; the projection stays untouched (不推进 updatedAt)。 */
   appendPermissionDecided(id: string, event: Omit<PermissionDecidedEvent, "type">): void {
     this.appendEvent(id, { type: "permission.decided", ...event })
   }
 
-  /** Append one team audit event（team/* 族：真相在团队目录，事件只留痕）; the projection stays untouched (不推进 updatedAt)。 */
+  /** Append one team audit event（team/* 族：真相在团队目录，事件只记录）; the projection stays untouched (不推进 updatedAt)。 */
   appendTeamAudit(id: string, event: TeamAuditEvent): void {
     this.appendEvent(id, event)
   }
@@ -376,7 +376,7 @@ export class SessionStore {
       events.push({ type: "session.restored", at: now })
     }
 
-    // 事件优先：逐条落盘事件并折进投影
+    // 事件优先：逐条写入事件并折进投影
     let projection = current
     for (const event of events) {
       this.appendEvent(id, event)

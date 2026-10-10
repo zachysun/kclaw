@@ -1,7 +1,7 @@
 /**
- * 技能调度器（提案制技能进化的唯一消费端）：扫到到期的空闲检查，触发
+ * 技能调度器（提案制技能进化的唯一处理方）：扫到到期的空闲检查，触发
  * core 提炼管线（triggerFollow）。定时器骨架在 host-kit，与记忆调度器的
- * 跟随分支共用门禁 followGateDue；两处有意差异（原型结论 #1）：
+ * 跟随分支共用判定 followGateDue；两处有意差异（原型结论 #1）：
  * - 成功才清检查：记忆侧"先清后触发"靠 interval 定时保底扫补失败重试；技能
  *   侧没有保底扫，若先清，一次失败就丢掉该批增量。改为 triggerFollow 成功
  *   resolve 才 clearFollowCheck；失败保留检查，下个 sweep 重试同一范围。
@@ -10,9 +10,9 @@
  *   重试计数管住无限失败。
  * - 重试上限：内存计数（daemon 重启归零，与唤醒预算同取舍），同一检查连败
  *   MAX_ATTEMPTS 次后清除并记日志——一个永久失败批次不该卡死该项目后续的
- *   检查消费（pendingFollowChecks 是逐条消费的，但账本条目无界增长没有意义）。
+ *   检查调用（pendingFollowChecks 是逐条处理的，但记录条目无界增长没有意义）。
  *
- * 空闲门禁复用 followGateDue（与记忆侧同一纯函数，host-kit）：end_turn 后
+ * 空闲判定复用 followGateDue（与记忆侧同一纯函数，host-kit）：end_turn 后
  * idleMinutes 内无新活动才触发；end_turn 后已有更新活动 → 清掉旧检查（新 run
  * 收尾钩子的粗查按全项目增量重排，语义等价记忆侧 I-1）。
  */

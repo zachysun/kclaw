@@ -43,7 +43,7 @@ export interface HookContextMap {
   /** 用户消息入场（message.created 与 completed 之间）。返回 Message = 改写生效。 */
   "run-before": { message: Message }
   /** run 结束（runAgent 已返回）。返回值忽略。totalUsage 即 protocol 的 Usage
-   *  正本：缓存字段仅 run 内所有 LLM 调用都携带时出现，缺省 = 未知。 */
+   *  正本：缓存字段仅 run 内所有 LLM 调用都携带时出现，默认 = 未知。 */
   "run-after": {
     outcome: {
       stopReason: string
@@ -51,9 +51,9 @@ export interface HookContextMap {
     }
     model: string
   }
-  /** 每次 LLM 调用前（模型视图已装配）。返回 ProviderMessage[] = 改写生效。 */
+  /** 每次 LLM 调用前（模型视图已组装）。返回 ProviderMessage[] = 改写生效。 */
   "llm-before": { messages: ProviderMessage[] }
-  /** 一次 LLM 调用完成（usage 整体透传，含缓存字段，缺省 = 未知）。返回值忽略。 */
+  /** 一次 LLM 调用完成（usage 整体透传，含缓存字段，默认 = 未知）。返回值忽略。 */
   "llm-after": { usage: Usage; stopReason: string; latencyMs: number }
   /** provider 层重试（withRetry 回调）。返回值忽略。 */
   "llm-retry": { attempt: number; error: string }

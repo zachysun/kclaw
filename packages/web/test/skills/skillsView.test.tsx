@@ -406,7 +406,7 @@ describe("SkillsView proposals tab（提案面）", () => {
 
   it("apply warning surfaces as a notice", async () => {
     const api = fakeApi({
-      post: vi.fn(async (path: string) => (path === "/skills/discovery/preview" ? { name: "pdf", body: "" } : { ok: true, warning: "项目 /w/proj 存在同名技能，将在该项目遮蔽全局版本" })),
+      post: vi.fn(async (path: string) => (path === "/skills/discovery/preview" ? { name: "pdf", body: "" } : { ok: true, warning: "项目 /w/proj 存在同名技能，项目副本将覆盖全局版本" })),
     })
     const notice = vi.fn()
     const { container } = await mount(api, notice)
@@ -419,6 +419,6 @@ describe("SkillsView proposals tab（提案面）", () => {
       container.querySelector<HTMLElement>('[data-testid="proposal-apply"]')!.click()
     })
     await flush()
-    expect(notice.mock.calls.some(([t]) => String(t).includes("遮蔽全局版本"))).toBe(true)
+    expect(notice.mock.calls.some(([t]) => String(t).includes("覆盖全局版本"))).toBe(true)
   })
 })

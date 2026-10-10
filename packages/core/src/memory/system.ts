@@ -26,19 +26,19 @@ export interface MemoryProjectInfo { id: string; workdir: string; threads: numbe
 export interface CognitionFileInfo { kind: "persona" | "wiki" | "rule"; name: string; path: string; scope: string; updated: string }
 
 /**
- * 消费者窄接口：MemorySystem 的 30 个方法按四拨消费方分面。类不拆、
- * 公共 API 不删改——接口只是每个消费方该看到的方法子集，调用方按面声明依赖，
+ * 调用方窄接口：MemorySystem 的 30 个方法按四拨调用方分面。类不拆、
+ * 公共 API 不删改——接口只是每个调用方该看到的方法子集，调用方按面声明依赖，
  * 编译器挡住越界使用（如路由碰触发器、调度器碰管理面）。
  */
 
-/** 检索面：内置钩子（记忆注入 / 系统提示词材料）与 memory_search 工具消费。 */
+/** 检索面：内置钩子（记忆注入 / 系统提示词材料）与 memory_search 工具调用。 */
 export interface MemoryQuery {
   cognitionPrompt(workdir: string): string
   searchEpisodes(workdir: string, query: string, limit?: number): Promise<EpisodeHit[]>
   searchAll(query: string, limit?: number): Promise<MemorySearchHit[]>
 }
 
-/** 触发面：记忆写入触发（memory_save 工具 + 调度器 + 手动内化）。 */
+/** 触发入口：记忆写入触发（memory_save 工具 + 调度器 + 手动沉淀）。 */
 export interface MemoryTriggers {
   triggerImmediate(sessionId: string): Promise<boolean>
   triggerManual(workdir: string, sessionId?: string): Promise<void>
@@ -50,7 +50,7 @@ export interface MemoryTriggers {
   recentSessionId(workdir: string): string | undefined
 }
 
-/** 调度簿记面：memory-scheduler 判节拍、跟随门禁、夜间防重跑。 */
+/** 调度簿记：memory-scheduler 判节拍、跟随判定、夜间防重跑。 */
 export interface MemoryScheduleBook {
   markIntervalRun(workdir: string, iso: string): void
   intervalLastRun(workdir: string): string | undefined
@@ -99,8 +99,8 @@ interface CogFile { kind: CogKind; name: string; title: string; body: string; sc
 interface ScoredHit { key: string; topic: string; title: string; date: string; text: string; score: number }
 
 /**
- * MemorySystem —— 记忆系统的唯一 server 侧门面。装配 L1 情节管线 + L2 认知库，
- * 方法面按四拨消费方分面（MemoryQuery / MemoryTriggers / MemoryScheduleBook /
+ * MemorySystem —— 记忆系统在 server 侧的唯一组装点。组装 L1 情节管线 + L2 认知库，
+ * 方法面按四拨调用方分面（MemoryQuery / MemoryTriggers / MemoryScheduleBook /
  * MemoryAdmin，卡⑤）；对账（reconcile）与停机（stop）只归 daemon。
  */
 export class MemorySystem implements MemoryQuery, MemoryTriggers, MemoryScheduleBook, MemoryAdmin {
@@ -113,7 +113,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
   readonly #emit?: (e: MemoryWrittenEvent) => void
   readonly #log: (m: string) => void
   readonly #now: () => Date
-  /** 记忆落盘通知：接成会话事件流 appendEvent；sessionId 缺失时跳过（无处可挂）。 */
+  /** 记忆写入通知：接成会话事件流 appendEvent；sessionId 缺失时跳过（无处可挂）。 */
   readonly #audit: (e: MemoryAudit) => void
   readonly #pipeline: MemoryPipeline
 
@@ -121,19 +121,19 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     memoryDir: string
     sessions: SessionStore
     config: KclawConfig
-    /** 每次触发时解析提取模型用的 llm 与 model（回落主模型）。 */
+    /** 每次触发时解析提取模型用的 llm 与 model（回退主模型）。 */
     resolveLlm: () => { llm: LlmClient; model: string }
     /**
      * extractModel 命中 provider 条目时解析该条目客户端的钩子（daemon 注入
-     * 签名缓存的 resolver，条目编辑热生效）；缺省每调用现建客户端。
+     * 签名缓存的 resolver，条目编辑热生效）；默认每调用现建客户端。
      */
     resolveEntryLlm?: (entryKey: string) => LlmClient
-    /** embedding 客户端（判定链通过时由装配方构造注入；缺省 = 向量路关闭）。 */
+    /** embedding 客户端（判定链通过时由组装方构造注入；默认 = 向量路关闭）。 */
     embed?: EmbeddingClient
     emit?: (e: MemoryWrittenEvent) => void
     log?: (msg: string) => void
     now?: () => Date
-    /** 杂活记账：提取/内化的 LLM 花费回调（daemon 注入；缺省不记）。 */
+    /** 后台调用用量记录：提取/沉淀的 LLM 花费回调（daemon 注入；默认不记）。 */
     recordChoreUsage?: ChoreUsageRecorder
   }) {
     this.#layout = new MemoryLayout(opts.memoryDir)
@@ -147,7 +147,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     this.#now = opts.now ?? (() => new Date())
     this.#audit = (e) => {
       const id = e.sessionId
-      if (id === undefined) return // 无归属会话：跳过（admin/手动内化在无会话项目上不落事件）
+      if (id === undefined) return // 无归属会话：跳过（admin/手动沉淀在无会话项目上不落事件）
       if (this.#sessions.meta(id) === undefined) return // 归属会话不存在：跳过（不落事件、不建幻影会话）
       const { sessionId: _sid, at, ...rest } = e
       // 事件体不携带 sessionId（Ruling 5：由所在会话目录决定）
@@ -155,7 +155,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     }
     this.#pipeline = new MemoryPipeline(opts.memoryDir, opts.sessions, {
       // extractModel 解析链抽成共享 helper（makeExtractLlmResolver）供记忆与
-      // 技能进化两套提取器共用；行为与原内联实现逐字一致（空串回落主模型、
+      // 技能进化两套提取器共用；行为与原内联实现逐字一致（空串回退主模型、
       // 条目命中走条目端点、其余按裸线上模型名发往主端点）。
       resolveLlm: makeExtractLlmResolver({
         config: this.#config,
@@ -169,7 +169,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     })
   }
 
-  // ---- 注入与检索（run.ts 消费） ----
+  // ---- 注入与检索（run.ts 调用） ----
 
   /**
    * L2 常驻注入：scope 过滤（global + 当前项目）+ token 预算 +
@@ -195,7 +195,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
       for (const f of readDirSafe(join(globalDir, "rule"))) if (f.endsWith(".md")) addFile(join(globalDir, "rule", f), "rule", f.slice(0, -3))
       if (files.length === 0) return ""
 
-      // 预算取舍：按 rule > persona > wiki 优先级逐文件记账，超预算整文件跳过
+      // 预算取舍：按 rule > persona > wiki 优先级逐文件累计，超预算整文件跳过
       const kept: CogFile[] = []
       let used = 0
       for (const kind of L2_PRIORITY) {
@@ -330,9 +330,9 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     return scored.slice(0, limit).map((x) => x.hit)
   }
 
-  // ---- 触发入口（工具/调度器消费） ----
+  // ---- 触发入口（工具/调度器调用） ----
 
-  /** 项目最近活动会话（interval/admin-threads 无显式归属时的回落目标）；子会话（subagent）不参与回落。 */
+  /** 项目最近活动会话（interval/admin-threads 无显式归属时的回退目标）；子会话（subagent）不参与回退。 */
   #recentSessionId(workdir: string): string | undefined {
     return this.#sessions.list().filter((m) => (m.workdir ?? "") === workdir && m.parentSessionId === undefined)
       .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))[0]?.id
@@ -366,14 +366,14 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     return this.#recentSessionId(workdir)
   }
 
-  /** 手动内化。 */
+  /** 手动沉淀。 */
   async consolidate(workdir: string, topic: string): Promise<void> {
     await this.#pipeline.consolidate(workdir, topic)
   }
 
-  // ---- 定时/跟随触发与跟随门禁（scheduler / run.ts 消费） ----
+  // ---- 定时/跟随触发与跟随判定（scheduler / run.ts 调用） ----
 
-  /** 定时触发（scheduler interval 兜底）：无显式归属会话，pipeline 对
+  /** 定时触发（scheduler interval 保底）：无显式归属会话，pipeline 对
    *  该项目全部会话逐个补增量（每会话各一本水位，谁的增量归谁的批次）。 */
   async triggerInterval(workdir: string): Promise<void> {
     await this.#pipeline.runTrigger(workdir, "interval")
@@ -384,15 +384,15 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     await this.#pipeline.runTrigger(workdir, "follow", sessionId ?? this.#recentSessionId(workdir))
   }
 
-  /** 夜间闲时内化（scheduler 每日 consolidateHour 触发）：对有新情节的线（含 active）逐条内化。 */
+  /** 夜间闲时沉淀（scheduler 每日 consolidateHour 触发）：对有新情节的线（含 active）逐条沉淀。 */
   async triggerNightly(workdir: string, sessionId?: string): Promise<void> {
     await this.#pipeline.runNightly(workdir, sessionId ?? this.#recentSessionId(workdir))
   }
 
-  // ---- 调度簿记（scheduler 消费） ----
+  // ---- 调度簿记（scheduler 调用） ----
 
   /**
-   * 账本唯一入口：state.json 的全部读写收口到这里，两条通道。
+   * 记录唯一入口：state.json 的全部读写收口到这里，两条通道。
    * 每次现开现读（WriteLedger 写时整文件原子重写，长命实例会覆盖别人的
    * 写入）——禁止在调用间缓存实例。
    */
@@ -418,19 +418,19 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     return new WriteLedger(this.#ledgerPath(workdir)).getIntervalLastRun()
   }
 
-  /** 记录最近一次夜间内化触发的本地日期（落 <projectDir>/state.json，scheduler 防同日重跑）。 */
+  /** 记录最近一次夜间沉淀触发的本地日期（落 <projectDir>/state.json，scheduler 防同日重跑）。 */
   markNightlyRun(workdir: string, localDate: string): void {
     this.#ledgerForWrite(workdir).setNightlyLastRun(localDate)
   }
 
-  /** 最近一次夜间内化触发的本地日期；从未触发过 → undefined。 */
+  /** 最近一次夜间沉淀触发的本地日期；从未触发过 → undefined。 */
   nightlyLastRun(workdir: string): string | undefined {
     return new WriteLedger(this.#ledgerPath(workdir)).getNightlyLastRun()
   }
 
   /**
-   * 跟随门禁挂起检查：run 收尾（任何 stopReason）时经 WriteLedger
-   * 落盘 <projectDir>/state.json，daemon 重启后 scheduler 补查。
+   * 跟随判定挂起检查：run 收尾（任何 stopReason）时经 WriteLedger
+   * 写入 <projectDir>/state.json，daemon 重启后 scheduler 补查。
    */
   scheduleFollowCheck(sessionId: string, endTurnAt: string): void {
     const meta = this.#sessions.meta(sessionId)
@@ -438,7 +438,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     this.#ledgerForWrite(workdir).scheduleFollowCheck(sessionId, endTurnAt)
   }
 
-  /** 清除某项目的挂起检查（幂等：无账本/无该检查则无事可做——不因清理而建文件）。 */
+  /** 清除某项目的挂起检查（幂等：无记录/无该检查则无事可做——不因清理而建文件）。 */
   clearFollowCheck(workdir: string, sessionId: string): void {
     const path = this.#ledgerPath(workdir)
     if (!existsSync(path)) return
@@ -452,7 +452,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     return new WriteLedger(path).pendingFollowChecks()
   }
 
-  /** 项目全部会话 meta 的最大 updatedAt（scheduler 判跟随门禁的"新活动"）。 */
+  /** 项目全部会话 meta 的最大 updatedAt（scheduler 判跟随检查的"新活动"）。 */
   lastActivity(workdir: string): string {
     let max = ""
     for (const m of this.#sessions.list()) {
@@ -469,7 +469,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     this.#pipeline.close()
   }
 
-  // ---- 对账与迁移（daemon 消费） ----
+  // ---- 对账与迁移（daemon 调用） ----
 
   /** 全部项目库 + 全局库对账 + 向量补算；异常逐目录 log 跳过。 */
   reconcile(): void {
@@ -488,7 +488,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     }
   }
 
-  // ---- 管理界面（routes/web/cli 消费） ----
+  // ---- 管理界面（routes/web/cli 调用） ----
 
   projects(): MemoryProjectInfo[] {
     const out: MemoryProjectInfo[] = []

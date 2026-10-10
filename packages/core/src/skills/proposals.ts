@@ -149,7 +149,7 @@ export class ProposalStore {
    * proposed → applied：new 建目录写文件；revise 先存快照再覆盖。返回值可带
    * 非致命 warning（拼接为一条）：revise 的现正文与提案时 baseline 不一致
    * （第三方改动过，apply 以提案内容覆盖）；scope=global 且某已知项目目录
-   * 有同名技能（项目副本将遮蔽全局版，shadowDirs 由调用方传入候选）。
+   * 有同名技能（项目副本将覆盖全局版，shadowDirs 由调用方传入候选）。
    */
   apply(id: string, opts: { at?: string; shadowDirs?: string[] } = {}): SkillProposalResult {
     const p = this.get(id)
@@ -182,11 +182,11 @@ export class ProposalStore {
     p.decidedAt = opts.at ?? new Date().toISOString()
     p.appliedAt = p.decidedAt
     this.#save(p)
-    // 遮蔽提示（读侧语义：项目覆盖全局）放在写入之后，apply 本身不受影响。
+    // 覆盖提示（读侧语义：项目覆盖全局）放在写入之后，apply 本身不受影响。
     if (p.scope === "global") {
       const shadow = (opts.shadowDirs ?? []).find((d) => existsSync(join(d, p.name, "SKILL.md")))
       if (shadow !== undefined) {
-        warnings.push(`项目 ${shadow} 存在同名技能，将在该项目遮蔽全局版本`)
+        warnings.push(`项目 ${shadow} 存在同名技能，项目副本将覆盖全局版本`)
       }
     }
     return warnings.length === 0 ? { ok: true, proposal: p } : { ok: true, proposal: p, warning: warnings.join("；") }

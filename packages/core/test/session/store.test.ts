@@ -286,10 +286,10 @@ describe("SessionStore event sourcing", () => {
     expect(store.meta(meta.id)!.title).toBe("标题")
   })
 
-  it("create 固化初始权限模式：缺省显式写 default，config 默认档传入则写该档", () => {
+  it("create 固化初始权限模式：默认显式写 default，config 默认档传入则写该档", () => {
     const store = new SessionStore(dir)
-    const dflt = store.create("缺省档")
-    // 事件恒带 mode 字段：meta.mode 永远有真实值（gate 读它判定，不各自回落）
+    const dflt = store.create("默认档")
+    // 事件恒带 mode 字段：meta.mode 永远有真实值（gate 读它判定，不各自回退）
     const [created] = store.readEvents(dflt.id)
     expect(created).toMatchObject({ type: "session.created", mode: "default" })
     expect(store.meta(dflt.id)!.mode).toBe("default")
@@ -320,11 +320,11 @@ describe("SessionStore event sourcing", () => {
     const store = new SessionStore(dir)
     const meta = store.create("审计会话")
     store.appendMessage(meta.id, newMessage(meta.id, "user", [{ id: "blk_1", type: "text", text: "hi" }]))
-    store.appendSystem(meta.id, { at: new Date().toISOString(), text: "底座人设 + 认知注入的拼装全文" })
+    store.appendSystem(meta.id, { at: new Date().toISOString(), text: "基础人设 + 认知注入的拼装全文" })
     store.appendCompaction(meta.id, { at: "2026-01-03T00:00:00.000Z", trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
     const systemEvents = store.readEvents(meta.id).filter(isSystemEvent)
     expect(systemEvents).toHaveLength(1)
-    expect(systemEvents[0].text).toBe("底座人设 + 认知注入的拼装全文")
+    expect(systemEvents[0].text).toBe("基础人设 + 认知注入的拼装全文")
     expect(Number.isNaN(Date.parse(systemEvents[0].at))).toBe(false)
     // 其他事件类型不受影响
     expect(store.readMessages(meta.id)).toHaveLength(1)
@@ -421,8 +421,8 @@ describe("SessionStore event sourcing", () => {
     // 压缩事件清除基线（重冻结边界）；压缩后下一条 system 事件重新固化
     store.appendCompaction(meta.id, { at: "2026-01-04T00:00:00.000Z", trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
     expect(store.meta(meta.id)!.systemBaseline).toBeUndefined()
-    store.appendSystem(meta.id, { at: "2026-01-05T00:00:00.000Z", stable: "压缩后重新装配的稳定段", live: "压缩后实时段" })
-    expect(store.meta(meta.id)!.systemBaseline?.stable.text).toBe("压缩后重新装配的稳定段")
+    store.appendSystem(meta.id, { at: "2026-01-05T00:00:00.000Z", stable: "压缩后重新组装的稳定段", live: "压缩后实时段" })
+    expect(store.meta(meta.id)!.systemBaseline?.stable.text).toBe("压缩后重新组装的稳定段")
     // 事件流全量重建投影，与增量推进结果一致
     store.appendCompaction(meta.id, { at: "2026-01-06T00:00:00.000Z", trigger: "manual", from: "m1", upto: "m2", messages: 1, segmentSummary: "s2", top: "t2" })
     const rebuilt = store.rebuildMeta(meta.id)!
@@ -513,7 +513,7 @@ describe("SessionStore event sourcing", () => {
 })
 
 describe("SessionStore append hook", () => {
-  it("appendEvent 落盘成功后触发 onAppended（携带 sessionId 与事件本体）", () => {
+  it("appendEvent 写入成功后触发 onAppended（携带 sessionId 与事件本体）", () => {
     const seen: Array<{ id: string; type: string }> = []
     const s = new SessionStore(dir, (id, ev) => seen.push({ id, type: ev.type }))
     const m = s.create()
@@ -525,7 +525,7 @@ describe("SessionStore append hook", () => {
     ])
   })
 
-  it("onAppended 抛异常不破坏落盘与投影（通知失败不是写失败）", () => {
+  it("onAppended 抛异常不破坏写入与投影（通知失败不是写失败）", () => {
     const s = new SessionStore(dir, () => { throw new Error("bus down") })
     const m = s.create()
     s.appendMessage(m.id, newMessage(m.id, "user", [{ id: "blk_1", type: "text", text: "hi" }]))
@@ -540,9 +540,9 @@ describe("SessionStore append hook", () => {
     expect(s.readEvents(m.id)).toHaveLength(2)
   })
 
-  it("落盘失败不触发 onAppended（异常照常抛出——通知只属于写成功的追加）", () => {
+  it("写入失败不触发 onAppended（异常照常抛出——通知只属于写成功的追加）", () => {
     // 把会话的 events.jsonl 换成目录：追加写入必然失败（EISDIR），
-    // 回调必须未被调用（"先落盘后广播"的不变式由这条用例守住）。
+    // 回调必须未被调用（"先写入后广播"的不变式由这条用例守住）。
     const seen: Array<{ id: string; type: string }> = []
     const s = new SessionStore(dir, (id, ev) => seen.push({ id, type: ev.type }))
     const m = s.create()

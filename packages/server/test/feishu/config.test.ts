@@ -1,4 +1,4 @@
-/** feishu.json 加载：缺省关、字段校验、enabled 必须带凭证（#45 配置决策）；管理页写入与待加白记录（#46）。 */
+/** feishu.json 加载：默认关、字段校验、enabled 必须带凭证（#45 配置决策）；管理页写入与待加白记录（#46）。 */
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"

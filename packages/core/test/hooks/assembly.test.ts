@@ -101,7 +101,7 @@ function handoff(sessionId: string, userText = "你好") {
 }
 
 describe("executeRun × hook system", () => {
-  it("内置链照常工作：消息落盘、run 完成、系统提示词审计留痕", async () => {
+  it("内置链照常工作：消息写入、run 完成、系统提示词审计记录", async () => {
     const { engine, bus, sessions, sessionId } = makeEngine()
     const outcome = await executeRun(engine, handoff(sessionId))
     expect(outcome.stopReason).toBe("end_turn")
@@ -116,7 +116,7 @@ describe("executeRun × hook system", () => {
     const persisted = sessions.readMessages(sessionId)
     expect(persisted.map((m) => m.role)).toEqual(["user", "assistant"])
 
-    // system 审计（每 run 一条，双段全量留痕）：stable/live 两段就位
+    // system 审计（每 run 一条，双段全量记录）：stable/live 两段就位
     const systemEvents = sessions.readEvents(sessionId).filter((e) => e.type === "system")
     expect(systemEvents).toHaveLength(1)
     const audit = systemEvents[0] as { stable: string; live: string }
@@ -124,7 +124,7 @@ describe("executeRun × hook system", () => {
     expect(audit.live).toBe("") // 默认环境无认知无技能：live 为空串
   })
 
-  it("分段冻结：live 变化即时生效且 stable 前缀逐字节不变；stable 变化整体重冻结；压缩清除后重新装配", async () => {
+  it("分段冻结：live 变化即时生效且 stable 前缀逐字节不变；stable 变化整体重冻结；压缩清除后重新组装", async () => {
     const requests: string[] = []
     const llm: LlmClient = {
       async *stream(req): AsyncIterable<LlmStreamEvent> {
@@ -143,7 +143,7 @@ describe("executeRun × hook system", () => {
     const { engine, sessions, sessionId } = makeEngine({ llm, extraHooks: extra })
     writeFileSync(engine.deps.paths.agentsMd, "v1 人设")
 
-    // run 1：无基线 → 全链装配；审计落盘即逐段固化
+    // run 1：无基线 → 全链组装；审计写入即逐段固化
     await executeRun(engine, handoff(sessionId))
     expect(requests[0]).toContain("v1 人设")
     expect(requests[0]).toContain("【漂移段】")
@@ -178,7 +178,7 @@ describe("executeRun × hook system", () => {
     expect(baseline3.stable.text).toContain("v2 人设")
     expect(baseline3.stable.frozenAt).not.toBe(baseline2.stable.frozenAt)
 
-    // 压缩清除基线（重冻结边界 = 缓存冷启动）；run 4 重新装配并再次固化
+    // 压缩清除基线（重冻结边界 = 缓存冷启动）；run 4 重新组装并再次固化
     sessions.appendCompaction(sessionId, { at: new Date().toISOString(), trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
     expect(sessions.meta(sessionId)!.systemBaseline).toBeUndefined()
     await executeRun(engine, handoff(sessionId, "压缩后第一条"))
@@ -383,7 +383,7 @@ describe("executeRun × v4 水位线", () => {
   function waterlineLlm(opts: {
     mainTurns: number
     anchor?: number
-    /** 逐主请求的锚点覆盖（anchors[N-1] 为主请求 N 的 inputTokens，缺省回落 anchor）。 */
+    /** 逐主请求的锚点覆盖（anchors[N-1] 为主请求 N 的 inputTokens，默认回退 anchor）。 */
     anchors?: number[]
     /** 第 N 次主请求零输出直接抛上下文超限错误（触发 overflow-rescue）。 */
     overflowAt?: number
@@ -460,7 +460,7 @@ describe("executeRun × v4 水位线", () => {
     expect(JSON.stringify(third.messages)).not.toContain("历史问题0")
   })
 
-  it("水位达红线时不预压：红线同步压缩兜底（请求 2 即带摘要）", async () => {
+  it("水位达红线时不预压：红线同步压缩保底（请求 2 即带摘要）", async () => {
     // 锚点 950 / 预算 1000 → 水位 0.95 ≥ 红线：precompact 让位，mid-run-panic 同步压
     const base = loadConfig(resolvePaths(home))
     const cfg = { ...base, sessions: { ...base.sessions, contextTokens: 1000 } }
@@ -476,7 +476,7 @@ describe("executeRun × v4 水位线", () => {
     expect(bus.events.some((e) => e.type === "compaction.started" && e.payload.phase === "in-run")).toBe(true)
   })
 
-  it("压缩摘要走杂活通道：resolveExtractLlm 接管摘要调用", async () => {
+  it("压缩摘要走后台调用通道：resolveExtractLlm 接管摘要调用", async () => {
     const base = loadConfig(resolvePaths(home))
     const cfg = { ...base, sessions: { ...base.sessions, contextTokens: 1000 } }
     const { llm, summaryRequests } = waterlineLlm({ mainTurns: 1, anchor: 950 })
@@ -484,7 +484,7 @@ describe("executeRun × v4 水位线", () => {
     const extractLlm: LlmClient = {
       async *stream(req) {
         extractRequests.push(req)
-        yield { type: "text_delta", delta: "杂活通道摘要" }
+        yield { type: "text_delta", delta: "后台调用通道摘要" }
         yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 10, outputTokens: 5 } }
       },
     }
@@ -496,18 +496,18 @@ describe("executeRun × v4 水位线", () => {
     seedTurns(sessions, sessionId, 3)
     const outcome = await executeRun(engine, handoff(sessionId, "x".repeat(500)))
     expect(outcome.stopReason).toBe("end_turn")
-    // 摘要调用被 extract 通道接走：主客户端没见过摘要请求，摘要正文出自杂活客户端
+    // 摘要调用被 extract 通道接走：主客户端没见过摘要请求，摘要正文出自后台调用客户端
     expect(summaryRequests).toHaveLength(0)
     expect(extractRequests.length).toBeGreaterThanOrEqual(1)
     const record = sessions.readEvents(sessionId).find((e) => e.type === "compaction") as { segmentSummary: string }
-    expect(record.segmentSummary).toContain("杂活通道摘要")
+    expect(record.segmentSummary).toContain("后台调用通道摘要")
   })
 
-  it("红线撞在飞后台：等它落定（不并发第二个压缩），落定后应用挂起成果", async () => {
+  it("红线撞进行中后台：等它落定（不并发第二个压缩），落定后应用挂起成果", async () => {
     // 锚点 780 → 950：边界 1 水位 0.78 落预压区间 kick 后台（摘要卡 gate）；
-    // 边界 2 水位 0.95 过红线 → mid-run-panic 等在飞后台，绝不并发第二个
+    // 边界 2 水位 0.95 过红线 → mid-run-panic 等进行中后台，绝不并发第二个
     // 压缩。放行后后台落定：挂起视图的重估否掉同步硬压（活跃段锚点偏大、
-    // 且切不出边界——spec 故事 19"放弃硬压"），兜底应用挂起成果
+    // 且切不出边界——spec 故事 19"放弃硬压"），保底应用挂起成果
     const base = loadConfig(resolvePaths(home))
     const cfg = { ...base, sessions: { ...base.sessions, contextTokens: 1000 } }
     const summaryGate = Promise.withResolvers<void>()
@@ -518,9 +518,9 @@ describe("executeRun × v4 水位线", () => {
     seedTurns(sessions, sessionId, 3)
 
     const run = executeRun(engine, handoff(sessionId, "x".repeat(500)))
-    await vi.waitFor(() => expect(summaryRequests.length).toBe(1)) // 后台在飞
+    await vi.waitFor(() => expect(summaryRequests.length).toBe(1)) // 后台进行中
     await new Promise((r) => setTimeout(r, 50))
-    // 红线判定撞上在飞：run 停在边界等待，第二个压缩没有开工
+    // 红线判定撞上进行中：run 停在边界等待，第二个压缩没有开工
     expect(summaryRequests.length).toBe(1)
     expect(mainRequests.length).toBe(2)
 
@@ -539,7 +539,7 @@ describe("executeRun × v4 水位线", () => {
 
   it("运行结束时后台未完成：收尾等它落定（单压缩不变量，不重复压缩）", async () => {
     // 锚点 780 全程：边界 1 kick 后台（摘要卡 gate），主 run 两轮内自然结束；
-    // 收尾压缩发现后台在飞 → 等待落定——run 挂在收尾链上不结束。落定后水位
+    // 收尾压缩发现后台进行中 → 等待落定——run 挂在收尾链上不结束。落定后水位
     // 0.78 低于黄线，收尾不再压：全程恰好一笔压缩（后台那笔）
     const base = loadConfig(resolvePaths(home))
     const cfg = { ...base, sessions: { ...base.sessions, contextTokens: 1000 } }
@@ -551,7 +551,7 @@ describe("executeRun × v4 水位线", () => {
     seedTurns(sessions, sessionId, 3)
 
     const run = executeRun(engine, handoff(sessionId, "x".repeat(500)))
-    await vi.waitFor(() => expect(summaryRequests.length).toBe(1)) // 后台在飞
+    await vi.waitFor(() => expect(summaryRequests.length).toBe(1)) // 后台进行中
     // 主请求早已走完（end_turn），run 仍挂着：收尾压缩在等后台
     expect(mainRequests.length).toBe(2)
     const pending = await Promise.race([run, new Promise((r) => setTimeout(() => r("pending"), 50))])
@@ -568,7 +568,7 @@ describe("executeRun × v4 水位线", () => {
     expect(bus.events.some((e) => e.type === "compaction.completed")).toBe(true)
   })
 
-  it("急救撞在飞后台：掐掉在飞（不写取消标记）并立即同步急救", async () => {
+  it("急救撞进行中后台：掐掉进行中（不写取消标记）并立即同步急救", async () => {
     // 边界 1 kick 后台（摘要卡 gate）；第 2 次主请求零输出抛超限 → 急救先
     // abortInFlight 清场再等其退出。旧实现的 cancel() 在这里自堵（取消标记
     // 压制紧随的急救 auto()），run 会以溢出错误收场、零压缩记录
@@ -585,7 +585,7 @@ describe("executeRun × v4 水位线", () => {
     await vi.waitFor(() => expect(summaryRequests.length).toBe(1)) // 边界 1 kick 后台
     await vi.waitFor(() => expect(mainRequests.length).toBe(2)) // 第 2 次请求已抛超限
     await new Promise((r) => setTimeout(r, 50))
-    // 急救在等在飞后台退出：run 挂着，急救的摘要调用还没发生
+    // 急救在等进行中后台退出：run 挂着，急救的摘要调用还没发生
     expect(summaryRequests.length).toBe(1)
     const pending = await Promise.race([run, new Promise((r) => setTimeout(() => r("pending"), 50))])
     expect(pending).toBe("pending")
@@ -602,7 +602,7 @@ describe("executeRun × v4 水位线", () => {
     expect(String(mainRequests[2]!.messages[0]!.content)).toContain("<compacted-summary>")
   })
 
-  it("挂起的 /compact 在收尾链冲刷：自动收尾压缩之前执行", async () => {
+  it("挂起的 /compact 在收尾链执行：自动收尾压缩之前执行", async () => {
     // 预算 400 → 手动边界切得出（尾部 126 < 目标 132）；锚点 780 过黄线但
     // flush 先执行、压完水位落回，post-run 判断自然不重复压
     const base = loadConfig(resolvePaths(home))

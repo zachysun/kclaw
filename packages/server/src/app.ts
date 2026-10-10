@@ -137,7 +137,7 @@ export interface AppOptions {
    */
   hooks?: HookRegistry
   /**
-   * 技能进化的治理面：/skills/proposals 路由族消费（列表/详情 + apply/
+   * 技能进化的治理面：/skills/proposals 路由族调用（列表/详情 + apply/
    * reject/revert/remove）。Absent → 提案路由族整体 503（裸 app/测试）。
    */
   skillsEvolution?: SkillEvolutionAdmin
@@ -231,14 +231,14 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   const config = opts.stores?.config ?? loadConfig(paths)
   // opts.run is the daemon's RunManager (same instance the ws routes use);
   // the session routes only need it for POST /sessions/:id/compact.
-  // /memory 路由族：无 memory 装配时全部 503，不影响既有路由。
+  // /memory 路由族：无 memory 组装时全部 503，不影响既有路由。
   registerMemoryRoutes(app, { memory: opts.memory, config })
   registerHookRoutes(app, { hooks: opts.hooks })
-  // /skills 路由族：只读技能管理面（CLI /skill 与 Web 技能页共用），无装配依赖；
-  // 提案子路由族（技能进化）有装配才可用，否则 503。
+  // /skills 路由族：只读技能管理面（CLI /skill 与 Web 技能页共用），无组装依赖；
+  // 提案子路由族（技能进化）有组装才可用，否则 503。
   registerSkillRoutes(app, { paths, builtinSources: opts.builtinSources, pluginHomes: opts.pluginHomes, skillsEvolution: opts.skillsEvolution })
   // 切会话写入：POST /sessions 是 CLI /clear、/new 与 web 新建会话的共同底层，
-  // 记忆系统在装配时才挂 clear 触发（缺省不触发，行为与未装配记忆时一致）。
+  // 记忆系统在组装时才挂 clear 触发（默认不触发，行为与未组装记忆时一致）。
   registerSessionRoutes(app, { sessions, config, run: opts.run, memory: opts.memory, cancelBackgroundForParent: opts.cancelBackgroundForParent, team: opts.team, goal: opts.goal })
   if (opts.attachmentsDir !== undefined) {
     registerAttachmentRoutes(app, { sessions, attachmentsDir: opts.attachmentsDir })
@@ -249,10 +249,10 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
 
   registerConfigRoutes(app, { config })
   registerSearchRoutes(app, { historySearch: opts.historySearch })
-  // Provider 管理面：Model 顶栏消费（快照 + 增删改/设默认/模型探测热生效）。
+  // Provider 管理面：Model 顶栏调用（快照 + 增删改/设默认/模型探测热生效）。
   registerProvidersRoutes(app, { config, paths, notifier: opts.configNotifier })
   registerFsRoutes(app, { workspace: config.workspace })
-  // 沉淀规则管理面：列表（含 git 跟踪状态）与删除，Web 权限页消费。
+  // 沉淀规则管理面：列表（含 git 跟踪状态）与删除，Web 权限页调用。
   registerPermissionsRoutes(app, { paths, workspaceFallback: config.workspace })
 
   if (opts.usage !== undefined) {

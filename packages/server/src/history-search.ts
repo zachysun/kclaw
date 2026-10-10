@@ -1,5 +1,5 @@
 /**
- * history_search 数据面（server 侧）：索引召回 + 标题解析 + 回收站过滤。
+ * history_search 数据源（server 侧）：索引召回 + 标题解析 + 回收站过滤。
  *
  * "已删除（回收站）或不存在的会话必须从结果里消失"是这条链路的正确性
  * 不变量——search-index 的注释把存活性复查交给调用方，这里就是那个调用
@@ -18,7 +18,7 @@ export function createHistorySearch(deps: {
   sessions: Pick<SessionStore, "meta">
 }): HistorySearchFn {
   return async (query, opts = {}) => {
-    // limit 兜底 = 工具面的默认 5；两个调用面（工具 5 / HTTP 10）各自显式
+    // limit 保底 = 工具清单的默认 5；两个调用方（工具 5 / HTTP 10）各自显式
     // 传参，上限统一封在 core 的 HISTORY_SEARCH_MAX_LIMIT。
     const hits = deps.index.search(query, opts.limit ?? 5, opts.sessionId)
     return hits

@@ -1,7 +1,7 @@
 /**
- * /goal 领域模块的公共出口（issue #47）。daemon 侧消费器
+ * /goal 领域模块的公共出口（issue #47）。daemon 侧调用方
  *（packages/server/src/goal-loop.ts）与浏览器端（快照/结果类型）从这里
- * 消费；沙箱执行器只服务 Node 侧。
+ * 调用；沙箱执行器只服务 Node 侧。
  */
 export type {
   GoalState,

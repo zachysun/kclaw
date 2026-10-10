@@ -1,6 +1,6 @@
 /**
- * host-kit 纯函数测试：dailyGateDue（每日过点门禁，skill curator 与记忆
- * 夜间内化共用）。时刻判定、本地日期判重、负 hour 关闭三个决策全部钉死，
+ * host-kit 纯函数测试：dailyGateDue（每日一次判定，skill curator 与记忆
+ * 夜间沉淀共用）。时刻判定、本地日期判重、负 hour 关闭三个决策全部钉死，
  * Date 用本地时区构造（判重键 = 本地日期，与时区无关）。
  */
 import { describe, expect, it } from "vitest"

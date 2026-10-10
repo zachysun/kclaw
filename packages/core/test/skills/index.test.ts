@@ -153,7 +153,7 @@ describe("skillListPrompt", () => {
   })
 })
 
-describe("matchSkillInvocations / wrapSkillInvocations（点名检测与隐式包装）", () => {
+describe("matchSkillInvocations / wrapSkillInvocations（调用检测与隐式包装）", () => {
   const mk = (name: string, opts: { userInvocable?: boolean } = {}): ReturnType<typeof parseSkillFile> & object =>
     ({ ...parseSkillFile(`---\ndescription: ${name} 的说明\n---\n\n正文\n`, name, "/d", "global")!, ...opts })
 

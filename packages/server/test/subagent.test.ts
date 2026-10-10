@@ -678,7 +678,7 @@ describe("subagent background mode", () => {
   it("前台子代理完成不清掉后台记录：两种模式各记各的账", async () => {
     // 同一父会话先后派一个后台子代理（永跑）和一个前台子代理（立刻完成）。
     // 前台的收尾绝不能影响后台的记录——级联取消必须仍能找到后台孩子。
-    // （曾经双份按父分组的账本让收尾误删对方的记录，级联取消扑空。）
+    // （曾经双份按父分组的记录让收尾误删对方的记录，级联取消扑空。）
     const parentScript = [
       spawnBackgroundTurn("call_1", "永跑任务", "bg"),
       spawnTurn("call_2", "快速任务"),
@@ -702,7 +702,7 @@ describe("subagent background mode", () => {
     const { sessions, manager, host } = makeEnv(llm)
     const parent = sessions.create("主线")
 
-    // 派发是阻塞式的：run 完成即前台子代理（连同它的记账收尾）已结束
+    // 派发是阻塞式的：run 完成即前台子代理（连同它的记录收尾）已结束
     const outcome = await manager.enqueue(parent.id, { userText: "一前一后", trigger: "user" })
     expect(outcome.stopReason).toBe("end_turn")
 
@@ -713,9 +713,9 @@ describe("subagent background mode", () => {
       const last = msgs.at(-1)
       return last !== undefined && last.blocks.some((b) => b.type === "text" && (b as { text: string }).text.includes("未正常完成"))
     }, "failure delivery", 8_000)
-    // 收尾后账本彻底清空
+    // 收尾后记录彻底清空
     expect(host.cancelBackgroundForParent(parent.id)).toBe(0)
-    // 收尾排空：被取消子 run 的收尾钩子可能晚于账本清账（同 rmSync 竞争防护）。
+    // 收尾排空：被取消子 run 的收尾钩子可能晚于记录清账（同 rmSync 竞争防护）。
     await until(() => !manager.busy(sessions.listByParent(parent.id)[0]!.id), "child settled")
   }, 20_000)
 })

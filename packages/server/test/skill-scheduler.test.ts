@@ -1,8 +1,8 @@
 /**
- * Skill scheduler tests：空闲检查消费端的宿主行为（成功才清 / 失败重试 /
- * 重试上限 / 同批去重 / 门禁与关闭态）。fake 对齐调度器消费的
+ * Skill scheduler tests：空闲检查处理方的宿主行为（成功才清 / 失败重试 /
+ * 重试上限 / 同批去重 / 判定与关闭态）。fake 对齐调度器调用的
  * SkillEvolutionSystem 公开方法（照 memory-scheduler.test.ts 的先例）；
- * pendingFollowChecks/clearFollowCheck 用同一可变数组模拟账本，清了才不吐。
+ * pendingFollowChecks/clearFollowCheck 用同一可变数组模拟记录，清了才不吐。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -124,7 +124,7 @@ describe("startSkillScheduler", () => {
     const handle = start(sys)
     await tick() // 首扫触发，promise 挂起
     expect(sys.triggerFollow).toHaveBeenCalledTimes(1)
-    await tick() // 下个 sweep：同检查在飞 → 跳过
+    await tick() // 下个 sweep：同检查进行中 → 跳过
     expect(sys.triggerFollow).toHaveBeenCalledTimes(1)
     release?.()
     await handle.stop()

@@ -93,7 +93,7 @@ function system(llm: LlmClient, over: Partial<ConstructorParameters<typeof Skill
   })
 }
 
-// ---- 粗查与调度簿记（run 收尾钩子消费面） ---------------------------------
+// ---- 粗查与调度簿记（run 收尾钩子调用） ---------------------------------
 
 describe("considerFollowCheck", () => {
   it("skips without scheduling or touching watermarks when no skill was involved", () => {
@@ -417,7 +417,7 @@ describe("governance and usage telemetry", () => {
 
   it("apply of a global proposal warns when a known project has the same-named skill (shadowing)", async () => {
     // 项目里已有同名技能，提炼 LLM 仍给出 scope=global 的 new 提案：
-    // apply 应当成功（全局落点为空），但带遮蔽警告（项目副本整目录覆盖全局）。
+    // apply 应当成功（全局落点为空），但带覆盖警告（项目副本整目录覆盖全局）。
     installSkill(join(WORKDIR, ".kclaw", "skills"), "shadowed", "项目版")
     const meta = sessions.create("s", undefined, WORKDIR)
     sessions.appendMessage(meta.id, toolCall(meta.id, "skill_read", { name: "deploy-runbook" }))
@@ -429,7 +429,7 @@ describe("governance and usage telemetry", () => {
     expect(p.scope).toBe("global")
     const applied = evo.applyProposal(p.id)
     expect(applied.ok).toBe(true)
-    expect(applied.warning).toContain("遮蔽")
+    expect(applied.warning).toContain("覆盖")
     expect(existsSync(join(skillsDir, "shadowed", "SKILL.md"))).toBe(true)
   })
 

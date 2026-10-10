@@ -2,7 +2,7 @@
  * /goal 循环的事件派生（issue #47）：一次前向扫描 goal.set(create) 之后
  * 的全部事件，得出检查时刻的循环状态（DerivedLoop）。纯函数——调用方
  * 负责读事件流与失败回退（读不到时按空事件派生即全零）。写侧规则在
- * 消费器（packages/server/src/goal-loop.ts），两侧唯一的编码约定：goal.checked
+ * 调用方（packages/server/src/goal-loop.ts），两侧唯一的编码约定：goal.checked
  * 的 verdict 缺失 = 门失败短路留下的检查（判定器没跑）。
  *
  * 尾部连败回溯规则：同性质的检查连续累积，任何不同性质的检查（成功

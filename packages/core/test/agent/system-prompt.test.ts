@@ -29,20 +29,20 @@ function systemEvents(sessions: SessionStore, sessionId: string): Array<{ stable
 }
 
 describe("assembleSystemPrompt", () => {
-  it("首装：system = stable + live 段，审计落盘，固定开销计入系统提示词与工具 schema", async () => {
+  it("首装：system = stable + live 段，审计写入，固定开销计入系统提示词与工具 schema", async () => {
     const sessions = new SessionStore(join(home, "s"))
     const session = sessions.create("组装")
     const entries: HookEntry[] = [hook("seg", "system-before", () => ["认知段落", ""])] // 空段被过滤
     const chain = chainOf(...entries)
 
     const { system, overheadTokens } = await assembleSystemPrompt({
-      chain, sessions, sessionId: session.id, base: "人设基座", baseline: undefined, toolDefs: TOOL_DEFS,
+      chain, sessions, sessionId: session.id, base: "人设基础文本", baseline: undefined, toolDefs: TOOL_DEFS,
     })
 
-    expect(system).toContain("人设基座")
+    expect(system).toContain("人设基础文本")
     expect(system).toContain("认知段落")
     const [audit] = systemEvents(sessions, session.id)
-    expect(audit.stable).toContain("人设基座")
+    expect(audit.stable).toContain("人设基础文本")
     expect(audit.stable).toContain("<system-reminder>") // 注入约定声明在 stable 段
     expect(audit.live).toBe("认知段落")
     // 开销 = 系统提示词 + 工具 schema 两部分，都非零
@@ -57,7 +57,7 @@ describe("assembleSystemPrompt", () => {
     const session = sessions.create("沿用")
     const chain = chainOf(hook("seg", "system-before", () => ["认知段落"]))
     const input = {
-      chain, sessions, sessionId: session.id, base: "人设基座",
+      chain, sessions, sessionId: session.id, base: "人设基础文本",
       baseline: sessions.meta(session.id)?.systemBaseline, toolDefs: TOOL_DEFS,
     }
 
@@ -69,12 +69,12 @@ describe("assembleSystemPrompt", () => {
 
     const second = await assembleSystemPrompt({ ...input, baseline: afterFirst })
     // 命中基线：拼回基线文本，内容与首次一致
-    expect(second.system).toContain("人设基座")
+    expect(second.system).toContain("人设基础文本")
     expect(second.system).toContain("认知段落")
     const afterSecond = sessions.meta(session.id)?.systemBaseline
     expect(afterSecond?.stable.frozenAt).toBe(frozenAtStable)
     expect(afterSecond?.live?.frozenAt).toBe(frozenAtLive)
-    // 审计每 run 一条：两次装配两条事件
+    // 审计每 run 一条：两次组装两条事件
     expect(systemEvents(sessions, session.id)).toHaveLength(2)
   })
 
@@ -87,7 +87,7 @@ describe("assembleSystemPrompt", () => {
       hook("rewriter", "system-after", ({ system }) => `${rewrite}（原 ${system.length} 字）`),
     )
     const input = {
-      chain, sessions, sessionId: session.id, base: "人设基座",
+      chain, sessions, sessionId: session.id, base: "人设基础文本",
       baseline: sessions.meta(session.id)?.systemBaseline, toolDefs: TOOL_DEFS,
     }
 
@@ -99,7 +99,7 @@ describe("assembleSystemPrompt", () => {
     expect(firstAudit.live).toBe("认知段落")
     const liveFrozenAt = sessions.meta(session.id)?.systemBaseline?.live?.frozenAt
 
-    // 第二个 run：fresh stable ≠ 基线（基线是终稿）→ 重装配、改写再次生效；
+    // 第二个 run：fresh stable ≠ 基线（基线是终稿）→ 重组装、改写再次生效；
     // live 现算文本与基线逐字相同 → 沿用，frozenAt 不得被改写刷新
     const second = await assembleSystemPrompt({ ...input, baseline: sessions.meta(session.id)?.systemBaseline })
     expect(second.system.startsWith(rewrite)).toBe(true)

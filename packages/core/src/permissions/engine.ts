@@ -642,7 +642,7 @@ export class ConfigPermissionGate implements PermissionGate {
 
     // trusted（批次 C）：沙箱与工作区边界内的操作全部自动放行、不弹确认；
     // 边界外——exec 无法沙箱化、越界、无沙箱保护的敏感工具——一律拒绝
-    // （fail-closed）。免审档没有人工兜底，deny 黑名单仍最优先。
+    // （fail-closed）。免审档没有人工保底，deny 黑名单仍最优先。
     if (this.#mode === "trusted") {
       if (profile.argField === "command") {
         const subs = splitSubcommands(arg)

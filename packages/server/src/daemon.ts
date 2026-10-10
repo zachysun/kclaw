@@ -264,7 +264,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   const bus = new EventBus()
   let mcpProjects: ReturnType<typeof createMcpProjects> | undefined
   // 跨会话原始消息检索索引：写路径挂在 store 的 post-append 回调上（与总线
-  // 同一接缝，best-effort——索引失败绝不干扰 run）；存量会话由启动后的
+  // 同一接入口，best-effort——索引失败绝不干扰 run）；存量会话由启动后的
   // 后台回填补齐（per-session 幂等）。purge 掉的会话在检索渲染时按 meta
   // 缺失过滤，事件路径的 session.deleted 也即时清行。
   const historyIndex = HistorySearchIndex.open(paths.searchDb)
@@ -282,7 +282,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     }
   })
   // embedding 判定链：model 空 → 不构造客户端（向量路关闭）；provider 名
-  // 缺省取 default provider entry；entry 不存在则向量路关闭并告警（不致命）。
+  // 默认取 default provider entry；entry 不存在则向量路关闭并告警（不致命）。
   const embedCfg = config.memory.embedding
   let embed: EmbeddingClient | undefined
   if (embedCfg.model !== "") {
@@ -300,7 +300,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       console.error("kclaw memory: embedding provider not found, vector path disabled")
     }
   }
-  // 用户 hook 注册表：daemon 级账本，run 装配每 run 现扫
+  // 用户 hook 注册表：daemon 级记录，run 组装每 run 现扫
   // ~/.kclaw/hooks；装载失败经 registry 去重后广播一次 hook.failed(load)。
   const hookRegistry = new HookRegistry({
     userDir: paths.hooksDir,
@@ -312,14 +312,14 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       }
     },
   })
-  // 记忆系统唯一门面：embed/emit/对账在此一次性装配。
-  // resolveLlm 引用上方 llmForEntry：回落走共享 resolver（未变更条目零成本
+  // 记忆系统的 server 侧组装点：embed/emit/对账在此一次性组装。
+  // resolveLlm 引用上方 llmForEntry：回退走共享 resolver（未变更条目零成本
   // 复用），extractModel 命中条目走 resolveEntryLlm 同源解析——Model 页
   // 改动对记忆提取同样热生效。测试注入的 llmFactory 保持原样直用。
-  // 杂活模型基座：主模型对的单点解析（llmFactory 注入直用，否则共享
-  // resolver + 重试包装），记忆提取、技能进化与 run 侧杂活（标题/压缩）
+  // 后台调用的模型解析基础：主模型对的单点解析（llmFactory 注入直用，否则共享
+  // resolver + 重试包装），记忆提取、技能进化与 run 侧后台调用（标题/压缩）
   // 共用同一条 extractModel 解析链。
-  // 杂活记账（goal 判定器记账的推广）：压缩/命名/记忆/技能四条后台通道的
+  // 后台调用用量记录（goal 判定器记录的推广）：压缩/命名/记忆/技能四条后台通道的
   // LLM 花费进同一张用量表，runId 以通道名为前缀；无归属会话或 usage 缺失
   // 的调用不记。
   const usage = new UsageStore(paths.usageDb)
@@ -358,7 +358,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   const model = resolveModel(config)
   // 技能进化（提案制）：提炼模型与记忆提取走同一条解析链（extractModel 命中
   // 条目走条目端点，Model 页改动同样热生效）。构造交给 RunManager（run 收尾
-  // 钩子 + skill_create 工具面）与 skill 调度器（检查消费端）。
+  // 钩子 + skill_create 工具清单）与 skill 调度器（检查处理方）。
   const skillsEvolution = new SkillEvolutionSystem({
     skillsDir: paths.skillsDir,
     sessions,
@@ -445,7 +445,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // /goal 循环主机（issue #47）：与 team host 同一空闲边缘。armed 是进程
   // 内开关——daemon 重启后目标快照还在（meta.goal），但循环不自动续，用户
   // 显式 resume 才重新起跑（ADR-0002）。判定器模型线走 config.goals.judge
-  // 命中的条目（Model 页热生效链），缺省回退会话模型线。
+  // 命中的条目（Model 页热生效链），默认回退会话模型线。
   const goalHost = new GoalLoopHost({
     config,
     sessions,
@@ -454,7 +454,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     model,
     // 注入 llmFactory（测试）时判定器与运行共用注入客户端（memory.resolveLlm
     // 同款约定）；生产走共享条目解析链并包 withRetry——judge.ts 的注释承诺
-    // "provider 客户端自带 withRetry"，与 extract 链同一装配约定。瞬时故障
+    // "provider 客户端自带 withRetry"，与 extract 链同一组装约定。瞬时故障
     // 在此消化，不再直接吃判定器传输连败计数（熔断只数真正打到判定层的失败）。
     // Model 页改动对判定器热生效。
     resolveEntryLlm: (entryKey) => (opts.llmFactory !== undefined ? llm : withRetry(llmForEntry(entryKey))),
@@ -462,7 +462,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     log: (line) => console.error(`kclaw goal: ${line}`),
   })
   hostStops.push(["goal loop", () => goalHost.dispose()])
-  // history_search 数据面（具名工厂 history-search.ts）：检索 + 标题解析 +
+  // history_search 数据源（具名工厂 history-search.ts）：检索 + 标题解析 +
   // 回收站过滤（"已删除/不存在的会话不命中"不变量在那里有独立测试面）。
   const historySearch: HistorySearchFn = createHistorySearch({ index: historyIndex, sessions })
   // 启动后后台回填存量会话（per-session 幂等；serving 不等它）。
@@ -551,9 +551,9 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     channel: feishuManager,
     attachmentsDir: paths.attachmentsDir,
     usage,
-    historySearch, // GET /search 跨会话检索（与 history_search 工具同一数据面）
+    historySearch, // GET /search 跨会话检索（与 history_search 工具同一数据源）
     webDist: resolveWebDist(opts.webDist),
-    memory, // /memory 路由消费（管理界面）
+    memory, // /memory 路由调用（管理界面）
     hooks: hookRegistry, // GET /hooks 管理面
     skillsEvolution, // /skills/proposals 提案治理面（技能进化）
   })
@@ -613,8 +613,8 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     workdirs: () => Array.from(new Set(sessions.list().map((m) => m.workdir ?? config.workspace))),
   })
   hostStops.push(["memory scheduler", () => memoryTick.stop()])
-  // 技能调度器：跟随检查消费端（成功才清 + 重试上限）。关闭配置下一个 sweep
-  // 直接返回，检查停留在账本里不动（功能重开后继续消费）。
+  // 技能调度器：跟随检查处理方（成功才清 + 重试上限）。关闭配置下一个 sweep
+  // 直接返回，检查停留在记录里不动（功能重开后继续调用）。
   const skillTick = startSkillScheduler({
     system: skillsEvolution, sessions, config,
     workdirs: () => Array.from(new Set(sessions.list().map((m) => m.workdir ?? config.workspace))),

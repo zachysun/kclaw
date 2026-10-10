@@ -21,8 +21,8 @@ describe("builtin hook meta", () => {
 
 /**
  * skill-follow-check（run-after 40）：提案制技能进化的收尾粗查排检查。
- * 门禁四条：childRun 不排（记忆隔离同向）；功能未启用不排；idleMinutes=0
- * 不排；skillsEvolution 未装配不排。粗查失败不影响 run（钩子 failure=skip）。
+ * 判定四条：childRun 不排（记忆隔离同向）；功能未启用不排；idleMinutes=0
+ * 不排；skillsEvolution 未组装不排。粗查失败不影响 run（钩子 failure=skip）。
  */
 describe("skill-follow-check", () => {
   const baseConfig = (): Record<string, unknown> => ({
@@ -57,7 +57,7 @@ describe("skill-follow-check", () => {
     await hookOf({ ...enabled, config: off }).handler(ctx)
     const zero = baseConfig(); (zero.skills as { evolution: { idleMinutes: number } }).evolution.idleMinutes = 0
     await hookOf({ ...enabled, config: zero }).handler(ctx)
-    await hookOf({}).handler(ctx) // 未装配
+    await hookOf({}).handler(ctx) // 未组装
     expect(consider).not.toHaveBeenCalled()
   })
 })

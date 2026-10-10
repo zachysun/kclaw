@@ -1,5 +1,5 @@
 /**
- * 验收门接缝测试（issue #47）：runAcceptanceGates 用假 ExecSandbox（真
+ * 验收命令接入口测试（issue #47）：runAcceptanceGates 用假 ExecSandbox（真
  * /bin/sh 子进程，不经 OS 沙箱）验证 串行执行/退出码判定/超时杀组/
  * 不可用 fail-closed。不依赖平台沙箱。
  */

@@ -64,7 +64,7 @@ describe("sessions routes", () => {
     expect((res.json() as SessionMeta).workdir).toBe("/ws/root")
   })
 
-  it("POST /sessions 把 config.permissions.defaultMode 固化为会话初始模式（缺省 default）", async () => {
+  it("POST /sessions 把 config.permissions.defaultMode 固化为会话初始模式（默认 default）", async () => {
     const dflt = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
     expect(dflt.mode).toBe("default")
 

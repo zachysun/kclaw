@@ -86,7 +86,7 @@ export class Compactor {
    * 只作用于当时那次运行，新运行从干净状态恢复。手动压缩不受压制。
    */
   readonly #cancelled = new Set<string>()
-  /** 每会话在飞的压缩 controller：cancel()/abortInFlight() 掐它；finally 清理并放行等待者。 */
+  /** 每会话进行中的压缩 controller：cancel()/abortInFlight() 掐它；finally 清理并放行等待者。 */
   readonly #inFlight = new Map<string, AbortController>()
   /**
    * 后台压缩的成果，已完成、未应用：由下一次迭代边界（mid-run-panic）
@@ -95,9 +95,9 @@ export class Compactor {
    * 更新——见 compact() 成功路径的注释）；没写成则挂起仍有效。
    */
   readonly #parked = new Map<string, ActiveSummary>()
-  /** 挂起的 /compact：会话忙时登记，收尾链（manual-compact-flush）冲刷。纯内存，重启即丢。 */
+  /** 挂起的 /compact：会话忙时登记，收尾链（manual-compact-flush）执行。纯内存，重启即丢。 */
   readonly #deferredManual = new Map<string, { focus?: string }>()
-  /** 等待在飞压缩结束的续体（红线/收尾/挂起冲刷的"等、称、再决定"）。 */
+  /** 等待进行中压缩结束的续体（红线/收尾/挂起执行的"等、称、再决定"）。 */
   readonly #waiters = new Map<string, Array<() => void>>()
 
   constructor(deps: CompactorDeps) {
@@ -105,10 +105,10 @@ export class Compactor {
   }
 
   /**
-   * 取消自动压缩：abort 在飞的压缩 controller（compact 的
+   * 取消自动压缩：abort 进行中的压缩 controller（compact 的
    * 取消分支吞掉中止，发 completed result:"cancelled"），同时写取消标记——
    * 本次 run 内后续的中途/收尾/后台压缩钩子据此直接跳过；标记在下一次 run
-   * 开头清除，新运行恢复正常压缩。返回：调用时刻是否存在在飞的压缩（false =
+   * 开头清除，新运行恢复正常压缩。返回：调用时刻是否存在进行中的压缩（false =
    * 没什么可掐，但标记仍写入，压制本次运行内尚未发生的自动压缩）。
    */
   cancel(sessionId: string): boolean {
@@ -125,10 +125,10 @@ export class Compactor {
   }
 
   /**
-   * 掐掉在飞的压缩但**不写取消标记**：溢出急救专用的清场——cancel() 的标记
+   * 掐掉进行中的压缩但**不写取消标记**：溢出急救专用的清场——cancel() 的标记
    * 会压制紧随其后的急救 auto()（它开工前先查标记），等于急救自堵。被掐的
    * 压缩走取消分支（completed result:"cancelled"），不写任何数据。返回调用
-   * 时刻是否存在在飞的压缩。
+   * 时刻是否存在进行中的压缩。
    */
   abortInFlight(sessionId: string): boolean {
     const ctrl = this.#inFlight.get(sessionId)
@@ -142,7 +142,7 @@ export class Compactor {
     this.#cancelled.delete(sessionId)
   }
 
-  /** 该会话是否有在飞的压缩（后台或同步）。 */
+  /** 该会话是否有进行中的压缩（后台或同步）。 */
   hasInFlight(sessionId: string): boolean {
     return this.#inFlight.has(sessionId)
   }
@@ -164,8 +164,8 @@ export class Compactor {
   }
 
   /**
-   * 等待该会话在飞的压缩结束（完成/失败/被取消都算结束）。无在飞时立即返回。
-   * 等待方（红线/收尾/挂起冲刷）在返回后重估水位、再决定同步压缩。
+   * 等待该会话进行中的压缩结束（完成/失败/被取消都算结束）。没有进行中的压缩时立即返回。
+   * 等待方（红线/收尾/挂起执行）在返回后重估水位、再决定同步压缩。
    * `signal` 仅用于提前解挂等待者（run 被中止时不悬挂）。
    */
   waitForSettled(sessionId: string, signal?: AbortSignal): Promise<void> {
@@ -184,7 +184,7 @@ export class Compactor {
   }
 
   /**
-   * 挂起一次手动压缩（会话忙时的 /compact）：后到覆盖先到，收尾链冲刷。
+   * 挂起一次手动压缩（会话忙时的 /compact）：后到覆盖先到，收尾链执行。
    * 纯内存，daemon 重启即丢（压缩无损，丢了重发即可）。
    */
   deferManual(sessionId: string, focus?: string): void {
@@ -196,7 +196,7 @@ export class Compactor {
     return this.#deferredManual.has(sessionId)
   }
 
-  /** 取走挂起的手动压缩（冲刷即清）。无则 null。 */
+  /** 取走挂起的手动压缩（执行即清）。无则 null。 */
   takeDeferredManual(sessionId: string): { focus?: string } | null {
     const d = this.#deferredManual.get(sessionId)
     this.#deferredManual.delete(sessionId)
@@ -211,11 +211,11 @@ export class Compactor {
   }
 
   /**
-   * 非阻塞启动一次后台压缩（预压线触发）：登记在飞（kind "background"）后
+   * 非阻塞启动一次后台压缩（预压线触发）：登记为进行中（kind "background"）后
    * 立即返回，摘要调用在后台进行——不挂 run 的中止信号（用户取消运行时它
    * 照常跑完，成果写入元数据，下次运行受益；daemon 退出掐断它等于没发生）。
    * 成功后成果挂起（takeParked 由下一次迭代边界应用）；失败等于没发生。
-   * 返回是否真的启动了（已取消/已在飞/已有挂起成果 → false）。
+   * 返回是否真的启动了（已取消/已有进行中的压缩/已有挂起成果 → false）。
    */
   background(
     sessionId: string,
@@ -251,7 +251,7 @@ export class Compactor {
   }
 
   /**
-   * 自动压缩装配：中途钩子、超限钩子与收尾压缩共用。
+   * 自动压缩组装：中途钩子、超限钩子与收尾压缩共用。
    * 独立 AbortController 登记 #inFlight（cancel 掐它），并监听
    * run 的 signal——run 中止顺带掐压缩；finally 清理。取消标记或 run signal 已
    * 中止时不开工，回答 cancelled（三路统一入口，manual 路径不经此——
@@ -362,7 +362,7 @@ export class Compactor {
       trigger: manual ? "manual" : phase === "in-run" ? "in-run" : "auto",
     }, { sessionId }))
 
-    // 杂活模型通道：摘要调用走 resolveLlm（extractModel 命中条目走条目端点），
+    // 后台调用的模型通道：摘要调用走 resolveLlm（extractModel 命中条目走条目端点），
     // 声明后才解析——declined 路径零成本。
     const { llm: runLlm, model } = resolveLlm()
 

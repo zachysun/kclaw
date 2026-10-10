@@ -38,7 +38,7 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
       if (event.workdir !== undefined) next.workdir = event.workdir
       if (event.jobId !== undefined) next.jobId = event.jobId
       if (event.parentSessionId !== undefined) next.parentSessionId = event.parentSessionId
-      // 创建时固化的默认模式：旧事件流无 mode → 投影不设（gate 读时回落 default）。
+      // 创建时固化的默认模式：旧事件流无 mode → 投影不设（gate 读时回退 default）。
       if (event.mode !== undefined) next.mode = event.mode
       break
     }
@@ -83,15 +83,15 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
       const segments = [...(next.compaction?.segments ?? []), { upto: event.upto, summary: event.segmentSummary }]
       next.compaction = { segments, top: event.top, upto: event.upto }
       // 压缩改写消息历史 = 请求前缀必然全量失效（缓存冷启动），正是重冻结
-      // 边界：清除冻结基线，下一次 run 重新装配并经 system 事件固化新基线。
+      // 边界：清除冻结基线，下一次 run 重新组装并经 system 事件固化新基线。
       delete next.systemBaseline
       next.updatedAt = event.at
       break
     }
     case "memory": break // 不更新任何投影字段（含 updatedAt）
-    case "skill": break // 技能提案审计事件：只留痕（真相在 .proposals/ 文件），不动投影
+    case "skill": break // 技能提案审计事件：只记录（真相在 .proposals/ 文件），不动投影
     case "system":
-      // 审计留痕即基线写入口：每次 run 的系统提示词全量事件按段 upsert 冻结
+      // 审计记录即基线写入口：每次 run 的系统提示词全量事件按段 upsert 冻结
       // 基线（提示词缓存纪律）。两段独立比对——哪段文本变了就重冻结哪段，
       // 另一段基线原样保留（frozenAt 记录的是"这份文本成为基线的时刻"，
       // 不是"最后一次审计的时刻"；那去事件流里看）。基线外字段与 updatedAt 一律不动。
@@ -107,14 +107,14 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
     case "sandbox.checked": break // 审计事件同样不进投影、不推进 updatedAt
     case "run.started":
     case "run.ended":
-    case "permission.decided": break // 审计事件：只留痕，不动投影
+    case "permission.decided": break // 审计事件：只记录，不动投影
     case "team.created":
     case "team.member.provisioned":
     case "team.member.settled":
     case "team.message.queued":
     case "team.message.delivered":
     case "team.task.created":
-    case "team.task.updated": break // 团队审计事件：真相在团队目录，事件只留痕，不动投影
+    case "team.task.updated": break // 团队审计事件：真相在团队目录，事件只记录，不动投影
     case "goal.set":
       // 快照全量替换（事件携带变更后的完整形态）；目标变更对用户可见，
       // 推进 updatedAt（同 session.set 的口径）。
@@ -125,7 +125,7 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
       delete next.goal
       next.updatedAt = event.at
       break
-    case "goal.checked": break // 判定审计事件：只留痕，不动投影（真相快照在 goal.set 链上）
+    case "goal.checked": break // 判定审计事件：只记录，不动投影（真相快照在 goal.set 链上）
     default: {
       const unhandled: never = event
       void unhandled

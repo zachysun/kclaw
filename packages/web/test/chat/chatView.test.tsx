@@ -22,7 +22,7 @@ interface ViewOpts {
   onCancelCompaction?: () => void
   /** 压缩审计记录（GET /sessions/:id/compactions 的 UI 镜像）。 */
   compactions?: CompactionRecordView[] | null
-  /** @ 文件点名的候选源（会话工作区文件清单）。 */
+  /** @ 文件指定的候选源（会话工作区文件清单）。 */
   mentionFiles?: readonly string[]
   /** 通知条与可点击动作（memory.written 跳转）。 */
   notice?: string | null

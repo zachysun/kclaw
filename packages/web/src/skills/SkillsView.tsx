@@ -3,7 +3,7 @@
  *
  * 「已装技能」：左栏技能清单（名字 / 作用域 / 可见性标记 / 截断两行的描
  * 述），右栏点开后的 SKILL.md 正文。user-invocable:false 的技能服务端已
- * 当作不存在（列表与点名都不出现）。
+ * 当作不存在（列表与指名都不出现）。
  *
  * 「从其他 agent 复用」：复用管理面——顶部已建链接的紧凑表格（来源、四
  * 档可见档位单选、删除；链接目标不再是探测正在提供的版本时标"过时"），
@@ -304,7 +304,7 @@ export function SkillsView({ api, notice }: {
     setBusy(true)
     try {
       const res = await api.post<{ ok: boolean; warning?: string }>(`/skills/proposals/${encodeURIComponent(p.id)}/${op}`, {})
-      if (res.warning !== undefined) notice(res.warning) // 非致命提示（如全局提案被某项目同名技能遮蔽）
+      if (res.warning !== undefined) notice(res.warning) // 非致命提示（如全局提案被某项目同名技能覆盖）
       const verb = op === "apply" ? "已采纳" : op === "reject" ? "已驳回" : "已回退"
       notice(`提案 ${p.name} ${verb}`)
       reload()

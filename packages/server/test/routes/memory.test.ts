@@ -17,7 +17,7 @@ beforeEach(async () => {
     resolveLlm: () => ({ llm: {} as never, model: "m" }),
   })
   system.writeCognition("persona", "persona", "画像")
-  // 种子项目线文件：直接落盘（memory 目录结构）
+  // 种子项目线文件：直接写入（memory 目录结构）
   mkdirSync(join(home, "memory", "projects", "kclaw-x"), { recursive: true })
   writeFileSync(join(home, "memory", "projects", "kclaw-x", "workdir.txt"), "/w/kclaw")
   writeFileSync(join(home, "memory", "projects", "kclaw-x", "ws.md"), "---\ntopic: ws\ntitle: T\nstatus: active\ncreated: 2026-08-28\nupdated: 2026-08-28\n---\n\n## 2026-08-28 · H\n\n正文\n")

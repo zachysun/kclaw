@@ -425,7 +425,7 @@ export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean
       else line(dim(`✱ 早期对话已压缩为 ${p.segments} 段，保留最近 ${p.kept} 条原文（早期细节可用 session_search 检索）`), ctx)
       return false
     }
-    // memory.written（项目级事务，广播不带 sessionId）：记忆已落盘，dim 一行
+    // memory.written（项目级事务，广播不带 sessionId）：记忆已写入，dim 一行
     // 提示路径，不是 run 终止事件。
     case "memory.written":
       line(dim(`已写入记忆: ${ev.payload.path}`), ctx)
@@ -591,7 +591,7 @@ async function reconnect(ctx: ChatCtx): Promise<boolean> {
       await ctx.client
         .request("GET", `/sessions/${encodeURIComponent(ctx.sessionId)}/messages`)
         .catch(() => undefined) // resync per the reconnect protocol; nothing is rendered from it
-      ctx.frameWaiters.length = 0 // 泵已随旧迭代器退出并 flush；这里兜底清空
+      ctx.frameWaiters.length = 0 // 泵已随旧迭代器退出并 flush；这里保底清空
       startPump(ctx)
       line(dim("[reconnected]"), ctx)
       return true
@@ -637,7 +637,7 @@ export async function renderRun(ctx: ChatCtx, text: string, opts: { disposition?
   // 静默收场，本渲染从这一刻起独占帧流。
   for (const waiter of ctx.frameWaiters.splice(0)) waiter("superseded")
   // 丢弃先于本渲染缓冲的命令错误帧：空闲期间到达的 error 帧（当时没有渲染
-  // 在等帧）会留在 pendingFrames 里，若被本渲染当作第一帧消费，会打印陈旧
+  // 在等帧）会留在 pendingFrames 里，若被本渲染当作第一帧处理，会打印陈旧
   // 错误并直接终止渲染——消息已发出而它的 run 无人渲染。此刻缓冲里的一切
   // 都早于本渲染（本渲染自己的帧只会经 waiter 到达），事件帧与 ack 保留：
   // 它们是当前 run 的渲染输入。本渲染自己 send 的错误帧不经过这里（发送前
@@ -747,7 +747,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
 
   // 初始发送处置（链正本在 core protocol/wire.ts）：会话覆盖 > 配置默认 >
   // steer。interrupt 覆盖原样带在本地状态里（回车直发会带上它，服务端按
-  // 一次性动作入队）；刚连上的 daemon 不可达时回落 steer。
+  // 一次性动作入队）；刚连上的 daemon 不可达时回退 steer。
   const resolveInitialDisposition = async (): Promise<"steer" | "wait" | "interrupt"> => {
     try {
       const [meta, cfg] = await Promise.all([
@@ -792,7 +792,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
     pumpAlive: false,
     reconnecting: undefined,
   }
-  startPump(ctx) // 常驻帧泵：从这一刻起所有帧都经它分发（openSubscribed 已消费订阅回执）
+  startPump(ctx) // 常驻帧泵：从这一刻起所有帧都经它分发（openSubscribed 已处理订阅回执）
 
   // 渲染启动器：发送与渲染不再阻塞输入行（/interrupt 因此能在 run 中途派发）。
   // 每次启动递增 renderEpoch —— 新渲染接管帧流，旧渲染以 "superseded" 静默收场，
@@ -1042,14 +1042,14 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
           startRender(refs.text) // sends, renders, and (if needed) resends after reconnect
         }
       } else if (parsed.command === "exit") {
-        await Promise.allSettled([...inFlight]) // 等在途渲染收尾，输出完整再退
+        await Promise.allSettled([...inFlight]) // 等正在进行的渲染收尾，输出完整再退
         break
       } else {
         await runOrHint(parsed, registry, slashCtx)
       }
       prompt()
     }
-    // stdin 已到 EOF：与旧的内联 await renderRun 等价——等在途渲染收尾后再关
+    // stdin 已到 EOF：与旧的内联 await renderRun 等价——等正在进行的渲染收尾后再关
     // socket，已缓冲的行不会打断正在输出的 run。
     await Promise.allSettled([...inFlight])
   } finally {

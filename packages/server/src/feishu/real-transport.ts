@@ -119,7 +119,7 @@ export function createRealFeishuTransport(
         // 逻辑——空白名单时等于全拦，管理页永远看不到待加白条目。
         policy: { dmMode: "open" },
         loggerLevel: LoggerLevel.error,
-        // 握手必须有死线：DNS/代理/防火墙故障时缺省可以无限挂起，
+        // 握手必须有超时上限：DNS/代理/防火墙故障时默认可以无限挂起，
         // 而 connect() 要等第一次握手成功才 resolve
         handshakeTimeoutMs: 10_000,
       })

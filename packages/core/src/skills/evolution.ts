@@ -69,9 +69,9 @@ export const SKILL_EXTRACT_SYSTEM_PROMPT = [
   "无值得提的内容输出 {\"proposals\":[]}。只输出 JSON，不要输出任何其他文字。",
 ].join("\n")
 
-/** 消费面窄接口（照 MemoryQuery/MemoryScheduleBook 惯例：调用方按面声明依赖）。 */
+/** 调用方窄接口（照 MemoryQuery/MemoryScheduleBook 惯例：调用方按接口声明依赖）。 */
 
-/** 调度簿记 + 粗查面：run 收尾钩子（considerFollowCheck）与 server 调度器消费。 */
+/** 调度簿记 + 粗查：run 收尾钩子（considerFollowCheck）与 server 调度器调用。 */
 export interface SkillEvolutionScheduleBook {
   /**
    * run 收尾粗查（纯读、零 LLM）：范围 = 该项目全部会话（含子会话）各自的
@@ -80,11 +80,11 @@ export interface SkillEvolutionScheduleBook {
   considerFollowCheck(sessionId: string, endTurnAt: string, installedNames: readonly string[]): { involved: boolean; names: string[] }
   pendingFollowChecks(workdir: string): FollowCheck[]
   clearFollowCheck(workdir: string, sessionId: string): void
-  /** 项目全部会话 meta 的最大 updatedAt（调度器判空闲门禁的"新活动"）。 */
+  /** 项目全部会话 meta 的最大 updatedAt（调度器判空闲检查的"新活动"）。 */
   lastActivity(workdir: string): string
 }
 
-/** 提炼触发面：server 调度器（triggerFollow）与 skill_create 工具（propose）消费。 */
+/** 提炼触发入口：server 调度器（triggerFollow）与 skill_create 工具（propose）调用。 */
 export interface SkillEvolutionTriggers {
   /**
    * 补查提炼：逐会话增量各调一次提炼 LLM；拿到合法 JSON（含 0 条）即推进
@@ -96,7 +96,7 @@ export interface SkillEvolutionTriggers {
   propose(sessionId: string, input: { name: string; content: string; rationale?: string }): SkillProposalResult
 }
 
-/** 治理面：server 路由消费（非法流转/冲突由 store 判定，路由映射 409）。 */
+/** 治理面：server 路由调用（非法流转/冲突由 store 判定，路由映射 409）。 */
 export interface SkillEvolutionAdmin {
   listProposals(): SkillProposal[]
   getProposal(id: string): SkillProposal | undefined
@@ -117,7 +117,7 @@ export interface SkillEvolutionDeps {
   resolveLlm: () => { llm: LlmClient; model: string }
   log?: (m: string) => void
   now?: () => Date
-  /** 杂活记账：提炼调用的 usage 回调（daemon 注入；缺省不记）。 */
+  /** 后台调用用量记录：提炼调用的 usage 回调（daemon 注入；默认不记）。 */
   recordChoreUsage?: ChoreUsageRecorder
 }
 
@@ -177,7 +177,7 @@ export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEv
     return this.#sessions.meta(sessionId)?.workdir ?? this.#config.workspace
   }
 
-  /** 项目最近活动会话（admin 事件归属；子会话不参与回落，照 memory 先例）。 */
+  /** 项目最近活动会话（admin 事件归属；子会话不参与回退，照 memory 先例）。 */
   #recentSessionId(workdir: string): string | undefined {
     return this.#sessions.list().filter((m) => (m.workdir ?? "") === workdir && m.parentSessionId === undefined)
       .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))[0]?.id
@@ -197,7 +197,7 @@ export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEv
       .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0))
   }
 
-  // ---- 账本（每项目一本 <skillsDir>/.proposals/state/<projectId>.json） ----
+  // ---- 记录（每项目一本 <skillsDir>/.proposals/state/<projectId>.json） ----
 
   #ledgerPath(workdir: string): string {
     return join(this.#proposalsDir, "state", `${projectIdFor(workdir)}.json`)
@@ -236,7 +236,7 @@ export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEv
 
   clearFollowCheck(workdir: string, sessionId: string): void {
     const path = this.#ledgerPath(workdir)
-    if (!existsSync(path)) return // 幂等：无账本不因清理而建文件
+    if (!existsSync(path)) return // 幂等：无记录不因清理而建文件
     this.#ledger(workdir).clearFollowCheck(sessionId)
   }
 
@@ -351,7 +351,7 @@ export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEv
   applyProposal(id: string): SkillProposalResult {
     const p = this.#store.get(id)
     if (p === undefined) return { ok: false, error: "提案不存在" }
-    // 遮蔽检查候选：daemon 已知的全部项目技能目录（项目副本整目录覆盖全局）。
+    // 覆盖检查候选：daemon 已知的全部项目技能目录（项目副本整目录覆盖全局）。
     const shadowDirs = p.scope === "global"
       ? [...new Set(this.#sessions.list().map((m) => m.workdir).filter((w): w is string => typeof w === "string" && w !== ""))].map(projectSkillsDir)
       : []
@@ -463,7 +463,7 @@ export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEv
  * user 消息文本里命中已装技能名的 /记号。/记号 正则即 SKILL_MENTION_REGEX
  * （与 matchSkillInvocations 共用同一常量），但匹配集合是全部已装技能名——
  * 那边按 user-invocable 档位过滤（渐进披露的用户面口径），观察面刻意更宽：
- * user-invocable:false 的技能被点名同样是"卷入"。
+ * user-invocable:false 的技能被指名同样是"卷入"。
  */
 function collectInvolvedNames(m: Message, installed: ReadonlySet<string>, out: Set<string>): void {
   if (m.role === "assistant") {

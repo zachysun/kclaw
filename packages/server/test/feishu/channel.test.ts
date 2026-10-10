@@ -483,7 +483,7 @@ describe("feishu channel", () => {
     const approval = env.transport.cards.find((c) => c.card.kind === "approval")!
       .card as Extract<OutboundCard, { kind: "approval" }>
 
-    // 审批卡已落盘（requested 即持久化），热重启后按钮有人认领
+    // 审批卡已写入（requested 即持久化），热重启后按钮有人认领
     const state = JSON.parse(readFileSync(join(env.home, "feishu-state.json"), "utf8")) as {
       pendingApprovals?: Record<string, { cardId: string; openId: string }>
     }

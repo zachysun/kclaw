@@ -1,5 +1,5 @@
 /**
- * /goal 参数解析接缝测试（issue #47）：双端共用 parseGoalCommandArgs——
+ * /goal 参数解析接入口测试（issue #47）：双端共用 parseGoalCommandArgs——
  * 动作子命令优先、verify: 分隔验收命令区、空参数返回 empty。
  */
 import { describe, it, expect } from "vitest"

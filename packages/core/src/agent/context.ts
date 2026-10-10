@@ -8,7 +8,7 @@ import type { ActiveSummary } from "../session/compaction.js"
  * 系统注入的统一标签约定：系统写入消息流的备注以 <system-reminder> 标签
  * 发给模型（kind 属性区分来源），压缩总摘要以 <compacted-summary> 标签
  * 随一条 user 消息注入。系统提示词里有一段对这两个约定的声明
- * （下方 SYSTEM_INJECTION_CONVENTION，由 agent/system-prompt.ts 装配时拼接），
+ * （下方 SYSTEM_INJECTION_CONVENTION，由 agent/system-prompt.ts 组装时拼接），
  * 两处必须同步改。
  */
 export const REMINDER_TAG = "system-reminder"
@@ -32,7 +32,7 @@ function escapeClosingTag(text: string, tag: string): string {
 }
 
 /** 摘要注入消息里固定模板部分（PREAMBLE、标签行、收尾提示）的 token 开销，
- *  模块加载时估一次。压缩后上下文的等效 token 记账 = 保留尾估算 + 总摘要
+ *  模块加载时估一次。压缩后上下文的等效 token 记录 = 保留尾估算 + 总摘要
  *  token + 本常量。 */
 export const SUMMARY_WRAPPER_TOKENS = estimateTokens(
   [SUMMARY_PREAMBLE, `<${SUMMARY_TAG}>`, `</${SUMMARY_TAG}>`, SUMMARY_SEARCH_HINT].join("\n"),
@@ -54,7 +54,7 @@ export function renderReminder(kind: string, text: string): string {
 /**
  * 系统提示词里对注入约定的声明（对齐 Claude Code：在系统提示中预先声明标签
  * 可信，模型才能区分"系统注入"与"用户输入"）。主会话与子代理的系统提示词
- * 装配都经 agent/system-prompt.ts 拼接本段（人设基座分别来自 run-assembly.ts
+ * 组装都经 agent/system-prompt.ts 拼接本段（人设基础文本分别来自 run-assembly.ts
  * 的 systemPrompt 与 subagent.ts 的 subagentSystemPrompt）。
  */
 export const SYSTEM_INJECTION_CONVENTION = [

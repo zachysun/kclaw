@@ -22,7 +22,7 @@ import type { ToolExecutor } from "../agent/tools.js"
 import { makeTool, requireString, ToolError } from "./shared.js"
 
 export const SKILL_READ_DESCRIPTION =
-  "按名字加载一个技能（skill）的完整说明，返回其操作规程正文。优先使用系统提示词\"可用技能\"列表里的技能；不在该列表中的技能设置了 disable-model-invocation，只有在用户明确点名要求时才应加载。"
+  "按名字加载一个技能（skill）的完整说明，返回其操作规程正文。优先使用系统提示词\"可用技能\"列表里的技能；不在该列表中的技能设置了 disable-model-invocation，只有在用户明确指名要求时才应加载。"
 
 export const SKILL_LIST_DESCRIPTION =
   "列出当前已装且模型可见的技能（名字 + 一句话描述）。系统提示词里的\"可用技能\"清单有长度预算、技能过多时会被截断，子代理更是没有清单——需要完整清单或按关键词找技能时调用本工具。可选 query：按名字与描述子串过滤（大小写不敏感）；不传则列出全部。找到后用 skill_read 加载正文。"
@@ -47,7 +47,7 @@ function visible(skills: SkillRecord[]): SkillRecord[] {
  * 并发调用安全。
  *
  * `recordUse` 在位时 skill_read 落一条使用遥测（curator 的生命数据）；
- * 缺省不记（裸引擎测试）。
+ * 默认不记（裸引擎测试）。
  */
 export function createSkillTools(skills: SkillRecord[], create?: {
   enabled: boolean

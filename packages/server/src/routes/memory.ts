@@ -19,7 +19,7 @@ function requireContent(body: unknown): string | undefined {
 
 /** /memory 路由族：管理记忆塔（项目线文件 + global 认知文件）。 */
 export function registerMemoryRoutes(app: FastifyInstance, opts: { memory?: MemoryAdmin & Pick<MemoryTriggers, "triggerManual">; config?: KclawConfig }): void {
-  // 无 memory 装配（createApp 未传 system）时全部 503，不注册会崩的调用。
+  // 无 memory 组装（createApp 未传 system）时全部 503，不注册会崩的调用。
   const unavailable = (reply: FastifyReply) => reply.code(503).send({ error: "memory system unavailable" })
   const memory = opts.memory
   const isKind = (k: string): k is CogKind => KINDS.has(k)
@@ -121,7 +121,7 @@ export function registerMemoryRoutes(app: FastifyInstance, opts: { memory?: Memo
         ? body.workdir
         : undefined
     // 可选归属会话：触发方（CLI/Web）可指定本次手动写入挂到哪个会话；
-    // 缺省回落由 core #recentSessionId 决定。trim 后为空视为缺省（纯空白不会生成幻影会话）。
+    // 默认回退由 core #recentSessionId 决定。trim 后为空视为默认（纯空白不会生成幻影会话）。
     const sessionId =
       typeof body === "object" && body !== null && typeof body.sessionId === "string" && body.sessionId.trim() !== ""
         ? body.sessionId.trim()

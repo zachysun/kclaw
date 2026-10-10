@@ -1,13 +1,13 @@
 /**
  * /goal 一轮检查的决策芯（issue #47）：门与判定器产物 → 下一步动作，纯
  * 函数。九条停止条件、熔断判定、wind-down（预算超限补一轮收尾）与续跑
- * 注入文本的组装都在这里；消费器（packages/server/src/goal-loop.ts）负责
- * 副作用——跑验收门、调判定器、写审计与用量、按决策入队或停摆（ADR-0003
+ * 注入文本的组装都在这里；调用方（packages/server/src/goal-loop.ts）负责
+ * 副作用——跑验收命令、调判定器、写审计与用量、按决策入队或停止（ADR-0003
  * 的"门先行、失败短路判定器"不变量由此处的调用次序编码：门失败时
  * judged 为 undefined）。
  *
- * 决策携带更新后的派生计数（loop）：除 gate-exhausted 外，停摆前都先有
- * 一次计数写回（refreshFirst——消费器按它决定先写 goal.set(state) 的计数
+ * 决策携带更新后的派生计数（loop）：除 gate-exhausted 外，停止前都先有
+ * 一次计数写回（refreshFirst——调用方按它决定先写 goal.set(state) 的计数
  * 刷新还是直接停），与 met/impossible 终态写回共用同一份计数。
  */
 import type { JudgeGoalOutput } from "./judge.js"
@@ -50,7 +50,7 @@ export type GoalRoundDecision =
       reason: GoalStopReason
       note: string
       loop: DerivedLoop
-      /** 停摆前是否先做一次计数写回（唯一例外是 gate-exhausted）。 */
+      /** 停止前是否先做一次计数写回（唯一例外是 gate-exhausted）。 */
       refreshFirst: boolean
       judge?: GoalJudgeResult
     }
@@ -59,8 +59,8 @@ export type GoalRoundDecision =
 
 /**
  * 续跑前的公共闸门（预算/轮数上限）：预算超限 → 标记收尾轮并入队
- * wrap-up（消费器置 windDownPending）；连续轮数达上限 → round-limit
- * 停摆；否则 undefined 继续正常入队。
+ * wrap-up（调用方置 windDownPending）；连续轮数达上限 → round-limit
+ * 停止；否则 undefined 继续正常入队。
  */
 function continueGate(
   goal: GoalSnapshot,
@@ -144,7 +144,7 @@ export function decideGoalRound(input: {
     const gateStreak = loop.gateFailStreak + 1
     const mixed: DerivedLoop = { ...loop, gateFailStreak: gateStreak }
     if (gateStreak >= GOAL_GATE_EXHAUSTED) {
-      // 唯一不做计数写回的停摆：达限即停，gateFailStreak 留在停摆写里。
+      // 唯一不做计数写回的停止：达限即停，gateFailStreak 留在停止时的写入里。
       return {
         kind: "stop",
         reason: "gate-exhausted",

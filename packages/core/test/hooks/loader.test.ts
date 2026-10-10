@@ -86,7 +86,7 @@ describe("scanUserHooks", () => {
     expect(entries[0]!.meta).toMatchObject({ name: "guard.js", position: "tool-before", failure: "deny", origin: "user" })
   })
 
-  it("非法 failure 值拒绝（类型校验在 js 文件上靠装载器兜底）", async () => {
+  it("非法 failure 值拒绝（类型校验在 js 文件上靠装载器保底）", async () => {
     writeFileSync(join(dir, "weird.js"), [
       'export const hook = { position: "run-before", failure: "explode" }',
       "export default () => undefined",

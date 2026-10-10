@@ -8,12 +8,12 @@
 import type { GoalGateOutcome, GoalJudgeResult, GoalSnapshot } from "./types.js"
 import { GOAL_GATE_EXHAUSTED, GOAL_JUDGE_MAX_TOKENS } from "./limits.js"
 
-/** 判定器允许的输出 token 上限（请求组装处消费）。 */
+/** 判定器允许的输出 token 上限（请求组装处调用）。 */
 export const judgeMaxTokens = GOAL_JUDGE_MAX_TOKENS
 
 /**
  * 判定器"无进展"的标记串：判定器 system 提示词的输出契约（没有进展
- * 就写这个字）与循环消费侧的无进展检测共用同一常量。改这个字必须两端
+ * 就写这个字）与循环调用侧的无进展检测共用同一常量。改这个字必须两端
  * 一起变，此处是唯一出处。
  */
 export const NO_PROGRESS_MARK = "无"

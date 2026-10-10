@@ -246,7 +246,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
   // protocol 的 mergeUsage。
   let totalUsage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
   // run.completed 事件统一从这里发射：缓存字段仅在 run 级聚合非 undefined
-  // 时携带（缺省 = 未知，事件流不出现显式 0）。
+  // 时携带（默认 = 未知，事件流不出现显式 0）。
   const emitRunCompleted = (stopReason: StopReason): void => {
     emit(makeEvent("run.completed", {
       stopReason,
@@ -274,7 +274,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       ...(deps.tokenBudget === undefined ? {} : { tokenBudget: deps.tokenBudget }),
       ...(compacted === undefined ? {} : { summary: compacted }),
     })
-    // llm-before 改写链（技能点名的隐式包装是内置使用者）：返回什么发什么，
+    // llm-before 改写链（技能指名的隐式包装是内置使用者）：返回什么发什么，
     // 持久化、事件流与 outcome 一概不动。
     return (await deps.hooks.run("llm-before", { messages: provider })) ?? provider
   }
@@ -344,7 +344,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
           ...(deps.maxTokens === undefined ? {} : { maxTokens: deps.maxTokens }),
           // 主循环恒传：同会话请求路由到同一缓存分片（子代理经同一路径，
           // 自然用自己的 sessionId，不继承父会话）。一次性辅助调用不经
-          // runAgent，缺省该字段即零缓存标记。
+          // runAgent，默认该字段即零缓存标记。
           promptCache: { key: input.sessionId },
         }), deps.signal)) {
           // Abort checkpoint: stop consuming the stream the moment the signal fires.
@@ -397,7 +397,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       if (next === null) break
       // 钩子 await 期间的 abort 窄窗口：急救压缩可能正好在信号触发后归并完、
       // 返回了有效视图——此刻信号已中止，重发注定立刻被拆（下一轮迭代的
-      // abort 检查点兜底），但主动检查能省下一次注定无用的模型调用。
+      // abort 检查点保底），但主动检查能省下一次注定无用的模型调用。
       if (deps.signal?.aborted) break
       compacted = next // 换压缩视图，整次重发一次
     }
@@ -547,11 +547,11 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       // 迭代边界中途压缩（compaction-check 位置）：工具批次
       // 完成后、引导注入之前。返回 null/undefined = 不压/已取消/失败，照常继续；
       // 抛错（skip 语义下不会发生，防御保留）同样照常继续（压缩失败不补救，
-      // 省略兜底）。非 null 视图从下一次请求起生效（buildMessages）。
+      // 省略保底）。非 null 视图从下一次请求起生效（buildMessages）。
       try {
         const next = await deps.hooks.run("compaction-check", {})
         if (next !== null && next !== undefined) compacted = next
-      } catch { /* 压缩失败不补救：省略兜底 */ }
+      } catch { /* 压缩失败不补救：省略保底 */ }
       // Steering drain（turn-boundary 位置）：工具批次后、下一次
       // llm.stream 前。取到的消息按序注入：created → persist(onMessage) →
       // completed → steered。fatal 钩子（内置 steering-drain）抛错按原语义终止

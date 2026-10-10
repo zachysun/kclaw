@@ -1,6 +1,6 @@
 /**
- * /goal 事件投影接缝测试（issue #47）：goal.set 全量替换进 meta.goal、
- * goal.cleared 删除、goal.checked 只留痕不动投影（含 updatedAt 口径）；
+ * /goal 事件投影接入口测试（issue #47）：goal.set 全量替换进 meta.goal、
+ * goal.cleared 删除、goal.checked 只记录不动投影（含 updatedAt 口径）；
  * run.started 的 trigger "goal" 在事件流里可用（派生计数的前提）。
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
@@ -65,7 +65,7 @@ describe("goal events projection", () => {
       tokens: { inputTokens: 10, outputTokens: 4 },
     })
     expect(s.meta(m.id)).toEqual(before)
-    // 留痕可从事件流读回（审计页渲染路径）。
+    // 记录可从事件流读回（审计页渲染路径）。
     const checked = s.readEvents(m.id).filter((e) => e.type === "goal.checked")
     expect(checked).toHaveLength(1)
   })

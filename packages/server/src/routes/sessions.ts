@@ -263,7 +263,7 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       }
     })
 
-    // 排队消息快照：重连/刷新的全量纠偏兜底。
+    // 排队消息快照：重连/刷新的全量纠偏保底。
     scope.get("/sessions/:id/queue", async (request, reply) => {
       const { id } = request.params as { id: string }
       if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)

@@ -1,11 +1,11 @@
 /**
- * Memory scheduler tests：定时触发 + 跟随门禁（挂起检查补查）+ 重启恢复。
+ * Memory scheduler tests：定时触发 + 跟随判定（挂起检查补查）+ 重启恢复。
  *
- * startMemoryScheduler 的宿主行为用 fake MemorySystem 驱动（调度器只消费
+ * startMemoryScheduler 的宿主行为用 fake MemorySystem 驱动（调度器只调用
  * MemorySystem 的公开方法：triggerInterval/triggerFollow/markIntervalRun/
  * intervalLastRun/pendingFollowChecks/clearFollowCheck/lastActivity）；
- * 跟随门禁的判定逻辑以纯函数 followGateDue 单测，调度器消费路径（due→clear+trigger、
- * 新活动超越→clear 不 trigger、interval 未到期→不触发、idleMinutes=0→不消费）各有集成用例。
+ * 跟随判定的实现以纯函数 followGateDue 单测，调度器调用路径（due→clear+trigger、
+ * 新活动超越→clear 不 trigger、interval 未到期→不触发、idleMinutes=0→不调用）各有集成用例。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -26,7 +26,7 @@ afterEach(() => { rmSync(root, { recursive: true, force: true }) })
 
 const viFnAsync = () => vi.fn(async () => undefined)
 
-/** 调度器消费的全部 MemorySystem 公开方法，fake 对齐真实名字；可按用例覆盖。 */
+/** 调度器调用的全部 MemorySystem 公开方法，fake 对齐真实名字；可按用例覆盖。 */
 function fakeSystem(over: Record<string, unknown> = {}) {
   return {
     triggerInterval: vi.fn(async () => undefined),
@@ -114,7 +114,7 @@ describe("startMemoryScheduler", () => {
   })
 
   it("follow gate: end_turn schedules a check; new activity before idleMinutes cancels it", async () => {
-    // 集成级：跟随门禁逻辑做成纯函数 followGateDue 导出单测（host-kit），这里测判定函数
+    // 集成级：跟随判定逻辑做成纯函数 followGateDue 导出单测（host-kit），这里测判定函数
     const { followGateDue } = await import("../src/host-kit.js")
     const endTurnAt = "2026-08-29T10:00:00Z"
     // 新活动发生在 end_turn 之后（idle 窗口内）→ 取消（not due）

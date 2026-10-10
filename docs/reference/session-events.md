@@ -83,5 +83,5 @@ TaskSnapshot 的字段（`protocol/team.ts`）：`id`、`subject`、`detail`、`
 | 类型 | 字段 |
 |------|------|
 | `goal.set` | `at`、`op`（create/edit/pause/resume/state）、`goal`（GoalSnapshot 全量：`text`、`acceptance`、`state`、`setAt`、`rounds`、`totalRounds`、`tokensUsed`、`stoppedReason?`、`stoppedAt?`、`stoppedNote?`、`lastJudgeAt?`、`lastJudgeVerdict?`、`lastJudgeReason?`、`lastJudgeProgress?`） |
-| `goal.checked` | `at`、`round`、`gates`（GoalGateOutcome[]：`command`、`ok`、`exitCode?`、`outputTail`）、`verdict?`、`reason?`、`progress?`、`judgeError?`（`{kind: parse\|transport, message}`）、`tokens?`（判定器本轮用量）——每轮检查一条；门失败短路时无 verdict，判定器失败时只有 judgeError |
+| `goal.checked` | `at`、`round`、`gates`（GoalGateOutcome[]：`command`、`ok`、`exitCode?`、`outputTail`）、`verdict?`、`reason?`、`progress?`、`judgeError?`（`{kind: parse\|transport, message}`）、`tokens?`（判定器本轮用量）——每轮检查一条；验收命令失败短路时无 verdict，判定器失败时只有 judgeError |
 | `goal.cleared` | `at`、`hadState`（移除前的状态） |

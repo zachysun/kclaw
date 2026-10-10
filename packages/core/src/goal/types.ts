@@ -2,13 +2,13 @@
  * /goal 领域类型（issue #47）：一次会话级可验证目标的快照、状态机与判定
  * 结果。快照是唯一持久形态（session meta 的 goal 字段，经 goal.set 事件
  * 全量替换）；进程内的自续开关（armed）与连败计数不在此处——它们属于
- * daemon 侧消费器（goal-loop.ts），重启即消失是设计约定（ADR-0002）。
+ * daemon 侧调用方（goal-loop.ts），重启即消失是设计约定（ADR-0002）。
  * 类型 only：浏览器构建经 @kclaw/core/protocol 引用本文件时不带 Node API。
  */
 import type { Usage } from "../protocol/messages.js"
 
 /**
- * 目标状态机。active = 消费器会在空闲边缘自续跑；paused = 用户暂停或
+ * 目标状态机。active = 调用方会在空闲边缘自续跑；paused = 用户暂停或
  * 守卫暂停（等待用户介入后 resume）；blocked = 等一次人工裁决（确认
  * 超时累计）后由用户恢复；complete = 终态（达成/不可能/任一上限），
  * 只剩 clear。paused 与 blocked 的区别只在暂停原因的语义呈现，恢复
@@ -23,7 +23,7 @@ export type GoalState = "active" | "paused" | "blocked" | "complete"
  */
 
 /**
- * 终止/暂停原因码（complete 或 paused/blocked 停摆时的 stoppedReason）。
+ * 终止/暂停原因码（complete 或 paused/blocked 停止时的 stoppedReason）。
  * met/impossible = 判定器终态；round-limit = 连续自续轮数达上限；
  * budget-limit = 目标生命周期 token 预算耗尽（含收尾轮）；gate-exhausted
  * = 验收命令连续失败达上限；no-progress = 判定器连续判"无进展"；
@@ -47,7 +47,7 @@ export type GoalStopReason =
 export type GoalVerdict = "not_met" | "met" | "impossible"
 
 /**
- * 目标快照（meta.goal 的形状）。计数字段由消费器在每次判定后经
+ * 目标快照（meta.goal 的形状）。计数字段由调用方在每次判定后经
  * goal.set 全量写回：rounds 是连续自续轮（任何 user 触发的 run 清零），
  * totalRounds 是生命周期累计；tokensUsed 含运行用量与判定器用量。
  */
@@ -96,7 +96,7 @@ export interface DerivedLoop {
   tokensUsed: number
   /** 判定器连续判无进展的次数。 */
   noProgressStreak: number
-  /** 验收门连续失败轮数。 */
+  /** 验收命令连续失败轮数。 */
   gateFailStreak: number
   /** 连续解析失败的判定次数。 */
   parseFails: number

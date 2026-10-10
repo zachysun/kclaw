@@ -163,7 +163,7 @@ describe("loadConfig / saveConfig", () => {
     expect(defaultConfig.permissions.defaultMode).toBe("default")
     writeConfig({ permissions: { defaultMode: "readonly" } })
     expect(loadConfig(resolvePaths(home)).permissions.defaultMode).toBe("readonly")
-    // 非法值（要进事件流的字段必须严格校验）回落 default 并警告
+    // 非法值（要进事件流的字段必须严格校验）回退 default 并警告
     writeConfig({ permissions: { defaultMode: "bogus" } })
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     try {
@@ -174,7 +174,7 @@ describe("loadConfig / saveConfig", () => {
       warn.mockRestore()
     }
   })
-  it("permissions 整节非对象（null 节）按默认节整体回落并警告，不裸抛", () => {
+  it("permissions 整节非对象（null 节）按默认节整体回退并警告，不裸抛", () => {
     writeConfig({ permissions: null })
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     try {

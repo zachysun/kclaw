@@ -36,7 +36,7 @@ const eventsOf = (bus: EventBus, sessionId: string): string[] => {
   return out
 }
 
-/** 基于 beforeEach 的装配重建 RunManager，仅覆盖 llm/tools（steer 相关用例统一用它）。 */
+/** 基于 beforeEach 的组装重建 RunManager，仅覆盖 llm/tools（steer 相关用例统一用它）。 */
 const managerWith = (over: { llm?: LlmClient; tools?: Map<string, ToolExecutor> }): RunManager =>
   new RunManager({
     config: structuredClone(defaultConfig), paths: resolvePaths(home), sessions,
@@ -224,8 +224,8 @@ describe("submit / driver", () => {
   })
 
   it("execution failure of a dequeued entry (bad attachment) emits queue_entry_failed visibility", async () => {
-    // 同族统一（fix A ③）：降级/排队的坏附件条目在 #execute 装配段同步抛出，
-    // 走 node.reject——循环自己的 run.failed 兜不住，补发条目级失败事件；
+    // 同族统一（fix A ③）：降级/排队的坏附件条目在 #execute 组装段同步抛出，
+    // 走 node.reject——循环自己的 run.failed 接不住，补发条目级失败事件；
     // 驱动器不停转，后续队列照常消化。
     const meta = sessions.create("t", undefined, "/w")
     const events: Array<{ type: string; payload: { error?: { code?: string; message?: string } } }> = []
@@ -595,7 +595,7 @@ describe("recoverQueues", () => {
       { messageId: "msg_i", disposition: "interrupt", text: "i", trigger: "user", enqueuedAt: new Date().toISOString() },
     ])
     manager.recoverQueues()
-    // 轮询到全部 3 条 user 消息 + 各自 assistant 回复落盘（3 run × 2 条 = 6 条）：
+    // 轮询到全部 3 条 user 消息 + 各自 assistant 回复写入（3 run × 2 条 = 6 条）：
     // 只数 user 消息会在 run 仍在写盘时放行，与 afterEach 的 rmSync 竞争。
     // 上限 50×20ms：回归时以明确断言失败，而非静默超时。
     for (let i = 0; i < 50; i++) {

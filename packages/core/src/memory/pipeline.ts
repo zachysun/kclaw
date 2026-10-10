@@ -41,30 +41,30 @@ export interface MemoryWrittenEvent {
   trigger?: MemoryAudit["trigger"]
 }
 
-/** 记忆落盘通知：pipeline 在每次写入后回调，at 由 pipeline 补；
- *  sessionId 是触发该次写入的会话（interval 由 MemorySystem 回落为项目最近活动会话）。 */
+/** 记忆写入通知：pipeline 在每次写入后回调，at 由 pipeline 补；
+ *  sessionId 是触发该次写入的会话（interval 由 MemorySystem 回退为项目最近活动会话）。 */
 export type MemoryAudit = Omit<MemoryEvent, "type" | "at"> & { at?: string; sessionId?: string }
 
 export interface PipelineDeps {
-  /** 每次触发时现取提取/内化用的 llm 与 model（model 为已回落解析后的提取模型）。
-   *  由装配方（MemorySystem）在闭包里做 extractModel 回落主模型解析。 */
+  /** 每次触发时现取提取/沉淀用的 llm 与 model（model 为已回退解析后的提取模型）。
+   *  由组装方（MemorySystem）在闭包里做 extractModel 回退主模型解析。 */
   resolveLlm: () => { llm: LlmClient; model: string }
-  embed?: EmbeddingClient                        // 判定链通过时才传入；缺省 = 纯关键词
+  embed?: EmbeddingClient                        // 判定链通过时才传入；默认 = 纯关键词
   emit?: (e: MemoryWrittenEvent) => void
-  /** 记忆落盘通知：由装配方接成会话事件流 appendEvent。 */
+  /** 记忆写入通知：由组装方接成会话事件流 appendEvent。 */
   audit?: (e: MemoryAudit) => void
-  log?: (msg: string) => void                    // 缺省 console.error
+  log?: (msg: string) => void                    // 默认 console.error
   now?: () => Date
-  /** 自动收束阈值：线最近活动距今超过该天数 → inactive；缺省 14。 */
+  /** 自动收束阈值：线最近活动距今超过该天数 → inactive；默认 14。 */
   threadInactiveDays?: number
-  /** 内化开关：缺省开；由 MemorySystem 从 config 传入。 */
+  /** 沉淀开关：默认开；由 MemorySystem 从 config 传入。 */
   consolidateEnabled?: boolean
-  /** 杂活记账：提取/内化调用的 usage 回调（daemon 注入；缺省不记）。 */
+  /** 后台调用用量记录：提取/沉淀调用的 usage 回调（daemon 注入；默认不记）。 */
   recordChoreUsage?: ChoreUsageRecorder
 }
 
 /** 提取器固定文案。字段名必须与 #extract 的校验逐字一致——模型
- *  只从这里认识 JSON 结构（2026-09-01 回归：旧文案未点名 op/file，真实模型
+ *  只从这里认识 JSON 结构（2026-09-01 回归：旧文案未指名 op/file，真实模型
  *  交回 type 判别 + 缺 file，动作全被丢弃且不重试）。 */
 export const EXTRACT_SYSTEM_PROMPT = [
   "你是长期记忆的情节提取器。输入是一段会话消息（每行一条）与该项目已有的主题线清单（MEMORY.md 表格）。",
@@ -82,10 +82,10 @@ export const EXTRACT_SYSTEM_PROMPT = [
   "噪音（寒暄、与长期记忆无关的过程性内容）直接跳过。无值得记的内容输出 {\"actions\":[]}。只输出 JSON，不要输出任何其他文字。",
 ].join("\n")
 
-/** 内化器固定文案。字段名必须与 parseCognitionActions 的校验逐字一致
+/** 沉淀器固定文案。字段名必须与 parseCognitionActions 的校验逐字一致
  *  （2026-09-01 回归：旧文案 "wiki:<name>" 记法诱导模型把名字嵌进 target）。 */
 export const CONSOLIDATE_SYSTEM_PROMPT = [
-  "你是认知内化器。输入是一条已完结主题线的全部情节，与现有的全局认知文件内容。",
+  "你是认知沉淀器。输入是一条已完结主题线的全部情节，与现有的全局认知文件内容。",
   "回答\"从这条线的经历里理解到了什么\"：只输出一个 JSON 对象 {\"actions\":[…]}，每个动作的字段名固定如下：",
   "- target：认知目标，只能取 \"persona\"（用户画像，连贯正文片段）、\"wiki\"（一个资源一个文件）、\"rule\"（清单式，每条规则一个小节）之一；目标名不要拼进 target。",
   "- name：目标名，target 为 \"wiki\" 或 \"rule\" 时必填，为 \"persona\" 时省略。",
@@ -104,7 +104,7 @@ interface CognitionAction {
   source: string
 }
 
-/** 模块级全局 L2 写入锁：跨项目并发内化撞同一文件时串行化。 */
+/** 模块级全局 L2 写入锁：跨项目并发沉淀撞同一文件时串行化。 */
 let l2WriteChain: Promise<void> = Promise.resolve()
 function withL2Lock<T>(fn: () => Promise<T>): Promise<T> {
   const run = l2WriteChain.then(fn)
@@ -124,7 +124,7 @@ function readDirSafe(dir: string): string[] {
   }
 }
 
-/** 把一条主题线渲染成内化提示里的情节正文。 */
+/** 把一条主题线渲染成沉淀提示里的情节正文。 */
 function renderThreadBody(tf: ThreadFile): string {
   return tf.sections.map((s) => `## ${s.date} · ${s.heading}\n\n${s.body}`).join("\n\n")
 }
@@ -133,7 +133,7 @@ function todayOf(date: Date): string {
   return date.toISOString().slice(0, 10)
 }
 
-/** 内化 JSON 解析（宽容原则，同 #extract）。 */
+/** 沉淀 JSON 解析（宽容原则，同 #extract）。 */
 function parseCognitionActions(raw: string, log: (m: string) => void): CognitionAction[] {
   let text = raw.trim()
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(text)
@@ -168,13 +168,13 @@ export class MemoryPipeline {
   readonly #layout: MemoryLayout
   readonly #sessions: SessionStore
   readonly #deps: PipelineDeps
-  /** 项目级串行锁：同项目触发（含内化）排队执行。 */
+  /** 项目级串行锁：同项目触发（含沉淀）排队执行。 */
   readonly #locks = new Map<string, Promise<void>>()
   /** 每项目打开的 VectorIndex（daemon 生命周期内复用连接）。 */
   readonly #indexes = new Map<string, VectorIndex>()
-  /** 自动收束阈值；缺省 14 天。 */
+  /** 自动收束阈值；默认 14 天。 */
   readonly #inactiveDays: number
-  /** 内化开关；缺省开。 */
+  /** 沉淀开关；默认开。 */
   readonly #consolidateEnabled: boolean
 
   constructor(memoryDir: string, sessions: SessionStore, deps: PipelineDeps) {
@@ -188,7 +188,7 @@ export class MemoryPipeline {
   #now(): Date { return this.#deps.now?.() ?? new Date() }
   #log(msg: string): void { (this.#deps.log ?? ((m) => console.error(m)))(msg) }
 
-  /** 记忆落盘通知：缺省 no-op；at 由 pipeline 统一补（now 时刻）。 */
+  /** 记忆写入通知：默认 no-op；at 由 pipeline 统一补（now 时刻）。 */
   #audit(e: MemoryAudit): void {
     this.#deps.audit?.({ ...e, at: e.at ?? this.#now().toISOString() })
   }
@@ -233,7 +233,7 @@ export class MemoryPipeline {
     const ledger = new WriteLedger(join(this.#layout.projectDir(projectId), "state.json"))
     // 选范围（会话维度）：提取只看触发会话自己的增量窗口——水位每会话
     // 各一本，互不比较（旧项目级水位按会话创建序划界，晚创建会话推进过水位后，
-    // 老会话的新消息会被永久跳过：2026-09-02 改名事故）。interval 定时兜底无显式
+    // 老会话的新消息会被永久跳过：2026-09-02 改名事故）。interval 定时保底无显式
     // 归属，对全部会话逐个补增量，单会话失败不阻塞其他会话。首跑水位为空 → 该
     // 会话全量，属首次提取；提取失败水位不推进，下次触发补上。
     const rows = this.#sessionRows(projectId)
@@ -270,7 +270,7 @@ export class MemoryPipeline {
         await this.#backfillVectors(this.indexFor(projectId), this.#projectEntries(projectId))
       }
     }
-    // 顺带内化检查：本次涉及的线若已 inactive 则总结一次。
+    // 顺带沉淀检查：本次涉及的线若已 inactive 则总结一次。
     await this.#maybeConsolidateTouched(projectId, touched, trigger, sessionId)
     return batches
   }
@@ -437,7 +437,7 @@ export class MemoryPipeline {
     return inactivated
   }
 
-  /** 顺带内化检查：本次涉及的线若已 inactive 则总结一次。 */
+  /** 顺带沉淀检查：本次涉及的线若已 inactive 则总结一次。 */
   async #maybeConsolidateTouched(projectId: string, touched: Set<string>, trigger: PipelineTrigger, sessionId?: string): Promise<void> {
     const dir = this.#layout.projectDir(projectId)
     for (const topic of touched) {
@@ -451,21 +451,21 @@ export class MemoryPipeline {
     return this.#lock(id, async () => {
       const tf = parseThreadFile(readFileSyncSafe(join(this.#layout.projectDir(id), `${topic}.md`)) ?? "")
       if (tf === undefined) throw new Error(`thread not found: ${topic}`)
-      // 手动内化：无触发会话归属（调用方未提供 sessionId），attached 会话交给 MemorySystem 回落
+      // 手动沉淀：无触发会话归属（调用方未提供 sessionId），attached 会话交给 MemorySystem 回退
       await this.#consolidateLocked(id, tf, "manual")
     })
   }
 
   /**
-   * 夜间闲时内化（每日兜底，scheduler 按 memory.consolidateHour 调度）：对本项目
-   * 自上次夜间内化以来有新情节的线逐条内化——判据 `updated >= #nightlyBaseline`
+   * 夜间闲时沉淀（每日保底，scheduler 按 memory.consolidateHour 调度）：对本项目
+   * 自上次夜间沉淀以来有新情节的线逐条沉淀——判据 `updated >= #nightlyBaseline`
    * （UTC 日期，与线文件 updated 同源），**含 active 线**：活跃线的认知不再等
-   * 14 天收束，每晚沉淀一次（收束时的顺带内化仍保留，二者幂等）。不提取、不动
-   * 提取水位。返回本次内化的线数。
+   * 14 天收束，每晚沉淀一次（收束时的顺带沉淀仍保留，二者幂等）。不提取、不动
+   * 提取水位。返回本次沉淀的线数。
    *
-   * 首跑（无 baseline）只内化当天更新的线——历史线已由顺带内化覆盖，不补跑。
+   * 首跑（无 baseline）只沉淀当天更新的线——历史线已由顺带沉淀覆盖，不补跑。
    * 判据含等号：上次跑之后同日（UTC）新增的情节不能漏，宁可用一次幂等的重复
-   * 内化去换。
+   * 沉淀去换。
    */
   async runNightly(workdir: string, sessionId?: string): Promise<number> {
     const { id } = this.#layout.ensureProject(workdir)
@@ -485,7 +485,7 @@ export class MemoryPipeline {
     })
   }
 
-  // ---- reconcile / 管理接口（MemorySystem 消费） ----
+  // ---- reconcile / 管理接口（MemorySystem 调用） ----
 
   /** 项目库全量重建索引（FTS，派生物对齐磁盘）。 */
   reindexProject(projectId: string): void {
@@ -518,7 +518,7 @@ export class MemoryPipeline {
     this.#indexes.clear()
   }
 
-  /** 内化实现；写 global 文件加全局 L2 锁。trigger 放宽为审计枚举
+  /** 沉淀实现；写 global 文件加全局 L2 锁。trigger 放宽为审计枚举
    *  （"nightly"/"manual" 不是提取触发，仅用于 memory 事件归属）。 */
   async #consolidateLocked(projectId: string, tf: ThreadFile, trigger: MemoryAudit["trigger"], sessionId?: string): Promise<void> {
     if (!this.#consolidateEnabled) return

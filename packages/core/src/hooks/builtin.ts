@@ -83,9 +83,9 @@ export interface BuiltinHookDeps {
   runLlm: LlmClient
   model: string
   /**
-   * 杂活模型通道（autoname/压缩摘要等后台 LLM 调用）：extractModel 解析链，
-   * daemon 注入（与记忆提取同源）。缺省回落 {runLlm, model} 主模型对——
-   * 裸引擎测试与旧装配无需接线。
+   * 后台调用的模型通道（autoname/压缩摘要等后台 LLM 调用）：extractModel 解析链，
+   * daemon 注入（与记忆提取同源）。默认回退 {runLlm, model} 主模型对——
+   * 裸引擎测试与旧组装无需接线。
    */
   resolveExtractLlm?: () => { llm: LlmClient; model: string }
   /**
@@ -127,7 +127,7 @@ export interface BuiltinHookDeps {
   /** 本次 run 技能扫描的目录名集合（skill-follow-check 粗查的 /记号 匹配集）。 */
   skillNames?: readonly string[]
   /**
-   * 技能进化的调度簿记面（提案制）：在位且 config.skills.evolution 开启时，
+   * 技能进化的调度簿记（提案制）：在位且 config.skills.evolution 开启时，
    * skill-follow-check（run-after 40）做零成本粗查，卷入技能才排空闲检查。
    */
   skillsEvolution?: SkillEvolutionScheduleBook
@@ -155,8 +155,8 @@ interface HookRuntime extends BuiltinHookDeps {
 }
 
 /**
- * 杂活模型 resolver：优先走 extractModel 通道，未接线回落主模型对。autoname
- * 与五个压缩钩子共用，保证"后台杂活"的模型选择只有一个出处。
+ * 后台调用模型 resolver：优先走 extractModel 通道，未接线回退主模型对。autoname
+ * 与五个压缩钩子共用，保证"后台调用"的模型选择只有一个出处。
  */
 function extractLlmResolver(rt: HookRuntime): () => { llm: LlmClient; model: string } {
   return rt.resolveExtractLlm ?? (() => ({ llm: rt.runLlm, model: rt.model }))
@@ -257,7 +257,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     name: "skill-wrap",
     position: "llm-before",
     order: 10,
-    description: "技能点名的隐式包装（只改发给模型的视图）",
+    description: "技能指名的隐式包装（只改发给模型的视图）",
     failure: "skip",
     makeHandler: (rt) => {
       const { llmUserText } = rt
@@ -307,7 +307,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     makeHandler: (rt) => {
       const { compactor, sessionId, signal, sessions, contextOverhead, waterlines, config, runLlm, model } = rt
       return () => {
-        // 预压线（ahead ≤ 估算水位 < 红线）且无在飞、无暂存成果时，在后台启动
+        // 预压线（ahead ≤ 估算水位 < 红线）且没有进行中的压缩、无暂存成果时，在后台启动
         // 压缩：不阻塞下一次请求，成果由后续迭代边界应用（mid-run-panic）。
         // 水位已达红线的场景让位给 mid-run-panic 的同步路径。
         if (compactor.cancelled(sessionId) || signal.aborted) return
@@ -388,7 +388,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
         // No watermark check — "it already overflowed" is a fact. Abort after
         // the await → null (the resend would be torn down at the next
         // checkpoint anyway).
-        // 急救撞在飞后台：abortInFlight 掐掉它并等其退出（单压缩不变量；成果
+        // 急救撞上正在进行的后台压缩：abortInFlight 掐掉它并等其退出（单压缩不变量；成果
         // 丢弃——原文无损，下次重压），再立即同步急救。救援路径不等摘要慢慢
         // 跑完；不用 cancel()——它的取消标记会压制紧随其后的急救 auto()。
         if (compactor.hasInFlight(sessionId)) {
@@ -411,7 +411,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     name: "usage-ledger",
     position: "run-after",
     order: 10,
-    description: "记录本次 run 的 token 用量台账",
+    description: "记录本次 run 的 token 用量",
     failure: "skip",
     makeHandler: (rt) => {
       const { usageStore, usageSessionId, runIdRef, model } = rt
@@ -419,13 +419,13 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
         if (usageStore === undefined) return
         try {
           usageStore.record({
-            // Subagent tokens group under the parent session (issue #16 记账).
+            // Subagent tokens group under the parent session (issue #16 的用量归并).
             sessionId: usageSessionId,
             runId: runIdRef.current ?? "",
             model,
             inputTokens: outcome.totalUsage.inputTokens,
             outputTokens: outcome.totalUsage.outputTokens,
-            // 缓存字段缺省 = 未知 → 写 NULL，与"没命中"区分。
+            // 缓存字段默认 = 未知 → 写 NULL，与"没命中"区分。
             cacheReadTokens: outcome.totalUsage.cacheReadTokens,
             cacheWriteTokens: outcome.totalUsage.cacheWriteTokens,
             at: new Date().toISOString(),
@@ -440,13 +440,13 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     name: "manual-compact-flush",
     position: "run-after",
     order: 15,
-    description: "冲刷排队的 /compact（忙时登记，运行结束后执行）",
+    description: "执行排队的 /compact（忙时登记，运行结束后执行）",
     failure: "skip",
     timeoutMs: Number.POSITIVE_INFINITY,
     makeHandler: (rt) => {
       const { compactor, sessionId, signal, sessions, config, runLlm, model, waterlines, contextOverhead, compactionAfter } = rt
       return async () => {
-        // 冲刷挂起的 /compact（会话忙时登记的）：在自动收尾压缩之前执行——
+        // 执行挂起的 /compact（会话忙时登记的）：在自动收尾压缩之前执行——
         // 用户显式意图优先，压完水位落回，自动收尾检查自然不再触发。
         // 不做忙碌/排队检查（收尾链时刻必然不忙；运行期间排队的消息等下一条
         // 出队，与压缩无关）。
@@ -480,7 +480,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
         // user-cancelled compaction for this run.
         if (runOutcome.stopReason === "aborted" || runOutcome.stopReason === "error" || compactor.cancelled(sessionId)) return
         if (compactor.hasInFlight(sessionId)) {
-          // 收尾撞在飞后台（预压没跑完 run 就结束了）：等它完成再判断——绝不
+          // 收尾撞上正在进行的后台压缩（预压没跑完 run 就结束了）：等它完成再判断——绝不
           // 并发第二个压缩。等待后走正常判断（auto 内部的活跃段细判自适应）。
           // 循环已结束，挂起视图没有"下一次请求"可应用，取走丢弃——元数据
           // 已携带同一成果，下一次运行从 meta 读到它。
@@ -530,7 +530,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     makeHandler: (rt) => {
       const { childRun, config, skillsEvolution, skillNames, sessionId } = rt
       return () => {
-        // 与记忆 follow 门禁同向：子会话不排检查（记忆隔离）。子会话的增量
+        // 与记忆 follow 判定同向：子会话不排检查（记忆隔离）。子会话的增量
         // 不会被漏看——粗查读的是全项目各会话的未处理增量（含子会话）。
         if (childRun) return
         const gate = resolveEvolutionGate(config)

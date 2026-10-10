@@ -53,7 +53,7 @@ describe("turn-boundary（steering 注入位置）", () => {
       tools: new Map([["noop", noopTool]]),
       toolDefs: [noopDef],
       hooks: chainOf(hook("drain", "turn-boundary", () =>
-        persisted.length >= 2 ? [steer1, steer2] : [])), // 工具消息落盘后的第一个边界吐两条
+        persisted.length >= 2 ? [steer1, steer2] : [])), // 工具消息写入后的第一个边界吐两条
       onEvent: (e) => events.push(e),
       onMessage: (m) => persisted.push(m),
     }

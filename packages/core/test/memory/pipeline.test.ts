@@ -108,7 +108,7 @@ describe("runTrigger", () => {
     await pipe.runTrigger(WORKDIR, "immediate")
     await pipe.runTrigger(WORKDIR, "interval") // 水位已推进：无范围
     await pipe.runTrigger(WORKDIR, "follow")
-    // 三个触发都不应产生落盘 —— 通过 emit 计数为 0 断言
+    // 三个触发都不应产生写入 —— 通过 emit 计数为 0 断言
     expect(calls).toBe(0)
   })
 
@@ -133,11 +133,11 @@ describe("runTrigger", () => {
     await pipe.runTrigger(WORKDIR, "clear")
     await pipe.runTrigger(WORKDIR, "interval") // 水位已推进：无范围
     await pipe.runTrigger(WORKDIR, "follow")
-    // 只有 clear 那次落盘；后续增量触发不重复提取同一段消息
+    // 只有 clear 那次写入；后续增量触发不重复提取同一段消息
     expect(calls).toBe(1)
   })
 
-  it("clear 不把已提取过的旧消息再喂给提取器（重复内化回归 2026-09-02）", async () => {
+  it("clear 不把已提取过的旧消息再喂给提取器（重复沉淀回归 2026-09-02）", async () => {
     // 真实时间线复刻：会话 A 里用户强调偏好，memory_save 工具触发 immediate 提取落线；
     // 之后新开会话只发了一句寒暄，POST /sessions 触发 clear——此时提取器不应再见到旧消息。
     const a = sessions.create("a", undefined, WORKDIR)
@@ -260,7 +260,7 @@ describe("runTrigger", () => {
   })
 
   it("new-thread 身份以 file 为准：thread 字段不一致时 topic 跟随 file（读取线 404 回归 2026-09-02）", async () => {
-    // 真实案例：模型交回 file:"user-abcd-profile" + thread:"user-name-abcd"，落盘后
+    // 真实案例：模型交回 file:"user-abcd-profile" + thread:"user-name-abcd"，写入后
     // 文件名与内部 topic 分裂——MEMORY.md 行按 topic 显示，点击按文件名找，404。
     const meta = sessions.create("s", undefined, WORKDIR)
     seedMessages(meta.id, ["记住，我叫abcd"])
@@ -284,7 +284,7 @@ describe("runTrigger", () => {
     }
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, deps)
     await pipe.runTrigger(WORKDIR, "interval")
-    // 非法单条被丢、合法单条落盘 —— 通过线文件存在断言
+    // 非法单条被丢、合法单条写入 —— 通过线文件存在断言
     const files = readDirDeep(join(root, "memory", "projects"))
     expect(files.some((f) => f.endsWith("ok.md"))).toBe(true)
   })
@@ -349,8 +349,8 @@ describe("runTrigger", () => {
   })
 
   it("empty-batch sweep consolidates the inactivated thread into global cognitions", async () => {
-    // 静止项目：空批次收束到期线后同样触发内化——否则该线的认知
-    // 永远不会被总结（线不复活、收束只扫 active，之后再无新情节触发内化）。
+    // 静止项目：空批次收束到期线后同样触发沉淀——否则该线的认知
+    // 永远不会被总结（线不复活、收束只扫 active，之后再无新情节触发沉淀）。
     const projectDir = join(root, "memory", "projects", projectIdFor(WORKDIR))
     mkdirSync(projectDir, { recursive: true })
     writeFileSync(join(projectDir, "old.md"), [
@@ -366,7 +366,7 @@ describe("runTrigger", () => {
       now: () => new Date("2026-08-28T00:00:00Z"), // 距线 updated（8-13）15 天 ≥ 14
       emit: (e) => { written.push({ path: e.path, kind: e.kind }) },
     })
-    await pipe.runTrigger(WORKDIR, "interval") // 空批次：范围空，只有收束 + 内化走 LLM
+    await pipe.runTrigger(WORKDIR, "interval") // 空批次：范围空，只有收束 + 沉淀走 LLM
     const rulePath = join(root, "memory", "global", "rule", "general.md")
     expect(written.some((w) => w.path === rulePath && w.kind === "cognition")).toBe(true)
     expect(readFileSync(rulePath, "utf8")).toContain("静止项目也要定期收束")
@@ -408,12 +408,12 @@ describe("runTrigger", () => {
     expect(audits.some((a) => a.trigger === "manual" && a.kind === "episode" && a.op === "append" && a.sessionId === meta.id)).toBe(true)
   })
 
-  it("cognition 内化事件带 trigger 与归属 sessionId", async () => {
+  it("cognition 沉淀事件带 trigger 与归属 sessionId", async () => {
     const meta = sessions.create("s", undefined, WORKDIR)
     seedMessages(meta.id, ["内容"])
     const llm = scriptedLlm([
       JSON.stringify({ actions: [{ file: "t1", op: "new-thread", thread: "t1", title: "T1", content: "情节", status: "inactive" }] }),
-      JSON.stringify({ actions: [{ target: "rule", name: "general", op: "append", content: "内化规则", source: "t1#2026-08-28" }] }),
+      JSON.stringify({ actions: [{ target: "rule", name: "general", op: "append", content: "沉淀规则", source: "t1#2026-08-28" }] }),
     ])
     const audits: MemoryEvent[] = []
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
@@ -505,7 +505,7 @@ describe("consolidate", () => {
       consolidateEnabled: false,
     })
     await pipe.runTrigger(WORKDIR, "interval")
-    expect(calls).toBe(1) // 只有提取调用，没有内化调用
+    expect(calls).toBe(1) // 只有提取调用，没有沉淀调用
   })
 
   it("append to a new cognition file does not duplicate the entry", async () => {
@@ -571,7 +571,7 @@ describe("consolidate", () => {
   })
 })
 
-describe("提取/内化的接口约定（prompt ↔ 校验对齐，回归 2026-09-01）", () => {
+describe("提取/沉淀的接口约定（prompt ↔ 校验对齐，回归 2026-09-01）", () => {
   it("EXTRACT_SYSTEM_PROMPT pins the field names: op discriminator, mandatory file, full JSON example", () => {
     // 提示词必须与 #extract 校验（file 非空 + op 三值）说同一套字段名——
     // 真实模型按 prompt 写 JSON，字段名只在这里教。示例必须同时含 op 与 file。
@@ -603,7 +603,7 @@ describe("提取/内化的接口约定（prompt ↔ 校验对齐，回归 2026-0
   })
 })
 
-describe("runNightly（夜间闲时内化）", () => {
+describe("runNightly（夜间闲时沉淀）", () => {
   const writeThread = (projectDir: string, updated: string): void => {
     writeFileSync(join(projectDir, "deploy.md"), [
       "---", "topic: deploy", "title: 部署", "status: active", "created: 2026-08-01", `updated: ${updated}`, "---", "",
@@ -626,7 +626,7 @@ describe("runNightly（夜间闲时内化）", () => {
     const rulePath = join(root, "memory", "global", "rule", "ops.md")
     expect(readFileSync(rulePath, "utf8")).toContain("先灰度")
     expect(audits.some((a) => a.trigger === "nightly" && a.kind === "cognition" && a.sessionId === "ses_A")).toBe(true)
-    // 夜间内化不动线状态：活跃线保持 active（收束仍由四触发顺带做）
+    // 夜间沉淀不动线状态：活跃线保持 active（收束仍由四触发顺带做）
     expect(readFileSync(join(projectDir, "deploy.md"), "utf8")).toContain("status: active")
   })
 
@@ -640,10 +640,10 @@ describe("runNightly（夜间闲时内化）", () => {
       now: () => new Date(nowISO),
       audit: () => { consolidateCalls += 1 },
     })
-    // 首跑（baseline = 9-01）：updated 8-01 的旧线不内化——历史线由顺带内化覆盖，不补跑
+    // 首跑（baseline = 9-01）：updated 8-01 的旧线不沉淀——历史线由顺带沉淀覆盖，不补跑
     expect(await makePipe("2026-09-01T20:00:00Z").runNightly(WORKDIR)).toBe(0)
     expect(consolidateCalls).toBe(0)
-    // 线有了新情节（updated 推进到 9-01）→ 次日夜间内化（baseline 9-01，updated >= baseline）
+    // 线有了新情节（updated 推进到 9-01）→ 次日夜间沉淀（baseline 9-01，updated >= baseline）
     writeThread(projectDir, "2026-09-01")
     expect(await makePipe("2026-09-02T20:00:00Z").runNightly(WORKDIR)).toBe(1)
     expect(consolidateCalls).toBe(1)

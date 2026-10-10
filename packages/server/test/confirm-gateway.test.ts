@@ -864,7 +864,7 @@ describe("question gateway over /ws", () => {
 })
 
 // --- sessionGrants run 级接线（批次 D）-----------------------------------------
-// 引擎的 session_grant 判定批次一就绪；本块验收 run 装配的真实接线：一次
+// 引擎的 session_grant 判定批次一就绪；本块验收 run 组装的真实接线：一次
 // once 确认把同一收窄规则写入本次 run 的 grant store，同一 run 内同操作
 // 不再弹确认（reason session_grant）；reject 不写；config 关闭特性时不接线。
 

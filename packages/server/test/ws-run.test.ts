@@ -500,7 +500,7 @@ describe("ws run commands (send_message / run.cancel)", () => {
 describe("ws queue steering (disposition / queue.cancel)", () => {
   it("send_message while busy enqueues as wait (config default), ack carries messageId+queued", async () => {
     const { llm, release } = gatedTextClient("慢回答")
-    // 锁定「配置默认」这一环：本测试把缺省处置置为 wait（出厂默认是 steer）
+    // 锁定「配置默认」这一环：本测试把默认处置置为 wait（出厂默认是 steer）
     const { env, url } = await makeWsRun(llm, { defaultDisposition: "wait" })
     const session = env.sessions.create("排队默认会话")
 

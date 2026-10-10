@@ -94,7 +94,7 @@ describe("Compactor 结构化 spill 指针", () => {
   })
 })
 
-describe("Compactor token 记账", () => {
+describe("Compactor token 记录", () => {
   it("tokensBefore 锚定真实请求；tokensAfter = 保留尾估算 + 真值摘要 token + 注入模板", async () => {
     const { dir, sessions, compactor, config } = makeEnv()
     try {

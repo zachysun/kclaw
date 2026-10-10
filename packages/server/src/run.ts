@@ -131,7 +131,7 @@ function makeNode(entry: QueueEntry): QueueNode {
   let reject!: QueueNode["reject"]
   const outcome = new Promise<RunOutcome>((res, rej) => { resolve = res; reject = rej })
   // 哑 handler：标记"拒绝已处理"，防止无人观察的 node（ws fire-and-forget 的
-  // steer 降级条目）在 run 抛错时演成 unhandled rejection；真实消费者
+  // steer 降级条目）在 run 抛错时演成 unhandled rejection；真实调用方
   // （wait 条目的 enqueue 调用方）仍通过自己的 .catch/await 收到原拒绝。
   outcome.catch(() => undefined)
   return { entry, resolve, reject, outcome }
@@ -229,7 +229,7 @@ export class RunManager {
     }
     // 处置解析链（正本在 core protocol/wire.ts）：显式 > 会话覆盖 > 配置
     // 默认；job/agent/goal 触发固定 wait（无人值守的排队行为必须可预测；
-    // agent 子 run 由派发器独占驱动；goal 自续轮由消费器排队驱动，用户中
+    // agent 子 run 由派发器独占驱动；goal 自续轮由调用方排队驱动，用户中
     // 途输入 steer 注入当前 run 的语义不变）。
     const disposition = input.trigger === "job" || input.trigger === "agent" || input.trigger === "goal"
       ? "wait"
@@ -244,7 +244,7 @@ export class RunManager {
       throw new Error(`队列已满（${RunManager.QUEUE_LIMIT} 条）`)
     }
     // 走到这里 = 提交被接受：预算在接受时计数（排队也算——拒绝发生在门口，
-    // 计数发生在进门，与回退兜底的判定点一致）。已接受未执行的积压条目不追溯：
+    // 计数发生在进门，与回退保底的判定点一致）。已接受未执行的积压条目不追溯：
     // 后续清零只解锁新的接受，最坏见「积压数 + WAKE_BUDGET」次机器 run，
     // 总量受队列上限约束。
     if (input.trigger === "agent" && meta.parentSessionId === undefined) {
@@ -331,9 +331,9 @@ export class RunManager {
 
   /**
    * 取消自动压缩（ws 层调用）：转发给 core 的
-   * Compactor——abort 在飞的压缩 controller，同时写取消标记压制本次 run 内
-   * 后续的中途/收尾压缩；标记在下一次 run 装配（core executeRun）开头清除。返回：调用时刻
-   * 是否存在在飞的压缩（false = 没什么可掐，但标记仍写入）。
+   * Compactor——abort 进行中的压缩 controller，同时写取消标记压制本次 run 内
+   * 后续的中途/收尾压缩；标记在下一次 run 组装（core executeRun）开头清除。返回：调用时刻
+   * 是否存在进行中的压缩（false = 没什么可掐，但标记仍写入）。
    */
   cancelCompaction(sessionId: string): boolean {
     return this.#compactor.cancel(sessionId)
@@ -497,7 +497,7 @@ export class RunManager {
     // injected-llmFactory test setups without the wiring.
     const resolveLlm = this.#deps.resolveExtractLlm
       ?? ((): { llm: LlmClient; model: string } => ({ llm: this.#deps.llmForRun?.(() => {}, entryKey) ?? this.#deps.llm, model }))
-    // 空闲手动压缩没有 run 装配上下文（contextOverhead 只在 run 内存在），
+    // 空闲手动压缩没有 run 组装上下文（contextOverhead 只在 run 内存在），
     // 固定开销退而取持久化的系统提示词基线估算——工具 schema 不在其中，
     // tokensAfter 因此略偏小；会话尚无任何 run 时无基线，X/Y 一并缺开销。
     const baseline = meta.systemBaseline
@@ -545,7 +545,7 @@ export class RunManager {
    *
    * 出队阶段的意外失败（#demoteSteer / 出队后的 #persistQueue 的 meta 写盘炸掉，如
    * 会话被删、盘满）不允许重演两种死法：会话永久停转（僵尸驱动器让后续
-   * submit 全部幂等返回、队列无人消费），或循环 promise 裸拒绝（unhandled
+   * submit 全部幂等返回、队列无人调用），或循环 promise 裸拒绝（unhandled
    * rejection）。处理：手头已出队的 node 以该错误落定（等待方看见失败而非
    * 永久悬挂）并**塞回队首**——persist 抛错意味着 queue.jsonl 也没写成，塞回后
    * 内存与盘上重新一致，条目留在队列等待下一次出队重试，而不是被此后任何一次
@@ -585,7 +585,7 @@ export class RunManager {
           try {
             node.resolve(await this.#executeEntry(sessionId, node))
           } catch (err) {
-            // 循环自己的 run.failed 兜不到的条目级失败（如降级坏附件在装配段同步抛）
+            // 循环自己的 run.failed 接不到的条目级失败（如降级坏附件在组装段同步抛）
             this.#emitEntryFailed(sessionId, node, "执行失败", err)
             node.reject(err)
           }
@@ -623,7 +623,7 @@ export class RunManager {
 
   /**
    * 条目级失败可见性：出队持久化 / 条目执行的失败发生时循环的 run.failed
-   * 兜不住（run 还没起，或同步抛在装配段）——已 ack `queued:true` 的消息
+   * 接不住（run 还没起，或同步抛在组装段）——已 ack `queued:true` 的消息
    * 不允许无声消失。以 run.failed 形状补一条 code "queue_entry_failed" 的
    * 事件（message 含 messageId 与原因），订阅客户端据此可见；总线发送
    * 本身不再包裹（与 submit/queueCancel 的直接 emit 一致，逐 socket 投递

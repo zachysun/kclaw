@@ -287,7 +287,7 @@ describe("ChatPanel", () => {
     await drive(() => {
       pushFrame(h.sockets[0]!, ev("memory.written", { path: "persona.md", kind: "persona", scope: "global" }))
     })
-    // 落盘反馈走 ChatView 的一次性 notice（写入通知）。
+    // 写入反馈走 ChatView 的一次性 notice（写入通知）。
     expect(h.container.querySelector('[data-testid="chat-notice"]')!.textContent).toContain("已写入记忆: persona.md")
     h.unmount()
   })
@@ -305,7 +305,7 @@ describe("ChatPanel", () => {
     await act(async () => { btn.click() })
     expect(onOpenMemoryWritten).toHaveBeenCalledTimes(1)
     expect(onOpenMemoryWritten).toHaveBeenCalledWith({ path: "/global/persona/persona.md", kind: "cognition", scope: "global" })
-    // 跳转动作消费了通知：点击后通知条随即消失（不必再打字）。
+    // 跳转动作清除通知：点击后通知条随即消失（不必再打字）。
     expect(h.container.querySelector('[data-testid="chat-notice"]')).toBeNull()
     h.unmount()
   })
@@ -592,7 +592,7 @@ describe("ChatPanel", () => {
       await act(async () => {
         btn!.click()
       })
-      // T8 协议：取消在飞的自动压缩 → ws 帧 {type:"compaction.cancel", sessionId}。
+      // T8 协议：取消进行中的自动压缩 → ws 帧 {type:"compaction.cancel", sessionId}。
       expect(h.sockets[0]!.sent).toContain(
         JSON.stringify({ type: "compaction.cancel", sessionId: "s1" }),
       )

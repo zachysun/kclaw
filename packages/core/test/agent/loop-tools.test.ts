@@ -103,7 +103,7 @@ describe("runAgent tool turn", () => {
       async execute() { executed++; return { status: "ok", output: "{}" } },
     }
     const guard = hook("guard", "tool-before", () => { throw new Error("非工作时段") }, { failure: "deny", order: 1 })
-    // 直接构造链以接住 onFailure（chainOf 不带回调；真实装配里它接到事件总线）
+    // 直接构造链以接住 onFailure（chainOf 不带回调；真实组装里它接到事件总线）
     const failures: AgentEvent[] = []
     const hooks = new HookChain({ timeoutMs: () => Number.POSITIVE_INFINITY, onFailure: (e) => failures.push(e as AgentEvent) })
     hooks.register(guard)

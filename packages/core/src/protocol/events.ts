@@ -48,7 +48,7 @@ export interface MessageTruncatedPayload { fromMessageId: string }
 export interface JobStartedPayload { jobId: string }
 export interface JobCompletedPayload { jobId: string; summary: string }
 export interface JobFailedPayload { jobId: string; error: { code: string; message: string } }
-export interface SessionRenamedPayload { title: string; /** 触发来源：auto = autoname 生成，manual = 用户改名（旧事件缺省按 manual）。 */ source?: "auto" | "manual" }
+export interface SessionRenamedPayload { title: string; /** 触发来源：auto = autoname 生成，manual = 用户改名（旧事件默认按 manual）。 */ source?: "auto" | "manual" }
 
 /** Persist notice: one session event has been written to events.jsonl. Emitted by the store after a successful append — persisted BEFORE announced, so consumers can incrementally refetch safely. */
 export interface SessionAppendedPayload { eventType: SessionEvent["type"] }

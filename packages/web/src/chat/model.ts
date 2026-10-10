@@ -141,7 +141,7 @@ export interface ChatState {
    */
   compacting?: boolean
   /**
-   * 在飞压缩的阶段（compaction.started 的 payload.phase）。manual 时取消按钮
+   * 进行中压缩的阶段（compaction.started 的 payload.phase）。manual 时取消按钮
    * 不渲染（用户自己发起的压缩，取消语义不存在）；与 compacting 同生共死。
    */
   compactingPhase?: string

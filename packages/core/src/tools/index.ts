@@ -66,11 +66,11 @@ export function createBuiltinTools(opts: {
   sessionId?: string
   web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean; spillDir: string }>
   sessionSearch?: SessionSearchFn
-  /** 跨会话原始消息检索（history_search 的数据面）；缺省返回固定不可用文案。 */
+  /** 跨会话原始消息检索（history_search 的数据源）；默认返回固定不可用文案。 */
   historySearch?: HistorySearchFn
   /** Skills scanned for this run (progressive disclosure's on-demand half). */
   skills?: SkillRecord[]
-  /** skill_read 使用遥测（curator 生命数据）；缺省不记。 */
+  /** skill_read 使用遥测（curator 生命数据）；默认不记。 */
   recordSkillUse?: (name: string, origin: "global" | "project") => void
   /**
    * skill_create（提案制技能进化）的模型面：在位才注册该工具。daemon 组装

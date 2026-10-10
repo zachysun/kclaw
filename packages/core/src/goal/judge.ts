@@ -1,9 +1,9 @@
 /**
  * /goal 判定器（issue #47）：证据窗口构建 + 独立 LLM 调用 + 严格 JSON
- * 解析。与运行模型隔离——daemon 侧经 config.goals.judge 解析条目（缺省
+ * 解析。与运行模型隔离——daemon 侧经 config.goals.judge 解析条目（默认
  * 回退会话模型），判定调用带 temperature 0 与宽松输出上限。解析失败在
  * 本函数内做一次有界重试（把错误回填给模型要求重出）；重试仍失败返回
- * parse 错误，由消费器计入熔断。不读磁盘、不发事件——纯计算，测试友好。
+ * parse 错误，由调用方计入熔断。不读磁盘、不发事件——纯计算，测试友好。
  */
 import type { LlmClient } from "../provider/types.js"
 import type { Message } from "../protocol/messages.js"

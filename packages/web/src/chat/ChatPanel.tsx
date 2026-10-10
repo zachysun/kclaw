@@ -64,7 +64,7 @@ export interface ChatPanelProps {
   onCreateSession: (title?: string) => Promise<void>
   /** Reveal the session list — the /sessions command (the drawer on mobile). */
   onOpenSessions: () => void
-  /** 当前会话的工作目录（/memory save 手动写入的目标项目；缺省由 daemon 回退 config.workspace）。 */
+  /** 当前会话的工作目录（/memory save 手动写入的目标项目；默认由 daemon 回退 config.workspace）。 */
   workdir?: string
   /** memory.written 通知条点击 → 跳转记忆页对应文件；不传则通知条保持纯文本。 */
   onOpenMemoryWritten?: (info: MemoryWrittenInfo) => void
@@ -116,7 +116,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   // 已装用户可见技能：出现在斜杠菜单的动态命令（/技能名），会话切换重拉
   // （项目级技能跟会话工作目录）。拉取失败静默——菜单少几条不碍聊天。
   const [skillRows, setSkillRows] = useState<Array<{ name: string; description: string; origin: string; visibility: string; plugin?: string }>>([])
-  // 会话工作区内的文件清单：@ 文件点名的候选源，会话/工作目录变化重拉
+  // 会话工作区内的文件清单：@ 文件指定的候选源，会话/工作目录变化重拉
   // （失败静默——抽屉没候选不碍聊天）。
   const [mentionFiles, setMentionFiles] = useState<readonly string[]>([])
   const [mentionTruncated, setMentionTruncated] = useState(false)
@@ -140,7 +140,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   const [teamTarget, setTeamTarget] = useState<string | null>(null)
   const teamPanelRef = useRef<TeamPanel | null>(null)
   teamPanelRef.current = teamPanel
-  // 面板拉取的在飞防抖与会话归属（迟到的响应不许落进新会话的 state）。
+  // 面板拉取的进行中防抖与会话归属（迟到的响应不许落进新会话的 state）。
   const teamFetchBusy = useRef(false)
   const teamSessionRef = useRef(sessionId)
 
@@ -170,7 +170,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   }, [api, sessionId])
   // /goal 目标循环视图（GET /sessions/:id/goal；goal:null = 无目标，不渲染）。
   // 拉取时机：会话切换、goal.* 追加帧（判定/状态迁移的即时刻画）、动作后
-  // 手动刷新；armed+active 时 5s 轮询兜底（判定器在 daemon 侧异步推进，
+  // 手动刷新；armed+active 时 5s 轮询保底（判定器在 daemon 侧异步推进，
   // 不发本会话的流，轮询是面板跟上进度的唯一途径；armed=false 的重启后
   // 待恢复态不轮询——没有会变化的东西）。
   const [goalView, setGoalView] = useState<GoalView | null>(null)
@@ -251,7 +251,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
 
     const refreshMessages = async (): Promise<{ ok: boolean; resent: number }> => {
       // 断线期间未确认的发送先抓快照（issue #8 补发）：mergeQueue 会按服务端
-      // 快照整体重建队列行——未送达消息的 local- 行不留痕迹，素材必须在重建
+      // 快照整体重建队列行——未送达消息的 local- 行不会留存，素材必须在重建
       // 之前抓。
       let pendingBefore: PendingSend[] = []
       updateView((v) => {
@@ -303,7 +303,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
         )
         if (!cancelled) updateView((v) => mergeQueue(v, entries))
       } catch {
-        // 事件流与下次重连纠偏兜底
+        // 事件流与下次重连纠偏保底
       } finally {
         resyncingQueue = false
       }
@@ -322,7 +322,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
                 const title = frame.payload.title
                 if (typeof title === "string") onSessionRenamed?.(sessionId, title)
               }
-              // memory.written 是跨视图的落盘反馈（写入通知）：不进
+              // memory.written 是跨视图的写入反馈（写入通知）：不进
               // reducer，走 ChatView 的一次性 notice（输入即清，见 onDraftChange）；
               // 通知条可点击跳转记忆页对应文件，点击动作由 owner 提供。
               if (frame.type === "memory.written") {
@@ -344,7 +344,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
               }
               // 团队面板跟随运行帧刷新：组长建团/派活/组员消息进出都会落在
               // 这几类帧上；组员自己的 run 帧不走本会话的流，由下面的定时
-              // 轮询兜底。无团队时帧不触发拉取（面板为 null，切会话时已拉过）。
+              // 轮询保底。无团队时帧不触发拉取（面板为 null，切会话时已拉过）。
               if (
                 (frame.type === "run.started" || frame.type === "run.completed" || frame.type === "run.failed" || frame.type === "message.created" || frame.type === "message.completed") &&
                 teamPanelRef.current !== null
@@ -549,8 +549,8 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   )
 
   // 会话切换：说话目标归位（新会话从"对组长"开始），面板立即拉一次；
-  // 有团队后 5s 轮询兜底——组员侧的忙闲、任务认领不发本会话的流，只有
-  // 面板轮询能看到（在飞防抖让轮询天然串行）。
+  // 有团队后 5s 轮询保底——组员侧的忙闲、任务认领不发本会话的流，只有
+  // 面板轮询能看到（进行中防抖让轮询天然串行）。
   useEffect(() => {
     teamSessionRef.current = sessionId
     setTeamTarget(null)
@@ -597,7 +597,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   const handleSend = useCallback((text: string) => {
     // Slash commands intercept before the ws send path (the same point where
     // the CLI chat loop intercepts) — they never reach the model. 动态技能
-    // 命令（/技能名）除外：原样进入发送路径——daemon 检测到点名后做隐式
+    // 命令（/技能名）除外：原样进入发送路径——daemon 检测到指名后做隐式
     // 包装（Master 2026-09-03），气泡与轨迹保持用户输入的原文。
     const parsed = parseSlashInput(text)
     const skillNames = new Set(skillRows.map((r) => r.name))
@@ -687,7 +687,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
   }, [sessionId])
 
-  /** 取消在飞的自动压缩（v3 compaction.cancel 帧）：服务端中止摘要器并以 result:"cancelled" 的 completed 收尾。 */
+  /** 取消进行中的自动压缩（v3 compaction.cancel 帧）：服务端中止摘要器并以 result:"cancelled" 的 completed 收尾。 */
   const handleCancelCompaction = useCallback(() => {
     try {
       clientRef.current.send({ type: "compaction.cancel", sessionId })

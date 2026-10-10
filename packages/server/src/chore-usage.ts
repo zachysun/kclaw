@@ -20,7 +20,7 @@ export function createChoreUsageRecorder(usage: UsageSink): ChoreUsageRecorder {
     const u = r.usage
     if (r.sessionId === undefined || r.sessionId === "") return
     if (u === undefined || (u.inputTokens === 0 && u.outputTokens === 0)) return
-    // 记账绝不反噬业务（UsageStore 自己的承诺，usage-ledger 同款）：库故障
+    // 记录绝不反噬业务（UsageStore 自己的承诺，usage-ledger 同款）：库故障
     // 只打一行日志，压缩/命名/记忆/技能照常。
     try {
       usage.record({

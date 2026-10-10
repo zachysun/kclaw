@@ -45,7 +45,7 @@ export interface WebCommandCtx {
    * plain notice when the panel does not support actions.
    */
   notifyAction?(action: () => void): void
-  /** 当前目标视图（无目标 = null；面板不在时 undefined）——/goal status 消费。 */
+  /** 当前目标视图（无目标 = null；面板不在时 undefined）——/goal status 读取。 */
   goal?: { goal: { state: string; stoppedReason?: string; text: string }; derived: { rounds: number; totalRounds: number } } | null
   /** 目标动作后刷新面板（set 之外的动作面板状态由 REST 响应驱动）。 */
   refreshGoal?(): void
@@ -128,7 +128,7 @@ export async function runWebCommand(parsed: ParsedSlash, ctx: WebCommandCtx): Pr
     }
     case "skill": {
       // 无参直接在通知区列清单（贴触发点）；看正文引导到只读技能页。
-      // 技能的"运行"没有命令也没有按钮：在对话里自然语言点名即可，
+      // 技能的"运行"没有命令也没有按钮：在对话里自然语言指名即可，
       // 模型经 skill_read 加载正文后照做——提示里带例子把这件事说明白。
       try {
         const q = ctx.workdir !== "" ? `?workdir=${encodeURIComponent(ctx.workdir)}` : ""

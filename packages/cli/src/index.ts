@@ -162,7 +162,7 @@ async function chatAction(home: string, options: Record<string, unknown>): Promi
       const r = await runWizard(home)
       if (r === "aborted") return
     } else {
-      process.stdout.write("尚未配置模型 provider：请在终端运行 `kclaw chat` 完成配置向导，详见 README\n")
+      process.stdout.write("尚未配置模型 provider：请在终端运行 `kclaw chat` 完成配置流程，详见 README\n")
       return
     }
   }

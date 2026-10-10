@@ -21,7 +21,7 @@ export function makeExtractLlmResolver(opts: {
   resolveLlm: () => { llm: LlmClient; model: string }
   /**
    * extractModel 命中 provider 条目时解析该条目客户端的钩子（daemon 注入
-   * 签名缓存的 resolver，条目编辑热生效）；缺省每调用现建客户端。
+   * 签名缓存的 resolver，条目编辑热生效）；默认每调用现建客户端。
    */
   resolveEntryLlm?: (entryKey: string) => LlmClient
 }): () => { llm: LlmClient; model: string } {

@@ -511,7 +511,7 @@ describe("optimistic user echo", () => {
     const merged = mergeMessages(optimistic.messages, [msg("m9", "user", [text("b9", "在吗")])])
     expect(merged.map((m) => m.id)).toEqual(["m9"])
     // still-unpersisted optimistic bubbles survive the merge
-    const other = appendOptimisticUser(initChat([]), "还没落盘")
+    const other = appendOptimisticUser(initChat([]), "还没写入")
     const merged2 = mergeMessages(other.messages, [msg("m9", "user", [text("b9", "在吗")])])
     expect(merged2.map((m) => m.id)).toEqual([other.messages[0]!.id, "m9"])
   })
@@ -658,7 +658,7 @@ describe("queue reducer", () => {
   })
 
   it("message.queued for an already-tracked id skips adoption (no row-text steal, no double)", () => {
-    // 恢复重播恰逢在途乐观气泡：queue 已含 msg_x（行文本"旧排队"），再收一条
+    // 恢复重播恰逢进行中乐观气泡：queue 已含 msg_x（行文本"旧排队"），再收一条
     // message.queued{msg_x}。必须先查重——否则最早的 pending local- 气泡（"新来
     // 的"）会被收走、行文本被张冠李戴。
     let s = appendOptimisticUser(base(), "旧排队")

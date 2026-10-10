@@ -1,5 +1,5 @@
 /**
- * createChoreUsageRecorder 的行为钉子：四条后台杂活通道（压缩/命名/记忆/技能）
+ * createChoreUsageRecorder 的行为钉子：四条后台调用通道（压缩/命名/记忆/技能）
  * 的花费落同一张用量表。覆盖：正常落行（runId 前缀=通道名）、无归属会话跳过、
  * usage 缺失（流中断）跳过、零 token 跳过、同毫秒多行主键不撞（真库）。
  */

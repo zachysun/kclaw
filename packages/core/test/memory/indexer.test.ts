@@ -31,7 +31,7 @@ describe("VectorIndex", () => {
     const idx = new VectorIndex(join(dir, "vectors.db"))
     const v = new Float32Array([0.1, 0.2, 0.3])
     idx.upsert(ep("k", "文本"), v)
-    idx.upsert(ep("j", "另一段")) // 无向量：允许（关键词路兜底）
+    idx.upsert(ep("j", "另一段")) // 无向量：允许（关键词路保底）
     expect(Array.from(idx.vectorOf("k")!)).toEqual(Array.from(v))
     expect(idx.vectorOf("j")).toBeUndefined()
     // 重开库仍在（持久化）

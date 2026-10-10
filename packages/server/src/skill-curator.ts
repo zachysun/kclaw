@@ -5,7 +5,7 @@
  * curateGlobalSkills（stale 标记 + 归档移动，只动 AI 自建技能）；daemon
  * 凌晨未开时开机后首个 sweep 补跑。上次运行日期存
  * <skillsDir>/.curator/lastRun（本地日期判重，与 memory-scheduler 同口径）。
- * 定时器骨架（首扫 + interval + 在飞记账 + 停机等待）在 host-kit。
+ * 定时器骨架（首扫 + interval + 进行中记录 + 停机等待）在 host-kit。
  */
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -53,7 +53,7 @@ export function startSkillCurator(deps: {
       const curator = resolveCuratorConfig(deps.config)
       if (!curator.enabled) return
       const t = now()
-      // 每日过点门禁在 host-kit（dailyGateDue）：时刻判定 + 本地日期判重单源。
+      // 每日一次判定在 host-kit（dailyGateDue）：时刻判定 + 本地日期判重单源。
       if (!dailyGateDue(t, curator.hour, lastRunDate(deps.skillsDir))) return
       markLastRun(deps.skillsDir, localDate(t))
       const report: CuratorReport = curateGlobalSkills(deps.skillsDir, curator, t)
@@ -68,7 +68,7 @@ export function startSkillCurator(deps: {
   return { stop: () => handle.stop() }
 }
 
-/** config 节的读取与保底（默认值来自 defaultConfig；缺字段回落同款）。 */
+/** config 节的读取与保底（默认值来自 defaultConfig；缺字段回退同款）。 */
 function resolveCuratorConfig(config: KclawConfig): CuratorConfig {
   const c = config.skills?.curator
   return {

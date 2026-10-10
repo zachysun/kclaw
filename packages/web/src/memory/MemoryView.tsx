@@ -3,7 +3,7 @@
  * 文件列表 → 查看/编辑/删除），项目记忆按需选择查看（项目清单 → 点开项目取主题线）。
  * 不存在会话级记忆——会话只是通过 memory_search 检索记忆，不是记忆的归属维度。
  * 右侧整文件编辑器（保存 PATCH / 删除 DELETE）。写入通知由 ChatPanel 的 notice +
- * 跳转按钮承接，不在本组件内重复。纯 REST 拉取 + 本地筛选；服务端 503（记忆未装配）
+ * 跳转按钮承接，不在本组件内重复。纯 REST 拉取 + 本地筛选；服务端 503（记忆未组装）
  * 时相应 GET 走 catch → notice 提示。
  */
 import { useCallback, useEffect, useRef, useState } from "react"
@@ -18,7 +18,7 @@ interface CogRow { kind: "persona" | "wiki" | "rule"; name: string; path: string
 export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
   api: ApiClient
   notice: NoticeFn
-  /** 写入通知的跳转目标：切换到记忆页后自动打开对应线/认知文件，消费后置空。 */
+  /** 写入通知的跳转目标：切换到记忆页后自动打开对应线/认知文件，使用后置空。 */
   openTarget?: MemoryWrittenInfo | null
   onOpenConsumed?: () => void
 }) {
@@ -46,7 +46,7 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
 
   useEffect(() => { reloadProjects() }, [reloadProjects])
 
-  // 写入通知跳转：切换到本页时 openTarget 带一次目标，打开对应文件后消费。
+  // 写入通知跳转：切换到本页时 openTarget 带一次目标，打开对应文件后清除。
   useEffect(() => {
     if (openTarget === undefined || openTarget === null) return
     const t = openTarget
@@ -65,7 +65,7 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
         onOpenConsumed?.()
       }
     })()
-    // openTarget 是单次跳转意图，每次变化消费一次即可。
+    // openTarget 是单次跳转意图，每次变化处理一次即可。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openTarget])
 

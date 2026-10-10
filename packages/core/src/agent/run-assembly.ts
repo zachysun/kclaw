@@ -93,7 +93,7 @@ export type LlmRetrySink = (info: { attempt: number; error: unknown }) => void
  */
 export interface EnqueueInput {
   userText: string
-  /** team = 团队收信箱投递/任务派活（引擎或宿主发起）：不走技能/文件点名包装，处置按提交方显式声明（常规派活=steer）。 */
+  /** team = 团队收信箱投递/任务派活（引擎或宿主发起）：不走技能/文件指定包装，处置按提交方显式声明（常规派活=steer）。 */
   trigger: RunTrigger
   /**
    * Per-run model override (a job's configured model, or a client-forced
@@ -115,11 +115,11 @@ export interface EnqueueInput {
    * the model must be able to tell machine input from user speech.
    */
   note?: QueueNote
-  /** 单次显式处置（层级最高）；缺省 = 会话覆盖 ?? 配置默认；job 触发强制 wait。 */
+  /** 单次显式处置（层级最高）；默认 = 会话覆盖 ?? 配置默认；job 触发强制 wait。 */
   disposition?: "steer" | "wait" | "interrupt"
   /**
    * 子代理派发携带（subagent_run 的 role/toolAllow，仅 agent 触发的子会话
-   * 消费）：role 拼进子会话系统提示词；toolAllow 只收窄运行面与 wire 面。
+   * 调用）：role 拼进子会话系统提示词；toolAllow 只收窄可用工具与线上请求形状。
    */
   subagentRole?: string
   subagentToolAllow?: string[]
@@ -182,13 +182,13 @@ export interface RunEngineDeps {
    */
   llmForRun?: (onRetry: LlmRetrySink, entryKey?: string) => LlmClient
   /**
-   * 杂活模型通道：标题生成与压缩摘要等后台 LLM 调用走 extractModel 解析链
-   * （daemon 与记忆提取/技能进化同源注入）。缺省由 builtin 钩子回落主模型。
+   * 后台调用的模型通道：标题生成与压缩摘要等后台 LLM 调用走 extractModel 解析链
+   * （daemon 与记忆提取/技能进化同源注入）。默认由 builtin 钩子回退主模型。
    */
   resolveExtractLlm?: () => { llm: LlmClient; model: string }
   /**
-   * 跨会话原始消息检索（history_search 的数据面）：daemon 注入（索引 +
-   * 标题解析 + 回收站过滤都在宿主侧）。缺省时工具返回固定不可用文案。
+   * 跨会话原始消息检索（history_search 的数据源）：daemon 注入（索引 +
+   * 标题解析 + 回收站过滤都在宿主侧）。默认时工具返回固定不可用文案。
    */
   historySearch?: HistorySearchFn
   /**
@@ -244,10 +244,10 @@ export interface RunEngineDeps {
    */
   extraHooks?: HookEntry[]
   /**
-   * 技能进化（提案制）：daemon 注入的完整系统（调度簿记 + 提炼/提案两个面）。
-   * run 收尾钩子 skill-follow-check（order 40）消费簿记面做粗查排检查；工具
-   * 面 skill_create 消费 propose。config 未开启时钩子直接跳过，工具拿到固定
-   * 关闭文案；该 dep 缺席（裸引擎测试）则两者都不在面里。
+   * 技能进化（提案制）：daemon 注入的完整系统（调度簿记 + 提炼/提案两组能力）。
+   * run 收尾钩子 skill-follow-check（order 40）调用簿记做粗查排检查；工具
+   * skill_create 调用 propose。config 未开启时钩子直接跳过，工具拿到固定
+   * 关闭文案；该 dep 缺席（裸引擎测试）则两者都不注册。
    */
   skillsEvolution?: SkillEvolutionScheduleBook & SkillEvolutionTriggers
 }
@@ -420,11 +420,11 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     [readLinksFile(paths.skillsDir), readLinksFile(projectDir)],
   )
 
-  // 技能点名与文件点名的隐式包装（Master 2026-09-03 / 2026-09-13）：用户消
+  // 技能指名与文件指定的隐式包装（Master 2026-09-03 / 2026-09-13）：用户消
   // 息里任意位置的 /技能名 精确命中已装且用户可调用的技能、@路径 解析为工作
   // 区内的真实文件时，只在发给模型的那份输入上追加调用/读取指示——持久化、
   // 事件流与气泡保持原始文本（所见即所发）。仅 trigger:user 生效：job 提示
-  // 是 daemon 生成的内部指令，不参与点名。内置 skill-wrap 钩子捕获这份预计
+  // 是 daemon 生成的内部指令，不参与指名。内置 skill-wrap 钩子捕获这份预计
   // 算文本，在 llm-before 位置应用。
   const llmUserText =
     input.trigger === "user"
@@ -434,8 +434,8 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
           wrapFileMentions("", resolveFileMentions(input.userText, workspace)),
         )
       : undefined
-  // 隐式包装的点名同样是"用了这个技能"：与 skill_read 一样落使用遥测，
-  // curator 的生命数据因此覆盖两条消费路径。
+  // 隐式包装的指名同样是"用了这个技能"：与 skill_read 一样落使用遥测，
+  // curator 的生命数据因此覆盖两条调用路径。
   if (llmUserText !== undefined) {
     for (const skill of matchSkillInvocations(input.userText, skills)) {
       recordSkillUse(paths.skillsDir, skill.origin, skill.name)
@@ -455,7 +455,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     console.warn(`kclaw: exec sandbox unavailable (${sandbox.unavailableReason}); sandboxable exec falls back to manual confirmation`)
   }
   // When the sandbox was attempted but unavailable, the confirmation explains
-  // why (User Story: "回落到确认框并说明沙箱不可用").
+  // why (User Story: "回退到确认框并说明沙箱不可用").
   const sandboxUnavailableNote = sandboxAttempted && !sandbox.available
     ? "exec 沙箱不可用，本次操作需人工确认"
     : undefined
@@ -838,7 +838,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   chain.registerAll(engine.deps.hooks?.snapshot() ?? [])
   if (engine.deps.extraHooks !== undefined) chain.registerAll(engine.deps.extraHooks)
 
-  // 系统提示词组装 + 双段冻结 + 审计落盘在 system-prompt.ts 一处完成；
+  // 系统提示词组装 + 双段冻结 + 审计写入在 system-prompt.ts 一处完成；
   // 固定开销在这里赋值一次，压缩/打包钩子经 contextOverhead 读取函数惰性
   // 取值（钩子注册先于组装，读取函数必须保持惰性）。
   const { system, overheadTokens } = await assembleSystemPrompt({
@@ -923,8 +923,8 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       onMessage: (m) => sessions.appendMessage(m.sessionId, m),
     },
   )
-  // run-after 链：用量台账（skip）→ 收尾压缩（fatal：与迁移前一致，压缩失败
-  // 传播为条目级失败）→ 跟随门禁（skip）。串行化保证收尾压缩期间新消息排队
+  // run-after 链：用量记录（skip）→ 收尾压缩（fatal：与迁移前一致，压缩失败
+  // 传播为条目级失败）→ 跟随判定（skip）。串行化保证收尾压缩期间新消息排队
   // 无需额外忙碌标记。
   await chain.run("run-after", {
     outcome: {

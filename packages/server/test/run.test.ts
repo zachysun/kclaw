@@ -736,7 +736,7 @@ describe("RunManager.enqueue", () => {
     expect(o2.stopReason).toBe("end_turn")
     expect(manager.cancel(session.id)).toBe(false) // 全部落定：无活动 run
 
-    // 排队消息确实执行了：run1 被中止（仅 user 落盘，中止不产 assistant 消息），
+    // 排队消息确实执行了：run1 被中止（仅 user 写入，中止不产 assistant 消息），
     // two 的问答齐全 —— 排队条目幸存并完成
     const msgs = env.sessions.readMessages(session.id)
     expect(msgs.map((m) => m.role)).toEqual(["user", "user", "assistant"])
@@ -1535,8 +1535,8 @@ describe("RunManager context compaction", () => {
 
 // --- memory injection------------------------------------------
 // RunManagerDeps.memory 是 MemorySystem：L2 cognition 拼进 system prompt
-// （cognitionPrompt 为空/抛错则回落到纯 AGENTS.md），L1 情节以 memory note 注入
-// 用户消息（searchEpisodes 失败静默跳过）。四触发提取管线由 daemon 装配。
+// （cognitionPrompt 为空/抛错则回退到纯 AGENTS.md），L1 情节以 memory note 注入
+// 用户消息（searchEpisodes 失败静默跳过）。四触发提取管线由 daemon 组装。
 
 describe("RunManager memory injection", () => {
   it("injects L2 cognition into the system prompt and L1 episodes as memory notes", async () => {
@@ -1582,7 +1582,7 @@ describe("RunManager memory injection", () => {
 
 // --- system 事件审计（第 9 种持久化事件）--------------------------------------
 // 每次 run 在系统提示词拼装完成后、进入模型循环前，把全量文本作为一条 system
-// 事件追加进该会话的事件流（只落盘，不上总线）。语义拍板：写入失败即本次 run
+// 事件追加进该会话的事件流（只写入，不上总线）。语义拍板：写入失败即本次 run
 // 失败（与消息写入失败同待遇）；不加幻影会话守卫；steer 注入与 run 内多次模型
 // 调用复用同一份提示词，每 run 恰好一条。
 
@@ -1664,7 +1664,7 @@ describe("RunManager system 事件审计", () => {
       llm: scriptClient([textTurn("收到")]), workspace: env.config.workspace,
     })
 
-    // 装配段（runAgent 之前）同步抛 → 驱动器条目级失败兜底：outcome 以该错误拒绝
+    // 组装段（runAgent 之前）同步抛 → 驱动器条目级失败保底：outcome 以该错误拒绝
     await expect(failingManager.enqueue(session.id, { userText: "写不进去", trigger: "user" }))
       .rejects.toThrow("disk full: cannot append system")
 
@@ -1674,7 +1674,7 @@ describe("RunManager system 事件审计", () => {
     expect(failed!.payload).toMatchObject({ error: { code: "queue_entry_failed" } })
     expect((failed!.payload as { error: { message: string } }).error.message).toContain("disk full")
 
-    // 没有任何 run 痕迹：无 system 审计事件、无消息落盘（装配段即失败，模型未被调用）
+    // 没有任何 run 痕迹：无 system 审计事件、无消息写入（组装段即失败，模型未被调用）
     expect(env.sessions.readEvents(session.id).filter((e) => e.type === "system")).toHaveLength(0)
     expect(env.sessions.readMessages(session.id)).toEqual([])
 
@@ -1874,7 +1874,7 @@ describe("RunManager model resolution + usage recording", () => {
 
 // --- sandbox.checked 事件审计（批次 D，第 10 种持久化事件）---------------------
 // 每次 run 在沙箱探测后立即落一条 sandbox.checked 事件：config 开关、是否真的
-// 探测、探测结果与原因（只落盘，不上总线；不进投影、不推进 updatedAt）。语义
+// 探测、探测结果与原因（只写入，不上总线；不进投影、不推进 updatedAt）。语义
 // 拍板：写入失败即本次 run 失败（与 system 事件同待遇——审计承诺必须完整）。
 
 describe("RunManager sandbox.checked 事件审计", () => {
@@ -1899,7 +1899,7 @@ describe("RunManager sandbox.checked 事件审计", () => {
     expect(userMsgIdx).toBeGreaterThan(sbIdx)
   })
 
-  it("配置开启时如实留痕宿主探测结果", async () => {
+  it("配置开启时如实记录宿主探测结果", async () => {
     // 宿主的真实探测结果（macOS sandbox-exec / Linux bwrap）：有沙箱则
     // available:true，无则 false 且带原因——本测试两种走向都必须如实断言。
     const hasHostSandbox =
@@ -1925,7 +1925,7 @@ describe("RunManager sandbox.checked 事件审计", () => {
     const socket = new FakeSocket()
     env.bus.subscribe(session.id, socket)
 
-    // 只炸 appendSandboxChecked 的 store 视图："跑了但没留痕"的静默缺口不允许
+    // 只炸 appendSandboxChecked 的 store 视图："跑了但没记录"的静默缺口不允许
     const failingStore = Object.create(env.sessions) as SessionStore
     Object.defineProperty(failingStore, "appendSandboxChecked", {
       value(): void {
@@ -1938,7 +1938,7 @@ describe("RunManager sandbox.checked 事件审计", () => {
       llm: scriptClient([textTurn("收到")]), workspace: env.config.workspace,
     })
 
-    // 装配段（runAgent 之前）同步抛 → 驱动器条目级失败兜底：outcome 以该错误拒绝
+    // 组装段（runAgent 之前）同步抛 → 驱动器条目级失败保底：outcome 以该错误拒绝
     await expect(failingManager.enqueue(session.id, { userText: "写不进去", trigger: "user" }))
       .rejects.toThrow("disk full: cannot append sandbox.checked")
 
@@ -1957,7 +1957,7 @@ describe("RunManager sandbox.checked 事件审计", () => {
 
 // --- run 边界与权限裁决的档案事件（issue #18）--------------------------------
 // 每次 run 落一对 run.started / run.ended（含 trigger、stopReason、usage/error），
-// 每次人工确认的裁决落一条 permission.decided。只落盘不上总线；不进投影、
+// 每次人工确认的裁决落一条 permission.decided。只写入不上总线；不进投影、
 // 不推进 updatedAt。写入失败即本次 run 失败（与 system/sandbox 审计同待遇）。
 
 describe("RunManager run 边界与权限裁决档案事件", () => {
@@ -2198,7 +2198,7 @@ describe("RunManager skill injection", () => {
     expect(system).not.toContain("全局部署版")
   })
 
-  it("分段冻结：两轮之间新放的技能下一轮进清单（stable 前缀逐字节不变）；压缩清除后重新装配", async () => {
+  it("分段冻结：两轮之间新放的技能下一轮进清单（stable 前缀逐字节不变）；压缩清除后重新组装", async () => {
     const requests: LlmRequest[] = []
     const llm: LlmClient = {
       async *stream(req): AsyncIterable<LlmStreamEvent> {
@@ -2223,7 +2223,7 @@ describe("RunManager skill injection", () => {
       env.sessions.meta(session.id)!.systemBaseline!.stable,
     )
 
-    // 压缩清除双段基线（重冻结边界 = 缓存冷启动）：下一轮重新装配，清单保持。
+    // 压缩清除双段基线（重冻结边界 = 缓存冷启动）：下一轮重新组装，清单保持。
     env.sessions.appendCompaction(session.id, { at: new Date().toISOString(), trigger: "auto", from: null, upto: "m1", messages: 1, segmentSummary: "s", top: "t" })
     await manager.enqueue(session.id, { userText: "第三轮", trigger: "user" })
     expect(requests[2]!.system ?? "").toContain("fresh")
@@ -2251,7 +2251,7 @@ describe("RunManager skill injection", () => {
   })
 })
 
-// --- 技能点名的隐式包装（mapLlmMessages 钩子，Master 2026-09-03）----------
+// --- 技能指名的隐式包装（mapLlmMessages 钩子，Master 2026-09-03）----------
 // 气泡/持久化/事件流保持用户原文；只有发给模型的 provider 请求在钩子里被
 // 追加一行“先 skill_read 读规程再执行”的调用指示。
 
@@ -2317,7 +2317,7 @@ describe("RunManager skill invocation wrap", () => {
     }
     const { env, manager } = makeEnv(llm)
     writeSkill(join(env.paths.home, "skills"), "deploy", "---\ndescription: 部署。\n---\n\n正文\n")
-    const session = env.sessions.create("行首点名会话")
+    const session = env.sessions.create("行首指名会话")
 
     await manager.enqueue(session.id, { userText: "/deploy 上线", trigger: "user" })
 
@@ -2346,7 +2346,7 @@ describe("RunManager.retry（编辑重试/重新生成）", () => {
     return { env, manager, session, q2 }
   }
 
-  it("编辑重试：截断落盘 + 新一轮以改后文本起跑，上下文不含被作废消息", async () => {
+  it("编辑重试：截断写入 + 新一轮以改后文本起跑，上下文不含被作废消息", async () => {
     const reqs: LlmRequest[] = []
     const { env, manager, session, q2 } = await twoTurns(
       recordRequests(scriptClient([textTurn("第一答"), textTurn("第二答"), textTurn("第二答重")]), reqs),
@@ -2413,7 +2413,7 @@ describe("RunManager.retry（编辑重试/重新生成）", () => {
     await run
   })
 
-  it("在飞压缩挡住重试；压缩落定后重试照常", async () => {
+  it("进行中压缩挡住重试；压缩落定后重试照常", async () => {
     let release!: () => void
     const gate = new Promise<void>((r) => { release = r })
     let n = 0

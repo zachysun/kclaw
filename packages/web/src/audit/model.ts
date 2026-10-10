@@ -568,7 +568,7 @@ export function goalSummary(event: GoalEvent): string {
         return `第 ${event.round} 轮判定失败（${event.judgeError.kind === "parse" ? "解析" : "传输"}）：${summarize(event.judgeError.message, 60)}`
       }
       const gateLine = event.gates.length > 0
-        ? `门 ${event.gates.every((g) => g.ok) ? "全过" : "有失败"} · `
+        ? `验收命令${event.gates.every((g) => g.ok) ? "全过" : "有失败"} · `
         : ""
       if (event.verdict === undefined) return `第 ${event.round} 轮：${gateLine}验收未过，判定短路`
       const verdictLabel: Record<NonNullable<GoalCheckedEvent["verdict"]>, string> = { not_met: "未达成", met: "已达成", impossible: "不可能" }

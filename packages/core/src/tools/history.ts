@@ -24,8 +24,8 @@ const DEFAULT_LIMIT = 5
 export const HISTORY_SEARCH_MAX_LIMIT = 20
 
 /**
- * 检索数据面：工具、HTTP 路由与宿主过滤共用同一个函数类型。limit 由调用
- * 方显式传入（不传时数据面回落 5），上限即 HISTORY_SEARCH_MAX_LIMIT。
+ * 检索数据源：工具、HTTP 路由与宿主过滤共用同一个函数类型。limit 由调用
+ * 方显式传入（不传时默认取 5），上限即 HISTORY_SEARCH_MAX_LIMIT。
  */
 export interface HistorySearchFn {
   (query: string, opts?: { limit?: number; sessionId?: string }): Promise<Array<{ sessionId: string; title: string; role: "user" | "assistant"; at: string; excerpt: string }>>

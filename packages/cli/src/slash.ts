@@ -439,7 +439,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
     ...meta("queue"),
     async run(args, ctx) {
       // 防护（/compact 先例）：列出与取消都先读快照，读取失败打印失败行即返回
-      // （cancel 走 ws queueCancel，自带 ack/错误帧处理，无需在此兜底）。
+      // （cancel 走 ws queueCancel，自带 ack/错误帧处理，无需在此保底）。
       let list: Array<{ messageId: string; disposition: string; text: string }>
       try {
         list = (await ctx.client.request("GET", `/sessions/${encodeURIComponent(ctx.sessionId)}/queue`)) as Array<{ messageId: string; disposition: string; text: string }>

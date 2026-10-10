@@ -9,7 +9,7 @@ import type { SessionStore } from "./store.js"
 export interface AutonameDeps {
   sessions: SessionStore
   /**
-   * 杂活模型通道：标题生成走 extractModel 解析链（缺省主模型），声明时才
+   * 后台调用的模型通道：标题生成走 extractModel 解析链（默认主模型），声明时才
    * 解析。与压缩摘要共用同一 resolver 形状。
    */
   resolveLlm: () => { llm: LlmClient; model: string }

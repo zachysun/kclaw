@@ -1,8 +1,8 @@
 /**
- * /goal 循环消费器（issue #47）：daemon 侧的驱动主机。挂在 RunManager
- * 的空闲边缘（onSessionIdle，与 team host 同一接缝）——每次队列排空时
- * 对设有 active 目标且 armed 的会话做一轮检查：跑验收门（沙箱）→ 调
- * 判定器（独立 LLM）→ 按裁决续跑或停摆。
+ * /goal 循环调用方（issue #47）：daemon 侧的驱动主机。挂在 RunManager
+ * 的空闲边缘（onSessionIdle，与 team host 同一接入口）——每次队列排空时
+ * 对设有 active 目标且 armed 的会话做一轮检查：跑验收命令（沙箱）→ 调
+ * 判定器（独立 LLM）→ 按裁决续跑或停止。
  *
  * 计数全部从事件流派生（events.jsonl 唯一真相）：totalRounds/tokensUsed
  * 从 goal.set(create) 起算；连续轮数在 user 触发的 run 处断开；无进展/
@@ -51,7 +51,7 @@ interface GoalRuntime {
 }
 
 /**
- * host 消费的 RunManager 切片：测试假对象实现这一面即可，不必手搓整个
+ * host 调用的 RunManager 切片：测试假对象实现这一面即可，不必手搓整个
  * RunManager（真 RunManager 结构满足本接口，daemon 原样传入）。
  */
 export interface GoalRunQueue {
@@ -74,7 +74,7 @@ export interface GoalLoopDeps {
   resolveEntryLlm: (entryKey?: string) => LlmClient
   /** 沙箱 home（~/.kclaw）。 */
   home: string
-  /** 时钟接缝（时间敏感逻辑可注假时钟测试；缺省真实时间）。 */
+  /** 时钟接入口（时间敏感逻辑可注假时钟测试；默认真实时间）。 */
   now?: () => Date
   log?: (message: string) => void
 }
@@ -84,7 +84,7 @@ export interface GoalLoopDeps {
 export class GoalLoopHost {
   readonly #deps: GoalLoopDeps
   readonly #runtimes = new Map<string, GoalRuntime>()
-  /** 进行中的检查（stop() 等待它们落定；记账骨架见 host-kit）。 */
+  /** 进行中的检查（stop() 等待它们落定；记录骨架见 host-kit）。 */
   readonly #inFlight = createTracker()
 
   constructor(deps: GoalLoopDeps) {
@@ -128,8 +128,8 @@ export class GoalLoopHost {
   /**
    * 设定或改写目标。create = armed + 立即发第一轮（会话忙则按 wait 排
    * 队）；edit 总是重新起跑（改了目标文本还停在 paused 没有道理）——
-   * 状态回 active、停摆字段清空、判定摘要清空，计数沿旧 epoch 继续。
-   * 带验收命令时要求沙箱可用（验收门将免审自动执行，不可沙箱化就不
+   * 状态回 active、停止相关字段清空、判定摘要清空，计数沿旧 epoch 继续。
+   * 带验收命令时要求沙箱可用（验收命令将免审自动执行，不可沙箱化就不
    * 接受——fail-closed）。
    */
   set(sessionId: string, input: { text: string; acceptance: string[] }): GoalSnapshot {
@@ -198,7 +198,7 @@ export class GoalLoopHost {
     return next
   }
 
-  /** 用户停止：掐活跃 run + 清排队 + paused(user-stop) + 停摆。 */
+  /** 用户停止：掐活跃 run + 清排队 + paused(user-stop) + 停止。 */
   userStop(sessionId: string): { goal: GoalSnapshot; aborted: boolean; dropped: number } {
     const goal = this.snapshot(sessionId)
     if (goal === undefined) throw new Error("本会话没有目标")
@@ -215,7 +215,7 @@ export class GoalLoopHost {
     return { goal: next, aborted, dropped }
   }
 
-  /** 移除目标（终态或停摆后清理；排队中的 goal 轮一并撤销）。 */
+  /** 移除目标（终态或停止后清理；排队中的 goal 轮一并撤销）。 */
   clear(sessionId: string): { hadState: GoalSnapshot["state"] } {
     const goal = this.snapshot(sessionId)
     if (goal === undefined) throw new Error("本会话没有目标")
@@ -244,7 +244,7 @@ export class GoalLoopHost {
     )
   }
 
-  /** daemon 停机：等所有进行中的检查落定（判定调用可能还在飞）。 */
+  /** daemon 停机：等所有进行中的检查落定（判定调用可能还进行中）。 */
   async dispose(): Promise<void> {
     await this.#inFlight.settleAll()
   }
@@ -266,8 +266,8 @@ export class GoalLoopHost {
 
   /**
    * 一轮检查（副作用编排；九条停止条件与续跑决策的芯在 core/goal 的
-   * check.ts）：派生计数 → 门前守卫 → 验收门 → 判定器 → 决策执行
-   * （终态/停摆/收尾轮/续跑入队）。互斥由 rt.judging 保证；判定器 await
+   * check.ts）：派生计数 → 验收前守卫 → 验收命令 → 判定器 → 决策执行
+   * （终态/停止/收尾轮/续跑入队）。互斥由 rt.judging 保证；判定器 await
    * 之后重新校验 armed 与快照状态（用户可能在等待期间 stop/pause/clear
    * ——审计照留，状态机只在仍 active 时推进）。
    */
@@ -290,7 +290,7 @@ export class GoalLoopHost {
         this.#persistStop(sessionId, loop, guard.reason, guard.note)
         return
       }
-      // ③ 验收门（短路判定器：失败输出即下一轮的修正指引）。
+      // ③ 验收命令（短路判定器：失败输出即下一轮的修正指引）。
       const meta = sessions.meta(sessionId)
       if (meta === undefined) return
       const gates: GoalGateOutcome[] =
@@ -310,7 +310,7 @@ export class GoalLoopHost {
           gates,
           messages: sessions.readMessages(sessionId),
         })
-        // 审计与用量无条件写：判定已花掉的 token 不能因用户中途停摆而失踪。
+        // 审计与用量无条件写：判定已花掉的 token 不能因用户中途停止而失踪。
         if (judged.ok) {
           sessions.appendGoalChecked(sessionId, {
             at: this.#now().toISOString(),
@@ -353,7 +353,7 @@ export class GoalLoopHost {
       if (decision.kind === "winddown") rt.windDownPending = true
       this.#enqueueRound(sessionId, { ...goal, totalRounds: loop.totalRounds }, decision.injection, decision.enqueueRound)
     } catch (err) {
-      // 检查自身故障不静默：停摆并说明，用户可 resume 重试。
+      // 检查自身故障不静默：停止并说明，用户可 resume 重试。
       this.#log(`check failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`)
       try {
         this.#persistStop(sessionId, this.#derive(sessionId), "judge-failed", `检查流程故障：${err instanceof Error ? err.message : String(err)}`)
@@ -376,7 +376,7 @@ export class GoalLoopHost {
     return { llm: resolveEntryLlm(resolved.entryKey), model: resolved.model }
   }
 
-  /** 入队一轮 goal run（submit 抛错按停摆处理并说明原因）。 */
+  /** 入队一轮 goal run（submit 抛错按停止处理并说明原因）。 */
   #enqueueRound(sessionId: string, goal: GoalSnapshot, userText: string, round: number): void {
     const note: QueueNote = { kind: "goal", text: goalLoopNote(round) }
     try {
@@ -389,7 +389,7 @@ export class GoalLoopHost {
     }
   }
 
-  /** 停摆落一条 goal.set(state)：permission → blocked，其余 paused。 */
+  /** 停止时落一条 goal.set(state)：permission → blocked，其余 paused。 */
   #persistStop(sessionId: string, loop: DerivedLoop, reason: GoalStopReason | undefined, note: string): void {
     const goal = this.snapshot(sessionId)
     if (goal === undefined) return

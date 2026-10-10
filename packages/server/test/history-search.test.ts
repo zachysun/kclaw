@@ -1,5 +1,5 @@
 /**
- * createHistorySearch（history_search 数据面）的行为钉子：核心不变量是
+ * createHistorySearch（history_search 数据源）的行为钉子：核心不变量是
  * "已删除（回收站）或不存在的会话必须从结果里消失"——search-index 把存活性
  * 复查交给调用方，这里验证那个复查。标题解析、limit/sessionId 透传一并覆盖。
  */
@@ -49,7 +49,7 @@ describe("createHistorySearch", () => {
     }
   })
 
-  it("limit 与 sessionId 透传给索引；limit 缺省回落 5", async () => {
+  it("limit 与 sessionId 透传给索引；limit 默认回退 5", async () => {
     dir = mkdtempSync(join(tmpdir(), "hsearch-"))
     try {
       const sessions = new SessionStore(join(dir, "s"))

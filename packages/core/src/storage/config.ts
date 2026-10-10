@@ -24,11 +24,11 @@ export interface ProviderEntry {
   /** 单次回复的输出上限（token）。配置后随请求下发 max_tokens；不写则沿用供应商默认。 */
   maxOutput?: number
   /**
-   * Prompt-cache markers（"auto" | "off"，缺省 auto）。auto：请求带
+   * Prompt-cache markers（"auto" | "off"，默认 auto）。auto：请求带
    * promptCache 时适配器加缓存标记（Anthropic cache_control 断点 /
    * OpenAI prompt_cache_key）；off：即使请求带该字段也不加（可疑端点的
    * 显式退路，如对陌生字段回 400 的网关）。端点运行时回 400 还有适配器
-   * 内的剥除重试与裁决记忆兜底，本配置是不等 400 的主动关闭。
+   * 内的剥除重试与裁决记忆保底，本配置是不等 400 的主动关闭。
    */
   promptCache?: "auto" | "off"
 }
@@ -368,7 +368,7 @@ function providerEntryLocation(name: string): CredentialLocation {
     readCreds: (f) => f.providers?.[name]?.apiKey,
     writeConfig: (c, v) => {
       const entry = c.providers.entries[name]
-      if (entry === undefined) return // 条目不存在的孤儿引用忽略
+      if (entry === undefined) return // 指向不存在条目的引用忽略
       entry.apiKey = v
     },
     collect: (c, f) => {
@@ -383,7 +383,7 @@ function providerEntryLocation(name: string): CredentialLocation {
 
 function applyCredentials(config: KclawConfig, creds: CredentialsFile): KclawConfig {
   // 凭据文件优先：同一条目两边都有值时 credentials.json 赢——config.json
-  // 里的内联 apiKey 只是首次保存前的迁移回落。条目不存在的孤儿引用忽略。
+  // 里的内联 apiKey 只是首次保存前的迁移回退。指向不存在条目的引用忽略。
   const locations = [WEB_TAVILY_KEY, ...Object.keys(creds.providers ?? {}).map(providerEntryLocation)]
   for (const loc of locations) {
     const v = loc.readCreds(creds)
@@ -413,8 +413,8 @@ function parseConfig(raw: string, path: string): KclawConfig {
   }
   const merged = deepMerge(structuredClone(defaultConfig), file)
   // permissions.defaultMode 会进事件流（session.created 的 mode 字段），必须严格校验；
-  // 非法值（含 YAML 里 `permissions:` 空节解析为 null 的整节非对象）回落 "default" 并
-  // 警告。整节非对象时按默认节整体回落（没有可保留的合法内容）；字段非法时只重置该字段，
+  // 非法值（含 YAML 里 `permissions:` 空节解析为 null 的整节非对象）回退 "default" 并
+  // 警告。整节非对象时按默认节整体回退（没有可保留的合法内容）；字段非法时只重置该字段，
   // 不碰用户已有的 allow/deny 等。
   const perms = merged.permissions
   if (!isPlainObject(perms)) {

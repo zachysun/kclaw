@@ -4,13 +4,13 @@
  * - 定时：每扫一次，对每个 workdir 判断距上次 interval 触发是否 ≥ intervalMinutes
  *   （上次时间存 <projectDir>/state.json 的 intervalLastRun；经 MemorySystem 直通读写）。
  * - 跟随：RunManager 在每个 run 结束（任何 stopReason）时调 system.scheduleFollowCheck
- *   （daemon 装配钩子，见 run.ts）；scheduler 扫到 due 的检查执行 triggerFollow 并 clear。
+ *   （daemon 组装钩子，见 run.ts）；scheduler 扫到 due 的检查执行 triggerFollow 并 clear。
  *   挂起检查经 WriteLedger 写盘，daemon 重启后由首次 sweep 补查。
- * - 夜间内化：本地时间过了 consolidateHour（默认凌晨 3 点）且该项目今天（本地日期）
+ * - 夜间沉淀：本地时间过了 consolidateHour（默认凌晨 3 点）且该项目今天（本地日期）
  *   未跑过则触发 triggerNightly；daemon 凌晨未开时开机后首个 sweep 补跑。触发发起后
  *   立即记日期（即便失败也推进，与 interval 的 M-2 取舍一致）：防重入优先，失败次日再试。
  *
- * 定时器骨架（首扫 + interval + 在飞记账 + 停机等待）在 host-kit，本文件
+ * 定时器骨架（首扫 + interval + 进行中记录 + 停机等待）在 host-kit，本文件
  * 只剩记忆域逻辑。手动/立刻不入此调度器（memory_save 工具与 /memory save 直接触发）。
  */
 import type { KclawConfig, MemoryScheduleBook, MemoryTriggers, SessionStore } from "@kclaw/core"
@@ -68,23 +68,23 @@ export function startMemoryScheduler(deps: {
               // 跟随触发的归属会话 = 发起该检查的会话（check.sessionId）。
               host.track(deps.system.triggerFollow(workdir, check.sessionId).catch((e) => log(`kclaw memory follow failed: ${String(e)}`)))
             } else if (activity !== "" && Date.parse(activity) > Date.parse(check.endTurnAt)) {
-              // I-1：门禁不过但 end_turn 之后已有更新活动（用户切到别的会话继续对话、
+              // I-1：判定不过但 end_turn 之后已有更新活动（用户切到别的会话继续对话、
               // 或该项目又跑了一轮）——该检查的锚点已被新活动取代，语义上旧检查停用，
               // 直接清掉，防止 state.json 里 followChecks 无界增长。
               deps.system.clearFollowCheck(workdir, check.sessionId)
             }
           }
         }
-        // 夜间内化（consolidateHour 负值关闭；pipeline 内部再受 memory.consolidate 总开关管）：
+        // 夜间沉淀（consolidateHour 负值关闭；pipeline 内部再受 memory.consolidate 总开关管）：
         // 本地时间过了 consolidateHour 且该项目今天（本地日期）未跑则触发——daemon 凌晨
         // 未开时，开机后首个 sweep 补跑。日期由 markNightlyRun 记本地日期（防同日重跑），
-        // 内化判据基线由 pipeline 记 UTC 日期（与线文件 updated 同源），两个时区各管各的。
+        // 沉淀判据基线由 pipeline 记 UTC 日期（与线文件 updated 同源），两个时区各管各的。
         {
           const t = now()
-          // 每日过点门禁在 host-kit（dailyGateDue）：时刻判定 + 本地日期判重
+          // 每日一次判定在 host-kit（dailyGateDue）：时刻判定 + 本地日期判重
           // 单源（consolidateHour 负值关闭）。
           if (dailyGateDue(t, cfg.consolidateHour, deps.system.nightlyLastRun(workdir))) {
-            // 夜间内化无显式归属会话时，memory 事件记到项目最近活动会话名下
+            // 夜间沉淀无显式归属会话时，memory 事件记到项目最近活动会话名下
             // （判据唯一正本在 core：system.recentSessionId）。
             host.track(deps.system.triggerNightly(workdir, deps.system.recentSessionId(workdir)).catch((e) => log(`kclaw memory nightly failed: ${String(e)}`)))
             deps.system.markNightlyRun(workdir, localDate(t))

@@ -1,7 +1,7 @@
 /**
- * GoalLoopHost 驱动器接缝测试（issue #47）：真 SessionStore + 假
+ * GoalLoopHost 驱动器接入口测试（issue #47）：真 SessionStore + 假
  * RunManager（记录 submit/stop）+ 脚本判定 LLM。每轮用
- * appendRunStarted/appendRunEnded 模拟引擎落盘，onIdle 触发检查，
+ * appendRunStarted/appendRunEnded 模拟引擎写入，onIdle 触发检查，
  * await dispose() 作为检查完成的同步点（它等所有 in-flight 检查落定）。
  * 覆盖：首轮入队、not_met 续跑、met/impossible 终态、run-error、
  * 熔断、轮数上限、无进展、预算收尾、暂停/恢复/停止/移除、重启 armed 语义。
@@ -95,7 +95,7 @@ function makeHarness(judgeScript: string[]): Harness {
   return { sessions, host, llm, submitted: () => submitted, stopCalls, sessionId: meta.id, config }
 }
 
-/** 模拟一轮 run 完成（引擎的落盘动作）并驱动检查到落定。 */
+/** 模拟一轮 run 完成（引擎的写入动作）并驱动检查到落定。 */
 async function driveRound(h: Harness, opts: { trigger?: string; stopReason?: string; usage?: { inputTokens: number; outputTokens: number } } = {}): Promise<void> {
   const at = new Date().toISOString()
   h.sessions.appendRunStarted(h.sessionId, { at, trigger: opts.trigger ?? "goal" })
