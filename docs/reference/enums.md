@@ -23,7 +23,7 @@ GoalState：
 | 值 | 含义 |
 |----|------|
 | `active` | 循环在跑：空闲边缘自动检查并续跑 |
-| `paused` | 停摆（用户暂停/停止或机械原因），resume 恢复 |
+| `paused` | 停止推进（用户暂停/停止或触发硬性上限），resume 恢复 |
 | `blocked` | 等一次人工裁决（连续确认超时），resume 恢复 |
 | `complete` | 终态（met/impossible），只能 clear 或改写目标 |
 

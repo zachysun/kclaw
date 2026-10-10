@@ -7,7 +7,7 @@
 ## 设计决策
 
 - **鉴权由一个 hook 统一处理**：`preHandler` 比对 `Authorization: Bearer <token>`（恒时比较），失败统一 `401 {error:"unauthorized"}`。豁免只有 `/health`、`/ws`、静态外壳三种（设计理由见 [daemon](./daemon.md) 的鉴权设计一节）。
-- **错误形状统一为 `{error: string}`**：会话/任务两个路由分组（scope）注册了 `setErrorHandler`，把 Fastify 的 body 解析错误（非法 JSON、空 body）也归一成这个形状；其余分组未注册（body 解析错误走 Fastify 默认形状 `{statusCode, error, message}`），客户端需兼容两种。客户端的共享 HTTP 基座（`@kclaw/core/client-http`）正是从这个 `error` 字段提取错误消息、取不到退回 `HTTP <status>`，见 [client-http](../core/client-http.md)。
+- **错误形状统一为 `{error: string}`**：会话/任务两个路由分组（scope）注册了 `setErrorHandler`，把 Fastify 的 body 解析错误（非法 JSON、空 body）也归一成这个形状；其余分组未注册（body 解析错误走 Fastify 默认形状 `{statusCode, error, message}`），客户端需兼容两种。客户端的共享 HTTP 模块（`@kclaw/core/client-http`）正是从这个 `error` 字段提取错误消息、取不到退回 `HTTP <status>`，见 [client-http](../core/client-http.md)。
 - **404 显式可判别**：会话/任务路由先查存在性（`sessions.meta(id)` / `jobs.get(id)`），不存在返回 `404 {error:"session not found"|"job not found"}`，不依赖异常路径。
 - **配置读面只读且脱敏，写面收在 provider 管理族**：`GET /config` 的 API key 永远掩码返回；改 provider 配置走 `/providers` 路由族（上一节）——改动热生效于下个 run 并持久化 `config.json`，其余配置节仍以手写配置文件为准。
 - **消息审计没有专门路由，压缩审计有只读视图**：审计页（web 的 `AuditView`）没有独立 `/audit` 路由（它由 `GET /sessions/:id/events`（该会话完整事件流，`?since=` 增量游标）单源读取 + 页面私有 ws 订阅（`session.appended` 通知帧驱动增量拉取）组合而成，会话选择跟随应用侧栏的全局选中）。压缩审计不同：手动压缩刻意不产生消息，纯靠消息流看不到它的痕迹，因此 `GET /sessions/:id/compactions` 作为事件流里 `compaction` 事件的只读视图存在（见 [compaction](../core/compaction.md)）。
@@ -44,14 +44,14 @@
 | POST | `/sessions/:id/disposition` | 会话级发送处置覆盖（CLI `/steer`、`/wait` 与 Web 三选的 steer/wait 的持续生效存储；interrupt 在 Web 为一次性、CLI 为 `/interrupt` 一次性动作，均不写覆盖） | `{disposition: "steer"\|"wait"\|"interrupt"}` 必填；非法值 400 `disposition must be "steer", "wait" or "interrupt"` | `SessionMeta`（写入 `dispositionOverride`，优先于配置默认） |
 | GET | `/sessions/:id/compactions` | 压缩审计记录（事件流里 `compaction` 事件的只读视图） | — | `CompactionRecord[]`（从 events.jsonl 过滤 `compaction` 事件按事件序返回；无事件返回 `[]`） |
 | POST | `/sessions/:id/compact` | 手动压缩：跳过触发线立即压缩一次（机制见 [compaction](../core/compaction.md)） | `{focus?}`：可选非空字符串，作为重点说明进入两次摘要调用；空串/非字符串 400 `focus must be a non-empty string` | `{message: string, queued?: boolean}`：成功 `压缩了 N 段，剩 X 条原文消息`；无可压缩内容 `无可压缩内容`；会话忙时排队 `{queued: true, message: "已排队：当前运行结束后自动压缩"}` |
-| GET | `/sessions/:id/goal` | 目标循环视图（`/goal`，机制见 [goal](../core/goal.md)） | — | `{goal: GoalView \| null}`（快照 + 派生计数 + armed + 机械上限当前值；无目标 `null`） |
+| GET | `/sessions/:id/goal` | 目标循环视图（`/goal`，机制见 [goal](../core/goal.md)） | — | `{goal: GoalView \| null}`（快照 + 派生计数 + armed + 硬性上限当前值；无目标 `null`） |
 | POST | `/sessions/:id/goal` | 设定或改写目标：create 立即起跑第一轮，edit 重新起跑（计数沿旧周期继续） | `{text}` 非空字符串必填；`acceptance?: string[]` 验收命令（字符串数组）。文本空/类型不对 400；host 校验失败（子会话、验收命令需要沙箱而沙箱不可用）400 带原因 | `{goal: GoalSnapshot, view: GoalView}` |
 | POST | `/sessions/:id/goal/pause` | 用户暂停（停自续，活跃 run 不动） | — | `{goal: GoalSnapshot}` |
 | POST | `/sessions/:id/goal/resume` | 恢复（armed + 立即检查；空闲则马上续跑）；终态（complete）会话 400 | — | `{goal: GoalSnapshot}` |
 | POST | `/sessions/:id/goal/stop` | 用户停止：同时中止活跃 run、清空排队、paused(user-stop) | — | `{goal, aborted, dropped}`（是否中止了活跃 run、清掉的排队条数） |
 | DELETE | `/sessions/:id/goal` | 移除目标（撤销排队中的 goal 轮，删除 `meta.goal`） | — | `{ok: true, hadState}`（移除前状态） |
 
-`:id` 不存在时上述全部返回 `404 {error:"session not found"}`；body 校验失败返回 400（如 `title must be a non-empty string`）。compact 的额外路径：会话活跃不拒绝而是**排队**（200 `{queued: true, message: "已排队：当前运行结束后自动压缩"}`，运行结束的收尾链自动冲刷）；队列非空仍拒绝 409 `还有 N 条排队消息，先处理或取消`（排队消息会连开多个 run，压缩窗口无法预期）；RunManager 未组装时 503。goal 路由族未组装 goal host 时（`createApp` 无 `opts.goal`，常见于测试）整体 503 `goal loop not available`。
+`:id` 不存在时上述全部返回 `404 {error:"session not found"}`；body 校验失败返回 400（如 `title must be a non-empty string`）。compact 的额外路径：会话活跃不拒绝而是**排队**（200 `{queued: true, message: "已排队：当前运行结束后自动压缩"}`，运行结束的收尾链自动执行它）；队列非空仍拒绝 409 `还有 N 条排队消息，先处理或取消`（排队消息会连开多个 run，压缩窗口无法预期）；RunManager 未组装时 503。goal 路由族未组装 goal host 时（`createApp` 无 `opts.goal`，常见于测试）整体 503 `goal loop not available`。
 
 `SessionMeta` 字段（`packages/core/src/session/store.ts`）：
 
@@ -183,7 +183,7 @@ interface Job {
 |------|------|------|------|------|
 | GET | `/skills/proposals?status=` | 提案列表（applied 项带用量） | `status` 可选：proposed/applied/rejected/reverted，默认返回全部 | `{proposals: [完整 SkillProposal 字段 + applied 项带 usage（采纳后 skill_read 次数）]}`；单个损坏提案文件跳过，不拖垮列表 |
 | GET | `/skills/proposals/:id` | 单个提案详情 | — | 完整 SkillProposal（applied 带 `usage`）；不存在 404；路径段先过 `isSafeSegment` |
-| POST | `/skills/proposals/:id/apply` | 确认提案（proposed → applied） | — | `{ok:true}`，可带非致命 `warning`（修订的现正文与提案时 baseline 不一致、或全局新增将被他项目同名技能遮蔽）；非法流转/同名冲突/目标是复用链接技能 409、不存在 404 |
+| POST | `/skills/proposals/:id/apply` | 确认提案（proposed → applied） | — | `{ok:true}`，可带非致命 `warning`（修订的现正文与提案时 baseline 不一致、或全局新增遇到某项目已有同名技能、项目副本优先生效）；非法流转/同名冲突/目标是复用链接技能 409、不存在 404 |
 | POST | `/skills/proposals/:id/reject` | 驳回提案（proposed → rejected，只改状态） | — | `{ok:true}`；非法流转 409、不存在 404 |
 | POST | `/skills/proposals/:id/revert` | 回退已采纳提案（applied → reverted：修订写回快照、新增删技能目录） | — | `{ok:true}`；非法流转 409、不存在 404 |
 | DELETE | `/skills/proposals/:id` | 删除提案文件（仅 rejected/reverted 可删） | — | `{ok:true}`；其余状态 409、不存在 404 |
@@ -223,13 +223,13 @@ interface Job {
 |------|------|------|------|------|
 | GET | `/fs/browse` | 列出某目录的子目录（WebUI 工作目录选择器的数据源） | query `path`：绝对路径或 `~` 开头（与权限引擎同样的展开规则）；默认列 `config.workspace` | `{path, parent, dirs}`——path 为符号链接解析后的规范绝对路径；parent 为父目录，文件系统根处为 null；dirs 只含子目录名、大小写不敏感排序。符号链接跟随解析（坏链跳过），macOS 的 `/tmp → private/tmp` 一类仍可导航 |
 | GET | `/fs/files` | 列出一个工作区的文件清单（WebUI 输入框 `@` 文件引用抽屉的数据源，机制见 [file-mentions](../core/file-mentions.md)） | query `workdir`：绝对路径或 `~` 开头（与 `/fs/browse` 同一 `resolveQueryDir` 解析）；默认列 `config.workspace` | `{workdir, files, truncated}`——workdir 为符号链接解析后的规范路径；files 为工作区相对路径（POSIX 分隔、仅文件、大小写不敏感排序）；truncated 为清单是否在 5000 条上限处被截断。git 仓库走 `git ls-files -z -co --exclude-standard`（跟踪 + 未被 ignore 的未跟踪文件，NUL 分隔保中文名），非 git 回退递归扫描（不进入 `.git`/`.kclaw`/`node_modules`） |
-| GET | `/usage?by=day\|session\|model` | token/费用用量聚合 | `by` 三选一；无效值静默回退到 `day` | `{by, buckets[], total}`——bucket/total 形状同为 `{key, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd}`；两个缓存字段 `number \| null`，**null = 桶内没有任何行携带该指标（未知）**——供应商不返回缓存指标是常态，消费方应显示 "—" 而非 0；费用按 `config.usage.prices` 计价（模型带缓存价目且行内有缓存数据时按非缓存输入/读/写/输出分列），未配置价格的模型计 0 |
+| GET | `/usage?by=day\|session\|model` | token/费用用量聚合 | `by` 三选一；无效值静默回退到 `day` | `{by, buckets[], total}`——bucket/total 形状同为 `{key, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd}`；两个缓存字段 `number \| null`，**null = 桶内没有任何行携带该指标（未知）**——供应商不返回缓存指标是常态，调用方应显示 "—" 而非 0；费用按 `config.usage.prices` 计价（模型带缓存价目且行内有缓存数据时按非缓存输入/读/写/输出分列），未配置价格的模型计 0 |
 
 `/fs/browse` 与 `/fs/files` 的出错是三态 400：`path does not exist: <path>`、`not a directory: <path>`、`cannot read directory: <path>`。这两个端点能列出本机任意目录——浏览端点的设计目的就是允许把工作目录设在任何地方，防线只有与其他 API 相同的 Bearer 鉴权；文件清单端点限制在工作区内（`workdir` 必须是目录），但同样不校验目录归属。用量数据记录在一张 SQLite 表里，数据来源见 [storage](../core/storage.md) 的用量记录一节。
 
 ### 检索（routes/search.ts，始终注册）
 
-跨会话原始消息的全文检索（`history_search` 工具同源数据面的人类窗口，机制见 [tools](../core/tools.md) 的 history 工具一节）。路由始终注册；未注入 `historySearch`（独立 app/测试）时 503 `history search unavailable`。
+跨会话原始消息的全文检索（与 `history_search` 工具同一份数据的 HTTP 入口，机制见 [tools](../core/tools.md) 的 history 工具一节）。路由始终注册；未注入 `historySearch`（独立 app/测试）时 503 `history search unavailable`。
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
@@ -328,5 +328,5 @@ app.addHook("preHandler", async (request, reply) => {
 - [mcp](../core/mcp.md)：`GET /mcp` 快照背后的连接管理器
 - [skills](../core/skills.md)：`/skills` 路由族背后的技能机制（渐进披露、双作用域、可见性档位）
 - [hooks](../core/hooks.md)：`/hooks` 路由背后的 hook 系统（位置网格、内置清单、用户文件契约）
-- [client-http](../core/client-http.md)：客户端共享的 HTTP 请求基座——`{error}` 形状的使用方
+- [client-http](../core/client-http.md)：客户端共享的 HTTP 请求模块——`{error}` 形状的使用方
 - [jobs](../core/jobs.md)：cron 语义与 nextRunAt 推进规则

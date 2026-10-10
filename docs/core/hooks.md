@@ -27,7 +27,7 @@
 | 位置 | 时机 | ctx | 返回 | 语义 |
 |------|------|-----|------|------|
 | `run-before` | 用户消息 `message.created` 之后、持久化之前 | `{ message }` | `Message` | 改写用户消息（内置：记忆检索 + 持久化 + 自动命名） |
-| `run-after` | `runAgent` 返回之后 | `{ outcome, model }` | 忽略 | 观察收尾（内置：用量记录、收尾压缩、跟随门禁） |
+| `run-after` | `runAgent` 返回之后 | `{ outcome, model }` | 忽略 | 观察收尾（内置：用量记录、收尾压缩、跟随检查） |
 | `llm-before` | 每次模型调用前、provider 视图组装后 | `{ messages }` | `ProviderMessage[]` | 改写模型视图（内置：技能与 `@` 文件指定的合并包装） |
 | `llm-after` | 一次模型调用完成后 | `{ usage, stopReason, latencyMs }` | 忽略 | 观察调用 |
 | `llm-retry` | provider 层重试时（withRetry 回调） | `{ attempt, error }` | 忽略 | 重试可见性（内置：转 `llm.failed {willRetry:true}`） |
@@ -43,7 +43,7 @@
 
 用户 hook 默认 order 1000——落在内置 hook（10–99）之后。system-after 上用户改写排在前面，组装层最后把终稿冻结为基线（见下），所以用户对系统提示词的改写永远在被审计的那份里。
 
-**冻结基线（提示词缓存策略，双段独立）**：系统提示词分两段，**stable**（人设基座 + 注入约定，缓存冻结面）在前，**live**（认知 + 技能清单，低频变化面）在后。会话 meta 的 `systemBaseline`（见 [storage](./storage.md)）为两段各存一份基线 `{ text, frozenAt }`：每 run 两段现算、与基线逐段比对，哪段文本变了就重冻结哪段，没变的沿用基线（`frozenAt` 记录的是"这份文本成为基线的时刻"）。前缀缓存按从头逐字节相同匹配，live 变化只失效变化点之后，stable 前缀继续命中；装一个新技能、夜间认知刷新在下一个 run 即时生效，不再等压缩边界。`system-before` 链每 run 都执行（live 段由它现算，文本与基线逐字相等时不重冻结）；两段全命中时 `system-after` 链**整体不跑**（用户 system-after hook 改写的段落同样冻结，文本未变则沿用基线）；至少一段变化时走 `system-after` 链，用户改写发生时终稿整体固化进 stable 基线。改写每 run 重新生效，审计恒记录模型实际看到的那份。基线由上一 run 的 `system` 审计事件按段固化，压缩清除后下一个 run 重新组装（见 [compaction](./compaction.md)）。
+**冻结基线（提示词缓存策略，双段独立）**：系统提示词分两段，**stable**（人设基础文本 + 注入约定，缓存冻结面）在前，**live**（认知 + 技能清单，低频变化面）在后。会话 meta 的 `systemBaseline`（见 [storage](./storage.md)）为两段各存一份基线 `{ text, frozenAt }`：每 run 两段现算、与基线逐段比对，哪段文本变了就重冻结哪段，没变的沿用基线（`frozenAt` 记录的是"这份文本成为基线的时刻"）。前缀缓存按从头逐字节相同匹配，live 变化只失效变化点之后，stable 前缀继续命中；装一个新技能、夜间认知刷新在下一个 run 即时生效，不再等压缩边界。`system-before` 链每 run 都执行（live 段由它现算，文本与基线逐字相等时不重冻结）；两段全命中时 `system-after` 链**整体不跑**（用户 system-after hook 改写的段落同样冻结，文本未变则沿用基线）；至少一段变化时走 `system-after` 链，用户改写发生时终稿整体固化进 stable 基线。改写每 run 重新生效，审计恒记录模型实际看到的那份。基线由上一 run 的 `system` 审计事件按段固化，压缩清除后下一个 run 重新组装（见 [compaction](./compaction.md)）。
 
 ---
 
@@ -101,10 +101,10 @@ export default async (ctx) => {
 | 10 | `mid-run-panic` | compaction-check | skip | 红线阈值触发的中途压缩判定（`null` = 不压）；先应用暂存的后台结果，遇正在执行的后台压缩先等 |
 | 10 | `overflow-emergency` | overflow-rescue | skip | 超限急救压缩（换视图整次重发）；先掐掉正在执行的后台压缩 |
 | 10 | `usage-ledger` | run-after | skip | 记录本次 run 的用量 |
-| 15 | `manual-compact-flush` | run-after | skip | 冲刷运行忙时排队的 /compact（在自动收尾压缩之前） |
+| 15 | `manual-compact-flush` | run-after | skip | 执行运行忙时排队的 /compact（在自动收尾压缩之前） |
 | 20 | `post-run-compaction` | run-after | skip | 上下文到达黄线时触发的收尾压缩（估算前等正在执行的后台压缩结束；压缩失败只记日志，不影响 run 收尾） |
 | 30 | `follow-check` | run-after | skip | 排一个记忆空闲检查（调度器补查） |
-| 40 | `skill-follow-check` | run-after | skip | 技能进化的零成本粗查：范围内卷入技能（skill_read/skill_list 工具块或 `/点名`）才排提炼空闲检查；`skills.evolution` 未启用或 `idleMinutes<=0` 时直接跳过 |
+| 40 | `skill-follow-check` | run-after | skip | 技能进化的零成本粗查：范围内卷入技能（skill_read/skill_list 工具块或 `/技能名` 指名）才排提炼空闲检查；`skills.evolution` 未启用或 `idleMinutes<=0` 时直接跳过 |
 | 10 | `system-materials` | system-before | skip | 收集 L2 认知与技能清单两个提示词段（即 live 段） |
 
 两个值得知道的次序：run-before 上 `memory-inject(10)` 只收集记忆 note，`user-message-land(20)` 统一把 job note（在前）与记忆 note 追加进消息、持久化并广播，块顺序与 `note.emitted` 次序保持稳定。system-after 上用户改写（默认 1000）排在前面，随后组装层把终稿（用户改写或原稿）按段冻结进基线并写 `system` 审计事件。**系统提示词的审计记录不是 hook**：`system` 事件的双段写入（stable/live）由 run 组装层直接写入事件流（写失败即 run 失败），因为分段冻结需要 stable/live 两段文本，而它们位于 hook 链之上（见 [run-manager](../server/run-manager.md) 组装第 11 步）。

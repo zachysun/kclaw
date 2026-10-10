@@ -1,17 +1,17 @@
 # goal — 目标循环（/goal）
 
-> 权威来源：`packages/core/src/goal/`（领域模块：类型/上限/提示词/判定器/验收门/事件派生/轮决策）+ `packages/server/src/goal-loop.ts`（daemon 侧驱动主机 `GoalLoopHost`：只做副作用编排——执行验收门、调判定器、写事件、按 core 给出的决策入队或停摆）。HTTP 路由族见 [http-api](../server/http-api.md)，持久化事件见 [session-events](../reference/session-events.md)。
+> 权威来源：`packages/core/src/goal/`（领域模块：类型/上限/提示词/判定器/验收命令/事件派生/轮决策）+ `packages/server/src/goal-loop.ts`（daemon 侧驱动主机 `GoalLoopHost`：只做副作用编排——执行验收命令、调判定器、写事件、按 core 给出的决策入队或停止）。HTTP 路由族见 [http-api](../server/http-api.md)，持久化事件见 [session-events](../reference/session-events.md)。
 
 ## 它是什么
 
-给会话设一个**可验证的目标**，daemon 自主多轮推进：每轮 run 结束后先跑验收命令、再由一个独立的判定器 LLM 裁决目标是否达成，没达成就把判定意见注入下一轮继续干，直到达成、被判不可能、或触碰机械上限才停。会话的普通对话（打字发消息）在任何时刻都可用——goal 循环只是队列里的一种 run 来源，用户输入照常 steer/wait/interrupt。
+给会话设一个**可验证的目标**，daemon 自主多轮推进：每轮 run 结束后先跑验收命令、再由一个独立的判定器 LLM 裁决目标是否达成，没达成就把判定意见注入下一轮继续干，直到达成、被判不可能、或触碰硬性上限才停。会话的普通对话（打字发消息）在任何时刻都可用——goal 循环只是队列里的一种 run 来源，用户输入照常 steer/wait/interrupt。
 
 四态状态机（`GoalState`）：
 
 | 状态 | 含义 | 离开方式 |
 |------|------|----------|
 | `active` | 循环在跑：每轮 run 结束后自动检查并续跑 | 达成/不可能 → `complete`；各种停止 → `paused`/`blocked` |
-| `paused` | 停摆（用户暂停/停止，或机械原因停止） | 用户 resume 或改写目标 |
+| `paused` | 停止推进（用户暂停/停止，或触发硬性上限） | 用户 resume 或改写目标 |
 | `blocked` | 被人工裁决卡住（连续确认超时）——需要人来 | 用户裁决后 resume |
 | `complete` | 终态：`met`（达成）或 `impossible`（判不可达） | 只能 clear 或改写（改写=新循环） |
 
@@ -27,10 +27,10 @@
   → GoalLoopHost 一轮检查（#check，互斥；九条停止条件与续跑决策是纯函数，在 core/goal 的 check.ts）：
       ① 上一轮 run 出错        → paused(run-error)，不自动重试
       ② 连续 2 轮确认超时       → blocked(permission)，等人来
-      ③ 验收门（有命令才跑）    → 失败短路判定器，直接进分支
+      ③ 验收命令（有命令才跑）  → 失败短路判定器，直接进分支
       ④ 判定器（独立 LLM）      → met/impossible → complete；
                                   not_met → 无进展检查 → budget/轮数 → 续跑
-      ⑤ 判定器失败/门失败       → 连败熔断或 fail-open 续跑
+      ⑤ 判定器失败/验收命令失败 → 连败熔断或 fail-open 续跑
   → 续跑 = 再入队一轮 goal run（用户文本带判定意见/验收输出）
 ```
 
@@ -40,31 +40,31 @@
 
 - **模型解析链**：`config.goals.judge` 命中的 provider 条目优先（Model 页改名/改配置热生效），未配置时回退会话模型线（会话级 `model` → 默认条目 → daemon 启动模型串）。
 - **调用形态**：温度 0、无工具、`maxTokens` 2048、严格 JSON 输出契约 `{"verdict":"not_met|met|impossible","reason":"…","progress":"…"}`（progress 无进展写「无」）。证据是目标原文 + 本轮验收输出 + 对话尾部窗口（最近约 24 条消息、单条 2000 字符、整窗 24000 字符封顶，超出部分头部省略）。
-- **解析与失败分类**：输出非法 JSON 时把错误喂回去重试一次（两次调用用量合并计入）；仍失败或调用本身失败（网络/供应商错误）按 `parse` / `transport` 两类分别计数，连续 3 次解析失败或 5 次传输失败熔断（`judge-failed` 停摆）。判定器客户端在 daemon 装配处包 `withRetry`（与压缩摘要、自动命名等后台杂活链同一约定）：瞬时网络错误先经重试消化，重试耗尽仍失败才计一次传输连败。未到熔断阈值时 fail-open：循环继续，下一轮注入"判定器不可用、请自行验收"的说明。
+- **解析与失败分类**：输出非法 JSON 时把错误喂回去重试一次（两次调用用量合并计入）；仍失败或调用本身失败（网络/供应商错误）按 `parse` / `transport` 两类分别计数，连续 3 次解析失败或 5 次传输失败熔断（`judge-failed` 停止）。判定器客户端在 daemon 组装处包 `withRetry`（与压缩摘要、自动命名等后台调用链同一约定）：瞬时网络错误先经重试消化，重试耗尽仍失败才计一次传输连败。未到熔断阈值时 fail-open：循环继续，下一轮注入"判定器不可用、请自行验收"的说明。
 - **判定纪律**在 system 提示词里写死：只看证据不听自述（说做完了而验收命令失败就是 not_met）、不预测不乐观、impossible 慎用。
 
 判定器用量逐次记入用量库（`goal-judge-<轮>-<时间>` 的 runId）并计入目标生命周期 token。
 
-## 验收门（acceptance gates）
+## 验收命令（acceptance gates）
 
 `/goal 目标描述 verify: <命令>`（可多条 `verify:`）登记验收命令，每轮检查先在 **exec 沙箱**里逐条执行（60 秒超时、输出尾部 2000 字符入事件）。语义：
 
 - **fail-closed**：设定带验收命令的目标时沙箱不可用就直接拒绝（错误 400）；检查时刻沙箱不可用按全部失败计。
-- **短路判定器**：任一命令失败就不调判定器（省 token），失败输出直接作为下一轮的修正指引；连续 3 轮全不过 → `gate-exhausted` 停摆。
-- 门通过与否只是判定器的**证据**，最终裁决权在判定器（防验收命令本身写错把循环锁死）。
+- **短路判定器**：任一命令失败就不调判定器（省 token），失败输出直接作为下一轮的修正指引；连续 3 轮全不过 → `gate-exhausted` 停止。
+- 验收命令通过与否只是判定器的**证据**，最终裁决权在判定器（防验收命令本身写错把循环锁死）。
 
-## 机械上限（防失控）
+## 硬性上限（防失控）
 
 | 上限 | 常量 | 触发后果 |
 |------|------|----------|
-| 连续自续轮数 | 10（`GOAL_MAX_ROUNDS`） | `round-limit` 停摆；用户发一条消息清零计数后 resume 可继续 |
-| 生命周期 token | 2,000,000（`GOAL_TOKEN_BUDGET`，run 用量 + 判定器用量） | 超限后**多给一轮收尾**（`<goal-wrapup>` 注入"整理到可交接状态"），收尾轮照常判定（可能是 met），之后 `budget-limit` 停摆 |
-| 判定器判无进展 | 连续 3 轮 progress 为空或「无」 | `no-progress` 停摆 |
-| 验收门连败 | 连续 3 轮 | `gate-exhausted` 停摆 |
-| 判定器连败 | 解析 3 次 / 传输 5 次 | `judge-failed` 熔断停摆 |
-| run 出错 | 1 次 | `run-error` 停摆，不自动重试 |
+| 连续自续轮数 | 10（`GOAL_MAX_ROUNDS`） | `round-limit` 停止；用户发一条消息清零计数后 resume 可继续 |
+| 生命周期 token | 2,000,000（`GOAL_TOKEN_BUDGET`，run 用量 + 判定器用量） | 超限后**多给一轮收尾**（`<goal-wrapup>` 注入"整理到可交接状态"），收尾轮照常判定（可能是 met），之后 `budget-limit` 停止 |
+| 判定器判无进展 | 连续 3 轮 progress 为空或「无」 | `no-progress` 停止 |
+| 验收命令连败 | 连续 3 轮 | `gate-exhausted` 停止 |
+| 判定器连败 | 解析 3 次 / 传输 5 次 | `judge-failed` 熔断停止 |
+| run 出错 | 1 次 | `run-error` 停止，不自动重试 |
 | 确认超时 | 连续 2 轮含确认超时 | `blocked(permission)`，等人工裁决 |
-| 队列入队失败 | 1 次 | 停摆并说明原因（如队列满） |
+| 队列入队失败 | 1 次 | 停止并说明原因（如队列满） |
 
 所有计数（轮数/token/各类连败）**不在进程里记**：每次检查从事件流一次性派生（见下节），进程内只留四个无法从事件恢复的运行时字段。
 
@@ -75,7 +75,7 @@
 | 事件 | 内容 |
 |------|------|
 | `goal.set` | `op`（create/edit/pause/resume/state）+ 全量 `GoalSnapshot`；投影写进 `meta.goal` |
-| `goal.checked` | 每轮检查一条：轮位、各验收门结果、判定裁决（verdict/reason/progress）或判定器错误、判定器 token；不进 meta 投影、不推进 updatedAt，纯审计 |
+| `goal.checked` | 每轮检查一条：轮位、各验收命令结果、判定裁决（verdict/reason/progress）或判定器错误、判定器 token；不进 meta 投影、不推进 updatedAt，纯审计 |
 | `goal.cleared` | 移除目标时一条，`hadState` 记移除前的状态 |
 
 `core/goal` 的 `deriveGoalLoop`（host 侧 `#derive` 只负责读事件流，读流失败按空事件派生全零）从最近一次 `goal.set(op:create)` 起单次前向扫描：`run.started(trigger:"goal")` 计轮、`run.ended.usage` 与 `goal.checked.tokens` 累计 token、run 边界配对出确认超时、尾部 `goal.checked` 回溯出四类连败（同性质连续累积，任何不同性质的检查断开计数）。快照（`meta.goal`）里的 `rounds`/`totalRounds`/`tokensUsed` 是检查时刻同步进去的展示缓存，权威数据是事件流。

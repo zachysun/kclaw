@@ -71,7 +71,7 @@ new EventBus()                      总线先于 store 构造：store 的写入�
                                     session.appended 总线帧（先写入后广播，审计页等
                                     订阅方据此增量拉取事件流——见 realtime/protocol）
 HistorySearchIndex.open(paths.searchDb)
-                                    跨会话消息全文索引（数据面与回填见 tools.md 与
+                                    跨会话消息全文索引（数据来源与回填见 tools.md 与
                                     storage.md）：open 在 store 之前，镜像三事件
                                     （message → 收录、message.truncated → 镜像截断、
                                     session.deleted → 清行）挂在下方 store 的事件
@@ -98,7 +98,7 @@ new SkillEvolutionSystem({skillsDir, sessions, config, resolveLlm, log})
                                     makeExtractLlmResolver 与记忆提取走同一条解析链
                                     （extractModel 命中条目走条目端点，Model 页改动同样
                                     热生效）；构造后交给 RunManager（run 收尾钩子 +
-                                    skill_create 工具面）与 skill 调度器（检查消费端）
+                                    skill_create 工具注册）与 skill 调度器（检查处理方）
 createMcpProjects({workspace, manager, allMetas, loadEntries, home})
                                     项目发现与热生效（见 mcp.md）：项目集合 = 主工作目录 +
                                     全部会话 meta（含回收站）的 workdir 并集，减去项目
@@ -135,8 +135,8 @@ createTeamHost / new GoalLoopHost   团队宿主（见 agent-team.md）与 /goal
                                     的同一空闲边缘（onSessionIdle：team pump → goal 检查），
                                     goal 检查自查忙闲，team 刚投递的下一轮只会让它跳过
 new RunManager({...})               注入 usageStore、memory、skillsEvolution（run 收尾钩子
-                                    与 skill_create 工具面的来源，见 skills.md）、
-                                    resolveExtractLlm（杂活模型解析链：手动压缩与
+                                    与 skill_create 工具注册的来源，见 skills.md）、
+                                    resolveExtractLlm（后台调用的模型解析链：手动压缩与
                                     压缩/自动命名/记忆提取共用 makeExtractLlmResolver
                                     的产物，见 compaction.md）、
                                     historySearch（history_search 工具与 GET /search
@@ -166,9 +166,9 @@ void mcpManager.start()             ← 恒定组装，恒执行；只启动空�
 run.recoverQueues()                 崩溃恢复：queue.jsonl 整体重排，steer/interrupt 降级 wait（见 run-manager）
 startSchedulerTick({...})           立即一次检查 + 每 30s 一次（deps 附带 notifier 与 webBase=`http://127.0.0.1:<port>`，用于推送中的 `?session=` 链接）
 startMemoryScheduler({...})         记忆调度器：定时 + 跟随保底触发（默认 60s 扫一次，见 memory.md）
-startSkillScheduler({...})          技能调度器：跟随检查消费端（默认 60s 扫一次，成功才清检查 +
+startSkillScheduler({...})          技能调度器：跟随检查处理方（默认 60s 扫一次，成功才清检查 +
                                     连败 3 次放弃；enabled:false 或 idleMinutes:0 时 sweep 直接返回，
-                                    检查停留在检查表里，功能重开后继续消费，见 skills.md）
+                                    检查停留在检查表里，功能重开后继续处理，见 skills.md）
 startSkillCurator({...})            技能 curator 调度：每日本地时间过 skills.curator.hour（默认凌晨 4 点）
                                     后首扫（lastRun 本地日期判重），标记陈旧与归档 AI 自建技能
                                     （见 skills.md 的 curator 一节）
@@ -254,7 +254,7 @@ rmSync(<home>/daemon.json)          // 只有全部成功才删
 
 `withStopTimeout(p, timeoutMs, step)` 用 `Promise.race([p, deadline])` 给每步设限。超时的一步**不会被取消**（它可能稍后自行完成，迟到的失败被丢弃——超时已经报告过失败，不能再以未处理 rejection 的形式抛出）。设限的原因：挂死的 provider 流会阻塞 tracked job run，卡住的客户端会阻塞 `app.close`，没有超时上限的 `stop()` 会永远不返回。
 
-**超时路径**：`stop()` reject → bin exit 1 → **daemon.json 保留**（进程仍在运行）。进行中的 job run 按崩溃安全语义放弃（见 [jobs](../core/jobs.md) 的「停机与在途运行」）：JSONL 兼容尾部残缺行；该次触发认领时已推进 `next_run_at`，重启后不会重放，job 在下个调度点照常触发。
+**超时路径**：`stop()` reject → bin exit 1 → **daemon.json 保留**（进程仍在运行）。进行中的 job run 按崩溃安全语义放弃（见 [jobs](../core/jobs.md) 的「停机与进行中的运行」）：JSONL 兼容尾部残缺行；该次触发认领时已推进 `next_run_at`，重启后不会重放，job 在下个调度点照常触发。
 
 ### CLI 侧的 pid 校验与 stop（daemon-ctl.ts）
 

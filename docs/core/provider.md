@@ -16,7 +16,7 @@
 
 ## 设计决策
 
-- **每个条目是一种协议 + 一个真实端点**：条目的 `format` 字段（`openai | anthropic`，默认 `openai`）决定请求怎么发；每个条目拥有自己的 baseUrl/apiKey——会话切到某条目就是真正换供应商，而不是把模型名发给默认端点。一种格式的全部线上知识（类型与校验、鉴权头、URL 规则、embeddings 能力位、探活请求形状）单源在 wire-format 注册表（`formats.ts` 的 `PROVIDER_WIRE_FORMATS`，经 `@kclaw/core/provider-formats` 子路径出口，WebUI 的 Model 页与 CLI 首跑向导都从它取格式集合，不再各存一份镜像）；`createProviderClient`（factory.ts）是唯一的按格式选 adapter 的构造点。新增一种协议 = 新 adapter 文件 + 注册表一条目 + factory 一个分支，类型系统（穷尽 `Record` 与 `isProviderApiFormat`）会揪住每一处没跟上的消费方。
+- **每个条目是一种协议 + 一个真实端点**：条目的 `format` 字段（`openai | anthropic`，默认 `openai`）决定请求怎么发；每个条目拥有自己的 baseUrl/apiKey——会话切到某条目就是真正换供应商，而不是把模型名发给默认端点。一种格式的全部线上知识（类型与校验、鉴权头、URL 规则、embeddings 能力位、探活请求形状）单源在 wire-format 注册表（`formats.ts` 的 `PROVIDER_WIRE_FORMATS`，经 `@kclaw/core/provider-formats` 子路径出口，WebUI 的 Model 页与 CLI 首次运行的配置流程都从它取格式集合，不再各存一份镜像）；`createProviderClient`（factory.ts）是唯一的按格式选 adapter 的构造点。新增一种协议 = 新 adapter 文件 + 注册表一条目 + factory 一个分支，类型系统（穷尽 `Record` 与 `isProviderApiFormat`）会揪住每一处没跟上的调用方。
 - **openai 格式的适用范围**：任何提供 OpenAI 兼容 `/chat/completions` 端点的服务（OpenAI、DeepSeek、Ollama、各类中转、本地模型网关）都无需单独适配；差异全部留在 baseUrl 指向的端点上。
 - **core 与传输解耦**：`agent/loop.ts` 只依赖 `LlmClient` 这个 async iterable 接口，不知道 fetch、SSE（Server-Sent Events：服务器通过 HTTP 持续推送文本行的流式格式）的存在；测试注入假 client 即可完整运行整个循环。
 - **超时覆盖整个请求**：`AbortSignal.timeout` 同时约束"等响应头"和"读流式响应体"两个阶段——停滞的 provider 流（无响应头、或响应体中途停止）不可能使一个 run 永久停滞。
@@ -230,7 +230,7 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 
 `fetchProviderModels` 向端点要模型清单：openai 格式 `GET {base}/models`（apiKey 非空才带 Bearer 头），anthropic 格式 `GET {base}/v1/models`（鉴权头与消息端点一致：x-api-key + Bearer + anthropic-version，apiKey 为空时不发；URL 规则也一致）。返回去重后的模型 id 列表；HTTP 错误抛 `llm http <status>`，响应形状不对抛可读错误。WebUI Model 页用它做两件事：表单里的"拉取模型列表"（填充模型下拉）与条目卡片的"验证"按钮（清单拉到了 = URL 和 key 都对）。
 
-模型名本身的验证走 `probeProviderChat`（1-token 补全探测）：openai 格式 `POST {base}/chat/completions`，anthropic 格式 `POST {base}/v1/messages`，20 秒超时；它不抛异常而是返回 `{status, body}`（status 为 null = 请求根本没到达），调用方按状态码分类失败原因。CLI 首次运行向导用它做连通测试（见 [onboarding](../cli/onboarding.md)）。
+模型名本身的验证走 `probeProviderChat`（1-token 补全探测）：openai 格式 `POST {base}/chat/completions`，anthropic 格式 `POST {base}/v1/messages`，20 秒超时；它不抛异常而是返回 `{status, body}`（status 为 null = 请求根本没到达），调用方按状态码分类失败原因。CLI 首次运行的配置流程用它做连通测试（见 [onboarding](../cli/onboarding.md)）。
 
 ### 7. 上下文窗口、输出上限与缓存标记开关（条目可选字段）
 

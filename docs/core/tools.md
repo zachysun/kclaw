@@ -71,9 +71,9 @@ export function makeTool<N extends string>(
 
 ## 24 个内置工具
 
-完整清单（名称、一句话职责、risk / concurrency、条件注册与工具面收缩规则）陈列在 [reference/tools](../reference/tools.md)：常驻 13 个（exec、fs 四件、web 两件、memory 两件、session_search、history_search、skill 两件）+ 条件注册 11 个（subagent 2、skill_create 1、团队 7、提问 1）。下面按实现文件分组说明各家的机制。
+完整清单（名称、一句话职责、risk / concurrency、条件注册与工具清单收缩规则）陈列在 [reference/tools](../reference/tools.md)：常驻 13 个（exec、fs 四件、web 两件、memory 两件、session_search、history_search、skill 两件）+ 条件注册 11 个（subagent 2、skill_create 1、团队 7、提问 1）。下面按实现文件分组说明各家的机制。
 
-前 13 个**常驻注册**（注册与否不随会话状态变化；可见性例外有两个——readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型工具面，见 [permissions](./permissions.md)；subagent run 会裁掉 `memory_save`，见 [subagents](./subagents.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 组装了 subagent 派发后端时注册（subagent 自己的 run 两者都不注册，单层委派、不能再派下一级 subagent）；`skill_create` 仅在 daemon 组装了技能进化系统时注册（`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案，机制见 [skills](./skills.md)）；`ask_user_questions` 每个 run 都注册；七个团队工具只在会话属于某个团队时注册，且**工具面按身份收缩**：组长拿全套，组员没有 `create_team`/`spawn_teammate`（见下文与 [agent-team](./agent-team.md)）。
+前 13 个**常驻注册**（注册与否不随会话状态变化；可见性例外有两个——readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型可见工具清单，见 [permissions](./permissions.md)；subagent run 会裁掉 `memory_save`，见 [subagents](./subagents.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 组装了 subagent 派发后端时注册（subagent 自己的 run 两者都不注册，单层委派、不能再派下一级 subagent）；`skill_create` 仅在 daemon 组装了技能进化系统时注册（`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案，机制见 [skills](./skills.md)）；`ask_user_questions` 每个 run 都注册；七个团队工具只在会话属于某个团队时注册，且**工具清单按身份收缩**：组长拿全套，组员没有 `create_team`/`spawn_teammate`（见下文与 [agent-team](./agent-team.md)）。
 
 ### exec（`tools/exec.ts`）
 
@@ -121,7 +121,7 @@ export function makeTool<N extends string>(
 
 ### history 工具（`tools/history.ts`）
 
-**history_search** `{query, limit?, session_id?}`：全文检索**全部历史会话**的原始消息（user/assistant 的文本块；工具输出与 note 不收），与 session_search 互补——那个找本会话被压缩的摘要段，这个找任何会话的原文（包括从未压缩的近期消息）。数据面是 `~/.kclaw/search.db`（SQLite FTS5 全文索引，中文按二字元切分，机制见 [storage](./storage.md)）；server 注入 `historySearch` 检索函数，缺席时工具仍注册、返回固定不可用文案（与 session_search 同一套路）。每条命中一行原文（带会话标题、角色、时间），`limit` 默认 5、最大 20，`session_id` 可选限定到单个会话。safe + parallel。同一份数据经 HTTP `GET /search?q=` 暴露给 WebUI（见 [http-api](../server/http-api.md)）。
+**history_search** `{query, limit?, session_id?}`：全文检索**全部历史会话**的原始消息（user/assistant 的文本块；工具输出与 note 不收），与 session_search 互补——那个找本会话被压缩的摘要段，这个找任何会话的原文（包括从未压缩的近期消息）。检索的数据存在 `~/.kclaw/search.db`（SQLite FTS5 全文索引，中文按二字元切分，机制见 [storage](./storage.md)）；server 注入 `historySearch` 检索函数，缺席时工具仍注册、返回固定不可用文案（与 session_search 同一套路）。每条命中一行原文（带会话标题、角色、时间），`limit` 默认 5、最大 20，`session_id` 可选限定到单个会话。safe + parallel。同一份数据经 HTTP `GET /search?q=` 暴露给 WebUI（见 [http-api](../server/http-api.md)）。
 
 ### skill 工具（`tools/skills.ts`）
 
@@ -129,7 +129,7 @@ export function makeTool<N extends string>(
 
 **skill_list** `{query?}`：列出模型可见的技能（每行 `- 名字: 描述`，按名字排序），`query` 可选，按名字与描述子串过滤（大小写不敏感）。可见口径与系统提示词清单一致（`disable-model-invocation` 的不出现）。存在的原因：提示词清单有字符 budget、技能多时截断，subagent 更是不注入清单。`skill_list` 是模型的自助发现入口（先 list 找到名字，再 skill_read 取正文）。safe + parallel，与 skill_read 同源同一份扫描结果。
 
-工具描述里带一句软性指引：优先用系统提示词"可用技能"列表里的技能，不在列表中的（`disable-model-invocation`）只有用户明确指名时才应加载——可见性规则骑在描述上、不是硬门禁，用户指名是隐藏档位的合法入口。
+工具描述里带一句软性指引：优先用系统提示词"可用技能"列表里的技能，不在列表中的（`disable-model-invocation`）只有用户明确指名时才应加载——可见性规则骑在描述上、不是硬性拦截，用户指名是隐藏档位的合法入口。
 
 **skill_create** `{name, content, rationale?}`：把一段可复用的经验当场固化为技能提案（提案制，机制见 [skills](./skills.md) 的"技能进化"一节）。safe + parallel——提案文件是 `writeFileAtomic` 原子写的独立文件，同名冲突由随机后缀化解，并发调用安全。只在 daemon 组装了技能进化系统时注册（run 组装传入 `skillCreate` 选项）；`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案（"技能提案未开启（skills.evolution.enabled=false）…"）。`name` 不过 `isSkillDirName`、`content` 超 64KB、目标是复用链接技能均报错。**kind/scope 由系统推导**（模型不给这两个参数）：项目副本命中 → `project` + 当前会话 workdir；仅全局命中 → `global`；未装 → `new` + `project`。写提案文件 + 一条 `skill` 审计事件，回复"已记录提案…待用户在 WebUI 审阅确认"，不谎报生效。
 
@@ -139,11 +139,11 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 
 ### subagent 工具（`tools/subagent.ts`）
 
-**subagent_run** `{task, label?, role?, tools?, run_in_background?}`：派一个 subagent 执行一段自包含任务，默认阻塞等待其结题答复作为工具结果（完整机制、生命周期与结果整形见 [subagents](./subagents.md)）。执行器是薄壳：校验 `task` 非空字符串、`label` 与 `run_in_background` 为相应类型、`role` 非空字符串（trim 后截 2000 字符）、`tools` 为字符串数组（元素 trim 后不得为空串，空串或非字符串整次报错；超过 40 个截取前 40）后调一次 spawner，会话创建/run 提交/状态转发都在 server 侧实现。`role` 是给子会话的角色补充（如"只做代码评审的审查员"），追加进子会话系统提示词；`tools` 是工具白名单，只减少子会话可用的工具、不会增加（白名单外的名字忽略）。`run_in_background: true` 时派发立即返回子会话 id（不阻塞父 run，生命周期挂到父**会话**而不是父 run，父 run 结束或中止不会取消它），subagent 完成后结题报告自动投递回父会话、开启新一轮分析（投递被拒时降级为通知；机制见 [subagents](./subagents.md)），`subagent_collect` 作按需取答复的补充手段。`risk: "safe"`：派出动作本身不碰敏感资源，子 run 自己的工具调用照常过自己的权限门；`concurrency: "parallel"`：一批多个 `subagent_run` 并发执行即并行路径。subagent 的 `childSessionId` 经结果的 `data` 字段随块持久化（web 的"查看 subagent 审计"链接读它）。
+**subagent_run** `{task, label?, role?, tools?, run_in_background?}`：派一个 subagent 执行一段自包含任务，默认阻塞等待其结题答复作为工具结果（完整机制、生命周期与结果整形见 [subagents](./subagents.md)）。执行器只负责参数校验：校验 `task` 非空字符串、`label` 与 `run_in_background` 为相应类型、`role` 非空字符串（trim 后截 2000 字符）、`tools` 为字符串数组（元素 trim 后不得为空串，空串或非字符串整次报错；超过 40 个截取前 40）后调一次 spawner，会话创建/run 提交/状态转发都在 server 侧实现。`role` 是给子会话的角色补充（如"只做代码评审的审查员"），追加进子会话系统提示词；`tools` 是工具白名单，只减少子会话可用的工具、不会增加（白名单外的名字忽略）。`run_in_background: true` 时派发立即返回子会话 id（不阻塞父 run，生命周期挂到父**会话**而不是父 run，父 run 结束或中止不会取消它），subagent 完成后结题报告自动投递回父会话、开启新一轮分析（投递被拒时降级为通知；机制见 [subagents](./subagents.md)），`subagent_collect` 作按需取答复的补充手段。`risk: "safe"`：派出动作本身不碰敏感资源，子 run 自己的工具调用照常过自己的权限门；`concurrency: "parallel"`：一批多个 `subagent_run` 并发执行即并行路径。subagent 的 `childSessionId` 经结果的 `data` 字段随块持久化（web 的"查看 subagent 审计"链接读它）。
 
 **subagent_collect** `{childSessionId}`：按子会话 id 取回后台 subagent 的最终结题答复（头尾截断，与阻塞结果同一形状）。只能取**本会话**派出的 subagent——collector 校验 `parentSessionId` 归属，别人的 subagent 与未知 id 都是 error 结果。`risk: "safe"`、`concurrency: "parallel"`。
 
-注册是**条件性**的（与 session/skill 工具的"始终注册"不同）：`subagent` 选项缺席（daemon 未组装 spawner）或本 run 自身是 subagent（单层委派）时不注册 `subagent_run` 与 `subagent_collect`；subagent 的工具面同时裁掉 `memory_save`（记忆隔离）。
+注册是**条件性**的（与 session/skill 工具的"始终注册"不同）：`subagent` 选项缺席（daemon 未组装 spawner）或本 run 自身是 subagent（单层委派）时不注册 `subagent_run` 与 `subagent_collect`；subagent 的工具清单同时裁掉 `memory_save`（记忆隔离）。
 
 ### ask 工具（`tools/ask.ts`）
 
@@ -151,7 +151,7 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 
 ### team 工具（`tools/team.ts`）
 
-七个工具都是团队宿主 facade（server 侧）的薄壳：校验参数类型 → 调 facade → 把返回值整形为工具结果，协作机制本身（目录、收信箱、任务板、投递）见 [agent-team](./agent-team.md)。**`create_team`** 建队并使本会话成为组长（一个会话只属一个队，重复建队是 error 结果）；**`spawn_teammate`** `{name, task, role?, model?}` 添加组员：名字 `[a-z][a-z0-9-]{0,31}`、保留名 `lead`，`task` 是必填的初始任务，建持久子会话并固化模型快照；**`send_message`** `{to?, text}` 写信（组员的默认目标是组长、可不填 `to`；组长必须显式指名收件人），超长/超限是明确的 error 结果；**`list_agents`** 列名单；**`task_create` / `task_update` / `task_list`** 操作任务板，`task_update` 必须回传 `expected_revision` 做比对再交换（CAS），认领未认领任务时自动填自己的名字。全部 `risk: "safe"`：动作只写团队目录，不碰工作区；改状态类（建队/添加/建任务/改任务）是 `serial`（同一批调用里不与别的工具重叠）。注册**条件性且按身份收缩**：不在团队里的会话（job 会话、非组员的 subagent 会话）一个都没有；组员的面不含 `create_team`/`spawn_teammate`（不能建队、不能添加，团队不递归）。
+七个工具都只做转发：校验参数类型 → 调 facade → 把返回值整形为工具结果，协作机制本身（目录、收信箱、任务板、投递）见 [agent-team](./agent-team.md)。**`create_team`** 建队并使本会话成为组长（一个会话只属一个队，重复建队是 error 结果）；**`spawn_teammate`** `{name, task, role?, model?}` 添加组员：名字 `[a-z][a-z0-9-]{0,31}`、保留名 `lead`，`task` 是必填的初始任务，建持久子会话并固化模型快照；**`send_message`** `{to?, text}` 写信（组员的默认目标是组长、可不填 `to`；组长必须显式指名收件人），超长/超限是明确的 error 结果；**`list_agents`** 列名单；**`task_create` / `task_update` / `task_list`** 操作任务板，`task_update` 必须回传 `expected_revision` 做比对再交换（CAS），认领未认领任务时自动填自己的名字。全部 `risk: "safe"`：动作只写团队目录，不碰工作区；改状态类（建队/添加/建任务/改任务）是 `serial`（同一批调用里不与别的工具重叠）。注册**条件性且按身份收缩**：不在团队里的会话（job 会话、非组员的 subagent 会话）一个都没有；组员的清单不含 `create_team`/`spawn_teammate`（不能建队、不能添加，团队不递归）。
 
 ---
 

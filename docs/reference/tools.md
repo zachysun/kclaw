@@ -177,8 +177,8 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `limit` | integer | 否 | 返回条数上限，范围 1–20，不传取 5 |
 | `session_id` | string | 否 | 只检索这一个会话 |
 
-- 数据面是 `~/.kclaw/search.db`（SQLite FTS5，中文按二字元切分），daemon 边收到消息边写入，消息被编辑重试截断、会话删除时同步镜像清理，启动时对缺失的旧会话补一次回填。
-- 每条命中一行原文（会话标题、角色、时间，行尾带 `（session: <会话id>）`）；没有命中返回 `(没有匹配的历史消息)`；数据面未组装（独立 core 场景）返回 `(历史检索不可用)`。
+- 检索的数据存在 `~/.kclaw/search.db`（SQLite FTS5，中文按二字元切分），daemon 边收到消息边写入，消息被编辑重试截断、会话删除时同步镜像清理，启动时对缺失的旧会话补一次回填。
+- 每条命中一行原文（会话标题、角色、时间，行尾带 `（session: <会话id>）`）；没有命中返回 `(没有匹配的历史消息)`；索引未组装（独立 core 场景）返回 `(历史检索不可用)`。
 - 同一份数据经 HTTP `GET /search?q=` 暴露给 WebUI（见 [http-api](../server/http-api.md)）。
 
 ### skill_read
@@ -190,7 +190,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `name` | string | 是 | 技能目录名（见系统提示词的可用技能列表，或用 skill_list 查询） |
 
 - 返回该技能 SKILL.md 的规程正文；同名技能项目层优先。
-- 设了 `disable-model-invocation` 的技能不在系统提示词清单里，但仍可按名加载：用户在对话里点名是这类技能的唯一入口。
+- 设了 `disable-model-invocation` 的技能不在系统提示词清单里，但仍可按名加载：用户在对话里指名是这类技能的唯一入口。
 - 名字不存在或正文为空报错。
 
 ### skill_list
@@ -355,4 +355,4 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 ## MCP 工具
 
-外部 MCP server 的工具不在此清单：每个 run 经 RunManager 的 `extraTools(workdir)` 动态注入（取该会话工作目录所在项目组的工具面），名字与 schema 来自 server 侧（见 [mcp](../core/mcp.md)）。
+外部 MCP server 的工具不在此清单：每个 run 经 RunManager 的 `extraTools(workdir)` 动态注入（取该会话工作目录所在项目组的工具清单），名字与 schema 来自 server 侧（见 [mcp](../core/mcp.md)）。

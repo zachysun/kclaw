@@ -11,7 +11,7 @@
 ## 设计决策
 
 - **渐进披露两层**：第一层是系统提示词里的一行"可用技能"列表（每个技能只出现名字 + 一句话描述，字符 budget 默认 6000、超限截断并带可见标记）；模型需要具体规程时，第二层用 `skill_read` 工具按名字加载那份 `SKILL.md` 的完整正文。平时上下文只负担清单，用到才加载全文——描述见 [compaction](./compaction.md) 的上下文 budget 动机。
-- **可见性是发现渠道，不是访问控制**：`disable-model-invocation` / `user-invocable` 两个字段只决定"出现在模型/用户哪一面的列表里"，不是权限门禁——所有档位的技能都能经 `skill_read` 按名加载（用户在对话里指名"按某技能的规程办"就是被隐藏技能的合法入口）。
+- **可见性是发现渠道，不是访问控制**：`disable-model-invocation` / `user-invocable` 两个字段只决定"出现在模型/用户哪一面的列表里"，不是权限检查——所有档位的技能都能经 `skill_read` 按名加载（用户在对话里指名"按某技能的规程办"就是被隐藏技能的合法入口）。
 - **目录名是唯一身份**：技能目录名必须是 Agent Skills 规范允许的形式（小写字母数字加连字符、1–64 字符），也是 `skill_read` 的加载键与斜杠命令名。
 - **项目级整目录覆盖全局**：同名技能在不同作用域并存时，项目那份整体替换全局那份（整目录覆盖，不做字段合并）。
 - **兼容生态技能**：只解释五个字段，其余 frontmatter 字段一律忽略且不报错——Agent Skills 生态里的现成技能可以不改就放进目录。CRLF 换行与文件头 BOM 都兼容。
@@ -126,9 +126,9 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 
 ## 技能进化（提案制）
 
-技能进化是"让技能库随使用变好"的机制：一轮对话（run）里卷入过的技能（被 `skill_read` 读取、被 `skill_list` 列出、被用户 `/点名`）在对话结束并空闲一段时间后，由系统自动提炼成**技能提案**（一份待确认的技能新增/修订建议），写进 `<skillsDir>/.proposals/`（点开头的目录，技能扫描器不认，见上文的目录名规则），绝不触碰已生效的技能。提案在 WebUI 技能页的「提案」页签里人工审阅：确认即写入技能目录、下一轮对话自动吃到；可驳回；已确认的可回退。对话中模型也可经 `skill_create` 工具当场发起提案，走同一个审阅状态机。整个功能在 config 中可开关，默认开启。
+技能进化是"让技能库随使用变好"的机制：一轮对话（run）里卷入过的技能（被 `skill_read` 读取、被 `skill_list` 列出、被用户以 `/技能名` 指名）在对话结束并空闲一段时间后，由系统自动提炼成**技能提案**（一份待确认的技能新增/修订建议），写进 `<skillsDir>/.proposals/`（点开头的目录，技能扫描器不认，见上文的目录名规则），绝不触碰已生效的技能。提案在 WebUI 技能页的「提案」页签里人工审阅：确认即写入技能目录、下一轮对话自动吃到；可驳回；已确认的可回退。对话中模型也可经 `skill_create` 工具当场发起提案，走同一个审阅状态机。整个功能在 config 中可开关，默认开启。
 
-状态机：`proposed → applied | rejected`，`applied → reverted`；`rejected` / `reverted` 保留在磁盘上可手动清理。核心实现在 `packages/core/src/skills/proposals.ts`（提案存取与治理）与 `evolution.ts`（提炼 pipeline 与调度簿记），服务端消费端在 `packages/server/src/skill-scheduler.ts`。
+状态机：`proposed → applied | rejected`，`applied → reverted`；`rejected` / `reverted` 保留在磁盘上可手动清理。核心实现在 `packages/core/src/skills/proposals.ts`（提案存取与治理）与 `evolution.ts`（提炼 pipeline 与调度簿记），服务端处理在 `packages/server/src/skill-scheduler.ts`。
 
 ### 配置（skills.evolution）
 
@@ -136,7 +136,7 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 
 | 字段 | 默认 | 说明 |
 |------|------|------|
-| `skills.evolution.enabled` | `true` | 总开关。`false` 时功能完全惰性：run 收尾不排检查、调度器不消费、`skill_create` 返回固定关闭文案；已有的提案文件无论开关状态都可列表查看。非布尔值按字段回退 `false` 并警告 |
+| `skills.evolution.enabled` | `true` | 总开关。`false` 时功能完全惰性：run 收尾不排检查、调度器不处理、`skill_create` 返回固定关闭文案；已有的提案文件无论开关状态都可列表查看。非布尔值按字段回退 `false` 并警告 |
 | `skills.evolution.idleMinutes` | `10` | run 结束后到提炼检查可触发的空闲窗口分钟数，与 `memory.write.idleMinutes` 互不牵动。`0` 视为关闭延迟补查（此时只剩 `skill_create` 一条提案路径）。负数/非整数按字段回退默认并警告 |
 
 `KclawConfig.skills.curator`（可选节，curator 巡检，见上文"curator：老化的下半场"）：
@@ -152,15 +152,15 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 
 两条路径，共同点是都只产生提案文件、不碰生效技能：
 
-**run 收尾粗查（内置 hook `skill-follow-check`，`run-after` order 40）**。每个 run 结束时（任何 stopReason）做一次**零成本、零 LLM** 的纯读检查：范围 = 该项目全部会话（**含 subagent 会话**，刻意不排除——观察盲区正是要覆盖的对象）各自的未提取增量；卷入判定 = 范围内任一消息满足之一——assistant 消息的 `tool_call` 块名字是 `skill_read` 或 `skill_list`，或 user 消息文本命中已装技能名的 `/记号`（正则与 `matchSkillInvocations` 同源，但匹配集合是**全部已装技能名**，不受 user-invocable 档位过滤——被隐藏的技能被点名同样是"卷入"）。未卷入：不排检查、不动增量进度，一次 LLM 都不调。卷入：把 `{sessionId, endTurnAt}` 写进该项目的检查表（同会话重复排 = 刷新锚点）。功能关闭（`enabled !== true`）或 `idleMinutes <= 0` 时钩子直接返回；子会话 run 不排（subagent 自己不排，它的使用由同项目后续任一主干 run 的粗查统一覆盖——粗查范围含子会话增量）。
+**run 收尾粗查（内置 hook `skill-follow-check`，`run-after` order 40）**。每个 run 结束时（任何 stopReason）做一次**零成本、零 LLM** 的纯读检查：范围 = 该项目全部会话（**含 subagent 会话**，刻意不排除——观察盲区正是要覆盖的对象）各自的未提取增量；卷入判定 = 范围内任一消息满足之一——assistant 消息的 `tool_call` 块名字是 `skill_read` 或 `skill_list`，或 user 消息文本出现已装技能名的 `/名字` 指名（正则与 `matchSkillInvocations` 同源，但匹配集合是**全部已装技能名**，不受 user-invocable 档位过滤——被隐藏的技能被指名同样是"卷入"）。未卷入：不排检查、不动增量进度，一次 LLM 都不调。卷入：把 `{sessionId, endTurnAt}` 写进该项目的检查表（同会话重复排 = 刷新锚点）。功能关闭（`enabled !== true`）或 `idleMinutes <= 0` 时钩子直接返回；子会话 run 不排（subagent 自己不排，它的使用由同项目后续任一主干 run 的粗查统一覆盖——粗查范围含子会话增量）。
 
-**延迟补查（`skill-scheduler.ts`，默认每 60s 扫一次；定时器与进行中任务记录骨架在 `host-kit.ts`）**。sweep 照记忆调度器按 workdir 循环挂起检查，空闲门禁复用与记忆调度器同一纯函数 `followGateDue`（`host-kit.ts`）：`end_turn` 后 `idleMinutes` 内项目无新活动才触发。额外规则：
+**延迟补查（`skill-scheduler.ts`，默认每 60s 扫一次；定时器与进行中任务记录骨架在 `host-kit.ts`）**。sweep 照记忆调度器按 workdir 循环挂起检查，空闲判定复用与记忆调度器同一纯函数 `followGateDue`（`host-kit.ts`）：`end_turn` 后 `idleMinutes` 内项目无新活动才触发。额外规则：
 
 - **成功才清检查**：提炼成功 resolve 才清；失败保留检查，下个 sweep 重试同一范围（记忆侧"先清后触发"靠 interval 兜扫补失败重试，技能侧没有兜扫，先清会丢批次）；
 - **同一检查连败 3 次放弃**：清除该检查并记日志（`MAX_ATTEMPTS`，内存按 `workdir|sessionId` 计数，daemon 重启归零后照常补查再试）；
 - **会话已删的检查无条件清掉**：`sessions.meta` 缺失的挂起检查没有活动可判、也没有提炼对象，不清会在检查表里永久堆积；
 - **end_turn 后有新活动的检查清掉**：旧锚点已被新活动取代，新 run 收尾的粗查若仍卷入会重排；
-- `enabled: false` 或 `idleMinutes: 0` 时 sweep 直接返回，检查停留在检查表里不动，功能重开后继续消费；daemon 重启后首次 sweep 补查已保存的检查。
+- `enabled: false` 或 `idleMinutes: 0` 时 sweep 直接返回，检查停留在检查表里不动，功能重开后继续处理；daemon 重启后首次 sweep 补查已保存的检查。
 
 ### 提炼 pipeline（triggerFollow）
 
@@ -212,14 +212,14 @@ interface SkillProposal {
 | `remove` | rejected/reverted → 删除 | 删提案文件（文件也可手动删） | 非 rejected/reverted 状态 |
 
 - **写入落点**：`scope=global` 写 `~/.kclaw/skills/<name>/SKILL.md`，`scope=project` 写 `<workdir>/.kclaw/skills/<name>/SKILL.md`。生效路径就是每轮重扫（见上文"每个 run 重新扫描"），下一轮对话自动吃到，无需任何热加载；
-- **apply 的两条非致命 warning**（不阻止写入、状态照常变 applied）：`revise` 的现正文与提案时 `baseline` 不一致（提案后正文已被第三方改动，apply 以提案内容覆盖——覆盖的是提案内容，不是用户上次看到的那份）；`scope=global` 的 `new` 落地后若任一已知项目技能目录已存在同名技能（项目副本整目录覆盖全局版，将在该项目遮蔽全局版本）。路由把 warning 原样带回，UI 走 toast 提示；
+- **apply 的两条非致命 warning**（不阻止写入、状态照常变 applied）：`revise` 的现正文与提案时 `baseline` 不一致（提案后正文已被第三方改动，apply 以提案内容覆盖——覆盖的是提案内容，不是用户上次看到的那份）；`scope=global` 的 `new` 落地后若任一已知项目技能目录已存在同名技能（项目副本整目录覆盖全局版，该项目实际生效的是项目副本）。路由把 warning 原样带回，UI 走 toast 提示；
 - **复用链接技能是 apply 的禁区**：目标是复用链接技能（`.links.json` 命中名字）409，文案说明复用技能由源目录维护——提炼与 `skill_create` 在产提案时已做同判，这一层是治理期的最后防线。
 
 ### 用量遥测
 
-口径 = `appliedAt` 之后全部会话事件流里 `skill_read` 的 `tool_call` 块（`args.name` 等于提案技能名）的次数。`skill_list` 是发现通道不计入使用；用户 `/记号` 点名经隐式包装最终也落到 `skill_read`（见上文"技能调用与隐式包装"），天然计入。现算不建索引、不持久化——个人 daemon 的会话规模下列表页现算可接受。
+口径 = `appliedAt` 之后全部会话事件流里 `skill_read` 的 `tool_call` 块（`args.name` 等于提案技能名）的次数。`skill_list` 是发现通道不计入使用；用户以 `/技能名` 指名经隐式包装最终也落到 `skill_read`（见上文"技能调用与隐式包装"），天然计入。现算不建索引、不持久化——个人 daemon 的会话规模下列表页现算可接受。
 
-提案列表的现算计数之外，curator 还维护一份**持久的**使用记录（见下节）：`~/.kclaw/skills/.curator/usage.json`（0600），两条路径计入：`skill_read` 每次命中，以及用户 `/点名` 经隐式包装命中（二者都调 `recordSkillUse`），按 `global:<名字>` / `project:<名字>` 记 count 与 lastUsedAt，写入尽力而为、失败静默（遥测永远不变成工具错误）。
+提案列表的现算计数之外，curator 还维护一份**持久的**使用记录（见下节）：`~/.kclaw/skills/.curator/usage.json`（0600），两条路径计入：`skill_read` 每次命中，以及用户以 `/技能名` 指名经隐式包装命中（二者都调 `recordSkillUse`），按 `global:<名字>` / `project:<名字>` 记 count 与 lastUsedAt，写入尽力而为、失败静默（遥测永远不变成工具错误）。
 
 ### curator：老化的下半场（闲时巡检）
 
@@ -257,7 +257,7 @@ interface SkillEvent {
 
 ### 前端入口
 
-- **WebUI 技能页「提案」页签**（`SkillsView.tsx`，第三个页签，带待确认数角标）：列表行 = 名字、种类徽标（新增/修订）、状态徽标、落点（全局 / 项目路径尾段）、创建时间、理由单行截断；状态筛选走服务端 `?status=`，种类筛选本地。详情右栏：title / rationale / changes；修订类把 `baseline` 与 `content` 上下两块并陈（标注"现正文 / 提案正文"，不引入 diff 依赖）。操作按钮按状态显隐：确认 / 驳回（proposed）、回退（applied，并显示"采纳后被调用 N 次"）、删除（rejected/reverted）；apply 响应带 `warning` 时走 toast 提示；
+- **WebUI 技能页「提案」页签**（`SkillsView.tsx`，第三个页签，带待确认数角标）：列表行 = 名字、种类徽标（新增/修订）、状态徽标、落点（全局 / 项目路径尾段）、创建时间、理由单行截断；状态筛选走服务端 `?status=`，种类筛选本地。详情右栏：title / rationale / changes；修订类把 `baseline` 与 `content` 上下两块对照展示（标注"现正文 / 提案正文"，不引入 diff 依赖）。操作按钮按状态显隐：确认 / 驳回（proposed）、回退（applied，并显示"采纳后被调用 N 次"）、删除（rejected/reverted）；apply 响应带 `warning` 时走 toast 提示；
 - **CLI `/skill` 命令族**（`slash.ts`）：只读子命令 `/skill proposals`（列表，带状态标记与采纳后调用次数）与 `/skill proposal <id>`（详情与完整提案正文）；治理操作只在 WebUI。
 
 ## 管理入口与前端入口

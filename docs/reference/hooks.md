@@ -50,7 +50,7 @@ order = 同位置内的执行次序（升序）：
 | `mid-run-panic` | compaction-check | 10 | skip | 红线阈值的迭代边界压缩判定（不限时） |
 | `overflow-emergency` | overflow-rescue | 10 | skip | 溢出急救压缩，换视图整次重发（不限时） |
 | `usage-ledger` | run-after | 10 | skip | 记录本次 run 的 token 用量 |
-| `manual-compact-flush` | run-after | 15 | skip | 冲刷运行忙时排队的 /compact（不限时） |
+| `manual-compact-flush` | run-after | 15 | skip | 执行运行忙时排队的 /compact（不限时） |
 | `post-run-compaction` | run-after | 20 | skip | 黄线阈值的收尾压缩（不限时） |
 | `follow-check` | run-after | 30 | skip | 排一个记忆空闲检查 |
 | `skill-follow-check` | run-after | 40 | skip | 技能进化的零成本粗查：卷入技能才排提炼空闲检查（未启用即跳过） |

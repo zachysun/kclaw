@@ -4,21 +4,21 @@
 
 subagent 是主对话的模型**自主派出**的短命执行单元：调用 `subagent_run` 工具、给出一段自包含的任务描述，daemon 为它开一个**独立子会话**跑完整个任务，结束时把结题答复（subagent 最后一条回复的全文）作为工具结果送回主对话。过程文本（工具输出、中间思考）不进主对话的上下文，subagent 的第一动机是**上下文隔离**；同一批工具调用里发多个 `subagent_run` 即**并行**执行互不相关的任务，是第二动机。派发时可带 `role`（角色补充，拼进子会话系统提示词）与 `tools`（工具白名单）做轻量特化——预置人设库、跨会话复用的角色档案不在当前范围。长任务可以**后台派发**（`run_in_background: true`）：派发立即返回子会话 id、不阻塞父 run，subagent 完成后结题报告**自动投递回主会话**、触发新一轮分析（见下文"后台模式"）。
 
-三个模块分担职责：`packages/core/src/agent/subagent.ts` 放两侧共享的契约（`SubagentSpawner` 接口、subagent 系统提示词、答复截断/标题助手）；`packages/core/src/tools/subagent.ts` 是模型可见的工具执行器（薄壳：校验参数后调一次 spawner）；`packages/server/src/subagent.ts` 是 daemon 侧的 spawner 实现（真会话、真 run 提交、状态与确认转发）。
+三个模块分担职责：`packages/core/src/agent/subagent.ts` 放两侧共享的契约（`SubagentSpawner` 接口、subagent 系统提示词、答复截断/标题助手）；`packages/core/src/tools/subagent.ts` 是模型可见的工具执行器（只做参数校验，校验后调一次 spawner）；`packages/server/src/subagent.ts` 是 daemon 侧的 spawner 实现（真会话、真 run 提交、状态与确认转发）。
 
 ## 设计决策
 
-- **子会话身份是唯一权威数据**：subagent 会话的 `meta.parentSessionId`（`session.created` 事件附带、投影进 meta.json）标识"这是一个 subagent、父是谁"。引擎侧一切 subagent 特化（精简系统提示词、hook 跳过、工具面裁剪、用量归属）都从这一个字段派生，没有任何运行期旗标。会话列表、审计页据此把它与普通会话区分开。
+- **子会话身份是唯一权威数据**：subagent 会话的 `meta.parentSessionId`（`session.created` 事件附带、投影进 meta.json）标识"这是一个 subagent、父是谁"。引擎侧一切 subagent 特化（精简系统提示词、hook 跳过、工具清单裁剪、用量归属）都从这一个字段派生，没有任何运行期旗标。会话列表、审计页据此把它与普通会话区分开。
 
 - **阻塞式调用（默认）**：`subagent_run` 执行器 await 子 run 的最终结果，把 subagent**最后一条 assistant 消息的文本块**作为工具结果返回（空的 text 块不算，拼接后去首尾空白）。答复有 16000 字符上限，超出留头尾各 4000 字符、中段以截断标记省略——过程再长也压不垮主对话。并行只来自"一批多个工具调用"，单个阻塞调用本身没有中途取回。
 
 - **后台模式（`run_in_background: true`）**：派发立即返回子会话 id 与取回提示（不阻塞父 run），subagent 的**生命周期挂到父会话**而不是父 run——父 run 结束或中止的信号刻意不递给 spawner，后台 subagent 照常跑完；删除父会话则先取消它仍在跑的后台 subagent，再走既有的级联软删。subagent 落定时结题报告**自动投递回父会话**：报告走 `RunManager.submit`（触发 `agent`、强制排队）开启**新一轮 run**，主 agent 消化全文后回复，三端同享；报告消息带 `kind:"subagent"` note 声明"机器回投、非用户发言"，正文为状态行 + 任务原文 + 结题全文（超长头尾截断）。投递被拒（队列满 10 条 / 防自循环唤醒 budget 耗尽）时降级为旧通知（带 `kind:"system"` note 的 assistant 消息，附拒绝原因，**不触发 run**），完成事件不静默丢失。投递或回退之后，宿主发出一次可选的 `onBackgroundSettled` 回调（含子会话 id、标签、成败与结题摘录），daemon 用它把落定推送给 IM 频道。**防自循环 budget**：每主会话连续 `agent` 触发的自动唤醒上限 3 次，只有真实用户输入真正到达模型（用户 run 开跑 / steer 注入）才清零，定时任务不清零（`goal` 触发的自续轮同样清零——目标循环有自己的一套独立停止条件，见 [goal](./goal.md)，否则长目标里 subagent 投递会先被这份 budget 卡死）；计数仅内存，daemon 重启归零。`subagent_collect {childSessionId}` 降为按需深挖手段（只能取本会话派出的 subagent），行为不变。后台任务有独立的每父会话并发上限（`subagents.maxBackground`，与阻塞档分开计数）。
 
-- **单层委派**：子 run 的工具面**不注册** `subagent_run` 与 `subagent_collect`（也没有 `memory_save`，见记忆隔离）——subagent 不能再派 subagent，防递归失控。
+- **单层委派**：子 run 的工具清单里**不注册** `subagent_run` 与 `subagent_collect`（也没有 `memory_save`，见记忆隔离）——subagent 不能再派 subagent，防递归失控。
 
-- **角色与工具白名单（每次派发可选）**：`subagent_run` 接受 `role`（角色补充说明）与 `tools`（工具白名单）。`role` 经 spawner 进入子 run 组装，追加进子会话系统提示词末尾的"# 角色补充"节（trim 后截 2000 字符）——任务里写不清的立场、口径、边界（如"只做评审，不改代码"）放这里。`tools` 在子 run 组装期过滤工具面：白名单外的执行器与 schema 同步剔除，且权限门的 safeTools 与注册事实由过滤后的面派生（构造在其后）——白名单**只能减少工具、不能增加**，结构上放大不了权限；名单外的名字忽略，空数组视为未限制（避免误派一个零工具的子会话）。两者随 submit → 队列 → 出队的链路全程携带（队列节点内存还原，不进持久化队列文件）。
+- **角色与工具白名单（每次派发可选）**：`subagent_run` 接受 `role`（角色补充说明）与 `tools`（工具白名单）。`role` 经 spawner 进入子 run 组装，追加进子会话系统提示词末尾的"# 角色补充"节（trim 后截 2000 字符）——任务里写不清的立场、口径、边界（如"只做评审，不改代码"）放这里。`tools` 在子 run 组装期过滤工具清单：白名单外的执行器与 schema 同步剔除，且权限门的 safeTools 与注册事实由过滤后的清单派生（构造在其后）——白名单**只能减少工具、不能增加**，结构上放大不了权限；名单外的名字忽略，空数组视为未限制（避免误派一个零工具的子会话）。两者随 submit → 队列 → 出队的链路全程携带（队列节点内存还原，不进持久化队列文件）。
 
-- **权限不放宽**：子 run 有自己的权限门，冻结父会话创建时的 `mode`；敏感操作照常请求人工确认。确认卡片经 spawner **转发到父会话频道**（用户正看着的地方），`noteText` 前缀"来自 subagent `<label 或会话 id>`"；裁决仍由全局 broker 按 `confirmationId` 统一处理，任何客户端答都行。Web 与 CLI 无需改动就能收到卡片。可见性同样继承：父会话为 readonly 时，子 run 的工具面按同一规则移除（sensitive 工具不可见），见 [permissions](./permissions.md)。
+- **权限不放宽**：子 run 有自己的权限门，冻结父会话创建时的 `mode`；敏感操作照常请求人工确认。确认卡片经 spawner **转发到父会话频道**（用户正看着的地方），`noteText` 前缀"来自 subagent `<label 或会话 id>`"；裁决仍由全局 broker 按 `confirmationId` 统一处理，任何客户端答都行。Web 与 CLI 无需改动就能收到卡片。可见性同样继承：父会话为 readonly 时，子 run 的工具清单按同一规则移除（sensitive 工具不可见），见 [permissions](./permissions.md)。
 
 - **父停子停**：工具执行器把父 run 的 abort 信号递给 spawner，spawner 监听到中止即 `run.cancel(child)`——子 run 在下一个检查点停下，派发以 error 结果（"随主任务中止而停止"，附中止前产出）结束。
 
@@ -33,7 +33,7 @@ subagent 是主对话的模型**自主派出**的短命执行单元：调用 `su
     parentSessionId 落 meta；父的会话级模型覆盖随行）
   → 订阅子频道（状态行 + 确认转发）→ submit(task, trigger:"agent", disposition:"wait",
     role/tools 随 EnqueueInput 全程携带)
-  → 子 run 组装：role 拼进系统提示词，tools 过滤工具面（gate 由过滤后的面派生）
+  → 子 run 组装：role 拼进系统提示词，tools 过滤工具清单（gate 由过滤后的清单派生）
   → 子 run 跑完（正常/中止/出错）
   → 拆订阅、清并发计数 → 结果整形回工具结果
 ```

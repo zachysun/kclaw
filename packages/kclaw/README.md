@@ -23,11 +23,11 @@ npm i -g ./packages/kclaw
 ## 快速上手
 
 ```bash
-kclaw chat    # 首次运行进入配置向导：选 provider → 粘贴 key → 自动测连通
+kclaw chat    # 首次运行进入配置流程：选 provider → 粘贴 key → 自动测连通
 kclaw web     # 浏览器打开 WebUI（带 token，自动登录）
 ```
 
-向导内置 DeepSeek / OpenAI / Ollama / 自定义模板，key 输入不回显，测通后写入 `~/.kclaw/config.json`（权限 0600）。daemon 无需单独启动：`kclaw chat` / `kclaw web` 发现它不在时会自动启动。
+配置流程内置 DeepSeek / OpenAI / Ollama / 自定义模板，key 输入不回显，测通后写入 `~/.kclaw/config.json`（权限 0600）。daemon 无需单独启动：`kclaw chat` / `kclaw web` 发现它不在时会自动启动。
 
 ---
 
@@ -37,7 +37,7 @@ kclaw web     # 浏览器打开 WebUI（带 token，自动登录）
 - **工具 + 确认**：agent 可调用 exec、fs_read 等工具；高危操作执行前弹出确认（允许 / 拒绝），决策全部记入审计日志。
 - **会话**：对话逐条持久化，可随时恢复历史会话。
 - **任务**：cron 定时任务（如 `0 9 * * *` 每日早报），到点 daemon 自动创建新会话执行。
-- **审计**：权限决策全程留痕，WebUI「审计」页可查。
+- **审计**：权限决策全程记录，WebUI「审计」页可查。
 - **记忆**：输入「记住我住在上海」→ 存为 markdown 笔记（SQLite 全文索引）；再问「我住哪？」可直接命中。
 - **WebUI**：浏览器图形界面，功能与 CLI 对等（流式对话、确认卡片、会话、任务、审计）。
 

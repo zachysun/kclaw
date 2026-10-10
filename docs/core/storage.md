@@ -30,7 +30,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `<home>/credentials.json` | 密钥文件（0600）：provider 条目 apiKey 与 web.tavilyApiKey 的实际存放处，`loadConfig` 合并回内存配置 | `saveConfig`（每次保存配置时重写）；用户手写亦可 |
 | `<home>/permissions.yaml` | 全局权限规则——在人工确认里选「总是允许」后保存下来的收紧 allow 规则；项目档在工作区 `.kclaw/permissions.yaml`（见下文「保存的权限规则」一节） | run 组装的 `resolveConfirmation`（`packages/core/src/agent/run-assembly.ts`，global 裁决时写入）；用户手写亦可 |
 | `<home>/mcp.json` | 全局组（所有项目共享）的 MCP server 配置（WebUI 的 MCP 页增删改落在这里）；各项目自己的配置在 `<项目>/.kclaw/mcp.json`（见 [mcp](./mcp.md) 与下文「项目 mcp.json」一节） | daemon 的 McpManager persist（global 组归拢写）；用户手写亦可 |
-| `<home>/AGENTS.md` | agent 人格设定，非空则作为系统提示的一部分（stable 段基座）；每次运行拼装的完整系统提示以 `system` 事件按 stable/live 两段全量记录 | 用户手写；daemon 启动时读 |
+| `<home>/AGENTS.md` | agent 人格设定，非空则作为系统提示的一部分（stable 段的基础文本）；每次运行拼装的完整系统提示以 `system` 事件按 stable/live 两段全量记录 | 用户手写；daemon 启动时读 |
 | `<home>/memory/global/` | L2 全局认知（persona.md、wiki/、rule/ 的 markdown，以文件为准） | MemorySystem / 用户手写 |
 | `<home>/memory/projects/<id>/` | L1 项目情节（`<topic>.md` 主题线、workdir.txt、MEMORY.md、state.json、vectors.db） | MemorySystem / 用户手写 |
 | `<home>/skills/` | 全局技能目录（每个子目录是一个技能，含 `SKILL.md`；软链接穿透加载；`.links.json` 旁挂文件记录复用链接与自定义检测目录；项目级技能在工作区 `.kclaw/skills/`，见 [skills](./skills.md)） | 用户手写或经技能页复用写入；每个 run 重新扫描读取 |
@@ -41,7 +41,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `<home>/attachments/<id>/` | 附件外存目录（每会话一个子目录） | server 上传路由 `routes/attachments.ts`；运行时只读挂载 |
 | `<home>/spill/` | 工具输出溢出目录：exec / web_fetch 截断输出时，把捕获到的全量输出写到这里，给模型的截断视图附带 fs_read 定位行 | core `tools/spill.ts`（单文件上限 10 MiB，超出部分不保留）；目录在权限引擎 readRoots 内，`fs_read` 可直接读 |
 | `<home>/logs/` | 日志目录；当前写入方是 MCP：stdio server 的 stderr 抽干写入 `logs/mcp/<server>.log`（0600，单文件封顶 1 MB（1,000,000 字节），见 [mcp](./mcp.md)） | McpManager（`stderrLogDir`） |
-| `<home>/search.db` | 跨会话消息全文索引（SQLite FTS5，`history_search` 与 `GET /search` 的数据面，见 [tools](./tools.md)） | HistorySearchIndex（daemon 组装，随消息实时写入 + 启动回填） |
+| `<home>/search.db` | 跨会话消息全文索引（SQLite FTS5，`history_search` 与 `GET /search` 的检索数据来源，见 [tools](./tools.md)） | HistorySearchIndex（daemon 组装，随消息实时写入 + 启动回填） |
 | `<home>/daemon.json` | daemon 存活标识（server 侧） | `launchDaemon` |
 | `<home>/token` | daemon 鉴权 token（server 侧） | `loadOrCreateToken` |
 
@@ -85,7 +85,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `team.maxActive` | `4` | 同时运行的组员上限；满员时新信在收信箱排队等空闲边投递 |
 | `team.mailbox.maxUnreadPerTarget` / `maxMessageBytes` | `64` / `65536` | 单个收信箱未读上限 / 单条信字节上限，超限投递方收到 error 结果 |
 | `team.taskBoard.maxTasks` | `64` | 任务板总量上限（含终态任务），超限建任务报错 |
-| `goals.judge` | `""` | `/goal` 判定器使用的 provider 条目名（见 [goal](./goal.md)），空 = 回退会话模型线（会话级 model → 默认条目）；循环的机械上限（轮数/token budget 等）是代码内常量，不进 config |
+| `goals.judge` | `""` | `/goal` 判定器使用的 provider 条目名（见 [goal](./goal.md)），空 = 回退会话模型线（会话级 model → 默认条目）；循环的硬性上限（轮数/token budget 等）是代码内常量，不进 config |
 | `server.port` | 无（临时端口） | daemon 的固定监听端口（1-65535）：固定后 WebUI 地址跨重启稳定，不配则每次启动由操作系统分配临时端口。bin 的 `--port` 旗标优先于此字段；固定端口被占用是硬错误（报一行原因退出，绝不静默换端口——地址悄悄漂移正是固定端口要消灭的），非法值回退到临时端口并告警。见 [daemon](../server/daemon.md) |
 
 | `notify.channels` | `[]` | 定时任务终态通知渠道列表；为空即关闭（零开销）。条目 `{ name?, type, url, template? }`，`type` 三种：`bark`（POST JSON `{title, body}`）、`serverchan`（POST 表单 `title`+`desp`）、`webhook`（POST JSON，正文含 title/body 及全部 job 字段）。`template` 占位符：`{{job}}` `{{statusText}}` `{{status}}` `{{summary}}` `{{sessionId}}` `{{sessionUrl}}`，未知占位符渲染为空串 |
@@ -137,7 +137,7 @@ export interface ConfigNotifier {
 }
 export function createConfigNotifier(): ConfigNotifier
 // 配置分节变更的进程内通知：provider 管理路由在持久化后 publish("providers")，
-// 长命消费者（daemon 的 resolver）订阅后清自己的缓存。同步、逐监听者隔离
+// 常驻的订阅方（daemon 的 resolver）订阅后清自己的缓存。同步、逐监听者隔离
 //（一个监听者抛错不影响其余），mcp/channels 是留给其他子系统的占位取值
 
 // packages/core/src/storage/jsonl.ts
@@ -238,7 +238,7 @@ rules:
 
 ## 用量记录（`storage/usage.ts`）
 
-`UsageStore` 是一张只追加、不修改的 SQLite 记录表（`<home>/usage.db`，表 `usage` + `at` 列索引）：daemon 每结束一个 run 就记一行 `{sessionId, runId, model, inputTokens, outputTokens, cacheReadTokens?, cacheWriteTokens?, at}`，行主键为 `u_<sessionId>_<runId>`。除 run 本体（usage-ledger 钩子）与 /goal 判定器（runId 前缀 `goal-judge-`）外，四条后台杂活通道也把花费记进同一张表：压缩摘要（每次压缩两段调用）、会话自动命名、记忆提取与内化、技能提炼，runId 以通道名为前缀（`compaction-`/`autoname-`/`memory-`/`skill-`）；无归属会话、流中断（拿不到 usage）或全零 token 的调用不记。两个缓存列（`cache_read_tokens`/`cache_write_tokens`）可空：NULL = 供应商未返回该指标（**未知**，不是没命中）；旧库经启动时 `PRAGMA table_info(usage)` 检列 + `ALTER TABLE ADD COLUMN` 迁移（先例：jobs 表的 model 列），新建库 SCHEMA 直接含列。记录失败不影响业务本身：写入是同步调用，调用方自己接住错误。run 本体的记录在 usage-ledger 内建钩子里包了 try/catch，四条后台杂活的记录在 server 的 chore-usage.ts 里同样包了 try/catch，usage.db 故障（磁盘满、文件损坏）时只打一行错误日志，run 照常收尾，后台杂活照常进行。
+`UsageStore` 是一张只追加、不修改的 SQLite 记录表（`<home>/usage.db`，表 `usage` + `at` 列索引）：daemon 每结束一个 run 就记一行 `{sessionId, runId, model, inputTokens, outputTokens, cacheReadTokens?, cacheWriteTokens?, at}`，行主键为 `u_<sessionId>_<runId>`。除 run 本体（usage-ledger 钩子）与 /goal 判定器（runId 前缀 `goal-judge-`）外，四条后台 LLM 调用通道也把花费记进同一张表：压缩摘要（每次压缩两段调用）、会话自动命名、记忆提取与沉淀、技能提炼，runId 以通道名为前缀（`compaction-`/`autoname-`/`memory-`/`skill-`）；无归属会话、流中断（拿不到 usage）或全零 token 的调用不记。两个缓存列（`cache_read_tokens`/`cache_write_tokens`）可空：NULL = 供应商未返回该指标（**未知**，不是没命中）；旧库经启动时 `PRAGMA table_info(usage)` 检列 + `ALTER TABLE ADD COLUMN` 迁移（先例：jobs 表的 model 列），新建库 SCHEMA 直接含列。记录失败不影响业务本身：写入是同步调用，调用方自己接住错误。run 本体的记录在 usage-ledger 内建钩子里包了 try/catch，四条后台调用的记录在 server 的 chore-usage.ts 里同样包了 try/catch，usage.db 故障（磁盘满、文件损坏）时只打一行错误日志，run 照常收尾，后台调用照常进行。
 
 ```ts
 // UsageAgg / UsageTotal / UsageBody（GET /usage 响应）的类型出处是 protocol/usage.ts

@@ -1,8 +1,8 @@
-# client-http — 客户端共享的 HTTP 请求基座
+# client-http — 客户端共享的 HTTP 请求模块
 
 ## 职责
 
-`packages/core/src/client-http.ts` 是所有 daemon 客户端（CLI 的 `KclawClient`、WebUI 的 `api.ts`）共用的 HTTP 请求基座，经 `@kclaw/core/client-http` 子路径出口对外发布。它把每处客户端都要重复写的同一套请求管道收敛成一份：Bearer 注入、JSON body 序列化、非 2xx 的错误提取、401 hook、204/空响应解析。
+`packages/core/src/client-http.ts` 是所有 daemon 客户端（CLI 的 `KclawClient`、WebUI 的 `api.ts`）共用的 HTTP 请求模块，经 `@kclaw/core/client-http` 子路径出口对外发布。它把每处客户端都要重复写的同一套请求逻辑收敛成一份：Bearer 注入、JSON body 序列化、非 2xx 的错误提取、401 hook、204/空响应解析。
 
 实现只依赖浏览器/Node 都有的全局 `fetch`，**不 import 任何 `node:*` 模块**——WebUI 把它打进浏览器产物时不会把 Node 绑定的代码带进去（与 `@kclaw/core/protocol` 同一先例）。
 

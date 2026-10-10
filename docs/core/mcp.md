@@ -12,17 +12,17 @@ kclaw 在这个过程中只扮演 MCP **客户端**：它去调用别人的 serv
 
 - **配置驱动，零代码接入**：在配置文件里写几行就能接入一个 server，不需要写任何代码。daemon 恒定构建管理器（一个空的管理器没有任何连接，开销为零）——这样"从 WebUI 添加第一个 server"的管理入口永远可用。
 - **每个项目（工作目录）各有自己的 MCP 层**：组（group）是条目归属与连接归属的统一键——`"global"`（全局组，跨项目共享）或一个工作目录路径（项目组，文件为该目录下的 `.kclaw/mcp.json`）。项目组 id 是工作目录的**规范身份**（core `resolveProjectIdentity`：词法解析成绝对路径，尾部斜杠、`.`/`..` 片段、相对拼写都归一到同一 id；不做符号链接 realpath，也不做 git 根归一化）——同一目录的不同写法只挂一个组，发现边界（会话记录、daemon 工作区、挂载调用）与查找边界（`toolsFor(workdir)`、快照）都过这一条规则。不同项目可以有同名的 server，互不干扰。
-- **取用视图按项目合并**：某项目一轮 run 看到的工具 = 全局组条目 + 该项目组条目的并集，同名时**项目组整体覆盖**（whole-entry override，字段级不合并）。遮蔽只发生在取用视图——两层各连各的连接，被遮蔽的全局条目在其他项目照常可用；项目组里一个 `enabled: false` 的同名条目会在该项目屏蔽全局条目（既不用项目配置，也不用全局的）。
+- **生效的工具清单按项目合并**：某项目一轮 run 看到的工具 = 全局组条目 + 该项目组条目的并集，同名时**项目组整体覆盖**（whole-entry override，字段级不合并）。覆盖只发生在这一层合并里——两层各连各的连接，被覆盖的全局条目在其他项目照常可用；项目组里一个 `enabled: false` 的同名条目会在该项目屏蔽全局条目（既不用项目配置，也不用全局的）。
 - **连接惰性**：daemon 启动时一条不连。每轮 run 组装时求值 `toolsFor(workdir)`：视图里缺失的连接在后台建立（工具从下一轮 run 起可用），已连接的直接贡献工具；同一个项目连续干活复用同一条连接，没有重复握手。从未被任何项目取用的条目保持 `"disconnected"` 状态。
 - **空闲回收**：每条连接记最近使用时间（取用与每次工具调用都会刷新），后台周期扫描（60 秒）断开空闲超过 TTL（10 分钟）的连接——不干活时不留活进程。回收后的条目回到 `"disconnected"`，下次取用自动重连。
 - **有界重试**：连接失败后按指数退避自动重试（默认 1 秒起步、封顶 60 秒），最多 10 次，耗尽停在 `"failed"` 等人处理；一次取用或一次手动连接会把计数归零重来。手动连接（管理方法 `connect`）本身是一次性尝试，背后不排退避循环。
 - **活连接有总量上限**（64）：新建连接前活连接数（connecting + connected）已达上限时，后台路径把失败记到条目状态上（`"failed"` + 提示），手动连接直接报冲突——不自动踢掉旧连接。
 - **配置管理独立于手写的配置文件**：WebUI 增删改的配置写进 daemon 主目录的 `mcp.json`（JSON 格式，与常见 MCP 客户端的习惯一致），不动 `config.json`。项目组配置写进对应目录的 `.kclaw/mcp.json`。持久化按组分发：全局组整层写 `mcp.json`，项目组整层写该项目文件（persist 回调携带组 id 与该组完整条目集；抛错只记日志，不回传——内存里的变更已经生效）。
 - **项目文件 git 跟踪即忽略，首次写入自动 gitignore**：克隆下来的仓库不能自带一份会去连接本地进程的 MCP 配置（与 decided-rules 的防御同动机）。项目文件在 git 里被跟踪时整体忽略并在 daemon 日志告警；首次写入项目文件前自动创建该目录的 `.kclaw` 目录、把 `.kclaw/mcp.json` 追加进工作区 `.gitignore`（幂等）。
-- **项目发现不靠清单**：daemon 管理的项目 = 会话记录（含回收站软删会话）里出现过的全部工作目录 + daemon 自己的工作区。启动时对会话记录现算并集、逐目录挂文件监听；新会话落在新目录时（`session.created` 事件携带 workdir）立即挂载；会话被永久清理且项目再无会话时项目组自然退出（文件保留，目录再来会话自动回来）。不扫描文件系统、不持久化任何清单（`packages/server/src/mcp-projects.ts`）。一个例外：daemon 主目录嵌在某个项目里时（典型形态是工作目录就是用户主目录），该目录的"项目文件"与全局 `mcp.json` 是同一个路径——这样的项目组不会挂载（没有独立的项目层，工具面走全局），否则全局的每次写入都会被项目 watch 当成配置变更，把同名条目一起改掉。
+- **项目发现不靠清单**：daemon 管理的项目 = 会话记录（含回收站软删会话）里出现过的全部工作目录 + daemon 自己的工作区。启动时对会话记录现算并集、逐目录挂文件监听；新会话落在新目录时（`session.created` 事件携带 workdir）立即挂载；会话被永久清理且项目再无会话时项目组自然退出（文件保留，目录再来会话自动回来）。不扫描文件系统、不持久化任何清单（`packages/server/src/mcp-projects.ts`）。一个例外：daemon 主目录嵌在某个项目里时（典型形态是工作目录就是用户主目录），该目录的"项目文件"与全局 `mcp.json` 是同一个路径——这样的项目组不会挂载（没有独立的项目层，工具清单走全局），否则全局的每次写入都会被项目 watch 当成配置变更，把同名条目一起改掉。
 - **热方法换新状态对象**：新增、改配置、启停与换组（`addServer`/`updateServer`/`setEnabled`）都会为该条目造一个全新的状态对象、把旧对象整体废弃（旧对象上的进行中的连接回调、重连定时器全部短路），保证旧配置的回调永远不会落到新配置的状态上；`removeServer` 断开并直接遗忘，不留新对象。两个例外：`connect` 只是对同一个状态对象取消挂着的退避定时器后发起一次连接，不换对象；`updateServer` 同组且配置一字未改时是无操作（活连接原样保留，与对账跳过 deep-equal 条目同一语义）。
 - **每个 run 开始时重新求值工具视图**：daemon 交给 RunManager 的是一个函数（`extraTools: (workdir) => mcpManager.toolsFor(workdir)`），每轮 run 开始时才求值，且入参是该会话的工作目录。某个 server 在两轮 run 之间上线或掉线（或被热方法改了配置），下一轮请求立刻反映最新情况，不用重启 daemon。
-- **工具名加前缀，避免冲突**：来自 MCP 的工具统一命名为 `mcp__<server>__<tool>`（例如 `mcp__filesystem__read_file`）。同一项目的视图内名字唯一（同名已被遮蔽规则消解）；不同项目可以有同名 server——它们出现在不同项目的工具面里，互不见面。与内置工具撞名时，适配器的实现覆盖内置的那个，并打一行日志说明。经 API 新增的 server 名字限定为字母、数字、下划线和连字符（名字会进模型可见的工具名）。
+- **工具名加前缀，避免冲突**：来自 MCP 的工具统一命名为 `mcp__<server>__<tool>`（例如 `mcp__filesystem__read_file`）。同一项目的视图内名字唯一（同名冲突由覆盖规则解决）；不同项目可以有同名 server——它们出现在不同项目的工具清单里，互不见面。与内置工具撞名时，适配器的实现覆盖内置的那个，并打一行日志说明。经 API 新增的 server 名字限定为字母、数字、下划线和连字符（名字会进模型可见的工具名）。
 - **stdio 子进程的 stderr 与 daemon 隔离**：MCP SDK 默认让子进程继承 daemon 的 stderr（前台是终端、respawn 后是 /dev/null）——server 的诊断输出会直接漏进 daemon 的输出流，还长期攥着 daemon 的文件描述符。daemon 组装时传入日志目录（`<home>/logs/mcp`），stdio 传输改用管道并把 stderr 抽干写入 `<日志目录>/<server 名>.log`（0600，封顶 1 MB（1,000,000 字节），每次连接重新打开文件（重连即截断重写，不会跨重连无限增长），写满即停笔但继续抽干，防管道缓冲塞死子进程；文件描述符随流关闭释放）。没传日志目录（独立 core 场景）时 stderr 直接丢弃（`"ignore"`），同样不进 daemon 的输出流。失败全程静默——这是诊断通道，不是连接的一部分。
 - **权限与调度一律按最保守处理**：kclaw 看不到外部工具内部做了什么，所以把它们的每个工具都标记为 `"sensitive"`（每次调用都经过权限网关，默认要人工确认）和 `"serial"`（不与其他工具并发执行）——宁可多打扰用户，也不放开。
 
@@ -74,7 +74,7 @@ kclaw 在这个过程中只扮演 MCP **客户端**：它去调用别人的 serv
 | `stdio` | `{type, command, args?, env?, enabled?}` | 在本地拉起一个子进程，通过标准输入输出与之通信 |
 | `http` | `{type, url, headers?, enabled?}` | 连接一个 streamable HTTP 端点 |
 
-`enabled === false` 的条目停留在 `"disabled"` 状态，永远不会发起连接（但仍会按遮蔽规则挡住全局同名条目）。读写函数收在 core 的 `storage/mcp-config.ts`：`loadMcpJson` / `saveMcpJson`（全局组 `mcp.json` 的读与写）、`loadProjectMcpServers` / `saveProjectMcpJson`（项目组的读与写，按目录复用，含 git 跟踪检测与 gitignore 防御）。
+`enabled === false` 的条目停留在 `"disabled"` 状态，永远不会发起连接（但仍会按同名覆盖规则挡住全局同名条目）。读写函数收在 core 的 `storage/mcp-config.ts`：`loadMcpJson` / `saveMcpJson`（全局组 `mcp.json` 的读与写）、`loadProjectMcpServers` / `saveProjectMcpJson`（项目组的读与写，按目录复用，含 git 跟踪检测与 gitignore 防御）。
 
 ---
 
@@ -177,7 +177,7 @@ daemon 用 `packages/server/src/mcp-projects.ts` 的 `createMcpProjects` 管理�
 
 ### 工具适配（toolsFor）
 
-- 取用视图 = 全局组条目 + 该项目组条目（同名项目组整体覆盖）。视图内每个**已连接**条目声明的每个工具产出一条适配结果：名字改成带前缀的 `mcp__<server>__<tool>`；参数 schema 直接沿用 server 声明的 `inputSchema`（server 没给就用空对象 schema）；描述缺失时补一句默认的 `MCP tool <tool> from server <server>`。
+- 生效的工具清单 = 全局组条目 + 该项目组条目（同名项目组整体覆盖）。视图内每个**已连接**条目声明的每个工具产出一条适配结果：名字改成带前缀的 `mcp__<server>__<tool>`；参数 schema 直接沿用 server 声明的 `inputSchema`（server 没给就用空对象 schema）；描述缺失时补一句默认的 `MCP tool <tool> from server <server>`。
 - 每个工具配一个执行器，风险与并发档位固定为 `"sensitive"` + `"serial"`。执行器在调用时**现取当前连接**（对账换组导致的状态对象替换不会把调用写进死客户端），并刷新该连接的最近使用时间；内部调用 `client.callTool({name: 原名, arguments})`（传入本次 run 的 abort 信号），把返回内容里的全部 text 片段拼接成输出文本。连接已不在时返回一条说明性的错误结果；server 返回 `isError: true` 或调用抛异常同样转成普通错误结果（`{status:"error", output}`）交回给循环——异常不会从执行器里抛出去打断这轮对话。
 
 ### daemon、WebUI 与 CLI 在哪里用到它

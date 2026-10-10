@@ -101,7 +101,7 @@ tick 的第二步 `sessions.purgeExpired(purgeTtlMs)`：把 `deletedAt` 距今 �
 
 - **无效 cron**：`create`/`update` 时 cron-parser 抛错，HTTP 层转 400；已存进表里的 job 不会再解析 cron，除非 `claimDue`——若通过直接修改数据库写入了无效 cron，`claimDue` 的重算会抛错，被 tick 的守卫捕获记日志。
 - **触发期间 job 被删**：`markRun` 对不存在的 id 是 no-op，运行照常完成，只是无处记录。
-- **停机与在途运行**：`stop()` 清除 interval 并 `Promise.allSettled` 等待所有在途 job 运行结束（有界：已结束的 promise 自动从追踪列表移除）。daemon 若在运行途中崩溃，该次触发认领时已推进 `nextRunAt`，被杀死的这一次不会重放，job 在下个调度点照常触发。
+- **停机与进行中的运行**：`stop()` 清除 interval 并 `Promise.allSettled` 等待所有进行中的 job 运行结束（有界：已结束的 promise 自动从追踪列表移除）。daemon 若在运行途中崩溃，该次触发认领时已推进 `nextRunAt`，被杀死的这一次不会重放，job 在下个调度点照常触发。
 - **单 daemon 假设**：`claimDue` 的 CAS 认领让两个句柄同时 tick 也无法重复认领同一次触发，但调度层之外并无互斥；设计前提是单机单 daemon（daemon.json 的 wx 独占认领即为此服务，见 [daemon](../server/daemon.md)）。
 - **CLI 功能面较窄**：`kclaw jobs list` 只读列表（`packages/cli/src/index.ts`）；增删改目前走 HTTP。
 

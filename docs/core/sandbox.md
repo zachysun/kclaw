@@ -35,7 +35,7 @@ export function createExecSandbox(
 ): ExecSandbox
 ```
 
-exec 工具消费的 spawn 契约（`ExecSandboxSpawn`）与沙箱面（`ExecSandbox`）都声明在 `sandbox/provider.ts` 一处，`tools/exec.ts` import 使用；`createExecSandbox` 的返回值同时满足两者（可用时）。组首不变量（超时杀整棵进程树的承重约定）是契约文档的一部分，换实现的人从接口上就能看到。
+exec 工具使用的 spawn 契约（`ExecSandboxSpawn`）与沙箱面（`ExecSandbox`）都声明在 `sandbox/provider.ts` 一处，`tools/exec.ts` import 使用；`createExecSandbox` 的返回值同时满足两者（可用时）。组首不变量（超时杀整棵进程树的承重约定）是契约文档的一部分，换实现的人从接口上就能看到。
 
 ## 平台布局
 

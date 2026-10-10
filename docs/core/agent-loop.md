@@ -195,7 +195,7 @@ daemon 侧 `RunManager.cancel(sessionId)` 调 `AbortController.abort()`，循环
 - [provider](./provider.md)：OpenAI 兼容流解析与 withRetry
 - [permissions](./permissions.md)：判定链与规则语法（allow/deny 的来源）
 - [skills](./skills.md)：技能指定隐式包装（`skill-wrap` 内置 hook + `withLastUserText`）
-- [subagents](./subagents.md)：subagent run 的提示词与工具面（childRun 派生）
+- [subagents](./subagents.md)：subagent run 的提示词与工具清单（childRun 派生）
 - [agent-team](./agent-team.md)：团队身份检测（lead/member/预备组长）与提示词选择（组长协议段 / 组员人设）
 - [hooks](./hooks.md)：位置网格、HookChain 语义、用户文件契约与内置 hook 清单
 - [run-manager](../server/run-manager.md)：daemon 侧如何组装这些依赖
