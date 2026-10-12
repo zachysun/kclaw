@@ -5,6 +5,28 @@ All notable changes to kclaw are documented in this file. The format is based on
 [semantic versioning](https://semver.org/) — note that the 0.x series makes no
 compatibility promises.
 
+## [0.5.1] - 2026-10-12
+
+### Changed
+
+- **Provider wire-format registry** — the provider API formats
+  (OpenAI-compatible vs Anthropic Messages) resolve through a single registry:
+  a provider entry can pin its wire format explicitly, the connectivity probe
+  honors that override, and embedding clients are gated on an explicit
+  capability declaration.
+
+### Fixed
+
+- Usage metering can no longer break the operation it measures, and goal-loop
+  judge retries are decided at assembly time.
+- Architecture-review correctness batch: the exec sandbox spawn contract is in
+  one place, provider HTTP helpers no longer cross adapter boundaries, the
+  credential-location declaration and sensitive-file defaults live in a single
+  leaf, the history-search data face and its limit cap are single-sourced, the
+  daily gate is shared across daemon services, and usage display folds through
+  one merge with protocol-owned REST shapes.
+
+
 ## [0.5.0] - 2026-10-05
 
 ### Added
