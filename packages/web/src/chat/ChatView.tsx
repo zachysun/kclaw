@@ -128,6 +128,8 @@ export interface ChatViewProps {
    * 置灰，POST 与跳转反馈归所有方（ChatPanel/App）。
    */
   onFork?: (messageId: string) => void
+  /** fork 请求进行中：禁用全部气泡的 fork 按钮（防重复提交）。 */
+  forkPending?: boolean
   /**
    * 压缩审计记录（GET /sessions/:id/compactions 的 UI 镜像，ChatPanel
    * 在会话选中时并行拉取）。null/undefined（未加载或拉取失败）→ 不渲染
@@ -181,7 +183,7 @@ export interface ChatViewProps {
   usage?: ReactNode
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDismissNotice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, onFork, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal, usage }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDismissNotice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, onFork, forkPending, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal, usage }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Suggestion-menu state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -218,9 +220,10 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
   // — stop first, then redo. Child sessions are read-only: never offered.
   const idle = view.runState === "idle" && view.queue.length === 0 && view.compacting !== true
   const canRetry = !readOnly && idle && onRetry !== undefined
-  // fork：任意消息可点，但只在空闲时可用（复制历史不容竞态）；非空闲置灰
-  // 并带提示，不隐藏（运行结束后可 fork）。
-  const canFork = idle
+  // fork：任意消息可点，但只在空闲时可用（复制历史不容竞态）；请求进行中
+  // 全体禁点（forkPending，防连点出多个会话）；非空闲置灰并带提示，不隐藏
+  // （运行结束后可 fork）。
+  const canFork = idle && !forkPending
   const lastUserIdx = findLastIdx(view.messages, (m) => m.role === "user")
   const lastAssistantIdx = findLastIdx(view.messages, (m) => m.role === "assistant")
   const lastUser = lastUserIdx === -1 ? undefined : view.messages[lastUserIdx]!

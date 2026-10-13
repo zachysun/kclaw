@@ -1,4 +1,4 @@
-import { forkSession, type HistorySearchIndex, type MemorySystem, type SessionMeta, type SessionStore } from "@kclaw/core"
+import { forkSession, ForkPointNotFoundError, type HistorySearchIndex, type MemorySystem, type SessionMeta, type SessionStore } from "@kclaw/core"
 import type { RunManager } from "./run.js"
 
 /**
@@ -6,7 +6,9 @@ import type { RunManager } from "./run.js"
  * (session/fork.ts): idle gating (the fork copies history, so it must not
  * race a live run/queue/compaction), memory-watermark seeding, search-index
  * marking and the attachments dir. The HTTP route stays a thin translator
- * over the discriminated outcome (no error-message matching).
+ * over the discriminated outcome; the only core error mapped by identity is
+ * ForkPointNotFoundError → 400 (anything else is a 500 with a generic body —
+ * internal error text may carry filesystem paths and must not reach clients).
  */
 export interface SessionForkHost {
   fork(sourceId: string, messageId?: string): ForkOutcome
@@ -29,6 +31,9 @@ export function createSessionForkHost(deps: {
 }): SessionForkHost {
   return {
     fork(sourceId, messageId) {
+      // 预检与 core forkSession 内部校验是有意重复：host 这层把已知拒绝翻译成
+      // 准确的状态码（core 只抛无类型 Error，不知道 HTTP）；core 重复校验是
+      // 对直接调用方（测试、未来 CLI 消费）保权威。两层文案保持一致。
       const meta = deps.sessions.meta(sourceId)
       if (meta === undefined || meta.deleted === true) return { ok: false, status: 404, error: "session not found" }
       // v1 非目标（spec §4.4）：subagent 会话只读，不是用户可分叉的对话线。
@@ -51,9 +56,11 @@ export function createSessionForkHost(deps: {
         )
         return { ok: true, meta: forked }
       } catch (e) {
-        const message = e instanceof Error ? e.message : String(e)
-        if (message.startsWith("fork 点不存在")) return { ok: false, status: 400, error: message }
-        return { ok: false, status: 500, error: message }
+        if (e instanceof ForkPointNotFoundError) return { ok: false, status: 400, error: e.message }
+        // 未知错误（磁盘、附件拷贝等）：细节进 daemon 日志，接口只回通用文案，
+        // 避免 Error.message 里的绝对路径等本机信息漏给客户端。
+        console.error("[session-fork] fork failed:", e)
+        return { ok: false, status: 500, error: "fork 失败：内部错误" }
       }
     },
   }

@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync } from "node:fs"
+import { copyFileSync, mkdirSync, rmSync } from "node:fs"
 import { dirname, isAbsolute, join, relative } from "node:path"
 import { newId } from "../protocol/ids.js"
 import { isMessageEvent, isRunEndedEvent } from "./events.js"
@@ -38,6 +38,9 @@ export interface ForkDeps {
   markSearchBackfilled?: (sessionId: string) => void
 }
 
+/** 所点消息不在源会话事件流里（消息被重试截掉、客户端传了过期 id 等）；宿主据此映射 400。 */
+export class ForkPointNotFoundError extends Error {}
+
 /** 从 sourceId 会话的 messageId 消息处（含）fork；缺省 messageId = 最新状态。 */
 export function forkSession(deps: ForkDeps, opts: { sourceId: string; messageId?: string }): SessionMeta {
   const { store } = deps
@@ -62,7 +65,10 @@ export function forkSession(deps: ForkDeps, opts: { sourceId: string; messageId?
       type: "session.forked",
       at: new Date().toISOString(),
       sourceSessionId: opts.sourceId,
-      sourceMessageId: opts.messageId ?? lastCopiedMessageId ?? "",
+      // 缺省 messageId 或复制段内无消息（空会话全量复制）时省略。
+      ...(opts.messageId !== undefined || lastCopiedMessageId !== undefined
+        ? { sourceMessageId: opts.messageId ?? lastCopiedMessageId }
+        : {}),
       title: forkTitle(store, opts.sourceId),
     })
     const meta = store.rebuildMeta(id)
@@ -72,6 +78,9 @@ export function forkSession(deps: ForkDeps, opts: { sourceId: string; messageId?
     return meta
   } catch (err) {
     store.purge(id)
+    // 附件目录与 sessions 目录分属两棵树（<home>/attachments/<id>），purge 只
+    // 管后者；拷贝中途失败已建出的附件半成品目录在这里补删。
+    if (deps.attachmentsDir !== undefined) rmSync(join(deps.attachmentsDir, id), { recursive: true, force: true })
     throw err
   }
 }
@@ -86,7 +95,7 @@ export function forkSession(deps: ForkDeps, opts: { sourceId: string; messageId?
 function resolveCutIndex(events: SessionEvent[], messageId: string | undefined): number {
   if (messageId === undefined) return events.length - 1
   const clicked = events.findIndex((e) => isMessageEvent(e) && e.id === messageId)
-  if (clicked < 0) throw new Error(`fork 点不存在：${messageId}`)
+  if (clicked < 0) throw new ForkPointNotFoundError(`fork 点不存在：${messageId}`)
   for (let i = clicked + 1; i < events.length; i++) {
     if (isRunEndedEvent(events[i]!)) return i
   }

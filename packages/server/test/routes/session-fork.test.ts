@@ -74,6 +74,19 @@ describe("POST /sessions/:id/fork", () => {
     expect(badType.statusCode).toBe(400)
   })
 
+  it("core 内部错误 → 500 通用文案（不透传 Error.message）", async () => {
+    const src = seedSession(store)
+    const explosive: SessionStore = Object.create(store)
+    explosive.readEvents = () => {
+      throw new Error("EACCES: permission denied, open /Users/someone/.kclaw/sessions/x/events.jsonl")
+    }
+    app = await buildWithHost(createSessionForkHost({ sessions: explosive, run: { isIdle: () => true }, workspaceFallback: "/ws/root" }))
+    const res = await app.inject({ method: "POST", url: `/sessions/${src.id}/fork`, headers: AUTH, payload: {} })
+    expect(res.statusCode).toBe(500)
+    expect(res.body).not.toContain("/Users/someone")
+    expect(JSON.parse(res.body).error).toBe("fork 失败：内部错误")
+  })
+
   it("messageId 在流中不存在 → 400", async () => {
     app = await buildWithHost(createSessionForkHost({ sessions: store, run: { isIdle: () => true }, workspaceFallback: "/ws/root" }))
     const src = seedSession(store)

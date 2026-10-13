@@ -31,6 +31,7 @@ interface ViewOpts {
   onStopRun?: () => void
   onRetry?: (fromMessageId: string, text: string) => void
   onFork?: (messageId: string) => void
+  forkPending?: boolean
 }
 
 function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
@@ -55,6 +56,7 @@ function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
         onStopRun={opts.onStopRun}
         onRetry={opts.onRetry}
         onFork={opts.onFork}
+        forkPending={opts.forkPending}
         compactions={opts.compactions}
         notice={opts.notice}
         noticeAction={opts.noticeAction}
@@ -642,6 +644,15 @@ describe("session fork affordances", () => {
     { id: "msg_c", sessionId: "s1", role: "user", blocks: [{ id: "b3", type: "text", text: "第二问" }], createdAt: "2026-08-15T00:00:02.000Z" },
     { id: "msg_d", sessionId: "s1", role: "assistant", blocks: [{ id: "b4", type: "text", text: "第二答" }], createdAt: "2026-08-15T00:00:03.000Z" },
   ]
+
+  it("forkPending：请求进行中全部 fork 按钮禁用（防连点重复提交）", () => {
+    const onFork = vi.fn()
+    const h = mountView(two, { onFork, forkPending: true })
+    for (const b of h.container.querySelectorAll('[data-testid="msg-fork"]')) {
+      expect((b as HTMLButtonElement).disabled).toBe(true)
+    }
+    h.unmount()
+  })
 
   it("空闲：每条气泡都有 fork 按钮，点谁从谁分叉", () => {
     const onFork = vi.fn()

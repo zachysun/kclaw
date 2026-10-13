@@ -15,11 +15,12 @@ export interface SessionRestoredEvent { type: "session.restored"; at: string }
 /**
  * 会话 fork 的血缘记录（单边：只落在新会话流上，原会话一字节不动）。
  * sourceMessageId 是用户所点的语义分叉点（未归一化）；实际复制区间归一化到
- * 该消息所属 run 的结束处（见 session/fork.ts）。title 是 fork 会话的初始
- * 标题（同源多次 fork 带序号）。事件推进 updatedAt（fork 是用户可见动作），
+ * 该消息所属 run 的结束处（见 session/fork.ts）。缺省 messageId 全量复制、
+ * 或复制段内没有任何消息（空会话）时省略。title 是 fork 会话的初始标题
+ * （同源多次 fork 带序号）。事件推进 updatedAt（fork 是用户可见动作），
  * 投影出 meta.forkedFrom。
  */
-export interface SessionForkedEvent { type: "session.forked"; at: string; sourceSessionId: string; sourceMessageId: string; title: string }
+export interface SessionForkedEvent { type: "session.forked"; at: string; sourceSessionId: string; sourceMessageId?: string; title: string }
 export interface SessionSetEvent { type: "session.set"; at: string; model?: string | null; mode?: import("../permissions/modes.js").PermissionMode | null; disposition?: "steer" | "wait" | "interrupt" | null }
 export type MessageEvent = { type: "message" } & Message
 /**

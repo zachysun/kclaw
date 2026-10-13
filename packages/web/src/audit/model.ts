@@ -456,7 +456,8 @@ export function sessionSummary(event: SessionMetaEvent): string {
     case "session.renamed":
       return `改名 · ${event.title}`
     case "session.forked":
-      return `fork 自会话 · ${event.sourceSessionId} @ ${event.sourceMessageId} · ${event.title}`
+      const point = event.sourceMessageId !== undefined ? ` @ ${event.sourceMessageId}` : "（全量复制）"
+      return `fork 自会话 · ${event.sourceSessionId}${point} · ${event.title}`
     case "session.deleted":
       return "移入回收站"
     case "session.restored":
@@ -482,7 +483,7 @@ export function sessionFullContent(event: SessionMetaEvent): string {
   }
   if (event.type === "session.forked") {
     lines.push(`sourceSessionId: ${event.sourceSessionId}`)
-    lines.push(`sourceMessageId: ${event.sourceMessageId}`)
+    if (event.sourceMessageId !== undefined) lines.push(`sourceMessageId: ${event.sourceMessageId}`)
   }
   if (event.type === "session.set") {
     if (event.model !== undefined) lines.push(`model: ${String(event.model)}`)

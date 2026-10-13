@@ -26,7 +26,7 @@ export type SessionEvent =
 | `session.renamed` | `at`、`title`、`source?`（auto=自动命名，不传视为 manual） |
 | `session.deleted` | `at` |
 | `session.restored` | `at` |
-| `session.forked` | `at`、`sourceSessionId`、`sourceMessageId`（用户所点的语义分叉点，未归一化）、`title`（fork 会话初始标题）——会话 fork 的血缘记录，只落在新会话流上（原会话一字节不动），投影出 `meta.forkedFrom`；实际复制区间归一化到该消息所属 run 的结束处（见 `core/src/session/fork.ts`） |
+| `session.forked` | `at`、`sourceSessionId`、`sourceMessageId?`（用户所点的语义分叉点，未归一化；缺省消息 id 全量复制且流内无消息时省略）、`title`（fork 会话初始标题）——会话 fork 的血缘记录，只落在新会话流上（原会话一字节不动），投影出 `meta.forkedFrom`；实际复制区间归一化到该消息所属 run 的结束处（见 `core/src/session/fork.ts`） |
 | `session.set` | `at`、`model?`、`mode?`、`disposition?`（键出现才发） |
 
 ### 消息与运行（5 种）

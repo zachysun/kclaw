@@ -73,7 +73,18 @@ describe("flattenAudit", () => {
     expect(row.kind).toBe("session")
     if (row.kind !== "session") return
     expect(sessionSummary(row.event)).toContain("ses_src")
+    expect(sessionSummary(row.event)).toContain("@ msg_1")
     expect(sessionFullContent(row.event)).toContain("sourceMessageId: msg_1")
+  })
+
+  it("session.forked 无 sourceMessageId（空会话全量复制）：摘要标注全量、全文不带该字段", () => {
+    const rows = flattenAudit([
+      { type: "session.forked", at: "2026-09-08T09:05:00.000Z", sourceSessionId: "ses_src", title: "空会话 · fork" },
+    ])
+    const row = rows[0]!
+    if (row.kind !== "session") return
+    expect(sessionSummary(row.event)).toContain("（全量复制）")
+    expect(sessionFullContent(row.event)).not.toContain("sourceMessageId")
   })
 
   it("混合流：块行/压缩/记忆/系统/沙箱按事件序渲染，key 携带事件下标", () => {

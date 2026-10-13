@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { newId } from "../protocol/ids.js"
 import type { Message } from "../protocol/messages.js"
@@ -36,7 +36,7 @@ export interface SessionMeta {
    * 会话是完全独立的普通会话：删除互不级联，与 subagent 的 parentSessionId
    * 语义无关。
    */
-  forkedFrom?: { sessionId: string; messageId: string }
+  forkedFrom?: { sessionId: string; /** 用户所点的分叉点消息；缺省 messageId 全量复制且流内无消息时省略。 */ messageId?: string }
   /** Per-session model override (empty/absent → daemon default). */
   model?: string
   /** Session permission mode (absent → "default"). */
@@ -166,7 +166,11 @@ export class SessionStore {
    */
   writeEventsRaw(id: string, events: SessionEvent[]): void {
     mkdirSync(this.sessionDir(id), { recursive: true })
-    writeFileAtomic(this.eventsPath(id), events.map((e) => JSON.stringify(e)).join("\n") + (events.length > 0 ? "\n" : ""))
+    // 只许写入尚无事件的会话（fork 建新流用）：append-only 的历史一旦整文件
+    // 覆盖就无从恢复，误用必须当场炸出来。
+    const target = this.eventsPath(id)
+    if (existsSync(target) && statSync(target).size > 0) throw new Error(`writeEventsRaw: event stream already exists: ${id}`)
+    writeFileAtomic(target, events.map((e) => JSON.stringify(e)).join("\n") + (events.length > 0 ? "\n" : ""))
   }
 
   /** Rebuild the meta projection from the full event stream and write it back;

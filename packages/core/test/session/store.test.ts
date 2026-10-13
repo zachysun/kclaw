@@ -589,6 +589,23 @@ describe("SessionStore readEventsFrom (tail read)", () => {
   })
 })
 
+describe("writeEventsRaw（fork 建新流专用）", () => {
+  it("目标事件流已存在且非空 → 抛错拒绝覆盖", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kclaw-store-raw-"))
+    try {
+      const s = new SessionStore(dir)
+      const m = s.create("已有历史", undefined, "/w", "default")
+      s.appendEvent(m.id, { type: "session.renamed", at: new Date().toISOString(), title: "改名" })
+      expect(() => s.writeEventsRaw(m.id, [])).toThrow(/already exists/)
+      // 空文件（零字节）不算已有历史：fork 建流的写入路径允许重试。
+      writeFileSync(s.eventsPath(m.id), "")
+      expect(() => s.writeEventsRaw(m.id, [{ type: "session.created", at: new Date().toISOString(), title: "t" }])).not.toThrow()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("SessionStore 截断（编辑重试/重新生成的读侧过滤）", () => {
   const user = (sessionId: string, text: string) => newMessage(sessionId, "user", [{ id: newId("blk"), type: "text", text }])
   const assistant = (sessionId: string, text: string) => newMessage(sessionId, "assistant", [{ id: newId("blk"), type: "text", text }])

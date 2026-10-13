@@ -347,7 +347,7 @@ export function SessionList({
                         <span className="session-title">
                           {meta.title}
                           {meta.forkedFrom !== undefined && (
-                            <span className="session-fork-badge" data-testid={`session-fork-badge-${meta.id}`} title={`fork 自会话 ${meta.forkedFrom.sessionId}`}>
+                            <span className="session-fork-badge" data-testid={`session-fork-badge-${meta.id}`} title={`fork 自 ${sessions.find((src) => src.id === meta.forkedFrom?.sessionId)?.title ?? meta.forkedFrom.sessionId}`}>
                               fork
                             </span>
                           )}

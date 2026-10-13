@@ -308,9 +308,9 @@ function MainShell({
       setSelectedId(meta.id)
       const sourceId = meta.forkedFrom?.sessionId
       if (sourceId !== undefined) {
-        notify(`已 fork 出「${meta.title}」`, "info", { label: "返回原会话", onAction: () => setSelectedId(sourceId) })
+        notify("已从原会话 fork", "info", { label: "返回原会话", onAction: () => setSelectedId(sourceId) })
       } else {
-        notify(`已 fork 出「${meta.title}」`)
+        notify("已从原会话 fork")
       }
     },
     [notify],

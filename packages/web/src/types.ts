@@ -31,7 +31,7 @@ export interface SessionMeta {
   deleted?: boolean
   deletedAt?: string
   /** fork 血缘（单边：只有 fork 出的新会话带）；sessionId = 来源会话。 */
-  forkedFrom?: { sessionId: string; messageId: string }
+  forkedFrom?: { sessionId: string; messageId?: string }
 }
 
 /** Wire shape of `GET /fs/browse` (the workdir picker's directory listing). */

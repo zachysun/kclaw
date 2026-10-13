@@ -46,7 +46,10 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
     case "session.renamed": next.title = event.title; next.updatedAt = event.at; break
     case "session.forked": {
       // 单边血缘：fork 的来源只记在新会话的投影里（原会话没有对应事件）。
-      next.forkedFrom = { sessionId: event.sourceSessionId, messageId: event.sourceMessageId }
+      next.forkedFrom = {
+        sessionId: event.sourceSessionId,
+        ...(event.sourceMessageId !== undefined ? { messageId: event.sourceMessageId } : {}),
+      }
       next.title = event.title
       next.updatedAt = event.at
       break

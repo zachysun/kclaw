@@ -175,7 +175,7 @@ export function readJsonl(file: string): unknown[]
 | `model?` | 会话级模型覆盖；空或默认回退到 daemon 默认 |
 | `mode?` | 会话权限模式，`"readonly" \| "default" \| "acceptEdits" \| "trusted" \| "auto"` 五档，默认 default（见 [permissions](./permissions.md)） |
 | `parentSessionId?` | subagent 会话的父会话标识；普通会话没有。引擎侧一切 subagent 特化行为都从它派生（见 [subagents](./subagents.md)） |
-| `forkedFrom?` | fork 血缘（`session.forked` 事件投影，单边：只有 fork 出的新会话带）：`sessionId` 来源会话、`messageId` 用户所点的分叉点。fork 出的会话是完全独立的普通会话（删除互不级联），与 `parentSessionId` 的 subagent 语义无关；复制段经 `writeEventsRaw` 直写（不过追加回调：无总线帧、不喂检索索引），记忆提取水位在 fork 时播种到分叉点 |
+| `forkedFrom?` | fork 血缘（`session.forked` 事件投影，单边：只有 fork 出的新会话带）：`sessionId` 来源会话、`messageId` 用户所点的分叉点（全量复制空会话时省略）。fork 出的会话是完全独立的普通会话（删除互不级联），与 `parentSessionId` 的 subagent 语义无关；复制段经 `writeEventsRaw` 直写（不过追加回调：无总线帧、不喂检索索引），记忆提取水位在 fork 时播种到分叉点 |
 | `compaction?` | 分层压缩状态 `{ segments, top, upto }`（语义见 [compaction](./compaction.md)），由 `compaction` 事件推导（每次压缩把新段汇入 `segments`；`updateMeta` 不再直接改它） |
 | `dispositionOverride?` | 会话级发送处置覆盖（`"steer" \| "wait" \| "interrupt"`），优先于 `sessions.defaultDisposition`。服务端路由接受三个值的写入；Web 与 CLI 的 interrupt 都是一次性动作、不写会话级覆盖（见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)） |
 | `goal?` | 会话级目标快照（`/goal`，`GoalSnapshot` 全量：目标文本、验收命令、状态机、轮数与 token 计数、最近判定摘要），由 `goal.set` 事件全量替换、`goal.cleared` 删除（见 [goal](./goal.md)）。计数字段是检查时刻的展示缓存，权威数据在事件流 |

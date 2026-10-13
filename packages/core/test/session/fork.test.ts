@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SessionStore } from "../../src/session/store.js"
-import { forkSession } from "../../src/session/fork.js"
+import { forkSession, ForkPointNotFoundError } from "../../src/session/fork.js"
 import { newMessage } from "../../src/protocol/messages.js"
 import type { MessageEvent } from "../../src/protocol/session-events.js"
 
@@ -107,6 +107,69 @@ describe("forkSession", () => {
     expect(() => forkSession({ store: s }, { sourceId: "ses_nope" })).toThrow()
     const child = s.create("子会话", undefined, "/w", "default", src.id)
     expect(() => forkSession({ store: s }, { sourceId: child.id })).toThrow()
+  })
+
+  it("messageId 不存在抛 ForkPointNotFoundError（宿主据此映射 400）", () => {
+    const s = new SessionStore(dir)
+    const src = seedTwoRuns(s)
+    try {
+      forkSession({ store: s }, { sourceId: src.id, messageId: "msg_nope" })
+      expect.unreachable()
+    } catch (e) {
+      expect(e).toBeInstanceOf(ForkPointNotFoundError)
+    }
+  })
+
+  it("截断标记随流复制：夹在两轮之间的标记照常带过去，readMessages 过滤语义不变", () => {
+    const s = new SessionStore(dir)
+    // 重试的真实形态：标记夹在旧 run 结束与新 run 开始之间（重做第一轮）。
+    const meta = s.create("原会话", undefined, "/w", "default")
+    const u1 = newMessage(meta.id, "user", [{ id: "blk_1", type: "text", text: "第一问" }])
+    const a1 = newMessage(meta.id, "assistant", [{ id: "blk_2", type: "text", text: "第一答" }])
+    const u2 = newMessage(meta.id, "user", [{ id: "blk_3", type: "text", text: "第二问" }])
+    const a2 = newMessage(meta.id, "assistant", [{ id: "blk_4", type: "text", text: "第二答" }])
+    s.appendRunStarted(meta.id, { at: new Date().toISOString(), trigger: "user" })
+    s.appendMessage(meta.id, u1)
+    s.appendMessage(meta.id, a1)
+    s.appendRunEnded(meta.id, { at: new Date().toISOString(), stopReason: "end_turn" })
+    s.appendMessageTruncated(meta.id, { at: new Date().toISOString(), fromMessageId: u1.id })
+    s.appendRunStarted(meta.id, { at: new Date().toISOString(), trigger: "user" })
+    s.appendMessage(meta.id, u2)
+    s.appendMessage(meta.id, a2)
+    s.appendRunEnded(meta.id, { at: new Date().toISOString(), stopReason: "end_turn" })
+
+    const forked = forkSession({ store: s }, { sourceId: meta.id, messageId: a2.id })
+    expect(s.readEvents(forked.id).map((e) => e.type)).toContain("message.truncated")
+    // 标记前的 u1/a1 被隐藏；标记之后追加的 u2/a2 不受旧起点约束，照常可见。
+    expect(s.readMessages(forked.id).map((m) => m.id)).toEqual([u2.id, a2.id])
+  })
+
+  it("空会话全量复制：sourceMessageId 省略（无消息可指）", () => {
+    const s = new SessionStore(dir)
+    const src = s.create("空会话", undefined, "/w", "default")
+    const forked = forkSession({ store: s }, { sourceId: src.id })
+    const ev = s.readEvents(forked.id).find((e) => e.type === "session.forked")!
+    expect(ev.type === "session.forked" && ev.sourceMessageId).toBe(undefined)
+    expect(s.meta(forked.id)?.forkedFrom).toEqual({ sessionId: src.id })
+  })
+
+  it("附件拷贝失败：会话目录与附件半成品目录都不残留", () => {
+    const s = new SessionStore(dir)
+    const src = seedTwoRuns(s)
+    const attachmentsDir = join(dir, "attachments")
+    // 块引用的源文件不存在 → copyFileSync 抛错。
+    const withAtt = newMessage(src.id, "user", [
+      { id: "blk_1", type: "attachment", mimeType: "image/png", name: "gone.png", source: { type: "file", path: join(attachmentsDir, src.id, "att_1__gone.png") } },
+    ])
+    s.appendRunStarted(src.id, { at: new Date().toISOString(), trigger: "user" })
+    s.appendMessage(src.id, withAtt)
+    s.appendRunEnded(src.id, { at: new Date().toISOString(), stopReason: "end_turn" })
+    expect(() => forkSession({ store: s, attachmentsDir }, { sourceId: src.id, messageId: withAtt.id })).toThrow()
+    expect(existsSync(join(dir, "sessions", "sessions"))).toBe(false)
+    // 新会话目录已清（allMetas 不含成功的新会话）且附件目录无 fork 半成品。
+    expect(s.allMetas().filter((m) => m.forkedFrom !== undefined)).toHaveLength(0)
+    expect(existsSync(attachmentsDir)).toBe(true) // 源会话附件目录未受伤
+    expect(readdirSync(attachmentsDir).filter((d) => d !== src.id)).toHaveLength(0)
   })
 
   it("记忆水位播种与搜索标记回调：以 fork 点收尾", () => {
