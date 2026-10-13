@@ -1,6 +1,6 @@
 import type {
   CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
-  SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
+  SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent, SessionForkedEvent,
   SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SessionEvent, SkillEvent, SystemEvent, TeamAuditEvent,
   GoalCheckedEvent, GoalClearedEvent, GoalSetEvent,
 } from "../protocol/session-events.js"
@@ -12,13 +12,14 @@ import type { SessionMeta } from "./store.js"
 // packages that historically imported them from here.
 export type {
   CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
-  SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent,
+  SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent, SessionForkedEvent,
   SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SkillEvent, SystemEvent, TeamAuditEvent,
   GoalCheckedEvent, GoalClearedEvent, GoalSetEvent,
 } from "../protocol/session-events.js"
 
 export function isMessageEvent(e: SessionEvent): e is MessageEvent { return e.type === "message" }
 export function isMessageTruncatedEvent(e: SessionEvent): e is MessageTruncatedEvent { return e.type === "message.truncated" }
+export function isSessionForkedEvent(e: SessionEvent): e is SessionForkedEvent { return e.type === "session.forked" }
 export function isCompactionEvent(e: SessionEvent): e is CompactionEvent { return e.type === "compaction" }
 export function isMemoryEvent(e: SessionEvent): e is MemoryEvent { return e.type === "memory" }
 export function isSkillEvent(e: SessionEvent): e is SkillEvent { return e.type === "skill" }
@@ -43,6 +44,13 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
       break
     }
     case "session.renamed": next.title = event.title; next.updatedAt = event.at; break
+    case "session.forked": {
+      // 单边血缘：fork 的来源只记在新会话的投影里（原会话没有对应事件）。
+      next.forkedFrom = { sessionId: event.sourceSessionId, messageId: event.sourceMessageId }
+      next.title = event.title
+      next.updatedAt = event.at
+      break
+    }
     case "session.deleted": next.deleted = true; next.deletedAt = event.at; next.updatedAt = event.at; break
     case "session.restored": next.deleted = false; delete next.deletedAt; next.updatedAt = event.at; break
     case "session.set": {

@@ -75,6 +75,11 @@ export interface ChatPanelProps {
   /** Switch the global selection to the given session — the read-only child
    * page's「返回主会话」button (the child never appears in the sidebar). */
   onReturnToParent?: (parentId: string) => void
+  /**
+   * Session fork 成功后上抛新会话 meta：所有方（App）负责跳转、侧栏刷新与
+   * 全局 toast（带"返回原会话"动作）。失败留在本会话，走本面板通知条。
+   */
+  onForked?: (meta: import("../types.js").SessionMeta) => void
 }
 
 /** Max consecutive failed reconnects before giving up with a notice. */
@@ -110,7 +115,7 @@ function errorFrameMessage(frame: unknown): string | null {
   return typeof message === "string" ? message : null
 }
 
-export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten, onOpenAudit, onOpenMcp, onReturnToParent }: ChatPanelProps) {
+export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten, onOpenAudit, onOpenMcp, onReturnToParent, onForked }: ChatPanelProps) {
   const [view, setViewState] = useState<ChatState>(() => initChat(initialMessages))
   const [notice, setNotice] = useState<string | null>(null)
   // 已装用户可见技能：出现在斜杠菜单的动态命令（/技能名），会话切换重拉
@@ -737,6 +742,14 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
   }, [sessionId, updateView])
 
+  /** Session fork：POST 成功上抛新会话；失败（409 忙等）留在本会话进通知条。 */
+  const handleFork = useCallback((messageId: string) => {
+    api
+      .post<import("../types.js").SessionMeta>(`/sessions/${encodeURIComponent(sessionId)}/fork`, { messageId })
+      .then((meta) => onForked?.(meta))
+      .catch((err: unknown) => setNotice(`fork 失败: ${err instanceof Error ? err.message : String(err)}`))
+  }, [api, sessionId, onForked])
+
   /** 三选切换：steer/wait 本地立即生效并写会话级覆盖（与 CLI /steer
    *  同一存储）；interrupt 是一次性——本地选中仅用于这一次发送、不写覆盖，
    *  发出后由 handleSend 切回基础处置。 */
@@ -811,6 +824,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           onCancelAllQueued={() => handleCancelQueued()}
           onOpenAudit={onOpenAudit}
           readOnly={childSession}
+          onFork={childSession ? undefined : handleFork}
           onReturnToParent={onReturnToParent !== undefined && childParentId !== null ? () => onReturnToParent(childParentId) : undefined}
           onCancelCompaction={handleCancelCompaction}
           onStopRun={handleStopRun}

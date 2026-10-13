@@ -29,6 +29,14 @@ export interface SessionMeta {
    * 不进记忆提取扫描，token 用量归组到父会话名下；完整轨迹仍按 id 可查（审计）。
    */
   parentSessionId?: string
+  /**
+   * fork 血缘（session.forked 事件投影，单边：只有 fork 出的新会话带）。
+   * sessionId = 来源会话，messageId = 用户所点的语义分叉点（未归一化；
+   * 实际复制区间到该消息所属 run 的结束处，见 session/fork.ts）。fork 出的
+   * 会话是完全独立的普通会话：删除互不级联，与 subagent 的 parentSessionId
+   * 语义无关。
+   */
+  forkedFrom?: { sessionId: string; messageId: string }
   /** Per-session model override (empty/absent → daemon default). */
   model?: string
   /** Session permission mode (absent → "default"). */
@@ -148,6 +156,17 @@ export class SessionStore {
    *  the skipped prefix neither parsed nor materialized. */
   readEventsFrom(id: string, since: number): SessionEvent[] {
     return readJsonlFrom(this.eventsPath(id), since) as SessionEvent[]
+  }
+
+  /**
+   * fork 支持：把一段事件原文一次性写进新会话的 events.jsonl。与 appendEvent
+   * 的区别：不折叠投影、不触发 onAppended——复制段不产生总线帧、不喂搜索
+   * 索引（重复归属防线，见 session/fork.ts）；投影由调用方随后 rebuildMeta
+   * 建立。仅供刚建目录、尚无事件的会话使用。
+   */
+  writeEventsRaw(id: string, events: SessionEvent[]): void {
+    mkdirSync(this.sessionDir(id), { recursive: true })
+    writeFileAtomic(this.eventsPath(id), events.map((e) => JSON.stringify(e)).join("\n") + (events.length > 0 ? "\n" : ""))
   }
 
   /** Rebuild the meta projection from the full event stream and write it back;

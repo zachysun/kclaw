@@ -344,7 +344,14 @@ export function SessionList({
                         data-selected={meta.id === selectedId}
                         onClick={() => onSelect(meta.id)}
                       >
-                        <span className="session-title">{meta.title}</span>
+                        <span className="session-title">
+                          {meta.title}
+                          {meta.forkedFrom !== undefined && (
+                            <span className="session-fork-badge" data-testid={`session-fork-badge-${meta.id}`} title={`fork 自会话 ${meta.forkedFrom.sessionId}`}>
+                              fork
+                            </span>
+                          )}
+                        </span>
                         <span className="session-meta">
                           {meta.workdir !== undefined && (
                             <span className="session-workdir" data-testid={`session-workdir-${meta.id}`} title={meta.workdir}>

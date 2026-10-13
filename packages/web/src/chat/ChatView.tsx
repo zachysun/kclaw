@@ -17,7 +17,7 @@ import { TeamPanelCard } from "./TeamPanel.js"
 import { GoalPanelCard } from "./GoalPanel.js"
 import type { TeamPanel } from "@kclaw/core/protocol"
 import { IconButton } from "../ui/IconButton.js"
-import { PencilIcon, RefreshIcon } from "../ui/icons.js"
+import { ForkIcon, PencilIcon, RefreshIcon } from "../ui/icons.js"
 import { fmtTokens } from "../audit/model.js"
 
 /**
@@ -123,6 +123,12 @@ export interface ChatViewProps {
    */
   onRetry?: (fromMessageId: string, text: string) => void
   /**
+   * Session fork（从任意消息处分叉新会话）：消息气泡的 Fork 按钮上抛。
+   * 只在非只读会话传入（subagent 会话不给入口）；空闲与否由本组件控制按钮
+   * 置灰，POST 与跳转反馈归所有方（ChatPanel/App）。
+   */
+  onFork?: (messageId: string) => void
+  /**
    * 压缩审计记录（GET /sessions/:id/compactions 的 UI 镜像，ChatPanel
    * 在会话选中时并行拉取）。null/undefined（未加载或拉取失败）→ 不渲染
    * 审计折叠条。
@@ -175,7 +181,7 @@ export interface ChatViewProps {
   usage?: ReactNode
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDismissNotice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal, usage }: ChatViewProps) {
+export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDismissNotice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, onFork, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal, usage }: ChatViewProps) {
   const [draft, setDraft] = useState("")
   // Suggestion-menu state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
@@ -212,6 +218,9 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
   // — stop first, then redo. Child sessions are read-only: never offered.
   const idle = view.runState === "idle" && view.queue.length === 0 && view.compacting !== true
   const canRetry = !readOnly && idle && onRetry !== undefined
+  // fork：任意消息可点，但只在空闲时可用（复制历史不容竞态）；非空闲置灰
+  // 并带提示，不隐藏（运行结束后可 fork）。
+  const canFork = idle
   const lastUserIdx = findLastIdx(view.messages, (m) => m.role === "user")
   const lastAssistantIdx = findLastIdx(view.messages, (m) => m.role === "assistant")
   const lastUser = lastUserIdx === -1 ? undefined : view.messages[lastUserIdx]!
@@ -434,8 +443,10 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
                 onOpenAudit={onOpenAudit}
                 canEdit={canRetry && idx === lastUserIdx}
                 canRegenerate={canRetry && idx === lastAssistantIdx && lastUser !== undefined}
+                canFork={onFork !== undefined && canFork}
                 onEditStart={(text) => setEditing({ id: message.id, text })}
                 onRegenerate={lastUser === undefined ? undefined : () => onRetry?.(lastUser.id, firstRenderedText(lastUser))}
+                onFork={onFork}
               />
             )}
           </Fragment>
@@ -758,8 +769,10 @@ function MessageBubble({
   onOpenAudit,
   canEdit,
   canRegenerate,
+  canFork,
   onEditStart,
   onRegenerate,
+  onFork,
 }: {
   message: RenderedMessage
   onOpenAudit?: (sessionId: string) => void
@@ -767,8 +780,11 @@ function MessageBubble({
   canEdit?: boolean
   /** While the session is idle, the last assistant bubble offers regenerate (rerun the last user message as-is). */
   canRegenerate?: boolean
+  /** Session is idle and fork is wired: every bubble offers the fork entry. */
+  canFork?: boolean
   onEditStart?: (currentText: string) => void
   onRegenerate?: () => void
+  onFork?: (messageId: string) => void
 }) {
   const streaming = message.pending && message.blocks.length === 0
   // 组员来信（团队收信箱投递的用户消息）不渲染成用户气泡：改为 agent 一侧的
@@ -792,7 +808,7 @@ function MessageBubble({
       {message.aborted === true && (
         <span className="msg-aborted" data-testid="msg-aborted">已中断</span>
       )}
-      {(canEdit === true || canRegenerate === true) && (
+      {(canEdit === true || canRegenerate === true || onFork !== undefined) && (
         <span className="msg-actions">
           {canEdit === true && (
             <IconButton
@@ -808,6 +824,15 @@ function MessageBubble({
               icon={<RefreshIcon />}
               testid="msg-regenerate"
               onClick={() => onRegenerate?.()}
+            />
+          )}
+          {onFork !== undefined && (
+            <IconButton
+              label={canFork ? "从此处 fork" : "运行结束后可 fork"}
+              icon={<ForkIcon />}
+              testid="msg-fork"
+              disabled={!canFork}
+              onClick={() => onFork(message.id)}
             />
           )}
         </span>

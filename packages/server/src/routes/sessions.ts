@@ -1,6 +1,7 @@
 import type { FastifyError, FastifyInstance } from "fastify"
 import { isPermissionMode, PERMISSION_MODES, type KclawConfig, type MemorySystem, type SessionStore } from "@kclaw/core"
 import type { RunManager } from "../run.js"
+import type { SessionForkHost } from "../session-fork.js"
 import type { TeamHost } from "../team.js"
 import type { GoalLoopHost } from "../goal-loop.js"
 
@@ -17,6 +18,12 @@ export interface SessionStores {
    * (same behavior as a project without memory assembled).
    */
   memory?: MemorySystem
+  /**
+   * The session fork host (daemon assembly: idle gate + watermark seeding +
+   * search marking + attachments). Missing (bare apps/tests) → the fork route
+   * answers 503.
+   */
+  sessionFork?: SessionForkHost
   /**
    * Cancel every live BACKGROUND subagent of one parent session (the
    * subagent host's live records, injected by createApp). Missing →
@@ -261,6 +268,22 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
         const status = isBusy || isQueued ? 409 : message === "session not found" ? 404 : 500
         return reply.code(status).send({ error: message })
       }
+    })
+
+    // Session fork: branch a new session from any message (spec in
+    // docs/superpowers/session-fork-spec.md). Validation and the core copy
+    // live in the host; the route is a thin translator over the outcome.
+    scope.post("/sessions/:id/fork", async (request, reply) => {
+      const { id } = request.params as { id: string }
+      if (stores.sessionFork === undefined) return reply.code(503).send({ error: "fork host not available" })
+      const body = request.body as { messageId?: unknown } | null | undefined
+      if (body?.messageId !== undefined && (typeof body.messageId !== "string" || body.messageId === "")) {
+        return reply.code(400).send({ error: "messageId must be a non-empty string" })
+      }
+      const messageId = typeof body?.messageId === "string" ? body.messageId : undefined
+      const outcome = stores.sessionFork.fork(id, messageId)
+      if (outcome.ok) return reply.code(201).send(outcome.meta)
+      return reply.code(outcome.status).send({ error: outcome.error })
     })
 
     // 排队消息快照：重连/刷新的全量纠偏保底。

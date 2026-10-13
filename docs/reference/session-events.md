@@ -1,4 +1,4 @@
-# session-events — 持久化会话事件清单（25 种）
+# session-events — 持久化会话事件清单（26 种）
 
 > 权威来源：`packages/core/src/protocol/session-events.ts`（运行时守卫与 meta 投影在 `core/src/session/events.ts`）。存储布局见 [storage](../core/storage.md)，读取接口 `GET /sessions/:id/events` 见 [http-api](../server/http-api.md)。
 
@@ -9,7 +9,7 @@
 ```ts
 export type SessionEvent =
   | SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent
-  | SessionRestoredEvent | SessionSetEvent
+  | SessionRestoredEvent | SessionForkedEvent | SessionSetEvent
   | MessageEvent | MessageTruncatedEvent | CompactionEvent
   | MemoryEvent | SkillEvent | SystemEvent | SandboxCheckedEvent
   | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent
@@ -18,7 +18,7 @@ export type SessionEvent =
 
 ## 逐类型字段
 
-### 会话元数据（5 种）
+### 会话元数据（6 种）
 
 | 类型 | 字段 |
 |------|------|
@@ -26,6 +26,7 @@ export type SessionEvent =
 | `session.renamed` | `at`、`title`、`source?`（auto=自动命名，不传视为 manual） |
 | `session.deleted` | `at` |
 | `session.restored` | `at` |
+| `session.forked` | `at`、`sourceSessionId`、`sourceMessageId`（用户所点的语义分叉点，未归一化）、`title`（fork 会话初始标题）——会话 fork 的血缘记录，只落在新会话流上（原会话一字节不动），投影出 `meta.forkedFrom`；实际复制区间归一化到该消息所属 run 的结束处（见 `core/src/session/fork.ts`） |
 | `session.set` | `at`、`model?`、`mode?`、`disposition?`（键出现才发） |
 
 ### 消息与运行（5 种）

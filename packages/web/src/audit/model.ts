@@ -9,12 +9,12 @@
  */
 import type {
   Block, CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, Role, RunEndedEvent, RunStartedEvent,
-  SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent, SessionEvent, SessionRenamedEvent,
+  SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent, SessionEvent, SessionForkedEvent, SessionRenamedEvent,
   SessionRestoredEvent, SessionSetEvent, SkillEvent, SystemEvent, TeamAuditEvent, ToolGrantReason, Usage,
   GoalEvent, GoalSetEvent, GoalCheckedEvent, GoalSnapshot,
 } from "../types.js"
 
-export type SessionMetaEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionSetEvent
+export type SessionMetaEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionForkedEvent | SessionSetEvent
 
 export type AuditRowKind = "block" | "compaction" | "memory" | "system" | "sandbox" | "session" | "run" | "decision" | "truncation" | "team" | "skill" | "goal"
 
@@ -197,6 +197,7 @@ function flattenEventInto(
     case "session.renamed":
     case "session.deleted":
     case "session.restored":
+    case "session.forked":
     case "session.set":
       rows.push({ kind: "session", key: `${index}`, index, event, at: event.at })
       break
@@ -454,6 +455,8 @@ export function sessionSummary(event: SessionMetaEvent): string {
     }
     case "session.renamed":
       return `改名 · ${event.title}`
+    case "session.forked":
+      return `fork 自会话 · ${event.sourceSessionId} @ ${event.sourceMessageId} · ${event.title}`
     case "session.deleted":
       return "移入回收站"
     case "session.restored":
@@ -471,11 +474,15 @@ export function sessionSummary(event: SessionMetaEvent): string {
 /** Full session metadata payload on expand (present fields only). */
 export function sessionFullContent(event: SessionMetaEvent): string {
   const lines: string[] = [`type: ${event.type}`, `at: ${event.at}`]
-  if (event.type === "session.created" || event.type === "session.renamed") lines.push(`title: ${event.title}`)
+  if (event.type === "session.created" || event.type === "session.renamed" || event.type === "session.forked") lines.push(`title: ${event.title}`)
   if (event.type === "session.created") {
     if (event.mode !== undefined) lines.push(`mode: ${event.mode}`)
     if (event.workdir !== undefined) lines.push(`workdir: ${event.workdir}`)
     if (event.jobId !== undefined) lines.push(`jobId: ${event.jobId}`)
+  }
+  if (event.type === "session.forked") {
+    lines.push(`sourceSessionId: ${event.sourceSessionId}`)
+    lines.push(`sourceMessageId: ${event.sourceMessageId}`)
   }
   if (event.type === "session.set") {
     if (event.model !== undefined) lines.push(`model: ${String(event.model)}`)
