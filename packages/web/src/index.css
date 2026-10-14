@@ -1692,6 +1692,32 @@ select:focus {
   font-family: var(--font-mono);
 }
 
+/* 卡片头部三件套：徽标 + 主体 + 右对齐的过期/风险小字，confirm/question 卡共用 */
+.confirm-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.confirm-badge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.confirm-when {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 /* 工具参数原文可能是一整个文件的内容：限高内部滚动，卡片保持紧凑，
    裁决按钮永远在视口内；anywhere 让无空格的长 token 也能折行。 */
 .confirm-args {
@@ -1738,18 +1764,20 @@ select:focus {
 }
 
 /* Question cards (ask_user_questions): the agent asking, not warning —
-   accent framing instead of warn; questions list option buttons or a
-   free-text input, one submit sends the whole answer set. */
+   neutral body with an accent left bar (warn stays with the confirmation
+   card), a per-question mode chip, picked options filled with a check. */
 .question-card {
-  border: 1px solid var(--accent);
-  background: var(--accent-dim);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent);
+  background: var(--surface-2);
   border-radius: var(--radius);
   padding: 10px 12px;
   font-size: 13px;
 }
 
-.question-card .confirm-title {
+.question-card .confirm-badge {
   color: var(--accent);
+  border-color: var(--accent);
 }
 
 .question-card .confirm-note {
@@ -1757,12 +1785,67 @@ select:focus {
 }
 
 .question-item {
-  margin-bottom: var(--space-2);
+  padding: 9px 0 3px;
+}
+
+.question-item + .question-item {
+  border-top: 1px solid var(--border);
+  margin-top: 6px;
 }
 
 .question-text-label {
-  margin-bottom: var(--space-1);
+  margin-bottom: 7px;
   font-weight: 600;
+}
+
+/* 描边 = 单选，实色 = 多选 */
+.question-mode {
+  font-size: 11px;
+  font-weight: 400;
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-right: 7px;
+  vertical-align: 1px;
+}
+
+.question-mode.single {
+  color: var(--muted);
+  border: 1px solid var(--border-strong);
+}
+
+.question-mode.multi {
+  color: var(--accent-ink);
+  background: var(--accent);
+  font-weight: 600;
+}
+
+.question-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* 选中态用实底：全局 button:hover 优先级更高，必须连 hover 一起钉住 */
+.question-options .question-picked {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.question-options .question-picked:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  color: var(--accent-ink);
+}
+
+.question-options .question-picked::before {
+  content: "✓ ";
+}
+
+.question-actions {
+  display: flex;
+  margin-top: 8px;
 }
 
 .question-text {
@@ -1778,12 +1861,6 @@ select:focus {
 
 .question-text::placeholder {
   color: var(--muted);
-}
-
-.confirm-actions button.question-picked {
-  border-color: var(--accent);
-  color: var(--accent-strong);
-  background: var(--accent-dim);
 }
 
 /* Model + permission selectors share one row (Master: vertical stacking
