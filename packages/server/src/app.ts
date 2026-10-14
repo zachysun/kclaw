@@ -11,6 +11,7 @@ import type { TeamHost } from "./team.js"
 import type { GoalLoopHost } from "./goal-loop.js"
 import { registerWsRoutes } from "./ws.js"
 import { registerSessionRoutes } from "./routes/sessions.js"
+import type { SessionForkHost } from "./session-fork.js"
 import { registerPermissionsRoutes } from "./routes/permissions.js"
 import { registerMemoryRoutes } from "./routes/memory.js"
 import { registerSkillRoutes } from "./routes/skills.js"
@@ -131,6 +132,12 @@ export interface AppOptions {
    */
   memory?: MemorySystem
   /**
+   * The session fork host (session-fork.ts): idle gate + core forkSession +
+   * watermark seeding + search marking. Absent (bare apps/tests) → the fork
+   * route answers 503.
+   */
+  sessionFork?: SessionForkHost
+  /**
    * The daemon's user-hook registry: `GET /hooks` reports
    * its current bookkeeping (healthy/disabled/load-failed user hooks) next
    * to the static builtin definitions. Absent → the user list is empty.
@@ -239,7 +246,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   registerSkillRoutes(app, { paths, builtinSources: opts.builtinSources, pluginHomes: opts.pluginHomes, skillsEvolution: opts.skillsEvolution })
   // 切会话写入：POST /sessions 是 CLI /clear、/new 与 web 新建会话的共同底层，
   // 记忆系统在组装时才挂 clear 触发（默认不触发，行为与未组装记忆时一致）。
-  registerSessionRoutes(app, { sessions, config, run: opts.run, memory: opts.memory, cancelBackgroundForParent: opts.cancelBackgroundForParent, team: opts.team, goal: opts.goal })
+  registerSessionRoutes(app, { sessions, config, run: opts.run, memory: opts.memory, sessionFork: opts.sessionFork, cancelBackgroundForParent: opts.cancelBackgroundForParent, team: opts.team, goal: opts.goal })
   if (opts.attachmentsDir !== undefined) {
     registerAttachmentRoutes(app, { sessions, attachmentsDir: opts.attachmentsDir })
   }

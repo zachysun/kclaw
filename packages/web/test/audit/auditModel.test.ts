@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest"
 import {
   appendEvents, appendRows, DEFAULT_FILTER, filterRows, flattenAudit, fmtMs, fmtRowTime, fmtUsage,
   isAppendedFrame, jumpTarget, rowMatchesFilter, rowSearchText,
+  sessionFullContent, sessionSummary,
 } from "../../src/audit/model.js"
 import type { AuditFilter, AuditRow } from "../../src/audit/model.js"
 import type {
@@ -50,17 +51,40 @@ const DECIDED: PermissionDecidedEvent = {
 // ---------- flattenAudit ----------
 
 describe("flattenAudit", () => {
-  it("渲染全部十种持久化事件：session 五类各成一行", () => {
+  it("session 元数据事件各成一行（含 fork）", () => {
     const events: SessionEvent[] = [
       { type: "session.created", at: "2026-09-08T09:00:00.000Z", title: "新会话" },
       { type: "session.renamed", at: "2026-09-08T09:01:00.000Z", title: "改名了" },
       { type: "session.set", at: "2026-09-08T09:02:00.000Z", mode: "acceptEdits" },
       { type: "session.deleted", at: "2026-09-08T09:03:00.000Z" },
       { type: "session.restored", at: "2026-09-08T09:04:00.000Z" },
+      { type: "session.forked", at: "2026-09-08T09:05:00.000Z", sourceSessionId: "ses_src", sourceMessageId: "msg_1", title: "新会话 · fork" },
     ]
     const rows = flattenAudit(events)
-    expect(rows.map((r) => r.kind)).toEqual(["session", "session", "session", "session", "session"])
+    expect(rows.map((r) => r.kind)).toEqual(["session", "session", "session", "session", "session", "session"])
     expect(rows.every((r) => r.index >= 0)).toBe(true)
+  })
+
+  it("session.forked 行的摘要与全文带血缘字段", () => {
+    const rows = flattenAudit([
+      { type: "session.forked", at: "2026-09-08T09:05:00.000Z", sourceSessionId: "ses_src", sourceMessageId: "msg_1", title: "新会话 · fork" },
+    ])
+    const row = rows[0]!
+    expect(row.kind).toBe("session")
+    if (row.kind !== "session") return
+    expect(sessionSummary(row.event)).toContain("ses_src")
+    expect(sessionSummary(row.event)).toContain("@ msg_1")
+    expect(sessionFullContent(row.event)).toContain("sourceMessageId: msg_1")
+  })
+
+  it("session.forked 无 sourceMessageId（空会话全量复制）：摘要标注全量、全文不带该字段", () => {
+    const rows = flattenAudit([
+      { type: "session.forked", at: "2026-09-08T09:05:00.000Z", sourceSessionId: "ses_src", title: "空会话 · fork" },
+    ])
+    const row = rows[0]!
+    if (row.kind !== "session") return
+    expect(sessionSummary(row.event)).toContain("（全量复制）")
+    expect(sessionFullContent(row.event)).not.toContain("sourceMessageId")
   })
 
   it("混合流：块行/压缩/记忆/系统/沙箱按事件序渲染，key 携带事件下标", () => {

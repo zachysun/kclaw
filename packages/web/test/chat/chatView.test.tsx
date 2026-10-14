@@ -30,6 +30,8 @@ interface ViewOpts {
   onDismissNotice?: () => void
   onStopRun?: () => void
   onRetry?: (fromMessageId: string, text: string) => void
+  onFork?: (messageId: string) => void
+  forkPending?: boolean
 }
 
 function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
@@ -53,6 +55,8 @@ function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
         onCancelCompaction={opts.onCancelCompaction}
         onStopRun={opts.onStopRun}
         onRetry={opts.onRetry}
+        onFork={opts.onFork}
+        forkPending={opts.forkPending}
         compactions={opts.compactions}
         notice={opts.notice}
         noticeAction={opts.noticeAction}
@@ -627,6 +631,58 @@ describe("stop button & retry affordances", () => {
     const half = { ...two[1]!, stopReason: "aborted" } as Message
     const h = mountView([two[0]!, half])
     expect(h.container.querySelector('[data-testid="msg-aborted"]')?.textContent).toContain("已中断")
+    h.unmount()
+  })
+})
+
+// ---------- session fork affordances ----------
+
+describe("session fork affordances", () => {
+  const two: Message[] = [
+    { id: "msg_a", sessionId: "s1", role: "user", blocks: [{ id: "b1", type: "text", text: "第一问" }], createdAt: "2026-08-15T00:00:00.000Z" },
+    { id: "msg_b", sessionId: "s1", role: "assistant", blocks: [{ id: "b2", type: "text", text: "第一答" }], createdAt: "2026-08-15T00:00:01.000Z" },
+    { id: "msg_c", sessionId: "s1", role: "user", blocks: [{ id: "b3", type: "text", text: "第二问" }], createdAt: "2026-08-15T00:00:02.000Z" },
+    { id: "msg_d", sessionId: "s1", role: "assistant", blocks: [{ id: "b4", type: "text", text: "第二答" }], createdAt: "2026-08-15T00:00:03.000Z" },
+  ]
+
+  it("forkPending：请求进行中全部 fork 按钮禁用（防连点重复提交）", () => {
+    const onFork = vi.fn()
+    const h = mountView(two, { onFork, forkPending: true })
+    for (const b of h.container.querySelectorAll('[data-testid="msg-fork"]')) {
+      expect((b as HTMLButtonElement).disabled).toBe(true)
+    }
+    h.unmount()
+  })
+
+  it("空闲：每条气泡都有 fork 按钮，点谁从谁分叉", () => {
+    const onFork = vi.fn()
+    const h = mountView(two, { onFork })
+    const forks = h.container.querySelectorAll('[data-testid="msg-fork"]')
+    expect(forks.length).toBe(4)
+    act(() => {
+      ;(forks[1] as HTMLButtonElement).click()
+    })
+    expect(onFork).toHaveBeenCalledWith("msg_b")
+    h.unmount()
+  })
+
+  it("运行中：fork 按钮置灰不隐藏，点了不触发", () => {
+    const onFork = vi.fn()
+    const h = mountView(two, { view: { runState: "running" }, onFork })
+    const fork = h.container.querySelector('[data-testid="msg-fork"]') as HTMLButtonElement
+    expect(fork).not.toBeNull()
+    expect(fork.disabled).toBe(true)
+    expect(fork.getAttribute("aria-label")).toBe("运行结束后可 fork")
+    act(() => {
+      fork.click()
+    })
+    expect(onFork).not.toHaveBeenCalled()
+    h.unmount()
+  })
+
+  it("未接 onFork（只读子会话）：不渲染 fork 按钮", () => {
+    const h = mountView(two, {})
+    expect(h.container.querySelector('[data-testid="msg-fork"]')).toBeNull()
     h.unmount()
   })
 })

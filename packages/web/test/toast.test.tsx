@@ -115,4 +115,22 @@ describe("ToastStack", () => {
     root.unmount()
     container.remove()
   })
+
+  it("带动作的 toast：点动作触发回调并提前关闭", () => {
+    vi.useFakeTimers()
+    const { container, root, api } = mount()
+    const onAction = vi.fn()
+    act(() => {
+      api.notify("已 fork 出「会话 · fork」", "info", { label: "返回原会话", onAction })
+    })
+    const actionBtn = container.querySelector("[data-testid^='toast-action-']") as HTMLButtonElement
+    expect(actionBtn.textContent).toBe("返回原会话")
+    act(() => {
+      actionBtn.click()
+    })
+    expect(onAction).toHaveBeenCalledTimes(1)
+    expect(container.querySelector("[data-testid='toast-stack']")).toBeNull()
+    root.unmount()
+    container.remove()
+  })
 })

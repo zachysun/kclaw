@@ -202,6 +202,19 @@ export class RunManager {
   }
 
   /**
+   * 完整空闲判定（fork 的服务端门槛，与 retry 的内部校验同口径）：无活动
+   * run、无驱动器、无队列、无 steer 残余、无进行中压缩。busy() 只覆盖前三
+   * 项（team 投递门够用）；fork 复制历史段落，属于"历史不容竞态"的操作，
+   * 用全量版。
+   */
+  isIdle(sessionId: string): boolean {
+    return !this.#active.has(sessionId) && !this.#drivers.has(sessionId)
+      && (this.#queues.get(sessionId)?.length ?? 0) === 0
+      && (this.#steerBuf.get(sessionId)?.length ?? 0) === 0
+      && !this.#compactor.hasInFlight(sessionId)
+  }
+
+  /**
    * 同步决策一条消息的去向：空闲直发；steer 且有活动 run →
    * 入缓冲区；其余（wait/interrupt，以及无活动 run 的 steer 降级 wait）入队，
    * interrupt 伴随对活动 run 的 abort。立即返回消息身份与实际生效处置。

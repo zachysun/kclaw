@@ -154,15 +154,15 @@ export function readJsonl(file: string): unknown[]
 
 每个会话一个目录 `<sessionsDir>/<id>/`，固定三个文件，由 `SessionStore`（`packages/core/src/session/store.ts`）统一管理。三个文件的分工：**events.jsonl 是唯一权威数据，meta.json 是从它推导出来的快速读取摘要，queue.jsonl 是运行态的排队消息。**
 
-- **`events.jsonl`（唯一权威数据）**：只追加的事件流，一行一个 `SessionEvent`（JSON 序列化），共 25 种事件——
-  - 会话生命周期 5 种：`session.created`（含创建时固化的初始权限模式 `mode`；subagent 会话还带 `parentSessionId`）、`session.renamed`、`session.deleted`、`session.restored`、`session.set`（model / mode / disposition 的会话级设置）。
+- **`events.jsonl`（唯一权威数据）**：只追加的事件流，一行一个 `SessionEvent`（JSON 序列化），共 26 种事件——
+  - 会话生命周期 6 种：`session.created`（含创建时固化的初始权限模式 `mode`；subagent 会话还带 `parentSessionId`）、`session.renamed`、`session.deleted`、`session.restored`、`session.set`（model / mode / disposition 的会话级设置）、`session.forked`（fork 血缘：来源会话、分叉点消息、初始标题，只落在新会话流上，投影出 `meta.forkedFrom`；fork 复制的历史段本身经 `writeEventsRaw` 直写，不走这条常规追加路径，见下文 fork 小节）。
   - 内容类 7 种：`message`（一条消息）、`message.truncated`（编辑重试/重新生成的截断标记：从 `fromMessageId` 起的所有消息退出对话视图；事件流只追加这条标记、不改写任何历史行，可见性是读取端投影）、`compaction`（一次压缩的审计）、`memory`（一次记忆写入的审计）、`skill`（一条技能提案审计——提案的产生与治理状态流转各落一条，只做记录、权威数据在 `.proposals/` 的提案文件，见 [skills](./skills.md)）、`system`（一条系统提示词审计，每次对话运行落一条，附带 stable/live 两段拼装文本）、`sandbox.checked`（一条沙箱状态审计——每次对话运行检测后落一条 `{enabled, available, unavailableReason?}`）。
   - 运行档案 3 种：`run.started` / `run.ended`（每 run 一对，把该 run 的消息事件夹成一轮边界；失败 run 也落 `run.ended`，起点必有终点）、`permission.decided`（每次人工确认裁决的记录；被中止的确认不落）。<br>运行档案与 `system` / `sandbox.checked` 一样只写事件流、不进 meta 投影、不推进 `updatedAt`。`message.truncated` 不同（它是用户可见的会话动作，会推进 `updatedAt`；且当截断起点越过压缩锚点（`compaction.upto`）时，部分已压缩的历史被丢弃，压缩投影随之一并清除（摘要无法再代替被隐藏的消息；尾部截断）常规路径——不碰压缩投影）。
   - 协作 7 种（`team.created` / `team.member.provisioned` / `team.member.settled` / `team.message.queued` / `team.message.delivered` / `team.task.created` / `team.task.updated`）：agent 团队协作的审计记录，只追加在**组长**的事件流上（以团队目录为准，见 [agent-team](./agent-team.md)）；尽力而为（写失败降为警告、团队操作照常），与运行档案一样不进投影、不推进 `updatedAt`。
   - 目标循环 3 种（`goal.set` / `goal.checked` / `goal.cleared`）：`/goal` 目标循环的全部写路径（见 [goal](./goal.md)）。`goal.set`（快照全量替换，含 create/edit/pause/resume/state 五种 op）与 `goal.cleared` 进 meta 投影（写/删 `goal` 字段）并推进 `updatedAt`；`goal.checked`（每轮检查的验收输出 + 判定裁决记录）只审计，不进投影、不推进 `updatedAt`。
 
   所有写入都先追加事件，再把事件汇入 meta.json 摘要（见下）。
-- **`meta.json`（派生摘要）**：类型 `SessionMeta`，由事件流经 `applyEvent` 逐条推导得出。它是「摘要」而非权威数据：删除或损坏都能从事件流完整重建（`meta()` 发现缺失或损坏时自动 `rebuildMeta`）。崩溃恢复时允许它暂时落后于事件流（落后不会丢数据）；但落后不会被后续写入自动追平（`appendEvent` 先读当前摘要、只汇入新事件）。只有 meta.json 缺失或损坏时才经 `rebuildMeta` 重放整条事件流。meta.json 整文件原子重写（`updateMeta` 合并 patch，`undefined` 键表示删除；`message` / `message.truncated` / `compaction` / `goal.set` / `goal.cleared` 事件会推进摘要的 `updatedAt`，`memory` / `skill` / `system` / `sandbox.checked` / `goal.checked` 事件不推进——审计类事件不算会话「更新」）。两条特殊的推导规则：`system` 事件把全文 upsert 进摘要的 `systemBaseline`（系统提示词的冻结基线，见下文），`compaction` 事件把 `systemBaseline` 清除（压缩改写了消息历史，提示词缓存必然全部失效，正是重新组装、重新冻结的时机）；`message.truncated` 在截断起点越过压缩锚点（`compaction.upto`）时一并清除压缩投影（部分被压缩的历史已随截断丢弃，摘要不能再代替它们）。
+- **`meta.json`（派生摘要）**：类型 `SessionMeta`，由事件流经 `applyEvent` 逐条推导得出。它是「摘要」而非权威数据：删除或损坏都能从事件流完整重建（`meta()` 发现缺失或损坏时自动 `rebuildMeta`）。崩溃恢复时允许它暂时落后于事件流（落后不会丢数据）；但落后不会被后续写入自动追平（`appendEvent` 先读当前摘要、只汇入新事件）。只有 meta.json 缺失或损坏时才经 `rebuildMeta` 重放整条事件流。meta.json 整文件原子重写（`updateMeta` 合并 patch，`undefined` 键表示删除；`message` / `message.truncated` / `compaction` / `session.forked` / `goal.set` / `goal.cleared` 事件会推进摘要的 `updatedAt`，`memory` / `skill` / `system` / `sandbox.checked` / `goal.checked` 事件不推进——审计类事件不算会话「更新」）。两条特殊的推导规则：`system` 事件把全文 upsert 进摘要的 `systemBaseline`（系统提示词的冻结基线，见下文），`compaction` 事件把 `systemBaseline` 清除（压缩改写了消息历史，提示词缓存必然全部失效，正是重新组装、重新冻结的时机）；`message.truncated` 在截断起点越过压缩锚点（`compaction.upto`）时一并清除压缩投影（部分被压缩的历史已随截断丢弃，摘要不能再代替它们）。
 - **`queue.jsonl`（运行态）**：排队中的消息（`{ messageId, disposition, text, trigger, attachments?, note?, enqueuedAt }`，顺序即执行顺序，见 [run-manager](../server/run-manager.md) 的消息队列）。与事件流不同，`replaceQueue` 每次整文件重写、不是追加；不参与 meta.json。
 
 `meta.json` 的全部字段：
@@ -175,6 +175,7 @@ export function readJsonl(file: string): unknown[]
 | `model?` | 会话级模型覆盖；空或默认回退到 daemon 默认 |
 | `mode?` | 会话权限模式，`"readonly" \| "default" \| "acceptEdits" \| "trusted" \| "auto"` 五档，默认 default（见 [permissions](./permissions.md)） |
 | `parentSessionId?` | subagent 会话的父会话标识；普通会话没有。引擎侧一切 subagent 特化行为都从它派生（见 [subagents](./subagents.md)） |
+| `forkedFrom?` | fork 血缘（`session.forked` 事件投影，单边：只有 fork 出的新会话带）：`sessionId` 来源会话、`messageId` 用户所点的分叉点（全量复制空会话时省略）。fork 出的会话是完全独立的普通会话（删除互不级联），与 `parentSessionId` 的 subagent 语义无关；复制段经 `writeEventsRaw` 直写（不过追加回调：无总线帧、不喂检索索引），记忆提取水位在 fork 时播种到分叉点 |
 | `compaction?` | 分层压缩状态 `{ segments, top, upto }`（语义见 [compaction](./compaction.md)），由 `compaction` 事件推导（每次压缩把新段汇入 `segments`；`updateMeta` 不再直接改它） |
 | `dispositionOverride?` | 会话级发送处置覆盖（`"steer" \| "wait" \| "interrupt"`），优先于 `sessions.defaultDisposition`。服务端路由接受三个值的写入；Web 与 CLI 的 interrupt 都是一次性动作、不写会话级覆盖（见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)） |
 | `goal?` | 会话级目标快照（`/goal`，`GoalSnapshot` 全量：目标文本、验收命令、状态机、轮数与 token 计数、最近判定摘要），由 `goal.set` 事件全量替换、`goal.cleared` 删除（见 [goal](./goal.md)）。计数字段是检查时刻的展示缓存，权威数据在事件流 |
@@ -195,6 +196,14 @@ export function readJsonl(file: string): unknown[]
 1. agent 循环产出消息 → run 组装（core `executeRun`）的 `onMessage` hook 调 `sessions.appendMessage(sessionId, m)`。
 2. `appendMessage` 经 `appendEvent` 往 events.jsonl 追加一条 `message` 事件：先 `repairTornTail`（末字节不是 `\n` 就按字节截断到上一个换行），再 `appendFileSync(JSON.stringify(event) + "\n")`，随后把事件汇入 meta.json 摘要（`applyEvent`）。
 3. 回读时 `readMessages` 读全部事件后过滤出 `message` 事件，并**按 `message.truncated` 标记倒序收缩**：从流尾向前走，最近的截断标记就是"该消息之后第一个截断"，消息 id 不小于它即被丢弃（重试追加在标记之后的新消息不受旧起点约束）——这是唯一的过滤点，聊天视图、run 上下文组装、压缩与记忆提取全部继承同一份可见历史。`readMessages` 先丢弃断尾行，逐行解析成 `Message` 数组，作为下次运行的历史（run 组装在追加用户消息**之前**读历史，避免同一条消息发送两次）。
+
+### 会话 fork（`session/fork.ts`）
+
+`forkSession` 把一个已有会话的历史复制成全新独立会话（web 对话页每条气泡的「fork」按钮、`POST /sessions/:id/fork`）：
+
+1. **复制区间**：源流从头复制到分叉点（用户所点消息）所属 run 的 `run.ended` 处——语义点是消息，实际写入的切点归一化到 run 边界，不产生半截对话；流被崩溃截断时退到流尾（残流没有收尾记录，有多少复制多少）。省略分叉点 = 复制全部历史。消息 id 是全局唯一的 ULID，复制不用改 id；压缩记录、系统提示词基线、模型/模式/工作目录等全部随事件重放自动继承。
+2. **写入路径**：复制段经 `writeEventsRaw` **整体直写** events.jsonl——不走 `appendEvent`，因此逐条不发 `session.appended` 通知帧、不喂检索索引、不逐条汇入 meta；随后经常规 `appendEvent` 落 `session.forked` 血缘事件（新会话的直播与增量拉取从这条开始），最后整流 `rebuildMeta` 重建摘要。复制段在源会话已被记忆提取与检索覆盖过：新会话的提取水位经 `seedWatermarksForFork` 直接推进到最后一条复制消息，检索索引对新会话整体标记已回填（backfilled、不写入复制段），都不重复处理。附件文件按块里的绝对路径复制进新会话目录并改写 `source.path`（路径越界源会话目录的引用保持原样）。
+3. **血缘与独立性**：血缘单边记录——只有新会话带 `meta.forkedFrom`，源会话一字节不动；新会话是完全独立的普通会话（改名、删除、继续对话互不影响，删除不级联），与 subagent 的 `parentSessionId`（隐藏列表、记忆跳过、用量归父）语义无关。标题取原标题 + ` · fork` 后缀（重名递增序号）。任一步失败清掉半成品（会话目录经 `purge` 删除，拷贝到一半的附件目录一并删除），不留残会话。
 
 ---
 

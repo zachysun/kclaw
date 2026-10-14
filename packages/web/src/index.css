@@ -595,6 +595,18 @@ select:focus {
   overflow-wrap: anywhere;
 }
 
+.session-fork-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--text-muted, var(--text));
+  vertical-align: 1px;
+}
+
 /* one meta line: where (tail-ellipsized) · when (right-aligned) */
 .session-meta {
   display: flex;
@@ -706,6 +718,23 @@ select:focus {
   border-radius: 6px;
   box-shadow: 0 4px 16px rgba(var(--shadow-rgb), 0.45);
   animation: toast-in 0.18s ease-out;
+}
+
+
+.toast-action {
+  appearance: none;
+  border: 1px solid var(--border-strong);
+  background: none;
+  color: inherit;
+  font: inherit;
+  padding: 0 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.toast-action:hover {
+  background: var(--surface-3, var(--surface-2));
 }
 
 .toast-text {

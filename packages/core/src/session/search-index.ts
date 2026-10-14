@@ -92,6 +92,15 @@ export class HistorySearchIndex {
   }
 
   /**
+   * fork 支持：把新会话只标记为已回填、不写入消息——复制段与原会话的行完全
+   * 重复，同一内容只在原会话命中一次；fork 之后经 session.appended 正常喂入
+   * 的新消息照常增量索引（session/fork.ts 调用）。
+   */
+  markBackfilled(sessionId: string): void {
+    this.#db.prepare(`INSERT OR IGNORE INTO backfilled (session_id) VALUES (?)`).run(sessionId)
+  }
+
+  /**
    * Lexical recall over all indexed history. Tokens are OR-recalled (BM25
    * ranks coverage), matching the memory indexer's behavior. The caller
    * re-checks each hit's session existence (purged sessions drop out at

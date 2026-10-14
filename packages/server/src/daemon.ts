@@ -64,6 +64,7 @@ import { RunManager } from "./run.js"
 import { createChoreUsageRecorder } from "./chore-usage.js"
 import { createHistorySearch } from "./history-search.js"
 import { createSubagentHost } from "./subagent.js"
+import { createSessionForkHost } from "./session-fork.js"
 import type { FeishuChannel } from "./feishu/channel.js"
 import { createFeishuManager } from "./feishu/manager.js"
 import { createTeamHost } from "./team.js"
@@ -546,6 +547,14 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     cancelBackgroundForParent: subagentHost.cancelBackgroundForParent,
     team: teamHost,
     goal: goalHost, // /sessions/:id/goal 路由族（issue #47）
+    sessionFork: createSessionForkHost({
+      sessions,
+      run,
+      memory,
+      historyIndex,
+      attachmentsDir: paths.attachmentsDir,
+      workspaceFallback: workspace,
+    }), // POST /sessions/:id/fork（会话 fork：空闲门槛+水位播种+索引标记+附件拷贝）
     mcp: mcpManager,
     mainWorkspace: workspace,
     channel: feishuManager,

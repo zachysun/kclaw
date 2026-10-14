@@ -445,6 +445,15 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     new WriteLedger(path).clearFollowCheck(sessionId)
   }
 
+  /**
+   * fork 支持（session/fork.ts 经 daemon 调用）：把新会话的 interval/follow
+   * 两条提取水位直接播种到 fork 点——其前的历史经源会话已提取过，不播种的
+   * 话首次触发会把整段复制历史再提取一遍。
+   */
+  seedWatermarksForFork(workdir: string, sessionId: string, messageId: string): void {
+    this.#ledgerForWrite(workdir).advanceAll(sessionId, messageId)
+  }
+
   /** 某项目的全部挂起检查（含 daemon 重启恢复）。 */
   pendingFollowChecks(workdir: string): Array<{ sessionId: string; endTurnAt: string }> {
     const path = this.#ledgerPath(workdir)

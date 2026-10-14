@@ -75,6 +75,11 @@ export interface ChatPanelProps {
   /** Switch the global selection to the given session — the read-only child
    * page's「返回主会话」button (the child never appears in the sidebar). */
   onReturnToParent?: (parentId: string) => void
+  /**
+   * Session fork 成功后上抛新会话 meta：所有方（App）负责跳转、侧栏刷新与
+   * 全局 toast（带"返回原会话"动作）。失败留在本会话，走本面板通知条。
+   */
+  onForked?: (meta: import("../types.js").SessionMeta) => void
 }
 
 /** Max consecutive failed reconnects before giving up with a notice. */
@@ -110,9 +115,10 @@ function errorFrameMessage(frame: unknown): string | null {
   return typeof message === "string" ? message : null
 }
 
-export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten, onOpenAudit, onOpenMcp, onReturnToParent }: ChatPanelProps) {
+export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten, onOpenAudit, onOpenMcp, onReturnToParent, onForked }: ChatPanelProps) {
   const [view, setViewState] = useState<ChatState>(() => initChat(initialMessages))
   const [notice, setNotice] = useState<string | null>(null)
+  const [forkPending, setForkPending] = useState(false)
   // 已装用户可见技能：出现在斜杠菜单的动态命令（/技能名），会话切换重拉
   // （项目级技能跟会话工作目录）。拉取失败静默——菜单少几条不碍聊天。
   const [skillRows, setSkillRows] = useState<Array<{ name: string; description: string; origin: string; visibility: string; plugin?: string }>>([])
@@ -737,6 +743,25 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
   }, [sessionId, updateView])
 
+  /** Session fork：POST 成功上抛新会话；失败（409 忙等）留在本会话进通知条。
+   *  在飞判定走 ref（同步置位、不随渲染刷新）：state 置位前重渲染还没发生，
+   *  闭包里的 forkPending 永远是旧值，挡不住同帧连点。forkPending 只做按钮
+   *  禁用的渲染反馈（spec §6 防重复提交）。 */
+  const forkInFlight = useRef(false)
+  const handleFork = useCallback((messageId: string) => {
+    if (forkInFlight.current) return
+    forkInFlight.current = true
+    setForkPending(true)
+    api
+      .post<import("../types.js").SessionMeta>(`/sessions/${encodeURIComponent(sessionId)}/fork`, { messageId })
+      .then((meta) => onForked?.(meta))
+      .catch((err: unknown) => setNotice(`fork 失败: ${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => {
+        forkInFlight.current = false
+        setForkPending(false)
+      })
+  }, [api, sessionId, onForked])
+
   /** 三选切换：steer/wait 本地立即生效并写会话级覆盖（与 CLI /steer
    *  同一存储）；interrupt 是一次性——本地选中仅用于这一次发送、不写覆盖，
    *  发出后由 handleSend 切回基础处置。 */
@@ -811,6 +836,8 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           onCancelAllQueued={() => handleCancelQueued()}
           onOpenAudit={onOpenAudit}
           readOnly={childSession}
+          onFork={childSession ? undefined : handleFork}
+          forkPending={forkPending}
           onReturnToParent={onReturnToParent !== undefined && childParentId !== null ? () => onReturnToParent(childParentId) : undefined}
           onCancelCompaction={handleCancelCompaction}
           onStopRun={handleStopRun}

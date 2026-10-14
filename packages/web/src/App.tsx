@@ -299,6 +299,23 @@ function MainShell({
     [createAndSelectSession],
   )
 
+  // Session fork 落地（ChatPanel POST 成功后上抛）：新会话进侧栏并选中，
+  // 全局 toast 带"返回原会话"动作——fork 的动机就是去新线干点什么，跳过去
+  // 省一次点击，回来靠这个动作。
+  const handleForked = useCallback(
+    (meta: SessionMeta) => {
+      setSessions((prev) => [meta, ...(prev ?? [])])
+      setSelectedId(meta.id)
+      const sourceId = meta.forkedFrom?.sessionId
+      if (sourceId !== undefined) {
+        notify("已从原会话 fork", "info", { label: "返回原会话", onAction: () => setSelectedId(sourceId) })
+      } else {
+        notify("已从原会话 fork")
+      }
+    },
+    [notify],
+  )
+
   // The /sessions command: reveal the list (no-op visually on desktop, where
   // the sidebar is permanent; opens the drawer on mobile).
   const handleOpenSessions = useCallback((): void => {
@@ -533,6 +550,7 @@ function MainShell({
                   switchTab("audit")
                 }}
                 onReturnToParent={selectSession}
+                onForked={handleForked}
                 onOpenMcp={() => switchTab("mcp")}
               />
             </div>

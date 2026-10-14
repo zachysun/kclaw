@@ -13,12 +13,19 @@ import { useCallback, useEffect, useRef, useState } from "react"
 export type ToastTone = "info" | "error"
 
 /** The callback shape every management view takes as its `notice` prop. */
-export type NoticeFn = (text: string, tone?: ToastTone) => void
+export type NoticeFn = (text: string, tone?: ToastTone, action?: ToastAction) => void
+
+/** One clickable follow-up riding a toast (e.g. fork 成功后跳回原会话)。 */
+export interface ToastAction {
+  label: string
+  onAction: () => void
+}
 
 export interface ToastItem {
   id: number
   text: string
   tone: ToastTone
+  action?: ToastAction
 }
 
 /** Auto-dismiss delay per tone: errors stay up longer, both are click-可消. */
@@ -36,9 +43,9 @@ export function useToasts(): {
   const nextId = useRef(0)
   // Stable identity (functional setState only) — views hold this callback in
   // refs and must never observe it changing.
-  const notify = useCallback<NoticeFn>((text, tone = "info") => {
+  const notify = useCallback<NoticeFn>((text, tone = "info", action?: ToastAction) => {
     const id = ++nextId.current
-    setToasts((prev) => [...prev.slice(-(MAX_TOASTS - 1)), { id, text, tone }])
+    setToasts((prev) => [...prev.slice(-(MAX_TOASTS - 1)), { id, text, tone, ...(action !== undefined ? { action } : {}) }])
   }, [])
   const dismiss = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id))
@@ -59,6 +66,19 @@ function Toast({ item, onDismiss }: { item: ToastItem; onDismiss: (id: number) =
       <button type="button" className="toast-text" onClick={() => onDismiss(item.id)}>
         {item.text}
       </button>
+      {item.action !== undefined && (
+        <button
+          type="button"
+          className="toast-action"
+          data-testid={`toast-action-${item.id}`}
+          onClick={() => {
+            item.action?.onAction()
+            onDismiss(item.id)
+          }}
+        >
+          {item.action.label}
+        </button>
+      )}
       <button type="button" className="toast-close" data-testid={`toast-close-${item.id}`} aria-label="关闭通知" onClick={() => onDismiss(item.id)}>
         ×
       </button>
