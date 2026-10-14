@@ -999,14 +999,23 @@ function QuestionCardView({
   })
   return (
     <div className="question-card" data-testid="question-card">
-      <div className="confirm-title">问题待回答</div>
-      <div className="confirm-meta">过期 {card.expiresAt}</div>
+      <div className="confirm-head">
+        <span className="confirm-badge">问题待回答</span>
+        <span className="confirm-when">{card.questions.length} 个问题 · {formatExpiresAt(card.expiresAt)}</span>
+      </div>
       {card.noteText !== undefined && <div className="confirm-note">{card.noteText}</div>}
       {card.questions.map((q, i) => (
         <div key={i} className="question-item" data-testid={`question-item-${i}`}>
-          <div className="question-text-label">{q.text}</div>
+          <div className="question-text-label">
+            {Array.isArray(q.options) && q.options.length > 0 && (
+              <span className={q.multiSelect === true ? "question-mode multi" : "question-mode single"}>
+                {q.multiSelect === true ? "多选" : "单选"}
+              </span>
+            )}
+            {q.text}
+          </div>
           {Array.isArray(q.options) && q.options.length > 0 ? (
-            <div className="confirm-actions">
+            <div className="question-options">
               {q.options.map((opt) => {
                 const picked = multiPicks[i]?.includes(opt) ?? false
                 return (
@@ -1043,8 +1052,8 @@ function QuestionCardView({
           )}
         </div>
       ))}
-      <div className="confirm-actions">
-        <button data-testid="question-submit" onClick={() => onAnswer(card.questionId, answers)}>
+      <div className="question-actions">
+        <button className="primary" data-testid="question-submit" onClick={() => onAnswer(card.questionId, answers)}>
           提交回答
         </button>
       </div>
@@ -1056,6 +1065,14 @@ function QuestionCardView({
 function summarizeOutput(output: string): string {
   const text = output.replace(/\s+/g, " ").trim()
   return text.length > 80 ? `${text.slice(0, 80)}…` : text
+}
+
+/** Expiry stamps arrive as ISO strings; cards show a local HH:mm:ss instead. */
+function formatExpiresAt(iso: string): string {
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return iso
+  const p = (n: number): string => String(n).padStart(2, "0")
+  return `${p(at.getHours())}:${p(at.getMinutes())}:${p(at.getSeconds())} 前有效`
 }
 
 /** Last non-empty line of a streaming subagent status feed (the live one-liner). */
