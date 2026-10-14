@@ -67,7 +67,7 @@ describe("subagent_run executor", () => {
 
   it("role supplement is appended to the lean prompt as its own section (head-capped)", () => {
     const withRole = subagentSystemPrompt("/ws", "只读代码侦探")
-    expect(withRole).toContain("子代理")
+    expect(withRole).toContain("subagent")
     expect(withRole).toContain("# 角色补充")
     expect(withRole).toContain("只读代码侦探")
     const long = "长".repeat(3000)
@@ -145,7 +145,7 @@ describe("subagent_collect executor", () => {
 describe("subagent helpers", () => {
   it("the lean prompt carries identity + workspace + discipline, not the persona", () => {
     const prompt = subagentSystemPrompt("/tmp/proj")
-    expect(prompt).toContain("子代理")
+    expect(prompt).toContain("subagent")
     expect(prompt).toContain("/tmp/proj")
     expect(prompt).toContain("结题答复")
     expect(prompt).not.toContain("AGENTS")
@@ -162,9 +162,9 @@ describe("subagent helpers", () => {
   })
 
   it("subagentTitle prefers the label, else the task's head, always prefixed", () => {
-    expect(subagentTitle("扫 TODO", "whatever")).toBe("子代理 · 扫 TODO")
+    expect(subagentTitle("扫 TODO", "whatever")).toBe("subagent · 扫 TODO")
     const fromTask = subagentTitle(undefined, `${"很长的任务".repeat(20)}结尾`)
-    expect(fromTask.startsWith("子代理 · ")).toBe(true)
+    expect(fromTask.startsWith("subagent · ")).toBe(true)
     expect(fromTask.length).toBeLessThanOrEqual(50)
   })
 })

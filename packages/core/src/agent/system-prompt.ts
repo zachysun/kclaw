@@ -13,7 +13,7 @@
  * run 重新生效；live 基线则照常逐字比对，frozenAt 不会虚假刷新。审计每 run
  * 一条双段全量记录（直接写入；写失败即 run 失败）。压缩事件在投影里清除
  * 基线（applyEvent），下一次 run 重新组装并固化——压缩本来就使缓存全量失效，
- * 基线重置点设在冷启动处零额外成本。子代理 run 的精简模板同样适用（live 恒空）。
+ * 基线重置点设在冷启动处零额外成本。subagent run 的精简模板同样适用（live 恒空）。
  */
 import { estimateTokens } from "../session/compaction.js"
 import type { SessionMeta, SessionStore } from "../session/store.js"
@@ -24,7 +24,7 @@ export interface AssembleSystemPromptInput {
   chain: HookChain
   sessions: SessionStore
   sessionId: string
-  /** 人设基础文本：主会话完整模板或子代理精简模板（调用方决定）。 */
+  /** 人设基础文本：主会话完整模板或subagent精简模板（调用方决定）。 */
   base: string
   /** 会话 meta 里的双段冻结基线（undefined = 首次组装）。 */
   baseline: SessionMeta["systemBaseline"]

@@ -106,7 +106,7 @@ describe("runTrigger", () => {
       emit: () => { calls += 1 },
     })
     await pipe.runTrigger(WORKDIR, "immediate")
-    await pipe.runTrigger(WORKDIR, "interval") // 水位已推进：无范围
+    await pipe.runTrigger(WORKDIR, "interval") // 标记已推进：无范围
     await pipe.runTrigger(WORKDIR, "follow")
     // 三个触发都不应产生写入 —— 通过 emit 计数为 0 断言
     expect(calls).toBe(0)
@@ -131,7 +131,7 @@ describe("runTrigger", () => {
       emit: () => { calls += 1 },
     })
     await pipe.runTrigger(WORKDIR, "clear")
-    await pipe.runTrigger(WORKDIR, "interval") // 水位已推进：无范围
+    await pipe.runTrigger(WORKDIR, "interval") // 标记已推进：无范围
     await pipe.runTrigger(WORKDIR, "follow")
     // 只有 clear 那次写入；后续增量触发不重复提取同一段消息
     expect(calls).toBe(1)
@@ -303,7 +303,7 @@ describe("runTrigger", () => {
     }
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, { resolveLlm: () => ({ llm: slow, model: "m" }) })
     await Promise.all([pipe.runTrigger(WORKDIR, "interval"), pipe.runTrigger(WORKDIR, "follow")])
-    expect(calls).toBe(1) // 后到者按最新水位重选范围：空，直接返回
+    expect(calls).toBe(1) // 后到者按最新标记重选范围：空，直接返回
   })
 
   it("auto-inactivates threads idle beyond threadInactiveDays", async () => {
@@ -322,7 +322,7 @@ describe("runTrigger", () => {
       resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [] })]), model: "m" }),
       now: () => now,
     })
-    seedMessages(meta.id, ["新内容让范围非空"]) // 让管线真的跑，顺带检查涉及的线
+    seedMessages(meta.id, ["新内容让范围非空"]) // 让 pipeline 真的跑，顺带检查涉及的线
     await pipe2.runTrigger(WORKDIR, "interval")
     const files = readDirDeep(join(root, "memory", "projects"))
     const oldThread = files.find((f) => f.endsWith("old.md"))!
@@ -330,7 +330,7 @@ describe("runTrigger", () => {
   })
 
   it("auto-inactivates idle threads even on an empty batch (no new messages)", async () => {
-    // 项目静止（无任何会话消息）：一次 interval 触发也应收束到期的 active 线。
+    // 项目静止（无任何会话消息）：一次 interval 触发也应把到期的 active 线转 inactive。
     const projectDir = join(root, "memory", "projects", projectIdFor(WORKDIR))
     mkdirSync(projectDir, { recursive: true })
     writeFileSync(join(projectDir, "old.md"), [
@@ -341,7 +341,7 @@ describe("runTrigger", () => {
       resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [] })]), model: "m" }),
       now: () => new Date("2026-08-28T00:00:00Z"), // 距线 updated（8-13）15 天 ≥ 14
     })
-    // sessions 无消息 → 范围为空；仍应收束并重建 MEMORY.md
+    // sessions 无消息 → 范围为空；仍应转 inactive 并重建 MEMORY.md
     await pipe.runTrigger(WORKDIR, "interval")
     expect(readFileSync(join(projectDir, "old.md"), "utf8")).toContain("status: inactive")
     const memoryMd = readFileSync(join(projectDir, "MEMORY.md"), "utf8")
@@ -349,8 +349,8 @@ describe("runTrigger", () => {
   })
 
   it("empty-batch sweep consolidates the inactivated thread into global cognitions", async () => {
-    // 静止项目：空批次收束到期线后同样触发沉淀——否则该线的认知
-    // 永远不会被总结（线不复活、收束只扫 active，之后再无新情节触发沉淀）。
+    // 静止项目：空批次也会把到期线转 inactive 后同样触发沉淀——否则该线的认知
+    // 永远不会被总结（线不复活、转 inactive 只扫 active，之后再无新情节触发沉淀）。
     const projectDir = join(root, "memory", "projects", projectIdFor(WORKDIR))
     mkdirSync(projectDir, { recursive: true })
     writeFileSync(join(projectDir, "old.md"), [
@@ -359,17 +359,17 @@ describe("runTrigger", () => {
     ].join("\n"), "utf8")
     const written: Array<{ path: string; kind: string }> = []
     const llm = scriptedLlm([
-      JSON.stringify({ actions: [{ target: "rule", name: "general", op: "append", content: "旧线教训：静止项目也要定期收束" }] }),
+      JSON.stringify({ actions: [{ target: "rule", name: "general", op: "append", content: "旧线教训：静止项目也要定期转 inactive" }] }),
     ])
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
       resolveLlm: () => ({ llm, model: "m" }),
       now: () => new Date("2026-08-28T00:00:00Z"), // 距线 updated（8-13）15 天 ≥ 14
       emit: (e) => { written.push({ path: e.path, kind: e.kind }) },
     })
-    await pipe.runTrigger(WORKDIR, "interval") // 空批次：范围空，只有收束 + 沉淀走 LLM
+    await pipe.runTrigger(WORKDIR, "interval") // 空批次：范围空，只有转 inactive + 沉淀走 LLM
     const rulePath = join(root, "memory", "global", "rule", "general.md")
     expect(written.some((w) => w.path === rulePath && w.kind === "cognition")).toBe(true)
-    expect(readFileSync(rulePath, "utf8")).toContain("静止项目也要定期收束")
+    expect(readFileSync(rulePath, "utf8")).toContain("静止项目也要定期转 inactive")
   })
 
   it("revives an inactive thread on a new episode ", async () => {
@@ -378,7 +378,7 @@ describe("runTrigger", () => {
     const pipe = new MemoryPipeline(join(root, "memory"), sessions, {
       resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "old", op: "append", content: "- 做了什么：又有新情节\n- 结果：线复活" }] })]), model: "m" }),
     })
-    // 预置一条 inactive 线（模拟时间自动收束后的状态）
+    // 预置一条 inactive 线（模拟时间自动转 inactive 后的状态）
     const projectDir = join(root, "memory", "projects", projectIdFor(WORKDIR))
     mkdirSync(projectDir, { recursive: true })
     writeFileSync(join(projectDir, "old.md"), [
@@ -626,7 +626,7 @@ describe("runNightly（夜间闲时沉淀）", () => {
     const rulePath = join(root, "memory", "global", "rule", "ops.md")
     expect(readFileSync(rulePath, "utf8")).toContain("先灰度")
     expect(audits.some((a) => a.trigger === "nightly" && a.kind === "cognition" && a.sessionId === "ses_A")).toBe(true)
-    // 夜间沉淀不动线状态：活跃线保持 active（收束仍由四触发顺带做）
+    // 夜间沉淀不动线状态：活跃线保持 active（转 inactive 仍由四触发顺带做）
     expect(readFileSync(join(projectDir, "deploy.md"), "utf8")).toContain("status: active")
   })
 

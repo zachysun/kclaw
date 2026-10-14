@@ -59,7 +59,7 @@ async function runOne(
 
 /**
  * 跑完整组验收命令（按声明顺序串行）。sandbox 不可用时不裸跑：每条
- * 记为失败并注明原因（fail-closed——验证不可用与验证失败同待遇，连败
+ * 记为失败并注明原因（fail-closed——验证不可用与验证失败同处理方式，连败
  * 达上限即停，stoppedNote 会说明）。cwd = 会话工作区。`timeoutMs` 默认
  * GOAL_GATE_TIMEOUT_MS（测试可收紧）。
  */

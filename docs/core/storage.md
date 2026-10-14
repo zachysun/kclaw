@@ -175,7 +175,7 @@ export function readJsonl(file: string): unknown[]
 | `model?` | 会话级模型覆盖；空或默认回退到 daemon 默认 |
 | `mode?` | 会话权限模式，`"readonly" \| "default" \| "acceptEdits" \| "trusted" \| "auto"` 五档，默认 default（见 [permissions](./permissions.md)） |
 | `parentSessionId?` | subagent 会话的父会话标识；普通会话没有。引擎侧一切 subagent 特化行为都从它派生（见 [subagents](./subagents.md)） |
-| `forkedFrom?` | fork 血缘（`session.forked` 事件投影，单边：只有 fork 出的新会话带）：`sessionId` 来源会话、`messageId` 用户所点的分叉点（全量复制空会话时省略）。fork 出的会话是完全独立的普通会话（删除互不级联），与 `parentSessionId` 的 subagent 语义无关；复制段经 `writeEventsRaw` 直写（不过追加回调：无总线帧、不喂检索索引），记忆提取水位在 fork 时播种到分叉点 |
+| `forkedFrom?` | fork 血缘（`session.forked` 事件投影，单边：只有 fork 出的新会话带）：`sessionId` 来源会话、`messageId` 用户所点的分叉点（全量复制空会话时省略）。fork 出的会话是完全独立的普通会话（删除互不级联），与 `parentSessionId` 的 subagent 语义无关；复制段经 `writeEventsRaw` 直写（不过追加回调：无总线帧、不喂检索索引），记忆提取进度在 fork 时播种到分叉点 |
 | `compaction?` | 分层压缩状态 `{ segments, top, upto }`（语义见 [compaction](./compaction.md)），由 `compaction` 事件推导（每次压缩把新段汇入 `segments`；`updateMeta` 不再直接改它） |
 | `dispositionOverride?` | 会话级发送处置覆盖（`"steer" \| "wait" \| "interrupt"`），优先于 `sessions.defaultDisposition`。服务端路由接受三个值的写入；Web 与 CLI 的 interrupt 都是一次性动作、不写会话级覆盖（见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)） |
 | `goal?` | 会话级目标快照（`/goal`，`GoalSnapshot` 全量：目标文本、验收命令、状态机、轮数与 token 计数、最近判定摘要），由 `goal.set` 事件全量替换、`goal.cleared` 删除（见 [goal](./goal.md)）。计数字段是检查时刻的展示缓存，权威数据在事件流 |
@@ -202,7 +202,7 @@ export function readJsonl(file: string): unknown[]
 `forkSession` 把一个已有会话的历史复制成全新独立会话（web 对话页每条气泡的「fork」按钮、`POST /sessions/:id/fork`）：
 
 1. **复制区间**：源流从头复制到分叉点（用户所点消息）所属 run 的 `run.ended` 处——语义点是消息，实际写入的切点归一化到 run 边界，不产生半截对话；流被崩溃截断时退到流尾（残流没有收尾记录，有多少复制多少）。省略分叉点 = 复制全部历史。消息 id 是全局唯一的 ULID，复制不用改 id；压缩记录、系统提示词基线、模型/模式/工作目录等全部随事件重放自动继承。
-2. **写入路径**：复制段经 `writeEventsRaw` **整体直写** events.jsonl——不走 `appendEvent`，因此逐条不发 `session.appended` 通知帧、不喂检索索引、不逐条汇入 meta；随后经常规 `appendEvent` 落 `session.forked` 血缘事件（新会话的直播与增量拉取从这条开始），最后整流 `rebuildMeta` 重建摘要。复制段在源会话已被记忆提取与检索覆盖过：新会话的提取水位经 `seedWatermarksForFork` 直接推进到最后一条复制消息，检索索引对新会话整体标记已回填（backfilled、不写入复制段），都不重复处理。附件文件按块里的绝对路径复制进新会话目录并改写 `source.path`（路径越界源会话目录的引用保持原样）。
+2. **写入路径**：复制段经 `writeEventsRaw` **整体直写** events.jsonl——不走 `appendEvent`，因此逐条不发 `session.appended` 通知帧、不喂检索索引、不逐条汇入 meta；随后经常规 `appendEvent` 落 `session.forked` 血缘事件（新会话的直播与增量拉取从这条开始），最后整流 `rebuildMeta` 重建摘要。复制段在源会话已被记忆提取与检索覆盖过：新会话的提取进度标记经 `seedWatermarksForFork` 直接推进到最后一条复制消息，检索索引对新会话整体标记已回填（backfilled、不写入复制段），都不重复处理。附件文件按块里的绝对路径复制进新会话目录并改写 `source.path`（路径越界源会话目录的引用保持原样）。
 3. **血缘与独立性**：血缘单边记录——只有新会话带 `meta.forkedFrom`，源会话一字节不动；新会话是完全独立的普通会话（改名、删除、继续对话互不影响，删除不级联），与 subagent 的 `parentSessionId`（隐藏列表、记忆跳过、用量归父）语义无关。标题取原标题 + ` · fork` 后缀（重名递增序号）。任一步失败清掉半成品（会话目录经 `purge` 删除，拷贝到一半的附件目录一并删除），不留残会话。
 
 ---

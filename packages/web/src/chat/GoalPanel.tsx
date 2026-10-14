@@ -2,7 +2,7 @@
  * GoalPanelCard — /goal 目标循环的浮动详情卡（issue #47），与团队卡同一
  * 挂载位（聊天区右上角、滚动日志之外）。整体可折叠成一行徽标：状态 +
  * 轮数进度。展开显示目标原文、验收命令、计数（连续/累计轮数、token
- * 预算）、判定器最近意见与停止说明；动作区提供 暂停/恢复/停止目标/移除
+ * budget）、判定器最近意见与停止说明；动作区提供 暂停/恢复/停止目标/移除
  * 与改写表单（改写含验收命令编辑——创建走 /goal 命令，验收命令的完整
  * 编辑入口在这里）。纯展示组件：数据经 props 进、动作经回调出。
  */
@@ -41,7 +41,7 @@ const REASON_SHORT: Record<NonNullable<GoalSnapshot["stoppedReason"]>, string> =
   met: "已达成",
   impossible: "不可能达成",
   "round-limit": "轮数达上限",
-  "budget-limit": "预算耗尽",
+  "budget-limit": "budget耗尽",
   "gate-exhausted": "验收连续失败",
   "no-progress": "无进展",
   permission: "待人工裁决",

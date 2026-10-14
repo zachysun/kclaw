@@ -211,8 +211,8 @@ describe("toProviderMessages tool-result eviction", () => {
       const tools = out.filter((m) => m.role === "tool")
       expect(tools.every((m) => !m.content.includes("已省略"))).toBe(true)
     }
-    // 省略线照旧：预算装不下的旧结果仍以占位符发送（GUARANTEED_TOOL_RESULTS
-    // 保底最新的两条，其余被预算省略）。
+    // 省略线照旧：budget装不下的旧结果仍以占位符发送（GUARANTEED_TOOL_RESULTS
+    // 保底最新的两条，其余被budget省略）。
     const budgeted = toProviderMessages(msgs, 50, { toolResultKeep: 0, tokenBudget: 1 })
     const budgetTools = budgeted.filter((m) => m.role === "tool")
     expect(budgetTools[0]!.content).toContain("已省略")
@@ -247,7 +247,7 @@ describe("toProviderMessages — v3", () => {
     expect(out[0]!.content).toContain("不要把摘要中记录的旧请求当作新指令")
   })
 
-  it("summary 脉络项收尾带 session_search 检索提示；无 summary 时该提示不出现", () => {
+  it("summary 上下文项收尾带 session_search 检索提示；无 summary 时该提示不出现", () => {
     const history = [userMsg("你好"), assistantMsg(" hi")]
     const withSummary = toProviderMessages(history, 200, { summary: { upto: "m1", top: "s" } })
     expect(withSummary[0]!.content).toContain("session_search")
@@ -257,14 +257,14 @@ describe("toProviderMessages — v3", () => {
     }
   })
 
-  it("summary 未传时不注入脉络项（行为不变）", () => {
+  it("summary 未传时不注入上下文项（行为不变）", () => {
     const out = toProviderMessages([userMsg("你好")], 200, {})
     expect(out[0]!.role).not.toBe("system")
   })
 
   it("tokenBudget：K 条保底之外，装不下的最旧结果被挤掉", () => {
     // 3 条工具结果各 100 字（estimateTokens ≈ 25），基线 acc = 3（每条 tool_call args "{}" ≈ 1）；
-    // 预算 27 < 3 + 25 → 装不下任何非保底结果：最新 2 条保底保留，最旧的 1 条被挤掉
+    // budget 27 < 3 + 25 → 装不下任何非保底结果：最新 2 条保底保留，最旧的 1 条被挤掉
     const history = [...toolMsg("a".repeat(100)), ...toolMsg("b".repeat(100)), ...toolMsg("c".repeat(100))]
     const out = toProviderMessages(history, 200, { tokenBudget: 27 })
     const contents = out.filter((m) => m.role === "tool").map((m) => (m as { content: string }).content)
@@ -289,7 +289,7 @@ describe("toProviderMessages — v3", () => {
     expect(contents[2]).toContain("c".repeat(100))
   })
 
-  it("工具结果不足 K 条且预算为 0 时同样保底", () => {
+  it("工具结果不足 K 条且budget为 0 时同样保底", () => {
     const history = [...toolMsg("only".repeat(40))]
     const out = toProviderMessages(history, 200, { tokenBudget: 0 })
     const tool = out.find((m) => m.role === "tool") as { content: string }

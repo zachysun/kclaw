@@ -3,7 +3,7 @@
  * vi.fn 的 ApiClient，get 按路径返回裸数据。两个子页签：默认「已装技能」，
  * 「从其他 agent 复用」页签承载发现列表（搜索/分组）、已建链接表格与批量
  * 复用，「提案」页签承载技能进化的治理面（角标、按状态显隐的操作按钮、
- * 修订对照、warning toast）。scope 默认全局；探测与链接数据加载失败静默
+ * 修订对照、warning toast）。scope 默认全局；扫描与链接数据加载失败静默
  * 降级，只有主清单失败走 notice。
  */
 import { describe, it, expect, vi } from "vitest"

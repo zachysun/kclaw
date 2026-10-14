@@ -597,7 +597,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
         // The child never appears in the sidebar — the button is the only
         // visible way back to the parent.
         <div className="chat-readonly-hint" data-testid="subagent-readonly-hint">
-          子代理会话只读——它的过程与结题答复在审计页查看
+          subagent会话只读——它的过程与结题答复在审计页查看
           {onReturnToParent !== undefined && (
             <button type="button" className="return-parent" data-testid="return-to-parent" onClick={onReturnToParent}>
               ← 返回主会话
@@ -922,12 +922,12 @@ function BlockView({ block, markdown, onOpenAudit }: { block: RenderedBlock; mar
         return (
           <details className="blk-tool-result" data-testid="blk-tool-result-subagent">
             <summary>
-              ↳ 子代理 · {latestLine(block.output)}
+              ↳ subagent · {latestLine(block.output)}
             </summary>
             <pre>{block.output}</pre>
             {onOpenAudit !== undefined && (
               <button className="subagent-audit-link" data-testid="subagent-audit-link" onClick={() => onOpenAudit(childSessionId)}>
-                查看子代理审计
+                查看subagent审计
               </button>
             )}
           </details>

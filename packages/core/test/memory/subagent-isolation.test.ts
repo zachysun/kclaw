@@ -54,9 +54,9 @@ function recordingExtractor(): { system: MemorySystem; prompts: string[] } {
 describe("subagent memory isolation", () => {
   it("interval sweep extracts the mainline session and never the child", async () => {
     const main = sessions.create("主线", undefined, WORKDIR)
-    const child = sessions.create("子代理 · 扫描", undefined, WORKDIR, "default", main.id)
+    const child = sessions.create("subagent · 扫描", undefined, WORKDIR, "default", main.id)
     seed(main.id, "主线敲定了用 SQLite 存用量记录")
-    seed(child.id, "子代理过程文本：翻了 30 个文件看到很多 TODO")
+    seed(child.id, "subagent过程文本：翻了 30 个文件看到很多 TODO")
 
     const { system, prompts } = recordingExtractor()
     await system.triggerInterval(WORKDIR)
@@ -64,7 +64,7 @@ describe("subagent memory isolation", () => {
     expect(prompts.length).toBeGreaterThan(0)
     const shown = prompts.join("\n")
     expect(shown).toContain("主线敲定了")
-    expect(shown).not.toContain("子代理过程文本")
+    expect(shown).not.toContain("subagent过程文本")
     // The child never even got a watermark bookkeeping row (it is not a target).
     void child
   })
@@ -72,7 +72,7 @@ describe("subagent memory isolation", () => {
   it("children never serve as the recent-session attribution fallback", () => {
     const main = sessions.create("主线", undefined, WORKDIR)
     // Child updated AFTER the mainline (it would win any updatedAt sort).
-    const child = sessions.create("子代理 · x", undefined, WORKDIR, "default", main.id)
+    const child = sessions.create("subagent · x", undefined, WORKDIR, "default", main.id)
     seed(child.id, "刚刚活跃")
     const { system } = recordingExtractor()
     expect(system.recentSessionId(WORKDIR)).toBe(main.id)

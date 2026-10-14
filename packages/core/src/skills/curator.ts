@@ -198,7 +198,7 @@ function removeLinksPointingTo(skillsDir: string, archivedDir: string): string[]
   const kept = book.links.filter((l) => {
     if (typeof l.name !== "string" || typeof l.target !== "string") return true
     // 归档是整目录移动：目标的旧位置已空。链接目标等于旧位置、或位于其
-    // 子路径下，都算失效（按 realpath 归一，容忍符号链前缀差异）。
+    // 子路径下，都算失效（按 realpath 归一，兼容符号链前缀差异）。
     let normalized = l.target
     try {
       normalized = realpathSync(l.target)

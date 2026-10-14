@@ -1,7 +1,7 @@
 /**
  * /goal 的三组提示词（issue #47）：判定器（独立 LLM，严格 JSON 三值
  * 裁决）、续跑注入（下一轮 goal 触发 run 的用户文本）、收尾注入（token
- * 预算耗尽后的最后一轮）。纯函数、无 Node API——浏览器构建可引用。
+ * budget耗尽后的最后一轮）。纯函数、无 Node API——浏览器构建可引用。
  * 注入文本沿用仓库的 XML 标签约定（<goal-continue>/<goal-wrapup>，同
  * <compacted-summary> 先例），闭合标签逃逸在拼装处处理。
  */
@@ -25,7 +25,7 @@ export function noProgressMarked(progress: string | undefined): boolean {
   return t === "" || t === NO_PROGRESS_MARK
 }
 
-/** 闭合标签逃逸：证据里出现的 `</goal-...>` 会被打散，防提示词提前收口。 */
+/** 闭合标签逃逸：证据里出现的 `</goal-...>` 会被打散，防提示词提前结束。 */
 function escapeClosingTags(text: string): string {
   return text.replace(/<\/(goal-[\w-]+)>/g, "<\\$1>")
 }
@@ -153,12 +153,12 @@ export function judgeUnavailableUserText(goal: GoalSnapshot, errorKind: "parse" 
   )
 }
 
-/** 收尾轮注入：token 预算耗尽，给最后一轮把状态收干净。 */
+/** 收尾轮注入：token budget耗尽，给最后一轮把状态收干净。 */
 export function windDownUserText(goal: GoalSnapshot): string {
   return [
     `<goal-wrapup>`,
     `目标：${goal.text}`,
-    `该目标的生命周期 token 预算已耗尽，这是最后一轮。请收尾：`,
+    `该目标的生命周期 token budget已耗尽，这是最后一轮。请收尾：`,
     `1. 不要开始新的重大改动；`,
     `2. 把已完成的工作整理到可交接状态（必要的说明写进文件或总结）；`,
     `3. 最后一句话说明目标达成到什么程度、剩余什么没做。`,

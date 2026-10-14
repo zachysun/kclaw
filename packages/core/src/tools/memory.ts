@@ -7,7 +7,7 @@
  * itself, so calls need no confirmation and may run concurrently with other
  * tools.
  *
- * - `memory_save {text}` → 当场触发当前会话的写入管线（system.triggerImmediate）。
+ * - `memory_save {text}` → 当场触发当前会话的写入 pipeline（system.triggerImmediate）。
  *   text 是"要记内容的提示"；多余字段忽略。
  *   immediateEnabled=false 时返回固定错误文本（写入走后台定时/跟随触发）；触发后
  *   按是否真有提取批次区分回复——无增量时明说"没有需要沉淀的新内容"，不谎报写入。

@@ -16,7 +16,7 @@ import type { SessionMeta, SessionStore } from "./store.js"
  * is byte-identical to the source's (provider prefix caches still hit).
  *
  * 归属防重（deepseek 的 inheritedEventCount 等价物，逐项）：
- * - 记忆提取：新会话的 interval/follow 水位经 seedWatermarks 播种到 fork 点，
+ * - 记忆提取：新会话的 interval/follow 进度标记经 seedWatermarks 播种到 fork 点，
  *   之后只扫 fork 之后的新消息。
  * - 全文检索：新会话经 markSearchBackfilled 只标记已回填、不写入复制段——
  *   同一内容只在原会话命中一次，fork 之后的新消息照常增量索引。
@@ -32,7 +32,7 @@ export interface ForkDeps {
   store: SessionStore
   /** <home>/attachments：给了才把引用到的附件拷进新会话目录并改写块内路径。 */
   attachmentsDir?: string
-  /** 记忆水位播种（MemorySystem 门面转发 WriteLedger.advanceAll）。 */
+  /** 记忆提取进度播种（MemorySystem 转发 WriteLedger.advanceAll）。 */
   seedWatermarks?: (sessionId: string, messageId: string) => void
   /** 搜索索引只标记不写入（HistorySearchIndex.markBackfilled）。 */
   markSearchBackfilled?: (sessionId: string) => void
@@ -41,7 +41,7 @@ export interface ForkDeps {
 /** 所点消息不在源会话事件流里（消息被重试截掉、客户端传了过期 id 等）；宿主据此映射 400。 */
 export class ForkPointNotFoundError extends Error {}
 
-/** 从 sourceId 会话的 messageId 消息处（含）fork；缺省 messageId = 最新状态。 */
+/** 从 sourceId 会话的 messageId 消息处（含）fork；不带 messageId = 最新状态。 */
 export function forkSession(deps: ForkDeps, opts: { sourceId: string; messageId?: string }): SessionMeta {
   const { store } = deps
   const source = store.meta(opts.sourceId)
@@ -65,7 +65,7 @@ export function forkSession(deps: ForkDeps, opts: { sourceId: string; messageId?
       type: "session.forked",
       at: new Date().toISOString(),
       sourceSessionId: opts.sourceId,
-      // 缺省 messageId 或复制段内无消息（空会话全量复制）时省略。
+      // 不带 messageId 或复制段内无消息（空会话全量复制）时省略。
       ...(opts.messageId !== undefined || lastCopiedMessageId !== undefined
         ? { sourceMessageId: opts.messageId ?? lastCopiedMessageId }
         : {}),

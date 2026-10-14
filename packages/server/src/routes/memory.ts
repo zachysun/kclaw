@@ -6,7 +6,7 @@ const NOT_FOUND = { error: "not found" } as const
 const KINDS = new Set(["persona", "wiki", "rule"])
 type CogKind = "persona" | "wiki" | "rule"
 
-/** 路径段白名单校验（纵深防御）：段非空、非 "."、非 ".."、不含 "/"。
+/** 路径段白名单校验（多层防御）：段非空、非 "."、非 ".."、不含 "/"。
  *  允许 CJK/空格（URL 里已 encodeURIComponent），只拦目录穿越段。 */
 const isSafeSegment = (s: string): boolean => s.length > 0 && s !== "." && s !== ".." && !s.includes("/")
 
@@ -17,7 +17,7 @@ function requireContent(body: unknown): string | undefined {
   return typeof c === "string" && c !== "" ? c : undefined
 }
 
-/** /memory 路由族：管理记忆塔（项目线文件 + global 认知文件）。 */
+/** /memory 路由族：管理记忆系统（项目线文件 + global 认知文件）。 */
 export function registerMemoryRoutes(app: FastifyInstance, opts: { memory?: MemoryAdmin & Pick<MemoryTriggers, "triggerManual">; config?: KclawConfig }): void {
   // 无 memory 组装（createApp 未传 system）时全部 503，不注册会崩的调用。
   const unavailable = (reply: FastifyReply) => reply.code(503).send({ error: "memory system unavailable" })
@@ -108,7 +108,7 @@ export function registerMemoryRoutes(app: FastifyInstance, opts: { memory?: Memo
   })
 
   // 手动写入入口：/memory save（CLI/Web）触发当前项目的
-  // L0→L1 提取，范围 = 该项目自上次水位以来的新消息（与定时/跟随同一条管线）。
+  // L0→L1 提取，范围 = 该项目自上次标记以来的新消息（与定时/跟随同一条 pipeline）。
   app.post("/memory/trigger-manual", async (req, reply) => {
     if (memory === undefined) return unavailable(reply)
     // write.manual 是开关（默认开）：关闭时明确拒绝，同 immediate 的"工具在、执行时拒绝"。

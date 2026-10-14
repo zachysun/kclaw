@@ -165,7 +165,7 @@ export class Compactor {
 
   /**
    * 等待该会话进行中的压缩结束（完成/失败/被取消都算结束）。没有进行中的压缩时立即返回。
-   * 等待方（红线/收尾/挂起执行）在返回后重估水位、再决定同步压缩。
+   * 等待方（红线/收尾/挂起执行）在返回后重估占用、再决定同步压缩。
    * `signal` 仅用于提前解挂等待者（run 被中止时不悬挂）。
    */
   waitForSettled(sessionId: string, signal?: AbortSignal): Promise<void> {
@@ -332,7 +332,7 @@ export class Compactor {
     // 后续流程（两次摘要调用、meta 写入、审计、事件）与普通压缩完全一致。
     // 后台压缩同样豁免：预压线（0.75）低于黄线（0.80），黄线细判会把整个预压
     // 区间的后台压缩静默拦掉，预压形同虚设。
-    // 这里的黄线判定走活跃段口径：预算细判发生在边界切出之后，若压缩会留下的
+    // 这里的黄线判定走活跃段口径：budget细判发生在边界切出之后，若压缩会留下的
     // 部分没过线，压了也无收益——放弃且什么都不丢（收尾钩子的门槛判定则是
     // 全量历史口径，两处口径差异是承重设计，见 waterlines 模块说明）。
     if (!manual && !emergency && !background && !waterlines.exceedsActiveSpan("at", estimateContextTokens(active, userText, opts.overheadTokens))) {
@@ -341,7 +341,7 @@ export class Compactor {
 
     let boundary = chooseBoundary(active, { budget, targetRatio: waterlines.targetRatio })
     if (boundary === undefined && emergency) {
-      // 预算细判不可信时 chooseBoundary 可能切不出边界——强制退守最小可行
+      // budget细判不可信时 chooseBoundary 可能切不出边界——强制退守最小可行
       // 上下文：只保留最近一轮用户轮次（emergencyBoundary）。
       const forced = emergencyBoundary(active)
       if (forced !== undefined) boundary = { keepFrom: forced }

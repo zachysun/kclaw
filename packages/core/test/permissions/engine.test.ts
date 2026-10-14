@@ -12,7 +12,7 @@ const tc = (name: string, args: unknown): ToolCallBlock => ({
 const CFG = { allow: ["exec:git status", "exec:git diff*"], deny: ["exec:sudo*", "fs_write:~/.ssh/**"], confirmTimeoutMs: 1000, sessionGrants: true }
 
 // 内置工具的注册事实表（等价于 run-assembly 的现场派生：工具名 + risk + schema
-// 参数字段名）。测试用它构造 gate，使工具按"已注册"的待遇参与裁决。
+// 参数字段名）。测试用它构造 gate，使工具按"已注册"的处理方式参与裁决。
 const F = (risk: "safe" | "sensitive", ...argFields: string[]) => ({ risk, argFields })
 const BUILTIN_FACTS = new Map([
   ["exec", F("sensitive", "command")],

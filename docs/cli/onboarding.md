@@ -43,7 +43,7 @@ export function detectProviderStatus(home: string): ProviderStatus
 | `ollama` | Ollama (local) | openai | `http://localhost:11434/v1` | | 是（key 固定填 `"ollama"`） |
 | `custom` | Custom OpenAI-compatible endpoint | openai | 无（需输入） | | |
 
-`format` 决定探测与保存条目的线上协议（openai 走 OpenAI 兼容的 `/chat/completions`，anthropic 走 Anthropic Messages API）。预设里写死格式与 baseUrl，用户只需填 key 与模型，Anthropic 格式的 provider 首次运行就能配（机制见 [provider](../core/provider.md)）。
+`format` 决定连通测试与保存条目的线上协议（openai 走 OpenAI 兼容的 `/chat/completions`，anthropic 走 Anthropic Messages API）。预设里写死格式与 baseUrl，用户只需填 key 与模型，Anthropic 格式的 provider 首次运行就能配（机制见 [provider](../core/provider.md)）。
 
 步骤机（`step: "template" | "baseurl" | "key" | "model"`）：
 
@@ -51,7 +51,7 @@ export function detectProviderStatus(home: string): ProviderStatus
 2. **baseurl**（仅 custom）：文本输入，裁掉末尾斜杠，空值报错并重新输入。
 3. **key**：`p.password` 隐藏输入（不回显）；ollama 不经过这步。
 4. **model**：文本输入，空则用模板默认；然后构造 `buildProviderEntry(t, apiKey, model)` → `{ baseUrl, apiKey, model }` → 连通测试。
-5. **连通测试**（core `probeProviderChat`）：按模板的 `format` 探测——openai 格式 `POST {baseUrl}/chat/completions`，body `{ model, messages: [{role:"user", content:"hi"}], max_tokens: 1, stream: false }`；anthropic 格式 `POST {baseUrl}/v1/messages`，body 为对应的 Messages 形态。20 秒超时；不抛异常而是返回 `{status, body}`（status 为 null = 请求没到达），与 provider 管理接口共用同一探测实现（机制见 [provider](../core/provider.md)）。成功（HTTP < 400）→ 写配置收尾；失败 → 分类报错 + 重试确认。
+5. **连通测试**（core `probeProviderChat`）：按模板的 `format` 做连通测试——openai 格式 `POST {baseUrl}/chat/completions`，body `{ model, messages: [{role:"user", content:"hi"}], max_tokens: 1, stream: false }`；anthropic 格式 `POST {baseUrl}/v1/messages`，body 为对应的 Messages 形态。20 秒超时；不抛异常而是返回 `{status, body}`（status 为 null = 请求没到达），与 provider 管理接口共用同一连通测试实现（机制见 [provider](../core/provider.md)）。成功（HTTP < 400）→ 写配置收尾；失败 → 分类报错 + 重试确认。
 
 **失败按三类报错**（`classifyProbeError` → `REASON`）：
 

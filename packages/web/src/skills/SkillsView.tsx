@@ -6,8 +6,8 @@
  * 当作不存在（列表与指名都不出现）。
  *
  * 「从其他 agent 复用」：复用管理面——顶部已建链接的紧凑表格（来源、四
- * 档可见档位单选、删除；链接目标不再是探测正在提供的版本时标"过时"），
- * 下方探测发现列表：搜索框 + 按来源分组折叠（用户级 agent 目录展开、插
+ * 档可见档位单选、删除；链接目标不再是扫描正在提供的版本时标"过时"），
+ * 下方扫描发现列表：搜索框 + 按来源分组折叠（用户级 agent 目录展开、插
  * 件技能折叠），每条可预览正文、单个复用或批量复用。复用的元数据（目标/
  * 来源/档位）在服务端 .links.json，外部 SKILL.md 一字不动；复用链接的管
  * 理记录不受用户可见性过滤影响（否则"仅模型"档改不回）。
@@ -61,7 +61,7 @@ interface LinkRecord {
   target: string
   agent: string
   tier: "all" | "user" | "model" | "off"
-  /** false = 目标已不是探测正在提供的版本（插件升级过）——链接可用但过时。 */
+  /** false = 目标已不是扫描正在提供的版本（插件升级过）——链接可用但过时。 */
   current?: boolean
 }
 
@@ -259,7 +259,7 @@ export function SkillsView({ api, notice }: {
       setNewSource("")
       reload()
     } catch (e) {
-      notice(`添加探测目录失败: ${String(e)}`, "error")
+      notice(`添加扫描目录失败: ${String(e)}`, "error")
     } finally {
       setBusy(false)
     }
@@ -271,7 +271,7 @@ export function SkillsView({ api, notice }: {
       await api.del(`/skills/sources${scopeQuery}${scopeQuery === "" ? "?" : "&"}dir=${encodeURIComponent(dir)}`)
       reload()
     } catch (e) {
-      notice(`移除探测目录失败: ${String(e)}`, "error")
+      notice(`移除扫描目录失败: ${String(e)}`, "error")
     } finally {
       setBusy(false)
     }
@@ -619,7 +619,7 @@ export function SkillsView({ api, notice }: {
                     <input
                       type="text"
                       data-testid="source-input"
-                      placeholder="添加探测目录（绝对路径）"
+                      placeholder="添加扫描目录（绝对路径）"
                       value={newSource}
                       onChange={(e) => setNewSource(e.target.value)}
                       onKeyDown={(e) => { if (e.key === "Enter") void addSource() }}

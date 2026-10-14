@@ -4,7 +4,7 @@
  * 对设有 active 目标且 armed 的会话做一轮检查：跑验收命令（沙箱）→ 调
  * 判定器（独立 LLM）→ 按裁决续跑或停止。
  *
- * 计数全部从事件流派生（events.jsonl 唯一真相）：totalRounds/tokensUsed
+ * 计数全部从事件流派生（events.jsonl 是权威数据）：totalRounds/tokensUsed
  * 从 goal.set(create) 起算；连续轮数在 user 触发的 run 处断开；无进展/
  * 门失败/判定器连败各自从尾部 goal.checked 回溯（不同类结果互相断开）。
  * 进程内只留无法从事件恢复的东西：armed（自续开关，重启即失——ADR-0002
@@ -136,7 +136,7 @@ export class GoalLoopHost {
     const { sessions } = this.#deps
     const meta = sessions.meta(sessionId)
     if (meta === undefined) throw new Error("session not found")
-    if (meta.parentSessionId !== undefined) throw new Error("子代理会话不设置目标（只读会话）")
+    if (meta.parentSessionId !== undefined) throw new Error("subagent会话不设置目标（只读会话）")
     const text = input.text.trim()
     if (text === "") throw new Error("目标描述不能为空")
     const acceptance = input.acceptance.map((a) => a.trim()).filter((a) => a !== "")
@@ -348,7 +348,7 @@ export class GoalLoopHost {
         this.#persistStop(sessionId, decision.loop, decision.reason, decision.note)
         return
       }
-      // 非终态：先写回计数（与判定摘要），预算超限的收尾轮置标记后入队。
+      // 非终态：先写回计数（与判定摘要），budget超限的收尾轮置标记后入队。
       this.#refreshCounters(sessionId, decision.loop, decision.judge)
       if (decision.kind === "winddown") rt.windDownPending = true
       this.#enqueueRound(sessionId, { ...goal, totalRounds: loop.totalRounds }, decision.injection, decision.enqueueRound)

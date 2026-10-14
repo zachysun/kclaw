@@ -76,7 +76,7 @@ export interface MemoryAdmin {
   deleteCognition(kind: CogKind, name: string): void
 }
 
-/** 超预算保留优先级：规则漏了会出错 > 画像缺一段 > wiki 少一块。 */
+/** 超budget保留优先级：规则漏了会出错 > 画像缺一段 > wiki 少一块。 */
 const L2_PRIORITY: Array<CogKind> = ["rule", "persona", "wiki"]
 const FTS_RECALL = 50
 
@@ -99,7 +99,7 @@ interface CogFile { kind: CogKind; name: string; title: string; body: string; sc
 interface ScoredHit { key: string; topic: string; title: string; date: string; text: string; score: number }
 
 /**
- * MemorySystem —— 记忆系统在 server 侧的唯一组装点。组装 L1 情节管线 + L2 认知库，
+ * MemorySystem —— 记忆系统在 server 侧的唯一组装点。组装 L1 情节 pipeline + L2 认知库，
  * 方法面按四拨调用方分面（MemoryQuery / MemoryTriggers / MemoryScheduleBook /
  * MemoryAdmin，卡⑤）；对账（reconcile）与停机（stop）只归 daemon。
  */
@@ -172,7 +172,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
   // ---- 注入与检索（run.ts 调用） ----
 
   /**
-   * L2 常驻注入：scope 过滤（global + 当前项目）+ token 预算 +
+   * L2 常驻注入：scope 过滤（global + 当前项目）+ token budget +
    * rule>persona>wiki 整文件取舍（装不下整文件跳过并 log，不截断）；空认知/异常返回 ""。
    * 块序：[关于用户] → [项目认知] → [通用规则]。
    */
@@ -195,7 +195,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
       for (const f of readDirSafe(join(globalDir, "rule"))) if (f.endsWith(".md")) addFile(join(globalDir, "rule", f), "rule", f.slice(0, -3))
       if (files.length === 0) return ""
 
-      // 预算取舍：按 rule > persona > wiki 优先级逐文件累计，超预算整文件跳过
+      // budget取舍：按 rule > persona > wiki 优先级逐文件累计，超budget整文件跳过
       const kept: CogFile[] = []
       let used = 0
       for (const kind of L2_PRIORITY) {
@@ -343,7 +343,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     return this.#sessions.list().find((m) => m.parentSessionId === undefined)?.id
   }
 
-  /** 立刻写入（memory_save 工具）：增量提取自最近水位的消息（水位推进两路）。
+  /** 立刻写入（memory_save 工具）：增量提取自最近标记的消息（标记推进两路）。
    *  返回是否真的执行了提取（false = 该会话无增量），工具据此给不误导的回复。 */
   async triggerImmediate(sessionId: string): Promise<boolean> {
     const meta = this.#sessions.meta(sessionId)
@@ -356,7 +356,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     await this.#pipeline.runTrigger(workdir, "manual", sessionId ?? this.#recentSessionId(workdir))
   }
 
-  /** 切会话写入（/clear、/new 与新建会话入口共用 POST /sessions 时触发）：增量提取自最近水位的消息。 */
+  /** 切会话写入（/clear、/new 与新建会话入口共用 POST /sessions 时触发）：增量提取自最近标记的消息。 */
   async triggerClear(workdir: string, sessionId?: string): Promise<void> {
     await this.#pipeline.runTrigger(workdir, "clear", sessionId ?? this.#recentSessionId(workdir))
   }
@@ -374,7 +374,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
   // ---- 定时/跟随触发与跟随判定（scheduler / run.ts 调用） ----
 
   /** 定时触发（scheduler interval 保底）：无显式归属会话，pipeline 对
-   *  该项目全部会话逐个补增量（每会话各一本水位，谁的增量归谁的批次）。 */
+   *  该项目全部会话逐个补增量（每会话各一份标记，谁的增量归谁的批次）。 */
   async triggerInterval(workdir: string): Promise<void> {
     await this.#pipeline.runTrigger(workdir, "interval")
   }
@@ -392,7 +392,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
   // ---- 调度簿记（scheduler 调用） ----
 
   /**
-   * 记录唯一入口：state.json 的全部读写收口到这里，两条通道。
+   * 记录唯一入口：state.json 的全部读写都走这里，两条通道。
    * 每次现开现读（WriteLedger 写时整文件原子重写，长命实例会覆盖别人的
    * 写入）——禁止在调用间缓存实例。
    */
@@ -447,7 +447,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
 
   /**
    * fork 支持（session/fork.ts 经 daemon 调用）：把新会话的 interval/follow
-   * 两条提取水位直接播种到 fork 点——其前的历史经源会话已提取过，不播种的
+   * 两条提取进度标记直接播种到 fork 点——其前的历史经源会话已提取过，不播种的
    * 话首次触发会把整段复制历史再提取一遍。
    */
   seedWatermarksForFork(workdir: string, sessionId: string, messageId: string): void {

@@ -1554,7 +1554,7 @@ select:focus {
   color: var(--muted);
 }
 
-/* 压缩指示行的取消按钮（v3 compaction.cancel）：中止在飞的自动压缩 */
+/* 压缩指示行的取消按钮（v3 compaction.cancel）：中止进行中的自动压缩 */
 .compaction-cancel {
   flex: none;
   margin-left: 4px;

@@ -36,7 +36,7 @@ export interface SessionMeta {
    * 会话是完全独立的普通会话：删除互不级联，与 subagent 的 parentSessionId
    * 语义无关。
    */
-  forkedFrom?: { sessionId: string; /** 用户所点的分叉点消息；缺省 messageId 全量复制且流内无消息时省略。 */ messageId?: string }
+  forkedFrom?: { sessionId: string; /** 用户所点的分叉点消息；不带 messageId 且流内无消息时省略。 */ messageId?: string }
   /** Per-session model override (empty/absent → daemon default). */
   model?: string
   /** Session permission mode (absent → "default"). */
@@ -51,14 +51,14 @@ export interface SessionMeta {
    * 从头逐字节相同匹配，live 变化只失效变化点之后。段级 frozenAt 记录该段
    * 文本成为基线的时刻。下一次压缩清除此字段后随首个 system 审计事件重新
    * 固化（基线重置点=缓存冷启动，零额外成本）。
-   * 投影由事件推进：system 事件逐段 upsert、compaction 事件清除——事件流唯一真相。
+   * 投影由事件推进：system 事件逐段 upsert、compaction 事件清除——事件流是权威数据。
    */
   systemBaseline?: { stable: { text: string; frozenAt: string }; live?: { text: string; frozenAt: string } }
   /** 会话级处置覆盖（/steer /wait、Web 三选）：优先于 sessions.defaultDisposition。 */
   dispositionOverride?: "steer" | "wait" | "interrupt"
   /**
    * 会话级目标快照（issue #47 /goal）：goal.set 事件全量替换、goal.cleared
-   * 删除——事件流唯一真相，投影只跟随。终态（complete）后仍保留在 meta 里
+   * 删除——以事件流为权威数据，投影只跟随。终态（complete）后仍保留在 meta 里
    * 供展示，直到用户 clear。进程内的自续开关（armed）不持久化：重启后目标
    * 还在但不会自动续跑（ADR-0002）。
    */
@@ -320,7 +320,7 @@ export class SessionStore {
     this.appendEvent(id, { type: "run.started", ...event })
   }
 
-  /** Append one run-boundary audit event（run 终点落款；失败带 error，成功带全程用量）; the projection stays untouched (不推进 updatedAt)。 */
+  /** Append one run-boundary audit event（run 终点记录；失败带 error，成功带全程用量）; the projection stays untouched (不推进 updatedAt)。 */
   appendRunEnded(id: string, event: Omit<RunEndedEvent, "type">): void {
     this.appendEvent(id, { type: "run.ended", ...event })
   }

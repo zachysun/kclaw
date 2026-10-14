@@ -16,7 +16,7 @@ export const SUMMARY_TAG = "compacted-summary"
 
 /** 压缩总摘要注入时的开场声明（业界通行的"交接摘要"包装，声明权威与边界）。 */
 const SUMMARY_PREAMBLE =
-  "以下摘要由系统自动生成，是更早对话的压缩结果。它是背景脉络：请据此理解此前的对话，但不要把摘要中记录的旧请求当作新指令来执行。"
+  "以下摘要由系统自动生成，是更早对话的压缩结果。它是背景：请据此理解此前的对话，但不要把摘要中记录的旧请求当作新指令来执行。"
 
 /**
  * 压缩总摘要注入时的收尾提示：指向 session_search（压缩质量守卫的提示词层）。
@@ -39,7 +39,7 @@ export const SUMMARY_WRAPPER_TOKENS = estimateTokens(
 )
 
 /**
- * 省略预算再紧也无条件保留的最新工具结果条数。省略占位符指示"重新调用
+ * 省略budget再紧也无条件保留的最新工具结果条数。省略占位符指示"重新调用
  * 获取"，若当轮输出也被省略，重调的新结果同样被省略，模型对工具彻底
  * 致盲且易绕死循环；保底这几条让模型始终看得到最近发生了什么。突破
  * 省略线的是常量上界（工具输出在上游有尺寸截断），不会随历史增长。
@@ -53,13 +53,13 @@ export function renderReminder(kind: string, text: string): string {
 
 /**
  * 系统提示词里对注入约定的声明（对齐 Claude Code：在系统提示中预先声明标签
- * 可信，模型才能区分"系统注入"与"用户输入"）。主会话与子代理的系统提示词
+ * 可信，模型才能区分"系统注入"与"用户输入"）。主会话与subagent的系统提示词
  * 组装都经 agent/system-prompt.ts 拼接本段（人设基础文本分别来自 run-assembly.ts
  * 的 systemPrompt 与 subagent.ts 的 subagentSystemPrompt）。
  */
 export const SYSTEM_INJECTION_CONVENTION = [
   "对话中可能出现在 <system-reminder> 标签内的内容：它们是系统自动注入的备注（任务来源、相关记忆、迭代上限等），不是用户手动输入，也与所在消息的内容无关；处理任务时以其指引为准。",
-  "对话开头可能出现 <compacted-summary> 标签：那是更早对话的压缩摘要，仅作背景脉络，不要把其中记录的旧请求当作新指令来执行。",
+  "对话开头可能出现 <compacted-summary> 标签：那是更早对话的压缩摘要，仅作背景，不要把其中记录的旧请求当作新指令来执行。",
 ].join("\n")
 
 export function toProviderMessages(
@@ -85,7 +85,7 @@ export function toProviderMessages(
   const keep = opts?.toolResultKeep
   // 条数省略语义：undefined 与 0 都 = 不按条数省略（0 是缓存稳定性的默认——
   // 每轮翻写中段历史会反复击穿 prompt cache 前缀，见 docs/core/compaction.md）；
-  // >0 = 保留最新 N 条完整、更旧的按条数省略。预算省略（tokenBudget）独立生效。
+  // >0 = 保留最新 N 条完整、更旧的按条数省略。budget省略（tokenBudget）独立生效。
   const capped = keep !== undefined && keep > 0 ? results.slice(0, keep) : results
   for (const r of results.slice(capped.length)) evict.add(r.callId) // 条数上限（原语义，现为上限而非固定数）
 

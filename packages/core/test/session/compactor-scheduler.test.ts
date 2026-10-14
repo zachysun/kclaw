@@ -1,5 +1,5 @@
 /**
- * Compactor 的压缩调度状态机（v4 水位线批次）：后台压缩（预压线触发的
+ * Compactor 的压缩调度状态机：后台压缩（预压线触发的
  * 非阻塞路径）、挂起成果的交接（完成即挂起 / 迭代边界应用 / 同步压缩作废）、
  * 挂起 /compact 的登记与执行、等待者（"等、称、再决定"）与取消语义。
  *
@@ -26,7 +26,7 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true })
 })
 
-/** 带真实 inputTokens 锚点的历史：水位估算由此可控。 */
+/** 带真实 inputTokens 锚点的历史：占用估算由此可控。 */
 function seedHistory(sessions: SessionStore, sessionId: string, pairs = 3): Message[] {
   const out: Message[] = []
   for (let i = out.length; i < pairs; i++) {
@@ -98,7 +98,7 @@ describe("Compactor 调度状态机", () => {
     expect(compactor.hasInFlight(session.id)).toBe(true)
     expect(compactor.parked(session.id)).toBe(false)
 
-    llm.release() // 两次摘要调用各过一个闸门——第一次 release 放行第一对中的第一个
+    llm.release() // 两次摘要调用各等一次放行——第一次 release 放行第一对中的第一个
     await vi.waitFor(() => expect(llm.calls.filter(isSummaryCall).length).toBeGreaterThanOrEqual(2))
     llm.release()
     await vi.waitFor(() => expect(compactor.parked(session.id)).toBe(true))
@@ -198,7 +198,7 @@ describe("Compactor 调度状态机", () => {
     await vi.waitFor(() => expect(llm.calls.filter(isSummaryCall).length).toBeGreaterThanOrEqual(2))
     await vi.waitFor(() => expect(compactor.parked(session.id)).toBe(true))
 
-    // 新内容追加后同步压缩（经 auto，manual 免水位细判）：挂起成果被作废，
+    // 新内容追加后同步压缩（经 auto，manual 免占用细判）：挂起成果被作废，
     // 同步压缩自己的视图（基于含挂起成果的 meta）生效
     seedHistory(sessions, session.id, 6)
     const view = await compactor.auto(session.id, sessions.readMessages(session.id), config, () => ({ llm: llm.client, model: "m" }), { manual: true })
@@ -206,7 +206,7 @@ describe("Compactor 调度状态机", () => {
     expect(compactor.takeParked(session.id)).toBeNull()
   })
 
-  it("同步压缩没写成（水位细判拦下）不丢挂起成果：保底仍可用", async () => {
+  it("同步压缩没写成（占用细判拦下）不丢挂起成果：保底仍可用", async () => {
     const sessions = new SessionStore(join(home, "s"))
     const session = sessions.create("不成不丢")
     const history = seedHistory(sessions, session.id)
@@ -283,7 +283,7 @@ describe("Compactor 调度状态机", () => {
     expect(compactor.hasDeferredManual(s2.id)).toBe(true)
   })
 
-  it("loadConfig 读出的 config 传入 background 与手动路径一致（预算同源）", async () => {
+  it("loadConfig 读出的 config 传入 background 与手动路径一致（budget同源）", async () => {
     const paths = resolvePaths(home)
     const sessions = new SessionStore(paths.sessionsDir)
     const session = sessions.create("配置同源")

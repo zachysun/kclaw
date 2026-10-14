@@ -1536,7 +1536,7 @@ describe("RunManager context compaction", () => {
 // --- memory injection------------------------------------------
 // RunManagerDeps.memory 是 MemorySystem：L2 cognition 拼进 system prompt
 // （cognitionPrompt 为空/抛错则回退到纯 AGENTS.md），L1 情节以 memory note 注入
-// 用户消息（searchEpisodes 失败静默跳过）。四触发提取管线由 daemon 组装。
+// 用户消息（searchEpisodes 失败静默跳过）。四触发提取 pipeline 由 daemon 组装。
 
 describe("RunManager memory injection", () => {
   it("injects L2 cognition into the system prompt and L1 episodes as memory notes", async () => {
@@ -1583,11 +1583,11 @@ describe("RunManager memory injection", () => {
 // --- system 事件审计（第 9 种持久化事件）--------------------------------------
 // 每次 run 在系统提示词拼装完成后、进入模型循环前，把全量文本作为一条 system
 // 事件追加进该会话的事件流（只写入，不上总线）。语义拍板：写入失败即本次 run
-// 失败（与消息写入失败同待遇）；不加幻影会话守卫；steer 注入与 run 内多次模型
+// 失败（与消息写入失败同处理方式）；不加幻影会话守卫；steer 注入与 run 内多次模型
 // 调用复用同一份提示词，每 run 恰好一条。
 
 describe("RunManager system 事件审计", () => {
-  // 批 1 的 isSystemEvent 守卫未导出到 @kclaw/core 公共入口：测试内行内收窄
+  // 批 1 的 isSystemEvent 守卫未导出到 @kclaw/core 公共入口：测试内行内自写类型守卫
   type StreamEvent = ReturnType<SessionStore["readEvents"]>[number]
   const isSystem = (e: StreamEvent): e is StreamEvent & { type: "system"; at: string; stable: string; live?: string } =>
     e.type === "system"
@@ -1873,9 +1873,9 @@ describe("RunManager model resolution + usage recording", () => {
 })
 
 // --- sandbox.checked 事件审计（批次 D，第 10 种持久化事件）---------------------
-// 每次 run 在沙箱探测后立即落一条 sandbox.checked 事件：config 开关、是否真的
-// 探测、探测结果与原因（只写入，不上总线；不进投影、不推进 updatedAt）。语义
-// 拍板：写入失败即本次 run 失败（与 system 事件同待遇——审计承诺必须完整）。
+// 每次 run 在沙箱检测后立即落一条 sandbox.checked 事件：config 开关、是否真的
+// 检测、检测结果与原因（只写入，不上总线；不进投影、不推进 updatedAt）。语义
+// 拍板：写入失败即本次 run 失败（与 system 事件同处理方式——审计承诺必须完整）。
 
 describe("RunManager sandbox.checked 事件审计", () => {
   type StreamEvent = ReturnType<SessionStore["readEvents"]>[number]
@@ -1899,8 +1899,8 @@ describe("RunManager sandbox.checked 事件审计", () => {
     expect(userMsgIdx).toBeGreaterThan(sbIdx)
   })
 
-  it("配置开启时如实记录宿主探测结果", async () => {
-    // 宿主的真实探测结果（macOS sandbox-exec / Linux bwrap）：有沙箱则
+  it("配置开启时如实记录宿主检测结果", async () => {
+    // 宿主的真实检测结果（macOS sandbox-exec / Linux bwrap）：有沙箱则
     // available:true，无则 false 且带原因——本测试两种走向都必须如实断言。
     const hasHostSandbox =
       process.platform === "darwin" ||
@@ -1958,7 +1958,7 @@ describe("RunManager sandbox.checked 事件审计", () => {
 // --- run 边界与权限裁决的档案事件（issue #18）--------------------------------
 // 每次 run 落一对 run.started / run.ended（含 trigger、stopReason、usage/error），
 // 每次人工确认的裁决落一条 permission.decided。只写入不上总线；不进投影、
-// 不推进 updatedAt。写入失败即本次 run 失败（与 system/sandbox 审计同待遇）。
+// 不推进 updatedAt。写入失败即本次 run 失败（与 system/sandbox 审计同处理方式）。
 
 describe("RunManager run 边界与权限裁决档案事件", () => {
   type StreamEvent = ReturnType<SessionStore["readEvents"]>[number]
@@ -2061,7 +2061,7 @@ describe("RunManager run 边界与权限裁决档案事件", () => {
   })
 
   it("运行中被中止的 run 落 run.ended stopReason aborted；确认等待中的中止不落裁决", async () => {
-    // 挂起的流让 run 停在确认等待：中止后既不该有裁决记录，也必须有 ended 落款。
+    // 挂起的流让 run 停在确认等待：中止后既不该有裁决记录，也必须有 ended 记录。
     const { env, manager } = makeEnv(
       scriptClient([execToolTurn("call_a", "echo hang"), textTurn("好")]),
       (c) => { c.permissions.confirmTimeoutMs = 60_000 },
@@ -2120,9 +2120,9 @@ describe("RunManager subagent session guard", () => {
     const { env, manager } = makeEnv(scriptClient([textTurn("不会被消费")]))
     const parent = env.sessions.create("主会话")
     // 子会话：meta 带 parentSessionId（create 的第五参）
-    const child = env.sessions.create("子代理 · 试跑", undefined, undefined, "default", parent.id)
+    const child = env.sessions.create("subagent · 试跑", undefined, undefined, "default", parent.id)
     expect(() => manager.submit(child.id, { userText: "插话", trigger: "user" }))
-      .toThrow("子代理会话不接收用户消息")
+      .toThrow("subagent会话不接收用户消息")
     // 没有任何消息落进子会话
     expect(env.sessions.readMessages(child.id)).toHaveLength(0)
   })
@@ -2452,7 +2452,7 @@ describe("RunManager.retry（编辑重试/重新生成）", () => {
     ])
   })
 
-  it("目标不合法即拒绝：不是最后一条用户消息、子代理会话、会话不存在", async () => {
+  it("目标不合法即拒绝：不是最后一条用户消息、subagent会话、会话不存在", async () => {
     const { env, manager, session } = await twoTurns(scriptClient([textTurn("答")]))
     const q1 = env.sessions.readMessages(session.id).filter((m) => m.role === "user")[0]!
     expect(() => manager.retry(session.id, q1.id, "改第一问")).toThrow()
@@ -2470,7 +2470,7 @@ describe("RunManager.retry 附件随重试原样带上", () => {
   it("编辑重试不带 attachments 参数时，从被截断的原用户消息重建附件", async () => {
     const { env, manager } = makeEnv(scriptClient([textTurn("答"), textTurn("答重")]))
     const session = env.sessions.create("附件重试")
-    // 造一个真实附件文件（挂在会话附件目录内，与上传管线同源）
+    // 造一个真实附件文件（挂在会话附件目录内，与上传流程同源）
     const attDir = join(env.paths.attachmentsDir, session.id)
     mkdirSync(attDir, { recursive: true })
     const attPath = join(attDir, "notes.txt")

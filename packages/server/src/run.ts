@@ -117,7 +117,7 @@ export class WakeBudgetExhaustedError extends Error {
 interface QueueNode {
   entry: QueueEntry
   model?: string
-  /** 子代理派发携带（subagent_run 的 role/toolAllow）；内存还原用，不进 queue.jsonl。 */
+  /** subagent派发携带（subagent_run 的 role/toolAllow）；内存还原用，不进 queue.jsonl。 */
   subagentRole?: string
   subagentToolAllow?: string[]
   resolve(o: RunOutcome): void
@@ -142,7 +142,7 @@ export class RunManager {
   static readonly QUEUE_LIMIT = 10
 
   /**
-   * 防自循环唤醒预算（#44）：每会话连续 agent 触发的自动唤醒上限。
+   * 防自循环唤醒上限（#44）：每会话连续 agent 触发的自动唤醒次数上限。
    * 计数在提交被接受时 +1，只有真实的用户输入真正到达模型时清零
    * （用户 run 开始 / steer 注入排空）。定时任务同属机器来源，不清零。
    * 仅内存：daemon 重启自然清零。
@@ -228,11 +228,11 @@ export class RunManager {
     // connected to a child session) are rejected; "agent" is the spawner's own
     // submission and "job" never lands on a child — neither is affected.
     if (input.trigger === "user" && meta.parentSessionId !== undefined) {
-      throw new Error("子代理会话不接收用户消息（只读；过程与结果见审计页）")
+      throw new Error("subagent会话不接收用户消息（只读；过程与结果见审计页）")
     }
-    // 防自循环预算（#44）：agent 触发 = 机器自动唤醒。检查先于队列上限
-    // （原型定序：预算耗尽的拒绝语义优先）；子会话不参与——它的 agent 提交
-    // 是派发器独占驱动的子 run，预算语义属于主会话。
+    // 防自循环上限（#44）：agent 触发 = 机器自动唤醒。检查先于队列上限
+    // （原型定序：上限耗尽的拒绝语义优先）；子会话不参与——它的 agent 提交
+    // 是派发器独占驱动的子 run，上限语义属于主会话。
     if (input.trigger === "agent" && meta.parentSessionId === undefined) {
       if ((this.#wakeBudgets.get(sessionId) ?? 0) >= RunManager.WAKE_BUDGET) {
         throw new WakeBudgetExhaustedError(
@@ -256,7 +256,7 @@ export class RunManager {
     if (queue.length + steer.length >= RunManager.QUEUE_LIMIT) {
       throw new Error(`队列已满（${RunManager.QUEUE_LIMIT} 条）`)
     }
-    // 走到这里 = 提交被接受：预算在接受时计数（排队也算——拒绝发生在门口，
+    // 走到这里 = 提交被接受：计数发生在接受时（排队也算——拒绝发生在门口，
     // 计数发生在进门，与回退保底的判定点一致）。已接受未执行的积压条目不追溯：
     // 后续清零只解锁新的接受，最坏见「积压数 + WAKE_BUDGET」次机器 run，
     // 总量受队列上限约束。
@@ -331,7 +331,7 @@ export class RunManager {
   }
 
   /**
-   * 仅中止会话的活动 run（语义收窄）：它停在下一个检查点并
+   * 仅中止会话的活动 run：它停在下一个检查点并
    * 以 stopReason "aborted" 结束。排队消息不受影响——排队取消一律走
    * queue.cancel。无活动 run 时返回 false。
    */
@@ -428,7 +428,7 @@ export class RunManager {
     const meta = sessions.meta(sessionId)
     if (meta === undefined) throw new Error("session not found")
     if (meta.parentSessionId !== undefined) {
-      throw new Error("子代理会话不接收用户消息（只读；过程与结果见审计页）")
+      throw new Error("subagent会话不接收用户消息（只读；过程与结果见审计页）")
     }
     const queue = this.#queues.get(sessionId) ?? []
     const steer = this.#steerBuf.get(sessionId) ?? []
@@ -562,7 +562,7 @@ export class RunManager {
    * rejection）。处理：手头已出队的 node 以该错误落定（等待方看见失败而非
    * 永久悬挂）并**塞回队首**——persist 抛错意味着 queue.jsonl 也没写成，塞回后
    * 内存与盘上重新一致，条目留在队列等待下一次出队重试，而不是被此后任何一次
-   * 成功的持久化按内存视图无声抹掉；#drivers 同步删除——下一次 submit 重新起转
+   * 成功的持久化按内存视图无声抹掉；#drivers 同步删除——下一次 submit 重新启动
    * （自愈）；错误日志一次。两条失败路径（出队持久化、条目执行）都补发条目级
    * 可见性事件（#emitEntryFailed）：已 ack 的消息不允许无声消失。
    */
@@ -678,11 +678,11 @@ export class RunManager {
     const controller = new AbortController()
     this.#active.set(sessionId, controller)
     const entry = node.entry
-    // 用户 run 真正开跑 = 真实用户输入到达模型：防自循环预算在此清零
+    // 用户 run 真正开跑 = 真实用户输入到达模型：防自循环计数在此清零
     // （#44 原型定案——清零不能发生在提交时，排在其后的机器条目会借它
     // 提前解锁，两次用户发言之间的唤醒上限就失守了）。goal 自续轮同样
     // 清零：目标循环本身有九条独立停止条件（goal-loop.ts），不需要也不
-    // 应该再吃 #44 的预算——否则长目标里 subagent 投递会先被卡死。
+    // 应该再受 #44 上限的约束——否则长目标里 subagent 投递会先被卡死。
     if (entry.trigger === "user" || entry.trigger === "goal") this.#wakeBudgets.delete(sessionId)
     const input: EnqueueInput = {
       userText: entry.text,
@@ -738,7 +738,7 @@ export class RunManager {
     this.#steerBuf.set(sessionId, [])
     this.#persistQueue(sessionId) // 从 queue.jsonl 移除这些条目
     for (const e of buf) this.#markInjected(e.messageId)
-    // 注入 = 用户插话真正进入对话：与用户 run 开跑同为预算清零点（#44）。
+    // 注入 = 用户插话真正进入对话：与用户 run 开跑同为计数清零点（#44）。
     this.#wakeBudgets.delete(sessionId)
     return msgs
   }

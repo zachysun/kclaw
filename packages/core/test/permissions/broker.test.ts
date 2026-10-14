@@ -1,7 +1,7 @@
 /**
  * ConfirmationBroker 直测：确认与问答两种登记共用一套语义（create/wait/
  * resolve/expire 对称、过期即陈旧、迟到 resolve 返回 false），
- * racePending 的三路竞速边界（值先到 / 超时 / 中止 / signal 已中止）。
+ * racePending 同时等三路、谁先到算谁（值先到 / 超时 / 中止 / signal 已中止）。
  * 网关侧端到端行为另有 server/confirm-gateway.test.ts 覆盖。
  */
 import { describe, it, expect } from "vitest"
@@ -22,7 +22,7 @@ describe("ConfirmationBroker 确认/问答登记对称", () => {
     expect(broker.resolve("conf_missing", "once")).toBe(false)
   })
 
-  it("wait 未知 id 永不结：竞速里表现为 timeout", async () => {
+  it("wait 未知 id 永不结：racePending 里表现为 timeout", async () => {
     const broker = new ConfirmationBroker()
     const raced = await racePending(broker.wait("conf_none"), 15, undefined)
     expect(raced).toBe("timeout")
@@ -34,7 +34,7 @@ describe("ConfirmationBroker 确认/问答登记对称", () => {
     broker.expire("conf_2")
     expect(broker.resolve("conf_2", "once")).toBe(false)
     expect(broker.pending()).toEqual([])
-    // 原承诺永远悬置——外面的竞速负责拒绝，这里只确认它不被 settle
+    // 原承诺永远悬置——外面的 racePending 负责拒绝，这里只确认它不被 settle
     const raced = await racePending(p, 15, undefined)
     expect(raced).toBe("timeout")
   })
@@ -73,18 +73,18 @@ describe("ConfirmationBroker 确认/问答登记对称", () => {
   })
 })
 
-describe("racePending 三路竞速", () => {
-  it("值先到：原样返回，不掺哨兵", async () => {
+describe("racePending 三路谁先到算谁", () => {
+  it("值先到：原样返回，不掺标记值", async () => {
     const raced = await racePending(Promise.resolve({ decision: "once" as const, by: "cli" as const }), 5_000, undefined)
     expect(raced).toEqual({ decision: "once", by: "cli" })
   })
 
-  it("timer 先到：timeout 哨兵", async () => {
+  it("timer 先到：timeout 标记值", async () => {
     const raced = await racePending(new Promise<{ decision: "once" }>(() => {}), 10, undefined)
     expect(raced).toBe("timeout")
   })
 
-  it("等待中 signal 中止：aborted 哨兵（不是 timeout，也不是拒绝）", async () => {
+  it("等待中 signal 中止：aborted 标记值（不是 timeout，也不是拒绝）", async () => {
     const ctrl = new AbortController()
     setTimeout(() => ctrl.abort(), 5)
     const raced = await racePending(new Promise<{ decision: "once" }>(() => {}), 60_000, ctrl.signal)

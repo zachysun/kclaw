@@ -238,7 +238,7 @@ export function ChannelView({ api, notice }: {
         </div>
 
         <label>
-          推送接收人（定时任务结果、后台子代理完成推送；可选）
+          推送接收人（定时任务结果、后台subagent完成推送；可选）
           <select
             data-testid="channel-primary"
             value={primaryOpenId}
@@ -313,7 +313,7 @@ export function ChannelView({ api, notice }: {
           <li>在「事件与回调」里做两件事：把订阅方式切换为<b>长连接</b>（无需公网 IP、无需端口、无需验证令牌），并在「事件订阅设置」里<b>添加事件</b> <code>im.message.receive_v1</code>（接收消息 v2）——开权限不等于订阅事件，两个开关缺一不可。</li>
           <li>在「凭证与基础信息」拿到 App ID 与 App Secret，填到上面并保存。</li>
           <li>在飞书里给机器人发一条消息——它不会回复你，但你的 open_id 会出现在「待加白发件人」里，点「加白」即可开始使用。</li>
-          <li>把「推送接收人」选成自己，定时任务与后台子代理完成时会推送卡片。</li>
+          <li>把「推送接收人」选成自己，定时任务与后台subagent完成时会推送卡片。</li>
         </ol>
       </details>
     </div>

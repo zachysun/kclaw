@@ -29,7 +29,7 @@ subagent 是主对话的模型**自主派出**的短命执行单元：调用 `su
 ```
 主对话模型发起 subagent_run {task, label?, role?, tools?}
   → spawner：查父会话 → 并发上限检查（超限直接 error，不建会话）
-  → 建子会话（标题"subagent · <label|task 头 40 字>"，继承父 workdir/mode，
+  → 建子会话（标题"subagent · <label|task 头 38 字>"，继承父 workdir/mode，
     parentSessionId 落 meta；父的会话级模型覆盖随行）
   → 订阅子频道（状态行 + 确认转发）→ submit(task, trigger:"agent", disposition:"wait",
     role/tools 随 EnqueueInput 全程携带)

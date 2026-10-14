@@ -29,7 +29,7 @@ describe("WriteLedger watermarks (per session)", () => {
     expect(l.get("ses_1", "interval")).toBeUndefined()
   })
   it("treats a legacy project-wide ledger as empty (no migration)", () => {
-    // 旧结构顶层只有 interval/follow 键（2026-09-02 之前的项目级水位）：不迁移，
+    // 旧结构顶层只有 interval/follow 键（2026-09-02 之前的项目级标记）：不迁移，
     // 视作空记录 —— 首次触发全量重扫，重复由提取去重 + 合并写保底。
     const p = join(dir, "state.json")
     writeFileSync(p, JSON.stringify({

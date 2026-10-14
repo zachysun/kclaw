@@ -15,7 +15,7 @@ export interface SessionRestoredEvent { type: "session.restored"; at: string }
 /**
  * 会话 fork 的血缘记录（单边：只落在新会话流上，原会话一字节不动）。
  * sourceMessageId 是用户所点的语义分叉点（未归一化）；实际复制区间归一化到
- * 该消息所属 run 的结束处（见 session/fork.ts）。缺省 messageId 全量复制、
+ * 该消息所属 run 的结束处（见 session/fork.ts）。不带 messageId 时全量复制、
  * 或复制段内没有任何消息（空会话）时省略。title 是 fork 会话的初始标题
  * （同源多次 fork 带序号）。事件推进 updatedAt（fork 是用户可见动作），
  * 投影出 meta.forkedFrom。
@@ -52,7 +52,7 @@ export interface SandboxCheckedEvent {
   type: "sandbox.checked"; at: string
   /** config 是否开启沙箱（sandbox.enabled）。 */
   enabled: boolean
-  /** 探测结果：沙箱可用（exec 工具实际被包裹）；配置关闭时恒 false（fail-closed）。 */
+  /** 检测结果：沙箱可用（exec 工具实际被包裹）；配置关闭时恒 false（fail-closed）。 */
   available: boolean
   /** 不可用原因（仅 available:false 时可能带；配置关闭时不含——那是主动选择）。 */
   unavailableReason?: string
@@ -64,7 +64,7 @@ export interface RunStartedEvent {
 }
 /**
  * 一次对话运行的终点记录（每 run 恰一条，与 run.started 成对）。stopReason
- * 为 error 时带 error；正常终点的 usage 为全程累计用量。aborted 也是正常落款
+ * 为 error 时带 error；正常终点的 usage 为全程累计用量。aborted 也是正常终点
  * （用户中止是有意的终止，不是故障）。
  */
 export interface RunEndedEvent {

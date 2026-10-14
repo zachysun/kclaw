@@ -1,6 +1,6 @@
 /**
- * Skill evolution tests（主切入点）：提炼管线（粗查 / 增量范围 / 提炼 LLM /
- * 提案落文件 / 水位推进）+ 调度簿记 + skill_create 提案面 + 治理审计事件。
+ * Skill evolution tests（主切入点）：提炼 pipeline（粗查 / 增量范围 / 提炼 LLM /
+ * 提案落文件 / 标记推进）+ 调度簿记 + skill_create 提案面 + 治理审计事件。
  *
  * 脚本化假 LLM 驱动（test/memory/helpers.ts 的 scriptedLlm 先例）+ 临时目录 +
  * 真 SessionStore / 真 ProposalStore / 真 WriteLedger。断言只看外部行为：
@@ -167,7 +167,7 @@ describe("considerFollowCheck", () => {
   })
 })
 
-// ---- 提炼管线（triggerFollow） --------------------------------------------
+// ---- 提炼 pipeline（triggerFollow） --------------------------------------------
 
 const ONE_NEW_PROPOSAL = JSON.stringify({
   proposals: [{ kind: "new", name: "deploy-postmortem", scope: "project", title: "复盘模板", rationale: "部署后总要做复盘", content: "---\ndescription: 复盘\n---\n复盘步骤" }],
@@ -197,7 +197,7 @@ describe("triggerFollow", () => {
     expect(p.baseline).toBeUndefined()
     // 提炼模型看得到读了什么：渲染段带技能正文
     expect(seen[0]).toContain("DEPLOY_BODY")
-    // 水位推进：再次触发无增量（无第二次 LLM 调用、无第二条提案）
+    // 标记推进：再次触发无增量（无第二次 LLM 调用、无第二条提案）
     await evo.triggerFollow(WORKDIR, meta.id)
     expect(calls()).toBe(1)
     expect(evo.listProposals()).toHaveLength(1)
@@ -248,7 +248,7 @@ describe("triggerFollow", () => {
     expect(evo.listProposals()).toHaveLength(0)
     expect(skillEvents(meta.id)).toHaveLength(0)
     await evo.triggerFollow(WORKDIR, meta.id)
-    expect(calls()).toBe(1) // 水位已推进：安静结束不重提
+    expect(calls()).toBe(1) // 标记已推进：安静结束不重提
   })
 
   it("caps at 3 proposals per batch and drops malformed entries without blocking the rest", async () => {

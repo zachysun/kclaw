@@ -303,14 +303,14 @@ describe("questions (ask_user_questions)", () => {
       questionId: "q_1",
       questions: QUESTIONS,
       expiresAt: "2026-09-11T00:10:00.000Z",
-      noteText: "来自子代理 小李",
+      noteText: "来自subagent 小李",
     }))
     expect(next.pendingQuestions).toEqual([
       {
         questionId: "q_1",
         questions: QUESTIONS,
         expiresAt: "2026-09-11T00:10:00.000Z",
-        noteText: "来自子代理 小李",
+        noteText: "来自subagent 小李",
       },
     ])
   })

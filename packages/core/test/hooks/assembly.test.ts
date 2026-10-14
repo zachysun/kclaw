@@ -254,10 +254,10 @@ describe("executeRun × hook system", () => {
     expect(order).toEqual(["watcher"])
   })
 
-  it("收尾压缩慢于钩子预算：压缩钩子不限时，完整落地且 run 正常完成", async () => {
-    // 回归背景（2026-09-09 线上）：迁移把内联压缩放进 5s 钩子竞速，真实压缩
+  it("收尾压缩慢于钩子budget：压缩钩子不限时，完整落地且 run 正常完成", async () => {
+    // 回归背景（2026-09-09 线上）：迁移把内联压缩放进 5s 钩子时限里比快慢，真实压缩
     // （两次 LLM 调用）必超时——mid-run 甩出后台重复压缩，post-run（fatal）
-    // 把已完成 run 拖成条目级失败。这里用 50ms 钩子预算 + 80ms/次的 LLM 复现。
+    // 把已完成 run 拖成条目级失败。这里用 50ms 钩子budget + 80ms/次的 LLM 复现。
     const base = loadConfig(resolvePaths(home))
     const cfg = {
       ...base,
@@ -289,8 +289,8 @@ describe("executeRun × hook system", () => {
   })
 
   it("模型条目的 contextWindow 收紧压缩线、maxOutput 随请求下发", async () => {
-    // 预算取 min(会话上限, 模型窗口)：窗口 1000 → 黄线 800。回复锚点 900 在
-    // 默认 128k 预算下永远不会触发压缩，但被窗口压过线——压缩必须发生，
+    // budget取 min(会话上限, 模型窗口)：窗口 1000 → 黄线 800。回复锚点 900 在
+    // 默认 128k budget下永远不会触发压缩，但被窗口压过线——压缩必须发生，
     // 且 maxOutput 以 max_tokens 形式出现在发给供应商的请求里。
     const base = loadConfig(resolvePaths(home))
     const cfg = {
@@ -362,7 +362,7 @@ describe("executeRun × hook system", () => {
 })
 
 /** 防止 runAgent import 被裁掉的类型引用（loop 语义测试在 agent/ 目录）。 */
-describe("executeRun × v4 水位线", () => {
+describe("executeRun × 压缩阈值线", () => {
   /** 预置 N 轮历史（每轮 user+assistant，文本可区分），给 chooseBoundary 留出分界。 */
   function seedTurns(sessions: InstanceType<typeof SessionStore>, sessionId: string, turns: number): void {
     for (let i = 0; i < turns; i++) {
@@ -427,7 +427,7 @@ describe("executeRun × v4 水位线", () => {
   }
 
   it("预压线触发后台压缩：同一 run 的后续迭代边界应用挂起成果", async () => {
-    // 锚点 780 / 预算 1000 → 水位 0.78 ∈ [0.75 预压, 0.90 红线)：边界 1 kick
+    // 锚点 780 / budget 1000 → 占用 0.78 ∈ [0.75 预压, 0.90 红线)：边界 1 kick
     // 后台；测试放行摘要后，边界 2 应用挂起视图——第三次请求应垫总摘要。
     const base = loadConfig(resolvePaths(home))
     const cfg = { ...base, sessions: { ...base.sessions, contextTokens: 1000 } }
@@ -460,8 +460,8 @@ describe("executeRun × v4 水位线", () => {
     expect(JSON.stringify(third.messages)).not.toContain("历史问题0")
   })
 
-  it("水位达红线时不预压：红线同步压缩保底（请求 2 即带摘要）", async () => {
-    // 锚点 950 / 预算 1000 → 水位 0.95 ≥ 红线：precompact 让位，mid-run-panic 同步压
+  it("占用达红线时不预压：红线同步压缩保底（请求 2 即带摘要）", async () => {
+    // 锚点 950 / budget 1000 → 占用 0.95 ≥ 红线：precompact 停手，mid-run-panic 同步压
     const base = loadConfig(resolvePaths(home))
     const cfg = { ...base, sessions: { ...base.sessions, contextTokens: 1000 } }
     const { llm, mainRequests } = waterlineLlm({ mainTurns: 1, anchor: 950 })
@@ -504,8 +504,8 @@ describe("executeRun × v4 水位线", () => {
   })
 
   it("红线撞进行中后台：等它落定（不并发第二个压缩），落定后应用挂起成果", async () => {
-    // 锚点 780 → 950：边界 1 水位 0.78 落预压区间 kick 后台（摘要卡 gate）；
-    // 边界 2 水位 0.95 过红线 → mid-run-panic 等进行中后台，绝不并发第二个
+    // 锚点 780 → 950：边界 1 占用 0.78 落预压区间 kick 后台（摘要卡 gate）；
+    // 边界 2 占用 0.95 过红线 → mid-run-panic 等进行中后台，绝不并发第二个
     // 压缩。放行后后台落定：挂起视图的重估否掉同步硬压（活跃段锚点偏大、
     // 且切不出边界——spec 故事 19"放弃硬压"），保底应用挂起成果
     const base = loadConfig(resolvePaths(home))
@@ -539,7 +539,7 @@ describe("executeRun × v4 水位线", () => {
 
   it("运行结束时后台未完成：收尾等它落定（单压缩不变量，不重复压缩）", async () => {
     // 锚点 780 全程：边界 1 kick 后台（摘要卡 gate），主 run 两轮内自然结束；
-    // 收尾压缩发现后台进行中 → 等待落定——run 挂在收尾链上不结束。落定后水位
+    // 收尾压缩发现后台进行中 → 等待落定——run 挂在收尾链上不结束。落定后占用
     // 0.78 低于黄线，收尾不再压：全程恰好一笔压缩（后台那笔）
     const base = loadConfig(resolvePaths(home))
     const cfg = { ...base, sessions: { ...base.sessions, contextTokens: 1000 } }
@@ -561,7 +561,7 @@ describe("executeRun × v4 水位线", () => {
     const outcome = await run
     expect(outcome.stopReason).toBe("end_turn")
 
-    // 后台那笔是唯一压缩；收尾等待后水位落回黄线以下，没有第二笔
+    // 后台那笔是唯一压缩；收尾等待后占用落回黄线以下，没有第二笔
     const records = sessions.readEvents(sessionId).filter((e) => e.type === "compaction")
     expect(records).toHaveLength(1)
     expect(summaryRequests.length).toBe(2)
@@ -603,8 +603,8 @@ describe("executeRun × v4 水位线", () => {
   })
 
   it("挂起的 /compact 在收尾链执行：自动收尾压缩之前执行", async () => {
-    // 预算 400 → 手动边界切得出（尾部 126 < 目标 132）；锚点 780 过黄线但
-    // flush 先执行、压完水位落回，post-run 判断自然不重复压
+    // budget 400 → 手动边界切得出（尾部 126 < 目标 132）；锚点 780 过黄线但
+    // flush 先执行、压完占用落回，post-run 判断自然不重复压
     const base = loadConfig(resolvePaths(home))
     const cfg = { ...base, sessions: { ...base.sessions, contextTokens: 400 } }
     const { llm, mainRequests, summaryRequests } = waterlineLlm({ mainTurns: 0 })

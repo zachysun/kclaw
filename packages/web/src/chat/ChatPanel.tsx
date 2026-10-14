@@ -744,7 +744,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   }, [sessionId, updateView])
 
   /** Session fork：POST 成功上抛新会话；失败（409 忙等）留在本会话进通知条。
-   *  在飞判定走 ref（同步置位、不随渲染刷新）：state 置位前重渲染还没发生，
+   *  进行中判定走 ref（同步置位、不随渲染刷新）：state 置位前重渲染还没发生，
    *  闭包里的 forkPending 永远是旧值，挡不住同帧连点。forkPending 只做按钮
    *  禁用的渲染反馈（spec §6 防重复提交）。 */
   const forkInFlight = useRef(false)

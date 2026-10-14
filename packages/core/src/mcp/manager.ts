@@ -383,7 +383,7 @@ export class McpManager {
   }
 
   /**
-   * One manual connect attempt (the "连接/探测" action). Refuses disabled
+   * One manual connect attempt (the "连接" action). Refuses disabled
    * entries, no-ops entries already connected/connecting, cancels a pending
    * backoff attempt first, and never schedules the backoff loop behind
    * itself — the user just retried; further attempts are their call.

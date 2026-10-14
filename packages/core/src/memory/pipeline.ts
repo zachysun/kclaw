@@ -27,7 +27,7 @@ export interface ExtractAction {
   section?: string                               // update 的小节短标题
   content: string                                // 情节正文（四要素列表）
   thread?: string                                // new-thread 的线名（kebab-case）
-  status?: "active" | "inactive"                 // 提取判断的线收束
+  status?: "active" | "inactive"                 // 提取判断的线转 inactive
   title?: string                                 // new-thread 的人可读标题
 }
 
@@ -55,7 +55,7 @@ export interface PipelineDeps {
   audit?: (e: MemoryAudit) => void
   log?: (msg: string) => void                    // 默认 console.error
   now?: () => Date
-  /** 自动收束阈值：线最近活动距今超过该天数 → inactive；默认 14。 */
+  /** 自动转 inactive 的阈值：线最近活动距今超过该天数 → inactive；默认 14。 */
   threadInactiveDays?: number
   /** 沉淀开关：默认开；由 MemorySystem 从 config 传入。 */
   consolidateEnabled?: boolean
@@ -172,7 +172,7 @@ export class MemoryPipeline {
   readonly #locks = new Map<string, Promise<void>>()
   /** 每项目打开的 VectorIndex（daemon 生命周期内复用连接）。 */
   readonly #indexes = new Map<string, VectorIndex>()
-  /** 自动收束阈值；默认 14 天。 */
+  /** 自动转 inactive 的阈值；默认 14 天。 */
   readonly #inactiveDays: number
   /** 沉淀开关；默认开。 */
   readonly #consolidateEnabled: boolean
@@ -231,11 +231,11 @@ export class MemoryPipeline {
   /** 返回本次实际执行提取的批次数（0 = 无增量，调用方可据此区分"触发即空转"）。 */
   async #runLocked(projectId: string, trigger: PipelineTrigger, sessionId?: string): Promise<number> {
     const ledger = new WriteLedger(join(this.#layout.projectDir(projectId), "state.json"))
-    // 选范围（会话维度）：提取只看触发会话自己的增量窗口——水位每会话
-    // 各一本，互不比较（旧项目级水位按会话创建序划界，晚创建会话推进过水位后，
+    // 选范围（会话维度）：提取只看触发会话自己的增量窗口——标记每会话
+    // 各一份，互不比较（旧项目级标记按会话创建序划界，晚创建会话推进过标记后，
     // 老会话的新消息会被永久跳过：2026-09-02 改名事故）。interval 定时保底无显式
-    // 归属，对全部会话逐个补增量，单会话失败不阻塞其他会话。首跑水位为空 → 该
-    // 会话全量，属首次提取；提取失败水位不推进，下次触发补上。
+    // 归属，对全部会话逐个补增量，单会话失败不阻塞其他会话。首跑标记为空 → 该
+    // 会话全量，属首次提取；提取失败标记不推进，下次触发补上。
     const rows = this.#sessionRows(projectId)
     const targets = trigger === "interval" ? rows : rows.filter((r) => r.id === sessionId)
     const touched = new Set<string>()
@@ -258,7 +258,7 @@ export class MemoryPipeline {
       }
       this.#advance(ledger, trigger, row.id, range)
     }
-    // 时间自动：每次管线跑完顺带扫描全部 active 线收束；空批次也扫。
+    // 时间自动：每次 pipeline 跑完顺带扫描全部 active 线、到期的转 inactive；空批次也扫。
     const inactivated = await this.#maybeAutoInactivate(projectId, trigger, sessionId)
     for (const t of inactivated) touched.add(t)
     if (touched.size > 0) {
@@ -309,7 +309,7 @@ export class MemoryPipeline {
       this.#deps.recordChoreUsage?.({ chore: "memory", sessionId, model, usage: extractResult.usage })
     } catch (err) {
       this.#log(`kclaw memory extract failed (watermark not advanced): ${String(err)}`)
-      throw err // 抛出走锁内 catch：水位不推进，下次触发重试同一范围
+      throw err // 抛出走锁内 catch：标记不推进，下次触发重试同一范围
     }
     let text = raw.trim()
     const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(text)
@@ -418,7 +418,7 @@ export class MemoryPipeline {
     writeFileAtomic(join(dir, "MEMORY.md"), renderMemoryMd(projectId, threads))
   }
 
-  /** 时间自动 inactive：扫描全部 active 线，闲置超阈值则收束；返回本次收束的线。 */
+  /** 时间自动 inactive：扫描全部 active 线，闲置超阈值则转 inactive；返回本次转 inactive 的线。 */
   async #maybeAutoInactivate(projectId: string, trigger: PipelineTrigger, sessionId?: string): Promise<string[]> {
     const dir = this.#layout.projectDir(projectId)
     const limitDays = this.#inactiveDays
@@ -460,8 +460,8 @@ export class MemoryPipeline {
    * 夜间闲时沉淀（每日保底，scheduler 按 memory.consolidateHour 调度）：对本项目
    * 自上次夜间沉淀以来有新情节的线逐条沉淀——判据 `updated >= #nightlyBaseline`
    * （UTC 日期，与线文件 updated 同源），**含 active 线**：活跃线的认知不再等
-   * 14 天收束，每晚沉淀一次（收束时的顺带沉淀仍保留，二者幂等）。不提取、不动
-   * 提取水位。返回本次沉淀的线数。
+   * 14 天转 inactive，每晚沉淀一次（转 inactive 时的顺带沉淀仍保留，二者幂等）。不提取、不动
+   * 提取进度标记。返回本次沉淀的线数。
    *
    * 首跑（无 baseline）只沉淀当天更新的线——历史线已由顺带沉淀覆盖，不补跑。
    * 判据含等号：上次跑之后同日（UTC）新增的情节不能漏，宁可用一次幂等的重复
@@ -508,7 +508,7 @@ export class MemoryPipeline {
   }
 
   /**
-   * 关闭本管线打开的全部项目 + 全局 VectorIndex（daemon stop 序列调用）：
+   * 关闭本 pipeline 打开的全部项目 + 全局 VectorIndex（daemon stop 序列调用）：
    * 防 better-sqlite3 句柄泄漏。已关闭/损坏的索引逐个容错。
    */
   close(): void {

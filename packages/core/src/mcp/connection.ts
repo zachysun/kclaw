@@ -233,7 +233,7 @@ export class ConnectionPool {
   }
 
   /**
-   * One manual connect attempt (the "连接/探测" action). Cancels a pending
+   * One manual connect attempt (the "连接" action). Cancels a pending
    * backoff attempt first — the loop's next try would otherwise fire behind
    * the manual one and race the same record with two concurrent connects.
    * Throws for disabled entries; at the cap it refuses with a conflict.

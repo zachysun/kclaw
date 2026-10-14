@@ -1,6 +1,6 @@
 /**
  * /goal 一轮检查的决策芯（issue #47）：门与判定器产物 → 下一步动作，纯
- * 函数。九条停止条件、熔断判定、wind-down（预算超限补一轮收尾）与续跑
+ * 函数。九条停止条件、熔断判定、wind-down（budget超限补一轮收尾）与续跑
  * 注入文本的组装都在这里；调用方（packages/server/src/goal-loop.ts）负责
  * 副作用——跑验收命令、调判定器、写审计与用量、按决策入队或停止（ADR-0003
  * 的"门先行、失败短路判定器"不变量由此处的调用次序编码：门失败时
@@ -58,7 +58,7 @@ export type GoalRoundDecision =
   | { kind: "continue"; loop: DerivedLoop; injection: string; enqueueRound: number; judge?: GoalJudgeResult }
 
 /**
- * 续跑前的公共闸门（预算/轮数上限）：预算超限 → 标记收尾轮并入队
+ * 续跑前的公共检查（budget/轮数上限）：budget超限 → 标记收尾轮并入队
  * wrap-up（调用方置 windDownPending）；连续轮数达上限 → round-limit
  * 停止；否则 undefined 继续正常入队。
  */
@@ -107,12 +107,12 @@ export function decideGoalRound(input: {
     if (result.verdict === "impossible") return { kind: "complete", reason: "impossible", judged: result, loop: withJudge }
     const noProgStreak = noProgressMarked(result.progress) ? loop.noProgressStreak + 1 : 0
     const guarded: DerivedLoop = { ...withJudge, noProgressStreak: noProgStreak }
-    // 收尾轮已跑过判定：无论进展如何，预算终停（met 已在上面返回）。
+    // 收尾轮已跑过判定：无论进展如何，budget终停（met 已在上面返回）。
     if (input.windDownPending) {
       return {
         kind: "stop",
         reason: "budget-limit",
-        note: `目标生命周期 token 预算（${GOAL_TOKEN_BUDGET}）已耗尽，收尾轮完成`,
+        note: `目标生命周期 token budget（${GOAL_TOKEN_BUDGET}）已耗尽，收尾轮完成`,
         loop: guarded,
         refreshFirst: true,
         judge: result,
@@ -157,7 +157,7 @@ export function decideGoalRound(input: {
       return {
         kind: "stop",
         reason: "budget-limit",
-        note: `目标生命周期 token 预算（${GOAL_TOKEN_BUDGET}）已耗尽，收尾轮完成`,
+        note: `目标生命周期 token budget（${GOAL_TOKEN_BUDGET}）已耗尽，收尾轮完成`,
         loop: mixed,
         refreshFirst: true,
       }
@@ -192,7 +192,7 @@ export function decideGoalRound(input: {
     return {
       kind: "stop",
       reason: "budget-limit",
-      note: `目标生命周期 token 预算（${GOAL_TOKEN_BUDGET}）已耗尽，收尾轮完成`,
+      note: `目标生命周期 token budget（${GOAL_TOKEN_BUDGET}）已耗尽，收尾轮完成`,
       loop: mixed,
       refreshFirst: true,
     }

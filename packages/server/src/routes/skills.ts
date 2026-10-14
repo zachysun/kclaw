@@ -28,7 +28,7 @@ import { realpathSync } from "node:fs"
 
 const NOT_FOUND = { error: "not found" } as const
 
-/** 路径段白名单校验（纵深防御，同 /memory 路由族）：拦目录穿越段。 */
+/** 路径段白名单校验（多层防御，同 /memory 路由族）：拦目录穿越段。 */
 const isSafeSegment = (s: string): boolean => s.length > 0 && s !== "." && s !== ".." && !s.includes("/")
 
 /** 用户可见技能的档位标签：all（模型+用户）| user-only（disable-model-invocation）。 */
@@ -104,7 +104,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     // 旧记录（归属字段出现前建的）惰性回填：目标能匹配到已安装插件就补名。
     backfillPluginAttribution({ skillsDir: dir, pluginHomes })
     const file = readLinksFile(dir)
-    // current = 该链接的目标仍是探测正在提供的版本（realpath 命中）；插件
+    // current = 该链接的目标仍是扫描正在提供的版本（realpath 命中）；插件
     // 升级换版本目录后旧链接仍可用但过时，页面据此刻"过时"标。
     const current = discoveredTargetPaths({ skillsDir: opts.paths.skillsDir, builtin, pluginHomes })
     const links = file.links.map((l) => {
@@ -129,7 +129,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
         owned: scan(workdir),
         builtin,
         pluginHomes,
-        // 项目 scope 里已建的链接也计入 reused 判定（探测锚在全局）
+        // 项目 scope 里已建的链接也计入 reused 判定（扫描锚在全局）
         extraLinksScopes: project !== undefined ? [readLinksFile(project)] : [],
       }),
       // 项目 scope 自身注册的 extraSources（与全局分开列出，便于分 scope 管理）

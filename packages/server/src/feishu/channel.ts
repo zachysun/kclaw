@@ -397,7 +397,7 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
 
   const onBackgroundSettled = (info: BackgroundSettlement): void => {
     pushSummary(
-      info.ok ? `后台子代理「${info.who}」已完成` : `后台子代理「${info.who}」未正常完成`,
+      info.ok ? `后台subagent「${info.who}」已完成` : `后台subagent「${info.who}」未正常完成`,
       info.excerpt === "" ? `会话 ${info.childId}` : info.excerpt,
     )
   }

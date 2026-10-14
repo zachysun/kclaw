@@ -71,7 +71,7 @@ describe("ask_user_questions executor", () => {
     expect(resolved!.payload).toMatchObject({ questionId, answers: [["甲"], [], ["丙"]], by: "cli" })
   })
 
-  it("超时路径：竞速定时器先到 → ok 结果含『未在限时内回答』，resolved 带 by:timeout，条目过期", async () => {
+  it("超时路径：定时器先到 → ok 结果含『未在限时内回答』，resolved 带 by:timeout，条目过期", async () => {
     const { broker, emitted, tool } = makeTool({ timeoutMs: 20 })
     const pending = tool.execute({ questions: [{ text: "在吗?" }] }, { onOutput: () => {} })
     const r = await pending

@@ -25,7 +25,7 @@ export const SKILL_READ_DESCRIPTION =
   "按名字加载一个技能（skill）的完整说明，返回其操作规程正文。优先使用系统提示词\"可用技能\"列表里的技能；不在该列表中的技能设置了 disable-model-invocation，只有在用户明确指名要求时才应加载。"
 
 export const SKILL_LIST_DESCRIPTION =
-  "列出当前已装且模型可见的技能（名字 + 一句话描述）。系统提示词里的\"可用技能\"清单有长度预算、技能过多时会被截断，子代理更是没有清单——需要完整清单或按关键词找技能时调用本工具。可选 query：按名字与描述子串过滤（大小写不敏感）；不传则列出全部。找到后用 skill_read 加载正文。"
+  "列出当前已装且模型可见的技能（名字 + 一句话描述）。系统提示词里的\"可用技能\"清单有长度上限，技能过多时会被截断，subagent更是没有清单——需要完整清单或按关键词找技能时调用本工具。可选 query：按名字与描述子串过滤（大小写不敏感）；不传则列出全部。找到后用 skill_read 加载正文。"
 
 export const SKILL_CREATE_DESCRIPTION =
   "把一段可复用的经验固化为技能提案（提案制：不直接安装，提案进入待确认列表，用户在 WebUI 审阅后才可能生效）。name 是技能目录名（小写字母、数字、连字符）；content 是完整的 SKILL.md 文件内容（YAML frontmatter 含 description 字段 + Markdown 正文）；rationale 可选，说明这段经验为什么值得沉淀。新增还是修订、落全局还是落项目由系统按已装技能自动判定，不要自己传。"

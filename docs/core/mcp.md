@@ -138,7 +138,7 @@ export class McpManager {
   // 后台重连，纯换组保持惰性（下轮取用按新组连接）。
   removeServer(group, name): void                  // 断开、清定时器、遗忘
   setEnabled(group, name, enabled): void           // 持久启停开关；同值调用不做任何事
-  connect(group, name): void                       // 手动一次性连接（探测）；拒绝 disabled、
+  connect(group, name): void                       // 手动一次性连接；拒绝 disabled、
                                                    // 已连接/连接中幂等、触上限报冲突
   peekRecord(group, name): ConnectionRecord | undefined
                                                    // 测试与检查用：取某条目当前的状态对象
@@ -183,7 +183,7 @@ daemon 用 `packages/server/src/mcp-projects.ts` 的 `createMcpProjects` 管理�
 ### daemon、WebUI 与 CLI 在哪里用到它
 
 - daemon（`packages/server/src/daemon.ts`）：恒定构建管理器（初始项目组来自会话记录并集，`persist` 回调按组分发——`"global"` 接到 `saveMcpJson`，工作目录接到 `saveProjectMcpJson`）；`createMcpProjects` 负责发现与每目录文件监视；启动监听之后 `void mcpManager.start()` 只启动扫描（不连任何 server）。RunManager 把 `extraTools(workdir)` 函数作为依赖传给 core `executeRun`，由后者以会话工作目录求值并注入工具（见 [run-manager](../server/run-manager.md)）。停止序列中先关全部监视（不遗留挂着的防抖回调）再关管理器。
-- HTTP 接口（见 [http-api](../server/http-api.md)）：`GET /mcp` 返回分组快照 `{groups: [...], mainWorkspace, defaultGroup}`（没组装管理器时是空组列表）；带 `?workdir=<会话工作目录>` 时服务端算好 `defaultGroup`——新增条目的默认目标组（会话目录在快照中已知则用它，否则 daemon 工作区，再否则全局；规则只在服务端，客户端不镜像）；`POST /mcp/servers`（新增，`group` 必填）、`PATCH /mcp/servers/:name`（改/换组，`group` 必填、可选 `toGroup` 即原子换组）、`DELETE /mcp/servers/:name?group=`、`POST /mcp/servers/:name/enable`、`POST /mcp/servers/:name/connect`（手动连接探测）是 WebUI MCP 页的管理动作，任何保存动作都会触发一次对应组的持久化。缺组/组形状不对是 400，未知组是 404。
+- HTTP 接口（见 [http-api](../server/http-api.md)）：`GET /mcp` 返回分组快照 `{groups: [...], mainWorkspace, defaultGroup}`（没组装管理器时是空组列表）；带 `?workdir=<会话工作目录>` 时服务端算好 `defaultGroup`——新增条目的默认目标组（会话目录在快照中已知则用它，否则 daemon 工作区，再否则全局；规则只在服务端，客户端不镜像）；`POST /mcp/servers`（新增，`group` 必填）、`PATCH /mcp/servers/:name`（改/换组，`group` 必填、可选 `toGroup` 即原子换组）、`DELETE /mcp/servers/:name?group=`、`POST /mcp/servers/:name/enable`、`POST /mcp/servers/:name/connect`（手动连接）是 WebUI MCP 页的管理动作，任何保存动作都会触发一次对应组的持久化。缺组/组形状不对是 400，未知组是 404。
 - WebUI 顶栏「MCP」页按组渲染快照：全局组在前、每个项目组一节（可折叠），条目卡片带连接状态徽标与最近错误；未连接/失败的条目提供手动连接按钮（失败条目的按钮显示"重试"）；添加表单的目标是"全局/目录"下拉，默认目标依次取当前选中会话的工作目录（快照里已有这个组才生效；不在快照里的目录不会成为组，选它保存会 404）、daemon 主工作区、全局；编辑表单可改目标组，变更即走原子换组。CLI 会话内 `/mcp` 按组打印状态一览（`/mcp <名字>` 看某 server 的工具清单，跨组同名会带项目路径区分），进程级的 `kclaw mcp [list]` 子命令同样按组输出，两者并存。
 
 ---

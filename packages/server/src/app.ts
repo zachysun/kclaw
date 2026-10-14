@@ -256,7 +256,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
 
   registerConfigRoutes(app, { config })
   registerSearchRoutes(app, { historySearch: opts.historySearch })
-  // Provider 管理面：Model 顶栏调用（快照 + 增删改/设默认/模型探测热生效）。
+  // Provider 管理面：Model 顶栏调用（快照 + 增删改/设默认/模型连通测试热生效）。
   registerProvidersRoutes(app, { config, paths, notifier: opts.configNotifier })
   registerFsRoutes(app, { workspace: config.workspace })
   // 沉淀规则管理面：列表（含 git 跟踪状态）与删除，Web 权限页调用。

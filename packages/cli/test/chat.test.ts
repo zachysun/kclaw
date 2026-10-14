@@ -140,7 +140,7 @@ const held: ServerResponse[] = []
 function turnFor(body: { messages?: Array<Record<string, unknown>> }): Array<Record<string, unknown>> {
   const messages = body.messages ?? []
   // memory 提取请求（memory_save 即时触发）：system 落在 messages[0]（toApiMessages
-  // 把 req.system 放最前），内容是管线的提取提示（只输出 JSON actions）。先于内容匹配
+  // 把 req.system 放最前），内容是 pipeline 的提取提示（只输出 JSON actions）。先于内容匹配
   // 判定——该请求的 user content 是 renderSegment 的整段对话，按旧规则会误命中
   // "记住" 分支而返回工具调用流。
   const systemContent = messages[0]?.role === "system" && typeof messages[0]?.content === "string" ? messages[0].content : ""
@@ -852,7 +852,7 @@ describe("renderRun (unit)", () => {
     // pendingFrames 里。随后一条消息的 renderRun 不得把它当作自己的第一帧——
     // 否则打印陈旧错误并直接返回：消息已发出，而它的 run 从未被渲染。
     // （集成层无法确定性构造此场景：daemon 只回 CLI 自己命令的错误帧，而
-    // CLI 空闲期可错的命令都会被客户端守卫拦下——故在 renderRun 单元层钉住。）
+    // CLI 空闲期可错的命令都会被客户端守卫拦下——故在 renderRun 单元层固定。）
     const staleError: WsFrame = { type: "error", message: "not found" }
     const runFrames: WsFrame[] = [
       { type: "send_message_ack", sessionId: "ses_unit", messageId: "msg_unit", queued: false },

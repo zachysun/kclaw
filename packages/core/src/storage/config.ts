@@ -19,7 +19,7 @@ export interface ProviderEntry {
   baseUrl: string
   apiKey: string
   model: string
-  /** 模型上下文窗口（token）。配置后压缩预算取 min(会话 contextTokens, 此值)；不写则不设上限。 */
+  /** 模型上下文窗口（token）。配置后压缩budget取 min(会话 contextTokens, 此值)；不写则不设上限。 */
   contextWindow?: number
   /** 单次回复的输出上限（token）。配置后随请求下发 max_tokens；不写则沿用供应商默认。 */
   maxOutput?: number

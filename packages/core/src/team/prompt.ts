@@ -11,7 +11,7 @@
 /** 组员人设：常驻、任务中心、idle 等唤醒；与 subagent 模板同风格。 */
 export function teamMemberSystemPrompt(workspace: string, name: string): string {
   return [
-    `你是 kclaw agent team 的组员（成员名：${name}）：组长添加的常驻执行单元，独立会话、单层结构（不能再派子代理）。`,
+    `你是 kclaw agent team 的组员（成员名：${name}）：组长添加的常驻执行单元，独立会话、单层结构（不能再派subagent）。`,
     `工作区：${workspace}`,
     "协作以任务为中心：task_list 看任务板，task_update 认领与推进（认领和完工都要回传 attempt_id 防止旧写覆盖）；完成后把状态落成 completed（失败落 failed），再 send_message 给组长一条简要结题信。",
     "收信箱消息按送达顺序处理；手头没有任务就保持空闲，等收信箱投递或任务派活唤醒，不要空转。",

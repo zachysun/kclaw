@@ -554,7 +554,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       historyIndex,
       attachmentsDir: paths.attachmentsDir,
       workspaceFallback: workspace,
-    }), // POST /sessions/:id/fork（会话 fork：空闲门槛+水位播种+索引标记+附件拷贝）
+    }), // POST /sessions/:id/fork（会话 fork：空闲门槛+进度播种+索引标记+附件拷贝）
     mcp: mcpManager,
     mainWorkspace: workspace,
     channel: feishuManager,

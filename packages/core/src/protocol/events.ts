@@ -87,7 +87,7 @@ export interface QuestionRequestedPayload {
   questionId: string
   questions: QuestionSpec[]
   expiresAt: string
-  /** Human-facing label (e.g. "来自子代理 X" on a forwarded card). */
+  /** Human-facing label (e.g. "来自subagent X" on a forwarded card). */
   noteText?: string
 }
 export interface QuestionResolvedPayload {
@@ -112,7 +112,7 @@ export interface MessageQueueCancelledPayload { messageId?: string; all?: boolea
 
 /** v3: 压缩触发阶段——post-run = run 前预压缩，in-run = 迭代边界中途压缩，manual = 手动。 */
 export type CompactionPhase = "in-run" | "post-run" | "manual"
-/** 压缩实际开始（预算过线且边界已定，即将调用摘要器）。trigger 与持久化 CompactionEvent 的 trigger 同口径。 */
+/** 压缩实际开始（budget过线且边界已定，即将调用摘要器）。trigger 与持久化 CompactionEvent 的 trigger 同口径。 */
 export interface CompactionStartedPayload { phase: CompactionPhase; trigger?: "manual" | "in-run" | "auto" }
 /** 压缩结束（每次 started 必有配对 completed）：新累计段数与压缩后保留的原文消息条数；非 ok 时 segments/kept 为 0。 */
 export interface CompactionCompletedPayload { segments: number; kept: number; phase: CompactionPhase; result: "ok" | "failed" | "cancelled"; trigger?: "manual" | "in-run" | "auto"; emergency?: boolean }

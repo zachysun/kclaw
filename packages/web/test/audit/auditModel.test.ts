@@ -221,7 +221,7 @@ describe("rowMatchesFilter / filterRows", () => {
     expect(filterRows(rows, withKw("不存在的词"), NOW)).toEqual([])
   })
 
-  it("三维度 AND 组合：类型+关键词+时间同时收窄", () => {
+  it("三维度 AND 组合：类型+关键词+时间同时收紧", () => {
     const f: AuditFilter = {
       ...DEFAULT_FILTER, kinds: { ...DEFAULT_FILTER.kinds, compaction: false },
       keyword: "摘要", timePreset: "1h",

@@ -5,7 +5,7 @@ export interface Gate {
   readonly toolEntered: Promise<void>
   /** 放行工具 executor（测试调用；此前工具停在执行中）。 */
   releaseTool(): void
-  /** 后续 llm.stream 等待的闸门（配合 gateLlm 的 gateLaterCalls）。 */
+  /** 后续 llm.stream 调用在此等待放行（配合 gateLlm 的 gateLaterCalls）。 */
   waitForLlm(): Promise<void>
   releaseLlm(): void
   /** executor 面：进入时报到（resolve toolEntered）。 */

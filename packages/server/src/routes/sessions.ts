@@ -87,7 +87,7 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       // 切会话写入（/clear、/new、web 新建会话共用此路由）：创建前取"项目最近活动
       // 会话"作归属——此刻新会话尚未建立，最近活动者必然是用户刚离开的旧会话；
       // 创建后异步触发 clear 提取（范围覆盖到当前时刻），不阻塞建会话响应。失败只
-      // 打日志：提取由水位防重复，下次任一触发补上。
+      // 打日志：提取由进度标记防重复，下次任一触发补上。
       const fromSession = stores.memory !== undefined && workdir !== undefined
         ? stores.memory.recentSessionId(workdir)
         : undefined

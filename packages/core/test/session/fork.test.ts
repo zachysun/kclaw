@@ -54,7 +54,7 @@ describe("forkSession", () => {
     expect(s.meta(src.id)!.title).toBe("原会话")
   })
 
-  it("缺省 messageId：整段复制（最新状态 fork）", () => {
+  it("不带 messageId：整段复制（最新状态 fork）", () => {
     const s = new SessionStore(dir)
     const src = seedTwoRuns(s)
     const forked = forkSession({ store: s }, { sourceId: src.id })
@@ -172,7 +172,7 @@ describe("forkSession", () => {
     expect(readdirSync(attachmentsDir).filter((d) => d !== src.id)).toHaveLength(0)
   })
 
-  it("记忆水位播种与搜索标记回调：以 fork 点收尾", () => {
+  it("记忆进度播种与搜索标记回调：以 fork 点收尾", () => {
     const s = new SessionStore(dir)
     const src = seedTwoRuns(s)
     const seeded: Array<[string, string]> = []

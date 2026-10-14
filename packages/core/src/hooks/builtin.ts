@@ -307,9 +307,9 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     makeHandler: (rt) => {
       const { compactor, sessionId, signal, sessions, contextOverhead, waterlines, config, runLlm, model } = rt
       return () => {
-        // 预压线（ahead ≤ 估算水位 < 红线）且没有进行中的压缩、无暂存成果时，在后台启动
+        // 预压线（ahead ≤ 估算占用 < 红线）且没有进行中的压缩、无暂存成果时，在后台启动
         // 压缩：不阻塞下一次请求，成果由后续迭代边界应用（mid-run-panic）。
-        // 水位已达红线的场景让位给 mid-run-panic 的同步路径。
+        // 占用已达红线的场景交给 mid-run-panic 的同步路径。
         if (compactor.cancelled(sessionId) || signal.aborted) return
         const history = sessions.readMessages(sessionId)
         const overhead = contextOverhead()
@@ -328,7 +328,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     name: "mid-run-panic",
     position: "compaction-check",
     order: 10,
-    description: "红线水位的迭代边界中途压缩判定（含后台成果应用）",
+    description: "占用达红线的迭代边界中途压缩判定（含后台成果应用）",
     failure: "skip",
     timeoutMs: Number.POSITIVE_INFINITY,
     makeHandler: (rt) => {
@@ -447,7 +447,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
       const { compactor, sessionId, signal, sessions, config, runLlm, model, waterlines, contextOverhead, compactionAfter } = rt
       return async () => {
         // 执行挂起的 /compact（会话忙时登记的）：在自动收尾压缩之前执行——
-        // 用户显式意图优先，压完水位落回，自动收尾检查自然不再触发。
+        // 用户显式意图优先，压完占用落回，自动收尾检查自然不再触发。
         // 不做忙碌/排队检查（收尾链时刻必然不忙；运行期间排队的消息等下一条
         // 出队，与压缩无关）。
         if (!compactor.hasDeferredManual(sessionId)) return
@@ -469,7 +469,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     name: "post-run-compaction",
     position: "run-after",
     order: 20,
-    description: "黄线水位触发的收尾压缩",
+    description: "占用到黄线的收尾压缩",
     failure: "skip",
     timeoutMs: Number.POSITIVE_INFINITY,
     makeHandler: (rt) => {

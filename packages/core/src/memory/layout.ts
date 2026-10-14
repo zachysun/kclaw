@@ -10,7 +10,7 @@ export function projectIdFor(workdir: string): string {
   return `${basename(abs) || "project"}-${hash}`
 }
 
-/** 记忆塔目录布局：global/（L2）与 projects/<id>/（L1）。 */
+/** 记忆系统目录布局：global/（L2）与 projects/<id>/（L1）。 */
 export class MemoryLayout {
   readonly globalDir: string
   readonly projectsDir: string

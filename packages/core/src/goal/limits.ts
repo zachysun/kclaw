@@ -9,12 +9,12 @@
 export const GOAL_MAX_ROUNDS = 10
 
 /**
- * 目标生命周期 token 预算（运行 usage + 判定器 usage 累计）。超限后
+ * 目标生命周期 token budget（运行 usage + 判定器 usage 累计）。超限后
  * 补一轮收尾（wind-down）再停 budget-limit，不在半途硬切。
  */
 export const GOAL_TOKEN_BUDGET = 2_000_000
 
-/** 判定器连续判"无进展"的容忍上限（progress 空或判 not_met 且 reason 明示无进展）。 */
+/** 判定器连续判"无进展"的上限（progress 空或判 not_met 且 reason 明示无进展）。 */
 export const GOAL_NO_PROGRESS_LIMIT = 3
 
 /** 验收命令连续失败轮数上限（每轮内全部通过才算过；达上限停 gate-exhausted）。 */

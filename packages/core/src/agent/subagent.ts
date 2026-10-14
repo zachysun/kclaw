@@ -96,7 +96,7 @@ const SUBAGENT_ROLE_MAX_CHARS = 2_000
  */
 export function subagentSystemPrompt(workspace: string, role?: string): string {
   const base = [
-    "你是 kclaw 的子代理（subagent）：由主对话派出的短命执行单元，独立会话、单层委派（不能再派子代理）。",
+    "你是 kclaw 的 subagent：由主对话派出的短命执行单元，独立会话、单层委派（不能再派subagent）。",
     `工作区：${workspace}`,
     "任务就是你的唯一指令。自主把它做完：需要什么信息就用工具取，不要反问（没有人在听）。",
     "权限规则与主会话一致：敏感操作会请求人工确认，批准后照常继续；被拒绝就换路。",
@@ -111,12 +111,13 @@ export function subagentSystemPrompt(workspace: string, role?: string): string {
 /** Keep head+tail of an overlong answer, with an elision marker in between. */
 export function truncateAnswer(text: string): string {
   if (text.length <= SUBAGENT_ANSWER_MAX_CHARS) return text
-  return `${text.slice(0, TRUNCATE_KEEP)}\n\n…[子代理答复超长，中段已截断（共 ${text.length} 字符）]…\n\n${text.slice(-TRUNCATE_KEEP)}`
+  return `${text.slice(0, TRUNCATE_KEEP)}\n\n…[subagent答复超长，中段已截断（共 ${text.length} 字符）]…\n\n${text.slice(-TRUNCATE_KEEP)}`
 }
 
 /** A child-session title from the dispatch: the label, else the task's head. */
 export function subagentTitle(label: string | undefined, task: string): string {
   const base = (label ?? task).replace(/\s+/g, " ").trim()
-  const shortened = base.length > 40 ? `${base.slice(0, 40)}…` : base
-  return `子代理 · ${shortened}`
+  // 前缀"subagent · "占 11 字符，正文连省略号至多 39，标题总长守住 50。
+  const shortened = base.length > 38 ? `${base.slice(0, 38)}…` : base
+  return `subagent · ${shortened}`
 }

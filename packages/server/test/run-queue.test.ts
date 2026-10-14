@@ -1,7 +1,7 @@
 /**
  * RunManager 显式队列语义测试：空闲直发、
  * wait FIFO 与预分配消息 id、queue.jsonl 镜像、上限拒绝、enqueue 兼容、
- * cancel 语义收窄（仅中止活动 run）、interrupt 插队不吞消息、出队失败自愈
+ * cancel 语义收紧（仅中止活动 run）、interrupt 插队不吞消息、出队失败自愈
  * （条目退回重试不无声消失）与条目级失败可见性（queue_entry_failed）。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
@@ -201,7 +201,7 @@ describe("submit / driver", () => {
       // 崩溃后 queue.jsonl 仍含崩溃条目（persist 没写成，盘上未动）
       expect(sessions.readQueue(meta.id).map((e) => e.text)).toEqual(["w1", "w2"])
 
-      // 恢复 replaceQueue，下一次 submit 重新起转：驱动器同步首拍立即重新出队 w1
+      // 恢复 replaceQueue，下一次 submit 重新启动：驱动器同步首拍立即重新出队 w1
       // 重试（这次 persist 成功）——崩溃条目被"重试处理"而不是被无声抹掉
       sessions.replaceQueue = originalReplace
       const w3 = manager.submit(meta.id, { userText: "w3", trigger: "user", disposition: "wait" })
@@ -268,7 +268,7 @@ describe("wake budget (#44)", () => {
 
   it("agent submissions to child sessions do not consume the budget", async () => {
     const parent = sessions.create("主线")
-    const child = sessions.create("子代理 · c", undefined, undefined, "default", parent.id)
+    const child = sessions.create("subagent · c", undefined, undefined, "default", parent.id)
     // The dispatch path submits to children with trigger "agent"; budget
     // semantics belong to MAIN sessions only.
     for (let i = 0; i < 5; i++) await manager.enqueue(child.id, { userText: `c${i}`, trigger: "agent" })
@@ -302,7 +302,7 @@ describe("wake budget (#44)", () => {
   })
 
   it("draining a steer injection resets the budget", async () => {
-    // 护栏：#drainSteer 是两个清零点之一（用户补充到达模型）。预算在活动 run
+    // 护栏：#drainSteer 是两个清零点之一（用户补充到达模型）。计数在活动 run
     // 存续期间被机器报告填满后，steer 注入边界清零，新的投递重新被接受。
     const gate = makeGate()
     const mgr = managerWith({ llm: gateLlm(gate, true), tools: new Map([["gate", gateTool(gate)]]) })

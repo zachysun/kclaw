@@ -25,7 +25,7 @@ export type GoalState = "active" | "paused" | "blocked" | "complete"
 /**
  * 终止/暂停原因码（complete 或 paused/blocked 停止时的 stoppedReason）。
  * met/impossible = 判定器终态；round-limit = 连续自续轮数达上限；
- * budget-limit = 目标生命周期 token 预算耗尽（含收尾轮）；gate-exhausted
+ * budget-limit = 目标生命周期 token budget耗尽（含收尾轮）；gate-exhausted
  * = 验收命令连续失败达上限；no-progress = 判定器连续判"无进展"；
  * permission = 确认超时累计（运行被人工裁决卡住）；judge-failed = 判定器
  * 熔断；run-error = 一轮运行出错（不自动重试，等用户）；user-stop =

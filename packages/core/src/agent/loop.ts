@@ -48,7 +48,7 @@ export interface RunInput {
   userMessage?: Message
   /**
    * 运行起点的压缩视图（来自会话 meta）：生效时 upto（含）之前的原文
-   * 不再发给模型，脉络项由 toProviderMessages 垫在 messages[0]。
+   * 不再发给模型，摘要上下文项由 toProviderMessages 垫在 messages[0]。
    */
   compaction?: ActiveSummary
 }
@@ -102,7 +102,7 @@ export interface AgentDeps {
    * each call site's existing catch path keeps its old error code.
    */
   hooks: HookRunner
-  /** 省略预算（黄线值）透传给打包台：预算装不下的工具输出以省略占位符发送。 */
+  /** 省略budget（黄线值）透传给打包台：budget装不下的工具输出以省略占位符发送。 */
   tokenBudget?: number
   onEvent(e: AgentEvent): void
   onMessage(m: Message): void
@@ -260,7 +260,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
   }
   // 压缩视图（运行起点来自 input.compaction，之后可被 compaction-check /
   // overflow-rescue 位置的钩子替换）：生效时 upto（含）之前的原文不再发送，
-  // 脉络项由 toProviderMessages 垫在 messages[0]。all 里的原文不动——
+  // 摘要上下文项由 toProviderMessages 垫在 messages[0]。all 里的原文不动——
   // 压缩只改“发什么给模型”，不改历史与持久化。
   let compacted = input.compaction
   const buildMessages = async (): Promise<ProviderMessage[]> => {
@@ -342,7 +342,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
           messages: await buildMessages(),
           tools: deps.toolDefs ?? [],
           ...(deps.maxTokens === undefined ? {} : { maxTokens: deps.maxTokens }),
-          // 主循环恒传：同会话请求路由到同一缓存分片（子代理经同一路径，
+          // 主循环恒传：同会话请求路由到同一缓存分片（subagent经同一路径，
           // 自然用自己的 sessionId，不继承父会话）。一次性辅助调用不经
           // runAgent，默认该字段即零缓存标记。
           promptCache: { key: input.sessionId },
@@ -417,7 +417,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       assistant.latencyMs = latencyMs
       emit(makeEvent("llm.completed", { usage, stopReason, latencyMs }, ctx))
       void deps.hooks.run("llm-after", {
-        // 透传整个 Usage（含缓存字段）——这是外部钩子的协议面，收窄会让
+        // 透传整个 Usage（含缓存字段）——这是外部钩子的协议面，裁掉字段会让
         // 外部永远见不到缓存指标。
         usage,
         stopReason,

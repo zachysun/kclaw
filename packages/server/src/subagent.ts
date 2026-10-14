@@ -64,7 +64,7 @@ const STATUS_EXCERPT_CHARS = 80
 /** Chars of the child answer carried by a background completion notice. */
 const NOTICE_EXCERPT_CHARS = 400
 
-/** 后台子代理落定的通知载荷（完成回投后由宿主发出；IM 频道转发为推送卡）。 */
+/** 后台subagent落定的通知载荷（完成回投后由宿主发出；IM 频道转发为推送卡）。 */
 export interface BackgroundSettlement {
   parentId: string
   childId: string
@@ -79,7 +79,7 @@ export interface SubagentHostDeps {
   bus: EventBus
   /** Late-bound: the spawner is wired into RunManager's deps before the manager exists. */
   getRun: () => RunManager
-  /** 可选：后台子代理落定（投递或回退）后的回调；daemon 用它接 IM 推送。 */
+  /** 可选：后台subagent落定（投递或回退）后的回调；daemon 用它接 IM 推送。 */
   onBackgroundSettled?: (info: BackgroundSettlement) => void
 }
 
@@ -125,8 +125,8 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
       return {
         status: "error",
         output: mode === "background"
-          ? `已达后台子代理并发上限（${maxBackground} 个同时运行）；等现有后台任务结束后再派，或改用阻塞模式`
-          : `已达子代理并发上限（${maxConcurrent} 个同时运行）；等现有子代理结束后再派`,
+          ? `已达后台subagent并发上限（${maxBackground} 个同时运行）；等现有后台任务结束后再派，或改用阻塞模式`
+          : `已达subagent并发上限（${maxConcurrent} 个同时运行）；等现有subagent结束后再派`,
       }
     }
     // A parent aborted before the dispatch started: nothing to run. (Background
@@ -192,8 +192,8 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
             deps.bus.emit(makeEvent("confirmation.requested", {
               ...e.payload,
               noteText: e.payload.noteText === undefined
-                ? `来自子代理 ${who}`
-                : `来自子代理 ${who} · ${e.payload.noteText}`,
+                ? `来自subagent ${who}`
+                : `来自subagent ${who} · ${e.payload.noteText}`,
             }, forwardCtx(e)))
             break
           }
@@ -207,8 +207,8 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
             deps.bus.emit(makeEvent("question.requested", {
               ...e.payload,
               noteText: e.payload.noteText === undefined
-                ? `来自子代理 ${who}`
-                : `来自子代理 ${who} · ${e.payload.noteText}`,
+                ? `来自subagent ${who}`
+                : `来自subagent ${who} · ${e.payload.noteText}`,
             }, forwardCtx(e)))
             break
           }
@@ -261,7 +261,7 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
       }
       return {
         status: "ok",
-        output: `已在后台派出子代理「${who}」（会话 ${child.id}）。它会独立运行，不受本次对话结束影响；完成后结题报告会自动投递回本会话并触发新一轮分析，届时可用 subagent_collect（childSessionId: ${child.id}）按需取完整答复。`,
+        output: `已在后台派出subagent「${who}」（会话 ${child.id}）。它会独立运行，不受本次对话结束影响；完成后结题报告会自动投递回本会话并触发新一轮分析，届时可用 subagent_collect（childSessionId: ${child.id}）按需取完整答复。`,
         childSessionId: child.id,
       }
     }
@@ -318,8 +318,8 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
     const ok = outcome.stopReason === "end_turn"
     const answer = truncateAnswer(answerOf(outcome))
     const statusLine = ok
-      ? `后台子代理「${who}」已完成（会话 ${childId}）。`
-      : `后台子代理「${who}」未正常完成（${outcome.stopReason}，会话 ${childId}）。`
+      ? `后台subagent「${who}」已完成（会话 ${childId}）。`
+      : `后台subagent「${who}」未正常完成（${outcome.stopReason}，会话 ${childId}）。`
     const report = [
       statusLine,
       `任务:${task}`,
@@ -329,7 +329,7 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
       deps.getRun().submit(parentId, {
         userText: report,
         trigger: "agent",
-        note: { kind: "subagent", text: "本消息为后台子代理完成回投，非用户发言" },
+        note: { kind: "subagent", text: "本消息为后台subagent完成回投，非用户发言" },
       })
     } catch (err) {
       legacyNotice(parentId, childId, who, outcome, err)
@@ -349,8 +349,8 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
     const answer = answerOf(outcome)
     const summary = answer === "" ? "" : excerptLong(answer)
     const text = outcome.stopReason === "end_turn"
-      ? `后台子代理「${who}」已完成（会话 ${childId}）。结果摘要：${summary === "" ? "（未给出结题答复）" : summary}。完整答复可用 subagent_collect 工具获取（childSessionId: ${childId}）。`
-      : `后台子代理「${who}」未正常完成（${outcome.stopReason}，会话 ${childId}）${summary === "" ? "" : `。已有产出：${summary}`}。可用 subagent_collect 查看它已产出的内容（childSessionId: ${childId}）。`
+      ? `后台subagent「${who}」已完成（会话 ${childId}）。结果摘要：${summary === "" ? "（未给出结题答复）" : summary}。完整答复可用 subagent_collect 工具获取（childSessionId: ${childId}）。`
+      : `后台subagent「${who}」未正常完成（${outcome.stopReason}，会话 ${childId}）${summary === "" ? "" : `。已有产出：${summary}`}。可用 subagent_collect 查看它已产出的内容（childSessionId: ${childId}）。`
     const message = newMessage(parentId, "assistant", [
       { id: newBlockId(), type: "note", kind: "system", text: `${text}（自动投递被拒：${reason}；回退为通知）` },
     ])
@@ -377,11 +377,11 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
   const collector: SubagentCollector = async (req) => {
     const childMeta = deps.sessions.meta(req.childSessionId)
     if (childMeta === undefined) {
-      return { status: "error", output: `subagent_collect: 子代理会话不存在（${req.childSessionId}）` }
+      return { status: "error", output: `subagent_collect: subagent会话不存在（${req.childSessionId}）` }
     }
     // A session may only collect its OWN children — no cross-session reads.
     if (childMeta.parentSessionId !== req.parentSessionId) {
-      return { status: "error", output: "subagent_collect: 该会话不是当前会话派出的子代理" }
+      return { status: "error", output: "subagent_collect: 该会话不是当前会话派出的subagent" }
     }
     const msgs = deps.sessions.readMessages(req.childSessionId)
     const last = [...msgs].reverse().find((m) => m.role === "assistant")
@@ -395,7 +395,7 @@ export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
     if (answer === "") {
       return {
         status: "ok",
-        output: `子代理（${req.childSessionId}）还没有可收集的答复（可能仍在运行）；完成通知出现后再收集。`,
+        output: `subagent（${req.childSessionId}）还没有可收集的答复（可能仍在运行）；完成通知出现后再收集。`,
         childSessionId: req.childSessionId,
       }
     }
@@ -427,14 +427,14 @@ function shapeResult(outcome: RunOutcome, childSessionId: string, who: string): 
   if (outcome.stopReason === "end_turn") {
     return {
       status: "ok",
-      output: answer === "" ? `子代理（${who}）已结束，但未给出结题答复` : truncateAnswer(answer),
+      output: answer === "" ? `subagent（${who}）已结束，但未给出结题答复` : truncateAnswer(answer),
       childSessionId,
     }
   }
   if (outcome.stopReason === "aborted") {
     return {
       status: "error",
-      output: `子代理（${who}）随主任务中止而停止${answer === "" ? "" : `；中止前产出：\n${truncateAnswer(answer)}`}`,
+      output: `subagent（${who}）随主任务中止而停止${answer === "" ? "" : `；中止前产出：\n${truncateAnswer(answer)}`}`,
       childSessionId,
     }
   }
@@ -442,7 +442,7 @@ function shapeResult(outcome: RunOutcome, childSessionId: string, who: string): 
   // report the parent can get — retrying is the parent model's call.
   return {
     status: "error",
-    output: `子代理（${who}）未正常结束（${outcome.stopReason}）${answer === "" ? "" : `；已有产出：\n${truncateAnswer(answer)}`}`,
+    output: `subagent（${who}）未正常结束（${outcome.stopReason}）${answer === "" ? "" : `；已有产出：\n${truncateAnswer(answer)}`}`,
     childSessionId,
   }
 }

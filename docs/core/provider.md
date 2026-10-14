@@ -230,7 +230,7 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 
 `fetchProviderModels` 向端点要模型清单：openai 格式 `GET {base}/models`（apiKey 非空才带 Bearer 头），anthropic 格式 `GET {base}/v1/models`（鉴权头与消息端点一致：x-api-key + Bearer + anthropic-version，apiKey 为空时不发；URL 规则也一致）。返回去重后的模型 id 列表；HTTP 错误抛 `llm http <status>`，响应形状不对抛可读错误。WebUI Model 页用它做两件事：表单里的"拉取模型列表"（填充模型下拉）与条目卡片的"验证"按钮（清单拉到了 = URL 和 key 都对）。
 
-模型名本身的验证走 `probeProviderChat`（1-token 补全探测）：openai 格式 `POST {base}/chat/completions`，anthropic 格式 `POST {base}/v1/messages`，20 秒超时；它不抛异常而是返回 `{status, body}`（status 为 null = 请求根本没到达），调用方按状态码分类失败原因。CLI 首次运行的配置流程用它做连通测试（见 [onboarding](../cli/onboarding.md)）。
+模型名本身的验证走 `probeProviderChat`（1-token 补全连通测试）：openai 格式 `POST {base}/chat/completions`，anthropic 格式 `POST {base}/v1/messages`，20 秒超时；它不抛异常而是返回 `{status, body}`（status 为 null = 请求根本没到达），调用方按状态码分类失败原因。CLI 首次运行的配置流程用它做连通测试（见 [onboarding](../cli/onboarding.md)）。
 
 ### 7. 上下文窗口、输出上限与缓存标记开关（条目可选字段）
 

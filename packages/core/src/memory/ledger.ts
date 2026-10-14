@@ -4,12 +4,12 @@ import { writeFileAtomic } from "../storage/atomic.js"
 export type LedgerTrigger = "interval" | "follow"
 export interface FollowCheck { sessionId: string; endTurnAt: string }
 
-/** 单会话水位：每个触发各记一条 messageId（该会话内最后一条已提取的消息）。 */
+/** 单会话提取进度：每个触发各记一条 messageId（该会话内最后一条已提取的消息）。 */
 export interface SessionWatermarks { interval?: string; follow?: string }
 
 interface LedgerState {
-  /** 每会话一本水位：提取范围 = 触发会话自己的增量窗口，
-   *  不做跨会话比较（项目级水位按会话创建序划界会永久漏掉老会话的新消息，
+  /** 每会话各记一份进度：提取范围 = 触发会话自己的增量窗口，
+   *  不做跨会话比较（项目级标记按会话创建序划界会永久漏掉老会话的新消息，
    *  2026-09-02 改名事故）。 */
   watermarks: Record<string, SessionWatermarks>
   followChecks: FollowCheck[]
@@ -60,7 +60,7 @@ export class WriteLedger {
     this.#flush()
   }
 
-  /** 手动/立刻的范围覆盖到当前时刻：该会话两种水位一并推进。 */
+  /** 手动/立刻的范围覆盖到当前时刻：该会话两个标记一并推进。 */
   advanceAll(sessionId: string, messageId: string): void {
     this.advance(sessionId, "interval", messageId)
     this.advance(sessionId, "follow", messageId)
@@ -112,8 +112,8 @@ export class WriteLedger {
   }
 
   /**
-   * 单会话内两个水位谁更靠后：范围选取一律用最靠后的那个，任一触发
-   * 先跑到哪，另一个触发都不再重复提取。水位指向的消息已不存在（被删/截断）时
+   * 单会话内两个标记谁更靠后：范围选取一律用最靠后的那个，任一触发
+   * 先跑到哪，另一个触发都不再重复提取。标记指向的消息已不存在（被删/截断）时
    * 按"更旧"处理 —— since 退化为全量（宁可重提取不可漏提取）。
    */
   static later(messages: Array<{ id: string }>, a?: string, b?: string): string | undefined {
@@ -126,7 +126,7 @@ export class WriteLedger {
     return ia >= ib ? a : b
   }
 
-  /** 会话内选范围：水位消息之后（不含）的全部消息；无水位 → 全量。 */
+  /** 会话内选范围：标记消息之后（不含）的全部消息；无标记 → 全量。 */
   static since<T extends { id: string }>(watermark: string | undefined, messages: T[]): T[] {
     if (watermark === undefined) return messages.slice()
     const idx = messages.findIndex((m) => m.id === watermark)

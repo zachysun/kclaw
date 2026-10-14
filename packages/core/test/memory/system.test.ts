@@ -55,7 +55,7 @@ describe("cognitionPrompt (L2 常驻注入)", () => {
   })
   it("drops whole files over budget by rule > persona > wiki, never truncates", () => {
     const cfg = structuredClone(defaultConfig)
-    cfg.memory.injectTokenBudget = 30 // 极小预算：容不下 wiki 大文件
+    cfg.memory.injectTokenBudget = 30 // 极小budget：容不下 wiki 大文件
     const sys = makeSystem({ config: cfg })
     sys.writeCognition("rule", "general", "规则一二三四五六七八九十。")
     sys.writeCognition("persona", "persona", "画像。")

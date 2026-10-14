@@ -1,4 +1,4 @@
-/** 出站剥离器：system-reminder 注入标记绝不上飞书（#45 测试决策：只断言可见行为）。 */
+/** 出站清洗器：system-reminder 注入标记绝不上飞书（#45 测试决策：只断言可见行为）。 */
 import { describe, it, expect } from "vitest"
 import { stripOutboundText } from "../../src/feishu/strip.js"
 

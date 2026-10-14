@@ -602,7 +602,7 @@ export function goalStopReasonLabel(reason: Exclude<GoalSnapshot["stoppedReason"
     met: "已达成",
     impossible: "不可能达成",
     "round-limit": "连续轮数达上限",
-    "budget-limit": "token 预算耗尽",
+    "budget-limit": "token budget耗尽",
     "gate-exhausted": "验收连续失败",
     "no-progress": "连续无进展",
     permission: "确认超时待裁决",

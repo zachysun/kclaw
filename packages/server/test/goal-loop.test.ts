@@ -4,7 +4,7 @@
  * appendRunStarted/appendRunEnded 模拟引擎写入，onIdle 触发检查，
  * await dispose() 作为检查完成的同步点（它等所有 in-flight 检查落定）。
  * 覆盖：首轮入队、not_met 续跑、met/impossible 终态、run-error、
- * 熔断、轮数上限、无进展、预算收尾、暂停/恢复/停止/移除、重启 armed 语义。
+ * 熔断、轮数上限、无进展、budget收尾、暂停/恢复/停止/移除、重启 armed 语义。
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -225,7 +225,7 @@ describe("GoalLoopHost", () => {
   it("token budget overruns get one wind-down round then budget-limit", async () => {
     const h = makeHarness([verdict("not_met", "继续", "推进")])
     h.host.set(h.sessionId, { text: "目标", acceptance: [] })
-    // 单轮 usage 顶到预算的 2/3：两轮即超。
+    // 单轮 usage 顶到budget的 2/3：两轮即超。
     const big = { inputTokens: Math.floor(GOAL_TOKEN_BUDGET * 2 / 3), outputTokens: 0 }
     await driveRound(h, { usage: big })
     await driveRound(h, { usage: big })

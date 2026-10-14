@@ -194,7 +194,7 @@ describe("subagent dispatch (integration)", () => {
     const inner = scriptClient([
       spawnTurn("call_1", "数到三", "counter"),
       textTurn("一 二 三"),
-      textTurn("子代理答复已收到"),
+      textTurn("subagent答复已收到"),
     ])
     const llm: LlmClient = {
       async *stream(req) {
@@ -205,14 +205,14 @@ describe("subagent dispatch (integration)", () => {
     const { sessions, manager, allEvents } = makeEnv(llm)
     const parent = sessions.create("主线", undefined, undefined, "acceptEdits")
 
-    const outcome = await manager.enqueue(parent.id, { userText: "派个子代理数到三", trigger: "user" })
+    const outcome = await manager.enqueue(parent.id, { userText: "派个subagent数到三", trigger: "user" })
     expect(outcome.stopReason).toBe("end_turn")
 
     // Child session: identity + inheritance (workdir/mode from the parent).
     const children = sessions.listByParent(parent.id)
     expect(children).toHaveLength(1)
     const child = children[0]!
-    expect(child.title).toBe("子代理 · counter")
+    expect(child.title).toBe("subagent · counter")
     expect(child.parentSessionId).toBe(parent.id)
     expect(child.workdir).toBe(sessions.meta(parent.id)!.workdir)
     expect(child.mode).toBe("acceptEdits")
@@ -241,7 +241,7 @@ describe("subagent dispatch (integration)", () => {
     const parentReq = requests[0]!
     expect(parentReq.tools.map((t) => t.name)).toContain("subagent_run")
     const childReq = requests[1]!
-    expect(childReq.system).toContain("子代理")
+    expect(childReq.system).toContain("subagent")
     expect(childReq.tools.map((t) => t.name)).not.toContain("memory_save")
     expect(childReq.tools.map((t) => t.name)).not.toContain("subagent_run")
     expect(childReq.tools.map((t) => t.name)).toContain("exec")
@@ -250,7 +250,7 @@ describe("subagent dispatch (integration)", () => {
 
     // The child's own event stream keeps the full audit (system prompt + sandbox probe).
     const childEvents = sessions.readEvents(child.id)
-    expect(childEvents.some((e) => e.type === "system" && e.stable.includes("子代理"))).toBe(true)
+    expect(childEvents.some((e) => e.type === "system" && e.stable.includes("subagent"))).toBe(true)
     expect(childEvents.some((e) => e.type === "sandbox.checked")).toBe(true)
 
     // Status lines streamed to the PARENT channel (tool_result.delta).
@@ -279,7 +279,7 @@ describe("subagent dispatch (integration)", () => {
     }
     const { sessions, manager } = makeEnv(llm)
     const parent = sessions.create("主线", undefined, undefined, "default")
-    const outcome = await manager.enqueue(parent.id, { userText: "派个只读子代理", trigger: "user" })
+    const outcome = await manager.enqueue(parent.id, { userText: "派个只读subagent", trigger: "user" })
     expect(outcome.stopReason).toBe("end_turn")
 
     const child = sessions.listByParent(parent.id)[0]!
@@ -287,7 +287,7 @@ describe("subagent dispatch (integration)", () => {
     // role 拼进了子会话系统提示词的独立小节
     expect(childReq.system).toContain("# 角色补充")
     expect(childReq.system).toContain("只读侦探")
-    // wire 面收窄：只留白名单内工具，exec/fs_write 等全部消失
+    // wire 面裁剪：只留白名单内工具，exec/fs_write 等全部消失
     const childToolNames = childReq.tools.map((t) => t.name)
     expect(childToolNames).toEqual(expect.arrayContaining(["fs_read", "fs_list"]))
     expect(childToolNames).not.toContain("exec")
@@ -314,7 +314,7 @@ describe("subagent dispatch (integration)", () => {
     const parentSocket = new FakeSocket()
     bus.subscribe(parent.id, parentSocket)
 
-    const runDone = manager.enqueue(parent.id, { userText: "派子代理跑命令", trigger: "user" })
+    const runDone = manager.enqueue(parent.id, { userText: "派subagent跑命令", trigger: "user" })
 
     // The forwarded card lands on the PARENT channel, labeled with the label.
     const deadline = Date.now() + 5_000
@@ -325,7 +325,7 @@ describe("subagent dispatch (integration)", () => {
     }
     expect(card).toBeDefined()
     expect(card!.sessionId).toBe(parent.id)
-    expect((card!.payload as { noteText?: string }).noteText).toContain("来自子代理 runner")
+    expect((card!.payload as { noteText?: string }).noteText).toContain("来自subagent runner")
     expect((card!.payload as { toolCall: { name: string } }).toolCall.name).toBe("exec")
 
     // A human verdict through the shared broker settles the child's gate.
@@ -475,7 +475,7 @@ describe("subagent visibility routes", () => {
 
   it("GET /sessions hides children by default; children=true lists them", async () => {
     const parent = store.create("主线")
-    store.create("子代理 · x", undefined, undefined, "default", parent.id)
+    store.create("subagent · x", undefined, undefined, "default", parent.id)
     const plain = await app.inject({ method: "GET", url: "/sessions", headers: { authorization: "Bearer t1" } })
     expect((plain.json() as Array<{ id: string }>).map((m) => m.id)).toEqual([parent.id])
     const withChildren = await app.inject({ method: "GET", url: "/sessions?children=true", headers: { authorization: "Bearer t1" } })
@@ -490,7 +490,7 @@ describe("subagent visibility routes", () => {
 
   it("deleting the parent soft-deletes children; purging the parent purges them", async () => {
     const parent = store.create("主线")
-    const child = store.create("子代理 · x", undefined, undefined, "default", parent.id)
+    const child = store.create("subagent · x", undefined, undefined, "default", parent.id)
     const AUTH = { authorization: "Bearer t1" }
 
     const del = await app.inject({ method: "DELETE", url: `/sessions/${parent.id}`, headers: AUTH })
@@ -536,7 +536,7 @@ describe("subagent background mode", () => {
     let childCalls = 0
     const llm: LlmClient = {
       async *stream(req) {
-        if (req.system.includes("子代理")) yield* childScript[Math.min(childCalls++, childScript.length - 1)]!
+        if (req.system.includes("subagent")) yield* childScript[Math.min(childCalls++, childScript.length - 1)]!
         else yield* parentScript[Math.min(parentCalls++, parentScript.length - 1)]!
       },
     }
@@ -551,7 +551,7 @@ describe("subagent background mode", () => {
     const toolMsg = parentMsgs.find((m) => m.role === "tool")!
     const result = toolMsg.blocks.find((b) => b.type === "tool_result") as { status: string; output: string; data?: { childSessionId?: string } }
     expect(result.status).toBe("ok")
-    expect(result.output).toContain("已在后台派出子代理「crawler」")
+    expect(result.output).toContain("已在后台派出subagent「crawler」")
     expect(result.output).toContain("subagent_collect")
     const childId = result.data!.childSessionId!
     expect(sessions.meta(childId)!.parentSessionId).toBe(parent.id)
@@ -566,7 +566,7 @@ describe("subagent background mode", () => {
     await until(() => sessions.readMessages(parent.id).some((m) => m.role === "user" && userTextOf(m).includes("慢慢调研")), "delivery message")
     const delivered = sessions.readMessages(parent.id).filter((m) => m.role === "user").at(-1)!
     const report = userTextOf(delivered)
-    expect(report).toContain("后台子代理「crawler」已完成")
+    expect(report).toContain("后台subagent「crawler」已完成")
     expect(report).toContain("任务:慢慢调研")
     expect(report).toContain("调研结论：一切正常")
     const note = delivered.blocks.find((b) => b.type === "note") as { kind: string; text: string }
@@ -603,7 +603,7 @@ describe("subagent background mode", () => {
     // A real session that is NOT this parent's child is refused.
     const foreign = (await host.collector({ parentSessionId: stranger.id, childSessionId: parent.id }))
     expect(foreign.status).toBe("error")
-    expect(foreign.output).toContain("不是当前会话派出的子代理")
+    expect(foreign.output).toContain("不是当前会话派出的subagent")
   })
 
   it("collect returns a not-yet answer while the child is still producing", async () => {
@@ -616,7 +616,7 @@ describe("subagent background mode", () => {
     let childCalls = 0
     const llm: LlmClient = {
       async *stream(req) {
-        if (req.system.includes("子代理")) yield* childScript[Math.min(childCalls++, childScript.length - 1)]!
+        if (req.system.includes("subagent")) yield* childScript[Math.min(childCalls++, childScript.length - 1)]!
         else yield* parentScript[Math.min(parentCalls++, parentScript.length - 1)]!
       },
     }
@@ -648,7 +648,7 @@ describe("subagent background mode", () => {
       async *stream(req) {
         // The child hangs forever (its lean prompt identifies it); only the
         // cancel can free it. The parent consumes its own script in order.
-        if (req.system.includes("子代理")) await new Promise<never>(() => {})
+        if (req.system.includes("subagent")) await new Promise<never>(() => {})
         yield* parentScript[Math.min(parentCalls++, parentScript.length - 1)]!
       },
     }
@@ -675,8 +675,8 @@ describe("subagent background mode", () => {
     await until(() => !manager.busy(childId), "child settled")
   }, 20_000)
 
-  it("前台子代理完成不清掉后台记录：两种模式各记各的账", async () => {
-    // 同一父会话先后派一个后台子代理（永跑）和一个前台子代理（立刻完成）。
+  it("前台subagent完成不清掉后台记录：两种模式各记各的账", async () => {
+    // 同一父会话先后派一个后台subagent（永跑）和一个前台subagent（立刻完成）。
     // 前台的收尾绝不能影响后台的记录——级联取消必须仍能找到后台孩子。
     // （曾经双份按父分组的记录让收尾误删对方的记录，级联取消扑空。）
     const parentScript = [
@@ -688,9 +688,9 @@ describe("subagent background mode", () => {
     let childCalls = 0
     const llm: LlmClient = {
       async *stream(req) {
-        // 子代理的精简提示词里没有任务文本以外的区分——借首条 user 消息里的
+        // subagent的精简提示词里没有任务文本以外的区分——借首条 user 消息里的
         // 任务名分流：前台孩子立刻完成，后台孩子永跑（只有级联取消能终结）。
-        if (req.system.includes("子代理")) {
+        if (req.system.includes("subagent")) {
           childCalls++
           if (JSON.stringify(req.messages).includes("快速任务")) yield* [textTurn("干完了")]
           else await new Promise<never>(() => {})
@@ -702,7 +702,7 @@ describe("subagent background mode", () => {
     const { sessions, manager, host } = makeEnv(llm)
     const parent = sessions.create("主线")
 
-    // 派发是阻塞式的：run 完成即前台子代理（连同它的记录收尾）已结束
+    // 派发是阻塞式的：run 完成即前台subagent（连同它的记录收尾）已结束
     const outcome = await manager.enqueue(parent.id, { userText: "一前一后", trigger: "user" })
     expect(outcome.stopReason).toBe("end_turn")
 
@@ -734,7 +734,7 @@ describe("background completion delivery", () => {
     let parentCalls = 0
     const llm: LlmClient = {
       async *stream(req) {
-        if (req.system.includes("子代理")) {
+        if (req.system.includes("subagent")) {
           await childGate
           yield* textTurn("最终结论：一切正常")
           return
@@ -768,7 +768,7 @@ describe("background completion delivery", () => {
     // The delivered report is a user turn with the subagent provenance note.
     const delivered = sessions.readMessages(parent.id).filter((m) => m.role === "user").at(-1)!
     const report = delivered.blocks.filter((b) => b.type === "text").map((b) => (b as { text: string }).text).join("\n")
-    expect(report).toContain("后台子代理「q」已完成")
+    expect(report).toContain("后台subagent「q」已完成")
     expect(report).toContain("最终结论：一切正常")
     expect((delivered.blocks.find((b) => b.type === "note") as { kind: string }).kind).toBe("subagent")
     expect(allEvents.filter((e) => e.type === "run.started" && e.sessionId === parent.id)).toHaveLength(3)
@@ -784,7 +784,7 @@ describe("background completion delivery", () => {
     let parentCalls = 0
     const llm: LlmClient = {
       async *stream(req) {
-        if (req.system.includes("子代理")) {
+        if (req.system.includes("subagent")) {
           await childGate
           yield* textTurn("满载结论")
           return
@@ -834,7 +834,7 @@ describe("background completion delivery", () => {
     let parentCalls = 0
     const llm: LlmClient = {
       async *stream(req) {
-        if (req.system.includes("子代理")) {
+        if (req.system.includes("subagent")) {
           await childGate
           yield* textTurn("预算结论")
           return
@@ -879,7 +879,7 @@ describe("subagent background card forwarding", () => {
     let childCalls = 0
     const llm: LlmClient = {
       async *stream(req) {
-        if (req.system.includes("子代理")) yield* childScript[Math.min(childCalls++, childScript.length - 1)]!
+        if (req.system.includes("subagent")) yield* childScript[Math.min(childCalls++, childScript.length - 1)]!
         else yield* parentScript[Math.min(parentCalls++, parentScript.length - 1)]!
       },
     }
@@ -900,7 +900,7 @@ describe("subagent background card forwarding", () => {
     }
     expect(card).toBeDefined()
     expect(card!.sessionId).toBe(parent.id)
-    expect((card!.payload as { noteText?: string }).noteText).toContain("来自子代理 bg-runner")
+    expect((card!.payload as { noteText?: string }).noteText).toContain("来自subagent bg-runner")
     expect((card!.payload as { toolCall: { name: string } }).toolCall.name).toBe("exec")
 
     // Approving lets the background child finish; the completion delivery follows.

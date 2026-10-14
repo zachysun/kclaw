@@ -118,8 +118,8 @@ export interface EnqueueInput {
   /** 单次显式处置（层级最高）；默认 = 会话覆盖 ?? 配置默认；job 触发强制 wait。 */
   disposition?: "steer" | "wait" | "interrupt"
   /**
-   * 子代理派发携带（subagent_run 的 role/toolAllow，仅 agent 触发的子会话
-   * 调用）：role 拼进子会话系统提示词；toolAllow 只收窄可用工具与线上请求形状。
+   * subagent派发携带（subagent_run 的 role/toolAllow，仅 agent 触发的子会话
+   * 调用）：role 拼进子会话系统提示词；toolAllow 只裁剪可用工具与线上请求形状。
    */
   subagentRole?: string
   subagentToolAllow?: string[]
@@ -553,10 +553,10 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // snapshot.
   if (sessionMeta?.mode === "readonly") dropSensitiveTools(tools, toolDefs)
 
-  // 子代理工具白名单（subagent_run 的 tools 参数，经 EnqueueInput 到这里）：
-  // 只收窄——白名单外的一切执行器与 schema 同步剔除，gate 的 safeTools 与
+  // subagent工具白名单（subagent_run 的 tools 参数，经 EnqueueInput 到这里）：
+  // 只做裁剪——白名单外的一切执行器与 schema 同步剔除，gate 的 safeTools 与
   // 注册事实由过滤后的面派生（在其后构造，天然一致），因此白名单不可能
-  // 放大权限。未知名字忽略；空数组视为未限制（避免误派一个零工具的子代理）。
+  // 放大权限。未知名字忽略；空数组视为未限制（避免误派一个零工具的subagent）。
   const toolAllow = childRun && input.subagentToolAllow !== undefined && input.subagentToolAllow.length > 0
     ? new Set(input.subagentToolAllow)
     : undefined
@@ -866,7 +866,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       trigger: input.trigger,
       userMessage,
       // 运行起点的压缩视图（来自会话 meta）：upto（含）之前的原文不再发送，
-      // 脉络项由打包台垫在 messages[0]。
+      // 摘要上下文项由打包台垫在 messages[0]。
       ...(sessionMeta?.compaction !== undefined
         ? { compaction: { upto: sessionMeta.compaction.upto, top: sessionMeta.compaction.top } }
         : {}),
@@ -886,7 +886,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       // 的前提；显式配置 N≥1 的用户保留旧的滚动省略行为。
       toolResultKeep: config.sessions.toolResultKeep ?? 0,
       loopMaxRepeats: config.sessions.toolLoopMaxRepeats,
-      // 省略预算（省略线值）透传给打包台：预算装不下的工具输出以省略占位符发送；
+      // 省略budget（省略线值）透传给打包台：budget装不下的工具输出以省略占位符发送；
       // 固定开销（系统提示词 + 工具定义）先行扣除，打包台只裁决消息内容
       tokenBudget: Math.max(0, waterlines.pack - contextOverheadRef.current),
       ...(maxOutput === undefined ? {} : { maxTokens: maxOutput }),
@@ -974,7 +974,7 @@ export function resolveBasePrompt(opts: {
   team: TeamIdentity | null
   workspace: string
   agentsMd: string
-  /** 子代理角色补充（subagent_run 的 role）：拼进子会话模板的独立小节。 */
+  /** subagent角色补充（subagent_run 的 role）：拼进子会话模板的独立小节。 */
   subagentRole?: string
 }): string {
   if (opts.team?.role === "member") return teamMemberSystemPrompt(opts.workspace, opts.team.name)

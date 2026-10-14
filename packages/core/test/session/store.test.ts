@@ -25,7 +25,7 @@ describe("SessionStore", () => {
   it("parentSessionId rides session.created into the projection and listByParent finds children", () => {
     const s = new SessionStore(dir)
     const parent = s.create("主线", undefined, "/w", "default")
-    const child = s.create("子代理 · 扫 TODO", undefined, "/w", "default", parent.id)
+    const child = s.create("subagent · 扫 TODO", undefined, "/w", "default", parent.id)
     expect(s.meta(child.id)!.parentSessionId).toBe(parent.id)
     expect(s.meta(parent.id)!.parentSessionId).toBeUndefined()
     // The parent link survives a projection rebuild from the event stream.

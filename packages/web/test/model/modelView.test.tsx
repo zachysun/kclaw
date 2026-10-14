@@ -169,7 +169,7 @@ describe("ModelView", () => {
       q(container, "model-form-fetch").click()
     })
     await flush()
-    // 编辑态：按名字探测（存量密钥），地址/格式用表单当前值覆盖
+    // 编辑态：按名字连通测试（存量密钥），地址/格式用表单当前值覆盖
     expect(api.post).toHaveBeenCalledWith("/providers/models", { name: "ds", format: "openai", baseUrl: "https://api.deepseek.com/v1" })
     // 拉到列表后模型字段变下拉，选一个再保存；名字没改 → payload 不带 name
     selectValue(q(container, "model-form-model-select") as HTMLSelectElement, "deepseek-reasoner")

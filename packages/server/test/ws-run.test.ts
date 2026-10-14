@@ -509,7 +509,7 @@ describe("ws queue steering (disposition / queue.cancel)", () => {
     ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
     await frameOf(frames, "subscribed")
 
-    // 先让第一条消息占住会话（llm 闸门挂起），再发第二条（不带 disposition → 配置默认 wait）
+    // 先让第一条消息占住会话（llm 调用挂起未放行），再发第二条（不带 disposition → 配置默认 wait）
     ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "first" }))
     await frameOf(frames, "send_message_ack")
     ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "second" }))
@@ -762,7 +762,7 @@ describe("ws event sequences (steer / wait / interrupt end-to-end)", () => {
  */
 describe("ws compaction.cancel", () => {
   it("acks active:true and cuts an in-flight in-run compaction; the run itself carries on", async () => {
-    // 水位顶线手法（T7 run.test.ts 同款）：contextTokens=10 → 红线 8.5；
+    // 把占用顶到线的手法（T7 run.test.ts 同款）：contextTokens=10 → 红线 8.5；
     // 第一轮 exec 轮 usage 9 顶过红线 → 迭代边界发起中途压缩，压缩自己的
     // 摘要请求（第 2 次调用）挂在 gate 上，compaction.cancel 从 ws 掐它。
     let release!: () => void

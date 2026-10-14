@@ -160,7 +160,7 @@ describe("global routes", () => {
 describe("segment validation (path traversal defense)", () => {
   // 裸 ".." 段会被 Fastify 路由层在到达 handler 前规范化并拒绝（404）；这是路由层第一道闸。
   // 真正能穿透到 handler 的是编码后的穿越段（如 %2e%2e%2f 解码成 "../"），
-  // isSafeSegment 负责兜住这第二道闸 → 400。
+  // isSafeSegment 负责接住这第二道检查 → 400。
   it("GET /memory/projects/../x → blocked by router (404, no escape)", async () => {
     const res = await app.inject({ method: "GET", url: "/memory/projects/../x", headers: auth })
     expect(res.statusCode).toBe(404)

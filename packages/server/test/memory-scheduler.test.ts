@@ -108,7 +108,7 @@ describe("startMemoryScheduler", () => {
     })
     await new Promise((r) => setTimeout(r, 30))
     await handle.stop()
-    // I-1：旧检查让位 → clear；但被超越的锚点不触发 follow 提取
+    // I-1：旧检查被取代 → clear；但被超越的锚点不触发 follow 提取
     expect(sys.clearFollowCheck).toHaveBeenCalledWith("/w/kclaw", "ses_a")
     expect(sys.triggerFollow).not.toHaveBeenCalled()
   })

@@ -1,7 +1,7 @@
 /**
  * Builtin hook 声明守卫：三个压缩钩子必须不限时（meta.timeoutMs =
  * Infinity）。它们的函数体是两次 provider 调用，时长由 LLM 决定——迁移前
- * 内联代码本就不限时；一旦这条声明丢失，5 秒链预算会把每次真实压缩掐成
+ * 内联代码本就不限时；一旦这条声明丢失，5 秒链budget会把每次真实压缩掐成
  * 失败并甩出一个后台重复压缩（2026-09-09 线上复现过）。
  */
 import { describe, it, expect, vi } from "vitest"

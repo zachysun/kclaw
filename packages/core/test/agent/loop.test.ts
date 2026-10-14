@@ -95,7 +95,7 @@ describe("runAgent usage 缓存字段链路", () => {
     },
   ]
 
-  it("每个 LLM 请求恒带 promptCache.key = sessionId（子代理经同一路径自然用自己的会话 id）", async () => {
+  it("每个 LLM 请求恒带 promptCache.key = sessionId（subagent经同一路径自然用自己的会话 id）", async () => {
     const requests: Array<Parameters<LlmClient["stream"]>[0]> = []
     const llm: LlmClient = {
       async *stream(req): AsyncIterable<LlmStreamEvent> {
@@ -112,7 +112,7 @@ describe("runAgent usage 缓存字段链路", () => {
     expect(requests[0]!.promptCache).toEqual({ key: "ses_cache01" })
   })
 
-  it("llm-after 钩子收到的 usage 透传缓存字段（不再收窄成两字段）", async () => {
+  it("llm-after 钩子收到的 usage 透传缓存字段（不再裁成两字段）", async () => {
     let seen: unknown
     await runAgent(
       { sessionId: "s", history: [], system: "", userText: "go" },

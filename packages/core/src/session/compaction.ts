@@ -42,7 +42,7 @@ export function estimateContextTokens(active: Message[], extraText?: string, ove
   for (let i = active.length - 1; i >= 0; i--) {
     const m = active[i]!
     // usage 为 0 的 assistant 是被中断的流（无 message_done）——当锚点会把
-    // 估算砍到近零，偏小是危险方向（水位线晚触发）。跳过它找更早的真实
+    // 估算砍到近零，偏小是危险方向（阈值线晚触发）。跳过它找更早的真实
     // 请求；找不到则走无锚点路径。
     if (m.role === "assistant" && (m as AssistantMessage).usage.inputTokens > 0) { anchorIdx = i; break }
   }
@@ -74,7 +74,7 @@ export interface CompactionSegment { upto: string; summary: string }
 /** compaction state persisted on SessionMeta. */
 export interface CompactionState { segments: CompactionSegment[]; top: string; upto: string }
 
-/** 当前生效的压缩视图：upto 之前的原文不再发送，top 是总摘要（脉络项内容）。 */
+/** 当前生效的压缩视图：upto 之前的原文不再发送，top 是总摘要（摘要上下文项内容）。 */
 export interface ActiveSummary { upto: string; top: string }
 
 /** One compaction event in a session's event stream. */
@@ -129,10 +129,10 @@ export function chooseBoundary(
 }
 
 /**
- * 超限急救的强制分界：预算细判在锚点缺失时不可信——急救通常发生
+ * 超限急救的强制分界：budget细判在锚点缺失时不可信——急救通常发生
  * 在压缩后的首请求或单轮工具输出暴涨时，active 里可能没有 assistant 锚点，
  * system 与工具定义的固定开销全漏计，估算会明显偏低，chooseBoundary 据此可能
- * 找不到边界。急救不看预算，直接退守最小可行上下文：只保留最近一轮用户轮次
+ * 找不到边界。急救不看budget，直接退守最小可行上下文：只保留最近一轮用户轮次
  * （最后一条 user 消息及其之后的整轮），更早的全部压掉。返回 keepFrom；整个
  * active 只有一轮（无早于最后一条 user 消息的内容）时返回 undefined。
  */
