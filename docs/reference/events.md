@@ -91,8 +91,8 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 | `tool_result.delta` | `messageId`、`callId`、`delta`（按 callId 而非 blockId） |
 | `attachment.created` / `attachment.completed` | BlockPayload（当前已定义无发射方，附件随 message.completed 整体附带） |
 | `llm.started` | `model`、`attempt` |
-| `llm.completed` | `usage`、`stopReason`、`latencyMs` |
-| `llm.failed` | `error { code, message }`、`willRetry` |
+| `llm.completed` | `usage`、`stopReason`、`latencyMs`、`cacheMiss?`（缓存未命中归因，见下） |
+| `llm.failed` | `error { code, message }`、`willRetry`、`cacheMiss?`（同 completed） |
 | `confirmation.requested` | `confirmationId`、`toolCall`、`risk`（safe/sensitive）、`expiresAt`、`noteText?`（给人工看的原因） |
 | `confirmation.resolved` | `confirmationId`、`decision`（once/project/global/reject/timeout）、`by`（cli/web/feishu/timeout） |
 | `question.requested` | `questionId`、`questions`（QuestionSpec 数组，1–5 个）、`expiresAt`、`noteText?` |

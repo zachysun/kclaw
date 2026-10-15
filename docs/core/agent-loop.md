@@ -83,7 +83,7 @@ run.started {trigger}
       ② llm.started {model, attempt}
       ③ message.created（assistant 骨架，先于任何块事件，附带真实 messageId）
       ④ 流式处理 llm.stream（视图经 llm-before hook 链改写，见下）
-      ⑤ llm.completed {usage, stopReason, latencyMs}     ← 流失败则跳过，改发 llm.failed
+      ⑤ llm.completed {usage, stopReason, latencyMs, cacheMiss?}  ← 流失败则跳过，改发 llm.failed（两事件的 cacheMiss 见下文缓存归因）
       ⑥ tool_call.completed ×N（流结束后才 parse argsJson）
       ⑦ assistant 补全：块为空 → 整条丢弃（不持久化、无 completed）
         否则 text/thinking.completed → onMessage → message.completed
@@ -99,6 +99,14 @@ run.started {trigger}
 `run.failed` 的四个错误码：`user_message_failed`（run-before 链的 fatal 抛错或持久化抛错）、`llm_error`（provider 彻底失败）、`max_iterations`、`steering_failed`（turn-boundary 链的 fatal 抛错或注入写入抛错）。
 
 用户消息路径有两条：默认由 `userText` 合成（循环自行 `onMessage` 持久化）；宿主传入 `RunInput.userMessage` 时循环原样使用、**不重复持久化**（持久化责任在宿主，daemon 侧由 run-before 链的内置 `user-message-land` hook 做，见 [hooks](./hooks.md)）。两条路径都会发 `message.created`/`message.completed`，hook 链都执行。
+
+### 缓存归因（cacheMiss）
+
+`AgentDeps.cacheProbe` 提供时（daemon 每会话持一份上次请求快照，内存态），每次 LLM 调用前对**实际发送视图**（llm-before 链改写后）做指纹（system 哈希、工具集哈希、逐消息哈希），与同一会话上次的指纹比对，变化原因随 `llm.completed` / `llm.failed` 的 `cacheMiss` 字段可见：`tools_changed`（工具集变了，前缀失效范围覆盖其后全部）、`system_changed`、`history_rebuilt`（消息列表头部重建：窗口滑动、压缩生效）、`history_diverged`（某条中间消息字节变了，如 mention/技能包装的跨 run 断裂），`divergedAt` 与两端摘录辅助定位。纯追加（上次是本次的真前缀）不携带字段。首个 run 无基准不报；探针缺失（一次性辅助调用、裸引擎）整段跳过；快照损坏按无数据处理，绝不影响 run。
+
+### run 级 usage 聚合的边界
+
+只有收到 `message_done`（provider 完整回报）的迭代参与 run 级折叠（`mergeUsage`）：流死亡 / 中断迭代的残缺数据不参与，已上报迭代的缓存字段照常保留；一次完整调用都没有的 run（如零迭代 abort），缓存字段按未知处理（事件与落库不带值），不写假 0。
 
 ### 工具回合（`runToolTurn`）
 

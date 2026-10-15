@@ -28,7 +28,7 @@
 |------|------|-----|------|------|
 | `run-before` | 用户消息 `message.created` 之后、持久化之前 | `{ message }` | `Message` | 改写用户消息（内置：记忆检索 + 持久化 + 自动命名） |
 | `run-after` | `runAgent` 返回之后 | `{ outcome, model }` | 忽略 | 观察收尾（内置：用量记录、收尾压缩、跟随检查） |
-| `llm-before` | 每次模型调用前、provider 视图组装后 | `{ messages }` | `ProviderMessage[]` | 改写模型视图（内置：技能与 `@` 文件指定的合并包装） |
+| `llm-before` | 每次模型调用前、provider 视图组装后 | `{ messages, currentUserText }` | `ProviderMessage[]` | 改写模型视图（内置：技能与 `@` 文件指定的合并包装，按 `currentUserText` 锚定本轮消息，steer 插话不被覆盖） |
 | `llm-after` | 一次模型调用完成后 | `{ usage, stopReason, latencyMs }` | 忽略 | 观察调用 |
 | `llm-retry` | provider 层重试时（withRetry 回调） | `{ attempt, error }` | 忽略 | 重试可见性（内置：转 `llm.failed {willRetry:true}`） |
 | `tool-before` | 工具执行前、权限裁决之前 | `{ toolCall }` | 忽略 | 观察 + 放行检查：`failure:"deny"` 的 hook 失败时该工具被拒绝（权限裁决本身保持引擎控制流） |
