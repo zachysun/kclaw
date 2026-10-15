@@ -140,6 +140,119 @@ describe("runAgent usage 缓存字段链路", () => {
     expect(Number.isNaN(outcome.totalUsage.cacheReadTokens as unknown as number)).toBe(false)
   })
 
+  it("流死亡迭代的残缺 usage 不参与聚合：已上报迭代的缓存字段保留（历史缺陷：一次中断丢整 run 记录）", async () => {
+    let i = 0
+    const llm: LlmClient = {
+      async *stream() {
+        i += 1
+        if (i === 1) {
+          yield { type: "text_delta", delta: "working" }
+          yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 100, outputTokens: 5, cacheReadTokens: 4096 } }
+        }
+        yield { type: "text_delta", delta: "dying" }
+        throw new Error("stream died")
+      },
+    }
+    const outcome = await runAgent(
+      { sessionId: "s", history: [], system: "", userText: "go" },
+      { llm, model: "m", hooks: chainOf(), onEvent: () => {}, onMessage: () => {} } as Parameters<typeof runAgent>[1],
+    )
+    expect(outcome.stopReason).toBe("error")
+    expect(outcome.totalUsage).toEqual({ inputTokens: 100, outputTokens: 5, cacheReadTokens: 4096 })
+  })
+
+  it("零迭代 abort：run 级 usage 缓存字段按未知处理，不写假 0", async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const llm: LlmClient = {
+      async *stream() {
+        yield { type: "text_delta", delta: "never consumed" }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+      },
+    }
+    const outcome = await runAgent(
+      { sessionId: "s", history: [], system: "", userText: "go" },
+      { llm, model: "m", hooks: chainOf(), onEvent: () => {}, onMessage: () => {}, signal: controller.signal } as Parameters<typeof runAgent>[1],
+    )
+    expect(outcome.stopReason).toBe("aborted")
+    expect(outcome.totalUsage).toEqual({ inputTokens: 0, outputTokens: 0 })
+  })
+
+  it("cacheProbe 提供时 llm.completed 带 cacheMiss 归因（MCP 抖动类 tools_changed 可见）", async () => {
+    const snapshots = new Map<string, string>()
+    const events: unknown[] = []
+    let call = 0
+    const llm: LlmClient = {
+      async *stream(): AsyncIterable<LlmStreamEvent> {
+        call += 1
+        if (call === 1) {
+          yield { type: "text_delta", delta: "one" }
+          yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+          return
+        }
+        yield { type: "text_delta", delta: "two" }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+      },
+    }
+    // 两个独立 run 同会话，第二个 run 换工具集 → 前缀断裂归因可见。
+    const mk = (toolDefs?: unknown) =>
+      runAgent(
+        { sessionId: "s", history: [], system: "", userText: "go" },
+        {
+          llm, model: "m", hooks: chainOf(), onEvent: (e) => events.push(e), onMessage: () => {},
+          ...(toolDefs === undefined ? {} : { toolDefs: toolDefs as never }),
+          cacheProbe: {
+            load: () => snapshots.get("s") ?? null,
+            save: (snap: string) => snapshots.set("s", snap),
+          },
+        } as Parameters<typeof runAgent>[1],
+      )
+    await mk()
+    await mk([{ name: "extra_tool", description: "d", parameters: { type: "object", properties: {} } }])
+    const completed = events.filter((e) => e.type === "llm.completed") as Array<{ payload: { cacheMiss?: { reasons: string[] } } }>
+    expect(completed[0]?.payload?.cacheMiss).toBeUndefined() // 首个 run 无基准，不报归因
+    expect(completed[1]?.payload?.cacheMiss?.reasons).toEqual(["tools_changed"])
+  })
+
+  it("steer 插话不被包装覆盖：llm-before 收到 currentUserText，包装锚定本轮消息", async () => {
+    const captured: Array<Parameters<LlmClient["stream"]>[0]> = []
+    let call = 0
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        captured.push(req)
+        call += 1
+        if (call === 1) {
+          yield { type: "tool_call_started", index: 0, callId: "call_1", name: "exec" }
+          yield { type: "tool_call_delta", index: 0, delta: "{}" }
+          yield { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 1, outputTokens: 1 } }
+          return
+        }
+        yield { type: "text_delta", delta: "done" }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 2, outputTokens: 1 } }
+      },
+    }
+    const steerMsg = newMessage("s", "user", [{ id: "steer_b", type: "text", text: "插话：改用 B 方案" }])
+    const outcome = await runAgent(
+      { sessionId: "s", history: [], system: "", userText: "帮我看看 A 文件" },
+      {
+        llm, model: "m",
+        hooks: chainOf(
+          hook("wrap", "llm-before", (ctx: { messages: unknown; currentUserText: string }) =>
+            withLastUserText(ctx.messages as never, `包装(${ctx.currentUserText})`, ctx.currentUserText)),
+          hook("steer", "turn-boundary", () => [steerMsg]),
+        ),
+        onEvent: () => {}, onMessage: () => {},
+        tools: new Map([["exec", EXEC]]),
+      } as Parameters<typeof runAgent>[1],
+    )
+    expect(outcome.stopReason).toBe("end_turn")
+    const second = captured[1]!.messages
+    const users = second.filter((m) => m.role === "user") as Array<{ role: "user"; content: string }>
+    // 本轮消息被包装；steer 插话原文原样保留（历史缺陷：包装覆盖插话）。
+    expect(users.some((m) => m.content === "包装(帮我看看 A 文件)")).toBe(true)
+    expect(users.some((m) => m.content === "插话：改用 B 方案")).toBe(true)
+  })
+
   async function runWith2(script: LlmStreamEvent[][]) {
     const outcome = await runAgent(
       { sessionId: "s", history: [], system: "", userText: "go" },
