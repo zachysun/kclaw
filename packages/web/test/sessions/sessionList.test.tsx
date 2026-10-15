@@ -101,6 +101,20 @@ describe("SessionList", () => {
     unmount(root, container)
   })
 
+  it("shows the error state with a retry entry instead of a silent empty list", () => {
+    const onRetry = vi.fn()
+    const { container, root } = mount({ sessions: [], error: true, onRetry })
+    expect(container.querySelector('[data-testid="session-error"]')).not.toBeNull()
+    expect(container.textContent).toContain("会话列表加载失败")
+    // 错误态覆盖空态：不再同时显示"新建一个会话开始"
+    expect(container.querySelector('[data-testid="session-empty"]')).toBeNull()
+    act(() => {
+      click(container, "session-retry")
+    })
+    expect(onRetry).toHaveBeenCalledTimes(1)
+    unmount(root, container)
+  })
+
   it("shows a session's workdir under its title (CLI-launched sessions stay visible)", () => {
     const withDir = { ...session("s1", "CLI 会话", "t"), workdir: "/Users/x/coding/kclaw" }
     const without = session("s2", "普通会话", "t")

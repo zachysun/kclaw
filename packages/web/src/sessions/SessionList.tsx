@@ -20,6 +20,7 @@
  */
 import { useMemo, useState, type ChangeEvent } from "react"
 import type { FsBrowseResult, SessionMeta } from "../types.js"
+import { formatCompactStamp } from "../usage/format.js"
 import { IconButton } from "../ui/IconButton.js"
 import { PencilIcon, TrashIcon } from "../ui/icons.js"
 import { DirectoryPicker } from "./DirectoryPicker.js"
@@ -30,6 +31,10 @@ export interface SessionListProps {
   selectedId: string | null
   /** True while the initial list is still being fetched (suppresses the empty state). */
   loading: boolean
+  /** 加载失败态：覆盖空态，给一行说明与重试入口（而不是看起来像空列表）。 */
+  error?: boolean
+  /** Retry the session-list fetch (the error state's button). */
+  onRetry?: () => void
   onSelect: (id: string) => void
   /** Escape a create-session request with the chosen working directory. */
   onCreate: (workdir: string) => void
@@ -92,6 +97,8 @@ export function SessionList({
   sessions,
   selectedId,
   loading,
+  error,
+  onRetry,
   onSelect,
   onCreate,
   onRename,
@@ -246,7 +253,17 @@ export function SessionList({
           ＋ 选择工作目录新建会话
         </button>
       </div>
-      {!loading && sessions.length === 0 && (
+      {error === true && (
+        <div className="session-error" data-testid="session-error">
+          <p className="muted">会话列表加载失败</p>
+          {onRetry !== undefined && (
+            <button type="button" data-testid="session-retry" onClick={onRetry}>
+              重试
+            </button>
+          )}
+        </div>
+      )}
+      {!loading && error !== true && sessions.length === 0 && (
         <p className="muted session-empty" data-testid="session-empty">
           新建一个会话开始
         </p>
@@ -358,7 +375,7 @@ export function SessionList({
                               {meta.workdir}
                             </span>
                           )}
-                          <span className="session-time">{formatWhen(meta.updatedAt)}</span>
+                          <span className="session-time">{formatCompactStamp(meta.updatedAt)}</span>
                         </span>
                       </button>
                       {editingId === meta.id ? (
@@ -424,23 +441,4 @@ export function SessionList({
       )}
     </div>
   )
-}
-
-/**
- * Compact local display for a session's updatedAt: today → HH:MM, this
- * year → MM/DD HH:MM, else YYYY/MM/DD; raw ISO when unparseable. All
- * comparison is local Date arithmetic (no timezone-sensitive formatting).
- */
-function formatWhen(iso: string): string {
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return iso
-  const now = new Date()
-  const sameDay =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate()
-  const hhmm = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
-  if (sameDay) return hhmm
-  const md = `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")} ${hhmm}`
-  return date.getFullYear() === now.getFullYear() ? md : `${date.getFullYear()}/${md}`
 }

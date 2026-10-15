@@ -1,24 +1,24 @@
 /**
- * ChatView — pure presentational conversation surface for the WebUI (block
- * block rendering). No I/O: everything arrives through props and every action
- * escapes through a callback. Only local UI state lives here (the composer
- * draft); expansion/collapse uses native <details> elements, so thinking folds
- * by default and tool_result cards expand to their full output without JS.
+ * ChatView — the conversation surface assembly: the floating team/goal
+ * panels, the message log (with follow-tail scrolling), run/compaction
+ * indicators, the decision cards, the notice strip, and the composer.
+ * Presentation + local UI state only: no I/O, every action escapes through
+ * a callback. The callbacks handed down to message bubbles are render-stable
+ * (ids, not per-message closures) so bubble memoization holds during a
+ * streaming run.
  */
-import { Fragment, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react"
-import { parseSlashInput, replaceTrailingSlashToken, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
-import { fileMentionCompletions, replaceTrailingMentionToken } from "@kclaw/core/mentions"
+import { Fragment, useCallback, useRef, useState, type ReactNode } from "react"
+import { SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
 import { PERMISSION_MODES, type PermissionMode } from "@kclaw/core/permission-modes"
-import type { AttachmentRef, ConfirmationDecision, GoalView } from "@kclaw/core/protocol"
-import type { ChatState, ConfirmationCard, QuestionCard, RenderedBlock, RenderedMessage } from "./model.js"
-import { parseTeamMail, type TeamMailParse } from "./model.js"
-import { MarkdownText } from "./Markdown.js"
+import type { AttachmentRef, ConfirmationDecision, GoalView, TeamPanel } from "@kclaw/core/protocol"
+import type { ChatState, RenderedMessage } from "./model.js"
+import { MessageBubble, firstRenderedText } from "./MessageBubble.js"
+import { ConfirmationCardView, QuestionCardView } from "./Cards.js"
+import { AuditContextNote, compactionBars, type CompactionRecordView } from "./CompactionBars.js"
+import { Composer } from "./Composer.js"
+import { useFollowTail } from "./useFollowTail.js"
 import { TeamPanelCard } from "./TeamPanel.js"
 import { GoalPanelCard } from "./GoalPanel.js"
-import type { TeamPanel } from "@kclaw/core/protocol"
-import { IconButton } from "../ui/IconButton.js"
-import { ForkIcon, PencilIcon, RefreshIcon } from "../ui/icons.js"
-import { fmtTokens } from "../audit/model.js"
 
 /**
  * How a message enters a busy session: steer injects into the live
@@ -27,51 +27,40 @@ import { fmtTokens } from "../audit/model.js"
  */
 export type Disposition = "steer" | "wait" | "interrupt"
 
-/** The trio's order — also the arrow-key rotation order. */
-const DISPOSITIONS = ["steer", "wait", "interrupt"] as const
-
-/** An uploaded attachment pending on the next message (the protocol's AttachmentRef). */
-export type PendingAttachment = AttachmentRef
-
 /**
- * One suggestion-menu entry: a slash command (builtin or installed skill) or
- * a workspace file mention. Both share the composer drawer — the trailing
- * word's first character picks the list (`/` commands, `@` files), so the
- * two kinds never mix in one open menu.
+ * An uploaded attachment queued for the next message. `path` is absent while
+ * the upload is still in flight (the chip renders 上传中 and sends are held
+ * back); it carries the wire AttachmentRef fields once settled.
  */
-type ComposerCandidate = { kind: "slash"; meta: SlashCommandMeta } | { kind: "file"; path: string }
-
-/** Slash-menu geometry constants — must stay in sync with `.slash-menu` in index.css. */
-export const SLASH_MENU_MAX_HEIGHT = 280
-const SLASH_MENU_GAP = 6 // CSS: bottom: calc(100% + 6px)
-const SLASH_MENU_MARGIN = 8 // breathing room to the viewport top
-const SLASH_MENU_MIN_HEIGHT = 48
-
-/**
- * The menu floats above the composer (absolute, bottom: calc(100% + 6px)); when
- * the composer sits high in the viewport (fresh session, few messages) it would
- * overflow the top edge and put the first option out of reach. Cap its height
- * to the room actually available above the composer (from the fixed top bar
- * down, when one is present), with a floor so a couple of options always stay
- * visible/clickable.
- */
-export function availableSlashMenuMaxHeight(composerTop: number, topBoundary = 0): number {
-  const available = composerTop - topBoundary - SLASH_MENU_GAP - SLASH_MENU_MARGIN
-  return Math.max(SLASH_MENU_MIN_HEIGHT, Math.min(SLASH_MENU_MAX_HEIGHT, available))
+export interface PendingAttachment {
+  id: string
+  name: string
+  size: number
+  mimeType: string
+  path?: string
 }
 
+/** The wire shape a settled upload contributes to a send_message frame. */
+export type SentAttachment = AttachmentRef
+
 export interface ChatViewProps {
+  /** Session identity — keys the follow-tail reset (a session switch scrolls to latest). */
+  sessionId: string
   view: ChatState
-  /** Send one user message (queued server-side; runs serialize like the CLI). */
-  onSend: (text: string) => void
+  /**
+   * Submit a composer message. `true` = accepted (the composer clears its
+   * draft); `false` = rejected — the draft stays so the user can retry
+   * without retyping (socket down, attachment upload still in flight).
+   */
+  onSend: (text: string) => boolean
   /** Answer an inline confirmation card. */
   onResolveConfirmation: (confirmationId: string, decision: ConfirmationDecision) => void
   /** Answer an inline question card (one string array per question, in ask order). */
   onAnswerQuestion: (questionId: string, answers: string[][]) => void
-  /** Attachments queued for the next message (drag-and-drop). */
+  /** Attachments queued for the next message (drag-and-drop; uploading ones have no path yet). */
   pendingAttachments: PendingAttachment[]
-  /** Drop one queued attachment. */
-  onRemoveAttachment: (index: number) => void
+  /** Drop one queued attachment (by its PendingAttachment.id). */
+  onRemoveAttachment: (id: string) => void
   /** Available provider model names (empty → no selector rendered). */
   models?: string[]
   /** Current session model override (undefined → daemon default). */
@@ -88,24 +77,18 @@ export interface ChatViewProps {
    * triggered it. Null/undefined hides it.
    */
   notice?: string | null
-  /**
-   * The user typed into the composer — the owner clears the stale notice so
-   * old feedback does not sit over the new message being written. Programmatic
-   * draft changes (suggestion completion) do not fire this.
-   */
-  onDraftChange?: () => void
-  /**
-   * Optional click action for the notice (memory.written 跳转)。
-   * Present → the notice renders as a button; absent → plain text.
-   */
+  /** Optional click action for the notice (memory.written 跳转)。
+   * Present → the notice renders as a button; absent → plain text. */
   noticeAction?: (() => void) | null
   /** Dismiss the notice (the × on the notice bar; typing clears it too). */
   onDismissNotice?: () => void
+  /** The user typed into the composer — the owner clears the stale notice. */
+  onDraftChange?: () => void
   /** The current send disposition (the trio's selection; the owner resolves it from meta/config). */
   disposition?: Disposition
   /** Select the trio — the owner writes the sticky override and carries it on sends. */
   onSetDisposition?: (d: Disposition) => void
-  /** Cancel one queued message (its bubble's cancel button). */
+  /** Cancel one queued message (its row's cancel button). */
   onCancelQueued?: (messageId: string) => void
   /** Cancel every still-queued message (the banner's 全部取消). */
   onCancelAllQueued?: () => void
@@ -183,29 +166,19 @@ export interface ChatViewProps {
   usage?: ReactNode
 }
 
-export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDismissNotice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, onFork, forkPending, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal, usage }: ChatViewProps) {
-  const [draft, setDraft] = useState("")
-  // Suggestion-menu state: Escape dismisses the menu until the draft changes;
-  // sel is the highlighted option, clamped whenever the candidate list shrinks.
-  const [dismissed, setDismissed] = useState(false)
-  const [sel, setSel] = useState(0)
-  const [helpOpen, setHelpOpen] = useState(false)
+export function ChatView({ sessionId, view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDismissNotice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, onFork, forkPending, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal, usage }: ChatViewProps) {
   // In-place editor state of edit & retry, keyed by the bubble being edited;
   // both confirm and Esc clear it.
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
+  const [helpOpen, setHelpOpen] = useState(false)
 
-  // 建议菜单候选（斜杠命令与 @ 文件指定共用一个抽屉）：正在输入的最后一个词
-  // 以 / 开头出命令、以 @ 开头出工作区文件，首字符互斥所以两类不同时出现。
-  const slashItems = dismissed ? [] : slashCompletions(draft, "web", extraCommands)
-  const fileItems =
-    dismissed || mentionFiles === undefined || mentionFiles.length === 0
-      ? []
-      : fileMentionCompletions(draft, mentionFiles)
-  const completions: ComposerCandidate[] =
-    slashItems.length > 0
-      ? slashItems.map((meta) => ({ kind: "slash" as const, meta }))
-      : fileItems.map((path) => ({ kind: "file" as const, path }))
-  const active = Math.min(sel, Math.max(0, completions.length - 1))
+  // 跟随滚动：贴底跟随、上滚暂停、切会话回到底部；暂停时给"回到底部"。
+  const { logRef, onLogScroll, pinned, jumpToBottom } = useFollowTail(view.messages, sessionId)
+
+  // 稳定回调的查找源：view.messages 每次渲染都是新数组，闭包持它会让所有
+  // 气泡的 memo 失效；ref 同步最新列表，回调本身零依赖、跨渲染稳定。
+  const messagesRef = useRef(view.messages)
+  messagesRef.current = view.messages
 
   // 排队列表数据（Master 2026-08-30 改版）：view.queue 本身就是
   // FIFO 行序（先排队的在下标 0），直接渲染即"先排队在上面"。
@@ -226,7 +199,8 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
   const canFork = idle && !forkPending
   const lastUserIdx = findLastIdx(view.messages, (m) => m.role === "user")
   const lastAssistantIdx = findLastIdx(view.messages, (m) => m.role === "assistant")
-  const lastUser = lastUserIdx === -1 ? undefined : view.messages[lastUserIdx]!
+
+  const openHelp = useCallback((): void => setHelpOpen(true), [])
 
   /** Edit confirm: an empty text does not submit (same rule as the composer). */
   const confirmEdit = (): void => {
@@ -238,7 +212,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
   }
 
   /** Editor keys: Enter confirms, Shift+Enter breaks a line, Esc cancels (composer habits). */
-  const handleEditKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+  const handleEditKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault()
       confirmEdit()
@@ -247,121 +221,23 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
     }
   }
 
-  /** 三选的方向键旋转（方向键+回车与点击皆可；回车/空格是按钮原生行为）。 */
-  const handleTrioKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (onSetDisposition === undefined || disposition === undefined) return
-    const idx = DISPOSITIONS.indexOf(disposition)
-    const delta =
-      event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 :
-      event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0
-    if (delta === 0) return
-    event.preventDefault()
-    onSetDisposition(DISPOSITIONS[(idx + delta + DISPOSITIONS.length) % DISPOSITIONS.length]!)
-  }
-
-  // Keep the suggestion menu inside the viewport: measure how much room sits
-  // above the composer and cap the menu height to it (fresh sessions leave
-  // little room; the absolute menu would otherwise overflow the top edge).
-  const composerRef = useRef<HTMLFormElement>(null)
-  const [menuMaxHeight, setMenuMaxHeight] = useState<number | undefined>(undefined)
-  useLayoutEffect(() => {
-    const composer = composerRef.current
-    if (completions.length === 0 || composer === null) {
-      return
-    }
-    const update = (): void => {
-      const topBoundary = document.querySelector("header.topbar")?.getBoundingClientRect().bottom ?? 0
-      setMenuMaxHeight(availableSlashMenuMaxHeight(composer.getBoundingClientRect().top, topBoundary))
-    }
-    update()
-    window.addEventListener("resize", update)
-    return () => window.removeEventListener("resize", update)
-  }, [completions.length])
-
-  // Auto-grow composer (textarea): track the content up to a ~5-line cap,
-  // then scroll internally instead of pushing the log away.
-  const inputRef = useRef<HTMLTextAreaElement>(null)
-  useLayoutEffect(() => {
-    const el = inputRef.current
-    if (el === null) return
-    el.style.height = "auto"
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
-  }, [draft])
-
-  const submitDraft = (): void => {
-    const text = draft.trim()
-    if (text === "") return
-    // /help renders the command panel right here — it is a view concern, so
-    // it never escapes through onSend (the dispatcher treats it as a no-op).
-    if (parseSlashInput(text)?.command === "help") {
-      setHelpOpen(true)
-      setDraft("")
-      return
-    }
-    onSend(text)
-    setDraft("")
-  }
-
-  const submit = (event: FormEvent): void => {
-    event.preventDefault()
-    submitDraft()
-  }
-
-  /** 文件候选里含空白的路径没法无歧义写进消息：抽屉里可见但禁选。 */
-  const isDisabledFile = (item: ComposerCandidate): boolean => item.kind === "file" && /\s/.test(item.path)
-
-  /** Replace the trailing in-progress token with the chosen candidate plus a trailing space; the space closes the menu. A disabled file entry never completes. */
-  const completeCandidate = (item: ComposerCandidate): void => {
-    if (isDisabledFile(item)) return
-    setDraft(item.kind === "slash" ? replaceTrailingSlashToken(draft, item.meta.name) : replaceTrailingMentionToken(draft, item.path))
-    setDismissed(true)
-  }
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    // Enter=发送，Shift+Enter=换行（Master 2026-09-03）：textarea 的 Enter
-    // 默认插换行符，一律拦下改走发送；带 Shift 时不拦，落到原生换行。
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault()
-      // While the menu is open, Enter ACCEPTS the highlighted suggestion —
-      // submitting the raw draft would run a half-typed word. Only a draft
-      // whose trailing token already IS the complete candidate goes straight
-      // to the submit; on a disabled file entry Enter does neither (the token
-      // cannot be completed and sending it raw would be broken).
-      if (completions.length > 0) {
-        const item = completions[active]!
-        if (isDisabledFile(item)) return
-        const finished = item.kind === "slash" ? `/${item.meta.name}` : `@${item.path}`
-        if (draft.trim() !== finished) {
-          completeCandidate(item)
-          return
-        }
+  // 气泡动作回调（跨渲染稳定，见 messagesRef 注释）：按 id 从最新列表取正文。
+  const startEdit = useCallback((messageId: string): void => {
+    const message = messagesRef.current.find((m) => m.id === messageId)
+    if (message !== undefined) setEditing({ id: messageId, text: firstRenderedText(message) })
+  }, [])
+  const regenerate = useCallback((): void => {
+    for (let i = messagesRef.current.length - 1; i >= 0; i--) {
+      const last = messagesRef.current[i]!
+      if (last.role === "user") {
+        onRetry?.(last.id, firstRenderedText(last))
+        return
       }
-      submitDraft()
-      return
     }
-    if (completions.length > 0) {
-      if (event.key === "ArrowDown") {
-        event.preventDefault()
-        setSel((active + 1) % completions.length)
-      } else if (event.key === "ArrowUp") {
-        event.preventDefault()
-        setSel((active - 1 + completions.length) % completions.length)
-      } else if (event.key === "Tab") {
-        event.preventDefault()
-        completeCandidate(completions[active]!)
-      } else if (event.key === "Escape") {
-        setDismissed(true)
-      }
-    } else if (event.key === "Escape" && helpOpen) {
-      setHelpOpen(false)
-    }
-  }
+  }, [onRetry])
 
   return (
     <div className="chat" data-testid="chat-view">
-      {/* The team panel floats over the chat area's top-right corner (outside
-          the scrolling log): pinned to the message stream it scrolled out of
-          sight with any history. The whole panel folds to a summary chip. */}
       {/* Floating cards (team + goal) stack in one column at the chat
           area's top-right corner, outside the scrolling log. */}
       {(team !== undefined || goal !== undefined) && (
@@ -385,11 +261,6 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
               onEdit={goal.onEdit}
             />
           )}
-        </div>
-      )}
-      {view.error !== undefined && (
-        <div className="chat-error" data-testid="chat-error" role="alert">
-          {view.error}
         </div>
       )}
       {helpOpen && (
@@ -416,48 +287,57 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
           </ul>
         </div>
       )}
-      <div className="chat-log" data-testid="chat-log">
-        {view.messages.map((message, idx) => (
-          <Fragment key={message.id}>
-            {auditBars.filter((b) => b.insertIdx === idx).map((b) => (
-              <AuditContextNote key={b.key} bar={b} />
-            ))}
-            {editing !== null && editing.id === message.id ? (
-              <div className="message message-user" data-testid="msg-editing">
-                <div className="msg-edit">
-                  <textarea
-                    className="msg-edit-input"
-                    data-testid="msg-edit-input"
-                    autoFocus
-                    value={editing.text}
-                    onChange={(event) => setEditing({ id: editing.id, text: event.target.value })}
-                    onKeyDown={handleEditKeyDown}
-                    rows={2}
-                  />
-                  <div className="msg-edit-actions">
-                    <button type="button" className="primary" data-testid="msg-edit-confirm" onClick={confirmEdit}>重试</button>
-                    <button type="button" data-testid="msg-edit-cancel" onClick={() => setEditing(null)}>取消</button>
+      {/* 流容器包住消息流与"回到底部"：悬浮按钮锚在流的可视底部（.chat 的
+          relative 锚的是整列，直接放会被 composer 区域挡住）。 */}
+      <div className="chat-log-wrap">
+        <div className="chat-log" data-testid="chat-log" ref={logRef} onScroll={onLogScroll}>
+          {view.messages.map((message, idx) => (
+            <Fragment key={message.id}>
+              {auditBars.filter((b) => b.insertIdx === idx).map((b) => (
+                <AuditContextNote key={b.key} bar={b} />
+              ))}
+              {editing !== null && editing.id === message.id ? (
+                <div className="message message-user" data-testid="msg-editing">
+                  <div className="msg-edit">
+                    <textarea
+                      className="msg-edit-input"
+                      data-testid="msg-edit-input"
+                      autoFocus
+                      value={editing.text}
+                      onChange={(event) => setEditing({ id: editing.id, text: event.target.value })}
+                      onKeyDown={handleEditKeyDown}
+                      rows={2}
+                    />
+                    <div className="msg-edit-actions">
+                      <button type="button" className="primary" data-testid="msg-edit-confirm" onClick={confirmEdit}>重试</button>
+                      <button type="button" data-testid="msg-edit-cancel" onClick={() => setEditing(null)}>取消</button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ) : (
-              <MessageBubble
-                message={message}
-                onOpenAudit={onOpenAudit}
-                canEdit={canRetry && idx === lastUserIdx}
-                canRegenerate={canRetry && idx === lastAssistantIdx && lastUser !== undefined}
-                canFork={onFork !== undefined && canFork}
-                onEditStart={(text) => setEditing({ id: message.id, text })}
-                onRegenerate={lastUser === undefined ? undefined : () => onRetry?.(lastUser.id, firstRenderedText(lastUser))}
-                onFork={onFork}
-              />
-            )}
-          </Fragment>
-        ))}
-        {/* upto 是最后一条消息（收尾压缩后没有新消息）→ 折叠条挂在消息流末尾。 */}
-        {auditBars.filter((b) => b.insertIdx >= view.messages.length).map((b) => (
-          <AuditContextNote key={b.key} bar={b} />
-        ))}
+              ) : (
+                <MessageBubble
+                  message={message}
+                  onOpenAudit={onOpenAudit}
+                  canEdit={canRetry && idx === lastUserIdx}
+                  canRegenerate={canRetry && idx === lastAssistantIdx && lastUserIdx !== -1}
+                  canFork={canFork}
+                  onEditStart={startEdit}
+                  onRegenerate={regenerate}
+                  onFork={onFork}
+                />
+              )}
+            </Fragment>
+          ))}
+          {/* upto 是最后一条消息（收尾压缩后没有新消息）→ 折叠条挂在消息流末尾。 */}
+          {auditBars.filter((b) => b.insertIdx >= view.messages.length).map((b) => (
+            <AuditContextNote key={b.key} bar={b} />
+          ))}
+        </div>
+        {!pinned && (
+          <button type="button" className="chat-jump" data-testid="chat-jump-bottom" onClick={jumpToBottom}>
+            回到底部 ↓
+          </button>
+        )}
       </div>
       {view.runState === "running" && (
         <div className="run-indicator" data-testid="run-indicator" aria-live="polite">
@@ -496,7 +376,7 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
       {view.pendingQuestions.map((card) => (
         <QuestionCardView key={card.questionId} card={card} onAnswer={onAnswerQuestion} />
       ))}
-      {!readOnly && (models !== undefined && models.length > 0 && onSwitchModel !== undefined || onSwitchMode !== undefined) && (
+      {!readOnly && ((models !== undefined && models.length > 0 && onSwitchModel !== undefined) || onSwitchMode !== undefined) && (
         <div className="composer-selectors" data-testid="composer-selectors">
           {models !== undefined && models.length > 0 && onSwitchModel !== undefined && (
             <div className="composer-row" data-testid="model-selector-row">
@@ -535,12 +415,20 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
       )}
       {!readOnly && pendingAttachments.length > 0 && (
         <div className="attachment-chips" data-testid="attachment-chips">
-          {pendingAttachments.map((a, i) => (
-            <span key={i} className="attachment-chip" data-testid="attachment-chip">
-              {a.name}（{a.size} 字节）
-              <button type="button" onClick={() => onRemoveAttachment(i)} aria-label={`移除 ${a.name}`}>×</button>
+          {pendingAttachments.map((a) => (
+            <span key={a.id} className={`attachment-chip${a.path === undefined ? " uploading" : ""}`} data-testid="attachment-chip">
+              {a.name}（{a.path === undefined ? "上传中…" : `${a.size} 字节`}）
+              <button type="button" onClick={() => onRemoveAttachment(a.id)} aria-label={`移除 ${a.name}`}>×</button>
             </span>
           ))}
+        </div>
+      )}
+      {/* 运行失败与帧错误的反馈条：贴着 composer（用户正在操作的位置）渲染，
+          不再挂在消息流顶部——长会话里顶部错误等于不可见。清除节奏归所有方：
+          下一次 run.started（与 view.error 的过期口径一致）或用户 × 掉 notice。 */}
+      {view.error !== undefined && (
+        <div className="chat-error" data-testid="chat-error" role="alert">
+          {view.error}
         </div>
       )}
       {notice !== undefined && notice !== null && notice !== "" && (
@@ -605,273 +493,24 @@ export function ChatView({ view, onSend, onResolveConfirmation, onAnswerQuestion
           )}
         </div>
       ) : (
-        <form className="chat-composer" ref={composerRef} onSubmit={submit}>
-        {team !== undefined && team.target !== null && (
-          <div className="team-target-chip" data-testid="team-target-chip">
-            → 组员 {team.target}
-            <button type="button" data-testid="team-target-clear" aria-label="切回对组长对话" onClick={() => team.onTalkTo(null)}>×</button>
-          </div>
-        )}
-        {completions.length > 0 && (
-          <ul
-            className="slash-menu"
-            data-testid="slash-menu"
-            role="listbox"
-            aria-label={completions[0]!.kind === "slash" ? "斜杠命令联想" : "文件联想"}
-            style={menuMaxHeight !== undefined ? { maxHeight: menuMaxHeight } : undefined}
-          >
-            {completions.map((c, i) =>
-              c.kind === "slash" ? (
-                <li key={`/${c.meta.name}`} role="option" aria-selected={i === active} className={i === active ? "slash-option active" : "slash-option"}>
-                  <button
-                    type="button"
-                    data-testid="slash-option"
-                    // mousedown so the input keeps focus (a click would blur it)
-                    onMouseDown={(event) => {
-                      event.preventDefault()
-                      completeCandidate(c)
-                    }}
-                  >
-                    <code>{c.meta.usage}</code>
-                    <span>{c.meta.description}</span>
-                  </button>
-                </li>
-              ) : (
-                <li
-                  key={`@${c.path}`}
-                  role="option"
-                  aria-selected={i === active}
-                  aria-disabled={isDisabledFile(c) || undefined}
-                  className={i === active ? "slash-option file-option active" : "slash-option file-option"}
-                >
-                  <button
-                    type="button"
-                    data-testid="file-option"
-                    // mousedown so the input keeps focus (a click would blur it)
-                    onMouseDown={(event) => {
-                      event.preventDefault()
-                      completeCandidate(c)
-                    }}
-                  >
-                    <code>@{c.path}</code>
-                  </button>
-                </li>
-              ),
-            )}
-            {completions[0]!.kind === "file" && mentionTruncated === true && (
-              <li className="slash-note" data-testid="mention-truncated">文件过多，列表已截断</li>
-            )}
-          </ul>
-        )}
-        <span className="composer-prompt" aria-hidden="true">❯</span>
-        <textarea
-          className="chat-input"
-          data-testid="chat-input"
-          ref={inputRef}
-          rows={1}
-          value={draft}
-          onChange={(event) => {
-            setDraft(event.target.value)
-            setDismissed(false)
-            setSel(0)
-            onDraftChange?.()
-          }}
-          onKeyDown={handleKeyDown}
-          placeholder="输入消息…"
-          autoFocus
+        <Composer
+          onSend={onSend}
+          onHelpRequest={openHelp}
+          onEscape={() => setHelpOpen(false)}
+          onDraftChange={onDraftChange}
+          extraCommands={extraCommands}
+          mentionFiles={mentionFiles}
+          mentionTruncated={mentionTruncated}
+          running={view.runState === "running"}
+          disposition={disposition}
+          onSetDisposition={onSetDisposition}
+          teamTarget={team?.target ?? null}
+          onClearTeamTarget={team === undefined ? undefined : () => team.onTalkTo(null)}
         />
-        {view.runState === "running" && (
-          <div className="disposition-trio" data-testid="disposition-trio" role="radiogroup" aria-label="发送处置" onKeyDown={handleTrioKeyDown}>
-            {DISPOSITIONS.map((d) => (
-              <button
-                key={d} type="button" role="radio" aria-checked={disposition === d}
-                data-testid={`disposition-${d}`}
-                onClick={() => onSetDisposition?.(d)}
-              >{d === "steer" ? "引导" : d === "wait" ? "等待" : "中断"}</button>
-            ))}
-          </div>
-        )}
-        <button type="submit" data-testid="send-button">发送</button>
-        </form>
       )}
       {usage}
     </div>
   )
-}
-
-/**
- * 压缩审计记录的 web 侧轻量镜像（GET /sessions/:id/compactions 的 UI
- * 子集，刻意不引 @kclaw/core——web 包自包含，见 model.ts 的协议镜像决策）。
- */
-export interface CompactionRecordView {
-  /** 本次压缩覆盖到的最后一条消息 id（折叠条插在它后面）。 */
-  upto: string
-  /** 本段摘要（折叠条展开后的正文）。 */
-  segmentSummary: string
-  /** "auto" | "in-run" | "manual"（审计用途，暂不参与渲染）。 */
-  trigger: string
-  /** 超限紧急压缩标记（审计用途，暂不参与渲染）。 */
-  emergency?: boolean
-  /** 压缩前活跃段上下文 token（旧记录缺失）。 */
-  tokensBefore?: number
-  /** 压缩后等效上下文 token（旧记录缺失）。 */
-  tokensAfter?: number
-}
-
-/** One audit-driven collapsed context bar to render. */
-export interface CompactionAuditBar {
-  key: string
-  /** 折叠条插在 messages[insertIdx] 之前（= upto 气泡之后）。 */
-  insertIdx: number
-  /** 第 N 次压缩（记录序号 + 1）。 */
-  segments: number
-  summary: string
-  /** 本次压缩的 token 变化（旧记录缺失）。 */
-  tokens?: { before: number; after: number }
-}
-
-/**
- * Derive the audit-driven collapsed context bars: one per compaction
- * record, inserted right AFTER the record's `upto` message. Records whose
- * upto no longer exists (deleted messages) are dropped.
- */
-export function compactionBars(
-  messages: RenderedMessage[],
-  records: CompactionRecordView[],
-): CompactionAuditBar[] {
-  const bars: CompactionAuditBar[] = []
-  records.forEach((record, ordinal) => {
-    const segments = ordinal + 1
-    const uptoIdx = messages.findIndex((m) => m.id === record.upto)
-    if (uptoIdx === -1) return
-    const tokens = record.tokensBefore !== undefined && record.tokensAfter !== undefined
-      ? { before: record.tokensBefore, after: record.tokensAfter }
-      : undefined
-    bars.push({ key: `compaction-${ordinal}-${record.upto}`, insertIdx: uptoIdx + 1, segments, summary: record.segmentSummary, tokens })
-  })
-  return bars
-}
-
-/** Audit-driven collapsed <details>, summary-only body (审计记录无 kept 数据). */
-function AuditContextNote({ bar }: { bar: CompactionAuditBar }) {
-  const tokens = bar.tokens !== undefined
-    ? ` · ${fmtTokens(bar.tokens.before)} → ${fmtTokens(bar.tokens.after)} token`
-    : ""
-  return (
-    <details className="ctx-note" data-testid="ctx-note-audit">
-      <summary>模型上下文：早期对话已压缩为 {bar.segments} 段{tokens}（点击展开）</summary>
-      <div className="ctx-note-body">
-        <p className="ctx-note-summary">{bar.summary}</p>
-      </div>
-    </details>
-  )
-}
-
-function MessageBubble({
-  message,
-  onOpenAudit,
-  canEdit,
-  canRegenerate,
-  canFork,
-  onEditStart,
-  onRegenerate,
-  onFork,
-}: {
-  message: RenderedMessage
-  onOpenAudit?: (sessionId: string) => void
-  /** While the session is idle, the last user bubble offers the edit entry (session-card hover pattern). */
-  canEdit?: boolean
-  /** While the session is idle, the last assistant bubble offers regenerate (rerun the last user message as-is). */
-  canRegenerate?: boolean
-  /** Session is idle and fork is wired: every bubble offers the fork entry. */
-  canFork?: boolean
-  onEditStart?: (currentText: string) => void
-  onRegenerate?: () => void
-  onFork?: (messageId: string) => void
-}) {
-  const streaming = message.pending && message.blocks.length === 0
-  // 组员来信（团队收信箱投递的用户消息）不渲染成用户气泡：改为 agent 一侧的
-  // 折叠条，点开看原文——模型收到什么不变，只是聊天页的画法。
-  const mail = message.role === "user" ? parseTeamMail(firstRenderedText(message)) : null
-  return (
-    <div
-      className={`message message-${message.role}${mail !== null ? " message-mail" : ""}`}
-      data-testid={`msg-${message.role}`}
-    >
-      {streaming && <div className="msg-pending" data-testid="msg-pending">…</div>}
-      {/* Only the assistant's side renders Markdown: the user's raw words stay
-          literal (a stray * or # in a typed message must not turn into markup). */}
-      {mail !== null ? (
-        <TeamMailView mail={mail} />
-      ) : (
-        message.blocks.map((block) => (
-          <BlockView key={block.blockId} block={block} markdown={message.role === "assistant"} onOpenAudit={onOpenAudit} />
-        ))
-      )}
-      {message.aborted === true && (
-        <span className="msg-aborted" data-testid="msg-aborted">已中断</span>
-      )}
-      {(canEdit === true || canRegenerate === true || onFork !== undefined) && (
-        <span className="msg-actions">
-          {canEdit === true && (
-            <IconButton
-              label="编辑"
-              icon={<PencilIcon />}
-              testid="msg-edit"
-              onClick={() => onEditStart?.(firstRenderedText(message))}
-            />
-          )}
-          {canRegenerate === true && (
-            <IconButton
-              label="重新生成"
-              icon={<RefreshIcon />}
-              testid="msg-regenerate"
-              onClick={() => onRegenerate?.()}
-            />
-          )}
-          {onFork !== undefined && (
-            <IconButton
-              label={canFork ? "从此处 fork" : "运行结束后可 fork"}
-              icon={<ForkIcon />}
-              testid="msg-fork"
-              disabled={!canFork}
-              onClick={() => onFork(message.id)}
-            />
-          )}
-        </span>
-      )}
-    </div>
-  )
-}
-
-/** First text render's text of a rendered message ("" when absent). */
-function firstRenderedText(m: RenderedMessage): string {
-  const first = m.blocks.find((b) => b.kind === "text")
-  return first !== undefined && first.kind === "text" ? first.text : ""
-}
-
-/** 组员来信折叠条：agent 一侧的窄条，摘要是发件人列表，展开看原文。 */
-function TeamMailView({ mail }: { mail: TeamMailParse }): React.ReactElement {
-  const senders = [...new Set(mail.entries.map((e) => e.from))].join("、")
-  return (
-    <details className="msg-team-mail" data-testid="msg-team-mail">
-      <summary>
-        📥 {mail.entries.length === 1 ? `收到来自 ${senders} 的来信` : `收到 ${mail.entries.length} 条来信（${senders}）`}
-      </summary>
-      {mail.entries.map((e, i) => (
-        <div key={i} className="mail-entry">
-          <div className="mail-from">【来自 {e.from}】</div>
-          <pre className="mail-text">{e.text}</pre>
-        </div>
-      ))}
-    </details>
-  )
-}
-
-/** Single-line preview: collapse whitespace, cap at 80 chars (full args open on click). */
-function oneLine(text: string): string {
-  const collapsed = text.replace(/\s+/g, " ").trim()
-  return collapsed.length > 80 ? `${collapsed.slice(0, 80)}…` : collapsed
 }
 
 /** Index of the last message matching pred; -1 when none. */
@@ -880,204 +519,4 @@ function findLastIdx(messages: RenderedMessage[], pred: (m: RenderedMessage) => 
     if (pred(messages[i]!)) return i
   }
   return -1
-}
-
-function BlockView({ block, markdown, onOpenAudit }: { block: RenderedBlock; markdown: boolean; onOpenAudit?: (sessionId: string) => void }) {
-  switch (block.kind) {
-    case "text":
-      return markdown ? (
-        <div className="blk-text md" data-testid="blk-text">
-          <MarkdownText text={block.text} />
-        </div>
-      ) : (
-        <p className="blk-text" data-testid="blk-text">{block.text}</p>
-      )
-    case "thinking":
-      return (
-        <details className="blk-thinking" data-testid="blk-thinking">
-          <summary>Thinking</summary>
-          <pre>{block.text === "" ? "…" : block.text}</pre>
-        </details>
-      )
-    case "note":
-      return <span className="blk-note" data-testid="blk-note">[note] {block.text}</span>
-    case "tool_call":
-      // Collapsed by default: the summary line is the tool name plus a
-      // one-line args preview; the full argsJson opens on click (clamped —
-      // a whole-file write must not swallow the chat pane).
-      return (
-        <details className="blk-tool-call" data-testid="blk-tool-call">
-          <summary>
-            ⚡ {block.name} <code>{oneLine(block.argsJson)}</code>
-          </summary>
-          <code className="blk-tool-call-args">{block.argsJson}</code>
-        </details>
-      )
-    case "tool_result": {
-      // A subagent dispatch row: the live status (streamed into output) is the
-      // summary's latest line, and the settled result links to the child's
-      // audit view via the executor-attached childSessionId.
-      const childSessionId = (block.data as { childSessionId?: string } | undefined)?.childSessionId
-      if (childSessionId !== undefined) {
-        return (
-          <details className="blk-tool-result" data-testid="blk-tool-result-subagent">
-            <summary>
-              ↳ subagent · {latestLine(block.output)}
-            </summary>
-            <pre>{block.output}</pre>
-            {onOpenAudit !== undefined && (
-              <button className="subagent-audit-link" data-testid="subagent-audit-link" onClick={() => onOpenAudit(childSessionId)}>
-                查看subagent审计
-              </button>
-            )}
-          </details>
-        )
-      }
-      return (
-        <details className="blk-tool-result" data-testid="blk-tool-result">
-          <summary>
-            {block.status === "ok" ? "↳ ok" : "↳ error"} · {Math.round(block.durationMs)}ms ·{" "}
-            {summarizeOutput(block.output)}
-          </summary>
-          <pre>{block.output}</pre>
-        </details>
-      )
-    }
-    case "attachment":
-      return <span className="blk-attachment" data-testid="blk-attachment">[attachment: {block.mimeType}]</span>
-  }
-}
-
-function ConfirmationCardView({
-  card,
-  onResolve,
-}: {
-  card: ConfirmationCard
-  onResolve: (confirmationId: string, decision: ConfirmationDecision) => void
-}) {
-  return (
-    <div className="confirm-card" data-testid="confirm-card">
-      <div className="confirm-title">需要确认</div>
-      <div className="confirm-tool">⚡ {card.toolName}</div>
-      {/* argsJson can carry a whole file's content — it must stay inside a
-          scroll-clamped block or the card swallows the chat pane and pushes
-          the resolve buttons out of the viewport. */}
-      <div className="confirm-args"><code>{card.argsJson}</code></div>
-      <div className="confirm-meta">风险 {card.risk} · 过期 {card.expiresAt}</div>
-      {card.noteText !== undefined && <div className="confirm-note">{card.noteText}</div>}
-      <div className="confirm-actions">
-        <button data-testid="confirm-once" onClick={() => onResolve(card.confirmationId, "once")}>仅本次</button>
-        <button data-testid="confirm-project" onClick={() => onResolve(card.confirmationId, "project")}>总是（本项目）</button>
-        <button data-testid="confirm-global" onClick={() => onResolve(card.confirmationId, "global")}>总是（全局）</button>
-        <button data-testid="confirm-reject" onClick={() => onResolve(card.confirmationId, "reject")}>拒绝</button>
-      </div>
-    </div>
-  )
-}
-
-/**
- * One pending ask_user_questions card: each question renders as option
- * buttons (single-pick submits immediately; multiSelect toggles + a submit
- * row) or a free-text input. Submitting sends the whole answer set — one
- * string array per question — as one question.resolve frame.
- */
-function QuestionCardView({
-  card,
-  onAnswer,
-}: {
-  card: QuestionCard
-  onAnswer: (questionId: string, answers: string[][]) => void
-}) {
-  const [textValues, setTextValues] = useState<string[]>(() => card.questions.map(() => ""))
-  const [multiPicks, setMultiPicks] = useState<string[][]>(() => card.questions.map(() => []))
-  // An empty answer array means "skipped" — the same contract as the CLI's
-  // enter-to-skip, and the tool result renders it as （未回答）.
-  const answers: string[][] = card.questions.map((q, i) => {
-    if (Array.isArray(q.options) && q.options.length > 0) return multiPicks[i] ?? []
-    const t = (textValues[i] ?? "").trim()
-    return t === "" ? [] : [t]
-  })
-  return (
-    <div className="question-card" data-testid="question-card">
-      <div className="confirm-head">
-        <span className="confirm-badge">问题待回答</span>
-        <span className="confirm-when">{card.questions.length} 个问题 · {formatExpiresAt(card.expiresAt)}</span>
-      </div>
-      {card.noteText !== undefined && <div className="confirm-note">{card.noteText}</div>}
-      {card.questions.map((q, i) => (
-        <div key={i} className="question-item" data-testid={`question-item-${i}`}>
-          <div className="question-text-label">
-            {Array.isArray(q.options) && q.options.length > 0 && (
-              <span className={q.multiSelect === true ? "question-mode multi" : "question-mode single"}>
-                {q.multiSelect === true ? "多选" : "单选"}
-              </span>
-            )}
-            {q.text}
-          </div>
-          {Array.isArray(q.options) && q.options.length > 0 ? (
-            <div className="question-options">
-              {q.options.map((opt) => {
-                const picked = multiPicks[i]?.includes(opt) ?? false
-                return (
-                  <button
-                    key={opt}
-                    data-testid={`question-${i}-option`}
-                    className={picked ? "question-picked" : undefined}
-                    onClick={() => {
-                      setMultiPicks((prev) => {
-                        const next = prev.map((p, j) => (j === i ? [...p] : p))
-                        const cur = next[i] ?? []
-                        if (q.multiSelect === true) {
-                          next[i] = picked ? cur.filter((x) => x !== opt) : [...cur, opt]
-                        } else {
-                          next[i] = [opt]
-                        }
-                        return next
-                      })
-                    }}
-                  >
-                    {opt}
-                  </button>
-                )
-              })}
-            </div>
-          ) : (
-            <input
-              className="question-text"
-              data-testid={`question-${i}-text`}
-              value={textValues[i] ?? ""}
-              placeholder="自由输入，留空跳过"
-              onChange={(e) => setTextValues((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))}
-            />
-          )}
-        </div>
-      ))}
-      <div className="question-actions">
-        <button className="primary" data-testid="question-submit" onClick={() => onAnswer(card.questionId, answers)}>
-          提交回答
-        </button>
-      </div>
-    </div>
-  )
-}
-
-/** Whitespace-collapsed, first-80-chars summary for a tool result card. */
-function summarizeOutput(output: string): string {
-  const text = output.replace(/\s+/g, " ").trim()
-  return text.length > 80 ? `${text.slice(0, 80)}…` : text
-}
-
-/** Expiry stamps arrive as ISO strings; cards show a local HH:mm:ss instead. */
-function formatExpiresAt(iso: string): string {
-  const at = new Date(iso)
-  if (Number.isNaN(at.getTime())) return iso
-  const p = (n: number): string => String(n).padStart(2, "0")
-  return `${p(at.getHours())}:${p(at.getMinutes())}:${p(at.getSeconds())} 前有效`
-}
-
-/** Last non-empty line of a streaming subagent status feed (the live one-liner). */
-function latestLine(output: string): string {
-  const lines = output.split("\n").map((l) => l.trim()).filter((l) => l !== "")
-  const last = lines[lines.length - 1] ?? ""
-  return last.length > 100 ? `${last.slice(0, 100)}…` : last
 }

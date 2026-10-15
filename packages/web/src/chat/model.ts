@@ -280,6 +280,30 @@ export function dropLocalPending(state: ChatState, texts: string[]): ChatState {
   }
 }
 
+/**
+ * Roll the earliest unconfirmed optimistic send back out of the view — the
+ * counterpart of {@link adoptQueuedId} for the error-frame path. The daemon's
+ * error frames carry no request correlation (`{type:"error", message}`), but
+ * frames arrive in wire order on one connection: an error landing while a
+ * `local-` echo is still unconfirmed is that send/retry's rejection (an
+ * earlier send's ack — or its own error — has already been applied). Bubbles
+ * precede rows (a bubble exists only if the send went out idle, i.e. before
+ * any still-pending row), so "earliest bubble, else earliest row" walks send
+ * order. The server rejected the retry WITHOUT truncating anything, so the
+ * original message and its edit entry stay — only the phantom echo goes.
+ */
+export function dropEarliestPendingSend(state: ChatState): ChatState {
+  const bubbleIdx = earliestPendingLocalIdx(state.messages)
+  if (bubbleIdx !== -1) {
+    return { ...state, messages: state.messages.filter((_, i) => i !== bubbleIdx) }
+  }
+  const rowIdx = earliestPendingLocalRowIdx(state.queue)
+  if (rowIdx !== -1) {
+    return { ...state, queue: state.queue.filter((_, i) => i !== rowIdx) }
+  }
+  return state
+}
+
 /** Narrow a wire disposition string to the view union ("wait" as the fallback). */
 function asDisposition(d: string): QueueEntryView["disposition"] {
   return d === "steer" || d === "wait" || d === "interrupt" ? d : "wait"

@@ -8,7 +8,9 @@
 import { describe, it, expect, vi } from "vitest"
 import { createRoot, type Root } from "react-dom/client"
 import { act } from "react"
-import { ChatView, availableSlashMenuMaxHeight, compactionBars, type CompactionRecordView, type Disposition } from "../../src/chat/ChatView.js"
+import { ChatView, type Disposition } from "../../src/chat/ChatView.js"
+import { availableSlashMenuMaxHeight } from "../../src/chat/Composer.js"
+import { compactionBars, type CompactionRecordView } from "../../src/chat/CompactionBars.js"
 import { initChat, type ChatState, type Message } from "../../src/chat/model.js"
 
 /** Optional props/view overrides for the new disposition/queue scenarios. */
@@ -35,13 +37,15 @@ interface ViewOpts {
 }
 
 function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
-  const onSend = vi.fn()
+  // onSend 返回 true（发送被接受）——composer 据此清空草稿，与真实路径一致。
+  const onSend = vi.fn((): boolean => true)
   const container = document.createElement("div")
   document.body.appendChild(container)
   const root = createRoot(container)
   act(() => {
     root.render(
       <ChatView
+        sessionId="s1"
         view={{ ...initChat(messages), ...opts.view }}
         onSend={onSend}
         onResolveConfirmation={vi.fn()}

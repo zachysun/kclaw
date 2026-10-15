@@ -139,8 +139,9 @@ describe("ChatView usage slot", () => {
     act(() => {
       root.render(
         <ChatView
+          sessionId="s1"
           view={initChat(messages)}
-          onSend={() => {}}
+          onSend={() => true}
           onResolveConfirmation={() => {}}
           onAnswerQuestion={() => {}}
           pendingAttachments={[]}

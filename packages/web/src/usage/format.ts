@@ -1,7 +1,7 @@
 /**
- * usage 显示策略（两个视图共用）：命中率算式、紧凑 token 数、"缺数据显示
- * —"。记录页（UsageView）与仪表条（SessionUsageStrip）分组件渲染，但策略
- * 不随组件走——改分母口径或缩写规则，这里一处生效两处。
+ * usage 显示策略与会话列表/管理页的时间戳、对话页卡片时钟共用：命中率算式、
+ * 紧凑 token 数、"缺数据显示 —"、三类时间格式化。改分母口径、缩写规则或
+ * 时区呈现，这里一处生效所有调用点（全站唯一时间格式化实现）。
  */
 import type { UsageAgg } from "@kclaw/core/protocol"
 
@@ -29,4 +29,40 @@ export function fmtCompact(n: number): string {
     return `${k >= 100 ? Math.round(k) : Math.round(k * 10) / 10}k`
   }
   return `${Math.round((n / 1_000_000) * 10) / 10}M`
+}
+
+/** "2026-09-06T12:34:56.789Z" → "2026-09-06 12:34"（本地时区；解析失败原样返回）。 */
+export function formatStamp(input: string): string {
+  const d = new Date(input)
+  if (Number.isNaN(d.getTime())) return input
+  const pad = (n: number): string => String(n).padStart(2, "0")
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/**
+ * 列表紧凑戳（全站唯一实现，原 SessionList.formatWhen 口径）：今天 →
+ * HH:mm，今年 → MM/DD HH:mm，往年 → YYYY/MM/DD HH:mm。input 接受 ISO 字符
+ * 串或 epoch 毫秒；解析失败原样返回。`now` 仅供测试注入。
+ */
+export function formatCompactStamp(input: string | number, now: Date = new Date()): string {
+  const raw = typeof input === "number" ? new Date(input).toISOString() : input
+  const date = new Date(raw)
+  if (Number.isNaN(date.getTime())) return raw
+  const pad = (n: number): string => String(n).padStart(2, "0")
+  const hhmm = `${pad(date.getHours())}:${pad(date.getMinutes())}`
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  if (sameDay) return hhmm
+  const md = `${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${hhmm}`
+  return date.getFullYear() === now.getFullYear() ? md : `${date.getFullYear()}/${md}`
+}
+
+/** "…T12:34:56.789Z" → "12:34:56"（本地时区，秒级——确认卡的有限期截点）。解析失败原样返回。 */
+export function formatClock(input: string): string {
+  const d = new Date(input)
+  if (Number.isNaN(d.getTime())) return input
+  const pad = (n: number): string => String(n).padStart(2, "0")
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }

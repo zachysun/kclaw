@@ -10,7 +10,7 @@
  * completion. Keys echo back masked by design; a blank key field on save
  * means "keep the stored key" (honored server-side).
  */
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { PROVIDER_WIRE_FORMAT_IDS, resolveFormat, type ProviderApiFormat } from "@kclaw/core/provider-formats"
 import type { ApiClient } from "../api.js"
 import { emitProvidersChanged } from "../events.js"
@@ -107,13 +107,8 @@ export function ModelView({ api, notice }: {
   api: ApiClient
   notice: NoticeFn
 }) {
-  // notice goes through a ref: App passes an inline arrow that is a fresh
-  // reference each render; depending on `notice` would refetch on every parent
-  // re-render (same guard as McpView).
-  const noticeRef = useRef(notice)
-  useEffect(() => {
-    noticeRef.current = notice
-  })
+  // notice comes from App's useToasts: its identity is stable across renders
+  // (empty-deps useCallback), so it goes straight into callback deps.
 
   const [snap, setSnap] = useState<ProvidersSnapshot | null>(null)
   const [form, setForm] = useState<FormState | null>(null)
@@ -125,8 +120,8 @@ export function ModelView({ api, notice }: {
     return api
       .get<ProvidersSnapshot>("/providers")
       .then(setSnap)
-      .catch((e) => noticeRef.current(`加载 provider 配置失败: ${String(e)}`, "error"))
-  }, [api])
+      .catch((e) => notice(`加载 provider 配置失败: ${String(e)}`, "error"))
+  }, [api, notice])
 
   useEffect(() => {
     void reload()
@@ -139,7 +134,7 @@ export function ModelView({ api, notice }: {
       emitProvidersChanged() // the chat page's model selector rereads /config on this
       await reload()
     } catch (e) {
-      noticeRef.current(`操作失败: ${String(e)}`, "error")
+      notice(`操作失败: ${String(e)}`, "error")
     }
   }
 
@@ -150,7 +145,7 @@ export function ModelView({ api, notice }: {
       const r = await api.post<{ ok: boolean; models?: string[]; error?: string }>("/providers/models", payload)
       return r.models ?? []
     } catch (e) {
-      noticeRef.current(`连接验证失败: ${String(e)}`, "error")
+      notice(`连接验证失败: ${String(e)}`, "error")
       return null
     } finally {
       setProbing(null)
@@ -159,7 +154,7 @@ export function ModelView({ api, notice }: {
 
   const verifyEntry = async (name: string): Promise<void> => {
     const models = await probe({ name }, `entry:${name}`)
-    if (models !== null) noticeRef.current(`验证成功：${name} 可达，${models.length} 个模型可用`)
+    if (models !== null) notice(`验证成功：${name} 可达，${models.length} 个模型可用`)
   }
 
   const fetchModels = async (f: FormState): Promise<void> => {
@@ -169,7 +164,7 @@ export function ModelView({ api, notice }: {
     const models = await probe(payload, "form")
     if (models === null) return
     if (models.length === 0) {
-      noticeRef.current("连接成功，但该端点没有返回任何模型")
+      notice("连接成功，但该端点没有返回任何模型")
       return
     }
     setForm((prev) => (prev === null ? prev : { ...prev, models, model: models.includes(prev.model) ? prev.model : models[0]! }))

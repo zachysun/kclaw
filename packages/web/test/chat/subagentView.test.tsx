@@ -16,8 +16,9 @@ function mountWith(view: ChatState, onOpenAudit?: (sessionId: string) => void, o
   act(() => {
     root.render(
       <ChatView
+        sessionId="s1"
         view={view}
-        onSend={vi.fn()}
+        onSend={vi.fn((): boolean => true)}
         onResolveConfirmation={vi.fn()}
         onAnswerQuestion={vi.fn()}
         pendingAttachments={[]}
