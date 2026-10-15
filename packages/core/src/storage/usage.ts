@@ -10,6 +10,8 @@ export interface UsageRow {
   sessionId: string
   runId: string
   model: string
+  /** Row class: the run itself, or which background chore spent these tokens. */
+  kind: UsageKind
   inputTokens: number
   outputTokens: number
   /** Prompt-cache read tokens; omitted = the provider reported no metric. */
@@ -21,6 +23,9 @@ export interface UsageRow {
 
 /** Which background chore a usage row belongs to (the runId's prefix). */
 export type ChoreKind = "compaction" | "autoname" | "memory" | "skill"
+
+/** Row class of a usage row: main runs vs background chores (goal judge included). */
+export type UsageKind = "run" | ChoreKind | "goal"
 
 /**
  * Metering seam for background chore LLM calls (compaction summaries, session
@@ -54,6 +59,7 @@ CREATE TABLE IF NOT EXISTS usage (
   session_id TEXT NOT NULL,
   run_id TEXT NOT NULL,
   model TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'run',
   input_tokens INTEGER NOT NULL,
   output_tokens INTEGER NOT NULL,
   cache_read_tokens INTEGER,
@@ -68,6 +74,7 @@ interface UsageDbRow {
   session_id: string
   run_id: string
   model: string
+  kind: string
   input_tokens: number
   output_tokens: number
   cache_read_tokens: number | null
@@ -126,7 +133,7 @@ export class UsageStore {
     mkdirSync(dirname(dbPath), { recursive: true })
     this.db = new Database(dbPath)
     this.db.exec(SCHEMA)
-    // Pre-existing DBs (created before the cache columns) get them via ALTER;
+    // Pre-existing DBs (created before the cache/kind columns) get them via ALTER;
     // CREATE TABLE IF NOT EXISTS does not extend an existing table.
     const cols = this.db.prepare("PRAGMA table_info(usage)").all() as Array<{ name: string }>
     if (!cols.some((c) => c.name === "cache_read_tokens")) {
@@ -134,6 +141,10 @@ export class UsageStore {
     }
     if (!cols.some((c) => c.name === "cache_write_tokens")) {
       this.db.exec("ALTER TABLE usage ADD COLUMN cache_write_tokens INTEGER")
+    }
+    if (!cols.some((c) => c.name === "kind")) {
+      // 存量行全部是主 run（kind 列引入前只有 run 记账）。
+      this.db.exec("ALTER TABLE usage ADD COLUMN kind TEXT NOT NULL DEFAULT 'run'")
     }
   }
 
@@ -145,14 +156,15 @@ export class UsageStore {
   record(row: Omit<UsageRow, "id">): void {
     this.db
       .prepare(
-        `INSERT INTO usage (id, session_id, run_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO usage (id, session_id, run_id, model, kind, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         `u_${row.sessionId}_${row.runId}`,
         row.sessionId,
         row.runId,
         row.model,
+        row.kind,
         row.inputTokens,
         row.outputTokens,
         row.cacheReadTokens ?? null,
@@ -161,16 +173,18 @@ export class UsageStore {
       )
   }
 
-  /** Aggregate by day | session | model over [from, to); cost via the price table. */
+  /** Aggregate by day | session | model | kind over [from, to); cost via the price table. */
   aggregate(
-    by: "day" | "session" | "model",
+    by: "day" | "session" | "model" | "kind",
     prices: UsagePrices,
     from?: Date,
     to?: Date,
   ): UsageAgg[] {
     const keyOf = by === "day"
       ? (r: UsageDbRow) => localDay(r.at)
-      : by === "session" ? (r: UsageDbRow) => r.session_id : (r: UsageDbRow) => r.model
+      : by === "session" ? (r: UsageDbRow) => r.session_id
+      : by === "kind" ? (r: UsageDbRow) => r.kind
+      : (r: UsageDbRow) => r.model
     const buckets = this.foldRows(this.selectRows(from, to), prices, keyOf)
     return [...buckets.entries()]
       .map(([key, b]) => ({ key, ...b }))

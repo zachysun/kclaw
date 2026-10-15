@@ -23,17 +23,19 @@ function hasCost(body: UsageBody | null): boolean {
 export function UsageView({ api }: { api: ApiClient }) {
   const [daily, setDaily] = useState<UsageBody | null>(null)
   const [bySession, setBySession] = useState<UsageBody | null>(null)
+  const [byKind, setByKind] = useState<UsageBody | null>(null)
   const [sessions, setSessions] = useState<SessionMeta[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [exportFailed, setExportFailed] = useState(false)
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([api.get<UsageBody>("/usage?by=day"), api.get<UsageBody>("/usage?by=session")])
-      .then(([d, s]) => {
+    Promise.all([api.get<UsageBody>("/usage?by=day"), api.get<UsageBody>("/usage?by=session"), api.get<UsageBody>("/usage?by=kind")])
+      .then(([d, s, k]) => {
         if (cancelled) return
         setDaily(d)
         setBySession(s)
+        setByKind(k)
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err))
@@ -84,6 +86,7 @@ export function UsageView({ api }: { api: ApiClient }) {
 
   const showDailyCost = hasCost(daily)
   const showSessionCost = hasCost(bySession)
+  const showKindCost = hasCost(byKind)
 
   return (
     <div className="usage-view" data-testid="usage-view">
@@ -147,6 +150,35 @@ export function UsageView({ api }: { api: ApiClient }) {
                 </span>
               </td>
               {showSessionCost && <td className="num">{b.costUsd === 0 ? "—" : fmtCost(b.costUsd)}</td>}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <h4>按类型</h4>
+      <table data-testid="usage-kind-table">
+        <thead>
+          <tr>
+            <th>类型</th><th>输入</th><th>输出</th><th>合计</th>
+            <th>缓存读</th><th>缓存写</th><th>命中率</th><th>分布</th>
+            {showKindCost && <th>费用</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {(byKind?.buckets ?? []).map((b) => (
+            <tr key={b.key}>
+              <td className="usage-kind-name" title={b.key}>{b.key}</td>
+              <td className="num">{fmt(b.inputTokens)}</td>
+              <td className="num">{fmt(b.outputTokens)}</td>
+              <td className="num">{fmt(total(b))}</td>
+              <td className="num">{b.cacheReadTokens === null ? "—" : fmt(b.cacheReadTokens)}</td>
+              <td className="num">{b.cacheWriteTokens === null ? "—" : fmt(b.cacheWriteTokens)}</td>
+              <td className="num">{hitRate(b) ?? "—"}</td>
+              <td className="usage-bar-cell" title={`${fmt(total(b))} token`}>
+                <span className="usage-bar-track">
+                  <span className="usage-bar" style={{ width: `${(total(b) / maxOf(byKind)) * 100}%` }} />
+                </span>
+              </td>
+              {showKindCost && <td className="num">{b.costUsd === 0 ? "—" : fmtCost(b.costUsd)}</td>}
             </tr>
           ))}
         </tbody>

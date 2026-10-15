@@ -226,6 +226,12 @@ export interface RunEngineDeps {
   /** Per-run token ledger (optional; recording failures are swallowed). */
   usageStore?: UsageStore
   /**
+   * Cache attribution snapshots（R5）：sessionKey → 上次组装快照（JSON）。
+   * daemon 持有一个 Map 传进来（内存态，重启即无基准）；省略时 loop 完全
+   * 跳过归因。快照体积 ≈ 消息条数 × hash+摘录，每会话 KB 量级。
+   */
+  cacheSnapshots?: Map<string, string>
+  /**
    * Chore metering for the run's background LLM calls (compaction summaries,
    * autoname): forwarded to the Compactor and the builtin hooks. Optional
    * (tests and bare engines omit it — the spend stays unrecorded).
@@ -886,6 +892,16 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       // 的前提；显式配置 N≥1 的用户保留旧的滚动省略行为。
       toolResultKeep: config.sessions.toolResultKeep ?? 0,
       loopMaxRepeats: config.sessions.toolLoopMaxRepeats,
+      // 缓存归因探针（R5）：快照按会话存 daemon 级 Map，跨 run 比对前缀
+      // 变化；未配置（裸引擎/测试）时 loop 跳过归因。
+      ...(engine.deps.cacheSnapshots === undefined
+        ? {}
+        : {
+            cacheProbe: {
+              load: () => engine.deps.cacheSnapshots!.get(sessionId) ?? null,
+              save: (snapshot: string) => engine.deps.cacheSnapshots!.set(sessionId, snapshot),
+            },
+          }),
       // 省略budget（省略线值）透传给打包台：budget装不下的工具输出以省略占位符发送；
       // 固定开销（系统提示词 + 工具定义）先行扣除，打包台只裁决消息内容
       tokenBudget: Math.max(0, waterlines.pack - contextOverheadRef.current),

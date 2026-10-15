@@ -181,7 +181,13 @@ export class RunManager {
     })
     this.#broker = deps.broker ?? new ConfirmationBroker()
     this.#engine = {
-      deps: { ...deps, broker: this.#broker },
+      deps: {
+        ...deps,
+        broker: this.#broker,
+        // 缓存归因快照（R5）：daemon 级内存表，sessionKey → 上次组装指纹；
+        // 管理器重建即无基准（首个 run 不报归因），无持久化需要。
+        cacheSnapshots: new Map(),
+      },
       compactor: this.#compactor,
     }
   }

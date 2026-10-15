@@ -17,8 +17,8 @@ const CACHE_PRICES = { ...PRICES, glm: { ...PRICES.glm, cacheReadPerM: 0.1, cach
 describe("UsageStore", () => {
   it("records rows and totals tokens with cost from the price table", () => {
     const { store, cleanup } = makeStore()
-    store.record({ sessionId: "s1", runId: "r1", model: "glm", inputTokens: 1_000_000, outputTokens: 500_000, at: "2026-08-25T10:00:00.000Z" })
-    store.record({ sessionId: "s1", runId: "r2", model: "deep", inputTokens: 2_000_000, outputTokens: 0, at: "2026-08-25T11:00:00.000Z" })
+    store.record({ sessionId: "s1", runId: "r1", model: "glm", kind: "run", inputTokens: 1_000_000, outputTokens: 500_000, at: "2026-08-25T10:00:00.000Z" })
+    store.record({ sessionId: "s1", runId: "r2", model: "deep", kind: "run", inputTokens: 2_000_000, outputTokens: 0, at: "2026-08-25T11:00:00.000Z" })
     const t = store.total(PRICES)
     expect(t.inputTokens).toBe(3_000_000)
     expect(t.outputTokens).toBe(500_000)
@@ -33,9 +33,9 @@ describe("UsageStore", () => {
 
   it("aggregates by model, session and local day", () => {
     const { store, cleanup } = makeStore()
-    store.record({ sessionId: "s1", runId: "r1", model: "glm", inputTokens: 100, outputTokens: 10, at: "2026-08-24T23:00:00.000Z" })
-    store.record({ sessionId: "s2", runId: "r2", model: "glm", inputTokens: 200, outputTokens: 20, at: "2026-08-25T01:00:00.000Z" })
-    store.record({ sessionId: "s1", runId: "r3", model: "deep", inputTokens: 300, outputTokens: 30, at: "2026-08-25T02:00:00.000Z" })
+    store.record({ sessionId: "s1", runId: "r1", model: "glm", kind: "run", inputTokens: 100, outputTokens: 10, at: "2026-08-24T23:00:00.000Z" })
+    store.record({ sessionId: "s2", runId: "r2", model: "glm", kind: "run", inputTokens: 200, outputTokens: 20, at: "2026-08-25T01:00:00.000Z" })
+    store.record({ sessionId: "s1", runId: "r3", model: "deep", kind: "run", inputTokens: 300, outputTokens: 30, at: "2026-08-25T02:00:00.000Z" })
 
     const byModel = store.aggregate("model", PRICES)
     expect(byModel).toEqual([
@@ -55,8 +55,8 @@ describe("UsageStore", () => {
 
   it("filters by time range", () => {
     const { store, cleanup } = makeStore()
-    store.record({ sessionId: "s1", runId: "r1", model: "glm", inputTokens: 100, outputTokens: 0, at: "2026-08-24T00:00:00.000Z" })
-    store.record({ sessionId: "s1", runId: "r2", model: "glm", inputTokens: 200, outputTokens: 0, at: "2026-08-25T00:00:00.000Z" })
+    store.record({ sessionId: "s1", runId: "r1", model: "glm", kind: "run", inputTokens: 100, outputTokens: 0, at: "2026-08-24T00:00:00.000Z" })
+    store.record({ sessionId: "s1", runId: "r2", model: "glm", kind: "run", inputTokens: 200, outputTokens: 0, at: "2026-08-25T00:00:00.000Z" })
     const t = store.total({}, new Date("2026-08-25T00:00:00.000Z"), new Date("2026-08-26T00:00:00.000Z"))
     expect(t.inputTokens).toBe(200)
     cleanup()
@@ -66,8 +66,8 @@ describe("UsageStore", () => {
 describe("UsageStore 缓存字段", () => {
   it("records cache fields and reads them back; omitted fields stay NULL (unknown, not 0)", () => {
     const { store, cleanup } = makeStore()
-    store.record({ sessionId: "s1", runId: "r1", model: "glm", inputTokens: 100, outputTokens: 10, cacheReadTokens: 60, cacheWriteTokens: 30, at: "2026-08-25T10:00:00.000Z" })
-    store.record({ sessionId: "s1", runId: "r2", model: "glm", inputTokens: 50, outputTokens: 5, at: "2026-08-25T11:00:00.000Z" })
+    store.record({ sessionId: "s1", runId: "r1", model: "glm", kind: "run", inputTokens: 100, outputTokens: 10, cacheReadTokens: 60, cacheWriteTokens: 30, at: "2026-08-25T10:00:00.000Z" })
+    store.record({ sessionId: "s1", runId: "r2", model: "glm", kind: "run", inputTokens: 50, outputTokens: 5, at: "2026-08-25T11:00:00.000Z" })
     const agg = store.aggregate("model", PRICES)
     expect(agg[0]).toEqual({ key: "glm", inputTokens: 150, outputTokens: 15, costUsd: agg[0]!.costUsd, cacheReadTokens: 60, cacheWriteTokens: 30 })
     cleanup()
@@ -76,11 +76,11 @@ describe("UsageStore 缓存字段", () => {
   it("bucket NULL semantics: all-NULL bucket → null; mixed rows → sum of the known values", () => {
     const { store, cleanup } = makeStore()
     // s-all: two rows, neither carries cache metrics → null (unknown)
-    store.record({ sessionId: "s-all", runId: "r1", model: "glm", inputTokens: 100, outputTokens: 10, at: "2026-08-25T10:00:00.000Z" })
-    store.record({ sessionId: "s-all", runId: "r2", model: "glm", inputTokens: 100, outputTokens: 10, at: "2026-08-25T10:05:00.000Z" })
+    store.record({ sessionId: "s-all", runId: "r1", model: "glm", kind: "run", inputTokens: 100, outputTokens: 10, at: "2026-08-25T10:00:00.000Z" })
+    store.record({ sessionId: "s-all", runId: "r2", model: "glm", kind: "run", inputTokens: 100, outputTokens: 10, at: "2026-08-25T10:05:00.000Z" })
     // s-mix: one row without, one with → sum of the known values only
-    store.record({ sessionId: "s-mix", runId: "r1", model: "glm", inputTokens: 100, outputTokens: 10, at: "2026-08-25T11:00:00.000Z" })
-    store.record({ sessionId: "s-mix", runId: "r2", model: "glm", inputTokens: 100, outputTokens: 10, cacheReadTokens: 40, cacheWriteTokens: 20, at: "2026-08-25T11:05:00.000Z" })
+    store.record({ sessionId: "s-mix", runId: "r1", model: "glm", kind: "run", inputTokens: 100, outputTokens: 10, at: "2026-08-25T11:00:00.000Z" })
+    store.record({ sessionId: "s-mix", runId: "r2", model: "glm", kind: "run", inputTokens: 100, outputTokens: 10, cacheReadTokens: 40, cacheWriteTokens: 20, at: "2026-08-25T11:05:00.000Z" })
 
     const bySession = store.aggregate("session", PRICES)
     const all = bySession.find((a) => a.key === "s-all")!
@@ -109,7 +109,7 @@ describe("UsageStore 缓存字段", () => {
     legacy.close()
 
     const store = new UsageStore(dbPath)
-    store.record({ sessionId: "s1", runId: "r1", model: "glm", inputTokens: 100, outputTokens: 10, cacheReadTokens: 70, at: "2026-08-25T10:00:00.000Z" })
+    store.record({ sessionId: "s1", runId: "r1", model: "glm", kind: "run", inputTokens: 100, outputTokens: 10, cacheReadTokens: 70, at: "2026-08-25T10:00:00.000Z" })
     const bySession = store.aggregate("session", PRICES)
     expect(bySession).toHaveLength(1)
     expect(bySession[0]).toMatchObject({ inputTokens: 1100, outputTokens: 110, cacheReadTokens: 70, cacheWriteTokens: null })
@@ -149,9 +149,9 @@ describe("UsageStore aggregate/total share one fold", () => {
     try {
       const store = new UsageStore(join(dir, "usage.db"))
       const at = new Date().toISOString()
-      store.record({ sessionId: "ses_a", runId: "r1", model: "m", inputTokens: 10, outputTokens: 5, cacheReadTokens: 4, at })
-      store.record({ sessionId: "ses_a", runId: "r2", model: "m", inputTokens: 20, outputTokens: 6, at })
-      store.record({ sessionId: "ses_b", runId: "r3", model: "m", inputTokens: 30, outputTokens: 7, cacheWriteTokens: 2, at })
+      store.record({ sessionId: "ses_a", runId: "r1", model: "m", kind: "run", inputTokens: 10, outputTokens: 5, cacheReadTokens: 4, at })
+      store.record({ sessionId: "ses_a", runId: "r2", model: "m", kind: "run", inputTokens: 20, outputTokens: 6, at })
+      store.record({ sessionId: "ses_b", runId: "r3", model: "m", kind: "run", inputTokens: 30, outputTokens: 7, cacheWriteTokens: 2, at })
       const buckets = store.aggregate("session", PRICES)
       const total = store.total(PRICES)
       expect(total.inputTokens).toBe(buckets.reduce((n, b) => n + b.inputTokens, 0))
@@ -171,3 +171,48 @@ describe("UsageStore aggregate/total share one fold", () => {
 function localDayKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
 }
+
+describe("UsageStore kind 列（主 run / 后台任务口径）", () => {
+  it("writes and aggregates by kind; rows default to explicit kinds from the writer", () => {
+    const { store, cleanup } = makeStore()
+    try {
+      store.record({ sessionId: "s1", runId: "r1", model: "glm", kind: "run", inputTokens: 100, outputTokens: 10, cacheReadTokens: 60, at: "2026-08-25T10:00:00.000Z" })
+      store.record({ sessionId: "s1", runId: "compaction-1", model: "glm", kind: "compaction", inputTokens: 50, outputTokens: 5, at: "2026-08-25T10:01:00.000Z" })
+      store.record({ sessionId: "s1", runId: "goal-judge-1-1", model: "glm", kind: "goal", inputTokens: 30, outputTokens: 3, at: "2026-08-25T10:02:00.000Z" })
+      const byKind = store.aggregate("kind", PRICES)
+      const kinds = Object.fromEntries(byKind.map((b) => [b.key, b]))
+      expect(Object.keys(kinds).sort()).toEqual(["compaction", "goal", "run"])
+      expect(kinds.run).toMatchObject({ inputTokens: 100, cacheReadTokens: 60, cacheWriteTokens: null })
+      expect(kinds.compaction).toMatchObject({ inputTokens: 50, cacheReadTokens: null })
+      expect(kinds.goal).toMatchObject({ inputTokens: 30, outputTokens: 3 })
+      // 旧三维不受影响：kind 不泄漏进 day/session/model 桶。
+      expect(store.aggregate("session", PRICES)).toHaveLength(1)
+    } finally {
+      cleanup()
+    }
+  })
+
+  it("migrates a pre-kind db: column added with 'run' default, old rows read as run", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kclaw-usage-nokind-"))
+    const dbPath = join(dir, "usage.db")
+    const legacy = new Database(dbPath)
+    legacy.exec(`CREATE TABLE IF NOT EXISTS usage (
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL, run_id TEXT NOT NULL, model TEXT NOT NULL,
+      input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+      cache_read_tokens INTEGER, cache_write_tokens INTEGER, at TEXT NOT NULL
+    );`)
+    legacy.prepare("INSERT INTO usage (id, session_id, run_id, model, input_tokens, output_tokens, at) VALUES (?,?,?,?,?,?,?)")
+      .run("u_old", "s1", "r0", "glm", 1000, 100, "2026-08-01T00:00:00.000Z")
+    legacy.close()
+
+    const store = new UsageStore(dbPath)
+    const byKind = store.aggregate("kind", PRICES)
+    expect(byKind).toHaveLength(1)
+    expect(byKind[0]).toMatchObject({ key: "run", inputTokens: 1000 })
+    // 新行继续可写（kind 必填由 writer 提供）。
+    store.record({ sessionId: "s1", runId: "memory-1", model: "glm", kind: "memory", inputTokens: 10, outputTokens: 1, at: "2026-08-25T10:00:00.000Z" })
+    expect(store.aggregate("kind", PRICES)).toHaveLength(2)
+    store.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+})
