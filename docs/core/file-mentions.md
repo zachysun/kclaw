@@ -25,7 +25,7 @@
 
 1. **工作区解析** `resolveFileMentions(text, workspace)`：每个 token 相对会话工作目录（默认 daemon 的 `workspace`）解析，realpath 后必须落在工作区内且是普通文件 → `ok`；不是文件 → `missing`；逃逸 → 整个丢弃（不产生指示行）。
 2. **合并** `combineMentionTexts`：技能指定的包装文本（见 [skills](./skills.md)）与文件指定的指示行合并成一份 `llmUserText`——两者都不匹配时保持原样。
-3. **应用**：`llmUserText` 经内置 `skill-wrap` hook（`llm-before` 位置，见 [hooks](./hooks.md)）的 `withLastUserText` 替换发送消息里最后一条 user 消息的文本。只在这一步影响模型输入。
+3. **应用**：`llmUserText` 经内置 `skill-wrap` hook（`llm-before` 位置，见 [hooks](./hooks.md)）的 `withLastUserText` 按内容锚定到本轮 user 消息（steer 插话挤到列表末尾时仍按内容找到本轮消息，不会误改插话）并替换其文本。只在这一步影响模型输入；包装文本已在组装层记录到消息的 `llmText` 标记、之后按标记重放（见 [agent-loop](./agent-loop.md) 的包装标记重放）。
 
 ## 数据源：GET /fs/files（server `routes/fs.ts`）
 

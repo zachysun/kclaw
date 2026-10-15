@@ -44,7 +44,7 @@
 | POST | `/sessions/:id/disposition` | 会话级发送处置覆盖（CLI `/steer`、`/wait` 与 Web 三选的 steer/wait 的持续生效存储；interrupt 在 Web 为一次性、CLI 为 `/interrupt` 一次性动作，均不写覆盖） | `{disposition: "steer"\|"wait"\|"interrupt"}` 必填；非法值 400 `disposition must be "steer", "wait" or "interrupt"` | `SessionMeta`（写入 `dispositionOverride`，优先于配置默认） |
 | GET | `/sessions/:id/compactions` | 压缩审计记录（事件流里 `compaction` 事件的只读视图） | — | `CompactionRecord[]`（从 events.jsonl 过滤 `compaction` 事件按事件序返回；无事件返回 `[]`） |
 | POST | `/sessions/:id/compact` | 手动压缩：跳过触发线立即压缩一次（机制见 [compaction](../core/compaction.md)） | `{focus?}`：可选非空字符串，作为重点说明进入两次摘要调用；空串/非字符串 400 `focus must be a non-empty string` | `{message: string, queued?: boolean}`：成功 `压缩了 N 段，剩 X 条原文消息`；无可压缩内容 `无可压缩内容`；会话忙时排队 `{queued: true, message: "已排队：当前运行结束后自动压缩"}` |
-| POST | `/sessions/:id/fork` | 从指定消息 fork 出新会话：把截至该消息所属 run 结束的全部事件（含压缩状态与附件文件）复制成全新独立会话，原会话一字节不动；复制段经 `writeEventsRaw` 直写、不过总线（无 `session.appended` 帧、不喂检索索引），新会话只在自身流上落一条 `session.forked` 血缘事件；记忆提取进度播种到分叉点（复制段不重复提取）。机制见 [storage](../core/storage.md) | `{messageId?}`：分叉点消息 id（省略 = 复制全部历史）；非空字符串校验失败 400 `messageId must be a non-empty string`；分叉点消息不在事件流里（消息被重试截掉、传了过期 id 等）400 `fork 点不存在：<id>`；会话不存在 404；subagent 会话 400；会话未空闲（run 进行中/有排队/压缩中）409 `运行结束后可 fork`；fork 宿主未组装 503；fork 内部失败（磁盘、附件拷贝等）500 `fork 失败：内部错误`（细节进 daemon 日志，不回传本机路径） | 201，新会话 `SessionMeta`（标题 = 原标题 + `· fork` 后缀，`forkedFrom` 记录来源会话与分叉点） |
+| POST | `/sessions/:id/fork` | 从指定消息 fork 出新会话：把截至该消息所属 run 结束的全部事件（含压缩状态与附件文件）复制成全新独立会话，原会话一字节不动；复制段经 `writeEventsRaw` 直写、不过总线（无 `session.appended` 帧、不喂检索索引），新会话只在自身流上落一条 `session.forked` 血缘事件；记忆提取进度播种到分叉点（复制段不重复提取）。机制见 [storage](../core/storage.md) | `{messageId?}`：分叉点消息 id（省略 = 复制全部历史）；非空字符串校验失败 400 `messageId must be a non-empty string`；分叉点消息不在事件流里（消息被重试截掉、传了过期 id 等）400 `fork 点不存在：<id>`；会话不存在或已软删（在回收站）404；subagent 会话与团队组员会话 400（两者都带 `parentSessionId`，禁令按它判定）；会话未空闲（run 进行中/有排队/压缩中）409 `运行结束后可 fork`；fork 宿主未组装 503；fork 内部失败（磁盘、附件拷贝等）500 `fork 失败：内部错误`（细节进 daemon 日志，不回传本机路径） | 201，新会话 `SessionMeta`（标题 = 原标题 + `· fork` 后缀，同一来源第二次起递增为 `· fork 2`、`· fork 3`，已删除的 fork 也计数、序号不回退；`forkedFrom` 记录来源会话与分叉点） |
 | GET | `/sessions/:id/goal` | 目标循环视图（`/goal`，机制见 [goal](../core/goal.md)） | — | `{goal: GoalView \| null}`（快照 + 派生计数 + armed + 硬性上限当前值；无目标 `null`） |
 | POST | `/sessions/:id/goal` | 设定或改写目标：create 立即起跑第一轮，edit 重新起跑（计数沿旧周期继续） | `{text}` 非空字符串必填；`acceptance?: string[]` 验收命令（字符串数组）。文本空/类型不对 400；host 校验失败（子会话、验收命令需要沙箱而沙箱不可用）400 带原因 | `{goal: GoalSnapshot, view: GoalView}` |
 | POST | `/sessions/:id/goal/pause` | 用户暂停（停自续，活跃 run 不动） | — | `{goal: GoalSnapshot}` |
@@ -73,6 +73,10 @@ interface SessionMeta {
   dispositionOverride?: "steer" | "wait" | "interrupt"
                               // 会话级发送处置覆盖（POST /disposition 写入；优先于 sessions.defaultDisposition）
   parentSessionId?: string  // subagent 会话的父会话（普通会话没有，见 subagents.md）
+  forkedFrom?: { sessionId: string; messageId?: string }
+                              // fork 血缘（session.forked 事件投影，单边：只有 fork 出的新会话带）；
+                              // messageId 是用户所点的分叉点，省略 = 复制全部历史。fork 出的会话是
+                              // 完全独立的普通会话：删除互不级联，与 parentSessionId 语义无关
   systemBaseline?: { stable: { text: string; frozenAt: string }; live?: { text: string; frozenAt: string } }
                               // 冻结的系统提示词基线（缓存纪律，system 事件投影 / compaction 事件清除，见 hooks.md）
   goal?: GoalSnapshot        // 会话级目标快照（/goal；goal.set 全量替换、goal.cleared 删除，见 goal.md）

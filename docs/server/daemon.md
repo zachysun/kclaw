@@ -147,12 +147,15 @@ new RunManager({...})               注入 usageStore、memory、skillsEvolution
                                     subagents: { spawner, collector, cancelBackgroundForParent }；见 run-manager。
                                     权限模式没有 daemon 级旗标——它是会话级事实（meta.mode），
                                     run 组装每 run 从会话 meta 读出（见 permissions/run-manager）
-createApp({home, token, stores, bus, run, mcp, mainWorkspace, configNotifier, attachmentsDir, usage, webDist, memory, skillsEvolution, goal, historySearch})
+createApp({home, token, stores, bus, run, mcp, mainWorkspace, configNotifier, attachmentsDir, usage, webDist, memory, skillsEvolution, goal, sessionFork, historySearch})
                                     Fastify 应用（见 http-api）；attachmentsDir/usage 传入时
                                     对应的附件与用量路由才注册，mcp 提供 /mcp 的分组快照，mainWorkspace
                                     随快照回显（新增条目的默认目标组），memory 供 /memory 路由族，
                                     skillsEvolution 供 /skills/proposals 提案治理路由族（未组装时该族 503），
                                     goal 供 /sessions/:id/goal 路由族（未组装时整体 503），
+                                    sessionFork（现场构造的 createSessionForkHost：空闲门槛 +
+                                    记忆进度播种 + 检索索引标记 + 附件拷贝）供 POST /sessions/:id/fork
+                                    （未组装时 503），
                                     historySearch 供 GET /search（未注入时 503）；
                                     configNotifier 交给 provider 路由，改动持久化后发布
 await app.listen({ port: listenPort, host: "127.0.0.1" })   ← listenPort = opts.port ?? config.server?.port ?? 0；

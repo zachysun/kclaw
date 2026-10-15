@@ -181,7 +181,7 @@ export function readJsonl(file: string): unknown[]
 | `goal?` | 会话级目标快照（`/goal`，`GoalSnapshot` 全量：目标文本、验收命令、状态机、轮数与 token 计数、最近判定摘要），由 `goal.set` 事件全量替换、`goal.cleared` 删除（见 [goal](./goal.md)）。计数字段是检查时刻的展示缓存，权威数据在事件流 |
 | `systemBaseline?` | 冻结的系统提示词基线，双段独立 `{ stable: {text, frozenAt}, live?: {text, frozenAt} }`。作用：每 run 两段现算、与基线逐段比对——哪段文本变了就重冻结哪段（`frozenAt` 记录这份文本成为基线的时刻），没变的沿用基线，`system-before` / `system-after` 组装链只在至少一段变化时才跑（提示词缓存的稳定性策略，详见 [hooks](./hooks.md)）。推导规则：`system` 事件按段 upsert、`compaction` 事件清除（压缩改写了消息历史，缓存必然全量失效，正是基线重置的边界），都不推进 `updatedAt` |
 
-`Message`（`packages/core/src/protocol/messages.ts`）的基础字段是 `{ id, sessionId, role: "user" \| "assistant" \| "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因）。id 前缀 `msg_` / `ses_`，ULID 格式。会话的消息列表和压缩列表如今都是事件流的只读视图：`readMessages` 从事件流过滤出 `message` 事件并按 `message.truncated` 标记隐藏被截断的消息（编辑重试/重新生成的过滤点，见下）、`readCompactions` 过滤出 `compaction` 事件，`readQueue` 读 `queue.jsonl`。
+`Message`（`packages/core/src/protocol/messages.ts`）的基础字段是 `{ id, sessionId, role: "user" \| "assistant" \| "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因），user 消息可选带 `llmText?`（技能指名与 `@` 文件引用隐式包装的模型视图文本标记，随消息持久化、气泡与事件流不显示，见 [agent-loop](./agent-loop.md) 的包装标记重放）。id 前缀 `msg_` / `ses_`，ULID 格式。会话的消息列表和压缩列表如今都是事件流的只读视图：`readMessages` 从事件流过滤出 `message` 事件并按 `message.truncated` 标记隐藏被截断的消息（编辑重试/重新生成的过滤点，见下）、`readCompactions` 过滤出 `compaction` 事件，`readQueue` 读 `queue.jsonl`。
 
 崩溃安全由两个策略函数承担（`packages/core/src/storage/jsonl.ts`），事件流与队列共用：
 
@@ -255,13 +255,13 @@ export interface UsageAgg { key: string; inputTokens: number; outputTokens: numb
 
 class UsageStore {
   record(row: Omit<UsageRow, "id">): void
-  aggregate(by: "day" | "session" | "model", prices, from?, to?): UsageAgg[]
+  aggregate(by: "day" | "session" | "model" | "kind", prices, from?, to?): UsageAgg[]
   total(prices, from?, to?): { inputTokens; outputTokens; cacheReadTokens: number | null; cacheWriteTokens: number | null; costUsd }
   close(): void
 }
 ```
 
-- **三种聚合口径**：`day`（按 `at` 的本地日历日 `YYYY-MM-DD`）、`session`（按 sessionId）、`model`（按模型名）；时间区间 `[from, to)` 对 ISO 格式的 `at` 字符串做比较，结果按 key 升序。
+- **四种聚合口径**：`day`（按 `at` 的本地日历日 `YYYY-MM-DD`）、`session`（按 sessionId，**只折 `kind='run'` 行**——记忆提取、压缩摘要、自动命名、技能提炼等后台调用虽挂在会话名下，但请求与主对话没有可比的前缀，混进会话桶会把主对话的缓存命中率拉到失真；后台花费在 `day`/`model`/`kind` 维度照常可见）、`model`（按模型名）、`kind`（按记账口径，即上文的 kind 列枚举）；时间区间 `[from, to)` 对 ISO 格式的 `at` 字符串做比较，结果按 key 升序。
 - **成本公式**（`costUsd(row, model, prices)`）：基式 `(input/1e6)·inputPerM + (output/1e6)·outputPerM`，价格来自 `config.usage.prices`（美元 / 百万 token）；**模型没有价格条目时成本恒为 0**（token 数照常显示）。模型价目带 `cacheReadPerM`/`cacheWritePerM` 且该行**任一**缓存字段非 NULL 时走分列式：`非缓存输入·inputPerM + 读·cacheReadPerM + 写·cacheWritePerM + 输出·outputPerM`（非缓存输入 = `inputTokens − 已知缓存字段之和`；缺失的缓存字段按 0 token 参与——OpenAI 兼容行只有 cacheRead，若按"两字段都非 NULL"门控会让 cached_tokens 永远按 input 全价计费）。两字段全 NULL 的行（含旧行）沿用基式按 input 单价对总输入计，不猜折扣。每组成本逐行累加——每行用它自己模型的价格，即使分组键是日期或会话。
 - **bucket 级 NULL 语义**：`aggregate`/`total` 的缓存字段类型 `number | null`——桶内所有行该列皆 NULL → `null`（未知，页面与 JSON 显示 "—"，不得显示 0 或命中率 0%；端点不返回缓存指标是常态而非边角）；行内混合 → 已知值之和（无值行跳过，不把未知吞成 0）。
 
