@@ -866,6 +866,11 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   })
   contextOverheadRef.current = overheadTokens
 
+  // R6 压缩前缀复用：把本 run 的最终请求形状（model/system/已排序工具定义）
+  // 登记给 Compactor——同会话的下一次段摘要调用据此重建与主请求对齐的前缀，
+  // 命中会话缓存。手动压缩等无 run 上下文的路径没有快照，退回独立形状。
+  engine.compactor.registerPrefix(sessionId, { model, system, tools: toolDefs })
+
   const outcome = await runAgent(
     {
       sessionId,
