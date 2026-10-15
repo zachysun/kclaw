@@ -13,6 +13,7 @@ import {
   appendPendingQueueRow,
   adoptQueuedId,
   collectPendingSends,
+  dropEarliestPendingSend,
   dropLocalPending,
   undeliveredPendingSends,
   type AgentEvent,
@@ -833,5 +834,48 @@ describe("parseTeamMail（组员来信识别）", () => {
     // 只认段首标头：第一个标头之后没有第二个段首（引用在正文中段）
     expect(mail!.entries).toHaveLength(1)
     expect(mail!.entries[0]!.text).toContain("引用了【来自 组长】的指示")
+  })
+})
+
+describe("dropEarliestPendingSend（错误帧回滚乐观发送）", () => {
+  it("空闲发送失败：回滚最早的 local- 乐观气泡", () => {
+    let s = appendOptimisticUser(initChat([]), "第一条")
+    s = appendOptimisticUser(s, "第二条")
+    const firstId = s.messages[0]!.id
+    const rolled = dropEarliestPendingSend(s)
+    expect(rolled.messages.map((m) => m.id)).toEqual([s.messages[1]!.id])
+    expect(rolled.messages[0]!.id).not.toBe(firstId)
+  })
+
+  it("忙会话发送失败：无待确认气泡时回滚最早的 local- 排队行", () => {
+    let s = appendPendingQueueRow(initChat([]), "排队一", "wait")
+    s = appendPendingQueueRow(s, "排队二", "steer")
+    const firstRowId = s.queue[0]!.messageId
+    const rolled = dropEarliestPendingSend(s)
+    expect(rolled.queue.map((e) => e.messageId)).toEqual([s.queue[1]!.messageId])
+    expect(rolled.queue[0]!.messageId).not.toBe(firstRowId)
+  })
+
+  it("气泡先于排队行发送：优先回滚气泡（发送序即帧序，与 adoptQueuedId 对称）", () => {
+    let s = appendOptimisticUser(initChat([]), "先发的")
+    s = appendPendingQueueRow(s, "后排队的", "wait")
+    const rolled = dropEarliestPendingSend(s)
+    expect(rolled.messages).toHaveLength(0)
+    expect(rolled.queue.map((e) => e.text)).toEqual(["后排队的"])
+  })
+
+  it("已确认（服务端 id）的行与气泡一律不动", () => {
+    let s = appendOptimisticUser(initChat([]), "已确认")
+    s = adoptQueuedId(s, "m-server")
+    const before = s
+    expect(dropEarliestPendingSend(s)).toBe(before)
+    const q = appendPendingQueueRow(initChat([]), "已确认行", "wait")
+    const acked = adoptQueuedId(q, "m-row")
+    expect(dropEarliestPendingSend(acked)).toBe(acked)
+  })
+
+  it("没有任何待确认项时原样返回（不新建引用）", () => {
+    const s = initChat([])
+    expect(dropEarliestPendingSend(s)).toBe(s)
   })
 })

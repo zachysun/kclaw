@@ -8,6 +8,7 @@
  */
 import { useCallback, useEffect, useState, type FormEvent } from "react"
 import { type ApiClient } from "../api.js"
+import { formatCompactStamp } from "../usage/format.js"
 import type { Job } from "../types.js"
 
 interface JobForm {
@@ -189,9 +190,9 @@ export function JobsView({ api }: { api: ApiClient }) {
                 <td>{job.name}</td>
                 <td><code>{job.cron}</code></td>
                 <td data-testid={`job-enabled-${job.id}`}>{job.enabled ? "启用" : "禁用"}</td>
-                <td>{formatIso(job.nextRunAt)}</td>
+                <td>{stampOrDash(job.nextRunAt)}</td>
                 <td>{job.lastStatus ?? "—"}</td>
-                <td>{formatIso(job.lastRunAt)}</td>
+                <td>{stampOrDash(job.lastRunAt)}</td>
                 <td className="row-actions">
                   <button type="button" data-testid={`job-edit-${job.id}`} onClick={() => startEdit(job)}>
                     编辑
@@ -222,12 +223,7 @@ export function JobsView({ api }: { api: ApiClient }) {
   )
 }
 
-/** Compact local time for schedule fields; em-dash for absent values. */
-function formatIso(iso: string | null | undefined): string {
-  if (iso === null || iso === undefined || iso === "") return "—"
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return iso
-  const md = `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")}`
-  const hhmm = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
-  return `${md} ${hhmm}`
+/** 排期字段缺值显示 "—"，有值走全站统一的紧凑时间戳。 */
+function stampOrDash(iso: string | null | undefined): string {
+  return iso === null || iso === undefined || iso === "" ? "—" : formatCompactStamp(iso)
 }

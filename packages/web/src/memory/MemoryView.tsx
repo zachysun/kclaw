@@ -6,7 +6,7 @@
  * 跳转按钮承接，不在本组件内重复。纯 REST 拉取 + 本地筛选；服务端 503（记忆未组装）
  * 时相应 GET 走 catch → notice 提示。
  */
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import type { ApiClient } from "../api.js"
 import type { MemoryWrittenInfo } from "../chat/model.js"
 import type { NoticeFn } from "../toast.js"
@@ -22,13 +22,8 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
   openTarget?: MemoryWrittenInfo | null
   onOpenConsumed?: () => void
 }) {
-  // notice 走 ref：reloadProjects 只依赖 api（稳定），effect 不会因父组件每次
-  // 重渲染新建的内联 notice identity 而重复触发（审查 Important：App 传内联箭头，
-  // 若 reloadProjects 依赖 notice，删除/停留记忆 tab 会反复拉 projects + global）。
-  const noticeRef = useRef(notice)
-  useEffect(() => {
-    noticeRef.current = notice
-  })
+  // notice 由 App 的 useToasts 提供，引用跨渲染稳定（空依赖 useCallback），
+  // 直接进回调依赖即可，无需 ref 中转。
 
   const [projects, setProjects] = useState<ProjectRow[] | null>(null)
   const [projectId, setProjectId] = useState<string | null>(null)
@@ -38,11 +33,14 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
   const [cogs, setCogs] = useState<CogRow[] | null>(null)
   const [cogTarget, setCogTarget] = useState<{ kind: CogRow["kind"]; name: string } | null>(null)
   const [dirtyPath, setDirtyPath] = useState<string | null>(null) // 保存目标（thread 或 cognition 的 PATCH 路径）
+  // 两步武装删除：第一击只点亮「确认删除」，第二击才发 DELETE——单击即删对
+  // 整文件记忆（persona/rule）太重了。换文件即解除武装。
+  const [deleteArmed, setDeleteArmed] = useState(false)
 
   const reloadProjects = useCallback(() => {
-    api.get<ProjectRow[]>("/memory/projects").then(setProjects).catch((e) => noticeRef.current(`加载项目失败: ${String(e)}`, "error"))
-    api.get<CogRow[]>("/memory/global").then(setCogs).catch((e) => noticeRef.current(`加载全局认知失败: ${String(e)}`, "error"))
-  }, [api])
+    api.get<ProjectRow[]>("/memory/projects").then(setProjects).catch((e) => notice(`加载项目失败: ${String(e)}`, "error"))
+    api.get<CogRow[]>("/memory/global").then(setCogs).catch((e) => notice(`加载全局认知失败: ${String(e)}`, "error"))
+  }, [api, notice])
 
   useEffect(() => { reloadProjects() }, [reloadProjects])
 
@@ -73,7 +71,7 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
     try {
       const { content } = await api.get<{ content: string }>(`/memory/threads/${encodeURIComponent(pid)}/${encodeURIComponent(topic)}`)
       setDraft(content); setDirtyPath(`/memory/threads/${encodeURIComponent(pid)}/${encodeURIComponent(topic)}`)
-      setThreadTopic(topic)
+      setThreadTopic(topic); setDeleteArmed(false)
     } catch (e) { notice(`读取线失败: ${String(e)}`, "error") }
   }
 
@@ -81,7 +79,7 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
     try {
       const { content } = await api.get<{ content: string }>(`/memory/global/${kind}/${encodeURIComponent(name)}`)
       setDraft(content); setDirtyPath(`/memory/global/${kind}/${encodeURIComponent(name)}`)
-      setCogTarget({ kind, name })
+      setCogTarget({ kind, name }); setDeleteArmed(false)
     } catch (e) { notice(`读取认知文件失败: ${String(e)}`, "error") }
   }
 
@@ -175,7 +173,11 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
             <textarea data-testid="memory-editor" value={draft} onChange={(e) => setDraft(e.target.value)} rows={24} />
             <div className="memory-editor-actions">
               <button type="button" data-testid="memory-save" onClick={() => void save()}>保存</button>
-              <button type="button" data-testid="memory-delete" onClick={() => void remove()}>删除</button>
+              {deleteArmed ? (
+                <button type="button" className="danger" data-testid="memory-delete" onClick={() => void remove()}>确认删除</button>
+              ) : (
+                <button type="button" data-testid="memory-delete" onClick={() => setDeleteArmed(true)}>删除</button>
+              )}
             </div>
           </>
         ) : <p className="muted">选择一条主题线或一个认知文件查看与编辑</p>}

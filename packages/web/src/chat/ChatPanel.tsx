@@ -24,6 +24,7 @@ import {
   appendOptimisticUser,
   appendPendingQueueRow,
   collectPendingSends,
+  dropEarliestPendingSend,
   dropLocalPending,
   initChat,
   mergeMessages,
@@ -37,7 +38,8 @@ import {
 } from "./model.js"
 import { useSilentFetch } from "../daemon-clients.js"
 import { runWebCommand } from "./commands.js"
-import { ChatView, type CompactionRecordView, type Disposition, type PendingAttachment } from "./ChatView.js"
+import { ChatView, type Disposition, type PendingAttachment, type SentAttachment } from "./ChatView.js"
+import type { CompactionRecordView } from "./CompactionBars.js"
 import { SessionUsageStrip } from "./SessionUsageStrip.js"
 import type { GoalView, GoalViewResponse } from "@kclaw/core/protocol"
 import { parseSendDisposition, resolveSendDisposition } from "@kclaw/core/protocol"
@@ -80,6 +82,13 @@ export interface ChatPanelProps {
    * 全局 toast（带"返回原会话"动作）。失败留在本会话，走本面板通知条。
    */
   onForked?: (meta: import("../types.js").SessionMeta) => void
+  /**
+   * 连接状态上抛（App 顶栏状态点）：open = 已收到 subscribe 确认（socket
+   * 已开、鉴权通过、正在推本会话事件）；connecting = 建连/重连中；closed =
+   * 连接掉了（重连进行中或已放弃）。借 {type:"subscribed"} ack 帧判定 open，
+   * 不动 ws 客户端本身。
+   */
+  onConnectionState?: (state: "connecting" | "open" | "closed") => void
 }
 
 /** Max consecutive failed reconnects before giving up with a notice. */
@@ -110,15 +119,34 @@ function isRetryAck(frame: unknown): frame is { type: "message.retry_ack"; messa
   )
 }
 
+/** The daemon's subscribe ack: proof the socket is open, authed, and streaming this session. */
+function isSubscribedAck(frame: unknown): frame is { type: "subscribed" } {
+  return (
+    typeof frame === "object" && frame !== null &&
+    (frame as { type?: unknown }).type === "subscribed"
+  )
+}
+
+/** Client-local id for an in-flight upload chip (crypto.randomUUID is absent in insecure contexts). */
+function localId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `up-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
 function errorFrameMessage(frame: unknown): string | null {
   const message = (frame as { message?: unknown }).message
   return typeof message === "string" ? message : null
 }
 
-export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten, onOpenAudit, onOpenMcp, onReturnToParent, onForked }: ChatPanelProps) {
+export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten, onOpenAudit, onOpenMcp, onReturnToParent, onForked, onConnectionState }: ChatPanelProps) {
   const [view, setViewState] = useState<ChatState>(() => initChat(initialMessages))
   const [notice, setNotice] = useState<string | null>(null)
   const [forkPending, setForkPending] = useState(false)
+  // 拖放附件的待发列表：上传中的条目没有 path（chip 显示 上传中…，发送被
+  // 拦下），POST 返回后就位。会话切换即清空（上传目标挂在上传时的 sessionId
+  // 上，带着旧工作区的路径跨会话发送是错的）。
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
   // 已装用户可见技能：出现在斜杠菜单的动态命令（/技能名），会话切换重拉
   // （项目级技能跟会话工作目录）。拉取失败静默——菜单少几条不碍聊天。
   const [skillRows, setSkillRows] = useState<Array<{ name: string; description: string; origin: string; visibility: string; plugin?: string }>>([])
@@ -237,8 +265,10 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       sessionRef.current = sessionId
       updateView(() => initChat(initialMessages))
       // 换会话即换语境：上一条会话的通知（重连结果、操作失败等）不属于
-      // 新会话，随视图一起清掉。
+      // 新会话，随视图一起清掉；拖放附件同理（上传目标挂在上传时的
+      // sessionId 上，路径指向旧工作区，不能带进新会话的发送）。
       clearNotice()
+      setPendingAttachments([])
     }
   }, [sessionId, initialMessages, updateView, clearNotice])
 
@@ -366,10 +396,17 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
               // retry renames the local bubble).
               const messageId = frame.messageId
               if (typeof messageId === "string") updateView((v) => adoptQueuedId(v, messageId))
+            } else if (isSubscribedAck(frame)) {
+              onConnectionState?.("open")
             } else {
               const message = errorFrameMessage(frame)
               if (message !== null) {
-                updateView((v) => ({ ...v, error: message }))
+                // 错误帧伴随回滚最早一条未确认的乐观发送：send_message /
+                // message.retry 被 daemon 拒绝时，乐观回显（气泡或排队行）
+                // 没有任何服务端事件会来认领它，不回滚就永远停在"待确认"态。
+                // 帧按线序到达，ack 先于任何后续帧，已确认的发送不受影响——
+                // 与 ack 采纳（adoptQueuedId）对称。无待确认发送时是空操作。
+                updateView((v) => ({ ...dropEarliestPendingSend(v), error: message }))
               }
             }
           } catch (err) {
@@ -390,9 +427,11 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       // the client factory forever; a successful reconnect resets the budget.
       let attempts = 0
       while (!cancelled) {
+        onConnectionState?.("connecting")
         subscribe(client)
         const outcome = await eventLoop(client)
         if (cancelled) return
+        onConnectionState?.("closed")
         if (outcome === "auth") {
           setNotice("认证已失效，请刷新页面重新输入 token")
           return
@@ -430,9 +469,8 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       cancelled = true
       client.close()
     }
-  }, [sessionId, api, ws, createWs, onSessionRenamed, refreshTeam, refreshGoal])
+  }, [sessionId, api, ws, createWs, onSessionRenamed, refreshTeam, refreshGoal, onConnectionState])
 
-  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
   const [models, setModels] = useState<string[]>([])
   const [currentModel, setCurrentModel] = useState<string | undefined>(sessionModel)
 
@@ -582,7 +620,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
    * when busy, pending bubble when idle) — and nothing else: no slash
    * parsing, no attachment/disposition state changes.
    */
-  const sendMessageRaw = useCallback((text: string, sendDisposition: Disposition, attachments: PendingAttachment[], target?: string | null) => {
+  const sendMessageRaw = useCallback((text: string, sendDisposition: Disposition, attachments: SentAttachment[], target?: string | null) => {
     clientRef.current.send({
       type: "send_message",
       sessionId,
@@ -600,7 +638,12 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
         : appendOptimisticUser(v, text))
   }, [sessionId, updateView])
 
-  const handleSend = useCallback((text: string) => {
+  /**
+   * 提交一条消息，返回是否被接受：composer 依据它决定清不清草稿（false =
+   * 发送被拒——连接断开、附件上传中——文本保留给用户重试）。斜杠命令与
+   * /help 都算"已处理"（草稿清掉）。
+   */
+  const handleSend = useCallback((text: string): boolean => {
     // Slash commands intercept before the ws send path (the same point where
     // the CLI chat loop intercepts) — they never reach the model. 动态技能
     // 命令（/技能名）除外：原样进入发送路径——daemon 检测到指名后做隐式
@@ -624,10 +667,21 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
         goal: goalView,
         refreshGoal,
       })
-      return
+      return true
     }
+    // 仍有附件在上传：帧上带不了没有 path 的附件，拦下发送（草稿保留，
+    // 通知条说明原因；上传完成的 chip 就位后即可重发）。
+    if (pendingAttachments.some((a) => a.path === undefined)) {
+      setNotice("附件上传中，请稍候再发送")
+      return false
+    }
+    const attachments: SentAttachment[] = pendingAttachments.map(({ path, name, size, mimeType }) => ({
+      path: path as string,
+      name,
+      size,
+      mimeType,
+    }))
     try {
-      const attachments = [...pendingAttachments]
       sendMessageRaw(text, disposition, attachments, teamTarget)
       setPendingAttachments([])
       // 定向发送立即刷一次面板（组员即将被唤醒）；普通发送交给帧驱动。
@@ -638,26 +692,42 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       if (disposition === "interrupt") {
         setDisposition(baseDispositionRef.current)
       }
+      return true
     } catch {
       setNotice("连接不可用，请稍后重试")
+      return false
     }
-  }, [sessionId, pendingAttachments, api, onCreateSession, onOpenSessions, onOpenMcp, handleSwitchModel, models, currentModel, updateView, disposition, skillRows, sendMessageRaw, teamTarget, refreshTeam, goalView, refreshGoal])
+  }, [sessionId, pendingAttachments, api, onCreateSession, onOpenSessions, onOpenMcp, handleSwitchModel, models, currentModel, disposition, skillRows, sendMessageRaw, teamTarget, refreshTeam, goalView, refreshGoal])
 
-  /** Upload dropped files and queue them for the next message. */
+  /** Upload dropped files and queue them for the next message. The chip appears
+   * immediately（上传中…，no path yet）; the POST settles its path. A failed
+   * upload drops its chip（留着只会一直挡发送）并进通知条。 */
   const handleDrop = useCallback((event: React.DragEvent) => {
     event.preventDefault()
     if (event.dataTransfer === null) return
     const files = Array.from(event.dataTransfer.files)
     if (files.length === 0) return
     for (const file of files) {
+      const id = localId()
+      setPendingAttachments((prev) => [
+        ...prev,
+        { id, name: file.name, size: file.size, mimeType: file.type || "application/octet-stream" },
+      ])
       api.upload(sessionId, file)
-        .then((f) => setPendingAttachments((prev) => [...prev, { path: f.path, name: f.name, size: f.size, mimeType: file.type || "application/octet-stream" }]))
-        .catch((err: unknown) => setNotice(`附件上传失败: ${err instanceof Error ? err.message : String(err)}`))
+        .then((f) =>
+          setPendingAttachments((prev) =>
+            prev.map((a) => (a.id === id ? { ...a, path: f.path, name: f.name, size: f.size } : a)),
+          ),
+        )
+        .catch((err: unknown) => {
+          setPendingAttachments((prev) => prev.filter((a) => a.id !== id))
+          setNotice(`附件上传失败: ${err instanceof Error ? err.message : String(err)}`)
+        })
     }
   }, [api, sessionId])
 
-  const handleRemoveAttachment = useCallback((index: number) => {
-    setPendingAttachments((prev) => prev.filter((_, i) => i !== index))
+  const handleRemoveAttachment = useCallback((id: string) => {
+    setPendingAttachments((prev) => prev.filter((a) => a.id !== id))
   }, [])
 
   const handleResolveConfirmation = useCallback((confirmationId: string, decision: ConfirmationDecision) => {
@@ -815,6 +885,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     <div className="chat-panel">
       <div className="chat-panel-inner" data-testid="chat-panel" onDragOver={(e) => e.preventDefault()} onDrop={handleDrop}>
         <ChatView
+          sessionId={sessionId}
           view={view}
           onSend={handleSend}
           onResolveConfirmation={handleResolveConfirmation}

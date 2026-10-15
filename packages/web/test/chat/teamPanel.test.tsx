@@ -125,6 +125,7 @@ function mountChatView(team?: Parameters<typeof ChatView>[0]["team"]) {
   act(() => {
     root.render(
       <ChatView
+        sessionId="s1"
         view={initChat([])}
         onSend={onSend}
         onResolveConfirmation={vi.fn()}

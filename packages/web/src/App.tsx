@@ -23,6 +23,7 @@ import { bootstrapToken, clearToken, saveToken } from "./token.js"
 import { applyTheme, isThemeName, loadTheme, themeOptions, type ThemeName } from "./theme.js"
 import type { WsClient } from "./ws.js"
 import { useDaemonClients } from "./daemon-clients.js"
+import { SESSIONS_CHANGED } from "./events.js"
 import { ChatPanel } from "./chat/ChatPanel.js"
 import { UsageView } from "./usage/UsageView.js"
 import type { MemoryWrittenInfo, Message } from "./chat/model.js"
@@ -117,6 +118,15 @@ function TokenForm() {
   )
 }
 
+// Keep-alive tab flag shared by the audit and memory hosts: once visited, the
+// view stays mounted (hidden) on other tabs so its live state survives
+// navigation.
+function useVisitedTab(): [boolean, () => void] {
+  const [visited, setVisited] = useState(false)
+  const mark = useCallback((): void => setVisited(true), [])
+  return [visited, mark]
+}
+
 /** Main shell: header with tabs + daemon status, sidebar, and the tab body. */
 function MainShell({
   token,
@@ -134,8 +144,15 @@ function MainShell({
   // form instead of surfacing a dead "refresh" notice.
   const { api, createWs, wsUrl } = useDaemonClients(token, onAuthExpired)
   const [status, setStatus] = useState<DaemonStatus>("connecting")
+  // ChatPanel 的 ws 连接状态（subscribe ack 判定）：顶栏状态点跟随它——
+  // /status ping 只在挂载时打一次，之后 daemon 死活只有聊天连接知道。
+  // null = 本页还没挂载聊天（未选会话），状态点回退到 ping 结果。
+  const [chatConn, setChatConn] = useState<"connecting" | "open" | "closed" | null>(null)
   const [tab, setTab] = useState<Tab>("chat")
   const [sessions, setSessions] = useState<SessionMeta[] | null>(null)
+  // 会话列表加载失败态：侧栏给错误说明与重试入口，而不是静默成空列表。
+  // 列表加载成功后网络抖动的轮询失败静默（旧列表继续可用），不进这个态。
+  const [sessionsError, setSessionsError] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [messagesCache, setMessagesCache] = useState<Record<string, Message[]>>({})
   // 全局 toast 栈：侧栏操作结果与管理页回执统一落这里（内容区右上角浮层，
@@ -148,7 +165,9 @@ function MainShell({
   const [sidebarOpen, setSidebarOpen] = useState(false)
   // The audit page stays mounted once visited (hidden offscreen on other tabs)
   // so its live connection, filters, and scroll position survive navigation.
-  const [auditVisited, setAuditVisited] = useState(false)
+  // The memory page does the same (hidden, not offscreen — no virtualization).
+  const [auditVisited, markAuditVisited] = useVisitedTab()
+  const [memoryVisited, markMemoryVisited] = useVisitedTab()
   // One-shot ?session=<id> deep link (notification targets): consumed exactly
   // once, after the session list loads, then stripped from the URL. An
   // optional ?tab=<name> rides along (e.g. /?tab=audit&session=…).
@@ -169,40 +188,70 @@ function MainShell({
     }
   }, [api])
 
-  // Session list on mount (server sorts by updatedAt desc).
+  // Session list fetch, shared by the mount load / the error-state retry /
+  // the keep-alive refresh (polling + SESSIONS_CHANGED). Returns the metas
+  // so the mount path can run the deep-link consumption on a real list.
+  const haveSessionsRef = useRef(false)
+  const fetchSessions = useCallback(async (): Promise<SessionMeta[] | null> => {
+    try {
+      const metas = await api.get<SessionMeta[]>("/sessions")
+      haveSessionsRef.current = true
+      setSessions(metas)
+      setSessionsError(false)
+      return metas
+    } catch {
+      // 只有列表从未加载成功（重试前）才进错误态；已有列表时静默——轮询的
+      // 偶发失败不该把可用侧栏打成错误页，旧列表继续可用。
+      if (!haveSessionsRef.current) setSessionsError(true)
+      return null
+    }
+  }, [api])
+
+  // Session list on mount (server sorts by updatedAt desc); deep-link params
+  // consume on the first SUCCESSFUL load (a failed load keeps them pending
+  // until the retry lands).
   useEffect(() => {
     let cancelled = false
-    api
-      .get<SessionMeta[]>("/sessions")
-      .then((metas) => {
-        if (!cancelled) setSessions(metas)
-        if (!cancelled && !deepLinkConsumed.current) {
-          deepLinkConsumed.current = true
-          const params = new URLSearchParams(window.location.search)
-          const target = params.get("session")
-          const targetTab = params.get("tab")
-          if (targetTab !== null && (TABS as readonly string[]).includes(targetTab)) {
-            if (targetTab === "audit") setAuditVisited(true) // deep links mount the kept-alive host too
-            setTab(targetTab as Tab)
-          }
-          // Consume the params either way (hit or miss) so a refresh or later
-          // navigation never re-triggers the jump.
-          window.history.replaceState({}, "", "/")
-          if (target !== null && metas.some((meta) => meta.id === target)) {
-            setSelectedId(target)
-          }
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setSessions([])
-          notify("加载会话列表失败", "error")
-        }
-      })
+    void fetchSessions().then((metas) => {
+      if (cancelled || metas === null || deepLinkConsumed.current) return
+      deepLinkConsumed.current = true
+      const params = new URLSearchParams(window.location.search)
+      const target = params.get("session")
+      const targetTab = params.get("tab")
+      if (targetTab !== null && (TABS as readonly string[]).includes(targetTab)) {
+        if (targetTab === "audit") markAuditVisited() // deep links mount the kept-alive host too
+        if (targetTab === "memory") markMemoryVisited()
+        setTab(targetTab as Tab)
+      }
+      // Consume the params either way (hit or miss) so a refresh or later
+      // navigation never re-triggers the jump.
+      window.history.replaceState({}, "", "/")
+      if (target !== null && metas.some((meta) => meta.id === target)) {
+        setSelectedId(target)
+      }
+    })
     return () => {
       cancelled = true
     }
-  }, [api])
+  }, [fetchSessions])
+
+  // 侧栏保活刷新：页面可见时每 10s 重拉 /sessions——CLI、IM channel、其他
+  // 浏览器产生的会话变化不发本页事件，轮询是它们进侧栏的途径。不可见时跳过
+  // （回来那一刻的 visibilitychange 立即补一次）；页内视图改了会话集合
+  // （TrashView 恢复等）发 SESSIONS_CHANGED 即时刷新，不等下一拍。
+  useEffect(() => {
+    const refresh = (): void => {
+      if (document.visibilityState === "visible") void fetchSessions()
+    }
+    const timer = window.setInterval(refresh, 10_000)
+    document.addEventListener("visibilitychange", refresh)
+    window.addEventListener(SESSIONS_CHANGED, refresh)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener("visibilitychange", refresh)
+      window.removeEventListener(SESSIONS_CHANGED, refresh)
+    }
+  }, [fetchSessions])
 
   // Pull the selected session's messages — on EVERY selection, not just the
   // first visit: the cache snapshot goes stale once a session's live stream
@@ -257,15 +306,28 @@ function MainShell({
   // A tab click on mobile should also dismiss the sidebar drawer.
   const switchTab = useCallback((next: Tab) => {
     setSidebarOpen(false)
-    if (next === "audit") setAuditVisited(true)
+    if (next === "audit") markAuditVisited()
+    if (next === "memory") markMemoryVisited()
     setTab(next)
   }, [])
 
   // memory.written 通知条点击：切到记忆页并把目标交给 MemoryView 自动打开。
   const handleOpenMemoryWritten = useCallback((info: MemoryWrittenInfo): void => {
     setMemoryTarget(info)
+    markMemoryVisited()
     setTab("memory")
   }, [])
+
+  // A subagent's audit view: audit follows the selected session, so selecting
+  // the child + switching tabs lands the audit page on it (the child never
+  // appears in the sidebar).
+  const handleOpenAudit = useCallback(
+    (childId: string): void => {
+      selectSession(childId)
+      switchTab("audit")
+    },
+    [selectSession, switchTab],
+  )
 
   // Shared "create a session → prepend to the list → select it" step behind
   // both the sidebar picker (workdir) and the slash commands (/new title,
@@ -381,6 +443,19 @@ function MainShell({
   )
 
   const chatActive = selectedId !== null && readyMessages !== null
+
+  // 状态点跟随聊天连接：聊天挂载时（chatActive）以 ws 状态为准（open=已连、
+  // connecting=建连中、closed=断了）；聊天未挂载（未选会话、或所选会话被删
+  // 等导致面板卸载）回退到挂载时的 /status ping 结果——chatConn 停留的旧值
+  // 不能泄漏到无聊天状态。
+  const dotStatus: DaemonStatus =
+    chatActive && chatConn !== null
+      ? chatConn === "open"
+        ? "connected"
+        : chatConn === "connecting"
+          ? "connecting"
+          : "error"
+      : status
 
   return (
     <div className="shell">
@@ -502,9 +577,9 @@ function MainShell({
           ))}
         </select>
         <span
-          className={`status-dot ${status}`}
+          className={`status-dot ${dotStatus}`}
           data-testid="status-dot"
-          title={`daemon: ${status}`}
+          title={`daemon: ${dotStatus}`}
         />
       </header>
       <div className="body">
@@ -513,6 +588,8 @@ function MainShell({
             sessions={sessions ?? []}
             selectedId={selectedId}
             loading={sessions === null}
+            error={sessionsError}
+            onRetry={() => void fetchSessions()}
             onSelect={(id) => {
               setSidebarOpen(false)
               selectSession(id)
@@ -542,13 +619,8 @@ function MainShell({
                 onOpenSessions={handleOpenSessions}
                 workdir={selectedMeta?.workdir}
                 onOpenMemoryWritten={handleOpenMemoryWritten}
-                onOpenAudit={(childId) => {
-                  // A subagent's audit view: audit follows the selected
-                  // session, so selecting the child + switching tabs lands the
-                  // audit page on it (the child never appears in the sidebar).
-                  selectSession(childId)
-                  switchTab("audit")
-                }}
+                onOpenAudit={handleOpenAudit}
+                onConnectionState={setChatConn}
                 onReturnToParent={selectSession}
                 onForked={handleForked}
                 onOpenMcp={() => switchTab("mcp")}
@@ -575,7 +647,13 @@ function MainShell({
           )}
           {tab === "usage" && <UsageView api={api} />}
           {tab === "trash" && <TrashView api={api} />}
-          {tab === "memory" && <MemoryView api={api} notice={notify} openTarget={memoryTarget} onOpenConsumed={() => setMemoryTarget(null)} />}
+          {memoryVisited && (
+            // Kept mounted (hidden on other tabs) so scroll position and the
+            // expanded-file state survive tab switches.
+            <div className="memory-host" hidden={tab !== "memory"} data-testid="memory-host">
+              <MemoryView api={api} notice={notify} openTarget={memoryTarget} onOpenConsumed={() => setMemoryTarget(null)} />
+            </div>
+          )}
           {tab === "skills" && <SkillsView api={api} notice={notify} />}
           {tab === "permissions" && <PermissionsView api={api} notice={notify} workdir={selectedMeta?.workdir} />}
           {tab === "mcp" && <McpView api={api} notice={notify} sessionWorkdir={selectedMeta?.workdir} />}

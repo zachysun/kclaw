@@ -8,8 +8,9 @@
  * with a manual refresh — no polling, same as Mcp/Model. The secret never
  * echoes back: the field starts empty and "leave empty" keeps the stored one.
  */
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
+import { useCallback, useEffect, useState, type FormEvent } from "react"
 import type { ApiClient } from "../api.js"
+import { formatCompactStamp } from "../usage/format.js"
 import type { NoticeFn } from "../toast.js"
 
 interface ChannelSnapshot {
@@ -35,22 +36,12 @@ const STATE_LABELS: Record<ChannelSnapshot["status"]["state"], string> = {
   error: "出错",
 }
 
-function formatTime(epochMs: number): string {
-  const d = new Date(epochMs)
-  const pad = (n: number): string => String(n).padStart(2, "0")
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
 export function ChannelView({ api, notice }: {
   api: ApiClient
   notice: NoticeFn
 }) {
-  // notice goes through a ref: App passes an inline arrow that is a fresh
-  // reference each render (same guard as McpView/ModelView).
-  const noticeRef = useRef(notice)
-  useEffect(() => {
-    noticeRef.current = notice
-  })
+  // notice comes from App's useToasts: its identity is stable across renders
+  // (empty-deps useCallback), so it goes straight into callback deps.
 
   const [snap, setSnap] = useState<ChannelSnapshot | null>(null)
   const [enabled, setEnabled] = useState(false)
@@ -80,8 +71,8 @@ export function ChannelView({ api, notice }: {
     return api
       .get<ChannelSnapshot>("/channel")
       .then(applySnapshot)
-      .catch((e) => noticeRef.current(`加载 IM Channel 状态失败: ${String(e)}`, "error"))
-  }, [api, applySnapshot])
+      .catch((e) => notice(`加载 IM Channel 状态失败: ${String(e)}`, "error"))
+  }, [api, applySnapshot, notice])
 
   useEffect(() => {
     void reload()
@@ -107,7 +98,7 @@ export function ChannelView({ api, notice }: {
         ...(primaryOpenId !== "" ? { primaryOpenId } : {}),
       })
       applySnapshot(next)
-      noticeRef.current("已保存，通道已按新配置重启。", "info")
+      notice("已保存，通道已按新配置重启。", "info")
     } catch (e) {
       setFormError(String(e))
     } finally {
@@ -140,9 +131,9 @@ export function ChannelView({ api, notice }: {
       // 只更新快照（pending 列表与 allowlist 标签随后跟上），不回填表单——
       // 用户未保存的草稿编辑（含刚粘贴的 secret）不能被无声冲掉
       setSnap(next)
-      noticeRef.current("已加入白名单。", "info")
+      notice("已加入白名单。", "info")
     } catch (e) {
-      noticeRef.current(`加白失败: ${String(e)}`, "error")
+      notice(`加白失败: ${String(e)}`, "error")
     } finally {
       setAddingOpenId(null)
     }
@@ -290,7 +281,7 @@ export function ChannelView({ api, notice }: {
             {snap.pendingSenders.map((p) => (
               <li key={p.openId} data-testid={`channel-pending-${p.openId}`}>
                 <code>{p.openId}</code>
-                <span className="muted">{p.count} 次 · 最近 {formatTime(p.lastSeen)}</span>
+                <span className="muted">{p.count} 次 · 最近 {formatCompactStamp(p.lastSeen)}</span>
                 <button
                   type="button"
                   data-testid={`channel-allow-${p.openId}`}

@@ -95,8 +95,9 @@ describe("chat markdown gating", () => {
   function mountChat(messages: Message[]) {
     return mount(
       <ChatView
+        sessionId="s1"
         view={initChat(messages)}
-        onSend={vi.fn()}
+        onSend={vi.fn((): boolean => true)}
         onResolveConfirmation={vi.fn()}
         onAnswerQuestion={vi.fn()}
         pendingAttachments={[]}

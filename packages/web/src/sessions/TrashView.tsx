@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useState } from "react"
 import { type ApiClient } from "../api.js"
+import { emitSessionsChanged } from "../events.js"
 import type { SessionMeta } from "../types.js"
 
 export function TrashView({ api }: { api: ApiClient }) {
@@ -30,6 +31,9 @@ export function TrashView({ api }: { api: ApiClient }) {
       setError(null)
       try {
         await api.post(`/sessions/${encodeURIComponent(id)}/restore`)
+        // 恢复让会话重新出现在侧栏列表：通知 App 重拉 /sessions（否则要等
+        // 下一拍轮询或刷新页面才能看到）。
+        emitSessionsChanged()
         await load()
       } catch (err) {
         setError(err instanceof Error ? err.message : "恢复失败")

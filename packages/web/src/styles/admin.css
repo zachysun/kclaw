@@ -1,0 +1,1124 @@
+/* --- skills view（只读技能页，布局对齐 memory-view） ------------------------- */
+
+.skills-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: stretch;
+}
+
+.skills-view h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 13px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.skills-list {
+  flex: 0 0 300px;
+  max-width: 40%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface);
+}
+
+.skills-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.skills-list .skill-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: var(--space-2);
+  cursor: pointer;
+  font: inherit;
+}
+
+.skills-list .skill-item:hover {
+  border-color: var(--border);
+}
+
+.skills-list .skill-item.active {
+  border-color: var(--border);
+  background: var(--surface-2, var(--surface));
+}
+
+.skills-list .skill-name {
+  font-weight: 600;
+}
+
+.skills-list .skill-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.skills-list .skill-desc {
+  font-size: 12px;
+}
+
+.skills-body {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface);
+}
+
+.skills-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+}
+
+/* 复用管理面：scope 行、子页签、分组折叠、链接表格、行高压缩 */
+
+.skills-scope-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.skills-scope {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.skills-scope select {
+  max-width: 280px;
+}
+
+.skills-subtabs {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2px;
+}
+
+.skills-subtabs button {
+  background: none;
+  border: none;
+  border-radius: calc(var(--radius) - 2px);
+  padding: 3px var(--space-3);
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.skills-subtabs button.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.skills-panes {
+  display: flex;
+  gap: var(--space-4);
+  align-items: stretch;
+  min-height: 0;
+}
+
+.skills-reuse {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+}
+
+.skills-reuse .skills-panes {
+  flex: 1;
+}
+
+.skills-toolbar {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  margin-bottom: var(--space-2);
+}
+
+.discover-search {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.skills-reuse-all {
+  font-size: 12px;
+  flex: none;
+}
+
+.skills-list .skills-seg-title {
+  margin: var(--space-3) 0 var(--space-1);
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.skills-list .skills-seg-title:first-child {
+  margin-top: 0;
+}
+
+.clamp2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.skills-section {
+  margin-bottom: var(--space-3);
+}
+
+.skills-section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin: var(--space-2) 0 var(--space-1);
+}
+
+.section-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-1);
+}
+
+.section-actions button {
+  font-size: 11px;
+  padding: 1px var(--space-2);
+}
+
+.discover-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: var(--space-2);
+  background: var(--surface);
+}
+
+.discover-group > summary {
+  cursor: pointer;
+  padding: var(--space-2) var(--space-3);
+  font-size: 12px;
+  font-weight: 600;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.discover-group > summary .group-origins {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.discover-group > summary .group-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-1);
+}
+
+.discover-group > summary .group-actions button {
+  font-size: 11px;
+  padding: 1px var(--space-2);
+}
+
+.discover-group > summary::marker {
+  color: var(--muted);
+}
+
+.discover-group > ul {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--space-2) var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.links-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.links-table td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.links-table tr:last-child td {
+  border-bottom: none;
+}
+
+.links-table .link-name {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.links-table .link-agent {
+  color: var(--muted);
+}
+
+.link-outdated {
+  display: inline-block;
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--text);
+  background: var(--surface-2, var(--surface));
+}
+
+.skills-links {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+}
+
+.skills-links .skills-seg-title {
+  margin: var(--space-1) 0 var(--space-2);
+}
+
+.link-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  justify-content: flex-end;
+}
+
+.link-actions select,
+.link-actions button,
+.discover-actions button {
+  font-size: 12px;
+  padding: 2px var(--space-2);
+}
+
+.skills-sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+
+.skill-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  max-width: 100%;
+}
+
+.skill-source.stale {
+  opacity: 0.55;
+}
+
+.skill-source-del {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.skills-source-add {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 1;
+  min-width: 180px;
+}
+
+.skills-source-add input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.skills-source-add button {
+  font-size: 12px;
+}
+
+.skills-list .skill-item.discover {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "name actions" "meta actions" "desc actions";
+  cursor: pointer;
+}
+
+.skills-list .skill-item.discover .skill-name { grid-area: name; }
+.skills-list .skill-item.discover .skill-meta { grid-area: meta; }
+.skills-list .skill-item.discover .skill-desc { grid-area: desc; }
+
+.discover-actions {
+  grid-area: actions;
+  align-self: center;
+}
+
+.skills-body h3 button {
+  margin-left: var(--space-2);
+  font-size: 12px;
+}
+
+/* --- permissions view（权限规则管理页） ------------------------------------- */
+
+.permissions-view {
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.perm-scope {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface);
+}
+
+.perm-scope h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 13px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.perm-path {
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+
+.perm-rules {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.perm-rules li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-2);
+}
+
+.perm-rule {
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.perm-meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* The "auto-learned" marker on a decided rule (batch C). */
+.perm-source {
+  font-style: normal;
+  color: var(--accent);
+  margin-right: 6px;
+}
+
+/* ============================================================
+   MCP tab: grouped snapshot (全局 + one section per project),
+   per-entry state badges, expandable tool lists, add/edit form
+   with a target-group dropdown.
+   ============================================================ */
+.mcp-view {
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.mcp-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.mcp-refresh {
+  white-space: nowrap;
+}
+
+.mcp-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mcp-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: none;
+  background: none;
+  padding: var(--space-1) 0;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+}
+
+.mcp-fold-mark {
+  width: 1em;
+  color: var(--muted);
+}
+
+.mcp-group-label {
+  font-weight: 600;
+  /* project groups are absolute paths; let them wrap instead of overflowing */
+  word-break: break-all;
+}
+
+.mcp-group-count {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.mcp-servers {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mcp-server {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mcp-server-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.mcp-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.mcp-state {
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  color: var(--muted);
+}
+
+.mcp-state.connected {
+  color: var(--success);
+  border-color: currentColor;
+}
+
+.mcp-state.failed {
+  color: var(--danger);
+  border-color: currentColor;
+}
+
+.mcp-error {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.mcp-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-1);
+}
+
+.mcp-form {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mcp-form-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.mcp-form-row label,
+.mcp-form > label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+
+.mcp-form input,
+.mcp-form textarea {
+  font: inherit;
+  font-size: 13px;
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+}
+
+.mcp-form-type {
+  display: inline-flex;
+  gap: 0;
+}
+
+.mcp-form-type button.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.mcp-form-type button:first-child {
+  border-radius: var(--radius) 0 0 var(--radius);
+}
+
+.mcp-form-type button:last-child {
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.mcp-kv {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  align-items: flex-start;
+}
+
+.mcp-kv-row {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.mcp-kv-row input {
+  font: inherit;
+  font-size: 12px;
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 3px 6px;
+}
+
+.mcp-form-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+  word-break: break-all;
+}
+
+.mcp-form-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.mcp-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.mcp-meta code {
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.mcp-tools {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mcp-tools li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+
+.mcp-tools code {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.mcp-tool-desc {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.mcp-sensitive {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 6px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* ============================================================
+   Model view (provider management tab).
+   ============================================================ */
+
+.model-view {
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.model-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.model-refresh {
+  white-space: nowrap;
+}
+
+.model-entries {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.model-entry {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.model-entry-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.model-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.model-default {
+  font-size: 12px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.model-format {
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  color: var(--muted);
+}
+
+.model-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-1);
+}
+
+.model-warning {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.model-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.model-meta code {
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.model-limits {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.model-form {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.model-form-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.model-form-row label,
+.model-form > label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+
+.model-form input,
+.model-form select {
+  font: inherit;
+  font-size: 13px;
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+}
+
+.model-form input[readonly] {
+  color: var(--muted);
+}
+
+.model-form-source {
+  display: inline-flex;
+  gap: 0;
+}
+
+.model-form-source button.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.model-form-source button:first-child {
+  border-radius: var(--radius) 0 0 var(--radius);
+}
+
+.model-form-source button:last-child {
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.model-advanced {
+  font-size: 13px;
+}
+
+.model-advanced summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.model-form-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+  word-break: break-all;
+}
+
+.model-form-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.channel-view {
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.channel-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.channel-refresh {
+  margin-left: auto;
+}
+
+.channel-status {
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  word-break: break-all;
+}
+
+.channel-status-running {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.channel-status-disabled {
+  color: var(--muted);
+}
+
+.channel-status-error {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.channel-form {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.channel-form > label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: 13px;
+}
+
+.channel-toggle {
+  flex-direction: row !important;
+  align-items: center;
+}
+
+.channel-form input:not([type="checkbox"]),
+.channel-form select {
+  font: inherit;
+  font-size: 13px;
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  max-width: 420px;
+}
+
+.channel-secret-set {
+  font-size: 12px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 1px 8px;
+  align-self: flex-start;
+}
+
+.channel-allowlist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+
+.channel-allowlist-label {
+  color: var(--muted);
+}
+
+.channel-allowlist-tags {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.channel-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2px 4px 2px 8px;
+}
+
+.channel-tag code {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.channel-tag button {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+}
+
+.channel-tag button:hover {
+  color: var(--danger);
+}
+
+.channel-allowlist-input {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.channel-form-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+  word-break: break-all;
+}
+
+.channel-form-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.channel-test-ok {
+  font-size: 12px;
+  color: var(--success);
+}
+
+.channel-test-fail {
+  font-size: 12px;
+  color: var(--danger);
+  word-break: break-all;
+}
+
+.channel-pending {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.channel-pending h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.channel-pending-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.channel-pending-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.channel-pending-list code {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.channel-pending-list button {
+  margin-left: auto;
+}
+
+.channel-guide {
+  font-size: 13px;
+}
+
+.channel-guide summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.channel-guide ol {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-left: 20px;
+}
+
+.channel-guide code {
+  font-size: 12px;
+}

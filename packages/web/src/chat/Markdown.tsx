@@ -3,7 +3,7 @@
  * (GFM tables, task lists, strikethrough included). Raw HTML never renders:
  * react-markdown skips it by default, so markup smuggled inside model output
  * stays inert text rather than becoming a second injection channel. Code
- * fences get highlight.js token classes (themed in index.css) and a copy
+ * fences get highlight.js token classes (themed in styles/chat.css) and a copy
  * button; links open in a new tab so a chat message never navigates away
  * from the live session.
  */

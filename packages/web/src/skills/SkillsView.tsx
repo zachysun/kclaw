@@ -20,9 +20,10 @@
  * 顶部作用域下拉（默认全局，候选来自会话列表的工作目录）对前两个页签共同
  * 生效，与 run 时注入同源同规则。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import type React from "react"
 import type { ApiClient } from "../api.js"
+import { formatStamp } from "../usage/format.js"
 import type { NoticeFn } from "../toast.js"
 import type { SkillProposalRow } from "@kclaw/core/protocol"
 
@@ -88,12 +89,8 @@ export function SkillsView({ api, notice }: {
   api: ApiClient
   notice: NoticeFn
 }) {
-  // notice 走 ref：App 传内联箭头，每次父组件重渲染都是新引用；若 reload 依赖
-  // notice，停留本页会反复拉取（MemoryView 曾犯过的同类审查问题，同款防御）。
-  const noticeRef = useRef(notice)
-  useEffect(() => {
-    noticeRef.current = notice
-  })
+  // notice 由 App 的 useToasts 提供，引用跨渲染稳定（空依赖 useCallback），
+  // 直接进回调依赖即可，无需 ref 中转。
 
   // scope 为空串表示全局；项目下拉的候选从会话列表的 workdir 去重而来。
   const [scope, setScope] = useState("")
@@ -137,19 +134,19 @@ export function SkillsView({ api, notice }: {
   }, [api])
 
   const reload = useCallback(() => {
-    api.get<SkillRow[]>(`/skills${scopeQuery}`).then(setRows).catch((e) => noticeRef.current(`加载技能失败: ${String(e)}`, "error"))
+    api.get<SkillRow[]>(`/skills${scopeQuery}`).then(setRows).catch((e) => notice(`加载技能失败: ${String(e)}`, "error"))
     // 复用管理面的三份数据失败都走行内降级，不打扰主清单的 notice。
     api.get<DiscoveryPayload>(`/skills/discovery${scopeQuery}`).then(setDiscovery).catch(() => setDiscovery(null))
     api.get<LinksPayload>(`/skills/links${scopeQuery}`).then(setLinks).catch(() => setLinks(null))
     // 提案面不挂在这里：它有自己的 effect 与写后刷新（reloadProposals），避免
     // proposalQuery 变化连带主清单三份数据重拉、挂载时提案重复请求。
-  }, [api, scopeQuery])
+  }, [api, scopeQuery, notice])
   useEffect(() => { reload() }, [reload])
 
   const refreshAfterWrite = useCallback((message: string) => {
-    noticeRef.current(message)
+    notice(message)
     reload()
-  }, [reload])
+  }, [reload, notice])
 
   const open = async (name: string): Promise<void> => {
     try {
@@ -291,13 +288,6 @@ export function SkillsView({ api, notice }: {
   const workdirTail = (wd: string | undefined): string => {
     if (wd === undefined || wd === "") return ""
     return wd.split("/").filter(Boolean).pop() ?? wd
-  }
-  /** ISO → 本地时区 "YYYY-MM-DD HH:mm"（列表行足够，不需要秒）。 */
-  const shortTime = (iso: string): string => {
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return iso
-    const pad = (n: number) => String(n).padStart(2, "0")
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
   }
 
   const proposalAction = async (p: SkillProposalRow, op: "apply" | "reject" | "revert"): Promise<void> => {
@@ -478,7 +468,7 @@ export function SkillsView({ api, notice }: {
                         {" · "}
                         {PROPOSAL_KIND_LABEL[p.kind]} · {p.scope === "project" ? `项目（${workdirTail(p.workdir)}）` : PROPOSAL_SCOPE_LABEL[p.scope]}
                         {" · "}
-                        {shortTime(p.createdAt)}
+                        {formatStamp(p.createdAt)}
                         {p.usage !== undefined ? ` · 被调用 ${p.usage} 次` : ""}
                       </span>
                       <span className="skill-desc clamp2">{p.rationale !== "" ? p.rationale : p.title}</span>
@@ -498,7 +488,7 @@ export function SkillsView({ api, notice }: {
                   PROPOSAL_STATUS_LABEL[p.status],
                   `来源：${p.source === "follow" ? "空闲提炼" : "模型 skill_create"}`,
                   `落点：${PROPOSAL_SCOPE_LABEL[p.scope]}${p.workdir !== undefined ? `（${p.workdir}）` : ""}`,
-                  `创建于 ${shortTime(p.createdAt)}`,
+                  `创建于 ${formatStamp(p.createdAt)}`,
                 ]
                 return (
                   <>

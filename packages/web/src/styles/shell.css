@@ -1,0 +1,791 @@
+/* ---- shared buttons ---- */
+
+button {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background var(--ease), border-color var(--ease), color var(--ease);
+}
+
+button:hover:not(:disabled) {
+  background: var(--surface-3);
+  border-color: var(--border-hover);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+button.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-dim);
+}
+
+button.danger:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--danger-ink);
+  border-color: var(--danger);
+}
+
+/* ---- inputs ---- */
+
+input[type="text"],
+input[type="password"],
+textarea,
+select {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--accent);
+}
+
+/* ---- Token form ---- */
+.token-gate {
+  max-width: 420px;
+  margin: 12vh auto 0;
+  padding: 0 var(--space-4);
+}
+
+.token-gate h1 {
+  font-size: 28px;
+  margin: 0 0 8px;
+  letter-spacing: -0.01em;
+}
+
+.token-gate form {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.token-gate input {
+  flex: 1;
+}
+
+/* ---- Main shell ---- */
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.brand::before {
+  content: "❯ ";
+  color: var(--accent);
+}
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  flex: 1;
+}
+
+.tab {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  border-radius: var(--radius-sm);
+  padding: 5px 14px;
+  font-weight: 600;
+}
+
+.tab:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: transparent;
+}
+
+.tab.active {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+}
+
+.tab.active:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+/* daemon status — accent while connecting, green when healthy, danger on error */
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  flex-shrink: 0;
+}
+
+.status-dot.connected {
+  background: var(--success);
+}
+
+.status-dot.error {
+  background: var(--danger);
+}
+
+.status-dot.connecting {
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+/* theme switch: a compact dropdown fed by the theme registry */
+.theme-select {
+  max-width: 92px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.sidebar-toggle {
+  display: none;
+  background: transparent;
+  border: none;
+  padding: 4px 8px;
+  font-size: 16px;
+}
+
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  padding: var(--space-3);
+  overflow-y: auto;
+}
+
+.sidebar-title {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 var(--space-2);
+}
+
+.main {
+  flex: 1;
+  padding: var(--space-4);
+  overflow-y: auto;
+  min-width: 0;
+  position: relative;
+}
+
+.view-title {
+  margin: 0 0 var(--space-4);
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+
+.view-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+}
+
+/* ---- Sidebar: new session + workdir tree ---- */
+
+.new-session-controls {
+  display: flex;
+  margin-bottom: var(--space-3);
+}
+
+.new-session {
+  width: 100%;
+  padding: 7px 12px;
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: var(--accent-dim);
+}
+
+.new-session:hover:not(:disabled) {
+  background: var(--accent-dim-strong);
+  border-color: var(--accent);
+}
+
+.session-empty {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* 会话列表加载失败态：一行说明 + 重试按钮（不再静默成空列表）。 */
+.session-error {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.session-error p {
+  margin: 0 0 6px;
+}
+
+.session-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.workdir-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workdir-group-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 20px;
+}
+
+/* The group header doubles as the fold toggle. The fold marker lives outside
+   the text flow (fixed at the left, never crowded out); the name itself
+   tail-ellipsizes — the rtl/ellipsis trick keeps the path's TAIL visible
+   (the distinguishing part of a directory path). The project name is the
+   sidebar's only bold white line — the section anchor; the theme accent
+   stays on the marker (interaction signal) and takes over the name on hover. */
+.workdir-group-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  cursor: pointer;
+}
+
+.fold-mark {
+  flex-shrink: 0;
+  color: var(--accent);
+  transition: transform var(--ease);
+}
+
+.fold-mark::before {
+  content: "▸";
+}
+
+.workdir-group:not(.collapsed) .fold-mark {
+  transform: rotate(90deg);
+}
+
+.group-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.workdir-group-name.muted {
+  color: var(--muted);
+}
+
+.workdir-group-name:not(.muted):hover {
+  color: var(--accent-strong);
+}
+
+/* session count on a folded header — the list is gone, the number stays */
+.group-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 6px;
+  line-height: 1.5;
+}
+
+.group-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.group-new {
+  font-size: 12px;
+  padding: 1px 8px;
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: var(--accent-dim);
+}
+
+.group-new:hover:not(:disabled) {
+  background: var(--accent-dim-strong);
+}
+
+/* ---- icon buttons + hover label bubbles ---- */
+
+/* icon-only buttons: the label lives in the hover bubble, not the layout */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.icon-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.icon-btn.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-dim);
+}
+
+/* the two hover bubbles: fixed-position siblings so the sidebar's scroll
+   container can't clip them; .icon-tip centers under the button,
+   .workdir-tip left-aligns under the group header (full workdir path) */
+.icon-tip,
+.workdir-tip {
+  position: fixed;
+  z-index: 35;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  pointer-events: none;
+  box-shadow: 0 3px 10px rgba(var(--shadow-rgb), 0.3);
+}
+
+.icon-tip {
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.workdir-tip {
+  padding: 4px 9px;
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+/* the group delete is a two-step armed button: plain while idle, the armed
+   state reuses button.danger so the commit click is unmistakable */
+.group-delete-trigger {
+  font-size: 11px;
+  padding: 2px 6px;
+  flex-shrink: 0;
+}
+
+.group-rename {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.group-rename input {
+  width: 180px;
+}
+
+.group-sessions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.session-row {
+  list-style: none;
+  position: relative;
+}
+
+.session-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-mono);
+}
+
+.session-item:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+}
+
+.session-item.selected {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.session-title {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.session-fork-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--text-muted, var(--text));
+  vertical-align: 1px;
+}
+
+/* one meta line: where (tail-ellipsized) · when (right-aligned) */
+.session-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.session-workdir {
+  font-size: 11px;
+  color: var(--accent);
+  opacity: 0.72;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.session-time {
+  font-size: 11px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+/* Row actions float over the card's top-right on hover (or keyboard focus
+   within the row) instead of living under every card as permanent noise.
+   The chip backdrop keeps the title underneath readable while overlaid. */
+.session-actions {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: flex;
+  gap: 4px;
+  padding: 2px 4px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--ease);
+}
+
+.session-row:hover .session-actions,
+.session-row:focus-within .session-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Touch has no hover: keep the buttons in their static slot below the card. */
+@media (hover: none) {
+  .session-actions {
+    position: static;
+    margin-top: 2px;
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.session-rename {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.session-rename input {
+  flex: 1;
+}
+
+.session-rename button {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
+/* ---- global toast stack ---- */
+
+/* Floating feedback layer: fixed top-right over the content area, above the
+   header so notices are visible no matter which tab (or sidebar state) the
+   user is on. Both themes read the same variables. */
+.toast-stack {
+  position: fixed;
+  top: 44px;
+  right: 16px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: min(420px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  padding: 8px 8px 8px 12px;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(var(--shadow-rgb), 0.45);
+  animation: toast-in 0.18s ease-out;
+}
+
+
+.toast-action {
+  appearance: none;
+  border: 1px solid var(--border-strong);
+  background: none;
+  color: inherit;
+  font: inherit;
+  padding: 0 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.toast-action:hover {
+  background: var(--surface-3, var(--surface-2));
+}
+
+.toast-text {
+  appearance: none;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+}
+
+.toast-close {
+  appearance: none;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: 1.2;
+  padding: 0 2px;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.toast-close:hover {
+  opacity: 1;
+}
+
+.toast.error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
+}
+
+/* ---- workdir directory picker ---- */
+
+.picker-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+}
+
+.picker-panel {
+  width: min(560px, 92vw);
+  max-height: 76vh;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(var(--shadow-rgb), 0.45);
+}
+
+.picker-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.picker-current {
+  font-size: 12px;
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.picker-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.picker-nav {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  min-height: 120px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.picker-item {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 0;
+}
+
+.picker-item::before {
+  content: "▸ ";
+  color: var(--accent);
+}
+
+.picker-item:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.picker-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.picker-empty {
+  padding: var(--space-3);
+  font-size: 12px;
+}
+
+.picker-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+

@@ -36,13 +36,8 @@ export function McpView({ api, notice, sessionWorkdir }: {
   /** The selected session's workdir — the default target for new entries. */
   sessionWorkdir?: string
 }) {
-  // notice goes through a ref: App passes an inline arrow that is a fresh
-  // reference each render; depending on `notice` would refetch on every parent
-  // re-render (same guard as PermissionsView).
-  const noticeRef = useRef(notice)
-  useEffect(() => {
-    noticeRef.current = notice
-  })
+  // notice comes from App's useToasts: its identity is stable across renders
+  // (empty-deps useCallback), so it goes straight into callback deps.
   const sessionWorkdirRef = useRef(sessionWorkdir)
   sessionWorkdirRef.current = sessionWorkdir
 
@@ -61,9 +56,9 @@ export function McpView({ api, notice, sessionWorkdir }: {
       .get<McpSnapshotResponse>(path)
       .then((r) => setSnapshot(r))
       .catch((e) => {
-        if (opts?.quiet !== true) noticeRef.current(`加载 MCP 状态失败: ${String(e)}`, "error")
+        if (opts?.quiet !== true) notice(`加载 MCP 状态失败: ${String(e)}`, "error")
       })
-  }, [api])
+  }, [api, notice])
 
   useEffect(() => {
     void reload()
@@ -102,7 +97,7 @@ export function McpView({ api, notice, sessionWorkdir }: {
       await fn()
       await reload()
     } catch (e) {
-      noticeRef.current(`操作失败: ${String(e)}`, "error")
+      notice(`操作失败: ${String(e)}`, "error")
     }
   }
 

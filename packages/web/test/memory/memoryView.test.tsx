@@ -160,7 +160,13 @@ describe("MemoryView", () => {
       })
       await flush()
       expect(api.patch).toHaveBeenCalledWith("/memory/global/persona/persona", { content: "改后的画像" })
-      // 删除：编辑器清空回默认占位
+      // 删除两步确认：第一击只武装（不发 DELETE），第二击才删并清空编辑器
+      await act(async () => {
+        ;(container.querySelector('[data-testid="memory-delete"]') as HTMLButtonElement).click()
+      })
+      await flush()
+      expect(api.del).not.toHaveBeenCalled()
+      expect((container.querySelector('[data-testid="memory-delete"]') as HTMLButtonElement).textContent).toBe("确认删除")
       await act(async () => {
         ;(container.querySelector('[data-testid="memory-delete"]') as HTMLButtonElement).click()
       })
@@ -174,23 +180,25 @@ describe("MemoryView", () => {
     }
   })
 
-  it("does not re-fetch the lists when the notice callback identity changes", async () => {
-    // 回归（审查 Important）：App 传的是内联箭头，父重渲染每次新建 notice
-    // identity。reloadProjects 的 effect 不得跟着 notice 变——否则停在记忆
-    // tab 时每个父重渲染都重复拉 projects + global。
+  it("does not re-fetch the lists when the parent re-renders with the same notice", async () => {
+    // 回归（审查 Important）：停留记忆 tab 时父组件重渲染（App 的 state 变化
+    // 等）不得连带重拉 projects + global。notice 由 App 的 useToasts 提供、
+    // 引用稳定（空依赖 useCallback），reloadProjects 直接依赖它——用同一
+    // notice 引用重渲染模拟父刷新，断言拉取次数不变。
     const api = fakeApi()
     const container = document.createElement("div")
     document.body.appendChild(container)
     const root = createRoot(container)
+    const notice = (): void => {}
     try {
       await act(async () => {
-        root.render(<MemoryView api={api} notice={() => {}} />)
+        root.render(<MemoryView api={api} notice={notice} />)
       })
       await flush()
       expect(api.get).toHaveBeenCalledTimes(2) // projects + global 各一次
-      // 父重渲染 → 新 identity 的 notice → 组件重渲染，但不许再拉取
+      // 父重渲染（同一 notice 引用）→ 组件重渲染，但不许再拉取
       await act(async () => {
-        root.render(<MemoryView api={api} notice={() => {}} />)
+        root.render(<MemoryView api={api} notice={notice} />)
       })
       await flush()
       expect(api.get.mock.calls.filter((c) => c[0] === "/memory/projects")).toHaveLength(1)

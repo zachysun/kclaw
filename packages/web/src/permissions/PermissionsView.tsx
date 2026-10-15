@@ -7,8 +7,9 @@
  * gate (a cloned repo cannot ship a pre-authorized allow list), so it is
  * labelled as such here.
  */
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import type { ApiClient } from "../api.js"
+import { formatStamp } from "../usage/format.js"
 import type { NoticeFn } from "../toast.js"
 
 interface RuleRow {
@@ -34,35 +35,22 @@ interface RulesPayload {
   project: ProjectBlock
 }
 
-/** "2026-09-06T12:34:56.789Z" → "2026-09-06 12:34" (local time). */
-function shortTime(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  const pad = (n: number): string => String(n).padStart(2, "0")
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
 export function PermissionsView({ api, notice, workdir }: {
   api: ApiClient
   notice: NoticeFn
   /** The current session's workdir: the project scope's read range; unknown → global only. */
   workdir?: string
 }) {
-  // notice goes through a ref: App passes an inline arrow that is a fresh
-  // reference each render; depending on `notice` would refetch on every parent
-  // re-render (same guard as SkillsView).
-  const noticeRef = useRef(notice)
-  useEffect(() => {
-    noticeRef.current = notice
-  })
+  // notice comes from App's useToasts: its identity is stable across renders
+  // (empty-deps useCallback), so it goes straight into callback deps.
 
   const [data, setData] = useState<RulesPayload | null>(null)
 
   const query = workdir !== undefined && workdir !== "" ? `?workspace=${encodeURIComponent(workdir)}` : ""
 
   const reload = useCallback(() => {
-    api.get<RulesPayload>(`/permissions/rules${query}`).then(setData).catch((e) => noticeRef.current(`加载权限规则失败: ${String(e)}`, "error"))
-  }, [api, query])
+    api.get<RulesPayload>(`/permissions/rules${query}`).then(setData).catch((e) => notice(`加载权限规则失败: ${String(e)}`, "error"))
+  }, [api, query, notice])
 
   useEffect(() => { reload() }, [reload])
 
@@ -95,7 +83,7 @@ export function PermissionsView({ api, notice, workdir }: {
               <code className="perm-rule">{r.rule}</code>
               <span className="perm-meta">
                 {r.source === "auto" && <em className="perm-source" data-testid={`perm-source-${scope}-${i}`}>自动学习</em>}
-                {shortTime(r.decidedAt)}
+                {formatStamp(r.decidedAt)}
                 {r.origin.sessionId !== undefined ? ` · ${r.origin.sessionId}` : ""}
               </span>
               <button
