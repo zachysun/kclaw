@@ -57,7 +57,6 @@ export interface RunInput {
 export interface AgentDeps {
   llm: LlmClient
   model: string
-  window?: number
   /** Tool results kept verbatim in the provider view; undefined = keep all. */
   toolResultKeep?: number
   /** Per-request output cap (config entry `maxOutput`) sent as max_tokens; undefined = provider default. */
@@ -208,7 +207,6 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
   const runId = newId("run")
   const ctx = { sessionId: input.sessionId, runId }
   const maxIterations = deps.maxIterations ?? 25
-  const window = deps.window ?? 200
   const emit = (e: AgentEvent) => deps.onEvent(e)
   // Tool-loop guard state: signature of the last executed call and its
   // consecutive repeat count, alive ACROSS turns (the guard detects a loop
@@ -290,7 +288,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       const base = all.findIndex((m) => m.id === compacted!.upto)
       if (base >= 0) msgs = all.slice(base + 1)
     }
-    const provider = toProviderMessages(msgs, window, {
+    const provider = toProviderMessages(msgs, {
       ...(deps.toolResultKeep === undefined ? {} : { toolResultKeep: deps.toolResultKeep }),
       ...(deps.tokenBudget === undefined ? {} : { tokenBudget: deps.tokenBudget }),
       ...(compacted === undefined ? {} : { summary: compacted }),

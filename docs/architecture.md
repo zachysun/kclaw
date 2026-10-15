@@ -131,7 +131,7 @@ run 的组装在 core 的 `executeRun`（`packages/core/src/agent/run-assembly.t
 4. 扫描技能目录（全局 `<home>/skills` + 工作区 `.kclaw/skills`），把可用技能清单追加进系统提示——此时系统提示分两段组装：**stable**（人设基础文本 + 注入约定，缓存冻结面）在前，**live**（全局认知 + 技能清单，低频变化面）在后；若消息里出现 `/技能名` 或 `@路径`（任意位置，仅用户消息），把两者的包装文本合并成一份改写后的模型视图文本（见 [skills](./core/skills.md) 与 [file-mentions](./core/file-mentions.md)）。
 5. 读会话历史（在读之后才追加新用户消息）→ `createBuiltinTools`（含 skill_read）+ extraTools（MCP 工具）→ `ConfigPermissionGate`（readRoots 为附件目录；权限模式与已保存规则每个 run 都从会话 meta 和磁盘现读）。
 6. 进入 agent 循环 `runAgent(...)`（`packages/core/src/agent/loop.ts`）：
-   - `llm.stream(await buildMessages())`：`toProviderMessages(history, window=200)` 负责把历史组装成发往模型的请求（`agent/context.ts`）；llm-before hook 链只能修改模型看到的输入（技能与 `@` 文件指定的合并包装就是内置的 skill-wrap hook，用 `withLastUserText` 锚定最后一条 user 消息）。
+   - `llm.stream(await buildMessages())`：`toProviderMessages(history)` 负责把全量历史组装成发往模型的请求（`agent/context.ts`，上下文长度由压缩体系统一管）；llm-before hook 链只能修改模型看到的输入（技能与 `@` 文件指定的合并包装就是内置的 skill-wrap hook，用 `withLastUserText` 锚定最后一条 user 消息）。
    - 模型流式返回 text / thinking / tool_call（各自经历 created → delta → …）。
    - 模型要求调用工具（`stopReason:"tool_use"`）→ 权限检查 `check(toolCall)`（`permissions/engine.ts`）。需要人工确认时，发出 confirmation.requested 事件，客户端弹确认框；用户的选择经 WS 帧 `{type:"confirmation.resolve", confirmationId, decision}` 回来，`ConfirmationBroker.resolve` 收到后循环继续（`core/src/permissions/broker.ts`）。
    - 执行工具：parallel 组并发、serial 组串行，产出 tool_result 块。

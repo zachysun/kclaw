@@ -34,7 +34,7 @@ describe("fingerprintAssembled / diffFingerprints（缓存归因）", () => {
     expect(diffFingerprints(prev, next)?.reasons).toEqual(["system_changed"])
   })
 
-  it("窗口滑动 / 压缩生效：头部重建 → history_rebuilt", () => {
+  it("压缩生效：头部原文退出 → history_rebuilt", () => {
     const prev = fpOf([TOOL_A], "S", [msg("user", "a"), msg("assistant", "b"), msg("user", "c")])
     const next = fpOf([TOOL_A], "S", [msg("assistant", "b"), msg("user", "c")])
     const d = diffFingerprints(prev, next)

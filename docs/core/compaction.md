@@ -21,7 +21,7 @@
 - **压缩不挡发送，失败不挡运行**：五个触发点全部不在发送路径上——发送消息后立即开始运行，压缩要么发生在运行结束后的收尾、要么在运行中途的迭代边界（中途与后台预压）、要么是对超限错误的急救重试。摘要调用抛错时发出 `result:"failed"` 的结束事件并记日志，运行照常继续，下一次过线重新触发；压缩事件（含投影）追加失败只记日志，不发失败事件（见"边界与出错"）。最坏情况等于"没有压缩"，不会比现状差。
 - **同一会话至多一个压缩在跑**：后台预压与同步压缩（中途/收尾/急救/手动）共用一张"正在执行"登记表，同步路径遇到正在执行的后台压缩时等它结束、重新估算占用后再决定，而不是并发两个摘要调用互相踩写。等来的后台结果不浪费：直接应用，或作为同步压缩的保底（等完发现占用已降回线以下，就用后台结果、不再压一次）。
 - **检索与审计是外围，不是前提**：`session_search` 每次调用都重新读一遍事件流，没有需要维护或重建的持久索引；审计是事件流里的一条 `compaction` 事件，追加失败只记日志，不让已成功的压缩回退。
-- **循环窗口退居保险**：agent 循环"最多取最近 N 条消息"的硬上限从 40 放宽到 200（`packages/core/src/agent/loop.ts`），角色从主要控制手段退化为防止估算彻底失准的极端保险。
+- **压缩体系独管上下文长度**：agent 循环没有"最多取最近 N 条消息"的条数窗口（窗口已删除，全量历史直发），上下文装不装得下完全由压缩体系接管——按条数截尾的切点随新消息逐轮前移，会把 prompt cache 前缀从第一条消息起打断且无告警，与缓存目标正面冲突，所以不留窗口作保险。
 
 ---
 
@@ -407,7 +407,7 @@ llm.stream({ system: <人格>, messages: [
 
 - [memory](./memory.md)：记忆提取与压缩共用的消息渲染（`renderSegment`）
 - [storage](./storage.md)：会话目录布局、events.jsonl 事件流与 meta 投影、JSONL 的追加/断尾修复、config 字段定义
-- [agent-loop](./agent-loop.md)：`toProviderMessages` 的窗口与 budget 驱动省略、循环的压缩视图与两个压缩 hook、超限重试、window 200 的保底位置
+- [agent-loop](./agent-loop.md)：`toProviderMessages` 的 budget 驱动省略、循环的压缩视图与两个压缩 hook、超限重试；条数窗口已删除、上下文长度由压缩体系统一管
 - [tools](./tools.md)：session_search 在工具体系中的注册与 safe/parallel 语义
 - [run-manager](../server/run-manager.md)：`Compactor` 的五触发点编排（收尾/中途/后台预压/超限在 run 组装、手动在 compactSession）、`cancelCompaction`、收尾压缩的串行化、/compact 的排队与执行
 - [http-api](../server/http-api.md)：`POST /sessions/:id/compact`、`GET /sessions/:id/compactions` 与 `GET /sessions/:id/events`

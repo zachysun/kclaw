@@ -102,7 +102,7 @@ run.started {trigger}
 
 ### 缓存归因（cacheMiss）
 
-`AgentDeps.cacheProbe` 提供时（daemon 每会话持一份上次请求快照，内存态），每次 LLM 调用前对**实际发送视图**（llm-before 链改写后）做指纹（system 哈希、工具集哈希、逐消息哈希），与同一会话上次的指纹比对，变化原因随 `llm.completed` / `llm.failed` 的 `cacheMiss` 字段可见：`tools_changed`（工具集变了，前缀失效范围覆盖其后全部）、`system_changed`、`history_rebuilt`（消息列表头部重建：窗口滑动、压缩生效）、`history_diverged`（某条中间消息字节变了，如 mention/技能包装的跨 run 断裂），`divergedAt` 与两端摘录辅助定位。纯追加（上次是本次的真前缀）不携带字段。首个 run 无基准不报；探针缺失（一次性辅助调用、裸引擎）整段跳过；快照损坏按无数据处理，绝不影响 run。
+`AgentDeps.cacheProbe` 提供时（daemon 每会话持一份上次请求快照，内存态），每次 LLM 调用前对**实际发送视图**（llm-before 链改写后）做指纹（system 哈希、工具集哈希、逐消息哈希），与同一会话上次的指纹比对，变化原因随 `llm.completed` / `llm.failed` 的 `cacheMiss` 字段可见：`tools_changed`（工具集变了，前缀失效范围覆盖其后全部）、`system_changed`、`history_rebuilt`（消息列表头部重建：压缩生效，upto 之前的原文退出发送范围）、`history_diverged`（某条中间消息字节变了，如 mention/技能包装的跨 run 断裂），`divergedAt` 与两端摘录辅助定位。纯追加（上次是本次的真前缀）不携带字段。首个 run 无基准不报；探针缺失（一次性辅助调用、裸引擎）整段跳过；快照损坏按无数据处理，绝不影响 run。
 
 ### run 级 usage 聚合的边界
 
@@ -130,16 +130,16 @@ run.started {trigger}
 
 ## 消息编排（上下文组装）
 
-`toProviderMessages(history, window, opts?)`（`packages/core/src/agent/context.ts`）是协议消息 → provider 请求的格式翻译点：
+`toProviderMessages(history, opts?)`（`packages/core/src/agent/context.ts`）是协议消息 → provider 请求的格式翻译点：
 
-- **滑动窗口**（只保留最近 N 条历史、随新消息整体前移）：`history.slice(-window)`（window 默认 200），system prompt 不占窗口。窗口截断仅作为未压缩/压缩失败时的极端保险；长会话的正常收缩靠压缩（见 [compaction](./compaction.md)）：压缩视图（`ActiveSummary { upto, top }`）由宿主从会话 meta 取出放进 `RunInput.compaction`，循环内的 `buildMessages` 据此把 `upto`（含）之前的原文排除在发送窗口外，`toProviderMessages` 再把压缩摘要项垫进待发送数组——循环本身不感知也不改动 JSONL 里的原始消息。运行起点不跑任何压缩（「发送前预压缩」这一做法已删除，压缩只发生在后台预压 / 收尾 / 运行中 / 超限急救四个自动时机加手动 /compact，见 [compaction](./compaction.md)）。
+- **全量历史直发**：历史消息全部进入请求，没有"最多取最近 N 条"的条数窗口（窗口已删除，见下）。上下文长度由压缩体系统一管：长会话的正常收缩靠压缩（见 [compaction](./compaction.md)）——预压线后台压缩、黄线、红线 × 有效 budget 逐级接管，省略线管工具输出，超限急救兜溢出。按条数截尾的问题在于切点随新消息逐轮前移，请求头部每轮都在变，prompt cache 前缀从第一条消息起就断且无告警，所以彻底删掉。压缩视图（`ActiveSummary { upto, top }`）由宿主从会话 meta 取出放进 `RunInput.compaction`，循环内的 `buildMessages` 据此把 `upto`（含）之前的原文排除在发送范围外，`toProviderMessages` 再把压缩摘要项垫进待发送数组——循环本身不感知也不改动 JSONL 里的原始消息。运行起点不跑任何压缩（「发送前预压缩」这一做法已删除，压缩只发生在后台预压 / 收尾 / 运行中 / 超限急救四个自动时机加手动 /compact，见 [compaction](./compaction.md)）。
 - **工具输出省略**（`opts.toolResultKeep`，server 从 `config.sessions.toolResultKeep` 传入，默认 0 = 不按条数省略；`N≥1` 时）：从最新消息往前数，最多保留最近 N 个工具结果原文（条数上限），更早的把输出文本替换成一行占位符 `[此工具输出已省略：<工具名> <参数摘要>，可重新调用获取]`（调用失败加"（该次调用失败）"）。传了 `opts.tokenBudget` 时在条数上限内再做 budget 驱动逐出：以"非工具结果内容的估算 token + 被上限挤掉结果的占位行"为基线，从最新到最旧逐条处理——最新的 2 条无条件保留（保底可见性，保证占位符"重新调用获取"的建议始终可行），其余各条独立判断，装得下保留、装不下省略。两者都只影响发出的请求，JSONL 存储不动；配对关系不变，不产生无效请求。不传任何 opts 时行为完全不变（全部保留）。详见 [compaction](./compaction.md) 机制二/三。
 - **工具清单按名排序**：发给模型的 `toolDefs`（内置 + 测试覆盖 + `extraTools` 追加 + readonly 裁剪之后的最终清单）在 run 组装末尾按 `name` 做 code point 序排序。tools 数组在请求前缀的最前面，MCP 连接恢复/重连后视图迭代序一变，整个 prompt cache 前缀就失效；排序让「集合没变顺序变了」不再发生。只排发送面（toolDefs）；executor 的 Map 顺序无关不动，同名冲突日志语义也不变。
 - **prompt-cache 路由**：主循环构造的每个 LLM 请求恒带 `promptCache: { key: sessionId }`（subagent 经同一路径自然用自己的会话 id，不继承父会话）——适配器据此加缓存标记（Anthropic `cache_control` 断点 / OpenAI `prompt_cache_key`），条目配置 `promptCache: "off"` 或端点回 400 时的退避见 [provider](./provider.md) 的 2b 节。一次性辅助调用（压缩摘要、goal judge、autoname）不经 runAgent、不带该字段，payload 与加缓存标记前逐字节一致。
 - **压缩摘要注入**（`opts.summary`，类型 `ActiveSummary { upto, top }`）：非空时在结果数组**最前面**注入一条 user 消息：交接声明 + `<compacted-summary>` 标签包装 `<top>` + 末尾一行 session_search 检索提示（system prompt 保持恒定以保住 KV 缓存前缀，故摘要走 user 通道；检索提示见 [compaction](./compaction.md) 的注入一节）。它排在切片后的对话之前；provider 适配层再在它前面加真正的 system 提示（persona），所以模型看到的最终顺序是 **persona → 压缩摘要 → 对话**。原始 `req.system` 不被覆盖，JSONL 里也没有这条注入（只在发送的请求里）。
 - **模型视图改写（`llm-before` 位置）**：上述全部组装完成后、`llm.stream` 之前，循环把最终消息列表交给 `llm-before` hook 链，链的最终改写值（`undefined` = 原样）就是要发送的内容。它是"只改模型看到的输入"的唯一口子，持久化、事件流与 outcome 一概不动。现成实现是 `withLastUserText(messages, text)`（`agent/context.ts`）：把消息列表里**最后一条 user 消息**的文本整体替换成 `text`（string 内容整体替换；ContentPart 数组只换第一个 text 部分，图片等其余部分保留）。从尾部向前找，工具循环的第二轮起列表末条是 tool 消息，锚定"最后一条 user"才能让改写在每一轮都生效；列表里没有 user 消息时原样返回。技能指定与 `@` 文件引用的隐式包装是内置 `skill-wrap` hook + 这个辅助（run 组装把两份包装文本合并成一份 `llmUserText` 交给 hook；见 [skills](./skills.md)、[file-mentions](./file-mentions.md) 与 [hooks](./hooks.md)）。
-- **无配对 tool 消息丢弃**：窗口切在 assistant 与 tool 消息之间时，开头的连续 `role:"tool"` 消息被 `shift` 丢弃——OpenAI 兼容 API 拒收无配对调用的 tool 结果。
-- **无配对的 tool_call 剔除**：assistant 的 `tool_call` 块只有当其后（窗口内）存在配对的 `tool_result` 才转成 `toolCalls` 发送；悬空调用会被 400。
+- **无配对 tool 消息丢弃**：历史开头出现连续 `role:"tool"` 消息时被 `shift` 丢弃——正常历史不会出现（压缩 upto 与编辑重试都保配对边界），这条是防御；OpenAI 兼容 API 拒收无配对调用的 tool 结果。
+- **无配对的 tool_call 剔除**：assistant 的 `tool_call` 块只有当其后存在配对的 `tool_result` 才转成 `toolCalls` 发送；悬空调用会被 400。
 - **块级转换**：user/assistant 的 text 拼接为 content；note 转 `<system-reminder kind="<NoteKind>"><text></system-reminder>` 行（对模型可见、可追溯；标签约定由系统提示词末尾的注入约定声明，正文中的闭合标签会被逃逸）；tool 消息的每个 `tool_result` 转成一条消息，error 结果加 `[error] ` 前缀；assistant 没有 text 时 content 置 null、只带 toolCalls；thinking 不转换，模型看不到自己之前的思考内容。attachment 块按附带的内容分三种转法：带 `base64` 数据且 MIME 是 `image/*` 的转成一个多模态 `image_url` 内容段（data: URL 形式，与文本段并列为 content 数组的元素）；带内联 `text` 正文的转成 `[附件 <名称>]` 加正文；两者都不满足的只转一行元数据提示（`[附件 <名称>（<mime>，仅元数据）已保存，路径 <path>，可用 fs_read 读取]`），需要内容时由模型自己调 fs_read。
 - 下一轮的 history：`[...input.history, userMsg, assistant?, toolMsg?, …]`，由循环内逐步 `all.push` 累积。
 
@@ -199,7 +199,7 @@ daemon 侧 `RunManager.cancel(sessionId)` 调 `AbortController.abort()`，循环
 ## 关联
 
 - [protocol](./protocol.md)：Message/Block/Event 的字段与事件全表
-- [compaction](./compaction.md)：上下文占用与五条阈值线（省略/预压/黄/红/目标）、五个触发点（后台预压/收尾/运行中/溢出急救/手动）、budget 驱动省略与 window 200 的分工
+- [compaction](./compaction.md)：上下文占用与五条阈值线（省略/预压/黄/红/目标）、五个触发点（后台预压/收尾/运行中/溢出急救/手动）、budget 驱动省略与压缩体系统管上下文长度的分工
 - [provider](./provider.md)：OpenAI 兼容流解析与 withRetry
 - [permissions](./permissions.md)：判定链与规则语法（allow/deny 的来源）
 - [skills](./skills.md)：技能指定隐式包装（`skill-wrap` 内置 hook + `withLastUserText`）
