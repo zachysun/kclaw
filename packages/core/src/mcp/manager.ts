@@ -199,6 +199,14 @@ export class McpManager {
    * The project's tool view: global + project entries, same-name project
    * wins. Missing connections start building in the background; tools from
    * live connections are returned now, the rest join on the next assembly.
+   *
+   * A disconnected record still serves its LAST listed tool view (and its
+   * executor, which answers honestly that the server is down): the tools
+   * array sits at the very front of the request prefix, so a flapping or
+   * idle-reclaimed server must not shrink and re-grow it — that would
+   * invalidate the prompt cache on every flap. The view refreshes from a
+   * real listTools on reconnect; entries never connected and disabled ones
+   * contribute nothing.
    */
   toolsFor(workdir: string): { executors: Map<string, ToolExecutor>; defs: ToolDefinition[] } {
     const executors = new Map<string, ToolExecutor>()
@@ -211,9 +219,10 @@ export class McpManager {
           this.#pool.kick(record, { retry: true })
         }
       }
-      if (record.state !== "connected") continue
+      const live = record.state === "connected"
+      if (!live && !(record.config.enabled !== false && record.tools.length > 0)) continue
       for (const tool of record.tools) {
-        executors.set(tool.name, this.#makeExecutor(entry.group, entry.name, tool))
+        executors.set(tool.name, this.#makeExecutor(entry.group, entry.name, tool, live))
         defs.push({
           name: tool.name,
           description: tool.description || `MCP tool ${tool.originalName} from server ${entry.name}`,
@@ -230,7 +239,7 @@ export class McpManager {
    * dead client, and a reconnect under the same key is picked up as-is.
    * Every call refreshes the idle marker, so a busy run is never reclaimed.
    */
-  #makeExecutor(group: string, name: string, tool: McpToolEntry): ToolExecutor {
+  #makeExecutor(group: string, name: string, tool: McpToolEntry, live: boolean): ToolExecutor {
     return {
       risk: "sensitive",
       concurrency: "serial",
@@ -239,7 +248,15 @@ export class McpManager {
         const client = record?.client
         if (record !== undefined) this.#pool.touch(record)
         if (client === undefined) {
-          return { status: "error", output: `MCP server ${name} 未连接（下一轮自动重连）` }
+          // Reachable both from a disconnected-but-listed entry (kept view,
+          // see toolsFor) and from a live-at-assembly record that dropped
+          // mid-run. The copy tells the model how to recover.
+          return {
+            status: "error",
+            output: live
+              ? `MCP server ${name} 本次调用时已断开（正在自动重连，稍后重试本调用通常即可恢复；多次失败请告知用户该工具暂时不可用）`
+              : `MCP server ${name} 当前未连接（正在自动重连，稍后重试本调用通常即可恢复；多次失败请告知用户该工具暂时不可用）`,
+          }
         }
         try {
           const result = (await client.callTool(

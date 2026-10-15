@@ -27,6 +27,7 @@ export function createChoreUsageRecorder(usage: UsageSink): ChoreUsageRecorder {
         sessionId: r.sessionId,
         runId: `${r.chore}-${randomUUID()}`,
         model: r.model,
+        kind: r.chore,
         inputTokens: u.inputTokens,
         outputTokens: u.outputTokens,
         ...(u.cacheReadTokens !== undefined ? { cacheReadTokens: u.cacheReadTokens } : {}),

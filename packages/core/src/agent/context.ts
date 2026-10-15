@@ -64,12 +64,14 @@ export const SYSTEM_INJECTION_CONVENTION = [
 
 export function toProviderMessages(
   history: Message[],
-  window: number,
   opts?: { toolResultKeep?: number; tokenBudget?: number; summary?: ActiveSummary },
 ): ProviderMessage[] {
-  const recent = history.slice(-window)
-  // A tool message whose paired assistant message fell outside the window is
-  // unusable for OpenAI-compatible APIs — drop leading orphans.
+  // 全量历史直发，条数窗口已删除（R2）：上下文长度由压缩体系统一管
+  // （预压线后台压缩 / 黄线 / 红线 × contextWindow，省略线管工具输出，
+  // overflow-rescue 兜溢出急救）——按条数截尾会让请求头部逐轮前移、
+  // prompt cache 前缀从第一条消息起全断且无告警。历史里不应有孤儿 tool
+  // 消息（压缩 upto 与编辑重试都保配对边界），仍按防御保留头部剔除。
+  const recent = history.slice()
   while (recent.length > 0 && recent[0].role === "tool") recent.shift()
 
   // ---- 工具结果收集（最新→最旧）----
@@ -161,11 +163,17 @@ export function toProviderMessages(
         }
       }
       if (m.role === "user") {
+        // llmText replay: a user message that carried an implicit wrap when
+        // first sent replays that exact payload on every later assembly —
+        // re-deriving the wrap would pick up changed skill catalogs / file
+        // contents and break the cache prefix mid-history. No marker →
+        // assemble exactly as before.
+        const text = m.llmText !== undefined ? m.llmText : parts.join("\n")
         if (images.length > 0) {
-          const content: ContentPart[] = [{ type: "text", text: parts.join("\n") }, ...images]
+          const content: ContentPart[] = [{ type: "text", text }, ...images]
           out.push({ role: "user", content })
         } else {
-          out.push({ role: "user", content: parts.join("\n") })
+          out.push({ role: "user", content: text })
         }
       } else {
         const content = parts.length ? parts.join("\n") : null
@@ -189,20 +197,39 @@ export function toProviderMessages(
 }
 
 /**
- * Provider 视图的定向改写（供 AgentDeps.mapLlmMessages 钩子使用）：把消息
- * 列表中最后一条 user 消息（当前轮次的用户输入）的文本换成 `text`——
- * string 内容整体替换；ContentPart[] 只换第一个 text part，图片等其余部分
- * 原样保留。从尾部向前找：工具循环第二轮起列表末条是 tool 消息，锚定
- * “最后一条 user”才能让改写在每一轮都生效。列表里没有 user 消息时原样
- * 返回。这是“只改模型看到的输入”的现成实现：调用方的持久化与事件流
+ * Provider 视图的定向改写（skill-wrap 钩子使用）：把消息列表中本轮用户
+ * 消息的文本换成 `text`——string 内容整体替换；ContentPart[] 只换第一个
+ * text part，图片等其余部分原样保留。
+ *
+ * 本轮消息按 `anchor`（本轮用户消息的实际文本）从尾部向前做内容匹配：
+ * 工具循环里 steer 插话后列表末条的 user 是插话而不是本轮消息，按内容
+ * 锚定才不会把插话覆盖掉。匹配不到时回退"从尾部向前第一条 user"
+ * （run-before 改写了本轮文本、或列表无 user 消息等边界，行为与旧版
+ * 一致）。这是"只改模型看到的输入"的现成实现：调用方的持久化与事件流
  * 不受影响。
  */
-export function withLastUserText(messages: ProviderMessage[], text: string): ProviderMessage[] {
+export function withLastUserText(messages: ProviderMessage[], text: string, anchor: string): ProviderMessage[] {
+  const textOf = (m: ProviderMessage): string => {
+    if (typeof m.content === "string") return m.content
+    if (m.content === null) return ""
+    return m.content
+      .map((p: ContentPart) => (p.type === "text" ? p.text : ""))
+      .join("")
+  }
   let idx = -1
+  // 先按本轮文本从尾部向前精确匹配；找不到再回退"最后一条 user"。
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]!.role === "user") {
+    if (messages[i]!.role === "user" && textOf(messages[i]!) === anchor) {
       idx = i
       break
+    }
+  }
+  if (idx === -1) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]!.role === "user") {
+        idx = i
+        break
+      }
     }
   }
   if (idx === -1) return messages

@@ -160,3 +160,70 @@ describe("executeRun file mention wiring (end to end)", () => {
     expect(persisted).toBe("看 @gone.ts")
   })
 })
+
+describe("executeRun wrap replay across runs (llmText marker)", () => {
+  let root: string
+  let home: string
+
+  beforeEach(async () => {
+    root = realpathSync(await mkdtemp(join(tmpdir(), "kclaw-wrap-replay-ws-")))
+    home = await mkdtemp(join(tmpdir(), "kclaw-wrap-replay-home-"))
+    await writeFile(join(root, "a.ts"), "hello")
+  })
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true })
+    await rm(home, { recursive: true, force: true })
+  })
+
+  it("run 2 replays run 1's wrapped bytes even though the file is gone (no re-derivation)", async () => {
+    const lastRequests: Array<Array<{ role: string; content: unknown }>> = []
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        lastRequests.push((req as { messages: Array<{ role: string; content: unknown }> }).messages)
+        yield { type: "text_delta", delta: "done" }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+      },
+    }
+    const paths = resolvePaths(home)
+    const config = loadConfig(paths)
+    const sessions = new SessionStore(paths.sessionsDir)
+    const bus = new EventBus()
+    const memory = new MemorySystem({
+      memoryDir: paths.memoryDir,
+      sessions,
+      config,
+      resolveLlm: () => ({ llm, model: "test-model" }),
+    })
+    const sessionId = sessions.create("重放").id
+    const engine: RunEngine = {
+      deps: {
+        config, paths, sessions, memory, bus, llm, model: "test-model",
+        workspace: root, broker: new ConfirmationBroker(),
+      },
+      compactor: new Compactor({ sessions, emit: (e) => bus.emit(e) }),
+    }
+
+    await executeRun(engine, {
+      sessionId, input: { userText: "看 @a.ts", trigger: "user" as const },
+      controller: new AbortController(), drainSteer: () => [],
+    })
+    const wrapped = lastRequests[0]!.at(-1) as { role: string; content: string }
+    expect(wrapped.content).toContain("fs_read")
+
+    // 标记随消息持久化
+    const persisted = sessions.readMessages(sessionId)[0]! as { llmText?: string }
+    expect(persisted.llmText).toBe(wrapped.content)
+    // 气泡/持久化文本保持原文
+    expect((persisted.blocks[0] as { text: string }).text).toBe("看 @a.ts")
+
+    // 文件删掉后重算包装会得到"文件不存在"文案——重放必须维持 run 1 的字节
+    await rm(join(root, "a.ts"))
+    await executeRun(engine, {
+      sessionId, input: { userText: "继续", trigger: "user" as const },
+      controller: new AbortController(), drainSteer: () => [],
+    })
+    const historyUser = lastRequests[1]!.find((m) => m.role === "user") as { role: string; content: string }
+    expect(historyUser.content).toBe(wrapped.content)
+  })
+})

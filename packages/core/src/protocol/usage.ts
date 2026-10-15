@@ -27,9 +27,9 @@ export interface UsageTotal {
   costUsd: number
 }
 
-/** GET /usage response body. */
+/** GET /usage response body. `by=kind` buckets main runs vs background chores. */
 export interface UsageBody {
-  by: "day" | "session" | "model"
+  by: "day" | "session" | "model" | "kind"
   buckets: UsageAgg[]
   total: UsageTotal
 }

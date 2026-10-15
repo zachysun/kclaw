@@ -980,10 +980,16 @@ describe("RunManager context compaction", () => {
     expect(startedIdx).toBeGreaterThanOrEqual(0)
     expect(startedIdx).toBeGreaterThan(types.indexOf("run.completed"))
     expect(events[startedIdx]!.payload).toEqual({ phase: "post-run", trigger: "auto" })
-    // both summarizer calls follow the main request
-    expect(reqs[1]!.tools).toEqual([])
-    expect(reqs[1]!.system).toContain("对话摘要器")
-    expect(reqs[1]!.messages[0]!.content).toContain("历史问题1")
+    // both summarizer calls follow the main request; the segment call reuses
+    // the main run's prefix (R6): same system and tool defs, the segment's
+    // provider view plus a trailing instruction, and the session cache key.
+    expect(reqs[1]!.system).toBe(reqs[0]!.system)
+    expect(reqs[1]!.tools).toEqual(reqs[0]!.tools)
+    expect(reqs[1]!.promptCache).toEqual({ key: session.id })
+    const segTail = reqs[1]!.messages.at(-1)!
+    expect(segTail.role).toBe("user")
+    expect(String(segTail.content)).toContain("（系统任务）")
+    expect(JSON.stringify(reqs[1]!.messages)).toContain("历史问题1")
     expect(reqs[2]!.system).toContain("对话摘要归并器")
     // first compaction has no previous top: the merge input IS the segment summary
     expect(reqs[2]!.messages[0]!.content).toContain("段摘要A")
@@ -1109,9 +1115,11 @@ describe("RunManager context compaction", () => {
       expect(meta?.compaction).toBeUndefined()
       // v3: the run already went out over the FULL history (nothing to fall
       // back to — the compaction simply did not happen); the failed summarizer
-      // call is the second request.
+      // call is the second request. The segment call rides the R6 reuse
+      // shape: same system as the main run, trailing instruction marker.
       expect(JSON.stringify(reqs[0]!.messages)).toContain("历史问题1")
-      expect(reqs[1]!.system).toContain("对话摘要器")
+      expect(reqs[1]!.system).toBe(reqs[0]!.system)
+      expect(String(reqs[1]!.messages.at(-1)!.content)).toContain("（系统任务）")
       // Completed-must-arrive protocol (v3): a started is ALWAYS paired with a
       // completed — failure reports result "failed" with zeroed counters. The
       // failure logs exactly once inside the Compactor, tagged with the phase.

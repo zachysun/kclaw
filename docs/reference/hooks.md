@@ -21,7 +21,7 @@ export type HookPosition =
 |------|-----|------------------|------|
 | `run-before` | `{ message }` | `Message` | 改写位：用户消息入场 |
 | `run-after` | `{ outcome, model }` | — | 观察位：run 结束 |
-| `llm-before` | `{ messages }` | `ProviderMessage[]` | 改写位：模型视图 |
+| `llm-before` | `{ messages, currentUserText }` | `ProviderMessage[]` | 改写位：模型视图；`currentUserText` 是本轮用户消息的实际文本（run-before 改写后），改写型钩子按它锚定本轮消息（steer 插话后"最后一条 user"不再是本轮消息） |
 | `llm-after` | `{ usage, stopReason, latencyMs }` | — | 观察位 |
 | `llm-retry` | `{ attempt, error }` | — | 观察位：provider 重试 |
 | `tool-before` | `{ toolCall }` | — | 观察 + 放行检查（deny 档失败 = 该工具被拒绝） |

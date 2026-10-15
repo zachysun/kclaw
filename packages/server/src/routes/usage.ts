@@ -8,17 +8,17 @@ export interface UsageStores {
   config: KclawConfig
 }
 
-const BY = new Set(["day", "session", "model"])
+const BY = new Set(["day", "session", "model", "kind"])
 
 /**
- * Register `GET /usage?by=day|session|model` — token/cost aggregation for
+ * Register `GET /usage?by=day|session|model|kind` — token/cost aggregation for
  * the WebUI usage view. `by` defaults to "day". Returns `{ by, buckets,
  * total }`; costs are computed from config.usage.prices (0 without a price).
  */
 export function registerUsageRoutes(app: FastifyInstance, opts: UsageStores): void {
   app.get("/usage", async (request) => {
     const by = (request.query as Record<string, unknown>).by
-    const key = typeof by === "string" && BY.has(by) ? (by as "day" | "session" | "model") : "day"
+    const key = typeof by === "string" && BY.has(by) ? (by as "day" | "session" | "model" | "kind") : "day"
     const prices: UsagePrices = opts.config.usage?.prices ?? {}
     const body: UsageBody = {
       by: key,

@@ -261,10 +261,14 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     failure: "skip",
     makeHandler: (rt) => {
       const { llmUserText } = rt
-      return ({ messages }) => {
+      return ({ messages, currentUserText }) => {
         // Implicit wrap of named skills: only the provider view is rewritten —
         // persistence, events and the chat bubble keep the user's raw text.
-        return llmUserText === undefined ? undefined : withLastUserText(messages, llmUserText)
+        // 锚定本轮消息文本：steer 插话后"最后一条 user"是插话，按内容匹配
+        // 才不会把插话替换掉。
+        return llmUserText === undefined
+          ? undefined
+          : withLastUserText(messages, llmUserText, currentUserText)
       }
     },
   }),
@@ -423,6 +427,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
             sessionId: usageSessionId,
             runId: runIdRef.current ?? "",
             model,
+            kind: "run",
             inputTokens: outcome.totalUsage.inputTokens,
             outputTokens: outcome.totalUsage.outputTokens,
             // 缓存字段默认 = 未知 → 写 NULL，与"没命中"区分。

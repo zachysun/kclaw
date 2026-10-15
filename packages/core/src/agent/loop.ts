@@ -7,7 +7,8 @@ import {
   newMessage, newAssistantMessage, newToolMessage, mergeUsage,
   type Message, type StopReason, type Usage, type GrantedBy,
 } from "../protocol/messages.js"
-import { makeEvent, type AgentEvent, type RunTrigger } from "../protocol/events.js"
+import { makeEvent, type AgentEvent, type CacheMissAttribution, type RunTrigger } from "../protocol/events.js"
+import { diffFingerprints, fingerprintAssembled } from "./cache-attribution.js"
 import type { LlmClient, LlmStreamEvent, ProviderMessage, ToolDefinition } from "../provider/types.js"
 import { isContextOverflowError } from "../provider/overflow.js"
 import type { ActiveSummary } from "../session/compaction.js"
@@ -56,7 +57,6 @@ export interface RunInput {
 export interface AgentDeps {
   llm: LlmClient
   model: string
-  window?: number
   /** Tool results kept verbatim in the provider view; undefined = keep all. */
   toolResultKeep?: number
   /** Per-request output cap (config entry `maxOutput`) sent as max_tokens; undefined = provider default. */
@@ -93,6 +93,14 @@ export interface AgentDeps {
    * seam; unset behaves exactly like before.
    */
   llmAttempt?(): number
+  /**
+   * Cache miss attribution probe（R5）：同一会话的组装快照存取。load() 返回
+   * 上次快照（JSON 串）或 null（无基准，如 daemon 重启后首次）；save() 保存
+   * 本次快照。提供时 loop 在 llm-before 链之后对实际发送视图做指纹比对，
+   * 变化原因随 llm.completed / llm.failed 的 cacheMiss 字段可见；不提供
+   * （一次性辅助调用、裸引擎）则完全跳过。
+   */
+  cacheProbe?: { load(): string | null; save(snapshot: string): void }
   /**
    * The hook chain: the loop's behavior seams as named
    * positions. The assembly installs the builtin closures (former
@@ -199,7 +207,6 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
   const runId = newId("run")
   const ctx = { sessionId: input.sessionId, runId }
   const maxIterations = deps.maxIterations ?? 25
-  const window = deps.window ?? 200
   const emit = (e: AgentEvent) => deps.onEvent(e)
   // Tool-loop guard state: signature of the last executed call and its
   // consecutive repeat count, alive ACROSS turns (the guard detects a loop
@@ -241,20 +248,29 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
   }
 
   const all: Message[] = [...input.history, userMsg]
-  // 缓存字段初始 0（空和）；任一次调用缺该字段即翻成 undefined 并锁定——
-  // 后续再有值也不恢复，保证"所有调用都携带才求和"。折叠语义单源在
-  // protocol 的 mergeUsage。
+  // 缓存字段初始 0（空和）：accumulator 的 0 是"还没加进任何输入"，与
+  // "provider 报了 0"在 merge 里不可区分，但整个 accumulator 的暴露面由
+  // anyUsageRecorded 门控（零完成时剥掉缓存字段 → 未知），假 0 不会外泄。
+  // 折叠语义单源在 protocol 的 mergeUsage。
   let totalUsage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
-  // run.completed 事件统一从这里发射：缓存字段仅在 run 级聚合非 undefined
-  // 时携带（默认 = 未知，事件流不出现显式 0）。
+  // 是否有至少一次迭代收到了 message_done：零完成（零迭代 abort 等）时
+  // run 级 usage 的缓存字段按未知处理，不把字面 0 当"已上报"写出。
+  let anyUsageRecorded = false
+  // run.completed 事件统一从这里发射：零完成时缓存字段按未知处理（字面 0
+  // 的 accumulator 不外泄）；聚合非 undefined 的字段才出现在事件里。
+  const outcomeUsage = (): Usage =>
+    anyUsageRecorded
+      ? totalUsage
+      : { inputTokens: totalUsage.inputTokens, outputTokens: totalUsage.outputTokens }
   const emitRunCompleted = (stopReason: StopReason): void => {
+    const u = outcomeUsage()
     emit(makeEvent("run.completed", {
       stopReason,
       usage: {
-        inputTokens: totalUsage.inputTokens,
-        outputTokens: totalUsage.outputTokens,
-        ...(totalUsage.cacheReadTokens !== undefined ? { cacheReadTokens: totalUsage.cacheReadTokens } : {}),
-        ...(totalUsage.cacheWriteTokens !== undefined ? { cacheWriteTokens: totalUsage.cacheWriteTokens } : {}),
+        inputTokens: u.inputTokens,
+        outputTokens: u.outputTokens,
+        ...(u.cacheReadTokens !== undefined ? { cacheReadTokens: u.cacheReadTokens } : {}),
+        ...(u.cacheWriteTokens !== undefined ? { cacheWriteTokens: u.cacheWriteTokens } : {}),
       },
     }, ctx))
   }
@@ -263,20 +279,37 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
   // 摘要上下文项由 toProviderMessages 垫在 messages[0]。all 里的原文不动——
   // 压缩只改“发什么给模型”，不改历史与持久化。
   let compacted = input.compaction
+  // 本次迭代请求相对上次的前缀变化归因（cacheProbe 提供时计算；随
+  // llm.completed / llm.failed 可见）。
+  let lastMiss: CacheMissAttribution | undefined
   const buildMessages = async (): Promise<ProviderMessage[]> => {
     let msgs = all
     if (compacted !== undefined) {
       const base = all.findIndex((m) => m.id === compacted!.upto)
       if (base >= 0) msgs = all.slice(base + 1)
     }
-    const provider = toProviderMessages(msgs, window, {
+    const provider = toProviderMessages(msgs, {
       ...(deps.toolResultKeep === undefined ? {} : { toolResultKeep: deps.toolResultKeep }),
       ...(deps.tokenBudget === undefined ? {} : { tokenBudget: deps.tokenBudget }),
       ...(compacted === undefined ? {} : { summary: compacted }),
     })
     // llm-before 改写链（技能指名的隐式包装是内置使用者）：返回什么发什么，
-    // 持久化、事件流与 outcome 一概不动。
-    return (await deps.hooks.run("llm-before", { messages: provider })) ?? provider
+    // 持久化、事件流与 outcome 一概不动。currentUserText 供改写型钩子锚定
+    // 本轮用户消息（steer 插话后"最后一条 user"不再是本轮消息）。带包装的
+    // 消息在 toProviderMessages 已按 llmText 重放，锚定值必须用同一字节才
+    // 匹配得上；无包装时用原文块（钩子在无包装载荷下原样返回，不消费该值）。
+    const final =
+      (await deps.hooks.run("llm-before", {
+        messages: provider,
+        currentUserText: userMsg.llmText ?? userMsg.blocks.find((b) => b.type === "text")?.text ?? "",
+      })) ?? provider
+    if (deps.cacheProbe) {
+      const fp = fingerprintAssembled(input.system, final, deps.toolDefs ?? [])
+      const prev = deps.cacheProbe.load()
+      lastMiss = prev === null ? undefined : diffFingerprints(prev, fp) ?? undefined
+      deps.cacheProbe.save(fp)
+    }
+    return final
   }
 
   // Abort guardrail for a signal that fires when no message from the current
@@ -287,7 +320,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
   // message from a mid-stream abort takes the post-stream path instead.
   const finishAborted = (): RunOutcome => {
     emitRunCompleted("aborted")
-    return { stopReason: "aborted", totalUsage, messages: all }
+    return { stopReason: "aborted", totalUsage: outcomeUsage(), messages: all }
   }
 
   for (let iter = 0; iter < maxIterations; iter++) {
@@ -315,6 +348,10 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
     let curThinking: ThinkingBlock | null = null
     let stopReason: StopReason = "end_turn"
     let usage: Usage = { inputTokens: 0, outputTokens: 0 }
+    // 仅在收到 message_done（provider 完整回报 usage）的迭代参与 run 级聚合：
+    // 流死亡 / abort 的迭代手里没有真实数据，参与聚合会把已上报的迭代一起
+    // 毒化成"未知"（历史缺陷：一次中断丢掉整 run 的缓存记录）。
+    let usageRecorded = false
     // Set when deps.llm.stream() threw for good (the retry wrapper gave up):
     // the run then terminates through the error lifecycle below instead of
     // rejecting — 只有 provider 彻底失败才终止 run.
@@ -335,6 +372,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       streamError = undefined
       stopReason = "end_turn"
       usage = { inputTokens: 0, outputTokens: 0 }
+      usageRecorded = false
       try {
         for await (const ev of streamWithAbort(deps.llm.stream({
           model: deps.model,
@@ -380,6 +418,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
           } else if (ev.type === "message_done") {
             stopReason = ev.stopReason
             usage = ev.usage
+            usageRecorded = true
           }
         }
       } catch (err) {
@@ -407,15 +446,19 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
     // stamp the current assistant message here and fall through to the terminal
     // path below (message.completed + run.completed with stopReason "aborted").
     if (deps.signal?.aborted) stopReason = "aborted"
-    // 字段级聚合：本次 run 的所有调用都携带该字段才求和；任一次缺失 → run
-    // 级该字段 undefined（宁记未知，不把"不知道"混成 0 或部分和）。
-    totalUsage = mergeUsage(totalUsage, usage)
+    // 字段级聚合：只有收到 message_done 的迭代参与（见 usageRecorded 声明）；
+    // 参与的迭代里任一次缺该字段 → run 级 undefined（宁记未知，不把"不知道"
+    // 混成 0 或部分和）。
+    if (usageRecorded) {
+      totalUsage = mergeUsage(totalUsage, usage)
+      anyUsageRecorded = true
+    }
     // A failed call is terminated by llm.failed, not llm.completed — the
     // degenerate created→delta→completed triple only completes what streamed.
     if (streamError === undefined) {
       const latencyMs = Date.now() - startedAt
       assistant.latencyMs = latencyMs
-      emit(makeEvent("llm.completed", { usage, stopReason, latencyMs }, ctx))
+      emit(makeEvent("llm.completed", { usage, stopReason, latencyMs, ...(lastMiss ? { cacheMiss: lastMiss } : {}) }, ctx))
       void deps.hooks.run("llm-after", {
         // 透传整个 Usage（含缓存字段）——这是外部钩子的协议面，裁掉字段会让
         // 外部永远见不到缓存指标。
@@ -528,7 +571,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
 
     if (stopReason === "end_turn") {
       emitRunCompleted(stopReason)
-      return { stopReason, totalUsage, messages: all }
+      return { stopReason, totalUsage: outcomeUsage(), messages: all }
     }
 
     // Provider failure: the stream died for good — bad key,
@@ -537,9 +580,9 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
     // the run. runAgent resolves — it never rejects for provider errors.
     if (stopReason === "error") {
       const error = { code: "llm_error", message: errorMessage(streamError) }
-      emit(makeEvent("llm.failed", { error, willRetry: false }, ctx))
+      emit(makeEvent("llm.failed", { error, willRetry: false, ...(lastMiss ? { cacheMiss: lastMiss } : {}) }, ctx))
       emit(makeEvent("run.failed", { error }, ctx))
-      return { stopReason: "error", totalUsage, messages: all }
+      return { stopReason: "error", totalUsage: outcomeUsage(), messages: all }
     }
 
     if (stopReason === "tool_use" && entries.length > 0) {
@@ -562,7 +605,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
         if (injected !== undefined) steerMsgs = injected
       } catch (err) {
         emit(makeEvent("run.failed", { error: { code: "steering_failed", message: errorMessage(err) } }, ctx))
-        return { stopReason: "error", totalUsage, messages: all }
+        return { stopReason: "error", totalUsage: outcomeUsage(), messages: all }
       }
       for (const m of steerMsgs) {
         emit(makeEvent("message.created", { message: m }, ctx))
@@ -570,7 +613,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
           deps.onMessage(m)
         } catch (err) {
           emit(makeEvent("run.failed", { error: { code: "steering_failed", message: errorMessage(err) } }, ctx))
-          return { stopReason: "error", totalUsage, messages: all }
+          return { stopReason: "error", totalUsage: outcomeUsage(), messages: all }
         }
         emit(makeEvent("message.completed", { message: m }, ctx))
         emit(makeEvent("message.steered", { messageId: m.id }, ctx))
@@ -582,7 +625,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
     // max_tokens / stop_sequence / content_filter / aborted, or a tool_use
     // with no calls at all — terminate the run.
     emitRunCompleted(stopReason)
-    return { stopReason, totalUsage, messages: all }
+    return { stopReason, totalUsage: outcomeUsage(), messages: all }
   }
 
   // The loop exhausted maxIterations mid tool-turn. The truncation note was
@@ -590,7 +633,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
   // the last iteration (pre-persist, see above), so both the user and the
   // next run's model see why the run stopped without a final answer.
   emit(makeEvent("run.failed", { error: { code: "max_iterations", message: `exceeded ${maxIterations} iterations` } }, ctx))
-  return { stopReason: "error", totalUsage, messages: all }
+  return { stopReason: "error", totalUsage: outcomeUsage(), messages: all }
 }
 
 /** Execute one turn's batch of tool calls and append the ordered tool message. */

@@ -51,8 +51,11 @@ export interface HookContextMap {
     }
     model: string
   }
-  /** 每次 LLM 调用前（模型视图已组装）。返回 ProviderMessage[] = 改写生效。 */
-  "llm-before": { messages: ProviderMessage[] }
+  /** 每次 LLM 调用前（模型视图已组装）。返回 ProviderMessage[] = 改写生效。
+   *  currentUserText = 本轮用户消息的实际文本（run-before 改写后的），供
+   *  改写型钩子按内容锚定本轮消息——工具循环里 steer 插话后"最后一条
+   *  user"不再是本轮消息，只有锚定才不会把插话覆盖掉。 */
+  "llm-before": { messages: ProviderMessage[]; currentUserText: string }
   /** 一次 LLM 调用完成（usage 整体透传，含缓存字段，默认 = 未知）。返回值忽略。 */
   "llm-after": { usage: Usage; stopReason: string; latencyMs: number }
   /** provider 层重试（withRetry 回调）。返回值忽略。 */

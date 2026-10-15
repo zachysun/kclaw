@@ -334,7 +334,11 @@ describe("executeRun × hook system", () => {
     }
     const llm: LlmClient = {
       async *stream(req): AsyncIterable<LlmStreamEvent> {
-        if (typeof req.system === "string" && req.system.startsWith("你是对话摘要")) {
+        // 摘要请求两种形状（R6）：独立 system（"你是对话摘要"开头）或主前缀
+        // 复用（system 同主 run，尾条是摘要指令 user 消息）。
+        const isSummary = (typeof req.system === "string" && req.system.startsWith("你是对话摘要"))
+          || String((req.messages.at(-1) as { content?: unknown })?.content ?? "").startsWith("（系统任务）")
+        if (isSummary) {
           throw new Error("summarizer down")
         }
         yield { type: "text_delta", delta: "x".repeat(2000) }
@@ -398,7 +402,11 @@ describe("executeRun × 压缩阈值线", () => {
     const anchorFor = (call: number): number => opts.anchors?.[call - 1] ?? anchor
     const llm: LlmClient = {
       async *stream(req): AsyncIterable<LlmStreamEvent> {
-        if (typeof req.system === "string" && req.system.startsWith("你是对话摘要")) {
+        // 摘要请求两种形状（R6）：独立 system（"你是对话摘要"开头）或主前缀
+        // 复用（system 同主 run，尾条是摘要指令 user 消息）。
+        const isSummary = (typeof req.system === "string" && req.system.startsWith("你是对话摘要"))
+          || String((req.messages.at(-1) as { content?: unknown })?.content ?? "").startsWith("（系统任务）")
+        if (isSummary) {
           summaryRequests.push(req as never)
           if (opts.summaryGate !== undefined) await opts.summaryGate
           yield { type: "text_delta", delta: "后台段摘要" }

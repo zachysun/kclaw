@@ -325,8 +325,16 @@ export class GoalLoopHost {
             sessionId,
             runId: `goal-judge-${round}-${this.#now().getTime()}`,
             model: judge.model,
+            kind: "goal",
             inputTokens: judged.result.tokens.inputTokens,
             outputTokens: judged.result.tokens.outputTokens,
+            // 缓存字段透传（缺失 = 未知 → 写 NULL），与主 run / chore 行同一语义。
+            ...(judged.result.tokens.cacheReadTokens !== undefined
+              ? { cacheReadTokens: judged.result.tokens.cacheReadTokens }
+              : {}),
+            ...(judged.result.tokens.cacheWriteTokens !== undefined
+              ? { cacheWriteTokens: judged.result.tokens.cacheWriteTokens }
+              : {}),
             at: this.#now().toISOString(),
           })
         } else {

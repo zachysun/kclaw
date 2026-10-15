@@ -143,3 +143,83 @@ describe("Compactor token 记录", () => {
     }
   })
 })
+
+describe("Compactor 段摘要前缀复用（R6）", () => {
+  it("登记了同 model 的主前缀时：system/tools 复用主请求形状、seg 全原文渲染 + 指令垫尾、带 promptCache key", async () => {
+    const { dir, sessions, compactor, config } = makeEnv()
+    try {
+      const session = sessions.create("复用会话")
+      const history = historyWithSpill(session.id)
+      for (const m of history) sessions.appendMessage(session.id, m)
+      const calls: LlmRequest[] = []
+      compactor.registerPrefix(session.id, {
+        model: "mock-model",
+        system: "主会话 system 文本",
+        tools: [{ name: "fs_read", description: "d", parameters: { type: "object", properties: {} } }],
+      })
+
+      const out = await compactor.compact(session.id, history, "", config, () => ({ llm: stubSummarizer(calls), model: "mock-model" }))
+      expect(out.status).toBe("applied")
+
+      const segmentReq = calls[0]!
+      expect(segmentReq.system).toBe("主会话 system 文本")
+      expect(segmentReq.tools.map((t) => t.name)).toContain("fs_read")
+      expect(segmentReq.promptCache).toEqual({ key: session.id })
+      // 尾条 = 摘要指令 user 消息；seg 原文在它之前的消息里（与主请求同构）
+      const tail = segmentReq.messages.at(-1)!
+      expect(tail.role).toBe("user")
+      expect(tail.content).toContain("（系统任务）")
+      expect(segmentReq.messages.some((m) => String(m.content).includes("先跑构建再看页面"))).toBe(true)
+      // merge 调用仍是独立形状（旧总摘要+新段摘要，与主前缀无关）
+      expect(calls[1]!.system).toContain("归并")
+      expect(calls[1]!.tools).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("model 不匹配时退回独立形状（独立 system、无 tools、无 promptCache）", async () => {
+    const { dir, sessions, compactor, config } = makeEnv()
+    try {
+      const session = sessions.create("换模型会话")
+      const history = historyWithSpill(session.id)
+      for (const m of history) sessions.appendMessage(session.id, m)
+      const calls: LlmRequest[] = []
+      compactor.registerPrefix(session.id, {
+        model: "another-model",
+        system: "主会话 system 文本",
+        tools: [{ name: "fs_read", description: "d", parameters: { type: "object", properties: {} } }],
+      })
+
+      const out = await compactor.compact(session.id, history, "", config, () => ({ llm: stubSummarizer(calls), model: "mock-model" }))
+      expect(out.status).toBe("applied")
+
+      const segmentReq = calls[0]!
+      expect(segmentReq.system).toContain("你是对话摘要器")
+      expect(segmentReq.tools).toEqual([])
+      expect(segmentReq.promptCache).toBeUndefined()
+      expect(segmentReq.messages).toHaveLength(1)
+      expect(segmentReq.messages[0]!.content).toContain("先跑构建再看页面")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("无快照（手动压缩路径）退回独立形状", async () => {
+    const { dir, sessions, compactor, config } = makeEnv()
+    try {
+      const session = sessions.create("手动会话")
+      const history = historyWithSpill(session.id)
+      for (const m of history) sessions.appendMessage(session.id, m)
+      const calls: LlmRequest[] = []
+
+      const out = await compactor.compact(session.id, history, "", config, () => ({ llm: stubSummarizer(calls), model: "mock-model" }), { manual: true })
+      expect(out.status).toBe("applied")
+
+      expect(calls[0]!.system).toContain("你是对话摘要器")
+      expect(calls[0]!.tools).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

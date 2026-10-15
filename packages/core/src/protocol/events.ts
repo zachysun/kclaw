@@ -58,8 +58,33 @@ export interface BlockDeltaPayload { messageId: string; blockId: string; delta: 
 export interface ToolResultDeltaPayload { messageId: string; callId: string; delta: string }
 
 export interface LlmStartedPayload { model: string; attempt: number }
-export interface LlmCompletedPayload { usage: Usage; stopReason: StopReason; latencyMs: number }
-export interface LlmFailedPayload { error: { code: string; message: string }; willRetry: boolean }
+export interface LlmCompletedPayload {
+  usage: Usage
+  stopReason: StopReason
+  latencyMs: number
+  /**
+   * 缓存未命中归因（R5）：本次请求相对同一会话上次请求的前缀指纹变化。
+   * 纯追加（前缀应命中）或调用方未启用归因探针时不携带。
+   */
+  cacheMiss?: CacheMissAttribution
+}
+export interface LlmFailedPayload {
+  error: { code: string; message: string }
+  willRetry: boolean
+  /** 同 llm.completed 的归因语义；终止性失败时归因同样随事件可见。 */
+  cacheMiss?: CacheMissAttribution
+}
+
+/** 一次请求前缀相对上次变化的原因（cache-attribution 的指纹比对产出）。 */
+export interface CacheMissAttribution {
+  /** 具名原因：tools_changed | system_changed | history_rebuilt | history_diverged。 */
+  reasons: string[]
+  /** 首个变化消息的 1-based 序号（history_diverged 时携带）。 */
+  divergedAt?: number
+  /** 变化消息的头部摘录（诊断辅助）：上次 vs 本次。 */
+  prevHead?: string
+  nextHead?: string
+}
 
 export interface ConfirmationRequestedPayload {
   confirmationId: string

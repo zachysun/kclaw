@@ -7,7 +7,7 @@
  */
 import type { LlmClient } from "../provider/types.js"
 import type { Message } from "../protocol/messages.js"
-import type { Usage } from "../protocol/messages.js"
+import { mergeUsage, type Usage } from "../protocol/messages.js"
 import { isBlockType } from "../protocol/blocks.js"
 import { judgeMaxTokens, judgeSystemPrompt, judgeUserContent } from "./prompt.js"
 import {
@@ -147,7 +147,9 @@ export async function judgeGoal(input: JudgeGoalInput): Promise<JudgeGoalOutput>
     )
     const verdict2 = parseVerdict(retry.text)
     if (verdict2 !== undefined) {
-      return { ok: true, result: { ...verdict2, tokens: addUsage(firstUsage, retry.usage) } }
+      // 重试轮的两段合并计：走 protocol 的 mergeUsage，缓存字段与主链路
+      // 同一折叠语义（任一段缺失该字段即未知，不再静默丢弃）。
+      return { ok: true, result: { ...verdict2, tokens: mergeUsage(firstUsage, retry.usage) } }
     }
     return {
       ok: false,
@@ -156,9 +158,4 @@ export async function judgeGoal(input: JudgeGoalInput): Promise<JudgeGoalOutput>
   } catch (err) {
     return { ok: false, error: { kind: "transport", message: err instanceof Error ? err.message : String(err) } }
   }
-}
-
-/** 用量相加（重试轮的两段合并计）。 */
-function addUsage(a: Usage, b: Usage): Usage {
-  return { inputTokens: a.inputTokens + b.inputTokens, outputTokens: a.outputTokens + b.outputTokens }
 }
