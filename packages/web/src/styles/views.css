@@ -1,0 +1,713 @@
+/* ---- Views: jobs / audit / usage / trash ---- */
+
+.view-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+}
+
+.form-error {
+  border: 1px solid var(--danger);
+  background: var(--danger-dim);
+  color: var(--danger);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  margin-bottom: var(--space-3);
+}
+
+.job-form {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  margin-bottom: var(--space-5);
+  background: var(--surface);
+}
+
+.form-title {
+  margin: 0 0 var(--space-3);
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+
+.form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.form-grid textarea {
+  min-height: 64px;
+  resize: vertical;
+  font-family: var(--font-mono);
+}
+
+.form-full {
+  grid-column: 1 / -1;
+}
+
+.form-checkbox {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px !important;
+}
+
+.form-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.form-actions button[type="submit"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.form-actions button[type="submit"]:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+.form-hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.form-checkbox input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* tables — hairline grid, mono data */
+.table-scroll {
+  overflow-x: auto;
+}
+
+.data-table,
+.usage-view table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+
+.data-table th,
+.data-table td,
+.usage-view th,
+.usage-view td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.data-table th,
+.usage-view th {
+  background: var(--surface);
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.data-table tr:nth-child(even) td,
+.usage-view tr:nth-child(even) td {
+  background: var(--row-stripe);
+}
+
+.row-actions {
+  white-space: nowrap;
+}
+
+.row-actions button {
+  padding: 3px 9px;
+  margin-right: 4px;
+  font-size: 12px;
+}
+
+.row-actions button.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-dim);
+}
+
+.row-actions button.danger:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--danger-ink);
+}
+
+.args-summary {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-empty {
+  font-size: 13px;
+  margin-top: var(--space-3);
+}
+
+/* audit page — virtualized live event stream */
+/* The audit view fills the pane and scrolls internally (Virtuoso owns the
+   scroller); .main must not double-scroll while the audit tab is visible. */
+.main:has(.audit-host:not(.offscreen)) {
+  display: flex;
+  overflow: hidden;
+}
+
+/* The chat pane mirrors the audit keep-alive: while the chat tab is visible,
+   .main stops being the scroller — the message log scrolls internally and
+   the composer stays pinned at the pane's bottom, so scrolling always ends
+   at the last message instead of trailing into empty page. */
+.main:has(.chat-host:not([hidden])) {
+  display: flex;
+  overflow: hidden;
+}
+
+/* :not([hidden]) keeps the UA's display:none in charge when the chat is
+   parked during tab switches. */
+.chat-host:not([hidden]) {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.audit-host {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Tab keep-alive: hidden must NOT be display:none — Virtuoso needs real
+   layout to measure rows. Offscreen pins the host to .main's box (same
+   geometry as when visible, zero scroll impact), drops interactivity. */
+.audit-host.offscreen {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.audit-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.audit-session-chip {
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.audit-toolbar-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.audit-kind-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  user-select: none;
+  cursor: pointer;
+}
+
+.audit-kw {
+  min-width: 180px;
+}
+
+.audit-jump-btn {
+  font-size: 12px;
+  padding: 3px 8px;
+}
+
+.audit-jump-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.audit-time-preset {
+  min-width: 0;
+}
+
+.audit-time-input {
+  font-size: 12px;
+}
+
+.audit-notice {
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+.audit-error-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.audit-retry {
+  flex-shrink: 0;
+  font-size: 12px;
+  padding: 3px 10px;
+}
+
+.audit-list-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.audit-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 4px 4px 0;
+}
+
+.audit-row-item {
+  padding: 0;
+}
+
+.audit-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.audit-row:hover {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+
+.audit-type {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--accent);
+  border: 1px solid var(--border);
+}
+
+.audit-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+
+.audit-meta {
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.audit-grant {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--success);
+}
+
+.audit-usage,
+.audit-duration {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+.audit-full {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-x: auto;
+}
+
+/* resume-following bubble (visible while scrolled away from the bottom) */
+.audit-latest-fab {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 5;
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 4px 16px rgba(var(--shadow-rgb), 0.35);
+}
+
+.audit-latest-fab:hover {
+  background: var(--surface-2);
+}
+
+/* trash */
+.trash-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.trash-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.trash-row .session-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.trash-row button {
+  font-size: 12px;
+  padding: 3px 10px;
+}
+
+.trash-row button:last-child {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-dim);
+}
+
+/* usage */
+.usage-view h3 {
+  margin: 0 0 var(--space-2);
+}
+
+.usage-view h4 {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: 13px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* numeric columns read right-aligned; mono digits are inherently tabular */
+.usage-view td.num,
+.data-table td.num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* the 分布 column: a pure-CSS bar scaled to the table's busiest row */
+.usage-bar-cell {
+  min-width: 140px;
+}
+
+.usage-bar-track {
+  display: block;
+  position: relative;
+  height: 8px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.usage-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: var(--accent);
+}
+
+/* session rows show the human title; the raw id rides the tooltip */
+.usage-session-name {
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-export {
+  margin-left: var(--space-3);
+  font-size: 12px;
+  padding: 3px 10px;
+}
+
+.usage-export-error {
+  margin-left: var(--space-2);
+  color: var(--danger);
+}
+
+/* memory — 记忆管理页：左列清单 + 右列整文件编辑器 */
+.memory-view {
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-start;
+}
+
+.memory-view h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 13px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.memory-list {
+  flex: 0 0 300px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 40%;
+}
+
+.memory-list section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface);
+}
+
+.memory-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.memory-list li button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 4px 8px;
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.memory-list li button:hover:not(:disabled) {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.memory-editor {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface);
+}
+
+.memory-editor textarea {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  resize: vertical;
+}
+
+.memory-editor-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.memory-editor-actions button:first-child {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.memory-editor-actions button:last-child {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-dim);
+}
+
+.memory-editor-actions button:last-child:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--danger-ink);
+}
+
+@media (max-width: 700px) {
+  .memory-view {
+    flex-direction: column;
+  }
+
+  .memory-list {
+    flex: none;
+    max-width: none;
+  }
+}
+
+/* ---- PWA / offline ---- */
+.offline-banner {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--warn);
+  color: var(--danger-ink);
+  font-weight: 700;
+  font-style: italic;
+  text-align: center;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+/* ---- Responsive ---- */
+
+/* Tablet & down: collapse the sidebar into a drawer behind the topbar. */
+@media (max-width: 900px) {
+  .sidebar-toggle {
+    display: inline-flex;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(300px, 84vw);
+    z-index: 30;
+    transform: translateX(-100%);
+    transition: transform 180ms ease;
+    background: var(--surface);
+    box-shadow: 4px 0 24px rgba(var(--shadow-rgb), 0.4);
+  }
+
+  .sidebar.open {
+    transform: none;
+  }
+
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: var(--overlay-soft);
+    z-index: 25;
+  }
+
+  .main {
+    padding: var(--space-3);
+  }
+}
+
+/* Keep wide tables scrollable on any narrow pane (no markup wrapper needed). */
+@media (max-width: 700px) {
+  .data-table,
+  .usage-view table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  .message {
+    max-width: 96%;
+  }
+
+  .view-title {
+    font-size: 16px;
+  }
+
+  /* audit rows: let summaries wrap instead of truncating away the content */
+  .audit-summary {
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  .audit-row {
+    flex-wrap: wrap;
+  }
+
+  .audit-kw {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .audit-time-input {
+    max-width: 46%;
+  }
+
+  .audit-session-chip {
+    max-width: 60%;
+  }
+}
+
+@media (max-width: 480px) {
+  .topbar {
+    padding: 8px 10px;
+    gap: var(--space-2);
+  }
+
+  .tabs {
+    gap: 0;
+  }
+
+  .tab {
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
