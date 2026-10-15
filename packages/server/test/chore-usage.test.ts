@@ -43,7 +43,7 @@ describe("createChoreUsageRecorder", () => {
     expect(rows).toEqual([])
   })
 
-  it("同一毫秒的多行 runId 唯一（真库主键不撞）", () => {
+  it("同一毫秒的多行 runId 唯一（真库主键不撞）；chore 行不进会话桶，按类型维度可见", () => {
     const dir = mkdtempSync(join(tmpdir(), "chore-usage-"))
     try {
       const store = new UsageStore(join(dir, "usage.db"))
@@ -51,9 +51,15 @@ describe("createChoreUsageRecorder", () => {
       for (const chore of ["compaction", "compaction", "autoname", "memory", "skill"] as const) {
         rec({ chore, sessionId: "ses_a", model: "m", usage: U() })
       }
-      const buckets = store.aggregate("session", {}, new Date("2000-01-01"), new Date("2999-01-01"))
-      expect(buckets).toHaveLength(1)
-      expect(buckets[0]).toMatchObject({ key: "ses_a", inputTokens: 5, outputTokens: 10 })
+      // 会话桶只折主 run（旁路调用不稀释主对话命中率），5 行 chore 全部不可见。
+      const bySession = store.aggregate("session", {}, new Date("2000-01-01"), new Date("2999-01-01"))
+      expect(bySession).toHaveLength(0)
+      // 落行本身无损：按类型维度 5 行分四类齐全，主键未撞。
+      const byKind = store.aggregate("kind", {}, new Date("2000-01-01"), new Date("2999-01-01"))
+      expect(byKind.find((b) => b.key === "compaction")).toMatchObject({ inputTokens: 2, outputTokens: 4 })
+      expect(byKind.find((b) => b.key === "autoname")).toMatchObject({ inputTokens: 1 })
+      expect(byKind.find((b) => b.key === "memory")).toMatchObject({ inputTokens: 1 })
+      expect(byKind.find((b) => b.key === "skill")).toMatchObject({ inputTokens: 1 })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

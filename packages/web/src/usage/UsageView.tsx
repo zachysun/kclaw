@@ -125,7 +125,9 @@ export function UsageView({ api }: { api: ApiClient }) {
           ))}
         </tbody>
       </table>
-      <h4>按会话</h4>
+      <h4>
+        按会话 <span className="muted">（仅主对话调用；记忆提取等后台花费见按类型）</span>
+      </h4>
       <table data-testid="usage-session-table">
         <thead>
           <tr>
