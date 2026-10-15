@@ -192,6 +192,26 @@ describe("UsageStore kind 列（主 run / 后台任务口径）", () => {
     }
   })
 
+  it("session buckets fold main runs only — chores stay out of the hit-rate denominator", () => {
+    // 实测场景：memory 提取（0% 命中，无前缀可比性）混进会话桶曾把 74% 的
+    // 主对话命中率拉成 29%。会话桶只折 run 行，旁路花费留在 day/kind 维度。
+    const { store, cleanup } = makeStore()
+    try {
+      store.record({ sessionId: "s1", runId: "r1", model: "glm", kind: "run", inputTokens: 400, outputTokens: 40, cacheReadTokens: 300, at: "2026-08-25T10:00:00.000Z" })
+      store.record({ sessionId: "s1", runId: "memory-1", model: "glm", kind: "memory", inputTokens: 60, outputTokens: 6, at: "2026-08-25T10:01:00.000Z" })
+      const bySession = store.aggregate("session", PRICES)
+      expect(bySession).toHaveLength(1)
+      expect(bySession[0]).toMatchObject({ inputTokens: 400, outputTokens: 40, cacheReadTokens: 300 })
+      // 其他维度照旧全量：旁路花费在按类型/按天/总计里仍可见。
+      expect(store.aggregate("kind", PRICES)).toHaveLength(2)
+      expect(store.aggregate("day", PRICES)).toHaveLength(1)
+      expect(store.aggregate("day", PRICES)[0]).toMatchObject({ inputTokens: 460, outputTokens: 46 })
+      expect(store.total(PRICES).inputTokens).toBe(460)
+    } finally {
+      cleanup()
+    }
+  })
+
   it("migrates a pre-kind db: column added with 'run' default, old rows read as run", () => {
     const dir = mkdtempSync(join(tmpdir(), "kclaw-usage-nokind-"))
     const dbPath = join(dir, "usage.db")

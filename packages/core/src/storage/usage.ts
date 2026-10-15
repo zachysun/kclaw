@@ -185,8 +185,15 @@ export class UsageStore {
       : by === "session" ? (r: UsageDbRow) => r.session_id
       : by === "kind" ? (r: UsageDbRow) => r.kind
       : (r: UsageDbRow) => r.model
-    const buckets = this.foldRows(this.selectRows(from, to), prices, keyOf)
-    return [...buckets.entries()]
+    const rows = this.selectRows(from, to)
+    // The per-session bucket folds main runs only: background chores (memory
+    // extract, compaction summaries, ...) are attributed to their session but
+    // have no request prefix comparable to the conversation, so their 0-hit
+    // rows dilute the session's cache hit rate into a meaningless blend (a
+    // 74% session read as 29% on real data). Their spend stays visible in the
+    // day/model/kind dimensions.
+    const folded = this.foldRows(by === "session" ? rows.filter((r) => r.kind === "run") : rows, prices, keyOf)
+    return [...folded.entries()]
       .map(([key, b]) => ({ key, ...b }))
       .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
   }
