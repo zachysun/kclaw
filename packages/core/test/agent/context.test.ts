@@ -297,36 +297,50 @@ describe("toProviderMessages — v3", () => {
   })
 })
 
-describe("withLastUserText（mapLlmMessages 钩子的定向改写助手）", () => {
+describe("withLastUserText（skill-wrap 钩子的定向改写助手）", () => {
   const user = (text: string) => newMessage("s", "user", [{ id: "b", type: "text", text }])
   const asUser = (m: unknown) => m as { role: "user"; content: string }
 
-  it("replaces only the last message when it is the user turn", () => {
+  it("replaces only the current-turn message when it is the last user turn", () => {
     const msgs = toProviderMessages([user("原文")], 10)
-    const out = withLastUserText(msgs, "包装文本")
+    const out = withLastUserText(msgs, "包装文本", "原文")
     expect(out).toHaveLength(1)
     expect(asUser(out[0]).content).toBe("包装文本")
     expect(asUser(msgs[0]).content).toBe("原文") // 入参不动
   })
 
-  it("anchors to the LAST USER message, so later tool-loop rounds still rewrite", () => {
+  it("anchors past assistant turns, so later tool-loop rounds still rewrite", () => {
     const a = newAssistantMessage("s", "glm", [{ id: "b", type: "text", text: "回答" }])
     const msgs = toProviderMessages([user("原文"), a], 10)
-    const out = withLastUserText(msgs, "包装文本")
+    const out = withLastUserText(msgs, "包装文本", "原文")
     expect(asUser(out[0]).content).toBe("包装文本") // 末条是 assistant，用户消息仍被改写
     expect((out[1] as { role: string }).role).toBe("assistant")
   })
 
+  it("skips a steer interjection and rewrites the current-turn message it anchors", () => {
+    const a = newAssistantMessage("s", "glm", [{ id: "b", type: "text", text: "回答" }])
+    const msgs = toProviderMessages([user("原文"), a, user("等等，先看 B 文件")], 10)
+    const out = withLastUserText(msgs, "包装文本", "原文")
+    expect(asUser(out[0]).content).toBe("包装文本") // 本轮消息被改写
+    expect(asUser(out[2]).content).toBe("等等，先看 B 文件") // steer 插话原样保留
+  })
+
+  it("falls back to the last user message when no content matches the anchor", () => {
+    const msgs = toProviderMessages([user("原文")], 10)
+    const out = withLastUserText(msgs, "包装文本", "对不上的锚文本")
+    expect(asUser(out[0]).content).toBe("包装文本") // 回退 = 旧行为
+  })
+
   it("passes the list through untouched when no user message exists", () => {
     const msgs: ProviderMessage[] = [{ role: "system", content: "只有系统消息" }]
-    expect(withLastUserText(msgs, "包装文本")).toBe(msgs)
+    expect(withLastUserText(msgs, "包装文本", "")).toBe(msgs)
   })
 
   it("swaps the first text part of multimodal user content, keeping the rest", () => {
     const msgs: ProviderMessage[] = [
       { role: "user", content: [{ type: "text", text: "原文" }, { type: "image_url", image_url: { url: "data:..." } }] },
     ]
-    const out = withLastUserText(msgs, "包装文本")
+    const out = withLastUserText(msgs, "包装文本", "原文")
     const content = (out[0] as { role: "user"; content: ContentPart[] }).content
     expect(content[0]).toEqual({ type: "text", text: "包装文本" })
     expect(content[1]).toEqual({ type: "image_url", image_url: { url: "data:..." } })
