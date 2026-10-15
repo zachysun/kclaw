@@ -24,6 +24,7 @@ export interface Message {
   role: Role
   blocks: Block[]
   createdAt: string // ISO-8601
+  llmText?: string    // 用户消息专用：首发送时经隐式包装（技能指名/@文件指示）后的最终文本；组装 provider 视图时按此值原样重放
 }
 
 export interface AssistantMessage extends Message {

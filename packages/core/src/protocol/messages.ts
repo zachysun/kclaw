@@ -65,6 +65,13 @@ export interface Message {
   role: Role
   blocks: Block[]
   createdAt: string // ISO-8601
+  /**
+   * 用户消息专用：该消息首发送时经隐式包装（技能指名 / @文件指示）后的最终
+   * 文本。组装 provider 视图时按此值原样重放——技能目录与被引用文件内容
+   * 随时间变化，现算包装会让同一条历史在不同 run 组装出不同字节，缓存前缀
+   * 从该消息起断裂。显示层（气泡/事件流）与 blocks.text 始终保持原文。
+   */
+  llmText?: string
 }
 
 export interface AssistantMessage extends Message {

@@ -253,6 +253,67 @@ describe("runAgent usage 缓存字段链路", () => {
     expect(users.some((m) => m.content === "插话：改用 B 方案")).toBe(true)
   })
 
+  it("历史消息按 llmText 标记重放（跨 run 字节稳定，不随技能目录/文件内容漂移）", async () => {
+    const captured: Array<Parameters<LlmClient["stream"]>[0]> = []
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        captured.push(req)
+        yield* FINAL_WITH_CACHE
+      },
+    }
+    const past = newMessage("s", "user", [{ id: "p1", type: "text", text: "看 @a.ts" }])
+    past.llmText = "看 @a.ts\n\n（fs_read 指示）"
+    await runAgent(
+      { sessionId: "s", history: [past], system: "", userText: "继续" },
+      { llm, model: "m", hooks: chainOf(), onEvent: () => {}, onMessage: () => {} } as Parameters<typeof runAgent>[1],
+    )
+    const users = captured[0]!.messages.filter((m) => m.role === "user") as Array<{ role: "user"; content: string }>
+    expect(users[0]!.content).toBe("看 @a.ts\n\n（fs_read 指示）")
+    expect(users.at(-1)!.content).toBe("继续")
+  })
+
+  it("带 llmText 的当轮消息 + steer：锚定按标记字节匹配，插话不被包装覆盖", async () => {
+    const captured: Array<Parameters<LlmClient["stream"]>[0]> = []
+    let call = 0
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        captured.push(req)
+        call += 1
+        if (call === 1) {
+          yield { type: "tool_call_started", index: 0, callId: "call_1", name: "exec" }
+          yield { type: "tool_call_delta", index: 0, delta: "{}" }
+          yield { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 1, outputTokens: 1 } }
+          return
+        }
+        yield { type: "text_delta", delta: "done" }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 2, outputTokens: 1 } }
+      },
+    }
+    // 模拟 run-assembly 的产物：当轮消息已带包装载荷标记
+    const userMsg = newMessage("s", "user", [{ id: "u1", type: "text", text: "帮我看看 A 文件" }])
+    userMsg.llmText = "包装(帮我看看 A 文件)"
+    const steerMsg = newMessage("s", "user", [{ id: "steer_b", type: "text", text: "插话：改用 B 方案" }])
+    const outcome = await runAgent(
+      { sessionId: "s", history: [], system: "", userMessage: userMsg },
+      {
+        llm, model: "m",
+        hooks: chainOf(
+          hook("wrap", "llm-before", (ctx: { messages: unknown; currentUserText: string }) =>
+            withLastUserText(ctx.messages as never, ctx.currentUserText, ctx.currentUserText)),
+          hook("steer", "turn-boundary", () => [steerMsg]),
+        ),
+        onEvent: () => {}, onMessage: () => {},
+        tools: new Map([["exec", EXEC]]),
+      } as Parameters<typeof runAgent>[1],
+    )
+    expect(outcome.stopReason).toBe("end_turn")
+    const second = captured[1]!.messages
+    const users = second.filter((m) => m.role === "user") as Array<{ role: "user"; content: string }>
+    // 当轮消息重放与 hook 替换同值幂等；steer 插话不被覆盖。
+    expect(users.some((m) => m.content === "包装(帮我看看 A 文件)")).toBe(true)
+    expect(users.some((m) => m.content === "插话：改用 B 方案")).toBe(true)
+  })
+
   async function runWith2(script: LlmStreamEvent[][]) {
     const outcome = await runAgent(
       { sessionId: "s", history: [], system: "", userText: "go" },

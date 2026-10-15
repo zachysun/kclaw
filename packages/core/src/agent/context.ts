@@ -163,11 +163,17 @@ export function toProviderMessages(
         }
       }
       if (m.role === "user") {
+        // llmText replay: a user message that carried an implicit wrap when
+        // first sent replays that exact payload on every later assembly —
+        // re-deriving the wrap would pick up changed skill catalogs / file
+        // contents and break the cache prefix mid-history. No marker →
+        // assemble exactly as before.
+        const text = m.llmText !== undefined ? m.llmText : parts.join("\n")
         if (images.length > 0) {
-          const content: ContentPart[] = [{ type: "text", text: parts.join("\n") }, ...images]
+          const content: ContentPart[] = [{ type: "text", text }, ...images]
           out.push({ role: "user", content })
         } else {
-          out.push({ role: "user", content: parts.join("\n") })
+          out.push({ role: "user", content: text })
         }
       } else {
         const content = parts.length ? parts.join("\n") : null

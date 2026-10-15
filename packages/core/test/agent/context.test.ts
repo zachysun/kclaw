@@ -57,6 +57,42 @@ describe("toProviderMessages", () => {
     expect(out.map((m) => m.role === "user" ? m.content : "")).toEqual(["0", "1", "2", "3", "4"])
   })
 
+  it("replays a marked user message's llmText verbatim (wrap replay)", () => {
+    const m = newMessage("s", "user", [{ id: "blk_1", type: "text", text: "看 @a.ts" }])
+    m.llmText = "看 @a.ts\n\n（本条消息中的「@a.ts」是在引用项目文件：请用 fs_read 工具读取。）"
+    expect(toProviderMessages([m])).toEqual([
+      { role: "user", content: m.llmText },
+    ])
+  })
+
+  it("a message without the marker assembles exactly as before", () => {
+    const m = newMessage("s", "user", [{ id: "blk_1", type: "text", text: "看 @a.ts" }])
+    expect(toProviderMessages([m])).toEqual([{ role: "user", content: "看 @a.ts" }])
+  })
+
+  it("replay also covers the note-rendered bytes (marker wins over parts.join)", () => {
+    // 当轮发送时 skill-wrap 的整体替换会把 note 渲染行顶掉；历史重放必须
+    // 复现同一字节，否则缓存前缀在第二轮起断裂。
+    const m = newMessage("s", "user", [
+      { id: "blk_1", type: "text", text: "看 @a.ts" },
+      { id: "blk_2", type: "note", kind: "memory", text: "用户在上海" },
+    ])
+    m.llmText = "看 @a.ts\n\n（fs_read 指示）"
+    expect(toProviderMessages([m])).toEqual([{ role: "user", content: "看 @a.ts\n\n（fs_read 指示）" }])
+  })
+
+  it("replay with an image keeps the image parts and swaps only the text", () => {
+    const m = newMessage("s", "user", [
+      { id: "blk_1", type: "text", text: "看这张图 @a.ts" },
+      { id: "blk_2", type: "attachment", name: "pic.png", mimeType: "image/png", source: { type: "base64", data: "aGk=" } },
+    ] as never)
+    m.llmText = "看这张图 @a.ts\n\n（fs_read 指示）"
+    const out = toProviderMessages([m])
+    const content = out[0]!.content as ContentPart[]
+    expect(content[0]).toEqual({ type: "text", text: "看这张图 @a.ts\n\n（fs_read 指示）" })
+    expect(content[1]).toMatchObject({ type: "image_url" })
+  })
+
   it("keeps assistant→tool pairs intact across the full history", () => {
     const a = newAssistantMessage("s", "glm", [
       { id: "blk_1", type: "tool_call", callId: "call_1", name: "exec", args: { command: "ls" }, argsJson: "{\"command\":\"ls\"}" },

@@ -446,6 +446,9 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     for (const skill of matchSkillInvocations(input.userText, skills)) {
       recordSkillUse(paths.skillsDir, skill.origin, skill.name)
     }
+    // 标记重放（llmText）：把当轮包装载荷记在消息上，之后每次组装按标记
+    // 原样重放（agent/context.ts）。只算一次、永久固定，跨 run 字节稳定。
+    userMessage.llmText = llmUserText
   }
 
   // --- exec sandbox (batch A): one probe, two consumers --------------------

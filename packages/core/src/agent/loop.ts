@@ -295,11 +295,13 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
     })
     // llm-before 改写链（技能指名的隐式包装是内置使用者）：返回什么发什么，
     // 持久化、事件流与 outcome 一概不动。currentUserText 供改写型钩子锚定
-    // 本轮用户消息（steer 插话后"最后一条 user"不再是本轮消息）。
+    // 本轮用户消息（steer 插话后"最后一条 user"不再是本轮消息）。带包装的
+    // 消息在 toProviderMessages 已按 llmText 重放，锚定值必须用同一字节才
+    // 匹配得上；无包装时用原文块（钩子在无包装载荷下原样返回，不消费该值）。
     const final =
       (await deps.hooks.run("llm-before", {
         messages: provider,
-        currentUserText: userMsg.blocks.find((b) => b.type === "text")?.text ?? "",
+        currentUserText: userMsg.llmText ?? userMsg.blocks.find((b) => b.type === "text")?.text ?? "",
       })) ?? provider
     if (deps.cacheProbe) {
       const fp = fingerprintAssembled(input.system, final, deps.toolDefs ?? [])
