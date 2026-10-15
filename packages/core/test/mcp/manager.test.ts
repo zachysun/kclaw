@@ -209,7 +209,8 @@ describe("McpManager lazy boot and per-project views", () => {
 
     const err = await executors.get("mcp__fake__echo")!.execute({ text: "hi" }, { onOutput: () => {} })
     expect(err.status).toBe("error")
-    expect(err.output).toContain("未连接")
+    expect(err.output).toContain("已断开")
+    expect(err.output).toContain("自动重连")
 
     // the next use rebuilds the view with a live connection again
     manager.toolsFor(DIR_A)
@@ -232,7 +233,9 @@ describe("McpManager idle reclaim and bounded retry", () => {
 
     manager.sweep(record.lastUsed + 100)
     expect(stateOf(manager, GLOBAL_GROUP, "g1")).toBe("disconnected")
-    expect(toolsOf(manager, GLOBAL_GROUP, "g1")).toEqual([])
+    // the last listed view stays on the record: the run's tool list must
+    // not shrink while the server is down (prompt-cache stability)
+    expect(toolsOf(manager, GLOBAL_GROUP, "g1")).toEqual(["mcp__g1__echo", "mcp__g1__boom"])
 
     manager.toolsFor(DIR_A)
     await manager.flush()
@@ -268,6 +271,52 @@ describe("McpManager idle reclaim and bounded retry", () => {
     // exhaustion is final: no further churn while nothing new asks for it
     await new Promise((r) => setTimeout(r, 30))
     expect(harness.attempts).toHaveLength(attemptsAtExhaustion)
+    await manager.stop()
+  })
+
+  it("after a transport drop the tool view stays and its executor reports the outage honestly", async () => {
+    const harness = fakeServerHarness()
+    // No reconnect budget: the drop settles straight into "failed" — a
+    // race-free window to assert the retained view.
+    const manager = makeManager({ harness, maxReconnectAttempts: 0, global: { fake: { type: "stdio", command: "x" } } })
+    manager.toolsFor(DIR_A)
+    await manager.flush()
+    expect(stateOf(manager, GLOBAL_GROUP, "fake")).toBe("connected")
+
+    harness.serverTransports[0]!.close()
+    await waitUntil(() => stateOf(manager, GLOBAL_GROUP, "fake") === "failed")
+    expect(toolsOf(manager, GLOBAL_GROUP, "fake")).toContain("mcp__fake__echo")
+
+    // The retained view still reaches the run; calling it answers with an
+    // honest outage message instead of vanishing from the tool list.
+    const { defs, executors } = manager.toolsFor(DIR_A)
+    expect(defs.map((d) => d.name)).toContain("mcp__fake__echo")
+    const err = await executors.get("mcp__fake__echo")!.execute({ text: "hi" }, { onOutput: () => {} })
+    expect(err.status).toBe("error")
+    expect(err.output).toContain("未连接")
+    expect(err.output).toContain("自动重连")
+
+    // A reconnect re-lists and flips the executor back to live calls (the
+    // factory spins up a fresh working server per attempt).
+    manager.connect(GLOBAL_GROUP, "fake")
+    await manager.flush()
+    expect(stateOf(manager, GLOBAL_GROUP, "fake")).toBe("connected")
+    const ok = await executors.get("mcp__fake__echo")!.execute({ text: "hi" }, { onOutput: () => {} })
+    expect(ok.status).toBe("ok")
+    await manager.stop()
+  })
+
+  it("a disabled entry contributes no tools even though its last view is retained", async () => {
+    const harness = fakeServerHarness()
+    const manager = makeManager({ harness, global: { fake: { type: "stdio", command: "x" } } })
+    manager.toolsFor(DIR_A)
+    await manager.flush()
+    expect(manager.toolsFor(DIR_A).defs.map((d) => d.name)).toContain("mcp__fake__echo")
+
+    manager.setEnabled(GLOBAL_GROUP, "fake", false)
+    const after = manager.toolsFor(DIR_A)
+    expect(after.defs).toEqual([])
+    expect(after.executors.size).toBe(0)
     await manager.stop()
   })
 

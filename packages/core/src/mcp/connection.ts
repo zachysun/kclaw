@@ -258,6 +258,14 @@ export class ConnectionPool {
    * Retire a record: every async path out of it (transport close, backoff
    * timer, in-flight connect) short-circuits on `stopped`. The caller owns
    * the follow-up state (fresh record / map removal / "disconnected").
+   *
+   * The last tool view stays on the record on purpose: idle reclamation and
+   * reconnect churn must not shrink a run's tool list (the tools array sits
+   * at the very front of the request prefix — a flapping server would
+   * invalidate the prompt cache on every flap). toolsFor keeps serving the
+   * retained view while disconnected; a re-list overwrites it on reconnect.
+   * Records that are dropped entirely (config change, removal, disable) get
+   * a fresh record with empty tools anyway.
    */
   async retire(record: ConnectionRecord, nextState: McpConnState = "disconnected"): Promise<void> {
     record.stopped = true
@@ -267,8 +275,6 @@ export class ConnectionPool {
     }
     const client = record.client
     record.client = undefined
-    record.tools = []
-    record.toolSchemas = new Map()
     record.state = nextState
     if (client !== undefined) {
       client.onclose = undefined
@@ -278,8 +284,9 @@ export class ConnectionPool {
 
   /**
    * One idle sweep: connected records idle for >= ttlMs are retired to
-   * "disconnected" (tools die with the connection; the next use reconnects
-   * and re-lists). Connecting and failed records are left alone.
+   * "disconnected". The tool view is kept (see retire) — the next use
+   * reconnects and re-lists; until then the run's tool list stays stable.
+   * Connecting and failed records are left alone.
    */
   sweep(now: number, ttlMs: number): string[] {
     const reclaimed: string[] = []
@@ -381,8 +388,9 @@ export class ConnectionPool {
       const message = (err as Error).message
       record.state = "failed"
       record.lastError = message
-      record.tools = []
-      record.toolSchemas = new Map()
+      // The last listed view stays (see retire): a retry-bound server must
+      // not shrink the run's tool list mid-flap. A record that never
+      // connected keeps its empty list.
       this.#opts.onError?.(record.group, record.name, message)
       if (retry && !record.stopped) this.#scheduleReconnect(record)
     }
@@ -395,8 +403,8 @@ export class ConnectionPool {
     // permanently-broken server.
     if (record.stopped || !record.hadSession) return
     record.state = "connecting"
-    record.tools = []
-    record.toolSchemas = new Map()
+    // Tool view stays (see retire): the run's tool list must not shrink
+    // while the reconnect loop churns.
     record.client = undefined
     this.#scheduleReconnect(record)
   }
