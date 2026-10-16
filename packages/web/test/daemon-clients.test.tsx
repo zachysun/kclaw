@@ -7,7 +7,7 @@ import { describe, it, expect, vi, afterEach } from "vitest"
 import { createRoot, type Root } from "react-dom/client"
 import { act, useEffect, useRef, useState } from "react"
 import { createWsClient } from "../src/ws.js"
-import { useDaemonClients, useSilentFetch, type DaemonClients } from "../src/daemon-clients.js"
+import { useDaemonClients, useSessionResource, useSilentFetch, type DaemonClients, type SessionResource } from "../src/daemon-clients.js"
 
 vi.mock("../src/ws.js", () => ({
   createWsClient: vi.fn((url: string, token: string) => ({
@@ -167,5 +167,147 @@ describe("useSilentFetch", () => {
     root.unmount()
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(seen).toEqual([])
+  })
+})
+
+describe("useSessionResource", () => {
+  interface ProbeProps {
+    sessionId: string
+    fetcher: (sid: string) => Promise<string | null>
+    resetOnSwitch?: boolean
+    poll?: { intervalMs: number; when: (data: string | null) => boolean }
+    onRender?: (resource: SessionResource<string>) => void
+  }
+
+  /** Props are fresh closures every render on purpose — the hook reads them through refs (no caller memo discipline). */
+  function Probe(props: ProbeProps) {
+    const resource = useSessionResource<string>(props)
+    props.onRender?.(resource)
+    return null
+  }
+
+  function mount(props: ProbeProps): { rerender: (next: ProbeProps) => Promise<void> } {
+    const container = document.createElement("div")
+    containers.push(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => {
+      root.render(<Probe {...props} />)
+    })
+    const rerender = (next: ProbeProps) =>
+      act(async () => {
+        root.render(<Probe {...next} />)
+      })
+    return { rerender }
+  }
+
+  it("fetches on mount, resets on switch, and drops the previous session's late response", async () => {
+    let resolveFirst!: (value: string | null) => void
+    const first = new Promise<string | null>((resolve) => {
+      resolveFirst = resolve
+    })
+    const fetcher = vi.fn((sid: string) => (sid === "s1" ? first : Promise.resolve(`data-${sid}`)))
+    let res: SessionResource<string> | undefined
+    const { rerender } = mount({ sessionId: "s1", fetcher, resetOnSwitch: true, onRender: (r) => (res = r) })
+    expect(fetcher).toHaveBeenCalledWith("s1")
+    expect(res!.data).toBe(null)
+    // Switch while the s1 fetch is still in flight: the reset applies, the
+    // switchover refresh is absorbed by the busy guard (same serialization
+    // the old hand-written wiring had), and the panel waits for a retry.
+    await rerender({ sessionId: "s2", fetcher, resetOnSwitch: true, onRender: (r) => (res = r) })
+    await flush()
+    expect(res!.data).toBe(null)
+    // The stale s1 answer arrives only now — dropped by the session guard,
+    // and its landing releases the busy guard for the next refresh.
+    resolveFirst("stale-from-s1")
+    await flush()
+    expect(res!.data).toBe(null)
+    res!.refresh()
+    await flush()
+    expect(res!.data).toBe("data-s2")
+  })
+
+  it("keeps the stale data on switch when resetOnSwitch is off (team-panel semantics)", async () => {
+    let resolveS2!: (value: string | null) => void
+    const s2 = new Promise<string | null>((resolve) => {
+      resolveS2 = resolve
+    })
+    const fetcher = vi.fn((sid: string) => (sid === "s1" ? Promise.resolve("team-s1") : s2))
+    let res: SessionResource<string> | undefined
+    const { rerender } = mount({ sessionId: "s1", fetcher, onRender: (r) => (res = r) })
+    await flush()
+    expect(res!.data).toBe("team-s1")
+    await rerender({ sessionId: "s2", fetcher, onRender: (r) => (res = r) })
+    await flush()
+    expect(res!.data).toBe("team-s1") // kept until the fresh answer lands
+    resolveS2("team-s2")
+    await flush()
+    expect(res!.data).toBe("team-s2")
+  })
+
+  it("debounces concurrent refreshes through the busy guard", async () => {
+    let resolvePending!: (value: string | null) => void
+    const pending = new Promise<string | null>((resolve) => {
+      resolvePending = resolve
+    })
+    const fetcher = vi.fn(() => pending)
+    let res: SessionResource<string> | undefined
+    mount({ sessionId: "s1", fetcher, onRender: (r) => (res = r) })
+    expect(fetcher).toHaveBeenCalledTimes(1) // the mount fetch is in flight…
+    res!.refresh()
+    res!.refresh()
+    expect(fetcher).toHaveBeenCalledTimes(1) // …so these were all skipped
+    resolvePending("x")
+    await flush()
+    res!.refresh()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it("keeps stale data when the fetch rejects (silent by design)", async () => {
+    let fail = false
+    const fetcher = vi.fn(() => (fail ? Promise.reject(new Error("daemon down")) : Promise.resolve("good")))
+    let res: SessionResource<string> | undefined
+    mount({ sessionId: "s1", fetcher, onRender: (r) => (res = r) })
+    await flush()
+    expect(res!.data).toBe("good")
+    fail = true
+    await act(async () => {
+      res!.refresh()
+    })
+    await flush()
+    expect(res!.data).toBe("good")
+  })
+
+  it("polls on the interval while when(data) holds", async () => {
+    vi.useFakeTimers()
+    try {
+      const fetcher = vi.fn((sid: string) => Promise.resolve(`poll-${sid}`))
+      mount({ sessionId: "s1", fetcher, poll: { intervalMs: 5000, when: () => true } })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      const afterMount = fetcher.mock.calls.length
+      expect(afterMount).toBeGreaterThanOrEqual(1)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000 * 3)
+      })
+      expect(fetcher.mock.calls.length).toBe(afterMount + 3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("keeps refresh/dataRef identity across renders and mirrors data in dataRef", async () => {
+    const fetcher = vi.fn(() => Promise.resolve("mirror"))
+    let res: SessionResource<string> | undefined
+    const { rerender } = mount({ sessionId: "s1", fetcher, onRender: (r) => (res = r) })
+    await flush()
+    expect(res!.data).toBe("mirror")
+    expect(res!.dataRef.current).toBe("mirror")
+    const firstRefresh = res!.refresh
+    const firstRef = res!.dataRef
+    await rerender({ sessionId: "s1", fetcher: () => Promise.resolve("mirror"), onRender: (r) => (res = r) })
+    expect(res!.refresh).toBe(firstRefresh) // stable even though the fetcher closure changed
+    expect(res!.dataRef).toBe(firstRef)
   })
 })

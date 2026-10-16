@@ -36,7 +36,7 @@ import {
   type Message,
   type PendingSend,
 } from "./model.js"
-import { useSilentFetch } from "../daemon-clients.js"
+import { useSessionResource, useSilentFetch } from "../daemon-clients.js"
 import { runWebCommand } from "./commands.js"
 import { ChatView, type Disposition, type PendingAttachment, type SentAttachment } from "./ChatView.js"
 import type { CompactionRecordView } from "./CompactionBars.js"
@@ -167,73 +167,46 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   }, [])
   // 发送处置：三选的当前选择，显式带在每条 send_message 上。
   const [disposition, setDisposition] = useState<Disposition>("steer")
-  // Agent team：面板数据（GET /sessions/:id/team；无团队 = null，不渲染）与
-  // composer 的说话目标（null = 对组长）。目标保持 sticky——连续对同一组员
-  // 说话不用每次重选，点组长卡或 chip 上的 × 切回。
-  const [teamPanel, setTeamPanel] = useState<TeamPanel | null>(null)
+  // Agent team：面板数据与 composer 的说话目标（null = 对组长）。目标保持
+  // sticky——连续对同一组员说话不用每次重选，点组长卡或 chip 上的 × 切回。
   const [teamTarget, setTeamTarget] = useState<string | null>(null)
-  const teamPanelRef = useRef<TeamPanel | null>(null)
-  teamPanelRef.current = teamPanel
-  // 面板拉取的进行中防抖与会话归属（迟到的响应不许落进新会话的 state）。
-  const teamFetchBusy = useRef(false)
-  const teamSessionRef = useRef(sessionId)
-
-  /** 团队面板数据：GET /sessions/:id/team，404（无团队）= null。 */
-  const refreshTeam = useCallback((): void => {
-    if (teamFetchBusy.current) return
-    teamFetchBusy.current = true
-    const sid = sessionId
-    api
-      .get<unknown>(`/sessions/${encodeURIComponent(sid)}/team`)
-      .then((raw) => {
-        const panel = toTeamPanel(raw)
-        // The panel is the LEAD's coordination view (组长（我）+ talk/stop
-        // controls): a member's own read-only session must not render it, so
-        // a member identity clears the panel just like a 404 would.
-        const leadPanel = panel !== null && panel.identity === "lead" ? panel : null
-        if (teamSessionRef.current === sid) setTeamPanel(leadPanel)
-      })
-      .catch((err: unknown) => {
-        // 404 = 该会话不在任何团队里（普通会话常态）；其余失败静默——面板
-        // 保留旧数据，下一轮帧或定时器再刷。会话已切换的迟到响应丢弃。
-        if (err instanceof ApiError && err.status === 404 && teamSessionRef.current === sid) setTeamPanel(null)
-      })
-      .finally(() => {
-        teamFetchBusy.current = false
-      })
-  }, [api, sessionId])
+  // 面板数据的拉取骨架（进行中防抖、迟到响应的会话归属守卫、条件轮询、
+  // 命令式 refresh）住在 useSessionResource，与 goal 视图共用同一份骨架。
+  const { data: teamPanel, dataRef: teamPanelRef, refresh: refreshTeam } = useSessionResource<TeamPanel>({
+    sessionId,
+    fetcher: (sid) =>
+      api
+        .get<unknown>(`/sessions/${encodeURIComponent(sid)}/team`)
+        .then((raw) => {
+          const panel = toTeamPanel(raw)
+          // The panel is the LEAD's coordination view (组长（我）+ talk/stop
+          // controls): a member's own read-only session must not render it, so
+          // a member identity clears the panel just like a 404 would.
+          return panel !== null && panel.identity === "lead" ? panel : null
+        })
+        .catch((err: unknown) => {
+          // 404 = 该会话不在任何团队里（普通会话常态）；其余失败静默——面板
+          // 保留旧数据，下一轮帧或定时器再刷。会话已切换的迟到响应由骨架丢弃。
+          if (err instanceof ApiError && err.status === 404) return null
+          throw err
+        }),
+    // 切会话保留旧面板直到新答案落地（goal 视图选择清空重拉）。
+    poll: { intervalMs: 5000, when: (panel) => panel !== null },
+  })
   // /goal 目标循环视图（GET /sessions/:id/goal；goal:null = 无目标，不渲染）。
-  // 拉取时机：会话切换、goal.* 追加帧（判定/状态迁移的即时刻画）、动作后
-  // 手动刷新；armed+active 时 5s 轮询保底（判定器在 daemon 侧异步推进，
-  // 不发本会话的流，轮询是面板跟上进度的唯一途径；armed=false 的重启后
-  // 待恢复态不轮询——没有会变化的东西）。
-  const [goalView, setGoalView] = useState<GoalView | null>(null)
-  const goalFetchBusy = useRef(false)
-  const goalSessionRef = useRef(sessionId)
-  const refreshGoal = useCallback((): void => {
-    if (goalFetchBusy.current) return
-    goalFetchBusy.current = true
-    const sid = sessionId
-    api
-      .get<GoalViewResponse>(`/sessions/${encodeURIComponent(sid)}/goal`)
-      .then((body) => {
-        if (goalSessionRef.current === sid) setGoalView(body.goal ?? null)
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        goalFetchBusy.current = false
-      })
-  }, [api, sessionId])
-  useEffect(() => {
-    goalSessionRef.current = sessionId
-    setGoalView(null)
-    refreshGoal()
-  }, [refreshGoal, sessionId])
-  useEffect(() => {
-    if (goalView?.goal.state !== "active" || goalView.armed !== true) return
-    const timer = setInterval(refreshGoal, 5000)
-    return () => clearInterval(timer)
-  }, [goalView, refreshGoal])
+  // 拉取时机：会话切换（清空重拉）、goal.* 追加帧（判定/状态迁移的即时刻
+  // 画）、动作后手动刷新；armed+active 时 5s 轮询保底（判定器在 daemon 侧
+  // 异步推进，不发本会话的流，轮询是面板跟上进度的唯一途径；armed=false
+  // 的重启后待恢复态不轮询——没有会变化的东西）。
+  const { data: goalView, setData: setGoalView, refresh: refreshGoal } = useSessionResource<GoalView>({
+    sessionId,
+    fetcher: (sid) =>
+      api
+        .get<GoalViewResponse>(`/sessions/${encodeURIComponent(sid)}/goal`)
+        .then((body) => body.goal ?? null),
+    resetOnSwitch: true,
+    poll: { intervalMs: 5000, when: (view) => view !== null && view.goal.state === "active" && view.armed === true },
+  })
 
   // 一次性 interrupt 的复位基准：点「中断」
   // 不写会话级覆盖，这条发完切回该档——中断是瞬时意图，不做成模式（与 CLI
@@ -592,20 +565,12 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     [api, workdir],
   )
 
-  // 会话切换：说话目标归位（新会话从"对组长"开始），面板立即拉一次；
-  // 有团队后 5s 轮询保底——组员侧的忙闲、任务认领不发本会话的流，只有
-  // 面板轮询能看到（进行中防抖让轮询天然串行）。
+  // 会话切换：说话目标归位（新会话从"对组长"开始）。面板的立即拉取与
+  // 5s 轮询保底（组员侧的忙闲、任务认领不发本会话的流，只有面板轮询
+  // 能看到；进行中防抖让轮询天然串行）由 useSessionResource 的骨架承担。
   useEffect(() => {
-    teamSessionRef.current = sessionId
     setTeamTarget(null)
-    refreshTeam()
-  }, [refreshTeam])
-  const hasTeam = teamPanel !== null
-  useEffect(() => {
-    if (!hasTeam) return
-    const timer = setInterval(refreshTeam, 5000)
-    return () => clearInterval(timer)
-  }, [hasTeam, refreshTeam])
+  }, [sessionId])
   // 目标组员被移除/改名后失效：面板刷新发现名单里没有他了就切回组长，
   // 否则下一次发送会撞上 daemon 的"未知组员"错误帧。
   useEffect(() => {
