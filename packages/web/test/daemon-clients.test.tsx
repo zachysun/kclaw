@@ -297,6 +297,49 @@ describe("useSessionResource", () => {
     }
   })
 
+  it("stops polling once when(data) turns false (the goal pause path)", async () => {
+    vi.useFakeTimers()
+    try {
+      // when holds only while data === null: the first successful fetch flips it off.
+      const fetcher = vi.fn(() => Promise.resolve("active"))
+      mount({ sessionId: "s1", fetcher, poll: { intervalMs: 5000, when: (d) => d === null } })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(fetcher).toHaveBeenCalledTimes(1)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000 * 4)
+      })
+      expect(fetcher).toHaveBeenCalledTimes(1) // the interval was torn down, no more ticks
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("does not land an in-flight fetch after unmount", async () => {
+    // Same contract as the useSilentFetch unmount case above: the late
+    // landing is a silent no-op (React drops post-unmount setState), so the
+    // last observed data survives unchanged and nothing throws.
+    let res: SessionResource<string> | undefined
+    function Probe() {
+      res = useSessionResource<string>({
+        sessionId: "s1",
+        fetcher: () => new Promise<string | null>((resolve) => setTimeout(() => resolve("late"), 5)),
+      })
+      return null
+    }
+    const container = document.createElement("div")
+    containers.push(container)
+    const root = createRoot(container)
+    roots.push(root)
+    await act(async () => {
+      root.render(<Probe />)
+    })
+    root.unmount()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(res!.data).toBe(null)
+  })
+
   it("keeps refresh/dataRef identity across renders and mirrors data in dataRef", async () => {
     const fetcher = vi.fn(() => Promise.resolve("mirror"))
     let res: SessionResource<string> | undefined
