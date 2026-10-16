@@ -89,6 +89,11 @@ select:focus {
   letter-spacing: -0.01em;
 }
 
+.token-gate .token-error {
+  margin: var(--space-3) 0 0;
+  color: var(--danger);
+}
+
 .token-gate form {
   display: flex;
   gap: var(--space-2);

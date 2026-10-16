@@ -54,7 +54,7 @@ export function bootstrapToken(): string | null
 
 1. **`kclaw web`（推荐）**：CLI 构造 `http://127.0.0.1:<port>/?token=<token>` 用系统浏览器打开（见 [onboarding](../cli/onboarding.md)），SPA 启动即握手。
 2. **页面输入**：不带 token 打开 `http://127.0.0.1:<port>/`，`TokenForm`（`App.tsx`）粘贴一次 token → `saveToken` + 刷新页面。
-3. **401 重入**：token 过期（如 daemon 数据目录重置）→ `clearToken` → 回到 `TokenForm`。
+3. **401 重入**：token 过期（如 daemon 数据目录重置）→ `clearToken` → 回到 `TokenForm`，表单提示"上一个 token 无效或已过期，请重新输入"，不是静默回空白表单。
 
 ## 视图（App.tsx 布局）
 

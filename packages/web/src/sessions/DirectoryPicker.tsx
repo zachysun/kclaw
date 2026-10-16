@@ -1,10 +1,12 @@
 /**
- * DirectoryPicker — pure presentational modal behind the sidebar's 浏览
- * button. A browser page cannot enumerate the daemon's filesystem, so the
- * owning component (SessionList) fetches each listing through its onBrowse
- * prop and hands the result down here; navigation/pick/close escape through
- * callbacks. No I/O of its own.
+ * DirectoryPicker — presentational modal behind the sidebar's 浏览 button and
+ * the chat empty state. A browser page cannot enumerate the daemon's
+ * filesystem, so the owning component fetches each listing through its
+ * onBrowse prop and hands the result down here; navigation/pick/close escape
+ * through callbacks. No I/O of its own; the one behavior it owns is closing
+ * on Escape (modal convention) via the onClose callback.
  */
+import { useEffect } from "react"
 import type { FsBrowseResult } from "../types.js"
 
 export interface DirectoryPickerProps {
@@ -28,6 +30,14 @@ export function joinPath(base: string, name: string): string {
 }
 
 export function DirectoryPicker({ listing, loading, error, onNavigate, onPick, onClose }: DirectoryPickerProps) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") onClose()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [onClose])
+
   return (
     <div className="picker-overlay" data-testid="picker-overlay" onClick={onClose}>
       <div className="picker-panel" data-testid="picker-panel" onClick={(event) => event.stopPropagation()}>

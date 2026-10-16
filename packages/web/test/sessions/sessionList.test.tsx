@@ -185,6 +185,20 @@ describe("SessionList", () => {
     unmount(root, container)
   })
 
+  it("closes the picker on Escape without creating anything", async () => {
+    const onBrowse = vi.fn(() => Promise.resolve({ path: "/a", parent: null, dirs: [] }))
+    const onCreate = vi.fn()
+    const { container, root } = mount({ onBrowse, onCreate })
+    await act(async () => click(container, "pick-workdir"))
+    expect(container.querySelector('[data-testid="picker-overlay"]')).not.toBeNull()
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
+    })
+    expect(container.querySelector('[data-testid="picker-overlay"]')).toBeNull()
+    expect(onCreate).not.toHaveBeenCalled()
+    unmount(root, container)
+  })
+
   it("shows the error inside the picker when browsing fails", async () => {
     const onBrowse = vi.fn(() => Promise.reject(new Error("目录读取失败: boom")))
     const { container, root } = mount({ onBrowse })

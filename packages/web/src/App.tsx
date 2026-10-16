@@ -60,6 +60,7 @@ function unionById(prev: Message[], fresh: Message[]): Message[] {
 
 export function App() {
   const [token, setToken] = useState<string | null>(() => bootstrapToken())
+  const [authExpired, setAuthExpired] = useState(false)
 
   // Shell theme: index.html already applied the stored value before first
   // paint; this state mirrors it. The effect re-applies on mount and on every
@@ -73,18 +74,20 @@ export function App() {
   // 401 re-entry: any API 401 — the mount-time status
   // ping or any later call — clears the stale token and re-renders the token
   // form. Without this a reload would re-bootstrap the SAME stale token and
-  // loop the auth notice forever.
+  // loop the auth notice forever. The flag lets the form say why it came
+  // back, instead of showing a silent blank form.
   const handleAuthExpired = useCallback(() => {
     clearToken()
+    setAuthExpired(true)
     setToken(null)
   }, [])
 
-  if (token === null) return <TokenForm />
+  if (token === null) return <TokenForm authExpired={authExpired} />
   return <MainShell token={token} onAuthExpired={handleAuthExpired} theme={theme} onThemeChange={setTheme} />
 }
 
 /** Shown when no token is stored: paste the daemon token to continue. */
-function TokenForm() {
+function TokenForm({ authExpired = false }: { authExpired?: boolean }) {
   const [value, setValue] = useState("")
 
   const submit = useCallback(
@@ -105,9 +108,15 @@ function TokenForm() {
         本实例由 daemon 的 token（bearer token）保护。在终端跑 <code>kclaw web</code>
         可直接登录；token 存放在 <code>~/.kclaw/token</code>。
       </p>
+      {authExpired && (
+        <p className="token-error" role="alert" data-testid="token-error">
+          上一个 token 无效或已过期，请重新输入。
+        </p>
+      )}
       <form onSubmit={submit}>
         <input
-          type="text"
+          type="password"
+          autoComplete="new-password"
           placeholder="daemon token"
           value={value}
           data-testid="token-input"

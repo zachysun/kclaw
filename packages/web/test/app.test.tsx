@@ -110,6 +110,8 @@ describe("App", () => {
     await act(async () => {}) // flush the /status 401 → onUnauthorized → setToken(null)
     expect(localStorage.getItem("kclaw_token")).toBeNull()
     expect(container.querySelector('input[data-testid="token-input"]')).not.toBeNull()
+    // The re-entry says why it happened instead of showing a silent blank form.
+    expect(container.querySelector('[data-testid="token-error"]')?.textContent).toContain("无效或已过期")
     unmount(root, container)
   })
 

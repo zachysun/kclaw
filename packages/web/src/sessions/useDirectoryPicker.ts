@@ -6,7 +6,7 @@
  * from the daemon client; picking a directory IS the create gesture, so the
  * consumer turns picker.listing.path into its own onCreate call.
  */
-import { useState } from "react"
+import { useCallback, useState } from "react"
 import type { FsBrowseResult } from "../types.js"
 
 export interface DirectoryPickerState {
@@ -45,7 +45,9 @@ export function useDirectoryPicker(onBrowse: (path?: string) => Promise<FsBrowse
     void load(undefined)
   }
 
-  const close = () => setOpen(false)
+  // Stable identity: it rides the Escape keydown effect's dependency array in
+  // DirectoryPicker.
+  const close = useCallback((): void => setOpen(false), [])
 
   return { open, listing, loading, error, openAtRoot, load, close }
 }
