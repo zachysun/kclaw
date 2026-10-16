@@ -690,7 +690,7 @@ function MainShell({
                   data-testid="chat-empty-new"
                   onClick={emptyPicker.openAtRoot}
                 >
-                  ＋ 选择工作目录新建会话
+                  ＋ 新建会话
                 </button>
                 {emptyPicker.open && (
                   <DirectoryPicker
