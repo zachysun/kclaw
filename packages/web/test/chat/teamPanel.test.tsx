@@ -270,6 +270,14 @@ describe("ChatPanel team wiring", () => {
     h2.unmount()
   })
 
+  it("member 身份的响应不渲染面板（组长专用协调视图）", async () => {
+    const member = { ...PANEL, identity: "member" }
+    const h = await mountChatPanel(makeApi(member), PANEL)
+    await flush()
+    expect(h.q("team-panel")).toBeNull()
+    h.unmount()
+  })
+
   it("点选组员后发送：帧带 target，且不做乐观回显（防与 message.created 双份）", async () => {
     const h = await mountChatPanel(makeApi(PANEL), PANEL)
     await flush()
