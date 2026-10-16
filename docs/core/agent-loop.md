@@ -86,7 +86,7 @@ run.started {trigger}
       ⑥ tool_call.completed ×N（流结束后才 parse argsJson）
       ⑦ assistant 补全：块为空 → 整条丢弃（不持久化、无 completed）
         否则 text/thinking.completed → onMessage → message.completed
-        （assistant 消息随 llm.completed 的 latencyMs 一并写入磁盘——流成功完成才有，失败流默认）
+        （assistant 消息随 llm.completed 的 latencyMs 一并写入磁盘——流成功完成才有，失败的流没有）
       ⑧ stopReason 分派：
          end_turn          → run.completed，返回
          error             → 悬空 tool_call（无配对结果的调用）合成 error result 配对持久化 → llm.failed{willRetry:false} → run.failed，返回
@@ -105,7 +105,7 @@ run.started {trigger}
 
 ### run 级 usage 聚合的边界
 
-只有收到 `message_done`（provider 完整回报）的迭代参与 run 级折叠（`mergeUsage`）：流死亡 / 中断迭代的残缺数据不参与，已上报迭代的缓存字段照常保留；一次完整调用都没有的 run（如零迭代 abort），缓存字段按未知处理（事件与落库不带值），不写假 0。
+只有收到 `message_done`（provider 完整回报）的迭代参与 run 级折叠（`mergeUsage`）：流死亡 / 中断迭代的残缺数据不参与，已上报迭代的缓存字段照常保留；一次完整调用都没有的 run（如零迭代 abort），缓存字段按未知处理（事件与用量记录不带值），不写假 0。
 
 ### 工具回合（`runToolTurn`）
 
@@ -131,7 +131,7 @@ run.started {trigger}
 
 `toProviderMessages(history, opts?)`（`packages/core/src/agent/context.ts`）是协议消息 → provider 请求的格式翻译点：
 
-- **全量历史直发**：历史消息全部进入请求，没有"最多取最近 N 条"的条数窗口（窗口已删除，见下）。上下文长度由压缩体系统一管：长会话的正常收缩靠压缩（见 [compaction](./compaction.md)）——预压线后台压缩、黄线、红线 × 有效 budget 逐级接管，省略线管工具输出，超限急救兜溢出。按条数截尾的问题在于切点随新消息逐轮前移，请求头部每轮都在变，prompt cache 前缀从第一条消息起就断且无告警，所以彻底删掉。压缩视图（`ActiveSummary { upto, top }`）由宿主从会话 meta 取出放进 `RunInput.compaction`，循环内的 `buildMessages` 据此把 `upto`（含）之前的原文排除在发送范围外，`toProviderMessages` 再把压缩摘要项垫进待发送数组——循环本身不感知也不改动 JSONL 里的原始消息。运行起点不跑任何压缩（「发送前预压缩」这一做法已删除，压缩只发生在后台预压 / 收尾 / 运行中 / 超限急救四个自动时机加手动 /compact，见 [compaction](./compaction.md)）。
+- **全量历史直发**：历史消息全部进入请求，没有"最多取最近 N 条"的条数窗口（窗口已删除，见下）。上下文长度由压缩体系统一管：长会话的正常收缩靠压缩（见 [compaction](./compaction.md)）——预压线后台压缩、黄线、红线 × 有效 budget 逐级接管，省略线管工具输出，超限急救接住溢出。按条数截尾的问题在于切点随新消息逐轮前移，请求头部每轮都在变，prompt cache 前缀从第一条消息起就断且无告警，所以彻底删掉。压缩视图（`ActiveSummary { upto, top }`）由宿主从会话 meta 取出放进 `RunInput.compaction`，循环内的 `buildMessages` 据此把 `upto`（含）之前的原文排除在发送范围外，`toProviderMessages` 再把压缩摘要项垫进待发送数组——循环本身不感知也不改动 JSONL 里的原始消息。运行起点不跑任何压缩（「发送前预压缩」这一做法已删除，压缩只发生在后台预压 / 收尾 / 运行中 / 超限急救四个自动时机加手动 /compact，见 [compaction](./compaction.md)）。
 - **工具输出省略**（`opts.toolResultKeep`，server 从 `config.sessions.toolResultKeep` 传入，默认 0 = 不按条数省略；`N≥1` 时）：从最新消息往前数，最多保留最近 N 个工具结果原文（条数上限），更早的把输出文本替换成一行占位符 `[此工具输出已省略：<工具名> <参数摘要>，可重新调用获取]`（调用失败加"（该次调用失败）"）。传了 `opts.tokenBudget` 时在条数上限内再做 budget 驱动逐出：以"非工具结果内容的估算 token + 被上限挤掉结果的占位行"为基线，从最新到最旧逐条处理——最新的 2 条无条件保留（保底可见性，保证占位符"重新调用获取"的建议始终可行），其余各条独立判断，装得下保留、装不下省略。两者都只影响发出的请求，JSONL 存储不动；配对关系不变，不产生无效请求。不传任何 opts 时行为完全不变（全部保留）。详见 [compaction](./compaction.md) 机制二/三。
 - **工具清单按名排序**：发给模型的 `toolDefs`（内置 + 测试覆盖 + `extraTools` 追加 + readonly 裁剪之后的最终清单）在 run 组装末尾按 `name` 做 code point 序排序。tools 数组在请求前缀的最前面，MCP 连接恢复/重连后视图迭代序一变，整个 prompt cache 前缀就失效；排序让「集合没变顺序变了」不再发生。只排发送面（toolDefs）；executor 的 Map 顺序无关不动，同名冲突日志语义也不变。
 - **prompt-cache 路由**：主循环构造的每个 LLM 请求恒带 `promptCache: { key: sessionId }`（subagent 经同一路径自然用自己的会话 id，不继承父会话）——适配器据此加缓存标记（Anthropic `cache_control` 断点 / OpenAI `prompt_cache_key`），条目配置 `promptCache: "off"` 或端点回 400 时的退避见 [provider](./provider.md) 的 2b 节。goal judge、autoname 等一次性辅助调用不经 runAgent、不带该字段；压缩的段摘要是例外——默认形状直接复用主 run 的 system、工具清单与同一缓存键（见 [compaction](./compaction.md) 的"第一次调用"一节），只有无前缀可复用时的独立形状与归并调用才不带。

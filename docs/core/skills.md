@@ -97,7 +97,7 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 
 ### 检测（discovery.ts）
 
-- **来源**：四个内置约定目录（`~/.claude/skills`、`~/.codex/skills`、`~/.dsh/skills`（DeepSeek harness）、`~/.zcode/skills`）加上当前作用域旁挂文件里手工登记的 `extraSources` 目录；以及**已安装插件的内置技能**——读 Claude Code（`~/.claude/plugins/installed_plugins.json`）与 zCode（`~/.zcode/cli/plugins/installed_plugins.json`）的插件安装清单，对每个已安装插件在当前版本的安装路径下枚举 `skills/<name>/SKILL.md` 与 `skills/<分类>/<name>/SKILL.md` 两种层级。清单文件两种形态都解析（zCode 平铺数组、Claude 按"插件@市场"分组的每项目条目，插件名取自键），缺失或损坏视为无插件技能，检测永不因清单报错。
+- **来源**：四个内置约定目录（`~/.claude/skills`、`~/.codex/skills`（其 `.system` 内置技能目录不参与检测）、`~/.dsh/skills`（DeepSeek harness）、`~/.zcode/skills`）加上当前作用域旁挂文件里手工登记的 `extraSources` 目录；以及**已安装插件的内置技能**——读 Claude Code（`~/.claude/plugins/installed_plugins.json`）与 zCode（`~/.zcode/cli/plugins/installed_plugins.json`）的插件安装清单，对每个已安装插件在当前版本的安装路径下枚举 `skills/<name>/SKILL.md` 与 `skills/<分类>/<name>/SKILL.md` 两种层级。清单文件两种形态都解析（zCode 平铺数组、Claude 按"插件@市场"分组的每项目条目，插件名取自键），缺失或损坏视为无插件技能，检测永不因清单报错。
 - **去重**：目录候选按 realpath 归一：同一份真实目录经多层软链接出现在多家（如 `.zcode` → `.claude` → `.cc-switch`）时只出一条，来源标签聚合。插件候选按"插件名 + 插件内路径"去重，同一插件装在两家时是两份独立的相同内容，合并为一条、来源聚合；与用户级目录同名的插件技能内容确实不同，保留两行。
 - **来源标签**：插件技能的来源标**插件名**（superpowers、mattpocock-skills）——这是用户认识的名字；用户级技能标 agent 名。
 - **状态标**：`reused`（该真实路径已被任一作用域的链接记录指向）、`conflict`（某自有技能占了同名但内容不同——同名同内容就是已复用）、`stale`（来源目录缺失或候选悬空）。任何失效都显示为状态而不是报错。
@@ -105,7 +105,7 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 
 ### 复用链接的版本语义
 
-复用插件的技能时，链接指向**创建当时的版本目录**。插件升级到新版本目录后，旧链接仍可用（旧版本目录还在磁盘上），但内容已过时——链接清单的每条记录带 `current` 标（目标仍是检测正在提供的版本之一），页面据此标"已过时"，取消后重新复用一次即切到新版。链接不自动跟随插件升级（那需要一层版本解析）；Codex 的 `.system` 内置技能目录不参与检测。
+复用插件的技能时，链接指向**创建当时的版本目录**。插件升级到新版本目录后，旧链接仍可用（旧版本目录还在磁盘上），但内容已过时——链接清单的每条记录带 `current` 标（目标仍是检测正在提供的版本之一），页面据此标"已过时"，取消后重新复用一次即切到新版。链接不自动跟随插件升级（那需要一层版本解析）。
 
 ### 链接与档位（links.ts）
 
@@ -139,7 +139,7 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 | `skills.evolution.enabled` | `true` | 总开关。`false` 时功能完全惰性：run 收尾不排检查、调度器不处理、`skill_create` 返回固定关闭文案；已有的提案文件无论开关状态都可列表查看。非布尔值按字段回退 `false` 并警告 |
 | `skills.evolution.idleMinutes` | `10` | run 结束后到提炼检查可触发的空闲窗口分钟数，与 `memory.write.idleMinutes` 互不牵动。`0` 视为关闭延迟补查（此时只剩 `skill_create` 一条提案路径）。负数/非整数按字段回退默认并警告 |
 
-`KclawConfig.skills.curator`（可选节，curator 巡检，见上文"curator：老化的下半场"）：
+`KclawConfig.skills.curator`（可选节，curator 巡检，见下文"curator：老化的下半场"）：
 
 | 字段 | 默认 | 说明 |
 |------|------|------|
@@ -156,7 +156,7 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 
 **延迟补查（`skill-scheduler.ts`，默认每 60s 扫一次；定时器与进行中任务记录骨架在 `host-kit.ts`）**。sweep 照记忆调度器按 workdir 循环挂起检查，空闲判定复用与记忆调度器同一纯函数 `followGateDue`（`host-kit.ts`）：`end_turn` 后 `idleMinutes` 内项目无新活动才触发。额外规则：
 
-- **成功才清检查**：提炼成功 resolve 才清；失败保留检查，下个 sweep 重试同一范围（记忆侧"先清后触发"靠 interval 兜扫补失败重试，技能侧没有兜扫，先清会丢批次）；
+- **成功才清检查**：提炼成功 resolve 才清；失败保留检查，下个 sweep 重试同一范围（记忆侧"先清后触发"靠 interval 补扫重试失败批次，技能侧没有补扫，先清会丢批次）；
 - **同一检查连败 3 次放弃**：清除该检查并记日志（`MAX_ATTEMPTS`，内存按 `workdir|sessionId` 计数，daemon 重启归零后照常补查再试）；
 - **会话已删的检查无条件清掉**：`sessions.meta` 缺失的挂起检查没有活动可判、也没有提炼对象，不清会在检查表里永久堆积；
 - **end_turn 后有新活动的检查清掉**：旧锚点已被新活动取代，新 run 收尾的粗查若仍卷入会重排；
@@ -232,7 +232,7 @@ interface SkillProposal {
 - **曾经闲置又复用**：lastUsedAt 变新后 idleDays 重新变小，`state.json` 里的 stale 标记自动清除。
 - **失败不致命**：单个技能归档失败记日志继续扫下一个；扫描整体由调度宿主接住，curator 出错不影响 daemon。
 
-配置节 `skills.curator`（默认全开，见下文配置表）。
+配置节 `skills.curator`（默认全开，见上文配置表）。
 
 ### skill_create 工具
 

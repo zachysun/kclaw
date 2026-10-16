@@ -58,7 +58,7 @@ export function bearerMatches(header: string | undefined, token: string): boolea
 
 ## 启动流程
 
-入口链：`packages/server/bin/kclaw-server.mjs`（package.json 的 `bin` 入口）→ `import { launchDaemon } from "../dist/index.js"` → `launchDaemon({ home, port })`。home 解析：`--home <dir>`（或 `--home=<dir>`）优先，否则 `resolvePaths` 内部使用 `KCLAW_HOME` env ?? `~/.kclaw`。端口解析：`--port <n>`（或 `--port=<n>`）优先，0 是合法值（强制临时端口，压过配置）；旗标缺席时由 `launchDaemon` 读配置 `server.port`，再缺席才用临时端口。`--port` 非整数或越界（0-65535 之外）报一行错退出 1；launch 失败（配置不可解析、固定端口被占用等）同样是一行 stderr 加退出 1，不裸抛堆栈。bin 脚本就绪后向 stdout 输出一行 `{"port":<port>}`，CLI 与测试以此行为就绪信号。
+入口链：`packages/server/bin/kclaw-server.mjs`（package.json 的 `bin` 入口）→ `import { launchDaemon } from "../dist/index.js"` → `launchDaemon({ home, port })`。home 解析：`--home <dir>`（或 `--home=<dir>`）优先，否则 `resolvePaths` 内部使用 `KCLAW_HOME` env ?? `~/.kclaw`。端口解析：`--port <n>`（或 `--port=<n>`）优先，0 是合法值（强制临时端口，压过配置）；旗标缺席时由 `launchDaemon` 读配置 `server.port`，再缺席才用临时端口。`--port` 非整数或越界（0-65535 之外）报一行错退出 1；launch 失败（配置不可解析、固定端口被占用等）同样是一行 stderr 加退出 1，不裸抛堆栈。bin 脚本就绪后向 stdout 输出一行 `{"port":<port>}`，CLI 与测试以这一行输出作为就绪信号。
 
 `launchDaemon` 的组装序（每步失败都让整个启动 reject，daemon 不会半启动）：
 
@@ -214,7 +214,7 @@ app.addHook("preHandler", async (request, reply) => {
 
 - **`/health`**：CLI 的存活检测（`probeHealth`，单次 1s 超时）不带 token——检测只回答 daemon 是否存活，此时客户端可能还没有 token。
 - **`/ws`**：WebSocket 升级请求常无法附带自定义 header，鉴权移到连接内部进行——首帧 `{type:"auth", token}` 或 `?token=` 查询参数，失败发 error 帧并以 4001 关闭（见 [realtime](./realtime.md)）。豁免的是升级路由，不是连接本身。
-- **静态 WebUI 外壳**（仅 `webDist` 已配置时）：浏览器加载页面前无法获得 token，`GET /`、`GET /index.html`、`GET /assets/*` 必须先放行，PWA 静态文件（`/manifest.webmanifest`、`/sw.js`、`/icon-192.png`、`/icon-512.png`、`/favicon.svg`、`/favicon.ico`）同样放行（`index.html` 声明了 SVG 图标、浏览器默认还会请求 ico，磁盘上没有对应文件时让它们从静态处理器 404 而不是 401）；页面加载后由 JS 附带 token 调用 API。
+- **静态 WebUI 外壳**（仅 `webDist` 已配置时）：浏览器加载页面前无法获得 token，`GET /`、`GET /index.html`、`GET /assets/*` 必须先放行，PWA 静态文件（`/manifest.webmanifest`、`/sw.js`、`/icon-192.png`、`/icon-512.png`、`/favicon.svg`、`/favicon.ico`）同样放行（`index.html` 声明了 SVG 图标、浏览器默认还会请求 ico，磁盘上没有对应文件时，让这些请求由静态处理器返回 404，而不是被鉴权拦成 401）；页面加载后由 JS 附带 token 调用 API。
 
 **外壳豁免的防绕过措施**（`isWebShellExempt`）：
 

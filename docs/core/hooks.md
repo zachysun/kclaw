@@ -41,7 +41,7 @@
 | `system-before` | 系统提示词组装前 | `{ base }` | `string[]` | 追加段落（内置：认知 + 技能清单），**多 hook 累积** |
 | `system-after` | 系统提示词终稿（两段拼装之后、组装层冻结基线之前） | `{ system }` | `string` | 改写终稿（用户改写随后被组装层整体固化进 stable 基线并审计） |
 
-用户 hook 默认 order 1000——落在内置 hook（10–99）之后。system-after 上用户改写排在前面，组装层最后把终稿冻结为基线（见下），所以用户对系统提示词的改写永远在被审计的那份里。
+用户 hook 默认 order 1000——落在内置 hook（10–99）之后。system-after 上，用户改写在组装层冻结基线之前执行，冻结进基线的终稿就是改写后的那份（见下），所以用户对系统提示词的改写永远在被审计的那份里。
 
 **冻结基线（提示词缓存策略，双段独立）**：系统提示词分两段，**stable**（人设基础文本 + 注入约定，缓存冻结面）在前，**live**（认知 + 技能清单，低频变化面）在后。会话 meta 的 `systemBaseline`（见 [storage](./storage.md)）为两段各存一份基线 `{ text, frozenAt }`：每 run 两段现算、与基线逐段比对，哪段文本变了就重冻结哪段，没变的沿用基线（`frozenAt` 记录的是"这份文本成为基线的时刻"）。前缀缓存按从头逐字节相同匹配，live 变化只失效变化点之后，stable 前缀继续命中；装一个新技能、夜间认知刷新在下一个 run 即时生效，不再等压缩边界。`system-before` 链每 run 都执行（live 段由它现算，文本与基线逐字相等时不重冻结）；两段全命中时 `system-after` 链**整体不跑**（用户 system-after hook 改写的段落同样冻结，文本未变则沿用基线）；至少一段变化时走 `system-after` 链，用户改写发生时终稿整体固化进 stable 基线。改写每 run 重新生效，审计恒记录模型实际看到的那份。基线由上一 run 的 `system` 审计事件按段固化，压缩清除后下一个 run 重新组装（见 [compaction](./compaction.md)）。
 
@@ -50,10 +50,10 @@
 ## HookChain 语义（runner.ts）
 
 - **排序**：`meta.order` 升序，同序按名字稳定排序（改写链依赖确定性）。
-- **真链式改写**：改写位置的返回值回填进 ctx 的改写字段（`run-before` 的 `message`、`llm-before` 的 `messages`、`system-after` 的 `system`），下一个 handler 看到的是改写后的值——这保证"用户改写在前、内置持久化在后"时，持久化落的是改写后的消息。调用方传入的 ctx 对象本身不被改动。
+- **真链式改写**：改写位置的返回值回填进 ctx 的改写字段（`run-before` 的 `message`、`llm-before` 的 `messages`、`system-after` 的 `system`），下一个 handler 看到的是改写后的值——这保证"用户改写在前、内置持久化在后"时，持久化落的是改写后的消息。回填只发生在链内部，调用方传入的 ctx 对象本身不被改动。
 - **追加型位置**：`system-before` 的返回值是段落**数组**，多个 hook 的段落累积拼接而不是互相覆盖。
 - **失败分派**：抛错/超时按 `meta.failure` 分派。`fatal` 让整次 `run()` 拒绝（循环既有的各位置 catch 路径接管，错误码保持原样：`user_message_failed`、`steering_failed` 等）；`skip` 发 `hook.failed {phase:"run"}` 后继续下一个 handler；`deny` 同样发事件并继续跑完链（后面的观察者不丢），但经 `runGate` 出口把首个失败记为**否决**：`tool-before` 位置上循环据此给该工具写拒绝结果（错误结果 + `denied` note，工具不执行，run 继续）。
-- **超时**：每个 handler 与 `config.hooks.timeoutMs`（默认 5000ms）同时计时，超时的一方算失败，走同样的 fatal/skip/deny 分派。条目可用 `meta.timeoutMs` 覆盖链 budget（`Infinity` = 不限时）：五个内置压缩 hook（background-precompact / mid-run-panic / overflow-emergency / manual-compact-flush / post-run-compaction）声明了不限时——它们的函数体是两次 provider 调用，时长由 LLM 决定；时长上限由 provider 单请求超时与 run 中止信号保底。
+- **超时**：每个 handler 都按 `config.hooks.timeoutMs`（默认 5000ms）计时，超时即算失败，走同样的 fatal/skip/deny 分派。条目可用 `meta.timeoutMs` 覆盖链 budget（`Infinity` = 不限时）：五个内置压缩 hook（background-precompact / mid-run-panic / overflow-emergency / manual-compact-flush / post-run-compaction）声明了不限时——它们的函数体是两次 provider 调用，时长由 LLM 决定；时长上限由 provider 单请求超时与 run 中止信号保底。
 - **空位置零开销**：没有注册任何 handler 的位置同步短路返回 `undefined`，`has()` 为 false（循环据此判断要不要走进某个分支，如 overflow-rescue）。
 
 ---

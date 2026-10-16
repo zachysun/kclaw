@@ -42,7 +42,7 @@ export async function httpRequest(url: string, init: HttpRequestInit): Promise<u
 ## 边界与出错
 
 - **错误消息优先服务端文案**：响应体是合法 JSON 且 `error` 字段是字符串时用它；否则（如网关层返回的非 JSON 页面）退回 `HTTP <status>`。
-- **浏览器安全是硬约束**：本模块不允许出现 `node:*` import，否则 WebUI 打包会失败——这是本模块的一条硬性要求。
+- **浏览器安全是硬约束**：本模块不允许出现 `node:*` import，否则 WebUI 打包会失败。
 
 ## 关联
 

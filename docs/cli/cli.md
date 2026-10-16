@@ -157,7 +157,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 
 ## 边界与出错
 
-- **订阅确认失败即失败**：`openSubscribed` 5s（`SUBSCRIBE_ACK_MS`）等不到 `subscribed` 或收到 error 帧即抛错并关闭 socket，不会把消息发送到总线尚未分发的连接上。
+- **订阅确认失败即失败**：`openSubscribed` 5s（`SUBSCRIBE_ACK_MS`）等不到 `subscribed` 或收到 error 帧即抛错并关闭 socket，不会把消息发往一条还没完成订阅（总线尚未登记分发）的连接。
 - **确认应答发送失败被忽略**：`confirmation.resolve` 发送抛错只忽略（socket 正在断开），交给重连路径接管。
 - **管道 stdin 的 EOF**：stdin 关闭时 readline 触发 close，循环自然退出；`rlClosed` 标志让迟到的 `prompt()` 变成空操作而不是抛 "readline was closed"（缓冲行仍会经异步迭代器到达）。
 - **重连后不回放**：重连只拉取全量对齐数据但不渲染，错过的事件不再补偿；持久化消息自洽，下次进入 REPL 重新拉取全量即可（协议规则见 [protocol](../core/protocol.md)）。

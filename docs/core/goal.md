@@ -87,7 +87,7 @@
 - **排队**：goal 轮的 trigger 是 `"goal"`（`run.started` 触发源第五种），处置固定 `wait`（与 job/agent 同款——无人值守的排队行为必须可预测），用户中途输入按自己的处置照常 steer 注入当前 run。
 - **唤醒 budget**（两次用户发言之间的机器唤醒上限）：goal 轮开跑时同样清零——目标循环自身有九条独立停止条件，不再叠加这份上限，否则长目标里 subagent 投递会先被卡死。
 - **subagent 会话**（`parentSessionId` 非空）不能设目标（只读会话）。
-- **提示词注入**沿用 XML 标签约定：首轮 `<goal-start>`、续跑 `<goal-continue round=N>`、收尾 `<goal-wrapup>`（闭合标签逃逸防提示词注入）；goal 轮的用户消息带 `note(kind:"goal")` 出处行。
+- **提示词注入**沿用 XML 标签约定：首轮 `<goal-start>`、续跑 `<goal-continue round=N>`、收尾 `<goal-wrapup>`（正文中的闭合标签会被逃逸，防提示词注入）；goal 轮的用户消息带 `note(kind:"goal")` 出处行。
 - **审计**：goal 事件在审计页渲染成 "goal" 行（设定/检查/移除各一句话摘要，点击展开完整快照与裁决）。
 
 ## 使用入口

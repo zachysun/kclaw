@@ -90,9 +90,10 @@ export function resolvePaths(home?: string): KclawPaths
 
 | `notify.channels` | `[]` | 定时任务终态通知渠道列表；为空即关闭（零开销）。条目 `{ name?, type, url, template? }`，`type` 三种：`bark`（POST JSON `{title, body}`）、`serverchan`（POST 表单 `title`+`desp`）、`webhook`（POST JSON，正文含 title/body 及全部 job 字段）。`template` 占位符：`{{job}}` `{{statusText}}` `{{status}}` `{{summary}}` `{{sessionId}}` `{{sessionUrl}}`，未知占位符渲染为空串 |
 | `notify.timeoutMs` | `10000` | 单次推送请求超时；推送失败只记日志、不重试 |
-团队协作的状态目录在工作区 `.kclaw/teams/<队名>/`（团队记录 + 组员名单 + 收信箱）与 `.kclaw/tasks/<队名>/`（任务快照 + 进行中锁），与项目档权限规则共用 `.kclaw` 根；目录结构、对账与崩溃恢复语义见 [agent-team](./agent-team.md)。
 | `hooks.timeoutMs` | `5000` | 单个 hook 处理函数的执行 budget（毫秒），超时按失败处理（用户 hook skip、内置 hook fatal，见 [hooks](./hooks.md)）；可选字段，默认值在 hook 链构建处补齐 |
 | `workspace` | `process.cwd()` | 工具的工作目录；daemon 的 cwd 由启动方决定，单个会话可经 `meta.workdir` 覆盖 |
+
+团队协作的状态目录在工作区 `.kclaw/teams/<队名>/`（团队记录 + 组员名单 + 收信箱）与 `.kclaw/tasks/<队名>/`（任务快照 + 进行中锁），与项目档权限规则共用 `.kclaw` 根；目录结构、对账与崩溃恢复语义见 [agent-team](./agent-team.md)。
 
 读（`loadConfig(paths)`）：`config.json` 存在 → 按 JSON 解析；缺失或内容为空 → 返回默认值的克隆。解析失败抛错（`invalid json in <path>: ...`），内容不是对象映射也抛错；其余 → `deepMerge(默认值克隆, 文件内容)`，随后合并 `credentials.json` 里的密钥（见设计决策：凭据文件优先）。**除三处外没有结构校验**：`permissions.defaultMode` 非五档时回退到 `"default"` 并告警、压缩阈值线四线经 `validateWaterlineConfig` 校验（见 [permissions](./permissions.md) 与 [compaction](./compaction.md)）、skills 两节（evolution/curator）逐字段校验回退；其余字段不校验——多余字段原样保留，字段类型写错要到使用方使用时才暴露。
 
@@ -157,7 +158,7 @@ export function readJsonl(file: string): unknown[]
 - **`events.jsonl`（唯一权威数据）**：只追加的事件流，一行一个 `SessionEvent`（JSON 序列化），共 26 种事件——
   - 会话生命周期 6 种：`session.created`（含创建时固化的初始权限模式 `mode`；subagent 会话还带 `parentSessionId`）、`session.renamed`、`session.deleted`、`session.restored`、`session.set`（model / mode / disposition 的会话级设置）、`session.forked`（fork 血缘：来源会话、分叉点消息、初始标题，只落在新会话流上，投影出 `meta.forkedFrom`；fork 复制的历史段本身经 `writeEventsRaw` 直写，不走这条常规追加路径，见下文 fork 小节）。
   - 内容类 7 种：`message`（一条消息）、`message.truncated`（编辑重试/重新生成的截断标记：从 `fromMessageId` 起的所有消息退出对话视图；事件流只追加这条标记、不改写任何历史行，可见性是读取端投影）、`compaction`（一次压缩的审计）、`memory`（一次记忆写入的审计）、`skill`（一条技能提案审计——提案的产生与治理状态流转各落一条，只做记录、权威数据在 `.proposals/` 的提案文件，见 [skills](./skills.md)）、`system`（一条系统提示词审计，每次对话运行落一条，附带 stable/live 两段拼装文本）、`sandbox.checked`（一条沙箱状态审计——每次对话运行检测后落一条 `{enabled, available, unavailableReason?}`）。
-  - 运行档案 3 种：`run.started` / `run.ended`（每 run 一对，把该 run 的消息事件夹成一轮边界；失败 run 也落 `run.ended`，起点必有终点）、`permission.decided`（每次人工确认裁决的记录；被中止的确认不落）。<br>运行档案与 `system` / `sandbox.checked` 一样只写事件流、不进 meta 投影、不推进 `updatedAt`。`message.truncated` 不同（它是用户可见的会话动作，会推进 `updatedAt`；且当截断起点越过压缩锚点（`compaction.upto`）时，部分已压缩的历史被丢弃，压缩投影随之一并清除（摘要无法再代替被隐藏的消息；尾部截断）常规路径——不碰压缩投影）。
+  - 运行档案 3 种：`run.started` / `run.ended`（每 run 一对，把该 run 的消息事件夹成一轮边界；失败 run 也落 `run.ended`，起点必有终点）、`permission.decided`（每次人工确认裁决的记录；被中止的确认不落）。<br>运行档案与 `system` / `sandbox.checked` 一样只写事件流、不进 meta 投影、不推进 `updatedAt`。`message.truncated` 不同（它是用户可见的会话动作，会推进 `updatedAt`；且当截断起点越过压缩锚点（`compaction.upto`）时，部分已压缩的历史被丢弃，压缩投影随之一并清除——摘要无法再代替被隐藏的消息。不越过锚点的尾部截断是常规路径，不碰压缩投影）。
   - 协作 7 种（`team.created` / `team.member.provisioned` / `team.member.settled` / `team.message.queued` / `team.message.delivered` / `team.task.created` / `team.task.updated`）：agent 团队协作的审计记录，只追加在**组长**的事件流上（以团队目录为准，见 [agent-team](./agent-team.md)）；尽力而为（写失败降为警告、团队操作照常），与运行档案一样不进投影、不推进 `updatedAt`。
   - 目标循环 3 种（`goal.set` / `goal.checked` / `goal.cleared`）：`/goal` 目标循环的全部写路径（见 [goal](./goal.md)）。`goal.set`（快照全量替换，含 create/edit/pause/resume/state 五种 op）与 `goal.cleared` 进 meta 投影（写/删 `goal` 字段）并推进 `updatedAt`；`goal.checked`（每轮检查的验收输出 + 判定裁决记录）只审计，不进投影、不推进 `updatedAt`。
 
@@ -289,6 +290,6 @@ HTTP 出口与展示见 [http-api](../server/http-api.md) 的 `GET /usage` 与 [
 
 - [jobs](./jobs.md)：jobs.db 的表结构与轮询
 - [compaction](./compaction.md)：压缩状态的存放位置（meta.compaction 摘要 + 事件流里的 compaction 事件）与压缩配置字段
-- [memory](./memory.md)：memory 目录的两层塔布局（文件是权威数据、vectors.db 是派生物）
+- [memory](./memory.md)：memory 目录的两层结构布局（文件是权威数据、vectors.db 是派生物）
 - [protocol](./protocol.md)：Message / Block 的完整定义（message 事件的内容就是一个 Message）
 - [daemon](../server/daemon.md)：daemon.json 的写入时机与停机流程、token 的鉴权链路

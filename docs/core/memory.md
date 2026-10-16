@@ -6,7 +6,7 @@
 
 模型通过 `memory_save` / `memory_search` 两个工具读写（`packages/core/src/tools/memory.ts`）；run 组装（core `executeRun`）在每次 run 时做两级注入——L2 认知常驻系统提示、L1 情节作为 note 挂到用户消息上（见下文"检索与注入"）。daemon 的 `MemorySystem` 组装与 embedding 判定链都在 `packages/server/src/daemon.ts`。
 
-## 三层塔
+## 三层结构
 
 记忆从"原始对话"到"可注入的长期记忆"分三层提炼：
 
@@ -79,7 +79,7 @@ updated: 2026-08-30
 （追加的新情节）
 ```
 
-- frontmatter 字段：`topic`（线名，即文件名去 `.md`）、`title`（人可读一句话，仅在开新线时写入）、`status`（`active`/`inactive`）、`created`/`updated`（日期）。`## YYYY-MM-DD · 标题` 起始新小节，标题取提取动作的 `title`，默认时 `append`/`update` 回退到情节正文首行、`new-thread` 回退到线文件名——一律截断到 40 字封顶（超长在句读处收刀），与本文件已有小节撞名时加序号后缀，索引键 `主题#日期#标题` 因此不互覆。
+- frontmatter 字段：`topic`（线名，即文件名去 `.md`）、`title`（人可读一句话，仅在开新线时写入）、`status`（`active`/`inactive`）、`created`/`updated`（日期）。`## YYYY-MM-DD · 标题` 起始新小节，标题取提取动作的 `title`，默认时 `append`/`update` 回退到情节正文首行、`new-thread` 回退到线文件名——一律截断到 40 字封顶（超长时截在句读处），与本文件已有小节撞名时加序号后缀，索引键 `主题#日期#标题` 因此不互覆。
 - 解析宽容：首行不是 `---`、frontmatter 未闭合或 yaml 解析失败的文件视为"不是线文件"（不进索引、不参与检索）；`status` 非 `inactive` 一律按 `active` 读。
 - 追加（`appendSection`）：新建小节不覆盖历史；修正（`updateSection`）：就地改写指定小节、找不到时退化为追加。
 
@@ -107,7 +107,7 @@ pipeline 位于 `packages/core/src/memory/pipeline.ts`，写入的触发入口�
 3. **写入**：逐条应用动作（追加/改写/开线），期间不阻塞地广播 `memory.written` 事件（见"事件"）；
 4. **收尾**：推进提取进度、闲置线在扫描时自动停用（见"生命周期"）、顺带沉淀检查、重建项目索引与 MEMORY.md。
 
-提取用的模型取 `memory.extractModel`，为空回退到主对话模型；名字命中 provider 条目时走该条目自己的端点与协议（daemon 注入的 `resolveEntryLlm` 解析条目客户端，与 run 客户端同源共享缓存，+ 条目的 `model`），裸模型名走主端点（见 [provider](./provider.md)）。校验与提示词的分工：**模型只从 `EXTRACT_SYSTEM_PROMPT` 认识 JSON 结构，字段名必须与写入校验逐字一致**。响应不是合法 JSON 或解析结果非 `actions` 数组时**整批放弃**、只打日志，不做部分写入；单个动作字段不合法（缺 `file`/`content`、`op` 非三值）则**只丢该条**、其余照常写入。提取进度的推进要区分两种情况：**LLM 调用抛错（提取失败）提取进度不推进**，下一次触发重试同一范围；而**调用成功但动作被丢光（格式不合法）提取进度照常推进**——这段消息不会自动重试，属已知取舍（丢弃的来源是模型输出不合规，重试大概率同样不合规）。
+提取用的模型取 `memory.extractModel`，为空回退到主对话模型；名字命中 provider 条目时走该条目自己的端点与协议（daemon 注入的 `resolveEntryLlm` 给出条目客户端与该条目的 `model`，客户端与 run 客户端同源、共享缓存），裸模型名走主端点（见 [provider](./provider.md)）。校验与提示词的分工：**模型只从 `EXTRACT_SYSTEM_PROMPT` 认识 JSON 结构，字段名必须与写入校验逐字一致**。响应不是合法 JSON 或解析结果非 `actions` 数组时**整批放弃**、只打日志，不做部分写入；单个动作字段不合法（缺 `file`/`content`、`op` 非三值）则**只丢该条**、其余照常写入。提取进度的推进要区分两种情况：**LLM 调用抛错（提取失败）提取进度不推进**，下一次触发重试同一范围；而**调用成功但动作被丢光（格式不合法）提取进度照常推进**——这段消息不会自动重试，属已知取舍（丢弃的来源是模型输出不合规，重试大概率同样不合规）。
 
 ### 五触发
 
@@ -125,7 +125,7 @@ pipeline 位于 `packages/core/src/memory/pipeline.ts`，写入的触发入口�
 
 ### 提取进度标记与串行锁
 
-`state.json` 每项目一本（`WriteLedger`，`packages/core/src/memory/ledger.ts`），内容：
+`state.json` 每项目一本（`WriteLedger`，`packages/core/src/memory/ledger.ts`）。
 
 > 读写收在 MemorySystem 的进度文件入口（写通道 `#ledgerForWrite`/读通道 `#ledgerPath`），且**每次调用现开现读**——WriteLedger 写时把内存状态整文件原子重写，跨调用缓存长命实例会把别人刚写入的字段覆盖掉（最后写者胜），禁止。
 
@@ -160,7 +160,7 @@ pipeline 位于 `packages/core/src/memory/pipeline.ts`，写入的触发入口�
 - `target:"wiki"` + `name`：领域知识，一个资源一个文件；
 - `target:"rule"` + `name`：用户规则，清单式，每条规则一个小节。
 
-新增用 `op:"append"`/`op:"create"`，已有认知被新经历印证的不动、与新经历不一致的就地改写（`op:"rewrite"`，不保留原文）；每条新认知附来源注释 `<!-- 来源：<topic>#<date> -->`。解析校验：`target` 必须是三值之一、`wiki`/`rule` 必带非空 `name`，不合法的动作在解析层丢弃并记日志（`dropping malformed cognition action (target=…)`）——`#applyCognitionAction` 拿 `target` 拼目录路径，放行任意字符串会写出索引读不到的垃圾文件。`target:"skill"` 预留、当前未实现（解析层即丢弃，`#applyCognitionAction` 内保留防御分支）。拿不准落 `global` 还是项目时**倾向 global、宁小勿大**。沉淀受 `memory.consolidate` 开关（默认 true）控制（停用顺带与夜间闲时两路共用）；LLM 调用失败只打日志、不影响 run。除这两条自动路径外，`MemorySystem.consolidate(workdir, topic)` 也暴露了手动沉淀入口（目前同样无路由/工具暴露）。
+新增用 `op:"append"`/`op:"create"`，已有认知被新经历印证的不动、与新经历不一致的就地改写（`op:"rewrite"`，不保留原文）；每条新认知附来源注释 `<!-- 来源：<topic>#<date> -->`。解析校验：`target` 必须是三值之一、`wiki`/`rule` 必带非空 `name`，不合法的动作在解析层丢弃并记日志（`dropping malformed cognition action (target=…)`）——`#applyCognitionAction` 拿 `target` 拼目录路径，放行任意字符串会写出索引读不到的垃圾文件。`target:"skill"` 预留、当前未实现（解析层即丢弃，`#applyCognitionAction` 内保留防御分支）。拿不准落 `global` 还是项目时**倾向 global、宁小勿大**。沉淀受 `memory.consolidate` 开关（默认 true）控制（停用顺带与夜间闲时两路共用）；LLM 调用失败只打日志、不影响 run。除这两条自动路径外，`MemorySystem.consolidate(workdir, topic)` 也暴露了手动沉淀入口（目前没有路由或工具暴露这个入口）。
 
 ## 检索与注入
 
