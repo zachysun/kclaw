@@ -483,12 +483,17 @@
   background: var(--accent);
 }
 
-/* session rows show the human title; the raw id rides the tooltip */
+/* session rows show the human title; the raw id rides the tooltip. Sessions
+   gone from the list render their raw id dimmed so named rows stand out. */
 .usage-session-name {
   max-width: 340px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.usage-session-unnamed {
+  color: var(--text-dim);
 }
 
 .usage-export {
@@ -570,6 +575,8 @@
 .memory-editor {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: var(--space-3);

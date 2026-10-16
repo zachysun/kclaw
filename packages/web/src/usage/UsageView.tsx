@@ -52,9 +52,13 @@ export function UsageView({ api }: { api: ApiClient }) {
     }
   }, [api])
 
+  // 会话行显示人起的名字；不在列表里的会话回退原始 id，行内降为次要色。
   const titleOf = useMemo(() => {
     const byId = new Map((sessions ?? []).map((s) => [s.id, s.title]))
-    return (key: string): string => byId.get(key) ?? key
+    return (key: string): { label: string; unnamed: boolean } => {
+      const title = byId.get(key)
+      return title === undefined ? { label: key, unnamed: true } : { label: title, unnamed: false }
+    }
   }, [sessions])
 
   const exportJson = (): void => {
@@ -137,23 +141,26 @@ export function UsageView({ api }: { api: ApiClient }) {
           </tr>
         </thead>
         <tbody>
-          {(bySession?.buckets ?? []).map((b) => (
-            <tr key={b.key}>
-              <td className="usage-session-name" title={b.key}>{titleOf(b.key)}</td>
-              <td className="num">{fmt(b.inputTokens)}</td>
-              <td className="num">{fmt(b.outputTokens)}</td>
-              <td className="num">{fmt(total(b))}</td>
-              <td className="num">{b.cacheReadTokens === null ? "—" : fmt(b.cacheReadTokens)}</td>
-              <td className="num">{b.cacheWriteTokens === null ? "—" : fmt(b.cacheWriteTokens)}</td>
-              <td className="num">{hitRate(b) ?? "—"}</td>
-              <td className="usage-bar-cell" title={`${fmt(total(b))} token`}>
-                <span className="usage-bar-track">
-                  <span className="usage-bar" style={{ width: `${(total(b) / maxOf(bySession)) * 100}%` }} />
-                </span>
-              </td>
-              {showSessionCost && <td className="num">{b.costUsd === 0 ? "—" : fmtCost(b.costUsd)}</td>}
-            </tr>
-          ))}
+          {(bySession?.buckets ?? []).map((b) => {
+            const { label, unnamed } = titleOf(b.key)
+            return (
+              <tr key={b.key}>
+                <td className={unnamed ? "usage-session-name usage-session-unnamed" : "usage-session-name"} title={b.key}>{label}</td>
+                <td className="num">{fmt(b.inputTokens)}</td>
+                <td className="num">{fmt(b.outputTokens)}</td>
+                <td className="num">{fmt(total(b))}</td>
+                <td className="num">{b.cacheReadTokens === null ? "—" : fmt(b.cacheReadTokens)}</td>
+                <td className="num">{b.cacheWriteTokens === null ? "—" : fmt(b.cacheWriteTokens)}</td>
+                <td className="num">{hitRate(b) ?? "—"}</td>
+                <td className="usage-bar-cell" title={`${fmt(total(b))} token`}>
+                  <span className="usage-bar-track">
+                    <span className="usage-bar" style={{ width: `${(total(b) / maxOf(bySession)) * 100}%` }} />
+                  </span>
+                </td>
+                {showSessionCost && <td className="num">{b.costUsd === 0 ? "—" : fmtCost(b.costUsd)}</td>}
+              </tr>
+            )
+          })}
         </tbody>
       </table>
       <h4>按类型</h4>

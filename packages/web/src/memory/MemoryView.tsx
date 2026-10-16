@@ -183,7 +183,7 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
               )}
             </div>
           </>
-        ) : <p className="muted">选择一条主题线或一个认知文件查看与编辑</p>}
+        ) : <p className="pane-placeholder muted">选择一条主题线或一个认知文件查看与编辑</p>}
       </div>
     </div>
   )

@@ -98,6 +98,21 @@ body {
   color: var(--muted);
 }
 
+/* Empty master-detail panes (skills preview/proposals/reuse, memory editor):
+   the "nothing selected yet" line centers in a viewport-high block instead of
+   hugging the top-left corner above a void. No flex-grow on purpose — these
+   panes stretch to their list sibling's height, which can exceed the
+   viewport, and a grown placeholder would park the text below the fold.
+   Parent panes are flex columns. */
+.pane-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  margin: 0;
+  min-height: 33vh;
+}
+
 /* Native checkboxes speak in the theme: the checked fill takes the agent
    accent instead of the browser default blue (audit kind filters, job form,
    channel form, GFM task lists). */

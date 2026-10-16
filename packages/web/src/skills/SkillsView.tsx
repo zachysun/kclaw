@@ -413,7 +413,7 @@ export function SkillsView({ api, notice }: {
           </div>
           <div className="skills-body">
             {body === null ? (
-              <p className="muted">选择一个技能查看完整说明</p>
+              <p className="pane-placeholder muted">选择一个技能查看完整说明</p>
             ) : (
               <>
                 <h3>{body.title}</h3>
@@ -481,7 +481,7 @@ export function SkillsView({ api, notice }: {
           </div>
           <div className="skills-body">
             {selectedProposal === null ? (
-              <p className="muted">选择一个提案查看详情；待确认的提案在此采纳或驳回，已采纳的可回退</p>
+              <p className="pane-placeholder muted">选择一个提案查看详情；待确认的提案在此采纳或驳回，已采纳的可回退</p>
             ) : (
               (() => {
                 const p = selectedProposal
@@ -650,7 +650,7 @@ export function SkillsView({ api, notice }: {
             </div>
             <div className="skills-body">
               {body === null ? (
-                <p className="muted">点开一个技能先预览正文，再决定复用；档位在上方已建链接里调整</p>
+                <p className="pane-placeholder muted">点开一个技能先预览正文，再决定复用；档位在上方已建链接里调整</p>
               ) : (
                 <>
                   <h3>

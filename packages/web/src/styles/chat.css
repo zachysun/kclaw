@@ -226,6 +226,13 @@
   margin: 0;
 }
 
+/* .new-session is width:100% for the sidebar row; here it stands alone and
+   should read as a button, not a full-width bar. */
+.chat-empty-state .new-session {
+  width: auto;
+  padding: 7px 16px;
+}
+
 .message {
   position: relative;
   max-width: 85%;
