@@ -355,6 +355,7 @@ export function SkillsView({ api, notice }: {
 
   return (
     <div className="skills-view" data-testid="skills-view">
+      <h2 className="view-title">技能</h2>
       <div className="skills-scope-row">
         <label className="skills-scope">
           作用域

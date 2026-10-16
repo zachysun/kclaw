@@ -141,6 +141,7 @@ export function ChannelView({ api, notice }: {
 
   return (
     <div className="channel-view" data-testid="channel-view">
+      <h2 className="view-title">IM Channel</h2>
       <div className="channel-head">
         {snap !== null && (
           <span className={`channel-status channel-status-${snap.status.state}`} data-testid="channel-status">

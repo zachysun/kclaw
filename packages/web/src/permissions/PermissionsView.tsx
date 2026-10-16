@@ -101,6 +101,7 @@ export function PermissionsView({ api, notice, workdir }: {
 
   return (
     <div className="permissions-view" data-testid="permissions-view">
+      <h2 className="view-title">权限</h2>
       {data === null ? (
         <p className="muted">加载中…</p>
       ) : (

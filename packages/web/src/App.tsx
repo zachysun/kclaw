@@ -28,6 +28,8 @@ import { ChatPanel } from "./chat/ChatPanel.js"
 import { UsageView } from "./usage/UsageView.js"
 import type { MemoryWrittenInfo, Message } from "./chat/model.js"
 import { SessionList } from "./sessions/SessionList.js"
+import { useDirectoryPicker } from "./sessions/useDirectoryPicker.js"
+import { DirectoryPicker } from "./sessions/DirectoryPicker.js"
 import { TrashView } from "./sessions/TrashView.js"
 import { JobsView } from "./jobs/JobsView.js"
 import { AuditView } from "./audit/AuditView.js"
@@ -168,6 +170,49 @@ function MainShell({
   // The memory page does the same (hidden, not offscreen — no virtualization).
   const [auditVisited, markAuditVisited] = useVisitedTab()
   const [memoryVisited, markMemoryVisited] = useVisitedTab()
+  // 进场动效两件套：tab 高亮滑块（.tab-glider 按活动按钮实际位置落位）与
+  // 主内容区的 120ms 淡入（.view-enter，tab 变化时重放）。keep-alive 视图
+  // 不重挂载，所以进场靠这里显式重启，而不是依赖 remount。
+  const tabsRef = useRef<HTMLElement | null>(null)
+  const gliderRef = useRef<HTMLSpanElement | null>(null)
+  const mainRef = useRef<HTMLElement | null>(null)
+  const gliderPlaced = useRef(false)
+
+  // 首帧直接落位（从 (0,0) 滑过来会读成动画事故），之后每次 tab 变化滑过去。
+  const placeGlider = useCallback(() => {
+    const nav = tabsRef.current
+    const glider = gliderRef.current
+    if (nav === null || glider === null) return
+    const active = nav.querySelector<HTMLElement>(`[data-testid="tab-${tab}"]`)
+    if (active === null) return
+    glider.style.setProperty("--glider-x", `${active.offsetLeft}px`)
+    glider.style.setProperty("--glider-w", `${active.offsetWidth}px`)
+    if (!gliderPlaced.current) {
+      gliderPlaced.current = true
+      glider.style.transition = "none"
+      requestAnimationFrame(() => {
+        glider.style.transition = ""
+      })
+    }
+  }, [tab])
+
+  useEffect(() => {
+    placeGlider()
+  }, [placeGlider])
+
+  useEffect(() => {
+    window.addEventListener("resize", placeGlider)
+    return () => window.removeEventListener("resize", placeGlider)
+  }, [placeGlider])
+
+  useEffect(() => {
+    const main = mainRef.current
+    if (main === null) return
+    main.classList.remove("view-enter")
+    // Reflow so removing + re-adding the class restarts the animation.
+    void main.offsetWidth
+    main.classList.add("view-enter")
+  }, [tab])
   // One-shot ?session=<id> deep link (notification targets): consumed exactly
   // once, after the session list loads, then stripped from the URL. An
   // optional ?tab=<name> rides along (e.g. /?tab=audit&session=…).
@@ -444,6 +489,10 @@ function MainShell({
 
   const chatActive = selectedId !== null && readyMessages !== null
 
+  // 空态的主动作落点：未选会话时主区直接给"新建会话"入口，复用侧栏同一条
+  // 选目录建会话的流程（DirectoryPicker 状态经 useDirectoryPicker 共享逻辑）。
+  const emptyPicker = useDirectoryPicker(browseDirs)
+
   // 状态点跟随聊天连接：聊天挂载时（chatActive）以 ws 状态为准（open=已连、
   // connecting=建连中、closed=断了）；聊天未挂载（未选会话、或所选会话被删
   // 等导致面板卸载）回退到挂载时的 /status ping 结果——chatConn 停留的旧值
@@ -470,7 +519,8 @@ function MainShell({
           ☰
         </button>
         <span className="brand">kclaw</span>
-        <nav className="tabs" data-testid="tabs">
+        <nav className="tabs" data-testid="tabs" ref={tabsRef}>
+          <span className="tab-glider" aria-hidden="true" ref={gliderRef} />
           <button
             type="button"
             className={tab === "chat" ? "tab active" : "tab"}
@@ -602,7 +652,7 @@ function MainShell({
           />
         </aside>
         {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
-        <main className="main">
+        <main className="main" ref={mainRef}>
           {selectedId !== null && readyMessages !== null && ws !== null && (
             // Kept mounted across tab switches (hidden elsewhere) so the live
             // stream and the composer draft survive navigation.
@@ -628,9 +678,40 @@ function MainShell({
             </div>
           )}
           {tab === "chat" && !chatActive && (
-            <p className="muted" data-testid="chat-empty">
-              {selectedId === null ? "未选择会话" : "加载会话中…"}
-            </p>
+            selectedId === null ? (
+              // Empty state with the primary action in reach: the first move
+              // of "start a conversation" lives where the eye lands, not in
+              // the sidebar.
+              <div className="chat-empty-state" data-testid="chat-empty">
+                <p className="muted">未选择会话</p>
+                <button
+                  type="button"
+                  className="new-session"
+                  data-testid="chat-empty-new"
+                  onClick={emptyPicker.openAtRoot}
+                >
+                  ＋ 选择工作目录新建会话
+                </button>
+                {emptyPicker.open && (
+                  <DirectoryPicker
+                    listing={emptyPicker.listing}
+                    loading={emptyPicker.loading}
+                    error={emptyPicker.error}
+                    onNavigate={(path) => void emptyPicker.load(path)}
+                    onPick={() => {
+                      if (emptyPicker.listing === null) return
+                      emptyPicker.close()
+                      void handleCreateSession(emptyPicker.listing.path)
+                    }}
+                    onClose={emptyPicker.close}
+                  />
+                )}
+              </div>
+            ) : (
+              <p className="muted" data-testid="chat-empty-loading">
+                加载会话中…
+              </p>
+            )
           )}
           {tab === "jobs" && <JobsView api={api} />}
           {auditVisited && (

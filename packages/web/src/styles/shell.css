@@ -130,9 +130,31 @@ select:focus {
   display: flex;
   gap: 2px;
   flex: 1;
+  position: relative;
 }
 
+/* The active-tab highlight is one sliding block (App measures the active
+   button and drives --glider-x/--glider-w), so switching tabs has a visible
+   origin instead of the highlight teleporting. Buttons stay transparent;
+   themes restyle the block (phantom turns it into the skewed red cursor). */
+.tab-glider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: var(--glider-w, 0px);
+  transform: translateX(var(--glider-x, 0px));
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  transition: transform var(--ease), width var(--ease);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Positioned so the buttons paint above the glider — the highlight sits
+   under the active label, not over it. */
 .tab {
+  position: relative;
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
@@ -149,13 +171,10 @@ select:focus {
 
 .tab.active {
   color: var(--text);
-  border-color: var(--border-strong);
-  background: var(--surface-2);
 }
 
 .tab.active:hover:not(:disabled) {
   color: var(--text);
-  background: var(--surface-2);
 }
 
 /* daemon status — accent while connecting, green when healthy, danger on error */
@@ -509,19 +528,21 @@ select:focus {
   vertical-align: 1px;
 }
 
-/* one meta line: where (tail-ellipsized) · when (right-aligned) */
+/* one meta line: where (tail-ellipsized) · when (right-aligned).
+   padding-right reserves the slot the hover actions chip drops into, so the
+   chip never covers meta text either. */
 .session-meta {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 8px;
   width: 100%;
   min-width: 0;
+  padding-right: 60px;
 }
 
 .session-workdir {
   font-size: 11px;
-  color: var(--accent);
-  opacity: 0.72;
+  color: var(--text-dim);
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -537,12 +558,13 @@ select:focus {
   flex-shrink: 0;
 }
 
-/* Row actions float over the card's top-right on hover (or keyboard focus
-   within the row) instead of living under every card as permanent noise.
-   The chip backdrop keeps the title underneath readable while overlaid. */
+/* Row actions drop into the slot reserved above the meta line's tail (or
+   keyboard focus within the row) instead of covering the title: the chip
+   lands on .session-meta's padding, so no text ever sits underneath it.
+   The chip backdrop is kept for the rare case the slot still runs short. */
 .session-actions {
   position: absolute;
-  top: 5px;
+  bottom: 5px;
   right: 5px;
   display: flex;
   gap: 4px;

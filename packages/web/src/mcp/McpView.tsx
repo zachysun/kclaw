@@ -112,6 +112,7 @@ export function McpView({ api, notice, sessionWorkdir }: {
 
   return (
     <div className="mcp-view" data-testid="mcp-view">
+      <h2 className="view-title">MCP</h2>
       <div className="mcp-head">
         <button
           type="button"

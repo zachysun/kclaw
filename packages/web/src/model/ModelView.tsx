@@ -242,6 +242,7 @@ export function ModelView({ api, notice }: {
 
   return (
     <div className="model-view" data-testid="model-view">
+      <h2 className="view-title">Model</h2>
       <div className="model-head">
         <button type="button" data-testid="model-add" onClick={() => { setFormError(null); setForm(emptyForm()) }}>
           添加条目

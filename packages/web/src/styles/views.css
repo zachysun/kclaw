@@ -1,5 +1,16 @@
 /* ---- Views: jobs / audit / usage / trash ---- */
 
+/* Wide views: data tables and list+detail workspaces share one content width
+   anchor (the config pages keep their narrower 760px anchor in admin.css), so
+   switching pages moves the pane edge between exactly two positions instead
+   of three arbitrary ones. */
+.usage-view,
+.jobs-view,
+.trash-view,
+.audit-host {
+  max-width: 1280px;
+}
+
 .view-head {
   display: flex;
   align-items: center;
@@ -491,11 +502,19 @@
   color: var(--danger);
 }
 
-/* memory — 记忆管理页：左列清单 + 右列整文件编辑器 */
+/* memory — 记忆管理页：左列清单 + 右列整文件编辑器。横排 flex 行，页头
+   h2 作为 100% basis 的行占满一行（wrap 换行），其余两列照旧。 */
 .memory-view {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-4);
   align-items: flex-start;
+  max-width: 1280px;
+}
+
+.memory-view > .view-title {
+  flex: 0 0 100%;
+  margin-bottom: 0; /* the row gap above the columns already separates */
 }
 
 .memory-view h3 {

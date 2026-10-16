@@ -24,6 +24,7 @@ import { formatCompactStamp } from "../usage/format.js"
 import { IconButton } from "../ui/IconButton.js"
 import { PencilIcon, TrashIcon } from "../ui/icons.js"
 import { DirectoryPicker } from "./DirectoryPicker.js"
+import { useDirectoryPicker } from "./useDirectoryPicker.js"
 
 export interface SessionListProps {
   sessions: SessionMeta[]
@@ -115,10 +116,7 @@ export function SessionList({
   const [deletingGroup, setDeletingGroup] = useState<string | null>(null)
   const [deletePending, setDeletePending] = useState(false)
   const [pathTip, setPathTip] = useState<{ text: string; top: number; left: number; maxWidth: number } | null>(null)
-  const [pickerOpen, setPickerOpen] = useState(false)
-  const [pickerListing, setPickerListing] = useState<FsBrowseResult | null>(null)
-  const [pickerLoading, setPickerLoading] = useState(false)
-  const [pickerError, setPickerError] = useState<string | null>(null)
+  const picker = useDirectoryPicker(onBrowse)
 
   /** Fold/unfold one workdir group; the set persists to localStorage. */
   const toggleGroup = (key: string): void => {
@@ -195,30 +193,11 @@ export function SessionList({
     setRenamingGroup(null)
   }
 
-  const loadPicker = async (path?: string): Promise<void> => {
-    setPickerLoading(true)
-    setPickerError(null)
-    try {
-      setPickerListing(await onBrowse(path))
-    } catch (err) {
-      setPickerError(err instanceof Error ? err.message : "目录读取失败")
-    } finally {
-      setPickerLoading(false)
-    }
-  }
-
-  const openPicker = () => {
-    setPickerOpen(true)
-    setPickerListing(null)
-    // The picker starts at the daemon's configured workspace.
-    void loadPicker(undefined)
-  }
-
   const pickCurrent = () => {
-    if (pickerListing === null) return
-    setPickerOpen(false)
+    if (picker.listing === null) return
+    picker.close()
     // Picking a directory IS the create gesture: a new session goes there.
-    onCreate(pickerListing.path)
+    onCreate(picker.listing.path)
   }
 
   // Groups preserve the server's updatedAt-desc order: first appearance of a
@@ -248,7 +227,7 @@ export function SessionList({
           type="button"
           className="new-session"
           data-testid="pick-workdir"
-          onClick={openPicker}
+          onClick={picker.openAtRoot}
         >
           ＋ 选择工作目录新建会话
         </button>
@@ -429,14 +408,14 @@ export function SessionList({
           {pathTip.text}
         </div>
       )}
-      {pickerOpen && (
+      {picker.open && (
         <DirectoryPicker
-          listing={pickerListing}
-          loading={pickerLoading}
-          error={pickerError}
-          onNavigate={(path) => void loadPicker(path)}
+          listing={picker.listing}
+          loading={picker.loading}
+          error={picker.error}
+          onNavigate={(path) => void picker.load(path)}
           onPick={pickCurrent}
-          onClose={() => setPickerOpen(false)}
+          onClose={picker.close}
         />
       )}
     </div>

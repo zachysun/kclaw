@@ -209,6 +209,23 @@
   background: var(--surface-2);
 }
 
+/* Chat empty state: the honest "no session picked" line plus the primary
+   create action, parked where the eye lands (upper-middle of the pane) so
+   starting a conversation needs no scan of the sidebar. */
+.chat-empty-state {
+  margin: 18vh auto 0;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  text-align: center;
+}
+
+.chat-empty-state .muted {
+  margin: 0;
+}
+
 .message {
   position: relative;
   max-width: 85%;
@@ -217,6 +234,10 @@
   line-height: 1.55;
   overflow-wrap: break-word;
   border: 1px solid transparent;
+  /* Newly mounted bubbles (streamed replies, sent messages, a switched-to
+     session) rise in; the initial mount plays for the whole log at once,
+     which reads as one soft entrance rather than per-bubble noise. */
+  animation: rise-in var(--ease);
 }
 
 .message-user {
@@ -369,7 +390,6 @@
 
 .md li.task-list-item input[type="checkbox"] {
   margin-right: 0.45em;
-  accent-color: var(--accent);
 }
 
 /* Fenced code block: a slightly darker well than the bubble, copy button as
@@ -818,6 +838,7 @@
   border: 1px solid var(--warn);
   background: var(--danger-dim);
   border-radius: var(--radius);
+  animation: rise-in var(--ease);
   padding: 10px 12px;
   font-size: 13px;
 }
@@ -913,6 +934,7 @@
   border-left: 3px solid var(--accent);
   background: var(--surface-2);
   border-radius: var(--radius);
+  animation: rise-in var(--ease);
   padding: 10px 12px;
   font-size: 13px;
 }

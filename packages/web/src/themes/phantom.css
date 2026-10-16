@@ -80,18 +80,17 @@ html[data-theme="phantom"] .brand::before {
 }
 
 /* The phantom-cursor tab: a hard red parallelogram with white type —
-   the one loud element in the bar. */
-html[data-theme="phantom"] .tab.active {
-  color: var(--accent-ink);
-  border-color: var(--accent);
+   the one loud element in the bar. The block itself is the shared sliding
+   .tab-glider (shell.css); phantom only gives it the skew and the red. */
+html[data-theme="phantom"] .tab-glider {
   background: var(--accent);
-  transform: skewX(-10deg);
+  border-color: var(--accent);
   box-shadow: 3px 3px 0 rgba(228, 0, 15, 0.3);
+  transform: translateX(var(--glider-x, 0px)) skewX(-10deg);
 }
 
-html[data-theme="phantom"] .tab.active:hover:not(:disabled) {
+html[data-theme="phantom"] .tab.active {
   color: var(--accent-ink);
-  background: var(--accent);
 }
 
 /* the live agent: an italic red line trailing a sliding hazard tape */

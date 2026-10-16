@@ -98,6 +98,27 @@ body {
   color: var(--muted);
 }
 
+/* Native checkboxes speak in the theme: the checked fill takes the agent
+   accent instead of the browser default blue (audit kind filters, job form,
+   channel form, GFM task lists). */
+input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+/* The one entrance motion, shared: 120ms fade with a 2px rise. The tab
+   switch replays it on .main (App toggles .view-enter); message bubbles and
+   the decision cards play it on mount. */
+.view-enter {
+  animation: rise-in var(--ease);
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+}
+
 code {
   background: var(--surface-2);
   border-radius: var(--radius-sm);

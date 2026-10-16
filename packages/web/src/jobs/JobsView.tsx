@@ -216,7 +216,7 @@ export function JobsView({ api }: { api: ApiClient }) {
       )}
       {jobs !== null && jobs.length === 0 && (
         <p className="muted table-empty" data-testid="jobs-empty">
-          还没有任务，在上方创建一个开始。
+          还没有任务，在上方创建一个。
         </p>
       )}
     </div>
