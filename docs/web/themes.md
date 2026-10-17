@@ -4,7 +4,7 @@
 
 WebUI 的视觉主题是**可插拔**的：一套主题 = `packages/web/src/themes/` 下的一个样式文件（调色板、color-scheme、圆角、焦点环与主题专属装饰全在自己文件里）+ `packages/web/src/theme.ts` 里 `THEME_META` 的一行登记（显示名与浏览器栏颜色）。新增主题即"一个文件 + 一行注册"，不需要改任何组件代码——组件只引用 CSS 变量（design tokens），不感知具体主题。
 
-## 机制
+## 设计决策
 
 - **主题清单从文件名派生**：`themeStylesheetIds()` 用构建期扫描（`import.meta.glob("./themes/*.css", { eager: true })`）从样式文件名读出主题 id，内联进产物、不发额外请求。`THEME_META` 的键必须与样式文件一一对应——单测 `theme.test.ts` 断言两边集合相等，注册表与样式文件脱节会直接测试失败。
 - **切换靠 `<html data-theme>` 一个属性**：整个换肤是纯 CSS 的——每个主题文件以 `html[data-theme="<主题id>"]` 选择器命中自己的值，组件不动。`applyTheme(theme)` 写这个属性、同步更新 `meta[name="theme-color"]`（PWA 窗口与移动端状态栏的颜色）并持久化到 localStorage 键 `kclaw_theme`；localStorage 写失败只影响下次启动，本次会话仍生效。

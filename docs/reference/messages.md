@@ -1,6 +1,8 @@
 # messages — 消息 / 角色 / 停止原因 / 放行原因
 
-> 权威来源：`packages/core/src/protocol/messages.ts`（停止原因的归一化映射另在 `core/src/provider/normalize.ts`）。机制见 [protocol](../core/protocol.md)。
+> 权威来源：`packages/core/src/protocol/messages.ts`（停止原因的归一化映射另在 `packages/core/src/provider/normalize.ts`）。机制见 [protocol](../core/protocol.md)。
+
+这份清单收消息层的三个类型联合与一组归一化映射：Role（3 种角色）、StopReason（7 种运行终态，附 provider 原值的归一化映射）、GrantedBy（8 种工具放行原因）；Message / Usage 等结构体一并陈列在核心源码里。
 
 ## 核心源码
 

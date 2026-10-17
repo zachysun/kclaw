@@ -118,6 +118,30 @@ export function createProviderResolver(cfg: KclawConfig, fetchImpl?: typeof fetc
 
 ## 核心流程
 
+一次 `stream()` 调用（经 `withRetry` 包装）从请求构造到 `message_done` 的完整路径，1–5 节分别展开各环节：
+
+```mermaid
+flowchart TD
+    S["循环调用 stream（withRetry 包装，最多 3 次尝试）"] --> N["按条目 format 归一化请求：openai 或 anthropic"]
+    N --> M{"promptCache 为 auto 且请求带缓存键？"}
+    M -->|"是"| CM["请求带缓存标记"]
+    M -->|"否，或已记剥标裁决"| NC["请求不带标记"]
+    CM --> H["发出请求，AbortSignal.timeout 约束三阶段"]
+    NC --> H
+    H --> R{"HTTP 结果"}
+    R -->|"400 且带了标记"| ST["剥掉全部缓存标记原样重试一次"]
+    ST -->|"成功"| RJ["客户端实例内记住该端点不支持缓存标记，后续直接发无标记版"]
+    RJ --> SSE
+    ST -->|"仍 400"| X["抛 llm http 400，重试层不接"]
+    R -->|"2xx"| SSE["SSE 逐行解析，映射为流式事件"]
+    R -->|"429 / 5xx / 超时 / 网络错"| Y{"本次尝试已产出过事件？"}
+    Y -->|"否"| BK["指数退避后重试（500ms 起步翻倍）"]
+    BK --> N
+    Y -->|"是（yielded 守卫）"| X
+    R -->|"其他（401 密钥错等）"| X
+    SSE --> DONE["message_done：usage 与 stopReason 归一化"]
+```
+
 ### 1. 请求归一化（openai 格式，`toApiMessages`）
 
 内部消息转成 OpenAI 格式，规则：
@@ -260,5 +284,5 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 - [agent-loop](./agent-loop.md)：处理 `LlmStreamEvent` 的一侧
 - [tools](./tools.md)：`ToolDefinition` 的生产方与 `argsJson` 的最终解析方
 - [protocol](./protocol.md)：`StopReason` / `Usage` 的定义
-- [../server/daemon.md](../server/daemon.md)：共享 resolver 的组装现场（创建实例并订阅配置变更通知）
-- [../server/http-api.md](../server/http-api.md)：`/providers` 管理路由族（Model 页的处理面）
+- [daemon](../server/daemon.md)：共享 resolver 的组装现场（创建实例并订阅配置变更通知）
+- [http-api](../server/http-api.md)：`/providers` 管理路由族（Model 页的处理面）

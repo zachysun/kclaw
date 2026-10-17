@@ -56,6 +56,18 @@
 
 一封信的投递过程：`enqueueMail` 写文件（持久）→ 渲染：该目标收信箱里所有**未处于投递中**的 pending 条目拼成一次 run 的输入 → `submit(trigger: "team", disposition: "steer")` → 监听到输入落地（目标会话的第一条 `message.created`）才翻转 delivered。**目标在忙时不投递**：信留在收信箱，等它当前 run 结束的空闲边再送——已拼进进行中 run 的条目有记录去重，不会投两次。
 
+```mermaid
+flowchart TD
+    W["send_message 来信，或 spawn_teammate 的初始任务"] --> E["enqueueMail：写入收信人收信箱文件（持久化）"]
+    E --> C{"目标空闲，且组员并发未到 maxActive？"}
+    C -->|"忙，或已满员"| P["信留在收信箱（pending）"]
+    P --> I["任一组员 run 结束的空闲边触发 pumpIdle"] --> C
+    C -->|"空闲"| G["把全部 pending 条目拼成一次 run 的输入"]
+    G --> S["submit：trigger=team，disposition=steer"]
+    S --> L["监听目标会话的首条 message.created"]
+    L --> D["翻转 pending → delivered"]
+```
+
 **并发上限 `team.maxActive`**（默认 4）：同时运行的组员数到顶后，新信留在收信箱；任一组员的 run 结束（空闲边）都会触发 `pumpIdle` 排空积压。组长的唤醒不占组员额度。
 
 **自动派活**：空闲边顺带扫描任务板——就绪（依赖全部完成）且未认领的任务派给一个空闲、无未读信、未持有任务的组员，提示它用 `task_update` 认领后推进。一份 **offer 记录**（状态计数 `offerEpoch` + 任务 id）防止死循环：同一计数下对同一任务只唤醒一次；任何来信、建任务、改任务都会把计数加一、重新开放派发。**冷恢复**走同一条路：空闲边发现组员持有进行中任务却闲置（比如 daemon 重启后），按「同一状态只唤醒一次」的规矩唤醒它继续推进。

@@ -1,8 +1,8 @@
 # goal — 目标循环（/goal）
 
-> 权威来源：`packages/core/src/goal/`（领域模块：类型/上限/提示词/判定器/验收命令/事件派生/轮决策）+ `packages/server/src/goal-loop.ts`（daemon 侧驱动主机 `GoalLoopHost`：只做副作用编排——执行验收命令、调判定器、写事件、按 core 给出的决策入队或停止）。HTTP 路由族见 [http-api](../server/http-api.md)，持久化事件见 [session-events](../reference/session-events.md)。
+## 职责
 
-## 它是什么
+`packages/core/src/goal/` 是目标循环的领域模块（类型/上限/提示词/判定器/验收命令/事件派生/轮决策）；`packages/server/src/goal-loop.ts` 的 `GoalLoopHost` 是 daemon 侧驱动主机，只做副作用编排——执行验收命令、调判定器、写事件、按 core 给出的决策入队或停止。
 
 给会话设一个**可验证的目标**，daemon 自主多轮推进：每轮 run 结束后先跑验收命令、再由一个独立的判定器 LLM 裁决目标是否达成，没达成就把判定意见注入下一轮继续干，直到达成、被判不可能、或触碰硬性上限才停。会话的普通对话（打字发消息）在任何时刻都可用——goal 循环只是队列里的一种 run 来源，用户输入照常 steer/wait/interrupt。
 
@@ -95,3 +95,21 @@
 - **CLI**：`/goal <目标描述> verify: <命令>…`（多条 `verify:` 各跟一条命令）；`/goal`（无参查看状态）、`/goal pause|resume|stop|clear`。`stop` 同时掐活跃 run 与清空队列。
 - **WebUI**：对话页右上角目标悬浮面板（状态点、轮数 `第 N/10 轮`、token 用量、判定器最近意见、验收命令清单；暂停/恢复/停止/移除/编辑表单），active 且 armed 时 5 秒轮询刷新。
 - **REST**：`GET/POST /sessions/:id/goal`、`POST …/goal/pause|resume|stop`、`DELETE …/goal`（清单见 [http-api](../server/http-api.md)）。
+
+## 边界与出错
+
+- **判定器失败不直接杀死循环**：输出非法 JSON 时把错误喂回重试一次；解析失败连续 3 次或传输失败连续 5 次熔断（`judge-failed` 停止）；未到熔断阈值时循环继续，下一轮注入"判定器不可用、请自行验收"的说明。
+- **验收命令 fail-closed**：设定带验收命令的目标时沙箱不可用直接拒绝（400）；检查时刻沙箱不可用按全部失败计；连续 3 轮全不过 `gate-exhausted` 停止。
+- **run 出错与入队失败都停**：检查 run 以 `run-error` 结束时不自动重试，等用户 resume；队列入队失败（如队列满）同样停止并说明原因。
+- **daemon 重启后循环不自动续**：armed 是进程内开关，重启即收回授权；快照（`meta.goal`）还在，用户显式 resume 才重新起跑（见 [ADR-0002](../adr/0002-goal-armed-is-process-local.md)）。
+- **判定期间的并发动作安全**：用户在判定器 await 之后 stop/pause/clear，审计事件（goal.checked）照常写入，状态机只在仍 active 时推进；检查入口互斥，不会重入。
+- **读事件流失败不炸检查**：计数派生只负责读事件流，读流失败按空事件派生全零，检查照常走完。
+
+## 关联
+
+- [http-api](../server/http-api.md)：`/goal` 路由族的协议细节
+- [session-events](../reference/session-events.md)：goal.set / goal.checked / goal.cleared 三种持久化事件
+- [agent-loop](./agent-loop.md)：trigger 为 `goal` 的 run 与普通 run 走同一循环
+- [run-manager](../server/run-manager.md)：检查挂载在 RunManager 的空闲边缘（onSessionIdle）
+- [subagents](./subagents.md)：subagent 会话只读，不能设目标
+- [ADR-0002](../adr/0002-goal-armed-is-process-local.md)：armed 进程本地的设计取舍

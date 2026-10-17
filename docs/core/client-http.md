@@ -13,7 +13,7 @@
 - **token 每次请求重取**：`getToken` 在每次请求时重新求值，所以 401 后重新输入、token 轮换立即对下一次请求生效，不需要重建客户端；返回 `null` 就不发 `Authorization` 头。
 - **contentType 是"原样透传"开关**：设置它时 body 不 JSON 序列化、按原始字节流发送——附件上传（CLI 的 `uploadAttachment`、WebUI 的 `upload`）用它传文件本体。
 
-## 契约
+## 接口
 
 ```ts
 // packages/core/src/client-http.ts

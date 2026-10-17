@@ -1,10 +1,23 @@
 # Feishu 频道（飞书 IM 接入）
 
+## 职责
+
 `packages/server/src/feishu/` 把 kclaw 接入飞书：在飞书里给机器人发消息就能用 kclaw，不需要开电脑，也不需要公网 IP 或端口转发，出站入站都走飞书官方的长连接（WebSocket，由飞书主动把事件推给 daemon）。频道是**新的入口和出口，不是新的机制**：入站消息走普通的 `RunManager.submit` 入口（触发器 user），出站渲染订阅既有的事件总线，权限确认走普通的确认网关，引擎零改动。
 
 - 模块：`channel.ts`（频道逻辑：命令、白名单、卡片状态机、出站清洗、待加白发件人记录）、`transport.ts`（传输接口，唯一的接入口）、`real-transport.ts`（官方 SDK 的薄封装）、`config.ts`（feishu.json 与频道运行状态）、`manager.ts`（频道管理器：配置保存与热重启、连接状态、一键加白）、`verify.ts`（凭据验证）。
 - 测试：全部频道逻辑在假传输上测试（`test/feishu/`），真传输不带逻辑、只做翻译。
 - 前置：`@larksuiteoapi/node-sdk`（server 依赖）；真机使用需要一个飞书自建应用（见文末"启用步骤"）。
+
+## 设计决策
+
+- **频道是新的入口和出口，不是新的机制**：入站走普通的 `RunManager.submit`（触发器 user），出站渲染订阅既有事件总线，权限确认走普通确认网关——引擎零改动。
+- **白名单外静默忽略**：不回任何信息，仅在本机记录待加白发件人（管理页可一键加白）——应用被拉进陌生群或被陌生人私聊都不会泄露内容。
+- **app_secret 独立于 config.json**：不让密钥混进主配置的备份与同步路径；管理页快照不回传 secret 内容，只回"是否已设置"。
+- **状态文件的两个写入方靠生死错开**：通道活着时整体重写、停止后迟到的传输回调一律丢弃；通道不在时管理器才局部修补，且所有变更排在同一条串行队列上。
+- **启动有 15 秒上限**：飞书长连接握手在坏网络下可能无限挂起，超时放弃这次启动、拆掉半启动的连接，daemon 其余功能照常；官方 SDK 只在频道启用时才加载。
+- **热重启不杀进行中的 run**：run 照常在 daemon 里跑完，断线的镜像卡补一张诚实的终稿。
+- **拦截统一在频道层**：传输层不得自作白名单过滤——被拒消息要在频道层记录待加白发件人，一键加白依赖这份记录。
+- **频道逻辑整体在假传输上测试**：真传输不带逻辑、只做接口翻译。
 
 ## 配置与状态
 
@@ -54,6 +67,21 @@
 
 **镜像（四态卡片）**：绑定会话的每一轮 run，无论从哪个入口触发（飞书消息、WebUI、定时任务），都同步渲染成卡片序列——`run.started` → "思考中"卡；首个 `text.created` → 流式卡（官方流式更新能力，增量累积，不手动反复刷卡）；`run.completed`/`run.failed` → 终稿卡（markdown 渲染，失败附原因）。用户在电脑上用 WebUI 时，手机飞书同步看到进展；双端同用的重复提醒是接受的成本。thinking 只体现为状态，思考内容不外发。
 
+```mermaid
+stateDiagram-v2
+    state "思考中卡" as thinking
+    state "流式卡" as streaming
+    state "终稿卡" as final
+    state "中断终稿（通道重启，本轮中断）" as cut
+
+    [*] --> thinking: 该会话 run.started
+    thinking --> streaming: 首个 text.created
+    thinking --> final: run.completed 或 run.failed
+    streaming --> final: run.completed 或 run.failed
+    thinking --> cut: 保存配置触发热重启，补一张诚实终稿
+    streaming --> cut: 保存配置触发热重启，补一张诚实终稿
+```
+
 **主动推送（摘要卡，发给 primaryOpenId）**：
 
 - `job.completed`/`job.failed` 广播（总线上的无会话事件）→ 定时任务终态卡；
@@ -76,3 +104,9 @@
 推荐走 WebUI 顶栏「IM Channel」页（页面内置同样的指引）：注册飞书组织（免费）→ 开放平台建**自建应用** → 开通四项权限：收单聊消息 `im:message.p2p_msg:readonly`、发消息与卡片 `im:message:send_as_bot`、表情回执 `im:message.reactions:write_only`、卡片实体读写 `cardkit:card:write`（流式卡片必需）→ 事件与回调页把订阅方式切到**长连接模式**，并在事件订阅设置里**添加事件** `im.message.receive_v1`（开权限不等于订阅事件，两个开关缺一不可）→ **创建版本并发布**（未发布的自建应用不推送任何事件；改权限后也要发新版本才生效）→ 页面填 `app_id`/`app_secret` 保存 → 在飞书给机器人发一条消息（它不回复你），在「待加白发件人」里点「加白」→ 把「推送接收人」选成自己。
 
 手工路径也保留：写 `~/.kclaw/feishu.json`（enabled=true）→ 重启 daemon；open_id 需在开发者后台调试台查询。
+
+## 关联
+
+- [run-manager](./run-manager.md)：入站 submit 的排队语义与 `/stop` 用的 stopAndClear 组合口
+- [permissions](../core/permissions.md)：审批卡裁决的确认网关与 `by:"feishu"` 的审计口径
+- [http-api](./http-api.md)：`/channel` 管理路由族

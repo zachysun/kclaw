@@ -64,6 +64,26 @@ export function detectProviderStatus(home: string): ProviderStatus
 
 "重试？→ 是"回到上表对应的步骤，"否"或取消 → `已退出，未做任何修改`，返回 `"aborted"`。
 
+步骤机的分支与回退边：
+
+```mermaid
+flowchart TD
+    A["missing 且 TTY，进入 wizard"] --> B["template：五模板单选"]
+    B -->|"custom（无 baseUrl）"| C["baseurl：输入端点，裁掉尾部斜杠"]
+    B -->|"ollama（skipKey）"| E["model：输入模型，空则用模板默认"]
+    B -->|"deepseek / openai / anthropic"| D["key：隐藏输入，不回显"]
+    C --> D
+    D --> E
+    E --> T["连通测试：max_tokens=1，20s 超时"]
+    T -->|"成功"| W["收尾：saveConfig 合并写入，0600 双保险"]
+    W --> Z["configured，进入 REPL"]
+    T -->|"失败"| F{"classifyProbeError 分类"}
+    F -->|"key：HTTP 401/403"| D
+    F -->|"model：404，或 400 且报错含 model"| E
+    F -->|"network / unknown"| B
+    T -->|"重试？→ 否，或取消"| X["aborted：零文件改动，静默退出"]
+```
+
 **成功收尾**：`loadConfig` 读旧配置 → `saveConfig` 合并写入 `{providers: {default: tpl.id, entries: {...旧, [tpl.id]: entry}}}`（其余配置原样保留；原子写、mode 0600）→ `chmodSync(paths.configJson, 0o600)`（双保险）→ `已写入 config.json，开始对话`，返回 `"configured"`，`chatAction` 继续进入 REPL。
 
 ## kclaw web（packages/cli/src/web-cmd.ts）

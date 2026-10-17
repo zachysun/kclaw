@@ -204,6 +204,21 @@ interface SkillProposal {
 
 状态流转只经路由（core 判定、路由映射 409）：
 
+```mermaid
+stateDiagram-v2
+    state "proposed（待审阅）" as proposed
+    state "applied（已生效）" as applied
+    state "rejected（已驳回）" as rejected
+    state "reverted（已回退）" as reverted
+
+    [*] --> proposed: 提炼 pipeline 或 skill_create 写入提案文件
+    proposed --> applied: apply：写入技能目录，下一轮对话自动生效
+    proposed --> rejected: reject：只改状态，文件保留
+    applied --> reverted: revert：new 删技能目录，revise 写回 snapshot
+    rejected --> [*]: remove 删提案文件（也可手动删）
+    reverted --> [*]: remove 删提案文件（也可手动删）
+```
+
 | 操作 | 流转 | 行为 | 冲突（409） |
 |------|------|------|-------------|
 | `apply` | proposed → applied | `new` 在落点目录建 `<name>/SKILL.md`；`revise` 先读现正文存进提案文件 `snapshot`，再用 `content` 覆盖写 | 目标已存在同名技能（new）、修订目标已不存在（revise）、目标是复用链接技能；非法流转 |

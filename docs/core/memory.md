@@ -6,6 +6,15 @@
 
 模型通过 `memory_save` / `memory_search` 两个工具读写（`packages/core/src/tools/memory.ts`）；run 组装（core `executeRun`）在每次 run 时做两级注入——L2 认知常驻系统提示、L1 情节作为 note 挂到用户消息上（见下文"检索与注入"）。daemon 的 `MemorySystem` 组装与 embedding 判定链都在 `packages/server/src/daemon.ts`。
 
+## 设计决策
+
+- **文件是权威数据，索引是派生物**：`<projectDir>/<topic>.md`（情节）与 `global/*.md`（认知）是唯一权威数据；`vectors.db`（FTS5 + 向量）任何时候删除都无损失，启动时 `reconcile()` 对全项目库与全局库重建索引（`packages/core/src/memory/pipeline.ts`），检索命中后也从线文件/认知文件回读正文。因此人工修改、删除文件始终生效，索引最多短暂滞后。
+- **为什么 markdown 而不是只存 SQLite**：记忆的价值一半在于人工可维护——用户可以直接用编辑器修改、git 可以版本化、grep 可以检索。双轨的成本（维护两份数据的一致性）换来的是"人工写入与机器写入是同一份数据"。
+- **机器只改不删**：写入 pipeline 只有追加、改写、停用三种动作，没有任何删除；删除只发生在人工路径（管理界面或直接删文件）。这一条贯穿生命周期（见下）。
+- **防覆盖写**：任何一次机器写入（追加情节、沉淀认知）都以"当前磁盘上的最新内容"为基准重解析后合并（`writeThreadFile` / `writeCognitionFile`），人工改动先被重解析再合并、永不静默丢失；文件存在但不可解析（如人工手写无 frontmatter）时**抛错不覆盖**——宁可不写也不丢数据。
+- **中文分词必须自己做**：FTS5 默认的 unicode61 分词器把连续中文当成一个不可拆的 token，查"上海"永远无法命中"用户在上海工作"。索引和查询共用一个自写分词器 `tokenize`（`packages/core/src/text/fts.ts`）：ASCII 字母数字串按整词（转小写），CJK 连续串拆成相邻两字组合（bigram），例如"用户在上海工作"拆成 `用户 户在 在上 上海 海工 工作`。一到两个字的中文查询本身就是合法 bigram，直接命中；更长的查询按 bigram 之间 OR 召回（`searchFts` 用 ` OR ` 连接，任一 bigram 命中即召回，bm25 把命中更多 token 的条目排更前）。检索是**召回优先**，模型侧二次判断，不是 AND 精确。每个 token 用引号包装后拼进 MATCH 串（`ftsQuery`），杜绝把用户输入当成检索语法注入。
+- **两层索引同构**：项目库与全局库共用同一个 `VectorIndex`（`packages/core/src/memory/indexer.ts`）——`entries`（元数据）+ `entries_fts`（分词 token 串）+ `vectors`（可选向量）三张表，只是条目形状不同（情节条目 key = `topic#date#heading`，认知条目 key = `kind/name`）。连接的唯一所有者是 `MemoryPipeline`：写入路径（reindex/backfill）与检索路径（MemorySystem 的 searchAll/searchEpisodes 向它借句柄）共用同一份连接缓存，全库 `new VectorIndex` 只出现在 pipeline；停机时 `system.stop()` → `pipeline.close()` 一条链统一关闭。
+
 ## 三层结构
 
 记忆从"原始对话"到"可注入的长期记忆"分三层提炼：
@@ -23,15 +32,6 @@
 - **L0 原始对话**：每轮对话的消息历史，留在会话目录，不属于记忆系统（记忆系统只记"提取后的内容"；压缩/检索它的机制见 [compaction](./compaction.md)）。
 - **L1 项目情节**：一次 run 收尾后，pipeline 从**触发会话**的新消息里**提取**出值得长期记住的"情节"（定时保底触发则对该项目每个会话逐个补），按主题（topic）追加到该项目的主题线文件里。项目即工作目录（workdir），项目 id 由目录名与绝对路径决定（见下节）。
 - **L2 全局认知**：一条主题线被判定不再活跃（inactive）后，pipeline 把它的全部情节**沉淀**成跨项目的认知——用户画像（persona）、领域知识（wiki）、用户规则（rule）三类文件。全局认知按 `scope` 字段区分"全项目可见"与"仅某项目可见"。
-
-## 设计决策
-
-- **文件是权威数据，索引是派生物**：`<projectDir>/<topic>.md`（情节）与 `global/*.md`（认知）是唯一权威数据；`vectors.db`（FTS5 + 向量）任何时候删除都无损失，启动时 `reconcile()` 对全项目库与全局库重建索引（`packages/core/src/memory/pipeline.ts`），检索命中后也从线文件/认知文件回读正文。因此人工修改、删除文件始终生效，索引最多短暂滞后。
-- **为什么 markdown 而不是只存 SQLite**：记忆的价值一半在于人工可维护——用户可以直接用编辑器修改、git 可以版本化、grep 可以检索。双轨的成本（维护两份数据的一致性）换来的是"人工写入与机器写入是同一份数据"。
-- **机器只改不删**：写入 pipeline 只有追加、改写、停用三种动作，没有任何删除；删除只发生在人工路径（管理界面或直接删文件）。这一条贯穿生命周期（见下）。
-- **防覆盖写**：任何一次机器写入（追加情节、沉淀认知）都以"当前磁盘上的最新内容"为基准重解析后合并（`writeThreadFile` / `writeCognitionFile`），人工改动先被重解析再合并、永不静默丢失；文件存在但不可解析（如人工手写无 frontmatter）时**抛错不覆盖**——宁可不写也不丢数据。
-- **中文分词必须自己做**：FTS5 默认的 unicode61 分词器把连续中文当成一个不可拆的 token，查"上海"永远无法命中"用户在上海工作"。索引和查询共用一个自写分词器 `tokenize`（`packages/core/src/text/fts.ts`）：ASCII 字母数字串按整词（转小写），CJK 连续串拆成相邻两字组合（bigram），例如"用户在上海工作"拆成 `用户 户在 在上 上海 海工 工作`。一到两个字的中文查询本身就是合法 bigram，直接命中；更长的查询按 bigram 之间 OR 召回（`searchFts` 用 ` OR ` 连接，任一 bigram 命中即召回，bm25 把命中更多 token 的条目排更前）。检索是**召回优先**，模型侧二次判断，不是 AND 精确。每个 token 用引号包装后拼进 MATCH 串（`ftsQuery`），杜绝把用户输入当成检索语法注入。
-- **两层索引同构**：项目库与全局库共用同一个 `VectorIndex`（`packages/core/src/memory/indexer.ts`）——`entries`（元数据）+ `entries_fts`（分词 token 串）+ `vectors`（可选向量）三张表，只是条目形状不同（情节条目 key = `topic#date#heading`，认知条目 key = `kind/name`）。连接的唯一所有者是 `MemoryPipeline`：写入路径（reindex/backfill）与检索路径（MemorySystem 的 searchAll/searchEpisodes 向它借句柄）共用同一份连接缓存，全库 `new VectorIndex` 只出现在 pipeline；停机时 `system.stop()` → `pipeline.close()` 一条链统一关闭。
 
 ## 目录布局与文件格式
 
@@ -108,6 +108,29 @@ pipeline 位于 `packages/core/src/memory/pipeline.ts`，写入的触发入口�
 4. **收尾**：推进提取进度、闲置线在扫描时自动停用（见"生命周期"）、顺带沉淀检查、重建项目索引与 MEMORY.md。
 
 提取用的模型取 `memory.extractModel`，为空回退到主对话模型；名字命中 provider 条目时走该条目自己的端点与协议（daemon 注入的 `resolveEntryLlm` 给出条目客户端与该条目的 `model`，客户端与 run 客户端同源、共享缓存），裸模型名走主端点（见 [provider](./provider.md)）。校验与提示词的分工：**模型只从 `EXTRACT_SYSTEM_PROMPT` 认识 JSON 结构，字段名必须与写入校验逐字一致**。响应不是合法 JSON 或解析结果非 `actions` 数组时**整批放弃**、只打日志，不做部分写入；单个动作字段不合法（缺 `file`/`content`、`op` 非三值）则**只丢该条**、其余照常写入。提取进度的推进要区分两种情况：**LLM 调用抛错（提取失败）提取进度不推进**，下一次触发重试同一范围；而**调用成功但动作被丢光（格式不合法）提取进度照常推进**——这段消息不会自动重试，属已知取舍（丢弃的来源是模型输出不合规，重试大概率同样不合规）。
+
+五个触发入口汇入同一条 pipeline，校验分支与进度推进的关系如下：
+
+```mermaid
+flowchart TD
+    T1["memory_save 工具（immediate）"] --> P
+    T2["/memory save（manual）"] --> P
+    T3["创建新会话（clear，异步触发）"] --> P
+    T4["记忆调度器（interval，逐会话补增量）"] --> P
+    T5["run 收尾跟随检查（follow，空闲才触发）"] --> P
+    P["runTrigger：项目级串行锁排队"] --> R["选范围：该会话两个进度标记中较靠后者之后的新消息"]
+    R --> E["提取：无工具 LLM 调用，输出 JSON actions"]
+    E --> X{"LLM 调用是否成功"}
+    X -->|"抛错"| D1["进度不推进，下次触发重试同一范围"]
+    X -->|"成功"| V{"响应是否为合法 actions 数组"}
+    V -->|"不是"| D2["整批放弃，只打日志，不做部分写入（进度照常推进）"]
+    V -->|"是"| W["逐条应用动作：append / update / new-thread"]
+    W --> V2{"单条字段校验"}
+    V2 -->|"缺 file 或 content、op 非法"| D3["只丢该条，其余照常写入"]
+    V2 -->|"合法"| B["写入线文件，广播 memory.written"]
+    D3 --> B
+    B --> F["收尾：推进进度标记、闲置线转 inactive、沉淀检查、重建索引与 MEMORY.md"]
+```
 
 ### 五触发
 

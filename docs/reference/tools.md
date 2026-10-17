@@ -1,8 +1,10 @@
 # tools — 内置工具清单（24 个）
 
-> 权威来源：`packages/core/src/tools/index.ts`（注册表：执行器与模型侧 JSON Schema 成对声明）与 `tools/` 下各实现文件（参数校验与行为）。机制见 [tools](../core/tools.md)，权限判定链见 [permissions](../core/permissions.md)。
+> 权威来源：`packages/core/src/tools/index.ts`（注册表：执行器与模型侧 JSON Schema 成对声明）与 `packages/core/src/tools/` 下各实现文件（参数校验与行为）。机制见 [tools](../core/tools.md)，权限判定链见 [permissions](../core/permissions.md)。
 
 每个工具在注册时声明两个属性，权限与调度全部从这两个属性派生：
+
+## 核心源码
 
 ```ts
 /** tools/shared.ts — makeTool 的签名 */

@@ -187,12 +187,11 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 ## 关联
 
 - [agent-loop](./agent-loop.md)：调用时机、并发调度与 callId 配对的执行侧
-- [permissions](./permissions.md)：`risk` 如何变成 allow/confirm 判定
+- [permissions](./permissions.md)：`risk` 如何变成 allow/confirm 判定；ask_user_questions 与人工确认共用的三方 race 网关（`racePending`）
 - [provider](./provider.md)：`ToolDefinition` 如何进入请求体
 - [memory](./memory.md)：memory 工具背后的存储与检索
 - [compaction](./compaction.md)：session_search 检索的索引来源（压缩段）与工具输出省略
 - [skills](./skills.md)：skill_read 背后的技能机制（渐进披露、双作用域、指定包装）
 - [subagents](./subagents.md)：subagent_run / subagent_collect 背后的子会话生命周期、并发上限、后台模式与结果整形
 - [agent-team](./agent-team.md)：team 工具背后的团队目录、收信箱投递、任务板与身份收缩
-- [permissions](./permissions.md)：ask_user_questions 与人工确认共用的三方 race 网关（`racePending`）
 - [mcp](./mcp.md)：同一 ToolExecutor 契约的另一种工具来源

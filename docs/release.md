@@ -26,7 +26,7 @@ kclaw 尚未发布 npm 包（恢复发布时 `packages/kclaw` 直接 `npm publis
 
 `.github/workflows/ci.yml` 在 push main 与 PR 时触发，ubuntu + macos × node 22/24 四个组合跑 install → build → typecheck → test。node 22 是发布下限，24 是实际部署形态（better-sqlite3 按 node 版本编译，双档都能锁住）。纯 `docs/**` 与 `*.md` 的改动跳过 CI。
 
-## 相关文档
+## 关联
 
 - [tutorial](./tutorial.md)：安装与升级（本地部署）
 - [architecture](./architecture.md)：包结构与依赖方向

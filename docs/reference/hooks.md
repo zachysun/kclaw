@@ -1,10 +1,10 @@
 # hooks — hook 位置与内置 hook 清单
 
-> 权威来源：`packages/core/src/hooks/types.ts`（位置与契约）、`hooks/positions.ts`（运行时清单）、`hooks/builtin.ts`（内置 hook 唯一定义来源 `BUILTIN_HOOK_SPECS`，管理接口用的 `BUILTIN_HOOK_DEFINITIONS` 由它投影）。机制见 [hooks](../core/hooks.md)。
+> 权威来源：`packages/core/src/hooks/types.ts`（位置与契约）、`packages/core/src/hooks/positions.ts`（运行时清单）、`packages/core/src/hooks/builtin.ts`（内置 hook 唯一定义来源 `BUILTIN_HOOK_SPECS`，管理接口用的 `BUILTIN_HOOK_DEFINITIONS` 由它投影）。机制见 [hooks](../core/hooks.md)。
 
-## HookPosition（14 个）
+这份清单收四块：14 个 hook 位置的封闭联合与契约表、15 个内置 hook 的 order/failure 一览、HookMeta 元数据字段、failure 三档失败策略。
 
-位置的封闭联合——run 时间线上全部命名挂载点：
+## 核心源码
 
 ```ts
 export type HookPosition =
@@ -16,6 +16,10 @@ export type HookPosition =
   | "think-after"
   | "system-before" | "system-after"
 ```
+
+## HookPosition（14 个）
+
+位置的封闭联合——run 时间线上全部命名挂载点：
 
 | 位置 | ctx | 返回（改写生效） | 性质 |
 |------|-----|------------------|------|

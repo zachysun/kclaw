@@ -87,7 +87,6 @@ export function resolvePaths(home?: string): KclawPaths
 | `team.taskBoard.maxTasks` | `64` | 任务板总量上限（含终态任务），超限建任务报错 |
 | `goals.judge` | `""` | `/goal` 判定器使用的 provider 条目名（见 [goal](./goal.md)），空 = 回退会话模型线（会话级 model → 默认条目）；循环的硬性上限（轮数/token budget 等）是代码内常量，不进 config |
 | `server.port` | 无（临时端口） | daemon 的固定监听端口（1-65535）：固定后 WebUI 地址跨重启稳定，不配则每次启动由操作系统分配临时端口。bin 的 `--port` 旗标优先于此字段；固定端口被占用是硬错误（报一行原因退出，绝不静默换端口——地址悄悄漂移正是固定端口要消灭的），非法值回退到临时端口并告警。见 [daemon](../server/daemon.md) |
-
 | `notify.channels` | `[]` | 定时任务终态通知渠道列表；为空即关闭（零开销）。条目 `{ name?, type, url, template? }`，`type` 三种：`bark`（POST JSON `{title, body}`）、`serverchan`（POST 表单 `title`+`desp`）、`webhook`（POST JSON，正文含 title/body 及全部 job 字段）。`template` 占位符：`{{job}}` `{{statusText}}` `{{status}}` `{{summary}}` `{{sessionId}}` `{{sessionUrl}}`，未知占位符渲染为空串 |
 | `notify.timeoutMs` | `10000` | 单次推送请求超时；推送失败只记日志、不重试 |
 | `hooks.timeoutMs` | `5000` | 单个 hook 处理函数的执行 budget（毫秒），超时按失败处理（用户 hook skip、内置 hook fatal，见 [hooks](./hooks.md)）；可选字段，默认值在 hook 链构建处补齐 |
@@ -197,6 +196,19 @@ export function readJsonl(file: string): unknown[]
 1. agent 循环产出消息 → run 组装（core `executeRun`）的 `onMessage` hook 调 `sessions.appendMessage(sessionId, m)`。
 2. `appendMessage` 经 `appendEvent` 往 events.jsonl 追加一条 `message` 事件：先 `repairTornTail`（末字节不是 `\n` 就按字节截断到上一个换行），再 `appendFileSync(JSON.stringify(event) + "\n")`，随后把事件汇入 meta.json 摘要（`applyEvent`）。
 3. 回读时 `readMessages` 读全部事件后过滤出 `message` 事件，并**按 `message.truncated` 标记倒序收缩**：从流尾向前走，最近的截断标记就是"该消息之后第一个截断"，消息 id 不小于它即被丢弃（重试追加在标记之后的新消息不受旧起点约束）——这是唯一的过滤点，聊天视图、run 上下文组装、压缩与记忆提取全部继承同一份可见历史。`readMessages` 先丢弃断尾行，逐行解析成 `Message` 数组，作为下次运行的历史（run 组装在追加用户消息**之前**读历史，避免同一条消息发送两次）。
+
+```mermaid
+flowchart TD
+    A["agent 循环产出消息"] --> B["onMessage（run 组装注入）"]
+    B --> C["SessionStore.appendMessage"]
+    C --> D["repairTornTail：末字节不是换行就截断到上一行"]
+    D --> E["events.jsonl 追加一条 message 事件"]
+    E --> F["applyEvent 汇入 meta.json 投影"]
+    E --> G["readMessages（下次 run 组装读历史）"]
+    G --> H["过滤出 message 事件"]
+    H --> I["按 message.truncated 标记倒序收缩"]
+    I --> J["可见历史：聊天视图 / 组装 / 压缩 / 记忆提取共用"]
+```
 
 ### 会话 fork（`session/fork.ts`）
 

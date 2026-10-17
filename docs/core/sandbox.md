@@ -83,3 +83,18 @@ bwrap 不可用 → 不可用（回退到人工确认）
 - **纯函数**：`seatbeltProfile` / `bwrapArgs` 断言布局形状（写白名单含工作区与 writeRoots、`~/.kclaw` 屏蔽、默认无 unshare-net、deny 才有、命令经 `/bin/sh -c`）。
 - **注入点**：`createExecSandbox` 的 `which`/`tmpDirs` 可注入；exec 工具的沙箱参数用 fake sandbox（放行 / 失败 / 超时）驱动，`tools/exec.test.ts`。
 - **真实环境冒烟**（smoke test：用真实环境跑通关键路径的慢速验证）：macOS 本机真 `sandbox-exec`（写工作区成功、写家目录被拒、读 `~/.kclaw` 被拒、网络 socket 可建；network deny 时出站 connect 得 EPERM 而文件操作照常），Linux CI ubuntu runner 真 bwrap（写工作区成功、家目录只读、`~/.kclaw` 屏蔽）。冒烟用注入的**假 home**（tmp 或真 home 下的临时目录），不碰真实 `~/.kclaw`。
+
+## 边界与出错
+
+- **沙箱不可用一律回人工确认（fail-closed）**：平台检测失败、bwrap 真实试跑不过、`sandbox.enabled: false` 三种情况下都不放行裸跑——exec 回到既有判定链（逐次确认），gate 的被包装工具集为空。
+- **越界表现为命令的普通失败**：沙箱内访问放行集外路径得到 Operation not permitted / Read-only file system 之类的错误，exec 以 error result 透传；对模型来说"被沙箱拒绝"与"命令自己失败"不可区分。
+- **network deny 的已知坑**：SBPL 裸 `(deny network*)` 连 shell 启动要用的内部操作一起拦，进程直接起不来——要用 `(deny network-outbound)` + `(deny network-inbound)`（见平台布局一节的实测结论）。
+- **macOS 的 sandbox-exec 被 Apple 标注 deprecated**：当前系统仍可用；长期迁移到 libsandbox C API 不在本文档范围。Linux 侧 Landlock 保底是后续项（纯 Node 无法发起 landlock_create_ruleset syscall），当前降级方向是"不可用 → 人工确认"，安全不降级。
+- **检测每 run 做一次**：平台可用性不是 daemon 启动时定死的，某次 run 组装时检测到不可用，该 run 即回退人工确认。
+
+## 关联
+
+- [permissions](./permissions.md)：`sandboxed` 放行的判定位置与被包装工具集
+- [tools](./tools.md)：exec 工具如何注入沙箱、超时 kill 进程组
+- [storage](./storage.md)：`sandbox.enabled` / `writeRoots` / `network` 配置字段
+- [agent-loop](./agent-loop.md)：run 组装把同一次检测结果喂给工具与 gate 两个使用方

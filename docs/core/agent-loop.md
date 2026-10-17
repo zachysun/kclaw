@@ -109,6 +109,29 @@ run.started {trigger}
 
 ### 工具回合（`runToolTurn`）
 
+一轮工具回合里，每个调用依次过 hook 检查与权限检查，然后统一调度执行：
+
+```mermaid
+flowchart TD
+    A["stopReason=tool_use，进入工具回合"] --> B["建 role:tool 消息骨架，发 message.created"]
+    B --> C["每个可执行调用依次判定"]
+    C --> D{"hook 检查 tool-before"}
+    D -->|"声明 deny 的 hook 失败"| E["error result + denied note，不执行，run 继续"]
+    D -->|"通过，或普通失败跳过"| F{"权限检查 check"}
+    F -->|"allow"| G["记 grantedBy，进入待执行"]
+    F -->|"deny 或超时"| E
+    F -->|"confirm"| H["发 confirmation.requested"]
+    H --> I{"raceConfirmation 三方竞争"}
+    I -->|"once / project / global"| G
+    I -->|"reject 或超时"| E
+    I -->|"abort"| J["run 以 aborted 终止"]
+    G --> K["调度执行：parallel 并发，serial 串行"]
+    K --> L["结果三段事件，附死循环守卫提醒（若触发）"]
+    L --> M["onMessage 持久化，message.completed"]
+    M --> N["turn-boundary 链注入引导缓冲消息"]
+    N --> O["回到循环顶部，下一轮模型调用"]
+```
+
 1. 建 `role:"tool"` 消息骨架 → `message.created`（先于执行，使 delta 事件可附带真实 messageId）。
 2. **hook 检查**：每个可执行调用先过 `hooks.runGate("tool-before", {toolCall})`（观察 + 失败否决权）——声明 `failure:"deny"` 的 hook 失败时该调用被拒绝：error result（文案 `hook <名> 失败，操作未执行：<原因>`）+ `kind:"denied"` note，不进权限检查、不执行，run 继续；其余失败照旧跳过。
 3. **权限检查**：每个可执行调用按模型顺序过 `check`——`deny` → error result + note 块（`kind:"denied"|"timeout"`）；`allow` → 记 `grantedBy`（`sandboxed` 即命令类工具由 exec 沙箱顶替人工的放行，见 [permissions](./permissions.md) 第 7 节）；`confirm` → 发 `confirmation.requested {confirmationId, toolCall, risk, expiresAt}`（沙箱启用但不可用时的回退确认带 `noteText`），`raceConfirmation` 同时等待三个来源：人工裁决 | confirmTimeoutMs 超时 | abort 信号，谁先到算谁。人工裁决是四选一（`once` / `project` / `global` / `reject`，来自 `confirmation.resolve` 帧）：`once`/`project`/`global` 都放行并记 `grantedBy:"confirmed"`（project/global 的规则由 run 组装的 `resolveConfirmation` 保存，见 [permissions](./permissions.md)）；`reject`/超时的文案固定："用户拒绝了该操作" / "确认超时，操作未执行"。

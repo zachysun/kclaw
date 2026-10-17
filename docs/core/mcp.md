@@ -155,6 +155,32 @@ MCP 协议要求客户端报告自己的名字和版本，这里固定为 `{name
 
 ### 惰性连接、重试与回收
 
+条目的连接状态机（状态取值即快照里的 `state` 字段）：
+
+```mermaid
+stateDiagram-v2
+    state "disconnected（未连接）" as disc
+    state "connecting（连接中）" as conn
+    state "connected（已连接）" as ok
+    state "failed（失败）" as fail
+    state "disabled（enabled=false）" as dis
+
+    [*] --> dis: 条目 enabled=false，永不发起连接
+    [*] --> disc
+    disc --> conn: toolsFor 取用触发后台连接，或手动 connect
+    conn --> ok: 连接与 listTools 在 10s 超时内成功
+    conn --> fail: 超时或失败，安排指数退避
+    fail --> conn: 退避定时器到点自动重试
+    ok --> conn: 意外断开（曾连上过），进入有界退避
+    ok --> disc: 空闲回收（60s 扫描，空闲超过 10 分钟）
+
+    note right of fail
+        退避 1s 起步封顶 60s，最多 10 次，耗尽停在 failed 等人处理；
+        下一次取用或手动 connect 归零计数重来；
+        活连接达上限 64 时后台路径也记 failed，手动连接报冲突
+    end note
+```
+
 1. 构造与 `start()` 都不建立连接；`start()` 只启动空闲回收扫描（默认 60 秒一次）。
 2. 每轮 run 组装时 `toolsFor(workdir)` 对视图内每个条目：无状态对象或缺连接 → 后台建立（状态 `"connecting"`），已连接的直接贡献工具。首次取用当轮未必有工具——连接是后台的，工具从下一轮组装起可用。
 3. **断连不清空工具视图**：tools 数组位于请求前缀的最前面，server 掉线、重连抖动或空闲回收若让清单缩掉再长回来，prompt cache 前缀每次抖动都从 tools 起全断。因此掉线与重连失败期间 `toolsFor` 仍按最近一次 `listTools` 的视图贡献工具，executor 对断连条目的调用如实报错（未连接、自动重连中、稍后重试通常可恢复）；重连成功后视图被真实清单覆盖。从未连上过的条目（无视图）与已禁用的条目不贡献任何工具。

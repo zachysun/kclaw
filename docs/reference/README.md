@@ -6,11 +6,11 @@
 
 | 篇目 | 陈列内容 | 权威来源 |
 |------|----------|--------|
-| [messages](./messages.md) | 消息类型（Role 3）、停止原因（StopReason 7 + 归一化映射）、放行原因（GrantedBy 8） | `core/src/protocol/messages.ts` |
-| [blocks](./blocks.md) | 内容块（6 种）、note 种类（6 种）、附件来源（3 种）、role × 块约定 | `core/src/protocol/blocks.ts` |
-| [events](./events.md) | 总线事件（EventType 40 种，含分组与 payload）、事件公共字段 | `core/src/protocol/events.ts` |
-| [session-events](./session-events.md) | 持久化会话事件（events.jsonl 的 26 种类型） | `core/src/protocol/session-events.ts` |
-| [wire](./wire.md) | WS 指令帧（10 种）、应答帧（9 种 + error）、排队处置（3 种） | `core/src/protocol/wire.ts` |
-| [tools](./tools.md) | 内置工具（24 个：常驻 13 + 条件 11）、risk / concurrency 两轴 | `core/src/tools/` |
-| [hooks](./hooks.md) | hook 位置（14 个）、内置 hook（15 个）、失败策略（3 档） | `core/src/hooks/` |
+| [messages](./messages.md) | 消息类型（Role 3 种）、停止原因（StopReason 7 种 + 归一化映射）、放行原因（GrantedBy 8 种） | `packages/core/src/protocol/messages.ts` |
+| [blocks](./blocks.md) | 内容块（6 种）、note 种类（6 种）、附件来源（3 种）、role × 块约定 | `packages/core/src/protocol/blocks.ts` |
+| [events](./events.md) | 总线事件（EventType 40 种，含分组与 payload）、事件公共字段 | `packages/core/src/protocol/events.ts` |
+| [session-events](./session-events.md) | 持久化会话事件（events.jsonl 的 26 种类型） | `packages/core/src/protocol/session-events.ts` |
+| [wire](./wire.md) | WS 指令帧（10 种）、应答帧（9 种 + error）、排队处置（3 种） | `packages/core/src/protocol/wire.ts` |
+| [tools](./tools.md) | 内置工具（24 个：常驻 13 + 条件 11）、risk / concurrency 两轴 | `packages/core/src/tools/` |
+| [hooks](./hooks.md) | hook 位置（14 个）、内置 hook（15 个）、失败策略（3 档） | `packages/core/src/hooks/` |
 | [enums](./enums.md) | 其余枚举集：权限模式、压缩结果、记忆触发、团队状态、provider 流事件、ID 前缀 | 分散（篇内逐项标注） |

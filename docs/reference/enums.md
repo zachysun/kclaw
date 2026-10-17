@@ -4,7 +4,7 @@
 
 ## 运行触发源（5 值）
 
-权威来源：`core/src/protocol/events.ts`（RunStartedPayload）、`protocol/wire.ts`（QueueEntry）、`protocol/session-events.ts`（run.started）。
+权威来源：`packages/core/src/protocol/events.ts`（RunStartedPayload）、`packages/core/src/protocol/wire.ts`（QueueEntry）、`packages/core/src/protocol/session-events.ts`（run.started）。
 
 | 值 | 含义 |
 |----|------|
@@ -16,7 +16,7 @@
 
 ## 目标状态与停止原因（GoalState 4 值 / GoalStopReason 10 值）
 
-权威来源：`core/src/goal/types.ts`。目标循环（`/goal`）的状态机与终止原因码，机制见 [goal](../core/goal.md)。
+权威来源：`packages/core/src/goal/types.ts`。目标循环（`/goal`）的状态机与终止原因码，机制见 [goal](../core/goal.md)。
 
 GoalState：
 
@@ -44,7 +44,7 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 
 ## 权限模式 PermissionMode（5 值）
 
-权威来源：`core/src/permissions/modes.ts`（`PERMISSION_MODES` 常量，严格校验，未知值拒绝）。从紧到松；判定链见 [permissions](../core/permissions.md)。
+权威来源：`packages/core/src/permissions/modes.ts`（`PERMISSION_MODES` 常量，严格校验，未知值拒绝）。从紧到松；判定链见 [permissions](../core/permissions.md)。
 
 | 值 | 含义 |
 |----|------|
@@ -56,7 +56,7 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 
 ## 确认 / 提问的裁决与来源
 
-权威来源：`core/src/protocol/events.ts`（ConfirmationResolvedPayload / QuestionResolvedPayload、session-events.ts 的 PermissionDecidedEvent）。
+权威来源：`packages/core/src/protocol/events.ts`（ConfirmationResolvedPayload / QuestionResolvedPayload）、`packages/core/src/protocol/session-events.ts`（PermissionDecidedEvent）。
 
 裁决 `decision`（5 值；客户端能发的只有前四值，见 [wire](./wire.md)）：
 
@@ -72,11 +72,11 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 
 ## 排队处置 SendDisposition（3 值）
 
-权威来源：`core/src/protocol/wire.ts`。steer（注入本轮）/ wait（排队下一轮）/ interrupt（终止本轮），详见 [wire](./wire.md)。
+权威来源：`packages/core/src/protocol/wire.ts`。steer（注入本轮）/ wait（排队下一轮）/ interrupt（终止本轮），详见 [wire](./wire.md)。
 
 ## 压缩相关
 
-权威来源：`core/src/protocol/events.ts`（CompactionPhase）、`protocol/session-events.ts`（CompactionEvent）、`session/compactor.ts`（CompactionOutcome）。
+权威来源：`packages/core/src/protocol/events.ts`（CompactionPhase）、`packages/core/src/protocol/session-events.ts`（CompactionEvent）、`packages/core/src/session/compactor.ts`（CompactionOutcome）。
 
 **CompactionPhase（3 值，运行时阶段）**：
 
@@ -101,7 +101,7 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 
 ## 记忆事件字段
 
-权威来源：`core/src/protocol/session-events.ts`（MemoryEvent）。
+权威来源：`packages/core/src/protocol/session-events.ts`（MemoryEvent）。
 
 **trigger（7 值，写入触发）**：
 
@@ -121,7 +121,7 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 
 ## 团队状态
 
-权威来源：`core/src/protocol/team.ts`。
+权威来源：`packages/core/src/protocol/team.ts`。
 
 | 枚举 | 值 | 含义 |
 |------|----|------|
@@ -132,7 +132,7 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 
 ## provider 层（LLM 协议适配）
 
-权威来源：`core/src/provider/types.ts`。
+权威来源：`packages/core/src/provider/types.ts`。
 
 **ProviderMessage 的 role（4 值）**：`system` / `user` / `assistant` / `tool`——发给 LLM 的消息形状（与持久化的 Role 三值不同：system 独立、无本地扩展）。
 
@@ -150,7 +150,7 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 
 ## ID 前缀（13 值）
 
-权威来源：`core/src/protocol/ids.ts`（`IdPrefix` 联合 + `newId(prefix)`，前缀 + 单调 ULID，例 `run_01J…`）。
+权威来源：`packages/core/src/protocol/ids.ts`（`IdPrefix` 联合 + `newId(prefix)`，前缀 + 单调 ULID，例 `run_01J…`）。
 
 | 前缀 | 用途 | 生成点 |
 |------|------|--------|

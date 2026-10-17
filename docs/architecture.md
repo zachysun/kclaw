@@ -156,7 +156,37 @@ run 的组装在 core 的 `executeRun`（`packages/core/src/agent/run-assembly.t
 
 ## 端到端示例：一条会改文件的消息
 
-设用户在 CLI 输入：`把 src 里的 TODO 改成 FIXME`。会话 `ses_…` 已存在。
+设用户在 CLI 输入：`把 src 里的 TODO 改成 FIXME`。会话 `ses_…` 已存在。整段流转的时序如下：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as CLI / WebUI
+    participant RM as RunManager（server）
+    participant A as executeRun（run 组装）
+    participant L as runAgent（agent 循环）
+    participant P as provider（LLM 接入层）
+    participant S as SessionStore（events.jsonl）
+
+    U->>RM: send_message 帧
+    RM-->>U: send_message_ack（ack 与 run 解耦，不等回复）
+    RM->>A: 空闲直发，组装并驱动一次 run
+    A->>L: 依赖就绪（工具、权限 gate、确认网关、压缩视图）
+    L->>S: run.started；run-before 链持久化用户消息
+    L->>P: 第一轮 llm.stream（全量历史 + 工具清单）
+    P-->>L: 流式事件：text_delta / tool_call_started / delta
+    L->>L: 流结束才解析参数，stopReason=tool_use
+    L->>L: 权限检查：fs_read 直接放行，fs_write 需人工确认
+    L->>U: confirmation.requested（经总线广播）
+    U->>A: confirmation.resolve（decision=project）
+    Note over A,L: raceConfirmation 三方竞争：人工裁决 / 120s 超时 / abort
+    L->>P: 第二轮 llm.stream（工具结果入历史）
+    P-->>L: 文本总结，stopReason=end_turn
+    L->>S: assistant 消息持久化，run.completed
+    L-->>A: RunOutcome（stopReason 与累计 usage）
+    A->>RM: run-after 链：用量、记忆检查、收尾压缩、自动命名
+    RM-->>U: 事件全程实时广播（先持久化后广播）
+```
 
 1. **入队**：CLI 经已认证的 WS 发 send_message 帧；`ws.ts` 查 `sessions.meta(sessionId)` 确认会话存在 → 调 `run.submit(sessionId, {userText, trigger:"user"})`，由它同步决定去向（空闲直发/入队/进引导缓冲）→ 立即回 `send_message_ack {messageId, queued}`，不等待 run 完成。
 2. **组装**（core 的 `executeRun`）：记忆检索命中 0 条 → 读历史 → 用户消息以纯 text 的空壳形态传入 `RunInput.userMessage`（先建占位消息，内容块随后补全）；run-before hook 链（内置 memory-inject → user-message-land）补上 note 块并调 `appendMessage` 持久化。事件顺序为 `run.started → message.created → note.emitted ×N → message.completed`。

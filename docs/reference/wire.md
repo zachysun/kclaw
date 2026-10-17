@@ -7,7 +7,7 @@ WS 连接上双向传输的帧。客户端 → daemon 是指令帧（`ClientComm
 ## 核心源码
 
 ```ts
-/** How a send_message rides the queue: steer injects, wait queues, interrupt preempts. */
+/** send_message 在队列上的三种走法：steer 注入本轮，wait 排队，interrupt 终止本轮抢先开跑。 */
 export type SendDisposition = "steer" | "wait" | "interrupt"
 
 export interface AttachmentRef { path: string; name: string; size: number; mimeType: string }
@@ -15,7 +15,7 @@ export interface AttachmentRef { path: string; name: string; size: number; mimeT
 /** 机器来源说明：随队列条目落到用户消息上的 note 块（kind 见 blocks.md NoteKind）。 */
 export interface QueueNote { kind: NoteKind; text: string }
 
-/** One persisted queue entry in queue.jsonl. */
+/** queue.jsonl 里持久化的一条队列条目。 */
 export interface QueueEntry {
   messageId: string
   disposition: SendDisposition

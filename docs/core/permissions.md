@@ -300,5 +300,5 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 - [tools](./tools.md)：risk/concurrency 元数据的来源与 24 个内置工具清单；exec 工具的沙箱注入参数
 - [sandbox](./sandbox.md)：exec 沙箱 provider 的平台布局与降级链
 - [storage](./storage.md)：decided-rules 文件的磁盘布局（会话容器之外）
-- [../server/run-manager.md](../server/run-manager.md)：gate + broker 的 daemon 侧组装
-- [../server/realtime.md](../server/realtime.md)：confirmation.resolve 帧的 WS 入口
+- [run-manager](../server/run-manager.md)：gate + broker 的 daemon 侧组装
+- [realtime](../server/realtime.md)：confirmation.resolve 帧的 WS 入口

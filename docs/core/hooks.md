@@ -119,13 +119,19 @@ export default async (ctx) => {
 
 ---
 
-## 与循环的关系
+## 边界与出错
 
-位置在循环里的确切触发时机、每次触发的事件序、fatal 失败对应哪个错误码，见 [agent-loop](./agent-loop.md)；压缩两个决策位的阈值规则见 [compaction](./compaction.md)；`hook.failed` 事件的 payload 见 [protocol](./protocol.md)。
+- **装载失败不伤 run**：损坏形态（语法错误、未知 position、缺 `hook` 导出或 default 函数、非法 failure 值）只成为一条装载失败条目，不拖垮目录里其他文件、不弄崩 daemon；按"文件名 + mtime + 错误"去重后发一次 `hook.failed {phase:"load"}`，管理接口持续显示失败。
+- **用户 hook 没有 fatal 权**：声明 `failure: "fatal"` 的文件拒绝装载；引擎内置 hook 在原行为抛错传播的地方保留 `fatal`（如用户消息持久化），语义与 hook 化之前一致。
+- **禁用文件照常可见**：`enabled: false` 的文件载入元数据（管理接口可见）但不进执行链。
+- **超时按失败分派**：每个 handler 按 `config.hooks.timeoutMs`（默认 5000ms）计时，超时走与抛错同样的 fatal/skip/deny 分派；条目 `meta.timeoutMs` 可覆盖，五个内置压缩 hook 声明不限时（时长由 provider 单请求超时与 run 中止信号保底）。
+- **装载环境限制**：`.ts` hook 依赖 Node 24+ 的原生类型擦除，低版本 Node 在 import 时得到明确报错；hook 文件不解析裸说明符依赖（第三方包不支持）。
 
 ## 关联
 
-- [agent-loop](./agent-loop.md)：各位置在 run 时间线上的触发点与错误语义
+- [agent-loop](./agent-loop.md)：各位置在循环里的确切触发时机、每次触发的事件序、fatal 对应的错误码
+- [compaction](./compaction.md)：两个压缩决策位（compaction-check / overflow-rescue）的阈值规则
+- [protocol](./protocol.md)：`hook.failed` 事件的 payload
 - [skills](./skills.md)：同一套"放文件，下一轮生效"的思路（`skill-wrap` hook 是其内置使用者）
 - [run-manager](../server/run-manager.md)：组装把内置闭包、registry 快照与测试注入注册进同一条链
 - [http-api](../server/http-api.md)：`GET /hooks` 的协议细节

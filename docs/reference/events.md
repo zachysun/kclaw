@@ -2,7 +2,7 @@
 
 > 权威来源：`packages/core/src/protocol/events.ts`（payload 接口同文件）。投递与订阅机制见 [realtime](../server/realtime.md)，设计取舍见 [protocol](../core/protocol.md)。
 
-这些事件经 `EventBus`（`core/src/bus.ts`）在 WS 上广播：带 `sessionId` 的发给订阅该会话的连接，不带 `sessionId` 的是广播（发给全部已连接 socket）。实时事件不持久化、不回放；持久化的是 [会话事件](./session-events.md)。
+这些事件经 `EventBus`（`packages/core/src/bus.ts`）在 WS 上广播：带 `sessionId` 的发给订阅该会话的连接，不带 `sessionId` 的是广播（发给全部已连接 socket）。实时事件不持久化、不回放；持久化的是 [会话事件](./session-events.md)。
 
 ## 核心源码
 
