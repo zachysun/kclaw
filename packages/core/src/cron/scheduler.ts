@@ -7,11 +7,24 @@ import { newId } from "../protocol/ids.js"
 /** Outcome of the last run of a cron, recorded by `markRun`. */
 export type CronStatus = "ok" | "error"
 
+/**
+ * Trigger form: `cron` = recurring 5-field expression; `delay` = one-shot
+ * "N minutes from creation" (fires once, auto-disables, record kept). The
+ * dedicated relative channel exists because a model-computed absolute cron
+ * for "in 30 minutes" silently rolls a full year forward once the moment
+ * has passed — two surveyed harnesses codified exactly this guard.
+ */
+export type CronKind = "cron" | "delay"
+
 /** A scheduled prompt: cron + prompt, persisted in SQLite. */
 export interface Cron {
   id: string
   name: string
+  /** 5-field expression for kind:"cron"; empty for kind:"delay". */
   cron: string
+  /** Original delay in minutes for kind:"delay"; undefined otherwise. */
+  delayMinutes?: number
+  kind: CronKind
   prompt: string
   enabled: boolean
   nextRunAt: string // ISO-8601
@@ -24,7 +37,9 @@ export interface Cron {
 
 export interface CreateCronInput {
   name: string
-  cron: string
+  /** Exactly one of `cron` / `delayMinutes`. */
+  cron?: string
+  delayMinutes?: number
   prompt: string
   model?: string
 }
@@ -34,6 +49,8 @@ CREATE TABLE IF NOT EXISTS crons (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   cron TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'cron',
+  delay_minutes INTEGER,
   prompt TEXT NOT NULL,
   enabled INTEGER NOT NULL,
   next_run_at TEXT NOT NULL,
@@ -48,6 +65,8 @@ interface CronRow {
   id: string
   name: string
   cron: string
+  kind: string
+  delay_minutes: number | null
   prompt: string
   enabled: number
   next_run_at: string
@@ -71,6 +90,8 @@ function toCron(row: CronRow): Cron {
     id: row.id,
     name: row.name,
     cron: row.cron,
+    kind: row.kind === "delay" ? "delay" : "cron",
+    ...(row.delay_minutes !== null ? { delayMinutes: row.delay_minutes } : {}),
     prompt: row.prompt,
     enabled: row.enabled === 1,
     nextRunAt: row.next_run_at,
@@ -94,10 +115,17 @@ export class CronScheduler {
     mkdirSync(dirname(dbPath), { recursive: true })
     this.db = new Database(dbPath)
     this.db.exec(SCHEMA)
-    // Pre-existing DBs (created before the model column) get it via ALTER.
+    // Pre-existing DBs get newer columns via ALTER (kind/delay_minutes for
+    // the one-shot form, model for per-cron overrides).
     const cols = this.db.prepare("PRAGMA table_info(crons)").all() as Array<{ name: string }>
     if (!cols.some((c) => c.name === "model")) {
       this.db.exec("ALTER TABLE crons ADD COLUMN model TEXT")
+    }
+    if (!cols.some((c) => c.name === "kind")) {
+      this.db.exec("ALTER TABLE crons ADD COLUMN kind TEXT NOT NULL DEFAULT 'cron'")
+    }
+    if (!cols.some((c) => c.name === "delay_minutes")) {
+      this.db.exec("ALTER TABLE crons ADD COLUMN delay_minutes INTEGER")
     }
   }
 
@@ -105,22 +133,59 @@ export class CronScheduler {
     return this.db.prepare("SELECT * FROM crons WHERE id = ?").get(id) as CronRow | undefined
   }
 
-  /** Insert a cron; `nextRunAt` is the next cron occurrence after now. */
+  /**
+   * Insert a cron. `cron` (recurring, next occurrence after now) or
+   * `delayMinutes` (one-shot: nextRunAt = now + delay) — exactly one.
+   */
   create(input: CreateCronInput): Cron {
-    const cron: Cron = {
-      id: newId("cron"),
-      name: input.name,
-      cron: input.cron,
-      prompt: input.prompt,
-      enabled: true,
-      nextRunAt: nextIsoAfter(input.cron, new Date()),
-      ...(input.model !== undefined ? { model: input.model } : {}),
+    const now = new Date()
+    let cron: Cron
+    if (input.delayMinutes !== undefined) {
+      if (input.cron !== undefined) {
+        throw new Error("cron 与 delayMinutes 只能二选一")
+      }
+      cron = {
+        id: newId("cron"),
+        name: input.name,
+        cron: "",
+        kind: "delay",
+        delayMinutes: input.delayMinutes,
+        prompt: input.prompt,
+        enabled: true,
+        nextRunAt: new Date(now.getTime() + input.delayMinutes * 60_000).toISOString(),
+        ...(input.model !== undefined ? { model: input.model } : {}),
+      }
+    } else {
+      if (input.cron === undefined) {
+        throw new Error("cron 与 delayMinutes 必须提供其一")
+      }
+      cron = {
+        id: newId("cron"),
+        name: input.name,
+        cron: input.cron,
+        kind: "cron",
+        prompt: input.prompt,
+        enabled: true,
+        nextRunAt: nextIsoAfter(input.cron, now),
+        ...(input.model !== undefined ? { model: input.model } : {}),
+      }
     }
     this.db
       .prepare(
-        `INSERT INTO crons (id, name, cron, prompt, enabled, next_run_at, model) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO crons (id, name, cron, kind, delay_minutes, prompt, enabled, next_run_at, model)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(cron.id, cron.name, cron.cron, cron.prompt, 1, cron.nextRunAt, cron.model ?? null)
+      .run(
+        cron.id,
+        cron.name,
+        cron.cron,
+        cron.kind,
+        cron.delayMinutes ?? null,
+        cron.prompt,
+        1,
+        cron.nextRunAt,
+        cron.model ?? null,
+      )
     return cron
   }
 
@@ -137,27 +202,37 @@ export class CronScheduler {
 
   /**
    * Apply a partial patch. Changing `cron` recalculates `nextRunAt` from now
-   * (invalid cron throws, cron-parser message passthrough); any other field —
-   * including `nextRunAt` itself — is written as given (tests back-date with it).
+   * and converts the row to kind:"cron" (invalid cron throws, cron-parser
+   * message passthrough); changing `delayMinutes` recomputes the one-shot
+   * time from now and converts to kind:"delay"; any other field — including
+   * `nextRunAt` itself — is written as given (tests back-date with it).
    */
   update(id: string, patch: Partial<Cron>): Cron | undefined {
     const row = this.getRow(id)
     if (row === undefined) return undefined
-    const next: Cron = {
-      ...toCron(row),
-      ...patch,
-      nextRunAt: patch.cron !== undefined && patch.nextRunAt === undefined
-        ? nextIsoAfter(patch.cron, new Date())
-        : (patch.nextRunAt ?? row.next_run_at),
+    const current = toCron(row)
+    const next: Cron = { ...current, ...patch }
+    if (patch.cron !== undefined && patch.delayMinutes === undefined) {
+      next.kind = "cron"
+      delete next.delayMinutes
+      if (patch.nextRunAt === undefined) next.nextRunAt = nextIsoAfter(patch.cron, new Date())
+    } else if (patch.delayMinutes !== undefined) {
+      next.kind = "delay"
+      next.cron = ""
+      if (patch.nextRunAt === undefined) {
+        next.nextRunAt = new Date(Date.now() + patch.delayMinutes * 60_000).toISOString()
+      }
     }
     this.db
       .prepare(
-        `UPDATE crons SET name = ?, cron = ?, prompt = ?, enabled = ?, next_run_at = ?,
+        `UPDATE crons SET name = ?, cron = ?, kind = ?, delay_minutes = ?, prompt = ?, enabled = ?, next_run_at = ?,
            last_run_at = ?, last_status = ?, last_error = ?, model = ? WHERE id = ?`,
       )
       .run(
         next.name,
         next.cron,
+        next.kind,
+        next.delayMinutes ?? null,
         next.prompt,
         next.enabled ? 1 : 0,
         next.nextRunAt,
@@ -185,23 +260,32 @@ export class CronScheduler {
 
   /**
    * Atomically claim every enabled cron whose next_run_at has passed:
-   * each row's next_run_at is advanced (skipping any backlog of missed
-   * fire times) inside one transaction, and only rows whose CAS update
-   * affected exactly one row are returned. Claim-then-execute means a
-   * crash mid-run cannot re-fire the cron on restart, and a second handle
-   * on the same db can never double-claim.
+   * recurring rows advance their next_run_at (skipping any backlog of
+   * missed fire times) inside one transaction; one-shot delay rows are
+   * disabled instead (fired once, record kept) — never rescheduled.
+   * Only rows whose CAS update affected exactly one row are returned.
+   * Claim-then-execute means a crash mid-run cannot re-fire the cron on
+   * restart, and a second handle on the same db can never double-claim.
    */
   claimDue(now: Date): Cron[] {
     const claim = this.db.transaction((rows: CronRow[]): Cron[] => {
       const claimed: Cron[] = []
       for (const row of rows) {
-        const next = nextIsoAfter(row.cron, now)
-        const res = this.db
-          .prepare(
-            "UPDATE crons SET next_run_at = ? WHERE id = ? AND enabled = 1 AND next_run_at <= ?",
-          )
-          .run(next, row.id, now.toISOString())
-        if (res.changes === 1) claimed.push(toCron({ ...row, next_run_at: next }))
+        if (row.kind === "delay") {
+          // One-shot: disable (fired once, record kept), never reschedule.
+          const res = this.db
+            .prepare("UPDATE crons SET enabled = 0 WHERE id = ? AND enabled = 1 AND next_run_at <= ?")
+            .run(row.id, now.toISOString())
+          if (res.changes === 1) claimed.push(toCron({ ...row, enabled: 0 }))
+        } else {
+          const next = nextIsoAfter(row.cron, now)
+          const res = this.db
+            .prepare(
+              "UPDATE crons SET next_run_at = ? WHERE id = ? AND enabled = 1 AND next_run_at <= ?",
+            )
+            .run(next, row.id, now.toISOString())
+          if (res.changes === 1) claimed.push(toCron({ ...row, next_run_at: next }))
+        }
       }
       return claimed
     })

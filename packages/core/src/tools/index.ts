@@ -17,6 +17,8 @@ import { createBashTool } from "./bash.js"
 import type { BashSandboxSpawn } from "../sandbox/provider.js"
 import type { ProcessRegistry } from "../process/registry.js"
 import { createProcessTools } from "./process.js"
+import type { CronScheduler } from "../cron/scheduler.js"
+import { createCronTools } from "./cron.js"
 import { createFsTools } from "./fs.js"
 import { createSearchTools } from "./search.js"
 import { createMemoryTools } from "./memory.js"
@@ -31,6 +33,7 @@ import { createWebTools } from "./web.js"
 export { createAskUserQuestionsTool, ASK_USER_QUESTIONS_DESCRIPTION, type QuestionEventEmitter } from "./ask.js"
 export { createBashTool, truncateMiddle } from "./bash.js"
 export { createProcessTools } from "./process.js"
+export { createCronTools } from "./cron.js"
 export { ProcessRegistry } from "../process/registry.js"
 export type { ProcessEntry, PendingNotice } from "../process/registry.js"
 export { createFsTools } from "./fs.js"
@@ -123,6 +126,12 @@ export function createBuiltinTools(opts: {
    * registry surface, scoped to this run's session.
    */
   processes?: ProcessRegistry
+  /**
+   * Cron model face: when set, the cron tools join the registry wired to
+   * this scheduler. `writeTools: false` (cron-fired runs, anti-recursion)
+   * registers only cron_list. The daemon always wires it.
+   */
+  cron?: { scheduler: CronScheduler; writeTools?: boolean }
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] } {
   const bash = createBashTool({
     workspace: opts.workspace,
@@ -143,6 +152,7 @@ export function createBuiltinTools(opts: {
     opts.processes !== undefined && opts.sessionId !== undefined
       ? createProcessTools({ registry: opts.processes, sessionId: opts.sessionId })
       : undefined
+  const cronTools = opts.cron !== undefined ? createCronTools(opts.cron) : undefined
   const web = createWebTools({
     tavilyApiKey: opts.tavilyApiKey,
     fetchImpl: opts.fetchImpl,
@@ -356,6 +366,62 @@ export function createBuiltinTools(opts: {
             ),
           },
         ]),
+    // cron 模型面四件仅在组装传入调度器时存在（daemon 恒有）。writeTools=false
+    // （cron 触发的 run，防递归：定时会话不能再建定时）只注册 cron_list。
+    ...(cronTools === undefined
+      ? []
+      : opts.cron!.writeTools === false
+        ? [
+            {
+              name: "cron_list",
+              tool: cronTools.cron_list,
+              def: def("cron_list", "List scheduled crons (id, schedule, enabled, next run, last result).", {}, []),
+            },
+          ]
+        : [
+            {
+              name: "cron_create",
+              tool: cronTools.cron_create,
+              def: def(
+                "cron_create",
+                "Create a scheduled cron ONLY when the user explicitly asked for a reminder/recurring task. Exactly one of `cron` (standard 5-field expression) or `delayMinutes` (one-shot, fires once then auto-disables — never compute an absolute time yourself). The prompt must be self-contained: firing creates a fresh session that sees nothing of this conversation.",
+                {
+                  name: str("Display name of the cron"),
+                  prompt: str("Self-contained prompt fired as the user message of a fresh session"),
+                  cron: str("Standard 5-field cron expression (mutually exclusive with delayMinutes)"),
+                  delayMinutes: { type: "integer", minimum: 1, maximum: 525600, description: "One-shot: fire once N minutes from now (mutually exclusive with cron)" },
+                },
+                ["name", "prompt"],
+              ),
+            },
+            {
+              name: "cron_list",
+              tool: cronTools.cron_list,
+              def: def("cron_list", "List scheduled crons (id, schedule, enabled, next run, last result).", {}, []),
+            },
+            {
+              name: "cron_update",
+              tool: cronTools.cron_update,
+              def: def(
+                "cron_update",
+                "Update a scheduled cron (partial patch; at least one field). Changing cron/delayMinutes converts the trigger form and reschedules from now.",
+                {
+                  id: str("Cron id from cron_list"),
+                  name: str("Optional: new display name"),
+                  prompt: str("Optional: new prompt"),
+                  cron: str("Optional: switch to a recurring 5-field expression"),
+                  delayMinutes: { type: "integer", minimum: 1, maximum: 525600, description: "Optional: switch to one-shot N minutes from now" },
+                  enabled: { type: "boolean", description: "Optional: enable/disable without deleting" },
+                },
+                ["id"],
+              ),
+            },
+            {
+              name: "cron_delete",
+              tool: cronTools.cron_delete,
+              def: def("cron_delete", "Delete a scheduled cron permanently.", { id: str("Cron id from cron_list") }, ["id"]),
+            },
+          ]),
     // skill_create 仅在组装传入 skillCreate 时存在（提案制功能面；功能关闭的
     // 安装里模型根本看不到这个工具）。
     ...(skill.skill_create === undefined

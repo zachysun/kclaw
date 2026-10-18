@@ -1,4 +1,4 @@
-# tools — 内置工具清单（29 个）
+# tools — 内置工具清单（33 个）
 
 > 权威来源：`packages/core/src/tools/index.ts`（注册表：执行器与模型侧 JSON Schema 成对声明）与 `packages/core/src/tools/` 下各实现文件（参数校验与行为）。机制见 [tools](../core/tools.md)，权限判定链见 [permissions](../core/permissions.md)。
 
@@ -236,7 +236,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - 只列模型可见技能（与系统提示词清单同一口径，`disable-model-invocation` 的不出现），按名字排序。
 - 找到后用 skill_read 加载正文。
 
-## 条件注册工具（14 个）
+## 条件注册工具（18 个）
 
 只在对应能力被组装进 run 时加入注册表：
 
@@ -245,6 +245,10 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `process_list` | 列出本会话的后台进程（命令、状态、退出码、输出文件） | safe | parallel | 组装了后台进程注册表（daemon 恒有） |
 | `process_output` | 按字节偏移增量读后台进程输出（可短暂阻塞等新输出） | safe | parallel | 同上 |
 | `process_kill` | 终止后台进程（SIGKILL 整个进程组） | safe | serial | 同上 |
+| `cron_create` | 创建定时任务（cron 表达式或 delayMinutes 一次性，二选一） | sensitive | serial | 组装了调度器（daemon 恒有）；cron 触发的 run 不带 |
+| `cron_list` | 列出全部定时任务（调度、状态、上次结果） | safe | parallel | 同上（cron 触发的 run 保留） |
+| `cron_update` | 部分字段更新（改 cron/delayMinutes 即换形态并重排） | sensitive | serial | 同 cron_create |
+| `cron_delete` | 删除定时任务 | sensitive | serial | 同 cron_create |
 | `subagent_run` | 派 subagent 独立执行自包含任务（可后台） | safe | parallel | 主线 run 且组装了派发器（daemon 恒有；子会话没有） |
 | `subagent_collect` | 按子会话 id 取回后台 subagent 的结题答复 | safe | parallel | 同上，且组装了收集器 |
 | `skill_create` | 把一段经验固化为技能提案（提案制，不经确认不生效） | safe | parallel | daemon 组装了技能进化系统（恒有）；`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案 |
@@ -277,6 +281,22 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - `process_list {}`：本会话后台进程清单，最新在前，上限 50 条。
 - `process_output { processId, offset?, wait?, timeoutMs? }`：从 `offset` 字节起读增量输出，返回 `nextOffset` 作下次游标；`wait:true` 阻塞等新输出或终态（timeoutMs 默认 30 秒、上限 600 秒）；`data` 带状态与退出码。
 - `process_kill { processId }`：SIGKILL 整个进程组；杀已结束的进程不报错。
+
+### cron 模型面四件
+
+模型面对既有调度器的投影（与 HTTP `/cron` 路由、WebUI cron 页同域同表）。三个写件 **sensitive**——审批卡上完整可见 name/prompt/调度，用户批准=明说（既定纪律：用户没开口，模型绝不建定时任务）；`cron_list` safe。
+
+| 工具 | 参数 | 说明 |
+|------|------|------|
+| `cron_create` | `name`、`prompt` 必填；`cron`（标准 5 段）与 `delayMinutes`（1–525600）**恰好二选一** | 触发即新建会话以 prompt 为用户消息，prompt 描述明确要求自包含 |
+| `cron_list` | 无参 | 全量列表：id、调度形态、启用、下次运行、上次结果 |
+| `cron_update` | `id` + 至少一个字段（`name`/`prompt`/`cron`/`delayMinutes`/`enabled`） | 改 `cron` 或 `delayMinutes` 即转换形态并从现在重排；停用不删记录 |
+| `cron_delete` | `id` | 物理删除（与 HTTP DELETE 同语义） |
+
+- **delayMinutes 一次性形态**：`kind:"delay"` 落表（存相对分钟数），触发一次后自动 `enabled=false` 保留记录、永不重排——相对通道是防"模型自算绝对 cron、刚过去的一次性时刻静默滚一年"坑的硬约束（两家对标 harness 源码立规实证）。
+- **防递归**：`trigger:"cron"` 的 run（定时触发的会话）只注册 `cron_list`，三个写工具不进面——定时会话不能再给自己安排后继。
+- **不带 model 参数**：单条调度的模型覆盖是花费面决定，留给用户的 HTTP/CLI 面。
+- 无效 cron 表达式：返回 cron-parser 原始错误（与 HTTP 400 同文案）。
 
 ### subagent_run
 

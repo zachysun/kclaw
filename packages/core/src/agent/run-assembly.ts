@@ -221,6 +221,12 @@ export interface RunEngineDeps {
    */
   processes?: import("../process/registry.js").ProcessRegistry
   /**
+   * Cron scheduler (daemon-owned). When set, the cron model face joins the
+   * surface; cron-fired runs (trigger "cron") get the read-only view only
+   * (anti-recursion — a scheduled session cannot schedule its successors).
+   */
+  cronScheduler?: import("../cron/scheduler.js").CronScheduler
+  /**
    * Agent team: the server-side team facade. When set,
    * every run probes it once for the session's team identity — lead gets the
    * lead protocol plus the full team tool surface, a member runs the member
@@ -507,6 +513,17 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     web: { timeoutMs: config.web.timeoutMs, allowPrivateNetworks: config.web.allowPrivateNetworks, spillDir: paths.spillDir },
     sessionSearch: buildSessionSearch(engine.deps, sessionId),
     ...(engine.deps.historySearch === undefined ? {} : { historySearch: engine.deps.historySearch }),
+    ...(engine.deps.processes === undefined ? {} : { processes: engine.deps.processes }),
+    ...(engine.deps.cronScheduler === undefined
+      ? {}
+      : {
+          cron: {
+            scheduler: engine.deps.cronScheduler,
+            // 防递归：cron 触发的 run 不带写工具（cron_list 保留）——
+            // 定时会话不能再给自己安排后继。
+            writeTools: input.trigger !== "cron",
+          },
+        }),
     skills,
     recordSkillUse: (name, origin) => recordSkillUse(paths.skillsDir, origin, name),
     ...(engine.deps.skillsEvolution === undefined

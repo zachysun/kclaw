@@ -23,11 +23,14 @@
 ```ts
 // packages/core/src/cron/scheduler.ts
 export type CronStatus = "ok" | "error"
+export type CronKind = "cron" | "delay"
 
 export interface Cron {
   id: string          // "cron_" + ULID
   name: string
-  cron: string        // 标准 5 段 cron 表达式（分 时 日 月 周）
+  cron: string        // 标准 5 段 cron 表达式（分 时 日 月 周）；kind:"delay" 时空串
+  kind: CronKind      // cron = 周期；delay = 一次性（触发后自动停用）
+  delayMinutes?: number // kind:"delay" 的原始相对分钟数
   prompt: string      // 到点后作为用户消息发给 agent 的文本
   model?: string      // 可选：该 cron 的模型覆盖（空/默认 = daemon 默认模型）
   enabled: boolean
@@ -106,6 +109,10 @@ tick 的第二步 `sessions.purgeExpired(purgeTtlMs)`：把 `deletedAt` 距今 �
 - **CLI 功能面较窄**：`kclaw cron list` 只读列表（`packages/cli/src/index.ts`）；增删改目前走 HTTP。
 
 ---
+
+## 模型面（cron 四件工具）
+
+daemon 组装时把同一个 `CronScheduler` 注入 run（engine deps `cronScheduler`），注册表追加 `cron_create` / `cron_list` / `cron_update` / `cron_delete`（实现 `tools/cron.ts`）：三写件 sensitive/serial、`cron_list` safe/parallel；与 HTTP `/cron` 同域同表，不新建存储。防递归：`trigger:"cron"` 的 run 组装时 `writeTools:false`，只有 `cron_list` 进面。create 的触发表达二选一：`cron`（5 段表达式）或 `delayMinutes`（一次性相对触发）——调度器为此新增 `kind`（cron/delay）与 `delay_minutes` 列（老库 ALTER 补列），delay 行 `claimDue` 认领时置 `enabled=0` 而不是推进 `next_run_at`（触发一次、记录保留）；`update` 改 `cron` 转 cron 形态、改 `delayMinutes` 转 delay 形态并从现在重算。模型面不带 `model` 参数（花费面归用户）。
 
 ## 关联
 
