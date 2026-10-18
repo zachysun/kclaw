@@ -19,6 +19,19 @@ import { errMsg, makeTool, requireString, ToolError } from "./shared.js"
 
 const DEFAULT_MAX_READ_BYTES = 1024 * 1024
 
+/**
+ * Read-state for the read-before-edit guard, scoped to one run (the tools
+ * are constructed per run): path → size+mtime captured at read time. An
+ * existing file may only be written/edited if it was read this run and has
+ * not changed since — the model must not edit from imagination, and an
+ * external change between read and write must not be silently clobbered.
+ * Creating a new file is never blocked (there is nothing to have read).
+ */
+interface ReadRecord {
+  size: number
+  mtimeMs: number
+}
+
 export function createFsTools(opts: {
   workspace: string
   maxReadBytes?: number
@@ -30,12 +43,40 @@ export function createFsTools(opts: {
 } {
   const root = path.resolve(opts.workspace)
   const maxReadBytes = opts.maxReadBytes ?? DEFAULT_MAX_READ_BYTES
+  const readState = new Map<string, ReadRecord>()
 
   /**
    * Resolve `p` against the workspace. No escape check lives here: the
    * permission gate decides whether an out-of-workspace target is allowed.
    */
   const sandboxed = (p: string): string => path.resolve(root, p)
+
+  /** Guard for an existing target; throws unless it was read and is unchanged. */
+  const requireRead = (resolved: string, p: string): void => {
+    let current: { size: number; mtimeMs: number }
+    try {
+      const st = statSync(resolved)
+      current = { size: st.size, mtimeMs: st.mtimeMs }
+    } catch (e) {
+      throw new ToolError(`${errMsg(e)} (${p})`)
+    }
+    const record = readState.get(resolved)
+    if (record === undefined) {
+      throw new ToolError(`该文件本 run 内未读取过，先用 fs_read 读取后再修改（防止盲改）: ${p}`)
+    }
+    if (record.size !== current.size || record.mtimeMs !== current.mtimeMs) {
+      throw new ToolError(`文件在读取后被外部修改过，请重新 fs_read 后再修改: ${p}`)
+    }
+  }
+
+  const record = (resolved: string): void => {
+    try {
+      const st = statSync(resolved)
+      readState.set(resolved, { size: st.size, mtimeMs: st.mtimeMs })
+    } catch {
+      readState.delete(resolved)
+    }
+  }
 
   const fs_read = makeTool("fs_read", "safe", "parallel", (args) => {
     const p = requireString(args, "path")
@@ -54,7 +95,11 @@ export function createFsTools(opts: {
       throw new ToolError(`file too large: ${p} is ${size} bytes (max ${maxReadBytes})`)
     }
     try {
-      return { status: "ok", output: readFileSync(resolved, "utf8") }
+      const output = readFileSync(resolved, "utf8")
+      // Record only on success: the guard's premise is that the content is
+      // in the model's context — a failed read does not count as having read.
+      record(resolved)
+      return { status: "ok", output }
     } catch (e) {
       throw new ToolError(`${errMsg(e)} (${p})`)
     }
@@ -91,12 +136,23 @@ export function createFsTools(opts: {
     const content = requireString(args, "content", { allowEmpty: true })
     const resolved = sandboxed(p)
 
+    // Read-before-overwrite guard: an existing file must have been read this
+    // run and unchanged since. A missing target is a create — no guard.
+    let exists = true
+    try {
+      statSync(resolved)
+    } catch {
+      exists = false
+    }
+    if (exists) requireRead(resolved, p)
+
     try {
       mkdirSync(path.dirname(resolved), { recursive: true })
       writeFileSync(resolved, content, "utf8")
     } catch (e) {
       throw new ToolError(`${errMsg(e)} (${p})`)
     }
+    record(resolved)
     return {
       status: "ok",
       output: `wrote ${Buffer.byteLength(content, "utf8")} bytes to ${resolved}`,
@@ -115,6 +171,10 @@ export function createFsTools(opts: {
     } catch (e) {
       throw new ToolError(`${errMsg(e)} (${p})`)
     }
+
+    // Read-before-edit guard: reading inside this call does not count — the
+    // model must have pulled the content into context via fs_read first.
+    requireRead(resolved, p)
 
     // Binary guard: decoding a binary file as UTF-8 turns invalid bytes into
     // U+FFFD replacement chars, and writing the edited string back would
@@ -138,6 +198,7 @@ export function createFsTools(opts: {
     } catch (e) {
       throw new ToolError(`${errMsg(e)} (${p})`)
     }
+    record(resolved)
     return { status: "ok", output: "replaced 1 occurrence" }
   })
 

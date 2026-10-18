@@ -16,6 +16,7 @@ import type { ConfirmationBroker } from "../permissions/broker.js"
 import { createBashTool } from "./bash.js"
 import type { BashSandboxSpawn } from "../sandbox/provider.js"
 import { createFsTools } from "./fs.js"
+import { createSearchTools } from "./search.js"
 import { createMemoryTools } from "./memory.js"
 import { createSessionTools, type SessionSearchFn } from "./session.js"
 import { createHistoryTool, HISTORY_SEARCH_DESCRIPTION, type HistorySearchFn } from "./history.js"
@@ -28,6 +29,7 @@ import { createWebTools } from "./web.js"
 export { createAskUserQuestionsTool, ASK_USER_QUESTIONS_DESCRIPTION, type QuestionEventEmitter } from "./ask.js"
 export { createBashTool, truncateMiddle } from "./bash.js"
 export { createFsTools } from "./fs.js"
+export { createSearchTools } from "./search.js"
 export { createMemoryTools } from "./memory.js"
 export { createSessionTools, type SessionSearchFn } from "./session.js"
 export { createHistoryTool, HISTORY_SEARCH_DESCRIPTION, HISTORY_SEARCH_MAX_LIMIT, type HistorySearchFn } from "./history.js"
@@ -123,6 +125,7 @@ export function createBuiltinTools(opts: {
       : { env: { KCLAW_SESSION_ID: opts.sessionId, KCLAW_WORKSPACE: opts.workspace } }),
   })
   const fs = createFsTools({ workspace: opts.workspace })
+  const search = createSearchTools({ workspace: opts.workspace, spillDir: opts.bash?.spillDir })
   const web = createWebTools({
     tavilyApiKey: opts.tavilyApiKey,
     fetchImpl: opts.fetchImpl,
@@ -191,6 +194,34 @@ export function createBuiltinTools(opts: {
           new: str("Replacement text (may be empty)"),
         },
         ["path", "old", "new"],
+      ),
+    },
+    {
+      name: "grep",
+      tool: search.grep,
+      def: def(
+        "grep",
+        "Search file contents in the workspace with a regex (workspace-relative line output `path:lineNo: content`). Respects .gitignore inside git repos; skips binary files; results capped with a truncation marker and a spill-file pointer to the full list.",
+        {
+          pattern: str("Regular expression (JS RegExp syntax)"),
+          path: str("Optional: workspace-relative directory or file to scope the search"),
+          glob: str("Optional: glob filter on file paths, e.g. `**/*.ts`"),
+          maxResults: int(1, 200),
+        },
+        ["pattern"],
+      ),
+    },
+    {
+      name: "glob",
+      tool: search.glob,
+      def: def(
+        "glob",
+        "Find files in the workspace by filename pattern (standard glob like `**/*.ts`). Respects .gitignore inside git repos; results capped with a truncation marker and a spill-file pointer to the full list.",
+        {
+          pattern: str("Glob pattern to match file paths against"),
+          path: str("Optional: workspace-relative directory to scope the search"),
+        },
+        ["pattern"],
       ),
     },
     {

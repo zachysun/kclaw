@@ -27,7 +27,7 @@ beforeEach(() => {
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
 const ALL_TOOLS = [
-  "bash", "fs_read", "fs_list", "fs_write", "fs_edit",
+  "bash", "fs_read", "fs_list", "fs_write", "fs_edit", "grep", "glob",
   "web_search", "web_fetch", "memory_save", "memory_search",
   "session_search", "history_search", "skill_read", "skill_list",
 ]
@@ -39,6 +39,8 @@ const REQUIRED: Record<string, string[]> = {
   fs_list: ["path"],
   fs_write: ["path", "content"],
   fs_edit: ["path", "old", "new"],
+  grep: ["pattern"],
+  glob: ["pattern"],
   web_search: ["query"],
   web_fetch: ["url"],
   memory_save: ["text"],
@@ -54,7 +56,7 @@ describe("builtin tool registry", () => {
     expect([...registry.tools.keys()].sort()).toEqual([...ALL_TOOLS].sort())
     expect(registry.toolDefs.map((d) => d.name).sort()).toEqual([...registry.tools.keys()].sort())
   })
-  it("a spawner adds subagent_run to the mainline surface (13 tools)", () => {
+  it("a spawner adds subagent_run to the mainline surface (15 tools)", () => {
     const withSpawner = createBuiltinTools({
       workspace: dir,
       memoryCtx: {
@@ -133,6 +135,10 @@ describe("builtin tool registry", () => {
     expect(registry.tools.get("fs_read")!.concurrency).toBe("parallel")
     expect(registry.tools.get("memory_save")!.risk).toBe("safe")
     expect(registry.tools.get("web_search")!.concurrency).toBe("parallel")
+    expect(registry.tools.get("grep")!.risk).toBe("safe")
+    expect(registry.tools.get("grep")!.concurrency).toBe("parallel")
+    expect(registry.tools.get("glob")!.risk).toBe("safe")
+    expect(registry.tools.get("glob")!.concurrency).toBe("parallel")
   })
 
   describe("dropSensitiveTools (readonly visibility)", () => {

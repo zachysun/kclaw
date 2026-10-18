@@ -43,6 +43,14 @@ export function optStringArray(args: unknown, key: string): string[] {
   return v
 }
 
+/** Optional string arg; missing → `undefined`, anything but string → error. */
+export function optString(args: unknown, key: string): string | undefined {
+  const v = (args as Record<string, unknown> | null)?.[key]
+  if (v === undefined) return undefined
+  if (typeof v !== "string") throw new ToolError(`args.${key} must be a string`)
+  return v
+}
+
 /** Optional integer arg, clamped to [min, max]; `undefined` → `fallback`. */
 export function optInt(args: unknown, key: string, fallback: number, min: number, max: number): number {
   const v = (args as Record<string, unknown> | null)?.[key]

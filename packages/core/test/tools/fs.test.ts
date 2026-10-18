@@ -48,6 +48,7 @@ describe("fs tools", () => {
   })
   it("fs_edit replaces exactly-once, errors on 0 or 2 matches", async () => {
     const t = createFsTools({ workspace: ws })
+    await call(t.fs_read, { path: "a.txt" })
     const ok = await call(t.fs_edit, { path: "a.txt", old: "world", new: "kclaw" })
     expect(ok.status).toBe("ok")
     const zero = await call(t.fs_edit, { path: "a.txt", old: "nope", new: "x" })
@@ -56,11 +57,45 @@ describe("fs tools", () => {
     expect(two.status).toBe("error")
     expect(two.output).toMatch(/2 occurrences/)
   })
+  it("fs_edit refuses to touch a file that was not read this run", async () => {
+    const t = createFsTools({ workspace: ws })
+    const r = await call(t.fs_edit, { path: "a.txt", old: "world", new: "x" })
+    expect(r.status).toBe("error")
+    expect(r.output).toContain("先用 fs_read 读取后再修改")
+    // A fresh tools instance is a fresh run: even a read via another instance
+    // does not carry over.
+    const other = createFsTools({ workspace: ws })
+    const r2 = await call(other.fs_edit, { path: "a.txt", old: "world", new: "x" })
+    expect(r2.status).toBe("error")
+  })
+  it("fs_edit refuses when the file changed after the read", async () => {
+    const t = createFsTools({ workspace: ws })
+    await call(t.fs_read, { path: "a.txt" })
+    writeFileSync(join(ws, "a.txt"), "changed externally")
+    const r = await call(t.fs_edit, { path: "a.txt", old: "changed", new: "x" })
+    expect(r.status).toBe("error")
+    expect(r.output).toContain("请重新 fs_read 后再修改")
+    // Re-reading refreshes the record and unblocks the edit.
+    await call(t.fs_read, { path: "a.txt" })
+    const ok = await call(t.fs_edit, { path: "a.txt", old: "changed", new: "x" })
+    expect(ok.status).toBe("ok")
+  })
+  it("fs_write overwriting an existing file needs a prior read; creating is free", async () => {
+    const t = createFsTools({ workspace: ws })
+    const blocked = await call(t.fs_write, { path: "a.txt", content: "clobber" })
+    expect(blocked.status).toBe("error")
+    const created = await call(t.fs_write, { path: "new.txt", content: "fresh" })
+    expect(created.status).toBe("ok")
+    await call(t.fs_read, { path: "a.txt" })
+    const ok = await call(t.fs_write, { path: "a.txt", content: "clobber" })
+    expect(ok.status).toBe("ok")
+  })
   it("fs_edit replaces literally without $-pattern expansion", async () => {
     // $$, $&, $` and $' are replacement patterns for a string replacer;
     // fs_edit must write them back byte-for-byte instead.
     writeFileSync(join(ws, "dollar.txt"), "pre [X] post")
     const t = createFsTools({ workspace: ws })
+    await call(t.fs_read, { path: "dollar.txt" })
     const r = await call(t.fs_edit, { path: "dollar.txt", old: "[X]", new: "` $' $$ $&" })
     expect(r.status).toBe("ok")
     expect(readFileSync(join(ws, "dollar.txt"), "utf8")).toBe("pre ` $' $$ $& post")
@@ -71,6 +106,7 @@ describe("fs tools", () => {
     const bytes = Buffer.from([0x68, 0x00, 0x69, 0xff, 0x21]) // h \0 i <invalid> !
     writeFileSync(join(ws, "blob.bin"), bytes)
     const t = createFsTools({ workspace: ws })
+    await call(t.fs_read, { path: "blob.bin" })
     const r = await call(t.fs_edit, { path: "blob.bin", old: "h", new: "H" })
     expect(r.status).toBe("error")
     expect(r.output).toContain("fs_edit only supports text files (binary content detected)")

@@ -1,4 +1,4 @@
-# tools — 内置工具清单（24 个）
+# tools — 内置工具清单（26 个）
 
 > 权威来源：`packages/core/src/tools/index.ts`（注册表：执行器与模型侧 JSON Schema 成对声明）与 `packages/core/src/tools/` 下各实现文件（参数校验与行为）。机制见 [tools](../core/tools.md)，权限判定链见 [permissions](../core/permissions.md)。
 
@@ -23,7 +23,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - 整数参数只收整数，超出范围按上下限截取（不是报错），不传取条目标注的默认值。
 - 模型多传的未知字段一律忽略。
 
-## 常驻工具（13 个）
+## 常驻工具（15 个）
 
 每个 run 都注册（childRun 例外见下）：
 
@@ -34,6 +34,8 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `fs_list` | 列目录（子目录带尾斜杠，文件带字节数） | safe | parallel |
 | `fs_write` | 新建或覆写文件（自动建父目录） | sensitive | serial |
 | `fs_edit` | 字面替换文件中恰好一处文本（0 处或多处报错） | sensitive | serial |
+| `grep` | 正则内容搜索（遵循 .gitignore，跳过二进制，结果截断+spill） | safe | parallel |
+| `glob` | 文件名模式匹配（与 grep 同一套枚举） | safe | parallel |
 | `web_search` | Tavily 网页搜索 | safe | parallel |
 | `web_fetch` | 抓取 http(s) URL 的正文（HTML 抽取为文章文本，≤ 512 KiB） | safe | parallel |
 | `memory_save` | 立即把当前轮对话沉淀进长期记忆 | safe | parallel |
@@ -106,6 +108,34 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - 字面替换，不做正则展开：`new` 里的 `$&` 这类序列原样写入文件。
 - `old` 出现 0 次或多于 1 次都报错，不写入。
 - 二进制内容直接报错：解码出 U+FFFD 或含 NUL 字节的文件不写入，防止把二进制文件写坏。
+- 先读后改守卫：目标文件必须在本 run 内被 `fs_read` 读过、且读后未被外部修改（size+mtime 比对），否则报错提示先读/重读；新建文件不受守卫约束。`fs_write` 覆写既有文件走同一条守卫。
+
+### grep
+
+`safe` · `parallel`。内容搜索与 glob 共享一套文件枚举：git 仓库内用 `git ls-files`（已跟踪 + 未跟踪未忽略，遵循 .gitignore，NUL 分隔保中文文件名）；git 外回落目录遍历（跳过隐藏目录与 node_modules）。候选文件上限 20000，超出报错提示收窄。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `pattern` | string | 是 | 正则表达式（JS RegExp 语法） |
+| `path` | string | 否 | 限定搜索范围的工作区相对目录或文件 |
+| `glob` | string | 否 | 文件名 glob 过滤（如 `**/*.ts`） |
+| `maxResults` | integer | 否 | 返回条数，范围 1–200，不传取 50 |
+
+- 输出行格式 `path:lineNo: 行内容`（单行截 400 字符）。
+- 二进制文件（含 NUL 字节）跳过；单文件命中 1000 行后停止扫描该文件。
+- 超出 maxResults 截断并带 `...[truncated, N more matches]` 标记；配置了 spill 目录时完整命中清单写入 spill 并附 fs_read 定位行。无命中返回 `(no matches)`。
+
+### glob
+
+`safe` · `parallel`。文件名模式匹配，与 grep 同一套枚举与 .gitignore 规则。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `pattern` | string | 是 | 标准 glob 模式（如 `**/*.ts`） |
+| `path` | string | 否 | 限定搜索范围的工作区相对目录 |
+
+- 返回匹配文件路径列表，上限 500；超限截断并带标记，配置了 spill 目录时完整清单写入 spill 并附定位行。
+- 无命中返回 `(no matches)`。
 
 ### web_search
 
