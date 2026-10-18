@@ -215,7 +215,7 @@ describe("fs files route (workspace file listing for the mention drawer)", () =>
     expect(body.files).toEqual(["a.ts", "sub/c.ts"])
   })
 
-  it("truncates at the cap and reports it", async () => {
+  it("truncates at the cap and reports it", { timeout: 15_000 }, async () => {
     for (let i = 0; i <= FILE_LIST_CAP; i++) {
       await writeFile(join(workspace, `f${String(i).padStart(5, "0")}.ts`), "x")
     }

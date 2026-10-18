@@ -550,6 +550,9 @@ export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
     case "cron.started":
     case "cron.completed":
     case "cron.failed":
+    case "process.started":
+    case "process.completed":
+    case "process.failed":
     case "session.renamed":
     case "session.appended":
     case "attachment.created":

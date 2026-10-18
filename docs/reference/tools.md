@@ -1,4 +1,4 @@
-# tools — 内置工具清单（26 个）
+# tools — 内置工具清单（29 个）
 
 > 权威来源：`packages/core/src/tools/index.ts`（注册表：执行器与模型侧 JSON Schema 成对声明）与 `packages/core/src/tools/` 下各实现文件（参数校验与行为）。机制见 [tools](../core/tools.md)，权限判定链见 [permissions](../core/permissions.md)。
 
@@ -236,12 +236,15 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - 只列模型可见技能（与系统提示词清单同一口径，`disable-model-invocation` 的不出现），按名字排序。
 - 找到后用 skill_read 加载正文。
 
-## 条件注册工具（11 个）
+## 条件注册工具（14 个）
 
 只在对应能力被组装进 run 时加入注册表：
 
 | 名称 | 一句话 | risk | concurrency | 注册条件 |
 |------|--------|------|-------------|----------|
+| `process_list` | 列出本会话的后台进程（命令、状态、退出码、输出文件） | safe | parallel | 组装了后台进程注册表（daemon 恒有） |
+| `process_output` | 按字节偏移增量读后台进程输出（可短暂阻塞等新输出） | safe | parallel | 同上 |
+| `process_kill` | 终止后台进程（SIGKILL 整个进程组） | safe | serial | 同上 |
 | `subagent_run` | 派 subagent 独立执行自包含任务（可后台） | safe | parallel | 主线 run 且组装了派发器（daemon 恒有；子会话没有） |
 | `subagent_collect` | 按子会话 id 取回后台 subagent 的结题答复 | safe | parallel | 同上，且组装了收集器 |
 | `skill_create` | 把一段经验固化为技能提案（提案制，不经确认不生效） | safe | parallel | daemon 组装了技能进化系统（恒有）；`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案 |
@@ -253,6 +256,27 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `task_update` | 按 revision 更新任务状态/认领（CAS 比对交换） | safe | serial | 团队身份 |
 | `task_list` | 列出任务板全貌 | safe | parallel | 团队身份 |
 | `ask_user_questions` | 向用户提 1–5 个当场拍板的问题 | safe | parallel | 组装了 ask 网关（run 组装恒注入，子 run 也带） |
+
+### bash 的后台模式与 process 三件
+
+`bash` 增加两个可选参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `timeoutMs` | integer | 否 | 模型自定超时（毫秒），clamp 1_000–600_000；缺省用配置 `bash.timeoutMs`（默认 60 秒） |
+| `run_in_background` | boolean | 否 | true = 后台启动：立即返回进程 id 与输出文件路径，不受前台超时约束 |
+
+- 后台输出流式写入 spill 文件（`<home>/spill/proc-<id>.txt`），文件字节偏移就是读游标，内存不积压。
+- 完成自动通知：进程结束后经队列以 `trigger:"process"` 的 run 投递到属主会话（note kind `process`），忙会话排队、闲会话唤醒——工具描述明确写有"不要轮询或 sleep 等待"。
+- 未送达通知持久化在 `<home>/process-notices.jsonl`，daemon 重启后补发；启动时对记录的进程组做存活探测，活的重进注册表、死的补发通知。
+- 单会话并发后台进程上限 8；注册表按会话隔离，process 三件只看得到本会话的进程。
+- 沙箱可用时后台命令同样在沙箱内运行（与前台同一条 spawn 缝隙）。
+
+**process 三件**（safe；list/output parallel、kill serial）：
+
+- `process_list {}`：本会话后台进程清单，最新在前，上限 50 条。
+- `process_output { processId, offset?, wait?, timeoutMs? }`：从 `offset` 字节起读增量输出，返回 `nextOffset` 作下次游标；`wait:true` 阻塞等新输出或终态（timeoutMs 默认 30 秒、上限 600 秒）；`data` 带状态与退出码。
+- `process_kill { processId }`：SIGKILL 整个进程组；杀已结束的进程不报错。
 
 ### subagent_run
 

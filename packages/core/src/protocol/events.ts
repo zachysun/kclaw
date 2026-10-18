@@ -10,6 +10,7 @@ export type EventType =
   // Edit & retry / regenerate: live broadcast of a persisted truncation (payload = the discarded range's start id)
   | "message.truncated"
   | "cron.started" | "cron.completed" | "cron.failed"
+  | "process.started" | "process.completed" | "process.failed"
   | "session.appended"
   // 会话元数据
   | "session.renamed"
@@ -37,7 +38,7 @@ export type EventType =
   | "hook.failed"
 
 /** Who initiated a run — the bus payload, the persisted run.started event, the enqueue input and the engine input share this union. */
-export type RunTrigger = "user" | "cron" | "agent" | "team" | "goal"
+export type RunTrigger = "user" | "cron" | "process" | "agent" | "team" | "goal"
 
 export interface RunStartedPayload { trigger: RunTrigger }
 export interface RunCompletedPayload { stopReason: StopReason; usage: Usage }
@@ -48,6 +49,9 @@ export interface MessageTruncatedPayload { fromMessageId: string }
 export interface CronStartedPayload { cronId: string }
 export interface CronCompletedPayload { cronId: string; summary: string }
 export interface CronFailedPayload { cronId: string; error: { code: string; message: string } }
+export interface ProcessStartedPayload { processId: string; sessionId: string; command: string }
+export interface ProcessCompletedPayload { processId: string; sessionId: string; exitCode: number }
+export interface ProcessFailedPayload { processId: string; sessionId: string; error: string }
 export interface SessionRenamedPayload { title: string; /** 触发来源：auto = autoname 生成，manual = 用户改名（旧事件默认按 manual）。 */ source?: "auto" | "manual" }
 
 /** Persist notice: one session event has been written to events.jsonl. Emitted by the store after a successful append — persisted BEFORE announced, so consumers can incrementally refetch safely. */
@@ -155,6 +159,9 @@ export type EventPayloadMap = {
   "cron.started": CronStartedPayload
   "cron.completed": CronCompletedPayload
   "cron.failed": CronFailedPayload
+  "process.started": ProcessStartedPayload
+  "process.completed": ProcessCompletedPayload
+  "process.failed": ProcessFailedPayload
   "session.appended": SessionAppendedPayload
   "session.renamed": SessionRenamedPayload
   "text.created": BlockPayload

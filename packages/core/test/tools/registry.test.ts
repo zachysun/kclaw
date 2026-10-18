@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createBuiltinTools, dropSensitiveTools } from "../../src/tools/index.js"
+import { ProcessRegistry } from "../../src/process/registry.js"
 import type { MemorySystem } from "../../src/memory/system.js"
 import type { ToolDefinition } from "../../src/provider/types.js"
 
@@ -180,5 +181,40 @@ describe("builtin tool registry", () => {
       dropSensitiveTools(tools, toolDefs)
       expect([...tools.keys()]).toEqual(["fs_read"])
     })
+  })
+})
+
+describe("background process surface", () => {
+  const mk = (processes?: Parameters<typeof createBuiltinTools>[0]["processes"]) =>
+    createBuiltinTools({
+      workspace: dir,
+      memoryCtx: {
+        system: {
+          triggerImmediate: vi.fn(async () => undefined),
+          searchAll: vi.fn(async () => []),
+        } as unknown as MemorySystem,
+        sessionId: "ses_1",
+        workdir: dir,
+        immediateEnabled: false,
+      },
+      tavilyApiKey: "tvly-test",
+      sessionId: "ses_1",
+      ...(processes === undefined ? {} : { processes }),
+    })
+
+  it("a registry wires the process trio (safe) and bash background passthrough", () => {
+    const reg = mk(new ProcessRegistry())
+    expect(reg.tools.has("process_list")).toBe(true)
+    expect(reg.tools.has("process_output")).toBe(true)
+    expect(reg.tools.has("process_kill")).toBe(true)
+    expect(reg.tools.get("process_list")!.risk).toBe("safe")
+    expect(reg.tools.get("process_kill")!.concurrency).toBe("serial")
+  })
+
+  it("no registry → no process tools, surface unchanged", () => {
+    const bare = mk()
+    expect(bare.tools.has("process_list")).toBe(false)
+    expect(bare.tools.has("process_output")).toBe(false)
+    expect(bare.tools.has("process_kill")).toBe(false)
   })
 })

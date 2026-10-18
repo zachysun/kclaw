@@ -39,7 +39,8 @@ export function resolvePaths(home?: string): KclawPaths
 | `<home>/cron.db` | 定时任务表 | CronScheduler |
 | `<home>/usage.db` | 每次 LLM 运行的 token 用量记录 | UsageStore |
 | `<home>/attachments/<id>/` | 附件外存目录（每会话一个子目录） | server 上传路由 `routes/attachments.ts`；运行时只读挂载 |
-| `<home>/spill/` | 工具输出溢出目录：bash / web_fetch 截断输出时，把捕获到的全量输出写到这里，给模型的截断视图附带 fs_read 定位行 | core `tools/spill.ts`（单文件上限 10 MiB，超出部分不保留）；目录在权限引擎 readRoots 内，`fs_read` 可直接读 |
+| `<home>/spill/` | 工具输出溢出目录：bash / web_fetch / grep / glob 截断输出时，把捕获到的全量输出写到这里，给模型的截断视图附带 fs_read 定位行；后台进程（bash run_in_background）的输出也流式写在这里（`proc-<id>.txt`，文件偏移即 process_output 的游标） | core `tools/spill.ts`（单文件上限 10 MiB，超出部分不保留）；目录在权限引擎 readRoots 内，`fs_read` 可直接读 |
+| `<home>/process-notices.jsonl` | 后台进程未送达通知日志：进程结算时追加、通知投递成功后重写删除；daemon 重启时补发（活进程组重进注册表、死的补发通知） | core `process/registry.ts` |
 | `<home>/logs/` | 日志目录；当前写入方是 MCP：stdio server 的 stderr 抽干写入 `logs/mcp/<server>.log`（0600，单文件封顶 1 MB（1,000,000 字节），见 [mcp](./mcp.md)） | McpManager（`stderrLogDir`） |
 | `<home>/search.db` | 跨会话消息全文索引（SQLite FTS5，`history_search` 与 `GET /search` 的检索数据来源，见 [tools](./tools.md)） | HistorySearchIndex（daemon 组装，随消息实时写入 + 启动回填） |
 | `<home>/daemon.json` | daemon 存活标识（server 侧） | `launchDaemon` |

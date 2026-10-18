@@ -48,14 +48,14 @@ export type RunManagerDeps = Omit<RunEngineDeps, "broker" | "extraHooks"> & {
 
 export interface EnqueueInput {
   userText: string
-  trigger: "user" | "cron" | "agent" | "team" | "goal"
+  trigger: "user" | "cron" | "process" | "agent" | "team" | "goal"
   model?: string       // 本 run 的模型覆盖（cron 配置的模型或客户端强制）；缺席 → 会话 meta → 默认
   attachments?: AttachmentRef[]  // 挂到用户消息上的附件引用（调用方已校验，这里防御性复验）
   note?: QueueNote     // 机器来源说明（结构化：kind + text），落在用户消息的同 kind note 块
                        // cron 触发=定时任务来源行；subagent kind=后台完成回投的"非用户发言"声明
   disposition?: "steer" | "wait" | "interrupt"
                         // 单次显式处置（层级最高）；默认 = 会话覆盖 ?? 配置默认；
-                        // trigger:"cron"/"agent"/"goal" 固定 wait，不读默认
+                        // trigger:"cron"/"process"/"agent"/"goal" 固定 wait，不读默认
   messageId?: string   // 内部：驱动器出队执行时传入的预分配消息 id（ws 层不传）
 }
 

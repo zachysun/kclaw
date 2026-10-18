@@ -59,7 +59,7 @@ import {
 import type { EmbeddingClient, KclawConfig, LlmClient, McpServerConfig } from "@kclaw/core"
 import { loadOrCreateToken } from "./auth.js"
 import { createMcpProjects, collectProjectDirs } from "./mcp-projects.js"
-import { EventBus } from "@kclaw/core"
+import { EventBus, ProcessRegistry } from "@kclaw/core"
 import { RunManager } from "./run.js"
 import { createChoreUsageRecorder } from "./chore-usage.js"
 import { createHistorySearch } from "./history-search.js"
@@ -477,6 +477,25 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     }
   })()
   hostStops.push(["history search index", async () => historyIndex.close()])
+  // Background-process registry (bash run_in_background): daemon-owned.
+  // Notices wake the owning session through the run queue — busy sessions
+  // get the notice run queued next, idle ones are woken. A session that has
+  // since been deleted simply drops the notice. Boot adoption probes
+  // journaled groups: live ones re-join the registry, dead ones deliver.
+  const processRegistry = new ProcessRegistry({ noticesPath: paths.processNotices })
+  processRegistry.onNotice((notice) => {
+    const meta = sessions.meta(notice.sessionId)
+    if (meta === undefined) return
+    const code = notice.exitCode !== null ? `exit ${notice.exitCode}` : notice.killed ? "已终止" : "退出码未知"
+    const line = `后台命令已结束（${code}）：${notice.command.slice(0, 80)}`
+    void run
+      .enqueue(notice.sessionId, {
+        userText: line,
+        trigger: "process",
+        note: { kind: "process", text: "后台进程完成通知" },
+      })
+      .catch((err) => console.error(`kclaw process notice enqueue failed (${notice.processId}):`, err))
+  })
   const run = new RunManager({
     config,
     paths,
@@ -492,6 +511,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     skillsEvolution,
     resolveExtractLlm,
     historySearch,
+    processes: processRegistry,
     subagents: {
       spawner: subagentHost.spawner,
       collector: subagentHost.collector,
@@ -632,6 +652,10 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // 技能 curator：每日闲时扫描（stale 标记 + 归档，只动 AI 自建的全局技能）。
   const curatorTick = startSkillCurator({ config, skillsDir: paths.skillsDir })
   hostStops.push(["skill curator", () => curatorTick.stop()])
+
+  // 后台进程收编：探测上次未送达通知里的进程组，活的重进注册表、死的补发
+  // 通知（run 已初始化，enqueued 安全）。失败只记日志，不阻塞启动。
+  void processRegistry.adopt().catch((err) => console.error("kclaw process registry adopt failed:", err))
 
   // Feishu channel (#45, managed since #46): opt-in via ~/.kclaw/feishu.json
   // (enabled). Started AFTER the schedulers under the manager's own hard

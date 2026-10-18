@@ -26,6 +26,8 @@ export interface KclawPaths {
   usageDb: string
   /** Cross-session message full-text index (<home>/search.db, FTS5). */
   searchDb: string
+  /** Undelivered background-process notices (<home>/process-notices.jsonl). */
+  processNotices: string
   /** ~/.kclaw/attachments/<session-id>/ — large attachment spillover */
   attachmentsDir: string
   /** ~/.kclaw/spill — full tool output kept readable when the model view truncates */
@@ -63,6 +65,7 @@ export function resolvePaths(home?: string): KclawPaths {
     cronDb: join(root, "cron.db"),
     usageDb: join(root, "usage.db"),
     searchDb: join(root, "search.db"),
+    processNotices: join(root, "process-notices.jsonl"),
     attachmentsDir: join(root, "attachments"),
     spillDir: join(root, "spill"),
     logsDir: join(root, "logs"),

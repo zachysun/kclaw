@@ -14,15 +14,30 @@
  *   the tail, finishing with a byte-counted `...[dropped N bytes]...` marker
  *   (truncateMiddle only micro-trims the head's <=1-chunk overshoot).
  * - Exit 0 → ok; anything else → error with an `exit code N` prefix line.
+ * - `timeoutMs` lets the model set a per-call timeout (clamped 1s–600s,
+ *   default = the configured tool timeout) — some commands legitimately run
+ *   for minutes and the model knows which.
+ * - `run_in_background` spawns detached with output streaming into a spill
+ *   file and returns immediately with a process id; completion is announced
+ *   into the conversation via the process registry (polling is unnecessary).
+ *   Background commands have no timeout: their lifetime is managed through
+ *   process_output / process_kill.
  */
 import { spawn, type ChildProcess } from "node:child_process"
+import { appendFileSync, closeSync, mkdirSync, openSync, unlinkSync } from "node:fs"
+import path from "node:path"
 import type { Readable } from "node:stream"
 import type { ToolExecutor } from "../agent/tools.js"
 import { spillLocatorLine, spillToolOutput, SPILL_MAX_BYTES } from "./spill.js"
+import type { ToolResult } from "./shared.js"
 import type { BashSandboxSpawn } from "../sandbox/provider.js"
+import { newId } from "../protocol/ids.js"
+import type { ProcessRegistry } from "../process/registry.js"
 
 const DEFAULT_TIMEOUT_MS = 60_000
 const DEFAULT_MAX_OUTPUT_BYTES = 100 * 1024
+const MIN_TIMEOUT_MS = 1_000
+const MAX_TIMEOUT_MS = 600_000
 /** After a timeout kill, how long "close" may take to deliver the exit + tail output. */
 const EXEC_TIMEOUT_GRACE_MS = 2_000
 
@@ -60,9 +75,130 @@ export function createBashTool(opts: {
    * (session identity: KCLAW_SESSION_ID etc.). Absent = inherit unchanged.
    */
   env?: Record<string, string>
+  /**
+   * Background-process registry. Required for `run_in_background`: the tool
+   * records the spawned group here (ownership, cap, notices). Absent =
+   * background calls return an assembly error (the daemon always wires it).
+   */
+  processes?: ProcessRegistry
+  /** Owning session id for background entries (registry ownership + notices). */
+  sessionId?: string
 }): ToolExecutor & { name: "bash" } {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES
+
+  /**
+   * Background branch: spawn detached, stream merged output into the spill
+   * file (the file offset is the read cursor), register the group, and
+   * return immediately. No timeout — lifetime is managed via process_kill,
+   * and completion is announced by the registry.
+   */
+  const runBackground = (command: string): Promise<ToolResult> =>
+    (async () => {
+      if (opts.processes === undefined) {
+        return { status: "error" as const, output: "bash: 后台执行未装配进程注册表" }
+      }
+      const id = newId("proc")
+      const spillPath =
+        opts.spillDir !== undefined
+          ? path.join(opts.spillDir, `proc-${id}.txt`)
+          : path.join(opts.workspace, `.${id}.out`)
+      let fd: number | undefined
+      let spillClosed = false
+      const pump = (stream: Readable | null): void => {
+        if (stream === null) return
+        stream.setEncoding("utf8")
+        stream.on("data", (chunk: string) => {
+          if (fd !== undefined) {
+            try {
+              appendFileSync(fd, chunk, "utf8")
+            } catch {
+              // spill write failure must not kill the process pump
+            }
+          }
+        })
+      }
+      const childEnv = opts.env === undefined ? undefined : { ...process.env, ...opts.env } as Record<string, string>
+      if (opts.spillDir !== undefined) {
+        try {
+          mkdirSync(opts.spillDir, { recursive: true })
+          fd = openSync(spillPath, "a")
+        } catch {
+          fd = undefined // fall back to the workspace-local file below
+        }
+      }
+      if (fd === undefined) {
+        fd = openSync(spillPath, "a")
+      }
+      let child: ChildProcess
+      try {
+        child = opts.sandbox
+          ? opts.sandbox.spawn(command, { cwd: opts.workspace, ...(childEnv === undefined ? {} : { env: childEnv }) })
+          : spawn(command, {
+              shell: true,
+              cwd: opts.workspace,
+              ...(childEnv === undefined ? {} : { env: childEnv }),
+              detached: process.platform !== "win32",
+            })
+      } catch (e) {
+        closeSync(fd)
+        spillClosed = true
+        unlinkSync(spillPath)
+        return { status: "error" as const, output: `bash failed: ${e instanceof Error ? e.message : String(e)}` }
+      }
+      pump(child.stdout)
+      pump(child.stderr)
+      child.stdin?.destroy()
+      const settle = (exitCode: number | null, killed: boolean): void => {
+        if (!spillClosed) {
+          spillClosed = true
+          try {
+            closeSync(fd!)
+          } catch {
+            // already closed
+          }
+        }
+      }
+      try {
+        opts.processes!.register({
+          id,
+          sessionId: opts.sessionId ?? "unknown",
+          command,
+          pid: child.pid ?? 0,
+          spillPath,
+          onExit: (done) => {
+            child.once("exit", (code, signal) => {
+              settle(code, signal !== null && signal !== undefined)
+              done(code, signal !== null && signal !== undefined)
+            })
+            child.once("error", () => {
+              settle(null, false)
+              done(null, false)
+            })
+          },
+        })
+      } catch (e) {
+        // Cap rejection etc.: kill the just-spawned group and report.
+        try {
+          if (child.pid != null && process.platform !== "win32") process.kill(-child.pid, "SIGKILL")
+          child.kill("SIGKILL")
+        } catch {
+          // already gone
+        }
+        closeSync(fd)
+        unlinkSync(spillPath)
+        return { status: "error" as const, output: `bash: ${e instanceof Error ? e.message : String(e)}` }
+      }
+      const hint =
+        opts.processes !== undefined
+          ? "完成后会自动通知，不要轮询或 sleep 等待；用 process_output 增量读输出，process_list 看清单，process_kill 终止。"
+          : ""
+      return {
+        status: "ok" as const,
+        output: `已在后台启动：${id}\n命令：${command}\n输出流式写入：${spillPath}${hint !== "" ? `\n${hint}` : ""}`,
+        data: { processId: id, spillPath },
+      }
+    })()
 
   return {
     name: "bash",
@@ -75,6 +211,18 @@ export function createBashTool(opts: {
           status: "error",
           output: "bash: args.command must be a non-empty string",
         })
+      }
+      const raw = args as { timeoutMs?: unknown; run_in_background?: unknown }
+      if (raw.timeoutMs !== undefined && (typeof raw.timeoutMs !== "number" || !Number.isInteger(raw.timeoutMs))) {
+        return Promise.resolve({ status: "error", output: "bash: args.timeoutMs must be an integer" })
+      }
+      // Model-set timeout, clamped; absent = the configured tool timeout.
+      const effectiveTimeout = Math.min(
+        MAX_TIMEOUT_MS,
+        Math.max(MIN_TIMEOUT_MS, raw.timeoutMs ?? timeoutMs),
+      )
+      if (raw.run_in_background === true) {
+        return runBackground(command)
       }
 
       return new Promise((resolve) => {
@@ -184,13 +332,13 @@ export function createBashTool(opts: {
           // everything still buffered in the pipes (waiter gives up, the
           // child's final words are still collected).
           const grace = setTimeout(() => {
-            finish({ status: "error", output: `command timed out after ${timeoutMs}ms\n${capped()}` })
+            finish({ status: "error", output: `command timed out after ${effectiveTimeout}ms\n${capped()}` })
           }, EXEC_TIMEOUT_GRACE_MS)
           child.once("close", () => {
             clearTimeout(grace)
-            finish({ status: "error", output: `command timed out after ${timeoutMs}ms\n${capped()}` })
+            finish({ status: "error", output: `command timed out after ${effectiveTimeout}ms\n${capped()}` })
           })
-        }, timeoutMs)
+        }, effectiveTimeout)
 
         child.on("error", (err) => {
           finish({ status: "error", output: `bash failed: ${err.message}` })

@@ -1,16 +1,28 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawn } from "node:child_process"
 import { createBashTool } from "../../src/tools/bash.js"
+import { ProcessRegistry } from "../../src/process/registry.js"
 
 let ws: string
 beforeEach(() => { ws = mkdtempSync(join(tmpdir(), "kclaw-bash-")) })
 afterEach(() => { rmSync(ws, { recursive: true, force: true }) })
 
-const run = async (tool: ReturnType<typeof createBashTool>, command: string, onOutput?: (d: string) => void) =>
-  tool.execute({ command }, { onOutput: onOutput ?? (() => {}) })
+const run = async (
+  tool: ReturnType<typeof createBashTool>,
+  command: string,
+  opts?: { onOutput?: (d: string) => void; run_in_background?: boolean; timeoutMs?: number },
+) =>
+  tool.execute(
+    {
+      command,
+      ...(opts?.run_in_background !== undefined ? { run_in_background: opts.run_in_background } : {}),
+      ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+    },
+    { onOutput: opts?.onOutput ?? (() => {}) },
+  )
 
 describe("bash tool", () => {
   it("runs in workspace cwd and merges output", async () => {
@@ -24,7 +36,7 @@ describe("bash tool", () => {
   it("streams stdout chunks via onOutput", async () => {
     const tool = createBashTool({ workspace: ws })
     const chunks: string[] = []
-    const r = await run(tool, "echo hello", (d) => chunks.push(d))
+    const r = await run(tool, "echo hello", { onOutput: (d) => chunks.push(d) })
     expect(r.status).toBe("ok")
     expect(chunks.join("")).toContain("hello")
   })
@@ -63,7 +75,7 @@ describe("bash tool", () => {
   it("caps streaming output: an endless producer cannot grow memory or deltas", async () => {
     const tool = createBashTool({ workspace: ws, timeoutMs: 300, maxOutputBytes: 2048 })
     const deltas: string[] = []
-    const r = await run(tool, "while true; do echo 0123456789; done", (d) => deltas.push(d))
+    const r = await run(tool, "while true; do echo 0123456789; done", { onOutput: (d) => deltas.push(d) })
     expect(r.status).toBe("error") // timeout
     expect(r.output).toMatch(/dropped \d+ bytes/)
     expect(r.output.length).toBeLessThan(2048 + 200) // head + marker only
@@ -159,4 +171,57 @@ describe("bash tool with an injected sandbox", () => {
     expect(r.output).toContain("timed out")
     expect(r.output).toContain("started")
   }, 10_000)
+})
+
+describe("bash tool background mode", () => {
+  const mk = (spillDir?: string) => {
+    const notices: string[] = []
+    const reg = new ProcessRegistry({ noticesPath: spillDir === undefined ? undefined : join(ws, "notices.jsonl") })
+    reg.onNotice((n) => { notices.push(n.processId) })
+    const tool = createBashTool({ workspace: ws, processes: reg, sessionId: "ses_bg", spillDir })
+    return { tool, reg, notices }
+  }
+
+  it("run_in_background returns immediately with a process id and streams output to the spill file", async () => {
+    const spillDir = join(ws, "spill")
+    const { tool, reg, notices } = mk(spillDir)
+    const r = await run(tool, "echo bg-hello && sleep 5", { run_in_background: true })
+    expect(r.status).toBe("ok")
+    expect(r.output).toContain("proc_")
+    expect(r.output).toContain("不要轮询")
+    const processId = (r.data as { processId: string }).processId
+    expect(processId).toMatch(/^proc_/)
+    // output lands in the spill file (cursor for process_output)
+    await new Promise((r2) => setTimeout(r2, 300))
+    const entry = reg.get(processId, "ses_bg")!
+    expect(readFileSync(entry.spillPath, "utf8")).toContain("bg-hello")
+    expect(entry.status).toBe("running")
+    // kill via the registry → exit event → killed notice
+    reg.kill(processId, "ses_bg")
+    await vi.waitFor(() => expect(notices).toContain(processId))
+    expect(reg.get(processId, "ses_bg")!.status).toBe("killed")
+  }, 15_000)
+
+  it("a fast background command settles and delivers its notice", async () => {
+    const { tool, reg, notices } = mk(undefined)
+    const r = await run(tool, "echo quick", { run_in_background: true })
+    expect(r.status).toBe("ok")
+    const processId = (r.data as { processId: string }).processId
+    await vi.waitFor(() => expect(notices).toContain(processId), { timeout: 5_000 })
+    expect(reg.get(processId, "ses_bg")!.exitCode).toBe(0)
+  }, 10_000)
+
+  it("timeoutMs is honored per call (clamped) without changing the default", async () => {
+    const tool = createBashTool({ workspace: ws, timeoutMs: 30_000 })
+    const r = await run(tool, "sleep 5", { timeoutMs: 300 })
+    expect(r.status).toBe("error")
+    expect(r.output).toContain("timed out after 1000ms")
+  }, 10_000)
+
+  it("without a registry, background calls report an assembly error", async () => {
+    const tool = createBashTool({ workspace: ws })
+    const r = await run(tool, "echo x", { run_in_background: true })
+    expect(r.status).toBe("error")
+    expect(r.output).toContain("未装配进程注册表")
+  })
 })

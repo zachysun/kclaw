@@ -29,7 +29,7 @@ export interface RunInput {
   history: Message[]          // 不含本次用户消息
   system: string
   userText: string
-  trigger?: "user" | "cron" | "agent" | "team"   // agent = subagent run（模型经 subagent_run 派出，见 subagents.md）；team = 团队收信箱投递的 run（见 agent-team.md）
+  trigger?: "user" | "cron" | "process" | "agent" | "team" | "goal"   // agent = subagent run（模型经 subagent_run 派出，见 subagents.md）；team = 团队收信箱投递的 run（见 agent-team.md）；process = 后台进程完成通知（bash run_in_background）；goal = 目标循环续跑
   userMessage?: Message       // 宿主预制时循环原样使用且不再经 onMessage 持久化
   compaction?: ActiveSummary  // 运行起点的压缩视图（来自会话 meta）：生效时 upto（含）之前的原文不再发给模型，压缩摘要项由 toProviderMessages 垫在 messages[0]
 }

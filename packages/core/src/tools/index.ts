@@ -15,6 +15,8 @@ import { createAskUserQuestionsTool, ASK_USER_QUESTIONS_DESCRIPTION, type Questi
 import type { ConfirmationBroker } from "../permissions/broker.js"
 import { createBashTool } from "./bash.js"
 import type { BashSandboxSpawn } from "../sandbox/provider.js"
+import type { ProcessRegistry } from "../process/registry.js"
+import { createProcessTools } from "./process.js"
 import { createFsTools } from "./fs.js"
 import { createSearchTools } from "./search.js"
 import { createMemoryTools } from "./memory.js"
@@ -28,6 +30,9 @@ import { createWebTools } from "./web.js"
 
 export { createAskUserQuestionsTool, ASK_USER_QUESTIONS_DESCRIPTION, type QuestionEventEmitter } from "./ask.js"
 export { createBashTool, truncateMiddle } from "./bash.js"
+export { createProcessTools } from "./process.js"
+export { ProcessRegistry } from "../process/registry.js"
+export type { ProcessEntry, PendingNotice } from "../process/registry.js"
 export { createFsTools } from "./fs.js"
 export { createSearchTools } from "./search.js"
 export { createMemoryTools } from "./memory.js"
@@ -111,6 +116,13 @@ export function createBuiltinTools(opts: {
    */
   childRun?: boolean
   fetchImpl?: typeof fetch
+  /**
+   * Background-process registry (daemon wires it; bare engine tests omit it).
+   * When present: `bash` gains run_in_background (spawning detached with
+   * spill-file output, registered here) and the process_* trio joins the
+   * registry surface, scoped to this run's session.
+   */
+  processes?: ProcessRegistry
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] } {
   const bash = createBashTool({
     workspace: opts.workspace,
@@ -123,9 +135,14 @@ export function createBuiltinTools(opts: {
     ...(opts.sessionId === undefined
       ? {}
       : { env: { KCLAW_SESSION_ID: opts.sessionId, KCLAW_WORKSPACE: opts.workspace } }),
+    ...(opts.processes === undefined ? {} : { processes: opts.processes, sessionId: opts.sessionId }),
   })
   const fs = createFsTools({ workspace: opts.workspace })
   const search = createSearchTools({ workspace: opts.workspace, spillDir: opts.bash?.spillDir })
+  const processTools =
+    opts.processes !== undefined && opts.sessionId !== undefined
+      ? createProcessTools({ registry: opts.processes, sessionId: opts.sessionId })
+      : undefined
   const web = createWebTools({
     tavilyApiKey: opts.tavilyApiKey,
     fetchImpl: opts.fetchImpl,
@@ -298,6 +315,47 @@ export function createBuiltinTools(opts: {
       tool: skill.skill_list,
       def: def("skill_list", SKILL_LIST_DESCRIPTION, { query: str("可选：按名字与描述子串过滤（大小写不敏感）；不传则列出全部模型可见技能") }, []),
     },
+    // process 三件仅在组装传入后台进程注册表时存在（daemon 恒有；裸引擎测试
+    // 没有）。归属按会话隔离：registry 只暴露本 sessionId 的条目。
+    ...(processTools === undefined
+      ? []
+      : [
+          {
+            name: "process_list",
+            tool: processTools.process_list,
+            def: def(
+              "process_list",
+              "List this session's background processes (id, command, status, exit code, output file). Completion is announced automatically; use process_output to read output incrementally.",
+              {},
+              [],
+            ),
+          },
+          {
+            name: "process_output",
+            tool: processTools.process_output,
+            def: def(
+              "process_output",
+              "Read a background process's output since a byte offset (incremental cursor; the completion notice arrives automatically — do not poll). Optional wait blocks for new output or exit, bounded by timeoutMs (default 30s, max 600s).",
+              {
+                processId: str("Background process id (from the run_in_background result or the completion notice)"),
+                offset: int(0, Number.MAX_SAFE_INTEGER),
+                wait: { type: "boolean", description: "True = block until new output or termination (bounded by timeoutMs)" },
+                timeoutMs: int(1_000, 600_000),
+              },
+              ["processId"],
+            ),
+          },
+          {
+            name: "process_kill",
+            tool: processTools.process_kill,
+            def: def(
+              "process_kill",
+              "Terminate a background process (SIGKILL to its whole process group). Killing an already-finished process is not an error.",
+              { processId: str("Background process id") },
+              ["processId"],
+            ),
+          },
+        ]),
     // skill_create 仅在组装传入 skillCreate 时存在（提案制功能面；功能关闭的
     // 安装里模型根本看不到这个工具）。
     ...(skill.skill_create === undefined

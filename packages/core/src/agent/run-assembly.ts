@@ -215,6 +215,12 @@ export interface RunEngineDeps {
    */
   subagents?: { spawner: SubagentSpawner; collector?: SubagentCollector }
   /**
+   * Background-process registry (daemon-owned). When set, the bash tool
+   * gains run_in_background and the process_* trio joins the surface,
+   * scoped to the run's session. Bare engine tests omit it.
+   */
+  processes?: import("../process/registry.js").ProcessRegistry
+  /**
    * Agent team: the server-side team facade. When set,
    * every run probes it once for the session's team identity — lead gets the
    * lead protocol plus the full team tool surface, a member runs the member

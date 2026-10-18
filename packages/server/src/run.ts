@@ -250,7 +250,7 @@ export class RunManager {
     // 默认；cron/agent/goal 触发固定 wait（无人值守的排队行为必须可预测；
     // agent 子 run 由派发器独占驱动；goal 自续轮由调用方排队驱动，用户中
     // 途输入 steer 注入当前 run 的语义不变）。
-    const disposition = input.trigger === "cron" || input.trigger === "agent" || input.trigger === "goal"
+    const disposition = input.trigger === "cron" || input.trigger === "process" || input.trigger === "agent" || input.trigger === "goal"
       ? "wait"
       : resolveSendDisposition({
           explicit: input.disposition,

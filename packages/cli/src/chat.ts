@@ -451,6 +451,11 @@ export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean
     case "cron.started":
     case "cron.completed":
     case "cron.failed":
+    // process.*: 后台进程生命周期广播；完成通知以排队的 run 到达属主会话，
+    // 裸广播在聊天视图不渲染。
+    case "process.started":
+    case "process.completed":
+    case "process.failed":
     case "session.renamed":
     // Block-open events: nothing live — the completed lines below carry the
     // full blocks (deltas stream between them; tool_result.delta's chunks are

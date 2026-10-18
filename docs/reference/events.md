@@ -1,4 +1,4 @@
-# events — 总线事件清单（40 种）
+# events — 总线事件清单（43 种）
 
 > 权威来源：`packages/core/src/protocol/events.ts`（payload 接口同文件）。投递与订阅机制见 [realtime](../server/realtime.md)，设计取舍见 [protocol](../core/protocol.md)。
 
@@ -13,6 +13,7 @@ export type EventType =
   | "message.created" | "message.completed"
   | "message.truncated"
   | "cron.started" | "cron.completed" | "cron.failed"
+  | "process.started" | "process.completed" | "process.failed"
   | "session.appended"
   // 会话元数据
   | "session.renamed"
@@ -55,7 +56,7 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 
 | 分组 | 事件 | 数量 |
 |------|------|------|
-| 生命周期 | run.started / run.completed / run.failed；message.created / message.completed / message.truncated；cron.started / cron.completed / cron.failed；session.appended | 10 |
+| 生命周期 | run.started / run.completed / run.failed；message.created / message.completed / message.truncated；cron.started / cron.completed / cron.failed；process.started / process.completed / process.failed；session.appended | 13 |
 | 会话元数据 | session.renamed | 1 |
 | 流式 | text、thinking、tool_call 各 created/delta/completed；tool_result 的 created/delta/completed；attachment.created / attachment.completed | 14 |
 | 模型调用 | llm.started / llm.completed / llm.failed | 3 |
@@ -79,6 +80,9 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 | `cron.started` | `cronId` |
 | `cron.completed` | `cronId`、`summary` |
 | `cron.failed` | `cronId`、`error { code, message }` |
+| `process.started` | `processId`、`sessionId`、`command` |
+| `process.completed` | `processId`、`sessionId`、`exitCode` |
+| `process.failed` | `processId`、`sessionId`、`error` |
 | `session.appended` | `eventType`（刚写入 events.jsonl 的会话事件类型；先写入后广播） |
 | `session.renamed` | `title`、`source?`（auto=自动命名；不传视为 manual=用户或路由改名） |
 | `text.created` / `text.completed` | `messageId`、`block`（BlockPayload） |
@@ -119,6 +123,7 @@ QuestionSpec：`{ text, options?, multiSelect? }` —— options 存在时从选
 | memory.written | core 的 MemoryPipeline（`memory/pipeline.ts`，经组装的 emit hook） |
 | hook.failed | core hook 系统（`hooks/runner.ts` 执行失败 + `hooks/registry.ts` 装载失败） |
 | cron.* | server 的 `scheduler-tick.ts` |
+| process.* | core 的 ProcessRegistry（`process/registry.ts`，进程结算时） |
 | session.renamed | 内置 hook `autoname`（经 `session/autoname.ts`） |
 | session.appended | core 的 SessionStore（`session/store.ts`，每个事件写入成功后） |
 | attachment.* | 已定义、当前无发射方 |
