@@ -86,7 +86,7 @@ function collectTurn(callId: string, childSessionId: string): LlmStreamEvent[] {
 
 function execTurn(callId: string, command: string): LlmStreamEvent[] {
   return [
-    { type: "tool_call_started", index: 0, callId, name: "exec" },
+    { type: "tool_call_started", index: 0, callId, name: "bash" },
     { type: "tool_call_delta", index: 0, delta: JSON.stringify({ command }) },
     { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 1, outputTokens: 2 } },
   ]
@@ -244,7 +244,7 @@ describe("subagent dispatch (integration)", () => {
     expect(childReq.system).toContain("subagent")
     expect(childReq.tools.map((t) => t.name)).not.toContain("memory_save")
     expect(childReq.tools.map((t) => t.name)).not.toContain("subagent_run")
-    expect(childReq.tools.map((t) => t.name)).toContain("exec")
+    expect(childReq.tools.map((t) => t.name)).toContain("bash")
     // The parent's follow-up request (2) still has subagent_run available.
     expect(requests[2]!.tools.map((t) => t.name)).toContain("subagent_run")
 
@@ -287,10 +287,10 @@ describe("subagent dispatch (integration)", () => {
     // role 拼进了子会话系统提示词的独立小节
     expect(childReq.system).toContain("# 角色补充")
     expect(childReq.system).toContain("只读侦探")
-    // wire 面裁剪：只留白名单内工具，exec/fs_write 等全部消失
+    // wire 面裁剪：只留白名单内工具，bash/fs_write 等全部消失
     const childToolNames = childReq.tools.map((t) => t.name)
     expect(childToolNames).toEqual(expect.arrayContaining(["fs_read", "fs_list"]))
-    expect(childToolNames).not.toContain("exec")
+    expect(childToolNames).not.toContain("bash")
     expect(childToolNames).not.toContain("fs_write")
     expect(childToolNames).not.toContain("subagent_run")
   })
@@ -326,7 +326,7 @@ describe("subagent dispatch (integration)", () => {
     expect(card).toBeDefined()
     expect(card!.sessionId).toBe(parent.id)
     expect((card!.payload as { noteText?: string }).noteText).toContain("来自subagent runner")
-    expect((card!.payload as { toolCall: { name: string } }).toolCall.name).toBe("exec")
+    expect((card!.payload as { toolCall: { name: string } }).toolCall.name).toBe("bash")
 
     // A human verdict through the shared broker settles the child's gate.
     expect(manager.broker.resolve(
@@ -334,7 +334,7 @@ describe("subagent dispatch (integration)", () => {
 
     const outcome = await runDone
     expect(outcome.stopReason).toBe("end_turn")
-    // The child's exec was granted by the human verdict.
+    // The child's bash was granted by the human verdict.
     const children = sessions.listByParent(parent.id)
     const childToolMsg = sessions.readMessages(children[0]!.id).find((m) => m.role === "tool")!
     expect(childToolMsg.grantedBy).toMatchObject({ call_c: "confirmed" })
@@ -867,7 +867,7 @@ describe("background completion delivery", () => {
 
 describe("subagent background card forwarding", () => {
   it("forwards a background child's confirmation card to the parent channel and completes after the verdict", async () => {
-    // Default config: allow list empty → the child's exec call needs a
+    // Default config: allow list empty → the child's bash call needs a
     // confirmation. In background mode the card must STILL reach the parent
     // channel (status lines are muted; cards are not).
     const parentScript = [
@@ -901,7 +901,7 @@ describe("subagent background card forwarding", () => {
     expect(card).toBeDefined()
     expect(card!.sessionId).toBe(parent.id)
     expect((card!.payload as { noteText?: string }).noteText).toContain("来自subagent bg-runner")
-    expect((card!.payload as { toolCall: { name: string } }).toolCall.name).toBe("exec")
+    expect((card!.payload as { toolCall: { name: string } }).toolCall.name).toBe("bash")
 
     // Approving lets the background child finish; the completion delivery follows.
     expect(manager.broker.resolve((card!.payload as { confirmationId: string }).confirmationId, "once", "web")).toBe(true)

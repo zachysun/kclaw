@@ -9,7 +9,7 @@
 - **事件与命令一条连接、两种帧**：客户端发的命令帧（subscribe/send_message/…）有 ack 无 `payload`；服务端推的事件帧有 `id/ts/type/payload`。客户端以 `"payload" in frame` 区分两类帧，无需状态机。
 - **公共字段零变形**：`AgentEvent` 对象从 agent 循环的 `onEvent` 一路 `JSON.stringify` 到线上，daemon 不翻译、不改写、不新增事件——协议只有一份定义（`packages/core/src/protocol/events.ts`）。
 - **鉴权在连接内，不在升级请求上**：浏览器场景常无法附带自定义 header，认证放首帧 `{type:"auth", token}`（或 `?token=` 查询参数），失败时以关闭码 4001 关闭连接。HTTP 层的 Bearer hook 因此豁免 `/ws` 路由本身。
-- **订阅制而非广播制**：带 `sessionId` 的事件只发给订阅了该会话的连接（客户端打开多个标签页时，各标签页订阅各自的会话，互不串流）；无 `sessionId` 的事件（`job.*`、`memory.written`）广播给全体已认证连接——任何客户端都应看到调度与记忆写入活动。
+- **订阅制而非广播制**：带 `sessionId` 的事件只发给订阅了该会话的连接（客户端打开多个标签页时，各标签页订阅各自的会话，互不串流）；无 `sessionId` 的事件（`cron.*`、`memory.written`）广播给全体已认证连接——任何客户端都应看到调度与记忆写入活动。
 - **单连接天然有序，事件不带序号**：一条 WS 连接内帧顺序即发送顺序，客户端无需核对序号。跨连接/断线不保证——用"拉取全量消息 + 只订阅新事件"恢复，不做实时事件回放（有意简化：实时增量事件不持久化，会话历史以 events.jsonl 事件流为唯一权威数据，见 [storage](../core/storage.md)）。
 - **投递异常不回传发射方**：单个 socket 的 `send` 抛错（连接刚断开）被 try/catch 捕获忽略，不阻断其他订阅者，也不把异常传回正在执行 run 的代码。
 
@@ -61,7 +61,7 @@
 { id: string           // evt_<ULID>
 , ts: string           // ISO-8601
 , type: EventType
-, sessionId?: string   // 缺失 == 广播（job.*）
+, sessionId?: string   // 缺失 == 广播（cron.*）
 , runId?: string
 , payload: …           // 按 type 不同，见 core/protocol.md
 }
@@ -72,16 +72,16 @@
 | 分组 | 事件 | 投递 |
 |------|------|------|
 | 会话事件（带 sessionId，发订阅者） | `run.started` `run.completed` `run.failed`；`message.created` `message.completed` `message.truncated`（编辑重试/重新生成的截断广播，payload `{fromMessageId}`）；`text/thinking/tool_call/tool_result` 的 `created/delta/completed`（12 个）；`attachment.created` `attachment.completed`；`llm.started` `llm.completed` `llm.failed`；`confirmation.requested` `confirmation.resolved`；`question.requested` `question.resolved`（`ask_user_questions` 工具的等待生命周期）；`note.emitted`；`message.queued` `message.steered` `message.queue_cancelled`（见上文"消息排队与引导"）；`compaction.started` `compaction.completed`（payload 见 [protocol](../core/protocol.md)：started 带 phase，completed 带 phase/result——`started` 一旦发出 `completed` 必达，成功/失败/取消分别报 `ok`/`failed`/`cancelled`，让客户端可靠地清除"正在压缩"状态）；`session.renamed`；`session.appended`（持久化通知，payload 附带该次写入事件的 `eventType`）；`hook.failed`（执行期失败带所在 run 的上下文） | `EventBus.emit` 查 `sessions.get(sessionId)`，发给该集合内的 socket |
-| 广播事件（无 sessionId，发全体连接） | `job.started` `job.completed` `job.failed`；`memory.written`（记忆写入，项目级事务不带 sessionId——见下）；`hook.failed`（装载期失败，无会话上下文） | `EventBus.emit` 遍历全部已 connect 的 socket |
+| 广播事件（无 sessionId，发全体连接） | `cron.started` `cron.completed` `cron.failed`；`memory.written`（记忆写入，项目级事务不带 sessionId——见下）；`hook.failed`（装载期失败，无会话上下文） | `EventBus.emit` 遍历全部已 connect 的 socket |
 
-发射方分布：26 种会话事件由 agent 循环产生、经引擎（core `executeRun`）的 `onEvent` hook 发送到总线（含 `run.failed {code:"steering_failed"}` 等循环内合成的终态，steering 注入时逐条发出的 `message.steered`，以及 `ask_user_questions` 工具执行器经组装注入的 emit hook 发出的 `question.requested`/`question.resolved`；执行器运行在循环的工具回合内）。不经 agent 循环的会话事件由服务端流程直接发送：`message.queued`/`message.queue_cancelled` 与条目级失败的 `run.failed {code:"queue_entry_failed"}` 由 `RunManager`（submit / queueCancel / recoverQueues / 驱动器）发出；`message.truncated` 同样由 `RunManager.retry` 在写完截断标记后发出（编辑重试/重新生成，见 [run-manager](./run-manager.md)）；`compaction.started`/`completed` 由 core 压缩引擎 `Compactor`（收尾/中途/超限三路共用的 `auto`，见 [run-manager](./run-manager.md)）发出；`session.renamed` 不经过 agent 循环：run 入队用户消息后，引擎会异步调度 `scheduleAutoname`（core `session/autoname.ts`）生成会话标题，新标题成功写回 meta 后才经注入的 emit hook（`busEmit`）发出这个事件；生成失败则静默放弃（流程细节见 [run-manager](./run-manager.md)）。`session.appended` 由 `SessionStore` 在**每个事件（含投影）成功写入 events.jsonl 之后**经 daemon 组装的回调发出（先写入磁盘后广播，对经常规追加路径写入的持久化事件生效；唯一例外是 fork 复制的历史段——经 `writeEventsRaw` 直写、不发通知帧，新会话的增量直播从 `session.forked` 这条写入开始；web 审计页收到它即按 `?since=` 游标增量拉取。这是唯一一条由存储层而非业务流程发出的事件）。3 种 `job.*` 由 `scheduler-tick.ts` 的 `makeEvent(...)` **不带 ctx** 调用产生（`makeEvent` 只在传了 `ctx.sessionId` 时才写字段）。`memory.written` 由 core 的 `MemoryPipeline` 在每次写入时发出，经 daemon 组装的 emit hook（`daemon.ts`）广播，不带 sessionId（项目级事务），订阅端只当"已写入"的轻提示。`hook.failed` 由 core hook 系统发出、两处形态：装载期失败（`hooks/registry.ts`，不带会话上下文、广播）与执行期失败（`hooks/runner.ts`，带所在 run 的上下文、作会话事件）。7 种 `team.*` 不直接上总线：由团队宿主（server `team.ts`）经 `SessionStore.appendTeamAudit` 尽力而为地写入**组长**会话的事件流，订阅端经 `session.appended` 感知（见 [agent-team](../core/agent-team.md)）。`attachment.*` 已定义但当前无发射方。
+发射方分布：26 种会话事件由 agent 循环产生、经引擎（core `executeRun`）的 `onEvent` hook 发送到总线（含 `run.failed {code:"steering_failed"}` 等循环内合成的终态，steering 注入时逐条发出的 `message.steered`，以及 `ask_user_questions` 工具执行器经组装注入的 emit hook 发出的 `question.requested`/`question.resolved`；执行器运行在循环的工具回合内）。不经 agent 循环的会话事件由服务端流程直接发送：`message.queued`/`message.queue_cancelled` 与条目级失败的 `run.failed {code:"queue_entry_failed"}` 由 `RunManager`（submit / queueCancel / recoverQueues / 驱动器）发出；`message.truncated` 同样由 `RunManager.retry` 在写完截断标记后发出（编辑重试/重新生成，见 [run-manager](./run-manager.md)）；`compaction.started`/`completed` 由 core 压缩引擎 `Compactor`（收尾/中途/超限三路共用的 `auto`，见 [run-manager](./run-manager.md)）发出；`session.renamed` 不经过 agent 循环：run 入队用户消息后，引擎会异步调度 `scheduleAutoname`（core `session/autoname.ts`）生成会话标题，新标题成功写回 meta 后才经注入的 emit hook（`busEmit`）发出这个事件；生成失败则静默放弃（流程细节见 [run-manager](./run-manager.md)）。`session.appended` 由 `SessionStore` 在**每个事件（含投影）成功写入 events.jsonl 之后**经 daemon 组装的回调发出（先写入磁盘后广播，对经常规追加路径写入的持久化事件生效；唯一例外是 fork 复制的历史段——经 `writeEventsRaw` 直写、不发通知帧，新会话的增量直播从 `session.forked` 这条写入开始；web 审计页收到它即按 `?since=` 游标增量拉取。这是唯一一条由存储层而非业务流程发出的事件）。3 种 `cron.*` 由 `scheduler-tick.ts` 的 `makeEvent(...)` **不带 ctx** 调用产生（`makeEvent` 只在传了 `ctx.sessionId` 时才写字段）。`memory.written` 由 core 的 `MemoryPipeline` 在每次写入时发出，经 daemon 组装的 emit hook（`daemon.ts`）广播，不带 sessionId（项目级事务），订阅端只当"已写入"的轻提示。`hook.failed` 由 core hook 系统发出、两处形态：装载期失败（`hooks/registry.ts`，不带会话上下文、广播）与执行期失败（`hooks/runner.ts`，带所在 run 的上下文、作会话事件）。7 种 `team.*` 不直接上总线：由团队宿主（server `team.ts`）经 `SessionStore.appendTeamAudit` 尽力而为地写入**组长**会话的事件流，订阅端经 `session.appended` 感知（见 [agent-team](../core/agent-team.md)）。`attachment.*` 已定义但当前无发射方。
 
 ## 订阅模型（EventBus）
 
 ```ts
 // @kclaw/core — packages/core/src/bus.ts（进程内事件分发器，server 经 @kclaw/core 引用）
 export class EventBus {
-  connect(socket: BusSocket): void            // 注册已认证连接：开始接收广播（job.*）
+  connect(socket: BusSocket): void            // 注册已认证连接：开始接收广播（cron.*）
   subscribe(sessionId: string, socket: BusSocket): void   // 该 socket 订阅此会话；重复订阅幂等（重复执行结果不变）
   unsubscribe(socket: BusSocket): void        // 断开：清掉该 socket 的全部订阅状态
   unsubscribe(sessionId: string, socket: BusSocket): void // 只退订单个会话
@@ -104,7 +104,7 @@ export class EventBus {
   │                                          认证通过 → authenticated = true + bus.connect
   │── {"type":"subscribe","sessionId"} ───▶ bus.subscribe
   │◀── {"type":"subscribed","sessionId"} ── ack
-  │◀── 事件帧（仅该 sessionId 的 + 广播的 job.*）
+  │◀── 事件帧（仅该 sessionId 的 + 广播的 cron.*）
   │── send_message / message.retry / run.cancel / queue.cancel / confirmation.resolve / question.resolve / unsubscribe …
   │◀── 对应 ack / error 帧
   │── close ────────────────────────────▶ socket.on("close") → bus.unsubscribe(socket)
@@ -133,7 +133,7 @@ export class EventBus {
 
 - **认证超时**：连接后 `authTimeoutMs`（默认 10s）内未认证即以 4002 关闭，未认证连接不再无限期挂着。
 - **错过的 confirmation.requested 不可恢复**：确认等待有时限（120s 默认），断线期间超时的确认按拒绝处理；重连拉取全量只能看到结果（note 块），不能补答。
-- **广播事件可能漏**：只 `connect` 未 `subscribe` 的连接收得到 `job.*`，但连接尚在认证前时收不到任何事件。
+- **广播事件可能漏**：只 `connect` 未 `subscribe` 的连接收得到 `cron.*`，但连接尚在认证前时收不到任何事件。
 - **同 token 多连接无互斥**：两个连接订阅同一会话各自收到全部分片事件；`send_message` 会各自入队（会话内仍串行，见 [run-manager](./run-manager.md)）。
 - **帧大小无限制**：不校验单帧长度，依赖 ws 库默认行为。
 

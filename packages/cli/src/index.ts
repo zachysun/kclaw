@@ -5,7 +5,7 @@
  * `bin` target is directly executable — no post-build step.
  *
  * Commands: `daemon start|stop|status` (lifecycle via daemon-ctl; `status`
- * is also aliased at the top level), `jobs list` (auto-connecting client →
+ * is also aliased at the top level), `cron list` (auto-connecting client →
  * padded-text table, no table dep), and the interactive `chat` REPL — which
  * is also the DEFAULT: bare `kclaw` (optionally `--session <id>`, `--think`,
  * hidden `--yes`/`--no` for tests & scripting) drops straight into a chat
@@ -20,7 +20,7 @@
 import { readFileSync, realpathSync } from "node:fs"
 import { pathToFileURL } from "node:url"
 import { Command, Option } from "commander"
-import type { Job } from "@kclaw/core"
+import type { Cron } from "@kclaw/core"
 import { mcpGroupLabel } from "@kclaw/core/commands"
 import type { McpSnapshotResponse } from "@kclaw/core/protocol"
 import { KclawClient } from "./client.js"
@@ -61,19 +61,19 @@ function run(action: (home: string, options: Record<string, unknown>) => Promise
   }
 }
 
-/** A job row's printable columns (the header doubles as the empty-state output). */
-function jobRow(job: Job): Record<"name" | "cron" | "enabled" | "nextRunAt" | "lastStatus", string> {
+/** A cron row's printable columns (the header doubles as the empty-state output). */
+function jobRow(cron: Cron): Record<"name" | "cron" | "enabled" | "nextRunAt" | "lastStatus", string> {
   return {
-    name: job.name,
-    cron: job.cron,
-    enabled: String(job.enabled),
-    nextRunAt: job.nextRunAt,
-    lastStatus: job.lastStatus ?? "-",
+    name: cron.name,
+    cron: cron.cron,
+    enabled: String(cron.enabled),
+    nextRunAt: cron.nextRunAt,
+    lastStatus: cron.lastStatus ?? "-",
   }
 }
 
 /** Plain string-padded table: header + rows, columns aligned, two-space gutters. */
-function renderJobsTable(jobs: Job[]): string {
+function renderCronTable(crons: Cron[]): string {
   const header: Record<"name" | "cron" | "enabled" | "nextRunAt" | "lastStatus", string> = {
     name: "name",
     cron: "cron",
@@ -82,7 +82,7 @@ function renderJobsTable(jobs: Job[]): string {
     lastStatus: "lastStatus",
   }
   const keys = Object.keys(header) as Array<keyof typeof header>
-  const rows = jobs.map(jobRow)
+  const rows = crons.map(jobRow)
   const widths = keys.map((key) =>
     Math.max(header[key].length, ...rows.map((row) => row[key].length)),
   )
@@ -125,11 +125,11 @@ async function statusAction(home: string): Promise<void> {
   }
 }
 
-async function jobsListAction(home: string): Promise<void> {
+async function cronListAction(home: string): Promise<void> {
   const client = await KclawClient.connect(home)
-  const list: unknown = await client.request("GET", "/jobs")
-  const jobs = Array.isArray(list) ? (list as Job[]) : []
-  process.stdout.write(`${renderJobsTable(jobs)}\n`)
+  const list: unknown = await client.request("GET", "/cron")
+  const crons = Array.isArray(list) ? (list as Cron[]) : []
+  process.stdout.write(`${renderCronTable(crons)}\n`)
 }
 
 /** `kclaw mcp [list]`: grouped lines per configured MCP server (group header, then name/state/tool count). */
@@ -214,11 +214,11 @@ program
   .action(run(webAction))
 
 program
-  .command("jobs")
+  .command("cron")
   .description("定时任务")
   .command("list")
   .description("列出任务（daemon 没在运行会自动拉起）")
-  .action(run(jobsListAction))
+  .action(run(cronListAction))
 
 // Only parse argv when this module is the executed entry (direct
 // `node dist/index.js` or via a bin symlink — realpathSync resolves the

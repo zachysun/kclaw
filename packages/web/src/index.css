@@ -6,7 +6,7 @@
    base.css   — tokens/keyboard/scrollbars/reduced-motion
    shell.css  — shared buttons/inputs, topbar, sidebar, toast, picker
    chat.css   — conversation surface (log, markdown, cards, composer, team)
-   views.css  — jobs/audit/usage/trash/memory, PWA, responsive
+   views.css  — cron/audit/usage/trash/memory, PWA, responsive
    admin.css  — skills/permissions/MCP/Model management tabs
    ============================================================ */
 @import "./styles/base.css";

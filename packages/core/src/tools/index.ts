@@ -13,8 +13,8 @@ import type { SkillRecord } from "../skills/index.js"
 import type { ToolDefinition } from "../provider/types.js"
 import { createAskUserQuestionsTool, ASK_USER_QUESTIONS_DESCRIPTION, type QuestionEventEmitter } from "./ask.js"
 import type { ConfirmationBroker } from "../permissions/broker.js"
-import { createExecTool } from "./exec.js"
-import type { ExecSandboxSpawn } from "../sandbox/provider.js"
+import { createBashTool } from "./bash.js"
+import type { BashSandboxSpawn } from "../sandbox/provider.js"
 import { createFsTools } from "./fs.js"
 import { createMemoryTools } from "./memory.js"
 import { createSessionTools, type SessionSearchFn } from "./session.js"
@@ -26,7 +26,7 @@ import { createTeamToolEntries } from "./team.js"
 import { createWebTools } from "./web.js"
 
 export { createAskUserQuestionsTool, ASK_USER_QUESTIONS_DESCRIPTION, type QuestionEventEmitter } from "./ask.js"
-export { createExecTool, truncateMiddle } from "./exec.js"
+export { createBashTool, truncateMiddle } from "./bash.js"
 export { createFsTools } from "./fs.js"
 export { createMemoryTools } from "./memory.js"
 export { createSessionTools, type SessionSearchFn } from "./session.js"
@@ -57,10 +57,10 @@ export function createBuiltinTools(opts: {
   workspace: string
   memoryCtx: { system: Pick<MemoryTriggers, "triggerImmediate"> & Pick<MemoryQuery, "searchAll">; sessionId: string; workdir: string; immediateEnabled: boolean }
   tavilyApiKey: string
-  exec?: Partial<{ timeoutMs: number; maxOutputBytes: number; sandbox: ExecSandboxSpawn; spillDir: string }>
+  bash?: Partial<{ timeoutMs: number; maxOutputBytes: number; sandbox: BashSandboxSpawn; spillDir: string }>
   /**
-   * Session identity injected into the exec child environment
-   * (KCLAW_SESSION_ID / KCLAW_WORKSPACE). Absent = exec inherits the daemon
+   * Session identity injected into the bash child environment
+   * (KCLAW_SESSION_ID / KCLAW_WORKSPACE). Absent = bash inherits the daemon
    * environment unchanged.
    */
   sessionId?: string
@@ -96,7 +96,7 @@ export function createBuiltinTools(opts: {
   /**
    * Agent team surface: when set, the team tools join the registry wired to
    * this facade and identity. The assembly resolves the identity (lead or
-   * named member) from the team host before constructing; a job session —
+   * named member) from the team host before constructing; a cron session —
    * or any session outside a team — simply leaves this absent. Member
    * identities never carry create_team / spawn_teammate (enforced inside
    * createTeamToolEntries).
@@ -110,14 +110,14 @@ export function createBuiltinTools(opts: {
   childRun?: boolean
   fetchImpl?: typeof fetch
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] } {
-  const exec = createExecTool({
+  const bash = createBashTool({
     workspace: opts.workspace,
-    timeoutMs: opts.exec?.timeoutMs,
-    maxOutputBytes: opts.exec?.maxOutputBytes,
+    timeoutMs: opts.bash?.timeoutMs,
+    maxOutputBytes: opts.bash?.maxOutputBytes,
     // The run assembly passes the sandbox wrapper here only when it is
     // actually available — single source with the gate's sandboxedTools set.
-    sandbox: opts.exec?.sandbox,
-    spillDir: opts.exec?.spillDir,
+    sandbox: opts.bash?.sandbox,
+    spillDir: opts.bash?.spillDir,
     ...(opts.sessionId === undefined
       ? {}
       : { env: { KCLAW_SESSION_ID: opts.sessionId, KCLAW_WORKSPACE: opts.workspace } }),
@@ -137,10 +137,10 @@ export function createBuiltinTools(opts: {
 
   const entries: Array<{ name: string; tool: ToolExecutor; def: ToolDefinition }> = [
     {
-      name: "exec",
-      tool: exec,
+      name: "bash",
+      tool: bash,
       def: def(
-        "exec",
+        "bash",
         "Run a shell command in the workspace. stdout and stderr are merged; long output is truncated head+tail; non-zero exit or timeout returns an error with the partial output.",
         { command: str("Shell command to run; cwd is the workspace root") },
         ["command"],

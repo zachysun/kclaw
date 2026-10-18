@@ -1,7 +1,7 @@
 /**
- * JobsView — jobs CRUD surface (scheduled jobs). GET /jobs renders the table
+ * CronView — crons CRUD surface (scheduled crons). GET /cron renders the table
  * (name/cron/enabled/nextRunAt/lastStatus/lastRunAt); one form both creates
- * (POST /jobs, enabled checkbox defaults true) and edits (PATCH /jobs/:id);
+ * (POST /cron, enabled checkbox defaults true) and edits (PATCH /cron/:id);
  * a delete button with a native confirm, and a per-row enable/disable toggle
  * (PATCH {enabled}). Server validation errors (an invalid cron is a 400 with
  * `{error}`) surface as the ApiError message in the form error banner.
@@ -9,27 +9,27 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react"
 import { type ApiClient } from "../api.js"
 import { formatCompactStamp } from "../usage/format.js"
-import type { Job } from "../types.js"
+import type { Cron } from "../types.js"
 
-interface JobForm {
+interface CronForm {
   name: string
   cron: string
   prompt: string
   enabled: boolean
 }
 
-const EMPTY_FORM: JobForm = { name: "", cron: "", prompt: "", enabled: true }
+const EMPTY_FORM: CronForm = { name: "", cron: "", prompt: "", enabled: true }
 
-export function JobsView({ api }: { api: ApiClient }) {
-  const [jobs, setJobs] = useState<Job[] | null>(null)
-  const [form, setForm] = useState<JobForm>(EMPTY_FORM)
+export function CronView({ api }: { api: ApiClient }) {
+  const [crons, setCrons] = useState<Cron[] | null>(null)
+  const [form, setForm] = useState<CronForm>(EMPTY_FORM)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(async (): Promise<void> => {
     try {
-      setJobs(await api.get<Job[]>("/jobs"))
+      setCrons(await api.get<Cron[]>("/cron"))
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载任务失败")
     }
@@ -52,17 +52,17 @@ export function JobsView({ api }: { api: ApiClient }) {
     setBusy(true)
     try {
       if (editingId === null) {
-        const job = await api.post<Job>("/jobs", { name, cron, prompt })
-        setJobs((prev) => (prev === null ? [job] : [job, ...prev]))
+        const created = await api.post<Cron>("/cron", { name, cron, prompt })
+        setCrons((prev) => (prev === null ? [created] : [created, ...prev]))
         resetForm()
       } else {
-        const job = await api.patch<Job>(`/jobs/${editingId}`, {
+        const updated = await api.patch<Cron>(`/cron/${editingId}`, {
           name,
           cron,
           prompt,
           enabled: form.enabled,
         })
-        setJobs((prev) => (prev === null ? prev : prev.map((j) => (j.id === editingId ? job : j))))
+        setCrons((prev) => (prev === null ? prev : prev.map((j) => (j.id === editingId ? updated : j))))
         resetForm()
       }
     } catch (err) {
@@ -78,49 +78,49 @@ export function JobsView({ api }: { api: ApiClient }) {
     setEditingId(null)
   }
 
-  const startEdit = (job: Job): void => {
-    setEditingId(job.id)
-    setForm({ name: job.name, cron: job.cron, prompt: job.prompt, enabled: job.enabled })
+  const startEdit = (cron: Cron): void => {
+    setEditingId(cron.id)
+    setForm({ name: cron.name, cron: cron.cron, prompt: cron.prompt, enabled: cron.enabled })
     setError(null)
   }
 
-  const toggleEnabled = async (job: Job): Promise<void> => {
+  const toggleEnabled = async (cron: Cron): Promise<void> => {
     setError(null)
     try {
-      const updated = await api.patch<Job>(`/jobs/${job.id}`, { enabled: !job.enabled })
-      setJobs((prev) => (prev === null ? prev : prev.map((j) => (j.id === job.id ? updated : j))))
+      const updated = await api.patch<Cron>(`/cron/${cron.id}`, { enabled: !cron.enabled })
+      setCrons((prev) => (prev === null ? prev : prev.map((j) => (j.id === cron.id ? updated : j))))
     } catch (err) {
       setError(err instanceof Error ? err.message : "更新任务失败")
     }
   }
 
-  const remove = async (job: Job): Promise<void> => {
-    if (!window.confirm(`删除任务 "${job.name}"？`)) return
+  const remove = async (cron: Cron): Promise<void> => {
+    if (!window.confirm(`删除任务 "${cron.name}"？`)) return
     setError(null)
     try {
-      await api.del(`/jobs/${job.id}`)
-      setJobs((prev) => (prev === null ? prev : prev.filter((j) => j.id !== job.id)))
-      if (editingId === job.id) resetForm()
+      await api.del(`/cron/${cron.id}`)
+      setCrons((prev) => (prev === null ? prev : prev.filter((j) => j.id !== cron.id)))
+      if (editingId === cron.id) resetForm()
     } catch (err) {
       setError(err instanceof Error ? err.message : "删除任务失败")
     }
   }
 
   return (
-    <div className="jobs-view" data-testid="jobs-view">
+    <div className="cron-view" data-testid="cron-view">
       <h2 className="view-title">任务</h2>
       {error !== null && (
-        <div className="form-error" data-testid="job-error" role="alert">
+        <div className="form-error" data-testid="cron-error" role="alert">
           {error}
         </div>
       )}
-      <form className="job-form" data-testid="job-form" onSubmit={submit}>
+      <form className="cron-form" data-testid="cron-form" onSubmit={submit}>
         <h3 className="form-title">{editingId === null ? "新建任务" : "编辑任务"}</h3>
         <div className="form-grid">
           <label>
             任务名
             <input
-              data-testid="job-name"
+              data-testid="cron-name"
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
               placeholder="早报"
@@ -129,7 +129,7 @@ export function JobsView({ api }: { api: ApiClient }) {
           <label>
             cron 表达式
             <input
-              data-testid="job-cron"
+              data-testid="cron-cron"
               value={form.cron}
               onChange={(e) => setForm({ ...form, cron: e.target.value })}
               placeholder="0 9 * * *"
@@ -138,7 +138,7 @@ export function JobsView({ api }: { api: ApiClient }) {
           <label className="form-full">
             提示词
             <textarea
-              data-testid="job-prompt"
+              data-testid="cron-prompt"
               value={form.prompt}
               onChange={(e) => setForm({ ...form, prompt: e.target.value })}
               placeholder="给我今日早报"
@@ -147,32 +147,32 @@ export function JobsView({ api }: { api: ApiClient }) {
           <label className="form-checkbox">
             <input
               type="checkbox"
-              data-testid="job-enabled"
+              data-testid="cron-enabled"
               checked={form.enabled}
               disabled={editingId === null}
               onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
             />
             启用
             {editingId === null && (
-              <span className="form-hint" data-testid="job-enabled-hint">
+              <span className="form-hint" data-testid="cron-enabled-hint">
                 新任务默认启用，创建后可切换
               </span>
             )}
           </label>
         </div>
         <div className="form-actions">
-          <button type="submit" data-testid="job-submit" disabled={busy}>
+          <button type="submit" data-testid="cron-submit" disabled={busy}>
             {editingId === null ? "创建" : "保存"}
           </button>
           {editingId !== null && (
-            <button type="button" data-testid="job-cancel" onClick={resetForm}>
+            <button type="button" data-testid="cron-cancel" onClick={resetForm}>
               取消
             </button>
           )}
         </div>
       </form>
-      {jobs !== null && jobs.length > 0 && (
-        <table className="data-table" data-testid="jobs-table">
+      {crons !== null && crons.length > 0 && (
+        <table className="data-table" data-testid="cron-table">
           <thead>
             <tr>
               <th>任务名</th>
@@ -185,26 +185,26 @@ export function JobsView({ api }: { api: ApiClient }) {
             </tr>
           </thead>
           <tbody>
-            {jobs.map((job) => (
-              <tr key={job.id} data-testid={`job-row-${job.id}`}>
-                <td>{job.name}</td>
-                <td><code>{job.cron}</code></td>
-                <td data-testid={`job-enabled-${job.id}`}>{job.enabled ? "启用" : "禁用"}</td>
-                <td>{stampOrDash(job.nextRunAt)}</td>
-                <td>{job.lastStatus ?? "—"}</td>
-                <td>{stampOrDash(job.lastRunAt)}</td>
+            {crons.map((cron) => (
+              <tr key={cron.id} data-testid={`cron-row-${cron.id}`}>
+                <td>{cron.name}</td>
+                <td><code>{cron.cron}</code></td>
+                <td data-testid={`cron-enabled-${cron.id}`}>{cron.enabled ? "启用" : "禁用"}</td>
+                <td>{stampOrDash(cron.nextRunAt)}</td>
+                <td>{cron.lastStatus ?? "—"}</td>
+                <td>{stampOrDash(cron.lastRunAt)}</td>
                 <td className="row-actions">
-                  <button type="button" data-testid={`job-edit-${job.id}`} onClick={() => startEdit(job)}>
+                  <button type="button" data-testid={`cron-edit-${cron.id}`} onClick={() => startEdit(cron)}>
                     编辑
                   </button>
-                  <button type="button" data-testid={`job-toggle-${job.id}`} onClick={() => void toggleEnabled(job)}>
-                    {job.enabled ? "禁用" : "启用"}
+                  <button type="button" data-testid={`cron-toggle-${cron.id}`} onClick={() => void toggleEnabled(cron)}>
+                    {cron.enabled ? "禁用" : "启用"}
                   </button>
                   <button
                     type="button"
                     className="danger"
-                    data-testid={`job-delete-${job.id}`}
-                    onClick={() => void remove(job)}
+                    data-testid={`cron-delete-${cron.id}`}
+                    onClick={() => void remove(cron)}
                   >
                     删除
                   </button>
@@ -214,8 +214,8 @@ export function JobsView({ api }: { api: ApiClient }) {
           </tbody>
         </table>
       )}
-      {jobs !== null && jobs.length === 0 && (
-        <p className="muted table-empty" data-testid="jobs-empty">
+      {crons !== null && crons.length === 0 && (
+        <p className="muted table-empty" data-testid="cron-empty">
           还没有任务，在上方创建一个。
         </p>
       )}

@@ -37,7 +37,7 @@ import type {
   KclawConfig,
 } from "@kclaw/core"
 import { resolveRunModelLine } from "@kclaw/core"
-import { createExecSandbox } from "@kclaw/core/sandbox"
+import { createBashSandbox } from "@kclaw/core/sandbox"
 import type { GoalView, SessionEvent } from "@kclaw/core/protocol"
 import { createTracker } from "./host-kit.js"
 
@@ -143,7 +143,7 @@ export class GoalLoopHost {
     if (acceptance.length > 0) {
       const sandbox = this.#sandbox(meta.workdir)
       if (!sandbox.available) {
-        throw new Error(`验收命令需要可用的 exec 沙箱（${sandbox.unavailableReason ?? "未知原因"}）；去掉验收命令或启用沙箱后重试`)
+        throw new Error(`验收命令需要可用的 bash 沙箱（${sandbox.unavailableReason ?? "未知原因"}）；去掉验收命令或启用沙箱后重试`)
       }
     }
     const existing = meta.goal
@@ -251,7 +251,7 @@ export class GoalLoopHost {
 
   #sandbox(workdir: string | undefined) {
     const { config, home } = this.#deps
-    return createExecSandbox(config.sandbox ?? { enabled: false, writeRoots: [] }, {
+    return createBashSandbox(config.sandbox ?? { enabled: false, writeRoots: [] }, {
       workspace: workdir ?? config.workspace,
       home,
     })

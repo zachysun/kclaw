@@ -22,7 +22,7 @@ export type SessionEvent =
 
 | 类型 | 字段 |
 |------|------|
-| `session.created` | `at`、`title`、`workdir?`、`jobId?`、`mode?`（创建时固化的权限模式快照，旧流默认 default）、`parentSessionId?`（subagent 派生关系） |
+| `session.created` | `at`、`title`、`workdir?`、`cronId?`、`mode?`（创建时固化的权限模式快照，旧流默认 default）、`parentSessionId?`（subagent 派生关系） |
 | `session.renamed` | `at`、`title`、`source?`（auto=自动命名，不传视为 manual） |
 | `session.deleted` | `at` |
 | `session.restored` | `at` |
@@ -43,7 +43,7 @@ export type SessionEvent =
 
 | 类型 | 字段 |
 |------|------|
-| `run.started` | `at`、`trigger`（user/job/agent/team/goal）——每 run 一条 |
+| `run.started` | `at`、`trigger`（user/cron/agent/team/goal）——每 run 一条 |
 | `run.ended` | `at`、`stopReason`、`usage?`（正常终点的全程累计）、`error?`（stopReason 为 error 时）——每 run 恰一条，失败 run 也落 |
 | `permission.decided` | `at`、`confirmationId`、`decision`（once/project/global/reject/timeout）、`by`（cli/web/feishu/timeout）、`tool { callId, name, argsJson }`——每次裁决一条 |
 

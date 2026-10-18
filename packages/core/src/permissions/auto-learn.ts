@@ -7,7 +7,7 @@
  *
  * This counter tracks those streaks: per key (the run assembly scopes it per
  * session — `sessionId\n` + the narrowed-rule shape `narrowDecidedRule`
- * produces: exec first word + prefix, fs realpath exact path), `approve()`
+ * produces: bash first word + prefix, fs realpath exact path), `approve()`
  * advances the streak and returns true exactly once when it crosses the
  * threshold (caller persists the rule; the streak resets). Any rejection or
  * TIMEOUT on the same key resets it — a "no" is an explicit signal and must
@@ -16,7 +16,7 @@
  * One instance per daemon process (the server wires it through the run
  * manager); a daemon restart clears all streaks, which is acceptable for v1 —
  * cross-session persistence is a documented follow-up. Session isolation is
- * the CALLER's job (the key carries the session id).
+ * the CALLER's cron (the key carries the session id).
  */
 export class AutoLearnCounter {
   readonly #threshold: number

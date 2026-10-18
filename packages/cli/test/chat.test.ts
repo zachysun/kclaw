@@ -71,14 +71,14 @@ const SECOND_TURN = [
   chunk({}, "stop", { prompt_tokens: 3, completion_tokens: 2 }),
 ]
 
-/** The tool turn: one exec tool_call then finish tool_calls. */
+/** The tool turn: one bash tool_call then finish tool_calls. */
 const TOOL_TURN = [
   chunk({
     tool_calls: [
       {
         index: 0,
         id: "call_mock_1",
-        function: { name: "exec", arguments: JSON.stringify({ command: "echo ok" }) },
+        function: { name: "bash", arguments: JSON.stringify({ command: "echo ok" }) },
       },
     ],
   }),
@@ -224,8 +224,8 @@ const mockServers: Server[] = []
 const homes: string[] = [mkdtempSync(join(tmpdir(), "kclaw-chat-home-"))]
 const home = homes[0]!
 // Scenarios B / B-deny drive the confirmation flow (--yes auto-approves,
-// --no auto-denies). On a host with an exec sandbox (macOS Seatbelt / Linux
-// bwrap) sandboxable exec auto-passes instead of confirming, so the shared
+// --no auto-denies). On a host with an bash sandbox (macOS Seatbelt / Linux
+// bwrap) sandboxable bash auto-passes instead of confirming, so the shared
 // home turns the sandbox off — it is exercised by core's provider tests.
 mkdirSync(home, { recursive: true })
 writeFileSync(
@@ -321,12 +321,12 @@ describe("kclaw chat (built CLI + real daemon + mock SSE provider)", () => {
   )
 
   it(
-    "scenario B: tool call with --yes auto-approves the confirmation, runs exec, then answers",
+    "scenario B: tool call with --yes auto-approves the confirmation, runs bash, then answers",
     async () => {
       const res = await runChatCli(["chat", "--yes"], "请执行 echo ok\n/exit\n")
       expect(res.exitCode).toBe(0)
       expect(res.stderr).toBe("")
-      expect(res.stdout).toContain("⚡ exec")
+      expect(res.stdout).toContain("⚡ bash")
       expect(res.stdout).toContain('{"command":"echo ok"}')
       expect(res.stdout).toContain("[--yes] 已自动允许")
       expect(res.stdout).toContain("↳ ok (") // tool_result.completed status line
@@ -341,7 +341,7 @@ describe("kclaw chat (built CLI + real daemon + mock SSE provider)", () => {
       const res = await runChatCli(["chat", "--no"], "请执行 echo ok\n/exit\n")
       expect(res.exitCode).toBe(0)
       expect(res.stderr).toBe("")
-      expect(res.stdout).toContain("⚡ exec")
+      expect(res.stdout).toContain("⚡ bash")
       expect(res.stdout).toContain("↳ error (")
       expect(res.stdout).toContain("用户拒绝了该操作") // error result output + [note] line
     },

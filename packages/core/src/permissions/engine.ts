@@ -67,7 +67,7 @@ function ruleMatches(rule: CompiledRule, tool: string, arg: string): boolean {
 const warnedRuleTools = new Set<string>()
 
 /**
- * The tool prefix of a rule source ("exec:rm *" → "exec"). Everything before
+ * The tool prefix of a rule source ("bash:rm *" → "bash"). Everything before
  * the first ":" is the tool name; a rule without one is a bare tool name.
  */
 function ruleToolPrefix(source: string): string {
@@ -94,7 +94,7 @@ function collectRuleNameWarnings(sources: string[], knownTools: Set<string>): st
 
 /**
  * Path-aware rule matching: the raw arg always matches literally first
- * (exec commands, JSON dumps); for file tools the rule is additionally tested
+ * (bash commands, JSON dumps); for file tools the rule is additionally tested
  * with BOTH the arg and the glob in normalized form (`~` expanded, resolved
  * against the workspace), so a rule written `~/.ssh/**` still hits the same
  * file spelled `.ssh/x` or `/Users/u/.ssh/x`.
@@ -178,9 +178,9 @@ export function extractArg(args: unknown, profile: PermissionProfile): string {
 }
 
 /**
- * Canonical form an exec rule matches against: whitespace collapsed to
+ * Canonical form an bash rule matches against: whitespace collapsed to
  * single spaces and the command token reduced to its basename, so a deny
- * like `exec:rm -rf*` cannot be dodged with double spaces or /bin/rm.
+ * like `bash:rm -rf*` cannot be dodged with double spaces or /bin/rm.
  * Flag reordering (-r -f vs -rf) is deliberately NOT normalized.
  */
 export function normalizeCommand(cmd: string): string {
@@ -197,7 +197,7 @@ export function normalizeCommand(cmd: string): string {
  * command-substitution openers `$(` and a backtick — QUOTE-AWARE: single
  * quotes keep everything inert, double quotes make `;`/`|`/`&&` inert but
  * still split at `$(` and a backtick (command substitution executes there
- * too), and an escaping backslash makes the next char a literal. exec runs
+ * too), and an escaping backslash makes the next char a literal. bash runs
  * under a shell, so `git status $(curl evil)` would really execute the
  * substitution — the split makes deny match the embedded command while
  * multi-segment lines lose allow/grant coverage (same semantics as the other
@@ -317,7 +317,7 @@ export function denyTokens(segment: string): string[] {
  * `*`); every remaining rule token must be present among the segment's
  * tokens (multiset — each match consumes one; a trailing `*` on a rule token
  * degrades it to a prefix match). Order-insensitive by design, which closes
- * the flag-reordering blind spot: `exec:rm -rf*` also covers `rm -r -f x`
+ * the flag-reordering blind spot: `bash:rm -rf*` also covers `rm -r -f x`
  * and `rm -f -r /bin/x`. DENY-SIDE ONLY — over-matching is the safe
  * direction here; allow/decided/grants keep the legacy string form (widening
  * an auto-allow would be fail-open). Rule globs carrying internal `*`s
@@ -441,7 +441,7 @@ function escapesWorkspace(profile: PermissionProfile, args: unknown, workspace: 
  * In-memory, run-scoped grant store: rules a human approved (via `once`) so
  * the same call stops re-prompting within this run. A fresh instance is
  * created per run and dies with it — cross-run repetition is the decided
- * rules' job (learned grants persist), not this store's.
+ * rules' cron (learned grants persist), not this store's.
  */
 export class SessionGrants {
   #rules: CompiledRule[] = []
@@ -455,7 +455,7 @@ export class SessionGrants {
     return this.#rules.some((r) => scopedMatch(r, tool, arg, workspace, profile))
   }
 
-  /** Snapshot of granted rules (for the exec branch's per-rule matching). */
+  /** Snapshot of granted rules (for the bash branch's per-rule matching). */
   rules(): readonly CompiledRule[] {
     return this.#rules
   }
@@ -519,7 +519,7 @@ export interface ConfigPermissionGateOptions {
   sandboxUnavailableNote?: string
   /**
    * Tools whose executor the run assembly actually wrapped in the OS sandbox
-   * (exec today). This set doubles as the availability fact: sandbox
+   * (bash today). This set doubles as the availability fact: sandbox
    * availability means "at least one tool is actually wrapped" — the
    * "sandboxed" auto-pass must never claim a tool is sandboxed when its
    * execution is not wrapped, and a wrapped tool implies the probe
@@ -539,7 +539,7 @@ interface DenyRule extends CompiledRule {
  * deny blacklist → allow whitelist → decided rules → acceptEdits → workspace
  * boundary → safeTools → session grants → confirm, with a fresh `conf_` id
  * the surrounding loop routes to a human.
- * Command-arg tools (sensitive + `command` parameter — exec today) take a
+ * Command-arg tools (sensitive + `command` parameter — bash today) take a
  * dedicated branch (safeTools never lists them): deny matches every
  * normalized sub-command of a concatenated line, while allow/decided/grant
  * only ever cover a single, concatenation-free command.
@@ -617,10 +617,10 @@ export class ConfigPermissionGate implements PermissionGate {
   }
 
   /**
-   * Deny-side exec matching, two paths ORed: the legacy normalized-string
+   * Deny-side bash matching, two paths ORed: the legacy normalized-string
    * glob (every rule keeps firing on exactly what it fired on before) plus
    * token-set cover (closes the flag-reordering/aggregate-flag blind spot —
-   * `exec:rm -rf*` also catches `rm -r -f x`). Allow/decided/grants never use
+   * `bash:rm -rf*` also catches `rm -r -f x`). Allow/decided/grants never use
    * the token path: widening an auto-allow would be fail-open.
    */
   #execDenyHit(rule: DenyRule, tool: string, segment: string): boolean {
@@ -641,7 +641,7 @@ export class ConfigPermissionGate implements PermissionGate {
     }
 
     // trusted（批次 C）：沙箱与工作区边界内的操作全部自动放行、不弹确认；
-    // 边界外——exec 无法沙箱化、越界、无沙箱保护的敏感工具——一律拒绝
+    // 边界外——bash 无法沙箱化、越界、无沙箱保护的敏感工具——一律拒绝
     // （fail-closed）。免审档没有人工保底，deny 黑名单仍最优先。
     if (this.#mode === "trusted") {
       if (profile.argField === "command") {
@@ -661,7 +661,7 @@ export class ConfigPermissionGate implements PermissionGate {
           type: "deny", reason: "mode",
           noteText: this.#sandboxAvailable
             ? "trusted 模式无法沙箱化该敏感工具"
-            : "trusted 模式要求 exec 进沙箱，但沙箱不可用",
+            : "trusted 模式要求 bash 进沙箱，但沙箱不可用",
         }
       }
       const matches = (r: CompiledRule) => scopedMatch(r, tool, arg, this.#workspace, profile)
@@ -687,7 +687,7 @@ export class ConfigPermissionGate implements PermissionGate {
 
     // Command-arg tools: deny matches every sub-command (normalized); allow,
     // decided rules and session grants only ever apply to a single,
-    // concatenation-free command — a rule like `exec:git status*` must not
+    // concatenation-free command — a rule like `bash:git status*` must not
     // wave through `git status; …`.
     if (profile.argField === "command") {
       const subs = splitSubcommands(arg)
@@ -752,7 +752,7 @@ export class ConfigPermissionGate implements PermissionGate {
     }
     // acceptEdits: sensitive path-arg tools (fs_write/fs_edit today) are
     // auto-approved while the target stays inside the workspace; escaped
-    // targets fall through to the boundary check. exec (command-arg) never
+    // targets fall through to the boundary check. bash (command-arg) never
     // reaches this branch. AcceptEdits therefore cannot authorize anything
     // beyond the workspace — and never auto-writes a sensitive file (.env,
     // keys): those go to a human even in acceptEdits.

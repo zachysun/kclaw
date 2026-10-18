@@ -2,10 +2,10 @@
  * /goal 质量门（issue #47）：验收命令的沙箱执行器。用户在设定目标时
  * 声明一次，此后每轮判定前自动执行——所以必须沙箱化（免审自执行的
  * 前提是可沙箱化），不可回退到裸跑。全部通过才进判定器；任一失败
- * 短路判定器，输出成为下一轮的修正指引。进程组杀灭与输出截断沿 exec
+ * 短路判定器，输出成为下一轮的修正指引。进程组杀灭与输出截断沿 bash
  * 工具的既有纪律（detached spawn + kill(-pid)、尾部保留）。
  */
-import type { ExecSandbox } from "../sandbox/provider.js"
+import type { BashSandbox } from "../sandbox/provider.js"
 import { GOAL_GATE_OUTPUT_TAIL_CHARS, GOAL_GATE_TIMEOUT_MS } from "./limits.js"
 import type { GoalGateOutcome } from "./types.js"
 
@@ -14,7 +14,7 @@ const MAX_CAPTURE_BYTES = 64 * 1024
 
 /** 沙箱内跑一条命令：超时杀进程组，输出取尾部。 */
 async function runOne(
-  sandbox: ExecSandbox,
+  sandbox: BashSandbox,
   command: string,
   cwd: string,
   timeoutMs: number,
@@ -64,7 +64,7 @@ async function runOne(
  * GOAL_GATE_TIMEOUT_MS（测试可收紧）。
  */
 export async function runAcceptanceGates(
-  sandbox: ExecSandbox,
+  sandbox: BashSandbox,
   acceptance: string[],
   cwd: string,
   timeoutMs: number = GOAL_GATE_TIMEOUT_MS,

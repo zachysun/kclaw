@@ -27,7 +27,7 @@ export interface ProvidersRoutesDeps {
   notifier?: ConfigNotifier
 }
 
-/** Names are entry keys referenced by session meta, jobs, and slash commands. */
+/** Names are entry keys referenced by session meta, crons, and slash commands. */
 const NAME_PATTERN = /^[A-Za-z0-9_-]+$/
 
 interface NameParams {

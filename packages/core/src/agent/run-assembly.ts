@@ -49,7 +49,7 @@ import { ConfigPermissionGate, realpathWithin, SessionGrants } from "../permissi
 import { appendDecidedRule, globalDecidedRulesPath, loadDecidedRulesForRun, narrowDecidedRule, projectDecidedRulesPath } from "../storage/decided-rules.js"
 import type { AutoLearnCounter } from "../permissions/auto-learn.js"
 import { ConfirmationBroker, raceConfirmation, type ConfirmationResolution } from "../permissions/broker.js"
-import { createExecSandbox } from "../sandbox/provider.js"
+import { createBashSandbox } from "../sandbox/provider.js"
 import type { PermissionGate, RunOutcome } from "./loop.js"
 import { runAgent } from "./loop.js"
 import { assembleSystemPrompt } from "./system-prompt.js"
@@ -96,7 +96,7 @@ export interface EnqueueInput {
   /** team = 团队收信箱投递/任务派活（引擎或宿主发起）：不走技能/文件指定包装，处置按提交方显式声明（常规派活=steer）。 */
   trigger: RunTrigger
   /**
-   * Per-run model override (a job's configured model, or a client-forced
+   * Per-run model override (a cron's configured model, or a client-forced
    * one). Priority per run: input.model > session meta model > daemon
    * default. Absent → the daemon default applies.
    */
@@ -110,12 +110,12 @@ export interface EnqueueInput {
   /**
    * Machine-originated provenance note: lands as a note block right after
    * the text block on the user message. The scheduler passes its
-   * 「本会话由定时任务…」 line as kind:"job"; a background completion
+   * 「本会话由定时任务…」 line as kind:"cron"; a background completion
    * delivery (#44) passes its identity declaration as kind:"subagent" —
    * the model must be able to tell machine input from user speech.
    */
   note?: QueueNote
-  /** 单次显式处置（层级最高）；默认 = 会话覆盖 ?? 配置默认；job 触发强制 wait。 */
+  /** 单次显式处置（层级最高）；默认 = 会话覆盖 ?? 配置默认；cron 触发强制 wait。 */
   disposition?: "steer" | "wait" | "interrupt"
   /**
    * subagent派发携带（subagent_run 的 role/toolAllow，仅 agent 触发的子会话
@@ -361,13 +361,13 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // lead / member(name) / none from the team directory. A mainline session
   // with no team yet still gets a provisional lead identity so the team
   // surface (create_team first) is reachable — every other team action hits
-  // the facade's loud conflict until the team exists. Child runs and job
+  // the facade's loud conflict until the team exists. Child runs and cron
   // sessions register no team tools at all.
   const teamIdentity =
     engine.deps.team === undefined
       ? null
       : (await engine.deps.team.facade.describeSession(sessionId)) ??
-        (childRun || input.trigger === "job"
+        (childRun || input.trigger === "cron"
           ? null
           : { role: "lead" as const, teamId: "", sessionId })
 
@@ -397,7 +397,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
 
   // History BEFORE the append (runAgent appends the user message itself).
   // The user message starts as a text-only SKELETON: the run-before hook
-  // chain lands it — memory/job notes appended, JSONL write, note.emitted ×N
+  // chain lands it — memory/cron notes appended, JSONL write, note.emitted ×N
   // — right after the loop announced the skeleton via message.created, so
   // the wire order stays
   // run.started → message.created → note.emitted ×N → message.completed.
@@ -429,7 +429,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // 技能指名与文件指定的隐式包装（Master 2026-09-03 / 2026-09-13）：用户消
   // 息里任意位置的 /技能名 精确命中已装且用户可调用的技能、@路径 解析为工作
   // 区内的真实文件时，只在发给模型的那份输入上追加调用/读取指示——持久化、
-  // 事件流与气泡保持原始文本（所见即所发）。仅 trigger:user 生效：job 提示
+  // 事件流与气泡保持原始文本（所见即所发）。仅 trigger:user 生效：cron 提示
   // 是 daemon 生成的内部指令，不参与指名。内置 skill-wrap 钩子捕获这份预计
   // 算文本，在 llm-before 位置应用。
   const llmUserText =
@@ -451,22 +451,22 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     userMessage.llmText = llmUserText
   }
 
-  // --- exec sandbox (batch A): one probe, two consumers --------------------
-  // `available` gates BOTH the exec tool's actual wrapper and the permission
+  // --- bash sandbox (batch A): one probe, two consumers --------------------
+  // `available` gates BOTH the bash tool's actual wrapper and the permission
   // gate's sandboxed auto-pass from the SAME source, so a "sandboxed"
-  // allowance can never be issued while exec runs bare (and vice versa).
-  const sandbox = createExecSandbox(config.sandbox ?? defaultConfig.sandbox ?? { enabled: true, writeRoots: [] }, { workspace })
+  // allowance can never be issued while bash runs bare (and vice versa).
+  const sandbox = createBashSandbox(config.sandbox ?? defaultConfig.sandbox ?? { enabled: true, writeRoots: [] }, { workspace })
   // User-chosen disable (sandbox.enabled: false) is a deliberate decision and
   // stays silent; a probe failure (platform tool missing, userns blocked) is
   // an environment problem worth a daemon log line — fail-closed either way.
   const sandboxAttempted = config.sandbox?.enabled !== false
   if (sandboxAttempted && !sandbox.available && sandbox.unavailableReason !== undefined) {
-    console.warn(`kclaw: exec sandbox unavailable (${sandbox.unavailableReason}); sandboxable exec falls back to manual confirmation`)
+    console.warn(`kclaw: bash sandbox unavailable (${sandbox.unavailableReason}); sandboxable bash falls back to manual confirmation`)
   }
   // When the sandbox was attempted but unavailable, the confirmation explains
   // why (User Story: "回退到确认框并说明沙箱不可用").
   const sandboxUnavailableNote = sandboxAttempted && !sandbox.available
-    ? "exec 沙箱不可用，本次操作需人工确认"
+    ? "bash 沙箱不可用，本次操作需人工确认"
     : undefined
   // Sandbox audit event (batch D): one per run, right after the probe — the
   // session's trail then shows what sandbox state THIS run had (config switch,
@@ -492,9 +492,9 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       immediateEnabled: config.memory.write.immediate,
     },
     tavilyApiKey: config.web.tavilyApiKey,
-    exec: {
-      timeoutMs: config.exec.timeoutMs,
-      maxOutputBytes: config.exec.maxOutputBytes,
+    bash: {
+      timeoutMs: config.bash.timeoutMs,
+      maxOutputBytes: config.bash.maxOutputBytes,
       sandbox: sandbox.available ? sandbox : undefined,
       spillDir: paths.spillDir,
     },
@@ -617,10 +617,10 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     // confirmation carries an explanation instead of the silent fail-closed
     // default.
     sandboxUnavailableNote,
-    // The tools this assembly actually wrapped in the OS sandbox (exec gets
+    // The tools this assembly actually wrapped in the OS sandbox (bash gets
     // the wrapper below; no other executor does). The gate's "sandboxed"
     // auto-pass must never claim an unwrapped tool is sandboxed.
-    sandboxedTools: sandbox.available ? new Set(["exec"]) : new Set(),
+    sandboxedTools: sandbox.available ? new Set(["bash"]) : new Set(),
     // Run-scoped grants (batch D): consulted only when config enables
     // sessionGrants; reason "session_grant".
     grants,

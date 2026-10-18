@@ -14,7 +14,7 @@ const FINAL: LlmStreamEvent[] = [
 
 function toolTurn(): LlmStreamEvent[] {
   return [
-    { type: "tool_call_started", index: 0, callId: "call_1", name: "exec" },
+    { type: "tool_call_started", index: 0, callId: "call_1", name: "bash" },
     { type: "tool_call_delta", index: 0, delta: '{"command":"rm -rf /"}' },
     { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 0, outputTokens: 0 } },
   ]
@@ -26,7 +26,7 @@ function scriptClient(script: LlmStreamEvent[][]): LlmClient {
   return { async *stream(): AsyncIterable<LlmStreamEvent> { yield* script[Math.min(i++, script.length - 1)]! } }
 }
 
-const EXEC: ToolExecutor = {
+const BASH: ToolExecutor = {
   risk: "sensitive", concurrency: "serial",
   async execute() { return { status: "ok", output: "should not run" } },
 }
@@ -43,9 +43,9 @@ async function runWith(gate: PermissionGate, extra: Record<string, unknown> = {}
       hooks: chainOf(),
       onEvent: (e) => events.push(e),
       onMessage: (m) => messages.push(m),
-      tools: new Map([["exec", {
-        ...EXEC,
-        execute: async (...a: Parameters<ToolExecutor["execute"]>) => { executed(); return EXEC.execute(...a) },
+      tools: new Map([["bash", {
+        ...BASH,
+        execute: async (...a: Parameters<ToolExecutor["execute"]>) => { executed(); return BASH.execute(...a) },
       }]]),
       permissions: gate,
       ...extra,
@@ -96,7 +96,7 @@ describe("permission gate", () => {
       resolveConfirmation: async () => ({ decision: "once" as const, by: "cli" as const }),
     })
     expect(events.find((e) => e.type === "confirmation.requested")).toMatchObject({
-      payload: { confirmationId: "conf_1", toolCall: { callId: "call_1", name: "exec" }, risk: "sensitive" },
+      payload: { confirmationId: "conf_1", toolCall: { callId: "call_1", name: "bash" }, risk: "sensitive" },
     })
     expect(events.find((e) => e.type === "confirmation.resolved")).toMatchObject({
       payload: { decision: "once", by: "cli" },

@@ -19,7 +19,7 @@ compatibility promises.
 
 - Usage metering can no longer break the operation it measures, and goal-loop
   judge retries are decided at assembly time.
-- Architecture-review correctness batch: the exec sandbox spawn contract is in
+- Architecture-review correctness batch: the bash sandbox spawn contract is in
   one place, provider HTTP helpers no longer cross adapter boundaries, the
   credential-location declaration and sensitive-file defaults live in a single
   leaf, the history-search data face and its limit cap are single-sourced, the
@@ -52,7 +52,7 @@ compatibility promises.
   `skills.curator`.
 - **Session usage strip** — a compact strip under the composer shows cumulative
   input/output tokens for the session and the cache hit rate.
-- **Exec sandbox hardening** — sandboxed commands get env injection, a grace
+- **Bash sandbox hardening** — sandboxed commands get env injection, a grace
   window after SIGKILL before cleanup, and a closest-tool hint when a named
   tool does not exist.
 - **Dismissible chat notice bar** — the chat page's notice bar can be dismissed.
@@ -145,7 +145,7 @@ compatibility promises.
   messages are consumed strictly in send order; every run mirrors to a Feishu
   interactive card (thinking → streaming → final markdown); tool confirmations
   render as approve/reject cards settled as actor `feishu`; `/new`, `/stop`
-  and `/help` work inside the chat; job results and background-subagent
+  and `/help` work inside the chat; cron results and background-subagent
   completions are pushed to the primary user. A failed channel start never
   blocks the daemon.
 - **Model provider management** — a WebUI "Model" tab to manage LLM providers:
@@ -190,7 +190,7 @@ compatibility promises.
 - **WebUI overhaul** — assistant messages render as markdown with code
   highlight and copy; pluggable theme registry (phantom dark default, amber
   classic, paper light); sidebar workdir folding; toast notifications;
-  readable usage tables; a Chinese jobs page.
+  readable usage tables; a Chinese cron page.
 - **Pinned daemon port** — `kclaw --port` or `server.port` pins the listen
   port for a stable URL (default still random; an occupied pin is a hard
   error).
@@ -215,7 +215,7 @@ compatibility promises.
   (`readonly` / `default` / `acceptEdits` / `trusted` / `auto`), stored in
   session meta and switched from the CLI (Shift+Tab cycle or `/mode`) or the
   WebUI (always-on selector).
-  `readonly` denies all write-class tools (fs_write / fs_edit / exec); in
+  `readonly` denies all write-class tools (fs_write / fs_edit / bash); in
   `acceptEdits` in-workspace file writes skip confirmation. The daemon-level
   readonly flag is gone — the mode is per-session, defaulting to `default`.
 - **Four-way confirmation verdicts** — confirmation prompts now offer
@@ -228,7 +228,7 @@ compatibility promises.
 - **Learned / accept_edits grants** — the permission chain gained two allow
   steps (`learned` for persisted rules, `accept_edits` for the mode), each
   recorded in `grantedBy` for the audit trail.
-- **Exec OS sandbox** — the `exec` child process runs inside an OS sandbox
+- **Bash OS sandbox** — the `bash` child process runs inside an OS sandbox
   (macOS Seatbelt via `sandbox-exec`; Linux bubblewrap), as defense in depth
   under the permission gate: the workspace and temp dirs stay writable, the
   home directory is read-only with `~/.kclaw` masked (credentials unreachable),
@@ -242,7 +242,7 @@ compatibility promises.
 - **Trusted session mode** — a fifth permission mode (`trusted`) that
   auto-approves everything inside the sandbox/workspace boundary with no
   prompts and denies everything outside it (fail-closed: no human fallback).
-  Deny blacklist rules still short-circuit first; exec requires the OS sandbox
+  Deny blacklist rules still short-circuit first; bash requires the OS sandbox
   (denied with a `mode` reason when unavailable); sensitive tools without
   sandbox coverage (MCP adapters, unregistered tools) are denied outright.
 - **Auto-learned rules** — a sixth permission mode (`auto`) that keeps the
@@ -307,11 +307,11 @@ compatibility promises.
 - **Tool-output spill** — when a tool result is truncated to fit the
   context, the full output is written to `<home>/spill` (mode 0600) and the
   truncation marker names the file and byte range, so `fs_read` can pull
-  exact slices afterwards. exec without a spill directory no longer buffers
+  exact slices afterwards. bash without a spill directory no longer buffers
   output it would never use.
 - **Tool-loop guard** — five structurally identical tool calls in a row
   append a reminder to change strategy; the loop itself does not abort.
-- **Sandbox network switch** — `sandbox.network: "deny"` cuts the exec child
+- **Sandbox network switch** — `sandbox.network: "deny"` cuts the bash child
   process off the network (Seatbelt denies `network-outbound` and
   `network-inbound`; bubblewrap adds `--unshare-net`); the default stays
   `"allow"` and web tools are unaffected either way.
@@ -349,9 +349,9 @@ state, and the CLI and the WebUI are its clients.
 ### Added
 
 - **Daemon core** — a single daemon per home directory owns sessions, memory
-  and jobs; HTTP + WebSocket API on 127.0.0.1 with token auth; state survives
+  and cron; HTTP + WebSocket API on 127.0.0.1 with token auth; state survives
   restarts.
-- **Agent engine** — tool loop with 11 builtin tools (filesystem, exec, web
+- **Agent engine** — tool loop with 11 builtin tools (filesystem, bash, web
   fetch, session introspection, memory, skills); a permission gate that derives
   each tool's treatment from its risk and parameters (allow / deny / confirm);
   a hook system covering the engine's behavior seams (builtin chain plus user
@@ -378,7 +378,7 @@ state, and the CLI and the WebUI are its clients.
   status).
 - **WebUI** — offline-capable single-page shell: chat with queue and disposition
   controls, a session timeline rendered from the event stream, a memory
-  manager, the job list and hook management.
+  manager, the cron list and hook management.
 - **Tests** — a four-package suite (core, server, web, cli) covering the engine,
   the daemon routes, the WebUI, and end-to-end CLI scenarios against a real
   daemon.

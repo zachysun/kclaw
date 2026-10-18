@@ -4,7 +4,7 @@
  * RunManager.submit door (trigger "user", forced wait → strict send order);
  * commands (/new /stop /help) are intercepted before submit. Outbound, every
  * run of a BOUND session is mirrored as a card sequence — thinking →
- * streaming → complete — no matter which surface triggered it; job-terminal
+ * streaming → complete — no matter which surface triggered it; cron-terminal
  * broadcasts and background-subagent settlements push a summary card to the
  * primary user. Permission confirmations on a bound session surface as
  * Confirm/Reject approval cards resolving through the ordinary broker.
@@ -265,11 +265,11 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
       }
       try {
         if (e.sessionId === undefined) {
-          // 广播事件（job.*）：job 终态推送
-          if (e.type === "job.completed") {
-            pushSummary("定时任务完成", `任务 ${e.payload.jobId} 已结束（${e.payload.summary}）。`)
-          } else if (e.type === "job.failed") {
-            pushSummary("定时任务失败", `任务 ${e.payload.jobId} 失败：${e.payload.error.message}`)
+          // 广播事件（cron.*）：cron 终态推送
+          if (e.type === "cron.completed") {
+            pushSummary("定时任务完成", `任务 ${e.payload.cronId} 已结束（${e.payload.summary}）。`)
+          } else if (e.type === "cron.failed") {
+            pushSummary("定时任务失败", `任务 ${e.payload.cronId} 失败：${e.payload.error.message}`)
           }
           return
         }

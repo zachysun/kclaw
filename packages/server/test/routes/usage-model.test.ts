@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { FastifyInstance } from "fastify"
-import { JobScheduler, SessionStore, UsageStore, loadConfig, resolvePaths } from "@kclaw/core"
+import { CronScheduler, SessionStore, UsageStore, loadConfig, resolvePaths } from "@kclaw/core"
 import { createApp } from "../../src/index.js"
 
 describe("usage + model routes", () => {
@@ -58,21 +58,21 @@ describe("usage + model routes", () => {
     expect(sessions.meta(sid)?.model).toBeUndefined()
   })
 
-  it("jobs accept an optional model field end to end", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kclaw-um-job-"))
+  it("crons accept an optional model field end to end", async () => {
+    const home = mkdtempSync(join(tmpdir(), "kclaw-um-cron-"))
     dirs.push(home)
     const paths = resolvePaths(home)
-    const jobs = new JobScheduler(paths.jobsDb)
-    app = await createApp({ home, token: "t1", stores: { jobs, paths } })
+    const crons = new CronScheduler(paths.cronDb)
+    app = await createApp({ home, token: "t1", stores: { crons, paths } })
 
-    const create = await app.inject({ method: "POST", url: "/jobs", headers: auth, payload: { name: "brief", cron: "* * * * *", prompt: "hi", model: "glm" } })
+    const create = await app.inject({ method: "POST", url: "/cron", headers: auth, payload: { name: "brief", cron: "* * * * *", prompt: "hi", model: "glm" } })
     expect(create.statusCode).toBe(201)
     const created = create.json() as { id: string; model?: string }
     expect(created.model).toBe("glm")
-    expect(jobs.get(created.id)?.model).toBe("glm")
+    expect(crons.get(created.id)?.model).toBe("glm")
 
-    const patch = await app.inject({ method: "PATCH", url: `/jobs/${created.id}`, headers: auth, payload: { model: "p" } })
+    const patch = await app.inject({ method: "PATCH", url: `/cron/${created.id}`, headers: auth, payload: { model: "p" } })
     expect(patch.statusCode).toBe(200)
-    expect(jobs.get(created.id)?.model).toBe("p")
+    expect(crons.get(created.id)?.model).toBe("p")
   })
 })

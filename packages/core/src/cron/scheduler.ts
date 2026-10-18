@@ -4,11 +4,11 @@ import { dirname } from "node:path"
 import cronParser from "cron-parser"
 import { newId } from "../protocol/ids.js"
 
-/** Outcome of the last run of a job, recorded by `markRun`. */
-export type JobStatus = "ok" | "error"
+/** Outcome of the last run of a cron, recorded by `markRun`. */
+export type CronStatus = "ok" | "error"
 
 /** A scheduled prompt: cron + prompt, persisted in SQLite. */
-export interface Job {
+export interface Cron {
   id: string
   name: string
   cron: string
@@ -16,13 +16,13 @@ export interface Job {
   enabled: boolean
   nextRunAt: string // ISO-8601
   lastRunAt?: string // ISO-8601
-  lastStatus?: JobStatus
+  lastStatus?: CronStatus
   lastError?: string
-  /** Optional per-job model override (empty/absent → daemon default). */
+  /** Optional per-cron model override (empty/absent → daemon default). */
   model?: string
 }
 
-export interface CreateJobInput {
+export interface CreateCronInput {
   name: string
   cron: string
   prompt: string
@@ -30,7 +30,7 @@ export interface CreateJobInput {
 }
 
 const SCHEMA = `
-CREATE TABLE IF NOT EXISTS jobs (
+CREATE TABLE IF NOT EXISTS crons (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   cron TEXT NOT NULL,
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 `
 
-interface JobRow {
+interface CronRow {
   id: string
   name: string
   cron: string
@@ -66,7 +66,7 @@ function nextIsoAfter(cron: string, after: Date): string {
   return cronParser.parseExpression(cron, { currentDate: after }).next().toISOString()
 }
 
-function toJob(row: JobRow): Job {
+function toCron(row: CronRow): Cron {
   return {
     id: row.id,
     name: row.name,
@@ -75,7 +75,7 @@ function toJob(row: JobRow): Job {
     enabled: row.enabled === 1,
     nextRunAt: row.next_run_at,
     lastRunAt: row.last_run_at ?? undefined,
-    lastStatus: (row.last_status as JobStatus | null) ?? undefined,
+    lastStatus: (row.last_status as CronStatus | null) ?? undefined,
     model: row.model ?? undefined,
     lastError: row.last_error ?? undefined,
   }
@@ -83,11 +83,11 @@ function toJob(row: JobRow): Job {
 
 /**
  * Persistent cron scheduler. All state lives in one SQLite
- * `jobs` table; every instance opens the same file and sees the same rows,
+ * `crons` table; every instance opens the same file and sees the same rows,
  * so the daemon can tick with a fresh handle. Times are ISO strings
  * (lexicographic = chronological, so `due` compares them in SQL).
  */
-export class JobScheduler {
+export class CronScheduler {
   private readonly db: Database.Database
 
   constructor(dbPath: string) {
@@ -95,20 +95,20 @@ export class JobScheduler {
     this.db = new Database(dbPath)
     this.db.exec(SCHEMA)
     // Pre-existing DBs (created before the model column) get it via ALTER.
-    const cols = this.db.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>
+    const cols = this.db.prepare("PRAGMA table_info(crons)").all() as Array<{ name: string }>
     if (!cols.some((c) => c.name === "model")) {
-      this.db.exec("ALTER TABLE jobs ADD COLUMN model TEXT")
+      this.db.exec("ALTER TABLE crons ADD COLUMN model TEXT")
     }
   }
 
-  private getRow(id: string): JobRow | undefined {
-    return this.db.prepare("SELECT * FROM jobs WHERE id = ?").get(id) as JobRow | undefined
+  private getRow(id: string): CronRow | undefined {
+    return this.db.prepare("SELECT * FROM crons WHERE id = ?").get(id) as CronRow | undefined
   }
 
-  /** Insert a job; `nextRunAt` is the next cron occurrence after now. */
-  create(input: CreateJobInput): Job {
-    const job: Job = {
-      id: newId("job"),
+  /** Insert a cron; `nextRunAt` is the next cron occurrence after now. */
+  create(input: CreateCronInput): Cron {
+    const cron: Cron = {
+      id: newId("cron"),
       name: input.name,
       cron: input.cron,
       prompt: input.prompt,
@@ -118,21 +118,21 @@ export class JobScheduler {
     }
     this.db
       .prepare(
-        `INSERT INTO jobs (id, name, cron, prompt, enabled, next_run_at, model) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO crons (id, name, cron, prompt, enabled, next_run_at, model) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(job.id, job.name, job.cron, job.prompt, 1, job.nextRunAt, job.model ?? null)
-    return job
+      .run(cron.id, cron.name, cron.cron, cron.prompt, 1, cron.nextRunAt, cron.model ?? null)
+    return cron
   }
 
-  /** All jobs in creation (id/ULID) order. */
-  list(): Job[] {
-    const rows = this.db.prepare("SELECT * FROM jobs ORDER BY id").all() as JobRow[]
-    return rows.map(toJob)
+  /** All crons in creation (id/ULID) order. */
+  list(): Cron[] {
+    const rows = this.db.prepare("SELECT * FROM crons ORDER BY id").all() as CronRow[]
+    return rows.map(toCron)
   }
 
-  get(id: string): Job | undefined {
+  get(id: string): Cron | undefined {
     const row = this.getRow(id)
-    return row === undefined ? undefined : toJob(row)
+    return row === undefined ? undefined : toCron(row)
   }
 
   /**
@@ -140,11 +140,11 @@ export class JobScheduler {
    * (invalid cron throws, cron-parser message passthrough); any other field —
    * including `nextRunAt` itself — is written as given (tests back-date with it).
    */
-  update(id: string, patch: Partial<Job>): Job | undefined {
+  update(id: string, patch: Partial<Cron>): Cron | undefined {
     const row = this.getRow(id)
     if (row === undefined) return undefined
-    const next: Job = {
-      ...toJob(row),
+    const next: Cron = {
+      ...toCron(row),
       ...patch,
       nextRunAt: patch.cron !== undefined && patch.nextRunAt === undefined
         ? nextIsoAfter(patch.cron, new Date())
@@ -152,7 +152,7 @@ export class JobScheduler {
     }
     this.db
       .prepare(
-        `UPDATE jobs SET name = ?, cron = ?, prompt = ?, enabled = ?, next_run_at = ?,
+        `UPDATE crons SET name = ?, cron = ?, prompt = ?, enabled = ?, next_run_at = ?,
            last_run_at = ?, last_status = ?, last_error = ?, model = ? WHERE id = ?`,
       )
       .run(
@@ -170,55 +170,55 @@ export class JobScheduler {
     return next
   }
 
-  /** True if the job existed and was deleted. */
+  /** True if the cron existed and was deleted. */
   remove(id: string): boolean {
-    return this.db.prepare("DELETE FROM jobs WHERE id = ?").run(id).changes > 0
+    return this.db.prepare("DELETE FROM crons WHERE id = ?").run(id).changes > 0
   }
 
-  /** Enabled jobs whose `nextRunAt` has passed (ISO string compare = time compare). */
-  due(now: Date): Job[] {
+  /** Enabled crons whose `nextRunAt` has passed (ISO string compare = time compare). */
+  due(now: Date): Cron[] {
     const rows = this.db
-      .prepare("SELECT * FROM jobs WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at")
-      .all(now.toISOString()) as JobRow[]
-    return rows.map(toJob)
+      .prepare("SELECT * FROM crons WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at")
+      .all(now.toISOString()) as CronRow[]
+    return rows.map(toCron)
   }
 
   /**
-   * Atomically claim every enabled job whose next_run_at has passed:
+   * Atomically claim every enabled cron whose next_run_at has passed:
    * each row's next_run_at is advanced (skipping any backlog of missed
    * fire times) inside one transaction, and only rows whose CAS update
    * affected exactly one row are returned. Claim-then-execute means a
-   * crash mid-run cannot re-fire the job on restart, and a second handle
+   * crash mid-run cannot re-fire the cron on restart, and a second handle
    * on the same db can never double-claim.
    */
-  claimDue(now: Date): Job[] {
-    const claim = this.db.transaction((rows: JobRow[]): Job[] => {
-      const claimed: Job[] = []
+  claimDue(now: Date): Cron[] {
+    const claim = this.db.transaction((rows: CronRow[]): Cron[] => {
+      const claimed: Cron[] = []
       for (const row of rows) {
         const next = nextIsoAfter(row.cron, now)
         const res = this.db
           .prepare(
-            "UPDATE jobs SET next_run_at = ? WHERE id = ? AND enabled = 1 AND next_run_at <= ?",
+            "UPDATE crons SET next_run_at = ? WHERE id = ? AND enabled = 1 AND next_run_at <= ?",
           )
           .run(next, row.id, now.toISOString())
-        if (res.changes === 1) claimed.push(toJob({ ...row, next_run_at: next }))
+        if (res.changes === 1) claimed.push(toCron({ ...row, next_run_at: next }))
       }
       return claimed
     })
     const rows = this.db
-      .prepare("SELECT * FROM jobs WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at")
-      .all(now.toISOString()) as JobRow[]
+      .prepare("SELECT * FROM crons WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at")
+      .all(now.toISOString()) as CronRow[]
     return claim(rows)
   }
 
   /**
    * Record a run's outcome (lastRunAt/lastStatus/lastError; `lastError`
    * cleared on "ok"). next_run_at is NOT touched — claimDue advanced it
-   * when the run was claimed. No-op if the job is gone.
+   * when the run was claimed. No-op if the cron is gone.
    */
-  markRun(id: string, status: JobStatus, now: Date, error?: string): void {
+  markRun(id: string, status: CronStatus, now: Date, error?: string): void {
     this.db
-      .prepare(`UPDATE jobs SET last_run_at = ?, last_status = ?, last_error = ? WHERE id = ?`)
+      .prepare(`UPDATE crons SET last_run_at = ?, last_status = ?, last_error = ? WHERE id = ?`)
       .run(now.toISOString(), status, error ?? null, id)
   }
 }

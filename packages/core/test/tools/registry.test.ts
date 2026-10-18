@@ -27,14 +27,14 @@ beforeEach(() => {
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
 const ALL_TOOLS = [
-  "exec", "fs_read", "fs_list", "fs_write", "fs_edit",
+  "bash", "fs_read", "fs_list", "fs_write", "fs_edit",
   "web_search", "web_fetch", "memory_save", "memory_search",
   "session_search", "history_search", "skill_read", "skill_list",
 ]
 
 /** required arrays per tool (task brief); checked as sets. */
 const REQUIRED: Record<string, string[]> = {
-  exec: ["command"],
+  bash: ["command"],
   fs_read: ["path"],
   fs_list: ["path"],
   fs_write: ["path", "content"],
@@ -119,7 +119,7 @@ describe("builtin tool registry", () => {
     // memory_save 只收 text（多余字段忽略）
     expect(prop("memory_save", "text")).toEqual({ type: "string", description: expect.any(String) })
     expect(prop("memory_search", "limit")).toEqual({ type: "integer", minimum: 1, maximum: 20 })
-    for (const tool of ["exec", "fs_read", "fs_list", "fs_write", "fs_edit", "web_fetch", "memory_save", "memory_search", "session_search", "skill_read"]) {
+    for (const tool of ["bash", "fs_read", "fs_list", "fs_write", "fs_edit", "web_fetch", "memory_save", "memory_search", "session_search", "skill_read"]) {
       expect(prop(tool, REQUIRED[tool][0])).toEqual({ type: "string", description: expect.any(String) })
     }
   })
@@ -127,8 +127,8 @@ describe("builtin tool registry", () => {
     expect(JSON.parse(JSON.stringify(registry.toolDefs))).toHaveLength(ALL_TOOLS.length)
   })
   it("risk/concurrency classification carried into the map", () => {
-    expect(registry.tools.get("exec")!.risk).toBe("sensitive")
-    expect(registry.tools.get("exec")!.concurrency).toBe("serial")
+    expect(registry.tools.get("bash")!.risk).toBe("sensitive")
+    expect(registry.tools.get("bash")!.concurrency).toBe("serial")
     expect(registry.tools.get("fs_write")!.risk).toBe("sensitive")
     expect(registry.tools.get("fs_read")!.concurrency).toBe("parallel")
     expect(registry.tools.get("memory_save")!.risk).toBe("safe")
@@ -152,9 +152,9 @@ describe("builtin tool registry", () => {
         subagent: { spawner: vi.fn(), parentSessionId: "ses_1" },
       })
       dropSensitiveTools(tools, toolDefs)
-      // sensitive today: exec, fs_write, fs_edit — everything safe survives,
+      // sensitive today: bash, fs_write, fs_edit — everything safe survives,
       // including the safe subagent pair
-      expect(tools.has("exec")).toBe(false)
+      expect(tools.has("bash")).toBe(false)
       expect(tools.has("fs_write")).toBe(false)
       expect(tools.has("fs_edit")).toBe(false)
       expect(tools.has("fs_read")).toBe(true)

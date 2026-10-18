@@ -1,5 +1,5 @@
 /**
- * exec tool: run a shell command inside the workspace.
+ * bash tool: run a shell command inside the workspace.
  *
  * - cwd is pinned to the workspace so commands can't wander the filesystem.
  * - stdout/stderr chunks are streamed via `ctx.onOutput` until
@@ -19,7 +19,7 @@ import { spawn, type ChildProcess } from "node:child_process"
 import type { Readable } from "node:stream"
 import type { ToolExecutor } from "../agent/tools.js"
 import { spillLocatorLine, spillToolOutput, SPILL_MAX_BYTES } from "./spill.js"
-import type { ExecSandboxSpawn } from "../sandbox/provider.js"
+import type { BashSandboxSpawn } from "../sandbox/provider.js"
 
 const DEFAULT_TIMEOUT_MS = 60_000
 const DEFAULT_MAX_OUTPUT_BYTES = 100 * 1024
@@ -42,7 +42,7 @@ export function truncateMiddle(s: string, maxBytes: number): string {
   return `${head.toString("utf8")}\n...[truncated ${dropped} bytes]...\n${tail.toString("utf8")}`
 }
 
-export function createExecTool(opts: {
+export function createBashTool(opts: {
   workspace: string
   timeoutMs?: number
   maxOutputBytes?: number
@@ -52,7 +52,7 @@ export function createExecTool(opts: {
    * pre-sandbox behavior. Wired by the run assembly from the sandbox
    * provider's availability — never by the tool itself.
    */
-  sandbox?: ExecSandboxSpawn
+  sandbox?: BashSandboxSpawn
   /** Full-output spill dir (<home>/spill); undefined = truncation drops data as before. */
   spillDir?: string
   /**
@@ -60,12 +60,12 @@ export function createExecTool(opts: {
    * (session identity: KCLAW_SESSION_ID etc.). Absent = inherit unchanged.
    */
   env?: Record<string, string>
-}): ToolExecutor & { name: "exec" } {
+}): ToolExecutor & { name: "bash" } {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES
 
   return {
-    name: "exec",
+    name: "bash",
     risk: "sensitive",
     concurrency: "serial",
     execute(args, ctx) {
@@ -73,7 +73,7 @@ export function createExecTool(opts: {
       if (typeof command !== "string" || command.trim() === "") {
         return Promise.resolve({
           status: "error",
-          output: "exec: args.command must be a non-empty string",
+          output: "bash: args.command must be a non-empty string",
         })
       }
 
@@ -144,7 +144,7 @@ export function createExecTool(opts: {
         const capped = (): string => {
           const base = truncateMiddle(output, maxOutputBytes)
           if (droppedBytes === 0) return base
-          const spill = spillToolOutput(opts.spillDir, "exec", spillBuf)
+          const spill = spillToolOutput(opts.spillDir, "bash", spillBuf)
           return `${base}\n...[dropped ${droppedBytes} bytes]...${spillLocatorLine(spill)}`
         }
 
@@ -193,7 +193,7 @@ export function createExecTool(opts: {
         }, timeoutMs)
 
         child.on("error", (err) => {
-          finish({ status: "error", output: `exec failed: ${err.message}` })
+          finish({ status: "error", output: `bash failed: ${err.message}` })
         })
 
         child.on("close", (code) => {

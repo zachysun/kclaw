@@ -401,7 +401,7 @@ export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean
     case "message.created":
     case "message.completed":
       return false
-    // note.emitted: one dim line per note block — including the memory/job
+    // note.emitted: one dim line per note block — including the memory/cron
     // notes the daemon injects onto the user message (each is announced
     // exactly once, between that message's created and completed).
     case "note.emitted": {
@@ -446,11 +446,11 @@ export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean
     // run.started: no line — the run's first visible output is the model's
     // first delta; printing a banner here would only add noise.
     case "run.started":
-    // job.* / session.renamed: the chat loop does not act on job lifecycle
+    // cron.* / session.renamed: the chat loop does not act on cron lifecycle
     // or list-level renames (other surfaces own those).
-    case "job.started":
-    case "job.completed":
-    case "job.failed":
+    case "cron.started":
+    case "cron.completed":
+    case "cron.failed":
     case "session.renamed":
     // Block-open events: nothing live — the completed lines below carry the
     // full blocks (deltas stream between them; tool_result.delta's chunks are

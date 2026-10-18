@@ -1,12 +1,12 @@
 import type { FastifyError, FastifyInstance } from "fastify"
-import type { Job, JobScheduler } from "@kclaw/core"
+import type { Cron, CronScheduler } from "@kclaw/core"
 
-/** Store dependencies for the job routes (injected by createApp). */
-export interface JobStores {
-  jobs: JobScheduler
+/** Store dependencies for the cron routes (injected by createApp). */
+export interface CronStores {
+  crons: CronScheduler
 }
 
-const NOT_FOUND = { error: "job not found" } as const
+const NOT_FOUND = { error: "cron not found" } as const
 
 function isBodyObject(body: unknown): body is Record<string, unknown> {
   return typeof body === "object" && body !== null && !Array.isArray(body)
@@ -23,7 +23,7 @@ function stringField(body: Record<string, unknown>, key: string): { ok: true; va
 }
 
 /**
- * Validate a `POST /jobs` body: `name`, `cron` and `prompt` are all required
+ * Validate a `POST /cron` body: `name`, `cron` and `prompt` are all required
  * non-empty strings. A missing body counts as all-missing.
  */
 function createInputFromBody(
@@ -45,12 +45,12 @@ function createInputFromBody(
 }
 
 /**
- * Validate a `PATCH /jobs/:id` body into a partial Job patch: only `name`,
+ * Validate a `PATCH /cron/:id` body into a partial Cron patch: only `name`,
  * `prompt`, `enabled` and `cron` are accepted; unknown keys are ignored.
  */
-function patchFromBody(body: unknown): { ok: true; patch: Partial<Job> } | { ok: false; error: string } {
+function patchFromBody(body: unknown): { ok: true; patch: Partial<Cron> } | { ok: false; error: string } {
   if (!isBodyObject(body)) return { ok: false, error: "body must be a JSON object" }
-  const patch: Partial<Job> = {}
+  const patch: Partial<Cron> = {}
   for (const key of ["name", "prompt", "cron", "model"] as const) {
     const field = stringField(body, key)
     if (!field.ok) return field
@@ -65,23 +65,23 @@ function patchFromBody(body: unknown): { ok: true; patch: Partial<Job> } | { ok:
 }
 
 /**
- * Register the job CRUD routes on the app, backed by the injected
- * JobScheduler. The scope's error handler normalizes body-parse failures
+ * Register the cron CRUD routes on the app, backed by the injected
+ * CronScheduler. The scope's error handler normalizes body-parse failures
  * into `{error}`; cron validation errors from the scheduler (cron-parser's
  * own messages) are caught at the call sites and returned as 400s.
  * The parent app's bearer-token auth hook still applies to every route.
  */
-export function registerJobRoutes(app: FastifyInstance, stores: JobStores): void {
+export function registerCronRoutes(app: FastifyInstance, stores: CronStores): void {
   app.register(async (scope) => {
     scope.setErrorHandler((error: FastifyError, _request, reply) => {
       reply.status(error.statusCode ?? 500).send({ error: error.message })
     })
 
-    scope.post("/jobs", async (request, reply) => {
+    scope.post("/cron", async (request, reply) => {
       const parsed = createInputFromBody(request.body)
       if (!parsed.ok) return reply.code(400).send({ error: parsed.error })
       try {
-        return reply.code(201).send(stores.jobs.create(parsed.input))
+        return reply.code(201).send(stores.crons.create(parsed.input))
       } catch (error) {
         // The scheduler's only throw path here is cron parsing; its message
         // (from cron-parser) is passed through untouched.
@@ -89,25 +89,25 @@ export function registerJobRoutes(app: FastifyInstance, stores: JobStores): void
       }
     })
 
-    scope.get("/jobs", async () => stores.jobs.list())
+    scope.get("/cron", async () => stores.crons.list())
 
-    scope.patch("/jobs/:id", async (request, reply) => {
+    scope.patch("/cron/:id", async (request, reply) => {
       const { id } = request.params as { id: string }
-      if (stores.jobs.get(id) === undefined) return reply.code(404).send(NOT_FOUND)
+      if (stores.crons.get(id) === undefined) return reply.code(404).send(NOT_FOUND)
       const parsed = patchFromBody(request.body)
       if (!parsed.ok) return reply.code(400).send({ error: parsed.error })
       try {
-        const job = stores.jobs.update(id, parsed.patch)
-        if (job === undefined) return reply.code(404).send(NOT_FOUND)
-        return job
+        const cron = stores.crons.update(id, parsed.patch)
+        if (cron === undefined) return reply.code(404).send(NOT_FOUND)
+        return cron
       } catch (error) {
         return reply.code(400).send({ error: (error as Error).message })
       }
     })
 
-    scope.delete("/jobs/:id", async (request, reply) => {
+    scope.delete("/cron/:id", async (request, reply) => {
       const { id } = request.params as { id: string }
-      if (!stores.jobs.remove(id)) return reply.code(404).send(NOT_FOUND)
+      if (!stores.crons.remove(id)) return reply.code(404).send(NOT_FOUND)
       return reply.code(204).send()
     })
   })

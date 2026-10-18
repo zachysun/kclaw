@@ -5,7 +5,7 @@
  *
  * Surface rules: the lead gets all seven; a member gets send/list/task_*
  * but never create_team / spawn_teammate (no second team, no multi-level
- * delegation); job sessions get none (the assembly simply omits opts.team).
+ * delegation); cron sessions get none (the assembly simply omits opts.team).
  */
 import type { TeamFacade, TeamIdentity } from "../team/facade.js"
 import { ToolError, makeTool, requireString } from "./shared.js"

@@ -677,8 +677,8 @@ describe("executeRun × usage 缓存字段链路", () => {
     const extra: HookEntry[] = [
       hook("watch-total", "run-after", (ctx) => { seen = ctx.outcome.totalUsage }, { failure: "skip" }),
     ]
-    // safe + non-"exec" name: keeps the permission gate out of the loop — this
-    // test is about the usage chain, and an "exec"-named sensitive tool parks
+    // safe + non-"bash" name: keeps the permission gate out of the loop — this
+    // test is about the usage chain, and an "bash"-named sensitive tool parks
     // on manual confirmation where no sandbox provider exists (CI linux).
     const probe: ToolExecutor = { risk: "safe", concurrency: "serial", async execute() { return { status: "ok", output: "ran" } } }
     const { engine, sessionId } = makeEngine({ llm, extraHooks: extra, tools: new Map([["probe", probe]]) })
@@ -742,7 +742,7 @@ describe("executeRun × usage 缓存字段链路", () => {
         }
       },
     }
-    // safe + non-"exec" name: same CI-sandbox reason as the test above.
+    // safe + non-"bash" name: same CI-sandbox reason as the test above.
     const probe: ToolExecutor = { risk: "safe", concurrency: "serial", async execute() { return { status: "ok", output: "ran" } } }
     const { engine, sessionId } = makeEngine({
       llm,

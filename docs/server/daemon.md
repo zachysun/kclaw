@@ -11,7 +11,7 @@
 - **daemon.json 是独占占位，启动第一步就认领**：组装开始即以 `wx` 原子创建占位 `{port: 0, pid, startedAt, starting: true}`（并发第二个启动者拿到 EEXIST，看到存活 pid 即拒绝"daemon already running"；死 pid 的残留被回收重认领）；listen 成功后回填真实 `{port, pid, startedAt}`（同一 startedAt，`starting` 移除），此时文件才指向可用端口。`launchDaemon` resolve 时 daemon 已在服务并在调度。CLI 侧以"文件出现且 `/health` 可访问"作为就绪判据。
 - **token 是 daemon 的稳定身份**：`<home>/token` 首次启动时生成（UUID，文件权限 0600，仅属主可读写），重启复用，stop 不删除；仅 daemon.json 会被删除。因此 CLI/WebUI 保存的 token 在 daemon 重启后仍然有效。
 - **鉴权是"每路由必带 Bearer"加白名单豁免**：一个 `preHandler` hook 拦截全部路由，只有三处豁免——`/health`、`/ws`、静态 WebUI 外壳（见下）。豁免列表是封闭集合，新增路由默认受保护。
-- **有界停止**：`stop()` 的每一步（停调度、关服务器）有独立超时（默认 60s）。超时则 `stop()` reject、daemon.json **保留**——进程仍在运行，指向它的文件必须与事实一致；虚报"已停止"会诱发双 daemon、job 双触发。
+- **有界停止**：`stop()` 的每一步（停调度、关服务器）有独立超时（默认 60s）。超时则 `stop()` reject、daemon.json **保留**——进程仍在运行，指向它的文件必须与事实一致；虚报"已停止"会诱发双 daemon、cron 双触发。
 - **provider 缺失是硬错误**：组装期就抛错终止，不启动一个"半配置"的 daemon。
 - **MCP 恒定组装，且启动零连接**：无论配置文件里有没有 server，daemon 都构建一个 `McpManager`（空的管理器没有任何连接、开销为零，管理路由因此永远可用，从 WebUI 添加第一个 server 不需要先改配置）。配置来自全局 `~/.kclaw/mcp.json` 加**每个已知项目**的 `.kclaw/mcp.json`（项目集合 = daemon 主工作目录 + 全部会话记录里出现过的工作目录，daemon 启动时现算，运行中新建会话即时挂载；不靠任何清单文件，与技能同源，放好配置文件即生效。唯一例外：daemon 主目录嵌在某个项目里时，该项目的配置文件与全局 `mcp.json` 是同一个路径，两层无法独立存在，这样的目录不挂项目组，见 [mcp](../core/mcp.md)）。连接是惰性的：启动与配置变更都不发起连接，run 用到某项目的工具、或用户手动 connect 时才按需连接（见 [mcp](../core/mcp.md)）。连接失败只打一行日志，永远不会拖垮 daemon。
 
@@ -87,7 +87,7 @@ embedding 判定链（memory.embedding） model 非空才构造 embedding 客户
 new MemorySystem({memoryDir, sessions, config, resolveLlm, embed, emit})
                                     记忆系统统一入口（见 memory.md）；组装后立即做：
                                     reconcile()（全部项目库 + 全局库重建索引，向量后台补算）
-new JobScheduler(paths.jobsDb)
+new CronScheduler(paths.cronDb)
 new UsageStore(paths.usageDb)       token 用量记录（SQLite，stop 时 close）
 createProviderResolver(config) + resolveModel(config)  见"provider 解析"；
                                     resolver 按条目建连并缓存客户端（llm/embed 两个缓存），
@@ -220,7 +220,7 @@ app.addHook("preHandler", async (request, reply) => {
 
 - 只放行 `GET`；其他方法一律走鉴权。
 - 匹配的是**原始请求路径**（`request.url.split("?")[0]`，去掉查询串），不是 `request.routeOptions.url`——`@fastify/static` 用一条 `/*` catch-all 路由服务一切文件，匹配到的路由 url 不含路径信息，依据它判断等于全部放行。
-- 路径白名单是"三种模式 + 六个精确路径"的封闭集合：模式为 `/`、`/index.html`、`/assets/` 前缀，精确路径为上文那六个 PWA 文件。`/sessions`、`/jobs`、`/config` 等 API 路由先注册、各自有真实 route url，不落在静态 catch-all 的放行逻辑里。
+- 路径白名单是"三种模式 + 六个精确路径"的封闭集合：模式为 `/`、`/index.html`、`/assets/` 前缀，精确路径为上文那六个 PWA 文件。`/sessions`、`/cron`、`/config` 等 API 路由先注册、各自有真实 route url，不落在静态 catch-all 的放行逻辑里。
 - 反向防线：`resolveWebDist` 在目录不存在时返回 `undefined`（不注册任何静态路由，`GET /` 保持 404），而不是注册一个半配置的静态服务器，使外壳豁免空设在鉴权之前。
 
 ## 停止流程
@@ -236,7 +236,7 @@ withStopTimeout(goalHost.dispose(), 60s)
                                     // 循环不自动续跑——重启后等用户 resume，见 goal.md）
 withStopTimeout(historyIndex.close(), 60s)
                                     // 关 search.db（历史检索索引）
-withStopTimeout(tick.stop(), 60s)   // 停心跳；tick.stop 会 await 所有进行中的 job run
+withStopTimeout(tick.stop(), 60s)   // 停心跳；tick.stop 会 await 所有进行中的 cron run
 withStopTimeout(memoryTick.stop(), 60s)
                                     // 停记忆调度器（定时 + 跟随保底）
 withStopTimeout(skillTick.stop(), 60s)
@@ -255,9 +255,9 @@ usage.close()                       // 关用量数据库
 rmSync(<home>/daemon.json)          // 只有全部成功才删
 ```
 
-`withStopTimeout(p, timeoutMs, step)` 用 `Promise.race([p, deadline])` 给每步设限。超时的一步**不会被取消**（它可能稍后自行完成，迟到的失败被丢弃——超时已经报告过失败，不能再以未处理 rejection 的形式抛出）。设限的原因：挂死的 provider 流会阻塞 tracked job run，卡住的客户端会阻塞 `app.close`，没有超时上限的 `stop()` 会永远不返回。
+`withStopTimeout(p, timeoutMs, step)` 用 `Promise.race([p, deadline])` 给每步设限。超时的一步**不会被取消**（它可能稍后自行完成，迟到的失败被丢弃——超时已经报告过失败，不能再以未处理 rejection 的形式抛出）。设限的原因：挂死的 provider 流会阻塞 tracked cron run，卡住的客户端会阻塞 `app.close`，没有超时上限的 `stop()` 会永远不返回。
 
-**超时路径**：`stop()` reject → bin exit 1 → **daemon.json 保留**（进程仍在运行）。进行中的 job run 按崩溃安全语义放弃（见 [jobs](../core/jobs.md) 的「停机与进行中的运行」）：JSONL 兼容尾部残缺行；该次触发认领时已推进 `next_run_at`，重启后不会重放，job 在下个调度点照常触发。
+**超时路径**：`stop()` reject → bin exit 1 → **daemon.json 保留**（进程仍在运行）。进行中的 cron run 按崩溃安全语义放弃（见 [cron](../core/cron.md) 的「停机与进行中的运行」）：JSONL 兼容尾部残缺行；该次触发认领时已推进 `next_run_at`，重启后不会重放，cron 在下个调度点照常触发。
 
 ### CLI 侧的 pid 校验与 stop（daemon-ctl.ts）
 

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs"
 import Fastify from "fastify"
 import fastifyStatic from "@fastify/static"
 import type { FastifyInstance, FastifyRequest } from "fastify"
-import { JobScheduler, SessionStore, loadConfig, resolvePaths } from "@kclaw/core"
+import { CronScheduler, SessionStore, loadConfig, resolvePaths } from "@kclaw/core"
 import type { KclawConfig, KclawPaths, ConfigNotifier, HistorySearchFn, HookRegistry, MemorySystem, SkillEvolutionAdmin, UsageStore } from "@kclaw/core"
 import { bearerMatches } from "./auth.js"
 import { EventBus } from "@kclaw/core"
@@ -16,7 +16,7 @@ import { registerPermissionsRoutes } from "./routes/permissions.js"
 import { registerMemoryRoutes } from "./routes/memory.js"
 import { registerSkillRoutes } from "./routes/skills.js"
 import { registerAttachmentRoutes } from "./routes/attachments.js"
-import { registerJobRoutes } from "./routes/jobs.js"
+import { registerCronRoutes } from "./routes/cron.js"
 import { registerConfigRoutes } from "./routes/config.js"
 import { registerSearchRoutes } from "./routes/search.js"
 import { registerFsRoutes } from "./routes/fs.js"
@@ -43,7 +43,7 @@ export interface AppOptions {
   /** Optional store overrides for tests and composition. */
   stores?: {
     sessions?: SessionStore
-    jobs?: JobScheduler
+    crons?: CronScheduler
     config?: KclawConfig
     paths?: KclawPaths
   }
@@ -178,7 +178,7 @@ function readVersion(): string {
  * and `/favicon.ico` is requested by browsers by default — a missing favicon
  * should 404 from the static handler, not 401). Only GET is exempt; every
  * other method and path
- * (sessions/jobs/config/ws included) stays bearer-protected.
+ * (sessions/cron/config/ws included) stays bearer-protected.
  *
  * The check runs on the raw request path with the query string stripped, NOT
  * `request.routeOptions.url`: @fastify/static serves everything through one
@@ -204,7 +204,7 @@ function isWebShellExempt(request: FastifyRequest): boolean {
 /**
  * Build the kclaw daemon Fastify app: bearer-token auth on every route
  * except /health and /ws (websockets authenticate per connection via the
- * first frame), plus GET /health and GET /status, the session/job/config
+ * first frame), plus GET /health and GET /status, the session/cron/config
  * routes, the GET /ws subscription endpoint, and (only when `webDist`
  * is given) static hosting of the web UI with its shell/assets exempted.
  */
@@ -251,8 +251,8 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
     registerAttachmentRoutes(app, { sessions, attachmentsDir: opts.attachmentsDir })
   }
 
-  const jobs = opts.stores?.jobs ?? new JobScheduler(paths.jobsDb)
-  registerJobRoutes(app, { jobs })
+  const crons = opts.stores?.crons ?? new CronScheduler(paths.cronDb)
+  registerCronRoutes(app, { crons })
 
   registerConfigRoutes(app, { config })
   registerSearchRoutes(app, { historySearch: opts.historySearch })

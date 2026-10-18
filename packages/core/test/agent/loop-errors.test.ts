@@ -157,14 +157,14 @@ describe("provider failure lifecycle", () => {
 
 describe("dangling tool calls from a dead stream", () => {
   const TOOLS = new Map([
-    ["exec", { risk: "sensitive" as const, concurrency: "parallel" as const, async execute() { return { status: "ok", output: "ran" } } }],
+    ["bash", { risk: "sensitive" as const, concurrency: "parallel" as const, async execute() { return { status: "ok", output: "ran" } } }],
   ])
 
   it("abort mid tool_call args streaming synthesizes error results for dangling calls", async () => {
     const controller = new AbortController()
     const llm: LlmClient = {
       async *stream(): AsyncIterable<LlmStreamEvent> {
-        yield { type: "tool_call_started", index: 0, callId: "call_1", name: "exec" }
+        yield { type: "tool_call_started", index: 0, callId: "call_1", name: "bash" }
         yield { type: "tool_call_delta", index: 0, delta: '{"comm' }
         controller.abort()
         await new Promise<never>(() => {})
@@ -187,7 +187,7 @@ describe("dangling tool calls from a dead stream", () => {
   it("provider failure mid tool_call streaming also synthesizes results", async () => {
     const llm: LlmClient = {
       async *stream(): AsyncIterable<LlmStreamEvent> {
-        yield { type: "tool_call_started", index: 0, callId: "call_9", name: "exec" }
+        yield { type: "tool_call_started", index: 0, callId: "call_9", name: "bash" }
         yield { type: "tool_call_delta", index: 0, delta: '{"comm' }
         throw new Error("llm http 500: dead")
       },
@@ -203,13 +203,13 @@ describe("dangling tool calls from a dead stream", () => {
 
 describe("max iterations truncation", () => {
   const TOOLS = new Map([
-    ["exec", { risk: "sensitive" as const, concurrency: "parallel" as const, async execute() { return { status: "ok", output: "ran" } } }],
+    ["bash", { risk: "sensitive" as const, concurrency: "parallel" as const, async execute() { return { status: "ok", output: "ran" } } }],
   ])
 
   it("attaches the truncation note before the final assistant is persisted", async () => {
     const llm: LlmClient = {
       async *stream(): AsyncIterable<LlmStreamEvent> {
-        yield { type: "tool_call_started", index: 0, callId: "call_1", name: "exec" }
+        yield { type: "tool_call_started", index: 0, callId: "call_1", name: "bash" }
         yield { type: "tool_call_delta", index: 0, delta: "{}" }
         yield { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 1, outputTokens: 1 } }
       },

@@ -5,7 +5,7 @@
  *   resolvePaths → acquireDaemonSlot (exclusive `wx` claim of
  *   `<home>/daemon.json` with a placeholder {port: 0, pid, startedAt,
  *   starting}) → loadConfig → loadOrCreateToken → stores (SessionStore,
- *   MemorySystem, JobScheduler) → llm client
+ *   MemorySystem, CronScheduler) → llm client
  *   → RunManager → createApp (auth + routes + ws) → listen 127.0.0.1 →
  *   backfill daemon.json with the real {port, pid, startedAt}
  *   → scheduler tick → Daemon.
@@ -14,10 +14,10 @@
  * file is kept — it is the daemon's stable identity across restarts). All of
  * it idempotent: a second stop() resolves immediately. Each step is bounded
  * by a deadline (default 60s): a step that misses it makes stop() REJECT,
- * daemon.json is kept (the process is still alive), and in-flight job runs
+ * daemon.json is kept (the process is still alive), and in-flight cron runs
  * are abandoned — JSONL tolerates partial runs; a claimed run's occurrence
  * already advanced next_run_at (at claim time), so it does not re-fire: the
- * job fires again at its next scheduled time.
+ * cron fires again at its next scheduled time.
  *
  * Provider resolution: the config's default provider
  * entry wins; KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY / KCLAW_LLM_MODEL env
@@ -29,7 +29,7 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
   GLOBAL_GROUP,
-  JobScheduler,
+  CronScheduler,
   MemorySystem,
   SessionStore,
   createConfigNotifier,
@@ -86,7 +86,7 @@ export const DEFAULT_STOP_TIMEOUT_MS = 60_000
 
 /**
  * Race one daemon-stop step against a deadline: `tick.stop()`
- * awaits every tracked job run and `app.close()` awaits every connection, so
+ * awaits every tracked cron run and `app.close()` awaits every connection, so
  * a hung provider stream (or a stuck client) could park `stop()` forever —
  * an unstoppable daemon that the CLI would then double-spawn. The losing
  * step is never cancelled: it MAY still settle later, and a late rejection
@@ -208,7 +208,7 @@ function releaseClaimedSlot(daemonJson: string, pid: number): void {
  * `wx` creation of daemon.json wins the race atomically — a concurrent
  * second launcher gets EEXIST, sees our live pid, and refuses instead of
  * silently overwriting the pidfile and orphaning the first daemon (which
- * also double-runs the scheduler against the same jobs.db and races the
+ * also double-runs the scheduler against the same cron.db and races the
  * token file). A stale slot (dead pid) is reclaimed. Returns the startedAt
  * timestamp for the post-listen backfill.
  */
@@ -348,7 +348,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     })),
   })
   memory.reconcile()
-  const jobs = new JobScheduler(paths.jobsDb)
+  const crons = new CronScheduler(paths.cronDb)
 
   // resolveConfirmation stays undefined: WS/CLI verdicts reach the RunManager's
   // internal ConfirmationBroker (createApp routes confirmation.resolve frames
@@ -540,7 +540,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   const app = await createApp({
     home: paths.home,
     token,
-    stores: { sessions, jobs, config, paths },
+    stores: { sessions, crons, config, paths },
     configNotifier,
     bus,
     run,
@@ -593,7 +593,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // startedAt keeps the claim's timestamp (no `starting` flag once serving).
   writeFileSync(daemonJson, `${JSON.stringify({ port, pid: process.pid, startedAt }, null, 2)}\n`, "utf8")
 
-  // Job terminal-state notifier: assembled only when channels are configured
+  // Cron terminal-state notifier: assembled only when channels are configured
   // (none → undefined, the tick skips pushes entirely). Failures are reported
   // here and never propagate — sending never throws inside the notifier.
   const notifier = config.notify.channels.length > 0
@@ -613,7 +613,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // reconnecting clients are corrected wholesale by GET /queue.
   run.recoverQueues()
 
-  const tick = startSchedulerTick({ scheduler: jobs, run, bus, sessions, intervalMs: opts.schedulerIntervalMs ?? DEFAULT_SCHEDULER_INTERVAL_MS, purgeTtlMs: config.sessions.recycleBinTtlMs, notifier, webBase: `http://${HOST}:${port}`, defaultMode: config.permissions.defaultMode })
+  const tick = startSchedulerTick({ scheduler: crons, run, bus, sessions, intervalMs: opts.schedulerIntervalMs ?? DEFAULT_SCHEDULER_INTERVAL_MS, purgeTtlMs: config.sessions.recycleBinTtlMs, notifier, webBase: `http://${HOST}:${port}`, defaultMode: config.permissions.defaultMode })
   hostStops.push(["scheduler tick", () => tick.stop()])
   // 记忆调度器：定时 + 跟随补查。workdirs = 全部有会话的
   // 项目（去重）；daemon 重启后首次 sweep 会补查写入的挂起跟随检查。
@@ -654,10 +654,10 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       // (app.close awaits them) could park stop() forever. On a timeout the
       // error propagates to the caller (bin logs to stderr and exits 1) and
       // daemon.json is KEPT: the process is still alive, so an honest pidfile
-      // beats a cleaned one. In-flight job runs are abandoned — JSONL
+      // beats a cleaned one. In-flight cron runs are abandoned — JSONL
       // tolerates partial runs; each claimed occurrence already had
       // next_run_at advanced at claim time, so the killed run does not
-      // re-fire: the job fires again at its next scheduled time.
+      // re-fire: the cron fires again at its next scheduled time.
       for (const [label, stop] of hostStops) {
         await withStopTimeout(stop(), stopTimeoutMs, label)
       }

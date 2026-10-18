@@ -8,7 +8,7 @@ import { describe, it, expect } from "vitest"
 import { ConfirmationBroker, racePending, type QuestionResolution } from "../../src/permissions/broker.js"
 import { newBlockId, type ToolCallBlock } from "../../src/protocol/blocks.js"
 
-function toolCall(name = "exec"): ToolCallBlock {
+function toolCall(name = "bash"): ToolCallBlock {
   return { id: newBlockId(), type: "tool_call", callId: "call_1", name, args: {}, argsJson: "{}" }
 }
 

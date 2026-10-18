@@ -88,7 +88,7 @@ describe("renderFrame compaction events", () => {
 })
 
 describe("renderFrame note.emitted", () => {
-  it("keeps printing memory and job notes as before", async () => {
+  it("keeps printing memory and cron notes as before", async () => {
     const block: NoteBlock = { id: "b1", type: "note", kind: "memory", text: "记住的要点" }
     const out = await capture((ctx) => renderFrame(ev("note.emitted", { messageId: "m1", block }), ctx))
     expect(out).toContain("[note] 记住的要点")

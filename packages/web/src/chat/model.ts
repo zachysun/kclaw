@@ -541,15 +541,15 @@ export function applyEvent(state: ChatState, event: AgentEvent): ChatState {
       return pushQuestion(state, event.payload)
     case "question.resolved":
       return removeQuestion(state, event.payload.questionId)
-    // The catalog's pass-through events (no view state to change): job
+    // The catalog's pass-through events (no view state to change): cron
     // lifecycle and session renames are other views' business, attachment
     // blocks are calibrated wholesale by message.completed, llm.started is
     // bookkeeping, and memory.written escapes to the panel before the
     // reducer. They are listed so a NEW core event type trips the sentinel
     // below instead of silently no-opping.
-    case "job.started":
-    case "job.completed":
-    case "job.failed":
+    case "cron.started":
+    case "cron.completed":
+    case "cron.failed":
     case "session.renamed":
     case "session.appended":
     case "attachment.created":

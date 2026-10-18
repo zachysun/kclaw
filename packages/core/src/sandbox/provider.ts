@@ -1,26 +1,26 @@
 /**
- * Exec sandbox provider: the OS-level sandbox that wraps the `exec` tool's
+ * Bash sandbox provider: the OS-level sandbox that wraps the `bash` tool's
  * child process. This is the ONE new concept the permission sandbox feature
  * introduces; everything else is a parameter on existing entry points.
  *
  * Responsibilities: platform availability probing + spawn wrapping. The
- * provider carries NO business judgment — whether a sandboxed exec auto-passes
+ * provider carries NO business judgment — whether a sandboxed bash auto-passes
  * the permission gate is decided in permissions/engine.ts from the set of
- * tools the run assembly actually wrapped (the assembly wraps exec only when
+ * tools the run assembly actually wrapped (the assembly wraps bash only when
  * `provider.available` — single source, so a "sandboxed" allowance can never
- * be issued while exec runs bare).
+ * be issued while bash runs bare).
  *
- * Platform layout (see docs/superpowers/exec-sandbox-spec.md):
+ * Platform layout (see docs/superpowers/bash-sandbox-spec.md):
  * - macOS: sandbox-exec + an SBPL profile — workspace/tmp writable, home
  *   readable except ~/.kclaw masked read-denied (credential isolation).
  *   First-match rule order matters (an allow list then a deny fallback).
  * - Linux: bubblewrap, no setuid — whole root ro-bind, ~/.kclaw tmpfs-masked,
- *   /tmp + workspace writable, `--die-with-parent --new-session` so the exec
+ *   /tmp + workspace writable, `--die-with-parent --new-session` so the bash
  *   tool's process-group kill and the timeout reach the whole tree. Network
  *   stays OPEN by default (v1 decision); `sandbox.network: "deny"` opts into
  *   isolation (`deny network-outbound/inbound` on Seatbelt, `--unshare-net`
  *   for bwrap) — web tools are unaffected (they run in the daemon, not the
- *   exec child).
+ *   bash child).
  * - Linux fallback chain: bwrap → unavailable (manual confirmation).
  *   Landlock fallback is a follow-up: pure Node cannot issue the
  *   landlock_create_ruleset syscall, and no mature CLI wrapper exists.
@@ -33,23 +33,23 @@ import { realpathWithin } from "../permissions/engine.js"
 import type { SandboxConfig } from "../storage/config.js"
 
 /**
- * The spawn contract the exec tool consumes from a sandbox wrapper. THE
+ * The spawn contract the bash tool consumes from a sandbox wrapper. THE
  * CARRIED INVARIANT: the returned ChildProcess must be a process-group /
  * session leader (`detached: true` on a plain spawn; bwrap's
- * `--new-session --die-with-parent` in the wrapper) — the exec tool's
+ * `--new-session --die-with-parent` in the wrapper) — the bash tool's
  * timeout kills the tree with `process.kill(-pid)`, which only reaches
  * shell descendants when the child leads its own group. A spawn that skips
  * this fails SILENTLY: the kill reaps the shell alone and grandchildren
  * keep running. `env` (when given) is the child's COMPLETE environment —
- * the exec tool merges the session identity vars over process.env before
+ * the bash tool merges the session identity vars over process.env before
  * calling; undefined = inherit the daemon's environment.
  */
-export interface ExecSandboxSpawn {
+export interface BashSandboxSpawn {
   spawn(command: string, opts: { cwd: string; env?: Record<string, string> }): ChildProcess
 }
 
 /** The full sandbox surface: the spawn contract + availability probing. */
-export interface ExecSandbox extends ExecSandboxSpawn {
+export interface BashSandbox extends BashSandboxSpawn {
   readonly available: boolean
   /** Why the sandbox is unavailable; undefined while available. */
   readonly unavailableReason?: string
@@ -79,7 +79,7 @@ const realpathOf = (p: string): string => realpathWithin(resolve(p))
  * network: "allow" keeps `(allow network*)`. "deny" swaps it for outbound +
  * inbound denies — a bare `(deny network*)` is TOO BROAD on Seatbelt (the
  * wildcard also matches internal ops the shell needs to even start, observed
- * empirically: process exec broke), while outbound+inbound precisely blocks
+ * empirically: process bash broke), while outbound+inbound precisely blocks
  * connect()/accept() and leaves the process usable.
  */
 export function seatbeltProfile(o: {
@@ -112,7 +112,7 @@ export function seatbeltProfile(o: {
  * Whole root ro-bind, then tmpfs/bind overrides — a later mount of the same
  * path shadows an earlier one, so the writable spots win. network: "deny"
  * adds `--unshare-net` (own network namespace, loopback down). --new-session
- * makes bwrap the session leader, so the exec tool's `kill(-pid)` (its own
+ * makes bwrap the session leader, so the bash tool's `kill(-pid)` (its own
  * new process group) still reaps the whole tree, and --die-with-parent covers
  * a SIGKILL'd bwrap's descendants.
  */
@@ -156,11 +156,11 @@ function bwrapWorks(bwrap: string): boolean {
 const SEATBELT_BIN = "/usr/bin/sandbox-exec"
 
 /**
- * Build the exec sandbox for this process. Availability is probed once per
+ * Build the bash sandbox for this process. Availability is probed once per
  * call (the run assembly calls this once per run; the probe is cheap). `which`
  * is injectable for tests; the real default probes PATH via `which`.
  */
-export function createExecSandbox(
+export function createBashSandbox(
   cfg: SandboxConfig,
   o: {
     workspace?: string
@@ -168,7 +168,7 @@ export function createExecSandbox(
     tmpDirs?: string[]
     which?: (name: string) => string | undefined
   } = {},
-): ExecSandbox {
+): BashSandbox {
   if (!cfg.enabled) {
     return unavailable("sandbox disabled in config (sandbox.enabled: false)")
   }
@@ -176,7 +176,7 @@ export function createExecSandbox(
   const tmpDirs = o.tmpDirs ?? [tmpdir(), "/private/tmp"]
   const network = cfg.network ?? "allow"
   const which = o.which ?? findOnPath
-  // The exec tool always spawns with cwd = workspace, so that is the layout's
+  // The bash tool always spawns with cwd = workspace, so that is the layout's
   // workspace when the caller did not pin one.
   const workspaceFor = (cwd: string): string => o.workspace ?? cwd
 
@@ -190,10 +190,10 @@ export function createExecSandbox(
         const profile = seatbeltProfile({ workspace: workspaceFor(opts.cwd), home, writeRoots: cfg.writeRoots, tmpDirs, network })
         return spawn(SEATBELT_BIN, ["-p", profile, "/bin/sh", "-c", command], {
           cwd: opts.cwd,
-          // The exec tool passes the COMPLETE child environment (session
+          // The bash tool passes the COMPLETE child environment (session
           // identity vars merged over process.env); undefined = inherit.
           ...(opts.env === undefined ? {} : { env: opts.env }),
-          // Own process group so the exec tool's timeout kill(-pid) reaches
+          // Own process group so the bash tool's timeout kill(-pid) reaches
           // the sandbox and everything it spawned (sandbox-exec execs the
           // shell in place, same pid/group).
           detached: true,
@@ -219,15 +219,15 @@ export function createExecSandbox(
     }
   }
 
-  return unavailable(`no exec sandbox for platform ${process.platform}`)
+  return unavailable(`no bash sandbox for platform ${process.platform}`)
 }
 
-function unavailable(reason: string): ExecSandbox {
+function unavailable(reason: string): BashSandbox {
   return {
     available: false,
     unavailableReason: reason,
     spawn() {
-      throw new Error(`exec sandbox unavailable: ${reason}`)
+      throw new Error(`bash sandbox unavailable: ${reason}`)
     },
   }
 }

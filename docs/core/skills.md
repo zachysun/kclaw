@@ -89,7 +89,7 @@
 
 包装经内置 `skill-wrap` hook 在 `llm-before` 位置生效（每次 `llm.stream` 之前，见 [hooks](./hooks.md)），配合 `withLastUserText` 按内容锚定本轮 user 消息——steer 插话后列表末条的 user 是插话，按内容锚定才不会把插话覆盖掉。包装文本同时记录到当轮消息的 `llmText` 标记：组装层每次按标记重放同一字节，hook 的替换与之同值幂等；技能目录随后变化（升级、删除、复用档位调整）只影响之后的新消息，不改动已发历史。
 
-**仅 `trigger: "user"` 生效**：job 提示是 daemon 生成的内部指令，不参与指定检测。
+**仅 `trigger: "user"` 生效**：cron 提示是 daemon 生成的内部指令，不参与指定检测。
 
 ## 技能复用（软链接接入其他 agent 的技能）
 

@@ -36,11 +36,11 @@ export function createBuiltinTools(opts: {
   memoryCtx: { system: MemorySystem; sessionId: string; workdir: string; immediateEnabled: boolean }
   // 记忆系统统一入口 + 当前会话上下文；immediateEnabled 决定 memory_save 是否当场触发写入
   tavilyApiKey: string
-  exec?: Partial<{ timeoutMs: number; maxOutputBytes: number; sandbox: ExecSandboxSpawn; spillDir: string }>
-  // sandbox = exec 沙箱包装器：run 组装仅在沙箱可用时传入（见 sandbox.md），
-  // exec 工具本身不检测平台；默认 = 裸跑，即沙箱功能不存在前的行为
+  bash?: Partial<{ timeoutMs: number; maxOutputBytes: number; sandbox: BashSandboxSpawn; spillDir: string }>
+  // sandbox = bash 沙箱包装器：run 组装仅在沙箱可用时传入（见 sandbox.md），
+  // bash 工具本身不检测平台；默认 = 裸跑，即沙箱功能不存在前的行为
   // spillDir = <home>/spill：截断时全量输出写入磁盘 + 模型视图附 fs_read 定位行（见 tools/spill.ts）
-  sessionId?: string                 // 注入 exec 子进程环境（KCLAW_SESSION_ID / KCLAW_WORKSPACE）；缺席 = exec 原样继承 daemon 环境
+  sessionId?: string                 // 注入 bash 子进程环境（KCLAW_SESSION_ID / KCLAW_WORKSPACE）；缺席 = bash 原样继承 daemon 环境
   web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean; spillDir: string }>
   sessionSearch?: SessionSearchFn    // session_search 的检索后端（server 每 run 注入）；缺席时工具仍注册、返回"(无可检索内容)"
   historySearch?: HistorySearchFn    // history_search 的检索后端（server 每 run 注入，跨会话原始消息）；缺席时工具仍注册、返回固定不可用文案
@@ -71,17 +71,17 @@ export function makeTool<N extends string>(
 
 ## 24 个内置工具
 
-完整清单（名称、一句话职责、risk / concurrency、条件注册与工具清单收缩规则）陈列在 [reference/tools](../reference/tools.md)：常驻 13 个（exec、fs 四件、web 两件、memory 两件、session_search、history_search、skill 两件）+ 条件注册 11 个（subagent 2、skill_create 1、团队 7、提问 1）。下面按实现文件分组说明各家的机制。
+完整清单（名称、一句话职责、risk / concurrency、条件注册与工具清单收缩规则）陈列在 [reference/tools](../reference/tools.md)：常驻 13 个（bash、fs 四件、web 两件、memory 两件、session_search、history_search、skill 两件）+ 条件注册 11 个（subagent 2、skill_create 1、团队 7、提问 1）。下面按实现文件分组说明各家的机制。
 
 前 13 个**常驻注册**（注册与否不随会话状态变化；可见性例外有两个——readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型可见工具清单，见 [permissions](./permissions.md)；subagent run 会裁掉 `memory_save`，见 [subagents](./subagents.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 组装了 subagent 派发后端时注册（subagent 自己的 run 两者都不注册，单层委派、不能再派下一级 subagent）；`skill_create` 仅在 daemon 组装了技能进化系统时注册（`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案，机制见 [skills](./skills.md)）；`ask_user_questions` 每个 run 都注册；七个团队工具只在会话属于某个团队时注册，且**工具清单按身份收缩**：组长拿全套，组员没有 `create_team`/`spawn_teammate`（见下文与 [agent-team](./agent-team.md)）。
 
-### exec（`tools/exec.ts`）
+### bash（`tools/bash.ts`）
 
 `spawn(command, {shell: true, cwd: workspace, detached: POSIX 下为 true})`——cwd 固定在工作目录；`detached` 让子进程成为进程组（一组一起调度/发信号的进程）组长。关键约束：
 
-- **沙箱注入**：构造参数可选带 `sandbox`（`ExecSandboxSpawn`，一个 `spawn(command, {cwd, env?}) → ChildProcess`）。注入时命令改经沙箱包装器运行（其内部负责再经 `/bin/sh -c` 与进程组语义，见 [sandbox](./sandbox.md)）；默认裸跑即沙箱功能不存在前的行为。run 组装只在沙箱可用时注入，与权限引擎的 `sandboxedTools` 同源。
+- **沙箱注入**：构造参数可选带 `sandbox`（`BashSandboxSpawn`，一个 `spawn(command, {cwd, env?}) → ChildProcess`）。注入时命令改经沙箱包装器运行（其内部负责再经 `/bin/sh -c` 与进程组语义，见 [sandbox](./sandbox.md)）；默认裸跑即沙箱功能不存在前的行为。run 组装只在沙箱可用时注入，与权限引擎的 `sandboxedTools` 同源。
 
-- **超时**：默认 `timeoutMs = 60_000`（`config.json` 的 `exec.timeoutMs` 同为 60s 默认值）。超时先 `process.kill(-pid, "SIGKILL")` 终止整个进程组（连带 shell 的子进程，如 `sleep`；Windows 无进程组，退回只终止直接子进程），然后返回 `{status:"error", output: "command timed out after 60000ms\n<部分输出>"}`——已产生的输出仍然返回。SIGKILL 之后留 2 秒宽限（`EXEC_TIMEOUT_GRACE_MS`）等 close 事件：子进程的退出信息与管道里已缓冲的尾部输出收集完才收尾，宽限到点保底走超时返回——超时是带现场的错误返回，不是静默丢弃。
+- **超时**：默认 `timeoutMs = 60_000`（`config.json` 的 `bash.timeoutMs` 同为 60s 默认值）。超时先 `process.kill(-pid, "SIGKILL")` 终止整个进程组（连带 shell 的子进程，如 `sleep`；Windows 无进程组，退回只终止直接子进程），然后返回 `{status:"error", output: "command timed out after 60000ms\n<部分输出>"}`——已产生的输出仍然返回。SIGKILL 之后留 2 秒宽限（`EXEC_TIMEOUT_GRACE_MS`）等 close 事件：子进程的退出信息与管道里已缓冲的尾部输出收集完才收尾，宽限到点保底走超时返回——超时是带现场的错误返回，不是静默丢弃。
 - **环境变量**：每次执行注入 `KCLAW_SESSION_ID`（会话 id）与 `KCLAW_WORKSPACE`（工作目录），其余环境继承 daemon 进程；沙箱包装器经 spawn 的 env 参数拿到同一份完整环境后透传。命令行工具可据此自识别所在会话。
 - **输出截断**：流式累计到 `maxOutputBytes`（默认 100 KiB，即 `100 * 1024`）即停止积累——头部保留，之后的 chunk 只计字节数不再转发；到达上限那一刻发一条截断提示 delta（`...[output truncated, further output dropped]...`），结束时在尾部附 `...[dropped N bytes]...` 字节数标记。`truncateMiddle` 只对头部超出上限 ≤1 chunk 的部分微裁剪（插 `\n...[truncated N bytes]...\n` 标记）。按 UTF-8 字节计数，多字节字符在切点被拆开会解码成 U+FFFD 替换字符，属可接受损失。
 - **输出溢出存盘（spill）**：run 组装传入 `spillDir`（`<home>/spill`）后，流式读取把全量输出另存一份（上限 `SPILL_MAX_BYTES = 10 MiB`，超出即停、存盘副本标注"仅保留前 10MB"）；发生截断时模型视图在 `dropped` 标记后追加一行 `[完整输出已存盘: <路径>；需要更多内容时用 fs_read 读取该文件]`——spill 目录在权限引擎 readRoots 内，`fs_read` 无需确认即可读。存盘尽力而为：写失败静默退化为纯截断；未传 `spillDir`（如部分测试）则行为与无 spill 时完全一致。
@@ -102,7 +102,7 @@ export function makeTool<N extends string>(
 两个工具的每次请求都带 `AbortSignal.timeout(timeoutMs)`（默认 20 秒，`config.json` 的 `web.timeoutMs`）——卡死的远端主机不能拖住一个 run。
 
 - **web_search**：POST `https://api.tavily.com/search`，体为 `{api_key, query, max_results}`；`maxResults` 默认 5、钳制在 [1, 10]。目标是固定的公网 Tavily 域名，**不走私网检查**。`output` 是给模型的 markdown 列表（`- [title](url)：content`），无结果输出 `(no results)`；`data` 附带原始三元组 `{results: [{title, url, content}]}` 供渲染。
-- **web_fetch**：只接受 http(s) URL。内置一层 SSRF（Server-Side Request Forgery，服务端请求伪造，即引导服务器自己去访问内网地址的攻击）防护：不使用 fetch 的自动跟随重定向，而是手工循环跟随（至多 `DEFAULT_MAX_REDIRECTS = 5` 跳），初始 URL 与每个 `Location` 都在真正请求前经 DNS 解析（字面 IP 直接判定）并按拒绝名单核查：loopback/未指定/链路本地/私网地址（127/8、0.0.0.0、::1、`::ffff:` 映射、10/8、172.16–31、192.168/16、169.254/16、fc00::/7、fe80::/10）一律拒绝，除非 config 里 `web.allowPrivateNetworks: true` 显式豁免（如允许抓本机 Ollama 端点）。非 2xx 报 `HTTP <status> <statusText> for <url>`。HTML 经 linkedom 解析 + Readability（Mozilla 的正文提取库）取文章正文，失败回退为移除 `script/style/noscript/template/svg` 后的 body 文本（对原始 HTML 重新解析，避免污染），仍为空则 `(no extractable text content)`；非 HTML 内容按纯文本返回。响应体经流式读取、**越过 `maxFetchBytes`（默认 512 KiB）即 cancel 连接**。上限施加于 DOM 解析之前，超大页面无法借解析阶段膨胀内存；截断附 `...[truncated, dropped N bytes]...` 标记。组装了 `spillDir` 时读取上限放宽到 10 MiB（spill 天花板），被截掉的原始正文存盘，字节数标记保留、fs_read 定位行追加其后（与 exec 同一输出形状；spill 写失败时定位行为空，只剩字节数标记）。
+- **web_fetch**：只接受 http(s) URL。内置一层 SSRF（Server-Side Request Forgery，服务端请求伪造，即引导服务器自己去访问内网地址的攻击）防护：不使用 fetch 的自动跟随重定向，而是手工循环跟随（至多 `DEFAULT_MAX_REDIRECTS = 5` 跳），初始 URL 与每个 `Location` 都在真正请求前经 DNS 解析（字面 IP 直接判定）并按拒绝名单核查：loopback/未指定/链路本地/私网地址（127/8、0.0.0.0、::1、`::ffff:` 映射、10/8、172.16–31、192.168/16、169.254/16、fc00::/7、fe80::/10）一律拒绝，除非 config 里 `web.allowPrivateNetworks: true` 显式豁免（如允许抓本机 Ollama 端点）。非 2xx 报 `HTTP <status> <statusText> for <url>`。HTML 经 linkedom 解析 + Readability（Mozilla 的正文提取库）取文章正文，失败回退为移除 `script/style/noscript/template/svg` 后的 body 文本（对原始 HTML 重新解析，避免污染），仍为空则 `(no extractable text content)`；非 HTML 内容按纯文本返回。响应体经流式读取、**越过 `maxFetchBytes`（默认 512 KiB）即 cancel 连接**。上限施加于 DOM 解析之前，超大页面无法借解析阶段膨胀内存；截断附 `...[truncated, dropped N bytes]...` 标记。组装了 `spillDir` 时读取上限放宽到 10 MiB（spill 天花板），被截掉的原始正文存盘，字节数标记保留、fs_read 定位行追加其后（与 bash 同一输出形状；spill 写失败时定位行为空，只剩字节数标记）。
 
 ### memory 工具（`tools/memory.ts`）
 
@@ -151,7 +151,7 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 
 ### team 工具（`tools/team.ts`）
 
-七个工具都只做转发：校验参数类型 → 调 facade → 把返回值整形为工具结果，协作机制本身（目录、收信箱、任务板、投递）见 [agent-team](./agent-team.md)。**`create_team`** 建队并使本会话成为组长（一个会话只属一个队，重复建队是 error 结果）；**`spawn_teammate`** `{name, task, role?, model?}` 添加组员：名字 `[a-z][a-z0-9-]{0,31}`、保留名 `lead`，`task` 是必填的初始任务，建持久子会话并固化模型快照；**`send_message`** `{to?, text}` 写信（组员的默认目标是组长、可不填 `to`；组长必须显式指名收件人），超长/超限是明确的 error 结果；**`list_agents`** 列名单；**`task_create` / `task_update` / `task_list`** 操作任务板，`task_update` 必须回传 `expected_revision` 做比对再交换（CAS），认领未认领任务时自动填自己的名字。全部 `risk: "safe"`：动作只写团队目录，不碰工作区；改状态类（建队/添加/建任务/改任务）是 `serial`（同一批调用里不与别的工具重叠）。注册**条件性且按身份收缩**：不在团队里的会话（job 会话、非组员的 subagent 会话）一个都没有；组员的清单不含 `create_team`/`spawn_teammate`（不能建队、不能添加，团队不递归）。
+七个工具都只做转发：校验参数类型 → 调 facade → 把返回值整形为工具结果，协作机制本身（目录、收信箱、任务板、投递）见 [agent-team](./agent-team.md)。**`create_team`** 建队并使本会话成为组长（一个会话只属一个队，重复建队是 error 结果）；**`spawn_teammate`** `{name, task, role?, model?}` 添加组员：名字 `[a-z][a-z0-9-]{0,31}`、保留名 `lead`，`task` 是必填的初始任务，建持久子会话并固化模型快照；**`send_message`** `{to?, text}` 写信（组员的默认目标是组长、可不填 `to`；组长必须显式指名收件人），超长/超限是明确的 error 结果；**`list_agents`** 列名单；**`task_create` / `task_update` / `task_list`** 操作任务板，`task_update` 必须回传 `expected_revision` 做比对再交换（CAS），认领未认领任务时自动填自己的名字。全部 `risk: "safe"`：动作只写团队目录，不碰工作区；改状态类（建队/添加/建任务/改任务）是 `serial`（同一批调用里不与别的工具重叠）。注册**条件性且按身份收缩**：不在团队里的会话（cron 会话、非组员的 subagent 会话）一个都没有；组员的清单不含 `create_team`/`spawn_teammate`（不能建队、不能添加，团队不递归）。
 
 ---
 
@@ -179,7 +179,7 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 - **参数校验失败/未知工具名**：在权限检查**之前**就被拦截为 error result，不会进权限判定，也不会执行。
 - **fs_read/fs_list 仅支持 UTF-8 文本**：二进制文件的读取结果为替换字符，判断交给上层（fs_edit 有显式二进制拦截）。
 - **网络工具的失败即结果**：web_search/web_fetch 的网络错误、非 2xx、JSON 解析失败都是 error result 文本，模型可以看到并决定下一步；不带自动重试。
-- **exec 与 web 的限制都可配**：daemon 从 `config.json` 传入 `exec.timeoutMs` / `exec.maxOutputBytes` 与 `web.timeoutMs` / `web.allowPrivateNetworks`（run 组装 core `executeRun` 传入），两处默认值与工具内默认一致（60s / 100 KiB；20s / false）。
+- **bash 与 web 的限制都可配**：daemon 从 `config.json` 传入 `bash.timeoutMs` / `bash.maxOutputBytes` 与 `web.timeoutMs` / `web.allowPrivateNetworks`（run 组装 core `executeRun` 传入），两处默认值与工具内默认一致（60s / 100 KiB；20s / false）。
 - **私网目标默认拒绝**：web_fetch 的 SSRF 防护意味着默认抓不到 `http://127.0.0.1:*` 这类本机服务；需要时在 config 显式 `web.allowPrivateNetworks: true`——这是有意的两层设计：默认拒绝，显式配置才放行，不是缺陷。
 
 ---

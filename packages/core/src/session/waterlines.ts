@@ -62,7 +62,7 @@ export interface Waterlines {
 /**
  * Resolve the five lines against `budget` (the effective context budget from
  * resolveContextTokens). Config ratios absent → the module defaults apply;
- * range/order validation is loadConfig's job, so values here are trusted.
+ * range/order validation is loadConfig's cron, so values here are trusted.
  */
 export function resolveWaterlines(config: KclawConfig, budget: number): Waterlines {
   // Both predicates compare the same way today; the two names exist so every

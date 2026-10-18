@@ -21,7 +21,7 @@ describe("resolvePaths", () => {
     const p = resolvePaths(home)
     expect(p.configJson).toBe(join(home, "config.json"))
     expect(p.sessionsDir).toBe(join(home, "sessions"))
-    expect(p.jobsDb).toBe(join(home, "jobs.db"))
+    expect(p.cronDb).toBe(join(home, "cron.db"))
     for (const d of [p.sessionsDir, p.logsDir]) {
       expect(() => readFileSync(d)).toThrow() // 是目录不是文件
     }
@@ -47,19 +47,19 @@ describe("loadConfig / saveConfig", () => {
   })
   it("deep-merges file over defaults", () => {
     const paths = resolvePaths(home)
-    writeConfig({ permissions: { allow: ["exec:git status"] }, exec: { timeoutMs: 5000 } })
+    writeConfig({ permissions: { allow: ["bash:git status"] }, bash: { timeoutMs: 5000 } })
     const cfg = loadConfig(paths)
-    expect(cfg.permissions.allow).toEqual(["exec:git status"])
+    expect(cfg.permissions.allow).toEqual(["bash:git status"])
     expect(cfg.permissions.deny).toEqual(defaultConfig.permissions.deny) // 未覆盖保留默认
-    expect(cfg.exec.timeoutMs).toBe(5000)
-    expect(cfg.exec.maxOutputBytes).toBe(defaultConfig.exec.maxOutputBytes)
+    expect(cfg.bash.timeoutMs).toBe(5000)
+    expect(cfg.bash.maxOutputBytes).toBe(defaultConfig.bash.maxOutputBytes)
   })
   it("roundtrips through saveConfig", () => {
     const paths = resolvePaths(home)
     const cfg = structuredClone(defaultConfig)
-    cfg.exec.timeoutMs = 1234
+    cfg.bash.timeoutMs = 1234
     saveConfig(paths, cfg)
-    expect(loadConfig(paths).exec.timeoutMs).toBe(1234)
+    expect(loadConfig(paths).bash.timeoutMs).toBe(1234)
   })
   it("defaults providers.timeoutMs to 120s and deep-merges overrides", () => {
     const paths = resolvePaths(home)
@@ -143,7 +143,7 @@ describe("loadConfig / saveConfig", () => {
   it("does not share nested references with defaultConfig", () => {
     const pristine = structuredClone(defaultConfig)
     const paths = resolvePaths(home)
-    writeConfig({ exec: { timeoutMs: 5000 } })
+    writeConfig({ bash: { timeoutMs: 5000 } })
     const cfg = loadConfig(paths)
     cfg.permissions.allow.push("x")
     expect(cfg.permissions).not.toBe(defaultConfig.permissions) // 覆盖段外不共享嵌套引用
@@ -186,12 +186,12 @@ describe("loadConfig / saveConfig", () => {
     }
   })
   it("defaultMode 非法时只重置该字段，不丢用户已有的 allow/deny", () => {
-    writeConfig({ permissions: { defaultMode: "bogus", deny: ["exec:rm -rf*"] } })
+    writeConfig({ permissions: { defaultMode: "bogus", deny: ["bash:rm -rf*"] } })
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     try {
       const cfg = loadConfig(resolvePaths(home))
       expect(cfg.permissions.defaultMode).toBe("default")
-      expect(cfg.permissions.deny).toEqual(["exec:rm -rf*"])
+      expect(cfg.permissions.deny).toEqual(["bash:rm -rf*"])
       expect(warn).toHaveBeenCalledOnce()
     } finally {
       warn.mockRestore()
@@ -311,10 +311,10 @@ describe("config.json storage", () => {
 
   it("roundtrips as JSON", () => {
     const paths = resolvePaths(home)
-    saveConfig(paths, { ...structuredClone(defaultConfig), exec: { timeoutMs: 4321, maxOutputBytes: 1 } })
+    saveConfig(paths, { ...structuredClone(defaultConfig), bash: { timeoutMs: 4321, maxOutputBytes: 1 } })
     const cfg = loadConfig(paths)
-    expect(cfg.exec.timeoutMs).toBe(4321)
-    expect(JSON.parse(readFileSync(paths.configJson, "utf8")).exec.timeoutMs).toBe(4321)
+    expect(cfg.bash.timeoutMs).toBe(4321)
+    expect(JSON.parse(readFileSync(paths.configJson, "utf8")).bash.timeoutMs).toBe(4321)
   })
 
   it("throws on unparseable config.json; an empty one yields defaults", () => {

@@ -74,7 +74,7 @@ function execToolTurn(callId: string, command: string): LlmStreamEvent[] {
 /** tool_use round whose usage anchors the NEXT waterline check (drives the red line). */
 function execToolTurnWithUsage(callId: string, command: string, inputTokens: number): LlmStreamEvent[] {
   return [
-    { type: "tool_call_started", index: 0, callId, name: "exec" },
+    { type: "tool_call_started", index: 0, callId, name: "bash" },
     { type: "tool_call_delta", index: 0, delta: JSON.stringify({ command }) },
     { type: "message_done", stopReason: "tool_use", usage: { inputTokens, outputTokens: 2 } },
   ]
@@ -130,7 +130,7 @@ function makeEnv(
   const config = loadConfig(paths)
   config.workspace = workspace
   // These tests exercise confirmation / queueing semantics on a host that may
-  // have an exec sandbox (macOS Seatbelt / Linux bwrap): sandboxed exec would
+  // have an bash sandbox (macOS Seatbelt / Linux bwrap): sandboxed bash would
   // auto-pass instead of confirming. Disable it — the sandbox is exercised in
   // core's provider tests, not here.
   config.sandbox = { enabled: false, writeRoots: [] }
@@ -200,21 +200,21 @@ describe("RunManager.enqueue", () => {
     ])
   })
 
-  it("appends a job note block onto the user message when enqueue carries note", async () => {
+  it("appends a cron note block onto the user message when enqueue carries note", async () => {
     const { env, manager } = makeEnv(scriptClient([textTurn("好的")]))
     const session = env.sessions.create("任务会话")
 
     await manager.enqueue(session.id, {
       userText: "执行任务",
-      trigger: "job",
-      note: { kind: "job", text: "本会话由定时任务「早报」触发" },
+      trigger: "cron",
+      note: { kind: "cron", text: "本会话由定时任务「早报」触发" },
     })
 
     const [user] = env.sessions.readMessages(session.id)
     expect(user!.blocks).toEqual([
       { id: expect.any(String), type: "text", text: "执行任务" },
       {
-        id: expect.any(String), type: "note", kind: "job",
+        id: expect.any(String), type: "note", kind: "cron",
         text: "本会话由定时任务「早报」触发",
       },
     ])
@@ -231,12 +231,12 @@ describe("RunManager.enqueue", () => {
 
     await manager.enqueue(session.id, {
       userText: "上海",
-      trigger: "job",
-      note: { kind: "job", text: "本会话由定时任务「早报」触发" },
+      trigger: "cron",
+      note: { kind: "cron", text: "本会话由定时任务「早报」触发" },
     })
 
     // wire order: run.started → message.created(user SKELETON) →
-    // note.emitted ×N (job note first, memory notes after) →
+    // note.emitted ×N (cron note first, memory notes after) →
     // message.completed(user FULL) → llm.started …
     const events = received(socket)
     expect(events.slice(0, 5).map((e) => e.type)).toEqual([
@@ -253,7 +253,7 @@ describe("RunManager.enqueue", () => {
     const [jobNote, memNote] = events.slice(2, 4)
     expect(jobNote!.payload).toEqual({
       messageId: createdMsg.id,
-      block: { id: expect.any(String), type: "note", kind: "job", text: "本会话由定时任务「早报」触发" },
+      block: { id: expect.any(String), type: "note", kind: "cron", text: "本会话由定时任务「早报」触发" },
     })
     expect(memNote!.payload).toEqual({
       messageId: createdMsg.id,
@@ -267,11 +267,11 @@ describe("RunManager.enqueue", () => {
       expect(e.runId).toBe(started.runId)
     }
 
-    // completed carries the FULL message: text + job note + memory note
+    // completed carries the FULL message: text + cron note + memory note
     const completedMsg = (events[4]!.payload as { message: { blocks: unknown[] } }).message
     expect(completedMsg.blocks).toEqual([
       { id: expect.any(String), type: "text", text: "上海" },
-      { id: expect.any(String), type: "note", kind: "job", text: "本会话由定时任务「早报」触发" },
+      { id: expect.any(String), type: "note", kind: "cron", text: "本会话由定时任务「早报」触发" },
       { id: expect.any(String), type: "note", kind: "memory", text: "相关经历（用户在上海）: 用户在上海" },
     ])
 
@@ -423,17 +423,17 @@ describe("RunManager.enqueue", () => {
     const { env, manager } = makeEnv(
       scriptClient([execToolTurn("call_1", "echo ok"), textTurn("完成")]),
       (c) => {
-        c.permissions.allow = ["exec:echo*"]
+        c.permissions.allow = ["bash:echo*"]
       },
     )
     const session = env.sessions.create("工具会话")
     const socket = new FakeSocket()
     env.bus.subscribe(session.id, socket)
 
-    const outcome = await manager.enqueue(session.id, { userText: "执行 echo ok", trigger: "job" })
+    const outcome = await manager.enqueue(session.id, { userText: "执行 echo ok", trigger: "cron" })
 
     expect(outcome.stopReason).toBe("end_turn")
-    expect(received(socket)[0]!.payload).toEqual({ trigger: "job" })
+    expect(received(socket)[0]!.payload).toEqual({ trigger: "cron" })
     const msgs = env.sessions.readMessages(session.id)
     expect(msgs.map((m) => m.role)).toEqual(["user", "assistant", "tool", "assistant"])
     const result = msgs[2]!.blocks[0] as ToolResultBlock
@@ -448,7 +448,7 @@ describe("RunManager.enqueue", () => {
     const { env, manager } = makeEnv(
       scriptClient([execToolTurn("call_wd", "pwd"), textTurn("完成")]),
       (c) => {
-        c.permissions.allow = ["exec:pwd*"]
+        c.permissions.allow = ["bash:pwd*"]
       },
     )
     const sessionWorkdir = mkdtempSync(join(tmpdir(), "kclaw-session-ws-"))
@@ -466,7 +466,7 @@ describe("RunManager.enqueue", () => {
   })
 
   it("answers default-wired confirmations through the internal broker and records grantedBy confirmed", async () => {
-    // default config: allow is empty, so exec falls through to confirmation;
+    // default config: allow is empty, so bash falls through to confirmation;
     // default deps construct an internal broker (exposed as manager.broker)
     const { env, manager } = makeEnv(scriptClient([execToolTurn("call_2", "echo yes"), textTurn("好")]))
     expect(manager.broker).toBeInstanceOf(ConfirmationBroker)
@@ -483,7 +483,7 @@ describe("RunManager.enqueue", () => {
     const [listed] = manager.broker.pending()
     expect(listed).toMatchObject({
       confirmationId: expect.stringMatching(/^conf_/),
-      toolCall: expect.objectContaining({ name: "exec" }),
+      toolCall: expect.objectContaining({ name: "bash" }),
       risk: "sensitive",
     })
     expect(manager.broker.resolve(listed!.confirmationId, true, "cli")).toBe(true)
@@ -497,7 +497,7 @@ describe("RunManager.enqueue", () => {
     expect((msgs[2] as ToolMessage).grantedBy).toEqual({ call_2: "confirmed" })
   })
 
-  it("exec with the OS sandbox available auto-passes as sandboxed, no confirmation", async () => {
+  it("bash with the OS sandbox available auto-passes as sandboxed, no confirmation", async () => {
     // The real run-assembly probe must find a usable sandbox on this host
     // (macOS sandbox-exec / Linux bwrap). Hosts without one (e.g. a CI runner
     // with no bwrap) fall back to confirmation and this assertion cannot hold.
@@ -799,7 +799,7 @@ describe("RunManager.enqueue", () => {
       },
     }
     const { env, manager } = makeEnv(raw, (c) => {
-      c.permissions.allow = ["exec:echo*"]
+      c.permissions.allow = ["bash:echo*"]
     }, undefined, {
       llmForRun: (onRetry) => withRetry(raw, { baseDelayMs: 1, jitter: () => 0, onRetry }),
     })
@@ -817,7 +817,7 @@ describe("RunManager.enqueue", () => {
 
   it("records a throwing executor's error tool_result", async () => {
     const boom = new Map<string, ToolExecutor>([
-      ["exec", {
+      ["bash", {
         risk: "sensitive",
         concurrency: "parallel",
         async execute() {
@@ -828,7 +828,7 @@ describe("RunManager.enqueue", () => {
     const { env, manager } = makeEnv(
       scriptClient([execToolTurn("call_b", "echo boom"), textTurn("完了")]),
       (c) => {
-        c.permissions.allow = ["exec:echo*"]
+        c.permissions.allow = ["bash:echo*"]
       },
       undefined,
       { tools: boom },
@@ -1435,7 +1435,7 @@ describe("RunManager context compaction", () => {
       ]), reqs),
       (c) => {
         c.sessions.contextTokens = 10 // red line: 10 × 0.90 = 9
-        c.permissions.allow = ["exec:echo*"]
+        c.permissions.allow = ["bash:echo*"]
       },
     )
     const session = env.sessions.create("中途压缩会话")
@@ -1504,7 +1504,7 @@ describe("RunManager context compaction", () => {
     }
     const { env, manager } = makeEnv(client, (c) => {
       c.sessions.contextTokens = 10
-      c.permissions.allow = ["exec:echo*"]
+      c.permissions.allow = ["bash:echo*"]
     })
     const session = env.sessions.create("取消防循环")
     seedHistory(env.sessions, session.id, 2)
@@ -2022,7 +2022,7 @@ describe("RunManager run 边界与权限裁决档案事件", () => {
     const [listed] = manager.broker.pending()
     expect(listed).toMatchObject({
       confirmationId: expect.stringMatching(/^conf_/),
-      toolCall: expect.objectContaining({ name: "exec" }),
+      toolCall: expect.objectContaining({ name: "bash" }),
       risk: "sensitive",
     })
     expect(manager.broker.resolve(listed!.confirmationId, "once", "cli")).toBe(true)
@@ -2035,7 +2035,7 @@ describe("RunManager run 边界与权限裁决档案事件", () => {
       confirmationId: listed!.confirmationId,
       decision: "once",
       by: "cli",
-      tool: { callId: "call_2", name: "exec", argsJson: expect.stringContaining("echo yes") },
+      tool: { callId: "call_2", name: "bash", argsJson: expect.stringContaining("echo yes") },
     })
     // 次序：裁决记录在对应的工具结果消息事件之前
     const decidedIdx = events.findIndex((e) => e.type === "permission.decided")

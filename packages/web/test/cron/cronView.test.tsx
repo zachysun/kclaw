@@ -1,6 +1,6 @@
 /**
- * JobsView — jobs CRUD surface (scheduled jobs, GET /jobs, POST /jobs,
- * PATCH /jobs/:id, DELETE /jobs/:id). Covers list rendering, create/edit form
+ * CronView — crons CRUD surface (scheduled crons, GET /cron, POST /cron,
+ * PATCH /cron/:id, DELETE /cron/:id). Covers list rendering, create/edit form
  * submit (including the 400 error from an invalid cron), delete confirmation,
  * and the enabled toggle.
  */
@@ -8,14 +8,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { createRoot, type Root } from "react-dom/client"
 import { act } from "react"
 import { ApiError, type ApiClient } from "../../src/api.js"
-import { JobsView } from "../../src/jobs/JobsView.js"
-import type { Job } from "../../src/types.js"
+import { CronView } from "../../src/cron/CronView.js"
+import type { Cron } from "../../src/types.js"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-function job(overrides: Partial<Job> = {}): Job {
+function cron(overrides: Partial<Cron> = {}): Cron {
   return {
-    id: "job_1",
+    id: "cron_1",
     name: "早报",
     cron: "0 9 * * *",
     prompt: "给我今日早报",
@@ -39,15 +39,15 @@ function makeApi(): ApiClient & {
   }
 }
 
-/** Mount the view and flush the initial GET /jobs effect. */
+/** Mount the view and flush the initial GET /cron effect. */
 async function mount(api: ApiClient): Promise<{ container: HTMLElement; root: Root }> {
   const container = document.createElement("div")
   document.body.appendChild(container)
   const root = createRoot(container)
   await act(async () => {
-    root.render(<JobsView api={api} />)
+    root.render(<CronView api={api} />)
   })
-  await act(async () => {}) // flush the GET /jobs promise + state update
+  await act(async () => {}) // flush the GET /cron promise + state update
   return { container, root }
 }
 
@@ -78,7 +78,7 @@ async function flush(): Promise<void> {
   })
 }
 
-describe("JobsView", () => {
+describe("CronView", () => {
   beforeEach(() => {
     vi.stubGlobal("confirm", vi.fn(() => true))
   })
@@ -87,21 +87,21 @@ describe("JobsView", () => {
     vi.unstubAllGlobals()
   })
 
-  it("renders the job list with the scheduled columns", async () => {
+  it("renders the cron list with the scheduled columns", async () => {
     const api = makeApi()
     api.get.mockResolvedValue([
-      job(),
-      job({ id: "job_2", name: "备份", cron: "*/5 * * * *", enabled: false, lastStatus: "ok", lastRunAt: "2026-08-15T08:00:00.000Z" }),
+      cron(),
+      cron({ id: "cron_2", name: "备份", cron: "*/5 * * * *", enabled: false, lastStatus: "ok", lastRunAt: "2026-08-15T08:00:00.000Z" }),
     ])
     const { container, root } = await mount(api)
-    expect(api.get).toHaveBeenCalledWith("/jobs")
-    const table = container.querySelector('[data-testid="jobs-table"]')!
+    expect(api.get).toHaveBeenCalledWith("/cron")
+    const table = container.querySelector('[data-testid="cron-table"]')!
     expect(table.textContent).toContain("早报")
     expect(table.textContent).toContain("0 9 * * *")
     expect(table.textContent).toContain("备份")
     expect(table.textContent).toContain("ok") // lastStatus
-    expect(container.querySelector('[data-testid="job-enabled-job_1"]')?.textContent).toContain("启用")
-    expect(container.querySelector('[data-testid="job-enabled-job_2"]')?.textContent).toContain("禁用")
+    expect(container.querySelector('[data-testid="cron-enabled-cron_1"]')?.textContent).toContain("启用")
+    expect(container.querySelector('[data-testid="cron-enabled-cron_2"]')?.textContent).toContain("禁用")
     // Schedule times render in the compact local form (MM/DD HH:MM), derived
     // here with local Date arithmetic so the assertion holds in any TZ.
     const expectLocal = (iso: string): string => {
@@ -116,26 +116,26 @@ describe("JobsView", () => {
     unmount(root, container)
   })
 
-  it("submits the create form and prepends the new job", async () => {
+  it("submits the create form and prepends the new cron", async () => {
     const api = makeApi()
     api.get.mockResolvedValue([])
-    api.post.mockResolvedValue(job({ id: "job_new", name: "备份", cron: "*/5 * * * *", prompt: "每五分钟跑一次" }))
+    api.post.mockResolvedValue(cron({ id: "cron_new", name: "备份", cron: "*/5 * * * *", prompt: "每五分钟跑一次" }))
     const { container, root } = await mount(api)
 
-    const inputs = container.querySelectorAll('form[data-testid="job-form"] input')
+    const inputs = container.querySelectorAll('form[data-testid="cron-form"] input')
     const nameInput = inputs[0] as HTMLInputElement
     const cronInput = inputs[1] as HTMLInputElement
-    const promptInput = container.querySelector('textarea[data-testid="job-prompt"]') as HTMLTextAreaElement
+    const promptInput = container.querySelector('textarea[data-testid="cron-prompt"]') as HTMLTextAreaElement
     setValue(nameInput, "备份")
     setValue(cronInput, "*/5 * * * *")
     setTextArea(promptInput, "每五分钟跑一次")
     await act(async () => {
-      ;(container.querySelector('button[data-testid="job-submit"]') as HTMLButtonElement).click()
+      ;(container.querySelector('button[data-testid="cron-submit"]') as HTMLButtonElement).click()
     })
     await flush()
-    expect(api.post).toHaveBeenCalledWith("/jobs", { name: "备份", cron: "*/5 * * * *", prompt: "每五分钟跑一次" })
-    // The new job appears as the first row.
-    expect(container.querySelector('[data-testid="job-row-job_new"]')).not.toBeNull()
+    expect(api.post).toHaveBeenCalledWith("/cron", { name: "备份", cron: "*/5 * * * *", prompt: "每五分钟跑一次" })
+    // The new cron appears as the first row.
+    expect(container.querySelector('[data-testid="cron-row-cron_new"]')).not.toBeNull()
     expect(container.textContent).toContain("备份")
     // Form resets after a successful create.
     expect(nameInput.value).toBe("")
@@ -146,22 +146,22 @@ describe("JobsView", () => {
     const api = makeApi()
     api.get.mockResolvedValue([])
     const { container, root } = await mount(api)
-    const enabledInput = container.querySelector('input[data-testid="job-enabled"]') as HTMLInputElement
+    const enabledInput = container.querySelector('input[data-testid="cron-enabled"]') as HTMLInputElement
     expect(enabledInput.checked).toBe(true)
     expect(enabledInput.disabled).toBe(true)
-    expect(container.querySelector('[data-testid="job-enabled-hint"]')?.textContent).toContain("默认启用")
+    expect(container.querySelector('[data-testid="cron-enabled-hint"]')?.textContent).toContain("默认启用")
     unmount(root, container)
   })
 
   it("edit mode: the enabled checkbox is interactive and its toggle reaches the PATCH", async () => {
     const api = makeApi()
-    api.get.mockResolvedValue([job({ id: "job_1", name: "早报", cron: "0 9 * * *", prompt: "给我今日早报", enabled: true })])
-    api.patch.mockResolvedValue(job({ id: "job_1", name: "早报", cron: "0 9 * * *", prompt: "给我今日早报", enabled: false }))
+    api.get.mockResolvedValue([cron({ id: "cron_1", name: "早报", cron: "0 9 * * *", prompt: "给我今日早报", enabled: true })])
+    api.patch.mockResolvedValue(cron({ id: "cron_1", name: "早报", cron: "0 9 * * *", prompt: "给我今日早报", enabled: false }))
     const { container, root } = await mount(api)
     await act(async () => {
-      ;(container.querySelector('[data-testid="job-edit-job_1"]') as HTMLButtonElement).click()
+      ;(container.querySelector('[data-testid="cron-edit-cron_1"]') as HTMLButtonElement).click()
     })
-    const enabledInput = container.querySelector('input[data-testid="job-enabled"]') as HTMLInputElement
+    const enabledInput = container.querySelector('input[data-testid="cron-enabled"]') as HTMLInputElement
     expect(enabledInput.disabled).toBe(false)
     expect(enabledInput.checked).toBe(true)
     // Uncheck it — this must flow into the PATCH.
@@ -169,10 +169,10 @@ describe("JobsView", () => {
       enabledInput.click()
     })
     await act(async () => {
-      ;(container.querySelector('button[data-testid="job-submit"]') as HTMLButtonElement).click()
+      ;(container.querySelector('button[data-testid="cron-submit"]') as HTMLButtonElement).click()
     })
     await flush()
-    expect(api.patch).toHaveBeenCalledWith("/jobs/job_1", {
+    expect(api.patch).toHaveBeenCalledWith("/cron/cron_1", {
       name: "早报",
       cron: "0 9 * * *",
       prompt: "给我今日早报",
@@ -186,10 +186,10 @@ describe("JobsView", () => {
     api.get.mockResolvedValue([])
     const { container, root } = await mount(api)
     await act(async () => {
-      ;(container.querySelector('button[data-testid="job-submit"]') as HTMLButtonElement).click()
+      ;(container.querySelector('button[data-testid="cron-submit"]') as HTMLButtonElement).click()
     })
     await flush()
-    expect(container.querySelector('[data-testid="job-error"]')?.textContent).toContain("必填")
+    expect(container.querySelector('[data-testid="cron-error"]')?.textContent).toContain("必填")
     expect(api.post).not.toHaveBeenCalled()
     unmount(root, container)
   })
@@ -200,88 +200,88 @@ describe("JobsView", () => {
     api.post.mockRejectedValue(new ApiError(400, "Invalid cron expression"))
     const { container, root } = await mount(api)
 
-    const inputs = container.querySelectorAll('form[data-testid="job-form"] input')
+    const inputs = container.querySelectorAll('form[data-testid="cron-form"] input')
     setValue(inputs[0] as HTMLInputElement, "坏任务")
     setValue(inputs[1] as HTMLInputElement, "not-a-cron")
-    setTextArea(container.querySelector('textarea[data-testid="job-prompt"]') as HTMLTextAreaElement, "p")
+    setTextArea(container.querySelector('textarea[data-testid="cron-prompt"]') as HTMLTextAreaElement, "p")
     await act(async () => {
-      ;(container.querySelector('button[data-testid="job-submit"]') as HTMLButtonElement).click()
+      ;(container.querySelector('button[data-testid="cron-submit"]') as HTMLButtonElement).click()
     })
     await flush()
-    expect(container.querySelector('[data-testid="job-error"]')?.textContent).toContain("Invalid cron expression")
+    expect(container.querySelector('[data-testid="cron-error"]')?.textContent).toContain("Invalid cron expression")
     unmount(root, container)
   })
 
   it("deletes only after the native confirm() approves", async () => {
     const api = makeApi()
-    api.get.mockResolvedValue([job({ id: "job_1" }), job({ id: "job_2" })])
+    api.get.mockResolvedValue([cron({ id: "cron_1" }), cron({ id: "cron_2" })])
     api.del.mockResolvedValue(undefined)
     const confirmMock = vi.fn(() => true)
     vi.stubGlobal("confirm", confirmMock)
     const { container, root } = await mount(api)
     await act(async () => {
-      ;(container.querySelector('[data-testid="job-delete-job_1"]') as HTMLButtonElement).click()
+      ;(container.querySelector('[data-testid="cron-delete-cron_1"]') as HTMLButtonElement).click()
     })
     await flush()
     expect(confirmMock).toHaveBeenCalledTimes(1)
-    expect(api.del).toHaveBeenCalledWith("/jobs/job_1")
-    expect(container.querySelector('[data-testid="job-row-job_1"]')).toBeNull()
-    expect(container.querySelector('[data-testid="job-row-job_2"]')).not.toBeNull()
+    expect(api.del).toHaveBeenCalledWith("/cron/cron_1")
+    expect(container.querySelector('[data-testid="cron-row-cron_1"]')).toBeNull()
+    expect(container.querySelector('[data-testid="cron-row-cron_2"]')).not.toBeNull()
     unmount(root, container)
   })
 
   it("does not delete when the confirm() is declined", async () => {
     const api = makeApi()
-    api.get.mockResolvedValue([job()])
+    api.get.mockResolvedValue([cron()])
     const confirmMock = vi.fn(() => false)
     vi.stubGlobal("confirm", confirmMock)
     const { container, root } = await mount(api)
     await act(async () => {
-      ;(container.querySelector('[data-testid="job-delete-job_1"]') as HTMLButtonElement).click()
+      ;(container.querySelector('[data-testid="cron-delete-cron_1"]') as HTMLButtonElement).click()
     })
     await flush()
     expect(confirmMock).toHaveBeenCalledTimes(1)
     expect(api.del).not.toHaveBeenCalled()
-    expect(container.querySelector('[data-testid="job-row-job_1"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="cron-row-cron_1"]')).not.toBeNull()
     unmount(root, container)
   })
 
   it("toggles enabled via PATCH {enabled}", async () => {
     const api = makeApi()
-    api.get.mockResolvedValue([job({ enabled: true })])
-    api.patch.mockResolvedValue(job({ enabled: false }))
+    api.get.mockResolvedValue([cron({ enabled: true })])
+    api.patch.mockResolvedValue(cron({ enabled: false }))
     const { container, root } = await mount(api)
     await act(async () => {
-      ;(container.querySelector('[data-testid="job-toggle-job_1"]') as HTMLButtonElement).click()
+      ;(container.querySelector('[data-testid="cron-toggle-cron_1"]') as HTMLButtonElement).click()
     })
     await flush()
-    expect(api.patch).toHaveBeenCalledWith("/jobs/job_1", { enabled: false })
-    expect(container.querySelector('[data-testid="job-enabled-job_1"]')?.textContent).toContain("禁用")
+    expect(api.patch).toHaveBeenCalledWith("/cron/cron_1", { enabled: false })
+    expect(container.querySelector('[data-testid="cron-enabled-cron_1"]')?.textContent).toContain("禁用")
     unmount(root, container)
   })
 
   it("prefills the form when editing and PATCHes the updated fields", async () => {
     const api = makeApi()
-    api.get.mockResolvedValue([job({ id: "job_1", name: "早报", cron: "0 9 * * *", prompt: "给我今日早报", enabled: false })])
-    api.patch.mockResolvedValue(job({ id: "job_1", name: "晚间报", cron: "0 18 * * *", prompt: "给我晚间报", enabled: false }))
+    api.get.mockResolvedValue([cron({ id: "cron_1", name: "早报", cron: "0 9 * * *", prompt: "给我今日早报", enabled: false })])
+    api.patch.mockResolvedValue(cron({ id: "cron_1", name: "晚间报", cron: "0 18 * * *", prompt: "给我晚间报", enabled: false }))
     const { container, root } = await mount(api)
     await act(async () => {
-      ;(container.querySelector('[data-testid="job-edit-job_1"]') as HTMLButtonElement).click()
+      ;(container.querySelector('[data-testid="cron-edit-cron_1"]') as HTMLButtonElement).click()
     })
-    const inputs = container.querySelectorAll('form[data-testid="job-form"] input')
+    const inputs = container.querySelectorAll('form[data-testid="cron-form"] input')
     expect((inputs[0] as HTMLInputElement).value).toBe("早报")
     expect((inputs[1] as HTMLInputElement).value).toBe("0 9 * * *")
-    expect((container.querySelector('textarea[data-testid="job-prompt"]') as HTMLTextAreaElement).value).toBe("给我今日早报")
-    expect((container.querySelector('input[data-testid="job-enabled"]') as HTMLInputElement).checked).toBe(false)
+    expect((container.querySelector('textarea[data-testid="cron-prompt"]') as HTMLTextAreaElement).value).toBe("给我今日早报")
+    expect((container.querySelector('input[data-testid="cron-enabled"]') as HTMLInputElement).checked).toBe(false)
 
     setValue(inputs[0] as HTMLInputElement, "晚间报")
     setValue(inputs[1] as HTMLInputElement, "0 18 * * *")
-    setTextArea(container.querySelector('textarea[data-testid="job-prompt"]') as HTMLTextAreaElement, "给我晚间报")
+    setTextArea(container.querySelector('textarea[data-testid="cron-prompt"]') as HTMLTextAreaElement, "给我晚间报")
     await act(async () => {
-      ;(container.querySelector('button[data-testid="job-submit"]') as HTMLButtonElement).click()
+      ;(container.querySelector('button[data-testid="cron-submit"]') as HTMLButtonElement).click()
     })
     await flush()
-    expect(api.patch).toHaveBeenCalledWith("/jobs/job_1", {
+    expect(api.patch).toHaveBeenCalledWith("/cron/cron_1", {
       name: "晚间报",
       cron: "0 18 * * *",
       prompt: "给我晚间报",

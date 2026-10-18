@@ -61,10 +61,10 @@ describe("EventBus", () => {
     bus.subscribe("ses_1", subscribed)
     bus.connect(bare)
 
-    bus.emit(makeEvent("job.started", { jobId: "job_1" }))
+    bus.emit(makeEvent("cron.started", { cronId: "cron_1" }))
 
-    expect(JSON.parse(subscribed.sent[0])).toMatchObject({ type: "job.started" })
-    expect(JSON.parse(bare.sent[0])).toMatchObject({ type: "job.started", payload: { jobId: "job_1" } })
+    expect(JSON.parse(subscribed.sent[0])).toMatchObject({ type: "cron.started" })
+    expect(JSON.parse(bare.sent[0])).toMatchObject({ type: "cron.started", payload: { cronId: "cron_1" } })
   })
 
   it("lets one socket subscribe to multiple sessions", () => {
@@ -92,7 +92,7 @@ describe("EventBus", () => {
     expect(bus.subscriberCount("ses_2")).toBe(0)
 
     bus.emit(textDelta("one", "ses_1"))
-    bus.emit(makeEvent("job.started", { jobId: "job_1" }))
+    bus.emit(makeEvent("cron.started", { cronId: "cron_1" }))
     expect(a.sent).toHaveLength(0)
   })
 
@@ -131,14 +131,14 @@ describe("EventBus", () => {
     bus.subscribe("ses_1", broken)
     bus.subscribe("ses_1", healthy)
     bus.connect(broken)
-    bus.connect(healthy) // broadcast path (job.*) exercises connect()ed sockets too
+    bus.connect(healthy) // broadcast path (cron.*) exercises connect()ed sockets too
 
     expect(() => bus.emit(textDelta("hi", "ses_1"))).not.toThrow()
-    expect(() => bus.emit(makeEvent("job.started", { jobId: "job_1" }))).not.toThrow()
+    expect(() => bus.emit(makeEvent("cron.started", { cronId: "cron_1" }))).not.toThrow()
 
     // the healthy subscriber still got both the session event and the broadcast
     expect((JSON.parse(healthy.sent[0]!) as AgentEvent).type).toBe("text.delta")
-    expect((JSON.parse(healthy.sent[1]!) as AgentEvent).type).toBe("job.started")
+    expect((JSON.parse(healthy.sent[1]!) as AgentEvent).type).toBe("cron.started")
   })
 })
 
@@ -244,12 +244,12 @@ describe("GET /ws", () => {
     ws.send(JSON.stringify({ type: "unsubscribe", sessionId: "ses_probe" }))
     expect(await nextMessage(ws)).toEqual({ type: "unsubscribed", sessionId: "ses_probe" })
 
-    bus.emit(makeEvent("job.started", { jobId: "job_1" }))
+    bus.emit(makeEvent("cron.started", { cronId: "cron_1" }))
 
     const evt = (await nextMessage(ws)) as AgentEvent
-    expect(evt.type).toBe("job.started")
+    expect(evt.type).toBe("cron.started")
     expect(evt.sessionId).toBeUndefined()
-    expect(evt.payload).toEqual({ jobId: "job_1" })
+    expect(evt.payload).toEqual({ cronId: "cron_1" })
   })
 
   it("a malformed frame gets an error frame and the connection stays open", async () => {
@@ -300,8 +300,8 @@ describe("GET /ws", () => {
     await expectSilence(ws)
 
     // broadcast events still flow (only the session filter was removed)
-    bus.emit(makeEvent("job.completed", { jobId: "job_1", summary: "done" }))
-    expect(((await nextMessage(ws)) as AgentEvent).type).toBe("job.completed")
+    bus.emit(makeEvent("cron.completed", { cronId: "cron_1", summary: "done" }))
+    expect(((await nextMessage(ws)) as AgentEvent).type).toBe("cron.completed")
   })
 
   it("a closed connection is fully unsubscribed from the bus", async () => {

@@ -1,13 +1,13 @@
-# sandbox — exec 沙箱 provider
+# sandbox — bash 沙箱 provider
 
 ## 职责
 
-`packages/core/src/sandbox/provider.ts` 的 `createExecSandbox` 是 exec 沙箱的专门模块：给 `exec` 工具的子进程套一层操作系统沙箱，作为权限确认之下的多层防御（一层失守还有下一层）：命令即使获准运行，也被限制在受控范围内（模型被提示词注入攻击时，人工确认挡不住命令内部的动作，沙箱保底）。模块只做两件事：**平台可用性检测** 与 **spawn 包装**，不做任何业务判定。"沙箱化是否免审"归权限引擎（`permissions/engine.ts` 由被包装工具集推导可用性），由 run 组装（core `executeRun`）用同一次检测结果喂给两个使用方：
+`packages/core/src/sandbox/provider.ts` 的 `createBashSandbox` 是 bash 沙箱的专门模块：给 `bash` 工具的子进程套一层操作系统沙箱，作为权限确认之下的多层防御（一层失守还有下一层）：命令即使获准运行，也被限制在受控范围内（模型被提示词注入攻击时，人工确认挡不住命令内部的动作，沙箱保底）。模块只做两件事：**平台可用性检测** 与 **spawn 包装**，不做任何业务判定。"沙箱化是否免审"归权限引擎（`permissions/engine.ts` 由被包装工具集推导可用性），由 run 组装（core `executeRun`）用同一次检测结果喂给两个使用方：
 
-1. `createBuiltinTools` 的 `exec.sandbox`（只有可用才注入，exec 工具本身不检测平台）；
+1. `createBuiltinTools` 的 `bash.sandbox`（只有可用才注入，bash 工具本身不检测平台）；
 2. `ConfigPermissionGate` 的 `sandboxedTools` 集合（集合非空即沙箱可用：命令类工具无规则命中时 `allow {reason:"sandboxed"}`）。
 
-单一来源保证 **"sandboxed" 放行的命令必然真被沙箱包住**，反之沙箱不可用时 exec 维持人工确认（fail-closed：出问题落到更安全的一侧，绝不放行裸跑）。
+单一来源保证 **"sandboxed" 放行的命令必然真被沙箱包住**，反之沙箱不可用时 bash 维持人工确认（fail-closed：出问题落到更安全的一侧，绝不放行裸跑）。
 
 ## 接口
 
@@ -17,25 +17,25 @@ export interface SandboxConfig {          // config.json 的 sandbox 节
   writeRoots: string[]                    // 追加写白名单（realpath 形态），默认 []
 }
 
-export interface ExecSandboxSpawn {      // spawn 契约；组首不变量写在 interface 文档里
+export interface BashSandboxSpawn {      // spawn 契约；组首不变量写在 interface 文档里
   spawn(command: string, opts: { cwd: string; env?: Record<string, string> }): ChildProcess
   // env（可选）= 子进程的完整环境；不传 = 原样继承 daemon 环境
   // 返回的子进程必须是进程组组长（detached / bwrap --new-session --die-with-parent），
-  // 否则 exec 工具超时时的 kill(-pid) 只杀掉 shell 本体，孙进程静默漏网
+  // 否则 bash 工具超时时的 kill(-pid) 只杀掉 shell 本体，孙进程静默漏网
 }
 
-export interface ExecSandbox extends ExecSandboxSpawn {
+export interface BashSandbox extends BashSandboxSpawn {
   readonly available: boolean
   readonly unavailableReason?: string     // 不可用原因（可用时无）
 }
 
-export function createExecSandbox(
+export function createBashSandbox(
   cfg: SandboxConfig,
   o?: { workspace?; home?; tmpDirs?; which? }   // which/tmpDirs 可注入（测试）
-): ExecSandbox
+): BashSandbox
 ```
 
-exec 工具使用的 spawn 契约（`ExecSandboxSpawn`）与沙箱面（`ExecSandbox`）都声明在 `sandbox/provider.ts` 一处，`tools/exec.ts` import 使用；`createExecSandbox` 的返回值同时满足两者（可用时）。组首不变量（超时杀整棵进程树的承重约定）是契约文档的一部分，换实现的人从接口上就能看到。
+bash 工具使用的 spawn 契约（`BashSandboxSpawn`）与沙箱面（`BashSandbox`）都声明在 `sandbox/provider.ts` 一处，`tools/bash.ts` import 使用；`createBashSandbox` 的返回值同时满足两者（可用时）。组首不变量（超时杀整棵进程树的承重约定）是契约文档的一部分，换实现的人从接口上就能看到。
 
 ## 平台布局
 
@@ -47,10 +47,10 @@ exec 工具使用的 spawn 契约（`ExecSandboxSpawn`）与沙箱面（`ExecSan
 两平台共同点：
 
 - **路径一律 realpath 形态**：`/tmp` 在 macOS 真实路径是 `/private/tmp`，词面匹配可被符号链接绕开（实测踩坑）。`realpathWithin`（来自 permissions/engine.ts）统一解析。
-- **环境经 spawn 的 env 参数透传**：exec 工具把会话身份变量（`KCLAW_SESSION_ID`/`KCLAW_WORKSPACE`）合并进 daemon 环境得到的完整环境，经 spawn 的 `env` 参数递给包装器，包装器原样交给 sandbox-exec/bwrap；不传 = 继承 daemon 环境。
-- **网络默认允许，可配 deny**：默认（`sandbox.network: "allow"`）bwrap 不加 `--unshare-net`、seatbelt profile 放行 `network*`——git clone / npm install / curl 照常工作。`sandbox.network: "deny"` 时 exec 子进程不可建出站/入站连接：Seatbelt 换成 `(deny network-outbound)` + `(deny network-inbound)`（实测裸 `(deny network*)` 过宽——通配符连 shell 启动要用的内部操作一起拦，进程直接起不来；outbound/inbound 恰好拦 `connect()`/`accept()` 而进程可用），bwrap 加 `--unshare-net`。**web_search/web_fetch 不受影响**：它们在 daemon 进程内执行、不走 exec 子进程——断网沙箱因此不需要沙箱外代理，这是架构上顺带的好处。
-- **进程组语义保留**：包装器 spawn 时 `detached: true`，exec 工具的超时 `kill(-pid)` 照旧波及整棵进程树；bwrap 的 `--new-session --die-with-parent` 双保险。
-- **越界表现为命令的普通失败**：沙箱内访问放行集外路径得到 Operation not permitted / Read-only file system 之类错误，exec 以 error result 透传——命令"被沙箱拒绝"与"启动失败"都 fail-closed。
+- **环境经 spawn 的 env 参数透传**：bash 工具把会话身份变量（`KCLAW_SESSION_ID`/`KCLAW_WORKSPACE`）合并进 daemon 环境得到的完整环境，经 spawn 的 `env` 参数递给包装器，包装器原样交给 sandbox-exec/bwrap；不传 = 继承 daemon 环境。
+- **网络默认允许，可配 deny**：默认（`sandbox.network: "allow"`）bwrap 不加 `--unshare-net`、seatbelt profile 放行 `network*`——git clone / npm install / curl 照常工作。`sandbox.network: "deny"` 时 bash 子进程不可建出站/入站连接：Seatbelt 换成 `(deny network-outbound)` + `(deny network-inbound)`（实测裸 `(deny network*)` 过宽——通配符连 shell 启动要用的内部操作一起拦，进程直接起不来；outbound/inbound 恰好拦 `connect()`/`accept()` 而进程可用），bwrap 加 `--unshare-net`。**web_search/web_fetch 不受影响**：它们在 daemon 进程内执行、不走 bash 子进程——断网沙箱因此不需要沙箱外代理，这是架构上顺带的好处。
+- **进程组语义保留**：包装器 spawn 时 `detached: true`，bash 工具的超时 `kill(-pid)` 照旧波及整棵进程树；bwrap 的 `--new-session --die-with-parent` 双保险。
+- **越界表现为命令的普通失败**：沙箱内访问放行集外路径得到 Operation not permitted / Read-only file system 之类错误，bash 以 error result 透传——命令"被沙箱拒绝"与"启动失败"都 fail-closed。
 
 ## 降级链
 
@@ -62,7 +62,7 @@ bwrap 不可用 → 不可用（回退到人工确认）
 - 检测在每 run 组装做一次；`bwrap --die-with-parent true` 验证 user namespaces 真的可用（而非只找到二进制）。
 - **Landlock 保底是后续项**：纯 Node 无法发起 `landlock_create_ruleset` syscall，也没有成熟 CLI 包装工具。降级为"不可用 → 人工确认"是 fail-closed 方向，安全不降级。
 - macOS 的 `sandbox-exec` 被 Apple 标注 deprecated 但当前系统仍可用；长期迁移到 libsandbox C API 不在本文档范围内。
-- `sandbox.enabled: false` 关闭整个特性：exec 恢复裸跑、gate 的被包装工具集为空（所有 exec 走既有判定链）。
+- `sandbox.enabled: false` 关闭整个特性：bash 恢复裸跑、gate 的被包装工具集为空（所有 bash 走既有判定链）。
 
 ## 配置
 
@@ -76,18 +76,18 @@ bwrap 不可用 → 不可用（回退到人工确认）
 }
 ```
 
-各值即默认值：`enabled` 整体开关，默认开；`writeRoots` 追加写白名单（realpath 形式），如 npm 缓存目录；`network` 取 `allow | deny`，deny 时 exec 子进程断网（web 工具不受影响）。daemon 级基础设施配置（非会话偏好），不进会话 meta。npm 等工具在沙箱内需要可写缓存：把 `npm_config_cache` 指到工作区或临时目录，或把缓存路径加进 `writeRoots` 白名单。
+各值即默认值：`enabled` 整体开关，默认开；`writeRoots` 追加写白名单（realpath 形式），如 npm 缓存目录；`network` 取 `allow | deny`，deny 时 bash 子进程断网（web 工具不受影响）。daemon 级基础设施配置（非会话偏好），不进会话 meta。npm 等工具在沙箱内需要可写缓存：把 `npm_config_cache` 指到工作区或临时目录，或把缓存路径加进 `writeRoots` 白名单。
 
 ## 测试策略
 
 - **纯函数**：`seatbeltProfile` / `bwrapArgs` 断言布局形状（写白名单含工作区与 writeRoots、`~/.kclaw` 屏蔽、默认无 unshare-net、deny 才有、命令经 `/bin/sh -c`）。
-- **注入点**：`createExecSandbox` 的 `which`/`tmpDirs` 可注入；exec 工具的沙箱参数用 fake sandbox（放行 / 失败 / 超时）驱动，`tools/exec.test.ts`。
+- **注入点**：`createBashSandbox` 的 `which`/`tmpDirs` 可注入；bash 工具的沙箱参数用 fake sandbox（放行 / 失败 / 超时）驱动，`tools/bash.test.ts`。
 - **真实环境冒烟**（smoke test：用真实环境跑通关键路径的慢速验证）：macOS 本机真 `sandbox-exec`（写工作区成功、写家目录被拒、读 `~/.kclaw` 被拒、网络 socket 可建；network deny 时出站 connect 得 EPERM 而文件操作照常），Linux CI ubuntu runner 真 bwrap（写工作区成功、家目录只读、`~/.kclaw` 屏蔽）。冒烟用注入的**假 home**（tmp 或真 home 下的临时目录），不碰真实 `~/.kclaw`。
 
 ## 边界与出错
 
-- **沙箱不可用一律回人工确认（fail-closed）**：平台检测失败、bwrap 真实试跑不过、`sandbox.enabled: false` 三种情况下都不放行裸跑——exec 回到既有判定链（逐次确认），gate 的被包装工具集为空。
-- **越界表现为命令的普通失败**：沙箱内访问放行集外路径得到 Operation not permitted / Read-only file system 之类的错误，exec 以 error result 透传；对模型来说"被沙箱拒绝"与"命令自己失败"不可区分。
+- **沙箱不可用一律回人工确认（fail-closed）**：平台检测失败、bwrap 真实试跑不过、`sandbox.enabled: false` 三种情况下都不放行裸跑——bash 回到既有判定链（逐次确认），gate 的被包装工具集为空。
+- **越界表现为命令的普通失败**：沙箱内访问放行集外路径得到 Operation not permitted / Read-only file system 之类的错误，bash 以 error result 透传；对模型来说"被沙箱拒绝"与"命令自己失败"不可区分。
 - **network deny 的已知坑**：SBPL 裸 `(deny network*)` 连 shell 启动要用的内部操作一起拦，进程直接起不来——要用 `(deny network-outbound)` + `(deny network-inbound)`（见平台布局一节的实测结论）。
 - **macOS 的 sandbox-exec 被 Apple 标注 deprecated**：当前系统仍可用；长期迁移到 libsandbox C API 不在本文档范围。Linux 侧 Landlock 保底是后续项（纯 Node 无法发起 landlock_create_ruleset syscall），当前降级方向是"不可用 → 人工确认"，安全不降级。
 - **检测每 run 做一次**：平台可用性不是 daemon 启动时定死的，某次 run 组装时检测到不可用，该 run 即回退人工确认。
@@ -95,6 +95,6 @@ bwrap 不可用 → 不可用（回退到人工确认）
 ## 关联
 
 - [permissions](./permissions.md)：`sandboxed` 放行的判定位置与被包装工具集
-- [tools](./tools.md)：exec 工具如何注入沙箱、超时 kill 进程组
+- [tools](./tools.md)：bash 工具如何注入沙箱、超时 kill 进程组
 - [storage](./storage.md)：`sandbox.enabled` / `writeRoots` / `network` 配置字段
 - [agent-loop](./agent-loop.md)：run 组装把同一次检测结果喂给工具与 gate 两个使用方

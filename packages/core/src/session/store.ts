@@ -22,7 +22,7 @@ export interface SessionMeta {
   title: string
   createdAt: string // ISO-8601
   updatedAt: string // ISO-8601
-  jobId?: string
+  cronId?: string
   workdir?: string
   /**
    * 父会话（subagent 派生关系）：设置即子会话。子会话不出现在默认会话列表、
@@ -191,11 +191,11 @@ export class SessionStore {
    * (the daemon's config default; absent → "default"), so meta.mode always
    * carries a real value and later config changes only affect NEW sessions.
    */
-  create(title?: string, jobId?: string, workdir?: string, mode: PermissionMode = "default", parentSessionId?: string): SessionMeta {
+  create(title?: string, cronId?: string, workdir?: string, mode: PermissionMode = "default", parentSessionId?: string): SessionMeta {
     const id = newId("ses")
     const now = new Date().toISOString()
     const event: SessionCreatedEvent = { type: "session.created", at: now, title: title ?? "新会话", mode }
-    if (jobId !== undefined) event.jobId = jobId
+    if (cronId !== undefined) event.cronId = cronId
     if (workdir !== undefined) event.workdir = workdir
     if (parentSessionId !== undefined) event.parentSessionId = parentSessionId
     this.appendEvent(id, event)
@@ -225,9 +225,9 @@ export class SessionStore {
     return metas.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))
   }
 
-  /** Non-deleted sessions of one job, newest-updated first (job-history queries). */
-  listByJob(jobId: string): SessionMeta[] {
-    return this.list().filter((m) => m.jobId === jobId)
+  /** Non-deleted sessions of one cron, newest-updated first (cron-history queries). */
+  listByCron(cronId: string): SessionMeta[] {
+    return this.list().filter((m) => m.cronId === cronId)
   }
 
   /** Every session projection including the recycle bin (workdir-union consumers, the purge cascade). */

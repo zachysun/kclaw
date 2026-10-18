@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest"
 import * as http from "node:http"
 import type { AddressInfo } from "node:net"
-import { createNotifier, type JobFinishedPayload, type NotifyChannel } from "../../src/notify/notify.js"
+import { createNotifier, type CronFinishedPayload, type NotifyChannel } from "../../src/notify/notify.js"
 
-const PAYLOAD: JobFinishedPayload = {
-  jobId: "job-1",
-  jobName: "nightly-build",
+const PAYLOAD: CronFinishedPayload = {
+  cronId: "cron-1",
+  cronName: "nightly-build",
   status: "ok",
   summary: "all steps passed",
   sessionId: "sess-9",
@@ -44,7 +44,7 @@ describe("notify request shapes per channel", () => {
   it("bark posts JSON {title, body}", async () => {
     const { fetchImpl, captured } = captureFetch()
     const n = createNotifier([{ type: "bark", url: "https://bark.dev/abc" }], { fetchImpl })
-    await n.notifyJobFinished(PAYLOAD)
+    await n.notifyCronFinished(PAYLOAD)
     const req = lastOf(captured, "bark.dev")
     expect(req.method).toBe("POST")
     expect(req.headers["content-type"]).toBe("application/json")
@@ -57,7 +57,7 @@ describe("notify request shapes per channel", () => {
   it("serverchan posts urlencoded title + desp", async () => {
     const { fetchImpl, captured } = captureFetch()
     const n = createNotifier([{ type: "serverchan", url: "https://sct.ftqq.com/SENDKEY.send" }], { fetchImpl })
-    await n.notifyJobFinished(PAYLOAD)
+    await n.notifyCronFinished(PAYLOAD)
     const req = lastOf(captured, "sct.ftqq.com")
     expect(req.method).toBe("POST")
     expect(req.headers["content-type"]).toBe("application/x-www-form-urlencoded")
@@ -68,8 +68,8 @@ describe("notify request shapes per channel", () => {
 
   it("webhook posts JSON with all payload fields", async () => {
     const { fetchImpl, captured } = captureFetch()
-    const n = createNotifier([{ type: "webhook", url: "https://hooks.dev/jobs" }], { fetchImpl })
-    await n.notifyJobFinished({ ...PAYLOAD, status: "error" })
+    const n = createNotifier([{ type: "webhook", url: "https://hooks.dev/cron" }], { fetchImpl })
+    await n.notifyCronFinished({ ...PAYLOAD, status: "error" })
     const req = lastOf(captured, "hooks.dev")
     expect(req.method).toBe("POST")
     expect(req.headers["content-type"]).toBe("application/json")
@@ -77,8 +77,8 @@ describe("notify request shapes per channel", () => {
     expect(body.title).toBe("【kclaw】nightly-build 任务失败")
     expect(body.body).toContain("失败")
     expect(body).toMatchObject({
-      jobId: "job-1",
-      jobName: "nightly-build",
+      cronId: "cron-1",
+      cronName: "nightly-build",
       status: "error",
       summary: "all steps passed",
       sessionId: "sess-9",
@@ -91,12 +91,12 @@ describe("notify request shapes per channel", () => {
     const channel: NotifyChannel = {
       type: "bark",
       url: "https://bark.dev/abc",
-      template: "job={{job}} status={{status}} text={{statusText}} sid={{sessionId}} unknown={{nope}} tail",
+      template: "cron={{cron}} status={{status}} text={{statusText}} sid={{sessionId}} unknown={{nope}} tail",
     }
     const n = createNotifier([channel], { fetchImpl })
-    await n.notifyJobFinished(PAYLOAD)
+    await n.notifyCronFinished(PAYLOAD)
     const body = JSON.parse(lastOf(captured, "bark.dev").body)
-    expect(body.body).toBe("job=nightly-build status=ok text=成功 sid=sess-9 unknown= tail")
+    expect(body.body).toBe("cron=nightly-build status=ok text=成功 sid=sess-9 unknown= tail")
   })
 })
 
@@ -105,7 +105,7 @@ describe("sendNotification outcomes", () => {
     const { fetchImpl } = captureFetch()
     const errors: Array<[NotifyChannel, string]> = []
     const n = createNotifier([{ type: "webhook", url: "https://ok.dev/h" }], { fetchImpl, onError: (c, e) => errors.push([c, e]) })
-    await n.notifyJobFinished(PAYLOAD)
+    await n.notifyCronFinished(PAYLOAD)
     expect(errors).toHaveLength(0)
   })
 
@@ -113,7 +113,7 @@ describe("sendNotification outcomes", () => {
     const { fetchImpl } = captureFetch([{ match: "hooks.dev", status: 502 }])
     const errors: Array<[NotifyChannel, string]> = []
     const n = createNotifier([{ type: "webhook", url: "https://hooks.dev/h" }], { fetchImpl, onError: (c, e) => errors.push([c, e]) })
-    await expect(n.notifyJobFinished(PAYLOAD)).resolves.toBeUndefined()
+    await expect(n.notifyCronFinished(PAYLOAD)).resolves.toBeUndefined()
     expect(errors).toHaveLength(1)
     expect(errors[0]![0].url).toBe("https://hooks.dev/h")
     expect(errors[0]![1]).toContain("502")
@@ -125,7 +125,7 @@ describe("sendNotification outcomes", () => {
     }) as typeof fetch
     const errors: Array<[NotifyChannel, string]> = []
     const n = createNotifier([{ type: "bark", url: "https://bark.dev/x" }], { fetchImpl, onError: (c, e) => errors.push([c, e]) })
-    await expect(n.notifyJobFinished(PAYLOAD)).resolves.toBeUndefined()
+    await expect(n.notifyCronFinished(PAYLOAD)).resolves.toBeUndefined()
     expect(errors).toHaveLength(1)
     expect(errors[0]![1]).toContain("network down")
   })
@@ -145,7 +145,7 @@ describe("createNotifier fan-out", () => {
       ],
       { fetchImpl, onError: (c, e) => errors.push([c, e]) },
     )
-    await expect(n.notifyJobFinished(PAYLOAD)).resolves.toBeUndefined()
+    await expect(n.notifyCronFinished(PAYLOAD)).resolves.toBeUndefined()
     expect(captured).toHaveLength(2)
     expect(errors).toHaveLength(1)
     expect(errors[0]![0].url).toBe("https://bark.dev/b")
@@ -159,7 +159,7 @@ describe("createNotifier fan-out", () => {
       return new Response("{}", { status: 200 })
     }) as typeof fetch
     const n = createNotifier([], { fetchImpl })
-    await expect(n.notifyJobFinished(PAYLOAD)).resolves.toBeUndefined()
+    await expect(n.notifyCronFinished(PAYLOAD)).resolves.toBeUndefined()
     expect(calls).toBe(0)
   })
 })
@@ -180,12 +180,12 @@ describe("real receiver integration", () => {
     const { port } = server.address() as AddressInfo
     try {
       const n = createNotifier([{ type: "webhook", url: `http://127.0.0.1:${port}/hook` }])
-      await n.notifyJobFinished(PAYLOAD)
+      await n.notifyCronFinished(PAYLOAD)
       expect(received).toHaveLength(1)
       const body = JSON.parse(received[0]!.body)
       expect(body.title).toBe("【kclaw】nightly-build 任务成功")
       expect(body.body).toContain("会话")
-      expect(body.jobId).toBe("job-1")
+      expect(body.cronId).toBe("cron-1")
       expect(body.sessionUrl).toBe("https://kclaw.local/s/sess-9")
     } finally {
       server.close()

@@ -8,7 +8,7 @@ import type { Message, StopReason, Usage } from "./messages.js"
 import type { RunTrigger } from "./events.js"
 import type { TaskSnapshot } from "./team.js"
 
-export interface SessionCreatedEvent { type: "session.created"; at: string; title: string; workdir?: string; jobId?: string; /** 创建时固化的权限模式快照（config permissions.defaultMode）；不写时 default。 */ mode?: import("../permissions/modes.js").PermissionMode; /** 父会话（subagent 派生关系）：设置即子会话——列表默认过滤、记忆提取排除、用量归组到父。 */ parentSessionId?: string }
+export interface SessionCreatedEvent { type: "session.created"; at: string; title: string; workdir?: string; cronId?: string; /** 创建时固化的权限模式快照（config permissions.defaultMode）；不写时 default。 */ mode?: import("../permissions/modes.js").PermissionMode; /** 父会话（subagent 派生关系）：设置即子会话——列表默认过滤、记忆提取排除、用量归组到父。 */ parentSessionId?: string }
 export interface SessionRenamedEvent { type: "session.renamed"; at: string; title: string; /** 触发来源：auto = autoname 生成，manual = 用户改名；旧事件无此字段按 manual 理解。 */ source?: "auto" | "manual" }
 export interface SessionDeletedEvent { type: "session.deleted"; at: string }
 export interface SessionRestoredEvent { type: "session.restored"; at: string }
@@ -52,7 +52,7 @@ export interface SandboxCheckedEvent {
   type: "sandbox.checked"; at: string
   /** config 是否开启沙箱（sandbox.enabled）。 */
   enabled: boolean
-  /** 检测结果：沙箱可用（exec 工具实际被包裹）；配置关闭时恒 false（fail-closed）。 */
+  /** 检测结果：沙箱可用（bash 工具实际被包裹）；配置关闭时恒 false（fail-closed）。 */
   available: boolean
   /** 不可用原因（仅 available:false 时可能带；配置关闭时不含——那是主动选择）。 */
   unavailableReason?: string

@@ -9,7 +9,7 @@ export type EventType =
   | "message.created" | "message.completed"
   // Edit & retry / regenerate: live broadcast of a persisted truncation (payload = the discarded range's start id)
   | "message.truncated"
-  | "job.started" | "job.completed" | "job.failed"
+  | "cron.started" | "cron.completed" | "cron.failed"
   | "session.appended"
   // 会话元数据
   | "session.renamed"
@@ -37,7 +37,7 @@ export type EventType =
   | "hook.failed"
 
 /** Who initiated a run — the bus payload, the persisted run.started event, the enqueue input and the engine input share this union. */
-export type RunTrigger = "user" | "job" | "agent" | "team" | "goal"
+export type RunTrigger = "user" | "cron" | "agent" | "team" | "goal"
 
 export interface RunStartedPayload { trigger: RunTrigger }
 export interface RunCompletedPayload { stopReason: StopReason; usage: Usage }
@@ -45,9 +45,9 @@ export interface RunFailedPayload { error: { code: string; message: string } }
 export interface MessageCreatedPayload { message: Message }
 export interface MessageCompletedPayload { message: Message }
 export interface MessageTruncatedPayload { fromMessageId: string }
-export interface JobStartedPayload { jobId: string }
-export interface JobCompletedPayload { jobId: string; summary: string }
-export interface JobFailedPayload { jobId: string; error: { code: string; message: string } }
+export interface CronStartedPayload { cronId: string }
+export interface CronCompletedPayload { cronId: string; summary: string }
+export interface CronFailedPayload { cronId: string; error: { code: string; message: string } }
 export interface SessionRenamedPayload { title: string; /** 触发来源：auto = autoname 生成，manual = 用户改名（旧事件默认按 manual）。 */ source?: "auto" | "manual" }
 
 /** Persist notice: one session event has been written to events.jsonl. Emitted by the store after a successful append — persisted BEFORE announced, so consumers can incrementally refetch safely. */
@@ -152,9 +152,9 @@ export type EventPayloadMap = {
   "message.created": MessageCreatedPayload
   "message.completed": MessageCompletedPayload
   "message.truncated": MessageTruncatedPayload
-  "job.started": JobStartedPayload
-  "job.completed": JobCompletedPayload
-  "job.failed": JobFailedPayload
+  "cron.started": CronStartedPayload
+  "cron.completed": CronCompletedPayload
+  "cron.failed": CronFailedPayload
   "session.appended": SessionAppendedPayload
   "session.renamed": SessionRenamedPayload
   "text.created": BlockPayload

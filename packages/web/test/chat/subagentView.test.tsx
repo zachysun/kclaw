@@ -48,7 +48,7 @@ function spawnConversation(): Message[] {
   const tool: Message = {
     id: "m3", sessionId: "s", role: "tool", createdAt: now, updatedAt: now,
     blocks: [{
-      id: "b3", type: "tool_result", callId: "c1", status: "ok", output: "▸ 调用工具 exec\n共 3 处 TODO", durationMs: 1200,
+      id: "b3", type: "tool_result", callId: "c1", status: "ok", output: "▸ 调用工具 bash\n共 3 处 TODO", durationMs: 1200,
       data: { childSessionId: "ses_child_1" },
     }],
   } as unknown as Message
@@ -91,7 +91,7 @@ describe("subagent chat rendering", () => {
 
   it("view: a plain tool result (no data) keeps the ordinary row", () => {
     const { container, unmount } = mountWith(initChat(spawnConversation()))
-    // Rewrite the tool block without data: an exec-style result.
+    // Rewrite the tool block without data: an bash-style result.
     const state = initChat(spawnConversation())
     state.messages = state.messages.map((m) =>
       m.role !== "tool"

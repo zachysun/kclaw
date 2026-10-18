@@ -37,7 +37,7 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
       next.createdAt = event.at
       next.updatedAt = event.at
       if (event.workdir !== undefined) next.workdir = event.workdir
-      if (event.jobId !== undefined) next.jobId = event.jobId
+      if (event.cronId !== undefined) next.cronId = event.cronId
       if (event.parentSessionId !== undefined) next.parentSessionId = event.parentSessionId
       // 创建时固化的默认模式：旧事件流无 mode → 投影不设（gate 读时回退 default）。
       if (event.mode !== undefined) next.mode = event.mode

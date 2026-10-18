@@ -16,7 +16,7 @@ export interface BusSocket {
  *   re-subscribing is idempotent.
  * - `connect(socket)`: registers an authenticated connection that has not
  *   (yet) subscribed to anything. Connected sockets receive every event
- *   WITHOUT a `sessionId` (job.*) — broadcasts go to all connections,
+ *   WITHOUT a `sessionId` (cron.*) — broadcasts go to all connections,
  *   not only subscribed ones.
  * - `emit(e)`: `JSON.stringify(e)` to the matching sockets only. Each
  *   delivery is guarded — a socket whose send throws is skipped, never
@@ -101,9 +101,9 @@ export class EventBus {
    * One recipient, guarded: a socket whose `send` throws
    * synchronously (e.g. a ws that already died) must neither abort the
    * remaining deliveries nor propagate into the emitter — scheduler-tick's
-   * job.* broadcasts and RunManager's run events share this path, and a
-   * throwing subscriber there would mark a healthy job failed. The broken
-   * socket stays registered: unsubscribing is the ws layer's job on close.
+   * cron.* broadcasts and RunManager's run events share this path, and a
+   * throwing subscriber there would mark a healthy cron failed. The broken
+   * socket stays registered: unsubscribing is the ws layer's cron on close.
    */
   private deliver(socket: BusSocket, data: string): void {
     try {

@@ -50,7 +50,7 @@ export interface AttachmentRef {
 /**
  * The structured provenance note riding a queue entry onto its user message
  * (as a note block right after the text): WHO asked for this run, when the
- * requester was not the user. `kind:"job"` = the scheduler's per-job line;
+ * requester was not the user. `kind:"cron"` = the scheduler's per-cron line;
  * `kind:"subagent"` = a background completion delivery declaring that the
  * message is machine-originated, not user speech.
  */
@@ -64,7 +64,7 @@ export interface QueueEntry {
   messageId: string                       // 分配即固定；出队执行时用同一 id 构建 Message
   disposition: SendDisposition
   text: string
-  trigger: RunTrigger  // 还原触发源（job 的 note/触发语义在出队执行时需要；agent = subagent 派生的子 run；team = 团队收信箱投递/派活，按常规处置走 steer 注入；goal = 目标循环自续轮，与 job 同强制 wait，连跑计数在调用方）
+  trigger: RunTrigger  // 还原触发源（cron 的 note/触发语义在出队执行时需要；agent = subagent 派生的子 run；team = 团队收信箱投递/派活，按常规处置走 steer 注入；goal = 目标循环自续轮，与 cron 同强制 wait，连跑计数在调用方）
   attachments?: AttachmentRef[]
   note?: QueueNote                        // 机器来源说明
   enqueuedAt: string                      // ISO-8601

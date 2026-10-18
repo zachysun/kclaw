@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/run.ts` 的 `RunManager` 是 `send_message` 之后服务端的**队列状态机**：消息去向的三处置决策（引导/等待/中断，见下文 submit）、每会话一条显式排队队列与其驱动循环、入队执行（把出队条目连同 AbortController 与 steer 取走回调交接给引擎）、run 取消、排队取消、手动压缩入口与崩溃恢复。单条 run 的**组装**：附件挂载、模型解析、记忆注入（L2 认知常驻系统提示 + L1 情节 note，见组装第 4 步）、技能目录扫描与隐式包装（见组装第 6 步）、系统提示（双段冻结基线或拼装，每 run 一条 `system` 事件按 stable/live 记录，见组装第 11 步）、工具与权限组装、事件发送到总线、run 边界与裁决记录（`run.started`/`run.ended`/`permission.decided` 三事件）、消息持久化、token 用量记录，在 core 的 `executeRun`（`packages/core/src/agent/run-assembly.ts`，引擎侧）完成，经 `RunEngine`/`RunHandoff` 两个形状与队列交接。确认网关 `ConfirmationBroker`（`packages/core/src/permissions/broker.ts`）是人工裁决的服务端半边：等待中的裁决经 WS/CLI 的 `confirmation.resolve` 命令、等待中的问题经 `question.resolve` 命令在此完成（同一个对象、两类等待中的条目）。`packages/core/src/session/autoname.ts` 的 `scheduleAutoname` 在首条用户消息后异步生成会话标题并把更名广播为 `session.renamed` 事件。调度心跳（`scheduler-tick.ts`）触发的 job run 也使用同一个入口。
+`packages/server/src/run.ts` 的 `RunManager` 是 `send_message` 之后服务端的**队列状态机**：消息去向的三处置决策（引导/等待/中断，见下文 submit）、每会话一条显式排队队列与其驱动循环、入队执行（把出队条目连同 AbortController 与 steer 取走回调交接给引擎）、run 取消、排队取消、手动压缩入口与崩溃恢复。单条 run 的**组装**：附件挂载、模型解析、记忆注入（L2 认知常驻系统提示 + L1 情节 note，见组装第 4 步）、技能目录扫描与隐式包装（见组装第 6 步）、系统提示（双段冻结基线或拼装，每 run 一条 `system` 事件按 stable/live 记录，见组装第 11 步）、工具与权限组装、事件发送到总线、run 边界与裁决记录（`run.started`/`run.ended`/`permission.decided` 三事件）、消息持久化、token 用量记录，在 core 的 `executeRun`（`packages/core/src/agent/run-assembly.ts`，引擎侧）完成，经 `RunEngine`/`RunHandoff` 两个形状与队列交接。确认网关 `ConfirmationBroker`（`packages/core/src/permissions/broker.ts`）是人工裁决的服务端半边：等待中的裁决经 WS/CLI 的 `confirmation.resolve` 命令、等待中的问题经 `question.resolve` 命令在此完成（同一个对象、两类等待中的条目）。`packages/core/src/session/autoname.ts` 的 `scheduleAutoname` 在首条用户消息后异步生成会话标题并把更名广播为 `session.renamed` 事件。调度心跳（`scheduler-tick.ts`）触发的 cron run 也使用同一个入口。
 
 ## 设计决策
 
@@ -11,13 +11,13 @@
 - **三种处置只决定消息何时被模型看到**：steer 注入正在跑的对话（在迭代边界注入，即模型完成一轮输出、要发起下一轮请求之间的间隙；不产生新 run）；wait 留在队列等当前 run 结束后出队；interrupt 立即中止当前 run 并插队首。三条路径最终都写进 JSONL，消息 id 在入队时预分配（`entry.messageId`）、出队/注入执行时用同一 id 构建消息，前端气泡从"排队态"原地升级。处置生效层级：单次请求显式指定 > 会话级覆盖（`SessionMeta.dispositionOverride`，CLI `/steer`/`/wait` 与 Web 三选的 steer/wait 写入；interrupt 是一次性动作、Web 与 CLI 均不写覆盖）> 配置默认 `sessions.defaultDisposition`（默认 steer）。
 - **steer 缓冲与降级**：steer 消息不进执行队列，进当前 run 的 steering 缓冲区；run 在迭代边界经 `turn-boundary` 位置的 hook 链（内置 `steering-drain`）取走全部缓冲消息注入。会话**完全空闲**（无活动 run、无可执行条目、无驱动器）时消息不降级、直接开跑（`queued:false`，不广播 `message.queued`）；只有"队列/驱动器在转但无活动 run"时 steer 才降级为 wait 入队并按 wait 报告（`message.queued {disposition:"wait", position}`）。若 run 在取走缓冲前结束（end_turn/aborted/failed 任何原因），残余条目在驱动器的下一拍自动降级为 wait、按原顺序并入队尾——消息绝不丢，队列里可执行的只有 wait 与 interrupt。
 - **注入的取走是先构建后变更**（不变量）：`#drainSteer` 先在局部把全部缓冲条目构建成 user Message（附件挂载可能失败——越界、文件被删），全部成功后才清空缓冲、重写 queue.jsonl 并把 id 登记进 `#injectedIds`（有界集合，容量 `QUEUE_LIMIT×2`，用于把排队取消请求区分为 `injected`（已进事件流历史，机器不删历史）与 `not_found`）；任一构建失败即整体不动，异常抛给循环走 `run.failed "steering_failed"`。
-- **job 消息固定 wait 且同受上限约束**：服务器内部的入队（job tick 的通知消息）按 wait 处置、不读 `defaultDisposition`——job 的语义是"当前的事忙完后轮到我"，没有"引导正在跑的 run"的诉求。上限对 job 一视同仁：会话排满时 job tick 的消息同样吃 `队列已满` 错误。
-- **用户消息由引擎预制**：以纯 text 骨架（先建只含一个文本块的消息，note 块随后补全）经 `RunInput.userMessage` 传入，循环原样使用且不重复持久化；note 块（job 来源 + 记忆）由 run-before hook 链（内置 `memory-inject` 收集 → `user-message-land` 统一追加）补全——事件序固定为 `run.started → message.created → note.emitted ×N → message.completed`，且持久化先于 note 事件（事件反映已持久化状态）。附件挂载同样在骨架构建时完成；越界路径在 `mountAttachments` 里抛错终止整条 run。
+- **cron 消息固定 wait 且同受上限约束**：服务器内部的入队（cron tick 的通知消息）按 wait 处置、不读 `defaultDisposition`——cron 的语义是"当前的事忙完后轮到我"，没有"引导正在跑的 run"的诉求。上限对 cron 一视同仁：会话排满时 cron tick 的消息同样吃 `队列已满` 错误。
+- **用户消息由引擎预制**：以纯 text 骨架（先建只含一个文本块的消息，note 块随后补全）经 `RunInput.userMessage` 传入，循环原样使用且不重复持久化；note 块（cron 来源 + 记忆）由 run-before hook 链（内置 `memory-inject` 收集 → `user-message-land` 统一追加）补全——事件序固定为 `run.started → message.created → note.emitted ×N → message.completed`，且持久化先于 note 事件（事件反映已持久化状态）。附件挂载同样在骨架构建时完成；越界路径在 `mountAttachments` 里抛错终止整条 run。
 - **历史在追加用户消息之前读**：`runAgent` 自己会把用户消息拼在 `history` 之后（`[...input.history, userMsg]`），若 history 已含它会向 provider 重复发送同一段文本。
 - **broker 只负责登记与汇合裁决，不发事件、不管理超时**：`confirmation.requested`/`confirmation.resolved` 由 agent 循环发（`packages/core/src/agent/loop.ts`），broker 若再发即造成线上重复；超时裁决也由循环的 `raceConfirmation` 完成。broker 的 `expiresAt` 只是登记信息。
 - **两侧的超时裁决互相一致**：引擎侧（core run-assembly）的 `raceResolution` 与循环侧的 `raceConfirmation` 用**同一个** `confirmTimeoutMs` 同时等待同一个人工 promise，谁先出结果算谁的——两侧结论一致；迟到的人工裁决被已经出结果的等待丢弃，服务端再把条目标记为过期，晚到的 resolve 只能得到 `unknown confirmation`。
 - **自动命名静默且不覆盖手动改名**：失败静默处理、两次校验默认标题（生成前、写回前），用户已手动改名则不再修改。更名成功写回 meta 后，经注入的 emit hook（`busEmit`）广播 `session.renamed {title, source?}`（`source: "auto"`，与用户/路由改名的 manual 区分）——订阅者立即收到通知。
-- **模型解析：每 run 一次，三级优先级**：本轮用哪个模型，按 `input.model`（job 配置的模型或客户端指定的）→ 会话 meta 的 `model`（POST `/sessions/:id/model` 写入的那个）→ daemon 默认模型的顺序取第一个非空的。取到的值再经 `resolveEntry` 做一次翻译：如果它是 config 里 provider 条目的名字（比如 `deepseek`），就换成该条目配置的线上模型名（比如 `deepseek-chat`）；如果本来就是一个直接的 API 模型名则原样通过。解析发生在每个 run 开始时，所以改完会话模型后下一次 run 即生效。
+- **模型解析：每 run 一次，三级优先级**：本轮用哪个模型，按 `input.model`（cron 配置的模型或客户端指定的）→ 会话 meta 的 `model`（POST `/sessions/:id/model` 写入的那个）→ daemon 默认模型的顺序取第一个非空的。取到的值再经 `resolveEntry` 做一次翻译：如果它是 config 里 provider 条目的名字（比如 `deepseek`），就换成该条目配置的线上模型名（比如 `deepseek-chat`）；如果本来就是一个直接的 API 模型名则原样通过。解析发生在每个 run 开始时，所以改完会话模型后下一次 run 即生效。
 - **附件挂载：按文件类型分三种处理**：`mountAttachments` 把用户上传的文件转成用户消息上的 attachment 块。文本类文件（MIME 为 `text/*` 或扩展名是常见文本类型）且不超过 64KiB 时，读出正文内联进消息（超过 8192 字符截断并加 `\n…[已截断]`）；图片且不超过 5MiB 时转成 base64 内嵌（作为多模态内容段发给模型）；其余文件只在块里放 `{type:"file", path}` 路径信息，模型需要内容时自己用 fs_read 读。安全上有两道检查：ws 层在校验 send_message 帧时查过一次路径，这里再用 `realpathWithin` 复核一遍——引用越出本会话附件目录就直接抛错、终止整条 run。
 - **用量记录失败不影响 run**：run 正常结束后向 `usageStore.record` 记一行（会话 id/run id/模型/输入输出 token/时刻，外加缓存读写字段——run 内所有 LLM 调用都携带该字段才求和，任一次缺失记 NULL=未知；字段经 run-after payload 的 `outcome.totalUsage` 传入，未知时整个字段不出现）。这行代码包在 try/catch 里，失败只打 `kclaw usage record failed:` 日志；daemon 没注入 usageStore 时整个步骤跳过。
 - **记忆写入在 core 侧，run 路径只留注入与检查排期**：写入 pipeline 整体在 core 的 `MemoryPipeline`（`packages/core/src/memory/pipeline.ts`），由五触发驱动（`memory_save` 工具的 immediate、`/memory save` 的手动 manual、新建会话路由的 clear、定时 interval、跟随 follow，机制见 [memory](../core/memory.md)）。run 路径（core `executeRun`）只承担三件事：每次 run 的两级注入（L2 认知常驻系统提示 + L1 情节 note，见组装第 4 步）；给 `createBuiltinTools` 传入 `memoryCtx.immediateEnabled = config.memory.write.immediate`（决定 `memory_save` 工具是否当场触发写入）；run 收尾时排一个跟随检查（`idleMinutes > 0` 时 `memory.scheduleFollowCheck`，写入 `<projectDir>/state.json`，daemon 重启后由记忆调度器补查，见下文组装第 13 步）。
@@ -48,14 +48,14 @@ export type RunManagerDeps = Omit<RunEngineDeps, "broker" | "extraHooks"> & {
 
 export interface EnqueueInput {
   userText: string
-  trigger: "user" | "job" | "agent" | "team" | "goal"
-  model?: string       // 本 run 的模型覆盖（job 配置的模型或客户端强制）；缺席 → 会话 meta → 默认
+  trigger: "user" | "cron" | "agent" | "team" | "goal"
+  model?: string       // 本 run 的模型覆盖（cron 配置的模型或客户端强制）；缺席 → 会话 meta → 默认
   attachments?: AttachmentRef[]  // 挂到用户消息上的附件引用（调用方已校验，这里防御性复验）
   note?: QueueNote     // 机器来源说明（结构化：kind + text），落在用户消息的同 kind note 块
-                       // job 触发=定时任务来源行；subagent kind=后台完成回投的"非用户发言"声明
+                       // cron 触发=定时任务来源行；subagent kind=后台完成回投的"非用户发言"声明
   disposition?: "steer" | "wait" | "interrupt"
                         // 单次显式处置（层级最高）；默认 = 会话覆盖 ?? 配置默认；
-                        // trigger:"job"/"agent"/"goal" 固定 wait，不读默认
+                        // trigger:"cron"/"agent"/"goal" 固定 wait，不读默认
   messageId?: string   // 内部：驱动器出队执行时传入的预分配消息 id（ws 层不传）
 }
 
@@ -87,7 +87,7 @@ export class RunManager {
                         // 拒绝抛错：主会话连续机器唤醒超 budget 先抛 WakeBudgetExhaustedError
                         //（先于队列满检查，语义见 subagents.md）；队列满抛 Error
   enqueue(sessionId: string, input: EnqueueInput): Promise<RunOutcome>
-                        // 兼容包装 = submit().outcome（job tick 等旧调用方不变）
+                        // 兼容包装 = submit().outcome（cron tick 等旧调用方不变）
   queue(sessionId: string): QueueEntry[]
                         // queue.jsonl 的内存副本（可执行条目 + steer 缓冲），内容与之一致，
                         // 供 GET /sessions/:id/queue 与恢复使用
@@ -134,7 +134,7 @@ export class ConfirmationBroker {
 
 ```
 submit(sessionId, input)
-  meta 存在性检查；处置解析（显式 > 会话覆盖 > 配置默认；job 固定 wait）
+  meta 存在性检查；处置解析（显式 > 会话覆盖 > 配置默认；cron 固定 wait）
   queue.length + steerBuf.length >= 10 → throw 队列已满（10 条）
   空闲（无活动 run、无可执行条目、无驱动器）
     → 直发：条目入 #queues 并立即 #drive，返回 {queued:false}（不广播 message.queued）
@@ -189,9 +189,9 @@ retry(sessionId, fromMessageId, text, attachments?)
 4. **记忆注入**（两级，机制见 [memory](../core/memory.md)）：
    - **L2 常驻（系统提示）**：认知块不再由组装直接拼——它由 `system-before` 位置的内置 `system-materials` hook 收集（`memory.cognitionPrompt(workspace)`，scope 过滤 + budget 取舍详见 memory.md；认知为空或抛错时该段缺席，run 照常进行），与技能清单一起在系统提示词组装时追加（见第 11 步）。
    - **L1 情节（用户消息 note）**：由 run-before 位置的内置 `memory-inject` hook 检索（`memory.searchEpisodes(workspace, 首条文本前 200 字符, 5)`），命中变成 `kind:"memory"` note 块（文本 `相关经历（<线的一句话标题>）: <情节正文>`）；检索抛错则不带记忆继续（记忆是加速器，不得阻塞 run）。
-5. **读 history**（此刻用户消息尚未追加），构造纯 text 骨架 `userMessage`，`input.attachments` 经 `mountAttachments` 挂成 attachment 块放进同一消息。**消息 id 采用排队时预分配的 `input.messageId`**（出队执行时由 `#executeEntry` 从条目还原传入）——前端气泡从"排队态"原地升级、id 不变；空闲直发没有这个附加，id 为构建时现生成。job 触发的提示文案（`input.note`）也在此备成 `kind:"job"` note 块，交由 run-before 链追加进消息。
-6. **技能扫描与工具**：先 `scanSkillDirs({global: paths.skillsDir, project: join(workspace, ".kclaw", "skills")})` 扫描技能目录（全局 `<home>/skills` + 会话工作目录的项目级 `.kclaw/skills`，项目同名整目录覆盖；渐进披露第一层的数据源，机制见 [skills](../core/skills.md)）；同时算好技能指定的隐式包装：`trigger: "user"` 时对用户原文做调用检测（`matchSkillInvocations`）并生成模型视图改写文本 `llmUserText`（交给 `llm-before` 位置的内置 `skill-wrap` hook 应用，同时记录到当轮用户消息的 `llmText` 标记、随消息持久化，之后的组装按标记重放同一字节，见 [agent-loop](../core/agent-loop.md) 的"包装标记重放"），`job`/`agent` 触发不参与调用检测。随后 `createBuiltinTools({workspace, memory, tavilyApiKey, exec 超时/输出上限 + 沙箱包装器（可用才注入）, web 超时/私网开关, skills, subagent?, ask?, childRun})`，把同一份扫描结果传给 `skill_read` 工具（渐进披露第二层，按需取正文）；`deps.subagents` 存在且本 run 非 subagent 时多注册 `subagent_run`（`run_in_background` 支持）与 `subagent_collect`（spawner/collector 与父会话 id 随行，机制见 [subagents](../core/subagents.md)）；每个 run 都注入 `ask`（`ask_user_questions` 工具：broker 与确认共用同一个网关对象、`timeoutMs` 取 `config.sessions.askTimeoutMs`、emit hook 给事件带 run 上下文，机制见 [tools](../core/tools.md)）；会话 meta 带 `parentSessionId`（subagent run）时带 `childRun: true`，工具清单裁掉 `memory_save`、`subagent_run` 与 `subagent_collect`（单层委派），系统提示词换成精简的 subagent 提示词；`deps.tools` 的执行器按名覆盖；`extraTools(workspace)` 每 run 求值一次（daemon 接 `mcpManager.toolsFor(workdir)`，工具清单跟会话工作目录所在项目组走），defs 追加、撞名打 `kclaw tool name collision: <name> (adapter overrides builtin)` 且适配器执行器胜出。
-7. **权限**：在 `ConfigPermissionGate` 外再包一层负责登记确认的 gate。组装 gate 的输入一半来自会话、一半来自磁盘，每个 run 重新读取：`mode` 读会话 meta（`sessionMeta.mode`，默认 `default`，没有全局模式旗标，会话 meta 是唯一权威数据）；`decidedRules` 经 `loadDecidedRulesForRun` 每 run 重读已保存的规则文件（全局档恒载；项目档被 git 跟踪则跳过并告警，机制见 [permissions](../core/permissions.md)）；`workspace` 取会话 `workdir`（默认 `deps.workspace`），越界判定与项目档路径都以此为准；`readRoots` 传入附件目录 `paths.attachmentsDir`：上传目录里的文件是 daemon 自己收下的用户输入，fs_read/fs_list 读它们不需要人工确认；`safeTools`/`toolFacts` 按内置工具注册的 risk 与参数 schema 字段名派生（引擎不持工具名单）。exec 沙箱在创建工具之前先检测一次可用性（`createExecSandbox`，结果写 daemon 日志当观察、不打断 run），检测结果同源喂两个使用方：exec 工具的沙箱包装器（第 6 步）与 gate 的 `sandboxedTools`；沙箱启用但检测不可用时，gate 判出的 exec 确认请求带说明 `noteText`（"exec 沙箱不可用，本次操作需人工确认"）。gate 判出 `confirm` 时，用 gate 签发的 id 调 `broker.create(confirmationId, toolCall, risk ?? "sensitive", confirmTimeoutMs, sessionId)` 登记。这一步只做登记，`confirmation.requested` 事件仍由循环发，全链路用的是同一个 id。
+5. **读 history**（此刻用户消息尚未追加），构造纯 text 骨架 `userMessage`，`input.attachments` 经 `mountAttachments` 挂成 attachment 块放进同一消息。**消息 id 采用排队时预分配的 `input.messageId`**（出队执行时由 `#executeEntry` 从条目还原传入）——前端气泡从"排队态"原地升级、id 不变；空闲直发没有这个附加，id 为构建时现生成。cron 触发的提示文案（`input.note`）也在此备成 `kind:"cron"` note 块，交由 run-before 链追加进消息。
+6. **技能扫描与工具**：先 `scanSkillDirs({global: paths.skillsDir, project: join(workspace, ".kclaw", "skills")})` 扫描技能目录（全局 `<home>/skills` + 会话工作目录的项目级 `.kclaw/skills`，项目同名整目录覆盖；渐进披露第一层的数据源，机制见 [skills](../core/skills.md)）；同时算好技能指定的隐式包装：`trigger: "user"` 时对用户原文做调用检测（`matchSkillInvocations`）并生成模型视图改写文本 `llmUserText`（交给 `llm-before` 位置的内置 `skill-wrap` hook 应用，同时记录到当轮用户消息的 `llmText` 标记、随消息持久化，之后的组装按标记重放同一字节，见 [agent-loop](../core/agent-loop.md) 的"包装标记重放"），`cron`/`agent` 触发不参与调用检测。随后 `createBuiltinTools({workspace, memory, tavilyApiKey, bash 超时/输出上限 + 沙箱包装器（可用才注入）, web 超时/私网开关, skills, subagent?, ask?, childRun})`，把同一份扫描结果传给 `skill_read` 工具（渐进披露第二层，按需取正文）；`deps.subagents` 存在且本 run 非 subagent 时多注册 `subagent_run`（`run_in_background` 支持）与 `subagent_collect`（spawner/collector 与父会话 id 随行，机制见 [subagents](../core/subagents.md)）；每个 run 都注入 `ask`（`ask_user_questions` 工具：broker 与确认共用同一个网关对象、`timeoutMs` 取 `config.sessions.askTimeoutMs`、emit hook 给事件带 run 上下文，机制见 [tools](../core/tools.md)）；会话 meta 带 `parentSessionId`（subagent run）时带 `childRun: true`，工具清单裁掉 `memory_save`、`subagent_run` 与 `subagent_collect`（单层委派），系统提示词换成精简的 subagent 提示词；`deps.tools` 的执行器按名覆盖；`extraTools(workspace)` 每 run 求值一次（daemon 接 `mcpManager.toolsFor(workdir)`，工具清单跟会话工作目录所在项目组走），defs 追加、撞名打 `kclaw tool name collision: <name> (adapter overrides builtin)` 且适配器执行器胜出。
+7. **权限**：在 `ConfigPermissionGate` 外再包一层负责登记确认的 gate。组装 gate 的输入一半来自会话、一半来自磁盘，每个 run 重新读取：`mode` 读会话 meta（`sessionMeta.mode`，默认 `default`，没有全局模式旗标，会话 meta 是唯一权威数据）；`decidedRules` 经 `loadDecidedRulesForRun` 每 run 重读已保存的规则文件（全局档恒载；项目档被 git 跟踪则跳过并告警，机制见 [permissions](../core/permissions.md)）；`workspace` 取会话 `workdir`（默认 `deps.workspace`），越界判定与项目档路径都以此为准；`readRoots` 传入附件目录 `paths.attachmentsDir`：上传目录里的文件是 daemon 自己收下的用户输入，fs_read/fs_list 读它们不需要人工确认；`safeTools`/`toolFacts` 按内置工具注册的 risk 与参数 schema 字段名派生（引擎不持工具名单）。bash 沙箱在创建工具之前先检测一次可用性（`createBashSandbox`，结果写 daemon 日志当观察、不打断 run），检测结果同源喂两个使用方：bash 工具的沙箱包装器（第 6 步）与 gate 的 `sandboxedTools`；沙箱启用但检测不可用时，gate 判出的 bash 确认请求带说明 `noteText`（"bash 沙箱不可用，本次操作需人工确认"）。gate 判出 `confirm` 时，用 gate 签发的 id 调 `broker.create(confirmationId, toolCall, risk ?? "sensitive", confirmTimeoutMs, sessionId)` 登记。这一步只做登记，`confirmation.requested` 事件仍由循环发，全链路用的是同一个 id。
 8. **resolveConfirmation**：`broker.wait(confirmationId)` 经共享的 `raceConfirmation(同 confirmTimeoutMs, controller.signal)`（`permissions/broker.ts` 导出，循环与组装用同一个函数）同时等待三方：人工裁决 / 超时 / abort，谁先到算谁。非人工胜出（超时或 abort）即 `broker.expire`，晚到的人工 resolve 只会得到 `unknown confirmation`。人工裁决落定（含超时，沉默也是"否"）时向会话事件流写一条 `permission.decided` 审计事件（裁决、裁决者 by、工具身份；abort 不是裁决不落），与 `system` / `sandbox.checked` 同契约：只写事件流、不进投影、不推进 updatedAt、写失败即 run 失败（运行档案三事件之一，见第 12 步）。
 9. **模型解析与 LLM 客户端**：模型行先解析：`resolveRunModelLine(config, { inputModel, sessionModel, launchModel })` 一次得出四件事：线上模型 id（名字命中 provider 条目时取条目的 `model`，未命中则原样是裸模型名）、命中的条目名 `entryKey`（未命中回退到默认条目）、本 run 的上下文 budget（条目 `contextWindow` 与会话 budget 取 min）、条目声明的 `maxOutput`。优先级链（显式 run 模型 → 会话模型 → 默认条目当前模型 → daemon 启动时解析的模型）收在 `resolveRunModelLine` 一处，手动压缩路径走同一函数。随后 `llmForRun(onLlmRetry, entryKey)` 为本 run 构造带重试可见性的客户端，重试回调把 attempt 计数推进并触发 `llm-retry` 位置的 hook 链（内置 `retry-notify` 转 `llm.failed {willRetry:true}` 事件）；daemon 侧按 `entryKey` 取该条目自己的端点与协议客户端（共享 resolver 按签名缓存、配置变更通知整体清空，改配置下个 run 热生效，见 [provider](../core/provider.md)）；`runId` 从循环的第一个事件 `run.started` 捕获，`llmAttempt` 计数在 `llm.completed/failed` 后复位。
 10. **压缩视图**：`RunInput.compaction` 传入会话 meta 里的压缩状态 `{ upto, top }`（无则 undefined）——循环据此在请求里垫压缩摘要项、跳过已压缩部分。**不再有发送前预压缩**。`session_search` 的检索后端在此懒构造（`buildSessionSearch`：返回一个首次调用才读取该会话事件流的闭包，交给 `createBuiltinTools`）。
@@ -201,7 +201,7 @@ retry(sessionId, fromMessageId, text, attachments?)
     - `onMessage`：assistant/tool 消息持久化（用户消息的持久化由 run-before 链的 `user-message-land` 负责，不经这里）。
 13. **run-after 链**：`runAgent` 返回后串行跑收尾链，首个是内置 `usage-ledger(10)`（有 usageStore 就记一行用量——含缓存读写字段（run 级字段级聚合，未知记 NULL），失败仅日志；subagent run 记到父会话名下，`usageSessionId` = `meta.parentSessionId ?? 自身`）→ 任何排其后的用户/注入条目 → 内置 `manual-compact-flush(15)`（运行忙时排队的 /compact 在这里执行：取排队的 focus，直调 `Compactor.compact({manual:true, phase:"manual"})`；没有暂存就零开销跳过）→ 内置 `post-run-compaction(20)`（stopReason 非 `aborted`/`error` 且上下文占用 ≥ `budget × compactAtRatio` 时 `compactor.auto({phase:"post-run", signal})`；估算前有正在执行的后台压缩则先等它结束（等来的结果多半已把占用压回线以下）。此 hook 声明 fatal：压缩失败会传播为条目级失败。这个等待发生在活动登记清除之前。驱动器串行化让压缩期间新消息排队，手动 /compact 此时也被"会话活跃"条件自然排到下一轮）→ 内置 `follow-check(30)`（`config.memory.write.idleMinutes > 0` 时排一个跟随检查，写入该项目 `state.json`，daemon 重启后由记忆调度器补查；subagent run 不挂；失败静默）→ 内置 `skill-follow-check(40)`（技能进化的零成本粗查：`skills.evolution.enabled` 且 `idleMinutes > 0` 时，对范围内卷入技能的 run 排一个提炼空闲检查（粗查失败静默，不影响 run），写入该项目 `.proposals/state/<projectId>.json`，daemon 重启后由技能调度器补查；subagent run 不排；机制见 [skills](../core/skills.md)）。最后 `#executeEntry` 在 finally 里清理 `#active`/`#activeOutcomes` 中属于本 run 的登记（仍是自己才删，防止误删后继 run 的）。
 
-调度心跳的 job run 使用同一入口：`run.enqueue(session.id, {userText: job.prompt, trigger: "job", note: {kind: "job", text: "本会话由定时任务「<name>」触发"}})`（`packages/server/src/scheduler-tick.ts`），job 触发的 run 跳过自动命名。
+调度心跳的 cron run 使用同一入口：`run.enqueue(session.id, {userText: cron.prompt, trigger: "cron", note: {kind: "cron", text: "本会话由定时任务「<name>」触发"}})`（`packages/server/src/scheduler-tick.ts`），cron 触发的 run 跳过自动命名。
 
 ### 引导注入口（#drainSteer）与 steer 的一生
 
@@ -211,7 +211,7 @@ steer 条目被 `submit` 放进 `#steerBuf` 后，目标 run 在**迭代边界**
 
 ```
 循环：gate.check(toolCall) → {type:"confirm", confirmationId:"conf_…"}
-      （命令类工具无规则命中且 exec 沙箱可用时 gate 直接 allow {reason:"sandboxed"}，不经确认，
+      （命令类工具无规则命中且 bash 沙箱可用时 gate 直接 allow {reason:"sandboxed"}，不经确认，
        见 [permissions](../core/permissions.md) 第 7 节）
       ↓（引擎组装的包装 gate 同步登记）
       broker.create(conf_…, toolCall, risk, 120s, sessionId)

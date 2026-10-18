@@ -394,7 +394,7 @@ export function ChatView({ sessionId, view, onSend, onResolveConfirmation, onAns
           )}
           {onSwitchMode !== undefined && (
             // Always-on permission mode selector (session-scoped, next run
-            // effective): readonly denies writes/exec, default confirms
+            // effective): readonly denies writes/bash, default confirms
             // out-of-bounds actions, accept-edits skips confirmation for
             // in-workspace file writes.
             <div className="composer-row" data-testid="mode-selector-row">

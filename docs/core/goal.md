@@ -47,7 +47,7 @@
 
 ## 验收命令（acceptance gates）
 
-`/goal 目标描述 verify: <命令>`（可多条 `verify:`）登记验收命令，每轮检查先在 **exec 沙箱**里逐条执行（60 秒超时、输出尾部 2000 字符入事件）。语义：
+`/goal 目标描述 verify: <命令>`（可多条 `verify:`）登记验收命令，每轮检查先在 **bash 沙箱**里逐条执行（60 秒超时、输出尾部 2000 字符入事件）。语义：
 
 - **fail-closed**：设定带验收命令的目标时沙箱不可用就直接拒绝（错误 400）；检查时刻沙箱不可用按全部失败计。
 - **短路判定器**：任一命令失败就不调判定器（省 token），失败输出直接作为下一轮的修正指引；连续 3 轮全不过 → `gate-exhausted` 停止。
@@ -84,7 +84,7 @@
 
 ## 与相邻系统的交互
 
-- **排队**：goal 轮的 trigger 是 `"goal"`（`run.started` 触发源第五种），处置固定 `wait`（与 job/agent 同款——无人值守的排队行为必须可预测），用户中途输入按自己的处置照常 steer 注入当前 run。
+- **排队**：goal 轮的 trigger 是 `"goal"`（`run.started` 触发源第五种），处置固定 `wait`（与 cron/agent 同款——无人值守的排队行为必须可预测），用户中途输入按自己的处置照常 steer 注入当前 run。
 - **唤醒 budget**（两次用户发言之间的机器唤醒上限）：goal 轮开跑时同样清零——目标循环自身有九条独立停止条件，不再叠加这份上限，否则长目标里 subagent 投递会先被卡死。
 - **subagent 会话**（`parentSessionId` 非空）不能设目标（只读会话）。
 - **提示词注入**沿用 XML 标签约定：首轮 `<goal-start>`、续跑 `<goal-continue round=N>`、收尾 `<goal-wrapup>`（正文中的闭合标签会被逃逸，防提示词注入）；goal 轮的用户消息带 `note(kind:"goal")` 出处行。

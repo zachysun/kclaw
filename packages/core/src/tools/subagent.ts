@@ -25,7 +25,7 @@ export const SUBAGENT_RUN_DESCRIPTION = [
   "Dispatch a subagent: an independent short-lived agent session that executes ONE task autonomously and returns its final answer as this tool's result.",
   "Use it for context-heavy work (codebase sweeps, research, multi-step verification) so the process never floods this conversation; the child cannot talk back, ask questions, or spawn further subagents.",
   "Issue several subagent_run calls in one batch to run independent tasks in parallel. `task` must be self-contained: the child sees nothing of this conversation, so include every path, constraint and definition it needs. `label` is a short display name.",
-  "Optionally specialize the child: `role` appends a per-task identity to its system prompt, and `tools` restricts its toolset (read-only exploration: ['fs_read','fs_list','fs_edit'] without fs_write/exec — a narrower toolset never widens permissions).",
+  "Optionally specialize the child: `role` appends a per-task identity to its system prompt, and `tools` restricts its toolset (read-only exploration: ['fs_read','fs_list','fs_edit'] without fs_write/bash — a narrower toolset never widens permissions).",
   "For long-running tasks set run_in_background: true — the call returns the child session id immediately and keeps this conversation free; a completion notice arrives as a message here, and subagent_collect fetches the full answer afterwards.",
 ].join(" ")
 

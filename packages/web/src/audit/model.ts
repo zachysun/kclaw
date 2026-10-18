@@ -479,7 +479,7 @@ export function sessionFullContent(event: SessionMetaEvent): string {
   if (event.type === "session.created") {
     if (event.mode !== undefined) lines.push(`mode: ${event.mode}`)
     if (event.workdir !== undefined) lines.push(`workdir: ${event.workdir}`)
-    if (event.jobId !== undefined) lines.push(`jobId: ${event.jobId}`)
+    if (event.cronId !== undefined) lines.push(`cronId: ${event.cronId}`)
   }
   if (event.type === "session.forked") {
     lines.push(`sourceSessionId: ${event.sourceSessionId}`)
@@ -520,7 +520,7 @@ export function blockTypeLabel(block: Block): string {
     case "tool_result":
       return "tool_result"
     case "note":
-      return `note:${block.kind}` // 具体类型可见（job/memory/system/timeout/denied/subagent），审计页不用展开就能分辨来源
+      return `note:${block.kind}` // 具体类型可见（cron/memory/system/timeout/denied/subagent），审计页不用展开就能分辨来源
     case "attachment":
       return "attachment"
   }

@@ -15,9 +15,9 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 describe("SessionStore", () => {
   it("create + list + meta roundtrip", () => {
     const s = new SessionStore(dir)
-    const m = s.create("早报会话", "job_1")
+    const m = s.create("早报会话", "cron_1")
     expect(m.title).toBe("早报会话")
-    expect(m.jobId).toBe("job_1")
+    expect(m.cronId).toBe("cron_1")
     expect(s.list()).toHaveLength(1)
     expect(s.meta(m.id)!.title).toBe("早报会话")
   })
@@ -36,15 +36,15 @@ describe("SessionStore", () => {
     expect(s.listByParent("ses_none")).toEqual([])
   })
 
-  it("listByJob returns one job's non-deleted sessions newest-updated first", async () => {
+  it("listByCron returns one cron's non-deleted sessions newest-updated first", async () => {
     const s = new SessionStore(dir)
-    const older = s.create("旧", "job_a")
+    const older = s.create("旧", "cron_a")
     await new Promise((r) => setTimeout(r, 5)) // distinct updatedAt for the order check
-    const newer = s.create("新", "job_a")
-    s.create("别的", "job_b") // different job: excluded
-    expect(s.listByJob("job_a").map((m) => m.id)).toEqual([newer.id, older.id])
+    const newer = s.create("新", "cron_a")
+    s.create("别的", "cron_b") // different cron: excluded
+    expect(s.listByCron("cron_a").map((m) => m.id)).toEqual([newer.id, older.id])
     s.delete(older.id) // deleted: excluded (recycle-bin territory)
-    expect(s.listByJob("job_a").map((m) => m.id)).toEqual([newer.id])
+    expect(s.listByCron("cron_a").map((m) => m.id)).toEqual([newer.id])
   })
 
   it("appendMessage writes one JSONL line per message and updates updatedAt", async () => {
@@ -372,7 +372,7 @@ describe("SessionStore event sourcing", () => {
     })
     store.appendPermissionDecided(meta.id, {
       at: "2026-01-02T00:00:30.000Z", confirmationId: "conf_1", decision: "once", by: "cli",
-      tool: { callId: "call_1", name: "exec", argsJson: '{"command":"ls"}' },
+      tool: { callId: "call_1", name: "bash", argsJson: '{"command":"ls"}' },
     })
 
     const events = store.readEvents(meta.id)
@@ -387,7 +387,7 @@ describe("SessionStore event sourcing", () => {
     expect(decided).toHaveLength(1)
     expect(decided[0]).toMatchObject({
       confirmationId: "conf_1", decision: "once", by: "cli",
-      tool: { callId: "call_1", name: "exec", argsJson: '{"command":"ls"}' },
+      tool: { callId: "call_1", name: "bash", argsJson: '{"command":"ls"}' },
     })
 
     // 审计事件不进投影：含 updatedAt 在内的所有投影字段逐字段一致

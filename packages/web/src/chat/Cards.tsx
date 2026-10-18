@@ -1,5 +1,5 @@
 /**
- * Inline decision cards of the chat surface: the confirmation card (exec /
+ * Inline decision cards of the chat surface: the confirmation card (bash /
  * write approvals) and the ask_user_questions card. Both render below the
  * run indicators, above the composer — the space the acting user is looking
  * at. QuestionCardView owns its per-question draft state (option picks and

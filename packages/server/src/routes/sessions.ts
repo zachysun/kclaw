@@ -172,7 +172,7 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       return { ok: true }
     })
 
-    // Session-level permission mode switch: readonly denies write/exec,
+    // Session-level permission mode switch: readonly denies write/bash,
     // acceptEdits auto-approves in-workspace file writes; trusted runs
     // everything sandboxed/no-prompt inside the boundary, auto inducts
     // repeated once-approvals into rules. Takes effect on the next run.

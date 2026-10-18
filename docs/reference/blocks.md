@@ -29,7 +29,7 @@ export interface ToolResultBlock {
   durationMs: number
 }
 
-export type NoteKind = "system" | "job" | "memory" | "timeout" | "denied" | "subagent"
+export type NoteKind = "system" | "cron" | "memory" | "timeout" | "denied" | "subagent"
 
 export interface NoteBlock { id: BlockId; type: "note"; kind: NoteKind; text: string }
 
@@ -75,7 +75,7 @@ export type Block =
 | 值 | 含义 | 生产点 |
 |----|------|--------|
 | `system` | 系统说明（迭代达上限的截断说明、团队转发标记、完成回投的降级通知） | agent 循环、团队投递、subagent 宿主 |
-| `job` | 定时任务来源说明（job 触发的 run 在用户消息上追加） | run 组装 |
+| `cron` | 定时任务来源说明（cron 触发的 run 在用户消息上追加） | run 组装 |
 | `subagent` | 后台 subagent 完成回投的来源声明（投递的用户消息上追加，声明这是机器回投、非用户发言） | run 组装（经队列条目的 note 参数） |
 | `memory` | 记忆注入（检索到的相关经历） | 内置 hook `memory-inject` |
 | `timeout` | 确认 / 提问等待超时 | agent 循环（确认与提问的等待出口） |

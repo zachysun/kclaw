@@ -208,7 +208,7 @@ run 组装（core `executeRun`）在构造用户消息骨架时调 `memory.searc
 相关经历（<线的一句话标题>）: <该小节情节正文>
 ```
 
-note 的 `kind` 是 `"memory"`，与 job 来源 note 一起经 run-before hook 链（内置 memory-inject 检索收集 → user-message-land 统一追加进消息、持久化，见 [hooks](./hooks.md)）落进用户消息，并逐个广播 `note.emitted`（事件序：`run.started → message.created → note.emitted ×N → message.completed`，job note 在 memory note 之前）。检索抛错时静默跳过——记忆是加速手段，检索失败不能阻塞一次 run。情节正文从线文件**实时回读**（以线文件为准），线文件被删或不可解析时回退到索引里的正文。
+note 的 `kind` 是 `"memory"`，与 cron 来源 note 一起经 run-before hook 链（内置 memory-inject 检索收集 → user-message-land 统一追加进消息、持久化，见 [hooks](./hooks.md)）落进用户消息，并逐个广播 `note.emitted`（事件序：`run.started → message.created → note.emitted ×N → message.completed`，cron note 在 memory note 之前）。检索抛错时静默跳过——记忆是加速手段，检索失败不能阻塞一次 run。情节正文从线文件**实时回读**（以线文件为准），线文件被删或不可解析时回退到索引里的正文。
 
 ### 混合打分
 
@@ -317,7 +317,7 @@ daemon 启动时做一次全库对齐（`daemon.ts` 调 `memory.reconcile`）：
 - **索引与文件短暂不一致**：写入是"写文件、写索引"两步，中间崩溃会留下未索引的新文件；下次 `reconcile()` 补齐。反向（索引有、文件无）同样由 `reconcile()` 清除。检索命中后实时回读文件正文，命中集合最多短暂滞后。
 - **提取失败不丢消息**：LLM 调用失败提取进度不推进、下次触发重试同一范围；响应不可解析则整批放弃（只打日志），不做部分写入——宁可少记也不记错。
 - **向量路是可选加速**：embedding 未配置、provider 缺失或调用失败时检索自动退化为纯 BM25，不影响任何写入与注入流程。
-- **多进程不支持**：`vectors.db` 是 better-sqlite3 默认日志模式，单 daemon 进程同步访问下安全；多个进程并发写同一 `memory/` 目录是明确不支持的用法（与 jobs.db/usage.db 同规则）。
+- **多进程不支持**：`vectors.db` 是 better-sqlite3 默认日志模式，单 daemon 进程同步访问下安全；多个进程并发写同一 `memory/` 目录是明确不支持的用法（与 cron.db/usage.db 同规则）。
 - **管理写入口无状态校验**：PATCH 是整文件覆写——传什么写什么，不校验 frontmatter；写后重新索引、重建 MEMORY.md，不可解析的文件会在检索里自然消失（但文件本体保留）。
 
 ## 关联

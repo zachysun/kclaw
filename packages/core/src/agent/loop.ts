@@ -39,7 +39,7 @@ export interface RunInput {
    * the loop uses it verbatim instead of synthesizing one from `userText`
    * (which is then ignored) — and does NOT persist it via onMessage. The
    * caller owns this message's persistence (either before calling, or inside
-   * `AgentDeps.onUserMessage`, where RunManager appends memory/job note blocks
+   * `AgentDeps.onUserMessage`, where RunManager appends memory/cron note blocks
    * and appends the finished message to the session log); re-persisting via
    * onMessage would write the same line twice.
    * Lifecycle events fire either way: `message.created` (the skeleton,

@@ -84,7 +84,7 @@ stateDiagram-v2
 
 **主动推送（摘要卡，发给 primaryOpenId）**：
 
-- `job.completed`/`job.failed` 广播（总线上的无会话事件）→ 定时任务终态卡；
+- `cron.completed`/`cron.failed` 广播（总线上的无会话事件）→ 定时任务终态卡；
 - 后台 subagent 落定 → subagent 宿主在完成回投后发出可选回调（`onBackgroundSettled`），daemon 把它接到频道。
 
 **审批卡**：绑定会话上的 `confirmation.requested` 渲染为"批准（仅本次）/拒绝"两键卡片；按钮按下经普通确认网关落裁决——批准即 `once`、拒绝即 `reject`，审计的裁决来源 `by` 记 `feishu`（与 cli/web 同级，见 [permissions](../core/permissions.md)）。裁决若已被别处（WebUI/CLI/超时）处理，broker 里这条确认已不存在，卡片就地改为"已失效"。卡片只在确认存续期间有效，超时按既有超时语义（拒绝）处理。等裁决的审批卡会随状态文件持久化，热重启后按钮照常能用：确认还活着就正常落裁决，已被处理或已超时就地改为"已失效"。

@@ -29,7 +29,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 | 名称 | 一句话 | risk | concurrency |
 |------|--------|------|-------------|
-| `exec` | 在工作目录执行 shell 命令（stdout/stderr 合并，超长截断保头尾） | sensitive | serial |
+| `bash` | 在工作目录执行 shell 命令（stdout/stderr 合并，超长截断保头尾） | sensitive | serial |
 | `fs_read` | 读工作目录内 UTF-8 文本文件（≤ 1 MiB） | safe | parallel |
 | `fs_list` | 列目录（子目录带尾斜杠，文件带字节数） | safe | parallel |
 | `fs_write` | 新建或覆写文件（自动建父目录） | sensitive | serial |
@@ -43,7 +43,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `skill_read` | 按名字加载一个技能的完整规程正文 | safe | parallel |
 | `skill_list` | 列出模型可见的技能（可按关键词过滤） | safe | parallel |
 
-### exec
+### bash
 
 `sensitive` · `serial`。shell 命令经 `shell: true` 执行，工作目录固定为 workspace 根；配置了沙箱且可用时在沙箱内运行（见 [sandbox](../core/sandbox.md)）。
 
@@ -54,8 +54,8 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 行为要点：
 
 - stdout 与 stderr 合并返回。
-- 输出上限由配置 `exec.maxOutputBytes` 决定（默认 100 KiB）：超限保留头部，结尾带 `...[dropped N bytes]...` 丢弃标记；配置了 spill 目录时完整输出同时写入 `<home>/spill`，返回里附一条 fs_read 定位行，模型可自己读回全量。
-- 超时由配置 `exec.timeoutMs` 决定（默认 60 秒）：到时整个进程组被 SIGKILL（shell 的子孙进程一起结束），返回错误并附带已产生的部分输出。SIGKILL 之后留 2 秒宽限等 close 事件：子进程的退出信息与管道里已缓冲的尾部输出仍被收集完才收尾（超时是出错返回，不是静默丢弃）。
+- 输出上限由配置 `bash.maxOutputBytes` 决定（默认 100 KiB）：超限保留头部，结尾带 `...[dropped N bytes]...` 丢弃标记；配置了 spill 目录时完整输出同时写入 `<home>/spill`，返回里附一条 fs_read 定位行，模型可自己读回全量。
+- 超时由配置 `bash.timeoutMs` 决定（默认 60 秒）：到时整个进程组被 SIGKILL（shell 的子孙进程一起结束），返回错误并附带已产生的部分输出。SIGKILL 之后留 2 秒宽限等 close 事件：子进程的退出信息与管道里已缓冲的尾部输出仍被收集完才收尾（超时是出错返回，不是静默丢弃）。
 - 退出码非 0 返回错误，输出以 `exit code N` 开头。
 - 每次执行注入两个环境变量：`KCLAW_SESSION_ID`（当前会话 id）与 `KCLAW_WORKSPACE`（工作目录），供命令行工具自识别；其余环境继承 daemon 进程。
 
@@ -351,9 +351,9 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | 场景 | 裁剪 |
 |------|------|
 | subagent 的 run（`childRun`） | 删 `memory_save`（记忆是主线的职责）；永不带 `subagent_run`（单层委派） |
-| readonly 权限模式 | 删全部 sensitive 工具（`exec` / `fs_write` / `fs_edit`）；可见范围缩小，但权限判定仍是边界 |
+| readonly 权限模式 | 删全部 sensitive 工具（`bash` / `fs_write` / `fs_edit`）；可见范围缩小，但权限判定仍是边界 |
 
-团队工具的注册条件按身份分化：`lead` 身份（含未建队的主线会话，即"预备组长"，见 [agent-team](../core/agent-team.md)）注册全部七个；`member` 身份注册 `send_message` / `list_agents` / `task_*` 五个（不含建队/添加）；不在团队里的会话（job 会话、非组员的 subagent 会话）一个都没有。
+团队工具的注册条件按身份分化：`lead` 身份（含未建队的主线会话，即"预备组长"，见 [agent-team](../core/agent-team.md)）注册全部七个；`member` 身份注册 `send_message` / `list_agents` / `task_*` 五个（不含建队/添加）；不在团队里的会话（cron 会话、非组员的 subagent 会话）一个都没有。
 
 ## MCP 工具
 

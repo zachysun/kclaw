@@ -137,7 +137,7 @@ describe("applyEvent", () => {
     const decided = applyEvent(base, {
       type: "permission.decided", at: "2026-01-05T00:00:00.000Z",
       confirmationId: "conf_1", decision: "once", by: "cli",
-      tool: { callId: "call_1", name: "exec", argsJson: '{"command":"ls"}' },
+      tool: { callId: "call_1", name: "bash", argsJson: '{"command":"ls"}' },
     })
     expect(decided.updatedAt).toBe("2026-01-01T00:00:00.000Z")
     expect(decided).toEqual(base)

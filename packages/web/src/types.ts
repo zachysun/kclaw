@@ -25,7 +25,7 @@ export interface SessionMeta {
   title: string
   createdAt: string // ISO-8601
   updatedAt: string // ISO-8601
-  jobId?: string
+  cronId?: string
   workdir?: string
   model?: string
   deleted?: boolean
@@ -44,8 +44,8 @@ export interface FsBrowseResult {
   dirs: string[]
 }
 
-/** A scheduled prompt as GET /jobs returns it. */
-export interface Job {
+/** A scheduled prompt as GET /cron returns it. */
+export interface Cron {
   id: string
   name: string
   cron: string

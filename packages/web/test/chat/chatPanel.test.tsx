@@ -681,14 +681,14 @@ describe("ChatPanel", () => {
     await drive(() => {
       pushFrame(h.sockets[0]!, ev("confirmation.requested", {
         confirmationId: "conf_1",
-        toolCall: { id: "b5", type: "tool_call", callId: "c1", name: "exec", args: {}, argsJson: "{\"cmd\":\"ls\"}" },
+        toolCall: { id: "b5", type: "tool_call", callId: "c1", name: "bash", args: {}, argsJson: "{\"cmd\":\"ls\"}" },
         risk: "sensitive",
         expiresAt: "2026-08-15T00:02:00.000Z",
       }))
     })
     const card = h.container.querySelector('[data-testid="confirm-card"]')
     expect(card).not.toBeNull()
-    expect(card!.textContent).toContain("exec")
+    expect(card!.textContent).toContain("bash")
     await act(async () => {
       ;(h.container.querySelector('button[data-testid="confirm-once"]') as HTMLButtonElement).click()
     })
@@ -796,7 +796,7 @@ describe("ChatPanel", () => {
       await drive(() => {
         pushFrame(h.sockets[0]!, ev("confirmation.requested", {
           confirmationId,
-          toolCall: { id, type: "tool_call", callId, name: "exec", args: {}, argsJson: "{}" },
+          toolCall: { id, type: "tool_call", callId, name: "bash", args: {}, argsJson: "{}" },
           risk: "safe",
           expiresAt: "t",
         }))
@@ -989,7 +989,7 @@ describe("ChatPanel", () => {
       pushFrame(h.sockets[0]!, { id: "evt-bad", ts: "t", type: "message.completed", payload: {} })
       pushFrame(h.sockets[0]!, ev("confirmation.requested", {
         confirmationId: "conf_1",
-        toolCall: { id: "b5", type: "tool_call", callId: "c1", name: "exec", args: {}, argsJson: "{}" },
+        toolCall: { id: "b5", type: "tool_call", callId: "c1", name: "bash", args: {}, argsJson: "{}" },
         risk: "sensitive",
         expiresAt: "2026-08-15T00:02:00.000Z",
       }))

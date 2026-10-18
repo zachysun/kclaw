@@ -29,7 +29,7 @@ export interface RunInput {
   history: Message[]          // 不含本次用户消息
   system: string
   userText: string
-  trigger?: "user" | "job" | "agent" | "team"   // agent = subagent run（模型经 subagent_run 派出，见 subagents.md）；team = 团队收信箱投递的 run（见 agent-team.md）
+  trigger?: "user" | "cron" | "agent" | "team"   // agent = subagent run（模型经 subagent_run 派出，见 subagents.md）；team = 团队收信箱投递的 run（见 agent-team.md）
   userMessage?: Message       // 宿主预制时循环原样使用且不再经 onMessage 持久化
   compaction?: ActiveSummary  // 运行起点的压缩视图（来自会话 meta）：生效时 upto（含）之前的原文不再发给模型，压缩摘要项由 toProviderMessages 垫在 messages[0]
 }
@@ -134,7 +134,7 @@ flowchart TD
 
 1. 建 `role:"tool"` 消息骨架 → `message.created`（先于执行，使 delta 事件可附带真实 messageId）。
 2. **hook 检查**：每个可执行调用先过 `hooks.runGate("tool-before", {toolCall})`（观察 + 失败否决权）——声明 `failure:"deny"` 的 hook 失败时该调用被拒绝：error result（文案 `hook <名> 失败，操作未执行：<原因>`）+ `kind:"denied"` note，不进权限检查、不执行，run 继续；其余失败照旧跳过。
-3. **权限检查**：每个可执行调用按模型顺序过 `check`——`deny` → error result + note 块（`kind:"denied"|"timeout"`）；`allow` → 记 `grantedBy`（`sandboxed` 即命令类工具由 exec 沙箱顶替人工的放行，见 [permissions](./permissions.md) 第 7 节）；`confirm` → 发 `confirmation.requested {confirmationId, toolCall, risk, expiresAt}`（沙箱启用但不可用时的回退确认带 `noteText`），`raceConfirmation` 同时等待三个来源：人工裁决 | confirmTimeoutMs 超时 | abort 信号，谁先到算谁。人工裁决是四选一（`once` / `project` / `global` / `reject`，来自 `confirmation.resolve` 帧）：`once`/`project`/`global` 都放行并记 `grantedBy:"confirmed"`（project/global 的规则由 run 组装的 `resolveConfirmation` 保存，见 [permissions](./permissions.md)）；`reject`/超时的文案固定："用户拒绝了该操作" / "确认超时，操作未执行"。
+3. **权限检查**：每个可执行调用按模型顺序过 `check`——`deny` → error result + note 块（`kind:"denied"|"timeout"`）；`allow` → 记 `grantedBy`（`sandboxed` 即命令类工具由 bash 沙箱顶替人工的放行，见 [permissions](./permissions.md) 第 7 节）；`confirm` → 发 `confirmation.requested {confirmationId, toolCall, risk, expiresAt}`（沙箱启用但不可用时的回退确认带 `noteText`），`raceConfirmation` 同时等待三个来源：人工裁决 | confirmTimeoutMs 超时 | abort 信号，谁先到算谁。人工裁决是四选一（`once` / `project` / `global` / `reject`，来自 `confirmation.resolve` 帧）：`once`/`project`/`global` 都放行并记 `grantedBy:"confirmed"`（project/global 的规则由 run 组装的 `resolveConfirmation` 保存，见 [permissions](./permissions.md)）；`reject`/超时的文案固定："用户拒绝了该操作" / "确认超时，操作未执行"。
 4. **调度**：`concurrency:"parallel"` 的调用 `Promise.allSettled` 并发；`"serial"` 的在并行组全部结束后逐个 `await`。串行独占是结构保证（先等并行组全部结束，再逐个顺序执行），不是测试约束。执行器收到 `ctx.signal`（即 `deps.signal`）：长时间运行的工具（如 `subagent_run`）靠它感知父 run 的中止，实现"父停子停"（见 [subagents](./subagents.md)）。`ask_user_questions` 的等待走与人工确认同一个三方race（回答 / 超时 / abort，`permissions/broker.ts` 的 `racePending`）。中止时等待作废、不发 `question.resolved`（见 [tools](./tools.md) 的 ask 工具一节）。
 5. **结果**：每个执行中的结果发 `tool_result.created → tool_result.delta（executor 的 onOutput）→ tool_result.completed`；未执行（参数解析失败/未知工具/hook 检查拒绝/abort 拦截）的结果只补 created+completed。结果块一律按模型给定顺序写入；拒绝 note 排在结果之后；`grantedBy` 记为 `Record<callId, GrantedBy>` 挂在 tool 消息上。
 6. **死循环守卫**：执行完成后（completed 发出前）按"工具名 + 参数串"签名做跨回合计数——同一签名连续执行达到 `sessions.toolLoopMaxRepeats`（默认 5，`0` 关闭）次时，该次结果附加一行 `<system-reminder kind="loop-guard">` 换策略提醒，随结果持久化、审计可见；签名变化即重置计数。守卫只提醒不终止，硬停止留待真实需要时再做。

@@ -45,7 +45,7 @@ order = 同位置内的执行次序（升序）：
 | name | position | order | failure | 一句话 |
 |------|----------|-------|---------|--------|
 | `memory-inject` | run-before | 10 | skip | 检索记忆库，收集相关经历 note（收集不落位） |
-| `user-message-land` | run-before | 20 | fatal | 追加 job/记忆 note、持久化用户消息、逐块 note.emitted |
+| `user-message-land` | run-before | 20 | fatal | 追加 cron/记忆 note、持久化用户消息、逐块 note.emitted |
 | `autoname` | run-before | 30 | skip | 新会话首条消息的后台自动命名 |
 | `skill-wrap` | llm-before | 10 | skip | 技能与 @ 文件调用的隐式包装（只改模型视图） |
 | `retry-notify` | llm-retry | 10 | skip | provider 重试转 llm.failed 事件 |

@@ -181,7 +181,7 @@ function permissionDecidedEvent(overrides: Record<string, unknown> = {}): Sessio
     confirmationId: "conf_1",
     decision: "once",
     by: "cli",
-    tool: { callId: "call_1", name: "exec", argsJson: '{"command":"ls"}' },
+    tool: { callId: "call_1", name: "bash", argsJson: '{"command":"ls"}' },
     ...overrides,
   } as unknown as SessionEvent
 }
@@ -630,7 +630,7 @@ describe("AuditView (audit)", () => {
     const { container, root } = await mount(api)
     expect(container.querySelector('[data-testid="run-row-0"]')!.textContent).toContain("运行开始")
     expect(container.querySelector('[data-testid="decision-row-1"]')!.textContent).toContain("批准（仅本次）")
-    expect(container.querySelector('[data-testid="decision-row-1"]')!.textContent).toContain("exec")
+    expect(container.querySelector('[data-testid="decision-row-1"]')!.textContent).toContain("bash")
     expect(container.querySelector('[data-testid="run-row-2"]')!.textContent).toContain("end_turn")
     expect(container.querySelector('[data-testid="run-row-3"]')!.textContent).toContain("error")
     expect(container.querySelector('[data-testid="run-row-3"]')!.textContent).toContain("provider down")

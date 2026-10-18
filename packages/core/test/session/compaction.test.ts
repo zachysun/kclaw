@@ -160,7 +160,7 @@ describe("segmentRanges", () => {
 
 describe("extractSpillLocators", () => {
   it("提取全部 spill locator 行并去重；无 locator 时为空", () => {
-    const l1 = "[完整输出已存盘: /spill/1-exec.txt；需要更多内容时用 fs_read 读取该文件]"
+    const l1 = "[完整输出已存盘: /spill/1-bash.txt；需要更多内容时用 fs_read 读取该文件]"
     const l2 = "[完整输出已存盘: /spill/2-web.txt（该文件仅保留了前 10MB）；需要更多内容时用 fs_read 读取该文件]"
     const t = newMessage("s", "tool", [
       { id: "b1", type: "tool_result", callId: "c1", status: "ok", output: "head\n" + l1, durationMs: 1 },
@@ -221,7 +221,7 @@ describe("renderSegment", () => {
   })
 
   it("spill locator 行逐字保留：超长输出截头后 locator 仍完整出现在渲染里", () => {
-    const locator = "[完整输出已存盘: /home/kclaw/spill/abc123-exec.txt；需要更多内容时用 fs_read 读取该文件]"
+    const locator = "[完整输出已存盘: /home/kclaw/spill/abc123-bash.txt；需要更多内容时用 fs_read 读取该文件]"
     const t = newMessage("s", "tool", [
       { id: "b1", type: "tool_result", callId: "c1", status: "ok", output: "长输出".repeat(500) + "\n" + locator, durationMs: 1 },
     ])
@@ -241,8 +241,8 @@ describe("renderSegment", () => {
 
   it("renders tool-only messages without text as <tool use>", () => {
     const a = newAssistantMessage("s", "m", [
-      { id: "b1", type: "tool_call", callId: "c1", name: "exec", args: { command: "ls" }, argsJson: '{"command":"ls"}' },
+      { id: "b1", type: "tool_call", callId: "c1", name: "bash", args: { command: "ls" }, argsJson: '{"command":"ls"}' },
     ])
-    expect(renderSegment([a])).toContain("→ exec(")
+    expect(renderSegment([a])).toContain("→ bash(")
   })
 })

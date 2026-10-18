@@ -2,13 +2,13 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权 hook 加 83 个业务路由（健康/状态 2 个、会话 23 个、记忆 10 个、技能 16 个、hook 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、provider 管理 6 个、目录浏览 2 个、用量 1 个、MCP 管理 6 个、IM Channel 管理 4 个、检索 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`jobs.ts`、`config.ts`、`providers.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`、`mcp.ts`、`channel.ts`、`search.ts`）；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未组装时降级 503，技能组始终注册（只读与复用管理无组装依赖；提案治理子路由族组装后才可用、未组装整体 503），hook 组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则以文件为准，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权 hook 加 83 个业务路由（健康/状态 2 个、会话 23 个、记忆 10 个、技能 16 个、hook 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、provider 管理 6 个、目录浏览 2 个、用量 1 个、MCP 管理 6 个、IM Channel 管理 4 个、检索 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`attachments.ts`、`crons.ts`、`config.ts`、`providers.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`、`mcp.ts`、`channel.ts`、`search.ts`）；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未组装时降级 503，技能组始终注册（只读与复用管理无组装依赖；提案治理子路由族组装后才可用、未组装整体 503），hook 组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则以文件为准，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
 - **鉴权由一个 hook 统一处理**：`preHandler` 比对 `Authorization: Bearer <token>`（恒时比较），失败统一 `401 {error:"unauthorized"}`。豁免只有 `/health`、`/ws`、静态外壳三种（设计理由见 [daemon](./daemon.md) 的鉴权设计一节）。
 - **错误形状统一为 `{error: string}`**：会话/任务两个路由分组（scope）注册了 `setErrorHandler`，把 Fastify 的 body 解析错误（非法 JSON、空 body）也归一成这个形状；其余分组未注册（body 解析错误走 Fastify 默认形状 `{statusCode, error, message}`），客户端需兼容两种。客户端的共享 HTTP 模块（`@kclaw/core/client-http`）正是从这个 `error` 字段提取错误消息、取不到退回 `HTTP <status>`，见 [client-http](../core/client-http.md)。
-- **404 显式可判别**：会话/任务路由先查存在性（`sessions.meta(id)` / `jobs.get(id)`），不存在返回 `404 {error:"session not found"|"job not found"}`，不依赖异常路径。
+- **404 显式可判别**：会话/任务路由先查存在性（`sessions.meta(id)` / `crons.get(id)`），不存在返回 `404 {error:"session not found"|"cron not found"}`，不依赖异常路径。
 - **配置读面只读且脱敏，写面收在 provider 管理族**：`GET /config` 的 API key 永远掩码返回；改 provider 配置走 `/providers` 路由族（见下文 Provider 管理一节）——改动热生效于下个 run 并持久化 `config.json`，其余配置节仍以手写配置文件为准。
 - **消息审计没有专门路由，压缩审计有只读视图**：审计页（web 的 `AuditView`）没有独立 `/audit` 路由（它由 `GET /sessions/:id/events`（该会话完整事件流，`?since=` 增量游标）单源读取 + 页面私有 ws 订阅（`session.appended` 通知帧驱动增量拉取）组合而成，会话选择跟随应用侧栏的全局选中）。压缩审计不同：手动压缩刻意不产生消息，纯靠消息流看不到它的痕迹，因此 `GET /sessions/:id/compactions` 作为事件流里 `compaction` 事件的只读视图存在（见 [compaction](../core/compaction.md)）。
 - **可选能力按注入条件注册**：附件路由只在传入 `attachmentsDir` 时注册、用量路由只在传入 `UsageStore` 时注册——能力未组装就没有这些路径，而不是"注册了但报错"；MCP 组始终注册，`GET /mcp` 在 daemon 未组装 McpManager 时返回空组列表，动作端点此时回答 503。技能组与记忆组同为始终注册，但语义不同：记忆组未组装 `MemorySystem` 时降级 503，技能组没有组装依赖（技能是以文件为准，每次请求重新扫描），始终正常工作。
@@ -62,7 +62,7 @@ interface SessionMeta {
   title: string
   createdAt: string     // ISO-8601
   updatedAt: string     // message / message.truncated / compaction 等事件会刷新；memory / system 事件不推进
-  jobId?: string        // 由定时任务创建的会话带此字段
+  cronId?: string        // 由定时任务创建的会话带此字段
   workdir?: string      // 会话级工作目录（run 以它覆盖全局 workspace）
   model?: string        // 会话级模型覆盖（默认 → 守护进程默认模型）
   mode?: "readonly" | "default" | "acceptEdits" | "trusted" | "auto"   // 会话权限模式（默认 default）
@@ -90,26 +90,26 @@ interface QueueEntry {
   messageId: string                       // 分配即固定；出队执行/steer 注入用同一 id 构建 Message
   disposition: "steer" | "wait" | "interrupt"
   text: string
-  trigger: "user" | "job" | "agent"       // 还原触发源（agent = subagent run；job 的 note/触发语义在出队执行时需要）
+  trigger: "user" | "cron" | "agent"       // 还原触发源（agent = subagent run；cron 的 note/触发语义在出队执行时需要）
   attachments?: AttachmentRef[]           // {path,name,size,mimeType}，路径已校验（与 send_message 帧同一形状）
-  note?: string                           // job 来源说明
+  note?: string                           // cron 来源说明
   enqueuedAt: string                      // ISO-8601
 }
 ```
 
-### 任务（routes/jobs.ts，底层 `JobScheduler`）
+### 任务（routes/cron.ts，底层 `CronScheduler`）
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
-| POST | `/jobs` | 创建定时任务 | `{name, cron, prompt}` 三者都必填、非空字符串（cron 是 cron 表达式：`分 时 日 月 周` 五段的时间表写法）；可选 `{model}`（该任务的模型覆盖，非空字符串） | 201，`Job`；cron 解析失败 400（cron-parser 的原始报错原样返回） |
-| GET | `/jobs` | 任务列表 | — | `Job[]` |
-| PATCH | `/jobs/:id` | 修改 | `{name?, prompt?, cron?, model?, enabled?}`（字符串字段必须非空、enabled 必须是布尔；未知字段忽略） | `Job`；cron 解析失败 400 |
-| DELETE | `/jobs/:id` | 删除 | — | 204 无 body；不存在 404 `{error:"job not found"}` |
+| POST | `/cron` | 创建定时任务 | `{name, cron, prompt}` 三者都必填、非空字符串（cron 是 cron 表达式：`分 时 日 月 周` 五段的时间表写法）；可选 `{model}`（该任务的模型覆盖，非空字符串） | 201，`Cron`；cron 解析失败 400（cron-parser 的原始报错原样返回） |
+| GET | `/cron` | 任务列表 | — | `Cron[]` |
+| PATCH | `/cron/:id` | 修改 | `{name?, prompt?, cron?, model?, enabled?}`（字符串字段必须非空、enabled 必须是布尔；未知字段忽略） | `Cron`；cron 解析失败 400 |
+| DELETE | `/cron/:id` | 删除 | — | 204 无 body；不存在 404 `{error:"cron not found"}` |
 
-`Job` 字段（`packages/core/src/jobs/scheduler.ts`）：
+`Cron` 字段（`packages/core/src/cron/scheduler.ts`）：
 
 ```ts
-interface Job {
+interface Cron {
   id: string
   name: string
   cron: string
@@ -318,7 +318,7 @@ app.addHook("preHandler", async (request, reply) => {
 - **无分页，只有增量**：`GET /sessions` 与 `GET /sessions/:id/messages` 全量返回；`GET /sessions/:id/events` 全量返回但支持 `?since=` 增量游标（append-only 下标）。个人使用规模下接受；审计页的列表渲染在客户端用虚拟滚动（只渲染可视行）承载大会话。
 - **软删除的会话不在默认列表**：`GET /sessions` 默认过滤 `deleted:true`；要操作回收站必须显式 `?deleted=true`（恢复/永久删除路由不区分列表，直接按 id 操作）。
 - **PATCH `/sessions/:id` 的 workdir 是解析但未生效的字段**（源码只把 title 传给 `updateMeta`）——API 处理者不应依赖它。
-- **`POST /jobs` 的 cron 校验依赖 cron-parser 的报错文本**，客户端展示的是原始英文错误。
+- **`POST /cron` 的 cron 校验依赖 cron-parser 的报错文本**，客户端展示的是原始英文错误。
 - **并发写无版本控制**：两个客户端同时 PATCH 同一资源是"后写赢"，没有乐观锁（加版本号防并发覆盖的机制）。
 - **上传 ≠ 挂载**：附件这三个路由只负责把字节写到磁盘、列举和下载。附件要真正进入对话，还需要客户端在下一条 send_message 帧里带上这些文件的路径，由 run 的挂载步骤转成模型能读的内容，详见 [realtime](./realtime.md) 与 [run-manager](./run-manager.md)。
 
@@ -327,11 +327,11 @@ app.addHook("preHandler", async (request, reply) => {
 - [daemon](./daemon.md)：鉴权豁免的设计理由、静态托管的配置来源
 - [realtime](./realtime.md)：`/ws` 端点的帧协议
 - [run-manager](./run-manager.md)：send_message 背后的三处置决策、队列驱动器与附件挂载（`/queue` 快照与 compact 409 的服务端语义）
-- [storage](../core/storage.md)：SessionStore/JobScheduler/UsageStore 的持久化实现
+- [storage](../core/storage.md)：SessionStore/CronScheduler/UsageStore 的持久化实现
 - [compaction](../core/compaction.md)：compact/compactions 两个路由背后的机制与事件流里的记录格式
 - [memory](../core/memory.md)：`/memory` 路由族背后的记忆系统存储与 `memory.written` 事件
 - [mcp](../core/mcp.md)：`GET /mcp` 快照背后的连接管理器
 - [skills](../core/skills.md)：`/skills` 路由族背后的技能机制（渐进披露、双作用域、可见性档位）
 - [hooks](../core/hooks.md)：`/hooks` 路由背后的 hook 系统（位置网格、内置清单、用户文件契约）
 - [client-http](../core/client-http.md)：客户端共享的 HTTP 请求模块——`{error}` 形状的使用方
-- [jobs](../core/jobs.md)：cron 语义与 nextRunAt 推进规则
+- [cron](../core/cron.md)：cron 语义与 nextRunAt 推进规则

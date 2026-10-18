@@ -227,7 +227,7 @@ export async function stopDaemon(home: string): Promise<StopResult> {
   return "stopped"
 }
 
-/** Outcome of {@link daemonStatus}: facts only, printing is the command's job. */
+/** Outcome of {@link daemonStatus}: facts only, printing is the command's cron. */
 export interface DaemonStatusResult {
   running: boolean
   /** Present when running: the daemon.json facts. */
