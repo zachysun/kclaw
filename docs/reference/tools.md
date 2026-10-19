@@ -114,7 +114,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 ### grep
 
-`safe` · `parallel`。内容搜索与 glob 共享一套文件枚举：git 仓库内用 `git ls-files`（已跟踪 + 未跟踪未忽略，遵循 .gitignore，NUL 分隔保中文文件名）；git 外回落目录遍历（跳过隐藏目录与 node_modules）。候选文件上限 20000，超出报错提示收窄。
+`safe` · `parallel`。内容搜索与 glob 共享一套文件枚举：git 仓库内用 `git ls-files`（已跟踪 + 未跟踪未忽略，遵循 .gitignore，NUL 分隔保中文文件名）；git 外回退目录遍历（跳过隐藏目录与 node_modules）。候选文件上限 20000，超出报错并建议缩小搜索范围。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -138,7 +138,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 - 返回匹配文件路径列表，上限 500；超限截断并带标记，配置了 spill 目录时完整清单写入 spill 并附定位行。
 - 无命中返回 `(no matches)`。
-- 已知限制（grep/glob 共有）：实现是同步扫描（候选上限 20000、单文件 1 MiB 兜底），超大仓库可能短暂阻塞 daemon 事件循环；异步化等真实痛点出现再做。
+- 已知限制（grep/glob 共有）：实现是同步扫描（候选上限 20000、单文件 1 MiB 保底），超大仓库可能短暂阻塞 daemon 事件循环；异步化等真实痛点出现再做。
 
 ### web_search
 
@@ -253,7 +253,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `cron_update` | 部分字段更新（改 cron/delayMinutes 即换形态并重排） | sensitive | serial | 同 cron_create |
 | `cron_delete` | 删除定时任务 | sensitive | serial | 同 cron_create |
 | `create_goal` | 设定目标循环（armed + 首轮入队） | sensitive | serial | 根会话且组装了 goal host（daemon 恒有；subagent 没有） |
-| `get_goal` | 读当前目标视图（状态/轮位/预算/最近判定） | safe | parallel | 同上 |
+| `get_goal` | 读当前目标视图（状态/轮位/budget/最近判定） | safe | parallel | 同上 |
 | `update_goal` | 目标动作（complete=请求判定 / pause / resume / stop） | sensitive | serial | 同上 |
 | `tool_search` | 检索未全量列出的工具（返回完整工具卡，命中即加入本 run 可用集） | safe | parallel | 检索池非空（有目录/deferred 层工具时） |
 | `subagent_run` | 派 subagent 独立执行自包含任务（可后台） | safe | parallel | 主线 run 且组装了派发器（daemon 恒有；子会话没有） |
@@ -274,14 +274,14 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `timeoutMs` | integer | 否 | 模型自定超时（毫秒），clamp 1_000–600_000；缺省用配置 `bash.timeoutMs`（默认 60 秒） |
+| `timeoutMs` | integer | 否 | 模型自定超时（毫秒），clamp 1_000–600_000；不传取配置 `bash.timeoutMs`（默认 60 秒） |
 | `run_in_background` | boolean | 否 | true = 后台启动：立即返回进程 id 与输出文件路径，不受前台超时约束 |
 
 - 后台输出流式写入 spill 文件（`<home>/spill/proc-<id>.txt`），文件字节偏移就是读游标，内存不积压。
 - 完成自动通知：进程结束后经队列以 `trigger:"process"` 的 run 投递到属主会话（note kind `process`），忙会话排队、闲会话唤醒——工具描述明确写有"不要轮询或 sleep 等待"。
-- 未送达通知持久化在 `<home>/process-notices.jsonl`，daemon 重启后补发；启动时对记录的进程组做存活探测，活的重进注册表、死的补发通知。
+- 未送达通知持久化在 `<home>/process-notices.jsonl`，daemon 重启后补发；启动时对记录的进程组做存活检测，活的重进注册表、死的补发通知。
 - 单会话并发后台进程上限 8；注册表按会话隔离，process 三件只看得到本会话的进程。
-- 沙箱可用时后台命令同样在沙箱内运行（与前台同一条 spawn 缝隙）。
+- 沙箱可用时后台命令同样在沙箱内运行（与前台同一条 spawn 路径）。
 
 **process 三件**（safe；list/output parallel、kill serial）：
 
@@ -296,7 +296,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | 工具 | 参数 | 说明 |
 |------|------|------|
 | `create_goal` | `text` 必填；`acceptance?`（字符串数组） | 落 `GoalLoopHost.set`（armed + 首轮入队），与 `/goal <text> verify:` 同路径；带验收命令时沿用沙箱 fail-closed 检查 |
-| `get_goal` | 无参 | 当前目标视图：状态、轮位、预算消耗、最近判定意见、验收命令、armed |
+| `get_goal` | 无参 | 当前目标视图：状态、轮位、budget 消耗、最近判定意见、验收命令、armed |
 | `update_goal` | `action`（complete/pause/resume/stop）必填；`note?` | **complete 只请求立即判定**（判定器裁决 met 才落终态，not_met 带意见续跑——模型永不自判完成）；pause=去 armed；resume=重新 armed+立即检查；stop=映射 userStop（掐活跃 run、清队列） |
 
 ### todo 两件
@@ -313,7 +313,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 ### cron 模型面四件
 
-模型面对既有调度器的投影（与 HTTP `/cron` 路由、WebUI cron 页同域同表）。三个写件 **sensitive**——审批卡上完整可见 name/prompt/调度，用户批准=明说（既定纪律：用户没开口，模型绝不建定时任务）；`cron_list` safe。
+模型面是既有调度器的投影（与 HTTP `/cron` 路由、WebUI cron 页同域同表）。三个写件 **sensitive**——审批卡上完整可见 name/prompt/调度，用户批准=明说（既定纪律：用户没开口，模型绝不建定时任务）；`cron_list` safe。
 
 | 工具 | 参数 | 说明 |
 |------|------|------|
@@ -323,8 +323,8 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `cron_delete` | `id` | 物理删除（与 HTTP DELETE 同语义） |
 
 - **delayMinutes 一次性形态**：`kind:"delay"` 落表（存相对分钟数），触发一次后自动 `enabled=false` 保留记录、永不重排——相对通道是防"模型自算绝对 cron、刚过去的一次性时刻静默滚一年"坑的硬约束（两家对标 harness 源码立规实证）。
-- **防递归**：`trigger:"cron"` 的 run（定时触发的会话）只注册 `cron_list`，三个写工具不进面——定时会话不能再给自己安排后继。
-- **不带 model 参数**：单条调度的模型覆盖是花费面决定，留给用户的 HTTP/CLI 面。
+- **防递归**：`trigger:"cron"` 的 run（定时触发的会话）只注册 `cron_list`——定时会话不能再给自己安排后继。
+- **不带 model 参数**：单条调度用哪个模型是花钱的事，留给用户经 HTTP/CLI 配置。
 - 无效 cron 表达式：返回 cron-parser 原始错误（与 HTTP 400 同文案）。
 
 ### subagent_run
@@ -456,7 +456,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | 层 | 形态 | 放什么 |
 |----|------|--------|
 | **full** | 完整 schema 进每请求的 tools 数组 | bash、fs 四件、grep/glob、ask、skill 两件、todo 两件、tool_search 本体 |
-| **directory** | 系统提示词"工具目录"节：名字+一行描述；**可直呼**（运行时参数校验兜底），参数拿不准用 tool_search 查 | web 两件、memory 两件、session/history 检索、subagent 两件、process 三件、cron 四件、goal 三件、skill_create |
+| **directory** | 系统提示词"工具目录"节：名字+一行描述；**可直呼**（运行时参数校验保底），参数拿不准用 tool_search 查 | web 两件、memory 两件、session/history 检索、subagent 两件、process 三件、cron 四件、goal 三件、skill_create |
 | **deferred** | **只列名字**：内置低频工具的名字进系统提示词目录节的一行名单（稳定文本）；MCP 工具名字列在 `tool_search` 自己的描述里（设计好的唯一缓存断点）。描述与 schema 一律不给，经 `tool_search` 查询后调用 | 团队七件 + **全部 MCP 工具**（连接增删不再动 tools 数组与稳定提示段，前缀缓存全程稳定） |
 
 - **tool_search**（safe/parallel）：Okapi BM25（k1 1.2/b 0.75）索引=名字拆词+描述+顶层参数名（schema 正文不算）；精确名直配第一；稀有词门+长查询覆盖率门防误召回；CJK 二元切分（中文友好）。返回完整工具卡（名字+描述+全参 schema+来源）。

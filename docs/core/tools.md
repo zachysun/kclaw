@@ -71,7 +71,7 @@ export function makeTool<N extends string>(
 
 ## 39 个内置工具
 
-完整清单（名称、一句话职责、risk / concurrency、条件注册与工具清单收缩规则）陈列在 [reference/tools](../reference/tools.md)：常驻 17 个（bash、fs 四件、grep/glob 检索两件、web 两件、memory 两件、session_search、history_search、skill 两件、todo 两件）+ 条件注册 22 个（subagent 2、skill_create 1、后台进程 3、cron 模型面 4、goal 模型面 3、团队 7、提问 1、tool_search 1）——披露分层见 [reference/tools](../reference/tools.md) 的工具披露分层节：全量层 name+description+schema、目录层 name+description、检索层只列 name。下面按实现文件分组说明各家的机制。
+完整清单（名称、一句话职责、risk / concurrency、条件注册与工具清单收缩规则）陈列在 [reference/tools](../reference/tools.md)：常驻 17 个（bash、fs 四件、grep/glob 检索两件、web 两件、memory 两件、session_search、history_search、skill 两件、todo 两件）+ 条件注册 22 个（subagent 2、skill_create 1、后台进程 3、cron 模型面 4、goal 模型面 3、团队 7、提问 1、tool_search 1）——披露分层见该篇的"工具披露分层"节：全量层 name+description+schema、目录层 name+description、检索层只列 name。下面按实现文件分组说明各家的机制。
 
 前 17 个**常驻注册**（注册与否不随会话状态变化；可见性例外有两个——readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型可见工具清单，见 [permissions](./permissions.md)；subagent run 会裁掉 `memory_save`，见 [subagents](./subagents.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 组装了 subagent 派发后端时注册（subagent 自己的 run 两者都不注册，单层委派、不能再派下一级 subagent）；`skill_create` 仅在 daemon 组装了技能进化系统时注册（`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案，机制见 [skills](./skills.md)）；`ask_user_questions` 每个 run 都注册；七个团队工具只在会话属于某个团队时注册，且**工具清单按身份收缩**：组长拿全套，组员没有 `create_team`/`spawn_teammate`（见下文与 [agent-team](./agent-team.md)）。
 
@@ -92,14 +92,14 @@ export function makeTool<N extends string>(
 
 统一边界：`sandboxed(p) = path.resolve(workspace, p)`，无越界拒绝（见设计决策）。
 
-- **fs_read**：先 `statSync`——目录报 `not a file`，超过 `maxReadBytes`（默认 1 MiB，`1024 * 1024`）报 `file too large: <p> is <size> bytes (max 1048576)`；然后整体以 UTF-8 读出。读取成功后把 size+mtime 记进本 run 的读状态表（先读后改守卫的记账，只在成功时记）。
+- **fs_read**：先 `statSync`——目录报 `not a file`，超过 `maxReadBytes`（默认 1 MiB，`1024 * 1024`）报 `file too large: <p> is <size> bytes (max 1048576)`；然后整体以 UTF-8 读出。读取成功后把 size+mtime 记进本 run 的读状态表（供先读后改守卫使用，只在成功时记）。
 - **fs_list**：子目录带尾部 `/`；文件显示字节数（对符号链接 stat 目标，指向目录的也按目录列出；stat 失败标 `broken symlink`）；空目录输出 `(empty directory)`。
 - **fs_write**：`content` 允许空串；`mkdirSync(recursive)` 补齐父目录；成功输出 `wrote <N> bytes to <解析后绝对路径>`。**覆写既有文件走先读后改守卫**：本 run 内没读过、或读后被外部改过，直接报错；目标不存在是新建，不拦。
 - **fs_edit**：`old` 必须在文件中**恰好出现一次**（0 次或多次都报错并给出实际次数）；替换是纯字面匹配（非正则），写回用函数式 replacer（`content.replace(old, () => new)`，字符串 replacer 会解释 `$&`、`$1` 等 $ 模式，导致文件内容被意外改写）。**拒绝二进制编辑**：解码后含 U+FFFD 替换字符或 NUL 字节的文件直接报 `fs_edit only supports text files (binary content detected)`，把二进制内容按文本写回会以乱码覆盖原始字节。**先读后改守卫**：调用内这次 `readFileSync` 不算读过，必须先经 `fs_read` 把内容拉进上下文，且读后文件未被外部修改（size+mtime 双字段比对，不符报"请重新 fs_read"）；守卫状态随 run 生命周期（工具工厂每 run 新建），编辑/覆写成功后刷新记录，同文件连续编辑不误报。
 
 ### 检索工具（`tools/search.ts`）
 
-grep 与 glob 共享一套文件枚举：git 仓库内 `git ls-files -z --cached --others --exclude-standard`（遵循 .gitignore，NUL 分隔保中文文件名），git 外回落目录遍历（跳过隐藏目录与 node_modules）；候选上限 20000，超出报错提示收窄。两者都 safe/parallel，越界 path 与 fs 同口径交权限链。
+grep 与 glob 共享一套文件枚举：git 仓库内 `git ls-files -z --cached --others --exclude-standard`（遵循 .gitignore，NUL 分隔保中文文件名），git 外回退目录遍历（跳过隐藏目录与 node_modules）；候选上限 20000，超出报错并建议缩小搜索范围。两者都 safe/parallel，越界 path 与 fs 同口径交权限链。
 
 - **grep**：JS 正则（超 512 字符拒、编译失败回原文）；跳过 NUL 二进制；单文件命中 1000 行即止；输出 `path:lineNo: 行内容`（单行截 400 字符），超出 maxResults（默认 50，clamp 1–200）带截断标记，溢出全量落 spill 并附定位行；无命中 `(no matches)`。
 - **glob**：picomatch 标准 glob（`dot: false`）；命中上限 500，截断+spill 同 grep。
@@ -176,7 +176,7 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 ## output 与 data 的分流
 
 - **进模型上下文的只有 `output`**：`toProviderMessages` 把 `tool_result` 转成 `{role:"tool", toolCallId, content: output}`（error 结果加 `[error] ` 前缀）；`data` 字段在这个转换里不存在。
-- **`data` 只随块持久化、仅供渲染**：循环在结果完成时 `block.data = res.data`（`packages/core/src/agent/loop.ts`），JSONL 会话日志与事件流附带它，前端（如 web_search 的结果卡片）按结构渲染。这使模型上下文保持纯文本、可控大小，渲染信息又不丢失。
+- **`data` 只随块持久化、仅供渲染**：循环在结果完成时 `block.data = res.data`（`packages/core/src/agent/loop.ts`），JSONL 会话日志与事件流附带它，前端（如 web_search 的结果卡片）按结构渲染。这使模型上下文保持纯文本、大小可控，渲染需要的信息也不丢。
 
 ---
 

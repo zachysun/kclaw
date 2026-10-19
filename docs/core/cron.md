@@ -112,7 +112,7 @@ tick 的第二步 `sessions.purgeExpired(purgeTtlMs)`：把 `deletedAt` 距今 �
 
 ## 模型面（cron 四件工具）
 
-daemon 组装时把同一个 `CronScheduler` 注入 run（engine deps `cronScheduler`），注册表追加 `cron_create` / `cron_list` / `cron_update` / `cron_delete`（实现 `tools/cron.ts`）：三写件 sensitive/serial、`cron_list` safe/parallel；与 HTTP `/cron` 同域同表，不新建存储。防递归：`trigger:"cron"` 的 run 组装时 `writeTools:false`，只有 `cron_list` 进面。create 的触发表达二选一：`cron`（5 段表达式）或 `delayMinutes`（一次性相对触发）——调度器为此新增 `kind`（cron/delay）与 `delay_minutes` 列（老库 ALTER 补列），delay 行 `claimDue` 认领时置 `enabled=0` 而不是推进 `next_run_at`（触发一次、记录保留）；`update` 改 `cron` 转 cron 形态、改 `delayMinutes` 转 delay 形态并从现在重算。模型面不带 `model` 参数（花费面归用户）。
+daemon 组装时把同一个 `CronScheduler` 注入 run（engine deps `cronScheduler`），注册表追加 `cron_create` / `cron_list` / `cron_update` / `cron_delete`（实现 `tools/cron.ts`）：三写件 sensitive/serial、`cron_list` safe/parallel；与 HTTP `/cron` 同域同表，不新建存储。防递归：`trigger:"cron"` 的 run 组装时 `writeTools:false`，只有 `cron_list` 注册。create 的触发表达二选一：`cron`（5 段表达式）或 `delayMinutes`（一次性相对触发）——调度器为此新增 `kind`（cron/delay）与 `delay_minutes` 列（老库 ALTER 补列），delay 行 `claimDue` 认领时置 `enabled=0` 而不是推进 `next_run_at`（触发一次、记录保留）；`update` 改 `cron` 转 cron 形态、改 `delayMinutes` 转 delay 形态并从现在重算。模型面不带 `model` 参数（用哪个模型是花钱的事，归用户决定）。
 
 ## 关联
 

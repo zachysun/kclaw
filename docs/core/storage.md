@@ -262,7 +262,7 @@ rules:
 
 ## 用量记录（`storage/usage.ts`）
 
-`UsageStore` 是一张只追加、不修改的 SQLite 记录表（`<home>/usage.db`，表 `usage` + `at` 列索引）：daemon 每结束一个 run 就记一行 `{sessionId, runId, model, kind, inputTokens, outputTokens, cacheReadTokens?, cacheWriteTokens?, at}`，行主键为 `u_<sessionId>_<runId>`。`kind` 列区分记账口径：`run`（主 run，usage-ledger 钩子）/ `compaction` / `autoname` / `memory` / `skill`（后台调用，runId 前缀同名）/ `goal`（判定器），`GET /usage?by=kind` 按此聚合，存量库经启动时检列 `ALTER TABLE ADD COLUMN kind TEXT NOT NULL DEFAULT 'run'` 迁移（旧行都是主 run）。除 run 本体（usage-ledger 钩子）与 /goal 判定器（runId 前缀 `goal-judge-`）外，四条后台 LLM 调用通道也把花费记进同一张表：压缩摘要（每次压缩两段调用）、会话自动命名、记忆提取与沉淀、技能提炼，runId 以通道名为前缀（`compaction-`/`autoname-`/`memory-`/`skill-`）；无归属会话、流中断（拿不到 usage）或全零 token 的调用不记。两个缓存列（`cache_read_tokens`/`cache_write_tokens`）可空：NULL = 供应商未返回该指标（**未知**，不是没命中）；旧库经启动时 `PRAGMA table_info(usage)` 检列 + `ALTER TABLE ADD COLUMN` 迁移（先例：crons 表的 model 列），新建库 SCHEMA 直接含列。记录失败不影响业务本身：写入是同步调用，调用方自己接住错误。run 本体的记录在 usage-ledger 内建钩子里包了 try/catch，四条后台调用的记录在 server 的 chore-usage.ts 里同样包了 try/catch，usage.db 故障（磁盘满、文件损坏）时只打一行错误日志，run 照常收尾，后台调用照常进行。
+`UsageStore` 是一张只追加、不修改的 SQLite 记录表（`<home>/usage.db`，表 `usage` + `at` 列索引）：daemon 每结束一个 run 就记一行 `{sessionId, runId, model, kind, inputTokens, outputTokens, cacheReadTokens?, cacheWriteTokens?, at}`，行主键为 `u_<sessionId>_<runId>`。`kind` 列区分记录口径：`run`（主 run，usage-ledger 钩子）/ `compaction` / `autoname` / `memory` / `skill`（后台调用，runId 前缀同名）/ `goal`（判定器），`GET /usage?by=kind` 按此聚合，存量库经启动时检列 `ALTER TABLE ADD COLUMN kind TEXT NOT NULL DEFAULT 'run'` 迁移（旧行都是主 run）。除 run 本体（usage-ledger 钩子）与 /goal 判定器（runId 前缀 `goal-judge-`）外，四条后台 LLM 调用通道也把花费记进同一张表：压缩摘要（每次压缩两段调用）、会话自动命名、记忆提取与沉淀、技能提炼，runId 以通道名为前缀（`compaction-`/`autoname-`/`memory-`/`skill-`）；无归属会话、流中断（拿不到 usage）或全零 token 的调用不记。两个缓存列（`cache_read_tokens`/`cache_write_tokens`）可空：NULL = 供应商未返回该指标（**未知**，不是没命中）；旧库经启动时 `PRAGMA table_info(usage)` 检列 + `ALTER TABLE ADD COLUMN` 迁移（先例：crons 表的 model 列），新建库 SCHEMA 直接含列。记录失败不影响业务本身：写入是同步调用，调用方自己接住错误。run 本体的记录在 usage-ledger 内建钩子里包了 try/catch，四条后台调用的记录在 server 的 chore-usage.ts 里同样包了 try/catch，usage.db 故障（磁盘满、文件损坏）时只打一行错误日志，run 照常收尾，后台调用照常进行。
 
 ```ts
 // UsageAgg / UsageTotal / UsageBody（GET /usage 响应）的类型出处是 protocol/usage.ts
@@ -276,7 +276,7 @@ class UsageStore {
 }
 ```
 
-- **四种聚合口径**：`day`（按 `at` 的本地日历日 `YYYY-MM-DD`）、`session`（按 sessionId，**只折 `kind='run'` 行**——记忆提取、压缩摘要、自动命名、技能提炼等后台调用虽挂在会话名下，但请求与主对话没有可比的前缀，混进会话桶会把主对话的缓存命中率拉到失真；后台花费在 `day`/`model`/`kind` 维度照常可见）、`model`（按模型名）、`kind`（按记账口径，即上文的 kind 列枚举）；时间区间 `[from, to)` 对 ISO 格式的 `at` 字符串做比较，结果按 key 升序。
+- **四种聚合口径**：`day`（按 `at` 的本地日历日 `YYYY-MM-DD`）、`session`（按 sessionId，**只折 `kind='run'` 行**——记忆提取、压缩摘要、自动命名、技能提炼等后台调用虽挂在会话名下，但请求与主对话没有可比的前缀，混进会话桶会把主对话的缓存命中率拉到失真；后台花费在 `day`/`model`/`kind` 维度照常可见）、`model`（按模型名）、`kind`（按记录口径，即上文的 kind 列枚举）；时间区间 `[from, to)` 对 ISO 格式的 `at` 字符串做比较，结果按 key 升序。
 - **成本公式**（`costUsd(row, model, prices)`）：基式 `(input/1e6)·inputPerM + (output/1e6)·outputPerM`，价格来自 `config.usage.prices`（美元 / 百万 token）；**模型没有价格条目时成本恒为 0**（token 数照常显示）。模型价目带 `cacheReadPerM`/`cacheWritePerM` 且该行**任一**缓存字段非 NULL 时走分列式：`非缓存输入·inputPerM + 读·cacheReadPerM + 写·cacheWritePerM + 输出·outputPerM`（非缓存输入 = `inputTokens − 已知缓存字段之和`；缺失的缓存字段按 0 token 参与——OpenAI 兼容行只有 cacheRead，若按"两字段都非 NULL"门控会让 cached_tokens 永远按 input 全价计费）。两字段全 NULL 的行（含旧行）沿用基式按 input 单价对总输入计，不猜折扣。每组成本逐行累加——每行用它自己模型的价格，即使分组键是日期或会话。
 - **bucket 级 NULL 语义**：`aggregate`/`total` 的缓存字段类型 `number | null`——桶内所有行该列皆 NULL → `null`（未知，页面与 JSON 显示 "—"，不得显示 0 或命中率 0%；端点不返回缓存指标是常态而非边角）；行内混合 → 已知值之和（无值行跳过，不把未知吞成 0）。
 
