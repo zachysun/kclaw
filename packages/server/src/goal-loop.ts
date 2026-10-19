@@ -233,6 +233,19 @@ export class GoalLoopHost {
     this.#kick(sessionId)
   }
 
+  /**
+   * 模型面（update_goal action=complete）：请求立即判定一轮。返回是否
+   * 真的发起——未 armed / 非 active / 判定进行中时为 false（判定照旧在
+   * run 边界自动进行）。判定器裁决不受影响：met/impossible 才落终态。
+   */
+  requestCheck(sessionId: string): boolean {
+    const rt = this.#runtime(sessionId)
+    const goal = this.snapshot(sessionId)
+    if (!rt.armed || rt.judging || goal === undefined || goal.state !== "active") return false
+    this.#kick(sessionId)
+    return true
+  }
+
   #kick(sessionId: string): void {
     const rt = this.#runtime(sessionId)
     if (!rt.armed || rt.judging) return

@@ -105,6 +105,10 @@
 - **判定期间的并发动作安全**：用户在判定器 await 之后 stop/pause/clear，审计事件（goal.checked）照常写入，状态机只在仍 active 时推进；检查入口互斥，不会重入。
 - **读事件流失败不炸检查**：计数派生只负责读事件流，读流失败按空事件派生全零，检查照常走完。
 
+## 模型面（goal 三件工具，2026-10-19 起）
+
+daemon 组装时把 GoalLoopHost（结构性接口 `GoalToolHost`）注入 run，根会话注册 `create_goal` / `get_goal` / `update_goal`（实现 `tools/goal.ts`，subagent 不注册）：create/update **sensitive**（审批=用户明说的机制化——既定纪律：模型不经 prompting 不得启动或操控花费循环）、get safe。`update_goal action=complete` 请求**立即判定**：host 新增 `requestCheck`（armed+active 才真发起，否则告知判定照旧在 run 边界自动进行），判定器裁决不变——met/impossible 才落终态，模型永不自判完成（对比的两家让模型自证完成，本仓库 ADR-0003 明确拒绝）。pause/resume/stop 直映 host 方法。CLI `/goal` 帮助文本已提及模型侧工具。ADR-0004 文末有本次决策的更新节。
+
 ## 关联
 
 - [http-api](../server/http-api.md)：`/goal` 路由族的协议细节

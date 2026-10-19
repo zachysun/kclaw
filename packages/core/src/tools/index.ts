@@ -21,6 +21,8 @@ import type { CronScheduler } from "../cron/scheduler.js"
 import { createCronTools } from "./cron.js"
 import { createTodoTools } from "./todo.js"
 import type { TodoStore } from "./todo.js"
+import { createGoalTools } from "./goal.js"
+import type { GoalToolHost } from "./goal.js"
 import { createFsTools } from "./fs.js"
 import { createSearchTools } from "./search.js"
 import { createMemoryTools } from "./memory.js"
@@ -38,6 +40,8 @@ export { createProcessTools } from "./process.js"
 export { createCronTools } from "./cron.js"
 export { createTodoTools } from "./todo.js"
 export type { TodoStore } from "./todo.js"
+export { createGoalTools } from "./goal.js"
+export type { GoalToolHost } from "./goal.js"
 export { ProcessRegistry } from "../process/registry.js"
 export type { ProcessEntry, PendingNotice } from "../process/registry.js"
 export { createFsTools } from "./fs.js"
@@ -143,6 +147,13 @@ export function createBuiltinTools(opts: {
    * check (config todo.allowParallelInProgress).
    */
   todo?: { store: TodoStore; allowParallelInProgress?: boolean }
+  /**
+   * Goal model face (root sessions only — childRun never registers): the
+   * three industry-standard tools projecting the goal loop host. create /
+   * update are sensitive (approval = the user's say-so); complete requests
+   * a judge pass and never writes the terminal state itself.
+   */
+  goal?: { host: GoalToolHost; sessionId: string }
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] } {
   const bash = createBashTool({
     workspace: opts.workspace,
@@ -165,6 +176,8 @@ export function createBuiltinTools(opts: {
       : undefined
   const cronTools = opts.cron !== undefined ? createCronTools(opts.cron) : undefined
   const todoTools = opts.todo !== undefined ? createTodoTools(opts.todo) : undefined
+  const goalTools =
+    opts.goal !== undefined && opts.childRun !== true ? createGoalTools(opts.goal) : undefined
   const web = createWebTools({
     tavilyApiKey: opts.tavilyApiKey,
     fetchImpl: opts.fetchImpl,
@@ -367,6 +380,41 @@ export function createBuiltinTools(opts: {
             name: "todo_read",
             tool: todoTools.todo_read,
             def: def("todo_read", "Read the session's current checklist (survives compaction — read it back after a compaction).", {}, []),
+          },
+        ]),
+    ...(goalTools === undefined
+      ? []
+      : [
+          {
+            name: "create_goal",
+            tool: goalTools.create_goal,
+            def: def(
+              "create_goal",
+              "Start a goal loop ONLY when the user explicitly asked for persistent autonomous work (e.g. keep iterating until tests pass). The loop self-continues with an independent judge at each run boundary; acceptance commands run sandboxed and unattended. One goal per session; a live goal must be stopped first.",
+              {
+                text: str("The objective, stated so an independent judge can evaluate it"),
+                acceptance: { type: "array", items: { type: "string" }, description: "Optional acceptance commands (each must pass; run sandboxed). Absent = judged on the conversation alone" },
+              },
+              ["text"],
+            ),
+          },
+          {
+            name: "get_goal",
+            tool: goalTools.get_goal,
+            def: def("get_goal", "Read the current goal's view: state, round position, budget spent, latest verdict, acceptance commands.", {}, []),
+          },
+          {
+            name: "update_goal",
+            tool: goalTools.update_goal,
+            def: def(
+              "update_goal",
+              "Act on the current goal. `complete` requests an immediate judge pass — the independent judge decides met/not_met/impossible, this tool never closes the goal itself. `pause` disarms (no self-continuation). `resume` re-arms and checks. `stop` aborts the active run and parks the goal (user-stop).",
+              {
+                action: { type: "string", enum: ["complete", "pause", "resume", "stop"], description: "complete / pause / resume / stop" },
+                note: str("Optional context note (recorded, not used as judge evidence)"),
+              },
+              ["action"],
+            ),
           },
         ]),
     // process 三件仅在组装传入后台进程注册表时存在（daemon 恒有；裸引擎测试

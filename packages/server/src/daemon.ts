@@ -513,6 +513,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     historySearch,
     processes: processRegistry,
     cronScheduler: crons,
+    goalHost,
     subagents: {
       spawner: subagentHost.spawner,
       collector: subagentHost.collector,

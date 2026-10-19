@@ -1,4 +1,4 @@
-# tools — 内置工具清单（35 个）
+# tools — 内置工具清单（38 个）
 
 > 权威来源：`packages/core/src/tools/index.ts`（注册表：执行器与模型侧 JSON Schema 成对声明）与 `packages/core/src/tools/` 下各实现文件（参数校验与行为）。机制见 [tools](../core/tools.md)，权限判定链见 [permissions](../core/permissions.md)。
 
@@ -238,7 +238,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - 只列模型可见技能（与系统提示词清单同一口径，`disable-model-invocation` 的不出现），按名字排序。
 - 找到后用 skill_read 加载正文。
 
-## 条件注册工具（18 个）
+## 条件注册工具（21 个）
 
 只在对应能力被组装进 run 时加入注册表：
 
@@ -251,6 +251,9 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `cron_list` | 列出全部定时任务（调度、状态、上次结果） | safe | parallel | 同上（cron 触发的 run 保留） |
 | `cron_update` | 部分字段更新（改 cron/delayMinutes 即换形态并重排） | sensitive | serial | 同 cron_create |
 | `cron_delete` | 删除定时任务 | sensitive | serial | 同 cron_create |
+| `create_goal` | 设定目标循环（armed + 首轮入队） | sensitive | serial | 根会话且组装了 goal host（daemon 恒有；subagent 没有） |
+| `get_goal` | 读当前目标视图（状态/轮位/预算/最近判定） | safe | parallel | 同上 |
+| `update_goal` | 目标动作（complete=请求判定 / pause / resume / stop） | sensitive | serial | 同上 |
 | `subagent_run` | 派 subagent 独立执行自包含任务（可后台） | safe | parallel | 主线 run 且组装了派发器（daemon 恒有；子会话没有） |
 | `subagent_collect` | 按子会话 id 取回后台 subagent 的结题答复 | safe | parallel | 同上，且组装了收集器 |
 | `skill_create` | 把一段经验固化为技能提案（提案制，不经确认不生效） | safe | parallel | daemon 组装了技能进化系统（恒有）；`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案 |
@@ -283,6 +286,16 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - `process_list {}`：本会话后台进程清单，最新在前，上限 50 条。
 - `process_output { processId, offset?, wait?, timeoutMs? }`：从 `offset` 字节起读增量输出，返回 `nextOffset` 作下次游标；`wait:true` 阻塞等新输出或终态（timeoutMs 默认 30 秒、上限 600 秒）；`data` 带状态与退出码。
 - `process_kill { processId }`：SIGKILL 整个进程组；杀已结束的进程不报错。
+
+### goal 三件
+
+模型面 goal 控制，与两家对标实现同形（create/get/update）。全部是既有 GoalLoopHost 路径的投影，goal 引擎零改动；run 边界的独立判定器仍是终态唯一写入者（ADR-0003）。`create_goal`/`update_goal` **sensitive**——审批卡就是"用户明说"的机制化；`get_goal` safe。仅根会话注册（subagent 不能设目标）；已有活跃目标时 create 拒绝（单目标，防嵌套）。
+
+| 工具 | 参数 | 说明 |
+|------|------|------|
+| `create_goal` | `text` 必填；`acceptance?`（字符串数组） | 落 `GoalLoopHost.set`（armed + 首轮入队），与 `/goal <text> verify:` 同路径；带验收命令时沿用沙箱 fail-closed 检查 |
+| `get_goal` | 无参 | 当前目标视图：状态、轮位、预算消耗、最近判定意见、验收命令、armed |
+| `update_goal` | `action`（complete/pause/resume/stop）必填；`note?` | **complete 只请求立即判定**（判定器裁决 met 才落终态，not_met 带意见续跑——模型永不自判完成）；pause=去 armed；resume=重新 armed+立即检查；stop=映射 userStop（掐活跃 run、清队列） |
 
 ### todo 两件
 

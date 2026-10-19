@@ -353,7 +353,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
           const body = (await ctx.client.request("GET", base)) as GoalViewResponse | null
           const view = body?.goal ?? null
           if (view === null) {
-            ctx.print("本会话还没有目标。用法：/goal <目标描述>（可加 verify: <验收命令>，可多条）；动作：/goal stop|pause|resume|clear")
+            ctx.print("本会话还没有目标。用法：/goal <目标描述>（可加 verify: <验收命令>，可多条）；动作：/goal stop|pause|resume|clear。模型侧也可以用 create_goal / get_goal / update_goal 工具（开启与状态动作走审批）")
             return
           }
           const stateLabel: Record<string, string> = { active: "进行中", paused: "已暂停", blocked: "待裁决", complete: "已终态" }

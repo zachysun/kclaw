@@ -60,6 +60,14 @@ function makeEngine(captured: LlmRequest[]): RunEngine {
       broker: new ConfirmationBroker(),
       processes: new ProcessRegistry(),
       cronScheduler: new CronScheduler(join(home, "cron.db")),
+      goalHost: {
+        set: () => { throw new Error("not used in this test") },
+        pause: () => { throw new Error("not used in this test") },
+        resume: () => { throw new Error("not used in this test") },
+        userStop: () => { throw new Error("not used in this test") },
+        view: () => undefined,
+        requestCheck: () => false,
+      },
     },
     compactor: new Compactor({ sessions, emit: (e) => bus.emit(e) }),
   }
@@ -102,6 +110,9 @@ describe("executeRun deps → surface forwarding", () => {
     expect(names).toContain("cron_delete")
     expect(names).toContain("todo_write")
     expect(names).toContain("todo_read")
+    expect(names).toContain("create_goal")
+    expect(names).toContain("get_goal")
+    expect(names).toContain("update_goal")
   })
 
   it("a cron-fired run keeps cron_list but loses the write trio (anti-recursion)", async () => {

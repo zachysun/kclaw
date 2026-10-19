@@ -227,6 +227,11 @@ export interface RunEngineDeps {
    */
   cronScheduler?: import("../cron/scheduler.js").CronScheduler
   /**
+   * Goal loop host (server-side; the structural GoalToolHost). When set and
+   * the run is a root session, the three goal tools join the surface.
+   */
+  goalHost?: import("../tools/goal.js").GoalToolHost
+  /**
    * Agent team: the server-side team facade. When set,
    * every run probes it once for the session's team identity — lead gets the
    * lead protocol plus the full team tool surface, a member runs the member
@@ -524,6 +529,9 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
             writeTools: input.trigger !== "cron",
           },
         }),
+    ...(engine.deps.goalHost === undefined || childRun
+      ? {}
+      : { goal: { host: engine.deps.goalHost, sessionId } }),
     ...(engine.deps.sessions === undefined
       ? {}
       : {
