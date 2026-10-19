@@ -2,7 +2,7 @@
 
 > 权威来源分散，每节开头标注。这篇收的是不属于前几篇主题的小枚举；消息 / 块 / 事件 / 帧 / 工具 / hook 的清单见同目录其余各篇。
 
-## 运行触发源（5 值）
+## 运行触发源（6 值）
 
 权威来源：`packages/core/src/protocol/events.ts`（RunStartedPayload）、`packages/core/src/protocol/wire.ts`（QueueEntry）、`packages/core/src/protocol/session-events.ts`（run.started）。
 
@@ -10,6 +10,7 @@
 |----|------|
 | `user` | 人发的消息 |
 | `cron` | 定时任务触发 |
+| `process` | 后台进程结算通知（bash `run_in_background` 启动的进程结束后，完成通知投递给属主会话开启的一轮 run；处置与 cron/agent/goal 同为强制 wait） |
 | `agent` | subagent 派生的子 run |
 | `team` | 团队收信箱投递 / 派活 |
 | `goal` | 目标循环自动续跑（`/goal`，处置固定 wait，机制见 [goal](../core/goal.md)） |
@@ -148,7 +149,7 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 | `tool_call_delta` | 工具参数增量（args 的 JSON 片段） |
 | `message_done` | 一条消息完成（stopReason + usage） |
 
-## ID 前缀（13 值）
+## ID 前缀（14 值）
 
 权威来源：`packages/core/src/protocol/ids.ts`（`IdPrefix` 联合 + `newId(prefix)`，前缀 + 单调 ULID，例 `run_01J…`）。
 
@@ -162,7 +163,8 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 | `run` | run id | runAgent |
 | `conf` | 确认卡 id | 权限引擎的确认 id 工厂 |
 | `mem` | 记忆（已声明） | 无生成点——线 / 认知文件按 topic / kind-name 命名 |
-| `cron` | 定时任务 id | crons/scheduler.ts |
+| `cron` | 定时任务 id | cron/scheduler.ts |
+| `proc` | 后台进程 id | bash 工具（`run_in_background` 后台启动时） |
 | `att` | 附件 id | server 上传路由（磁盘文件名 `<att_…>__<原名>`） |
 | `q` | 提问 id | ask_user_questions 的 questionId |
 | `tm` | 收信箱条目 id | 团队 store（mailbox 入队） |

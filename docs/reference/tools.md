@@ -277,6 +277,8 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `timeoutMs` | integer | 否 | 模型自定超时（毫秒），clamp 1_000–600_000；不传取配置 `bash.timeoutMs`（默认 60 秒） |
 | `run_in_background` | boolean | 否 | true = 后台启动：立即返回进程 id 与输出文件路径，不受前台超时约束 |
 
+注意：bash 的模型侧 JSON Schema 目前只声明 `command` 一个参数——上表两个参数由执行器直接接受并生效，但没有写进 schema，模型无法从工具清单得知它们的存在，需要在对话里明确告知参数名才能用上。
+
 - 后台输出流式写入 spill 文件（`<home>/spill/proc-<id>.txt`），文件字节偏移就是读游标，内存不积压。
 - 完成自动通知：进程结束后经队列以 `trigger:"process"` 的 run 投递到属主会话（note kind `process`），忙会话排队、闲会话唤醒——工具描述明确写有"不要轮询或 sleep 等待"。
 - 未送达通知持久化在 `<home>/process-notices.jsonl`，daemon 重启后补发；启动时对记录的进程组做存活检测，活的重进注册表、死的补发通知。
@@ -461,7 +463,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 - **tool_search**（safe/parallel）：Okapi BM25（k1 1.2/b 0.75）索引=名字拆词+描述+顶层参数名（schema 正文不算）；精确名直配第一；稀有词门+长查询覆盖率门防误召回；CJK 二元切分（中文友好）。返回完整工具卡（名字+描述+全参 schema+来源）。
 - **真提升**：命中的 defs 经执行器上下文的 promote 缝注入本 run 活跃集——下一请求的 tools 数组带上，模型直呼、可并行、逐调用审计照旧（不走折叠转发的桥）。
-- 调完全 deferred 且未提升的名字：`unknown tool` + 提示可用 tool_search 检索；directory 名字直呼有效。
+- 名字调用的边界：完全未注册的名字报 `unknown tool` 错误，附编辑距离最近的可调用名提示（活跃集与检索池里的名字都算候选）；directory 名字直呼有效。引擎里有按层拦截未提升 deferred 调用的分支（`agent/loop.ts`），但其判定条件恒为假（可调用集合包含了执行器表的全部键），实际不拦截——deferred 名字直呼同样会执行；"先检索后调用"目前靠系统提示词与工具描述引导，不由引擎强制。
 - **分层清单是静态的、人工评审的**：调用频率持续记录，但层级只在批次评审中调整——tools 数组与目录节都是前缀缓存成分，即时重排等于反复断缓存。
 - readonly 裁剪与 subagent 白名单先于分层投影（先来的裁剪永远赢）。
 

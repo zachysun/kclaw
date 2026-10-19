@@ -33,8 +33,8 @@ export interface ToolExecutor {
 // packages/core/src/tools/index.ts
 export function createBuiltinTools(opts: {
   workspace: string
-  memoryCtx: { system: MemorySystem; sessionId: string; workdir: string; immediateEnabled: boolean }
-  // 记忆系统统一入口 + 当前会话上下文；immediateEnabled 决定 memory_save 是否当场触发写入
+  memoryCtx: { system: Pick<MemoryTriggers, "triggerImmediate"> & Pick<MemoryQuery, "searchAll">; sessionId: string; workdir: string; immediateEnabled: boolean }
+  // 记忆系统统一入口（只取立即写入与全库检索两个方法）+ 当前会话上下文；immediateEnabled 决定 memory_save 是否当场触发写入
   tavilyApiKey: string
   bash?: Partial<{ timeoutMs: number; maxOutputBytes: number; sandbox: BashSandboxSpawn; spillDir: string }>
   // sandbox = bash 沙箱包装器：run 组装仅在沙箱可用时传入（见 sandbox.md），
@@ -55,6 +55,18 @@ export function createBuiltinTools(opts: {
   // run 组装对每个 run 都注入——主线与 subagent 一样（subagent 的转发卡沿确认先例）
   childRun?: boolean                 // 本 run 自身是 subagent（meta.parentSessionId 派生）：裁掉 memory_save 与 subagent_run
   fetchImpl?: typeof fetch
+  processes?: ProcessRegistry        // 后台进程注册表（daemon 恒有）：bash 获得 run_in_background，process 三件加入清单（按会话隔离）
+  cron?: { scheduler: CronScheduler; writeTools?: boolean }
+                                     // cron 模型面（daemon 恒有）：四件 cron 工具加入清单；
+                                     // writeTools: false（cron 触发的 run，防递归）只注册 cron_list
+  todo?: { store: TodoStore; allowParallelInProgress?: boolean }
+                                     // 会话级 todo 清单（daemon 恒有）：todo_list_write / todo_list_read 加入清单；
+                                     // allowParallelInProgress 松开"默认同时只有一条 in_progress"的检查
+  goal?: { host: GoalToolHost; sessionId: string }
+                                     // goal 模型面（仅根会话注册，childRun 不注册）：create/get/update_goal 三件
+  skillCreate?: { enabled: boolean; sessionId: string; propose: SkillEvolutionTriggers["propose"] }
+                                     // skill_create（提案制技能进化）的模型面：在位才注册该工具；
+                                     // enabled=false 时工具仍在、调用返回固定关闭文案（见 skills.md）
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] }
 
 // packages/core/src/tools/shared.ts

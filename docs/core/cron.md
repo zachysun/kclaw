@@ -53,7 +53,7 @@ SQLite 表结构与之一一对应（`enabled` 存 0/1，驼峰字段转下划�
 | `update(id, patch)` | 部分字段更新；见下方"启用/停用" |
 | `remove(id)` | 物理删除；返回是否真的删了 |
 | `due(now)` | `enabled = 1 且 next_run_at <= now` 的行，按到期先后排列 |
-| `claimDue(now)` | 一个事务内认领 `enabled = 1 且 next_run_at <= now` 的行：每行把 `next_run_at` 推进到 now 之后的下一次（跳过积压），CAS 更新恰好命中一行才算认领并返回——重叠 tick 或同库第二个句柄都无法重复认领 |
+| `claimDue(now)` | 一个事务内认领 `enabled = 1 且 next_run_at <= now` 的行：每行把 `next_run_at` 推进到 now 之后的下一次（跳过积压），CAS 更新恰好命中一行才算认领并返回——重叠 tick 或同库第二个句柄都无法重复认领。delay 形态例外：不推进时间、直接置 `enabled = 0`（触发一次即停用，见下文模型面） |
 | `markRun(id, status, now, error?)` | 记录 `lastRunAt/lastStatus/lastError`（status 为 "ok" 时清空 lastError）；不碰 `nextRunAt`——认领时已由 `claimDue` 推进；cron 已被删则什么都不做 |
 
 ---
@@ -112,7 +112,7 @@ tick 的第二步 `sessions.purgeExpired(purgeTtlMs)`：把 `deletedAt` 距今 �
 
 ## 模型面（cron 四件工具）
 
-daemon 组装时把同一个 `CronScheduler` 注入 run（engine deps `cronScheduler`），注册表追加 `cron_create` / `cron_list` / `cron_update` / `cron_delete`（实现 `tools/cron.ts`）：三写件 sensitive/serial、`cron_list` safe/parallel；与 HTTP `/cron` 同域同表，不新建存储。防递归：`trigger:"cron"` 的 run 组装时 `writeTools:false`，只有 `cron_list` 注册。create 的触发表达二选一：`cron`（5 段表达式）或 `delayMinutes`（一次性相对触发）——调度器为此新增 `kind`（cron/delay）与 `delay_minutes` 列（老库 ALTER 补列），delay 行 `claimDue` 认领时置 `enabled=0` 而不是推进 `next_run_at`（触发一次、记录保留）；`update` 改 `cron` 转 cron 形态、改 `delayMinutes` 转 delay 形态并从现在重算。模型面不带 `model` 参数（用哪个模型是花钱的事，归用户决定）。
+daemon 组装时把同一个 `CronScheduler` 注入 run（engine deps `cronScheduler`），注册表追加 `cron_create` / `cron_list` / `cron_update` / `cron_delete`（实现 `tools/cron.ts`）：三写件 sensitive/serial、`cron_list` safe/parallel；与 HTTP `/cron` 同域同表，不新建存储。防递归：`trigger:"cron"` 的 run 组装时 `writeTools:false`，只有 `cron_list` 注册。create 的触发表达二选一：`cron`（5 段表达式）或 `delayMinutes`（一次性相对触发，模型传入值钳制到 [1, 525600]，越界取边界不报错——整数参数的全局约定）——调度器为此新增 `kind`（cron/delay）与 `delay_minutes` 列（老库 ALTER 补列），delay 行 `claimDue` 认领时置 `enabled=0` 而不是推进 `next_run_at`（触发一次、记录保留）；`update` 改 `cron` 转 cron 形态、改 `delayMinutes` 转 delay 形态并从现在重算。模型面不带 `model` 参数（用哪个模型是花钱的事，归用户决定）。
 
 ## 关联
 

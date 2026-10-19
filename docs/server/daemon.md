@@ -75,8 +75,8 @@ HistorySearchIndex.open(paths.searchDb)
                                     storage.md）：open 在 store 之前，镜像三事件
                                     （message → 收录、message.truncated → 镜像截断、
                                     session.deleted → 清行）挂在下方 store 的事件
-                                    追加回调上，启动组装期对存量会话同步回填一次
-                                    （幂等）；停机时经 hostStops close
+                                    追加回调上，启动后后台回填存量会话（逐会话幂等，
+                                    serving 不等它）；停机时经 hostStops close
 new SessionStore(paths.sessionsDir, onAppended)
                                     store 构造时注入写入完成通知回调：每个事件（含投影）
                                     成功写入 events.jsonl 后发 session.appended，
@@ -134,6 +134,14 @@ createTeamHost / new GoalLoopHost   团队宿主（见 agent-team.md）与 /goal
                                     的测试与运行客户端共用注入实现）；两 host 挂 RunManager
                                     的同一空闲边缘（onSessionIdle：team pump → goal 检查），
                                     goal 检查自查忙闲，team 刚投递的下一轮只会让它跳过
+new ProcessRegistry({noticesPath, onRegister})
+                                    后台进程注册表（bash run_in_background 的结算方，
+                                    见 tools.md）：onRegister 发 process.started；
+                                    onNotice 按退出码发 process.completed/process.failed，
+                                    并把完成通知经 run.enqueue(trigger:"process"，
+                                    note kind:"process") 投递属主会话——忙会话排队、
+                                    闲会话唤醒；未送达通知持久化在
+                                    <home>/process-notices.jsonl，投递成功才删行
 new RunManager({...})               注入 usageStore、memory、skillsEvolution（run 收尾钩子
                                     与 skill_create 工具注册的来源，见 skills.md）、
                                     resolveExtractLlm（后台调用的模型解析链：手动压缩与
@@ -144,7 +152,14 @@ new RunManager({...})               注入 usageStore、memory、skillsEvolution
                                     extraTools: (workdir) => mcpManager.toolsFor(workdir)
                                     （恒定组装，见上；每 run 按会话工作目录取用，惰性
                                     连接由 toolsFor 内部 kick）、
-                                    subagents: { spawner, collector, cancelBackgroundForParent }；见 run-manager。
+                                    processes: processRegistry（见上）、
+                                    cronScheduler: crons（cron 模型面的来源：cron 四件
+                                    工具，cron 触发的 run 只注册 cron_list）、
+                                    goalHost（goal 三件工具与空闲检查的来源）、
+                                    subagents: { spawner, collector }（cancelBackgroundForParent
+                                    不走 RunManager：它经 createApp 交给会话删除/彻底删除
+                                    路由做级联取消）、
+                                    team: { facade: teamHost.facade }（团队工具的来源）；见 run-manager。
                                     权限模式没有 daemon 级旗标——它是会话级事实（meta.mode），
                                     run 组装每 run 从会话 meta 读出（见 permissions/run-manager）
 createApp({home, token, stores, bus, run, mcp, mainWorkspace, configNotifier, attachmentsDir, usage, webDist, memory, skillsEvolution, goal, sessionFork, historySearch})
@@ -175,6 +190,9 @@ startSkillScheduler({...})          技能调度器：跟随检查处理方（�
 startSkillCurator({...})            技能 curator 调度：每日本地时间过 skills.curator.hour（默认凌晨 4 点）
                                     后首扫（lastRun 本地日期判重），标记陈旧与归档 AI 自建技能
                                     （见 skills.md 的 curator 一节）
+void processRegistry.adopt()        后台进程收编：探测上次未送达通知里的进程组，
+                                    活的重进注册表、死的补发通知（此时 run 已就绪，
+                                    enqueue 安全）；失败只记日志，不阻塞启动
 feishu 频道管理器启动（opt-in）     ← 仅 ~/.kclaw/feishu.json enabled 时建通道；在各调度器与宿主之后启动，
                                     有 15s 上限——挂起的握手不拖累 daemon；失败记入管理器错误状态
                                     （IM Channel 页可见）并拆掉半启动状态，daemon 照常服务。

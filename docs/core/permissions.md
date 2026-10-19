@@ -169,7 +169,7 @@ bash 没有可判定的"目标路径"——命令可以以任何方式访问文�
 gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
 
 - **mode（会话权限模式）**：`PERMISSION_MODES = ["readonly" | "default" | "acceptEdits" | "trusted" | "auto"]` 五档，存在会话元数据 `meta.mode`，默认 `default`；daemon 创建的新会话（HTTP `POST /sessions` 与任务调度建会话）把 `config.permissions.defaultMode` 的当前值**固化为初始 mode**（事件流 `session.created` 带 `mode` 字段），改 config 默认只影响之后新建的会话；run 组装每 run 从会话 meta 读出传入 gate。各档语义：
-  - *readonly*：**risk 为 sensitive 的工具**（由 risk 直接派生，引擎不持名单，今天恰为 `fs_write`/`fs_edit`/`bash` 三个）在判定链第 ⓪ 步直接拒绝：reason `"readonly"`、note 文案 `只读模式（readonly）`，工具得到 error result 并随 tool 消息落一个 `kind:"denied"` note；读、web 与 memory 工具不受影响。短路排在一切规则之前：白名单里的 `allow: bash:*` 在只读下同样不执行：这个模式承诺的是零写入风险。在此之上，只读 run 的组装还会把这些工具（连同同样声明 sensitive 的 MCP 适配器工具）整个移出模型可见的工具清单，模型看到的清单里根本没有它们；第 ⓪ 步因此只剩防御意义，正常情况下不会被触及：模型从残留上下文里执意调用一个不可见的名字时，循环直接按 `unknown tool` 报错（不进入判定链），不产生 denied note。可见性与 gate 用同一份 risk 事实（都从注册表派生），两者不会漂移。
+  - *readonly*：**risk 为 sensitive 的工具**（由 risk 直接派生，引擎不持名单，今天共 8 个：`bash`、`fs_write`、`fs_edit`、`cron_create`、`cron_update`、`cron_delete`、`create_goal`、`update_goal`）在判定链第 ⓪ 步直接拒绝：reason `"readonly"`、note 文案 `只读模式（readonly）`，工具得到 error result 并随 tool 消息落一个 `kind:"denied"` note；读、web 与 memory 工具不受影响。短路排在一切规则之前：白名单里的 `allow: bash:*` 在只读下同样不执行：这个模式承诺的是零写入风险。在此之上，只读 run 的组装还会把这些工具（连同同样声明 sensitive 的 MCP 适配器工具）整个移出模型可见的工具清单，模型看到的清单里根本没有它们；第 ⓪ 步因此只剩防御意义，正常情况下不会被触及：模型从残留上下文里执意调用一个不可见的名字时，循环直接按 `unknown tool` 报错（不进入判定链），不产生 denied note。可见性与 gate 用同一份 risk 事实（都从注册表派生），两者不会漂移。
   - *default*：默认档，判定链照常走（本节其余内容描述的就是它）。
   - *acceptEdits*：工作区内的文件写入免逐次确认——判定链第 ②'' 步对**路径写类工具**（带 `path` 参数且 sensitive）的目标做工作区内检查，通过即 `allow {reason:"accept_edits"}`；越界目标与 bash 等命令类工具不受益，仍走 confirm。
   - *trusted*：免审档，沙箱与工作区边界内的操作全部自动放行、不弹确认；边界外（bash 无法沙箱化、越界、无沙箱保护的 sensitive 工具）一律拒绝（fail-closed，见第 2 节「trusted 分支」）。前提是 bash 沙箱可用（`config.sandbox.enabled` 默认开）：沙箱不可用或未启用时，trusted 下的 bash 直接 deny，免审档没有人工确认这道防线，拒绝是唯一安全出路。
@@ -184,8 +184,8 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
 
 | 处理方式 | 派生规则 | 今天的成员 |
 |------|----------|------------|
-| safeTools 自动放行 | `risk === "safe"` | fs_read、fs_list、web_search、web_fetch、memory_save、memory_search、session_search、history_search、skill_read、skill_list、skill_create、subagent_run、subagent_collect、ask_user_questions |
-| readonly 无条件拒绝（且不进入只读 run 的模型工具清单） | `risk === "sensitive"` | bash、fs_write、fs_edit |
+| safeTools 自动放行 | `risk === "safe"` | 全部 `risk === "safe"` 的内置工具（今天 31 个，清单见下节按 risk 推导） |
+| readonly 无条件拒绝（且不进入只读 run 的模型工具清单） | `risk === "sensitive"` | bash、fs_write、fs_edit、cron_create、cron_update、cron_delete、create_goal、update_goal |
 | 路径规范化双匹配（防拼写绕过） | 带 `path` 参数且 sensitive | fs_write、fs_edit |
 | 工作目录边界检查 | 带 `path` 参数 | fs_read、fs_list、fs_write、fs_edit |
 | readRoots 读豁免 | 带 `path` 参数且 safe | fs_read、fs_list |
@@ -215,7 +215,7 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
   }
   ```
   `writeRoots` 是追加写白名单（realpath 形式），如 npm 缓存目录。沙箱启动失败或命令被沙箱拒绝 → bash 返回 error result（fail-closed，不降级裸跑）。可执行性检测用真实路径试跑（如 `bwrap --die-with-parent true` 验证 user namespaces 真可用）。
-  - **审计**：run 组装在每次检测后向会话事件流写一条 `sandbox.checked` 审计事件（26 种会话事件之一，字段 `enabled`=config 开关 / `available`=检测结果 / `unavailableReason`=原因；主动关闭沙箱时 `available` 恒 false 且不带原因）。每 run 恰一条，只写入事件流不上总线、不进 meta 投影、不推进 updatedAt，写失败即 run 失败（与 `system` 审计事件同契约）——审计页可逐 run 回看"当时沙箱是什么状态"，配合 grantedBy / deny note 串成完整审计链（见 [webui](../web/webui.md)）。人工确认的裁决另有 `permission.decided` 事件记录（裁决、裁决者、工具身份；中止不算裁决，不落），与沙箱审计合起来构成完整的放行链路。
+  - **审计**：run 组装在每次检测后向会话事件流写一条 `sandbox.checked` 审计事件（27 种会话事件之一，字段 `enabled`=config 开关 / `available`=检测结果 / `unavailableReason`=原因；主动关闭沙箱时 `available` 恒 false 且不带原因）。每 run 恰一条，只写入事件流不上总线、不进 meta 投影、不推进 updatedAt，写失败即 run 失败（与 `system` 审计事件同契约）——审计页可逐 run 回看"当时沙箱是什么状态"，配合 grantedBy / deny note 串成完整审计链（见 [webui](../web/webui.md)）。人工确认的裁决另有 `permission.decided` 事件记录（裁决、裁决者、工具身份；中止不算裁决，不落），与沙箱审计合起来构成完整的放行链路。
   - **权限链外的沙箱使用者**：`/goal` 的验收命令（acceptance gates）由 daemon 侧直接经 `createBashSandbox` 执行——不经权限判定链（它们是用户设定目标时**自己登记**的验收命令，不是模型发起的工具调用），同一沙箱同一约束（60 秒超时、输出尾部截断）。沙箱不可用时 fail-closed：设定带验收命令的目标被拒绝，检查时刻不可用按全部失败计（见 [goal](./goal.md)）。
 
 ### 8. 人工确认流程
@@ -243,7 +243,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
   - **auto 模式归纳在组装层（不在 WS 入口）**：run 组装（core `run-assembly.ts`）的 `resolveConfirmation` wrapper 能看到**每一种**裁决结果（`once`/`reject` 经网关、**超时**在共享的等待计时内自行到期），这是 WS 命令分发层做不到的（超时永不产生 resolve 帧）。当裁决所属会话的模式是 `auto`（用 run 启动时的快照，不是 resolve 时刻的实时值，避免切模式竞态）时：`once` 裁决先喂给 `AutoLearnCounter`（core 纯内存类，键 = `sessionId + 收紧键`，按会话隔离，见第 5 节 auto 档）——跨过阈值即保存一条 `source:"auto"` 的项目档规则（尽力而为，写失败只记日志不打断 run）；`reject` **或超时**清零该键计数；abort（run 取消）不是拒绝、不碰计数。同一个包装里，`once` 裁决还会把收紧规则写入**本次 run 的授权存储**（`grants.grant`，见第 11 节）（auto 模式下 gate 不处理它，属死写，无副作用。判定链与规则引擎完全不知道 auto 的存在）。归纳发生在裁决侧，规则保存后由既有机制生效。WS 入口不参与归纳。
   - broker **不发事件、不设内部超时**——事件归循环，计时归循环与组装侧的同一套计时机制；两处用同一超时值计时保证视图一致。
   - 超时/取消后 run 组装（core `executeRun`）的 `resolveConfirmation` 调 `expire` 把条目标记失效，迟到的裁决只会收到 unknown confirmation，不会确认一个已无人等待的动作。
-- deny 的 `user_denied` / `timeout` 两个 reason 不是 gate 产出的：gate 只产生 `blacklist` / `readonly` 两种拒绝（规则命中或只读会话禁写/bash），前两者是循环把人工拒绝/超时转成 error result 时的语义标记（note 块的 `kind`）。
+- deny 的 `user_denied` / `timeout` 两个 reason 不是 gate 产出的：gate 产生 `blacklist` / `readonly` / `mode` 三种拒绝（规则命中黑名单、只读会话禁写/bash、trusted 档的越界或无法沙箱化），前两者是循环把人工拒绝/超时转成 error result 时的语义标记（note 块的 `kind`）。
 
 ### 9. 沉淀规则（decided rules）
 

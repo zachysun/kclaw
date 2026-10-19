@@ -14,7 +14,7 @@ subagent 是主对话的模型**自主派出**的短命执行单元：调用 `su
 
 - **后台模式（`run_in_background: true`）**：派发立即返回子会话 id 与取回提示（不阻塞父 run），subagent 的**生命周期挂到父会话**而不是父 run——父 run 结束或中止的信号刻意不递给 spawner，后台 subagent 照常跑完；删除父会话则先取消它仍在跑的后台 subagent，再走既有的级联软删。subagent 落定时结题报告**自动投递回父会话**：报告走 `RunManager.submit`（触发 `agent`、强制排队）开启**新一轮 run**，主 agent 消化全文后回复，三端同享；报告消息带 `kind:"subagent"` note 声明"机器回投、非用户发言"，正文为状态行 + 任务原文 + 结题全文（超长头尾截断）。投递被拒（队列满 10 条 / 防自循环唤醒 budget 耗尽）时降级为旧通知（带 `kind:"system"` note 的 assistant 消息，附拒绝原因，**不触发 run**），完成事件不静默丢失。投递或回退之后，宿主发出一次可选的 `onBackgroundSettled` 回调（含子会话 id、标签、成败与结题摘录），daemon 用它把落定推送给 IM 频道。**防自循环 budget**：每主会话连续 `agent` 触发的自动唤醒上限 3 次，只有真实用户输入真正到达模型（用户 run 开跑 / steer 注入）才清零；定时任务不清零，`goal` 触发的自续轮开跑时则清零（目标循环有自己的一套独立停止条件，见 [goal](./goal.md)，不清零的话，长目标里 subagent 投递会先被这份 budget 卡死）；计数仅内存，daemon 重启归零。`subagent_collect {childSessionId}` 降为按需深挖手段（只能取本会话派出的 subagent），行为不变。后台任务有独立的每父会话并发上限（`subagents.maxBackground`，与阻塞档分开计数）。
 
-- **单层委派**：子 run 的工具清单里**不注册** `subagent_run` 与 `subagent_collect`（也没有 `memory_save`，见记忆隔离）——subagent 不能再派 subagent，防递归失控。
+- **单层委派**：子 run 的工具清单里**不注册** `subagent_run` 与 `subagent_collect`（也没有 `memory_save`，见记忆隔离；goal 三件 `create_goal` / `get_goal` / `update_goal` 同样不注册——目标循环是主线的职责）——subagent 不能再派 subagent，防递归失控。
 
 - **角色与工具白名单（每次派发可选）**：`subagent_run` 接受 `role`（角色补充说明）与 `tools`（工具白名单）。`role` 经 spawner 进入子 run 组装，追加进子会话系统提示词末尾的"# 角色补充"节（trim 后截 2000 字符）——任务里写不清的立场、口径、边界（如"只做评审，不改代码"）放这里。`tools` 在子 run 组装期过滤工具清单：白名单外的执行器与 schema 同步剔除，且权限门的 safeTools 与注册事实由过滤后的清单派生（构造在其后）——白名单**只能减少工具、不能增加**，结构上放大不了权限；名单外的名字忽略，空数组视为未限制（避免误派一个零工具的子会话）。两者随 submit → 队列 → 出队的链路全程携带（队列节点内存还原，不进持久化队列文件）。
 

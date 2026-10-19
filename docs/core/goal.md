@@ -107,7 +107,7 @@
 
 ## 模型面（goal 三件工具，2026-10-19 起）
 
-daemon 组装时把 GoalLoopHost（结构性接口 `GoalToolHost`）注入 run，根会话注册 `create_goal` / `get_goal` / `update_goal`（实现 `tools/goal.ts`，subagent 不注册）：create/update **sensitive**（审批=用户明说的机制化——既定纪律：模型不经 prompting 不得启动或操控花费循环）、get safe。`update_goal action=complete` 请求**立即判定**：host 新增 `requestCheck`（armed+active 才真发起，否则告知判定照旧在 run 边界自动进行），判定器裁决不变——met/impossible 才落终态，模型永不自判完成（对比的两家让模型自证完成，本仓库 ADR-0003 明确拒绝）。pause/resume/stop 直映 host 方法。CLI `/goal` 帮助文本已提及模型侧工具。ADR-0004 文末有本次决策的更新节。
+daemon 组装时把 GoalLoopHost（结构性接口 `GoalToolHost`）注入 run，根会话注册 `create_goal` / `get_goal` / `update_goal`（实现 `tools/goal.ts`，subagent 不注册）：create/update **sensitive**（审批=用户明说的机制化——既定纪律：模型不经 prompting 不得启动或操控花费循环）、get safe。`create_goal` 有单目标守卫：本会话已有未完成目标（state 非 complete）时直接报错，先 stop 处理才能开新目标（不嵌套）。`update_goal action=complete` 请求**立即判定**：host 新增 `requestCheck`（armed+active 才真发起，否则告知判定照旧在 run 边界自动进行），判定器裁决不变——met/impossible 才落终态，模型永不自判完成（对比的两家让模型自证完成，本仓库 ADR-0003 明确拒绝）。pause/resume/stop 直映 host 方法。CLI `/goal` 帮助文本已提及模型侧工具。ADR-0004 文末有本次决策的更新节。
 
 ## 关联
 
