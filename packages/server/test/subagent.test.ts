@@ -67,6 +67,14 @@ function spawnTurn(callId: string, task: string, label?: string): LlmStreamEvent
   ]
 }
 
+/** Parent vs child router: the child's lean template opens with a sentence
+ *  only the subagent system prompt has. The old system.includes("subagent")
+ *  heuristic died with tiered disclosure — the parent's directory section
+ *  legitimately mentions subagent_run now, and both sides carry tool_search. */
+function isChild(req: LlmRequest): boolean {
+  return req.system.includes("由主对话派出的短命执行单元")
+}
+
 function spawnBackgroundTurn(callId: string, task: string, label?: string): LlmStreamEvent[] {
   const args = label === undefined ? { task, run_in_background: true } : { task, label, run_in_background: true }
   return [
@@ -236,17 +244,22 @@ describe("subagent dispatch (integration)", () => {
     expect(result.output).toBe("一 二 三")
     expect(result.data?.childSessionId).toBe(child.id)
 
-    // Prompt + surface generation gap: parent request 0 carries subagent_run;
-    // child request (1) is the lean prompt WITHOUT memory_save/subagent_run.
+    // Prompt + surface generation gap under tiered disclosure: subagent_run is
+    // DIRECTORY tier — the parent request does NOT carry its def (tool_search
+    // does), but the call executes via the direct-names seam; the child
+    // request (1) is the lean prompt WITHOUT memory_save/subagent_run.
     const parentReq = requests[0]!
-    expect(parentReq.tools.map((t) => t.name)).toContain("subagent_run")
+    expect(parentReq.tools.map((t) => t.name)).not.toContain("subagent_run")
+    expect(parentReq.tools.map((t) => t.name)).toContain("tool_search")
     const childReq = requests[1]!
     expect(childReq.system).toContain("subagent")
     expect(childReq.tools.map((t) => t.name)).not.toContain("memory_save")
     expect(childReq.tools.map((t) => t.name)).not.toContain("subagent_run")
     expect(childReq.tools.map((t) => t.name)).toContain("bash")
-    // The parent's follow-up request (2) still has subagent_run available.
-    expect(requests[2]!.tools.map((t) => t.name)).toContain("subagent_run")
+    // The parent's follow-up request (2): same tiered surface (the executor
+    // stays directly callable; the def stays pooled).
+    expect(requests[2]!.tools.map((t) => t.name)).not.toContain("subagent_run")
+    expect(requests[2]!.tools.map((t) => t.name)).toContain("tool_search")
 
     // The child's own event stream keeps the full audit (system prompt + sandbox probe).
     const childEvents = sessions.readEvents(child.id)
@@ -536,7 +549,7 @@ describe("subagent background mode", () => {
     let childCalls = 0
     const llm: LlmClient = {
       async *stream(req) {
-        if (req.system.includes("subagent")) yield* childScript[Math.min(childCalls++, childScript.length - 1)]!
+        if (isChild(req)) yield* childScript[Math.min(childCalls++, childScript.length - 1)]!
         else yield* parentScript[Math.min(parentCalls++, parentScript.length - 1)]!
       },
     }
@@ -616,7 +629,7 @@ describe("subagent background mode", () => {
     let childCalls = 0
     const llm: LlmClient = {
       async *stream(req) {
-        if (req.system.includes("subagent")) yield* childScript[Math.min(childCalls++, childScript.length - 1)]!
+        if (isChild(req)) yield* childScript[Math.min(childCalls++, childScript.length - 1)]!
         else yield* parentScript[Math.min(parentCalls++, parentScript.length - 1)]!
       },
     }
@@ -648,7 +661,7 @@ describe("subagent background mode", () => {
       async *stream(req) {
         // The child hangs forever (its lean prompt identifies it); only the
         // cancel can free it. The parent consumes its own script in order.
-        if (req.system.includes("subagent")) await new Promise<never>(() => {})
+        if (isChild(req)) await new Promise<never>(() => {})
         yield* parentScript[Math.min(parentCalls++, parentScript.length - 1)]!
       },
     }
@@ -690,7 +703,7 @@ describe("subagent background mode", () => {
       async *stream(req) {
         // subagent的精简提示词里没有任务文本以外的区分——借首条 user 消息里的
         // 任务名分流：前台孩子立刻完成，后台孩子永跑（只有级联取消能终结）。
-        if (req.system.includes("subagent")) {
+        if (isChild(req)) {
           childCalls++
           if (JSON.stringify(req.messages).includes("快速任务")) yield* [textTurn("干完了")]
           else await new Promise<never>(() => {})
@@ -734,7 +747,7 @@ describe("background completion delivery", () => {
     let parentCalls = 0
     const llm: LlmClient = {
       async *stream(req) {
-        if (req.system.includes("subagent")) {
+        if (isChild(req)) {
           await childGate
           yield* textTurn("最终结论：一切正常")
           return
@@ -784,7 +797,7 @@ describe("background completion delivery", () => {
     let parentCalls = 0
     const llm: LlmClient = {
       async *stream(req) {
-        if (req.system.includes("subagent")) {
+        if (isChild(req)) {
           await childGate
           yield* textTurn("满载结论")
           return
@@ -834,7 +847,7 @@ describe("background completion delivery", () => {
     let parentCalls = 0
     const llm: LlmClient = {
       async *stream(req) {
-        if (req.system.includes("subagent")) {
+        if (isChild(req)) {
           await childGate
           yield* textTurn("预算结论")
           return
@@ -879,7 +892,7 @@ describe("subagent background card forwarding", () => {
     let childCalls = 0
     const llm: LlmClient = {
       async *stream(req) {
-        if (req.system.includes("subagent")) yield* childScript[Math.min(childCalls++, childScript.length - 1)]!
+        if (isChild(req)) yield* childScript[Math.min(childCalls++, childScript.length - 1)]!
         else yield* parentScript[Math.min(parentCalls++, parentScript.length - 1)]!
       },
     }

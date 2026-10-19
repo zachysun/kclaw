@@ -70,8 +70,27 @@ export interface AgentDeps {
   maxIterations?: number
   /** executors keyed by tool name; calls to unknown names come back as error results */
   tools?: Map<string, ToolExecutor>
-  /** tool schemas forwarded to the model so it can actually emit tool_calls */
+  /**
+   * tool schemas forwarded to the model so it can actually emit tool_calls.
+   * TIERED DISCLOSURE: when `promotableDefs` is set this array is treated as
+   * the ACTIVE set and may GROW mid-run — tool_search hands hit defs to
+   * promote(), which appends here (and registers the executor), so the next
+   * step's request carries the promoted tools. The array is the run's own
+   * (assembled fresh per run); callers must not share it across runs.
+   */
   toolDefs?: ToolDefinition[]
+  /**
+   * Deferred/directory pool for tiered disclosure: defs known by name (or
+   * searchable) but not in the request until promoted. Absent = no tiering
+   * (the tools array is the whole truth, as before).
+   */
+  promotableDefs?: ToolDefinition[]
+  /**
+   * Directory-tier names: in the searchable pool but callable DIRECTLY (the
+   * system prompt lists them by name; runtime validation is the net).
+   * Deferred names (the rest of the pool) stay unknown until promoted.
+   */
+  directNames?: Set<string>
   /** permission gate consulted before every tool execution */
   permissions?: PermissionGate
   /**
@@ -505,10 +524,21 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       // lexically close, point at it — the model can self-correct instead of
       // guessing a second time.
       if (!entry.result && !(deps.tools?.has(call.name) ?? false)) {
-        const closest = closestToolName(call.name, (deps.toolDefs ?? []).map((d) => d.name))
+        const known = [...(deps.toolDefs ?? []).map((d) => d.name), ...(deps.promotableDefs ?? []).map((d) => d.name)]
+        const closest = closestToolName(call.name, known)
+        // Tiered disclosure: with a pool present, "registered executor but not
+        // in the active defs" means a deferred/directory tool the model hasn't
+        // promoted — same unknown-tool contract, plus the search hint.
+        const tiered =
+          deps.promotableDefs !== undefined &&
+          (deps.tools?.has(call.name) ?? false) &&
+          !(deps.directNames?.has(call.name) ?? false)
+        const hint = tiered ? "（该工具未加入本 run 可用集，可用 tool_search 检索后调用）" : ""
         entry.result = errorResult(
           call.callId,
-          closest === undefined ? `unknown tool: ${call.name}` : `unknown tool: ${call.name} (closest available: ${closest})`,
+          closest === undefined
+            ? `unknown tool: ${call.name}${hint}`
+            : `unknown tool: ${call.name} (closest available: ${closest})${hint}`,
         )
       }
       entries.push(entry)
@@ -752,6 +782,26 @@ async function runToolTurn(
           block.output += delta
           emit(makeEvent("tool_result.delta", { messageId: toolMsg.id, callId: entry.call.callId, delta }, ctx))
         },
+        // Tiered disclosure: tool_search promotes hit defs into the active
+        // set — next step's request carries them; calls stay individually
+        // validated/audited (no dispatcher bridge). Best-effort: a promotion
+        // failure must not fail the search call itself.
+        ...(deps.promotableDefs === undefined
+          ? {}
+          : {
+              promote: (defs) => {
+                const active = deps.toolDefs ?? (deps.toolDefs = [])
+                for (const def of defs) {
+                  if (active.some((d) => d.name === def.name)) continue
+                  active.push(def)
+                  if (deps.tools !== undefined && !deps.tools.has(def.name)) {
+                    // executor arrives via deps.extraExecutors lookup at call
+                    // time — the assembly registered every pool executor in
+                    // the map up front, so nothing to do here.
+                  }
+                }
+              },
+            }),
       })
       block.status = res.status
       block.output = res.output

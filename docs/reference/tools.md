@@ -1,4 +1,4 @@
-# tools — 内置工具清单（38 个）
+# tools — 内置工具清单（39 个）
 
 > 权威来源：`packages/core/src/tools/index.ts`（注册表：执行器与模型侧 JSON Schema 成对声明）与 `packages/core/src/tools/` 下各实现文件（参数校验与行为）。机制见 [tools](../core/tools.md)，权限判定链见 [permissions](../core/permissions.md)。
 
@@ -238,7 +238,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - 只列模型可见技能（与系统提示词清单同一口径，`disable-model-invocation` 的不出现），按名字排序。
 - 找到后用 skill_read 加载正文。
 
-## 条件注册工具（21 个）
+## 条件注册工具（22 个）
 
 只在对应能力被组装进 run 时加入注册表：
 
@@ -254,6 +254,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `create_goal` | 设定目标循环（armed + 首轮入队） | sensitive | serial | 根会话且组装了 goal host（daemon 恒有；subagent 没有） |
 | `get_goal` | 读当前目标视图（状态/轮位/预算/最近判定） | safe | parallel | 同上 |
 | `update_goal` | 目标动作（complete=请求判定 / pause / resume / stop） | sensitive | serial | 同上 |
+| `tool_search` | 检索未全量列出的工具（返回完整工具卡，命中即加入本 run 可用集） | safe | parallel | 检索池非空（有目录/deferred 层工具时） |
 | `subagent_run` | 派 subagent 独立执行自包含任务（可后台） | safe | parallel | 主线 run 且组装了派发器（daemon 恒有；子会话没有） |
 | `subagent_collect` | 按子会话 id 取回后台 subagent 的结题答复 | safe | parallel | 同上，且组装了收集器 |
 | `skill_create` | 把一段经验固化为技能提案（提案制，不经确认不生效） | safe | parallel | daemon 组装了技能进化系统（恒有）；`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案 |
@@ -446,6 +447,22 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 - 等待上限默认 10 分钟：超时返回"用户未在限时内回答"，并提示不要重复调用、信息仍不可缺时基于合理假设继续并说明假设。
 - run 中止时返回错误（中止不算回答）；正常返回按题号列答案，没答的题标注（未回答）。
+
+## 工具披露分层（tool_search）
+
+工具在注册声明（risk/concurrency）之外还有第三个属性 `exposure`（`tools/exposure.ts` 的正本表，默认 full）：
+
+| 层 | 形态 | 放什么 |
+|----|------|--------|
+| **full** | 完整 schema 进每请求的 tools 数组 | bash、fs 四件、grep/glob、ask、skill 两件、todo 两件、tool_search 本体 |
+| **directory** | 系统提示词"工具目录"节：名字+一行描述；**可直呼**（运行时参数校验兜底），参数拿不准用 tool_search 查 | web 两件、memory 两件、session/history 检索、subagent 两件、process 三件、cron 四件、goal 三件、skill_create |
+| **deferred** | 只进检索索引；`tool_search` 的描述里带 server 级来源清单 | 团队七件 + **全部 MCP 工具**（连接增删不再动 tools 数组，前缀缓存全程稳定） |
+
+- **tool_search**（safe/parallel）：Okapi BM25（k1 1.2/b 0.75）索引=名字拆词+描述+顶层参数名（schema 正文不算）；精确名直配第一；稀有词门+长查询覆盖率门防误召回；CJK 二元切分（中文友好）。返回完整工具卡（名字+描述+全参 schema+来源）。
+- **真提升**：命中的 defs 经执行器上下文的 promote 缝注入本 run 活跃集——下一请求的 tools 数组带上，模型直呼、可并行、逐调用审计照旧（不走折叠转发的桥）。
+- 调完全 deferred 且未提升的名字：`unknown tool` + 提示可用 tool_search 检索；directory 名字直呼有效。
+- **分层清单是静态的、人工评审的**：调用频率持续记录，但层级只在批次评审中调整——tools 数组与目录节都是前缀缓存成分，即时重排等于反复断缓存。
+- readonly 裁剪与 subagent 白名单先于分层投影（先来的裁剪永远赢）。
 
 ## 工具可见性裁剪
 

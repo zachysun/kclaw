@@ -68,6 +68,8 @@ import type { MemorySystem } from "../memory/system.js"
 import type { EventBus } from "../bus.js"
 import { HookChain, DEFAULT_HOOK_TIMEOUT_MS } from "../hooks/runner.js"
 import { makeBuiltinHooks } from "../hooks/builtin.js"
+import { TOOL_EXPOSURE, type Exposure } from "../tools/exposure.js"
+import { createToolSearchTool } from "../tools/tool-search.js"
 import type { HookRegistry } from "../hooks/registry.js"
 import type { HookEntry } from "../hooks/types.js"
 
@@ -618,10 +620,56 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     toolDefs.splice(0, toolDefs.length, ...toolDefs.filter((d) => toolAllow.has(d.name)))
   }
 
+  // --- tiered disclosure (tool_search) -------------------------------------
+  // Split the surviving surface into the ACTIVE set (full tier: schemas in
+  // every request) and the SEARCHABLE pool (directory + deferred: name-only
+  // or invisible). tool_search itself joins the active set. The split runs
+  // AFTER readonly/allowlist narrowing so earlier reductions always win;
+  // the pool keeps the same narrowing (filtered by the surviving tools map).
+  // Directory-tier tools get a stable one-line section in the system
+  // prompt's base (existence signal — the model must know the tools exist).
+  // Undeclared tools default to full: nothing silently vanishes.
+  // MCP adapter tools are ALWAYS deferred regardless of the table: schema
+  // unbounded, membership changes with connections — the surveyed field's
+  // unanimous placement. Everything undeclared defaults to full.
+  const exposureOf = (name: string): Exposure =>
+    name.startsWith("mcp__") ? "deferred" : (TOOL_EXPOSURE[name] ?? "full")
+  const activeDefs = toolDefs.filter((d) => exposureOf(d.name) === "full")
+  let poolDefs = toolDefs.filter((d) => exposureOf(d.name) !== "full")
+  const directoryDefs = poolDefs.filter((d) => exposureOf(d.name) === "directory")
+  const deferredDefs = poolDefs.filter((d) => exposureOf(d.name) === "deferred")
+  if (poolDefs.length > 0) {
+    const servers = [...new Set(poolDefs.map((d) => /^mcp__([^_]+)__/.exec(d.name)?.[1]).filter((x): x is string => x !== undefined))]
+    const sourceLine = servers.length > 0 ? `MCP 服务器：${servers.join("、")}` : "内置低频编排工具（团队协作面）"
+    const search = createToolSearchTool({
+      pool: poolDefs,
+      sources: servers.length > 0 ? [`mcp:${servers.join(" / mcp:")}`, "builtin"] : ["builtin"],
+    })
+    tools.set("tool_search", search)
+    activeDefs.push({
+      name: "tool_search",
+      description: `Search ${poolDefs.length} tools not fully listed this run (by intent, e.g. "search the codebase", "schedule a cron", "send a teammate a message"). Returns complete tool cards; hits join this run's usable set and are callable by name directly. ${sourceLine}.`,
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "What the tool should do — intent words, tool names" },
+          limit: { type: "integer", minimum: 1, maximum: 10, description: "Max cards to return (default 5)" },
+        },
+        required: ["query"],
+      },
+    })
+  }
+  // The active array is what the loop mutates on promotion; the pool rides
+  // alongside for the unknown-name contract and closest-match hints.
+  toolDefs.splice(0, toolDefs.length, ...activeDefs)
+  const promotableDefs = poolDefs
+
   // 发送面工具清单按名排序（code point 序，确定性）：MCP 连接恢复/重连后
   // 视图迭代序可能变化，而 tools 在请求前缀的最前面，顺序一变整个 prompt
-  // cache 前缀失效。只排 wire 面（toolDefs）；executor 的 Map 顺序无关，不动。
+  // cache 前缀失效。只排 wire 面（active + pool 各自排；pool 的顺序只影响
+  // 检索稳定性，同样排定）。executor 的 Map 顺序无关，不动。
   toolDefs.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+  promotableDefs.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 
   // --- permission wiring (config gate + confirmation gateway) ---
   const pendingConfirmations = new Map<string, ToolCallBlock>()
@@ -902,6 +950,15 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       workspace,
       agentsMd: paths.agentsMd,
       ...(childRun && input.subagentRole !== undefined ? { subagentRole: input.subagentRole } : {}),
+      ...(directoryDefs.length > 0
+        ? {
+            toolDirectory: [
+              "# 工具目录（本 run 未全量列出的工具；按名直呼即可，参数拿不准先用 tool_search 查询）",
+              ...directoryDefs.map((d) => `- ${d.name}：${d.description.split("。")[0].split(". ")[0].slice(0, 120)}`),
+              poolDefs.some((d) => exposureOf(d.name) === "deferred") ? "- 另有低频编排工具与 MCP 工具未列出：用 tool_search 按意图检索。" : "",
+            ].filter((l) => l !== "").join("\n"),
+          }
+        : {}),
     }),
     baseline: sessionMeta?.systemBaseline,
     toolDefs,
@@ -932,6 +989,12 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       model,
       tools,
       toolDefs,
+      ...(promotableDefs.length > 0
+        ? {
+            promotableDefs,
+            directNames: new Set(directoryDefs.map((d) => d.name)),
+          }
+        : {}),
       permissions: gate,
       resolveConfirmation,
       confirmTimeoutMs,
@@ -1042,9 +1105,14 @@ export function resolveBasePrompt(opts: {
   agentsMd: string
   /** subagent角色补充（subagent_run 的 role）：拼进子会话模板的独立小节。 */
   subagentRole?: string
+  /** directory 层工具目录（名字 + 一行描述）：稳定文本节，进 stable 段保前缀缓存。 */
+  toolDirectory?: string
 }): string {
-  if (opts.team?.role === "member") return teamMemberSystemPrompt(opts.workspace, opts.team.name)
+  const directory = opts.toolDirectory === undefined ? "" : `\n\n${opts.toolDirectory}`
+  if (opts.team?.role === "member") return `${teamMemberSystemPrompt(opts.workspace, opts.team.name)}${directory}`
   const main = systemPrompt(opts.agentsMd)
-  if (opts.team?.role === "lead") return `${main}\n\n${teamLeadProtocol()}`
-  return opts.childRun ? subagentSystemPrompt(opts.workspace, opts.subagentRole) : main
+  if (opts.team?.role === "lead") return `${main}\n\n${teamLeadProtocol()}${directory}`
+  return opts.childRun
+    ? `${subagentSystemPrompt(opts.workspace, opts.subagentRole)}${directory}`
+    : `${main}${directory}`
 }

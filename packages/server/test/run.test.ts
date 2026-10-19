@@ -1727,12 +1727,16 @@ describe("RunManager extraTools (MCP adapter seam)", () => {
     await manager.enqueue(session.id, { userText: "看看文件", trigger: "user" })
 
     expect(reqs.length).toBeGreaterThan(0)
-    const def = reqs[0]!.tools.find((t) => t.name === "mcp__files__read")
-    expect(def).toBeDefined()
-    expect(def?.description).toBe("Read a file via the files MCP server")
-    expect(def?.parameters).toMatchObject({ type: "object" })
-    // Builtin defs still present alongside the adapter's.
+    // Tiered disclosure: MCP adapter tools are ALWAYS deferred — the def is
+    // not in the request's tools array; the model reaches it via tool_search
+    // (which IS in the active set) and promotion.
+    expect(reqs[0]!.tools.some((t) => t.name === "mcp__files__read")).toBe(false)
+    expect(reqs[0]!.tools.some((t) => t.name === "tool_search")).toBe(true)
     expect(reqs[0]!.tools.some((t) => t.name === "fs_read")).toBe(true)
+    // The system prompt's directory section lists nothing for it (deferred =
+    // invisible except through tool_search's own source list).
+    expect(reqs[0]!.system).not.toContain("mcp__files__read")
+    expect(reqs[0]!.system).toContain("tool_search")
   })
 
   it("re-evaluates extraTools per run (reconnect recovery reflected)", async () => {
@@ -1759,7 +1763,15 @@ describe("RunManager extraTools (MCP adapter seam)", () => {
 
     connected = true // server came up between runs
     await manager.enqueue(session.id, { userText: "第二轮", trigger: "user" })
-    expect(reqs.at(-1)!.tools.some((t) => t.name === "mcp__x__t")).toBe(true)
+    // Tiered disclosure + cache stability: the adapter tool appears in NEITHER
+    // run's request (always deferred → searchable pool). The tools ARRAYS are
+    // the same set; the ONLY byte difference is tool_search's own description
+    // (pool size / source list) — the designed single cache break point.
+    expect(reqs.at(-1)!.tools.some((t) => t.name === "mcp__x__t")).toBe(false)
+    expect(reqs.at(-1)!.tools.map((t) => t.name)).toEqual(reqs[0]!.tools.map((t) => t.name))
+    const strip = (tools: LlmRequest["tools"]) =>
+      JSON.stringify(tools.map((t) => (t.name === "tool_search" ? { ...t, description: "" } : t)))
+    expect(strip(reqs.at(-1)!.tools)).toBe(strip(reqs[0]!.tools))
   })
 })
 

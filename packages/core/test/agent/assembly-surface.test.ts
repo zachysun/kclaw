@@ -93,38 +93,46 @@ const runOnce = async (engine: RunEngine, trigger: "user" | "cron") => {
   })
 }
 
-describe("executeRun deps → surface forwarding", () => {
-  it("a user run carries the process trio and all four cron tools", async () => {
+describe("executeRun deps → surface forwarding (tiered disclosure)", () => {
+  it("a user run's ACTIVE set carries the full tier + tool_search; directory/deferred tiers ride the pool", async () => {
     const captured: LlmRequest[] = []
     const engine = makeEngine(captured)
     await runOnce(engine, "user")
     expect(captured.length).toBeGreaterThan(0)
     const names = captured[0]!.tools!.map((t) => t.name)
-    expect(names).toContain("bash")
-    expect(names).toContain("process_list")
-    expect(names).toContain("process_output")
-    expect(names).toContain("process_kill")
-    expect(names).toContain("cron_create")
-    expect(names).toContain("cron_list")
-    expect(names).toContain("cron_update")
-    expect(names).toContain("cron_delete")
-    expect(names).toContain("todo_write")
-    expect(names).toContain("todo_read")
-    expect(names).toContain("create_goal")
-    expect(names).toContain("get_goal")
-    expect(names).toContain("update_goal")
+    // full tier: core loop tools, complete schemas in the request
+    for (const n of ["bash", "fs_read", "fs_edit", "grep", "glob", "todo_write", "todo_read", "skill_read", "skill_list"]) {
+      expect(names).toContain(n)
+    }
+    // tool_search itself (full) — the pool is non-empty in a daemon-shaped engine
+    expect(names).toContain("tool_search")
+    // directory tier: NOT in the request; the model sees them via the system
+    // prompt's tool directory (assert the directory section landed in base)
+    expect(names).not.toContain("process_list")
+    expect(names).not.toContain("cron_create")
+    expect(names).not.toContain("cron_list")
+    expect(names).not.toContain("subagent_run")
+    expect(names).not.toContain("create_goal")
+    const system = captured[0]!.system as string
+    expect(system).toContain("工具目录")
+    expect(system).toContain("process_list")
+    expect(system).toContain("cron_create")
+    expect(system).toContain("create_goal")
+    // deferred tier: team tools invisible in both
+    expect(system).not.toContain("create_team：")
   })
 
-  it("a cron-fired run keeps cron_list but loses the write trio (anti-recursion)", async () => {
+  it("a cron-fired run loses the cron WRITE tools everywhere (anti-recursion survives tiering)", async () => {
     const captured: LlmRequest[] = []
     const engine = makeEngine(captured)
     await runOnce(engine, "cron")
     const names = captured[0]!.tools!.map((t) => t.name)
-    expect(names).toContain("cron_list")
-    expect(names).not.toContain("cron_create")
-    expect(names).not.toContain("cron_update")
-    expect(names).not.toContain("cron_delete")
-    // the process trio is unaffected by the cron trigger
-    expect(names).toContain("process_list")
+    const system = captured[0]!.system as string
+    // cron_list is directory tier → pool, and must SURVIVE there
+    expect(names).not.toContain("cron_list")
+    // the narrowing runs before tiering: the write trio is gone from the pool
+    // (and thus unsearchable) on a cron-fired run
+    const cronInSystem = system.includes("cron_create")
+    expect(cronInSystem).toBe(false)
   })
 })
