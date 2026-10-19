@@ -110,7 +110,7 @@ describe("ConfirmationBroker question registry", () => {
   it("确认与问题两类条目共存：各自的 resolve 互不串扰", async () => {
     const broker = new ConfirmationBroker()
     const q = broker.createQuestion("q_1", 60_000)
-    const confP = broker.create("conf_1", { id: "blk_1", type: "tool_call", callId: "call_1", name: "exec", argsJson: "{}" }, "safe", 60_000, "ses_a")
+    const confP = broker.create("conf_1", { id: "blk_1", type: "tool_call", callId: "call_1", name: "bash", argsJson: "{}" }, "safe", 60_000, "ses_a")
     expect(broker.resolveQuestion("conf_1", [["x"]])).toBe(false)
     expect(broker.resolve("q_1", "once")).toBe(false)
     expect(broker.resolveQuestion("q_1", [["在"]], "cli")).toBe(true)

@@ -93,13 +93,13 @@ describe("subagent_run executor", () => {
 
   it("streams spawner status lines through onOutput (the live one-liner channel)", async () => {
     const spawner = vi.fn(async (req: SubagentSpawnRequest) => {
-      req.onStatus("▸ 调用工具 exec\n")
+      req.onStatus("▸ 调用工具 bash\n")
       return ok("done")
     })
     const tool = createSubagentTool(spawner, "ses_p")
     const seen: string[] = []
     await tool.execute({ task: "t" }, { onOutput: (d) => seen.push(d) })
-    expect(seen).toEqual(["▸ 调用工具 exec\n"])
+    expect(seen).toEqual(["▸ 调用工具 bash\n"])
   })
 
   it("run_in_background: background flag rides the request and the abort signal does NOT (lifecycle belongs to the session)", async () => {

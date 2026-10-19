@@ -76,14 +76,14 @@ describe("openai-compat client", () => {
 
   it("accumulates tool_call argument deltas per index", async () => {
     const fetchImpl = (async () => sseResponse([
-      { choices: [{ delta: { tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "exec", arguments: "" } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "bash", arguments: "" } }] } }] },
       { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{"comm' } }] } }] },
       { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'and":"ls"}' } }] } }] },
       { choices: [{ delta: {}, finish_reason: "tool_calls" }], usage: { prompt_tokens: 3, completion_tokens: 4 } },
     ])) as typeof fetch
     const events = await collect(createOpenAiCompatClient({ baseUrl: "https://x", apiKey: "k", fetchImpl }))
     expect(events).toEqual([
-      { type: "tool_call_started", index: 0, callId: "call_1", name: "exec" },
+      { type: "tool_call_started", index: 0, callId: "call_1", name: "bash" },
       { type: "tool_call_delta", index: 0, delta: '{"comm' },
       { type: "tool_call_delta", index: 0, delta: 'and":"ls"}' },
       { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 3, outputTokens: 4 } },
@@ -99,12 +99,12 @@ describe("openai-compat client", () => {
     await collect(createOpenAiCompatClient({ baseUrl: "https://x/v1", apiKey: "k", fetchImpl }), {
       model: "m", system: "be brief",
       messages: [{ role: "user", content: "hi" }],
-      tools: [{ name: "exec", description: "run", parameters: { type: "object" } }],
+      tools: [{ name: "bash", description: "run", parameters: { type: "object" } }],
     })
     expect(captured!.url).toBe("https://x/v1/chat/completions")
     const body = await captured!.json()
     expect(body.messages[0]).toEqual({ role: "system", content: "be brief" })
-    expect(body.tools[0].function.name).toBe("exec")
+    expect(body.tools[0].function.name).toBe("bash")
     expect(body.stream).toBe(true)
     expect(captured!.headers.get("authorization")).toBe("Bearer k")
   })

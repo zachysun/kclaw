@@ -13,9 +13,18 @@ import type { SkillRecord } from "../skills/index.js"
 import type { ToolDefinition } from "../provider/types.js"
 import { createAskUserQuestionsTool, ASK_USER_QUESTIONS_DESCRIPTION, type QuestionEventEmitter } from "./ask.js"
 import type { ConfirmationBroker } from "../permissions/broker.js"
-import { createExecTool } from "./exec.js"
-import type { ExecSandboxSpawn } from "../sandbox/provider.js"
+import { createBashTool } from "./bash.js"
+import type { BashSandboxSpawn } from "../sandbox/provider.js"
+import type { ProcessRegistry } from "../process/registry.js"
+import { createProcessTools } from "./process.js"
+import type { CronScheduler } from "../cron/scheduler.js"
+import { createCronTools } from "./cron.js"
+import { createTodoTools } from "./todo.js"
+import type { TodoStore } from "./todo.js"
+import { createGoalTools } from "./goal.js"
+import type { GoalToolHost } from "./goal.js"
 import { createFsTools } from "./fs.js"
+import { createSearchTools } from "./search.js"
 import { createMemoryTools } from "./memory.js"
 import { createSessionTools, type SessionSearchFn } from "./session.js"
 import { createHistoryTool, HISTORY_SEARCH_DESCRIPTION, type HistorySearchFn } from "./history.js"
@@ -26,8 +35,17 @@ import { createTeamToolEntries } from "./team.js"
 import { createWebTools } from "./web.js"
 
 export { createAskUserQuestionsTool, ASK_USER_QUESTIONS_DESCRIPTION, type QuestionEventEmitter } from "./ask.js"
-export { createExecTool, truncateMiddle } from "./exec.js"
+export { createBashTool, truncateMiddle } from "./bash.js"
+export { createProcessTools } from "./process.js"
+export { createCronTools } from "./cron.js"
+export { createTodoTools } from "./todo.js"
+export type { TodoStore } from "./todo.js"
+export { createGoalTools } from "./goal.js"
+export type { GoalToolHost } from "./goal.js"
+export { ProcessRegistry } from "../process/registry.js"
+export type { ProcessEntry, PendingNotice } from "../process/registry.js"
 export { createFsTools } from "./fs.js"
+export { createSearchTools } from "./search.js"
 export { createMemoryTools } from "./memory.js"
 export { createSessionTools, type SessionSearchFn } from "./session.js"
 export { createHistoryTool, HISTORY_SEARCH_DESCRIPTION, HISTORY_SEARCH_MAX_LIMIT, type HistorySearchFn } from "./history.js"
@@ -57,10 +75,10 @@ export function createBuiltinTools(opts: {
   workspace: string
   memoryCtx: { system: Pick<MemoryTriggers, "triggerImmediate"> & Pick<MemoryQuery, "searchAll">; sessionId: string; workdir: string; immediateEnabled: boolean }
   tavilyApiKey: string
-  exec?: Partial<{ timeoutMs: number; maxOutputBytes: number; sandbox: ExecSandboxSpawn; spillDir: string }>
+  bash?: Partial<{ timeoutMs: number; maxOutputBytes: number; sandbox: BashSandboxSpawn; spillDir: string }>
   /**
-   * Session identity injected into the exec child environment
-   * (KCLAW_SESSION_ID / KCLAW_WORKSPACE). Absent = exec inherits the daemon
+   * Session identity injected into the bash child environment
+   * (KCLAW_SESSION_ID / KCLAW_WORKSPACE). Absent = bash inherits the daemon
    * environment unchanged.
    */
   sessionId?: string
@@ -96,7 +114,7 @@ export function createBuiltinTools(opts: {
   /**
    * Agent team surface: when set, the team tools join the registry wired to
    * this facade and identity. The assembly resolves the identity (lead or
-   * named member) from the team host before constructing; a job session —
+   * named member) from the team host before constructing; a cron session —
    * or any session outside a team — simply leaves this absent. Member
    * identities never carry create_team / spawn_teammate (enforced inside
    * createTeamToolEntries).
@@ -109,20 +127,57 @@ export function createBuiltinTools(opts: {
    */
   childRun?: boolean
   fetchImpl?: typeof fetch
+  /**
+   * Background-process registry (daemon wires it; bare engine tests omit it).
+   * When present: `bash` gains run_in_background (spawning detached with
+   * spill-file output, registered here) and the process_* trio joins the
+   * registry surface, scoped to this run's session.
+   */
+  processes?: ProcessRegistry
+  /**
+   * Cron model face: when set, the cron tools join the registry wired to
+   * this scheduler. `writeTools: false` (cron-fired runs, anti-recursion)
+   * registers only cron_list. The daemon always wires it.
+   */
+  cron?: { scheduler: CronScheduler; writeTools?: boolean }
+  /**
+   * Session todo surface: when set, todo_list_write/todo_list_read join the registry
+   * (safe, mainline and child runs alike). The store closes over this
+   * run's session; allowParallelInProgress relaxes the single-in_progress
+   * check (config todo.allowParallelInProgress).
+   */
+  todo?: { store: TodoStore; allowParallelInProgress?: boolean }
+  /**
+   * Goal model face (root sessions only — childRun never registers): the
+   * three industry-standard tools projecting the goal loop host. create /
+   * update are sensitive (approval = the user's say-so); complete requests
+   * a judge pass and never writes the terminal state itself.
+   */
+  goal?: { host: GoalToolHost; sessionId: string }
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] } {
-  const exec = createExecTool({
+  const bash = createBashTool({
     workspace: opts.workspace,
-    timeoutMs: opts.exec?.timeoutMs,
-    maxOutputBytes: opts.exec?.maxOutputBytes,
+    timeoutMs: opts.bash?.timeoutMs,
+    maxOutputBytes: opts.bash?.maxOutputBytes,
     // The run assembly passes the sandbox wrapper here only when it is
     // actually available — single source with the gate's sandboxedTools set.
-    sandbox: opts.exec?.sandbox,
-    spillDir: opts.exec?.spillDir,
+    sandbox: opts.bash?.sandbox,
+    spillDir: opts.bash?.spillDir,
     ...(opts.sessionId === undefined
       ? {}
       : { env: { KCLAW_SESSION_ID: opts.sessionId, KCLAW_WORKSPACE: opts.workspace } }),
+    ...(opts.processes === undefined ? {} : { processes: opts.processes, sessionId: opts.sessionId }),
   })
   const fs = createFsTools({ workspace: opts.workspace })
+  const search = createSearchTools({ workspace: opts.workspace, spillDir: opts.bash?.spillDir })
+  const processTools =
+    opts.processes !== undefined && opts.sessionId !== undefined
+      ? createProcessTools({ registry: opts.processes, sessionId: opts.sessionId })
+      : undefined
+  const cronTools = opts.cron !== undefined ? createCronTools(opts.cron) : undefined
+  const todoTools = opts.todo !== undefined ? createTodoTools(opts.todo) : undefined
+  const goalTools =
+    opts.goal !== undefined && opts.childRun !== true ? createGoalTools(opts.goal) : undefined
   const web = createWebTools({
     tavilyApiKey: opts.tavilyApiKey,
     fetchImpl: opts.fetchImpl,
@@ -137,10 +192,10 @@ export function createBuiltinTools(opts: {
 
   const entries: Array<{ name: string; tool: ToolExecutor; def: ToolDefinition }> = [
     {
-      name: "exec",
-      tool: exec,
+      name: "bash",
+      tool: bash,
       def: def(
-        "exec",
+        "bash",
         "Run a shell command in the workspace. stdout and stderr are merged; long output is truncated head+tail; non-zero exit or timeout returns an error with the partial output.",
         { command: str("Shell command to run; cwd is the workspace root") },
         ["command"],
@@ -191,6 +246,34 @@ export function createBuiltinTools(opts: {
           new: str("Replacement text (may be empty)"),
         },
         ["path", "old", "new"],
+      ),
+    },
+    {
+      name: "grep",
+      tool: search.grep,
+      def: def(
+        "grep",
+        "Search file contents in the workspace with a regex (workspace-relative line output `path:lineNo: content`). Respects .gitignore inside git repos; skips binary files; results capped with a truncation marker and a spill-file pointer to the full list.",
+        {
+          pattern: str("Regular expression (JS RegExp syntax)"),
+          path: str("Optional: workspace-relative directory or file to scope the search"),
+          glob: str("Optional: glob filter on file paths, e.g. `**/*.ts`"),
+          maxResults: int(1, 200),
+        },
+        ["pattern"],
+      ),
+    },
+    {
+      name: "glob",
+      tool: search.glob,
+      def: def(
+        "glob",
+        "Find files in the workspace by filename pattern (standard glob like `**/*.ts`). Respects .gitignore inside git repos; results capped with a truncation marker and a spill-file pointer to the full list.",
+        {
+          pattern: str("Glob pattern to match file paths against"),
+          path: str("Optional: workspace-relative directory to scope the search"),
+        },
+        ["pattern"],
       ),
     },
     {
@@ -267,6 +350,170 @@ export function createBuiltinTools(opts: {
       tool: skill.skill_list,
       def: def("skill_list", SKILL_LIST_DESCRIPTION, { query: str("可选：按名字与描述子串过滤（大小写不敏感）；不传则列出全部模型可见技能") }, []),
     },
+    ...(todoTools === undefined
+      ? []
+      : [
+          {
+            name: "todo_list_write",
+            tool: todoTools.todo_list_write,
+            def: def(
+              "todo_list_write",
+              "Replace the session's checklist in one full snapshot (no item ids; last write wins). Use it to plan multi-step work and keep the plan honest across runs. Exactly one in_progress item by default. An empty array clears the list.",
+              {
+                todos: {
+                  type: "array",
+                  description: "The complete list: every item, not just changes",
+                  items: {
+                    type: "object",
+                    properties: {
+                      content: str("Item text (non-empty, ≤200 chars)"),
+                      status: { type: "string", enum: ["pending", "in_progress", "completed"], description: "pending / in_progress / completed" },
+                    },
+                    required: ["content", "status"],
+                  },
+                },
+              },
+              ["todos"],
+            ),
+          },
+          {
+            name: "todo_list_read",
+            tool: todoTools.todo_list_read,
+            def: def("todo_list_read", "Read the session's current checklist (survives compaction — read it back after a compaction).", {}, []),
+          },
+        ]),
+    ...(goalTools === undefined
+      ? []
+      : [
+          {
+            name: "create_goal",
+            tool: goalTools.create_goal,
+            def: def(
+              "create_goal",
+              "Start a goal loop ONLY when the user explicitly asked for persistent autonomous work (e.g. keep iterating until tests pass). The loop self-continues with an independent judge at each run boundary; acceptance commands run sandboxed and unattended. One goal per session; a live goal must be stopped first.",
+              {
+                text: str("The objective, stated so an independent judge can evaluate it"),
+                acceptance: { type: "array", items: { type: "string" }, description: "Optional acceptance commands (each must pass; run sandboxed). Absent = judged on the conversation alone" },
+              },
+              ["text"],
+            ),
+          },
+          {
+            name: "get_goal",
+            tool: goalTools.get_goal,
+            def: def("get_goal", "Read the current goal's view: state, round position, budget spent, latest verdict, acceptance commands.", {}, []),
+          },
+          {
+            name: "update_goal",
+            tool: goalTools.update_goal,
+            def: def(
+              "update_goal",
+              "Act on the current goal. `complete` requests an immediate judge pass — the independent judge decides met/not_met/impossible, this tool never closes the goal itself. `pause` disarms (no self-continuation). `resume` re-arms and checks. `stop` aborts the active run and parks the goal (user-stop).",
+              {
+                action: { type: "string", enum: ["complete", "pause", "resume", "stop"], description: "complete / pause / resume / stop" },
+                note: str("Optional context note (recorded, not used as judge evidence)"),
+              },
+              ["action"],
+            ),
+          },
+        ]),
+    // process 三件仅在组装传入后台进程注册表时存在（daemon 恒有；裸引擎测试
+    // 没有）。归属按会话隔离：registry 只暴露本 sessionId 的条目。
+    ...(processTools === undefined
+      ? []
+      : [
+          {
+            name: "process_list",
+            tool: processTools.process_list,
+            def: def(
+              "process_list",
+              "List this session's background processes (id, command, status, exit code, output file). Completion is announced automatically; use process_output to read output incrementally.",
+              {},
+              [],
+            ),
+          },
+          {
+            name: "process_output",
+            tool: processTools.process_output,
+            def: def(
+              "process_output",
+              "Read a background process's output since a byte offset (incremental cursor; the completion notice arrives automatically — do not poll). Optional wait blocks for new output or exit, bounded by timeoutMs (default 30s, max 600s).",
+              {
+                processId: str("Background process id (from the run_in_background result or the completion notice)"),
+                offset: int(0, Number.MAX_SAFE_INTEGER),
+                wait: { type: "boolean", description: "True = block until new output or termination (bounded by timeoutMs)" },
+                timeoutMs: int(1_000, 600_000),
+              },
+              ["processId"],
+            ),
+          },
+          {
+            name: "process_kill",
+            tool: processTools.process_kill,
+            def: def(
+              "process_kill",
+              "Terminate a background process (SIGKILL to its whole process group). Killing an already-finished process is not an error.",
+              { processId: str("Background process id") },
+              ["processId"],
+            ),
+          },
+        ]),
+    // cron 模型面四件仅在组装传入调度器时存在（daemon 恒有）。writeTools=false
+    // （cron 触发的 run，防递归：定时会话不能再建定时）只注册 cron_list。
+    ...(cronTools === undefined
+      ? []
+      : opts.cron!.writeTools === false
+        ? [
+            {
+              name: "cron_list",
+              tool: cronTools.cron_list,
+              def: def("cron_list", "List scheduled crons (id, schedule, enabled, next run, last result).", {}, []),
+            },
+          ]
+        : [
+            {
+              name: "cron_create",
+              tool: cronTools.cron_create,
+              def: def(
+                "cron_create",
+                "Create a scheduled cron ONLY when the user explicitly asked for a reminder/recurring task. Exactly one of `cron` (standard 5-field expression) or `delayMinutes` (one-shot, fires once then auto-disables — never compute an absolute time yourself). The prompt must be self-contained: firing creates a fresh session that sees nothing of this conversation.",
+                {
+                  name: str("Display name of the cron"),
+                  prompt: str("Self-contained prompt fired as the user message of a fresh session"),
+                  cron: str("Standard 5-field cron expression (mutually exclusive with delayMinutes)"),
+                  delayMinutes: { type: "integer", minimum: 1, maximum: 525600, description: "One-shot: fire once N minutes from now (mutually exclusive with cron)" },
+                },
+                ["name", "prompt"],
+              ),
+            },
+            {
+              name: "cron_list",
+              tool: cronTools.cron_list,
+              def: def("cron_list", "List scheduled crons (id, schedule, enabled, next run, last result).", {}, []),
+            },
+            {
+              name: "cron_update",
+              tool: cronTools.cron_update,
+              def: def(
+                "cron_update",
+                "Update a scheduled cron (partial patch; at least one field). Changing cron/delayMinutes converts the trigger form and reschedules from now.",
+                {
+                  id: str("Cron id from cron_list"),
+                  name: str("Optional: new display name"),
+                  prompt: str("Optional: new prompt"),
+                  cron: str("Optional: switch to a recurring 5-field expression"),
+                  delayMinutes: { type: "integer", minimum: 1, maximum: 525600, description: "Optional: switch to one-shot N minutes from now" },
+                  enabled: { type: "boolean", description: "Optional: enable/disable without deleting" },
+                },
+                ["id"],
+              ),
+            },
+            {
+              name: "cron_delete",
+              tool: cronTools.cron_delete,
+              def: def("cron_delete", "Delete a scheduled cron permanently.", { id: str("Cron id from cron_list") }, ["id"]),
+            },
+          ]),
     // skill_create 仅在组装传入 skillCreate 时存在（提案制功能面；功能关闭的
     // 安装里模型根本看不到这个工具）。
     ...(skill.skill_create === undefined

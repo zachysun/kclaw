@@ -5,7 +5,7 @@
  * env holds dummies so launch never needs a reachable provider (client
  * construction only, server daemon.test.ts pattern).
  *
- * Layout: one shared home for start/status/idempotent-start/jobs-list (one
+ * Layout: one shared home for start/status/idempotent-start/cron-list (one
  * daemon, kept alive across those assertions); a second home for the stop
  * lifecycle; a third for the stale-pidfile respawn. afterAll SIGTERMs
  * anything still holding a daemon.json.
@@ -164,10 +164,10 @@ describe("kclaw daemon lifecycle (built CLI)", () => {
   )
 
   it(
-    "jobs list prints the padded header when there are no jobs",
+    "cron list prints the padded header when there are no crons",
     async () => {
       const home = homes[0]!
-      const res = await runCli(["jobs", "list"], home)
+      const res = await runCli(["cron", "list"], home)
       expect(res.exitCode).toBe(0)
       expect(res.stderr).toBe("")
       expect(res.stdout).toContain("name")
@@ -214,20 +214,20 @@ describe("kclaw daemon lifecycle (built CLI)", () => {
   )
 
   it(
-    "jobs list renders one padded row per job (created via the client's POST)",
+    "cron list renders one padded row per cron (created via the client's POST)",
     async () => {
       const home = homes[0]!
       const { port } = daemonJson(home)
       const token = readFileSync(join(home, "token"), "utf8").trim()
       const client = new KclawClient(`http://127.0.0.1:${port}`, token)
-      const created = (await client.request("POST", "/jobs", {
+      const created = (await client.request("POST", "/cron", {
         name: "daily-digest",
         cron: "0 9 * * *",
         prompt: "summarize yesterday",
       })) as { id: string }
       expect(typeof created.id).toBe("string")
 
-      const res = await runCli(["jobs", "list"], home)
+      const res = await runCli(["cron", "list"], home)
       expect(res.exitCode).toBe(0)
       const lines = res.stdout.split("\n").filter((line) => line !== "")
       expect(lines).toHaveLength(2) // header + the one row
@@ -245,7 +245,7 @@ describe("kclaw daemon lifecycle (built CLI)", () => {
     async () => {
       const { port } = daemonJson(homes[0]!)
       const bad = new KclawClient(`http://127.0.0.1:${port}`, "wrong-token")
-      await expect(bad.request("GET", "/jobs")).rejects.toThrow("unauthorized")
+      await expect(bad.request("GET", "/cron")).rejects.toThrow("unauthorized")
     },
     15_000,
   )

@@ -33,7 +33,7 @@ export interface WsHandle {
   close(): void
   /**
    * Parsed frames as they arrive; the iterator ends when the socket closes.
-   * Bus events (run.*, job.*, session.*) for subscribed sessions plus every
+   * Bus events (run.*, cron.*, session.*) for subscribed sessions plus every
    * broadcast (sessionId-less) event flow here after auth.
    */
   frames: AsyncIterable<WsFrame>

@@ -114,7 +114,7 @@ body {
 }
 
 /* Native checkboxes speak in the theme: the checked fill takes the agent
-   accent instead of the browser default blue (audit kind filters, job form,
+   accent instead of the browser default blue (audit kind filters, cron form,
    channel form, GFM task lists). */
 input[type="checkbox"] {
   accent-color: var(--accent);

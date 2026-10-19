@@ -91,7 +91,7 @@ function textTurn(text: string): LlmStreamEvent[] {
  */
 function execToolTurnWithUsage(callId: string, command: string, inputTokens: number): LlmStreamEvent[] {
   return [
-    { type: "tool_call_started", index: 0, callId, name: "exec" },
+    { type: "tool_call_started", index: 0, callId, name: "bash" },
     { type: "tool_call_delta", index: 0, delta: JSON.stringify({ command }) },
     { type: "message_done", stopReason: "tool_use", usage: { inputTokens, outputTokens: 2 } },
   ]
@@ -763,7 +763,7 @@ describe("ws event sequences (steer / wait / interrupt end-to-end)", () => {
 describe("ws compaction.cancel", () => {
   it("acks active:true and cuts an in-flight in-run compaction; the run itself carries on", async () => {
     // 把占用顶到线的手法（T7 run.test.ts 同款）：contextTokens=10 → 红线 8.5；
-    // 第一轮 exec 轮 usage 9 顶过红线 → 迭代边界发起中途压缩，压缩自己的
+    // 第一轮 bash 轮 usage 9 顶过红线 → 迭代边界发起中途压缩，压缩自己的
     // 摘要请求（第 2 次调用）挂在 gate 上，compaction.cancel 从 ws 掐它。
     let release!: () => void
     const gate = new Promise<void>((r) => {
@@ -790,7 +790,7 @@ describe("ws compaction.cancel", () => {
     const { env, url } = await makeWsRun(llm, {
       configure: (c) => {
         c.sessions.contextTokens = 10
-        c.permissions.allow = ["exec:echo*"]
+        c.permissions.allow = ["bash:echo*"]
       },
     })
     const session = env.sessions.create("ws 取消压缩会话")

@@ -312,7 +312,7 @@ describe("GoalLoopHost", () => {
         confirmationId: `c_${i}`,
         decision: "timeout",
         by: "timeout",
-        tool: { callId: "t", name: "exec", argsJson: "{}" },
+        tool: { callId: "t", name: "bash", argsJson: "{}" },
       })
       h.sessions.appendRunEnded(h.sessionId, { at, stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } })
       h.host.onIdle(h.sessionId)

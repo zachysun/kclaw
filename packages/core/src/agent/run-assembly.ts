@@ -49,7 +49,7 @@ import { ConfigPermissionGate, realpathWithin, SessionGrants } from "../permissi
 import { appendDecidedRule, globalDecidedRulesPath, loadDecidedRulesForRun, narrowDecidedRule, projectDecidedRulesPath } from "../storage/decided-rules.js"
 import type { AutoLearnCounter } from "../permissions/auto-learn.js"
 import { ConfirmationBroker, raceConfirmation, type ConfirmationResolution } from "../permissions/broker.js"
-import { createExecSandbox } from "../sandbox/provider.js"
+import { createBashSandbox } from "../sandbox/provider.js"
 import type { PermissionGate, RunOutcome } from "./loop.js"
 import { runAgent } from "./loop.js"
 import { assembleSystemPrompt } from "./system-prompt.js"
@@ -68,6 +68,8 @@ import type { MemorySystem } from "../memory/system.js"
 import type { EventBus } from "../bus.js"
 import { HookChain, DEFAULT_HOOK_TIMEOUT_MS } from "../hooks/runner.js"
 import { makeBuiltinHooks } from "../hooks/builtin.js"
+import { TOOL_EXPOSURE, type Exposure } from "../tools/exposure.js"
+import { createToolSearchTool } from "../tools/tool-search.js"
 import type { HookRegistry } from "../hooks/registry.js"
 import type { HookEntry } from "../hooks/types.js"
 
@@ -96,7 +98,7 @@ export interface EnqueueInput {
   /** team = 团队收信箱投递/任务派活（引擎或宿主发起）：不走技能/文件指定包装，处置按提交方显式声明（常规派活=steer）。 */
   trigger: RunTrigger
   /**
-   * Per-run model override (a job's configured model, or a client-forced
+   * Per-run model override (a cron's configured model, or a client-forced
    * one). Priority per run: input.model > session meta model > daemon
    * default. Absent → the daemon default applies.
    */
@@ -110,12 +112,12 @@ export interface EnqueueInput {
   /**
    * Machine-originated provenance note: lands as a note block right after
    * the text block on the user message. The scheduler passes its
-   * 「本会话由定时任务…」 line as kind:"job"; a background completion
+   * 「本会话由定时任务…」 line as kind:"cron"; a background completion
    * delivery (#44) passes its identity declaration as kind:"subagent" —
    * the model must be able to tell machine input from user speech.
    */
   note?: QueueNote
-  /** 单次显式处置（层级最高）；默认 = 会话覆盖 ?? 配置默认；job 触发强制 wait。 */
+  /** 单次显式处置（层级最高）；默认 = 会话覆盖 ?? 配置默认；cron 触发强制 wait。 */
   disposition?: "steer" | "wait" | "interrupt"
   /**
    * subagent派发携带（subagent_run 的 role/toolAllow，仅 agent 触发的子会话
@@ -214,6 +216,23 @@ export interface RunEngineDeps {
    * session meta's parentSessionId, not this flag).
    */
   subagents?: { spawner: SubagentSpawner; collector?: SubagentCollector }
+  /**
+   * Background-process registry (daemon-owned). When set, the bash tool
+   * gains run_in_background and the process_* trio joins the surface,
+   * scoped to the run's session. Bare engine tests omit it.
+   */
+  processes?: import("../process/registry.js").ProcessRegistry
+  /**
+   * Cron scheduler (daemon-owned). When set, the cron model face joins the
+   * surface; cron-fired runs (trigger "cron") get the read-only view only
+   * (anti-recursion — a scheduled session cannot schedule its successors).
+   */
+  cronScheduler?: import("../cron/scheduler.js").CronScheduler
+  /**
+   * Goal loop host (server-side; the structural GoalToolHost). When set and
+   * the run is a root session, the three goal tools join the surface.
+   */
+  goalHost?: import("../tools/goal.js").GoalToolHost
   /**
    * Agent team: the server-side team facade. When set,
    * every run probes it once for the session's team identity — lead gets the
@@ -361,13 +380,13 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // lead / member(name) / none from the team directory. A mainline session
   // with no team yet still gets a provisional lead identity so the team
   // surface (create_team first) is reachable — every other team action hits
-  // the facade's loud conflict until the team exists. Child runs and job
+  // the facade's loud conflict until the team exists. Child runs and cron
   // sessions register no team tools at all.
   const teamIdentity =
     engine.deps.team === undefined
       ? null
       : (await engine.deps.team.facade.describeSession(sessionId)) ??
-        (childRun || input.trigger === "job"
+        (childRun || input.trigger === "cron"
           ? null
           : { role: "lead" as const, teamId: "", sessionId })
 
@@ -397,7 +416,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
 
   // History BEFORE the append (runAgent appends the user message itself).
   // The user message starts as a text-only SKELETON: the run-before hook
-  // chain lands it — memory/job notes appended, JSONL write, note.emitted ×N
+  // chain lands it — memory/cron notes appended, JSONL write, note.emitted ×N
   // — right after the loop announced the skeleton via message.created, so
   // the wire order stays
   // run.started → message.created → note.emitted ×N → message.completed.
@@ -429,7 +448,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // 技能指名与文件指定的隐式包装（Master 2026-09-03 / 2026-09-13）：用户消
   // 息里任意位置的 /技能名 精确命中已装且用户可调用的技能、@路径 解析为工作
   // 区内的真实文件时，只在发给模型的那份输入上追加调用/读取指示——持久化、
-  // 事件流与气泡保持原始文本（所见即所发）。仅 trigger:user 生效：job 提示
+  // 事件流与气泡保持原始文本（所见即所发）。仅 trigger:user 生效：cron 提示
   // 是 daemon 生成的内部指令，不参与指名。内置 skill-wrap 钩子捕获这份预计
   // 算文本，在 llm-before 位置应用。
   const llmUserText =
@@ -451,22 +470,22 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     userMessage.llmText = llmUserText
   }
 
-  // --- exec sandbox (batch A): one probe, two consumers --------------------
-  // `available` gates BOTH the exec tool's actual wrapper and the permission
+  // --- bash sandbox (batch A): one probe, two consumers --------------------
+  // `available` gates BOTH the bash tool's actual wrapper and the permission
   // gate's sandboxed auto-pass from the SAME source, so a "sandboxed"
-  // allowance can never be issued while exec runs bare (and vice versa).
-  const sandbox = createExecSandbox(config.sandbox ?? defaultConfig.sandbox ?? { enabled: true, writeRoots: [] }, { workspace })
+  // allowance can never be issued while bash runs bare (and vice versa).
+  const sandbox = createBashSandbox(config.sandbox ?? defaultConfig.sandbox ?? { enabled: true, writeRoots: [] }, { workspace })
   // User-chosen disable (sandbox.enabled: false) is a deliberate decision and
   // stays silent; a probe failure (platform tool missing, userns blocked) is
   // an environment problem worth a daemon log line — fail-closed either way.
   const sandboxAttempted = config.sandbox?.enabled !== false
   if (sandboxAttempted && !sandbox.available && sandbox.unavailableReason !== undefined) {
-    console.warn(`kclaw: exec sandbox unavailable (${sandbox.unavailableReason}); sandboxable exec falls back to manual confirmation`)
+    console.warn(`kclaw: bash sandbox unavailable (${sandbox.unavailableReason}); sandboxable bash falls back to manual confirmation`)
   }
   // When the sandbox was attempted but unavailable, the confirmation explains
   // why (User Story: "回退到确认框并说明沙箱不可用").
   const sandboxUnavailableNote = sandboxAttempted && !sandbox.available
-    ? "exec 沙箱不可用，本次操作需人工确认"
+    ? "bash 沙箱不可用，本次操作需人工确认"
     : undefined
   // Sandbox audit event (batch D): one per run, right after the probe — the
   // session's trail then shows what sandbox state THIS run had (config switch,
@@ -492,15 +511,40 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       immediateEnabled: config.memory.write.immediate,
     },
     tavilyApiKey: config.web.tavilyApiKey,
-    exec: {
-      timeoutMs: config.exec.timeoutMs,
-      maxOutputBytes: config.exec.maxOutputBytes,
+    bash: {
+      timeoutMs: config.bash.timeoutMs,
+      maxOutputBytes: config.bash.maxOutputBytes,
       sandbox: sandbox.available ? sandbox : undefined,
       spillDir: paths.spillDir,
     },
     web: { timeoutMs: config.web.timeoutMs, allowPrivateNetworks: config.web.allowPrivateNetworks, spillDir: paths.spillDir },
     sessionSearch: buildSessionSearch(engine.deps, sessionId),
     ...(engine.deps.historySearch === undefined ? {} : { historySearch: engine.deps.historySearch }),
+    ...(engine.deps.processes === undefined ? {} : { processes: engine.deps.processes }),
+    ...(engine.deps.cronScheduler === undefined
+      ? {}
+      : {
+          cron: {
+            scheduler: engine.deps.cronScheduler,
+            // 防递归：cron 触发的 run 不带写工具（cron_list 保留）——
+            // 定时会话不能再给自己安排后继。
+            writeTools: input.trigger !== "cron",
+          },
+        }),
+    ...(engine.deps.goalHost === undefined || childRun
+      ? {}
+      : { goal: { host: engine.deps.goalHost, sessionId } }),
+    ...(engine.deps.sessions === undefined
+      ? {}
+      : {
+          todo: {
+            store: {
+              write: (todos) => engine.deps.sessions!.appendTodoWritten(sessionId, { at: new Date().toISOString(), todos }),
+              read: () => engine.deps.sessions!.meta(sessionId)?.todo,
+            },
+            allowParallelInProgress: config.todo?.allowParallelInProgress ?? false,
+          },
+        }),
     skills,
     recordSkillUse: (name, origin) => recordSkillUse(paths.skillsDir, origin, name),
     ...(engine.deps.skillsEvolution === undefined
@@ -576,10 +620,68 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     toolDefs.splice(0, toolDefs.length, ...toolDefs.filter((d) => toolAllow.has(d.name)))
   }
 
+  // --- tiered disclosure (tool_search) -------------------------------------
+  // Split the surviving surface into the ACTIVE set (full tier: schemas in
+  // every request) and the SEARCHABLE pool (directory + deferred: name-only
+  // or invisible). tool_search itself joins the active set. The split runs
+  // AFTER readonly/allowlist narrowing so earlier reductions always win;
+  // the pool keeps the same narrowing (filtered by the surviving tools map).
+  // Directory-tier tools get a stable one-line section in the system
+  // prompt's base (existence signal — the model must know the tools exist).
+  // Undeclared tools default to full: nothing silently vanishes.
+  // MCP adapter tools are ALWAYS deferred regardless of the table: schema
+  // unbounded, membership changes with connections — the surveyed field's
+  // unanimous placement. Everything undeclared defaults to full.
+  const exposureOf = (name: string): Exposure =>
+    name.startsWith("mcp__") ? "deferred" : (TOOL_EXPOSURE[name] ?? "full")
+  const activeDefs = toolDefs.filter((d) => exposureOf(d.name) === "full")
+  let poolDefs = toolDefs.filter((d) => exposureOf(d.name) !== "full")
+  const directoryDefs = poolDefs.filter((d) => exposureOf(d.name) === "directory")
+  const deferredDefs = poolDefs.filter((d) => exposureOf(d.name) === "deferred")
+  if (poolDefs.length > 0) {
+    const servers = [...new Set(poolDefs.map((d) => /^mcp__([^_]+)__/.exec(d.name)?.[1]).filter((x): x is string => x !== undefined))]
+    // Deferred tier = NAME-ONLY visibility (Master 2026-10-19): builtin
+    // deferred names ride the prompt's stable directory section; MCP tool
+    // names ride tool_search's own description — the single designed cache
+    // break point — so MCP membership changes still never touch the stable
+    // prompt segment or the tools array.
+    const mcpNames = poolDefs.filter((d) => d.name.startsWith("mcp__")).map((d) => d.name)
+    const mcpNameList = mcpNames.length <= 80
+      ? mcpNames.join("、")
+      : `${mcpNames.slice(0, 80).join("、")}…（另有 ${mcpNames.length - 80} 个，用 tool_search 查询）`
+    const sourceLine =
+      mcpNames.length > 0
+        ? `MCP 工具名单：${mcpNameList}`
+        : "内置低频编排工具（团队协作面）"
+    const search = createToolSearchTool({
+      pool: poolDefs,
+      sources: servers.length > 0 ? [`mcp:${servers.join(" / mcp:")}`, "builtin"] : ["builtin"],
+    })
+    tools.set("tool_search", search)
+    activeDefs.push({
+      name: "tool_search",
+      description: `Search ${poolDefs.length} tools not fully listed this run (by intent, e.g. "search the codebase", "schedule a cron", "send a teammate a message"). Returns complete tool cards; hits join this run's usable set and are callable by name directly. ${sourceLine}.`,
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "What the tool should do — intent words, tool names" },
+          limit: { type: "integer", minimum: 1, maximum: 10, description: "Max cards to return (default 5)" },
+        },
+        required: ["query"],
+      },
+    })
+  }
+  // The active array is what the loop mutates on promotion; the pool rides
+  // alongside for the unknown-name contract and closest-match hints.
+  toolDefs.splice(0, toolDefs.length, ...activeDefs)
+  const promotableDefs = poolDefs
+
   // 发送面工具清单按名排序（code point 序，确定性）：MCP 连接恢复/重连后
   // 视图迭代序可能变化，而 tools 在请求前缀的最前面，顺序一变整个 prompt
-  // cache 前缀失效。只排 wire 面（toolDefs）；executor 的 Map 顺序无关，不动。
+  // cache 前缀失效。只排 wire 面（active + pool 各自排；pool 的顺序只影响
+  // 检索稳定性，同样排定）。executor 的 Map 顺序无关，不动。
   toolDefs.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+  promotableDefs.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 
   // --- permission wiring (config gate + confirmation gateway) ---
   const pendingConfirmations = new Map<string, ToolCallBlock>()
@@ -617,10 +719,10 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     // confirmation carries an explanation instead of the silent fail-closed
     // default.
     sandboxUnavailableNote,
-    // The tools this assembly actually wrapped in the OS sandbox (exec gets
+    // The tools this assembly actually wrapped in the OS sandbox (bash gets
     // the wrapper below; no other executor does). The gate's "sandboxed"
     // auto-pass must never claim an unwrapped tool is sandboxed.
-    sandboxedTools: sandbox.available ? new Set(["exec"]) : new Set(),
+    sandboxedTools: sandbox.available ? new Set(["bash"]) : new Set(),
     // Run-scoped grants (batch D): consulted only when config enables
     // sessionGrants; reason "session_grant".
     grants,
@@ -860,6 +962,25 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       workspace,
       agentsMd: paths.agentsMd,
       ...(childRun && input.subagentRole !== undefined ? { subagentRole: input.subagentRole } : {}),
+      ...(poolDefs.length > 0
+        ? {
+            toolDirectory: [
+              "# 工具目录（本 run 未全量列出的工具）",
+              ...directoryDefs.map((d) => `- ${d.name}：${d.description.split("。")[0].split(". ")[0].slice(0, 120)}（可直呼，参数拿不准先用 tool_search 查询）`),
+              ...(deferredDefs.some((d) => !d.name.startsWith("mcp__"))
+                ? [
+                    `- 低频工具（只列名字，详情用 tool_search 查询后调用）：${deferredDefs
+                      .filter((d) => !d.name.startsWith("mcp__"))
+                      .map((d) => d.name)
+                      .join("、")}`,
+                  ]
+                : []),
+              ...(deferredDefs.some((d) => d.name.startsWith("mcp__"))
+                ? ["- MCP 外挂工具同样只列名字，名单见 tool_search 的说明。"]
+                : []),
+            ].join("\n"),
+          }
+        : {}),
     }),
     baseline: sessionMeta?.systemBaseline,
     toolDefs,
@@ -890,6 +1011,12 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       model,
       tools,
       toolDefs,
+      ...(promotableDefs.length > 0
+        ? {
+            promotableDefs,
+            directNames: new Set(directoryDefs.map((d) => d.name)),
+          }
+        : {}),
       permissions: gate,
       resolveConfirmation,
       confirmTimeoutMs,
@@ -1000,9 +1127,14 @@ export function resolveBasePrompt(opts: {
   agentsMd: string
   /** subagent角色补充（subagent_run 的 role）：拼进子会话模板的独立小节。 */
   subagentRole?: string
+  /** directory 层工具目录（名字 + 一行描述）：稳定文本节，进 stable 段保前缀缓存。 */
+  toolDirectory?: string
 }): string {
-  if (opts.team?.role === "member") return teamMemberSystemPrompt(opts.workspace, opts.team.name)
+  const directory = opts.toolDirectory === undefined ? "" : `\n\n${opts.toolDirectory}`
+  if (opts.team?.role === "member") return `${teamMemberSystemPrompt(opts.workspace, opts.team.name)}${directory}`
   const main = systemPrompt(opts.agentsMd)
-  if (opts.team?.role === "lead") return `${main}\n\n${teamLeadProtocol()}`
-  return opts.childRun ? subagentSystemPrompt(opts.workspace, opts.subagentRole) : main
+  if (opts.team?.role === "lead") return `${main}\n\n${teamLeadProtocol()}${directory}`
+  return opts.childRun
+    ? `${subagentSystemPrompt(opts.workspace, opts.subagentRole)}${directory}`
+    : `${main}${directory}`
 }

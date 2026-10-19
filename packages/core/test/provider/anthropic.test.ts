@@ -42,7 +42,7 @@ describe("anthropic client", () => {
   it("maps tool_use blocks to tool_call_started/delta and stop_reason tool_use", async () => {
     const fetchImpl = (async () => sseResponse([
       { type: "message_start", message: { usage: { input_tokens: 5 } } },
-      { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_1", name: "exec" } },
+      { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_1", name: "bash" } },
       { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"comm' } },
       { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: 'and":"ls"}' } },
       { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 9 } },
@@ -50,7 +50,7 @@ describe("anthropic client", () => {
     ])) as typeof fetch
     const events = await collect(createAnthropicClient({ baseUrl: "https://api.anthropic.com", apiKey: "k", fetchImpl }))
     expect(events).toEqual([
-      { type: "tool_call_started", index: 1, callId: "toolu_1", name: "exec" },
+      { type: "tool_call_started", index: 1, callId: "toolu_1", name: "bash" },
       { type: "tool_call_delta", index: 1, delta: '{"comm' },
       { type: "tool_call_delta", index: 1, delta: 'and":"ls"}' },
       { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 5, outputTokens: 9 } },
@@ -123,12 +123,12 @@ describe("anthropic client", () => {
       messages: [
         { role: "system", content: "extra persona" },
         { role: "user", content: "hi" },
-        { role: "assistant", content: null, toolCalls: [{ callId: "t1", name: "exec", argsJson: '{"command":"ls"}' }] },
+        { role: "assistant", content: null, toolCalls: [{ callId: "t1", name: "bash", argsJson: '{"command":"ls"}' }] },
         { role: "tool", toolCallId: "t1", content: "out1" },
         { role: "tool", toolCallId: "t2", content: "out2" },
         { role: "assistant", content: null }, // empty assistant turn is dropped
       ],
-      tools: [{ name: "exec", description: "run", parameters: { type: "object" } }],
+      tools: [{ name: "bash", description: "run", parameters: { type: "object" } }],
     })
     expect(captured!.url).toBe("https://api.anthropic.com/v1/messages")
     expect(captured!.headers.get("x-api-key")).toBe("sk-a")
@@ -138,11 +138,11 @@ describe("anthropic client", () => {
     expect(body.system).toBe("be brief\n\nextra persona")
     expect(body.max_tokens).toBe(ANTHROPIC_DEFAULT_MAX_TOKENS)
     expect(body.stream).toBe(true)
-    expect(body.tools[0]).toEqual({ name: "exec", description: "run", input_schema: { type: "object" } })
+    expect(body.tools[0]).toEqual({ name: "bash", description: "run", input_schema: { type: "object" } })
     // user → assistant(tool_use) → one user message carrying both tool_results
     expect(body.messages).toEqual([
       { role: "user", content: [{ type: "text", text: "hi" }] },
-      { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "exec", input: { command: "ls" } }] },
+      { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "bash", input: { command: "ls" } }] },
       { role: "user", content: [
         { type: "tool_result", tool_use_id: "t1", content: "out1" },
         { type: "tool_result", tool_use_id: "t2", content: "out2" },

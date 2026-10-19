@@ -144,23 +144,23 @@ describe("block created/completed calibration", () => {
     state = applyEvent(state, ev("text.completed", { messageId: "m2", block: text("b4", "Hello") }))
     expect(state.messages[0]!.blocks[0]).toEqual({ kind: "text", blockId: "b4", text: "Hello" })
 
-    state = applyEvent(state, ev("tool_call.created", { messageId: "m2", block: toolCall("b5", "c1", "exec", "") }))
+    state = applyEvent(state, ev("tool_call.created", { messageId: "m2", block: toolCall("b5", "c1", "bash", "") }))
     state = applyEvent(state, ev("tool_call.delta", { messageId: "m2", blockId: "b5", delta: "{\"cmd\":\"ls\"}" }))
     expect(state.messages[0]!.blocks[1]).toEqual(
-      { kind: "tool_call", blockId: "b5", callId: "c1", name: "exec", argsJson: "{\"cmd\":\"ls\"}" },
+      { kind: "tool_call", blockId: "b5", callId: "c1", name: "bash", argsJson: "{\"cmd\":\"ls\"}" },
     )
 
     const full = msg("m2", "assistant", [
       thinking("b3", "reasoning"),
       text("b4", "Hello"),
-      toolCall("b5", "c1", "exec", "{\"cmd\":\"ls\"}"),
+      toolCall("b5", "c1", "bash", "{\"cmd\":\"ls\"}"),
     ])
     state = applyEvent(state, ev("message.completed", { message: full }))
     expect(state.messages[0]!.pending).toBe(false)
     expect(state.messages[0]!.blocks).toEqual([
       { kind: "thinking", blockId: "b3", text: "reasoning" },
       { kind: "text", blockId: "b4", text: "Hello" },
-      { kind: "tool_call", blockId: "b5", callId: "c1", name: "exec", argsJson: "{\"cmd\":\"ls\"}" },
+      { kind: "tool_call", blockId: "b5", callId: "c1", name: "bash", argsJson: "{\"cmd\":\"ls\"}" },
     ])
   })
 
@@ -181,7 +181,7 @@ describe("block created/completed calibration", () => {
     expect(state.messages[0]!.blocks).toEqual([{ kind: "text", blockId: "b4", text: "full" }])
   })
 
-  it("note.emitted upserts a note block onto the message (live memory/job notes)", () => {
+  it("note.emitted upserts a note block onto the message (live memory/cron notes)", () => {
     let state = initChat([msg("m1", "user", [text("b1", "hi")])])
     state = applyEvent(state, ev("note.emitted", { messageId: "m1", block: note("b2", "memory", "remembered") }))
     expect(state.messages[0]!.blocks).toEqual([
@@ -189,10 +189,10 @@ describe("block created/completed calibration", () => {
       { kind: "note", blockId: "b2", noteKind: "memory", text: "remembered" },
     ])
     // Same blockId re-emitted replaces rather than duplicating.
-    state = applyEvent(state, ev("note.emitted", { messageId: "m1", block: note("b2", "job", "job note") }))
+    state = applyEvent(state, ev("note.emitted", { messageId: "m1", block: note("b2", "cron", "cron note") }))
     expect(state.messages[0]!.blocks).toEqual([
       { kind: "text", blockId: "b1", text: "hi" },
-      { kind: "note", blockId: "b2", noteKind: "job", text: "job note" },
+      { kind: "note", blockId: "b2", noteKind: "cron", text: "cron note" },
     ])
   })
 
@@ -236,14 +236,14 @@ describe("confirmations", () => {
     const state = initChat([])
     const next = applyEvent(state, ev("confirmation.requested", {
       confirmationId: "conf_1",
-      toolCall: toolCall("b5", "c1", "exec", "{\"cmd\":\"rm -rf /\"}"),
+      toolCall: toolCall("b5", "c1", "bash", "{\"cmd\":\"rm -rf /\"}"),
       risk: "sensitive",
       expiresAt: "2026-08-15T00:02:00.000Z",
     }))
     expect(next.pendingConfirmations).toEqual([
       {
         confirmationId: "conf_1",
-        toolName: "exec",
+        toolName: "bash",
         argsJson: "{\"cmd\":\"rm -rf /\"}",
         risk: "sensitive",
         expiresAt: "2026-08-15T00:02:00.000Z",
@@ -255,7 +255,7 @@ describe("confirmations", () => {
     let state = initChat([])
     const payload = {
       confirmationId: "conf_1",
-      toolCall: toolCall("b5", "c1", "exec", "{}"),
+      toolCall: toolCall("b5", "c1", "bash", "{}"),
       risk: "sensitive" as const,
       expiresAt: "2026-08-15T00:02:00.000Z",
     }
@@ -268,7 +268,7 @@ describe("confirmations", () => {
     let state = initChat([])
     state = applyEvent(state, ev("confirmation.requested", {
       confirmationId: "conf_1",
-      toolCall: toolCall("b5", "c1", "exec", "{}"),
+      toolCall: toolCall("b5", "c1", "bash", "{}"),
       risk: "sensitive",
       expiresAt: "2026-08-15T00:02:00.000Z",
     }))
@@ -283,7 +283,7 @@ describe("confirmations", () => {
     let state = initChat([])
     const push = (id: string) =>
       applyEvent(state, ev("confirmation.requested", {
-        confirmationId: id, toolCall: toolCall("b", id, "exec", "{}"), risk: "safe", expiresAt: "t",
+        confirmationId: id, toolCall: toolCall("b", id, "bash", "{}"), risk: "safe", expiresAt: "t",
       }))
     state = push("conf_1")
     state = push("conf_2")
@@ -355,16 +355,16 @@ describe("mergeMessages (reconnect)", () => {
 })
 
 describe("unrelated events", () => {
-  it("ignores events outside the UI-relevant subset (llm.started/job/attachment)", () => {
+  it("ignores events outside the UI-relevant subset (llm.started/cron/attachment)", () => {
     const state = initChat([msg("m1", "user", [text("b1", "hi")])])
     const payloads = new Map<string, unknown>([
       ["attachment.created", { messageId: "m1", block: { id: "b9", type: "attachment", mimeType: "text/plain", source: { type: "file", path: "/x" } } }],
       ["attachment.completed", { messageId: "m1", block: { id: "b9", type: "attachment", mimeType: "text/plain", source: { type: "file", path: "/x" } } }],
       ["llm.started", { model: "m", attempt: 1 }],
       ["llm.failed", { error: { code: "x", message: "m" }, willRetry: false }],
-      ["job.started", { jobId: "j1" }],
-      ["job.completed", { jobId: "j1", summary: "s" }],
-      ["job.failed", { jobId: "j1", error: { code: "x", message: "m" } }],
+      ["cron.started", { cronId: "j1" }],
+      ["cron.completed", { cronId: "j1", summary: "s" }],
+      ["cron.failed", { cronId: "j1", error: { code: "x", message: "m" } }],
     ])
     for (const [type, payload] of payloads) {
       const next = applyEvent(state, ev(type as AgentEvent["type"], payload))

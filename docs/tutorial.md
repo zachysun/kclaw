@@ -70,7 +70,7 @@ kclaw chat
 ~/Downloads 里最大的文件是哪个？
 ```
 
-agent 会调用 exec 工具执行命令。exec 属于高危工具，执行前会显示一张**确认卡片**，列出工具名、参数和风险等级：
+agent 会调用 bash 工具执行命令。bash 属于高危工具，执行前会显示一张**确认卡片**，列出工具名、参数和风险等级：
 
 - 选**仅本次**：这一次允许，命令执行，agent 获取输出后继续回答。
 - 选**总是允许（本项目）** 或 **总是允许（全局）**：这次允许，并把一条收紧后的放行规则存下来，之后同类的操作不再逐次询问（规则可以在 WebUI 的「权限」页查看和删除）。
@@ -135,7 +135,7 @@ agent 每轮回复前都会先检索相关记忆，因此即使更换了会话�
 终端中随时可查看：
 
 ```bash
-kclaw jobs list
+kclaw cron list
 ```
 
 输出一张五列表格：name / cron / enabled / nextRunAt（下次触发时间）/ lastStatus（上次执行结果）。
@@ -185,7 +185,7 @@ token 的处理：页面获取 token 后存入浏览器本地存储并从地址�
 ├── daemon.json      # daemon 运行信息（端口、pid）
 ├── sessions/        # 每个会话一个目录：events.jsonl 完整事件流（权威数据）+ meta.json 投影 + queue.jsonl 排队
 ├── memory/          # 记忆系统：global/（全局认知）+ projects/<项目id>/（项目情节），含 vectors.db 检索索引
-├── jobs.db          # 定时任务
+├── cron.db          # 定时任务
 ├── usage.db         # token 用量记录
 ├── attachments/     # 附件（WebUI/CLI 上传的文件保存在这里）
 ├── commands/        # 自定义 slash 命令（*.md）
@@ -210,6 +210,6 @@ kclaw daemon status   # 查看状态（kclaw status 是同一命令的别名）
 
 ## 9. 下一步
 
-- **配置全表**（[storage](./core/storage.md)）：`workspace` 限定文件工具的活动范围；`permissions.allow` 可以让某些命令跳过确认（如 `exec:git *`）；`exec.timeoutMs` 控制命令超时；`~/.kclaw/AGENTS.md` 定义 agent 人设。模型 provider 的配置见 [storage](./core/storage.md) 的「config.json 全量字段」一节。
+- **配置全表**（[storage](./core/storage.md)）：`workspace` 限定文件工具的活动范围；`permissions.allow` 可以让某些命令跳过确认（如 `bash:git *`）；`bash.timeoutMs` 控制命令超时；`~/.kclaw/AGENTS.md` 定义 agent 人设。模型 provider 的配置见 [storage](./core/storage.md) 的「config.json 全量字段」一节。
 - **扩展指南**（[extending](./extending.md)）：为 kclaw 增加新功能时的切入点。
 - **架构总览**（[architecture](./architecture.md)）：阅读内部实现时的入口文档。

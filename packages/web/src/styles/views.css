@@ -1,11 +1,11 @@
-/* ---- Views: jobs / audit / usage / trash ---- */
+/* ---- Views: cron / audit / usage / trash ---- */
 
 /* Wide views: data tables and list+detail workspaces share one content width
    anchor (the config pages keep their narrower 760px anchor in admin.css), so
    switching pages moves the pane edge between exactly two positions instead
    of three arbitrary ones. */
 .usage-view,
-.jobs-view,
+.cron-view,
 .trash-view,
 .audit-host {
   max-width: 1280px;
@@ -27,7 +27,7 @@
   margin-bottom: var(--space-3);
 }
 
-.job-form {
+.cron-form {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: var(--space-4);

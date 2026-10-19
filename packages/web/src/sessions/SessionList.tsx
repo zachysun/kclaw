@@ -16,7 +16,7 @@
  * that soft-deletes every session in the group into the trash. The top-level
  * 选择工作目录 button opens the DirectoryPicker for a directory not in the
  * list yet — picking a path creates the session there. Sessions without a
- * workdir (old rows, job sessions) land in a muted "未指定工作目录" group.
+ * workdir (old rows, cron sessions) land in a muted "未指定工作目录" group.
  */
 import { useMemo, useState, type ChangeEvent } from "react"
 import type { FsBrowseResult, SessionMeta } from "../types.js"

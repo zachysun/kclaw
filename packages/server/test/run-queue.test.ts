@@ -252,12 +252,12 @@ describe("wake budget (#44)", () => {
     expect(() => manager.submit(meta.id, { userText: "auto4", trigger: "agent" })).toThrow(WakeBudgetExhaustedError)
   })
 
-  it("a user run start resets the budget; a job run does not", async () => {
+  it("a user run start resets the budget; a cron run does not", async () => {
     const meta = sessions.create("主线")
     await manager.enqueue(meta.id, { userText: "a1", trigger: "agent" })
     await manager.enqueue(meta.id, { userText: "a2", trigger: "agent" })
-    await manager.enqueue(meta.id, { userText: "job1", trigger: "job" })
-    // The job run is machine-originated: the budget stays at 2, so a third
+    await manager.enqueue(meta.id, { userText: "job1", trigger: "cron" })
+    // The cron run is machine-originated: the budget stays at 2, so a third
     // agent submission is still accepted and a fourth is refused.
     await manager.enqueue(meta.id, { userText: "a3", trigger: "agent" })
     expect(() => manager.submit(meta.id, { userText: "a4", trigger: "agent" })).toThrow(WakeBudgetExhaustedError)

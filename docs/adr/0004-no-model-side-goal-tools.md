@@ -1,6 +1,6 @@
 # ADR-0004：不给模型提供 goal 工具（循环控制全在 daemon 侧）
 
-状态：已接受（2026-09-27）
+状态：已取代（2026-10-19 起模型侧三件工具，见文末更新）
 
 ## 背景
 
@@ -21,3 +21,13 @@
 - 模型不能主动"认输"提前终态；它的出路是在回复里说明不可达，判定器读到证据后判 `impossible`。
 - goal 循环与权限系统解耦：不新增任何工具权限项，权限文档零改动。
 - 未来若出现真实用例（如模型请求延长 budget），再按"第二个真实用例才引入抽象"的原则单独评估。
+
+## 更新（2026-10-19）：模型侧 goal 工具已引入（三件，照抄行业集合）
+
+Master 2026-10-18 定案推翻本 ADR 的"零工具"决策：goal 控制交给模型，工具面与两家对标实现同形——`create_goal`（sensitive）、`get_goal`（safe）、`update_goal`（sensitive；动作 complete/pause/resume/stop）。三条硬约束（见 [ADR-0003](./0003-goal-judging-at-run-boundary.md) 与 [ADR-0002](./0002-goal-armed-is-process-local.md)，均不动摇）：
+
+1. `create_goal`/`update_goal` 恒 sensitive：审批卡就是"用户明说"的机制化——模型不经 prompting 不得启动或操控花费循环。
+2. `update_goal action=complete` 只请求立即判定，不写终态：判定器独立裁决 met/not_met/impossible（对比的两家让模型自证完成，本仓库明确拒绝）。
+3. armed 仍进程内（ADR-0002）；工具只是既有 host 路径的投影，goal 引擎零改动。
+
+原"零工具"时期的其余论证（注入已够用、工具面干净）对 get_goal 一类只读面不再适用；控制权与预算仍归用户的原则由 sensitive 档承接。

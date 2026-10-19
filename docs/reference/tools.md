@@ -1,4 +1,4 @@
-# tools — 内置工具清单（24 个）
+# tools — 内置工具清单（39 个）
 
 > 权威来源：`packages/core/src/tools/index.ts`（注册表：执行器与模型侧 JSON Schema 成对声明）与 `packages/core/src/tools/` 下各实现文件（参数校验与行为）。机制见 [tools](../core/tools.md)，权限判定链见 [permissions](../core/permissions.md)。
 
@@ -23,17 +23,19 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - 整数参数只收整数，超出范围按上下限截取（不是报错），不传取条目标注的默认值。
 - 模型多传的未知字段一律忽略。
 
-## 常驻工具（13 个）
+## 常驻工具（17 个）
 
 每个 run 都注册（childRun 例外见下）：
 
 | 名称 | 一句话 | risk | concurrency |
 |------|--------|------|-------------|
-| `exec` | 在工作目录执行 shell 命令（stdout/stderr 合并，超长截断保头尾） | sensitive | serial |
+| `bash` | 在工作目录执行 shell 命令（stdout/stderr 合并，超长截断保头尾） | sensitive | serial |
 | `fs_read` | 读工作目录内 UTF-8 文本文件（≤ 1 MiB） | safe | parallel |
 | `fs_list` | 列目录（子目录带尾斜杠，文件带字节数） | safe | parallel |
 | `fs_write` | 新建或覆写文件（自动建父目录） | sensitive | serial |
 | `fs_edit` | 字面替换文件中恰好一处文本（0 处或多处报错） | sensitive | serial |
+| `grep` | 正则内容搜索（遵循 .gitignore，跳过二进制，结果截断+spill） | safe | parallel |
+| `glob` | 文件名模式匹配（与 grep 同一套枚举） | safe | parallel |
 | `web_search` | Tavily 网页搜索 | safe | parallel |
 | `web_fetch` | 抓取 http(s) URL 的正文（HTML 抽取为文章文本，≤ 512 KiB） | safe | parallel |
 | `memory_save` | 立即把当前轮对话沉淀进长期记忆 | safe | parallel |
@@ -42,8 +44,10 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `history_search` | 全文检索全部历史会话的原始消息（含未压缩部分） | safe | parallel |
 | `skill_read` | 按名字加载一个技能的完整规程正文 | safe | parallel |
 | `skill_list` | 列出模型可见的技能（可按关键词过滤） | safe | parallel |
+| `todo_list_write` | 整单替换会话级任务清单（全量快照，后写胜出） | safe | serial |
+| `todo_list_read` | 读回当前清单（跨 run、跨压缩存活） | safe | parallel |
 
-### exec
+### bash
 
 `sensitive` · `serial`。shell 命令经 `shell: true` 执行，工作目录固定为 workspace 根；配置了沙箱且可用时在沙箱内运行（见 [sandbox](../core/sandbox.md)）。
 
@@ -54,8 +58,8 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 行为要点：
 
 - stdout 与 stderr 合并返回。
-- 输出上限由配置 `exec.maxOutputBytes` 决定（默认 100 KiB）：超限保留头部，结尾带 `...[dropped N bytes]...` 丢弃标记；配置了 spill 目录时完整输出同时写入 `<home>/spill`，返回里附一条 fs_read 定位行，模型可自己读回全量。
-- 超时由配置 `exec.timeoutMs` 决定（默认 60 秒）：到时整个进程组被 SIGKILL（shell 的子孙进程一起结束），返回错误并附带已产生的部分输出。SIGKILL 之后留 2 秒宽限等 close 事件：子进程的退出信息与管道里已缓冲的尾部输出仍被收集完才收尾（超时是出错返回，不是静默丢弃）。
+- 输出上限由配置 `bash.maxOutputBytes` 决定（默认 100 KiB）：超限保留头部，结尾带 `...[dropped N bytes]...` 丢弃标记；配置了 spill 目录时完整输出同时写入 `<home>/spill`，返回里附一条 fs_read 定位行，模型可自己读回全量。
+- 超时由配置 `bash.timeoutMs` 决定（默认 60 秒）：到时整个进程组被 SIGKILL（shell 的子孙进程一起结束），返回错误并附带已产生的部分输出。SIGKILL 之后留 2 秒宽限等 close 事件：子进程的退出信息与管道里已缓冲的尾部输出仍被收集完才收尾（超时是出错返回，不是静默丢弃）。
 - 退出码非 0 返回错误，输出以 `exit code N` 开头。
 - 每次执行注入两个环境变量：`KCLAW_SESSION_ID`（当前会话 id）与 `KCLAW_WORKSPACE`（工作目录），供命令行工具自识别；其余环境继承 daemon 进程。
 
@@ -106,6 +110,35 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - 字面替换，不做正则展开：`new` 里的 `$&` 这类序列原样写入文件。
 - `old` 出现 0 次或多于 1 次都报错，不写入。
 - 二进制内容直接报错：解码出 U+FFFD 或含 NUL 字节的文件不写入，防止把二进制文件写坏。
+- 先读后改守卫：目标文件必须在本 run 内被 `fs_read` 读过、且读后未被外部修改（size+mtime 比对），否则报错提示先读/重读；新建文件不受守卫约束。`fs_write` 覆写既有文件走同一条守卫。
+
+### grep
+
+`safe` · `parallel`。内容搜索与 glob 共享一套文件枚举：git 仓库内用 `git ls-files`（已跟踪 + 未跟踪未忽略，遵循 .gitignore，NUL 分隔保中文文件名）；git 外回落目录遍历（跳过隐藏目录与 node_modules）。候选文件上限 20000，超出报错提示收窄。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `pattern` | string | 是 | 正则表达式（JS RegExp 语法） |
+| `path` | string | 否 | 限定搜索范围的工作区相对目录或文件 |
+| `glob` | string | 否 | 文件名 glob 过滤（如 `**/*.ts`） |
+| `maxResults` | integer | 否 | 返回条数，范围 1–200，不传取 50 |
+
+- 输出行格式 `path:lineNo: 行内容`（单行截 400 字符）。
+- 二进制文件（含 NUL 字节）跳过；单文件命中 1000 行后停止扫描该文件。
+- 超出 maxResults 截断并带 `...[truncated, N more matches]` 标记；配置了 spill 目录时完整命中清单写入 spill 并附 fs_read 定位行。无命中返回 `(no matches)`。
+
+### glob
+
+`safe` · `parallel`。文件名模式匹配，与 grep 同一套枚举与 .gitignore 规则。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `pattern` | string | 是 | 标准 glob 模式（如 `**/*.ts`） |
+| `path` | string | 否 | 限定搜索范围的工作区相对目录 |
+
+- 返回匹配文件路径列表，上限 500；超限截断并带标记，配置了 spill 目录时完整清单写入 spill 并附定位行。
+- 无命中返回 `(no matches)`。
+- 已知限制（grep/glob 共有）：实现是同步扫描（候选上限 20000、单文件 1 MiB 兜底），超大仓库可能短暂阻塞 daemon 事件循环；异步化等真实痛点出现再做。
 
 ### web_search
 
@@ -206,12 +239,23 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - 只列模型可见技能（与系统提示词清单同一口径，`disable-model-invocation` 的不出现），按名字排序。
 - 找到后用 skill_read 加载正文。
 
-## 条件注册工具（11 个）
+## 条件注册工具（22 个）
 
 只在对应能力被组装进 run 时加入注册表：
 
 | 名称 | 一句话 | risk | concurrency | 注册条件 |
 |------|--------|------|-------------|----------|
+| `process_list` | 列出本会话的后台进程（命令、状态、退出码、输出文件） | safe | parallel | 组装了后台进程注册表（daemon 恒有） |
+| `process_output` | 按字节偏移增量读后台进程输出（可短暂阻塞等新输出） | safe | parallel | 同上 |
+| `process_kill` | 终止后台进程（SIGKILL 整个进程组） | safe | serial | 同上 |
+| `cron_create` | 创建定时任务（cron 表达式或 delayMinutes 一次性，二选一） | sensitive | serial | 组装了调度器（daemon 恒有）；cron 触发的 run 不带 |
+| `cron_list` | 列出全部定时任务（调度、状态、上次结果） | safe | parallel | 同上（cron 触发的 run 保留） |
+| `cron_update` | 部分字段更新（改 cron/delayMinutes 即换形态并重排） | sensitive | serial | 同 cron_create |
+| `cron_delete` | 删除定时任务 | sensitive | serial | 同 cron_create |
+| `create_goal` | 设定目标循环（armed + 首轮入队） | sensitive | serial | 根会话且组装了 goal host（daemon 恒有；subagent 没有） |
+| `get_goal` | 读当前目标视图（状态/轮位/预算/最近判定） | safe | parallel | 同上 |
+| `update_goal` | 目标动作（complete=请求判定 / pause / resume / stop） | sensitive | serial | 同上 |
+| `tool_search` | 检索未全量列出的工具（返回完整工具卡，命中即加入本 run 可用集） | safe | parallel | 检索池非空（有目录/deferred 层工具时） |
 | `subagent_run` | 派 subagent 独立执行自包含任务（可后台） | safe | parallel | 主线 run 且组装了派发器（daemon 恒有；子会话没有） |
 | `subagent_collect` | 按子会话 id 取回后台 subagent 的结题答复 | safe | parallel | 同上，且组装了收集器 |
 | `skill_create` | 把一段经验固化为技能提案（提案制，不经确认不生效） | safe | parallel | daemon 组装了技能进化系统（恒有）；`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案 |
@@ -223,6 +267,65 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `task_update` | 按 revision 更新任务状态/认领（CAS 比对交换） | safe | serial | 团队身份 |
 | `task_list` | 列出任务板全貌 | safe | parallel | 团队身份 |
 | `ask_user_questions` | 向用户提 1–5 个当场拍板的问题 | safe | parallel | 组装了 ask 网关（run 组装恒注入，子 run 也带） |
+
+### bash 的后台模式与 process 三件
+
+`bash` 增加两个可选参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `timeoutMs` | integer | 否 | 模型自定超时（毫秒），clamp 1_000–600_000；缺省用配置 `bash.timeoutMs`（默认 60 秒） |
+| `run_in_background` | boolean | 否 | true = 后台启动：立即返回进程 id 与输出文件路径，不受前台超时约束 |
+
+- 后台输出流式写入 spill 文件（`<home>/spill/proc-<id>.txt`），文件字节偏移就是读游标，内存不积压。
+- 完成自动通知：进程结束后经队列以 `trigger:"process"` 的 run 投递到属主会话（note kind `process`），忙会话排队、闲会话唤醒——工具描述明确写有"不要轮询或 sleep 等待"。
+- 未送达通知持久化在 `<home>/process-notices.jsonl`，daemon 重启后补发；启动时对记录的进程组做存活探测，活的重进注册表、死的补发通知。
+- 单会话并发后台进程上限 8；注册表按会话隔离，process 三件只看得到本会话的进程。
+- 沙箱可用时后台命令同样在沙箱内运行（与前台同一条 spawn 缝隙）。
+
+**process 三件**（safe；list/output parallel、kill serial）：
+
+- `process_list {}`：本会话后台进程清单，最新在前，上限 50 条。
+- `process_output { processId, offset?, wait?, timeoutMs? }`：从 `offset` 字节起读增量输出，返回 `nextOffset` 作下次游标；`wait:true` 阻塞等新输出或终态（timeoutMs 默认 30 秒、上限 600 秒）；`data` 带状态与退出码。
+- `process_kill { processId }`：SIGKILL 整个进程组；杀已结束的进程不报错。
+
+### goal 三件
+
+模型面 goal 控制，与两家对标实现同形（create/get/update）。全部是既有 GoalLoopHost 路径的投影，goal 引擎零改动；run 边界的独立判定器仍是终态唯一写入者（ADR-0003）。`create_goal`/`update_goal` **sensitive**——审批卡就是"用户明说"的机制化；`get_goal` safe。仅根会话注册（subagent 不能设目标）；已有活跃目标时 create 拒绝（单目标，防嵌套）。
+
+| 工具 | 参数 | 说明 |
+|------|------|------|
+| `create_goal` | `text` 必填；`acceptance?`（字符串数组） | 落 `GoalLoopHost.set`（armed + 首轮入队），与 `/goal <text> verify:` 同路径；带验收命令时沿用沙箱 fail-closed 检查 |
+| `get_goal` | 无参 | 当前目标视图：状态、轮位、预算消耗、最近判定意见、验收命令、armed |
+| `update_goal` | `action`（complete/pause/resume/stop）必填；`note?` | **complete 只请求立即判定**（判定器裁决 met 才落终态，not_met 带意见续跑——模型永不自判完成）；pause=去 armed；resume=重新 armed+立即检查；stop=映射 userStop（掐活跃 run、清队列） |
+
+### todo 两件
+
+`safe`（清单是模型自有的草稿状态，不是能力边界；write `serial`、read `parallel`）。会话级持久：每次写入落一条 `todo.written` 事件（全量快照、后写胜出），投影 `meta.todo`，审计页有 todo 行；跨 run 存活、压缩后可用 `todo_list_read` 读回（压缩摘要会提示）。主线与 subagent 都注册，各会话各清单。与团队任务板（协作）、/goal（用户目标循环）是三个东西。
+
+| 工具 | 参数 | 说明 |
+|------|------|------|
+| `todo_list_write` | `todos`（TodoItem 数组：`content` + `status`）必填 | **整单替换**（无条目 id，后写胜出）；空数组=清空；返回条数摘要供自查漏行 |
+| `todo_list_read` | 无参 | 读回当前清单（未写入过或已清空时返回空态文案） |
+
+- 上限：50 条、单条 200 字符、总 4000 字符，超限拒绝并说明。
+- 默认同时只允许一条 `in_progress`（清单如实反映当前动作）；配置 `todo.allowParallelInProgress: true` 松开（并行 subagent 流的逃生口）。
+
+### cron 模型面四件
+
+模型面对既有调度器的投影（与 HTTP `/cron` 路由、WebUI cron 页同域同表）。三个写件 **sensitive**——审批卡上完整可见 name/prompt/调度，用户批准=明说（既定纪律：用户没开口，模型绝不建定时任务）；`cron_list` safe。
+
+| 工具 | 参数 | 说明 |
+|------|------|------|
+| `cron_create` | `name`、`prompt` 必填；`cron`（标准 5 段）与 `delayMinutes`（1–525600）**恰好二选一** | 触发即新建会话以 prompt 为用户消息，prompt 描述明确要求自包含 |
+| `cron_list` | 无参 | 全量列表：id、调度形态、启用、下次运行、上次结果 |
+| `cron_update` | `id` + 至少一个字段（`name`/`prompt`/`cron`/`delayMinutes`/`enabled`） | 改 `cron` 或 `delayMinutes` 即转换形态并从现在重排；停用不删记录 |
+| `cron_delete` | `id` | 物理删除（与 HTTP DELETE 同语义） |
+
+- **delayMinutes 一次性形态**：`kind:"delay"` 落表（存相对分钟数），触发一次后自动 `enabled=false` 保留记录、永不重排——相对通道是防"模型自算绝对 cron、刚过去的一次性时刻静默滚一年"坑的硬约束（两家对标 harness 源码立规实证）。
+- **防递归**：`trigger:"cron"` 的 run（定时触发的会话）只注册 `cron_list`，三个写工具不进面——定时会话不能再给自己安排后继。
+- **不带 model 参数**：单条调度的模型覆盖是花费面决定，留给用户的 HTTP/CLI 面。
+- 无效 cron 表达式：返回 cron-parser 原始错误（与 HTTP 400 同文案）。
 
 ### subagent_run
 
@@ -346,14 +449,30 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - 等待上限默认 10 分钟：超时返回"用户未在限时内回答"，并提示不要重复调用、信息仍不可缺时基于合理假设继续并说明假设。
 - run 中止时返回错误（中止不算回答）；正常返回按题号列答案，没答的题标注（未回答）。
 
+## 工具披露分层（tool_search）
+
+工具在注册声明（risk/concurrency）之外还有第三个属性 `exposure`（`tools/exposure.ts` 的正本表，默认 full）：
+
+| 层 | 形态 | 放什么 |
+|----|------|--------|
+| **full** | 完整 schema 进每请求的 tools 数组 | bash、fs 四件、grep/glob、ask、skill 两件、todo 两件、tool_search 本体 |
+| **directory** | 系统提示词"工具目录"节：名字+一行描述；**可直呼**（运行时参数校验兜底），参数拿不准用 tool_search 查 | web 两件、memory 两件、session/history 检索、subagent 两件、process 三件、cron 四件、goal 三件、skill_create |
+| **deferred** | **只列名字**：内置低频工具的名字进系统提示词目录节的一行名单（稳定文本）；MCP 工具名字列在 `tool_search` 自己的描述里（设计好的唯一缓存断点）。描述与 schema 一律不给，经 `tool_search` 查询后调用 | 团队七件 + **全部 MCP 工具**（连接增删不再动 tools 数组与稳定提示段，前缀缓存全程稳定） |
+
+- **tool_search**（safe/parallel）：Okapi BM25（k1 1.2/b 0.75）索引=名字拆词+描述+顶层参数名（schema 正文不算）；精确名直配第一；稀有词门+长查询覆盖率门防误召回；CJK 二元切分（中文友好）。返回完整工具卡（名字+描述+全参 schema+来源）。
+- **真提升**：命中的 defs 经执行器上下文的 promote 缝注入本 run 活跃集——下一请求的 tools 数组带上，模型直呼、可并行、逐调用审计照旧（不走折叠转发的桥）。
+- 调完全 deferred 且未提升的名字：`unknown tool` + 提示可用 tool_search 检索；directory 名字直呼有效。
+- **分层清单是静态的、人工评审的**：调用频率持续记录，但层级只在批次评审中调整——tools 数组与目录节都是前缀缓存成分，即时重排等于反复断缓存。
+- readonly 裁剪与 subagent 白名单先于分层投影（先来的裁剪永远赢）。
+
 ## 工具可见性裁剪
 
 | 场景 | 裁剪 |
 |------|------|
 | subagent 的 run（`childRun`） | 删 `memory_save`（记忆是主线的职责）；永不带 `subagent_run`（单层委派） |
-| readonly 权限模式 | 删全部 sensitive 工具（`exec` / `fs_write` / `fs_edit`）；可见范围缩小，但权限判定仍是边界 |
+| readonly 权限模式 | 删全部 sensitive 工具（`bash` / `fs_write` / `fs_edit`）；可见范围缩小，但权限判定仍是边界 |
 
-团队工具的注册条件按身份分化：`lead` 身份（含未建队的主线会话，即"预备组长"，见 [agent-team](../core/agent-team.md)）注册全部七个；`member` 身份注册 `send_message` / `list_agents` / `task_*` 五个（不含建队/添加）；不在团队里的会话（job 会话、非组员的 subagent 会话）一个都没有。
+团队工具的注册条件按身份分化：`lead` 身份（含未建队的主线会话，即"预备组长"，见 [agent-team](../core/agent-team.md)）注册全部七个；`member` 身份注册 `send_message` / `list_agents` / `task_*` 五个（不含建队/添加）；不在团队里的会话（cron 会话、非组员的 subagent 会话）一个都没有。
 
 ## MCP 工具
 

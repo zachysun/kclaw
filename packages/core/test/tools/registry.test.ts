@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createBuiltinTools, dropSensitiveTools } from "../../src/tools/index.js"
+import { ProcessRegistry } from "../../src/process/registry.js"
 import type { MemorySystem } from "../../src/memory/system.js"
 import type { ToolDefinition } from "../../src/provider/types.js"
 
@@ -27,18 +28,20 @@ beforeEach(() => {
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
 const ALL_TOOLS = [
-  "exec", "fs_read", "fs_list", "fs_write", "fs_edit",
+  "bash", "fs_read", "fs_list", "fs_write", "fs_edit", "grep", "glob",
   "web_search", "web_fetch", "memory_save", "memory_search",
   "session_search", "history_search", "skill_read", "skill_list",
 ]
 
 /** required arrays per tool (task brief); checked as sets. */
 const REQUIRED: Record<string, string[]> = {
-  exec: ["command"],
+  bash: ["command"],
   fs_read: ["path"],
   fs_list: ["path"],
   fs_write: ["path", "content"],
   fs_edit: ["path", "old", "new"],
+  grep: ["pattern"],
+  glob: ["pattern"],
   web_search: ["query"],
   web_fetch: ["url"],
   memory_save: ["text"],
@@ -54,7 +57,7 @@ describe("builtin tool registry", () => {
     expect([...registry.tools.keys()].sort()).toEqual([...ALL_TOOLS].sort())
     expect(registry.toolDefs.map((d) => d.name).sort()).toEqual([...registry.tools.keys()].sort())
   })
-  it("a spawner adds subagent_run to the mainline surface (13 tools)", () => {
+  it("a spawner adds subagent_run to the mainline surface (15 tools)", () => {
     const withSpawner = createBuiltinTools({
       workspace: dir,
       memoryCtx: {
@@ -119,7 +122,7 @@ describe("builtin tool registry", () => {
     // memory_save 只收 text（多余字段忽略）
     expect(prop("memory_save", "text")).toEqual({ type: "string", description: expect.any(String) })
     expect(prop("memory_search", "limit")).toEqual({ type: "integer", minimum: 1, maximum: 20 })
-    for (const tool of ["exec", "fs_read", "fs_list", "fs_write", "fs_edit", "web_fetch", "memory_save", "memory_search", "session_search", "skill_read"]) {
+    for (const tool of ["bash", "fs_read", "fs_list", "fs_write", "fs_edit", "web_fetch", "memory_save", "memory_search", "session_search", "skill_read"]) {
       expect(prop(tool, REQUIRED[tool][0])).toEqual({ type: "string", description: expect.any(String) })
     }
   })
@@ -127,12 +130,16 @@ describe("builtin tool registry", () => {
     expect(JSON.parse(JSON.stringify(registry.toolDefs))).toHaveLength(ALL_TOOLS.length)
   })
   it("risk/concurrency classification carried into the map", () => {
-    expect(registry.tools.get("exec")!.risk).toBe("sensitive")
-    expect(registry.tools.get("exec")!.concurrency).toBe("serial")
+    expect(registry.tools.get("bash")!.risk).toBe("sensitive")
+    expect(registry.tools.get("bash")!.concurrency).toBe("serial")
     expect(registry.tools.get("fs_write")!.risk).toBe("sensitive")
     expect(registry.tools.get("fs_read")!.concurrency).toBe("parallel")
     expect(registry.tools.get("memory_save")!.risk).toBe("safe")
     expect(registry.tools.get("web_search")!.concurrency).toBe("parallel")
+    expect(registry.tools.get("grep")!.risk).toBe("safe")
+    expect(registry.tools.get("grep")!.concurrency).toBe("parallel")
+    expect(registry.tools.get("glob")!.risk).toBe("safe")
+    expect(registry.tools.get("glob")!.concurrency).toBe("parallel")
   })
 
   describe("dropSensitiveTools (readonly visibility)", () => {
@@ -152,9 +159,9 @@ describe("builtin tool registry", () => {
         subagent: { spawner: vi.fn(), parentSessionId: "ses_1" },
       })
       dropSensitiveTools(tools, toolDefs)
-      // sensitive today: exec, fs_write, fs_edit — everything safe survives,
+      // sensitive today: bash, fs_write, fs_edit — everything safe survives,
       // including the safe subagent pair
-      expect(tools.has("exec")).toBe(false)
+      expect(tools.has("bash")).toBe(false)
       expect(tools.has("fs_write")).toBe(false)
       expect(tools.has("fs_edit")).toBe(false)
       expect(tools.has("fs_read")).toBe(true)
@@ -174,5 +181,40 @@ describe("builtin tool registry", () => {
       dropSensitiveTools(tools, toolDefs)
       expect([...tools.keys()]).toEqual(["fs_read"])
     })
+  })
+})
+
+describe("background process surface", () => {
+  const mk = (processes?: Parameters<typeof createBuiltinTools>[0]["processes"]) =>
+    createBuiltinTools({
+      workspace: dir,
+      memoryCtx: {
+        system: {
+          triggerImmediate: vi.fn(async () => undefined),
+          searchAll: vi.fn(async () => []),
+        } as unknown as MemorySystem,
+        sessionId: "ses_1",
+        workdir: dir,
+        immediateEnabled: false,
+      },
+      tavilyApiKey: "tvly-test",
+      sessionId: "ses_1",
+      ...(processes === undefined ? {} : { processes }),
+    })
+
+  it("a registry wires the process trio (safe) and bash background passthrough", () => {
+    const reg = mk(new ProcessRegistry())
+    expect(reg.tools.has("process_list")).toBe(true)
+    expect(reg.tools.has("process_output")).toBe(true)
+    expect(reg.tools.has("process_kill")).toBe(true)
+    expect(reg.tools.get("process_list")!.risk).toBe("safe")
+    expect(reg.tools.get("process_kill")!.concurrency).toBe("serial")
+  })
+
+  it("no registry → no process tools, surface unchanged", () => {
+    const bare = mk()
+    expect(bare.tools.has("process_list")).toBe(false)
+    expect(bare.tools.has("process_output")).toBe(false)
+    expect(bare.tools.has("process_kill")).toBe(false)
   })
 })

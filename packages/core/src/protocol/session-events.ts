@@ -8,7 +8,7 @@ import type { Message, StopReason, Usage } from "./messages.js"
 import type { RunTrigger } from "./events.js"
 import type { TaskSnapshot } from "./team.js"
 
-export interface SessionCreatedEvent { type: "session.created"; at: string; title: string; workdir?: string; jobId?: string; /** 创建时固化的权限模式快照（config permissions.defaultMode）；不写时 default。 */ mode?: import("../permissions/modes.js").PermissionMode; /** 父会话（subagent 派生关系）：设置即子会话——列表默认过滤、记忆提取排除、用量归组到父。 */ parentSessionId?: string }
+export interface SessionCreatedEvent { type: "session.created"; at: string; title: string; workdir?: string; cronId?: string; /** 创建时固化的权限模式快照（config permissions.defaultMode）；不写时 default。 */ mode?: import("../permissions/modes.js").PermissionMode; /** 父会话（subagent 派生关系）：设置即子会话——列表默认过滤、记忆提取排除、用量归组到父。 */ parentSessionId?: string }
 export interface SessionRenamedEvent { type: "session.renamed"; at: string; title: string; /** 触发来源：auto = autoname 生成，manual = 用户改名；旧事件无此字段按 manual 理解。 */ source?: "auto" | "manual" }
 export interface SessionDeletedEvent { type: "session.deleted"; at: string }
 export interface SessionRestoredEvent { type: "session.restored"; at: string }
@@ -52,7 +52,7 @@ export interface SandboxCheckedEvent {
   type: "sandbox.checked"; at: string
   /** config 是否开启沙箱（sandbox.enabled）。 */
   enabled: boolean
-  /** 检测结果：沙箱可用（exec 工具实际被包裹）；配置关闭时恒 false（fail-closed）。 */
+  /** 检测结果：沙箱可用（bash 工具实际被包裹）；配置关闭时恒 false（fail-closed）。 */
   available: boolean
   /** 不可用原因（仅 available:false 时可能带；配置关闭时不含——那是主动选择）。 */
   unavailableReason?: string
@@ -152,4 +152,16 @@ export interface GoalCheckedEvent {
 
 export type GoalEvent = GoalSetEvent | GoalClearedEvent | GoalCheckedEvent
 
-export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionForkedEvent | SessionSetEvent | MessageEvent | MessageTruncatedEvent | CompactionEvent | MemoryEvent | SkillEvent | SystemEvent | SandboxCheckedEvent | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent | TeamAuditEvent | GoalEvent
+/**
+ * todo 快照写入（模型自组织的会话级清单）：全量替换、后写胜出——一个事件
+ * 就是完整可审计的状态，重放/审计/UI 零合并逻辑。挂会话（不刷 updatedAt，
+ * 与 skill/memory 审计事件同约定：清单不是对话活动）；fork 复制历史即天然
+ * 继承快照，分叉后各自独立。
+ */
+export interface TodoItem {
+  content: string
+  status: "pending" | "in_progress" | "completed"
+}
+export interface TodoWrittenEvent { type: "todo.written"; at: string; todos: TodoItem[] }
+
+export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionForkedEvent | SessionSetEvent | MessageEvent | MessageTruncatedEvent | CompactionEvent | MemoryEvent | SkillEvent | SystemEvent | SandboxCheckedEvent | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent | TeamAuditEvent | GoalEvent | TodoWrittenEvent

@@ -1,4 +1,4 @@
-# events — 总线事件清单（40 种）
+# events — 总线事件清单（43 种）
 
 > 权威来源：`packages/core/src/protocol/events.ts`（payload 接口同文件）。投递与订阅机制见 [realtime](../server/realtime.md)，设计取舍见 [protocol](../core/protocol.md)。
 
@@ -12,7 +12,8 @@ export type EventType =
   | "run.started" | "run.completed" | "run.failed"
   | "message.created" | "message.completed"
   | "message.truncated"
-  | "job.started" | "job.completed" | "job.failed"
+  | "cron.started" | "cron.completed" | "cron.failed"
+  | "process.started" | "process.completed" | "process.failed"
   | "session.appended"
   // 会话元数据
   | "session.renamed"
@@ -55,7 +56,7 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 
 | 分组 | 事件 | 数量 |
 |------|------|------|
-| 生命周期 | run.started / run.completed / run.failed；message.created / message.completed / message.truncated；job.started / job.completed / job.failed；session.appended | 10 |
+| 生命周期 | run.started / run.completed / run.failed；message.created / message.completed / message.truncated；cron.started / cron.completed / cron.failed；process.started / process.completed / process.failed；session.appended | 13 |
 | 会话元数据 | session.renamed | 1 |
 | 流式 | text、thinking、tool_call 各 created/delta/completed；tool_result 的 created/delta/completed；attachment.created / attachment.completed | 14 |
 | 模型调用 | llm.started / llm.completed / llm.failed | 3 |
@@ -70,15 +71,18 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 
 | 事件 | payload 字段 |
 |------|--------------|
-| `run.started` | `trigger`（user/job/agent/team/goal） |
+| `run.started` | `trigger`（user/cron/agent/team/goal） |
 | `run.completed` | `stopReason`、`usage`（全程累计） |
 | `run.failed` | `error { code, message }` |
 | `message.created` | `message`（Message 全量） |
 | `message.completed` | `message`（终稿快照，持久化之后才发） |
 | `message.truncated` | `fromMessageId`（编辑重试/重新生成的截断广播） |
-| `job.started` | `jobId` |
-| `job.completed` | `jobId`、`summary` |
-| `job.failed` | `jobId`、`error { code, message }` |
+| `cron.started` | `cronId` |
+| `cron.completed` | `cronId`、`summary` |
+| `cron.failed` | `cronId`、`error { code, message }` |
+| `process.started` | `processId`、`sessionId`、`command` |
+| `process.completed` | `processId`、`sessionId`、`exitCode` |
+| `process.failed` | `processId`、`sessionId`、`error` |
 | `session.appended` | `eventType`（刚写入 events.jsonl 的会话事件类型；先写入后广播） |
 | `session.renamed` | `title`、`source?`（auto=自动命名；不传视为 manual=用户或路由改名） |
 | `text.created` / `text.completed` | `messageId`、`block`（BlockPayload） |
@@ -118,7 +122,8 @@ QuestionSpec：`{ text, options?, multiSelect? }` —— options 存在时从选
 | compaction.started / compaction.completed | core 压缩引擎 `Compactor`（`session/compactor.ts`） |
 | memory.written | core 的 MemoryPipeline（`memory/pipeline.ts`，经组装的 emit hook） |
 | hook.failed | core hook 系统（`hooks/runner.ts` 执行失败 + `hooks/registry.ts` 装载失败） |
-| job.* | server 的 `scheduler-tick.ts` |
+| cron.* | server 的 `scheduler-tick.ts` |
+| process.* | core 的 ProcessRegistry（`process/registry.ts`，进程结算时） |
 | session.renamed | 内置 hook `autoname`（经 `session/autoname.ts`） |
 | session.appended | core 的 SessionStore（`session/store.ts`，每个事件写入成功后） |
 | attachment.* | 已定义、当前无发射方 |

@@ -11,12 +11,12 @@ import type {
   Block, CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, Role, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent, SessionEvent, SessionForkedEvent, SessionRenamedEvent,
   SessionRestoredEvent, SessionSetEvent, SkillEvent, SystemEvent, TeamAuditEvent, ToolGrantReason, Usage,
-  GoalEvent, GoalSetEvent, GoalCheckedEvent, GoalSnapshot,
+  GoalEvent, GoalSetEvent, GoalCheckedEvent, GoalSnapshot, TodoItem, TodoWrittenEvent,
 } from "../types.js"
 
 export type SessionMetaEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionForkedEvent | SessionSetEvent
 
-export type AuditRowKind = "block" | "compaction" | "memory" | "system" | "sandbox" | "session" | "run" | "decision" | "truncation" | "team" | "skill" | "goal"
+export type AuditRowKind = "block" | "compaction" | "memory" | "system" | "sandbox" | "session" | "run" | "decision" | "truncation" | "team" | "skill" | "goal" | "todo"
 
 /**
  * One flattened audit row. Block rows carry the owning message's role,
@@ -40,6 +40,7 @@ export type AuditRow =
   | { kind: "team"; key: string; index: number; event: TeamAuditEvent; at: string }
   | { kind: "skill"; key: string; index: number; event: SkillEvent; at: string }
   | { kind: "goal"; key: string; index: number; event: GoalEvent; at: string }
+  | { kind: "todo"; key: string; index: number; event: TodoWrittenEvent; at: string }
 
 /**
  * Flatten the event stream into rows, one per rendered event. Message events
@@ -193,6 +194,9 @@ function flattenEventInto(
     case "goal.checked":
       rows.push({ kind: "goal", key: `${index}`, index, event, at: event.at })
       break
+    case "todo.written":
+      rows.push({ kind: "todo", key: `${index}`, index, event, at: event.at })
+      break
     case "session.created":
     case "session.renamed":
     case "session.deleted":
@@ -227,10 +231,10 @@ export interface AuditFilter {
   timeTo: string
 }
 
-export const ALL_KINDS: AuditRowKind[] = ["block", "compaction", "memory", "system", "sandbox", "session", "run", "decision", "truncation", "team", "skill", "goal"]
+export const ALL_KINDS: AuditRowKind[] = ["block", "compaction", "memory", "system", "sandbox", "session", "run", "decision", "truncation", "team", "skill", "goal", "todo"]
 
 export const DEFAULT_FILTER: AuditFilter = {
-  kinds: { block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true, team: true, skill: true, goal: true },
+  kinds: { block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true, team: true, skill: true, goal: true, todo: true },
   keyword: "",
   timePreset: "all",
   timeFrom: "",
@@ -287,6 +291,8 @@ export function rowSearchText(row: AuditRow): string {
       return skillSummary(row.event)
     case "goal":
       return `${goalSummary(row.event)} ${goalFullContent(row.event)}`
+    case "todo":
+      return `${todoSummary(row.event)} ${todoFullContent(row.event)}`
   }
 }
 
@@ -479,7 +485,7 @@ export function sessionFullContent(event: SessionMetaEvent): string {
   if (event.type === "session.created") {
     if (event.mode !== undefined) lines.push(`mode: ${event.mode}`)
     if (event.workdir !== undefined) lines.push(`workdir: ${event.workdir}`)
-    if (event.jobId !== undefined) lines.push(`jobId: ${event.jobId}`)
+    if (event.cronId !== undefined) lines.push(`cronId: ${event.cronId}`)
   }
   if (event.type === "session.forked") {
     lines.push(`sourceSessionId: ${event.sourceSessionId}`)
@@ -520,7 +526,7 @@ export function blockTypeLabel(block: Block): string {
     case "tool_result":
       return "tool_result"
     case "note":
-      return `note:${block.kind}` // 具体类型可见（job/memory/system/timeout/denied/subagent），审计页不用展开就能分辨来源
+      return `note:${block.kind}` // 具体类型可见（cron/memory/system/timeout/denied/subagent），审计页不用展开就能分辨来源
     case "attachment":
       return "attachment"
   }
@@ -594,6 +600,19 @@ export function goalFullContent(event: GoalEvent): string {
     case "goal.checked":
       return JSON.stringify(event, null, 2)
   }
+}
+
+/** todo 快照写入的单行摘要（审计页 todo 行）。 */
+export function todoSummary(event: TodoWrittenEvent): string {
+  const remaining = event.todos.filter((t) => t.status !== "completed").length
+  const inProgress = event.todos.filter((t) => t.status === "in_progress").length
+  return `清单更新：${event.todos.length} 项（未完成 ${remaining}${inProgress > 0 ? `，进行中 ${inProgress}` : ""}）`
+}
+
+/** todo 快照写入的完整展开（审计行点击后的 pre）。 */
+export function todoFullContent(event: TodoWrittenEvent): string {
+  const mark = (t: TodoItem): string => (t.status === "completed" ? "[x]" : t.status === "in_progress" ? "[~]" : "[ ]")
+  return event.todos.map((t) => `${mark(t)} ${t.content}`).join("\n")
 }
 
 /** 停止/终态原因码的中文标签（快照与审计共用）。 */

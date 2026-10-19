@@ -31,7 +31,7 @@ import { SessionList } from "./sessions/SessionList.js"
 import { useDirectoryPicker } from "./sessions/useDirectoryPicker.js"
 import { DirectoryPicker } from "./sessions/DirectoryPicker.js"
 import { TrashView } from "./sessions/TrashView.js"
-import { JobsView } from "./jobs/JobsView.js"
+import { CronView } from "./cron/CronView.js"
 import { AuditView } from "./audit/AuditView.js"
 import { MemoryView } from "./memory/MemoryView.js"
 import { SkillsView } from "./skills/SkillsView.js"
@@ -44,7 +44,7 @@ import type { FsBrowseResult, SessionMeta } from "./types.js"
 
 type DaemonStatus = "connecting" | "connected" | "error"
 
-const TABS = ["chat", "jobs", "audit", "usage", "trash", "memory", "skills", "permissions", "mcp", "model", "channel"] as const
+const TABS = ["chat", "cron", "audit", "usage", "trash", "memory", "skills", "permissions", "mcp", "model", "channel"] as const
 type Tab = (typeof TABS)[number]
 
 /**
@@ -540,9 +540,9 @@ function MainShell({
           </button>
           <button
             type="button"
-            className={tab === "jobs" ? "tab active" : "tab"}
-            data-testid="tab-jobs"
-            onClick={() => switchTab("jobs")}
+            className={tab === "cron" ? "tab active" : "tab"}
+            data-testid="tab-crons"
+            onClick={() => switchTab("cron")}
           >
             任务
           </button>
@@ -722,7 +722,7 @@ function MainShell({
               </p>
             )
           )}
-          {tab === "jobs" && <JobsView api={api} />}
+          {tab === "cron" && <CronView api={api} />}
           {auditVisited && (
             // Kept mounted (offscreen, not display:none — Virtuoso needs real
             // layout) so the live stream, filters, and scroll survive tab switches.

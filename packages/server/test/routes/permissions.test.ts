@@ -35,15 +35,15 @@ describe("permissions rules routes", () => {
 
   it("GET /permissions/rules lists both scopes with their on-disk state", async () => {
     appendDecidedRule(join(home, "permissions.yaml"), {
-      rule: "exec:git push*",
+      rule: "bash:git push*",
       decidedAt: "2026-09-06T00:00:00.000Z",
-      origin: { tool: "exec", argsJson: "{}" },
+      origin: { tool: "bash", argsJson: "{}" },
     })
     const res = await app.inject({ method: "GET", url: "/permissions/rules", headers: AUTH })
     expect(res.statusCode).toBe(200)
     const body = res.json() as RulesResponse
     expect(body.global.path).toBe(join(home, "permissions.yaml"))
-    expect(body.global.rules.map((r) => r.rule)).toEqual(["exec:git push*"])
+    expect(body.global.rules.map((r) => r.rule)).toEqual(["bash:git push*"])
     // empty project scope: file absent, not tracked → rules flow through
     expect(body.project.ignored).toBe(false)
     expect(body.project.rules).toEqual([])
@@ -86,14 +86,14 @@ describe("permissions rules routes", () => {
   it("DELETE /permissions/rules removes by scope+index and returns the entry", async () => {
     const globalPath = join(home, "permissions.yaml")
     appendDecidedRule(globalPath, {
-      rule: "exec:git push*",
+      rule: "bash:git push*",
       decidedAt: "2026-09-06T00:00:00.000Z",
-      origin: { tool: "exec", argsJson: "{}" },
+      origin: { tool: "bash", argsJson: "{}" },
     })
     appendDecidedRule(globalPath, {
-      rule: "exec:ls",
+      rule: "bash:ls",
       decidedAt: "2026-09-06T00:00:01.000Z",
-      origin: { tool: "exec", argsJson: "{}" },
+      origin: { tool: "bash", argsJson: "{}" },
     })
 
     const res = await app.inject({
@@ -103,10 +103,10 @@ describe("permissions rules routes", () => {
       payload: { scope: "global", index: 0 },
     })
     expect(res.statusCode).toBe(200)
-    expect((res.json() as { removed: { rule: string } }).removed.rule).toBe("exec:git push*")
+    expect((res.json() as { removed: { rule: string } }).removed.rule).toBe("bash:git push*")
 
     const after = await app.inject({ method: "GET", url: "/permissions/rules", headers: AUTH })
-    expect((after.json() as RulesResponse).global.rules.map((r) => r.rule)).toEqual(["exec:ls"])
+    expect((after.json() as RulesResponse).global.rules.map((r) => r.rule)).toEqual(["bash:ls"])
   })
 
   it("DELETE /permissions/rules validates scope and index, and 404s out of range", async () => {

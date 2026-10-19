@@ -23,7 +23,7 @@ function msgEvent(
 }
 
 const TEXT: Block = { id: "b1", type: "text", text: "你好世界" }
-const TOOL_CALL: Block = { id: "b2", type: "tool_call", callId: "call_1", name: "exec", args: {}, argsJson: '{"command":"ls"}' }
+const TOOL_CALL: Block = { id: "b2", type: "tool_call", callId: "call_1", name: "bash", args: {}, argsJson: '{"command":"ls"}' }
 const TOOL_RESULT: Block = { id: "b3", type: "tool_result", callId: "call_1", status: "ok", output: "file.txt", durationMs: 1250 }
 
 const COMPACTION: CompactionEvent = {
@@ -45,7 +45,7 @@ const RUN_FAILED: RunEndedEvent = {
 }
 const DECIDED: PermissionDecidedEvent = {
   type: "permission.decided", at: "2026-09-08T10:00:30.000Z", confirmationId: "conf_1",
-  decision: "once", by: "cli", tool: { callId: "call_1", name: "exec", argsJson: '{"command":"ls"}' },
+  decision: "once", by: "cli", tool: { callId: "call_1", name: "bash", argsJson: '{"command":"ls"}' },
 }
 
 // ---------- flattenAudit ----------
@@ -156,7 +156,7 @@ function kindsFilter(off: AuditRow["kind"]): AuditFilter {
   return {
     ...DEFAULT_FILTER,
     kinds: {
-      block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true, team: true, skill: true, goal: true,
+      block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true, team: true, skill: true, goal: true, todo: true,
       [off]: false,
     },
   }

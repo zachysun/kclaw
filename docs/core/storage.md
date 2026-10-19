@@ -9,7 +9,7 @@
 ## 设计决策
 
 - **单一根目录容纳全部状态。** 配置、会话、记忆、任务、附件、日志全在同一个根目录下，根目录可以整体重定向——解析顺序是：显式参数 > `KCLAW_HOME` 环境变量 > `~/.kclaw`。环境变量的空白字符串视为未设置：用 `??` 判断时，空串会被当成有效值，导致所有路径变成相对当前目录而不是回退到 `~/.kclaw`；这条规则来自一次实际故障的修正（`envHome()`）。
-- **只建目录，不建文件。** `resolvePaths` 用 `mkdirSync(recursive)` 创建目录树，但 `config.json`、`jobs.db` 等文件只是路径字符串，不在这里创建——文件由各自的所有者在首次写入时产生（`SessionStore`/`MemorySystem`/`JobScheduler` 的构造函数建目录并初始化自己的数据库）。
+- **只建目录，不建文件。** `resolvePaths` 用 `mkdirSync(recursive)` 创建目录树，但 `config.json`、`cron.db` 等文件只是路径字符串，不在这里创建——文件由各自的所有者在首次写入时产生（`SessionStore`/`MemorySystem`/`CronScheduler` 的构造函数建目录并初始化自己的数据库）。
 - **配置深合并，默认值永不被污染。** `loadConfig` 把文件内容深合并到默认值上，且两个分支都从 `structuredClone(defaultConfig)` 开始——否则返回值会与导出的 `defaultConfig` 共享嵌套引用，调用方任意一处 `cfg.permissions.allow.push()` 都会改掉进程级的默认值。合并规则（`deepMerge`）：普通对象按键递归合并，数组与标量整体替换，`undefined` 跳过，两个输入都不被修改。
 - **配置无效时报错，而不是静默回退。** `config.json` 解析失败直接抛错（`invalid json in <path>: ...`），文件内容不是对象映射也抛错。不做静默回退——悄悄改用默认值意味着用户配置的权限规则在无提示的情况下失效，比启动失败更危险。文件缺失或内容为空则返回默认值，这是首次使用的正常路径。
 - **`config.json` 是唯一的形态配置文件，密钥另存 `credentials.json`。** 读取只认 `config.json`；写入（CLI wizard、WebUI 保存）也只写 `config.json`，权限 0600。密钥类字段（provider 条目的 `apiKey`、`web.tavilyApiKey`）经 `saveConfig` 时**不写入 config.json**——它们写进同目录的 `credentials.json`（0600），config.json 里留空串。`credentials.json` 的形状：`{ providers: { <条目名>: { apiKey } }, web: { tavilyApiKey? } }`。`loadConfig` 读入 config 后把凭据文件里的值合并回来；同一条目两边都有值时**凭据文件优先**（config 内联 key 只是首次保存前的过渡读法，下一次保存就搬进凭据文件；指向已删除条目的引用忽略）。凭据文件损坏时警告并当空文件处理（不挡启动）。`saveConfig` **始终**重写凭据文件（含空对象）：provider 删除后它的 key 必须同时离开磁盘，不能留一份陈旧文件继续生效。
@@ -36,10 +36,11 @@ export function resolvePaths(home?: string): KclawPaths
 | `<home>/skills/` | 全局技能目录（每个子目录是一个技能，含 `SKILL.md`；软链接穿透加载；`.links.json` 旁挂文件记录复用链接与自定义检测目录；项目级技能在工作区 `.kclaw/skills/`，见 [skills](./skills.md)） | 用户手写或经技能页复用写入；每个 run 重新扫描读取 |
 | `<home>/hooks/` | 用户 hook 目录（每个文件是一个 hook，`export const hook` + default 函数；见 [hooks](./hooks.md)） | 用户手写；每个 run 重新扫描读取 |
 | `<home>/sessions/<id>/` | 每会话一个目录（events.jsonl + meta.json + queue.jsonl，分工见下节） | SessionStore（events.jsonl 是唯一权威数据、meta.json 是派生摘要、queue.jsonl 是运行态、整文件重写） |
-| `<home>/jobs.db` | 定时任务表 | JobScheduler |
+| `<home>/cron.db` | 定时任务表 | CronScheduler |
 | `<home>/usage.db` | 每次 LLM 运行的 token 用量记录 | UsageStore |
 | `<home>/attachments/<id>/` | 附件外存目录（每会话一个子目录） | server 上传路由 `routes/attachments.ts`；运行时只读挂载 |
-| `<home>/spill/` | 工具输出溢出目录：exec / web_fetch 截断输出时，把捕获到的全量输出写到这里，给模型的截断视图附带 fs_read 定位行 | core `tools/spill.ts`（单文件上限 10 MiB，超出部分不保留）；目录在权限引擎 readRoots 内，`fs_read` 可直接读 |
+| `<home>/spill/` | 工具输出溢出目录：bash / web_fetch / grep / glob 截断输出时，把捕获到的全量输出写到这里，给模型的截断视图附带 fs_read 定位行；后台进程（bash run_in_background）的输出也流式写在这里（`proc-<id>.txt`，文件偏移即 process_output 的游标） | core `tools/spill.ts`（单文件上限 10 MiB，超出部分不保留）；目录在权限引擎 readRoots 内，`fs_read` 可直接读 |
+| `<home>/process-notices.jsonl` | 后台进程未送达通知日志：进程结算时追加、通知投递成功后重写删除；daemon 重启时补发（活进程组重进注册表、死的补发通知） | core `process/registry.ts` |
 | `<home>/logs/` | 日志目录；当前写入方是 MCP：stdio server 的 stderr 抽干写入 `logs/mcp/<server>.log`（0600，单文件封顶 1 MB（1,000,000 字节），见 [mcp](./mcp.md)） | McpManager（`stderrLogDir`） |
 | `<home>/search.db` | 跨会话消息全文索引（SQLite FTS5，`history_search` 与 `GET /search` 的检索数据来源，见 [tools](./tools.md)） | HistorySearchIndex（daemon 组装，随消息实时写入 + 启动回填） |
 | `<home>/daemon.json` | daemon 存活标识（server 侧） | `launchDaemon` |
@@ -58,7 +59,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `providers.default` | `""` | 默认 provider 名，指向 entries 里的一条 |
 | `providers.entries` | `{}` | `Record<名, { format?, baseUrl, apiKey, model, contextWindow?, maxOutput? }>`。一个条目是一个可直连的端点加它服务的那个模型：`format` 选 API 协议（`openai` = OpenAI 兼容 chat-completions，默认；`anthropic` = Anthropic Messages，见 [provider](./provider.md)），`baseUrl` 是端点根、`apiKey` 为空表示端点免鉴权（不发鉴权头）、`model` 是请求里下发的模型 id。daemon 启动时解析默认条目（config 优先，`KCLAW_LLM_BASE_URL` / `KCLAW_LLM_API_KEY` / `KCLAW_LLM_MODEL` 环境变量补空）。`contextWindow` 参与压缩 budget 的 min 解析、`maxOutput` 随请求下发 max_tokens（见 [compaction](./compaction.md)） |
 | `providers.timeoutMs` | `120000` | 单次 LLM 请求超时（`DEFAULT_LLM_TIMEOUT_MS`） |
-| `permissions.allow` / `deny` | `[]` / `["exec:sudo*", "exec:rm -rf*"]` | 权限规则，见 [permissions](./permissions.md) |
+| `permissions.allow` / `deny` | `[]` / `["bash:sudo*", "bash:rm -rf*"]` | 权限规则，见 [permissions](./permissions.md) |
 | `permissions.confirmTimeoutMs` | `120000` | 人工确认的等待上限，超时按拒绝处理 |
 | `permissions.sessionGrants` | `true` | 会话内「仅本次允许」的记忆是否生效（run 级，见 [permissions](./permissions.md) 第 11 节） |
 | `permissions.autoLearnThreshold` | `3` | auto 模式的归纳阈值：同一操作被连续 `once` 批准多少次后，自动保存为项目档规则；`0` 关闭归纳（auto 模式的判定链保留） |
@@ -72,9 +73,10 @@ export function resolvePaths(home?: string): KclawPaths
 | `web.timeoutMs` | `20000` | 每次网络抓取（搜索与网页）的 AbortSignal 超时，卡死的主机不能拖住一个 run |
 | `web.allowPrivateNetworks` | `false` | 设为 `true` 时豁免 web_fetch 对私网/回环目标的拒绝（SSRF 防护，例如允许抓取本机 Ollama 端点），由 run 组装传入工具 |
 | `usage.prices` | `{}` | 模型 → `{inputPerM?, outputPerM?, cacheReadPerM?, cacheWritePerM?}`：每百万 token 的美元单价，用量记录算成本用；没有价格条目的模型成本按 0 计；没有配置缓存价时该模型即使有缓存数据也按 input 单价对总输入计（不猜折扣） |
-| `exec.timeoutMs` / `maxOutputBytes` | `60000` / `102400`（100 KiB） | exec 工具的超时与输出截断上限 |
-| `sandbox.enabled` / `writeRoots` / `network` | `true` / `[]` / `"allow"` | exec 沙箱的整体开关、追加写白名单（realpath 形态）与沙箱内网络开关（deny 时 exec 子进程断网，web 工具不受影响），见 [sandbox](./sandbox.md) |
-| `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 周期清理用（见 [jobs](./jobs.md)） |
+| `bash.timeoutMs` / `maxOutputBytes` | `60000` / `102400`（100 KiB） | bash 工具的超时与输出截断上限 |
+| `sandbox.enabled` / `writeRoots` / `network` | `true` / `[]` / `"allow"` | bash 沙箱的整体开关、追加写白名单（realpath 形态）与沙箱内网络开关（deny 时 bash 子进程断网，web 工具不受影响），见 [sandbox](./sandbox.md) |
+| `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 周期清理用（见 [cron](./cron.md)） |
+| `todo.allowParallelInProgress` | `false` | 允许多条同时 in_progress（todo_list_write 的单条校验松开口） |
 | `sessions.contextTokens` / `compactPackRatio` / `compactAheadRatio` / `compactAtRatio` / `compactPanicRatio` / `compactTargetRatio` / `toolResultKeep` | `128000` / `0.70` / `0.75` / `0.80` / `0.90` / `0.33` / `8` | 上下文压缩（见 [compaction](./compaction.md)）：token budget、省略线（发送时工具输出省略的 budget 比例）、预压线（估算发送量达 budget × 0.75 且未过红线时在迭代边界派后台压缩）、黄线（估算发送量达 budget × 0.80 即触发收尾压缩）、红线（运行中占用达 budget × 0.90 时在迭代边界触发中途压缩）、压缩后保留部分的目标比例（budget × 0.33）、发送时保留原文的最近工具结果条数。七个字段均可选：默认值、加载校验与"budget × 比例 → 绝对 token 阈值"的解析集中在压缩阈值线模块 `session/waterlines.ts`——触发四线（预压/黄/红/目标）越出 (0,1] 或次序不满足"目标 < 预压 < 黄 < 红"整组回退到默认并告警，省略线单独校验、独立回退到默认；每次 run 由 `resolveWaterlines` 解析出绝对阈值供触发 hook 与压缩引擎使用（`contextTokens` 的读取在 `resolveContextTokens`） |
 | `sessions.toolLoopMaxRepeats` | `5` | 工具死循环守卫：同一工具调用（同名同参数）连续执行达 N 次后，该次结果附加 `<system-reminder kind="loop-guard">` 提醒模型换策略（跨工具回合计数，结果改变即重置）；`0` 关闭（见 [agent-loop](./agent-loop.md)） |
 | `sessions.defaultDisposition` | `"steer"` | 不带 disposition 的 send_message 的默认处置（见 [run-manager](../server/run-manager.md)）；单个会话可经 `meta.dispositionOverride` 覆盖 |
@@ -87,7 +89,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `team.taskBoard.maxTasks` | `64` | 任务板总量上限（含终态任务），超限建任务报错 |
 | `goals.judge` | `""` | `/goal` 判定器使用的 provider 条目名（见 [goal](./goal.md)），空 = 回退会话模型线（会话级 model → 默认条目）；循环的硬性上限（轮数/token budget 等）是代码内常量，不进 config |
 | `server.port` | 无（临时端口） | daemon 的固定监听端口（1-65535）：固定后 WebUI 地址跨重启稳定，不配则每次启动由操作系统分配临时端口。bin 的 `--port` 旗标优先于此字段；固定端口被占用是硬错误（报一行原因退出，绝不静默换端口——地址悄悄漂移正是固定端口要消灭的），非法值回退到临时端口并告警。见 [daemon](../server/daemon.md) |
-| `notify.channels` | `[]` | 定时任务终态通知渠道列表；为空即关闭（零开销）。条目 `{ name?, type, url, template? }`，`type` 三种：`bark`（POST JSON `{title, body}`）、`serverchan`（POST 表单 `title`+`desp`）、`webhook`（POST JSON，正文含 title/body 及全部 job 字段）。`template` 占位符：`{{job}}` `{{statusText}}` `{{status}}` `{{summary}}` `{{sessionId}}` `{{sessionUrl}}`，未知占位符渲染为空串 |
+| `notify.channels` | `[]` | 定时任务终态通知渠道列表；为空即关闭（零开销）。条目 `{ name?, type, url, template? }`，`type` 三种：`bark`（POST JSON `{title, body}`）、`serverchan`（POST 表单 `title`+`desp`）、`webhook`（POST JSON，正文含 title/body 及全部 cron 字段）。`template` 占位符：`{{cron}}` `{{statusText}}` `{{status}}` `{{summary}}` `{{sessionId}}` `{{sessionUrl}}`，未知占位符渲染为空串 |
 | `notify.timeoutMs` | `10000` | 单次推送请求超时；推送失败只记日志、不重试 |
 | `hooks.timeoutMs` | `5000` | 单个 hook 处理函数的执行 budget（毫秒），超时按失败处理（用户 hook skip、内置 hook fatal，见 [hooks](./hooks.md)）；可选字段，默认值在 hook 链构建处补齐 |
 | `workspace` | `process.cwd()` | 工具的工作目录；daemon 的 cwd 由启动方决定，单个会话可经 `meta.workdir` 覆盖 |
@@ -113,7 +115,7 @@ export interface KclawPaths {
   hooksDir: string                // <home>/hooks —— 用户 hook 目录（见 hooks.md）
   memoryDir: string               // <home>/memory
   sessionsDir: string             // <home>/sessions（每会话一个子目录）
-  jobsDb: string                  // <home>/jobs.db
+  cronDb: string                  // <home>/cron.db
   usageDb: string                 // <home>/usage.db
   searchDb: string                // <home>/search.db —— 跨会话消息全文索引（SQLite FTS5）
   attachmentsDir: string          // <home>/attachments（每会话一个子目录）
@@ -154,7 +156,7 @@ export function readJsonl(file: string): unknown[]
 
 每个会话一个目录 `<sessionsDir>/<id>/`，固定三个文件，由 `SessionStore`（`packages/core/src/session/store.ts`）统一管理。三个文件的分工：**events.jsonl 是唯一权威数据，meta.json 是从它推导出来的快速读取摘要，queue.jsonl 是运行态的排队消息。**
 
-- **`events.jsonl`（唯一权威数据）**：只追加的事件流，一行一个 `SessionEvent`（JSON 序列化），共 26 种事件——
+- **`events.jsonl`（唯一权威数据）**：只追加的事件流，一行一个 `SessionEvent`（JSON 序列化），共 27 种事件——
   - 会话生命周期 6 种：`session.created`（含创建时固化的初始权限模式 `mode`；subagent 会话还带 `parentSessionId`）、`session.renamed`、`session.deleted`、`session.restored`、`session.set`（model / mode / disposition 的会话级设置）、`session.forked`（fork 血缘：来源会话、分叉点消息、初始标题，只落在新会话流上，投影出 `meta.forkedFrom`；fork 复制的历史段本身经 `writeEventsRaw` 直写，不走这条常规追加路径，见下文 fork 小节）。
   - 内容类 7 种：`message`（一条消息）、`message.truncated`（编辑重试/重新生成的截断标记：从 `fromMessageId` 起的所有消息退出对话视图；事件流只追加这条标记、不改写任何历史行，可见性是读取端投影）、`compaction`（一次压缩的审计）、`memory`（一次记忆写入的审计）、`skill`（一条技能提案审计——提案的产生与治理状态流转各落一条，只做记录、权威数据在 `.proposals/` 的提案文件，见 [skills](./skills.md)）、`system`（一条系统提示词审计，每次对话运行落一条，附带 stable/live 两段拼装文本）、`sandbox.checked`（一条沙箱状态审计——每次对话运行检测后落一条 `{enabled, available, unavailableReason?}`）。
   - 运行档案 3 种：`run.started` / `run.ended`（每 run 一对，把该 run 的消息事件夹成一轮边界；失败 run 也落 `run.ended`，起点必有终点）、`permission.decided`（每次人工确认裁决的记录；被中止的确认不落）。<br>运行档案与 `system` / `sandbox.checked` 一样只写事件流、不进 meta 投影、不推进 `updatedAt`。`message.truncated` 不同（它是用户可见的会话动作，会推进 `updatedAt`；且当截断起点越过压缩锚点（`compaction.upto`）时，部分已压缩的历史被丢弃，压缩投影随之一并清除——摘要无法再代替被隐藏的消息。不越过锚点的尾部截断是常规路径，不碰压缩投影）。
@@ -170,7 +172,7 @@ export function readJsonl(file: string): unknown[]
 | 字段 | 含义 |
 |------|------|
 | `id` / `title` / `createdAt` / `updatedAt` | 会话标识、标题、创建/更新时间 |
-| `jobId?` | 创建本会话的定时任务；普通会话没有 |
+| `cronId?` | 创建本会话的定时任务；普通会话没有 |
 | `workdir?` | 会话的工作目录覆盖 |
 | `model?` | 会话级模型覆盖；空或默认回退到 daemon 默认 |
 | `mode?` | 会话权限模式，`"readonly" \| "default" \| "acceptEdits" \| "trusted" \| "auto"` 五档，默认 default（见 [permissions](./permissions.md)） |
@@ -233,10 +235,10 @@ flowchart TD
 
 ```yaml
 rules:
-  - rule: "exec:git push*"        # 收紧后的规则（exec = 首词+子命令前缀；路径工具 = realpath 精确路径；其余 = 工具级）
+  - rule: "bash:git push*"        # 收紧后的规则（bash = 首词+子命令前缀；路径工具 = realpath 精确路径；其余 = 工具级）
     decidedAt: "2026-09-07T08:00:00.000Z"   # ISO-8601
     origin:                        # 触发裁决的出处
-      tool: "exec"
+      tool: "bash"
       argsJson: '{"command":"git push origin main"}'
       sessionId: "ses_…"
     source: "auto"                 # 可选：auto 模式归纳（默认/缺失 = 人工「总是允许」）
@@ -260,7 +262,7 @@ rules:
 
 ## 用量记录（`storage/usage.ts`）
 
-`UsageStore` 是一张只追加、不修改的 SQLite 记录表（`<home>/usage.db`，表 `usage` + `at` 列索引）：daemon 每结束一个 run 就记一行 `{sessionId, runId, model, kind, inputTokens, outputTokens, cacheReadTokens?, cacheWriteTokens?, at}`，行主键为 `u_<sessionId>_<runId>`。`kind` 列区分记账口径：`run`（主 run，usage-ledger 钩子）/ `compaction` / `autoname` / `memory` / `skill`（后台调用，runId 前缀同名）/ `goal`（判定器），`GET /usage?by=kind` 按此聚合，存量库经启动时检列 `ALTER TABLE ADD COLUMN kind TEXT NOT NULL DEFAULT 'run'` 迁移（旧行都是主 run）。除 run 本体（usage-ledger 钩子）与 /goal 判定器（runId 前缀 `goal-judge-`）外，四条后台 LLM 调用通道也把花费记进同一张表：压缩摘要（每次压缩两段调用）、会话自动命名、记忆提取与沉淀、技能提炼，runId 以通道名为前缀（`compaction-`/`autoname-`/`memory-`/`skill-`）；无归属会话、流中断（拿不到 usage）或全零 token 的调用不记。两个缓存列（`cache_read_tokens`/`cache_write_tokens`）可空：NULL = 供应商未返回该指标（**未知**，不是没命中）；旧库经启动时 `PRAGMA table_info(usage)` 检列 + `ALTER TABLE ADD COLUMN` 迁移（先例：jobs 表的 model 列），新建库 SCHEMA 直接含列。记录失败不影响业务本身：写入是同步调用，调用方自己接住错误。run 本体的记录在 usage-ledger 内建钩子里包了 try/catch，四条后台调用的记录在 server 的 chore-usage.ts 里同样包了 try/catch，usage.db 故障（磁盘满、文件损坏）时只打一行错误日志，run 照常收尾，后台调用照常进行。
+`UsageStore` 是一张只追加、不修改的 SQLite 记录表（`<home>/usage.db`，表 `usage` + `at` 列索引）：daemon 每结束一个 run 就记一行 `{sessionId, runId, model, kind, inputTokens, outputTokens, cacheReadTokens?, cacheWriteTokens?, at}`，行主键为 `u_<sessionId>_<runId>`。`kind` 列区分记账口径：`run`（主 run，usage-ledger 钩子）/ `compaction` / `autoname` / `memory` / `skill`（后台调用，runId 前缀同名）/ `goal`（判定器），`GET /usage?by=kind` 按此聚合，存量库经启动时检列 `ALTER TABLE ADD COLUMN kind TEXT NOT NULL DEFAULT 'run'` 迁移（旧行都是主 run）。除 run 本体（usage-ledger 钩子）与 /goal 判定器（runId 前缀 `goal-judge-`）外，四条后台 LLM 调用通道也把花费记进同一张表：压缩摘要（每次压缩两段调用）、会话自动命名、记忆提取与沉淀、技能提炼，runId 以通道名为前缀（`compaction-`/`autoname-`/`memory-`/`skill-`）；无归属会话、流中断（拿不到 usage）或全零 token 的调用不记。两个缓存列（`cache_read_tokens`/`cache_write_tokens`）可空：NULL = 供应商未返回该指标（**未知**，不是没命中）；旧库经启动时 `PRAGMA table_info(usage)` 检列 + `ALTER TABLE ADD COLUMN` 迁移（先例：crons 表的 model 列），新建库 SCHEMA 直接含列。记录失败不影响业务本身：写入是同步调用，调用方自己接住错误。run 本体的记录在 usage-ledger 内建钩子里包了 try/catch，四条后台调用的记录在 server 的 chore-usage.ts 里同样包了 try/catch，usage.db 故障（磁盘满、文件损坏）时只打一行错误日志，run 照常收尾，后台调用照常进行。
 
 ```ts
 // UsageAgg / UsageTotal / UsageBody（GET /usage 响应）的类型出处是 protocol/usage.ts
@@ -293,14 +295,14 @@ HTTP 出口与展示见 [http-api](../server/http-api.md) 的 `GET /usage` 与 [
 
 - **meta.json 原子写**：`writeMeta` 经 `writeFileAtomic`（临时文件 + rename）写入，meta.json 本身不会被截断；崩溃最坏残留一个 `<meta.json>.tmp` 临时文件，不影响读取。
 - **config 校验是分字段的，不是整体 schema**：文件级语法错（JSON 解析失败、根不是映射）启动即抛错；少数进事件流或影响存亡的字段在加载时逐字段校验（`permissions.defaultMode`、压缩阈值线整组、`team.*`、`server.port`——非法值回退到默认并告警一行）；其余字段不做结构校验，写错类型要到运行时的读取处才以意外方式失败。
-- **SQLite 未开 WAL**：jobs.db、记忆的 `vectors.db`（每项目 + 全局各一个）与 usage.db 都用默认日志模式。单 daemon 进程同步访问（better-sqlite3）下安全；多进程并发写同一个 home 是明确不支持的用法。进程内的同一个 vectors.db 也只有 MemoryPipeline 一个连接（检索方借用句柄）。
+- **SQLite 未开 WAL**：cron.db、记忆的 `vectors.db`（每项目 + 全局各一个）与 usage.db 都用默认日志模式。单 daemon 进程同步访问（better-sqlite3）下安全；多进程并发写同一个 home 是明确不支持的用法。进程内的同一个 vectors.db 也只有 MemoryPipeline 一个连接（检索方借用句柄）。
 - **KCLAW_HOME 只在 `resolvePaths` 读取一次**：核心层不缓存，但各调用方持有自己的解析结果；daemon 启动后改环境变量不影响已创建的路径。
 
 ---
 
 ## 关联
 
-- [jobs](./jobs.md)：jobs.db 的表结构与轮询
+- [cron](./cron.md)：cron.db 的表结构与轮询
 - [compaction](./compaction.md)：压缩状态的存放位置（meta.compaction 摘要 + 事件流里的 compaction 事件）与压缩配置字段
 - [memory](./memory.md)：memory 目录的两层结构布局（文件是权威数据、vectors.db 是派生物）
 - [protocol](./protocol.md)：Message / Block 的完整定义（message 事件的内容就是一个 Message）

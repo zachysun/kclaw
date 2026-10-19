@@ -28,7 +28,7 @@
 
 **current_tasks 锁**是"这条任务正在被执行"的可见投影：任务进入 in_progress 时写锁文件，到达终态或改主题时移除；宿主加载团队目录时做一次对账（`reconcileLocks`）——清掉任务文件已经不认的残留锁，为还在进行中的任务补写锁，崩溃遗留的锁就是一次执行被中断的痕迹。
 
-**身份反查**：团队宿主 `find()` 扫描 `.kclaw/teams/`（跳过 dot 开头的归档目录）。`config.json.leadSessionId` 命中即组长、`members` 里的子会话 id 命中即对应组员。run 组装在每次 run 前调用一次 `facade.describeSession(sessionId)`，拿到的身份决定这个 run 的一切团队特化。查询结果为 null 时分两种：不在团队里的 subagent 会话与 job 会话拿不到任何团队工具；**主线会话拿到一个"预备组长"身份**：七个工具全部注册（身份是 lead），`create_team` 由此可达，其余团队动作会被 facade 以明确的冲突报错拒绝（队还不存在）。崩溃遗留的 provisioning（添加中途断电）在组长下次被检测时按磁盘上的实际状态定为 active / failed。
+**身份反查**：团队宿主 `find()` 扫描 `.kclaw/teams/`（跳过 dot 开头的归档目录）。`config.json.leadSessionId` 命中即组长、`members` 里的子会话 id 命中即对应组员。run 组装在每次 run 前调用一次 `facade.describeSession(sessionId)`，拿到的身份决定这个 run 的一切团队特化。查询结果为 null 时分两种：不在团队里的 subagent 会话与 cron 会话拿不到任何团队工具；**主线会话拿到一个"预备组长"身份**：七个工具全部注册（身份是 lead），`create_team` 由此可达，其余团队动作会被 facade 以明确的冲突报错拒绝（队还不存在）。崩溃遗留的 provisioning（添加中途断电）在组长下次被检测时按磁盘上的实际状态定为 active / failed。
 
 ## 身份与提示词
 
@@ -50,7 +50,7 @@
 | `task_update` | 全体 | 按 revision 改任务；认领未认领任务时自动填自己的名字 |
 | `task_list` | 全体 | 列任务板全貌 |
 
-工具清单按身份收缩：不在团队里的会话（job 会话、非组员的 subagent 会话）一个都没有；组员拿上面 5 个；组员同时是子会话（`childRun`），再按 subagent 规则裁掉 `memory_save` 与 `subagent_run`（单层结构，组员不能再派 subagent，提示词里同样写明）。任务认领与状态变更必须回传 `expected_revision`（服务端 CAS 比对）；认领同时生成 `attemptId`，被取代的执行者拿着旧 id 的迟到写入会被拒绝，不会覆盖继任者的结果。
+工具清单按身份收缩：不在团队里的会话（cron 会话、非组员的 subagent 会话）一个都没有；组员拿上面 5 个；组员同时是子会话（`childRun`），再按 subagent 规则裁掉 `memory_save` 与 `subagent_run`（单层结构，组员不能再派 subagent，提示词里同样写明）。任务认领与状态变更必须回传 `expected_revision`（服务端 CAS 比对）；认领同时生成 `attemptId`，被取代的执行者拿着旧 id 的迟到写入会被拒绝，不会覆盖继任者的结果。
 
 ## 收信箱与投递
 

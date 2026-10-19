@@ -25,12 +25,14 @@
     "better-sqlite3": "^13.0.3",
     "cron-parser": "^4.9.0",
     "linkedom": "^0.18.13",
+    "picomatch": "^4.0.5",
     "ulidx": "^2.4.0",
     "yaml": "^2.5.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^20.14.0",
+    "@types/picomatch": "^4.0.3",
     "typescript": "^5.5.0",
     "vitest": "^2.1.0",
     "zod": "^4.4.3"

@@ -44,7 +44,7 @@ kclaw chat
 - **Event persistence & full audit**: tool calls with arguments, permission decisions, context injection, retrieved memory — all appended as persistent events; the audit page is a timeline view of that event stream.
 - **Context compaction**: four thresholds on context occupancy: past 70% old tool outputs are replaced with omission placeholders; past 75% a summary is pre-compacted in the background as a standby; past 80% compaction runs when a run ends; past 90% it is forced between two step calls mid-run. Compaction has the LLM summarize old messages into one summary placed at the top; the most recent messages stay verbatim.
 - **Three-tier memory**: L0 is the raw conversation, kept in the session event stream; L1 is per-project episodes, mostly extracted by the LLM from new messages at the end of each run and archived by topic into the project's topic files; L2 is global knowledge, mostly distilled by the LLM into `persona` / `wiki` / `rule` once a topic is no longer active. L2 stays resident in the context; L1 is retrieved on demand.
-- **Skills & tools**: 22 built-in tools covering file read/write/edit (`fs_read` / `fs_write` / `fs_edit`), shell command execution (`exec`), web search and fetch (`web_search` / `web_fetch`), memory and team coordination, and more; skills already installed by existing agents such as Claude Code can be reused directly.
+- **Skills & tools**: 22 built-in tools covering file read/write/edit (`fs_read` / `fs_write` / `fs_edit`), shell command execution (`bash`), web search and fetch (`web_search` / `web_fetch`), memory and team coordination, and more; skills already installed by existing agents such as Claude Code can be reused directly.
 - **Permissions & sandbox**: five permission modes: readonly (all writes and commands denied), default (each risky action confirmed one by one), acceptEdits (file writes inside the workspace allowed), trusted (no confirmation inside the sandbox and workspace), auto (judged from the user's repeated approval behavior; currently rule-based). An approval can be granted "just this once" / "for this project" / "globally"; the next similar operation is then allowed automatically.
 - **Subagent**: two types: (1) blocking — the lead agent waits for the result; (2) background — the lead agent can keep working in the meantime and is notified when the subagent finishes. A subagent is an independent session: it inherits the lead agent's working directory, uses a lean system prompt, and receives only the task description, not the lead agent's message history.
 - **Agent team**: the lead and the teammates are each independent sessions, communicating point-to-point via mailboxes, with a shared task board.
@@ -64,7 +64,7 @@ kclaw chat
 | `kclaw web` | Open the WebUI in the browser |
 | `kclaw daemon start \| stop \| status` | Daemon lifecycle |
 | `kclaw status` | Alias of `daemon status` |
-| `kclaw jobs list` | List scheduled jobs |
+| `kclaw cron list` | List scheduled crons |
 
 Inside the REPL: `/exit` to quit, `/sessions` to list sessions, `/new <title>` for a new session; Ctrl+C cancels the current run.
 
@@ -99,7 +99,7 @@ pnpm test        # vitest for every package (cli/server quick checks need pnpm b
   - [compaction](docs/core/compaction.md): context compaction
   - [goal](docs/core/goal.md): the /goal autonomous goal loop
   - [hooks](docs/core/hooks.md): the hook system
-  - [jobs](docs/core/jobs.md): cron job scheduling
+  - [cron](docs/core/cron.md): cron scheduling
   - [mcp](docs/core/mcp.md): MCP integration
   - [memory](docs/core/memory.md): the three-tier memory system
   - [permissions](docs/core/permissions.md): permissions and user approval

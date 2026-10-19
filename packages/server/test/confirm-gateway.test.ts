@@ -2,7 +2,7 @@
  * Confirmation gateway tests: the ConfirmationBroker bridging
  * websocket verdicts onto the loop's resolver, driven through a REAL app on
  * an ephemeral port (real /ws route, real RunManager on real stores, mock
- * LlmClient). Config keeps `permissions.allow` EMPTY so an exec call falls
+ * LlmClient). Config keeps `permissions.allow` EMPTY so an bash call falls
  * through to a confirmation.
  *
  * Composition pinned by these tests (verified against core agent/loop.ts):
@@ -46,7 +46,7 @@ const isAgentEvent = (f: Frame): f is Frame & AgentEvent =>
 // --- broker unit tests -------------------------------------------------------
 
 const CALL: ToolCallBlock = {
-  id: "blk_1", type: "tool_call", callId: "call_1", name: "exec",
+  id: "blk_1", type: "tool_call", callId: "call_1", name: "bash",
   args: { command: "echo hi" }, argsJson: "{\"command\":\"echo hi\"}",
 }
 
@@ -153,7 +153,7 @@ function textTurn(text: string): LlmStreamEvent[] {
 
 function execToolTurn(callId: string, command: string): LlmStreamEvent[] {
   return [
-    { type: "tool_call_started", index: 0, callId, name: "exec" },
+    { type: "tool_call_started", index: 0, callId, name: "bash" },
     { type: "tool_call_delta", index: 0, delta: JSON.stringify({ command }) },
     { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 1, outputTokens: 2 } },
   ]
@@ -208,15 +208,15 @@ async function makeGateway(
   const config = loadConfig(paths)
   config.workspace = workspace
   // These tests drive the confirmation gateway over a real WS server; the
-  // host may have an exec sandbox (macOS Seatbelt / Linux bwrap) that would
-  // auto-pass exec instead of confirming. Disable it — this suite is about
+  // host may have an bash sandbox (macOS Seatbelt / Linux bwrap) that would
+  // auto-pass bash instead of confirming. Disable it — this suite is about
   // the confirmation flow, not the sandbox.
   config.sandbox = { enabled: false, writeRoots: [] }
   config.providers = {
     default: "mock",
     entries: { mock: { baseUrl: "http://127.0.0.1:1", apiKey: "test-key", model: "mock-model" } },
   }
-  // permissions.allow stays EMPTY (the config default) → exec requires a confirmation
+  // permissions.allow stays EMPTY (the config default) → bash requires a confirmation
 
   const sessions = new SessionStore(paths.sessionsDir)
   const memory = makeMemoryFake()
@@ -324,7 +324,7 @@ describe("confirmation gateway over /ws", () => {
     const requested = (await waitFor(frames, (f) => f.type === "confirmation.requested")) as AgentEvent
     const payload = requested.payload as ConfirmationRequestedPayload
     expect(payload.confirmationId).toMatch(/^conf_/)
-    expect(payload.toolCall).toMatchObject({ type: "tool_call", name: "exec", callId: "call_1" })
+    expect(payload.toolCall).toMatchObject({ type: "tool_call", name: "bash", callId: "call_1" })
     expect(payload.risk).toBe("sensitive")
     expect(typeof payload.expiresAt).toBe("string")
 
@@ -511,7 +511,7 @@ describe("confirmation gateway over /ws", () => {
     }))
     await waitFor(frames, (f) => f.type === "confirmation.resolved_ack")
 
-    // call_2: matched by the just-decided `exec:git push*` rule? No — the
+    // call_2: matched by the just-decided `bash:git push*` rule? No — the
     // gate was built at run start, so this still asks; allow once.
     const requested2 = (await waitFor(frames, (f) =>
       f.type === "confirmation.requested" && (f.payload as ConfirmationRequestedPayload).toolCall.callId === "call_2")) as AgentEvent
@@ -544,15 +544,15 @@ describe("confirmation gateway over /ws", () => {
     // project scope: narrowed prefix + provenance, gitignored, inside the workspace
     const projectRules = loadDecidedRules(join(env.config.workspace, ".kclaw", "permissions.yaml"))
     expect(projectRules).toHaveLength(1)
-    expect(projectRules[0]!.rule).toBe("exec:git push*")
-    expect(projectRules[0]!.origin.tool).toBe("exec")
+    expect(projectRules[0]!.rule).toBe("bash:git push*")
+    expect(projectRules[0]!.origin.tool).toBe("bash")
     expect(projectRules[0]!.origin.sessionId).toBe(session.id)
     expect(readFileSync(join(env.config.workspace, ".gitignore"), "utf8")).toContain(".kclaw/permissions.yaml")
 
     // global scope: the call_3 rule landed in <home>/permissions.yaml
     const globalRules = loadDecidedRules(join(env.paths.home, "permissions.yaml"))
     expect(globalRules).toHaveLength(1)
-    expect(globalRules[0]!.rule).toBe("exec:git fetch*")
+    expect(globalRules[0]!.rule).toBe("bash:git fetch*")
   }, 30_000)
 
   it("a verdict arriving after the run aborted persists no decided rule", async () => {
@@ -607,7 +607,7 @@ describe("confirmation gateway over /ws", () => {
 
     const run = env.manager.enqueue(session.id, { userText: "执行 git 操作", trigger: "user" })
 
-    // three identical once approvals (the same narrowed key `exec:git push*`)
+    // three identical once approvals (the same narrowed key `bash:git push*`)
     for (let i = 1; i <= 3; i++) {
       const requested = (await waitFor(frames, (f) =>
         f.type === "confirmation.requested" && (f.payload as ConfirmationRequestedPayload).toolCall.callId === `call_${i}`)) as AgentEvent
@@ -628,7 +628,7 @@ describe("confirmation gateway over /ws", () => {
 
     const projectRules = loadDecidedRules(join(env.config.workspace, ".kclaw", "permissions.yaml"))
     expect(projectRules).toHaveLength(1)
-    expect(projectRules[0]!.rule).toBe("exec:git push*")
+    expect(projectRules[0]!.rule).toBe("bash:git push*")
     expect(projectRules[0]!.source).toBe("auto")
   }, 30_000)
 
@@ -717,10 +717,10 @@ describe("confirmation gateway over /ws", () => {
     const projectRules = loadDecidedRules(join(env.config.workspace, ".kclaw", "permissions.yaml"))
     expect(projectRules).toHaveLength(2)
     // the hand-written "always allow" lands unmarked (manual)…
-    const manual = projectRules.find((r) => r.rule === "exec:git fetch*")
+    const manual = projectRules.find((r) => r.rule === "bash:git fetch*")
     expect(manual?.source).toBeUndefined()
     // …while the auto-inducted one is marked
-    const auto = projectRules.find((r) => r.rule === "exec:git push*")
+    const auto = projectRules.find((r) => r.rule === "bash:git push*")
     expect(auto?.source).toBe("auto")
   }, 30_000)
 
@@ -1040,8 +1040,8 @@ describe("readonly tool visibility", () => {
     expect(seen.length).toBeGreaterThan(0)
     for (const names of seen) {
       // every tool the readonly gate would deny wholesale is gone from the
-      // model's view (sensitive today: exec, fs_write, fs_edit)
-      expect(names).not.toContain("exec")
+      // model's view (sensitive today: bash, fs_write, fs_edit)
+      expect(names).not.toContain("bash")
       expect(names).not.toContain("fs_write")
       expect(names).not.toContain("fs_edit")
       // safe tools the gate would allow stay visible

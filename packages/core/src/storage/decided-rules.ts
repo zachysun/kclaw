@@ -59,7 +59,7 @@ export const PROJECT_RULES_REL = join(".kclaw", "permissions.yaml")
  * than what the human saw, because a persisted approval must not
  * over-authorize look-alike calls:
  * - command tools: first segment's first word + subcommand as a prefix glob
- *   (`git push origin main` → `exec:git push*`; a bare `ls` stays exact) —
+ *   (`git push origin main` → `bash:git push*`; a bare `ls` stays exact) —
  *   the engine's single-segment constraint still guards chained commands;
  * - path tools: the exact resolved path;
  * - anything else (schema-less MCP tools): tool-level.

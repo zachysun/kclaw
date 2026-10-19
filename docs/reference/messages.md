@@ -54,7 +54,7 @@ export interface ToolMessage extends Message {
 
 | 值 | 含义 |
 |----|------|
-| `user` | 人（或 job、投递路径）发给模型的消息 |
+| `user` | 人（或 cron、投递路径）发给模型的消息 |
 | `assistant` | 模型产出（thinking / 文本 / 工具调用） |
 | `tool` | 工具执行结果回填 |
 
@@ -94,5 +94,5 @@ provider 归一化（`normalizeFinishReason`，OpenAI 风格 finish_reason → S
 | `confirmed` | 人工在确认卡上批准 |
 | `accept_edits` | acceptEdits 模式下工作区内的写操作 |
 | `learned` | 命中沉淀规则（auto 模式归纳写下的 learned 规则） |
-| `sandboxed` | exec 沙箱可用，沙箱内放行 |
+| `sandboxed` | bash 沙箱可用，沙箱内放行 |
 | `trusted` | trusted 模式下沙箱可用的操作 |

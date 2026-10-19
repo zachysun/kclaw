@@ -20,7 +20,7 @@ export interface QueueEntry {
   messageId: string
   disposition: SendDisposition
   text: string
-  trigger: "user" | "job" | "agent" | "team"
+  trigger: "user" | "cron" | "process" | "agent" | "team" | "goal"
   attachments?: AttachmentRef[]
   note?: QueueNote
   enqueuedAt: string

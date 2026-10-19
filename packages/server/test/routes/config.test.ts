@@ -69,7 +69,7 @@ describe("config route", () => {
     const body = res.json() as KclawConfig
     expect(body.permissions).toEqual(defaultConfig.permissions)
     expect(body.memory).toEqual(defaultConfig.memory)
-    expect(body.exec).toEqual(defaultConfig.exec)
+    expect(body.bash).toEqual(defaultConfig.bash)
     expect(body.workspace).toBe(defaultConfig.workspace)
   })
 

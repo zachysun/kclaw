@@ -30,20 +30,20 @@ afterEach(() => {
 
 describe("narrowDecidedRule", () => {
   it("narrows a command to first word + subcommand prefix", () => {
-    const call = { name: "exec", args: { command: "git push origin main" } }
-    expect(narrowDecidedRule(call)).toBe("exec:git push*")
+    const call = { name: "bash", args: { command: "git push origin main" } }
+    expect(narrowDecidedRule(call)).toBe("bash:git push*")
   })
 
   it("keeps a single-word command exact", () => {
-    expect(narrowDecidedRule({ name: "exec", args: { command: "ls" } })).toBe("exec:ls")
+    expect(narrowDecidedRule({ name: "bash", args: { command: "ls" } })).toBe("bash:ls")
   })
 
   it("narrows a chained command to its first segment", () => {
-    expect(narrowDecidedRule({ name: "exec", args: { command: "git status; rm -rf /" } })).toBe("exec:git status*")
+    expect(narrowDecidedRule({ name: "bash", args: { command: "git status; rm -rf /" } })).toBe("bash:git status*")
   })
 
   it("collapses the command token to its basename", () => {
-    expect(narrowDecidedRule({ name: "exec", args: { command: "/bin/rm -rf build" } })).toBe("exec:rm -rf*")
+    expect(narrowDecidedRule({ name: "bash", args: { command: "/bin/rm -rf build" } })).toBe("bash:rm -rf*")
   })
 
   it("persists the exact resolved path for path tools", () => {
@@ -65,18 +65,18 @@ describe("decided rules file round-trip", () => {
   it("append + load + delete round-trips and keeps 0600", () => {
     const p = globalDecidedRulesPath(home)
     appendDecidedRule(p, {
-      rule: "exec:git push*",
+      rule: "bash:git push*",
       decidedAt: "2026-09-06T00:00:00.000Z",
-      origin: { tool: "exec", argsJson: '{"command":"git push origin main"}', sessionId: "ses_1" },
+      origin: { tool: "bash", argsJson: '{"command":"git push origin main"}', sessionId: "ses_1" },
     })
     const rules = loadDecidedRules(p)
     expect(rules).toHaveLength(1)
-    expect(rules[0]!.rule).toBe("exec:git push*")
-    expect(rules[0]!.origin.tool).toBe("exec")
+    expect(rules[0]!.rule).toBe("bash:git push*")
+    expect(rules[0]!.origin.tool).toBe("bash")
     // 0600: owner rw only (mask off platform bits)
     expect(statSync(p).mode & 0o777).toBe(0o600)
 
-    expect(deleteDecidedRule(p, 0)?.rule).toBe("exec:git push*")
+    expect(deleteDecidedRule(p, 0)?.rule).toBe("bash:git push*")
     expect(loadDecidedRules(p)).toEqual([])
     expect(deleteDecidedRule(p, 5)).toBeUndefined()
   })
@@ -89,31 +89,31 @@ describe("decided rules file round-trip", () => {
 
   it("drops entries that are not objects but keeps valid ones", () => {
     const p = globalDecidedRulesPath(home)
-    writeFileSync(p, "rules:\n  - 42\n  - rule: exec:ls\n")
+    writeFileSync(p, "rules:\n  - 42\n  - rule: bash:ls\n")
     const rules = loadDecidedRules(p)
     expect(rules).toHaveLength(1)
-    expect(rules[0]!.rule).toBe("exec:ls")
+    expect(rules[0]!.rule).toBe("bash:ls")
   })
 
   it("round-trips the source marker: auto persists, an absent marker reads as manual", () => {
     const p = globalDecidedRulesPath(home)
     appendDecidedRule(p, {
-      rule: "exec:git push*",
+      rule: "bash:git push*",
       decidedAt: "2026-09-06T00:00:00.000Z",
-      origin: { tool: "exec", argsJson: "{}" },
+      origin: { tool: "bash", argsJson: "{}" },
       source: "auto",
     })
     appendDecidedRule(p, {
-      rule: "exec:ls",
+      rule: "bash:ls",
       decidedAt: "2026-09-06T00:00:00.001Z",
-      origin: { tool: "exec", argsJson: "{}" },
+      origin: { tool: "bash", argsJson: "{}" },
     })
     const rules = loadDecidedRules(p)
     expect(rules).toHaveLength(2)
     expect(rules[0]!.source).toBe("auto")
     expect(rules[1]!.source).toBeUndefined() // old files have no marker → manual
     // the gate only consumes rule strings; the marker never leaks there
-    expect(decidedRuleStrings(rules)).toEqual(["exec:git push*", "exec:ls"])
+    expect(decidedRuleStrings(rules)).toEqual(["bash:git push*", "bash:ls"])
   })
 })
 
@@ -131,7 +131,7 @@ describe("project scope defenses", () => {
     // idempotent: a second append does not duplicate the gitignore entry
     appendDecidedRule(
       p,
-      { rule: "exec:ls", decidedAt: "2026-09-06T00:00:01.000Z", origin: { tool: "exec", argsJson: "{}" } },
+      { rule: "bash:ls", decidedAt: "2026-09-06T00:00:01.000Z", origin: { tool: "bash", argsJson: "{}" } },
       { workspace },
     )
     expect(readFileSync(join(workspace, ".gitignore"), "utf8").split(PROJECT_RULES_REL).length - 1).toBe(1)
@@ -161,9 +161,9 @@ describe("loadDecidedRulesForRun", () => {
   it("merges global and project rule strings", () => {
     const paths = resolvePaths(home)
     appendDecidedRule(globalDecidedRulesPath(home), {
-      rule: "exec:ls",
+      rule: "bash:ls",
       decidedAt: "2026-09-06T00:00:00.000Z",
-      origin: { tool: "exec", argsJson: "{}" },
+      origin: { tool: "bash", argsJson: "{}" },
     })
     appendDecidedRule(
       projectDecidedRulesPath(workspace),
@@ -171,23 +171,23 @@ describe("loadDecidedRulesForRun", () => {
       { workspace },
     )
     const snap = loadDecidedRulesForRun(paths, workspace)
-    expect(snap.rules).toEqual(["exec:ls", "fs_write:x"])
+    expect(snap.rules).toEqual(["bash:ls", "fs_write:x"])
     expect(snap.projectIgnored).toBe(false)
   })
 
   it("ignores a git-tracked project file with projectIgnored=true", () => {
     const paths = resolvePaths(home)
     appendDecidedRule(globalDecidedRulesPath(home), {
-      rule: "exec:ls",
+      rule: "bash:ls",
       decidedAt: "2026-09-06T00:00:00.000Z",
-      origin: { tool: "exec", argsJson: "{}" },
+      origin: { tool: "bash", argsJson: "{}" },
     })
     mkdirSync(join(workspace, ".kclaw"), { recursive: true })
-    writeFileSync(join(workspace, PROJECT_RULES_REL), "rules:\n  - rule: exec:evil*\n")
+    writeFileSync(join(workspace, PROJECT_RULES_REL), "rules:\n  - rule: bash:evil*\n")
     execSync("git init -q", { cwd: workspace })
     execSync(`git add ${JSON.stringify(PROJECT_RULES_REL)}`, { cwd: workspace })
     const snap = loadDecidedRulesForRun(paths, workspace)
     expect(snap.projectIgnored).toBe(true)
-    expect(snap.rules).toEqual(["exec:ls"])
+    expect(snap.rules).toEqual(["bash:ls"])
   })
 })

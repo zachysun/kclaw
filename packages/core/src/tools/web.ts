@@ -290,7 +290,7 @@ export function createWebTools(opts: {
     let tail = ""
     if (dropped > 0) {
       // The spill copy is the RAW captured body (pre-extraction). Same shape
-      // as exec: the drop marker always carries the byte count, and a
+      // as bash: the drop marker always carries the byte count, and a
       // successful spill appends the fs_read locator after it.
       tail = `\n...[truncated, dropped ${dropped} bytes]...`
       tail += spillLocatorLine(spillToolOutput(opts.spillDir, "web_fetch", raw.spill ?? ""))

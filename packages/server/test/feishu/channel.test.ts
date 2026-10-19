@@ -90,7 +90,7 @@ function textTurn(text: string): LlmStreamEvent[] {
 
 function execTurn(callId: string, command: string): LlmStreamEvent[] {
   return [
-    { type: "tool_call_started", index: 0, callId, name: "exec" },
+    { type: "tool_call_started", index: 0, callId, name: "bash" },
     { type: "tool_call_delta", index: 0, delta: JSON.stringify({ command }) },
     { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 1, outputTokens: 2 } },
   ]
@@ -434,7 +434,7 @@ describe("feishu channel", () => {
     await until(() => env.transport.cards.some((c) => c.card.kind === "approval"), "approval card")
     const approval = env.transport.cards.find((c) => c.card.kind === "approval")!
       .card as Extract<OutboundCard, { kind: "approval" }>
-    expect(approval.toolName).toBe("exec")
+    expect(approval.toolName).toBe("bash")
 
     env.transport.cardAction("ou_master", `confirm:${approval.confirmationId}`)
     await until(() => env.transport.finishes.length > 0, "run finished after approval")
@@ -545,10 +545,10 @@ describe("feishu channel", () => {
     expect(env.transport.cardUpdates).toHaveLength(before)
   })
 
-  it("pushes a summary card to the primary user on job terminal broadcasts", async () => {
+  it("pushes a summary card to the primary user on cron terminal broadcasts", async () => {
     env = await makeScriptedEnv()
-    env.bus.emit(makeEvent("job.completed", { jobId: "j1", summary: "end_turn" }))
-    env.bus.emit(makeEvent("job.failed", { jobId: "j2", error: { code: "job_failed", message: "boom" } }))
+    env.bus.emit(makeEvent("cron.completed", { cronId: "j1", summary: "end_turn" }))
+    env.bus.emit(makeEvent("cron.failed", { cronId: "j2", error: { code: "cron_failed", message: "boom" } }))
     await until(() => env.transport.cards.filter((c) => c.card.kind === "summary").length >= 2, "push cards")
     const summaries = env.transport.cards.filter((c) => c.card.kind === "summary")
     expect(summaries.every((c) => c.openId === "ou_master")).toBe(true)

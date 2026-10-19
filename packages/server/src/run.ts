@@ -111,7 +111,7 @@ export class WakeBudgetExhaustedError extends Error {
  * `entry` is what lands in queue.jsonl ；outcome 在本条 run 结束时
  * 以其 RunOutcome settle（wait/interrupt 为本条 run，steer 不建 node）。
  * `model` 是仅存于内存的入队时 per-run 覆盖（QueueEntry 不含 model，出队时
- * 在此还原——现状行为：job 的配置模型与调用方强制模型不因排队而丢失；
+ * 在此还原——现状行为：cron 的配置模型与调用方强制模型不因排队而丢失；
  * steer 降级路径无此附加：steer 不建队列节点，没有可还原的模型覆盖）。
  */
 interface QueueNode {
@@ -232,7 +232,7 @@ export class RunManager {
     // Child sessions are read-only to users: their only input is the dispatch
     // task (delegation semantics). User-triggered submissions (a chat client
     // connected to a child session) are rejected; "agent" is the spawner's own
-    // submission and "job" never lands on a child — neither is affected.
+    // submission and "cron" never lands on a child — neither is affected.
     if (input.trigger === "user" && meta.parentSessionId !== undefined) {
       throw new Error("subagent会话不接收用户消息（只读；过程与结果见审计页）")
     }
@@ -247,10 +247,10 @@ export class RunManager {
       }
     }
     // 处置解析链（正本在 core protocol/wire.ts）：显式 > 会话覆盖 > 配置
-    // 默认；job/agent/goal 触发固定 wait（无人值守的排队行为必须可预测；
+    // 默认；cron/agent/goal 触发固定 wait（无人值守的排队行为必须可预测；
     // agent 子 run 由派发器独占驱动；goal 自续轮由调用方排队驱动，用户中
     // 途输入 steer 注入当前 run 的语义不变）。
-    const disposition = input.trigger === "job" || input.trigger === "agent" || input.trigger === "goal"
+    const disposition = input.trigger === "cron" || input.trigger === "process" || input.trigger === "agent" || input.trigger === "goal"
       ? "wait"
       : resolveSendDisposition({
           explicit: input.disposition,
@@ -719,7 +719,7 @@ export class RunManager {
    * Steering drain：活动 run 在迭代边界取走 steer 缓冲区里的
    * 全部消息注入对话。同步取走（先到先得，与 queueCancel 在同一线程内天然
    * 互斥）；返回按发送顺序构建的 user Message（id=entry.messageId；
-   * blocks = text + attachments + note(job provenance)）。
+   * blocks = text + attachments + note(cron provenance)）。
    *
    * 先构建后变更（不变量：登记 injected = 确已进 JSONL，机器不删）：
    * mountAttachments 可失败（附件越界、steer 等待期间文件被删），故全部 Message

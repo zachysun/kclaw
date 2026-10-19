@@ -10,7 +10,7 @@ describe("makeEvent", () => {
     expect(new Date(e.ts).getTime()).toBeGreaterThan(0)
   })
   it("strips undefined sessionId/runId", () => {
-    const e = makeEvent("job.started", { jobId: "job_1" })
+    const e = makeEvent("cron.started", { cronId: "cron_1" })
     expect(e).not.toHaveProperty("sessionId")
     expect(e).not.toHaveProperty("runId")
   })

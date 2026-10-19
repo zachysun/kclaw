@@ -14,7 +14,7 @@ import { SUMMARY_WRAPPER_TOKENS } from "../../src/agent/context.js"
 // 压缩的结构化 spill 指针：摘要器 mock 不回显任何路径，但段摘要与总摘要必须
 // 携带 locator 行——指针由代码保证，不依赖提示词纪律。
 
-const LOCATOR_A = "[完整输出已存盘: /tmp/kclaw-spill/aaa-exec.txt；需要更多内容时用 fs_read 读取该文件]"
+const LOCATOR_A = "[完整输出已存盘: /tmp/kclaw-spill/aaa-bash.txt；需要更多内容时用 fs_read 读取该文件]"
 const LOCATOR_B = "[完整输出已存盘: /tmp/kclaw-spill/bbb-web.txt；需要更多内容时用 fs_read 读取该文件]"
 
 function makeEnv() {
@@ -43,7 +43,7 @@ function historyWithSpill(sessionId: string) {
   // 前缀里，后面跟着一条大文本 assistant 消息把估算顶过黄线。
   const u0 = newMessage(sessionId, "user", [{ id: "b-u0", type: "text", text: "先跑构建再看页面" }])
   const a1 = newAssistantMessage(sessionId, "m1", [
-    { id: "b-c1", type: "tool_call", callId: "call_1", name: "exec", args: {}, argsJson: '{"command":"pnpm build"}' },
+    { id: "b-c1", type: "tool_call", callId: "call_1", name: "bash", args: {}, argsJson: '{"command":"pnpm build"}' },
   ])
   a1.stopReason = "tool_use"
   const t1 = newMessage(sessionId, "tool", [

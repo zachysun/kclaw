@@ -5,7 +5,7 @@
  *   resolvePaths → acquireDaemonSlot (exclusive `wx` claim of
  *   `<home>/daemon.json` with a placeholder {port: 0, pid, startedAt,
  *   starting}) → loadConfig → loadOrCreateToken → stores (SessionStore,
- *   MemorySystem, JobScheduler) → llm client
+ *   MemorySystem, CronScheduler) → llm client
  *   → RunManager → createApp (auth + routes + ws) → listen 127.0.0.1 →
  *   backfill daemon.json with the real {port, pid, startedAt}
  *   → scheduler tick → Daemon.
@@ -14,10 +14,10 @@
  * file is kept — it is the daemon's stable identity across restarts). All of
  * it idempotent: a second stop() resolves immediately. Each step is bounded
  * by a deadline (default 60s): a step that misses it makes stop() REJECT,
- * daemon.json is kept (the process is still alive), and in-flight job runs
+ * daemon.json is kept (the process is still alive), and in-flight cron runs
  * are abandoned — JSONL tolerates partial runs; a claimed run's occurrence
  * already advanced next_run_at (at claim time), so it does not re-fire: the
- * job fires again at its next scheduled time.
+ * cron fires again at its next scheduled time.
  *
  * Provider resolution: the config's default provider
  * entry wins; KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY / KCLAW_LLM_MODEL env
@@ -29,7 +29,7 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
   GLOBAL_GROUP,
-  JobScheduler,
+  CronScheduler,
   MemorySystem,
   SessionStore,
   createConfigNotifier,
@@ -59,7 +59,7 @@ import {
 import type { EmbeddingClient, KclawConfig, LlmClient, McpServerConfig } from "@kclaw/core"
 import { loadOrCreateToken } from "./auth.js"
 import { createMcpProjects, collectProjectDirs } from "./mcp-projects.js"
-import { EventBus } from "@kclaw/core"
+import { EventBus, ProcessRegistry } from "@kclaw/core"
 import { RunManager } from "./run.js"
 import { createChoreUsageRecorder } from "./chore-usage.js"
 import { createHistorySearch } from "./history-search.js"
@@ -86,7 +86,7 @@ export const DEFAULT_STOP_TIMEOUT_MS = 60_000
 
 /**
  * Race one daemon-stop step against a deadline: `tick.stop()`
- * awaits every tracked job run and `app.close()` awaits every connection, so
+ * awaits every tracked cron run and `app.close()` awaits every connection, so
  * a hung provider stream (or a stuck client) could park `stop()` forever —
  * an unstoppable daemon that the CLI would then double-spawn. The losing
  * step is never cancelled: it MAY still settle later, and a late rejection
@@ -208,7 +208,7 @@ function releaseClaimedSlot(daemonJson: string, pid: number): void {
  * `wx` creation of daemon.json wins the race atomically — a concurrent
  * second launcher gets EEXIST, sees our live pid, and refuses instead of
  * silently overwriting the pidfile and orphaning the first daemon (which
- * also double-runs the scheduler against the same jobs.db and races the
+ * also double-runs the scheduler against the same cron.db and races the
  * token file). A stale slot (dead pid) is reclaimed. Returns the startedAt
  * timestamp for the post-listen backfill.
  */
@@ -348,7 +348,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     })),
   })
   memory.reconcile()
-  const jobs = new JobScheduler(paths.jobsDb)
+  const crons = new CronScheduler(paths.cronDb)
 
   // resolveConfirmation stays undefined: WS/CLI verdicts reach the RunManager's
   // internal ConfirmationBroker (createApp routes confirmation.resolve frames
@@ -477,6 +477,44 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     }
   })()
   hostStops.push(["history search index", async () => historyIndex.close()])
+  // Background-process registry (bash run_in_background): daemon-owned.
+  // Notices wake the owning session through the run queue — busy sessions
+  // get the notice run queued next, idle ones are woken. A session that has
+  // since been deleted simply drops the notice. Boot adoption probes
+  // journaled groups: live ones re-join the registry, dead ones deliver.
+  const processRegistry = new ProcessRegistry({
+    noticesPath: paths.processNotices,
+    onRegister: (entry) =>
+      bus.emit(
+        makeEvent("process.started", { processId: entry.id, sessionId: entry.sessionId, command: entry.command }),
+      ),
+  })
+  processRegistry.onNotice((notice) => {
+    if (notice.exitCode !== null && notice.exitCode > 0) {
+      bus.emit(
+        makeEvent("process.failed", {
+          processId: notice.processId,
+          sessionId: notice.sessionId,
+          error: `exit ${notice.exitCode}${notice.killed ? "（被终止）" : ""}`,
+        }),
+      )
+    } else {
+      bus.emit(
+        makeEvent("process.completed", { processId: notice.processId, sessionId: notice.sessionId, exitCode: notice.exitCode ?? 0 }),
+      )
+    }
+    const meta = sessions.meta(notice.sessionId)
+    if (meta === undefined) return
+    const code = notice.exitCode !== null ? `exit ${notice.exitCode}` : notice.killed ? "已终止" : "退出码未知"
+    const line = `后台命令已结束（${code}）：${notice.command.slice(0, 80)}`
+    void run
+      .enqueue(notice.sessionId, {
+        userText: line,
+        trigger: "process",
+        note: { kind: "process", text: "后台进程完成通知" },
+      })
+      .catch((err) => console.error(`kclaw process notice enqueue failed (${notice.processId}):`, err))
+  })
   const run = new RunManager({
     config,
     paths,
@@ -492,6 +530,9 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     skillsEvolution,
     resolveExtractLlm,
     historySearch,
+    processes: processRegistry,
+    cronScheduler: crons,
+    goalHost,
     subagents: {
       spawner: subagentHost.spawner,
       collector: subagentHost.collector,
@@ -540,7 +581,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   const app = await createApp({
     home: paths.home,
     token,
-    stores: { sessions, jobs, config, paths },
+    stores: { sessions, crons, config, paths },
     configNotifier,
     bus,
     run,
@@ -593,7 +634,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // startedAt keeps the claim's timestamp (no `starting` flag once serving).
   writeFileSync(daemonJson, `${JSON.stringify({ port, pid: process.pid, startedAt }, null, 2)}\n`, "utf8")
 
-  // Job terminal-state notifier: assembled only when channels are configured
+  // Cron terminal-state notifier: assembled only when channels are configured
   // (none → undefined, the tick skips pushes entirely). Failures are reported
   // here and never propagate — sending never throws inside the notifier.
   const notifier = config.notify.channels.length > 0
@@ -613,7 +654,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // reconnecting clients are corrected wholesale by GET /queue.
   run.recoverQueues()
 
-  const tick = startSchedulerTick({ scheduler: jobs, run, bus, sessions, intervalMs: opts.schedulerIntervalMs ?? DEFAULT_SCHEDULER_INTERVAL_MS, purgeTtlMs: config.sessions.recycleBinTtlMs, notifier, webBase: `http://${HOST}:${port}`, defaultMode: config.permissions.defaultMode })
+  const tick = startSchedulerTick({ scheduler: crons, run, bus, sessions, intervalMs: opts.schedulerIntervalMs ?? DEFAULT_SCHEDULER_INTERVAL_MS, purgeTtlMs: config.sessions.recycleBinTtlMs, notifier, webBase: `http://${HOST}:${port}`, defaultMode: config.permissions.defaultMode })
   hostStops.push(["scheduler tick", () => tick.stop()])
   // 记忆调度器：定时 + 跟随补查。workdirs = 全部有会话的
   // 项目（去重）；daemon 重启后首次 sweep 会补查写入的挂起跟随检查。
@@ -632,6 +673,10 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // 技能 curator：每日闲时扫描（stale 标记 + 归档，只动 AI 自建的全局技能）。
   const curatorTick = startSkillCurator({ config, skillsDir: paths.skillsDir })
   hostStops.push(["skill curator", () => curatorTick.stop()])
+
+  // 后台进程收编：探测上次未送达通知里的进程组，活的重进注册表、死的补发
+  // 通知（run 已初始化，enqueued 安全）。失败只记日志，不阻塞启动。
+  void processRegistry.adopt().catch((err) => console.error("kclaw process registry adopt failed:", err))
 
   // Feishu channel (#45, managed since #46): opt-in via ~/.kclaw/feishu.json
   // (enabled). Started AFTER the schedulers under the manager's own hard
@@ -654,10 +699,10 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
       // (app.close awaits them) could park stop() forever. On a timeout the
       // error propagates to the caller (bin logs to stderr and exits 1) and
       // daemon.json is KEPT: the process is still alive, so an honest pidfile
-      // beats a cleaned one. In-flight job runs are abandoned — JSONL
+      // beats a cleaned one. In-flight cron runs are abandoned — JSONL
       // tolerates partial runs; each claimed occurrence already had
       // next_run_at advanced at claim time, so the killed run does not
-      // re-fire: the job fires again at its next scheduled time.
+      // re-fire: the cron fires again at its next scheduled time.
       for (const [label, stop] of hostStops) {
         await withStopTimeout(stop(), stopTimeoutMs, label)
       }

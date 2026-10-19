@@ -1,16 +1,16 @@
 /**
- * Scheduler tick tests: startSchedulerTick turning due Job rows
- * of a REAL JobScheduler (temp SQLite) into runs of a REAL RunManager under a
- * mock LlmClient, with job.* frames observed on a fake socket CONNECTED to
- * the bus (job events carry no sessionId → broadcast, not subscribe).
+ * Scheduler tick tests: startSchedulerTick turning due Cron rows
+ * of a REAL CronScheduler (temp SQLite) into runs of a REAL RunManager under a
+ * mock LlmClient, with cron.* frames observed on a fake socket CONNECTED to
+ * the bus (cron events carry no sessionId → broadcast, not subscribe).
  *
  * Covers: the happy fire (session/note/markRun/events/no re-run), the
  * claim-then-execute semantics (claimDue advances nextRunAt the moment a
- * tick takes the job — no double-fire on overlapping ticks), in-flight
- * re-entry protection while a run is still executing, pruning a job's
+ * tick takes the cron — no double-fire on overlapping ticks), in-flight
+ * re-entry protection while a run is still executing, pruning a cron's
  * session history after each fire, the error path
- * (llm throws → stopReason "error" → job.failed + lastStatus "error"),
- * disabled jobs never firing, and stop() idempotence + interval shutdown.
+ * (llm throws → stopReason "error" → cron.failed + lastStatus "error"),
+ * disabled crons never firing, and stop() idempotence + interval shutdown.
  */
 import { describe, it, expect, afterEach } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -19,15 +19,15 @@ import { join } from "node:path"
 
 import {
   EventBus,
-  JobScheduler,
+  CronScheduler,
   SessionStore,
   loadConfig,
   resolvePaths,
 } from "@kclaw/core"
 import type {
   AgentEvent,
-  Job,
-  JobFinishedPayload,
+  Cron,
+  CronFinishedPayload,
   KclawConfig,
   LlmClient,
   LlmStreamEvent,
@@ -49,7 +49,7 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
-/** Minimal in-memory stand-in for a connected socket (job.* = broadcast). */
+/** Minimal in-memory stand-in for a connected socket (cron.* = broadcast). */
 class FakeSocket {
   sent: string[] = []
   send(data: string): void {
@@ -74,10 +74,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-/** JobScheduler that counts claimDue() calls — the only way to see a tick happen. */
-class CountingScheduler extends JobScheduler {
+/** CronScheduler that counts claimDue() calls — the only way to see a tick happen. */
+class CountingScheduler extends CronScheduler {
   claimCalls = 0
-  override claimDue(now: Date): Job[] {
+  override claimDue(now: Date): Cron[] {
     this.claimCalls += 1
     return super.claimDue(now)
   }
@@ -145,14 +145,14 @@ function makeEnv(llm: LlmClient): TickEnv {
   const manager = new RunManager({
     config, paths, sessions, memory, bus, llm, workspace,
   })
-  const scheduler = new CountingScheduler(join(home, "jobs.db"))
+  const scheduler = new CountingScheduler(join(home, "cron.db"))
   const socket = new FakeSocket()
-  bus.connect(socket) // connected (not subscribed): receives sessionId-less job.* events
+  bus.connect(socket) // connected (not subscribed): receives sessionId-less cron.* events
   return { scheduler, sessions, bus, manager, socket }
 }
 
-/** Back-date a job's nextRunAt by a minute so the next tick finds it due. */
-function backdate(scheduler: JobScheduler, id: string): void {
+/** Back-date a cron's nextRunAt by a minute so the next tick finds it due. */
+function backdate(scheduler: CronScheduler, id: string): void {
   scheduler.update(id, { nextRunAt: new Date(Date.now() - 60_000).toISOString() })
 }
 
@@ -174,72 +174,72 @@ function startTick(env: TickEnv, intervalMs: number, purgeTtlMs?: number, defaul
 // --- tests ------------------------------------------------------------------
 
 describe("startSchedulerTick", () => {
-  it("fires a due job end to end: session, job note, markRun ok, no re-run", async () => {
+  it("fires a due cron end to end: session, cron note, markRun ok, no re-run", async () => {
     const env = makeEnv(scriptClient([textTurn("早报好了")]))
-    const job = env.scheduler.create({ name: "早报", cron: "* * * * *", prompt: "给我今日早报" })
+    const cron = env.scheduler.create({ name: "早报", cron: "* * * * *", prompt: "给我今日早报" })
     // 时钟钉死在 t0：claimDue 把 next_run_at 推进到"下一个分钟边界"（12:01），
     // 真实时钟若在观察窗内跨过边界，* * * * * 的任务会合法地再次到期——
     // 合跑负载下偶发双触发就是这个机理。固定 now 后 next_run_at 永远在
     // "未来"，no-re-run 断言与真实时钟彻底解耦（t0 取半分钟处，边界 30s 外）。
     const t0 = new Date("2026-06-01T12:00:30.000Z")
-    env.scheduler.update(job.id, { nextRunAt: new Date(t0.getTime() - 60_000).toISOString() })
+    env.scheduler.update(cron.id, { nextRunAt: new Date(t0.getTime() - 60_000).toISOString() })
 
     startTick(env, 25, undefined, undefined, () => t0)
 
-    await waitForEvent(env.socket, "job.completed")
+    await waitForEvent(env.socket, "cron.completed")
 
-    // job.started (broadcast: no sessionId) preceded the run
-    const started = received(env.socket).find((e) => e.type === "job.started")
+    // cron.started (broadcast: no sessionId) preceded the run
+    const started = received(env.socket).find((e) => e.type === "cron.started")
     expect(started).toBeDefined()
     expect(started!.sessionId).toBeUndefined()
-    expect(started!.payload).toEqual({ jobId: job.id })
+    expect(started!.payload).toEqual({ cronId: cron.id })
 
-    // session created with title=job.name and jobId recorded
+    // session created with title=cron.name and cronId recorded
     const [session] = env.sessions.list()
     expect(session.title).toBe("早报")
-    expect(session.jobId).toBe(job.id)
+    expect(session.cronId).toBe(cron.id)
 
-    // first user message: prompt text + kind:"job" note naming the job
+    // first user message: prompt text + kind:"cron" note naming the cron
     const [user] = env.sessions.readMessages(session.id)
     expect(user!.blocks).toEqual([
       { id: expect.any(String), type: "text", text: "给我今日早报" },
       {
-        id: expect.any(String), type: "note", kind: "job",
+        id: expect.any(String), type: "note", kind: "cron",
         text: "本会话由定时任务「早报」触发",
       },
     ])
 
-    // job.completed summarizes the run's stopReason
-    const completed = received(env.socket).find((e) => e.type === "job.completed")
-    expect(completed!.payload).toEqual({ jobId: job.id, summary: "end_turn" })
+    // cron.completed summarizes the run's stopReason
+    const completed = received(env.socket).find((e) => e.type === "cron.completed")
+    expect(completed!.payload).toEqual({ cronId: cron.id, summary: "end_turn" })
 
     // markRun recorded the ok outcome
-    const after = env.scheduler.get(job.id)
+    const after = env.scheduler.get(cron.id)
     expect(after!.lastStatus).toBe("ok")
     expect(after!.lastError).toBeUndefined()
     expect(after!.lastRunAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
 
     // in-flight cleared + nextRunAt advanced: later ticks must not re-run
     await sleep(100)
-    expect(received(env.socket).filter((e) => e.type === "job.started")).toHaveLength(1)
+    expect(received(env.socket).filter((e) => e.type === "cron.started")).toHaveLength(1)
     expect(env.sessions.list()).toHaveLength(1)
   })
 
-  it("job-created sessions honor the injected defaultMode (daemon config)", async () => {
+  it("cron-created sessions honor the injected defaultMode (daemon config)", async () => {
     const env = makeEnv(scriptClient([textTurn("好了")]))
-    const job = env.scheduler.create({ name: "只读任务", cron: "* * * * *", prompt: "跑一下" })
-    backdate(env.scheduler, job.id)
+    const cron = env.scheduler.create({ name: "只读任务", cron: "* * * * *", prompt: "跑一下" })
+    backdate(env.scheduler, cron.id)
 
     startTick(env, 25, undefined, "readonly")
 
-    await waitForEvent(env.socket, "job.completed")
+    await waitForEvent(env.socket, "cron.completed")
 
-    // the daemon's default mode applies to job sessions too, frozen at creation
+    // the daemon's default mode applies to cron sessions too, frozen at creation
     const [session] = env.sessions.list()
     expect(session.mode).toBe("readonly")
   })
 
-  it("fires due jobs through claimDue (no double-fire on overlapping ticks)", async () => {
+  it("fires due crons through claimDue (no double-fire on overlapping ticks)", async () => {
     let release!: () => void
     const gate = new Promise<void>((r) => {
       release = r
@@ -252,41 +252,41 @@ describe("startSchedulerTick", () => {
       },
     }
     const env = makeEnv(llm)
-    const job = env.scheduler.create({ name: "认领", cron: "* * * * *", prompt: "跑" })
+    const cron = env.scheduler.create({ name: "认领", cron: "* * * * *", prompt: "跑" })
     const backdated = new Date(Date.now() - 60_000).toISOString()
-    env.scheduler.update(job.id, { nextRunAt: backdated })
+    env.scheduler.update(cron.id, { nextRunAt: backdated })
 
     startTick(env, 20)
-    await waitForEvent(env.socket, "job.started")
+    await waitForEvent(env.socket, "cron.started")
 
     // claim-then-execute: claiming advanced nextRunAt while the run is still
-    // hanging, so a later tick cannot claim (let alone fire) the job again
-    expect(Date.parse(env.scheduler.get(job.id)!.nextRunAt)).toBeGreaterThan(Date.parse(backdated))
+    // hanging, so a later tick cannot claim (let alone fire) the cron again
+    expect(Date.parse(env.scheduler.get(cron.id)!.nextRunAt)).toBeGreaterThan(Date.parse(backdated))
 
     await sleep(120) // several ticks pass while the fire is unsettled
-    expect(received(env.socket).filter((e) => e.type === "job.started")).toHaveLength(1)
+    expect(received(env.socket).filter((e) => e.type === "cron.started")).toHaveLength(1)
     expect(env.sessions.list()).toHaveLength(1)
 
     release()
-    await waitForEvent(env.socket, "job.completed")
-    expect(received(env.socket).filter((e) => e.type === "job.started")).toHaveLength(1)
+    await waitForEvent(env.socket, "cron.completed")
+    expect(received(env.socket).filter((e) => e.type === "cron.started")).toHaveLength(1)
   })
 
-  it("prunes a job's old sessions down to JOB_SESSION_KEEP after firing", async () => {
+  it("prunes a cron's old sessions down to CRON_SESSION_KEEP after firing", async () => {
     const env = makeEnv(scriptClient([textTurn("好")]))
-    const job = env.scheduler.create({ name: "清理", cron: "* * * * *", prompt: "跑" })
-    // 22 historical sessions of the same job; the fire adds a 23rd
+    const cron = env.scheduler.create({ name: "清理", cron: "* * * * *", prompt: "跑" })
+    // 22 historical sessions of the same cron; the fire adds a 23rd
     const oldIds = new Set<string>()
     for (let i = 0; i < 22; i++) {
-      oldIds.add(env.sessions.create(`第${i}次`, job.id).id)
+      oldIds.add(env.sessions.create(`第${i}次`, cron.id).id)
     }
-    backdate(env.scheduler, job.id)
+    backdate(env.scheduler, cron.id)
 
     startTick(env, 25)
-    await waitForEvent(env.socket, "job.completed")
+    await waitForEvent(env.socket, "cron.completed")
 
     // the fresh fire + the newest 19 old sessions survive (20 total)
-    const kept = env.sessions.list().filter((m) => m.jobId === job.id)
+    const kept = env.sessions.list().filter((m) => m.cronId === cron.id)
     expect(kept).toHaveLength(20)
     // the oldest 3 land in the recycle bin (soft-deleted, purgeable later)
     const deleted = env.sessions.list({ deleted: true })
@@ -294,7 +294,7 @@ describe("startSchedulerTick", () => {
     for (const m of deleted) expect(oldIds.has(m.id)).toBe(true)
   })
 
-  it("skips a job that is still running when the next tick fires", async () => {
+  it("skips a cron that is still running when the next tick fires", async () => {
     let release!: () => void
     const gate = new Promise<void>((r) => {
       release = r
@@ -307,53 +307,53 @@ describe("startSchedulerTick", () => {
       },
     }
     const env = makeEnv(llm)
-    const job = env.scheduler.create({ name: "慢任务", cron: "* * * * *", prompt: "慢慢来" })
-    backdate(env.scheduler, job.id)
+    const cron = env.scheduler.create({ name: "慢任务", cron: "* * * * *", prompt: "慢慢来" })
+    backdate(env.scheduler, cron.id)
 
     startTick(env, 20)
-    await waitForEvent(env.socket, "job.started")
+    await waitForEvent(env.socket, "cron.started")
 
     // ~6 ticks pass while the run is in flight; the claim already advanced
     // nextRunAt, so later ticks claim nothing (an in-flight overlap would be
     // skipped, never queued)
     await sleep(120)
-    expect(received(env.socket).filter((e) => e.type === "job.started")).toHaveLength(1)
+    expect(received(env.socket).filter((e) => e.type === "cron.started")).toHaveLength(1)
     expect(env.sessions.list()).toHaveLength(1)
 
     release()
-    await waitForEvent(env.socket, "job.completed")
-    expect(env.scheduler.get(job.id)!.lastStatus).toBe("ok")
+    await waitForEvent(env.socket, "cron.completed")
+    expect(env.scheduler.get(cron.id)!.lastStatus).toBe("ok")
   })
 
-  it("emits job.failed and records lastStatus error when the run fails", async () => {
+  it("emits cron.failed and records lastStatus error when the run fails", async () => {
     const env = makeEnv(failingClient())
-    const job = env.scheduler.create({ name: "坏任务", cron: "* * * * *", prompt: "必定失败" })
-    backdate(env.scheduler, job.id)
+    const cron = env.scheduler.create({ name: "坏任务", cron: "* * * * *", prompt: "必定失败" })
+    backdate(env.scheduler, cron.id)
 
     startTick(env, 25)
 
-    await waitForEvent(env.socket, "job.failed")
+    await waitForEvent(env.socket, "cron.failed")
 
-    const failed = received(env.socket).find((e) => e.type === "job.failed")
+    const failed = received(env.socket).find((e) => e.type === "cron.failed")
     expect(failed!.payload).toEqual({
-      jobId: job.id,
-      error: { code: "job_failed", message: expect.any(String) },
+      cronId: cron.id,
+      error: { code: "cron_failed", message: expect.any(String) },
     })
 
-    const after = env.scheduler.get(job.id)
+    const after = env.scheduler.get(cron.id)
     expect(after!.lastStatus).toBe("error")
     expect(after!.lastError).toBeTruthy()
 
     // the run did start: session and user message exist
     const [session] = env.sessions.list()
-    expect(session.jobId).toBe(job.id)
+    expect(session.cronId).toBe(cron.id)
     expect(env.sessions.readMessages(session.id).map((m) => m.role)).toContain("user")
   })
 
-  it("never fires a disabled job", async () => {
+  it("never fires a disabled cron", async () => {
     const env = makeEnv(scriptClient([textTurn("不该出现")]))
-    const job = env.scheduler.create({ name: "停用", cron: "* * * * *", prompt: "不该跑" })
-    env.scheduler.update(job.id, {
+    const cron = env.scheduler.create({ name: "停用", cron: "* * * * *", prompt: "不该跑" })
+    env.scheduler.update(cron.id, {
       enabled: false,
       nextRunAt: new Date(Date.now() - 60_000).toISOString(),
     })
@@ -363,27 +363,27 @@ describe("startSchedulerTick", () => {
 
     expect(received(env.socket)).toEqual([])
     expect(env.sessions.list()).toEqual([])
-    expect(env.scheduler.get(job.id)!.lastStatus).toBeUndefined()
+    expect(env.scheduler.get(cron.id)!.lastStatus).toBeUndefined()
   })
 
-  it("a socket whose send throws neither fails the job nor starves other subscribers", async () => {
+  it("a socket whose send throws neither fails the cron nor starves other subscribers", async () => {
     const env = makeEnv(scriptClient([textTurn("好")]))
-    const job = env.scheduler.create({ name: "抗炸", cron: "* * * * *", prompt: "跑" })
-    backdate(env.scheduler, job.id)
+    const cron = env.scheduler.create({ name: "抗炸", cron: "* * * * *", prompt: "跑" })
+    backdate(env.scheduler, cron.id)
 
-    // connected BEFORE the healthy socket: every job.* broadcast reaches it
+    // connected BEFORE the healthy socket: every cron.* broadcast reaches it
     // first, and each send throws synchronously
     const broken = { send(): void { throw new Error("send boom") } }
     env.bus.connect(broken)
 
     startTick(env, 25)
 
-    // the healthy socket still saw the full job lifecycle …
-    await waitForEvent(env.socket, "job.completed")
-    expect(received(env.socket).some((e) => e.type === "job.started")).toBe(true)
-    // … and the job was recorded ok, not marked failed by the broken socket
-    expect(env.scheduler.get(job.id)!.lastStatus).toBe("ok")
-    expect(received(env.socket).some((e) => e.type === "job.failed")).toBe(false)
+    // the healthy socket still saw the full cron lifecycle …
+    await waitForEvent(env.socket, "cron.completed")
+    expect(received(env.socket).some((e) => e.type === "cron.started")).toBe(true)
+    // … and the cron was recorded ok, not marked failed by the broken socket
+    expect(env.scheduler.get(cron.id)!.lastStatus).toBe("ok")
+    expect(received(env.socket).some((e) => e.type === "cron.failed")).toBe(false)
   })
 
   it("purges soft-deleted sessions past retention each tick", async () => {
@@ -397,7 +397,7 @@ describe("startSchedulerTick", () => {
 
     startTick(env, 25, 60_000) // purgeTtlMs = 1 minute
 
-    // 无 due job 也会在首次 tick 执行清理，轮询等待 old 被永久删除
+    // 无 due cron 也会在首次 tick 执行清理，轮询等待 old 被永久删除
     const deadline = Date.now() + 2000
     while (env.sessions.meta(old.id) !== undefined) {
       if (Date.now() > deadline) throw new Error("expired session was not purged")
@@ -406,14 +406,14 @@ describe("startSchedulerTick", () => {
     expect(env.sessions.meta(fresh.id)).toBeDefined() // 未过期保留
   })
 
-  it("notifies the job's terminal state with the last assistant text as summary", async () => {
+  it("notifies the cron's terminal state with the last assistant text as summary", async () => {
     const env = makeEnv(scriptClient([textTurn("早报摘要：今日无事")]))
-    const job = env.scheduler.create({ name: "早报", cron: "* * * * *", prompt: "给我今日早报" })
-    backdate(env.scheduler, job.id)
+    const cron = env.scheduler.create({ name: "早报", cron: "* * * * *", prompt: "给我今日早报" })
+    backdate(env.scheduler, cron.id)
 
-    const calls: JobFinishedPayload[] = []
+    const calls: CronFinishedPayload[] = []
     const notifier = {
-      notifyJobFinished: async (p: JobFinishedPayload): Promise<void> => {
+      notifyCronFinished: async (p: CronFinishedPayload): Promise<void> => {
         calls.push(p)
       },
     }
@@ -428,19 +428,19 @@ describe("startSchedulerTick", () => {
     })
     tickers.push(tick)
 
-    await waitForEvent(env.socket, "job.completed")
+    await waitForEvent(env.socket, "cron.completed")
 
-    // the push is async but issued before job.completed settles downstream;
+    // the push is async but issued before cron.completed settles downstream;
     // poll briefly so the fake recorder has run
     const deadline = Date.now() + 2000
     while (calls.length === 0) {
-      if (Date.now() > deadline) throw new Error("job.finished notification never arrived")
+      if (Date.now() > deadline) throw new Error("cron.finished notification never arrived")
       await sleep(5)
     }
 
     const [p] = calls
-    expect(p.jobId).toBe(job.id)
-    expect(p.jobName).toBe("早报")
+    expect(p.cronId).toBe(cron.id)
+    expect(p.cronName).toBe("早报")
     expect(p.status).toBe("ok")
     expect(p.summary).toContain("早报摘要：今日无事")
     const [session] = env.sessions.list()
@@ -450,8 +450,8 @@ describe("startSchedulerTick", () => {
 
   it("notifies with status error and the failure message when the run fails", async () => {
     const env = makeEnv(scriptClient([textTurn("不该到达")]))
-    const job = env.scheduler.create({ name: "坏任务", cron: "* * * * *", prompt: "跑" })
-    backdate(env.scheduler, job.id)
+    const cron = env.scheduler.create({ name: "坏任务", cron: "* * * * *", prompt: "跑" })
+    backdate(env.scheduler, cron.id)
 
     // enqueue itself throws: the tick's catch records the failure with the
     // error's own message, which must also become the push summary
@@ -461,9 +461,9 @@ describe("startSchedulerTick", () => {
       },
     } as unknown as RunManager
 
-    const calls: JobFinishedPayload[] = []
+    const calls: CronFinishedPayload[] = []
     const notifier = {
-      notifyJobFinished: async (p: JobFinishedPayload): Promise<void> => {
+      notifyCronFinished: async (p: CronFinishedPayload): Promise<void> => {
         calls.push(p)
       },
     }
@@ -478,18 +478,18 @@ describe("startSchedulerTick", () => {
     })
     tickers.push(tick)
 
-    await waitForEvent(env.socket, "job.failed")
+    await waitForEvent(env.socket, "cron.failed")
 
     const deadline = Date.now() + 2000
     while (calls.length === 0) {
-      if (Date.now() > deadline) throw new Error("job.finished notification never arrived")
+      if (Date.now() > deadline) throw new Error("cron.finished notification never arrived")
       await sleep(5)
     }
     await sleep(50) // no second push may sneak in
 
     expect(calls).toHaveLength(1)
     const [p] = calls
-    expect(p.jobId).toBe(job.id)
+    expect(p.cronId).toBe(cron.id)
     expect(p.status).toBe("error")
     expect(p.summary).toContain("enqueue exploded")
     // the session was created before enqueue threw, so the link is complete
@@ -500,35 +500,35 @@ describe("startSchedulerTick", () => {
 
   it("a tick without a notifier dep changes nothing", async () => {
     const env = makeEnv(scriptClient([textTurn("好")]))
-    const job = env.scheduler.create({ name: "无通知", cron: "* * * * *", prompt: "跑" })
-    backdate(env.scheduler, job.id)
+    const cron = env.scheduler.create({ name: "无通知", cron: "* * * * *", prompt: "跑" })
+    backdate(env.scheduler, cron.id)
 
     startTick(env, 25) // no notifier in deps
 
-    await waitForEvent(env.socket, "job.completed")
-    const after = env.scheduler.get(job.id)
+    await waitForEvent(env.socket, "cron.completed")
+    const after = env.scheduler.get(cron.id)
     expect(after!.lastStatus).toBe("ok")
     expect(after!.lastError).toBeUndefined()
   })
 
   it("stop() is idempotent and the interval stops firing", async () => {
     const env = makeEnv(scriptClient([textTurn("好")]))
-    const job = env.scheduler.create({ name: "一次性", cron: "* * * * *", prompt: "跑一次" })
-    backdate(env.scheduler, job.id)
+    const cron = env.scheduler.create({ name: "一次性", cron: "* * * * *", prompt: "跑一次" })
+    backdate(env.scheduler, cron.id)
 
     const tick = startTick(env, 30)
-    await waitForEvent(env.socket, "job.completed")
+    await waitForEvent(env.socket, "cron.completed")
     await sleep(80) // several interval ticks fire while idle (no re-run)
     expect(env.scheduler.claimCalls).toBeGreaterThanOrEqual(3)
-    expect(received(env.socket).filter((e) => e.type === "job.started")).toHaveLength(1)
+    expect(received(env.socket).filter((e) => e.type === "cron.started")).toHaveLength(1)
 
     await tick.stop()
     await tick.stop() // idempotent
 
-    // make the job due again AFTER stop: nothing may fire anymore
+    // make the cron due again AFTER stop: nothing may fire anymore
     const claimCalls = env.scheduler.claimCalls
     const frames = received(env.socket).length
-    backdate(env.scheduler, job.id)
+    backdate(env.scheduler, cron.id)
     await sleep(120) // > 2 intervals
     expect(env.scheduler.claimCalls).toBe(claimCalls)
     expect(received(env.socket)).toHaveLength(frames)

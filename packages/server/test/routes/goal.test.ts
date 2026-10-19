@@ -134,7 +134,7 @@ describe("/sessions/:id/goal routes", () => {
   })
 
   it("host validation errors map to 400 with the message", async () => {
-    stubError = new Error("验收命令需要可用的 exec 沙箱")
+    stubError = new Error("验收命令需要可用的 bash 沙箱")
     const res = await app.inject({ method: "POST", url: `/sessions/${sessionId}/goal`, headers: AUTH, payload: { text: "目标", acceptance: ["pnpm test"] } })
     expect(res.statusCode).toBe(400)
     expect(res.json().error).toContain("沙箱")

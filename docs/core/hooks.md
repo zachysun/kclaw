@@ -92,7 +92,7 @@ export default async (ctx) => {
 | order | 名字 | 位置 | failure | 行为 |
 |-------|------|------|---------|------|
 | 10 | `memory-inject` | run-before | skip | 检索记忆库、收集相关经历 note（收集不落位） |
-| 20 | `user-message-land` | run-before | fatal | 追加 job/记忆 note → `appendMessage` 持久化 → 逐块 `note.emitted` |
+| 20 | `user-message-land` | run-before | fatal | 追加 cron/记忆 note → `appendMessage` 持久化 → 逐块 `note.emitted` |
 | 30 | `autoname` | run-before | skip | 新会话首条消息的后台自动命名 |
 | 10 | `skill-wrap` | llm-before | skip | 技能与 `@` 文件指定的隐式包装（只改模型视图；run 组装把两份包装文本合并成一份 `llmUserText`） |
 | 10 | `retry-notify` | llm-retry | skip | 把 provider 重试转成 `llm.failed {willRetry:true}` 事件 |
@@ -107,7 +107,7 @@ export default async (ctx) => {
 | 40 | `skill-follow-check` | run-after | skip | 技能进化的零成本粗查：范围内卷入技能（skill_read/skill_list 工具块或 `/技能名` 指名）才排提炼空闲检查；`skills.evolution` 未启用或 `idleMinutes<=0` 时直接跳过 |
 | 10 | `system-materials` | system-before | skip | 收集 L2 认知与技能清单两个提示词段（即 live 段） |
 
-两个值得知道的次序：run-before 上 `memory-inject(10)` 只收集记忆 note，`user-message-land(20)` 统一把 job note（在前）与记忆 note 追加进消息、持久化并广播，块顺序与 `note.emitted` 次序保持稳定。system-after 上用户改写（默认 1000）排在前面，随后组装层把终稿（用户改写或原稿）按段冻结进基线并写 `system` 审计事件。**系统提示词的审计记录不是 hook**：`system` 事件的双段写入（stable/live）由 run 组装层直接写入事件流（写失败即 run 失败），因为分段冻结需要 stable/live 两段文本，而它们位于 hook 链之上（见 [run-manager](../server/run-manager.md) 组装第 11 步）。
+两个值得知道的次序：run-before 上 `memory-inject(10)` 只收集记忆 note，`user-message-land(20)` 统一把 cron note（在前）与记忆 note 追加进消息、持久化并广播，块顺序与 `note.emitted` 次序保持稳定。system-after 上用户改写（默认 1000）排在前面，随后组装层把终稿（用户改写或原稿）按段冻结进基线并写 `system` 审计事件。**系统提示词的审计记录不是 hook**：`system` 事件的双段写入（stable/live）由 run 组装层直接写入事件流（写失败即 run 失败），因为分段冻结需要 stable/live 两段文本，而它们位于 hook 链之上（见 [run-manager](../server/run-manager.md) 组装第 11 步）。
 
 **subagent run 的派生跳过**：会话 meta 带 `parentSessionId` 时，run 组装给内置 hook 链带 `childRun: true`（同一个事实派生，无独立开关，见 [subagents](./subagents.md)），五个内置 hook 直接停用：`memory-inject` 不检索不收集（subagent 不注入记忆 note）、`autoname` 跳过（标题已带"subagent · "前缀）、`follow-check` 不挂检查（子会话不进记忆的任何提取路径）、`skill-follow-check` 不排（子会话不自己排技能提炼检查，其技能使用由同项目后续主干 run 的粗查覆盖）、`system-materials` 返回空段（系统提示词整体换成精简的 `subagentSystemPrompt`，不带认知与技能清单）。`usage-ledger` 照常记录，但记到 `usageSessionId`（= 父会话 id）名下，subagent 的 token 消耗归因到派它的主对话。
 

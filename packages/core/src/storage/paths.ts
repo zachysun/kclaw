@@ -20,12 +20,14 @@ export interface KclawPaths {
   memoryDir: string
   /** ~/.kclaw/sessions/<session-id>/ */
   sessionsDir: string
-  /** ~/.kclaw/jobs.db — scheduled job state */
-  jobsDb: string
+  /** ~/.kclaw/cron.db — scheduled cron state */
+  cronDb: string
   /** Per-run token usage ledger (<home>/usage.db). */
   usageDb: string
   /** Cross-session message full-text index (<home>/search.db, FTS5). */
   searchDb: string
+  /** Undelivered background-process notices (<home>/process-notices.jsonl). */
+  processNotices: string
   /** ~/.kclaw/attachments/<session-id>/ — large attachment spillover */
   attachmentsDir: string
   /** ~/.kclaw/spill — full tool output kept readable when the model view truncates */
@@ -47,7 +49,7 @@ function envHome(): string | undefined {
 /**
  * Resolve the kclaw directory layout and create the directory tree.
  * Parent dirs are created with mkdirSync(recursive); files (config.json,
- * jobs.db, ...) are only path strings and are not created here.
+ * cron.db, ...) are only path strings and are not created here.
  */
 export function resolvePaths(home?: string): KclawPaths {
   const root = home ?? envHome() ?? join(homedir(), ".kclaw")
@@ -60,9 +62,10 @@ export function resolvePaths(home?: string): KclawPaths {
     hooksDir: join(root, "hooks"),
     memoryDir: join(root, "memory"),
     sessionsDir: join(root, "sessions"),
-    jobsDb: join(root, "jobs.db"),
+    cronDb: join(root, "cron.db"),
     usageDb: join(root, "usage.db"),
     searchDb: join(root, "search.db"),
+    processNotices: join(root, "process-notices.jsonl"),
     attachmentsDir: join(root, "attachments"),
     spillDir: join(root, "spill"),
     logsDir: join(root, "logs"),

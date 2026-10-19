@@ -13,7 +13,7 @@ export type {
   SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SkillEvent, SystemEvent,
   TeamAuditEvent, TeamCreatedEvent, TeamMemberProvisionedEvent, TeamMemberSettledEvent,
   TeamMessageDeliveredEvent, TeamMessageQueuedEvent, TeamTaskCreatedEvent, TeamTaskUpdatedEvent,
-  GoalEvent, GoalSetEvent, GoalClearedEvent, GoalCheckedEvent,
+  GoalEvent, GoalSetEvent, GoalClearedEvent, GoalCheckedEvent, TodoItem, TodoWrittenEvent,
 } from "@kclaw/core/protocol"
 export type { GoalGateOutcome, GoalJudgeResult, GoalSnapshot, GoalState, GoalStopReason, GoalVerdict } from "@kclaw/core/protocol"
 // The core canon names this GrantedBy; the web UI's historical name stays.
@@ -25,7 +25,7 @@ export interface SessionMeta {
   title: string
   createdAt: string // ISO-8601
   updatedAt: string // ISO-8601
-  jobId?: string
+  cronId?: string
   workdir?: string
   model?: string
   deleted?: boolean
@@ -44,8 +44,8 @@ export interface FsBrowseResult {
   dirs: string[]
 }
 
-/** A scheduled prompt as GET /jobs returns it. */
-export interface Job {
+/** A scheduled prompt as GET /cron returns it. */
+export interface Cron {
   id: string
   name: string
   cron: string

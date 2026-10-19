@@ -15,7 +15,7 @@ const SNAPSHOT = {
   global: {
     path: "/home/.kclaw/permissions.yaml",
     rules: [
-      { rule: "exec:git push*", decidedAt: "2026-09-06T00:00:00.000Z", origin: { tool: "exec", argsJson: "{}", sessionId: "ses_1" }, source: "auto" },
+      { rule: "bash:git push*", decidedAt: "2026-09-06T00:00:00.000Z", origin: { tool: "bash", argsJson: "{}", sessionId: "ses_1" }, source: "auto" },
     ],
   },
   project: {
@@ -69,7 +69,7 @@ describe("PermissionsView", () => {
     const api = fakeApi()
     const { container } = await mount(api, undefined, "/w/proj")
     expect(api.get).toHaveBeenCalledWith("/permissions/rules?workspace=%2Fw%2Fproj")
-    expect(container.textContent).toContain("exec:git push*")
+    expect(container.textContent).toContain("bash:git push*")
     expect(container.textContent).toContain("fs_write:/w/proj/a.md")
     expect(container.textContent).toContain("ses_1")
     expect(container.textContent).toContain("/home/.kclaw/permissions.yaml")

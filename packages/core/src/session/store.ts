@@ -7,7 +7,7 @@ import { writeFileAtomic } from "../storage/atomic.js"
 import { appendJsonlLine, readJsonl, readJsonlFrom } from "../storage/jsonl.js"
 import { applyEvent, isCompactionEvent, isMessageEvent, isMessageTruncatedEvent } from "./events.js"
 import type { MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent, SandboxCheckedEvent, SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent, TeamAuditEvent } from "./events.js"
-import type { GoalCheckedEvent, GoalClearedEvent, GoalSetEvent } from "./events.js"
+import type { GoalCheckedEvent, GoalClearedEvent, GoalSetEvent, TodoWrittenEvent } from "./events.js"
 import type { GoalSnapshot } from "../goal/types.js"
 import type { AttachmentRef, QueueEntry } from "../protocol/wire.js"
 import type { PermissionMode } from "../permissions/modes.js"
@@ -22,7 +22,7 @@ export interface SessionMeta {
   title: string
   createdAt: string // ISO-8601
   updatedAt: string // ISO-8601
-  jobId?: string
+  cronId?: string
   workdir?: string
   /**
    * 父会话（subagent 派生关系）：设置即子会话。子会话不出现在默认会话列表、
@@ -37,6 +37,8 @@ export interface SessionMeta {
    * 语义无关。
    */
   forkedFrom?: { sessionId: string; /** 用户所点的分叉点消息；不带 messageId 且流内无消息时省略。 */ messageId?: string }
+  /** 会话级 todo 清单（todo.written 事件投影，后写胜出；模型自组织草稿，见 tools/todo.ts）。 */
+  todo?: import("../protocol/session-events.js").TodoItem[]
   /** Per-session model override (empty/absent → daemon default). */
   model?: string
   /** Session permission mode (absent → "default"). */
@@ -191,11 +193,11 @@ export class SessionStore {
    * (the daemon's config default; absent → "default"), so meta.mode always
    * carries a real value and later config changes only affect NEW sessions.
    */
-  create(title?: string, jobId?: string, workdir?: string, mode: PermissionMode = "default", parentSessionId?: string): SessionMeta {
+  create(title?: string, cronId?: string, workdir?: string, mode: PermissionMode = "default", parentSessionId?: string): SessionMeta {
     const id = newId("ses")
     const now = new Date().toISOString()
     const event: SessionCreatedEvent = { type: "session.created", at: now, title: title ?? "新会话", mode }
-    if (jobId !== undefined) event.jobId = jobId
+    if (cronId !== undefined) event.cronId = cronId
     if (workdir !== undefined) event.workdir = workdir
     if (parentSessionId !== undefined) event.parentSessionId = parentSessionId
     this.appendEvent(id, event)
@@ -225,9 +227,9 @@ export class SessionStore {
     return metas.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))
   }
 
-  /** Non-deleted sessions of one job, newest-updated first (job-history queries). */
-  listByJob(jobId: string): SessionMeta[] {
-    return this.list().filter((m) => m.jobId === jobId)
+  /** Non-deleted sessions of one cron, newest-updated first (cron-history queries). */
+  listByCron(cronId: string): SessionMeta[] {
+    return this.list().filter((m) => m.cronId === cronId)
   }
 
   /** Every session projection including the recycle bin (workdir-union consumers, the purge cascade). */
@@ -348,6 +350,11 @@ export class SessionStore {
   /** Append one goal-check audit event（每轮判定至多一条；验收输出+裁决或失败）; the projection stays untouched (不推进 updatedAt)。 */
   appendGoalChecked(id: string, event: Omit<GoalCheckedEvent, "type">): void {
     this.appendEvent(id, { type: "goal.checked", ...event })
+  }
+
+  /** Append one todo snapshot write（全量替换，后写胜出；投影 todo，不推进 updatedAt）。 */
+  appendTodoWritten(id: string, event: Omit<TodoWrittenEvent, "type">): void {
+    this.appendEvent(id, { type: "todo.written", ...event })
   }
 
   /** Read a session's persisted message queue (queue.jsonl), oldest-first; a missing/empty file yields []. */

@@ -12,7 +12,7 @@
 - **argv 只在作为入口时解析**：`invokedAsMain` 用 `realpathSync(process.argv[1])` 与 `import.meta.url` 比较（与 ESM 加载器一致的符号链接解析），所以 `import "@kclaw/cli"` 当库引用没有副作用；`KclawClient` 与 `runChat` 同时作为库导出。
 - **连接即自动启动 daemon**：`KclawClient.connect` 读 `<home>/daemon.json`、探活 `/health`，不健康就先 `ensureDaemon` 再重读——任何命令在冷机器上直接可用，用户不需要先知道 daemon 的存在。
 - **Node >= 22 是启动门槛**：解析 argv 之前检查 `process.versions.node` 主版本，不满足则打印一行错误并 `process.exit(1)`，避免旧运行时报出难懂的语法/API 错误（详见 [onboarding](./onboarding.md)）。
-- **表格输出零依赖**：`jobs list` 的表格是纯字符串对齐（`renderJobsTable`：按列宽 `padEnd`，两空格列间隔），不引入表格库；列头同时充当空列表时的输出。
+- **表格输出零依赖**：`cron list` 的表格是纯字符串对齐（`renderCronTable`：按列宽 `padEnd`，两空格列间隔），不引入表格库；列头同时充当空列表时的输出。
 - **运行中发送不阻塞输入行，处置随每条发送显式附带**：发送与渲染由常驻帧泵（`startPump`，一个持续读取 socket 帧并分发给当前渲染的后台循环）接管，每次 `startRender` 递增渲染代际、旧渲染静默停止，run 中途照样能继续输入（`/interrupt`、忙时直发都依赖它）。每条 `send_message` 显式带 `disposition`（当前会话处置模式），模式由 `/steer`/`/wait` 切换、存会话级覆盖（与 Web 三选同源）；`interrupt` 是一次性动作，不做成模式（做成模式有"切了忘改回、接连中断 run"的误伤风险）。
 - **颜色只在 TTY 下生效**（TTY：终端这类交互式字符设备）：`dim`/`red` 输出 ANSI 转义序列（终端控制字符，用于改颜色/亮度），管道/重定向时输出纯文本，保证脚本经管道处理到纯文本。
 
@@ -26,7 +26,7 @@
 | `kclaw daemon start` | 确保 daemon 在运行（不在则启动），打印 pid 与端口；已在运行则打印 "daemon already running" |
 | `kclaw daemon stop` | 发 SIGTERM 终止 daemon，轮询至 `/health` 不可访问后删除 `daemon.json`；返回 "stopped" 或 "daemon not running" |
 | `kclaw daemon status` / `kclaw status` | 报告状态：`not running`，或 `running (pid <pid>, port <port>, v<版本>, uptime <n>s)`；daemon 报出的版本与 CLI 自身不一致时追加一行提示（两者不是同一次构建的产物，重新 `pnpm build` 并重启 daemon） |
-| `kclaw jobs list` | 列定时任务（连接过程中自动启动 daemon），五列表格：name/cron/enabled/nextRunAt/lastStatus |
+| `kclaw cron list` | 列定时任务（连接过程中自动启动 daemon），五列表格：name/cron/enabled/nextRunAt/lastStatus |
 | `kclaw mcp [list]` | 经 `GET /mcp` 按组打印 MCP server：每组先一行组头 `【全局】` 或 `【<工作目录路径>】`，组内每行 `  <名字>  <状态>  <N> 个工具[ 错误: <lastError>]`（状态为原始枚举串）；空配置打印 "未配置 MCP server（全局 mcp.json 与各项目 .kclaw/mcp.json 均为空）" |
 | `kclaw web` | 浏览器打开 WebUI（见 [onboarding](./onboarding.md)） |
 
@@ -106,9 +106,9 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
    - `tool_call.completed` → `⚡ <name> <args>`，args 是紧凑 JSON、截断到 60 字符。
    - `tool_result.completed` → `↳ <status> (<n>ms) <output>`，输出压空白后取前 80 字符；`tool_result.delta` 不做实时渲染（completed 行已带摘要）。
    - `message.queued`（我的消息）→ 暗色 `已排队（第 N 位）`（`position+1`）或 `已进入引导缓冲`（steer 无 position）；`message.steered`（我的消息）→ 暗色 `已注入`——我的消息身份从 `send_message_ack` 的 `messageId` 学到，终点以"我的消息被看到（`message.created`/`message.steered`）之后的第一个 `run.completed`"判定，前一个 run 的终态不会错收我的渲染。
-   - `confirmation.requested` → `⚠ <name> <argsJson> · 风险 <risk> · 过期 <expiresAt>`（带 `noteText` 时紧随一行暗色说明，如 exec 沙箱不可用），按 yes/no/ask 三种模式收集决定（ask 时暂停 readline、@clack 出确认框、恢复 readline）；ask 是**四项选择**——`允许（仅本次）` / `总是允许（本项目）` / `总是允许（全局）` / `拒绝`（`--yes`/`--no` 隐藏选项分别映射 once/reject；取消同样按拒绝），回发 `{type:"confirmation.resolve", confirmationId, decision}`（不带 `client` 字段 → 服务端记 "cli"）。"总是允许"会把一条收紧后的放行规则写入磁盘，之后同形操作不再询问（见 [permissions](../core/permissions.md) 的"沉淀规则"一节）。
+   - `confirmation.requested` → `⚠ <name> <argsJson> · 风险 <risk> · 过期 <expiresAt>`（带 `noteText` 时紧随一行暗色说明，如 bash 沙箱不可用），按 yes/no/ask 三种模式收集决定（ask 时暂停 readline、@clack 出确认框、恢复 readline）；ask 是**四项选择**——`允许（仅本次）` / `总是允许（本项目）` / `总是允许（全局）` / `拒绝`（`--yes`/`--no` 隐藏选项分别映射 once/reject；取消同样按拒绝），回发 `{type:"confirmation.resolve", confirmationId, decision}`（不带 `client` 字段 → 服务端记 "cli"）。"总是允许"会把一条收紧后的放行规则写入磁盘，之后同形操作不再询问（见 [permissions](../core/permissions.md) 的"沉淀规则"一节）。
    - `question.requested`（ask_user_questions 工具）→ `❓ N 个问题待回答`（带 `noteText` 时附一行说明，如"来自 subagent X"），每题按选项（方向键 + 回车单选/多选）或自由文本（输入一行）收集，全部答完回发 `{type:"question.resolve", questionId, answers}`（每题一个字符串数组，未回答的题为空数组）。等待期间运行暂停，超时（默认 10 分钟）后工具以"用户未在限时内回答"收场（机制见 [tools](../core/tools.md)）。
-   - `note.emitted` → 暗色 `[note] <text>`（记忆注入、job 来源等系统 note 每条一行）；`message.created/completed` 刻意不渲染（readline 已回显用户输入，再渲染会重复）。
+   - `note.emitted` → 暗色 `[note] <text>`（记忆注入、cron 来源等系统 note 每条一行）；`message.created/completed` 刻意不渲染（readline 已回显用户输入，再渲染会重复）。
    - `compaction.started` → 暗色 `[正在压缩早期对话…]` 一行（收尾压缩发生在 `run.completed` 之后、中途/急救压缩发生在运行中的迭代边界，都有这行提示，摘要调用的数秒不是静默空窗）；`compaction.completed` → 按 `result` 三分支：`ok` 打暗色 `✱ 早期对话已压缩为 N 段，保留最近 M 条原文（早期细节可用 session_search 检索）`、`failed` 打暗色 `✱ 压缩失败，本轮继续（稍后自动重试）`、`cancelled` 打暗色 `✱ 压缩已取消`。事件只在真正发生压缩时发一次，天然是"每次压缩一条"的告知，与 WebUI 的折叠块同一去重语义（见 [compaction](../core/compaction.md)）。
    - `memory.written`（广播，不带 sessionId）→ 暗色一行 `已写入记忆: <path>`，提示记忆已写入；它与 run 生命周期无关，只是轻提示（见 [memory](../core/memory.md)）。
    - `hook.failed` → 暗色一行 `⚠ hook <名字> 失败（<位置>[ 装载]）：<原因>`，hook 失败不伤 run，但失败必须可见（机制见 [hooks](../core/hooks.md)）。
@@ -161,7 +161,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 - **确认应答发送失败被忽略**：`confirmation.resolve` 发送抛错只忽略（socket 正在断开），交给重连路径接管。
 - **管道 stdin 的 EOF**：stdin 关闭时 readline 触发 close，循环自然退出；`rlClosed` 标志让迟到的 `prompt()` 变成空操作而不是抛 "readline was closed"（缓冲行仍会经异步迭代器到达）。
 - **重连后不回放**：重连只拉取全量对齐数据但不渲染，错过的事件不再补偿；持久化消息自洽，下次进入 REPL 重新拉取全量即可（协议规则见 [protocol](../core/protocol.md)）。
-- **jobs 表格无分页**：`GET /jobs` 全量返回，任务多时表格整体打印。
+- **cron 表格无分页**：`GET /cron` 全量返回，任务多时表格整体打印。
 - **文件引用宁可整条失败也不靠猜**：`@token` 越界、不存在或不是文件时消息不发出——发出去模型要么读不到要么读到不该读的。文本与二进制的区分只按扩展名和 MIME 粗判，识别不了的类型一律当"非文本"处理，只留一条 fs_read 提示。
 - **自定义命令是提示词模板，不是脚本**：它只做一件事——把模板里的 `{{args}}` 替换成命令参数后作为普通消息发送，没有任何 shell 执行面；与内置命令重名的文件直接忽略。
 
@@ -172,6 +172,6 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 - [realtime](../server/realtime.md)：`/ws` 帧协议与订阅语义、断线恢复规则总述
 - [client-http](../core/client-http.md)：`request`/`uploadAttachment` 背后的共享 HTTP 请求模块
 - [run-manager](../server/run-manager.md)：`send_message`/`run.cancel`/确认在服务端的后续
-- [http-api](../server/http-api.md)：slash 命令、`jobs list`、`mcp list` 背后的 REST 端点
+- [http-api](../server/http-api.md)：slash 命令、`cron list`、`mcp list` 背后的 REST 端点
 - [mcp](../core/mcp.md)：`kclaw mcp [list]` 展示的状态快照与 `mcp__<server>__<tool>` 命名
 - [skills](../core/skills.md)：`/skill` 命令与技能即斜杠命令背后的技能机制

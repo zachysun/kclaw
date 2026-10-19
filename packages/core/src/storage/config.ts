@@ -45,9 +45,9 @@ export interface SandboxConfig {
   writeRoots: string[]
   /**
    * 沙箱内网络开关（`"allow" | "deny"`，默认 `"allow"`）。deny 时
-   * exec 子进程不可建出站/入站连接（Seatbelt `deny network-outbound/inbound`、
+   * bash 子进程不可建出站/入站连接（Seatbelt `deny network-outbound/inbound`、
    * bwrap `--unshare-net`）；web_search/web_fetch 在 daemon 进程内执行、不走
-   * exec 子进程，不受此开关影响。
+   * bash 子进程，不受此开关影响。
    */
   network?: "allow" | "deny"
 }
@@ -113,12 +113,12 @@ export interface KclawConfig {
      */
     allowPrivateNetworks?: boolean
   }
-  exec: { timeoutMs: number; maxOutputBytes: number }
+  bash: { timeoutMs: number; maxOutputBytes: number }
   /**
-   * Exec OS sandbox (permission batch A). When enabled and the platform
+   * Bash OS sandbox (permission batch A). When enabled and the platform
    * sandbox (macOS sandbox-exec / Linux bubblewrap) is available, `default`
-   * and `acceptEdits` modes auto-pass sandboxable exec commands (grantedBy
-   * "sandboxed") and every exec runs inside the sandbox: workspace + tmp
+   * and `acceptEdits` modes auto-pass sandboxable bash commands (grantedBy
+   * "sandboxed") and every bash runs inside the sandbox: workspace + tmp
    * writable, home read-only with ~/.kclaw masked. Unavailable sandbox falls
    * back to manual confirmation (fail-closed — never a bare run). Defaults
    * to enabled with no extra write roots (defaultConfig).
@@ -126,6 +126,11 @@ export interface KclawConfig {
   sandbox?: SandboxConfig
   /** Hook 系统。不写时各取读取处的 ?? 默认值。 */
   hooks?: { /** 单个 hook 处理器的时限（毫秒）；超时按失败处理（fail-open）。 */ timeoutMs?: number }
+  /** 会话级 todo 清单（模型自组织计划面）。 */
+  todo?: {
+    /** true = 允许多条同时 in_progress（并行 subagent 流的逃生口；默认单条）。 */
+    allowParallelInProgress?: boolean
+  }
   sessions: {
     recycleBinTtlMs: number
     /** Context token budget. Default 128000 (resolveContextTokens applies it). */
@@ -146,7 +151,7 @@ export interface KclawConfig {
     askTimeoutMs?: number
   }
   /**
-   * Job-finish notifications. Delivery failures are only logged (onError),
+   * Cron-finish notifications. Delivery failures are only logged (onError),
    * never retried and never thrown. An empty channels list disables
    * notifications entirely (zero cost).
    */
@@ -253,7 +258,7 @@ export interface KclawConfig {
 
 export const defaultConfig: KclawConfig = {
   providers: { default: "", entries: {}, timeoutMs: DEFAULT_LLM_TIMEOUT_MS },
-  permissions: { allow: [], deny: ["exec:sudo*", "exec:rm -rf*"], confirmTimeoutMs: 120_000, sessionGrants: true, defaultMode: "default", sensitiveFiles: DEFAULT_SENSITIVE_FILES },
+  permissions: { allow: [], deny: ["bash:sudo*", "bash:rm -rf*"], confirmTimeoutMs: 120_000, sessionGrants: true, defaultMode: "default", sensitiveFiles: DEFAULT_SENSITIVE_FILES },
   memory: {
     write: { immediate: true, manual: true, intervalMinutes: 30, idleMinutes: 10 },
     extractModel: "",
@@ -264,7 +269,8 @@ export const defaultConfig: KclawConfig = {
     injectTokenBudget: 1000,
   },
   web: { tavilyApiKey: "", timeoutMs: 20_000, allowPrivateNetworks: false },
-  exec: { timeoutMs: 60_000, maxOutputBytes: 100 * 1024 },
+  bash: { timeoutMs: 60_000, maxOutputBytes: 100 * 1024 },
+  todo: { allowParallelInProgress: false },
   sandbox: { enabled: true, writeRoots: [] },
   sessions: { recycleBinTtlMs: 30 * 24 * 60 * 60 * 1000, defaultDisposition: "steer" as const },
   notify: { channels: [], timeoutMs: 10_000 },
@@ -645,7 +651,7 @@ export const PROVIDER_ENTRY_REFERENCES: ReadonlyArray<{
 /**
  * Move the entry keyed `from` to `to` and rewrite every
  * {@link PROVIDER_ENTRY_REFERENCES} location pointing at it. Session-level
- * references (session meta, jobs, slash commands) keep the old name by
+ * references (session meta, crons, slash commands) keep the old name by
  * design — they fall back to the default entry on their next run, the same
  * semantics as deletion.
  */

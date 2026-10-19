@@ -3,10 +3,10 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, realpathSync
 import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
 import { spawnSync } from "node:child_process"
-import { createExecSandbox, seatbeltProfile, bwrapArgs, type ExecSandbox } from "../../src/sandbox/provider.js"
+import { createBashSandbox, seatbeltProfile, bwrapArgs, type BashSandbox } from "../../src/sandbox/provider.js"
 
 /** Run one command inside a sandbox; resolves with exit status + merged output. */
-function runIn(sb: ExecSandbox, command: string, cwd: string): Promise<{ status: number | null; output: string }> {
+function runIn(sb: BashSandbox, command: string, cwd: string): Promise<{ status: number | null; output: string }> {
   return new Promise((resolve) => {
     const child = sb.spawn(command, { cwd })
     let output = ""
@@ -40,7 +40,7 @@ describe("seatbeltProfile", () => {
     expect(p).toContain("(allow network*)")
   })
 
-  it("network deny swaps the allow for outbound+inbound denies (bare network* breaks exec)", () => {
+  it("network deny swaps the allow for outbound+inbound denies (bare network* breaks bash)", () => {
     const p = seatbeltProfile({
       workspace: "/Users/u/proj",
       home: "/Users/u",
@@ -90,16 +90,16 @@ describe("bwrapArgs", () => {
   })
 })
 
-describe("createExecSandbox", () => {
+describe("createBashSandbox", () => {
   it("disabled in config → unavailable with a clear reason", () => {
-    const sb = createExecSandbox({ enabled: false, writeRoots: [] }, { workspace: "/tmp" })
+    const sb = createBashSandbox({ enabled: false, writeRoots: [] }, { workspace: "/tmp" })
     expect(sb.available).toBe(false)
     expect(sb.unavailableReason).toContain("disabled")
     expect(() => sb.spawn("true", { cwd: "/tmp" })).toThrow(/unavailable/)
   })
 
   it("macOS: sandbox-exec available, spawns through it (this host)", () => {
-    const sb = createExecSandbox({ enabled: true, writeRoots: [] }, { workspace: "/tmp" })
+    const sb = createBashSandbox({ enabled: true, writeRoots: [] }, { workspace: "/tmp" })
     if (process.platform === "darwin") {
       expect(sb.available).toBe(true)
       const child = sb.spawn("echo hi", { cwd: "/tmp" })
@@ -119,7 +119,7 @@ describe("createExecSandbox", () => {
 
   it("unrecognized platforms are unavailable", () => {
     // the win32 branch can only be exercised by stubbing; assert the guard exists
-    expect(() => createExecSandbox({ enabled: true, writeRoots: [] }, { workspace: "/tmp" })).not.toThrow()
+    expect(() => createBashSandbox({ enabled: true, writeRoots: [] }, { workspace: "/tmp" })).not.toThrow()
   })
 })
 
@@ -146,7 +146,7 @@ describe("macOS seatbelt smoke", { skip: !isMac }, () => {
     try {
       // tmpDirs excludes os.tmpdir(): the fake home lives under it, and
       // must NOT be in the writable whitelist — only the real tmp dirs.
-      const sb = createExecSandbox(
+      const sb = createBashSandbox(
         { enabled: true, writeRoots: [] },
         { workspace: ws, home, tmpDirs: ["/private/tmp"] },
       )
@@ -178,7 +178,7 @@ describe("macOS seatbelt smoke", { skip: !isMac }, () => {
     const home = fakeHome()
     const extra = mkdtempSync(join(tmpdir(), "kclaw-sbx-extra-"))
     try {
-      const sb = createExecSandbox(
+      const sb = createBashSandbox(
         { enabled: true, writeRoots: [extra] },
         { workspace: ws, home, tmpDirs: ["/private/tmp"] },
       )
@@ -196,7 +196,7 @@ describe("macOS seatbelt smoke", { skip: !isMac }, () => {
     const ws = mkdtempSync(join(tmpdir(), "kclaw-sbx-ws-"))
     const home = fakeHome()
     try {
-      const sb = createExecSandbox(
+      const sb = createBashSandbox(
         { enabled: true, writeRoots: [], network: "deny" },
         { workspace: ws, home, tmpDirs: ["/private/tmp"] },
       )
@@ -228,7 +228,7 @@ describe("linux bwrap smoke", { skip: !isLinux || !linuxHasBwrap }, () => {
     mkdirSync(join(home, ".kclaw"), { recursive: true })
     writeFileSync(join(home, ".kclaw", "token"), "super-secret")
     try {
-      const sb = createExecSandbox({ enabled: true, writeRoots: [] }, { workspace: ws, home })
+      const sb = createBashSandbox({ enabled: true, writeRoots: [] }, { workspace: ws, home })
       expect(sb.available).toBe(true)
 
       const ok = await runIn(sb, `echo hi > ${ws}/out.txt`, ws)

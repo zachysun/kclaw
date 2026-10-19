@@ -9,7 +9,7 @@
 | 值 | 含义 |
 |----|------|
 | `user` | 人发的消息 |
-| `job` | 定时任务触发 |
+| `cron` | 定时任务触发 |
 | `agent` | subagent 派生的子 run |
 | `team` | 团队收信箱投递 / 派活 |
 | `goal` | 目标循环自动续跑（`/goal`，处置固定 wait，机制见 [goal](../core/goal.md)） |
@@ -48,7 +48,7 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 
 | 值 | 含义 |
 |----|------|
-| `readonly` | 只读（写与 exec 拒绝，敏感工具不可见） |
+| `readonly` | 只读（写与 bash 拒绝，敏感工具不可见） |
 | `default` | 越界操作逐次确认 |
 | `acceptEdits` | 工作区内文件写入免确认 |
 | `trusted` | 沙箱与工作区内免确认，边界外直接拒绝 |
@@ -162,7 +162,7 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 | `run` | run id | runAgent |
 | `conf` | 确认卡 id | 权限引擎的确认 id 工厂 |
 | `mem` | 记忆（已声明） | 无生成点——线 / 认知文件按 topic / kind-name 命名 |
-| `job` | 定时任务 id | jobs/scheduler.ts |
+| `cron` | 定时任务 id | crons/scheduler.ts |
 | `att` | 附件 id | server 上传路由（磁盘文件名 `<att_…>__<原名>`） |
 | `q` | 提问 id | ask_user_questions 的 questionId |
 | `tm` | 收信箱条目 id | 团队 store（mailbox 入队） |

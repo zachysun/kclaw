@@ -27,7 +27,7 @@ function resolveUrl(base: string, path: string): string {
 
 export interface ApiClientOptions {
   /**
-   * Fired once per 401 response (status ping, sessions, jobs, audit, message
+   * Fired once per 401 response (status ping, sessions, crons, audit, message
    * pulls — any request through the client). The App uses it to clear the
    * stored token and drop back to the token form, so a stale token cannot
    * loop the "refresh to re-enter" notice forever.

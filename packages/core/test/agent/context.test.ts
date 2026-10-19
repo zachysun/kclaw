@@ -28,7 +28,7 @@ describe("toProviderMessages", () => {
   it("maps assistant tool_calls and tool results pairwise", () => {
     const a = newAssistantMessage("s", "glm", [
       { id: "blk_1", type: "text", text: "我来查" },
-      { id: "blk_2", type: "tool_call", callId: "call_1", name: "exec", args: { command: "ls" }, argsJson: "{\"command\":\"ls\"}" },
+      { id: "blk_2", type: "tool_call", callId: "call_1", name: "bash", args: { command: "ls" }, argsJson: "{\"command\":\"ls\"}" },
     ])
     a.stopReason = "tool_use"
     const t = newMessage("s", "tool", [
@@ -36,14 +36,14 @@ describe("toProviderMessages", () => {
     ])
     const out = toProviderMessages([a, t])
     expect(out).toEqual([
-      { role: "assistant", content: "我来查", toolCalls: [{ callId: "call_1", name: "exec", argsJson: "{\"command\":\"ls\"}" }] },
+      { role: "assistant", content: "我来查", toolCalls: [{ callId: "call_1", name: "bash", argsJson: "{\"command\":\"ls\"}" }] },
       { role: "tool", toolCallId: "call_1", content: "a.txt" },
     ])
   })
 
   it("marks error results", () => {
     const a = newAssistantMessage("s", "glm", [
-      { id: "blk_0", type: "tool_call", callId: "call_9", name: "exec", args: {}, argsJson: "{}" },
+      { id: "blk_0", type: "tool_call", callId: "call_9", name: "bash", args: {}, argsJson: "{}" },
     ])
     const t = newMessage("s", "tool", [
       { id: "blk_1", type: "tool_result", callId: "call_9", status: "error", output: "boom", durationMs: 1 },
@@ -95,7 +95,7 @@ describe("toProviderMessages", () => {
 
   it("keeps assistant→tool pairs intact across the full history", () => {
     const a = newAssistantMessage("s", "glm", [
-      { id: "blk_1", type: "tool_call", callId: "call_1", name: "exec", args: { command: "ls" }, argsJson: "{\"command\":\"ls\"}" },
+      { id: "blk_1", type: "tool_call", callId: "call_1", name: "bash", args: { command: "ls" }, argsJson: "{\"command\":\"ls\"}" },
     ])
     a.stopReason = "tool_use"
     const t = newMessage("s", "tool", [
@@ -113,7 +113,7 @@ describe("toProviderMessages", () => {
     // reach the provider — OpenAI-compat APIs 400 on unpaired tool_calls
     const a = newAssistantMessage("s", "glm", [
       { id: "blk_1", type: "text", text: "let me run" },
-      { id: "blk_2", type: "tool_call", callId: "call_1", name: "exec", args: {}, argsJson: "{}" },
+      { id: "blk_2", type: "tool_call", callId: "call_1", name: "bash", args: {}, argsJson: "{}" },
     ])
     const u = newMessage("s", "user", [{ id: "blk_3", type: "text", text: "next" }])
     const out = toProviderMessages([a, u])
@@ -125,15 +125,15 @@ describe("toProviderMessages", () => {
 
   it("keeps only the tool_calls that are answered in history", () => {
     const a = newAssistantMessage("s", "glm", [
-      { id: "blk_1", type: "tool_call", callId: "call_1", name: "exec", args: {}, argsJson: "{}" },
-      { id: "blk_2", type: "tool_call", callId: "call_2", name: "exec", args: {}, argsJson: "{}" },
+      { id: "blk_1", type: "tool_call", callId: "call_1", name: "bash", args: {}, argsJson: "{}" },
+      { id: "blk_2", type: "tool_call", callId: "call_2", name: "bash", args: {}, argsJson: "{}" },
     ])
     const t = newMessage("s", "tool", [
       { id: "blk_3", type: "tool_result", callId: "call_2", status: "ok", output: "ok", durationMs: 1 },
     ])
     const out = toProviderMessages([a, t])
     expect(out).toEqual([
-      { role: "assistant", content: null, toolCalls: [{ callId: "call_2", name: "exec", argsJson: "{}" }] },
+      { role: "assistant", content: null, toolCalls: [{ callId: "call_2", name: "bash", argsJson: "{}" }] },
       { role: "tool", toolCallId: "call_2", content: "ok" },
     ])
   })
@@ -199,7 +199,7 @@ describe("toProviderMessages tool-result eviction", () => {
   }
 
   it("replaces tool results older than toolResultKeep with a placeholder", () => {
-    const msgs = [...big("一", "c1", "fs_read"), ...big("二", "c2", "exec"), ...big("三", "c3", "fs_read")]
+    const msgs = [...big("一", "c1", "fs_read"), ...big("二", "c2", "bash"), ...big("三", "c3", "fs_read")]
     const out = toProviderMessages(msgs, { toolResultKeep: 1 })
     const tools = out.filter((m) => m.role === "tool")
     expect(tools.length).toBe(3)
@@ -213,13 +213,13 @@ describe("toProviderMessages tool-result eviction", () => {
 
   it("marks evicted failed calls as failed", () => {
     const a = na("s", "m", [
-      { id: "c1", type: "tool_call", callId: "x", name: "exec", args: {}, argsJson: "{}" },
+      { id: "c1", type: "tool_call", callId: "x", name: "bash", args: {}, argsJson: "{}" },
     ])
     a.stopReason = "tool_use"
     const t = nm("s", "tool", [
       { id: "r1", type: "tool_result", callId: "x", status: "error", output: "boom", durationMs: 1 },
     ])
-    const newer = big("新", "y", "exec")
+    const newer = big("新", "y", "bash")
     const out = toProviderMessages([a, t, ...newer], { toolResultKeep: 1 })
     const evicted = out.find((m) => m.role === "tool" && m.content.includes("已省略"))
     expect(evicted!.content).toContain("该次调用失败")
@@ -232,7 +232,7 @@ describe("toProviderMessages tool-result eviction", () => {
   })
 
   it("toolResultKeep 0 means NO count-based eviction: every result is sent verbatim（缓存前缀稳定的新默认）", () => {
-    const msgs = [...big("一", "c1", "fs_read"), ...big("二", "c2", "exec"), ...big("三", "c3", "fs_read")]
+    const msgs = [...big("一", "c1", "fs_read"), ...big("二", "c2", "bash"), ...big("三", "c3", "fs_read")]
     const out = toProviderMessages(msgs, { toolResultKeep: 0 })
     const tools = out.filter((m) => m.role === "tool")
     expect(tools.length).toBe(3)
@@ -242,7 +242,7 @@ describe("toProviderMessages tool-result eviction", () => {
   })
 
   it("undefined keeps everything (unchanged), and the token budget still evicts under keep 0", () => {
-    const msgs = [...big("一", "c1", "fs_read"), ...big("二", "c2", "exec"), ...big("三", "c3", "fs_read")]
+    const msgs = [...big("一", "c1", "fs_read"), ...big("二", "c2", "bash"), ...big("三", "c3", "fs_read")]
     for (const keep of [undefined, 0]) {
       const out = toProviderMessages(msgs, { ...(keep === undefined ? {} : { toolResultKeep: keep }) })
       const tools = out.filter((m) => m.role === "tool")
@@ -267,7 +267,7 @@ describe("toProviderMessages — v3", () => {
   const toolMsg = (output: string) => {
     const callId = `call_${++seq}`
     const a = newAssistantMessage("s", "glm", [
-      { id: `c-${callId}`, type: "tool_call", callId, name: "exec", args: {}, argsJson: "{}" },
+      { id: `c-${callId}`, type: "tool_call", callId, name: "bash", args: {}, argsJson: "{}" },
     ])
     a.stopReason = "tool_use"
     const t = newMessage("s", "tool", [

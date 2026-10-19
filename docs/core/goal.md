@@ -47,7 +47,7 @@
 
 ## 验收命令（acceptance gates）
 
-`/goal 目标描述 verify: <命令>`（可多条 `verify:`）登记验收命令，每轮检查先在 **exec 沙箱**里逐条执行（60 秒超时、输出尾部 2000 字符入事件）。语义：
+`/goal 目标描述 verify: <命令>`（可多条 `verify:`）登记验收命令，每轮检查先在 **bash 沙箱**里逐条执行（60 秒超时、输出尾部 2000 字符入事件）。语义：
 
 - **fail-closed**：设定带验收命令的目标时沙箱不可用就直接拒绝（错误 400）；检查时刻沙箱不可用按全部失败计。
 - **短路判定器**：任一命令失败就不调判定器（省 token），失败输出直接作为下一轮的修正指引；连续 3 轮全不过 → `gate-exhausted` 停止。
@@ -84,7 +84,7 @@
 
 ## 与相邻系统的交互
 
-- **排队**：goal 轮的 trigger 是 `"goal"`（`run.started` 触发源第五种），处置固定 `wait`（与 job/agent 同款——无人值守的排队行为必须可预测），用户中途输入按自己的处置照常 steer 注入当前 run。
+- **排队**：goal 轮的 trigger 是 `"goal"`（`run.started` 触发源第五种），处置固定 `wait`（与 cron/agent 同款——无人值守的排队行为必须可预测），用户中途输入按自己的处置照常 steer 注入当前 run。
 - **唤醒 budget**（两次用户发言之间的机器唤醒上限）：goal 轮开跑时同样清零——目标循环自身有九条独立停止条件，不再叠加这份上限，否则长目标里 subagent 投递会先被卡死。
 - **subagent 会话**（`parentSessionId` 非空）不能设目标（只读会话）。
 - **提示词注入**沿用 XML 标签约定：首轮 `<goal-start>`、续跑 `<goal-continue round=N>`、收尾 `<goal-wrapup>`（正文中的闭合标签会被逃逸，防提示词注入）；goal 轮的用户消息带 `note(kind:"goal")` 出处行。
@@ -104,6 +104,10 @@
 - **daemon 重启后循环不自动续**：armed 是进程内开关，重启即收回授权；快照（`meta.goal`）还在，用户显式 resume 才重新起跑（见 [ADR-0002](../adr/0002-goal-armed-is-process-local.md)）。
 - **判定期间的并发动作安全**：用户在判定器 await 之后 stop/pause/clear，审计事件（goal.checked）照常写入，状态机只在仍 active 时推进；检查入口互斥，不会重入。
 - **读事件流失败不炸检查**：计数派生只负责读事件流，读流失败按空事件派生全零，检查照常走完。
+
+## 模型面（goal 三件工具，2026-10-19 起）
+
+daemon 组装时把 GoalLoopHost（结构性接口 `GoalToolHost`）注入 run，根会话注册 `create_goal` / `get_goal` / `update_goal`（实现 `tools/goal.ts`，subagent 不注册）：create/update **sensitive**（审批=用户明说的机制化——既定纪律：模型不经 prompting 不得启动或操控花费循环）、get safe。`update_goal action=complete` 请求**立即判定**：host 新增 `requestCheck`（armed+active 才真发起，否则告知判定照旧在 run 边界自动进行），判定器裁决不变——met/impossible 才落终态，模型永不自判完成（对比的两家让模型自证完成，本仓库 ADR-0003 明确拒绝）。pause/resume/stop 直映 host 方法。CLI `/goal` 帮助文本已提及模型侧工具。ADR-0004 文末有本次决策的更新节。
 
 ## 关联
 

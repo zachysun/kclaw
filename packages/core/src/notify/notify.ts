@@ -1,9 +1,9 @@
 /**
- * Job-finish notification channels (bark / Server酱 / generic webhook).
+ * Cron-finish notification channels (bark / Server酱 / generic webhook).
  *
  * Design rules: sending never throws — every failure is reported through
  * `opts.onError` (or swallowed) so a notify hiccup can never break the
- * job pipeline. No external deps: native fetch + AbortSignal.timeout.
+ * cron pipeline. No external deps: native fetch + AbortSignal.timeout.
  */
 
 export interface NotifyChannel {
@@ -12,13 +12,13 @@ export interface NotifyChannel {
   type: "bark" | "serverchan" | "webhook"
   /** Channel endpoint: bark device URL / Server酱 SendKey URL / any webhook URL. */
   url: string
-  /** Optional body template; placeholders {{job}} {{status}} {{summary}} {{sessionId}} {{sessionUrl}}. */
+  /** Optional body template; placeholders {{cron}} {{status}} {{summary}} {{sessionId}} {{sessionUrl}}. */
   template?: string
 }
 
-export interface JobFinishedPayload {
-  jobId: string
-  jobName: string
+export interface CronFinishedPayload {
+  cronId: string
+  cronName: string
   status: "ok" | "error"
   summary: string
   sessionId: string
@@ -26,7 +26,7 @@ export interface JobFinishedPayload {
 }
 
 export interface Notifier {
-  notifyJobFinished(payload: JobFinishedPayload): Promise<void>
+  notifyCronFinished(payload: CronFinishedPayload): Promise<void>
 }
 
 export type FetchImpl = typeof fetch
@@ -40,7 +40,7 @@ export interface NotifierOptions {
   onError?: (channel: NotifyChannel, error: string) => void
 }
 
-const DEFAULT_BODY_TEMPLATE = "{{job}}：{{statusText}}\n{{summary}}\n会话：{{sessionUrl}}"
+const DEFAULT_BODY_TEMPLATE = "{{cron}}：{{statusText}}\n{{summary}}\n会话：{{sessionUrl}}"
 const DEFAULT_TIMEOUT_MS = 10_000
 
 /** Render `{{placeholder}}` against vars; unknown placeholders become "". */
@@ -52,16 +52,16 @@ export function createNotifier(channels: NotifyChannel[], opts: NotifierOptions 
   const fetchImpl = opts.fetchImpl ?? fetch
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   return {
-    async notifyJobFinished(payload: JobFinishedPayload): Promise<void> {
+    async notifyCronFinished(payload: CronFinishedPayload): Promise<void> {
       const vars = {
-        job: payload.jobName,
+        cron: payload.cronName,
         statusText: payload.status === "ok" ? "成功" : "失败",
         status: payload.status,
         summary: payload.summary,
         sessionId: payload.sessionId,
         sessionUrl: payload.sessionUrl,
       }
-      const title = `【kclaw】${payload.jobName} ${payload.status === "ok" ? "任务成功" : "任务失败"}`
+      const title = `【kclaw】${payload.cronName} ${payload.status === "ok" ? "任务成功" : "任务失败"}`
       const body = render(DEFAULT_BODY_TEMPLATE, vars)
       const results = await Promise.allSettled(
         channels.map((channel) => {
@@ -88,7 +88,7 @@ export async function sendNotification(
   channel: NotifyChannel,
   title: string,
   body: string,
-  payload: JobFinishedPayload,
+  payload: CronFinishedPayload,
   fetchImpl: FetchImpl,
   timeoutMs: number,
 ): Promise<{ ok: boolean; error?: string }> {
@@ -106,7 +106,7 @@ export async function sendNotification(
       // bark: {title, body}; webhook: full payload alongside the rendered text.
       const json =
         channel.type === "webhook"
-          ? { title, body, jobId: payload.jobId, jobName: payload.jobName, status: payload.status, summary: payload.summary, sessionId: payload.sessionId, sessionUrl: payload.sessionUrl }
+          ? { title, body, cronId: payload.cronId, cronName: payload.cronName, status: payload.status, summary: payload.summary, sessionId: payload.sessionId, sessionUrl: payload.sessionUrl }
           : { title, body }
       res = await fetchImpl(channel.url, {
         method: "POST",

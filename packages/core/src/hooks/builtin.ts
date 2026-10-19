@@ -106,7 +106,7 @@ export interface BuiltinHookDeps {
   /** runId becomes known after run.started; closures read it lazily. */
   runIdRef: { current?: string }
   // user-message-land / autoname inputs (former onUserMessage closure state):
-  // machine-originated provenance notes (job / subagent) riding the input message
+  // machine-originated provenance notes (cron / subagent) riding the input message
   inputNotes: NoteBlock[]
   trigger: RunTrigger
   /**
@@ -199,8 +199,8 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
         // Subagent children carry no memory materials (Q7: 记忆隔离).
         if (childRun) return
         // Notes are COLLECTED here, not pushed onto the message: the land step
-        // (order 20) appends job notes first, then these — preserving the
-        // pre-migration block order (text → job → memory) and the matching
+        // (order 20) appends cron notes first, then these — preserving the
+        // pre-migration block order (text → cron → memory) and the matching
         // note.emitted order.
         try {
           for (const hit of await memory.searchEpisodes(workspace, textOf(message).slice(0, MEMORY_QUERY_CHARS), MEMORY_LIMIT)) {
@@ -223,7 +223,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
       return ({ message }) => {
         // Notes become part of the message BEFORE it is persisted and
         // completed; persist first, then announce — wire order stays
-        // created → note.emitted ×N → completed, job notes before memory notes.
+        // created → note.emitted ×N → completed, cron notes before memory notes.
         message.blocks.push(...inputNotes, ...memoryNotes)
         sessions.appendMessage(sessionId, message)
         const noteCtx = runCtx()
@@ -243,7 +243,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     makeHandler: (rt) => {
       const { trigger, sessions, busEmit, sessionId } = rt
       return ({ message }) => {
-        // Only human-sent turns autoname: job notes are daemon-composed and
+        // Only human-sent turns autoname: cron notes are daemon-composed and
         // subagent children get their title at spawn time (label/task).
         if (trigger !== "user") return
         void scheduleAutoname(

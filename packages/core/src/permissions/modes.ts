@@ -16,7 +16,7 @@ export function isPermissionMode(v: unknown): v is PermissionMode {
 
 /** One-line confirmation copy a frontend prints after switching modes. */
 export const PERMISSION_MODE_CONFIRMATIONS: Record<PermissionMode, string> = {
-  readonly: "已切换为只读模式（写与 exec 将被拒绝）",
+  readonly: "已切换为只读模式（写与 bash 将被拒绝）",
   default: "已切换为默认模式（越界操作逐次确认）",
   acceptEdits: "已切换为自动接受编辑（工作区内文件写入不再逐次确认）",
   trusted: "已切换为信任模式（沙箱与工作区内免确认，边界外直接拒绝）",

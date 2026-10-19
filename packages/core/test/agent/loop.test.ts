@@ -15,7 +15,7 @@ function scriptClient(script: LlmStreamEvent[][]): LlmClient {
 
 function toolTurn(): LlmStreamEvent[] {
   return [
-    { type: "tool_call_started", index: 0, callId: "call_1", name: "exec" },
+    { type: "tool_call_started", index: 0, callId: "call_1", name: "bash" },
     { type: "tool_call_delta", index: 0, delta: '{"command":"ls"}' },
     { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 0, outputTokens: 0 } },
   ]
@@ -26,7 +26,7 @@ const FINAL: LlmStreamEvent[] = [
   { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 0, outputTokens: 0 } },
 ]
 
-const EXEC: ToolExecutor = {
+const BASH: ToolExecutor = {
   risk: "sensitive", concurrency: "serial",
   async execute() { return { status: "ok", output: "ran" } },
 }
@@ -41,7 +41,7 @@ async function runWith(extra: Partial<Parameters<typeof runAgent>[1]> = {}) {
       hooks: chainOf(),
       onEvent: () => {},
       onMessage: (m) => messages.push(m),
-      tools: new Map([["exec", EXEC]]),
+      tools: new Map([["bash", BASH]]),
       ...extra,
     } as Parameters<typeof runAgent>[1],
   )
@@ -76,7 +76,7 @@ describe("runAgent tool message grantedBy", () => {
 
 describe("runAgent usage 缓存字段链路", () => {
   const TOOL_WITH_CACHE: LlmStreamEvent[] = [
-    { type: "tool_call_started", index: 0, callId: "call_1", name: "exec" },
+    { type: "tool_call_started", index: 0, callId: "call_1", name: "bash" },
     { type: "tool_call_delta", index: 0, delta: '{"command":"ls"}' },
     {
       type: "message_done", stopReason: "tool_use",
@@ -222,7 +222,7 @@ describe("runAgent usage 缓存字段链路", () => {
         captured.push(req)
         call += 1
         if (call === 1) {
-          yield { type: "tool_call_started", index: 0, callId: "call_1", name: "exec" }
+          yield { type: "tool_call_started", index: 0, callId: "call_1", name: "bash" }
           yield { type: "tool_call_delta", index: 0, delta: "{}" }
           yield { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 1, outputTokens: 1 } }
           return
@@ -242,7 +242,7 @@ describe("runAgent usage 缓存字段链路", () => {
           hook("steer", "turn-boundary", () => [steerMsg]),
         ),
         onEvent: () => {}, onMessage: () => {},
-        tools: new Map([["exec", EXEC]]),
+        tools: new Map([["bash", BASH]]),
       } as Parameters<typeof runAgent>[1],
     )
     expect(outcome.stopReason).toBe("end_turn")
@@ -280,7 +280,7 @@ describe("runAgent usage 缓存字段链路", () => {
         captured.push(req)
         call += 1
         if (call === 1) {
-          yield { type: "tool_call_started", index: 0, callId: "call_1", name: "exec" }
+          yield { type: "tool_call_started", index: 0, callId: "call_1", name: "bash" }
           yield { type: "tool_call_delta", index: 0, delta: "{}" }
           yield { type: "message_done", stopReason: "tool_use", usage: { inputTokens: 1, outputTokens: 1 } }
           return
@@ -303,7 +303,7 @@ describe("runAgent usage 缓存字段链路", () => {
           hook("steer", "turn-boundary", () => [steerMsg]),
         ),
         onEvent: () => {}, onMessage: () => {},
-        tools: new Map([["exec", EXEC]]),
+        tools: new Map([["bash", BASH]]),
       } as Parameters<typeof runAgent>[1],
     )
     expect(outcome.stopReason).toBe("end_turn")
@@ -323,7 +323,7 @@ describe("runAgent usage 缓存字段链路", () => {
         hooks: chainOf(),
         onEvent: () => {},
         onMessage: () => {},
-        tools: new Map([["exec", EXEC]]),
+        tools: new Map([["bash", BASH]]),
       } as Parameters<typeof runAgent>[1],
     )
     return { outcome }
@@ -393,14 +393,14 @@ describe("runAgent llm-before（LLM 执行前的模型视图改写钩子）", ()
         requests.push(req)
         yield* i++ === 0
           ? [
-              { type: "tool_call_started", index: 0, callId: "call_1", name: "exec" },
+              { type: "tool_call_started", index: 0, callId: "call_1", name: "bash" },
               { type: "tool_call_delta", index: 0, delta: '{"command":"ls"}' },
               { type: "message_done", stopReason: "tool_use" as const, usage: { inputTokens: 0, outputTokens: 0 } },
             ]
           : FINAL
       },
     }
-    const EXEC: ToolExecutor = {
+    const BASH: ToolExecutor = {
       risk: "safe", concurrency: "serial",
       async execute() { return { status: "ok", output: "ran" } },
     }
@@ -412,7 +412,7 @@ describe("runAgent llm-before（LLM 执行前的模型视图改写钩子）", ()
         hooks: chainOf(hook("wrap", "llm-before", (ctx) => withLastUserText(ctx.messages, "wrapped"))),
         onEvent: () => {},
         onMessage: () => {},
-        tools: new Map([["exec", EXEC]]),
+        tools: new Map([["bash", BASH]]),
       } as Parameters<typeof runAgent>[1],
     )
     expect(requests).toHaveLength(2)

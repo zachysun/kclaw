@@ -10,7 +10,7 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
 describe("spillToolOutput", () => {
   it("writes the captured span and returns a readable path", () => {
-    const r = spillToolOutput(dir, "exec", "hello\nworld")
+    const r = spillToolOutput(dir, "bash", "hello\nworld")
     expect(r.path).toBeDefined()
     expect(existsSync(r.path!)).toBe(true)
     expect(readFileSync(r.path!, "utf8")).toBe("hello\nworld")
@@ -27,21 +27,21 @@ describe("spillToolOutput", () => {
 
   it("marks and truncates a capture beyond the ceiling", () => {
     const big = "x".repeat(SPILL_MAX_BYTES + 1)
-    const r = spillToolOutput(dir, "exec", big)
+    const r = spillToolOutput(dir, "bash", big)
     expect(r.partial).toBe(true)
     expect(readFileSync(r.path!, "utf8")).toHaveLength(SPILL_MAX_BYTES)
   })
 
   it("degrades silently: missing dir flag and unwritable root both return empty results", () => {
-    expect(spillToolOutput(undefined, "exec", "data")).toEqual({})
+    expect(spillToolOutput(undefined, "bash", "data")).toEqual({})
     // dir points at a FILE — mkdir/write must fail, not throw
     const asFile = join(dir, "occupied")
     writeFileSync(asFile, "not a dir")
-    expect(spillToolOutput(asFile, "exec", "data")).toEqual({})
+    expect(spillToolOutput(asFile, "bash", "data")).toEqual({})
   })
 
   it("skips empty captures without creating anything", () => {
-    expect(spillToolOutput(dir, "exec", "")).toEqual({})
+    expect(spillToolOutput(dir, "bash", "")).toEqual({})
     expect(readdirSync(dir)).toHaveLength(0)
   })
 })

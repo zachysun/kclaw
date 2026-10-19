@@ -14,7 +14,7 @@ export interface FeishuConfig {
   appSecret: string
   /** open_id 白名单：白名单外的发件人被静默忽略。 */
   allowlist: string[]
-  /** 主动推送（job 终态、后台subagent完成）的接收人。 */
+  /** 主动推送（cron 终态、后台subagent完成）的接收人。 */
   primaryOpenId?: string
 }
 

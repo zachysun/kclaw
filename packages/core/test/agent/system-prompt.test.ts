@@ -22,7 +22,7 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true })
 })
 
-const TOOL_DEFS = [{ type: "function", function: { name: "exec", parameters: {} } }]
+const TOOL_DEFS = [{ type: "function", function: { name: "bash", parameters: {} } }]
 
 function systemEvents(sessions: SessionStore, sessionId: string): Array<{ stable: string; live: string }> {
   return sessions.readEvents(sessionId).filter((e) => e.type === "system") as Array<{ stable: string; live: string }>

@@ -4,7 +4,7 @@
  *
  * SessionStore + MemorySystem + ConfigPermissionGate + createBuiltinTools
  * drive one runAgent turn with a scripted LlmClient that emits a tool_call
- * for `exec {command:"echo hi"}` then a final end_turn. Two scenarios: the
+ * for `bash {command:"echo hi"}` then a final end_turn. Two scenarios: the
  * whitelist path (allow rule → no confirmation) and the confirmation path
  * (empty allow → confirm → auto-approve). Both assert the granted reason
  * landed on the tool message.
@@ -67,11 +67,11 @@ describe("integration smoke", () => {
 
     // config roundtrip: defaults from disk, then a whitelist rule for echo
     const cfg = loadConfig(paths)
-    cfg.permissions.allow = ["exec:echo*"]
+    cfg.permissions.allow = ["bash:echo*"]
     cfg.workspace = workspace
     saveConfig(paths, cfg)
     const loaded = loadConfig(paths)
-    expect(loaded.permissions.allow).toEqual(["exec:echo*"])
+    expect(loaded.permissions.allow).toEqual(["bash:echo*"])
 
     const sessionStore = new SessionStore(paths.sessionsDir)
     const memory = new MemorySystem({
@@ -88,7 +88,7 @@ describe("integration smoke", () => {
 
     const session = sessionStore.create("冒烟会话")
     // 生产组装（run-assembly）会传 safeTools 与注册事实表——这里同构地传，
-    // exec 的 echo* 白名单才能按 command 语义命中（issue #9 的事实派生）。
+    // bash 的 echo* 白名单才能按 command 语义命中（issue #9 的事实派生）。
     const gate = new ConfigPermissionGate(loaded.permissions, { toolFacts: deriveToolFacts(tools, toolDefs) })
 
     const events: AgentEvent[] = []
@@ -98,7 +98,7 @@ describe("integration smoke", () => {
       { sessionId: session.id, history: [], system: "", userText: "run echo hi" },
       {
         llm: scriptClient([
-          toolCallStream(0, "call_1", "exec", '{"command":"echo hi"}'),
+          toolCallStream(0, "call_1", "bash", '{"command":"echo hi"}'),
           FINAL,
         ]),
         model: "test-model",
@@ -121,7 +121,7 @@ describe("integration smoke", () => {
     expect(toolResult).toMatchObject({ type: "tool_result", status: "ok" })
     expect(toolResult.output).toContain("hi")
 
-    // 2) the granted reason landed on the tool message (whitelisted exec call)
+    // 2) the granted reason landed on the tool message (whitelisted bash call)
     expect((persisted[2] as ToolMessage).grantedBy).toEqual({ call_1: "whitelist" })
 
     // 3) event sequence ends with run.completed
@@ -132,7 +132,7 @@ describe("integration smoke", () => {
     const paths = resolvePaths(home)
 
     // defaults on disk: allow is EMPTY (deny only carries the blacklist), so
-    // exec {command:"echo hi"} falls through to confirm, not whitelist
+    // bash {command:"echo hi"} falls through to confirm, not whitelist
     const cfg = loadConfig(paths)
     cfg.workspace = workspace
     saveConfig(paths, cfg)
@@ -154,7 +154,7 @@ describe("integration smoke", () => {
 
     const session = sessionStore.create("确认会话")
     // 生产组装（run-assembly）会传 safeTools 与注册事实表——这里同构地传，
-    // exec 的 echo* 白名单才能按 command 语义命中（issue #9 的事实派生）。
+    // bash 的 echo* 白名单才能按 command 语义命中（issue #9 的事实派生）。
     const gate = new ConfigPermissionGate(loaded.permissions, { toolFacts: deriveToolFacts(tools, toolDefs) })
 
     const events: AgentEvent[] = []
@@ -164,7 +164,7 @@ describe("integration smoke", () => {
       { sessionId: session.id, history: [], system: "", userText: "run echo hi" },
       {
         llm: scriptClient([
-          toolCallStream(0, "call_1", "exec", '{"command":"echo hi"}'),
+          toolCallStream(0, "call_1", "bash", '{"command":"echo hi"}'),
           FINAL,
         ]),
         model: "test-model",
@@ -198,7 +198,7 @@ describe("integration smoke", () => {
       | Extract<AgentEvent, { type: "confirmation.resolved" }>
       | undefined
     expect(requested).toBeDefined()
-    expect(requested!.payload.toolCall).toMatchObject({ name: "exec" })
+    expect(requested!.payload.toolCall).toMatchObject({ name: "bash" })
     expect(requested!.payload.risk).toBe("sensitive")
     expect(resolved).toBeDefined()
     expect(resolved!.payload).toMatchObject({ decision: "once", by: "cli" })
@@ -211,8 +211,8 @@ describe("integration smoke", () => {
 
   it("exposes the public surface from the package barrel", () => {
     for (const name of [
-      "SessionStore", "MemorySystem", "JobScheduler",
-      "ConfigPermissionGate", "createBuiltinTools", "createExecTool",
+      "SessionStore", "MemorySystem", "CronScheduler",
+      "ConfigPermissionGate", "createBuiltinTools", "createBashTool",
       "createFsTools", "createWebTools", "createMemoryTools",
       "resolvePaths", "loadConfig", "saveConfig", "runAgent",
     ] as const) {

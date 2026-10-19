@@ -155,7 +155,7 @@ describe("runAgent user message lifecycle events", () => {
         model: "m",
         hooks: chainOf(hook("land", "run-before", (ctx) => {
           hooked = ctx.message
-          ctx.message.blocks.push({ id: newBlockId(), type: "note", kind: "job", text: "本会话由定时任务触发" })
+          ctx.message.blocks.push({ id: newBlockId(), type: "note", kind: "cron", text: "本会话由定时任务触发" })
           return ctx.message
         })),
         onEvent: (e) => events.push(e),

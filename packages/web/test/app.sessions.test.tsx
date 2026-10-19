@@ -100,11 +100,11 @@ describe("App (sessions + tabs)", () => {
     vi.unstubAllGlobals()
   })
 
-  it("switches between the chat / jobs / audit tabs", async () => {
+  it("switches between the chat / crons / audit tabs", async () => {
     mockFetch(fetchMock, {
       "GET /status": { body: { ok: true } },
       "GET /sessions": { body: [session("s1", "第一会话")] },
-      "GET /jobs": { body: [] },
+      "GET /cron": { body: [] },
       "GET /sessions/s1/events": { body: [] },
     })
     localStorage.setItem("kclaw_token", "tok-1")
@@ -118,18 +118,18 @@ describe("App (sessions + tabs)", () => {
     expect(container.querySelector('[data-testid="session-item-s1"]')).not.toBeNull()
 
     await act(async () => {
-      ;(container.querySelector('button[data-testid="tab-jobs"]') as HTMLButtonElement).click()
+      ;(container.querySelector('button[data-testid="tab-crons"]') as HTMLButtonElement).click()
     })
     await flush()
-    expect(container.querySelector('[data-testid="jobs-view"]')).not.toBeNull()
-    expect(container.querySelector('[data-testid="chat-view"]')).toBeNull() // chat hidden on jobs tab
+    expect(container.querySelector('[data-testid="cron-view"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="chat-view"]')).toBeNull() // chat hidden on crons tab
 
     await act(async () => {
       ;(container.querySelector('button[data-testid="tab-audit"]') as HTMLButtonElement).click()
     })
     await flush()
     expect(container.querySelector('[data-testid="audit-view"]')).not.toBeNull()
-    expect(container.querySelector('[data-testid="jobs-view"]')).toBeNull()
+    expect(container.querySelector('[data-testid="cron-view"]')).toBeNull()
 
     await act(async () => {
       ;(container.querySelector('button[data-testid="tab-chat"]') as HTMLButtonElement).click()
@@ -307,7 +307,7 @@ describe("App (sessions + tabs)", () => {
       "GET /status": { body: { ok: true } },
       "GET /sessions": { body: [session("s1", "第一会话")] },
       "GET /sessions/s1/messages": { body: [] },
-      "GET /jobs": { body: [] },
+      "GET /cron": { body: [] },
     })
     localStorage.setItem("kclaw_token", "tok-1")
     const { container, root } = mountApp()
@@ -325,12 +325,12 @@ describe("App (sessions + tabs)", () => {
     expect(container.querySelector('[data-testid="chat-view"]')).not.toBeNull()
     expect(FakeWebSocket.instances).toHaveLength(1)
 
-    // Switch to jobs and back — one socket only, chat state survives.
+    // Switch to crons and back — one socket only, chat state survives.
     await act(async () => {
-      ;(container.querySelector('button[data-testid="tab-jobs"]') as HTMLButtonElement).click()
+      ;(container.querySelector('button[data-testid="tab-crons"]') as HTMLButtonElement).click()
     })
     await flush()
-    expect(container.querySelector('[data-testid="jobs-view"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="cron-view"]')).not.toBeNull()
     expect(FakeWebSocket.instances).toHaveLength(1)
 
     await act(async () => {
@@ -362,7 +362,7 @@ describe("App (sessions + tabs)", () => {
         return { body: s1Pulls === 1 ? [] : [streamed] }
       },
       "GET /sessions/s2/messages": { body: [] },
-      "GET /jobs": { body: [] },
+      "GET /cron": { body: [] },
     })
     localStorage.setItem("kclaw_token", "tok-1")
     const { container, root } = mountApp()

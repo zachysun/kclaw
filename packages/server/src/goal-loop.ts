@@ -37,7 +37,7 @@ import type {
   KclawConfig,
 } from "@kclaw/core"
 import { resolveRunModelLine } from "@kclaw/core"
-import { createExecSandbox } from "@kclaw/core/sandbox"
+import { createBashSandbox } from "@kclaw/core/sandbox"
 import type { GoalView, SessionEvent } from "@kclaw/core/protocol"
 import { createTracker } from "./host-kit.js"
 
@@ -143,7 +143,7 @@ export class GoalLoopHost {
     if (acceptance.length > 0) {
       const sandbox = this.#sandbox(meta.workdir)
       if (!sandbox.available) {
-        throw new Error(`验收命令需要可用的 exec 沙箱（${sandbox.unavailableReason ?? "未知原因"}）；去掉验收命令或启用沙箱后重试`)
+        throw new Error(`验收命令需要可用的 bash 沙箱（${sandbox.unavailableReason ?? "未知原因"}）；去掉验收命令或启用沙箱后重试`)
       }
     }
     const existing = meta.goal
@@ -233,6 +233,19 @@ export class GoalLoopHost {
     this.#kick(sessionId)
   }
 
+  /**
+   * 模型面（update_goal action=complete）：请求立即判定一轮。返回是否
+   * 真的发起——未 armed / 非 active / 判定进行中时为 false（判定照旧在
+   * run 边界自动进行）。判定器裁决不受影响：met/impossible 才落终态。
+   */
+  requestCheck(sessionId: string): boolean {
+    const rt = this.#runtime(sessionId)
+    const goal = this.snapshot(sessionId)
+    if (!rt.armed || rt.judging || goal === undefined || goal.state !== "active") return false
+    this.#kick(sessionId)
+    return true
+  }
+
   #kick(sessionId: string): void {
     const rt = this.#runtime(sessionId)
     if (!rt.armed || rt.judging) return
@@ -251,7 +264,7 @@ export class GoalLoopHost {
 
   #sandbox(workdir: string | undefined) {
     const { config, home } = this.#deps
-    return createExecSandbox(config.sandbox ?? { enabled: false, writeRoots: [] }, {
+    return createBashSandbox(config.sandbox ?? { enabled: false, writeRoots: [] }, {
       workspace: workdir ?? config.workspace,
       home,
     })
