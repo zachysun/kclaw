@@ -1,4 +1,4 @@
-# tools — 内置工具清单（33 个）
+# tools — 内置工具清单（35 个）
 
 > 权威来源：`packages/core/src/tools/index.ts`（注册表：执行器与模型侧 JSON Schema 成对声明）与 `packages/core/src/tools/` 下各实现文件（参数校验与行为）。机制见 [tools](../core/tools.md)，权限判定链见 [permissions](../core/permissions.md)。
 
@@ -23,7 +23,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - 整数参数只收整数，超出范围按上下限截取（不是报错），不传取条目标注的默认值。
 - 模型多传的未知字段一律忽略。
 
-## 常驻工具（15 个）
+## 常驻工具（17 个）
 
 每个 run 都注册（childRun 例外见下）：
 
@@ -44,6 +44,8 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `history_search` | 全文检索全部历史会话的原始消息（含未压缩部分） | safe | parallel |
 | `skill_read` | 按名字加载一个技能的完整规程正文 | safe | parallel |
 | `skill_list` | 列出模型可见的技能（可按关键词过滤） | safe | parallel |
+| `todo_write` | 整单替换会话级任务清单（全量快照，后写胜出） | safe | serial |
+| `todo_read` | 读回当前清单（跨 run、跨压缩存活） | safe | parallel |
 
 ### bash
 
@@ -281,6 +283,18 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - `process_list {}`：本会话后台进程清单，最新在前，上限 50 条。
 - `process_output { processId, offset?, wait?, timeoutMs? }`：从 `offset` 字节起读增量输出，返回 `nextOffset` 作下次游标；`wait:true` 阻塞等新输出或终态（timeoutMs 默认 30 秒、上限 600 秒）；`data` 带状态与退出码。
 - `process_kill { processId }`：SIGKILL 整个进程组；杀已结束的进程不报错。
+
+### todo 两件
+
+`safe`（清单是模型自有的草稿状态，不是能力边界；write `serial`、read `parallel`）。会话级持久：每次写入落一条 `todo.written` 事件（全量快照、后写胜出），投影 `meta.todo`，审计页有 todo 行；跨 run 存活、压缩后可用 `todo_read` 读回（压缩摘要会提示）。主线与 subagent 都注册，各会话各清单。与团队任务板（协作）、/goal（用户目标循环）是三个东西。
+
+| 工具 | 参数 | 说明 |
+|------|------|------|
+| `todo_write` | `todos`（TodoItem 数组：`content` + `status`）必填 | **整单替换**（无条目 id，后写胜出）；空数组=清空；返回条数摘要供自查漏行 |
+| `todo_read` | 无参 | 读回当前清单（未写入过或已清空时返回空态文案） |
+
+- 上限：50 条、单条 200 字符、总 4000 字符，超限拒绝并说明。
+- 默认同时只允许一条 `in_progress`（清单如实反映当前动作）；配置 `todo.allowParallelInProgress: true` 松开（并行 subagent 流的逃生口）。
 
 ### cron 模型面四件
 

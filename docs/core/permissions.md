@@ -191,10 +191,10 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
 | readRoots 读豁免 | 带 `path` 参数且 safe | fs_read、fs_list |
 | 规则匹配取 `command` 字段 | 带 `command` 参数（即命令类，走专属分支） | bash |
 
-**新工具因此零引擎改动**：按惯例把写参数命名为 `path`（或命令参数命名为 `command`）并声明 risk，处理方式自动齐备——漏声明的默认是最严处理（不进 safeTools、无豁免，需确认）。未注册工具（模型幻觉调用不存在的名字）按同样最严默认处理。结构约定优于名单：名单漏一个名字是漏洞，结构让新工具天然被覆盖。按当前 33 个内置工具的声明（见 [tools](./tools.md)）：
+**新工具因此零引擎改动**：按惯例把写参数命名为 `path`（或命令参数命名为 `command`）并声明 risk，处理方式自动齐备——漏声明的默认是最严处理（不进 safeTools、无豁免，需确认）。未注册工具（模型幻觉调用不存在的名字）按同样最严默认处理。结构约定优于名单：名单漏一个名字是漏洞，结构让新工具天然被覆盖。按当前 35 个内置工具的声明（见 [tools](./tools.md)）：
 
-- **safe（命中即自动放行）**：`fs_read`、`fs_list`、`grep`、`glob`、`web_search`、`web_fetch`、`memory_save`、`memory_search`、`session_search`、`history_search`、`skill_read`、`skill_list`、`skill_create`、`process_list`、`process_output`、`process_kill`、`subagent_run`、`subagent_collect`、`ask_user_questions`、`create_team`、`spawn_teammate`、`send_message`、`list_agents`、`task_create`、`task_update`、`task_list`、`cron_list`——共 27 个，全是不改工作目录状态的工具（process 三件终止/读取的是本会话自己启动的后台进程，不构成新的能力边界）；
-- **sensitive（无 allow 规则命中必然 confirm）**：`bash`、`fs_write`、`fs_edit`、`cron_create`、`cron_update`、`cron_delete`——共 6 个（cron 三写件的审批卡就是"用户明说才建定时"的机制化）。注意 fs_read/fs_list 虽是 safe，目标越界且不在 readRoots 内时仍进入 confirm（第 ③ 步）、目标命中敏感文件名单时同样转 confirm（第 ⑤' 步）；MCP 适配器工具（见 [mcp](./mcp.md)）一律声明 sensitive。团队工具只在会话属于某个团队时注册（15 个常驻工具之外的条件面），safe 名单按实际注册面派生。
+- **safe（命中即自动放行）**：`fs_read`、`fs_list`、`grep`、`glob`、`web_search`、`web_fetch`、`memory_save`、`memory_search`、`session_search`、`history_search`、`skill_read`、`skill_list`、`skill_create`、`process_list`、`process_output`、`process_kill`、`subagent_run`、`subagent_collect`、`ask_user_questions`、`create_team`、`spawn_teammate`、`send_message`、`list_agents`、`task_create`、`task_update`、`task_list`、`cron_list`、`todo_write`、`todo_read`——共 29 个，全是不改工作目录状态的工具（process 三件终止/读取的是本会话自己启动的后台进程，不构成新的能力边界）；
+- **sensitive（无 allow 规则命中必然 confirm）**：`bash`、`fs_write`、`fs_edit`、`cron_create`、`cron_update`、`cron_delete`——共 6 个（cron 三写件的审批卡就是"用户明说才建定时"的机制化）。注意 fs_read/fs_list 虽是 safe，目标越界且不在 readRoots 内时仍进入 confirm（第 ③ 步）、目标命中敏感文件名单时同样转 confirm（第 ⑤' 步）；MCP 适配器工具（见 [mcp](./mcp.md)）一律声明 sensitive。团队工具只在会话属于某个团队时注册（17 个常驻工具之外的条件面），safe 名单按实际注册面派生。
 
 ### 7. bash 沙箱（OS 层）
 
@@ -297,7 +297,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 ## 关联
 
 - [agent-loop](./agent-loop.md)：确认的三方等待、note 块与 grantedBy 的写入现场
-- [tools](./tools.md)：risk/concurrency 元数据的来源与 33 个内置工具清单；bash 工具的沙箱注入参数
+- [tools](./tools.md)：risk/concurrency 元数据的来源与 35 个内置工具清单；bash 工具的沙箱注入参数
 - [sandbox](./sandbox.md)：bash 沙箱 provider 的平台布局与降级链
 - [storage](./storage.md)：decided-rules 文件的磁盘布局（会话容器之外）
 - [run-manager](../server/run-manager.md)：gate + broker 的 daemon 侧组装

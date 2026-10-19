@@ -1,4 +1,4 @@
-# session-events — 持久化会话事件清单（26 种）
+# session-events — 持久化会话事件清单（27 种）
 
 > 权威来源：`packages/core/src/protocol/session-events.ts`（运行时守卫与 meta 投影在 `packages/core/src/session/events.ts`）。存储布局见 [storage](../core/storage.md)，读取接口 `GET /sessions/:id/events` 见 [http-api](../server/http-api.md)。
 
@@ -43,7 +43,7 @@ export type SessionEvent =
 
 | 类型 | 字段 |
 |------|------|
-| `run.started` | `at`、`trigger`（user/cron/agent/team/goal）——每 run 一条 |
+| `run.started` | `at`、`trigger`（user/cron/process/agent/team/goal）——每 run 一条 |
 | `run.ended` | `at`、`stopReason`、`usage?`（正常终点的全程累计）、`error?`（stopReason 为 error 时）——每 run 恰一条，失败 run 也落 |
 | `permission.decided` | `at`、`confirmationId`、`decision`（once/project/global/reject/timeout）、`by`（cli/web/feishu/timeout）、`tool { callId, name, argsJson }`——每次裁决一条 |
 
@@ -76,6 +76,14 @@ export type SessionEvent =
 | `team.task.updated` | `version`、`at`、`teamId`、`task`（TaskSnapshot 全量） |
 
 TaskSnapshot 的字段（`protocol/team.ts`）：`id`、`subject`、`detail`、`status`、`assignee`（null = 未认领）、`dependencies`、`attempt`、`attemptId?`、`revision`、`createdAt`、`updatedAt`。
+
+### todo 清单（1 种，TodoWrittenEvent）
+
+模型自组织的会话级清单（`todo_write`/`todo_read` 工具的持久化面）。全量快照、后写胜出——一个事件就是完整可审计状态，重放/审计/UI 零合并逻辑。进 meta 投影（写 `meta.todo`）、不推进 updatedAt（清单不是对话活动，与 skill/memory 审计事件同约定）；fork 复制历史即天然继承快照，分叉后各自独立。
+
+| 类型 | 字段 |
+|------|------|
+| `todo.written` | `at`、`todos`（TodoItem[]：`content`、`status`∈pending/in_progress/completed）——每次 todo_write 一条 |
 
 ### 目标循环（3 种，GoalEvent）
 

@@ -19,6 +19,8 @@ import type { ProcessRegistry } from "../process/registry.js"
 import { createProcessTools } from "./process.js"
 import type { CronScheduler } from "../cron/scheduler.js"
 import { createCronTools } from "./cron.js"
+import { createTodoTools } from "./todo.js"
+import type { TodoStore } from "./todo.js"
 import { createFsTools } from "./fs.js"
 import { createSearchTools } from "./search.js"
 import { createMemoryTools } from "./memory.js"
@@ -34,6 +36,8 @@ export { createAskUserQuestionsTool, ASK_USER_QUESTIONS_DESCRIPTION, type Questi
 export { createBashTool, truncateMiddle } from "./bash.js"
 export { createProcessTools } from "./process.js"
 export { createCronTools } from "./cron.js"
+export { createTodoTools } from "./todo.js"
+export type { TodoStore } from "./todo.js"
 export { ProcessRegistry } from "../process/registry.js"
 export type { ProcessEntry, PendingNotice } from "../process/registry.js"
 export { createFsTools } from "./fs.js"
@@ -132,6 +136,13 @@ export function createBuiltinTools(opts: {
    * registers only cron_list. The daemon always wires it.
    */
   cron?: { scheduler: CronScheduler; writeTools?: boolean }
+  /**
+   * Session todo surface: when set, todo_write/todo_read join the registry
+   * (safe, mainline and child runs alike). The store closes over this
+   * run's session; allowParallelInProgress relaxes the single-in_progress
+   * check (config todo.allowParallelInProgress).
+   */
+  todo?: { store: TodoStore; allowParallelInProgress?: boolean }
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] } {
   const bash = createBashTool({
     workspace: opts.workspace,
@@ -153,6 +164,7 @@ export function createBuiltinTools(opts: {
       ? createProcessTools({ registry: opts.processes, sessionId: opts.sessionId })
       : undefined
   const cronTools = opts.cron !== undefined ? createCronTools(opts.cron) : undefined
+  const todoTools = opts.todo !== undefined ? createTodoTools(opts.todo) : undefined
   const web = createWebTools({
     tavilyApiKey: opts.tavilyApiKey,
     fetchImpl: opts.fetchImpl,
@@ -325,6 +337,38 @@ export function createBuiltinTools(opts: {
       tool: skill.skill_list,
       def: def("skill_list", SKILL_LIST_DESCRIPTION, { query: str("可选：按名字与描述子串过滤（大小写不敏感）；不传则列出全部模型可见技能") }, []),
     },
+    ...(todoTools === undefined
+      ? []
+      : [
+          {
+            name: "todo_write",
+            tool: todoTools.todo_write,
+            def: def(
+              "todo_write",
+              "Replace the session's checklist in one full snapshot (no item ids; last write wins). Use it to plan multi-step work and keep the plan honest across runs. Exactly one in_progress item by default. An empty array clears the list.",
+              {
+                todos: {
+                  type: "array",
+                  description: "The complete list: every item, not just changes",
+                  items: {
+                    type: "object",
+                    properties: {
+                      content: str("Item text (non-empty, ≤200 chars)"),
+                      status: { type: "string", enum: ["pending", "in_progress", "completed"], description: "pending / in_progress / completed" },
+                    },
+                    required: ["content", "status"],
+                  },
+                },
+              },
+              ["todos"],
+            ),
+          },
+          {
+            name: "todo_read",
+            tool: todoTools.todo_read,
+            def: def("todo_read", "Read the session's current checklist (survives compaction — read it back after a compaction).", {}, []),
+          },
+        ]),
     // process 三件仅在组装传入后台进程注册表时存在（daemon 恒有；裸引擎测试
     // 没有）。归属按会话隔离：registry 只暴露本 sessionId 的条目。
     ...(processTools === undefined

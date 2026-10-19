@@ -126,6 +126,11 @@ export interface KclawConfig {
   sandbox?: SandboxConfig
   /** Hook 系统。不写时各取读取处的 ?? 默认值。 */
   hooks?: { /** 单个 hook 处理器的时限（毫秒）；超时按失败处理（fail-open）。 */ timeoutMs?: number }
+  /** 会话级 todo 清单（模型自组织计划面）。 */
+  todo?: {
+    /** true = 允许多条同时 in_progress（并行 subagent 流的逃生口；默认单条）。 */
+    allowParallelInProgress?: boolean
+  }
   sessions: {
     recycleBinTtlMs: number
     /** Context token budget. Default 128000 (resolveContextTokens applies it). */
@@ -265,6 +270,7 @@ export const defaultConfig: KclawConfig = {
   },
   web: { tavilyApiKey: "", timeoutMs: 20_000, allowPrivateNetworks: false },
   bash: { timeoutMs: 60_000, maxOutputBytes: 100 * 1024 },
+  todo: { allowParallelInProgress: false },
   sandbox: { enabled: true, writeRoots: [] },
   sessions: { recycleBinTtlMs: 30 * 24 * 60 * 60 * 1000, defaultDisposition: "steer" as const },
   notify: { channels: [], timeoutMs: 10_000 },

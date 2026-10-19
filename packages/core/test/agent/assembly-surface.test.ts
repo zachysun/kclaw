@@ -100,6 +100,8 @@ describe("executeRun deps → surface forwarding", () => {
     expect(names).toContain("cron_list")
     expect(names).toContain("cron_update")
     expect(names).toContain("cron_delete")
+    expect(names).toContain("todo_write")
+    expect(names).toContain("todo_read")
   })
 
   it("a cron-fired run keeps cron_list but loses the write trio (anti-recursion)", async () => {

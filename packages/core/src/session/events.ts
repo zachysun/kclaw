@@ -2,7 +2,7 @@ import type {
   CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent, SessionForkedEvent,
   SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SessionEvent, SkillEvent, SystemEvent, TeamAuditEvent,
-  GoalCheckedEvent, GoalClearedEvent, GoalSetEvent,
+  GoalCheckedEvent, GoalClearedEvent, GoalSetEvent, TodoWrittenEvent,
 } from "../protocol/session-events.js"
 import type { SessionMeta } from "./store.js"
 
@@ -14,7 +14,7 @@ export type {
   CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent, SessionForkedEvent,
   SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SkillEvent, SystemEvent, TeamAuditEvent,
-  GoalCheckedEvent, GoalClearedEvent, GoalSetEvent,
+  GoalCheckedEvent, GoalClearedEvent, GoalSetEvent, TodoWrittenEvent,
 } from "../protocol/session-events.js"
 
 export function isMessageEvent(e: SessionEvent): e is MessageEvent { return e.type === "message" }
@@ -137,6 +137,7 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
       next.updatedAt = event.at
       break
     case "goal.checked": break // 判定审计事件：只记录，不动投影（真相快照在 goal.set 链上）
+    case "todo.written": next.todo = event.todos; break // 全量快照后写胜出；不刷 updatedAt
     default: {
       const unhandled: never = event
       void unhandled

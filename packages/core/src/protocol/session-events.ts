@@ -152,4 +152,16 @@ export interface GoalCheckedEvent {
 
 export type GoalEvent = GoalSetEvent | GoalClearedEvent | GoalCheckedEvent
 
-export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionForkedEvent | SessionSetEvent | MessageEvent | MessageTruncatedEvent | CompactionEvent | MemoryEvent | SkillEvent | SystemEvent | SandboxCheckedEvent | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent | TeamAuditEvent | GoalEvent
+/**
+ * todo 快照写入（模型自组织的会话级清单）：全量替换、后写胜出——一个事件
+ * 就是完整可审计的状态，重放/审计/UI 零合并逻辑。挂会话（不刷 updatedAt，
+ * 与 skill/memory 审计事件同约定：清单不是对话活动）；fork 复制历史即天然
+ * 继承快照，分叉后各自独立。
+ */
+export interface TodoItem {
+  content: string
+  status: "pending" | "in_progress" | "completed"
+}
+export interface TodoWrittenEvent { type: "todo.written"; at: string; todos: TodoItem[] }
+
+export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionForkedEvent | SessionSetEvent | MessageEvent | MessageTruncatedEvent | CompactionEvent | MemoryEvent | SkillEvent | SystemEvent | SandboxCheckedEvent | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent | TeamAuditEvent | GoalEvent | TodoWrittenEvent

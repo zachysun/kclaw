@@ -524,6 +524,17 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
             writeTools: input.trigger !== "cron",
           },
         }),
+    ...(engine.deps.sessions === undefined
+      ? {}
+      : {
+          todo: {
+            store: {
+              write: (todos) => engine.deps.sessions!.appendTodoWritten(sessionId, { at: new Date().toISOString(), todos }),
+              read: () => engine.deps.sessions!.meta(sessionId)?.todo,
+            },
+            allowParallelInProgress: config.todo?.allowParallelInProgress ?? false,
+          },
+        }),
     skills,
     recordSkillUse: (name, origin) => recordSkillUse(paths.skillsDir, origin, name),
     ...(engine.deps.skillsEvolution === undefined

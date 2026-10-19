@@ -7,7 +7,7 @@ import { writeFileAtomic } from "../storage/atomic.js"
 import { appendJsonlLine, readJsonl, readJsonlFrom } from "../storage/jsonl.js"
 import { applyEvent, isCompactionEvent, isMessageEvent, isMessageTruncatedEvent } from "./events.js"
 import type { MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent, SandboxCheckedEvent, SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent, TeamAuditEvent } from "./events.js"
-import type { GoalCheckedEvent, GoalClearedEvent, GoalSetEvent } from "./events.js"
+import type { GoalCheckedEvent, GoalClearedEvent, GoalSetEvent, TodoWrittenEvent } from "./events.js"
 import type { GoalSnapshot } from "../goal/types.js"
 import type { AttachmentRef, QueueEntry } from "../protocol/wire.js"
 import type { PermissionMode } from "../permissions/modes.js"
@@ -37,6 +37,8 @@ export interface SessionMeta {
    * 语义无关。
    */
   forkedFrom?: { sessionId: string; /** 用户所点的分叉点消息；不带 messageId 且流内无消息时省略。 */ messageId?: string }
+  /** 会话级 todo 清单（todo.written 事件投影，后写胜出；模型自组织草稿，见 tools/todo.ts）。 */
+  todo?: import("../protocol/session-events.js").TodoItem[]
   /** Per-session model override (empty/absent → daemon default). */
   model?: string
   /** Session permission mode (absent → "default"). */
@@ -348,6 +350,11 @@ export class SessionStore {
   /** Append one goal-check audit event（每轮判定至多一条；验收输出+裁决或失败）; the projection stays untouched (不推进 updatedAt)。 */
   appendGoalChecked(id: string, event: Omit<GoalCheckedEvent, "type">): void {
     this.appendEvent(id, { type: "goal.checked", ...event })
+  }
+
+  /** Append one todo snapshot write（全量替换，后写胜出；投影 todo，不推进 updatedAt）。 */
+  appendTodoWritten(id: string, event: Omit<TodoWrittenEvent, "type">): void {
+    this.appendEvent(id, { type: "todo.written", ...event })
   }
 
   /** Read a session's persisted message queue (queue.jsonl), oldest-first; a missing/empty file yields []. */
