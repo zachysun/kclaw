@@ -482,8 +482,27 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // get the notice run queued next, idle ones are woken. A session that has
   // since been deleted simply drops the notice. Boot adoption probes
   // journaled groups: live ones re-join the registry, dead ones deliver.
-  const processRegistry = new ProcessRegistry({ noticesPath: paths.processNotices })
+  const processRegistry = new ProcessRegistry({
+    noticesPath: paths.processNotices,
+    onRegister: (entry) =>
+      bus.emit(
+        makeEvent("process.started", { processId: entry.id, sessionId: entry.sessionId, command: entry.command }),
+      ),
+  })
   processRegistry.onNotice((notice) => {
+    if (notice.exitCode !== null && notice.exitCode > 0) {
+      bus.emit(
+        makeEvent("process.failed", {
+          processId: notice.processId,
+          sessionId: notice.sessionId,
+          error: `exit ${notice.exitCode}${notice.killed ? "（被终止）" : ""}`,
+        }),
+      )
+    } else {
+      bus.emit(
+        makeEvent("process.completed", { processId: notice.processId, sessionId: notice.sessionId, exitCode: notice.exitCode ?? 0 }),
+      )
+    }
     const meta = sessions.meta(notice.sessionId)
     if (meta === undefined) return
     const code = notice.exitCode !== null ? `exit ${notice.exitCode}` : notice.killed ? "已终止" : "退出码未知"

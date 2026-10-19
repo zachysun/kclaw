@@ -16,7 +16,7 @@
  * One instance per daemon process (the server wires it through the run
  * manager); a daemon restart clears all streaks, which is acceptable for v1 —
  * cross-session persistence is a documented follow-up. Session isolation is
- * the CALLER's cron (the key carries the session id).
+ * the CALLER's task (the key carries the session id).
  */
 export class AutoLearnCounter {
   readonly #threshold: number

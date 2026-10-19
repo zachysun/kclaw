@@ -39,7 +39,7 @@ const DEFAULT_MAX_OUTPUT_BYTES = 100 * 1024
 const MIN_TIMEOUT_MS = 1_000
 const MAX_TIMEOUT_MS = 600_000
 /** After a timeout kill, how long "close" may take to deliver the exit + tail output. */
-const EXEC_TIMEOUT_GRACE_MS = 2_000
+const TIMEOUT_GRACE_MS = 2_000
 
 /**
  * Clamp a string to `maxBytes` by keeping the first and last maxBytes/2
@@ -99,7 +99,7 @@ export function createBashTool(opts: {
         return { status: "error" as const, output: "bash: 后台执行未装配进程注册表" }
       }
       const id = newId("proc")
-      const spillPath =
+      let spillPath =
         opts.spillDir !== undefined
           ? path.join(opts.spillDir, `proc-${id}.txt`)
           : path.join(opts.workspace, `.${id}.out`)
@@ -124,11 +124,18 @@ export function createBashTool(opts: {
           mkdirSync(opts.spillDir, { recursive: true })
           fd = openSync(spillPath, "a")
         } catch {
-          fd = undefined // fall back to the workspace-local file below
+          fd = undefined // spill dir unwritable: fall back below
         }
       }
       if (fd === undefined) {
-        fd = openSync(spillPath, "a")
+        // Spill dir unavailable → the workspace-local file (still on disk,
+        // still a cursor); if even that fails, surface the error.
+        spillPath = path.join(opts.workspace, `.${id}.out`)
+        try {
+          fd = openSync(spillPath, "a")
+        } catch (e) {
+          return { status: "error" as const, output: `bash: 后台输出文件无法创建：${e instanceof Error ? e.message : String(e)}` }
+        }
       }
       let child: ChildProcess
       try {
@@ -333,7 +340,7 @@ export function createBashTool(opts: {
           // child's final words are still collected).
           const grace = setTimeout(() => {
             finish({ status: "error", output: `command timed out after ${effectiveTimeout}ms\n${capped()}` })
-          }, EXEC_TIMEOUT_GRACE_MS)
+          }, TIMEOUT_GRACE_MS)
           child.once("close", () => {
             clearTimeout(grace)
             finish({ status: "error", output: `command timed out after ${effectiveTimeout}ms\n${capped()}` })

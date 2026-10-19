@@ -138,6 +138,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 - 返回匹配文件路径列表，上限 500；超限截断并带标记，配置了 spill 目录时完整清单写入 spill 并附定位行。
 - 无命中返回 `(no matches)`。
+- 已知限制（grep/glob 共有）：实现是同步扫描（候选上限 20000、单文件 1 MiB 兜底），超大仓库可能短暂阻塞 daemon 事件循环；异步化等真实痛点出现再做。
 
 ### web_search
 

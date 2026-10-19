@@ -526,19 +526,11 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       if (!entry.result && !(deps.tools?.has(call.name) ?? false)) {
         const known = [...(deps.toolDefs ?? []).map((d) => d.name), ...(deps.promotableDefs ?? []).map((d) => d.name)]
         const closest = closestToolName(call.name, known)
-        // Tiered disclosure: with a pool present, "registered executor but not
-        // in the active defs" means a deferred/directory tool the model hasn't
-        // promoted — same unknown-tool contract, plus the search hint.
-        const tiered =
-          deps.promotableDefs !== undefined &&
-          (deps.tools?.has(call.name) ?? false) &&
-          !(deps.directNames?.has(call.name) ?? false)
-        const hint = tiered ? "（该工具未加入本 run 可用集，可用 tool_search 检索后调用）" : ""
         entry.result = errorResult(
           call.callId,
           closest === undefined
-            ? `unknown tool: ${call.name}${hint}`
-            : `unknown tool: ${call.name} (closest available: ${closest})${hint}`,
+            ? `unknown tool: ${call.name}`
+            : `unknown tool: ${call.name} (closest available: ${closest})`,
         )
       }
       entries.push(entry)
@@ -791,14 +783,12 @@ async function runToolTurn(
           : {
               promote: (defs) => {
                 const active = deps.toolDefs ?? (deps.toolDefs = [])
+                // Executors for pool tools are registered in the tools map
+                // up front (the assembly adds every pool def's executor), so
+                // promotion only needs the def in the active schema list.
                 for (const def of defs) {
                   if (active.some((d) => d.name === def.name)) continue
                   active.push(def)
-                  if (deps.tools !== undefined && !deps.tools.has(def.name)) {
-                    // executor arrives via deps.extraExecutors lookup at call
-                    // time — the assembly registered every pool executor in
-                    // the map up front, so nothing to do here.
-                  }
                 }
               },
             }),
@@ -825,6 +815,31 @@ async function runToolTurn(
     emit(makeEvent("tool_result.completed", { messageId: toolMsg.id, block }, ctx))
     await deps.hooks.run("tool-after", { toolCall: entry.call, result: block })
     return block
+  }
+
+  // Tiered disclosure enforcement: with a searchable pool present, a call
+  // to an executor that is NEITHER in the active defs NOR a directory-tier
+  // direct name is a deferred tool the model has not promoted — answer as
+  // unknown-tool with the search hint instead of executing it. Without a
+  // pool, the executor map is the whole truth (as before).
+  if (deps.promotableDefs !== undefined) {
+    // deps.tools keys are always callable: that map is the caller's explicit
+    // executor seam (per-name overrides AND hand-injected test tools) — the
+    // tier system governs the builtin+MCP catalog, not what the caller wired.
+    const callable = new Set([
+      ...(deps.toolDefs ?? []).map((d) => d.name),
+      ...(deps.directNames ?? []),
+      ...(deps.tools?.keys() ?? []),
+    ])
+    for (const e of entries) {
+      if (e.result) continue
+      if ((deps.tools?.has(e.call.name) ?? false) && !callable.has(e.call.name)) {
+        e.result = errorResult(
+          e.call.callId,
+          `unknown tool: ${e.call.name}（该工具未加入本 run 可用集，可用 tool_search 检索后调用）`,
+        )
+      }
+    }
   }
 
   // Scheduling: parallel tools run concurrently; serial tools run

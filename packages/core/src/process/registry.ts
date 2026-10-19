@@ -59,6 +59,12 @@ export interface ProcessRegistryOpts {
   /** Cap on concurrently running entries per session (default 8). */
   maxRunningPerSession?: number
   /**
+   * process.started emitter (daemon wires the bus): fired synchronously when
+   * a background process registers. The settled twins (completed/failed)
+   * fire through onNotice's outcome — one emission point per lifecycle edge.
+   */
+  onRegister?: (entry: { id: string; sessionId: string; command: string }) => void
+  /**
    * Undelivered-notice journal (<home>/process-notices.jsonl). Wired by the
    * daemon; absent = notices are fire-and-forget (bare engine tests).
    */
@@ -76,9 +82,12 @@ export class ProcessRegistry {
   readonly #noticesPath: string | undefined
   #onNotice?: (notice: PendingNotice) => void | Promise<void>
 
+  readonly #onRegister?: ProcessRegistryOpts["onRegister"]
+
   constructor(opts: ProcessRegistryOpts = {}) {
     this.#maxRunning = opts.maxRunningPerSession ?? DEFAULT_MAX_RUNNING
     this.#noticesPath = opts.noticesPath
+    this.#onRegister = opts.onRegister
   }
 
   /** Daemon hook: called once per settled process, after the notice persisted. */
@@ -123,6 +132,11 @@ export class ProcessRegistry {
       startedAt: new Date().toISOString(),
     }
     this.#entries.set(entry.id, entry)
+    try {
+      this.#onRegister?.({ id: entry.id, sessionId: entry.sessionId, command: entry.command })
+    } catch {
+      // observation must not fail the registration
+    }
     input.onExit((exitCode, killed) => this.#settle(entry, exitCode, killed))
     return entry
   }
@@ -185,16 +199,20 @@ export class ProcessRegistry {
 
   /**
    * Boot recovery: probe journaled process groups. Live pids are re-adopted
-   * as running entries (the record is theirs again, exit settles it), dead
-   * ones get their notice delivered now. The journal is consumed either way,
-   * so a delivered notice never fires twice.
+   * as running entries with a liveness PROBE (a re-adopted pid has no
+   * ChildProcess object to hang an exit event on, so a 2s interval polls it;
+   * death settles the entry and its notice flows through the normal
+   * persist-then-handoff path). Dead pids get their notice delivered now.
+   * The journal is consumed per line AFTER a successful handoff — a failed
+   * delivery re-appends its line, keeping the "never silently lost" contract.
    */
   async adopt(): Promise<void> {
     if (this.#noticesPath === undefined || !existsSync(this.#noticesPath)) return
     const lines = readFileSync(this.#noticesPath, "utf8").split("\n").filter((l) => l.trim() !== "")
     if (lines.length === 0) return
+    let journal: string
     try {
-      unlinkSync(this.#noticesPath)
+      journal = readFileSync(this.#noticesPath, "utf8")
     } catch {
       return
     }
@@ -203,7 +221,8 @@ export class ProcessRegistry {
       try {
         notice = JSON.parse(line) as PendingNotice
       } catch {
-        continue // torn line from a crash mid-append: nothing to deliver
+        this.#dropJournalLine(journal, line) // torn line: nothing to deliver, drop it
+        continue
       }
       if (notice.killed !== true && this.#pidAlive(notice.pid)) {
         this.#entries.set(notice.processId, {
@@ -216,10 +235,36 @@ export class ProcessRegistry {
           spillPath: notice.spillPath,
           startedAt: notice.startedAt,
         })
+        this.#startProbe(notice.processId, notice.pid)
+        this.#dropJournalLine(journal, line) // adopted: no undelivered notice anymore
         continue
       }
-      await this.#onNotice?.(notice)
+      // Dead: deliver; failure re-appends the line (redelivered next boot).
+      journal = this.#removeLine(journal, line)
+      this.#writeJournal(journal)
+      try {
+        await this.#onNotice?.(notice)
+      } catch (e) {
+        console.error(`kclaw process notice delivery failed (${notice.processId}):`, e)
+        appendFileSync(this.#noticesPath, line + "\n", "utf8")
+      }
     }
+  }
+
+  /** Liveness poll for re-adopted groups (no exit event exists for them). */
+  #startProbe(id: string, pid: number): void {
+    const timer = setInterval(() => {
+      const entry = this.#entries.get(id)
+      if (entry === undefined || entry.status !== "running") {
+        clearInterval(timer)
+        return
+      }
+      if (!this.#pidAlive(pid)) {
+        clearInterval(timer)
+        this.#settle(entry, null, false)
+      }
+    }, 2_000)
+    timer.unref?.()
   }
 
   /** Zero-signal liveness probe: ESRCH = gone, EPERM = exists (not ours). */
@@ -230,6 +275,32 @@ export class ProcessRegistry {
       return true
     } catch (e) {
       return (e as NodeJS.ErrnoException).code === "EPERM"
+    }
+  }
+
+  #removeLine(journal: string, line: string): string {
+    const kept = journal.split("\n").filter((l) => l.trim() !== "" && l !== line)
+    return kept.length === 0 ? "" : kept.join("\n") + "\n"
+  }
+
+  #dropJournalLine(_original: string, line: string): void {
+    if (this.#noticesPath === undefined || !existsSync(this.#noticesPath)) return
+    try {
+      const kept = readFileSync(this.#noticesPath, "utf8").split("\n").filter((l) => l.trim() !== "" && l !== line)
+      if (kept.length === 0) unlinkSync(this.#noticesPath)
+      else writeFileSync(this.#noticesPath, kept.join("\n") + "\n", "utf8")
+    } catch (e) {
+      console.error("kclaw process notice journal rewrite failed:", e)
+    }
+  }
+
+  #writeJournal(journal: string): void {
+    if (this.#noticesPath === undefined) return
+    try {
+      if (journal === "") unlinkSync(this.#noticesPath)
+      else writeFileSync(this.#noticesPath, journal, "utf8")
+    } catch (e) {
+      console.error("kclaw process notice journal rewrite failed:", e)
     }
   }
 

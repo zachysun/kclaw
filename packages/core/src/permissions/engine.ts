@@ -178,7 +178,7 @@ export function extractArg(args: unknown, profile: PermissionProfile): string {
 }
 
 /**
- * Canonical form an bash rule matches against: whitespace collapsed to
+ * Canonical form a bash rule matches against: whitespace collapsed to
  * single spaces and the command token reduced to its basename, so a deny
  * like `bash:rm -rf*` cannot be dodged with double spaces or /bin/rm.
  * Flag reordering (-r -f vs -rf) is deliberately NOT normalized.

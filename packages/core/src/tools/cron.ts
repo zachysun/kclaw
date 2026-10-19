@@ -122,9 +122,7 @@ export function createCronTools(opts: {
     return { status: "ok", output: `已删除：${id}` }
   })
 
-  // `writeTools === false` (cron-fired run, anti-recursion): the registry
-  // below registers only cron_list; the write executors exist but never
-  // reach the model's surface.
-  void writeTools
+  // `writeTools === false`（cron 触发的 run，防递归）不改变本工厂的返回：
+  // 注册表侧（tools/index.ts）按该标志只挂 cron_list，写执行器不进模型面。
   return { "cron_create": cron_create, "cron_list": cron_list, "cron_update": cron_update, "cron_delete": cron_delete }
 }
