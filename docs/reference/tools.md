@@ -44,8 +44,8 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `history_search` | 全文检索全部历史会话的原始消息（含未压缩部分） | safe | parallel |
 | `skill_read` | 按名字加载一个技能的完整规程正文 | safe | parallel |
 | `skill_list` | 列出模型可见的技能（可按关键词过滤） | safe | parallel |
-| `todo_write` | 整单替换会话级任务清单（全量快照，后写胜出） | safe | serial |
-| `todo_read` | 读回当前清单（跨 run、跨压缩存活） | safe | parallel |
+| `todo_list_write` | 整单替换会话级任务清单（全量快照，后写胜出） | safe | serial |
+| `todo_list_read` | 读回当前清单（跨 run、跨压缩存活） | safe | parallel |
 
 ### bash
 
@@ -301,12 +301,12 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 ### todo 两件
 
-`safe`（清单是模型自有的草稿状态，不是能力边界；write `serial`、read `parallel`）。会话级持久：每次写入落一条 `todo.written` 事件（全量快照、后写胜出），投影 `meta.todo`，审计页有 todo 行；跨 run 存活、压缩后可用 `todo_read` 读回（压缩摘要会提示）。主线与 subagent 都注册，各会话各清单。与团队任务板（协作）、/goal（用户目标循环）是三个东西。
+`safe`（清单是模型自有的草稿状态，不是能力边界；write `serial`、read `parallel`）。会话级持久：每次写入落一条 `todo.written` 事件（全量快照、后写胜出），投影 `meta.todo`，审计页有 todo 行；跨 run 存活、压缩后可用 `todo_list_read` 读回（压缩摘要会提示）。主线与 subagent 都注册，各会话各清单。与团队任务板（协作）、/goal（用户目标循环）是三个东西。
 
 | 工具 | 参数 | 说明 |
 |------|------|------|
-| `todo_write` | `todos`（TodoItem 数组：`content` + `status`）必填 | **整单替换**（无条目 id，后写胜出）；空数组=清空；返回条数摘要供自查漏行 |
-| `todo_read` | 无参 | 读回当前清单（未写入过或已清空时返回空态文案） |
+| `todo_list_write` | `todos`（TodoItem 数组：`content` + `status`）必填 | **整单替换**（无条目 id，后写胜出）；空数组=清空；返回条数摘要供自查漏行 |
+| `todo_list_read` | 无参 | 读回当前清单（未写入过或已清空时返回空态文案） |
 
 - 上限：50 条、单条 200 字符、总 4000 字符，超限拒绝并说明。
 - 默认同时只允许一条 `in_progress`（清单如实反映当前动作）；配置 `todo.allowParallelInProgress: true` 松开（并行 subagent 流的逃生口）。

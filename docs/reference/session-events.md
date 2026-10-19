@@ -79,11 +79,11 @@ TaskSnapshot 的字段（`protocol/team.ts`）：`id`、`subject`、`detail`、`
 
 ### todo 清单（1 种，TodoWrittenEvent）
 
-模型自组织的会话级清单（`todo_write`/`todo_read` 工具的持久化面）。全量快照、后写胜出——一个事件就是完整可审计状态，重放/审计/UI 零合并逻辑。进 meta 投影（写 `meta.todo`）、不推进 updatedAt（清单不是对话活动，与 skill/memory 审计事件同约定）；fork 复制历史即天然继承快照，分叉后各自独立。
+模型自组织的会话级清单（`todo_list_write`/`todo_list_read` 工具的持久化面）。全量快照、后写胜出——一个事件就是完整可审计状态，重放/审计/UI 零合并逻辑。进 meta 投影（写 `meta.todo`）、不推进 updatedAt（清单不是对话活动，与 skill/memory 审计事件同约定）；fork 复制历史即天然继承快照，分叉后各自独立。
 
 | 类型 | 字段 |
 |------|------|
-| `todo.written` | `at`、`todos`（TodoItem[]：`content`、`status`∈pending/in_progress/completed）——每次 todo_write 一条 |
+| `todo.written` | `at`、`todos`（TodoItem[]：`content`、`status`∈pending/in_progress/completed）——每次 todo_list_write 一条 |
 
 ### 目标循环（3 种，GoalEvent）
 

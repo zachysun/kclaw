@@ -34,8 +34,8 @@ export const TOOL_EXPOSURE: Record<string, Exposure> = {
   ask_user_questions: "full",
   skill_read: "full",
   skill_list: "full",
-  todo_write: "full",
-  todo_read: "full",
+  todo_list_write: "full",
+  todo_list_read: "full",
   // directory — known by name + one line; schema on demand
   web_search: "directory",
   web_fetch: "directory",

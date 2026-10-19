@@ -141,7 +141,7 @@ export function createBuiltinTools(opts: {
    */
   cron?: { scheduler: CronScheduler; writeTools?: boolean }
   /**
-   * Session todo surface: when set, todo_write/todo_read join the registry
+   * Session todo surface: when set, todo_list_write/todo_list_read join the registry
    * (safe, mainline and child runs alike). The store closes over this
    * run's session; allowParallelInProgress relaxes the single-in_progress
    * check (config todo.allowParallelInProgress).
@@ -354,10 +354,10 @@ export function createBuiltinTools(opts: {
       ? []
       : [
           {
-            name: "todo_write",
-            tool: todoTools.todo_write,
+            name: "todo_list_write",
+            tool: todoTools.todo_list_write,
             def: def(
-              "todo_write",
+              "todo_list_write",
               "Replace the session's checklist in one full snapshot (no item ids; last write wins). Use it to plan multi-step work and keep the plan honest across runs. Exactly one in_progress item by default. An empty array clears the list.",
               {
                 todos: {
@@ -377,9 +377,9 @@ export function createBuiltinTools(opts: {
             ),
           },
           {
-            name: "todo_read",
-            tool: todoTools.todo_read,
-            def: def("todo_read", "Read the session's current checklist (survives compaction — read it back after a compaction).", {}, []),
+            name: "todo_list_read",
+            tool: todoTools.todo_list_read,
+            def: def("todo_list_read", "Read the session's current checklist (survives compaction — read it back after a compaction).", {}, []),
           },
         ]),
     ...(goalTools === undefined

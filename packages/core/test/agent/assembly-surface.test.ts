@@ -101,7 +101,7 @@ describe("executeRun deps → surface forwarding (tiered disclosure)", () => {
     expect(captured.length).toBeGreaterThan(0)
     const names = captured[0]!.tools!.map((t) => t.name)
     // full tier: core loop tools, complete schemas in the request
-    for (const n of ["bash", "fs_read", "fs_edit", "grep", "glob", "todo_write", "todo_read", "skill_read", "skill_list"]) {
+    for (const n of ["bash", "fs_read", "fs_edit", "grep", "glob", "todo_list_write", "todo_list_read", "skill_read", "skill_list"]) {
       expect(names).toContain(n)
     }
     // tool_search itself (full) — the pool is non-empty in a daemon-shaped engine

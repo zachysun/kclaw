@@ -1,5 +1,5 @@
 /**
- * todo_write / todo_read: the model's session-scoped scratch checklist.
+ * todo_list_write / todo_list_read: the model's session-scoped scratch checklist.
  *
  * Full-snapshot semantics: one write replaces the whole list (no item ids —
  * replacement needs no stable identity), last write wins. Every write lands
@@ -43,8 +43,8 @@ export function createTodoTools(opts: {
   /** true = relax the single-in_progress check (parallel-subagent flows). */
   allowParallelInProgress?: boolean
 }): {
-  "todo_write": ToolExecutor & { name: "todo_write" }
-  "todo_read": ToolExecutor & { name: "todo_read" }
+  "todo_list_write": ToolExecutor & { name: "todo_list_write" }
+  "todo_list_read": ToolExecutor & { name: "todo_list_read" }
 } {
   const { store, allowParallelInProgress = false } = opts
 
@@ -53,13 +53,13 @@ export function createTodoTools(opts: {
     return todos.map((t) => `${mark(t.status)} ${t.content}`).join("\n")
   }
 
-  const todo_write = makeTool("todo_write", "safe", "serial", (args) => {
+  const todo_list_write = makeTool("todo_list_write", "safe", "serial", (args) => {
     const raw = (args as { todos?: unknown } | null)?.todos
     if (!Array.isArray(raw)) {
-      return { status: "error", output: "todo_write: args.todos must be an array of {content, status}" }
+      return { status: "error", output: "todo_list_write: args.todos must be an array of {content, status}" }
     }
     if (raw.length > MAX_ITEMS) {
-      return { status: "error", output: `todo_write: 条数超上限（${raw.length} > ${MAX_ITEMS}）` }
+      return { status: "error", output: `todo_list_write: 条数超上限（${raw.length} > ${MAX_ITEMS}）` }
     }
     const todos: TodoItem[] = []
     let total = 0
@@ -68,25 +68,25 @@ export function createTodoTools(opts: {
       const content = (item as { content?: unknown } | null)?.content
       const status = (item as { status?: unknown } | null)?.status
       if (typeof content !== "string" || content.trim() === "") {
-        return { status: "error", output: "todo_write: 每条目必须有非空 content" }
+        return { status: "error", output: "todo_list_write: 每条目必须有非空 content" }
       }
       if (typeof status !== "string" || !STATUSES.includes(status as Status)) {
-        return { status: "error", output: `todo_write: status 必须是 ${STATUSES.join(" / ")} 之一` }
+        return { status: "error", output: `todo_list_write: status 必须是 ${STATUSES.join(" / ")} 之一` }
       }
       if (content.length > MAX_ITEM_CHARS) {
-        return { status: "error", output: `todo_write: 单条 content 超上限（${content.length} > ${MAX_ITEM_CHARS} 字符）` }
+        return { status: "error", output: `todo_list_write: 单条 content 超上限（${content.length} > ${MAX_ITEM_CHARS} 字符）` }
       }
       total += content.length
       if (status === "in_progress") inProgress++
       todos.push({ content, status: status as Status })
     }
     if (total > MAX_TOTAL_CHARS) {
-      return { status: "error", output: `todo_write: 总字符超上限（${total} > ${MAX_TOTAL_CHARS}）` }
+      return { status: "error", output: `todo_list_write: 总字符超上限（${total} > ${MAX_TOTAL_CHARS}）` }
     }
     if (!allowParallelInProgress && inProgress > 1) {
       return {
         status: "error",
-        output: `todo_write: 同时只能有一条 in_progress（收到 ${inProgress} 条）；确实需要并行时由用户在配置开启 todo.allowParallelInProgress`,
+        output: `todo_list_write: 同时只能有一条 in_progress（收到 ${inProgress} 条）；确实需要并行时由用户在配置开启 todo.allowParallelInProgress`,
       }
     }
     store.write(todos)
@@ -98,7 +98,7 @@ export function createTodoTools(opts: {
     }
   })
 
-  const todo_read = makeTool("todo_read", "safe", "parallel", () => {
+  const todo_list_read = makeTool("todo_list_read", "safe", "parallel", () => {
     const todos = store.read()
     if (todos === undefined || todos.length === 0) {
       return { status: "ok", output: "(清单为空——从未写入，或最近一次写入是空数组)" }
@@ -107,5 +107,5 @@ export function createTodoTools(opts: {
     return { status: "ok", output: `${todos.length} 项（未完成 ${remaining}）：\n${render(todos)}` }
   })
 
-  return { "todo_write": todo_write, "todo_read": todo_read }
+  return { "todo_list_write": todo_list_write, "todo_list_read": todo_list_read }
 }

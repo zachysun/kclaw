@@ -21,7 +21,7 @@ function memStore(): TodoStore & { items: TodoItem[] } {
 describe("todo tools", () => {
   it("write replaces the whole list; read returns it", async () => {
     const t = createTodoTools({ store: memStore() })
-    const r = await call(t.todo_write, { todos: [
+    const r = await call(t.todo_list_write, { todos: [
       { content: "step 1", status: "completed" },
       { content: "step 2", status: "in_progress" },
       { content: "step 3", status: "pending" },
@@ -29,43 +29,43 @@ describe("todo tools", () => {
     expect(r.status).toBe("ok")
     expect(r.output).toContain("3 项")
     expect(r.output).toContain("[~] step 2")
-    const back = await call(t.todo_read, {})
+    const back = await call(t.todo_list_read, {})
     expect(back.output).toContain("step 3")
     // full replacement, not a merge
-    await call(t.todo_write, { todos: [{ content: "only", status: "pending" }] })
-    expect((await call(t.todo_read, {})).output).not.toContain("step 2")
+    await call(t.todo_list_write, { todos: [{ content: "only", status: "pending" }] })
+    expect((await call(t.todo_list_read, {})).output).not.toContain("step 2")
   })
 
   it("an empty array clears; read reports the empty state", async () => {
     const t = createTodoTools({ store: memStore() })
-    await call(t.todo_write, { todos: [{ content: "x", status: "pending" }] })
-    const r = await call(t.todo_write, { todos: [] })
+    await call(t.todo_list_write, { todos: [{ content: "x", status: "pending" }] })
+    const r = await call(t.todo_list_write, { todos: [] })
     expect(r.status).toBe("ok")
-    expect((await call(t.todo_read, {})).output).toContain("清单为空")
+    expect((await call(t.todo_list_read, {})).output).toContain("清单为空")
   })
 
   it("caps: 50 items / 200 chars per item / 4000 total", async () => {
     const t = createTodoTools({ store: memStore() })
-    const tooMany = await call(t.todo_write, { todos: Array.from({ length: 51 }, () => ({ content: "x", status: "pending" })) })
+    const tooMany = await call(t.todo_list_write, { todos: Array.from({ length: 51 }, () => ({ content: "x", status: "pending" })) })
     expect(tooMany.status).toBe("error")
     expect(tooMany.output).toContain("50")
-    const tooLong = await call(t.todo_write, { todos: [{ content: "a".repeat(201), status: "pending" }] })
+    const tooLong = await call(t.todo_list_write, { todos: [{ content: "a".repeat(201), status: "pending" }] })
     expect(tooLong.status).toBe("error")
-    const tooTotal = await call(t.todo_write, { todos: Array.from({ length: 30 }, () => ({ content: "c".repeat(150), status: "pending" })) })
+    const tooTotal = await call(t.todo_list_write, { todos: Array.from({ length: 30 }, () => ({ content: "c".repeat(150), status: "pending" })) })
     expect(tooTotal.status).toBe("error")
     expect(tooTotal.output).toContain("4000")
   })
 
   it("exactly one in_progress by default; the config escape relaxes it", async () => {
     const t = createTodoTools({ store: memStore() })
-    const two = await call(t.todo_write, { todos: [
+    const two = await call(t.todo_list_write, { todos: [
       { content: "a", status: "in_progress" },
       { content: "b", status: "in_progress" },
     ] })
     expect(two.status).toBe("error")
     expect(two.output).toContain("in_progress")
     const relaxed = createTodoTools({ store: memStore(), allowParallelInProgress: true })
-    const ok = await call(relaxed.todo_write, { todos: [
+    const ok = await call(relaxed.todo_list_write, { todos: [
       { content: "a", status: "in_progress" },
       { content: "b", status: "in_progress" },
     ] })
@@ -74,18 +74,18 @@ describe("todo tools", () => {
 
   it("validates item shape and status enum", async () => {
     const t = createTodoTools({ store: memStore() })
-    expect((await call(t.todo_write, { todos: "nope" })).status).toBe("error")
-    expect((await call(t.todo_write, { todos: [{ content: "", status: "pending" }] })).status).toBe("error")
-    expect((await call(t.todo_write, { todos: [{ content: "x", status: "done" }] })).status).toBe("error")
-    expect((await call(t.todo_write, {})).status).toBe("error")
+    expect((await call(t.todo_list_write, { todos: "nope" })).status).toBe("error")
+    expect((await call(t.todo_list_write, { todos: [{ content: "", status: "pending" }] })).status).toBe("error")
+    expect((await call(t.todo_list_write, { todos: [{ content: "x", status: "done" }] })).status).toBe("error")
+    expect((await call(t.todo_list_write, {})).status).toBe("error")
   })
 
   it("risk classification: safe; write serial, read parallel", () => {
     const t = createTodoTools({ store: memStore() })
-    expect(t.todo_write.risk).toBe("safe")
-    expect(t.todo_write.concurrency).toBe("serial")
-    expect(t.todo_read.risk).toBe("safe")
-    expect(t.todo_read.concurrency).toBe("parallel")
+    expect(t.todo_list_write.risk).toBe("safe")
+    expect(t.todo_list_write.concurrency).toBe("serial")
+    expect(t.todo_list_read.risk).toBe("safe")
+    expect(t.todo_list_read.concurrency).toBe("parallel")
   })
 })
 
@@ -106,14 +106,14 @@ describe("todo persistence (event + projection)", () => {
         read: () => store.meta(id)?.todo,
       },
     })
-    await call(tools.todo_write, { todos: [{ content: "s1", status: "completed" }, { content: "s2", status: "in_progress" }] })
-    await call(tools.todo_write, { todos: [{ content: "s3", status: "pending" }] })
+    await call(tools.todo_list_write, { todos: [{ content: "s1", status: "completed" }, { content: "s2", status: "in_progress" }] })
+    await call(tools.todo_list_write, { todos: [{ content: "s3", status: "pending" }] })
     // projection = last snapshot
     expect(store.meta(id)?.todo).toEqual([{ content: "s3", status: "pending" }])
     // replay rebuilds the same projection
     const replayed = store.rebuildMeta(id)
     expect(replayed?.todo).toEqual([{ content: "s3", status: "pending" }])
     // reading through the tool mirrors it
-    expect((await call(tools.todo_read, {})).output).toContain("s3")
+    expect((await call(tools.todo_list_read, {})).output).toContain("s3")
   })
 })
