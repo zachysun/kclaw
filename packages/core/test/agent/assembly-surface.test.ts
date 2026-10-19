@@ -118,8 +118,11 @@ describe("executeRun deps → surface forwarding (tiered disclosure)", () => {
     expect(system).toContain("process_list")
     expect(system).toContain("cron_create")
     expect(system).toContain("create_goal")
-    // deferred tier: team tools invisible in both
-    expect(system).not.toContain("create_team：")
+    // this engine wires no team host, so the deferred tier is empty here —
+    // its NAME-ONLY line is covered by the registry exposure tests; what
+    // this seam pins is that a listed tool always carries its description
+    // format and the deferred line never appears without deferred tools.
+    expect(system).not.toContain("低频工具（只列名字")
   })
 
   it("a cron-fired run loses the cron WRITE tools everywhere (anti-recursion survives tiering)", async () => {

@@ -640,7 +640,19 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   const deferredDefs = poolDefs.filter((d) => exposureOf(d.name) === "deferred")
   if (poolDefs.length > 0) {
     const servers = [...new Set(poolDefs.map((d) => /^mcp__([^_]+)__/.exec(d.name)?.[1]).filter((x): x is string => x !== undefined))]
-    const sourceLine = servers.length > 0 ? `MCP 服务器：${servers.join("、")}` : "内置低频编排工具（团队协作面）"
+    // Deferred tier = NAME-ONLY visibility (Master 2026-10-19): builtin
+    // deferred names ride the prompt's stable directory section; MCP tool
+    // names ride tool_search's own description — the single designed cache
+    // break point — so MCP membership changes still never touch the stable
+    // prompt segment or the tools array.
+    const mcpNames = poolDefs.filter((d) => d.name.startsWith("mcp__")).map((d) => d.name)
+    const mcpNameList = mcpNames.length <= 80
+      ? mcpNames.join("、")
+      : `${mcpNames.slice(0, 80).join("、")}…（另有 ${mcpNames.length - 80} 个，用 tool_search 查询）`
+    const sourceLine =
+      mcpNames.length > 0
+        ? `MCP 工具名单：${mcpNameList}`
+        : "内置低频编排工具（团队协作面）"
     const search = createToolSearchTool({
       pool: poolDefs,
       sources: servers.length > 0 ? [`mcp:${servers.join(" / mcp:")}`, "builtin"] : ["builtin"],
@@ -950,13 +962,23 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       workspace,
       agentsMd: paths.agentsMd,
       ...(childRun && input.subagentRole !== undefined ? { subagentRole: input.subagentRole } : {}),
-      ...(directoryDefs.length > 0
+      ...(poolDefs.length > 0
         ? {
             toolDirectory: [
-              "# 工具目录（本 run 未全量列出的工具；按名直呼即可，参数拿不准先用 tool_search 查询）",
-              ...directoryDefs.map((d) => `- ${d.name}：${d.description.split("。")[0].split(". ")[0].slice(0, 120)}`),
-              poolDefs.some((d) => exposureOf(d.name) === "deferred") ? "- 另有低频编排工具与 MCP 工具未列出：用 tool_search 按意图检索。" : "",
-            ].filter((l) => l !== "").join("\n"),
+              "# 工具目录（本 run 未全量列出的工具）",
+              ...directoryDefs.map((d) => `- ${d.name}：${d.description.split("。")[0].split(". ")[0].slice(0, 120)}（可直呼，参数拿不准先用 tool_search 查询）`),
+              ...(deferredDefs.some((d) => !d.name.startsWith("mcp__"))
+                ? [
+                    `- 低频工具（只列名字，详情用 tool_search 查询后调用）：${deferredDefs
+                      .filter((d) => !d.name.startsWith("mcp__"))
+                      .map((d) => d.name)
+                      .join("、")}`,
+                  ]
+                : []),
+              ...(deferredDefs.some((d) => d.name.startsWith("mcp__"))
+                ? ["- MCP 外挂工具同样只列名字，名单见 tool_search 的说明。"]
+                : []),
+            ].join("\n"),
           }
         : {}),
     }),

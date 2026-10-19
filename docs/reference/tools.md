@@ -457,7 +457,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 |----|------|--------|
 | **full** | 完整 schema 进每请求的 tools 数组 | bash、fs 四件、grep/glob、ask、skill 两件、todo 两件、tool_search 本体 |
 | **directory** | 系统提示词"工具目录"节：名字+一行描述；**可直呼**（运行时参数校验兜底），参数拿不准用 tool_search 查 | web 两件、memory 两件、session/history 检索、subagent 两件、process 三件、cron 四件、goal 三件、skill_create |
-| **deferred** | 只进检索索引；`tool_search` 的描述里带 server 级来源清单 | 团队七件 + **全部 MCP 工具**（连接增删不再动 tools 数组，前缀缓存全程稳定） |
+| **deferred** | **只列名字**：内置低频工具的名字进系统提示词目录节的一行名单（稳定文本）；MCP 工具名字列在 `tool_search` 自己的描述里（设计好的唯一缓存断点）。描述与 schema 一律不给，经 `tool_search` 查询后调用 | 团队七件 + **全部 MCP 工具**（连接增删不再动 tools 数组与稳定提示段，前缀缓存全程稳定） |
 
 - **tool_search**（safe/parallel）：Okapi BM25（k1 1.2/b 0.75）索引=名字拆词+描述+顶层参数名（schema 正文不算）；精确名直配第一；稀有词门+长查询覆盖率门防误召回；CJK 二元切分（中文友好）。返回完整工具卡（名字+描述+全参 schema+来源）。
 - **真提升**：命中的 defs 经执行器上下文的 promote 缝注入本 run 活跃集——下一请求的 tools 数组带上，模型直呼、可并行、逐调用审计照旧（不走折叠转发的桥）。
