@@ -12,7 +12,7 @@
  * undici errors pending body reads when the request signal aborts. Also the
  * default for `KclawConfig.providers.timeoutMs` (storage/config.ts).
  */
-export const DEFAULT_LLM_TIMEOUT_MS = 120_000
+export const DEFAULT_LLM_TIMEOUT_MS = 300_000
 
 /**
  * Abort classification for the stream's guarded awaits: any failure after the

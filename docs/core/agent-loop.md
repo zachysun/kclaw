@@ -37,7 +37,7 @@ export interface RunInput {
 export interface AgentDeps {
   llm: LlmClient
   model: string
-  maxIterations?: number      // 默认 25
+  maxIterations?: number      // 默认 500
   tools?: Map<string, ToolExecutor>
   toolDefs?: ToolDefinition[]
   permissions?: PermissionGate          // 缺失 == 全放行
@@ -213,7 +213,7 @@ daemon 侧 `RunManager.cancel(sessionId)` 调 `AbortController.abort()`，循环
 
 - **provider 彻底失败**：`withRetry` 耗尽后 `stream()` 抛错 → 部分内容以 `stopReason:"error"` 持久化 → 悬空 tool_call 合成 `"llm call failed before execution"` 结果配对持久化（防下轮 400）→ `llm.failed` + `run.failed` → resolve（不 reject）。
 - **参数解析失败 / 未知工具**：不执行、不进入权限检查；error result（`"invalid tool args json"` / `"unknown tool: <name>"`）随 tool 消息持久化，循环继续。未知工具名会做一次相近名提示：在已注册工具名里找编辑距离 ≤2 的最近者（大小写不敏感，`closestToolName`，候选含活跃清单与检索池），命中时错误文案变为 `"unknown tool: <name> (closest available: <最近名>)"`——模型拼错工具名时下一轮直接换对，不再盲猜第二次。带检索池的 run 另有一个按层拦截未提升 deferred 名字的分支，但其判定条件恒为假（可调用集合包含了执行器表的全部键），实际不会触发——deferred 名字直呼会照常执行（详见 [tools](./tools.md) 的"工具披露分层"）。
-- **迭代耗尽**：最后一次迭代若仍是 `tool_use`，先在该 assistant 消息上附加 `kind:"system"` 截断 note（"已达最大迭代次数（25）…"）再持久化，然后 `run.failed {code:"max_iterations"}`——用户和下一轮模型均可看到中断原因。
+- **迭代耗尽**：最后一次迭代若仍是 `tool_use`，先在该 assistant 消息上附加 `kind:"system"` 截断 note（"已达最大迭代次数（500）…"）再持久化，然后 `run.failed {code:"max_iterations"}`——用户和下一轮模型均可看到中断原因。
 - **hook 失败**：run-before 链的 fatal 抛错或持久化抛错 → `run.failed {code:"user_message_failed"}`，resolve `stopReason:"error"`；用户 hook 失败时的行为自行声明（skip 跳过 / deny 否决所在环节），失败只发 `hook.failed` 事件不伤 run（见 [hooks](./hooks.md)）。
 - **工具执行器契约**：`ToolExecutor.execute` 应吞掉一切异常返回 `{status:"error", output}`（内置工具由 `shared.ts` 的包装保证）；循环对执行器抛异常（Promise 拒绝）也统一转为 error result（保证异常也产出结果）。执行 ctx 带可选 `signal`（父 run 的中止信号）、`onOutput`（部分输出的流式回传）与 `promote`（仅 tool_search 拿到：把命中的工具定义并入下一请求的工具清单，见 [tools](./tools.md) 的"工具披露分层"）。
 

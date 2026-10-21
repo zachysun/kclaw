@@ -34,8 +34,8 @@ import type { BashSandboxSpawn } from "../sandbox/provider.js"
 import { newId } from "../protocol/ids.js"
 import type { ProcessRegistry } from "../process/registry.js"
 
-const DEFAULT_TIMEOUT_MS = 60_000
-const DEFAULT_MAX_OUTPUT_BYTES = 100 * 1024
+const DEFAULT_TIMEOUT_MS = 300_000
+const DEFAULT_MAX_OUTPUT_BYTES = 512 * 1024
 const MIN_TIMEOUT_MS = 1_000
 const MAX_TIMEOUT_MS = 600_000
 /** After a timeout kill, how long "close" may take to deliver the exit + tail output. */

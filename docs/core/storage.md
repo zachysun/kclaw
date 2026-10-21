@@ -58,7 +58,7 @@ export function resolvePaths(home?: string): KclawPaths
 |------|--------|--------------|
 | `providers.default` | `""` | 默认 provider 名，指向 entries 里的一条 |
 | `providers.entries` | `{}` | `Record<名, { format?, baseUrl, apiKey, model, contextWindow?, maxOutput? }>`。一个条目是一个可直连的端点加它服务的那个模型：`format` 选 API 协议（`openai` = OpenAI 兼容 chat-completions，默认；`anthropic` = Anthropic Messages，见 [provider](./provider.md)），`baseUrl` 是端点根、`apiKey` 为空表示端点免鉴权（不发鉴权头）、`model` 是请求里下发的模型 id。daemon 启动时解析默认条目（config 优先，`KCLAW_LLM_BASE_URL` / `KCLAW_LLM_API_KEY` / `KCLAW_LLM_MODEL` 环境变量补空）。`contextWindow` 参与压缩 budget 的 min 解析、`maxOutput` 随请求下发 max_tokens（见 [compaction](./compaction.md)） |
-| `providers.timeoutMs` | `120000` | 单次 LLM 请求超时（`DEFAULT_LLM_TIMEOUT_MS`） |
+| `providers.timeoutMs` | `300000` | 单次 LLM 请求超时（`DEFAULT_LLM_TIMEOUT_MS`） |
 | `permissions.allow` / `deny` | `[]` / `["bash:sudo*", "bash:rm -rf*"]` | 权限规则，见 [permissions](./permissions.md) |
 | `permissions.confirmTimeoutMs` | `120000` | 人工确认的等待上限，超时按拒绝处理 |
 | `permissions.sessionGrants` | `true` | 会话内「仅本次允许」的记忆是否生效（run 级，见 [permissions](./permissions.md) 第 11 节） |
@@ -73,7 +73,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `web.timeoutMs` | `20000` | 每次网络抓取（搜索与网页）的 AbortSignal 超时，卡死的主机不能拖住一个 run |
 | `web.allowPrivateNetworks` | `false` | 设为 `true` 时豁免 web_fetch 对私网/回环目标的拒绝（SSRF 防护，例如允许抓取本机 Ollama 端点），由 run 组装传入工具 |
 | `usage.prices` | `{}` | 模型 → `{inputPerM?, outputPerM?, cacheReadPerM?, cacheWritePerM?}`：每百万 token 的美元单价，用量记录算成本用；没有价格条目的模型成本按 0 计；没有配置缓存价时该模型即使有缓存数据也按 input 单价对总输入计（不猜折扣） |
-| `bash.timeoutMs` / `maxOutputBytes` | `60000` / `102400`（100 KiB） | bash 工具的超时与输出截断上限 |
+| `bash.timeoutMs` / `maxOutputBytes` | `300000` / `524288`（512 KiB） | bash 工具的超时与输出截断上限 |
 | `sandbox.enabled` / `writeRoots` / `network` | `true` / `[]` / `"allow"` | bash 沙箱的整体开关、追加写白名单（realpath 形态）与沙箱内网络开关（deny 时 bash 子进程断网，web 工具不受影响），见 [sandbox](./sandbox.md) |
 | `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 周期清理用（见 [cron](./cron.md)） |
 | `todo.allowParallelInProgress` | `false` | 允许多条同时 in_progress（todo_list_write 的单条校验松开口） |
@@ -81,7 +81,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `sessions.toolLoopMaxRepeats` | `5` | 工具死循环守卫：同一工具调用（同名同参数）连续执行达 N 次后，该次结果附加 `<system-reminder kind="loop-guard">` 提醒模型换策略（跨工具回合计数，结果改变即重置）；`0` 关闭（见 [agent-loop](./agent-loop.md)） |
 | `sessions.defaultDisposition` | `"steer"` | 不带 disposition 的 send_message 的默认处置（见 [run-manager](../server/run-manager.md)）；单个会话可经 `meta.dispositionOverride` 覆盖 |
 | `sessions.askTimeoutMs` | `600000`（10 分钟） | ask_user_questions 工具等待用户回答的上限，超时按"未回答"落结果、run 继续（见 [tools](./tools.md)）；可选字段，默认值在工具构建处补齐 |
-| `subagents.maxConcurrent` | `4` | 每个主会话同时存活的**阻塞**subagent 上限（按父会话计数，超限的派发立即返回 error、不建会话，见 [subagents](./subagents.md)）；可选字段，默认值在 spawner 构建处补齐 |
+| `subagents.maxConcurrent` | `10` | 每个主会话同时存活的**阻塞**subagent 上限（按父会话计数，超限的派发立即返回 error、不建会话，见 [subagents](./subagents.md)）；可选字段，默认值在 spawner 构建处补齐 |
 | `subagents.maxBackground` | `4` | 每个主会话同时存活的**后台**subagent 上限（`run_in_background` 派发，与阻塞上限分别计数、互不挤占；超限同样立即返回 error，见 [subagents](./subagents.md)）；可选字段，默认值在 spawner 构建处补齐 |
 | `team.maxMembers` | `8` | 团队组员名单上限（含失败的添加） |
 | `team.maxActive` | `4` | 同时运行的组员上限；满员时新信在收信箱排队等空闲边投递 |

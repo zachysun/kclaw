@@ -86,7 +86,7 @@ export class ConfigPermissionGate implements PermissionGate {
 }
 ```
 
-各值即默认值：`allow` 默认空；`confirmTimeoutMs` 是确认等待上限（默认 120s）；`sessionGrants` 控制会话内"本次允许"记忆是否生效（run 级）；`defaultMode` 是新会话的初始权限模式（创建时固化为 meta.mode）；可选字段 `autoLearnThreshold` 设 auto 模式归纳阈值（默认 3，0 关闭），见第 5 节。
+各值即默认值：`allow` 默认空；`confirmTimeoutMs` 是确认等待上限（默认 300s）；`sessionGrants` 控制会话内"本次允许"记忆是否生效（run 级）；`defaultMode` 是新会话的初始权限模式（创建时固化为 meta.mode）；可选字段 `autoLearnThreshold` 设 auto 模式归纳阈值（默认 3，0 关闭），见第 5 节。
 
 ---
 
@@ -234,7 +234,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
   → 循环发 confirmation.resolved {confirmationId, decision: "once"|"project"|"global"|"reject"|"timeout", by}
 ```
 
-- 超时默认 `confirmTimeoutMs = 120_000`（config 默认值与循环的内置默认值一致，均为 120 秒）。
+- 超时默认 `confirmTimeoutMs = 300_000`（config 默认值与循环的内置默认值一致，均为 300 秒）。
 - 人工裁决是**四选一**（`ConfirmationDecision = "once" | "project" | "global" | "reject"`）：仅本次、总是（本项目）、总是（全局）、拒绝。CLI 的确认提示是 @clack 四项选择（`--yes`/`--no` 脚本旗标分别映射 once/reject）；WebUI 是确认卡上的四个按钮。
 - 确认网关 `ConfirmationBroker`（`packages/core/src/permissions/broker.ts`）：
   - 登记：run 组装（core `executeRun`）的包装 gate，confirm 判定一出就在 broker 登记（附带 toolCall、risk、会话 id）。

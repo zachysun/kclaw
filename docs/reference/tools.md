@@ -58,7 +58,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 行为要点：
 
 - stdout 与 stderr 合并返回。
-- 输出上限由配置 `bash.maxOutputBytes` 决定（默认 100 KiB）：超限保留头部，结尾带 `...[dropped N bytes]...` 丢弃标记；配置了 spill 目录时完整输出同时写入 `<home>/spill`，返回里附一条 fs_read 定位行，模型可自己读回全量。
+- 输出上限由配置 `bash.maxOutputBytes` 决定（默认 512 KiB）：超限保留头部，结尾带 `...[dropped N bytes]...` 丢弃标记；配置了 spill 目录时完整输出同时写入 `<home>/spill`，返回里附一条 fs_read 定位行，模型可自己读回全量。
 - 超时由配置 `bash.timeoutMs` 决定（默认 60 秒）：到时整个进程组被 SIGKILL（shell 的子孙进程一起结束），返回错误并附带已产生的部分输出。SIGKILL 之后留 2 秒宽限等 close 事件：子进程的退出信息与管道里已缓冲的尾部输出仍被收集完才收尾（超时是出错返回，不是静默丢弃）。
 - 退出码非 0 返回错误，输出以 `exit code N` 开头。
 - 每次执行注入两个环境变量：`KCLAW_SESSION_ID`（当前会话 id）与 `KCLAW_WORKSPACE`（工作目录），供命令行工具自识别；其余环境继承 daemon 进程。

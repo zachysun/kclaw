@@ -225,7 +225,7 @@ async function* streamWithAbort(
 export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOutcome> {
   const runId = newId("run")
   const ctx = { sessionId: input.sessionId, runId }
-  const maxIterations = deps.maxIterations ?? 25
+  const maxIterations = deps.maxIterations ?? 500
   const emit = (e: AgentEvent) => deps.onEvent(e)
   // Tool-loop guard state: signature of the last executed call and its
   // consecutive repeat count, alive ACROSS turns (the guard detects a loop
@@ -684,7 +684,7 @@ async function runToolTurn(
   // runs, in model order (confirmations reach the human one at a time).
   // Refused calls become error results + a note block on this tool message;
   // the loop itself continues so the model can react to the refusal.
-  const confirmTimeoutMs = deps.confirmTimeoutMs ?? 120_000
+  const confirmTimeoutMs = deps.confirmTimeoutMs ?? 300_000
   for (const entry of entries) {
     if (entry.result) continue // invalid args / unknown tool never reach the gate
     // Abort checkpoint: stop gating — and thereby executing — anything further.

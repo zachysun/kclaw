@@ -96,7 +96,7 @@ export interface SubagentHost {
 
 /** Build the daemon's subagent host (one per daemon; live counts live here). */
 export function createSubagentHost(deps: SubagentHostDeps): SubagentHost {
-  const maxConcurrent = deps.config.subagents?.maxConcurrent ?? 4
+  const maxConcurrent = deps.config.subagents?.maxConcurrent ?? 10
   const maxBackground = deps.config.subagents?.maxBackground ?? 4
   /**
    * Live children, one record per child session: its parent and the dispatch

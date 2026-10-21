@@ -63,8 +63,8 @@ describe("loadConfig / saveConfig", () => {
   })
   it("defaults providers.timeoutMs to 120s and deep-merges overrides", () => {
     const paths = resolvePaths(home)
-    expect(defaultConfig.providers.timeoutMs).toBe(120_000)
-    expect(loadConfig(paths).providers.timeoutMs).toBe(120_000) // absent in file → default
+    expect(defaultConfig.providers.timeoutMs).toBe(300_000)
+    expect(loadConfig(paths).providers.timeoutMs).toBe(300_000) // absent in file → default
     writeConfig({ providers: { timeoutMs: 5000 } })
     expect(loadConfig(paths).providers.timeoutMs).toBe(5000) // 覆盖保留其余默认
     expect(loadConfig(paths).providers.default).toBe("")

@@ -228,7 +228,7 @@ score = fused × 1/(1 + 距今天数/30)      // 时效因子：30 天衰减一�
 1. `memory.embedding.model` 为空 → 不构造 embedding 客户端（向量路关闭）；
 2. model 非空 → provider 取 `memory.embedding.provider`；为空回退到 `config.providers.default` 条目；
 3. 条目存在但它的线格式不带 embeddings API（能力位记在 wire-format 注册表里，anthropic 格式即没有）→ 打一行 `embedding provider's wire format has no embeddings API, vector path disabled`，向量路关闭（不致命）；
-4. 条目存在且格式可 embedding → 用该条目的 `baseUrl`/`apiKey` + 配置的 `model` 构造 OpenAI 兼容客户端（`POST /v1/embeddings`，**超时随 `config.providers.timeoutMs`**，组装时显式传入，默认 120s；客户端代码在 `packages/core/src/memory/embeddings.ts`）；
+4. 条目存在且格式可 embedding → 用该条目的 `baseUrl`/`apiKey` + 配置的 `model` 构造 OpenAI 兼容客户端（`POST /v1/embeddings`，**超时随 `config.providers.timeoutMs`**，组装时显式传入，默认 300s；客户端代码在 `packages/core/src/memory/embeddings.ts`）；
 5. 条目不存在 → 打一行 `embedding provider not found, vector path disabled`，向量路关闭（不致命）。
 
 向量路打开时：写入侧在 `reconcile()` 里对缺向量或正文变化的条目批量补算（`backfillVectors`），正文没变的条目**保留旧向量**（双路不退化）；embed 调用失败只打日志、该批降级为纯 FTS。

@@ -31,7 +31,7 @@
  * `fetchImpl` and `lookupImpl` are injectable; tests pass stubs so no
  * network is touched (the default lookupImpl resolves via node:dns).
  *
- * Every fetch carries an AbortSignal.timeout (default 20s, `timeoutMs`) so a
+ * Every fetch carries an AbortSignal.timeout (default 60s, `timeoutMs`) so a
  * hung host can never park a run forever.
  */
 import { lookup as dnsLookup } from "node:dns/promises"
@@ -44,7 +44,7 @@ import { spillLocatorLine, spillToolOutput, SPILL_MAX_BYTES } from "./spill.js"
 const TAVILY_URL = "https://api.tavily.com/search"
 const DEFAULT_MAX_RESULTS = 5
 const DEFAULT_MAX_FETCH_BYTES = 512 * 1024
-const DEFAULT_TIMEOUT_MS = 20_000
+const DEFAULT_TIMEOUT_MS = 60_000
 const DEFAULT_MAX_REDIRECTS = 5
 
 /** True for loopback/unspecified/link-local/private v4/v6 addresses (SSRF boundary). */

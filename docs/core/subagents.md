@@ -10,7 +10,7 @@ subagent 是主对话的模型**自主派出**的短命执行单元：调用 `su
 
 - **子会话身份是唯一权威数据**：subagent 会话的 `meta.parentSessionId`（`session.created` 事件附带、投影进 meta.json）标识"这是一个 subagent、父是谁"。引擎侧一切 subagent 特化（精简系统提示词、hook 跳过、工具清单裁剪、用量归属）都从这一个字段派生，没有任何运行期旗标。会话列表、审计页据此把它与普通会话区分开。
 
-- **阻塞式调用（默认）**：`subagent_run` 执行器 await 子 run 的最终结果，把 subagent**最后一条 assistant 消息的文本块**作为工具结果返回（空的 text 块不算，拼接后去首尾空白）。答复有 16000 字符上限，超出留头尾各 4000 字符、中段以截断标记省略——过程再长也压不垮主对话。并行只来自"一批多个工具调用"，单个阻塞调用本身没有中途取回。
+- **阻塞式调用（默认）**：`subagent_run` 执行器 await 子 run 的最终结果，把 subagent**最后一条 assistant 消息的文本块**作为工具结果返回（空的 text 块不算，拼接后去首尾空白）。答复有 32000 字符上限，超出留头尾各 4000 字符、中段以截断标记省略——过程再长也压不垮主对话。并行只来自"一批多个工具调用"，单个阻塞调用本身没有中途取回。
 
 - **后台模式（`run_in_background: true`）**：派发立即返回子会话 id 与取回提示（不阻塞父 run），subagent 的**生命周期挂到父会话**而不是父 run——父 run 结束或中止的信号刻意不递给 spawner，后台 subagent 照常跑完；删除父会话则先取消它仍在跑的后台 subagent，再走既有的级联软删。subagent 落定时结题报告**自动投递回父会话**：报告走 `RunManager.submit`（触发 `agent`、强制排队）开启**新一轮 run**，主 agent 消化全文后回复，三端同享；报告消息带 `kind:"subagent"` note 声明"机器回投、非用户发言"，正文为状态行 + 任务原文 + 结题全文（超长头尾截断）。投递被拒（队列满 10 条 / 防自循环唤醒 budget 耗尽）时降级为旧通知（带 `kind:"system"` note 的 assistant 消息，附拒绝原因，**不触发 run**），完成事件不静默丢失。投递或回退之后，宿主发出一次可选的 `onBackgroundSettled` 回调（含子会话 id、标签、成败与结题摘录），daemon 用它把落定推送给 IM 频道。**防自循环 budget**：每主会话连续 `agent` 触发的自动唤醒上限 3 次，只有真实用户输入真正到达模型（用户 run 开跑 / steer 注入）才清零；定时任务不清零，`goal` 触发的自续轮开跑时则清零（目标循环有自己的一套独立停止条件，见 [goal](./goal.md)，不清零的话，长目标里 subagent 投递会先被这份 budget 卡死）；计数仅内存，daemon 重启归零。`subagent_collect {childSessionId}` 降为按需深挖手段（只能取本会话派出的 subagent），行为不变。后台任务有独立的每父会话并发上限（`subagents.maxBackground`，与阻塞档分开计数）。
 

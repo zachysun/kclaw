@@ -68,7 +68,7 @@ export type LlmStreamEvent =
 
 ```ts
 // packages/core/src/provider/openai-compat.ts
-export const DEFAULT_LLM_TIMEOUT_MS = 120_000
+export const DEFAULT_LLM_TIMEOUT_MS = 300_000
 export function createOpenAiCompatClient(opts: {
   baseUrl: string; apiKey: string; fetchImpl?: typeof fetch; timeoutMs?: number
 }): LlmClient
@@ -195,7 +195,7 @@ anthropic 格式每个 SSE 事件的映射：
 
 ### 3. 超时终止
 
-`AbortSignal.timeout(timeoutMs)`（默认 `DEFAULT_LLM_TIMEOUT_MS = 120_000`，也是 `config.json` 里 `providers.timeoutMs` 的默认值）在两个协议实现里同样生效于三个位置，任何一处因超时中断（以"信号是否已触发"判断，不看错误形状）都改抛成同一条消息：
+`AbortSignal.timeout(timeoutMs)`（默认 `DEFAULT_LLM_TIMEOUT_MS = 300_000`，也是 `config.json` 里 `providers.timeoutMs` 的默认值）在两个协议实现里同样生效于三个位置，任何一处因超时中断（以"信号是否已触发"判断，不看错误形状）都改抛成同一条消息：
 
 | 阶段 | 位置 | 超时后的行为 |
 |------|------|--------------|
@@ -240,7 +240,7 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 - baseUrl 仍为空 → 启动即抛 `no llm provider configured: set providers in config.json or KCLAW_LLM_BASE_URL env`，不做半配置的静默启动。
 - model 为空 → 抛 `no llm model configured: set providers.<name>.model in config.json or KCLAW_LLM_MODEL env`；RunManager 每次请求都要带 model，纯环境变量配置时 model 也必须有来源。
 - CLI 首次运行判定（`packages/cli/src/provider-check.ts` 的 `detectProviderStatus`）用同一套优先级输出三态：`config`（default 指向存在的条目）/ `env`（任一 `KCLAW_LLM_*` 非空）/ `missing`。
-- `providers.timeoutMs` 未配置时由 `loadConfig` 的默认值补齐为 `DEFAULT_LLM_TIMEOUT_MS`（120s）。
+- `providers.timeoutMs` 未配置时由 `loadConfig` 的默认值补齐为 `DEFAULT_LLM_TIMEOUT_MS`（300s）。
 
 **按条目建连**（`createProviderResolver`）：daemon 启动时建一个 resolver，run 客户端、记忆提取与向量路都出自它。每个 run 的客户端由 `llmForRun(onRetry, entryKey)` 给出，`entryKey` 来自 `resolveRunModel` 的解析结果（run 组装先解析条目、再建客户端）。取值链：条目命中 → 该条目的 format 决定协议实现（`createProviderClient`）；条目缺失（key 为空或不存在）→ 回退到默认条目；连默认条目都没有 → 回退到环境变量端点（openai 格式）。
 

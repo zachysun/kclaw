@@ -78,7 +78,7 @@ export type SubagentCollector = (req: {
 export type SubagentSpawner = (req: SubagentSpawnRequest) => Promise<SubagentSpawnResult>
 
 /** Cap on the returned answer (chars); head+tail kept, middle elided. */
-export const SUBAGENT_ANSWER_MAX_CHARS = 16_000
+export const SUBAGENT_ANSWER_MAX_CHARS = 32_000
 
 /** Chars kept at each end when the answer exceeds the cap. */
 const TRUNCATE_KEEP = 4_000

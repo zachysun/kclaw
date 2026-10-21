@@ -162,7 +162,7 @@ export interface KclawConfig {
    */
   usage?: { prices?: Record<string, { inputPerM?: number; outputPerM?: number }> }
   /**
-   * Subagent delegation (issue #16). Defaults to maxConcurrent 4
+   * Subagent delegation (issue #16). Defaults to maxConcurrent 10
    * (defaultConfig).
    */
   subagents?: {
@@ -258,7 +258,7 @@ export interface KclawConfig {
 
 export const defaultConfig: KclawConfig = {
   providers: { default: "", entries: {}, timeoutMs: DEFAULT_LLM_TIMEOUT_MS },
-  permissions: { allow: [], deny: ["bash:sudo*", "bash:rm -rf*"], confirmTimeoutMs: 120_000, sessionGrants: true, defaultMode: "default", sensitiveFiles: DEFAULT_SENSITIVE_FILES },
+  permissions: { allow: [], deny: ["bash:sudo*", "bash:rm -rf*"], confirmTimeoutMs: 300_000, sessionGrants: true, defaultMode: "default", sensitiveFiles: DEFAULT_SENSITIVE_FILES },
   memory: {
     write: { immediate: true, manual: true, intervalMinutes: 30, idleMinutes: 10 },
     extractModel: "",
@@ -268,14 +268,14 @@ export const defaultConfig: KclawConfig = {
     embedding: { provider: "", model: "" },
     injectTokenBudget: 1000,
   },
-  web: { tavilyApiKey: "", timeoutMs: 20_000, allowPrivateNetworks: false },
-  bash: { timeoutMs: 60_000, maxOutputBytes: 100 * 1024 },
+  web: { tavilyApiKey: "", timeoutMs: 60_000, allowPrivateNetworks: false },
+  bash: { timeoutMs: 300_000, maxOutputBytes: 512 * 1024 },
   todo: { allowParallelInProgress: false },
   sandbox: { enabled: true, writeRoots: [] },
   sessions: { recycleBinTtlMs: 30 * 24 * 60 * 60 * 1000, defaultDisposition: "steer" as const },
   notify: { channels: [], timeoutMs: 10_000 },
   usage: { prices: {} },
-  subagents: { maxConcurrent: 4, maxBackground: 4 },
+  subagents: { maxConcurrent: 10, maxBackground: 4 },
   team: {
     maxMembers: 8,
     maxActive: 4,
