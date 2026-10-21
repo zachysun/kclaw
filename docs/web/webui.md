@@ -132,7 +132,7 @@ export class WsAuthError extends Error { readonly code: number }  // 默认 4001
 
 - **`GET /` 404 = 没构建 web**：`resolveWebDist` 找不到目录时 daemon 纯 API 模式；先 `pnpm build`（web 包）再启动 daemon。
 - **ws 认证失败没有 token 刷新**：只能刷新页面重新进入输入页；API 侧的 401 重入不覆盖 ws 路径。
-- **错过的 confirmation.requested 不可恢复**：确认有时限（默认 120s），断线期间超时按拒绝处理；重连全量拉取只能看到结果（note 块），不能补答。
+- **错过的 confirmation.requested 不可恢复**：确认有时限（默认 300s），断线期间超时按拒绝处理；重连全量拉取只能看到结果（note 块），不能补答。
 - **错过的排队事件由快照补齐**：断线期间的 `message.queued`/`message.queue_cancelled` 不重放（重连只订阅新事件，不回放），重连时的 `GET /queue` 全量快照负责重建排队视图；快照拉取失败不阻塞消息合并，排队视图退化为纯事件驱动。
 - **审计没有独立 /audit 路由**：审计的唯一事实来源是该会话的**事件流**——审计页跟随全局选中会话后拉 `GET /sessions/:id/events` 单源渲染（十三类行：message 块 / truncation"截断"行 / compaction"压缩"行 / memory"记忆"行 / system"系统提示词"行 / sandbox"沙箱"行 / run"运行"行 / permission"权限"行 / session"会话"行 / team"团队"行 / skill"技能提案"行 / goal"目标"行 / todo"清单"行，二十七种持久化事件全覆盖，按流序，实时增量，见上文审计 tab）；`GET /sessions/:id/compactions` 是事件流里 `compaction` 事件的只读投影视图，无记录时不显示。
 - **Service Worker 缓存只覆盖外壳三文件**：消息与 API 响应永远不经过 Service Worker 缓存。缓存名带构建指纹：`public/sw.js` 里的 `kclaw-shell-__BUILD_ID__` 占位符在每次构建时被 `scripts/inject-sw-hash.mjs` 替换为 `dist/index.html` 内容的 sha256 前 10 位——前端任何改动都会改变 index.html（它引用带内容 hash 的 bundle）→ 指纹变 → sw.js 字节变 → 浏览器重装 SW、换新缓存名并在 `activate` 阶段清掉旧缓存。因此**发布新版外壳后用户浏览器自动换新，无需手动清缓存**；同源码重复构建指纹稳定，缓存名不会无意义抖动。

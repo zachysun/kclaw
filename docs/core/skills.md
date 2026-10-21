@@ -305,7 +305,7 @@ interface SkillEvent {
 
 ## 关联
 
-- [tools](./tools.md)：`skill_read` / `skill_list` / `skill_create` 在 24 个内置工具里的位置与注册
+- [tools](./tools.md)：`skill_read` / `skill_list` / `skill_create` 在 39 个内置工具里的位置与注册
 - [hooks](./hooks.md)：`skill-wrap` 内置 hook（`llm-before` 位置的指定包装）、`skill-follow-check`（`run-after` 的提炼粗查）与 `withLastUserText`
 - [agent-loop](./agent-loop.md)：`llm-before` 位置在循环里的触发时机
 - [run-manager](../server/run-manager.md)：系统提示词组装（基础 + 认知 + 技能清单）、技能目录每 run 扫描

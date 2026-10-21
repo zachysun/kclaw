@@ -60,7 +60,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `providers.entries` | `{}` | `Record<名, { format?, baseUrl, apiKey, model, contextWindow?, maxOutput? }>`。一个条目是一个可直连的端点加它服务的那个模型：`format` 选 API 协议（`openai` = OpenAI 兼容 chat-completions，默认；`anthropic` = Anthropic Messages，见 [provider](./provider.md)），`baseUrl` 是端点根、`apiKey` 为空表示端点免鉴权（不发鉴权头）、`model` 是请求里下发的模型 id。daemon 启动时解析默认条目（config 优先，`KCLAW_LLM_BASE_URL` / `KCLAW_LLM_API_KEY` / `KCLAW_LLM_MODEL` 环境变量补空）。`contextWindow` 参与压缩 budget 的 min 解析、`maxOutput` 随请求下发 max_tokens（见 [compaction](./compaction.md)） |
 | `providers.timeoutMs` | `300000` | 单次 LLM 请求超时（`DEFAULT_LLM_TIMEOUT_MS`） |
 | `permissions.allow` / `deny` | `[]` / `["bash:sudo*", "bash:rm -rf*"]` | 权限规则，见 [permissions](./permissions.md) |
-| `permissions.confirmTimeoutMs` | `120000` | 人工确认的等待上限，超时按拒绝处理 |
+| `permissions.confirmTimeoutMs` | `300000` | 人工确认的等待上限，超时按拒绝处理 |
 | `permissions.sessionGrants` | `true` | 会话内「仅本次允许」的记忆是否生效（run 级，见 [permissions](./permissions.md) 第 11 节） |
 | `permissions.autoLearnThreshold` | `3` | auto 模式的归纳阈值：同一操作被连续 `once` 批准多少次后，自动保存为项目档规则；`0` 关闭归纳（auto 模式的判定链保留） |
 | `permissions.defaultMode` | `"default"` | 新会话的初始权限模式。daemon 创建的新会话（HTTP `POST /sessions` 与定时任务调度建会话）在创建时固化为 `meta.mode`；改这个值只影响之后新建的会话。非法值回退到 `"default"` 并告警 |
@@ -70,9 +70,9 @@ export function resolvePaths(home?: string): KclawPaths
 | `memory.embedding.{provider, model}` | `""` / `""` | 向量检索：`model` 为空则向量这条路整体关闭（只用 BM25 关键词检索）；provider 为空回退到 default 条目 |
 | `memory.injectTokenBudget` | `1000` | 每轮 L2 认知常驻注入的 token 上限（只约束常驻注入；L1 情节前 5 条全量注入不受此限） |
 | `web.tavilyApiKey` | `""` | web_search 工具的 Tavily 密钥 |
-| `web.timeoutMs` | `20000` | 每次网络抓取（搜索与网页）的 AbortSignal 超时，卡死的主机不能拖住一个 run |
+| `web.timeoutMs` | `60000` | 每次网络抓取（搜索与网页）的 AbortSignal 超时，卡死的主机不能拖住一个 run |
 | `web.allowPrivateNetworks` | `false` | 设为 `true` 时豁免 web_fetch 对私网/回环目标的拒绝（SSRF 防护，例如允许抓取本机 Ollama 端点），由 run 组装传入工具 |
-| `usage.prices` | `{}` | 模型 → `{inputPerM?, outputPerM?, cacheReadPerM?, cacheWritePerM?}`：每百万 token 的美元单价，用量记录算成本用；没有价格条目的模型成本按 0 计；没有配置缓存价时该模型即使有缓存数据也按 input 单价对总输入计（不猜折扣） |
+| `usage.prices` | `{}` | 模型 → `{inputPerM?, outputPerM?, cacheReadPerM?, cacheWritePerM?}`：每百万 token 的美元单价，用量记录算成本用；没有价格条目的模型成本按 0 计；没有配置缓存价时该模型即使有缓存数据也按 input 单价对总输入计（不猜缓存单价） |
 | `bash.timeoutMs` / `maxOutputBytes` | `300000` / `524288`（512 KiB） | bash 工具的超时与输出截断上限 |
 | `sandbox.enabled` / `writeRoots` / `network` | `true` / `[]` / `"allow"` | bash 沙箱的整体开关、追加写白名单（realpath 形态）与沙箱内网络开关（deny 时 bash 子进程断网，web 工具不受影响），见 [sandbox](./sandbox.md) |
 | `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 周期清理用（见 [cron](./cron.md)） |
@@ -280,7 +280,7 @@ class UsageStore {
 ```
 
 - **四种聚合口径**：`day`（按 `at` 的本地日历日 `YYYY-MM-DD`）、`session`（按 sessionId，**只折 `kind='run'` 行**——记忆提取、压缩摘要、自动命名、技能提炼等后台调用虽挂在会话名下，但请求与主对话没有可比的前缀，混进会话桶会把主对话的缓存命中率拉到失真；后台花费在 `day`/`model`/`kind` 维度照常可见）、`model`（按模型名）、`kind`（按记录口径，即上文的 kind 列枚举）；时间区间 `[from, to)` 对 ISO 格式的 `at` 字符串做比较，结果按 key 升序。
-- **成本公式**（`costUsd(row, model, prices)`）：基式 `(input/1e6)·inputPerM + (output/1e6)·outputPerM`，价格来自 `config.usage.prices`（美元 / 百万 token）；**模型没有价格条目时成本恒为 0**（token 数照常显示）。模型价目带 `cacheReadPerM`/`cacheWritePerM` 且该行**任一**缓存字段非 NULL 时走分列式：`非缓存输入·inputPerM + 读·cacheReadPerM + 写·cacheWritePerM + 输出·outputPerM`（非缓存输入 = `inputTokens − 已知缓存字段之和`；缺失的缓存字段按 0 token 参与——OpenAI 兼容行只有 cacheRead，若按"两字段都非 NULL"门控会让 cached_tokens 永远按 input 全价计费）。两字段全 NULL 的行（含旧行）沿用基式按 input 单价对总输入计，不猜折扣。每组成本逐行累加——每行用它自己模型的价格，即使分组键是日期或会话。
+- **成本公式**（`costUsd(row, model, prices)`）：基式 `(input/1e6)·inputPerM + (output/1e6)·outputPerM`，价格来自 `config.usage.prices`（美元 / 百万 token）；**模型没有价格条目时成本恒为 0**（token 数照常显示）。模型价目带 `cacheReadPerM`/`cacheWritePerM` 且该行**任一**缓存字段非 NULL 时走分列式：`非缓存输入·inputPerM + 读·cacheReadPerM + 写·cacheWritePerM + 输出·outputPerM`（非缓存输入 = `inputTokens − 已知缓存字段之和`；缺失的缓存字段按 0 token 参与——OpenAI 兼容行只有 cacheRead，若按"两字段都非 NULL"门控会让 cached_tokens 永远按 input 单价计费）。两字段全 NULL 的行（含旧行）沿用基式按 input 单价对总输入计，不猜缓存单价。每组成本逐行累加——每行用它自己模型的价格，即使分组键是日期或会话。
 - **bucket 级 NULL 语义**：`aggregate`/`total` 的缓存字段类型 `number | null`——桶内所有行该列皆 NULL → `null`（未知，页面与 JSON 显示 "—"，不得显示 0 或命中率 0%；端点不返回缓存指标是常态而非边角）；行内混合 → 已知值之和（无值行跳过，不把未知吞成 0）。
 
 HTTP 出口与展示见 [http-api](../server/http-api.md) 的 `GET /usage` 与 [webui](../web/webui.md) 的用量页。

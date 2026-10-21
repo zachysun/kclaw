@@ -59,7 +59,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 - stdout 与 stderr 合并返回。
 - 输出上限由配置 `bash.maxOutputBytes` 决定（默认 512 KiB）：超限保留头部，结尾带 `...[dropped N bytes]...` 丢弃标记；配置了 spill 目录时完整输出同时写入 `<home>/spill`，返回里附一条 fs_read 定位行，模型可自己读回全量。
-- 超时由配置 `bash.timeoutMs` 决定（默认 60 秒）：到时整个进程组被 SIGKILL（shell 的子孙进程一起结束），返回错误并附带已产生的部分输出。SIGKILL 之后留 2 秒宽限等 close 事件：子进程的退出信息与管道里已缓冲的尾部输出仍被收集完才收尾（超时是出错返回，不是静默丢弃）。
+- 超时由配置 `bash.timeoutMs` 决定（默认 300 秒）：到时整个进程组被 SIGKILL（shell 的子孙进程一起结束），返回错误并附带已产生的部分输出。SIGKILL 之后留 2 秒宽限等 close 事件：子进程的退出信息与管道里已缓冲的尾部输出仍被收集完才收尾（超时是出错返回，不是静默丢弃）。
 - 退出码非 0 返回错误，输出以 `exit code N` 开头。
 - 每次执行注入两个环境变量：`KCLAW_SESSION_ID`（当前会话 id）与 `KCLAW_WORKSPACE`（工作目录），供命令行工具自识别；其余环境继承 daemon 进程。
 
@@ -164,7 +164,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - 非 2xx 返回错误并带状态码。
 - HTML 用 Readability 抽文章正文（script/style 不会保留）；抽不出时退化为去掉脚本与样式后的正文文本；非 HTML 内容类型按纯文本返回。
 - 正文上限默认 512 KiB，超限截断并带标记；配置了 spill 目录时附 fs_read 定位行。上限作用在解析前的原始字节上，超大页面不会撑大内存。
-- 单次请求 20 秒超时（配置 `web.timeoutMs`）。
+- 单次请求 60 秒超时（配置 `web.timeoutMs`）。
 
 ### memory_save
 
@@ -274,7 +274,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `timeoutMs` | integer | 否 | 模型自定超时（毫秒），clamp 1_000–600_000；不传取配置 `bash.timeoutMs`（默认 60 秒） |
+| `timeoutMs` | integer | 否 | 模型自定超时（毫秒），clamp 1_000–600_000；不传取配置 `bash.timeoutMs`（默认 300 秒） |
 | `run_in_background` | boolean | 否 | true = 后台启动：立即返回进程 id 与输出文件路径，不受前台超时约束 |
 
 注意：bash 的模型侧 JSON Schema 目前只声明 `command` 一个参数——上表两个参数由执行器直接接受并生效，但没有写进 schema，模型无法从工具清单得知它们的存在，需要在对话里明确告知参数名才能用上。

@@ -73,7 +73,7 @@ spawner 在子频道挂一个普通 bus 订阅者（EventBus 接受任何 `{send
 
 | 键 | 默认 | 说明 |
 |----|------|------|
-| `subagents.maxConcurrent` | `4` | 每个**主会话**同时存活的**阻塞**subagent 上限（per-parent 计数，全局不设限）；超限的派发立即返回 error 结果、不建会话 |
+| `subagents.maxConcurrent` | `10` | 每个**主会话**同时存活的**阻塞**subagent 上限（per-parent 计数，全局不设限）；超限的派发立即返回 error 结果、不建会话 |
 | `subagents.maxBackground` | `4` | 每个主会话同时存活的**后台**subagent 上限，与阻塞档分开计数；超限返回 error（提示等现有后台任务结束或改用阻塞模式） |
 
 ## 关联

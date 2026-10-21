@@ -79,7 +79,7 @@ export class ConfigPermissionGate implements PermissionGate {
   "permissions": {
     "allow": [],
     "deny": ["bash:sudo*", "bash:rm -rf*"],
-    "confirmTimeoutMs": 120000,
+    "confirmTimeoutMs": 300000,
     "sessionGrants": true,
     "defaultMode": "default"
   }
