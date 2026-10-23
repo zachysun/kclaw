@@ -23,7 +23,7 @@
  */
 import type { ToolExecutor } from "../agent/tools.js"
 import type { TodoItem } from "../protocol/session-events.js"
-import { makeTool } from "./shared.js"
+import { def, makeTool, str, type ToolEntry } from "./shared.js"
 
 const MAX_ITEMS = 50
 const MAX_ITEM_CHARS = 200
@@ -108,4 +108,39 @@ export function createTodoTools(opts: {
   })
 
   return { "todo_list_write": todo_list_write, "todo_list_read": todo_list_read }
+}
+
+/** The registry-facing bundle: executors + schemas owned beside each other. */
+export function createTodoToolEntries(opts: Parameters<typeof createTodoTools>[0]): ToolEntry[] {
+  const tools = createTodoTools(opts)
+  return [
+    {
+      name: "todo_list_write",
+      tool: tools.todo_list_write,
+      def: def(
+        "todo_list_write",
+        "Replace the session's checklist in one full snapshot (no item ids; last write wins). Use it to plan multi-step work and keep the plan honest across runs. Exactly one in_progress item by default. An empty array clears the list.",
+        {
+          todos: {
+            type: "array",
+            description: "The complete list: every item, not just changes",
+            items: {
+              type: "object",
+              properties: {
+                content: str("Item text (non-empty, ≤200 chars)"),
+                status: { type: "string", enum: ["pending", "in_progress", "completed"], description: "pending / in_progress / completed" },
+              },
+              required: ["content", "status"],
+            },
+          },
+        },
+        ["todos"],
+      ),
+    },
+    {
+      name: "todo_list_read",
+      tool: tools.todo_list_read,
+      def: def("todo_list_read", "Read the session's current checklist (survives compaction — read it back after a compaction).", {}, []),
+    },
+  ]
 }

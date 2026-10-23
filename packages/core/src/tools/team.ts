@@ -8,9 +8,7 @@
  * delegation); cron sessions get none (the assembly simply omits opts.team).
  */
 import type { TeamFacade, TeamIdentity } from "../team/facade.js"
-import { ToolError, makeTool, requireString } from "./shared.js"
-import type { ToolExecutor } from "../agent/tools.js"
-import type { ToolDefinition } from "../provider/types.js"
+import { ToolError, makeTool, requireString, def, str, type ToolEntry } from "./shared.js"
 
 export const CREATE_TEAM_DESCRIPTION =
   "Create your agent team: materializes the team state directory and makes this session the team lead. One team per session; call this once before spawn_teammate / task_create."
@@ -18,19 +16,9 @@ export const CREATE_TEAM_DESCRIPTION =
 export const SPAWN_TEAMMATE_DESCRIPTION =
   "Recruit a resident teammate: spawns a persistent child agent with its own session, registers it on the member list and delivers the initial task. The teammate stays available for further messages and task dispatch after finishing. Give a self-contained task — the teammate starts with an empty history."
 
-function str(description: string) {
-  return { type: "string", description }
-}
-
-function def(name: string, description: string, properties: Record<string, unknown>, required: string[]): ToolDefinition {
-  return { name, description, parameters: { type: "object", properties, required } }
-}
-
-type TeamEntry = { name: string; tool: ToolExecutor; def: ToolDefinition }
-
 /** The seven team tools, paired executor + schema. */
-export function createTeamToolEntries(facade: TeamFacade, identity: TeamIdentity): TeamEntry[] {
-  const entries: TeamEntry[] = []
+export function createTeamToolEntries(facade: TeamFacade, identity: TeamIdentity): ToolEntry[] {
+  const entries: ToolEntry[] = []
 
   if (identity.role === "lead") {
     entries.push({

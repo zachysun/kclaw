@@ -38,7 +38,7 @@ import { lookup as dnsLookup } from "node:dns/promises"
 import { Readability } from "@mozilla/readability"
 import { parseHTML } from "linkedom"
 import type { ToolExecutor } from "../agent/tools.js"
-import { errMsg, makeTool, optInt, requireString, ToolError } from "./shared.js"
+import { def, errMsg, int, makeTool, optInt, requireString, str, ToolError, type ToolEntry } from "./shared.js"
 import { spillLocatorLine, spillToolOutput, SPILL_MAX_BYTES } from "./spill.js"
 
 const TAVILY_URL = "https://api.tavily.com/search"
@@ -299,4 +299,31 @@ export function createWebTools(opts: {
   })
 
   return { "web_search": web_search, "web_fetch": web_fetch }
+}
+
+/** The registry-facing bundle: executors + schemas owned beside each other. */
+export function createWebToolEntries(opts: Parameters<typeof createWebTools>[0]): ToolEntry[] {
+  const tools = createWebTools(opts)
+  return [
+    {
+      name: "web_search",
+      tool: tools.web_search,
+      def: def(
+        "web_search",
+        "Web search via Tavily. Returns a markdown list of `- [title](url)：content` lines.",
+        { query: str("Search query"), maxResults: int(1, 10) },
+        ["query"],
+      ),
+    },
+    {
+      name: "web_fetch",
+      tool: tools.web_fetch,
+      def: def(
+        "web_fetch",
+        "Fetch an http(s) URL and return its readable text: HTML is extracted to article text, other content types come back as plain text; bodies are capped at 512 KiB.",
+        { url: str("Absolute http(s) URL to fetch") },
+        ["url"],
+      ),
+    },
+  ]
 }

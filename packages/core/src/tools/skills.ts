@@ -19,7 +19,7 @@
 import type { SkillRecord } from "../skills/index.js"
 import type { SkillEvolutionTriggers } from "../skills/evolution.js"
 import type { ToolExecutor } from "../agent/tools.js"
-import { makeTool, requireString, ToolError } from "./shared.js"
+import { def, makeTool, requireString, str, ToolError, type ToolEntry } from "./shared.js"
 
 export const SKILL_READ_DESCRIPTION =
   "按名字加载一个技能（skill）的完整说明，返回其操作规程正文。优先使用系统提示词\"可用技能\"列表里的技能；不在该列表中的技能设置了 disable-model-invocation，只有在用户明确指名要求时才应加载。"
@@ -103,4 +103,46 @@ export function createSkillTools(skills: SkillRecord[], create?: {
   })
 
   return { skill_read, skill_list, skill_create }
+}
+
+/**
+ * The registry-facing bundle: executors + schemas owned beside each other.
+ * skill_create 仅在 `create` 在位时加入（daemon 组装时传；裸引擎测试不传）：
+ * 功能关闭的安装里模型根本看不到这个工具。
+ */
+export function createSkillToolEntries(
+  skills: Parameters<typeof createSkillTools>[0],
+  create?: Parameters<typeof createSkillTools>[1],
+  recordUse?: Parameters<typeof createSkillTools>[2],
+): ToolEntry[] {
+  const tools = createSkillTools(skills, create, recordUse)
+  const entries: ToolEntry[] = [
+    {
+      name: "skill_read",
+      tool: tools.skill_read,
+      def: def("skill_read", SKILL_READ_DESCRIPTION, { name: str("要加载哪个技能（目录名，见系统提示词的可用技能列表，或用 skill_list 查询）") }, ["name"]),
+    },
+    {
+      name: "skill_list",
+      tool: tools.skill_list,
+      def: def("skill_list", SKILL_LIST_DESCRIPTION, { query: str("可选：按名字与描述子串过滤（大小写不敏感）；不传则列出全部模型可见技能") }, []),
+    },
+  ]
+  if (tools.skill_create !== undefined) {
+    entries.push({
+      name: "skill_create",
+      tool: tools.skill_create,
+      def: def(
+        "skill_create",
+        SKILL_CREATE_DESCRIPTION,
+        {
+          name: str("技能目录名：小写字母、数字、连字符（如 deploy-runbook）"),
+          content: str("完整的 SKILL.md 文件内容：YAML frontmatter（含 description）+ Markdown 正文"),
+          rationale: str("可选：为什么这段经验值得沉淀为技能"),
+        },
+        ["name", "content"],
+      ),
+    })
+  }
+  return entries
 }

@@ -20,7 +20,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs"
 import path from "node:path"
 import picomatch from "picomatch"
 import type { ToolExecutor } from "../agent/tools.js"
-import { errMsg, makeTool, optInt, optString, requireString, ToolError } from "./shared.js"
+import { def, errMsg, int, makeTool, optInt, optString, requireString, str, ToolError, type ToolEntry } from "./shared.js"
 import { spillLocatorLine, spillToolOutput } from "./spill.js"
 
 const MAX_ENUM_FILES = 20_000
@@ -194,4 +194,39 @@ export function createSearchTools(opts: {
   }
 
   return { "grep": grep, "glob": glob }
+}
+
+/** The registry-facing bundle: executors + schemas owned beside each other. */
+export function createSearchToolEntries(opts: Parameters<typeof createSearchTools>[0]): ToolEntry[] {
+  const tools = createSearchTools(opts)
+  return [
+    {
+      name: "grep",
+      tool: tools.grep,
+      def: def(
+        "grep",
+        "Search file contents in the workspace with a regex (workspace-relative line output `path:lineNo: content`). Respects .gitignore inside git repos; skips binary files; results capped with a truncation marker and a spill-file pointer to the full list.",
+        {
+          pattern: str("Regular expression (JS RegExp syntax)"),
+          path: str("Optional: workspace-relative directory or file to scope the search"),
+          glob: str("Optional: glob filter on file paths, e.g. `**/*.ts`"),
+          maxResults: int(1, 200),
+        },
+        ["pattern"],
+      ),
+    },
+    {
+      name: "glob",
+      tool: tools.glob,
+      def: def(
+        "glob",
+        "Find files in the workspace by filename pattern (standard glob like `**/*.ts`). Respects .gitignore inside git repos; results capped with a truncation marker and a spill-file pointer to the full list.",
+        {
+          pattern: str("Glob pattern to match file paths against"),
+          path: str("Optional: workspace-relative directory to scope the search"),
+        },
+        ["pattern"],
+      ),
+    },
+  ]
 }

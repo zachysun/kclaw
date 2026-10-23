@@ -14,7 +14,7 @@ import { newId } from "../protocol/ids.js"
 import type { EventPayloadMap, QuestionSpec } from "../protocol/index.js"
 import { racePending, type ConfirmationBroker } from "../permissions/broker.js"
 import type { ToolExecutor } from "../agent/tools.js"
-import { ToolError, errMsg } from "./shared.js"
+import { ToolError, errMsg, def, str, type ToolEntry } from "./shared.js"
 
 /** Emits the question lifecycle events with the run's session/runId context (wired by the run assembly). */
 export type QuestionEventEmitter = <T extends "question.requested" | "question.resolved">(
@@ -123,4 +123,36 @@ export function createAskUserQuestionsTool(opts: {
       }
     },
   }
+}
+
+/** The registry-facing bundle: executor + schema owned beside each other. */
+export function createAskToolEntries(opts: Parameters<typeof createAskUserQuestionsTool>[0]): ToolEntry[] {
+  return [
+    {
+      name: "ask_user_questions",
+      tool: createAskUserQuestionsTool(opts),
+      def: def(
+        "ask_user_questions",
+        ASK_USER_QUESTIONS_DESCRIPTION,
+        {
+          questions: {
+            type: "array",
+            description: "1-5 questions to ask the user",
+            items: {
+              type: "object",
+              properties: {
+                text: str("The question, self-contained and answerable on its own"),
+                options: { type: "array", items: { type: "string" }, description: "2+ choices to pick from; omit for free text" },
+                multiSelect: { type: "boolean", description: "With options: allow several picks (default single)" },
+              },
+              required: ["text"],
+            },
+            minItems: 1,
+            maxItems: 5,
+          },
+        },
+        ["questions"],
+      ),
+    },
+  ]
 }

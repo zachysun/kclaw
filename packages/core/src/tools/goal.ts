@@ -22,7 +22,7 @@
 import type { ToolExecutor } from "../agent/tools.js"
 import type { GoalSnapshot } from "../goal/types.js"
 import type { GoalView } from "../protocol/goal.js"
-import { makeTool, optString, requireString } from "./shared.js"
+import { def, makeTool, optString, requireString, str, type ToolEntry } from "./shared.js"
 
 /** The host surface the tools consume — GoalLoopHost satisfies this structurally. */
 export interface GoalToolHost {
@@ -146,4 +146,42 @@ export function createGoalTools(opts: {
   })
 
   return { "create_goal": create_goal, "get_goal": get_goal, "update_goal": update_goal }
+}
+
+/** The registry-facing bundle: executors + schemas owned beside each other. */
+export function createGoalToolEntries(opts: Parameters<typeof createGoalTools>[0]): ToolEntry[] {
+  const tools = createGoalTools(opts)
+  return [
+    {
+      name: "create_goal",
+      tool: tools.create_goal,
+      def: def(
+        "create_goal",
+        "Start a goal loop ONLY when the user explicitly asked for persistent autonomous work (e.g. keep iterating until tests pass). The loop self-continues with an independent judge at each run boundary; acceptance commands run sandboxed and unattended. One goal per session; a live goal must be stopped first.",
+        {
+          text: str("The objective, stated so an independent judge can evaluate it"),
+          acceptance: { type: "array", items: { type: "string" }, description: "Optional acceptance commands (each must pass; run sandboxed). Absent = judged on the conversation alone" },
+        },
+        ["text"],
+      ),
+    },
+    {
+      name: "get_goal",
+      tool: tools.get_goal,
+      def: def("get_goal", "Read the current goal's view: state, round position, budget spent, latest verdict, acceptance commands.", {}, []),
+    },
+    {
+      name: "update_goal",
+      tool: tools.update_goal,
+      def: def(
+        "update_goal",
+        "Act on the current goal. `complete` requests an immediate judge pass — the independent judge decides met/not_met/impossible, this tool never closes the goal itself. `pause` disarms (no self-continuation). `resume` re-arms and checks. `stop` aborts the active run and parks the goal (user-stop).",
+        {
+          action: { type: "string", enum: ["complete", "pause", "resume", "stop"], description: "complete / pause / resume / stop" },
+          note: str("Optional context note (recorded, not used as judge evidence)"),
+        },
+        ["action"],
+      ),
+    },
+  ]
 }

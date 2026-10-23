@@ -19,8 +19,9 @@
  */
 import type { ToolExecutor } from "../agent/tools.js"
 import type { SubagentCollector, SubagentSpawnRequest, SubagentSpawner } from "../agent/subagent.js"
+import { def, str, type ToolEntry } from "./shared.js"
 
-/** The tool's model-facing description (kept beside the def in the registry). */
+/** The tool's model-facing description (the schema below shapes it). */
 export const SUBAGENT_RUN_DESCRIPTION = [
   "Dispatch a subagent: an independent short-lived agent session that executes ONE task autonomously and returns its final answer as this tool's result.",
   "Use it for context-heavy work (codebase sweeps, research, multi-step verification) so the process never floods this conversation; the child cannot talk back, ask questions, or spawn further subagents.",
@@ -104,4 +105,46 @@ export function createSubagentCollectTool(collector: SubagentCollector, parentSe
       }
     },
   }
+}
+
+/**
+ * The registry-facing bundle: executors + schemas owned beside each other.
+ * `collector` 在位时一并挂 subagent_collect（后台子代理按需取回答案）。
+ */
+export function createSubagentToolEntries(opts: {
+  spawner: SubagentSpawner
+  parentSessionId: string
+  collector?: SubagentCollector
+}): ToolEntry[] {
+  const entries: ToolEntry[] = [
+    {
+      name: "subagent_run",
+      tool: createSubagentTool(opts.spawner, opts.parentSessionId),
+      def: def(
+        "subagent_run",
+        SUBAGENT_RUN_DESCRIPTION,
+        {
+          task: str("Self-contained task description — the child sees nothing of this conversation"),
+          label: str("Short display name shown in status lines and confirmation cards"),
+          run_in_background: { type: "boolean", description: "True = return the child session id immediately; the completion notice arrives later and subagent_collect fetches the answer (default false = wait for the result here)" },
+          role: str("Optional role supplement for the child's system prompt: who it is for THIS task (e.g. '只读代码侦探，定位调用链'). Plain text, a few sentences at most"),
+          tools: { type: "array", items: { type: "string" }, description: "Optional tool allowlist for the child (exact tool names, e.g. ['fs_read','fs_list']). Narrowing only — omitted tools vanish from the child. Empty/absent = the child gets the full default surface" },
+        },
+        ["task"],
+      ),
+    },
+  ]
+  if (opts.collector !== undefined) {
+    entries.push({
+      name: "subagent_collect",
+      tool: createSubagentCollectTool(opts.collector, opts.parentSessionId),
+      def: def(
+        "subagent_collect",
+        SUBAGENT_COLLECT_DESCRIPTION,
+        { childSessionId: str("The child session id to collect (from the background dispatch result or the completion notice)") },
+        ["childSessionId"],
+      ),
+    })
+  }
+  return entries
 }

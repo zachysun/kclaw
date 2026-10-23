@@ -1,14 +1,39 @@
 /**
  * Shared plumbing for built-in tool modules: the control-flow error type,
- * arg validators, and the makeTool wrapper that turns thrown ToolErrors into
- * `{status: "error"}` results.
+ * arg validators, the makeTool wrapper that turns thrown ToolErrors into
+ * `{status: "error"}` results, and the schema-shaping helpers each module
+ * uses to declare its provider-facing definitions next to the executor.
  *
  * Extracted when memory.ts became the third module to need the same helpers
  * (previously duplicated in fs.ts and web.ts).
  */
 import type { ToolExecutor } from "../agent/tools.js"
+import type { ToolDefinition } from "../provider/types.js"
 
 export type ToolResult = { status: "ok" | "error"; output: string; data?: unknown }
+
+/** A registered builtin tool: name + executor + schema, bundled by the owning module. */
+export interface ToolEntry {
+  name: string
+  tool: ToolExecutor
+  def: ToolDefinition
+}
+
+/** A string property with a model-facing description. */
+export const str = (description: string) => ({ type: "string", description })
+
+/** An integer property clamped to [min, max] by the tool. */
+export const int = (minimum: number, maximum: number) => ({ type: "integer", minimum, maximum })
+
+/** Assemble a ToolDefinition from a name, description, properties and required list. */
+export function def(
+  name: string,
+  description: string,
+  properties: Record<string, unknown>,
+  required: string[],
+): ToolDefinition {
+  return { name, description, parameters: { type: "object", properties, required } }
+}
 
 /** Control-flow error carrying a user-facing message; caught by makeTool. */
 export class ToolError extends Error {}

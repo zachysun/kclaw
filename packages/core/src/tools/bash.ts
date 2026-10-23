@@ -29,7 +29,7 @@ import path from "node:path"
 import type { Readable } from "node:stream"
 import type { ToolExecutor } from "../agent/tools.js"
 import { spillLocatorLine, spillToolOutput, SPILL_MAX_BYTES } from "./spill.js"
-import type { ToolResult } from "./shared.js"
+import { def, str, type ToolEntry, type ToolResult } from "./shared.js"
 import type { BashSandboxSpawn } from "../sandbox/provider.js"
 import { newId } from "../protocol/ids.js"
 import type { ProcessRegistry } from "../process/registry.js"
@@ -360,4 +360,25 @@ export function createBashTool(opts: {
       })
     },
   }
+}
+
+/**
+ * The registry-facing bundle: executor + schema owned beside each other, so
+ * adding or changing the tool touches this module only (the registry spreads
+ * the entry; the opts routing — session env, processes passthrough — stays
+ * with the run assembly).
+ */
+export function createBashToolEntries(opts: Parameters<typeof createBashTool>[0]): ToolEntry[] {
+  return [
+    {
+      name: "bash",
+      tool: createBashTool(opts),
+      def: def(
+        "bash",
+        "Run a shell command in the workspace. stdout and stderr are merged; long output is truncated head+tail; non-zero exit or timeout returns an error with the partial output.",
+        { command: str("Shell command to run; cwd is the workspace root") },
+        ["command"],
+      ),
+    },
+  ]
 }
