@@ -16,7 +16,7 @@
  */
 import type { ToolExecutor } from "../agent/tools.js"
 import type { MemoryQuery, MemoryTriggers } from "../memory/system.js"
-import { errMsg, makeTool, optInt, requireString, ToolError } from "./shared.js"
+import { def, errMsg, int, makeTool, optInt, requireString, str, ToolError, type ToolEntry } from "./shared.js"
 
 const DEFAULT_SEARCH_LIMIT = 5
 const MAX_SEARCH_LIMIT = 20
@@ -58,4 +58,31 @@ export function createMemoryTools(ctx: {
   })
 
   return { memory_save, memory_search }
+}
+
+/** The registry-facing bundle: executors + schemas owned beside each other. */
+export function createMemoryToolEntries(ctx: Parameters<typeof createMemoryTools>[0]): ToolEntry[] {
+  const tools = createMemoryTools(ctx)
+  return [
+    {
+      name: "memory_save",
+      tool: tools.memory_save,
+      def: def(
+        "memory_save",
+        "立即把当前这轮对话沉淀进长期记忆（触发记忆写入 pipeline，处理当前轮）。判断权在你：用户明确要求记住时调用；对话里刚敲定重要决定、暴露稳定偏好、得出关键结论时也应自主调用。text 用一句话说明要记什么。",
+        { text: str("要记内容的提示（说明这轮什么内容值得沉淀）") },
+        ["text"],
+      ),
+    },
+    {
+      name: "memory_search",
+      tool: tools.memory_search,
+      def: def(
+        "memory_search",
+        "跨项目经历与全局认知的混合检索（关键词+向量）。每个命中带 [经历]/[认知] 与 [project:<id>]/[global] 标注。",
+        { query: str("要在长期记忆里找什么"), limit: int(1, 20) },
+        ["query"],
+      ),
+    },
+  ]
 }

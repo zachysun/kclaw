@@ -1,6 +1,6 @@
 # tools — 内置工具清单（39 个）
 
-> 权威来源：`packages/core/src/tools/index.ts`（注册表：执行器与模型侧 JSON Schema 成对声明）与 `packages/core/src/tools/` 下各实现文件（参数校验与行为）。机制见 [tools](../core/tools.md)，权限判定链见 [permissions](../core/permissions.md)。
+> 权威来源：`packages/core/src/tools/` 下各工具模块（每个模块的 `createXxxToolEntries` 工厂把执行器与模型侧 JSON Schema 成对打包，参数校验与行为同居一处）与 `packages/core/src/tools/index.ts`（注册表组装：路由组装参数、汇成 entries 列表）。机制见 [tools](../core/tools.md)，权限判定链见 [permissions](../core/permissions.md)。
 
 每个工具在注册时声明两个属性，权限与调度全部从这两个属性派生：
 
@@ -16,7 +16,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 ## 参数约定
 
-模型看到的参数定义（JSON Schema：类型、必填、描述）在注册表里声明；执行器收到参数后再做一轮运行时校验（`tools/shared.ts`）。全部工具共用四条约定：
+模型看到的参数定义（JSON Schema：类型、必填、描述）在各工具模块的 entries 工厂里声明；执行器收到参数后再做一轮运行时校验（`tools/shared.ts`）。全部工具共用四条约定：
 
 - 必填参数缺失或类型不对，返回 `args.<key> must be ...` 形式的错误结果。
 - 字符串参数拒绝空串与纯空白；少数正文类参数允许空串，在各自条目里标明。

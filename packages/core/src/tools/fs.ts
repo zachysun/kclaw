@@ -15,7 +15,7 @@ import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "n
 import type { Dirent } from "node:fs"
 import path from "node:path"
 import type { ToolExecutor } from "../agent/tools.js"
-import { errMsg, makeTool, requireString, ToolError } from "./shared.js"
+import { def, errMsg, makeTool, requireString, str, ToolError, type ToolEntry } from "./shared.js"
 
 const DEFAULT_MAX_READ_BYTES = 1024 * 1024
 
@@ -203,4 +203,58 @@ export function createFsTools(opts: {
   })
 
   return { "fs_read": fs_read, "fs_list": fs_list, "fs_write": fs_write, "fs_edit": fs_edit }
+}
+
+/** The registry-facing bundle: executors + schemas owned beside each other. */
+export function createFsToolEntries(opts: Parameters<typeof createFsTools>[0]): ToolEntry[] {
+  const tools = createFsTools(opts)
+  return [
+    {
+      name: "fs_read",
+      tool: tools.fs_read,
+      def: def(
+        "fs_read",
+        "Read a UTF-8 text file inside the workspace (up to 1 MiB).",
+        { path: str("Workspace-relative or absolute path of the file to read") },
+        ["path"],
+      ),
+    },
+    {
+      name: "fs_list",
+      tool: tools.fs_list,
+      def: def(
+        "fs_list",
+        "List a directory inside the workspace: subdirectories get a trailing /, files show their size in bytes.",
+        { path: str("Workspace-relative or absolute path of the directory to list") },
+        ["path"],
+      ),
+    },
+    {
+      name: "fs_write",
+      tool: tools.fs_write,
+      def: def(
+        "fs_write",
+        "Create or overwrite a file inside the workspace; missing parent directories are created.",
+        {
+          path: str("Workspace-relative or absolute path of the file to write"),
+          content: str("Full file content to write (may be empty)"),
+        },
+        ["path", "content"],
+      ),
+    },
+    {
+      name: "fs_edit",
+      tool: tools.fs_edit,
+      def: def(
+        "fs_edit",
+        "Replace exactly one occurrence of `old` with `new` in a workspace file. Replacement is literal (no regex, no $-patterns); 0 or multiple occurrences of `old` is an error.",
+        {
+          path: str("Workspace-relative or absolute path of the file to edit"),
+          old: str("Exact text to replace (must occur exactly once)"),
+          new: str("Replacement text (may be empty)"),
+        },
+        ["path", "old", "new"],
+      ),
+    },
+  ]
 }

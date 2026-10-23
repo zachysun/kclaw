@@ -17,7 +17,7 @@
  */
 import type { ToolExecutor } from "../agent/tools.js"
 import type { Cron, CronScheduler } from "../cron/scheduler.js"
-import { makeTool, optString, requireString } from "./shared.js"
+import { def, makeTool, optString, requireString, str, type ToolEntry } from "./shared.js"
 
 const DELAY_MIN = 1
 const DELAY_MAX = 525_600
@@ -123,6 +123,61 @@ export function createCronTools(opts: {
   })
 
   // `writeTools === false`（cron 触发的 run，防递归）不改变本工厂的返回：
-  // 注册表侧（tools/index.ts）按该标志只挂 cron_list，写执行器不进模型面。
+  // entries 工厂按该标志只挂 cron_list，写执行器不进模型面。
   return { "cron_create": cron_create, "cron_list": cron_list, "cron_update": cron_update, "cron_delete": cron_delete }
+}
+
+/**
+ * The registry-facing bundle: executors + schemas owned beside each other.
+ * writeTools=false（cron 触发的 run，防递归：定时会话不能再建定时）只挂
+ * cron_list，写三件不进模型面。
+ */
+export function createCronToolEntries(opts: Parameters<typeof createCronTools>[0]): ToolEntry[] {
+  const tools = createCronTools(opts)
+  const cronListEntry: ToolEntry = {
+    name: "cron_list",
+    tool: tools.cron_list,
+    def: def("cron_list", "List scheduled crons (id, schedule, enabled, next run, last result).", {}, []),
+  }
+  if (opts.writeTools === false) return [cronListEntry]
+  return [
+    {
+      name: "cron_create",
+      tool: tools.cron_create,
+      def: def(
+        "cron_create",
+        "Create a scheduled cron ONLY when the user explicitly asked for a reminder/recurring task. Exactly one of `cron` (standard 5-field expression) or `delayMinutes` (one-shot, fires once then auto-disables — never compute an absolute time yourself). The prompt must be self-contained: firing creates a fresh session that sees nothing of this conversation.",
+        {
+          name: str("Display name of the cron"),
+          prompt: str("Self-contained prompt fired as the user message of a fresh session"),
+          cron: str("Standard 5-field cron expression (mutually exclusive with delayMinutes)"),
+          delayMinutes: { type: "integer", minimum: 1, maximum: 525600, description: "One-shot: fire once N minutes from now (mutually exclusive with cron)" },
+        },
+        ["name", "prompt"],
+      ),
+    },
+    cronListEntry,
+    {
+      name: "cron_update",
+      tool: tools.cron_update,
+      def: def(
+        "cron_update",
+        "Update a scheduled cron (partial patch; at least one field). Changing cron/delayMinutes converts the trigger form and reschedules from now.",
+        {
+          id: str("Cron id from cron_list"),
+          name: str("Optional: new display name"),
+          prompt: str("Optional: new prompt"),
+          cron: str("Optional: switch to a recurring 5-field expression"),
+          delayMinutes: { type: "integer", minimum: 1, maximum: 525600, description: "Optional: switch to one-shot N minutes from now" },
+          enabled: { type: "boolean", description: "Optional: enable/disable without deleting" },
+        },
+        ["id"],
+      ),
+    },
+    {
+      name: "cron_delete",
+      tool: tools.cron_delete,
+      def: def("cron_delete", "Delete a scheduled cron permanently.", { id: str("Cron id from cron_list") }, ["id"]),
+    },
+  ]
 }

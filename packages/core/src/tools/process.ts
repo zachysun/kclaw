@@ -8,7 +8,7 @@
  */
 import type { ToolExecutor } from "../agent/tools.js"
 import type { ProcessRegistry, ProcessEntry } from "../process/registry.js"
-import { makeTool, optInt, requireString } from "./shared.js"
+import { def, int, makeTool, optInt, requireString, str, type ToolEntry } from "./shared.js"
 
 export function createProcessTools(opts: {
   registry: ProcessRegistry
@@ -75,4 +75,50 @@ export function createProcessTools(opts: {
   })
 
   return { "process_list": process_list, "process_output": process_output, "process_kill": process_kill }
+}
+
+/**
+ * The registry-facing bundle: executors + schemas owned beside each other.
+ * 归属按会话隔离：registry 只暴露本 sessionId 的条目（装配层按注册表在位
+ * 与否决定是否展开本组）。
+ */
+export function createProcessToolEntries(opts: Parameters<typeof createProcessTools>[0]): ToolEntry[] {
+  const tools = createProcessTools(opts)
+  return [
+    {
+      name: "process_list",
+      tool: tools.process_list,
+      def: def(
+        "process_list",
+        "List this session's background processes (id, command, status, exit code, output file). Completion is announced automatically; use process_output to read output incrementally.",
+        {},
+        [],
+      ),
+    },
+    {
+      name: "process_output",
+      tool: tools.process_output,
+      def: def(
+        "process_output",
+        "Read a background process's output since a byte offset (incremental cursor; the completion notice arrives automatically — do not poll). Optional wait blocks for new output or exit, bounded by timeoutMs (default 30s, max 600s).",
+        {
+          processId: str("Background process id (from the run_in_background result or the completion notice)"),
+          offset: int(0, Number.MAX_SAFE_INTEGER),
+          wait: { type: "boolean", description: "True = block until new output or termination (bounded by timeoutMs)" },
+          timeoutMs: int(1_000, 600_000),
+        },
+        ["processId"],
+      ),
+    },
+    {
+      name: "process_kill",
+      tool: tools.process_kill,
+      def: def(
+        "process_kill",
+        "Terminate a background process (SIGKILL to its whole process group). Killing an already-finished process is not an error.",
+        { processId: str("Background process id") },
+        ["processId"],
+      ),
+    },
+  ]
 }

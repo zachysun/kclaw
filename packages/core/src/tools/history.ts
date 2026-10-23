@@ -9,7 +9,7 @@
  * fixed unavailable line so the tool surface stays stable.
  */
 import type { ToolExecutor } from "../agent/tools.js"
-import { makeTool, optInt, requireString, ToolError } from "./shared.js"
+import { def, int, makeTool, optInt, requireString, str, ToolError, type ToolEntry } from "./shared.js"
 
 export const HISTORY_SEARCH_DESCRIPTION =
   "跨会话检索全部历史对话的原始消息（按关键词全文匹配，返回命中会话、说话人与摘录）。记忆系统只保留沉淀后的事实；想找回某次对话里说过的原话、给过的路径或决定（如\"上次怎么修的 X\"）时用本工具。可选 session_id 限定单个会话。"
@@ -52,4 +52,24 @@ export function createHistoryTool(search?: HistorySearchFn): { "history_search":
     }
   })
   return { history_search }
+}
+
+/** The registry-facing bundle: executor + schema owned beside each other. */
+export function createHistoryToolEntries(search?: Parameters<typeof createHistoryTool>[0]): ToolEntry[] {
+  return [
+    {
+      name: "history_search",
+      tool: createHistoryTool(search).history_search,
+      def: def(
+        "history_search",
+        HISTORY_SEARCH_DESCRIPTION,
+        {
+          query: str("要在全部历史会话的原始消息里找什么（关键词，中文友好）"),
+          limit: int(1, 20),
+          session_id: str("可选：只检索这一个会话"),
+        },
+        ["query"],
+      ),
+    },
+  ]
 }
