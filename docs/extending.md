@@ -2,7 +2,7 @@
 
 新增一类功能时，各自要动哪个包的哪个位置（各包内部命名统一，见各包 README）：
 
-1. **新增一个工具（模型可调用）**：`packages/core/src/tools/` 新建文件实现，在 `tools/index.ts` 的 `createBuiltinTools` 注册；权限规则在 `core/src/permissions`。
+1. **新增一个工具（模型可调用）**：`packages/core/src/tools/` 新建文件，模块自带 `createXxxToolEntries` 工厂（执行器与模型侧 JSON Schema 成对打包，参数校验同居一处），在 `tools/index.ts` 的 `createBuiltinTools` 里一行展开接入，再补上真正的接线：依赖注入选项与披露分层登记（`tools/exposure.ts`）；权限规则在 `core/src/permissions`。
 2. **接入外部 MCP server 的工具（不改代码）**：在全局 `~/.kclaw/mcp.json` 或某个项目的 `<项目>/.kclaw/mcp.json` 配置即可——连接（run 用到才按需连）与工具适配由 `packages/core/src/mcp/manager.ts` 完成，每个 run 经 RunManager 的 `extraTools(workdir)` 注入该会话工作目录所在项目组的工具清单（见 [mcp](./core/mcp.md)）。
 3. **新增一个 HTTP API**：`packages/server/src/routes/` 新建 `registerXxxRoutes`，在 `server/src/app.ts` 注册。
 4. **新增一个 WebUI 视图**：`packages/web/src/<name>/` 新建目录，在 `App.tsx` 视图切换处接入。

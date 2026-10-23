@@ -9,7 +9,7 @@
 ## 设计决策
 
 - **统一执行接口**：内置工具、MCP 适配器（`mcp__<server>__<tool>`，见 [mcp](./mcp.md)）实现同一个 `ToolExecutor`，循环不区分工具来源。`risk` 与 `concurrency` 是声明性元数据：前者驱动权限检查（safe 的工具集可自动放行；sensitive 在只读模式被无条件拒绝），后者驱动同批调用的调度。权限引擎需要的其余处理规则（路径归一、工作目录边界、读豁免、规则匹配取哪个参数）不要求工具声明，由引擎从 `risk` 与参数 schema 的字段名推导（见 [permissions](./permissions.md) 的按 risk 推导处理节）：写参数按惯例命名 `path`、命令参数命名 `command`，就自动被规则引擎识别。
-- **注册表与定义同源**：每个工具模块自带 `createXxxToolEntries` 工厂，把执行器、ToolDefinition 和名字打成一条 entry（schema 和手写校验同居在所属模块里）；`createBuiltinTools` 只路由组装参数、把各模块的 entries 汇成一条列表，`tools` 的键集合与 `toolDefs` 的名字集合天然一致（`registry.test.ts` 双向断言这一点），不会出现"模型可见但循环无法执行"的名字。新增一个工具=写好模块 + 注册表处一行展开（外加真正的接线：依赖注入、披露分层登记）。
+- **注册表与定义同源**：每个工具模块自带 `createXxxToolEntries` 工厂，把执行器、ToolDefinition 和名字打成一条 entry（schema 和手写校验同居在所属模块里）；`createBuiltinTools` 只路由组装参数、把各模块的 entries 汇成一条列表，`tools` 的键集合与 `toolDefs` 的名字集合天然一致（`registry.test.ts` 双向断言这一点），不会出现"模型可见但循环无法执行"的名字。新增一个工具=写好模块 + 注册表处一行展开（外加真正的接线：依赖注入、披露分层登记）。entries 的排列顺序有一处刻意安排：skills 家族展开在全部条件组之后。系统提示词的"工具目录"节按 entries 顺序渲染（不做排序），这段文字属于冻结的提示词基线，skill_create 保持在 cron 之后就是保持基线字节不变；发送面的 tools 数组不受影响，每请求按名排序（见 [agent-loop](./agent-loop.md)）。
 - **schema 面向模型，校验为手写实现**：parameters 字段是 JSON Schema（描述 JSON 参数结构的规范格式），随请求传给模型引导其生成参数；运行时不加载 schema 校验库，而是用 `shared.ts` 里的手写校验函数（`requireString` / `optInt` / `optStringArray`）逐个字段检查——失败抛 `ToolError`，由 `makeTool` 统一转成 `{status:"error"}` 结果，异常永远不逃出执行器。
 - **fs 工具不做工作目录越界拦截**：路径只经 `path.resolve(workspace, p)` 解析，越界与否交给权限网关判定（越界会变成一次可由人批准的确认）——如果工具层先拒绝，人工批准后的调用仍会失败，确认就失去意义。
 - **output 与 data 分离**：`output` 是面向模型的纯文本（进入下一轮请求的上下文）；`data` 是给前端渲染用的原始结构化数据（只持久化在块上，从不传给模型）。两者职责不同，避免"为渲染保留结构"污染模型上下文。
@@ -53,6 +53,10 @@ export function createBuiltinTools(opts: {
   ask?: { broker: ConfirmationBroker; timeoutMs?: number; emit: QuestionEventEmitter }
   // 运行中提问（issue #21）：broker 与确认共用同一个网关对象；缺席时 ask_user_questions 不注册。
   // run 组装对每个 run 都注入——主线与 subagent 一样（subagent 的转发卡沿确认先例）
+  team?: { facade: TeamFacade; identity: TeamIdentity }
+                                     // 团队模型面（七个团队工具）：组装先经团队 host 解析出身份（lead 或具名组员）再传入；
+                                     // cron 会话与任何团队外的会话没有这个选项，七件一个都不注册；
+                                     // 组员身份永不带 create_team / spawn_teammate（createTeamToolEntries 内部强制，见 agent-team.md）
   childRun?: boolean                 // 本 run 自身是 subagent（meta.parentSessionId 派生）：裁掉 memory_save 与 subagent_run
   fetchImpl?: typeof fetch
   processes?: ProcessRegistry        // 后台进程注册表（daemon 恒有）：bash 获得 run_in_background，process 三件加入清单（按会话隔离）

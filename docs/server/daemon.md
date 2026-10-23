@@ -190,7 +190,7 @@ startSkillScheduler({...})          技能调度器：跟随检查处理方（�
 startSkillCurator({...})            技能 curator 调度：每日本地时间过 skills.curator.hour（默认凌晨 4 点）
                                     后首扫（lastRun 本地日期判重），标记陈旧与归档 AI 自建技能
                                     （见 skills.md 的 curator 一节）
-void processRegistry.adopt()        后台进程收编：探测上次未送达通知里的进程组，
+void processRegistry.adopt()        后台进程收编：检测上次未送达通知里的进程组，
                                     活的重进注册表、死的补发通知（此时 run 已就绪，
                                     enqueue 安全）；失败只记日志，不阻塞启动
 feishu 频道管理器启动（opt-in）     ← 仅 ~/.kclaw/feishu.json enabled 时建通道；在各调度器与宿主之后启动，
