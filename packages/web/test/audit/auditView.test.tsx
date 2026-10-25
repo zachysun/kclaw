@@ -283,6 +283,48 @@ describe("AuditView (audit)", () => {
     unmount(root, container)
   })
 
+  it("chain badge verifies on click and shows the ok verdict", async () => {
+    const api = makeApi()
+    staticStream(api, [])
+    api.get.mockImplementation(async (path: string) => {
+      if (path.startsWith("/sessions/s1/events")) return []
+      if (path === "/sessions/s1/verify") return { status: "ok", checked: 4 }
+      throw new Error(`unexpected path: ${path}`)
+    })
+    const { container, root } = await mount(api)
+    const badge = container.querySelector('[data-testid="audit-chain-badge"]') as HTMLButtonElement
+    expect(badge.textContent).toContain("校验链")
+    await act(async () => { badge.click() })
+    const after = container.querySelector('[data-testid="audit-chain-badge"]') as HTMLButtonElement
+    expect(after.textContent).toContain("✓ 链完整")
+    expect(after.title).toContain("4 条")
+    unmount(root, container)
+  })
+
+  it("chain badge shows the broken verdict with line number", async () => {
+    const api = makeApi()
+    staticStream(api, [])
+    api.get.mockImplementation(async (path: string) => {
+      if (path.startsWith("/sessions/s1/events")) return []
+      if (path === "/sessions/s1/verify") return { status: "broken", checked: 3, brokenAt: 7, reason: "第 7 行与前行摘要不符" }
+      throw new Error(`unexpected path: ${path}`)
+    })
+    const { container, root } = await mount(api)
+    const badge = container.querySelector('[data-testid="audit-chain-badge"]') as HTMLButtonElement
+    await act(async () => { badge.click() })
+    const after = container.querySelector('[data-testid="audit-chain-badge"]') as HTMLButtonElement
+    expect(after.textContent).toContain("✗ 链断裂")
+    expect(after.title).toContain("第 7 行")
+    unmount(root, container)
+  })
+
+  it("chain badge is hidden without a session", async () => {
+    const api = makeApi()
+    const { container, root } = await mount(api, { sessionId: null })
+    expect(container.querySelector('[data-testid="audit-chain-badge"]')).toBeNull()
+    unmount(root, container)
+  })
+
   it("renders rows in event-array order (oldest first, newest at the bottom)", async () => {
     const api = makeApi()
     staticStream(api, [

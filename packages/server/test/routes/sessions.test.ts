@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { mkdtemp, rm, readdir } from "node:fs/promises"
+import { readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SessionStore, newMessage, defaultConfig } from "@kclaw/core"
@@ -156,6 +157,36 @@ describe("sessions routes", () => {
     const events = res.json() as Array<{ type: string }>
     expect(events.length).toBeGreaterThanOrEqual(3)
     expect(events.map((e) => e.type)).toEqual(["session.created", "message", "compaction"])
+  })
+
+  it("GET /sessions/:id/verify 返回链校验结果，篡改后检出", async () => {
+    const created = (await app.inject({ method: "POST", url: "/sessions", headers: AUTH })).json() as SessionMeta
+    store.appendMessage(created.id, newMessage(created.id, "user", [{ id: "blk_v", type: "text", text: "hello" }]))
+    store.appendMessage(created.id, newMessage(created.id, "assistant", [{ id: "blk_w", type: "text", text: "hi" }]))
+
+    const ok = await app.inject({ method: "GET", url: `/sessions/${created.id}/verify`, headers: AUTH })
+    expect(ok.statusCode).toBe(200)
+    expect(ok.json()).toMatchObject({ status: "ok", checked: 3 })
+
+    // 篡改事件文件中间一行 → broken + 断裂行号
+    const eventsFile = join(home, "sessions", created.id, "events.jsonl")
+    const lines = readFileSync(eventsFile, "utf8").split("\n").filter((l) => l !== "")
+    const tampered = JSON.parse(lines[1]!) as Record<string, unknown>
+    tampered.id = "HACKED"
+    lines[1] = JSON.stringify(tampered)
+    writeFileSync(eventsFile, lines.join("\n") + "\n")
+
+    const broken = await app.inject({ method: "GET", url: `/sessions/${created.id}/verify`, headers: AUTH })
+    expect(broken.statusCode).toBe(200)
+    const result = broken.json() as { status: string; brokenAt?: number }
+    expect(result.status).toBe("broken")
+    expect(result.brokenAt).toBe(3)
+  })
+
+  it("GET /sessions/:id/verify 会话不存在返回 404", async () => {
+    const res = await app.inject({ method: "GET", url: "/sessions/ses_doesnotexist/verify", headers: AUTH })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toEqual({ error: "session not found" })
   })
 
   it("GET /sessions/:id/events 会话不存在返回 404", async () => {

@@ -78,6 +78,62 @@ function localInputToIso(v: string): string {
   return Number.isNaN(d.getTime()) ? "" : d.toISOString()
 }
 
+/** 链校验结果的中文摘要（verify 端点返回形状的窄化）。 */
+interface VerifyResult {
+  status: "ok" | "partial" | "not-chained" | "torn-tail" | "broken"
+  checked: number
+  verifiedFrom?: number
+  brokenAt?: number
+  reason?: string
+}
+
+const CHAIN_LABELS: Record<VerifyResult["status"], string> = {
+  ok: "链完整",
+  partial: "链完整（含未起链前缀）",
+  "not-chained": "未起链",
+  "torn-tail": "末行不完整（崩溃痕迹）",
+  broken: "链断裂",
+}
+
+/**
+ * 哈希链状态标记：点击现算（按需校验，不在每次读会话时自动跑）。
+ * 结果以 title 提示展示，断裂带原因与行号。
+ */
+function ChainBadge({ api, sessionId }: { api: ApiClient; sessionId: string | null }) {
+  const [state, setState] = useState<"idle" | "checking" | VerifyResult | { status: "error"; reason: string }>("idle")
+  const onClick = useCallback(async () => {
+    if (sessionId === null || state === "checking") return
+    setState("checking")
+    try {
+      setState(await api.get<VerifyResult>(`/sessions/${encodeURIComponent(sessionId)}/verify`))
+    } catch (err) {
+      setState({ status: "error", reason: err instanceof Error ? err.message : String(err) })
+    }
+  }, [api, sessionId, state])
+  if (sessionId === null) return null
+  const label = state === "idle" ? "校验链" : state === "checking" ? "校验中…" : state.status === "error" ? "校验失败" : CHAIN_LABELS[state.status]
+  const title = state === "idle" || state === "checking" ? "校验本会话事件流的哈希链"
+    : state.status === "error" ? state.reason
+    : state.status === "broken" ? `${state.reason ?? "链断裂"}${state.brokenAt !== undefined ? `（第 ${state.brokenAt} 行）` : ""}`
+    : state.status === "partial" ? `前 ${state.verifiedFrom! - 1} 条无链（功能上线前写入），自第 ${state.verifiedFrom} 条起 ${state.checked} 条链完整`
+    : state.status === "ok" ? `全部 ${state.checked} 条事件链完整`
+    : state.reason ?? CHAIN_LABELS[state.status]
+  const tone = state !== "idle" && state !== "checking" && state.status !== "error"
+    ? state.status === "broken" || state.status === "torn-tail" ? "warn" : "ok"
+    : state.status === "error" ? "warn" : "muted"
+  return (
+    <button
+      type="button"
+      className={`audit-chain-badge audit-chain-${tone}`}
+      data-testid="audit-chain-badge"
+      title={title}
+      onClick={onClick}
+    >
+      {state !== "idle" && state !== "checking" && state.status === "broken" ? `✗ ${label}` : state !== "idle" && state !== "checking" && state.status !== "error" && (state.status === "ok" || state.status === "partial") ? `✓ ${label}` : label}
+    </button>
+  )
+}
+
 export interface AuditViewProps {
   api: ApiClient
   /** Per-connection ws factory (from useDaemonClients) — the page owns its connection. */
@@ -377,6 +433,7 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
         <span className="audit-session-chip" data-testid="audit-session-chip">
           {sessionTitle ?? (sessionId !== null ? sessionId : "未选择会话")}
         </span>
+        <ChainBadge api={api} sessionId={sessionId} />
       </div>
 
       <div className="audit-toolbar">
