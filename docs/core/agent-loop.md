@@ -73,7 +73,7 @@ export type PermissionDecision =
 ## run 生命周期状态机
 
 ```
-run.started {trigger}
+run.started {trigger, model?, provider?, permissionMode?}
   → message.created（用户消息骨架：先建空壳，内容随后补全）
   → [run-before hook 链：改写/注入 note/持久化/自动命名，见 hooks.md]
     → onMessage 持久化（非注入路径）→ message.completed

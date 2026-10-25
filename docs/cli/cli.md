@@ -29,6 +29,7 @@
 | `kclaw cron list` | 列定时任务（连接过程中自动启动 daemon），五列表格：name/cron/enabled/nextRunAt/lastStatus |
 | `kclaw mcp [list]` | 经 `GET /mcp` 按组打印 MCP server：每组先一行组头 `【全局】` 或 `【<工作目录路径>】`，组内每行 `  <名字>  <状态>  <N> 个工具[ 错误: <lastError>]`（状态为原始枚举串）；空配置打印 "未配置 MCP server（全局 mcp.json 与各项目 .kclaw/mcp.json 均为空）" |
 | `kclaw web` | 浏览器打开 WebUI（见 [onboarding](./onboarding.md)） |
+| `kclaw session verify --id <id>` / `kclaw session verify --all` | 校验会话事件流的哈希链（机制见 [storage](../core/storage.md) 的「事件流哈希链」）：对每个会话调 `GET /sessions/:id/verify`，`--all` 遍历 `GET /sessions` 返回的全部会话。每会话打印一行结论：`✓ <id>  链完整（N 条）`、`✓ <id>  前 K 条无链（功能上线前写入），自第 M 条起链完整（N 条）`、`· <id>  未起链（功能上线前写入的会话）`、`· <id>  末行不完整（崩溃痕迹，下次追加自动修复）`、`✗ <id>  <原因>（断裂位置：第 X 行）`。退出码：没有任何会话断裂为 0，任一会话断裂为 1；两个选项都不给时把用法打到 stderr、退出码 2 |
 
 程序级选项：`--home <dir>`（默认 `KCLAW_HOME ?? ~/.kclaw`）；`--version` 运行时从所在包的 package.json 读取（聚合安装形态即聚合包版本）。
 

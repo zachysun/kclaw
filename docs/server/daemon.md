@@ -26,7 +26,7 @@ export interface Daemon {
   port: number        // 实际绑定的端口（0 启动时为临时端口）
   token: string       // app 要求的 Bearer token（<home>/token）
   pid: number         // 本进程 pid，即 daemon.json 里记录的
-  stop(): Promise<void>   // 有界拆除：六个常驻宿主按构造序逐项限时执行（goal 循环 → 历史检索索引 → 调度心跳 → 记忆调度器 → 技能调度器 → 技能 curator）→ 飞书频道管理器（未启用时为 no-op）→ 项目发现（mcpProjects）→ mcp → app → memory → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
+  stop(): Promise<void>   // 有界拆除：七个常驻宿主按构造序逐项限时执行（goal 循环 → 历史检索索引 → 调度心跳 → 记忆调度器 → 技能调度器 → 技能 curator → spill 保留期清理）→ 飞书频道管理器（未启用时为 no-op）→ 项目发现（mcpProjects）→ mcp → app → memory → usage.close → 删 daemon.json；幂等（重复调用立即 resolve）
 }
 
 export interface LaunchDaemonOptions {
@@ -190,6 +190,9 @@ startSkillScheduler({...})          技能调度器：跟随检查处理方（�
 startSkillCurator({...})            技能 curator 调度：每日本地时间过 skills.curator.hour（默认凌晨 4 点）
                                     后首扫（lastRun 本地日期判重），标记陈旧与归档 AI 自建技能
                                     （见 skills.md 的 curator 一节）
+startSpillRetention({...})          spill 保留期清理：`sessions.spillRetentionDays` 为正时每小时扫一次
+                                    `<home>/spill`，删掉 mtime 超过保留期的文件；为 0（默认）时只确保
+                                    目录存在、不挂定时器（见 storage.md 的溢出目录一节）
 void processRegistry.adopt()        后台进程收编：检测上次未送达通知里的进程组，
                                     活的重进注册表、死的补发通知（此时 run 已就绪，
                                     enqueue 安全）；失败只记日志，不阻塞启动
@@ -248,7 +251,7 @@ bin 脚本注册信号处理：SIGTERM/SIGINT → `shutdown()`（`stopping` 标�
 `stop()` 的拆除序：常驻宿主按注册序逐项限时执行，其余步骤与启动相反，每步有界：
 
 ```
-// 先按构造序逐项限时执行 hostStops（goal → 历史检索索引 → 心跳 → 记忆 → 技能 → curator）：
+// 先按构造序逐项限时执行 hostStops（goal → 历史检索索引 → 心跳 → 记忆 → 技能 → curator → spill 清理）：
 withStopTimeout(goalHost.dispose(), 60s)
                                     // 等进行中的 goal 检查落定（判定器调用可能尚未返回；
                                     // 循环不自动续跑——重启后等用户 resume，见 goal.md）
@@ -261,6 +264,8 @@ withStopTimeout(skillTick.stop(), 60s)
                                     // 停技能调度器（await 所有进行中的提炼）
 withStopTimeout(curatorTick.stop(), 60s)
                                     // 停技能 curator 宿主（见 skills.md 的 curator 一节）
+withStopTimeout(spillTick.stop(), 60s)
+                                    // 停 spill 保留期清理宿主（spillRetentionDays=0 时没挂定时器，此步是空操作）
 withStopTimeout(feishuManager.stop(), 60s)
                                     // 停飞书频道（未启用时为 no-op；断开长连接与总线订阅）
 mcpProjects?.close()                // 停项目发现（关闭全部项目文件 watch，丢弃挂着的

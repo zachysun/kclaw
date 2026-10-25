@@ -46,7 +46,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `<home>/daemon.json` | daemon 存活标识（server 侧） | `launchDaemon` |
 | `<home>/token` | daemon 鉴权 token（server 侧） | `loadOrCreateToken` |
 
-补充三点：`logs` 目录当前的写入方是 MCP 的 stdio server stderr 日志（`logs/mcp/`，见 [mcp](./mcp.md)）。`attachments` 由上传路由写入，由权限引擎的 readRoots 与附件挂载读取，见 [run-manager](../server/run-manager.md)。`spill` 是尽力而为的写入：写入失败时静默退化为纯截断输出；每份溢出文件写入时计算 SHA-256 随定位行记录在工具结果里（`sha256=<摘要>`，副本被改动可对照发现；部分保留的副本对保留部分取摘要）。溢出文件按 mtime 过期清理：`sessions.spillRetentionDays`（默认 `0` = 永不清理），daemon 每小时一扫（`server/src/session-retention.ts`）。
+补充三点：`logs` 目录当前的写入方是 MCP 的 stdio server stderr 日志（`logs/mcp/`，见 [mcp](./mcp.md)）。`attachments` 由上传路由写入，由权限引擎的 readRoots 与附件挂载读取，见 [run-manager](../server/run-manager.md)。`spill` 是尽力而为的写入：写入失败时静默退化为纯截断输出；每份溢出文件写入时计算 SHA-256 随定位行记录在工具结果里（`sha256=<摘要>`，副本被改动可对照发现；部分保留的副本对保留部分取摘要）。溢出文件按 mtime 过期清理：`sessions.spillRetentionDays`（默认 `0` = 永不清理），daemon 每小时一扫（`server/src/session-retention.ts`）。清理只看文件修改时间、不看文件名：目录里的所有普通文件（包括后台进程的输出文件 `proc-<id>.txt`）都按同一保留期判定；单个文件判定或删除失败就跳过、下一扫再试，目录不存在视为无事发生。
 
 ---
 
@@ -196,7 +196,7 @@ export function readJsonl(file: string): unknown[]
 `events.jsonl` 的每行写入时携带前一行**原文文本**的 SHA-256 摘要（`$prev` 字段），首行接链创世摘要（创世值绑定会话 id，目录改名/文件置换可检出）；`meta.json` 的 `chainHead` / `chainLength` 锚定链头与总行数（检出删尾）。摘要按行原文计算、不做重新序列化——`JSON.stringify` 键序是插入序，同数据不同构造路径可能得到不同文本，重序列化会造成假断裂。设计动机与边界（IETF 草案对齐、外部锚定明确不做）见 `docs/superpowers/agent-traceability-research.md`（本地调研记录）。
 
 - **读取剥离**：`readEvents` / `readEventsFrom` 返回前删掉 `$prev`——该字段只属于持久化层，不进领域模型、总线与 HTTP 响应。
-- **崩溃窗口自愈**：新行的 `$prev` 恒以文件末行为准（不是 meta 的链头——事件已写、meta 未写的窗口里末才是已生效历史）；meta 链字段允许落后一行，校验容忍、下次追加对齐。撕裂尾按崩溃痕迹处理（校验报 `torn-tail` 而非篡改，追加时自动修复续链）。
+- **崩溃窗口自愈**：新行的 `$prev` 恒以文件末行为准（不是 meta 的链头——事件已写、meta 未写的窗口里，末行才是已生效的历史）；meta 链字段允许落后：校验时文件比 meta 记录的行数长不算错，记录的链头只要出现在文件各行的摘要集合里即通过，文件比记录短才报断裂；下次追加即对齐。撕裂尾按崩溃痕迹处理（校验报 `torn-tail` 而非篡改，追加时自动修复续链）。
 - **fork**：`writeEventsRaw` 建新流时逐行重链化——复制段是一条**独立新链**（创世绑定新会话 id），不是源流的延续（源流在源会话里自有链）；篡改 fork 会话的复制段在本会话校验即可检出。
 - **旧会话**：升级前的行没有 `$prev`，校验从第一条带链行起验（`partial`，前缀如实标注无链）；纯旧会话报 `not-chained`，不作废、不迁移。
 - **校验入口**：`SessionStore.verifyChain(id)` 返回结构化结果（`ok` / `partial` / `not-chained` / `torn-tail` / `broken`，`broken` 带断裂行号与嫌疑行）；HTTP `GET /sessions/:id/verify`（见 [http-api](../server/http-api.md)）、CLI `kclaw session verify --id <id> | --all`（退出码 0/1 可脚本化）、审计页标题旁的链状态标记（点击现算）。校验按需执行，不在读会话时自动跑。

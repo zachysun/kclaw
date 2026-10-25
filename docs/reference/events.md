@@ -71,7 +71,7 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 
 | 事件 | payload 字段 |
 |------|--------------|
-| `run.started` | `trigger`（user/cron/agent/team/goal）、`model?` / `provider?` / `permissionMode?`（run 配置快照，与持久化 run.started 事件同款；旧事件无） |
+| `run.started` | `trigger`（user/cron/process/agent/team/goal，六值含义见 [enums](./enums.md)）、`model?` / `provider?` / `permissionMode?`（run 配置快照，与持久化 run.started 事件同款；旧事件无） |
 | `run.completed` | `stopReason`、`usage`（全程累计） |
 | `run.failed` | `error { code, message }` |
 | `message.created` | `message`（Message 全量） |

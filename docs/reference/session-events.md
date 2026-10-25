@@ -13,7 +13,7 @@ export type SessionEvent =
   | MessageEvent | MessageTruncatedEvent | CompactionEvent
   | MemoryEvent | SkillEvent | SystemEvent | SandboxCheckedEvent
   | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent
-  | TeamAuditEvent | GoalEvent | HookEvent
+  | TeamAuditEvent | GoalEvent | TodoWrittenEvent | HookEvent
 ```
 
 ## 逐类型字段
