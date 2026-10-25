@@ -55,6 +55,8 @@ describe("goal events projection", () => {
     const m = s.create("目标会话")
     s.appendGoalSet(m.id, { at: "2026-01-02T00:00:00.000Z", op: "create", goal: snapshot() })
     const before = s.meta(m.id)!
+    // 链锚字段随每次追加推进，剔除后比较（测试意图=业务投影不变）
+    const stripChain = (m: typeof before) => { const { chainHead: _h, chainLength: _l, ...rest } = m; return rest }
     s.appendGoalChecked(m.id, {
       at: "2026-01-05T00:00:00.000Z",
       round: 1,
@@ -64,7 +66,7 @@ describe("goal events projection", () => {
       progress: "过半",
       tokens: { inputTokens: 10, outputTokens: 4 },
     })
-    expect(s.meta(m.id)).toEqual(before)
+    expect(s.meta(m.id) !== undefined && stripChain(s.meta(m.id)!)).toEqual(stripChain(before))
     // 记录可从事件流读回（审计页渲染路径）。
     const checked = s.readEvents(m.id).filter((e) => e.type === "goal.checked")
     expect(checked).toHaveLength(1)
