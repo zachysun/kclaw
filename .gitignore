@@ -18,3 +18,6 @@ packages/core/sessions/
 
 # build output of the aggregate npm package
 packages/kclaw/app/
+
+# one-off prototypes and scratch scripts; conclusions get folded into code/docs
+throwaway/
