@@ -145,19 +145,18 @@ export class SessionStore {
   appendEvent(id: string, event: SessionEvent): void {
     mkdirSync(this.sessionDir(id), { recursive: true })
     const current = this.meta(id)
-    // 链真相源是文件末行原文（不是 meta.chainHead——崩溃窗口里事件已写、
-    // meta 未写，末行才是已生效的历史）；末行无 $prev（未起链的旧会话）或
-    // 空文件 → 新链从创世起。
-    const prev = this.nextChainPrev(id)
-    appendJsonlLine(this.eventsPath(id), { ...event, $prev: prev })
+    // 链以文件末行原文为准（不是 meta.chainHead——崩溃窗口里事件已写、
+    // meta 未写，末行才是已生效的历史）。一次读取产出 prev 与规范行数
+    // （撕裂尾在读取时丢弃，与 appendJsonlLine 的修复语义一致），追加后
+    // 不再重读文件——新行原文由本次调用唯一拼装，链锚直接推算。
+    const tail = this.chainTailBeforeAppend(id)
+    const line = JSON.stringify({ ...event, $prev: tail.prev })
+    appendJsonlLine(this.eventsPath(id), { ...event, $prev: tail.prev })
     const at = this.eventAt(event)
     const base: SessionMeta = current ?? { id, title: "", createdAt: at, updatedAt: at }
     const projection = applyEvent(base, event)
-    // 链字段：追加完成后按磁盘原文回填（appendJsonlLine 可能修复撕裂尾，
-    // 行数以修复后的文件为准）
-    const { head, length } = this.chainTail(id)
-    projection.chainHead = head
-    projection.chainLength = length
+    projection.chainHead = lineDigest(line)
+    projection.chainLength = tail.lineCount + 1
     this.writeMeta(projection)
     if (this.onAppended !== undefined) {
       try {
@@ -168,18 +167,26 @@ export class SessionStore {
     }
   }
 
-  /** 新一行的 $prev：末行原文摘要（续链）或创世（空文件/旧会话首条）。 */
-  private nextChainPrev(id: string): string {
+  /**
+   * 追加前的链尾事实（一次文件读取产出全部）：prev = 新行该带的 `$prev`
+   * （末行有链 → 末行原文摘要；空文件 → 创世；末行无 `$prev` 的旧会话 →
+   * 创世起新链），lineCount = 丢弃撕裂尾后的规范行数。
+   */
+  private chainTailBeforeAppend(id: string): { prev: string; lineCount: number } {
     const lines = this.readChainLines(id)
     const last = lines[lines.length - 1]
-    if (last === undefined) return chainGenesis(id)
+    if (last === undefined) return { prev: chainGenesis(id), lineCount: 0 }
     try {
-      if ("$prev" in (JSON.parse(last) as object)) return lineDigest(last)
-    } catch { /* 撕裂行：将被修复砍掉，视为无末行 */ }
-    return chainGenesis(id)
+      const prev = "$prev" in (JSON.parse(last) as object) ? lineDigest(last) : chainGenesis(id)
+      return { prev, lineCount: lines.length }
+    } catch {
+      // readChainLines 已丢弃撕裂尾，parse 失败只剩"末行本身损坏"一种来源：
+      // 按旧会话首条处理起新链，损坏行留在文件里由 verifyChain 报告。
+      return { prev: chainGenesis(id), lineCount: lines.length }
+    }
   }
 
-  /** 修复后文件的链尾事实：末行摘要与总行数（无文件 → 创世与 0）。 */
+  /** 修复后文件的链尾事实：末行摘要与总行数（无文件 → 创世与 0）。rebuildMeta 用。 */
   private chainTail(id: string): { head: string; length: number } {
     const lines = this.readChainLines(id)
     if (lines.length === 0) return { head: chainGenesis(id), length: 0 }

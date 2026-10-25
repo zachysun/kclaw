@@ -49,7 +49,7 @@ export type SessionEvent =
 
 ### 钩子审计（1 种）
 
-每条**实际执行**的钩子一条（runner 的 `onExecuted` 回调落盘）。零投影效果、不推进 `updatedAt`。run-after 等收尾位置的钩子在 `run.ended` 落盘后执行，物理位置在 run 边界外，归属靠 `runId`。
+每条**实际执行**的钩子一条（runner 的 `onExecuted` 回调写进事件流）。零投影效果、不推进 `updatedAt`。run-after 等收尾位置的钩子在 `run.ended` 写入磁盘后执行，物理位置在 run 边界外，归属靠 `runId`。
 
 | 类型 | 字段 |
 |------|------|

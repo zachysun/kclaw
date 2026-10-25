@@ -170,7 +170,7 @@ export interface TodoItem {
 }
 export interface TodoWrittenEvent { type: "todo.written"; at: string; todos: TodoItem[] }
 
-/** 钩子执行审计（每条实际执行的钩子一条；runner 的 onExecuted 回调落盘）。 */
+/** 钩子执行审计（每条实际执行的钩子一条；runner 的 onExecuted 回调写进事件流）。 */
 export interface HookEvent {
   type: "hook"; at: string
   /** 钩子身份：builtin=功能名，user=文件名（HookMeta.name 同源）。 */
@@ -181,7 +181,7 @@ export interface HookEvent {
   outcome: "ok" | "failed" | "timeout"
   durationMs: number
   /**
-   * 归属 run：run-after 等位置的钩子在 run.ended 落盘之后执行（runAgent
+   * 归属 run：run-after 等位置的钩子在 run.ended 写入磁盘之后执行（runAgent
    * 返回后的收尾链），物理位置在 run 边界之外，归属靠本字段而非位置夹逼。
    */
   runId?: string

@@ -207,7 +207,8 @@ export class HookChain implements HookRunner {
       origin: entry.meta.origin,
       outcome: outcome.ok ? "ok" : (outcome.error instanceof Error && outcome.error.message.startsWith("hook timed out") ? "timeout" : "failed"),
       durationMs,
-      ...(this.#opts.eventCtx?.().runId !== undefined ? { runId: this.#opts.eventCtx!().runId } : {}),
+      // 工厂幂等（ctx 是即时快照），取一次：mid-run 链带 runId，装载期链没有
+      ...(() => { const runId = this.#opts.eventCtx?.().runId; return runId !== undefined ? { runId } : {} })(),
     }
     try {
       this.#opts.onExecuted(record)
