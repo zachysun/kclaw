@@ -304,7 +304,7 @@ describe("ws run commands (send_message / run.cancel)", () => {
     // the run is now live but cannot finish (the llm is manually gated): the
     // ack demonstrably arrived while the run was still pending
     const started = (await waitFor(frames, (f) => f.type === "run.started")) as AgentEvent
-    expect(started.payload).toEqual({ trigger: "user" })
+    expect(started.payload).toMatchObject({ trigger: "user" })
     expect(frames.some((f) => f.type === "run.completed")).toBe(false)
 
     release()
@@ -695,7 +695,7 @@ describe("ws event sequences (steer / wait / interrupt end-to-end)", () => {
     const secondStarted = await eventOf(frames, "run.started", 2)
     expect(frames.indexOf(secondStarted)).toBeGreaterThan(frames.indexOf(firstCompleted))
     expect(secondStarted.runId).not.toBe(firstStarted.runId) // 确是新 run
-    expect(secondStarted.payload).toEqual({ trigger: "user" })
+    expect(secondStarted.payload).toMatchObject({ trigger: "user" })
 
     // message.created arrives under the PRE-ALLOCATED queued id (原地升级，无新 id).
     await waitFor(frames, (f) => createdFor(frames, ack.messageId) === f)

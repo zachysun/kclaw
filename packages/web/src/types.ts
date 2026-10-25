@@ -8,7 +8,7 @@
 export type {
   AgentEvent, AttachmentBlock, AttachmentSource, Block, Message, NoteBlock, NoteKind, Role,
   TextBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock, ToolStatus, Usage,
-  CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
+  CompactionEvent, HookEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent, SessionForkedEvent,
   SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SkillEvent, SystemEvent,
   TeamAuditEvent, TeamCreatedEvent, TeamMemberProvisionedEvent, TeamMemberSettledEvent,

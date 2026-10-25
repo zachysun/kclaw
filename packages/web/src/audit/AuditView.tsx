@@ -54,6 +54,7 @@ const KIND_LABELS: Record<AuditRowKind, string> = {
   todo: "todo",
   team: "team",
   skill: "skill",
+  hook: "hook",
 }
 
 const TIME_PRESETS: Array<{ value: TimePreset; label: string }> = [
@@ -111,16 +112,22 @@ function ChainBadge({ api, sessionId }: { api: ApiClient; sessionId: string | nu
     }
   }, [api, sessionId, state])
   if (sessionId === null) return null
-  const label = state === "idle" ? "校验链" : state === "checking" ? "校验中…" : state.status === "error" ? "校验失败" : CHAIN_LABELS[state.status]
-  const title = state === "idle" || state === "checking" ? "校验本会话事件流的哈希链"
-    : state.status === "error" ? state.reason
-    : state.status === "broken" ? `${state.reason ?? "链断裂"}${state.brokenAt !== undefined ? `（第 ${state.brokenAt} 行）` : ""}`
-    : state.status === "partial" ? `前 ${state.verifiedFrom! - 1} 条无链（功能上线前写入），自第 ${state.verifiedFrom} 条起 ${state.checked} 条链完整`
-    : state.status === "ok" ? `全部 ${state.checked} 条事件链完整`
-    : state.reason ?? CHAIN_LABELS[state.status]
-  const tone = state !== "idle" && state !== "checking" && state.status !== "error"
-    ? state.status === "broken" || state.status === "torn-tail" ? "warn" : "ok"
-    : state.status === "error" ? "warn" : "muted"
+  // 三态渲染前的窄化：idle/checking 是提示文案，其余是带结论的结果态
+  const settled: VerifyResult | { status: "error"; reason: string } | null =
+    state === "idle" || state === "checking" ? null : state
+  const label = settled === null ? (state === "checking" ? "校验中…" : "校验链")
+    : settled.status === "error" ? "校验失败"
+    : CHAIN_LABELS[settled.status]
+  const title = settled === null ? "校验本会话事件流的哈希链"
+    : settled.status === "error" ? settled.reason
+    : settled.status === "broken" ? `${settled.reason ?? "链断裂"}${settled.brokenAt !== undefined ? `（第 ${settled.brokenAt} 行）` : ""}`
+    : settled.status === "partial" ? `前 ${settled.verifiedFrom! - 1} 条无链（功能上线前写入），自第 ${settled.verifiedFrom} 条起 ${settled.checked} 条链完整`
+    : settled.status === "ok" ? `全部 ${settled.checked} 条事件链完整`
+    : settled.reason ?? CHAIN_LABELS[settled.status]
+  const tone = settled === null ? "muted"
+    : settled.status === "error" || settled.status === "broken" || settled.status === "torn-tail" ? "warn" : "ok"
+  const mark = settled !== null && settled.status !== "error" && (settled.status === "ok" || settled.status === "partial") ? "✓ "
+    : settled !== null && (settled.status === "broken" || settled.status === "torn-tail") ? "✗ " : ""
   return (
     <button
       type="button"
@@ -129,7 +136,7 @@ function ChainBadge({ api, sessionId }: { api: ApiClient; sessionId: string | nu
       title={title}
       onClick={onClick}
     >
-      {state !== "idle" && state !== "checking" && state.status === "broken" ? `✗ ${label}` : state !== "idle" && state !== "checking" && state.status !== "error" && (state.status === "ok" || state.status === "partial") ? `✓ ${label}` : label}
+      {mark}{label}
     </button>
   )
 }

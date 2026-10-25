@@ -1,7 +1,7 @@
 import type {
   CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent, SessionForkedEvent,
-  SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SessionEvent, SkillEvent, SystemEvent, TeamAuditEvent,
+  HookEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SessionEvent, SkillEvent, SystemEvent, TeamAuditEvent,
   GoalCheckedEvent, GoalClearedEvent, GoalSetEvent, TodoWrittenEvent,
 } from "../protocol/session-events.js"
 import type { SessionMeta } from "./store.js"
@@ -11,7 +11,7 @@ import type { SessionMeta } from "./store.js"
 // guards and the meta projection — and re-exports the types for the Node
 // packages that historically imported them from here.
 export type {
-  CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
+  CompactionEvent, HookEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent, SessionForkedEvent,
   SessionEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SkillEvent, SystemEvent, TeamAuditEvent,
   GoalCheckedEvent, GoalClearedEvent, GoalSetEvent, TodoWrittenEvent,
@@ -25,6 +25,7 @@ export function isMemoryEvent(e: SessionEvent): e is MemoryEvent { return e.type
 export function isSkillEvent(e: SessionEvent): e is SkillEvent { return e.type === "skill" }
 export function isSystemEvent(e: SessionEvent): e is SystemEvent { return e.type === "system" }
 export function isSandboxCheckedEvent(e: SessionEvent): e is SandboxCheckedEvent { return e.type === "sandbox.checked" }
+export function isHookEvent(e: SessionEvent): e is HookEvent { return e.type === "hook" }
 export function isRunStartedEvent(e: SessionEvent): e is RunStartedEvent { return e.type === "run.started" }
 export function isRunEndedEvent(e: SessionEvent): e is RunEndedEvent { return e.type === "run.ended" }
 export function isPermissionDecidedEvent(e: SessionEvent): e is PermissionDecidedEvent { return e.type === "permission.decided" }
@@ -138,6 +139,7 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
       break
     case "goal.checked": break // 判定审计事件：只记录，不动投影（真相快照在 goal.set 链上）
     case "todo.written": next.todo = event.todos; break // 全量快照后写胜出；不刷 updatedAt
+    case "hook": break // 钩子执行审计：只记录，不动投影（同 sandbox.checked 口径）
     default: {
       const unhandled: never = event
       void unhandled

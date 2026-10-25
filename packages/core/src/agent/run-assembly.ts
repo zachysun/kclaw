@@ -412,6 +412,11 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     timeoutMs: () => config.hooks?.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS,
     onFailure: (e) => busEmit(e),
     eventCtx,
+    // 钩子执行审计（spec：记录完整性）：每条实际执行的钩子一条持久事件。
+    // 与 hook.failed 分工：总线事件是实时通道（仅失败），这是权威记录（全量）。
+    onExecuted: (r) => {
+      sessions.appendHook(sessionId, { at: new Date().toISOString(), ...r })
+    },
   })
 
   // History BEFORE the append (runAgent appends the user message itself).
@@ -1009,6 +1014,8 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     {
       llm: runLlm,
       model,
+      provider: entryKey === "" || entryKey === undefined ? undefined : entryKey,
+      permissionMode: sessionMeta?.mode,
       tools,
       toolDefs,
       ...(promotableDefs.length > 0
@@ -1055,7 +1062,13 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
         // events. Same contract as the system/sandbox audit events: a write
         // failure fails the run (the audit promise is all-or-nothing).
         if (e.type === "run.started") {
-          sessions.appendRunStarted(sessionId, { at: new Date().toISOString(), trigger: e.payload.trigger })
+          sessions.appendRunStarted(sessionId, {
+            at: new Date().toISOString(),
+            trigger: e.payload.trigger,
+            ...(e.payload.model !== undefined ? { model: e.payload.model } : {}),
+            ...(e.payload.provider !== undefined ? { provider: e.payload.provider } : {}),
+            ...(e.payload.permissionMode !== undefined ? { permissionMode: e.payload.permissionMode } : {}),
+          })
         } else if (e.type === "run.completed") {
           sessions.appendRunEnded(sessionId, {
             at: new Date().toISOString(),

@@ -55,6 +55,24 @@ describe("runAgent text turn", () => {
     expect(types).toContain("llm.started")
     expect(types).toContain("llm.completed")
   })
+
+  it("run.started carries the model/provider/permissionMode snapshot when supplied", async () => {
+    const { events } = await runText({ provider: "deepseek", permissionMode: "auto" })
+    const started = events[0]!
+    expect(started.type).toBe("run.started")
+    const payload = (started as { payload: Record<string, unknown> }).payload
+    expect(payload.model).toBe("glm-4.7")
+    expect(payload.provider).toBe("deepseek")
+    expect(payload.permissionMode).toBe("auto")
+  })
+
+  it("run.started omits the snapshot fields when deps do not supply them", async () => {
+    const { events } = await runText()
+    const started = events[0]!
+    const payload = (started as { payload: Record<string, unknown> }).payload
+    expect(payload.provider).toBeUndefined()
+    expect(payload.permissionMode).toBeUndefined()
+  })
 })
 
 /** Timeline label: message lifecycle entries carry their role so user and

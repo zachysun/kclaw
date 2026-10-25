@@ -40,7 +40,13 @@ export type EventType =
 /** Who initiated a run — the bus payload, the persisted run.started event, the enqueue input and the engine input share this union. */
 export type RunTrigger = "user" | "cron" | "process" | "agent" | "team" | "goal"
 
-export interface RunStartedPayload { trigger: RunTrigger }
+export interface RunStartedPayload {
+  trigger: RunTrigger
+  /** 与持久化 run.started 事件同款三字段（模型/供应商/权限模式快照）。 */
+  model?: string
+  provider?: string
+  permissionMode?: import("../permissions/modes.js").PermissionMode
+}
 export interface RunCompletedPayload { stopReason: StopReason; usage: Usage }
 export interface RunFailedPayload { error: { code: string; message: string } }
 export interface MessageCreatedPayload { message: Message }

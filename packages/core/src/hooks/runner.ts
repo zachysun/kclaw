@@ -59,6 +59,17 @@ const APPEND_POSITIONS: ReadonlySet<HookPosition> = new Set(["system-before"])
 /** One reported failure (throw / timeout) of a skip-failure hook. */
 export type HookFailureSink = (e: AgentEvent<"hook.failed">) => void
 
+/** One executed hook's audit record (persisted by the daemon as a `hook` session event). */
+export interface HookExecRecord {
+  name: string
+  position: HookPosition
+  origin: "builtin" | "user"
+  outcome: "ok" | "failed" | "timeout"
+  durationMs: number
+  /** Owning run when known (mid-run chains); loader-phase hooks have none. */
+  runId?: string
+}
+
 interface SortedEntry {
   entry: HookEntry
   timer: ReturnType<typeof setTimeout> | undefined
@@ -69,6 +80,12 @@ export interface HookChainOptions {
   timeoutMs?: () => number
   /** Receives one hook.failed event per skip-failure (loader callers fan it onto the bus). */
   onFailure?: HookFailureSink
+  /**
+   * Audit tap: one record per ACTUALLY EXECUTED hook (ok/failed/timeout
+   * alike — failures already reach onFailure, this is the full-execution
+   * record). A throwing tap never breaks the chain.
+   */
+  onExecuted?: (record: HookExecRecord) => void
   /** Event context factory: sessionId/runId known mid-run; loader-phase failures have neither. */
   eventCtx?: () => { sessionId?: string; runId?: string }
 }
@@ -129,7 +146,9 @@ export class HookChain implements HookRunner {
     let current: unknown = undefined
     let denial: { hook: string; error: string } | undefined
     for (const { entry } of list) {
+      const startedAt = Date.now()
       const outcome = await this.#invoke(entry, position, invokeCtx as HookContextMap[HookPosition])
+      this.#audit(entry, position, outcome, Date.now() - startedAt)
       if (!outcome.ok) {
         if (entry.meta.failure === "fatal") throw outcome.error
         const message = this.#report(entry, position, outcome.error)
@@ -176,6 +195,24 @@ export class HookChain implements HookRunner {
       return { ok: false, error }
     } finally {
       if (timer !== undefined) clearTimeout(timer)
+    }
+  }
+
+  /** Emit the execution audit record; a throwing tap never breaks the chain. */
+  #audit(entry: HookEntry, position: HookPosition, outcome: { ok: true } | { ok: false; error: unknown }, durationMs: number): void {
+    if (this.#opts.onExecuted === undefined) return
+    const record: HookExecRecord = {
+      name: entry.meta.name,
+      position,
+      origin: entry.meta.origin,
+      outcome: outcome.ok ? "ok" : (outcome.error instanceof Error && outcome.error.message.startsWith("hook timed out") ? "timeout" : "failed"),
+      durationMs,
+      ...(this.#opts.eventCtx?.().runId !== undefined ? { runId: this.#opts.eventCtx!().runId } : {}),
+    }
+    try {
+      this.#opts.onExecuted(record)
+    } catch {
+      // audit must never break the chain
     }
   }
 

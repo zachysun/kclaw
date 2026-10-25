@@ -9,6 +9,7 @@
  * contract — any spill failure degrades silently to the plain truncated
  * output; the tool call must never fail because spilling did.
  */
+import { createHash } from "node:crypto"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
@@ -20,6 +21,8 @@ export interface SpillResult {
   path?: string
   /** true = the captured span itself exceeded SPILL_MAX_BYTES and the copy is partial. */
   partial?: boolean
+  /** SHA-256 of the written bytes (partial copies hash what was kept); rides the locator line. */
+  sha256?: string
 }
 
 /** Monotonic per-process suffix so same-second spills never collide. */
@@ -37,11 +40,12 @@ export function spillToolOutput(spillDir: string | undefined, toolName: string, 
     // copy gets the same 0600 treatment as the daemon's own config/token
     // files, not the 0644 default.
     if (buf.length > SPILL_MAX_BYTES) {
-      writeFileSync(path, buf.subarray(0, SPILL_MAX_BYTES), { mode: 0o600 })
-      return { path, partial: true }
+      const kept = buf.subarray(0, SPILL_MAX_BYTES)
+      writeFileSync(path, kept, { mode: 0o600 })
+      return { path, partial: true, sha256: createHash("sha256").update(kept).digest("hex") }
     }
     writeFileSync(path, buf, { mode: 0o600 })
-    return { path }
+    return { path, sha256: createHash("sha256").update(buf).digest("hex") }
   } catch {
     return {}
   }
@@ -54,5 +58,6 @@ export const SPILL_LOCATOR_PREFIX = "[完整输出已存盘: "
 export function spillLocatorLine(result: SpillResult): string {
   if (result.path === undefined) return ""
   const note = result.partial === true ? "（该文件仅保留了前 10MB）" : ""
-  return `\n${SPILL_LOCATOR_PREFIX}${result.path}${note}；需要更多内容时用 fs_read 读取该文件]`
+  const digest = result.sha256 === undefined ? "" : `，sha256=${result.sha256}`
+  return `\n${SPILL_LOCATOR_PREFIX}${result.path}${note}${digest}；需要更多内容时用 fs_read 读取该文件]`
 }

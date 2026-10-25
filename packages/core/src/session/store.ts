@@ -8,7 +8,7 @@ import { appendJsonlLine, readJsonl, readJsonlFrom } from "../storage/jsonl.js"
 import { applyEvent, isCompactionEvent, isMessageEvent, isMessageTruncatedEvent } from "./events.js"
 import { chainGenesis, lineDigest, stripChainField, verifyEventChain } from "./integrity.js"
 import type { ChainMetaAnchor, ChainVerifyResult } from "./integrity.js"
-import type { MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent, SandboxCheckedEvent, SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent, TeamAuditEvent } from "./events.js"
+import type { HookEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent, SandboxCheckedEvent, SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent, TeamAuditEvent } from "./events.js"
 import type { GoalCheckedEvent, GoalClearedEvent, GoalSetEvent, TodoWrittenEvent } from "./events.js"
 import type { GoalSnapshot } from "../goal/types.js"
 import type { AttachmentRef, QueueEntry } from "../protocol/wire.js"
@@ -408,6 +408,11 @@ export class SessionStore {
   /** Append one run-boundary audit event（run 终点记录；失败带 error，成功带全程用量）; the projection stays untouched (不推进 updatedAt)。 */
   appendRunEnded(id: string, event: Omit<RunEndedEvent, "type">): void {
     this.appendEvent(id, { type: "run.ended", ...event })
+  }
+
+  /** Append one hook-execution audit event（每条实际执行的钩子一条；零投影效果，不推进 updatedAt）。 */
+  appendHook(id: string, event: Omit<HookEvent, "type">): void {
+    this.appendEvent(id, { type: "hook", ...event })
   }
 
   /** Append one permission-decision audit event（每次人工确认的裁决记录; 中止不是裁决，不落）; the projection stays untouched (不推进 updatedAt)。 */

@@ -176,7 +176,8 @@ describe("RunManager.enqueue", () => {
     // bus: subscribed socket saw run.started … run.completed, all for this session
     const events = received(socket)
     expect(events[0]!.type).toBe("run.started")
-    expect(events[0]!.payload).toEqual({ trigger: "user" })
+    expect(events[0]!.payload).toMatchObject({ trigger: "user" })
+    expect((events[0]!.payload as Record<string, unknown>).model).toBe("mock-model")
     expect(events.at(-1)!.type).toBe("run.completed")
     expect(events.every((e) => e.sessionId === session.id)).toBe(true)
   })
@@ -433,7 +434,7 @@ describe("RunManager.enqueue", () => {
     const outcome = await manager.enqueue(session.id, { userText: "执行 echo ok", trigger: "cron" })
 
     expect(outcome.stopReason).toBe("end_turn")
-    expect(received(socket)[0]!.payload).toEqual({ trigger: "cron" })
+    expect(received(socket)[0]!.payload).toMatchObject({ trigger: "cron" })
     const msgs = env.sessions.readMessages(session.id)
     expect(msgs.map((m) => m.role)).toEqual(["user", "assistant", "tool", "assistant"])
     const result = msgs[2]!.blocks[0] as ToolResultBlock
@@ -1999,12 +2000,15 @@ describe("RunManager run 边界与权限裁决档案事件", () => {
     expect(started[0]).toMatchObject({ trigger: "user" })
     expect(ended[0]).toMatchObject({ stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 2 } })
     expect("error" in ended[0]!).toBe(false)
-    // 次序：run.started 先于本 run 的 user 消息事件，run.ended 殿后
+    // 次序：run.started 先于本 run 的 user 消息事件；run.ended 之后只允许
+    // run-after 收尾链的 hook 审计事件（runAgent 返回后执行，物理位置在边界
+    // 外、归属靠事件里的 runId）
     const first = events.findIndex((e) => e.type === "run.started")
     const userMsg = events.findIndex((e) => e.type === "message" && e.role === "user")
-    const last = events.findIndex((e) => e.type === "run.ended")
+    const endedIdx = events.findIndex((e) => e.type === "run.ended")
     expect(first).toBeLessThan(userMsg)
-    expect(last).toBe(events.length - 1)
+    const tail = events.slice(endedIdx + 1)
+    expect(tail.every((e) => e.type === "hook")).toBe(true)
   })
 
   it("失败的 run 也落 run.ended（stopReason error + 失败原因）——有始必有终", async () => {
