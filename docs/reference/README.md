@@ -9,7 +9,7 @@
 | [messages](./messages.md) | 消息类型（Role 3 种）、停止原因（StopReason 7 种 + 归一化映射）、放行原因（GrantedBy 8 种） | `packages/core/src/protocol/messages.ts` |
 | [blocks](./blocks.md) | 内容块（6 种）、note 种类（8 种）、附件来源（3 种）、role × 块约定 | `packages/core/src/protocol/blocks.ts` |
 | [events](./events.md) | 总线事件（EventType 43 种，含分组与 payload）、事件公共字段 | `packages/core/src/protocol/events.ts` |
-| [session-events](./session-events.md) | 持久化会话事件（events.jsonl 的 27 种类型） | `packages/core/src/protocol/session-events.ts` |
+| [session-events](./session-events.md) | 持久化会话事件（events.jsonl 的 28 种类型） | `packages/core/src/protocol/session-events.ts` |
 | [wire](./wire.md) | WS 指令帧（10 种）、应答帧（9 种 + error）、排队处置（3 种） | `packages/core/src/protocol/wire.ts` |
 | [tools](./tools.md) | 内置工具（39 个：常驻 17 + 条件 22）、risk / concurrency 两轴 | `packages/core/src/tools/` |
 | [hooks](./hooks.md) | hook 位置（14 个）、内置 hook（15 个）、失败策略（3 档） | `packages/core/src/hooks/` |

@@ -46,7 +46,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `<home>/daemon.json` | daemon 存活标识（server 侧） | `launchDaemon` |
 | `<home>/token` | daemon 鉴权 token（server 侧） | `loadOrCreateToken` |
 
-补充三点：`logs` 目录当前的写入方是 MCP 的 stdio server stderr 日志（`logs/mcp/`，见 [mcp](./mcp.md)）。`attachments` 由上传路由写入，由权限引擎的 readRoots 与附件挂载读取，见 [run-manager](../server/run-manager.md)。`spill` 是尽力而为的写入：写入失败时静默退化为纯截断输出；溢出文件是普通文件，可随时手动清理（目前没有自动过期清理）。
+补充三点：`logs` 目录当前的写入方是 MCP 的 stdio server stderr 日志（`logs/mcp/`，见 [mcp](./mcp.md)）。`attachments` 由上传路由写入，由权限引擎的 readRoots 与附件挂载读取，见 [run-manager](../server/run-manager.md)。`spill` 是尽力而为的写入：写入失败时静默退化为纯截断输出；每份溢出文件写入时计算 SHA-256 随定位行记录在工具结果里（`sha256=<摘要>`，副本被改动可对照发现；部分保留的副本对保留部分取摘要）。溢出文件按 mtime 过期清理：`sessions.spillRetentionDays`（默认 `0` = 永不清理），daemon 每小时一扫（`server/src/session-retention.ts`）。
 
 ---
 
@@ -76,6 +76,7 @@ export function resolvePaths(home?: string): KclawPaths
 | `bash.timeoutMs` / `maxOutputBytes` | `300000` / `524288`（512 KiB） | bash 工具的超时与输出截断上限 |
 | `sandbox.enabled` / `writeRoots` / `network` | `true` / `[]` / `"allow"` | bash 沙箱的整体开关、追加写白名单（realpath 形态）与沙箱内网络开关（deny 时 bash 子进程断网，web 工具不受影响），见 [sandbox](./sandbox.md) |
 | `sessions.recycleBinTtlMs` | `2592000000`（30 天） | 回收站保留期，scheduler tick 周期清理用（见 [cron](./cron.md)） |
+| `sessions.spillRetentionDays` | `0` | spill 目录按 mtime 的保留天数（0 = 永不清理，行为与历史一致；正数时 daemon 每小时清理超期文件，见上文「溢出目录」） |
 | `todo.allowParallelInProgress` | `false` | 允许多条同时 in_progress（todo_list_write 的单条校验松开口） |
 | `sessions.contextTokens` / `compactPackRatio` / `compactAheadRatio` / `compactAtRatio` / `compactPanicRatio` / `compactTargetRatio` / `toolResultKeep` | `128000` / `0.70` / `0.75` / `0.80` / `0.90` / `0.33` / `8` | 上下文压缩（见 [compaction](./compaction.md)）：token budget、省略线（发送时工具输出省略的 budget 比例）、预压线（估算发送量达 budget × 0.75 且未过红线时在迭代边界派后台压缩）、黄线（估算发送量达 budget × 0.80 即触发收尾压缩）、红线（运行中占用达 budget × 0.90 时在迭代边界触发中途压缩）、压缩后保留部分的目标比例（budget × 0.33）、发送时保留原文的最近工具结果条数。七个字段均可选：默认值、加载校验与"budget × 比例 → 绝对 token 阈值"的解析集中在压缩阈值线模块 `session/waterlines.ts`——触发四线（预压/黄/红/目标）越出 (0,1] 或次序不满足"目标 < 预压 < 黄 < 红"整组回退到默认并告警，省略线单独校验、独立回退到默认；每次 run 由 `resolveWaterlines` 解析出绝对阈值供触发 hook 与压缩引擎使用（`contextTokens` 的读取在 `resolveContextTokens`） |
 | `sessions.toolLoopMaxRepeats` | `5` | 工具死循环守卫：同一工具调用（同名同参数）连续执行达 N 次后，该次结果附加 `<system-reminder kind="loop-guard">` 提醒模型换策略（跨工具回合计数，结果改变即重置）；`0` 关闭（见 [agent-loop](./agent-loop.md)） |
@@ -157,13 +158,14 @@ export function readJsonl(file: string): unknown[]
 
 每个会话一个目录 `<sessionsDir>/<id>/`，固定三个文件，由 `SessionStore`（`packages/core/src/session/store.ts`）统一管理。三个文件的分工：**events.jsonl 是唯一权威数据，meta.json 是从它推导出来的快速读取摘要，queue.jsonl 是运行态的排队消息。**
 
-- **`events.jsonl`（唯一权威数据）**：只追加的事件流，一行一个 `SessionEvent`（JSON 序列化），共 27 种事件——
+- **`events.jsonl`（唯一权威数据）**：只追加的事件流，一行一个 `SessionEvent`（JSON 序列化），共 28 种事件（每行另带一个持久层私有的 `$prev` 字段——哈希链防篡改，见下文「事件流哈希链」）——
   - 会话生命周期 6 种：`session.created`（含创建时固化的初始权限模式 `mode`；subagent 会话还带 `parentSessionId`）、`session.renamed`、`session.deleted`、`session.restored`、`session.set`（model / mode / disposition 的会话级设置）、`session.forked`（fork 血缘：来源会话、分叉点消息、初始标题，只落在新会话流上，投影出 `meta.forkedFrom`；fork 复制的历史段本身经 `writeEventsRaw` 直写，不走这条常规追加路径，见下文 fork 小节）。
   - 内容类 7 种：`message`（一条消息）、`message.truncated`（编辑重试/重新生成的截断标记：从 `fromMessageId` 起的所有消息退出对话视图；事件流只追加这条标记、不改写任何历史行，可见性是读取端投影）、`compaction`（一次压缩的审计）、`memory`（一次记忆写入的审计）、`skill`（一条技能提案审计——提案的产生与治理状态流转各落一条，只做记录、权威数据在 `.proposals/` 的提案文件，见 [skills](./skills.md)）、`system`（一条系统提示词审计，每次对话运行落一条，附带 stable/live 两段拼装文本）、`sandbox.checked`（一条沙箱状态审计——每次对话运行检测后落一条 `{enabled, available, unavailableReason?}`）。
-  - 运行档案 3 种：`run.started` / `run.ended`（每 run 一对，把该 run 的消息事件夹成一轮边界；失败 run 也落 `run.ended`，起点必有终点）、`permission.decided`（每次人工确认裁决的记录；被中止的确认不落）。<br>运行档案与 `system` / `sandbox.checked` 一样只写事件流、不进 meta 投影、不推进 `updatedAt`。`message.truncated` 不同（它是用户可见的会话动作，会推进 `updatedAt`；且当截断起点越过压缩锚点（`compaction.upto`）时，部分已压缩的历史被丢弃，压缩投影随之一并清除——摘要无法再代替被隐藏的消息。不越过锚点的尾部截断是常规路径，不碰压缩投影）。
+  - 运行档案 3 种：`run.started`（起点带本次 run 的 `model?` / `provider?` / `permissionMode?` 快照——一处直读"这次 run 在什么配置下跑的"；旧事件无此三字段）/ `run.ended`（每 run 一对，把该 run 的消息事件夹成一轮边界；失败 run 也落 `run.ended`，起点必有终点）、`permission.decided`（每次人工确认裁决的记录；被中止的确认不落）。<br>运行档案与 `system` / `sandbox.checked` 一样只写事件流、不进 meta 投影、不推进 `updatedAt`。`message.truncated` 不同（它是用户可见的会话动作，会推进 `updatedAt`；且当截断起点越过压缩锚点（`compaction.upto`）时，部分已压缩的历史被丢弃，压缩投影随之一并清除——摘要无法再代替被隐藏的消息。不越过锚点的尾部截断是常规路径，不碰压缩投影）。
   - 协作 7 种（`team.created` / `team.member.provisioned` / `team.member.settled` / `team.message.queued` / `team.message.delivered` / `team.task.created` / `team.task.updated`）：agent 团队协作的审计记录，只追加在**组长**的事件流上（以团队目录为准，见 [agent-team](./agent-team.md)）；尽力而为（写失败降为警告、团队操作照常），与运行档案一样不进投影、不推进 `updatedAt`。
   - 目标循环 3 种（`goal.set` / `goal.checked` / `goal.cleared`）：`/goal` 目标循环的全部写路径（见 [goal](./goal.md)）。`goal.set`（快照全量替换，含 create/edit/pause/resume/state 五种 op）与 `goal.cleared` 进 meta 投影（写/删 `goal` 字段）并推进 `updatedAt`；`goal.checked`（每轮检查的验收输出 + 判定裁决记录）只审计，不进投影、不推进 `updatedAt`。
   - todo 清单 1 种：`todo.written`（模型经 `todo_list_write` 维护的会话级任务清单，每次写入落一条全量快照、后写胜出，投影出 `meta.todo`；不进投影以外的状态、不推进 `updatedAt`，见 [tools](./tools.md)）。
+  - 钩子审计 1 种：`hook`（每条**实际执行**的钩子一条：`name` / `position` / `origin`（builtin/user）/ `outcome`（ok/failed/timeout）/ `durationMs` / `runId?`。零投影效果、不推进 `updatedAt`。run-after 等收尾位置的钩子在 `run.ended` 落盘之后执行，事件物理位置在 run 边界之外，归属靠 `runId` 而非位置；实现是 hook runner 的 `onExecuted` 回调接 `SessionStore.appendHook`，见 [hooks](./hooks.md)）。
 
   所有写入都先追加事件，再把事件汇入 meta.json 摘要（见下）。
 - **`meta.json`（派生摘要）**：类型 `SessionMeta`，由事件流经 `applyEvent` 逐条推导得出。它是「摘要」而非权威数据：删除或损坏都能从事件流完整重建（`meta()` 发现缺失或损坏时自动 `rebuildMeta`）。崩溃恢复时允许它暂时落后于事件流（落后不会丢数据）；但落后不会被后续写入自动追平（`appendEvent` 先读当前摘要、只汇入新事件）。只有 meta.json 缺失或损坏时才经 `rebuildMeta` 重放整条事件流。meta.json 整文件原子重写（`updateMeta` 合并 patch，`undefined` 键表示删除；`message` / `message.truncated` / `compaction` / `session.forked` / `goal.set` / `goal.cleared` 事件会推进摘要的 `updatedAt`，`memory` / `skill` / `system` / `sandbox.checked` / `goal.checked` / `todo.written` 事件不推进——审计类事件不算会话「更新」）。两条特殊的推导规则：`system` 事件把全文 upsert 进摘要的 `systemBaseline`（系统提示词的冻结基线，见下文），`compaction` 事件把 `systemBaseline` 清除（压缩改写了消息历史，提示词缓存必然全部失效，正是重新组装、重新冻结的时机）；`message.truncated` 在截断起点越过压缩锚点（`compaction.upto`）时一并清除压缩投影（部分被压缩的历史已随截断丢弃，摘要不能再代替它们）。
@@ -184,9 +186,21 @@ export function readJsonl(file: string): unknown[]
 | `dispositionOverride?` | 会话级发送处置覆盖（`"steer" \| "wait" \| "interrupt"`），优先于 `sessions.defaultDisposition`。服务端路由接受三个值的写入；Web 与 CLI 的 interrupt 都是一次性动作、不写会话级覆盖（见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)） |
 | `goal?` | 会话级目标快照（`/goal`，`GoalSnapshot` 全量：目标文本、验收命令、状态机、轮数与 token 计数、最近判定摘要），由 `goal.set` 事件全量替换、`goal.cleared` 删除（见 [goal](./goal.md)）。计数字段是检查时刻的展示缓存，权威数据在事件流 |
 | `todo?` | 会话级 todo 清单（`todo_list_write` 写入的最新快照，`TodoItem[]`：`content` + `status`），由 `todo.written` 事件全量替换、后写胜出；跨 run 存活，压缩后可经 `todo_list_read` 读回；不推进 `updatedAt`（见 [tools](./tools.md)） |
+| `chainHead?` / `chainLength?` | 事件流哈希链锚定（见下文「事件流哈希链」）：最新一行原文的 SHA-256 与文件总行数。写入路径维护；崩溃窗口允许暂时落后（事件已写、meta 未写），校验容忍并随下次追加对齐 |
 | `systemBaseline?` | 冻结的系统提示词基线，双段独立 `{ stable: {text, frozenAt}, live?: {text, frozenAt} }`。作用：每 run 两段现算、与基线逐段比对——哪段文本变了就重冻结哪段（`frozenAt` 记录这份文本成为基线的时刻），没变的沿用基线，`system-before` / `system-after` 组装链只在至少一段变化时才跑（提示词缓存的稳定性策略，详见 [hooks](./hooks.md)）。推导规则：`system` 事件按段 upsert、`compaction` 事件清除（压缩改写了消息历史，缓存必然全量失效，正是基线重置的边界），都不推进 `updatedAt` |
 
 `Message`（`packages/core/src/protocol/messages.ts`）的基础字段是 `{ id, sessionId, role: "user" \| "assistant" \| "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因），user 消息可选带 `llmText?`（技能指名与 `@` 文件引用隐式包装的模型视图文本标记，随消息持久化、气泡与事件流不显示，见 [agent-loop](./agent-loop.md) 的包装标记重放）。id 前缀 `msg_` / `ses_`，ULID 格式。会话的消息列表和压缩列表如今都是事件流的只读视图：`readMessages` 从事件流过滤出 `message` 事件并按 `message.truncated` 标记隐藏被截断的消息（编辑重试/重新生成的过滤点，见下）、`readCompactions` 过滤出 `compaction` 事件，`readQueue` 读 `queue.jsonl`。
+
+### 事件流哈希链（防篡改）
+
+`events.jsonl` 的每行写入时携带前一行**原文文本**的 SHA-256 摘要（`$prev` 字段），首行接链创世摘要（创世值绑定会话 id，目录改名/文件置换可检出）；`meta.json` 的 `chainHead` / `chainLength` 锚定链头与总行数（检出删尾）。摘要按行原文计算、不做重新序列化——`JSON.stringify` 键序是插入序，同数据不同构造路径可能得到不同文本，重序列化会造成假断裂。设计动机与边界（IETF 草案对齐、外部锚定明确不做）见 `docs/superpowers/agent-traceability-research.md`（本地调研记录）。
+
+- **读取剥离**：`readEvents` / `readEventsFrom` 返回前删掉 `$prev`——该字段只属于持久化层，不进领域模型、总线与 HTTP 响应。
+- **崩溃窗口自愈**：新行的 `$prev` 恒以文件末行为真相源（不是 meta 的链头——事件已写、meta 未写的窗口里末才是已生效历史）；meta 链字段允许落后一行，校验容忍、下次追加对齐。撕裂尾按崩溃痕迹处理（校验报 `torn-tail` 而非篡改，追加时自动修复续链）。
+- **fork**：`writeEventsRaw` 建新流时逐行重链化——复制段是一条**独立新链**（创世绑定新会话 id），不是源流的延续（源流在源会话里自有链）；篡改 fork 会话的复制段在本会话校验即可检出。
+- **旧会话**：升级前的行没有 `$prev`，校验从第一条带链行起验（`partial`，前缀如实标注无链）；纯旧会话报 `not-chained`，不作废、不迁移。
+- **校验入口**：`SessionStore.verifyChain(id)` 返回结构化结果（`ok` / `partial` / `not-chained` / `torn-tail` / `broken`，`broken` 带断裂行号与嫌疑行）；HTTP `GET /sessions/:id/verify`（见 [http-api](../server/http-api.md)）、CLI `kclaw session verify --id <id> | --all`（退出码 0/1 可脚本化）、审计页标题旁的链状态标记（点击现算）。校验按需执行，不在读会话时自动跑。
+- **检出能力**：改写、删除、插入、调换任意行（断裂点精确定位）；截尾（行数对不上）；整目录置换（创世 + `meta.id` 双重核对）；meta 链字段被改。**不防**持写权限者重写整条链并同步改 meta（需外部锚定，明确不做，见调研记录）。
 
 崩溃安全由两个策略函数承担（`packages/core/src/storage/jsonl.ts`），事件流与队列共用：
 
