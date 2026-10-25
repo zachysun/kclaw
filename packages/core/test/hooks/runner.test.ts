@@ -33,6 +33,38 @@ function spy(name: string, log: string[], result?: unknown, failure: "fatal" | "
 
 const msg = (text: string) => ({ message: { text } })
 
+describe("HookChain onExecuted（执行审计 tap）", () => {
+  it("每条实际执行的钩子一条记录：ok/failed/timeout 三态与耗时", async () => {
+    const records: Array<{ name: string; outcome: string; position: string; origin: string; runId?: string }> = []
+    const chain = new HookChain({
+      onExecuted: (r) => records.push(r),
+      eventCtx: () => ({ sessionId: "ses_1", runId: "run_9" }),
+    })
+    chain.registerAll([
+      spy("ok-hook", [], undefined, "fatal", 1),
+      entry("boom", "run-before", () => { throw new Error("boom") }, { failure: "skip", order: 2 }),
+      entry("slow", "run-before", () => new Promise((_resolve, reject) => setTimeout(() => reject(new Error("x")), 50)), { failure: "skip", order: 3, timeoutMs: 5 }),
+    ])
+    await chain.run("run-before", msg("hi"))
+    const byName = Object.fromEntries(records.map((r) => [r.name, r]))
+    expect(byName["ok-hook"].outcome).toBe("ok")
+    expect(byName["boom"].outcome).toBe("failed")
+    expect(byName["slow"].outcome).toBe("timeout")
+    expect(records.every((r) => r.position === "run-before" && r.origin === "builtin" && r.runId === "run_9")).toBe(true)
+  })
+
+  it("不注入回调时行为不变；回调抛错不伤链", async () => {
+    const log: string[] = []
+    const chain = new HookChain({
+      onExecuted: () => { throw new Error("tap blew up") },
+    })
+    chain.register(spy("survivor", log, undefined, "fatal", 1))
+    const out = await chain.run("run-before", msg("x"))
+    expect(log).toEqual(["survivor:x"])
+    expect(out).toBeUndefined()
+  })
+})
+
 describe("HookChain", () => {
   it("空位置短路：run 返回 undefined、has 为 false", async () => {
     const chain = new HookChain()

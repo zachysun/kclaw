@@ -133,6 +133,8 @@ export interface KclawConfig {
   }
   sessions: {
     recycleBinTtlMs: number
+    /** spill 目录（<home>/spill）按 mtime 的保留天数；0 = 永不清理（默认）。 */
+    spillRetentionDays?: number
     /** Context token budget. Default 128000 (resolveContextTokens applies it). */
     contextTokens?: number
     /** Compaction waterlines (ratios of the budget): defaults and the target < ahead < at < panic ordering are owned by the waterlines module, which also validates them at load time. */
@@ -272,7 +274,7 @@ export const defaultConfig: KclawConfig = {
   bash: { timeoutMs: 300_000, maxOutputBytes: 512 * 1024 },
   todo: { allowParallelInProgress: false },
   sandbox: { enabled: true, writeRoots: [] },
-  sessions: { recycleBinTtlMs: 30 * 24 * 60 * 60 * 1000, defaultDisposition: "steer" as const },
+  sessions: { recycleBinTtlMs: 30 * 24 * 60 * 60 * 1000, spillRetentionDays: 0, defaultDisposition: "steer" as const },
   notify: { channels: [], timeoutMs: 10_000 },
   usage: { prices: {} },
   subagents: { maxConcurrent: 10, maxBackground: 4 },

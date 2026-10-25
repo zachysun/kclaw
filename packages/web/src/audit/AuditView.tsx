@@ -54,6 +54,7 @@ const KIND_LABELS: Record<AuditRowKind, string> = {
   todo: "todo",
   team: "team",
   skill: "skill",
+  hook: "hook",
 }
 
 const TIME_PRESETS: Array<{ value: TimePreset; label: string }> = [
@@ -76,6 +77,68 @@ function localInputToIso(v: string): string {
   if (v === "") return ""
   const d = new Date(v)
   return Number.isNaN(d.getTime()) ? "" : d.toISOString()
+}
+
+/** 链校验结果的中文摘要（verify 端点返回形状的窄化）。 */
+interface VerifyResult {
+  status: "ok" | "partial" | "not-chained" | "torn-tail" | "broken"
+  checked: number
+  verifiedFrom?: number
+  brokenAt?: number
+  reason?: string
+}
+
+const CHAIN_LABELS: Record<VerifyResult["status"], string> = {
+  ok: "链完整",
+  partial: "链完整（含未起链前缀）",
+  "not-chained": "未起链",
+  "torn-tail": "末行不完整（崩溃痕迹）",
+  broken: "链断裂",
+}
+
+/**
+ * 哈希链状态标记：点击现算（按需校验，不在每次读会话时自动跑）。
+ * 结果以 title 提示展示，断裂带原因与行号。
+ */
+function ChainBadge({ api, sessionId }: { api: ApiClient; sessionId: string | null }) {
+  const [state, setState] = useState<"idle" | "checking" | VerifyResult | { status: "error"; reason: string }>("idle")
+  const onClick = useCallback(async () => {
+    if (sessionId === null || state === "checking") return
+    setState("checking")
+    try {
+      setState(await api.get<VerifyResult>(`/sessions/${encodeURIComponent(sessionId)}/verify`))
+    } catch (err) {
+      setState({ status: "error", reason: err instanceof Error ? err.message : String(err) })
+    }
+  }, [api, sessionId, state])
+  if (sessionId === null) return null
+  // 三态渲染前的窄化：idle/checking 是提示文案，其余是带结论的结果态
+  const settled: VerifyResult | { status: "error"; reason: string } | null =
+    state === "idle" || state === "checking" ? null : state
+  const label = settled === null ? (state === "checking" ? "校验中…" : "校验链")
+    : settled.status === "error" ? "校验失败"
+    : CHAIN_LABELS[settled.status]
+  const title = settled === null ? "校验本会话事件流的哈希链"
+    : settled.status === "error" ? settled.reason
+    : settled.status === "broken" ? `${settled.reason ?? "链断裂"}${settled.brokenAt !== undefined ? `（第 ${settled.brokenAt} 行）` : ""}`
+    : settled.status === "partial" ? `前 ${settled.verifiedFrom! - 1} 条无链（功能上线前写入），自第 ${settled.verifiedFrom} 条起 ${settled.checked} 条链完整`
+    : settled.status === "ok" ? `全部 ${settled.checked} 条事件链完整`
+    : settled.reason ?? CHAIN_LABELS[settled.status]
+  const tone = settled === null ? "muted"
+    : settled.status === "error" || settled.status === "broken" || settled.status === "torn-tail" ? "warn" : "ok"
+  const mark = settled !== null && settled.status !== "error" && (settled.status === "ok" || settled.status === "partial") ? "✓ "
+    : settled !== null && (settled.status === "broken" || settled.status === "torn-tail") ? "✗ " : ""
+  return (
+    <button
+      type="button"
+      className={`audit-chain-badge audit-chain-${tone}`}
+      data-testid="audit-chain-badge"
+      title={title}
+      onClick={onClick}
+    >
+      {mark}{label}
+    </button>
+  )
 }
 
 export interface AuditViewProps {
@@ -377,6 +440,7 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
         <span className="audit-session-chip" data-testid="audit-session-chip">
           {sessionTitle ?? (sessionId !== null ? sessionId : "未选择会话")}
         </span>
+        <ChainBadge api={api} sessionId={sessionId} />
       </div>
 
       <div className="audit-toolbar">

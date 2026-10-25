@@ -228,7 +228,7 @@ describe("subagent dispatch (integration)", () => {
     // The child run announced itself with trigger "agent".
     const childStarted = allEvents.find(
       (e) => e.type === "run.started" && e.sessionId === child.id)
-    expect(childStarted?.payload).toEqual({ trigger: "agent" })
+    expect(childStarted?.payload).toMatchObject({ trigger: "agent" })
 
     // Child history: exactly the task as the user message + its answer.
     const childMsgs = sessions.readMessages(child.id)

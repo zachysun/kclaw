@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
   appendEvents, appendRows, DEFAULT_FILTER, filterRows, flattenAudit, fmtMs, fmtRowTime, fmtUsage,
-  isAppendedFrame, jumpTarget, rowMatchesFilter, rowSearchText,
+  hookSummary, isAppendedFrame, jumpTarget, rowMatchesFilter, rowSearchText,
   sessionFullContent, sessionSummary,
 } from "../../src/audit/model.js"
 import type { AuditFilter, AuditRow } from "../../src/audit/model.js"
@@ -49,6 +49,20 @@ const DECIDED: PermissionDecidedEvent = {
 }
 
 // ---------- flattenAudit ----------
+
+describe("hook rows", () => {
+  it("hook 事件一行，摘要带名称/位置/结局/耗时", () => {
+    const rows = flattenAudit([
+      { type: "hook", at: "2026-09-08T10:00:00.000Z", name: "persist", position: "run-before", origin: "builtin", outcome: "ok", durationMs: 3 },
+      { type: "hook", at: "2026-09-08T10:00:01.000Z", name: "my-hook.js", position: "tool-before", origin: "user", outcome: "timeout", durationMs: 5000 },
+    ])
+    expect(rows.map((r) => r.kind)).toEqual(["hook", "hook"])
+    expect(rows[0]).toMatchObject({ kind: "hook" })
+    expect(hookSummary((rows[0] as { event: import("../../src/types.js").HookEvent }).event)).toContain("persist @ run-before")
+    expect(hookSummary((rows[1] as { event: import("../../src/types.js").HookEvent }).event)).toContain("超时")
+  })
+})
+
 
 describe("flattenAudit", () => {
   it("session 元数据事件各成一行（含 fork）", () => {
@@ -156,7 +170,7 @@ function kindsFilter(off: AuditRow["kind"]): AuditFilter {
   return {
     ...DEFAULT_FILTER,
     kinds: {
-      block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true, team: true, skill: true, goal: true, todo: true,
+      block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true, team: true, skill: true, goal: true, todo: true, hook: true,
       [off]: false,
     },
   }

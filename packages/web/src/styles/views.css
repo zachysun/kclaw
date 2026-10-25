@@ -231,6 +231,29 @@
   white-space: nowrap;
 }
 
+.audit-chain-badge {
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.audit-chain-badge:hover {
+  border-color: var(--accent, currentColor);
+}
+
+.audit-chain-ok {
+  color: var(--ok, inherit);
+}
+
+.audit-chain-warn {
+  color: var(--danger, inherit);
+}
+
 .audit-toolbar {
   display: flex;
   flex-direction: column;

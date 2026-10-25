@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { spillLocatorLine, spillToolOutput, SPILL_MAX_BYTES } from "../../src/tools/spill.js"
+import { createHash } from "node:crypto"
+import { spillLocatorLine, spillToolOutput, SPILL_MAX_BYTES, SPILL_LOCATOR_PREFIX } from "../../src/tools/spill.js"
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "kclaw-spill-")) })
@@ -55,5 +56,24 @@ describe("spillLocatorLine", () => {
     expect(line).toContain("/tmp/x.txt")
     expect(line).toContain("fs_read")
     expect(line).toContain("前 10MB")
+  })
+})
+
+describe("spill sha256", () => {
+  it("spillToolOutput 返回写入字节的摘要，locator line 带指纹段", () => {
+    const r = spillToolOutput(dir, "bash", "hello\nworld")
+    expect(r.sha256).toBe(createHash("sha256").update("hello\nworld").digest("hex"))
+    expect(r.path).toBeDefined()
+    const line = spillLocatorLine(r)
+    expect(line).toContain(`sha256=${r.sha256}`)
+    expect(line.startsWith("\n" + SPILL_LOCATOR_PREFIX)).toBe(true)
+    expect(line.endsWith("]")).toBe(true)
+  })
+
+  it("partial 拷贝的指纹对保留部分", () => {
+    const big = "x".repeat(SPILL_MAX_BYTES + 100)
+    const r = spillToolOutput(dir, "bash", big)
+    expect(r.partial).toBe(true)
+    expect(r.sha256).toBe(createHash("sha256").update("x".repeat(SPILL_MAX_BYTES)).digest("hex"))
   })
 })

@@ -8,7 +8,7 @@
  * incremental appends and full recomputes.
  */
 import type {
-  Block, CompactionEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, Role, RunEndedEvent, RunStartedEvent,
+  Block, CompactionEvent, HookEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, Role, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent, SessionEvent, SessionForkedEvent, SessionRenamedEvent,
   SessionRestoredEvent, SessionSetEvent, SkillEvent, SystemEvent, TeamAuditEvent, ToolGrantReason, Usage,
   GoalEvent, GoalSetEvent, GoalCheckedEvent, GoalSnapshot, TodoItem, TodoWrittenEvent,
@@ -16,7 +16,7 @@ import type {
 
 export type SessionMetaEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionForkedEvent | SessionSetEvent
 
-export type AuditRowKind = "block" | "compaction" | "memory" | "system" | "sandbox" | "session" | "run" | "decision" | "truncation" | "team" | "skill" | "goal" | "todo"
+export type AuditRowKind = "block" | "compaction" | "memory" | "system" | "sandbox" | "session" | "run" | "decision" | "truncation" | "team" | "skill" | "goal" | "todo" | "hook"
 
 /**
  * One flattened audit row. Block rows carry the owning message's role,
@@ -41,6 +41,7 @@ export type AuditRow =
   | { kind: "skill"; key: string; index: number; event: SkillEvent; at: string }
   | { kind: "goal"; key: string; index: number; event: GoalEvent; at: string }
   | { kind: "todo"; key: string; index: number; event: TodoWrittenEvent; at: string }
+  | { kind: "hook"; key: string; index: number; event: HookEvent; at: string }
 
 /**
  * Flatten the event stream into rows, one per rendered event. Message events
@@ -197,6 +198,9 @@ function flattenEventInto(
     case "todo.written":
       rows.push({ kind: "todo", key: `${index}`, index, event, at: event.at })
       break
+    case "hook":
+      rows.push({ kind: "hook", key: `${index}`, index, event, at: event.at })
+      break
     case "session.created":
     case "session.renamed":
     case "session.deleted":
@@ -231,10 +235,10 @@ export interface AuditFilter {
   timeTo: string
 }
 
-export const ALL_KINDS: AuditRowKind[] = ["block", "compaction", "memory", "system", "sandbox", "session", "run", "decision", "truncation", "team", "skill", "goal", "todo"]
+export const ALL_KINDS: AuditRowKind[] = ["block", "compaction", "memory", "system", "sandbox", "session", "run", "decision", "truncation", "team", "skill", "goal", "todo", "hook"]
 
 export const DEFAULT_FILTER: AuditFilter = {
-  kinds: { block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true, team: true, skill: true, goal: true, todo: true },
+  kinds: { block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true, team: true, skill: true, goal: true, todo: true, hook: true },
   keyword: "",
   timePreset: "all",
   timeFrom: "",
@@ -277,6 +281,8 @@ export function rowSearchText(row: AuditRow): string {
       return systemFullText(row.event)
     case "sandbox":
       return `${sandboxSummary(row.event)} ${sandboxFullContent(row.event)}`
+    case "hook":
+      return hookSummary(row.event)
     case "session":
       return sessionSummary(row.event)
     case "run":
@@ -394,6 +400,11 @@ export function sandboxSummary(event: SandboxCheckedEvent): string {
   if (!event.enabled) return "已关闭（配置未启用）"
   if (!event.available) return `不可用${event.unavailableReason !== undefined ? `（${event.unavailableReason}）` : ""}`
   return "可用"
+}
+
+/** One executed hook, summarized: name @ position (outcome). */
+export function hookSummary(event: HookEvent): string {
+  return `${event.name} @ ${event.position}（${event.outcome === "ok" ? "正常" : event.outcome === "timeout" ? "超时" : "失败"}，${event.durationMs}ms）`
 }
 
 /** Full sandbox audit payload on expand. */

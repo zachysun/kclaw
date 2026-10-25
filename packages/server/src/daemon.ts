@@ -73,6 +73,7 @@ import { startSchedulerTick } from "./scheduler-tick.js"
 import { startMemoryScheduler } from "./memory-scheduler.js"
 import { startSkillScheduler } from "./skill-scheduler.js"
 import { startSkillCurator } from "./skill-curator.js"
+import { startSpillRetention } from "./session-retention.js"
 import { createApp } from "./app.js"
 
 /** The daemon only ever binds loopback (127.0.0.1). */
@@ -673,6 +674,9 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // 技能 curator：每日闲时扫描（stale 标记 + 归档，只动 AI 自建的全局技能）。
   const curatorTick = startSkillCurator({ config, skillsDir: paths.skillsDir })
   hostStops.push(["skill curator", () => curatorTick.stop()])
+  // spill 保留期（sessions.spillRetentionDays，0=关）：按 mtime 清理超期文件。
+  const spillTick = startSpillRetention({ spillDir: paths.spillDir, retentionDays: config.sessions.spillRetentionDays ?? 0 })
+  hostStops.push(["spill retention", () => spillTick.stop()])
 
   // 后台进程收编：探测上次未送达通知里的进程组，活的重进注册表、死的补发
   // 通知（run 已初始化，enqueued 安全）。失败只记日志，不阻塞启动。

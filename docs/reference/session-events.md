@@ -1,4 +1,4 @@
-# session-events — 持久化会话事件清单（27 种）
+# session-events — 持久化会话事件清单（28 种）
 
 > 权威来源：`packages/core/src/protocol/session-events.ts`（运行时守卫与 meta 投影在 `packages/core/src/session/events.ts`）。存储布局见 [storage](../core/storage.md)，读取接口 `GET /sessions/:id/events` 见 [http-api](../server/http-api.md)。
 
@@ -13,7 +13,7 @@ export type SessionEvent =
   | MessageEvent | MessageTruncatedEvent | CompactionEvent
   | MemoryEvent | SkillEvent | SystemEvent | SandboxCheckedEvent
   | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent
-  | TeamAuditEvent | GoalEvent
+  | TeamAuditEvent | GoalEvent | HookEvent
 ```
 
 ## 逐类型字段
@@ -43,9 +43,17 @@ export type SessionEvent =
 
 | 类型 | 字段 |
 |------|------|
-| `run.started` | `at`、`trigger`（user/cron/process/agent/team/goal）——每 run 一条 |
+| `run.started` | `at`、`trigger`（user/cron/process/agent/team/goal）、`model?` / `provider?` / `permissionMode?`（本次 run 的配置快照，一处直读；旧事件无此三字段）——每 run 一条 |
 | `run.ended` | `at`、`stopReason`、`usage?`（正常终点的全程累计）、`error?`（stopReason 为 error 时）——每 run 恰一条，失败 run 也落 |
 | `permission.decided` | `at`、`confirmationId`、`decision`（once/project/global/reject/timeout）、`by`（cli/web/feishu/timeout）、`tool { callId, name, argsJson }`——每次裁决一条 |
+
+### 钩子审计（1 种）
+
+每条**实际执行**的钩子一条（runner 的 `onExecuted` 回调写进事件流）。零投影效果、不推进 `updatedAt`。run-after 等收尾位置的钩子在 `run.ended` 写入磁盘后执行，物理位置在 run 边界外，归属靠 `runId`。
+
+| 类型 | 字段 |
+|------|------|
+| `hook` | `at`、`name`、`position`、`origin`（builtin/user）、`outcome`（ok/failed/timeout）、`durationMs`、`runId?` |
 
 ### 记忆（1 种）
 

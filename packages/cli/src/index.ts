@@ -220,6 +220,57 @@ program
   .description("列出任务（daemon 没在运行会自动拉起）")
   .action(run(cronListAction))
 
+/** `kclaw session verify --id <id>` / `--all`：哈希链校验，退出码 0/1 可脚本化。 */
+async function sessionVerifyAction(home: string, options: Record<string, unknown>): Promise<void> {
+  const client = await KclawClient.connect(home)
+  const all = options.all === true
+  const idArg = typeof options.id === "string" ? options.id : undefined
+  if (!all && idArg === undefined) {
+    process.stderr.write("用法：kclaw session verify --id <会话id> 或 kclaw session verify --all\n")
+    process.exitCode = 2
+    return
+  }
+  const ids: string[] = all
+    ? ((await client.request("GET", "/sessions")) as { id: string }[]).map((s) => s.id)
+    : [idArg!]
+  let failed = false
+  for (const id of ids) {
+    const r = (await client.request("GET", `/sessions/${encodeURIComponent(id)}/verify`)) as {
+      status: string; checked: number; verifiedFrom?: number; brokenAt?: number; suspect?: number; reason?: string
+    }
+    let line: string
+    switch (r.status) {
+      case "ok":
+        line = `✓ ${id}  链完整（${r.checked} 条）`
+        break
+      case "partial":
+        line = `✓ ${id}  前 ${r.verifiedFrom! - 1} 条无链（功能上线前写入），自第 ${r.verifiedFrom} 条起链完整（${r.checked} 条）`
+        break
+      case "not-chained":
+        line = `· ${id}  未起链（功能上线前写入的会话）`
+        break
+      case "torn-tail":
+        line = `· ${id}  末行不完整（崩溃痕迹，下次追加自动修复）`
+        break
+      default:
+        failed = true
+        line = `✗ ${id}  ${r.reason ?? "链断裂"}`
+        if (r.brokenAt !== undefined) line += `（断裂位置：第 ${r.brokenAt} 行）`
+        break
+    }
+    process.stdout.write(`${line}\n`)
+  }
+  if (failed) process.exitCode = 1
+}
+
+const sessionCmd = program.command("session").description("会话")
+sessionCmd
+  .command("verify")
+  .description("校验会话事件流的哈希链（防篡改完整性检查）")
+  .option("--id <id>", "要校验的会话 id")
+  .option("--all", "校验全部会话")
+  .action(run(sessionVerifyAction))
+
 // Only parse argv when this module is the executed entry (direct
 // `node dist/index.js` or via a bin symlink — realpathSync resolves the
 // symlink the same way the ESM loader does), never on library import.

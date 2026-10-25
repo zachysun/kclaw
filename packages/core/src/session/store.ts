@@ -6,7 +6,9 @@ import type { CompactionRecord, CompactionState } from "./compaction.js"
 import { writeFileAtomic } from "../storage/atomic.js"
 import { appendJsonlLine, readJsonl, readJsonlFrom } from "../storage/jsonl.js"
 import { applyEvent, isCompactionEvent, isMessageEvent, isMessageTruncatedEvent } from "./events.js"
-import type { MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent, SandboxCheckedEvent, SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent, TeamAuditEvent } from "./events.js"
+import { chainGenesis, lineDigest, stripChainField, verifyEventChain } from "./integrity.js"
+import type { ChainMetaAnchor, ChainVerifyResult } from "./integrity.js"
+import type { HookEvent, MessageTruncatedEvent, PermissionDecidedEvent, RunEndedEvent, RunStartedEvent, SandboxCheckedEvent, SessionCreatedEvent, SessionEvent, SessionSetEvent, SystemEvent, TeamAuditEvent } from "./events.js"
 import type { GoalCheckedEvent, GoalClearedEvent, GoalSetEvent, TodoWrittenEvent } from "./events.js"
 import type { GoalSnapshot } from "../goal/types.js"
 import type { AttachmentRef, QueueEntry } from "../protocol/wire.js"
@@ -58,6 +60,13 @@ export interface SessionMeta {
   systemBaseline?: { stable: { text: string; frozenAt: string }; live?: { text: string; frozenAt: string } }
   /** 会话级处置覆盖（/steer /wait、Web 三选）：优先于 sessions.defaultDisposition。 */
   dispositionOverride?: "steer" | "wait" | "interrupt"
+  /**
+   * 事件流哈希链锚定（integrity.ts）：chainHead = 最新一行原文的 SHA-256，
+   * chainLength = 文件总行数（含未起链的旧前缀）。写入路径维护；崩溃窗口
+   * 允许落后一行（事件已写、meta 未写），verify 容忍并随下次追加自愈。
+   */
+  chainHead?: string
+  chainLength?: number
   /**
    * 会话级目标快照（issue #47 /goal）：goal.set 事件全量替换、goal.cleared
    * 删除——以事件流为权威数据，投影只跟随。终态（complete）后仍保留在 meta 里
@@ -136,10 +145,19 @@ export class SessionStore {
   appendEvent(id: string, event: SessionEvent): void {
     mkdirSync(this.sessionDir(id), { recursive: true })
     const current = this.meta(id)
-    appendJsonlLine(this.eventsPath(id), event)
+    // 链以文件末行原文为准（不是 meta.chainHead——崩溃窗口里事件已写、
+    // meta 未写，末行才是已生效的历史）。一次读取产出 prev 与规范行数
+    // （撕裂尾在读取时丢弃，与 appendJsonlLine 的修复语义一致），追加后
+    // 不再重读文件——新行原文由本次调用唯一拼装，链锚直接推算。
+    const tail = this.chainTailBeforeAppend(id)
+    const line = JSON.stringify({ ...event, $prev: tail.prev })
+    appendJsonlLine(this.eventsPath(id), { ...event, $prev: tail.prev })
     const at = this.eventAt(event)
     const base: SessionMeta = current ?? { id, title: "", createdAt: at, updatedAt: at }
-    this.writeMeta(applyEvent(base, event))
+    const projection = applyEvent(base, event)
+    projection.chainHead = lineDigest(line)
+    projection.chainLength = tail.lineCount + 1
+    this.writeMeta(projection)
     if (this.onAppended !== undefined) {
       try {
         this.onAppended(id, event)
@@ -149,15 +167,58 @@ export class SessionStore {
     }
   }
 
-  /** Load a session's event stream oldest-first; missing file yields []. */
+  /**
+   * 追加前的链尾事实（一次文件读取产出全部）：prev = 新行该带的 `$prev`
+   * （末行有链 → 末行原文摘要；空文件 → 创世；末行无 `$prev` 的旧会话 →
+   * 创世起新链），lineCount = 丢弃撕裂尾后的规范行数。
+   */
+  private chainTailBeforeAppend(id: string): { prev: string; lineCount: number } {
+    const lines = this.readChainLines(id)
+    const last = lines[lines.length - 1]
+    if (last === undefined) return { prev: chainGenesis(id), lineCount: 0 }
+    try {
+      const prev = "$prev" in (JSON.parse(last) as object) ? lineDigest(last) : chainGenesis(id)
+      return { prev, lineCount: lines.length }
+    } catch {
+      // readChainLines 已丢弃撕裂尾，parse 失败只剩"末行本身损坏"一种来源：
+      // 按旧会话首条处理起新链，损坏行留在文件里由 verifyChain 报告。
+      return { prev: chainGenesis(id), lineCount: lines.length }
+    }
+  }
+
+  /** 修复后文件的链尾事实：末行摘要与总行数（无文件 → 创世与 0）。rebuildMeta 用。 */
+  private chainTail(id: string): { head: string; length: number } {
+    const lines = this.readChainLines(id)
+    if (lines.length === 0) return { head: chainGenesis(id), length: 0 }
+    return { head: lineDigest(lines[lines.length - 1]!), length: lines.length }
+  }
+
+  /**
+   * 事件文件的完整行（原文文本）。撕裂尾规范化与 appendJsonlLine 的修复
+   * 语义一致：不以换行结尾的末行视为崩溃残迹、丢弃。
+   */
+  private readChainLines(id: string): string[] {
+    let raw: string
+    try {
+      raw = readFileSync(this.eventsPath(id), "utf8")
+    } catch {
+      return []
+    }
+    if (raw === "") return []
+    // 到最后一个换行（含）为止：撕裂尾随之丢弃，与 appendJsonlLine 的修复语义一致
+    const body = raw.slice(0, raw.lastIndexOf("\n") + 1)
+    return body === "" ? [] : body.slice(0, -1).split("\n")
+  }
+
+  /** Load a session's event stream oldest-first; missing file yields []. `$prev` 链字段在读取边界剥离（不进领域模型）。 */
   readEvents(id: string): SessionEvent[] {
-    return readJsonl(this.eventsPath(id)) as SessionEvent[]
+    return (readJsonl(this.eventsPath(id)) as unknown[]).map((v) => stripChainField<SessionEvent>(v))
   }
 
   /** Tail read for incremental pulls: the events at indexes >= since, with
-   *  the skipped prefix neither parsed nor materialized. */
+   *  the skipped prefix neither parsed nor materialized. `$prev` 同样剥离。 */
   readEventsFrom(id: string, since: number): SessionEvent[] {
-    return readJsonlFrom(this.eventsPath(id), since) as SessionEvent[]
+    return (readJsonlFrom(this.eventsPath(id), since) as unknown[]).map((v) => stripChainField<SessionEvent>(v))
   }
 
   /**
@@ -172,19 +233,48 @@ export class SessionStore {
     // 覆盖就无从恢复，误用必须当场炸出来。
     const target = this.eventsPath(id)
     if (existsSync(target) && statSync(target).size > 0) throw new Error(`writeEventsRaw: event stream already exists: ${id}`)
-    writeFileAtomic(target, events.map((e) => JSON.stringify(e)).join("\n") + (events.length > 0 ? "\n" : ""))
+    // 建新流即建新链：创世绑定本会话 id，逐行续接（复制段是重链化的独立
+    // 流，不是源流的延续——源流在源会话里自有链）。
+    let prev = chainGenesis(id)
+    const lines = events.map((e) => {
+      const line = JSON.stringify({ ...e, $prev: prev })
+      prev = lineDigest(line)
+      return line
+    })
+    writeFileAtomic(target, lines.join("\n") + (lines.length > 0 ? "\n" : ""))
   }
 
   /** Rebuild the meta projection from the full event stream and write it back;
-   *  undefined when the session has no events (does not exist). */
+   *  undefined when the session has no events (does not exist). 链锚字段按
+   *  事件文件原文重算（重建的 meta 与流对齐，不是投影事件能推出的）。 */
   rebuildMeta(id: string): SessionMeta | undefined {
     const events = this.readEvents(id)
     if (events.length === 0) return undefined
     const first = events[0]!
     const at = first.type === "message" ? first.createdAt : first.at
     const meta = events.reduce(applyEvent, { id, title: "", createdAt: at, updatedAt: at })
+    const { head, length } = this.chainTail(id)
+    meta.chainHead = head
+    meta.chainLength = length
     this.writeMeta(meta)
     return meta
+  }
+
+  /** 校验本会话事件流的哈希链（integrity.ts 纯函数的 IO 组装）。 */
+  verifyChain(id: string): ChainVerifyResult {
+    let meta: ChainMetaAnchor | null = null
+    try {
+      meta = JSON.parse(readFileSync(this.metaPath(id), "utf8")) as ChainMetaAnchor
+    } catch {
+      meta = null
+    }
+    let raw = ""
+    try {
+      raw = readFileSync(this.eventsPath(id), "utf8")
+    } catch {
+      return { status: "not-chained", checked: 0, reason: "事件流不存在" }
+    }
+    return verifyEventChain(raw, meta, id)
   }
 
   /**
@@ -327,6 +417,11 @@ export class SessionStore {
     this.appendEvent(id, { type: "run.ended", ...event })
   }
 
+  /** Append one hook-execution audit event（每条实际执行的钩子一条；零投影效果，不推进 updatedAt）。 */
+  appendHook(id: string, event: Omit<HookEvent, "type">): void {
+    this.appendEvent(id, { type: "hook", ...event })
+  }
+
   /** Append one permission-decision audit event（每次人工确认的裁决记录; 中止不是裁决，不落）; the projection stays untouched (不推进 updatedAt)。 */
   appendPermissionDecided(id: string, event: Omit<PermissionDecidedEvent, "type">): void {
     this.appendEvent(id, { type: "permission.decided", ...event })
@@ -417,6 +512,14 @@ export class SessionStore {
     if ("deleted" in patch && patch.deleted !== true) {
       delete projection.deleted
       delete projection.deletedAt
+    }
+
+    // 链锚字段不属于投影事件，本地 projection 上没有——从磁盘取回（appendEvent
+    // 循环里已维护），避免这次整体重写把它们抹掉
+    const disk = this.meta(id)
+    if (disk?.chainHead !== undefined) {
+      projection.chainHead = disk.chainHead
+      projection.chainLength = disk.chainLength
     }
 
     this.writeMeta(projection)

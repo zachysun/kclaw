@@ -351,8 +351,10 @@ describe("SessionStore event sourcing", () => {
       unavailableReason: "bwrap not found on PATH",
     })
     // 审计事件不进投影：含 updatedAt 在内的所有投影字段逐字段一致
+    // （链锚字段 chainHead/chainLength 随每次追加推进，属存储层元数据、不属业务投影，剔除后比较）
+    const stripChain = (m: Record<string, unknown>) => { const { chainHead: _h, chainLength: _l, ...rest } = m; return rest }
     const after = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
-    expect(after).toEqual(before)
+    expect(stripChain(after)).toEqual(stripChain(before))
   })
 
   it("appendRunStarted / appendRunEnded / appendPermissionDecided 写审计事件：字段完整、投影穿透（updatedAt 不动）", () => {
@@ -391,8 +393,10 @@ describe("SessionStore event sourcing", () => {
     })
 
     // 审计事件不进投影：含 updatedAt 在内的所有投影字段逐字段一致
+    // （链锚字段 chainHead/chainLength 随每次追加推进，属存储层元数据、不属业务投影，剔除后比较）
+    const stripChain = (m: Record<string, unknown>) => { const { chainHead: _h, chainLength: _l, ...rest } = m; return rest }
     const after = JSON.parse(readFileSync(join(dir, meta.id, "meta.json"), "utf8"))
-    expect(after).toEqual(before)
+    expect(stripChain(after)).toEqual(stripChain(before))
   })
 
   it("appendSystem 投影效果=逐段 upsert 冻结基线：updatedAt 与其余字段不动，压缩清除，rebuild 一致", () => {
@@ -407,8 +411,8 @@ describe("SessionStore event sourcing", () => {
       stable: { text: "run-1 的稳定段", frozenAt: "2026-01-02T00:00:00.000Z" },
       live: { text: "run-1 的实时段", frozenAt: "2026-01-02T00:00:00.000Z" },
     })
-    const { systemBaseline: _drop, ...rest } = after
-    const { systemBaseline: _dropBefore, ...restBefore } = before
+    const { systemBaseline: _drop, chainHead: _h2, chainLength: _l2, ...rest } = after
+    const { systemBaseline: _dropBefore, chainHead: _h3, chainLength: _l3, ...restBefore } = before
     expect(rest).toEqual(restBefore)
     // live 单独刷新：stable 的 frozenAt 保留（逐段独立冻结）
     store.appendSystem(meta.id, { at: "2026-01-03T00:00:00.000Z", stable: "run-1 的稳定段", live: "run-2 的实时段" })

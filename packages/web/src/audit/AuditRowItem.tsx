@@ -9,7 +9,7 @@ import { memo } from "react"
 import type { AuditRow } from "./model.js"
 import {
   blockFullContent, blockSummary, blockTypeLabel, decisionFullContent, decisionSummary, fmtMs, fmtRowTime, fmtTokens, fmtUsage,
-  memoryFullContent, memorySummary, rowTime, runSummary, sandboxFullContent, sandboxSummary, skillSummary, truncationSummary,
+  hookSummary, memoryFullContent, memorySummary, rowTime, runSummary, sandboxFullContent, sandboxSummary, skillSummary, truncationSummary,
   sessionFullContent, sessionSummary, summarize, systemFullText, teamFullContent, teamSummary,
   goalFullContent, goalSummary, todoFullContent, todoSummary,
 } from "./model.js"
@@ -80,6 +80,8 @@ function rowLabel(row: AuditRow): string {
       return "goal"
     case "todo":
       return "todo"
+    case "hook":
+      return "hook"
   }
 }
 
@@ -113,6 +115,8 @@ function rowSummary(row: AuditRow): string {
       return goalSummary(row.event)
     case "todo":
       return todoSummary(row.event)
+    case "hook":
+      return hookSummary(row.event)
   }
 }
 
@@ -156,6 +160,8 @@ function rowFull(row: AuditRow): string {
       return `【稳定段】\n${row.event.stable}\n\n【实时段】\n${row.event.live ?? ""}`
     case "sandbox":
       return sandboxFullContent(row.event)
+    case "hook":
+      return JSON.stringify(row.event, null, 2)
     case "session":
       return sessionFullContent(row.event)
     case "run":

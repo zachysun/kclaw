@@ -61,6 +61,12 @@ export interface SandboxCheckedEvent {
 export interface RunStartedEvent {
   type: "run.started"; at: string
   trigger: RunTrigger
+  /** 本次 run 的模型/供应商/权限模式快照（run 起点一处直读；旧事件无此三字段）。 */
+  model?: string
+  /** 供应商条目名（resolveRunModelLine 的 entryKey；默认条目时省略）。 */
+  provider?: string
+  /** 本次 run 生效的会话权限模式（session.created 固化 + session.set 覆盖后的现值）。 */
+  permissionMode?: import("../permissions/modes.js").PermissionMode
 }
 /**
  * 一次对话运行的终点记录（每 run 恰一条，与 run.started 成对）。stopReason
@@ -164,4 +170,20 @@ export interface TodoItem {
 }
 export interface TodoWrittenEvent { type: "todo.written"; at: string; todos: TodoItem[] }
 
-export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionForkedEvent | SessionSetEvent | MessageEvent | MessageTruncatedEvent | CompactionEvent | MemoryEvent | SkillEvent | SystemEvent | SandboxCheckedEvent | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent | TeamAuditEvent | GoalEvent | TodoWrittenEvent
+/** 钩子执行审计（每条实际执行的钩子一条；runner 的 onExecuted 回调写进事件流）。 */
+export interface HookEvent {
+  type: "hook"; at: string
+  /** 钩子身份：builtin=功能名，user=文件名（HookMeta.name 同源）。 */
+  name: string
+  position: string
+  origin: "builtin" | "user"
+  /** ok=正常返回；failed=抛错；timeout=超预算被掐。 */
+  outcome: "ok" | "failed" | "timeout"
+  durationMs: number
+  /**
+   * 归属 run：run-after 等位置的钩子在 run.ended 写入磁盘之后执行（runAgent
+   * 返回后的收尾链），物理位置在 run 边界之外，归属靠本字段而非位置夹逼。
+   */
+  runId?: string
+}
+export type SessionEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionForkedEvent | SessionSetEvent | MessageEvent | MessageTruncatedEvent | CompactionEvent | MemoryEvent | SkillEvent | SystemEvent | SandboxCheckedEvent | RunStartedEvent | RunEndedEvent | PermissionDecidedEvent | TeamAuditEvent | GoalEvent | TodoWrittenEvent | HookEvent

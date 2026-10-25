@@ -57,6 +57,10 @@ export interface RunInput {
 export interface AgentDeps {
   llm: LlmClient
   model: string
+  /** 供应商条目名（run.started 审计快照用；省略 = 默认条目/未知）。 */
+  provider?: string
+  /** 本 run 生效的权限模式（run.started 审计快照用；省略 = 未解析）。 */
+  permissionMode?: import("../permissions/modes.js").PermissionMode
   /** Tool results kept verbatim in the provider view; undefined = keep all. */
   toolResultKeep?: number
   /** Per-request output cap (config entry `maxOutput`) sent as max_tokens; undefined = provider default. */
@@ -234,7 +238,12 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
   const loopThreshold = deps.loopMaxRepeats ?? 5
   const loopState = { sig: "", count: 0 }
 
-  emit(makeEvent("run.started", { trigger: input.trigger ?? "user" }, ctx))
+  emit(makeEvent("run.started", {
+    trigger: input.trigger ?? "user",
+    ...(deps.model !== "" ? { model: deps.model } : {}),
+    ...(deps.provider !== undefined ? { provider: deps.provider } : {}),
+    ...(deps.permissionMode !== undefined ? { permissionMode: deps.permissionMode } : {}),
+  }, ctx))
 
   // User message lifecycle: created carries the
   // SKELETON before the message is used; the run-before hook chain then runs
