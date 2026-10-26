@@ -9,12 +9,12 @@
  * run.
  */
 import { describe, it, expect, afterEach, vi } from "vitest"
-import { spawnSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { ConfirmationBroker, EventBus, SessionStore, UsageStore, loadConfig, newAssistantMessage, newMessage, resolvePaths, withRetry } from "@kclaw/core"
+import { createBashSandbox } from "@kclaw/core/sandbox"
 import type {
   AgentEvent, AssistantMessage, KclawConfig, KclawPaths, LlmClient, LlmRequest, LlmStreamEvent, MemorySystem, Message, ToolExecutor, ToolMessage, ToolResultBlock,
 } from "@kclaw/core"
@@ -501,10 +501,11 @@ describe("RunManager.enqueue", () => {
   it("bash with the OS sandbox available auto-passes as sandboxed, no confirmation", async () => {
     // The real run-assembly probe must find a usable sandbox on this host
     // (macOS sandbox-exec / Linux bwrap). Hosts without one (e.g. a CI runner
-    // with no bwrap) fall back to confirmation and this assertion cannot hold.
+    // whose bwrap lacks userns) fall back to confirmation and this assertion
+    // cannot hold — gate on the same real probe the run assembly uses, not on
+    // "the binary exists".
     const hasHostSandbox =
-      process.platform === "darwin" ||
-      spawnSync("which", ["bwrap"], { encoding: "utf8" }).status === 0
+      createBashSandbox({ enabled: true, writeRoots: [] }, { workspace: tmpdir() }).available
     if (!hasHostSandbox) return
 
     // makeEnv turns the sandbox OFF by default (the confirmation suites need
@@ -1924,8 +1925,7 @@ describe("RunManager sandbox.checked 事件审计", () => {
     // 宿主的真实检测结果（macOS sandbox-exec / Linux bwrap）：有沙箱则
     // available:true，无则 false 且带原因——本测试两种走向都必须如实断言。
     const hasHostSandbox =
-      process.platform === "darwin" ||
-      spawnSync("which", ["bwrap"], { encoding: "utf8" }).status === 0
+      createBashSandbox({ enabled: true, writeRoots: [] }, { workspace: tmpdir() }).available
     const { env, manager } = makeEnv(
       scriptClient([textTurn("收到")]),
       (c) => { c.sandbox = { enabled: true, writeRoots: [] } },

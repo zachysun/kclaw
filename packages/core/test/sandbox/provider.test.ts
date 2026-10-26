@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest"
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, realpathSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
-import { spawnSync } from "node:child_process"
 import { createBashSandbox, seatbeltProfile, bwrapArgs, type BashSandbox } from "../../src/sandbox/provider.js"
 
 /** Run one command inside a sandbox; resolves with exit status + merged output. */
@@ -135,7 +134,6 @@ describe("createBashSandbox", () => {
 // ---------------------------------------------------------------------------
 const isMac = process.platform === "darwin"
 const isLinux = process.platform === "linux"
-const linuxHasBwrap = spawnSync("which", ["bwrap"], { encoding: "utf8" }).status === 0
 
 function fakeHome(): string {
   const home = mkdtempSync(join(tmpdir(), "kclaw-fakehome-"))
