@@ -5,6 +5,46 @@ All notable changes to kclaw are documented in this file. The format is based on
 [semantic versioning](https://semver.org/) — note that the 0.x series makes no
 compatibility promises.
 
+## [0.6.0] - 2026-10-26
+
+### Added
+
+- **Expanded tool face** — the model's toolbox grows a full set of general
+  tools: read-only `grep`/`glob` search with a read-before-edit guard,
+  background `bash` (`run_in_background` with a process trio and a
+  model-chosen timeout), a `cron` tool family (create/list/update/delete with
+  one-shot delays), session-persistent todo tools, and model-facing goal
+  tools. A tiered disclosure system keeps the surface manageable — deferred
+  tools expose only their names until `tool_search` (BM25 over descriptions)
+  promotes them into the live set.
+- **Session integrity** — the event stream is now a hash chain (every line
+  carries `$prev`, anchored in session metadata) with verify endpoints, a CLI
+  command, and a chain badge on the audit page. Runs also snapshot their
+  metadata, hook executions emit audit events, and spill files carry digests
+  with an optional retention sweep (`sessions.spillRetentionDays`, off by
+  default).
+- **UI polish pass** — a taste-review polish across the web app: action slots,
+  sliding highlight, entrance motion, page heads, empty-state actions, picker
+  close keys, and a masked-token form that flags invalid re-entry.
+
+### Changed
+
+- **Tool renames** — `exec` is now `bash`, and the `job` domain is now `cron`,
+  end to end (model-visible names, slash commands, docs). The 0.x series makes
+  no compatibility promises: old names are gone, not aliased.
+- **Higher production defaults** — default run and tool limits are raised for
+  production use.
+
+### Fixed
+
+- Frontend review fixes: ChatView split into focused components, reliable
+  follow-tail on the chat stream, send rollback on failure, gated uploads,
+  sidebar refresh, and the CSS module split.
+- Per-session usage buckets fold main runs only, so background subagent runs
+  no longer double-count into the parent session's numbers.
+- Code-review findings across the tool-face series.
+
+
 ## [0.5.1] - 2026-10-12
 
 ### Changed
