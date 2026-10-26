@@ -153,6 +153,17 @@ function bwrapWorks(bwrap: string): boolean {
   }
 }
 
+/** Quick real-world probe that sandbox-exec can actually run (deprecated by
+ * Apple; recent macOS images ship the binary but it no longer works). */
+function seatbeltWorks(bin: string): boolean {
+  try {
+    const r = spawnSync(bin, ["-p", "(version 1)(allow default)", "/bin/sh", "-c", "true"], { timeout: 5_000 })
+    return r.status === 0
+  } catch {
+    return false
+  }
+}
+
 const SEATBELT_BIN = "/usr/bin/sandbox-exec"
 
 /**
@@ -183,6 +194,11 @@ export function createBashSandbox(
   if (process.platform === "darwin") {
     if (!existsSync(SEATBELT_BIN)) {
       return unavailable("sandbox-exec not found (expected at /usr/bin/sandbox-exec)")
+    }
+    // A file on disk is not enough — recent macOS images ship the deprecated
+    // binary with it disabled. Probe a real run like bwrapWorks does.
+    if (!seatbeltWorks(SEATBELT_BIN)) {
+      return unavailable("sandbox-exec present but unusable (deprecated by Apple, disabled on this system); falling back to manual confirmation")
     }
     return {
       available: true,

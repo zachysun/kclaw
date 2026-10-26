@@ -101,14 +101,19 @@ describe("createBashSandbox", () => {
   it("macOS: sandbox-exec available, spawns through it (this host)", () => {
     const sb = createBashSandbox({ enabled: true, writeRoots: [] }, { workspace: "/tmp" })
     if (process.platform === "darwin") {
-      expect(sb.available).toBe(true)
-      const child = sb.spawn("echo hi", { cwd: "/tmp" })
-      expect(child.pid).toBeGreaterThan(0)
+      // The provider probes a real run — recent macOS images ship the
+      // deprecated binary with it disabled, so availability is the gate.
+      if (sb.available) {
+        const child = sb.spawn("echo hi", { cwd: "/tmp" })
+        expect(child.pid).toBeGreaterThan(0)
+      } else {
+        expect(sb.unavailableReason).toBeTruthy()
+      }
     } else if (process.platform === "linux") {
-      // availability on Linux depends on bwrap being present AND usable;
-      // the spawn smoke for Linux lives in its own describe below
-      expect(sb.available).toBe(linuxHasBwrap)
-      if (linuxHasBwrap) {
+      // which-bwrap is necessary but not sufficient: the provider also runs
+      // a real probe, so match whatever it decided.
+      expect(sb.unavailableReason === undefined).toBe(sb.available)
+      if (sb.available) {
         const child = sb.spawn("echo hi", { cwd: "/tmp" })
         expect(child.pid).toBeGreaterThan(0)
       }
@@ -218,7 +223,12 @@ describe("macOS seatbelt smoke", { skip: !isMac }, () => {
   })
 })
 
-describe("linux bwrap smoke", { skip: !isLinux || !linuxHasBwrap }, () => {
+// Same gate the provider uses: bwrap on PATH AND a successful real probe
+// (user namespaces are unavailable on some images despite the binary).
+const linuxSmokeUsable =
+  isLinux &&
+  createBashSandbox({ enabled: true, writeRoots: [] }, { workspace: "/tmp" }).available
+describe("linux bwrap smoke", { skip: !linuxSmokeUsable }, () => {
   it("writes in workspace, home is read-only, ~/.kclaw is masked", async () => {
     const ws = mkdtempSync(join(tmpdir(), "kclaw-sbx-ws-"))
     // Fake home under the REAL home (visible via ro-bind /, but read-only
