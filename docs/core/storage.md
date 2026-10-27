@@ -186,7 +186,7 @@ export function readJsonl(file: string): unknown[]
 | `dispositionOverride?` | 会话级发送处置覆盖（`"steer" \| "wait" \| "interrupt"`），优先于 `sessions.defaultDisposition`。服务端路由接受三个值的写入；Web 与 CLI 的 interrupt 都是一次性动作、不写会话级覆盖（见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)） |
 | `goal?` | 会话级目标快照（`/goal`，`GoalSnapshot` 全量：目标文本、验收命令、状态机、轮数与 token 计数、最近判定摘要），由 `goal.set` 事件全量替换、`goal.cleared` 删除（见 [goal](./goal.md)）。计数字段是检查时刻的展示缓存，权威数据在事件流 |
 | `todo?` | 会话级 todo 清单（`todo_list_write` 写入的最新快照，`TodoItem[]`：`content` + `status`），由 `todo.written` 事件全量替换、后写胜出；跨 run 存活，压缩后可经 `todo_list_read` 读回；不推进 `updatedAt`（见 [tools](./tools.md)） |
-| `chainHead?` / `chainLength?` | 事件流哈希链锚定（见下文「事件流哈希链」）：最新一行原文的 SHA-256 与文件总行数。写入路径维护；崩溃窗口允许暂时落后（事件已写、meta 未写），校验容忍并随下次追加对齐 |
+| `chainHead?` / `chainLength?` | 事件流哈希链锚定（见下文「事件流哈希链」）：最新一行原文的 SHA-256 与文件总行数。写入路径维护；崩溃窗口允许暂时落后（事件已写、meta 未写），校验不视其为断裂、随下次追加对齐 |
 | `systemBaseline?` | 冻结的系统提示词基线，双段独立 `{ stable: {text, frozenAt}, live?: {text, frozenAt} }`。作用：每 run 两段现算、与基线逐段比对——哪段文本变了就重冻结哪段（`frozenAt` 记录这份文本成为基线的时刻），没变的沿用基线，`system-before` / `system-after` 组装链只在至少一段变化时才跑（提示词缓存的稳定性策略，详见 [hooks](./hooks.md)）。推导规则：`system` 事件按段 upsert、`compaction` 事件清除（压缩改写了消息历史，缓存必然全量失效，正是基线重置的边界），都不推进 `updatedAt` |
 
 `Message`（`packages/core/src/protocol/messages.ts`）的基础字段是 `{ id, sessionId, role: "user" \| "assistant" \| "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因），user 消息可选带 `llmText?`（技能指名与 `@` 文件引用隐式包装的模型视图文本标记，随消息持久化、气泡与事件流不显示，见 [agent-loop](./agent-loop.md) 的包装标记重放）。id 前缀 `msg_` / `ses_`，ULID 格式。会话的消息列表和压缩列表如今都是事件流的只读视图：`readMessages` 从事件流过滤出 `message` 事件并按 `message.truncated` 标记隐藏被截断的消息（编辑重试/重新生成的过滤点，见下）、`readCompactions` 过滤出 `compaction` 事件，`readQueue` 读 `queue.jsonl`。
@@ -195,7 +195,7 @@ export function readJsonl(file: string): unknown[]
 
 `events.jsonl` 的每行写入时携带前一行**原文文本**的 SHA-256 摘要（`$prev` 字段），首行接链创世摘要（创世值绑定会话 id，目录改名/文件置换可检出）；`meta.json` 的 `chainHead` / `chainLength` 锚定链头与总行数（检出删尾）。摘要按行原文计算、不做重新序列化——`JSON.stringify` 键序是插入序，同数据不同构造路径可能得到不同文本，重序列化会造成假断裂。设计动机与边界（IETF 草案对齐、外部锚定明确不做）见 `docs/superpowers/agent-traceability-research.md`（本地调研记录）。
 
-- **读取剥离**：`readEvents` / `readEventsFrom` 返回前删掉 `$prev`——该字段只属于持久化层，不进领域模型、总线与 HTTP 响应。
+- **读取时删掉**：`readEvents` / `readEventsFrom` 返回前删掉 `$prev`——该字段只属于持久化层，不进领域模型、总线与 HTTP 响应。
 - **崩溃窗口自愈**：新行的 `$prev` 恒以文件末行为准（不是 meta 的链头——事件已写、meta 未写的窗口里，末行才是已生效的历史）；meta 链字段允许落后：校验时文件比 meta 记录的行数长不算错，记录的链头只要出现在文件各行的摘要集合里即通过，文件比记录短才报断裂；下次追加即对齐。撕裂尾按崩溃痕迹处理（校验报 `torn-tail` 而非篡改，追加时自动修复续链）。
 - **fork**：`writeEventsRaw` 建新流时逐行重链化——复制段是一条**独立新链**（创世绑定新会话 id），不是源流的延续（源流在源会话里自有链）；篡改 fork 会话的复制段在本会话校验即可检出。
 - **旧会话**：升级前的行没有 `$prev`，校验从第一条带链行起验（`partial`，前缀如实标注无链）；纯旧会话报 `not-chained`，不作废、不迁移。
