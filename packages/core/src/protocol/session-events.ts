@@ -52,7 +52,7 @@ export interface SandboxCheckedEvent {
   type: "sandbox.checked"; at: string
   /** config 是否开启沙箱（sandbox.enabled）。 */
   enabled: boolean
-  /** 检测结果：沙箱可用（bash 工具实际被包裹）；配置关闭时恒 false（fail-closed）。 */
+  /** 检测结果：沙箱可用（bash 工具实际被包装）；配置关闭时恒 false（fail-closed）。 */
   available: boolean
   /** 不可用原因（仅 available:false 时可能带；配置关闭时不含——那是主动选择）。 */
   unavailableReason?: string
@@ -177,7 +177,7 @@ export interface HookEvent {
   name: string
   position: string
   origin: "builtin" | "user"
-  /** ok=正常返回；failed=抛错；timeout=超预算被掐。 */
+  /** ok=正常返回；failed=抛错；timeout=超时被终止。 */
   outcome: "ok" | "failed" | "timeout"
   durationMs: number
   /**

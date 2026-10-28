@@ -1,6 +1,6 @@
 /**
  * 事件流哈希链：每条事件行携带前一行原文的 SHA-256 摘要（`$prev` 字段，
- * 持久层私有，读取边界剥离），meta.json 记录链头与总行数做删尾锚定。
+ * 持久层私有，读取边界处删掉），meta.json 记录链头与总行数做删尾锚定。
  *
  * 威胁模型与边界（spec：docs/superpowers/session-integrity-batch-spec.md）：
  * - 检出：改写、删除、插入、调换任意行；截尾（行数对不上）；整目录置换
@@ -111,7 +111,7 @@ export function verifyEventChain(
   return { status: start > 0 ? "partial" : "ok", verifiedFrom: start + 1, checked: lines.length - start }
 }
 
-/** 读取边界剥离：`$prev` 只属于持久化层，不进领域模型（AGENTS.md 原则 3）。 */
+/** 读取边界处删掉：`$prev` 只属于持久化层，不进领域模型（AGENTS.md 原则 3）。 */
 export function stripChainField<T>(value: unknown): T {
   if (typeof value === "object" && value !== null && "$prev" in value) {
     const { $prev: _drop, ...rest } = value as Record<string, unknown>

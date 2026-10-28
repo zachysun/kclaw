@@ -678,7 +678,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   const spillTick = startSpillRetention({ spillDir: paths.spillDir, retentionDays: config.sessions.spillRetentionDays ?? 0 })
   hostStops.push(["spill retention", () => spillTick.stop()])
 
-  // 后台进程收编：探测上次未送达通知里的进程组，活的重进注册表、死的补发
+  // 后台进程收编：检测上次未送达通知里的进程组，活的重进注册表、死的补发
   // 通知（run 已初始化，enqueued 安全）。失败只记日志，不阻塞启动。
   void processRegistry.adopt().catch((err) => console.error("kclaw process registry adopt failed:", err))
 

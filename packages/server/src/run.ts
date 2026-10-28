@@ -645,7 +645,7 @@ export class RunManager {
    * 接不住（run 还没起，或同步抛在组装段）——已 ack `queued:true` 的消息
    * 不允许无声消失。以 run.failed 形状补一条 code "queue_entry_failed" 的
    * 事件（message 含 messageId 与原因），订阅客户端据此可见；总线发送
-   * 本身不再包裹（与 submit/queueCancel 的直接 emit 一致，逐 socket 投递
+   * 本身不再包一层 try/catch（与 submit/queueCancel 的直接 emit 一致，逐 socket 投递
    * 已由 EventBus 自守）。
    */
   #emitEntryFailed(sessionId: string, node: QueueNode, why: string, err: unknown): void {

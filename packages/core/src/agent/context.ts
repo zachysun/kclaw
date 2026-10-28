@@ -69,8 +69,8 @@ export function toProviderMessages(
   // 全量历史直发，条数窗口已删除（R2）：上下文长度由压缩体系统一管
   // （预压线后台压缩 / 黄线 / 红线 × contextWindow，省略线管工具输出，
   // overflow-rescue 兜溢出急救）——按条数截尾会让请求头部逐轮前移、
-  // prompt cache 前缀从第一条消息起全断且无告警。历史里不应有孤儿 tool
-  // 消息（压缩 upto 与编辑重试都保配对边界），仍按防御保留头部剔除。
+  // prompt cache 前缀从第一条消息起全断且无告警。历史里不应有没配对的
+  // tool 消息（压缩 upto 与编辑重试都保配对边界），仍按防御保留头部剔除。
   const recent = history.slice()
   while (recent.length > 0 && recent[0].role === "tool") recent.shift()
 

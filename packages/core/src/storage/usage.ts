@@ -143,7 +143,7 @@ export class UsageStore {
       this.db.exec("ALTER TABLE usage ADD COLUMN cache_write_tokens INTEGER")
     }
     if (!cols.some((c) => c.name === "kind")) {
-      // 存量行全部是主 run（kind 列引入前只有 run 记账）。
+      // 存量行全部是主 run（kind 列引入前只有 run 一种）。
       this.db.exec("ALTER TABLE usage ADD COLUMN kind TEXT NOT NULL DEFAULT 'run'")
     }
   }

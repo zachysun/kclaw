@@ -79,7 +79,7 @@ export function createProcessTools(opts: {
 
 /**
  * The registry-facing bundle: executors + schemas owned beside each other.
- * 归属按会话隔离：registry 只暴露本 sessionId 的条目（装配层按注册表在位
+ * 归属按会话隔离：registry 只暴露本 sessionId 的条目（组装层按注册表在位
  * 与否决定是否展开本组）。
  */
 export function createProcessToolEntries(opts: Parameters<typeof createProcessTools>[0]): ToolEntry[] {

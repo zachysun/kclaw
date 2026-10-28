@@ -63,7 +63,7 @@ export interface SessionMeta {
   /**
    * 事件流哈希链锚定（integrity.ts）：chainHead = 最新一行原文的 SHA-256，
    * chainLength = 文件总行数（含未起链的旧前缀）。写入路径维护；崩溃窗口
-   * 允许落后一行（事件已写、meta 未写），verify 容忍并随下次追加自愈。
+   * 允许落后（事件已写、meta 未写），verify 不视其为断裂并随下次追加自愈。
    */
   chainHead?: string
   chainLength?: number
@@ -210,13 +210,13 @@ export class SessionStore {
     return body === "" ? [] : body.slice(0, -1).split("\n")
   }
 
-  /** Load a session's event stream oldest-first; missing file yields []. `$prev` 链字段在读取边界剥离（不进领域模型）。 */
+  /** Load a session's event stream oldest-first; missing file yields []. `$prev` 链字段在读取边界处删掉（不进领域模型）。 */
   readEvents(id: string): SessionEvent[] {
     return (readJsonl(this.eventsPath(id)) as unknown[]).map((v) => stripChainField<SessionEvent>(v))
   }
 
   /** Tail read for incremental pulls: the events at indexes >= since, with
-   *  the skipped prefix neither parsed nor materialized. `$prev` 同样剥离。 */
+   *  the skipped prefix neither parsed nor materialized. `$prev` 同样删掉。 */
   readEventsFrom(id: string, since: number): SessionEvent[] {
     return (readJsonlFrom(this.eventsPath(id), since) as unknown[]).map((v) => stripChainField<SessionEvent>(v))
   }

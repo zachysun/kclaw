@@ -12,7 +12,7 @@ export function fusedScore(fts: number | undefined, vec: number | undefined): nu
   return 0.5 * fts + 0.5 * vec
 }
 
-/** 时效因子：30 天衰减一半（1/(1+d/30)）；无日期 = 1（不打折）。 */
+/** 时效因子：30 天衰减一半（1/(1+d/30)）；无日期 = 1（不衰减）。 */
 export function recencyFactor(dateISO: string, now: Date): number {
   if (dateISO === "") return 1
   const t = Date.parse(dateISO.length === 10 ? `${dateISO}T00:00:00Z` : dateISO)

@@ -394,8 +394,8 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   // registry 去重后发一次 hook.failed(load) 事件。
   await engine.deps.hooks?.refresh()
 
-  // bus fan-out：一个坏订阅者不能弄死 run（bus.emit 已逐 socket 自守；此
-  // 包裹覆盖 emit 里剩余的同步工作，如 JSON.stringify）。
+  // bus fan-out：一个坏订阅者不能弄死 run（bus.emit 已逐 socket 自守；这
+  // 层 try 包住 emit 里剩余的同步工作，如 JSON.stringify）。
   const busEmit = (e: AgentEvent): void => {
     try {
       bus.emit(e)

@@ -109,7 +109,7 @@ export function createSubagentCollectTool(collector: SubagentCollector, parentSe
 
 /**
  * The registry-facing bundle: executors + schemas owned beside each other.
- * `collector` 在位时一并挂 subagent_collect（后台子代理按需取回答案）。
+ * `collector` 在位时一并挂 subagent_collect（后台 subagent 按需取回答案）。
  */
 export function createSubagentToolEntries(opts: {
   spawner: SubagentSpawner
