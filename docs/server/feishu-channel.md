@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/feishu/` 把 kclaw 接入飞书：在飞书里给机器人发消息就能用 kclaw，不需要开电脑，也不需要公网 IP 或端口转发，出站入站都走飞书官方的长连接（WebSocket，由飞书主动把事件推给 daemon）。频道是**新的入口和出口，不是新的机制**：入站消息走普通的 `RunManager.submit` 入口（触发器 user），出站渲染订阅既有的事件总线，权限确认走普通的确认网关，引擎零改动。
+`packages/server/src/feishu/` 把 kclaw 接入飞书：在飞书里给机器人发消息就能用 kclaw，不需要开电脑，也不需要公网 IP 或端口转发，出站入站都走飞书官方的长连接（WebSocket，由飞书主动把事件推给 daemon）。频道是**新的入口和出口**：入站消息走普通的 `RunManager.submit` 入口（触发器 user），出站渲染订阅既有的事件总线，权限确认走普通的确认网关，引擎零改动。
 
 - 模块：`channel.ts`（频道逻辑：命令、白名单、卡片状态机、出站清洗、待加白发件人记录）、`transport.ts`（传输接口，唯一的接入口）、`real-transport.ts`（官方 SDK 的薄封装）、`config.ts`（feishu.json 与频道运行状态）、`manager.ts`（频道管理器：配置保存与热重启、连接状态、一键加白）、`verify.ts`（凭据验证）。
 - 测试：全部频道逻辑在假传输上测试（`test/feishu/`），真传输不带逻辑、只做翻译。

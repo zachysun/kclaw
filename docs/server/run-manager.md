@@ -258,7 +258,7 @@ steer 条目被 `submit` 放进 `#steerBuf` 后，目标 run 在**迭代边界**
 
 ### recoverQueues：崩溃恢复
 
-daemon 启动时对每个 queue.jsonl 非空的会话调用：整体重排为内存队列并重新启动驱动器。**steer 与 interrupt 条目一律降级为 wait**——它们的目标场景（某个正在跑的 run）已不存在，降级重排是唯一说得通的语义；恢复后的队列在审计意义上无损（消息都还在），仅在"原本想引导/中断"的意图上打了折扣，这是重启的固有代价。每条恢复条目重新广播 `message.queued {disposition:"wait", position:i}`，让重连的客户端重建排队气泡。
+daemon 启动时对每个 queue.jsonl 非空的会话调用：整体重排为内存队列并重新启动驱动器。**steer 与 interrupt 条目一律降级为 wait**——它们的目标场景（某个正在跑的 run）已不存在，降级重排是唯一说得通的语义；恢复后的队列在审计意义上无损（消息都还在），仅在"原本想引导/中断"的意图上有损失，这是重启的固有代价。每条恢复条目重新广播 `message.queued {disposition:"wait", position:i}`，让重连的客户端重建排队气泡。
 
 ### compactSession：手动压缩（忙时排队执行，发消息的排队仍拒绝）
 

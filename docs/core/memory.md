@@ -218,7 +218,7 @@ note 的 `kind` 是 `"memory"`，与 cron 来源 note 一起经 run-before hook 
 fts   = normalizeFtsRank(bm25_rank)     // 1 − 1/(1−rank)，越相关越接近 1
 vec   = cosine(query向量, 条目向量)       // 仅向量路打开时
 fused = 0.5·fts + 0.5·vec               // 单边缺失降级为另一边，双边缺失为 0
-score = fused × 1/(1 + 距今天数/30)      // 时效因子：30 天衰减一半；无日期不打折
+score = fused × 1/(1 + 距今天数/30)      // 时效因子：30 天衰减一半；无日期 = 1（不衰减）
 ```
 
 先 FTS 召回 top-50（`FTS_RECALL`，token 间 OR），再对召回的每条算分，降序取 `limit`。向量路关闭时 `vec` 不参与、`fused = fts`（纯关键词）。
