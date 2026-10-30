@@ -54,6 +54,17 @@ export const MessageBubble = memo(function MessageBubble({
   onFork,
 }: MessageBubbleProps) {
   const streaming = message.pending && message.blocks.length === 0
+  // 结果块全被 call 侧注册卡吸收的 tool 消息不再渲染气泡壳：壳里唯一剩下的
+  // 是悬空的 fork 按钮，会画成一个空白小胶囊挂在工具卡下面（真机验收发现
+  // 的空泡）。分叉点用相邻的 assistant 消息等价可达，fork 面不受影响。
+  if (message.role === "tool" && message.blocks.length > 0) {
+    const absorbed = (b: RenderedBlock): boolean => {
+      if (b.kind !== "tool_result") return false
+      const name = toolPairing?.nameOf.get(b.callId)
+      return name !== undefined && TOOL_CARDS[name]?.call !== undefined
+    }
+    if (message.blocks.every(absorbed)) return null
+  }
   // 组员来信（团队收信箱投递的用户消息）不渲染成用户气泡：改为 agent 一侧的
   // 折叠条，点开看原文——模型收到什么不变，只是聊天页的画法。
   const mail = message.role === "user" ? parseTeamMail(firstRenderedText(message)) : null

@@ -67,6 +67,25 @@ describe("bash card", () => {
     side.unmount()
   })
 
+  it("fully absorbed tool message renders no bubble shell (no stray empty pill)", () => {
+    const messages = [
+      assistantMsg([callBlock("bash", JSON.stringify({ command: "pnpm test" }))]),
+      toolMsg([resultBlock({ output: "all good", data: { exitCode: 0 } })]),
+    ]
+    const { container, unmount } = mount(messages, 1)
+    expect(container.querySelector(".message-tool")).toBeNull()
+    unmount()
+
+    // Result-card tools keep their bubble (the card lives inside it).
+    const keep = [
+      assistantMsg([callBlock("todo_list_write", "{}")]),
+      toolMsg([resultBlock({ data: { items: [] } })]),
+    ]
+    const kept = mount(keep, 1)
+    expect(kept.container.querySelector(".message-tool")).not.toBeNull()
+    kept.unmount()
+  })
+
   it("ok result shows the green check and exit 0", () => {
     const { container, unmount } = mount([
       assistantMsg([callBlock("bash", "{}")]),
