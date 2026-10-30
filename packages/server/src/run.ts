@@ -276,6 +276,7 @@ export class RunManager {
       trigger: input.trigger,
       ...(input.attachments !== undefined && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
       ...(input.note !== undefined ? { note: input.note } : {}),
+      ...(input.uiAction !== undefined ? { uiAction: input.uiAction } : {}),
       enqueuedAt: new Date().toISOString(),
     }
     // 空闲 = 无活动 run、无可执行条目、无驱动器 → 直发开跑（不广播 message.queued）
@@ -698,6 +699,7 @@ export class RunManager {
       ...(node.subagentToolAllow !== undefined ? { subagentToolAllow: node.subagentToolAllow } : {}),
       ...(entry.attachments !== undefined && entry.attachments.length > 0 ? { attachments: entry.attachments } : {}),
       ...(entry.note !== undefined ? { note: entry.note } : {}),
+      ...(entry.uiAction !== undefined ? { uiAction: entry.uiAction } : {}),
       messageId: entry.messageId,
     }
     const execution = executeRun(this.#engine, {
@@ -738,6 +740,7 @@ export class RunManager {
           ? [{ id: newBlockId(), type: "note", kind: e.note.kind, text: e.note.text } satisfies NoteBlock]
           : []),
       ])
+      if (e.uiAction !== undefined) m.uiAction = e.uiAction // UI 卡交互来源（与常规落盘口径一致）
       m.id = e.messageId
       return m
     })
