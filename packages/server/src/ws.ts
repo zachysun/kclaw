@@ -275,7 +275,7 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
         if (run === undefined) {
           return send(socket, { type: "error", message: "run manager not available" })
         }
-        const { sessionId, text, disposition, attachments, target } = check.command
+        const { sessionId, text, disposition, attachments, target, uiAction } = check.command
         // Team-targeted send: through the mailbox to one member (the session
         // must be the team lead); the ack carries the mailbox entry id.
         if (target !== undefined) {
@@ -297,6 +297,7 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
             userText: text, trigger: "user",
             ...(disposition !== undefined ? { disposition } : {}),
             ...(attachments !== undefined && attachments.length > 0 ? { attachments } : {}),
+            ...(uiAction !== undefined ? { uiAction } : {}),
           })
           return send(socket, { type: "send_message_ack", sessionId, messageId: r.messageId, queued: r.queued })
         } catch (err) {

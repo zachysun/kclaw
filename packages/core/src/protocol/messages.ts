@@ -1,5 +1,6 @@
 import { newId } from "./ids.js"
 import type { Block } from "./blocks.js"
+import type { UiActionRef } from "./ui-cards.js"
 
 export type Role = "user" | "assistant" | "tool"
 
@@ -72,6 +73,12 @@ export interface Message {
    * 从该消息起断裂。显示层（气泡/事件流）与 blocks.text 始终保持原文。
    */
   llmText?: string
+  /**
+   * 用户消息专用：这条消息由某张 UI 卡的交互产生（按钮点击/表单提交）。
+   * 仅展示来源标记——web 据此渲染卡的已选态、气泡与审计页标注徽标；
+   * 不作任何权限或语义判定的依据。见 protocol/ui-cards.ts 的 UiActionRef。
+   */
+  uiAction?: UiActionRef
 }
 
 export interface AssistantMessage extends Message {

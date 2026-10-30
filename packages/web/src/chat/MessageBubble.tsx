@@ -11,6 +11,7 @@ import { memo } from "react"
 import { MarkdownText } from "./Markdown.js"
 import { parseTeamMail, type RenderedBlock, type RenderedMessage } from "./model.js"
 import { isUiCard, UiCardView } from "./UiCard.js"
+import type { UiCardAction } from "./UiCardForm.js"
 import { IconButton } from "../ui/IconButton.js"
 import { ForkIcon, PencilIcon, RefreshIcon } from "../ui/icons.js"
 
@@ -18,6 +19,10 @@ export interface MessageBubbleProps {
   message: RenderedMessage
   /** Open a subagent's audit view (the spawn row's link). */
   onOpenAudit?: (sessionId: string) => void
+  /** UI 卡动作回传（按钮/表单，callId 标记来源卡）。 */
+  onUiAction?: (callId: string, action: UiCardAction) => void
+  /** callId → 已发生的卡动作（持久已选态反查）。 */
+  uiPicks?: Map<string, UiCardAction>
   /** While the session is idle, the last user bubble offers the edit entry. */
   canEdit?: boolean
   /** While the session is idle, the last assistant bubble offers regenerate. */
@@ -35,6 +40,8 @@ export interface MessageBubbleProps {
 export const MessageBubble = memo(function MessageBubble({
   message,
   onOpenAudit,
+  onUiAction,
+  uiPicks,
   canEdit,
   canRegenerate,
   canFork,
@@ -58,11 +65,14 @@ export const MessageBubble = memo(function MessageBubble({
         <TeamMailView mail={mail} />
       ) : (
         message.blocks.map((block) => (
-          <BlockView key={block.blockId} block={block} markdown={message.role === "assistant"} onOpenAudit={onOpenAudit} />
+          <BlockView key={block.blockId} block={block} markdown={message.role === "assistant"} onOpenAudit={onOpenAudit} onUiAction={onUiAction} uiPicks={uiPicks} />
         ))
       )}
       {message.aborted === true && (
         <span className="msg-aborted" data-testid="msg-aborted">已中断</span>
+      )}
+      {message.role === "user" && message.uiAction !== undefined && (
+        <span className="msg-ui-action" data-testid="msg-ui-action">来自 UI 卡</span>
       )}
       {(canEdit === true || canRegenerate === true || onFork !== undefined) && (
         <span className="msg-actions">
@@ -128,7 +138,7 @@ function oneLine(text: string): string {
   return collapsed.length > 80 ? `${collapsed.slice(0, 80)}…` : collapsed
 }
 
-function BlockView({ block, markdown, onOpenAudit }: { block: RenderedBlock; markdown: boolean; onOpenAudit?: (sessionId: string) => void }) {
+function BlockView({ block, markdown, onOpenAudit, onUiAction, uiPicks }: { block: RenderedBlock; markdown: boolean; onOpenAudit?: (sessionId: string) => void; onUiAction?: (callId: string, action: UiCardAction) => void; uiPicks?: Map<string, UiCardAction> }) {
   switch (block.kind) {
     case "text":
       return markdown ? (
@@ -184,7 +194,11 @@ function BlockView({ block, markdown, onOpenAudit }: { block: RenderedBlock; mar
       if (block.status === "ok" && isUiCard(block.data)) {
         return (
           <div className="blk-ui-card" data-testid="blk-ui-card">
-            <UiCardView card={block.data} />
+            <UiCardView
+              card={block.data}
+              onAction={onUiAction !== undefined ? (action) => onUiAction(block.callId, action) : undefined}
+              picked={uiPicks?.get(block.callId) ?? null}
+            />
           </div>
         )
       }

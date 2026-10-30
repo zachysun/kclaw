@@ -57,6 +57,11 @@ function rowLabel(row: AuditRow): string {
 function rowBadges(row: AuditRow) {
   return (
     <>
+      {row.kind === "block" && row.role === "user" && row.uiAction !== undefined && (
+        <span className="audit-grant" data-testid={`audit-ui-action-${row.key}`}>
+          来自 UI 卡
+        </span>
+      )}
       {row.kind === "block" && row.grantedBy !== undefined && (
         <span className="audit-grant" data-testid={`audit-grant-${row.key}`}>
           放行: {row.grantedBy}

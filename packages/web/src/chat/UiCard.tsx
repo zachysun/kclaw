@@ -45,7 +45,7 @@ export function UiCardView({ card, onAction, picked }: UiCardViewProps) {
           <button
             className={`ui-btn${card.tone !== undefined && card.tone !== "default" ? ` ui-btn-${card.tone}` : ""}`}
             disabled={isPicked}
-            onClick={() => onAction?.({ optionId: card.label })}
+            onClick={() => onAction?.({ optionId: card.label, text: `选择：${card.label}` })}
           >
             {card.label}
           </button>

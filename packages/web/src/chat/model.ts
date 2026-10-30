@@ -32,6 +32,7 @@ import type {
   Message,
   QuestionRequestedPayload,
   Role,
+  UiActionRef,
 } from "@kclaw/core/protocol"
 
 export type { Block, ConfirmationRequestedPayload, Message, QuestionRequestedPayload, Role }
@@ -90,6 +91,9 @@ export interface RenderedMessage {
   blocks: RenderedBlock[]
   /** The assistant message was stopped (stopReason aborted): the half reply renders normally with an "interrupted" tail marker. */
   aborted?: boolean
+  /** 用户消息专用：这条消息来自某张 UI 卡的交互（按钮/表单）——气泡徽标与
+   * 卡片已选态反查的数据源。 */
+  uiAction?: UiActionRef
 }
 
 export interface ConfirmationCard {
@@ -582,6 +586,7 @@ function renderMessage(msg: Message, pending: boolean): RenderedMessage {
     pending,
     blocks: msg.blocks.map(renderBlock),
     ...(aborted ? { aborted: true } : {}),
+    ...(msg.uiAction !== undefined ? { uiAction: msg.uiAction } : {}),
   }
 }
 

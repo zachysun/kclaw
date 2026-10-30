@@ -138,4 +138,28 @@ describe("executeRun deps → surface forwarding (tiered disclosure)", () => {
     const cronInSystem = system.includes("cron_create")
     expect(cronInSystem).toBe(false)
   })
+
+  it("a UI Card action's uiAction rides onto the persisted user message", async () => {
+    const captured: LlmRequest[] = []
+    const engine = makeEngine(captured)
+    const sessionId = engine.deps.sessions.create("surface").id
+    await executeRun(engine, {
+      sessionId,
+      input: { userText: "选择：先做 core", trigger: "user", uiAction: { cardCallId: "call_1", optionId: "先做 core" } },
+      controller: new AbortController(),
+      drainSteer: () => [],
+    })
+    const user = engine.deps.sessions.readMessages(sessionId).find((m) => m.role === "user")
+    expect(user?.uiAction).toEqual({ cardCallId: "call_1", optionId: "先做 core" })
+    // Plain sends carry no provenance — the field stays absent.
+    const sessionId2 = engine.deps.sessions.create("surface2").id
+    await executeRun(engine, {
+      sessionId: sessionId2,
+      input: { userText: "plain", trigger: "user" },
+      controller: new AbortController(),
+      drainSteer: () => [],
+    })
+    const plain = engine.deps.sessions.readMessages(sessionId2).find((m) => m.role === "user")
+    expect(plain?.uiAction).toBeUndefined()
+  })
 })

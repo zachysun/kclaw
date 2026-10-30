@@ -131,7 +131,7 @@ describe("button card", () => {
     act(() => {
       ;(container.querySelector("button") as HTMLButtonElement).click()
     })
-    expect(onAction).toHaveBeenCalledWith({ optionId: "先做 core" })
+    expect(onAction).toHaveBeenCalledWith({ optionId: "先做 core", text: "选择：先做 core" })
     unmount()
   })
 

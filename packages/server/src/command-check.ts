@@ -12,7 +12,7 @@
  */
 import { join } from "node:path"
 import { realpathWithin, type AttachmentRef } from "@kclaw/core"
-import type { ClientCommand, SendMessageFrame } from "@kclaw/core"
+import type { ClientCommand, SendMessageFrame, UiActionRef } from "@kclaw/core"
 import { tokenEquals } from "./auth.js"
 
 /** A client→daemon command with its fields validated and narrowed (auth handled separately). */
@@ -61,6 +61,7 @@ export function checkCommandFrame(frame: object, deps: CheckDeps): FrameCheck {
     target?: unknown
     messageId?: unknown
     fromMessageId?: unknown
+    uiAction?: unknown
   }
 
   if (!deps.authenticated) {
@@ -148,6 +149,26 @@ export function checkCommandFrame(frame: object, deps: CheckDeps): FrameCheck {
       if (target !== undefined && (typeof target !== "string" || target.length === 0)) {
         return { kind: "error", message: "send_message target must be a non-empty string (a member name)" }
       }
+      // UI Card provenance: shape-checked here, trusted as display-only downstream.
+      const { uiAction } = msg
+      if (uiAction !== undefined) {
+        const a = uiAction as { cardCallId?: unknown; optionId?: unknown; values?: unknown }
+        if (typeof a.cardCallId !== "string" || a.cardCallId.length === 0) {
+          return { kind: "error", message: "send_message uiAction requires a non-empty string cardCallId" }
+        }
+        if (a.optionId !== undefined && (typeof a.optionId !== "string" || a.optionId.length === 0)) {
+          return { kind: "error", message: "send_message uiAction.optionId must be a non-empty string" }
+        }
+        if (a.values !== undefined) {
+          if (typeof a.values !== "object" || a.values === null || Array.isArray(a.values)) {
+            return { kind: "error", message: "send_message uiAction.values must be an object of string → string" }
+          }
+          const bad = Object.entries(a.values).some(([k, v]) => typeof k !== "string" || typeof v !== "string")
+          if (bad) {
+            return { kind: "error", message: "send_message uiAction.values must be an object of string → string" }
+          }
+        }
+      }
       if (!deps.sessionExists(sessionId)) {
         return { kind: "error", message: "session not found" }
       }
@@ -167,6 +188,7 @@ export function checkCommandFrame(frame: object, deps: CheckDeps): FrameCheck {
         ...(disposition !== undefined ? { disposition } : {}),
         ...(target !== undefined ? { target } : {}),
         ...(refs.length > 0 ? { attachments: refs } : {}),
+        ...(uiAction !== undefined ? { uiAction: uiAction as UiActionRef } : {}),
       }
       return { kind: "command", command }
     }

@@ -11,10 +11,10 @@
  * a notice and stops (the App drops back to the token form on API 401; the ws
  * path has no token-refresh flow, so it asks for a reload).
  */
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { parseSlashInput, skillCommandMeta } from "@kclaw/core/commands"
 import { isPermissionMode, type PermissionMode } from "@kclaw/core/permission-modes"
-import type { ConfirmationDecision } from "@kclaw/core/protocol"
+import type { ConfirmationDecision, UiActionRef } from "@kclaw/core/protocol"
 import { ApiError, type ApiClient } from "../api.js"
 import { PROVIDERS_CHANGED } from "../events.js"
 import { WsAuthError, type WsClient } from "../ws.js"
@@ -38,6 +38,7 @@ import {
 } from "./model.js"
 import { useSessionResource, useSilentFetch } from "../daemon-clients.js"
 import { runWebCommand } from "./commands.js"
+import type { UiCardAction } from "./UiCardForm.js"
 import { ChatView, type Disposition, type PendingAttachment, type SentAttachment } from "./ChatView.js"
 import type { CompactionRecordView } from "./CompactionBars.js"
 import { SessionUsageStrip } from "./SessionUsageStrip.js"
@@ -585,23 +586,53 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
    * when busy, pending bubble when idle) — and nothing else: no slash
    * parsing, no attachment/disposition state changes.
    */
-  const sendMessageRaw = useCallback((text: string, sendDisposition: Disposition, attachments: SentAttachment[], target?: string | null) => {
+  const sendMessageRaw = useCallback((text: string, sendDisposition: Disposition | undefined, attachments: SentAttachment[], target?: string | null, uiAction?: UiActionRef) => {
     clientRef.current.send({
       type: "send_message",
       sessionId,
       text,
-      disposition: sendDisposition,
+      // UI 卡动作不指定处置：跟随服务端解析链（显式 > 会话覆盖 > 配置默认 > steer）。
+      ...(sendDisposition !== undefined ? { disposition: sendDisposition } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(target !== undefined && target !== null ? { target } : {}),
+      ...(uiAction !== undefined ? { uiAction } : {}),
     })
     // 定向给组员的发送不做乐观回显：daemon 会把这条消息落进组长历史并以
     // message.created 广播回来，本端再叠本地行就是双份。
     if (target !== undefined && target !== null) return
     updateView((v) =>
       v.runState === "running" || v.compacting === true
-        ? appendPendingQueueRow(v, text, sendDisposition)
+        ? appendPendingQueueRow(v, text, sendDisposition ?? "wait")
         : appendOptimisticUser(v, text))
   }, [sessionId, updateView])
+
+  /**
+   * UI 卡动作回传：按钮点击/表单提交格式化成用户消息走普通提交链路（排队、
+   * Stop、审计语义全继承）；帧上带 uiAction 来源标记，渲染侧据此反查已选态。
+   * 回调 render-stable（MessageBubble 是 memo 的）。
+   */
+  const handleUiAction = useCallback((callId: string, action: UiCardAction) => {
+    if (action.text === undefined || action.text === "") return
+    sendMessageRaw(action.text, undefined, [], null, {
+      cardCallId: callId,
+      ...(action.optionId !== undefined ? { optionId: action.optionId } : {}),
+      ...(action.values !== undefined ? { values: action.values } : {}),
+    })
+  }, [sendMessageRaw])
+
+  /** callId → 已发生的卡动作（反查持久已选态：按钮禁用、表单快照）。 */
+  const uiPicks = useMemo(() => {
+    const picks = new Map<string, UiCardAction>()
+    for (const m of view.messages) {
+      if (m.role !== "user" || m.uiAction === undefined) continue
+      const a = m.uiAction
+      picks.set(a.cardCallId, {
+        ...(a.optionId !== undefined ? { optionId: a.optionId } : {}),
+        ...(a.values !== undefined ? { values: a.values } : {}),
+      })
+    }
+    return picks
+  }, [view.messages])
 
   /**
    * 提交一条消息，返回是否被接受：composer 依据它决定清不清草稿（false =
@@ -853,6 +884,8 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           sessionId={sessionId}
           view={view}
           onSend={handleSend}
+          onUiAction={handleUiAction}
+          uiPicks={uiPicks}
           onResolveConfirmation={handleResolveConfirmation}
           onAnswerQuestion={handleAnswerQuestion}
           pendingAttachments={pendingAttachments}

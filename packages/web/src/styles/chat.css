@@ -2125,3 +2125,14 @@
   color: var(--success);
   font-size: 12px;
 }
+
+/* UI 卡动作来源徽标（用户气泡上的小标） */
+.msg-ui-action {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 8px;
+  margin-top: 4px;
+}

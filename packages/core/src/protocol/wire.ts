@@ -9,6 +9,7 @@
  */
 import type { AgentEvent, RunTrigger } from "./events.js"
 import type { NoteKind } from "./blocks.js"
+import type { UiActionRef } from "./ui-cards.js"
 
 /** How a send_message rides the queue: steer injects, wait queues, interrupt preempts. */
 export type SendDisposition = "steer" | "wait" | "interrupt"
@@ -115,6 +116,9 @@ export interface SendMessageFrame {
    * session itself (the lead). The message also lands in the lead's history
    * with a forwarding marker, per the team spec's user-to-member path. */
   target?: string
+  /** UI Card interaction provenance (a button pick or a form submit rides
+   * the normal submit path — this only marks where the text came from). */
+  uiAction?: UiActionRef
 }
 
 /**

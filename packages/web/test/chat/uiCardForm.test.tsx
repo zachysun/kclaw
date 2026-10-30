@@ -60,6 +60,7 @@ describe("UiCardForm", () => {
     await act(async () => box.submitBtn().click())
     expect(onAction).toHaveBeenCalledWith({
       values: { version: "0.7.0", channel: "npm", opts: "B", timeout: "120" },
+      text: "[表单] 发布参数\n- 版本号: 0.7.0\n- 渠道: npm\n- 多选: B\n- 超时(秒): 120",
     })
     box.unmount()
   })

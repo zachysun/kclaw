@@ -241,3 +241,18 @@ export type UIContainerCard =
   | UICarouselCard
 
 export type UICard = UIDisplayCard | UIContainerCard
+
+/**
+ * Where a user message came from when it was a UI Card interaction: the
+ * triggering card's tool callId, the picked button's label, or a form's
+ * reported values. Display provenance only — never a permission or semantics
+ * input (a client may claim anything; that is harmless). The web reverse-
+ * looks these up to render settled UI Card states across reloads.
+ */
+export interface UiActionRef {
+  cardCallId: string
+  /** Button cards: the picked label. */
+  optionId?: string
+  /** Form submits: field name → reported (label-form) value. */
+  values?: Record<string, string>
+}

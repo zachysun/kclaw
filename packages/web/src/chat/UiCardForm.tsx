@@ -11,8 +11,13 @@ import type { UIField, UIFormCard } from "@kclaw/core/protocol"
 export interface UiCardAction {
   /** Button cards: the picked label. Absent for form submits. */
   optionId?: string
-  /** Form submits: field name → value (checkbox joins with "、"). */
+  /** Form submits: field name → reported (label-form) value. */
   values?: Record<string, string>
+  /** The user-facing text this action submits as (the send_message payload):
+   * `选择：<label>` for buttons, a titled line-per-field block for forms.
+   * Always present on fresh interactions; absent on persisted picks (the
+   * reverse-lookup view never re-sends). */
+  text?: string
 }
 
 type Draft = Record<string, string | string[]>
@@ -75,7 +80,12 @@ export function UiCardForm({
         .filter((x): x is [string, string] => x !== null),
     )
     if (Object.keys(filled).length === 0) return // 空表单不允许提交
-    onAction({ values: filled })
+    // The submit text IS the user message: titled, one line per field, values
+    // in label form — the same strings the snapshot view shows.
+    const fieldLabels = new Map(card.fields.map((f) => [f.name, f.label]))
+    const lines = Object.entries(filled).map(([name, v]) => `${fieldLabels.get(name) ?? name}: ${v}`)
+    const text = `[表单]${card.title !== undefined ? ` ${card.title}` : ""}\n${lines.map((l) => `- ${l}`).join("\n")}`
+    onAction({ values: filled, text })
   }
 
   return (
