@@ -219,6 +219,135 @@ function flattenEventInto(
   }
 }
 
+// ---------- 行类型注册表 ----------
+
+type RowOf<K extends AuditRowKind> = Extract<AuditRow, { kind: K }>
+
+/**
+ * Everything display-related one row kind knows about itself: toolbar toggle
+ * label, per-row type-chip label (only block varies per row), one-line
+ * summary, expand payload, and the keyword-filter corpus. Adding a kind =
+ * an AuditRow member + a flattenEventInto case + one entry here; the mapped
+ * Record type fails to compile until the entry exists, and ALL_KINDS /
+ * DEFAULT_FILTER derive from the keys, so the other touch points can't fall
+ * behind. The per-kind formatters further below stay as named functions;
+ * entries only wire them up.
+ */
+export interface AuditRowTypeDef<K extends AuditRowKind> {
+  /** Constant label for the toolbar's kind toggle and the default chip. */
+  label: string
+  /** Per-row chip label override (block names its block type). */
+  rowLabel?: (row: RowOf<K>) => string
+  /** Collapsed row's one-line summary. */
+  summary: (row: RowOf<K>) => string
+  /** Expanded row's full payload (`<pre>`). */
+  full: (row: RowOf<K>) => string
+  /** Keyword-filter corpus — full content, not the truncated summary. */
+  search: (row: RowOf<K>) => string
+}
+
+export const ROW_TYPES: { readonly [K in AuditRowKind]: AuditRowTypeDef<K> } = {
+  block: {
+    label: "block",
+    rowLabel: (row) => blockTypeLabel(row.block),
+    summary: (row) => blockSummary(row.block),
+    full: (row) => blockFullContent(row.block),
+    search: (row) => {
+      const body = row.block.type === "attachment" ? JSON.stringify(row.block.source) : blockFullContent(row.block)
+      return `${row.role} ${body}`
+    },
+  },
+  compaction: {
+    label: "compaction",
+    summary: (row) => compactionSummary(row.record),
+    full: (row) => `${compactionTokensLine(row.record)}段摘要：\n${row.record.segmentSummary}\n\n总摘要：\n${row.record.top}`,
+    search: (row) => `${row.record.trigger} ${row.record.focus ?? ""} ${row.record.segmentSummary} ${row.record.top}`,
+  },
+  memory: {
+    label: "memory",
+    summary: (row) => memorySummary(row.event),
+    full: (row) => memoryFullContent(row.event),
+    search: (row) => memoryFullContent(row.event),
+  },
+  system: {
+    label: "system",
+    summary: (row) => {
+      const full = systemFullText(row.event)
+      return `${summarize(full, 60)} · ${full.length} 字`
+    },
+    full: (row) => `【稳定段】\n${row.event.stable}\n\n【实时段】\n${row.event.live ?? ""}`,
+    search: (row) => systemFullText(row.event),
+  },
+  sandbox: {
+    label: "sandbox",
+    summary: (row) => sandboxSummary(row.event),
+    full: (row) => sandboxFullContent(row.event),
+    search: (row) => `${sandboxSummary(row.event)} ${sandboxFullContent(row.event)}`,
+  },
+  session: {
+    label: "session",
+    summary: (row) => sessionSummary(row.event),
+    full: (row) => sessionFullContent(row.event),
+    search: (row) => sessionSummary(row.event),
+  },
+  run: {
+    label: "run",
+    summary: (row) => runSummary(row.event),
+    full: (row) => JSON.stringify(row.event, null, 2),
+    search: (row) => runSummary(row.event),
+  },
+  decision: {
+    label: "permission",
+    summary: (row) => decisionSummary(row.event),
+    full: (row) => decisionFullContent(row.event),
+    search: (row) => `${decisionSummary(row.event)} ${decisionFullContent(row.event)}`,
+  },
+  truncation: {
+    label: "truncation",
+    summary: (row) => truncationSummary(row.event),
+    full: (row) => JSON.stringify(row.event, null, 2),
+    search: (row) => `${truncationSummary(row.event)} ${row.event.fromMessageId}`,
+  },
+  team: {
+    label: "team",
+    summary: (row) => teamSummary(row.event),
+    full: (row) => teamFullContent(row.event),
+    search: (row) => `${teamSummary(row.event)} ${teamFullContent(row.event)}`,
+  },
+  skill: {
+    label: "skill",
+    summary: (row) => skillSummary(row.event),
+    full: (row) => JSON.stringify(row.event, null, 2),
+    search: (row) => skillSummary(row.event),
+  },
+  goal: {
+    label: "goal",
+    summary: (row) => goalSummary(row.event),
+    full: (row) => goalFullContent(row.event),
+    search: (row) => `${goalSummary(row.event)} ${goalFullContent(row.event)}`,
+  },
+  todo: {
+    label: "todo",
+    summary: (row) => todoSummary(row.event),
+    full: (row) => todoFullContent(row.event),
+    search: (row) => `${todoSummary(row.event)} ${todoFullContent(row.event)}`,
+  },
+  hook: {
+    label: "hook",
+    summary: (row) => hookSummary(row.event),
+    full: (row) => JSON.stringify(row.event, null, 2),
+    search: (row) => hookSummary(row.event),
+  },
+}
+
+/**
+ * Registry lookup keyed by the row's own kind. The generic keeps every call
+ * site on the entry's narrowed parameter type without casts.
+ */
+export function rowTypeDef<K extends AuditRowKind>(row: AuditRow & { kind: K }): AuditRowTypeDef<K> {
+  return ROW_TYPES[row.kind]
+}
+
 // ---------- 过滤 ----------
 
 export type TimePreset = "all" | "1h" | "today" | "custom"
@@ -235,10 +364,13 @@ export interface AuditFilter {
   timeTo: string
 }
 
-export const ALL_KINDS: AuditRowKind[] = ["block", "compaction", "memory", "system", "sandbox", "session", "run", "decision", "truncation", "team", "skill", "goal", "todo", "hook"]
+/** All kinds in toolbar order (registry insertion order). The ROW_TYPES type
+ *  guarantees the key set, so this can't fall behind a new kind. */
+export const ALL_KINDS: AuditRowKind[] = Object.keys(ROW_TYPES) as AuditRowKind[]
 
 export const DEFAULT_FILTER: AuditFilter = {
-  kinds: { block: true, compaction: true, memory: true, system: true, sandbox: true, session: true, run: true, decision: true, truncation: true, team: true, skill: true, goal: true, todo: true, hook: true },
+  // Every kind on by default, derived from the registry for the same reason.
+  kinds: Object.fromEntries(ALL_KINDS.map((kind) => [kind, true])) as Record<AuditRowKind, boolean>,
   keyword: "",
   timePreset: "all",
   timeFrom: "",
@@ -268,38 +400,7 @@ function timeMatches(row: AuditRow, f: AuditFilter, now: Date): boolean {
 
 /** Everything the keyword filter matches against — FULL content, not the truncated summary. */
 export function rowSearchText(row: AuditRow): string {
-  switch (row.kind) {
-    case "block": {
-      const body = row.block.type === "attachment" ? JSON.stringify(row.block.source) : blockFullContent(row.block)
-      return `${row.role} ${body}`
-    }
-    case "compaction":
-      return `${row.record.trigger} ${row.record.focus ?? ""} ${row.record.segmentSummary} ${row.record.top}`
-    case "memory":
-      return memoryFullContent(row.event)
-    case "system":
-      return systemFullText(row.event)
-    case "sandbox":
-      return `${sandboxSummary(row.event)} ${sandboxFullContent(row.event)}`
-    case "hook":
-      return hookSummary(row.event)
-    case "session":
-      return sessionSummary(row.event)
-    case "run":
-      return runSummary(row.event)
-    case "decision":
-      return `${decisionSummary(row.event)} ${decisionFullContent(row.event)}`
-    case "truncation":
-      return `${truncationSummary(row.event)} ${row.event.fromMessageId}`
-    case "team":
-      return `${teamSummary(row.event)} ${teamFullContent(row.event)}`
-    case "skill":
-      return skillSummary(row.event)
-    case "goal":
-      return `${goalSummary(row.event)} ${goalFullContent(row.event)}`
-    case "todo":
-      return `${todoSummary(row.event)} ${todoFullContent(row.event)}`
-  }
+  return rowTypeDef(row).search(row)
 }
 
 /** Blank keyword matches everything; otherwise a case-insensitive substring
@@ -377,8 +478,29 @@ export function fmtRowTime(iso: string, now = new Date()): string {
 
 // ---------- 行摘要与全文（组件层渲染用） ----------
 
+/** One-line compaction summary: 手动/自动 · 超限急救 · token 变化 · 范围 · 条数. */
+function compactionSummary(record: CompactionEvent): string {
+  const trigger =
+    record.trigger === "manual"
+      ? `手动${record.focus ? `（${record.focus}）` : ""}`
+      : record.trigger === "in-run"
+        ? "自动（运行中）"
+        : "自动（收尾）"
+  const tokens = record.tokensBefore !== undefined && record.tokensAfter !== undefined
+    ? ` · ${fmtTokens(record.tokensBefore)} → ${fmtTokens(record.tokensAfter)} token`
+    : ""
+  return `${trigger}${record.emergency === true ? "·超限急救" : ""}${tokens} · ${record.from ?? "会话开头"} – ${record.upto} · ${record.messages} 条`
+}
+
+/** 展开区的 token 口径说明行（旧记录无数字时为空）。 */
+function compactionTokensLine(record: CompactionEvent): string {
+  if (record.tokensBefore === undefined || record.tokensAfter === undefined) return ""
+  return `压缩前 ${record.tokensBefore.toLocaleString()} token → 压缩后 ${record.tokensAfter.toLocaleString()} token\n` +
+    "（压缩前锚定最后一次真实请求；压缩后含保留尾与固定开销的估算、总摘要的真实 token）\n\n"
+}
+
 /** One-line memory summary: 记忆 · trigger · kind · op · (topic) · (file). */
-export function memorySummary(event: MemoryEvent): string {
+function memorySummary(event: MemoryEvent): string {
   let s = `记忆 · ${event.trigger} · ${event.kind} · ${event.op}`
   if (event.topic !== undefined) s += ` · ${event.topic}`
   if (event.file !== undefined) s += ` · ${event.file}`
@@ -386,7 +508,7 @@ export function memorySummary(event: MemoryEvent): string {
 }
 
 /** Full memory payload on expand (present fields only). */
-export function memoryFullContent(event: MemoryEvent): string {
+function memoryFullContent(event: MemoryEvent): string {
   const lines = [`trigger: ${event.trigger}`, `kind: ${event.kind}`, `op: ${event.op}`]
   if (event.topic !== undefined) lines.push(`topic: ${event.topic}`)
   if (event.file !== undefined) lines.push(`file: ${event.file}`)
@@ -396,7 +518,7 @@ export function memoryFullContent(event: MemoryEvent): string {
 }
 
 /** One-line sandbox summary: 可用 / 不可用（原因）/ 已关闭. */
-export function sandboxSummary(event: SandboxCheckedEvent): string {
+function sandboxSummary(event: SandboxCheckedEvent): string {
   if (!event.enabled) return "已关闭（配置未启用）"
   if (!event.available) return `不可用${event.unavailableReason !== undefined ? `（${event.unavailableReason}）` : ""}`
   return "可用"
@@ -408,19 +530,19 @@ export function hookSummary(event: HookEvent): string {
 }
 
 /** Full sandbox audit payload on expand. */
-export function sandboxFullContent(event: SandboxCheckedEvent): string {
+function sandboxFullContent(event: SandboxCheckedEvent): string {
   const lines = [`enabled: ${event.enabled}`, `available: ${event.available}`]
   if (event.unavailableReason !== undefined) lines.push(`unavailableReason: ${event.unavailableReason}`)
   return lines.join("\n")
 }
 
 /** The system prompt text the model actually saw, composed from stable + live segments. */
-export function systemFullText(event: SystemEvent): string {
+function systemFullText(event: SystemEvent): string {
   return [event.stable, event.live].filter((s) => s !== undefined && s !== "").join("\n\n")
 }
 
 /** One-line run-boundary summary: 运行开始 · trigger / 运行结束 · stopReason（+用量或失败原因）. */
-export function runSummary(event: RunStartedEvent | RunEndedEvent): string {
+function runSummary(event: RunStartedEvent | RunEndedEvent): string {
   if (event.type === "run.started") return `运行开始 · ${event.trigger}`
   let s = `运行结束 · ${stopReasonLabel(event.stopReason)}`
   if (event.error !== undefined) s += ` · ${event.error.code}: ${event.error.message}`
@@ -434,12 +556,12 @@ function stopReasonLabel(reason: RunEndedEvent["stopReason"]): string {
 }
 
 /** One-line truncation summary: 消息截断 · 从 <起点> 起退出对话视图. */
-export function truncationSummary(event: MessageTruncatedEvent): string {
+function truncationSummary(event: MessageTruncatedEvent): string {
   return `消息截断 · 从 ${event.fromMessageId} 起作废（编辑重试/重新生成）`
 }
 
 /** One-line permission-decision summary: 权限 · 裁决 · 谁批的 · 工具名. */
-export function decisionSummary(event: PermissionDecidedEvent): string {
+function decisionSummary(event: PermissionDecidedEvent): string {
   const verdict =
     event.decision === "once" ? "批准（仅本次）"
     : event.decision === "project" ? "批准（本项目）"
@@ -450,7 +572,7 @@ export function decisionSummary(event: PermissionDecidedEvent): string {
 }
 
 /** Full permission-decision payload on expand. */
-export function decisionFullContent(event: PermissionDecidedEvent): string {
+function decisionFullContent(event: PermissionDecidedEvent): string {
   return [
     `decision: ${event.decision}`,
     `by: ${event.by}`,
@@ -511,7 +633,7 @@ export function sessionFullContent(event: SessionMetaEvent): string {
 }
 
 /** Whitespace-collapsed, first-N-chars summary. */
-export function summarize(text: string, max = 80): string {
+function summarize(text: string, max = 80): string {
   const t = text.replace(/\s+/g, " ").trim()
   return t.length > max ? `${t.slice(0, max)}…` : t
 }
@@ -526,7 +648,7 @@ export function isAppendedFrame(frame: unknown): boolean {
   return (frame as { type?: unknown }).type === "session.appended"
 }
 
-export function blockTypeLabel(block: Block): string {
+function blockTypeLabel(block: Block): string {
   switch (block.type) {
     case "text":
       return "text"
@@ -543,7 +665,7 @@ export function blockTypeLabel(block: Block): string {
   }
 }
 
-export function blockSummary(block: Block): string {
+function blockSummary(block: Block): string {
   switch (block.type) {
     case "text":
     case "thinking":
@@ -559,7 +681,7 @@ export function blockSummary(block: Block): string {
   }
 }
 
-export function blockFullContent(block: Block): string {
+function blockFullContent(block: Block): string {
   switch (block.type) {
     case "text":
     case "thinking":
@@ -578,7 +700,7 @@ export function blockFullContent(block: Block): string {
 
 /** team/* 事件的单行摘要（审计页团队行）。 */
 /** goal/* 事件的单行摘要（目标循环审计行：变更/移除/每轮判定）。 */
-export function goalSummary(event: GoalEvent): string {
+function goalSummary(event: GoalEvent): string {
   switch (event.type) {
     case "goal.set": {
       const opLabel: Record<GoalSetEvent["op"], string> = { create: "设定", edit: "改写", pause: "暂停", resume: "恢复", state: "状态迁移" }
@@ -603,7 +725,7 @@ export function goalSummary(event: GoalEvent): string {
 }
 
 /** goal/* 事件的完整展开内容（审计行点击后的 pre）。 */
-export function goalFullContent(event: GoalEvent): string {
+function goalFullContent(event: GoalEvent): string {
   switch (event.type) {
     case "goal.set":
       return JSON.stringify(event.goal, null, 2)
@@ -614,20 +736,20 @@ export function goalFullContent(event: GoalEvent): string {
 }
 
 /** todo 快照写入的单行摘要（审计页 todo 行）。 */
-export function todoSummary(event: TodoWrittenEvent): string {
+function todoSummary(event: TodoWrittenEvent): string {
   const remaining = event.todos.filter((t) => t.status !== "completed").length
   const inProgress = event.todos.filter((t) => t.status === "in_progress").length
   return `清单更新：${event.todos.length} 项（未完成 ${remaining}${inProgress > 0 ? `，进行中 ${inProgress}` : ""}）`
 }
 
 /** todo 快照写入的完整展开（审计行点击后的 pre）。 */
-export function todoFullContent(event: TodoWrittenEvent): string {
+function todoFullContent(event: TodoWrittenEvent): string {
   const mark = (t: TodoItem): string => (t.status === "completed" ? "[x]" : t.status === "in_progress" ? "[~]" : "[ ]")
   return event.todos.map((t) => `${mark(t)} ${t.content}`).join("\n")
 }
 
 /** 停止/终态原因码的中文标签（快照与审计共用）。 */
-export function goalStopReasonLabel(reason: Exclude<GoalSnapshot["stoppedReason"], undefined>): string {
+function goalStopReasonLabel(reason: Exclude<GoalSnapshot["stoppedReason"], undefined>): string {
   const labels: Record<Exclude<GoalSnapshot["stoppedReason"], undefined>, string> = {
     met: "已达成",
     impossible: "不可能达成",
@@ -643,7 +765,7 @@ export function goalStopReasonLabel(reason: Exclude<GoalSnapshot["stoppedReason"
   return labels[reason]
 }
 
-export function teamSummary(event: TeamAuditEvent): string {
+function teamSummary(event: TeamAuditEvent): string {
   switch (event.type) {
     case "team.created":
       return `建团「${event.name}」`
@@ -663,7 +785,7 @@ export function teamSummary(event: TeamAuditEvent): string {
 }
 
 /** team/* 事件的完整展开内容（审计行点击后的 pre）。 */
-export function teamFullContent(event: TeamAuditEvent): string {
+function teamFullContent(event: TeamAuditEvent): string {
   switch (event.type) {
     case "team.created":
     case "team.member.provisioned":
@@ -678,7 +800,7 @@ export function teamFullContent(event: TeamAuditEvent): string {
 }
 
 /** skill 事件的单行摘要（技能进化审计行：op/kind/name/scope）。 */
-export function skillSummary(event: SkillEvent): string {
+function skillSummary(event: SkillEvent): string {
   const opLabel: Record<SkillEvent["op"], string> = { proposed: "提案", applied: "采纳", rejected: "驳回", reverted: "回退", deleted: "删除" }
   const kindLabel: Record<SkillEvent["kind"], string> = { new: "新增", revise: "修订" }
   const scopeLabel: Record<SkillEvent["scope"], string> = { global: "全局", project: "项目" }
