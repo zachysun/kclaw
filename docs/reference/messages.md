@@ -27,6 +27,7 @@ export interface Message {
   blocks: Block[]
   createdAt: string // ISO-8601
   llmText?: string    // 用户消息专用：首发送时经隐式包装（技能指名/@文件指示）后的最终文本；组装 provider 视图时按此值原样重放
+  uiAction?: UiActionRef  // 用户消息专用：来自 UI 卡的交互回传（按钮点击/表单提交）——cardCallId 标记来源卡，optionId/values 记录所选；仅作展示来源标记（web 反查渲染持久已选态），不参与权限或语义判定
 }
 
 export interface AssistantMessage extends Message {

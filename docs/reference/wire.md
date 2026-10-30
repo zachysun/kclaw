@@ -42,7 +42,7 @@ export type ServerFrame = AgentEvent | ServerAck | ErrorFrame
 | `auth` | `token` | 每条连接的第一帧（或用 `?token=` 查询参数代替） |
 | `subscribe` | `sessionId` | 订阅该会话的事件 |
 | `unsubscribe` | `sessionId` | 取消订阅 |
-| `send_message` | `sessionId`、`text`、`disposition?`、`attachments?`、`target?` | 发消息；`target` 是团队组员名（带它时改走组员收信箱投递，不经本会话 run） |
+| `send_message` | `sessionId`、`text`、`disposition?`、`attachments?`、`target?`、`uiAction?` | 发消息；`target` 是团队组员名（带它时改走组员收信箱投递，不经本会话 run）；`uiAction` 是 UI 卡交互回传的来源标记（`cardCallId` + `optionId?`/`values?`，随消息持久化，web 反查渲染已选态） |
 | `message.retry` | `sessionId`、`fromMessageId`、`text`、`attachments?` | 编辑重试/重新生成：从 fromMessageId（须为最后一条 user 消息）截断重跑 |
 | `queue.cancel` | `sessionId`、`messageId?` | 取消排队条目；messageId 默认 = 清空全部可取消条目 |
 | `confirmation.resolve` | `confirmationId`、`decision`、`client?` | 人工确认裁决（decision 四值，见下） |

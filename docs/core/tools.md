@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/tools/` 实现 39 个内置工具（17 个常驻 + 22 个按组装条件注册），并把它们组装成两份对齐的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
+`packages/core/src/tools/` 实现 40 个内置工具（18 个常驻 + 22 个按组装条件注册），并把它们组装成两份对齐的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
 
 ---
 
@@ -85,11 +85,11 @@ export function makeTool<N extends string>(
 
 ---
 
-## 39 个内置工具
+## 40 个内置工具
 
-完整清单（名称、一句话职责、risk / concurrency、条件注册与工具清单收缩规则）陈列在 [reference/tools](../reference/tools.md)：常驻 17 个（bash、fs 四件、grep/glob 检索两件、web 两件、memory 两件、session_search、history_search、skill 两件、todo 两件）+ 条件注册 22 个（subagent 2、skill_create 1、后台进程 3、cron 模型面 4、goal 模型面 3、团队 7、提问 1、tool_search 1）——披露分层见该篇的"工具披露分层"节：全量层 name+description+schema、目录层 name+description、检索层只列 name。下面按实现文件分组说明各家的机制。
+完整清单（名称、一句话职责、risk / concurrency、条件注册与工具清单收缩规则）陈列在 [reference/tools](../reference/tools.md)：常驻 18 个（bash、fs 四件、grep/glob 检索两件、web 两件、memory 两件、session_search、history_search、skill 两件、todo 两件、ui_render）+ 条件注册 22 个（subagent 2、skill_create 1、后台进程 3、cron 模型面 4、goal 模型面 3、团队 7、提问 1、tool_search 1）——披露分层见该篇的"工具披露分层"节：全量层 name+description+schema、目录层 name+description、检索层只列 name。下面按实现文件分组说明各家的机制。
 
-前 17 个**常驻注册**（注册与否不随会话状态变化；可见性例外有两个——readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型可见工具清单，见 [permissions](./permissions.md)；subagent run 会裁掉 `memory_save`，见 [subagents](./subagents.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 组装了 subagent 派发后端时注册（subagent 自己的 run 两者都不注册，单层委派、不能再派下一级 subagent）；`skill_create` 仅在 daemon 组装了技能进化系统时注册（`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案，机制见 [skills](./skills.md)）；`ask_user_questions` 每个 run 都注册；七个团队工具只在会话属于某个团队时注册，且**工具清单按身份收缩**：组长拿全套，组员没有 `create_team`/`spawn_teammate`（见下文与 [agent-team](./agent-team.md)）。
+前 18 个**常驻注册**（注册与否不随会话状态变化；可见性例外有两个——readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型可见工具清单，见 [permissions](./permissions.md)；subagent run 会裁掉 `memory_save`，见 [subagents](./subagents.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 组装了 subagent 派发后端时注册（subagent 自己的 run 两者都不注册，单层委派、不能再派下一级 subagent）；`skill_create` 仅在 daemon 组装了技能进化系统时注册（`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案，机制见 [skills](./skills.md)）；`ask_user_questions` 每个 run 都注册；七个团队工具只在会话属于某个团队时注册，且**工具清单按身份收缩**：组长拿全套，组员没有 `create_team`/`spawn_teammate`（见下文与 [agent-team](./agent-team.md)）。
 
 ### bash（`tools/bash.ts`）
 
@@ -101,7 +101,7 @@ export function makeTool<N extends string>(
 - **环境变量**：每次执行注入 `KCLAW_SESSION_ID`（会话 id）与 `KCLAW_WORKSPACE`（工作目录），其余环境继承 daemon 进程；沙箱包装器经 spawn 的 env 参数拿到同一份完整环境后透传。命令行工具可据此自识别所在会话。
 - **输出截断**：流式累计到 `maxOutputBytes`（默认 512 KiB，即 `512 * 1024`）即停止积累——头部保留，之后的 chunk 只计字节数不再转发；到达上限那一刻发一条截断提示 delta（`...[output truncated, further output dropped]...`），结束时在尾部附 `...[dropped N bytes]...` 字节数标记。`truncateMiddle` 只对头部超出上限 ≤1 chunk 的部分微裁剪（插 `\n...[truncated N bytes]...\n` 标记）。按 UTF-8 字节计数，多字节字符在切点被拆开会解码成 U+FFFD 替换字符，属可接受损失。
 - **输出溢出存盘（spill）**：run 组装传入 `spillDir`（`<home>/spill`）后，流式读取把全量输出另存一份（上限 `SPILL_MAX_BYTES = 10 MiB`，超出即停、存盘副本标注"仅保留前 10MB"）；发生截断时模型视图在 `dropped` 标记后追加一行 `[完整输出已存盘: <路径>，sha256=<摘要>；需要更多内容时用 fs_read 读取该文件]`（副本只保留了前 10 MiB 时，路径后面多一段 `（该文件仅保留了前 10MB）`；`sha256` 是实际写入字节的 SHA-256，部分保留的副本只对保留部分取摘要，之后对照摘要能发现副本被改动过）——spill 目录在权限引擎 readRoots 内，`fs_read` 无需确认即可读。存盘尽力而为：写失败静默退化为纯截断；未传 `spillDir`（如部分测试）则行为与无 spill 时完全一致。
-- **退出码**：0 → ok；非 0 → error，输出带 `exit code N` 首行；stdout 与 stderr 合并，到达即经 `ctx.onOutput` 流式回传。
+- **退出码**：0 → ok；非 0 → error，输出带 `exit code N` 首行；结果在 `data` 字段附 `{exitCode: N}`（超时与进程启动失败为 `null`），web 聊天页的工具卡据此显示 exit 徽标。stdout 与 stderr 合并，到达即经 `ctx.onOutput` 流式回传。
 - 空/非字符串 `command` 直接返回 error（`args.command must be a non-empty string`）。
 
 ### fs 工具（`tools/fs.ts`）
@@ -176,6 +176,10 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 
 七个工具都只做转发：校验参数类型 → 调 facade → 把返回值整形为工具结果，协作机制本身（目录、收信箱、任务板、投递）见 [agent-team](./agent-team.md)。**`create_team`** 建队并使本会话成为组长（一个会话只属一个队，重复建队是 error 结果）；**`spawn_teammate`** `{name, task, role?, model?}` 添加组员：名字 `[a-z][a-z0-9-]{0,31}`、保留名 `lead`，`task` 是必填的初始任务，建持久子会话并固化模型快照；**`send_message`** `{to?, text}` 写信（组员的默认目标是组长、可不填 `to`；组长必须显式指名收件人），超长/超限是明确的 error 结果；**`list_agents`** 列名单；**`task_create` / `task_update` / `task_list`** 操作任务板，`task_update` 必须回传 `expected_revision` 做比对再交换（CAS），认领未认领任务时自动填自己的名字。全部 `risk: "safe"`：动作只写团队目录，不碰工作区；改状态类（建队/添加/建任务/改任务）是 `serial`（同一批调用里不与别的工具重叠）。注册**条件性且按身份收缩**：不在团队里的会话（cron 会话、非组员的 subagent 会话）一个都没有；组员的清单不含 `create_team`/`spawn_teammate`（不能建队、不能添加，团队不递归）。
 
+### UI 卡工具（`tools/ui-render.ts`）
+
+**ui_render** `{card}`：为用户产出一张交互式 UI 卡（25 种组件：12 种展示组件、5 种容器、8 种表单字段，类型正本在 `packages/core/src/protocol/ui-cards.ts`）。执行器只做一件事——运行时校验后把整张卡原样放进结果的 `data` 字段：卡片随块持久化、由 web 聊天页渲染成可交互组件，**不进模型上下文**（进入上下文的只有一行文字回执，如"已渲染表格《xx》（3 行）"；回执由各组件的 receiptFor 生成）。护栏：文本 ≤500 字符、标题 ≤100、表格 ≤50 行 8 列、树 ≤200 节点、轮播 ≤10 页、表单 ≤20 字段、选项 ≤8 项、单卡 ≤32 KB；校验逐字段报错，错误信息带字段路径（如 `card.fields[0].min: 必须小于 max`），失败时提示改用 Markdown。容器里不能再嵌容器——类型层把 children 声明为只收展示组件，运行时校验再拦一道。`risk: "safe"`、`concurrency: "parallel"`（只产数据不碰任何资源）；`exposure: directory`（完整 schema 数千 token，不进每请求，经 tool_search 取）。按钮点击与表单提交在 web 侧格式化成用户消息走普通发送链路，发送帧的 `uiAction` 字段标记来源卡（见 [messages](../reference/messages.md)）；模型上下文里它就是一条普通用户消息。卡组件的类型契约与渲染端降级（未知 kind 退回折叠条——渲染器只增不破）见 [webui](../web/webui.md)。
+
 ---
 
 ## callId 配对生命周期
@@ -192,7 +196,7 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 ## output 与 data 的分流
 
 - **进模型上下文的只有 `output`**：`toProviderMessages` 把 `tool_result` 转成 `{role:"tool", toolCallId, content: output}`（error 结果加 `[error] ` 前缀）；`data` 字段在这个转换里不存在。
-- **`data` 只随块持久化、仅供渲染**：循环在结果完成时 `block.data = res.data`（`packages/core/src/agent/loop.ts`），JSONL 会话日志与事件流附带它，前端（如 web_search 的结果卡片）按结构渲染。这使模型上下文保持纯文本、大小可控，渲染需要的信息也不丢。
+- **`data` 只随块持久化、仅供渲染**：循环在结果完成时 `block.data = res.data`（`packages/core/src/agent/loop.ts`），JSONL 会话日志与事件流附带它，前端按结构渲染。现有三处读取：web_search 的原始结果三元组、bash 的结构化退出码 `{exitCode}`（工具卡的 exit 徽标）、ui_render 的整张 UI 卡（`data` 通道是 UI 卡零 token 占用的关键——卡片本体只在渲染端存活）。这使模型上下文保持纯文本、大小可控，渲染需要的信息也不丢。
 
 ---
 

@@ -23,7 +23,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - 整数参数只收整数，超出范围按上下限截取（不是报错），不传取条目标注的默认值。
 - 模型多传的未知字段一律忽略。
 
-## 常驻工具（17 个）
+## 常驻工具（18 个）
 
 每个 run 都注册（childRun 例外见下）：
 
@@ -46,6 +46,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `skill_list` | 列出模型可见的技能（可按关键词过滤） | safe | parallel |
 | `todo_list_write` | 整单替换会话级任务清单（全量快照，后写胜出） | safe | serial |
 | `todo_list_read` | 读回当前清单（跨 run、跨压缩存活） | safe | parallel |
+| `ui_render` | 为用户产出一张交互式 UI 卡（25 种组件，经结果 data 通道渲染、不进上下文） | safe | parallel |
 
 ### bash
 
@@ -61,6 +62,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - 输出上限由配置 `bash.maxOutputBytes` 决定（默认 512 KiB）：超限保留头部，结尾带 `...[dropped N bytes]...` 丢弃标记；配置了 spill 目录时完整输出同时写入 `<home>/spill`，返回里附一条 fs_read 定位行，模型可自己读回全量。
 - 超时由配置 `bash.timeoutMs` 决定（默认 300 秒）：到时整个进程组被 SIGKILL（shell 的子孙进程一起结束），返回错误并附带已产生的部分输出。SIGKILL 之后留 2 秒宽限等 close 事件：子进程的退出信息与管道里已缓冲的尾部输出仍被收集完才收尾（超时是出错返回，不是静默丢弃）。
 - 退出码非 0 返回错误，输出以 `exit code N` 开头。
+- 执行结果在 `data` 字段附结构化退出码 `{exitCode: N}`（超时与进程启动失败为 `null`），web 聊天页的工具卡据此显示 exit 徽标。
 - 每次执行注入两个环境变量：`KCLAW_SESSION_ID`（当前会话 id）与 `KCLAW_WORKSPACE`（工作目录），供命令行工具自识别；其余环境继承 daemon 进程。
 
 ### fs_read
@@ -238,6 +240,20 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 - 只列模型可见技能（与系统提示词清单同一口径，`disable-model-invocation` 的不出现），按名字排序。
 - 找到后用 skill_read 加载正文。
+
+### ui_render
+
+`safe` · `parallel`。为用户产出一张交互式 UI 卡（表格、条形图、按钮、表单、时间轴、树、折叠面板等 25 种组件），卡片经工具结果的 `data` 字段随块持久化、由 web 聊天页渲染成可交互组件——**不占模型上下文**（进入上下文的只有一行文字回执）。适合呈现结构化结果（对照表、进度、选项菜单）与收集参数的表单；纯文本能说清的内容不必用它。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `card` | object | 是 | 组件描述，`kind` 字段判别 25 种组件 |
+
+- 25 种组件分三层：**展示组件** 12 种（button、link、table、list、tag、badge、timeline、tree、quote、icon、chart、form）可单独成卡；**容器组件** 5 种（card/tabs/collapse/drawer/carousel）把展示组件组合出布局（标签页、折叠、抽屉、轮播），容器里不能再嵌容器（类型层封死，运行时校验再拦一道）；**表单字段** 8 种（input、textarea、radio、checkbox、segmented、slider、date、time）挂在 form 组件的 `fields` 里。
+- 运行时校验逐字段报错，错误信息带字段路径（如 `card.fields[0].min: 必须小于 max`）；护栏：文本 ≤500 字符、标题 ≤100、表格 ≤50 行 8 列、树 ≤200 节点、轮播 ≤10 页、表单 ≤20 字段、选项 ≤8 项、单卡 ≤32 KB。
+- 校验通过返回一行回执（如"已渲染表格《xx》（3 行）"）作为工具结果进入上下文；失败返回错误并提示改用 Markdown。
+- 交互回传：按钮点击与表单提交格式化成用户消息走普通发送链路（排队、中止、审计语义全部继承），发送帧带 `uiAction` 来源标记（见 [messages](./messages.md) 与 [wire](./wire.md)）；web 据此在卡上渲染持久已选态（刷新、重进会话都不复活）。
+- `exposure: directory`（见下节）：25 组件的完整 schema 有数千 token，不适合进每个请求——目录节一行描述教何时用，`tool_search` 返回完整 schema 教怎么写，校验错误回执教怎么改。
 
 ## 条件注册工具（22 个）
 
@@ -458,7 +474,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | 层 | 形态 | 放什么 |
 |----|------|--------|
 | **full** | 完整 schema 进每请求的 tools 数组 | bash、fs 四件、grep/glob、ask、skill 两件、todo 两件、tool_search 本体 |
-| **directory** | 系统提示词"工具目录"节：名字+一行描述；**可直呼**（运行时参数校验保底），参数拿不准用 tool_search 查 | web 两件、memory 两件、session/history 检索、subagent 两件、process 三件、cron 四件、goal 三件、skill_create |
+| **directory** | 系统提示词"工具目录"节：名字+一行描述；**可直呼**（运行时参数校验保底），参数拿不准用 tool_search 查 | web 两件、memory 两件、session/history 检索、subagent 两件、process 三件、cron 四件、goal 三件、skill_create、ui_render |
 | **deferred** | **只列名字**：内置低频工具的名字进系统提示词目录节的一行名单（稳定文本）；MCP 工具名字列在 `tool_search` 自己的描述里（设计好的唯一缓存断点）。描述与 schema 一律不给，经 `tool_search` 查询后调用 | 团队七件 + **全部 MCP 工具**（连接增删不再动 tools 数组与稳定提示段，前缀缓存全程稳定） |
 
 - **tool_search**（safe/parallel）：Okapi BM25（k1 1.2/b 0.75）索引=名字拆词+描述+顶层参数名（schema 正文不算）；精确名直配第一；稀有词门+长查询覆盖率门防误召回；CJK 二元切分（中文友好）。返回完整工具卡（名字+描述+全参 schema+来源）。
