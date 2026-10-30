@@ -11,7 +11,7 @@ import { Fragment, useCallback, useRef, useState, type ReactNode } from "react"
 import { SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
 import { PERMISSION_MODES, type PermissionMode } from "@kclaw/core/permission-modes"
 import type { AttachmentRef, ConfirmationDecision, GoalView, TeamPanel } from "@kclaw/core/protocol"
-import type { ChatState, RenderedMessage } from "./model.js"
+import { buildToolPairing, type ChatState, type RenderedMessage } from "./model.js"
 import type { UiCardAction } from "./UiCardForm.js"
 import { MessageBubble, firstRenderedText } from "./MessageBubble.js"
 import { ConfirmationCardView, QuestionCardView } from "./Cards.js"
@@ -180,6 +180,9 @@ export function ChatView({ sessionId, view, onSend, onUiAction, uiPicks, onResol
   // 跟随滚动：贴底跟随、上滚暂停、切会话回到底部；暂停时给"回到底部"。
   const { logRef, onLogScroll, pinned, jumpToBottom } = useFollowTail(view.messages, sessionId)
 
+  // 工具卡跨消息配对索引（call 在 assistant 消息、result 在 tool 消息）。
+  const toolPairing = buildToolPairing(view.messages)
+
   // 稳定回调的查找源：view.messages 每次渲染都是新数组，闭包持它会让所有
   // 气泡的 memo 失效；ref 同步最新列表，回调本身零依赖、跨渲染稳定。
   const messagesRef = useRef(view.messages)
@@ -325,6 +328,7 @@ export function ChatView({ sessionId, view, onSend, onUiAction, uiPicks, onResol
                   onOpenAudit={onOpenAudit}
                   onUiAction={onUiAction}
                   uiPicks={uiPicks}
+                  toolPairing={toolPairing}
                   canEdit={canRetry && idx === lastUserIdx}
                   canRegenerate={canRetry && idx === lastAssistantIdx && lastUserIdx !== -1}
                   canFork={canFork}

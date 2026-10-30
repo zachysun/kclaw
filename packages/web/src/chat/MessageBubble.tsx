@@ -9,9 +9,10 @@
  */
 import { memo } from "react"
 import { MarkdownText } from "./Markdown.js"
-import { parseTeamMail, type RenderedBlock, type RenderedMessage } from "./model.js"
+import { parseTeamMail, type RenderedBlock, type RenderedMessage, type ToolPairing } from "./model.js"
 import { isUiCard, UiCardView } from "./UiCard.js"
 import type { UiCardAction } from "./UiCardForm.js"
+import { TOOL_CARDS } from "./ToolCards.js"
 import { IconButton } from "../ui/IconButton.js"
 import { ForkIcon, PencilIcon, RefreshIcon } from "../ui/icons.js"
 
@@ -23,6 +24,8 @@ export interface MessageBubbleProps {
   onUiAction?: (callId: string, action: UiCardAction) => void
   /** callId → 已发生的卡动作（持久已选态反查）。 */
   uiPicks?: Map<string, UiCardAction>
+  /** 跨消息工具配对索引（call 在 assistant 消息、result 在 tool 消息）。 */
+  toolPairing?: ToolPairing
   /** While the session is idle, the last user bubble offers the edit entry. */
   canEdit?: boolean
   /** While the session is idle, the last assistant bubble offers regenerate. */
@@ -42,6 +45,7 @@ export const MessageBubble = memo(function MessageBubble({
   onOpenAudit,
   onUiAction,
   uiPicks,
+  toolPairing,
   canEdit,
   canRegenerate,
   canFork,
@@ -65,7 +69,15 @@ export const MessageBubble = memo(function MessageBubble({
         <TeamMailView mail={mail} />
       ) : (
         message.blocks.map((block) => (
-          <BlockView key={block.blockId} block={block} markdown={message.role === "assistant"} onOpenAudit={onOpenAudit} onUiAction={onUiAction} uiPicks={uiPicks} />
+          <BlockView
+            key={block.blockId}
+            block={block}
+            markdown={message.role === "assistant"}
+            onOpenAudit={onOpenAudit}
+            onUiAction={onUiAction}
+            uiPicks={uiPicks}
+            toolPairing={toolPairing}
+          />
         ))
       )}
       {message.aborted === true && (
@@ -138,7 +150,7 @@ function oneLine(text: string): string {
   return collapsed.length > 80 ? `${collapsed.slice(0, 80)}…` : collapsed
 }
 
-function BlockView({ block, markdown, onOpenAudit, onUiAction, uiPicks }: { block: RenderedBlock; markdown: boolean; onOpenAudit?: (sessionId: string) => void; onUiAction?: (callId: string, action: UiCardAction) => void; uiPicks?: Map<string, UiCardAction> }) {
+function BlockView({ block, markdown, onOpenAudit, onUiAction, uiPicks, toolPairing }: { block: RenderedBlock; markdown: boolean; onOpenAudit?: (sessionId: string) => void; onUiAction?: (callId: string, action: UiCardAction) => void; uiPicks?: Map<string, UiCardAction>; toolPairing?: ToolPairing }) {
   switch (block.kind) {
     case "text":
       return markdown ? (
@@ -157,7 +169,15 @@ function BlockView({ block, markdown, onOpenAudit, onUiAction, uiPicks }: { bloc
       )
     case "note":
       return <span className="blk-note" data-testid="blk-note">[note] {block.text}</span>
-    case "tool_call":
+    case "tool_call": {
+      // Registry card first (bash status, fs diff/write — renders from the
+      // call side with its cross-message paired result); a renderer that
+      // can't build from these args returns undefined → the plain row stays.
+      const card = TOOL_CARDS[block.name]?.call
+      if (card !== undefined) {
+        const built = card({ call: block, result: toolPairing?.resultOf.get(block.callId) ?? null, onOpenAudit })
+        if (built !== undefined) return built
+      }
       // Collapsed by default: the summary line is the tool name plus a
       // one-line args preview; the full argsJson opens on click (clamped —
       // a whole-file write must not swallow the chat pane).
@@ -169,25 +189,18 @@ function BlockView({ block, markdown, onOpenAudit, onUiAction, uiPicks }: { bloc
           <code className="blk-tool-call-args">{block.argsJson}</code>
         </details>
       )
+    }
     case "tool_result": {
-      // A subagent dispatch row: the live status (streamed into output) is the
-      // summary's latest line, and the settled result links to the child's
-      // audit view via the executor-attached childSessionId.
-      const childSessionId = (block.data as { childSessionId?: string } | undefined)?.childSessionId
-      if (childSessionId !== undefined) {
-        return (
-          <details className="blk-tool-result" data-testid="blk-tool-result-subagent">
-            <summary>
-              ↳ subagent · {latestLine(block.output)}
-            </summary>
-            <pre>{block.output}</pre>
-            {onOpenAudit !== undefined && (
-              <button className="subagent-audit-link" data-testid="subagent-audit-link" onClick={() => onOpenAudit(childSessionId)}>
-                查看subagent审计
-              </button>
-            )}
-          </details>
-        )
+      // Result blocks carry no tool name — resolve it from the paired call
+      // side (another message). A call-side registry card already shows this
+      // result → no double row; a result-side card (todo/cron/subagent —
+      // the call args add nothing) renders instead of the plain row.
+      const name = toolPairing?.nameOf.get(block.callId)
+      if (name !== undefined && TOOL_CARDS[name]?.call !== undefined) return null
+      const resultCard = name !== undefined ? TOOL_CARDS[name]?.result : undefined
+      if (resultCard !== undefined) {
+        const built = resultCard({ result: block, onOpenAudit })
+        if (built !== undefined && built !== null) return built
       }
       // A UI Card rides `data`: render the interactive component instead of
       // the plain collapse row. Anything unparsable keeps the fallback view.
@@ -219,9 +232,3 @@ function BlockView({ block, markdown, onOpenAudit, onUiAction, uiPicks }: { bloc
 
 /** Whitespace-collapsed, first-80-chars summary for a tool result card. */
 
-/** Last non-empty line of a streaming subagent status feed (the live one-liner). */
-function latestLine(output: string): string {
-  const lines = output.split("\n").map((l) => l.trim()).filter((l) => l !== "")
-  const last = lines[lines.length - 1] ?? ""
-  return last.length > 100 ? `${last.slice(0, 100)}…` : last
-}

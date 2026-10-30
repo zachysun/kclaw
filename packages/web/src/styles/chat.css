@@ -2136,3 +2136,128 @@
   padding: 0 8px;
   margin-top: 4px;
 }
+
+/* ---- 工具卡（按工具名注册的专用展示；未注册工具保持折叠条） ---- */
+
+.tool-card {
+  margin: 4px 0;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.tool-card summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  list-style: none;
+}
+
+.tool-card summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-card-plain {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+}
+
+.tool-card-status {
+  flex: none;
+}
+
+.tool-card-running {
+  animation: tool-card-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes tool-card-pulse {
+  50% { opacity: 0.45; }
+}
+
+.tool-card-ok {
+  color: var(--success);
+}
+
+.tool-card-error {
+  color: var(--danger);
+}
+
+.tool-card-cmd {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.tool-card-meta {
+  margin-left: auto;
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.tool-card-body {
+  margin: 0;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  white-space: pre-wrap;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  max-height: 240px;
+  overflow: auto;
+  word-break: break-word;
+}
+
+/* 红绿 diff（fs_edit：old 红 / new 绿） */
+.tool-card-diff {
+  border-top: 1px solid var(--border);
+  max-height: 240px;
+  overflow: auto;
+}
+
+.diff-lines {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+.diff-del {
+  color: var(--danger);
+  background: var(--danger-dim);
+  padding: 0 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.diff-add {
+  color: var(--success);
+  background: var(--success-dim);
+  padding: 0 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* todo 进度条 */
+.tool-card-progress {
+  flex: 1;
+  max-width: 160px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.tool-card-progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+}

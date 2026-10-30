@@ -761,3 +761,29 @@ export function parseTeamMail(raw: string): TeamMailParse | null {
   }))
   return { entries }
 }
+
+/**
+ * Cross-message tool pairing: a tool_call streams into the assistant message
+ * while its tool_result lands in the follow-up tool message (the executor
+ * skeleton exists before execution), and result blocks carry no tool name of
+ * their own. The chat view indexes the whole list once so registry cards can
+ * see both sides of a call — the same pairing the audit view does by callId.
+ */
+export interface ToolPairing {
+  /** callId → tool name (from the call side). */
+  nameOf: Map<string, string>
+  /** callId → the settled result block (from the tool message side). */
+  resultOf: Map<string, ToolResultRender>
+}
+
+export function buildToolPairing(messages: RenderedMessage[]): ToolPairing {
+  const nameOf = new Map<string, string>()
+  const resultOf = new Map<string, ToolResultRender>()
+  for (const m of messages) {
+    for (const b of m.blocks) {
+      if (b.kind === "tool_call") nameOf.set(b.callId, b.name)
+      else if (b.kind === "tool_result") resultOf.set(b.callId, b)
+    }
+  }
+  return { nameOf, resultOf }
+}

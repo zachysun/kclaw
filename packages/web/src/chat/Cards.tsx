@@ -39,9 +39,9 @@ export function ConfirmationCardView({
 
 /**
  * One pending ask_user_questions card: each question renders as option
- * buttons (single-pick submits immediately; multiSelect toggles + a submit
- * row) or a free-text input. Submitting sends the whole answer set — one
- * string array per question — as one question.resolve frame.
+ * buttons (picks accumulate into the local draft, single- or multi-select
+ * alike) or a free-text input; the submit row sends the whole answer set —
+ * one string array per question — as one question.resolve frame.
  */
 export function QuestionCardView({
   card,
