@@ -42,6 +42,7 @@ import { createCronToolEntries } from "./cron.js"
 import { createSubagentToolEntries } from "./subagent.js"
 import { createTeamToolEntries } from "./team.js"
 import { createAskToolEntries } from "./ask.js"
+import { createUiRenderToolEntries } from "./ui-render.js"
 
 export { createAskUserQuestionsTool, createAskToolEntries, ASK_USER_QUESTIONS_DESCRIPTION, type QuestionEventEmitter } from "./ask.js"
 export { createBashTool, createBashToolEntries, truncateMiddle } from "./bash.js"
@@ -189,6 +190,9 @@ export function createBuiltinTools(opts: {
     // run-assembly），skill_create 保持在 cron 之后 = 基线字节不变。full 档的
     // skill_read/skill_list 位置无感知（进的是排序后的数组）。
     ...createSkillToolEntries(opts.skills ?? [], opts.skillCreate, opts.recordSkillUse),
+    // ui_render 无条件注册（safe 展示面，主线程与子会话同享）；directory 档，
+    // 完整 schema 经 tool_search 取回（25 分支不进每请求基线）。
+    ...createUiRenderToolEntries(),
   ]
 
   // Subagent surface rules (issue #16): a child run drops memory_save (memory

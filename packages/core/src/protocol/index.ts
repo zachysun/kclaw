@@ -11,3 +11,6 @@ export * from "./skills.js"
 // 构建取 @kclaw/core/protocol 时一并可用。
 export * from "./goal.js"
 export * from "./usage.js"
+// UI Card DSL（ui_render 的 data 通道线上形状）：类型 only，web 渲染与 core
+// 校验共用此正本。
+export * from "./ui-cards.js"

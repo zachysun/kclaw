@@ -56,6 +56,10 @@ export const TOOL_EXPOSURE: Record<string, Exposure> = {
   create_goal: "directory",
   get_goal: "directory",
   update_goal: "directory",
+  // 25-branch card schema is far too heavy to ride every request (4-8k tokens);
+  // the directory line keeps the capability visible, tool_search fetches the
+  // full card on demand, and the runtime validator catches stale schemas.
+  ui_render: "directory",
   // deferred — searchable only (low-frequency orchestration)
   create_team: "deferred",
   spawn_teammate: "deferred",
