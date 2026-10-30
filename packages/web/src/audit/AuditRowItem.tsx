@@ -7,12 +7,7 @@
  */
 import { memo } from "react"
 import type { AuditRow } from "./model.js"
-import {
-  blockFullContent, blockSummary, blockTypeLabel, decisionFullContent, decisionSummary, fmtMs, fmtRowTime, fmtTokens, fmtUsage,
-  hookSummary, memoryFullContent, memorySummary, rowTime, runSummary, sandboxFullContent, sandboxSummary, skillSummary, truncationSummary,
-  sessionFullContent, sessionSummary, summarize, systemFullText, teamFullContent, teamSummary,
-  goalFullContent, goalSummary, todoFullContent, todoSummary,
-} from "./model.js"
+import { fmtMs, fmtRowTime, fmtUsage, rowTime, rowTypeDef } from "./model.js"
 
 export interface AuditRowItemProps {
   row: AuditRow
@@ -32,7 +27,7 @@ export const AuditRowItem = memo(function AuditRowItem({ row, expanded, onToggle
       onClick={toggle}
     >
       <span className="audit-type">{rowLabel(row)}</span>
-      <span className="audit-summary">{rowSummary(row)}</span>
+      <span className="audit-summary">{rowTypeDef(row).summary(row)}</span>
       {rowBadges(row)}
       <span className="audit-meta muted">{time}</span>
     </button>
@@ -40,7 +35,7 @@ export const AuditRowItem = memo(function AuditRowItem({ row, expanded, onToggle
 
   const full = expanded ? (
     <pre className="audit-full" data-testid={`audit-full-${row.key}`}>
-      {rowFull(row)}
+      {rowTypeDef(row).full(row)}
     </pre>
   ) : null
 
@@ -52,72 +47,11 @@ export const AuditRowItem = memo(function AuditRowItem({ row, expanded, onToggle
   )
 })
 
+/** Type-chip label: the registry's per-row override (block names its block
+ *  type) or its constant label. */
 function rowLabel(row: AuditRow): string {
-  switch (row.kind) {
-    case "block":
-      return blockTypeLabel(row.block)
-    case "compaction":
-      return "compaction"
-    case "memory":
-      return "memory"
-    case "system":
-      return "system"
-    case "sandbox":
-      return "sandbox"
-    case "session":
-      return "session"
-    case "run":
-      return "run"
-    case "decision":
-      return "permission"
-    case "truncation":
-      return "truncation"
-    case "team":
-      return "team"
-    case "skill":
-      return "skill"
-    case "goal":
-      return "goal"
-    case "todo":
-      return "todo"
-    case "hook":
-      return "hook"
-  }
-}
-
-function rowSummary(row: AuditRow): string {
-  switch (row.kind) {
-    case "block":
-      return blockSummary(row.block)
-    case "compaction":
-      return compactionSummary(row.record)
-    case "memory":
-      return memorySummary(row.event)
-    case "system": {
-      const full = systemFullText(row.event)
-      return `${summarize(full, 60)} · ${full.length} 字`
-    }
-    case "sandbox":
-      return sandboxSummary(row.event)
-    case "session":
-      return sessionSummary(row.event)
-    case "run":
-      return runSummary(row.event)
-    case "decision":
-      return decisionSummary(row.event)
-    case "truncation":
-      return truncationSummary(row.event)
-    case "team":
-      return teamSummary(row.event)
-    case "skill":
-      return skillSummary(row.event)
-    case "goal":
-      return goalSummary(row.event)
-    case "todo":
-      return todoSummary(row.event)
-    case "hook":
-      return hookSummary(row.event)
-  }
+  const def = rowTypeDef(row)
+  return def.rowLabel !== undefined ? def.rowLabel(row) : def.label
 }
 
 function rowBadges(row: AuditRow) {
@@ -146,57 +80,4 @@ function rowBadges(row: AuditRow) {
       )}
     </>
   )
-}
-
-function rowFull(row: AuditRow): string {
-  switch (row.kind) {
-    case "block":
-      return blockFullContent(row.block)
-    case "compaction":
-      return `${tokensLine(row.record)}段摘要：\n${row.record.segmentSummary}\n\n总摘要：\n${row.record.top}`
-    case "memory":
-      return memoryFullContent(row.event)
-    case "system":
-      return `【稳定段】\n${row.event.stable}\n\n【实时段】\n${row.event.live ?? ""}`
-    case "sandbox":
-      return sandboxFullContent(row.event)
-    case "hook":
-      return JSON.stringify(row.event, null, 2)
-    case "session":
-      return sessionFullContent(row.event)
-    case "run":
-      return JSON.stringify(row.event, null, 2)
-    case "decision":
-      return decisionFullContent(row.event)
-    case "truncation":
-      return JSON.stringify(row.event, null, 2)
-    case "team":
-      return teamFullContent(row.event)
-    case "skill":
-      return JSON.stringify(row.event, null, 2)
-    case "goal":
-      return goalFullContent(row.event)
-    case "todo":
-      return todoFullContent(row.event)
-  }
-}
-
-function compactionSummary(record: Extract<AuditRow, { kind: "compaction" }>["record"]): string {
-  const trigger =
-    record.trigger === "manual"
-      ? `手动${record.focus ? `（${record.focus}）` : ""}`
-      : record.trigger === "in-run"
-        ? "自动（运行中）"
-        : "自动（收尾）"
-  const tokens = record.tokensBefore !== undefined && record.tokensAfter !== undefined
-    ? ` · ${fmtTokens(record.tokensBefore)} → ${fmtTokens(record.tokensAfter)} token`
-    : ""
-  return `${trigger}${record.emergency === true ? "·超限急救" : ""}${tokens} · ${record.from ?? "会话开头"} – ${record.upto} · ${record.messages} 条`
-}
-
-/** 展开区的 token 口径说明行（旧记录无数字时为空）。 */
-function tokensLine(record: Extract<AuditRow, { kind: "compaction" }>["record"]): string {
-  if (record.tokensBefore === undefined || record.tokensAfter === undefined) return ""
-  return `压缩前 ${record.tokensBefore.toLocaleString()} token → 压缩后 ${record.tokensAfter.toLocaleString()} token\n` +
-    "（压缩前锚定最后一次真实请求；压缩后含保留尾与固定开销的估算、总摘要的真实 token）\n\n"
 }

@@ -34,28 +34,11 @@ import type { SessionEvent } from "../types.js"
 import { AuditRowItem } from "./AuditRowItem.js"
 import {
   ALL_KINDS, appendEvents, appendRows, DEFAULT_FILTER, filterRows, isAppendedFrame,
-  jumpTarget, type AuditFilter, type AuditRow, type AuditRowKind, type TimePreset,
+  jumpTarget, ROW_TYPES, type AuditFilter, type AuditRow, type AuditRowKind, type TimePreset,
 } from "./model.js"
 
 /** Max consecutive failed reconnects before giving up with a notice. */
 const MAX_RECONNECT_ATTEMPTS = 3
-
-const KIND_LABELS: Record<AuditRowKind, string> = {
-  block: "block",
-  compaction: "compaction",
-  memory: "memory",
-  system: "system",
-  sandbox: "sandbox",
-  session: "session",
-  run: "run",
-  decision: "permission",
-  truncation: "truncation",
-  goal: "goal",
-  todo: "todo",
-  team: "team",
-  skill: "skill",
-  hook: "hook",
-}
 
 const TIME_PRESETS: Array<{ value: TimePreset; label: string }> = [
   { value: "all", label: "全部时间" },
@@ -453,7 +436,7 @@ export function AuditView({ api, createWs, sessionId, sessionTitle }: AuditViewP
                 checked={filter.kinds[kind]}
                 onChange={(e) => setKind(kind, e.target.checked)}
               />
-              {KIND_LABELS[kind]}
+              {ROW_TYPES[kind].label}
             </label>
           ))}
         </div>
