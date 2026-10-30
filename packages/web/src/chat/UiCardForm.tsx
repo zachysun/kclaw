@@ -59,6 +59,15 @@ export function UiCardForm({
 
   const setValue = (name: string, v: string | string[]) => setDraft((d) => ({ ...d, [name]: v }))
 
+  // A field counts as answered when it holds a real value (checkbox picks are
+  // an array). The submit button disables on this — the visible feedback for
+  // an untouched form. A slider always holds a value, so a slider-only form
+  // is always submittable (the displayed value IS the answer).
+  const hasAnswer = card.fields.some((f) => {
+    const d = draft[f.name]
+    return f.kind === "checkbox" ? Array.isArray(d) && d.length > 0 : typeof d === "string" && d !== ""
+  })
+
   const submit = () => {
     if (onAction === undefined || submitted) return
     // Reported values are user-visible labels (the submit text IS a user
@@ -100,7 +109,7 @@ export function UiCardForm({
         <button
           className="ui-btn ui-btn-primary"
           data-testid="ui-form-submit"
-          disabled={Object.keys(draft).length === 0}
+          disabled={!hasAnswer}
           onClick={submit}
         >
           {card.submitLabel ?? "提交"}

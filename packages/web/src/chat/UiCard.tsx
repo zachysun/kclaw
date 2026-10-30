@@ -78,9 +78,7 @@ export function UiCardView({ card, onAction, picked }: UiCardViewProps) {
         </div>
       )
     case "list": {
-      const items = card.items.map((t, i) =>
-        card.ordered === true ? <li key={i} className="ui-list-item">{t}</li> : <li key={i} className="ui-list-item">{t}</li>,
-      )
+      const items = card.items.map((t, i) => <li key={i} className="ui-list-item">{t}</li>)
       return (
         <div className="ui-block" data-testid="ui-list">
           {card.title !== undefined && <div className="ui-card-title">{card.title}</div>}

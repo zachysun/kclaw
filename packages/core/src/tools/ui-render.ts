@@ -380,7 +380,9 @@ export function createUiRenderTool(): ToolExecutor & { name: "ui_render" } {
         const raw = (args as Record<string, unknown> | null)?.["card"]
         if (raw === undefined) throw new ToolError("args.card: 必填，组件描述对象")
         card = validateCard(raw, "card")
-        const bytes = JSON.stringify(card).length
+        // Real UTF-8 bytes: string .length counts UTF-16 code units, which
+        // undercounts CJK content ~3x and would let an oversized card through.
+        const bytes = Buffer.byteLength(JSON.stringify(card), "utf8")
         if (bytes > MAX_CARD_BYTES) throw new ToolError(`card: 序列化后 ${bytes} 字节，超过 ${MAX_CARD_BYTES} 字节上限`)
       } catch (e) {
         return {

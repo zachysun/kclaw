@@ -12,7 +12,7 @@ import { MarkdownText } from "./Markdown.js"
 import { parseTeamMail, type RenderedBlock, type RenderedMessage, type ToolPairing } from "./model.js"
 import { isUiCard, UiCardView } from "./UiCard.js"
 import type { UiCardAction } from "./UiCardForm.js"
-import { TOOL_CARDS } from "./ToolCards.js"
+import { TOOL_CARDS, oneLine } from "./ToolCards.js"
 import { IconButton } from "../ui/IconButton.js"
 import { ForkIcon, PencilIcon, RefreshIcon } from "../ui/icons.js"
 
@@ -142,12 +142,6 @@ function TeamMailView({ mail }: { mail: ReturnType<typeof parseTeamMail> }) {
       ))}
     </details>
   )
-}
-
-/** Single-line preview: collapse whitespace, cap at 80 chars (full args open on click). */
-function oneLine(text: string): string {
-  const collapsed = text.replace(/\s+/g, " ").trim()
-  return collapsed.length > 80 ? `${collapsed.slice(0, 80)}…` : collapsed
 }
 
 function BlockView({ block, markdown, onOpenAudit, onUiAction, uiPicks, toolPairing }: { block: RenderedBlock; markdown: boolean; onOpenAudit?: (sessionId: string) => void; onUiAction?: (callId: string, action: UiCardAction) => void; uiPicks?: Map<string, UiCardAction>; toolPairing?: ToolPairing }) {

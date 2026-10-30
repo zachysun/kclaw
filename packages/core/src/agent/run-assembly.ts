@@ -121,7 +121,7 @@ export interface EnqueueInput {
   /** 单次显式处置（层级最高）；默认 = 会话覆盖 ?? 配置默认；cron 触发强制 wait。 */
   disposition?: "steer" | "wait" | "interrupt"
   /**
-   * UI 卡交互来源标记（按钮点击/表单提交）：随消息落盘，web 据此渲染卡的
+   * UI 卡交互来源标记（按钮点击/表单提交）：随消息持久化，web 据此渲染卡的
    * 已选态、气泡与审计页徽标。纯展示来源——见 protocol/ui-cards.ts。
    */
   uiAction?: UiActionRef
