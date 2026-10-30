@@ -268,7 +268,7 @@ export function createBashTool(opts: {
               detached: process.platform !== "win32",
             })
 
-        const finish = (result: { status: "ok" | "error"; output: string }) => {
+        const finish = (result: { status: "ok" | "error"; output: string; data: { exitCode: number | null } }) => {
           if (settled) return
           settled = true
           if (timer) clearTimeout(timer)
