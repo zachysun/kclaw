@@ -609,10 +609,14 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   /**
    * UI 卡动作回传：按钮点击/表单提交格式化成用户消息走普通提交链路（排队、
    * Stop、审计语义全继承）；帧上带 uiAction 来源标记，渲染侧据此反查已选态。
+   * 点击即写 localPicks——spec 的"本地立即置灰"半句：乐观回显尚未变成带
+   * uiAction 的持久消息之前，按钮就已禁用，连点不会重复提交。
    * 回调 render-stable（MessageBubble 是 memo 的）。
    */
+  const [localPicks, setLocalPicks] = useState<Map<string, UiCardAction>>(() => new Map())
   const handleUiAction = useCallback((callId: string, action: UiCardAction) => {
     if (action.text === undefined || action.text === "") return
+    setLocalPicks((prev) => new Map(prev).set(callId, action))
     sendMessageRaw(action.text, undefined, [], null, {
       cardCallId: callId,
       ...(action.optionId !== undefined ? { optionId: action.optionId } : {}),
@@ -620,9 +624,10 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     })
   }, [sendMessageRaw])
 
-  /** callId → 已发生的卡动作（反查持久已选态：按钮禁用、表单快照）。 */
+  /** callId → 已发生的卡动作（反查持久已选态：按钮禁用、表单快照）。
+   * 持久消息优先，本地点击补位（窗口期：发送后 message.created 到达前）。 */
   const uiPicks = useMemo(() => {
-    const picks = new Map<string, UiCardAction>()
+    const picks = new Map(localPicks)
     for (const m of view.messages) {
       if (m.role !== "user" || m.uiAction === undefined) continue
       const a = m.uiAction
@@ -632,7 +637,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       })
     }
     return picks
-  }, [view.messages])
+  }, [localPicks, view.messages])
 
   /**
    * 提交一条消息，返回是否被接受：composer 依据它决定清不清草稿（false =

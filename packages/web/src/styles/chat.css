@@ -2261,3 +2261,16 @@
   background: var(--accent);
   border-radius: 999px;
 }
+
+/* UI 卡渲染失败时的原始 JSON 折叠条（spec：降级不空白）。 */
+.blk-ui-card-raw {
+  max-height: 320px;
+  overflow: auto;
+  margin: 4px 0 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

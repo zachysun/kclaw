@@ -19,6 +19,7 @@ import type {
   UIDisplayCard,
   UIField,
   UIFormCard,
+  UIButtonTone,
   UICard,
   UIOption,
   UITableCard,
@@ -93,6 +94,17 @@ function optTone(o: Record<string, unknown>, path: string): UITone | undefined {
     throw new ToolError(`${path}.tone: 必须是 ${TONES.join("/")} 之一`)
   }
   return v as UITone
+}
+
+const BUTTON_TONES: UIButtonTone[] = ["default", "primary", "danger"]
+
+function optButtonTone(o: Record<string, unknown>, path: string): UIButtonTone | undefined {
+  const v = o.tone
+  if (v === undefined) return undefined
+  if (typeof v !== "string" || !BUTTON_TONES.includes(v as UIButtonTone)) {
+    throw new ToolError(`${path}.tone: 必须是 ${BUTTON_TONES.join("/")} 之一`)
+  }
+  return v as UIButtonTone
 }
 
 function optInt(o: Record<string, unknown>, key: string, path: string, min: number, max: number): number | undefined {
@@ -269,7 +281,7 @@ function validateCard(raw: unknown, path: string, opts: { insideContainer?: bool
 
   switch (kind) {
     case "button": {
-      const tone = optTone(o, path)
+      const tone = optButtonTone(o, path)
       return withTitle({ kind, label: reqStr(o, "label", path, MAX_TITLE), ...(tone !== undefined ? { tone } : {}) })
     }
     case "link": {
@@ -344,7 +356,10 @@ function validateCard(raw: unknown, path: string, opts: { insideContainer?: bool
     }
     case "icon": {
       const value = reqStr(o, "value", path, 16)
-      if (!/\p{Extended_Pictographic}/u.test(value)) throw new ToolError(`${path}.value: 只允许 emoji`)
+      // Whole-string whitelist: every code point must be emoji-ish (pictographic
+      // itself, variation selector FE0F, ZWJ for multi-glyph sequences, and the
+      // keycap combiner). A substring test would let "a😀b" through.
+      if (!/^[\p{Extended_Pictographic}\u{FE0F}\u{200D}\u{20E3}]+$/u.test(value)) throw new ToolError(`${path}.value: 只允许 emoji`)
       return withTitle({ kind, value })
     }
     case "chart":
@@ -465,7 +480,7 @@ const displayChildren = (description: string) => ({
 })
 
 const BRANCHES = [
-  branch("button", "按钮：点击后以用户消息形式回传 label", { label: strF(MAX_TITLE, "按钮文本（即回传内容）"), tone: enumOf(TONES) }, ["label"]),
+  branch("button", "按钮：点击后以用户消息形式回传 label", { label: strF(MAX_TITLE, "按钮文本（即回传内容）"), tone: enumOf(BUTTON_TONES) }, ["label"]),
   branch("link", "链接：新标签页打开外链", { text: strF(MAX_TITLE, "显示文本"), url: strF(2000, "http/https 地址") }, ["text", "url"]),
   branch("table", "表格：多方案对比、结构化罗列", { title: strF(MAX_TITLE), columns: { type: "array", items: tableCol, minItems: 1, maxItems: MAX_TABLE_COLS }, rows: { type: "array", minItems: 1, maxItems: MAX_TABLE_ROWS, items: { type: "object", additionalProperties: { type: "string", maxLength: MAX_TEXT } } } }, ["columns", "rows"]),
   branch("list", "列表：要点罗列", { title: strF(MAX_TITLE), ordered: boolF("有序列表"), items: { type: "array", items: strF(MAX_TEXT), minItems: 1, maxItems: MAX_ITEMS } }, ["items"]),

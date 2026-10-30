@@ -147,10 +147,11 @@ describe("result-side cards", () => {
   it("subagent card keeps the settled audit jump (old anchor testid)", () => {
     const onOpenAudit = vi.fn()
     const { container, unmount } = mount([
-      assistantMsg([callBlock("subagent_run", "{}")]),
+      assistantMsg([callBlock("subagent_run", JSON.stringify({ task: "扫 TODO" }))]),
       toolMsg([resultBlock({ output: "▸ 干活\n结论已出", data: { childSessionId: "ses_c" } })]),
-    ], 1, { onOpenAudit })
+    ], 0, { onOpenAudit })
     const card = container.querySelector('[data-testid="blk-tool-result-subagent"]')!
+    expect(card.querySelector("summary")!.textContent).toContain("扫 TODO") // name from call args
     const link = card.querySelector('[data-testid="subagent-audit-link"]') as HTMLButtonElement
     act(() => link.click())
     expect(onOpenAudit).toHaveBeenCalledWith("ses_c")

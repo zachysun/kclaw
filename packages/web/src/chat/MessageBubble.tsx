@@ -10,7 +10,7 @@
 import { memo } from "react"
 import { MarkdownText } from "./Markdown.js"
 import { parseTeamMail, type RenderedBlock, type RenderedMessage, type ToolPairing } from "./model.js"
-import { isUiCard, UiCardView } from "./UiCard.js"
+import { isUiCard, UiCardBoundary, UiCardView } from "./UiCard.js"
 import type { UiCardAction } from "./UiCardForm.js"
 import { TOOL_CARDS, oneLine } from "./ToolCards.js"
 import { IconButton } from "../ui/IconButton.js"
@@ -197,15 +197,25 @@ function BlockView({ block, markdown, onOpenAudit, onUiAction, uiPicks, toolPair
         if (built !== undefined && built !== null) return built
       }
       // A UI Card rides `data`: render the interactive component instead of
-      // the plain collapse row. Anything unparsable keeps the fallback view.
+      // the plain collapse row. Anything unparsable keeps the fallback view;
+      // a renderer that throws degrades to the raw JSON row (never a blank).
       if (block.status === "ok" && isUiCard(block.data)) {
         return (
           <div className="blk-ui-card" data-testid="blk-ui-card">
-            <UiCardView
-              card={block.data}
-              onAction={onUiAction !== undefined ? (action) => onUiAction(block.callId, action) : undefined}
-              picked={uiPicks?.get(block.callId) ?? null}
-            />
+            <UiCardBoundary
+              fallback={
+                <details className="blk-tool-result" data-testid="blk-ui-card-raw">
+                  <summary>↳ UI 卡渲染失败 · 原始 JSON</summary>
+                  <pre className="blk-ui-card-raw">{JSON.stringify(block.data, null, 2)}</pre>
+                </details>
+              }
+            >
+              <UiCardView
+                card={block.data}
+                onAction={onUiAction !== undefined ? (action) => onUiAction(block.callId, action) : undefined}
+                picked={uiPicks?.get(block.callId) ?? null}
+              />
+            </UiCardBoundary>
           </div>
         )
       }

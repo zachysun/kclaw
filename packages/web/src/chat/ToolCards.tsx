@@ -53,7 +53,8 @@ function BashCard({ call, result }: ToolCardCtx) {
 }
 
 /** fs_edit card: the old→new diff as aligned red/green lines (both sides
- * from the call args; the payload carries no file content). */
+ * from the call args; the payload carries no file content). Lines pair up
+ * by index; whichever side has more lines appends its surplus as a block. */
 function FsEditCard({ call, result }: ToolCardCtx) {
   let old = ""
   let new_ = ""
@@ -61,6 +62,9 @@ function FsEditCard({ call, result }: ToolCardCtx) {
     const args = JSON.parse(call.argsJson) as { old?: unknown; new?: unknown; path?: unknown }
     if (typeof args.old === "string") old = args.old
     if (typeof args.new === "string") new_ = args.new
+    const oldLines = old.split("\n")
+    const newLines = new_.split("\n")
+    const paired = Math.min(oldLines.length, newLines.length)
     return (
       <details className="tool-card" data-testid="tool-card-fs-edit" open={undefined}>
         <summary>
@@ -72,8 +76,10 @@ function FsEditCard({ call, result }: ToolCardCtx) {
         </summary>
         <div className="tool-card-diff">
           <div className="diff-lines">
-            {old.split("\n").map((l, i) => <div key={`o${i}`} className="diff-del">- {l}</div>)}
-            {new_.split("\n").map((l, i) => <div key={`n${i}`} className="diff-add">+ {l}</div>)}
+            {oldLines.slice(0, paired).map((l, i) => <div key={`o${i}`} className="diff-del">- {l}</div>)}
+            {newLines.slice(0, paired).map((l, i) => <div key={`n${i}`} className="diff-add">+ {l}</div>)}
+            {oldLines.slice(paired).map((l, i) => <div key={`ox${i}`} className="diff-del">- {l}</div>)}
+            {newLines.slice(paired).map((l, i) => <div key={`nx${i}`} className="diff-add">+ {l}</div>)}
           </div>
         </div>
       </details>
@@ -144,10 +150,19 @@ function CronCard({ result }: { result: ToolResultRender }) {
   )
 }
 
-/** goal snapshot card: state + round progress. */
+/** goal snapshot card: state + round progress. `update_goal`'s kick receipt
+ * carries only `{ kicked }` (no state) — renders the settled mark for it. */
 function GoalCard({ result }: { result: ToolResultRender }) {
-  const goal = result.data as { text?: string; state?: string; rounds?: number; totalRounds?: number } | undefined
-  if (goal?.state === undefined) return null
+  const goal = result.data as { text?: string; state?: string; rounds?: number; totalRounds?: number; kicked?: boolean } | undefined
+  if (goal === undefined || (goal.state === undefined && goal.kicked === undefined)) return null
+  if (goal.state === undefined) {
+    return (
+      <div className="tool-card tool-card-plain" data-testid="tool-card-goal">
+        <span className={`tool-card-status ${goal.kicked ? "tool-card-ok" : "tool-card-running"}`}>{goal.kicked ? "🎯✓" : "🎯"}</span>
+        <span className="tool-card-meta">{goal.kicked ? "已请求立即判定" : "判定未触发（会在 run 边界自动进行）"}</span>
+      </div>
+    )
+  }
   const done = goal.state === "complete"
   return (
     <div className="tool-card tool-card-plain" data-testid="tool-card-goal">
@@ -160,18 +175,38 @@ function GoalCard({ result }: { result: ToolResultRender }) {
   )
 }
 
-/** subagent status card: the live last-line feed plus the audit jump. */
-function SubagentCard({ result, onOpenAudit }: { result: ToolResultRender; onOpenAudit?: (sessionId: string) => void }) {
+/** subagent status card: call side — name from the call args (label, else
+ * the task preview), the cross-message paired result carries the live feed
+ * and the audit jump. A settled result without the child session id (very
+ * old history) renders the card without the jump — the result is consumed
+ * by this card either way, so falling back would hide the output. */
+function SubagentCard({ call, result, onOpenAudit }: ToolCardCtx) {
+  let label = ""
+  try {
+    const args = JSON.parse(call.argsJson) as { label?: unknown; task?: unknown }
+    if (typeof args.label === "string" && args.label !== "") label = args.label
+    else if (typeof args.task === "string") label = oneLine(args.task)
+  } catch {
+    // unparseable args: the card still renders, just without the name
+  }
+  const name = `subagent${label !== "" ? ` · ${label}` : ""}`
+  if (result === null) {
+    return (
+      <div className="tool-card" data-testid="tool-card-subagent-running">
+        <span className="tool-card-status tool-card-running">⏳</span>
+        <span className="tool-card-meta">{name}</span>
+      </div>
+    )
+  }
   const childSessionId = (result.data as { childSessionId?: string } | undefined)?.childSessionId
-  if (childSessionId === undefined) return null
   return (
     <details className="tool-card" data-testid="blk-tool-result-subagent">
       <summary>
         <span className="tool-card-status tool-card-ok">↳</span>
-        <span className="tool-card-meta">subagent · {latestLine(result.output)}</span>
+        <span className="tool-card-meta">{name} · {latestLine(result.output)}</span>
       </summary>
       <pre className="tool-card-body">{result.output}</pre>
-      {onOpenAudit !== undefined && (
+      {childSessionId !== undefined && onOpenAudit !== undefined && (
         <button className="subagent-audit-link" data-testid="subagent-audit-link" onClick={() => onOpenAudit(childSessionId)}>
           查看subagent审计
         </button>
@@ -195,7 +230,7 @@ export const TOOL_CARDS: Record<string, { call?: CallCard; result?: ResultCard }
   cron_update: { result: CronCard },
   create_goal: { result: GoalCard },
   update_goal: { result: GoalCard },
-  subagent_run: { result: SubagentCard },
+  subagent_run: { call: SubagentCard },
 }
 
 /** Whitespace-collapsed, first-80-chars summary for a tool card line. */

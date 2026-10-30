@@ -14,6 +14,9 @@
 
 export type UITone = "default" | "primary" | "ok" | "warn" | "error"
 
+/** Button actions get the semantic triplet only (no ok/warn — a button is not a status chip). */
+export type UIButtonTone = "default" | "primary" | "danger"
+
 /** A form field is named (answers report label→value by name) and only legal inside form.fields. */
 interface UIFieldBase {
   name: string
@@ -81,7 +84,7 @@ export type UIField =
 export interface UIButtonCard {
   kind: "button"
   label: string
-  tone?: UITone
+  tone?: UIButtonTone
 }
 
 export interface UILinkCard {

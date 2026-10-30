@@ -9,9 +9,24 @@
  * `picked` (this card was already acted on in an earlier session) renders the
  * settled state — picked button disabled, submitted form a snapshot.
  */
-import { useState, type ReactNode } from "react"
+import { Component, useState, type ReactNode } from "react"
 import type { UIDisplayCard, UICard } from "@kclaw/core/protocol"
 import { UiCardForm, type UiCardAction } from "./UiCardForm.js"
+
+/**
+ * Renders `fallback` when a card renderer throws (spec: a render error
+ * degrades to the raw JSON row, never a blank). The DSL is model output —
+ * one bad branch must not take down the chat tree.
+ */
+export class UiCardBoundary extends Component<{ children: ReactNode; fallback: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children
+  }
+}
 
 const CARD_KINDS: ReadonlySet<string> = new Set([
   "button", "link", "table", "list", "card", "tag", "badge", "tabs", "collapse",

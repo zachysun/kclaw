@@ -100,8 +100,8 @@ export function UiCardForm({
   return (
     <div className="ui-form" data-testid="ui-form">
       {card.title !== undefined && <div className="ui-card-title">{card.title}</div>}
-      {card.fields.map((f) => (
-        <FieldView key={f.name} field={f} value={values[f.name]} disabled={submitted} onChange={(v) => setValue(f.name, v)} />
+      {card.fields.map((f, i) => (
+        <FieldView key={f.name} id={`ui-f-${i}-${f.name}`} field={f} value={values[f.name]} disabled={submitted} onChange={(v) => setValue(f.name, v)} />
       ))}
       {submitted ? (
         <div className="ui-form-done" data-testid="ui-form-done">已提交</div>
@@ -120,23 +120,27 @@ export function UiCardForm({
 }
 
 function FieldView({
+  id,
   field,
   value,
   disabled,
   onChange,
 }: {
+  /** Dom id for the label association (callers pass one unique per field). */
+  id: string
   field: UIField
   value: string | string[] | undefined
   disabled: boolean
   onChange: (v: string | string[]) => void
 }) {
-  const label = <label className="ui-field-label">{field.label}</label>
+  const label = <label className="ui-field-label" htmlFor={id}>{field.label}</label>
   switch (field.kind) {
     case "input":
       return (
         <div className="ui-field" data-testid={`ui-field-${field.name}`}>
           {label}
           <input
+            id={id}
             className="ui-input"
             type={field.inputType ?? "text"}
             placeholder={field.placeholder}
@@ -151,6 +155,7 @@ function FieldView({
         <div className="ui-field" data-testid={`ui-field-${field.name}`}>
           {label}
           <textarea
+            id={id}
             className="ui-input ui-textarea"
             rows={field.rows ?? 3}
             value={typeof value === "string" ? value : ""}
@@ -211,6 +216,7 @@ function FieldView({
           {label}
           <div className="ui-slider-row">
             <input
+              id={id}
               type="range"
               min={field.min}
               max={field.max}
@@ -231,6 +237,7 @@ function FieldView({
         <div className="ui-field" data-testid={`ui-field-${field.name}`}>
           {label}
           <input
+            id={id}
             className="ui-input"
             type="date"
             value={typeof value === "string" ? value : ""}
@@ -244,6 +251,7 @@ function FieldView({
         <div className="ui-field" data-testid={`ui-field-${field.name}`}>
           {label}
           <input
+            id={id}
             className="ui-input"
             type="time"
             value={typeof value === "string" ? value : ""}
