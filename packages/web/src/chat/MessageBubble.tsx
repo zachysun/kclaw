@@ -10,6 +10,7 @@
 import { memo } from "react"
 import { MarkdownText } from "./Markdown.js"
 import { parseTeamMail, type RenderedBlock, type RenderedMessage } from "./model.js"
+import { isUiCard, UiCardView } from "./UiCard.js"
 import { IconButton } from "../ui/IconButton.js"
 import { ForkIcon, PencilIcon, RefreshIcon } from "../ui/icons.js"
 
@@ -176,6 +177,15 @@ function BlockView({ block, markdown, onOpenAudit }: { block: RenderedBlock; mar
               </button>
             )}
           </details>
+        )
+      }
+      // A UI Card rides `data`: render the interactive component instead of
+      // the plain collapse row. Anything unparsable keeps the fallback view.
+      if (block.status === "ok" && isUiCard(block.data)) {
+        return (
+          <div className="blk-ui-card" data-testid="blk-ui-card">
+            <UiCardView card={block.data} />
+          </div>
         )
       }
       return (
