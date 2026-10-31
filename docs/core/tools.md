@@ -178,7 +178,7 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 
 ### UI 卡工具（`tools/ui-render.ts`）
 
-**ui_render** `{card}`：为用户产出一张交互式 UI 卡（25 种组件：12 种展示组件、5 种容器、8 种表单字段，类型正本在 `packages/core/src/protocol/ui-cards.ts`）。执行器只做一件事——运行时校验后把整张卡原样放进结果的 `data` 字段：卡片随块持久化、由 web 聊天页渲染成可交互组件，**不进模型上下文**（进入上下文的只有一行文字回执，如"已渲染表格《xx》（3 行）"；回执由各组件的 receiptFor 生成）。护栏：文本 ≤500 字符、标题 ≤100、表格 ≤50 行 8 列、树 ≤200 节点、轮播 ≤10 页、表单 ≤20 字段、选项 ≤8 项、单卡 ≤32 KB；校验逐字段报错，错误信息带字段路径（如 `card.fields[0].min: 必须小于 max`），失败时提示改用 Markdown。容器里不能再嵌容器——类型层把 children 声明为只收展示组件，运行时校验再拦一道。`risk: "safe"`、`concurrency: "parallel"`（只产数据不碰任何资源）；`exposure: directory`（完整 schema 数千 token，不进每请求，经 tool_search 取）。按钮点击与表单提交在 web 侧格式化成用户消息走普通发送链路，发送帧的 `uiAction` 字段标记来源卡（见 [messages](../reference/messages.md)）；模型上下文里它就是一条普通用户消息。卡组件的类型契约与渲染端降级（未知 kind 退回折叠条——渲染器只增不破）见 [webui](../web/webui.md)。
+**ui_render** `{card}`：为用户产出一张交互式 UI 卡（25 种组件：12 种展示组件、5 种容器、8 种表单字段，类型正本在 `packages/core/src/protocol/ui-cards.ts`）。执行器只做一件事——运行时校验后把整张卡原样放进结果的 `data` 字段：卡片随块持久化、由 web 聊天页渲染成可交互组件，**不进模型上下文**（进入上下文的只有一行文字回执，如"已渲染表格《xx》（3 行）"；回执由各组件的 receiptFor 生成）。护栏：文本 ≤500 字符、标题 ≤100、表格 ≤50 行 8 列、树 ≤200 节点、轮播 ≤10 页、表单 ≤20 字段、选项 ≤8 项、单卡 ≤32 KB（按 UTF-8 字节计）；校验逐字段报错，错误信息带字段路径（如 `card.fields[0].min: 必须小于 max`），失败时提示改用 Markdown。容器里不能再嵌容器——类型层把 children 声明为只收展示组件，运行时校验再拦一道。`risk: "safe"`、`concurrency: "parallel"`（只产数据不碰任何资源）；`exposure: directory`（完整 schema 数千 token，不进每请求，经 tool_search 取）。按钮点击与表单提交在 web 侧格式化成用户消息走普通发送链路，发送帧的 `uiAction` 字段标记来源卡（见 [messages](../reference/messages.md)）；模型上下文里它就是一条普通用户消息。卡组件的类型契约与渲染端降级（未知 kind 与渲染抛错都退回折叠条——渲染器只增不破）见 [webui](../web/webui.md)。
 
 ---
 
