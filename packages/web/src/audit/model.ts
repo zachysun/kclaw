@@ -11,8 +11,9 @@ import type {
   Block, CompactionEvent, HookEvent, MemoryEvent, MessageEvent, MessageTruncatedEvent, PermissionDecidedEvent, Role, RunEndedEvent, RunStartedEvent,
   SandboxCheckedEvent, SessionCreatedEvent, SessionDeletedEvent, SessionEvent, SessionForkedEvent, SessionRenamedEvent,
   SessionRestoredEvent, SessionSetEvent, SkillEvent, SystemEvent, TeamAuditEvent, ToolGrantReason, Usage,
-  GoalEvent, GoalSetEvent, GoalCheckedEvent, GoalSnapshot, TodoItem, TodoWrittenEvent,
+  GoalEvent, GoalSetEvent, GoalCheckedEvent, GoalSnapshot, TodoItem, TodoWrittenEvent, UiActionRef,
 } from "../types.js"
+import { isUiCard } from "../chat/UiCard.js"
 
 export type SessionMetaEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionForkedEvent | SessionSetEvent
 
@@ -28,6 +29,8 @@ export type AuditRow =
   | {
     kind: "block"; key: string; index: number; role: Role; block: Block; createdAt: string
     grantedBy?: ToolGrantReason; usage?: Usage; latencyMs?: number; messageTail: boolean
+    /** 用户消息专用：该消息来自某张 UI 卡的交互——徽标显示在消息尾行。 */
+    uiAction?: UiActionRef
   }
   | { kind: "compaction"; key: string; index: number; record: CompactionEvent; at: string }
   | { kind: "memory"; key: string; index: number; event: MemoryEvent; at: string }
@@ -138,6 +141,9 @@ function flattenEventInto(
         if (isAssistant) {
           row.usage = usage
           row.latencyMs = latencyMs
+        }
+        if (msg.role === "user" && msg.uiAction !== undefined && i === last) {
+          row.uiAction = msg.uiAction
         }
         if (block.type === "tool_call" || block.type === "tool_result") {
           const reason = grantByCallId.get(block.callId)
@@ -690,7 +696,9 @@ function blockFullContent(block: Block): string {
     case "tool_call":
       return block.argsJson
     case "tool_result":
-      return block.output
+      // ui_render's card body lives in `data` (never in output): the audit
+      // row's expanded view appends the raw DSL JSON.
+      return isUiCard(block.data) ? `${block.output}\n${JSON.stringify(block.data, null, 2)}` : block.output
     case "attachment":
       return JSON.stringify(block.source, null, 2)
   }

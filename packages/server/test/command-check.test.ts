@@ -171,6 +171,35 @@ describe("checkCommandFrame — send_message", () => {
     })
   })
 
+  it("passes a well-shaped uiAction through and rejects malformed ones", () => {
+    const uiAction = { cardCallId: "call_1", optionId: "先做 core" }
+    expect(checkCommandFrame(sendFrame({ uiAction }), deps())).toEqual({
+      kind: "command",
+      command: { type: "send_message", sessionId: SESSION, text: "hi", uiAction },
+    })
+    const formAction = { cardCallId: "call_2", values: { 版本: "0.7.0" } }
+    expect(checkCommandFrame(sendFrame({ uiAction: formAction }), deps())).toEqual({
+      kind: "command",
+      command: { type: "send_message", sessionId: SESSION, text: "hi", uiAction: formAction },
+    })
+    expect(checkCommandFrame(sendFrame({ uiAction: {} }), deps())).toEqual({
+      kind: "error",
+      message: "send_message uiAction requires a non-empty string cardCallId",
+    })
+    expect(checkCommandFrame(sendFrame({ uiAction: { cardCallId: "call_1", optionId: 3 } }), deps())).toEqual({
+      kind: "error",
+      message: "send_message uiAction.optionId must be a non-empty string",
+    })
+    expect(checkCommandFrame(sendFrame({ uiAction: { cardCallId: "call_1", values: ["a"] } }), deps())).toEqual({
+      kind: "error",
+      message: "send_message uiAction.values must be an object of string → string",
+    })
+    expect(checkCommandFrame(sendFrame({ uiAction: { cardCallId: "call_1", values: { k: 1 } } }), deps())).toEqual({
+      kind: "error",
+      message: "send_message uiAction.values must be an object of string → string",
+    })
+  })
+
   it("answers session not found before attachment checks", () => {
     expect(checkCommandFrame(sendFrame({ sessionId: "ses_x" }), deps())).toEqual({
       kind: "error",

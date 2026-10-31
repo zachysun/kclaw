@@ -221,6 +221,22 @@ describe("RunManager.enqueue", () => {
     ])
   })
 
+  it("stamps uiAction from the submit input onto the persisted user message", async () => {
+    // 回归：submit 曾把 input.uiAction 丢在队列入口（QueueEntry 没这字段），
+    // ws 校验层放行后到落盘全程无声丢失——真机验收抓的正是这一段。
+    const { env, manager } = makeEnv(scriptClient([textTurn("好的")]))
+    const session = env.sessions.create("选择会话")
+
+    await manager.enqueue(session.id, {
+      userText: "选择：方案A",
+      trigger: "user",
+      uiAction: { cardCallId: "call_1", optionId: "方案A", values: { 备注: "优先做" } },
+    })
+
+    const [user] = env.sessions.readMessages(session.id)
+    expect(user!.uiAction).toEqual({ cardCallId: "call_1", optionId: "方案A", values: { 备注: "优先做" } })
+  })
+
   it("emits user message lifecycle + note.emitted on the bus in wire order", async () => {
     const { env, manager } = makeEnv(scriptClient([textTurn("好的")]))
     vi.mocked(env.memory.searchEpisodes).mockResolvedValue([

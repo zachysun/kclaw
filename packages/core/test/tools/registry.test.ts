@@ -30,7 +30,7 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 const ALL_TOOLS = [
   "bash", "fs_read", "fs_list", "fs_write", "fs_edit", "grep", "glob",
   "web_search", "web_fetch", "memory_save", "memory_search",
-  "session_search", "history_search", "skill_read", "skill_list",
+  "session_search", "history_search", "skill_read", "skill_list", "ui_render",
 ]
 
 /** required arrays per tool (task brief); checked as sets. */
@@ -50,6 +50,7 @@ const REQUIRED: Record<string, string[]> = {
   history_search: ["query"],
   skill_read: ["name"],
   skill_list: [],
+  ui_render: ["card"],
 }
 
 describe("builtin tool registry", () => {
@@ -57,7 +58,7 @@ describe("builtin tool registry", () => {
     expect([...registry.tools.keys()].sort()).toEqual([...ALL_TOOLS].sort())
     expect(registry.toolDefs.map((d) => d.name).sort()).toEqual([...registry.tools.keys()].sort())
   })
-  it("a spawner adds subagent_run to the mainline surface (15 tools)", () => {
+  it("a spawner adds subagent_run to the mainline surface (16 tools)", () => {
     const withSpawner = createBuiltinTools({
       workspace: dir,
       memoryCtx: {

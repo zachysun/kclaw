@@ -99,8 +99,11 @@ describe("subagent chat rendering", () => {
         : { ...m, blocks: m.blocks.map((b) => (b.kind === "tool_result" ? { ...b, data: undefined } : b)) })
     unmount()
     const second = mountWith(state)
-    expect(second.container.querySelector('[data-testid="blk-tool-result-subagent"]')).toBeNull()
-    expect(second.container.querySelector('[data-testid="blk-tool-result"]')).not.toBeNull()
+    // 老历史无 data：卡仍渲染（output 有宿主，不被 result 消费逻辑吞掉），
+    // 但没有审计跳转链接。
+    const row = second.container.querySelector('[data-testid="blk-tool-result-subagent"]')
+    expect(row).not.toBeNull()
+    expect(row!.querySelector('[data-testid="subagent-audit-link"]')).toBeNull()
     second.unmount()
   })
 

@@ -9,6 +9,7 @@
  */
 import type { AgentEvent, RunTrigger } from "./events.js"
 import type { NoteKind } from "./blocks.js"
+import type { UiActionRef } from "./ui-cards.js"
 
 /** How a send_message rides the queue: steer injects, wait queues, interrupt preempts. */
 export type SendDisposition = "steer" | "wait" | "interrupt"
@@ -67,6 +68,7 @@ export interface QueueEntry {
   trigger: RunTrigger  // 还原触发源（cron 的 note/触发语义在出队执行时需要；agent = subagent 派生的子 run；team = 团队收信箱投递/派活，按常规处置走 steer 注入；goal = 目标循环自续轮，与 cron 同强制 wait，连跑计数在调用方）
   attachments?: AttachmentRef[]
   note?: QueueNote                        // 机器来源说明
+  uiAction?: UiActionRef                  // UI 卡交互来源（随条目过队列，出队时盖到持久消息上）
   enqueuedAt: string                      // ISO-8601
 }
 
@@ -115,6 +117,9 @@ export interface SendMessageFrame {
    * session itself (the lead). The message also lands in the lead's history
    * with a forwarding marker, per the team spec's user-to-member path. */
   target?: string
+  /** UI Card interaction provenance (a button pick or a form submit rides
+   * the normal submit path — this only marks where the text came from). */
+  uiAction?: UiActionRef
 }
 
 /**

@@ -268,7 +268,7 @@ export function createBashTool(opts: {
               detached: process.platform !== "win32",
             })
 
-        const finish = (result: { status: "ok" | "error"; output: string }) => {
+        const finish = (result: { status: "ok" | "error"; output: string; data: { exitCode: number | null } }) => {
           if (settled) return
           settled = true
           if (timer) clearTimeout(timer)
@@ -339,23 +339,23 @@ export function createBashTool(opts: {
           // everything still buffered in the pipes (waiter gives up, the
           // child's final words are still collected).
           const grace = setTimeout(() => {
-            finish({ status: "error", output: `command timed out after ${effectiveTimeout}ms\n${capped()}` })
+            finish({ status: "error", output: `command timed out after ${effectiveTimeout}ms\n${capped()}`, data: { exitCode: null } })
           }, TIMEOUT_GRACE_MS)
           child.once("close", () => {
             clearTimeout(grace)
-            finish({ status: "error", output: `command timed out after ${effectiveTimeout}ms\n${capped()}` })
+            finish({ status: "error", output: `command timed out after ${effectiveTimeout}ms\n${capped()}`, data: { exitCode: null } })
           })
         }, effectiveTimeout)
 
         child.on("error", (err) => {
-          finish({ status: "error", output: `bash failed: ${err.message}` })
+          finish({ status: "error", output: `bash failed: ${err.message}`, data: { exitCode: null } })
         })
 
         child.on("close", (code) => {
           if (timedOut) return // timeout path already resolved with partial output
           const merged = capped()
-          if (code === 0) finish({ status: "ok", output: merged })
-          else finish({ status: "error", output: `exit code ${code}\n${merged}` })
+          if (code === 0) finish({ status: "ok", output: merged, data: { exitCode: 0 } })
+          else finish({ status: "error", output: `exit code ${code}\n${merged}`, data: { exitCode: code } })
         })
       })
     },

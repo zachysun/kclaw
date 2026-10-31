@@ -11,7 +11,8 @@ import { Fragment, useCallback, useRef, useState, type ReactNode } from "react"
 import { SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
 import { PERMISSION_MODES, type PermissionMode } from "@kclaw/core/permission-modes"
 import type { AttachmentRef, ConfirmationDecision, GoalView, TeamPanel } from "@kclaw/core/protocol"
-import type { ChatState, RenderedMessage } from "./model.js"
+import { buildToolPairing, type ChatState, type RenderedMessage } from "./model.js"
+import type { UiCardAction } from "./UiCardForm.js"
 import { MessageBubble, firstRenderedText } from "./MessageBubble.js"
 import { ConfirmationCardView, QuestionCardView } from "./Cards.js"
 import { AuditContextNote, compactionBars, type CompactionRecordView } from "./CompactionBars.js"
@@ -94,6 +95,10 @@ export interface ChatViewProps {
   onCancelAllQueued?: () => void
   /** Open a subagent's audit view (the spawn row's link). */
   onOpenAudit?: (sessionId: string) => void
+  /** UI 卡动作回传（按钮/表单提交，callId 标记来源卡）。 */
+  onUiAction?: (callId: string, action: UiCardAction) => void
+  /** callId → 已发生的卡动作（持久已选态反查）。 */
+  uiPicks?: Map<string, UiCardAction>
   /** Cancel the in-flight automatic compaction (the indicator's cancel button, compaction.cancel). */
   onCancelCompaction?: () => void
   /** Stop the active run (the run indicator's stop button; the run.cancel frame). */
@@ -166,7 +171,7 @@ export interface ChatViewProps {
   usage?: ReactNode
 }
 
-export function ChatView({ sessionId, view, onSend, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDismissNotice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, onFork, forkPending, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal, usage }: ChatViewProps) {
+export function ChatView({ sessionId, view, onSend, onUiAction, uiPicks, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDismissNotice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, onFork, forkPending, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal, usage }: ChatViewProps) {
   // In-place editor state of edit & retry, keyed by the bubble being edited;
   // both confirm and Esc clear it.
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
@@ -174,6 +179,9 @@ export function ChatView({ sessionId, view, onSend, onResolveConfirmation, onAns
 
   // 跟随滚动：贴底跟随、上滚暂停、切会话回到底部；暂停时给"回到底部"。
   const { logRef, onLogScroll, pinned, jumpToBottom } = useFollowTail(view.messages, sessionId)
+
+  // 工具卡跨消息配对索引（call 在 assistant 消息、result 在 tool 消息）。
+  const toolPairing = buildToolPairing(view.messages)
 
   // 稳定回调的查找源：view.messages 每次渲染都是新数组，闭包持它会让所有
   // 气泡的 memo 失效；ref 同步最新列表，回调本身零依赖、跨渲染稳定。
@@ -318,6 +326,9 @@ export function ChatView({ sessionId, view, onSend, onResolveConfirmation, onAns
                 <MessageBubble
                   message={message}
                   onOpenAudit={onOpenAudit}
+                  onUiAction={onUiAction}
+                  uiPicks={uiPicks}
+                  toolPairing={toolPairing}
                   canEdit={canRetry && idx === lastUserIdx}
                   canRegenerate={canRetry && idx === lastAssistantIdx && lastUserIdx !== -1}
                   canFork={canFork}

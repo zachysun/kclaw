@@ -32,6 +32,7 @@ import type {
   Message,
   QuestionRequestedPayload,
   Role,
+  UiActionRef,
 } from "@kclaw/core/protocol"
 
 export type { Block, ConfirmationRequestedPayload, Message, QuestionRequestedPayload, Role }
@@ -90,6 +91,9 @@ export interface RenderedMessage {
   blocks: RenderedBlock[]
   /** The assistant message was stopped (stopReason aborted): the half reply renders normally with an "interrupted" tail marker. */
   aborted?: boolean
+  /** 用户消息专用：这条消息来自某张 UI 卡的交互（按钮/表单）——气泡徽标与
+   * 卡片已选态反查的数据源。 */
+  uiAction?: UiActionRef
 }
 
 export interface ConfirmationCard {
@@ -582,6 +586,7 @@ function renderMessage(msg: Message, pending: boolean): RenderedMessage {
     pending,
     blocks: msg.blocks.map(renderBlock),
     ...(aborted ? { aborted: true } : {}),
+    ...(msg.uiAction !== undefined ? { uiAction: msg.uiAction } : {}),
   }
 }
 
@@ -755,4 +760,30 @@ export function parseTeamMail(raw: string): TeamMailParse | null {
     text: body.slice(mark.end, i + 1 < marks.length ? marks[i + 1]!.start : body.length).trim(),
   }))
   return { entries }
+}
+
+/**
+ * Cross-message tool pairing: a tool_call streams into the assistant message
+ * while its tool_result lands in the follow-up tool message (the executor
+ * skeleton exists before execution), and result blocks carry no tool name of
+ * their own. The chat view indexes the whole list once so registry cards can
+ * see both sides of a call — the same pairing the audit view does by callId.
+ */
+export interface ToolPairing {
+  /** callId → tool name (from the call side). */
+  nameOf: Map<string, string>
+  /** callId → the settled result block (from the tool message side). */
+  resultOf: Map<string, ToolResultRender>
+}
+
+export function buildToolPairing(messages: RenderedMessage[]): ToolPairing {
+  const nameOf = new Map<string, string>()
+  const resultOf = new Map<string, ToolResultRender>()
+  for (const m of messages) {
+    for (const b of m.blocks) {
+      if (b.kind === "tool_call") nameOf.set(b.callId, b.name)
+      else if (b.kind === "tool_result") resultOf.set(b.callId, b)
+    }
+  }
+  return { nameOf, resultOf }
 }

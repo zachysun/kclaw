@@ -35,6 +35,7 @@ import type { AgentEvent, AnyAgentEvent, RunTrigger } from "../protocol/events.j
 import type { AttachmentBlock, NoteBlock, ToolCallBlock } from "../protocol/blocks.js"
 import { newBlockId } from "../protocol/blocks.js"
 import type { Message } from "../protocol/messages.js"
+import type { UiActionRef } from "../protocol/ui-cards.js"
 import { newMessage } from "../protocol/messages.js"
 import type { AttachmentRef, QueueNote } from "../protocol/wire.js"
 import type { LlmClient, ToolDefinition } from "../provider/types.js"
@@ -119,6 +120,11 @@ export interface EnqueueInput {
   note?: QueueNote
   /** 单次显式处置（层级最高）；默认 = 会话覆盖 ?? 配置默认；cron 触发强制 wait。 */
   disposition?: "steer" | "wait" | "interrupt"
+  /**
+   * UI 卡交互来源标记（按钮点击/表单提交）：随消息持久化，web 据此渲染卡的
+   * 已选态、气泡与审计页徽标。纯展示来源——见 protocol/ui-cards.ts。
+   */
+  uiAction?: UiActionRef
   /**
    * subagent派发携带（subagent_run 的 role/toolAllow，仅 agent 触发的子会话
    * 调用）：role 拼进子会话系统提示词；toolAllow 只裁剪可用工具与线上请求形状。
@@ -435,6 +441,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     ...mountAttachments(input.attachments ?? [], paths.attachmentsDir, sessionId),
   ])
   if (input.messageId !== undefined) userMessage.id = input.messageId // 气泡原地升级
+  if (input.uiAction !== undefined) userMessage.uiAction = input.uiAction // UI 卡交互来源
 
   // 技能目录每 run 重扫（渐进披露第一层）：全局 + 会话工作目录的项目级，
   // 项目同名整目录覆盖。列表段追加进系统提示词，与 system 审计事件同文；
