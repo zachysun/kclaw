@@ -173,7 +173,9 @@
   display: flex;
   flex-direction: column;
   flex: 1;
-  min-height: 0;
+  /* 保底而非 0：问题卡/确认卡出现时卡片可压缩，但不许把消息流压没——
+     提问期间用户仍要看得到自己在聊什么。 */
+  min-height: 96px;
   min-width: 0;
 }
 
@@ -944,6 +946,13 @@
   animation: rise-in var(--ease);
   padding: 10px 12px;
   font-size: 13px;
+  /* 卡是聊天 flex 列的子项：矮视口下可被压缩（min-height:0），压缩量由
+     .question-list 内滚吸收；50vh 只是大视口下的上限，防止卡占满整列。 */
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 1;
+  min-height: 0;
+  max-height: 50vh;
 }
 
 .question-card .confirm-badge {
@@ -953,6 +962,14 @@
 
 .question-card .confirm-note {
   color: var(--text-dim);
+}
+
+/* 问题列表独立滚动：卡头与提交行常驻。聊天列高度固定，整卡自然撑开会把
+   超出视口的后半截问题和提交按钮顶出去，且根容器裁死溢出、无路可滚。 */
+.question-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .question-item {

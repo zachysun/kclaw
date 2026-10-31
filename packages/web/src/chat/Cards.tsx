@@ -66,54 +66,58 @@ export function QuestionCardView({
         <span className="confirm-when">{card.questions.length} 个问题 · 有效至 {formatClock(card.expiresAt)}</span>
       </div>
       {card.noteText !== undefined && <div className="confirm-note">{card.noteText}</div>}
-      {card.questions.map((q, i) => (
-        <div key={i} className="question-item" data-testid={`question-item-${i}`}>
-          <div className="question-text-label">
-            {Array.isArray(q.options) && q.options.length > 0 && (
-              <span className={q.multiSelect === true ? "question-mode multi" : "question-mode single"}>
-                {q.multiSelect === true ? "多选" : "单选"}
-              </span>
-            )}
-            {q.text}
-          </div>
-          {Array.isArray(q.options) && q.options.length > 0 ? (
-            <div className="question-options">
-              {q.options.map((opt) => {
-                const picked = multiPicks[i]?.includes(opt) ?? false
-                return (
-                  <button
-                    key={opt}
-                    data-testid={`question-${i}-option`}
-                    className={picked ? "question-picked" : undefined}
-                    onClick={() => {
-                      setMultiPicks((prev) => {
-                        const next = prev.map((p, j) => (j === i ? [...p] : p))
-                        const cur = next[i] ?? []
-                        if (q.multiSelect === true) {
-                          next[i] = picked ? cur.filter((x) => x !== opt) : [...cur, opt]
-                        } else {
-                          next[i] = [opt]
-                        }
-                        return next
-                      })
-                    }}
-                  >
-                    {opt}
-                  </button>
-                )
-              })}
+      {/* 问题多时列表内部滚动：卡头与提交行常驻可见。外层聊天列高度固定，
+          整卡自然撑开会把后半截问题和提交按钮推出视口外且无路可滚。 */}
+      <div className="question-list" data-testid="question-list">
+        {card.questions.map((q, i) => (
+          <div key={i} className="question-item" data-testid={`question-item-${i}`}>
+            <div className="question-text-label">
+              {Array.isArray(q.options) && q.options.length > 0 && (
+                <span className={q.multiSelect === true ? "question-mode multi" : "question-mode single"}>
+                  {q.multiSelect === true ? "多选" : "单选"}
+                </span>
+              )}
+              {q.text}
             </div>
-          ) : (
-            <input
-              className="question-text"
-              data-testid={`question-${i}-text`}
-              value={textValues[i] ?? ""}
-              placeholder="自由输入，留空跳过"
-              onChange={(e) => setTextValues((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))}
-            />
-          )}
-        </div>
-      ))}
+            {Array.isArray(q.options) && q.options.length > 0 ? (
+              <div className="question-options">
+                {q.options.map((opt) => {
+                  const picked = multiPicks[i]?.includes(opt) ?? false
+                  return (
+                    <button
+                      key={opt}
+                      data-testid={`question-${i}-option`}
+                      className={picked ? "question-picked" : undefined}
+                      onClick={() => {
+                        setMultiPicks((prev) => {
+                          const next = prev.map((p, j) => (j === i ? [...p] : p))
+                          const cur = next[i] ?? []
+                          if (q.multiSelect === true) {
+                            next[i] = picked ? cur.filter((x) => x !== opt) : [...cur, opt]
+                          } else {
+                            next[i] = [opt]
+                          }
+                          return next
+                        })
+                      }}
+                    >
+                      {opt}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : (
+              <input
+                className="question-text"
+                data-testid={`question-${i}-text`}
+                value={textValues[i] ?? ""}
+                placeholder="自由输入，留空跳过"
+                onChange={(e) => setTextValues((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))}
+              />
+            )}
+          </div>
+        ))}
+      </div>
       <div className="question-actions">
         <button className="primary" data-testid="question-submit" onClick={() => onAnswer(card.questionId, answers)}>
           提交回答
