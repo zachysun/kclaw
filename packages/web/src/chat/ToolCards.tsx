@@ -11,6 +11,10 @@
  */
 import type { ReactNode } from "react"
 import type { ToolCallRender, ToolResultRender } from "./model.js"
+import { DiffView } from "../changes/DiffView.js"
+import { CodeView } from "../changes/CodeView.js"
+import { langFromPath } from "../changes/lang.js"
+import { emitOpenChanges } from "../events.js"
 
 export interface ToolCardCtx {
   call: ToolCallRender
@@ -52,9 +56,10 @@ function BashCard({ call, result }: ToolCardCtx) {
   )
 }
 
-/** fs_edit card: the old→new diff as aligned red/green lines (both sides
- * from the call args; the payload carries no file content). Lines pair up
- * by index; whichever side has more lines appends its surplus as a block. */
+/** fs_edit card: the old→new diff (both sides from the call args; the
+ * payload carries no file content). Line alignment via jsdiff with a
+ * word-level overlay — surplus lines fall back to whole-line coloring
+ * instead of the old index-pairing misalignment. */
 function FsEditCard({ call, result }: ToolCardCtx) {
   let old = ""
   let new_ = ""
@@ -62,26 +67,20 @@ function FsEditCard({ call, result }: ToolCardCtx) {
     const args = JSON.parse(call.argsJson) as { old?: unknown; new?: unknown; path?: unknown }
     if (typeof args.old === "string") old = args.old
     if (typeof args.new === "string") new_ = args.new
-    const oldLines = old.split("\n")
-    const newLines = new_.split("\n")
-    const paired = Math.min(oldLines.length, newLines.length)
+    const path = typeof args.path === "string" ? args.path : ""
     return (
       <details className="tool-card" data-testid="tool-card-fs-edit" open={undefined}>
         <summary>
           <span className={`tool-card-status ${result !== null && result.status === "ok" ? "tool-card-ok" : result !== null ? "tool-card-error" : "tool-card-running"}`}>
             {result === null ? "⏳" : result.status === "ok" ? "✓" : "✗"}
           </span>
-          <code className="tool-card-cmd">✎ {typeof args.path === "string" ? args.path : ""}</code>
+          <code className="tool-card-cmd">✎ {path}</code>
           <span className="tool-card-meta">{result !== null ? `${Math.round(result.durationMs)}ms` : ""}</span>
         </summary>
-        <div className="tool-card-diff">
-          <div className="diff-lines">
-            {oldLines.slice(0, paired).map((l, i) => <div key={`o${i}`} className="diff-del">- {l}</div>)}
-            {newLines.slice(0, paired).map((l, i) => <div key={`n${i}`} className="diff-add">+ {l}</div>)}
-            {oldLines.slice(paired).map((l, i) => <div key={`ox${i}`} className="diff-del">- {l}</div>)}
-            {newLines.slice(paired).map((l, i) => <div key={`nx${i}`} className="diff-add">+ {l}</div>)}
-          </div>
-        </div>
+        <button type="button" className="tool-card-drawer-link" data-testid="tool-card-open-changes" onClick={() => emitOpenChanges(path)}>
+          在改动抽屉中查看 →
+        </button>
+        <DiffView oldText={old} newText={new_} lang={langFromPath(path)} compact />
       </details>
     )
   } catch {
@@ -95,6 +94,7 @@ function FsWriteCard({ call, result }: ToolCardCtx) {
   try {
     const args = JSON.parse(call.argsJson) as { content?: unknown; path?: unknown }
     if (typeof args.content !== "string") return undefined
+    const path = typeof args.path === "string" ? args.path : ""
     const bytes = new TextEncoder().encode(args.content).length
     return (
       <details className="tool-card" data-testid="tool-card-fs-write">
@@ -102,10 +102,13 @@ function FsWriteCard({ call, result }: ToolCardCtx) {
           <span className={`tool-card-status ${result !== null && result.status === "ok" ? "tool-card-ok" : result !== null ? "tool-card-error" : "tool-card-running"}`}>
             {result === null ? "⏳" : result.status === "ok" ? "✓" : "✗"}
           </span>
-          <code className="tool-card-cmd">+ {typeof args.path === "string" ? args.path : ""}</code>
+          <code className="tool-card-cmd">+ {path}</code>
           <span className="tool-card-meta">{formatBytes(bytes)}{result !== null ? ` · ${Math.round(result.durationMs)}ms` : ""}</span>
         </summary>
-        <pre className="tool-card-body">{args.content}</pre>
+        <button type="button" className="tool-card-drawer-link" data-testid="tool-card-open-changes" onClick={() => emitOpenChanges(path)}>
+          在改动抽屉中查看 →
+        </button>
+        <CodeView content={args.content} lang={langFromPath(path)} compact />
       </details>
     )
   } catch {

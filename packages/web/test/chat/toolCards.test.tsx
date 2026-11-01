@@ -131,6 +131,47 @@ describe("fs cards", () => {
     expect(container.querySelector('[data-testid="blk-tool-call"]')).not.toBeNull()
     unmount()
   })
+
+  it("fs_edit keeps every surplus line colored when old/new line counts differ (no index-pairing misalignment)", () => {
+    const oldText = "a\nb\nc"
+    const newText = "a2\nb2\nc2\nd\ne"
+    const { container, unmount } = mount([
+      assistantMsg([callBlock("fs_edit", JSON.stringify({ path: "src/a.ts", old: oldText, new: newText }))]),
+      toolMsg([resultBlock({ output: "replaced 1 occurrence" })]),
+    ], 0)
+    const card = container.querySelector('[data-testid="tool-card-fs-edit"]')!
+    expect(card.querySelectorAll(".diff-del")).toHaveLength(3)
+    expect(card.querySelectorAll(".diff-add")).toHaveLength(5)
+    unmount()
+  })
+
+  it("fs cards expose the drawer jump emitting kclaw:open-changes with the file path", () => {
+    const dispatch = vi.spyOn(window, "dispatchEvent")
+    try {
+      for (const [tool, args] of [
+        ["fs_edit", { path: "src/a.ts", old: "x", new: "y" }],
+        ["fs_write", { path: "out.txt", content: "hello\nworld" }],
+      ] as const) {
+        const { container, unmount } = mount([
+          assistantMsg([callBlock(tool, JSON.stringify(args))]),
+          toolMsg([resultBlock({ output: "done" })]),
+        ], 0)
+        const link = container.querySelector('[data-testid="tool-card-open-changes"]') as HTMLButtonElement
+        expect(link).not.toBeNull()
+        act(() => {
+          link.click()
+        })
+        expect(dispatch).toHaveBeenCalledTimes(1)
+        const event = dispatch.mock.calls[0]![0] as CustomEvent
+        expect(event.type).toBe("kclaw:open-changes")
+        expect(event.detail).toMatchObject({ path: args.path })
+        dispatch.mockClear()
+        unmount()
+      }
+    } finally {
+      dispatch.mockRestore()
+    }
+  })
 })
 
 describe("result-side cards", () => {

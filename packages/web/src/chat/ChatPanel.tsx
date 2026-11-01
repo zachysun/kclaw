@@ -16,7 +16,8 @@ import { parseSlashInput, skillCommandMeta } from "@kclaw/core/commands"
 import { isPermissionMode, type PermissionMode } from "@kclaw/core/permission-modes"
 import type { ConfirmationDecision, UiActionRef } from "@kclaw/core/protocol"
 import { ApiError, type ApiClient } from "../api.js"
-import { PROVIDERS_CHANGED, SKILLS_CHANGED } from "../events.js"
+import { OPEN_CHANGES, PROVIDERS_CHANGED, SKILLS_CHANGED } from "../events.js"
+import { ChangesPanel, type ChangesFocus } from "../changes/ChangesPanel.js"
 import { WsAuthError, type WsClient } from "../ws.js"
 import {
   adoptQueuedId,
@@ -160,6 +161,20 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   // 会话用量状态条的刷新拍子：每收尾一个 run +1，驱动 SessionUsageStrip
   // 重拉 /usage（run-after 钩子先写 usage 表，run.completed 帧后到，无竞态）。
   const [usageTick, setUsageTick] = useState(0)
+  // 改动抽屉（ChangesPanel）：清单/胶囊计数在 run 收尾帧时 +1 重拉——写动作
+  // 都发生在 run 内，收尾即稳定态；流式期间的 message 帧不触发（那会是每步
+  // 一次 events.jsonl 全量扫描，中间态拉取没有意义）。focus 是工具卡的跳转
+  // 信号（在改动抽屉中查看 →），seq 让重复点击同一路径也能再次定位。
+  const [changesTick, setChangesTick] = useState(0)
+  const [changesFocus, setChangesFocus] = useState<ChangesFocus | null>(null)
+  useEffect(() => {
+    const handler = (e: Event): void => {
+      const path = (e as CustomEvent<{ path?: unknown }>).detail?.path
+      if (typeof path === "string") setChangesFocus({ path, seq: Date.now() })
+    }
+    window.addEventListener(OPEN_CHANGES, handler)
+    return () => window.removeEventListener(OPEN_CHANGES, handler)
+  }, [])
   // 通知条的三条清除路径共用：输入即清（onDraftChange）、× 关闭、点击跳转
   // 后即清；切换会话也走它（见 sessionRef effect）。
   const clearNotice = useCallback((): void => {
@@ -363,6 +378,8 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
               }
               // 运行收尾 → 会话用量状态条刷一次（失败 run 同样记 usage）。
               if (frame.type === "run.completed" || frame.type === "run.failed") setUsageTick((t) => t + 1)
+              // 运行收尾 → 改动抽屉清单与胶囊计数刷一次（见 changesTick 注释）。
+              if (frame.type === "run.completed" || frame.type === "run.failed") setChangesTick((t) => t + 1)
             } else if (isQueuedSendAck(frame) || isRetryAck(frame)) {
               // Both acks carry the server message identity; adopt it eagerly
               // so the optimistic echo is pinned by id before its created event
@@ -941,6 +958,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
             onEdit: handleGoalEdit,
           }}
           usage={<SessionUsageStrip api={api} sessionId={sessionId} refreshKey={usageTick} />}
+          changesSlot={<ChangesPanel api={api} sessionId={sessionId} refreshTick={changesTick} focus={changesFocus} />}
         />
       </div>
     </div>
