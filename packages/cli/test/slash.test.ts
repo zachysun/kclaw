@@ -570,6 +570,32 @@ describe("skill slash commands (dynamic registration)", () => {
     expect(registry.get("help")!.description).not.toBe("撞内置名")
   })
 
+  it("refresh reflects removals: 取消复用/切项目后消失的技能从 registry 与补全清单同步摘除", async () => {
+    let rows: unknown = [
+      { name: "test", description: "验收技能", visibility: "all", origin: "global" },
+      { name: "deploy", description: "部署", visibility: "user-only", origin: "project" },
+    ]
+    const fake = makeFakeCtx((_m: string, _path: string) => rows)
+    const registry = createRegistry(fake.ctx)
+    await refreshSkillCommands(registry, fake.ctx)
+    expect(registry.has("test")).toBe(true)
+    expect(registry.has("deploy")).toBe(true)
+
+    // test 消失（取消复用/提案回退/切项目）、fresh 新增：registry 与 metas 同步
+    rows = [{ name: "fresh", description: "新技能", visibility: "all", origin: "global" }]
+    const metas = await refreshSkillCommands(registry, fake.ctx)
+    expect(metas.map((m) => m.name)).toEqual(["fresh"])
+    expect(registry.has("test")).toBe(false)
+    expect(registry.has("fresh")).toBe(true)
+    // builtin 不是本函数注册的名字，永不误删
+    expect(registry.has("help")).toBe(true)
+    // 已被摘除的名字再次出现（重新复用）能重新注册
+    rows = [{ name: "test", description: "又回来了", visibility: "all", origin: "global" }]
+    const again = await refreshSkillCommands(registry, fake.ctx)
+    expect(again.map((m) => m.name)).toEqual(["test"])
+    expect(registry.has("test")).toBe(true)
+  })
+
   it("createSlashCompleter suggests dynamic commands after builtins", () => {
     const completer = createSlashCompleter(() => [
       { name: "test", usage: "/test [要求]", description: "验收技能", surfaces: ["cli"] },

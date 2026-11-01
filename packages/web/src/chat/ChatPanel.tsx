@@ -16,7 +16,7 @@ import { parseSlashInput, skillCommandMeta } from "@kclaw/core/commands"
 import { isPermissionMode, type PermissionMode } from "@kclaw/core/permission-modes"
 import type { ConfirmationDecision, UiActionRef } from "@kclaw/core/protocol"
 import { ApiError, type ApiClient } from "../api.js"
-import { PROVIDERS_CHANGED } from "../events.js"
+import { PROVIDERS_CHANGED, SKILLS_CHANGED } from "../events.js"
 import { WsAuthError, type WsClient } from "../ws.js"
 import {
   adoptQueuedId,
@@ -542,16 +542,22 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   )
 
   // 已装用户可见技能清单：斜杠菜单的动态命令数据源（会话切换重拉，失败静默）。
-  useSilentFetch(
-    () => {
-      const q = workdir ? `?workdir=${encodeURIComponent(workdir)}` : ""
-      return api.get<Array<{ name: string; description: string; origin: string; visibility: string; plugin?: string }>>(`/skills${q}`)
-    },
-    (rows) => {
-      if (Array.isArray(rows)) setSkillRows(rows)
-    },
-    [api, workdir],
-  )
+  // 面板跨 tab 保活不重挂，技能页的复用/提案采纳等写操作广播 SKILLS_CHANGED
+  // （照上面 PROVIDERS_CHANGED 的先例），收到即重拉，斜杠菜单即时跟进。
+  const refreshSkills = useCallback((): void => {
+    const q = workdir ? `?workdir=${encodeURIComponent(workdir)}` : ""
+    api
+      .get<Array<{ name: string; description: string; origin: string; visibility: string; plugin?: string }>>(`/skills${q}`)
+      .then((rows) => {
+        if (Array.isArray(rows)) setSkillRows(rows)
+      })
+      .catch(() => undefined)
+  }, [api, workdir])
+  useEffect(() => {
+    refreshSkills()
+    window.addEventListener(SKILLS_CHANGED, refreshSkills)
+    return () => window.removeEventListener(SKILLS_CHANGED, refreshSkills)
+  }, [refreshSkills])
 
   // 会话工作区文件清单：@ 文件抽屉的数据源（同上，失败静默）。
   useSilentFetch(

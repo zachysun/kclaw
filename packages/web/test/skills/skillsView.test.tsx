@@ -10,6 +10,7 @@ import { describe, it, expect, vi } from "vitest"
 import { createRoot, type Root } from "react-dom/client"
 import { act } from "react"
 import type { ApiClient } from "../../src/api.js"
+import { SKILLS_CHANGED } from "../../src/events.js"
 import { SkillsView } from "../../src/skills/SkillsView.js"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -420,5 +421,108 @@ describe("SkillsView proposals tab（提案面）", () => {
     })
     await flush()
     expect(notice.mock.calls.some(([t]) => String(t).includes("覆盖全局版本"))).toBe(true)
+  })
+})
+
+describe("SkillsView SKILLS_CHANGED 广播（ChatPanel 斜杠菜单的即时刷新源）", () => {
+  /** 挂事件收集器：数 SKILLS_CHANGED 广播次数，测试结束记得 dispose。 */
+  function collect(): { count: () => number; dispose: () => void } {
+    let n = 0
+    const listener = (e: Event): void => {
+      if (e.type === SKILLS_CHANGED) n += 1
+    }
+    window.addEventListener(SKILLS_CHANGED, listener)
+    return { count: () => n, dispose: () => window.removeEventListener(SKILLS_CHANGED, listener) }
+  }
+
+  /** openProposalsTab 定义在提案 describe 内，这里补一份同款。 */
+  async function openProposalsTab(container: HTMLElement): Promise<void> {
+    const tab = container.querySelector<HTMLElement>('[data-testid="subtab-proposals"]')!
+    await act(async () => {
+      tab.click()
+    })
+    await flush()
+  }
+
+  it("单个复用与取消复用成功后各广播一次", async () => {
+    const c = collect()
+    try {
+      const api = fakeApi()
+      const { container, root } = await mount(api)
+      await openReuseTab(container)
+      await act(async () => {
+        container.querySelector<HTMLElement>('[data-testid="reuse-pdf"]')!.click()
+      })
+      await flush()
+      expect(c.count()).toBe(1)
+      await act(async () => {
+        container.querySelector<HTMLElement>('[data-testid="unlink-docs"]')!.click()
+      })
+      await flush()
+      expect(c.count()).toBe(2)
+      root.unmount()
+    } finally {
+      c.dispose()
+    }
+  })
+
+  it("提案采纳与回退广播、驳回不广播（驳回不改已装清单）", async () => {
+    const c = collect()
+    try {
+      // fixture 追加一条 proposed 专供驳回：原 PROPOSALS 静态返回，apply/revert 后状态不变
+      const proposals = [
+        ...PROPOSALS,
+        {
+          id: "1730000000002-rej-kit", status: "proposed", kind: "new", name: "rej-kit", scope: "project", workdir: "/w/proj",
+          title: "驳回用", rationale: "", content: "---\ndescription: d\n---\n正文", source: "skill_create", sourceSessionId: "s1",
+          createdAt: "2026-09-21T09:00:00.000Z",
+        },
+      ]
+      const api = fakeApi({
+        get: vi.fn(async (path: string) => {
+          if (path === "/sessions") return [{ workdir: "/w/proj" }, {}]
+          if (path === "/skills") return ROWS
+          if (path === "/skills/discovery") return DISCOVERY
+          if (path === "/skills/links") return LINKS
+          if (path === "/skills/proposals") return { proposals }
+          throw new Error(`unexpected ${path}`)
+        }),
+      })
+      const { container, root } = await mount(api)
+      await openProposalsTab(container)
+      // 采纳 new-kit → 广播
+      await act(async () => {
+        container.querySelector<HTMLElement>('[data-testid="proposal-1730000000000-new-kit"]')!.click()
+      })
+      await flush()
+      await act(async () => {
+        container.querySelector<HTMLElement>('[data-testid="proposal-apply"]')!.click()
+      })
+      await flush()
+      expect(c.count()).toBe(1)
+      // 回退 old-kit（已采纳，卸技能）→ 广播
+      await act(async () => {
+        container.querySelector<HTMLElement>('[data-testid="proposal-1730000000001-old-kit"]')!.click()
+      })
+      await flush()
+      await act(async () => {
+        container.querySelector<HTMLElement>('[data-testid="proposal-revert"]')!.click()
+      })
+      await flush()
+      expect(c.count()).toBe(2)
+      // 驳回 rej-kit → 已装清单无变化，不广播
+      await act(async () => {
+        container.querySelector<HTMLElement>('[data-testid="proposal-1730000000002-rej-kit"]')!.click()
+      })
+      await flush()
+      await act(async () => {
+        container.querySelector<HTMLElement>('[data-testid="proposal-reject"]')!.click()
+      })
+      await flush()
+      expect(c.count()).toBe(2)
+      root.unmount()
+    } finally {
+      c.dispose()
+    }
   })
 })

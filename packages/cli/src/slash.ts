@@ -129,11 +129,34 @@ const PROPOSAL_STATUS: Record<ProposalWire["status"], string> = { proposed: "待
  * nothing already in the registry is overwritten, so builtins keep precedence
  * over skills and custom `commands/*.md` (which are registered first inside
  * createRegistry) keep precedence over skills.
+ *
+ * Skills can also DISAPPEAR between refreshes (取消复用/提案回退/切项目换
+ * 工作目录)：names this function itself registered in earlier calls are
+ * tracked per-registry and dropped when absent from the fresh list — builtins
+ * and custom `commands/*.md` are not owned here, so they are never touched.
+ *
  * Returns the metas actually registered — the Tab completer's extra list.
  * Failures (daemon down) throw; the caller decides whether that is fatal.
  */
+const skillOwnedNames = new WeakMap<Map<string, SlashCommand>, Set<string>>()
+
 export async function refreshSkillCommands(registry: Map<string, SlashCommand>, ctx: SlashCtx): Promise<SlashCommandMeta[]> {
   const rows = (await ctx.client.request("GET", "/skills")) as SkillCommandRow[]
+  const fresh = new Set<string>()
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (typeof row?.name === "string" && row.name !== "") fresh.add(row.name)
+  }
+  let owned = skillOwnedNames.get(registry)
+  if (owned === undefined) {
+    owned = new Set<string>()
+    skillOwnedNames.set(registry, owned)
+  }
+  for (const name of owned) {
+    if (!fresh.has(name)) {
+      registry.delete(name)
+      owned.delete(name)
+    }
+  }
   const registered: SlashCommandMeta[] = []
   for (const row of Array.isArray(rows) ? rows : []) {
     const name = typeof row?.name === "string" ? row.name : ""
@@ -149,6 +172,7 @@ export async function refreshSkillCommands(registry: Map<string, SlashCommand>, 
         c.send(args.trim() === "" ? `/${name}` : `/${name} ${args}`)
       },
     })
+    owned.add(name)
     registered.push({ name, usage: `/${name} [要求]`, description, surfaces: ["cli"] })
   }
   return registered

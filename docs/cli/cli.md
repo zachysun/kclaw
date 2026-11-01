@@ -152,7 +152,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 | `/mcp [服务器名]` | MCP 状态一览（机制见 [mcp](../core/mcp.md)）：无参按组打印（组头 `【全局】`/`【<路径>】`，组内每行 `名字 · 状态 · N 个工具[ · 最近错误]`，读 `GET /mcp` 快照），有失败项时附一行提示（连接与配置管理用 WebUI 的 MCP 页）；带名字打印该 server 的状态行与工具清单（每工具一行 `mcp__<server>__<tool> — 描述`；跨组同名逐条打印，项目组条目带 `<路径> · ` 前缀）；没有接入任何 server、名字未知、请求失败都打印对应提示行 |
 | `/goal [目标描述 [verify: 命令]…]` | 目标循环（机制见 [goal](../core/goal.md)）：带描述设定目标并立即起跑（`POST /sessions/:id/goal`，可选多条 `verify:` 验收命令，沙箱内执行）；无参查看状态（状态、轮数、token、验收命令、停止原因）；动作 `stop`（停止循环并中止活跃 run）、`pause`、`resume`、`clear`（移除目标）各打一行确认；失败打印 `目标操作失败: …` |
 
-- **技能即斜杠命令**：每个已装且用户可见的技能自动注册成 `/<技能名> [要求]` 命令（`refreshSkillCommands`，启动时与每次切会话后各重拉一次，尽力而为：daemon 不可达则没有技能命令，内置命令（含 `/skill`）照常可用）。命令发送**用户原文**（要求写在命令后面时原样拼接进消息），是否调用技能由 daemon 检测、正文仍经 `skill_read` 加载——`disable-model-invocation` 的技能由此获得手动入口。内置名优先：与内置命令重名的技能命令被丢弃；自定义 `commands/*.md`（先注册）同样优先于技能。命令名不出现在注册表里时 Tab 补全也能提示（见上文 Tab 补全）。
+- **技能即斜杠命令**：每个已装且用户可见的技能自动注册成 `/<技能名> [要求]` 命令（`refreshSkillCommands`，启动时与每次切会话后各重拉一次，重拉会把已消失的技能（取消复用/提案回退/切项目）从注册表与补全清单同步摘除；Tab 补全时再惰性重拉（2 秒节流）、未注册命令提交时也重拉一次再判定——技能增删改不用重启 REPL 即生效。尽力而为：daemon 不可达则没有技能命令，内置命令（含 `/skill`）照常可用）。命令发送**用户原文**（要求写在命令后面时原样拼接进消息），是否调用技能由 daemon 检测、正文仍经 `skill_read` 加载——`disable-model-invocation` 的技能由此获得手动入口。内置名优先：与内置命令重名的技能命令被丢弃；自定义 `commands/*.md`（先注册）同样优先于技能。命令名不出现在注册表里时 Tab 补全也能提示（见上文 Tab 补全）。
 - 自定义命令：`ctx.commandsDir`（daemon 组装为 `<home>/commands`）目录下的每个 `*.md` 文件注册成一个命令——文件名就是命令名，文件内容是一段提示词模板；执行命令时，模板里的 `{{args}}` 替换成命令参数，然后经 `ctx.send(text)` 作为普通消息发出。与内置命令重名的文件不生效，打印一行警告。
 - `switchSession` 在**同一 socket** 上发 `unsubscribe`（旧会话）+ `subscribe`（新会话），同时清空待发附件（附件是会话级的，换会话不带走）；`SlashCtx` 的 `client`/`sessionId` 是 getter，命令执行时看到的总是重连/切换后的当前值。
 
