@@ -2439,13 +2439,14 @@
   border-color: var(--border-hover);
 }
 
+/* 抽屉用 fixed：它的 DOM 挂在 chat-float-panels（absolute 容器）里，若用
+   absolute 会以那个小容器为包含块、宽高双双塌陷；fixed 相对视口，全高
+   右侧滑出，不受任何祖先定位语义影响。 */
 .changes-drawer {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
+  position: fixed;
+  inset: 0 0 0 auto;
   width: min(620px, 100%);
-  z-index: 45;
+  z-index: 60;
   pointer-events: auto;
   display: flex;
   flex-direction: column;

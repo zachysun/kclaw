@@ -236,6 +236,15 @@ describe("changes focus signal", () => {
     expect(h.container.querySelector('[data-testid="changes-content"]')!.textContent).toContain("export const a = 2")
     await unmount(h)
   })
+
+  it("matches a tool-card relative path against the resolved list keys (jump lands on the file)", async () => {
+    const api = fakeApi({ "src/a.ts": { content: "export const a = 2\n", bytes: 19 } })
+    const h = await mount({ api, focus: { path: "src/a.ts" } })
+    await flush()
+    expect(h.container.querySelector(".changes-item.on")!.textContent).toContain("src/a.ts")
+    expect(h.container.querySelector('[data-testid="changes-content"]')!.textContent).toContain("export const a = 2")
+    await unmount(h)
+  })
 })
 
 describe("message-frame refetch", () => {

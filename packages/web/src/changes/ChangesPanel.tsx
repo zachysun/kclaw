@@ -85,7 +85,10 @@ export function ChangesPanel({ api, sessionId, refreshTick, messageTick, focus }
   }, [open, messageTick, reload])
 
   // 工具卡的跳转信号：展开抽屉并定位到该文件的当前全文（focus 每次点击
-  // 都是新对象，重复点击同一路径也会重新触发定位）。
+  // 都是新对象，重复点击同一路径也会重新触发定位）。selected 存调用参数
+  // 原样路径（相对/绝对都有可能）；选中项在渲染期按两种口径解析（清单键
+  // 是 resolve 后的绝对路径，relativePath 是工作区相对口径），file 端点本
+  // 身就接受两种口径（resolve 后与白名单全等），所以原样值直接可用。
   useEffect(() => {
     if (focus === null) return
     setOpen(true)
@@ -112,7 +115,7 @@ export function ChangesPanel({ api, sessionId, refreshTick, messageTick, focus }
       })
   }, [api, sessionId, selected, tab])
 
-  const selectedFile = files?.find((f) => f.path === selected) ?? null
+  const selectedFile = files?.find((f) => f.path === selected || f.relativePath === selected) ?? null
   const chipVisible = files !== null && (files.length > 0 || open)
 
   return (
@@ -139,7 +142,7 @@ export function ChangesPanel({ api, sessionId, refreshTick, messageTick, focus }
                 <li key={f.path}>
                   <button
                     type="button"
-                    className={`changes-item${selected === f.path ? " on" : ""}`}
+                    className={`changes-item${selectedFile?.path === f.path ? " on" : ""}`}
                     onClick={() => { setSelected(f.path); setTab("content") }}
                   >
                     <span className="changes-item-path">{f.relativePath ?? f.path}</span>
