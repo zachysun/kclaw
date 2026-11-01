@@ -2336,10 +2336,6 @@
   padding: 0 10px 0 0;
 }
 
-.diff-row-nonos {
-  grid-template-columns: 16px 1fr;
-}
-
 .diff-no {
   color: var(--muted);
   text-align: right;

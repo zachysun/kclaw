@@ -77,9 +77,12 @@ function FsEditCard({ call, result }: ToolCardCtx) {
           <code className="tool-card-cmd">✎ {path}</code>
           <span className="tool-card-meta">{result !== null ? `${Math.round(result.durationMs)}ms` : ""}</span>
         </summary>
-        <button type="button" className="tool-card-drawer-link" data-testid="tool-card-open-changes" onClick={() => emitOpenChanges(path)}>
-          在改动抽屉中查看 →
-        </button>
+        {/* 失败的调用不构成改动记录（清单里没有它），跳转入口只对 ok 的调用出现。 */}
+        {result?.status === "ok" && (
+          <button type="button" className="tool-card-drawer-link" data-testid="tool-card-open-changes" onClick={() => emitOpenChanges(path)}>
+            在改动抽屉中查看 →
+          </button>
+        )}
         <DiffView oldText={old} newText={new_} lang={langFromPath(path)} compact />
       </details>
     )
@@ -105,9 +108,11 @@ function FsWriteCard({ call, result }: ToolCardCtx) {
           <code className="tool-card-cmd">+ {path}</code>
           <span className="tool-card-meta">{formatBytes(bytes)}{result !== null ? ` · ${Math.round(result.durationMs)}ms` : ""}</span>
         </summary>
-        <button type="button" className="tool-card-drawer-link" data-testid="tool-card-open-changes" onClick={() => emitOpenChanges(path)}>
-          在改动抽屉中查看 →
-        </button>
+        {result?.status === "ok" && (
+          <button type="button" className="tool-card-drawer-link" data-testid="tool-card-open-changes" onClick={() => emitOpenChanges(path)}>
+            在改动抽屉中查看 →
+          </button>
+        )}
         <CodeView content={args.content} lang={langFromPath(path)} compact />
       </details>
     )

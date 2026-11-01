@@ -161,16 +161,18 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   // 会话用量状态条的刷新拍子：每收尾一个 run +1，驱动 SessionUsageStrip
   // 重拉 /usage（run-after 钩子先写 usage 表，run.completed 帧后到，无竞态）。
   const [usageTick, setUsageTick] = useState(0)
-  // 改动抽屉（ChangesPanel）：清单/胶囊计数在 run 收尾帧时 +1 重拉——写动作
-  // 都发生在 run 内，收尾即稳定态；流式期间的 message 帧不触发（那会是每步
-  // 一次 events.jsonl 全量扫描，中间态拉取没有意义）。focus 是工具卡的跳转
-  // 信号（在改动抽屉中查看 →），seq 让重复点击同一路径也能再次定位。
+  // 改动抽屉（ChangesPanel）：changesTick 在 run 收尾帧时 +1，无条件驱动
+  // 清单重拉（胶囊计数在抽屉关闭时也要新）；messageTick 每个消息帧 +1，只
+  // 被打开着的抽屉消费（关闭时流式期间每步一次 events.jsonl 全量扫描没有
+  // 意义，见 ChangesPanel）。changesFocus 是工具卡的跳转信号（在改动抽屉
+  // 中查看 →），每次点击新对象、重复点击同一路径也会重新定位。
   const [changesTick, setChangesTick] = useState(0)
+  const [messageTick, setMessageTick] = useState(0)
   const [changesFocus, setChangesFocus] = useState<ChangesFocus | null>(null)
   useEffect(() => {
     const handler = (e: Event): void => {
       const path = (e as CustomEvent<{ path?: unknown }>).detail?.path
-      if (typeof path === "string") setChangesFocus({ path, seq: Date.now() })
+      if (typeof path === "string") setChangesFocus({ path })
     }
     window.addEventListener(OPEN_CHANGES, handler)
     return () => window.removeEventListener(OPEN_CHANGES, handler)
@@ -380,6 +382,8 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
               if (frame.type === "run.completed" || frame.type === "run.failed") setUsageTick((t) => t + 1)
               // 运行收尾 → 改动抽屉清单与胶囊计数刷一次（见 changesTick 注释）。
               if (frame.type === "run.completed" || frame.type === "run.failed") setChangesTick((t) => t + 1)
+              // 消息帧 → 打开着的改动抽屉增量重拉（关闭时无人消费，纯计数）。
+              if (frame.type === "message.created" || frame.type === "message.completed") setMessageTick((t) => t + 1)
             } else if (isQueuedSendAck(frame) || isRetryAck(frame)) {
               // Both acks carry the server message identity; adopt it eagerly
               // so the optimistic echo is pinned by id before its created event
@@ -958,7 +962,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
             onEdit: handleGoalEdit,
           }}
           usage={<SessionUsageStrip api={api} sessionId={sessionId} refreshKey={usageTick} />}
-          changesSlot={<ChangesPanel api={api} sessionId={sessionId} refreshTick={changesTick} focus={changesFocus} />}
+          changesSlot={<ChangesPanel api={api} sessionId={sessionId} refreshTick={changesTick} messageTick={messageTick} focus={changesFocus} />}
         />
       </div>
     </div>

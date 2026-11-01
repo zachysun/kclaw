@@ -1,32 +1,12 @@
 import { readFileSync, statSync } from "node:fs"
 import { relative, resolve } from "node:path"
 import type { FastifyInstance } from "fastify"
-import type { KclawConfig, Message, SessionStore } from "@kclaw/core"
+import type { ChangeFile, ChangeOp, KclawConfig, Message, SessionStore } from "@kclaw/core"
 
 /** Read cap for the current-content preview, same as the fs_read tool. */
 export const MAX_CHANGE_FILE_BYTES = 1024 * 1024
 
 const WRITE_TOOLS: ReadonlySet<string> = new Set(["fs_write", "fs_edit"])
-
-/** One successful fs_write/fs_edit call against a file, newest first within a file. */
-export interface ChangeOp {
-  callId: string
-  tool: "fs_write" | "fs_edit"
-  at: string
-  /** fs_edit carries old/new, fs_write carries content — the write payload itself. */
-  args: { old?: string; new?: string; content?: string }
-}
-
-/** Change records for one file, aggregated over the whole session event stream. */
-export interface ChangeFile {
-  /** Resolved absolute path (the whitelist key for the file-content route). */
-  path: string
-  /** Workspace-relative display path; null when the file lives outside the workspace. */
-  relativePath: string | null
-  firstAt: string
-  lastAt: string
-  ops: ChangeOp[]
-}
 
 /** Dependencies for the changes routes (injected by createApp). */
 export interface ChangesStores {

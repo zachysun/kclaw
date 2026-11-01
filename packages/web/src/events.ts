@@ -37,11 +37,11 @@ export function emitSkillsChanged(): void {
 
 /**
  * Fired from a tool card（fs_edit/fs_write）to open the in-chat change
- * drawer focused on that file：ChatPanel 收到即展开抽屉并选中该路径。
- * detail 带 seq（Date.now）让重复点击同一路径也能再次触发定位。
+ * drawer focused on that file：ChatPanel 收到即展开抽屉并选中该路径
+ * （每次点击都是新事件对象，重复点击同一路径也会重新定位）。
  */
 export const OPEN_CHANGES = "kclaw:open-changes"
 
 export function emitOpenChanges(path: string): void {
-  window.dispatchEvent(new CustomEvent(OPEN_CHANGES, { detail: { path, seq: Date.now() } }))
+  window.dispatchEvent(new CustomEvent(OPEN_CHANGES, { detail: { path } }))
 }

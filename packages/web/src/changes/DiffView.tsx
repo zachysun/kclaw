@@ -108,18 +108,18 @@ export function DiffView({ oldText, newText, lang, compact }: DiffViewProps): Re
   const rows = useMemo(() => buildRows(oldText, newText), [oldText, newText])
   return (
     // `md` rides along so the shared highlight token colors (.md .hljs-*) apply.
+    // Line numbers render in every form (spec): compact only tightens the box.
     <div className={`diffview md${compact ? " diffview-compact" : ""}`}>
       {rows.map((row, idx) => {
-        const nos =
-          compact === true ? null : (
-            <>
-              <span className="diff-no">{row.oldNo ?? ""}</span>
-              <span className="diff-no">{row.newNo ?? ""}</span>
-            </>
-          )
+        const nos = (
+          <>
+            <span className="diff-no">{row.oldNo ?? ""}</span>
+            <span className="diff-no">{row.newNo ?? ""}</span>
+          </>
+        )
         if (row.kind === "ctx") {
           return (
-            <div key={idx} className={`diff-row diff-ctx${compact ? " diff-row-nonos" : ""}`}>
+            <div key={idx} className="diff-row diff-ctx">
               {nos}
               <span className="diff-sign" />
               <span className="diff-text hljs" dangerouslySetInnerHTML={{ __html: highlightLine(row.text, lang) }} />
@@ -130,7 +130,7 @@ export function DiffView({ oldText, newText, lang, compact }: DiffViewProps): Re
           ? <WordOverlay pair={row.pair} text={row.text} kind={row.kind} lang={lang} />
           : <span className="diff-text">{row.text}</span>
         return (
-          <div key={idx} className={`diff-row diff-${row.kind}${compact ? " diff-row-nonos" : ""}`}>
+          <div key={idx} className={`diff-row diff-${row.kind}`}>
             {nos}
             <span className="diff-sign" />
             {overlay}

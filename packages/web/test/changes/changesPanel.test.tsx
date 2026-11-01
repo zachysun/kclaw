@@ -58,17 +58,27 @@ async function flush(): Promise<void> {
   })
 }
 
-async function mount(props: { api: ApiClient; focus?: ChangesFocus | null }): Promise<{ container: HTMLElement; root: Root }> {
+async function mount(props: { api: ApiClient; focus?: ChangesFocus | null; messageTick?: number }): Promise<{ container: HTMLElement; root: Root; api: ApiClient }> {
   const container = document.createElement("div")
   document.body.appendChild(container)
   const root = createRoot(container)
   await act(async () => {
     root.render(
-      <ChangesPanel api={props.api} sessionId="ses1" refreshTick={0} focus={props.focus ?? null} />,
+      <ChangesPanel api={props.api} sessionId="ses1" refreshTick={0} messageTick={props.messageTick ?? 0} focus={props.focus ?? null} />,
     )
   })
   await flush()
-  return { container, root }
+  return { container, root, api: props.api }
+}
+
+/** Rerender with fresh props (tick bumps); focus stays null. */
+async function rerender(h: { container: HTMLElement; root: Root; api: ApiClient }, props: { messageTick?: number }): Promise<void> {
+  await act(async () => {
+    h.root.render(
+      <ChangesPanel api={h.api} sessionId="ses1" refreshTick={0} messageTick={props.messageTick ?? 0} focus={null} />,
+    )
+  })
+  await flush()
 }
 
 async function unmount(h: { container: HTMLElement; root: Root }): Promise<void> {
@@ -219,11 +229,31 @@ describe("changes drawer", () => {
 describe("changes focus signal", () => {
   it("opens the drawer straight onto the focused file's current content", async () => {
     const api = fakeApi({ "src/a.ts": { content: "export const a = 2\n", bytes: 19 } })
-    const h = await mount({ api, focus: { path: "/w/proj/src/a.ts", seq: 1 } })
+    const h = await mount({ api, focus: { path: "/w/proj/src/a.ts" } })
     await flush()
     expect(h.container.querySelector('[data-testid="changes-drawer"]')).not.toBeNull()
     expect(h.container.querySelector(".changes-item.on")!.textContent).toContain("src/a.ts")
     expect(h.container.querySelector('[data-testid="changes-content"]')!.textContent).toContain("export const a = 2")
+    await unmount(h)
+  })
+})
+
+describe("message-frame refetch", () => {
+  it("refetches the list on message ticks while the drawer is open, not while closed", async () => {
+    const api = fakeApi()
+    const h = await mount({ api })
+    const callsWhileClosed = vi.mocked(api.get).mock.calls.filter((c) => (c[0] as string).endsWith("/changes")).length
+    await rerender(h, { messageTick: 3 })
+    const callsAfterClosedBump = vi.mocked(api.get).mock.calls.filter((c) => (c[0] as string).endsWith("/changes")).length
+    expect(callsAfterClosedBump).toBe(callsWhileClosed) // 关闭时不跟 message 帧
+    await act(async () => {
+      ;(h.container.querySelector('[data-testid="changes-chip"]') as HTMLButtonElement).click()
+    })
+    const callsAfterOpen = vi.mocked(api.get).mock.calls.filter((c) => (c[0] as string).endsWith("/changes")).length
+    expect(callsAfterOpen).toBeGreaterThan(callsAfterClosedBump) // 打开即拉一次
+    await rerender(h, { messageTick: 4 })
+    const callsAfterOpenBump = vi.mocked(api.get).mock.calls.filter((c) => (c[0] as string).endsWith("/changes")).length
+    expect(callsAfterOpenBump).toBeGreaterThan(callsAfterOpen) // 打开时跟 message 帧
     await unmount(h)
   })
 })

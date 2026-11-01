@@ -12,24 +12,11 @@
  */
 import { useCallback, useEffect, useState } from "react"
 import type React from "react"
+import type { ChangeFile } from "@kclaw/core/protocol"
 import type { ApiClient } from "../api.js"
 import { DiffView } from "./DiffView.js"
 import { CodeView } from "./CodeView.js"
 import { langFromPath } from "./lang.js"
-
-interface ChangeOp {
-  callId: string
-  tool: "fs_write" | "fs_edit"
-  at: string
-  args: { old?: string; new?: string; content?: string }
-}
-interface ChangeFile {
-  path: string
-  relativePath: string | null
-  firstAt: string
-  lastAt: string
-  ops: ChangeOp[]
-}
 
 type FileBody =
   | { state: "ok"; content: string; bytes: number }
@@ -38,17 +25,19 @@ type FileBody =
   | { state: "too-large" }
   | { state: "error"; message: string }
 
-/** Tool-card jump signal: open the drawer focused on one file (seq dedupes repeats). */
+/** Tool-card jump signal: open the drawer focused on one file (a fresh
+ * object identity each time, so repeated clicks re-run the focus effect). */
 export interface ChangesFocus {
   path: string
-  seq: number
 }
 
 export interface ChangesPanelProps {
   api: ApiClient
   sessionId: string
-  /** +1 whenever the session saw new message activity (frame-driven refetch). */
+  /** +1 on run-final frames — refetch while closed (chip count) too. */
   refreshTick: number
+  /** +1 on every message frame — refetched only while the drawer is open. */
+  messageTick: number
   focus: ChangesFocus | null
 }
 
@@ -65,7 +54,7 @@ function formatBytes(n: number): string {
   return n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`
 }
 
-export function ChangesPanel({ api, sessionId, refreshTick, focus }: ChangesPanelProps): React.ReactElement {
+export function ChangesPanel({ api, sessionId, refreshTick, messageTick, focus }: ChangesPanelProps): React.ReactElement {
   const [open, setOpen] = useState(false)
   const [files, setFiles] = useState<ChangeFile[] | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
@@ -86,9 +75,17 @@ export function ChangesPanel({ api, sessionId, refreshTick, focus }: ChangesPane
     setSelected(null)
     setTab("content")
   }, [sessionId])
+  // run 收尾帧无条件重拉（胶囊计数在关闭时也要新）。
   useEffect(() => { reload() }, [reload, refreshTick])
+  // 抽屉开着时每个消息帧都重拉（正在看的清单即时长出来）；关闭时不跟随
+  // message 帧——那是流式期间每步一次 events.jsonl 全量扫描，中间态拉取没有意义。
+  useEffect(() => {
+    if (!open) return
+    reload()
+  }, [open, messageTick, reload])
 
-  // 工具卡的跳转信号：展开抽屉并定位到该文件的当前全文。
+  // 工具卡的跳转信号：展开抽屉并定位到该文件的当前全文（focus 每次点击
+  // 都是新对象，重复点击同一路径也会重新触发定位）。
   useEffect(() => {
     if (focus === null) return
     setOpen(true)

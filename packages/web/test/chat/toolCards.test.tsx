@@ -172,6 +172,15 @@ describe("fs cards", () => {
       dispatch.mockRestore()
     }
   })
+
+  it("failed calls get no drawer jump (they are not change records)", () => {
+    const { container, unmount } = mount([
+      assistantMsg([callBlock("fs_edit", JSON.stringify({ path: "src/a.ts", old: "x", new: "y" }))]),
+      toolMsg([resultBlock({ status: "error", output: "old not found" })]),
+    ], 0)
+    expect(container.querySelector('[data-testid="tool-card-open-changes"]')).toBeNull()
+    unmount()
+  })
 })
 
 describe("result-side cards", () => {
