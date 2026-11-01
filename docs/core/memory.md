@@ -177,13 +177,13 @@ flowchart TD
 - **停用顺带沉淀**：一条主题线被标记为 `inactive` 后，pipeline 顺带对它做一次沉淀总结；
 - **夜间闲时沉淀**：调度器每天本地时间过了 `memory.consolidateHour`（默认凌晨 3 点）后对该项目触发一次（`MemorySystem.triggerNightly` → `pipeline.runNightly`）——对象是**自上次夜间沉淀以来有新情节的全部线（含 active）**，判据 `updated ≥ nightlyBaseline`（UTC 日期，与线文件 `updated` 同源，记在该项目 `state.json`）。活跃线的情节不再需要等线闲置转 inactive 才沉淀，每晚整理一次；daemon 凌晨未开时开机后首次扫描补跑（防同日重跑记本地日期，与沉淀判据的 UTC 日期各管各的）。首跑只沉淀当天更新的线，历史线不补（已由顺带沉淀覆盖）。
 
-停用顺带沉淀的输入输出：无工具 LLM 调用，把线文件全部情节 + 现有认知文件内容交给固定 system 提示的沉淀器（`CONSOLIDATE_SYSTEM_PROMPT`），回答"从这条线的经历里理解到了什么"，输出 JSON `{"actions":[...]}`，动作按 `target` 三选一（目标名放 `name` 字段、**不拼进 target**）：
+沉淀的输入输出：无工具 LLM 调用，把线文件全部记录 + 现有认知文件内容交给固定 system 提示（`CONSOLIDATE_SYSTEM_PROMPT`），判断这段经历能否得出**换个项目依然成立**的认知，输出 JSON `{"actions":[...]}`，动作按 `target` 三选一（目标名放 `name` 字段、**不拼进 target**）：
 
-- `target:"persona"`：用户画像，连贯正文片段（`name` 省略）；
-- `target:"wiki"` + `name`：领域知识，一个资源一个文件；
-- `target:"rule"` + `name`：用户规则，清单式，每条规则一个小节。
+- `target:"persona"`：用户画像，只收跨项目稳定的特质与偏好，只见过一次的行为记成倾向、不写成断言（连贯正文片段，`name` 省略）；
+- `target:"wiki"` + `name`：领域知识，跨项目可复用、一个主题一个文件，单项目的设定/剧情/代码细节不收；
+- `target:"rule"` + `name`：用户规则，门槛最高，需现有认知已记录或本次记录中反复出现的行为才能立（清单式，每条规则一个小节）。
 
-新增用 `op:"append"`/`op:"create"`，已有认知被新经历印证的不动、与新经历不一致的就地改写（`op:"rewrite"`，不保留原文）；每条新认知附来源注释 `<!-- 来源：<topic>#<date> -->`。解析校验：`target` 必须是三值之一、`wiki`/`rule` 必带非空 `name`，不合法的动作在解析层丢弃并记日志（`dropping malformed cognition action (target=…)`）——`#applyCognitionAction` 拿 `target` 拼目录路径，放行任意字符串会写出索引读不到的垃圾文件。`target:"skill"` 预留、当前未实现（解析层即丢弃，`#applyCognitionAction` 内保留防御分支）。拿不准落 `global` 还是项目时**倾向 global、宁小勿大**。沉淀受 `memory.consolidate` 开关（默认 true）控制（停用顺带与夜间闲时两路共用）；LLM 调用失败只打日志、不影响 run。除这两条自动路径外，`MemorySystem.consolidate(workdir, topic)` 也暴露了手动沉淀入口（目前没有路由或工具暴露这个入口）。
+新增用 `op:"append"`/`op:"create"`，现有认知已记录、这次再次出现的不动，与这次经历不一致的改写（`op:"rewrite"`，不保留原文）；每条新认知附来源注释 `<!-- 来源：<topic>#<date> -->`。解析校验：`target` 必须是三值之一、`wiki`/`rule` 必带非空 `name`，不合法的动作在解析层丢弃并记日志（`dropping malformed cognition action (target=…)`）——`#applyCognitionAction` 拿 `target` 拼目录路径，放行任意字符串会写出索引读不到的垃圾文件。`target:"skill"` 预留、当前未实现（解析层即丢弃，`#applyCognitionAction` 内保留防御分支）。写入门槛：只收换个项目依然成立的认知，单项目自己的设定、剧情、文档内容不进 `global`（这些归 L1 项目记忆和项目文档管）。沉淀受 `memory.consolidate` 开关（默认 true）控制（停用顺带与夜间闲时两路共用）；LLM 调用失败只打日志、不影响 run。除这两条自动路径外，`MemorySystem.consolidate(workdir, topic)` 也暴露了手动沉淀入口（目前没有路由或工具暴露这个入口）。
 
 ## 检索与注入
 

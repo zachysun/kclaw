@@ -9,6 +9,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { act } from "react"
 import { createWsClient, type WsClient, type WsLikeSocket } from "../../src/ws.js"
 import type { ApiClient } from "../../src/api.js"
+import { SKILLS_CHANGED } from "../../src/events.js"
 import { ChatPanel } from "../../src/chat/ChatPanel.js"
 import type { AgentEvent, MemoryWrittenInfo, Message } from "../../src/chat/model.js"
 
@@ -163,6 +164,8 @@ interface Harness {
   api: ApiClient & { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn> }
   /** The original props handed to the panel — rerenders reuse them. */
   apiProp: ApiClient
+  /** The fake GET fixtures — mutate `routes.skills` between renders for refetch tests. */
+  routes: ApiRoutes
   ws: WsClient
   createWs: () => WsClient
   unmount: () => void
@@ -199,7 +202,8 @@ async function mount(
   } = {},
 ): Promise<Harness> {
   const sessionId = opts.sessionId ?? "s1"
-  const api = makeApi(opts.initialMessages ?? [], { queue: opts.queue, meta: opts.meta, config: opts.config, compactions: opts.compactions, compactionsFail: opts.compactionsFail, skills: opts.skills, files: opts.files, filesTruncated: opts.filesTruncated, filesFail: opts.filesFail })
+  const routes: ApiRoutes = { queue: opts.queue, meta: opts.meta, config: opts.config, compactions: opts.compactions, compactionsFail: opts.compactionsFail, skills: opts.skills, files: opts.files, filesTruncated: opts.filesTruncated, filesFail: opts.filesFail }
+  const api = makeApi(opts.initialMessages ?? [], routes)
   const { sockets, socketFactory, createWs } = setup()
   const ws = createWs()
   const container = document.createElement("div")
@@ -233,6 +237,7 @@ async function mount(
     socketFactory,
     api,
     apiProp: api,
+    routes,
     ws,
     createWs,
     unmount: () => {
@@ -1340,6 +1345,43 @@ describe("ChatPanel skill slash commands", () => {
       await sendText(h, "/help")
       const sends = h.sockets[0]!.sent.map((f) => JSON.parse(f) as { type?: string }).filter((f) => f.type === "send_message")
       expect(sends).toEqual([])
+    } finally {
+      h.unmount()
+    }
+  })
+
+  it("SKILLS_CHANGED refetches /skills — 技能页增删复用后斜杠菜单即时跟进", async () => {
+    const h = await mount({ skills: [] })
+    try {
+      const input = h.container.querySelector('textarea[data-testid="chat-input"]') as HTMLTextAreaElement
+      // 初始空清单：/tes 无动态候选（菜单不渲染）
+      typeInto(input, "/tes")
+      await flush()
+      expect(h.container.querySelector('[data-testid="slash-menu"]')).toBeNull()
+      typeInto(input, " ")
+      await flush()
+
+      // 技能页复用成功 → 广播 → 重拉 /skills（面板跨 tab 保活，没有重挂重拉可用）
+      h.routes.skills = [{ name: "test", description: "验收技能", visibility: "all", origin: "global" }]
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent(SKILLS_CHANGED))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      typeInto(input, "/tes")
+      await flush()
+      expect(h.container.querySelector('[data-testid="slash-menu"]')?.textContent).toContain("/test")
+
+      // 取消复用 → 再广播 → 条目即时消失
+      h.routes.skills = []
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent(SKILLS_CHANGED))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      typeInto(input, " ")
+      await flush()
+      typeInto(input, "/tes")
+      await flush()
+      expect(h.container.querySelector('[data-testid="slash-menu"]')).toBeNull()
     } finally {
       h.unmount()
     }

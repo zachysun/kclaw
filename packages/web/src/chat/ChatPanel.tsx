@@ -16,7 +16,8 @@ import { parseSlashInput, skillCommandMeta } from "@kclaw/core/commands"
 import { isPermissionMode, type PermissionMode } from "@kclaw/core/permission-modes"
 import type { ConfirmationDecision, UiActionRef } from "@kclaw/core/protocol"
 import { ApiError, type ApiClient } from "../api.js"
-import { PROVIDERS_CHANGED } from "../events.js"
+import { OPEN_CHANGES, PROVIDERS_CHANGED, SKILLS_CHANGED } from "../events.js"
+import { ChangesPanel, type ChangesFocus } from "../changes/ChangesPanel.js"
 import { WsAuthError, type WsClient } from "../ws.js"
 import {
   adoptQueuedId,
@@ -160,6 +161,22 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   // 会话用量状态条的刷新拍子：每收尾一个 run +1，驱动 SessionUsageStrip
   // 重拉 /usage（run-after 钩子先写 usage 表，run.completed 帧后到，无竞态）。
   const [usageTick, setUsageTick] = useState(0)
+  // 改动抽屉（ChangesPanel）：changesTick 在 run 收尾帧时 +1，无条件驱动
+  // 清单重拉（胶囊计数在抽屉关闭时也要新）；messageTick 每个消息帧 +1，只
+  // 被打开着的抽屉消费（关闭时流式期间每步一次 events.jsonl 全量扫描没有
+  // 意义，见 ChangesPanel）。changesFocus 是工具卡的跳转信号（在改动抽屉
+  // 中查看 →），每次点击新对象、重复点击同一路径也会重新定位。
+  const [changesTick, setChangesTick] = useState(0)
+  const [messageTick, setMessageTick] = useState(0)
+  const [changesFocus, setChangesFocus] = useState<ChangesFocus | null>(null)
+  useEffect(() => {
+    const handler = (e: Event): void => {
+      const path = (e as CustomEvent<{ path?: unknown }>).detail?.path
+      if (typeof path === "string") setChangesFocus({ path })
+    }
+    window.addEventListener(OPEN_CHANGES, handler)
+    return () => window.removeEventListener(OPEN_CHANGES, handler)
+  }, [])
   // 通知条的三条清除路径共用：输入即清（onDraftChange）、× 关闭、点击跳转
   // 后即清；切换会话也走它（见 sessionRef effect）。
   const clearNotice = useCallback((): void => {
@@ -363,6 +380,10 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
               }
               // 运行收尾 → 会话用量状态条刷一次（失败 run 同样记 usage）。
               if (frame.type === "run.completed" || frame.type === "run.failed") setUsageTick((t) => t + 1)
+              // 运行收尾 → 改动抽屉清单与胶囊计数刷一次（见 changesTick 注释）。
+              if (frame.type === "run.completed" || frame.type === "run.failed") setChangesTick((t) => t + 1)
+              // 消息帧 → 打开着的改动抽屉增量重拉（关闭时无人消费，纯计数）。
+              if (frame.type === "message.created" || frame.type === "message.completed") setMessageTick((t) => t + 1)
             } else if (isQueuedSendAck(frame) || isRetryAck(frame)) {
               // Both acks carry the server message identity; adopt it eagerly
               // so the optimistic echo is pinned by id before its created event
@@ -542,16 +563,22 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   )
 
   // 已装用户可见技能清单：斜杠菜单的动态命令数据源（会话切换重拉，失败静默）。
-  useSilentFetch(
-    () => {
-      const q = workdir ? `?workdir=${encodeURIComponent(workdir)}` : ""
-      return api.get<Array<{ name: string; description: string; origin: string; visibility: string; plugin?: string }>>(`/skills${q}`)
-    },
-    (rows) => {
-      if (Array.isArray(rows)) setSkillRows(rows)
-    },
-    [api, workdir],
-  )
+  // 面板跨 tab 保活不重挂，技能页的复用/提案采纳等写操作广播 SKILLS_CHANGED
+  // （照上面 PROVIDERS_CHANGED 的先例），收到即重拉，斜杠菜单即时跟进。
+  const refreshSkills = useCallback((): void => {
+    const q = workdir ? `?workdir=${encodeURIComponent(workdir)}` : ""
+    api
+      .get<Array<{ name: string; description: string; origin: string; visibility: string; plugin?: string }>>(`/skills${q}`)
+      .then((rows) => {
+        if (Array.isArray(rows)) setSkillRows(rows)
+      })
+      .catch(() => undefined)
+  }, [api, workdir])
+  useEffect(() => {
+    refreshSkills()
+    window.addEventListener(SKILLS_CHANGED, refreshSkills)
+    return () => window.removeEventListener(SKILLS_CHANGED, refreshSkills)
+  }, [refreshSkills])
 
   // 会话工作区文件清单：@ 文件抽屉的数据源（同上，失败静默）。
   useSilentFetch(
@@ -935,6 +962,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
             onEdit: handleGoalEdit,
           }}
           usage={<SessionUsageStrip api={api} sessionId={sessionId} refreshKey={usageTick} />}
+          changesSlot={<ChangesPanel api={api} sessionId={sessionId} refreshTick={changesTick} messageTick={messageTick} focus={changesFocus} />}
         />
       </div>
     </div>

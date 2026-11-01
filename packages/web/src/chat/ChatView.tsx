@@ -169,9 +169,15 @@ export interface ChatViewProps {
    * 摆放。默认不渲染。
    */
   usage?: ReactNode
+  /**
+   * 改动抽屉（ChangesPanel）：悬浮胶囊+滑出面板，与团队/目标卡同挂载位
+   * （chat-float-panels）。取数与刷新节奏归所有方（ChatPanel），本组件只
+   * 负责摆放。默认不渲染。
+   */
+  changesSlot?: ReactNode
 }
 
-export function ChatView({ sessionId, view, onSend, onUiAction, uiPicks, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDismissNotice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, onFork, forkPending, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal, usage }: ChatViewProps) {
+export function ChatView({ sessionId, view, onSend, onUiAction, uiPicks, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDismissNotice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, onFork, forkPending, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal, usage, changesSlot }: ChatViewProps) {
   // In-place editor state of edit & retry, keyed by the bubble being edited;
   // both confirm and Esc clear it.
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
@@ -246,10 +252,11 @@ export function ChatView({ sessionId, view, onSend, onUiAction, uiPicks, onResol
 
   return (
     <div className="chat" data-testid="chat-view">
-      {/* Floating cards (team + goal) stack in one column at the chat
-          area's top-right corner, outside the scrolling log. */}
-      {(team !== undefined || goal !== undefined) && (
+      {/* Floating cards (team + goal + changes) stack in one column at the
+          chat area's top-right corner, outside the scrolling log. */}
+      {(team !== undefined || goal !== undefined || changesSlot !== undefined) && (
         <div className="chat-float-panels">
+          {changesSlot}
           {team !== undefined && (
             <TeamPanelCard
               panel={team.panel}

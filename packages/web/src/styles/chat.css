@@ -2291,3 +2291,363 @@
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* ============================================================
+   改动抽屉（ChangesPanel）与 DiffView / CodeView
+   ============================================================ */
+
+/* —— 工具卡里的"在改动抽屉中查看"入口 —— */
+.tool-card-drawer-link {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 10px 2px;
+  border: none;
+  background: none;
+  color: var(--accent-strong);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tool-card-drawer-link:hover {
+  text-decoration: underline;
+}
+
+/* —— DiffView：unified 行级 diff（工具卡紧凑形态限高） —— */
+.diffview {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-x: auto;
+  border-top: 1px solid var(--border);
+  background: var(--code-well-bg, var(--surface-2, var(--surface)));
+}
+
+.diffview-compact {
+  max-height: 300px;
+  overflow: auto;
+}
+
+.diff-row {
+  display: grid;
+  grid-template-columns: 38px 38px 16px 1fr;
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: 0 10px 0 0;
+}
+
+.diff-no {
+  color: var(--muted);
+  text-align: right;
+  padding-right: 8px;
+  user-select: none;
+  opacity: 0.75;
+}
+
+.diff-sign {
+  text-align: center;
+  user-select: none;
+}
+
+.diff-del {
+  background: var(--danger-dim);
+}
+
+.diff-del .diff-sign::after {
+  content: "−";
+  color: var(--danger);
+}
+
+.diff-del > .diff-text {
+  color: var(--danger);
+}
+
+.diff-add {
+  background: var(--success-dim);
+}
+
+.diff-add .diff-sign::after {
+  content: "+";
+  color: var(--success);
+}
+
+.diff-add > .diff-text {
+  color: var(--success);
+}
+
+/* 词级叠加：比整行底更饱和的一档（主题色混合，双主题自动适配）。 */
+.diff-word-del {
+  background: color-mix(in srgb, var(--danger) 42%, transparent);
+  border-radius: 2px;
+}
+
+.diff-word-add {
+  background: color-mix(in srgb, var(--success) 42%, transparent);
+  border-radius: 2px;
+}
+
+/* —— CodeView：行号 + 逐行语法高亮 —— */
+.codeview {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  background: var(--code-well-bg, var(--surface-2, var(--surface)));
+  padding: 4px 0;
+}
+
+.codeview-compact {
+  max-height: 300px;
+}
+
+.codeview-row {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: 0 10px 0 0;
+}
+
+.codeview-no {
+  color: var(--muted);
+  text-align: right;
+  padding-right: 10px;
+  user-select: none;
+  opacity: 0.75;
+}
+
+/* —— 悬浮胶囊与滑出抽屉 —— */
+.changes-wrap {
+  pointer-events: none;
+}
+
+.changes-chip {
+  pointer-events: auto;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  padding: 4px 12px;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(var(--shadow-rgb), 0.35);
+  white-space: nowrap;
+}
+
+.changes-chip:hover {
+  border-color: var(--border-hover);
+}
+
+/* 抽屉用 fixed：它的 DOM 挂在 chat-float-panels（absolute 容器）里，若用
+   absolute 会以那个小容器为包含块、宽高双双塌陷；fixed 相对视口，全高
+   右侧滑出，不受任何祖先定位语义影响。 */
+.changes-drawer {
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(620px, 100%);
+  z-index: 60;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(var(--shadow-rgb), 0.4);
+}
+
+.changes-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.changes-close {
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.changes-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+}
+
+.changes-list {
+  overflow: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border-right: 1px solid var(--border);
+}
+
+.changes-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.changes-item:hover {
+  background: var(--surface-2);
+}
+
+.changes-item.on {
+  background: var(--surface-3);
+}
+
+.changes-item-path {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changes-item-meta {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.changes-detail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.changes-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.changes-detail-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changes-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.changes-tabs button {
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.changes-tabs button.on {
+  border-color: var(--accent-border);
+  color: var(--accent-strong);
+}
+
+.changes-detail-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px;
+}
+
+.changes-detail-body .diffview,
+.changes-detail-body .codeview {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.changes-empty {
+  color: var(--muted);
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 13px;
+}
+
+/* 改动历史里的一条写动作 */
+.changes-op {
+  margin-bottom: 12px;
+}
+
+.changes-op-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 2px 0 4px;
+}
+
+.changes-op-tool {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.changes-op-fs_edit {
+  color: var(--danger);
+}
+
+.changes-op-fs_write {
+  color: var(--success);
+}
+
+.changes-op-time {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.changes-op-write {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.changes-op-write > summary {
+  cursor: pointer;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  list-style: none;
+}
+
+.changes-op-write > summary::-webkit-details-marker {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .changes-drawer {
+    width: 100%;
+  }
+
+  .changes-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(110px, 30%) 1fr;
+  }
+
+  .changes-list {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}

@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import type React from "react"
 import type { ApiClient } from "../api.js"
+import { emitSkillsChanged } from "../events.js"
 import { formatStamp } from "../usage/format.js"
 import type { NoticeFn } from "../toast.js"
 import type { SkillProposalRow } from "@kclaw/core/protocol"
@@ -146,6 +147,9 @@ export function SkillsView({ api, notice }: {
   const refreshAfterWrite = useCallback((message: string) => {
     notice(message)
     reload()
+    // 本页写操作改变了已装技能集合：广播给跨 tab 保活的 ChatPanel，
+    // 让斜杠菜单的动态技能命令即时重拉（无广播就要等会话切换）。
+    emitSkillsChanged()
   }, [reload, notice])
 
   const open = async (name: string): Promise<void> => {
@@ -299,6 +303,9 @@ export function SkillsView({ api, notice }: {
       notice(`提案 ${p.name} ${verb}`)
       reload()
       reloadProposals()
+      // apply 装技能、revert 卸技能：已装集合变了要广播；reject 只改提案
+      // 状态、不碰技能目录，无需广播。
+      if (op !== "reject") emitSkillsChanged()
     } catch (e) {
       notice(`操作失败: ${String(e)}`, "error")
       reload()

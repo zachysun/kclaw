@@ -784,7 +784,19 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
     client,
     ws: await openSubscribed(client, sessionId),
     sessionId,
-    rl: createInterface({ input: process.stdin, output: process.stdout, prompt: modePrompt(initialMode), completer: createSlashCompleter(() => skillCommandMetas) }),
+    rl: createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      prompt: modePrompt(initialMode),
+      completer: createSlashCompleter(() => {
+        // 技能增删改（WebUI 复用/提案采纳、外部编辑）不在本进程发生，无法
+        // 推送——Tab 补全时惰性重拉（2s 节流，fire-and-forget）：本次按键仍
+        // 用旧清单，下一次 Tab 即最新，与服务端"每次 run 现扫、下一次交互
+        // 边界生效"同语义。
+        if (Date.now() - skillMetasAt > 2000) refreshSkillCommands()
+        return skillCommandMetas
+      }),
+    }),
     showThinking: opts.showThinking === true,
     auto,
     io: { atLineStart: true },
@@ -917,7 +929,9 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
   // the builtins (including /skill) still work. Re-checked per session
   // switch, since the project scope follows the session's workdir.
   let skillCommandMetas: SlashCommandMeta[] = []
+  let skillMetasAt = 0 // 上次触发重拉的时刻（Tab 补全节流用）
   const refreshSkillCommands = (): void => {
+    skillMetasAt = Date.now()
     void refreshSkillCommandsOp(registry, slashCtx)
       .then((metas) => { skillCommandMetas = metas })
       .catch(() => {})
@@ -1049,7 +1063,12 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
       } else if (parsed.command === "exit") {
         await Promise.allSettled([...inFlight]) // 等正在进行的渲染收尾，输出完整再退
         break
+      } else if (registry.has(parsed.command)) {
+        await runOrHint(parsed, registry, slashCtx)
       } else {
+        // 未注册：可能只是技能清单过期（技能刚在 WebUI 复用/提案采纳/外部
+        // 新增）——重拉一次再判定，避免把新技能误报成"没有这个命令"。
+        await refreshSkillCommandsOp(registry, slashCtx).catch(() => {})
         await runOrHint(parsed, registry, slashCtx)
       }
       prompt()

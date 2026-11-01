@@ -16,6 +16,7 @@ import { registerPermissionsRoutes } from "./routes/permissions.js"
 import { registerMemoryRoutes } from "./routes/memory.js"
 import { registerSkillRoutes } from "./routes/skills.js"
 import { registerAttachmentRoutes } from "./routes/attachments.js"
+import { registerChangesRoutes } from "./routes/changes.js"
 import { registerCronRoutes } from "./routes/cron.js"
 import { registerConfigRoutes } from "./routes/config.js"
 import { registerSearchRoutes } from "./routes/search.js"
@@ -247,6 +248,8 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   // 切会话写入：POST /sessions 是 CLI /clear、/new 与 web 新建会话的共同底层，
   // 记忆系统在组装时才挂 clear 触发（默认不触发，行为与未组装记忆时一致）。
   registerSessionRoutes(app, { sessions, config, run: opts.run, memory: opts.memory, sessionFork: opts.sessionFork, cancelBackgroundForParent: opts.cancelBackgroundForParent, team: opts.team, goal: opts.goal })
+  // /sessions/:id/changes 路由族：改动记录聚合与受限全文预览，纯事件流推导，无组装依赖。
+  registerChangesRoutes(app, { sessions, config })
   if (opts.attachmentsDir !== undefined) {
     registerAttachmentRoutes(app, { sessions, attachmentsDir: opts.attachmentsDir })
   }

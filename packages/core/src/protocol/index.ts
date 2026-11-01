@@ -14,3 +14,4 @@ export * from "./usage.js"
 // UI Card DSL（ui_render 的 data 通道线上形状）：类型 only，web 渲染与 core
 // 校验共用此正本。
 export * from "./ui-cards.js"
+export * from "./changes.js"
