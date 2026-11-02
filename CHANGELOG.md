@@ -5,6 +5,59 @@ All notable changes to kclaw are documented in this file. The format is based on
 [semantic versioning](https://semver.org/) — note that the 0.x series makes no
 compatibility promises.
 
+## [0.7.0] - 2026-11-02
+
+### Added
+
+- **Generative UI cards** — a new `ui_render` tool lets the model render a
+  validated, bounded UI card (25 component kinds, typed DSL, container
+  nesting closed at the type level and re-checked at runtime) into the tool
+  result's data channel; the chat stream renders it as a real card, and
+  buttons on the card answer back through the submit path as `uiAction`
+  events with provenance. Receipt text is all the model sees — the card
+  payload never re-enters context.
+- **Purpose-built tool cards** — a per-tool card registry renders each tool
+  call plus its paired result as one purpose-built card: `bash` gets a
+  spinner, duration and the structured exit code, `fs_edit` a red/green diff
+  built from its call args, `fs_write` a byte count with a collapsed
+  preview, and todo/cron/goal/subagent results get snapshot cards.
+  Unregistered tools keep the plain collapse rows.
+- **Change drawer** — `fs_edit` tool cards now render a word-level diff with
+  syntax highlighting, and a floating chip on the chat panel slides out a
+  drawer listing every file the session's agent actually wrote (successful
+  writes and edits only, aggregated from the event stream, so compaction
+  never hides a change). Each file offers the current disk content through a
+  route locked to the session's change set, plus a per-write change history.
+
+### Changed
+
+- **Global cognition gate** — the memory pipeline's global-cognition prompt
+  now states what the global layer is for and sets a bar per target:
+  persona records tendencies without asserting facts, rules need a pattern
+  that recurs across experiences, and wiki entries exclude single-project
+  content (that belongs to project memory and project docs). A
+  single-project storyline can no longer settle into files that steer every
+  other project.
+- **Live skill commands** — skill changes (reuse links, proposal
+  apply/revert, disk edits) reach a running session without a restart: the
+  skills page broadcasts a change event the chat panel refetches its slash
+  menu on, and CLI completion lazily refetches on Tab and before judging an
+  unregistered command, dropping removed skills from the registry.
+- **Audit row registry** — the audit page's per-row display knowledge
+  (labels, badges, renderers) converges into one registry, mirroring the
+  tool-card pattern.
+
+### Fixed
+
+- Review fixes across the generative-UI batch: `uiAction` now survives the
+  submit queue instead of being dropped, and a tool message fully absorbed
+  into its card no longer renders an empty bubble shell.
+- Change drawer fixes: jump-to-file links land on the right file, the drawer
+  keeps its full width, and protocol types, line numbers and guard rails
+  align with the server routes.
+- The question card stays reachable when it outgrows the viewport.
+
+
 ## [0.6.0] - 2026-10-26
 
 ### Added
