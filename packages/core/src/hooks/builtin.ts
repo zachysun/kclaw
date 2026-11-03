@@ -127,7 +127,7 @@ export interface BuiltinHookDeps {
   /** 本次 run 技能扫描的目录名集合（skill-follow-check 粗查的 /记号 匹配集）。 */
   skillNames?: readonly string[]
   /**
-   * 技能进化的调度簿记（提案制）：在位且 config.skills.evolution 开启时，
+   * 技能进化的调度记录（提案制）：在位且 config.skills.evolution 开启时，
    * skill-follow-check（run-after 40）做零成本粗查，卷入技能才排空闲检查。
    */
   skillsEvolution?: SkillEvolutionScheduleBook

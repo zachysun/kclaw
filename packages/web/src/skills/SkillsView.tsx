@@ -5,7 +5,7 @@
  * 述），右栏点开后的 SKILL.md 正文。user-invocable:false 的技能服务端已
  * 当作不存在（列表与指名都不出现）。
  *
- * 「从其他 agent 复用」：复用管理面——顶部已建链接的紧凑表格（来源、四
+ * 「从其他 agent 复用」：复用管理页——顶部已建链接的紧凑表格（来源、四
  * 档可见档位单选、删除；链接目标不再是扫描正在提供的版本时标"过时"），
  * 下方扫描发现列表：搜索框 + 按来源分组折叠（用户级 agent 目录展开、插
  * 件技能折叠），每条可预览正文、单个复用或批量复用。复用的元数据（目标/
@@ -136,7 +136,7 @@ export function SkillsView({ api, notice }: {
 
   const reload = useCallback(() => {
     api.get<SkillRow[]>(`/skills${scopeQuery}`).then(setRows).catch((e) => notice(`加载技能失败: ${String(e)}`, "error"))
-    // 复用管理面的三份数据失败都走行内降级，不打扰主清单的 notice。
+    // 复用管理页的三份数据失败都走行内降级，不打扰主清单的 notice。
     api.get<DiscoveryPayload>(`/skills/discovery${scopeQuery}`).then(setDiscovery).catch(() => setDiscovery(null))
     api.get<LinksPayload>(`/skills/links${scopeQuery}`).then(setLinks).catch(() => setLinks(null))
     // 提案面不挂在这里：它有自己的 effect 与写后刷新（reloadProposals），避免
@@ -329,7 +329,7 @@ export function SkillsView({ api, notice }: {
     }
   }
 
-  // 发现列表分两个区块，层级对齐心智模型：
+  // 发现列表分两个区块，层级与心智模型一致：
   //   「用户级技能目录」按 agent 分组（展开）——用户亲手放的技能；
   //   「已安装插件」按插件分组（折叠）——插件带给你的技能。
   // 搜索词过滤名字与描述，命中时全部组展开。

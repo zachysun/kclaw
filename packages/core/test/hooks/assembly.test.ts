@@ -211,7 +211,7 @@ describe("executeRun × hook system", () => {
     expect(bus.events.some((e) => e.type === "hook.failed")).toBe(false)
   })
 
-  it("skip 钩子抛错：run 照常完成，hook.failed 经 bus 可见（phase run）", async () => {
+  it("skip 钩子抛出错误：run 照常完成，hook.failed 经 bus 可见（phase run）", async () => {
     const extra: HookEntry[] = [
       hook("broken-observer", "run-before", () => { throw new Error("observer boom") }, { failure: "skip", order: 5 }),
     ]
@@ -254,7 +254,7 @@ describe("executeRun × hook system", () => {
     expect(order).toEqual(["watcher"])
   })
 
-  it("收尾压缩慢于钩子budget：压缩钩子不限时，完整落地且 run 正常完成", async () => {
+  it("收尾压缩慢于钩子budget：压缩钩子不限时，完整执行且 run 正常完成", async () => {
     // 回归背景（2026-09-09 线上）：迁移把内联压缩放进 5s 钩子时限里比快慢，真实压缩
     // （两次 LLM 调用）必超时——mid-run 甩出后台重复压缩，post-run（fatal）
     // 把已完成 run 拖成条目级失败。这里用 50ms 钩子budget + 80ms/次的 LLM 复现。
@@ -324,7 +324,7 @@ describe("executeRun × hook system", () => {
   })
 
   it("压缩失败如实转发：compaction-after 收到 failed，run 照常完成", async () => {
-    // 摘要调用抛错 → compact 以 failed 结局回答（completed 事件记录 failed，
+    // 摘要调用抛出错误 → compact 以 failed 结局回答（completed 事件记录 failed，
     // 错误只在压缩器里打一行日志）；触发钩子把 failed 如实转发给
     // compaction-after 链；收尾压缩失败不连坐 run。
     const base = loadConfig(resolvePaths(home))

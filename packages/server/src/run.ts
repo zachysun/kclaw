@@ -131,7 +131,7 @@ function makeNode(entry: QueueEntry): QueueNode {
   let reject!: QueueNode["reject"]
   const outcome = new Promise<RunOutcome>((res, rej) => { resolve = res; reject = rej })
   // 哑 handler：标记"拒绝已处理"，防止无人观察的 node（ws fire-and-forget 的
-  // steer 降级条目）在 run 抛错时演成 unhandled rejection；真实调用方
+  // steer 降级条目）在 run 抛出错误时演成 unhandled rejection；真实调用方
   // （wait 条目的 enqueue 调用方）仍通过自己的 .catch/await 收到原拒绝。
   outcome.catch(() => undefined)
   return { entry, resolve, reject, outcome }
@@ -586,7 +586,7 @@ export class RunManager {
    * 会话被删、盘满）不允许重演两种死法：会话永久停转（僵尸驱动器让后续
    * submit 全部幂等返回、队列无人调用），或循环 promise 裸拒绝（unhandled
    * rejection）。处理：手头已出队的 node 以该错误落定（等待方看见失败而非
-   * 永久悬挂）并**塞回队首**——persist 抛错意味着 queue.jsonl 也没写成，塞回后
+   * 永久悬挂）并**塞回队首**——persist 抛出错误意味着 queue.jsonl 也没写成，塞回后
    * 内存与盘上重新一致，条目留在队列等待下一次出队重试，而不是被此后任何一次
    * 成功的持久化按内存视图无声抹掉；#drivers 同步删除——下一次 submit 重新启动
    * （自愈）；错误日志一次。两条失败路径（出队持久化、条目执行）都补发条目级
@@ -759,7 +759,7 @@ export class RunManager {
           ? [{ id: newBlockId(), type: "note", kind: e.note.kind, text: e.note.text } satisfies NoteBlock]
           : []),
       ])
-      if (e.uiAction !== undefined) m.uiAction = e.uiAction // UI 卡交互来源（与常规落盘口径一致）
+      if (e.uiAction !== undefined) m.uiAction = e.uiAction // UI 卡交互来源（与常规写入口径一致）
       m.id = e.messageId
       return m
     })

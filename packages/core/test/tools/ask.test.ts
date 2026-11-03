@@ -58,7 +58,7 @@ describe("ask_user_questions executor", () => {
     const requested = emitted.find((e) => e.type === "question.requested")!
     const questionId = (requested.payload as { questionId: string }).questionId
     // 网关应答错位：第 2 题的槽位不是数组（按未回答处理），第 4 组越位
-    // （丢弃）——结果与 data 都按问题数对齐
+    // （丢弃）——结果与 data 都按问题数一一对应
     expect(broker.resolveQuestion(questionId, [["甲"], "bad", ["丙"], ["越位"]] as unknown as string[][], "cli")).toBe(true)
     const r = await pending
     expect(r.status).toBe("ok")

@@ -50,7 +50,7 @@ export interface AgentDeps {
                                         // stream() 内部完成后，由组装把这个计数反馈进来（默认恒 1）
   tokenBudget?: number                // 请求 budget（token 数）：驱动工具输出省略/历史逐出（见 compaction.md 机制二）
   hooks: HookRunner                   // hook 链：循环的行为挂载点全部以此为准（见 hooks.md）。
-                                      // 各位置的 fatal 抛错沿 hooks.run 传播，由循环既有的 catch 路径接管，
+                                      // 各位置的 fatal 抛出错误沿 hooks.run 传播，由循环既有的 catch 路径接管，
                                       // 错误码照旧（user_message_failed / steering_failed / …）
   onEvent(e: AgentEvent): void
   onMessage(m: Message): void
@@ -95,7 +95,7 @@ run.started {trigger, model?, provider?, permissionMode?}
   → 循环耗尽：截断 note 已随最后一条 assistant 持久化 → run.failed {code:"max_iterations"}，返回 stopReason "error"
 ```
 
-`run.failed` 的四个错误码：`user_message_failed`（run-before 链的 fatal 抛错或持久化抛错）、`llm_error`（provider 彻底失败）、`max_iterations`、`steering_failed`（turn-boundary 链的 fatal 抛错或注入写入抛错）。
+`run.failed` 的四个错误码：`user_message_failed`（run-before 链的 fatal 抛出错误或持久化抛出错误）、`llm_error`（provider 彻底失败）、`max_iterations`、`steering_failed`（turn-boundary 链的 fatal 抛出错误或注入写入抛出错误）。
 
 用户消息路径有两条：默认由 `userText` 合成（循环自行 `onMessage` 持久化）；宿主传入 `RunInput.userMessage` 时循环原样使用、**不重复持久化**（持久化责任在宿主，daemon 侧由 run-before 链的内置 `user-message-land` hook 做，见 [hooks](./hooks.md)）。两条路径都会发 `message.created`/`message.completed`，hook 链都执行。
 
@@ -146,7 +146,7 @@ flowchart TD
 
 返回的消息数组逐条按序注入：`message.created` → `deps.onMessage` 持久化 → `message.completed` → `message.steered {messageId}`（事件级 `runId` 标识注入的 run）→ 消息追加进 history（`all`），模型在下一轮自然看到它。流式输出不打断、不产生新 run，`stopReason` 语义不变。内置使用者是 `steering-drain`（取走 RunManager 的 steer 缓冲，fatal）。
 
-错误语义与用户消息路径一致：链上 fatal hook 抛错，或注入途中 `onMessage` 持久化抛错，都发 `run.failed {code:"steering_failed"}`、run 以 `stopReason:"error"` 收场（不 reject）。位置上没有 hook 时整段跳过（返回 `undefined` = 无注入）。
+错误语义与用户消息路径一致：链上 fatal hook 抛出错误，或注入途中 `onMessage` 持久化抛出错误，都发 `run.failed {code:"steering_failed"}`、run 以 `stopReason:"error"` 收场（不 reject）。位置上没有 hook 时整段跳过（返回 `undefined` = 无注入）。
 
 ---
 
@@ -190,7 +190,7 @@ finish_reason: stop → end_turn    length → max_tokens    tool_calls → tool
                stop_sequence → stop_sequence    null/未知 → end_turn
 ```
 
-`aborted` 与 `error` 不会来自 provider——前者由循环在各 abort 检查点打上标记，后者标记在流抛错/宿主 hook 失败的消息上。归一化后，`runAgent` 的分派逻辑只认 7 个值，与具体 provider 解耦。aborted/error 的 assistant 消息连同部分内容照常持久化（对应"生成中途被取消"的场景）。
+`aborted` 与 `error` 不会来自 provider——前者由循环在各 abort 检查点打上标记，后者标记在流抛出错误/宿主 hook 失败的消息上。归一化后，`runAgent` 的分派逻辑只认 7 个值，与具体 provider 解耦。aborted/error 的 assistant 消息连同部分内容照常持久化（对应"生成中途被取消"的场景）。
 
 ---
 
@@ -211,10 +211,10 @@ daemon 侧 `RunManager.cancel(sessionId)` 调 `AbortController.abort()`，循环
 
 ## 边界与出错
 
-- **provider 彻底失败**：`withRetry` 耗尽后 `stream()` 抛错 → 部分内容以 `stopReason:"error"` 持久化 → 悬空 tool_call 合成 `"llm call failed before execution"` 结果配对持久化（防下轮 400）→ `llm.failed` + `run.failed` → resolve（不 reject）。
+- **provider 彻底失败**：`withRetry` 耗尽后 `stream()` 抛出错误 → 部分内容以 `stopReason:"error"` 持久化 → 悬空 tool_call 合成 `"llm call failed before execution"` 结果配对持久化（防下轮 400）→ `llm.failed` + `run.failed` → resolve（不 reject）。
 - **参数解析失败 / 未知工具**：不执行、不进入权限检查；error result（`"invalid tool args json"` / `"unknown tool: <name>"`）随 tool 消息持久化，循环继续。未知工具名会做一次相近名提示：在已注册工具名里找编辑距离 ≤2 的最近者（大小写不敏感，`closestToolName`，候选含活跃清单与检索池），命中时错误文案变为 `"unknown tool: <name> (closest available: <最近名>)"`——模型拼错工具名时下一轮直接换对，不再盲猜第二次。带检索池的 run 另有一个按层拦截未提升 deferred 名字的分支，但其判定条件恒为假（可调用集合包含了执行器表的全部键），实际不会触发——deferred 名字直呼会照常执行（详见 [reference/tools](../reference/tools.md) 的"工具披露分层"）。
 - **迭代耗尽**：最后一次迭代若仍是 `tool_use`，先在该 assistant 消息上附加 `kind:"system"` 截断 note（"已达最大迭代次数（500）…"）再持久化，然后 `run.failed {code:"max_iterations"}`——用户和下一轮模型均可看到中断原因。
-- **hook 失败**：run-before 链的 fatal 抛错或持久化抛错 → `run.failed {code:"user_message_failed"}`，resolve `stopReason:"error"`；用户 hook 失败时的行为自行声明（skip 跳过 / deny 否决所在环节），失败只发 `hook.failed` 事件不伤 run（见 [hooks](./hooks.md)）。
+- **hook 失败**：run-before 链的 fatal 抛出错误或持久化抛出错误 → `run.failed {code:"user_message_failed"}`，resolve `stopReason:"error"`；用户 hook 失败时的行为自行声明（skip 跳过 / deny 否决所在环节），失败只发 `hook.failed` 事件不伤 run（见 [hooks](./hooks.md)）。
 - **工具执行器契约**：`ToolExecutor.execute` 应吞掉一切异常返回 `{status:"error", output}`（内置工具由 `shared.ts` 的包装保证）；循环对执行器抛异常（Promise 拒绝）也统一转为 error result（保证异常也产出结果）。执行 ctx 带可选 `signal`（父 run 的中止信号）、`onOutput`（部分输出的流式回传）与 `promote`（仅 tool_search 拿到：把命中的工具定义并入下一请求的工具清单，见 [reference/tools](../reference/tools.md) 的"工具披露分层"）。
 
 ---

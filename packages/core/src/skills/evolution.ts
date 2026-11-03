@@ -71,7 +71,7 @@ export const SKILL_EXTRACT_SYSTEM_PROMPT = [
 
 /** 调用方窄接口（照 MemoryQuery/MemoryScheduleBook 惯例：调用方按接口声明依赖）。 */
 
-/** 调度簿记 + 粗查：run 收尾钩子（considerFollowCheck）与 server 调度器调用。 */
+/** 调度记录 + 粗查：run 收尾钩子（considerFollowCheck）与 server 调度器调用。 */
 export interface SkillEvolutionScheduleBook {
   /**
    * run 收尾粗查（纯读、零 LLM）：范围 = 该项目全部会话（含子会话）各自的

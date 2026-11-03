@@ -104,7 +104,7 @@ export function createBashTool(opts: {
   const runBackground = (command: string): Promise<ToolResult> =>
     (async () => {
       if (opts.processes === undefined) {
-        return { status: "error" as const, output: "bash: 后台执行未装配进程注册表" }
+        return { status: "error" as const, output: "bash: 后台执行未组装进程注册表" }
       }
       const id = newId("proc")
       let spillPath =

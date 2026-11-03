@@ -46,7 +46,7 @@ export interface LlmRequest {
   promptCache?: { key?: string }
   /**
    * 取消信号（run 的 abort）。接入后取消能立即断开底层 HTTP 连接——此前取消
-   * 只停止消费流，连接与计费延续到流自然结束或超时。两个协议适配器用
+   * 只停止读取流，连接与计费延续到流自然结束或超时。两个协议适配器用
    * AbortSignal.any 把它和请求超时合并；外部信号触发的失败按取消处理：抛出
    * 原始 abort 原因，不归类超时，withRetry 不重试。一次性辅助调用（压缩
    * 摘要、goal 判定、autoname）可不传。

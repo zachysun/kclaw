@@ -46,7 +46,7 @@ describe("collectStreamText", () => {
     await expect(collectStreamText(llm, req)).rejects.toThrow("boom")
   })
 
-  it("signal 中止时抛错且不返回部分文本", async () => {
+  it("signal 中止时抛出错误且不返回部分文本", async () => {
     const controller = new AbortController()
     const llm = fakeLlmStreamingForever()
     const p = collectStreamText(llm, { model: "m", system: "", messages: [], tools: [] }, { signal: controller.signal })

@@ -501,7 +501,7 @@ export class MemoryPipeline {
 
   // ---- reconcile / 管理接口（MemorySystem 调用） ----
 
-  /** 项目库全量重建索引（FTS，派生物对齐磁盘）。 */
+  /** 项目库全量重建索引（FTS，派生物与磁盘一致）。 */
   reindexProject(projectId: string): void {
     this.#reindexProject(projectId)
   }

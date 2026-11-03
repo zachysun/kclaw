@@ -100,7 +100,7 @@ describe("forkSession", () => {
     expect(meta.systemBaseline?.live?.text).toBe("LIVE")
   })
 
-  it("messageId 不存在、源会话不存在、subagent 会话：抛错", () => {
+  it("messageId 不存在、源会话不存在、subagent 会话：抛出错误", () => {
     const s = new SessionStore(dir)
     const src = seedTwoRuns(s)
     expect(() => forkSession({ store: s }, { sourceId: src.id, messageId: "msg_nope" })).toThrow()
@@ -157,7 +157,7 @@ describe("forkSession", () => {
     const s = new SessionStore(dir)
     const src = seedTwoRuns(s)
     const attachmentsDir = join(dir, "attachments")
-    // 块引用的源文件不存在 → copyFileSync 抛错。
+    // 块引用的源文件不存在 → copyFileSync 抛出错误。
     const withAtt = newMessage(src.id, "user", [
       { id: "blk_1", type: "attachment", mimeType: "image/png", name: "gone.png", source: { type: "file", path: join(attachmentsDir, src.id, "att_1__gone.png") } },
     ])

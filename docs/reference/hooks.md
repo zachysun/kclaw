@@ -86,4 +86,4 @@ subagent run（`childRun`）的派生跳过：`memory-inject` 不检索、`auton
 |----|------|
 | `skip` | 失败即跳过，发一条 `hook.failed`，run 照常（用户 hook 默认） |
 | `deny` | 失败否决所在环节（tool-before 上 = 该工具不执行，fail-closed 自选档） |
-| `fatal` | 抛错穿透 run（仅内置可用；用户声明会被拒绝装载） |
+| `fatal` | 抛出错误穿透 run（仅内置可用；用户声明会被拒绝装载） |

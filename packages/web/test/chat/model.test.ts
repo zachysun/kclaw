@@ -559,7 +559,7 @@ describe("queue reducer", () => {
   it("message.queued first (before ack): adopts the local ROW (rename), not just bubbles", () => {
     let s = appendPendingQueueRow(base(), "排队消息", "wait")
     s = applyEvent(s, ev("message.queued", { messageId: "msg_8", disposition: "wait" }))
-    // 本地行被收养改名——不是落地一条空文本的新行（双行）
+    // 本地行被收养改名——不是写入一条空文本的新行（双行）
     expect(s.queue).toEqual([{ messageId: "msg_8", disposition: "wait", text: "排队消息" }])
     // 随后真 ack 到达：id 已跟踪 → no-op（不得偷走下一条的 local- 行）
     s = appendPendingQueueRow(s, "第二条", "wait")

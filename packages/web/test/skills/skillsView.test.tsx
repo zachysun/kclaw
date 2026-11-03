@@ -348,7 +348,7 @@ describe("SkillsView proposals tab（提案面）", () => {
     // 行内：状态 + 种类 + 项目尾段 + 创建时间 + applied 用量
     expect(container.textContent).toContain("待确认")
     expect(container.textContent).toContain("新增 · 项目（proj）")
-    // 创建时间按本地时区展示，期望值用同一 ISO 串本地算出，不钉死时区。
+    // 创建时间按本地时区展示，期望值用同一 ISO 串本地算出，不固定时区。
     const created = new Date("2026-09-21T08:30:00.000Z")
     const pad = (n: number) => String(n).padStart(2, "0")
     expect(container.textContent).toContain(

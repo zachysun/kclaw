@@ -53,7 +53,7 @@ describe("HookChain onExecuted（执行审计 tap）", () => {
     expect(records.every((r) => r.position === "run-before" && r.origin === "builtin" && r.runId === "run_9")).toBe(true)
   })
 
-  it("不注入回调时行为不变；回调抛错不伤链", async () => {
+  it("不注入回调时行为不变；回调抛出错误不伤链", async () => {
     const log: string[] = []
     const chain = new HookChain({
       onExecuted: () => { throw new Error("tap blew up") },
@@ -98,7 +98,7 @@ describe("HookChain", () => {
     expect(out).toEqual({ text: "rewritten-2" })
   })
 
-  it("skip 钩子抛错不中断：报告 hook.failed 后继续后面的 handler", async () => {
+  it("skip 钩子抛出错误不中断：报告 hook.failed 后继续后面的 handler", async () => {
     const onFailure = vi.fn()
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {})
     try {
@@ -120,7 +120,7 @@ describe("HookChain", () => {
     }
   })
 
-  it("fatal 钩子抛错让 run() 拒绝", async () => {
+  it("fatal 钩子抛出错误让 run() 拒绝", async () => {
     const chain = new HookChain()
     chain.register(entry("fatal-broken", "run-before", () => { throw new Error("fatal reason") }))
     await expect(chain.run("run-before", msg("x"))).rejects.toThrow("fatal reason")

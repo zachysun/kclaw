@@ -4,7 +4,7 @@
  * 记录 + 停机等待"样板收在这里；无定时器的宿主（goal 循环挂在空闲边缘）
  * 只用进行中记录这一半（createTracker）。
  *
- * 单次 sweep 抛错被接住并交给 onError：节拍必须活过自己的失败，一个坏
+ * 单次 sweep 抛出错误被接住并交给 onError：节拍必须活过自己的失败，一个坏
  * sweep 不能终止宿主（此前记忆/技能调度器的裸 `void sweep()` 会把异常
  * 漏成 unhandled rejection）。
  *
@@ -76,7 +76,7 @@ export interface IntervalHost {
 }
 
 /**
- * 起一个定时宿主：立即首扫一次，之后每 intervalMs 一扫；sweep 抛错经
+ * 起一个定时宿主：立即首扫一次，之后每 intervalMs 一扫；sweep 抛出错误经
  * onError 记日志后丢弃，节拍继续。宿主句柄上的 stopped/track 传入 sweep，
  * 供循环中途退出与登记 fire-and-forget 任务。
  */
@@ -85,7 +85,7 @@ export function startIntervalHost(opts: {
   label: string
   intervalMs: number
   sweep: (host: IntervalHost) => Promise<void> | void
-  /** sweep 整体抛错的去向；默认 console.error（带 label）。 */
+  /** sweep 整体抛出错误的去向；默认 console.error（带 label）。 */
   onError?: (err: unknown) => void
 }): IntervalHost {
   const onError = opts.onError ?? ((err) => console.error(`kclaw ${opts.label} sweep failed:`, err))

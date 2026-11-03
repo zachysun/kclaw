@@ -12,7 +12,7 @@
 - **token 是 daemon 的稳定身份**：`<home>/token` 首次启动时生成（UUID，文件权限 0600，仅属主可读写），重启复用，stop 不删除；仅 daemon.json 会被删除。因此 CLI/WebUI 保存的 token 在 daemon 重启后仍然有效。
 - **鉴权是"每路由必带 Bearer"加白名单豁免**：一个 `preHandler` hook 拦截全部路由，只有三处豁免——`/health`、`/ws`、静态 WebUI 外壳（见下）。豁免列表是封闭集合，新增路由默认受保护。
 - **有界停止**：`stop()` 的每一步（停调度、关服务器）有独立超时（默认 60s）。超时则 `stop()` reject、daemon.json **保留**——进程仍在运行，指向它的文件必须与事实一致；虚报"已停止"会诱发双 daemon、cron 双触发。
-- **provider 缺失是硬错误**：组装期就抛错终止，不启动一个"半配置"的 daemon。
+- **provider 缺失是硬错误**：组装期就抛出错误终止，不启动一个"半配置"的 daemon。
 - **MCP 恒定组装，且启动零连接**：无论配置文件里有没有 server，daemon 都构建一个 `McpManager`（空的管理器没有任何连接、开销为零，管理路由因此永远可用，从 WebUI 添加第一个 server 不需要先改配置）。配置来自全局 `~/.kclaw/mcp.json` 加**每个已知项目**的 `.kclaw/mcp.json`（项目集合 = daemon 主工作目录 + 全部会话记录里出现过的工作目录，daemon 启动时现算，运行中新建会话即时挂载；不靠任何清单文件，与技能同源，放好配置文件即生效。唯一例外：daemon 主目录嵌在某个项目里时，该项目的配置文件与全局 `mcp.json` 是同一个路径，两层无法独立存在，这样的目录不挂项目组，见 [mcp](../core/mcp.md)）。连接是惰性的：启动与配置变更都不发起连接，run 用到某项目的工具、或用户手动 connect 时才按需连接（见 [mcp](../core/mcp.md)）。连接失败只打一行日志，永远不会拖垮 daemon。
 
 ## 接口
@@ -58,9 +58,9 @@ export function bearerMatches(header: string | undefined, token: string): boolea
 
 ## 启动流程
 
-入口链：`packages/server/bin/kclaw-server.mjs`（package.json 的 `bin` 入口）→ `import { launchDaemon } from "../dist/index.js"` → `launchDaemon({ home, port })`。home 解析：`--home <dir>`（或 `--home=<dir>`）优先，否则 `resolvePaths` 内部使用 `KCLAW_HOME` env ?? `~/.kclaw`。端口解析：`--port <n>`（或 `--port=<n>`）优先，0 是合法值（强制临时端口，压过配置）；旗标缺席时由 `launchDaemon` 读配置 `server.port`，再缺席才用临时端口。`--port` 非整数或越界（0-65535 之外）报一行错退出 1；launch 失败（配置不可解析、固定端口被占用等）同样是一行 stderr 加退出 1，不裸抛堆栈。bin 脚本就绪后向 stdout 输出一行 `{"port":<port>}`，CLI 与测试以这一行输出作为就绪信号。
+入口链：`packages/server/bin/kclaw-server.mjs`（package.json 的 `bin` 入口）→ `import { launchDaemon } from "../dist/index.js"` → `launchDaemon({ home, port })`。home 解析：`--home <dir>`（或 `--home=<dir>`）优先，否则 `resolvePaths` 内部使用 `KCLAW_HOME` env ?? `~/.kclaw`。端口解析：`--port <n>`（或 `--port=<n>`）优先，0 是合法值（强制临时端口，压过配置）；旗标缺席时由 `launchDaemon` 读配置 `server.port`，再缺席才用临时端口。`--port` 非整数或越界（0-65535 之外）报一行错退出 1；launch 失败（配置不可解析、固定端口被占用等）同样是一行 stderr 加退出 1，不输出完整 call stack。bin 脚本就绪后向 stdout 输出一行 `{"port":<port>}`，CLI 与测试以这一行输出作为就绪信号。
 
-bin 在进程级注册了两个业务代码接不住的异常出口，策略不同：`unhandledRejection`（异步迟到的失败，进程状态仍然干净）只记一行 stderr 带堆栈、daemon 继续跑；`uncaughtException`（同步异常逃出了所有 try/catch，进程状态已不可信）记 stderr 后**退出 1**——事件流的追加式写入与 daemon.json 的 pid 认领机制让重启无损，非零退出也让 CLI 立即知道 daemon 死了，而不是对着一个僵而不死的进程干等。
+bin 在进程级注册了两个业务代码接不住的异常出口，策略不同：`unhandledRejection`（异步迟到的失败，进程状态仍然干净）只记一行 stderr 带 call stack、daemon 继续运行；`uncaughtException`（同步异常逃出了所有 try/catch，进程状态已不可信）记 stderr 后**退出 1**——事件流的追加式写入与 daemon.json 的 pid 认领机制让重启无损，非零退出也让 CLI 立即知道 daemon 已退出，而不是对着一个失去响应的进程干等。
 
 `launchDaemon` 的组装序（每步失败都让整个启动 reject，daemon 不会半启动）：
 
@@ -83,7 +83,7 @@ new SessionStore(paths.sessionsDir, onAppended)
                                     store 构造时注入写入完成通知回调：每个事件（含投影）
                                     成功写入 events.jsonl 后发 session.appended，
                                     并顺路喂历史检索索引的镜像写入
-                                    （通知抛错被吞掉，写成功不被通知连累）
+                                    （通知抛出错误被吞掉，写成功不被通知连累）
 embedding 判定链（memory.embedding） model 非空才构造 embedding 客户端（见 memory.md 判定链）；
                                     构造在 EventBus/SessionStore 之后、MemorySystem 之前，赋给下方 memory
 new MemorySystem({memoryDir, sessions, config, resolveLlm, embed, emit})
@@ -106,7 +106,7 @@ createMcpProjects({workspace, manager, allMetas, loadEntries, home})
                                     全部会话 meta（含回收站）的 workdir 并集，减去项目
                                     配置文件与全局 mcp.json 同路径的目录（home 用于排除
                                     这个形态：两层共用一个文件，项目层无法独立存在），
-                                    启动时 sync() 一次对齐（挂缺失、退出无会话项目，60s 一次），
+                                    启动时 sync() 一次（补挂缺失的项目、移除已退出会话的项目，60s 一次），
                                     并从 SessionStore 的 session.created 回调即时 mount
                                     新项目；每目录挂一个两阶段项目 watch（先 watch 项目
                                     顶层等 `.kclaw` 出现、再切 `.kclaw` watch），手工编辑
@@ -215,7 +215,7 @@ return { port, token, pid, stop }
 2. 条目留空的字段由环境变量补：`KCLAW_LLM_BASE_URL`、`KCLAW_LLM_API_KEY`、`KCLAW_LLM_MODEL`（`valueOrEnv`：配置值非空则用配置，否则用环境变量，再否则空串）；
 3. `baseUrl` 仍为空 → 抛 `no llm provider configured: set providers in config.json or KCLAW_LLM_BASE_URL env`（apiKey 可为空——免密钥端点合法）；`model` 为空 → 抛 `no llm model configured: …`。
 
-抛错发生在 `launchDaemon` 内部，daemon 从未 listen；第一步认领的占位 daemon.json 留在原处（pid 存活时挡住后续启动，pid 退出后被回收重认领）——CLI 的 `ensureDaemon` 轮询 5s 后报"daemon did not become healthy"。
+抛出错误发生在 `launchDaemon` 内部，daemon 从未 listen；第一步认领的占位 daemon.json 留在原处（pid 存活时挡住后续启动，pid 退出后被回收重认领）——CLI 的 `ensureDaemon` 轮询 5s 后报"daemon did not become healthy"。
 
 **run 客户端按条目解析**：每个 run 的客户端由 `llmForRun(onRetry, entryKey)` 给出，`entryKey` 来自 `resolveRunModel`（run 组装先解析条目、再建客户端）。daemon 的共享 resolver（`createProviderResolver`）按条目名缓存裸客户端，签名 = `format|baseUrl|apiKey|timeoutMs`——条目缺失回退到默认条目、连默认条目都没有则回退到环境变量端点（openai 格式）。Model 页的增删改持久化后经 ConfigNotifier 发布 `providers` 变更，resolver 收到即整体清空缓存，下个 run 自动重建（签名检查保留为优化）：热生效于下一个 run，无需重启。`withRetry` 由 `llmForRun` 每次现包（重试回调归属当次 run）；`format` 经 `createProviderClient` 选协议（openai → `createOpenAiCompatClient`，anthropic → `createAnthropicClient`，机制见 [provider](../core/provider.md)）。
 
@@ -249,7 +249,7 @@ app.addHook("preHandler", async (request, reply) => {
 
 ## 停止流程
 
-bin 脚本注册信号处理：SIGTERM/SIGINT → `shutdown()`（`stopping` 标志防重入）→ `daemon.stop()` → 正常停止，exit 0；`stop()` 抛错（某步超时）则记录 stderr，exit 1。
+bin 脚本注册信号处理：SIGTERM/SIGINT → `shutdown()`（`stopping` 标志防重入）→ `daemon.stop()` → 正常停止，exit 0；`stop()` 抛出错误（某步超时）则记录 stderr，exit 1。
 
 `stop()` 的拆除序：常驻宿主按注册序逐项限时执行，其余步骤与启动相反，每步有界：
 
@@ -296,9 +296,9 @@ rmSync(<home>/daemon.json)          // 只有全部成功才删
 - **stop 后 token 仍在**：`<home>/token` 是 daemon 的身份，不是某次运行的临时凭证；重装/换 token 需手动删文件。
 - **stale daemon.json 在启动时自愈**：`acquireDaemonSlot` 见到死 pid 的残留文件即删除并重新 `wx` 认领；存活 pid 则拒绝启动。运行中失效的发现（health 检测、respawn 决策）仍在 CLI 侧（见上文 ensureDaemon/stopDaemon）。
 - **`/health` 无鉴权，因此也没有信息泄露控制**：它只返回 `{ok:true}`，不暴露版本/端口/pid；`/status`（version、uptimeSec）受鉴权保护。
-- **配置文件损坏即启动失败**：`loadConfig` 对无法解析的 JSON 直接抛错（静默退回默认值会丢掉用户的权限规则），daemon 不启动。
+- **配置文件损坏即启动失败**：`loadConfig` 对无法解析的 JSON 直接抛出错误（静默退回默认值会丢掉用户的权限规则），daemon 不启动。
 - **bin 假定构建产物存在**：`kclaw-server.mjs` import 的是 `../dist/index.js`，packages/server 未构建时启动直接失败（CLI 的错误信息里提示 `pnpm -C packages/server build`）。
-- **MCP server 挂了不牵连 daemon**：连接/调用失败只进状态与日志（`kclaw mcp <name> error: …`，项目条目带组前缀 `kclaw mcp <路径> · <name> error: …`），该 server 的工具从下一次 run 起消失，其余功能不受影响（见 [mcp](../core/mcp.md)）。
+- **MCP server 卡死不牵连 daemon**：连接/调用失败只进状态与日志（`kclaw mcp <name> error: …`，项目条目带组前缀 `kclaw mcp <路径> · <name> error: …`），该 server 的工具从下一次 run 起消失，其余功能不受影响（见 [mcp](../core/mcp.md)）。
 
 ## 关联
 

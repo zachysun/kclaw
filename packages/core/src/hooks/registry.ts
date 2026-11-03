@@ -7,7 +7,7 @@
  * - `refresh()` rescans the user hooks dir and rebuilds the bookkeeping:
  *   healthy files contribute entries, broken files contribute failures.
  * - Load failures are deduplicated: a hook.failed(load) event fires ONCE per
- *   file version (name+mtime+error), not once per run — the管理面 keeps
+ *   file version (name+mtime+error), not once per run — the audit page keeps
  *   showing the failure, the event stream doesn't drown.
  * - `snapshot()` hands the run assembly the current healthy+enabled entries.
  * - `list()` is the management-plane view (user side); the route merges it

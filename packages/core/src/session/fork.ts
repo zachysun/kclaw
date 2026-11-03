@@ -89,7 +89,7 @@ export function forkSession(deps: ForkDeps, opts: { sourceId: string; messageId?
  * 切点归一化：语义点是用户所点的消息，实际切到该消息所属 run 的结束处
  * （run.ended，含）——复制段不会截断在工具配对中间，悬空 toolCall 从根上
  * 不存在（codex ForkBoundary/deepseek 合成闭合器同判，kclaw 不需要合成
- * 闭合器：切点向外扩而不是向内截）。流里找不到该消息 → 抛错；该 run 没有
+ * 闭合器：切点向外扩而不是向内截）。流里找不到该消息 → 抛出错误；该 run 没有
  * run.ended（daemon 中途崩溃的残流）→ 切到流末尾。
  */
 function resolveCutIndex(events: SessionEvent[], messageId: string | undefined): number {

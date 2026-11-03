@@ -35,7 +35,7 @@ const USER_HOOK_EXTS = new Set([".js", ".mjs", ".ts"])
 const DEFAULT_USER_ORDER = 1000
 
 export interface LoadFailure {
-  /** File basename — the hook's identity (shown in the管理面). */
+  /** File basename — the hook's identity (shown in the audit page). */
   name: string
   path: string
   error: string

@@ -8,7 +8,7 @@
 
 - **`kclaw` 不带子命令即 chat**：不指定子命令时默认动作即 `chatAction`。chat 的选项（`--session`/`--think`/隐藏的 `--yes`/`--no`）挂在 program 层而非 `chat` 子命令上，`optsWithGlobals` 会把 program 选项合并进子命令的选项里，因此 `kclaw --session X` 与 `kclaw chat --session X` 都能解析到。
 - **`--yes`/`--no` 是隐藏选项**：供测试与脚本自动应答确认卡片使用（`new Option(...).hideHelp()`），帮助中不出现；人机交互使用 @clack 确认框。
-- **所有 action 走同一个 `run()` 包装**（`src/index.ts`）：从合并选项解析 `--home` 传给实现，任何抛错统一转为 stderr 一行 + 退出码 1——命令实现中不出现 `process.exit`。
+- **所有 action 走同一个 `run()` 包装**（`src/index.ts`）：从合并选项解析 `--home` 传给实现，任何抛出错误统一转为 stderr 一行 + 退出码 1——命令实现中不出现 `process.exit`。
 - **argv 只在作为入口时解析**：`invokedAsMain` 用 `realpathSync(process.argv[1])` 与 `import.meta.url` 比较（与 ESM 加载器一致的符号链接解析），所以 `import "@kclaw/cli"` 当库引用没有副作用；`KclawClient` 与 `runChat` 同时作为库导出。
 - **连接即自动启动 daemon**：`KclawClient.connect` 读 `<home>/daemon.json`、探活 `/health`，不健康就先 `ensureDaemon` 再重读——任何命令在冷机器上直接可用，用户不需要先知道 daemon 的存在。
 - **Node >= 22 是启动门槛**：解析 argv 之前检查 `process.versions.node` 主版本，不满足则打印一行错误并 `process.exit(1)`，避免旧运行时报出难懂的语法/API 错误（详见 [onboarding](./onboarding.md)）。
@@ -118,8 +118,8 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 
 ### 空闲重连与消息重发
 
-- **重连**（`reconnect`）：socket 意外关闭时重新 `KclawClient.connect`（daemon 已终止时重新启动一个）、重新订阅、`GET /sessions/:id/messages` 全量拉取一次进行对齐（不重放渲染），打印 `[reconnected]`；重连失败打印 `[连接断开，重连失败 — 输入 /exit 退出]` 并放弃。
-- **重发规则**：一条发送中的消息只有当**一帧都没观察到**（连 `send_message_ack` 都没有）才会在重连后重发——零帧说明消息从未到达存活的 daemon（ws 库对已关闭的 socket 静默丢帧、只在连接中才同步抛错，两者都等价于"未送达"）。观察到任何一帧即视为已送达，中途断线绝不重发：run 可能已在服务端排队，重发会导致同一消息被执行两次。
+- **重连**（`reconnect`）：socket 意外关闭时重新 `KclawClient.connect`（daemon 已终止时重新启动一个）、重新订阅、`GET /sessions/:id/messages` 全量拉取一次以更新本地状态（不重放渲染），打印 `[reconnected]`；重连失败打印 `[连接断开，重连失败 — 输入 /exit 退出]` 并放弃。
+- **重发规则**：一条发送中的消息只有当**一帧都没观察到**（连 `send_message_ack` 都没有）才会在重连后重发——零帧说明消息从未到达存活的 daemon（ws 库对已关闭的 socket 静默丢帧、只在连接中才同步抛出错误，两者都等价于"未送达"）。观察到任何一帧即视为已送达，中途断线绝不重发：run 可能已在服务端排队，重发会导致同一消息被执行两次。
 - **120s 静默看门狗**：重连后观察到的帧带 `POST_RECONNECT_SILENCE_MS = 120_000` 的不活动超时，已终止的 run 永远不会完成，REPL 不可无限等待；超时打印提示后回到提示符。重连前的等待不加人为上限（`nextFrame` 对非有限超时直接跳过等待：node 会把 `setTimeout(fn, Infinity)` 钳到 1ms，反而会截断仍在运行的 run）。
 
 ### 权限模式：提示符徽章与 Shift+Tab 循环
@@ -158,10 +158,10 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 
 ## 边界与出错
 
-- **订阅确认失败即失败**：`openSubscribed` 5s（`SUBSCRIBE_ACK_MS`）等不到 `subscribed` 或收到 error 帧即抛错并关闭 socket，不会把消息发往一条还没完成订阅（总线尚未登记分发）的连接。
-- **确认应答发送失败被忽略**：`confirmation.resolve` 发送抛错只忽略（socket 正在断开），交给重连路径接管。
+- **订阅确认失败即失败**：`openSubscribed` 5s（`SUBSCRIBE_ACK_MS`）等不到 `subscribed` 或收到 error 帧即抛出错误并关闭 socket，不会把消息发往一条还没完成订阅（总线尚未登记分发）的连接。
+- **确认应答发送失败被忽略**：`confirmation.resolve` 发送抛出错误只忽略（socket 正在断开），交给重连路径接管。
 - **管道 stdin 的 EOF**：stdin 关闭时 readline 触发 close，循环自然退出；`rlClosed` 标志让迟到的 `prompt()` 变成空操作而不是抛 "readline was closed"（缓冲行仍会经异步迭代器到达）。
-- **重连后不回放**：重连只拉取全量对齐数据但不渲染，错过的事件不再补偿；持久化消息自洽，下次进入 REPL 重新拉取全量即可（协议规则见 [protocol](../core/protocol.md)）。
+- **重连后不回放**：重连只拉取全量数据用于更新本地状态但不渲染，错过的事件不再补偿；持久化消息自洽，下次进入 REPL 重新拉取全量即可（协议规则见 [protocol](../core/protocol.md)）。
 - **cron 表格无分页**：`GET /cron` 全量返回，任务多时表格整体打印。
 - **文件引用宁可整条失败也不靠猜**：`@token` 越界、不存在或不是文件时消息不发出——发出去模型要么读不到要么读到不该读的。文本与二进制的区分只按扩展名和 MIME 粗判，识别不了的类型一律当"非文本"处理，只留一条 fs_read 提示。
 - **自定义命令是提示词模板，不是脚本**：它只做一件事——把模板里的 `{{args}}` 替换成命令参数后作为普通消息发送，没有任何 shell 执行面；与内置命令重名的文件直接忽略。

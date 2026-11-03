@@ -605,7 +605,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
     historySearch, // GET /search 跨会话检索（与 history_search 工具同一数据源）
     webDist: resolveWebDist(opts.webDist),
     memory, // /memory 路由调用（管理界面）
-    hooks: hookRegistry, // GET /hooks 管理面
+    hooks: hookRegistry, // GET /hooks 管理接口
     skillsEvolution, // /skills/proposals 提案治理面（技能进化）
   })
   // Port precedence: explicit override (bin --port) ?? config server.port ??

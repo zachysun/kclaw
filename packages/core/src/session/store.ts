@@ -156,7 +156,7 @@ export class SessionStore {
     // compaction 状态、mode/model 覆盖）被这次追加永久固化。检测只在
     // 落后后的第一次追加生效，代价是一次 O(n) 重建，仅异常路径发生。
     // 重建按尽力而为降级：行数差异也可能来自文件损坏（而非崩溃窗口），
-    // 此时严格读全文会抛错——追加路径对损坏文件保持历史容忍语义
+    // 此时严格读全文会抛出错误——追加路径对损坏文件维持历史行为（照常追加）
     // （run 历史读取与 verifyChain 才是损坏的暴露面），退回旧投影继续。
     let base: SessionMeta | undefined = current
     if (current !== undefined && current.chainLength !== tail.lineCount) {
@@ -262,7 +262,7 @@ export class SessionStore {
 
   /** Rebuild the meta projection from the full event stream and write it back;
    *  undefined when the session has no events (does not exist). 链锚字段按
-   *  事件文件原文重算（重建的 meta 与流对齐，不是投影事件能推出的）。 */
+   *  事件文件原文重算（重建的 meta 与事件流一致，不是投影事件能推出的）。 */
   rebuildMeta(id: string): SessionMeta | undefined {
     const events = this.readEvents(id)
     if (events.length === 0) return undefined

@@ -51,7 +51,7 @@ function gatedClient() {
     async *stream(req): AsyncIterable<LlmStreamEvent> {
       calls.push(req)
       await gate.promise
-      if (failAt.index === calls.length - 1) throw new Error("摘要挂了")
+      if (failAt.index === calls.length - 1) throw new Error("摘要卡死")
       yield { type: "text_delta", delta: "段摘要内容" }
       yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 10, outputTokens: 5 } }
     },

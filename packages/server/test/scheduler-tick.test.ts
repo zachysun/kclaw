@@ -177,7 +177,7 @@ describe("startSchedulerTick", () => {
   it("fires a due cron end to end: session, cron note, markRun ok, no re-run", async () => {
     const env = makeEnv(scriptClient([textTurn("早报好了")]))
     const cron = env.scheduler.create({ name: "早报", cron: "* * * * *", prompt: "给我今日早报" })
-    // 时钟钉死在 t0：claimDue 把 next_run_at 推进到"下一个分钟边界"（12:01），
+    // 时钟固定在 t0：claimDue 把 next_run_at 推进到"下一个分钟边界"（12:01），
     // 真实时钟若在观察窗内跨过边界，* * * * * 的任务会合法地再次到期——
     // 合跑负载下偶发双触发就是这个机理。固定 now 后 next_run_at 永远在
     // "未来"，no-re-run 断言与真实时钟彻底解耦（t0 取半分钟处，边界 30s 外）。

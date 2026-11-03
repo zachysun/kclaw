@@ -177,7 +177,7 @@ export interface HookEvent {
   name: string
   position: string
   origin: "builtin" | "user"
-  /** ok=正常返回；failed=抛错；timeout=超时被终止。 */
+  /** ok=正常返回；failed=抛出错误；timeout=超时被终止。 */
   outcome: "ok" | "failed" | "timeout"
   durationMs: number
   /**

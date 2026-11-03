@@ -275,8 +275,8 @@ export interface RunEngineDeps {
    */
   extraHooks?: HookEntry[]
   /**
-   * 技能进化（提案制）：daemon 注入的完整系统（调度簿记 + 提炼/提案两组能力）。
-   * run 收尾钩子 skill-follow-check（order 40）调用簿记做粗查排检查；工具
+   * 技能进化（提案制）：daemon 注入的完整系统（调度记录 + 提炼/提案两组能力）。
+   * run 收尾钩子 skill-follow-check（order 40）调用调度层做粗查排检查；工具
    * skill_create 调用 propose。config 未开启时钩子直接跳过，工具拿到固定
    * 关闭文案；该 dep 缺席（裸引擎测试）则两者都不注册。
    */
@@ -1000,7 +1000,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
   contextOverheadRef.current = overheadTokens
 
   // R6 压缩前缀复用：把本 run 的最终请求形状（model/system/已排序工具定义）
-  // 登记给 Compactor——同会话的下一次段摘要调用据此重建与主请求对齐的前缀，
+  // 登记给 Compactor——同会话的下一次段摘要调用据此重建与主请求一致的前缀，
   // 命中会话缓存。手动压缩等无 run 上下文的路径没有快照，退回独立形状。
   engine.compactor.registerPrefix(sessionId, { model, system, tools: toolDefs })
 

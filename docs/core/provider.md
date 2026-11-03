@@ -200,9 +200,9 @@ anthropic 格式每个 SSE 事件的映射：
 
 | 阶段 | 位置 | 超时后的行为 |
 |------|------|--------------|
-| 等响应头 | `fetch` 抛错 | 抛 `llm http timeout after <n>ms` |
-| 非 2xx 读错误体 | `res.text()` 抛错 | 超时优先抛超时；**超时前**的读失败则吞掉、text 记为空——状态行 `llm http <status>` 仍能完成分类 |
-| 读流式响应体 | SSE 循环抛错 | 抛 `llm http timeout after <n>ms` |
+| 等响应头 | `fetch` 抛出错误 | 抛 `llm http timeout after <n>ms` |
+| 非 2xx 读错误体 | `res.text()` 抛出错误 | 超时优先抛超时；**超时前**的读失败则吞掉、text 记为空——状态行 `llm http <status>` 仍能完成分类 |
+| 读流式响应体 | SSE 循环抛出错误 | 抛 `llm http timeout after <n>ms` |
 
 非 2xx 且响应体读成功时抛 `llm http <status>: <body文本>`——错误体的读取同样受超时约束，不会把一种无限等待换成另一种。
 

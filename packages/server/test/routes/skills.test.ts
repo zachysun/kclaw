@@ -130,7 +130,7 @@ describe("skill reuse routes", () => {
       expect(patched.statusCode).toBe(200)
       const listed2 = await app.inject({ method: "GET", url: "/skills", headers: auth })
       expect((listed2.json() as { name: string; visibility: string }[]).find((r) => r.name === "pdf")).toMatchObject({ visibility: "all" })
-      // 管理面记录不受可见性过滤影响
+      // 管理接口记录不受可见性过滤影响
       const links = await app.inject({ method: "GET", url: "/skills/links", headers: auth })
       expect(links.json()).toMatchObject({ links: [{ name: "pdf", tier: "all", agent: "claude" }] })
       // 取消复用

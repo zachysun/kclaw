@@ -52,7 +52,7 @@ export function renderThreadFile(tf: ThreadFile): string {
 /**
  * 防覆盖写：永远读最新磁盘内容做基准 —— 人工改动因此先被重解析
  * 再合并，永不静默丢失。文件不存在时用 create() 起稿；存在但不可解析（如
- * 人工手写无 frontmatter）时抛错、绝不覆盖，宁可不写也不丢数据。
+ * 人工手写无 frontmatter）时抛出错误、绝不覆盖，宁可不写也不丢数据。
  */
 export function writeThreadFile(
   path: string,

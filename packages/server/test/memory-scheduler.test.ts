@@ -26,7 +26,7 @@ afterEach(() => { rmSync(root, { recursive: true, force: true }) })
 
 const viFnAsync = () => vi.fn(async () => undefined)
 
-/** 调度器调用的全部 MemorySystem 公开方法，fake 对齐真实名字；可按用例覆盖。 */
+/** 调度器调用的全部 MemorySystem 公开方法，fake 使用与真实一致的名字；可按用例覆盖。 */
 function fakeSystem(over: Record<string, unknown> = {}) {
   return {
     triggerInterval: vi.fn(async () => undefined),

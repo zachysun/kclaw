@@ -9,7 +9,7 @@
 ## 设计决策
 
 - **一个错误路径，两种消息来源**：非 2xx 时优先取服务端 `body.error` 字符串（服务端统一错误形状就是 `{error: string}`，见 [http-api](../server/http-api.md)），取不到（非 JSON 错误体等）退回 `HTTP <status>`。抛出的 `HttpRequestError` 始终附带 `status`，调用方可以按状态码分支而不必解析消息文本。
-- **401 用 hook 而不是抛错语义**：每次 401 响应都在抛错之前触发一次 `onUnauthorized`（比如 WebUI 的"清 token 回输入页"），然后照常抛错——调用方不用在 catch 里猜状态码做重入。
+- **401 用 hook 而不是抛出错误语义**：每次 401 响应都在抛出错误之前触发一次 `onUnauthorized`（比如 WebUI 的"清 token 回输入页"），然后照常抛出错误——调用方不用在 catch 里猜状态码做重入。
 - **token 每次请求重取**：`getToken` 在每次请求时重新求值，所以 401 后重新输入、token 轮换立即对下一次请求生效，不需要重建客户端；返回 `null` 就不发 `Authorization` 头。
 - **contentType 是"原样透传"开关**：设置它时 body 不 JSON 序列化、按原始字节流发送——附件上传（CLI 的 `uploadAttachment`、WebUI 的 `upload`）用它传文件本体。
 
@@ -26,7 +26,7 @@ export interface HttpRequestInit {
   body?: unknown                  // JSON 序列化为 application/json；设置了 contentType 则原样透传
   contentType?: string            // 设了就按这个 Content-Type 原样发 body（附件上传用）
   getToken: () => string | null   // 每次请求重评估；null 不发 Authorization 头
-  onUnauthorized?: () => void     // 每次 401 触发一次，发生在抛错之前
+  onUnauthorized?: () => void     // 每次 401 触发一次，发生在抛出错误之前
 }
 
 export async function httpRequest(url: string, init: HttpRequestInit): Promise<unknown>

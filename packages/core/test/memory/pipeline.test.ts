@@ -571,7 +571,7 @@ describe("consolidate", () => {
   })
 })
 
-describe("提取/沉淀的接口约定（prompt ↔ 校验对齐，回归 2026-09-01）", () => {
+describe("提取/沉淀的接口约定（prompt 与校验一致，回归 2026-09-01）", () => {
   it("EXTRACT_SYSTEM_PROMPT pins the field names: op discriminator, mandatory file, full JSON example", () => {
     // 提示词必须与 #extract 校验（file 非空 + op 三值）说同一套字段名——
     // 真实模型按 prompt 写 JSON，字段名只在这里教。示例必须同时含 op 与 file。

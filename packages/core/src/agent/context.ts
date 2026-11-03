@@ -20,7 +20,7 @@ const SUMMARY_PREAMBLE =
 
 /**
  * 压缩总摘要注入时的收尾提示：指向 session_search（压缩质量守卫的提示词层）。
- * 措辞与工具的真实行为对齐：searchSessionEvents 扫描的是被压缩覆盖的原始
+ * 措辞与工具的真实行为一致：searchSessionEvents 扫描的是被压缩覆盖的原始
  * 消息块（含工具输出），返回段摘要与命中片段。
  */
 const SUMMARY_SEARCH_HINT =
@@ -52,7 +52,7 @@ export function renderReminder(kind: string, text: string): string {
 }
 
 /**
- * 系统提示词里对注入约定的声明（对齐 Claude Code：在系统提示中预先声明标签
+ * 系统提示词里对注入约定的声明（与 Claude Code 一致：在系统提示中预先声明标签
  * 可信，模型才能区分"系统注入"与"用户输入"）。主会话与subagent的系统提示词
  * 组装都经 agent/system-prompt.ts 拼接本段（人设基础文本分别来自 run-assembly.ts
  * 的 systemPrompt 与 subagent.ts 的 subagentSystemPrompt）。

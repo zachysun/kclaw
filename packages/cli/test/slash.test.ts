@@ -201,7 +201,7 @@ describe("slash command registry", () => {
     expect(fake.resumeInput).toHaveBeenCalledTimes(1)
   })
 
-  it("sessions: select 抛错时 finally 仍 resumeInput（终端不锁死）", async () => {
+  it("sessions: select 抛出错误时 finally 仍 resumeInput（终端不锁死）", async () => {
     const fake = makeFakeCtx(async () => [
       { id: "ses_a", title: "A", createdAt: "c", updatedAt: "t0" },
     ])

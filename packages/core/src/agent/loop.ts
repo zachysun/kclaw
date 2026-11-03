@@ -325,7 +325,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
     // 持久化、事件流与 outcome 一概不动。currentUserText 供改写型钩子锚定
     // 本轮用户消息（steer 插话后"最后一条 user"不再是本轮消息）。带包装的
     // 消息在 toProviderMessages 已按 llmText 重放，锚定值必须用同一字节才
-    // 匹配得上；无包装时用原文块（钩子在无包装载荷下原样返回，不消费该值）。
+    // 匹配得上；无包装时用原文块（钩子在无包装载荷下原样返回，不使用该值）。
     const final =
       (await deps.hooks.run("llm-before", {
         messages: provider,
@@ -413,7 +413,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
           // runAgent，默认该字段即零缓存标记。
           promptCache: { key: input.sessionId },
           // 取消信号接进 HTTP 请求：abort 时底层连接立即断开，不再延续到
-          // 流自然结束或请求超时（streamWithAbort 只保证停止消费）。
+          // 流自然结束或请求超时（streamWithAbort 只保证停止读取）。
           ...(deps.signal === undefined ? {} : { signal: deps.signal }),
         }), deps.signal)) {
           // Abort checkpoint: stop consuming the stream the moment the signal fires.
@@ -623,7 +623,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       await runToolTurn(entries, { input, deps, emit, ctx, all, loop: loopState, threshold: loopThreshold })
       // 迭代边界中途压缩（compaction-check 位置）：工具批次
       // 完成后、引导注入之前。返回 null/undefined = 不压/已取消/失败，照常继续；
-      // 抛错（skip 语义下不会发生，防御保留）同样照常继续（压缩失败不补救，
+      // 抛出错误（skip 语义下不会发生，防御保留）同样照常继续（压缩失败不补救，
       // 省略保底）。非 null 视图从下一次请求起生效（buildMessages）。
       try {
         const next = await deps.hooks.run("compaction-check", {})
@@ -631,7 +631,7 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
       } catch { /* 压缩失败不补救：省略保底 */ }
       // Steering drain（turn-boundary 位置）：工具批次后、下一次
       // llm.stream 前。取到的消息按序注入：created → persist(onMessage) →
-      // completed → steered。fatal 钩子（内置 steering-drain）抛错按原语义终止
+      // completed → steered。fatal 钩子（内置 steering-drain）抛出错误按原语义终止
       // run（run.failed "steering_failed"，resolve stopReason "error"）。
       let steerMsgs: Message[] = []
       try {

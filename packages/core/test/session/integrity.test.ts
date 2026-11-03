@@ -24,7 +24,7 @@ const lines = (id: string) => readFileSync(eventsPath(id), "utf8").split("\n").f
 const writeLines = (id: string, ls: string[]) => writeFileSync(eventsPath(id), ls.join("\n") + "\n")
 
 describe("哈希链写入与读取", () => {
-  it("appendEvent 写入 $prev 且 readEvents 剥离", () => {
+  it("appendEvent 写入 $prev 且 readEvents 读取时去除", () => {
     const { store, id } = seeded(3)
     const raw = lines(id)
     expect(raw).toHaveLength(4) // session.created + 3 messages
@@ -32,7 +32,7 @@ describe("哈希链写入与读取", () => {
     for (let i = 1; i < raw.length; i++) {
       expect((JSON.parse(raw[i]!) as Record<string, unknown>).$prev).toBe(lineDigest(raw[i - 1]!))
     }
-    // 读取边界剥离：上层事件不含 $prev
+    // 读取边界去除：上层事件不含 $prev
     for (const e of store.readEvents(id)) expect("$prev" in (e as object)).toBe(false)
     const tail = store.readEventsFrom(id, 3)
     expect(tail).toHaveLength(1)
@@ -97,7 +97,7 @@ describe("哈希链写入与读取", () => {
   })
 })
 
-describe("verifyEventChain 篡改检出（原型场景对齐）", () => {
+describe("verifyEventChain 篡改检出（与原型场景一致）", () => {
   it("正常链 ok", () => {
     const { store, id } = seeded(3)
     const r = store.verifyChain(id)
@@ -187,7 +187,7 @@ describe("verifyEventChain 篡改检出（原型场景对齐）", () => {
     expect(r.status).toBe("ok")
   })
 
-  it("崩溃窗口（事件已写、meta 未写）→ 容忍并自愈", () => {
+  it("崩溃窗口（事件已写、meta 未写）→ 兼容并自愈", () => {
     const { store, id } = seeded(3)
     // 模拟：手动追加一条链正确的行（走 store 内部逻辑等价于事件写成功），
     // 但把 meta 回滚到追加前
@@ -195,8 +195,8 @@ describe("verifyEventChain 篡改检出（原型场景对齐）", () => {
     store.appendMessage(id, newMessage(id, "user", [{ type: "text", text: "crash window" }]))
     writeFileSync(metaPath(id), metaBefore) // meta 回滚（事件在、meta 旧）
     const stale = store.verifyChain(id)
-    expect(stale.status === "ok" || stale.status === "partial").toBe(true) // 崩溃窗口容忍
-    // 下一次追加后 meta 对齐 → 彻底 ok
+    expect(stale.status === "ok" || stale.status === "partial").toBe(true) // 崩溃窗口兼容
+    // 下一次追加后 meta 追平 → 彻底 ok
     store.appendMessage(id, newMessage(id, "user", [{ type: "text", text: "heal" }]))
     expect(store.verifyChain(id).status).toBe("ok")
   })

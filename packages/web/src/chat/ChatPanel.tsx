@@ -163,7 +163,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   const [usageTick, setUsageTick] = useState(0)
   // 改动抽屉（ChangesPanel）：changesTick 在 run 收尾帧时 +1，无条件驱动
   // 清单重拉（胶囊计数在抽屉关闭时也要新）；messageTick 每个消息帧 +1，只
-  // 被打开着的抽屉消费（关闭时流式期间每步一次 events.jsonl 全量扫描没有
+  // 由打开着的抽屉读取（关闭时流式期间每步一次 events.jsonl 全量扫描没有
   // 意义，见 ChangesPanel）。changesFocus 是工具卡的跳转信号（在改动抽屉
   // 中查看 →），每次点击新对象、重复点击同一路径也会重新定位。
   const [changesTick, setChangesTick] = useState(0)
@@ -208,7 +208,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           if (err instanceof ApiError && err.status === 404) return null
           throw err
         }),
-    // 切会话保留旧面板直到新答案落地（goal 视图选择清空重拉）。
+    // 切会话保留旧面板直到新答案到达（goal 视图选择清空重拉）。
     poll: { intervalMs: 5000, when: (panel) => panel !== null },
   })
   // /goal 目标循环视图（GET /sessions/:id/goal；goal:null = 无目标，不渲染）。
@@ -228,7 +228,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
 
   // 一次性 interrupt 的复位基准：点「中断」
   // 不写会话级覆盖，这条发完切回该档——中断是瞬时意图，不做成模式（与 CLI
-  // /interrupt 对齐，避免跨客户端"来一条、断一条"）。
+  // 的 /interrupt 行为一致，避免跨客户端"来一条、断一条"）。
   const baseDispositionRef = useRef<Disposition>("steer")
   const clientRef = useRef<WsClient>(ws)
   clientRef.current = ws
@@ -306,7 +306,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
         updateView((v) => mergeQueue(v, queueResult.value))
       }
       if (!ok) return { ok: false, resent: 0 }
-      // 对齐之后仍无踪迹的快照项 = 从未到达 daemon（CLI 重发规则的同一窗口）：
+      // 同步之后仍无踪迹的快照项 = 从未到达 daemon（CLI 重发规则的同一窗口）：
       // 清掉残留的乐观行，按原处置逐条补发——补发走新 client 的发送缓冲，
       // 鉴权帧仍然最先。已对上的消息绝不重发（防服务端双跑）。
       const undelivered = undeliveredPendingSends(pendingBefore, viewRef.current)
@@ -318,7 +318,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
 
     // 跨客户端行补文本：message.queued 载荷不带文本——别的客户端（CLI、另一
-    // 浏览器）排队的消息在本端落地为空文本行，拉一次队列快照把 text 补上。
+    // 浏览器）排队的消息在本端写入空文本行，拉一次队列快照把 text 补上。
     // in-flight 防抖；失败静默（下次纠偏路径再补）。
     let resyncingQueue = false
     const refreshQueueText = async (): Promise<void> => {
@@ -382,7 +382,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
               if (frame.type === "run.completed" || frame.type === "run.failed") setUsageTick((t) => t + 1)
               // 运行收尾 → 改动抽屉清单与胶囊计数刷一次（见 changesTick 注释）。
               if (frame.type === "run.completed" || frame.type === "run.failed") setChangesTick((t) => t + 1)
-              // 消息帧 → 打开着的改动抽屉增量重拉（关闭时无人消费，纯计数）。
+              // 消息帧 → 打开着的改动抽屉增量重拉（关闭时无人读取，纯计数）。
               if (frame.type === "message.created" || frame.type === "message.completed") setMessageTick((t) => t + 1)
             } else if (isQueuedSendAck(frame) || isRetryAck(frame)) {
               // Both acks carry the server message identity; adopt it eagerly

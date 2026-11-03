@@ -397,7 +397,7 @@ export class GoalLoopHost {
     return { llm: resolveEntryLlm(resolved.entryKey), model: resolved.model }
   }
 
-  /** 入队一轮 goal run（submit 抛错按停止处理并说明原因）。 */
+  /** 入队一轮 goal run（submit 抛出错误按停止处理并说明原因）。 */
   #enqueueRound(sessionId: string, goal: GoalSnapshot, userText: string, round: number): void {
     const note: QueueNote = { kind: "goal", text: goalLoopNote(round) }
     try {

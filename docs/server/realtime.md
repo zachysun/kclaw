@@ -11,7 +11,7 @@
 - **鉴权在连接内，不在升级请求上**：浏览器场景常无法附带自定义 header，认证放首帧 `{type:"auth", token}`（或 `?token=` 查询参数），失败时以关闭码 4001 关闭连接。HTTP 层的 Bearer hook 因此豁免 `/ws` 路由本身。
 - **订阅制而非广播制**：带 `sessionId` 的事件只发给订阅了该会话的连接（客户端打开多个标签页时，各标签页订阅各自的会话，互不串流）；无 `sessionId` 的事件（`cron.*`、`memory.written`）广播给全体已认证连接——任何客户端都应看到调度与记忆写入活动。
 - **单连接天然有序，事件不带序号**：一条 WS 连接内帧顺序即发送顺序，客户端无需核对序号。跨连接/断线不保证——用"拉取全量消息 + 只订阅新事件"恢复，不做实时事件回放（有意简化：实时增量事件不持久化，会话历史以 events.jsonl 事件流为唯一权威数据，见 [storage](../core/storage.md)）。
-- **投递异常不回传发射方**：单个 socket 的 `send` 抛错（连接刚断开）被 try/catch 捕获忽略，不阻断其他订阅者，也不把异常传回正在执行 run 的代码。
+- **投递异常不回传发射方**：单个 socket 的 `send` 抛出错误（连接刚断开）被 try/catch 捕获忽略，不阻断其他订阅者，也不把异常传回正在执行 run 的代码。
 
 ## 帧格式
 
@@ -125,9 +125,9 @@ export class EventBus {
   → 此后只处理新到达的事件帧
 ```
 
-- **web**（`packages/web/src/chat/ChatPanel.tsx`）：连续失败重连上限 `MAX_RECONNECT_ATTEMPTS = 3`（成功一次即清零计数），超过则提示"重连失败，请刷新页面"停止；4001 关闭不重连，提示重新输入 token。合并语义在 `packages/web/src/chat/model.ts` 的 `mergeMessages`：新拉的消息列表是权威状态，覆盖本地流式中的未完成版本。对齐之后还有一个**补发环节**：对齐前快照的未确认发送（`local-` 行/气泡），对齐后在队列快照与消息列表里都找不到同文本的，视为从未送达、按原处置自动补发——判定只认服务端证据（本地即时回显不算），与 CLI 重发规则同一保守方向（宁漏发不双发）。
+- **web**（`packages/web/src/chat/ChatPanel.tsx`）：连续失败重连上限 `MAX_RECONNECT_ATTEMPTS = 3`（成功一次即清零计数），超过则提示"重连失败，请刷新页面"停止；4001 关闭不重连，提示重新输入 token。合并语义在 `packages/web/src/chat/model.ts` 的 `mergeMessages`：新拉的消息列表是权威状态，覆盖本地流式中的未完成版本。同步之后还有一个**补发环节**：同步前快照的未确认发送（`local-` 行/气泡），同步后在队列快照与消息列表里都找不到同文本的，视为从未送达、按原处置自动补发——判定只认服务端证据（本地即时回显不算），与 CLI 重发规则同一保守方向（宁漏发不双发）。
 - **CLI**（`packages/cli/src/chat.ts`）：重连后观察到的事件带 120s 静默超时（`POST_RECONNECT_SILENCE_MS = 120_000`，超时内一帧未到就认定 run 已终止、放弃等待；daemon 已终止的 run 永远不会完成，REPL 不可无限等待）。**重发规则**：发送中的消息仅当观察到**零帧**（连 `send_message_ack` 都没有）才重发，零帧证明消息从未到达存活的 daemon；一旦观察到任何帧（ack 即证明服务端已入队）就绝不重发，宁可等待静默超时，避免同一消息被执行两次。
-- **为什么无回放可行**：持久化的块永远是完整终稿（见 [protocol](../core/protocol.md)），`GET /sessions/:id/messages` 拉取到的每条消息自洽；实时事件流只是"正在发生"的增量视图，丢失即丢弃，下一次全量拉取自然对齐（权威历史在 events.jsonl，需要回查可走 `GET /sessions/:id/events`）。
+- **为什么无回放可行**：持久化的块永远是完整终稿（见 [protocol](../core/protocol.md)），`GET /sessions/:id/messages` 拉取到的每条消息自洽；实时事件流只是"正在发生"的增量视图，丢失即丢弃，下一次全量拉取自然补齐（权威历史在 events.jsonl，需要回查可走 `GET /sessions/:id/events`）。
 
 ## 边界与出错
 

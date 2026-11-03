@@ -28,7 +28,7 @@ export interface CognitionFileInfo { kind: "persona" | "wiki" | "rule"; name: st
 /**
  * 调用方窄接口：MemorySystem 的 30 个方法按四拨调用方分面。类不拆、
  * 公共 API 不删改——接口只是每个调用方该看到的方法子集，调用方按面声明依赖，
- * 编译器挡住越界使用（如路由碰触发器、调度器碰管理面）。
+ * 编译器挡住越界使用（如路由碰触发器、调度器碰管理接口）。
  */
 
 /** 检索面：内置钩子（记忆注入 / 系统提示词材料）与 memory_search 工具调用。 */
@@ -50,7 +50,7 @@ export interface MemoryTriggers {
   recentSessionId(workdir: string): string | undefined
 }
 
-/** 调度簿记：memory-scheduler 判节拍、跟随判定、夜间防重跑。 */
+/** 调度记录：memory-scheduler 判节拍、跟随判定、夜间防重跑。 */
 export interface MemoryScheduleBook {
   markIntervalRun(workdir: string, iso: string): void
   intervalLastRun(workdir: string): string | undefined
@@ -62,7 +62,7 @@ export interface MemoryScheduleBook {
   lastActivity(workdir: string): string
 }
 
-/** 管理面：网页记忆页路由（列表、线程/认知的读与人工覆写、对账）。 */
+/** 管理接口：网页记忆页路由（列表、线程/认知的读与人工覆写、对账）。 */
 export interface MemoryAdmin {
   reconcile(): void
   projects(): MemoryProjectInfo[]
@@ -232,7 +232,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
 
   /**
    * 混合打分：FTS 归一化 + 向量余弦（#embed 存在时）融合（0.5/0.5），
-   * 乘时效因子，按分降序取 limit；单边缺失降级，全部不抛错。
+   * 乘时效因子，按分降序取 limit；单边缺失降级，全部不抛出错误。
    */
   async #scoreIndex(idx: VectorIndex, query: string, limit: number, now: Date): Promise<ScoredHit[]> {
     const ftsHits = idx.searchFts(query, FTS_RECALL)
@@ -389,7 +389,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     await this.#pipeline.runNightly(workdir, sessionId ?? this.#recentSessionId(workdir))
   }
 
-  // ---- 调度簿记（scheduler 调用） ----
+  // ---- 调度记录（scheduler 调用） ----
 
   /**
    * 记录唯一入口：state.json 的全部读写都走这里，两条通道。
@@ -574,7 +574,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     writeCognitionFile(cognitionPath(this.#layout.globalDir, kind, name), kind, name,
       (cf) => ({ ...cf, body: content, updated: today }),
       () => ({ kind, name, title: name, scope: "global", created: today, updated: today, body: content }))
-    // 与 writeThread 对齐：写后立即重建全局索引，检索无需等下次对账。
+    // 与 writeThread 一致：写后立即重建全局索引，检索无需等下次对账。
     void this.#pipeline.reindexGlobal().catch((err) => this.#log(`kclaw memory writeCognition reindex failed: ${String(err)}`))
     this.#audit({ trigger: "admin", kind: "cognition", op: "overwrite", file: `${kind}/${name}`, sessionId: this.#recentGlobalSessionId() })
   }

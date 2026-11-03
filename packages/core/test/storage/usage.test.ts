@@ -137,7 +137,7 @@ describe("costUsd 缓存价目", () => {
     expect(cost).toBeCloseTo(0.001 + 0.0002, 10)
   })
 
-  it("keeps the legacy formula when the model has no cache prices (不猜折扣)", () => {
+  it("keeps the legacy formula when the model has no cache prices (不猜计费规则)", () => {
     const cost = costUsd({ inputTokens: 1000, outputTokens: 100, cacheReadTokens: 600 }, "glm", PRICES)
     expect(cost).toBeCloseTo(0.001 + 0.0002, 10)
   })

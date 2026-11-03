@@ -112,7 +112,7 @@ describe("scanUserHooks", () => {
     expect(failures[0]!.error).toContain("export const hook")
   })
 
-  it(".ts 文件在 Node 原生加载下可用（类型剥离；vitest 的 vite 管道不参与，故走子进程 + dist）", async () => {
+  it(".ts 文件在 Node 原生加载下可用（类型剥离；vitest 的 vite 转换层不参与，故走子进程 + dist）", async () => {
     writeFileSync(join(dir, "typed.ts"), [
       'export const hook = { position: "tool-before" }',
       "type Ctx = { toolCall: { name: string } }",

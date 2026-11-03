@@ -222,7 +222,7 @@ describe("bash tool background mode", () => {
     const tool = createBashTool({ workspace: ws })
     const r = await run(tool, "echo x", { run_in_background: true })
     expect(r.status).toBe("error")
-    expect(r.output).toContain("未装配进程注册表")
+    expect(r.output).toContain("未组装进程注册表")
   })
 
   it("aborts a foreground command when the run's signal fires", async () => {

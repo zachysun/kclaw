@@ -12,7 +12,7 @@
 
 - **位置网格是封闭枚举**：`HookPosition` 是 14 个命名位置的联合类型。位置只开在"真实存在改动需求的地方"——改写用户消息、改写模型视图、注入引导、压缩判定……没有改动需求的地方不开位置。加一个位置 = 更新 `HookContextMap`/`HookResultMap` 两张契约表，编译器会走查每一个使用方（封闭原则）。
 - **注册接口是唯一挂载入口**：内置闭包、用户文件、测试注入，全部经 `HookChain.register` 进链。引擎不区分"自己人"和"外人"——它自己就是这套机制的第一批用户。
-- **失败时怎么办由文件自己声明，默认放行**：用户文件可声明 `failure: "skip"`（默认，失败即跳过、只发一条 `hook.failed`，run 照常继续）或 `"deny"`（失败时否决所在环节——`tool-before` 位置上就是该工具不执行，fail-closed 自选档）；声明 `"fatal"` 的用户文件拒绝装载（用户代码没有杀死整个 run 的权力）。引擎内置 hook 在原行为抛错传播的地方保留 `fatal`（如用户消息持久化），语义与改成 hook 形态之前完全一致。
+- **失败时怎么办由文件自己声明，默认放行**：用户文件可声明 `failure: "skip"`（默认，失败即跳过、只发一条 `hook.failed`，run 照常继续）或 `"deny"`（失败时否决所在环节——`tool-before` 位置上就是该工具不执行，fail-closed 自选档）；声明 `"fatal"` 的用户文件拒绝装载（用户代码没有杀死整个 run 的权力）。引擎内置 hook 在原行为抛出错误传播的地方保留 `fatal`（如用户消息持久化），语义与改成 hook 形态之前完全一致。
 - **改写权只开在四处**：`run-before`（用户消息）、`llm-before`（模型视图）、`system-before`（系统提示词追加段落）、`system-after`（系统提示词终稿）。其余位置是观察（返回值忽略）或内置独占的决策位（`compaction-check`/`overflow-rescue`：压缩判定闭包着压缩引擎，用户 hook 不注册）。
 - **权限与确认不进 hook 链**：工具执行前的权限裁决保持循环的控制流（`tool-before` 位置观察 + deny 否决权，见上）。把"允许/拒绝/确认"做成可改写 hook 等于把安全边界交给目录里的文件，收益配不上风险；`deny` 档给的是"hook 失败宁可不放行"的表达力，不是主动裁决权。
 - **每个 run 重新扫描，以文件为准**：用户 hook 目录在每次 run 开始时重扫（与技能同一套思路），改文件下一轮生效、不重启 daemon。装载失败按"文件名+mtime+错误"去重后发一次 `hook.failed {phase:"load"}` 事件——管理接口持续显示失败，事件流不被刷屏。
@@ -52,8 +52,8 @@
 - **排序**：`meta.order` 升序，同序按名字稳定排序（改写链依赖确定性）。
 - **真链式改写**：改写位置的返回值回填进 ctx 的改写字段（`run-before` 的 `message`、`llm-before` 的 `messages`、`system-after` 的 `system`），下一个 handler 看到的是改写后的值——这保证"用户改写在前、内置持久化在后"时，持久化落的是改写后的消息。回填只发生在链内部，调用方传入的 ctx 对象本身不被改动。
 - **追加型位置**：`system-before` 的返回值是段落**数组**，多个 hook 的段落累积拼接而不是互相覆盖。
-- **执行审计**：每条实际执行的钩子（正常返回、抛错、超时三种结果都记）落一条 `hook` 持久化事件（`name` / `position` / `origin` / `outcome` / `durationMs` / `runId?`，经 runner 的 `onExecuted` 回调接 `SessionStore.appendHook`；回调自身抛错不影响链继续执行），与 `hook.failed` 总线事件分工：总线是实时通道（仅失败），事件流是权威记录（全量）。见 [storage](./storage.md) 的钩子审计一节。
-- **失败分派**：抛错/超时按 `meta.failure` 分派。`fatal` 让整次 `run()` 拒绝（循环既有的各位置 catch 路径接管，错误码保持原样：`user_message_failed`、`steering_failed` 等）；`skip` 发 `hook.failed {phase:"run"}` 后继续下一个 handler；`deny` 同样发事件并继续跑完链（后面的观察者不丢），但经 `runGate` 出口把首个失败记为**否决**：`tool-before` 位置上循环据此给该工具写拒绝结果（错误结果 + `denied` note，工具不执行，run 继续）。
+- **执行审计**：每条实际执行的钩子（正常返回、抛出错误、超时三种结果都记）落一条 `hook` 持久化事件（`name` / `position` / `origin` / `outcome` / `durationMs` / `runId?`，经 runner 的 `onExecuted` 回调接 `SessionStore.appendHook`；回调自身抛出错误不影响链继续执行），与 `hook.failed` 总线事件分工：总线是实时通道（仅失败），事件流是权威记录（全量）。见 [storage](./storage.md) 的钩子审计一节。
+- **失败分派**：抛出错误/超时按 `meta.failure` 分派。`fatal` 让整次 `run()` 拒绝（循环既有的各位置 catch 路径接管，错误码保持原样：`user_message_failed`、`steering_failed` 等）；`skip` 发 `hook.failed {phase:"run"}` 后继续下一个 handler；`deny` 同样发事件并继续跑完链（后面的观察者不丢），但经 `runGate` 出口把首个失败记为**否决**：`tool-before` 位置上循环据此给该工具写拒绝结果（错误结果 + `denied` note，工具不执行，run 继续）。
 - **超时**：每个 handler 都按 `config.hooks.timeoutMs`（默认 5000ms）计时，超时即算失败，走同样的 fatal/skip/deny 分派。条目可用 `meta.timeoutMs` 覆盖链 budget（`Infinity` = 不限时）：五个内置压缩 hook（background-precompact / mid-run-panic / overflow-emergency / manual-compact-flush / post-run-compaction）声明了不限时——它们的函数体是两次 provider 调用，时长由 LLM 决定；时长上限由 provider 单请求超时与 run 中止信号保底。
 - **空位置零开销**：没有注册任何 handler 的位置同步短路返回 `undefined`，`has()` 为 false（循环据此判断要不要走进某个分支，如 overflow-rescue）。
 
@@ -123,9 +123,9 @@ export default async (ctx) => {
 ## 边界与出错
 
 - **装载失败不伤 run**：损坏形态（语法错误、未知 position、缺 `hook` 导出或 default 函数、非法 failure 值）只成为一条装载失败条目，不拖垮目录里其他文件、不弄崩 daemon；按"文件名 + mtime + 错误"去重后发一次 `hook.failed {phase:"load"}`，管理接口持续显示失败。
-- **用户 hook 没有 fatal 权**：声明 `failure: "fatal"` 的文件拒绝装载；引擎内置 hook 在原行为抛错传播的地方保留 `fatal`（如用户消息持久化），语义与 hook 化之前一致。
+- **用户 hook 没有 fatal 权**：声明 `failure: "fatal"` 的文件拒绝装载；引擎内置 hook 在原行为抛出错误传播的地方保留 `fatal`（如用户消息持久化），语义与 hook 化之前一致。
 - **禁用文件照常可见**：`enabled: false` 的文件载入元数据（管理接口可见）但不进执行链。
-- **超时按失败分派**：每个 handler 按 `config.hooks.timeoutMs`（默认 5000ms）计时，超时走与抛错同样的 fatal/skip/deny 分派；条目 `meta.timeoutMs` 可覆盖，五个内置压缩 hook 声明不限时（时长由 provider 单请求超时与 run 中止信号保底）。
+- **超时按失败分派**：每个 handler 按 `config.hooks.timeoutMs`（默认 5000ms）计时，超时走与抛出错误同样的 fatal/skip/deny 分派；条目 `meta.timeoutMs` 可覆盖，五个内置压缩 hook 声明不限时（时长由 provider 单请求超时与 run 中止信号保底）。
 - **装载环境限制**：`.ts` hook 依赖 Node 24+ 的原生类型擦除，低版本 Node 在 import 时得到明确报错；hook 文件不解析裸说明符依赖（第三方包不支持）。
 
 ## 关联

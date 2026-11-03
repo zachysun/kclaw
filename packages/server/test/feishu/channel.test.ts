@@ -302,7 +302,7 @@ describe("feishu channel", () => {
     env = await makeEnv(llm)
     env.transport.inbound("ou_master", "长任务")
     await until(() => env.transport.cards.some((c) => c.card.kind === "thinking"), "thinking card")
-    // sendCard 已返回卡片 id（视图登记是它的 .then 微任务），等它落地再停
+    // sendCard 已返回卡片 id（视图登记是它的 .then 微任务），等它写完再停
     await new Promise((r) => setTimeout(r, 20))
     await until(() => readNonChildBusy(env), "run active")
 

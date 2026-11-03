@@ -1,6 +1,6 @@
 /**
  * Skill evolution tests（主切入点）：提炼 pipeline（粗查 / 增量范围 / 提炼 LLM /
- * 提案落文件 / 标记推进）+ 调度簿记 + skill_create 提案面 + 治理审计事件。
+ * 提案落文件 / 标记推进）+ 调度记录 + skill_create 提案面 + 治理审计事件。
  *
  * 脚本化假 LLM 驱动（test/memory/helpers.ts 的 scriptedLlm 先例）+ 临时目录 +
  * 真 SessionStore / 真 ProposalStore / 真 WriteLedger。断言只看外部行为：
@@ -42,7 +42,7 @@ function enabledConfig(): KclawConfig {
   return cfg
 }
 
-/** 计数 + 脚本化 LLM：每次调用消耗一条脚本（或抛错）；多余的调用重复最后一条。
+/** 计数 + 脚本化 LLM：每次调用消耗一条脚本（或抛出错误）；多余的调用重复最后一条。
  * seen 记录每次调用请求里的用户内容（渲染段），供"模型看得到什么"断言。 */
 function fakeLlm(replies: Array<string | Error>): { client: LlmClient; calls: () => number; seen: string[] } {
   let call = 0
@@ -93,7 +93,7 @@ function system(llm: LlmClient, over: Partial<ConstructorParameters<typeof Skill
   })
 }
 
-// ---- 粗查与调度簿记（run 收尾钩子调用） ---------------------------------
+// ---- 粗查与调度记录（run 收尾钩子调用） ---------------------------------
 
 describe("considerFollowCheck", () => {
   it("skips without scheduling or touching watermarks when no skill was involved", () => {

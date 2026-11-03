@@ -1,6 +1,6 @@
 /**
  * Skill scheduler tests：空闲检查处理方的宿主行为（成功才清 / 失败重试 /
- * 重试上限 / 同批去重 / 判定与关闭态）。fake 对齐调度器调用的
+ * 重试上限 / 同批去重 / 判定与关闭态）。fake 实现调度器调用的
  * SkillEvolutionSystem 公开方法（照 memory-scheduler.test.ts 的先例）；
  * pendingFollowChecks/clearFollowCheck 用同一可变数组模拟记录，清了才不吐。
  */

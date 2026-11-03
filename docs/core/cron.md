@@ -14,7 +14,7 @@
 - **`next()` 不含边界时刻**：cron-parser 的 `next()` 只返回严格晚于 `currentDate` 的时刻（恰好相等也不算），所以 `nextIsoAfter` 的语义是"严格晚于给定时刻的第一次触发"。无效 cron 表达式原样抛出 cron-parser 自身的错误消息，不做包装。
 - **id 即创建序**：id 用 `newId("cron")` 生成（ULID，一种按时间有序的唯一 id），`list()` 按 `ORDER BY id` 排序，天然就是创建顺序。
 - **cron 事件广播不带会话**：`cron.started` / `cron.completed` / `cron.failed` 事件用不带上下文的 `makeEvent` 构造（无 sessionId/runId），EventBus 会把它们广播给每一个连接的客户端——任何界面都能看到调度活动，而不只是订阅了某个会话的客户端。
-- **tick 失败不中断轮询**：一次 tick 抛错（`scheduler.claimDue` 失败、单个 cron 的记录步骤失败）只记日志并丢弃这一轮，`setInterval` 不中断——轮询循环必须能在自身失败后继续运行。
+- **tick 失败不中断轮询**：一次 tick 抛出错误（`scheduler.claimDue` 失败、单个 cron 的记录步骤失败）只记日志并丢弃这一轮，`setInterval` 不中断——轮询循环必须能在自身失败后继续运行。
 
 ---
 
@@ -75,7 +75,7 @@ SQLite 表结构与之一一对应（`enabled` 存 0/1，驼峰字段转下划�
 2. `sessions.create(cron.name, cron.id)` 创建一个新会话：标题即 cron 名字，`cronId` 记进 `meta.json`。创建后随即做历史封顶：`sessions.listByCron(cron.id)` 按新到旧排列，第 `CRON_SESSION_KEEP = 20` 个之后的老会话一律软删除（`sessions.delete`，落入回收站、由回收站保留期清理）——cron 每次触发都建新会话，不封顶会让该 cron 的会话目录无限增长。
 3. 广播 `cron.started {cronId}`。
 4. `run.enqueue(sessionId, { userText: cron.prompt, trigger: "cron", note: "本会话由定时任务「<name>」触发", ...(cron.model !== undefined && cron.model !== "" ? { model: cron.model } : {}) })`——RunManager 把 prompt 作为用户消息发起一次运行（cron 配置的 `model` 作为本次运行的模型覆盖透传，默认则走会话/默认解析链），该 note 写入用户消息上紧跟正文的 `kind: "cron"` note 块（组装过程见 core `packages/core/src/agent/run-assembly.ts` 的 `executeRun`）。
-5. 运行结束：`outcome.stopReason !== "error"` → `markRun(id, "ok", now)` + 广播 `cron.completed {cronId, summary: stopReason}`；否则 `markRun(id, "error", ...)` + 广播 `cron.failed {cronId, error}`（enqueue 本身抛错也走同一条失败记录路径）。到达终态时若 daemon 配置了 `notify.channels`，会经 notifier 异步推送一条终态通知（含 cron 名、摘要与 `?session=` 会话链接；失败仅记日志，不重试、不阻塞 cron 记录；channels 为空则完全不推送）。
+5. 运行结束：`outcome.stopReason !== "error"` → `markRun(id, "ok", now)` + 广播 `cron.completed {cronId, summary: stopReason}`；否则 `markRun(id, "error", ...)` + 广播 `cron.failed {cronId, error}`（enqueue 本身抛出错误也走同一条失败记录路径）。到达终态时若 daemon 配置了 `notify.channels`，会经 notifier 异步推送一条终态通知（含 cron 名、摘要与 `?session=` 会话链接；失败仅记日志，不重试、不阻塞 cron 记录；channels 为空则完全不推送）。
 6. `finally` 里将 cron.id 移出 `inFlight`——无论成败都移除该条目。
 
 **审计信息的位置**：没有独立的审计文件；一次触发的全部痕迹 = cron 行上的 `lastRunAt/lastStatus/lastError` + 对应会话目录里完整的 `events.jsonl` 事件流（cron 会话与普通会话使用同一条持久化路径，消息即 `message` 事件），以及广播的三个 `cron.*` 事件。
@@ -102,7 +102,7 @@ tick 的第二步 `sessions.purgeExpired(purgeTtlMs)`：把 `deletedAt` 距今 �
 
 ## 边界与出错
 
-- **无效 cron**：`create`/`update` 时 cron-parser 抛错，HTTP 层转 400；已存进表里的 cron 不会再解析 cron，除非 `claimDue`——若通过直接修改数据库写入了无效 cron，`claimDue` 的重算会抛错，被 tick 的守卫捕获记日志。
+- **无效 cron**：`create`/`update` 时 cron-parser 抛出错误，HTTP 层转 400；已存进表里的 cron 不会再解析 cron，除非 `claimDue`——若通过直接修改数据库写入了无效 cron，`claimDue` 的重算会抛出错误，被 tick 的守卫捕获记日志。
 - **触发期间 cron 被删**：`markRun` 对不存在的 id 是 no-op，运行照常完成，只是无处记录。
 - **停机与进行中的运行**：`stop()` 清除 interval 并 `Promise.allSettled` 等待所有进行中的 cron 运行结束（有界：已结束的 promise 自动从追踪列表移除）。daemon 若在运行途中崩溃，该次触发认领时已推进 `nextRunAt`，被杀死的这一次不会重放，cron 在下个调度点照常触发。
 - **单 daemon 假设**：`claimDue` 的 CAS 认领让两个句柄同时 tick 也无法重复认领同一次触发，但调度层之外并无互斥；设计前提是单机单 daemon（daemon.json 的 wx 独占认领即为此服务，见 [daemon](../server/daemon.md)）。

@@ -17,7 +17,7 @@
 - **兼容生态技能**：只解释五个字段，其余 frontmatter 字段一律忽略且不报错——Agent Skills 生态里的现成技能可以不改就放进目录。CRLF 换行与文件头 BOM 都兼容。
 - **只改模型看到的输入**：技能指定的隐式包装是内置 `skill-wrap` hook（`llm-before` 位置，见 [hooks](./hooks.md)），只改写发给模型的那一份消息——持久化、事件流与聊天气泡保持用户原文（所见即所发）。包装文本同时记录到消息的 `llmText` 标记，之后每次组装按标记原样重放（见 [agent-loop](./agent-loop.md) 的包装标记重放）——技能目录随时间变化也不影响历史消息的发送字节，缓存前缀稳定。
 - **每个 run 重新扫描，以文件为准**：技能目录在每次 run 开始时重新扫描（不存在则跳过、单条损坏只跳过该条，不拖垮整个 run），改动技能文件不用重启 daemon；`/skills` 管理路由同样每次请求重新扫描，与 run 同源同规则。
-- **用户面隐藏是"不存在"**：`user-invocable: false` 的技能对用户面完全不可见——列表不显示、按名调用返回 404，且 404 与"名字不存在"同响应（不向检测者泄露存在性），对齐 Claude Code"从 / 菜单隐藏"。
+- **用户面隐藏是"不存在"**：`user-invocable: false` 的技能对用户面完全不可见——列表不显示、按名调用返回 404，且 404 与"名字不存在"同响应（不向检测者泄露存在性），与 Claude Code 的"从 / 菜单隐藏"行为一致。
 - **复用是链接不是复制**：其他 coding agent（Claude Code、Codex、DeepSeek harness、zCode）的技能以软链接接入，内容不复制、仍由源目录维护，外部 SKILL.md 一字不动；复用元数据与可见档位存在 kclaw 侧的旁挂文件里（见下文"技能复用"）。
 
 ---
@@ -128,7 +128,7 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 
 技能进化是"让技能库随使用变好"的机制：一轮对话（run）里卷入过的技能（被 `skill_read` 读取、被 `skill_list` 列出、被用户以 `/技能名` 指名）在对话结束并空闲一段时间后，由系统自动提炼成**技能提案**（一份待确认的技能新增/修订建议），写进 `<skillsDir>/.proposals/`（点开头的目录，技能扫描器不认，见上文的目录名规则），绝不触碰已生效的技能。提案在 WebUI 技能页的「提案」页签里人工审阅：确认即写入技能目录、下一轮对话自动吃到；可驳回；已确认的可回退。对话中模型也可经 `skill_create` 工具当场发起提案，走同一个审阅状态机。整个功能在 config 中可开关，默认开启。
 
-状态机：`proposed → applied | rejected`，`applied → reverted`；`rejected` / `reverted` 保留在磁盘上可手动清理。核心实现在 `packages/core/src/skills/proposals.ts`（提案存取与治理）与 `evolution.ts`（提炼 pipeline 与调度簿记），服务端处理在 `packages/server/src/skill-scheduler.ts`。
+状态机：`proposed → applied | rejected`，`applied → reverted`；`rejected` / `reverted` 保留在磁盘上可手动清理。核心实现在 `packages/core/src/skills/proposals.ts`（提案存取与治理）与 `evolution.ts`（提炼 pipeline 与调度记录），服务端处理在 `packages/server/src/skill-scheduler.ts`。
 
 ### 配置（skills.evolution）
 
@@ -227,7 +227,7 @@ stateDiagram-v2
 | `remove` | rejected/reverted → 删除 | 删提案文件（文件也可手动删） | 非 rejected/reverted 状态 |
 
 - **写入落点**：`scope=global` 写 `~/.kclaw/skills/<name>/SKILL.md`，`scope=project` 写 `<workdir>/.kclaw/skills/<name>/SKILL.md`。生效路径就是每轮重扫（见上文"每个 run 重新扫描"），下一轮对话自动吃到，无需任何热加载；
-- **apply 的两条非致命 warning**（不阻止写入、状态照常变 applied）：`revise` 的现正文与提案时 `baseline` 不一致（提案后正文已被第三方改动，apply 以提案内容覆盖——覆盖的是提案内容，不是用户上次看到的那份）；`scope=global` 的 `new` 落地后若任一已知项目技能目录已存在同名技能（项目副本整目录覆盖全局版，该项目实际生效的是项目副本）。路由把 warning 原样带回，UI 走 toast 提示；
+- **apply 的两条非致命 warning**（不阻止写入、状态照常变 applied）：`revise` 的现正文与提案时 `baseline` 不一致（提案后正文已被第三方改动，apply 以提案内容覆盖——覆盖的是提案内容，不是用户上次看到的那份）；`scope=global` 的 `new` 写入后若任一已知项目技能目录已存在同名技能（项目副本整目录覆盖全局版，该项目实际生效的是项目副本）。路由把 warning 原样带回，UI 走 toast 提示；
 - **复用链接技能是 apply 的禁区**：目标是复用链接技能（`.links.json` 命中名字）409，文案说明复用技能由源目录维护——提炼与 `skill_create` 在产提案时已做同判，这一层是治理期的最后防线。
 
 ### 用量遥测
@@ -298,7 +298,7 @@ interface SkillEvent {
 - **技能目录与 run 解耦**：扫描失败（目录不可读、单条损坏）只影响该次扫描本身，不拖垮 run；技能列表为空时系统提示词不追加，行为与无技能完全一致。
 - **指定包装不改变对话内容**：消息的原文块不变，JSONL 事件流与气泡里显示的都是用户原文；包装文本只额外记录在消息的 `llmText` 标记上（随消息持久化，供后续组装重放，见 [agent-loop](./agent-loop.md) 的包装标记重放），不向用户展示。
 - **`user-invocable: false` 不是安全边界**：它只把技能从用户面列表隐藏；用户指名调用（斜杠命令已隐藏，但对话里打出名字仍可）仍可经 `skill_read` 加载——隐藏的是"发现渠道"，不是"访问权"。
-- **description 有截断**：`description` + `when_to_use` 拼接上限 1536 字符（对齐 Claude Code 的清单长度），超限从尾部截断。
+- **description 有截断**：`description` + `when_to_use` 拼接上限 1536 字符（与 Claude Code 的清单长度一致），超限从尾部截断。
 - **提案在确认前不可见**：提案 `content` 由模型产出，但只写入点开头目录——不被 run 组装扫描、不被模型经 `skill_read` 读到、不执行；进入技能目录的唯一路径是人工确认。`skill_create` 与后台提炼产出的提案走同一状态机，无特权差异。
 - **子会话的使用由主干 run 覆盖**：子会话不自己排检查（hook 跳过 childRun），但粗查与提炼的范围都含子会话的各自增量——其技能使用由同项目后续任一主干 run 的粗查统一覆盖，提案与事件的 `sourceSessionId` 记发起补查的会话。
 - **提炼失败的进度语义**：提炼 LLM 异常不推进增量进度、下次补查重试同一范围，同一挂起检查连败 3 次放弃（清检查 + 记日志，内存计数、daemon 重启归零）；拿到合法 JSON（无论产出 0 条还是 N 条）即推进——"判断没有值得提的"是正常结局，不落文件不发事件。

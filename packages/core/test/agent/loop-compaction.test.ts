@@ -75,7 +75,7 @@ describe("compaction hooks in the agent loop", () => {
     expect(views[0]!.map((m) => JSON.stringify(m)).join("\n")).toContain("很早的话题")
   })
 
-  it("skip 失败的判定钩子抛错时运行照常继续", async () => {
+  it("skip 失败的判定钩子抛出错误时运行照常继续", async () => {
     const events: AgentEvent[] = []
     const views: ProviderMessage[][] = []
     const deps: AgentDeps = {

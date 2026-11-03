@@ -99,7 +99,7 @@ describe("submit / driver", () => {
   it("queue cap 10 rejects with the fixed error message", async () => {
     const meta = sessions.create("t", undefined, "/w")
     // 收集全部 outcome 并在断言后排空：测试结束时不得有仍在写的 run，
-    // 否则与 afterEach 的 rmSync 竞争（updateMeta 抛错 → 驱动循环未处理拒绝）。
+    // 否则与 afterEach 的 rmSync 竞争（updateMeta 抛出错误 → 驱动循环未处理拒绝）。
     const outcomes: Promise<RunOutcome>[] = []
     outcomes.push(manager.submit(meta.id, { userText: "first", trigger: "user" }).outcome)
     for (let i = 0; i < 10; i++) {
@@ -165,7 +165,7 @@ describe("submit / driver", () => {
   it("driver survives a dequeue-phase persist crash: node rejects, entry returns to the queue (no silent drop), no zombie", async () => {
     // #drive 的出队阶段（#demoteSteer / 出队后的 #persistQueue）在 try 之外：
     // meta.json 写盘炸掉（会话被删、盘满）时，不允许会话永久停转（僵尸驱动器）
-    // 也不允许循环 promise 裸拒绝。手头 node 以错误落定并塞回队首——persist 抛错
+    // 也不允许循环 promise 裸拒绝。手头 node 以错误落定并塞回队首——persist 抛出错误
     // 意味着 queue.jsonl 也没写成，塞回后内存与盘上重新一致；此后任何一次成功的
     // 持久化都不得把崩溃条目从 queue.jsonl 无声抹掉，条目由重启的驱动器重试执行。
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {}) // 崩溃日志静音

@@ -100,7 +100,7 @@ export type HookResultMap = {
 
 /** Self-declared metadata — the same shape for builtin and file hooks. */
 export interface HookMeta {
-  /** Builtin: feature name; user: file basename (identity, shown in管理面). */
+  /** Builtin: feature name; user: file basename (identity, shown in the audit page). */
   name: string
   position: HookPosition
   description?: string

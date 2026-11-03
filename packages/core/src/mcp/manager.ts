@@ -25,7 +25,7 @@ import { GLOBAL_GROUP, McpError, configsEqual } from "./types.js"
 import type { McpGroupStatus, McpServerConfig, McpServerStatus, McpSnapshot, McpToolEntry } from "./types.js"
 
 /** 单次工具调用返回体的截断上限。请求侧的组装会按 token 省略装不下的旧
- *  工具输出，但落盘与事件推送在此之前——一个返回几十 MB 文本的 MCP 工具
+ *  工具输出，但写入磁盘与事件推送在此之前——一个返回几十 MB 文本的 MCP 工具
  *  会无界写大事件流。与 bash 前台输出的模型视图同款上限。 */
 const MCP_OUTPUT_MAX_BYTES = 512 * 1024
 /** callTool 单次调用超时（默认）。连接与工具列举有 10s 上限而调用没有——

@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/tools/` 实现 40 个内置工具（18 个常驻 + 22 个按组装条件注册），并把它们组装成两份对齐的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
+`packages/core/src/tools/` 实现 40 个内置工具（18 个常驻 + 22 个按组装条件注册），并把它们组装成两份相互对应的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
 
 ---
 
@@ -102,7 +102,7 @@ export function makeTool<N extends string>(
 - **环境变量**：每次执行注入 `KCLAW_SESSION_ID`（会话 id）与 `KCLAW_WORKSPACE`（工作目录），其余环境继承 daemon 进程；沙箱包装器经 spawn 的 env 参数拿到同一份完整环境后透传。命令行工具可据此自识别所在会话。
 - **输出截断**：流式累计到 `maxOutputBytes`（默认 512 KiB，即 `512 * 1024`）即停止积累——头部保留，之后的 chunk 只计字节数不再转发；到达上限那一刻发一条截断提示 delta（`...[output truncated, further output dropped]...`），结束时在尾部附 `...[dropped N bytes]...` 字节数标记。`truncateMiddle` 只对头部超出上限 ≤1 chunk 的部分微裁剪（插 `\n...[truncated N bytes]...\n` 标记）。按 UTF-8 字节计数，多字节字符在切点被拆开会解码成 U+FFFD 替换字符，属可接受损失。
 - **输出溢出存盘（spill）**：run 组装传入 `spillDir`（`<home>/spill`）后，流式读取把全量输出另存一份（上限 `SPILL_MAX_BYTES = 10 MiB`，超出即停、存盘副本标注"仅保留前 10MB"）；发生截断时模型视图在 `dropped` 标记后追加一行 `[完整输出已存盘: <路径>，sha256=<摘要>；需要更多内容时用 fs_read 读取该文件]`（副本只保留了前 10 MiB 时，路径后面多一段 `（该文件仅保留了前 10MB）`；`sha256` 是实际写入字节的 SHA-256，部分保留的副本只对保留部分取摘要，之后对照摘要能发现副本被改动过）——spill 目录在权限引擎 readRoots 内，`fs_read` 无需确认即可读。存盘尽力而为：写失败静默退化为纯截断；未传 `spillDir`（如部分测试）则行为与无 spill 时完全一致。
-- **后台输出上限**：`run_in_background` 的输出文件（spill 目录的 `proc-<id>.txt`，目录不可用时回落工作目录下的 `.<id>.out`）按同一量级封顶（`bgOutputMaxBytes`，默认同为 `SPILL_MAX_BYTES = 10 MiB`）：到达后停止追加，文件尾追加一行 `...[后台输出已达 N 字节上限，停止记录；进程继续运行]...`，进程本身照常运行。输出文件同时是 `process_output` 的读取游标——不封顶的话，一个狂奔的进程会把文件与每次增量读取一起拖到无限增长。
+- **后台输出上限**：`run_in_background` 的输出文件（spill 目录的 `proc-<id>.txt`，目录不可用时退回工作目录下的 `.<id>.out`）按同一量级封顶（`bgOutputMaxBytes`，默认同为 `SPILL_MAX_BYTES = 10 MiB`）：到达后停止追加，文件尾追加一行 `...[后台输出已达 N 字节上限，停止记录；进程继续运行]...`，进程本身照常运行。输出文件同时是 `process_output` 的读取游标——不封顶的话，一个狂奔的进程会把文件与每次增量读取一起拖到无限增长。
 - **退出码**：0 → ok；非 0 → error，输出带 `exit code N` 首行；结果在 `data` 字段附 `{exitCode: N}`（超时与进程启动失败为 `null`），web 聊天页的工具卡据此显示 exit 徽标。stdout 与 stderr 合并，到达即经 `ctx.onOutput` 流式回传。
 - 空/非字符串 `command` 直接返回 error（`args.command must be a non-empty string`）。
 
@@ -172,7 +172,7 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 
 ### ask 工具（`tools/ask.ts`）
 
-**ask_user_questions** `{questions: [{text, options?, multiSelect?}]}`：向用户提出 1–5 个需要当场拍板的问题（选项单选/多选或自由文本），等待用户回答后把答案文本作为工具结果返回（每个问题一行 `N. <问题>\n   → <回答>`；选项题按选项文案拼接、自由题按输入文本，未回答显示"（未回答）"；应答按问题序对齐，缺位补空、越位丢弃）。描述里带一条软性指引：只在关键分叉点用（信息缺失会导致方案走偏，或不可逆操作前必须用户拍板时）；能从上下文或文件里推断的信息不要问。等待走与人工确认**同一个**三方等待（`racePending`，`permissions/broker.ts`）：人工回答 / `sessions.askTimeoutMs` 超时（默认 10 分钟）/ run 中止，谁先到算谁。超时是合法结果（返回 `ok`，附"用户未在限时内回答，不要重复调用，基于合理假设继续"的说明，模型必须学会处理空回答），中止不是（错误结果、不发 `question.resolved`，与确认流的规则一致）。`risk: "safe"`：提问本身不碰敏感资源；`concurrency: "parallel"`。
+**ask_user_questions** `{questions: [{text, options?, multiSelect?}]}`：向用户提出 1–5 个需要当场拍板的问题（选项单选/多选或自由文本），等待用户回答后把答案文本作为工具结果返回（每个问题一行 `N. <问题>\n   → <回答>`；选项题按选项文案拼接、自由题按输入文本，未回答显示"（未回答）"；应答按问题顺序一一对应，缺位补空、越位丢弃）。描述里带一条软性指引：只在关键分叉点用（信息缺失会导致方案走偏，或不可逆操作前必须用户拍板时）；能从上下文或文件里推断的信息不要问。等待走与人工确认**同一个**三方等待（`racePending`，`permissions/broker.ts`）：人工回答 / `sessions.askTimeoutMs` 超时（默认 10 分钟）/ run 中止，谁先到算谁。超时是合法结果（返回 `ok`，附"用户未在限时内回答，不要重复调用，基于合理假设继续"的说明，模型必须学会处理空回答），中止不是（错误结果、不发 `question.resolved`，与确认流的规则一致）。`risk: "safe"`：提问本身不碰敏感资源；`concurrency: "parallel"`。
 
 ### team 工具（`tools/team.ts`）
 
@@ -180,7 +180,7 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 
 ### UI 卡工具（`tools/ui-render.ts`）
 
-**ui_render** `{card}`：为用户产出一张交互式 UI 卡（25 种组件：12 种展示组件、5 种容器、8 种表单字段，类型正本在 `packages/core/src/protocol/ui-cards.ts`）。执行器只做一件事——运行时校验后把整张卡原样放进结果的 `data` 字段：卡片随块持久化、由 web 聊天页渲染成可交互组件，**不进模型上下文**（进入上下文的只有一行文字回执，如"已渲染表格《xx》（3 行）"；回执由各组件的 receiptFor 生成）。护栏：文本 ≤500 字符、标题 ≤100、表格 ≤50 行 8 列、树 ≤200 节点、轮播 ≤10 页、表单 ≤20 字段、选项 ≤8 项、单卡 ≤32 KB（按 UTF-8 字节计）；校验逐字段报错，错误信息带字段路径（如 `card.fields[0].min: 必须小于 max`），失败时提示改用 Markdown。容器里不能再嵌容器——类型层把 children 声明为只收展示组件，运行时校验再拦一道。`risk: "safe"`、`concurrency: "parallel"`（只产数据不碰任何资源）；`exposure: directory`（完整 schema 数千 token，不进每请求，经 tool_search 取）。按钮点击与表单提交在 web 侧格式化成用户消息走普通发送链路，发送帧的 `uiAction` 字段标记来源卡（见 [messages](../reference/messages.md)）；模型上下文里它就是一条普通用户消息。卡组件的类型契约与渲染端降级（未知 kind 与渲染抛错都退回折叠条——渲染器只增不破）见 [webui](../web/webui.md)。
+**ui_render** `{card}`：为用户产出一张交互式 UI 卡（25 种组件：12 种展示组件、5 种容器、8 种表单字段，类型正本在 `packages/core/src/protocol/ui-cards.ts`）。执行器只做一件事——运行时校验后把整张卡原样放进结果的 `data` 字段：卡片随块持久化、由 web 聊天页渲染成可交互组件，**不进模型上下文**（进入上下文的只有一行文字回执，如"已渲染表格《xx》（3 行）"；回执由各组件的 receiptFor 生成）。护栏：文本 ≤500 字符、标题 ≤100、表格 ≤50 行 8 列、树 ≤200 节点、轮播 ≤10 页、表单 ≤20 字段、选项 ≤8 项、单卡 ≤32 KB（按 UTF-8 字节计）；校验逐字段报错，错误信息带字段路径（如 `card.fields[0].min: 必须小于 max`），失败时提示改用 Markdown。容器里不能再嵌容器——类型层把 children 声明为只收展示组件，运行时校验再拦一道。`risk: "safe"`、`concurrency: "parallel"`（只产数据不碰任何资源）；`exposure: directory`（完整 schema 数千 token，不进每请求，经 tool_search 取）。按钮点击与表单提交在 web 侧格式化成用户消息走普通发送链路，发送帧的 `uiAction` 字段标记来源卡（见 [messages](../reference/messages.md)）；模型上下文里它就是一条普通用户消息。卡组件的类型契约与渲染端降级（未知 kind 与渲染抛出错误都退回折叠条——渲染器只增不破）见 [webui](../web/webui.md)。
 
 ---
 

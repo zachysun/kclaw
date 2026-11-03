@@ -223,7 +223,7 @@ describe("RunManager.enqueue", () => {
 
   it("stamps uiAction from the submit input onto the persisted user message", async () => {
     // 回归：submit 曾把 input.uiAction 丢在队列入口（QueueEntry 没这字段），
-    // ws 校验层放行后到落盘全程无声丢失——真机验收抓的正是这一段。
+    // ws 校验层放行后到写入磁盘全程无声丢失——真机验收抓的正是这一段。
     const { env, manager } = makeEnv(scriptClient([textTurn("好的")]))
     const session = env.sessions.create("选择会话")
 
@@ -1121,7 +1121,7 @@ describe("RunManager context compaction", () => {
     try {
       const reqs: LlmRequest[] = []
       const { env, manager } = makeEnv(
-        recordRequests(firstOkThenFailClient(textTurnWithUsage("主回复", 10_000), "摘要挂了"), reqs),
+        recordRequests(firstOkThenFailClient(textTurnWithUsage("主回复", 10_000), "摘要卡死"), reqs),
         (c) => { c.sessions.contextTokens = 10 },
       )
       const session = env.sessions.create("回退")
@@ -1270,7 +1270,7 @@ describe("RunManager context compaction", () => {
 
   it("writes no audit record when the summarizer fails", async () => {
     const { env, manager } = makeEnv(
-      firstOkThenFailClient(textTurnWithUsage("主回复", 10_000), "摘要挂了"),
+      firstOkThenFailClient(textTurnWithUsage("主回复", 10_000), "摘要卡死"),
       (c) => { c.sessions.contextTokens = 10 },
     )
     const session = env.sessions.create("失败审计")
@@ -1283,7 +1283,7 @@ describe("RunManager context compaction", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     try {
       const { env, manager } = makeEnv(
-        failFirstClient("手动摘要挂了", textTurn("不会到这")),
+        failFirstClient("手动摘要卡死", textTurn("不会到这")),
         (c) => { c.sessions.contextTokens = 10 },
       )
       const session = env.sessions.create("手动失败")
@@ -1293,7 +1293,7 @@ describe("RunManager context compaction", () => {
 
       // compactSession rethrows the failed outcome's carried error: the HTTP
       // route maps it to a 500 carrying the message (routes/compact.test.ts).
-      await expect(manager.compactSession(session.id)).rejects.toThrow("手动摘要挂了")
+      await expect(manager.compactSession(session.id)).rejects.toThrow("手动摘要卡死")
 
       const events = received(socket)
       expect(events.filter((e) => e.type === "compaction.started").map((e) => e.payload)).toEqual([{ phase: "manual", trigger: "manual" }])
@@ -1561,7 +1561,7 @@ describe("RunManager context compaction", () => {
 
 // --- memory injection------------------------------------------
 // RunManagerDeps.memory 是 MemorySystem：L2 cognition 拼进 system prompt
-// （cognitionPrompt 为空/抛错则回退到纯 AGENTS.md），L1 情节以 memory note 注入
+// （cognitionPrompt 为空/抛出错误则回退到纯 AGENTS.md），L1 情节以 memory note 注入
 // 用户消息（searchEpisodes 失败静默跳过）。四触发提取 pipeline 由 daemon 组装。
 
 describe("RunManager memory injection", () => {

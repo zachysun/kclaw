@@ -242,7 +242,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   // /memory 路由族：无 memory 组装时全部 503，不影响既有路由。
   registerMemoryRoutes(app, { memory: opts.memory, config })
   registerHookRoutes(app, { hooks: opts.hooks })
-  // /skills 路由族：只读技能管理面（CLI /skill 与 Web 技能页共用），无组装依赖；
+  // /skills 路由族：只读技能管理接口（CLI /skill 与 Web 技能页共用），无组装依赖；
   // 提案子路由族（技能进化）有组装才可用，否则 503。
   registerSkillRoutes(app, { paths, builtinSources: opts.builtinSources, pluginHomes: opts.pluginHomes, skillsEvolution: opts.skillsEvolution })
   // 切会话写入：POST /sessions 是 CLI /clear、/new 与 web 新建会话的共同底层，
@@ -259,10 +259,10 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
 
   registerConfigRoutes(app, { config })
   registerSearchRoutes(app, { historySearch: opts.historySearch })
-  // Provider 管理面：Model 顶栏调用（快照 + 增删改/设默认/模型连通测试热生效）。
+  // Provider 管理接口：Model 顶栏调用（快照 + 增删改/设默认/模型连通测试热生效）。
   registerProvidersRoutes(app, { config, paths, notifier: opts.configNotifier })
   registerFsRoutes(app, { workspace: config.workspace })
-  // 沉淀规则管理面：列表（含 git 跟踪状态）与删除，Web 权限页调用。
+  // 沉淀规则管理接口：列表（含 git 跟踪状态）与删除，Web 权限页调用。
   registerPermissionsRoutes(app, { paths, workspaceFallback: config.workspace })
 
   if (opts.usage !== undefined) {

@@ -125,7 +125,7 @@ describe("SessionStore", () => {
     expect(s2.list().map((x) => x.id)).toEqual([m.id])
   })
 
-  it("list 跳过 meta 与事件流都损坏的会话，而不是让整个列表抛错", () => {
+  it("list 跳过 meta 与事件流都损坏的会话，而不是让整个列表抛出错误", () => {
     const store = new SessionStore(dir)
     const good = store.create("好会话")
     const bad = store.create("坏会话")
@@ -213,7 +213,7 @@ describe("SessionStore", () => {
     expect(store.readCompactions(meta.id)).toEqual([])
   })
 
-  it("readCompactions 在事件流中部损坏时返回 [] 而不是抛错", () => {
+  it("readCompactions 在事件流中部损坏时返回 [] 而不是抛出错误", () => {
     const store = new SessionStore(dir)
     const meta = store.create("审计")
     store.appendCompaction(meta.id, { at: "2026-08-27T00:00:00.000Z", trigger: "auto", from: "m1", upto: "m3", messages: 3, segmentSummary: "段摘要", top: "总摘要" })
@@ -575,7 +575,7 @@ describe("SessionStore readEventsFrom (tail read)", () => {
     expect(s.readEventsFrom(id, 99)).toEqual([])
   })
 
-  it("只解析尾部：跳过的行损坏不抛错，尾部的损坏语义与 readJsonl 一致（丢撕裂数据）", () => {
+  it("只解析尾部：跳过的行损坏不抛出错误，尾部的损坏语义与 readJsonl 一致（丢撕裂数据）", () => {
     const { s, id } = seeded()
     // 模拟真实损坏场景比较绕，这里直接验证"跳过区不 parse"：把首行改成非法 JSON，
     // readEvents 会抛（corrupt），readEventsFrom(1, …) 不受影响。
@@ -594,7 +594,7 @@ describe("SessionStore readEventsFrom (tail read)", () => {
 })
 
 describe("writeEventsRaw（fork 建新流专用）", () => {
-  it("目标事件流已存在且非空 → 抛错拒绝覆盖", () => {
+  it("目标事件流已存在且非空 → 抛出错误拒绝覆盖", () => {
     const dir = mkdtempSync(join(tmpdir(), "kclaw-store-raw-"))
     try {
       const s = new SessionStore(dir)

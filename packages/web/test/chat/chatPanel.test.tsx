@@ -1195,7 +1195,7 @@ describe("ChatPanel", () => {
 
   it("fills a cross-client empty-text row by resyncing GET /queue", async () => {
     // 别的客户端（CLI/另一浏览器）排队的消息：message.queued 载荷不带文本，
-    // 本端落地空文本行 → 自动拉一次队列快照把文本补上。
+    // 本端写入空文本行 → 自动拉一次队列快照把文本补上。
     const h = await mount()
     ;(h.api.get as ReturnType<typeof vi.fn>).mockImplementation(async (path: string) => {
       if (path.endsWith("/queue")) return [{ messageId: "q9", disposition: "wait", text: "CLI 发的排队消息" }]

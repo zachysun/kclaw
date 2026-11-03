@@ -25,7 +25,7 @@ export function SessionUsageStrip({ api, sessionId, refreshKey }: {
       .then((body) => {
         if (alive) setBucket(body.buckets.find((b) => b.key === sessionId))
       })
-      // 状态条拿不到数不是故障：保留旧值、静默不打断对话（对齐 MCP 页轮询的静默约定）。
+      // 状态条拿不到数不是故障：保留旧值、静默不打断对话（与 MCP 页轮询的静默约定一致）。
       .catch(() => {})
     return () => {
       alive = false

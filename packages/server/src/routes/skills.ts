@@ -37,13 +37,13 @@ function visibilityOf(s: SkillRecord): "all" | "user-only" {
 }
 
 /**
- * /skills 路由族：技能管理面（CLI /skill 与 Web 技能页的共同后端）。
+ * /skills 路由族：技能管理接口（CLI /skill 与 Web 技能页的共同后端）。
  * 每次请求现扫全局 <home>/skills + 可选 workdir 的 .kclaw/skills（项目级
  * 覆盖全局），与 run 时的注入同源同规则；复用技能（软链接接入）的可见
  * 档位由 .links.json 按 realpath 覆盖，与 run 组装共用同一覆盖函数。
- * user-invocable:false 的技能对用户面不存在（列表不显示、指名 404，对齐
- * Claude Code"从 / 菜单隐藏"）；复用链接的管理记录直接从 .links.json 读，
- * 不受该过滤影响（否则"仅模型"档在页面上消失后无法改回；管理面本身持
+ * user-invocable:false 的技能对用户面不存在（列表不显示、指名 404，与
+ * Claude Code"从 / 菜单隐藏"的行为一致）；复用链接的管理记录直接从 .links.json 读，
+ * 不受该过滤影响（否则"仅模型"档在页面上消失后无法改回；管理接口本身持
  * token 鉴权）。
  */
 export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPaths; builtinSources?: { agent: string; dir: string }[]; pluginHomes?: { agent: string; home: string }[]; skillsEvolution?: SkillEvolutionAdmin }): void {
@@ -95,7 +95,7 @@ export function registerSkillRoutes(app: FastifyInstance, opts: { paths: KclawPa
     return { name: skill.name, displayName: skill.displayName, description: skill.description, visibility: visibilityOf(skill), origin: skill.origin, plugin: skill.plugin, content: skill.body }
   })
 
-  // ---- 复用管理面（写操作，均经持 token 鉴权中间件） ----------------------
+  // ---- 复用管理接口（写操作，均经持 token 鉴权中间件） ----------------------
 
   app.get("/skills/links", async (req, reply: FastifyReply) => {
     const { workdir } = req.query as { workdir?: string }

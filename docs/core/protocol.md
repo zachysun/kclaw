@@ -104,7 +104,7 @@ export function newId(prefix: IdPrefix): string {
 ## 边界与出错
 
 - 实时事件无 ack、无重发：客户端错过的增量事件不补发，靠「HTTP 拉全量 + 只订阅新事件」补齐，而不是回放（回放语义由 events.jsonl 的唯一权威数据承载，`GET /sessions/:id/events` 可按会话回查整条事件流）。
-- `message.created` 之后消息可能永远不 `completed`（空 assistant 被丢弃、宿主 hook 抛错）——客户端不能假设 created 必有 completed 配对。
+- `message.created` 之后消息可能永远不 `completed`（空 assistant 被丢弃、宿主 hook 抛出错误）——客户端不能假设 created 必有 completed 配对。
 - `AgentEvent.sessionId` 缺失即广播语义（`EventBus.emit` 发给全部已连接 socket），客户端不应把它当异常。
 - `attachment` 的 `file` source 指向 `<home>/attachments/<session-id>/`：客户端先把文件传到该目录（HTTP `POST /sessions/:id/attachments`），发起消息时引用路径、由服务端挂载为块（见 [run-manager](../server/run-manager.md)）；大文件不进 JSONL，JSONL 里只有指向磁盘的元数据。
 

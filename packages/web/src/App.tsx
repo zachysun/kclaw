@@ -166,7 +166,7 @@ function MainShell({
   const [sessionsError, setSessionsError] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [messagesCache, setMessagesCache] = useState<Record<string, Message[]>>({})
-  // 全局 toast 栈：侧栏操作结果与管理页回执统一落这里（内容区右上角浮层，
+  // 全局 toast 容器：侧栏操作结果与管理页回执统一显示在这里（内容区右上角浮层，
   // 自动消失、点击即消），不再堆在侧栏底部。
   const { toasts, notify, dismiss } = useToasts()
   // memory.written 通知条点击后的跳转目标：切到记忆页并自动打开对应文件。
@@ -415,7 +415,7 @@ function MainShell({
     [createAndSelectSession],
   )
 
-  // Session fork 落地（ChatPanel POST 成功后上抛）：新会话进侧栏并选中，
+  // Session fork 完成（ChatPanel POST 成功后上抛）：新会话进侧栏并选中，
   // 全局 toast 带"返回原会话"动作——fork 的动机就是去新线干点什么，跳过去
   // 省一次点击，回来靠这个动作。
   const handleForked = useCallback(
