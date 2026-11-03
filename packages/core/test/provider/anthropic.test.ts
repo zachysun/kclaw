@@ -191,6 +191,27 @@ describe("anthropic client", () => {
     await expect(collect(createAnthropicClient({ baseUrl: "https://x", apiKey: "k", fetchImpl: evFetch })))
       .rejects.toThrow("llm anthropic overloaded_error: Overloaded")
   })
+
+  it("merges the run's cancel signal into the request; an external abort surfaces as cancellation, not a timeout", async () => {
+    let seen: AbortSignal | undefined
+    const external = new AbortController()
+    const fetchImpl = (async (_url: unknown, init?: { signal?: AbortSignal }) => {
+      seen = init?.signal
+      // 模拟 undici：请求信号一断，挂起的 body 读取立即以 abort 原因拒绝
+      return new Response(new ReadableStream({
+        start(controller) {
+          init?.signal?.addEventListener("abort", () => controller.error(init.signal!.reason), { once: true })
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } })
+    }) as typeof fetch
+    const client = createAnthropicClient({ baseUrl: "https://x", apiKey: "k", fetchImpl, timeoutMs: 60_000 })
+    const it = client.stream({ ...REQ, signal: external.signal })[Symbol.asyncIterator]()
+    const pending = it.next() // 挂在 body 读取上
+    await new Promise((r) => setTimeout(r, 20))
+    external.abort(new Error("run cancelled"))
+    await expect(pending).rejects.toThrow("run cancelled")
+    expect(seen?.aborted).toBe(true)
+  })
 })
 
 describe("anthropic cache breakpoints (prompt_cache channel)", () => {

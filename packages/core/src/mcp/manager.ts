@@ -18,10 +18,21 @@
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import type { ToolDefinition } from "../provider/types.js"
 import type { ToolExecutor } from "../agent/tools.js"
+import { truncateMiddle } from "../tools/bash.js"
 import { ConnectionPool, freshRecord } from "./connection.js"
 import { McpGroupStore } from "./groups.js"
 import { GLOBAL_GROUP, McpError, configsEqual } from "./types.js"
 import type { McpGroupStatus, McpServerConfig, McpServerStatus, McpSnapshot, McpToolEntry } from "./types.js"
+
+/** 单次工具调用返回体的截断上限。请求侧的组装会按 token 省略装不下的旧
+ *  工具输出，但落盘与事件推送在此之前——一个返回几十 MB 文本的 MCP 工具
+ *  会无界写大事件流。与 bash 前台输出的模型视图同款上限。 */
+const MCP_OUTPUT_MAX_BYTES = 512 * 1024
+/** callTool 单次调用超时（默认）。连接与工具列举有 10s 上限而调用没有——
+ *  server 进程活着但 handler 挂起时，run 会无限期停在工具阶段，该会话队列
+ *  积压直到打满上限，唯一出口是用户 /stop。超时返回 error 结果并废弃该连
+ *  接（下次调用重连）。run 的取消信号仍并行有效。 */
+const DEFAULT_TOOL_CALL_TIMEOUT_MS = 120_000
 
 export {
   GLOBAL_GROUP,
@@ -61,6 +72,8 @@ export interface McpManagerOptions {
   maxReconnectAttempts?: number
   /** Per-server stderr diagnostics dir (see ConnectionPoolOptions.stderrLogDir). */
   stderrLogDir?: string
+  /** 单次工具调用超时 ms（默认 120s；0 = 不限，不推荐）。见 DEFAULT_TOOL_CALL_TIMEOUT_MS。 */
+  toolCallTimeoutMs?: number
   onError?: (group: string, name: string, error: string) => void
   /**
    * Persist one group's FULL entry set after a hot mutation. The daemon
@@ -76,6 +89,7 @@ export class McpManager {
   readonly #pool: ConnectionPool
   readonly #idleTtlMs: number
   readonly #sweepIntervalMs: number
+  readonly #toolCallTimeoutMs: number
   readonly #persistHook?: (group: string, servers: Record<string, McpServerConfig>) => void
   #sweepTimer?: NodeJS.Timeout
 
@@ -83,6 +97,7 @@ export class McpManager {
     this.#store = new McpGroupStore({ global: opts.globalServers, projects: opts.projects })
     this.#idleTtlMs = opts.idleTtlMs ?? 600_000
     this.#sweepIntervalMs = opts.sweepIntervalMs ?? 60_000
+    this.#toolCallTimeoutMs = opts.toolCallTimeoutMs ?? DEFAULT_TOOL_CALL_TIMEOUT_MS
     this.#pool = new ConnectionPool({
       transportFactory: opts.transportFactory,
       backoffBaseMs: opts.backoffBaseMs,
@@ -258,22 +273,47 @@ export class McpManager {
               : `MCP server ${name} 当前未连接（正在自动重连，稍后重试本调用通常即可恢复；多次失败请告知用户该工具暂时不可用）`,
           }
         }
+        let timedOut = false
         try {
-          const result = (await client.callTool(
+          // 调用与定时器同时等待谁先到算谁：挂起的 handler 不能无限期占住
+          // run。超时后废弃该连接——handler 挂起的 server 不值得信任，下次
+          // 调用走重连拿到干净状态。
+          const call = client.callTool(
             {
               name: tool.originalName,
               arguments: (args ?? {}) as Record<string, unknown>,
             },
             undefined,
             ctx.signal ? { signal: ctx.signal } : undefined,
-          )) as { content?: Array<{ type: string; text?: string }>; isError?: boolean }
-          const output = (result.content ?? [])
+          )
+          const result = await (this.#toolCallTimeoutMs > 0
+            ? Promise.race([
+                call,
+                new Promise<never>((_, reject) => {
+                  const t = setTimeout(() => {
+                    timedOut = true
+                    reject(new Error("mcp tool call timed out"))
+                  }, this.#toolCallTimeoutMs)
+                  t.unref?.()
+                }),
+              ])
+            : call) as { content?: Array<{ type: string; text?: string }>; isError?: boolean }
+          const joined = (result.content ?? [])
             .filter((c) => c.type === "text" && typeof c.text === "string")
             .map((c) => c.text as string)
             .join("\n")
+          const output = truncateMiddle(joined, MCP_OUTPUT_MAX_BYTES)
           if (result.isError === true) return { status: "error", output }
           return { status: "ok", output }
         } catch (err) {
+          if (timedOut) {
+            const recordNow = this.#pool.get(group, name)
+            if (recordNow !== undefined) void this.#pool.retire(recordNow, "failed")
+            return {
+              status: "error",
+              output: `MCP server ${name} 工具 ${tool.originalName} 调用超时（${this.#toolCallTimeoutMs}ms 无响应）。server 可能卡死，已断开该连接，稍后重试通常即可恢复；多次失败请告知用户该工具暂时不可用。`,
+            }
+          }
           return { status: "error", output: (err as Error).message }
         }
       },

@@ -682,4 +682,61 @@ describe("McpManager status snapshot shape", () => {
     expect(snapshot.groups[1]!.servers[0]!.group).toBe(DIR_A)
     await manager.stop()
   })
+
+  it("times out a hanging callTool and retires the connection", async () => {
+    const transportFactory = (): Transport => {
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+      const mcp = new McpServer({ name: "fake", version: "1.0.0" })
+      mcp.registerTool("hang", { description: "never returns", inputSchema: {} }, async () => new Promise(() => {}))
+      void mcp.connect(serverTransport)
+      return clientTransport
+    }
+    const manager = new McpManager({
+      globalServers: { slow: { type: "stdio", command: "unused", args: [], env: {} } },
+      transportFactory,
+      backoffBaseMs: 1,
+      backoffCapMs: 4,
+      connectTimeoutMs: 1000,
+      toolCallTimeoutMs: 300,
+    })
+    manager.connect(GLOBAL_GROUP, "slow")
+    await manager.flush()
+    const { executors } = manager.toolsFor(DIR_A)
+    const hang = executors.get("mcp__slow__hang")!
+    const t0 = Date.now()
+    const r = await hang.execute({}, { onOutput: () => {} })
+    expect(r.status).toBe("error")
+    expect(r.output).toContain("调用超时")
+    expect(Date.now() - t0).toBeLessThan(5_000)
+    // 连接已废弃：记录离开 connected 态（下次 toolsFor 会 kick 重连）
+    await manager.stop()
+  })
+
+  it("truncates an oversized tool result to the output cap", async () => {
+    const big = "y".repeat(600 * 1024)
+    const transportFactory = (): Transport => {
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+      const mcp = new McpServer({ name: "fake", version: "1.0.0" })
+      mcp.registerTool("big", { description: "returns a huge text", inputSchema: {} }, async () => ({
+        content: [{ type: "text", text: big }],
+      }))
+      void mcp.connect(serverTransport)
+      return clientTransport
+    }
+    const manager = new McpManager({
+      globalServers: { fat: { type: "stdio", command: "unused", args: [], env: {} } },
+      transportFactory,
+      backoffBaseMs: 1,
+      backoffCapMs: 4,
+      connectTimeoutMs: 1000,
+    })
+    manager.connect(GLOBAL_GROUP, "fat")
+    await manager.flush()
+    const { executors } = manager.toolsFor(DIR_A)
+    const r = await executors.get("mcp__fat__big")!.execute({}, { onOutput: () => {} })
+    expect(r.status).toBe("ok")
+    expect(r.output.length).toBeLessThan(600 * 1024)
+    expect(r.output).toContain("truncated")
+    await manager.stop()
+  })
 })

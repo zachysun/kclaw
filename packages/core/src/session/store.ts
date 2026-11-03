@@ -150,11 +150,27 @@ export class SessionStore {
     // （撕裂尾在读取时丢弃，与 appendJsonlLine 的修复语义一致），追加后
     // 不再重读文件——新行原文由本次调用唯一拼装，链锚直接推算。
     const tail = this.chainTailBeforeAppend(id)
+    // 投影落后检测：meta 能解析但 chainLength 与文件行数不一致 = 上次
+    // "事件先行、投影后写"的两步写死在了中间（崩溃/盘满）。链锚字段随
+    // 每次追加自愈，投影字段不会——不重建的话，缺掉的投影效果（如
+    // compaction 状态、mode/model 覆盖）被这次追加永久固化。检测只在
+    // 落后后的第一次追加生效，代价是一次 O(n) 重建，仅异常路径发生。
+    // 重建按尽力而为降级：行数差异也可能来自文件损坏（而非崩溃窗口），
+    // 此时严格读全文会抛错——追加路径对损坏文件保持历史容忍语义
+    // （run 历史读取与 verifyChain 才是损坏的暴露面），退回旧投影继续。
+    let base: SessionMeta | undefined = current
+    if (current !== undefined && current.chainLength !== tail.lineCount) {
+      try {
+        base = this.rebuildMeta(id) ?? current
+      } catch {
+        base = current
+      }
+    }
     const line = JSON.stringify({ ...event, $prev: tail.prev })
     appendJsonlLine(this.eventsPath(id), { ...event, $prev: tail.prev })
     const at = this.eventAt(event)
-    const base: SessionMeta = current ?? { id, title: "", createdAt: at, updatedAt: at }
-    const projection = applyEvent(base, event)
+    const baseMeta: SessionMeta = base ?? { id, title: "", createdAt: at, updatedAt: at }
+    const projection = applyEvent(baseMeta, event)
     projection.chainHead = lineDigest(line)
     projection.chainLength = tail.lineCount + 1
     this.writeMeta(projection)

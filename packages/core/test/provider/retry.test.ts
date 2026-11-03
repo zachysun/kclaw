@@ -64,4 +64,15 @@ describe("withRetry", () => {
       for await (const _ of c.stream({ model: "m", system: "", messages: [], tools: [] })) void _
     }).rejects.toThrow(/^llm http timeout after 50ms/)
   })
+
+  it("does not retry a cancelled call (an external abort is not transient)", async () => {
+    const onRetry = vi.fn()
+    const c = withRetry(clientFailing(99, new Error("run cancelled")), {
+      maxAttempts: 3, baseDelayMs: 1, jitter: () => 0, onRetry,
+    })
+    await expect(async () => {
+      for await (const _ of c.stream({ model: "m", system: "", messages: [], tools: [] })) void _
+    }).rejects.toThrow("run cancelled")
+    expect(onRetry).not.toHaveBeenCalled()
+  })
 })

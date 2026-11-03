@@ -18,8 +18,12 @@ export const DEFAULT_LLM_TIMEOUT_MS = 300_000
  * Abort classification for the stream's guarded awaits: any failure after the
  * timeout signal fired is reported as the `llm http timeout` message (the
  * retry contract in retry.ts matches on it); everything else rethrows as-is.
+ * When the caller's own cancel signal (`external`, the run's abort) fired, the
+ * failure is the caller's cancellation — rethrown as the raw abort reason so
+ * it is NOT classified as a timeout (a cancelled run must not be retried).
  */
-export function rethrowClassified(err: unknown, signal: AbortSignal, timeoutMs: number): never {
+export function rethrowClassified(err: unknown, signal: AbortSignal, timeoutMs: number, external?: AbortSignal): never {
+  if (external?.aborted) throw external.reason instanceof Error ? external.reason : new Error("llm stream aborted")
   if (signal.aborted) throw new Error(`llm http timeout after ${timeoutMs}ms`)
   throw err
 }
