@@ -158,7 +158,7 @@ kclaw 的技能目录可以以**软链接**的方式接入其他 coding agent �
 
 - **成功才清检查**：提炼成功 resolve 才清；失败保留检查，下个 sweep 重试同一范围（记忆侧"先清后触发"靠 interval 补扫重试失败批次，技能侧没有补扫，先清会丢批次）；
 - **同一检查连败 3 次放弃**：清除该检查并记日志（`MAX_ATTEMPTS`，内存按 `workdir|sessionId` 计数，daemon 重启归零后照常补查再试）；
-- **会话已删的检查无条件清掉**：`sessions.meta` 缺失的挂起检查没有活动可判、也没有提炼对象，不清会在检查表里永久堆积；
+- **会话已删的检查无条件清掉**：`sessions.meta` 缺失的挂起检查没有活动可判定、也没有提炼对象，不清会在检查表里永久堆积；
 - **end_turn 后有新活动的检查清掉**：旧锚点已被新活动取代，新 run 收尾的粗查若仍卷入会重排；
 - `enabled: false` 或 `idleMinutes: 0` 时 sweep 直接返回，检查停留在检查表里不动，功能重开后继续处理；daemon 重启后首次 sweep 补查已保存的检查。
 
@@ -228,7 +228,7 @@ stateDiagram-v2
 
 - **写入落点**：`scope=global` 写 `~/.kclaw/skills/<name>/SKILL.md`，`scope=project` 写 `<workdir>/.kclaw/skills/<name>/SKILL.md`。生效路径就是每轮重扫（见上文"每个 run 重新扫描"），下一轮对话自动吃到，无需任何热加载；
 - **apply 的两条非致命 warning**（不阻止写入、状态照常变 applied）：`revise` 的现正文与提案时 `baseline` 不一致（提案后正文已被第三方改动，apply 以提案内容覆盖——覆盖的是提案内容，不是用户上次看到的那份）；`scope=global` 的 `new` 写入后若任一已知项目技能目录已存在同名技能（项目副本整目录覆盖全局版，该项目实际生效的是项目副本）。路由把 warning 原样带回，UI 走 toast 提示；
-- **复用链接技能是 apply 的禁区**：目标是复用链接技能（`.links.json` 命中名字）409，文案说明复用技能由源目录维护——提炼与 `skill_create` 在产提案时已做同判，这一层是治理期的最后防线。
+- **复用链接技能是 apply 的禁区**：目标是复用链接技能（`.links.json` 命中名字）409，文案说明复用技能由源目录维护——提炼与 `skill_create` 在产提案时已做同样判定，这一层是治理期的最后防线。
 
 ### 用量遥测
 

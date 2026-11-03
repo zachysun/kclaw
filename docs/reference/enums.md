@@ -37,7 +37,7 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 | `round-limit` | 连续自续 10 轮未达成（发一条消息清零计数可继续） |
 | `budget-limit` | 生命周期 token budget（2,000,000）耗尽，收尾轮完成后停止 |
 | `gate-exhausted` | 验收命令连续 3 轮未通过 |
-| `no-progress` | 判定器连续 3 轮判无进展 |
+| `no-progress` | 判定器连续 3 轮判定无进展 |
 | `permission` | 连续 2 轮出现确认超时（→blocked，等人工裁决） |
 | `judge-failed` | 判定器连续失败熔断（解析 3 次 / 传输 5 次）或检查流程故障 |
 | `run-error` | 上一轮运行出错（不自动重试，等用户） |

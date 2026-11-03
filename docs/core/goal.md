@@ -4,7 +4,7 @@
 
 `packages/core/src/goal/` 是目标循环的领域模块（类型/上限/提示词/判定器/验收命令/事件派生/轮决策）；`packages/server/src/goal-loop.ts` 的 `GoalLoopHost` 是 daemon 侧驱动主机，只做副作用编排——执行验收命令、调判定器、写事件、按 core 给出的决策入队或停止。
 
-给会话设一个**可验证的目标**，daemon 自主多轮推进：每轮 run 结束后先跑验收命令、再由一个独立的判定器 LLM 裁决目标是否达成，没达成就把判定意见注入下一轮继续干，直到达成、被判不可能、或触碰硬性上限才停。会话的普通对话（打字发消息）在任何时刻都可用——goal 循环只是队列里的一种 run 来源，用户输入照常 steer/wait/interrupt。
+给会话设一个**可验证的目标**，daemon 自主多轮推进：每轮 run 结束后先跑验收命令、再由一个独立的判定器 LLM 裁决目标是否达成，没达成就把判定意见注入下一轮继续干，直到达成、被判定不可能、或触碰硬性上限才停。会话的普通对话（打字发消息）在任何时刻都可用——goal 循环只是队列里的一种 run 来源，用户输入照常 steer/wait/interrupt。
 
 四态状态机（`GoalState`）：
 
@@ -59,7 +59,7 @@
 |------|------|----------|
 | 连续自续轮数 | 10（`GOAL_MAX_ROUNDS`） | `round-limit` 停止；用户发一条消息清零计数后 resume 可继续 |
 | 生命周期 token | 2,000,000（`GOAL_TOKEN_BUDGET`，run 用量 + 判定器用量） | 超限后**多给一轮收尾**（`<goal-wrapup>` 注入"整理到可交接状态"），收尾轮照常判定（可能是 met），之后 `budget-limit` 停止 |
-| 判定器判无进展 | 连续 3 轮 progress 为空或「无」 | `no-progress` 停止 |
+| 判定器判定无进展 | 连续 3 轮 progress 为空或「无」 | `no-progress` 停止 |
 | 验收命令连败 | 连续 3 轮 | `gate-exhausted` 停止 |
 | 判定器连败 | 解析 3 次 / 传输 5 次 | `judge-failed` 熔断停止 |
 | run 出错 | 1 次 | `run-error` 停止，不自动重试 |
@@ -107,7 +107,7 @@
 
 ## 模型面（goal 三件工具，2026-10-19 起）
 
-daemon 组装时把 GoalLoopHost（结构性接口 `GoalToolHost`）注入 run，根会话注册 `create_goal` / `get_goal` / `update_goal`（实现 `tools/goal.ts`，subagent 不注册）：create/update **sensitive**（审批=用户明说的机制化——既定纪律：模型不经 prompting 不得启动或操控花费循环）、get safe。`create_goal` 有单目标守卫：本会话已有未完成目标（state 非 complete）时直接报错，先 stop 处理才能开新目标（不嵌套）。`update_goal action=complete` 请求**立即判定**：host 新增 `requestCheck`（armed+active 才真发起，否则告知判定照旧在 run 边界自动进行），判定器裁决不变——met/impossible 才落终态，模型永不自判完成（对比的两家让模型自证完成，本仓库 ADR-0003 明确拒绝）。pause/resume/stop 直映 host 方法。CLI `/goal` 帮助文本已提及模型侧工具。ADR-0004 文末有本次决策的更新节。
+daemon 组装时把 GoalLoopHost（结构性接口 `GoalToolHost`）注入 run，根会话注册 `create_goal` / `get_goal` / `update_goal`（实现 `tools/goal.ts`，subagent 不注册）：create/update **sensitive**（审批=用户明说的机制化——既定纪律：模型不经 prompting 不得启动或操控花费循环）、get safe。`create_goal` 有单目标守卫：本会话已有未完成目标（state 非 complete）时直接报错，先 stop 处理才能开新目标（不嵌套）。`update_goal action=complete` 请求**立即判定**：host 新增 `requestCheck`（armed+active 才真发起，否则告知判定照旧在 run 边界自动进行），判定器裁决不变——met/impossible 才落终态，模型永不自行判定完成（对比的两家让模型自证完成，本仓库 ADR-0003 明确拒绝）。pause/resume/stop 直映 host 方法。CLI `/goal` 帮助文本已提及模型侧工具。ADR-0004 文末有本次决策的更新节。
 
 ## 关联
 

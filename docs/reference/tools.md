@@ -61,8 +61,9 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - stdout 与 stderr 合并返回。
 - 输出上限由配置 `bash.maxOutputBytes` 决定（默认 512 KiB）：超限保留头部，结尾带 `...[dropped N bytes]...` 丢弃标记；配置了 spill 目录时完整输出同时写入 `<home>/spill`，返回里附一条 fs_read 定位行，模型可自己读回全量。
 - 超时由配置 `bash.timeoutMs` 决定（默认 300 秒）：到时整个进程组被 SIGKILL（shell 的子孙进程一起结束），返回错误并附带已产生的部分输出。SIGKILL 之后留 2 秒宽限等 close 事件：子进程的退出信息与管道里已缓冲的尾部输出仍被收集完才收尾（超时是出错返回，不是静默丢弃）。
+- run 被取消时前台命令正在执行：同样先 SIGKILL 整个进程组再收尾（同样留 2 秒宽限收集退出信息与尾部输出），返回错误输出以 `command aborted` 开头、附带已产生的部分输出（`exitCode` 为 `null`）——取消的 run 不留命令在后台继续跑。后台进程不随 run 取消终止，生命周期只由 `process_kill` 与进程自身决定。
 - 退出码非 0 返回错误，输出以 `exit code N` 开头。
-- 执行结果在 `data` 字段附结构化退出码 `{exitCode: N}`（超时与进程启动失败为 `null`），web 聊天页的工具卡据此显示 exit 徽标。
+- 执行结果在 `data` 字段附结构化退出码 `{exitCode: N}`（超时、取消与进程启动失败为 `null`），web 聊天页的工具卡据此显示 exit 徽标。
 - 每次执行注入两个环境变量：`KCLAW_SESSION_ID`（当前会话 id）与 `KCLAW_WORKSPACE`（工作目录），供命令行工具自识别；其余环境继承 daemon 进程。
 
 ### fs_read
@@ -315,7 +316,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 |------|------|------|
 | `create_goal` | `text` 必填；`acceptance?`（字符串数组） | 落 `GoalLoopHost.set`（armed + 首轮入队），与 `/goal <text> verify:` 同路径；带验收命令时沿用沙箱 fail-closed 检查 |
 | `get_goal` | 无参 | 当前目标视图：状态、轮位、budget 消耗、最近判定意见、验收命令、armed |
-| `update_goal` | `action`（complete/pause/resume/stop）必填；`note?` | **complete 只请求立即判定**（判定器裁决 met 才落终态，not_met 带意见续跑——模型永不自判完成）；pause=去 armed；resume=重新 armed+立即检查；stop=映射 userStop（掐活跃 run、清队列） |
+| `update_goal` | `action`（complete/pause/resume/stop）必填；`note?` | **complete 只请求立即判定**（判定器裁决 met 才落终态，not_met 带意见续跑——模型永不自行判定完成）；pause=去 armed；resume=重新 armed+立即检查；stop=映射 userStop（掐活跃 run、清队列） |
 
 ### todo 两件
 
