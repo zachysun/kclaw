@@ -186,4 +186,82 @@ describe("process tools", () => {
     expect(tools.process_kill.risk).toBe("safe")
     expect(tools.process_kill.concurrency).toBe("serial")
   })
+
+  it("caps process_output reads and paginates via offset", async () => {
+    const reg = new ProcessRegistry()
+    const spill = join(dir, "big.txt")
+    writeFileSync(spill, "x".repeat(300 * 1024))
+    reg.register({
+      id: "proc_cap",
+      sessionId: "ses_1",
+      command: "sleep 2",
+      pid: spawnSleeper(3),
+      spillPath: spill,
+      onExit: () => {},
+    })
+    const r1 = await reg.output("proc_cap", "ses_1", { offset: 0 })
+    expect(r1.nextOffset).toBe(256 * 1024)
+    expect(r1.output).toContain(`offset=${256 * 1024}`)
+    expect(r1.output).toContain(`文件共 ${300 * 1024} 字节`)
+    const r2 = await reg.output("proc_cap", "ses_1", { offset: r1.nextOffset })
+    expect(Buffer.byteLength(r2.output)).toBe(300 * 1024 - 256 * 1024)
+    expect(r2.output).not.toContain("输出截断")
+    expect(r2.nextOffset).toBe(300 * 1024)
+  })
+
+  it("journals a running line at register and re-adopts the live pid after a restart", async () => {
+    const noticesPath = join(dir, "notices.jsonl")
+    const pid = spawnSleeper(20)
+    const reg1 = new ProcessRegistry({ noticesPath })
+    reg1.register({
+      id: "proc_r1",
+      sessionId: "ses_1",
+      command: "sleep 20",
+      pid,
+      spillPath: join(dir, "r.txt"),
+      onExit: () => {},
+    })
+    expect(existsSync(noticesPath)).toBe(true)
+    expect(JSON.parse(readFileSync(noticesPath, "utf8").trim())).toEqual(
+      expect.objectContaining({ kind: "running", processId: "proc_r1", pid }),
+    )
+    // "重启"：全新 registry 读同一份 journal，进程仍活着 → 重新收编
+    const reg2 = new ProcessRegistry({ noticesPath })
+    await reg2.adopt()
+    expect(reg2.get("proc_r1", "ses_1")?.status).toBe("running")
+    // 行保留：settle 前再次崩溃仍能恢复
+    expect(readFileSync(noticesPath, "utf8").trim().split("\n").length).toBe(1)
+    try { process.kill(-pid, "SIGKILL") } catch { /* already gone */ }
+  })
+
+  it("delivers a synthetic completion for a dead running group and consumes the line", async () => {
+    const noticesPath = join(dir, "notices.jsonl")
+    writeFileSync(noticesPath, JSON.stringify({
+      kind: "running", processId: "proc_d1", sessionId: "ses_1", pid: 999_999_999,
+      command: "x", spillPath: join(dir, "d.txt"), startedAt: new Date().toISOString(),
+    }) + "\n")
+    const notices: unknown[] = []
+    const reg = new ProcessRegistry({ noticesPath })
+    reg.onNotice((n) => { notices.push(n) })
+    await reg.adopt()
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toEqual(expect.objectContaining({ processId: "proc_d1", exitCode: null, killed: false }))
+    expect(existsSync(noticesPath)).toBe(false)
+  })
+
+  it("prefers the real notice over the running line for the same process", async () => {
+    const noticesPath = join(dir, "notices.jsonl")
+    const started = new Date().toISOString()
+    writeFileSync(noticesPath, [
+      JSON.stringify({ kind: "running", processId: "proc_x", sessionId: "ses_1", pid: 999_999_999, command: "x", spillPath: join(dir, "x.txt"), startedAt: started }),
+      JSON.stringify({ processId: "proc_x", sessionId: "ses_1", pid: 999_999_999, command: "x", exitCode: 3, killed: false, spillPath: join(dir, "x.txt"), startedAt: started }),
+    ].join("\n") + "\n")
+    const delivered: unknown[] = []
+    const reg = new ProcessRegistry({ noticesPath })
+    reg.onNotice((n) => { delivered.push(n) })
+    await reg.adopt()
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0]).toEqual(expect.objectContaining({ processId: "proc_x", exitCode: 3 }))
+    expect(existsSync(noticesPath)).toBe(false)
+  })
 })

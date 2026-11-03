@@ -295,16 +295,16 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 注意：bash 的模型侧 JSON Schema 目前只声明 `command` 一个参数——上表两个参数由执行器直接接受并生效，但没有写进 schema，模型无法从工具清单得知它们的存在，需要在对话里明确告知参数名才能用上。
 
-- 后台输出流式写入 spill 文件（`<home>/spill/proc-<id>.txt`），文件字节偏移就是读游标，内存不积压。
+- 后台输出流式写入 spill 文件（`<home>/spill/proc-<id>.txt`），文件字节偏移就是读游标，内存不积压；输出封顶 10 MiB（与前台 spill 上限同量级），到达后停止记录并追加一行上限说明，进程照常运行。
 - 完成自动通知：进程结束后经队列以 `trigger:"process"` 的 run 投递到属主会话（note kind `process`），忙会话排队、闲会话唤醒——工具描述明确写有"不要轮询或 sleep 等待"。
-- 未送达通知持久化在 `<home>/process-notices.jsonl`，daemon 重启后补发；启动时对记录的进程组做存活检测，活的重进注册表、死的补发通知。
+- 通知持久化在 `<home>/process-notices.jsonl`：进程注册时先记一条 running 行，结算后追加结果行，投递成功才删行；daemon 重启时按进程去重收编——running 行对应进程还活着的重进注册表继续跟踪，已死的补发一条退出码未知的合成通知，结算行照常补发。
 - 单会话并发后台进程上限 8；注册表按会话隔离，process 三件只看得到本会话的进程。
 - 沙箱可用时后台命令同样在沙箱内运行（与前台同一条 spawn 路径）。
 
 **process 三件**（safe；list/output parallel、kill serial）：
 
 - `process_list {}`：本会话后台进程清单，最新在前，上限 50 条。
-- `process_output { processId, offset?, wait?, timeoutMs? }`：从 `offset` 字节起读增量输出，返回 `nextOffset` 作下次游标；`wait:true` 阻塞等新输出或终态（timeoutMs 默认 30 秒、上限 600 秒）；`data` 带状态与退出码。
+- `process_output { processId, offset?, wait?, timeoutMs? }`：从 `offset` 字节起读增量输出，返回 `nextOffset` 作下次游标；单次最多读 256 KiB，超出时结果附截断说明与续读偏移（用返回的 `nextOffset` 继续即可）；`wait:true` 阻塞等新输出或终态（timeoutMs 默认 30 秒、上限 600 秒）；`data` 带状态与退出码。
 - `process_kill { processId }`：SIGKILL 整个进程组；杀已结束的进程不报错。
 
 ### goal 三件

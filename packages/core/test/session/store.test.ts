@@ -676,6 +676,29 @@ describe("SessionStore 截断（编辑重试/重新生成的读侧过滤）", ()
     expect(crossed.updatedAt > after.updatedAt).toBe(true)
   })
 
+  it("rebuilds the projection when meta lags the event file (crash between the two writes)", () => {
+    const s = new SessionStore(dir)
+    const id = "lagfix"
+    s.create("demo")
+    s.appendEvent(id, { type: "message", id: "m0", role: "user", blocks: [], createdAt: new Date().toISOString() })
+    // 崩溃窗口模拟：快照拍在 compaction 之前，appendEvent 之后把快照写回
+    // （= 事件已写、meta 未写，进程死在两步之间）。
+    const snapshot = readFileSync(join(dir, id, "meta.json"), "utf8")
+    s.appendEvent(id, {
+      type: "compaction", at: new Date().toISOString(), trigger: "manual", from: null,
+      upto: "m_old", messages: 2, segmentSummary: "SEG", top: "TOP",
+    })
+    writeFileSync(join(dir, id, "meta.json"), snapshot, "utf8")
+    expect(s.meta(id)!.compaction).toBeUndefined() // 缺口确实存在
+
+    // 落后后的第一次追加：chainLength 对不上文件行数 → 重建后再叠加
+    s.appendEvent(id, { type: "message", id: "m1", role: "user", blocks: [], createdAt: new Date().toISOString() })
+    const meta = s.meta(id)!
+    expect(meta.compaction).toBeDefined()
+    expect(meta.compaction?.upto).toBe("m_old")
+    expect(meta.chainLength).toBe(readFileSync(join(dir, id, "events.jsonl"), "utf8").trimEnd().split("\n").length)
+  })
+
   it("投影可重建：rebuildMeta 对含截断事件的事件流给出同一投影", () => {
     const s = new SessionStore(dir)
     const m = s.create()

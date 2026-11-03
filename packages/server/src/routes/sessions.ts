@@ -44,6 +44,12 @@ export interface SessionStores {
 }
 
 const NOT_FOUND = { error: "session not found" } as const
+// Bound on waiting for an aborted run to finish its final writes before the
+// delete/purge cascades touch the session on disk. A run reacts to abort at
+// its next checkpoint and normally settles in milliseconds; the bound only
+// matters for a wedged executor — past it we proceed anyway (the run's own
+// abort checkpoints will still end it).
+const RUN_SETTLE_WAIT_MS = 5_000
 
 /**
  * Parse a `{title?, workdir?}` request body. Each field must be absent or a
@@ -133,6 +139,13 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
       const { id } = request.params as { id: string }
       const meta = stores.sessions.meta(id)
       if (meta === undefined) return reply.code(404).send(NOT_FOUND)
+      // Cancel the session's own live run and queued entries first, and wait
+      // (bounded) for the aborted run to finish writing: without this the run
+      // keeps appending events to a session the client can no longer see, and
+      // recoverQueues skips a deleted session's queue file on the next boot —
+      // those entries strand on disk forever.
+      stores.run?.stopAndClear(id)
+      await stores.run?.awaitSettle(id, RUN_SETTLE_WAIT_MS)
       // Cancel-first: live BACKGROUND subagents of this parent die with it
       // (issue #22) — the soft-delete cascade below then removes their
       // sessions, so nothing keeps running orphaned.
@@ -159,6 +172,14 @@ export function registerSessionRoutes(app: FastifyInstance, stores: SessionStore
     scope.post("/sessions/:id/purge", async (request, reply) => {
       const { id } = request.params as { id: string }
       if (stores.sessions.meta(id) === undefined) return reply.code(404).send(NOT_FOUND)
+      // Same cancel-first as the delete route — and one hazard specific to
+      // purge: a still-running run would recreate the rmSync'd directory via
+      // appendEvent's mkdirSync, reviving the session as a broken ghost
+      // (no session.created event, empty title). abort() is cooperative — the
+      // run's final appends happen in later async steps — so we must WAIT for
+      // the run to settle here, not merely signal it.
+      stores.run?.stopAndClear(id)
+      await stores.run?.awaitSettle(id, RUN_SETTLE_WAIT_MS)
       // Cancel-first mirrors the delete route (background children die with
       // their parent); then the purge cascade (children are soft-deleted with
       // their parent, so both die together here).

@@ -412,6 +412,9 @@ export async function runAgent(input: RunInput, deps: AgentDeps): Promise<RunOut
           // 自然用自己的 sessionId，不继承父会话）。一次性辅助调用不经
           // runAgent，默认该字段即零缓存标记。
           promptCache: { key: input.sessionId },
+          // 取消信号接进 HTTP 请求：abort 时底层连接立即断开，不再延续到
+          // 流自然结束或请求超时（streamWithAbort 只保证停止消费）。
+          ...(deps.signal === undefined ? {} : { signal: deps.signal }),
         }), deps.signal)) {
           // Abort checkpoint: stop consuming the stream the moment the signal fires.
           if (deps.signal?.aborted) break

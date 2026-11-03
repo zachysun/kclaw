@@ -39,8 +39,8 @@ export function resolvePaths(home?: string): KclawPaths
 | `<home>/cron.db` | 定时任务表 | CronScheduler |
 | `<home>/usage.db` | 每次 LLM 运行的 token 用量记录 | UsageStore |
 | `<home>/attachments/<id>/` | 附件外存目录（每会话一个子目录） | server 上传路由 `routes/attachments.ts`；运行时只读挂载 |
-| `<home>/spill/` | 工具输出溢出目录：bash / web_fetch / grep / glob 截断输出时，把捕获到的全量输出写到这里，给模型的截断视图附带 fs_read 定位行；后台进程（bash run_in_background）的输出也流式写在这里（`proc-<id>.txt`，文件偏移即 process_output 的游标） | core `tools/spill.ts`（单文件上限 10 MiB，超出部分不保留）；目录在权限引擎 readRoots 内，`fs_read` 可直接读 |
-| `<home>/process-notices.jsonl` | 后台进程未送达通知日志：进程结算时追加、通知投递成功后重写删除；daemon 重启时补发（活进程组重进注册表、死的补发通知） | core `process/registry.ts` |
+| `<home>/spill/` | 工具输出溢出目录：bash / web_fetch / grep / glob 截断输出时，把捕获到的全量输出写到这里，给模型的截断视图附带 fs_read 定位行；后台进程（bash run_in_background）的输出也流式写在这里（`proc-<id>.txt`，文件偏移即 process_output 的游标；同量级封顶 10 MiB，到达后停止记录、追加一行上限说明，进程照常运行） | core `tools/spill.ts`（单文件上限 10 MiB，超出部分不保留）；目录在权限引擎 readRoots 内，`fs_read` 可直接读 |
+| `<home>/process-notices.jsonl` | 后台进程通知日志：进程**注册时**即追加一条 running 行（进程尚在跑的事实先于任何结算入文件），进程结算时追加结果行，通知投递成功后重写删除已送达的行；daemon 重启时按进程去重收编——结算行优先于 running 行（同一进程两行只认结算），running 行且进程还活着的重进注册表继续跟踪，死了的补发一条合成通知（退出码未知）；行重写失败保留原文，下轮重启再来一次 | core `process/registry.ts` |
 | `<home>/logs/` | 日志目录；当前写入方是 MCP：stdio server 的 stderr 抽干写入 `logs/mcp/<server>.log`（0600，单文件封顶 1 MB（1,000,000 字节），见 [mcp](./mcp.md)） | McpManager（`stderrLogDir`） |
 | `<home>/search.db` | 跨会话消息全文索引（SQLite FTS5，`history_search` 与 `GET /search` 的检索数据来源，见 [tools](./tools.md)） | HistorySearchIndex（daemon 组装，随消息实时写入 + 启动回填） |
 | `<home>/daemon.json` | daemon 存活标识（server 侧） | `launchDaemon` |
@@ -168,7 +168,7 @@ export function readJsonl(file: string): unknown[]
   - 钩子审计 1 种：`hook`（每条**实际执行**的钩子一条：`name` / `position` / `origin`（builtin/user）/ `outcome`（ok/failed/timeout）/ `durationMs` / `runId?`。零投影效果、不推进 `updatedAt`。run-after 等收尾位置的钩子在 `run.ended` 写入磁盘之后执行，事件物理位置在 run 边界之外，归属靠 `runId` 而非位置；实现是 hook runner 的 `onExecuted` 回调接 `SessionStore.appendHook`，见 [hooks](./hooks.md)）。
 
   所有写入都先追加事件，再把事件汇入 meta.json 摘要（见下）。
-- **`meta.json`（派生摘要）**：类型 `SessionMeta`，由事件流经 `applyEvent` 逐条推导得出。它是「摘要」而非权威数据：删除或损坏都能从事件流完整重建（`meta()` 发现缺失或损坏时自动 `rebuildMeta`）。崩溃恢复时允许它暂时落后于事件流（落后不会丢数据）；但落后不会被后续写入自动追平（`appendEvent` 先读当前摘要、只汇入新事件）。只有 meta.json 缺失或损坏时才经 `rebuildMeta` 重放整条事件流。meta.json 整文件原子重写（`updateMeta` 合并 patch，`undefined` 键表示删除；`message` / `message.truncated` / `compaction` / `session.forked` / `goal.set` / `goal.cleared` 事件会推进摘要的 `updatedAt`，`memory` / `skill` / `system` / `sandbox.checked` / `goal.checked` / `todo.written` 事件不推进——审计类事件不算会话「更新」）。两条特殊的推导规则：`system` 事件把全文 upsert 进摘要的 `systemBaseline`（系统提示词的冻结基线，见下文），`compaction` 事件把 `systemBaseline` 清除（压缩改写了消息历史，提示词缓存必然全部失效，正是重新组装、重新冻结的时机）；`message.truncated` 在截断起点越过压缩锚点（`compaction.upto`）时一并清除压缩投影（部分被压缩的历史已随截断丢弃，摘要不能再代替它们）。
+- **`meta.json`（派生摘要）**：类型 `SessionMeta`，由事件流经 `applyEvent` 逐条推导得出。它是「摘要」而非权威数据：删除或损坏都能从事件流完整重建（`meta()` 发现缺失或损坏时自动 `rebuildMeta`）。崩溃恢复时允许它暂时落后于事件流（落后不会丢数据）；落后由下一次追加自动追平——`appendEvent` 比对摘要的 `chainLength` 与事件文件实际行数，不一致（上次"事件已写入、摘要未写"的两步写死在中间）就先 `rebuildMeta` 重放整条流再追加，缺掉的投影效果（如 compaction 状态、会话级设置）不会被这次追加永久固化。重建按尽力而为降级：行数差异也可能来自文件损坏，此时重放读不了全文，退回旧摘要照常追加（追加路径对损坏文件保持历史容忍，损坏的暴露面是 run 历史读取与 `verifyChain`）。meta.json 整文件原子重写（`updateMeta` 合并 patch，`undefined` 键表示删除；`message` / `message.truncated` / `compaction` / `session.forked` / `goal.set` / `goal.cleared` 事件会推进摘要的 `updatedAt`，`memory` / `skill` / `system` / `sandbox.checked` / `goal.checked` / `todo.written` 事件不推进——审计类事件不算会话「更新」）。两条特殊的推导规则：`system` 事件把全文 upsert 进摘要的 `systemBaseline`（系统提示词的冻结基线，见下文），`compaction` 事件把 `systemBaseline` 清除（压缩改写了消息历史，提示词缓存必然全部失效，正是重新组装、重新冻结的时机）；`message.truncated` 在截断起点越过压缩锚点（`compaction.upto`）时一并清除压缩投影（部分被压缩的历史已随截断丢弃，摘要不能再代替它们）。
 - **`queue.jsonl`（运行态）**：排队中的消息（`{ messageId, disposition, text, trigger, attachments?, note?, enqueuedAt }`，顺序即执行顺序，见 [run-manager](../server/run-manager.md) 的消息队列）。与事件流不同，`replaceQueue` 每次整文件重写、不是追加；不参与 meta.json。
 
 `meta.json` 的全部字段：

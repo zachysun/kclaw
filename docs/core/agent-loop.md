@@ -199,7 +199,7 @@ finish_reason: stop → end_turn    length → max_tokens    tool_calls → tool
 daemon 侧 `RunManager.cancel(sessionId)` 调 `AbortController.abort()`，循环在 **6 个检查点** 响应 `deps.signal`：
 
 1. 迭代开始前——无任何产出，直接 `run.completed {stopReason:"aborted"}`，不合成空 assistant（空消息会被部分 provider 拒收）。
-2. 流中（`streamWithAbort` 包装）——`Promise.race(stream.next(), abort)` 立即停止处理，不再等待可能永久停滞的流。
+2. 流中（`streamWithAbort` 包装）——`Promise.race(stream.next(), abort)` 立即停止处理，不再等待可能永久停滞的流。取消信号同时接进 LLM 请求本身（`LlmRequest.signal`，见 [provider](./provider.md)）：底层 HTTP 连接立即断开，原先的形状是循环层已放弃、请求却还挂在 daemon 里继续读流，最长拖到 300 秒超时。
 3. 流后——无 `message_done`，就地打上 `stopReason = "aborted"`，部分内容照常持久化。
 4. 权限检查中——不再进行 gate 的后续调用；确认等待中 abort 经 `raceConfirmation` 以 `"aborted"` sentinel（区分结果来源的特殊返回值）胜出，**不发** `confirmation.resolved`（用户取消 ≠ 超时拒绝）。
 5. 调度中——不再启动新工具；已启动的允许自然结束（不强行终止进行中的执行）。

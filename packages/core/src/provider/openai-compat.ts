@@ -78,7 +78,14 @@ export function createOpenAiCompatClient(opts: {
       // park a run forever: the abort fires at `timeoutMs` and the error is
       // re-classified below so withRetry sees it as transient. The signal is
       // checked (not the error shape) so any abort → timeout classification.
-      const signal = AbortSignal.timeout(timeoutMs)
+      // The run's cancel signal (req.signal) is merged in: an abort closes
+      // the underlying connection immediately instead of leaving it billing
+      // until the stream ends or the timeout fires; an EXTERNAL abort is
+      // reported as cancellation (never as a timeout), so withRetry won't
+      // retry a call the run already gave up on.
+      const signal = req.signal !== undefined
+        ? AbortSignal.any([AbortSignal.timeout(timeoutMs), req.signal])
+        : AbortSignal.timeout(timeoutMs)
       const wantCacheKey = cacheKey.wanted(req.promptCache?.key !== undefined)
       const post = (body: string): Promise<Response> =>
         doFetch(PROVIDER_WIRE_FORMATS.openai.endpoint(opts.baseUrl, "/chat/completions"), {
@@ -110,7 +117,7 @@ export function createOpenAiCompatClient(opts: {
           rejectedLogLine: "kclaw openai-compat: endpoint rejected prompt_cache_key (400); retrying without it",
         })
       } catch (err) {
-        rethrowClassified(err, signal, timeoutMs)
+        rethrowClassified(err, signal, timeoutMs, req.signal)
       }
       if (!res.ok || res.body === null) {
         let text = ""
@@ -121,6 +128,7 @@ export function createOpenAiCompatClient(opts: {
           // not trade one hang for another. A PRE-timeout read failure keeps
           // the historical swallow-to-empty so the status line still
           // classifies the failure (`llm http <status>`).
+          if (req.signal?.aborted) throw req.signal.reason instanceof Error ? req.signal.reason : new Error("llm stream aborted")
           if (signal.aborted) throw new Error(`llm http timeout after ${timeoutMs}ms`)
           void err
         }
@@ -166,7 +174,7 @@ export function createOpenAiCompatClient(opts: {
       } catch (err) {
         // stalled SSE body: undici (and the tests) surface the abort as a
         // body-read rejection — same classified message as the fetch phase
-        rethrowClassified(err, signal, timeoutMs)
+        rethrowClassified(err, signal, timeoutMs, req.signal)
       }
       yield { type: "message_done", stopReason: normalizeFinishReason(finish), usage }
     },

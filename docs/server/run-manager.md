@@ -102,6 +102,10 @@ export class RunManager {
                         // /stop 组合口（IM 频道用）：cancel + queueCancel 全清，
                         // 返回"是否中止了活跃 run"与"丢弃条数"；普通 interrupt
                         // 处置只插队头不清队列，做不成"停止"（见 feishu-channel.md）
+  awaitSettle(sessionId: string, timeoutMs: number): Promise<boolean>
+                        // 有界等待活跃 run 落定（删除/清库路由用）：cancel 只是
+                        // 协作式信号，被中止 run 的收尾追加还要走若干异步步骤；
+                        // 超时返回 false，调用方自行决定是否继续
   recoverQueues(): void                // daemon 启动恢复：queue.jsonl 整体重排，steer/interrupt 降级 wait
   cancelCompaction(sessionId: string): boolean
                                         // 取消进行中的自动压缩：写会话级取消标记 + 取消压缩用的

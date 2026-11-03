@@ -181,7 +181,13 @@ export function createAnthropicClient(opts: {
   const cacheMarkers = createCacheMarkerPolicy({ promptCacheEnabled: opts.promptCacheEnabled })
   return {
     async *stream(req: LlmRequest): AsyncIterable<LlmStreamEvent> {
-      const signal = AbortSignal.timeout(timeoutMs)
+      // The run's cancel signal (req.signal) is merged into the request:
+      // an abort closes the underlying connection immediately; an EXTERNAL
+      // abort is reported as cancellation (never as a timeout), so withRetry
+      // won't retry a call the run already gave up on.
+      const signal = req.signal !== undefined
+        ? AbortSignal.any([AbortSignal.timeout(timeoutMs), req.signal])
+        : AbortSignal.timeout(timeoutMs)
       const wantCache = cacheMarkers.wanted(req.promptCache !== undefined)
       const anthropic = PROVIDER_WIRE_FORMATS.anthropic
       const post = (body: string): Promise<Response> =>
@@ -204,13 +210,14 @@ export function createAnthropicClient(opts: {
           rejectedLogLine: "kclaw anthropic: endpoint rejected cache_control markers (400); retrying without them",
         })
       } catch (err) {
-        rethrowClassified(err, signal, timeoutMs)
+        rethrowClassified(err, signal, timeoutMs, req.signal)
       }
       if (!res.ok || res.body === null) {
         let text = ""
         try {
           text = await res.text()
         } catch (err) {
+          if (req.signal?.aborted) throw req.signal.reason instanceof Error ? req.signal.reason : new Error("llm stream aborted")
           if (signal.aborted) throw new Error(`llm http timeout after ${timeoutMs}ms`)
           void err
         }
@@ -266,7 +273,7 @@ export function createAnthropicClient(opts: {
           }
         }
       } catch (err) {
-        rethrowClassified(err, signal, timeoutMs)
+        rethrowClassified(err, signal, timeoutMs, req.signal)
       }
       const usage: Usage = {
         inputTokens: baseInput + (cacheWrite ?? 0) + (cacheRead ?? 0),

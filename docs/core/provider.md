@@ -20,6 +20,7 @@
 - **openai 格式的适用范围**：任何提供 OpenAI 兼容 `/chat/completions` 端点的服务（OpenAI、DeepSeek、Ollama、各类中转、本地模型网关）都无需单独适配；差异全部留在 baseUrl 指向的端点上。
 - **core 与传输解耦**：`agent/loop.ts` 只依赖 `LlmClient` 这个 async iterable 接口，不知道 fetch、SSE（Server-Sent Events：服务器通过 HTTP 持续推送文本行的流式格式）的存在；测试注入假 client 即可完整运行整个循环。
 - **超时覆盖整个请求**：`AbortSignal.timeout` 同时约束"等响应头"和"读流式响应体"两个阶段——停滞的 provider 流（无响应头、或响应体中途停止）不可能使一个 run 永久停滞。
+- **取消信号接进请求**：`LlmRequest.signal`（run 的取消信号，循环从 `deps.signal` 传入）经 `AbortSignal.any` 与超时信号合并成请求的最终信号——用户取消时底层 HTTP 连接**立即断开**，不再等流自然结束或超时到点才释放。外部信号触发的中断按取消处理（抛出信号自带的取消原因，不改写成超时），`withRetry` 不重试它——用户已经不要这次输出了。
 - **超时与 HTTP 错误共用一套消息格式**：失败统一抛成 `llm http <status>` 或 `llm http timeout after <n>ms` 字符串，`retry.ts` 用正则识别——分类方（`provider/http.ts`，两家 client 与探活共用的 HTTP 层）与使用方（retry）靠这个消息约定耦合，改任何一侧都要保持同步。
 - **重试封装在 client 内部，不在循环层**：`runAgent` 调一次 `stream()` 就是完整的一次"可能含内部重试"的调用；循环层再重试会形成双重重试。重试经 `withRetry` 的 `onRetry` 回调对外可见，把它接到循环的 `onLlmRetry` hook，转成 `llm.failed {willRetry:true}` 事件（见 [agent-loop](./agent-loop.md)）。
 - **已产出事件绝不重试**：流已产出过事件即说明使用方可能已收到，重试会造成输出重复——此时错误直接抛出。
@@ -207,7 +208,7 @@ anthropic 格式每个 SSE 事件的映射：
 
 ### 4. 重试（`withRetry`）
 
-- **可重试的判定 `isTransient`**：`TypeError`（fetch 网络层失败的典型形态）；或错误消息匹配 `/llm http (429|5\d\d|timeout)/`——即限流（429）、服务端错误（5xx）、provider 超时。其余（如 401 密钥错误、400 请求格式错误）直接抛出。
+- **可重试的判定 `isTransient`**：`TypeError`（fetch 网络层失败的典型形态）；或错误消息匹配 `/llm http (429|5\d\d|timeout)/`——即限流（429）、服务端错误（5xx）、provider 超时。其余（如 401 密钥错误、400 请求格式错误）直接抛出。外部取消信号触发的失败（请求携带的 `signal` 已中止）不算临时错误——按取消处理，一次都不重试。
 - **次数与退避**：默认 `maxAttempts = 3`，第 n 次失败后等待 `baseDelayMs * 2^(n-1) + jitter()*100`（默认基数 500ms：首次重试前约 500–600ms，第二次约 1000–1100ms），指数退避即每次失败后等待时间翻倍，附加随机抖动（jitter，避免固定节奏）。
 - **`yielded` 守卫**：一旦本次尝试已产出过事件，任何错误都不再重试（防重复输出，见设计决策）。
 - **`onRetry`**：每次即将重试前回调 `{attempt, error}`；daemon 把它接到事件总线上变成 `llm.failed {willRetry:true}`。

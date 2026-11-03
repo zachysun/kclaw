@@ -18,10 +18,10 @@
  *   default = the configured tool timeout) — some commands legitimately run
  *   for minutes and the model knows which.
  * - `run_in_background` spawns detached with output streaming into a spill
- *   file and returns immediately with a process id; completion is announced
- *   into the conversation via the process registry (polling is unnecessary).
- *   Background commands have no timeout: their lifetime is managed through
- *   process_output / process_kill.
+ *   file (capped, like the foreground capture) and returns immediately with
+ *   a process id; completion is announced into the conversation via the
+ *   process registry (polling is unnecessary). Background commands have no
+ *   timeout: their lifetime is managed through process_output / process_kill.
  */
 import { spawn, type ChildProcess } from "node:child_process"
 import { appendFileSync, closeSync, mkdirSync, openSync, unlinkSync } from "node:fs"
@@ -83,9 +83,17 @@ export function createBashTool(opts: {
   processes?: ProcessRegistry
   /** Owning session id for background entries (registry ownership + notices). */
   sessionId?: string
+  /**
+   * Background output-file ceiling (test seam; default = the foreground spill
+   * ceiling). The pump stops appending past it — a runaway producer must not
+   * grow the output file without bound (the foreground path has had the same
+   * ceiling all along).
+   */
+  bgOutputMaxBytes?: number
 }): ToolExecutor & { name: "bash" } {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES
+  const bgOutputMaxBytes = opts.bgOutputMaxBytes ?? SPILL_MAX_BYTES
 
   /**
    * Background branch: spawn detached, stream merged output into the spill
@@ -105,16 +113,27 @@ export function createBashTool(opts: {
           : path.join(opts.workspace, `.${id}.out`)
       let fd: number | undefined
       let spillClosed = false
+      // The output file is the read cursor for process_output — unbounded
+      // growth would also grow every read. Past the ceiling the pump stops
+      // appending (one marker line explains why); the process keeps running.
+      let bgWritten = 0
+      let bgCapped = false
       const pump = (stream: Readable | null): void => {
         if (stream === null) return
         stream.setEncoding("utf8")
         stream.on("data", (chunk: string) => {
-          if (fd !== undefined) {
-            try {
-              appendFileSync(fd, chunk, "utf8")
-            } catch {
-              // spill write failure must not kill the process pump
+          if (fd === undefined || bgWritten >= bgOutputMaxBytes) return
+          try {
+            const room = bgOutputMaxBytes - bgWritten
+            const part = Buffer.byteLength(chunk) > room ? chunk.slice(0, room) : chunk
+            appendFileSync(fd, part, "utf8")
+            bgWritten += Buffer.byteLength(part)
+            if (bgWritten >= bgOutputMaxBytes && !bgCapped) {
+              bgCapped = true
+              appendFileSync(fd, `\n...[后台输出已达 ${bgOutputMaxBytes} 字节上限，停止记录；进程继续运行]...\n`, "utf8")
             }
+          } catch {
+            // spill write failure must not kill the process pump
           }
         })
       }
@@ -347,12 +366,35 @@ export function createBashTool(opts: {
           })
         }, effectiveTimeout)
 
+        // Cancel propagation: the run's abort signal kills the process group
+        // and finishes with the same two-phase pattern as the timeout (grace
+        // window collects the exit + tail output). Before this, a foreground
+        // command ignored ctx.signal entirely — a long command kept the
+        // session's active slot for up to 10 minutes after "stop".
+        let abortHandled = false
+        const onAbort = (): void => {
+          if (settled || abortHandled) return
+          abortHandled = true
+          killAll()
+          const grace = setTimeout(() => {
+            finish({ status: "error", output: `command aborted\n${capped()}`, data: { exitCode: null } })
+          }, TIMEOUT_GRACE_MS)
+          child.once("close", () => {
+            clearTimeout(grace)
+            finish({ status: "error", output: `command aborted\n${capped()}`, data: { exitCode: null } })
+          })
+        }
+        if (ctx.signal !== undefined) {
+          if (ctx.signal.aborted) onAbort()
+          else ctx.signal.addEventListener("abort", onAbort, { once: true })
+        }
+
         child.on("error", (err) => {
           finish({ status: "error", output: `bash failed: ${err.message}`, data: { exitCode: null } })
         })
 
         child.on("close", (code) => {
-          if (timedOut) return // timeout path already resolved with partial output
+          if (timedOut || abortHandled) return // timeout/abort path already resolved with partial output
           const merged = capped()
           if (code === 0) finish({ status: "ok", output: merged, data: { exitCode: 0 } })
           else finish({ status: "error", output: `exit code ${code}\n${merged}`, data: { exitCode: code } })

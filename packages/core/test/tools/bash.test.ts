@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawn } from "node:child_process"
@@ -223,5 +223,40 @@ describe("bash tool background mode", () => {
     const r = await run(tool, "echo x", { run_in_background: true })
     expect(r.status).toBe("error")
     expect(r.output).toContain("未装配进程注册表")
+  })
+
+  it("aborts a foreground command when the run's signal fires", async () => {
+    const tool = createBashTool({ workspace: ws })
+    const ctl = new AbortController()
+    const p = tool.execute({ command: "sleep 30", timeoutMs: 30_000 }, { onOutput: () => {}, signal: ctl.signal })
+    setTimeout(() => ctl.abort(), 200)
+    const t0 = Date.now()
+    const r = await p
+    expect(Date.now() - t0).toBeLessThan(5_000)
+    expect(r.status).toBe("error")
+    expect(r.output).toContain("command aborted")
+  })
+
+  it("finishes immediately when the signal is already aborted at call time", async () => {
+    const tool = createBashTool({ workspace: ws })
+    const ctl = new AbortController()
+    ctl.abort()
+    const r = await tool.execute({ command: "echo hi" }, { onOutput: () => {}, signal: ctl.signal })
+    expect(r.status).toBe("error")
+    expect(r.output).toContain("command aborted")
+  })
+
+  it("caps the background output file at the ceiling and keeps the process running", async () => {
+    const reg = new ProcessRegistry()
+    const tool = createBashTool({ workspace: ws, processes: reg, sessionId: "ses_bg", bgOutputMaxBytes: 4096 })
+    const r = await run(tool, "yes hello", { run_in_background: true })
+    expect(r.status).toBe("ok")
+    const data = r.data as { spillPath: string; processId: string }
+    await vi.waitFor(() => expect(statSync(data.spillPath).size).toBeGreaterThanOrEqual(4096))
+    expect(readFileSync(data.spillPath, "utf8")).toContain("停止记录")
+    const size = statSync(data.spillPath).size
+    await new Promise((res) => setTimeout(res, 300))
+    expect(statSync(data.spillPath).size).toBe(size) // capped: no further growth
+    reg.kill(data.processId, "ses_bg")
   })
 })
