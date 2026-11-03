@@ -205,7 +205,7 @@ daemon 用 `packages/server/src/mcp-projects.ts` 的 `createMcpProjects` 管理�
 ### 工具适配（toolsFor）
 
 - 生效的工具清单 = 全局组条目 + 该项目组条目（同名项目组整体覆盖）。视图内每个**有工具视图**的条目（已连接的，或断连但还留着最近一次 `listTools` 结果的，见"惰性连接、重试与回收"第 3 条）声明的每个工具产出一条适配结果：名字改成带前缀的 `mcp__<server>__<tool>`；参数 schema 直接沿用 server 声明的 `inputSchema`（server 没给就用空对象 schema）；描述缺失时补一句默认的 `MCP tool <tool> from server <server>`。
-- 每个工具配一个执行器，风险与并发档位固定为 `"sensitive"` + `"serial"`。执行器在调用时**现取当前连接**（对账换组导致的状态对象替换不会把调用写进死客户端），并刷新该连接的最近使用时间；内部调用 `client.callTool({name: 原名, arguments})`（传入本次 run 的 abort 信号），把返回内容里的全部 text 片段拼接成输出文本。连接已不在时返回一条说明性的错误结果；server 返回 `isError: true` 或调用抛异常同样转成普通错误结果（`{status:"error", output}`）交回给循环——异常不会从执行器里抛出去打断这轮对话。
+- 每个工具配一个执行器，风险与并发档位固定为 `"sensitive"` + `"serial"`。执行器在调用时**现取当前连接**（对账换组导致的状态对象替换不会把调用写进死客户端），并刷新该连接的最近使用时间；内部调用 `client.callTool({name: 原名, arguments})`（传入本次 run 的 abort 信号），把返回内容里的全部 text 片段拼接成输出文本。调用带两层保护：**单次调用超时**（默认 120 秒，构造参数 `toolCallTimeoutMs`，设 0 关闭）——超时即关闭该连接（状态记 `"failed"`、最近一次工具视图保留），下一次调用按惰性语义新建连接重来，错误结果文案说明 server 可能卡死、稍后重试通常即可恢复；**输出封顶 512 KiB**（`truncateMiddle`，头部保留、中部插截断标记），超大结果不会挤爆上下文。连接已不在时返回一条说明性的错误结果；server 返回 `isError: true` 或调用抛异常同样转成普通错误结果（`{status:"error", output}`）交回给循环——异常不会从执行器里抛出去打断这轮对话。
 
 ### daemon、WebUI 与 CLI 在哪里用到它
 

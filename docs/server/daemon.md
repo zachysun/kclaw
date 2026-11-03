@@ -60,6 +60,8 @@ export function bearerMatches(header: string | undefined, token: string): boolea
 
 入口链：`packages/server/bin/kclaw-server.mjs`（package.json 的 `bin` 入口）→ `import { launchDaemon } from "../dist/index.js"` → `launchDaemon({ home, port })`。home 解析：`--home <dir>`（或 `--home=<dir>`）优先，否则 `resolvePaths` 内部使用 `KCLAW_HOME` env ?? `~/.kclaw`。端口解析：`--port <n>`（或 `--port=<n>`）优先，0 是合法值（强制临时端口，压过配置）；旗标缺席时由 `launchDaemon` 读配置 `server.port`，再缺席才用临时端口。`--port` 非整数或越界（0-65535 之外）报一行错退出 1；launch 失败（配置不可解析、固定端口被占用等）同样是一行 stderr 加退出 1，不裸抛堆栈。bin 脚本就绪后向 stdout 输出一行 `{"port":<port>}`，CLI 与测试以这一行输出作为就绪信号。
 
+bin 在进程级注册了两个业务代码接不住的异常出口，策略不同：`unhandledRejection`（异步迟到的失败，进程状态仍然干净）只记一行 stderr 带堆栈、daemon 继续跑；`uncaughtException`（同步异常逃出了所有 try/catch，进程状态已不可信）记 stderr 后**退出 1**——事件流的追加式写入与 daemon.json 的 pid 认领机制让重启无损，非零退出也让 CLI 立即知道 daemon 死了，而不是对着一个僵而不死的进程干等。
+
 `launchDaemon` 的组装序（每步失败都让整个启动 reject，daemon 不会半启动）：
 
 ```
@@ -193,8 +195,9 @@ startSkillCurator({...})            技能 curator 调度：每日本地时间�
 startSpillRetention({...})          spill 保留期清理：`sessions.spillRetentionDays` 为正时每小时扫一次
                                     `<home>/spill`，删掉 mtime 超过保留期的文件；为 0（默认）时只确保
                                     目录存在、不挂定时器（见 storage.md 的溢出目录一节）
-void processRegistry.adopt()        后台进程收编：检测上次未送达通知里的进程组，
-                                    活的重进注册表、死的补发通知（此时 run 已就绪，
+void processRegistry.adopt()        后台进程收编：读 process-notices.jsonl 的行并按进程去重
+                                    （结算行优先于 running 行），活的重进注册表、
+                                    死 running 行补发退出码未知的合成通知（此时 run 已就绪，
                                     enqueue 安全）；失败只记日志，不阻塞启动
 feishu 频道管理器启动（opt-in）     ← 仅 ~/.kclaw/feishu.json enabled 时建通道；在各调度器与宿主之后启动，
                                     有 15s 上限——挂起的握手不拖累 daemon；失败记入管理器错误状态

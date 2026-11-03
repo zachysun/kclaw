@@ -32,9 +32,9 @@
 | GET | `/sessions` | 会话列表（updatedAt 新的在前） | 查询参数 `deleted=true` 返回回收站会话；默认只返回未删除会话。两种情况都**不含 subagent 会话**（meta 带 `parentSessionId` 的会话不是列表一等公民），`children=true` 才列出（给定父的 subagent 排查用，见 [subagents](../core/subagents.md)） | `SessionMeta[]` |
 | GET | `/sessions/:id` | 读单个会话元数据 | — | `SessionMeta` |
 | PATCH | `/sessions/:id` | 改名 | `{title?}`（非空字符串；body 里的 `workdir` 被解析但**不生效**，只有 title 传给 `updateMeta`） | `SessionMeta` |
-| DELETE | `/sessions/:id` | 软删除（移入回收站，标记 `deleted`/`deletedAt`）；**先取消该会话在跑的后台 subagent 与团队组员 run**，再级联软删其全部 subagent 会话（不留残留会话，见 [subagents](../core/subagents.md)、[agent-team](../core/agent-team.md)）；若本会话是组长，团队目录随之一并归档（见 agent-team） | — | `SessionMeta` |
+| DELETE | `/sessions/:id` | 软删除（移入回收站，标记 `deleted`/`deletedAt`）；**先停掉该会话自己的 run（中止在跑的、丢弃排队的，并有界等待被中止 run 的收尾写完）**——不停的话 run 会继续向一个客户端已不可见的会话追加事件，重启恢复还会跳过已删会话的队列文件、那些条目永久滞留磁盘；**再取消该会话在跑的后台 subagent 与团队组员 run**，然后级联软删其全部 subagent 会话（不留残留会话，见 [subagents](../core/subagents.md)、[agent-team](../core/agent-team.md)）；若本会话是组长，团队目录随之一并归档（见 agent-team） | — | `SessionMeta` |
 | POST | `/sessions/:id/restore` | 从回收站恢复（清除 `deleted`/`deletedAt`） | — | `SessionMeta` |
-| POST | `/sessions/:id/purge` | 永久删除（整个会话目录删除）；**先取消该会话在跑的后台 subagent 与团队组员 run**，再级联永久删除其全部 subagent 会话；团队目录同样归档 | — | `{ok: true}` |
+| POST | `/sessions/:id/purge` | 永久删除（整个会话目录删除）；**先停掉该会话自己的 run 并有界等待其落定**（与 DELETE 同参数的 `stopAndClear` + `awaitSettle`；purge 特有的风险：abort 是协作式信号，不等待落定的话，被中止 run 的收尾追加会在目录删除后经 mkdirSync 把它复活成一个残废会话——没有 `session.created` 事件、标题为空；等待有上限，超时照常继续删除）；**再取消该会话在跑的后台 subagent 与团队组员 run**，然后级联永久删除其全部 subagent 会话；团队目录同样归档 | — | `{ok: true}` |
 | POST | `/sessions/:id/model` | 会话级模型切换（只影响此会话**之后**的 run，历史不动） | `{model?}`：provider 条目名（entry key，见 [run-manager](./run-manager.md) 的模型解析）或裸模型名；`""`/默认清空回退到默认；类型不对 400 `model must be a string`，条目不存在 400 `model not found: <name>` | `SessionMeta` |
 | POST | `/sessions/:id/mode` | 会话级权限模式切换（只影响此会话**之后**的 run，历史不动；机制见 [permissions](../core/permissions.md)） | `{mode: "readonly"\|"default"\|"acceptEdits"\|"trusted"\|"auto"}` 必填；非法值 400 `mode must be one of readonly \| default \| acceptEdits \| trusted \| auto` | `SessionMeta` |
 | GET | `/sessions/:id/team` | agent 团队面板数据（机制见 [agent-team](../core/agent-team.md)） | — | `{team, identity: "lead"\|"member", members, tasks}`（团队、本会话身份、组员名单含忙闲与当前任务、任务板快照）；会话不在任何团队 404 |
