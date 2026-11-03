@@ -77,6 +77,14 @@ async function shutdown() {
 process.on("unhandledRejection", (err) => {
   process.stderr.write(`kclaw-server unhandled rejection: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`)
 })
+// A synchronous exception that escapes every handler is different: the
+// process is in an undefined state, so log the stack and exit 1 — the
+// JSONL store and the daemon slot make the restart lossless, and the
+// nonzero exit tells the CLI the daemon died instead of lingering.
+process.on("uncaughtException", (err) => {
+  process.stderr.write(`kclaw-server uncaught exception: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`)
+  process.exit(1)
+})
 // Register the signal handlers BEFORE the ready line: a client may kill the
 // daemon as soon as it reads readiness, and a SIGTERM landing after launch
 // but before these lines are registered would take the default action

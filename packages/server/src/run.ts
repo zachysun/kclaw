@@ -421,6 +421,25 @@ export class RunManager {
   }
 
   /**
+   * 有界等待会话的活动 run 落定。cancel 只是协作式信号：run 从收到
+   * abort 到持久化完部分内容、写 run.ended 还要经过若干异步步骤；删除/
+   * 清库路由必须等这一步走完再动会话目录——否则收尾追加会在目录删除后
+   * 经 appendEvent 的 mkdirSync 复活它（purge 特有的幽灵会话）。
+   * 返回 true = 已落定（或本就没有活动 run）；false = 超时，调用方自行
+   * 决定是否继续。落定的执行正常不会 reject，防御性按已落定处理。
+   */
+  async awaitSettle(sessionId: string, timeoutMs: number): Promise<boolean> {
+    const active = this.#activeOutcomes.get(sessionId)
+    if (active === undefined) return true
+    const settled = active.then(() => true, () => true)
+    const deadline = new Promise<false>((resolve) => {
+      const t = setTimeout(() => resolve(false), timeoutMs)
+      t.unref?.()
+    })
+    return Promise.race([settled, deadline])
+  }
+
+  /**
    * The edit & retry / regenerate orchestration entry: validate (session
    * exists, not a child, idle, target = the last user message) → persist and
    * broadcast the truncation → submit through the ordinary user-message path.
