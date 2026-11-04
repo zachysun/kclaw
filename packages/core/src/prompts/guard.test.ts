@@ -29,7 +29,7 @@ function walk(dir: string): string[] {
   for (const name of readdirSync(dir)) {
     const p = join(dir, name)
     if (statSync(p).isDirectory()) {
-      if (name === "prompts") continue // 提示词正身所在地，扫描其余实现文件
+      if (name === "prompts") continue // 提示词本体所在地，扫描其余实现文件
       out.push(...walk(p))
     } else if (name.endsWith(".ts") && !name.endsWith(".test.ts")) {
       out.push(p)

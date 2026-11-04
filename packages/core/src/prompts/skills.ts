@@ -14,7 +14,7 @@ export const SKILL_EXTRACT_SYSTEM_PROMPT = [
   "只输出一个 JSON 对象：{\"proposals\":[…]}，每个元素都是 JSON 对象，字段名固定如下：",
   "- kind：\"new\"（新增技能）或 \"revise\"（修订已有技能），判别字段名是 kind，不是 type。",
   "- name：技能目录名，小写字母、数字与连字符组成（如 deploy-runbook）；revise 时必须是已装技能名。",
-  "- scope：落点，\"global\"（全局技能库）或 \"project\"（当前项目的 .kclaw/skills）；拿不准用 \"project\"。",
+  "- scope：存放位置，\"global\"（全局技能库）或 \"project\"（当前项目的 .kclaw/skills）；拿不准用 \"project\"。",
   "- title：一句话短标题。rationale：为什么提这个案（从对话里看到的依据）。",
   "- changes：kind 为 revise 时必填，改了哪里、为什么（对照说明）。",
   "- content：完整的 SKILL.md 文件内容（YAML frontmatter + Markdown 正文，含 description 字段）。",
