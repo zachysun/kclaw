@@ -1,5 +1,5 @@
 /**
- * 技能进化（提案制）提炼调用的 system 提示词（消费方：skills/evolution.ts）。
+ * 技能进化（提案制）提炼调用的 system 提示词（使用方：skills/evolution.ts）。
  */
 
 /**

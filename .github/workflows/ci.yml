@@ -1,6 +1,6 @@
 name: ci
 on:
-  # Manual re-run hatch: a lost push event (or an empty re-push, which
+  # Manual re-run: a lost push event (or an empty re-push, which
   # paths-ignore treats as fully ignored) can leave main without a run.
   workflow_dispatch:
   push:

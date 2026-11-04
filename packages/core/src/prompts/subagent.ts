@@ -1,5 +1,5 @@
 /**
- * subagent 子会话的精简系统提示词模板（消费方：agent/subagent.ts 与
+ * subagent 子会话的精简系统提示词模板（使用方：agent/subagent.ts 与
  * run-assembly 组装）。
  */
 

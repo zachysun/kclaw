@@ -1,5 +1,5 @@
 /**
- * 会话自动命名（autoname）的后台调用提示词（消费方：session/autoname.ts）。
+ * 会话自动命名（autoname）的后台调用提示词（使用方：session/autoname.ts）。
  */
 
 /** 标题生成的 system 提示词。 */

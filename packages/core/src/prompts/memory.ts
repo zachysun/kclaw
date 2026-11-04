@@ -1,5 +1,5 @@
 /**
- * 长期记忆两个后台 LLM 调用的 system 提示词（消费方：memory/pipeline.ts）。
+ * 长期记忆两个后台 LLM 调用的 system 提示词（使用方：memory/pipeline.ts）。
  * 字段名必须与 pipeline.ts 的动作校验逐字一致——模型只从提示词认识 JSON
  * 结构，改任何字段描述两端必须一起改。
  */

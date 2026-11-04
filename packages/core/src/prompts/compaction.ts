@@ -1,5 +1,5 @@
 /**
- * 压缩体系的固定提示词文本（消费方：session/compactor.ts 与
+ * 压缩体系的固定提示词文本（使用方：session/compactor.ts 与
  * agent/context.ts 的摘要注入）。三段摘要提示词的措辞与压缩质量守卫
  * 强耦合：精确标识符保留条款支撑 session_search 的检索可用性，改动前
  * 先读 docs/core/compaction.md。
