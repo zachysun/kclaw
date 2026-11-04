@@ -1,5 +1,8 @@
 name: ci
 on:
+  # Manual re-run hatch: a lost push event (or an empty re-push, which
+  # paths-ignore treats as fully ignored) can leave main without a run.
+  workflow_dispatch:
   push:
     branches: [main]
     # Docs-only pushes skip CI: markdown never reaches the build.
