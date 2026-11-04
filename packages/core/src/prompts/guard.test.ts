@@ -8,8 +8,9 @@
 import { describe, expect, it } from "vitest"
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join, relative } from "node:path"
+import { fileURLToPath } from "node:url"
 
-const SRC_ROOT = new URL("..", import.meta.url).pathname
+const SRC_ROOT = fileURLToPath(new URL("..", import.meta.url))
 
 /** 目录级白名单：整目录豁免（相对 SRC_ROOT）。 */
 const DIRECTORY_ALLOW = new Set(["tools", "sandbox", "notify"])

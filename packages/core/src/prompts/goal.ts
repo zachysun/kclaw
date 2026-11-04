@@ -1,7 +1,8 @@
 /**
- * /goal 的全部注入文本模板（issue #47；消费方：goal/index.ts、judge.ts、
- * check.ts）。判定器 system 提示词（严格 JSON 三值裁决）、续轮注入、收尾
- * 注入。纯函数、无 Node API——浏览器构建可引用。注入文本沿用仓库的 XML
+ * /goal 的三组注入文本模板（issue #47；消费方：goal/index.ts、judge.ts、
+ * check.ts）：判定器（独立 LLM，严格 JSON 三值裁决）、续轮注入（下一轮
+ * goal 触发 run 的用户文本）、收尾注入（token budget耗尽后的最后一轮）。
+ * 纯函数、无 Node API——浏览器构建可引用。注入文本沿用仓库的 XML
  * 标签约定（<goal-continue>/<goal-wrapup>，同 <compacted-summary> 先例），
  * 闭合标签逃逸在拼装处处理。
  */
