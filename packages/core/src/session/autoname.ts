@@ -5,6 +5,8 @@ import type { LlmClient } from "../provider/types.js"
 import { collectStreamResult } from "../provider/collect.js"
 import type { ChoreUsageRecorder } from "../storage/usage.js"
 import type { SessionStore } from "./store.js"
+// 标题生成的固定文案在 prompts/autoname.ts。
+import { AUTONAME_SYSTEM_PROMPT, autonameUserContent } from "../prompts/autoname.js"
 
 export interface AutonameDeps {
   sessions: SessionStore
@@ -49,8 +51,8 @@ export function scheduleAutoname(deps: AutonameDeps, sessionId: string, firstTex
 export async function defaultTitle(llm: LlmClient, model: string, firstText: string): Promise<{ title: string; usage?: Usage }> {
   const r = await collectStreamResult(llm, {
     model,
-    system: "你是标题生成助手，只输出一个不超过30字的会话标题。",
-    messages: [{ role: "user", content: `给这段对话起一个不超过30字的标题：\n${firstText}` }],
+    system: AUTONAME_SYSTEM_PROMPT,
+    messages: [{ role: "user", content: autonameUserContent(firstText) }],
     tools: [],
   })
   return { title: r.text.trim(), usage: r.usage }

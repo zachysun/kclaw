@@ -54,8 +54,10 @@ import { createBashSandbox } from "../sandbox/provider.js"
 import type { PermissionGate, RunOutcome } from "./loop.js"
 import { runAgent } from "./loop.js"
 import { assembleSystemPrompt } from "./system-prompt.js"
-import { subagentSystemPrompt, type SubagentCollector, type SubagentSpawner } from "./subagent.js"
-import { teamLeadProtocol, teamMemberSystemPrompt } from "../team/prompt.js"
+import { type SubagentCollector, type SubagentSpawner } from "./subagent.js"
+import { subagentSystemPrompt } from "../prompts/subagent.js"
+import { teamLeadProtocol, teamMemberSystemPrompt } from "../prompts/team.js"
+import { DEFAULT_SYSTEM_PROMPT, TOOL_DIRECTORY_HEADING, TOOL_DIRECTORY_MCP_NOTE, toolDirectoryEntry, toolDirectoryLowFreqLine } from "../prompts/system.js"
 import type { TeamFacade, TeamIdentity } from "../team/facade.js"
 import type { SessionSearchFn } from "../tools/session.js"
 import type { ToolExecutor } from "./tools.js"
@@ -73,9 +75,6 @@ import { TOOL_EXPOSURE, type Exposure } from "../tools/exposure.js"
 import { createToolSearchTool } from "../tools/tool-search.js"
 import type { HookRegistry } from "../hooks/registry.js"
 import type { HookEntry } from "../hooks/types.js"
-
-/** System prompt fallback when ~/.kclaw/AGENTS.md is missing or empty. */
-const DEFAULT_SYSTEM_PROMPT = "你是 kclaw，一个务实的个人助理。"
 
 /** Text-like MIME/exif: inlined into context when small enough. */
 const TEXT_MIME = /^text\//
@@ -977,19 +976,12 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
       ...(poolDefs.length > 0
         ? {
             toolDirectory: [
-              "# 工具目录（本 run 未全量列出的工具）",
-              ...directoryDefs.map((d) => `- ${d.name}：${d.description.split("。")[0].split(". ")[0].slice(0, 120)}（可直呼，参数拿不准先用 tool_search 查询）`),
+              TOOL_DIRECTORY_HEADING,
+              ...directoryDefs.map((d) => toolDirectoryEntry(d.name, d.description.split("。")[0].split(". ")[0].slice(0, 120))),
               ...(deferredDefs.some((d) => !d.name.startsWith("mcp__"))
-                ? [
-                    `- 低频工具（只列名字，详情用 tool_search 查询后调用）：${deferredDefs
-                      .filter((d) => !d.name.startsWith("mcp__"))
-                      .map((d) => d.name)
-                      .join("、")}`,
-                  ]
+                ? [toolDirectoryLowFreqLine(deferredDefs.filter((d) => !d.name.startsWith("mcp__")).map((d) => d.name))]
                 : []),
-              ...(deferredDefs.some((d) => d.name.startsWith("mcp__"))
-                ? ["- MCP 外部工具同样只列名字，名单见 tool_search 的说明。"]
-                : []),
+              ...(deferredDefs.some((d) => d.name.startsWith("mcp__")) ? [TOOL_DIRECTORY_MCP_NOTE] : []),
             ].join("\n"),
           }
         : {}),

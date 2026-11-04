@@ -18,7 +18,7 @@
 import { estimateTokens } from "../session/compaction.js"
 import type { SessionMeta, SessionStore } from "../session/store.js"
 import type { HookChain } from "../hooks/runner.js"
-import { SYSTEM_INJECTION_CONVENTION } from "./context.js"
+import { SYSTEM_INJECTION_CONVENTION } from "../prompts/system.js"
 
 export interface AssembleSystemPromptInput {
   chain: HookChain

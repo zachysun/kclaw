@@ -29,9 +29,8 @@ export {
   goalLoopNote,
   judgeSystemPrompt,
   judgeUserContent,
-  NO_PROGRESS_MARK,
-  noProgressMarked,
-} from "./prompt.js"
+} from "../prompts/goal.js"
+export { NO_PROGRESS_MARK, noProgressMarked } from "./contract.js"
 export {
   GOAL_MAX_ROUNDS,
   GOAL_TOKEN_BUDGET,

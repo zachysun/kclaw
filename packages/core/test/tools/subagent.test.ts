@@ -6,7 +6,8 @@
  */
 import { describe, it, expect, vi } from "vitest"
 import { createSubagentTool, createSubagentCollectTool, SUBAGENT_RUN_DESCRIPTION } from "../../src/tools/subagent.js"
-import { subagentSystemPrompt, truncateAnswer, subagentTitle, SUBAGENT_ANSWER_MAX_CHARS } from "../../src/agent/subagent.js"
+import { truncateAnswer, subagentTitle, SUBAGENT_ANSWER_MAX_CHARS } from "../../src/agent/subagent.js"
+import { subagentSystemPrompt } from "../../src/prompts/subagent.js"
 import type { SubagentSpawnRequest, SubagentSpawnResult } from "../../src/agent/subagent.js"
 
 function ok(output: string, childSessionId?: string): SubagentSpawnResult {
