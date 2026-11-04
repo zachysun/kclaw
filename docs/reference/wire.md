@@ -7,7 +7,7 @@ WS 连接上双向传输的帧。客户端 → daemon 是指令帧（`ClientComm
 ## 核心源码
 
 ```ts
-/** send_message 在队列上的三种走法：steer 注入本轮，wait 排队，interrupt 终止本轮抢先开跑。 */
+/** send_message 在队列上的三种走法：steer 注入本轮，wait 排队，interrupt 终止本轮抢先开始运行。 */
 export type SendDisposition = "steer" | "wait" | "interrupt"
 
 export interface AttachmentRef { path: string; name: string; size: number; mimeType: string }
@@ -43,7 +43,7 @@ export type ServerFrame = AgentEvent | ServerAck | ErrorFrame
 | `subscribe` | `sessionId` | 订阅该会话的事件 |
 | `unsubscribe` | `sessionId` | 取消订阅 |
 | `send_message` | `sessionId`、`text`、`disposition?`、`attachments?`、`target?`、`uiAction?` | 发消息；`target` 是团队组员名（带它时改走组员收信箱投递，不经本会话 run）；`uiAction` 是 UI 卡交互回传的来源标记（`cardCallId` + `optionId?`/`values?`，随消息持久化，web 反查渲染已选态） |
-| `message.retry` | `sessionId`、`fromMessageId`、`text`、`attachments?` | 编辑重试/重新生成：从 fromMessageId（须为最后一条 user 消息）截断重跑 |
+| `message.retry` | `sessionId`、`fromMessageId`、`text`、`attachments?` | 编辑重试/重新生成：从 fromMessageId（须为最后一条 user 消息）截断重新运行 |
 | `queue.cancel` | `sessionId`、`messageId?` | 取消排队条目；messageId 默认 = 清空全部可取消条目 |
 | `confirmation.resolve` | `confirmationId`、`decision`、`client?` | 人工确认裁决（decision 四值，见下） |
 | `question.resolve` | `questionId`、`answers`、`client?` | 回答运行中提问（answers 为 string[][]，按提问顺序） |
@@ -74,5 +74,5 @@ export type ServerFrame = AgentEvent | ServerAck | ErrorFrame
 | 值 | 含义 |
 |----|------|
 | `steer` | 注入正在回答的模型（本轮纳入考虑，不终止） |
-| `wait` | 排进队尾，当前轮结束后作为新问题开跑 |
+| `wait` | 排进队尾，当前轮结束后作为新问题开始运行 |
 | `interrupt` | 终止当前轮，本条随即成为下一轮的开始 |

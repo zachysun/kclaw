@@ -4,13 +4,13 @@
 
 `packages/core/src/goal/` 是目标循环的领域模块（类型/上限/提示词/判定器/验收命令/事件派生/轮决策）；`packages/server/src/goal-loop.ts` 的 `GoalLoopHost` 是 daemon 侧驱动主机，只做副作用编排——执行验收命令、调判定器、写事件、按 core 给出的决策入队或停止。
 
-给会话设一个**可验证的目标**，daemon 自主多轮推进：每轮 run 结束后先跑验收命令、再由一个独立的判定器 LLM 裁决目标是否达成，没达成就把判定意见注入下一轮继续干，直到达成、被判定不可能、或触碰硬性上限才停。会话的普通对话（打字发消息）在任何时刻都可用——goal 循环只是队列里的一种 run 来源，用户输入照常 steer/wait/interrupt。
+给会话设一个**可验证的目标**，daemon 自主多轮推进：每轮 run 结束后先执行验收命令、再由一个独立的判定器 LLM 裁决目标是否达成，没达成就把判定意见注入下一轮继续工作，直到达成、被判定不可能、或触碰硬性上限才停。会话的普通对话（打字发消息）在任何时刻都可用——goal 循环只是队列里的一种 run 来源，用户输入照常 steer/wait/interrupt。
 
 四态状态机（`GoalState`）：
 
 | 状态 | 含义 | 离开方式 |
 |------|------|----------|
-| `active` | 循环在跑：每轮 run 结束后自动检查并续跑 | 达成/不可能 → `complete`；各种停止 → `paused`/`blocked` |
+| `active` | 循环运行中：每轮 run 结束后自动检查并继续运行 | 达成/不可能 → `complete`；各种停止 → `paused`/`blocked` |
 | `paused` | 停止推进（用户暂停/停止，或触发硬性上限） | 用户 resume 或改写目标 |
 | `blocked` | 被人工裁决卡住（连续确认超时）——需要人来 | 用户裁决后 resume |
 | `complete` | 终态：`met`（达成）或 `impossible`（判不可达） | 只能 clear 或改写（改写=新循环） |
@@ -24,14 +24,14 @@
   → goal.set(create) 事件 + armed + 第一轮入队（trigger:"goal"，固定 wait）
   → run 正常执行（工具循环、权限判定、沙箱，与普通 run 完全同一套）
   → 队列排空（RunManager 的空闲边缘 onSessionIdle，与 team host 同一挂载点）
-  → GoalLoopHost 一轮检查（#check，互斥；九条停止条件与续跑决策是纯函数，在 core/goal 的 check.ts）：
+  → GoalLoopHost 一轮检查（#check，互斥；九条停止条件与续轮决策是纯函数，在 core/goal 的 check.ts）：
       ① 上一轮 run 出错        → paused(run-error)，不自动重试
       ② 连续 2 轮确认超时       → blocked(permission)，等人来
-      ③ 验收命令（有命令才跑）  → 失败短路判定器，直接进分支
+      ③ 验收命令（有命令才执行）  → 失败短路判定器，直接进分支
       ④ 判定器（独立 LLM）      → met/impossible → complete；
-                                  not_met → 无进展检查 → budget/轮数 → 续跑
-      ⑤ 判定器失败/验收命令失败 → 连败熔断或 fail-open 续跑
-  → 续跑 = 再入队一轮 goal run（用户文本带判定意见/验收输出）
+                                  not_met → 无进展检查 → budget/轮数 → 续轮
+      ⑤ 判定器失败/验收命令失败 → 连败熔断或 fail-open 续轮
+  → 续轮 = 再入队一轮 goal run（用户文本带判定意见/验收输出）
 ```
 
 检查在判定器 await 之后会重新校验 armed 与快照状态：用户在判定进行中 stop/pause/clear，审计事件（goal.checked）照常写入，状态机只在仍 active 时推进。中途打字发消息就是普通的用户 run（trigger:"user"），它会把"连续自续轮数"清零重新数，循环本身不断。
@@ -80,14 +80,14 @@
 
 `core/goal` 的 `deriveGoalLoop`（host 侧 `#derive` 只负责读事件流，读流失败按空事件派生全零）从最近一次 `goal.set(op:create)` 起单次前向扫描：`run.started(trigger:"goal")` 计轮、`run.ended.usage` 与 `goal.checked.tokens` 累计 token、run 边界配对出确认超时、尾部 `goal.checked` 回溯出四类连败（同性质连续累积，任何不同性质的检查断开计数）。快照（`meta.goal`）里的 `rounds`/`totalRounds`/`tokensUsed` 是检查时刻同步进去的展示缓存，权威数据是事件流。
 
-**armed 是进程内开关**（`GoalRuntime.armed`）：daemon 重启后目标快照还在（meta.goal），但循环**不自动续**——目标循环是"当时授权这台 daemon 自主花钱"的语义，重启即收回，用户显式 resume 才重新起跑。设计取舍见 [ADR-0002](../adr/0002-goal-armed-is-process-local.md)。
+**armed 是进程内开关**（`GoalRuntime.armed`）：daemon 重启后目标快照还在（meta.goal），但循环**不自动继续运行**——目标循环是"当时授权这台 daemon 自主花钱"的语义，重启即收回，用户显式 resume 才重新开始运行。设计取舍见 [ADR-0002](../adr/0002-goal-armed-is-process-local.md)。
 
 ## 与相邻系统的交互
 
 - **排队**：goal 轮的 trigger 是 `"goal"`（`run.started` 六种触发源之一，枚举见 [enums](../reference/enums.md)），处置固定 `wait`（与 cron/agent 同款——无人值守的排队行为必须可预测），用户中途输入按自己的处置照常 steer 注入当前 run。
-- **唤醒 budget**（两次用户发言之间的机器唤醒上限）：goal 轮开跑时同样清零——目标循环自身有九条独立停止条件，不再叠加这份上限，否则长目标里 subagent 投递会先被卡死。
+- **唤醒 budget**（两次用户发言之间的机器唤醒上限）：goal 轮开始运行时同样清零——目标循环自身有九条独立停止条件，不再叠加这份上限，否则长目标里 subagent 投递会先被卡死。
 - **subagent 会话**（`parentSessionId` 非空）不能设目标（只读会话）。
-- **提示词注入**沿用 XML 标签约定：首轮 `<goal-start>`、续跑 `<goal-continue round=N>`、收尾 `<goal-wrapup>`（正文中的闭合标签会被逃逸，防提示词注入）；goal 轮的用户消息带 `note(kind:"goal")` 出处行。
+- **提示词注入**沿用 XML 标签约定：首轮 `<goal-start>`、续轮 `<goal-continue round=N>`、收尾 `<goal-wrapup>`（正文中的闭合标签会被逃逸，防提示词注入）；goal 轮的用户消息带 `note(kind:"goal")` 出处行。
 - **审计**：goal 事件在审计页渲染成 "goal" 行（设定/检查/移除各一句话摘要，点击展开完整快照与裁决）。
 
 ## 使用入口
@@ -98,10 +98,10 @@
 
 ## 边界与出错
 
-- **判定器失败不直接杀死循环**：输出非法 JSON 时把错误喂回重试一次；解析失败连续 3 次或传输失败连续 5 次熔断（`judge-failed` 停止）；未到熔断阈值时循环继续，下一轮注入"判定器不可用、请自行验收"的说明。
+- **判定器失败不直接终止循环**：输出非法 JSON 时把错误喂回重试一次；解析失败连续 3 次或传输失败连续 5 次熔断（`judge-failed` 停止）；未到熔断阈值时循环继续，下一轮注入"判定器不可用、请自行验收"的说明。
 - **验收命令 fail-closed**：设定带验收命令的目标时沙箱不可用直接拒绝（400）；检查时刻沙箱不可用按全部失败计；连续 3 轮全不过 `gate-exhausted` 停止。
 - **run 出错与入队失败都停**：检查 run 以 `run-error` 结束时不自动重试，等用户 resume；队列入队失败（如队列满）同样停止并说明原因。
-- **daemon 重启后循环不自动续**：armed 是进程内开关，重启即收回授权；快照（`meta.goal`）还在，用户显式 resume 才重新起跑（见 [ADR-0002](../adr/0002-goal-armed-is-process-local.md)）。
+- **daemon 重启后循环不自动继续运行**：armed 是进程内开关，重启即收回授权；快照（`meta.goal`）还在，用户显式 resume 才重新开始运行（见 [ADR-0002](../adr/0002-goal-armed-is-process-local.md)）。
 - **判定期间的并发动作安全**：用户在判定器 await 之后 stop/pause/clear，审计事件（goal.checked）照常写入，状态机只在仍 active 时推进；检查入口互斥，不会重入。
 - **读事件流失败不炸检查**：计数派生只负责读事件流，读流失败按空事件派生全零，检查照常走完。
 

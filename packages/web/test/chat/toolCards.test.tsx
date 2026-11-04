@@ -217,7 +217,7 @@ describe("result-side cards", () => {
     const onOpenAudit = vi.fn()
     const { container, unmount } = mount([
       assistantMsg([callBlock("subagent_run", JSON.stringify({ task: "扫 TODO" }))]),
-      toolMsg([resultBlock({ output: "▸ 干活\n结论已出", data: { childSessionId: "ses_c" } })]),
+      toolMsg([resultBlock({ output: "▸ 执行中\n结论已出", data: { childSessionId: "ses_c" } })]),
     ], 0, { onOpenAudit })
     const card = container.querySelector('[data-testid="blk-tool-result-subagent"]')!
     expect(card.querySelector("summary")!.textContent).toContain("扫 TODO") // name from call args

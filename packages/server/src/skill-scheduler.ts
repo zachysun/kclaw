@@ -59,7 +59,7 @@ export function startSkillScheduler(deps: {
           const key = `${workdir}|${check.sessionId}`
           if (busy.has(key)) continue
           // 会话已删（meta 缺失）的挂起检查无条件清掉：归属会话没了，检查没有
-          // 继续存在的意义，空跑一次提炼只剩噪音（判据同 memory 系统的先例）。
+          // 继续存在的意义，做一次提炼也只剩噪音（判据同 memory 系统的先例）。
           if (deps.sessions.meta(check.sessionId) === undefined) {
             deps.system.clearFollowCheck(workdir, check.sessionId)
             continue

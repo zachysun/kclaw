@@ -160,7 +160,7 @@ describe("executeRun × hook system", () => {
     await executeRun(engine, handoff(sessionId, "第二条"))
     expect(requests[1]).toContain("commit-helper")
     expect(requests[1].startsWith(baseline1.stable.text)).toBe(true) // stable 前缀逐字节命中
-    expect(segmentRuns).toHaveLength(2) // system-before 链每 run 都跑（live 现算）
+    expect(segmentRuns).toHaveLength(2) // system-before 链每 run 都执行（live 现算）
     const baseline2 = sessions.meta(sessionId)!.systemBaseline!
     expect(baseline2.stable).toEqual(baseline1.stable) // stable 基线原样保留（frozenAt 不动）
     expect(baseline2.live.text).toContain("commit-helper")
@@ -547,7 +547,7 @@ describe("executeRun × 压缩阈值线", () => {
 
   it("运行结束时后台未完成：收尾等它落定（单压缩不变量，不重复压缩）", async () => {
     // 锚点 780 全程：边界 1 kick 后台（摘要卡 gate），主 run 两轮内自然结束；
-    // 收尾压缩发现后台进行中 → 等待落定——run 挂在收尾链上不结束。落定后占用
+    // 收尾压缩发现后台进行中 → 等待落定——run 停在收尾链上不结束。落定后占用
     // 0.78 低于黄线，收尾不再压：全程恰好一笔压缩（后台那笔）
     const base = loadConfig(resolvePaths(home))
     const cfg = { ...base, sessions: { ...base.sessions, contextTokens: 1000 } }
@@ -560,7 +560,7 @@ describe("executeRun × 压缩阈值线", () => {
 
     const run = executeRun(engine, handoff(sessionId, "x".repeat(500)))
     await vi.waitFor(() => expect(summaryRequests.length).toBe(1)) // 后台进行中
-    // 主请求早已走完（end_turn），run 仍挂着：收尾压缩在等后台
+    // 主请求早已走完（end_turn），run 仍未结束：收尾压缩在等后台
     expect(mainRequests.length).toBe(2)
     const pending = await Promise.race([run, new Promise((r) => setTimeout(() => r("pending"), 50))])
     expect(pending).toBe("pending")
@@ -593,7 +593,7 @@ describe("executeRun × 压缩阈值线", () => {
     await vi.waitFor(() => expect(summaryRequests.length).toBe(1)) // 边界 1 kick 后台
     await vi.waitFor(() => expect(mainRequests.length).toBe(2)) // 第 2 次请求已抛超限
     await new Promise((r) => setTimeout(r, 50))
-    // 急救在等进行中后台退出：run 挂着，急救的摘要调用还没发生
+    // 急救在等进行中后台退出：run 未结束，急救的摘要调用还没发生
     expect(summaryRequests.length).toBe(1)
     const pending = await Promise.race([run, new Promise((r) => setTimeout(() => r("pending"), 50))])
     expect(pending).toBe("pending")

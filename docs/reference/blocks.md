@@ -78,7 +78,7 @@ export type Block =
 | `cron` | 定时任务来源说明（cron 触发的 run 在用户消息上追加） | run 组装 |
 | `process` | 后台进程完成通知的来源声明（bash run_in_background 结束后投递到属主会话的消息上追加） | daemon（进程注册表通知 → 队列条目） |
 | `subagent` | 后台 subagent 完成回投的来源声明（投递的用户消息上追加，声明这是机器回投、非用户发言） | run 组装（经队列条目的 note 参数） |
-| `goal` | 目标循环的轮次注入出处行 | run 组装（goal 续跑） |
+| `goal` | 目标循环的轮次注入出处行 | run 组装（goal 续轮） |
 | `memory` | 记忆注入（检索到的相关经历） | 内置 hook `memory-inject` |
 | `timeout` | 确认 / 提问等待超时 | agent 循环（确认与提问的等待出口） |
 | `denied` | 权限拒绝（拒绝原因写进 text） | agent 循环（权限判定） |

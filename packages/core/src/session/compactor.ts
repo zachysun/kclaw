@@ -174,7 +174,7 @@ export class Compactor {
   /**
    * 登记本会话最近一次主 run 的请求形状（run 组装在 runAgent 之前调用）。
    * 同会话的下一次压缩据此重建与主请求一致的前缀（R6）；压缩前的 run
-   * 一定已登记过——同会话的压缩触发点全部挂在 run 组装的钩子链上，手动
+   * 一定已登记过——同会话的压缩触发点全部挂载在 run 组装的钩子链上，手动
    * /compact 是唯一例外（无快照时退回独立请求形状）。
    */
   registerPrefix(sessionId: string, prefix: RunPrefix): void {
@@ -205,7 +205,7 @@ export class Compactor {
   /**
    * 等待该会话进行中的压缩结束（完成/失败/被取消都算结束）。没有进行中的压缩时立即返回。
    * 等待方（红线/收尾/挂起执行）在返回后重估占用、再决定同步压缩。
-   * `signal` 仅用于提前解挂等待者（run 被中止时不悬挂）。
+   * `signal` 仅用于提前唤醒等待者（run 被中止时不悬挂）。
    */
   waitForSettled(sessionId: string, signal?: AbortSignal): Promise<void> {
     if (!this.#inFlight.has(sessionId)) return Promise.resolve()
@@ -251,8 +251,8 @@ export class Compactor {
 
   /**
    * 非阻塞启动一次后台压缩（预压线触发）：登记为进行中（kind "background"）后
-   * 立即返回，摘要调用在后台进行——不挂 run 的中止信号（用户取消运行时它
-   * 照常跑完，成果写入元数据，下次运行受益；daemon 退出掐断它等于没发生）。
+ * 立即返回，摘要调用在后台进行——不接 run 的中止信号（用户取消运行时它
+ * 照常执行完毕，成果写入元数据，下次运行受益；daemon 退出掐断它等于没发生）。
    * 成功后成果挂起（takeParked 由下一次迭代边界应用）；失败等于没发生。
    * 返回是否真的启动了（已取消/已有进行中的压缩/已有挂起成果 → false）。
    */

@@ -133,7 +133,7 @@ readonly 模式还有一道更早的关口：**组装期就移除 sensitive 工�
 **trusted 分支**（`mode === "trusted"`，在 readonly 短路之后、规则命中之前接管）：这是免审档——没有人工确认这道防线，所以边界外一律**拒绝**而不是 confirm（fail-closed）。执行顺序：
 
 1. deny 黑名单仍然最优先：命令类对每个归一化子命令分别匹配，路径类按 scopedMatch 匹配，命中即 `deny {reason:"blacklist"}`。
-2. 命令类（仅 bash 被组装层真正包进 OS 沙箱，`sandboxedTools` 事实）：该工具被沙箱包装且沙箱可用 → `allow {reason:"sandboxed"}`（整个 shell 调用进沙箱）；否则 → `deny {reason:"mode"}`——沙箱不可用或启用被关时 noteText 为"trusted 模式要求 bash 进沙箱，但沙箱不可用"，工具可沙箱化但未被包装时（schema 带 `command` 字段的 MCP 适配器等）为"trusted 模式无法沙箱化该敏感工具"。**绝不让未包装的工具顶着"已沙箱化"的名头在免审档裸跑**。
+2. 命令类（仅 bash 被组装层真正包进 OS 沙箱，`sandboxedTools` 事实）：该工具被沙箱包装且沙箱可用 → `allow {reason:"sandboxed"}`（整个 shell 调用进沙箱）；否则 → `deny {reason:"mode"}`——沙箱不可用或启用被关时 noteText 为"trusted 模式要求 bash 进沙箱，但沙箱不可用"，工具可沙箱化但未被包装时（schema 带 `command` 字段的 MCP 适配器等）为"trusted 模式无法沙箱化该敏感工具"。**绝不让未包装的工具顶着"已沙箱化"的名头在免审档无沙箱直接执行**。
 3. 路径类工具：目标逃逸工作区 → `deny {reason:"mode", noteText:"trusted 模式只放行工作区内的操作"}`；工作区内 sensitive 路径写（fs_write/fs_edit）→ `allow {reason:"trusted"}`、safe 路径读 → `allow {reason:"safe"}`。
 4. safe 工具照常 `allow {reason:"safe"}`。
 5. 无沙箱保护的 sensitive 工具（MCP 适配器、未注册工具）→ `deny {reason:"mode", noteText:"trusted 模式无法沙箱化该敏感工具"}`。
@@ -203,8 +203,8 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
 - **模块**：`packages/core/src/sandbox/provider.ts` 的 `createBashSandbox`（检测 + 包装，不做业务判定）。平台布局：
   - macOS `sandbox-exec` + SBPL profile——工作区与系统临时目录可写，家目录只读且 `~/.kclaw` 读拒绝（凭据隔离），网络默认允许（SBPL 规则按先匹配生效：`~/.kclaw` 读拒绝在宽放行之前、写白名单在保底 deny 之前；路径一律 realpath 形态，`/tmp` 写作 `/private/tmp`）。
   - Linux bubblewrap（无特权 user namespaces）——整个根只读挂载、`~/.kclaw` 用 tmpfs 屏蔽（读不到凭据）、`/tmp` 与工作区可写、`--die-with-parent --new-session` 保证 bash 超时进程组 kill 能波及整棵进程树；网络默认允许（不加 `--unshare-net`），`sandbox.network: "deny"` 时加 `--unshare-net` 断网（见 [sandbox](./sandbox.md)）。
-  - 降级链：bwrap → **不可用**（回退到人工确认，fail-closed——绝不让命令裸跑）。Landlock 保底是后续项：纯 Node 无法发起 `landlock_create_ruleset` syscall，也没有成熟 CLI 包装。
-- **判定联动（`sandboxedTools`）**：run 组装检测一次沙箱可用性，同源喂给两个使用方：bash 工具的实际包装器（可用的才注入）与 gate 的**实际被包装的工具集**输入（`sandboxedTools`，今天只有 bash；集合非空即沙箱可用，gate 不再单独收可用性布尔）。因此 "sandboxed" 放行的命令必然真被沙箱包住；反之沙箱不可用时 bash 维持 confirm，不会出现"放了行却裸跑"的错配。`default` 与 `acceptEdits` 模式下，被包装的命令类工具无规则命中时由沙箱顶替人工（reason `sandboxed`）；trusted 模式下未包装的命令类工具（schema 带 `command` 字段的适配器等）直接被 deny，绝不顶着"已沙箱化"的名头放行。readonly 的短路依旧最优先，deny/allow/沉淀规则/会话授权也都先于它。沙箱**启用但检测不可用**时，bash 回退时的确认请求会带一条说明（`noteText`："bash 沙箱不可用，本次操作需人工确认"，CLI 暗色一行、WebUI 卡片注明，见第 8 节）；用户主动 `sandbox.enabled: false` 关闭沙箱时不带说明，那是刻意决定，不需要解释。
+  - 降级链：bwrap → **不可用**（回退到人工确认，fail-closed——绝不让命令无沙箱直接执行）。Landlock 保底是后续项：纯 Node 无法发起 `landlock_create_ruleset` syscall，也没有成熟 CLI 包装。
+- **判定联动（`sandboxedTools`）**：run 组装检测一次沙箱可用性，同源喂给两个使用方：bash 工具的实际包装器（可用的才注入）与 gate 的**实际被包装的工具集**输入（`sandboxedTools`，今天只有 bash；集合非空即沙箱可用，gate 不再单独收可用性布尔）。因此 "sandboxed" 放行的命令必然真被沙箱包住；反之沙箱不可用时 bash 维持 confirm，不会出现"放了行却无沙箱执行"的错配。`default` 与 `acceptEdits` 模式下，被包装的命令类工具无规则命中时由沙箱顶替人工（reason `sandboxed`）；trusted 模式下未包装的命令类工具（schema 带 `command` 字段的适配器等）直接被 deny，绝不顶着"已沙箱化"的名头放行。readonly 的短路依旧最优先，deny/allow/沉淀规则/会话授权也都先于它。沙箱**启用但检测不可用**时，bash 回退时的确认请求会带一条说明（`noteText`："bash 沙箱不可用，本次操作需人工确认"，CLI 暗色一行、WebUI 卡片注明，见第 8 节）；用户主动 `sandbox.enabled: false` 关闭沙箱时不带说明，那是刻意决定，不需要解释。
 - **配置**（`config.json` 的 `sandbox` 节，daemon 级，默认开）：
   ```json
   {
@@ -214,7 +214,7 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
     }
   }
   ```
-  `writeRoots` 是追加写白名单（realpath 形式），如 npm 缓存目录。沙箱启动失败或命令被沙箱拒绝 → bash 返回 error result（fail-closed，不降级裸跑）。可执行性检测用真实路径试跑（如 `bwrap --die-with-parent true` 验证 user namespaces 真可用）。
+  `writeRoots` 是追加写白名单（realpath 形式），如 npm 缓存目录。沙箱启动失败或命令被沙箱拒绝 → bash 返回 error result（fail-closed，不降级为无沙箱直接执行）。可执行性检测用真实路径试运行（如 `bwrap --die-with-parent true` 验证 user namespaces 真可用）。
   - **审计**：run 组装在每次检测后向会话事件流写一条 `sandbox.checked` 审计事件（28 种会话事件之一，字段 `enabled`=config 开关 / `available`=检测结果 / `unavailableReason`=原因；主动关闭沙箱时 `available` 恒 false 且不带原因）。每 run 恰一条，只写入事件流不上总线、不进 meta 投影、不推进 updatedAt，写失败即 run 失败（与 `system` 审计事件同契约）——审计页可逐 run 回看"当时沙箱是什么状态"，配合 grantedBy / deny note 串成完整审计链（见 [webui](../web/webui.md)）。人工确认的裁决另有 `permission.decided` 事件记录（裁决、裁决者、工具身份；中止不算裁决，不落），与沙箱审计合起来构成完整的放行链路。
   - **权限链外的沙箱使用者**：`/goal` 的验收命令（acceptance gates）由 daemon 侧直接经 `createBashSandbox` 执行——不经权限判定链（它们是用户设定目标时**自己登记**的验收命令，不是模型发起的工具调用），同一沙箱同一约束（60 秒超时、输出尾部截断）。沙箱不可用时 fail-closed：设定带验收命令的目标被拒绝，检查时刻不可用按全部失败计（见 [goal](./goal.md)）。
 
@@ -288,7 +288,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID——按时间
 - **bash 沙箱是放行的批准方，不是额外的确认**：`sandboxed` 只在无规则命中、本应 confirm 的落点上生效；deny/allow/沉淀规则/会话授权的优先级都高于它，readonly 的短路也依旧最优先。
 - **trusted 免审档没有人工确认这道防线**：边界外一律 deny——bash 沙箱不可用、路径越出工作区、无沙箱保护的 sensitive 工具（MCP 适配器、未注册工具）在 trusted 下都会被拒绝而不是交给人工；deny 黑名单仍然最优先。开着沙箱才应该用 trusted。
 - **auto 归纳只针对人工裁决**：沙箱自动放行（`sandboxed`）的调用从不计数——那没有经过人的判断，归纳它等于把沙箱当作授权人；`project`/`global` 是显式"总是允许"，也从不计数。计数是进程内存、**键按会话隔离**（`sessionId + 收紧键`，跨会话批准互不叠加），daemon 重启即清零（文档化后续项：跨会话持久化）。
-- **沙箱不可用不裸跑**：平台工具缺失、user namespaces 被禁或沙箱启动失败时，bash 回退到人工确认或返回 error result（fail-closed）；可用性检测在每 run 组装时做一次，检测失败会写 daemon 日志（仅观察，不打断 run）。
+- **沙箱不可用不放行**：平台工具缺失、user namespaces 被禁或沙箱启动失败时，bash 回退到人工确认或返回 error result（fail-closed）；可用性检测在每 run 组装时做一次，检测失败会写 daemon 日志（仅观察，不打断 run）。
 - **网络默认允许**：沙箱默认只隔离文件系统（凭据屏蔽 + 写范围），git clone / npm install / curl 照常；需要断网时在配置里设 `sandbox.network: "deny"`（见 [sandbox](./sandbox.md)）。
 - **越界检查依赖 workspace 正确**：会话 `workdir` 决定了越界判定的边界；创建会话时不传 workdir 则落到 `config.workspace`（daemon 启动目录的默认值是进程当前目录）。
 

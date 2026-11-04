@@ -729,7 +729,7 @@ describe("RunManager.enqueue", () => {
     // enqueue returns before #execute's first await; a synchronous cancel must
     // find the controller (or the queued-cancel mark) — the old code answered
     // false here because #active.set ran after several awaits.
-    const { env, manager } = makeEnv(scriptClient([textTurn("不该跑到这")]))
+    const { env, manager } = makeEnv(scriptClient([textTurn("不该执行到这")]))
     const session = env.sessions.create("窗口会话")
 
     const outcomePromise = manager.enqueue(session.id, { userText: "hi", trigger: "user" })
@@ -1052,7 +1052,7 @@ describe("RunManager context compaction", () => {
 
   /**
    * 收尾压缩进行中 submit 第二条消息 → 进入队列,压缩完成后
-   * 才开跑。驱动器的串行化天然保证这一点——#execute 在收尾压缩上 await,
+   * 才开始运行。驱动器的串行化天然保证这一点——#execute 在收尾压缩上 await,
    * 驱动循环不会出队下一条,无需额外忙碌标记。
    */
   it("a second message submitted during a post-run compaction queues until the compaction completes", async () => {
@@ -1609,7 +1609,7 @@ describe("RunManager memory injection", () => {
 // --- system 事件审计（第 9 种持久化事件）--------------------------------------
 // 每次 run 在系统提示词拼装完成后、进入模型循环前，把全量文本作为一条 system
 // 事件追加进该会话的事件流（只写入，不上总线）。语义拍板：写入失败即本次 run
-// 失败（与消息写入失败同处理方式）；不加幻影会话守卫；steer 注入与 run 内多次模型
+// 失败（与消息写入失败同处理方式）；不加无来源会话守卫；steer 注入与 run 内多次模型
 // 调用复用同一份提示词，每 run 恰好一条。
 
 describe("RunManager system 事件审计", () => {
@@ -1676,7 +1676,7 @@ describe("RunManager system 事件审计", () => {
     const socket = new FakeSocket()
     env.bus.subscribe(session.id, socket)
 
-    // 只炸 appendSystem 的 store 视图（其余方法走原型委托）："跑了但没记录"
+    // 只炸 appendSystem 的 store 视图（其余方法走原型委托）："执行了但没记录"
     // 的静默缺口不允许——写入失败必须让本次 run 失败
     const failingStore = Object.create(env.sessions) as SessionStore
     Object.defineProperty(failingStore, "appendSystem", {
@@ -1962,7 +1962,7 @@ describe("RunManager sandbox.checked 事件审计", () => {
     const socket = new FakeSocket()
     env.bus.subscribe(session.id, socket)
 
-    // 只炸 appendSandboxChecked 的 store 视图："跑了但没记录"的静默缺口不允许
+    // 只炸 appendSandboxChecked 的 store 视图："执行了但没记录"的静默缺口不允许
     const failingStore = Object.create(env.sessions) as SessionStore
     Object.defineProperty(failingStore, "appendSandboxChecked", {
       value(): void {
@@ -2160,7 +2160,7 @@ describe("RunManager subagent session guard", () => {
     const { env, manager } = makeEnv(scriptClient([textTurn("不会被消费")]))
     const parent = env.sessions.create("主会话")
     // 子会话：meta 带 parentSessionId（create 的第五参）
-    const child = env.sessions.create("subagent · 试跑", undefined, undefined, "default", parent.id)
+    const child = env.sessions.create("subagent · 试运行", undefined, undefined, "default", parent.id)
     expect(() => manager.submit(child.id, { userText: "插话", trigger: "user" }))
       .toThrow("subagent会话不接收用户消息")
     // 没有任何消息落进子会话
@@ -2313,21 +2313,21 @@ describe("RunManager skill invocation wrap", () => {
     writeSkill(join(env.paths.home, "skills"), "test", "---\ndescription: 验收技能。\n---\n\n正文\n")
     const session = env.sessions.create("包装会话")
 
-    await manager.enqueue(session.id, { userText: "帮我 /test 跑一下", trigger: "user" })
+    await manager.enqueue(session.id, { userText: "帮我 /test 执行一下", trigger: "user" })
 
     // 模型视图：原文打底 + 一行技能调用指示
     const seen = seenUserText(requests[0]!)
-    expect(seen.startsWith("帮我 /test 跑一下")).toBe(true)
+    expect(seen.startsWith("帮我 /test 执行一下")).toBe(true)
     expect(seen).toContain("「/test」是在调用技能 test")
     expect(seen).toContain("skill_read")
     // 持久化（events.jsonl 的 message 事件）：原文
     const msgs = env.sessions.readMessages(session.id)
-    expect((msgs[0]!.blocks[0] as { type: string; text: string }).text).toBe("帮我 /test 跑一下")
+    expect((msgs[0]!.blocks[0] as { type: string; text: string }).text).toBe("帮我 /test 执行一下")
     // 事件流（轨迹页/气泡的数据源）：原文
     const messageEvent = env.sessions.readEvents(session.id).find((e) => e.type === "message") as
       | { blocks: { type: string; text: string }[] }
       | undefined
-    expect(messageEvent!.blocks[0]!.text).toBe("帮我 /test 跑一下")
+    expect(messageEvent!.blocks[0]!.text).toBe("帮我 /test 执行一下")
   })
 
   it("skips the wrap for user-invocable:false skills and unknown tokens", async () => {
@@ -2386,7 +2386,7 @@ describe("RunManager.retry（编辑重试/重新生成）", () => {
     return { env, manager, session, q2 }
   }
 
-  it("编辑重试：截断写入 + 新一轮以改后文本起跑，上下文不含被作废消息", async () => {
+  it("编辑重试：截断写入 + 新一轮以改后文本开始运行，上下文不含被作废消息", async () => {
     const reqs: LlmRequest[] = []
     const { env, manager, session, q2 } = await twoTurns(
       recordRequests(scriptClient([textTurn("第一答"), textTurn("第二答"), textTurn("第二答重")]), reqs),
@@ -2419,7 +2419,7 @@ describe("RunManager.retry（编辑重试/重新生成）", () => {
     expect(types.indexOf("run.started")).toBeGreaterThan(truncAt)
   })
 
-  it("重新生成：不改文本原样重跑，旧回答退出上下文与视图", async () => {
+  it("重新生成：不改文本原样重新运行，旧回答退出上下文与视图", async () => {
     const reqs: LlmRequest[] = []
     const { env, manager, session, q2 } = await twoTurns(
       recordRequests(scriptClient([textTurn("第一答"), textTurn("第二答"), textTurn("重新答")]), reqs),
@@ -2445,7 +2445,7 @@ describe("RunManager.retry（编辑重试/重新生成）", () => {
     const { env, manager, session, q2 } = await twoTurns(client)
     const socket = new FakeSocket()
     env.bus.subscribe(session.id, socket)
-    const run = manager.enqueue(session.id, { userText: "挂着", trigger: "user" })
+    const run = manager.enqueue(session.id, { userText: "等待中", trigger: "user" })
     await waitForEvent(socket, "llm.started")
     manager.enqueue(session.id, { userText: "排队中", trigger: "user", disposition: "wait" })
     expect(() => manager.retry(session.id, q2.id, "改")).toThrow()
@@ -2510,7 +2510,7 @@ describe("RunManager.retry 附件随重试原样带上", () => {
   it("编辑重试不带 attachments 参数时，从被截断的原用户消息重建附件", async () => {
     const { env, manager } = makeEnv(scriptClient([textTurn("答"), textTurn("答重")]))
     const session = env.sessions.create("附件重试")
-    // 造一个真实附件文件（挂在会话附件目录内，与上传流程同源）
+    // 造一个真实附件文件（放在会话附件目录内，与上传流程同源）
     const attDir = join(env.paths.attachmentsDir, session.id)
     mkdirSync(attDir, { recursive: true })
     const attPath = join(attDir, "notes.txt")

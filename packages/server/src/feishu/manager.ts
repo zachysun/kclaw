@@ -183,7 +183,7 @@ export function createFeishuManager(deps: FeishuManagerDeps): FeishuManager {
       log(`feishu channel 启动失败：${message(err)}`)
       // 半启动状态也要拆干净：总线订阅不清理会留下喂空转的僵尸，而
       // 真传输底下的 SDK 自动重连还可能把半启动的连接自己救活——
-      // 那会变成两个活通道同时挂在总线上、消息被处理两遍。
+      // 那会变成两个活通道同时订阅总线、消息被处理两遍。
       if (next !== undefined) {
         try {
           await withDeadline(next.stop(), startTimeoutMs, "cleanup")

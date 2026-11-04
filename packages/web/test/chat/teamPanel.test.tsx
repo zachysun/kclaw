@@ -61,10 +61,10 @@ describe("TeamPanelCard", () => {
     const h = mountPanel(PANEL)
     const head = h.q("team-panel")?.textContent ?? ""
     expect(head).toContain("团队 登录攻坚")
-    expect(head).toContain("3 名组员 · 1 人干活中 · 任务 1/3 完成")
-    // 徽标：干活中 / 生成中 / 失败（含原因）
+    expect(head).toContain("3 名组员 · 1 人运行中 · 任务 1/3 完成")
+    // 徽标：运行中 / 生成中 / 失败（含原因）
     const alice = h.q("team-member-card-alice")?.textContent ?? ""
-    expect(alice).toContain("干活中")
+    expect(alice).toContain("运行中")
     expect(alice).toContain("正在做：实现登录页")
     expect(h.q("team-member-card-bob")?.textContent).toContain("生成中")
     expect(h.q("team-member-card-carol")?.textContent).toContain("失败")
@@ -106,7 +106,7 @@ describe("TeamPanelCard", () => {
     expect(h.q("team-stop-alice")).not.toBeNull()
     h.click(h.q("team-stop-alice"))
     expect(h.onStopMember).toHaveBeenCalledWith("s2")
-    // bob 生成中未挂会话、carol 空闲（不 busy）→ 没有停止按钮
+    // bob 生成中未绑定会话、carol 空闲（不 busy）→ 没有停止按钮
     expect(h.q("team-stop-bob")).toBeNull()
     expect(h.q("team-stop-carol")).toBeNull()
     h.click(h.q("team-trail") ?? h.container.querySelector(".team-trail"))

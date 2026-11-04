@@ -190,7 +190,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     name: "memory-inject",
     position: "run-before",
     order: 10,
-    description: "检索记忆库并把相关经历挂为用户消息的 note",
+    description: "检索记忆库并把相关经历附加为用户消息的 note",
     failure: "skip",
     makeHandler: (rt) => {
       const { childRun, memory, workspace, memoryNotes } = rt
@@ -394,7 +394,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
         // checkpoint anyway).
         // 急救撞上正在进行的后台压缩：abortInFlight 掐掉它并等其退出（单压缩不变量；成果
         // 丢弃——原文无损，下次重压），再立即同步急救。救援路径不等摘要慢慢
-        // 跑完；不用 cancel()——它的取消标记会压制紧随其后的急救 auto()。
+        // 执行完；不用 cancel()——它的取消标记会压制紧随其后的急救 auto()。
         if (compactor.hasInFlight(sessionId)) {
           compactor.abortInFlight(sessionId)
           await compactor.waitForSettled(sessionId)
@@ -485,7 +485,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
         // user-cancelled compaction for this run.
         if (runOutcome.stopReason === "aborted" || runOutcome.stopReason === "error" || compactor.cancelled(sessionId)) return
         if (compactor.hasInFlight(sessionId)) {
-          // 收尾撞上正在进行的后台压缩（预压没跑完 run 就结束了）：等它完成再判断——绝不
+          // 收尾撞上正在进行的后台压缩（预压没执行完 run 就结束了）：等它完成再判断——绝不
           // 并发第二个压缩。等待后走正常判断（auto 内部的活跃段细判自适应）。
           // 循环已结束，挂起视图没有"下一次请求"可应用，取走丢弃——元数据
           // 已携带同一成果，下一次运行从 meta 读到它。

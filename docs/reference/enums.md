@@ -13,7 +13,7 @@
 | `process` | 后台进程结算通知（bash `run_in_background` 启动的进程结束后，完成通知投递给属主会话开启的一轮 run；处置与 cron/agent/goal 同为强制 wait） |
 | `agent` | subagent 派生的子 run |
 | `team` | 团队收信箱投递 / 派活 |
-| `goal` | 目标循环自动续跑（`/goal`，处置固定 wait，机制见 [goal](../core/goal.md)） |
+| `goal` | 目标循环自动续轮（`/goal`，处置固定 wait，机制见 [goal](../core/goal.md)） |
 
 ## 目标状态与停止原因（GoalState 4 值 / GoalStopReason 10 值）
 
@@ -23,7 +23,7 @@ GoalState：
 
 | 值 | 含义 |
 |----|------|
-| `active` | 循环在跑：空闲边缘自动检查并续跑 |
+| `active` | 循环运行中：空闲边缘自动检查并继续运行 |
 | `paused` | 停止推进（用户暂停/停止或触发硬性上限），resume 恢复 |
 | `blocked` | 等一次人工裁决（连续确认超时），resume 恢复 |
 | `complete` | 终态（met/impossible），只能 clear 或改写目标 |

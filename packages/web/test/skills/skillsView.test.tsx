@@ -425,7 +425,7 @@ describe("SkillsView proposals tab（提案面）", () => {
 })
 
 describe("SkillsView SKILLS_CHANGED 广播（ChatPanel 斜杠菜单的即时刷新源）", () => {
-  /** 挂事件收集器：数 SKILLS_CHANGED 广播次数，测试结束记得 dispose。 */
+  /** 注册事件收集器：数 SKILLS_CHANGED 广播次数，测试结束记得 dispose。 */
   function collect(): { count: () => number; dispose: () => void } {
     let n = 0
     const listener = (e: Event): void => {

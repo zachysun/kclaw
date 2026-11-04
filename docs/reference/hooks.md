@@ -62,7 +62,7 @@ order = 同位置内的执行次序（升序）：
 
 `compaction-after` 位置没有静态内置条目：压缩 hook 经 `compactionAfter` 回调把结果（applied→ok / failed / cancelled，declined 静默）转发到该位置的链上。
 
-subagent run（`childRun`）的派生跳过：`memory-inject` 不检索、`autoname` 跳过、`follow-check` 不挂、`skill-follow-check` 不排、`system-materials` 返回空段。
+subagent run（`childRun`）的派生跳过：`memory-inject` 不检索、`autoname` 跳过、`follow-check` 不排、`skill-follow-check` 不排、`system-materials` 返回空段。
 
 ## HookMeta 字段
 

@@ -38,7 +38,7 @@ export function createBuiltinTools(opts: {
   tavilyApiKey: string
   bash?: Partial<{ timeoutMs: number; maxOutputBytes: number; sandbox: BashSandboxSpawn; spillDir: string }>
   // sandbox = bash 沙箱包装器：run 组装仅在沙箱可用时传入（见 sandbox.md），
-  // bash 工具本身不检测平台；默认 = 裸跑，即沙箱功能不存在前的行为
+  // bash 工具本身不检测平台；默认 = 无沙箱直接执行，即沙箱功能不存在前的行为
   // spillDir = <home>/spill：截断时全量输出写入磁盘 + 模型视图附 fs_read 定位行（见 tools/spill.ts）
   sessionId?: string                 // 注入 bash 子进程环境（KCLAW_SESSION_ID / KCLAW_WORKSPACE）；缺席 = bash 原样继承 daemon 环境
   web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean; spillDir: string }>
@@ -95,10 +95,10 @@ export function makeTool<N extends string>(
 
 `spawn(command, {shell: true, cwd: workspace, detached: POSIX 下为 true})`——cwd 固定在工作目录；`detached` 让子进程成为进程组（一组一起调度/发信号的进程）组长。关键约束：
 
-- **沙箱注入**：构造参数可选带 `sandbox`（`BashSandboxSpawn`，一个 `spawn(command, {cwd, env?}) → ChildProcess`）。注入时命令改经沙箱包装器运行（其内部负责再经 `/bin/sh -c` 与进程组语义，见 [sandbox](./sandbox.md)）；默认裸跑即沙箱功能不存在前的行为。run 组装只在沙箱可用时注入，与权限引擎的 `sandboxedTools` 同源。
+- **沙箱注入**：构造参数可选带 `sandbox`（`BashSandboxSpawn`，一个 `spawn(command, {cwd, env?}) → ChildProcess`）。注入时命令改经沙箱包装器运行（其内部负责再经 `/bin/sh -c` 与进程组语义，见 [sandbox](./sandbox.md)）；默认无沙箱直接执行，即沙箱功能不存在前的行为。run 组装只在沙箱可用时注入，与权限引擎的 `sandboxedTools` 同源。
 
 - **超时**：默认 `timeoutMs = 300_000`（`config.json` 的 `bash.timeoutMs` 同为 300s 默认值）。超时先 `process.kill(-pid, "SIGKILL")` 终止整个进程组（连带 shell 的子进程，如 `sleep`；Windows 无进程组，退回只终止直接子进程），然后返回 `{status:"error", output: "command timed out after 300000ms\n<部分输出>"}`——已产生的输出仍然返回。SIGKILL 之后留 2 秒宽限（`EXEC_TIMEOUT_GRACE_MS`）等 close 事件：子进程的退出信息与管道里已缓冲的尾部输出收集完才收尾，宽限到点保底走超时返回——超时是带现场的错误返回，不是静默丢弃。
-- **取消（run 中止）**：run 的取消信号在命令执行中触发时，同样先 `SIGKILL` 整个进程组再收尾，返回 `{status:"error", output: "command aborted\n<部分输出>"}`（`data.exitCode` 为 `null`），宽限收尾与超时共用同一套逻辑。没有这一步时，被取消的 run 留下的命令会继续跑到自然结束——进程组泄漏到 run 生命周期之外，长命令（如起本地服务）会一直挂着。
+- **取消（run 中止）**：run 的取消信号在命令执行中触发时，同样先 `SIGKILL` 整个进程组再收尾，返回 `{status:"error", output: "command aborted\n<部分输出>"}`（`data.exitCode` 为 `null`），宽限收尾与超时共用同一套逻辑。没有这一步时，被取消的 run 留下的命令会继续执行到自然结束——进程组泄漏到 run 生命周期之外，长命令（如启动本地服务）会一直存活。
 - **环境变量**：每次执行注入 `KCLAW_SESSION_ID`（会话 id）与 `KCLAW_WORKSPACE`（工作目录），其余环境继承 daemon 进程；沙箱包装器经 spawn 的 env 参数拿到同一份完整环境后透传。命令行工具可据此自识别所在会话。
 - **输出截断**：流式累计到 `maxOutputBytes`（默认 512 KiB，即 `512 * 1024`）即停止积累——头部保留，之后的 chunk 只计字节数不再转发；到达上限那一刻发一条截断提示 delta（`...[output truncated, further output dropped]...`），结束时在尾部附 `...[dropped N bytes]...` 字节数标记。`truncateMiddle` 只对头部超出上限 ≤1 chunk 的部分微裁剪（插 `\n...[truncated N bytes]...\n` 标记）。按 UTF-8 字节计数，多字节字符在切点被拆开会解码成 U+FFFD 替换字符，属可接受损失。
 - **输出溢出存盘（spill）**：run 组装传入 `spillDir`（`<home>/spill`）后，流式读取把全量输出另存一份（上限 `SPILL_MAX_BYTES = 10 MiB`，超出即停、存盘副本标注"仅保留前 10MB"）；发生截断时模型视图在 `dropped` 标记后追加一行 `[完整输出已存盘: <路径>，sha256=<摘要>；需要更多内容时用 fs_read 读取该文件]`（副本只保留了前 10 MiB 时，路径后面多一段 `（该文件仅保留了前 10MB）`；`sha256` 是实际写入字节的 SHA-256，部分保留的副本只对保留部分取摘要，之后对照摘要能发现副本被改动过）——spill 目录在权限引擎 readRoots 内，`fs_read` 无需确认即可读。存盘尽力而为：写失败静默退化为纯截断；未传 `spillDir`（如部分测试）则行为与无 spill 时完全一致。
@@ -164,7 +164,7 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 
 ### subagent 工具（`tools/subagent.ts`）
 
-**subagent_run** `{task, label?, role?, tools?, run_in_background?}`：派一个 subagent 执行一段自包含任务，默认阻塞等待其结题答复作为工具结果（完整机制、生命周期与结果整形见 [subagents](./subagents.md)）。执行器只负责参数校验：校验 `task` 非空字符串、`label` 与 `run_in_background` 为相应类型、`role` 非空字符串（trim 后截 2000 字符）、`tools` 为字符串数组（元素 trim 后不得为空串，空串或非字符串整次报错；超过 40 个截取前 40）后调一次 spawner，会话创建/run 提交/状态转发都在 server 侧实现。`role` 是给子会话的角色补充（如"只做代码评审的审查员"），追加进子会话系统提示词；`tools` 是工具白名单，只减少子会话可用的工具、不会增加（白名单外的名字忽略）。`run_in_background: true` 时派发立即返回子会话 id（不阻塞父 run，生命周期挂到父**会话**而不是父 run，父 run 结束或中止不会取消它），subagent 完成后结题报告自动投递回父会话、开启新一轮分析（投递被拒时降级为通知；机制见 [subagents](./subagents.md)），`subagent_collect` 作按需取答复的补充手段。`risk: "safe"`：派出动作本身不碰敏感资源，子 run 自己的工具调用照常过自己的权限门；`concurrency: "parallel"`：一批多个 `subagent_run` 并发执行即并行路径。subagent 的 `childSessionId` 经结果的 `data` 字段随块持久化（web 的"查看 subagent 审计"链接读它）。
+**subagent_run** `{task, label?, role?, tools?, run_in_background?}`：派一个 subagent 执行一段自包含任务，默认阻塞等待其结题答复作为工具结果（完整机制、生命周期与结果整形见 [subagents](./subagents.md)）。执行器只负责参数校验：校验 `task` 非空字符串、`label` 与 `run_in_background` 为相应类型、`role` 非空字符串（trim 后截 2000 字符）、`tools` 为字符串数组（元素 trim 后不得为空串，空串或非字符串整次报错；超过 40 个截取前 40）后调一次 spawner，会话创建/run 提交/状态转发都在 server 侧实现。`role` 是给子会话的角色补充（如"只做代码评审的审查员"），追加进子会话系统提示词；`tools` 是工具白名单，只减少子会话可用的工具、不会增加（白名单外的名字忽略）。`run_in_background: true` 时派发立即返回子会话 id（不阻塞父 run，生命周期归属父**会话**而不是父 run，父 run 结束或中止不会取消它），subagent 完成后结题报告自动投递回父会话、开启新一轮分析（投递被拒时降级为通知；机制见 [subagents](./subagents.md)），`subagent_collect` 作按需取答复的补充手段。`risk: "safe"`：派出动作本身不碰敏感资源，子 run 自己的工具调用照常过自己的权限门；`concurrency: "parallel"`：一批多个 `subagent_run` 并发执行即并行路径。subagent 的 `childSessionId` 经结果的 `data` 字段随块持久化（web 的"查看 subagent 审计"链接读它）。
 
 **subagent_collect** `{childSessionId}`：按子会话 id 取回后台 subagent 的最终结题答复（头尾截断，与阻塞结果同一形状）。只能取**本会话**派出的 subagent——collector 校验 `parentSessionId` 归属，别人的 subagent 与未知 id 都是 error 结果。`risk: "safe"`、`concurrency: "parallel"`。
 

@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest"
 import { dailyGateDue, localDate } from "../src/host-kit.js"
 
 describe("dailyGateDue", () => {
-  it("过了 hour 且今天未跑 → due", () => {
+  it("过了 hour 且今天未运行 → due", () => {
     // 用本地时间构造：4:05 过了 4 点的门
     const t = new Date(2026, 9, 4, 4, 5)
     expect(dailyGateDue(t, 4, undefined)).toBe(true)
@@ -18,7 +18,7 @@ describe("dailyGateDue", () => {
     expect(dailyGateDue(new Date(2026, 9, 4, 4, 0), 4, undefined)).toBe(true)
   })
 
-  it("今天已跑（判重键=本地日期）→ 不 due；昨天跑过 → due", () => {
+  it("今天已运行（判重键=本地日期）→ 不 due；昨天运行过 → due", () => {
     const t = new Date(2026, 9, 4, 12, 0)
     expect(dailyGateDue(t, 4, localDate(t))).toBe(false)
     expect(dailyGateDue(t, 4, localDate(new Date(2026, 9, 3, 12, 0)))).toBe(true)

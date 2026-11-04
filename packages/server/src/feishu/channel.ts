@@ -238,7 +238,7 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
       }
       case "confirmation.resolved": {
         // 我们自己的裁决在按钮处理器里已就地更新并移除 pending；走到这里的是
-        // 别处（cli/web/超时）的裁决——把还挂着的卡片标记为已失效。
+        // 别处（cli/web/超时）的裁决——把仍在显示的卡片标记为已失效。
         const entry = pending.get(e.payload.confirmationId)
         if (entry === undefined) return
         pending.delete(e.payload.confirmationId)
@@ -293,7 +293,7 @@ export function createFeishuChannel(deps: FeishuChannelDeps): FeishuChannel {
 
     let sessionId = bindings.get(m.openId)
     // 与 start() 的加载判断一致：软删（回收站）的会话同样作废重绑，
-    // 否则消息会跑进一个随时可能被清理扫描硬删的目录
+    // 否则消息会落进一个随时可能被清理扫描硬删的目录
     if (sessionId === undefined || sessions.meta(sessionId) === undefined || sessions.meta(sessionId)!.deleted) {
       sessionId = bindSession(m.openId)
     }

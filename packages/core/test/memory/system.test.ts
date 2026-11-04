@@ -103,7 +103,7 @@ describe("interval write backfills project vectors immediately ", () => {
       embed,
       resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "ws", op: "new-thread", thread: "ws", title: "重连线", content: "指数退避消灭了重连风暴" }] })]), model: "m" }),
     })
-    // 只跑一次 interval 触发写入，绝不调用 reconcile
+    // 只执行一次 interval 触发写入，绝不调用 reconcile
     await sys.triggerInterval(WORKDIR)
     const dbPath = join(root, "memory", "projects", projectIdFor(WORKDIR), "vectors.db")
     const idx = new VectorIndex(dbPath)
@@ -220,7 +220,7 @@ describe("memory events in session stream ", () => {
     const sys = makeSystem({
       resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [{ file: "ws", op: "new-thread", thread: "ws", title: "重连线", content: "指数退避消灭了重连风暴" }] })]), model: "m" }),
     })
-    // 不存在的归属会话 → 跳过（不落事件、不建幻影会话目录）
+    // 不存在的归属会话 → 跳过（不落事件、不创建无来源的会话目录）
     await sys.triggerManual(WORKDIR, "ses_nope")
     expect(sessions.meta("ses_nope")).toBeUndefined()
     expect(existsSync(join(root, "sessions", "ses_nope"))).toBe(false)

@@ -3,7 +3,7 @@
  * RunManager（记录 submit/stop）+ 脚本判定 LLM。每轮用
  * appendRunStarted/appendRunEnded 模拟引擎写入，onIdle 触发检查，
  * await dispose() 作为检查完成的同步点（它等所有 in-flight 检查落定）。
- * 覆盖：首轮入队、not_met 续跑、met/impossible 终态、run-error、
+ * 覆盖：首轮入队、not_met 续轮、met/impossible 终态、run-error、
  * 熔断、轮数上限、无进展、budget收尾、暂停/恢复/停止/移除、重启 armed 语义。
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
@@ -183,7 +183,7 @@ describe("GoalLoopHost", () => {
     // 每轮 check 内部自带一次重试：3 个脚本槽位即 3 轮失败。
     const goal = snapshotOf(h)
     expect(goal).toMatchObject({ state: "paused", stoppedReason: "judge-failed" })
-    expect(h.submitted()).toHaveLength(3) // 前两轮 fail-open 续跑，第三轮熔断停
+    expect(h.submitted()).toHaveLength(3) // 前两轮 fail-open 续轮，第三轮熔断停
   })
 
   it("ten consecutive goal rounds without a user run stop at the round limit", async () => {
@@ -229,7 +229,7 @@ describe("GoalLoopHost", () => {
     const big = { inputTokens: Math.floor(GOAL_TOKEN_BUDGET * 2 / 3), outputTokens: 0 }
     await driveRound(h, { usage: big })
     await driveRound(h, { usage: big })
-    // 第三轮应是收尾轮（wrapup 文本），跑完后停 budget-limit。
+    // 第三轮应是收尾轮（wrapup 文本），执行完后停 budget-limit。
     const last = h.submitted()[h.submitted().length - 1]!
     expect(last.userText).toContain("<goal-wrapup>")
     await driveRound(h, { usage: { inputTokens: 100, outputTokens: 50 } })
@@ -243,7 +243,7 @@ describe("GoalLoopHost", () => {
     expect(h.submitted()).toHaveLength(2)
     h.host.pause(h.sessionId)
     expect(snapshotOf(h).state).toBe("paused")
-    // 暂停后：完成一轮也不续跑。
+    // 暂停后：完成一轮也不续轮。
     await driveRound(h)
     expect(h.submitted()).toHaveLength(2)
     h.host.resume(h.sessionId)
@@ -280,7 +280,7 @@ describe("GoalLoopHost", () => {
     h.host.set(h.sessionId, { text: "目标", acceptance: [] })
     await driveRound(h)
     expect(snapshotOf(h).state).toBe("active")
-    // 重启 = 新实例：快照还在、state 还是 active，但不 armed、不续跑。
+    // 重启 = 新实例：快照还在、state 还是 active，但不 armed、不续轮。
     const sessions2 = new SessionStore(join(dir, "s"))
     const config2 = h.config
     const { run: run2 } = fakeRun()

@@ -55,7 +55,7 @@ export const MessageBubble = memo(function MessageBubble({
 }: MessageBubbleProps) {
   const streaming = message.pending && message.blocks.length === 0
   // 结果块全被 call 侧注册卡吸收的 tool 消息不再渲染气泡壳：壳里唯一剩下的
-  // 是悬空的 fork 按钮，会画成一个空白小胶囊挂在工具卡下面（真机验收发现
+  // 是悬空的 fork 按钮，会画成一个空白小胶囊显示在工具卡下面（真机验收发现
   // 的空泡）。分叉点用相邻的 assistant 消息等价可达，fork 面不受影响。
   if (message.role === "tool" && message.blocks.length > 0) {
     const absorbed = (b: RenderedBlock): boolean => {

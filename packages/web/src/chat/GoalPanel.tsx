@@ -124,7 +124,7 @@ export function GoalPanelCard({ view, onPause, onResume, onStop, onClear, onEdit
           <span>连续轮 {derived.rounds}/{limits.maxRounds}</span>
           <span>累计 {derived.totalRounds} 轮</span>
           <span>token {fmtTokens(derived.tokensUsed)}/{fmtTokens(limits.tokenBudget)}</span>
-          <span>{armed ? "自动续跑中" : "不自动续跑"}</span>
+          <span>{armed ? "自动运行中" : "不自动运行"}</span>
         </div>
         {goal.lastJudgeReason !== undefined && (
           <div className="goal-judge" data-testid="goal-judge">
@@ -157,7 +157,7 @@ export function GoalPanelCard({ view, onPause, onResume, onStop, onClear, onEdit
             />
             <div className="goal-edit-actions">
               <button type="button" data-testid="goal-edit-submit" onClick={submitEdit}>
-                保存并重新起跑
+                保存并重新开始运行
               </button>
               <button type="button" onClick={() => setEditing(false)}>
                 取消

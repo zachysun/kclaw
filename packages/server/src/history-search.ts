@@ -4,7 +4,7 @@
  * "已删除（回收站）或不存在的会话必须从结果里消失"是这条链路的正确性
  * 不变量——search-index 的注释把存活性复查交给调用方，这里就是那个调用
  * 方。提为具名工厂是为了让不变量有测试面（真 SessionStore + 桩索引即可
- * 单测），不必拉起整个 daemon 才能验证。
+ * 单测），不必启动整个 daemon 才能验证。
  */
 import type { HistoryHit, HistorySearchFn, SessionStore } from "@kclaw/core"
 

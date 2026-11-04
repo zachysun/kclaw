@@ -96,7 +96,7 @@ const SUBAGENT_ROLE_MAX_CHARS = 2_000
  */
 export function subagentSystemPrompt(workspace: string, role?: string): string {
   const base = [
-    "你是 kclaw 的 subagent：由主对话派出的短命执行单元，独立会话、单层委派（不能再派subagent）。",
+    "你是 kclaw 的 subagent：由主对话派出的一次性执行单元，独立会话、单层委派（不能再派subagent）。",
     `工作区：${workspace}`,
     "任务就是你的唯一指令。自主把它做完：需要什么信息就用工具取，不要反问（没有人在听）。",
     "权限规则与主会话一致：敏感操作会请求人工确认，批准后照常继续；被拒绝就换路。",

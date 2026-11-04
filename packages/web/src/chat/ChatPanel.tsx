@@ -146,7 +146,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   const [notice, setNotice] = useState<string | null>(null)
   const [forkPending, setForkPending] = useState(false)
   // 拖放附件的待发列表：上传中的条目没有 path（chip 显示 上传中…，发送被
-  // 拦下），POST 返回后就位。会话切换即清空（上传目标挂在上传时的 sessionId
+  // 拦下），POST 返回后就位。会话切换即清空（上传目标绑定在上传时的 sessionId
   // 上，带着旧工作区的路径跨会话发送是错的）。
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
   // 已装用户可见技能：出现在斜杠菜单的动态命令（/技能名），会话切换重拉
@@ -256,7 +256,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       sessionRef.current = sessionId
       updateView(() => initChat(initialMessages))
       // 换会话即换语境：上一条会话的通知（重连结果、操作失败等）不属于
-      // 新会话，随视图一起清掉；拖放附件同理（上传目标挂在上传时的
+      // 新会话，随视图一起清掉；拖放附件同理（上传目标绑定在上传时的
       // sessionId 上，路径指向旧工作区，不能带进新会话的发送）。
       clearNotice()
       setPendingAttachments([])
@@ -308,7 +308,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
       if (!ok) return { ok: false, resent: 0 }
       // 同步之后仍无踪迹的快照项 = 从未到达 daemon（CLI 重发规则的同一窗口）：
       // 清掉残留的乐观行，按原处置逐条补发——补发走新 client 的发送缓冲，
-      // 鉴权帧仍然最先。已对上的消息绝不重发（防服务端双跑）。
+      // 鉴权帧仍然最先。已对上的消息绝不重发（防服务端重复处理）。
       const undelivered = undeliveredPendingSends(pendingBefore, viewRef.current)
       if (undelivered.length > 0) {
         updateView((v) => dropLocalPending(v, undelivered.map((s) => s.text)))
@@ -809,7 +809,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
   }, [sessionId])
 
-  /** 停掉一个组员正在跑的轮（成员卡上的「停止」）：run.cancel 打到组员自己的
+  /** 停掉一个组员正在运行的轮（成员卡上的「停止」）：run.cancel 打到组员自己的
    * 会话上。团队运行模型没有级联停止，逐个停是唯一的停止路径。 */
   const handleStopMember = useCallback((memberSessionId: string) => {
     try {

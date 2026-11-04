@@ -50,7 +50,7 @@ export interface MemoryTriggers {
   recentSessionId(workdir: string): string | undefined
 }
 
-/** 调度记录：memory-scheduler 判节拍、跟随判定、夜间防重跑。 */
+/** 调度记录：memory-scheduler 判节拍、跟随判定、夜间防重复触发。 */
 export interface MemoryScheduleBook {
   markIntervalRun(workdir: string, iso: string): void
   intervalLastRun(workdir: string): string | undefined
@@ -113,7 +113,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
   readonly #emit?: (e: MemoryWrittenEvent) => void
   readonly #log: (m: string) => void
   readonly #now: () => Date
-  /** 记忆写入通知：接成会话事件流 appendEvent；sessionId 缺失时跳过（无处可挂）。 */
+  /** 记忆写入通知：接成会话事件流 appendEvent；sessionId 缺失时跳过（无处附加）。 */
   readonly #audit: (e: MemoryAudit) => void
   readonly #pipeline: MemoryPipeline
 
@@ -148,7 +148,7 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     this.#audit = (e) => {
       const id = e.sessionId
       if (id === undefined) return // 无归属会话：跳过（admin/手动沉淀在无会话项目上不落事件）
-      if (this.#sessions.meta(id) === undefined) return // 归属会话不存在：跳过（不落事件、不建幻影会话）
+      if (this.#sessions.meta(id) === undefined) return // 归属会话不存在：跳过（不落事件、不创建无来源的会话）
       const { sessionId: _sid, at, ...rest } = e
       // 事件体不携带 sessionId（Ruling 5：由所在会话目录决定）
       this.#sessions.appendEvent(id, { type: "memory", at: at ?? this.#now().toISOString(), ...rest } as MemoryEvent)
@@ -413,12 +413,12 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     this.#ledgerForWrite(workdir).setIntervalLastRun(iso)
   }
 
-  /** 最近一次定时触发的墙钟时间；从未触发过 → undefined（scheduler 据此立刻首跑）。 */
+  /** 最近一次定时触发的墙钟时间；从未触发过 → undefined（scheduler 据此立刻首次触发）。 */
   intervalLastRun(workdir: string): string | undefined {
     return new WriteLedger(this.#ledgerPath(workdir)).getIntervalLastRun()
   }
 
-  /** 记录最近一次夜间沉淀触发的本地日期（落 <projectDir>/state.json，scheduler 防同日重跑）。 */
+  /** 记录最近一次夜间沉淀触发的本地日期（落 <projectDir>/state.json，scheduler 防同日重复触发）。 */
   markNightlyRun(workdir: string, localDate: string): void {
     this.#ledgerForWrite(workdir).setNightlyLastRun(localDate)
   }

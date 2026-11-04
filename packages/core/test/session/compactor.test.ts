@@ -41,7 +41,7 @@ function stubSummarizer(calls: LlmRequest[]): LlmClient {
 function historyWithSpill(sessionId: string) {
   // 两轮结构：第一轮的两个工具输出（带 spill locator）要落在被压缩的最旧
   // 前缀里，后面跟着一条大文本 assistant 消息把估算顶过黄线。
-  const u0 = newMessage(sessionId, "user", [{ id: "b-u0", type: "text", text: "先跑构建再看页面" }])
+  const u0 = newMessage(sessionId, "user", [{ id: "b-u0", type: "text", text: "先执行构建再看页面" }])
   const a1 = newAssistantMessage(sessionId, "m1", [
     { id: "b-c1", type: "tool_call", callId: "call_1", name: "bash", args: {}, argsJson: '{"command":"pnpm build"}' },
   ])
@@ -169,7 +169,7 @@ describe("Compactor 段摘要前缀复用（R6）", () => {
       const tail = segmentReq.messages.at(-1)!
       expect(tail.role).toBe("user")
       expect(tail.content).toContain("（系统任务）")
-      expect(segmentReq.messages.some((m) => String(m.content).includes("先跑构建再看页面"))).toBe(true)
+      expect(segmentReq.messages.some((m) => String(m.content).includes("先执行构建再看页面"))).toBe(true)
       // merge 调用仍是独立形状（旧总摘要+新段摘要，与主前缀无关）
       expect(calls[1]!.system).toContain("归并")
       expect(calls[1]!.tools).toEqual([])
@@ -199,7 +199,7 @@ describe("Compactor 段摘要前缀复用（R6）", () => {
       expect(segmentReq.tools).toEqual([])
       expect(segmentReq.promptCache).toBeUndefined()
       expect(segmentReq.messages).toHaveLength(1)
-      expect(segmentReq.messages[0]!.content).toContain("先跑构建再看页面")
+      expect(segmentReq.messages[0]!.content).toContain("先执行构建再看页面")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

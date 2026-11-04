@@ -519,7 +519,7 @@ describe("audit-driven collapsed context bars (compactionBars)", () => {
     const h = mountView(messages, { compactions: [rec("m1", "收尾压缩的摘要")] })
     expect(auditBars(h.container)).toHaveLength(1)
     const log = h.container.querySelector('[data-testid="chat-log"]')!
-    // upto 是最后一条消息 → 折叠条挂在消息流末尾（chat-log 的最后一个子节点）。
+    // upto 是最后一条消息 → 折叠条位于消息流末尾（chat-log 的最后一个子节点）。
     expect(log.lastElementChild!.getAttribute("data-testid")).toBe("ctx-note-audit")
     h.unmount()
   })
@@ -568,7 +568,7 @@ describe("stop button & retry affordances", () => {
     { id: "msg_b", sessionId: "s1", role: "assistant", blocks: [{ id: "b2", type: "text", text: "第一答" }], createdAt: "2026-08-15T00:00:01.000Z" },
   ]
 
-  it("idle: 编辑挂在最后一条用户气泡、重新生成挂在最后一条助手气泡，确认即重试", () => {
+  it("idle: 编辑按钮位于最后一条用户气泡、重新生成位于最后一条助手气泡，确认即重试", () => {
     const onRetry = vi.fn()
     const h = mountView(two, { onRetry })
     expect(h.container.querySelector('[data-testid="msg-edit"]')).not.toBeNull()

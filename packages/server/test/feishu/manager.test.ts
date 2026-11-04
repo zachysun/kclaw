@@ -169,7 +169,7 @@ describe("feishu manager", () => {
         transports.push(t)
         const originalStart = t.start.bind(t)
         t.start = async (h) => {
-          // channel.start 先挂总线订阅，transport.start 再失败——半启动形态
+          // channel.start 先注册总线订阅，transport.start 再失败——半启动形态
           await originalStart(h)
           throw new Error("handshake refused")
         }

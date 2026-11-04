@@ -71,7 +71,7 @@ SQLite 表结构与之一一对应（`enabled` 存 0/1，驼峰字段转下划�
 
 单个 cron 的触发流程（`fireCron`）：
 
-1. 把 cron.id 加入 `inFlight`（进程内第二道防线：`nextRunAt` 已在认领时推进，重叠 tick 不会再认领到它；它只拦一种情况——一次运行尚未结束而下个调度点已到并被新 tick 认领时，该次触发被跳过，丢弃而不是并发再跑）。
+1. 把 cron.id 加入 `inFlight`（进程内第二道防线：`nextRunAt` 已在认领时推进，重叠 tick 不会再认领到它；它只拦一种情况——一次运行尚未结束而下个调度点已到并被新 tick 认领时，该次触发被跳过，丢弃而不是并发再执行）。
 2. `sessions.create(cron.name, cron.id)` 创建一个新会话：标题即 cron 名字，`cronId` 记进 `meta.json`。创建后随即做历史封顶：`sessions.listByCron(cron.id)` 按新到旧排列，第 `CRON_SESSION_KEEP = 20` 个之后的老会话一律软删除（`sessions.delete`，落入回收站、由回收站保留期清理）——cron 每次触发都建新会话，不封顶会让该 cron 的会话目录无限增长。
 3. 广播 `cron.started {cronId}`。
 4. `run.enqueue(sessionId, { userText: cron.prompt, trigger: "cron", note: "本会话由定时任务「<name>」触发", ...(cron.model !== undefined && cron.model !== "" ? { model: cron.model } : {}) })`——RunManager 把 prompt 作为用户消息发起一次运行（cron 配置的 `model` 作为本次运行的模型覆盖透传，默认则走会话/默认解析链），该 note 写入用户消息上紧跟正文的 `kind: "cron"` note 块（组装过程见 core `packages/core/src/agent/run-assembly.ts` 的 `executeRun`）。
@@ -104,7 +104,7 @@ tick 的第二步 `sessions.purgeExpired(purgeTtlMs)`：把 `deletedAt` 距今 �
 
 - **无效 cron**：`create`/`update` 时 cron-parser 抛出错误，HTTP 层转 400；已存进表里的 cron 不会再解析 cron，除非 `claimDue`——若通过直接修改数据库写入了无效 cron，`claimDue` 的重算会抛出错误，被 tick 的守卫捕获记日志。
 - **触发期间 cron 被删**：`markRun` 对不存在的 id 是 no-op，运行照常完成，只是无处记录。
-- **停机与进行中的运行**：`stop()` 清除 interval 并 `Promise.allSettled` 等待所有进行中的 cron 运行结束（有界：已结束的 promise 自动从追踪列表移除）。daemon 若在运行途中崩溃，该次触发认领时已推进 `nextRunAt`，被杀死的这一次不会重放，cron 在下个调度点照常触发。
+- **停机与进行中的运行**：`stop()` 清除 interval 并 `Promise.allSettled` 等待所有进行中的 cron 运行结束（有界：已结束的 promise 自动从追踪列表移除）。daemon 若在运行途中崩溃，该次触发认领时已推进 `nextRunAt`，被终止的这一次不会重放，cron 在下个调度点照常触发。
 - **单 daemon 假设**：`claimDue` 的 CAS 认领让两个句柄同时 tick 也无法重复认领同一次触发，但调度层之外并无互斥；设计前提是单机单 daemon（daemon.json 的 wx 独占认领即为此服务，见 [daemon](../server/daemon.md)）。
 - **CLI 功能面较窄**：`kclaw cron list` 只读列表（`packages/cli/src/index.ts`）；增删改目前走 HTTP。
 

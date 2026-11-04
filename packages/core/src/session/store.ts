@@ -71,7 +71,7 @@ export interface SessionMeta {
    * 会话级目标快照（issue #47 /goal）：goal.set 事件全量替换、goal.cleared
    * 删除——以事件流为权威数据，投影只跟随。终态（complete）后仍保留在 meta 里
    * 供展示，直到用户 clear。进程内的自续开关（armed）不持久化：重启后目标
-   * 还在但不会自动续跑（ADR-0002）。
+   * 还在但不会自动继续运行（ADR-0002）。
    */
   goal?: GoalSnapshot
 }

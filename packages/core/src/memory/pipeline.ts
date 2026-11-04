@@ -248,7 +248,7 @@ export class MemoryPipeline {
     // 选范围（会话维度）：提取只看触发会话自己的增量窗口——标记每会话
     // 各一份，互不比较（旧项目级标记按会话创建序划界，晚创建会话推进过标记后，
     // 老会话的新消息会被永久跳过：2026-09-02 改名事故）。interval 定时保底无显式
-    // 归属，对全部会话逐个补增量，单会话失败不阻塞其他会话。首跑标记为空 → 该
+    // 归属，对全部会话逐个补增量，单会话失败不阻塞其他会话。首次触发时标记为空 → 该
     // 会话全量，属首次提取；提取失败标记不推进，下次触发补上。
     const rows = this.#sessionRows(projectId)
     const targets = trigger === "interval" ? rows : rows.filter((r) => r.id === sessionId)
@@ -272,7 +272,7 @@ export class MemoryPipeline {
       }
       this.#advance(ledger, trigger, row.id, range)
     }
-    // 时间自动：每次 pipeline 跑完顺带扫描全部 active 线、到期的转 inactive；空批次也扫。
+    // 时间自动：每次 pipeline 执行完毕顺带扫描全部 active 线、到期的转 inactive；空批次也扫。
     const inactivated = await this.#maybeAutoInactivate(projectId, trigger, sessionId)
     for (const t of inactivated) touched.add(t)
     if (touched.size > 0) {
@@ -477,8 +477,8 @@ export class MemoryPipeline {
    * 14 天转 inactive，每晚沉淀一次（转 inactive 时的顺带沉淀仍保留，二者幂等）。不提取、不动
    * 提取进度标记。返回本次沉淀的线数。
    *
-   * 首跑（无 baseline）只沉淀当天更新的线——历史线已由顺带沉淀覆盖，不补跑。
-   * 判据含等号：上次跑之后同日（UTC）新增的情节不能漏，宁可用一次幂等的重复
+   * 首次执行（无 baseline）只沉淀当天更新的线——历史线已由顺带沉淀覆盖，不补做。
+   * 判据含等号：上次执行之后同日（UTC）新增的情节不能漏，宁可用一次幂等的重复
    * 沉淀去换。
    */
   async runNightly(workdir: string, sessionId?: string): Promise<number> {

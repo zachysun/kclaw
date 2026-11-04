@@ -7,7 +7,7 @@
  *   （daemon 组装钩子，见 run.ts）；scheduler 扫到 due 的检查执行 triggerFollow 并 clear。
  *   挂起检查经 WriteLedger 写盘，daemon 重启后由首次 sweep 补查。
  * - 夜间沉淀：本地时间过了 consolidateHour（默认凌晨 3 点）且该项目今天（本地日期）
- *   未跑过则触发 triggerNightly；daemon 凌晨未开时开机后首个 sweep 补跑。触发发起后
+ *   未运行过则触发 triggerNightly；daemon 凌晨未开时开机后首个 sweep 补做一次。触发发起后
  *   立即记日期（即便失败也推进，与 interval 的 M-2 取舍一致）：防重入优先，失败次日再试。
  *
  * 定时器骨架（首扫 + interval + 进行中记录 + 停机等待）在 host-kit，本文件
@@ -50,7 +50,7 @@ export function startMemoryScheduler(deps: {
           const last = deps.system.intervalLastRun(workdir)
           if (last === undefined || now().getTime() - Date.parse(last) >= cfg.write.intervalMinutes * 60_000) {
             // 定时触发无显式归属会话：pipeline 对该项目全部会话逐个补增量，
-            // 各批次的写入事件挂各自的来源会话。
+            // 各批次的写入事件归属各自的来源会话。
             host.track(deps.system.triggerInterval(workdir).catch((e) => log(`kclaw memory interval failed: ${String(e)}`)))
             // markIntervalRun 在触发发起后立即推进（即便失败也推进，M-2 取舍）：interval
             // 语义是"至少每 intervalMinutes 保底扫一次"，失败后下个整周期再试，避免同项目
@@ -69,15 +69,15 @@ export function startMemoryScheduler(deps: {
               host.track(deps.system.triggerFollow(workdir, check.sessionId).catch((e) => log(`kclaw memory follow failed: ${String(e)}`)))
             } else if (activity !== "" && Date.parse(activity) > Date.parse(check.endTurnAt)) {
               // I-1：判定不过但 end_turn 之后已有更新活动（用户切到别的会话继续对话、
-              // 或该项目又跑了一轮）——该检查的锚点已被新活动取代，语义上旧检查停用，
+              // 或该项目又执行了一轮）——该检查的锚点已被新活动取代，语义上旧检查停用，
               // 直接清掉，防止 state.json 里 followChecks 无界增长。
               deps.system.clearFollowCheck(workdir, check.sessionId)
             }
           }
         }
         // 夜间沉淀（consolidateHour 负值关闭；pipeline 内部再受 memory.consolidate 总开关管）：
-        // 本地时间过了 consolidateHour 且该项目今天（本地日期）未跑则触发——daemon 凌晨
-        // 未开时，开机后首个 sweep 补跑。日期由 markNightlyRun 记本地日期（防同日重跑），
+        // 本地时间过了 consolidateHour 且该项目今天（本地日期）未运行过则触发——daemon 凌晨
+        // 未开时，开机后首个 sweep 补做一次。日期由 markNightlyRun 记本地日期（防同日重复触发），
         // 沉淀判据基线由 pipeline 记 UTC 日期（与线文件 updated 同源），两个时区各管各的。
         {
           const t = now()

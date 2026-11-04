@@ -2,7 +2,7 @@
 
 ## 职责
 
-subagent 是主对话的模型**自主派出**的短命执行单元：调用 `subagent_run` 工具、给出一段自包含的任务描述，daemon 为它开一个**独立子会话**跑完整个任务，结束时把结题答复（subagent 最后一条回复的全文）作为工具结果送回主对话。过程文本（工具输出、中间思考）不进主对话的上下文，subagent 的第一动机是**上下文隔离**；同一批工具调用里发多个 `subagent_run` 即**并行**执行互不相关的任务，是第二动机。派发时可带 `role`（角色补充，拼进子会话系统提示词）与 `tools`（工具白名单）做轻量特化——预置人设库、跨会话复用的角色档案不在当前范围。长任务可以**后台派发**（`run_in_background: true`）：派发立即返回子会话 id、不阻塞父 run，subagent 完成后结题报告**自动投递回主会话**、触发新一轮分析（见下文"后台模式"）。
+subagent 是主对话的模型**自主派出**的一次性执行单元：调用 `subagent_run` 工具、给出一段自包含的任务描述，daemon 为它开一个**独立子会话**执行完整个任务，结束时把结题答复（subagent 最后一条回复的全文）作为工具结果送回主对话。过程文本（工具输出、中间思考）不进主对话的上下文，subagent 的第一动机是**上下文隔离**；同一批工具调用里发多个 `subagent_run` 即**并行**执行互不相关的任务，是第二动机。派发时可带 `role`（角色补充，拼进子会话系统提示词）与 `tools`（工具白名单）做轻量特化——预置人设库、跨会话复用的角色档案不在当前范围。长任务可以**后台派发**（`run_in_background: true`）：派发立即返回子会话 id、不阻塞父 run，subagent 完成后结题报告**自动投递回主会话**、触发新一轮分析（见下文"后台模式"）。
 
 三个模块分担职责：`packages/core/src/agent/subagent.ts` 放两侧共享的契约（`SubagentSpawner` 接口、subagent 系统提示词、答复截断/标题助手）；`packages/core/src/tools/subagent.ts` 是模型可见的工具执行器（只做参数校验，校验后调一次 spawner）；`packages/server/src/subagent.ts` 是 daemon 侧的 spawner 实现（真会话、真 run 提交、状态与确认转发）。
 
@@ -12,7 +12,7 @@ subagent 是主对话的模型**自主派出**的短命执行单元：调用 `su
 
 - **阻塞式调用（默认）**：`subagent_run` 执行器 await 子 run 的最终结果，把 subagent**最后一条 assistant 消息的文本块**作为工具结果返回（空的 text 块不算，拼接后去首尾空白）。答复有 32000 字符上限，超出留头尾各 4000 字符、中段以截断标记省略——过程再长也压不垮主对话。并行只来自"一批多个工具调用"，单个阻塞调用本身没有中途取回。
 
-- **后台模式（`run_in_background: true`）**：派发立即返回子会话 id 与取回提示（不阻塞父 run），subagent 的**生命周期挂到父会话**而不是父 run——父 run 结束或中止的信号刻意不递给 spawner，后台 subagent 照常跑完；删除父会话则先取消它仍在跑的后台 subagent，再走既有的级联软删。subagent 落定时结题报告**自动投递回父会话**：报告走 `RunManager.submit`（触发 `agent`、强制排队）开启**新一轮 run**，主 agent 消化全文后回复，三端同享；报告消息带 `kind:"subagent"` note 声明"机器回投、非用户发言"，正文为状态行 + 任务原文 + 结题全文（超长头尾截断）。投递被拒（队列满 10 条 / 防自循环唤醒 budget 耗尽）时降级为旧通知（带 `kind:"system"` note 的 assistant 消息，附拒绝原因，**不触发 run**），完成事件不静默丢失。投递或回退之后，宿主发出一次可选的 `onBackgroundSettled` 回调（含子会话 id、标签、成败与结题摘录），daemon 用它把落定推送给 IM 频道。**防自循环 budget**：每主会话连续 `agent` 触发的自动唤醒上限 3 次，只有真实用户输入真正到达模型（用户 run 开跑 / steer 注入）才清零；定时任务不清零，`goal` 触发的自续轮开跑时则清零（目标循环有自己的一套独立停止条件，见 [goal](./goal.md)，不清零的话，长目标里 subagent 投递会先被这份 budget 卡死）；计数仅内存，daemon 重启归零。`subagent_collect {childSessionId}` 降为按需深挖手段（只能取本会话派出的 subagent），行为不变。后台任务有独立的每父会话并发上限（`subagents.maxBackground`，与阻塞档分开计数）。
+- **后台模式（`run_in_background: true`）**：派发立即返回子会话 id 与取回提示（不阻塞父 run），subagent 的**生命周期归属父会话**而不是父 run——父 run 结束或中止的信号刻意不递给 spawner，后台 subagent 照常执行完毕；删除父会话则先取消它仍在执行的后台 subagent，再走既有的级联软删。subagent 落定时结题报告**自动投递回父会话**：报告走 `RunManager.submit`（触发 `agent`、强制排队）开启**新一轮 run**，主 agent 消化全文后回复，三端同享；报告消息带 `kind:"subagent"` note 声明"机器回投、非用户发言"，正文为状态行 + 任务原文 + 结题全文（超长头尾截断）。投递被拒（队列满 10 条 / 防自循环唤醒 budget 耗尽）时降级为旧通知（带 `kind:"system"` note 的 assistant 消息，附拒绝原因，**不触发 run**），完成事件不静默丢失。投递或回退之后，宿主发出一次可选的 `onBackgroundSettled` 回调（含子会话 id、标签、成败与结题摘录），daemon 用它把落定推送给 IM 频道。**防自循环 budget**：每主会话连续 `agent` 触发的自动唤醒上限 3 次，只有真实用户输入真正到达模型（用户 run 开始运行 / steer 注入）才清零；定时任务不清零，`goal` 触发的自续轮开始运行时则清零（目标循环有自己的一套独立停止条件，见 [goal](./goal.md)，不清零的话，长目标里 subagent 投递会先被这份 budget 卡死）；计数仅内存，daemon 重启归零。`subagent_collect {childSessionId}` 降为按需深挖手段（只能取本会话派出的 subagent），行为不变。后台任务有独立的每父会话并发上限（`subagents.maxBackground`，与阻塞档分开计数）。
 
 - **单层委派**：子 run 的工具清单里**不注册** `subagent_run` 与 `subagent_collect`（也没有 `memory_save`，见记忆隔离；goal 三件 `create_goal` / `get_goal` / `update_goal` 同样不注册——目标循环是主线的职责）——subagent 不能再派 subagent，防递归失控。
 
@@ -34,17 +34,17 @@ subagent 是主对话的模型**自主派出**的短命执行单元：调用 `su
   → 订阅子频道（状态行 + 确认转发）→ submit(task, trigger:"agent", disposition:"wait",
     role/tools 随 EnqueueInput 全程携带)
   → 子 run 组装：role 拼进系统提示词，tools 过滤工具清单（gate 由过滤后的清单派生）
-  → 子 run 跑完（正常/中止/出错）
+  → 子 run 执行完毕（正常/中止/出错）
   → 拆订阅、清并发计数 → 结果整形回工具结果
 ```
 
 子会话与普通会话走完全相同的存储路径（events.jsonl 唯一权威数据 + meta 投影），审计页照常能看它的全部事件。
 
-**后台派发的生命周期差异**：`run_in_background: true` 时上面第 2 步的并发上限换成后台档（`maxBackground`），第 3 步后立即返回子会话 id（工具结果是 `已在后台派出 subagent「…」（会话 …）…完成后结题报告会自动投递回本会话并触发新一轮分析，届时可用 subagent_collect …`），不等待子 run 落定；子 run 完成后结题报告经 `submit(trigger:"agent")` 投递回父会话、开启新一轮 run（投递被拒则降级为系统通知，见"后台模式"），删父会话时 `cancelBackgroundForParent` 先取消在跑的后台 subagent。
+**后台派发的生命周期差异**：`run_in_background: true` 时上面第 2 步的并发上限换成后台档（`maxBackground`），第 3 步后立即返回子会话 id（工具结果是 `已在后台派出 subagent「…」（会话 …）…完成后结题报告会自动投递回本会话并触发新一轮分析，届时可用 subagent_collect …`），不等待子 run 落定；子 run 完成后结题报告经 `submit(trigger:"agent")` 投递回父会话、开启新一轮 run（投递被拒则降级为系统通知，见"后台模式"），删父会话时 `cancelBackgroundForParent` 先取消仍在执行的后台 subagent。
 
 ## 状态行（主对话里的"实时一行"）
 
-spawner 在子频道挂一个普通 bus 订阅者（EventBus 接受任何 `{send}` 形状），把子 run 的动静整理成一行行状态、经工具的 `onOutput` 通道变成父频道的 `tool_result.delta`——Web 对话页的 subagent 行因此**实时刷新**（默认折叠行里显示最新一行）：
+spawner 在子频道注册一个普通 bus 订阅者（EventBus 接受任何 `{send}` 形状），把子 run 的动静整理成一行行状态、经工具的 `onOutput` 通道变成父频道的 `tool_result.delta`——Web 对话页的 subagent 行因此**实时刷新**（默认折叠行里显示最新一行）：
 
 - subagent 开始生成（assistant `message.created`）→ `▸ 生成中`
 - 每完成一个工具调用 → `▸ 调用工具 <name>`（这条**强制立即**发出，不受节流）
@@ -54,12 +54,12 @@ spawner 在子频道挂一个普通 bus 订阅者（EventBus 接受任何 `{send
 
 ## 记忆与用量
 
-- **记忆完全隔离**（subagent 被当成工具，不是人）：`MemorySystem` 的三处会话枚举全部排除子会话——定时扫描不提取子会话（interval 对**全部会话逐个补增量**的清单里没有它）、`recentSessionId`/`recentGlobalSessionId` 回退到不选它、follow-check 不为它挂检查。subagent 的过程不写入长期记忆。
+- **记忆完全隔离**（subagent 被当成工具，不是人）：`MemorySystem` 的三处会话枚举全部排除子会话——定时扫描不提取子会话（interval 对**全部会话逐个补增量**的清单里没有它）、`recentSessionId`/`recentGlobalSessionId` 回退到不选它、follow-check 不为它排检查。subagent 的过程不写入长期记忆。
 - **用量记到父会话**：usage-ledger hook 以 `usageSessionId`（= `parentSessionId`，普通会话即自身）记录——subagent 消耗的 token 记在派它的主对话名下，用量统计按用户视角归因。
 
 ## 内置 hook 跳过（引擎侧派生）
 
-`parentSessionId` 存在时，组装给 hook 链带 `childRun: true`，五个内置 hook 直接跳过：`memory-inject`（不注入记忆 note）、`autoname`（不自动命名，标题已带"subagent · "前缀）、`follow-check`（不挂记忆检查）、`skill-follow-check`（不排技能提炼检查——subagent 的技能使用由同项目后续主干 run 的粗查覆盖，见 [skills](./skills.md)）、`system-materials`（系统提示词不带认知与技能清单段——subagent 提示词刻意精简，将来要补材料就改 `subagentSystemPrompt` 模板）。系统提示词整体换成 `subagentSystemPrompt(workspace)`：subagent 身份、工作区、"任务即唯一指令、不要反问"、权限规则一致、结题答复是全部产出，五句话，不带 AGENTS.md 人设。
+`parentSessionId` 存在时，组装给 hook 链带 `childRun: true`，五个内置 hook 直接跳过：`memory-inject`（不注入记忆 note）、`autoname`（不自动命名，标题已带"subagent · "前缀）、`follow-check`（不排记忆检查）、`skill-follow-check`（不排技能提炼检查——subagent 的技能使用由同项目后续主干 run 的粗查覆盖，见 [skills](./skills.md)）、`system-materials`（系统提示词不带认知与技能清单段——subagent 提示词刻意精简，将来要补材料就改 `subagentSystemPrompt` 模板）。系统提示词整体换成 `subagentSystemPrompt(workspace)`：subagent 身份、工作区、"任务即唯一指令、不要反问"、权限规则一致、结题答复是全部产出，五句话，不带 AGENTS.md 人设。
 
 ## 会话可见性与级联删除
 

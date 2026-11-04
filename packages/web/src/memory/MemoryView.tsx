@@ -118,7 +118,7 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
   }
 
   // 结构：左列 = 全局认知常驻（顶部）+ 项目/主题线按需（下方）；右列 = 编辑器。
-  // 页头 h2 也挂在这根 flex 行里，靠 .memory-view 的 wrap + 100% basis 独占一行
+  // 页头 h2 也放在这根 flex 行里，靠 .memory-view 的 wrap + 100% basis 独占一行
   //（CSS 处理），避免为了页头把整棵 JSX 重新包一层。
   return (
     <div className="memory-view" data-testid="memory-view">

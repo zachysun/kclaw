@@ -1,8 +1,8 @@
 /**
  * /goal 质量门（issue #47）：验收命令的沙箱执行器。用户在设定目标时
  * 声明一次，此后每轮判定前自动执行——所以必须沙箱化（免审自执行的
- * 前提是可沙箱化），不可回退到裸跑。全部通过才进判定器；任一失败
- * 短路判定器，输出成为下一轮的修正指引。进程组杀灭与输出截断沿 bash
+ * 前提是可沙箱化），不可回退到无沙箱直接执行。全部通过才进判定器；任一失败
+ * 短路判定器，输出成为下一轮的修正指引。进程组终止与输出截断沿 bash
  * 工具的既有纪律（detached spawn + kill(-pid)、尾部保留）。
  */
 import type { BashSandbox } from "../sandbox/provider.js"
@@ -12,7 +12,7 @@ import type { GoalGateOutcome } from "./types.js"
 /** 单条命令的采集上限（字节）：整段输出只留尾部，防失控输出吃内存。 */
 const MAX_CAPTURE_BYTES = 64 * 1024
 
-/** 沙箱内跑一条命令：超时杀进程组，输出取尾部。 */
+/** 沙箱内执行一条命令：超时后终止进程组，输出取尾部。 */
 async function runOne(
   sandbox: BashSandbox,
   command: string,
@@ -50,7 +50,7 @@ async function runOne(
       tail !== ""
         ? tail
         : killed
-          ? `（超时 ${timeoutMs / 1000}s 被杀，无输出）`
+          ? `（超时 ${timeoutMs / 1000}s 被终止，无输出）`
           : code === null
             ? "（启动失败，无输出）"
             : "（无输出）",
@@ -58,7 +58,7 @@ async function runOne(
 }
 
 /**
- * 跑完整组验收命令（按声明顺序串行）。sandbox 不可用时不裸跑：每条
+ * 执行完整组验收命令（按声明顺序串行）。sandbox 不可用时不降级为无沙箱直接执行：每条
  * 记为失败并注明原因（fail-closed——验证不可用与验证失败同处理方式，连败
  * 达上限即停，stoppedNote 会说明）。cwd = 会话工作区。`timeoutMs` 默认
  * GOAL_GATE_TIMEOUT_MS（测试可收紧）。

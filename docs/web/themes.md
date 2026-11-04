@@ -24,7 +24,7 @@ WebUI 的视觉主题是**可插拔**的：一套主题 = `packages/web/src/them
 
 1. 在 `packages/web/src/themes/` 新建 `<主题id>.css`，以 `html[data-theme="<主题id>"]` 块声明该主题的全部设计令牌（浅色主题要连 phantom `:root` 里的派生表面一起覆盖）。
 2. 在 `theme.ts` 的 `THEME_META` 加一行：`<主题id>: { label: "显示名", themeColor: "浏览器栏颜色" }`。
-3. 跑一遍 `theme.test.ts`——它保证样式文件与注册表同步，两处不一致会失败。
+3. 执行一遍 `theme.test.ts`——它保证样式文件与注册表同步，两处不一致会失败。
 
 ## 关联
 

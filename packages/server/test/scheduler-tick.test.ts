@@ -179,7 +179,7 @@ describe("startSchedulerTick", () => {
     const cron = env.scheduler.create({ name: "早报", cron: "* * * * *", prompt: "给我今日早报" })
     // 时钟固定在 t0：claimDue 把 next_run_at 推进到"下一个分钟边界"（12:01），
     // 真实时钟若在观察窗内跨过边界，* * * * * 的任务会合法地再次到期——
-    // 合跑负载下偶发双触发就是这个机理。固定 now 后 next_run_at 永远在
+    // 负载合并执行下偶发双触发就是这个机理。固定 now 后 next_run_at 永远在
     // "未来"，no-re-run 断言与真实时钟彻底解耦（t0 取半分钟处，边界 30s 外）。
     const t0 = new Date("2026-06-01T12:00:30.000Z")
     env.scheduler.update(cron.id, { nextRunAt: new Date(t0.getTime() - 60_000).toISOString() })
@@ -227,7 +227,7 @@ describe("startSchedulerTick", () => {
 
   it("cron-created sessions honor the injected defaultMode (daemon config)", async () => {
     const env = makeEnv(scriptClient([textTurn("好了")]))
-    const cron = env.scheduler.create({ name: "只读任务", cron: "* * * * *", prompt: "跑一下" })
+    const cron = env.scheduler.create({ name: "只读任务", cron: "* * * * *", prompt: "执行一下" })
     backdate(env.scheduler, cron.id)
 
     startTick(env, 25, undefined, "readonly")
@@ -252,7 +252,7 @@ describe("startSchedulerTick", () => {
       },
     }
     const env = makeEnv(llm)
-    const cron = env.scheduler.create({ name: "认领", cron: "* * * * *", prompt: "跑" })
+    const cron = env.scheduler.create({ name: "认领", cron: "* * * * *", prompt: "执行" })
     const backdated = new Date(Date.now() - 60_000).toISOString()
     env.scheduler.update(cron.id, { nextRunAt: backdated })
 
@@ -274,7 +274,7 @@ describe("startSchedulerTick", () => {
 
   it("prunes a cron's old sessions down to CRON_SESSION_KEEP after firing", async () => {
     const env = makeEnv(scriptClient([textTurn("好")]))
-    const cron = env.scheduler.create({ name: "清理", cron: "* * * * *", prompt: "跑" })
+    const cron = env.scheduler.create({ name: "清理", cron: "* * * * *", prompt: "执行" })
     // 22 historical sessions of the same cron; the fire adds a 23rd
     const oldIds = new Set<string>()
     for (let i = 0; i < 22; i++) {
@@ -352,7 +352,7 @@ describe("startSchedulerTick", () => {
 
   it("never fires a disabled cron", async () => {
     const env = makeEnv(scriptClient([textTurn("不该出现")]))
-    const cron = env.scheduler.create({ name: "停用", cron: "* * * * *", prompt: "不该跑" })
+    const cron = env.scheduler.create({ name: "停用", cron: "* * * * *", prompt: "不该执行" })
     env.scheduler.update(cron.id, {
       enabled: false,
       nextRunAt: new Date(Date.now() - 60_000).toISOString(),
@@ -368,7 +368,7 @@ describe("startSchedulerTick", () => {
 
   it("a socket whose send throws neither fails the cron nor starves other subscribers", async () => {
     const env = makeEnv(scriptClient([textTurn("好")]))
-    const cron = env.scheduler.create({ name: "抗炸", cron: "* * * * *", prompt: "跑" })
+    const cron = env.scheduler.create({ name: "抗炸", cron: "* * * * *", prompt: "执行" })
     backdate(env.scheduler, cron.id)
 
     // connected BEFORE the healthy socket: every cron.* broadcast reaches it
@@ -450,7 +450,7 @@ describe("startSchedulerTick", () => {
 
   it("notifies with status error and the failure message when the run fails", async () => {
     const env = makeEnv(scriptClient([textTurn("不该到达")]))
-    const cron = env.scheduler.create({ name: "坏任务", cron: "* * * * *", prompt: "跑" })
+    const cron = env.scheduler.create({ name: "坏任务", cron: "* * * * *", prompt: "执行" })
     backdate(env.scheduler, cron.id)
 
     // enqueue itself throws: the tick's catch records the failure with the
@@ -500,7 +500,7 @@ describe("startSchedulerTick", () => {
 
   it("a tick without a notifier dep changes nothing", async () => {
     const env = makeEnv(scriptClient([textTurn("好")]))
-    const cron = env.scheduler.create({ name: "无通知", cron: "* * * * *", prompt: "跑" })
+    const cron = env.scheduler.create({ name: "无通知", cron: "* * * * *", prompt: "执行" })
     backdate(env.scheduler, cron.id)
 
     startTick(env, 25) // no notifier in deps
@@ -513,7 +513,7 @@ describe("startSchedulerTick", () => {
 
   it("stop() is idempotent and the interval stops firing", async () => {
     const env = makeEnv(scriptClient([textTurn("好")]))
-    const cron = env.scheduler.create({ name: "一次性", cron: "* * * * *", prompt: "跑一次" })
+    const cron = env.scheduler.create({ name: "一次性", cron: "* * * * *", prompt: "执行一次" })
     backdate(env.scheduler, cron.id)
 
     const tick = startTick(env, 30)

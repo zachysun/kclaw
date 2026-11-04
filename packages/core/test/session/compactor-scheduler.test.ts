@@ -218,7 +218,7 @@ describe("Compactor 调度状态机", () => {
     await vi.waitFor(() => expect(llm.calls.filter(isSummaryCall).length).toBeGreaterThanOrEqual(2))
     await vi.waitFor(() => expect(compactor.parked(session.id)).toBe(true))
 
-    // 同步压缩在过小的历史上跑（估算 < 黄线）→ declined 结局，
+    // 同步压缩在过小的历史上执行（估算 < 黄线）→ declined 结局，
     // 什么都没写：挂起成果仍是最新视图，不得被入口顺手清掉
     const tiny = [newMessage(session.id, "user", [{ id: "btiny", type: "text", text: "小" }])]
     const out = await compactor.compact(session.id, tiny, "", config, () => ({ llm: llm.client, model: "m" }), { phase: "post-run" })
@@ -278,7 +278,7 @@ describe("Compactor 调度状态机", () => {
     // s1 的取消标记不波及 s2
     compactor.cancel(s1.id)
     compactor.clearCancelled(s1.id)
-    compactor.deferManual(s2.id, "只挂 s2")
+    compactor.deferManual(s2.id, "只压 s2")
     expect(compactor.hasDeferredManual(s1.id)).toBe(false)
     expect(compactor.hasDeferredManual(s2.id)).toBe(true)
   })

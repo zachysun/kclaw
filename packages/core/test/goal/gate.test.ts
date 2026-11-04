@@ -1,6 +1,6 @@
 /**
  * 验收命令接入口测试（issue #47）：runAcceptanceGates 用假 BashSandbox（真
- * /bin/sh 子进程，不经 OS 沙箱）验证 串行执行/退出码判定/超时杀组/
+ * /bin/sh 子进程，不经 OS 沙箱）验证 串行执行/退出码判定/超时终止组/
  * 不可用 fail-closed。不依赖平台沙箱。
  */
 import { describe, it, expect } from "vitest"
@@ -8,7 +8,7 @@ import { spawn, type ChildProcess } from "node:child_process"
 import { runAcceptanceGates } from "../../src/goal/gate.js"
 import type { BashSandbox } from "../../src/sandbox/provider.js"
 
-/** 直通沙箱：命令原样交给 /bin/sh（detached 同产品路径，可杀进程组）。 */
+/** 直通沙箱：命令原样交给 /bin/sh（detached 同产品路径，可终止进程组）。 */
 const passthrough: BashSandbox = {
   available: true,
   spawn(command: string, opts: { cwd: string }): ChildProcess {

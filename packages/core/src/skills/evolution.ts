@@ -381,7 +381,7 @@ export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEv
 
   // ---- 内部 ---------------------------------------------------------------
 
-  /** skill 审计事件：归属会话缺失即跳过（不落事件、不建幻影会话，照 memory 先例）。 */
+  /** skill 审计事件：归属会话缺失即跳过（不落事件、不创建无来源的会话，照 memory 先例）。 */
   #audit(e: Omit<SkillEvent, "type" | "at"> & { at?: string; sessionId?: string }): void {
     const id = e.sessionId
     if (id === undefined) return

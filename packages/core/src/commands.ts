@@ -35,7 +35,7 @@ export const SLASH_COMMANDS: readonly SlashCommandMeta[] = [
   { name: "mode", usage: "/mode [readonly|default|acceptEdits]", description: "切换本会话权限模式（无参数显示当前值；Shift+Tab 亦可循环切换）", surfaces: ["cli", "web"] },
   { name: "attach", usage: "/attach <path>", description: "上传附件，随下一条消息发送（无参数时列出待发附件）", surfaces: ["cli"] },
   { name: "compact", usage: "/compact [重点说明]", description: "手动压缩当前会话的早期对话（可指定摘要重点保留什么）", surfaces: ["cli", "web"] },
-  { name: "goal", usage: "/goal [目标描述] | /goal stop|pause|resume|clear|status", description: "目标循环：设定可验证目标进入自动续跑（stop 停止；pause/resume 暂停恢复；clear 移除；status 看当前目标）", surfaces: ["cli", "web"] },
+  { name: "goal", usage: "/goal [目标描述] | /goal stop|pause|resume|clear|status", description: "目标循环：设定可验证目标进入自动续轮（stop 停止；pause/resume 暂停恢复；clear 移除；status 看当前目标）", surfaces: ["cli", "web"] },
   { name: "steer", usage: "/steer", description: "本会话发送处置切换为引导（steer）：运行中发送的消息注入当前 run", surfaces: ["cli"] },
   { name: "wait", usage: "/wait", description: "本会话发送处置切换为等待（wait）：运行中发送的消息排队，当前 run 结束后执行", surfaces: ["cli"] },
   { name: "interrupt", usage: "/interrupt <消息>", description: "掐掉当前 run，并把这条消息插到队列最前（一次性动作，不是模式）", surfaces: ["cli"] },

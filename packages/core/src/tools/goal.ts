@@ -86,7 +86,7 @@ export function createGoalTools(opts: {
       })
       return {
         status: "ok",
-        output: `目标已设定并起跑（armed + 首轮入队）：\n目标：${goal.text}\n轮数上限 ${goal.totalRounds}、token budget ${goal.tokensUsed} 起。`,
+        output: `目标已设定并开始运行（armed + 首轮入队）：\n目标：${goal.text}\n轮数上限 ${goal.totalRounds}、token budget ${goal.tokensUsed} 起。`,
         data: goal,
       }
     } catch (e) {

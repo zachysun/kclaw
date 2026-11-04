@@ -346,7 +346,7 @@ export function ChatView({ sessionId, view, onSend, onUiAction, uiPicks, onResol
               )}
             </Fragment>
           ))}
-          {/* upto 是最后一条消息（收尾压缩后没有新消息）→ 折叠条挂在消息流末尾。 */}
+          {/* upto 是最后一条消息（收尾压缩后没有新消息）→ 折叠条位于消息流末尾。 */}
           {auditBars.filter((b) => b.insertIdx >= view.messages.length).map((b) => (
             <AuditContextNote key={b.key} bar={b} />
           ))}
@@ -442,7 +442,7 @@ export function ChatView({ sessionId, view, onSend, onUiAction, uiPicks, onResol
         </div>
       )}
       {/* 运行失败与帧错误的反馈条：贴着 composer（用户正在操作的位置）渲染，
-          不再挂在消息流顶部——长会话里顶部错误等于不可见。清除节奏归所有方：
+          不再固定在消息流顶部——长会话里顶部错误等于不可见。清除节奏归所有方：
           下一次 run.started（与 view.error 的过期口径一致）或用户 × 掉 notice。 */}
       {view.error !== undefined && (
         <div className="chat-error" data-testid="chat-error" role="alert">

@@ -322,7 +322,7 @@ describe("runTrigger", () => {
       resolveLlm: () => ({ llm: scriptedLlm([JSON.stringify({ actions: [] })]), model: "m" }),
       now: () => now,
     })
-    seedMessages(meta.id, ["新内容让范围非空"]) // 让 pipeline 真的跑，顺带检查涉及的线
+    seedMessages(meta.id, ["新内容让范围非空"]) // 让 pipeline 真的执行，顺带检查涉及的线
     await pipe2.runTrigger(WORKDIR, "interval")
     const files = readDirDeep(join(root, "memory", "projects"))
     const oldThread = files.find((f) => f.endsWith("old.md"))!
@@ -640,7 +640,7 @@ describe("runNightly（夜间闲时沉淀）", () => {
       now: () => new Date(nowISO),
       audit: () => { consolidateCalls += 1 },
     })
-    // 首跑（baseline = 9-01）：updated 8-01 的旧线不沉淀——历史线由顺带沉淀覆盖，不补跑
+    // 首次执行（baseline = 9-01）：updated 8-01 的旧线不沉淀——历史线由顺带沉淀覆盖，不补做
     expect(await makePipe("2026-09-01T20:00:00Z").runNightly(WORKDIR)).toBe(0)
     expect(consolidateCalls).toBe(0)
     // 线有了新情节（updated 推进到 9-01）→ 次日夜间沉淀（baseline 9-01，updated >= baseline）

@@ -46,7 +46,7 @@ export function forkSession(deps: ForkDeps, opts: { sourceId: string; messageId?
   const { store } = deps
   const source = store.meta(opts.sourceId)
   if (source === undefined || source.deleted === true) throw new Error(`session not found: ${opts.sourceId}`)
-  // v1 非目标（spec §4.4）：subagent 会话是模型自主的短命执行单元，不是用户
+  // v1 非目标（spec §4.4）：subagent 会话是模型自主的一次性执行单元，不是用户
   // 可分叉的对话线；子会话对用户只读，fork 出的会话却要进列表收消息。
   if (source.parentSessionId !== undefined) throw new Error("subagent 会话不支持 fork")
 

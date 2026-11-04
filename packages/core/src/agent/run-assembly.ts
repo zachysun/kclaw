@@ -988,7 +988,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
                   ]
                 : []),
               ...(deferredDefs.some((d) => d.name.startsWith("mcp__"))
-                ? ["- MCP 外挂工具同样只列名字，名单见 tool_search 的说明。"]
+                ? ["- MCP 外部工具同样只列名字，名单见 tool_search 的说明。"]
                 : []),
             ].join("\n"),
           }

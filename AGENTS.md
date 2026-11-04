@@ -25,4 +25,4 @@ Single-context: one `CONTEXT.md` plus `docs/adr/` at the repo root. See `docs/ag
 9. **确保变更可验证、可观测、可回滚**：每项改动都应行为可测试、运行状态可观测（在本仓库经事件流与审计页）、故障可定位，并兼顾向后兼容和回滚路径；错误与日志必须保留诊断上下文，但不得泄露敏感信息。
 10. **删除优于兼容**：内部路径重构时直接删除过时实现，禁止新增兼容层、deprecated shim 或双写逻辑；对外契约（`~/.kclaw/` 配置文件格式、HTTP/WS 接口、已分发版本的行为）的兼容性按契约单独评估，属于合同义务而非迁就旧代码。
 
-> **变更速查**：提交前通常运行 `pnpm -r build && pnpm -r test`；`@kclaw/server`、`@kclaw/web`、`@kclaw/cli` 经 workspace 链接引用 `@kclaw/core` 的 dist，先构建再测，旧产物会假红。修改 web 或 core 后额外运行 `pnpm --filter kclaw build` 重组装聚合包，daemon 重启后才会吃到新产物（daemon 用 node 24 跑）。改动行为、事件、工具或路由后，先同步 `docs/` 对应篇章再提交。推送前做一遍隐私自查（本机 pre-push 钩子会再扫一遍）。
+> **变更速查**：提交前通常运行 `pnpm -r build && pnpm -r test`；`@kclaw/server`、`@kclaw/web`、`@kclaw/cli` 经 workspace 链接引用 `@kclaw/core` 的 dist，先构建再测，旧产物会假红。修改 web 或 core 后额外运行 `pnpm --filter kclaw build` 重组装聚合包，daemon 重启后才会吃到新产物（daemon 用 node 24 运行）。改动行为、事件、工具或路由后，先同步 `docs/` 对应篇章再提交。推送前做一遍隐私自查（本机 pre-push 钩子会再扫一遍）。

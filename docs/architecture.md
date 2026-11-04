@@ -2,7 +2,7 @@
 
 ## kclaw 是什么，本文讲什么
 
-kclaw 是一个运行在本机的个人 AI 助手（agent）。整套系统只有一个真正干活的进程：daemon（守护进程，常驻后台的程序）。会话、定时任务、记忆、配置全部由 daemon 一手保管；终端里的 CLI 和浏览器里的 WebUI 只是它的两个客户端，负责输入和显示，自己不保存任何业务数据。
+kclaw 是一个运行在本机的个人 AI 助手（agent）。整套系统只有一个承担实际工作的进程：daemon（守护进程，常驻后台的程序）。会话、定时任务、记忆、配置全部由 daemon 一手保管；终端里的 CLI 和浏览器里的 WebUI 只是它的两个客户端，负责输入和显示，自己不保存任何业务数据。
 
 本文是全部技术文档的入口：先给出模块地图与进程模型，再沿一条用户消息从进入到回复的完整流转把数据流走一遍，最后交代边界情况下的行为。各子系统的细节见 `core/`、`server/`、`cli/`、`web/` 下的分篇；枚举与清单的逐值陈列见 [reference](./reference/README.md)。
 
@@ -57,12 +57,12 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 | `cron/` | CronScheduler（定时任务调度） |
 | `mcp/` | MCP（Model Context Protocol：给模型接入外部工具的开放协议）客户端管理器 |
 | `team/` | agent 团队的存储（TeamStore：团队目录/收信箱/任务板）与提示词（见 [agent-team](./core/agent-team.md)） |
-| `goal/` | /goal 目标循环的领域模块：快照类型、硬性上限常量、判定器与验收命令、三组注入提示词、事件派生纯函数（derive.ts）与轮决策纯函数（check.ts：九条停止条件与续跑/收尾判定）（调用方在 server 的 goal-loop.ts，见 [goal](./core/goal.md)） |
+| `goal/` | /goal 目标循环的领域模块：快照类型、硬性上限常量、判定器与验收命令、三组注入提示词、事件派生纯函数（derive.ts）与轮决策纯函数（check.ts：九条停止条件与续轮/收尾判定）（调用方在 server 的 goal-loop.ts，见 [goal](./core/goal.md)） |
 | `notify/` | 任务完成通知 |
 
 根级另有 `bus.ts`（EventBus，进程内事件分发）与 `client-http.ts`（CLI/WebUI 共享的 HTTP 请求模块：自动附带 Bearer token、提取错误信息、处理 204/空响应，经 `@kclaw/core/client-http` 子路径出口；不 import 任何 Node 专属模块，浏览器可以直接打包）。`mentions.ts`（`@` 文件引用的纯函数层：提取、候选补全与模型侧包装文本，经 `@kclaw/core/mentions` 子路径出口；机制见 [file-mentions](./core/file-mentions.md)）与 `provider/formats.ts`（LLM 线格式注册表：格式类型与校验、鉴权头、端点 URL、embeddings 能力位、探活请求形状，经 `@kclaw/core/provider-formats` 子路径出口；协议实现、探活、配置与 REST 校验、daemon 的 embedding 能力判定、WebUI Model 页的格式下拉都直接读它，不再各存一份镜像）同为浏览器可引用的纯模块。`sandbox/`（bash 工具的操作系统级沙箱：Seatbelt/bwrap 检测与包装，见 [sandbox](./core/sandbox.md)）是内部模块，不经入口导出，由 run 组装直接 import。
 
-**server**（入口 `packages/server/src/index.ts`）：`app.ts`（createApp 组装）、`daemon.ts`（launchDaemon）、`auth.ts`（token 鉴权）、`run.ts`（RunManager 队列状态机；单次 run 的组装在 core 的 `executeRun`）、`subagent.ts`（subagent 派生：子会话创建、状态行与确认转发，见 [subagents](./core/subagents.md)）、`team.ts`（团队宿主：身份反查、收信箱投递、自动派活、面板，见 [agent-team](./core/agent-team.md)）、`goal-loop.ts`（/goal 目标循环主机：空闲边缘驱动、验收命令、判定器与续跑，见 [goal](./core/goal.md)）、`command-check.ts`（WS 命令帧的唯一校验点）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`（定时调度 tick）、`memory-scheduler.ts`（记忆的定时/跟随保底调度）、`skill-scheduler.ts`（技能进化的跟随检查处理方，见 [skills](./core/skills.md)）、`skill-curator.ts`（技能 curator 的每日闲时扫描宿主：陈旧标记与归档，见 [skills](./core/skills.md)）、`session-retention.ts`（spill 目录保留期清理宿主：每小时按文件 mtime 删除存放超过 `sessions.spillRetentionDays` 天的文件，默认 0 = 不清理，见 [storage](./core/storage.md)）、`host-kit.ts`（常驻宿主共享组件：定时宿主的"立即首扫 + interval + 进行中任务记录 + 停机等待"，与两调度器共用的空闲判定 `followGateDue`、skill curator 与记忆夜间沉淀共用的每日一次判定 `dailyGateDue`；goal 循环等无定时器宿主只用其中的进行中记录）、`mcp-projects.ts`（项目发现：从会话记录现算已知项目集合、逐项目挂两阶段配置 watch、每 60s 同步一次，见 [mcp](./core/mcp.md)）、`project-mcp-watch.ts`（项目层 mcp.json 的两阶段文件监视，与 mcp-projects 配套）、`history-search.ts`（history_search 工具与 `/search` 路由共用的检索实现：索引召回 + 标题解析 + 回收站过滤）、`session-fork.ts`（会话 fork 宿主：空闲判定、调 core 原语复制历史、新会话标题与 meta，见 [storage](./core/storage.md)）、`chore-usage.ts`（后台 LLM 调用花费的用量记录）、`feishu/`（飞书频道：频道逻辑 + 传输接入口 + 飞书 SDK 的薄封装，见 [feishu-channel](./server/feishu-channel.md)）、`routes/`（sessions/changes/attachments/cron/config/providers/fs/usage/memory/skills/hooks/permissions/mcp/channel/search 十五组路由）。
+**server**（入口 `packages/server/src/index.ts`）：`app.ts`（createApp 组装）、`daemon.ts`（launchDaemon）、`auth.ts`（token 鉴权）、`run.ts`（RunManager 队列状态机；单次 run 的组装在 core 的 `executeRun`）、`subagent.ts`（subagent 派生：子会话创建、状态行与确认转发，见 [subagents](./core/subagents.md)）、`team.ts`（团队宿主：身份反查、收信箱投递、自动派活、面板，见 [agent-team](./core/agent-team.md)）、`goal-loop.ts`（/goal 目标循环主机：空闲边缘驱动、验收命令、判定器与续轮，见 [goal](./core/goal.md)）、`command-check.ts`（WS 命令帧的唯一校验点）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`（定时调度 tick）、`memory-scheduler.ts`（记忆的定时/跟随保底调度）、`skill-scheduler.ts`（技能进化的跟随检查处理方，见 [skills](./core/skills.md)）、`skill-curator.ts`（技能 curator 的每日闲时扫描宿主：陈旧标记与归档，见 [skills](./core/skills.md)）、`session-retention.ts`（spill 目录保留期清理宿主：每小时按文件 mtime 删除存放超过 `sessions.spillRetentionDays` 天的文件，默认 0 = 不清理，见 [storage](./core/storage.md)）、`host-kit.ts`（常驻宿主共享组件：定时宿主的"立即首扫 + interval + 进行中任务记录 + 停机等待"，与两调度器共用的空闲判定 `followGateDue`、skill curator 与记忆夜间沉淀共用的每日一次判定 `dailyGateDue`；goal 循环等无定时器宿主只用其中的进行中记录）、`mcp-projects.ts`（项目发现：从会话记录现算已知项目集合、逐项目注册两阶段配置 watch、每 60s 同步一次，见 [mcp](./core/mcp.md)）、`project-mcp-watch.ts`（项目层 mcp.json 的两阶段文件监视，与 mcp-projects 配套）、`history-search.ts`（history_search 工具与 `/search` 路由共用的检索实现：索引召回 + 标题解析 + 回收站过滤）、`session-fork.ts`（会话 fork 宿主：空闲判定、调 core 原语复制历史、新会话标题与 meta，见 [storage](./core/storage.md)）、`chore-usage.ts`（后台 LLM 调用花费的用量记录）、`feishu/`（飞书频道：频道逻辑 + 传输接入口 + 飞书 SDK 的薄封装，见 [feishu-channel](./server/feishu-channel.md)）、`routes/`（sessions/changes/attachments/cron/config/providers/fs/usage/memory/skills/hooks/permissions/mcp/channel/search 十五组路由）。
 
 **cli**（入口 `packages/cli/src/index.ts`）：commander 命令树（默认进 chat）；`chat.ts`（REPL 交互循环、渲染、@引用展开）、`client.ts`（KclawClient）、`daemon-ctl.ts`（daemon 检测/启动/停止）、`slash.ts`（slash 命令实现）、`file-refs.ts`（@文件引用）、`wizard.ts`（首次配置 wizard）、`provider-check.ts`（模型配置来源判定：config/env/missing 三态，决定是否进入 wizard）、`web-cmd.ts`（`kclaw web` 子命令）。
 
@@ -90,7 +90,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
       └─────────────┘          └─────────────┘
 ```
 
-**客户端如何把 daemon 拉起来。** 任何客户端命令都先经 `KclawClient.connect()` → `ensureDaemon()`（`packages/cli/src/daemon-ctl.ts`），按检测结果分三种情况处理：
+**客户端如何启动 daemon。** 任何客户端命令都先经 `KclawClient.connect()` → `ensureDaemon()`（`packages/cli/src/daemon-ctl.ts`），按检测结果分三种情况处理：
 
 - `daemon.json` 记录健康 → 直接使用。
 - 文件还在、`/health` 不通且进程号对应的进程已死（系统返回 ESRCH）→ 判定记录失效，重新分叉启动一个 daemon（detached、stdio ignore、unref，目标脚本由 `resolveServerBin()` 解析到 `packages/server/bin/kclaw-server.mjs`），然后轮询等它健康（总 budget 5 秒、间隔 250 毫秒、单次检测超时 1 秒）。
@@ -144,7 +144,7 @@ run 的组装在 core 的 `executeRun`（`packages/core/src/agent/run-assembly.t
 
 - 每条消息：`deps.onMessage` → `SessionStore.appendMessage` → events.jsonl 追加一条 message 事件，并汇入 meta.json 投影。
 - 每个事件：`deps.onEvent` → `bus.emit` → JSON 序列化 → 只发给订阅了该会话的 socket（`packages/core/src/bus.ts`）。
-- run 结束时（run-after hook 链）：往 usage.db 记一行用量（失败只写日志，不影响 run）；`memory.write.idleMinutes>0` 时挂一个跟随触发的记忆检查（记忆由 memory_save 工具与定时/跟随调度器写入，见 [memory](./core/memory.md)）；`skills.evolution.enabled` 时对卷入技能的 run 挂一个技能提炼的空闲检查（提案制，见 [skills](./core/skills.md)）；上下文占用到达黄线（budget 的 80%）时执行一次收尾压缩，压缩失败则本次 run 以失败收场；只有用户消息触发（trigger 为 user）的 run 才做自动命名，成功后改名并广播 session.renamed。
+- run 结束时（run-after hook 链）：往 usage.db 记一行用量（失败只写日志，不影响 run）；`memory.write.idleMinutes>0` 时排一个跟随触发的记忆检查（记忆由 memory_save 工具与定时/跟随调度器写入，见 [memory](./core/memory.md)）；`skills.evolution.enabled` 时对卷入技能的 run 排一个技能提炼的空闲检查（提案制，见 [skills](./core/skills.md)）；上下文占用到达黄线（budget 的 80%）时执行一次收尾压缩，压缩失败则本次 run 以失败收场；只有用户消息触发（trigger 为 user）的 run 才做自动命名，成功后改名并广播 session.renamed。
 - 客户端渲染（CLI 写 stdout；WebUI 更新 React 状态），最后 run.completed 终态。
 
 两条不变量贯穿全链：
@@ -201,7 +201,7 @@ sequenceDiagram
 
 ## 边界与出错
 
-**daemon 崩溃。** JSONL 文件兼容尾部残缺行（进程死在写入中途、只写了一半的行：`repairTornTail`/`readJsonl`，`packages/core/src/storage/jsonl.ts`）。崩溃时进行中的定时任务触发，其下一次执行时间（`next_run_at`）已在认领（`claimDue`）时推进——被杀死的这一次不会重放，任务在下个调度点照常触发。「认领即把下次执行时间推进到 now 之后」的语义保证了不会重放积压。
+**daemon 崩溃。** JSONL 文件兼容尾部残缺行（进程死在写入中途、只写了一半的行：`repairTornTail`/`readJsonl`，`packages/core/src/storage/jsonl.ts`）。崩溃时进行中的定时任务触发，其下一次执行时间（`next_run_at`）已在认领（`claimDue`）时推进——被终止的这一次不会重放，任务在下个调度点照常触发。「认领即把下次执行时间推进到 now 之后」的语义保证了不会重放积压。
 
 **模型服务彻底失败。** `runAgent` 不抛异常——已产出的部分内容以 `stopReason:"error"` 持久化，随后 `llm.failed {willRetry:false}` 与 `run.failed` 收尾。瞬时错误由 provider 层的 `withRetry`（3 次尝试）内部消化，外部只能看到 `llm.failed {willRetry:true}` 事件。
 

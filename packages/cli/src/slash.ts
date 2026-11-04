@@ -423,7 +423,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
       try {
         await ctx.client.request("POST", `/sessions/${encodeURIComponent(ctx.sessionId)}/disposition`, { disposition: "steer" })
       } catch (e) {
-        // 防护（/compact 先例）：daemon 短暂不可达不让一次命令杀死 REPL；
+        // 防护（/compact 先例）：daemon 短暂不可达不让一次命令终止 REPL；
         // 失败时不切本地模式（setDisposition 不可达），回车直发维持旧处置。
         ctx.print(`切换处置失败: ${e instanceof Error ? e.message : String(e)}`)
         return

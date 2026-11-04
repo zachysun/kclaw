@@ -577,7 +577,7 @@ describe("queue reducer", () => {
 
   it("mergeQueue drops an unconfirmed local row (resync is authoritative)", () => {
     // 重连快照整体替换：本地未确认行被服务端真相取代——消息送达则服务端行
-    // 重现（服务器 id），没送达则行消失（用户需重发），无幽灵行。
+    // 重现（服务器 id），没送达则行消失（用户需重发），不残留无对应消息的行。
     let s = appendPendingQueueRow(base(), "断线前发送", "wait")
     s = mergeQueue(s, [{ messageId: "srv_1", disposition: "wait", text: "断线前发送" }])
     expect(s.queue).toEqual([{ messageId: "srv_1", disposition: "wait", text: "断线前发送" }])

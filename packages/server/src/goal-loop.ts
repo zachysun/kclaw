@@ -1,8 +1,8 @@
 /**
- * /goal 循环调用方（issue #47）：daemon 侧的驱动主机。挂在 RunManager
+ * /goal 循环调用方（issue #47）：daemon 侧的驱动主机。挂载在 RunManager
  * 的空闲边缘（onSessionIdle，与 team host 同一接入口）——每次队列排空时
- * 对设有 active 目标且 armed 的会话做一轮检查：跑验收命令（沙箱）→ 调
- * 判定器（独立 LLM）→ 按裁决续跑或停止。
+ * 对设有 active 目标且 armed 的会话做一轮检查：执行验收命令（沙箱）→ 调
+ * 判定器（独立 LLM）→ 按裁决继续运行或停止。
  *
  * 计数全部从事件流派生（events.jsonl 是权威数据）：totalRounds/tokensUsed
  * 从 goal.set(create) 起算；连续轮数在 user 触发的 run 处断开；无进展/
@@ -46,7 +46,7 @@ interface GoalRuntime {
   armed: boolean
   judging: boolean
   windDownPending: boolean
-  /** 最近一次入队的 goal 轮 messageId（clear 时撤销还没跑的排队轮）。 */
+  /** 最近一次入队的 goal 轮 messageId（clear 时撤销还没执行的排队轮）。 */
   lastEnqueuedMessageId?: string
 }
 
@@ -127,7 +127,7 @@ export class GoalLoopHost {
 
   /**
    * 设定或改写目标。create = armed + 立即发第一轮（会话忙则按 wait 排
-   * 队）；edit 总是重新起跑（改了目标文本还停在 paused 没有道理）——
+   * 队）；edit 总是重新开始运行（改了目标文本还停在 paused 没有道理）——
    * 状态回 active、停止相关字段清空、判定摘要清空，计数沿旧 epoch 继续。
    * 带验收命令时要求沙箱可用（验收命令将免审自动执行，不可沙箱化就不
    * 接受——fail-closed）。
@@ -183,7 +183,7 @@ export class GoalLoopHost {
     return next
   }
 
-  /** 恢复：armed 并立刻检查（空闲则马上续跑；忙则等空闲边缘）。 */
+  /** 恢复：armed 并立刻检查（空闲则马上继续运行；忙则等空闲边缘）。 */
   resume(sessionId: string): GoalSnapshot {
     const goal = this.snapshot(sessionId)
     if (goal === undefined) throw new Error("本会话没有目标")
@@ -278,9 +278,9 @@ export class GoalLoopHost {
   }
 
   /**
-   * 一轮检查（副作用编排；九条停止条件与续跑决策的芯在 core/goal 的
+   * 一轮检查（副作用编排；九条停止条件与续轮决策的芯在 core/goal 的
    * check.ts）：派生计数 → 验收前守卫 → 验收命令 → 判定器 → 决策执行
-   * （终态/停止/收尾轮/续跑入队）。互斥由 rt.judging 保证；判定器 await
+   * （终态/停止/收尾轮/续轮入队）。互斥由 rt.judging 保证；判定器 await
    * 之后重新校验 armed 与快照状态（用户可能在等待期间 stop/pause/clear
    * ——审计照留，状态机只在仍 active 时推进）。
    */
@@ -406,7 +406,7 @@ export class GoalLoopHost {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       this.#log(`enqueue round ${round} for ${sessionId} failed: ${message}`)
-      this.#persistStop(sessionId, this.#derive(sessionId), undefined, `自动续跑入队失败：${message}`)
+      this.#persistStop(sessionId, this.#derive(sessionId), undefined, `自动续轮入队失败：${message}`)
     }
   }
 

@@ -41,7 +41,7 @@ export function sweepSpillDir(spillDir: string, ttlMs: number, now = Date.now())
 export function startSpillRetention(opts: { spillDir: string; retentionDays: number; intervalMs?: number }) {
   const ttlMs = opts.retentionDays * 24 * 60 * 60 * 1000
   if (ttlMs <= 0) {
-    // 保留 0 天 = 关闭：仍建目录（spill 写入路径免 mkdir 竞争），但不挂定时器
+    // 保留 0 天 = 关闭：仍建目录（spill 写入路径免 mkdir 竞争），但不建定时器
     try { mkdirSync(opts.spillDir, { recursive: true }) } catch { /* best-effort */ }
     return { stop: async () => {} }
   }

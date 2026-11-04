@@ -8,7 +8,7 @@
 import type { Usage } from "../protocol/messages.js"
 
 /**
- * 目标状态机。active = 调用方会在空闲边缘自续跑；paused = 用户暂停或
+ * 目标状态机。active = 调用方会在空闲边缘自续轮；paused = 用户暂停或
  * 守卫暂停（等待用户介入后 resume）；blocked = 等一次人工裁决（确认
  * 超时累计）后由用户恢复；complete = 终态（达成/不可能/任一上限），
  * 只剩 clear。paused 与 blocked 的区别只在暂停原因的语义呈现，恢复
@@ -43,7 +43,7 @@ export type GoalStopReason =
   | "run-error"
   | "user-stop"
 
-/** 判定器三值裁决。not_met = 继续跑；met/impossible = 终态。 */
+/** 判定器三值裁决。not_met = 继续运行；met/impossible = 终态。 */
 export type GoalVerdict = "not_met" | "met" | "impossible"
 
 /**
@@ -71,7 +71,7 @@ export interface GoalSnapshot {
   lastJudgeAt?: string
   lastJudgeVerdict?: GoalVerdict
   lastJudgeReason?: string
-  /** 判定器要求的进展一句话（下一次续跑提示词带它）。 */
+  /** 判定器要求的进展一句话（下一次续轮提示词带它）。 */
   lastJudgeProgress?: string
 }
 

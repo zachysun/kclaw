@@ -315,7 +315,7 @@ describe("feishu channel", () => {
     expect((final.card as Extract<OutboundCard, { kind: "complete" }>).markdown).toContain("WebUI")
     expect(env.transport.finishes).toHaveLength(0)
 
-    // 收尾：放行挂着的 run（结果不再镜像），让会话落回空闲
+    // 收尾：放行等待中的 run（结果不再镜像），让会话落回空闲
     gate.open!()
     await until(() => !readNonChildBusy(env), "run settled")
   })
@@ -429,7 +429,7 @@ describe("feishu channel", () => {
   it("delivers permission confirmations as approval cards and resolves them", async () => {
     llmQueue.push(execTurn("c1", "echo hi"), textTurn("批准后继续"))
     env = await makeScriptedEnv()
-    env.transport.inbound("ou_master", "跑个命令")
+    env.transport.inbound("ou_master", "执行个命令")
 
     await until(() => env.transport.cards.some((c) => c.card.kind === "approval"), "approval card")
     const approval = env.transport.cards.find((c) => c.card.kind === "approval")!
@@ -446,7 +446,7 @@ describe("feishu channel", () => {
   it("rejecting the approval card rejects the tool call", async () => {
     llmQueue.push(execTurn("c1", "echo hi"), textTurn("拒绝后继续"))
     env = await makeScriptedEnv()
-    env.transport.inbound("ou_master", "跑个命令")
+    env.transport.inbound("ou_master", "执行个命令")
     await until(() => env.transport.cards.some((c) => c.card.kind === "approval"), "approval card")
     const approval = env.transport.cards.find((c) => c.card.kind === "approval")!
       .card as Extract<OutboundCard, { kind: "approval" }>
@@ -461,7 +461,7 @@ describe("feishu channel", () => {
   it("marks the card invalid when the confirmation settled elsewhere first", async () => {
     llmQueue.push(execTurn("c1", "echo hi"), textTurn("继续"))
     env = await makeScriptedEnv()
-    env.transport.inbound("ou_master", "跑个命令")
+    env.transport.inbound("ou_master", "执行个命令")
     await until(() => env.transport.cards.some((c) => c.card.kind === "approval"), "approval card")
     const approval = env.transport.cards.find((c) => c.card.kind === "approval")!
       .card as Extract<OutboundCard, { kind: "approval" }>
@@ -478,7 +478,7 @@ describe("feishu channel", () => {
   it("approval cards survive a hot restart: the click still resolves", async () => {
     llmQueue.push(execTurn("c1", "echo hi"), textTurn("批准后继续"))
     env = await makeScriptedEnv()
-    env.transport.inbound("ou_master", "跑个命令")
+    env.transport.inbound("ou_master", "执行个命令")
     await until(() => env.transport.cards.some((c) => c.card.kind === "approval"), "approval card")
     const approval = env.transport.cards.find((c) => c.card.kind === "approval")!
       .card as Extract<OutboundCard, { kind: "approval" }>
@@ -509,7 +509,7 @@ describe("feishu channel", () => {
   it("an approval click after the confirmation settled while the channel was down marks the card invalid", async () => {
     llmQueue.push(execTurn("c1", "echo hi"), textTurn("继续"))
     env = await makeScriptedEnv()
-    env.transport.inbound("ou_master", "跑个命令")
+    env.transport.inbound("ou_master", "执行个命令")
     await until(() => env.transport.cards.some((c) => c.card.kind === "approval"), "approval card")
     const approval = env.transport.cards.find((c) => c.card.kind === "approval")!
       .card as Extract<OutboundCard, { kind: "approval" }>
@@ -536,7 +536,7 @@ describe("feishu channel", () => {
   it("ignores card actions from non-allowlisted senders", async () => {
     llmQueue.push(execTurn("c1", "echo hi"), textTurn("继续"))
     env = await makeScriptedEnv()
-    env.transport.inbound("ou_master", "跑个命令")
+    env.transport.inbound("ou_master", "执行个命令")
     await until(() => env.transport.cards.some((c) => c.card.kind === "approval"), "approval card")
     const before = env.transport.cardUpdates.length
 

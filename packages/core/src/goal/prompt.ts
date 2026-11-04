@@ -1,6 +1,6 @@
 /**
  * /goal 的三组提示词（issue #47）：判定器（独立 LLM，严格 JSON 三值
- * 裁决）、续跑注入（下一轮 goal 触发 run 的用户文本）、收尾注入（token
+ * 裁决）、续轮注入（下一轮 goal 触发 run 的用户文本）、收尾注入（token
  * budget耗尽后的最后一轮）。纯函数、无 Node API——浏览器构建可引用。
  * 注入文本沿用仓库的 XML 标签约定（<goal-continue>/<goal-wrapup>，同
  * <compacted-summary> 先例），闭合标签逃逸在拼装处处理。
@@ -98,7 +98,7 @@ export function firstRoundUserText(goal: GoalSnapshot): string {
 }
 
 /**
- * 续跑注入：not_met 后下一轮的用户文本。带判定器意见与（若刚跑过）
+ * 续轮注入：not_met 后下一轮的用户文本。带判定器意见与（若刚执行过）
  * 验收输出，让下一轮有明确的修正方向。
  */
 export function continuationUserText(
@@ -123,7 +123,7 @@ export function continuationUserText(
   )
 }
 
-/** 验收失败短路续跑：判定器没跑，方向就是让模型直面失败的验收输出。 */
+/** 验收失败短路续轮：判定器未执行，方向就是让模型直面失败的验收输出。 */
 export function gateFailureUserText(goal: GoalSnapshot, gates: GoalGateOutcome[], failedRounds: number): string {
   return escapeClosingTags(
     [
@@ -138,7 +138,7 @@ export function gateFailureUserText(goal: GoalSnapshot, gates: GoalGateOutcome[]
 }
 
 /**
- * 判定器不可用时的续跑（fail-open）：解析/传输失败未熔断，循环继续但
+ * 判定器不可用时的续轮（fail-open）：解析/传输失败未熔断，循环继续但
  * 本轮没有判定意见——明确告知模型自查验收，不要等外部裁决。
  */
 export function judgeUnavailableUserText(goal: GoalSnapshot, errorKind: "parse" | "transport", attempt: number): string {
@@ -168,5 +168,5 @@ export function windDownUserText(goal: GoalSnapshot): string {
 
 /** goal 触发 run 的出处 note（NoteBlock kind:"goal" 的文本）。 */
 export function goalLoopNote(round: number): string {
-  return `本会话设有进行中的目标（第 ${round} 轮自动续跑）。你的中间消息会注入当前运行；停止目标请用 /goal stop。`
+  return `本会话设有进行中的目标（第 ${round} 轮自动继续运行）。你的中间消息会注入当前运行；停止目标请用 /goal stop。`
 }

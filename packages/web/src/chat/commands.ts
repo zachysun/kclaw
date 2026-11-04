@@ -140,7 +140,7 @@ export async function runWebCommand(parsed: ParsedSlash, ctx: WebCommandCtx): Pr
         const list = rows
           .map((r) => `${r.name}（${r.origin === "project" ? "项目" : "全局"}${r.plugin !== undefined ? ` · 来自插件 ${r.plugin}` : ""}${r.visibility === "user-only" ? " · 仅用户" : ""}）`)
           .join("、")
-        ctx.notify(`已装技能：${list}。使用方式：在对话里直接说，例如「跑一下 ${rows[0]!.name}」，模型会加载该技能再执行；正文看顶部「技能」页`)
+        ctx.notify(`已装技能：${list}。使用方式：在对话里直接说，例如「运行一下 ${rows[0]!.name}」，模型会加载该技能再执行；正文看顶部「技能」页`)
       } catch (err) {
         ctx.notify(`查看技能失败: ${err instanceof Error ? err.message : String(err)}`)
       }

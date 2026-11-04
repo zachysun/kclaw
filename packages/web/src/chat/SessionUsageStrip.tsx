@@ -1,5 +1,5 @@
 /**
- * SessionUsageStrip — 一行灰色小字，挂在对话页输入框下方：当前会话累计
+ * SessionUsageStrip — 一行灰色小字，位于对话页输入框下方：当前会话累计
  * 输入/输出 token 与提示词缓存命中率。数据来自 `GET /usage?by=session`
  * （usage 表在 run 收尾时已写好缓存字段），父组件在每次 run 收尾时递增
  * `refreshKey` 驱动刷新。定位是"仪表"不是"记录"：缓存读/写明细只在用量

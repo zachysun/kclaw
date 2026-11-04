@@ -279,7 +279,7 @@ export class RunManager {
       ...(input.uiAction !== undefined ? { uiAction: input.uiAction } : {}),
       enqueuedAt: new Date().toISOString(),
     }
-    // 空闲 = 无活动 run、无可执行条目、无驱动器 → 直发开跑（不广播 message.queued）
+    // 空闲 = 无活动 run、无可执行条目、无驱动器 → 直发直接运行（不广播 message.queued）
     const idle = !this.#active.has(sessionId) && queue.length === 0 && !this.#drivers.has(sessionId)
     if (idle) {
       const node = makeNode(entry)
@@ -424,7 +424,7 @@ export class RunManager {
    * 有界等待会话的活动 run 落定。cancel 只是协作式信号：run 从收到
    * abort 到持久化完部分内容、写 run.ended 还要经过若干异步步骤；删除/
    * 清库路由必须等这一步走完再动会话目录——否则收尾追加会在目录删除后
-   * 经 appendEvent 的 mkdirSync 复活它（purge 特有的幽灵会话）。
+   * 经 appendEvent 的 mkdirSync 复活它（purge 特有的无来源残留会话）。
    * 返回 true = 已落定（或本就没有活动 run）；false = 超时，调用方自行
    * 决定是否继续。落定的执行正常不会 reject，防御性按已落定处理。
    */
@@ -704,7 +704,7 @@ export class RunManager {
     const controller = new AbortController()
     this.#active.set(sessionId, controller)
     const entry = node.entry
-    // 用户 run 真正开跑 = 真实用户输入到达模型：防自循环计数在此清零
+    // 用户 run 真正开始运行 = 真实用户输入到达模型：防自循环计数在此清零
     // （#44 原型定案——清零不能发生在提交时，排在其后的机器条目会借它
     // 提前解锁，两次用户发言之间的唤醒上限就失守了）。goal 自续轮同样
     // 清零：目标循环本身有九条独立停止条件（goal-loop.ts），不需要也不
@@ -766,7 +766,7 @@ export class RunManager {
     this.#steerBuf.set(sessionId, [])
     this.#persistQueue(sessionId) // 从 queue.jsonl 移除这些条目
     for (const e of buf) this.#markInjected(e.messageId)
-    // 注入 = 用户插话真正进入对话：与用户 run 开跑同为计数清零点（#44）。
+    // 注入 = 用户插话真正进入对话：与用户 run 开始运行同为计数清零点（#44）。
     this.#wakeBudgets.delete(sessionId)
     return msgs
   }

@@ -72,7 +72,7 @@ function spawnTurn(callId: string, task: string, label?: string): LlmStreamEvent
  *  heuristic died with tiered disclosure — the parent's directory section
  *  legitimately mentions subagent_run now, and both sides carry tool_search. */
 function isChild(req: LlmRequest): boolean {
-  return req.system.includes("由主对话派出的短命执行单元")
+  return req.system.includes("由主对话派出的一次性执行单元")
 }
 
 function spawnBackgroundTurn(callId: string, task: string, label?: string): LlmStreamEvent[] {
@@ -311,7 +311,7 @@ describe("subagent dispatch (integration)", () => {
   it("forwards child confirmations to the parent channel, labeled, and they resolve via the broker", async () => {
     const requests: LlmRequest[] = []
     const inner = scriptClient([
-      spawnTurn("call_1", "跑个命令", "runner"),
+      spawnTurn("call_1", "执行个命令", "runner"),
       execTurn("call_c", "echo hi"),
       textTurn("命令完成"),
       textTurn("收到"),
@@ -327,7 +327,7 @@ describe("subagent dispatch (integration)", () => {
     const parentSocket = new FakeSocket()
     bus.subscribe(parent.id, parentSocket)
 
-    const runDone = manager.enqueue(parent.id, { userText: "派subagent跑命令", trigger: "user" })
+    const runDone = manager.enqueue(parent.id, { userText: "派subagent执行命令", trigger: "user" })
 
     // The forwarded card lands on the PARENT channel, labeled with the label.
     const deadline = Date.now() + 5_000
@@ -355,14 +355,14 @@ describe("subagent dispatch (integration)", () => {
 
   it("attributes the child's tokens to the parent session in the usage ledger", async () => {
     const llm = scriptClient([
-      spawnTurn("call_1", "干点活"),
-      textTurn("干完了"),
+      spawnTurn("call_1", "做点事"),
+      textTurn("做完了"),
       textTurn("好的"),
     ])
     const { sessions, manager, usage } = makeEnv(llm)
     const parent = sessions.create("主线")
 
-    await manager.enqueue(parent.id, { userText: "去干活", trigger: "user" })
+    await manager.enqueue(parent.id, { userText: "去执行任务", trigger: "user" })
 
     const bySession = usage.aggregate("session", {})
     const child = sessions.listByParent(parent.id)[0]!
@@ -376,7 +376,7 @@ describe("subagent dispatch (integration)", () => {
     // Parent turn 0 spawns; the child then hangs mid-stream; the parent's
     // abort must cancel the child and settle the whole tree.
     const parentScript = scriptClient([
-      spawnTurn("call_1", "慢慢干"),
+      spawnTurn("call_1", "慢慢做"),
       textTurn("never reached"),
     ])
     const requests: LlmRequest[] = []
@@ -541,7 +541,7 @@ describe("subagent background mode", () => {
     // serves the delivery run: the report arrives as a new user turn (#44).
     const parentScript = [
       spawnBackgroundTurn("call_1", "慢慢调研", "crawler"),
-      textTurn("已派出，先干别的"),
+      textTurn("已派出，先做别的"),
       textTurn("收到报告，结论正常"),
     ]
     const childScript = [textTurn("调研结论：一切正常")]
@@ -621,7 +621,7 @@ describe("subagent background mode", () => {
 
   it("collect returns a not-yet answer while the child is still producing", async () => {
     const parentScript = [
-      spawnBackgroundTurn("call_1", "慢慢跑", "slow"),
+      spawnBackgroundTurn("call_1", "慢慢执行", "slow"),
       textTurn("好"),
     ]
     const childScript = [textTurn("终于完成")]
@@ -653,7 +653,7 @@ describe("subagent background mode", () => {
 
   it("cancelBackgroundForParent stops live background children when the parent dies; a settled child notifies '未正常完成'", async () => {
     const parentScript = [
-      spawnBackgroundTurn("call_1", "永跑任务", "zombie"),
+      spawnBackgroundTurn("call_1", "永不结束任务", "zombie"),
       textTurn("派出去了"),
     ]
     let parentCalls = 0
@@ -668,7 +668,7 @@ describe("subagent background mode", () => {
     const { sessions, manager, host } = makeEnv(llm)
     const parent = sessions.create("主线")
 
-    const outcome = await manager.enqueue(parent.id, { userText: "后台永跑", trigger: "user" })
+    const outcome = await manager.enqueue(parent.id, { userText: "后台永不结束", trigger: "user" })
     expect(outcome.stopReason).toBe("end_turn")
 
     // Wait for the background child's run to actually start, then cancel it
@@ -689,11 +689,11 @@ describe("subagent background mode", () => {
   }, 20_000)
 
   it("前台subagent完成不清掉后台记录：两种模式各记各的账", async () => {
-    // 同一父会话先后派一个后台subagent（永跑）和一个前台subagent（立刻完成）。
+    // 同一父会话先后派一个后台subagent（永不结束）和一个前台subagent（立刻完成）。
     // 前台的收尾绝不能影响后台的记录——级联取消必须仍能找到后台孩子。
     // （曾经双份按父分组的记录让收尾误删对方的记录，级联取消扑空。）
     const parentScript = [
-      spawnBackgroundTurn("call_1", "永跑任务", "bg"),
+      spawnBackgroundTurn("call_1", "永不结束任务", "bg"),
       spawnTurn("call_2", "快速任务"),
       textTurn("都派出去了"),
     ]
@@ -702,10 +702,10 @@ describe("subagent background mode", () => {
     const llm: LlmClient = {
       async *stream(req) {
         // subagent的精简提示词里没有任务文本以外的区分——借首条 user 消息里的
-        // 任务名分流：前台孩子立刻完成，后台孩子永跑（只有级联取消能终结）。
+        // 任务名分流：前台孩子立刻完成，后台孩子永不结束（只有级联取消能终结）。
         if (isChild(req)) {
           childCalls++
-          if (JSON.stringify(req.messages).includes("快速任务")) yield* [textTurn("干完了")]
+          if (JSON.stringify(req.messages).includes("快速任务")) yield* [textTurn("做完了")]
           else await new Promise<never>(() => {})
           return
         }
@@ -884,7 +884,7 @@ describe("subagent background card forwarding", () => {
     // confirmation. In background mode the card must STILL reach the parent
     // channel (status lines are muted; cards are not).
     const parentScript = [
-      spawnBackgroundTurn("call_1", "跑个命令", "bg-runner"),
+      spawnBackgroundTurn("call_1", "执行个命令", "bg-runner"),
       textTurn("派出去了"),
     ]
     const childScript = [execTurn("call_c", "echo hi"), textTurn("命令完成")]
@@ -901,7 +901,7 @@ describe("subagent background card forwarding", () => {
     const socket = new FakeSocket()
     bus.subscribe(parent.id, socket)
 
-    const outcome = await manager.enqueue(parent.id, { userText: "后台跑命令", trigger: "user" })
+    const outcome = await manager.enqueue(parent.id, { userText: "后台执行命令", trigger: "user" })
     expect(outcome.stopReason).toBe("end_turn") // the parent is NOT blocked by the child
 
     // The card lands on the parent channel, labeled with the background child.

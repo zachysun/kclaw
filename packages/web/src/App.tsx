@@ -105,7 +105,7 @@ function TokenForm({ authExpired = false }: { authExpired?: boolean }) {
     <div className="token-gate">
       <h1>kclaw</h1>
       <p className="muted">
-        本实例由 daemon 的 token（bearer token）保护。在终端跑 <code>kclaw web</code>
+        本实例由 daemon 的 token（bearer token）保护。在终端运行 <code>kclaw web</code>
         可直接登录；token 存放在 <code>~/.kclaw/token</code>。
       </p>
       {authExpired && (
@@ -416,7 +416,7 @@ function MainShell({
   )
 
   // Session fork 完成（ChatPanel POST 成功后上抛）：新会话进侧栏并选中，
-  // 全局 toast 带"返回原会话"动作——fork 的动机就是去新线干点什么，跳过去
+  // 全局 toast 带"返回原会话"动作——fork 的动机就是去新线做点什么，跳过去
   // 省一次点击，回来靠这个动作。
   const handleForked = useCallback(
     (meta: SessionMeta) => {

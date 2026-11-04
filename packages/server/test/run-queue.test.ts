@@ -131,8 +131,8 @@ describe("submit / driver", () => {
 
   it("interrupt aborts the active run and jumps the queue head", async () => {
     const meta = sessions.create("t", undefined, "/w")
-    // endTurnLlm 在微任务级跑完，10ms 内 first 早已结束——按用例前提
-    // "first 已在跑"，这里换用门控客户端把 first 挂在第一次调用上。
+    // endTurnLlm 在微任务级执行完毕，10ms 内 first 早已结束——按用例前提
+    // "first 已在执行"，这里换用门控客户端把 first 阻塞在第一次调用上。
     let release!: () => void
     const gate = new Promise<void>((r) => { release = r })
     let calls = 0
@@ -141,7 +141,7 @@ describe("submit / driver", () => {
       memory: { search: async () => [] } as never, bus,
       llm: {
         async *stream(): AsyncIterable<LlmStreamEvent> {
-          if (++calls === 1) await gate // first 挂在门上，直到被中断
+          if (++calls === 1) await gate // first 阻塞在门上，直到被中断
           yield { type: "text_delta", delta: "ok" }
           yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
         },
@@ -149,7 +149,7 @@ describe("submit / driver", () => {
       workspace: "/w",
     })
     const first = manager.submit(meta.id, { userText: "first", trigger: "user" })
-    await new Promise((r) => setTimeout(r, 10)) // first 已在跑
+    await new Promise((r) => setTimeout(r, 10)) // first 已在执行
     const w = manager.submit(meta.id, { userText: "waiter", trigger: "user", disposition: "wait" })
     const it = manager.submit(meta.id, { userText: "cutter", trigger: "user", disposition: "interrupt" })
     expect(it.disposition).toBe("interrupt")
@@ -462,8 +462,8 @@ describe("steer", () => {
     } })
     const run = mgr.submit(meta.id, { userText: "start", trigger: "user" })
     await gate.toolEntered
-    gate.releaseTool() // 边界 drain 空跑（此刻缓冲为空），final stream 停在 releaseLlm 门上
-    await secondStarted // llm.started #2 与 stream 挂门之间无 await：此后提交必落在门后
+    gate.releaseTool() // 边界 drain 空执行一轮（此刻缓冲为空），final stream 停在 releaseLlm 门上
+    await secondStarted // llm.started #2 与 stream 停门之间无 await：此后提交必落在门后
     const s1 = mgr.submit(meta.id, { userText: "s1", trigger: "user", disposition: "steer" })
     const s2 = mgr.submit(meta.id, { userText: "s2", trigger: "user", disposition: "steer" })
     // run 在 abort 处结束、从未取走缓冲：结算后 #demoteSteer 是 s1/s2 的唯一执行
@@ -564,7 +564,7 @@ describe("compactSession refusal", () => {
     })
     mgr.cancel(meta.id)
     gate.releaseTool()
-    await run.outcome // 不留仍在跑的 run（afterEach rmSync 竞争）
+    await run.outcome // 不留仍在执行的 run（afterEach rmSync 竞争）
   })
 
   it("refuses with the queued-count message when only the queue is non-empty", async () => {

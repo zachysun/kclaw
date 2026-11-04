@@ -120,8 +120,8 @@ export function registerMemoryRoutes(app: FastifyInstance, opts: { memory?: Memo
       typeof body === "object" && body !== null && typeof body.workdir === "string" && body.workdir !== ""
         ? body.workdir
         : undefined
-    // 可选归属会话：触发方（CLI/Web）可指定本次手动写入挂到哪个会话；
-    // 默认回退由 core #recentSessionId 决定。trim 后为空视为默认（纯空白不会生成幻影会话）。
+    // 可选归属会话：触发方（CLI/Web）可指定本次手动写入归属哪个会话；
+    // 默认回退由 core #recentSessionId 决定。trim 后为空视为默认（纯空白不会生成无来源的会话）。
     const sessionId =
       typeof body === "object" && body !== null && typeof body.sessionId === "string" && body.sessionId.trim() !== ""
         ? body.sessionId.trim()

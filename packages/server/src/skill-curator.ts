@@ -1,9 +1,9 @@
 /**
  * 技能 curator 调度器：每日一次的闲时扫描宿主。
  *
- * 本地时间过了 skills.curator.hour（默认凌晨 4 点）且今天未跑过则执行
+ * 本地时间过了 skills.curator.hour（默认凌晨 4 点）且今天未运行过则执行
  * curateGlobalSkills（stale 标记 + 归档移动，只动 AI 自建技能）；daemon
- * 凌晨未开时开机后首个 sweep 补跑。上次运行日期存
+ * 凌晨未开时开机后首个 sweep 补做一次。上次运行日期存
  * <skillsDir>/.curator/lastRun（本地日期判重，与 memory-scheduler 同口径）。
  * 定时器骨架（首扫 + interval + 进行中记录 + 停机等待）在 host-kit。
  */

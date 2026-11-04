@@ -4,7 +4,7 @@
 
 `MemorySystem`（`packages/core/src/memory/system.ts`）是记忆系统的唯一服务端入口（单类不拆；30 个公共方法按四类使用方拆成四个窄接口 `MemoryQuery`/`MemoryTriggers`/`MemoryScheduleBook`/`MemoryAdmin`——共 29 个，另有接口外的 `stop()`，调用方按需依赖其中一个面），它把三类文件级能力组装在一起：**L1 项目情节**（按项目分目录的主题线文件）、**L2 全局认知**（跨项目的画像/知识/规则文件）、以及两套**派生检索索引**（SQLite FTS5 全文索引 + 可选的向量索引）。一条记忆就是一份 markdown 文件，用户可以直接打开查看、修改、删除；索引永远只是派生物，删掉可以重建。
 
-模型通过 `memory_save` / `memory_search` 两个工具读写（`packages/core/src/tools/memory.ts`）；run 组装（core `executeRun`）在每次 run 时做两级注入——L2 认知常驻系统提示、L1 情节作为 note 挂到用户消息上（见下文"检索与注入"）。daemon 的 `MemorySystem` 组装与 embedding 判定链都在 `packages/server/src/daemon.ts`。
+模型通过 `memory_save` / `memory_search` 两个工具读写（`packages/core/src/tools/memory.ts`）；run 组装（core `executeRun`）在每次 run 时做两级注入——L2 认知常驻系统提示、L1 情节作为 note 附到用户消息上（见下文"检索与注入"）。daemon 的 `MemorySystem` 组装与 embedding 判定链都在 `packages/server/src/daemon.ts`。
 
 ## 设计决策
 
@@ -139,12 +139,12 @@ flowchart TD
 | **immediate**（立即） | `memory_save` 工具 → `system.triggerImmediate(sessionId)` | 该会话自上次提取位置起的增量 | 模型在对话中主动要求"记下来"，当场处理；`memory.write.immediate=false` 时工具返回固定提示、内容留给后台触发写入 |
 | **manual**（手动） | `MemorySystem.triggerManual(workdir)` | 取该会话自上次提取位置起的增量 | 用户通过 **`/memory save` 斜杠命令**（CLI 与 web 均有）触发当前项目的手动写入；CLI 取启动目录、web 取当前会话工作目录。归属会话默认回退到"项目最近活动会话"。开关 `memory.write.manual`（默认 true）关闭时路由返回 400 |
 | **clear**（切会话） | `POST /sessions` 创建新会话时 → `system.triggerClear(workdir, 旧会话)` | 该会话自上次提取位置起的增量 | CLI `/clear`、`/new` 与 web 新建会话共用该路由，创建成功后**异步**触发对旧会话所在项目的提取（不阻塞建会话响应；失败只打日志，由提取进度防重复、下次触发补上）。归属会话取创建前的项目最近活动会话——此刻它必然是用户刚离开的旧会话；未组装记忆系统时不触发 |
-| **interval**（定时） | `memory-scheduler`（默认每 60s 扫一次） | 该项目**全部会话**（不含 subagent 会话）逐个补各自增量 | 距上次定时触发满 `memory.write.intervalMinutes` 分钟就触发一次（0 关闭）；上次时间落在 `state.json` 的 `intervalLastRun`，未触发过则立刻首跑。无显式归属会话，对每个提取进度落后的会话各跑一批提取，单会话失败不阻塞其他会话 |
-| **follow**（跟随） | run 收尾排一个检查，空闲满时限才触发 | 该会话自上次提取位置起的增量 | 每个 run 结束（任何 stopReason）由 run 组装（core `executeRun`）挂一个跟随检查；`end_turn` 之后满 `memory.write.idleMinutes` 分钟无新活动才真正触发（0 关闭），见下 |
+| **interval**（定时） | `memory-scheduler`（默认每 60s 扫一次） | 该项目**全部会话**（不含 subagent 会话）逐个补各自增量 | 距上次定时触发满 `memory.write.intervalMinutes` 分钟就触发一次（0 关闭）；上次时间落在 `state.json` 的 `intervalLastRun`，未触发过则立刻首次触发。无显式归属会话，对每个提取进度落后的会话各执行一批提取，单会话失败不阻塞其他会话 |
+| **follow**（跟随） | run 收尾排一个检查，空闲满时限才触发 | 该会话自上次提取位置起的增量 | 每个 run 结束（任何 stopReason）由 run 组装（core `executeRun`）排一个跟随检查；`end_turn` 之后满 `memory.write.idleMinutes` 分钟无新活动才真正触发（0 关闭），见下 |
 
-**会话级增量**：提取进度**每会话各记一份**（interval/follow 两个标记），范围一律取"该会话两个标记中较靠后的那一条"之后的新消息（`advanceAll` 把该会话两个标记一并推进的只有 manual/immediate/clear，interval/follow 只推自己的）。任何一个先跑到，其余触发都不会重复提取同一段消息。首跑没有标记时该会话全量提取一次，此后只增不重。会话内标记指向的消息被删导致失配时按"宁可重提取不可漏提取"退化为该会话全量（见 `WriteLedger.since`）。
+**会话级增量**：提取进度**每会话各记一份**（interval/follow 两个标记），范围一律取"该会话两个标记中较靠后的那一条"之后的新消息（`advanceAll` 把该会话两个标记一并推进的只有 manual/immediate/clear，interval/follow 只推自己的）。任何一个先执行，其余触发都不会重复提取同一段消息。首次触发没有标记时该会话全量提取一次，此后只增不重。会话内标记指向的消息被删导致失配时按"宁可重提取不可漏提取"退化为该会话全量（见 `WriteLedger.since`）。
 
-**跟随检查的判定**：run 收尾时 `scheduleFollowCheck` 把 `{sessionId, endTurnAt}` 写进该项目的 `state.json`（排下的检查写入磁盘，daemon 重启后由调度器首次扫描补查）。调度器每次扫描时对每个排下的检查判定是否到期：`now − endTurnAt ≥ idleMinutes` **且** `endTurnAt 之后项目无新活动`才算 due，due 才真正触发 follow 并清除检查；判定不过但 `endTurnAt` 之后已有更新活动（用户切到别的会话继续对话、或该项目又跑了一轮）时，旧检查的锚点已被新活动取代，直接清掉，防止 `state.json` 的 followChecks 无界增长。这里的"项目最后活动时间"取**该项目全部会话 meta 的最大 `updatedAt`**（本实现选会话级聚合，无需新表）；空活动记录视作"end_turn 即最后活动"，保证重启后可补查。
+**跟随检查的判定**：run 收尾时 `scheduleFollowCheck` 把 `{sessionId, endTurnAt}` 写进该项目的 `state.json`（排下的检查写入磁盘，daemon 重启后由调度器首次扫描补查）。调度器每次扫描时对每个排下的检查判定是否到期：`now − endTurnAt ≥ idleMinutes` **且** `endTurnAt 之后项目无新活动`才算 due，due 才真正触发 follow 并清除检查；判定不过但 `endTurnAt` 之后已有更新活动（用户切到别的会话继续对话、或该项目又执行了一轮）时，旧检查的锚点已被新活动取代，直接清掉，防止 `state.json` 的 followChecks 无界增长。这里的"项目最后活动时间"取**该项目全部会话 meta 的最大 `updatedAt`**（本实现选会话级聚合，无需新表）；空活动记录视作"end_turn 即最后活动"，保证重启后可补查。
 
 ### 提取进度标记与串行锁
 
@@ -165,9 +165,9 @@ flowchart TD
 }
 ```
 
-- **提取进度标记（watermark）每会话各记一份**：`{sessionId → {interval, follow}}`，值是该会话内最后一条已提取消息的 id；定时/跟随触发从该会话两个标记中较靠后的那个取增量（`WriteLedger.later`），任一触发先跑到，另一个都不再重复提取；标记指向的消息已被删除（会话截断等）时按"更旧"处理——`since` 退化为该会话全量，**宁可重提取不可漏提取**。
+- **提取进度标记（watermark）每会话各记一份**：`{sessionId → {interval, follow}}`，值是该会话内最后一条已提取消息的 id；定时/跟随触发从该会话两个标记中较靠后的那个取增量（`WriteLedger.later`），任一触发先执行，另一个都不再重复提取；标记指向的消息已被删除（会话截断等）时按"更旧"处理——`since` 退化为该会话全量，**宁可重提取不可漏提取**。
 - **fork 播种**：会话 fork（复制历史到新会话）时，新会话的两条提取进度标记经 `seedWatermarksForFork` 直接推进到最后一条复制消息（即分叉 run 的末条，可能越过用户所点的消息）——其前的历史经源会话已提取过，不播种的话首次触发会把整段复制历史再提取一遍。
-- `nightlyBaseline`（UTC 日期）是夜间沉淀的判据基线（pipeline 读写）；`nightlyLastRun`（本地日期）是夜间沉淀的防同日重跑标记（调度器读写）——两个时区各管各的，见"沉淀"节。
+- `nightlyBaseline`（UTC 日期）是夜间沉淀的判据基线（pipeline 读写）；`nightlyLastRun`（本地日期）是夜间沉淀的防同日重复触发标记（调度器读写）——两个时区各管各的，见"沉淀"节。
 - **串行锁**：项目级（`MemoryPipeline` 对同一项目维护一个 promise 链（`#locks`），同项目的触发（含沉淀）排队执行，避免两个触发并发读写同一批线文件）；全局级则在写 L2 认知文件时再套一层模块级全局锁（`withL2Lock`），跨项目并发沉淀撞同一认知文件也串行化。调度器的每次扫描本身不等待触发完成（发出后不等待结果 + 防重入）。
 
 ### 沉淀（consolidate）
@@ -175,7 +175,7 @@ flowchart TD
 沉淀有两条路，落到同一个实现（`#consolidateLocked`）：
 
 - **停用顺带沉淀**：一条主题线被标记为 `inactive` 后，pipeline 顺带对它做一次沉淀总结；
-- **夜间闲时沉淀**：调度器每天本地时间过了 `memory.consolidateHour`（默认凌晨 3 点）后对该项目触发一次（`MemorySystem.triggerNightly` → `pipeline.runNightly`）——对象是**自上次夜间沉淀以来有新情节的全部线（含 active）**，判据 `updated ≥ nightlyBaseline`（UTC 日期，与线文件 `updated` 同源，记在该项目 `state.json`）。活跃线的情节不再需要等线闲置转 inactive 才沉淀，每晚整理一次；daemon 凌晨未开时开机后首次扫描补跑（防同日重跑记本地日期，与沉淀判据的 UTC 日期各管各的）。首跑只沉淀当天更新的线，历史线不补（已由顺带沉淀覆盖）。
+- **夜间闲时沉淀**：调度器每天本地时间过了 `memory.consolidateHour`（默认凌晨 3 点）后对该项目触发一次（`MemorySystem.triggerNightly` → `pipeline.runNightly`）——对象是**自上次夜间沉淀以来有新情节的全部线（含 active）**，判据 `updated ≥ nightlyBaseline`（UTC 日期，与线文件 `updated` 同源，记在该项目 `state.json`）。活跃线的情节不再需要等线闲置转 inactive 才沉淀，每晚整理一次；daemon 凌晨未开时开机后首次扫描补做一次（防同日重复触发记本地日期，与沉淀判据的 UTC 日期各管各的）。首次执行只沉淀当天更新的线，历史线不补（已由顺带沉淀覆盖）。
 
 沉淀的输入输出：无工具 LLM 调用，把线文件全部记录 + 现有认知文件内容交给固定 system 提示（`CONSOLIDATE_SYSTEM_PROMPT`），判断这段经历能否得出**换个项目依然成立**的认知，输出 JSON `{"actions":[...]}`，动作按 `target` 三选一（目标名放 `name` 字段、**不拼进 target**）：
 
@@ -202,7 +202,7 @@ flowchart TD
 
 ### L1 情节检索（用户消息 note）
 
-run 组装（core `executeRun`）在构造用户消息骨架时调 `memory.searchEpisodes(workspace, userText.slice(0, 200), 5)`——用户消息**前 200 个字符**（`MEMORY_QUERY_CHARS`）作查询、取 **top-5**（`MEMORY_LIMIT`）。每条命中变成一个挂在用户消息上的 note 块：
+run 组装（core `executeRun`）在构造用户消息骨架时调 `memory.searchEpisodes(workspace, userText.slice(0, 200), 5)`——用户消息**前 200 个字符**（`MEMORY_QUERY_CHARS`）作查询、取 **top-5**（`MEMORY_LIMIT`）。每条命中变成一个附在用户消息上的 note 块：
 
 ```
 相关经历（<线的一句话标题>）: <该小节情节正文>
@@ -246,7 +246,7 @@ score = fused × 1/(1 + 距今天数/30)      // 时效因子：30 天衰减一�
 
 线文件只有 **active / inactive** 两态，两条转换都是机器自动完成：
 
-- **闲置自动转 inactive**：每次 pipeline 跑完，扫描该项目全部 `active` 线，`updated` 距今 ≥ `memory.threadInactiveDays`（默认 14 天）的自动转为 `inactive`（空批次也扫）；
+- **闲置自动转 inactive**：每次 pipeline 执行完毕，扫描该项目全部 `active` 线，`updated` 距今 ≥ `memory.threadInactiveDays`（默认 14 天）的自动转为 `inactive`（空批次也扫）；
 - **复活**：`inactive` 线又有新情节（append）时自动恢复 `active`；提取器也可显式给动作加 `status:"inactive"`（明确的完成结论）。
 
 转为 inactive 的线不再参与新情节的追加匹配，但**正文永不删除**——它的全部情节保留在原文件里（这也是"沉淀"的输入）。**机器只改不删**：删除只发生在人工路径（管理界面的删除按钮、或直接删文件）。
@@ -304,8 +304,8 @@ daemon 启动时做一次全库重算（`daemon.ts` 调 `memory.reconcile`）：
   topic?: string, file?: string, scope?: string, source?: string }
 ```
 
-- **归属规则**：memory 事件挂在**触发会话**的目录里：immediate（`memory_save` 工具）显式带会话；manual（`/memory save` 或 `POST /memory/trigger-manual`，HTTP 路由可选 `sessionId` 覆盖、CLI/web 命令不传）与 nightly 默认**回退到该项目最近活动会话**（`recentSessionId`，不选 subagent 会话）；interval **无显式归属**：pipeline 对全部会话（不含 subagent 会话）逐个补增量，各批次的 memory 事件挂**各自来源会话**；clear 挂**创建新会话前的项目最近活动会话**（即用户刚离开的旧会话，`POST /sessions` 路由在创建前取好传入）；follow 挂**发起该检查的会话**（check.sessionId；subagent run 不挂检查）；admin（记忆页的覆写/删除）挂"最近活动会话"：线文件操作挂该项目最近活动会话、全局认知操作挂**全局**最近活动会话。找不到归属会话时跳过（不落事件）。
-- **subagent 会话完全隔离**（设计原则：把 subagent 当成工具，而不是对话者）：meta 带 `parentSessionId` 的会话不进任何提取路径——interval 扫描不列它、`recentSessionId`/`recentGlobalSessionId` 回退到不选它、follow-check 不为它挂检查（run 组装的 hook 直接跳过，见 [hooks](./hooks.md)）；subagent 的工具清单里也没有 `memory_save`。subagent 的过程不写入长期记忆（见 [subagents](./subagents.md)）。
+- **归属规则**：memory 事件归属**触发会话**的目录：immediate（`memory_save` 工具）显式带会话；manual（`/memory save` 或 `POST /memory/trigger-manual`，HTTP 路由可选 `sessionId` 覆盖、CLI/web 命令不传）与 nightly 默认**回退到该项目最近活动会话**（`recentSessionId`，不选 subagent 会话）；interval **无显式归属**：pipeline 对全部会话（不含 subagent 会话）逐个补增量，各批次的 memory 事件归属**各自来源会话**；clear 归属**创建新会话前的项目最近活动会话**（即用户刚离开的旧会话，`POST /sessions` 路由在创建前取好传入）；follow 归属**发起该检查的会话**（check.sessionId；subagent run 不安排检查）；admin（记忆页的覆写/删除）归属"最近活动会话"：线文件操作归属该项目最近活动会话、全局认知操作归属**全局**最近活动会话。找不到归属会话时跳过（不落事件）。
+- **subagent 会话完全隔离**（设计原则：把 subagent 当成工具，而不是对话者）：meta 带 `parentSessionId` 的会话不进任何提取路径——interval 扫描不列它、`recentSessionId`/`recentGlobalSessionId` 回退到不选它、follow-check 不为它安排检查（run 组装的 hook 直接跳过，见 [hooks](./hooks.md)）；subagent 的工具清单里也没有 `memory_save`。subagent 的过程不写入长期记忆（见 [subagents](./subagents.md)）。
 - **事件体不带 `sessionId` 字段**：会话由事件所在目录决定，payload 里没有它。
 - **不推进投影 `updatedAt`**：`applyEvent` 对 `memory` 事件不更新任何投影字段（见 [storage](./storage.md) 的 events.jsonl 一节）。
 - 可通过 `GET /sessions/:id/events` 查询某会话的完整事件流（含 memory 事件），web 审计页把它们渲染成"记忆"行（见 [http-api](../server/http-api.md) 与 [webui](../web/webui.md)）。

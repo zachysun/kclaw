@@ -6,7 +6,7 @@
 
 ## 设计决策
 
-- **`kclaw` 不带子命令即 chat**：不指定子命令时默认动作即 `chatAction`。chat 的选项（`--session`/`--think`/隐藏的 `--yes`/`--no`）挂在 program 层而非 `chat` 子命令上，`optsWithGlobals` 会把 program 选项合并进子命令的选项里，因此 `kclaw --session X` 与 `kclaw chat --session X` 都能解析到。
+- **`kclaw` 不带子命令即 chat**：不指定子命令时默认动作即 `chatAction`。chat 的选项（`--session`/`--think`/隐藏的 `--yes`/`--no`）注册在 program 层而非 `chat` 子命令上，`optsWithGlobals` 会把 program 选项合并进子命令的选项里，因此 `kclaw --session X` 与 `kclaw chat --session X` 都能解析到。
 - **`--yes`/`--no` 是隐藏选项**：供测试与脚本自动应答确认卡片使用（`new Option(...).hideHelp()`），帮助中不出现；人机交互使用 @clack 确认框。
 - **所有 action 走同一个 `run()` 包装**（`src/index.ts`）：从合并选项解析 `--home` 传给实现，任何抛出错误统一转为 stderr 一行 + 退出码 1——命令实现中不出现 `process.exit`。
 - **argv 只在作为入口时解析**：`invokedAsMain` 用 `realpathSync(process.argv[1])` 与 `import.meta.url` 比较（与 ESM 加载器一致的符号链接解析），所以 `import "@kclaw/cli"` 当库引用没有副作用；`KclawClient` 与 `runChat` 同时作为库导出。
@@ -129,7 +129,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 ## slash 命令机制（packages/cli/src/slash.ts）
 
 - 注册表是 `createRegistry(ctx)` 返回的 `Map<string, SlashCommand>`；命令的名称/用法/描述读自 `@kclaw/core/commands` 的共享清单 `SLASH_COMMANDS`（WebUI 读同一份，保证两端文案不漂移，见 [webui](../web/webui.md)）；解析（`dispatch`，委托 core 的 `parseSlashInput`）与查表执行（`runOrHint`）分离，未注册的命令打印一行 `没有这个命令，/help 看看`（miss 路径可单测）。
-- **Tab 补全**：readline 的 completer 挂在 `createSlashCompleter(() => skillCommandMetas)`（`slash.ts`）上——**输入的最后一段空白分隔块**是以 `/` 开头且还没打空格时按 Tab，按共享清单给出前缀候选：内置命令在前、动态注册的技能命令在后（与内置重名的技能命令被共享补全器排除），唯一命中直接补全命令名，多个命中补全公共前缀并列出清单；普通文本、带参数的输入（`/new 标题` 这种已打空格的）、未知前缀都不动作。自定义命令不参与联想，仍靠 `/help` 发现。
+- **Tab 补全**：readline 的 completer 绑定为 `createSlashCompleter(() => skillCommandMetas)`（`slash.ts`）——**输入的最后一段空白分隔块**是以 `/` 开头且还没打空格时按 Tab，按共享清单给出前缀候选：内置命令在前、动态注册的技能命令在后（与内置重名的技能命令被共享补全器排除），唯一命中直接补全命令名，多个命中补全公共前缀并列出清单；普通文本、带参数的输入（`/new 标题` 这种已打空格的）、未知前缀都不动作。自定义命令不参与联想，仍靠 `/help` 发现。
 - `/exit` **刻意不注册**：它是 `chat.ts` 输入循环的控制流（`parsed.command === "exit"` 直接 break），不经过注册表。
 - 内置命令：
 
@@ -150,7 +150,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 | `/memory [save\|项目 [线]]` | 记忆命令（见 [memory](../core/memory.md)）：`save` 手动触发当前项目的手动写入（`POST /memory/trigger-manual`，工作目录取 CLI 启动目录，处理归属会话（默认回退到项目最近活动会话）自上次提取位置以来的新消息，成功打印 `已触发手动写入…`）；无 save 参数时是只读查看——无参列项目（`GET /memory/projects`）；指定项目列该项目的主题线（`GET /memory/projects/:id`）；再指定一条线打印线文件原文（`GET /memory/threads/:project/:topic`）；各级读取失败打印对应错误 |
 | `/skill [名字\|proposals\|proposal <id>]` | 技能命令（机制见 [skills](../core/skills.md)）：无参列出已装技能（`名字 · 全局\|项目 · [仅用户] · 描述`，作用域跟会话工作目录，经 `GET /skills?workdir=`）；带名字打印该技能的 `SKILL.md` 完整正文（`GET /skills/:name?workdir=`）；`proposals` 列出技能提案（`GET /skills/proposals`，每行 `id · 状态（待确认/已采纳/已驳回/已回退） · 新增\|修订 名字 · 全局\|项目[ · 被调用 N 次]`，空时提示"还没有技能提案…"）；`proposal <id>` 打印提案详情与完整提案正文（`GET /skills/proposals/:id`）；提案治理操作（采纳/驳回/回退/删除）在 WebUI 技能页，CLI 只读；没有技能时提示 `（还没有技能。把技能目录放进 ~/.kclaw/skills/ 或工作区 .kclaw/skills/）`；失败打印 `查看技能失败: …` |
 | `/mcp [服务器名]` | MCP 状态一览（机制见 [mcp](../core/mcp.md)）：无参按组打印（组头 `【全局】`/`【<路径>】`，组内每行 `名字 · 状态 · N 个工具[ · 最近错误]`，读 `GET /mcp` 快照），有失败项时附一行提示（连接与配置管理用 WebUI 的 MCP 页）；带名字打印该 server 的状态行与工具清单（每工具一行 `mcp__<server>__<tool> — 描述`；跨组同名逐条打印，项目组条目带 `<路径> · ` 前缀）；没有接入任何 server、名字未知、请求失败都打印对应提示行 |
-| `/goal [目标描述 [verify: 命令]…]` | 目标循环（机制见 [goal](../core/goal.md)）：带描述设定目标并立即起跑（`POST /sessions/:id/goal`，可选多条 `verify:` 验收命令，沙箱内执行）；无参查看状态（状态、轮数、token、验收命令、停止原因）；动作 `stop`（停止循环并中止活跃 run）、`pause`、`resume`、`clear`（移除目标）各打一行确认；失败打印 `目标操作失败: …` |
+| `/goal [目标描述 [verify: 命令]…]` | 目标循环（机制见 [goal](../core/goal.md)）：带描述设定目标并立即开始运行（`POST /sessions/:id/goal`，可选多条 `verify:` 验收命令，沙箱内执行）；无参查看状态（状态、轮数、token、验收命令、停止原因）；动作 `stop`（停止循环并中止活跃 run）、`pause`、`resume`、`clear`（移除目标）各打一行确认；失败打印 `目标操作失败: …` |
 
 - **技能即斜杠命令**：每个已装且用户可见的技能自动注册成 `/<技能名> [要求]` 命令（`refreshSkillCommands`，启动时与每次切会话后各重拉一次，重拉会把已消失的技能（取消复用/提案回退/切项目）从注册表与补全清单同步摘除；Tab 补全时再惰性重拉（2 秒节流）、未注册命令提交时也重拉一次再判定——技能增删改不用重启 REPL 即生效。尽力而为：daemon 不可达则没有技能命令，内置命令（含 `/skill`）照常可用）。命令发送**用户原文**（要求写在命令后面时原样拼接进消息），是否调用技能由 daemon 检测、正文仍经 `skill_read` 加载——`disable-model-invocation` 的技能由此获得手动入口。内置名优先：与内置命令重名的技能命令被丢弃；自定义 `commands/*.md`（先注册）同样优先于技能。命令名不出现在注册表里时 Tab 补全也能提示（见上文 Tab 补全）。
 - 自定义命令：`ctx.commandsDir`（daemon 组装为 `<home>/commands`）目录下的每个 `*.md` 文件注册成一个命令——文件名就是命令名，文件内容是一段提示词模板；执行命令时，模板里的 `{{args}}` 替换成命令参数，然后经 `ctx.send(text)` 作为普通消息发出。与内置命令重名的文件不生效，打印一行警告。

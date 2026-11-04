@@ -62,7 +62,7 @@ describe("startMemoryScheduler", () => {
     expect(sys.markIntervalRun).toHaveBeenCalledWith("/w/kclaw", now.toISOString())
   })
 
-  it("interval: an unexpired intervalLastRun skips triggerInterval (非首跑)", async () => {
+  it("interval: an unexpired intervalLastRun skips triggerInterval (非首次触发)", async () => {
     const sys = fakeSystem({ intervalLastRun: vi.fn(() => "2026-08-29T11:59:00Z") })
     const now = new Date("2026-08-29T12:00:00Z") // 距上次 1 分钟 < intervalMinutes=30
     const handle = startMemoryScheduler({

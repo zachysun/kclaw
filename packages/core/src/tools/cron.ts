@@ -123,13 +123,13 @@ export function createCronTools(opts: {
   })
 
   // `writeTools === false`（cron 触发的 run，防递归）不改变本工厂的返回：
-  // entries 工厂按该标志只挂 cron_list，写执行器不进模型面。
+  // entries 工厂按该标志只注册 cron_list，写执行器不进模型面。
   return { "cron_create": cron_create, "cron_list": cron_list, "cron_update": cron_update, "cron_delete": cron_delete }
 }
 
 /**
  * The registry-facing bundle: executors + schemas owned beside each other.
- * writeTools=false（cron 触发的 run，防递归：定时会话不能再建定时）只挂
+ * writeTools=false（cron 触发的 run，防递归：定时会话不能再建定时）只注册
  * cron_list，写三件不进模型面。
  */
 export function createCronToolEntries(opts: Parameters<typeof createCronTools>[0]): ToolEntry[] {

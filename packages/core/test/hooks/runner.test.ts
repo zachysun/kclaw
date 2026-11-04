@@ -141,7 +141,7 @@ describe("HookChain", () => {
     await expect(fatalChain.run("run-before", msg("x"))).rejects.toThrow("timed out")
   })
 
-  it("无限/非正 budget 不设超时（挂着的 handler 永不被掐）", async () => {
+  it("无限/非正 budget 不设超时（运行中的 handler 永不被掐）", async () => {
     const chain = new HookChain({ timeoutMs: () => 0 })
     chain.register(entry("forever", "run-before", () => "done"))
     expect(await chain.run("run-before", msg("x"))).toBe("done")
@@ -149,7 +149,7 @@ describe("HookChain", () => {
 
   it("条目级 meta.timeoutMs 覆盖链budget：Infinity 不限时、有限值放宽（内置压缩钩子的通道）", async () => {
     const slow = () => new Promise<string>((resolve) => setTimeout(() => resolve("done"), 40))
-    // 链budget 10ms：无限条目budget → 40ms handler 完整跑完
+    // 链budget 10ms：无限条目budget → 40ms handler 完整执行完
     const infChain = new HookChain({ timeoutMs: () => 10 })
     infChain.register(entry("slow-inf", "run-before", slow, { failure: "skip", timeoutMs: Number.POSITIVE_INFINITY }))
     expect(await infChain.run("run-before", msg("x"))).toBe("done")
@@ -232,7 +232,7 @@ describe("runGate（deny 否决档）", () => {
     }
   })
 
-  it("deny 失败 → 否决并携带首个失败者；链仍跑完、每次失败都报告", async () => {
+  it("deny 失败 → 否决并携带首个失败者；链仍执行完、每次失败都报告", async () => {
     const onFailure = vi.fn()
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {})
     try {

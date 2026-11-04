@@ -246,7 +246,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   // 提案子路由族（技能进化）有组装才可用，否则 503。
   registerSkillRoutes(app, { paths, builtinSources: opts.builtinSources, pluginHomes: opts.pluginHomes, skillsEvolution: opts.skillsEvolution })
   // 切会话写入：POST /sessions 是 CLI /clear、/new 与 web 新建会话的共同底层，
-  // 记忆系统在组装时才挂 clear 触发（默认不触发，行为与未组装记忆时一致）。
+  // 记忆系统在组装时才注册 clear 触发（默认不触发，行为与未组装记忆时一致）。
   registerSessionRoutes(app, { sessions, config, run: opts.run, memory: opts.memory, sessionFork: opts.sessionFork, cancelBackgroundForParent: opts.cancelBackgroundForParent, team: opts.team, goal: opts.goal })
   // /sessions/:id/changes 路由族：改动记录聚合与受限全文预览，纯事件流推导，无组装依赖。
   registerChangesRoutes(app, { sessions, config })

@@ -80,7 +80,7 @@ const CHAIN_LABELS: Record<VerifyResult["status"], string> = {
 }
 
 /**
- * 哈希链状态标记：点击现算（按需校验，不在每次读会话时自动跑）。
+ * 哈希链状态标记：点击现算（按需校验，不在每次读会话时自动执行）。
  * 结果以 title 提示展示，断裂带原因与行号。
  */
 function ChainBadge({ api, sessionId }: { api: ApiClient; sessionId: string | null }) {

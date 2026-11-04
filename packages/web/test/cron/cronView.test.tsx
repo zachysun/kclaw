@@ -119,7 +119,7 @@ describe("CronView", () => {
   it("submits the create form and prepends the new cron", async () => {
     const api = makeApi()
     api.get.mockResolvedValue([])
-    api.post.mockResolvedValue(cron({ id: "cron_new", name: "备份", cron: "*/5 * * * *", prompt: "每五分钟跑一次" }))
+    api.post.mockResolvedValue(cron({ id: "cron_new", name: "备份", cron: "*/5 * * * *", prompt: "每五分钟执行一次" }))
     const { container, root } = await mount(api)
 
     const inputs = container.querySelectorAll('form[data-testid="cron-form"] input')
@@ -128,12 +128,12 @@ describe("CronView", () => {
     const promptInput = container.querySelector('textarea[data-testid="cron-prompt"]') as HTMLTextAreaElement
     setValue(nameInput, "备份")
     setValue(cronInput, "*/5 * * * *")
-    setTextArea(promptInput, "每五分钟跑一次")
+    setTextArea(promptInput, "每五分钟执行一次")
     await act(async () => {
       ;(container.querySelector('button[data-testid="cron-submit"]') as HTMLButtonElement).click()
     })
     await flush()
-    expect(api.post).toHaveBeenCalledWith("/cron", { name: "备份", cron: "*/5 * * * *", prompt: "每五分钟跑一次" })
+    expect(api.post).toHaveBeenCalledWith("/cron", { name: "备份", cron: "*/5 * * * *", prompt: "每五分钟执行一次" })
     // The new cron appears as the first row.
     expect(container.querySelector('[data-testid="cron-row-cron_new"]')).not.toBeNull()
     expect(container.textContent).toContain("备份")

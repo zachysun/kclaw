@@ -291,7 +291,7 @@ describe("backfillPluginAttribution", () => {
     const links = readLinksFile(skillsDir).links
     expect(links.find((l) => l.name === "tdd")?.plugin).toBe("superpowers")
     expect(links.find((l) => l.name === "plain")?.plugin).toBeUndefined()
-    // 幂等：再跑一遍不再有补写
+    // 幂等：再执行一遍不再有补写
     expect(backfillPluginAttribution({ skillsDir, pluginHomes: [{ agent: "zcode", home }] })).toBe(0)
   })
 })

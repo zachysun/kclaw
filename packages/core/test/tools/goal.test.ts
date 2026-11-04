@@ -7,7 +7,7 @@ import type { ToolExecutor } from "../../src/agent/tools.js"
 const call = (t: { execute: ToolExecutor["execute"] }, args: unknown) => t.execute(args, { onOutput: () => {} })
 
 const snap = (over: Partial<GoalSnapshot> = {}): GoalSnapshot => ({
-  text: "跑到测试全绿",
+  text: "直到测试全绿",
   acceptance: ["pnpm test"],
   state: "active",
   setAt: "2026-10-19T00:00:00Z",
@@ -93,7 +93,7 @@ describe("goal tools", () => {
     const t = createGoalTools({ host: fakeHost({}, snap()), sessionId: "s" })
     const r = await call(t.get_goal, {})
     expect(r.status).toBe("ok")
-    expect(r.output).toContain("跑到测试全绿")
+    expect(r.output).toContain("直到测试全绿")
     expect(r.output).toContain("验收命令：pnpm test")
     const none = createGoalTools({ host: fakeHost({ view: () => undefined }), sessionId: "s" })
     expect((await call(none.get_goal, {})).output).toContain("没有目标")

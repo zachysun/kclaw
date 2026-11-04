@@ -89,7 +89,7 @@ export interface KclawConfig {
     consolidate: boolean
     /**
      * 夜间闲时沉淀的本地小时（0-23；负值 = 关闭）。调度器在本地时间过了该点后
-     * 对每个项目做一次夜间沉淀（daemon 凌晨未开则开机后补跑）；仍受 consolidate
+     * 对每个项目做一次夜间沉淀（daemon 凌晨未开则开机后补做一次）；仍受 consolidate
      * 总开关管。默认 3（凌晨 3 点）。
      */
     consolidateHour: number

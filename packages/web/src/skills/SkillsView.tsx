@@ -139,7 +139,7 @@ export function SkillsView({ api, notice }: {
     // 复用管理页的三份数据失败都走行内降级，不打扰主清单的 notice。
     api.get<DiscoveryPayload>(`/skills/discovery${scopeQuery}`).then(setDiscovery).catch(() => setDiscovery(null))
     api.get<LinksPayload>(`/skills/links${scopeQuery}`).then(setLinks).catch(() => setLinks(null))
-    // 提案面不挂在这里：它有自己的 effect 与写后刷新（reloadProposals），避免
+    // 提案面不放在这里：它有自己的 effect 与写后刷新（reloadProposals），避免
     // proposalQuery 变化连带主清单三份数据重拉、挂载时提案重复请求。
   }, [api, scopeQuery, notice])
   useEffect(() => { reload() }, [reload])

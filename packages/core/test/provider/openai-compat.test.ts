@@ -308,7 +308,7 @@ describe("openai-compat prompt_cache_key", () => {
     }) as typeof fetch
     const client = createOpenAiCompatClient({ baseUrl: "https://x", apiKey: "k", fetchImpl, timeoutMs: 60_000 })
     const it = client.stream({ ...REQ, signal: external.signal })[Symbol.asyncIterator]()
-    const pending = it.next() // 挂在 body 读取上
+    const pending = it.next() // 阻塞在 body 读取上
     await new Promise((r) => setTimeout(r, 20))
     external.abort(new Error("run cancelled"))
     await expect(pending).rejects.toThrow("run cancelled")

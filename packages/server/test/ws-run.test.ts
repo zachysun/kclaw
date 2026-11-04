@@ -325,7 +325,7 @@ describe("ws run commands (send_message / run.cancel)", () => {
   })
 
   it("rejects send_message with a bad text or an unknown session (error frames, connection stays open)", async () => {
-    const { env, url } = await makeWsRun(gatedTextClient("不会跑到这里").llm)
+    const { env, url } = await makeWsRun(gatedTextClient("不会执行到这里").llm)
     const session = env.sessions.create("校验会话")
 
     const ws = await openAuthed(url)
@@ -450,7 +450,7 @@ describe("ws run commands (send_message / run.cancel)", () => {
     ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
     await waitFor(frames, (f) => f.type === "subscribed")
 
-    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "会挂的请求" }))
+    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "会失败的请求" }))
     await waitFor(frames, (f) => f.type === "send_message_ack")
 
     // the error lifecycle reaches the subscriber: llm.failed then run.failed
@@ -521,7 +521,7 @@ describe("ws queue steering (disposition / queue.cancel)", () => {
     expect(payload.position).toBe(0)
 
     release()
-    await frameOf(frames, "run.completed", 2) // 两条都跑完，干净收尾
+    await frameOf(frames, "run.completed", 2) // 两条都执行完毕，干净收尾
   })
 
   it("disposition=steer while busy buffers; queue.cancel withdraws before injection", async () => {
@@ -548,7 +548,7 @@ describe("ws queue steering (disposition / queue.cancel)", () => {
     await eventOf(frames, "message.queue_cancelled")
 
     release()
-    await frameOf(frames, "run.completed") // 仅第一条跑完
+    await frameOf(frames, "run.completed") // 仅第一条执行完毕
   })
 
   it("queue full answers an error frame with the fixed message", async () => {
@@ -628,7 +628,7 @@ describe("ws event sequences (steer / wait / interrupt end-to-end)", () => {
     await frameOf(frames, "subscribed")
 
     // Occupy the session: the first run parks INSIDE the tool batch.
-    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "先跑着" }))
+    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "先执行着" }))
     await frameOf(frames, "send_message_ack")
     await gate.toolEntered
 
@@ -764,7 +764,7 @@ describe("ws compaction.cancel", () => {
   it("acks active:true and cuts an in-flight in-run compaction; the run itself carries on", async () => {
     // 把占用顶到线的手法（T7 run.test.ts 同款）：contextTokens=10 → 红线 8.5；
     // 第一轮 bash 轮 usage 9 顶过红线 → 迭代边界发起中途压缩，压缩自己的
-    // 摘要请求（第 2 次调用）挂在 gate 上，compaction.cancel 从 ws 掐它。
+    // 摘要请求（第 2 次调用）阻塞在 gate 上，compaction.cancel 从 ws 掐它。
     let release!: () => void
     const gate = new Promise<void>((r) => {
       release = r

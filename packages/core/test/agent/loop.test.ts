@@ -367,22 +367,22 @@ describe("runAgent llm-before（LLM 执行前的模型视图改写钩子）", ()
     }
     const persisted: Message[] = []
     const outcome = await runAgent(
-      { sessionId: "s", history: [], system: "", userText: "帮我 /test 跑一下" },
+      { sessionId: "s", history: [], system: "", userText: "帮我 /test 执行一下" },
       {
         llm,
         model: "m",
         hooks: chainOf(hook("wrap", "llm-before", (ctx) =>
-          withLastUserText(ctx.messages, "帮我 /test 跑一下\n\n（技能调用指示）"))),
+          withLastUserText(ctx.messages, "帮我 /test 执行一下\n\n（技能调用指示）"))),
         onEvent: () => {},
         onMessage: (m) => persisted.push(m),
       } as Parameters<typeof runAgent>[1],
     )
     // 模型视图：包装文本
     const userContent = (requests[0]!.messages.at(-1) as { role: string; content: string }).content
-    expect(userContent).toBe("帮我 /test 跑一下\n\n（技能调用指示）")
+    expect(userContent).toBe("帮我 /test 执行一下\n\n（技能调用指示）")
     // 持久化与 outcome：原文
-    expect((persisted[0]!.blocks[0] as { text: string }).text).toBe("帮我 /test 跑一下")
-    expect((outcome.messages[0]!.blocks[0] as { text: string }).text).toBe("帮我 /test 跑一下")
+    expect((persisted[0]!.blocks[0] as { text: string }).text).toBe("帮我 /test 执行一下")
+    expect((outcome.messages[0]!.blocks[0] as { text: string }).text).toBe("帮我 /test 执行一下")
   })
 
   it("fires on every LLM round of the tool loop (idempotent per round)", async () => {
@@ -405,7 +405,7 @@ describe("runAgent llm-before（LLM 执行前的模型视图改写钩子）", ()
       async execute() { return { status: "ok", output: "ran" } },
     }
     await runAgent(
-      { sessionId: "s", history: [], system: "", userText: "帮我 /test 跑一下" },
+      { sessionId: "s", history: [], system: "", userText: "帮我 /test 执行一下" },
       {
         llm,
         model: "m",

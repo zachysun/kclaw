@@ -161,13 +161,13 @@ describe("matchSkillInvocations / wrapSkillInvocations（调用检测与隐式�
     const test = mk("test")
     const deploy = mk("deploy")
     expect(matchSkillInvocations("帮我 /test 处理", [test, deploy])).toEqual([test])
-    expect(matchSkillInvocations("/test 开跑", [test, deploy])).toEqual([test])
+    expect(matchSkillInvocations("/test 启动", [test, deploy])).toEqual([test])
     expect(matchSkillInvocations("先 /deploy 再 /test，最后又提 /deploy", [test, deploy])).toEqual([deploy, test])
   })
 
   it("reads unspaced Chinese around the token but keeps URL-ish fragments out", () => {
     const test = mk("test")
-    expect(matchSkillInvocations("帮我/test 跑一下", [test])).toEqual([test])
+    expect(matchSkillInvocations("帮我/test 执行一下", [test])).toEqual([test])
     expect(matchSkillInvocations("文档在 https://example.com/test 下", [test])).toEqual([])
     expect(matchSkillInvocations("路径 a/b/test 别误判", [test])).toEqual([])
   })

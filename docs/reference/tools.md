@@ -61,7 +61,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - stdout 与 stderr 合并返回。
 - 输出上限由配置 `bash.maxOutputBytes` 决定（默认 512 KiB）：超限保留头部，结尾带 `...[dropped N bytes]...` 丢弃标记；配置了 spill 目录时完整输出同时写入 `<home>/spill`，返回里附一条 fs_read 定位行，模型可自己读回全量。
 - 超时由配置 `bash.timeoutMs` 决定（默认 300 秒）：到时整个进程组被 SIGKILL（shell 的子孙进程一起结束），返回错误并附带已产生的部分输出。SIGKILL 之后留 2 秒宽限等 close 事件：子进程的退出信息与管道里已缓冲的尾部输出仍被收集完才收尾（超时是出错返回，不是静默丢弃）。
-- run 被取消时前台命令正在执行：同样先 SIGKILL 整个进程组再收尾（同样留 2 秒宽限收集退出信息与尾部输出），返回错误输出以 `command aborted` 开头、附带已产生的部分输出（`exitCode` 为 `null`）——取消的 run 不留命令在后台继续跑。后台进程不随 run 取消终止，生命周期只由 `process_kill` 与进程自身决定。
+- run 被取消时前台命令正在执行：同样先 SIGKILL 整个进程组再收尾（同样留 2 秒宽限收集退出信息与尾部输出），返回错误输出以 `command aborted` 开头、附带已产生的部分输出（`exitCode` 为 `null`）——取消的 run 不留命令在后台继续运行。后台进程不随 run 取消终止，生命周期只由 `process_kill` 与进程自身决定。
 - 退出码非 0 返回错误，输出以 `exit code N` 开头。
 - 执行结果在 `data` 字段附结构化退出码 `{exitCode: N}`（超时、取消与进程启动失败为 `null`），web 聊天页的工具卡据此显示 exit 徽标。
 - 每次执行注入两个环境变量：`KCLAW_SESSION_ID`（当前会话 id）与 `KCLAW_WORKSPACE`（工作目录），供命令行工具自识别；其余环境继承 daemon 进程。
@@ -250,7 +250,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 |------|------|------|------|
 | `card` | object | 是 | 组件描述，`kind` 字段判别 25 种组件 |
 
-- 25 种组件分三层：**展示组件** 12 种（button、link、table、list、tag、badge、timeline、tree、quote、icon、chart、form）可单独成卡；**容器组件** 5 种（card/tabs/collapse/drawer/carousel）把展示组件组合出布局（标签页、折叠、抽屉、轮播），容器里不能再嵌容器（类型层封死，运行时校验再拦一道）；**表单字段** 8 种（input、textarea、radio、checkbox、segmented、slider、date、time）挂在 form 组件的 `fields` 里。
+- 25 种组件分三层：**展示组件** 12 种（button、link、table、list、tag、badge、timeline、tree、quote、icon、chart、form）可单独成卡；**容器组件** 5 种（card/tabs/collapse/drawer/carousel）把展示组件组合出布局（标签页、折叠、抽屉、轮播），容器里不能再嵌容器（类型层封死，运行时校验再拦一道）；**表单字段** 8 种（input、textarea、radio、checkbox、segmented、slider、date、time）位于 form 组件的 `fields` 里。
 - 运行时校验逐字段报错，错误信息带字段路径（如 `card.fields[0].min: 必须小于 max`）；护栏：文本 ≤500 字符、标题 ≤100、表格 ≤50 行 8 列、树 ≤200 节点、轮播 ≤10 页、表单 ≤20 字段、选项 ≤8 项、单卡 ≤32 KB（按 UTF-8 字节计）。
 - 校验通过返回一行回执（如"已渲染表格《xx》（3 行）"）作为工具结果进入上下文；失败返回错误并提示改用 Markdown。
 - 交互回传：按钮点击与表单提交格式化成用户消息走普通发送链路（排队、中止、审计语义全部继承），发送帧带 `uiAction` 来源标记（见 [messages](./messages.md) 与 [wire](./wire.md)）；web 据此在卡上渲染持久已选态（刷新、重进会话都不复活）。
@@ -316,7 +316,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 |------|------|------|
 | `create_goal` | `text` 必填；`acceptance?`（字符串数组） | 落 `GoalLoopHost.set`（armed + 首轮入队），与 `/goal <text> verify:` 同路径；带验收命令时沿用沙箱 fail-closed 检查 |
 | `get_goal` | 无参 | 当前目标视图：状态、轮位、budget 消耗、最近判定意见、验收命令、armed |
-| `update_goal` | `action`（complete/pause/resume/stop）必填；`note?` | **complete 只请求立即判定**（判定器裁决 met 才落终态，not_met 带意见续跑——模型永不自行判定完成）；pause=去 armed；resume=重新 armed+立即检查；stop=映射 userStop（掐活跃 run、清队列） |
+| `update_goal` | `action`（complete/pause/resume/stop）必填；`note?` | **complete 只请求立即判定**（判定器裁决 met 才落终态，not_met 带意见续轮——模型永不自行判定完成）；pause=去 armed；resume=重新 armed+立即检查；stop=映射 userStop（掐活跃 run、清队列） |
 
 ### todo 两件
 
@@ -359,7 +359,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `run_in_background` | boolean | 否 | true = 立即返回子会话 id，完成后有通知、用 subagent_collect 取结果；不传取 false（阻塞等结题） |
 
 - 子会话不能回话、不能提问、不能再派 subagent（单层委派）。
-- 阻塞式派发挂父 run 的中止信号（父 run 停，子也停）；后台派发的生命周期挂父会话（父 run 结束不取消后台子会话）。
+- 阻塞式派发绑定父 run 的中止信号（父 run 停，子也停）；后台派发的生命周期绑定父会话（父 run 结束不取消后台子会话）。
 - 结题答复与阻塞结果一样做保头保尾截断。
 
 ### subagent_collect

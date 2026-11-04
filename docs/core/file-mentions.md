@@ -33,7 +33,7 @@
 
 文件清单的产生（`listWorkspaceFiles`）：
 
-- **git 仓库**（优先）：跑 `git ls-files -z -co --exclude-standard`——跟踪的 + 未被 ignore 的未跟踪文件，git-ignored 内容不会出现。`-z` 用 NUL 分隔（按字节切分，非 ASCII 文件名不损坏），随后按 `existsSync` 过滤掉索引里已被删除的条目。
+- **git 仓库**（优先）：执行 `git ls-files -z -co --exclude-standard`——跟踪的 + 未被 ignore 的未跟踪文件，git-ignored 内容不会出现。`-z` 用 NUL 分隔（按字节切分，非 ASCII 文件名不损坏），随后按 `existsSync` 过滤掉索引里已被删除的条目。
 - **非 git 仓库 / git 不可用**：递归扫描目录收集普通文件，**不进入** `.git`、`.kclaw`、`node_modules` 三个目录（readdir 本身就是磁盘实况，无需再过滤）；不可读的子目录跳过、其余照常列出。
 - 两条路径都排序并封顶 5000 条。目标必须是存在的目录，否则 400。
 

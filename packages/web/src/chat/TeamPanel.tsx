@@ -70,7 +70,7 @@ export function TeamPanelCard({ panel, target, onTalkTo, onStopMember, onOpenAud
       >
         <span>团队 {panel.team.name}</span>
         <span className="team-panel-meta muted">
-          {panel.members.length} 名组员 · {working} 人干活中 · 任务 {stats.completed}/{panel.tasks.length} 完成
+          {panel.members.length} 名组员 · {working} 人运行中 · 任务 {stats.completed}/{panel.tasks.length} 完成
         </span>
       </summary>
       <div className="team-panel-body">
@@ -171,7 +171,7 @@ function MemberBadge({ member }: { member: AgentSummary }) {
   if (member.status === "provisioning") return <span className="team-badge provisioning">生成中</span>
   if (member.status === "failed") return <span className="team-badge failed">失败</span>
   return member.busy === true
-    ? <span className="team-badge busy">干活中</span>
+    ? <span className="team-badge busy">运行中</span>
     : <span className="team-badge idle">待命</span>
 }
 

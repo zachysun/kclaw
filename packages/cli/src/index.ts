@@ -196,7 +196,7 @@ program
   .action(run(chatAction))
 
 const daemon = program.command("daemon").description("daemon 生命周期管理")
-daemon.command("start").description("确保 daemon 在运行（没在运行就拉起）").action(run(startAction))
+daemon.command("start").description("确保 daemon 在运行（没在运行就启动）").action(run(startAction))
 daemon.command("stop").description("停止 daemon（先 SIGTERM，再清理 pid 文件）").action(run(stopAction))
 daemon.command("status").description("查看 daemon 是否在运行及运行位置").action(run(statusAction))
 
@@ -210,14 +210,14 @@ program
 
 program
   .command("web")
-  .description("在浏览器打开 WebUI（daemon 没在运行会先拉起）")
+  .description("在浏览器打开 WebUI（daemon 没在运行会先启动）")
   .action(run(webAction))
 
 program
   .command("cron")
   .description("定时任务")
   .command("list")
-  .description("列出任务（daemon 没在运行会自动拉起）")
+  .description("列出任务（daemon 没在运行会自动启动）")
   .action(run(cronListAction))
 
 /** `kclaw session verify --id <id>` / `--all`：哈希链校验，退出码 0/1 可脚本化。 */

@@ -76,7 +76,7 @@ HistorySearchIndex.open(paths.searchDb)
                                     跨会话消息全文索引（数据来源与回填见 tools.md 与
                                     storage.md）：open 在 store 之前，镜像三事件
                                     （message → 收录、message.truncated → 镜像截断、
-                                    session.deleted → 清行）挂在下方 store 的事件
+                                    session.deleted → 清行）绑定在下方 store 的事件
                                     追加回调上，启动后后台回填存量会话（逐会话幂等，
                                     serving 不等它）；停机时经 hostStops close
 new SessionStore(paths.sessionsDir, onAppended)
@@ -106,9 +106,9 @@ createMcpProjects({workspace, manager, allMetas, loadEntries, home})
                                     全部会话 meta（含回收站）的 workdir 并集，减去项目
                                     配置文件与全局 mcp.json 同路径的目录（home 用于排除
                                     这个形态：两层共用一个文件，项目层无法独立存在），
-                                    启动时 sync() 一次（补挂缺失的项目、移除已退出会话的项目，60s 一次），
+                                    启动时 sync() 一次（补进缺失的项目、移除已退出会话的项目，60s 一次），
                                     并从 SessionStore 的 session.created 回调即时 mount
-                                    新项目；每目录挂一个两阶段项目 watch（先 watch 项目
+                                    新项目；每目录注册一个两阶段项目 watch（先 watch 项目
                                     顶层等 `.kclaw` 出现、再切 `.kclaw` watch），手工编辑
                                     防抖后经 reconcileProject 热生效；起不来只告警降级、
                                     不致命
@@ -127,13 +127,13 @@ createSubagentHost({config, sessions, bus, getRun})
                                     subagent 宿主（见 subagents.md）：一次组装返回三件能力——
                                     spawner（派发后端，阻塞与后台 subagent 各有一个并发计数）、collector
                                     （后台 subagent 的结果收集）、cancelBackgroundForParent
-                                    （会话删除时级联取消在跑的后台 subagent）。getRun 是晚绑闭包——
+                                    （会话删除时级联取消仍在执行的后台 subagent）。getRun 是晚绑闭包——
                                     spawner 要调 RunManager.cancel/submit，而 RunManager 的 deps
                                     又要 spawner，构造顺序上先建 host、再建 manager、随后回填
 createTeamHost / new GoalLoopHost   团队宿主（见 agent-team.md）与 /goal 循环主机
                                     （见 goal.md）——同一晚绑 getRun 约定；goal host 的
                                     判定器走 config.goals.judge 条目解析链（注入 llmFactory
-                                    的测试与运行客户端共用注入实现）；两 host 挂 RunManager
+                                    的测试与运行客户端共用注入实现）；两 host 注册到 RunManager
                                     的同一空闲边缘（onSessionIdle：team pump → goal 检查），
                                     goal 检查自查忙闲，team 刚投递的下一轮只会让它跳过
 new ProcessRegistry({noticesPath, onRegister})
@@ -194,7 +194,7 @@ startSkillCurator({...})            技能 curator 调度：每日本地时间�
                                     （见 skills.md 的 curator 一节）
 startSpillRetention({...})          spill 保留期清理：`sessions.spillRetentionDays` 为正时每小时扫一次
                                     `<home>/spill`，删掉 mtime 超过保留期的文件；为 0（默认）时只确保
-                                    目录存在、不挂定时器（见 storage.md 的溢出目录一节）
+                                    目录存在、不建定时器（见 storage.md 的溢出目录一节）
 void processRegistry.adopt()        后台进程收编：读 process-notices.jsonl 的行并按进程去重
                                     （结算行优先于 running 行），活的重进注册表、
                                     死 running 行补发退出码未知的合成通知（此时 run 已就绪，
@@ -257,7 +257,7 @@ bin 脚本注册信号处理：SIGTERM/SIGINT → `shutdown()`（`stopping` 标�
 // 先按构造序逐项限时执行 hostStops（goal → 历史检索索引 → 心跳 → 记忆 → 技能 → curator → spill 清理）：
 withStopTimeout(goalHost.dispose(), 60s)
                                     // 等进行中的 goal 检查落定（判定器调用可能尚未返回；
-                                    // 循环不自动续跑——重启后等用户 resume，见 goal.md）
+                                    // 循环不自动继续运行——重启后等用户 resume，见 goal.md）
 withStopTimeout(historyIndex.close(), 60s)
                                     // 关 search.db（历史检索索引）
 withStopTimeout(tick.stop(), 60s)   // 停心跳；tick.stop 会 await 所有进行中的 cron run
@@ -268,10 +268,10 @@ withStopTimeout(skillTick.stop(), 60s)
 withStopTimeout(curatorTick.stop(), 60s)
                                     // 停技能 curator 宿主（见 skills.md 的 curator 一节）
 withStopTimeout(spillTick.stop(), 60s)
-                                    // 停 spill 保留期清理宿主（spillRetentionDays=0 时没挂定时器，此步是空操作）
+                                    // 停 spill 保留期清理宿主（spillRetentionDays=0 时未建定时器，此步是空操作）
 withStopTimeout(feishuManager.stop(), 60s)
                                     // 停飞书频道（未启用时为 no-op；断开长连接与总线订阅）
-mcpProjects?.close()                // 停项目发现（关闭全部项目文件 watch，丢弃挂着的
+mcpProjects?.close()                // 停项目发现（关闭全部项目文件 watch，丢弃未触发的
                                     // 防抖回调；reconcile 不与下面的管理器拆除并发执行）
 withStopTimeout(mcpManager.stop(), 60s)
                                     // 断开全部 MCP server（恒定组装，恒有此步；幂等）
@@ -281,7 +281,7 @@ usage.close()                       // 关用量数据库
 rmSync(<home>/daemon.json)          // 只有全部成功才删
 ```
 
-`withStopTimeout(p, timeoutMs, step)` 用 `Promise.race([p, deadline])` 给每步设限。超时的一步**不会被取消**（它可能稍后自行完成，迟到的失败被丢弃——超时已经报告过失败，不能再以未处理 rejection 的形式抛出）。设限的原因：挂死的 provider 流会阻塞 tracked cron run，卡住的客户端会阻塞 `app.close`，没有超时上限的 `stop()` 会永远不返回。
+`withStopTimeout(p, timeoutMs, step)` 用 `Promise.race([p, deadline])` 给每步设限。超时的一步**不会被取消**（它可能稍后自行完成，迟到的失败被丢弃——超时已经报告过失败，不能再以未处理 rejection 的形式抛出）。设限的原因：失去响应的 provider 流会阻塞 tracked cron run，卡住的客户端会阻塞 `app.close`，没有超时上限的 `stop()` 会永远不返回。
 
 **超时路径**：`stop()` reject → bin exit 1 → **daemon.json 保留**（进程仍在运行）。进行中的 cron run 按崩溃安全语义放弃（见 [cron](../core/cron.md) 的「停机与进行中的运行」）：JSONL 兼容尾部残缺行；该次触发认领时已推进 `next_run_at`，重启后不会重放，cron 在下个调度点照常触发。
 

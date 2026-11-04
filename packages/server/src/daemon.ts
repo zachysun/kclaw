@@ -265,7 +265,7 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // assembled further down).
   const bus = new EventBus()
   let mcpProjects: ReturnType<typeof createMcpProjects> | undefined
-  // 跨会话原始消息检索索引：写路径挂在 store 的 post-append 回调上（与总线
+  // 跨会话原始消息检索索引：写路径绑定在 store 的 post-append 回调上（与总线
   // 同一接入口，best-effort——索引失败绝不干扰 run）；存量会话由启动后的
   // 后台回填补齐（per-session 幂等）。purge 掉的会话在检索渲染时按 meta
   // 缺失过滤，事件路径的 session.deleted 也即时清行。
@@ -445,8 +445,8 @@ export async function launchDaemon(opts: LaunchDaemonOptions = {}): Promise<Daem
   // same late-bound getter breaks the cycle.
   const teamHost = createTeamHost({ config, sessions, bus, getRun })
   // /goal 循环主机（issue #47）：与 team host 同一空闲边缘。armed 是进程
-  // 内开关——daemon 重启后目标快照还在（meta.goal），但循环不自动续，用户
-  // 显式 resume 才重新起跑（ADR-0002）。判定器模型线走 config.goals.judge
+  // 内开关——daemon 重启后目标快照还在（meta.goal），但循环不自动继续运行，用户
+  // 显式 resume 才重新开始运行（ADR-0002）。判定器模型线走 config.goals.judge
   // 命中的条目（Model 页热生效链），默认回退会话模型线。
   const goalHost = new GoalLoopHost({
     config,

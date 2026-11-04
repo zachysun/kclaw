@@ -29,7 +29,7 @@ export interface RunInput {
   history: Message[]          // 不含本次用户消息
   system: string
   userText: string
-  trigger?: "user" | "cron" | "process" | "agent" | "team" | "goal"   // agent = subagent run（模型经 subagent_run 派出，见 subagents.md）；team = 团队收信箱投递的 run（见 agent-team.md）；process = 后台进程完成通知（bash run_in_background）；goal = 目标循环续跑
+  trigger?: "user" | "cron" | "process" | "agent" | "team" | "goal"   // agent = subagent run（模型经 subagent_run 派出，见 subagents.md）；team = 团队收信箱投递的 run（见 agent-team.md）；process = 后台进程完成通知（bash run_in_background）；goal = 目标循环续轮
   userMessage?: Message       // 宿主预制时循环原样使用且不再经 onMessage 持久化
   compaction?: ActiveSummary  // 运行起点的压缩视图（来自会话 meta）：生效时 upto（含）之前的原文不再发给模型，压缩摘要项由 toProviderMessages 垫在 messages[0]
 }
@@ -136,7 +136,7 @@ flowchart TD
 2. **hook 检查**：每个可执行调用先过 `hooks.runGate("tool-before", {toolCall})`（观察 + 失败否决权）——声明 `failure:"deny"` 的 hook 失败时该调用被拒绝：error result（文案 `hook <名> 失败，操作未执行：<原因>`）+ `kind:"denied"` note，不进权限检查、不执行，run 继续；其余失败照旧跳过。
 3. **权限检查**：每个可执行调用按模型顺序过 `check`——`deny` → error result + note 块（`kind:"denied"|"timeout"`）；`allow` → 记 `grantedBy`（`sandboxed` 即命令类工具由 bash 沙箱顶替人工的放行，见 [permissions](./permissions.md) 第 7 节）；`confirm` → 发 `confirmation.requested {confirmationId, toolCall, risk, expiresAt}`（沙箱启用但不可用时的回退确认带 `noteText`），`raceConfirmation` 同时等待三个来源：人工裁决 | confirmTimeoutMs 超时 | abort 信号，谁先到算谁。人工裁决是四选一（`once` / `project` / `global` / `reject`，来自 `confirmation.resolve` 帧）：`once`/`project`/`global` 都放行并记 `grantedBy:"confirmed"`（project/global 的规则由 run 组装的 `resolveConfirmation` 保存，见 [permissions](./permissions.md)）；`reject`/超时的文案固定："用户拒绝了该操作" / "确认超时，操作未执行"。
 4. **调度**：`concurrency:"parallel"` 的调用 `Promise.allSettled` 并发；`"serial"` 的在并行组全部结束后逐个 `await`。串行独占是结构保证（先等并行组全部结束，再逐个顺序执行），不是测试约束。执行器收到 `ctx.signal`（即 `deps.signal`）：长时间运行的工具（如 `subagent_run`）靠它感知父 run 的中止，实现"父停子停"（见 [subagents](./subagents.md)）。`ask_user_questions` 的等待走与人工确认同一个三方race（回答 / 超时 / abort，`permissions/broker.ts` 的 `racePending`）。中止时等待作废、不发 `question.resolved`（见 [tools](./tools.md) 的 ask 工具一节）。
-5. **结果**：每个执行中的结果发 `tool_result.created → tool_result.delta（executor 的 onOutput）→ tool_result.completed`；未执行（参数解析失败/未知工具/hook 检查拒绝/abort 拦截）的结果只补 created+completed。结果块一律按模型给定顺序写入；拒绝 note 排在结果之后；`grantedBy` 记为 `Record<callId, GrantedBy>` 挂在 tool 消息上。
+5. **结果**：每个执行中的结果发 `tool_result.created → tool_result.delta（executor 的 onOutput）→ tool_result.completed`；未执行（参数解析失败/未知工具/hook 检查拒绝/abort 拦截）的结果只补 created+completed。结果块一律按模型给定顺序写入；拒绝 note 排在结果之后；`grantedBy` 记为 `Record<callId, GrantedBy>` 附着在 tool 消息上。
 6. **死循环守卫**：执行完成后（completed 发出前）按"工具名 + 参数串"签名做跨回合计数——同一签名连续执行达到 `sessions.toolLoopMaxRepeats`（默认 5，`0` 关闭）次时，该次结果附加一行 `<system-reminder kind="loop-guard">` 换策略提醒，随结果持久化、审计可见；签名变化即重置计数。守卫只提醒不终止，硬停止留待真实需要时再做。
 7. `onMessage` 持久化 → `message.completed` → 回到循环顶部。
 
@@ -154,7 +154,7 @@ flowchart TD
 
 `toProviderMessages(history, opts?)`（`packages/core/src/agent/context.ts`）是协议消息 → provider 请求的格式翻译点：
 
-- **全量历史直发**：历史消息全部进入请求，没有"最多取最近 N 条"的条数窗口（窗口已删除，见下）。上下文长度由压缩体系统一管：长会话的正常收缩靠压缩（见 [compaction](./compaction.md)）——预压线后台压缩、黄线、红线 × 有效 budget 逐级接管，省略线管工具输出，超限急救接住溢出。按条数截尾的问题在于切点随新消息逐轮前移，请求头部每轮都在变，prompt cache 前缀从第一条消息起就断且无告警，所以彻底删掉。压缩视图（`ActiveSummary { upto, top }`）由宿主从会话 meta 取出放进 `RunInput.compaction`，循环内的 `buildMessages` 据此把 `upto`（含）之前的原文排除在发送范围外，`toProviderMessages` 再把压缩摘要项垫进待发送数组——循环本身不感知也不改动 JSONL 里的原始消息。运行起点不跑任何压缩（「发送前预压缩」这一做法已删除，压缩只发生在后台预压 / 收尾 / 运行中 / 超限急救四个自动时机加手动 /compact，见 [compaction](./compaction.md)）。
+- **全量历史直发**：历史消息全部进入请求，没有"最多取最近 N 条"的条数窗口（窗口已删除，见下）。上下文长度由压缩体系统一管：长会话的正常收缩靠压缩（见 [compaction](./compaction.md)）——预压线后台压缩、黄线、红线 × 有效 budget 逐级接管，省略线管工具输出，超限急救接住溢出。按条数截尾的问题在于切点随新消息逐轮前移，请求头部每轮都在变，prompt cache 前缀从第一条消息起就断且无告警，所以彻底删掉。压缩视图（`ActiveSummary { upto, top }`）由宿主从会话 meta 取出放进 `RunInput.compaction`，循环内的 `buildMessages` 据此把 `upto`（含）之前的原文排除在发送范围外，`toProviderMessages` 再把压缩摘要项垫进待发送数组——循环本身不感知也不改动 JSONL 里的原始消息。运行起点不执行任何压缩（「发送前预压缩」这一做法已删除，压缩只发生在后台预压 / 收尾 / 运行中 / 超限急救四个自动时机加手动 /compact，见 [compaction](./compaction.md)）。
 - **工具输出省略**（`opts.toolResultKeep`，server 从 `config.sessions.toolResultKeep` 传入，默认 0 = 不按条数省略；`N≥1` 时）：从最新消息往前数，最多保留最近 N 个工具结果原文（条数上限），更早的把输出文本替换成一行占位符 `[此工具输出已省略：<工具名> <参数摘要>，可重新调用获取]`（调用失败加"（该次调用失败）"）。传了 `opts.tokenBudget` 时在条数上限内再做 budget 驱动逐出：以"非工具结果内容的估算 token + 被上限挤掉结果的占位行"为基线，从最新到最旧逐条处理——最新的 2 条无条件保留（保底可见性，保证占位符"重新调用获取"的建议始终可行），其余各条独立判断，装得下保留、装不下省略。两者都只影响发出的请求，JSONL 存储不动；配对关系不变，不产生无效请求。不传任何 opts 时行为完全不变（全部保留）。详见 [compaction](./compaction.md) 机制二/三。
 - **工具清单按名排序**：发给模型的 `toolDefs`（内置 + 测试覆盖 + `extraTools` 追加 + readonly 裁剪之后的最终清单）在 run 组装末尾按 `name` 做 code point 序排序。tools 数组在请求前缀的最前面，MCP 连接恢复/重连后视图迭代序一变，整个 prompt cache 前缀就失效；排序让「集合没变顺序变了」不再发生。发送面（toolDefs）与检索池（`promotableDefs`，分层披露的池数组，见 [reference/tools](../reference/tools.md) 的"工具披露分层"）各自排序；executor 的 Map 顺序无关不动，同名冲突日志语义也不变。
 - **prompt-cache 路由**：主循环构造的每个 LLM 请求恒带 `promptCache: { key: sessionId }`（subagent 经同一路径自然用自己的会话 id，不继承父会话）——适配器据此加缓存标记（Anthropic `cache_control` 断点 / OpenAI `prompt_cache_key`），条目配置 `promptCache: "off"` 或端点回 400 时的退避见 [provider](./provider.md) 的 2b 节。goal judge、autoname 等一次性辅助调用不经 runAgent、不带该字段；压缩的段摘要是例外——默认形状直接复用主 run 的 system、工具清单与同一缓存键（见 [compaction](./compaction.md) 的"第一次调用"一节），只有无前缀可复用时的独立形状与归并调用才不带。
@@ -199,10 +199,10 @@ finish_reason: stop → end_turn    length → max_tokens    tool_calls → tool
 daemon 侧 `RunManager.cancel(sessionId)` 调 `AbortController.abort()`，循环在 **6 个检查点** 响应 `deps.signal`：
 
 1. 迭代开始前——无任何产出，直接 `run.completed {stopReason:"aborted"}`，不合成空 assistant（空消息会被部分 provider 拒收）。
-2. 流中（`streamWithAbort` 包装）——`Promise.race(stream.next(), abort)` 立即停止处理，不再等待可能永久停滞的流。取消信号同时接进 LLM 请求本身（`LlmRequest.signal`，见 [provider](./provider.md)）：底层 HTTP 连接立即断开，原先的形状是循环层已放弃、请求却还挂在 daemon 里继续读流，最长拖到 300 秒超时。
+2. 流中（`streamWithAbort` 包装）——`Promise.race(stream.next(), abort)` 立即停止处理，不再等待可能永久停滞的流。取消信号同时接进 LLM 请求本身（`LlmRequest.signal`，见 [provider](./provider.md)）：底层 HTTP 连接立即断开，原先的形状是循环层已放弃、请求却还在 daemon 里继续读流，最长拖到 300 秒超时。
 3. 流后——无 `message_done`，就地打上 `stopReason = "aborted"`，部分内容照常持久化。
 4. 权限检查中——不再进行 gate 的后续调用；确认等待中 abort 经 `raceConfirmation` 以 `"aborted"` sentinel（区分结果来源的特殊返回值）胜出，**不发** `confirmation.resolved`（用户取消 ≠ 超时拒绝）。
-5. 调度中——不再启动新工具；已启动的执行器循环层不强杀、等它返回，但取消信号会传进执行器（`ctx.signal`）：响应信号的工具当场收短（bash 杀掉子进程组并返回 `command aborted`，见 [tools](./tools.md)；subagent_run 停掉子会话 run，见 [subagents](./subagents.md)），不响应信号的工具自然跑完。
+5. 调度中——不再启动新工具；已启动的执行器循环层不强制终止、等它返回，但取消信号会传进执行器（`ctx.signal`）：响应信号的工具当场收短（bash 终止子进程组并返回 `command aborted`，见 [tools](./tools.md)；subagent_run 停掉子会话 run，见 [subagents](./subagents.md)），不响应信号的工具自然执行结束。
 6. 未及执行的工具——统一补 `errorResult(callId, "run aborted before execution")`，tool 消息保持完整。
 
 终态统一为 `run.completed {stopReason:"aborted"}`（不是 run.failed）；客户端把它当正常终态渲染。
