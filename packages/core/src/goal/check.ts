@@ -11,13 +11,13 @@
  * 刷新还是直接停），与 met/impossible 终态写回共用同一份计数。
  */
 import type { JudgeGoalOutput } from "./judge.js"
+import { noProgressMarked } from "./contract.js"
 import {
   continuationUserText,
   gateFailureUserText,
   judgeUnavailableUserText,
-  noProgressMarked,
   windDownUserText,
-} from "./prompt.js"
+} from "../prompts/goal.js"
 import {
   GOAL_APPROVAL_TIMEOUT_ROUNDS,
   GOAL_GATE_EXHAUSTED,

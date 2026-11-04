@@ -1,29 +1,14 @@
 /**
- * /goal 的三组提示词（issue #47）：判定器（独立 LLM，严格 JSON 三值
- * 裁决）、续轮注入（下一轮 goal 触发 run 的用户文本）、收尾注入（token
- * budget耗尽后的最后一轮）。纯函数、无 Node API——浏览器构建可引用。
- * 注入文本沿用仓库的 XML 标签约定（<goal-continue>/<goal-wrapup>，同
- * <compacted-summary> 先例），闭合标签逃逸在拼装处处理。
+ * /goal 的三组注入文本模板（issue #47；消费方：goal/index.ts、judge.ts、
+ * check.ts）：判定器（独立 LLM，严格 JSON 三值裁决）、续轮注入（下一轮
+ * goal 触发 run 的用户文本）、收尾注入（token budget耗尽后的最后一轮）。
+ * 纯函数、无 Node API——浏览器构建可引用。注入文本沿用仓库的 XML
+ * 标签约定（<goal-continue>/<goal-wrapup>，同 <compacted-summary> 先例），
+ * 闭合标签逃逸在拼装处处理。
  */
-import type { GoalGateOutcome, GoalJudgeResult, GoalSnapshot } from "./types.js"
-import { GOAL_GATE_EXHAUSTED, GOAL_JUDGE_MAX_TOKENS } from "./limits.js"
-
-/** 判定器允许的输出 token 上限（请求组装处调用）。 */
-export const judgeMaxTokens = GOAL_JUDGE_MAX_TOKENS
-
-/**
- * 判定器"无进展"的标记串：判定器 system 提示词的输出契约（没有进展
- * 就写这个字）与循环调用侧的无进展检测共用同一常量。改这个字必须两端
- * 一起变，此处是唯一出处。
- */
-export const NO_PROGRESS_MARK = "无"
-
-/** progress 字段是否标记为无进展（缺失/空白/恰好是标记串）。 */
-export function noProgressMarked(progress: string | undefined): boolean {
-  if (progress === undefined) return true
-  const t = progress.trim()
-  return t === "" || t === NO_PROGRESS_MARK
-}
+import type { GoalGateOutcome, GoalJudgeResult, GoalSnapshot } from "../goal/types.js"
+import { GOAL_GATE_EXHAUSTED } from "../goal/limits.js"
+import { NO_PROGRESS_MARK } from "../goal/contract.js"
 
 /** 闭合标签逃逸：证据里出现的 `</goal-...>` 会被打散，防提示词提前结束。 */
 function escapeClosingTags(text: string): string {

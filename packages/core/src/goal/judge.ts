@@ -9,7 +9,8 @@ import type { LlmClient } from "../provider/types.js"
 import type { Message } from "../protocol/messages.js"
 import { mergeUsage, type Usage } from "../protocol/messages.js"
 import { isBlockType } from "../protocol/blocks.js"
-import { judgeMaxTokens, judgeSystemPrompt, judgeUserContent } from "./prompt.js"
+import { judgeMaxTokens } from "./contract.js"
+import { judgeSystemPrompt, judgeUserContent } from "../prompts/goal.js"
 import {
   GOAL_EVIDENCE_MAX_MESSAGES,
   GOAL_EVIDENCE_TEXT_CHARS,

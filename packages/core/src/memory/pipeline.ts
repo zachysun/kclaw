@@ -18,6 +18,8 @@ import { VectorIndex, type IndexEntry } from "./indexer.js"
 import type { EmbeddingClient } from "./embeddings.js"
 import { writeCognitionFile, parseCognitionFile, cognitionPath, type CogKind } from "./cognition.js"
 import { writeFileAtomic } from "../storage/atomic.js"
+// 提取/沉淀的固定文案在 prompts/memory.ts；字段名与本文件的校验逐字一致，改动两端同步。
+import { CONSOLIDATE_SYSTEM_PROMPT, EXTRACT_SYSTEM_PROMPT } from "../prompts/memory.js"
 
 export type PipelineTrigger = "immediate" | "manual" | "interval" | "follow" | "clear"
 
@@ -62,53 +64,6 @@ export interface PipelineDeps {
   /** 后台调用用量记录：提取/沉淀调用的 usage 回调（daemon 注入；默认不记）。 */
   recordChoreUsage?: ChoreUsageRecorder
 }
-
-/** 提取器固定文案。字段名必须与 #extract 的校验逐字一致——模型
- *  只从这里认识 JSON 结构（2026-09-01 回归：旧文案未指名 op/file，真实模型
- *  交回 type 判别 + 缺 file，动作全被丢弃且不重试）。 */
-export const EXTRACT_SYSTEM_PROMPT = [
-  "你是长期记忆的情节提取器。输入是一段会话消息（每行一条）与该项目已有的主题线清单（MEMORY.md 表格）。",
-  "只输出一个 JSON 对象：{\"actions\":[…]}，actions 里每个动作都是 JSON 对象，字段名固定如下：",
-  "- op：动作类型，只能取 \"append\"、\"update\"、\"new-thread\" 之一（判别字段名是 op，不是 type）。",
-  "- file：目标线文件名（kebab-case、不含 .md），每个动作必填；new-thread 时它就是新线的文件名。",
-  "- content：情节正文，每个动作必填。",
-  "- title（一句话短标题，30 字以内）：每个动作必填；new-thread 时它同时是线的显示名。update 动作额外带 section（要修正的小节短标题）；new-thread 动作额外带 thread（kebab-case 短名）。",
-  "- 判断某条线这段对话之后再无下文迹象（如明确的完成结论）时，给该动作加 status:\"inactive\"。",
-  "完整示例：{\"actions\":[{\"op\":\"new-thread\",\"file\":\"user-pref-plain-language\",\"thread\":\"user-pref-plain-language\",\"title\":\"用户偏好通俗语言\",\"content\":\"用户自称小白，要求所有解释都用通俗语言。\"},{\"op\":\"append\",\"file\":\"user-pref-plain-language\",\"title\":\"通俗语言偏好扩展到代码示例\",\"content\":\"用户补充：技术文档里的代码示例也要配大白话说明。\"}]}",
-  "情节要有叙事要素（做了什么/结果/说了什么/有何要求），不要孤立的一句话事实；能接上已有线就对该线的 file 做 append/update，接不上才 new-thread。",
-  "已有主题线里已记录过的内容不要重复记录；append/update 只落这段消息里出现的新信息，同一经历的转述不算新信息。",
-  "区分说话人：只有用户消息里的话才算用户的表态；助手自己的复述、确认，以及记忆检索结果里的内容，都不算用户的新经历或新要求。",
-  "以下三类不要记为经验：一次性的环境故障（网络抖动、服务暂时 5xx——不是持久事实）；对工具或方法的负面断言（某次失败不等于\"X 不可用/不行\"，记了会让以后自缚手脚）；没走通的尝试（不许包装成可靠工作流，只有走通并验证过的做法才值得记）。",
-  "噪音（寒暄、与长期记忆无关的过程性内容）直接跳过。无值得记的内容输出 {\"actions\":[]}。只输出 JSON，不要输出任何其他文字。",
-].join("\n")
-
-/** 沉淀器固定文案。字段名必须与 parseCognitionActions 的校验逐字一致
- *  （2026-09-01 回归：旧文案 "wiki:<name>" 记法诱导模型把名字嵌进 target）。
- *  2026-11-01 加准入门槛重写：旧文案唯一门槛是"宁小勿大"口号，且暗示了不存在的
- *  "落项目"选项（写入 scope 恒为 global），单项目情节被沉淀进 global 后常驻注入
- *  所有会话，新项目的回答会被旧项目带偏。新文案三类各设门槛：persona 只记倾向
- *  不断言、rule 需两次经历印证、wiki 排除单项目内容。 */
-export const CONSOLIDATE_SYSTEM_PROMPT = [
-  "你负责维护用户的长期记忆。这次的任务：给你一条主题线（同一话题的一串对话记录）的全部记录，判断其中有没有值得写进\"全局认知\"的内容。",
-  "全局认知是跨项目的长期记忆：一旦写入，用户之后所有项目的每次会话都会自动读到它，写错了会持续误导之后的助手。所以判断标准不是\"这段经历里有没有新东西\"，而是\"能从中得出换个项目依然成立的结论吗\"。多数主题线得不出，直接输出空 actions。",
-  "输入有两部分：这条主题线的全部记录（每条带日期、标题、正文），以及现有的全局认知文件全文（可能为空）。",
-  "只输出一个 JSON 对象，形如 {\"actions\":[…]}。actions 里每个动作的字段固定如下：",
-  "- target：写入哪一类，只能取 \"persona\"、\"wiki\"、\"rule\" 三个值之一，文件名不写进这个字段（不要写成 \"wiki:xxx\"）。",
-  "- name：文件名。target 为 \"wiki\" 或 \"rule\" 时必填，为 \"persona\" 时省略。用简短的名字直接说明这个文件记什么。",
-  "- op：\"append\"（在现有文件末尾追加一条）、\"create\"（新建文件）、\"rewrite\"（改写现有内容，content 给出改写后的完整正文）。",
-  "- content：认知正文。",
-  "- source：这条认知的出处，格式 topic#日期。",
-  "三类的准入标准：",
-  "- persona（用户画像）：收跨项目稳定的特质与偏好，比如\"在意助手怎么知道信息\"\"喜欢先看推荐再拍板\"，写成连贯段落。只见过一次的行为也可以记，但写成倾向（\"在……时倾向于……\"），不要写成断言。",
-  "- rule（给助手的行为规则）：门槛最高。只收两种来源：现有认知里已经记过、这次又再次出现的行为；或这段记录里反复出现的行为。只见过一次的观察先记进 persona 当倾向，等以后再次遇到，才写成 rule。每条规则一个小节，写清\"遇到什么情况、怎么做\"。",
-  "- wiki（领域知识）：收跨项目可复用的知识，比如某类工具的用法要点、某个领域的常识，一个主题一个文件。单个项目自己的设定、剧情、代码细节不进 wiki。",
-  "更新规则：",
-  "- 现有认知已经记了、这次经历再次出现的：不要动。",
-  "- 现有认知和这次经历不一致的：用 op:\"rewrite\" 改正对应的部分。",
-  "- 确实是现有认知里没有的新内容：用 op:\"append\" 追加，或 op:\"create\" 新建。",
-  "- 同一条认知只写一处：说用户是什么样的人，写 persona；要求助手以后怎么做，写 rule；领域知识，写 wiki。",
-  "没有值得写的内容是常见结果，直接输出 {\"actions\":[]}。只输出 JSON，不要输出任何其他文字。",
-].join("\n")
 
 interface CognitionAction {
   target: "persona" | "wiki" | "rule" | "skill"

@@ -10,7 +10,7 @@
  */
 import type { GoalCheckedEvent, SessionEvent } from "../protocol/session-events.js"
 import type { DerivedLoop } from "./types.js"
-import { noProgressMarked } from "./prompt.js"
+import { noProgressMarked } from "./contract.js"
 
 export function deriveGoalLoop(events: SessionEvent[]): DerivedLoop {
   const zero: DerivedLoop = {

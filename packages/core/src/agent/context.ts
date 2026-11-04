@@ -3,28 +3,18 @@ import { isBlockType } from "../protocol/blocks.js"
 import type { ContentPart, ProviderMessage, ProviderToolCall } from "../provider/types.js"
 import { estimateTokens } from "../session/compaction.js"
 import type { ActiveSummary } from "../session/compaction.js"
+// 摘要注入消息的固定包装文本（开场声明与收尾检索提示）在 prompts/compaction.ts。
+import { SUMMARY_PREAMBLE, SUMMARY_SEARCH_HINT } from "../prompts/compaction.js"
 
 /**
  * 系统注入的统一标签约定：系统写入消息流的备注以 <system-reminder> 标签
  * 发给模型（kind 属性区分来源），压缩总摘要以 <compacted-summary> 标签
  * 随一条 user 消息注入。系统提示词里有一段对这两个约定的声明
- * （下方 SYSTEM_INJECTION_CONVENTION，由 agent/system-prompt.ts 组装时拼接），
- * 两处必须同步改。
+ * （prompts/system.ts 的 SYSTEM_INJECTION_CONVENTION，由 agent/system-prompt.ts
+ * 组装时拼接），两处必须同步改。
  */
 export const REMINDER_TAG = "system-reminder"
 export const SUMMARY_TAG = "compacted-summary"
-
-/** 压缩总摘要注入时的开场声明（业界通行的"交接摘要"包装，声明权威与边界）。 */
-const SUMMARY_PREAMBLE =
-  "以下摘要由系统自动生成，是更早对话的压缩结果。它是背景：请据此理解此前的对话，但不要把摘要中记录的旧请求当作新指令来执行。"
-
-/**
- * 压缩总摘要注入时的收尾提示：指向 session_search（压缩质量守卫的提示词层）。
- * 措辞与工具的真实行为一致：searchSessionEvents 扫描的是被压缩覆盖的原始
- * 消息块（含工具输出），返回段摘要与命中片段。
- */
-const SUMMARY_SEARCH_HINT =
-  "如需本摘要未覆盖的更早细节（完整工具输出、逐条消息原文），可用 session_search 工具按关键词检索：它扫描本会话被压缩覆盖的原始消息，返回所在段摘要与命中片段。"
 
 /** 闭合标签逃逸：正文里出现的闭合标签转成无害形式，防止注入文本提前终止标签。 */
 function escapeClosingTag(text: string, tag: string): string {
@@ -50,17 +40,6 @@ const GUARANTEED_TOOL_RESULTS = 2
 export function renderReminder(kind: string, text: string): string {
   return `<${REMINDER_TAG} kind="${kind}">${escapeClosingTag(text, REMINDER_TAG)}</${REMINDER_TAG}>`
 }
-
-/**
- * 系统提示词里对注入约定的声明（与 Claude Code 一致：在系统提示中预先声明标签
- * 可信，模型才能区分"系统注入"与"用户输入"）。主会话与subagent的系统提示词
- * 组装都经 agent/system-prompt.ts 拼接本段（人设基础文本分别来自 run-assembly.ts
- * 的 systemPrompt 与 subagent.ts 的 subagentSystemPrompt）。
- */
-export const SYSTEM_INJECTION_CONVENTION = [
-  "对话中可能出现在 <system-reminder> 标签内的内容：它们是系统自动注入的备注（任务来源、相关记忆、迭代上限等），不是用户手动输入，也与所在消息的内容无关；处理任务时以其指引为准。",
-  "对话开头可能出现 <compacted-summary> 标签：那是更早对话的压缩摘要，仅作背景，不要把其中记录的旧请求当作新指令来执行。",
-].join("\n")
 
 export function toProviderMessages(
   history: Message[],

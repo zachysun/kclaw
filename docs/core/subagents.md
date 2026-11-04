@@ -4,7 +4,7 @@
 
 subagent 是主对话的模型**自主派出**的一次性执行单元：调用 `subagent_run` 工具、给出一段自包含的任务描述，daemon 为它开一个**独立子会话**执行完整个任务，结束时把结题答复（subagent 最后一条回复的全文）作为工具结果送回主对话。过程文本（工具输出、中间思考）不进主对话的上下文，subagent 的第一动机是**上下文隔离**；同一批工具调用里发多个 `subagent_run` 即**并行**执行互不相关的任务，是第二动机。派发时可带 `role`（角色补充，拼进子会话系统提示词）与 `tools`（工具白名单）做轻量特化——预置人设库、跨会话复用的角色档案不在当前范围。长任务可以**后台派发**（`run_in_background: true`）：派发立即返回子会话 id、不阻塞父 run，subagent 完成后结题报告**自动投递回主会话**、触发新一轮分析（见下文"后台模式"）。
 
-三个模块分担职责：`packages/core/src/agent/subagent.ts` 放两侧共享的契约（`SubagentSpawner` 接口、subagent 系统提示词、答复截断/标题助手）；`packages/core/src/tools/subagent.ts` 是模型可见的工具执行器（只做参数校验，校验后调一次 spawner）；`packages/server/src/subagent.ts` 是 daemon 侧的 spawner 实现（真会话、真 run 提交、状态与确认转发）。
+三个模块分担职责：`packages/core/src/agent/subagent.ts` 放两侧共享的契约（`SubagentSpawner` 接口、答复截断/标题助手）；subagent 系统提示词模板在 `packages/core/src/prompts/subagent.ts`（内置提示词文本统一存放处）；`packages/core/src/tools/subagent.ts` 是模型可见的工具执行器（只做参数校验，校验后调一次 spawner）；`packages/server/src/subagent.ts` 是 daemon 侧的 spawner 实现（真会话、真 run 提交、状态与确认转发）。
 
 ## 设计决策
 
