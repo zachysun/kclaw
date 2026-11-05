@@ -24,7 +24,7 @@ kclaw 尚未发布 npm 包（恢复发布时 `packages/kclaw` 直接 `npm publis
 
 ## CI
 
-`.github/workflows/ci.yml` 在 push main 与 PR 时触发，ubuntu + macos × node 22/24 四个组合执行 install → build → typecheck → test。node 22 是发布下限，24 是实际部署形态（better-sqlite3 按 node 版本编译，双档都能锁住）。纯 `docs/**` 与 `*.md` 的改动跳过 CI。
+`.github/workflows/ci.yml` 在 push main 与 PR 时触发，ubuntu + macos × node 22/24 四个组合执行 install → build → typecheck → test。node 22 是发布下限，24 是实际部署形态（better-sqlite3 按 node 版本编译，双档都能锁住）。纯 `docs/**` 与 `*.md` 的改动跳过 CI。另支持手动触发（`workflow_dispatch`）：push 事件丢失、或纯 docs 推送本来就不触发 CI 时，可在 GitHub 页面上补跑一次，避免 main 上缺一次 CI 记录。
 
 ## 关联
 

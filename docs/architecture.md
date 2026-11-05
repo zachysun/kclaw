@@ -39,13 +39,14 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 ### 各包内部结构
 
-**core**（入口 `packages/core/src/index.ts`）统一导出 16 个子目录：
+**core**（入口 `packages/core/src/index.ts`）统一导出 17 个子目录：
 
 | 子目录 | 内容 |
 |--------|------|
 | `protocol/` | 消息、块、事件、WS 指令帧、会话事件、ID、团队域、技能提案、UI 卡 DSL（`ui_render` 的 `data` 通道形状），以及 MCP、goal、usage 与改动记录的 REST 响应类型（GET /mcp 的 `McpSnapshotResponse`、GET /sessions/:id/goal 的 `GoalViewResponse`、GET /usage 的 `UsageBody`、GET /sessions/:id/changes 的 `ChangesView` 与 `/changes/file` 的 `ChangeFileContent`）的定义——线上数据形状的权威来源，经 `@kclaw/core/protocol` 子路径出口供三端引用 |
 | `provider/` | OpenAI 兼容与 Anthropic Messages 两种协议的模型客户端，带重试、内置预设目录与统一的端点/模型解析（resolver，见 [provider](./core/provider.md)）；两种线格式的全部知识（类型、鉴权头、URL 规则、embeddings 能力位、探活请求形状）单源在 `formats.ts` 的 wire-format 注册表 |
 | `agent/` | agent 循环、上下文组装、工具契约、单次 run 的组装（`run-assembly.ts` 的 `executeRun`） |
+| `prompts/` | 内置提示词文本的统一存放处（系统提示词回退与注入约定、压缩摘要、goal 注入模板、团队人设、记忆提取与沉淀、技能提炼、subagent 精简模板、会话自动命名）；随附守卫测试——实现文件里再出现提示词形态的中文文本即测试失败，防止文本散落回实现文件。仅团队提示词经入口导出，其余由各使用模块直接 import |
 | `hooks/` | hook 系统：14 个挂载位置、HookChain 注册接口、用户文件装载、内置 hook（见 [hooks](./core/hooks.md)） |
 | `storage/` | 路径解析、配置读取、JSONL（每行一条 JSON 的文本文件）读写；含用量记录 `usage.ts` 与已保存权限规则 `decided-rules.ts` |
 | `session/` | SessionStore 与上下文压缩：token 估算、分界、渲染等纯函数、事件流存储、事件流哈希链（`integrity.ts`：每行带前一行摘要，校验函数判定 ok/partial/not-chained/torn-tail/broken，见 [storage](./core/storage.md)）、压缩引擎 `Compactor`、会话自动命名、会话 fork 原语（把截至某条消息的历史复制成独立新会话）；`session_search` 工具直接扫事件流 |
@@ -56,8 +57,8 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 | `skills/` | 技能解析、双作用域扫描、指定匹配、复用检测与软链接接入、提案制的技能进化（提炼 pipeline 与提案存取，见 [skills](./core/skills.md)） |
 | `cron/` | CronScheduler（定时任务调度） |
 | `mcp/` | MCP（Model Context Protocol：给模型接入外部工具的开放协议）客户端管理器 |
-| `team/` | agent 团队的存储（TeamStore：团队目录/收信箱/任务板）与提示词（见 [agent-team](./core/agent-team.md)） |
-| `goal/` | /goal 目标循环的领域模块：快照类型、硬性上限常量、判定器与验收命令、三组注入提示词、事件派生纯函数（derive.ts）与轮决策纯函数（check.ts：九条停止条件与续轮/收尾判定）（调用方在 server 的 goal-loop.ts，见 [goal](./core/goal.md)） |
+| `team/` | agent 团队的存储（TeamStore：团队目录/收信箱/任务板）与团队工具的接口边界（`facade.ts`：身份规则在 core、实现在 server 团队宿主；见 [agent-team](./core/agent-team.md)） |
+| `goal/` | /goal 目标循环的领域模块：快照类型、硬性上限常量、判定契约常量（`contract.ts`：判定器输出上限与"无进展"标记串，判定器与循环侧检测共用）、判定器、验收命令的沙箱执行器（`gate.ts`）、事件派生纯函数（derive.ts）与轮决策纯函数（check.ts：九条停止条件与续轮/收尾判定）；注入文本模板在 `prompts/goal.ts`（调用方在 server 的 goal-loop.ts，见 [goal](./core/goal.md)） |
 | `notify/` | 任务完成通知 |
 
 根级另有 `bus.ts`（EventBus，进程内事件分发）与 `client-http.ts`（CLI/WebUI 共享的 HTTP 请求模块：自动附带 Bearer token、提取错误信息、处理 204/空响应，经 `@kclaw/core/client-http` 子路径出口；不 import 任何 Node 专属模块，浏览器可以直接打包）。`mentions.ts`（`@` 文件引用的纯函数层：提取、候选补全与模型侧包装文本，经 `@kclaw/core/mentions` 子路径出口；机制见 [file-mentions](./core/file-mentions.md)）与 `provider/formats.ts`（LLM 线格式注册表：格式类型与校验、鉴权头、端点 URL、embeddings 能力位、探活请求形状，经 `@kclaw/core/provider-formats` 子路径出口；协议实现、探活、配置与 REST 校验、daemon 的 embedding 能力判定、WebUI Model 页的格式下拉都直接读它，不再各存一份镜像）同为浏览器可引用的纯模块。`sandbox/`（bash 工具的操作系统级沙箱：Seatbelt/bwrap 检测与包装，见 [sandbox](./core/sandbox.md)）是内部模块，不经入口导出，由 run 组装直接 import。

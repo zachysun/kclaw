@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/goal/` 是目标循环的领域模块（类型/上限/提示词/判定器/验收命令/事件派生/轮决策）；`packages/server/src/goal-loop.ts` 的 `GoalLoopHost` 是 daemon 侧驱动主机，只做副作用编排——执行验收命令、调判定器、写事件、按 core 给出的决策入队或停止。
+`packages/core/src/goal/` 是目标循环的领域模块（类型/上限/判定契约/判定器/验收命令/事件派生/轮决策，注入文本模板与判定器提示词在 `packages/core/src/prompts/goal.ts`）；`packages/server/src/goal-loop.ts` 的 `GoalLoopHost` 是 daemon 侧驱动主机，只做副作用编排——执行验收命令、调判定器、写事件、按 core 给出的决策入队或停止。
 
 给会话设一个**可验证的目标**，daemon 自主多轮推进：每轮 run 结束后先执行验收命令、再由一个独立的判定器 LLM 裁决目标是否达成，没达成就把判定意见注入下一轮继续工作，直到达成、被判定不可能、或触碰硬性上限才停。会话的普通对话（打字发消息）在任何时刻都可用——goal 循环只是队列里的一种 run 来源，用户输入照常 steer/wait/interrupt。
 
