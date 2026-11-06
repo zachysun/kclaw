@@ -245,11 +245,17 @@ export function checkCommandFrame(frame: object, deps: CheckDeps): FrameCheck {
       if (!deps.hasRun) {
         return { kind: "error", message: "run manager not available" }
       }
-      const { sessionId } = msg
+      const { sessionId, messageId } = msg
       if (typeof sessionId !== "string" || sessionId.length === 0) {
         return { kind: "error", message: "run.cancel requires a non-empty string sessionId" }
       }
-      return { kind: "command", command: { type: "run.cancel", sessionId } }
+      if (messageId !== undefined && typeof messageId !== "string") {
+        return { kind: "error", message: "run.cancel messageId must be a string" }
+      }
+      return {
+        kind: "command",
+        command: { type: "run.cancel", sessionId, ...(messageId !== undefined ? { messageId } : {}) },
+      }
     }
     case "compaction.cancel": {
       if (!deps.hasRun) {

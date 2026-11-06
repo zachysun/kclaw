@@ -435,6 +435,39 @@ describe("ws run commands (send_message / run.cancel)", () => {
     expect(env.sessions.readMessages(session.id).map((m) => m.role)).toEqual(["user"])
   })
 
+  it("run.cancel with a messageId only stops that message's run", async () => {
+    const { env, url } = await makeWsRun(hangingClient())
+    const session = env.sessions.create("定向取消会话")
+
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: session.id }))
+    await waitFor(frames, (f) => f.type === "subscribed")
+
+    ws.send(JSON.stringify({ type: "send_message", sessionId: session.id, text: "别回了" }))
+    const ack = (await waitFor(frames, (f) => f.type === "send_message_ack")) as unknown as { messageId: string }
+    await waitFor(frames, (f) => f.type === "llm.started")
+
+    // 取消方以为还在执行自己的 run，实际已轮到别人：这条取消不能生效
+    ws.send(JSON.stringify({ type: "run.cancel", sessionId: session.id, messageId: "msg_someone_else" }))
+    expect(await waitFor(frames, (f) => f.type === "error")).toMatchObject({ type: "error", message: "no active run" })
+
+    ws.send(JSON.stringify({ type: "run.cancel", sessionId: session.id, messageId: ack.messageId }))
+    await waitFor(frames, (f) => f.type === "run_cancel_ack")
+    const completed = (await waitFor(frames, (f) => f.type === "run.completed")) as AgentEvent
+    expect((completed.payload as RunCompletedPayload).stopReason).toBe("aborted")
+  })
+
+  it("rejects a non-string run.cancel messageId", async () => {
+    const { url } = await makeWsRun(hangingClient())
+    const ws = await openAuthed(url)
+    const frames = collectFrames(ws)
+    ws.send(JSON.stringify({ type: "run.cancel", sessionId: "ses_x", messageId: 7 }))
+    expect(await waitFor(frames, (f) => f.type === "error")).toMatchObject({
+      type: "error", message: "run.cancel messageId must be a string",
+    })
+  })
+
   it("plumbs a provider throw into run.failed and persists the partial assistant message with stopReason error", async () => {
     const llm: LlmClient = {
       async *stream(): AsyncIterable<LlmStreamEvent> {

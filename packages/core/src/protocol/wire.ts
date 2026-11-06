@@ -142,7 +142,12 @@ export interface QueueCancelFrame {
   messageId?: string
 }
 
-export interface RunCancelFrame { type: "run.cancel"; sessionId: string }
+export interface RunCancelFrame {
+  type: "run.cancel"
+  sessionId: string
+  /** Stop the active run only if it executes this message: a sender's cancel must never reach the run queued behind its own. */
+  messageId?: string
+}
 export interface CompactionCancelFrame { type: "compaction.cancel"; sessionId: string }
 
 /** One client→daemon command frame. */

@@ -245,7 +245,7 @@ steer 条目被 `submit` 放进 `#steerBuf` 后，目标 run 在**迭代边界**
 
 ### run.cancel 的 aborted 路径（只中止当前 run）
 
-`cancel(sessionId)` 只做一件事：`#active` 有 controller → `abort()`、返回 true；没有 → false（ws 层回 `no active run`）。abort 后循环在下一个检查点以 `run.completed {stopReason:"aborted"}` 终止（不是 run.failed），确认等待中的 abort 不算超时拒绝。ack（`run_cancel_ack`）在处理完成后立即返回，终态事件随后经总线到达。
+`cancel(sessionId, messageId?)` 只做一件事：`#active` 有 controller → `abort()`、返回 true；没有 → false（ws 层回 `no active run`）。带 `messageId` 时只有活动 run 执行的正是这条消息才中止，否则同样返回 false：发送方的取消可能晚于自己 run 的结束，此时活动的已经是排在后面的别人的 run。abort 后循环在下一个检查点以 `run.completed {stopReason:"aborted"}` 终止（不是 run.failed），确认等待中的 abort 不算超时拒绝。ack（`run_cancel_ack`）在处理完成后立即返回，终态事件随后经总线到达。
 
 **run.cancel 只中止当前 run，不连带排队消息**。排队中的 wait 条目原封不动，当前 run 停止后由驱动器照常出队执行；排队消息的取消一律走 `queueCancel`。CLI 的三段 Ctrl+C、Web 的"当前回复停止"都建立在这个窄语义上。
 
