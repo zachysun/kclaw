@@ -320,7 +320,7 @@ export function mountAttachments(refs: AttachmentRef[], attachmentsDir: string, 
     const isImage = ref.mimeType.startsWith("image/")
     if (isText && ref.size <= TEXT_INLINE_MAX_BYTES) {
       let text = readFileSync(resolved, "utf8")
-      if (text.length > TEXT_INLINE_MAX_CHARS) text = `${text.slice(0, TEXT_INLINE_MAX_CHARS)}\n…[已截断]`
+      if (text.length > TEXT_INLINE_MAX_CHARS) text = `${text.slice(0, TEXT_INLINE_MAX_CHARS)}\n…[已截断，完整内容可用 fs_read 读取 ${resolved}]`
       blocks.push({ id: newBlockId(), type: "attachment", mimeType: ref.mimeType, name: ref.name, text, source: { type: "file", path: resolved } })
     } else if (isImage && ref.size <= IMAGE_INLINE_MAX_BYTES) {
       blocks.push({ id: newBlockId(), type: "attachment", mimeType: ref.mimeType, name: ref.name, source: { type: "base64", data: readFileSync(resolved).toString("base64") } })

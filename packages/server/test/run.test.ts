@@ -1823,6 +1823,25 @@ describe("RunManager attachment mounting", () => {
     expect(parts.some((p) => p.type === "image_url" && p.image_url?.url.startsWith("data:image/png;base64,"))).toBe(true)
   })
 
+  it("a truncated text attachment tells the model where the rest lives", async () => {
+    const reqs: LlmRequest[] = []
+    const { env, manager } = makeEnv(recordRequests(scriptClient([textTurn("收到")]), reqs))
+    const session = env.sessions.create("att-truncate")
+    const attDir = join(env.paths.attachmentsDir, session.id)
+    mkdirSync(attDir, { recursive: true })
+    const logPath = join(attDir, "stdin.txt")
+    writeFileSync(logPath, "日志行\n".repeat(4_000))
+
+    await manager.enqueue(session.id, {
+      userText: "找出原因",
+      trigger: "user",
+      attachments: [{ path: logPath, name: "stdin.txt", size: 40_000, mimeType: "text/plain" }],
+    })
+
+    const userMsg = reqs[0]!.messages.find((m) => m.role === "user")
+    expect(userMsg!.content).toContain(`…[已截断，完整内容可用 fs_read 读取 ${realpathSync(logPath)}]`)
+  })
+
   it("leaves large non-text attachments as metadata only", async () => {
     const reqs: LlmRequest[] = []
     const { env, manager } = makeEnv(recordRequests(scriptClient([textTurn("收到")]), reqs))

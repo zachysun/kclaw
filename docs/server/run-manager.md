@@ -18,7 +18,7 @@
 - **两侧的超时裁决互相一致**：引擎侧（core run-assembly）的 `raceResolution` 与循环侧的 `raceConfirmation` 用**同一个** `confirmTimeoutMs` 同时等待同一个人工 promise，谁先出结果算谁的——两侧结论一致；迟到的人工裁决被已经出结果的等待丢弃，服务端再把条目标记为过期，晚到的 resolve 只能得到 `unknown confirmation`。
 - **自动命名静默且不覆盖手动改名**：失败静默处理、两次校验默认标题（生成前、写回前），用户已手动改名则不再修改。更名成功写回 meta 后，经注入的 emit hook（`busEmit`）广播 `session.renamed {title, source?}`（`source: "auto"`，与用户/路由改名的 manual 区分）——订阅者立即收到通知。
 - **模型解析：每 run 一次，三级优先级**：本轮用哪个模型，按 `input.model`（cron 配置的模型或客户端指定的）→ 会话 meta 的 `model`（POST `/sessions/:id/model` 写入的那个）→ daemon 默认模型的顺序取第一个非空的。取到的值再经 `resolveEntry` 做一次翻译：如果它是 config 里 provider 条目的名字（比如 `deepseek`），就换成该条目配置的线上模型名（比如 `deepseek-chat`）；如果本来就是一个直接的 API 模型名则原样通过。解析发生在每个 run 开始时，所以改完会话模型后下一次 run 即生效。
-- **附件挂载：按文件类型分三种处理**：`mountAttachments` 把用户上传的文件转成用户消息上的 attachment 块。文本类文件（MIME 为 `text/*` 或扩展名是常见文本类型）且不超过 64KiB 时，读出正文内联进消息（超过 8192 字符截断并加 `\n…[已截断]`）；图片且不超过 5MiB 时转成 base64 内嵌（作为多模态内容段发给模型）；其余文件只在块里放 `{type:"file", path}` 路径信息，模型需要内容时自己用 fs_read 读。安全上有两道检查：ws 层在校验 send_message 帧时查过一次路径，这里再用 `realpathWithin` 复核一遍——引用越出本会话附件目录就直接抛出错误、终止整条 run。
+- **附件挂载：按文件类型分三种处理**：`mountAttachments` 把用户上传的文件转成用户消息上的 attachment 块。文本类文件（MIME 为 `text/*` 或扩展名是常见文本类型）且不超过 64KiB 时，读出正文内联进消息（超过 8192 字符截断，并加上 `\n…[已截断，完整内容可用 fs_read 读取 <附件路径>]`，模型据此读取后面的内容）；图片且不超过 5MiB 时转成 base64 内嵌（作为多模态内容段发给模型）；其余文件只在块里放 `{type:"file", path}` 路径信息，模型需要内容时自己用 fs_read 读。安全上有两道检查：ws 层在校验 send_message 帧时查过一次路径，这里再用 `realpathWithin` 复核一遍——引用越出本会话附件目录就直接抛出错误、终止整条 run。
 - **用量记录失败不影响 run**：run 正常结束后向 `usageStore.record` 记一行（会话 id/run id/模型/输入输出 token/时刻，外加缓存读写字段——run 内所有 LLM 调用都携带该字段才求和，任一次缺失记 NULL=未知；字段经 run-after payload 的 `outcome.totalUsage` 传入，未知时整个字段不出现）。这行代码包在 try/catch 里，失败只打 `kclaw usage record failed:` 日志；daemon 没注入 usageStore 时整个步骤跳过。
 - **记忆写入在 core 侧，run 路径只留注入与检查排期**：写入 pipeline 整体在 core 的 `MemoryPipeline`（`packages/core/src/memory/pipeline.ts`），由五触发驱动（`memory_save` 工具的 immediate、`/memory save` 的手动 manual、新建会话路由的 clear、定时 interval、跟随 follow，机制见 [memory](../core/memory.md)）。run 路径（core `executeRun`）只承担三件事：每次 run 的两级注入（L2 认知常驻系统提示 + L1 情节 note，见组装第 4 步）；给 `createBuiltinTools` 传入 `memoryCtx.immediateEnabled = config.memory.write.immediate`（决定 `memory_save` 工具是否当场触发写入）；run 收尾时排一个跟随检查（`idleMinutes > 0` 时 `memory.scheduleFollowCheck`，写入 `<projectDir>/state.json`，daemon 重启后由记忆调度器补查，见下文组装第 13 步）。
 - **上下文压缩（token 触发的分层摘要，五个触发点）**：压缩不发生在发送路径上：引擎直接以全量 `history` 起 run，用户发消息永远零压缩等待。五个触发点由 run 路径编排（机制细节与数据格式见 [compaction](../core/compaction.md)）：
@@ -254,7 +254,7 @@ steer 条目被 `submit` 放进 `#steerBuf` 后，目标 run 在**迭代边界**
 `queueCancel(sessionId, messageId?)` 的取消范围：
 
 - **带 messageId**：先查可执行队列（wait 条目随时可取消），再查 steer 缓冲（注入前可取消——长工具批次期间注入窗口可达数分钟，此间条目占用着共享上限的名额）。命中即从内存与 queue.jsonl 删除、广播 `message.queue_cancelled {messageId}`、回 `{ok:true, cancelled:[id]}`；都不在时按 `#injectedIds` 区分两种失败：近期已注入 → `{ok:false, reason:"injected"}`（已进事件流历史，机器不删历史），否则 `{ok:false, reason:"not_found"}`。ws 层把两者分别映射为错误文案 `已注入` 与 `not found`。
-- **不带 messageId**：清空全部可取消条目（全部 wait + 全部未注入 steer），广播 `message.queue_cancelled {all:true}`。
+- **不带 messageId**：清空全部可取消条目（全部 wait + 全部未注入 steer），广播 `message.queue_cancelled {all:true, messageIds}`，`messageIds` 列出实际撤回的条目。
 
 被取消的 wait 条目其 `outcome` promise 以拒绝（`排队消息已取消`）落定——`enqueue()` 兼容层的调用方在等它，静默丢弃会让 promise 永远悬挂；steer 条目没有独立的 outcome（搭活动 run 的车），随活动 run 的终态自然落定。
 
@@ -289,7 +289,7 @@ daemon 启动时对每个 queue.jsonl 非空的会话调用：整体重排为内
 - **队列已满是同步拒绝**：`submit` 在入队前检查上限（排队 + steer 缓冲合计 10），超限直接抛 `队列已满（10 条）`，ws 层回 error 帧、无 ack——消息不会半入队。上限不分池：steer 与 wait 挤同一个池子，挤压风险由"steer 注入前可单条删除"化解（排队气泡可见、可删）。
 - **排队取消是三态的**：命中删除 / `injected`（近期已注入，进了 JSONL 机器不删历史）/ `not_found`（无此条目，或已被当前会话队列淘汰）。判定依赖 `#injectedIds`——有界集合（容量 `QUEUE_LIMIT×2`，够覆盖一个满队列加直发余量），注入时登记；重启后集合清空，恢复条目尚未注入前取消仍是合法的。
 - **附件路径的第二道检查会终止整条 run**：正常情况下 ws 帧层已经把越界的附件引用拦在入队之前；如果有越界路径绕过了帧层到达 `mountAttachments`（比如直接调用 enqueue 的代码没做检查），这里的抛出错误让本次 run 以异常收场：await 该 outcome 的调用方看到 reject，订阅客户端经 `queue_entry_failed` 事件看到失败（见下一条）。steer 注入走的是另一条失败路径：`#drainSteer` 先构建后变更，任一条构建失败即整批留在缓冲区、没有一部分先进入历史（异常沿 hook 链传播，run 以 `run.failed "steering_failed"` 正常失败收场，不是附件路径那种调用方 reject），缓冲区里的条目仍可取消、可重试注入；注入前 run 先结束的，残余条目降级入队后走到同一出队执行路径，组装段同步抛出同样补 `queue_entry_failed`。
-- **条目级失败有可见性事件（`queue_entry_failed`）**：两类失败发生时循环的 `run.failed` 覆盖不到：出队持久化失败（run 还没起）与条目执行在组装段的同步抛出（如降级后的坏附件，`mountAttachments`/读历史在 `runAgent` 之前就抛出错误；进入模型循环前的系统提示词审计写入 `appendSystem` 同属此类，写入失败即本次 run 失败，与消息写入失败的处理一致，不做静默吞掉）。驱动器在这两条路径上补发 `run.failed {error:{code:"queue_entry_failed", message}}`（message 含 `messageId` 与原因，sessionId 级事件），已 ack `queued:true` 的消息不会无声消失；出队持久化失败还伴随条目退回队首（内存与 queue.jsonl 保持一致，等待重试）。
+- **条目级失败有可见性事件（`queue_entry_failed`）**：两类失败发生时循环的 `run.failed` 覆盖不到：出队持久化失败（run 还没起）与条目执行在组装段的同步抛出（如降级后的坏附件，`mountAttachments`/读历史在 `runAgent` 之前就抛出错误；进入模型循环前的系统提示词审计写入 `appendSystem` 同属此类，写入失败即本次 run 失败，与消息写入失败的处理一致，不做静默吞掉）。驱动器在这两条路径上补发 `run.failed {error:{code:"queue_entry_failed", message}, messageId}`（message 含 `messageId` 与原因，sessionId 级事件；run 没有开始，事件不带 runId，等结果的发送方靠 payload 的 `messageId` 认领这次失败），已 ack `queued:true` 的消息不会无声消失；出队持久化失败还伴随条目退回队首（内存与 queue.jsonl 保持一致，等待重试）。
 - **确认裁决不落任何队列**：`broker.resolve` 对已出结果/已过期的条目返回 false 并回 `unknown confirmation`，不记录"迟到的意见"。确认卡等待期间 steer 照常入缓冲区；run 在等确认期间不迭代，注入发生在确认解决后的下一个迭代边界——无特殊路径。
 - **自动命名没有去重锁**：同一会话两次快速入队理论上可能并发两次命名，写回前的重读校验保证只有第一次生效（后到的发现标题已不是默认值即放弃）。
 - **`resolveConfirmation` 测试注入点优先于 broker**：设置了它 broker 就只剩登记职责——生产路径不设置。
