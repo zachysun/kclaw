@@ -48,6 +48,9 @@ export interface AttachmentRef {
   mimeType: string
 }
 
+/** Size cap of one uploaded attachment (raw body): the daemon's upload route enforces it, clients check it before uploading. */
+export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
 /**
  * The structured provenance note riding a queue entry onto its user message
  * (as a note block right after the text): WHO asked for this run, when the

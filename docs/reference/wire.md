@@ -12,6 +12,9 @@ export type SendDisposition = "steer" | "wait" | "interrupt"
 
 export interface AttachmentRef { path: string; name: string; size: number; mimeType: string }
 
+/** 单个上传附件的大小上限：daemon 的上传路由据此拒绝（413），客户端上传前据此检查。 */
+export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
 /** 机器来源说明：随队列条目落到用户消息上的 note 块（kind 见 blocks.md NoteKind）。 */
 export interface QueueNote { kind: NoteKind; text: string }
 
