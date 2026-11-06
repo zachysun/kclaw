@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权 hook 加 86 个业务路由（健康/状态 2 个、会话 24 个、改动记录 2 个、记忆 10 个、技能 16 个、hook 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、provider 管理 6 个、目录浏览 2 个、用量 1 个、MCP 管理 6 个、IM Channel 管理 4 个、检索 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`changes.ts`、`attachments.ts`、`cron.ts`、`config.ts`、`providers.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`、`mcp.ts`、`channel.ts`、`search.ts`）；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未组装时降级 503，技能组始终注册（只读与复用管理无组装依赖；提案治理子路由族组装后才可用、未组装整体 503），hook 组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则以文件为准，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权 hook 加 87 个业务路由（健康/状态 2 个、会话 24 个、改动记录 2 个、记忆 10 个、技能 16 个、hook 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、provider 管理 7 个、目录浏览 2 个、用量 1 个、MCP 管理 6 个、IM Channel 管理 4 个、检索 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`changes.ts`、`attachments.ts`、`cron.ts`、`config.ts`、`providers.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`、`mcp.ts`、`channel.ts`、`search.ts`）；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未组装时降级 503，技能组始终注册（只读与复用管理无组装依赖；提案治理子路由族组装后才可用、未组装整体 503），hook 组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则以文件为准，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
@@ -140,12 +140,13 @@ interface Cron {
 
 | 方法 | 路径 | 用途 | 请求/响应 |
 |------|------|------|------|
-| GET | `/providers` | Model 页快照：条目（key 掩码）+ 默认条目 + 内置预设目录 | `{default, entries, presets}`；`entries` 形状同 `config.providers.entries` 但 apiKey 已掩码 |
-| POST | `/providers` | 新增一个条目 | 请求 `{name, entry}`；名字限定字母/数字/下划线/连字符（会话 meta 与 `/model` 命令按名引用）；`entry` 经 `parseProviderEntry` 校验（format 必须是 `openai`/`anthropic`，baseUrl 须 http(s)，model 必填，apiKey 可空，`contextWindow`/`maxOutput` 声明时必须为正数）；重复 409、形状非法 400；返回 `{ok, default, entries, presets}` |
+| GET | `/providers` | Model 页快照：条目（key 掩码）+ 默认条目 + 内置预设目录 + 配置状态 | `{default, entries, presets, configured}`；`entries` 形状同 `config.providers.entries` 但 apiKey 已掩码；`configured` 表示默认 provider 的端点和模型是否都能解析（条目留空的字段取 daemon 进程的 `KCLAW_LLM_BASE_URL`/`KCLAW_LLM_MODEL`），daemon 未配置 provider 时也能启动，此时为 false |
+| POST | `/providers` | 新增一个条目 | 请求 `{name, entry}`；名字限定字母/数字/下划线/连字符（会话 meta 与 `/model` 命令按名引用）；`entry` 经 `parseProviderEntry` 校验（format 必须是 `openai`/`anthropic`，baseUrl 须 http(s)，model 必填，apiKey 可空，`contextWindow`/`maxOutput` 声明时必须为正数）；重复 409、形状非法 400；返回 `{ok, default, entries, presets, configured}` |
 | PATCH | `/providers/:name` | 整体替换一个条目，可同时改名 | 请求 `{entry}`，可带 `{name}`（新名字，与旧名不同即改名）；`apiKey` 为空 = 保留存量密钥（UI 只有掩码值）；改名时把条目键整体迁移，`providers.default` 与记忆提取/向量检索的引用（`memory.extractModel`、`memory.embedding.provider`）一并跟随；会话级引用保留旧名（下个 run 回退到默认条目，与删除同语义）；名字未知 404、改名目标已存在 409 |
 | DELETE | `/providers/:name` | 删除一个条目 | 默认条目 409（先切默认再删）；被会话引用**不阻断**（引用方下个 run 回退到默认条目，WebUI 删除前自行提示）；名字未知 404 |
 | POST | `/providers/:name/default` | 把该条目设为默认 | 名字未知 404 |
 | POST | `/providers/models` | 模型列表检测（兼作连接验证） | 请求 `{name}`（用存量条目的真实密钥检测，`format`/`baseUrl`/`apiKey` 可逐项覆盖：覆盖值合法或非空才生效，否则回退到存量条目——编辑表单的草稿值检测）或 `{format, baseUrl, apiKey?}`（新建表单直探，`format` 非法或 `baseUrl` 为空 400）；成功 `{ok: true, models: string[]}`，检测失败（端点不可达、密钥错误、响应形状不对等一律）502 `{ok: false, error}` |
+| POST | `/providers/probe` | 连通测试：向待测端点发 1 token 补全，验证 URL、密钥和模型名都可用（模型列表验证不了模型名）；首次配置向导使用，不保存任何内容 | 请求 `{format, baseUrl, apiKey?, model}`（`format` 非法、`baseUrl` 或 `model` 为空 400）；响应恒为 200 `{status, body}`：`status` 是端点返回的状态码，`null` 表示请求没有到达，`body` 取响应前 200 字符；如何判断结果由调用方决定 |
 
 所有变更路由直接改 daemon 的内存配置（**下一个 run 即热生效**：持久化后经 ConfigNotifier 发布 `providers` 变更，daemon 的客户端解析器整体清空缓存；条目签名检查保留为优化）并经 `saveConfig` 持久化：每次写都是 config.json 的整文件原子重写（0600，密钥明文只在盘上；MCP server 不经此写入，mcp.json 是唯一管理源）；持久化失败只记日志不回滚，但变更通知照发——内存里的改动已经生效，缓存不能停留在旧值上，下次写入会再试。条目改名（PATCH 带 `name`）经 `renameProviderEntry` 统一挪键并改写配置级引用（默认指针与记忆提取/embedding 条目）。没有审计事件（全局配置面，与 MCP 管理同理）。使用方是 WebUI 的 Model 页。
 

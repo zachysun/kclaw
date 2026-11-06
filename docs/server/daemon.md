@@ -12,7 +12,7 @@
 - **token 是 daemon 的稳定身份**：`<home>/token` 首次启动时生成（UUID，文件权限 0600，仅属主可读写），重启复用，stop 不删除；仅 daemon.json 会被删除。因此 CLI/WebUI 保存的 token 在 daemon 重启后仍然有效。
 - **鉴权是"每路由必带 Bearer"加白名单豁免**：一个 `preHandler` hook 拦截全部路由，只有三处豁免——`/health`、`/ws`、静态 WebUI 外壳（见下）。豁免列表是封闭集合，新增路由默认受保护。
 - **有界停止**：`stop()` 的每一步（停调度、关服务器）有独立超时（默认 60s）。超时则 `stop()` reject、daemon.json **保留**——进程仍在运行，指向它的文件必须与事实一致；虚报"已停止"会诱发双 daemon、cron 双触发。
-- **provider 缺失是硬错误**：组装期就抛出错误终止，不启动一个"半配置"的 daemon。
+- **没有 provider 也能启动**：WebUI 的 Model 页和首次配置向导都要经由运行中的 daemon 完成配置，所以启动不要求 provider。未配置时 `GET /providers` 的 `configured` 为 false，run 第一次调用模型时以 `run.failed` 结束并写明缺什么（见下文 provider 解析）。
 - **MCP 恒定组装，且启动零连接**：无论配置文件里有没有 server，daemon 都构建一个 `McpManager`（空的管理器没有任何连接、开销为零，管理路由因此永远可用，从 WebUI 添加第一个 server 不需要先改配置）。配置来自全局 `~/.kclaw/mcp.json` 加**每个已知项目**的 `.kclaw/mcp.json`（项目集合 = daemon 主工作目录 + 全部会话记录里出现过的工作目录，daemon 启动时现算，运行中新建会话即时挂载；不靠任何清单文件，与技能同源，放好配置文件即生效。唯一例外：daemon 主目录嵌在某个项目里时，该项目的配置文件与全局 `mcp.json` 是同一个路径，两层无法独立存在，这样的目录不挂项目组，见 [mcp](../core/mcp.md)）。连接是惰性的：启动与配置变更都不发起连接，run 用到某项目的工具、或用户手动 connect 时才按需连接（见 [mcp](../core/mcp.md)）。连接失败只打一行日志，永远不会拖垮 daemon。
 
 ## 接口
@@ -213,11 +213,11 @@ return { port, token, pid, stop }
 
 1. `config.providers.entries[config.providers.default]` 条目里的 `baseUrl` / `apiKey` / `model` 优先；
 2. 条目留空的字段由环境变量补：`KCLAW_LLM_BASE_URL`、`KCLAW_LLM_API_KEY`、`KCLAW_LLM_MODEL`（`valueOrEnv`：配置值非空则用配置，否则用环境变量，再否则空串）；
-3. `baseUrl` 仍为空 → 抛 `no llm provider configured: set providers in config.json or KCLAW_LLM_BASE_URL env`（apiKey 可为空——免密钥端点合法）；`model` 为空 → 抛 `no llm model configured: …`。
+3. 端点或模型仍为空不影响 `launchDaemon`（apiKey 可为空——免密钥端点合法）。`GET /providers` 的 `configured` 按这两步判断端点和模型是否都能解析。
 
-抛出错误发生在 `launchDaemon` 内部，daemon 从未 listen；第一步认领的占位 daemon.json 留在原处（pid 存活时挡住后续启动，pid 退出后被回收重认领）——CLI 的 `ensureDaemon` 轮询 5s 后报"daemon did not become healthy"。
+缺配置时第一次调用模型才失败：`baseUrl` 为空抛出 `provider 未配置：…`，`model` 为空抛出 `模型未配置：…`（两者都缺时报前者）。失败发生在用户消息写入会话之后，这次 run 走 provider 失败的既有路径，以 `run.failed {code:"llm_error"}` 结束。记忆提取、标题生成等后台调用同样在调用模型时失败，按各自的失败处理（写日志或静默放弃），不影响 daemon。配置完成后下一个 run 直接生效，无需重启。
 
-**run 客户端按条目解析**：每个 run 的客户端由 `llmForRun(onRetry, entryKey)` 给出，`entryKey` 来自 `resolveRunModel`（run 组装先解析条目、再建客户端）。daemon 的共享 resolver（`createProviderResolver`）按条目名缓存裸客户端，签名 = `format|baseUrl|apiKey|timeoutMs`——条目缺失回退到默认条目、连默认条目都没有则回退到环境变量端点（openai 格式）。Model 页的增删改持久化后经 ConfigNotifier 发布 `providers` 变更，resolver 收到即整体清空缓存，下个 run 自动重建（签名检查保留为优化）：热生效于下一个 run，无需重启。`withRetry` 由 `llmForRun` 每次现包（重试回调归属当次 run）；`format` 经 `createProviderClient` 选协议（openai → `createOpenAiCompatClient`，anthropic → `createAnthropicClient`，机制见 [provider](../core/provider.md)）。
+**run 客户端按条目解析**：每个 run 的客户端由 `llmForRun(onRetry, entryKey)` 给出，`entryKey` 来自 `resolveRunModel`（run 组装先解析条目、再建客户端）。daemon 的共享 resolver（`createProviderResolver`）按条目名缓存裸客户端，签名 = `format|baseUrl|apiKey|timeoutMs`——条目缺失回退到默认条目；连默认条目都没有，或条目的 baseUrl 为空时，第一次调用模型才解析环境变量端点。Model 页的增删改持久化后经 ConfigNotifier 发布 `providers` 变更，resolver 收到即整体清空缓存，下个 run 自动重建（签名检查保留为优化）：热生效于下一个 run，无需重启。`withRetry` 由 `llmForRun` 每次现包（重试回调归属当次 run）；`format` 经 `createProviderClient` 选协议（openai → `createOpenAiCompatClient`，anthropic → `createAnthropicClient`，机制见 [provider](../core/provider.md)）。
 
 ## 鉴权设计
 

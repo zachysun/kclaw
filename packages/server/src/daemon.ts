@@ -21,8 +21,10 @@
  *
  * Provider resolution: the config's default provider
  * entry wins; KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY / KCLAW_LLM_MODEL env
- * vars fill whatever the entry leaves empty; still-missing endpoint or model
- * is a hard launch error.
+ * vars fill whatever the entry leaves empty. Nothing here requires a provider:
+ * the daemon starts unconfigured so the Model tab and the first-run wizard
+ * can configure it live, GET /providers reports `configured`, and a run with
+ * no endpoint or model fails on its first model call (run.failed llm_error).
  */
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"

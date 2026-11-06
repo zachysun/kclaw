@@ -219,7 +219,7 @@ sequenceDiagram
 - [daemon](./server/daemon.md)：daemon 组装序、有界 stop、pidfile 语义
 - [run-manager](./server/run-manager.md)：服务端侧的会话串行与确认网关
 - [feishu-channel](./server/feishu-channel.md)：飞书 IM 接入（长连接、四态卡片、审批卡、命令）
-- [http-api](./server/http-api.md)：86 条业务路由清单（含附件/用量/目录浏览/MCP 管理/记忆管理/技能与复用/提案治理/hook/权限/团队面板/事件流链校验/改动记录）
+- [http-api](./server/http-api.md)：87 条业务路由清单（含附件/用量/目录浏览/MCP 管理/记忆管理/技能与复用/提案治理/hook/权限/团队面板/事件流链校验/改动记录）
 - [mcp](./core/mcp.md)：恒定组装、惰性连接的 MCP 工具适配器（分组配置）
 - [agent-team](./core/agent-team.md)：agent 团队（组长 + 组员、收信箱投递、任务板协作）
 - [goal](./core/goal.md)：/goal 目标循环（独立判定器、验收命令、硬性上限）

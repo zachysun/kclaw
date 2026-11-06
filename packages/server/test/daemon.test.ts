@@ -60,6 +60,34 @@ function makeHome(): string {
   return home
 }
 
+/** One authenticated JSON call against a launched daemon; non-2xx fails the test. */
+async function api(daemon: Daemon, method: string, path: string, body?: unknown): Promise<Record<string, unknown>> {
+  const res = await fetch(`http://127.0.0.1:${daemon.port}${path}`, {
+    method,
+    headers: { authorization: `Bearer ${daemon.token}`, ...(body !== undefined ? { "content-type": "application/json" } : {}) },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  })
+  if (!res.ok) throw new Error(`${method} ${path} → ${res.status}: ${await res.text()}`)
+  return (await res.json()) as Record<string, unknown>
+}
+
+/** Subscribe, send one message over /ws and resolve with the first terminal frame. */
+function sendAndWaitTerminal(daemon: Daemon, sessionId: string, text: string): Promise<{ type: string; payload: unknown }> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${daemon.port}/ws?token=${daemon.token}`)
+    ws.onopen = () => ws.send(JSON.stringify({ type: "subscribe", sessionId }))
+    ws.onerror = () => reject(new Error("ws connection failed"))
+    ws.onmessage = (event) => {
+      const frame = JSON.parse(String(event.data)) as { type: string; payload: unknown }
+      if (frame.type === "subscribed") ws.send(JSON.stringify({ type: "send_message", sessionId, text }))
+      if (frame.type === "run.completed" || frame.type === "run.failed") {
+        ws.close()
+        resolve(frame)
+      }
+    }
+  })
+}
+
 /** Grab a free TCP port from the OS and release it (same pattern as the onRetry test). */
 async function freePort(): Promise<number> {
   const srv = createServer()
@@ -324,20 +352,49 @@ describe("default llmFactory", () => {
     )
   })
 
-  it("throws 'no llm provider configured' when config and env are both empty", async () => {
+  it("starts with no provider: the run fails on its model call, the message stays, and a provider added live serves the next run", async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" })
+      res.end(
+        'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n' +
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2}}\n\n' +
+          "data: [DONE]\n\n",
+      )
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const port = (server.address() as AddressInfo).port
     const home = makeHome()
-    await withEnv(
-      { KCLAW_LLM_BASE_URL: undefined, KCLAW_LLM_API_KEY: undefined, KCLAW_LLM_MODEL: undefined },
-      async () => {
-        const config = loadConfig(resolvePaths(home)) // defaults: empty providers
-        await expect(launchDaemon({ home, config })).rejects.toThrow(
-          "no llm provider configured: set providers in config.json or KCLAW_LLM_BASE_URL env",
-        )
-      },
-    )
+    try {
+      await withEnv(
+        { KCLAW_LLM_BASE_URL: undefined, KCLAW_LLM_API_KEY: undefined, KCLAW_LLM_MODEL: undefined },
+        async () => {
+          const daemon = await launchDaemon({ home, config: loadConfig(resolvePaths(home)) }) // defaults: empty providers
+          daemons.push(daemon)
+          expect((await api(daemon, "GET", "/providers")).configured).toBe(false)
+          const session = await api(daemon, "POST", "/sessions", {}) as { id: string }
+
+          const failed = await sendAndWaitTerminal(daemon, session.id, "第一条")
+          expect(failed).toMatchObject({ type: "run.failed", payload: { error: { code: "llm_error" } } })
+          expect((failed.payload as { error: { message: string } }).error.message).toContain("provider 未配置")
+          const messages = await api(daemon, "GET", `/sessions/${session.id}/messages`) as Array<{ role: string; blocks: Array<{ text?: string }> }>
+          expect(messages.find((m) => m.role === "user")?.blocks[0]?.text).toBe("第一条")
+
+          await api(daemon, "POST", "/providers", {
+            name: "mock",
+            entry: { format: "openai", baseUrl: `http://127.0.0.1:${port}`, apiKey: "test-key", model: "mock-model" },
+          })
+          await api(daemon, "POST", "/providers/mock/default", {})
+          expect((await api(daemon, "GET", "/providers")).configured).toBe(true)
+          const done = await sendAndWaitTerminal(daemon, session.id, "第二条")
+          expect(done).toMatchObject({ type: "run.completed", payload: { stopReason: "end_turn" } })
+        },
+      )
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
   })
 
-  it("throws when the provider resolves but no model is configured anywhere", async () => {
+  it("an entry with no model starts too; the run's model call names what is missing", async () => {
     const home = makeHome()
     await withEnv({ KCLAW_LLM_MODEL: undefined }, async () => {
       const config = loadConfig(resolvePaths(home))
@@ -345,7 +402,12 @@ describe("default llmFactory", () => {
         default: "mock",
         entries: { mock: { baseUrl: "http://127.0.0.1:1", apiKey: "test-key", model: "" } },
       }
-      await expect(launchDaemon({ home, config })).rejects.toThrow(/no llm model configured/)
+      const daemon = await launchDaemon({ home, config })
+      daemons.push(daemon)
+      expect((await api(daemon, "GET", "/providers")).configured).toBe(false)
+      const session = await api(daemon, "POST", "/sessions", {}) as { id: string }
+      const failed = await sendAndWaitTerminal(daemon, session.id, "第一条")
+      expect((failed.payload as { error: { message: string } }).error.message).toContain("模型未配置")
     })
   })
 
