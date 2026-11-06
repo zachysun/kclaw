@@ -199,17 +199,8 @@ export async function runOrHint(
 }
 
 import { readFileSync, readdirSync } from "node:fs"
-import { basename, extname, join } from "node:path"
-
-/** Guess a content type from a filename for the upload (coarse but enough). */
-function mimeForFile(name: string): string {
-  const ext = extname(name).toLowerCase()
-  if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].includes(ext)) return "image/" + ext.slice(1)
-  if (ext === ".pdf") return "application/pdf"
-  if (ext === ".md" || ext === ".markdown") return "text/markdown"
-  if ([".txt", ".json", ".csv", ".yaml", ".yml", ".log", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".sh"].includes(ext)) return "text/plain"
-  return "application/octet-stream"
-}
+import { basename, join } from "node:path"
+import { mimeForFile } from "./mime.js"
 
 /** One session row as served by GET /sessions (SessionStore meta shape). */
 interface SessionRow {

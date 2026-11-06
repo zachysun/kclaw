@@ -22,6 +22,9 @@ const HOST = "127.0.0.1"
 /** Budget for the post-ensure health retry (belt and braces; ensureDaemon already polled). */
 const CONNECT_RETRY_MS = 5_000
 
+/** Budget for the `subscribed` ack after opening + subscribing a socket. */
+const SUBSCRIBE_ACK_MS = 5_000
+
 /** One parsed WS frame from the daemon, or an async iterator over them. */
 export type WsFrame = Record<string, unknown>
 
@@ -195,4 +198,28 @@ export class KclawClient {
       getToken: () => this.token,
     }) as Promise<{ file: { path: string; name: string; size: number } }>
   }
+}
+
+/**
+ * Open an authenticated ws and subscribe to `sessionId`, waiting for the
+ * `subscribed` ack (or failing on an error frame / timeout) so the caller
+ * never send_messages onto a socket the bus is not yet fanning out to.
+ */
+export async function openSubscribed(client: KclawClient, sessionId: string): Promise<WsHandle> {
+  const ws = await client.ws()
+  ws.send({ type: "subscribe", sessionId })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const next = await Promise.race([
+    ws.frames[Symbol.asyncIterator]().next(),
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("5 秒内没有收到订阅回执")), SUBSCRIBE_ACK_MS)
+    }),
+  ])
+  clearTimeout(timer)
+  if (next.done || next.value.type !== "subscribed") {
+    ws.close()
+    const message = next.done ? "socket 在订阅前就关闭了" : String(next.value.message ?? "订阅被拒绝")
+    throw new Error(message)
+  }
+  return ws
 }

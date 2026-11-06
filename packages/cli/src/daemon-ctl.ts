@@ -15,6 +15,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { originalEnv } from "./color.js"
 
 /** The daemon only ever binds loopback (127.0.0.1). */
 const HOST = "127.0.0.1"
@@ -137,7 +138,7 @@ function spawnDaemon(home: string): void {
   const child = spawn(process.execPath, [resolveServerBin(), "--home", home], {
     detached: true,
     stdio: "ignore",
-    env: { ...process.env, KCLAW_HOME: home },
+    env: { ...originalEnv(), KCLAW_HOME: home },
   })
   child.unref()
 }

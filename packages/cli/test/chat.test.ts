@@ -24,7 +24,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest"
 import { execa } from "execa"
 import { execFileSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { createServer, type Server, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
@@ -805,6 +805,39 @@ describe("kclaw chat (built CLI + real daemon + mock SSE provider)", () => {
       await pump.catch(() => {})
     },
     30_000,
+  )
+
+  it(
+    "@file is the daemon's job: an email address sends fine, a mention gets the read note, the stored text stays verbatim",
+    async () => {
+      const project = realpathSync(mkdtempSync(join(tmpdir(), "kclaw-chat-c5-")))
+      homes.push(project) // swept with the homes
+      writeFileSync(join(project, "notes.txt"), "笔记正文")
+      const text = "联系 user@example.com 并参考 @notes.txt"
+      const res = await execa(process.execPath, [CLI, "--home", home], {
+        cwd: project,
+        env: { ...process.env, KCLAW_LLM_BASE_URL: mockUrl, KCLAW_LLM_API_KEY: "chat-test-key", KCLAW_LLM_MODEL: "chat-test-model" },
+        input: `${text}\n/exit\n`,
+        reject: false,
+        timeout: 15_000,
+      })
+      expect(res.exitCode).toBe(0)
+      expect(res.stdout).toContain("你好，世界")
+      const sent = mockRequests
+        .map((r) => [...r.messages].reverse().find((m) => m.role === "user")?.content)
+        .find((c): c is string => typeof c === "string" && c.startsWith(text))
+      expect(sent).toBeDefined()
+      expect(sent).toContain("「@notes.txt」是在引用项目文件")
+      expect(sent).not.toContain("不存在")
+      const sid = SESSION_ID_RE.exec(res.stdout)![0]
+      const messages = (await clientForHome().request("GET", `/sessions/${sid}/messages`)) as Array<{
+        role: string
+        blocks: Array<{ type: string; text?: string }>
+      }>
+      const userTexts = messages.filter((m) => m.role === "user").flatMap((m) => m.blocks.filter((b) => b.type === "text").map((b) => b.text))
+      expect(userTexts).toEqual([text])
+    },
+    20_000,
   )
 })
 

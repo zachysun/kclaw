@@ -19,6 +19,7 @@
     "@clack/prompts": "^1.7.0",
     "@kclaw/core": "workspace:*",
     "commander": "^12.1.0",
+    "string-width": "^8.3.0",
     "ws": "^8.21.3"
   },
   "devDependencies": {

@@ -57,15 +57,16 @@
  */
 import { isCancel, select, multiselect, text } from "@clack/prompts"
 import { isPermissionMode, PERMISSION_MODES } from "@kclaw/core"
-import type { AnyAgentEvent, ConfirmationDecision, ConfirmationRequestedPayload, MessageQueuedPayload, PermissionMode, QuestionRequestedPayload } from "@kclaw/core"
+import type { ConfirmationDecision, ConfirmationRequestedPayload, MessageQueuedPayload, PermissionMode, QuestionRequestedPayload } from "@kclaw/core"
 import { parseSendDisposition, resolveSendDisposition } from "@kclaw/core/protocol"
 import { join } from "node:path"
 import { createInterface, type Interface as RlInterface } from "node:readline"
-import { KclawClient } from "./client.js"
+import { KclawClient, openSubscribed } from "./client.js"
 import type { WsFrame, WsHandle } from "./client.js"
+import { dim, red } from "./color.js"
+import { confirmationLine, frameView, isAgentEvent, questionLine, toolCallLine, toolResultLine } from "./frame-view.js"
 import { createRegistry, createSlashCompleter, dispatch, refreshSkillCommands as refreshSkillCommandsOp, runOrHint, slashCompleter, type AttachmentRef, type SlashCtx } from "./slash.js"
 import type { SlashCommandMeta } from "@kclaw/core/commands"
-import { expandFileRefs } from "./file-refs.js"
 
 /** Session rows as served by GET /sessions (SessionStore meta shape). */
 interface SessionInfo {
@@ -77,13 +78,6 @@ interface SessionInfo {
 
 /** Reconnect watchdog: a fully quiet run after a reconnect is presumed gone. */
 const POST_RECONNECT_SILENCE_MS = 120_000
-
-/** Budget for the `subscribed` ack after opening + subscribing a socket. */
-const SUBSCRIBE_ACK_MS = 5_000
-
-const TTY = process.stdout.isTTY === true
-const dim = (s: string): string => (TTY ? `\x1b[2m${s}\x1b[22m` : s)
-const red = (s: string): string => (TTY ? `\x1b[31m${s}\x1b[39m` : s)
 
 /** Prompt string per mode: default keeps the bare "> "; other modes badge it. */
 function modePrompt(m: PermissionMode): string {
@@ -178,28 +172,6 @@ interface ArmedFrame {
   waiter: FrameWaiter
 }
 
-/** A bus event frame has `payload`; command acks and error frames do not. */
-function isAgentEvent(frame: WsFrame): frame is WsFrame & AnyAgentEvent {
-  return typeof frame.type === "string" && "payload" in frame
-}
-
-/** Args summary for the `⚡ <name> <args>` line: compact JSON, capped at 60 chars. */
-function summarizeArgs(args: unknown): string {
-  let text: string
-  try {
-    text = JSON.stringify(args ?? {}) ?? "{}"
-  } catch {
-    text = String(args)
-  }
-  return text.length > 60 ? `${text.slice(0, 57)}...` : text
-}
-
-/** Output summary for the `↳ <status>` line: whitespace-collapsed, first 80 chars. */
-function summarizeOutput(output: string): string {
-  const text = output.replace(/\s+/g, " ").trim()
-  return text.length > 80 ? `${text.slice(0, 80)}...` : text
-}
-
 function write(text: string, ctx: ChatCtx): void {
   process.stdout.write(text)
   ctx.io.atLineStart = text.endsWith("\n")
@@ -212,28 +184,6 @@ function ensureLineStart(ctx: ChatCtx): void {
 function line(text: string, ctx: ChatCtx): void {
   ensureLineStart(ctx)
   write(`${text}\n`, ctx)
-}
-
-/**
- * Open an authenticated ws and subscribe to `sessionId`, waiting for the
- * `subscribed` ack (or failing on an error frame / timeout) so the caller
- * never send_messages onto a socket the bus is not yet fanning out to.
- */
-async function openSubscribed(client: KclawClient, sessionId: string): Promise<WsHandle> {
-  const ws = await client.ws()
-  ws.send({ type: "subscribe", sessionId })
-  const next = await Promise.race([
-    ws.frames[Symbol.asyncIterator]().next(),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("5 秒内没有收到订阅回执")), SUBSCRIBE_ACK_MS),
-    ),
-  ])
-  if (next.done || next.value.type !== "subscribed") {
-    ws.close()
-    const message = next.done ? "socket 在订阅前就关闭了" : String(next.value.message ?? "订阅被拒绝")
-    throw new Error(message)
-  }
-  return ws
 }
 
 /** Create a session, or verify a resume target exists ("session not found" otherwise). */
@@ -262,7 +212,7 @@ async function withPausedInput<T>(ctx: ChatCtx, fn: () => Promise<T>): Promise<T
 
 /** Print the risk summary, collect the verdict (flags or @clack), send confirmation.resolve. */
 async function handleConfirmation(p: ConfirmationRequestedPayload, ctx: ChatCtx): Promise<void> {
-  line(`⚠ ${p.toolCall.name} ${p.toolCall.argsJson} · 风险 ${p.risk} · 过期 ${p.expiresAt}`, ctx)
+  line(confirmationLine(p), ctx)
   if (p.noteText !== undefined) line(dim(p.noteText), ctx)
   let decision: ConfirmationDecision
   if (ctx.auto === "yes") {
@@ -303,7 +253,7 @@ async function handleConfirmation(p: ConfirmationRequestedPayload, ctx: ChatCtx)
 
 /** Collect the answers for one pending question (options → arrows+enter, free text → typed line). */
 async function handleQuestion(p: QuestionRequestedPayload, ctx: ChatCtx): Promise<void> {
-  line(`❓ ${p.questions.length} 个问题待回答${p.noteText === undefined ? "" : dim(` · ${p.noteText}`)}`, ctx)
+  line(`${questionLine(p)}${p.noteText === undefined ? "" : dim(` · ${p.noteText}`)}`, ctx)
   const answers: string[][] = await withPausedInput(ctx, async () => {
     const collected: string[][] = []
     try {
@@ -347,157 +297,43 @@ async function handleQuestion(p: QuestionRequestedPayload, ctx: ChatCtx): Promis
  * tests (the runOrHint precedent).
  */
 export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean> {
-  if (!isAgentEvent(frame)) {
-    if (frame.type === "error") {
-      line(red(`错误: ${String(frame.message ?? "unknown error")}`), ctx)
-      return true // e.g. send_message rejected — no run will start
-    }
-    return false // acks (send_message_ack / run_cancel_ack / …)
-  }
-  const ev = frame
-  switch (ev.type) {
-    case "text.delta":
-      write(ev.payload.delta, ctx)
+  const view = frameView(frame)
+  switch (view.kind) {
+    case "text":
+      write(view.delta, ctx)
       return false
-    case "text.completed":
-      ensureLineStart(ctx) // deltas never newline themselves
+    case "text-end":
+      ensureLineStart(ctx)
       return false
-    case "thinking.delta":
-      if (ctx.showThinking) write(dim(`· ${ev.payload.delta}`), ctx)
+    case "thinking":
+      if (ctx.showThinking) write(dim(`· ${view.delta}`), ctx)
       return false
-    case "tool_call.completed": {
-      const block = ev.payload.block
-      if (block.type === "tool_call") {
-        line(`⚡ ${block.name} ${summarizeArgs(block.args)}`, ctx)
-      }
+    case "tool-call":
+      line(toolCallLine(view), ctx)
       return false
-    }
-    case "tool_result.completed": {
-      const block = ev.payload.block
-      if (block.type === "tool_result") {
-        line(`↳ ${block.status} (${Math.round(block.durationMs)}ms) ${summarizeOutput(block.output)}`, ctx)
-      }
+    case "tool-result":
+      line(toolResultLine(view), ctx)
       return false
-    }
-    // tool_result.delta: deliberately nothing live — the completed line
-    // carries the (truncated) output; live chunk buffering is deliberately
-    // left out.
-    case "confirmation.requested":
-      await handleConfirmation(ev.payload, ctx)
+    case "confirmation":
+      await handleConfirmation(view.payload, ctx)
       return false
-    case "question.requested":
-      await handleQuestion(ev.payload, ctx)
+    case "question":
+      await handleQuestion(view.payload, ctx)
       return false
-    // question.resolved: the pending question already collected its answers
-    // interactively above; the broadcast needs nothing.
-    case "question.resolved":
+    case "system":
+      line(dim(view.text), ctx)
       return false
-    // message.created/completed (any role): deliberately nothing. The USER
-    // message events (the daemon announces the user message lifecycle on the
-    // wire) must not render — readline already showed the
-    // typed line, so a render here would double-echo the user's text.
-    // Assistant/tool messages are equally non-visual here: their content
-    // streams through the text.*/tool_*/thinking.* events above.
-    case "message.created":
-    case "message.completed":
-      return false
-    // note.emitted: one dim line per note block — including the memory/cron
-    // notes the daemon injects onto the user message (each is announced
-    // exactly once, between that message's created and completed).
-    case "note.emitted": {
-      const block = ev.payload.block
-      line(dim(`[note] ${block.text}`), ctx)
-      return false
-    }
-    // Pre-run compaction lifecycle: started prints one hint (the compaction
-    // runs BEFORE run.started — without it the seconds-long summarizer calls
-    // are a silent gap after Enter). Completed prints the one-line summary:
-    // this event only fires when a compaction actually ran, so it is a
-    // natural once-per-compaction announcement (the per-turn note re-attach
-    // above stays silent).
-    case "compaction.started":
-      line(dim("[正在压缩早期对话…]"), ctx)
-      return false
-    case "compaction.completed": {
-      const p = ev.payload
-      if (p.result === "failed") line(dim("✱ 压缩失败，本轮继续（稍后自动重试）"), ctx)
-      else if (p.result === "cancelled") line(dim("✱ 压缩已取消"), ctx)
-      else line(dim(`✱ 早期对话已压缩为 ${p.segments} 段，保留最近 ${p.kept} 条原文（早期细节可用 session_search 检索）`), ctx)
-      return false
-    }
-    // memory.written（项目级事务，广播不带 sessionId）：记忆已写入，dim 一行
-    // 提示路径，不是 run 终止事件。
-    case "memory.written":
-      line(dim(`已写入记忆: ${ev.payload.path}`), ctx)
-      return false
-    // hook.failed：用户 hook 一律 fail-open（不伤 run），但失败必须可见——
-    // dim 一行警告，带钩子名与位置；phase load 表示装载期失败。
-    case "hook.failed": {
-      const p = ev.payload
-      line(dim(`⚠ hook ${p.hook} 失败（${p.position}${p.phase === "load" ? " 装载" : ""}）：${p.error}`), ctx)
-      return false
-    }
-    case "run.failed":
-      line(red(`✖ 运行失败: ${ev.payload.error.message}`), ctx)
+    case "run-failed":
+      line(red(`✖ 运行失败: ${view.message}`), ctx)
       return true
-    case "run.completed":
+    case "run-completed":
       ensureLineStart(ctx) // the "prompt newline": end the streamed line
       return true
-    // run.started: no line — the run's first visible output is the model's
-    // first delta; printing a banner here would only add noise.
-    case "run.started":
-    // cron.* / session.renamed: the chat loop does not act on cron lifecycle
-    // or list-level renames (other surfaces own those).
-    case "cron.started":
-    case "cron.completed":
-    case "cron.failed":
-    // process.*: 后台进程生命周期广播；完成通知以排队的 run 到达属主会话，
-    // 裸广播在聊天视图不渲染。
-    case "process.started":
-    case "process.completed":
-    case "process.failed":
-    case "session.renamed":
-    // Block-open events: nothing live — the completed lines below carry the
-    // full blocks (deltas stream between them; tool_result.delta's chunks are
-    // deliberately not buffered, the completed line truncates the output).
-    case "text.created":
-    case "thinking.created":
-    case "thinking.completed":
-    case "tool_call.created":
-    case "tool_call.delta":
-    case "tool_result.created":
-    case "tool_result.delta":
-    case "attachment.created":
-    case "attachment.completed":
-    // llm.*: raw provider-call bookkeeping — the retry hint is not rendered
-    // in the CLI (a retried call keeps streaming; the final failure surfaces
-    // via run.failed / run.completed).
-    case "llm.started":
-    case "llm.completed":
-    case "llm.failed":
-    // confirmation.resolved: the pending confirm already printed its verdict
-    // line when handled above; the broadcast needs nothing.
-    case "confirmation.resolved":
-    // Queue trio: the daemon's queue state is visible via /queue on demand;
-    // the queued/steered/cancelled broadcasts render nothing in the CLI.
-    case "message.queued":
-    case "message.steered":
-    case "message.queue_cancelled":
-    // Edit & retry / regenerate: the truncation broadcast only reshapes the
-    // webui chat view; the CLI has no retry entry and renders nothing.
-    case "message.truncated":
-    // session.appended: the persistence announcement consumed by the webui
-    // audit page (incremental refetch); the CLI renders nothing.
-    case "session.appended":
+    case "command-error":
+      line(red(`错误: ${view.message}`), ctx)
+      return true
+    case "silent":
       return false
-    default: {
-      // Compile-time exhaustiveness sentinel: a new core event type lands
-      // here as a non-never `ev` and fails this assignment — it must be
-      // rendered or explicitly ignored above.
-      const unhandled: never = ev
-      void unhandled
-      return false
-    }
   }
 }
 
@@ -1042,24 +878,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
         // blocking the input line (a mid-run line is what makes /interrupt
         // and busy-run sends possible). /exit and EOF drain in-flight
         // renders, so output still completes before the process ends.
-        if (text !== "") {
-          // Expand @path file references against the session's workdir. A
-          // dead daemon here must not kill the input loop: renderRun's
-          // reconnect path resends after the daemon comes back.
-          let workdir = process.cwd()
-          try {
-            workdir = ((await ctx.client.request("GET", `/sessions/${ctx.sessionId}`)) as { workdir?: string }).workdir ?? process.cwd()
-          } catch {
-            // daemon unreachable — proceed with the cwd fallback
-          }
-          const refs = expandFileRefs(text, process.cwd(), workdir)
-          if ("error" in refs) {
-            line(`引用失败: ${refs.error}`, ctx)
-            prompt()
-            continue
-          }
-          startRender(refs.text) // sends, renders, and (if needed) resends after reconnect
-        }
+        if (text !== "") startRender(text) // sends, renders, and (if needed) resends after reconnect
       } else if (parsed.command === "exit") {
         await Promise.allSettled([...inFlight]) // 等正在进行的渲染收尾，输出完整再退
         break
