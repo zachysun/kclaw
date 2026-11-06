@@ -35,7 +35,9 @@ function OptionList({ options, selected, marks }: { options: readonly string[]; 
   return (
     <Box flexDirection="column">
       {options.map((label, idx) => (
-        <Text key={label} color={idx === selected ? AMBER : undefined} dimColor={idx !== selected}>
+        // 选项是静态列表（不重排不增删），按下标取 key——重复文案的选项
+        // （如"其他"出现两次）不会触发重复 key。
+        <Text key={String(idx)} color={idx === selected ? AMBER : undefined} dimColor={idx !== selected}>
           {idx === selected ? "❯ " : "  "}
           {marks !== undefined ? `[${marks[idx] ? "x" : " "}] ` : ""}
           {label}
@@ -92,7 +94,8 @@ export function QuestionCard({ payload, isActive, onResolve }: {
     }
   }
 
-  return <SingleQuestion key={question.text} isActive={isActive} finishOne={finishOne} question={question} progress={{ index, total }} noteText={payload.noteText} />
+  // key 随题号变化：连续两题同文也强制重挂，自由文本的本地草稿不会串题
+  return <SingleQuestion key={String(index)} isActive={isActive} finishOne={finishOne} question={question} progress={{ index, total }} noteText={payload.noteText} />
 }
 
 function SingleQuestion({ isActive, finishOne, question, progress, noteText }: {
@@ -121,7 +124,9 @@ function SingleQuestion({ isActive, finishOne, question, progress, noteText }: {
         setPicked((cur) => (cur.includes(selected) ? cur.filter((i) => i !== selected) : [...cur, selected]))
       } else if (key.return) {
         if (multi) {
-          if (picked.length > 0) finishOne(picked.map((i) => options[i]!))
+          // 零勾选直接提交空答案：与 readline 表面的 multiselect 语义一致
+          // （空数组 = 未回答，服务端按"该题未答"收下）。
+          finishOne(picked.map((i) => options[i]!))
         } else {
           finishOne([options[selected]!])
         }

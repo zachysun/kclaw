@@ -173,16 +173,16 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 3. **发送与渲染**（`renderRun`）：发 `{type:"send_message", sessionId, text, disposition, attachments?}`——`disposition` 必带，取当前会话处置模式（`/steer`/`/wait` 切换，或 `/interrupt` 一次性注入；初始值 = 会话覆盖 `dispositionOverride` > 配置 `sessions.defaultDisposition` > steer）。之前用 `/attach` 上传累积的待发附件随这条帧一起发出，发完立即清空附件队列。发送与渲染**不阻塞输入行**：常驻帧泵（`startPump`）读取 socket 帧并分发给当前渲染，每次发送经 `startRender` 递增 `renderEpoch` 接手后续帧流的渲染，旧渲染静默停止，run 中途还能继续输入（`/interrupt` 和忙时发送都依赖它）。按帧渲染直到 run 终态（每种帧归为哪类显示内容由 `frame-view.ts` 决定，与 `kclaw run` 的文本输出共用）：
    - `text.delta` 交表面流式写出（readline 表面自带换行控制：`ensureLineStart` 保证块之间换行；TUI 进动态区，块完成移入历史区）；`thinking.delta` 仅 `--think` 时显示（readline 表面暗色 `· ` 前缀；TUI 折叠成 `✻ 思考 Ns` 一行，`--think` 时展开流式文本）。
    - `tool_call.completed` → readline 表面 `⚡ <name> <args>`，args 是紧凑 JSON、截断到 60 字符；TUI 是 `⏺ <name> <一行摘要>`，摘要按工具名注册（bash 显示命令文本、fs_* 显示目标路径、grep/glob 显示模式、检索类显示关键词，未注册工具回退紧凑 JSON）。
-   - `tool_result.completed` → readline 表面 `↳ <status> (<n>ms) <output>`，输出压空白后取前 80 字符；TUI 是缩进在调用行下方的 `⎿ <status> (<n>ms) <摘要>` 完成行，进行中的调用行带 spinner 与计时；`tool_result.delta` 不做实时渲染（completed 行已带摘要，全文在转录视图可达）。
+   - `tool_result.completed` → readline 表面 `↳ <status> (<n>ms) <output>`，输出压空白后取前 80 字符；TUI 是缩进在调用行下方的 `⎿ <status> (<n>ms) <摘要>` 完成行（摘要被截断时附暗色"完整输出在转录视图，Ctrl+O"标注），进行中的调用行带 spinner 与计时；`tool_result.delta` 不做实时渲染（completed 行已带摘要，全文在转录视图可达）。
    - `message.queued`（我的消息）→ 暗色 `已排队（第 N 位）`（`position+1`）或 `已进入引导缓冲`（steer 无 position）；`message.steered`（我的消息）→ 暗色 `已注入`——我的消息身份从 `send_message_ack` 的 `messageId` 学到，终点以"我的消息被看到（`message.created`/`message.steered`）之后的第一个 `run.completed`"判定，前一个 run 的终态不会错收我的渲染。
    - `confirmation.requested` → `⚠ <name> <argsJson> · 风险 <risk> · 过期 <expiresAt>`（带 `noteText` 时紧随一行暗色说明，如 bash 沙箱不可用），按 yes/no/ask 三种模式收集决定（ask 时交给表面：readline 表面暂停 readline、@clack 出确认框、恢复 readline；TUI 出同树的 ink 卡片，方向键 + Enter 选择、Esc=拒绝）；ask 是**四项选择**——`允许（仅本次）` / `总是允许（本项目）` / `总是允许（全局）` / `拒绝`（`--yes`/`--no` 分别映射 once/reject；取消同样按拒绝），回发 `{type:"confirmation.resolve", confirmationId, decision}`（不带 `client` 字段 → 服务端记 "cli"）。"总是允许"会把一条收紧后的放行规则写入磁盘，之后同形操作不再询问（见 [permissions](../core/permissions.md) 的"沉淀规则"一节）。
    - `question.requested`（ask_user_questions 工具）→ `❓ N 个问题待回答`（带 `noteText` 时附一行说明，如"来自 subagent X"），每题按选项（方向键 + 回车单选/多选）或自由文本（输入一行）收集，全部答完回发 `{type:"question.resolve", questionId, answers}`（每题一个字符串数组，未回答的题为空数组）。等待期间运行暂停，超时（默认 10 分钟）后工具以"用户未在限时内回答"收场（机制见 [tools](../core/tools.md)）。
-   - `note.emitted` → 暗色 `[note] <text>`（记忆注入、cron 来源等系统 note 每条一行）；`message.created/completed` 刻意不渲染（两个表面都已回显用户输入——readline 表面 readline 自带回显、TUI 把提交行存入历史区，再渲染会重复）。
+   - `note.emitted` → 暗色 `[note] <text>`（记忆注入、cron 来源等系统 note 每条一行）；`message.created/completed` 刻意不渲染（两个表面都已回显用户输入——readline 表面由 readline 自带回显、TUI 把提交行存入历史区，再渲染会重复）。
    - `compaction.started` → 暗色 `[正在压缩早期对话…]` 一行（收尾压缩发生在 `run.completed` 之后、中途/急救压缩发生在运行中的迭代边界，都有这行提示，摘要调用的数秒不是静默空窗）；`compaction.completed` → 按 `result` 三分支：`ok` 打暗色 `✱ 早期对话已压缩为 N 段，保留最近 M 条原文（早期细节可用 session_search 检索）`、`failed` 打暗色 `✱ 压缩失败，本轮继续（稍后自动重试）`、`cancelled` 打暗色 `✱ 压缩已取消`。事件只在真正发生压缩时发一次，天然是"每次压缩一条"的告知，与 WebUI 的折叠块同一去重语义（见 [compaction](../core/compaction.md)）。
    - `memory.written`（广播，不带 sessionId）→ 暗色一行 `已写入记忆: <path>`，提示记忆已写入；它与 run 生命周期无关，只是轻提示（见 [memory](../core/memory.md)）。
    - `hook.failed` → 暗色一行 `⚠ hook <名字> 失败（<位置>[ 装载]）：<原因>`，hook 失败不伤 run，但失败必须可见（机制见 [hooks](../core/hooks.md)）。
    - `run.completed`/`run.failed`/error 帧 → 结束本轮等待。
-4. **Ctrl+C 逐级升级**（两个表面都把 Ctrl+C 交给编排器的同一处理：readline 表面是 readline 待输行为空时的 `"SIGINT"` 事件加进程信号，TUI 是 ink 键盘处理；`sigints` 计数只增不减）：第一次在 run 进行中 → 发 `{type:"run.cancel"}`（run 随后经正常渲染路径以 `stopReason:"aborted"` 结束），并查排队数，非空则提示"还有 N 条排队消息，再按一次 Ctrl+C 清空"；第一次空闲 → 同样查排队数，非空提示清空、为空提示"再按一次 Ctrl+C 退出"；第二次 → 队列非空则发 `{type:"queue.cancel"}` 清空全部可取消条目并提示"队列已清空，再按一次 Ctrl+C 退出"，队列为空直接退出；第三次 → 关闭 socket、关闭表面、`process.exit(130)`（TUI 在退出路径上顺带清除自己写过的终端标题，见下文 TUI 一节）。
+4. **Ctrl+C 逐级升级**（两个表面都把 Ctrl+C 交给编排器的同一处理：readline 表面在终端 stdin 下是 readline 的 `"SIGINT"` 事件（任意行状态，node 不区分空行与非空行）、管道 stdin 下是进程信号，TUI 是 ink 键盘处理；`sigints` 计数只增不减）：第一次在 run 进行中 → 发 `{type:"run.cancel"}`（run 随后经正常渲染路径以 `stopReason:"aborted"` 结束），并查排队数，非空则提示"还有 N 条排队消息，再按一次 Ctrl+C 清空"；第一次空闲 → 同样查排队数，非空提示清空、为空提示"再按一次 Ctrl+C 退出"；第二次 → 队列非空则发 `{type:"queue.cancel"}` 清空全部可取消条目并提示"队列已清空，再按一次 Ctrl+C 退出"，队列为空直接退出；第三次 → 关闭 socket、关闭表面、`process.exit(130)`（TUI 在退出路径上顺带清除自己写过的终端标题，见下文 TUI 一节）。
 
 ### 空闲重连与消息重发
 
@@ -196,7 +196,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 
 ### ink TUI 表面（stdin 与 stdout 都是终端时）
 
-- **画面结构**：已完成内容进 ink `<Static>` 历史区（文本完成块、`⏺/⎿` 工具对、折叠 thinking 行、系统行、输入回显）——只追加不重画，终端原生滚动缓冲与复制保留；动态区承载进行中内容（流式文本、thinking 行、带 spinner 与计时的工具行）；底部是常驻输入框与状态行。
+- **画面结构**：已完成内容进 ink `<Static>` 历史区（文本完成块、`⏺/⎿` 工具对、折叠 thinking 行、系统行、输入回显）——只追加不重画，终端原生滚动缓冲与复制保留；动态区承载进行中内容（流式文本、排队灰色常驻行——消息入队出现、离队或清队消失，与 WebUI 排队可视面同一语义、thinking 行、带 spinner 与计时的工具行）；底部是常驻输入框与状态行。
 - **输入历史**：数据源是当前会话里用户发过的消息，与 WebUI 读取同一份会话数据——接入会话时从 `GET /sessions/:id/messages` 读一次（只取文本），之后每发送一条追加一条，切换会话按新会话重读；CLI 不另存历史文件。定时任务、/goal 续轮、subagent 与团队投递等机器发出的用户消息都带来源说明块（`PROVENANCE_NOTE_KINDS`，见 [blocks](../reference/blocks.md)），历史把它们全部排除。
 - **转录视图（Ctrl+O）**：全屏覆盖层，打开时从 `GET /sessions/:id/messages` 拉全量消息（服务器真相替换实时账本，之后的实时帧继续追加）；thinking 全文、工具完整输出在此可达——历史区的任何截断都有去处。↑↓/j/k 滚动、PgUp/PgDn 翻页、g/G 跳头尾、`{`/`}` 跳上一条/下一条用户消息、q/Esc 关闭。
 - **快捷键帮助（?）**：输入为空时按 `?` 打开覆盖层，列出当前全部快捷键；文案与实际键位绑定同源于 `tui/keybindings.ts` 一张表。
@@ -238,10 +238,10 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 
 - **订阅确认失败即失败**：`openSubscribed`（`client.ts`，chat 与 run 共用）5s（`SUBSCRIBE_ACK_MS`）等不到 `subscribed` 或收到 error 帧即抛出错误并关闭 socket，不会把消息发往一条还没完成订阅（总线尚未登记分发）的连接。
 - **确认应答发送失败被忽略**：`confirmation.resolve` 发送抛出错误只忽略（socket 正在断开），交给重连路径接管。
-- **管道 stdin 的 EOF**：stdin 关闭时 readline 触发 close，readline 表面循环自然退出；`rlClosed` 标志让迟到的 `prompt()` 变成空操作而不是抛 "readline was closed"（缓冲行仍会经异步迭代器到达）。EOF 属于readline 表面：TUI 的 stdin 是 raw mode 终端，不存在这条路径。
+- **管道 stdin 的 EOF**：stdin 关闭时 readline 触发 close，readline 表面循环自然退出；`rlClosed` 标志让迟到的 `prompt()` 变成空操作而不是抛 "readline was closed"（缓冲行仍会经异步迭代器到达）。EOF 属于 readline 表面：TUI 的 stdin 是 raw mode 终端，不存在这条路径。
 - **重连后不回放**：重连只拉取全量数据用于更新本地状态但不渲染，错过的事件不再补偿；持久化消息自洽，下次进入 REPL 重新拉取全量即可（协议规则见 [protocol](../core/protocol.md)）。
 - **cron 表格无分页**：`GET /cron` 全量返回，任务多时表格整体打印。
-- **自定义命令是提示词模板，不是脚本**：它只做一件事——把模板里的 `{{args}}` 替换成命令参数后作为普通消息发送，没有任何 shell 执readline 表面；与内置命令重名的文件直接忽略。
+- **自定义命令是提示词模板，不是脚本**：它只做一件事——把模板里的 `{{args}}` 替换成命令参数后作为普通消息发送，没有任何 shell 执行面；与内置命令重名的文件直接忽略。
 
 ## 关联
 

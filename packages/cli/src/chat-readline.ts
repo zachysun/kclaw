@@ -11,9 +11,10 @@
  * predictable. @clack/prompts only ever runs one prompt at a time, with the
  * readline interface paused while the prompt owns the terminal.
  *
- * SIGINT approach: readline emits "SIGINT" on Ctrl+C when the pending line is
- * empty (a non-empty line just clears — node's default), and the process
- * receives the OS signal when stdin is not a TTY — the controller's
+ * SIGINT approach: on a TTY, readline consumes Ctrl+C in raw mode and emits
+ * its own "SIGINT" event (any line state — node documents no empty-line
+ * condition; without a listener it would merely emit "pause"); with a piped
+ * stdin the process still receives the OS signal externally. The controller's
  * escalation is wired to both (the process signal by the orchestrator, the
  * readline event here), so piped runs escalate identically.
  */
@@ -41,6 +42,11 @@ export function openReadline(mode: PermissionMode, skillCommands: () => readonly
   })
 }
 
+/** The pre-input greeting: session line plus the key hints (dim). */
+function banner(sessionId: string): string {
+  return `kclaw · session ${sessionId}\n${dim("输入消息，/ 命令可用（Tab 补全），/exit 退出，Ctrl+C 取消当前 run")}\n`
+}
+
 /** The part of a readline interface the surface pauses around a prompt. */
 type Pausable = Pick<RlInterface, "pause" | "resume">
 
@@ -61,8 +67,10 @@ export async function withPausedInput<T>(rl: Pausable, paused: { value: boolean 
   }
 }
 
-export function createReadlineUi(opts: { rl: RlInterface; showThinking: boolean }): ChatUi {
-  const { rl } = opts
+export function createReadlineUi(opts: { sessionId: string; mode: PermissionMode; showThinking: boolean; skillCommands: () => readonly SlashCommandMeta[] }): ChatUi {
+  // The interface is built here, not by the orchestrator: surface construction
+  // details (prompt shape, completer wiring) stay behind the seam.
+  const rl = openReadline(opts.mode, opts.skillCommands)
   /** Whether stdout sits at column 0, so line-oriented output can newline first. */
   let atLineStart = true
   /** True while an @clack prompt owns the terminal (Shift+Tab stands down). */
@@ -200,6 +208,7 @@ export function createReadlineUi(opts: { rl: RlInterface; showThinking: boolean 
     sessionChanged() {},
 
     async run(controller: ChatController) {
+      write(banner(opts.sessionId))
       rl.on("SIGINT", () => controller.interrupt())
       // Shift+Tab cycles the session's permission mode (readonly → default →
       // acceptEdits, Claude Code style). Stands down while an @clack prompt

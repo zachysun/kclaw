@@ -52,11 +52,10 @@ import { isPermissionMode, PERMISSION_MODES } from "@kclaw/core"
 import type { ConfirmationDecision, ConfirmationRequestedPayload, MessageQueuedPayload, PermissionMode, QuestionRequestedPayload } from "@kclaw/core"
 import { parseSendDisposition, resolveSendDisposition } from "@kclaw/core/protocol"
 import { join } from "node:path"
-import { openReadline, createReadlineUi } from "./chat-readline.js"
+import { createReadlineUi } from "./chat-readline.js"
 import type { ChatController, ChatSurface, ChatUi } from "./chat-surface.js"
 import { KclawClient, openSubscribed } from "./client.js"
 import type { WsFrame, WsHandle } from "./client.js"
-import { dim } from "./color.js"
 import { confirmationLine, frameView, isAgentEvent } from "./frame-view.js"
 import { createRegistry, dispatch, refreshSkillCommands as refreshSkillCommandsOp, runOrHint, type AttachmentRef, type SlashCtx } from "./slash.js"
 import type { SlashCommandMeta } from "@kclaw/core/commands"
@@ -485,11 +484,6 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
   const sessionId = await resolveSessionId(client, opts.session)
   const tty = process.stdin.isTTY === true && process.stdout.isTTY === true
 
-  if (!tty) {
-    process.stdout.write(`kclaw · session ${sessionId}\n`)
-    process.stdout.write(dim(`输入消息，/ 命令可用（Tab 补全），/exit 退出，Ctrl+C 取消当前 run\n`))
-  }
-
   // 初始发送处置（链正本在 core protocol/wire.ts）：会话覆盖 > 配置默认 >
   // steer。interrupt 覆盖原样带在本地状态里（回车直发会带上它，服务端按
   // 一次性动作入队）；刚连上的 daemon 不可达时回退 steer。
@@ -524,7 +518,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
   // colour module already wrote its verdict into the environment.
   const ui: ChatUi = tty
     ? (await import("./tui/tui.js")).createTuiUi({ sessionId, mode: initialMode, showThinking })
-    : createReadlineUi({ rl: openReadline(initialMode, () => controller.skillCommands()), showThinking })
+    : createReadlineUi({ sessionId, mode: initialMode, showThinking, skillCommands: () => controller.skillCommands() })
 
   const ctx: ChatCtx = {
     pendingAttachments: [],
@@ -736,7 +730,11 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
     }
   }
 
+  let exiting = false
   const submit = async (raw: string): Promise<"exit" | "continue"> => {
+    // /exit 之后的排水窗口不再接受输入：此时再发送会启动新渲染，而 runChat
+    // 的 finally 已在关 socket 的路上，重连接管会产生无人关闭的孤儿连接。
+    if (exiting) return "exit"
     const text = raw.trim()
     const parsed = dispatch(text, registry)
     if (parsed === null) {
@@ -746,6 +744,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
       // output still completes before the process ends.
       if (text !== "") startRender(text) // sends, renders, and (if needed) resends after reconnect
     } else if (parsed.command === "exit") {
+      exiting = true
       await Promise.allSettled([...inFlight]) // 等正在进行的渲染收尾，输出完整再退
       return "exit"
     } else if (registry.has(parsed.command)) {

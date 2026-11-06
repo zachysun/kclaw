@@ -15,7 +15,7 @@
 import { Box, Text, useInput, useWindowSize } from "ink"
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react"
 import type { ChatController } from "../chat-surface.js"
-import { messagesToTranscript } from "./chat-data.js"
+import { fetchMessages, messagesToTranscript } from "./chat-data.js"
 import { AMBER } from "./colors.js"
 import { KEY_BINDINGS } from "./keybindings.js"
 import type { ChatStore, TranscriptEntry } from "./store.js"
@@ -65,10 +65,8 @@ export function TranscriptOverlay({ store, controller }: { store: ChatStore; con
     let cancelled = false
     void (async () => {
       try {
-        const messages = await controller.client.request("GET", `/sessions/${encodeURIComponent(controller.sessionId)}/messages`) as unknown
-        if (cancelled) return
-        const list = Array.isArray(messages) ? (messages as Parameters<typeof messagesToTranscript>[0]) : []
-        store.replaceTranscript(messagesToTranscript(list))
+        const list = await fetchMessages(controller.client, controller.sessionId)
+        if (!cancelled) store.replaceTranscript(messagesToTranscript(list))
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err))
       }

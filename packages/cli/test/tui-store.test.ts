@@ -220,3 +220,39 @@ describe("session switch", () => {
     expect(store.getState().transcriptLive).toBe(false)
   })
 })
+
+describe("queue row (spec B3)", () => {
+  it("queued messages count in, leaves on left-queue, and a session switch clears the row", () => {
+    const store = makeStore()
+    store.show(view({ kind: "queued", messageId: "m1" }))
+    store.show(view({ kind: "queued", messageId: "m2" }))
+    store.show(view({ kind: "queued", messageId: "m1" })) // 重复入队只计一次
+    expect(store.getState().dynamic.queuedIds).toEqual(["m1", "m2"])
+    store.show(view({ kind: "left-queue", messageIds: ["m1", "m3"] }))
+    expect(store.getState().dynamic.queuedIds).toEqual(["m2"])
+    store.sessionChanged("ses_next")
+    expect(store.getState().dynamic.queuedIds).toHaveLength(0)
+  })
+})
+
+describe("tool output truncation (spec B7)", () => {
+  it("marks summaries that were cut so the row can point at the transcript view", () => {
+    const store = makeStore()
+    const long = "长".repeat(100)
+    store.show(view({ kind: "tool-result", callId: "x1", status: "ok", durationMs: 1, output: long }))
+    expect(store.getState().history[0]).toMatchObject({ kind: "tool", outputTruncated: true })
+    store.show(view({ kind: "tool-result", callId: "x2", status: "ok", durationMs: 1, output: "短" }))
+    expect(store.getState().history[1]).toMatchObject({ kind: "tool", outputTruncated: false })
+  })
+})
+
+describe("exit gate", () => {
+  it("requestExit flips exiting once and fires onExit", () => {
+    let exits = 0
+    const store = new ChatStore({ showThinking: false, onExit: () => { exits += 1 } })
+    expect(store.getState().exiting).toBe(false)
+    store.requestExit()
+    expect(store.getState().exiting).toBe(true)
+    expect(exits).toBe(1)
+  })
+})

@@ -12,12 +12,11 @@
  * otherwise), so exactly one handler sees every Ctrl+C.
  */
 import { Box, Text, useInput, usePaste } from "ink"
-import { useEffect, useState, useSyncExternalStore } from "react"
+import { useState, useSyncExternalStore } from "react"
 import { fileMentionCompletions, replaceTrailingMentionToken } from "@kclaw/core/mentions"
 import { replaceTrailingSlashToken, slashCompletions } from "@kclaw/core/commands"
 import type { SlashCommandMeta } from "@kclaw/core/commands"
 import type { ChatController } from "../chat-surface.js"
-import { fetchSessionMeta, fetchWorkspaceFiles } from "./chat-data.js"
 import { AMBER } from "./colors.js"
 import type { ChatStore } from "./store.js"
 
@@ -44,26 +43,7 @@ export function InputEditor({ store, controller, active }: { store: ChatStore; c
   const state = useSyncExternalStore(store.subscribe, store.getState)
   const inputHistory = state.inputHistory
 
-  // @ 候选源：接入会话（与切换会话）时按会话工作目录拉一次；失败静默——菜单
-  // 没有候选，打字与发送不受影响。
-  useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      try {
-        const meta = await fetchSessionMeta(controller.client, controller.sessionId)
-        if (cancelled) return
-        const files = await fetchWorkspaceFiles(controller.client, meta.workdir)
-        if (!cancelled) store.setFiles(controller.sessionId, files)
-      } catch {
-        // daemon 不可达：@ 菜单静默无候选
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [controller.sessionId, controller.client, store])
-
-  const filesEntry = store.getState().files
+  const filesEntry = state.files
   // 含空白字符的路径不进候选：键盘菜单无法像 WebUI 抽屉那样把不可选项标灰
   // 跳过，直接过滤是同一语义的最干净画法（过滤放在取用处，清单怎么来的都成立）。
   const files = filesEntry !== undefined && filesEntry.sessionId === controller.sessionId

@@ -1,17 +1,18 @@
 /**
  * TUI component tests (spec 测试接入口 3): real ink renders through
  * ink-testing-library with keystrokes injected via stdin.write — the
- * confirmation card's four options and Esc, the editor's / menu
- * (open → select → accept → submit), the @ mention menu with the whitespace
- * filter, the status line's data, the dynamic area's rows, and the help
- * overlay's table.
+ * confirmation card's four options and Esc, the question card's multiselect
+ * semantics, the editor's / menu (open → select → accept → submit), the
+ * @ mention menu with the whitespace filter, the status line's data, the
+ * dynamic area's rows, the card exclusivity, and the help overlay's table.
  */
 import { describe, expect, it, afterEach } from "vitest"
 import { render, cleanup } from "ink-testing-library"
 import { createElement } from "react"
-import type { ConfirmationRequestedPayload } from "@kclaw/core"
+import type { ConfirmationRequestedPayload, QuestionRequestedPayload } from "@kclaw/core"
 import type { ChatController } from "../src/chat-surface.js"
-import { ConfirmCard } from "../src/tui/cards.js"
+import { ConfirmCard, QuestionCard } from "../src/tui/cards.js"
+import { ChatApp } from "../src/tui/chat-app.js"
 import { InputEditor } from "../src/tui/input-editor.js"
 import { StatusLine } from "../src/tui/status-line.js"
 import { DynamicArea } from "../src/tui/dynamic-area.js"
@@ -203,6 +204,64 @@ describe("DynamicArea (ink)", () => {
     expect(frame).toContain("bash")
     expect(frame).toContain("pnpm test")
   })
+
+  it("shows the queued-messages row while the queue holds entries", async () => {
+    const store = new ChatStore({ showThinking: false, onExit: () => {} })
+    store.show({ kind: "queued", messageId: "m1" })
+    store.show({ kind: "queued", messageId: "m2" })
+    const instance = render(createElement(DynamicArea, { state: store.getState() }))
+    await settle()
+    expect(instance.lastFrame()).toContain("已排队 2 条")
+    store.show({ kind: "left-queue", messageIds: ["m1", "m2"] })
+    // DynamicArea 收的是渲染时的快照 prop，与真实应用里 ChatApp 重渲染
+    // 传新 state 不同——直接渲染时手动喂新快照。
+    instance.rerender(createElement(DynamicArea, { state: store.getState() }))
+    await settle()
+    expect(instance.lastFrame()).not.toContain("已排队")
+  })
+})
+
+describe("QuestionCard multiselect (ink)", () => {
+  const questionPayload: QuestionRequestedPayload = {
+    questionId: "q1",
+    questions: [{ text: "选哪几项?", options: ["甲", "乙"], multiSelect: true }],
+    expiresAt: "2026-11-07T00:00:00.000Z",
+  }
+  it("Enter with nothing picked submits an empty answer (readline semantics)", async () => {
+    const answers: string[][][] = []
+    const instance = render(createElement(QuestionCard, {
+      payload: questionPayload,
+      isActive: true,
+      onResolve: (a) => answers.push(a),
+    }))
+    await settle()
+    instance.stdin.write(ENTER)
+    await settle()
+    expect(answers).toHaveLength(1)
+    expect(answers[0]).toEqual([[]])
+  })
+
+  it("space toggles picks and Enter submits them", async () => {
+    const answers: string[][][] = []
+    const instance = render(createElement(QuestionCard, {
+      payload: questionPayload,
+      isActive: true,
+      onResolve: (a) => answers.push(a),
+    }))
+    await settle()
+    // 逐键等一帧：连发会全部命中同一渲染的旧闭包（真实终端的按键间隔
+    // 足够 React 落一帧，测试也按这个节奏喂）。
+    instance.stdin.write(" ")
+    await settle()
+    instance.stdin.write(DOWN)
+    await settle()
+    instance.stdin.write(" ")
+    await settle()
+    instance.stdin.write(ENTER)
+    await settle()
+    expect(answers).toHaveLength(1)
+    expect(answers[0]).toEqual([["甲", "乙"]])
+  })
 })
 
 describe("HelpOverlay (ink)", () => {
@@ -215,5 +274,34 @@ describe("HelpOverlay (ink)", () => {
     expect(frame).toContain("Ctrl+O")
     expect(frame).toContain("循环切换权限模式")
     expect(frame).toContain("转录视图跳到上一条 / 下一条用户消息")
+  })
+})
+
+describe("ChatApp card exclusivity (ink)", () => {
+  const confirmForApp: ConfirmationRequestedPayload = {
+    confirmationId: "app-c1",
+    toolCall: { id: "b", type: "tool_call", callId: "k", name: "bash", args: {}, argsJson: "ls" },
+    risk: "safe",
+    expiresAt: "2026-11-07T00:00:00.000Z",
+  }
+
+  it("renders exactly one card at a time — the choice waits until the confirm resolves", async () => {
+    const store = new ChatStore({ showThinking: false, onExit: () => {} })
+    const confirmPromise = store.confirm(confirmForApp)
+    const choicePromise = store.choose("选择会话", [{ value: "alpha", label: "CHOICE_ALPHA" }])
+    const instance = render(createElement(ChatApp, { store, controller: makeController() }))
+    await settle()
+    // ink 把按键广播给所有激活的 useInput：同时挂起两张卡会一次回车双重
+    // 裁决，所以同一帧只允许出现一张。
+    let frame = instance.lastFrame() ?? ""
+    expect(frame).toContain("允许（仅本次）")
+    expect(frame).not.toContain("CHOICE_ALPHA")
+    store.resolveConfirm("once")
+    await expect(confirmPromise).resolves.toBe("once")
+    await settle()
+    frame = instance.lastFrame() ?? ""
+    expect(frame).toContain("CHOICE_ALPHA")
+    store.resolveChoice("alpha")
+    await expect(choicePromise).resolves.toBe("alpha")
   })
 })

@@ -16,7 +16,7 @@ import { render } from "ink"
 import type { Instance } from "ink"
 import { createElement } from "react"
 import type { ChatController, ChatUi, ChoiceOption, DisplayView, NoticeTone } from "../chat-surface.js"
-import { fetchMessages, fetchSessionMeta } from "./chat-data.js"
+import { fetchMessages, fetchSessionMeta, fetchWorkspaceFiles } from "./chat-data.js"
 import { ChatApp } from "./chat-app.js"
 import { ChatStore } from "./store.js"
 import { clearTerminalTitle, writeTerminalTitle } from "./title.js"
@@ -47,8 +47,9 @@ export function createTuiUi(opts: TuiOptions): ChatUi {
   }
 
   /**
-   * Pull session meta (status line + title) and messages (input history)
-   * for a session. Callers all run inside run() (controller set); without
+   * Pull session meta (status line + title), the workspace file list (@
+   * menu) and messages (input history) for a session — one place per
+   * session change. Callers all run inside run() (controller set); without
    * one there is no client to ask — a wiring bug would loop forever here.
    */
   const resync = async (sessionId: string): Promise<void> => {
@@ -58,8 +59,9 @@ export function createTuiUi(opts: TuiOptions): ChatUi {
       sessionTitle = meta.title ?? ""
       store.setStatusMeta({ model: meta.model, title: sessionTitle })
       refreshTitle()
+      store.setFiles(sessionId, await fetchWorkspaceFiles(controllerRef.client, meta.workdir))
     } catch {
-      // daemon 不可达：状态行保持占位值，下一次会话切换或重连后再恢复
+      // daemon 不可达：状态行保持占位值，@ 菜单暂无候选，下一次会话切换或重连后再恢复
     }
     try {
       store.setInputHistory(await fetchMessages(controllerRef.client, sessionId))

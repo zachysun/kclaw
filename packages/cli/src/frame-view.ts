@@ -197,10 +197,15 @@ export function summarizeArgs(args: unknown): string {
   return text.length > 60 ? `${text.slice(0, 57)}...` : text
 }
 
-/** Output summary for a tool result line: whitespace-collapsed, first 80 chars. */
-export function summarizeOutput(output: string): string {
+/** Output summary for a tool result line: whitespace-collapsed, first 80 chars, plus whether it was cut. */
+export function summarizeOutputInfo(output: string): { text: string; truncated: boolean } {
   const text = output.replace(/\s+/g, " ").trim()
-  return text.length > 80 ? `${text.slice(0, 80)}...` : text
+  if (text.length > 80) return { text: `${text.slice(0, 80)}...`, truncated: true }
+  return { text, truncated: false }
+}
+
+export function summarizeOutput(output: string): string {
+  return summarizeOutputInfo(output).text
 }
 
 export function toolCallLine(view: { name: string; args: unknown }): string {

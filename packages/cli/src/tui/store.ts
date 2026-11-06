@@ -16,7 +16,7 @@
 import { PROVENANCE_NOTE_KINDS } from "@kclaw/core"
 import type { ConfirmationDecision, ConfirmationRequestedPayload, Message, PermissionMode, QuestionRequestedPayload } from "@kclaw/core"
 import type { DisplayView, NoticeTone, ChoiceOption } from "../chat-surface.js"
-import { summarizeOutput } from "../frame-view.js"
+import { summarizeOutputInfo } from "../frame-view.js"
 import { toolArgLine } from "./tool-format.js"
 
 /** One completed entry the <Static> region prints (never re-rendered). */
@@ -24,7 +24,7 @@ export type HistoryItem =
   | { id: number; kind: "echo"; text: string }
   | { id: number; kind: "text"; text: string }
   | { id: number; kind: "thinking"; seconds: number }
-  | { id: number; kind: "tool"; name: string; argsSummary: string; status: string; durationMs: number; outputSummary: string }
+  | { id: number; kind: "tool"; name: string; argsSummary: string; status: string; durationMs: number; outputSummary: string; outputTruncated: boolean }
   | { id: number; kind: "system"; text: string }
   | { id: number; kind: "notice"; text: string; tone: NoticeTone }
 
@@ -47,6 +47,8 @@ export interface DynamicState {
   /** A render is in flight (drives the spinner row and the terminal title). */
   busy: boolean
   busySince: number | undefined
+  /** Messages sitting in the daemon's run queue (queued → left-queue lifecycle). */
+  queuedIds: string[]
 }
 
 /** The bottom status line's data (spec B3). */
@@ -83,6 +85,8 @@ export interface ChatState {
    */
   transcriptLive: boolean
   transcript: TranscriptEntry[]
+  /** True once /exit was accepted — the editor must not accept further input while the exit drains. */
+  exiting: boolean
 }
 
 interface ChatStoreOptions {
@@ -108,7 +112,7 @@ export class ChatStore {
     this.options = options
     this.state = {
       history: [],
-      dynamic: { streamingText: "", thinkingText: undefined, thinkingStartedAt: undefined, runningTools: [], busy: false, busySince: undefined },
+      dynamic: { streamingText: "", thinkingText: undefined, thinkingStartedAt: undefined, runningTools: [], busy: false, busySince: undefined, queuedIds: [] },
       status: { mode: "default", model: "default", title: "", sessionId: "", inputTokens: undefined, outputTokens: undefined },
       pending: { confirms: [], questions: [], choices: [] },
       overlays: { transcript: false, help: false },
@@ -116,6 +120,7 @@ export class ChatStore {
       files: undefined,
       transcriptLive: false,
       transcript: [],
+      exiting: false,
     }
   }
 
@@ -217,6 +222,7 @@ export class ChatStore {
       case "tool-result": {
         const call = this.calls.get(view.callId)
         const dynamic = { ...this.state.dynamic, runningTools: this.state.dynamic.runningTools.filter((t) => t.callId !== view.callId) }
+        const summary = summarizeOutputInfo(view.output)
         const history = [...this.state.history, {
           id: this.nextId++,
           kind: "tool" as const,
@@ -224,7 +230,8 @@ export class ChatStore {
           argsSummary: call?.argsSummary ?? "",
           status: view.status,
           durationMs: view.durationMs,
-          outputSummary: summarizeOutput(view.output),
+          outputSummary: summary.text,
+          outputTruncated: summary.truncated,
         }]
         const patch: Partial<ChatState> = { dynamic, history }
         const openIdx = this.openTools.get(view.callId)
@@ -258,11 +265,19 @@ export class ChatStore {
       case "command-error":
         this.notice(`错误: ${view.message}`, "error")
         return
-      // 队列三帧：排队的可视面是「输入回显 + 已排队提示」（编排器的 notice），
-      // 离队无需专门显示——行结构已经由回显与提示表达了。
+      // 队列三帧：维护动态区的灰色常驻条目（spec B3，与 web 端排队可视面
+      // 同一语义）——入队计数、离队（注入/取消）消行；编排器的 notice 仍
+      // 负责一次性提示。
       case "queued":
-      case "left-queue":
+        if (!this.state.dynamic.queuedIds.includes(view.messageId)) {
+          this.set({ dynamic: { ...this.state.dynamic, queuedIds: [...this.state.dynamic.queuedIds, view.messageId] } })
+        }
         return
+      case "left-queue": {
+        const leaving = new Set(view.messageIds)
+        this.set({ dynamic: { ...this.state.dynamic, queuedIds: this.state.dynamic.queuedIds.filter((id) => !leaving.has(id)) } })
+        return
+      }
     }
   }
 
@@ -341,7 +356,7 @@ export class ChatStore {
     this.openTools.clear()
     this.set({
       status: { ...this.state.status, sessionId, inputTokens: undefined, outputTokens: undefined },
-      dynamic: { streamingText: "", thinkingText: undefined, thinkingStartedAt: undefined, runningTools: [], busy: false, busySince: undefined },
+      dynamic: { streamingText: "", thinkingText: undefined, thinkingStartedAt: undefined, runningTools: [], busy: false, busySince: undefined, queuedIds: [] },
       transcript: [],
       transcriptLive: false,
       inputHistory: [],
@@ -405,6 +420,7 @@ export class ChatStore {
   }
 
   requestExit(): void {
+    this.set({ exiting: true })
     this.options.onExit()
   }
 }

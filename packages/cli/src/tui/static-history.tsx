@@ -39,6 +39,7 @@ const HistoryRow = memo(function HistoryRow({ item }: { item: HistoryItem }) {
           <Text dimColor={item.status !== "error"}>
             {"  "}
             {ICONS.result} {item.status} ({Math.round(item.durationMs)}ms) {item.outputSummary}
+            {item.outputTruncated ? "（完整输出在转录视图，Ctrl+O）" : ""}
           </Text>
         </Text>
       )
