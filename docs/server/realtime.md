@@ -45,8 +45,8 @@
 
 - `message.queued {messageId, disposition, position?}`：消息入队/入引导缓冲（ack 的 `queued:true` 必有对应广播；`queued:false` 的空闲直发不发）。`disposition` 按**实际生效**处置报告——无活动 run 的 steer 降级为 wait；`position` 是 wait/interrupt 在可执行队列中的序位（0 起），steer 在缓冲区、不带。
 - `message.steered {messageId}`：引导条目在迭代边界注入活动 run（事件级 `runId` 标识注入的 run）——随后该 id 的 `message.created`/`message.completed` 走正常流式，注入即进历史、不可再 `queue.cancel`。
-- `message.queue_cancelled {messageId} | {all:true}`：单条或全部排队取消的广播；已注入条目不受 `all:true` 影响（机器不删历史）。
-- **条目级失败可见性**：出队持久化失败、条目执行在组装段同步抛出（如降级后的坏附件）这两类失败，循环的 `run.failed` 覆盖不到——驱动器补发 `run.failed {error:{code:"queue_entry_failed", message 含 messageId 与原因}}`（sessionId 级）。已 ack `queued:true` 的消息不会无声消失。
+- `message.queue_cancelled {messageId} | {all:true, messageIds}`：单条或全部排队取消的广播；已注入条目不受 `all:true` 影响（机器不删历史），`messageIds` 列出实际撤回的条目，恰好出队的消息不在其中。
+- **条目级失败可见性**：出队持久化失败、条目执行在组装段同步抛出（如降级后的坏附件）这两类失败，循环的 `run.failed` 覆盖不到——驱动器补发 `run.failed {error:{code:"queue_entry_failed", message 含 messageId 与原因}, messageId}`（sessionId 级，不带 runId）。已 ack `queued:true` 的消息不会无声消失。
 
 事件在总线广播、ack 在命令通道回包，两条通路各自送达——客户端不应假设 `message.queued` 与 `send_message_ack` 的先后（网络上 queued 可能先于 ack 到达）。
 

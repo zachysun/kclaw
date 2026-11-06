@@ -48,7 +48,11 @@ export interface RunStartedPayload {
   permissionMode?: import("../permissions/modes.js").PermissionMode
 }
 export interface RunCompletedPayload { stopReason: StopReason; usage: Usage }
-export interface RunFailedPayload { error: { code: string; message: string } }
+export interface RunFailedPayload {
+  error: { code: string; message: string }
+  /** 条目级失败（queue_entry_failed）专属：run 没有开始，事件不带 runId，发送方靠这个 id 认领。 */
+  messageId?: string
+}
 export interface MessageCreatedPayload { message: Message }
 export interface MessageCompletedPayload { message: Message }
 export interface MessageTruncatedPayload { fromMessageId: string }
@@ -143,7 +147,12 @@ export interface MessageQueuedPayload {
   position?: number                            // wait/interrupt 在队列中的序位；steer 不适用
 }
 export interface MessageSteeredPayload { messageId: string } // 事件级 runId 标识注入的 run
-export interface MessageQueueCancelledPayload { messageId?: string; all?: boolean }
+export interface MessageQueueCancelledPayload {
+  messageId?: string
+  all?: boolean
+  /** all:true 时被撤回的条目：等结果的发送方靠它确认自己的消息在内（出队在途的不算）。 */
+  messageIds?: string[]
+}
 
 /** v3: 压缩触发阶段——post-run = run 前预压缩，in-run = 迭代边界中途压缩，manual = 手动。 */
 export type CompactionPhase = "in-run" | "post-run" | "manual"

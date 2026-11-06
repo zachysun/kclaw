@@ -402,7 +402,7 @@ export class RunManager {
     this.#persistQueue(sessionId)
     this.#deps.bus.emit(makeEvent(
       "message.queue_cancelled",
-      messageId !== undefined ? { messageId } : { all: true },
+      messageId !== undefined ? { messageId } : { all: true, messageIds: cancelIds },
       { sessionId },
     ))
     return { ok: true, cancelled: cancelIds }
@@ -674,6 +674,7 @@ export class RunManager {
         code: "queue_entry_failed",
         message: `排队消息 ${node.entry.messageId} ${why}：${err instanceof Error ? err.message : String(err)}`,
       },
+      messageId: node.entry.messageId,
     }, { sessionId }))
   }
 
