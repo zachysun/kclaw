@@ -3,7 +3,7 @@
  * "多行中文字符串字面量"形态的文本即失败（四类特征在收拢前的真实源码上
  * 验证过：九处提示词全覆盖、白名单外零漏报）。
  * 白名单只收非提示词文本：工具描述与输出（tools/，按设计不收拢）、
- * 沙箱命令包装、通知文案模板、CLI 帮助、项目记忆表格。
+ * 沙箱命令包装、通知文案模板、CLI 帮助、项目记忆表格、provider 未配置的报错文案。
  */
 import { describe, expect, it } from "vitest"
 import { readdirSync, readFileSync, statSync } from "node:fs"
@@ -22,6 +22,7 @@ const LINE_ALLOW: Array<{ file: string; contains: string }> = [
   { file: "agent/context.ts", contains: "SUMMARY_PREAMBLE" }, // 摘要注入包装与 token 估算基准
   { file: "agent/run-assembly.ts", contains: "TOOL_DIRECTORY" }, // 工具目录段组装（prompts/system.ts 文本）
   { file: "memory/threads.ts", contains: "| topic |" }, // 项目记忆 markdown 表格（CLI 展示）
+  { file: "provider/resolve.ts", contains: "未配置：" }, // provider/模型未配置的报错（经 run.failed 给用户看，写明配置途径）
 ]
 
 function walk(dir: string): string[] {
