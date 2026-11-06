@@ -8,7 +8,7 @@
  * precedent).
  */
 import type { AgentEvent, RunTrigger } from "./events.js"
-import type { NoteKind } from "./blocks.js"
+import type { ProvenanceNoteKind } from "./blocks.js"
 import type { UiActionRef } from "./ui-cards.js"
 
 /** How a send_message rides the queue: steer injects, wait queues, interrupt preempts. */
@@ -59,7 +59,7 @@ export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
  * message is machine-originated, not user speech.
  */
 export interface QueueNote {
-  kind: NoteKind
+  kind: ProvenanceNoteKind
   text: string
 }
 

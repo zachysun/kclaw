@@ -27,7 +27,16 @@ export interface ToolResultBlock {
   durationMs: number
 }
 
-export type NoteKind = "system" | "cron" | "process" | "memory" | "timeout" | "denied" | "subagent" | "goal"
+export type NoteKind = "system" | "cron" | "process" | "memory" | "timeout" | "denied" | "subagent" | "goal" | "team"
+
+/**
+ * The note kinds that declare a user-role message machine-originated (the
+ * provenance a queue entry carries onto its message). The other kinds ride
+ * on messages for other reasons: memory recall lands on the user's own
+ * message, a system note may mark the user's forwarded words.
+ */
+export const PROVENANCE_NOTE_KINDS = ["cron", "process", "subagent", "goal", "team"] as const satisfies readonly NoteKind[]
+export type ProvenanceNoteKind = (typeof PROVENANCE_NOTE_KINDS)[number]
 
 export interface NoteBlock {
   id: BlockId

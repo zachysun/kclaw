@@ -4,7 +4,7 @@
  * (appended to the mainline persona). The lead section reads truthfully both
  * before and after create_team — every mainline session carries it so the
  * capability is discoverable, and the facade rejects team actions until the
- * team actually exists.
+ * team actually exists. Plus the provenance note every team delivery carries.
  * Pure text builders — no I/O — so tests assert content directly.
  */
 
@@ -31,3 +31,7 @@ export function teamLeadProtocol(): string {
     "- 组员是常驻会话：空闲时不退出、也没有级联停止；停止或移除都是逐个显式操作。",
   ].join("\n")
 }
+
+/** 团队投递 run 的出处 note（NoteBlock kind:"team" 的文本）：收信箱来信、任务派发、恢复提醒共用一句。 */
+export const TEAM_DELIVERY_NOTE =
+  "本消息为团队投递，非用户直接发言：收信箱来信以【来自 …】标明发信人，没有这个标注的是团队引擎发出的任务派发或恢复提醒。"
