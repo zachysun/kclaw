@@ -858,17 +858,25 @@ describe("resolveSessionId (unit)", () => {
 
 describe("renderRun (unit)", () => {
   /** Synthetic ChatCtx over a fake ws：泵"活着"、帧全部预置进 pendingFrames——renderRun 的 armNextFrame 会逐个同步取走。 */
-  function unitCtx(pending: WsFrame[]): { ctx: Parameters<typeof renderRun>[0]; sent: WsFrame[] } {
+  function unitCtx(pending: WsFrame[]): { ctx: Parameters<typeof renderRun>[0]; sent: WsFrame[]; surface: { notices: string[]; shows: unknown[] } } {
     const sent: WsFrame[] = []
+    const surface: { notices: string[]; shows: unknown[] } = { notices: [], shows: [] }
     const ctx = {
       home: undefined,
       client: {} as never,
       ws: { send: (f: WsFrame) => sent.push(f) } as never,
       sessionId: "ses_unit",
-      rl: {} as never,
-      showThinking: false,
+      surface: {
+        show: (view: unknown) => surface.shows.push(view),
+        notice: (text: string) => surface.notices.push(text),
+        confirm: async () => "once" as const,
+        ask: async () => [] as string[][],
+        choose: async () => undefined,
+        modeChanged: () => {},
+        busyChanged: () => {},
+        sessionChanged: () => {},
+      } as never,
       auto: "yes" as const,
-      io: { atLineStart: true },
       pendingAttachments: [],
       disposition: "steer" as const,
       frameWaiters: [],
@@ -877,7 +885,7 @@ describe("renderRun (unit)", () => {
       pumpAlive: true,
       reconnecting: undefined,
     } as unknown as Parameters<typeof renderRun>[0]
-    return { ctx, sent }
+    return { ctx, sent, surface }
   }
 
   it("a stale buffered error frame never consumes a fresh render", async () => {
@@ -893,22 +901,14 @@ describe("renderRun (unit)", () => {
       { id: "e2", ts: "t", type: "text.delta", payload: { messageId: "msg_unit", blockId: "b1", delta: "新鲜输出" } },
       { id: "e3", ts: "t", type: "run.completed", payload: { stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } } },
     ]
-    const writes: string[] = []
-    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
-      writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString())
-      return true
-    })
-    try {
-      const { ctx, sent } = unitCtx([staleError, ...runFrames])
-      await renderRun(ctx, "新消息")
-      const out = writes.join("")
-      expect(out).not.toContain("错误") // 不打印先于本渲染的陈旧错误
-      expect(out).not.toContain("not found")
-      expect(out).toContain("新鲜输出") // 本渲染正常渲染了自己的 run（不因旧帧提前终止）
-      expect(sent).toHaveLength(1) // 消息发出且只发一次
-      expect((sent[0] as { type?: string }).type).toBe("send_message")
-    } finally {
-      spy.mockRestore()
-    }
+    const { ctx, sent, surface } = unitCtx([staleError, ...runFrames])
+    await renderRun(ctx, "新消息")
+    const notices = surface.notices.join("")
+    const shows = JSON.stringify(surface.shows)
+    expect(notices).not.toContain("错误") // 不打印先于本渲染的陈旧错误
+    expect(notices).not.toContain("not found")
+    expect(shows).toContain("新鲜输出") // 本渲染正常渲染了自己的 run（不因旧帧提前终止）
+    expect(sent).toHaveLength(1) // 消息发出且只发一次
+    expect((sent[0] as { type?: string }).type).toBe("send_message")
   })
 })

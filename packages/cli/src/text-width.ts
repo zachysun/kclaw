@@ -27,3 +27,35 @@ export function alignColumns(rows: readonly (readonly string[])[]): string[] {
   }
   return rows.map((row) => row.map((cell, i) => (i === row.length - 1 ? cell : padDisplay(cell, widths[i]!))).join("  "))
 }
+
+/**
+ * Wrap one logical line into visual lines of at most `width` display
+ * columns (CJK-aware, so 中文 breaks at the right column). The transcript
+ * overlay slices scrollable content by VISUAL line; ink's own wrapping is
+ * layout-only (unquery-able line counts), so long text must be wrapped here
+ * first for the line offsets to match what is on screen.
+ */
+export function wrapDisplay(text: string, width: number): string[] {
+  const cap = Math.max(1, width)
+  const lines: string[] = []
+  for (const rawLine of text.split("\n")) {
+    if (rawLine === "") {
+      lines.push("")
+      continue
+    }
+    let current = ""
+    let currentWidth = 0
+    for (const ch of rawLine) {
+      const w = stringWidth(ch)
+      if (currentWidth + w > cap && current !== "") {
+        lines.push(current)
+        current = ""
+        currentWidth = 0
+      }
+      current += ch
+      currentWidth += w
+    }
+    lines.push(current)
+  }
+  return lines
+}

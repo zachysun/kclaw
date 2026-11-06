@@ -1,13 +1,13 @@
 /**
  * What one daemon frame means for a terminal surface, decided in ONE switch:
- * the readline chat and `kclaw run` both map these views to their own output.
- * The compile-time exhaustiveness check lives here, so a new core event type
- * must be classified once, not once per surface.
+ * the readline chat, the ink TUI and `kclaw run` all map these views to their
+ * own output. The compile-time exhaustiveness check lives here, so a new core
+ * event type must be classified once, not once per surface.
  *
  * Pure: no IO and no colour. Line helpers return plain text; the surface
  * applies its own tone.
  */
-import type { AnyAgentEvent, ConfirmationRequestedPayload, QuestionRequestedPayload } from "@kclaw/core"
+import type { AnyAgentEvent, ConfirmationRequestedPayload, QuestionRequestedPayload, StopReason, Usage } from "@kclaw/core"
 import type { WsFrame } from "./client.js"
 
 export type FrameView =
@@ -16,14 +16,20 @@ export type FrameView =
   /** The text block ended: whatever follows starts on a new line. */
   | { kind: "text-end" }
   | { kind: "thinking"; delta: string }
-  | { kind: "tool-call"; name: string; args: unknown }
-  | { kind: "tool-result"; status: string; durationMs: number; output: string }
+  /** The thinking block ended (the TUI folds it into one timed line). */
+  | { kind: "thinking-end" }
+  | { kind: "tool-call"; callId: string; name: string; args: unknown }
+  | { kind: "tool-result"; callId: string; status: string; durationMs: number; output: string }
   | { kind: "confirmation"; payload: ConfirmationRequestedPayload }
   | { kind: "question"; payload: QuestionRequestedPayload }
   /** One system line: note, compaction, memory or hook. */
   | { kind: "system"; text: string }
+  /** A message entered the session queue (or the steer buffer). */
+  | { kind: "queued"; messageId: string }
+  /** These messages no longer wait: they started, were injected, or were withdrawn. */
+  | { kind: "left-queue"; messageIds: string[] }
   | { kind: "run-failed"; message: string }
-  | { kind: "run-completed" }
+  | { kind: "run-completed"; stopReason: StopReason; usage: Usage }
   /** A command was rejected (no run will start for it). */
   | { kind: "command-error"; message: string }
   /** Nothing to show. */
@@ -50,14 +56,16 @@ export function frameView(frame: WsFrame): FrameView {
       return { kind: "text-end" } // deltas never newline themselves
     case "thinking.delta":
       return { kind: "thinking", delta: ev.payload.delta }
+    case "thinking.completed":
+      return { kind: "thinking-end" }
     case "tool_call.completed": {
       const block = ev.payload.block
-      return block.type === "tool_call" ? { kind: "tool-call", name: block.name, args: block.args } : SILENT
+      return block.type === "tool_call" ? { kind: "tool-call", callId: block.callId, name: block.name, args: block.args } : SILENT
     }
     case "tool_result.completed": {
       const block = ev.payload.block
       return block.type === "tool_result"
-        ? { kind: "tool-result", status: block.status, durationMs: block.durationMs, output: block.output }
+        ? { kind: "tool-result", callId: block.callId, status: block.status, durationMs: block.durationMs, output: block.output }
         : SILENT
     }
     // tool_result.delta: deliberately nothing live — the completed line
@@ -71,13 +79,15 @@ export function frameView(frame: WsFrame): FrameView {
     // the broadcast needs nothing.
     case "question.resolved":
       return SILENT
-    // message.created/completed (any role): deliberately nothing. The USER
-    // message events (the daemon announces the user message lifecycle on the
-    // wire) must not render — the typed line is already on screen, so a render
-    // here would double-echo the user's text. Assistant/tool messages are
-    // equally non-visual here: their content streams through the
-    // text.*/tool_*/thinking.* events above.
+    // message.created: never a text render. The USER message events (the
+    // daemon announces the user message lifecycle on the wire) must not
+    // render — the typed line is already on screen, so a render here would
+    // double-echo the user's text. Assistant/tool messages are equally
+    // non-visual: their content streams through the text.*/tool_*/thinking.*
+    // events above. A created message no longer waits in the queue, which is
+    // all a queue view needs from it.
     case "message.created":
+      return { kind: "left-queue", messageIds: [ev.payload.message.id] }
     case "message.completed":
       return SILENT
     // note.emitted: one line per note block — including the memory/cron notes
@@ -112,7 +122,18 @@ export function frameView(frame: WsFrame): FrameView {
     case "run.failed":
       return { kind: "run-failed", message: ev.payload.error.message }
     case "run.completed":
-      return { kind: "run-completed" }
+      return { kind: "run-completed", stopReason: ev.payload.stopReason, usage: ev.payload.usage }
+    // Queue trio: queued opens a queue row, steered / queue_cancelled close
+    // them (a started message closes its row through message.created). The
+    // readline chat and `kclaw run` print nothing for these.
+    case "message.queued":
+      return { kind: "queued", messageId: ev.payload.messageId }
+    case "message.steered":
+      return { kind: "left-queue", messageIds: [ev.payload.messageId] }
+    case "message.queue_cancelled": {
+      const p = ev.payload
+      return { kind: "left-queue", messageIds: p.messageIds ?? (p.messageId !== undefined ? [p.messageId] : []) }
+    }
     // run.started: no line — the run's first visible output is the model's
     // first delta; printing a banner here would only add noise.
     case "run.started":
@@ -132,7 +153,6 @@ export function frameView(frame: WsFrame): FrameView {
     // deliberately not buffered, the completed line truncates the output).
     case "text.created":
     case "thinking.created":
-    case "thinking.completed":
     case "tool_call.created":
     case "tool_call.delta":
     case "tool_result.created":
@@ -148,11 +168,6 @@ export function frameView(frame: WsFrame): FrameView {
     // confirmation.resolved: the pending confirm already printed its verdict
     // line when handled; the broadcast needs nothing.
     case "confirmation.resolved":
-    // Queue trio: the daemon's queue state is visible via /queue on demand;
-    // the queued/steered/cancelled broadcasts render nothing here.
-    case "message.queued":
-    case "message.steered":
-    case "message.queue_cancelled":
     // Edit & retry / regenerate: the truncation broadcast only reshapes the
     // webui chat view; the CLI has no retry entry and renders nothing.
     case "message.truncated":
@@ -171,8 +186,8 @@ export function frameView(frame: WsFrame): FrameView {
   }
 }
 
-/** Args summary for the `⚡ <name> <args>` line: compact JSON, capped at 60 chars. */
-function summarizeArgs(args: unknown): string {
+/** Args summary for a tool line: compact JSON, capped at 60 chars. */
+export function summarizeArgs(args: unknown): string {
   let text: string
   try {
     text = JSON.stringify(args ?? {}) ?? "{}"
@@ -182,8 +197,8 @@ function summarizeArgs(args: unknown): string {
   return text.length > 60 ? `${text.slice(0, 57)}...` : text
 }
 
-/** Output summary for the `↳ <status>` line: whitespace-collapsed, first 80 chars. */
-function summarizeOutput(output: string): string {
+/** Output summary for a tool result line: whitespace-collapsed, first 80 chars. */
+export function summarizeOutput(output: string): string {
   const text = output.replace(/\s+/g, " ").trim()
   return text.length > 80 ? `${text.slice(0, 80)}...` : text
 }

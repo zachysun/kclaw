@@ -13,8 +13,7 @@ function ctxWith(calls: Array<{ method: string; path: string; body?: unknown }>)
     switchSession: async () => {},
     exit: () => {},
     print: () => {},
-    pauseInput: () => {},
-    resumeInput: () => {},
+    choose: async () => undefined,
     pendingAttachments: [],
     send: () => {},
   }

@@ -118,6 +118,11 @@ function textOutput(opts: { policy: CardPolicy; showThinking: boolean; write: (c
         // run-failed / command-error: the lifecycle's stderr line carries them.
         case "run-failed":
         case "command-error":
+        // thinking-end / queue views: the text output has no folded thinking
+        // line and no queue display.
+        case "thinking-end":
+        case "queued":
+        case "left-queue":
         case "silent":
           return
       }

@@ -1,33 +1,26 @@
 /**
- * Interactive chat REPL — the terminal product surface: connect
- * (auto-starting) the daemon, create or resume a session, subscribe over WS
- * and render one run's events as plain text on stdout, per line of input.
+ * Interactive chat — the terminal product surface: connect (auto-starting)
+ * the daemon, create or resume a session, subscribe over WS and render each
+ * run's events per typed line. This module is the orchestration both
+ * terminal surfaces share (spec B2/B11); what the user sees lives behind
+ * ChatSurface: the ink TUI when stdin and stdout are both TTYs
+ * (`tui/`), the readline line surface otherwise (`chat-readline.ts`).
  *
- * Line input uses node:readline (NOT @clack text): deltas stream through
- * process.stdout.write while the interface idles between lines, a piped
- * stdin (tests, scripting) works line-by-line, and history/choreography stay
- * predictable. @clack/prompts is used ONLY for the confirmation prompt — the
- * readline interface is paused while the prompt owns the terminal.
- *
- * SIGINT approach: readline emits "SIGINT" on Ctrl+C when the pending line is
- * empty (a non-empty line just clears — node's default), and the process
- * receives the OS signal when stdin is not a TTY — the same handler is
- * registered on both so piped runs (tests, scripting) escalate identically.
- * Three stages, `sigints` only ever growing: the first press
- * cancels the active run (`run.cancel`; the run then ends through the normal
- * render path with run.completed {stopReason:"aborted"}) or, while idle,
- * prints the exit hint — with a queued-count warning ("还有 N 条…") whenever
- * the session holds queued messages. The second press clears the queue
- * (`queue.cancel` without messageId) when one exists, otherwise exits. The
- * third press always exits immediately (code 130, socket closed first so the
- * daemon sees a clean disconnect).
+ * Ctrl+C escalates in three stages, `sigints` only ever growing: the first
+ * press cancels the active run (`run.cancel`; the run then ends through the
+ * normal render path with run.completed {stopReason:"aborted"}) or, while
+ * idle, prints the exit hint — with a queued-count warning ("还有 N 条…")
+ * whenever the session holds queued messages. The second press clears the
+ * queue (`queue.cancel` without messageId) when one exists, otherwise exits.
+ * The third press always exits immediately (code 130, socket closed first so
+ * the daemon sees a clean disconnect).
  *
  * Reconnect (basic version): when the socket drops
  * unexpectedly, re-resolve the daemon (KclawClient.connect respawns one when
  * it died), resubscribe, pull the full message list (拉全量消息，只订阅新事件，
  * 不回放 — nothing is replay-rendered) and print "[reconnected]"; frames
  * observed after a reconnect carry a 120s inactivity timeout so a dead run
- * cannot hang the REPL forever. The frame pump dies with the old socket's
+ * cannot hang the chat forever. The frame pump dies with the old socket's
  * iterator (flushing its waiters with "closed" so the render loop drives the
  * reconnect) and restarts on the new socket.
  *
@@ -50,22 +43,22 @@
  * event — which means it never reached a live daemon (ws drops frames on a
  * CLOSED socket silently, and throws only while CONNECTING; both are
  * indistinguishable from "never delivered", e.g. the socket died while the
- * REPL sat idle). Once ANY frame was observed the message is presumed
+ * chat sat idle). Once ANY frame was observed the message is presumed
  * delivered and a mid-run reconnect never re-sends: the run may already be
  * queued server-side, and a duplicate would double-run it — the 120s
  * watchdog bounds that wait instead.
  */
-import { isCancel, select, multiselect, text } from "@clack/prompts"
 import { isPermissionMode, PERMISSION_MODES } from "@kclaw/core"
 import type { ConfirmationDecision, ConfirmationRequestedPayload, MessageQueuedPayload, PermissionMode, QuestionRequestedPayload } from "@kclaw/core"
 import { parseSendDisposition, resolveSendDisposition } from "@kclaw/core/protocol"
 import { join } from "node:path"
-import { createInterface, type Interface as RlInterface } from "node:readline"
+import { openReadline, createReadlineUi } from "./chat-readline.js"
+import type { ChatController, ChatSurface, ChatUi } from "./chat-surface.js"
 import { KclawClient, openSubscribed } from "./client.js"
 import type { WsFrame, WsHandle } from "./client.js"
-import { dim, red } from "./color.js"
-import { confirmationLine, frameView, isAgentEvent, questionLine, toolCallLine, toolResultLine } from "./frame-view.js"
-import { createRegistry, createSlashCompleter, dispatch, refreshSkillCommands as refreshSkillCommandsOp, runOrHint, slashCompleter, type AttachmentRef, type SlashCtx } from "./slash.js"
+import { dim } from "./color.js"
+import { confirmationLine, frameView, isAgentEvent } from "./frame-view.js"
+import { createRegistry, dispatch, refreshSkillCommands as refreshSkillCommandsOp, runOrHint, type AttachmentRef, type SlashCtx } from "./slash.js"
 import type { SlashCommandMeta } from "@kclaw/core/commands"
 
 /** Session rows as served by GET /sessions (SessionStore meta shape). */
@@ -79,11 +72,6 @@ interface SessionInfo {
 /** Reconnect watchdog: a fully quiet run after a reconnect is presumed gone. */
 const POST_RECONNECT_SILENCE_MS = 120_000
 
-/** Prompt string per mode: default keeps the bare "> "; other modes badge it. */
-function modePrompt(m: PermissionMode): string {
-  return m === "default" ? "> " : `[${m}] > `
-}
-
 /** Next mode in the Shift+Tab cycle (PERMISSION_MODES order, strictest first). */
 function nextMode(m: PermissionMode): PermissionMode {
   return PERMISSION_MODES[(PERMISSION_MODES.indexOf(m) + 1) % PERMISSION_MODES.length]!
@@ -93,7 +81,7 @@ export interface ChatOptions {
   home?: string
   /** Resume this session instead of creating one; unknown ids are an error. */
   session?: string
-  /** Show thinking deltas (dim, "· " prefix); hidden by default. */
+  /** Show thinking text (the line chat streams it dim; the TUI unfolds its thinking lines). */
   showThinking?: boolean
   /** Hidden --yes: auto-approve every confirmation (tests & scripting). */
   yes?: boolean
@@ -102,17 +90,15 @@ export interface ChatOptions {
 }
 
 /** Everything the render loop mutates or consults, kept in one place so a reconnect can swap the socket underneath. */
-interface ChatCtx {
+export interface ChatCtx {
   home: string | undefined
   client: KclawClient
   ws: WsHandle
   sessionId: string
-  rl: RlInterface
-  showThinking: boolean
-  /** Confirmation answering mode: flag-driven auto verdicts, or the @clack prompt. */
+  /** Where every line, card and picker goes (the TUI or the readline surface). */
+  surface: ChatSurface
+  /** Confirmation answering mode: flag-driven auto verdicts, or the surface's card. */
   auto: "yes" | "no" | "ask"
-  /** Tracks whether stdout sits at column 0, so line-oriented renders can newline first. */
-  io: { atLineStart: boolean }
   /** Attachments uploaded via /attach, carried on the next send_message. */
   pendingAttachments: AttachmentRef[]
   /**
@@ -124,14 +110,12 @@ interface ChatCtx {
    */
   disposition: "steer" | "wait" | "interrupt"
   /**
-   * The session's permission mode (readonly / default / acceptEdits): shown
-   * as a prompt badge (non-default only), cycled by Shift+Tab and flipped by
-   * /mode. Local mirror of the daemon's session meta — the daemon re-derives
-   * it per run, so this only drives the UI.
+   * The session's permission mode: shown by the surface (the line prompt's
+   * badge, the TUI status line), cycled by Shift+Tab and flipped by /mode.
+   * Local mirror of the daemon's session meta — the daemon re-derives it per
+   * run, so this only drives the UI.
    */
   mode: PermissionMode
-  /** True while a @clack prompt owns the terminal (Shift+Tab stands down). */
-  inputPaused: boolean
   /**
    * The frame pump's one-shot waiters: each renderRun registers one waiter for
    * its next frame and the pump hands every arriving frame to exactly one of
@@ -172,20 +156,6 @@ interface ArmedFrame {
   waiter: FrameWaiter
 }
 
-function write(text: string, ctx: ChatCtx): void {
-  process.stdout.write(text)
-  ctx.io.atLineStart = text.endsWith("\n")
-}
-
-function ensureLineStart(ctx: ChatCtx): void {
-  if (!ctx.io.atLineStart) write("\n", ctx)
-}
-
-function line(text: string, ctx: ChatCtx): void {
-  ensureLineStart(ctx)
-  write(`${text}\n`, ctx)
-}
-
 /** Create a session, or verify a resume target exists ("session not found" otherwise). */
 export async function resolveSessionId(client: KclawClient, session: string | undefined): Promise<string> {
   if (session === undefined) {
@@ -198,51 +168,16 @@ export async function resolveSessionId(client: KclawClient, session: string | un
   return session
 }
 
-/** Run an @clack prompt with our readline paused (@clack owns the terminal while it runs). */
-async function withPausedInput<T>(ctx: ChatCtx, fn: () => Promise<T>): Promise<T> {
-  ctx.inputPaused = true
-  ctx.rl.pause() // @clack owns the terminal while our readline sits quiet
-  try {
-    return await fn()
-  } finally {
-    ctx.inputPaused = false
-    ctx.rl.resume()
-  }
-}
-
-/** Print the risk summary, collect the verdict (flags or @clack), send confirmation.resolve. */
+/** Collect the verdict (flag policy or the surface's card), then send confirmation.resolve. */
 async function handleConfirmation(p: ConfirmationRequestedPayload, ctx: ChatCtx): Promise<void> {
-  line(confirmationLine(p), ctx)
-  if (p.noteText !== undefined) line(dim(p.noteText), ctx)
   let decision: ConfirmationDecision
-  if (ctx.auto === "yes") {
-    line(dim("[--yes] 已自动允许（仅本次）"), ctx)
-    decision = "once"
-  } else if (ctx.auto === "no") {
-    line(dim("[--no] 已自动拒绝"), ctx)
-    decision = "reject"
+  if (ctx.auto === "ask") {
+    decision = await ctx.surface.confirm(p)
   } else {
-    let answer: ConfirmationDecision | symbol
-    try {
-      answer = await withPausedInput(ctx, () =>
-        select<ConfirmationDecision>({
-          message: "如何处置?",
-          options: [
-            { value: "once", label: "允许（仅本次）" },
-            { value: "project", label: "总是允许（本项目）" },
-            { value: "global", label: "总是允许（全局）" },
-            { value: "reject", label: "拒绝" },
-          ],
-        }))
-    } catch {
-      answer = "reject"
-    }
-    if (isCancel(answer)) {
-      line(dim("已取消，默认拒绝"), ctx)
-      decision = "reject"
-    } else {
-      decision = answer
-    }
+    ctx.surface.notice(confirmationLine(p), "plain")
+    if (p.noteText !== undefined) ctx.surface.notice(p.noteText, "dim")
+    ctx.surface.notice(ctx.auto === "yes" ? "[--yes] 已自动允许（仅本次）" : "[--no] 已自动拒绝", "dim")
+    decision = ctx.auto === "yes" ? "once" : "reject"
   }
   try {
     ctx.ws.send({ type: "confirmation.resolve", confirmationId: p.confirmationId, decision })
@@ -251,38 +186,9 @@ async function handleConfirmation(p: ConfirmationRequestedPayload, ctx: ChatCtx)
   }
 }
 
-/** Collect the answers for one pending question (options → arrows+enter, free text → typed line). */
+/** Collect the answers for one pending question through the surface, then send question.resolve. */
 async function handleQuestion(p: QuestionRequestedPayload, ctx: ChatCtx): Promise<void> {
-  line(`${questionLine(p)}${p.noteText === undefined ? "" : dim(` · ${p.noteText}`)}`, ctx)
-  const answers: string[][] = await withPausedInput(ctx, async () => {
-    const collected: string[][] = []
-    try {
-      for (const q of p.questions) {
-        if (Array.isArray(q.options) && q.options.length > 0) {
-          if (q.multiSelect === true) {
-            const picked = await multiselect<string>({
-              message: q.text,
-              options: q.options.map((o) => ({ value: o, label: o })),
-              required: false,
-            })
-            collected.push(isCancel(picked) ? [] : [...picked])
-          } else {
-            const picked = await select<string>({
-              message: q.text,
-              options: q.options.map((o) => ({ value: o, label: o })),
-            })
-            collected.push(isCancel(picked) ? [] : [picked])
-          }
-        } else {
-          const typed = await text({ message: q.text, placeholder: "回车跳过" })
-          collected.push(isCancel(typed) || typeof typed !== "string" ? [] : typed.trim() === "" ? [] : [typed])
-        }
-      }
-    } catch {
-      collected.push(...p.questions.slice(collected.length).map(() => []))
-    }
-    return collected
-  })
+  const answers = await ctx.surface.ask(p)
   try {
     ctx.ws.send({ type: "question.resolve", questionId: p.questionId, answers })
   } catch {
@@ -293,46 +199,36 @@ async function handleQuestion(p: QuestionRequestedPayload, ctx: ChatCtx): Promis
 /**
  * Render one frame; resolves true when the run reached a terminal state
  * (run.completed / run.failed) or a command error frame arrived — anything
- * that means the caller should stop waiting for events. Exported for unit
- * tests (the runOrHint precedent).
+ * that means the caller should stop waiting for events. Every view kind is
+ * listed (no default), so a new kind fails compilation here until it is
+ * routed. Exported for unit tests (the runOrHint precedent).
  */
 export async function renderFrame(frame: WsFrame, ctx: ChatCtx): Promise<boolean> {
   const view = frameView(frame)
   switch (view.kind) {
-    case "text":
-      write(view.delta, ctx)
-      return false
-    case "text-end":
-      ensureLineStart(ctx)
-      return false
-    case "thinking":
-      if (ctx.showThinking) write(dim(`· ${view.delta}`), ctx)
-      return false
-    case "tool-call":
-      line(toolCallLine(view), ctx)
-      return false
-    case "tool-result":
-      line(toolResultLine(view), ctx)
-      return false
     case "confirmation":
       await handleConfirmation(view.payload, ctx)
       return false
     case "question":
       await handleQuestion(view.payload, ctx)
       return false
-    case "system":
-      line(dim(view.text), ctx)
+    case "silent":
       return false
     case "run-failed":
-      line(red(`✖ 运行失败: ${view.message}`), ctx)
-      return true
     case "run-completed":
-      ensureLineStart(ctx) // the "prompt newline": end the streamed line
-      return true
     case "command-error":
-      line(red(`错误: ${view.message}`), ctx)
+      ctx.surface.show(view)
       return true
-    case "silent":
+    case "text":
+    case "text-end":
+    case "thinking":
+    case "thinking-end":
+    case "tool-call":
+    case "tool-result":
+    case "system":
+    case "queued":
+    case "left-queue":
+      ctx.surface.show(view)
       return false
   }
 }
@@ -359,7 +255,7 @@ function startPump(ctx: ChatCtx): void {
       else ctx.pendingFrames.push(frame)
     }
     ctx.pumpAlive = false
-    ctx.pendingFrames.length = 0 // socket 已死，暂存帧随旧连接作废
+    ctx.pendingFrames.length = 0 // socket 已断开，暂存帧随旧连接作废
     for (const waiter of ctx.frameWaiters.splice(0)) waiter("closed")
   })()
 }
@@ -434,10 +330,10 @@ async function reconnect(ctx: ChatCtx): Promise<boolean> {
         .catch(() => undefined) // resync per the reconnect protocol; nothing is rendered from it
       ctx.frameWaiters.length = 0 // 泵已随旧迭代器退出并 flush；这里保底清空
       startPump(ctx)
-      line(dim("[reconnected]"), ctx)
+      ctx.surface.notice("[reconnected]", "dim")
       return true
     } catch {
-      line(red("[连接断开，重连失败。输入 /exit 退出]"), ctx)
+      ctx.surface.notice("[连接断开，重连失败。输入 /exit 退出]", "error")
       return false
     } finally {
       ctx.reconnecting = undefined
@@ -526,7 +422,7 @@ export async function renderRun(ctx: ChatCtx, text: string, opts: { disposition?
       continue // continue waiting on the new socket
     }
     if (frame === "timeout") {
-      line(red("[等待运行事件超时 — 回到提示符]"), ctx)
+      ctx.surface.notice("[等待运行事件超时 — 回到提示符]", "error")
       return
     }
     observedAny = true
@@ -551,11 +447,11 @@ export async function renderRun(ctx: ChatCtx, text: string, opts: { disposition?
         }
       } else if (frame.type === "message.steered") {
         if (frame.payload.messageId === mine) {
-          line(dim("已注入"), ctx)
+          ctx.surface.notice("已注入", "dim")
           targetSeen = true
         }
       } else if (frame.type === "message.queue_cancelled") {
-        line(dim("已取消排队"), ctx)
+        ctx.surface.notice("已取消排队", "dim")
       } else if (frame.type === "message.created") {
         if (frame.payload.message.id === mine) targetSeen = true
       }
@@ -570,21 +466,29 @@ export async function renderRun(ctx: ChatCtx, text: string, opts: { disposition?
 
 /** message.queued（mine）的一次性 dim 提示：有序位报位次，steer 报引导缓冲。 */
 function printQueuedHint(ctx: ChatCtx, p: MessageQueuedPayload): void {
-  line(dim(p.position !== undefined ? `已排队（第 ${p.position + 1} 位）` : "已进入引导缓冲"), ctx)
+  ctx.surface.notice(p.position !== undefined ? `已排队（第 ${p.position + 1} 位）` : "已进入引导缓冲", "dim")
 }
 
 /**
- * Run the interactive chat loop (the CLI's default command). See the module
- * comment for the readline/SIGINT/reconnect design.
+ * Run the interactive chat (the CLI's default command): resolve the session,
+ * subscribe, then hand the input side to a surface — the ink TUI when stdin
+ * and stdout are both TTYs (ink switches stdin to raw mode, which a pipe
+ * cannot do: `echo hi | kclaw chat` stays on the line surface), the readline
+ * line surface otherwise. See the module comment for the escalation and
+ * reconnect design.
  */
 export async function runChat(opts: ChatOptions = {}): Promise<void> {
   const auto = opts.yes === true ? "yes" : opts.no === true ? "no" : "ask"
+  const showThinking = opts.showThinking === true
 
   const client = await KclawClient.connect(opts.home)
   const sessionId = await resolveSessionId(client, opts.session)
+  const tty = process.stdin.isTTY === true && process.stdout.isTTY === true
 
-  process.stdout.write(`kclaw · session ${sessionId}\n`)
-  process.stdout.write(dim(`输入消息，/ 命令可用（Tab 补全），/exit 退出，Ctrl+C 取消当前 run\n`))
+  if (!tty) {
+    process.stdout.write(`kclaw · session ${sessionId}\n`)
+    process.stdout.write(dim(`输入消息，/ 命令可用（Tab 补全），/exit 退出，Ctrl+C 取消当前 run\n`))
+  }
 
   // 初始发送处置（链正本在 core protocol/wire.ts）：会话覆盖 > 配置默认 >
   // steer。interrupt 覆盖原样带在本地状态里（回车直发会带上它，服务端按
@@ -613,32 +517,25 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
     }
   }
   const initialMode = await resolveInitialMode()
+  const ws = await openSubscribed(client, sessionId)
+
+  // The TUI module (ink, react, chalk) loads only on this branch: a piped
+  // chat never pays for it, and chalk settles on colour after the CLI's
+  // colour module already wrote its verdict into the environment.
+  const ui: ChatUi = tty
+    ? (await import("./tui/tui.js")).createTuiUi({ sessionId, mode: initialMode, showThinking })
+    : createReadlineUi({ rl: openReadline(initialMode, () => controller.skillCommands()), showThinking })
 
   const ctx: ChatCtx = {
     pendingAttachments: [],
     home: opts.home,
     client,
-    ws: await openSubscribed(client, sessionId),
+    ws,
     sessionId,
-    rl: createInterface({
-      input: process.stdin,
-      output: process.stdout,
-      prompt: modePrompt(initialMode),
-      completer: createSlashCompleter(() => {
-        // 技能增删改（WebUI 复用/提案采纳、外部编辑）不在本进程发生，无法
-        // 推送——Tab 补全时惰性重拉（2s 节流，fire-and-forget）：本次按键仍
-        // 用旧清单，下一次 Tab 即最新，与服务端"每次 run 现扫、下一次交互
-        // 边界生效"同语义。
-        if (Date.now() - skillMetasAt > 2000) refreshSkillCommands()
-        return skillCommandMetas
-      }),
-    }),
-    showThinking: opts.showThinking === true,
+    surface: ui,
     auto,
-    io: { atLineStart: true },
     disposition,
     mode: initialMode,
-    inputPaused: false,
     frameWaiters: [],
     pendingFrames: [],
     renderEpoch: 0,
@@ -655,9 +552,13 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
   const startRender = (text: string, renderOpts: { disposition?: "steer" | "wait" | "interrupt" } = {}): void => {
     const myEpoch = ++ctx.renderEpoch
     runActive = true
+    ui.busyChanged(true)
     const pending = renderRun(ctx, text, renderOpts).finally(() => {
       inFlight.delete(pending)
-      if (ctx.renderEpoch === myEpoch) runActive = false
+      if (ctx.renderEpoch === myEpoch) {
+        runActive = false
+        ui.busyChanged(false)
+      }
     })
     inFlight.add(pending)
   }
@@ -679,6 +580,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
       ctx.sessionId = id
       ctx.ws.send({ type: "subscribe", sessionId: id })
       ctx.pendingAttachments.length = 0 // attachments are session-scoped
+      ui.sessionChanged(id)
       refreshSkillCommands() // 项目级技能跟会话工作目录：切会话后重拉
       // The badge follows the new session's meta (best effort: a dead daemon
       // keeps the stale badge until the next Shift+Tab round-trip).
@@ -686,7 +588,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
         const meta = await ctx.client.request("GET", `/sessions/${id}`) as { mode?: string }
         if (isPermissionMode(meta.mode)) {
           ctx.mode = meta.mode
-          ctx.rl.setPrompt(modePrompt(meta.mode))
+          ui.modeChanged(meta.mode, false)
         }
       } catch { /* ignore — reconnect path resyncs nothing critical here */ }
     },
@@ -694,15 +596,10 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
       // handled by the input loop (parsed.command === "exit" → break)
     },
     print(text: string) {
-      line(text, ctx)
+      ui.notice(text, "plain")
     },
-    pauseInput() {
-      ctx.inputPaused = true
-      ctx.rl.pause()
-    },
-    resumeInput() {
-      ctx.inputPaused = false
-      ctx.rl.resume()
+    choose(message, options) {
+      return ui.choose(message, options)
     },
     get pendingAttachments() {
       return ctx.pendingAttachments
@@ -722,12 +619,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
       // /mode flips the local mirror AFTER the POST succeeded: the badge and
       // the Shift+Tab cycle base follow the daemon-confirmed value.
       ctx.mode = m
-      ctx.rl.setPrompt(modePrompt(m))
-      if (!runActive) {
-        process.stdout.write("\n")
-        ctx.io.atLineStart = true
-        ctx.rl.prompt(true)
-      }
+      ui.modeChanged(m, !runActive)
     },
     async queueCancel(target: string | "all") {
       try {
@@ -765,7 +657,7 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
   // the builtins (including /skill) still work. Re-checked per session
   // switch, since the project scope follows the session's workdir.
   let skillCommandMetas: SlashCommandMeta[] = []
-  let skillMetasAt = 0 // 上次触发重拉的时刻（Tab 补全节流用）
+  let skillMetasAt = 0 // 上次触发重拉的时刻（补全节流用）
   const refreshSkillCommands = (): void => {
     skillMetasAt = Date.now()
     void refreshSkillCommandsOp(registry, slashCtx)
@@ -777,10 +669,10 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
   // Ctrl+C escalates in three stages: ① cancel the active run
   // (or, while idle, print the exit hint — always warning about a backed-up
   // queue), ② clear the queue (`queue.cancel` without messageId), ③ exit 130.
-  // `sigints` only ever grows. The handler lives on the readline interface
-  // (the TTY Ctrl+C path — see the module comment) AND on `process` (the OS
-  // signal piped stdin delivers): a raw-mode TTY fires exactly one of the
-  // two, so piped runs escalate identically instead of default-dying.
+  // `sigints` only ever grows. The process signal (a piped stdin delivers
+  // the OS SIGINT) is wired here; each surface wires its own Ctrl+C key to
+  // the same escalation (readline's "SIGINT" event, the TUI's key handler),
+  // so every path escalates identically instead of default-dying.
   // runActive is owned by startRender (see above).
   let sigints = 0
   const queueCount = async (): Promise<number> => {
@@ -793,20 +685,20 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
   }
   const exitNow = (): void => {
     ctx.ws.close()
-    ctx.rl.close()
+    ui.close()
     process.exit(130)
   }
   const onSigint = (): void => {
     sigints += 1
     if (sigints === 1) {
       if (runActive) {
-        line(dim("^C 已请求取消当前 run"), ctx)
+        ui.notice("^C 已请求取消当前 run", "dim")
         try { ctx.ws.send({ type: "run.cancel", sessionId: ctx.sessionId }) } catch { /* closing */ }
-        void queueCount().then((n) => { if (n > 0) line(dim(`还有 ${n} 条排队消息，再按一次 Ctrl+C 清空`), ctx) })
+        void queueCount().then((n) => { if (n > 0) ui.notice(`还有 ${n} 条排队消息，再按一次 Ctrl+C 清空`, "dim") })
         return
       }
       void queueCount().then((n) => {
-        line(dim(n > 0 ? `还有 ${n} 条排队消息，再按一次 Ctrl+C 清空` : "^C 再按一次 Ctrl+C 退出"), ctx)
+        ui.notice(n > 0 ? `还有 ${n} 条排队消息，再按一次 Ctrl+C 清空` : "^C 再按一次 Ctrl+C 退出", "dim")
       })
       return
     }
@@ -814,89 +706,97 @@ export async function runChat(opts: ChatOptions = {}): Promise<void> {
       void queueCount().then((n) => {
         if (n > 0) {
           try { ctx.ws.send({ type: "queue.cancel", sessionId: ctx.sessionId }) } catch { /* closing */ }
-          line(dim("队列已清空，再按一次 Ctrl+C 退出"), ctx)
+          ui.notice("队列已清空，再按一次 Ctrl+C 退出", "dim")
         } else exitNow()
       })
       return
     }
     exitNow()
   }
-  ctx.rl.on("SIGINT", onSigint)
   process.on("SIGINT", onSigint)
 
   // Shift+Tab cycles the session's permission mode (readonly → default →
-  // acceptEdits, Claude Code style). Stands down while a @clack prompt owns
-  // stdin; mid-run presses apply from the NEXT run (the daemon gates per
-  // run) — the notice prints and the badge updates on the next prompt.
+  // acceptEdits, Claude Code style); the surface stands down while one of
+  // its prompts owns the keyboard. Mid-run presses apply from the NEXT run
+  // (the daemon gates per run) — the notice prints right away.
   let modeBusy = false
   const cycleMode = async (): Promise<void> => {
-    if (ctx.inputPaused || modeBusy || !process.stdin.isTTY) return
+    if (modeBusy) return
     modeBusy = true
     const target = nextMode(ctx.mode)
     try {
       await ctx.client.request("POST", `/sessions/${ctx.sessionId}/mode`, { mode: target })
       ctx.mode = target
-      ctx.rl.setPrompt(modePrompt(target))
-      line(dim(`权限模式: ${target}（Shift+Tab 继续切换）`), ctx)
-      if (!runActive) {
-        process.stdout.write("\n") // break off the drawn prompt line, then redraw
-        ctx.io.atLineStart = true
-        ctx.rl.prompt(true) // re-display the (new) prompt, preserving typed input
-      }
+      ui.notice(`权限模式: ${target}（Shift+Tab 继续切换）`, "dim")
+      ui.modeChanged(target, !runActive)
     } catch {
       // daemon unreachable — the badge stays; the next cycle retries
     } finally {
       modeBusy = false
     }
   }
-  if (process.stdin.isTTY) {
-    process.stdin.on("keypress", (_str, key: { name?: string; shift?: boolean; sequence?: string } | undefined) => {
-      if (key?.name === "tab" && key.shift === true) void cycleMode()
-    })
+
+  const submit = async (raw: string): Promise<"exit" | "continue"> => {
+    const text = raw.trim()
+    const parsed = dispatch(text, registry)
+    if (parsed === null) {
+      // Plain message: send and render the run it triggers — without
+      // blocking the input (a mid-run line is what makes /interrupt and
+      // busy-run sends possible). /exit and EOF drain in-flight renders, so
+      // output still completes before the process ends.
+      if (text !== "") startRender(text) // sends, renders, and (if needed) resends after reconnect
+    } else if (parsed.command === "exit") {
+      await Promise.allSettled([...inFlight]) // 等正在进行的渲染收尾，输出完整再退
+      return "exit"
+    } else if (registry.has(parsed.command)) {
+      await runOrHint(parsed, registry, slashCtx)
+    } else {
+      // 未注册：可能只是技能清单过期（技能刚在 WebUI 复用/提案采纳/外部
+      // 新增）——重新获取一次再判定，避免把新技能误报成"没有这个命令"。
+      await refreshSkillCommandsOp(registry, slashCtx).catch(() => {})
+      await runOrHint(parsed, registry, slashCtx)
+    }
+    return "continue"
+  }
+
+  const controller: ChatController = {
+    get client() {
+      return ctx.client
+    },
+    get sessionId() {
+      return ctx.sessionId
+    },
+    get mode() {
+      return ctx.mode
+    },
+    get busy() {
+      return runActive
+    },
+    submit,
+    interrupt: onSigint,
+    stopRun() {
+      if (!runActive) return
+      ui.notice("已请求停止当前 run", "dim")
+      try { ctx.ws.send({ type: "run.cancel", sessionId: ctx.sessionId }) } catch { /* closing */ }
+    },
+    cycleMode,
+    skillCommands() {
+      // 技能增删改（WebUI 复用/提案采纳、外部编辑）不在本进程发生，无法
+      // 推送——补全时惰性重新获取（2s 节流，fire-and-forget）：本次按键仍用旧
+      // 清单，下一次即最新，与服务端"每次 run 现扫、下一次交互边界生效"
+      // 同语义。
+      if (Date.now() - skillMetasAt > 2000) refreshSkillCommands()
+      return skillCommandMetas
+    },
+    async drain() {
+      await Promise.allSettled([...inFlight])
+    },
   }
 
   try {
-    // A piped stdin reaches EOF (and closes the interface) while the FIRST
-    // line's run is still rendering — track it so late prompt() calls no-op
-    // instead of throwing "readline was closed" (buffered lines still arrive
-    // through the async iterator afterwards).
-    let rlClosed = false
-    ctx.rl.on("close", () => {
-      rlClosed = true
-    })
-
-    const prompt = (): void => {
-      if (!rlClosed) ctx.rl.prompt()
-    }
-
-    prompt()
-    for await (const raw of ctx.rl) {
-      const text = raw.trim()
-      const parsed = dispatch(text, registry)
-      if (parsed === null) {
-        // Plain message: send and render the run it triggers — without
-        // blocking the input line (a mid-run line is what makes /interrupt
-        // and busy-run sends possible). /exit and EOF drain in-flight
-        // renders, so output still completes before the process ends.
-        if (text !== "") startRender(text) // sends, renders, and (if needed) resends after reconnect
-      } else if (parsed.command === "exit") {
-        await Promise.allSettled([...inFlight]) // 等正在进行的渲染收尾，输出完整再退
-        break
-      } else if (registry.has(parsed.command)) {
-        await runOrHint(parsed, registry, slashCtx)
-      } else {
-        // 未注册：可能只是技能清单过期（技能刚在 WebUI 复用/提案采纳/外部
-        // 新增）——重拉一次再判定，避免把新技能误报成"没有这个命令"。
-        await refreshSkillCommandsOp(registry, slashCtx).catch(() => {})
-        await runOrHint(parsed, registry, slashCtx)
-      }
-      prompt()
-    }
-    // stdin 已到 EOF：与旧的内联 await renderRun 等价——等正在进行的渲染收尾后再关
-    // socket，已缓冲的行不会打断正在输出的 run。
-    await Promise.allSettled([...inFlight])
+    await ui.run(controller)
   } finally {
     ctx.ws.close()
-    ctx.rl.close()
+    ui.close()
   }
 }

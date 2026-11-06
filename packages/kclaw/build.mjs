@@ -40,6 +40,8 @@ await build({
     "@modelcontextprotocol/sdk",
     "@mozilla/readability",
     "linkedom",
+    "ink",
+    "react",
   ],
   // No shebang banner: the tsc-built cli/dist/index.js already carries its
   // own `#!/usr/bin/env node` on line 1 (esbuild preserves it); a banner here
@@ -114,6 +116,14 @@ for (const out of outputs) {
 // must not import @clack/prompts itself.
 if (/^import .* from "@clack\/prompts"/m.test(readFileSync(new URL("app/cli/cli.js", import.meta.url), "utf8"))) {
   console.error("kclaw: app/cli/cli.js imports @clack/prompts at load time — chat and the wizard must stay dynamic imports")
+  process.exit(1)
+}
+
+// Regression guard for the lazy TUI load (same reasoning): the CLI entry
+// must not import ink (and transitively react) itself — the TUI module is
+// reached only through the TTY-both-ends branch's dynamic import.
+if (/^import .* from "(ink|react\/jsx-runtime)"/m.test(readFileSync(new URL("app/cli/cli.js", import.meta.url), "utf8"))) {
+  console.error("kclaw: app/cli/cli.js imports ink at load time — the TUI must stay a dynamic import")
   process.exit(1)
 }
 
