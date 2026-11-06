@@ -1,5 +1,5 @@
 import { build } from "esbuild"
-import { chmodSync, cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
 const root = fileURLToPath(new URL("../..", import.meta.url)) // repo root
@@ -11,12 +11,24 @@ mkdirSync("app/server/bin", { recursive: true })
 // @kclaw/core is inlined here, its runtime deps are externalized too (the
 // union below matches kclaw's package.json dependencies) — better-sqlite3 is
 // a native module and must never be bundled.
+//
+// Code splitting keeps the CLI's dynamic imports lazy: chat and the wizard
+// load @clack/prompts (picocolors), and the TUI loads ink (chalk), and those
+// colour libraries settle on colour or not when they load — after the CLI's
+// colour module has written its verdict into their env vars. A single-file
+// bundle would hoist those imports to the top of cli.js, ahead of that
+// verdict. The entry keeps its name (the bin path); shared code lands in
+// chunk files beside it — the same directory depth, so every
+// import.meta.url-relative lookup (../package.json, the walk up to
+// server/bin) resolves exactly as from cli.js.
 await build({
-  entryPoints: [`${root}/packages/cli/dist/index.js`],
+  entryPoints: { cli: `${root}/packages/cli/dist/index.js` },
   bundle: true,
+  splitting: true,
   platform: "node",
   format: "esm",
-  outfile: "app/cli/cli.js",
+  outdir: "app/cli",
+  chunkNames: "chunk-[hash]",
   external: [
     "@clack/prompts",
     "commander",
@@ -87,14 +99,22 @@ chmodSync("app/server/bin/kclaw-server.mjs", 0o755)
 // Regression guard: @modelcontextprotocol/sdk must stay externalized (it is
 // inlined above only if someone removes it from the external lists) — inlining
 // it drags cross-spawn in, whose runtime require("child_process") throws inside
-// an ESM bundle and kills every command. Fail the build the moment either
-// bundle re-inlines it.
-for (const out of ["app/cli/cli.js", "app/server/bin/kclaw-server.mjs"]) {
+// an ESM bundle and kills every command. Fail the build the moment any
+// bundle file re-inlines it.
+const outputs = [...readdirSync("app/cli").map((f) => `app/cli/${f}`), "app/server/bin/kclaw-server.mjs"]
+for (const out of outputs) {
   const text = readFileSync(new URL(out, import.meta.url), "utf8")
   if (text.includes("cross-spawn")) {
     console.error(`kclaw: ${out} inlined cross-spawn — keep @modelcontextprotocol/sdk externalized`)
     process.exit(1)
   }
+}
+
+// Regression guard for the lazy colour-library load above: the CLI entry
+// must not import @clack/prompts itself.
+if (/^import .* from "@clack\/prompts"/m.test(readFileSync(new URL("app/cli/cli.js", import.meta.url), "utf8"))) {
+  console.error("kclaw: app/cli/cli.js imports @clack/prompts at load time — chat and the wizard must stay dynamic imports")
+  process.exit(1)
 }
 
 console.log("kclaw: app/ assembled")
