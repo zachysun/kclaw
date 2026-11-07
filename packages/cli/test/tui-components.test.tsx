@@ -273,6 +273,8 @@ describe("HelpOverlay (ink)", () => {
     expect(frame).toContain("快捷键帮助")
     expect(frame).toContain("Ctrl+O")
     expect(frame).toContain("循环切换权限模式")
+    // 权限模式五档全部列出——文案曾漏 trusted/auto 两档
+    expect(frame).toContain("readonly → default → acceptEdits → trusted → auto")
     expect(frame).toContain("转录视图跳到上一条 / 下一条用户消息")
   })
 })

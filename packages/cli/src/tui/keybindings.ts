@@ -32,6 +32,6 @@ export const KEY_BINDINGS: readonly KeyBinding[] = [
   { keys: "Esc / ?", description: "关闭帮助浮层", context: "覆盖层" },
   { keys: "Ctrl+O", description: "开关转录视图（全文与完整工具输出在此可达）", context: "全局" },
   { keys: "?", description: "输入为空时打开本帮助", context: "全局" },
-  { keys: "Shift+Tab", description: "循环切换权限模式（readonly → default → acceptEdits）", context: "全局" },
+  { keys: "Shift+Tab", description: "循环切换权限模式（readonly → default → acceptEdits → trusted → auto）", context: "全局" },
   { keys: "Ctrl+C", description: "取消当前 run → 清空队列 → 退出（三段升级）", context: "全局" },
 ]
