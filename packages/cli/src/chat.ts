@@ -17,7 +17,8 @@
  *
  * Reconnect (basic version): when the socket drops
  * unexpectedly, re-resolve the daemon (KclawClient.connect respawns one when
- * it died), resubscribe, pull the full message list (拉全量消息，只订阅新事件，
+ * it died) within a 15s retry budget — one spawn window can be exceeded on a
+ * loaded machine — resubscribe, pull the full message list (拉全量消息，只订阅新事件，
  * 不回放 — nothing is replay-rendered) and print "[reconnected]"; frames
  * observed after a reconnect carry a 120s inactivity timeout so a dead run
  * cannot hang the chat forever. The frame pump dies with the old socket's
@@ -70,6 +71,14 @@ interface SessionInfo {
 
 /** Reconnect watchdog: a fully quiet run after a reconnect is presumed gone. */
 const POST_RECONNECT_SILENCE_MS = 120_000
+
+/**
+ * Reconnect budget: ensureDaemon's own respawn poll is 5s (boot + SQLite
+ * recovery after a hard kill), which a loaded machine can exceed — so the
+ * reconnect keeps retrying well past one spawn window before giving up.
+ */
+const RECONNECT_BUDGET_MS = 15_000
+const RECONNECT_INTERVAL_MS = 500
 
 /** Next mode in the Shift+Tab cycle (PERMISSION_MODES order, strictest first). */
 function nextMode(m: PermissionMode): PermissionMode {
@@ -321,22 +330,27 @@ async function nextFrame(
 async function reconnect(ctx: ChatCtx): Promise<boolean> {
   if (ctx.reconnecting !== undefined) return ctx.reconnecting
   ctx.reconnecting = (async () => {
-    try {
-      ctx.client = await KclawClient.connect(ctx.home)
-      ctx.ws = await openSubscribed(ctx.client, ctx.sessionId)
-      await ctx.client
-        .request("GET", `/sessions/${encodeURIComponent(ctx.sessionId)}/messages`)
-        .catch(() => undefined) // resync per the reconnect protocol; nothing is rendered from it
-      ctx.frameWaiters.length = 0 // 泵已随旧迭代器退出并 flush；这里保底清空
-      startPump(ctx)
-      ctx.surface.notice("[reconnected]", "dim")
-      return true
-    } catch {
-      ctx.surface.notice("[连接断开，重连失败。输入 /exit 退出]", "error")
-      return false
-    } finally {
-      ctx.reconnecting = undefined
+    const deadline = Date.now() + RECONNECT_BUDGET_MS
+    // 预算内反复尝试：daemon 重生（含 SIGKILL 后的存储恢复）在慢机上可能
+    // 超出 ensureDaemon 单次 5 秒的轮询预算；尝试失败静默，终态各报一行。
+    for (;;) {
+      try {
+        ctx.client = await KclawClient.connect(ctx.home)
+        ctx.ws = await openSubscribed(ctx.client, ctx.sessionId)
+        await ctx.client
+          .request("GET", `/sessions/${encodeURIComponent(ctx.sessionId)}/messages`)
+          .catch(() => undefined) // resync per the reconnect protocol; nothing is rendered from it
+        ctx.frameWaiters.length = 0 // 泵已随旧迭代器退出并 flush；这里保底清空
+        startPump(ctx)
+        ctx.surface.notice("[reconnected]", "dim")
+        return true
+      } catch {
+        if (Date.now() >= deadline) break
+        await new Promise((r) => setTimeout(r, RECONNECT_INTERVAL_MS))
+      }
     }
+    ctx.surface.notice("[连接断开，重连失败。输入 /exit 退出]", "error")
+    return false
   })()
   return ctx.reconnecting
 }

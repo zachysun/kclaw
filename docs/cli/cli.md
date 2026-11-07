@@ -186,7 +186,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 
 ### 空闲重连与消息重发
 
-- **重连**（`reconnect`）：socket 意外关闭时重新 `KclawClient.connect`（daemon 已终止时重新启动一个）、重新订阅、`GET /sessions/:id/messages` 全量拉取一次以更新本地状态（不重放渲染），打印 `[reconnected]`；重连失败打印 `[连接断开，重连失败。输入 /exit 退出]` 并放弃。
+- **重连**（`reconnect`）：socket 意外关闭时重新 `KclawClient.connect`（daemon 已终止时重新启动一个）、重新订阅、`GET /sessions/:id/messages` 全量拉取一次以更新本地状态（不重放渲染），打印 `[reconnected]`。重连在 15 秒预算内反复尝试（间隔 500 毫秒，覆盖 daemon 重生与慢机启动——单次重生轮询预算 5 秒可能不够），预算耗尽仍失败才打印 `[连接断开，重连失败。输入 /exit 退出]` 并放弃。
 - **重发规则**：一条发送中的消息只有当**一帧都没观察到**（连 `send_message_ack` 都没有）才会在重连后重发——零帧说明消息从未到达存活的 daemon（ws 库对已关闭的 socket 静默丢帧、只在连接中才同步抛出错误，两者都等价于"未送达"）。观察到任何一帧即视为已送达，中途断线绝不重发：run 可能已在服务端排队，重发会导致同一消息被执行两次。
 - **120s 静默看门狗**：重连后观察到的帧带 `POST_RECONNECT_SILENCE_MS = 120_000` 的不活动超时，已终止的 run 永远不会完成，REPL 不可无限等待；超时打印提示后回到提示符。重连前的等待不加人为上限（`nextFrame` 对非有限超时直接跳过等待：node 会把 `setTimeout(fn, Infinity)` 钳到 1ms，反而会截断仍在运行的 run）。
 
