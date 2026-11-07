@@ -298,7 +298,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 - 后台输出流式写入 spill 文件（`<home>/spill/proc-<id>.txt`），文件字节偏移就是读游标，内存不积压；输出封顶 10 MiB（与前台 spill 上限同量级），到达后停止记录并追加一行上限说明，进程照常运行。
 - 完成自动通知：进程结束后经队列以 `trigger:"process"` 的 run 投递到属主会话（note kind `process`），忙会话排队、闲会话唤醒——工具描述明确写有"不要轮询或 sleep 等待"。
-- 通知持久化在 `<home>/process-notices.jsonl`：进程注册时先记一条 running 行，结算后追加结果行，投递成功才删行；daemon 重启时按进程去重收编——running 行对应进程还活着的重进注册表继续跟踪，已死的补发一条退出码未知的合成通知，结算行照常补发。
+- 通知持久化在 `<home>/process-notices.jsonl`：进程注册时先记一条 running 行，结算后追加结果行，投递成功才删行；daemon 重启时按进程去重收编——running 行对应进程还活着的重进注册表继续跟踪，已终止的补发一条退出码未知的合成通知，结算行照常补发。
 - 单会话并发后台进程上限 8；注册表按会话隔离，process 三件只看得到本会话的进程。
 - 沙箱可用时后台命令同样在沙箱内运行（与前台同一条 spawn 路径）。
 

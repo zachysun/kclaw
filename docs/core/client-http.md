@@ -30,7 +30,7 @@ export interface HttpRequestInit {
 }
 
 export async function httpRequest(url: string, init: HttpRequestInit): Promise<unknown>
-// 一次到 daemon 的请求：JSON 进、JSON 出。非 2xx 抛 HttpRequestError（消息取
+// 一次到 daemon 的请求：JSON 进、JSON 出。非 2xx 抛出 HttpRequestError（消息取
 // body.error，退回 "HTTP <status>"）；204 或空响应体解析为 undefined。
 ```
 

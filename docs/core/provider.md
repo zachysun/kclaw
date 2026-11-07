@@ -100,7 +100,7 @@ export function withRetry(client: LlmClient, opts?: {
 
 内置预设（`PROVIDER_PRESETS`，WebUI Model 页的"预设"来源）：`openai`（https://api.openai.com/v1）、`anthropic`（https://api.anthropic.com）、`deepseek`（https://api.deepseek.com/v1，openai 格式）、`ollama`（http://localhost:11434/v1，openai 格式，可免密钥）。预设写死 baseUrl 与格式，用户只填 API key。
 
-条目校验（`parseProviderEntry`）除 format/baseUrl/apiKey/model 外，还要求 `contextWindow`/`maxOutput` 声明时必须是正数，否则抛 `"<key> must be a positive number"`——新增/编辑条目经此校验，WebUI 把它转成表单内的错误。
+条目校验（`parseProviderEntry`）除 format/baseUrl/apiKey/model 外，还要求 `contextWindow`/`maxOutput` 声明时必须是正数，否则抛出 `"<key> must be a positive number"`——新增/编辑条目经此校验，WebUI 把它转成表单内的错误。
 
 **apiKey 实际存放在 `~/.kclaw/credentials.json`**（0600，形状 `{ providers: { <条目名>: { apiKey } }, web: { tavilyApiKey? } }`）：`saveConfig` 把密钥从 config.json 分流到这份凭据文件、config.json 里留空串；`loadConfig` 再合并回内存配置（同一条目两边都有值时凭据文件优先）。解析链（resolver、`resolveProviderEndpoint`、模型拉取）看到的都是合并后的值，对分流无感——只有直接手读 config.json 才需要知道这层（详见 [storage](./storage.md)）。
 
@@ -133,7 +133,7 @@ flowchart TD
     R -->|"400 且带了标记"| ST["剥掉全部缓存标记原样重试一次"]
     ST -->|"成功"| RJ["客户端实例内记住该端点不支持缓存标记，后续直接发无标记版"]
     RJ --> SSE
-    ST -->|"仍 400"| X["抛 llm http 400，重试层不接"]
+    ST -->|"仍 400"| X["抛出 llm http 400，重试层不接"]
     R -->|"2xx"| SSE["SSE 逐行解析，映射为流式事件"]
     R -->|"429 / 5xx / 超时 / 网络错"| Y{"本次尝试已产出过事件？"}
     Y -->|"否"| BK["指数退避后重试（500ms 起步翻倍）"]
@@ -186,13 +186,13 @@ anthropic 格式每个 SSE 事件的映射：
 - `content_block_start`（`tool_use`）→ 发 `tool_call_started`（index 即块序号，无 id 时用 `call_idx_${index}` 代替）；
 - `content_block_delta`：`text_delta` → `text_delta`；`thinking_delta` → `thinking_delta`；`input_json_delta` → `tool_call_delta`（`partial_json` 原样透传）；`signature_delta` 忽略；
 - `message_delta` → 记下 `stop_reason`；`usage` 的各字段按字段级 last-wins 合并（`output_tokens` / `input_tokens` / 两个缓存字段各自独立更新）；
-- `message_stop` → 结束；`error` 事件 → 抛 `llm anthropic <type>: <message>`；`ping` 忽略。
+- `message_stop` → 结束；`error` 事件 → 抛出 `llm anthropic <type>: <message>`；`ping` 忽略。
 
 两家的 `inputTokens` 口径一致："当次请求发出去的全部输入 token"，且满足恒等式 **inputTokens = 非缓存输入 + cacheReadTokens + cacheWriteTokens**。OpenAI 的 `prompt_tokens` 本身就是总量（含自动缓存命中部分），`cached_tokens`（`prompt_tokens_details`）单独读出为 `cacheReadTokens`，OpenAI 协议没有写指标、`cacheWriteTokens` 不出现。Anthropic 的 `input_tokens` 只是非缓存输入，适配器**三字段加总**（`input_tokens + cache_creation_input_tokens + cache_read_input_tokens`）得出 `inputTokens`——漏加总会让 assistant 消息的 usage 锚点与压缩的 token 统计（见 [compaction](./compaction.md)）系统性偏低。缓存字段端点未返回时字段不出现（未知），读侧必须兼容缺字段、不得当 0。
 
 ### 2b. 缓存标记的兼容退避（两格式同款）
 
-条目配置 `promptCache: "auto"`（默认）时请求带缓存标记（Anthropic `cache_control` 断点 / OpenAI `prompt_cache_key`，主循环恒传 `promptCache.key = sessionId`）。端点对陌生字段回 **400** 时（401/403/429 不在列——认证与限流不是 schema 问题）：剥掉全部缓存标记原样重试一次；重试成功后在该客户端实例内记住"该端点不支持缓存标记"的裁决，后续请求直接发无标记版本（省一次注定失败的往返）；重试仍 400 则抛原始 `llm http 400` 走既有失败路径。剥除重试静默进行，只有一行 `console.error` 记录裁决，不发额外事件。客户端实例即条目生命周期（resolver 按条目签名缓存、配置变更重建），`promptCache` 配置参与签名——改配置即重建实例、裁决随之重置。`withRetry` 只认 429/5xx/timeout/网络错，400 本就不在其列，两层重试互不重叠。这份"开标记 → 被拒 → 剥标重试一次 → 重试成功才记裁决"的有状态协议单源在 `provider/cache-markers.ts`，两家 client 只提供各自的标记布点与请求序列化。
+条目配置 `promptCache: "auto"`（默认）时请求带缓存标记（Anthropic `cache_control` 断点 / OpenAI `prompt_cache_key`，主循环恒传 `promptCache.key = sessionId`）。端点对陌生字段回 **400** 时（401/403/429 不在列——认证与限流不是 schema 问题）：剥掉全部缓存标记原样重试一次；重试成功后在该客户端实例内记住"该端点不支持缓存标记"的裁决，后续请求直接发无标记版本（省一次注定失败的往返）；重试仍 400 则抛出原始 `llm http 400` 走既有失败路径。剥除重试静默进行，只有一行 `console.error` 记录裁决，不发额外事件。客户端实例即条目生命周期（resolver 按条目签名缓存、配置变更重建），`promptCache` 配置参与签名——改配置即重建实例、裁决随之重置。`withRetry` 只认 429/5xx/timeout/网络错，400 本就不在其列，两层重试互不重叠。这份"开标记 → 被拒 → 剥标重试一次 → 重试成功才记裁决"的有状态协议单源在 `provider/cache-markers.ts`，两家 client 只提供各自的标记布点与请求序列化。
 
 ### 3. 超时终止
 
@@ -200,11 +200,11 @@ anthropic 格式每个 SSE 事件的映射：
 
 | 阶段 | 位置 | 超时后的行为 |
 |------|------|--------------|
-| 等响应头 | `fetch` 抛出错误 | 抛 `llm http timeout after <n>ms` |
+| 等响应头 | `fetch` 抛出错误 | 抛出 `llm http timeout after <n>ms` |
 | 非 2xx 读错误体 | `res.text()` 抛出错误 | 超时优先抛超时；**超时前**的读失败则吞掉、text 记为空——状态行 `llm http <status>` 仍能完成分类 |
-| 读流式响应体 | SSE 循环抛出错误 | 抛 `llm http timeout after <n>ms` |
+| 读流式响应体 | SSE 循环抛出错误 | 抛出 `llm http timeout after <n>ms` |
 
-非 2xx 且响应体读成功时抛 `llm http <status>: <body文本>`——错误体的读取同样受超时约束，不会把一种无限等待换成另一种。
+非 2xx 且响应体读成功时抛出 `llm http <status>: <body文本>`——错误体的读取同样受超时约束，不会把一种无限等待换成另一种。
 
 ### 4. 重试（`withRetry`）
 
@@ -254,7 +254,7 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 
 ### 6b. 模型列表检测（probe，兼作连接验证）
 
-`fetchProviderModels` 向端点要模型清单：openai 格式 `GET {base}/models`（apiKey 非空才带 Bearer 头），anthropic 格式 `GET {base}/v1/models`（鉴权头与消息端点一致：x-api-key + Bearer + anthropic-version，apiKey 为空时不发；URL 规则也一致）。返回去重后的模型 id 列表；HTTP 错误抛 `llm http <status>`，响应形状不对抛可读错误。WebUI Model 页用它做两件事：表单里的"拉取模型列表"（填充模型下拉）与条目卡片的"验证"按钮（清单拉到了 = URL 和 key 都对）。
+`fetchProviderModels` 向端点要模型清单：openai 格式 `GET {base}/models`（apiKey 非空才带 Bearer 头），anthropic 格式 `GET {base}/v1/models`（鉴权头与消息端点一致：x-api-key + Bearer + anthropic-version，apiKey 为空时不发；URL 规则也一致）。返回去重后的模型 id 列表；HTTP 错误抛出 `llm http <status>`，响应形状不对抛出可读错误。WebUI Model 页用它做两件事：表单里的"拉取模型列表"（填充模型下拉）与条目卡片的"验证"按钮（清单拉到了 = URL 和 key 都对）。
 
 模型名本身的验证走 `probeProviderChat`（1-token 补全连通测试）：openai 格式 `POST {base}/chat/completions`，anthropic 格式 `POST {base}/v1/messages`，20 秒超时；它不抛异常而是返回 `{status, body}`（status 为 null = 请求根本没到达），调用方按状态码分类失败原因。CLI 首次运行的配置流程用它做连通测试（见 [onboarding](../cli/onboarding.md)）。
 
