@@ -5,7 +5,7 @@
  * 目标来自服务端 defaultGroup，会话目录以查询参数随行）、编辑换层
  * （toGroup）、删除带组、手动刷新、空态、加载失败提示、后台轮询静默。
  */
-import { describe, it, expect, vi } from "vitest"
+import { describe, it, expect, vi, afterEach } from "vitest"
 import { createRoot, type Root } from "react-dom/client"
 import { act } from "react"
 import type { ApiClient } from "../../src/api.js"
@@ -99,10 +99,29 @@ async function flush(): Promise<void> {
   })
 }
 
+/**
+ * Roots created by a test, unmounted after it: a root left mounted keeps a
+ * real 2s poll interval and pending React scheduler work alive into the
+ * environment teardown, where the scheduler's setImmediate callback then
+ * fires without jsdom globals ("window is not defined" after the last test
+ * — seen on loaded CI runners, never locally).
+ */
+const liveRoots: Root[] = []
+
+afterEach(async () => {
+  for (const root of liveRoots.splice(0)) {
+    await act(async () => {
+      root.unmount()
+    })
+  }
+  document.body.innerHTML = ""
+})
+
 async function mount(api: ApiClient, notice: (text: string) => void = (): void => {}, sessionWorkdir?: string): Promise<{ container: HTMLElement; root: Root }> {
   const container = document.createElement("div")
   document.body.appendChild(container)
   const root = createRoot(container)
+  liveRoots.push(root)
   await act(async () => {
     root.render(<McpView api={api} notice={notice} sessionWorkdir={sessionWorkdir} />)
   })
@@ -442,6 +461,7 @@ describe("McpView background polling", () => {
     const container = document.createElement("div")
     document.body.appendChild(container)
     const root = createRoot(container)
+    liveRoots.push(root)
     await act(async () => {
       root.render(<McpView api={api} notice={notice} sessionWorkdir={sessionWorkdir} />)
     })
@@ -471,6 +491,7 @@ describe("McpView background polling", () => {
       await act(async () => {
         root.unmount()
       })
+      liveRoots.splice(liveRoots.indexOf(root), 1) // 本用例自己卸载，afterEach 不重复
       await act(async () => {
         await vi.advanceTimersByTimeAsync(6000)
       })
