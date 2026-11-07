@@ -69,6 +69,11 @@ resolvePaths(home)                  建目录树（core/storage/paths.ts）
 acquireDaemonSlot                   wx 独占认领 <home>/daemon.json：占位 {port:0, pid, startedAt, starting:true}
 loadConfig(paths)                   config.json 深合并默认值
 loadOrCreateToken(paths.home)       读/生成 <home>/token
+createConfigNotifier + createProviderResolver(config)
+                                    见"provider 解析"：resolver 按条目建连并缓存客户端
+                                    （llm/embed 两个缓存），启动客户端与每 run 的 llmForRun
+                                    都出自它；创建后立即订阅 providers 配置变更通知，收到即
+                                    整体清空缓存（签名检查保留为优化）
 new EventBus()                      总线先于 store 构造：store 的写入完成通知回调要发
                                     session.appended 总线帧（先写入后广播，审计页等
                                     订阅方据此增量拉取事件流——见 realtime/protocol）
@@ -86,36 +91,38 @@ new SessionStore(paths.sessionsDir, onAppended)
                                     （通知抛出错误被吞掉，写成功不被通知连累）
 embedding 判定链（memory.embedding） model 非空才构造 embedding 客户端（见 memory.md 判定链）；
                                     构造在 EventBus/SessionStore 之后、MemorySystem 之前，赋给下方 memory
-new MemorySystem({memoryDir, sessions, config, resolveLlm, embed, emit})
+new HookRegistry({userDir, onEvent})
+                                    用户 hook 注册表（见 hooks.md）：daemon 级记录，run 组装
+                                    每 run 现扫 ~/.kclaw/hooks；装载失败经 registry 去重后
+                                    广播一次 hook.failed(load)；onEvent 把 hook 事件发上总线
+                                    （单个订阅者出错不拖垮 daemon）。随后注入 RunManager
+                                    （每 run 的 hook 链）与 createApp（GET /hooks 管理接口）
+new UsageStore(paths.usageDb)       token 用量记录（SQLite，stop 时 close）；随后建
+                                    recordChoreUsage（createChoreUsageRecorder，server 的
+                                    chore-usage.ts）：压缩/命名/记忆/技能四条后台通道的
+                                    LLM 花费进同一张用量表，runId 以通道名为前缀
+resolveExtractLlm                   后台调用的模型解析链（makeExtractLlmResolver，见
+                                    compaction.md）：未注入 llmFactory 时回退共享 resolver
+                                    加重试包装；记忆提取、技能进化与 run 侧后台调用共用
+new MemorySystem({memoryDir, sessions, config, resolveLlm, resolveEntryLlm, recordChoreUsage, embed, emit})
                                     记忆系统统一入口（见 memory.md）；组装后立即做：
                                     reconcile()（全部项目库 + 全局库重建索引，向量后台补算）
 new CronScheduler(paths.cronDb)
-new UsageStore(paths.usageDb)       token 用量记录（SQLite，stop 时 close）
-createProviderResolver(config) + resolveModel(config)  见"provider 解析"；
-                                    resolver 按条目建连并缓存客户端（llm/embed 两个缓存），
-                                    启动客户端与每 run 的 llmForRun 都出自它；
-                                    订阅 providers 配置变更通知，收到即整体清空缓存
+llm + resolveModel(config)          默认条目客户端（经共享 resolver 包装重试；注入
+                                    llmFactory 的测试直用注入实现）与主模型名解析
 new SkillEvolutionSystem({skillsDir, sessions, config, resolveLlm, log})
                                     技能进化系统（提案制，见 skills.md）：提炼模型经
                                     makeExtractLlmResolver 与记忆提取走同一条解析链
                                     （extractModel 命中条目走条目端点，Model 页改动同样
                                     热生效）；构造后交给 RunManager（run 收尾钩子 +
                                     skill_create 工具注册）与 skill 调度器（检查处理方）
-createMcpProjects({workspace, manager, allMetas, loadEntries, home})
-                                    项目发现与热生效（见 mcp.md）：项目集合 = 主工作目录 +
-                                    全部会话 meta（含回收站）的 workdir 并集，减去项目
-                                    配置文件与全局 mcp.json 同路径的目录（home 用于排除
-                                    这个形态：两层共用一个文件，项目层无法独立存在），
-                                    启动时 sync() 一次（补进缺失的项目、移除已退出会话的项目，60s 一次），
-                                    并从 SessionStore 的 session.created 回调即时 mount
-                                    新项目；每目录注册一个两阶段项目 watch（先 watch 项目
-                                    顶层等 `.kclaw` 出现、再切 `.kclaw` watch），手工编辑
-                                    防抖后经 reconcileProject 热生效；起不来只告警降级、
-                                    不致命
-new McpManager({globalServers, projects, stderrLogDir, onError, persist})
+collectProjectDirs + new McpManager({globalServers, projects, stderrLogDir, onError, persist})
                                     恒定组装：globalServers = <home>/mcp.json 的条目；
-                                    projects = 每个已知项目 `.kclaw/mcp.json` 的条目
-                                    （缺失/损坏/git 跟踪均读作 {}）；stderrLogDir =
+                                    projects = collectProjectDirs 现算的每个已知项目
+                                    `.kclaw/mcp.json` 的条目（缺失/损坏/git 跟踪均读作
+                                    {}；项目配置文件与全局 mcp.json 同路径的目录被排除
+                                    ——home 用于排除这个形态：两层共用一个文件，项目层
+                                    无法独立存在）；stderrLogDir =
                                     <home>/logs/mcp（stdio server 的 stderr 逐台
                                     写入 <server>.log，见 mcp.md）；onError 把连接失败
                                     打一行日志；persist 按组分发："global" 写 mcp.json，
@@ -123,6 +130,16 @@ new McpManager({globalServers, projects, stderrLogDir, onError, persist})
                                     上限、连接上限等参数取构造默认值（见 mcp.md），
                                     组装后零连接——连接由 run 的工具取用或手动 connect
                                     按需发起
+createMcpProjects({workspace, manager, allMetas, loadEntries, home})
+                                    项目发现与热生效（见 mcp.md）：项目集合 = 主工作目录 +
+                                    全部会话 meta（含回收站）的 workdir 并集，减去项目
+                                    配置文件与全局 mcp.json 同路径的目录，
+                                    启动时 sync() 一次（补进缺失的项目、移除已退出会话的项目，60s 一次），
+                                    并从 SessionStore 的 session.created 回调即时 mount
+                                    新项目；每目录注册一个两阶段项目 watch（先 watch 项目
+                                    顶层等 `.kclaw` 出现、再切 `.kclaw` watch），手工编辑
+                                    防抖后经 reconcileProject 热生效；起不来只告警降级、
+                                    不致命
 createSubagentHost({config, sessions, bus, getRun})
                                     subagent 宿主（见 subagents.md）：一次组装返回三件能力——
                                     spawner（派发后端，阻塞与后台 subagent 各有一个并发计数）、collector
@@ -144,7 +161,9 @@ new ProcessRegistry({noticesPath, onRegister})
                                     note kind:"process") 投递属主会话——忙会话排队、
                                     闲会话唤醒；未送达通知持久化在
                                     <home>/process-notices.jsonl，投递成功才删行
-new RunManager({...})               注入 usageStore、memory、skillsEvolution（run 收尾钩子
+new RunManager({...})               注入 usageStore、recordChoreUsage（后台通道的用量记录，见上）、
+                                    hooks: hookRegistry（每 run 的 hook 链来源，见上）、
+                                    memory、skillsEvolution（run 收尾钩子
                                     与 skill_create 工具注册的来源，见 skills.md）、
                                     resolveExtractLlm（后台调用的模型解析链：手动压缩与
                                     压缩/自动命名/记忆提取共用 makeExtractLlmResolver
@@ -161,7 +180,11 @@ new RunManager({...})               注入 usageStore、memory、skillsEvolution
                                     subagents: { spawner, collector }（cancelBackgroundForParent
                                     不走 RunManager：它经 createApp 交给会话删除/彻底删除
                                     路由做级联取消）、
-                                    team: { facade: teamHost.facade }（团队工具的来源）；见 run-manager。
+                                    team: { facade: teamHost.facade }（团队工具的来源）、
+                                    autoLearn: { counter }（auto 模式归纳的跨 run 计数器，
+                                    阈值取 config.permissions.autoLearnThreshold，默认 3，
+                                    0 关闭）、llmForRun（未注入 llmFactory 时才注入：每 run
+                                    现包重试的按条目客户端，重试事件归属当次 run）；见 run-manager。
                                     权限模式没有 daemon 级旗标——它是会话级事实（meta.mode），
                                     run 组装每 run 从会话 meta 读出（见 permissions/run-manager）
 createApp({home, token, stores, bus, run, mcp, mainWorkspace, configNotifier, attachmentsDir, usage, webDist, memory, skillsEvolution, goal, sessionFork, historySearch})
@@ -217,7 +240,7 @@ return { port, token, pid, stop }
 
 缺配置时第一次调用模型才失败：`baseUrl` 为空抛出 `provider 未配置：…`，`model` 为空抛出 `模型未配置：…`（两者都缺时报前者）。失败发生在用户消息写入会话之后，这次 run 走 provider 失败的既有路径，以 `run.failed {code:"llm_error"}` 结束。记忆提取、标题生成等后台调用同样在调用模型时失败，按各自的失败处理（写日志或静默放弃），不影响 daemon。配置完成后下一个 run 直接生效，无需重启。
 
-**run 客户端按条目解析**：每个 run 的客户端由 `llmForRun(onRetry, entryKey)` 给出，`entryKey` 来自 `resolveRunModel`（run 组装先解析条目、再建客户端）。daemon 的共享 resolver（`createProviderResolver`）按条目名缓存裸客户端，签名 = `format|baseUrl|apiKey|timeoutMs`——条目缺失回退到默认条目；连默认条目都没有，或条目的 baseUrl 为空时，第一次调用模型才解析环境变量端点。Model 页的增删改持久化后经 ConfigNotifier 发布 `providers` 变更，resolver 收到即整体清空缓存，下个 run 自动重建（签名检查保留为优化）：热生效于下一个 run，无需重启。`withRetry` 由 `llmForRun` 每次现包（重试回调归属当次 run）；`format` 经 `createProviderClient` 选协议（openai → `createOpenAiCompatClient`，anthropic → `createAnthropicClient`，机制见 [provider](../core/provider.md)）。
+**run 客户端按条目解析**：每个 run 的客户端由 `llmForRun(onRetry, entryKey)` 给出，`entryKey` 来自 `resolveRunModel`（run 组装先解析条目、再建客户端）。daemon 的共享 resolver（`createProviderResolver`）按条目名缓存裸客户端，签名 = `format|baseUrl|apiKey|timeoutMs|promptCache`（`promptCache` 参与签名：翻转该开关会重建客户端，连同实例内"标记被拒"的判定一起重来）——条目缺失回退到默认条目；连默认条目都没有，或条目的 baseUrl 为空时，第一次调用模型才解析环境变量端点。Model 页的增删改持久化后经 ConfigNotifier 发布 `providers` 变更，resolver 收到即整体清空缓存，下个 run 自动重建（签名检查保留为优化）：热生效于下一个 run，无需重启。`withRetry` 由 `llmForRun` 每次现包（重试回调归属当次 run）；`format` 经 `createProviderClient` 选协议（openai → `createOpenAiCompatClient`，anthropic → `createAnthropicClient`，机制见 [provider](../core/provider.md)）。
 
 ## 鉴权设计
 

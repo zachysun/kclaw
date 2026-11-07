@@ -24,7 +24,7 @@
 | `kclaw`（默认动作）/ `kclaw chat` | 进入 chat REPL（daemon 报告尚未配置 provider 时先进入配置 wizard，见 [onboarding](./onboarding.md)） |
 | `kclaw run [prompt...]` | 一次性运行：发送提示词，把本次 run 的输出写到 stdout，按结局给出退出码（见下文 [kclaw run](#kclaw-runpackagesclisrcrun-cmdts)） |
 | `kclaw --session <id>` | 恢复指定会话；列表中查不到该 id 时报 "session not found" |
-| `kclaw --think` | REPL 显示 thinking 增量（暗色 `· ` 前缀，默认隐藏） |
+| `kclaw --think` | REPL 显示 thinking：readline 表面显示增量文本（暗色 `· ` 前缀，默认隐藏）；TUI 默认只显示 `✻ 思考 Ns` 折叠行，加上后展开流式文本 |
 | `kclaw daemon start` | 确保 daemon 在运行（不在则启动），打印 pid 与端口；已在运行则打印 "daemon already running" |
 | `kclaw daemon stop` | 发 SIGTERM 终止 daemon，轮询至 `/health` 不可访问后删除 `daemon.json`；返回 "stopped" 或 "daemon not running" |
 | `kclaw daemon status` / `kclaw status` | 报告状态：`not running`，或 `running (pid <pid>, port <port>, v<版本>, uptime <n>s)`；daemon 报出的版本与 CLI 自身不一致时追加一行提示（两者不是同一次构建的产物，重新 `pnpm build` 并重启 daemon） |
@@ -76,7 +76,7 @@
 
 json 两种格式在任何情况下都不输出颜色。
 
-`error.code` 的取值：停止原因（`aborted`/`max_tokens`/`content_filter`）、`run.failed` 自带的 code（如 `llm_error`、`queue_entry_failed`）、`rejected`（daemon 拒绝这条消息）、`withdrawn`（排队中被撤回）、`disconnected`（连接断开）、`interrupted`（收到信号）、`provider_not_configured`、`session_not_found`、`no_session_to_continue`、`fork_failed`、`upload_failed`、`daemon_unavailable`（连不上 daemon 或订阅失败）、`daemon_request_failed`（其余接口请求失败）。
+`error.code` 的取值：停止原因（`aborted`/`max_tokens`/`content_filter`）、`run.failed` 自带的 code（如 `llm_error`、`queue_entry_failed`）、`rejected`（daemon 拒绝这条消息）、`withdrawn`（排队中被撤回）、`disconnected`（连接断开）、`interrupted`（收到信号）、`provider_not_configured`、`session_not_found`、`no_session_to_continue`、`fork_failed`、`upload_failed`、`daemon_unavailable`（连不上 daemon 或订阅失败）、`daemon_request_failed`（其余接口请求失败）、`protocol_error`（收到无法对应到任何命令的错误帧）。
 
 ### 退出码
 
@@ -148,7 +148,7 @@ export interface SlashCtx {
   queueCancel(target: string | "all"): Promise<void>  // 发 queue.cancel 帧：messageId 取消单条，"all" 清空全部
   sendInterrupt(text: string): void  // 一次性中断发送：带 interrupt 处置的 send_message（/interrupt 展开成这个）
   queueSnapshot?(): Promise<Array<{ messageId: string; disposition: string; text: string }>>
-                                     // 读 GET /queue 的便捷包装（/queue 列表与排队计数用）
+                                     // 读 GET /sessions/:id/queue 的便捷包装（/queue 列表与排队计数用）
   commandsDir?: string              // 自定义命令目录（<home>/commands，*.md）；默认不加载
 }
 export interface SlashCommand {
@@ -186,7 +186,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 
 ### 空闲重连与消息重发
 
-- **重连**（`reconnect`）：socket 意外关闭时重新 `KclawClient.connect`（daemon 已终止时重新启动一个）、重新订阅、`GET /sessions/:id/messages` 全量拉取一次以更新本地状态（不重放渲染），打印 `[reconnected]`；重连失败打印 `[连接断开，重连失败 — 输入 /exit 退出]` 并放弃。
+- **重连**（`reconnect`）：socket 意外关闭时重新 `KclawClient.connect`（daemon 已终止时重新启动一个）、重新订阅、`GET /sessions/:id/messages` 全量拉取一次以更新本地状态（不重放渲染），打印 `[reconnected]`；重连失败打印 `[连接断开，重连失败。输入 /exit 退出]` 并放弃。
 - **重发规则**：一条发送中的消息只有当**一帧都没观察到**（连 `send_message_ack` 都没有）才会在重连后重发——零帧说明消息从未到达存活的 daemon（ws 库对已关闭的 socket 静默丢帧、只在连接中才同步抛出错误，两者都等价于"未送达"）。观察到任何一帧即视为已送达，中途断线绝不重发：run 可能已在服务端排队，重发会导致同一消息被执行两次。
 - **120s 静默看门狗**：重连后观察到的帧带 `POST_RECONNECT_SILENCE_MS = 120_000` 的不活动超时，已终止的 run 永远不会完成，REPL 不可无限等待；超时打印提示后回到提示符。重连前的等待不加人为上限（`nextFrame` 对非有限超时直接跳过等待：node 会把 `setTimeout(fn, Infinity)` 钳到 1ms，反而会截断仍在运行的 run）。
 
@@ -197,9 +197,10 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 ### ink TUI 表面（stdin 与 stdout 都是终端时）
 
 - **画面结构**：已完成内容进 ink `<Static>` 历史区（文本完成块、`⏺/⎿` 工具对、折叠 thinking 行、系统行、输入回显）——只追加不重画，终端原生滚动缓冲与复制保留；动态区承载进行中内容（流式文本、排队灰色常驻行——消息入队出现、离队或清队消失，与 WebUI 排队可视面同一语义、thinking 行、带 spinner 与计时的工具行）；底部是常驻输入框与状态行。
+- **卡片呈现**：同一时刻至多一张卡激活，优先级固定为确认 > 问题 > 单选，其余在队列里等前一张裁决完（ink 会把按键广播给所有激活的键盘处理，多张卡同时激活会被一次按键同时裁决）。
 - **输入历史**：数据源是当前会话里用户发过的消息，与 WebUI 读取同一份会话数据——接入会话时从 `GET /sessions/:id/messages` 读一次（只取文本），之后每发送一条追加一条，切换会话按新会话重读；CLI 不另存历史文件。定时任务、/goal 续轮、subagent 与团队投递等机器发出的用户消息都带来源说明块（`PROVENANCE_NOTE_KINDS`，见 [blocks](../reference/blocks.md)），历史把它们全部排除。
-- **转录视图（Ctrl+O）**：全屏覆盖层，打开时从 `GET /sessions/:id/messages` 拉全量消息（服务器真相替换实时账本，之后的实时帧继续追加）；thinking 全文、工具完整输出在此可达——历史区的任何截断都有去处。↑↓/j/k 滚动、PgUp/PgDn 翻页、g/G 跳头尾、`{`/`}` 跳上一条/下一条用户消息、q/Esc 关闭。
-- **快捷键帮助（?）**：输入为空时按 `?` 打开覆盖层，列出当前全部快捷键；文案与实际键位绑定同源于 `tui/keybindings.ts` 一张表。
+- **转录视图（Ctrl+O）**：全屏覆盖层，打开时从 `GET /sessions/:id/messages` 拉全量消息，以服务器返回的数据替换本地累积的实时记录，之后的实时帧继续追加；thinking 全文、工具完整输出在此可达——历史区的任何截断都有去处。↑↓/j/k 滚动、PgUp/PgDn 翻页、g/G 跳头尾、`{`/`}` 跳上一条/下一条用户消息、q/Esc 关闭。
+- **快捷键帮助（?）**：输入为空时按 `?` 打开覆盖层，列出当前全部快捷键；清单文案来自 `tui/keybindings.ts` 一张表，只负责展示，各处按键的实际处理在各自组件内实现（输入编辑器、转录视图、全局键）。
 - **Esc**：覆盖层开着 → 关闭；run 进行中 → 发 `run.cancel` 并提示（保留已完成输出）；空闲 → 无操作。
 - **终端标题**：随运行状态变化（空闲 `kclaw · <会话标题>` / 运行中 `kclaw ▶ 运行中 · …`），切窗口可判忙闲。标题内容含会话名与会话标题（可能含模型输出），写入前先消毒：剔除控制字符、剔除双向与不可见格式码点（Trojan Source 注入族）、空白归一、240 字上限；GNU Screen（`STY` 已设）下整体降级为可打印 ASCII。终端没有可移植的方式读取原标题，kclaw 不读取、不恢复，只在每次退出路径（正常关闭与 Ctrl+C 第三段）清除自己写过的标题。
 - **视觉**：色板四档——正文默认色、系统事件暗色、错误红、工具行琥珀（与 WebUI amber 主题呼应）；颜色开关由 `color.ts` 统一判定后经 ink 使用的 chalk 生效，组件不各自判断。状态行与转录视图的滚动按 East Asian Width 显示宽度对齐（`text-width.ts`，与 `session list` 共用）。
@@ -208,7 +209,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 
 - 注册表是 `createRegistry(ctx)` 返回的 `Map<string, SlashCommand>`；命令的名称/用法/描述读自 `@kclaw/core/commands` 的共享清单 `SLASH_COMMANDS`（WebUI 读同一份，保证两端文案不漂移，见 [webui](../web/webui.md)）；解析（`dispatch`，委托 core 的 `parseSlashInput`）与查表执行（`runOrHint`）分离，未注册的命令打印一行 `没有这个命令，/help 看看`（miss 路径可单测）。
 - **补全**：两个表面共用同一候选清单与插入函数。readline 表面是 readline 的 completer（`createSlashCompleter`，Tab 触发）——**输入的最后一段空白分隔块**以 `/` 开头且还没打空格时，按共享清单给出前缀候选：内置命令在前、动态注册的技能命令在后（与内置重名的技能命令被共享补全器排除），唯一命中直接补全命令名，多个命中补全公共前缀并列出清单；普通文本、带参数的输入（`/new 标题` 这种已打空格的）、未知前缀都不动作。TUI 的菜单自动弹出：`/` 起头的末段开命令菜单、`@` 起头的末段开文件引用菜单（候选排序与插入沿用 WebUI 输入框同一套 `slashCompletions`/`fileMentionCompletions`/replaceTrailing 函数，候选来自 `GET /fs/files`，失败静默隐藏；含空白字符的路径不进候选——键盘菜单无法标灰跳过），↑↓ 选择、Tab/Enter 接受、Esc 关闭。自定义命令不参与联想，仍靠 `/help` 发现。
-- `/exit` **刻意不注册**：它是 `chat.ts` 输入循环的控制流（`parsed.command === "exit"` 直接 break），不经过注册表。
+- `/exit` **刻意不注册**：它是 `chat.ts` 输入循环的控制流（置退出标志、等所有进行中的渲染收尾后退出），不经过注册表；退出标志置位后提交的行不再发送（此时 socket 正在关闭，再发送会产生无人关闭的重连连接）。
 - 内置命令：
 
 | 命令 | 行为 |
@@ -217,7 +218,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 | `/new [标题]` | `POST /sessions`（带可选 title，body 总带 workdir=当前 cwd）→ `switchSession` → 打印确认 |
 | `/clear` | 同 `/new` 但不带标题（快速新建一个空白会话）；服务端在创建新会话后异步触发一次切会话记忆写入（clear 触发，把旧会话的对话存入记忆，不阻塞切换） |
 | `/sessions` | `GET /sessions` 列表；空则"（还没有会话）"；否则经当前表面出单选器（TUI 菜单 / @clack select）、切换会话 |
-| `/model [名字]` | 不带参数时列出可用模型（读 `GET /config` 的 provider 条目名）和当前用的模型；带上名字则调 `POST /sessions/:id/model` 切换本会话模型，只影响之后的回复；`/model default` 恢复默认；名字不存在时打印服务端 400 的原文（如 `model not found: …`） |
+| `/model [名字]` | 不带参数时列出可用模型（读 `GET /config` 的 provider 条目名）和当前用的模型；带上名字则调 `POST /sessions/:id/model` 切换本会话模型，只影响之后的回复；`/model default` 恢复默认；名字不存在时打印 `切换失败: <服务端 400 原文>`（如 `切换失败: model not found: …`） |
 | `/mode [readonly\|default\|acceptEdits\|trusted\|auto]` | 切换本会话权限模式（无参数显示当前模式与可选项）；通过 `POST /sessions/:id/mode` 生效、下一次 run 起生效——`readonly` 拒绝写文件与执行命令类工具、`acceptEdits` 工作区内文件写入免逐次确认、`trusted` 沙箱与工作区内免确认（边界外拒绝）、`auto` 反复放行的操作自动保存为规则（见 [permissions](../core/permissions.md)） |
 | `/attach <路径>` | 读入本地文件、按扩展名粗略判定 MIME 类型，经 `client.uploadAttachment` 上传并把返回的引用放进待发队列，随你的下一条消息一起发送；不带参数时列出当前待发的附件；失败打印 `附件上传失败: …` |
 | `/compact [重点说明]` | 手动压缩当前会话的早期对话（跳过触发线立即执行一次，机制见 [compaction](../core/compaction.md)）：调 `POST /sessions/:id/compact`，参数作为摘要重点说明（focus）进入两次摘要调用；打印 daemon 返回的一句话（`压缩了 N 段…` / `无可压缩内容` / 会话忙时 `已排队：当前运行结束后自动压缩`）；失败打印 `压缩失败: …` |

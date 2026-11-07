@@ -97,7 +97,8 @@ interface QueueEntry {
                                            // 还原触发源（agent = subagent run；cron 的 note/触发语义在出队执行时需要；
                                            // process = 后台进程结算通知，team = 团队收信箱投递，goal = 目标循环自续轮）
   attachments?: AttachmentRef[]           // {path,name,size,mimeType}，路径已校验（与 send_message 帧同一形状）
-  note?: string                           // cron 来源说明
+  note?: QueueNote                        // 机器来源说明 {kind: "cron"|"process"|"subagent"|"goal"|"team", text}
+  uiAction?: UiActionRef                  // UI 卡交互来源（随条目过队列，出队时盖到持久消息上）
   enqueuedAt: string                      // ISO-8601
 }
 ```
@@ -284,7 +285,7 @@ interface Cron {
 - `send_message` 增加可选 `disposition` 字段（`"steer"|"wait"|"interrupt"`；非法值 error 帧 `send_message disposition must be "steer", "wait" or "interrupt"`）。不带字段取会话覆盖 ?? 配置默认（**默认引导**）。回包 `send_message_ack` 增加 `messageId` 与 `queued`（会话空闲直发 `queued:false`、不广播 `message.queued`；运行中按处置分流 `queued:true`）。会话忙时超限的 error 帧文案：`队列已满（10 条）`。
 - `queue.cancel`：`{sessionId, messageId?}`——带 id 取消该条（wait 随时、steer 注入前），不带则清空全部可取消条目。回 `queue.cancel_ack {sessionId, cancelled}`；失败为 error 帧：已注入 `已注入`（机器不删历史）、无此条目 `not found`。
 - `message.retry`：`{sessionId, fromMessageId, text, attachments?}`——编辑重试/重新生成的服务端入口（机制见 [run-manager](./run-manager.md)）：校验通过后先持久化并广播 `message.truncated {fromMessageId}`（从该消息起退出对话视图），再走普通用户消息路径提交；回 `message.retry_ack {sessionId, messageId, queued}`（与 send_message 同步决策的形状一致）。同步失败为 error 帧：`只能从最后一条用户消息重试`（fromMessageId 不是最后一条 user 消息）、`会话忙：等当前运行和压缩结束、清空队列后再重试`、`重试内容为空（无文本也无附件）`、subagent 会话只读拒绝。
-- 三个新事件：`message.queued {messageId, disposition, position?}`（消息入队/入缓冲区时；position 是 wait/interrupt 的队列序位，steer 不适用；降级按实际处置报告）、`message.steered {messageId}`（steer 注入当前 run 的时刻，事件级 `runId` 标识注入的 run）、`message.queue_cancelled {messageId}` 或 `{all:true}`（单条取消/清空）。出队执行与注入仍用既有 `run.started` + `message.created` 表达，消息 id 与排队时相同——前端气泡原地升级，无需替换。
+- 三个新事件：`message.queued {messageId, disposition, position?}`（消息入队/入缓冲区时；position 是 wait/interrupt 的队列序位，steer 不适用；降级按实际处置报告）、`message.steered {messageId}`（steer 注入当前 run 的时刻，事件级 `runId` 标识注入的 run）、`message.queue_cancelled {messageId}`（单条取消）或 `{all:true, messageIds}`（清空，messageIds 是实际撤回条目的 id 列表）。出队执行与注入仍用既有 `run.started` + `message.created` 表达，消息 id 与排队时相同——前端气泡原地升级，无需替换。
 
 **记忆写入事件 `memory.written`**：记忆写入 pipeline 每次实际写入磁盘时经总线广播，帧为 `memory.written {path, kind, topic?, scope?}`——`kind` 是 `"episode"`（项目情节，带 `topic` 线名）或 `"cognition"`（全局认知，带 `scope`），`path` 是写入文件的绝对路径；不带 `sessionId`（项目级事务）。它只作"已写入"的轻提示：CLI 用暗色一行显示 `已写入记忆: <path>`，web 在通知条显示同文案，都不驱动任何状态机。事件不带"记忆内容"，要看内容走上面的 `/memory` 路由。payload 定义见 [protocol](../core/protocol.md)。
 

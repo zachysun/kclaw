@@ -26,6 +26,7 @@ export interface QueueEntry {
   trigger: "user" | "cron" | "process" | "agent" | "team" | "goal"
   attachments?: AttachmentRef[]
   note?: QueueNote
+  uiAction?: UiActionRef                  // UI 卡交互来源（随条目过队列，出队时盖到持久消息上）
   enqueuedAt: string
 }
 
@@ -50,7 +51,7 @@ export type ServerFrame = AgentEvent | ServerAck | ErrorFrame
 | `queue.cancel` | `sessionId`、`messageId?` | 取消排队条目；messageId 默认 = 清空全部可取消条目 |
 | `confirmation.resolve` | `confirmationId`、`decision`、`client?` | 人工确认裁决（decision 四值，见下） |
 | `question.resolve` | `questionId`、`answers`、`client?` | 回答运行中提问（answers 为 string[][]，按提问顺序） |
-| `run.cancel` | `sessionId` | 停止当前 run |
+| `run.cancel` | `sessionId`、`messageId?` | 停止当前 run；带 `messageId` 时仅当活动 run 执行的正是这条消息才中止 |
 | `compaction.cancel` | `sessionId` | 取消正在进行的压缩 |
 
 `ConfirmationDecision`（`confirmation.resolve` 的 decision）：`once`（仅本次）/ `project`（总是·项目级规则）/ `global`（总是·全局规则）/ `reject`（拒绝）。超时不是客户端发的——resolved 事件里的 `timeout` 由等待方产生。

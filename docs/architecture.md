@@ -20,7 +20,7 @@ kclaw 是一个运行在本机的个人 AI 助手（agent）。整套系统只�
 
 **实时事件不持久化，持久化的是事件流。** WS 上推送的增量事件（text.delta、message.created 等）只用于实时刷新界面：不写入磁盘、断线不补发、不回放。会话真正的持久化形式是每个会话目录下的 events.jsonl 事件流（唯一权威数据，message / compaction / memory / system 等业务事件都记录在这里），以及由它推导出来的 meta.json 摘要（见 [storage](./core/storage.md)）。客户端断线恢复的办法：先用 HTTP 拉一次全量消息，再只订阅新事件（详见 [protocol](./core/protocol.md)）。
 
-**WebUI 是独立构建的静态产物。** `@kclaw/web` 的运行时依赖是 react/react-dom、`@kclaw/core` 的几个纯数据/纯类型子路径出口（`commands`、`protocol`、`mentions`、`client-http`、`permission-modes`），以及 react-virtuoso（审计页用的虚拟滚动列表库，见 [webui](./web/webui.md)）与 react-markdown 全家桶（对话页 Markdown 渲染）。`commands` 是 slash 命令的 name/usage 元数据共享表（CLI 与 WebUI 读同一份，见 [extending](./extending.md)），`protocol` 是线上数据形状的类型定义。构建出的静态文件由 daemon 托管（`resolveWebDist` → `packages/web/dist`），不需要额外的文件服务器。
+**WebUI 是独立构建的静态产物。** `@kclaw/web` 的运行时依赖是 react/react-dom、`@kclaw/core` 的几个纯数据/纯类型子路径出口（`commands`、`protocol`、`mentions`、`client-http`、`permission-modes`、`provider-formats`），以及 react-virtuoso（审计页用的虚拟滚动列表库，见 [webui](./web/webui.md)）与 react-markdown 全家桶（对话页 Markdown 渲染）。`commands` 是 slash 命令的 name/usage 元数据共享表（CLI 与 WebUI 读同一份，见 [extending](./extending.md)），`protocol` 是线上数据形状的类型定义。构建出的静态文件由 daemon 托管（`resolveWebDist` → `packages/web/dist`），不需要额外的文件服务器。
 
 ---
 
@@ -35,7 +35,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
  └── @kclaw/web      客户端：React SPA（依赖 core 的 commands/protocol 子路径出口与 react-virtuoso，vite 独立构建）
 ```
 
-依赖方向唯一：core ← server、core ← cli。web 只依赖 core 的几个子路径出口（`commands`/`protocol`/`mentions`/`client-http`/`permission-modes`——纯数据/纯类型，不含 agent 引擎）、react-virtuoso 与 react-markdown 全家桶；发布包 kclaw 只在构建期把 cli、server、web 的产物打包到一起。
+依赖方向唯一：core ← server、core ← cli。web 只依赖 core 的几个子路径出口（`commands`/`protocol`/`mentions`/`client-http`/`permission-modes`/`provider-formats`——纯数据/纯类型，不含 agent 引擎）、react-virtuoso 与 react-markdown 全家桶；发布包 kclaw 只在构建期把 cli、server、web 的产物打包到一起。
 
 ### 各包内部结构
 
@@ -53,7 +53,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 | `permissions/` | ConfigPermissionGate（权限判定）+ ConfirmationBroker（人工确认网关） |
 | `memory/` | MemorySystem：L1 项目情节 + L2 全局认知 + FTS5/向量索引（见 [memory](./core/memory.md)） |
 | `text/` | 三端共享的中文分词器与全文检索（FTS）辅助 |
-| `tools/` | 40 个内置工具（18 常驻 + 22 条件注册：后台进程、定时任务、目标循环、工具检索、subagent 派发/取回、运行中提问、技能提案、UI 卡与团队工具） |
+| `tools/` | 40 个内置工具（16 常驻，其中含 UI 卡 `ui_render`；24 条件注册：后台进程、定时任务、目标循环、会话 todo、工具检索、subagent 派发/取回、运行中提问、技能提案与团队工具） |
 | `skills/` | 技能解析、双作用域扫描、指定匹配、复用检测与软链接接入、提案制的技能进化（提炼 pipeline 与提案存取，见 [skills](./core/skills.md)） |
 | `cron/` | CronScheduler（定时任务调度） |
 | `mcp/` | MCP（Model Context Protocol：给模型接入外部工具的开放协议）客户端管理器 |
@@ -101,7 +101,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 **如何停止。** 收到 SIGTERM/SIGINT 后走有界 stop（每一步默认 60 秒超时）；stop 失败时保留 daemon.json——进程还在运行，pid 文件必须如实反映。
 
-**状态全部在 `<home>`。** `<home>` 指 `KCLAW_HOME` 环境变量指定的目录，未设置时为 `~/.kclaw`（`resolvePaths`，`packages/core/src/storage/paths.ts`）。里面有：`config.json`、`AGENTS.md`、`token`、`daemon.json`、`permissions.yaml`（全局的已保存权限规则，见 [permissions](./core/permissions.md)）、`mcp.json`（**全局组**的 MCP server 配置；各项目自己的在 `<项目>/.kclaw/mcp.json`，见 [mcp](./core/mcp.md)）、`feishu.json` 与 `feishu-state.json`（飞书频道的配置与绑定状态，见 [feishu-channel](./server/feishu-channel.md)）、`sessions/`、`memory/`（记忆库：`global/`（persona/wiki/rule 三类认知文件）+ `projects/<id>/`（主题线文件），各带 `vectors.db` 检索索引，见 [memory](./core/memory.md)）、`skills/`（全局技能目录，项目级技能在工作区 `.kclaw/skills/`，见 [skills](./core/skills.md)）、`hooks/`（用户 hook 目录，每个 run 重新扫描，见 [hooks](./core/hooks.md)）、`cron.db`、`usage.db`、`attachments/`、`commands/`、`logs/`。
+**状态全部在 `<home>`。** `<home>` 指 `KCLAW_HOME` 环境变量指定的目录，未设置时为 `~/.kclaw`（`resolvePaths`，`packages/core/src/storage/paths.ts`）。里面有：`config.json`、`credentials.json`（provider apiKey 与 tavily key 的实际存放处，0600，见 [storage](./core/storage.md)）、`AGENTS.md`、`token`、`daemon.json`、`permissions.yaml`（全局的已保存权限规则，见 [permissions](./core/permissions.md)）、`mcp.json`（**全局组**的 MCP server 配置；各项目自己的在 `<项目>/.kclaw/mcp.json`，见 [mcp](./core/mcp.md)）、`feishu.json` 与 `feishu-state.json`（飞书频道的配置与绑定状态，见 [feishu-channel](./server/feishu-channel.md)）、`sessions/`、`memory/`（记忆库：`global/`（persona/wiki/rule 三类认知文件）+ `projects/<id>/`（主题线文件），各带 `vectors.db` 检索索引，见 [memory](./core/memory.md)）、`skills/`（全局技能目录，项目级技能在工作区 `.kclaw/skills/`，见 [skills](./core/skills.md)）、`hooks/`（用户 hook 目录，每个 run 重新扫描，见 [hooks](./core/hooks.md)）、`cron.db`、`usage.db`、`attachments/`、`spill/`（工具输出被截断时的全量副本，`fs_read` 可直接读取）、`commands/`、`logs/`。
 
 ---
 
@@ -130,7 +130,7 @@ run 的组装在 core 的 `executeRun`（`packages/core/src/agent/run-assembly.t
 2. 确定模型：`input.model` → 会话 meta → 默认配置，三级依次回退；条目名翻译成线上模型名。
 3. 记忆检索：拿用户文本的前 200 字符搜项目情节，取前 5 条，作为 note 块注入用户消息；另把 L2 全局认知拼进系统提示（见 [memory](./core/memory.md)）。
 4. 扫描技能目录（全局 `<home>/skills` + 工作区 `.kclaw/skills`），把可用技能清单追加进系统提示——此时系统提示分两段组装：**stable**（人设基础文本 + 注入约定，缓存冻结面）在前，**live**（全局认知 + 技能清单，低频变化面）在后；若消息里出现 `/技能名` 或 `@路径`（任意位置，仅用户消息），把两者的包装文本合并成一份改写后的模型视图文本（见 [skills](./core/skills.md) 与 [file-mentions](./core/file-mentions.md)）。
-5. 读会话历史（在读之后才追加新用户消息）→ `createBuiltinTools`（含 skill_read）+ extraTools（MCP 工具）→ `ConfigPermissionGate`（readRoots 为附件目录；权限模式与已保存规则每个 run 都从会话 meta 和磁盘现读）。
+5. 读会话历史（在读之后才追加新用户消息）→ `createBuiltinTools`（含 skill_read）+ extraTools（MCP 工具）→ `ConfigPermissionGate`（readRoots 为附件目录与 spill 目录；权限模式与已保存规则每个 run 都从会话 meta 和磁盘现读）。
 6. 进入 agent 循环 `runAgent(...)`（`packages/core/src/agent/loop.ts`）：
    - `llm.stream(await buildMessages())`：`toProviderMessages(history)` 负责把全量历史组装成发往模型的请求（`agent/context.ts`，上下文长度由压缩体系统一管）；llm-before hook 链只能修改模型看到的输入（技能与 `@` 文件指定的合并包装就是内置的 skill-wrap hook，用 `withLastUserText` 按内容锚定本轮 user 消息，steer 插话不会被误改写）。
    - 模型流式返回 text / thinking / tool_call（各自经历 created → delta → …）。
