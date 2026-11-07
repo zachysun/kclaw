@@ -624,15 +624,19 @@ describe("RunManager.enqueue", () => {
   })
 
   it("discards a late human verdict that loses the timeout race", async () => {
-    const late = new Promise<{ decision: "once"; by: "web" }>((resolve) => {
-      setTimeout(() => resolve({ decision: "once", by: "web" }), 250)
-    })
     const { env, manager } = makeEnv(
       scriptClient([execToolTurn("call_5", "echo late"), textTurn("好的")]),
       (c) => {
         c.permissions.confirmTimeoutMs = 50
       },
-      () => late,
+      // The 250ms timer must start when the confirmation is REQUESTED, not
+      // at setup: on a loaded runner the run can take >250ms to reach the
+      // gate, and a pre-created promise would already be settled — the
+      // "late" verdict would win the race it is meant to lose.
+      () =>
+        new Promise<{ decision: "once"; by: "web" }>((resolve) => {
+          setTimeout(() => resolve({ decision: "once", by: "web" }), 250)
+        }),
     )
     const session = env.sessions.create("迟到会话")
 
