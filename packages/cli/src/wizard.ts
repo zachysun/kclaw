@@ -1,17 +1,14 @@
 /**
- * First-run provider wizard: when detectProviderStatus reports
- * "missing" and stdout is a TTY, `kclaw chat` hands over to runWizard — a
- * 30-second select→key→model flow that probes the endpoint with a 1-token
- * completion and, only on success, writes config.json. Every cancel or
- * "重试？→否" bails out WITHOUT touching the filesystem (no partial
- * config.json is ever written).
- *
- * Paths come from core's resolvePaths (the real KclawPaths shape, home et
- * al.) — never a hand-rolled stand-in — so resolution cannot drift from the
- * daemon's; its mkdir side effect merely pre-creates the home tree any
- * kclaw invocation creates anyway. saveConfig persists through
- * writeFileAtomic which already sets 0600; the wizard re-chmods anyway as
- * belt and braces — API keys live in that file.
+ * First-run provider wizard: when the daemon reports `configured: false` and
+ * stdout is a TTY, `kclaw chat` hands over to runWizard — a 30-second
+ * select→key→model flow. Everything that touches the configuration goes
+ * through the daemon, the process that holds the configuration and makes the
+ * real model calls: the connection test is `POST /providers/probe` (a 1-token
+ * completion sent from the daemon), and only after it succeeds is the entry
+ * saved (`POST /providers`; `PATCH /providers/:name` when that name already
+ * exists) and made the default. The daemon persists the change and publishes
+ * it, so the next message already uses it — no restart. Every cancel or
+ * "重试？→否" bails out before anything is saved.
  *
  * The template menu derives from core's PROVIDER_PRESETS (the format +
  * baseUrl canon shared with the Model tab) plus wizard-only extras
@@ -23,9 +20,10 @@
  * baseUrl input step for it before the key step.
  */
 import * as p from "@clack/prompts"
-import { findProviderPreset, probeProviderChat, saveConfig, loadConfig, resolvePaths } from "@kclaw/core"
+import { findProviderPreset } from "@kclaw/core"
 import type { ProviderApiFormat } from "@kclaw/core"
-import { chmodSync } from "node:fs"
+import { HttpRequestError } from "@kclaw/core/client-http"
+import type { KclawClient } from "./client.js"
 
 export interface Template {
   id: "deepseek" | "openai" | "anthropic" | "ollama" | "custom"
@@ -87,7 +85,18 @@ function retryStepFor(reason: "key" | "network" | "model" | "unknown"): "templat
   return "template"
 }
 
-export async function runWizard(home: string): Promise<"configured" | "aborted"> {
+/** Save the probed entry under `name` and make it the default; a same-named entry (409) is overwritten. */
+async function saveAsDefault(client: KclawClient, name: string, entry: ReturnType<typeof buildProviderEntry>): Promise<void> {
+  try {
+    await client.request("POST", "/providers", { name, entry })
+  } catch (error) {
+    if (!(error instanceof HttpRequestError) || error.status !== 409) throw error
+    await client.request("PATCH", `/providers/${encodeURIComponent(name)}`, { entry })
+  }
+  await client.request("POST", `/providers/${encodeURIComponent(name)}/default`)
+}
+
+export async function runWizard(client: KclawClient): Promise<"configured" | "aborted"> {
   p.intro("还没配模型——带你 30 秒配好")
   // step 语义：下一步要采集的项；probe 失败按 retryStepFor 回退（custom 的 baseUrl 并入模板步）
   let step: "template" | "baseurl" | "key" | "model" = "template"
@@ -124,19 +133,11 @@ export async function runWizard(home: string): Promise<"configured" | "aborted">
     if (!model) { p.log.error("模型名不能为空"); continue }
     const entry = buildProviderEntry(tpl, apiKey, model)
     const s = p.spinner(); s.start("测试连通…")
-    const { status, body } = await probeProviderChat({ format: tpl.format, baseUrl: entry.baseUrl, apiKey: entry.apiKey, model: entry.model })
+    const { status, body } = (await client.request("POST", "/providers/probe", entry)) as { status: number | null; body: string }
     s.stop(status !== null && status < 400 ? "连通成功" : "连通失败")
     if (status !== null && status < 400) {
-      const paths = resolvePaths(home)
-      const cfg = loadConfig(paths)
-      saveConfig(paths, {
-        ...cfg,
-        providers: { ...cfg.providers, default: tpl.id, entries: { ...cfg.providers.entries, [tpl.id]: entry } },
-      })
-      // Belt and braces: writeFileAtomic already sets 0600; the explicit
-      // chmod keeps the guarantee independent of the atomic-write path.
-      chmodSync(paths.configJson, 0o600)
-      p.outro("已写入 config.json，开始对话")
+      await saveAsDefault(client, tpl.id, entry)
+      p.outro("配置已保存，开始对话")
       return "configured"
     }
     const reason = classifyProbeError(status, body)

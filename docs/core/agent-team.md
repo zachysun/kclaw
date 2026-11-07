@@ -56,6 +56,8 @@
 
 一封信的投递过程：`enqueueMail` 写文件（持久）→ 渲染：该目标收信箱里所有**未处于投递中**的 pending 条目拼成一次 run 的输入 → `submit(trigger: "team", disposition: "steer")` → 监听到输入到达（目标会话的第一条 `message.created`）才翻转 delivered。**目标在忙时不投递**：信留在收信箱，等它当前 run 结束的空闲边再送——已拼进进行中 run 的条目有记录去重，不会投两次。
 
+每次团队投递（收信箱来信、自动派活、恢复提醒，组长收到的组员来信同样如此）都带一条 `team` 来源说明块（`TEAM_DELIVERY_NOTE`，文本在 `packages/core/src/prompts/team.ts`），落在投递的 user 消息上，模型据此分辨团队投递与用户在本会话里的发言；来信以【来自 …】标明发信人，没有这个标注的是派活或恢复提醒。用户经 `target` 转给组员的话也走收信箱，所以组员那边收到的这条同样带说明块；组长历史里那份原话副本只带「已转发给组员 X」的 `system` note。
+
 ```mermaid
 flowchart TD
     W["send_message 来信，或 spawn_teammate 的初始任务"] --> E["enqueueMail：写入收信人收信箱文件（持久化）"]

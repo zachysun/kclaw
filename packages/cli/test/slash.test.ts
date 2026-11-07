@@ -5,25 +5,16 @@
  * (stubbed `request`) plus a recording `SlashCtx`; no daemon, no real
  * HTTP/WS. chat.test.ts exercises the full REPL loop end-to-end, but the
  * command implementations and the hint are asserted directly here. The
- * `sessions` select is mocked via `vi.mock("@clack/prompts")` so its
- * `select`/`isCancel` behaviour (and the pause/resume around it) is asserted
- * without a real terminal.
+ * `sessions` picker rides the surface seam: the ctx's `choose` is a stub,
+ * so the command's option shape and follow-up behaviour are asserted
+ * without a terminal (the surfaces' own pickers are their own business).
  */
-import { describe, it, expect, vi, beforeEach } from "vitest"
-import { isCancel, select } from "@clack/prompts"
+import { describe, it, expect, vi } from "vitest"
 import { createRegistry, createSlashCompleter, dispatch, refreshSkillCommands, runOrHint, type SlashCtx } from "../src/slash.js"
 import { basename, join } from "node:path"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import type { KclawClient } from "../src/client.js"
-
-vi.mock("@clack/prompts", () => ({
-  select: vi.fn(),
-  isCancel: vi.fn(),
-}))
-
-const selectMock = vi.mocked(select)
-const isCancelMock = vi.mocked(isCancel)
 
 /** A recording SlashCtx whose `sessionId` is mutable (switchSession rewrites it, like the real chat loop). */
 function makeFakeCtx(requestImpl: (method: string, path: string, body?: unknown) => unknown) {
@@ -33,8 +24,7 @@ function makeFakeCtx(requestImpl: (method: string, path: string, body?: unknown)
     sessionId = id
   })
   const print = vi.fn((_text: string) => {})
-  const pauseInput = vi.fn(() => {})
-  const resumeInput = vi.fn(() => {})
+  const choose = vi.fn(async (_message: string, _options: ReadonlyArray<{ value: string; label: string }>) => undefined as string | undefined)
   /** ws 帧收集器：queueCancel 按真实实现的帧形状写入（all 不带 messageId）。 */
   const sent: unknown[] = []
   const ctx: SlashCtx = {
@@ -45,8 +35,7 @@ function makeFakeCtx(requestImpl: (method: string, path: string, body?: unknown)
     switchSession,
     exit: () => {},
     print,
-    pauseInput,
-    resumeInput,
+    choose,
     send: vi.fn(),
     commandsDir: undefined,
     setDisposition: vi.fn((_d: "steer" | "wait") => {}),
@@ -63,13 +52,8 @@ function makeFakeCtx(requestImpl: (method: string, path: string, body?: unknown)
       sent.push({ type: "send_message", sessionId, text, disposition: "interrupt" })
     }),
   }
-  return { ctx, request, switchSession, print, pauseInput, resumeInput, sent }
+  return { ctx, request, switchSession, print, choose, sent }
 }
-
-beforeEach(() => {
-  selectMock.mockReset()
-  isCancelMock.mockReset()
-})
 
 describe("slash command dispatch", () => {
   it("dispatch 解析 / 命令与参数", () => {
@@ -151,7 +135,7 @@ describe("slash command registry", () => {
     expect(lines).toContain("sessions /sessions — 选择会话并切换")
   })
 
-  it("sessions: GET /sessions → select 选项（value=id label=title）→ 选中后 switchSession", async () => {
+  it("sessions: GET /sessions → choose 选项（value=id label=title）→ 选中后 switchSession", async () => {
     const fake = makeFakeCtx(async (method, path) => {
       expect(method).toBe("GET")
       expect(path).toBe("/sessions")
@@ -160,72 +144,56 @@ describe("slash command registry", () => {
         { id: "ses_b", title: "B", createdAt: "c", updatedAt: "t1" },
       ]
     })
-    selectMock.mockResolvedValue("ses_b")
-    isCancelMock.mockReturnValue(false)
+    fake.choose.mockResolvedValue("ses_b")
 
     const registry = createRegistry(fake.ctx)
     await registry.get("sessions")!.run("", fake.ctx)
 
     expect(fake.request).toHaveBeenCalledWith("GET", "/sessions")
-    expect(selectMock).toHaveBeenCalledTimes(1)
-    expect(selectMock).toHaveBeenCalledWith({
-      message: "选择会话",
-      options: [
-        { value: "ses_a", label: "A" },
-        { value: "ses_b", label: "B" },
-      ],
-    })
-    expect(isCancelMock).toHaveBeenCalledWith("ses_b")
+    expect(fake.choose).toHaveBeenCalledTimes(1)
+    expect(fake.choose).toHaveBeenCalledWith("选择会话", [
+      { value: "ses_a", label: "A" },
+      { value: "ses_b", label: "B" },
+    ])
     expect(fake.switchSession).toHaveBeenCalledWith("ses_b")
     expect(fake.print).not.toHaveBeenCalled()
-    // readline 被暂停/恢复，@clack 拥有终端期间 readline 安静
-    expect(fake.pauseInput).toHaveBeenCalledTimes(1)
-    expect(fake.resumeInput).toHaveBeenCalledTimes(1)
   })
 
-  it("sessions: Esc 取消（isCancel=true）不 switchSession，仍 resumeInput", async () => {
+  it("sessions: choose 返回 undefined（用户取消）不 switchSession", async () => {
     const fake = makeFakeCtx(async () => [
       { id: "ses_a", title: "A", createdAt: "c", updatedAt: "t0" },
     ])
-    const cancelSymbol = Symbol("cancel")
-    selectMock.mockResolvedValue(cancelSymbol)
-    isCancelMock.mockReturnValue(true)
+    fake.choose.mockResolvedValue(undefined)
 
     const registry = createRegistry(fake.ctx)
     await registry.get("sessions")!.run("", fake.ctx)
 
     expect(fake.request).toHaveBeenCalledWith("GET", "/sessions")
-    expect(selectMock).toHaveBeenCalledTimes(1)
+    expect(fake.choose).toHaveBeenCalledTimes(1)
     expect(fake.switchSession).not.toHaveBeenCalled()
-    expect(fake.pauseInput).toHaveBeenCalledTimes(1)
-    expect(fake.resumeInput).toHaveBeenCalledTimes(1)
   })
 
-  it("sessions: select 抛出错误时 finally 仍 resumeInput（终端不锁死）", async () => {
+  it("sessions: choose 抛出错误时原样向上抛（表面的终端恢复是各表面自己的保证）", async () => {
     const fake = makeFakeCtx(async () => [
       { id: "ses_a", title: "A", createdAt: "c", updatedAt: "t0" },
     ])
-    selectMock.mockRejectedValue(new Error("boom"))
+    fake.choose.mockRejectedValue(new Error("boom"))
 
     const registry = createRegistry(fake.ctx)
     await expect(registry.get("sessions")!.run("", fake.ctx)).rejects.toThrow("boom")
 
-    expect(fake.pauseInput).toHaveBeenCalledTimes(1)
-    expect(fake.resumeInput).toHaveBeenCalledTimes(1)
     expect(fake.switchSession).not.toHaveBeenCalled()
   })
 
-  it("sessions: 空列表不弹 select，打印（还没有会话）", async () => {
+  it("sessions: 空列表不弹 choose，打印（还没有会话）", async () => {
     const fake = makeFakeCtx(async () => [])
     const registry = createRegistry(fake.ctx)
     await registry.get("sessions")!.run("", fake.ctx)
 
     expect(fake.request).toHaveBeenCalledWith("GET", "/sessions")
     expect(fake.print).toHaveBeenCalledWith("（还没有会话）")
-    expect(selectMock).not.toHaveBeenCalled()
+    expect(fake.choose).not.toHaveBeenCalled()
     expect(fake.switchSession).not.toHaveBeenCalled()
-    expect(fake.pauseInput).not.toHaveBeenCalled()
-    expect(fake.resumeInput).not.toHaveBeenCalled()
   })
 })
 

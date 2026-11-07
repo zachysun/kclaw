@@ -29,7 +29,11 @@ export interface ToolResultBlock {
   durationMs: number
 }
 
-export type NoteKind = "system" | "cron" | "process" | "memory" | "timeout" | "denied" | "subagent" | "goal"
+export type NoteKind = "system" | "cron" | "process" | "memory" | "timeout" | "denied" | "subagent" | "goal" | "team"
+
+/** 声明 user 消息由机器发出的 note 种类（队列条目带到消息上的来源说明）。 */
+export const PROVENANCE_NOTE_KINDS = ["cron", "process", "subagent", "goal", "team"] as const satisfies readonly NoteKind[]
+export type ProvenanceNoteKind = (typeof PROVENANCE_NOTE_KINDS)[number]
 
 export interface NoteBlock { id: BlockId; type: "note"; kind: NoteKind; text: string }
 
@@ -70,7 +74,7 @@ export type Block =
 | `ok` | 工具执行成功 |
 | `error` | 工具执行失败（output 里带错误说明） |
 
-## NoteKind（8 种）
+## NoteKind（9 种）
 
 | 值 | 含义 | 生产点 |
 |----|------|--------|
@@ -79,9 +83,12 @@ export type Block =
 | `process` | 后台进程完成通知的来源声明（bash run_in_background 结束后投递到属主会话的消息上追加） | daemon（进程注册表通知 → 队列条目） |
 | `subagent` | 后台 subagent 完成回投的来源声明（投递的用户消息上追加，声明这是机器回投、非用户发言） | run 组装（经队列条目的 note 参数） |
 | `goal` | 目标循环的轮次注入出处行 | run 组装（goal 续轮） |
+| `team` | 团队投递的来源声明（收信箱来信、任务派发、恢复提醒，投递的用户消息上追加） | 团队宿主（经队列条目的 note 参数） |
 | `memory` | 记忆注入（检索到的相关经历） | 内置 hook `memory-inject` |
 | `timeout` | 确认 / 提问等待超时 | agent 循环（确认与提问的等待出口） |
 | `denied` | 权限拒绝（拒绝原因写进 text） | agent 循环（权限判定） |
+
+`PROVENANCE_NOTE_KINDS` 是其中的来源说明种类：`cron`、`process`、`subagent`、`goal`、`team`。带这几种 note 的 user 消息由机器发出（队列条目 `QueueNote` 的 kind 只能取这几种）；其余种类会出现在用户自己发出的消息上，例如 `memory` 挂在用户消息上、`system` 标记转发给组员的原话。
 
 ## AttachmentSource（3 种）
 

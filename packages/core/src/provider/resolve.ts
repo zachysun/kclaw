@@ -1,7 +1,6 @@
-import type { KclawConfig } from "../storage/config.js"
-import type { LlmClient } from "./types.js"
+import type { KclawConfig, ProviderEntry } from "../storage/config.js"
+import type { LlmClient, LlmRequest, LlmStreamEvent } from "./types.js"
 import { createEmbeddingClient, type EmbeddingClient } from "../memory/embeddings.js"
-import { createOpenAiCompatClient } from "./openai-compat.js"
 import { createProviderClient } from "./factory.js"
 import { resolveProviderFormat } from "../storage/config.js"
 
@@ -15,33 +14,52 @@ function valueOrEnv(value: string | undefined, envName: string): string {
 /**
  * The default provider endpoint: the config's default provider entry, with
  * KCLAW_LLM_BASE_URL / KCLAW_LLM_API_KEY filling in what the entry leaves
- * empty. A still-missing baseUrl is a launch error, not a silent
- * half-configured daemon; an empty apiKey is legal (keyless local runtimes
- * get no auth header).
+ * empty. A still-missing baseUrl throws — this runs on a model call, so the
+ * failure lands on the run that needed the endpoint; an empty apiKey is legal
+ * (keyless local runtimes get no auth header).
  */
 export function resolveProviderEndpoint(cfg: KclawConfig): { baseUrl: string; apiKey: string } {
   const entry = cfg.providers.entries[cfg.providers.default]
   const baseUrl = valueOrEnv(entry?.baseUrl, "KCLAW_LLM_BASE_URL")
   const apiKey = valueOrEnv(entry?.apiKey, "KCLAW_LLM_API_KEY")
   if (baseUrl === "") {
-    throw new Error("no llm provider configured: set providers in config.json or KCLAW_LLM_BASE_URL env")
+    throw new Error("provider 未配置：在 WebUI 的 Model 页添加，或运行 kclaw chat 按向导配置，或设置环境变量 KCLAW_LLM_BASE_URL")
   }
   return { baseUrl, apiKey }
 }
 
 /**
- * The model string for runs: the provider entry's model, falling back to
- * KCLAW_LLM_MODEL. Separate from {@link resolveProviderEndpoint} so a test
- * llmFactory still needs a model (RunManager sends one on every request)
- * without needing a reachable endpoint.
+ * The model string for runs: the default entry's model, falling back to
+ * KCLAW_LLM_MODEL, "" when neither is set. Empty is legal here: the daemon
+ * starts unconfigured (the Model tab and the first-run wizard configure it
+ * through the live daemon), and the resolver's clients report a missing model
+ * on the model call.
  */
 export function resolveModel(cfg: KclawConfig): string {
+  return valueOrEnv(cfg.providers.entries[cfg.providers.default]?.model, "KCLAW_LLM_MODEL")
+}
+
+/**
+ * Whether a run can resolve both halves of the default provider, by the same
+ * rule runs use (env fills what the entry leaves empty). The env is the
+ * daemon process's, which is why clients ask the daemon instead of judging
+ * from their own config read.
+ */
+export function isProviderConfigured(cfg: KclawConfig): boolean {
   const entry = cfg.providers.entries[cfg.providers.default]
-  const model = valueOrEnv(entry?.model, "KCLAW_LLM_MODEL")
-  if (model === "") {
-    throw new Error("no llm model configured: set providers.<name>.model in config.json or KCLAW_LLM_MODEL env")
+  return valueOrEnv(entry?.baseUrl, "KCLAW_LLM_BASE_URL") !== "" && resolveModel(cfg) !== ""
+}
+
+/** An empty wire model fails the call with the fix spelled out, before any request leaves. */
+function requireModel(client: LlmClient): LlmClient {
+  return {
+    async *stream(req: LlmRequest): AsyncIterable<LlmStreamEvent> {
+      if (req.model === "") {
+        throw new Error("模型未配置：在 WebUI 的 Model 页为默认 provider 填写模型，或设置环境变量 KCLAW_LLM_MODEL")
+      }
+      yield* client.stream(req)
+    },
   }
-  return model
 }
 
 /**
@@ -54,8 +72,10 @@ export function resolveModel(cfg: KclawConfig): string {
  *   un-retried — callers wrap in withRetry per run to carry their own retry
  *   sink). The cache holds one slot per entry key; a changed entry (format,
  *   baseUrl, apiKey, or the global timeout) changes the signature and
- *   rebuilds. No configured entry (empty key, nothing set) falls back to the
- *   KCLAW_LLM_* env endpoint.
+ *   rebuilds. An entry without an endpoint of its own (none configured, or
+ *   its baseUrl left empty) resolves the KCLAW_LLM_* env endpoint on the model
+ *   call, never here: the daemon starts unconfigured, so the failure has to
+ *   land on the run, after the user message is persisted.
  * - {@link ProviderResolver.embed} re-resolves the configured embedding
  *   entry per call (signature-checked, so unchanged entries reuse the
  *   client). Whether the vector path exists at all is decided once at launch
@@ -81,20 +101,33 @@ export interface ProviderResolver {
 export function createProviderResolver(cfg: KclawConfig, fetchImpl?: typeof fetch): ProviderResolver {
   const llmCache = new Map<string, { sig: string; client: LlmClient }>()
   const embedCache = new Map<string, { sig: string; client: EmbeddingClient }>()
+  // One client per run at most (the instance holds the "markers rejected"
+  // verdict), built on the first model call so a later configuration counts.
+  // The endpoint is checked before the model: a fresh install lacks both, and
+  // "add a provider" is the message that helps there.
+  const deferredClient = (entry: ProviderEntry | undefined): LlmClient => {
+    let client: LlmClient | undefined
+    return {
+      async *stream(req: LlmRequest): AsyncIterable<LlmStreamEvent> {
+        if (client === undefined) {
+          const endpoint = resolveProviderEndpoint(cfg)
+          client = requireModel(createProviderClient({ entry: { model: "", ...entry, ...endpoint }, timeoutMs: cfg.providers.timeoutMs, fetchImpl }))
+        }
+        yield* client.stream(req)
+      },
+    }
+  }
   const llmOf = (entryKey?: string): LlmClient => {
     const entry = (entryKey !== undefined ? cfg.providers.entries[entryKey] : undefined)
       ?? cfg.providers.entries[cfg.providers.default]
-    if (entry === undefined) {
-      const { baseUrl, apiKey } = resolveProviderEndpoint(cfg)
-      return createOpenAiCompatClient({ baseUrl, apiKey, timeoutMs: cfg.providers.timeoutMs, fetchImpl })
-    }
+    if (entry === undefined || entry.baseUrl === "") return deferredClient(entry)
     // promptCache participates in the signature so flipping the flag rebuilds
     // the client — and with it any in-instance "markers rejected" verdict.
     const sig = `${resolveProviderFormat(entry)}|${entry.baseUrl}|${entry.apiKey}|${cfg.providers.timeoutMs}|${entry.promptCache ?? "auto"}`
     const key = entryKey ?? ""
     const hit = llmCache.get(key)
     if (hit !== undefined && hit.sig === sig) return hit.client
-    const client = createProviderClient({ entry, timeoutMs: cfg.providers.timeoutMs, fetchImpl })
+    const client = requireModel(createProviderClient({ entry, timeoutMs: cfg.providers.timeoutMs, fetchImpl }))
     llmCache.set(key, { sig, client })
     return client
   }

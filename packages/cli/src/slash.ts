@@ -7,12 +7,12 @@
  * stays loop control in chat.ts (`parsed.command === "exit"` breaks the input
  * loop).
  */
-import { isCancel, select } from "@clack/prompts"
 import { MCP_STATE_LABELS, mcpGroupLabel, parseGoalCommandArgs, parseSlashInput, slashCompletions, SLASH_COMMANDS, type SlashCommandMeta } from "@kclaw/core/commands"
 import { isPermissionMode, PERMISSION_MODES, PERMISSION_MODE_CONFIRMATIONS } from "@kclaw/core"
 import type { AttachmentRef } from "@kclaw/core"
 import type { PermissionMode } from "@kclaw/core"
 import type { GoalViewResponse, McpSnapshotResponse, SkillProposalRow } from "@kclaw/core/protocol"
+import type { ChoiceOption } from "./chat-surface.js"
 import type { KclawClient } from "./client.js"
 
 /** Everything a registered command may reach at run time (a view over the chat loop's live state). */
@@ -22,10 +22,8 @@ export interface SlashCtx {
   switchSession(id: string): Promise<void>
   exit(): void
   print(text: string): void
-  /** Pause the readline interface so @clack owns the terminal (sessions select). */
-  pauseInput(): void
-  /** Resume the readline interface after an @clack prompt. */
-  resumeInput(): void
+  /** Let the user pick one option (the session picker); undefined = backed out. */
+  choose(message: string, options: readonly ChoiceOption[]): Promise<string | undefined>
   /**
    * Attachments uploaded for the NEXT message: send_message carries them
    * (as `attachments`) and the send path clears the array.
@@ -98,7 +96,7 @@ export function slashCompleter(line: string): [string[], string] {
  * (see refreshSkillCommands) — builtins stay first, reserved names excluded
  * by the shared completion helper.
  */
-export function createSlashCompleter(getExtra: () => SlashCommandMeta[]): (line: string) => [string[], string] {
+export function createSlashCompleter(getExtra: () => readonly SlashCommandMeta[]): (line: string) => [string[], string] {
   return (line: string) => [slashCompletions(line, "cli", getExtra()).map((c) => `/${c.name}`), line]
 }
 
@@ -199,17 +197,8 @@ export async function runOrHint(
 }
 
 import { readFileSync, readdirSync } from "node:fs"
-import { basename, extname, join } from "node:path"
-
-/** Guess a content type from a filename for the upload (coarse but enough). */
-function mimeForFile(name: string): string {
-  const ext = extname(name).toLowerCase()
-  if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].includes(ext)) return "image/" + ext.slice(1)
-  if (ext === ".pdf") return "application/pdf"
-  if (ext === ".md" || ext === ".markdown") return "text/markdown"
-  if ([".txt", ".json", ".csv", ".yaml", ".yml", ".log", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".sh"].includes(ext)) return "text/plain"
-  return "application/octet-stream"
-}
+import { basename, join } from "node:path"
+import { mimeForFile } from "./mime.js"
 
 /** One session row as served by GET /sessions (SessionStore meta shape). */
 interface SessionRow {
@@ -269,19 +258,8 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
         ctx.print("（还没有会话）")
         return
       }
-      // @clack owns the terminal while the select is up; the readline
-      // interface sits paused underneath (same pattern as chat.ts confirmation).
-      ctx.pauseInput()
-      try {
-        const chosen = await select({
-          message: "选择会话",
-          options: rows.map((s) => ({ value: s.id, label: s.title })),
-        })
-        if (isCancel(chosen)) return
-        await ctx.switchSession(chosen as string)
-      } finally {
-        ctx.resumeInput()
-      }
+      const chosen = await ctx.choose("选择会话", rows.map((s) => ({ value: s.id, label: s.title })))
+      if (chosen !== undefined) await ctx.switchSession(chosen)
     },
   })
 

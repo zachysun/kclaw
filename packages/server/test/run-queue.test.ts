@@ -228,7 +228,7 @@ describe("submit / driver", () => {
     // 走 node.reject——循环自己的 run.failed 接不住，补发条目级失败事件；
     // 驱动器不停转，后续队列照常消化。
     const meta = sessions.create("t", undefined, "/w")
-    const events: Array<{ type: string; payload: { error?: { code?: string; message?: string } } }> = []
+    const events: Array<{ type: string; runId?: string; payload: { messageId?: string; error?: { code?: string; message?: string } } }> = []
     bus.subscribe(meta.id, { send: (d: string) => { const e = JSON.parse(d); if (e.sessionId === meta.id) events.push(e) } })
     const first = manager.submit(meta.id, { userText: "first", trigger: "user" })
     const bad = manager.submit(meta.id, {
@@ -240,6 +240,9 @@ describe("submit / driver", () => {
     const failed = events.find((e) => e.type === "run.failed" && e.payload.error?.code === "queue_entry_failed")
     expect(failed).toBeDefined()
     expect(failed!.payload.error?.message).toContain(bad.messageId)
+    // run 没有开始：事件不带 runId，发送方只能靠 payload.messageId 认领这次失败
+    expect(failed!.runId).toBeUndefined()
+    expect(failed!.payload.messageId).toBe(bad.messageId)
     // 驱动器没有停转：坏条目失败后队列清空、字段删除
     expect(sessions.readQueue(meta.id)).toHaveLength(0)
   })
@@ -534,9 +537,15 @@ describe("queueCancel", () => {
     await gate.toolEntered
     const s = mgr.submit(meta.id, { userText: "s", trigger: "user", disposition: "steer" })
     const w = mgr.submit(meta.id, { userText: "w", trigger: "user", disposition: "wait" })
+    const seen: Array<{ type: string; payload: { all?: boolean; messageIds?: string[] } }> = []
+    bus.subscribe(meta.id, { send: (d: string) => seen.push(JSON.parse(d)) })
     const res = mgr.queueCancel(meta.id)
     expect(res.ok).toBe(true)
     if (res.ok) expect(res.cancelled).toEqual(expect.arrayContaining([s.messageId, w.messageId]))
+    // 清空事件列出实际撤回的条目：等结果的发送方靠它确认自己在内
+    const cancelled = seen.find((e) => e.type === "message.queue_cancelled")
+    expect(cancelled?.payload.all).toBe(true)
+    expect(cancelled?.payload.messageIds).toEqual(expect.arrayContaining([s.messageId, w.messageId]))
     mgr.cancel(meta.id)
     gate.releaseTool()
     await run.outcome

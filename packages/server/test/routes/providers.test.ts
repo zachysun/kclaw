@@ -246,6 +246,134 @@ describe("providers routes", () => {
       expect(unknown.statusCode).toBe(404)
     })
   })
+
+  describe("configured", () => {
+    const saved = { base: process.env.KCLAW_LLM_BASE_URL, model: process.env.KCLAW_LLM_MODEL }
+    beforeEach(() => {
+      delete process.env.KCLAW_LLM_BASE_URL
+      delete process.env.KCLAW_LLM_MODEL
+    })
+    afterEach(() => {
+      if (saved.base === undefined) delete process.env.KCLAW_LLM_BASE_URL; else process.env.KCLAW_LLM_BASE_URL = saved.base
+      if (saved.model === undefined) delete process.env.KCLAW_LLM_MODEL; else process.env.KCLAW_LLM_MODEL = saved.model
+    })
+
+    it("reports true when the default entry resolves an endpoint and a model", async () => {
+      const res = await app.inject({ method: "GET", url: "/providers", headers: AUTH })
+      expect(res.json().configured).toBe(true)
+    })
+
+    it("flips to true once a fresh daemon's first entry becomes the default", async () => {
+      const bare = await createApp({ home, token: "t1", stores: { config: structuredClone(defaultConfig) } })
+      try {
+        const before = await bare.inject({ method: "GET", url: "/providers", headers: AUTH })
+        expect(before.json().configured).toBe(false)
+        await bare.inject({
+          method: "POST", url: "/providers", headers: AUTH,
+          payload: { name: "ds", entry: { format: "openai", baseUrl: "https://api.deepseek.com/v1", apiKey: "k", model: "deepseek-chat" } },
+        })
+        const added = await bare.inject({ method: "GET", url: "/providers", headers: AUTH })
+        expect(added.json().configured).toBe(false) // 还没有默认条目
+        const chosen = await bare.inject({ method: "POST", url: "/providers/ds/default", headers: AUTH })
+        expect(chosen.json().configured).toBe(true)
+      } finally {
+        await bare.close()
+      }
+    })
+
+    it("counts the daemon's own env, the case a client's config read cannot see", async () => {
+      const bare = await createApp({ home, token: "t1", stores: { config: structuredClone(defaultConfig) } })
+      try {
+        process.env.KCLAW_LLM_BASE_URL = "http://127.0.0.1:1"
+        process.env.KCLAW_LLM_MODEL = "env-model"
+        const res = await bare.inject({ method: "GET", url: "/providers", headers: AUTH })
+        expect(res.json().configured).toBe(true)
+      } finally {
+        await bare.close()
+      }
+    })
+  })
+
+  describe("POST /providers/probe", () => {
+    let server: Server
+    let base: string
+    let received: Array<{ url: string; auth: string | undefined; body: { model?: string; max_tokens?: number } }>
+    let answer: { status: number; body: string }
+    beforeEach(async () => {
+      received = []
+      answer = { status: 200, body: JSON.stringify({ choices: [] }) }
+      server = createServer((req, res) => {
+        let raw = ""
+        req.on("data", (c: Buffer) => { raw += c.toString("utf8") })
+        req.on("end", () => {
+          received.push({ url: req.url ?? "", auth: req.headers.authorization, body: JSON.parse(raw) as { model?: string; max_tokens?: number } })
+          res.writeHead(answer.status, { "content-type": "application/json" })
+          res.end(answer.body)
+        })
+      })
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+      base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    })
+    afterEach(() => new Promise<void>((resolve) => server.close(() => resolve())))
+
+    it("sends a 1-token completion with the draft values and returns the endpoint's answer", async () => {
+      const res = await app.inject({
+        method: "POST", url: "/providers/probe", headers: AUTH,
+        payload: { format: "openai", baseUrl: base, apiKey: "sk-draft", model: "m-draft" },
+      })
+      expect(res.statusCode).toBe(200)
+      expect(res.json()).toEqual({ status: 200, body: JSON.stringify({ choices: [] }) })
+      expect(received).toHaveLength(1)
+      expect(received[0]!.url).toBe("/chat/completions")
+      expect(received[0]!.auth).toBe("Bearer sk-draft")
+      expect(received[0]!.body).toMatchObject({ model: "m-draft", max_tokens: 1 })
+    })
+
+    it("passes a provider rejection through as a result, leaving the judgement to the caller", async () => {
+      answer = { status: 401, body: "bad key" }
+      const res = await app.inject({
+        method: "POST", url: "/providers/probe", headers: AUTH,
+        payload: { format: "openai", baseUrl: base, apiKey: "wrong", model: "m" },
+      })
+      expect(res.statusCode).toBe(200)
+      expect(res.json()).toEqual({ status: 401, body: "bad key" })
+    })
+
+    it("reports an unreachable endpoint as status null", async () => {
+      const res = await app.inject({
+        method: "POST", url: "/providers/probe", headers: AUTH,
+        payload: { format: "openai", baseUrl: "http://127.0.0.1:1", apiKey: "", model: "m" },
+      })
+      expect(res.statusCode).toBe(200)
+      expect(res.json()).toEqual({ status: null, body: "" })
+    })
+
+    it("does not touch the config", async () => {
+      await app.inject({
+        method: "POST", url: "/providers/probe", headers: AUTH,
+        payload: { format: "openai", baseUrl: base, apiKey: "sk-draft", model: "m" },
+      })
+      const res = await app.inject({ method: "GET", url: "/providers", headers: AUTH })
+      expect(Object.keys(res.json().entries)).toEqual(["ds"])
+      expect(existsSync(join(home, "config.json"))).toBe(false)
+    })
+
+    it("rejects malformed bodies", async () => {
+      const cases: unknown[] = [
+        { baseUrl: base, model: "m" },
+        { format: "nope", baseUrl: base, model: "m" },
+        { format: "openai", model: "m" },
+        { format: "openai", baseUrl: "  ", model: "m" },
+        { format: "openai", baseUrl: base },
+        { format: "openai", baseUrl: base, model: "" },
+      ]
+      for (const payload of cases) {
+        const res = await app.inject({ method: "POST", url: "/providers/probe", headers: AUTH, payload: payload as object })
+        expect(res.statusCode).toBe(400)
+      }
+      expect(received).toEqual([])
+    })
+  })
 })
 
 describe("providers config-change notification", () => {

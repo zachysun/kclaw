@@ -73,7 +73,7 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 |------|--------------|
 | `run.started` | `trigger`（user/cron/process/agent/team/goal，六值含义见 [enums](./enums.md)）、`model?` / `provider?` / `permissionMode?`（run 配置快照，与持久化 run.started 事件同款；旧事件无） |
 | `run.completed` | `stopReason`、`usage`（全程累计） |
-| `run.failed` | `error { code, message }` |
+| `run.failed` | `error { code, message }`、`messageId?`（条目级失败 `queue_entry_failed` 专属：run 没有开始，事件不带 runId，发送方靠它认领） |
 | `message.created` | `message`（Message 全量） |
 | `message.completed` | `message`（终稿快照，持久化之后才发） |
 | `message.truncated` | `fromMessageId`（编辑重试/重新生成的截断广播） |
@@ -105,7 +105,7 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 | `memory.written` | `path`、`kind`（episode/cognition）、`topic?`、`scope?`、`trigger?`（与持久化 MemoryEvent 同口径；不带 sessionId，项目级广播） |
 | `message.queued` | `messageId`、`disposition`（steer/wait/interrupt）、`position?`（wait/interrupt 的队列序位） |
 | `message.steered` | `messageId`（事件级 runId 标识注入的 run） |
-| `message.queue_cancelled` | `messageId?`、`all?` |
+| `message.queue_cancelled` | `messageId?`、`all?`、`messageIds?`（`all` 时列出实际撤回的条目） |
 | `compaction.started` | `phase`（in-run/post-run/manual）、`trigger`（auto/manual/in-run） |
 | `compaction.completed` | `segments`、`kept`、`phase`、`result`（ok/failed/cancelled；非 ok 时前两值为 0）、`trigger`（auto/manual/in-run；非 ok 不带）、`emergency?`（急救压缩且成功时为 true） |
 | `hook.failed` | `hook`、`position`、`error`、`phase`（load/run） |

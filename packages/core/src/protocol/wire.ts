@@ -8,7 +8,7 @@
  * precedent).
  */
 import type { AgentEvent, RunTrigger } from "./events.js"
-import type { NoteKind } from "./blocks.js"
+import type { ProvenanceNoteKind } from "./blocks.js"
 import type { UiActionRef } from "./ui-cards.js"
 
 /** How a send_message rides the queue: steer injects, wait queues, interrupt preempts. */
@@ -48,6 +48,9 @@ export interface AttachmentRef {
   mimeType: string
 }
 
+/** Size cap of one uploaded attachment (raw body): the daemon's upload route enforces it, clients check it before uploading. */
+export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
 /**
  * The structured provenance note riding a queue entry onto its user message
  * (as a note block right after the text): WHO asked for this run, when the
@@ -56,7 +59,7 @@ export interface AttachmentRef {
  * message is machine-originated, not user speech.
  */
 export interface QueueNote {
-  kind: NoteKind
+  kind: ProvenanceNoteKind
   text: string
 }
 
@@ -142,7 +145,12 @@ export interface QueueCancelFrame {
   messageId?: string
 }
 
-export interface RunCancelFrame { type: "run.cancel"; sessionId: string }
+export interface RunCancelFrame {
+  type: "run.cancel"
+  sessionId: string
+  /** Stop the active run only if it executes this message: a sender's cancel must never reach the run queued behind its own. */
+  messageId?: string
+}
 export interface CompactionCancelFrame { type: "compaction.cancel"; sessionId: string }
 
 /** One client→daemon command frame. */

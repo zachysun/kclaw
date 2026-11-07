@@ -1,214 +1,162 @@
 /**
- * renderFrame unit tests — the per-frame CLI renderer, driven with synthetic
- * ChatCtx (a recording `line` stand-in; no readline, no daemon). Covers the
- * compaction lifecycle events: started prints one dim hint line (the pre-run
- * compaction is otherwise a silent multi-second gap between send and
- * run.started), completed prints the one-line "compacted to N segments"
- * summary, and the per-turn re-attached compact note (it carries the
- * structured meta) stays silent — printing its full text every turn would
- * repeat the whole summary each round.
+ * renderFrame unit tests — the orchestrator's per-frame router, driven with
+ * a synthetic ChatCtx (a recording ChatSurface; no daemon, no terminal).
+ * Covers the compaction lifecycle events: started prints one dim hint line
+ * (the pre-run compaction is otherwise a silent multi-second gap between
+ * send and run.started), completed prints the one-line "compacted to N
+ * segments" summary, the per-turn re-attached compact note stays silent,
+ * notes and memory hints route through the surface, and the question flow
+ * collects answers through the surface and sends exactly one resolve frame.
  */
-import { describe, it, expect, vi } from "vitest"
+import { describe, it, expect } from "vitest"
 import { renderFrame, type ChatCtx } from "../src/chat.js"
+import type { DisplayView } from "../src/chat-surface.js"
 import type { AgentEvent, NoteBlock } from "@kclaw/core"
 
-// The @clack prompts own the terminal; tests answer through this mock so the
-// question flow is exercisable headlessly (arrow-key ergonomics are @clack's).
-vi.mock("@clack/prompts", () => ({
-  isCancel: (v: unknown) => typeof v === "symbol",
-  select: vi.fn(async () => "方案A"),
-  multiselect: vi.fn(async () => ["db", "api"]),
-  text: vi.fn(async () => "没有补充"),
-}))
+/** A recording ChatSurface: every view and notice lands in arrays for assertions. */
+function makeSurface() {
+  const notices: Array<{ text: string; tone: string }> = []
+  const shows: DisplayView[] = []
+  return {
+    notices,
+    shows,
+    askedPayloads: [] as unknown[],
+    show(view: DisplayView): void {
+      shows.push(view)
+    },
+    notice(text: string, tone: "plain" | "dim" | "error"): void {
+      notices.push({ text, tone })
+    },
+    async confirm() {
+      return "once" as const
+    },
+    async ask(p: unknown) {
+      this.askedPayloads.push(p)
+      return [["方案A"], ["没有补充"], ["db", "api"]]
+    },
+    async choose() {
+      return undefined
+    },
+    modeChanged() {},
+    busyChanged() {},
+    sessionChanged() {},
+  }
+}
 
-function makeCtx(): { ctx: ChatCtx; lines: string[] } {
-  const lines: string[] = []
+function makeCtx(surface = makeSurface()): { ctx: ChatCtx; surface: ReturnType<typeof makeSurface>; sent: unknown[] } {
+  const sent: unknown[] = []
   const ctx = {
     home: undefined,
     client: {} as never,
-    ws: {} as never,
+    ws: { send: (frame: unknown) => sent.push(frame) },
     sessionId: "s1",
-    rl: {} as never,
-    showThinking: false,
+    surface,
     auto: "ask",
-    io: { atLineStart: true },
     pendingAttachments: [],
   } as unknown as ChatCtx
-  // line() routes through the module's io bookkeeping; simplest recording
-  // seam: patch the module-level writer via the ctx adapter used by line().
-  // Instead of reaching into internals, call renderFrame and capture through
-  // process.stdout writes.
-  return { ctx, lines }
+  return { ctx, surface, sent }
 }
 
 function ev(type: AgentEvent["type"], payload: unknown): AgentEvent {
   return { id: `evt-${type}`, ts: "2026-08-28T00:00:00.000Z", type, payload, sessionId: "s1" } as AgentEvent
 }
 
-/** Run one render through a synthetic ctx, capturing stdout as a string. */
-async function capture(render: (ctx: ChatCtx) => Promise<unknown>): Promise<string> {
-  const writes: string[] = []
-  const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
-    writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString())
-    return true
-  })
-  try {
-    const { ctx } = makeCtx()
-    await render(ctx)
-  } finally {
-    spy.mockRestore()
-  }
-  return writes.join("")
+/** Run one render, returning what the surface received. */
+async function capture(render: (ctx: ChatCtx) => Promise<unknown>): Promise<{ surface: ReturnType<typeof makeSurface>; sent: unknown[] }> {
+  const { ctx, surface, sent } = makeCtx()
+  await render(ctx)
+  return { surface, sent }
 }
 
 describe("renderFrame compaction events", () => {
   it("prints one dim hint on compaction.started and stays quiet on completed", async () => {
-    const writes: string[] = []
-    const origWrite = process.stdout.write.bind(process.stdout)
-    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
-      writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString())
-      return true
-    })
-    try {
-      const { ctx } = makeCtx()
-      const done1 = await renderFrame(ev("compaction.started", {}), ctx)
-      expect(done1).toBe(false)
-      const done2 = await renderFrame(ev("compaction.completed", { segments: 1, kept: 4 }), ctx)
-      expect(done2).toBe(false)
-      const out = writes.join("")
-      expect(out).toContain("正在压缩")
-      expect(out).toContain("已压缩为 1 段")
-      expect(out).toContain("保留最近 4 条")
-      expect(spy).toHaveBeenCalled()
-      void origWrite
-    } finally {
-      spy.mockRestore()
-    }
+    const { ctx, surface } = makeCtx()
+    const done1 = await renderFrame(ev("compaction.started", {}), ctx)
+    expect(done1).toBe(false)
+    const done2 = await renderFrame(ev("compaction.completed", { segments: 1, kept: 4 }), ctx)
+    expect(done2).toBe(false)
+    const texts = surface.shows.map((v) => (v.kind === "system" ? v.text : ""))
+    expect(texts.join("\n")).toContain("正在压缩")
+    expect(texts.join("\n")).toContain("已压缩为 1 段")
+    expect(texts.join("\n")).toContain("保留最近 4 条")
+    expect(surface.shows.every((v) => v.kind === "system")).toBe(true)
   })
 })
 
 describe("renderFrame note.emitted", () => {
   it("keeps printing memory and cron notes as before", async () => {
     const block: NoteBlock = { id: "b1", type: "note", kind: "memory", text: "记住的要点" }
-    const out = await capture((ctx) => renderFrame(ev("note.emitted", { messageId: "m1", block }), ctx))
-    expect(out).toContain("[note] 记住的要点")
+    const { surface } = await capture((ctx) => renderFrame(ev("note.emitted", { messageId: "m1", block }), ctx))
+    expect(surface.shows.map((v) => (v.kind === "system" ? v.text : "")).join("")).toContain("[note] 记住的要点")
   })
 })
 
 describe("renderFrame question cards (issue #21)", () => {
-  /** A ctx with a recording ws + readline pair (handleQuestion drives both). */
-  function makeQuestionCtx(): { ctx: ChatCtx; sent: unknown[]; rlCalls: string[] } {
-    const sent: unknown[] = []
-    const rlCalls: string[] = []
-    const ctx = {
-      ...makeCtx().ctx,
-      rl: { pause: () => rlCalls.push("pause"), resume: () => rlCalls.push("resume") },
-      ws: { send: (frame: unknown) => sent.push(frame) },
-      inputPaused: false,
-    } as unknown as ChatCtx
-    return { ctx, sent, rlCalls }
-  }
-
-  it("collects per-question answers via @clack and sends one question.resolve frame", async () => {
-    const { select, multiselect, text } = await import("@clack/prompts")
-    const writes: string[] = []
-    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
-      writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString())
-      return true
+  it("collects per-question answers via the surface and sends one question.resolve frame", async () => {
+    const { ctx, surface, sent } = makeCtx()
+    const done = await renderFrame(ev("question.requested", {
+      questionId: "q_1",
+      questions: [
+        { text: "用哪个方案?", options: ["方案A", "方案B"] },
+        { text: "补充说明?" },
+        { text: "改哪些?", options: ["db", "api"], multiSelect: true },
+      ],
+      expiresAt: "t",
+    }), ctx)
+    expect(done).toBe(false)
+    // The surface got the full payload once; the prompt UI is its own business.
+    expect(surface.askedPayloads).toHaveLength(1)
+    expect(surface.askedPayloads[0]).toMatchObject({ questionId: "q_1" })
+    // One answer array per question, in ask order; one resolve frame.
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({
+      type: "question.resolve",
+      questionId: "q_1",
+      answers: [["方案A"], ["没有补充"], ["db", "api"]],
     })
-    try {
-      const { ctx, sent, rlCalls } = makeQuestionCtx()
-      const done = await renderFrame(ev("question.requested", {
-        questionId: "q_1",
-        questions: [
-          { text: "用哪个方案?", options: ["方案A", "方案B"] },
-          { text: "补充说明?" },
-          { text: "改哪些?", options: ["db", "api"], multiSelect: true },
-        ],
-        expiresAt: "t",
-      }), ctx)
-      expect(done).toBe(false)
-      // The header line announced the questions; each prompt got its question
-      // text (the prompt UI itself is @clack's, mocked here).
-      expect(writes.join("")).toContain("❓ 3 个问题待回答")
-      expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "用哪个方案?" }))
-      expect(text).toHaveBeenCalledWith(expect.objectContaining({ message: "补充说明?" }))
-      expect(multiselect).toHaveBeenCalledWith(expect.objectContaining({ message: "改哪些?" }))
-      expect(rlCalls).toEqual(["pause", "resume"])
-      // One answer array per question, in ask order; one resolve frame.
-      expect(sent).toHaveLength(1)
-      expect(sent[0]).toMatchObject({
-        type: "question.resolve",
-        questionId: "q_1",
-        answers: [["方案A"], ["没有补充"], ["db", "api"]],
-      })
-      expect(select).toHaveBeenCalledTimes(1)
-      expect(text).toHaveBeenCalledTimes(1)
-      expect(multiselect).toHaveBeenCalledTimes(1)
-    } finally {
-      spy.mockRestore()
-    }
   })
 
   it("stays silent and non-terminating on question.resolved (the answers were already collected)", async () => {
-    const writes: string[] = []
-    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
-      writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString())
-      return true
-    })
-    try {
-      const { ctx } = makeCtx()
-      const done = await renderFrame(ev("question.resolved", { questionId: "q_1", answers: [["a"]], by: "cli" }), ctx)
-      expect(done).toBe(false)
-      expect(writes.join("")).toBe("")
-    } finally {
-      spy.mockRestore()
-    }
+    const { surface } = await capture((ctx) => renderFrame(ev("question.resolved", { questionId: "q_1", answers: [["a"]], by: "cli" }), ctx))
+    expect(surface.shows).toHaveLength(0)
+    expect(surface.notices).toHaveLength(0)
   })
 })
 
 describe("renderFrame memory.written", () => {
   it("prints a dim notice line and stays non-terminating (done === false)", async () => {
-    const writes: string[] = []
-    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
-      writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString())
-      return true
-    })
-    try {
-      const { ctx } = makeCtx()
-      const done = await renderFrame(ev("memory.written", { path: "/m/global/persona.md", kind: "cognition" }), ctx)
-      expect(done).toBe(false)
-      expect(writes.join("")).toContain("已写入记忆: /m/global/persona.md")
-    } finally {
-      spy.mockRestore()
-    }
+    const { surface } = await capture((ctx) => renderFrame(ev("memory.written", { path: "/m/global/persona.md", kind: "cognition" }), ctx))
+    expect(surface.shows.map((v) => (v.kind === "system" ? v.text : "")).join("")).toContain("已写入记忆: /m/global/persona.md")
   })
 })
 
 describe("renderFrame compaction.completed result branches", () => {
   it("prints the failure hint when result is failed", async () => {
-    const out = await capture((ctx) =>
+    const { surface } = await capture((ctx) =>
       renderFrame(ev("compaction.completed", { segments: 0, kept: 0, result: "failed" }), ctx),
     )
-    expect(out).toContain("✱ 压缩失败，本轮继续（稍后自动重试）")
-    expect(out).not.toContain("已压缩为")
+    const texts = surface.shows.map((v) => (v.kind === "system" ? v.text : "")).join("")
+    expect(texts).toContain("✱ 压缩失败，本轮继续（稍后自动重试）")
+    expect(texts).not.toContain("已压缩为")
   })
 
   it("prints the cancelled hint when result is cancelled", async () => {
-    const out = await capture((ctx) =>
+    const { surface } = await capture((ctx) =>
       renderFrame(ev("compaction.completed", { segments: 0, kept: 0, result: "cancelled" }), ctx),
     )
-    expect(out).toContain("✱ 压缩已取消")
-    expect(out).not.toContain("已压缩为")
+    const texts = surface.shows.map((v) => (v.kind === "system" ? v.text : "")).join("")
+    expect(texts).toContain("✱ 压缩已取消")
+    expect(texts).not.toContain("已压缩为")
   })
 
   it("keeps the success summary when result is ok (and for legacy payloads without result)", async () => {
-    const ok = await capture((ctx) =>
+    const { surface: okSurface } = await capture((ctx) =>
       renderFrame(ev("compaction.completed", { segments: 2, kept: 5, result: "ok" }), ctx),
     )
-    expect(ok).toContain("✱ 早期对话已压缩为 2 段，保留最近 5 条原文（早期细节可用 session_search 检索）")
+    expect(okSurface.shows.map((v) => (v.kind === "system" ? v.text : "")).join("")).toContain("✱ 早期对话已压缩为 2 段，保留最近 5 条原文（早期细节可用 session_search 检索）")
 
-    const legacy = await capture((ctx) => renderFrame(ev("compaction.completed", { segments: 1, kept: 4 }), ctx))
+    const { surface: legacySurface } = await capture((ctx) => renderFrame(ev("compaction.completed", { segments: 1, kept: 4 }), ctx))
+    const legacy = legacySurface.shows.map((v) => (v.kind === "system" ? v.text : "")).join("")
     expect(legacy).toContain("已压缩为 1 段")
     expect(legacy).toContain("保留最近 4 条")
   })

@@ -17,6 +17,8 @@
  *   first input is still in flight never renders the same entry twice.
  * - crash recovery: an idle member holding an in_progress task gets one
  *   resume nudge per situation (no wake loop).
+ * - provenance: every team delivery (mail, task dispatch, resume nudge, the
+ *   lead's inbox) carries one kind:"team" note; the user's own words never do.
  */
 import { describe, it, expect, afterEach } from "vitest"
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
@@ -27,6 +29,7 @@ import WebSocket from "ws"
 import {
   EventBus,
   SessionStore,
+  TEAM_DELIVERY_NOTE,
   loadConfig,
   resolvePaths,
   type KclawConfig,
@@ -34,6 +37,7 @@ import {
   type LlmClient,
   type LlmStreamEvent,
   type MemorySystem,
+  type Message,
 } from "@kclaw/core"
 import type { FastifyInstance } from "fastify"
 import { RunManager } from "../src/run.js"
@@ -465,5 +469,50 @@ describe("team host", () => {
     await until(() => runs().some((m) => m.blocks.some((b) => b.type === "text" && b.text.includes("恢复提醒"))))
     await sleep(250) // the nudged run settles; nothing may wake him again
     expect(runs().length).toBe(3) // 就位 mail / 任务派发 offer / 恢复提醒 nudge
+  })
+
+  it("every team delivery carries the team provenance note; the user's own messages stay unmarked", async () => {
+    const llm = scriptedLlm(
+      endTurn("就位收到"),
+      toolTurn("c1", "task_update", { id: 1, expected_revision: 1, status: "in_progress" }),
+      endTurn("收到，继续推进"),
+    )
+    const { sessions, host, manager, workspace } = await makeTeamEnv(llm)
+    const lead = sessions.create("组长", undefined, workspace)
+    const { teamId } = await host.facade.createTeam(lead.id)
+    const spawned = await host.facade.spawnTeammate({ role: "lead", teamId, sessionId: lead.id }, { name: "builder", task: "就位" })
+    const hasText = (m: Message, marker: string) => m.blocks.some((b) => b.type === "text" && b.text.includes(marker))
+    const teamNotes = (m: Message) => m.blocks.filter((b) => b.type === "note" && b.kind === "team")
+    const memberRuns = () => sessions.readMessages(spawned.sessionId).filter((m) => m.role === "user")
+    const leadUser = () => sessions.readMessages(lead.id).filter((m) => m.role === "user")
+    await until(() => sessions.readMessages(spawned.sessionId).length >= 2)
+    await host.facade.taskCreate({ role: "lead", teamId, sessionId: lead.id }, { subject: "做不完的活" })
+    await until(() => memberRuns().some((m) => hasText(m, "恢复提醒")))
+    await sleep(250)
+    await host.facade.sendMessage({ role: "member", teamId, sessionId: spawned.sessionId, name: "builder" }, { to: { kind: "lead" }, text: "REPORT-marker" })
+    await until(() => leadUser().some((m) => hasText(m, "REPORT-marker")))
+    await until(() => !manager.busy(lead.id))
+    manager.submit(lead.id, { userText: "USER-marker", trigger: "user", disposition: "steer" })
+    await until(() => leadUser().some((m) => hasText(m, "USER-marker")))
+    await host.deliverUserToMember(lead.id, "builder", "FORWARD-marker")
+    await until(() => memberRuns().some((m) => hasText(m, "FORWARD-marker")))
+
+    // Member side: the 就位 mail, the task dispatch, the resume nudge (one per
+    // situation, so new mail may add more) and the user's mail relayed through
+    // the inbox — every one of them machine-delivered.
+    for (const marker of ["就位", "任务派发", "恢复提醒", "FORWARD-marker"]) {
+      expect(memberRuns().some((m) => hasText(m, marker)), marker).toBe(true)
+    }
+    for (const m of memberRuns()) {
+      expect(teamNotes(m)).toEqual([expect.objectContaining({ text: TEAM_DELIVERY_NOTE })])
+    }
+    // The member's report delivered into the lead's inbox.
+    const report = leadUser().find((m) => hasText(m, "REPORT-marker"))!
+    expect(teamNotes(report)).toHaveLength(1)
+    // The user's own chat and the forwarded copy are the user's words: no team note.
+    for (const marker of ["USER-marker", "FORWARD-marker"]) {
+      const own = leadUser().find((m) => hasText(m, marker))!
+      expect(teamNotes(own)).toEqual([])
+    }
   })
 })

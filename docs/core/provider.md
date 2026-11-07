@@ -230,7 +230,7 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 
 ### 6. 端点与模型解析（config 优先于环境变量）
 
-**启动校验**：`resolveProviderEndpoint` / `resolveModel`（core `provider/resolve.ts`）在 daemon 启动时做一次 fail-fast 校验，经 `valueOrEnv` 实现——config 条目的值非空就用它，为空再看环境变量：
+**解析规则**：`resolveProviderEndpoint` / `resolveModel`（core `provider/resolve.ts`）经 `valueOrEnv` 取值——config 条目的值非空就用它，为空再看环境变量：
 
 | 项 | config 来源 | 环境变量 |
 |----|-------------|----------|
@@ -238,12 +238,13 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 | apiKey | 同上 `.apiKey`（可为空——免密钥端点合法） | `KCLAW_LLM_API_KEY` |
 | model | 同上 `.model` | `KCLAW_LLM_MODEL` |
 
-- baseUrl 仍为空 → 启动即抛 `no llm provider configured: set providers in config.json or KCLAW_LLM_BASE_URL env`，不做半配置的静默启动。
-- model 为空 → 抛 `no llm model configured: set providers.<name>.model in config.json or KCLAW_LLM_MODEL env`；RunManager 每次请求都要带 model，纯环境变量配置时 model 也必须有来源。
-- CLI 首次运行判定（`packages/cli/src/provider-check.ts` 的 `detectProviderStatus`）用同一套优先级输出三态：`config`（default 指向存在的条目）/ `env`（任一 `KCLAW_LLM_*` 非空）/ `missing`。
+- daemon 没有配置 provider 也能启动：WebUI 的 Model 页与首次配置向导都经由运行中的 daemon 完成配置。缺配置要到 run 第一次调用模型时才报错，此时用户消息已写入会话，这次 run 走 provider 失败的既有路径，以 `run.failed {code:"llm_error"}` 结束。
+- baseUrl 仍为空 → 调用模型时抛出 `provider 未配置：…`，错误写明三种配置途径；端点和模型都缺时报这一条。
+- model 为空 → 调用模型时抛出 `模型未配置：…`，请求不会发出。
+- `isProviderConfigured(cfg)` 按同一规则判断默认 provider 的端点和模型是否都能解析，环境变量取 daemon 进程自己的。`GET /providers` 的 `configured` 字段由它计算，首次配置向导与 `kclaw run` 都读这个字段，不自行读取 config.json。
 - `providers.timeoutMs` 未配置时由 `loadConfig` 的默认值补齐为 `DEFAULT_LLM_TIMEOUT_MS`（300s）。
 
-**按条目建连**（`createProviderResolver`）：daemon 启动时建一个 resolver，run 客户端、记忆提取与向量路都出自它。每个 run 的客户端由 `llmForRun(onRetry, entryKey)` 给出，`entryKey` 来自 `resolveRunModel` 的解析结果（run 组装先解析条目、再建客户端）。取值链：条目命中 → 该条目的 format 决定协议实现（`createProviderClient`）；条目缺失（key 为空或不存在）→ 回退到默认条目；连默认条目都没有 → 回退到环境变量端点（openai 格式）。
+**按条目建连**（`createProviderResolver`）：daemon 启动时建一个 resolver，run 客户端、记忆提取与向量路都出自它。每个 run 的客户端由 `llmForRun(onRetry, entryKey)` 给出，`entryKey` 来自 `resolveRunModel` 的解析结果（run 组装先解析条目、再建客户端）。取值链：条目命中 → 该条目的 format 决定协议实现（`createProviderClient`）；条目缺失（key 为空或不存在）→ 回退到默认条目；连默认条目都没有，或条目的 baseUrl 为空 → 第一次调用模型时才解析环境变量端点（沿用条目的 format，没有条目时为 openai 格式）。
 
 - **缓存与热生效**：resolver 按条目名缓存裸客户端，签名 = `format|baseUrl|apiKey|timeoutMs|promptCache`（`promptCache` 参与签名，改开关即重建实例、2b 节的"端点不支持缓存标记"裁决随之重置）。Model 页的增删改直接改 daemon 的内存配置并持久化，随后经 ConfigNotifier 发布 `providers` 变更（见 [storage](./storage.md)），resolver 订阅后**整体清空缓存**，下个 run 自动重建，**无需重启**；签名检查保留为优化，两次通知之间的字段改动也能即时重建。
 - **每次 run 包一层新重试**：缓存的是裸客户端；`withRetry` 在每次 `llmForRun` 调用时现包，重试回调才归属当次 run（`llm.failed` 事件带对的上文）。

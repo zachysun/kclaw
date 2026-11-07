@@ -1,7 +1,8 @@
 /**
  * Provider management routes: the Model-tab snapshot (GET /providers —
- * entries with masked keys plus the built-in presets) and the hot-config
- * action family (create/update/rename/delete/set-default/model-probe).
+ * entries with masked keys, the built-in presets and whether a run can resolve
+ * the default provider) and the hot-config action family
+ * (create/update/rename/delete/set-default/model-probe/chat-probe).
  * Mutations apply to the daemon's shared in-memory config immediately — the
  * next run resolves its entry through it — and persist through saveConfig
  * to config.json. Delete guards only the default entry (switch first); an
@@ -11,7 +12,7 @@
  */
 import type { FastifyInstance } from "fastify"
 import type { ConfigNotifier, KclawConfig, KclawPaths, ProviderApiFormat, ProviderEntry } from "@kclaw/core"
-import { fetchProviderModels, isProviderApiFormat, parseProviderEntry, PROVIDER_PRESETS, PROVIDER_WIRE_FORMAT_IDS, renameProviderEntry, resolveProviderFormat } from "@kclaw/core"
+import { fetchProviderModels, isProviderApiFormat, isProviderConfigured, parseProviderEntry, probeProviderChat, PROVIDER_PRESETS, PROVIDER_WIRE_FORMAT_IDS, renameProviderEntry, resolveProviderFormat } from "@kclaw/core"
 import { saveConfig } from "@kclaw/core"
 import { maskSecret } from "./config.js"
 
@@ -34,17 +35,18 @@ interface NameParams {
   name: string
 }
 
-/** The view snapshot: masked entries, the default, and the preset catalog. */
+/** The view snapshot: masked entries, the default, the preset catalog and the configured verdict. */
 function snapshot(deps: ProvidersRoutesDeps): {
   default: string
   entries: Record<string, ProviderEntry>
   presets: typeof PROVIDER_PRESETS
+  configured: boolean
 } {
   const entries: Record<string, ProviderEntry> = {}
   for (const [name, entry] of Object.entries(deps.config.providers.entries)) {
     entries[name] = { ...entry, apiKey: maskSecret(entry.apiKey) }
   }
-  return { default: deps.config.providers.default, entries, presets: PROVIDER_PRESETS }
+  return { default: deps.config.providers.default, entries, presets: PROVIDER_PRESETS, configured: isProviderConfigured(deps.config) }
 }
 
 /**
@@ -192,5 +194,30 @@ export function registerProvidersRoutes(app: FastifyInstance, deps: ProvidersRou
     } catch (e) {
       return reply.code(502).send({ ok: false, error: (e as Error).message })
     }
+  })
+
+  // Chat probe: one 1-token completion proves the model name on top of a
+  // working URL + key, which the models list cannot. The first-run wizard's
+  // connection test runs here so the request leaves from the daemon, the
+  // process that will make the real calls. A failed probe is a result, not an
+  // error: { status, body } comes back as is (status null = the request never
+  // landed) and judging it stays with the caller. Nothing is saved.
+  app.post("/providers/probe", async (request, reply) => {
+    const body = request.body as { format?: unknown; baseUrl?: unknown; apiKey?: unknown; model?: unknown } | null | undefined
+    if (!isProviderApiFormat(body?.format)) {
+      return reply.code(400).send({ error: `format must be one of ${PROVIDER_WIRE_FORMAT_IDS.map((id) => `"${id}"`).join(", ")}` })
+    }
+    if (typeof body?.baseUrl !== "string" || body.baseUrl.trim() === "") {
+      return reply.code(400).send({ error: "baseUrl is required" })
+    }
+    if (typeof body.model !== "string" || body.model.trim() === "") {
+      return reply.code(400).send({ error: "model is required" })
+    }
+    return probeProviderChat({
+      format: body.format,
+      baseUrl: body.baseUrl.trim(),
+      apiKey: typeof body.apiKey === "string" ? body.apiKey : "",
+      model: body.model.trim(),
+    })
   })
 }

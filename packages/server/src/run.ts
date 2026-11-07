@@ -158,6 +158,8 @@ export class RunManager {
   readonly #drivers = new Map<string, Promise<void>>()
   /** Abort controller of the session's ACTIVE run; absent while idle or queued. */
   readonly #active = new Map<string, AbortController>()
+  /** The message the active run executes, paired with #active: a targeted cancel matches on it. */
+  readonly #activeMessageIds = new Map<string, string>()
   /** 活动 run 的 outcome：steer 的参考 outcome / 降级时序。 */
   readonly #activeOutcomes = new Map<string, Promise<RunOutcome>>()
   /** 每会话已消耗的机器唤醒数（#wakeBudgets 的值域 0..WAKE_BUDGET）。 */
@@ -340,11 +342,14 @@ export class RunManager {
   /**
    * 仅中止会话的活动 run：它停在下一个检查点并
    * 以 stopReason "aborted" 结束。排队消息不受影响——排队取消一律走
-   * queue.cancel。无活动 run 时返回 false。
+   * queue.cancel。无活动 run 时返回 false。带 messageId 时只有活动 run
+   * 执行的正是这条消息才中止（否则同样返回 false）：发送方的取消可能晚于
+   * 自己 run 的结束，此时活动的已经是排在后面的别人的 run。
    */
-  cancel(sessionId: string): boolean {
+  cancel(sessionId: string, messageId?: string): boolean {
     const controller = this.#active.get(sessionId)
     if (controller === undefined) return false
+    if (messageId !== undefined && this.#activeMessageIds.get(sessionId) !== messageId) return false
     controller.abort()
     return true
   }
@@ -402,7 +407,7 @@ export class RunManager {
     this.#persistQueue(sessionId)
     this.#deps.bus.emit(makeEvent(
       "message.queue_cancelled",
-      messageId !== undefined ? { messageId } : { all: true },
+      messageId !== undefined ? { messageId } : { all: true, messageIds: cancelIds },
       { sessionId },
     ))
     return { ok: true, cancelled: cancelIds }
@@ -674,6 +679,7 @@ export class RunManager {
         code: "queue_entry_failed",
         message: `排队消息 ${node.entry.messageId} ${why}：${err instanceof Error ? err.message : String(err)}`,
       },
+      messageId: node.entry.messageId,
     }, { sessionId }))
   }
 
@@ -704,6 +710,7 @@ export class RunManager {
     const controller = new AbortController()
     this.#active.set(sessionId, controller)
     const entry = node.entry
+    this.#activeMessageIds.set(sessionId, entry.messageId)
     // 用户 run 真正开始运行 = 真实用户输入到达模型：防自循环计数在此清零
     // （#44 原型定案——清零不能发生在提交时，排在其后的机器条目会借它
     // 提前解锁，两次用户发言之间的唤醒上限就失守了）。goal 自续轮同样
@@ -731,7 +738,10 @@ export class RunManager {
     try {
       return await execution
     } finally {
-      if (this.#active.get(sessionId) === controller) this.#active.delete(sessionId)
+      if (this.#active.get(sessionId) === controller) {
+        this.#active.delete(sessionId)
+        this.#activeMessageIds.delete(sessionId)
+      }
       this.#activeOutcomes.delete(sessionId)
     }
   }

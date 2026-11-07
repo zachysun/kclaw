@@ -1,11 +1,8 @@
 import { createReadStream, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs"
 import { basename, join, resolve } from "node:path"
 import type { FastifyInstance } from "fastify"
-import { newId } from "@kclaw/core"
+import { MAX_ATTACHMENT_BYTES, newId } from "@kclaw/core"
 import type { SessionStore } from "@kclaw/core"
-
-/** Upload size cap: 20MB raw body. */
-export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
 /** Dependencies for the attachment routes (injected by createApp). */
 export interface AttachmentStores {

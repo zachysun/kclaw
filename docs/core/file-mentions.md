@@ -2,7 +2,7 @@
 
 ## 职责
 
-在用户消息里用 `@路径` 引用项目文件（如「把 @src/main.ts 的逻辑讲给我听」），让模型在回答前先读取该文件的完整内容。实现分三层：纯函数层（core `packages/core/src/mentions.ts`，负责提取、候选补全与模型侧包装文本，无 Node API，浏览器构建可直接引用）、运行组装层（core `run-assembly.ts` 的 `resolveFileMentions`，把 token 解析成工作区里的真实文件）、数据源层（server `GET /fs/files`——提供抽屉的候选清单）。WebUI 的输入框用同一套纯函数做联想抽屉；手打与抽屉补全的引用走完全相同的解析路径，行为一致。
+在用户消息里用 `@路径` 引用项目文件（如「把 @src/main.ts 的逻辑讲给我听」），让模型在回答前先读取该文件的完整内容。实现分三层：纯函数层（core `packages/core/src/mentions.ts`，负责提取、候选补全与模型侧包装文本，无 Node API，浏览器构建可直接引用）、运行组装层（core `run-assembly.ts` 的 `resolveFileMentions`，把 token 解析成工作区里的真实文件）、数据源层（server `GET /fs/files`——提供抽屉的候选清单）。WebUI 的输入框用同一套纯函数做联想抽屉；手打与抽屉补全的引用走完全相同的解析路径，行为一致。CLI（`kclaw chat` 与 `kclaw run`）只发送原文，`@路径` 同样全部由 daemon 在这里处理，几个界面规则一致。
 
 ## 设计决策
 

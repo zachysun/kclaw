@@ -12,8 +12,11 @@ export type SendDisposition = "steer" | "wait" | "interrupt"
 
 export interface AttachmentRef { path: string; name: string; size: number; mimeType: string }
 
-/** 机器来源说明：随队列条目落到用户消息上的 note 块（kind 见 blocks.md NoteKind）。 */
-export interface QueueNote { kind: NoteKind; text: string }
+/** 单个上传附件的大小上限：daemon 的上传路由据此拒绝（413），客户端上传前据此检查。 */
+export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
+/** 机器来源说明：随队列条目落到用户消息上的 note 块（kind 只取来源说明种类，见 blocks.md 的 PROVENANCE_NOTE_KINDS）。 */
+export interface QueueNote { kind: ProvenanceNoteKind; text: string }
 
 /** queue.jsonl 里持久化的一条队列条目。 */
 export interface QueueEntry {
@@ -23,6 +26,7 @@ export interface QueueEntry {
   trigger: "user" | "cron" | "process" | "agent" | "team" | "goal"
   attachments?: AttachmentRef[]
   note?: QueueNote
+  uiAction?: UiActionRef                  // UI 卡交互来源（随条目过队列，出队时盖到持久消息上）
   enqueuedAt: string
 }
 
@@ -47,7 +51,7 @@ export type ServerFrame = AgentEvent | ServerAck | ErrorFrame
 | `queue.cancel` | `sessionId`、`messageId?` | 取消排队条目；messageId 默认 = 清空全部可取消条目 |
 | `confirmation.resolve` | `confirmationId`、`decision`、`client?` | 人工确认裁决（decision 四值，见下） |
 | `question.resolve` | `questionId`、`answers`、`client?` | 回答运行中提问（answers 为 string[][]，按提问顺序） |
-| `run.cancel` | `sessionId` | 停止当前 run |
+| `run.cancel` | `sessionId`、`messageId?` | 停止当前 run；带 `messageId` 时仅当活动 run 执行的正是这条消息才中止 |
 | `compaction.cancel` | `sessionId` | 取消正在进行的压缩 |
 
 `ConfirmationDecision`（`confirmation.resolve` 的 decision）：`once`（仅本次）/ `project`（总是·项目级规则）/ `global`（总是·全局规则）/ `reject`（拒绝）。超时不是客户端发的——resolved 事件里的 `timeout` 由等待方产生。

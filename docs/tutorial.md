@@ -25,14 +25,14 @@ npm i -g ./packages/kclaw   # 把聚合包安装为全局 kclaw 命令
 kclaw chat
 ```
 
-尚未配置模型、且在交互式终端里运行时，`kclaw chat` 会进入一个 30 秒左右的配置 wizard。wizard 只做一件事：把模型配置写入 `~/.kclaw/config.json`，完成后不再出现。
+尚未配置模型、且在交互式终端里运行时，`kclaw chat` 会进入一个 30 秒左右的配置 wizard。wizard 只做一件事：经由后台运行的 daemon 保存模型配置（写入 `~/.kclaw/config.json`），完成后不再出现，也不需要重启 daemon。
 
 ### 路线一：DeepSeek 模板（粘贴 key）
 
 1. **选模板**：上下方向键选中 `DeepSeek`，回车。
 2. **输入 API key**：粘贴 key。输入不回显（屏幕上不显示字符），粘贴后直接回车。
 3. **输入模型名**：直接回车，使用默认的 `deepseek-chat`。
-4. **连通测试**：kclaw 发送一个只消耗 1 个 token 的最小请求，验证 key、模型名、接口地址三项均可用。通过后写入配置文件（权限仅本用户可读写），自动进入对话。
+4. **连通测试**：daemon 发送一个只消耗 1 个 token 的最小请求，验证 key、模型名、接口地址三项均可用。通过后保存配置（key 所在的文件权限仅本用户可读写），自动进入对话。
 
 ### 路线二：Ollama（零 key）
 

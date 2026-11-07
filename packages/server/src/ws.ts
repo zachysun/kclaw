@@ -136,8 +136,9 @@ declare module "fastify" {
  * before they execute (acked
  * `{type:"queue.cancel_ack", sessionId, cancelled}`, or an error frame
  * "已注入" for an already-injected id / "not found"), and
- * `{type:"run.cancel", sessionId}` to
- * abort the session's active run (acked `{type:"run_cancel_ack", sessionId}`,
+ * `{type:"run.cancel", sessionId, messageId?}` to
+ * abort the session's active run — with `messageId`, only if that run executes
+ * that message (acked `{type:"run_cancel_ack", sessionId}`,
  * or an error frame "no active run"), and `{type:"compaction.cancel",
  * sessionId}` to cut the session's in-flight auto compaction (acked
  * `{type:"compaction_cancel_ack", sessionId, active}` — `active` mirrors
@@ -336,8 +337,8 @@ function handleConnection(socket: WsConnection, request: FastifyRequest, opts: W
         if (run === undefined) {
           return send(socket, { type: "error", message: "run manager not available" })
         }
-        const { sessionId } = check.command
-        if (!run.cancel(sessionId)) {
+        const { sessionId, messageId } = check.command
+        if (!run.cancel(sessionId, messageId)) {
           return send(socket, { type: "error", message: "no active run" })
         }
         // The aborted outcome arrives as run.completed {stopReason:"aborted"}

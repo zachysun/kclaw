@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { createProviderResolver, resolveProviderEndpoint, resolveModel, defaultConfig } from "../../src/index.js"
+import { createProviderResolver, isProviderConfigured, resolveProviderEndpoint, resolveModel, defaultConfig } from "../../src/index.js"
 import type { KclawConfig } from "../../src/index.js"
 
 function sseResponse(): Response {
@@ -41,8 +41,23 @@ function recordingFetch(): { fetch: typeof fetch; requests: Array<{ url: string;
 
 const REQ = { model: "m", system: "s", messages: [], tools: [] }
 
-async function drain(c: { stream(r: never): AsyncIterable<never> }): Promise<void> {
-  for await (const _ of c.stream(REQ)) void _
+async function drain(c: { stream(r: never): AsyncIterable<never> }, req: unknown = REQ): Promise<void> {
+  for await (const _ of c.stream(req as never)) void _
+}
+
+/** Run `fn` with the KCLAW_LLM_* env cleared, restoring whatever it changed. */
+async function withoutLlmEnv(fn: () => void | Promise<void>): Promise<void> {
+  const names = ["KCLAW_LLM_BASE_URL", "KCLAW_LLM_API_KEY", "KCLAW_LLM_MODEL"]
+  const saved = names.map((n) => [n, process.env[n]] as const)
+  for (const n of names) delete process.env[n]
+  try {
+    await fn()
+  } finally {
+    for (const [n, v] of saved) {
+      if (v === undefined) delete process.env[n]
+      else process.env[n] = v
+    }
+  }
 }
 
 describe("resolveProviderEndpoint / resolveModel", () => {
@@ -68,16 +83,37 @@ describe("resolveProviderEndpoint / resolveModel", () => {
     }
   })
 
-  it("a still-missing endpoint is a launch error", () => {
+  it("a still-missing endpoint throws; a still-missing model is just empty", async () => {
     const cfg = makeConfig((c) => { c.providers.entries = {} })
-    const hadBase = "KCLAW_LLM_BASE_URL" in process.env
-    const saved = process.env.KCLAW_LLM_BASE_URL
-    try {
-      delete process.env.KCLAW_LLM_BASE_URL
-      expect(() => resolveProviderEndpoint(cfg)).toThrow("no llm provider configured")
-    } finally {
-      if (hadBase) process.env.KCLAW_LLM_BASE_URL = saved
-    }
+    await withoutLlmEnv(() => {
+      expect(() => resolveProviderEndpoint(cfg)).toThrow("provider 未配置")
+      expect(resolveModel(cfg)).toBe("")
+    })
+  })
+})
+
+describe("isProviderConfigured", () => {
+  it("needs the default entry's endpoint and model", async () => {
+    await withoutLlmEnv(() => {
+      expect(isProviderConfigured(makeConfig())).toBe(true)
+      expect(isProviderConfigured(makeConfig((c) => { c.providers.entries = {} }))).toBe(false)
+      expect(isProviderConfigured(makeConfig((c) => { c.providers.entries.a!.baseUrl = "" }))).toBe(false)
+      expect(isProviderConfigured(makeConfig((c) => { c.providers.entries.a!.model = "" }))).toBe(false)
+    })
+  })
+
+  it("entries with no default pointing at them do not count", async () => {
+    await withoutLlmEnv(() => {
+      expect(isProviderConfigured(makeConfig((c) => { c.providers.default = "" }))).toBe(false)
+    })
+  })
+
+  it("env fills what the entry leaves empty, the same rule runs resolve by", async () => {
+    await withoutLlmEnv(() => {
+      process.env.KCLAW_LLM_BASE_URL = "https://from-env"
+      process.env.KCLAW_LLM_MODEL = "env-model"
+      expect(isProviderConfigured(makeConfig((c) => { c.providers.entries = {} }))).toBe(true)
+    })
   })
 })
 
@@ -154,6 +190,54 @@ describe("createProviderResolver", () => {
       if (prev.base === undefined) delete process.env.KCLAW_LLM_BASE_URL; else process.env.KCLAW_LLM_BASE_URL = prev.base
       if (prev.model === undefined) delete process.env.KCLAW_LLM_MODEL; else process.env.KCLAW_LLM_MODEL = prev.model
     }
+  })
+
+  it("an entry leaving baseUrl empty rides the env endpoint too, keeping its wire format", async () => {
+    const cfg = makeConfig((c) => {
+      c.providers.entries.a!.format = "anthropic"
+      c.providers.entries.a!.baseUrl = ""
+    })
+    await withoutLlmEnv(async () => {
+      process.env.KCLAW_LLM_BASE_URL = "https://env-endpoint"
+      const { fetch, requests } = recordingFetch()
+      await drain(createProviderResolver(cfg, fetch).llm()).catch(() => undefined) // 只看请求去向，SSE 形状属 openai
+      expect(requests[0]!.url).toBe("https://env-endpoint/v1/messages")
+    })
+  })
+
+  it("an unconfigured resolver hands out a client; the failure surfaces on the model call", async () => {
+    await withoutLlmEnv(async () => {
+      const cfg = makeConfig((c) => { c.providers.entries = {} })
+      const client = createProviderResolver(cfg).llm()
+      await expect(drain(client)).rejects.toThrow("provider 未配置")
+    })
+  })
+
+  it("with both halves missing the endpoint is what gets reported", async () => {
+    await withoutLlmEnv(async () => {
+      const cfg = makeConfig((c) => { c.providers.entries = {} })
+      await expect(drain(createProviderResolver(cfg).llm(), { ...REQ, model: "" })).rejects.toThrow("provider 未配置")
+    })
+  })
+
+  it("a client created unconfigured picks the endpoint up once the config arrives", async () => {
+    await withoutLlmEnv(async () => {
+      const cfg = makeConfig((c) => { c.providers.entries = {} })
+      const { fetch, requests } = recordingFetch()
+      const client = createProviderResolver(cfg, fetch).llm()
+      process.env.KCLAW_LLM_BASE_URL = "https://arrived-later"
+      await drain(client)
+      expect(requests[0]!.url).toBe("https://arrived-later/chat/completions")
+    })
+  })
+
+  it("an empty wire model fails the call before any request leaves", async () => {
+    await withoutLlmEnv(async () => {
+      const { fetch, requests } = recordingFetch()
+      const resolver = createProviderResolver(makeConfig(), fetch)
+      await expect(drain(resolver.llm(), { ...REQ, model: "" })).rejects.toThrow("模型未配置")
+      expect(requests).toEqual([])
+    })
   })
 
   it("embed resolves the named entry, reuses its client, and rebuilds on change", async () => {

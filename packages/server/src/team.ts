@@ -41,6 +41,7 @@ import {
   newBlockId,
   newId,
   newMessage,
+  TEAM_DELIVERY_NOTE,
   TeamConflictError,
   TeamStore,
   type AgentSummary,
@@ -254,7 +255,9 @@ export function createTeamHost(deps: TeamHostDeps): TeamHost {
   }
 
   /** One dispatched session run: forwarder on, running ledger on, idle edge
-   * after settle. Returns false when submit was rejected (queue full / session
+   * after settle; the input carries the kind:"team" provenance note (every
+   * dispatch is machine-delivered, even mail relaying the user's words).
+   * Returns false when submit was rejected (queue full / session
    * gone) so the caller can release whatever it pinned for this attempt. */
   const startRun = (found: Found, targetName: string, sessionId: string, model: string | undefined, text: string, mail?: { to: string; ids: string[]; onDrop: () => void }): boolean => {
     const member = found.store.memberByName(targetName)
@@ -269,6 +272,7 @@ export function createTeamHost(deps: TeamHostDeps): TeamHost {
         userText: text,
         trigger: "team",
         disposition: "steer",
+        note: { kind: "team", text: TEAM_DELIVERY_NOTE },
         ...(model !== undefined && model !== "" ? { model } : {}),
       })
     } catch (err) {

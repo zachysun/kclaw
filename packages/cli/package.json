@@ -19,12 +19,17 @@
     "@clack/prompts": "^1.7.0",
     "@kclaw/core": "workspace:*",
     "commander": "^12.1.0",
+    "ink": "^8.0.0",
+    "react": "^19.3.1",
+    "string-width": "^8.3.0",
     "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "@types/react": "^19.3.0",
     "@types/ws": "^8.18.1",
     "execa": "^9.5.1",
+    "ink-testing-library": "^4.0.0",
     "typescript": "^5.5.0",
     "vitest": "^2.1.0"
   }
