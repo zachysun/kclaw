@@ -17,6 +17,7 @@ import { PROVENANCE_NOTE_KINDS } from "@kclaw/core"
 import type { ConfirmationDecision, ConfirmationRequestedPayload, Message, PermissionMode, QuestionRequestedPayload } from "@kclaw/core"
 import type { DisplayView, NoticeTone, ChoiceOption } from "../chat-surface.js"
 import { summarizeOutputInfo } from "../frame-view.js"
+import { CONFIRM_VERDICT_LABELS } from "../surface-cards.js"
 import { toolArgLine } from "./tool-format.js"
 
 /** One completed entry the <Static> region prints (never re-rendered). */
@@ -306,7 +307,7 @@ export class ChatStore {
   resolveConfirm(decision: ConfirmationDecision): void {
     const head = this.state.pending.confirms[0]
     if (head === undefined) return
-    const label = decision === "once" ? "已允许（仅本次）" : decision === "project" ? "已允许（本项目）" : decision === "global" ? "已允许（全局）" : "已拒绝"
+    const label = CONFIRM_VERDICT_LABELS[decision]
     this.set({
       pending: { ...this.state.pending, confirms: this.state.pending.confirms.slice(1) },
       history: [...this.state.history, { id: this.nextId++, kind: "notice", text: label, tone: decision === "reject" ? "dim" : "plain" }],

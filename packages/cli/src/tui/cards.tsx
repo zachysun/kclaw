@@ -5,22 +5,18 @@
  * the /sessions list). One card renders at a time — the first of the
  * store's pending queue, passed in as props so every hook runs
  * unconditionally — and owns the keyboard while visible (the editor stands
- * down; Ctrl+C stays with the root app). Option labels and semantics match
- * the readline surface verbatim. Cards are keyed by payload id at the call
- * site, so a queued follow-up card remounts fresh.
+ * down; Ctrl+C stays with the root app). Option labels and copy come from
+ * surface-cards.ts — the same source the readline surface renders from.
+ * Cards are keyed by payload id at the call site, so a queued follow-up
+ * card remounts fresh.
  */
 import { Box, Text, useInput } from "ink"
 import { useState } from "react"
 import type { ConfirmationDecision, ConfirmationRequestedPayload, QuestionRequestedPayload, QuestionSpec } from "@kclaw/core"
 import type { ChoiceOption } from "../chat-surface.js"
+import { confirmationLine } from "../frame-view.js"
+import { CONFIRM_OPTIONS } from "../surface-cards.js"
 import { AMBER, ICONS } from "./colors.js"
-
-const CONFIRM_OPTIONS: ReadonlyArray<{ value: ConfirmationDecision; label: string }> = [
-  { value: "once", label: "允许（仅本次）" },
-  { value: "project", label: "总是允许（本项目）" },
-  { value: "global", label: "总是允许（全局）" },
-  { value: "reject", label: "拒绝" },
-]
 
 function CardFrame({ children, footer }: { children: React.ReactNode; footer: string }) {
   return (
@@ -62,9 +58,7 @@ export function ConfirmCard({ payload, isActive, onResolve }: {
   const safe = Math.min(selected, CONFIRM_OPTIONS.length - 1)
   return (
     <CardFrame footer="Enter 确认，Esc 拒绝">
-      <Text color={AMBER}>
-        {ICONS.warn} {payload.toolCall.name} {payload.toolCall.argsJson} · 风险 {payload.risk} · 过期 {payload.expiresAt}
-      </Text>
+      <Text color={AMBER}>{confirmationLine(payload)}</Text>
       {payload.noteText !== undefined && <Text dimColor>{payload.noteText}</Text>}
       <OptionList options={CONFIRM_OPTIONS.map((o) => o.label)} selected={safe} />
     </CardFrame>

@@ -58,6 +58,7 @@ import type { ChatController, ChatSurface, ChatUi } from "./chat-surface.js"
 import { KclawClient, openSubscribed } from "./client.js"
 import type { WsFrame, WsHandle } from "./client.js"
 import { confirmationLine, frameView, isAgentEvent } from "./frame-view.js"
+import { AUTO_CONFIRM_VERDICTS } from "./surface-cards.js"
 import { createRegistry, dispatch, refreshSkillCommands as refreshSkillCommandsOp, runOrHint, type AttachmentRef, type SlashCtx } from "./slash.js"
 import type { SlashCommandMeta } from "@kclaw/core/commands"
 
@@ -184,7 +185,7 @@ async function handleConfirmation(p: ConfirmationRequestedPayload, ctx: ChatCtx)
   } else {
     ctx.surface.notice(confirmationLine(p), "plain")
     if (p.noteText !== undefined) ctx.surface.notice(p.noteText, "dim")
-    ctx.surface.notice(ctx.auto === "yes" ? "[--yes] 已自动允许（仅本次）" : "[--no] 已自动拒绝", "dim")
+    ctx.surface.notice(AUTO_CONFIRM_VERDICTS[ctx.auto === "yes" ? "yes" : "no"], "dim")
     decision = ctx.auto === "yes" ? "once" : "reject"
   }
   try {

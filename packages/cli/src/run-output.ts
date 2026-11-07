@@ -21,16 +21,10 @@ import type { WsFrame } from "./client.js"
 import { dim } from "./color.js"
 import { confirmationLine, frameView, isAgentEvent, questionLine, toolCallLine, toolResultLine } from "./frame-view.js"
 import { UNATTENDED_ANSWER, type CardPolicy, type RunFailure } from "./run-lifecycle.js"
+import { AUTO_CONFIRM_VERDICTS } from "./surface-cards.js"
 
 export const OUTPUT_FORMATS = ["text", "json", "stream-json"] as const
 export type OutputFormat = (typeof OUTPUT_FORMATS)[number]
-
-/** The verdict line under a confirmation card, per policy. */
-const CONFIRMATION_VERDICT: Readonly<Record<CardPolicy, string>> = {
-  yes: "[--yes] 已自动允许（仅本次）",
-  no: "[--no] 已自动拒绝",
-  default: "已自动拒绝（未指定 --yes）",
-}
 
 /** What the json object needs beyond the frames. */
 export interface RunSummary {
@@ -105,7 +99,7 @@ function textOutput(opts: { policy: CardPolicy; showThinking: boolean; write: (c
         case "confirmation":
           line(confirmationLine(view.payload))
           if (view.payload.noteText !== undefined) line(dim(view.payload.noteText))
-          line(dim(CONFIRMATION_VERDICT[opts.policy]))
+          line(dim(AUTO_CONFIRM_VERDICTS[opts.policy]))
           return
         case "question":
           line(questionLine(view.payload))

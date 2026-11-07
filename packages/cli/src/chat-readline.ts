@@ -26,6 +26,7 @@ import type { ChatController, ChatUi } from "./chat-surface.js"
 import { dim, red } from "./color.js"
 import { confirmationLine, questionLine, toolCallLine, toolResultLine } from "./frame-view.js"
 import { createSlashCompleter } from "./slash.js"
+import { CONFIRM_OPTIONS } from "./surface-cards.js"
 
 /** Prompt string per mode: default keeps the bare "> "; other modes badge it. */
 function modePrompt(m: PermissionMode): string {
@@ -139,12 +140,7 @@ export function createReadlineUi(opts: { sessionId: string; mode: PermissionMode
         answer = await withPausedInput(rl, paused, () =>
           select<ConfirmationDecision>({
             message: "如何处置?",
-            options: [
-              { value: "once", label: "允许（仅本次）" },
-              { value: "project", label: "总是允许（本项目）" },
-              { value: "global", label: "总是允许（全局）" },
-              { value: "reject", label: "拒绝" },
-            ],
+            options: CONFIRM_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
           }))
       } catch {
         answer = "reject"
