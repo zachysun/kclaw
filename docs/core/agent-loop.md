@@ -8,13 +8,13 @@
 
 ## 设计决策
 
-- **终态不变量**：`run.started` 发出后，`runAgent` 一定以 `run.completed` 或 `run.failed` 结束，且对 provider 错误**永不 reject**——调用方（daemon）无需 try/catch 处理没有终态的 run。
+- **终态不变量**：`run.started` 发出后，`runAgent` 一定以 `run.completed` 或 `run.failed` 结束，且对 provider 错误**永不 reject**，调用方（daemon）无需 try/catch 处理没有终态的 run。
 - **先持久化后广播**：每条消息先经 `deps.onMessage` 持久化，再发 `message.completed`；事件流反映的是已持久化状态。
 - **持久化的块永远完整**：流式增量只存在于事件里，`onMessage` 收到的 `Message.blocks` 一定是终稿。
-- **历史永不修改**：无配对消息清理等组装期调整都发生在组装 provider 视图时（`toProviderMessages`），JSONL（每行一条 JSON 的文本文件）里的原始消息逐字节不变。历史整体发给模型，不按条数截断（上下文长度由压缩体系统一管，见 [compaction](./compaction.md)）。
+- **历史永不修改**：无配对消息清理等组装期调整都发生在组装 provider 视图时（`toProviderMessages`），JSONL（每行一条 JSON 的文本文件）里的原始消息逐字节不变。历史整体发给模型，不按条数截断（上下文长度由压缩体系统一管理，见 [compaction](./compaction.md)）。
 - **确认流不中断循环**：拒绝/超时变成 error result + note 块传回模型，模型可以换方案继续；只有 abort 才真正终止。
 - **重试所有权在 provider 层**：循环自己从不重试 LLM 调用（会与 `withRetry` 双重重试）；provider 层的重试经 `llm-retry` 位置的 hook 链以 `llm.failed {willRetry:true}` 事件对外可见。
-- **循环只认位置，不认行为**：用户消息增强、引导注入、压缩判定、模型视图改写……这些原本身份各异的"hook 字段"统一收进 `deps.hooks`（一个 `HookRunner`）的 14 个命名位置；行为以 hook 条目在组装时注册（内置闭包与用户文件同一条链，见 [hooks](./hooks.md)）。循环在每个位置调用 `hooks.run(位置, ctx)` 并按该位置的契约处理结果。
+- **循环只认位置，不认行为**：用户消息增强、引导注入、压缩判定、模型视图改写等职责各异的扩展点统一收进 `deps.hooks`（一个 `HookRunner`）的 14 个命名位置；行为以 hook 条目在组装时注册（内置闭包与用户文件同一条链，见 [hooks](./hooks.md)）。循环在每个位置调用 `hooks.run(位置, ctx)` 并按该位置的契约处理结果。
 
 ---
 
@@ -31,7 +31,7 @@ export interface RunInput {
   userText: string
   trigger?: "user" | "cron" | "process" | "agent" | "team" | "goal"   // agent = subagent run（模型经 subagent_run 派出，见 subagents.md）；team = 团队收信箱投递的 run（见 agent-team.md）；process = 后台进程完成通知（bash run_in_background）；goal = 目标循环续轮
   userMessage?: Message       // 宿主预制时循环原样使用且不再经 onMessage 持久化
-  compaction?: ActiveSummary  // 运行起点的压缩视图（来自会话 meta）：生效时 upto（含）之前的原文不再发给模型，压缩摘要项由 toProviderMessages 垫在 messages[0]
+  compaction?: ActiveSummary  // 运行起点的压缩视图（来自会话 meta）：生效时 upto（含）之前的原文不再发给模型，压缩摘要项由 toProviderMessages 放在 messages[0]
 }
 
 export interface AgentDeps {
@@ -86,7 +86,7 @@ run.started {trigger, model?, provider?, permissionMode?}
       ⑥ tool_call.completed ×N（流结束后才 parse argsJson）
       ⑦ assistant 补全：块为空 → 整条丢弃（不持久化、无 completed）
         否则 text/thinking.completed → onMessage → message.completed
-        （assistant 消息随 llm.completed 的 latencyMs 一并写入磁盘——流成功完成才有，失败的流没有）
+        （assistant 消息随 llm.completed 的 latencyMs 一并写入磁盘：流成功完成才有，失败的流没有）
       ⑧ stopReason 分派：
          end_turn          → run.completed，返回
          error             → 悬空 tool_call（无配对结果的调用）合成 error result 配对持久化 → llm.failed{willRetry:false} → run.failed，返回
@@ -101,11 +101,11 @@ run.started {trigger, model?, provider?, permissionMode?}
 
 ### 缓存归因（cacheMiss）
 
-`AgentDeps.cacheProbe` 提供时（daemon 每会话持一份上次请求快照，内存态），每次 LLM 调用前对**实际发送视图**（llm-before 链改写后）做指纹（system 哈希、工具集哈希、逐消息哈希），与同一会话上次的指纹比对，变化原因随 `llm.completed` / `llm.failed` 的 `cacheMiss` 字段可见：`tools_changed`（工具集变了，前缀失效范围覆盖其后全部）、`system_changed`、`history_rebuilt`（消息列表头部重建：压缩生效，upto 之前的原文退出发送范围）、`history_diverged`（某条中间消息字节变了——toolResultKeep 省略配置改变等；mention/技能包装的跨 run 断裂已被 llmText 标记重放消除），`divergedAt` 与两端摘录辅助定位。纯追加（上次是本次的真前缀）不携带字段。首个 run 无基准不报；`cacheProbe` 缺失（一次性辅助调用、裸引擎）整段跳过；快照损坏按无数据处理，绝不影响 run。
+`AgentDeps.cacheProbe` 提供时（daemon 每会话持一份上次请求快照，内存态），每次 LLM 调用前对**实际发送视图**（llm-before 链改写后）做指纹（system 哈希、工具集哈希、逐消息哈希），与同一会话上次的指纹比对，变化原因随 `llm.completed` / `llm.failed` 的 `cacheMiss` 字段可见：`tools_changed`（工具集变了，前缀失效范围覆盖其后全部）、`system_changed`、`history_rebuilt`（消息列表头部重建：压缩生效，upto 之前的原文退出发送范围）、`history_diverged`（某条中间消息字节变了，如 toolResultKeep 省略配置改变；mention/技能包装的跨 run 断裂已被 llmText 标记重放消除），`divergedAt` 与两端摘录辅助定位。纯追加（上次是本次的真前缀）不携带字段。首个 run 无基准不报；`cacheProbe` 缺失（一次性辅助调用、单独使用的引擎）整段跳过；快照损坏按无数据处理，绝不影响 run。
 
 ### run 级 usage 聚合的边界
 
-只有收到 `message_done`（provider 完整回报）的迭代参与 run 级折叠（`mergeUsage`）：流死亡 / 中断迭代的残缺数据不参与，已上报迭代的缓存字段照常保留；一次完整调用都没有的 run（如零迭代 abort），缓存字段按未知处理（事件与用量记录不带值），不写假 0。
+只有收到 `message_done`（provider 完整回报）的迭代参与 run 级折叠（`mergeUsage`）：流中途终止 / 被中断的迭代的残缺数据不参与，已上报迭代的缓存字段照常保留；一次完整调用都没有的 run（如零迭代 abort），缓存字段按未知处理（事件与用量记录不带值），不写入虚假的 0。
 
 ### 工具回合（`runToolTurn`）
 
@@ -133,11 +133,11 @@ flowchart TD
 ```
 
 1. 建 `role:"tool"` 消息骨架 → `message.created`（先于执行，使 delta 事件可附带真实 messageId）。
-2. **hook 检查**：每个可执行调用先过 `hooks.runGate("tool-before", {toolCall})`（观察 + 失败否决权）——声明 `failure:"deny"` 的 hook 失败时该调用被拒绝：error result（文案 `hook <名> 失败，操作未执行：<原因>`）+ `kind:"denied"` note，不进权限检查、不执行，run 继续；其余失败照旧跳过。
-3. **权限检查**：每个可执行调用按模型顺序过 `check`——`deny` → error result + note 块（`kind:"denied"|"timeout"`）；`allow` → 记 `grantedBy`（`sandboxed` 即命令类工具由 bash 沙箱顶替人工的放行，见 [permissions](./permissions.md) 第 7 节）；`confirm` → 发 `confirmation.requested {confirmationId, toolCall, risk, expiresAt}`（沙箱启用但不可用时的回退确认带 `noteText`），`raceConfirmation` 同时等待三个来源：人工裁决 | confirmTimeoutMs 超时 | abort 信号，谁先到算谁。人工裁决是四选一（`once` / `project` / `global` / `reject`，来自 `confirmation.resolve` 帧）：`once`/`project`/`global` 都放行并记 `grantedBy:"confirmed"`（project/global 的规则由 run 组装的 `resolveConfirmation` 保存，见 [permissions](./permissions.md)）；`reject`/超时的文案固定："用户拒绝了该操作" / "确认超时，操作未执行"。
-4. **调度**：`concurrency:"parallel"` 的调用 `Promise.allSettled` 并发；`"serial"` 的在并行组全部结束后逐个 `await`。串行独占是结构保证（先等并行组全部结束，再逐个顺序执行），不是测试约束。执行器收到 `ctx.signal`（即 `deps.signal`）：长时间运行的工具（如 `subagent_run`）靠它感知父 run 的中止，实现"父停子停"（见 [subagents](./subagents.md)）。`ask_user_questions` 的等待走与人工确认同一个三方race（回答 / 超时 / abort，`permissions/broker.ts` 的 `racePending`）。中止时等待作废、不发 `question.resolved`（见 [tools](./tools.md) 的 ask 工具一节）。
+2. **hook 检查**：每个可执行调用先过 `hooks.runGate("tool-before", {toolCall})`（观察 + 失败否决权）：声明 `failure:"deny"` 的 hook 失败时该调用被拒绝：error result（文案 `hook <名> 失败，操作未执行：<原因>`）+ `kind:"denied"` note，不进权限检查、不执行，run 继续；其余失败照旧跳过。
+3. **权限检查**：每个可执行调用按模型顺序过 `check`：`deny` → error result + note 块（`kind:"denied"|"timeout"`）；`allow` → 记 `grantedBy`（`sandboxed` 即命令类工具由 bash 沙箱顶替人工的放行，见 [permissions](./permissions.md) 第 7 节）；`confirm` → 发 `confirmation.requested {confirmationId, toolCall, risk, expiresAt}`（沙箱启用但不可用时的回退确认带 `noteText`），`raceConfirmation` 同时等待三个来源：人工裁决 | confirmTimeoutMs 超时 | abort 信号，谁先到算谁。人工裁决是四选一（`once` / `project` / `global` / `reject`，来自 `confirmation.resolve` 帧）：`once`/`project`/`global` 都放行并记 `grantedBy:"confirmed"`（project/global 的规则由 run 组装的 `resolveConfirmation` 保存，见 [permissions](./permissions.md)）；`reject`/超时的文案固定："用户拒绝了该操作" / "确认超时，操作未执行"。
+4. **调度**：`concurrency:"parallel"` 的调用 `Promise.allSettled` 并发；`"serial"` 的在并行组全部结束后逐个 `await`。串行独占由代码结构保证（先等并行组全部结束，再逐个顺序执行），无需依赖测试约束。执行器收到 `ctx.signal`（即 `deps.signal`）：长时间运行的工具（如 `subagent_run`）靠它感知父 run 的中止，实现"父停子停"（见 [subagents](./subagents.md)）。`ask_user_questions` 的等待走与人工确认同一套三方等待（回答 / 超时 / abort，谁先到算谁，`permissions/broker.ts` 的 `racePending`）。中止时等待作废、不发 `question.resolved`（见 [tools](./tools.md) 的 ask 工具一节）。
 5. **结果**：每个执行中的结果发 `tool_result.created → tool_result.delta（executor 的 onOutput）→ tool_result.completed`；未执行（参数解析失败/未知工具/hook 检查拒绝/abort 拦截）的结果只补 created+completed。结果块一律按模型给定顺序写入；拒绝 note 排在结果之后；`grantedBy` 记为 `Record<callId, GrantedBy>` 附着在 tool 消息上。
-6. **死循环守卫**：执行完成后（completed 发出前）按"工具名 + 参数串"签名做跨回合计数——同一签名连续执行达到 `sessions.toolLoopMaxRepeats`（默认 5，`0` 关闭）次时，该次结果附加一行 `<system-reminder kind="loop-guard">` 换策略提醒，随结果持久化、审计可见；签名变化即重置计数。守卫只提醒不终止，硬停止留待真实需要时再做。
+6. **死循环守卫**：执行完成后（completed 发出前）按"工具名 + 参数串"签名做跨回合计数：同一签名连续执行达到 `sessions.toolLoopMaxRepeats`（默认 5，`0` 关闭）次时，该次结果附加一行 `<system-reminder kind="loop-guard">` 换策略提醒，随结果持久化、审计可见；签名变化即重置计数。守卫只提醒不终止，硬停止留待真实需要时再做。
 7. `onMessage` 持久化 → `message.completed` → 回到循环顶部。
 
 ### turn-boundary 位置（引导注入）
@@ -154,15 +154,15 @@ flowchart TD
 
 `toProviderMessages(history, opts?)`（`packages/core/src/agent/context.ts`）是协议消息 → provider 请求的格式翻译点：
 
-- **全量历史直发**：历史消息全部进入请求，没有"最多取最近 N 条"的条数窗口（窗口已删除，见下）。上下文长度由压缩体系统一管：长会话的正常收缩靠压缩（见 [compaction](./compaction.md)）——预压线后台压缩、黄线、红线 × 有效 budget 逐级接管，省略线管工具输出，超限急救接住溢出。按条数截尾的问题在于切点随新消息逐轮前移，请求头部每轮都在变，prompt cache 前缀从第一条消息起就断且无告警，所以彻底删掉。压缩视图（`ActiveSummary { upto, top }`）由宿主从会话 meta 取出放进 `RunInput.compaction`，循环内的 `buildMessages` 据此把 `upto`（含）之前的原文排除在发送范围外，`toProviderMessages` 再把压缩摘要项垫进待发送数组——循环本身不感知也不改动 JSONL 里的原始消息。运行起点不执行任何压缩（「发送前预压缩」这一做法已删除，压缩只发生在后台预压 / 收尾 / 运行中 / 超限急救四个自动时机加手动 /compact，见 [compaction](./compaction.md)）。
-- **工具输出省略**（`opts.toolResultKeep`，server 从 `config.sessions.toolResultKeep` 传入，默认 0 = 不按条数省略；`N≥1` 时）：从最新消息往前数，最多保留最近 N 个工具结果原文（条数上限），更早的把输出文本替换成一行占位符 `[此工具输出已省略：<工具名> <参数摘要>，可重新调用获取]`（调用失败加"（该次调用失败）"）。传了 `opts.tokenBudget` 时在条数上限内再做 budget 驱动逐出：以"非工具结果内容的估算 token + 被上限挤掉结果的占位行"为基线，从最新到最旧逐条处理——最新的 2 条无条件保留（保底可见性，保证占位符"重新调用获取"的建议始终可行），其余各条独立判断，装得下保留、装不下省略。两者都只影响发出的请求，JSONL 存储不动；配对关系不变，不产生无效请求。不传任何 opts 时行为完全不变（全部保留）。详见 [compaction](./compaction.md) 机制二/三。
-- **工具清单按名排序**：发给模型的 `toolDefs`（内置 + 测试覆盖 + `extraTools` 追加 + readonly 裁剪之后的最终清单）在 run 组装末尾按 `name` 做 code point 序排序。tools 数组在请求前缀的最前面，MCP 连接恢复/重连后视图迭代序一变，整个 prompt cache 前缀就失效；排序让「集合没变顺序变了」不再发生。发送面（toolDefs）与检索池（`promotableDefs`，分层披露的池数组，见 [reference/tools](../reference/tools.md) 的"工具披露分层"）各自排序；executor 的 Map 顺序无关不动，同名冲突日志语义也不变。
-- **prompt-cache 路由**：主循环构造的每个 LLM 请求恒带 `promptCache: { key: sessionId }`（subagent 经同一路径自然用自己的会话 id，不继承父会话）——适配器据此加缓存标记（Anthropic `cache_control` 断点 / OpenAI `prompt_cache_key`），条目配置 `promptCache: "off"` 或端点回 400 时的退避见 [provider](./provider.md) 的 2b 节。goal judge、autoname 等一次性辅助调用不经 runAgent、不带该字段；压缩的段摘要是例外——默认形状直接复用主 run 的 system、工具清单与同一缓存键（见 [compaction](./compaction.md) 的"第一次调用"一节），只有无前缀可复用时的独立形状与归并调用才不带。
+- **全量历史直发**：历史消息全部进入请求，没有"最多取最近 N 条"的条数窗口（原因见下）。上下文长度由压缩体系统一管理：长会话的正常收缩靠压缩（见 [compaction](./compaction.md)），预压线后台压缩、黄线、红线 × 有效 budget 逐级接管，省略线管理工具输出，超限急救处理溢出。按条数截尾的问题在于切点随新消息逐轮前移，请求头部每轮都在变，prompt cache 前缀从第一条消息起就失效且没有任何告警，所以不做条数截断。压缩视图（`ActiveSummary { upto, top }`）由宿主从会话 meta 取出放进 `RunInput.compaction`，循环内的 `buildMessages` 据此把 `upto`（含）之前的原文排除在发送范围外，`toProviderMessages` 再把压缩摘要项放到待发送数组的最前面，循环本身不感知也不改动 JSONL 里的原始消息。运行起点不执行任何压缩（压缩只发生在后台预压 / 收尾 / 运行中 / 超限急救四个自动时机加手动 /compact，见 [compaction](./compaction.md)）。
+- **工具输出省略**（`opts.toolResultKeep`，server 从 `config.sessions.toolResultKeep` 传入，默认 0 = 不按条数省略；`N≥1` 时）：从最新消息往前数，最多保留最近 N 个工具结果原文（条数上限），更早的把输出文本替换成一行占位符 `[此工具输出已省略：<工具名> <参数摘要>，可重新调用获取]`（调用失败加"（该次调用失败）"）。传了 `opts.tokenBudget` 时在条数上限内再做 budget 驱动逐出：以"非工具结果内容的估算 token + 超出条数上限的结果的占位行"为基线，从最新到最旧逐条处理：最新的 2 条无条件保留（保底可见性，保证占位符"重新调用获取"的建议始终可行），其余各条独立判断，装得下保留、装不下省略。两者都只影响发出的请求，JSONL 存储不动；配对关系不变，不产生无效请求。不传任何 opts 时行为完全不变（全部保留）。详见 [compaction](./compaction.md) 机制二/三。
+- **工具清单按名排序**：发给模型的 `toolDefs`（内置 + 测试覆盖 + `extraTools` 追加 + readonly 裁剪之后的最终清单）在 run 组装末尾按 `name` 做 code point 序排序。tools 数组在请求前缀的最前面，MCP 连接恢复/重连后视图迭代序一变，整个 prompt cache 前缀就失效；排序保证「集合没变、顺序却变了」的情况不会出现。发送清单（toolDefs）与检索池（`promotableDefs`，分层披露的池数组，见 [reference/tools](../reference/tools.md) 的"工具披露分层"）各自排序；executor 的 Map 顺序与此无关，保持不变，同名冲突日志语义也不变。
+- **prompt-cache 路由**：主循环构造的每个 LLM 请求恒带 `promptCache: { key: sessionId }`（subagent 经同一路径自然用自己的会话 id，不继承父会话），适配器据此加缓存标记（Anthropic `cache_control` 断点 / OpenAI `prompt_cache_key`），条目配置 `promptCache: "off"` 或端点回 400 时的退避见 [provider](./provider.md) 的 2b 节。goal judge、autoname 等一次性辅助调用不经 runAgent、不带该字段；压缩的段摘要是例外：默认形状直接复用主 run 的 system、工具清单与同一缓存键（见 [compaction](./compaction.md) 的"第一次调用"一节），只有无前缀可复用时的独立形状与归并调用才不带。
 - **压缩摘要注入**（`opts.summary`，类型 `ActiveSummary { upto, top }`）：非空时在结果数组**最前面**注入一条 user 消息：交接声明 + `<compacted-summary>` 标签包装 `<top>` + 末尾一行 session_search 检索提示（system prompt 保持恒定以保住 KV 缓存前缀，故摘要走 user 通道；检索提示见 [compaction](./compaction.md) 的注入一节）。它排在切片后的对话之前；provider 适配层再在它前面加真正的 system 提示（persona），所以模型看到的最终顺序是 **persona → 压缩摘要 → 对话**。原始 `req.system` 不被覆盖，JSONL 里也没有这条注入（只在发送的请求里）。
-- **包装标记重放（`Message.llmText`）**：技能指名与 `@` 文件的隐式包装文本在 run 组装时记录到当轮用户消息的 `llmText` 字段（随消息持久化，气泡与事件流仍是原文）；之后每次组装直接按标记原样重放，不再重算。技能目录、被引用文件会随时间变化（文件删除、技能升降级），重算会让同一条历史在不同 run 组装出不同字节，缓存前缀从该消息起断裂——标记把它固定为首次发送的字节。无标记的消息（旧数据、steer 插话、非 user 触发的消息）按原逻辑组装。
-- **模型视图改写（`llm-before` 位置）**：上述全部组装完成后、`llm.stream` 之前，循环把最终消息列表交给 `llm-before` hook 链，链的最终改写值（`undefined` = 原样）就是要发送的内容。它是"只改模型看到的输入"的唯一口子，持久化、事件流与 outcome 一概不动。现成实现是 `withLastUserText(messages, text, anchor)`（`agent/context.ts`）：把消息列表里本轮 user 消息的文本整体替换成 `text`（string 内容整体替换；ContentPart 数组只换第一个 text 部分，图片等其余部分保留）。本轮消息按 `anchor`（当轮消息的 `llmText`，无包装时为原文块）从尾部向前做内容匹配——steer 插话后列表末条的 user 是插话而不是本轮消息，按内容锚定才不会把插话覆盖掉；匹配不到时回退"从尾部向前第一条 user"；列表里没有 user 消息时原样返回。技能指定与 `@` 文件引用的隐式包装是内置 `skill-wrap` hook + 这个辅助（run 组装把两份包装文本合并成一份 `llmUserText` 交给 hook；带包装的当轮消息在组装层已按标记重放出同一字节，hook 的替换与之同值幂等；见 [skills](./skills.md)、[file-mentions](./file-mentions.md) 与 [hooks](./hooks.md)）。
-- **无配对 tool 消息丢弃**：历史开头出现连续 `role:"tool"` 消息时被 `shift` 丢弃——正常历史不会出现（压缩 upto 与编辑重试都保配对边界），这条是防御；OpenAI 兼容 API 拒收无配对调用的 tool 结果。
-- **无配对的 tool_call 剔除**：assistant 的 `tool_call` 块只有当其后存在配对的 `tool_result` 才转成 `toolCalls` 发送；悬空调用会被 400。
+- **包装标记重放（`Message.llmText`）**：技能指名与 `@` 文件的隐式包装文本在 run 组装时记录到当轮用户消息的 `llmText` 字段（随消息持久化，气泡与事件流仍是原文）；之后每次组装直接按标记原样重放，不再重算。技能目录、被引用文件会随时间变化（文件删除、技能升降级），重算会让同一条历史在不同 run 组装出不同字节，缓存前缀从该消息起失效；标记把它固定为首次发送的字节。无标记的消息（旧数据、steer 插话、非 user 触发的消息）按原逻辑组装。
+- **模型视图改写（`llm-before` 位置）**：上述全部组装完成后、`llm.stream` 之前，循环把最终消息列表交给 `llm-before` hook 链，链的最终改写值（`undefined` = 原样）就是要发送的内容。它是"只改模型看到的输入"的唯一入口，持久化、事件流与 outcome 一概不动。现成实现是 `withLastUserText(messages, text, anchor)`（`agent/context.ts`）：把消息列表里本轮 user 消息的文本整体替换成 `text`（string 内容整体替换；ContentPart 数组只换第一个 text 部分，图片等其余部分保留）。本轮消息按 `anchor`（当轮消息的 `llmText`，无包装时为原文块）从尾部向前做内容匹配：steer 插话后列表末条的 user 是插话，本轮消息在它之前，按内容锚定才不会把插话覆盖掉；匹配不到时回退"从尾部向前第一条 user"；列表里没有 user 消息时原样返回。技能指定与 `@` 文件引用的隐式包装是内置 `skill-wrap` hook + 这个辅助（run 组装把两份包装文本合并成一份 `llmUserText` 交给 hook；带包装的当轮消息在组装层已按标记重放出同一字节，hook 的替换与之同值幂等；见 [skills](./skills.md)、[file-mentions](./file-mentions.md) 与 [hooks](./hooks.md)）。
+- **无配对 tool 消息丢弃**：历史开头出现连续 `role:"tool"` 消息时被 `shift` 丢弃。正常历史不会出现这种情况（压缩 upto 与编辑重试都保持配对边界），这条是防御措施；OpenAI 兼容 API 拒收无配对调用的 tool 结果。
+- **无配对的 tool_call 剔除**：assistant 的 `tool_call` 块只有当其后存在配对的 `tool_result` 才转成 `toolCalls` 发送；悬空调用会被 provider 以 400 拒绝。
 - **块级转换**：user/assistant 的 text 拼接为 content；note 转 `<system-reminder kind="<NoteKind>"><text></system-reminder>` 行（对模型可见、可追溯；标签约定由系统提示词末尾的注入约定声明，正文中的闭合标签会被逃逸）；tool 消息的每个 `tool_result` 转成一条消息，error 结果加 `[error] ` 前缀；assistant 没有 text 时 content 置 null、只带 toolCalls；thinking 不转换，模型看不到自己之前的思考内容。attachment 块按附带的内容分三种转法：带 `base64` 数据且 MIME 是 `image/*` 的转成一个多模态 `image_url` 内容段（data: URL 形式，与文本段并列为 content 数组的元素）；带内联 `text` 正文的转成 `[附件 <名称>]` 加正文；两者都不满足的只转一行元数据提示（`[附件 <名称>（<mime>，仅元数据）已保存，路径 <path>，可用 fs_read 读取]`），需要内容时由模型自己调 fs_read。
 - 下一轮的 history：`[...input.history, userMsg, assistant?, toolMsg?, …]`，由循环内逐步 `all.push` 累积。
 
@@ -173,8 +173,8 @@ flowchart TD
 循环处理 `LlmStreamEvent`（`text_delta` / `thinking_delta` / `tool_call_started` / `tool_call_delta` / `message_done`，定义在 `packages/core/src/provider/types.ts`），转成块级三段：
 
 - **created**：块的容器事件，附带 `{messageId, block}`。text/thinking 在首个 delta 到达时建块；tool_call 在 `tool_call_started`（首个带 callId/name 的帧）建块。
-- **delta**：纯字符串增量 `{messageId, blockId, delta}`——文本增量与 tool args 的 JSON 片段本质相同，客户端按同一套拼接逻辑处理。
-- **completed**：全量块校准 `{messageId, block}`。text/thinking 在流结束后逐块发；tool_call 在流结束后 parse `argsJson` 时发——**解析失败也发 completed**（附带原始块），随后给 error result，不执行。
+- **delta**：纯字符串增量 `{messageId, blockId, delta}`。文本增量与 tool args 的 JSON 片段本质相同，客户端按同一套拼接逻辑处理。
+- **completed**：全量块校准 `{messageId, block}`。text/thinking 在流结束后逐块发；tool_call 在流结束后 parse `argsJson` 时发，**解析失败也发 completed**（附带原始块），随后给 error result，不执行。
 
 退化为两段的情况：无参调用（`argsJson === ""` 按 `{}` 解析）没有 delta；被 abort/error 中断的悬空 tool_call **没有** completed（三段事件未完整发出）。
 
@@ -190,7 +190,7 @@ finish_reason: stop → end_turn    length → max_tokens    tool_calls → tool
                stop_sequence → stop_sequence    null/未知 → end_turn
 ```
 
-`aborted` 与 `error` 不会来自 provider——前者由循环在各 abort 检查点打上标记，后者标记在流抛出错误/宿主 hook 失败的消息上。归一化后，`runAgent` 的分派逻辑只认 7 个值，与具体 provider 解耦。aborted/error 的 assistant 消息连同部分内容照常持久化（对应"生成中途被取消"的场景）。
+`aborted` 与 `error` 不会来自 provider：前者由循环在各 abort 检查点打上标记，后者标记在流抛出错误/宿主 hook 失败的消息上。归一化后，`runAgent` 的分派逻辑只认 7 个值，与具体 provider 解耦。aborted/error 的 assistant 消息连同部分内容照常持久化（对应"生成中途被取消"的场景）。
 
 ---
 
@@ -198,24 +198,24 @@ finish_reason: stop → end_turn    length → max_tokens    tool_calls → tool
 
 daemon 侧 `RunManager.cancel(sessionId)` 调 `AbortController.abort()`，循环在 **6 个检查点** 响应 `deps.signal`：
 
-1. 迭代开始前——无任何产出，直接 `run.completed {stopReason:"aborted"}`，不合成空 assistant（空消息会被部分 provider 拒收）。
-2. 流中（`streamWithAbort` 包装）——`Promise.race(stream.next(), abort)` 立即停止处理，不再等待可能永久停滞的流。取消信号同时接进 LLM 请求本身（`LlmRequest.signal`，见 [provider](./provider.md)）：底层 HTTP 连接立即断开，原先的形状是循环层已放弃、请求却还在 daemon 里继续读流，最长拖到 300 秒超时。
-3. 流后——无 `message_done`，就地打上 `stopReason = "aborted"`，部分内容照常持久化。
-4. 权限检查中——不再进行 gate 的后续调用；确认等待中 abort 经 `raceConfirmation` 以 `"aborted"` sentinel（区分结果来源的特殊返回值）胜出，**不发** `confirmation.resolved`（用户取消 ≠ 超时拒绝）。
-5. 调度中——不再启动新工具；已启动的执行器循环层不强制终止、等它返回，但取消信号会传进执行器（`ctx.signal`）：响应信号的工具当场收短（bash 终止子进程组并返回 `command aborted`，见 [tools](./tools.md)；subagent_run 停掉子会话 run，见 [subagents](./subagents.md)），不响应信号的工具自然执行结束。
-6. 未及执行的工具——统一补 `errorResult(callId, "run aborted before execution")`，tool 消息保持完整。
+1. 迭代开始前：无任何产出，直接 `run.completed {stopReason:"aborted"}`，不合成空 assistant（空消息会被部分 provider 拒收）。
+2. 流中（`streamWithAbort` 包装）：`Promise.race(stream.next(), abort)` 立即停止处理，不再等待可能永久停滞的流。取消信号同时接进 LLM 请求本身（`LlmRequest.signal`，见 [provider](./provider.md)）：底层 HTTP 连接立即断开，循环层放弃之后，请求不会继续在 daemon 里读流、一直拖到 300 秒超时。
+3. 流后：无 `message_done`，就地打上 `stopReason = "aborted"`，部分内容照常持久化。
+4. 权限检查中：不再进行 gate 的后续调用；确认等待中 abort 经 `raceConfirmation` 以 `"aborted"` sentinel（区分结果来源的特殊返回值）胜出，**不发** `confirmation.resolved`（用户取消 ≠ 超时拒绝）。
+5. 调度中：不再启动新工具；已启动的执行器循环层不强制终止、等它返回，但取消信号会传进执行器（`ctx.signal`）：响应信号的工具立即提前结束（bash 终止子进程组并返回 `command aborted`，见 [tools](./tools.md)；subagent_run 停掉子会话 run，见 [subagents](./subagents.md)），不响应信号的工具自然执行结束。
+6. 未及执行的工具：统一补 `errorResult(callId, "run aborted before execution")`，tool 消息保持完整。
 
-终态统一为 `run.completed {stopReason:"aborted"}`（不是 run.failed）；客户端把它当正常终态渲染。
+终态统一为 `run.completed {stopReason:"aborted"}`，不发 run.failed；客户端把它当正常终态渲染。
 
 ---
 
 ## 边界与出错
 
-- **provider 彻底失败**：`withRetry` 耗尽后 `stream()` 抛出错误 → 部分内容以 `stopReason:"error"` 持久化 → 悬空 tool_call 合成 `"llm call failed before execution"` 结果配对持久化（防下轮 400）→ `llm.failed` + `run.failed` → resolve（不 reject）。
-- **参数解析失败 / 未知工具**：不执行、不进入权限检查；error result（`"invalid tool args json"` / `"unknown tool: <name>"`）随 tool 消息持久化，循环继续。未知工具名会做一次相近名提示：在已注册工具名里找编辑距离 ≤2 的最近者（大小写不敏感，`closestToolName`，候选含活跃清单与检索池），命中时错误文案变为 `"unknown tool: <name> (closest available: <最近名>)"`——模型拼错工具名时下一轮直接换对，不再盲猜第二次。带检索池的 run 另有一个按层拦截未提升 deferred 名字的分支，但其判定条件恒为假（可调用集合包含了执行器表的全部键），实际不会触发——deferred 名字直呼会照常执行（详见 [reference/tools](../reference/tools.md) 的"工具披露分层"）。
-- **迭代耗尽**：最后一次迭代若仍是 `tool_use`，先在该 assistant 消息上附加 `kind:"system"` 截断 note（"已达最大迭代次数（500）…"）再持久化，然后 `run.failed {code:"max_iterations"}`——用户和下一轮模型均可看到中断原因。
-- **hook 失败**：run-before 链的 fatal 抛出错误或持久化抛出错误 → `run.failed {code:"user_message_failed"}`，resolve `stopReason:"error"`；用户 hook 失败时的行为自行声明（skip 跳过 / deny 否决所在环节），失败只发 `hook.failed` 事件不伤 run（见 [hooks](./hooks.md)）。
-- **工具执行器契约**：`ToolExecutor.execute` 应吞掉一切异常返回 `{status:"error", output}`（内置工具由 `shared.ts` 的包装保证）；循环对执行器抛异常（Promise 拒绝）也统一转为 error result（保证异常也产出结果）。执行 ctx 带可选 `signal`（父 run 的中止信号）、`onOutput`（部分输出的流式回传）与 `promote`（仅 tool_search 拿到：把命中的工具定义并入下一请求的工具清单，见 [reference/tools](../reference/tools.md) 的"工具披露分层"）。
+- **provider 彻底失败**：`withRetry` 耗尽后 `stream()` 抛出错误 → 部分内容以 `stopReason:"error"` 持久化 → 悬空 tool_call 合成 `"llm call failed before execution"` 结果配对持久化（防止下一轮请求被 400 拒绝）→ `llm.failed` + `run.failed` → resolve（不 reject）。
+- **参数解析失败 / 未知工具**：不执行、不进入权限检查；error result（`"invalid tool args json"` / `"unknown tool: <name>"`）随 tool 消息持久化，循环继续。未知工具名会做一次相近名提示：在已注册工具名里找编辑距离 ≤2 的最近者（大小写不敏感，`closestToolName`，候选含活跃清单与检索池），命中时错误文案变为 `"unknown tool: <name> (closest available: <最近名>)"`，模型拼错工具名时下一轮可以直接改正，不必再猜一次。带检索池的 run 另有一个按层拦截未提升 deferred 名字的分支，但其判定条件恒为假（可调用集合包含了执行器表的全部键），实际不会触发：直接调用 deferred 名字会照常执行（详见 [reference/tools](../reference/tools.md) 的"工具披露分层"）。
+- **迭代耗尽**：最后一次迭代若仍是 `tool_use`，先在该 assistant 消息上附加 `kind:"system"` 截断 note（"已达最大迭代次数（500）…"）再持久化，然后 `run.failed {code:"max_iterations"}`，用户和下一轮模型均可看到中断原因。
+- **hook 失败**：run-before 链的 fatal 抛出错误或持久化抛出错误 → `run.failed {code:"user_message_failed"}`，resolve `stopReason:"error"`；用户 hook 失败时的行为自行声明（skip 跳过 / deny 否决所在环节），失败只发 `hook.failed` 事件，不影响 run（见 [hooks](./hooks.md)）。
+- **工具执行器契约**：`ToolExecutor.execute` 应捕获一切异常并返回 `{status:"error", output}`（内置工具由 `shared.ts` 的包装保证）；循环对执行器抛出异常（Promise 拒绝）也统一转为 error result（保证异常也产出结果）。执行 ctx 带可选 `signal`（父 run 的中止信号）、`onOutput`（部分输出的流式回传）与 `promote`（仅 tool_search 拿到：把命中的工具定义并入下一请求的工具清单，见 [reference/tools](../reference/tools.md) 的"工具披露分层"）。
 
 ---
 

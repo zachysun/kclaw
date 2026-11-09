@@ -2,9 +2,9 @@
 
 ## 职责
 
-`packages/core/src/goal/` 是目标循环的领域模块（类型/上限/判定契约/判定器/验收命令/事件派生/轮决策，注入文本模板与判定器提示词在 `packages/core/src/prompts/goal.ts`）；`packages/server/src/goal-loop.ts` 的 `GoalLoopHost` 是 daemon 侧驱动主机，只做副作用编排——执行验收命令、调判定器、写事件、按 core 给出的决策入队或停止。
+`packages/core/src/goal/` 是目标循环的领域模块（类型/上限/判定契约/判定器/验收命令/事件派生/轮决策，注入文本模板与判定器提示词在 `packages/core/src/prompts/goal.ts`）；`packages/server/src/goal-loop.ts` 的 `GoalLoopHost` 是 daemon 侧驱动主机，只做副作用编排：执行验收命令、调用判定器、写事件、按 core 给出的决策入队或停止。
 
-给会话设一个**可验证的目标**，daemon 自主多轮推进：每轮 run 结束后先执行验收命令、再由一个独立的判定器 LLM 裁决目标是否达成，没达成就把判定意见注入下一轮继续工作，直到达成、被判定不可能、或触碰硬性上限才停。会话的普通对话（打字发消息）在任何时刻都可用——goal 循环只是队列里的一种 run 来源，用户输入照常 steer/wait/interrupt。
+给会话设一个**可验证的目标**，daemon 自主多轮推进：每轮 run 结束后先执行验收命令、再由一个独立的判定器 LLM 裁决目标是否达成，没达成就把判定意见注入下一轮继续工作，直到达成、被判定不可能、或触碰硬性上限才停。会话的普通对话（打字发消息）在任何时刻都可用：goal 循环只是队列里的一种 run 来源，用户输入照常 steer/wait/interrupt。
 
 四态状态机（`GoalState`）：
 
@@ -12,8 +12,8 @@
 |------|------|----------|
 | `active` | 循环运行中：每轮 run 结束后自动检查并继续运行 | 达成/不可能 → `complete`；各种停止 → `paused`/`blocked` |
 | `paused` | 停止推进（用户暂停/停止，或触发硬性上限） | 用户 resume 或改写目标 |
-| `blocked` | 被人工裁决卡住（连续确认超时）——需要人来 | 用户裁决后 resume |
-| `complete` | 终态：`met`（达成）或 `impossible`（判不可达） | 只能 clear 或改写（改写=新循环） |
+| `blocked` | 被人工裁决卡住（连续确认超时），需要人来处理 | 用户裁决后 resume |
+| `complete` | 终态：`met`（达成）或 `impossible`（判定不可达） | 只能 clear 或改写（改写=新循环） |
 
 十种停止原因（`GoalStopReason`，快照的 `stoppedReason` 字段）：`met`、`impossible`、`user-stop`、`run-error`、`permission`（→blocked）、`no-progress`、`gate-exhausted`、`budget-limit`、`round-limit`、`judge-failed`。除 `met`/`impossible` 外全部落在 `paused` 或 `blocked`，用户 resume 即可重试（`met`/`impossible` 之后只能 clear 或改写目标）。
 
@@ -40,8 +40,8 @@
 
 - **模型解析链**：`config.goals.judge` 命中的 provider 条目优先（Model 页改名/改配置热生效），未配置时回退会话模型线（会话级 `model` → 默认条目 → daemon 启动模型串）。
 - **调用形态**：温度 0、无工具、`maxTokens` 2048、严格 JSON 输出契约 `{"verdict":"not_met|met|impossible","reason":"…","progress":"…"}`（progress 无进展写「无」）。证据是目标原文 + 本轮验收输出 + 对话尾部窗口（最近约 24 条消息、单条 2000 字符、整窗 24000 字符封顶，超出部分头部省略）。
-- **解析与失败分类**：输出非法 JSON 时把错误喂回去重试一次（两次调用用量经 `mergeUsage` 合并计入，缓存字段与主 run 同一折叠语义）；仍失败或调用本身失败（网络/供应商错误）按 `parse` / `transport` 两类分别计数，连续 3 次解析失败或 5 次传输失败熔断（`judge-failed` 停止）。判定器客户端在 daemon 组装处包 `withRetry`（与压缩摘要、自动命名等后台调用链同一约定）：瞬时网络错误先经重试消化，重试耗尽仍失败才计一次传输连败。未到熔断阈值时 fail-open：循环继续，下一轮注入"判定器不可用、请自行验收"的说明。
-- **判定纪律**在 system 提示词里写死：只看证据不听自述（说做完了而验收命令失败就是 not_met）、不预测不乐观、impossible 慎用。
+- **解析与失败分类**：输出非法 JSON 时把错误信息传回去重试一次（两次调用用量经 `mergeUsage` 合并计入，缓存字段与主 run 同一折叠语义）；仍失败或调用本身失败（网络/供应商错误）按 `parse` / `transport` 两类分别计数，连续 3 次解析失败或 5 次传输失败熔断（`judge-failed` 停止）。判定器客户端在 daemon 组装处包 `withRetry`（与压缩摘要、自动命名等后台调用链同一约定）：瞬时网络错误先经重试消化，重试耗尽仍失败才计一次传输连败。未到熔断阈值时 fail-open：循环继续，下一轮注入"判定器不可用、请自行验收"的说明。
+- **判定规则**固定写在 system 提示词里：只看证据，不采信自述（声称做完了但验收命令失败就是 not_met）、不预测、不乐观估计、impossible 慎用。
 
 判定器用量逐次记入用量库（`goal-judge-<轮>-<时间>` 的 runId）并计入目标生命周期 token。
 
@@ -51,7 +51,7 @@
 
 - **fail-closed**：设定带验收命令的目标时沙箱不可用就直接拒绝（错误 400）；检查时刻沙箱不可用按全部失败计。
 - **短路判定器**：任一命令失败就不调判定器（省 token），失败输出直接作为下一轮的修正指引；连续 3 轮全不过 → `gate-exhausted` 停止。
-- 验收命令通过与否只是判定器的**证据**，最终裁决权在判定器（防验收命令本身写错把循环锁死）。
+- 验收命令通过与否只是判定器的**证据**，最终裁决权在判定器（防止验收命令本身写错时循环永远无法结束）。
 
 ## 硬性上限（防失控）
 
@@ -80,34 +80,34 @@
 
 `core/goal` 的 `deriveGoalLoop`（host 侧 `#derive` 只负责读事件流，读流失败按空事件派生全零）从最近一次 `goal.set(op:create)` 起单次前向扫描：`run.started(trigger:"goal")` 计轮、`run.ended.usage` 与 `goal.checked.tokens` 累计 token、run 边界配对出确认超时、尾部 `goal.checked` 回溯出四类连败（同性质连续累积，任何不同性质的检查断开计数）。快照（`meta.goal`）里的 `rounds`/`totalRounds`/`tokensUsed` 是检查时刻同步进去的展示缓存，权威数据是事件流。
 
-**armed 是进程内开关**（`GoalRuntime.armed`）：daemon 重启后目标快照还在（meta.goal），但循环**不自动继续运行**——目标循环是"当时授权这台 daemon 自主花钱"的语义，重启即收回，用户显式 resume 才重新开始运行。设计取舍见 [ADR-0002](../adr/0002-goal-armed-is-process-local.md)。
+**armed 是进程内开关**（`GoalRuntime.armed`）：daemon 重启后目标快照还在（meta.goal），但循环**不自动继续运行**：目标循环是"当时授权这台 daemon 自主花钱"的语义，重启即收回，用户显式 resume 才重新开始运行。设计取舍见 [ADR-0002](../adr/0002-goal-armed-is-process-local.md)。
 
 ## 与相邻系统的交互
 
-- **排队**：goal 轮的 trigger 是 `"goal"`（`run.started` 六种触发源之一，枚举见 [enums](../reference/enums.md)），处置固定 `wait`（与 cron/agent 同款——无人值守的排队行为必须可预测），用户中途输入按自己的处置照常 steer 注入当前 run。
-- **唤醒 budget**（两次用户发言之间的机器唤醒上限）：goal 轮开始运行时同样清零——目标循环自身有九条独立停止条件，不再叠加这份上限，否则长目标里 subagent 投递会先被卡死。
+- **排队**：goal 轮的 trigger 是 `"goal"`（`run.started` 六种触发源之一，枚举见 [enums](../reference/enums.md)），处置固定 `wait`（与 cron/agent 相同，无人值守的排队行为必须可预测），用户中途输入按自己的处置照常 steer 注入当前 run。
+- **唤醒 budget**（两次用户发言之间的机器唤醒上限）：goal 轮开始运行时同样清零：目标循环自身有九条独立停止条件，不再叠加这份上限，否则长目标里 subagent 投递会先被卡死。
 - **subagent 会话**（`parentSessionId` 非空）不能设目标（只读会话）。
 - **提示词注入**沿用 XML 标签约定：首轮 `<goal-start>`、续轮 `<goal-continue round=N>`、收尾 `<goal-wrapup>`（正文中的闭合标签会被逃逸，防提示词注入）；goal 轮的用户消息带 `note(kind:"goal")` 出处行。
 - **审计**：goal 事件在审计页渲染成 "goal" 行（设定/检查/移除各一句话摘要，点击展开完整快照与裁决）。
 
 ## 使用入口
 
-- **CLI**：`/goal <目标描述> verify: <命令>…`（多条 `verify:` 各跟一条命令）；`/goal`（无参查看状态）、`/goal pause|resume|stop|clear`。`stop` 同时掐活跃 run 与清空队列。
+- **CLI**：`/goal <目标描述> verify: <命令>…`（多条 `verify:` 各跟一条命令）；`/goal`（无参查看状态）、`/goal pause|resume|stop|clear`。`stop` 同时中止活跃 run 并清空队列。
 - **WebUI**：对话页右上角目标悬浮面板（状态点、轮数 `第 N/10 轮`、token 用量、判定器最近意见、验收命令清单；暂停/恢复/停止/移除/编辑表单），active 且 armed 时 5 秒轮询刷新。
 - **REST**：`GET/POST /sessions/:id/goal`、`POST …/goal/pause|resume|stop`、`DELETE …/goal`（清单见 [http-api](../server/http-api.md)）。
 
 ## 边界与出错
 
-- **判定器失败不直接终止循环**：输出非法 JSON 时把错误喂回重试一次；解析失败连续 3 次或传输失败连续 5 次熔断（`judge-failed` 停止）；未到熔断阈值时循环继续，下一轮注入"判定器不可用、请自行验收"的说明。
+- **判定器失败不直接终止循环**：输出非法 JSON 时把错误信息传回重试一次；解析失败连续 3 次或传输失败连续 5 次熔断（`judge-failed` 停止）；未到熔断阈值时循环继续，下一轮注入"判定器不可用、请自行验收"的说明。
 - **验收命令 fail-closed**：设定带验收命令的目标时沙箱不可用直接拒绝（400）；检查时刻沙箱不可用按全部失败计；连续 3 轮全不过 `gate-exhausted` 停止。
 - **run 出错与入队失败都停**：检查 run 以 `run-error` 结束时不自动重试，等用户 resume；队列入队失败（如队列满）同样停止并说明原因。
 - **daemon 重启后循环不自动继续运行**：armed 是进程内开关，重启即收回授权；快照（`meta.goal`）还在，用户显式 resume 才重新开始运行（见 [ADR-0002](../adr/0002-goal-armed-is-process-local.md)）。
 - **判定期间的并发动作安全**：用户在判定器 await 之后 stop/pause/clear，审计事件（goal.checked）照常写入，状态机只在仍 active 时推进；检查入口互斥，不会重入。
 - **读事件流失败不中断检查**：计数派生只负责读事件流，读流失败按空事件派生全零，检查照常走完。
 
-## 模型面（goal 三件工具，2026-10-19 起）
+## 模型可调用的 goal 工具（3 个）
 
-daemon 组装时把 GoalLoopHost（结构性接口 `GoalToolHost`）注入 run，根会话注册 `create_goal` / `get_goal` / `update_goal`（实现 `tools/goal.ts`，subagent 不注册）：create/update **sensitive**（审批=用户明说的机制化——既定纪律：模型不经 prompting 不得启动或操控花费循环）、get safe。`create_goal` 有单目标守卫：本会话已有未完成目标（state 非 complete）时直接报错，先 stop 处理才能开新目标（不嵌套）。`update_goal action=complete` 请求**立即判定**：host 新增 `requestCheck`（armed+active 才真发起，否则告知判定照旧在 run 边界自动进行），判定器裁决不变——met/impossible 才落终态，模型永不自行判定完成（对比的两家让模型自证完成，本仓库 ADR-0003 明确拒绝）。pause/resume/stop 直映 host 方法。CLI `/goal` 帮助文本已提及模型侧工具。ADR-0004 文末有本次决策的更新节。
+daemon 组装时把 GoalLoopHost（结构性接口 `GoalToolHost`）注入 run，根会话注册 `create_goal` / `get_goal` / `update_goal`（实现 `tools/goal.ts`，subagent 不注册）：create/update 为 **sensitive**（审批卡就是用户明确同意的方式：用户没有要求时，模型不得启动或操控会产生花费的目标循环），get 为 safe。`create_goal` 有单目标守卫：本会话已有未完成目标（state 非 complete）时直接报错，先 stop 才能开新目标（不嵌套）。`update_goal action=complete` 请求**立即判定**：调用 host 的 `requestCheck`（armed、state 为 active 且没有正在进行的判定时才真正发起，否则告知判定会在 run 边界自动进行），终态仍由判定器裁决：met/impossible 才进入终态，模型永远不能自行判定完成（参照的两个同类实现让模型自证完成，本仓库 ADR-0003 明确拒绝这种做法）。pause/resume/stop 直接对应 host 方法。CLI `/goal` 的帮助文本提到了这 3 个模型侧工具；决策背景见 ADR-0004 文末的更新节。
 
 ## 关联
 

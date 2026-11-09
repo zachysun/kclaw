@@ -19,7 +19,7 @@ export type HookPosition =
 
 ## HookPosition（14 个）
 
-位置的封闭联合——run 时间线上全部命名挂载点：
+位置的封闭联合，即 run 时间线上全部命名挂载点：
 
 | 位置 | ctx | 返回（改写生效） | 性质 |
 |------|-----|------------------|------|
@@ -44,7 +44,7 @@ order = 同位置内的执行次序（升序）：
 
 | name | position | order | failure | 一句话 |
 |------|----------|-------|---------|--------|
-| `memory-inject` | run-before | 10 | skip | 检索记忆库，收集相关经历 note（收集不落位） |
+| `memory-inject` | run-before | 10 | skip | 检索记忆库，收集相关经历 note（只收集，不写入消息） |
 | `user-message-land` | run-before | 20 | fatal | 追加 cron/记忆 note、持久化用户消息、逐块 note.emitted |
 | `autoname` | run-before | 30 | skip | 新会话首条消息的后台自动命名 |
 | `skill-wrap` | llm-before | 10 | skip | 技能与 @ 文件调用的隐式包装（只改模型视图） |

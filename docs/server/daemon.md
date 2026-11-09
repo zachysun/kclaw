@@ -7,11 +7,11 @@
 ## 设计决策
 
 - **只绑回环地址**：`HOST = "127.0.0.1"`（本机回环地址，外部网络访问不到）。daemon 不做网络隔离，安全完全交给 token；绑回环保证其他机器无法连接。
-- **端口三级优先级，固定端口是显式选择**：listen 端口取 `--port` 旗标 ?? 配置文件 `server.port` ?? `0`（让操作系统分配一个空闲临时端口）。真实端口 listen 成功后从 `app.server.address()` 读出并写入 `daemon.json`，客户端通过文件发现端口。固定端口后 WebUI 地址跨重启稳定；固定端口被占用是**硬错误**（退出并报一行原因，绝不静默回退到临时端口——地址悄悄漂移正是固定端口要消灭的东西），listen 失败时同步释放占位 daemon.json，下次启动不会看到僵尸 pid。
+- **端口三级优先级，固定端口是显式选择**：listen 端口取 `--port` 旗标 ?? 配置文件 `server.port` ?? `0`（让操作系统分配一个空闲临时端口）。真实端口 listen 成功后从 `app.server.address()` 读出并写入 `daemon.json`，客户端通过文件发现端口。固定端口后 WebUI 地址跨重启稳定；固定端口被占用是**硬错误**（退出并报一行原因，绝不静默回退到临时端口：固定端口就是为了避免地址悄悄变化），listen 失败时同步释放占位 daemon.json，下次启动不会读到已失效的 pid。
 - **daemon.json 是独占占位，启动第一步就认领**：组装开始即以 `wx` 原子创建占位 `{port: 0, pid, startedAt, starting: true}`（并发第二个启动者拿到 EEXIST，看到存活 pid 即拒绝"daemon already running"；已终止 pid 的残留被回收重认领）；listen 成功后回填真实 `{port, pid, startedAt}`（同一 startedAt，`starting` 移除），此时文件才指向可用端口。`launchDaemon` resolve 时 daemon 已在服务并在调度。CLI 侧以"文件出现且 `/health` 可访问"作为就绪判据。
 - **token 是 daemon 的稳定身份**：`<home>/token` 首次启动时生成（UUID，文件权限 0600，仅属主可读写），重启复用，stop 不删除；仅 daemon.json 会被删除。因此 CLI/WebUI 保存的 token 在 daemon 重启后仍然有效。
-- **鉴权是"每路由必带 Bearer"加白名单豁免**：一个 `preHandler` hook 拦截全部路由，只有三处豁免——`/health`、`/ws`、静态 WebUI 外壳（见下）。豁免列表是封闭集合，新增路由默认受保护。
-- **有界停止**：`stop()` 的每一步（停调度、关服务器）有独立超时（默认 60s）。超时则 `stop()` reject、daemon.json **保留**——进程仍在运行，指向它的文件必须与事实一致；虚报"已停止"会诱发双 daemon、cron 双触发。
+- **鉴权是"每路由必带 Bearer"加白名单豁免**：一个 `preHandler` hook 拦截全部路由，只有三处豁免：`/health`、`/ws`、静态 WebUI 外壳（见下）。豁免列表是封闭集合，新增路由默认受保护。
+- **有界停止**：`stop()` 的每一步（停调度、关服务器）有独立超时（默认 60s）。超时则 `stop()` reject、daemon.json **保留**：进程仍在运行，指向它的文件必须与事实一致；虚报"已停止"会诱发双 daemon、cron 双触发。
 - **没有 provider 也能启动**：WebUI 的 Model 页和首次配置向导都要经由运行中的 daemon 完成配置，所以启动不要求 provider。未配置时 `GET /providers` 的 `configured` 为 false，run 第一次调用模型时以 `run.failed` 结束并写明缺什么（见下文 provider 解析）。
 - **MCP 恒定组装，且启动零连接**：无论配置文件里有没有 server，daemon 都构建一个 `McpManager`（空的管理器没有任何连接、开销为零，管理路由因此永远可用，从 WebUI 添加第一个 server 不需要先改配置）。配置来自全局 `~/.kclaw/mcp.json` 加**每个已知项目**的 `.kclaw/mcp.json`（项目集合 = daemon 主工作目录 + 全部会话记录里出现过的工作目录，daemon 启动时现算，运行中新建会话即时挂载；不靠任何清单文件，与技能同源，放好配置文件即生效。唯一例外：daemon 主目录嵌在某个项目里时，该项目的配置文件与全局 `mcp.json` 是同一个路径，两层无法独立存在，这样的目录不挂项目组，见 [mcp](../core/mcp.md)）。连接是惰性的：启动与配置变更都不发起连接，run 用到某项目的工具、或用户手动 connect 时才按需连接（见 [mcp](../core/mcp.md)）。连接失败只打一行日志，永远不会拖垮 daemon。
 
@@ -58,9 +58,9 @@ export function bearerMatches(header: string | undefined, token: string): boolea
 
 ## 启动流程
 
-入口链：`packages/server/bin/kclaw-server.mjs`（package.json 的 `bin` 入口）→ `import { launchDaemon } from "../dist/index.js"` → `launchDaemon({ home, port })`。home 解析：`--home <dir>`（或 `--home=<dir>`）优先，否则 `resolvePaths` 内部使用 `KCLAW_HOME` env ?? `~/.kclaw`。端口解析：`--port <n>`（或 `--port=<n>`）优先，0 是合法值（强制临时端口，压过配置）；旗标缺席时由 `launchDaemon` 读配置 `server.port`，再缺席才用临时端口。`--port` 非整数或越界（0-65535 之外）报一行错退出 1；launch 失败（配置不可解析、固定端口被占用等）同样是一行 stderr 加退出 1，不输出完整 call stack。bin 脚本就绪后向 stdout 输出一行 `{"port":<port>}`，CLI 与测试以这一行输出作为就绪信号。
+入口链：`packages/server/bin/kclaw-server.mjs`（package.json 的 `bin` 入口）→ `import { launchDaemon } from "../dist/index.js"` → `launchDaemon({ home, port })`。home 解析：`--home <dir>`（或 `--home=<dir>`）优先，否则 `resolvePaths` 内部使用 `KCLAW_HOME` env ?? `~/.kclaw`。端口解析：`--port <n>`（或 `--port=<n>`）优先，0 是合法值（强制临时端口，优先于配置）；旗标缺失时由 `launchDaemon` 读配置 `server.port`，配置也没有时才用临时端口。`--port` 非整数或越界（0-65535 之外）时报一行错误并以退出码 1 退出；launch 失败（配置不可解析、固定端口被占用等）同样是一行 stderr 加退出 1，不输出完整 call stack。bin 脚本就绪后向 stdout 输出一行 `{"port":<port>}`，CLI 与测试以这一行输出作为就绪信号。
 
-bin 在进程级注册了两个业务代码接不住的异常出口，策略不同：`unhandledRejection`（异步迟到的失败，进程状态仍然干净）只记一行 stderr 带 call stack、daemon 继续运行；`uncaughtException`（同步异常逃出了所有 try/catch，进程状态已不可信）记 stderr 后**退出 1**——事件流的追加式写入与 daemon.json 的 pid 认领机制让重启无损，非零退出也让 CLI 立即知道 daemon 已退出，而不是对着一个失去响应的进程干等。
+bin 在进程级注册了两个业务代码接不住的异常出口，策略不同：`unhandledRejection`（异步迟到的失败，进程状态仍然干净）只记一行 stderr 带 call stack、daemon 继续运行；`uncaughtException`（同步异常逃出了所有 try/catch，进程状态已不可信）记 stderr 后**退出 1**：事件流的追加式写入与 daemon.json 的 pid 认领机制让重启无损，非零退出也让 CLI 立即知道 daemon 已退出，不必一直等待一个失去响应的进程。
 
 `launchDaemon` 的组装序（每步失败都让整个启动 reject，daemon 不会半启动）：
 
@@ -76,7 +76,7 @@ createConfigNotifier + createProviderResolver(config)
                                     整体清空缓存（签名检查保留为优化）
 new EventBus()                      总线先于 store 构造：store 的写入完成通知回调要发
                                     session.appended 总线帧（先写入后广播，审计页等
-                                    订阅方据此增量拉取事件流——见 realtime/protocol）
+                                    订阅方据此增量拉取事件流，见 realtime/protocol）
 HistorySearchIndex.open(paths.searchDb)
                                     跨会话消息全文索引（数据来源与回填见 tools.md 与
                                     storage.md）：open 在 store 之前，镜像三事件
@@ -87,8 +87,8 @@ HistorySearchIndex.open(paths.searchDb)
 new SessionStore(paths.sessionsDir, onAppended)
                                     store 构造时注入写入完成通知回调：每个事件（含投影）
                                     成功写入 events.jsonl 后发 session.appended，
-                                    并顺路喂历史检索索引的镜像写入
-                                    （通知抛出错误被吞掉，写成功不被通知连累）
+                                    并顺路写入历史检索索引的镜像
+                                    （通知回调抛出的错误会被忽略，已成功的写入不受影响）
 embedding 判定链（memory.embedding） model 非空才构造 embedding 客户端（见 memory.md 判定链）；
                                     构造在 EventBus/SessionStore 之后、MemorySystem 之前，赋给下方 memory
 new HookRegistry({userDir, onEvent})
@@ -120,15 +120,15 @@ collectProjectDirs + new McpManager({globalServers, projects, stderrLogDir, onEr
                                     恒定组装：globalServers = <home>/mcp.json 的条目；
                                     projects = collectProjectDirs 现算的每个已知项目
                                     `.kclaw/mcp.json` 的条目（缺失/损坏/git 跟踪均读作
-                                    {}；项目配置文件与全局 mcp.json 同路径的目录被排除
-                                    ——home 用于排除这个形态：两层共用一个文件，项目层
+                                    {}；项目配置文件与全局 mcp.json 同路径的目录被排除，
+                                    home 参数就用于排除这种情况：两层共用一个文件，项目层
                                     无法独立存在）；stderrLogDir =
                                     <home>/logs/mcp（stdio server 的 stderr 逐台
                                     写入 <server>.log，见 mcp.md）；onError 把连接失败
                                     打一行日志；persist 按组分发："global" 写 mcp.json，
                                     其余组接 saveProjectMcpJson；空闲回收 TTL、重试
                                     上限、连接上限等参数取构造默认值（见 mcp.md），
-                                    组装后零连接——连接由 run 的工具取用或手动 connect
+                                    组装后不建立任何连接，连接由 run 的工具调用或手动 connect
                                     按需发起
 createMcpProjects({workspace, manager, allMetas, loadEntries, home})
                                     项目发现与热生效（见 mcp.md）：项目集合 = 主工作目录 +
@@ -141,14 +141,14 @@ createMcpProjects({workspace, manager, allMetas, loadEntries, home})
                                     防抖后经 reconcileProject 热生效；起不来只告警降级、
                                     不致命
 createSubagentHost({config, sessions, bus, getRun})
-                                    subagent 宿主（见 subagents.md）：一次组装返回三件能力——
+                                    subagent 宿主（见 subagents.md）：一次组装返回 3 项能力：
                                     spawner（派发后端，阻塞与后台 subagent 各有一个并发计数）、collector
                                     （后台 subagent 的结果收集）、cancelBackgroundForParent
-                                    （会话删除时级联取消仍在执行的后台 subagent）。getRun 是晚绑闭包——
+                                    （会话删除时级联取消仍在执行的后台 subagent）。getRun 是延迟绑定的闭包：
                                     spawner 要调 RunManager.cancel/submit，而 RunManager 的 deps
                                     又要 spawner，构造顺序上先建 host、再建 manager、随后回填
 createTeamHost / new GoalLoopHost   团队宿主（见 agent-team.md）与 /goal 循环主机
-                                    （见 goal.md）——同一晚绑 getRun 约定；goal host 的
+                                    （见 goal.md），沿用同样的延迟绑定 getRun 约定；goal host 的
                                     判定器走 config.goals.judge 条目解析链（注入 llmFactory
                                     的测试与运行客户端共用注入实现）；两 host 注册到 RunManager
                                     的同一空闲边缘（onSessionIdle：team pump → goal 检查），
@@ -158,7 +158,7 @@ new ProcessRegistry({noticesPath, onRegister})
                                     见 tools.md）：onRegister 发 process.started；
                                     onNotice 按退出码发 process.completed/process.failed，
                                     并把完成通知经 run.enqueue(trigger:"process"，
-                                    note kind:"process") 投递属主会话——忙会话排队、
+                                    note kind:"process") 投递属主会话：忙会话排队、
                                     闲会话唤醒；未送达通知持久化在
                                     <home>/process-notices.jsonl，投递成功才删行
 new RunManager({...})               注入 usageStore、recordChoreUsage（后台通道的用量记录，见上）、
@@ -174,9 +174,9 @@ new RunManager({...})               注入 usageStore、recordChoreUsage（后�
                                     （恒定组装，见上；每 run 按会话工作目录取用，惰性
                                     连接由 toolsFor 内部 kick）、
                                     processes: processRegistry（见上）、
-                                    cronScheduler: crons（cron 模型面的来源：cron 四件
-                                    工具，cron 触发的 run 只注册 cron_list）、
-                                    goalHost（goal 三件工具与空闲检查的来源）、
+                                    cronScheduler: crons（4 个 cron 工具的来源；
+                                    cron 触发的 run 只注册 cron_list）、
+                                    goalHost（3 个 goal 工具与空闲检查的来源）、
                                     subagents: { spawner, collector }（cancelBackgroundForParent
                                     不走 RunManager：它经 createApp 交给会话删除/彻底删除
                                     路由做级联取消）、
@@ -185,7 +185,7 @@ new RunManager({...})               注入 usageStore、recordChoreUsage（后�
                                     阈值取 config.permissions.autoLearnThreshold，默认 3，
                                     0 关闭）、llmForRun（未注入 llmFactory 时才注入：每 run
                                     现包重试的按条目客户端，重试事件归属当次 run）；见 run-manager。
-                                    权限模式没有 daemon 级旗标——它是会话级事实（meta.mode），
+                                    权限模式没有 daemon 级开关：它是会话级的状态（meta.mode），
                                     run 组装每 run 从会话 meta 读出（见 permissions/run-manager）
 createApp({home, token, stores, bus, run, mcp, mainWorkspace, configNotifier, attachmentsDir, usage, webDist, memory, skillsEvolution, goal, sessionFork, historySearch})
                                     Fastify 应用（见 http-api）；attachmentsDir/usage 传入时
@@ -200,7 +200,7 @@ createApp({home, token, stores, bus, run, mcp, mainWorkspace, configNotifier, at
                                     configNotifier 交给 provider 路由，改动持久化后发布
 await app.listen({ port: listenPort, host: "127.0.0.1" })   ← listenPort = opts.port ?? config.server?.port ?? 0；
                                     固定端口被占（EADDRINUSE）是硬错误：释放占位 daemon.json
-                                    后抛一行原因，不静默回退到临时端口
+                                    后抛出一行原因，不静默回退到临时端口
 port = app.server.address().port
 writeFileSync(<home>/daemon.json, {port, pid, startedAt})   ← 回填占位（同 startedAt、starting 移除）；listen 之后、tick 之前
 createNotifier(notify.channels)     ← 仅当 notify.channels 非空时创建；空则 undefined，tick 完全不推送
@@ -213,7 +213,7 @@ startSkillScheduler({...})          技能调度器：跟随检查处理方（�
                                     连败 3 次放弃；enabled:false 或 idleMinutes:0 时 sweep 直接返回，
                                     检查停留在检查表里，功能重开后继续处理，见 skills.md）
 startSkillCurator({...})            技能 curator 调度：每日本地时间过 skills.curator.hour（默认凌晨 4 点）
-                                    后首扫（lastRun 本地日期判重），标记陈旧与归档 AI 自建技能
+                                    后首扫（lastRun 按本地日期判断是否重复），标记陈旧与归档 AI 自建技能
                                     （见 skills.md 的 curator 一节）
 startSpillRetention({...})          spill 保留期清理：`sessions.spillRetentionDays` 为正时每小时扫一次
                                     `<home>/spill`，删掉 mtime 超过保留期的文件；为 0（默认）时只确保
@@ -223,9 +223,9 @@ void processRegistry.adopt()        后台进程收编：读 process-notices.jso
                                     已终止的 running 行补发退出码未知的合成通知（此时 run 已就绪，
                                     enqueue 安全）；失败只记日志，不阻塞启动
 feishu 频道管理器启动（opt-in）     ← 仅 ~/.kclaw/feishu.json enabled 时建通道；在各调度器与宿主之后启动，
-                                    有 15s 上限——挂起的握手不拖累 daemon；失败记入管理器错误状态
-                                    （IM Channel 页可见）并拆掉半启动状态，daemon 照常服务。
-                                    管理器恒定组装（未启用零成本），保存配置即热重启通道
+                                    有 15s 上限，握手无响应时不会拖住 daemon；失败记入管理器错误状态
+                                    （IM Channel 页可见）并拆掉启动了一半的状态，daemon 照常服务。
+                                    管理器恒定组装（未启用时不产生开销），保存配置即热重启通道
                                     （机制见 feishu-channel.md）
 return { port, token, pid, stop }
 ```
@@ -236,11 +236,11 @@ return { port, token, pid, stop }
 
 1. `config.providers.entries[config.providers.default]` 条目里的 `baseUrl` / `apiKey` / `model` 优先；
 2. 条目留空的字段由环境变量补：`KCLAW_LLM_BASE_URL`、`KCLAW_LLM_API_KEY`、`KCLAW_LLM_MODEL`（`valueOrEnv`：配置值非空则用配置，否则用环境变量，再否则空串）；
-3. 端点或模型仍为空不影响 `launchDaemon`（apiKey 可为空——免密钥端点合法）。`GET /providers` 的 `configured` 按这两步判断端点和模型是否都能解析。
+3. 端点或模型仍为空不影响 `launchDaemon`（apiKey 可为空，免密钥端点合法）。`GET /providers` 的 `configured` 按这两步判断端点和模型是否都能解析。
 
 缺配置时第一次调用模型才失败：`baseUrl` 为空抛出 `provider 未配置：…`，`model` 为空抛出 `模型未配置：…`（两者都缺时报前者）。失败发生在用户消息写入会话之后，这次 run 走 provider 失败的既有路径，以 `run.failed {code:"llm_error"}` 结束。记忆提取、标题生成等后台调用同样在调用模型时失败，按各自的失败处理（写日志或静默放弃），不影响 daemon。配置完成后下一个 run 直接生效，无需重启。
 
-**run 客户端按条目解析**：每个 run 的客户端由 `llmForRun(onRetry, entryKey)` 给出，`entryKey` 来自 `resolveRunModel`（run 组装先解析条目、再建客户端）。daemon 的共享 resolver（`createProviderResolver`）按条目名缓存裸客户端，签名 = `format|baseUrl|apiKey|timeoutMs|promptCache`（`promptCache` 参与签名：翻转该开关会重建客户端，连同实例内"标记被拒"的判定一起重来）——条目缺失回退到默认条目；连默认条目都没有，或条目的 baseUrl 为空时，第一次调用模型才解析环境变量端点。Model 页的增删改持久化后经 ConfigNotifier 发布 `providers` 变更，resolver 收到即整体清空缓存，下个 run 自动重建（签名检查保留为优化）：热生效于下一个 run，无需重启。`withRetry` 由 `llmForRun` 每次现包（重试回调归属当次 run）；`format` 经 `createProviderClient` 选协议（openai → `createOpenAiCompatClient`，anthropic → `createAnthropicClient`，机制见 [provider](../core/provider.md)）。
+**run 客户端按条目解析**：每个 run 的客户端由 `llmForRun(onRetry, entryKey)` 给出，`entryKey` 来自 `resolveRunModel`（run 组装先解析条目、再建客户端）。daemon 的共享 resolver（`createProviderResolver`）按条目名缓存裸客户端，签名 = `format|baseUrl|apiKey|timeoutMs|promptCache`（`promptCache` 参与签名：翻转该开关会重建客户端，连同实例内"标记被拒"的判定一起重新开始）。条目缺失时回退到默认条目；连默认条目都没有，或条目的 baseUrl 为空时，第一次调用模型才解析环境变量端点。Model 页的增删改持久化后经 ConfigNotifier 发布 `providers` 变更，resolver 收到即整体清空缓存，下个 run 自动重建（签名检查保留为优化）：热生效于下一个 run，无需重启。`withRetry` 由 `llmForRun` 每次现包（重试回调归属当次 run）；`format` 经 `createProviderClient` 选协议（openai → `createOpenAiCompatClient`，anthropic → `createAnthropicClient`，机制见 [provider](../core/provider.md)）。
 
 ## 鉴权设计
 
@@ -259,16 +259,16 @@ app.addHook("preHandler", async (request, reply) => {
 
 三处豁免及理由：
 
-- **`/health`**：CLI 的存活检测（`probeHealth`，单次 1s 超时）不带 token——检测只回答 daemon 是否存活，此时客户端可能还没有 token。
-- **`/ws`**：WebSocket 升级请求常无法附带自定义 header，鉴权移到连接内部进行——首帧 `{type:"auth", token}` 或 `?token=` 查询参数，失败发 error 帧并以 4001 关闭（见 [realtime](./realtime.md)）。豁免的是升级路由，不是连接本身。
-- **静态 WebUI 外壳**（仅 `webDist` 已配置时）：浏览器加载页面前无法获得 token，`GET /`、`GET /index.html`、`GET /assets/*` 必须先放行，PWA 静态文件（`/manifest.webmanifest`、`/sw.js`、`/icon-192.png`、`/icon-512.png`、`/favicon.svg`、`/favicon.ico`）同样放行（`index.html` 声明了 SVG 图标、浏览器默认还会请求 ico，磁盘上没有对应文件时，让这些请求由静态处理器返回 404，而不是被鉴权拦成 401）；页面加载后由 JS 附带 token 调用 API。
+- **`/health`**：CLI 的存活检测（`probeHealth`，单次 1s 超时）不带 token：检测只回答 daemon 是否存活，此时客户端可能还没有 token。
+- **`/ws`**：WebSocket 升级请求常无法附带自定义 header，鉴权移到连接内部进行：首帧 `{type:"auth", token}` 或 `?token=` 查询参数，失败发 error 帧并以 4001 关闭（见 [realtime](./realtime.md)）。豁免只针对升级路由，连接内部仍要完成鉴权。
+- **静态 WebUI 外壳**（仅 `webDist` 已配置时）：浏览器加载页面前无法获得 token，`GET /`、`GET /index.html`、`GET /assets/*` 必须先放行，PWA 静态文件（`/manifest.webmanifest`、`/sw.js`、`/icon-192.png`、`/icon-512.png`、`/favicon.svg`、`/favicon.ico`）同样放行（`index.html` 声明了 SVG 图标、浏览器默认还会请求 ico，磁盘上没有对应文件时，让这些请求由静态处理器返回 404，避免被鉴权拦截成 401）；页面加载后由 JS 附带 token 调用 API。
 
 **外壳豁免的防绕过措施**（`isWebShellExempt`）：
 
 - 只放行 `GET`；其他方法一律走鉴权。
-- 匹配的是**原始请求路径**（`request.url.split("?")[0]`，去掉查询串），不是 `request.routeOptions.url`——`@fastify/static` 用一条 `/*` catch-all 路由服务一切文件，匹配到的路由 url 不含路径信息，依据它判断等于全部放行。
-- 路径白名单是"三种模式 + 六个精确路径"的封闭集合：模式为 `/`、`/index.html`、`/assets/` 前缀，精确路径为上文那六个 PWA 文件。`/sessions`、`/cron`、`/config` 等 API 路由先注册、各自有真实 route url，不落在静态 catch-all 的放行逻辑里。
-- 反向防线：`resolveWebDist` 在目录不存在时返回 `undefined`（不注册任何静态路由，`GET /` 保持 404），而不是注册一个半配置的静态服务器，使外壳豁免空设在鉴权之前。
+- 匹配的是**原始请求路径**（`request.url.split("?")[0]`，去掉查询串）。`request.routeOptions.url` 不能作为依据：`@fastify/static` 用一条 `/*` catch-all 路由服务一切文件，匹配到的路由 url 不含路径信息，依据它判断等于全部放行。
+- 路径白名单是"三种模式 + 六个精确路径"的封闭集合：模式为 `/`、`/index.html`、`/assets/` 前缀，精确路径为上文那六个 PWA 文件。`/sessions`、`/cron`、`/config` 等 API 路由先注册、各自有真实 route url，不经过静态 catch-all 的放行逻辑。
+- 反向防线：`resolveWebDist` 在目录不存在时返回 `undefined`（不注册任何静态路由，`GET /` 保持 404）。这样不会注册半配置的静态服务器，外壳豁免也不会在没有 WebUI 文件时空设在鉴权之前。
 
 ## 停止流程
 
@@ -279,8 +279,8 @@ bin 脚本注册信号处理：SIGTERM/SIGINT → `shutdown()`（`stopping` 标�
 ```
 // 先按构造序逐项限时执行 hostStops（goal → 历史检索索引 → 心跳 → 记忆 → 技能 → curator → spill 清理）：
 withStopTimeout(goalHost.dispose(), 60s)
-                                    // 等进行中的 goal 检查落定（判定器调用可能尚未返回；
-                                    // 循环不自动继续运行——重启后等用户 resume，见 goal.md）
+                                    // 等进行中的 goal 检查结束（判定器调用可能尚未返回；
+                                    // 循环不自动继续运行，重启后等用户 resume，见 goal.md）
 withStopTimeout(historyIndex.close(), 60s)
                                     // 关 search.db（历史检索索引）
 withStopTimeout(tick.stop(), 60s)   // 停心跳；tick.stop 会 await 所有进行中的 cron run
@@ -304,19 +304,19 @@ usage.close()                       // 关用量数据库
 rmSync(<home>/daemon.json)          // 只有全部成功才删
 ```
 
-`withStopTimeout(p, timeoutMs, step)` 用 `Promise.race([p, deadline])` 给每步设限。超时的一步**不会被取消**（它可能稍后自行完成，迟到的失败被丢弃——超时已经报告过失败，不能再以未处理 rejection 的形式抛出）。设限的原因：失去响应的 provider 流会阻塞 tracked cron run，卡住的客户端会阻塞 `app.close`，没有超时上限的 `stop()` 会永远不返回。
+`withStopTimeout(p, timeoutMs, step)` 用 `Promise.race([p, deadline])` 给每步设限。超时的一步**不会被取消**（它可能稍后自行完成，迟到的失败被丢弃：超时已经报告过失败，不能再以未处理 rejection 的形式抛出）。设限的原因：失去响应的 provider 流会阻塞 tracked cron run，卡住的客户端会阻塞 `app.close`，没有超时上限的 `stop()` 会永远不返回。
 
 **超时路径**：`stop()` reject → bin exit 1 → **daemon.json 保留**（进程仍在运行）。进行中的 cron run 按崩溃安全语义放弃（见 [cron](../core/cron.md) 的「停机与进行中的运行」）：JSONL 兼容尾部残缺行；该次触发认领时已推进 `next_run_at`，重启后不会重放，cron 在下个调度点照常触发。
 
 ### CLI 侧的 pid 校验与 stop（daemon-ctl.ts）
 
-- `readDaemonJson(home)`：解析 `{port, pid, startedAt}`；pid 必须是**正整数**（pid 0 会让 `process.kill(0,…)` 信号整个进程组）——不合法视同文件不存在。
+- `readDaemonJson(home)`：解析 `{port, pid, startedAt}`；pid 必须是**正整数**（pid 0 会让 `process.kill(0,…)` 向整个进程组发信号）；不合法视同文件不存在。
 - `ensureDaemon`（检测/重启）：daemon.json 健康（`GET /health` 可访问）→ 直接使用；文件在、health 不可访问、pid 已终止（`process.kill(pid, 0)` 抛出 ESRCH）→ 判定失效，stderr 提示 "stale daemon.json, respawning" 后 `spawnDaemon` 分叉启动（detached、stdio ignore、unref，目标 `resolveServerBin()` 解析到 `packages/server/bin/kclaw-server.mjs`）；pid 存活但不健康 → 仅在 5 秒 budget 内轮询等待（250ms 间隔），**绝不在 pid 存活时再次启动**（否则会同时出现两个 daemon）。
-- `stopDaemon`：对 daemon.json 的 pid 发 SIGTERM（ESRCH 视为已终止，继续清理）→ 轮询直到端口拒绝连接（budget 5 秒）→ budget 耗尽而 `/health` 仍应答 → 抛出 `停止失败：daemon 仍在响应端口 <port>（pid <pid>）` 且**不删除 daemon.json**（进程还活着，删掉文件会让它从此无法被找到或停止；CLI 把错误打到 stderr、以退出码 1 结束）；否则删除文件并返回 "stopped"。
+- `stopDaemon`：对 daemon.json 的 pid 发 SIGTERM（ESRCH 视为已终止，继续清理）→ 轮询直到端口拒绝连接（budget 5 秒）→ budget 耗尽而 `/health` 仍应答 → 抛出 `停止失败：daemon 仍在响应端口 <port>（pid <pid>）` 且**不删除 daemon.json**（进程仍在运行，删除文件会让它从此无法被找到或停止；CLI 把错误打到 stderr、以退出码 1 结束）；否则删除文件并返回 "stopped"。
 
 ## 边界与出错
 
-- **stop 后 token 仍在**：`<home>/token` 是 daemon 的身份，不是某次运行的临时凭证；重装/换 token 需手动删文件。
+- **stop 后 token 仍在**：`<home>/token` 是 daemon 的长期身份凭证，多次启动共用同一个；重装/换 token 需手动删除该文件。
 - **stale daemon.json 在启动时自愈**：`acquireDaemonSlot` 见到已终止 pid 的残留文件即删除并重新 `wx` 认领；存活 pid 则拒绝启动。运行中失效的发现（health 检测、respawn 决策）仍在 CLI 侧（见上文 ensureDaemon/stopDaemon）。
 - **`/health` 无鉴权，因此也没有信息泄露控制**：它只返回 `{ok:true}`，不暴露版本/端口/pid；`/status`（version、uptimeSec）受鉴权保护。
 - **配置文件损坏即启动失败**：`loadConfig` 对无法解析的 JSON 直接抛出错误（静默退回默认值会丢掉用户的权限规则），daemon 不启动。

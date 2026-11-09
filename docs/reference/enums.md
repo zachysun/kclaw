@@ -41,7 +41,7 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 | `permission` | 连续 2 轮出现确认超时（→blocked，等人工裁决） |
 | `judge-failed` | 判定器连续失败熔断（解析 3 次 / 传输 5 次）或检查流程故障 |
 | `run-error` | 上一轮运行出错（不自动重试，等用户） |
-| `user-stop` | 用户主动停止（同时掐活跃 run 与清空队列） |
+| `user-stop` | 用户主动停止（同时中止活跃 run 并清空队列） |
 
 ## 权限模式 PermissionMode（5 值）
 
@@ -67,7 +67,7 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 | `project` | 批准并写项目级规则 |
 | `global` | 批准并写全局规则 |
 | `reject` | 拒绝 |
-| `timeout` | 无人裁决等到超时（等待方产生，不是客户端发的） |
+| `timeout` | 无人裁决等到超时（由等待方产生，客户端不会发送这个值） |
 
 来源 `by`（4 值）：`cli` / `web` / `feishu` / `timeout`（`feishu` 来自飞书频道的审批卡）。
 
@@ -87,18 +87,18 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 | `post-run` | run 结束后的收尾压缩 |
 | `manual` | 手动 /compact |
 
-**compaction 会话事件的 `trigger`（3 值，持久化记录）**：`manual` / `in-run` / `auto`——phase 为 post-run 的持久化时记作 `auto`。
+**compaction 会话事件的 `trigger`（3 值，持久化记录）**：`manual` / `in-run` / `auto`；phase 为 post-run 的持久化时记作 `auto`。
 
-**compaction.completed 的 `result`（3 值）**：`ok` / `failed` / `cancelled`——started 一旦发出 completed 必达。
+**compaction.completed 的 `result`（3 值）**：`ok` / `failed` / `cancelled`；started 一旦发出，completed 必达。
 
 **CompactionOutcome（4 值，压缩结果的枚举名）**：
 
 | 值 | 含义 |
 |----|------|
 | `applied` | 新视图已生效（upto/top 命名边界，segments 计段数） |
-| `declined` | 无需压缩（阈值细判没收益或无可用边界），静默 |
+| `declined` | 无需压缩（按阈值细致判断后没有收益，或没有可用边界），静默 |
 | `failed` | 摘要器调用失败 |
-| `cancelled` | run 中止信号打断，结果吞掉 |
+| `cancelled` | 被 run 中止信号打断，结果丢弃 |
 
 ## 记忆事件字段
 
@@ -135,7 +135,7 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 
 权威来源：`packages/core/src/provider/types.ts`。
 
-**ProviderMessage 的 role（4 值）**：`system` / `user` / `assistant` / `tool`——发给 LLM 的消息形状（与持久化的 Role 三值不同：system 独立、无本地扩展）。
+**ProviderMessage 的 role（4 值）**：`system` / `user` / `assistant` / `tool`，即发给 LLM 的消息形状（与持久化的 Role 三值不同：system 独立、无本地扩展）。
 
 **ContentPart（2 值，用户消息内的多模态段）**：`text`（文本）/ `image_url`（图片，data: URL）。
 
@@ -158,11 +158,11 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 | `msg` | 消息 id | newMessage；入队时预分配的 messageId 同前缀 |
 | `ses` | 会话 id | SessionStore.create |
 | `blk` | 块 id | newBlockId |
-| `call` | 工具调用 id（已声明） | 无生成点——callId 由 provider 原样传入（缺失时合成 `call_idx_<n>`） |
+| `call` | 工具调用 id（已声明） | 无生成点：callId 由 provider 原样传入（缺失时合成 `call_idx_<n>`） |
 | `evt` | 总线事件 id | makeEvent |
 | `run` | run id | runAgent |
 | `conf` | 确认卡 id | 权限引擎的确认 id 工厂 |
-| `mem` | 记忆（已声明） | 无生成点——线 / 认知文件按 topic / kind-name 命名 |
+| `mem` | 记忆（已声明） | 无生成点：线 / 认知文件按 topic / kind-name 命名 |
 | `cron` | 定时任务 id | cron/scheduler.ts |
 | `proc` | 后台进程 id | bash 工具（`run_in_background` 后台启动时） |
 | `att` | 附件 id | server 上传路由（磁盘文件名 `<att_…>__<原名>`） |

@@ -36,7 +36,7 @@ kclaw chat
 
 ### 路线二：Ollama（零 key）
 
-选模板 `Ollama`：接口地址已预填 `http://localhost:11434/v1`，key 这一步直接跳过，只输入模型名——填入前面 `ollama pull` 下载的那个名字（不确定时可先执行 `ollama list` 查看），其余步骤相同。
+选模板 `Ollama`：接口地址已预填 `http://localhost:11434/v1`，key 这一步直接跳过，只输入模型名，填入前面 `ollama pull` 下载的那个名字（不确定时可先执行 `ollama list` 查看），其余步骤相同。
 
 ### wizard 失败的处理
 
@@ -114,7 +114,7 @@ REPL 里用 `/` 开头的命令管理会话：
 记住：我住在上海，习惯用中文回复
 ```
 
-agent 会把这条信息写进记忆系统的 markdown 文件（`~/.kclaw/memory/` 下，分两层：当前项目的**项目情节**存在 `projects/<项目id>/<主题>.md`，跨项目的长期偏好会进一步沉淀——也就是整理成不依赖单个项目的全局认知，如 `global/persona.md`）；全文检索索引是派生的 `vectors.db`（SQLite FTS5 + 向量，删掉可重建）。详细机制见 [memory](./core/memory.md)。
+agent 会把这条信息写进记忆系统的 markdown 文件（`~/.kclaw/memory/` 下，分两层：当前项目的**项目情节**存在 `projects/<项目id>/<主题>.md`，跨项目的长期偏好会进一步沉淀，也就是整理成不依赖单个项目的全局认知，如 `global/persona.md`）；全文检索索引是派生的 `vectors.db`（SQLite FTS5 + 向量，删掉可重建）。详细机制见 [memory](./core/memory.md)。
 
 验证跨会话生效：
 
@@ -147,7 +147,7 @@ kclaw cron list
 kclaw web
 ```
 
-这一条命令依次做四件事：
+这一条命令依次完成四个步骤：
 
 1. 确认 daemon 在运行，不在则自动启动。
 2. 读取 `~/.kclaw/token`（daemon 的访问凭证）。

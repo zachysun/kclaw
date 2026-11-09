@@ -6,9 +6,9 @@
 
 ## 设计决策
 
-- **是否已配置只以 daemon 为准**：daemon 没有 provider 也能启动（每次 run 第一次调用模型时才解析 provider，见 [provider](../core/provider.md)），`GET /providers` 快照里的 `configured` 字段由 daemon 按自己的解析规则计算——默认 provider 的端点与模型都能解析出来（条目字段为空时取 daemon 进程的 `KCLAW_LLM_BASE_URL`/`KCLAW_LLM_MODEL`）。CLI 进程不自己读 config.json 判断：CLI 与 daemon 的环境变量可能不同，各自判断会得出不一致的结论。
+- **是否已配置只以 daemon 为准**：daemon 没有 provider 也能启动（每次 run 第一次调用模型时才解析 provider，见 [provider](../core/provider.md)），`GET /providers` 快照里的 `configured` 字段由 daemon 按自己的解析规则计算：默认 provider 的端点与模型都能解析出来（条目字段为空时取 daemon 进程的 `KCLAW_LLM_BASE_URL`/`KCLAW_LLM_MODEL`）。CLI 进程不自己读 config.json 判断：CLI 与 daemon 的环境变量可能不同，各自判断会得出不一致的结论。
 - **wizard 经由运行中的 daemon 写配置**：连通测试走 `POST /providers/probe`，请求从 daemon 发出（真正调用模型的也是 daemon）；保存走 `POST /providers` 与 `POST /providers/:name/default`，daemon 写入 config.json 并发出配置变更通知，下一条消息就用上新配置，不需要重启 daemon。
-- **wizard 是验证环节不是必经之路**：只在 `configured === false` 且 stdout 是 TTY 时启动；取消（Ctrl+C 等）或"重试？→否"都直接静默退出，连通测试成功之前**不保存任何配置**。
+- **wizard 是按需出现的验证环节**：只在 `configured === false` 且 stdout 是 TTY 时启动；取消（Ctrl+C 等）或"重试？→否"都直接静默退出，连通测试成功之前**不保存任何配置**。
 - **连通测试用最小请求**：一次 `max_tokens: 1` 的补全请求，验证 key、model、baseUrl 三项组合可用，不浪费 token。
 - **key 经 daemon 保存到 credentials.json**：daemon 的 `saveConfig` 原子写入（临时文件写入后 rename，mode 0600），API key 存放在 `~/.kclaw/credentials.json`（0600，config.json 里留空串，机制见 [storage](../core/storage.md)），仅属主可读写；`/providers` 快照返回的 key 是掩码。
 - **`kclaw web` 不向用户展示 token**：URL 带 token 只用于浏览器一次交接，终端打印的地址刻意去掉 `?token=` 部分（用户能看见/分享的是不带 token 的 URL）。
@@ -43,7 +43,7 @@
 2. **baseurl**（仅 custom）：文本输入，裁掉末尾斜杠，空值报错并重新输入。
 3. **key**：`p.password` 隐藏输入（不回显）；ollama 不经过这步。
 4. **model**：文本输入，空则用模板默认；然后构造 `buildProviderEntry(t, apiKey, model)` → `{ format, baseUrl, apiKey, model }` → 连通测试。
-5. **连通测试**（`POST /providers/probe`，daemon 调用 core 的 `probeProviderChat`）：按模板的 `format` 做连通测试——openai 格式 `POST {baseUrl}/chat/completions`，body `{ model, messages: [{role:"user", content:"hi"}], max_tokens: 1, stream: false }`；anthropic 格式 `POST {baseUrl}/v1/messages`（baseUrl 已以 `/v1` 结尾时不再重复追加，探测路径与消息端点共用同一条 URL 规则），body 为对应的 Messages 形态。20 秒超时；不抛异常而是原样返回 `{status, body}`（status 为 null = 请求没到达；body 是响应文本，截取前 200 个字符），判定与重试留在 CLI，与 provider 管理接口共用同一连通测试实现（机制见 [provider](../core/provider.md)）。成功（HTTP < 400）→ 保存收尾；失败 → 分类报错 + 重试确认。
+5. **连通测试**（`POST /providers/probe`，daemon 调用 core 的 `probeProviderChat`）：按模板的 `format` 做连通测试：openai 格式 `POST {baseUrl}/chat/completions`，body `{ model, messages: [{role:"user", content:"hi"}], max_tokens: 1, stream: false }`；anthropic 格式 `POST {baseUrl}/v1/messages`（baseUrl 已以 `/v1` 结尾时不重复追加，连通测试路径与消息端点共用同一条 URL 规则），body 为对应的 Messages 形态。20 秒超时；出错时也不抛出异常，原样返回 `{status, body}`（status 为 null = 请求没到达；body 是响应文本，截取前 200 个字符），判定与重试留在 CLI，与 provider 管理接口共用同一连通测试实现（机制见 [provider](../core/provider.md)）。成功（HTTP < 400）→ 保存收尾；失败 → 分类报错 + 重试确认。
 
 **失败按三类报错**（`classifyProbeError` → `REASON`）：
 

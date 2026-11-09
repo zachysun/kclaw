@@ -1,16 +1,16 @@
 # reference — 参考清单
 
-这组文档只做陈列：把源代码里的枚举、类型联合、注册清单逐值列出，每项一句话说明，配核心源码。不讲机制——机制在各分篇（[core](../core/protocol.md)、[server](../server/realtime.md) 等）。
+这组文档只做陈列：把源代码里的枚举、类型联合、注册清单逐值列出，每项一句话说明，配核心源码。不讲机制，机制在各分篇（[core](../core/protocol.md)、[server](../server/realtime.md) 等）。
 
-**权威来源原则**：每篇的第一行标出它的源码权威来源（类型定义所在文件）。其他技术文档需要罗列这些值时，直接引用本目录对应篇目，不再各自维护一份清单——清单只此一份，源码改了只改这里。
+**权威来源原则**：每篇的第一行标出它的源码权威来源（类型定义所在文件）。其他技术文档需要罗列这些值时，直接引用本目录对应篇目，不各自维护清单。清单只此一份，源码改了只改这里。
 
 | 篇目 | 陈列内容 | 权威来源 |
 |------|----------|--------|
 | [messages](./messages.md) | 消息类型（Role 3 种）、停止原因（StopReason 7 种 + 归一化映射）、放行原因（GrantedBy 8 种） | `packages/core/src/protocol/messages.ts` |
-| [blocks](./blocks.md) | 内容块（6 种）、note 种类（8 种）、附件来源（3 种）、role × 块约定 | `packages/core/src/protocol/blocks.ts` |
+| [blocks](./blocks.md) | 内容块（6 种）、note 种类（9 种）、附件来源（3 种）、role × 块约定 | `packages/core/src/protocol/blocks.ts` |
 | [events](./events.md) | 总线事件（EventType 43 种，含分组与 payload）、事件公共字段 | `packages/core/src/protocol/events.ts` |
 | [session-events](./session-events.md) | 持久化会话事件（events.jsonl 的 28 种类型） | `packages/core/src/protocol/session-events.ts` |
 | [wire](./wire.md) | WS 指令帧（10 种）、应答帧（9 种 + error）、排队处置（3 种） | `packages/core/src/protocol/wire.ts` |
-| [tools](./tools.md) | 内置工具（40 个：常驻 18 + 条件 22）、risk / concurrency 两轴 | `packages/core/src/tools/` |
+| [tools](./tools.md) | 内置工具（40 个：常驻 16 + 条件 24）、risk / concurrency 两轴 | `packages/core/src/tools/` |
 | [hooks](./hooks.md) | hook 位置（14 个）、内置 hook（15 个）、失败策略（3 档） | `packages/core/src/hooks/` |
 | [enums](./enums.md) | 其余枚举集：权限模式、压缩结果、记忆触发、团队状态、provider 流事件、ID 前缀 | 分散（篇内逐项标注） |

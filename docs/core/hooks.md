@@ -4,18 +4,18 @@
 
 `packages/core/src/hooks/` 实现 hook 系统：`types.ts`（位置网格与每位置的 ctx/result 契约）、`runner.ts`（`HookChain`，唯一执行路径）、`loader.ts`（用户 hook 文件装载）、`registry.ts`（`HookRegistry`，daemon 级装载记录）、`builtin.ts`（引擎内置行为的 hook 化形态）、`positions.ts`（位置的运行时清单）。
 
-它回答的问题是"给 run 加一个行为，最少要动多少东西"。答案分两档：**引擎自己的行为**是一批注册在固定位置上的内置 hook（与用户 hook 走同一条链、同一个文件契约，只是闭包了 run 资源、允许声明 fatal）；**外部新增行为**是一个放进 `~/.kclaw/hooks/` 的 js/ts 文件，下一轮 run 即生效，不重启 daemon、不改一行源码。循环本身（`agent/loop.ts`）只知道"位置"——它调用 `hooks.run("位置", 上下文)`，别的都不知情。
+它回答的问题是"给 run 加一个行为，最少要动多少东西"。答案分两档：**引擎自己的行为**是一批注册在固定位置上的内置 hook（与用户 hook 走同一条链、同一个文件契约，只是闭包了 run 资源、允许声明 fatal）；**外部新增行为**是一个放进 `~/.kclaw/hooks/` 的 js/ts 文件，下一轮 run 即生效，不重启 daemon、不改一行源码。循环本身（`agent/loop.ts`）只知道"位置"：它调用 `hooks.run("位置", 上下文)`，别的都不知情。
 
 ---
 
 ## 设计决策
 
-- **位置网格是封闭枚举**：`HookPosition` 是 14 个命名位置的联合类型。位置只开在"真实存在改动需求的地方"——改写用户消息、改写模型视图、注入引导、压缩判定……没有改动需求的地方不开位置。加一个位置 = 更新 `HookContextMap`/`HookResultMap` 两张契约表，编译器会走查每一个使用方（封闭原则）。
-- **注册接口是唯一挂载入口**：内置闭包、用户文件、测试注入，全部经 `HookChain.register` 进链。引擎不区分"自己人"和"外人"——它自己就是这套机制的第一批用户。
-- **失败时怎么办由文件自己声明，默认放行**：用户文件可声明 `failure: "skip"`（默认，失败即跳过、只发一条 `hook.failed`，run 照常继续）或 `"deny"`（失败时否决所在环节——`tool-before` 位置上就是该工具不执行，fail-closed 自选档）；声明 `"fatal"` 的用户文件拒绝装载（用户代码没有终止整个 run 的权力）。引擎内置 hook 在原行为抛出错误传播的地方保留 `fatal`（如用户消息持久化），语义与改成 hook 形态之前完全一致。
+- **位置网格是封闭枚举**：`HookPosition` 是 14 个命名位置的联合类型。位置只开在"真实存在改动需求的地方"（改写用户消息、改写模型视图、注入引导、压缩判定……），没有改动需求的地方不开位置。加一个位置 = 更新 `HookContextMap`/`HookResultMap` 两张契约表，编译器会走查每一个使用方（封闭原则）。
+- **注册接口是唯一挂载入口**：内置闭包、用户文件、测试注入，全部经 `HookChain.register` 进链。引擎不区分内置 hook 与外部 hook，它自己就是这套机制的第一批用户。
+- **失败时怎么办由文件自己声明，默认放行**：用户文件可声明 `failure: "skip"`（默认，失败即跳过、只发一条 `hook.failed`，run 照常继续）或 `"deny"`（失败时否决所在环节，在 `tool-before` 位置上就是该工具不执行，fail-closed 自选档）；声明 `"fatal"` 的用户文件拒绝装载（用户代码没有终止整个 run 的权力）。引擎内置 hook 在必须让错误传播出去的环节使用 `fatal`（如用户消息持久化）。
 - **改写权只开在四处**：`run-before`（用户消息）、`llm-before`（模型视图）、`system-before`（系统提示词追加段落）、`system-after`（系统提示词终稿）。其余位置是观察（返回值忽略）或内置独占的决策位（`compaction-check`/`overflow-rescue`：压缩判定闭包着压缩引擎，用户 hook 不注册）。
-- **权限与确认不进 hook 链**：工具执行前的权限裁决保持循环的控制流（`tool-before` 位置观察 + deny 否决权，见上）。把"允许/拒绝/确认"做成可改写 hook 等于把安全边界交给目录里的文件，收益配不上风险；`deny` 档给的是"hook 失败宁可不放行"的表达力，不是主动裁决权。
-- **每个 run 重新扫描，以文件为准**：用户 hook 目录在每次 run 开始时重扫（与技能同一套思路），改文件下一轮生效、不重启 daemon。装载失败按"文件名+mtime+错误"去重后发一次 `hook.failed {phase:"load"}` 事件——管理接口持续显示失败，事件流不被刷屏。
+- **权限与确认不进 hook 链**：工具执行前的权限裁决保持循环的控制流（`tool-before` 位置观察 + deny 否决权，见上）。把"允许/拒绝/确认"做成可改写 hook 等于把安全边界交给目录里的文件，收益配不上风险；`deny` 档只用来表达"hook 失败时宁可不放行"，hook 本身没有主动裁决权。
+- **每个 run 重新扫描，以文件为准**：用户 hook 目录在每次 run 开始时重扫（与技能同一套思路），改文件下一轮生效、不重启 daemon。装载失败按"文件名+mtime+错误"去重后发一次 `hook.failed {phase:"load"}` 事件：管理接口持续显示失败，事件流里不会反复出现同一条失败。
 - **hook 名即文件名**：用户 hook 的身份是文件基名，同名文件重复扫描整体替换（后扫的版本胜出）。
 
 ---
@@ -41,20 +41,20 @@
 | `system-before` | 系统提示词组装前 | `{ base }` | `string[]` | 追加段落（内置：认知 + 技能清单），**多 hook 累积** |
 | `system-after` | 系统提示词终稿（两段拼装之后、组装层冻结基线之前） | `{ system }` | `string` | 改写终稿（用户改写随后被组装层整体固化进 stable 基线并审计） |
 
-用户 hook 默认 order 1000——落在内置 hook（10–99）之后。system-after 上，用户改写在组装层冻结基线之前执行，冻结进基线的终稿就是改写后的那份（见下），所以用户对系统提示词的改写永远在被审计的那份里。
+用户 hook 默认 order 1000，排在内置 hook（10–99）之后。system-after 上，用户改写在组装层冻结基线之前执行，冻结进基线的终稿就是改写后的那份（见下），所以用户对系统提示词的改写永远在被审计的那份里。
 
-**冻结基线（提示词缓存策略，双段独立）**：系统提示词分两段，**stable**（人设基础文本 + 注入约定，缓存冻结面）在前，**live**（认知 + 技能清单，低频变化面）在后。会话 meta 的 `systemBaseline`（见 [storage](./storage.md)）为两段各存一份基线 `{ text, frozenAt }`：每 run 两段现算、与基线逐段比对，哪段文本变了就重冻结哪段，没变的沿用基线（`frozenAt` 记录的是"这份文本成为基线的时刻"）。前缀缓存按从头逐字节相同匹配，live 变化只失效变化点之后，stable 前缀继续命中；装一个新技能、夜间认知刷新在下一个 run 即时生效，不再等压缩边界。`system-before` 链每 run 都执行（live 段由它现算，文本与基线逐字相等时不重冻结）；两段全命中时 `system-after` 链**整体不执行**（用户 system-after hook 改写的段落同样冻结，文本未变则沿用基线）；至少一段变化时走 `system-after` 链，用户改写发生时终稿整体固化进 stable 基线。改写每 run 重新生效，审计恒记录模型实际看到的那份。基线由上一 run 的 `system` 审计事件按段固化，压缩清除后下一个 run 重新组装（见 [compaction](./compaction.md)）。
+**冻结基线（提示词缓存策略，双段独立）**：系统提示词分两段，**stable**（人设基础文本 + 注入约定，缓存冻结面）在前，**live**（认知 + 技能清单，低频变化面）在后。会话 meta 的 `systemBaseline`（见 [storage](./storage.md)）为两段各存一份基线 `{ text, frozenAt }`：每 run 两段现算、与基线逐段比对，哪段文本变了就重冻结哪段，没变的沿用基线（`frozenAt` 记录的是"这份文本成为基线的时刻"）。前缀缓存按从头逐字节相同匹配，live 变化只失效变化点之后，stable 前缀继续命中；装一个新技能、夜间认知刷新都在下一个 run 即时生效，无需等到压缩边界。`system-before` 链每 run 都执行（live 段由它现算，文本与基线逐字相等时不重冻结）；两段全命中时 `system-after` 链**整体不执行**（用户 system-after hook 改写的段落同样冻结，文本未变则沿用基线）；至少一段变化时走 `system-after` 链，用户改写发生时终稿整体固化进 stable 基线。改写每 run 重新生效，审计恒记录模型实际看到的那份。基线由上一 run 的 `system` 审计事件按段固化，压缩清除后下一个 run 重新组装（见 [compaction](./compaction.md)）。
 
 ---
 
 ## HookChain 语义（runner.ts）
 
 - **排序**：`meta.order` 升序，同序按名字稳定排序（改写链依赖确定性）。
-- **真链式改写**：改写位置的返回值回填进 ctx 的改写字段（`run-before` 的 `message`、`llm-before` 的 `messages`、`system-after` 的 `system`），下一个 handler 看到的是改写后的值——这保证"用户改写在前、内置持久化在后"时，持久化落的是改写后的消息。回填只发生在链内部，调用方传入的 ctx 对象本身不被改动。
-- **追加型位置**：`system-before` 的返回值是段落**数组**，多个 hook 的段落累积拼接而不是互相覆盖。
-- **执行审计**：每条实际执行的钩子（正常返回、抛出错误、超时三种结果都记）落一条 `hook` 持久化事件（`name` / `position` / `origin` / `outcome` / `durationMs` / `runId?`，经 runner 的 `onExecuted` 回调接 `SessionStore.appendHook`；回调自身抛出错误不影响链继续执行），与 `hook.failed` 总线事件分工：总线是实时通道（仅失败），事件流是权威记录（全量）。见 [storage](./storage.md) 的钩子审计一节。
+- **真链式改写**：改写位置的返回值回填进 ctx 的改写字段（`run-before` 的 `message`、`llm-before` 的 `messages`、`system-after` 的 `system`），下一个 handler 看到的是改写后的值。这保证"用户改写在前、内置持久化在后"时，持久化写入的是改写后的消息。回填只发生在链内部，调用方传入的 ctx 对象本身不被改动。
+- **追加型位置**：`system-before` 的返回值是段落**数组**，多个 hook 的段落依次拼接，互不覆盖。
+- **执行审计**：每条实际执行的钩子（正常返回、抛出错误、超时三种结果都记）写入一条 `hook` 持久化事件（`name` / `position` / `origin` / `outcome` / `durationMs` / `runId?`，由 runner 的 `onExecuted` 回调交给 `SessionStore.appendHook` 写入；回调自身抛出错误不影响链继续执行），与 `hook.failed` 总线事件分工：总线是实时通道（仅失败），事件流是权威记录（全量）。见 [storage](./storage.md) 的钩子审计一节。
 - **失败分派**：抛出错误/超时按 `meta.failure` 分派。`fatal` 让整次 `run()` 拒绝（循环既有的各位置 catch 路径接管，错误码保持原样：`user_message_failed`、`steering_failed` 等）；`skip` 发 `hook.failed {phase:"run"}` 后继续下一个 handler；`deny` 同样发事件并继续执行完链（后面的观察者不丢），但经 `runGate` 出口把首个失败记为**否决**：`tool-before` 位置上循环据此给该工具写拒绝结果（错误结果 + `denied` note，工具不执行，run 继续）。
-- **超时**：每个 handler 都按 `config.hooks.timeoutMs`（默认 5000ms）计时，超时即算失败，走同样的 fatal/skip/deny 分派。条目可用 `meta.timeoutMs` 覆盖链 budget（`Infinity` = 不限时）：五个内置压缩 hook（background-precompact / mid-run-panic / overflow-emergency / manual-compact-flush / post-run-compaction）声明了不限时——它们的函数体是两次 provider 调用，时长由 LLM 决定；时长上限由 provider 单请求超时与 run 中止信号保底。
+- **超时**：每个 handler 都按 `config.hooks.timeoutMs`（默认 5000ms）计时，超时即算失败，走同样的 fatal/skip/deny 分派。条目可用 `meta.timeoutMs` 覆盖链 budget（`Infinity` = 不限时）：五个内置压缩 hook（background-precompact / mid-run-panic / overflow-emergency / manual-compact-flush / post-run-compaction）声明了不限时：它们的函数体是两次 provider 调用，时长由 LLM 决定；时长上限由 provider 单请求超时与 run 中止信号保底。
 - **空位置零开销**：没有注册任何 handler 的位置同步短路返回 `undefined`，`has()` 为 false（循环据此判断要不要走进某个分支，如 overflow-rescue）。
 
 ---
@@ -80,8 +80,8 @@ export default async (ctx) => {
 装载规则（`scanUserHooks`）：
 
 - 扩展名 `.js` / `.mjs` / `.ts`（`.ts` 依赖 Node 24+ 的原生类型擦除；低版本 Node 会在 import 时得到明确报错）。其余扩展名忽略。
-- 文件用绝对 URL 加 `?t=<mtimeMs>` 动态 import——同一路径改文件后必重新执行（编辑即生效）；不解析裸说明符依赖（第三方包不支持）。
-- 损坏形态（语法错误、未知 position、缺 `hook` 导出或 default 函数、声明 `failure: "fatal"` 或非法 failure 值）成为**装载失败条目**，不会拖垮目录里其他文件，也不会弄崩 daemon。
+- 文件用绝对 URL 加 `?t=<mtimeMs>` 动态 import，同一路径改文件后必重新执行（编辑即生效）；不解析裸说明符依赖（第三方包不支持）。
+- 损坏形态（语法错误、未知 position、缺 `hook` 导出或 default 函数、声明 `failure: "fatal"` 或非法 failure 值）成为**装载失败条目**，不会拖垮目录里其他文件，也不会导致 daemon 崩溃。
 - `enabled: false` 的文件照常载入元数据（管理接口可见）但不进执行链。
 
 ---
@@ -92,15 +92,15 @@ export default async (ctx) => {
 
 | order | 名字 | 位置 | failure | 行为 |
 |-------|------|------|---------|------|
-| 10 | `memory-inject` | run-before | skip | 检索记忆库、收集相关经历 note（收集不落位） |
+| 10 | `memory-inject` | run-before | skip | 检索记忆库、收集相关经历 note（只收集，不写入消息） |
 | 20 | `user-message-land` | run-before | fatal | 追加 cron/记忆 note → `appendMessage` 持久化 → 逐块 `note.emitted` |
 | 30 | `autoname` | run-before | skip | 新会话首条消息的后台自动命名 |
 | 10 | `skill-wrap` | llm-before | skip | 技能与 `@` 文件指定的隐式包装（只改模型视图；run 组装把两份包装文本合并成一份 `llmUserText`） |
 | 10 | `retry-notify` | llm-retry | skip | 把 provider 重试转成 `llm.failed {willRetry:true}` 事件 |
 | 10 | `steering-drain` | turn-boundary | fatal | 取走队列的引导缓冲并注入对话 |
 | 5 | `background-precompact` | compaction-check | skip | 预压区间的后台压缩派发（非阻塞，见 [compaction](./compaction.md) 机制四） |
-| 10 | `mid-run-panic` | compaction-check | skip | 红线阈值触发的中途压缩判定（`null` = 不压）；先应用暂存的后台结果，遇正在执行的后台压缩先等 |
-| 10 | `overflow-emergency` | overflow-rescue | skip | 超限急救压缩（换视图整次重发）；先掐掉正在执行的后台压缩 |
+| 10 | `mid-run-panic` | compaction-check | skip | 红线阈值触发的中途压缩判定（`null` = 不压缩）；先应用暂存的后台结果，遇正在执行的后台压缩先等 |
+| 10 | `overflow-emergency` | overflow-rescue | skip | 超限急救压缩（换视图整次重发）；先中止正在执行的后台压缩 |
 | 10 | `usage-ledger` | run-after | skip | 记录本次 run 的用量 |
 | 15 | `manual-compact-flush` | run-after | skip | 执行运行忙时排队的 /compact（在自动收尾压缩之前） |
 | 20 | `post-run-compaction` | run-after | skip | 上下文到达黄线时触发的收尾压缩（估算前等正在执行的后台压缩结束；压缩失败只记日志，不影响 run 收尾） |
@@ -108,7 +108,7 @@ export default async (ctx) => {
 | 40 | `skill-follow-check` | run-after | skip | 技能进化的零成本粗查：范围内卷入技能（skill_read/skill_list 工具块或 `/技能名` 指名）才排提炼空闲检查；`skills.evolution` 未启用或 `idleMinutes<=0` 时直接跳过 |
 | 10 | `system-materials` | system-before | skip | 收集 L2 认知与技能清单两个提示词段（即 live 段） |
 
-两个值得知道的次序：run-before 上 `memory-inject(10)` 只收集记忆 note，`user-message-land(20)` 统一把 cron note（在前）与记忆 note 追加进消息、持久化并广播，块顺序与 `note.emitted` 次序保持稳定。system-after 上用户改写（默认 1000）排在前面，随后组装层把终稿（用户改写或原稿）按段冻结进基线并写 `system` 审计事件。**系统提示词的审计记录不是 hook**：`system` 事件的双段写入（stable/live）由 run 组装层直接写入事件流（写失败即 run 失败），因为分段冻结需要 stable/live 两段文本，而它们位于 hook 链之上（见 [run-manager](../server/run-manager.md) 组装第 11 步）。
+两个值得知道的次序：run-before 上 `memory-inject(10)` 只收集记忆 note，`user-message-land(20)` 统一把 cron note（在前）与记忆 note 追加进消息、持久化并广播，块顺序与 `note.emitted` 次序保持稳定。system-after 上用户改写（默认 1000）排在前面，随后组装层把终稿（用户改写或原稿）按段冻结进基线并写 `system` 审计事件。**系统提示词的审计记录不经过 hook**：`system` 事件的双段写入（stable/live）由 run 组装层直接完成（写失败即 run 失败），因为分段冻结需要 stable/live 两段文本，而它们位于 hook 链之上（见 [run-manager](../server/run-manager.md) 组装第 11 步）。
 
 **subagent run 的派生跳过**：会话 meta 带 `parentSessionId` 时，run 组装给内置 hook 链带 `childRun: true`（同一个事实派生，无独立开关，见 [subagents](./subagents.md)），五个内置 hook 直接停用：`memory-inject` 不检索不收集（subagent 不注入记忆 note）、`autoname` 跳过（标题已带"subagent · "前缀）、`follow-check` 不排检查（子会话不进记忆的任何提取路径）、`skill-follow-check` 不排（子会话不自己排技能提炼检查，其技能使用由同项目后续主干 run 的粗查覆盖）、`system-materials` 返回空段（系统提示词整体换成精简的 `subagentSystemPrompt`，不带认知与技能清单）。`usage-ledger` 照常记录，但记到 `usageSessionId`（= 父会话 id）名下，subagent 的 token 消耗归因到派它的主对话。
 
@@ -122,7 +122,7 @@ export default async (ctx) => {
 
 ## 边界与出错
 
-- **装载失败不伤 run**：损坏形态（语法错误、未知 position、缺 `hook` 导出或 default 函数、非法 failure 值）只成为一条装载失败条目，不拖垮目录里其他文件、不弄崩 daemon；按"文件名 + mtime + 错误"去重后发一次 `hook.failed {phase:"load"}`，管理接口持续显示失败。
+- **装载失败不影响 run**：损坏形态（语法错误、未知 position、缺 `hook` 导出或 default 函数、非法 failure 值）只成为一条装载失败条目，不拖垮目录里其他文件、不导致 daemon 崩溃；按"文件名 + mtime + 错误"去重后发一次 `hook.failed {phase:"load"}`，管理接口持续显示失败。
 - **用户 hook 没有 fatal 权**：声明 `failure: "fatal"` 的文件拒绝装载；引擎内置 hook 在原行为抛出错误传播的地方保留 `fatal`（如用户消息持久化），语义与 hook 化之前一致。
 - **禁用文件照常可见**：`enabled: false` 的文件载入元数据（管理接口可见）但不进执行链。
 - **超时按失败分派**：每个 handler 按 `config.hooks.timeoutMs`（默认 5000ms）计时，超时走与抛出错误同样的 fatal/skip/deny 分派；条目 `meta.timeoutMs` 可覆盖，五个内置压缩 hook 声明不限时（时长由 provider 单请求超时与 run 中止信号保底）。

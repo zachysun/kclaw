@@ -9,9 +9,9 @@
 - **鉴权由一个 hook 统一处理**：`preHandler` 比对 `Authorization: Bearer <token>`（恒时比较），失败统一 `401 {error:"unauthorized"}`。豁免只有 `/health`、`/ws`、静态外壳三种（设计理由见 [daemon](./daemon.md) 的鉴权设计一节）。
 - **错误形状统一为 `{error: string}`**：会话/任务两个路由分组（scope）注册了 `setErrorHandler`，把 Fastify 的 body 解析错误（非法 JSON、空 body）也归一成这个形状；其余分组未注册（body 解析错误走 Fastify 默认形状 `{statusCode, error, message}`），客户端需兼容两种。客户端的共享 HTTP 模块（`@kclaw/core/client-http`）正是从这个 `error` 字段提取错误消息、取不到退回 `HTTP <status>`，见 [client-http](../core/client-http.md)。
 - **404 显式可判别**：会话/任务路由先查存在性（`sessions.meta(id)` / `crons.get(id)`），不存在返回 `404 {error:"session not found"|"cron not found"}`，不依赖异常路径。
-- **配置读面只读且脱敏，写面收在 provider 管理族**：`GET /config` 的 API key 永远掩码返回；改 provider 配置走 `/providers` 路由族（见下文 Provider 管理一节）——改动热生效于下个 run 并持久化 `config.json`，其余配置节仍以手写配置文件为准。
+- **配置的读取接口只读且脱敏，写入集中在 provider 管理路由族**：`GET /config` 的 API key 永远掩码返回；改 provider 配置走 `/providers` 路由族（见下文 Provider 管理一节），改动热生效于下个 run 并持久化 `config.json`，其余配置节仍以手写配置文件为准。
 - **消息审计没有专门路由，压缩审计有只读视图**：审计页（web 的 `AuditView`）没有独立 `/audit` 路由（它由 `GET /sessions/:id/events`（该会话完整事件流，`?since=` 增量游标）单源读取 + 页面私有 ws 订阅（`session.appended` 通知帧驱动增量拉取）组合而成，会话选择跟随应用侧栏的全局选中）。压缩审计不同：手动压缩刻意不产生消息，纯靠消息流看不到它的痕迹，因此 `GET /sessions/:id/compactions` 作为事件流里 `compaction` 事件的只读视图存在（见 [compaction](../core/compaction.md)）。
-- **可选能力按注入条件注册**：附件路由只在传入 `attachmentsDir` 时注册、用量路由只在传入 `UsageStore` 时注册——能力未组装就没有这些路径，而不是"注册了但报错"；MCP 组始终注册，`GET /mcp` 在 daemon 未组装 McpManager 时返回空组列表，动作端点此时回答 503。技能组与记忆组同为始终注册，但语义不同：记忆组未组装 `MemorySystem` 时降级 503，技能组没有组装依赖（技能是以文件为准，每次请求重新扫描），始终正常工作。
+- **可选能力按注入条件注册**：附件路由只在传入 `attachmentsDir` 时注册、用量路由只在传入 `UsageStore` 时注册：能力未组装就没有这些路径（不存在"路由已注册但调用报错"的状态）；MCP 组始终注册，`GET /mcp` 在 daemon 未组装 McpManager 时返回空组列表，动作端点此时回答 503。技能组与记忆组同为始终注册，但语义不同：记忆组未组装 `MemorySystem` 时降级 503，技能组没有组装依赖（技能以文件为准，每次请求重新扫描），始终正常工作。
 
 ## 路由清单
 
@@ -29,25 +29,25 @@
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
 | POST | `/sessions` | 创建会话 | `{title?, workdir?}`（均可默认；传入时必须是非空字符串）；**workdir 默认取 `config.workspace` 的值**，保证每条会话都带具体工作目录；初始权限模式取 `config.permissions.defaultMode` 的当前值**固化为 `meta.mode`**（默认 default；改配置只影响之后新建的会话）；创建成功后**异步触发一次切会话记忆写入**（clear 触发，归属 = 创建前的项目最近活动会话，即用户刚离开的旧会话；未组装记忆系统时不触发），不阻塞响应 | 201，`SessionMeta`（title 默认为 `"新会话"`） |
-| GET | `/sessions` | 会话列表（updatedAt 新的在前） | 查询参数 `deleted=true` 返回回收站会话；默认只返回未删除会话。两种情况都**不含 subagent 会话**（meta 带 `parentSessionId` 的会话不是列表一等公民），`children=true` 才列出（给定父的 subagent 排查用，见 [subagents](../core/subagents.md)） | `SessionMeta[]` |
+| GET | `/sessions` | 会话列表（updatedAt 新的在前） | 查询参数 `deleted=true` 返回回收站会话；默认只返回未删除会话。两种情况都**不含 subagent 会话**（列表只列 meta 不带 `parentSessionId` 的顶层会话），`children=true` 才列出（给定父的 subagent 排查用，见 [subagents](../core/subagents.md)） | `SessionMeta[]` |
 | GET | `/sessions/:id` | 读单个会话元数据 | — | `SessionMeta` |
 | PATCH | `/sessions/:id` | 改名 | `{title?}`（非空字符串；body 里的 `workdir` 被解析但**不生效**，只有 title 传给 `updateMeta`） | `SessionMeta` |
-| DELETE | `/sessions/:id` | 软删除（移入回收站，标记 `deleted`/`deletedAt`）；**先停掉该会话自己的 run（中止执行中的、丢弃排队的，并有界等待被中止 run 的收尾写完）**——不停的话 run 会继续向一个客户端已不可见的会话追加事件，重启恢复还会跳过已删会话的队列文件、那些条目永久滞留磁盘；**再取消该会话仍在执行的后台 subagent 与团队组员 run**，然后级联软删其全部 subagent 会话（不留残留会话，见 [subagents](../core/subagents.md)、[agent-team](../core/agent-team.md)）；若本会话是组长，团队目录随之一并归档（见 agent-team） | — | `SessionMeta` |
+| DELETE | `/sessions/:id` | 软删除（移入回收站，标记 `deleted`/`deletedAt`）；**先停掉该会话自己的 run（中止执行中的、丢弃排队的，并有界等待被中止 run 的收尾写完）**：不停的话 run 会继续向一个客户端已不可见的会话追加事件，重启恢复还会跳过已删会话的队列文件，那些条目会永久留在磁盘上；**再取消该会话仍在执行的后台 subagent 与团队组员 run**，然后级联软删其全部 subagent 会话（不留残留会话，见 [subagents](../core/subagents.md)、[agent-team](../core/agent-team.md)）；若本会话是组长，团队目录随之一并归档（见 agent-team） | — | `SessionMeta` |
 | POST | `/sessions/:id/restore` | 从回收站恢复（清除 `deleted`/`deletedAt`） | — | `SessionMeta` |
-| POST | `/sessions/:id/purge` | 永久删除（整个会话目录删除）；**先停掉该会话自己的 run 并有界等待其落定**（与 DELETE 同参数的 `stopAndClear` + `awaitSettle`；purge 特有的风险：abort 是协作式信号，不等待落定的话，被中止 run 的收尾追加会在目录删除后经 mkdirSync 把它复活成一个残废会话——没有 `session.created` 事件、标题为空；等待有上限，超时照常继续删除）；**再取消该会话仍在执行的后台 subagent 与团队组员 run**，然后级联永久删除其全部 subagent 会话；团队目录同样归档 | — | `{ok: true}` |
+| POST | `/sessions/:id/purge` | 永久删除（整个会话目录删除）；**先停掉该会话自己的 run 并有界等待它结束**（与 DELETE 同参数的 `stopAndClear` + `awaitSettle`；purge 特有的风险：abort 是协作式信号，如果不等待 run 结束，被中止 run 的收尾追加会在目录删除后经 mkdirSync 重新建出这个目录，形成一个不完整的会话：没有 `session.created` 事件、标题为空；等待有上限，超时照常继续删除）；**再取消该会话仍在执行的后台 subagent 与团队组员 run**，然后级联永久删除其全部 subagent 会话；团队目录同样归档 | — | `{ok: true}` |
 | POST | `/sessions/:id/model` | 会话级模型切换（只影响此会话**之后**的 run，历史不动） | `{model?}`：provider 条目名（entry key，见 [run-manager](./run-manager.md) 的模型解析）或裸模型名；`""`/默认清空回退到默认；类型不对 400 `model must be a string`，条目不存在 400 `model not found: <name>` | `SessionMeta` |
 | POST | `/sessions/:id/mode` | 会话级权限模式切换（只影响此会话**之后**的 run，历史不动；机制见 [permissions](../core/permissions.md)） | `{mode: "readonly"\|"default"\|"acceptEdits"\|"trusted"\|"auto"}` 必填；非法值 400 `mode must be one of readonly \| default \| acceptEdits \| trusted \| auto` | `SessionMeta` |
 | GET | `/sessions/:id/team` | agent 团队面板数据（机制见 [agent-team](../core/agent-team.md)） | — | `{team, identity: "lead"\|"member", members, tasks}`（团队、本会话身份、组员名单含忙闲与当前任务、任务板快照）；会话不在任何团队 404 |
-| GET | `/sessions/:id/messages` | 读全部消息（对话/断线恢复的数据源，ChatPanel 用） | — | `Message[]`（事件流投影视图——`readMessages` 从 events.jsonl 过滤 `message` 事件按事件序返回；**排队未执行的消息不在其中**，见 `/queue`） |
-| GET | `/sessions/:id/events` | 完整事件流（会话历史的唯一权威数据；审计页的单源数据） | `since?`：非负整数，只返回数组下标 `>= since` 的事件（流是 append-only：只追加、不修改，下标即稳定增量游标；默认/0 = 全量；越界返回 `[]`；负数/非整数 400 `since must be a non-negative integer`）。带 `since` 时存储层走**尾部读**（`readEventsFrom`）：文件仍整体读入（无行偏移索引），但跳过的行不解析、不构建，增量拉取的开销随返回条数而非流总长走 | `SessionEvent[]`（append-only，按事件序；含 session.created / message / message.truncated / compaction / memory / skill / system / sandbox.checked / run.started / run.ended / permission.decided / team.* / goal.* / todo.written / hook 等全部 28 种事件，见 [storage](../core/storage.md)） |
+| GET | `/sessions/:id/messages` | 读全部消息（对话/断线恢复的数据源，ChatPanel 用） | — | `Message[]`（事件流投影视图：`readMessages` 从 events.jsonl 过滤 `message` 事件按事件序返回；**排队未执行的消息不在其中**，见 `/queue`） |
+| GET | `/sessions/:id/events` | 完整事件流（会话历史的唯一权威数据；审计页的单源数据） | `since?`：非负整数，只返回数组下标 `>= since` 的事件（流是 append-only：只追加、不修改，下标即稳定增量游标；默认/0 = 全量；越界返回 `[]`；负数/非整数 400 `since must be a non-negative integer`）。带 `since` 时存储层走**尾部读**（`readEventsFrom`）：文件仍整体读入（无行偏移索引），但跳过的行不解析、不构建，增量拉取的解析开销只与返回条数有关 | `SessionEvent[]`（append-only，按事件序；含 session.created / message / message.truncated / compaction / memory / skill / system / sandbox.checked / run.started / run.ended / permission.decided / team.* / goal.* / todo.written / hook 等全部 28 种事件，见 [storage](../core/storage.md)） |
 | GET | `/sessions/:id/queue` | 排队消息快照：重连/刷新后校正客户端状态的全量依据 | — | `QueueEntry[]`（`queue.jsonl` 整文件读出，数组顺序即执行顺序；steer 条目排在可执行条目之后；空队列返回 `[]`） |
 | POST | `/sessions/:id/disposition` | 会话级发送处置覆盖（CLI `/steer`、`/wait` 与 Web 三选的 steer/wait 的持续生效存储；interrupt 在 Web 为一次性、CLI 为 `/interrupt` 一次性动作，均不写覆盖） | `{disposition: "steer"\|"wait"\|"interrupt"}` 必填；非法值 400 `disposition must be "steer", "wait" or "interrupt"` | `SessionMeta`（写入 `dispositionOverride`，优先于配置默认） |
 | GET | `/sessions/:id/compactions` | 压缩审计记录（事件流里 `compaction` 事件的只读视图） | — | `CompactionRecord[]`（从 events.jsonl 过滤 `compaction` 事件按事件序返回；无事件返回 `[]`） |
-| GET | `/sessions/:id/verify` | 事件流哈希链校验（按需执行，不在读会话时自动运行；机制见 [storage](../core/storage.md) 的「事件流哈希链」） | — | `{status, checked, verifiedFrom?, brokenAt?, suspect?, reason?}`：`ok`（链完整）/ `partial`（前缀无链〔功能上线前写入〕、自某行起完整）/ `not-chained`（未起链的旧会话）/ `torn-tail`（末行撕裂，崩溃痕迹非篡改）/ `broken`（断裂，带行号与原因）。CLI 同款：`kclaw session verify --id <id> | --all`（退出码 0/1） |
+| GET | `/sessions/:id/verify` | 事件流哈希链校验（按需执行，不在读会话时自动运行；机制见 [storage](../core/storage.md) 的「事件流哈希链」） | — | `{status, checked, verifiedFrom?, brokenAt?, suspect?, reason?}`：`ok`（链完整）/ `partial`（前缀无链〔功能上线前写入〕、自某行起完整）/ `not-chained`（未起链的旧会话）/ `torn-tail`（末行不完整，是崩溃痕迹，不属于篡改）/ `broken`（断裂，带行号与原因）。CLI 对应命令：`kclaw session verify --id <id> | --all`（退出码 0/1） |
 | GET | `/sessions/:id/changes` | 改动记录聚合（本会话结果为 ok 的 `fs_write`/`fs_edit` 调用按文件聚合；从事件流现算、不持久化，压缩不影响清单；失败调用不构成改动记录） | — | `{files: [{path, relativePath, firstAt, lastAt, ops: [{callId, tool, at, args}]}]}`：`files` 按最近改动倒序、`ops` 按时间倒序；`fs_edit` 的 `args` 带 `old`/`new`、`fs_write` 带 `content`；`relativePath` 在工作区外为 `null` |
-| GET | `/sessions/:id/changes/file?path=` | 改动文件的当前全文预览（磁盘现状实时读；Web 改动抽屉用，不持久化） | `path` 解析后必须与该会话改动清单中的某条路径全等（白名单即聚合结果，防穿越，否则 400）；超 1 MiB 返回 413（与 fs_read 同口径） | `{content, bytes}`；内容含 NUL 字节判二进制返回 `{binary: true, bytes}` 不吐内容；文件已不在磁盘返回 404 |
+| GET | `/sessions/:id/changes/file?path=` | 改动文件的当前全文预览（磁盘现状实时读；Web 改动抽屉用，不持久化） | `path` 解析后必须与该会话改动清单中的某条路径全等（白名单即聚合结果，防穿越，否则 400）；超 1 MiB 返回 413（与 fs_read 同口径） | `{content, bytes}`；内容含 NUL 字节判定为二进制，返回 `{binary: true, bytes}`、不返回内容；文件已不在磁盘返回 404 |
 | POST | `/sessions/:id/compact` | 手动压缩：跳过触发线立即压缩一次（机制见 [compaction](../core/compaction.md)） | `{focus?}`：可选非空字符串，作为重点说明进入两次摘要调用；空串/非字符串 400 `focus must be a non-empty string` | `{message: string, queued?: boolean}`：成功 `压缩了 N 段，剩 X 条原文消息`；无可压缩内容 `无可压缩内容`；会话忙时排队 `{queued: true, message: "已排队：当前运行结束后自动压缩"}` |
-| POST | `/sessions/:id/fork` | 从指定消息 fork 出新会话：把截至该消息所属 run 结束的全部事件（含压缩状态与附件文件）复制成全新独立会话，原会话一字节不动；复制段经 `writeEventsRaw` 直写、不过总线（无 `session.appended` 帧、不喂检索索引），新会话只在自身流上落一条 `session.forked` 血缘事件；记忆提取进度播种到分叉点（复制段不重复提取）。机制见 [storage](../core/storage.md) | `{messageId?}`：分叉点消息 id（省略 = 复制全部历史）；非空字符串校验失败 400 `messageId must be a non-empty string`；分叉点消息不在事件流里（消息被重试截掉、传了过期 id 等）400 `fork 点不存在：<id>`；会话不存在或已软删（在回收站）404；subagent 会话与团队组员会话 400（两者都带 `parentSessionId`，禁令按它判定）；会话未空闲（run 进行中/有排队/压缩中）409 `运行结束后可 fork`；fork 宿主未组装 503；fork 内部失败（磁盘、附件拷贝等）500 `fork 失败：内部错误`（细节进 daemon 日志，不回传本机路径） | 201，新会话 `SessionMeta`（标题 = 原标题 + `· fork` 后缀，同一来源第二次起递增为 `· fork 2`、`· fork 3`，已删除的 fork 也计数、序号不回退；`forkedFrom` 记录来源会话与分叉点） |
+| POST | `/sessions/:id/fork` | 从指定消息 fork 出新会话：把截至该消息所属 run 结束的全部事件（含压缩状态与附件文件）复制成全新独立会话，原会话一字节不动；复制段经 `writeEventsRaw` 直写、不过总线（无 `session.appended` 帧、不写入检索索引），新会话只在自身流上写入一条 `session.forked` 血缘事件；记忆提取进度设为分叉点（复制段不重复提取）。机制见 [storage](../core/storage.md) | `{messageId?}`：分叉点消息 id（省略 = 复制全部历史）；非空字符串校验失败 400 `messageId must be a non-empty string`；分叉点消息不在事件流里（消息被重试截掉、传了过期 id 等）400 `fork 点不存在：<id>`；会话不存在或已软删（在回收站）404；subagent 会话与团队组员会话 400（两者都带 `parentSessionId`，禁令按它判定）；会话未空闲（run 进行中/有排队/压缩中）409 `运行结束后可 fork`；fork 宿主未组装 503；fork 内部失败（磁盘、附件拷贝等）500 `fork 失败：内部错误`（细节进 daemon 日志，不回传本机路径） | 201，新会话 `SessionMeta`（标题 = 原标题 + `· fork` 后缀，同一来源第二次起递增为 `· fork 2`、`· fork 3`，已删除的 fork 也计数、序号不回退；`forkedFrom` 记录来源会话与分叉点） |
 | GET | `/sessions/:id/goal` | 目标循环视图（`/goal`，机制见 [goal](../core/goal.md)） | — | `{goal: GoalView \| null}`（快照 + 派生计数 + armed + 硬性上限当前值；无目标 `null`） |
 | POST | `/sessions/:id/goal` | 设定或改写目标：create 立即开始第一轮，edit 重新开始运行（计数沿旧周期继续） | `{text}` 非空字符串必填；`acceptance?: string[]` 验收命令（字符串数组）。文本空/类型不对 400；host 校验失败（子会话、验收命令需要沙箱而沙箱不可用）400 带原因 | `{goal: GoalSnapshot, view: GoalView}` |
 | POST | `/sessions/:id/goal/pause` | 用户暂停（停自续，活跃 run 不动） | — | `{goal: GoalSnapshot}` |
@@ -55,7 +55,7 @@
 | POST | `/sessions/:id/goal/stop` | 用户停止：同时中止活跃 run、清空排队、paused(user-stop) | — | `{goal, aborted, dropped}`（是否中止了活跃 run、清掉的排队条数） |
 | DELETE | `/sessions/:id/goal` | 移除目标（撤销排队中的 goal 轮，删除 `meta.goal`） | — | `{ok: true, hadState}`（移除前状态） |
 
-`:id` 不存在时上述全部返回 `404 {error:"session not found"}`；body 校验失败返回 400（如 `title must be a non-empty string`）。compact 的额外路径：会话活跃不拒绝而是**排队**（200 `{queued: true, message: "已排队：当前运行结束后自动压缩"}`，运行结束的收尾链自动执行它）；队列非空仍拒绝 409 `还有 N 条排队消息，先处理或取消`（排队消息会连开多个 run，压缩窗口无法预期）；RunManager 未组装时 503。goal 路由族未组装 goal host 时（`createApp` 无 `opts.goal`，常见于测试）整体 503 `goal loop not available`。
+`:id` 不存在时上述全部返回 `404 {error:"session not found"}`；body 校验失败返回 400（如 `title must be a non-empty string`）。compact 的额外路径：会话活跃时**排队**、不拒绝（200 `{queued: true, message: "已排队：当前运行结束后自动压缩"}`，运行结束的收尾链自动执行它）；队列非空仍拒绝 409 `还有 N 条排队消息，先处理或取消`（排队消息会连续开启多个 run，无法预期压缩何时执行）；RunManager 未组装时 503。goal 路由族未组装 goal host 时（`createApp` 无 `opts.goal`，常见于测试）整体 503 `goal loop not available`。
 
 `SessionMeta` 字段（`packages/core/src/session/store.ts`）：
 
@@ -81,7 +81,7 @@ interface SessionMeta {
                               // messageId 是用户所点的分叉点，省略 = 复制全部历史。fork 出的会话是
                               // 完全独立的普通会话：删除互不级联，与 parentSessionId 语义无关
   systemBaseline?: { stable: { text: string; frozenAt: string }; live?: { text: string; frozenAt: string } }
-                              // 冻结的系统提示词基线（缓存纪律，system 事件投影 / compaction 事件清除，见 hooks.md）
+                              // 冻结的系统提示词基线（缓存冻结策略，system 事件投影 / compaction 事件清除，见 hooks.md）
   goal?: GoalSnapshot        // 会话级目标快照（/goal；goal.set 全量替换、goal.cleared 删除，见 goal.md）
 }
 ```
@@ -146,14 +146,14 @@ interface Cron {
 | PATCH | `/providers/:name` | 整体替换一个条目，可同时改名 | 请求 `{entry}`，可带 `{name}`（新名字，与旧名不同即改名）；`apiKey` 为空 = 保留存量密钥（UI 只有掩码值）；改名时把条目键整体迁移，`providers.default` 与记忆提取/向量检索的引用（`memory.extractModel`、`memory.embedding.provider`）一并跟随；会话级引用保留旧名（下个 run 回退到默认条目，与删除同语义）；名字未知 404、改名目标已存在 409 |
 | DELETE | `/providers/:name` | 删除一个条目 | 默认条目 409（先切默认再删）；被会话引用**不阻断**（引用方下个 run 回退到默认条目，WebUI 删除前自行提示）；名字未知 404 |
 | POST | `/providers/:name/default` | 把该条目设为默认 | 名字未知 404 |
-| POST | `/providers/models` | 模型列表检测（兼作连接验证） | 请求 `{name}`（用存量条目的真实密钥检测，`format`/`baseUrl`/`apiKey` 可逐项覆盖：覆盖值合法或非空才生效，否则回退到存量条目——编辑表单的草稿值检测）或 `{format, baseUrl, apiKey?}`（新建表单直探，`format` 非法或 `baseUrl` 为空 400）；成功 `{ok: true, models: string[]}`，检测失败（端点不可达、密钥错误、响应形状不对等一律）502 `{ok: false, error}` |
+| POST | `/providers/models` | 模型列表检测（兼作连接验证） | 请求 `{name}`（用存量条目的真实密钥检测，`format`/`baseUrl`/`apiKey` 可逐项覆盖：覆盖值合法或非空才生效，否则回退到存量条目，用于编辑表单的草稿值检测）或 `{format, baseUrl, apiKey?}`（新建表单直接检测，`format` 非法或 `baseUrl` 为空 400）；成功 `{ok: true, models: string[]}`，检测失败（端点不可达、密钥错误、响应形状不对等一律）502 `{ok: false, error}` |
 | POST | `/providers/probe` | 连通测试：向待测端点发 1 token 补全，验证 URL、密钥和模型名都可用（模型列表验证不了模型名）；首次配置向导使用，不保存任何内容 | 请求 `{format, baseUrl, apiKey?, model}`（`format` 非法、`baseUrl` 或 `model` 为空 400）；响应恒为 200 `{status, body}`：`status` 是端点返回的状态码，`null` 表示请求没有到达，`body` 取响应前 200 字符；如何判断结果由调用方决定 |
 
-所有变更路由直接改 daemon 的内存配置（**下一个 run 即热生效**：持久化后经 ConfigNotifier 发布 `providers` 变更，daemon 的客户端解析器整体清空缓存；条目签名检查保留为优化）并经 `saveConfig` 持久化：每次写都是 config.json 的整文件原子重写（0600，密钥明文只在盘上；MCP server 不经此写入，mcp.json 是唯一管理源）；持久化失败只记日志不回滚，但变更通知照发——内存里的改动已经生效，缓存不能停留在旧值上，下次写入会再试。条目改名（PATCH 带 `name`）经 `renameProviderEntry` 统一挪键并改写配置级引用（默认指针与记忆提取/embedding 条目）。没有审计事件（全局配置面，与 MCP 管理同理）。使用方是 WebUI 的 Model 页。
+所有变更路由直接改 daemon 的内存配置（**下一个 run 即热生效**：持久化后经 ConfigNotifier 发布 `providers` 变更，daemon 的客户端解析器整体清空缓存；条目签名检查保留为优化）并经 `saveConfig` 持久化：每次写都是 config.json 的整文件原子重写（0600，密钥明文只保存在磁盘上；MCP server 不经此写入，mcp.json 是唯一管理源）；持久化失败只记日志不回滚，但变更通知照常发出：内存里的改动已经生效，缓存不能停留在旧值上，下次写入时会再次尝试。条目改名（PATCH 带 `name`）经 `renameProviderEntry` 统一迁移键名并改写配置级引用（默认指针与记忆提取/embedding 条目）。没有审计事件（属于全局配置，与 MCP 管理同理）。使用方是 WebUI 的 Model 页。
 
 ### 记忆（routes/memory.ts，底层 `MemorySystem`）
 
-`/memory` 管理路由族：读取与整文件覆写/删除记忆系统里的项目主题线（L1）与全局认知文件（L2）。机制与文件格式见 [memory](../core/memory.md)。与附件/用量"仅注入时注册"不同，这组**始终注册**——`createApp` 未组装 `MemorySystem`（`opts.memory` 缺失，常见于测试）时，命中任何一条都返回 `503 {error:"memory system unavailable"}`，而不是 404。
+`/memory` 管理路由族：读取与整文件覆写/删除记忆系统里的项目主题线（L1）与全局认知文件（L2）。机制与文件格式见 [memory](../core/memory.md)。与附件/用量"仅注入时注册"不同，这组**始终注册**：`createApp` 未组装 `MemorySystem`（`opts.memory` 缺失，常见于测试）时，命中任何一条都返回 `503 {error:"memory system unavailable"}`，不返回 404。
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
@@ -161,43 +161,43 @@ interface Cron {
 | GET | `/memory/projects/:id` | 某项目的主题线清单 | — | `{id, threads}`，threads 为 `{topic, title, status, updated}[]`（按 MEMORY.md 生成）；项目不存在 404 `{error:"not found"}` |
 | GET | `/memory/threads/:project/:topic` | 读线文件原文 | — | `{content}`（线文件完整 markdown）；项目或线不存在 404 |
 | PATCH | `/memory/threads/:project/:topic` | 整文件覆写线文件（写后重索引 + 重建 MEMORY.md） | `{content}` 必填、非空字符串，否则 400 `content must be a non-empty string` | `{ok:true}`；目标不存在 404 |
-| DELETE | `/memory/threads/:project/:topic` | 删线文件 + 重建索引与 MEMORY.md | — | `{ok:true}`；目标不存在 404 |
+| DELETE | `/memory/threads/:project/:topic` | 删除线文件 + 重建索引与 MEMORY.md | — | `{ok:true}`；目标不存在 404 |
 | GET | `/memory/global` | 全局认知文件列表 | — | `{kind, name, path, scope, updated}[]`（kind ∈ persona/wiki/rule） |
 | GET | `/memory/global/:kind/:file` | 读认知文件原文 | — | `{content}`；kind 非 persona/wiki/rule 或文件不存在 404 |
 | PATCH | `/memory/global/:kind/:file` | 整文件覆写认知文件（写后重建全局索引） | `{content}` 必填、非空字符串，否则 400 `content must be a non-empty string` | `{ok:true}`；kind 非法或文件不存在 404 |
-| DELETE | `/memory/global/:kind/:file` | 删认知文件 + 重建全局索引 | — | `{ok:true}`；kind 非法或文件不存在 404；**persona 是全局画像，不可删除，返回 400 `persona 不可删除（可清空正文）`** |
+| DELETE | `/memory/global/:kind/:file` | 删除认知文件 + 重建全局索引 | — | `{ok:true}`；kind 非法或文件不存在 404；**persona 是全局画像，不可删除，返回 400 `persona 不可删除（可清空正文）`** |
 | POST | `/memory/trigger-manual` | 手动触发当前项目的手动写入：与定时/跟随同一条 pipeline，范围 = 归属会话自上次提取位置以来的新消息（会话默认回退到项目最近活动会话） | `{workdir?, sessionId?}`：均可选，workdir 默认回退到 `config.workspace`，sessionId 默认回退到项目最近活动会话 | `{ok:true}`；`memory.write.manual=false` 时 400 `手动写入已关闭（memory.write.manual=false），可依赖定时/跟随触发`；pipeline 异常 500 |
 
-`:id`/`:project`/`:topic`/`:file` 的路径段先过白名单校验（`isSafeSegment`：段非空、非 `.`、非 `..`、不含 `/`，拦目录穿越段；允许 CJK/空格，URL 里已 encodeURIComponent）。非法段返回 400 `invalid segment`；合法段按原样传给 `MemorySystem`，读侧宽容（找不到就 404），写侧是整文件覆写，请求体就是文件的新内容。`GET /memory/projects/:id` 的响应包装成 `{id, threads}` 是为前端取数方便（见 [memory](../core/memory.md) 的管理界面一节）。删除类的机器语义：删的是文件，`vectors.db` 里的对应条目由随后的 reindex 清除。
+`:id`/`:project`/`:topic`/`:file` 的路径段先过白名单校验（`isSafeSegment`：段非空、非 `.`、非 `..`、不含 `/`，拦截目录穿越段；允许 CJK/空格，URL 里已 encodeURIComponent）。非法段返回 400 `invalid segment`；合法段按原样传给 `MemorySystem`，读侧宽容（找不到就 404），写侧是整文件覆写，请求体就是文件的新内容。`GET /memory/projects/:id` 的响应包装成 `{id, threads}` 是为前端取数方便（见 [memory](../core/memory.md) 的管理界面一节）。删除类的机器语义：删除的是文件，`vectors.db` 里的对应条目由随后的 reindex 清除。
 
 ### 技能（routes/skills.ts，始终注册）
 
-技能管理接口（CLI `/skill` 与 Web 技能页、技能即斜杠命令的共同后端），分只读、复用管理与提案治理三半。技能是以文件为准——`~/.kclaw/skills/`（全局）与工作区 `.kclaw/skills/`（项目级，覆盖全局）下的每个子目录一份 `SKILL.md`；机制、字段与复用链接见 [skills](../core/skills.md)。每次请求**重新扫描**这两个作用域（与 run 时的注入同源同规则），`?workdir=` 指定项目级作用域（默认无项目级）。
+技能管理接口（CLI `/skill` 与 Web 技能页、技能即斜杠命令的共同后端），分为只读、复用管理与提案治理三部分。技能以文件为准：`~/.kclaw/skills/`（全局）与工作区 `.kclaw/skills/`（项目级，覆盖全局）下的每个子目录一份 `SKILL.md`；机制、字段与复用链接见 [skills](../core/skills.md)。每次请求**重新扫描**这两个作用域（与 run 时的注入使用同一套扫描规则），`?workdir=` 指定项目级作用域（默认无项目级）。
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
-| GET | `/skills?workdir=` | 用户可见技能清单 | `workdir` 可选：会话工作目录，决定项目级技能作用域 | `{name, displayName, description, visibility, origin, plugin}[]`——`visibility` 为 `all`（模型+用户）或 `user-only`（被 `disable-model-invocation` 隐藏但仍用户可见）；`origin` 为 `global` / `project`；`plugin` 为可选的来源插件名（插件自带的技能才带） |
-| GET | `/skills/:name?workdir=` | 单个技能详情（含正文） | 同上 | `{name, displayName, description, visibility, origin, plugin, content}`——`content` 是 `SKILL.md` 正文 |
-| GET | `/skills/discovery?workdir=` | 检测其他 agent 的可复用技能 | 同上 | `{sources, skills, projectSources}`——`sources` 是检测来源（含失效标），`skills` 是发现列表（realpath 去重、来源聚合、`reused`/`conflict`/`stale` 标、插件技能带 `plugin` 名），`projectSources` 是项目作用域自行登记的来源 |
+| GET | `/skills?workdir=` | 用户可见技能清单 | `workdir` 可选：会话工作目录，决定项目级技能作用域 | `{name, displayName, description, visibility, origin, plugin}[]`：`visibility` 为 `all`（模型+用户）或 `user-only`（被 `disable-model-invocation` 隐藏但仍用户可见）；`origin` 为 `global` / `project`；`plugin` 为可选的来源插件名（插件自带的技能才带） |
+| GET | `/skills/:name?workdir=` | 单个技能详情（含正文） | 同上 | `{name, displayName, description, visibility, origin, plugin, content}`，`content` 是 `SKILL.md` 正文 |
+| GET | `/skills/discovery?workdir=` | 检测其他 agent 的可复用技能 | 同上 | `{sources, skills, projectSources}`：`sources` 是检测来源（含失效标记），`skills` 是发现列表（realpath 去重、来源聚合、`reused`/`conflict`/`stale` 标记、插件技能带 `plugin` 名），`projectSources` 是项目作用域自行登记的来源 |
 | POST | `/skills/discovery/preview` | 预览候选 SKILL.md 正文 | `{path}` | `{name, body}`；路径必须解析到已发现候选或位于已登记来源之下，否则 404 |
-| GET | `/skills/links?workdir=` | 当前作用域链接记录与自定义来源 | 同上 | `{links: {name, target, agent, tier, current}[], extraSources: string[]}`——直接读旁挂文件，不受用户可见性过滤影响；`current` 为 false 表示目标已不是检测正在提供的版本（插件升级过，链接可用但过时） |
+| GET | `/skills/links?workdir=` | 当前作用域链接记录与自定义来源 | 同上 | `{links: {name, target, agent, tier, current}[], extraSources: string[]}`：直接读旁挂文件，不受用户可见性过滤影响；`current` 为 false 表示目标与检测当前提供的版本不同（插件升级过，链接可用但过时） |
 | POST | `/skills/links` | 建复用链接（软链接 + 记录） | `{name, target, agent?, tier?, workdir?}` | 201 `{ok:true}`；同名冲突或已复用 409、目标不合法 400；`workdir` 必须绝对路径，默认全局 |
 | PATCH | `/skills/links/:name` | 改复用技能的可见档位 | `{tier: all\|user\|model\|off, workdir?}` | `{ok:true}`；无记录 404、档位非法 400 |
-| DELETE | `/skills/links/:name?workdir=` | 取消复用（删链接 + 清记录） | query | `{ok:true}`；无记录 404 |
+| DELETE | `/skills/links/:name?workdir=` | 取消复用（删除链接 + 清除记录） | query | `{ok:true}`；无记录 404 |
 | POST | `/skills/sources` | 登记自定义检测目录 | `{dir, workdir?}` | 201 `{ok:true}`；重复 409 |
 | DELETE | `/skills/sources?dir=&workdir=` | 移除自定义检测目录 | query | `{ok:true}`；无记录 404 |
 
-`:name` 路径段先过白名单校验（同 `/memory` 的 `isSafeSegment`），非法段 400 `invalid segment`。**`user-invocable: false` 的技能对用户面视为不存在**：列表不显示、按名调用返回 404——且与未知名字同响应（`{error:"not found"}`，不泄露存在性）。
+`:name` 路径段先过白名单校验（同 `/memory` 的 `isSafeSegment`），非法段 400 `invalid segment`。**`user-invocable: false` 的技能在用户侧视为不存在**：列表不显示、按名调用返回 404，且与未知名字同响应（`{error:"not found"}`，不泄露存在性）。
 
 **提案治理路由族**（技能进化，`registerSkillRoutes` 的 opts 带 `skillsEvolution` 时注册；未组装时整体 503 `skill evolution is not assembled`，不影响上面的既有路由）。治理写操作均经全局 token 鉴权中间件。机制见 [skills](../core/skills.md) 的"技能进化"一节。
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
-| GET | `/skills/proposals?status=` | 提案列表（applied 项带用量） | `status` 可选：proposed/applied/rejected/reverted，默认返回全部 | `{proposals: [完整 SkillProposal 字段 + applied 项带 usage（采纳后 skill_read 次数）]}`；单个损坏提案文件跳过，不拖垮列表 |
+| GET | `/skills/proposals?status=` | 提案列表（applied 项带用量） | `status` 可选：proposed/applied/rejected/reverted，默认返回全部 | `{proposals: [完整 SkillProposal 字段 + applied 项带 usage（采纳后 skill_read 次数）]}`；单个损坏的提案文件跳过，不影响整个列表 |
 | GET | `/skills/proposals/:id` | 单个提案详情 | — | 完整 SkillProposal（applied 带 `usage`）；不存在 404；路径段先过 `isSafeSegment` |
 | POST | `/skills/proposals/:id/apply` | 确认提案（proposed → applied） | — | `{ok:true}`，可带非致命 `warning`（修订的现正文与提案时 baseline 不一致、或全局新增遇到某项目已有同名技能、项目副本优先生效）；非法流转/同名冲突/目标是复用链接技能 409、不存在 404 |
 | POST | `/skills/proposals/:id/reject` | 驳回提案（proposed → rejected，只改状态） | — | `{ok:true}`；非法流转 409、不存在 404 |
-| POST | `/skills/proposals/:id/revert` | 回退已采纳提案（applied → reverted：修订写回快照、新增删技能目录） | — | `{ok:true}`；非法流转 409、不存在 404 |
+| POST | `/skills/proposals/:id/revert` | 回退已采纳提案（applied → reverted：修订写回快照、新增的删除技能目录） | — | `{ok:true}`；非法流转 409、不存在 404 |
 | DELETE | `/skills/proposals/:id` | 删除提案文件（仅 rejected/reverted 可删） | — | `{ok:true}`；其余状态 409、不存在 404 |
 
 ### hook（routes/hooks.ts，始终注册）
@@ -206,7 +206,7 @@ interface Cron {
 
 | 方法 | 路径 | 用途 | 响应 |
 |------|------|------|------|
-| GET | `/hooks` | 内置 + 用户 hook 的只读快照 | `{builtin: [{name, position, description, failure, origin:"builtin"}], user: [{name, position, description?, enabled, order, failure, origin:"user", error?}]}`——`user` 侧含健康、禁用（`enabled:false`）与装载失败（`position:"?"` 且带 `error` 原因）三类条目；未注入 `HookRegistry` 时 `user` 为空数组 |
+| GET | `/hooks` | 内置 + 用户 hook 的只读快照 | `{builtin: [{name, position, description, failure, origin:"builtin"}], user: [{name, position, description?, enabled, order, failure, origin:"user", error?}]}`：`user` 侧含健康、禁用（`enabled:false`）与装载失败（`position:"?"` 且带 `error` 原因）三类条目；未注入 `HookRegistry` 时 `user` 为空数组 |
 
 ### 权限（routes/permissions.ts，始终注册）
 
@@ -233,11 +233,11 @@ interface Cron {
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
-| GET | `/fs/browse` | 列出某目录的子目录（WebUI 工作目录选择器的数据源） | query `path`：绝对路径或 `~` 开头（与权限引擎同样的展开规则）；默认列 `config.workspace` | `{path, parent, dirs}`——path 为符号链接解析后的规范绝对路径；parent 为父目录，文件系统根处为 null；dirs 只含子目录名、大小写不敏感排序。符号链接跟随解析（坏链跳过），macOS 的 `/tmp → private/tmp` 一类仍可导航 |
-| GET | `/fs/files` | 列出一个工作区的文件清单（WebUI 输入框 `@` 文件引用抽屉的数据源，机制见 [file-mentions](../core/file-mentions.md)） | query `workdir`：绝对路径或 `~` 开头（与 `/fs/browse` 同一 `resolveQueryDir` 解析）；默认列 `config.workspace` | `{workdir, files, truncated}`——workdir 为符号链接解析后的规范路径；files 为工作区相对路径（POSIX 分隔、仅文件、大小写不敏感排序）；truncated 为清单是否在 5000 条上限处被截断。git 仓库走 `git ls-files -z -co --exclude-standard`（跟踪 + 未被 ignore 的未跟踪文件，NUL 分隔保中文名），非 git 回退递归扫描（不进入 `.git`/`.kclaw`/`node_modules`） |
-| GET | `/usage?by=day\|session\|model\|kind` | token/费用用量聚合 | `by` 四选一（`kind` = 主 run 与后台任务〔compaction/autoname/memory/skill/goal〕分桶）；**`by=session` 只折 `kind='run'` 行**——旁路后台调用归属会话名下但与主对话请求没有可比的前缀，混进会话桶会把缓存命中率拉到失真，旁路花费在 day/kind 维度仍可见；无效值静默回退到 `day` | `{by, buckets[], total}`——bucket/total 形状同为 `{key, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd}`；两个缓存字段 `number \| null`，**null = 桶内没有任何行携带该指标（未知）**——供应商不返回缓存指标是常态，调用方应显示 "—" 而非 0；费用按 `config.usage.prices` 计价（模型带缓存价目且行内有缓存数据时按非缓存输入/读/写/输出分列），未配置价格的模型计 0 |
+| GET | `/fs/browse` | 列出某目录的子目录（WebUI 工作目录选择器的数据源） | query `path`：绝对路径或 `~` 开头（与权限引擎同样的展开规则）；默认列 `config.workspace` | `{path, parent, dirs}`：path 为符号链接解析后的规范绝对路径；parent 为父目录，文件系统根处为 null；dirs 只含子目录名、大小写不敏感排序。符号链接跟随解析（失效的链接跳过），macOS 的 `/tmp → private/tmp` 一类仍可导航 |
+| GET | `/fs/files` | 列出一个工作区的文件清单（WebUI 输入框 `@` 文件引用抽屉的数据源，机制见 [file-mentions](../core/file-mentions.md)） | query `workdir`：绝对路径或 `~` 开头（与 `/fs/browse` 同一 `resolveQueryDir` 解析）；默认列 `config.workspace` | `{workdir, files, truncated}`：workdir 为符号链接解析后的规范路径；files 为工作区相对路径（POSIX 分隔、仅文件、大小写不敏感排序）；truncated 为清单是否在 5000 条上限处被截断。git 仓库走 `git ls-files -z -co --exclude-standard`（跟踪 + 未被 ignore 的未跟踪文件，NUL 分隔，保证中文文件名不损坏），非 git 回退递归扫描（不进入 `.git`/`.kclaw`/`node_modules`） |
+| GET | `/usage?by=day\|session\|model\|kind` | token/费用用量聚合 | `by` 四选一（`kind` = 主 run 与后台任务〔compaction/autoname/memory/skill/goal〕分桶）；**`by=session` 只汇总 `kind='run'` 行**：旁路后台调用虽归属会话名下，但与主对话请求没有可比的前缀，混进会话桶会让缓存命中率失真，旁路花费在 day/kind 维度仍可见；无效值静默回退到 `day` | `{by, buckets[], total}`：bucket/total 形状同为 `{key, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd}`；两个缓存字段 `number \| null`，**null = 桶内没有任何行携带该指标（未知）**：供应商不返回缓存指标是常态，调用方应显示 "—"，不显示 0；费用按 `config.usage.prices` 计价（模型带缓存价目且行内有缓存数据时按非缓存输入/读/写/输出分列），未配置价格的模型计 0 |
 
-`/fs/browse` 与 `/fs/files` 的出错是三态 400：`path does not exist: <path>`、`not a directory: <path>`、`cannot read directory: <path>`。这两个端点能列出本机任意目录——浏览端点的设计目的就是允许把工作目录设在任何地方，防线只有与其他 API 相同的 Bearer 鉴权；文件清单端点限制在工作区内（`workdir` 必须是目录），但同样不校验目录归属。用量数据记录在一张 SQLite 表里，数据来源见 [storage](../core/storage.md) 的用量记录一节。
+`/fs/browse` 与 `/fs/files` 的出错是三态 400：`path does not exist: <path>`、`not a directory: <path>`、`cannot read directory: <path>`。这两个端点能列出本机任意目录：浏览端点的设计目的就是允许把工作目录设在任何地方，防线只有与其他 API 相同的 Bearer 鉴权；文件清单端点限制在工作区内（`workdir` 必须是目录），但同样不校验目录归属。用量数据记录在一张 SQLite 表里，数据来源见 [storage](../core/storage.md) 的用量记录一节。
 
 ### 检索（routes/search.ts，始终注册）
 
@@ -245,7 +245,7 @@ interface Cron {
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
-| GET | `/search` | 全文检索全部历史会话的原始消息（user/assistant 文本块；回收站与已清除会话的命中被过滤） | query `q` 必填非空（否则 400 `query parameter q is required`）；`limit` 可选整数 1–20（默认 10，越界/非整数 400）；`sessionId` 可选非空字符串，限定到单个会话 | `{hits: [{sessionId, title, role, at, excerpt}]}`——title 为会话标题，excerpt 为命中消息的原文；按 bm25 相关度排序 |
+| GET | `/search` | 全文检索全部历史会话的原始消息（user/assistant 文本块；回收站与已清除会话的命中被过滤） | query `q` 必填非空（否则 400 `query parameter q is required`）；`limit` 可选整数 1–20（默认 10，越界/非整数 400）；`sessionId` 可选非空字符串，限定到单个会话 | `{hits: [{sessionId, title, role, at, excerpt}]}`：title 为会话标题，excerpt 为命中消息的原文；按 bm25 相关度排序 |
 
 ### MCP 管理
 
@@ -253,7 +253,7 @@ interface Cron {
 
 | 方法 | 路径 | 用途 | 请求/响应 |
 |------|------|------|------|
-| GET | `/mcp[?workdir=<会话工作目录>]` | 分组快照：各组内 server 的连接状态 + 服务端算好的新增默认目标组 | `{groups: [{id, servers: [{name, state, group, tools: {name, server, originalName, description}[], config, lastError?}]}], mainWorkspace, defaultGroup}`（`global` 组恒在最前、项目组按路径排序；`state` 含惰性常态 `disconnected`；`tools` 里的 `server` 是所属 server 名、`originalName` 是远端原名、`description` 供工具清单与 `/mcp <名字>` 展示；`mainWorkspace` 是 daemon 主工作目录；`defaultGroup` 是新增条目的默认目标组——带 `?workdir=` 时该目录在快照中已知则用它，否则 `mainWorkspace`（若它是组），再否则 `"global"`，回退规则只在服务端、两种拼写都按项目组同一规范身份归一）；stdio `env` 与 http `headers` 的值掩码成 `***` + 末 4 位（不足 4 位只显示 `***`；键名可见，与 `/config` 的 API key 同一规则）；连接是惰性的：快照不触发连接，只有 run 用到对应项目的工具或手动 connect 才会连（见 [mcp](../core/mcp.md)） |
+| GET | `/mcp[?workdir=<会话工作目录>]` | 分组快照：各组内 server 的连接状态 + 服务端算好的新增默认目标组 | `{groups: [{id, servers: [{name, state, group, tools: {name, server, originalName, description}[], config, lastError?}]}], mainWorkspace, defaultGroup}`（`global` 组恒在最前、项目组按路径排序；`state` 含惰性常态 `disconnected`；`tools` 里的 `server` 是所属 server 名、`originalName` 是远端原名、`description` 供工具清单与 `/mcp <名字>` 展示；`mainWorkspace` 是 daemon 主工作目录；`defaultGroup` 是新增条目的默认目标组：带 `?workdir=` 时该目录在快照中已知则用它，否则 `mainWorkspace`（若它是组），再否则 `"global"`，回退规则只在服务端、两种拼写都按项目组同一规范身份归一）；stdio `env` 与 http `headers` 的值掩码成 `***` + 末 4 位（不足 4 位只显示 `***`；键名可见，与 `/config` 的 API key 同一规则）；连接是惰性的：快照不触发连接，只有 run 用到对应项目的工具或手动 connect 才会连（见 [mcp](../core/mcp.md)） |
 | POST | `/mcp/servers` | 新增一个 server（enabled 则后台连接） | 请求 `{name, config, group}`；名字限定字母/数字/下划线/连字符（会进模型可见的工具名）；名字缺失/为空 400（`name is required`）、形状非法 400、组内重名 409；返回 `{ok, groups}` |
 | PATCH | `/mcp/servers/:name` | 整体替换配置，可选原子换组 | 请求 `{group, config, toGroup?}`；条目留在 `group` 组写回对应文件；带 `toGroup` 时移动到目标组（目标组已有同名条目则先拒绝 409，不变更原条目）；名字未知 404；`env`/`headers` 里留空的键保持已存值（客户端只持有掩码），删掉该键即移除 |
 | DELETE | `/mcp/servers/:name?group=<group>` | 删除一个 server（断开并遗忘） | 组走 query（DELETE 不读 body）；返回 `{ok, groups}`；名字未知 404 |
@@ -271,7 +271,7 @@ interface Cron {
 | POST | `/channel/test` | 用草稿凭据验证飞书应用身份（换一次 access token），不写入文件 | 请求 `{appId, appSecret?}`；secret 留空时用已存值；返回 `{ok, error?}` |
 | POST | `/channel/allowlist/:openId` | 一键加白：open_id 写入白名单并热重启，同时清除对应待加白记录 | 幂等（已在白名单则不重启）；返回新快照 |
 
-路由始终注册；daemon 未组装频道管理器时 `GET /channel` 返回未启用快照、动作端点回答 503（与 MCP 组同款）。机制、热重启语义与待加白说明见 [feishu-channel](./feishu-channel.md)。
+路由始终注册；daemon 未组装频道管理器时 `GET /channel` 返回未启用快照、动作端点回答 503（与 MCP 组相同）。机制、热重启语义与待加白说明见 [feishu-channel](./feishu-channel.md)。
 
 ### WS 与静态托管
 
@@ -283,11 +283,11 @@ interface Cron {
 **队列相关的 WS 命令与事件**（完整帧语义见 [realtime](./realtime.md) 与 [run-manager](./run-manager.md)）：
 
 - `send_message` 增加可选 `disposition` 字段（`"steer"|"wait"|"interrupt"`；非法值 error 帧 `send_message disposition must be "steer", "wait" or "interrupt"`）。不带字段取会话覆盖 ?? 配置默认（**默认引导**）。回包 `send_message_ack` 增加 `messageId` 与 `queued`（会话空闲直发 `queued:false`、不广播 `message.queued`；运行中按处置分流 `queued:true`）。会话忙时超限的 error 帧文案：`队列已满（10 条）`。
-- `queue.cancel`：`{sessionId, messageId?}`——带 id 取消该条（wait 随时、steer 注入前），不带则清空全部可取消条目。回 `queue.cancel_ack {sessionId, cancelled}`；失败为 error 帧：已注入 `已注入`（机器不删历史）、无此条目 `not found`。
-- `message.retry`：`{sessionId, fromMessageId, text, attachments?}`——编辑重试/重新生成的服务端入口（机制见 [run-manager](./run-manager.md)）：校验通过后先持久化并广播 `message.truncated {fromMessageId}`（从该消息起退出对话视图），再走普通用户消息路径提交；回 `message.retry_ack {sessionId, messageId, queued}`（与 send_message 同步决策的形状一致）。同步失败为 error 帧：`只能从最后一条用户消息重试`（fromMessageId 不是最后一条 user 消息）、`会话忙：等当前运行和压缩结束、清空队列后再重试`、`重试内容为空（无文本也无附件）`、subagent 会话只读拒绝。
-- 三个新事件：`message.queued {messageId, disposition, position?}`（消息入队/入缓冲区时；position 是 wait/interrupt 的队列序位，steer 不适用；降级按实际处置报告）、`message.steered {messageId}`（steer 注入当前 run 的时刻，事件级 `runId` 标识注入的 run）、`message.queue_cancelled {messageId}`（单条取消）或 `{all:true, messageIds}`（清空，messageIds 是实际撤回条目的 id 列表）。出队执行与注入仍用既有 `run.started` + `message.created` 表达，消息 id 与排队时相同——前端气泡原地升级，无需替换。
+- `queue.cancel`：`{sessionId, messageId?}`，带 id 取消该条（wait 随时、steer 注入前），不带则清空全部可取消条目。回 `queue.cancel_ack {sessionId, cancelled}`；失败为 error 帧：已注入 `已注入`（机器不删历史）、无此条目 `not found`。
+- `message.retry`：`{sessionId, fromMessageId, text, attachments?}`，编辑重试/重新生成的服务端入口（机制见 [run-manager](./run-manager.md)）：校验通过后先持久化并广播 `message.truncated {fromMessageId}`（从该消息起退出对话视图），再走普通用户消息路径提交；回 `message.retry_ack {sessionId, messageId, queued}`（与 send_message 同步决策的形状一致）。同步失败为 error 帧：`只能从最后一条用户消息重试`（fromMessageId 指向的消息不是最后一条 user 消息）、`会话忙：等当前运行和压缩结束、清空队列后再重试`、`重试内容为空（无文本也无附件）`、subagent 会话只读拒绝。
+- 三个新事件：`message.queued {messageId, disposition, position?}`（消息入队/入缓冲区时；position 是 wait/interrupt 的队列序位，steer 不适用；降级按实际处置报告）、`message.steered {messageId}`（steer 注入当前 run 的时刻，事件级 `runId` 标识注入的 run）、`message.queue_cancelled {messageId}`（单条取消）或 `{all:true, messageIds}`（清空，messageIds 是实际撤回条目的 id 列表）。出队执行与注入仍用既有 `run.started` + `message.created` 表达，消息 id 与排队时相同，前端气泡原地升级，无需替换。
 
-**记忆写入事件 `memory.written`**：记忆写入 pipeline 每次实际写入磁盘时经总线广播，帧为 `memory.written {path, kind, topic?, scope?}`——`kind` 是 `"episode"`（项目情节，带 `topic` 线名）或 `"cognition"`（全局认知，带 `scope`），`path` 是写入文件的绝对路径；不带 `sessionId`（项目级事务）。它只作"已写入"的轻提示：CLI 用暗色一行显示 `已写入记忆: <path>`，web 在通知条显示同文案，都不驱动任何状态机。事件不带"记忆内容"，要看内容走上面的 `/memory` 路由。payload 定义见 [protocol](../core/protocol.md)。
+**记忆写入事件 `memory.written`**：记忆写入 pipeline 每次实际写入磁盘时经总线广播，帧为 `memory.written {path, kind, topic?, scope?}`：`kind` 是 `"episode"`（项目情节，带 `topic` 线名）或 `"cognition"`（全局认知，带 `scope`），`path` 是写入文件的绝对路径；不带 `sessionId`（项目级事务）。它只作"已写入"的轻提示：CLI 用暗色一行显示 `已写入记忆: <path>`，web 在通知条显示同文案，都不驱动任何状态机。事件不带"记忆内容"，要看内容走上面的 `/memory` 路由。payload 定义见 [protocol](../core/protocol.md)。
 
 ## 审计的读取方式
 
@@ -298,9 +298,9 @@ web 的审计页（`packages/web/src/audit/AuditView.tsx`）演示了标准用�
 3. 客户端按流序摊平成逐行审计：`message` 事件每条消息按块（block）摊平（role + 类型标签 + 摘要，点击展开完整块；assistant 消息的最后一块行上显示 token 用量与 LLM 耗时 `latencyMs`，tool_result 行显示执行耗时 `durationMs`）、`message.truncated` 事件渲染成"截断"行（消息截断 · 从 `<起点>` 起退出对话视图，编辑重试/重新生成的记录）、`compaction` 事件渲染成"压缩"行、`memory` 事件渲染成"记忆"行、`skill` 事件渲染成"技能"行（技能提案的产生/采纳/驳回/回退/删除各一行，点击展开完整事件字段，见 [skills](../core/skills.md)）、`system` 事件渲染成"系统提示词"行（开头片段 + 字符数，点击展开全文，按稳定段/实时段两段展示；与相邻上一条文本不同标"已变化"）、`sandbox.checked` 事件渲染成"沙箱"行（可用 / 不可用（原因）/ 已关闭）、`run.started`/`run.ended` 渲染成"运行"行（触发来源 / 停止原因 + 用量，失败带错误，与消息事件夹出每轮边界）、`permission.decided` 渲染成"权限"行（裁决 + 裁决者 + 工具身份，展开看参数）、会话元数据事件（created/renamed/deleted/restored/forked/set）渲染成轻量"会话"行，`team.*` 七种事件渲染成"team"行（建团/添加/组员状态/收信/送达/任务创建/任务状态的摘要，点击展开完整内容）、`goal.*` 三种渲染成"goal"行（设定/改写/暂停/恢复/状态迁移与每轮判定的一句话摘要，点击展开完整快照）、`todo.written` 渲染成"todo"行（清单更新：N 项，未完成 X）、`hook` 事件渲染成"hook"行（钩子名 @ 位置 + 结局〔正常/失败/超时〕与耗时，展开看完整字段）。**二十八种持久化事件全部渲染成行**；
 4. 实时增量：页面私有 ws 连接订阅会话，收到 `session.appended` 通知帧（存储层写入磁盘成功后发出，先写入磁盘再广播）即 `GET /sessions/:id/events?since=<已有条数>` 增量拉取，append-only 下标做游标、断线重连后重拉补齐。
 
-只读、不修改任何状态、无独立 `/audit` 路由——事件流（`events.jsonl`，一行一个事件的 append-only 文件）是审计的唯一事实来源，HTTP 只是它的读取窗口。tool 消息上的 `grantedBy`（每个工具调用的放行原因）随 `message` 事件一起返回，是"谁批准了这个操作"的审计依据。
+只读、不修改任何状态、无独立 `/audit` 路由：事件流（`events.jsonl`，一行一个事件的 append-only 文件）是审计的唯一事实来源，HTTP 只是它的读取窗口。tool 消息上的 `grantedBy`（每个工具调用的放行原因）随 `message` 事件一起返回，是"谁批准了这个操作"的审计依据。
 
-压缩审计不再单独拉取：`compaction` 事件就在同一事件流里，审计页随事件流一并渲染（`GET /sessions/:id/compactions` 仍存在，是它的只读投影视图，见 [compaction](../core/compaction.md)）。
+压缩审计不单独拉取：`compaction` 事件就在同一事件流里，审计页随事件流一并渲染（`GET /sessions/:id/compactions` 仍存在，是它的只读投影视图，见 [compaction](../core/compaction.md)）。
 
 ## 鉴权中间件行为
 
@@ -318,15 +318,15 @@ app.addHook("preHandler", async (request, reply) => {
 
 - 判定用的 route url 取 `request.routeOptions.url`（匹配到的路由模板，如 `/sessions/:id`），静态 catch-all 场景退回原始路径。
 - token 错误/缺失一律 `401 {error:"unauthorized"}`，不区分"未附带"与"附带错误"（不向检测者提供信息）。
-- 会话/任务两个分组注册的 `setErrorHandler` 只处理 body 解析类错误（`error.statusCode ?? 500`），不影响鉴权 hook——hook 先于 handler 运行。
+- 会话/任务两个分组注册的 `setErrorHandler` 只处理 body 解析类错误（`error.statusCode ?? 500`），不影响鉴权 hook：hook 先于 handler 运行。
 
 ## 边界与出错
 
 - **无分页，只有增量**：`GET /sessions` 与 `GET /sessions/:id/messages` 全量返回；`GET /sessions/:id/events` 全量返回但支持 `?since=` 增量游标（append-only 下标）。个人使用规模下接受；审计页的列表渲染在客户端用虚拟滚动（只渲染可视行）承载大会话。
 - **软删除的会话不在默认列表**：`GET /sessions` 默认过滤 `deleted:true`；要操作回收站必须显式 `?deleted=true`（恢复/永久删除路由不区分列表，直接按 id 操作）。
-- **PATCH `/sessions/:id` 的 workdir 是解析但未生效的字段**（源码只把 title 传给 `updateMeta`）——API 处理者不应依赖它。
+- **PATCH `/sessions/:id` 的 workdir 是解析但未生效的字段**（源码只把 title 传给 `updateMeta`），API 调用方不应依赖它。
 - **`POST /cron` 的 cron 校验依赖 cron-parser 的报错文本**，客户端展示的是原始英文错误。
-- **并发写无版本控制**：两个客户端同时 PATCH 同一资源是"后写赢"，没有乐观锁（加版本号防并发覆盖的机制）。
+- **并发写无版本控制**：两个客户端同时 PATCH 同一资源是"后写的覆盖先写的"，没有乐观锁（加版本号防并发覆盖的机制）。
 - **上传 ≠ 挂载**：附件这三个路由只负责把字节写到磁盘、列举和下载。附件要真正进入对话，还需要客户端在下一条 send_message 帧里带上这些文件的路径，由 run 的挂载步骤转成模型能读的内容，详见 [realtime](./realtime.md) 与 [run-manager](./run-manager.md)。
 
 ## 关联
@@ -340,5 +340,5 @@ app.addHook("preHandler", async (request, reply) => {
 - [mcp](../core/mcp.md)：`GET /mcp` 快照背后的连接管理器
 - [skills](../core/skills.md)：`/skills` 路由族背后的技能机制（渐进披露、双作用域、可见性档位）
 - [hooks](../core/hooks.md)：`/hooks` 路由背后的 hook 系统（位置网格、内置清单、用户文件契约）
-- [client-http](../core/client-http.md)：客户端共享的 HTTP 请求模块——`{error}` 形状的使用方
+- [client-http](../core/client-http.md)：客户端共享的 HTTP 请求模块，`{error}` 形状的使用方
 - [cron](../core/cron.md)：cron 语义与 nextRunAt 推进规则

@@ -26,7 +26,7 @@ export type SessionEvent =
 | `session.renamed` | `at`、`title`、`source?`（auto=自动命名，不传视为 manual） |
 | `session.deleted` | `at` |
 | `session.restored` | `at` |
-| `session.forked` | `at`、`sourceSessionId`、`sourceMessageId?`（用户所点的语义分叉点，未归一化；全量复制时取复制段内最后一条消息，流内无消息则省略）、`title`（fork 会话初始标题）——会话 fork 的血缘记录，只落在新会话流上（原会话一字节不动），投影出 `meta.forkedFrom`；实际复制区间归一化到该消息所属 run 的结束处（见 `packages/core/src/session/fork.ts`） |
+| `session.forked` | `at`、`sourceSessionId`、`sourceMessageId?`（用户所点的语义分叉点，未归一化；全量复制时取复制段内最后一条消息，流内无消息则省略）、`title`（fork 会话初始标题）。这是会话 fork 的血缘记录，只写在新会话的事件流上（原会话一个字节都不改动），投影出 `meta.forkedFrom`；实际复制区间归一化到该消息所属 run 的结束处（见 `packages/core/src/session/fork.ts`） |
 | `session.set` | `at`、`model?`、`mode?`、`disposition?`（键出现才发） |
 
 ### 消息与运行（5 种）
@@ -43,9 +43,9 @@ export type SessionEvent =
 
 | 类型 | 字段 |
 |------|------|
-| `run.started` | `at`、`trigger`（user/cron/process/agent/team/goal）、`model?` / `provider?` / `permissionMode?`（本次 run 的配置快照，一处直读；旧事件无此三字段）——每 run 一条 |
-| `run.ended` | `at`、`stopReason`、`usage?`（正常终点的全程累计）、`error?`（stopReason 为 error 时）——每 run 恰一条，失败 run 也落 |
-| `permission.decided` | `at`、`confirmationId`、`decision`（once/project/global/reject/timeout）、`by`（cli/web/feishu/timeout）、`tool { callId, name, argsJson }`——每次裁决一条 |
+| `run.started` | `at`、`trigger`（user/cron/process/agent/team/goal）、`model?` / `provider?` / `permissionMode?`（本次 run 的配置快照，一处直读；旧事件无此三字段）；每 run 一条 |
+| `run.ended` | `at`、`stopReason`、`usage?`（正常终点的全程累计）、`error?`（stopReason 为 error 时）；每 run 恰一条，失败 run 也写入 |
+| `permission.decided` | `at`、`confirmationId`、`decision`（once/project/global/reject/timeout）、`by`（cli/web/feishu/timeout）、`tool { callId, name, argsJson }`；每次裁决一条 |
 
 ### 钩子审计（1 种）
 
@@ -63,7 +63,7 @@ export type SessionEvent =
 
 ### 技能提案（1 种，SkillEvent）
 
-技能进化（提案制）的全部写路径都各落一条事件：提案的产生与治理状态流转各一条。只做记录——不进 meta 投影、不推进 `updatedAt`（与 memory 事件同约定），权威数据在 `<skillsDir>/.proposals/` 的提案文件。
+技能进化（提案制）的全部写路径都各写入一条事件：提案的产生与治理状态流转各一条。只做记录，不进 meta 投影、不推进 `updatedAt`（与 memory 事件同约定），权威数据在 `<skillsDir>/.proposals/` 的提案文件。
 
 | 类型 | 字段 |
 |------|------|
@@ -87,18 +87,18 @@ TaskSnapshot 的字段（`protocol/team.ts`）：`id`、`subject`、`detail`、`
 
 ### todo 清单（1 种，TodoWrittenEvent）
 
-模型自组织的会话级清单（`todo_list_write`/`todo_list_read` 工具的持久化面）。全量快照、后写胜出——一个事件就是完整可审计状态，重放/审计/UI 零合并逻辑。进 meta 投影（写 `meta.todo`）、不推进 updatedAt（清单不是对话活动，与 skill/memory 审计事件同约定）；fork 复制历史即天然继承快照，分叉后各自独立。
+模型自组织的会话级清单（`todo_list_write`/`todo_list_read` 工具的持久化记录）。全量快照、后写胜出：一个事件就是完整可审计状态，重放/审计/UI 都不需要合并逻辑。进 meta 投影（写 `meta.todo`）、不推进 updatedAt（清单写入不算对话活动，与 skill/memory 审计事件的约定相同）；fork 复制历史即天然继承快照，分叉后各自独立。
 
 | 类型 | 字段 |
 |------|------|
-| `todo.written` | `at`、`todos`（TodoItem[]：`content`、`status`∈pending/in_progress/completed）——每次 todo_list_write 一条 |
+| `todo.written` | `at`、`todos`（TodoItem[]：`content`、`status`∈pending/in_progress/completed）；每次 todo_list_write 一条 |
 
 ### 目标循环（3 种，GoalEvent）
 
-`/goal` 目标循环的全部写路径（机制见 [goal](../core/goal.md)）。`goal.set` 进 meta 投影（写 `meta.goal`）并推进 updatedAt；`goal.checked`/`goal.cleared` 只审计——不进投影、不推进 updatedAt。循环是否自续（armed）是进程内开关，不在事件流里（见 [ADR-0002](../adr/0002-goal-armed-is-process-local.md)）。
+`/goal` 目标循环的全部写路径（机制见 [goal](../core/goal.md)）。`goal.set` 进 meta 投影（写 `meta.goal`）并推进 updatedAt；`goal.cleared` 同样进投影（删除 `meta.goal`）并推进 updatedAt；`goal.checked` 只审计，不进投影、不推进 updatedAt。循环是否自续（armed）是进程内开关，不在事件流里（见 [ADR-0002](../adr/0002-goal-armed-is-process-local.md)）。
 
 | 类型 | 字段 |
 |------|------|
 | `goal.set` | `at`、`op`（create/edit/pause/resume/state）、`goal`（GoalSnapshot 全量：`text`、`acceptance`、`state`、`setAt`、`rounds`、`totalRounds`、`tokensUsed`、`stoppedReason?`、`stoppedAt?`、`stoppedNote?`、`lastJudgeAt?`、`lastJudgeVerdict?`、`lastJudgeReason?`、`lastJudgeProgress?`） |
-| `goal.checked` | `at`、`round`、`gates`（GoalGateOutcome[]：`command`、`ok`、`exitCode?`、`outputTail`）、`verdict?`、`reason?`、`progress?`、`judgeError?`（`{kind: parse\|transport, message}`）、`tokens?`（判定器本轮用量）——每轮检查一条；验收命令失败短路时无 verdict，判定器失败时只有 judgeError |
+| `goal.checked` | `at`、`round`、`gates`（GoalGateOutcome[]：`command`、`ok`、`exitCode?`、`outputTail`）、`verdict?`、`reason?`、`progress?`、`judgeError?`（`{kind: parse\|transport, message}`）、`tokens?`（判定器本轮用量）。每轮检查一条；验收命令失败短路时无 verdict，判定器失败时只有 judgeError |
 | `goal.cleared` | `at`、`hadState`（移除前的状态） |

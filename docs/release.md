@@ -5,7 +5,7 @@ kclaw 尚未发布 npm 包（恢复发布时 `packages/kclaw` 直接 `npm publis
 ## 版本号
 
 - **唯一权威数据**：`packages/kclaw/package.json` 的 `version`（当前 0.x 规则，不做兼容承诺）。core/server/web/cli 四个内部包的版本号不参与定版，恒停在 0.1.0。
-- **运行时读取**：daemon 的 `GET /status` 与 CLI 的 `--version` 都在运行时读所在包的 package.json。聚合安装形态（`packages/kclaw/app/`）下两者读到的是同一个文件（构建时写入的 stub，携带聚合包版本），因此 `kclaw daemon status` 报出的 daemon 版本与 CLI 版本天然可比——不一致即说明两者不是同一次构建的产物。
+- **运行时读取**：daemon 的 `GET /status` 与 CLI 的 `--version` 都在运行时读所在包的 package.json。聚合安装形态（`packages/kclaw/app/`）下两者读到的是同一个文件（构建时写入的 stub，携带聚合包版本），因此 `kclaw daemon status` 报出的 daemon 版本与 CLI 版本可以直接比较，不一致即说明两者来自不同的构建。
 
 ## 定版流程（三步手工，其余自动）
 

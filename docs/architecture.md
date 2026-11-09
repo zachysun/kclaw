@@ -16,11 +16,11 @@ kclaw 是一个运行在本机的个人 AI 助手（agent）。整套系统只�
 
 **core 是纯库。** `@kclaw/core` 不依赖 fastify、ws、commander 中的任何一个框架，也不知道 HTTP 和 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）的存在。它需要的外部能力全部由调用方注入：模型调用（`deps.llm`）、工具执行、事件出口（`deps.onEvent`）、持久化（`deps.onMessage`）。因此整个 agent 循环可以用假的依赖（mock）离线测试。
 
-**daemon 只监听本机回环地址。** 回环地址（loopback）是 127.0.0.1，只有本机进程能连上，外部网络访问不到。监听地址在 `packages/server/src/daemon.ts` 与 `packages/cli/src/daemon-ctl.ts` 里各自写死为 `HOST = "127.0.0.1"`；监听端口优先级从高到低：server bin 的 `--port` 旗标 > 配置文件 `server.port` > `0`（让操作系统分配一个空闲临时端口）——固定端口后 WebUI 地址跨重启不变，被占用是硬错误（退出报一行原因，绝不静默换端口）。实际端口与进程号写入 `<home>/daemon.json`。客户端每次请求都带上 `<home>/token` 文件里的 Bearer token（放在 HTTP `Authorization` 请求头里的访问令牌）完成鉴权。详见 [daemon](./server/daemon.md)。
+**daemon 只监听本机回环地址。** 回环地址（loopback）是 127.0.0.1，只有本机进程能连上，外部网络访问不到。监听地址在 `packages/server/src/daemon.ts` 与 `packages/cli/src/daemon-ctl.ts` 里各自写死为 `HOST = "127.0.0.1"`；监听端口优先级从高到低：server bin 的 `--port` 旗标 > 配置文件 `server.port` > `0`（让操作系统分配一个空闲临时端口）。固定端口后 WebUI 地址跨重启不变，被占用是硬错误（退出报一行原因，绝不静默换端口）。实际端口与进程号写入 `<home>/daemon.json`。客户端每次请求都带上 `<home>/token` 文件里的 Bearer token（放在 HTTP `Authorization` 请求头里的访问令牌）完成鉴权。详见 [daemon](./server/daemon.md)。
 
 **实时事件不持久化，持久化的是事件流。** WS 上推送的增量事件（text.delta、message.created 等）只用于实时刷新界面：不写入磁盘、断线不补发、不回放。会话真正的持久化形式是每个会话目录下的 events.jsonl 事件流（唯一权威数据，message / compaction / memory / system 等业务事件都记录在这里），以及由它推导出来的 meta.json 摘要（见 [storage](./core/storage.md)）。客户端断线恢复的办法：先用 HTTP 拉一次全量消息，再只订阅新事件（详见 [protocol](./core/protocol.md)）。
 
-**WebUI 是独立构建的静态产物。** `@kclaw/web` 的运行时依赖是 react/react-dom、`@kclaw/core` 的几个纯数据/纯类型子路径出口（`commands`、`protocol`、`mentions`、`client-http`、`permission-modes`、`provider-formats`），以及 react-virtuoso（审计页用的虚拟滚动列表库，见 [webui](./web/webui.md)）与 react-markdown 全家桶（对话页 Markdown 渲染）。`commands` 是 slash 命令的 name/usage 元数据共享表（CLI 与 WebUI 读同一份，见 [extending](./extending.md)），`protocol` 是线上数据形状的类型定义。构建出的静态文件由 daemon 托管（`resolveWebDist` → `packages/web/dist`），不需要额外的文件服务器。
+**WebUI 是独立构建的静态产物。** `@kclaw/web` 的运行时依赖是 react/react-dom、`@kclaw/core` 的几个纯数据/纯类型子路径出口（`commands`、`protocol`、`mentions`、`client-http`、`permission-modes`、`provider-formats`），以及 react-virtuoso（审计页用的虚拟滚动列表库，见 [webui](./web/webui.md)）与 react-markdown 及其插件（对话页 Markdown 渲染）。`commands` 是 slash 命令的 name/usage 元数据共享表（CLI 与 WebUI 读同一份，见 [extending](./extending.md)），`protocol` 是线上数据形状的类型定义。构建出的静态文件由 daemon 托管（`resolveWebDist` → `packages/web/dist`），不需要额外的文件服务器。
 
 ---
 
@@ -31,11 +31,11 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
  │
  ├── @kclaw/core     纯库，agent 引擎（run 组装/压缩引擎/事件总线/确认网关都在这里；server 与 cli 都依赖它）
  ├── @kclaw/server   daemon：Fastify app + RunManager 队列状态机（依赖 core）
- ├── @kclaw/cli      客户端：REPL / daemon 控制（依赖 core 的类型、ws、commander）
- └── @kclaw/web      客户端：React SPA（依赖 core 的 commands/protocol 子路径出口与 react-virtuoso，vite 独立构建）
+ ├── @kclaw/cli      客户端：对话 REPL（ink TUI / readline 两个表面）、kclaw run 与 daemon 控制（依赖 core、ws、commander、@clack/prompts、ink + react、string-width）
+ └── @kclaw/web      客户端：React SPA（依赖 core 的 commands/protocol 等子路径出口与 react-virtuoso 等前端库，vite 独立构建）
 ```
 
-依赖方向唯一：core ← server、core ← cli。web 只依赖 core 的几个子路径出口（`commands`/`protocol`/`mentions`/`client-http`/`permission-modes`/`provider-formats`——纯数据/纯类型，不含 agent 引擎）、react-virtuoso 与 react-markdown 全家桶；发布包 kclaw 只在构建期把 cli、server、web 的产物打包到一起。
+依赖方向唯一：core ← server、core ← cli。web 只依赖 core 的几个子路径出口（`commands`/`protocol`/`mentions`/`client-http`/`permission-modes`/`provider-formats`，纯数据/纯类型，不含 agent 引擎）、react-virtuoso、react-markdown 及其插件（remark-gfm、rehype-highlight），以及改动抽屉使用的 diff 与 highlight.js；发布包 kclaw 只在构建期把 cli、server、web 的产物打包到一起。
 
 ### 各包内部结构
 
@@ -43,10 +43,10 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 | 子目录 | 内容 |
 |--------|------|
-| `protocol/` | 消息、块、事件、WS 指令帧、会话事件、ID、团队域、技能提案、UI 卡 DSL（`ui_render` 的 `data` 通道形状），以及 MCP、goal、usage 与改动记录的 REST 响应类型（GET /mcp 的 `McpSnapshotResponse`、GET /sessions/:id/goal 的 `GoalViewResponse`、GET /usage 的 `UsageBody`、GET /sessions/:id/changes 的 `ChangesView` 与 `/changes/file` 的 `ChangeFileContent`）的定义——线上数据形状的权威来源，经 `@kclaw/core/protocol` 子路径出口供三端引用 |
+| `protocol/` | 消息、块、事件、WS 指令帧、会话事件、ID、团队域、技能提案、UI 卡 DSL（`ui_render` 的 `data` 通道形状），以及 MCP、goal、usage 与改动记录的 REST 响应类型（GET /mcp 的 `McpSnapshotResponse`、GET /sessions/:id/goal 的 `GoalViewResponse`、GET /usage 的 `UsageBody`、GET /sessions/:id/changes 的 `ChangesView` 与 `/changes/file` 的 `ChangeFileContent`）的定义，是线上数据形状的权威来源，经 `@kclaw/core/protocol` 子路径出口供三端引用 |
 | `provider/` | OpenAI 兼容与 Anthropic Messages 两种协议的模型客户端，带重试、内置预设目录与统一的端点/模型解析（resolver，见 [provider](./core/provider.md)）；两种线格式的全部知识（类型、鉴权头、URL 规则、embeddings 能力位、探活请求形状）单源在 `formats.ts` 的 wire-format 注册表 |
 | `agent/` | agent 循环、上下文组装、工具契约、单次 run 的组装（`run-assembly.ts` 的 `executeRun`） |
-| `prompts/` | 内置提示词文本的统一存放处（系统提示词回退与注入约定、压缩摘要、goal 注入模板、团队人设、记忆提取与沉淀、技能提炼、subagent 精简模板、会话自动命名）；随附守卫测试——实现文件里再出现提示词形态的中文文本即测试失败，防止文本散落回实现文件。仅团队提示词经入口导出，其余由各使用模块直接 import |
+| `prompts/` | 内置提示词文本的统一存放处（系统提示词回退与注入约定、压缩摘要、goal 注入模板、团队人设、记忆提取与沉淀、技能提炼、subagent 精简模板、会话自动命名）；随附守卫测试：实现文件里再出现提示词形态的中文文本即测试失败，防止文本散落回实现文件。仅团队提示词经入口导出，其余由各使用模块直接 import |
 | `hooks/` | hook 系统：14 个挂载位置、HookChain 注册接口、用户文件装载、内置 hook（见 [hooks](./core/hooks.md)） |
 | `storage/` | 路径解析、配置读取、JSONL（每行一条 JSON 的文本文件）读写；含用量记录 `usage.ts` 与已保存权限规则 `decided-rules.ts` |
 | `session/` | SessionStore 与上下文压缩：token 估算、分界、渲染等纯函数、事件流存储、事件流哈希链（`integrity.ts`：每行带前一行摘要，校验函数判定 ok/partial/not-chained/torn-tail/broken，见 [storage](./core/storage.md)）、压缩引擎 `Compactor`、会话自动命名、会话 fork 原语（把截至某条消息的历史复制成独立新会话）；`session_search` 工具直接扫事件流 |
@@ -61,7 +61,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 | `goal/` | /goal 目标循环的领域模块：快照类型、硬性上限常量、判定契约常量（`contract.ts`：判定器输出上限与"无进展"标记串，判定器与循环侧检测共用）、判定器、验收命令的沙箱执行器（`gate.ts`）、事件派生纯函数（derive.ts）与轮决策纯函数（check.ts：九条停止条件与续轮/收尾判定）；注入文本模板在 `prompts/goal.ts`（调用方在 server 的 goal-loop.ts，见 [goal](./core/goal.md)） |
 | `notify/` | 任务完成通知 |
 
-根级另有 `bus.ts`（EventBus，进程内事件分发）与 `client-http.ts`（CLI/WebUI 共享的 HTTP 请求模块：自动附带 Bearer token、提取错误信息、处理 204/空响应，经 `@kclaw/core/client-http` 子路径出口；不 import 任何 Node 专属模块，浏览器可以直接打包）。`mentions.ts`（`@` 文件引用的纯函数层：提取、候选补全与模型侧包装文本，经 `@kclaw/core/mentions` 子路径出口；机制见 [file-mentions](./core/file-mentions.md)）与 `provider/formats.ts`（LLM 线格式注册表：格式类型与校验、鉴权头、端点 URL、embeddings 能力位、探活请求形状，经 `@kclaw/core/provider-formats` 子路径出口；协议实现、探活、配置与 REST 校验、daemon 的 embedding 能力判定、WebUI Model 页的格式下拉都直接读它，不再各存一份镜像）同为浏览器可引用的纯模块。`sandbox/`（bash 工具的操作系统级沙箱：Seatbelt/bwrap 检测与包装，见 [sandbox](./core/sandbox.md)）是内部模块，不经入口导出，由 run 组装直接 import。
+根级另有 `bus.ts`（EventBus，进程内事件分发）与 `client-http.ts`（CLI/WebUI 共享的 HTTP 请求模块：自动附带 Bearer token、提取错误信息、处理 204/空响应，经 `@kclaw/core/client-http` 子路径出口；不 import 任何 Node 专属模块，浏览器可以直接打包）。`mentions.ts`（`@` 文件引用的纯函数层：提取、候选补全与模型侧包装文本，经 `@kclaw/core/mentions` 子路径出口；机制见 [file-mentions](./core/file-mentions.md)）与 `provider/formats.ts`（LLM 线格式注册表：格式类型与校验、鉴权头、端点 URL、embeddings 能力位、探活请求形状，经 `@kclaw/core/provider-formats` 子路径出口；协议实现、探活、配置与 REST 校验、daemon 的 embedding 能力判定、WebUI Model 页的格式下拉都直接读它，各处不另存镜像）同为浏览器可引用的纯模块。`sandbox/`（bash 工具的操作系统级沙箱：Seatbelt/bwrap 检测与包装，见 [sandbox](./core/sandbox.md)）是内部模块，不经入口导出，由 run 组装直接 import。
 
 **server**（入口 `packages/server/src/index.ts`）：`app.ts`（createApp 组装）、`daemon.ts`（launchDaemon）、`auth.ts`（token 鉴权）、`run.ts`（RunManager 队列状态机；单次 run 的组装在 core 的 `executeRun`）、`subagent.ts`（subagent 派生：子会话创建、状态行与确认转发，见 [subagents](./core/subagents.md)）、`team.ts`（团队宿主：身份反查、收信箱投递、自动派活、面板，见 [agent-team](./core/agent-team.md)）、`goal-loop.ts`（/goal 目标循环主机：空闲边缘驱动、验收命令、判定器与续轮，见 [goal](./core/goal.md)）、`command-check.ts`（WS 命令帧的唯一校验点）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`（定时调度 tick）、`memory-scheduler.ts`（记忆的定时/跟随保底调度）、`skill-scheduler.ts`（技能进化的跟随检查处理方，见 [skills](./core/skills.md)）、`skill-curator.ts`（技能 curator 的每日闲时扫描宿主：陈旧标记与归档，见 [skills](./core/skills.md)）、`session-retention.ts`（spill 目录保留期清理宿主：每小时按文件 mtime 删除存放超过 `sessions.spillRetentionDays` 天的文件，默认 0 = 不清理，见 [storage](./core/storage.md)）、`host-kit.ts`（常驻宿主共享组件：定时宿主的"立即首扫 + interval + 进行中任务记录 + 停机等待"，与两调度器共用的空闲判定 `followGateDue`、skill curator 与记忆夜间沉淀共用的每日一次判定 `dailyGateDue`；goal 循环等无定时器宿主只用其中的进行中记录）、`mcp-projects.ts`（项目发现：从会话记录现算已知项目集合、逐项目注册两阶段配置 watch、每 60s 同步一次，见 [mcp](./core/mcp.md)）、`project-mcp-watch.ts`（项目层 mcp.json 的两阶段文件监视，与 mcp-projects 配套）、`history-search.ts`（history_search 工具与 `/search` 路由共用的检索实现：索引召回 + 标题解析 + 回收站过滤）、`session-fork.ts`（会话 fork 宿主：空闲判定、调 core 原语复制历史、新会话标题与 meta，见 [storage](./core/storage.md)）、`chore-usage.ts`（后台 LLM 调用花费的用量记录）、`feishu/`（飞书频道：频道逻辑 + 传输接入口 + 飞书 SDK 的薄封装，见 [feishu-channel](./server/feishu-channel.md)）、`routes/`（sessions/changes/attachments/cron/config/providers/fs/usage/memory/skills/hooks/permissions/mcp/channel/search 十五组路由）。
 
@@ -94,12 +94,12 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 **客户端如何启动 daemon。** 任何客户端命令都先经 `KclawClient.connect()` → `ensureDaemon()`（`packages/cli/src/daemon-ctl.ts`），按检测结果分三种情况处理：
 
 - `daemon.json` 记录健康 → 直接使用。
-- 文件还在、`/health` 不通且进程号对应的进程已死（系统返回 ESRCH）→ 判定记录失效，重新分叉启动一个 daemon（detached、stdio ignore、unref，目标脚本由 `resolveServerBin()` 解析到 `packages/server/bin/kclaw-server.mjs`），然后轮询等它健康（总 budget 5 秒、间隔 250 毫秒、单次检测超时 1 秒）。
-- 进程还活着但不健康 → 只等待，不重复启动——防止把同一个 daemon 启动出第二份。
+- 文件还在、`/health` 不通且进程号对应的进程已终止（系统返回 ESRCH）→ 判定记录失效，重新分叉启动一个 daemon（detached、stdio ignore、unref，目标脚本由 `resolveServerBin()` 解析到 `packages/server/bin/kclaw-server.mjs`），然后轮询等它健康（总 budget 5 秒、间隔 250 毫秒、单次检测超时 1 秒）。
+- 进程还活着但不健康 → 只等待，不重复启动，防止把同一个 daemon 启动出第二份。
 
-**daemon 如何宣告就绪。** `launchDaemon` 第一步以 `wx` 独占模式认领 `<home>/daemon.json`（先写入占位内容 `{port: 0, pid, startedAt, starting: true}`；发现存活 pid 就拒绝二次启动，发现死 pid 则回收文件重新认领），监听成功后回填 `{port, pid, startedAt}`；启动脚本同时向 stdout 打一行 `{"port":<port>}` 供启动方读取。
+**daemon 如何宣告就绪。** `launchDaemon` 第一步以 `wx` 独占模式认领 `<home>/daemon.json`（先写入占位内容 `{port: 0, pid, startedAt, starting: true}`；发现存活 pid 就拒绝二次启动，发现 pid 对应的进程已终止则回收文件重新认领），监听成功后回填 `{port, pid, startedAt}`；启动脚本同时向 stdout 打一行 `{"port":<port>}` 供启动方读取。
 
-**如何停止。** 收到 SIGTERM/SIGINT 后走有界 stop（每一步默认 60 秒超时）；stop 失败时保留 daemon.json——进程还在运行，pid 文件必须如实反映。
+**如何停止。** 收到 SIGTERM/SIGINT 后走有界 stop（每一步默认 60 秒超时）；stop 失败时保留 daemon.json：进程还在运行，pid 文件必须如实反映。
 
 **状态全部在 `<home>`。** `<home>` 指 `KCLAW_HOME` 环境变量指定的目录，未设置时为 `~/.kclaw`（`resolvePaths`，`packages/core/src/storage/paths.ts`）。里面有：`config.json`、`credentials.json`（provider apiKey 与 tavily key 的实际存放处，0600，见 [storage](./core/storage.md)）、`AGENTS.md`、`token`、`daemon.json`、`permissions.yaml`（全局的已保存权限规则，见 [permissions](./core/permissions.md)）、`mcp.json`（**全局组**的 MCP server 配置；各项目自己的在 `<项目>/.kclaw/mcp.json`，见 [mcp](./core/mcp.md)）、`feishu.json` 与 `feishu-state.json`（飞书频道的配置与绑定状态，见 [feishu-channel](./server/feishu-channel.md)）、`sessions/`、`memory/`（记忆库：`global/`（persona/wiki/rule 三类认知文件）+ `projects/<id>/`（主题线文件），各带 `vectors.db` 检索索引，见 [memory](./core/memory.md)）、`skills/`（全局技能目录，项目级技能在工作区 `.kclaw/skills/`，见 [skills](./core/skills.md)）、`hooks/`（用户 hook 目录，每个 run 重新扫描，见 [hooks](./core/hooks.md)）、`cron.db`、`usage.db`、`attachments/`、`spill/`（工具输出被截断时的全量副本，`fs_read` 可直接读取）、`commands/`、`logs/`。
 
@@ -111,7 +111,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 ### 第一步：发送与排队（server 侧）
 
-用户在 CLI 或 WebUI 输入文本，客户端经已认证的 WS 连接发一帧 `{type:"send_message", sessionId, text, disposition?, attachments?}`（`packages/server/src/ws.ts`）。服务端先做两件轻活（查这个会话存在、核对附件引用）然后立刻回一帧 `send_message_ack {messageId, queued}`，不等回复生成完，长任务不会堵住命令通道。
+用户在 CLI 或 WebUI 输入文本，客户端经已认证的 WS 连接发一帧 `{type:"send_message", sessionId, text, disposition?, attachments?}`（`packages/server/src/ws.ts`）。服务端先做两项简单检查（确认这个会话存在、核对附件引用），然后立刻回一帧 `send_message_ack {messageId, queued}`，不等回复生成完，长任务不会堵住命令通道。
 
 随后 `RunManager.submit`（`packages/server/src/run.ts`）决定这条消息的去向，每个会话有一条显式队列和自己的驱动循环：
 
@@ -129,7 +129,7 @@ run 的组装在 core 的 `executeRun`（`packages/core/src/agent/run-assembly.t
 1. 附件引用挂载为 attachment 块（多模态、内联文本、fs_read 提示三种形态）。
 2. 确定模型：`input.model` → 会话 meta → 默认配置，三级依次回退；条目名翻译成线上模型名。
 3. 记忆检索：拿用户文本的前 200 字符搜项目情节，取前 5 条，作为 note 块注入用户消息；另把 L2 全局认知拼进系统提示（见 [memory](./core/memory.md)）。
-4. 扫描技能目录（全局 `<home>/skills` + 工作区 `.kclaw/skills`），把可用技能清单追加进系统提示——此时系统提示分两段组装：**stable**（人设基础文本 + 注入约定，缓存冻结面）在前，**live**（全局认知 + 技能清单，低频变化面）在后；若消息里出现 `/技能名` 或 `@路径`（任意位置，仅用户消息），把两者的包装文本合并成一份改写后的模型视图文本（见 [skills](./core/skills.md) 与 [file-mentions](./core/file-mentions.md)）。
+4. 扫描技能目录（全局 `<home>/skills` + 工作区 `.kclaw/skills`），把可用技能清单追加进系统提示。此时系统提示分两段组装：**stable**（人设基础文本 + 注入约定，缓存冻结面）在前，**live**（全局认知 + 技能清单，低频变化面）在后；若消息里出现 `/技能名` 或 `@路径`（任意位置，仅用户消息），把两者的包装文本合并成一份改写后的模型视图文本（见 [skills](./core/skills.md) 与 [file-mentions](./core/file-mentions.md)）。
 5. 读会话历史（在读之后才追加新用户消息）→ `createBuiltinTools`（含 skill_read）+ extraTools（MCP 工具）→ `ConfigPermissionGate`（readRoots 为附件目录与 spill 目录；权限模式与已保存规则每个 run 都从会话 meta 和磁盘现读）。
 6. 进入 agent 循环 `runAgent(...)`（`packages/core/src/agent/loop.ts`）：
    - `llm.stream(await buildMessages())`：`toProviderMessages(history)` 负责把全量历史组装成发往模型的请求（`agent/context.ts`，上下文长度由压缩体系统一管）；llm-before hook 链只能修改模型看到的输入（技能与 `@` 文件指定的合并包装就是内置的 skill-wrap hook，用 `withLastUserText` 按内容锚定本轮 user 消息，steer 插话不会被误改写）。
@@ -139,7 +139,7 @@ run 的组装在 core 的 `executeRun`（`packages/core/src/agent/run-assembly.t
    - turn-boundary hook 链（内置 steering-drain）取走引导缓冲里的消息逐条注入：message.created → onMessage 持久化 → message.completed → message.steered。
    - 回到下一轮模型调用，直到模型输出 end_turn。
 
-系统提示词的全量记录发生在进入模型循环之前：引擎拼装好系统提示词后调用 `SessionStore.appendSystem`，往 events.jsonl 追加一条 system 事件（按 stable/live 两段记录）——每 run 恰好一条，不并入 meta 投影、不上事件总线，写失败则本次 run 直接失败。run 的边界（`run.started` / `run.ended`）与人工确认的裁决（`permission.decided`）也在此层落进会话档案，三者构成审计页的"每轮发生了什么"（见 [run-manager](./server/run-manager.md) 与 [webui](./web/webui.md)）。
+系统提示词的全量记录发生在进入模型循环之前：引擎拼装好系统提示词后调用 `SessionStore.appendSystem`，往 events.jsonl 追加一条 system 事件（按 stable/live 两段记录），每 run 恰好一条，不并入 meta 投影、不上事件总线，写失败则本次 run 直接失败。run 的边界（`run.started` / `run.ended`）与人工确认的裁决（`permission.decided`）也在此层写入会话档案，三者构成审计页的"每轮发生了什么"（见 [run-manager](./server/run-manager.md) 与 [webui](./web/webui.md)）。
 
 ### 第三步：收尾与广播
 
@@ -194,7 +194,7 @@ sequenceDiagram
 3. **第一轮模型调用**：`llm.started {attempt:1}` → assistant 空壳 `message.created` → 模型流式产出工具调用：`tool_call.created` → 若干 `tool_call.delta` → 流结束 `llm.completed {stopReason:"tool_use"}` → `tool_call.completed`（到此才 `JSON.parse(argsJson)` 解析参数）。
 4. **权限检查**：`fs_read` 是 safe 工具，直接放行（`grantedBy:"safe"`）；`fs_write` 命中 confirm → 循环发出 `confirmation.requested {confirmationId:"conf_…", toolCall, risk:"sensitive", expiresAt}` 并等待答复。`raceConfirmation` 同时在三件事上竞争：人工裁决、300 秒超时、run 的 abort 信号，谁先到算谁。
 5. **人机回合**：CLI 收到事件，在当前表面弹四项确认卡（允许（仅本次）/ 总是允许（本项目）/ 总是允许（全局）/ 拒绝）：ink TUI 是同树的 ink 卡片，readline 表面是 @clack 确认框。用户选「总是允许（本项目）」→ CLI 回 `confirmation.resolve {confirmationId, decision:"project"}` → ws.ts 调 `broker.resolve` 完成裁决，run 组装的`resolveConfirmation` 随即将这次工具调用收紧成一条具体规则写入项目档 `.kclaw/permissions.yaml` → 循环发出 `confirmation.resolved {decision:"project", by:"cli"}`，工具以 `grantedBy:"confirmed"` 放行（「总是允许」两档的保存机制见 [permissions](./core/permissions.md)）。
-6. **执行与结果消息**：`fs_read` 属 parallel 组、`fs_write` 属 serial 组，分组调度——并行组经 `Promise.allSettled` 等全部完成后，串行组逐个执行；每个结果走 `tool_result.created → (delta) → completed`。结果块按模型给定的顺序组成一条 `role:"tool"` 消息，`onMessage` 持久化后广播 message.completed。
+6. **执行与结果消息**：`fs_read` 属 parallel 组、`fs_write` 属 serial 组，分组调度：并行组经 `Promise.allSettled` 等全部完成后，串行组逐个执行；每个结果走 `tool_result.created → (delta) → completed`。结果块按模型给定的顺序组成一条 `role:"tool"` 消息，`onMessage` 持久化后广播 message.completed。
 7. **第二轮模型调用**：带上完整的工具结果再次调用；模型输出文本总结 → `end_turn` → assistant 消息持久化、message.completed → `run.completed {stopReason:"end_turn", usage:{…累计…}}`。
 8. **渲染收尾**：CLI 渲染完终态事件后回到输入（readline 表面回到提示符，TUI 回到输入框）；WebUI 同样只依赖这一串事件。daemon 继续常驻，等待下一条消息或 30 秒一次的调度 tick。
 
@@ -202,13 +202,13 @@ sequenceDiagram
 
 ## 边界与出错
 
-**daemon 崩溃。** JSONL 文件兼容尾部残缺行（进程死在写入中途、只写了一半的行：`repairTornTail`/`readJsonl`，`packages/core/src/storage/jsonl.ts`）。崩溃时进行中的定时任务触发，其下一次执行时间（`next_run_at`）已在认领（`claimDue`）时推进——被终止的这一次不会重放，任务在下个调度点照常触发。「认领即把下次执行时间推进到 now 之后」的语义保证了不会重放积压。
+**daemon 崩溃。** JSONL 文件兼容尾部残缺行（进程在写入中途终止、只写了一半的行：`repairTornTail`/`readJsonl`，`packages/core/src/storage/jsonl.ts`）。崩溃时进行中的定时任务触发，其下一次执行时间（`next_run_at`）已在认领（`claimDue`）时推进，被终止的这一次不会重放，任务在下个调度点照常触发。「认领即把下次执行时间推进到 now 之后」的语义保证了不会重放积压。
 
-**模型服务彻底失败。** `runAgent` 不抛异常——已产出的部分内容以 `stopReason:"error"` 持久化，随后 `llm.failed {willRetry:false}` 与 `run.failed` 收尾。瞬时错误由 provider 层的 `withRetry`（3 次尝试）内部消化，外部只能看到 `llm.failed {willRetry:true}` 事件。
+**模型服务彻底失败。** `runAgent` 不抛出异常：已产出的部分内容以 `stopReason:"error"` 持久化，随后 `llm.failed {willRetry:false}` 与 `run.failed` 收尾。瞬时错误由 provider 层的 `withRetry`（3 次尝试）内部消化，外部只能看到 `llm.failed {willRetry:true}` 事件。
 
 **取消。** WS 帧 `run.cancel` → `RunManager.cancel` 只中止当前 run（有活跃 run 就直接 `abort()`，没有则返回 false）→ 循环在下一个检查点以 `stopReason:"aborted"` 终止。**排队中的消息不受 run.cancel 影响**，取消排队一律走 WS `queue.cancel`：wait 状态随时可取消，steer 在注入前可取消，已注入的进入了 JSONL 历史，不删除。确认等待中收到 abort 不算「超时拒绝」（不发 `confirmation.resolved`）。
 
-**已知限制。** bash 的权限规则按归一化命令匹配（空白折叠、命令取文件名，`/bin/rm` 与 `rm` 视为同一个），含接续符（`;` `&&` `||` `|`、换行、命令替换 `$(...)`/反引号）的命令不再命中 allow 规则或会话授权（退回到逐次确认；bash 沙箱可用时改由沙箱接手，见 [permissions](./core/permissions.md) 第 7 节），deny 则对每个子命令分别匹配。但 flag 重排（`-r -f` 与 `-rf`）和引号内的分隔符仍识别不了——规则是尽力而为的防线。真正的运行时保底是 bash 外面套的操作系统级沙箱：工作区与临时目录可写、家目录只读且 `~/.kclaw` 被屏蔽（见 [sandbox](./core/sandbox.md)）。fs 的边界与路径规则已按 realpath（解析符号链接后的真实路径）处理：经 symlink 逃逸出边界的操作落到逐次确认，deny 无法经 symlink 绕过。CLI 的 respawn 目标解析假定源码仓库布局（`packages/cli` 与 `packages/server` 相邻）。独立分发包由 kclaw 包的 esbuild 产物解决。
+**已知限制。** bash 的权限规则按归一化命令匹配（空白折叠、命令取文件名，`/bin/rm` 与 `rm` 视为同一个），含接续符（`;` `&&` `||` `|`、换行、命令替换 `$(...)`/反引号）的命令不会命中 allow 规则或会话授权（退回到逐次确认；bash 沙箱可用时改由沙箱接手，见 [permissions](./core/permissions.md) 第 7 节），deny 则对每个子命令分别匹配。但 flag 重排（`-r -f` 与 `-rf`）和引号内的分隔符仍识别不了，规则是尽力而为的防线。真正的运行时保底是 bash 外面套的操作系统级沙箱：工作区与临时目录可写、家目录只读且 `~/.kclaw` 被屏蔽（见 [sandbox](./core/sandbox.md)）。fs 的边界与路径规则已按 realpath（解析符号链接后的真实路径）处理：经 symlink 逃逸出边界的操作转入逐次确认，deny 无法经 symlink 绕过。CLI 的 respawn 目标解析假定源码仓库布局（`packages/cli` 与 `packages/server` 相邻）。独立分发包由 kclaw 包的 esbuild 产物解决。
 
 ---
 

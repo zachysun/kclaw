@@ -27,6 +27,7 @@ export type EventType =
   | "llm.started" | "llm.completed" | "llm.failed"
   // 人工介入
   | "confirmation.requested" | "confirmation.resolved"
+  // 运行中提问（ask_user_questions 工具的等待生命周期）
   | "question.requested" | "question.resolved"
   // note 单发
   | "note.emitted"
@@ -60,7 +61,8 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 | 会话元数据 | session.renamed | 1 |
 | 流式 | text、thinking、tool_call 各 created/delta/completed；tool_result 的 created/delta/completed；attachment.created / attachment.completed | 14 |
 | 模型调用 | llm.started / llm.completed / llm.failed | 3 |
-| 人工介入 | confirmation.requested / resolved；question.requested / resolved | 4 |
+| 人工介入 | confirmation.requested / resolved | 2 |
+| 运行中提问 | question.requested / resolved | 2 |
 | note 单发 | note.emitted | 1 |
 | 消息排队与引导 | message.queued / message.steered / message.queue_cancelled | 3 |
 | 上下文压缩 | compaction.started / compaction.completed | 2 |
@@ -92,7 +94,7 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 | `tool_call.created` / `tool_call.completed` | BlockPayload |
 | `tool_call.delta` | `messageId`、`blockId`、`delta`（args 的 JSON 片段） |
 | `tool_result.created` / `tool_result.completed` | BlockPayload |
-| `tool_result.delta` | `messageId`、`callId`、`delta`（按 callId 而非 blockId） |
+| `tool_result.delta` | `messageId`、`callId`、`delta`（按 callId 定位，其余 delta 按 blockId） |
 | `attachment.created` / `attachment.completed` | BlockPayload（当前已定义无发射方，附件随 message.completed 整体附带） |
 | `llm.started` | `model`、`attempt` |
 | `llm.completed` | `usage`、`stopReason`、`latencyMs`、`cacheMiss?`（缓存未命中归因，见下） |
@@ -110,7 +112,7 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 | `compaction.completed` | `segments`、`kept`、`phase`、`result`（ok/failed/cancelled；非 ok 时前两值为 0）、`trigger`（auto/manual/in-run；非 ok 不带）、`emergency?`（急救压缩且成功时为 true） |
 | `hook.failed` | `hook`、`position`、`error`、`phase`（load/run） |
 
-QuestionSpec：`{ text, options?, multiSelect? }` —— options 存在时从选项里选，默认自由文本。
+QuestionSpec：`{ text, options?, multiSelect? }`，options 存在时从选项里选，默认自由文本。
 
 ## 发射方
 

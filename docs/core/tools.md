@@ -2,18 +2,18 @@
 
 ## 职责
 
-`packages/core/src/tools/` 实现 40 个内置工具（18 个常驻 + 22 个按组装条件注册），并把它们组装成两份相互对应的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
+`packages/core/src/tools/` 实现 40 个内置工具（16 个常驻 + 24 个按组装条件注册），并把它们组装成两份相互对应的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
 
 ---
 
 ## 设计决策
 
 - **统一执行接口**：内置工具、MCP 适配器（`mcp__<server>__<tool>`，见 [mcp](./mcp.md)）实现同一个 `ToolExecutor`，循环不区分工具来源。`risk` 与 `concurrency` 是声明性元数据：前者驱动权限检查（safe 的工具集可自动放行；sensitive 在只读模式被无条件拒绝），后者驱动同批调用的调度。权限引擎需要的其余处理规则（路径归一、工作目录边界、读豁免、规则匹配取哪个参数）不要求工具声明，由引擎从 `risk` 与参数 schema 的字段名推导（见 [permissions](./permissions.md) 的按 risk 推导处理节）：写参数按惯例命名 `path`、命令参数命名 `command`，就自动被规则引擎识别。
-- **注册表与定义同源**：每个工具模块自带 `createXxxToolEntries` 工厂，把执行器、ToolDefinition 和名字打成一条 entry（schema 和手写校验同居在所属模块里）；`createBuiltinTools` 只路由组装参数、把各模块的 entries 汇成一条列表，`tools` 的键集合与 `toolDefs` 的名字集合天然一致（`registry.test.ts` 双向断言这一点），不会出现"模型可见但循环无法执行"的名字。新增一个工具=写好模块 + 注册表处一行展开（外加真正的接线：依赖注入、披露分层登记）。entries 的排列顺序有一处刻意安排：skills 家族展开在全部条件组之后。系统提示词的"工具目录"节按 entries 顺序渲染（不做排序），这段文字属于冻结的提示词基线，skill_create 保持在 cron 之后就是保持基线字节不变；发送面的 tools 数组不受影响，每请求按名排序（见 [agent-loop](./agent-loop.md)）。
-- **schema 面向模型，校验为手写实现**：parameters 字段是 JSON Schema（描述 JSON 参数结构的规范格式），随请求传给模型引导其生成参数；运行时不加载 schema 校验库，而是用 `shared.ts` 里的手写校验函数（`requireString` / `optInt` / `optStringArray`）逐个字段检查——失败抛出 `ToolError`，由 `makeTool` 统一转成 `{status:"error"}` 结果，异常永远不逃出执行器。
-- **fs 工具不做工作目录越界拦截**：路径只经 `path.resolve(workspace, p)` 解析，越界与否交给权限网关判定（越界会变成一次可由人批准的确认）——如果工具层先拒绝，人工批准后的调用仍会失败，确认就失去意义。
+- **注册表与定义同源**：每个工具模块自带 `createXxxToolEntries` 工厂，把执行器、ToolDefinition 和名字打成一条 entry（schema 和手写校验同居在所属模块里）；`createBuiltinTools` 只路由组装参数、把各模块的 entries 汇成一条列表，`tools` 的键集合与 `toolDefs` 的名字集合天然一致（`registry.test.ts` 双向断言这一点），不会出现"模型可见但循环无法执行"的名字。新增一个工具=写好模块 + 注册表处一行展开（另外还需要完成依赖注入与披露分层登记）。entries 的排列顺序有一处刻意安排：skills 家族展开在全部条件组之后。系统提示词的"工具目录"节按 entries 顺序渲染（不做排序），这段文字属于冻结的提示词基线，skill_create 保持在 cron 之后就是保持基线字节不变；发送给模型的 tools 数组不受影响，每请求按名排序（见 [agent-loop](./agent-loop.md)）。
+- **schema 面向模型，校验为手写实现**：parameters 字段是 JSON Schema（描述 JSON 参数结构的规范格式），随请求传给模型引导其生成参数；运行时用 `shared.ts` 里的手写校验函数（`requireString` / `optInt` / `optStringArray`）逐个字段检查，不加载 schema 校验库；失败时抛出 `ToolError`，由 `makeTool` 统一转成 `{status:"error"}` 结果，异常永远不逃出执行器。
+- **fs 工具不做工作目录越界拦截**：路径只经 `path.resolve(workspace, p)` 解析，越界与否交给权限网关判定（越界会变成一次可由人批准的确认）。如果工具层先拒绝，人工批准后的调用仍会失败，确认就失去意义。
 - **output 与 data 分离**：`output` 是面向模型的纯文本（进入下一轮请求的上下文）；`data` 是给前端渲染用的原始结构化数据（只持久化在块上，从不传给模型）。两者职责不同，避免"为渲染保留结构"污染模型上下文。
-- **argsJson 原文保留**：工具调用参数的原始 JSON 字符串原样存在 `ToolCallBlock.argsJson` 上——即使解析失败，审计时仍能看到模型的原始输出。
+- **argsJson 原文保留**：工具调用参数的原始 JSON 字符串原样存在 `ToolCallBlock.argsJson` 上，即使解析失败，审计时仍能看到模型的原始输出。
 
 ---
 
@@ -38,38 +38,38 @@ export function createBuiltinTools(opts: {
   tavilyApiKey: string
   bash?: Partial<{ timeoutMs: number; maxOutputBytes: number; sandbox: BashSandboxSpawn; spillDir: string }>
   // sandbox = bash 沙箱包装器：run 组装仅在沙箱可用时传入（见 sandbox.md），
-  // bash 工具本身不检测平台；默认 = 无沙箱直接执行，即沙箱功能不存在前的行为
+  // bash 工具本身不检测平台；默认 = 无沙箱直接执行
   // spillDir = <home>/spill：截断时全量输出写入磁盘 + 模型视图附 fs_read 定位行（见 tools/spill.ts）
-  sessionId?: string                 // 注入 bash 子进程环境（KCLAW_SESSION_ID / KCLAW_WORKSPACE）；缺席 = bash 原样继承 daemon 环境
+  sessionId?: string                 // 注入 bash 子进程环境（KCLAW_SESSION_ID / KCLAW_WORKSPACE）；缺失 = bash 原样继承 daemon 环境
   web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean; spillDir: string }>
-  sessionSearch?: SessionSearchFn    // session_search 的检索后端（server 每 run 注入）；缺席时工具仍注册、返回"(无可检索内容)"
-  historySearch?: HistorySearchFn    // history_search 的检索后端（server 每 run 注入，跨会话原始消息）；缺席时工具仍注册、返回固定不可用文案
+  sessionSearch?: SessionSearchFn    // session_search 的检索后端（server 每 run 注入）；缺失时工具仍注册、返回"(无可检索内容)"
+  historySearch?: HistorySearchFn    // history_search 的检索后端（server 每 run 注入，跨会话原始消息）；缺失时工具仍注册、返回固定不可用文案
   skills?: SkillRecord[]             // 技能目录扫描结果：skill_read 按名加载正文（见 skills.md）
   recordSkillUse?: (name: string, origin: "global" | "project") => void
-                                     // skill_read 使用遥测（curator 生命数据，见 skills.md）；缺席不记
+                                     // skill_read 使用记录（供 curator 管理技能生命周期，见 skills.md）；缺失时不记录
   subagent?: { spawner: SubagentSpawner; parentSessionId: string; collector?: SubagentCollector }
-  // subagent 派发后端（server 侧 spawner，见 subagents.md）；缺席时 subagent_run 不注册；
-  // collector 随行时追加 subagent_collect（后台 subagent 的答复按需取回，issue #22）
+  // subagent 派发后端（server 侧 spawner，见 subagents.md）；缺失时 subagent_run 不注册；
+  // collector 随行时追加 subagent_collect（后台 subagent 的答复按需取回）
   ask?: { broker: ConfirmationBroker; timeoutMs?: number; emit: QuestionEventEmitter }
-  // 运行中提问（issue #21）：broker 与确认共用同一个网关对象；缺席时 ask_user_questions 不注册。
-  // run 组装对每个 run 都注入——主线与 subagent 一样（subagent 的转发卡沿确认先例）
+  // 运行中提问：broker 与确认共用同一个网关对象；缺失时 ask_user_questions 不注册。
+  // run 组装对每个 run 都注入，主线与 subagent 一样（subagent 的问题卡与确认卡同样转发到父会话频道）
   team?: { facade: TeamFacade; identity: TeamIdentity }
-                                     // 团队模型面（七个团队工具）：组装先经团队 host 解析出身份（lead 或具名组员）再传入；
-                                     // cron 会话与任何团队外的会话没有这个选项，七件一个都不注册；
+                                     // 团队工具（七个）：组装先经团队 host 解析出身份（lead 或具名组员）再传入；
+                                     // cron 会话与任何团队外的会话没有这个选项，七个工具一个都不注册；
                                      // 组员身份永不带 create_team / spawn_teammate（createTeamToolEntries 内部强制，见 agent-team.md）
   childRun?: boolean                 // 本 run 自身是 subagent（meta.parentSessionId 派生）：裁掉 memory_save 与 subagent_run
   fetchImpl?: typeof fetch
-  processes?: ProcessRegistry        // 后台进程注册表（daemon 恒有）：bash 获得 run_in_background，process 三件加入清单（按会话隔离）
+  processes?: ProcessRegistry        // 后台进程注册表（daemon 恒有）：bash 获得 run_in_background，process 三个工具加入清单（按会话隔离）
   cron?: { scheduler: CronScheduler; writeTools?: boolean }
-                                     // cron 模型面（daemon 恒有）：四件 cron 工具加入清单；
+                                     // cron 工具（daemon 恒有）：四个 cron 工具加入清单；
                                      // writeTools: false（cron 触发的 run，防递归）只注册 cron_list
   todo?: { store: TodoStore; allowParallelInProgress?: boolean }
                                      // 会话级 todo 清单（daemon 恒有）：todo_list_write / todo_list_read 加入清单；
-                                     // allowParallelInProgress 松开"默认同时只有一条 in_progress"的检查
+                                     // allowParallelInProgress 放宽"默认同时只有一条 in_progress"的检查
   goal?: { host: GoalToolHost; sessionId: string }
-                                     // goal 模型面（仅根会话注册，childRun 不注册）：create/get/update_goal 三件
+                                     // goal 工具（仅根会话注册，childRun 不注册）：create/get/update_goal 三个
   skillCreate?: { enabled: boolean; sessionId: string; propose: SkillEvolutionTriggers["propose"] }
-                                     // skill_create（提案制技能进化）的模型面：在位才注册该工具；
+                                     // skill_create（提案制技能进化）：传入该选项才注册该工具；
                                      // enabled=false 时工具仍在、调用返回固定关闭文案（见 skills.md）
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] }
 
@@ -87,22 +87,22 @@ export function makeTool<N extends string>(
 
 ## 40 个内置工具
 
-完整清单（名称、一句话职责、risk / concurrency、条件注册与工具清单收缩规则）陈列在 [reference/tools](../reference/tools.md)：常驻 18 个（bash、fs 四件、grep/glob 检索两件、web 两件、memory 两件、session_search、history_search、skill 两件、todo 两件、ui_render）+ 条件注册 22 个（subagent 2、skill_create 1、后台进程 3、cron 模型面 4、goal 模型面 3、团队 7、提问 1、tool_search 1）——披露分层见该篇的"工具披露分层"节：全量层 name+description+schema、目录层 name+description、检索层只列 name。下面按实现文件分组说明各家的机制。
+完整清单（名称、一句话职责、risk / concurrency、条件注册与工具清单收缩规则）陈列在 [reference/tools](../reference/tools.md)：常驻 16 个（bash、fs 4、grep/glob 检索 2、web 2、memory 2、session_search、history_search、skill 2、ui_render）+ 条件注册 24 个（subagent 2、skill_create 1、后台进程 3、cron 4、goal 3、会话 todo 2、团队 7、提问 1、tool_search 1）；披露分层见该篇的"工具披露分层"节：全量层 name+description+schema、目录层 name+description、检索层只列 name。下面按实现文件分组说明各组工具的机制。
 
-前 18 个**常驻注册**（注册与否不随会话状态变化；可见性例外有两个——readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型可见工具清单，见 [permissions](./permissions.md)；subagent run 会裁掉 `memory_save`，见 [subagents](./subagents.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 组装了 subagent 派发后端时注册（subagent 自己的 run 两者都不注册，单层委派、不能再派下一级 subagent）；`skill_create` 仅在 daemon 组装了技能进化系统时注册（`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案，机制见 [skills](./skills.md)）；`ask_user_questions` 每个 run 都注册；七个团队工具只在会话属于某个团队时注册，且**工具清单按身份收缩**：组长拿全套，组员没有 `create_team`/`spawn_teammate`（见下文与 [agent-team](./agent-team.md)）。
+前 16 个**常驻注册**（注册与否不随会话状态变化；可见性例外有两个：readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型可见工具清单，见 [permissions](./permissions.md)；subagent run 会裁掉 `memory_save`，见 [subagents](./subagents.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 组装了 subagent 派发后端时注册（subagent 自己的 run 两者都不注册，单层委派、不能再派下一级 subagent）；`skill_create` 仅在 daemon 组装了技能进化系统时注册（`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案，机制见 [skills](./skills.md)）；`ask_user_questions` 每个 run 都注册；七个团队工具只在会话属于某个团队时注册，且**工具清单按身份收缩**：组长拿全套，组员没有 `create_team`/`spawn_teammate`（见下文与 [agent-team](./agent-team.md)）。
 
 ### bash（`tools/bash.ts`）
 
-`spawn(command, {shell: true, cwd: workspace, detached: POSIX 下为 true})`——cwd 固定在工作目录；`detached` 让子进程成为进程组（一组一起调度/发信号的进程）组长。关键约束：
+`spawn(command, {shell: true, cwd: workspace, detached: POSIX 下为 true})`，cwd 固定在工作目录；`detached` 让子进程成为进程组（一组一起调度/发信号的进程）组长。关键约束：
 
-- **沙箱注入**：构造参数可选带 `sandbox`（`BashSandboxSpawn`，一个 `spawn(command, {cwd, env?}) → ChildProcess`）。注入时命令改经沙箱包装器运行（其内部负责再经 `/bin/sh -c` 与进程组语义，见 [sandbox](./sandbox.md)）；默认无沙箱直接执行，即沙箱功能不存在前的行为。run 组装只在沙箱可用时注入，与权限引擎的 `sandboxedTools` 同源。
+- **沙箱注入**：构造参数可选带 `sandbox`（`BashSandboxSpawn`，一个 `spawn(command, {cwd, env?}) → ChildProcess`）。注入时命令改经沙箱包装器运行（其内部负责再经 `/bin/sh -c` 与进程组语义，见 [sandbox](./sandbox.md)）；默认无沙箱直接执行。run 组装只在沙箱可用时注入，与权限引擎的 `sandboxedTools` 同源。
 
-- **超时**：默认 `timeoutMs = 300_000`（`config.json` 的 `bash.timeoutMs` 同为 300s 默认值）。超时先 `process.kill(-pid, "SIGKILL")` 终止整个进程组（连带 shell 的子进程，如 `sleep`；Windows 无进程组，退回只终止直接子进程），然后返回 `{status:"error", output: "command timed out after 300000ms\n<部分输出>"}`——已产生的输出仍然返回。SIGKILL 之后留 2 秒宽限（`EXEC_TIMEOUT_GRACE_MS`）等 close 事件：子进程的退出信息与管道里已缓冲的尾部输出收集完才收尾，宽限到点保底走超时返回——超时是带现场的错误返回，不是静默丢弃。
-- **取消（run 中止）**：run 的取消信号在命令执行中触发时，同样先 `SIGKILL` 整个进程组再收尾，返回 `{status:"error", output: "command aborted\n<部分输出>"}`（`data.exitCode` 为 `null`），宽限收尾与超时共用同一套逻辑。没有这一步时，被取消的 run 留下的命令会继续执行到自然结束——进程组泄漏到 run 生命周期之外，长命令（如启动本地服务）会一直存活。
+- **超时**：默认 `timeoutMs = 300_000`（`config.json` 的 `bash.timeoutMs` 同为 300s 默认值）。超时先 `process.kill(-pid, "SIGKILL")` 终止整个进程组（连带 shell 的子进程，如 `sleep`；Windows 无进程组，退回只终止直接子进程），然后返回 `{status:"error", output: "command timed out after 300000ms\n<部分输出>"}`，已产生的输出仍然返回。SIGKILL 之后留 2 秒宽限（`EXEC_TIMEOUT_GRACE_MS`）等 close 事件：子进程的退出信息与管道里已缓冲的尾部输出收集完才收尾，宽限到点仍按超时返回：超时返回的是带已产生输出的错误结果，输出不会被静默丢弃。
+- **取消（run 中止）**：run 的取消信号在命令执行中触发时，同样先 `SIGKILL` 整个进程组再收尾，返回 `{status:"error", output: "command aborted\n<部分输出>"}`（`data.exitCode` 为 `null`），宽限收尾与超时共用同一套逻辑。没有这一步时，被取消的 run 留下的命令会继续执行到自然结束：进程组泄漏到 run 生命周期之外，长命令（如启动本地服务）会一直运行。
 - **环境变量**：每次执行注入 `KCLAW_SESSION_ID`（会话 id）与 `KCLAW_WORKSPACE`（工作目录），其余环境继承 daemon 进程；沙箱包装器经 spawn 的 env 参数拿到同一份完整环境后透传。命令行工具可据此自识别所在会话。
-- **输出截断**：流式累计到 `maxOutputBytes`（默认 512 KiB，即 `512 * 1024`）即停止积累——头部保留，之后的 chunk 只计字节数不再转发；到达上限那一刻发一条截断提示 delta（`...[output truncated, further output dropped]...`），结束时在尾部附 `...[dropped N bytes]...` 字节数标记。`truncateMiddle` 只对头部超出上限 ≤1 chunk 的部分微裁剪（插 `\n...[truncated N bytes]...\n` 标记）。按 UTF-8 字节计数，多字节字符在切点被拆开会解码成 U+FFFD 替换字符，属可接受损失。
-- **输出溢出存盘（spill）**：run 组装传入 `spillDir`（`<home>/spill`）后，流式读取把全量输出另存一份（上限 `SPILL_MAX_BYTES = 10 MiB`，超出即停、存盘副本标注"仅保留前 10MB"）；发生截断时模型视图在 `dropped` 标记后追加一行 `[完整输出已存盘: <路径>，sha256=<摘要>；需要更多内容时用 fs_read 读取该文件]`（副本只保留了前 10 MiB 时，路径后面多一段 `（该文件仅保留了前 10MB）`；`sha256` 是实际写入字节的 SHA-256，部分保留的副本只对保留部分取摘要，之后对照摘要能发现副本被改动过）——spill 目录在权限引擎 readRoots 内，`fs_read` 无需确认即可读。存盘尽力而为：写失败静默退化为纯截断；未传 `spillDir`（如部分测试）则行为与无 spill 时完全一致。
-- **后台输出上限**：`run_in_background` 的输出文件（spill 目录的 `proc-<id>.txt`，目录不可用时退回工作目录下的 `.<id>.out`）按同一量级封顶（`bgOutputMaxBytes`，默认同为 `SPILL_MAX_BYTES = 10 MiB`）：到达后停止追加，文件尾追加一行 `...[后台输出已达 N 字节上限，停止记录；进程继续运行]...`，进程本身照常运行。输出文件同时是 `process_output` 的读取游标——不封顶的话，一个狂奔的进程会把文件与每次增量读取一起拖到无限增长。
+- **输出截断**：流式累计到 `maxOutputBytes`（默认 512 KiB，即 `512 * 1024`）即停止积累：头部保留，之后的 chunk 只计字节数不再转发；到达上限那一刻发一条截断提示 delta（`...[output truncated, further output dropped]...`），结束时在尾部附 `...[dropped N bytes]...` 字节数标记。`truncateMiddle` 只对头部超出上限 ≤1 chunk 的部分微裁剪（插 `\n...[truncated N bytes]...\n` 标记）。按 UTF-8 字节计数，多字节字符在切点被拆开会解码成 U+FFFD 替换字符，属可接受损失。
+- **输出溢出存盘（spill）**：run 组装传入 `spillDir`（`<home>/spill`）后，流式读取把全量输出另存一份（上限 `SPILL_MAX_BYTES = 10 MiB`，超出即停、存盘副本标注"仅保留前 10MB"）；发生截断时模型视图在 `dropped` 标记后追加一行 `[完整输出已存盘: <路径>，sha256=<摘要>；需要更多内容时用 fs_read 读取该文件]`（副本只保留了前 10 MiB 时，路径后面多一段 `（该文件仅保留了前 10MB）`；`sha256` 是实际写入字节的 SHA-256，部分保留的副本只对保留部分取摘要，之后对照摘要能发现副本被改动过）。spill 目录在权限引擎 readRoots 内，`fs_read` 无需确认即可读。存盘尽力而为：写失败静默退化为纯截断；未传 `spillDir`（如部分测试）则行为与无 spill 时完全一致。
+- **后台输出上限**：`run_in_background` 的输出文件（spill 目录的 `proc-<id>.txt`，目录不可用时退回工作目录下的 `.<id>.out`）按同一量级封顶（`bgOutputMaxBytes`，默认同为 `SPILL_MAX_BYTES = 10 MiB`）：到达后停止追加，文件尾追加一行 `...[后台输出已达 N 字节上限，停止记录；进程继续运行]...`，进程本身照常运行。输出文件同时是 `process_output` 的读取游标：不封顶的话，一个持续大量输出的进程会让文件与每次增量读取一起无限增长。
 - **退出码**：0 → ok；非 0 → error，输出带 `exit code N` 首行；结果在 `data` 字段附 `{exitCode: N}`（超时、取消与进程启动失败为 `null`），web 聊天页的工具卡据此显示 exit 徽标。stdout 与 stderr 合并，到达即经 `ctx.onOutput` 流式回传。
 - 空/非字符串 `command` 直接返回 error（`args.command must be a non-empty string`）。
 
@@ -110,28 +110,28 @@ export function makeTool<N extends string>(
 
 统一边界：`sandboxed(p) = path.resolve(workspace, p)`，无越界拒绝（见设计决策）。
 
-- **fs_read**：先 `statSync`——目录报 `not a file`，超过 `maxReadBytes`（默认 1 MiB，`1024 * 1024`）报 `file too large: <p> is <size> bytes (max 1048576)`；然后整体以 UTF-8 读出。读取成功后把 size+mtime 记进本 run 的读状态表（供先读后改守卫使用，只在成功时记）。
+- **fs_read**：先 `statSync`：目录报 `not a file`，超过 `maxReadBytes`（默认 1 MiB，`1024 * 1024`）报 `file too large: <p> is <size> bytes (max 1048576)`；然后整体以 UTF-8 读出。读取成功后把 size+mtime 记进本 run 的读状态表（供先读后改守卫使用，只在成功时记）。
 - **fs_list**：子目录带尾部 `/`；文件显示字节数（对符号链接 stat 目标，指向目录的也按目录列出；stat 失败标 `broken symlink`）；空目录输出 `(empty directory)`。
-- **fs_write**：`content` 允许空串；`mkdirSync(recursive)` 补齐父目录；成功输出 `wrote <N> bytes to <解析后绝对路径>`。**覆写既有文件走先读后改守卫**：本 run 内没读过、或读后被外部改过，直接报错；目标不存在是新建，不拦。
+- **fs_write**：`content` 允许空串；`mkdirSync(recursive)` 补齐父目录；成功输出 `wrote <N> bytes to <解析后绝对路径>`。**覆写既有文件走先读后改守卫**：本 run 内没读过、或读后被外部改过，直接报错；目标不存在时是新建，不拦截。
 - **fs_edit**：`old` 必须在文件中**恰好出现一次**（0 次或多次都报错并给出实际次数）；替换是纯字面匹配（非正则），写回用函数式 replacer（`content.replace(old, () => new)`，字符串 replacer 会解释 `$&`、`$1` 等 $ 模式，导致文件内容被意外改写）。**拒绝二进制编辑**：解码后含 U+FFFD 替换字符或 NUL 字节的文件直接报 `fs_edit only supports text files (binary content detected)`，把二进制内容按文本写回会以乱码覆盖原始字节。**先读后改守卫**：调用内这次 `readFileSync` 不算读过，必须先经 `fs_read` 把内容拉进上下文，且读后文件未被外部修改（size+mtime 双字段比对，不符报"请重新 fs_read"）；守卫状态随 run 生命周期（工具工厂每 run 新建），编辑/覆写成功后刷新记录，同文件连续编辑不误报。
 
 ### 检索工具（`tools/search.ts`）
 
-grep 与 glob 共享一套文件枚举：git 仓库内 `git ls-files -z --cached --others --exclude-standard`（遵循 .gitignore，NUL 分隔保中文文件名），git 外回退目录遍历（跳过隐藏目录与 node_modules）；候选上限 20000，超出报错并建议缩小搜索范围。两者都 safe/parallel，越界 path 与 fs 同口径交权限链。
+grep 与 glob 共享一套文件枚举：git 仓库内 `git ls-files -z --cached --others --exclude-standard`（遵循 .gitignore，NUL 分隔，保证中文文件名不损坏），git 外回退目录遍历（跳过隐藏目录与 node_modules）；候选上限 20000，超出报错并建议缩小搜索范围。两者都 safe/parallel，越界 path 与 fs 工具同口径交给权限链判定。
 
-- **grep**：JS 正则（超 512 字符拒、编译失败回原文）；跳过 NUL 二进制；单文件命中 1000 行即止；输出 `path:lineNo: 行内容`（单行截 400 字符），超出 maxResults（默认 50，clamp 1–200）带截断标记，溢出全量落 spill 并附定位行；无命中 `(no matches)`。
+- **grep**：JS 正则（超过 512 字符拒绝、编译失败时报 `invalid regex: <原始错误信息>`）；跳过 NUL 二进制；单文件命中 1000 行即止；输出 `path:lineNo: 行内容`（单行截断到 400 字符），超出 maxResults（默认 50，限制在 1–200）带截断标记，溢出时全量写入 spill 并附定位行；无命中 `(no matches)`。
 - **glob**：picomatch 标准 glob（`dot: false`）；命中上限 500，截断+spill 同 grep。
 
 ### web 工具（tools/web.ts）
 
-两个工具的每次请求都带 `AbortSignal.timeout(timeoutMs)`（默认 60 秒，`config.json` 的 `web.timeoutMs`）——卡死的远端主机不能拖住一个 run。
+两个工具的每次请求都带 `AbortSignal.timeout(timeoutMs)`（默认 60 秒，`config.json` 的 `web.timeoutMs`），无响应的远端主机不能拖住一个 run。
 
-- **web_search**：POST `https://api.tavily.com/search`，体为 `{api_key, query, max_results}`；`maxResults` 默认 5、钳制在 [1, 10]。目标是固定的公网 Tavily 域名，**不走私网检查**。`output` 是给模型的 markdown 列表（`- [title](url)：content`），无结果输出 `(no results)`；`data` 附带原始三元组 `{results: [{title, url, content}]}` 供渲染。
-- **web_fetch**：只接受 http(s) URL。内置一层 SSRF（Server-Side Request Forgery，服务端请求伪造，即引导服务器自己去访问内网地址的攻击）防护：不使用 fetch 的自动跟随重定向，而是手工循环跟随（至多 `DEFAULT_MAX_REDIRECTS = 5` 跳），初始 URL 与每个 `Location` 都在真正请求前经 DNS 解析（字面 IP 直接判定）并按拒绝名单核查：loopback/未指定/链路本地/私网地址（127/8、0.0.0.0、::1、`::ffff:` 映射、10/8、172.16–31、192.168/16、169.254/16、fc00::/7、fe80::/10）一律拒绝，除非 config 里 `web.allowPrivateNetworks: true` 显式豁免（如允许抓本机 Ollama 端点）。非 2xx 报 `HTTP <status> <statusText> for <url>`。HTML 经 linkedom 解析 + Readability（Mozilla 的正文提取库）取文章正文，失败回退为移除 `script/style/noscript/template/svg` 后的 body 文本（对原始 HTML 重新解析，避免污染），仍为空则 `(no extractable text content)`；非 HTML 内容按纯文本返回。响应体经流式读取、**越过 `maxFetchBytes`（默认 512 KiB）即 cancel 连接**。上限施加于 DOM 解析之前，超大页面无法借解析阶段膨胀内存；截断附 `...[truncated, dropped N bytes]...` 标记。组装了 `spillDir` 时读取上限放宽到 10 MiB（spill 天花板），被截掉的原始正文存盘，字节数标记保留、fs_read 定位行追加其后（与 bash 同一输出形状；spill 写失败时定位行为空，只剩字节数标记）。
+- **web_search**：POST `https://api.tavily.com/search`，体为 `{api_key, query, max_results}`；`maxResults` 默认 5、限制在 [1, 10]。目标是固定的公网 Tavily 域名，**不做私网检查**。`output` 是给模型的 markdown 列表（`- [title](url)：content`），无结果输出 `(no results)`；`data` 附带原始三元组 `{results: [{title, url, content}]}` 供渲染。
+- **web_fetch**：只接受 http(s) URL。内置一层 SSRF（Server-Side Request Forgery，服务端请求伪造，即引导服务器自己去访问内网地址的攻击）防护：关闭 fetch 的自动跟随重定向，手工循环跟随（至多 `DEFAULT_MAX_REDIRECTS = 5` 跳），初始 URL 与每个 `Location` 都在真正请求前经 DNS 解析（字面 IP 直接判定）并按拒绝名单核查：loopback/未指定/链路本地/私网地址（127/8、0.0.0.0、::1、`::ffff:` 映射、10/8、172.16–31、192.168/16、169.254/16、fc00::/7、fe80::/10）一律拒绝，除非 config 里 `web.allowPrivateNetworks: true` 显式豁免（如允许抓取本机 Ollama 端点）。非 2xx 报 `HTTP <status> <statusText> for <url>`。HTML 经 linkedom 解析 + Readability（Mozilla 的正文提取库）取文章正文，失败回退为移除 `script/style/noscript/template/svg` 后的 body 文本（对原始 HTML 重新解析，避免污染），仍为空则 `(no extractable text content)`；非 HTML 内容按纯文本返回。响应体经流式读取、**越过 `maxFetchBytes`（默认 512 KiB）即 cancel 连接**。上限施加于 DOM 解析之前，超大页面无法借解析阶段膨胀内存；截断附 `...[truncated, dropped N bytes]...` 标记。组装了 `spillDir` 时读取上限放宽到 10 MiB（spill 上限），被截掉的原始正文存盘，字节数标记保留、fs_read 定位行追加其后（与 bash 同一输出形状；spill 写失败时定位行为空，只剩字节数标记）。
 
 ### memory 工具（`tools/memory.ts`）
 
-是 `MemorySystem` 的薄封装（主题线 markdown 为准、FTS5 + 向量为派生索引，见 [memory](./memory.md)）。
+两个工具把参数转交给 `MemorySystem`，自身不含检索与写入逻辑（主题线 markdown 为准、FTS5 + 向量为派生索引，见 [memory](./memory.md)）。
 
 - **memory_save** `{text}`：text 是"要记内容的提示"（多余字段忽略）；当场触发 `system.triggerImmediate` 处理当前这轮对话：真有提取批次（该会话自上次提取位置起有未处理的新消息）时输出 `已触发记忆写入（处理当前这轮对话）`，没有增量时如实输出 `该轮没有需要沉淀的新内容`（不谎报写入）；`memory.write.immediate=false` 时返回 `立即写入已关闭（memory.write.immediate=false），该内容将在后台定时/跟随触发时沉淀`，此时不写入，内容留给后台触发时处理。
 - **memory_search** `{query, limit?}`：`system.searchAll` 跨**全部**项目库 + 全局库的混合检索（关键词 + 向量，打分见 [memory](./memory.md)），`limit` 默认 5、最大 20；每个命中一行 `- [经历|认知] [scope] 正文`（scope 如 `project:<id>` / `global`），无命中输出 `（没有相关记忆）`。
@@ -142,45 +142,45 @@ grep 与 glob 共享一套文件枚举：git 仓库内 `git ls-files -z --cached
 
 **session_search** `{query, limit?}`：检索**当前会话**已压缩段的内容（`limit` 默认 5、最大 20；检索机制见 [compaction](./compaction.md)：每次调用现读会话事件流，按压缩段的 `upto` 取增量段区间做朴素文本匹配）。每个命中输出两行：`- <段摘要>` 加缩进的匹配位置文本片段；会话没有压缩段（或 server 未注入检索后端）时输出 `(无可检索内容)`。safe + parallel，与 memory 工具同类：只读访问会话目录下的事件流。
 
-工具**始终注册**（工具列表不随会话状态变化）：`createSessionTools(search?)` 的 search 参数缺席时工具仍在，只是查询一律返回"(无可检索内容)"——模型看到的工具集合稳定，不会因会话有没有压缩历史而变。
+工具**始终注册**（工具列表不随会话状态变化）：`createSessionTools(search?)` 的 search 参数缺失时工具仍在，只是查询一律返回"(无可检索内容)"，模型看到的工具集合因此保持稳定，不会因会话有没有压缩历史而变。
 
 ### history 工具（`tools/history.ts`）
 
-**history_search** `{query, limit?, session_id?}`：全文检索**全部历史会话**的原始消息（user/assistant 的文本块；工具输出与 note 不收），与 session_search 互补——那个找本会话被压缩的摘要段，这个找任何会话的原文（包括从未压缩的近期消息）。检索的数据存在 `~/.kclaw/search.db`（SQLite FTS5 全文索引，中文按二字元切分，机制见 [storage](./storage.md)）；server 注入 `historySearch` 检索函数，缺席时工具仍注册、返回固定不可用文案（与 session_search 同一套路）。每条命中一行原文（带会话标题、角色、时间），`limit` 默认 5、最大 20，`session_id` 可选限定到单个会话。safe + parallel。同一份数据经 HTTP `GET /search?q=` 暴露给 WebUI（见 [http-api](../server/http-api.md)）。
+**history_search** `{query, limit?, session_id?}`：全文检索**全部历史会话**的原始消息（user/assistant 的文本块；工具输出与 note 不收），与 session_search 互补：session_search 找本会话被压缩的摘要段，history_search 找任何会话的原文（包括从未压缩的近期消息）。检索的数据存在 `~/.kclaw/search.db`（SQLite FTS5 全文索引，中文按二字元切分，机制见 [storage](./storage.md)）；server 注入 `historySearch` 检索函数，缺失时工具仍注册、返回固定不可用文案（与 session_search 做法相同）。每条命中一行原文（带会话标题、角色、时间），`limit` 默认 5、最大 20，`session_id` 可选限定到单个会话。safe + parallel。同一份数据经 HTTP `GET /search?q=` 暴露给 WebUI（见 [http-api](../server/http-api.md)）。
 
 ### skill 工具（`tools/skills.ts`）
 
-**skill_read** `{name}`：按名字加载一个技能（skill）的完整规程正文（`SKILL.md` 的 Markdown 正文，机制与字段见 [skills](./skills.md)）。safe + parallel——只读 daemon 每次 run 扫描过的技能目录，不碰工作目录本身；同名技能的项目级副本胜出（与 `scanSkillDirs` 的覆盖规则一致）。技能不在已扫描集合时报 `没有叫 <name> 的技能（可用 skill_list 列出已装技能，或 /skill 查看）`；正文为空报错不加载。
+**skill_read** `{name}`：按名字加载一个技能（skill）的完整规程正文（`SKILL.md` 的 Markdown 正文，机制与字段见 [skills](./skills.md)）。safe + parallel：只读 daemon 每次 run 扫描过的技能目录，不访问工作目录本身；同名技能的项目级副本胜出（与 `scanSkillDirs` 的覆盖规则一致）。技能不在已扫描集合时报 `没有叫 <name> 的技能（可用 skill_list 列出已装技能，或 /skill 查看）`；正文为空报错不加载。
 
-**skill_list** `{query?}`：列出模型可见的技能（每行 `- 名字: 描述`，按名字排序），`query` 可选，按名字与描述子串过滤（大小写不敏感）。可见口径与系统提示词清单一致（`disable-model-invocation` 的不出现）。存在的原因：提示词清单有字符 budget、技能多时截断，subagent 更是不注入清单。`skill_list` 是模型的自助发现入口（先 list 找到名字，再 skill_read 取正文）。safe + parallel，与 skill_read 同源同一份扫描结果。
+**skill_list** `{query?}`：列出模型可见的技能（每行 `- 名字: 描述`，按名字排序），`query` 可选，按名字与描述子串过滤（大小写不敏感）。可见口径与系统提示词清单一致（`disable-model-invocation` 的不出现）。存在的原因：提示词清单有字符 budget、技能多时截断，subagent 更是不注入清单。`skill_list` 是模型的自助发现入口（先 list 找到名字，再 skill_read 取正文）。safe + parallel，与 skill_read 使用同一份扫描结果。
 
-工具描述里带一句软性指引：优先用系统提示词"可用技能"列表里的技能，不在列表中的（`disable-model-invocation`）只有用户明确指名时才应加载——可见性规则骑在描述上、不是硬性拦截，用户指名是隐藏档位的合法入口。
+工具描述里带一句软性指引：优先用系统提示词"可用技能"列表里的技能，不在列表中的（`disable-model-invocation`）只有用户明确指名时才应加载：可见性规则写在工具描述里，属于软性约束，没有硬性拦截，用户指名是隐藏档位的合法入口。
 
-**skill_create** `{name, content, rationale?}`：把一段可复用的经验当场固化为技能提案（提案制，机制见 [skills](./skills.md) 的"技能进化"一节）。safe + parallel——提案文件是 `writeFileAtomic` 原子写的独立文件，同名冲突由随机后缀化解，并发调用安全。只在 daemon 组装了技能进化系统时注册（run 组装传入 `skillCreate` 选项）；`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案（"技能提案未开启（skills.evolution.enabled=false）…"）。`name` 不过 `isSkillDirName`、`content` 超 64KB、目标是复用链接技能均报错。**kind/scope 由系统推导**（模型不给这两个参数）：项目副本命中 → `project` + 当前会话 workdir；仅全局命中 → `global`；未装 → `new` + `project`。写提案文件 + 一条 `skill` 审计事件，回复"已记录提案…待用户在 WebUI 审阅确认"，不谎报生效。
+**skill_create** `{name, content, rationale?}`：把一段可复用的经验当场固化为技能提案（提案制，机制见 [skills](./skills.md) 的"技能进化"一节）。safe + parallel：提案文件是 `writeFileAtomic` 原子写的独立文件，同名冲突由随机后缀化解，并发调用安全。只在 daemon 组装了技能进化系统时注册（run 组装传入 `skillCreate` 选项）；`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案（"技能提案未开启（skills.evolution.enabled=false）…"）。`name` 未通过 `isSkillDirName` 校验、`content` 超 64KB、目标是复用链接技能均报错。**kind/scope 由系统推导**（模型不给这两个参数）：项目副本命中 → `project` + 当前会话 workdir；仅全局命中 → `global`；未装 → `new` + `project`。写提案文件 + 一条 `skill` 审计事件，回复"已记录提案…待用户在 WebUI 审阅确认"，不谎报生效。
 
 ### 与 skill 机制的衔接
 
-skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每 run 重新扫描技能目录后传入同一份结果（渐进披露第二层），系统提示词里的技能清单用同一份扫描结果（第一层）。指定包装等其余机制见 [skills](./skills.md)。
+skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项：server 每 run 重新扫描技能目录后传入同一份结果（渐进披露第二层），系统提示词里的技能清单用同一份扫描结果（第一层）。指定包装等其余机制见 [skills](./skills.md)。
 
 ### subagent 工具（`tools/subagent.ts`）
 
-**subagent_run** `{task, label?, role?, tools?, run_in_background?}`：派一个 subagent 执行一段自包含任务，默认阻塞等待其结题答复作为工具结果（完整机制、生命周期与结果整形见 [subagents](./subagents.md)）。执行器只负责参数校验：校验 `task` 非空字符串、`label` 与 `run_in_background` 为相应类型、`role` 非空字符串（trim 后截 2000 字符）、`tools` 为字符串数组（元素 trim 后不得为空串，空串或非字符串整次报错；超过 40 个截取前 40）后调一次 spawner，会话创建/run 提交/状态转发都在 server 侧实现。`role` 是给子会话的角色补充（如"只做代码评审的审查员"），追加进子会话系统提示词；`tools` 是工具白名单，只减少子会话可用的工具、不会增加（白名单外的名字忽略）。`run_in_background: true` 时派发立即返回子会话 id（不阻塞父 run，生命周期归属父**会话**而不是父 run，父 run 结束或中止不会取消它），subagent 完成后结题报告自动投递回父会话、开启新一轮分析（投递被拒时降级为通知；机制见 [subagents](./subagents.md)），`subagent_collect` 作按需取答复的补充手段。`risk: "safe"`：派出动作本身不碰敏感资源，子 run 自己的工具调用照常过自己的权限门；`concurrency: "parallel"`：一批多个 `subagent_run` 并发执行即并行路径。subagent 的 `childSessionId` 经结果的 `data` 字段随块持久化（web 的"查看 subagent 审计"链接读它）。
+**subagent_run** `{task, label?, role?, tools?, run_in_background?}`：派一个 subagent 执行一段自包含任务，默认阻塞等待其结题答复作为工具结果（完整机制、生命周期与结果整形见 [subagents](./subagents.md)）。执行器只负责参数校验：校验 `task` 非空字符串、`label` 与 `run_in_background` 为相应类型、`role` 非空字符串（trim 后截取 2000 字符）、`tools` 为字符串数组（元素 trim 后不得为空串，空串或非字符串整次报错；超过 40 个截取前 40）后调一次 spawner，会话创建/run 提交/状态转发都在 server 侧实现。`role` 是给子会话的角色补充（如"只做代码评审的审查员"），追加进子会话系统提示词；`tools` 是工具白名单，只减少子会话可用的工具、不会增加（白名单外的名字忽略）。`run_in_background: true` 时派发立即返回子会话 id（不阻塞父 run，生命周期归属父**会话**，父 run 结束或中止不会取消它），subagent 完成后结题报告自动投递回父会话、开启新一轮分析（投递被拒时降级为通知；机制见 [subagents](./subagents.md)），`subagent_collect` 作按需取答复的补充手段。`risk: "safe"`：派出动作本身不涉及敏感资源，子 run 自己的工具调用照常过自己的权限门；`concurrency: "parallel"`：一批多个 `subagent_run` 并发执行即并行路径。subagent 的 `childSessionId` 经结果的 `data` 字段随块持久化（web 的"查看 subagent 审计"链接读它）。
 
-**subagent_collect** `{childSessionId}`：按子会话 id 取回后台 subagent 的最终结题答复（头尾截断，与阻塞结果同一形状）。只能取**本会话**派出的 subagent——collector 校验 `parentSessionId` 归属，别人的 subagent 与未知 id 都是 error 结果。`risk: "safe"`、`concurrency: "parallel"`。
+**subagent_collect** `{childSessionId}`：按子会话 id 取回后台 subagent 的最终结题答复（头尾截断，与阻塞结果同一形状）。只能取**本会话**派出的 subagent：collector 校验 `parentSessionId` 归属，别人的 subagent 与未知 id 都是 error 结果。`risk: "safe"`、`concurrency: "parallel"`。
 
-注册是**条件性**的（与 session/skill 工具的"始终注册"不同）：`subagent` 选项缺席（daemon 未组装 spawner）或本 run 自身是 subagent（单层委派）时不注册 `subagent_run` 与 `subagent_collect`；subagent 的工具清单同时裁掉 `memory_save`（记忆隔离）。
+注册是**条件性**的（与 session/skill 工具的"始终注册"不同）：`subagent` 选项缺失（daemon 未组装 spawner）或本 run 自身是 subagent（单层委派）时不注册 `subagent_run` 与 `subagent_collect`；subagent 的工具清单同时裁掉 `memory_save`（记忆隔离）。
 
 ### ask 工具（`tools/ask.ts`）
 
-**ask_user_questions** `{questions: [{text, options?, multiSelect?}]}`：向用户提出 1–5 个需要当场拍板的问题（选项单选/多选或自由文本），等待用户回答后把答案文本作为工具结果返回（每个问题一行 `N. <问题>\n   → <回答>`；选项题按选项文案拼接、自由题按输入文本，未回答显示"（未回答）"；应答按问题顺序一一对应，缺位补空、越位丢弃）。描述里带一条软性指引：只在关键分叉点用（信息缺失会导致方案走偏，或不可逆操作前必须用户拍板时）；能从上下文或文件里推断的信息不要问。等待走与人工确认**同一个**三方等待（`racePending`，`permissions/broker.ts`）：人工回答 / `sessions.askTimeoutMs` 超时（默认 10 分钟）/ run 中止，谁先到算谁。超时是合法结果（返回 `ok`，附"用户未在限时内回答，不要重复调用，基于合理假设继续"的说明，模型必须学会处理空回答），中止不是（错误结果、不发 `question.resolved`，与确认流的规则一致）。`risk: "safe"`：提问本身不碰敏感资源；`concurrency: "parallel"`。
+**ask_user_questions** `{questions: [{text, options?, multiSelect?}]}`：向用户提出 1–5 个需要用户当场决定的问题（选项单选/多选或自由文本），等待用户回答后把答案文本作为工具结果返回（每个问题一行 `N. <问题>\n   → <回答>`；选项题按选项文案拼接、自由题按输入文本，未回答显示"（未回答）"；应答按问题顺序一一对应，缺位补空、越位丢弃）。描述里带一条软性指引：只在关键分叉点用（信息缺失会导致方案走偏，或不可逆操作前必须由用户决定时）；能从上下文或文件里推断的信息不要问。等待走与人工确认**同一个**三方等待（`racePending`，`permissions/broker.ts`）：人工回答 / `sessions.askTimeoutMs` 超时（默认 10 分钟）/ run 中止，谁先到算谁。超时是合法结果（返回 `ok`，附"用户未在限时内回答，不要重复调用，基于合理假设继续"的说明，模型需要能处理空回答）；中止按错误结果处理（不发 `question.resolved`，与确认流的规则一致）。`risk: "safe"`：提问本身不涉及敏感资源；`concurrency: "parallel"`。
 
 ### team 工具（`tools/team.ts`）
 
-七个工具都只做转发：校验参数类型 → 调 facade → 把返回值整形为工具结果，协作机制本身（目录、收信箱、任务板、投递）见 [agent-team](./agent-team.md)。**`create_team`** 建队并使本会话成为组长（一个会话只属一个队，重复建队是 error 结果）；**`spawn_teammate`** `{name, task, role?, model?}` 添加组员：名字 `[a-z][a-z0-9-]{0,31}`、保留名 `lead`，`task` 是必填的初始任务，建持久子会话并固化模型快照；**`send_message`** `{to?, text}` 写信（组员的默认目标是组长、可不填 `to`；组长必须显式指名收件人），超长/超限是明确的 error 结果；**`list_agents`** 列名单；**`task_create` / `task_update` / `task_list`** 操作任务板，`task_update` 必须回传 `expected_revision` 做比对再交换（CAS），认领未认领任务时自动填自己的名字。全部 `risk: "safe"`：动作只写团队目录，不碰工作区；改状态类（建队/添加/建任务/改任务）是 `serial`（同一批调用里不与别的工具重叠）。注册**条件性且按身份收缩**：不在团队里的会话（cron 会话、非组员的 subagent 会话）一个都没有；组员的清单不含 `create_team`/`spawn_teammate`（不能建队、不能添加，团队不递归）。
+七个工具都只做转发：校验参数类型 → 调 facade → 把返回值整形为工具结果，协作机制本身（目录、收信箱、任务板、投递）见 [agent-team](./agent-team.md)。**`create_team`** 建队并使本会话成为组长（一个会话只属一个队，重复建队是 error 结果）；**`spawn_teammate`** `{name, task, role?, model?}` 添加组员：名字 `[a-z][a-z0-9-]{0,31}`、保留名 `lead`，`task` 是必填的初始任务，建持久子会话并固化模型快照；**`send_message`** `{to?, text}` 写信（组员的默认目标是组长、可不填 `to`；组长必须显式指名收件人），超长/超限是明确的 error 结果；**`list_agents`** 列名单；**`task_create` / `task_update` / `task_list`** 操作任务板，`task_update` 必须回传 `expected_revision` 做比对再交换（CAS），认领未认领任务时自动填自己的名字。全部 `risk: "safe"`：动作只写团队目录，不改动工作区；改状态类（建队/添加/建任务/改任务）是 `serial`（同一批调用里不与别的工具重叠）。注册**条件性且按身份收缩**：不在团队里的会话（cron 会话、非组员的 subagent 会话）一个都没有；组员的清单不含 `create_team`/`spawn_teammate`（不能建队、不能添加，团队不递归）。
 
 ### UI 卡工具（`tools/ui-render.ts`）
 
-**ui_render** `{card}`：为用户产出一张交互式 UI 卡（25 种组件：12 种展示组件、5 种容器、8 种表单字段，类型正本在 `packages/core/src/protocol/ui-cards.ts`）。执行器只做一件事——运行时校验后把整张卡原样放进结果的 `data` 字段：卡片随块持久化、由 web 聊天页渲染成可交互组件，**不进模型上下文**（进入上下文的只有一行文字回执，如"已渲染表格《xx》（3 行）"；回执由各组件的 receiptFor 生成）。护栏：文本 ≤500 字符、标题 ≤100、表格 ≤50 行 8 列、树 ≤200 节点、轮播 ≤10 页、表单 ≤20 字段、选项 ≤8 项、单卡 ≤32 KB（按 UTF-8 字节计）；校验逐字段报错，错误信息带字段路径（如 `card.fields[0].min: 必须小于 max`），失败时提示改用 Markdown。容器里不能再嵌容器——类型层把 children 声明为只收展示组件，运行时校验再拦一道。`risk: "safe"`、`concurrency: "parallel"`（只产数据不碰任何资源）；`exposure: directory`（完整 schema 数千 token，不进每请求，经 tool_search 取）。按钮点击与表单提交在 web 侧格式化成用户消息走普通发送链路，发送帧的 `uiAction` 字段标记来源卡（见 [messages](../reference/messages.md)）；模型上下文里它就是一条普通用户消息。卡组件的类型契约与渲染端降级（未知 kind 与渲染抛出错误都退回折叠条——渲染器只增不破）见 [webui](../web/webui.md)。
+**ui_render** `{card}`：为用户产出一张交互式 UI 卡（25 种组件：12 种展示组件、5 种容器、8 种表单字段，类型正本在 `packages/core/src/protocol/ui-cards.ts`）。执行器只做一件事：运行时校验后把整张卡原样放进结果的 `data` 字段：卡片随块持久化、由 web 聊天页渲染成可交互组件，**不进模型上下文**（进入上下文的只有一行文字回执，如"已渲染表格《xx》（3 行）"；回执由各组件的 receiptFor 生成）。护栏：文本 ≤500 字符、标题 ≤100、表格 ≤50 行 8 列、树 ≤200 节点、轮播 ≤10 页、表单 ≤20 字段、选项 ≤8 项、单卡 ≤32 KB（按 UTF-8 字节计）；校验逐字段报错，错误信息带字段路径（如 `card.fields[0].min: 必须小于 max`），失败时提示改用 Markdown。容器里不能再嵌容器：类型层把 children 声明为只收展示组件，运行时校验再检查一次。`risk: "safe"`、`concurrency: "parallel"`（只生成数据，不访问任何资源）；`exposure: directory`（完整 schema 数千 token，不进每请求，经 tool_search 取）。按钮点击与表单提交在 web 侧格式化成用户消息走普通发送链路，发送帧的 `uiAction` 字段标记来源卡（见 [messages](../reference/messages.md)）；模型上下文里它就是一条普通用户消息。卡组件的类型契约与渲染端降级（未知 kind 与渲染抛出错误都退回折叠条，渲染器只增加支持、不破坏已有渲染）见 [webui](../web/webui.md)。
 
 ---
 
@@ -188,35 +188,35 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项——server 每
 
 工具调用与结果靠 `callId`（provider 给的调用 id，如 OpenAI 的 `tool_calls[].id`）配对，全程四个节点（块定义在 `packages/core/src/protocol/blocks.ts`）：
 
-1. **创建**：流中 `tool_call_started` 帧到达 → 循环建 `ToolCallBlock {callId, name, args: undefined, argsJson: ""}`；`argsJson` 随 `tool_call_delta` 逐段拼接——**流未结束时参数不完整**，因此解析必须等待流结束。
+1. **创建**：流中 `tool_call_started` 帧到达 → 循环建 `ToolCallBlock {callId, name, args: undefined, argsJson: ""}`；`argsJson` 随 `tool_call_delta` 逐段拼接，**流未结束时参数不完整**，因此解析必须等待流结束。
 2. **收尾解析**：流结束后 `JSON.parse(argsJson || "{}")`（无参数流的调用按空对象处理）；解析失败 → 该调用得到 error result（`invalid tool args json`），**永不执行**，但原文块照常持久化。provider 请求回传时用的也是 `argsJson` 原文（`function.arguments`），不重新序列化。
 3. **配对**：执行产出 `ToolResultBlock {callId, status, output, data?, durationMs}`，与调用块的 `callId` 一一对应。
-4. **不变量**：历史中每个 assistant 的 `tool_call` 块之后必须存在同 `callId` 的 `tool_result`——OpenAI 兼容 API 对无配对调用的下一轮请求回 400。流中途中断（abort/错误）时循环为悬空调用合成 error result；组装 provider 视图时（`packages/core/src/agent/context.ts` 的 `toProviderMessages`）无配对的 `tool_call` 与 tool 消息都会被剔除。
+4. **不变量**：历史中每个 assistant 的 `tool_call` 块之后必须存在同 `callId` 的 `tool_result`：OpenAI 兼容 API 对无配对调用的下一轮请求回 400。流中途中断（abort/错误）时循环为悬空调用合成 error result；组装 provider 视图时（`packages/core/src/agent/context.ts` 的 `toProviderMessages`）无配对的 `tool_call` 与 tool 消息都会被剔除。
 
 ---
 
 ## output 与 data 的分流
 
 - **进模型上下文的只有 `output`**：`toProviderMessages` 把 `tool_result` 转成 `{role:"tool", toolCallId, content: output}`（error 结果加 `[error] ` 前缀）；`data` 字段在这个转换里不存在。
-- **`data` 只随块持久化、仅供渲染**：循环在结果完成时 `block.data = res.data`（`packages/core/src/agent/loop.ts`），JSONL 会话日志与事件流附带它，前端按结构渲染。现有三处读取：web_search 的原始结果三元组、bash 的结构化退出码 `{exitCode}`（工具卡的 exit 徽标）、ui_render 的整张 UI 卡（`data` 通道是 UI 卡零 token 占用的关键——卡片本体只在渲染端存活）。这使模型上下文保持纯文本、大小可控，渲染需要的信息也不丢。
+- **`data` 只随块持久化、仅供渲染**：循环在结果完成时 `block.data = res.data`（`packages/core/src/agent/loop.ts`），JSONL 会话日志与事件流附带它，前端按结构渲染。现有三处读取：web_search 的原始结果三元组、bash 的结构化退出码 `{exitCode}`（工具卡的 exit 徽标）、ui_render 的整张 UI 卡（`data` 通道让 UI 卡不占用任何 token：卡片本体只在渲染端使用）。这使模型上下文保持纯文本、大小可控，渲染需要的信息也不丢。
 
 ---
 
 ## 边界与出错
 
-- **执行器永不抛异常**：`makeTool` 把一切异常转为 `{status:"error"}`；循环对执行器抛异常（Promise 拒绝）也统一转为 error result（保证异常也产出结果）。
+- **执行器永不抛出异常**：`makeTool` 把一切异常转为 `{status:"error"}`；循环对执行器抛出异常（Promise 拒绝）也统一转为 error result（保证异常也产出结果）。
 - **参数校验失败/未知工具名**：在权限检查**之前**就被拦截为 error result，不会进权限判定，也不会执行。
 - **fs_read/fs_list 仅支持 UTF-8 文本**：二进制文件的读取结果为替换字符，判断交给上层（fs_edit 有显式二进制拦截）。
 - **网络工具的失败即结果**：web_search/web_fetch 的网络错误、非 2xx、JSON 解析失败都是 error result 文本，模型可以看到并决定下一步；不带自动重试。
 - **bash 与 web 的限制都可配**：daemon 从 `config.json` 传入 `bash.timeoutMs` / `bash.maxOutputBytes` 与 `web.timeoutMs` / `web.allowPrivateNetworks`（run 组装 core `executeRun` 传入），两处默认值与工具内默认一致（300s / 512 KiB；60s / false）。
-- **私网目标默认拒绝**：web_fetch 的 SSRF 防护意味着默认抓不到 `http://127.0.0.1:*` 这类本机服务；需要时在 config 显式 `web.allowPrivateNetworks: true`——这是有意的两层设计：默认拒绝，显式配置才放行，不是缺陷。
+- **私网目标默认拒绝**：web_fetch 的 SSRF 防护意味着默认抓不到 `http://127.0.0.1:*` 这类本机服务；需要时在 config 显式设置 `web.allowPrivateNetworks: true`。这是有意的两层设计：默认拒绝，显式配置才放行。
 
 ---
 
 ## 关联
 
 - [agent-loop](./agent-loop.md)：调用时机、并发调度与 callId 配对的执行侧
-- [permissions](./permissions.md)：`risk` 如何变成 allow/confirm 判定；ask_user_questions 与人工确认共用的三方 race 网关（`racePending`）
+- [permissions](./permissions.md)：`risk` 如何变成 allow/confirm 判定；ask_user_questions 与人工确认共用的三方等待网关（`racePending`）
 - [provider](./provider.md)：`ToolDefinition` 如何进入请求体
 - [memory](./memory.md)：memory 工具背后的存储与检索
 - [compaction](./compaction.md)：session_search 检索的索引来源（压缩段）与工具输出省略
