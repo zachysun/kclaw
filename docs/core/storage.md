@@ -99,7 +99,7 @@ export function resolvePaths(home?: string): KclawPaths
 
 读（`loadConfig(paths)`）：`config.json` 存在 → 按 JSON 解析；缺失或内容为空 → 返回默认值的克隆。解析失败抛出错误（`invalid json in <path>: ...`），内容不是对象映射也抛出错误；其余 → `deepMerge(默认值克隆, 文件内容)`，随后合并 `credentials.json` 里的密钥（见设计决策：凭据文件优先）。合并之后只有以下几处做结构校验，非法值都按字段回退并告警一行：`permissions` 整节不是映射时回退默认节、`permissions.defaultMode` 非五档时回退到 `"default"`；压缩阈值线经 `validateWaterlineConfig` 校验（触发四线整组、省略线单独，见 [compaction](./compaction.md)）；`providers.entries.*.promptCache` 非 `"auto"`/`"off"` 时回退 auto；`team.*` 各上限非正整数时回退默认；skills 两节（evolution/curator）逐字段校验；`server.port` 越出 1-65535 时回退到临时端口；`goals.judge` 不是字符串时回退到会话模型。其余字段不校验：多余字段原样保留，字段类型写错要到使用方读取时才暴露。
 
-写（`saveConfig(paths, config)`）：把**深合并后的整份 config** 拆成两份写入（含全部默认字段，首次生成的 `config.json` 也包含全部字段）：密钥字段（provider apiKey、tavilyApiKey）先写进 `credentials.json`（0600），其余整文件原子重写到 `config.json`（密钥位置留空串）；凭据文件**始终**重写（含空对象，provider 删除后 key 同步离开磁盘）。两份都走 `writeFileAtomic`（`storage/atomic.ts`：先写 `<path>.tmp` 再 rename，POSIX 同目录 rename 是原子的）。MCP server 不经 `saveConfig` 写入，唯一管理源是全局 `mcp.json` 与各项目的 `.kclaw/mcp.json`（见 [mcp](./mcp.md)）。CLI wizard 保存后仍执行一次显式 `chmodSync(0o600)`，作为双重保险（见 [onboarding](../cli/onboarding.md)）。
+写（`saveConfig(paths, config)`）：把**深合并后的整份 config** 拆成两份写入（含全部默认字段，首次生成的 `config.json` 也包含全部字段）：密钥字段（provider apiKey、tavilyApiKey）先写进 `credentials.json`，其余整文件原子重写到 `config.json`（密钥位置留空串），两个文件的权限都是 0600；凭据文件**始终**重写（含空对象，provider 删除后 key 同步离开磁盘）。两份都走 `writeFileAtomic`（`storage/atomic.ts`：先以指定权限写 `<path>.tmp` 再 rename，POSIX 同目录 rename 是原子的）。MCP server 不经 `saveConfig` 写入，唯一管理源是全局 `mcp.json` 与各项目的 `.kclaw/mcp.json`（见 [mcp](./mcp.md)）。CLI wizard 自己不写配置文件，它经 daemon 的 `/providers` 路由保存，最终也是这里的 `saveConfig`（见 [onboarding](../cli/onboarding.md)）。
 
 ---
 
@@ -131,7 +131,7 @@ export function saveConfig(paths: KclawPaths, config: KclawConfig): void
 export function renameProviderEntry(config: KclawConfig, from: string, to: string): void
 // 条目改名统一入口：挪动 entries 的键，并把 PROVIDER_ENTRY_REFERENCES 里
 // 指向旧名的配置级引用（providers.default、memory.extractModel、
-// memory.embedding.provider）一并改写；会话级引用保持旧名、下个 run 改用默认条目
+// memory.embedding.provider、goals.judge）一并改写；会话级引用保持旧名、下个 run 改用默认条目
 
 // packages/core/src/storage/config-notifier.ts
 export type ConfigSection = "providers" | "mcp" | "channels"
@@ -169,7 +169,7 @@ export function readJsonl(file: string): unknown[]
 
   所有写入都先追加事件，再把事件汇入 meta.json 摘要（见下）。
 - **`meta.json`（派生摘要）**：类型 `SessionMeta`，由事件流经 `applyEvent` 逐条推导得出。它只是「摘要」，权威数据在事件流：删除或损坏都能从事件流完整重建（`meta()` 发现缺失或损坏时自动 `rebuildMeta`）。崩溃恢复时允许它暂时落后于事件流（落后不会丢数据），落后的部分由下一次追加自动补齐：`appendEvent` 比对摘要的 `chainLength` 与事件文件实际行数，不一致（上次"事件已写入、摘要未写"的两步写入中途中断）就先 `rebuildMeta` 重放整条流再追加，缺掉的投影效果（如 compaction 状态、会话级设置）不会因这次追加而永久丢失。重建按尽力而为处理：行数差异也可能来自文件损坏，此时重放无法读取全文，就退回旧摘要照常追加（追加路径不处理文件损坏，损坏会在读取 run 历史与 `verifyChain` 时暴露）。meta.json 整文件原子重写（`updateMeta` 合并 patch，`undefined` 键表示删除；`message` / `message.truncated` / `compaction` / `session.forked` / `goal.set` / `goal.cleared` 事件会推进摘要的 `updatedAt`，`memory` / `skill` / `system` / `sandbox.checked` / `goal.checked` / `todo.written` 事件不推进，审计类事件不算会话「更新」）。两条特殊的推导规则：`system` 事件把全文 upsert 进摘要的 `systemBaseline`（系统提示词的冻结基线，见下文），`compaction` 事件把 `systemBaseline` 清除（压缩改写了消息历史，提示词缓存必然全部失效，正是重新组装、重新冻结的时机）；`message.truncated` 在截断起点越过压缩锚点（`compaction.upto`）时一并清除压缩投影（部分被压缩的历史已随截断丢弃，摘要不能再代替它们）。
-- **`queue.jsonl`（运行态）**：排队中的消息（`{ messageId, disposition, text, trigger, attachments?, note?, enqueuedAt }`，顺序即执行顺序，见 [run-manager](../server/run-manager.md) 的消息队列）。与事件流不同，`replaceQueue` 每次整文件重写，不追加；不参与 meta.json。
+- **`queue.jsonl`（运行态）**：排队中的消息（`{ messageId, disposition, text, trigger, attachments?, note?, uiAction?, enqueuedAt }`，顺序即执行顺序，见 [run-manager](../server/run-manager.md) 的消息队列）。与事件流不同，`replaceQueue` 每次整文件重写，不追加；不参与 meta.json。
 
 `meta.json` 的全部字段：
 
@@ -187,9 +187,10 @@ export function readJsonl(file: string): unknown[]
 | `goal?` | 会话级目标快照（`/goal`，`GoalSnapshot` 全量：目标文本、验收命令、状态机、轮数与 token 计数、最近判定摘要），由 `goal.set` 事件全量替换、`goal.cleared` 删除（见 [goal](./goal.md)）。计数字段是检查时刻的展示缓存，权威数据在事件流 |
 | `todo?` | 会话级 todo 清单（`todo_list_write` 写入的最新快照，`TodoItem[]`：`content` + `status`），由 `todo.written` 事件全量替换、后写的生效；跨 run 保留，压缩后可经 `todo_list_read` 读回；不推进 `updatedAt`（见 [tools](./tools.md)） |
 | `chainHead?` / `chainLength?` | 事件流哈希链锚定（见下文「事件流哈希链」）：最新一行原文的 SHA-256 与文件总行数。写入路径维护；崩溃窗口允许暂时落后（事件已写、meta 未写），校验不视其为断裂，下次追加时补齐 |
+| `deleted?` / `deletedAt?` | 软删除标记（`session.deleted` / `session.restored` 事件投影，回收站与恢复都落在这一对字段上） |
 | `systemBaseline?` | 冻结的系统提示词基线，双段独立 `{ stable: {text, frozenAt}, live?: {text, frozenAt} }`。作用：每 run 两段都重新计算，再与基线逐段比对，哪段文本变了就重冻结哪段（`frozenAt` 记录这份文本成为基线的时刻），没变的沿用基线；`system-before` 链每 run 都执行，`system-after` 链只在至少一段变化时才执行（提示词缓存的稳定性策略，详见 [hooks](./hooks.md)）。推导规则：`system` 事件按段 upsert、`compaction` 事件清除（压缩改写了消息历史，缓存必然全部失效，正是基线重置的时机），都不推进 `updatedAt` |
 
-`Message`（`packages/core/src/protocol/messages.ts`）的基础字段是 `{ id, sessionId, role: "user" \| "assistant" \| "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因），user 消息可选带 `llmText?`（技能指名与 `@` 文件引用隐式包装的模型视图文本标记，随消息持久化、气泡与事件流不显示，见 [agent-loop](./agent-loop.md) 的包装标记重放）。id 前缀 `msg_` / `ses_`，ULID 格式。会话的消息列表和压缩列表都是事件流的只读视图：`readMessages` 从事件流过滤出 `message` 事件并按 `message.truncated` 标记隐藏被截断的消息（编辑重试/重新生成的过滤点，见下）、`readCompactions` 过滤出 `compaction` 事件，`readQueue` 读 `queue.jsonl`。
+`Message`（`packages/core/src/protocol/messages.ts`）的基础字段是 `{ id, sessionId, role: "user" \| "assistant" \| "tool", blocks, createdAt }`；assistant 消息额外带 `{ model, usage, stopReason }`，tool 消息额外带 `{ grantedBy? }`（callId → 放行原因），user 消息可选带 `llmText?`（技能指名与 `@` 文件引用隐式包装的模型视图文本标记，随消息持久化、气泡与事件流不显示，见 [agent-loop](./agent-loop.md) 的包装标记重放）与 `uiAction?`（UI 卡交互来源标记，仅作展示与徽标，不作权限判定依据）。id 前缀 `msg_` / `ses_`，ULID 格式。会话的消息列表和压缩列表都是事件流的只读视图：`readMessages` 从事件流过滤出 `message` 事件并按 `message.truncated` 标记隐藏被截断的消息（编辑重试/重新生成的过滤点，见下）、`readCompactions` 过滤出 `compaction` 事件，`readQueue` 读 `queue.jsonl`。
 
 ### 事件流哈希链（防篡改）
 

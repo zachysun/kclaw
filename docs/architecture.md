@@ -52,7 +52,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 | `session/` | SessionStore 与上下文压缩：token 估算、分界、渲染等纯函数、事件流存储、事件流哈希链（`integrity.ts`：每行带前一行摘要，校验函数判定 ok/partial/not-chained/torn-tail/broken，见 [storage](./core/storage.md)）、压缩引擎 `Compactor`、会话自动命名、会话 fork 原语（把截至某条消息的历史复制成独立新会话）；`session_search` 工具直接扫事件流 |
 | `permissions/` | ConfigPermissionGate（权限判定）+ ConfirmationBroker（人工确认网关） |
 | `memory/` | MemorySystem：L1 项目情节 + L2 全局认知 + FTS5/向量索引（见 [memory](./core/memory.md)） |
-| `text/` | 三端共享的中文分词器与全文检索（FTS）辅助 |
+| `text/` | 记忆索引与会话检索索引共用的中文分词器与全文检索（FTS）辅助 |
 | `tools/` | 40 个内置工具（16 常驻，其中含 UI 卡 `ui_render`；24 条件注册：后台进程、定时任务、目标循环、会话 todo、工具检索、subagent 派发/取回、运行中提问、技能提案与团队工具） |
 | `skills/` | 技能解析、双作用域扫描、指定匹配、复用检测与软链接接入、提案制的技能进化（提炼 pipeline 与提案存取，见 [skills](./core/skills.md)） |
 | `cron/` | CronScheduler（定时任务调度） |
@@ -61,13 +61,13 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 | `goal/` | /goal 目标循环的领域模块：快照类型、硬性上限常量、判定契约常量（`contract.ts`：判定器输出上限与"无进展"标记串，判定器与循环侧检测共用）、判定器、验收命令的沙箱执行器（`gate.ts`）、事件派生纯函数（derive.ts）与轮决策纯函数（check.ts：九条停止条件与续轮/收尾判定）；注入文本模板在 `prompts/goal.ts`（调用方在 server 的 goal-loop.ts，见 [goal](./core/goal.md)） |
 | `notify/` | 任务完成通知 |
 
-根级另有 `bus.ts`（EventBus，进程内事件分发）与 `client-http.ts`（CLI/WebUI 共享的 HTTP 请求模块：自动附带 Bearer token、提取错误信息、处理 204/空响应，经 `@kclaw/core/client-http` 子路径出口；不 import 任何 Node 专属模块，浏览器可以直接打包）。`mentions.ts`（`@` 文件引用的纯函数层：提取、候选补全与模型侧包装文本，经 `@kclaw/core/mentions` 子路径出口；机制见 [file-mentions](./core/file-mentions.md)）与 `provider/formats.ts`（LLM 线格式注册表：格式类型与校验、鉴权头、端点 URL、embeddings 能力位、探活请求形状，经 `@kclaw/core/provider-formats` 子路径出口；协议实现、探活、配置与 REST 校验、daemon 的 embedding 能力判定、WebUI Model 页的格式下拉都直接读它，各处不另存镜像）同为浏览器可引用的纯模块。`sandbox/`（bash 工具的操作系统级沙箱：Seatbelt/bwrap 检测与包装，见 [sandbox](./core/sandbox.md)）是内部模块，不经入口导出，由 run 组装直接 import。
+根级另有 `bus.ts`（EventBus，进程内事件分发）与 `client-http.ts`（CLI/WebUI 共享的 HTTP 请求模块：自动附带 Bearer token、提取错误信息、处理 204/空响应，经 `@kclaw/core/client-http` 子路径出口；不 import 任何 Node 专属模块，浏览器可以直接打包）。`mentions.ts`（`@` 文件引用的纯函数层：提取、候选补全与模型侧包装文本，经 `@kclaw/core/mentions` 子路径出口；机制见 [file-mentions](./core/file-mentions.md)）与 `provider/formats.ts`（LLM 线格式注册表：格式类型与校验、鉴权头、端点 URL、embeddings 能力位、探活请求形状，经 `@kclaw/core/provider-formats` 子路径出口；协议实现、探活、配置与 REST 校验、daemon 的 embedding 能力判定、WebUI Model 页的格式下拉都直接读它，各处不另存镜像）同为浏览器可引用的纯模块。`sandbox/`（bash 工具的操作系统级沙箱：Seatbelt/bwrap 检测与包装，见 [sandbox](./core/sandbox.md)）是内部模块，不经入口导出，由 run 组装直接 import。`process/`（后台进程注册表 `ProcessRegistry`：记录 bash 以 `run_in_background` 启动的进程；进程启动与结束都会在 `<home>/process-notices.jsonl` 追加一行，daemon 重启后据此继续跟踪仍在运行的进程、补发尚未送达的结束通知）不单独列入入口，`ProcessRegistry` 经 `tools/` 一并导出，由 daemon 创建。
 
 **server**（入口 `packages/server/src/index.ts`）：`app.ts`（createApp 组装）、`daemon.ts`（launchDaemon）、`auth.ts`（token 鉴权）、`run.ts`（RunManager 队列状态机；单次 run 的组装在 core 的 `executeRun`）、`subagent.ts`（subagent 派生：子会话创建、状态行与确认转发，见 [subagents](./core/subagents.md)）、`team.ts`（团队宿主：身份反查、收信箱投递、自动派活、面板，见 [agent-team](./core/agent-team.md)）、`goal-loop.ts`（/goal 目标循环主机：空闲边缘驱动、验收命令、判定器与续轮，见 [goal](./core/goal.md)）、`command-check.ts`（WS 命令帧的唯一校验点）、`ws.ts`（/ws 协议）、`scheduler-tick.ts`（定时调度 tick）、`memory-scheduler.ts`（记忆的定时/跟随保底调度）、`skill-scheduler.ts`（技能进化的跟随检查处理方，见 [skills](./core/skills.md)）、`skill-curator.ts`（技能 curator 的每日闲时扫描宿主：陈旧标记与归档，见 [skills](./core/skills.md)）、`session-retention.ts`（spill 目录保留期清理宿主：每小时按文件 mtime 删除存放超过 `sessions.spillRetentionDays` 天的文件，默认 0 = 不清理，见 [storage](./core/storage.md)）、`host-kit.ts`（常驻宿主共享组件：定时宿主的"立即首扫 + interval + 进行中任务记录 + 停机等待"，与两调度器共用的空闲判定 `followGateDue`、skill curator 与记忆夜间沉淀共用的每日一次判定 `dailyGateDue`；goal 循环等无定时器宿主只用其中的进行中记录）、`mcp-projects.ts`（项目发现：从会话记录现算已知项目集合、逐项目注册两阶段配置 watch、每 60s 同步一次，见 [mcp](./core/mcp.md)）、`project-mcp-watch.ts`（项目层 mcp.json 的两阶段文件监视，与 mcp-projects 配套）、`history-search.ts`（history_search 工具与 `/search` 路由共用的检索实现：索引召回 + 标题解析 + 回收站过滤）、`session-fork.ts`（会话 fork 宿主：空闲判定、调 core 原语复制历史、新会话标题与 meta，见 [storage](./core/storage.md)）、`chore-usage.ts`（后台 LLM 调用花费的用量记录）、`feishu/`（飞书频道：频道逻辑 + 传输接入口 + 飞书 SDK 的薄封装，见 [feishu-channel](./server/feishu-channel.md)）、`routes/`（sessions/changes/attachments/cron/config/providers/fs/usage/memory/skills/hooks/permissions/mcp/channel/search 十五组路由）。
 
 **cli**（入口 `packages/cli/src/index.ts`）：commander 命令树（默认进 chat）；`chat.ts`（REPL 编排：连接、订阅、帧泵、重连、slash 注册表、Ctrl+C 升级，显示与收键交给表面）、`chat-surface.ts`（两个终端表面的公共接口）、`chat-readline.ts`（readline 表面：管道与非全 TTY 终端）、`tui/`（ink TUI：stdin 与 stdout 都是终端时的流式界面）、`run-cmd.ts`（一次性的 `kclaw run`）、`run-input.ts`（run 的 stdin 四种状态）、`run-lifecycle.ts`（run 的生命周期：哪些帧属于本次、何时结束、只停止自己的那一次）、`run-output.ts`（run 的三种输出格式）、`frame-view.ts`（daemon 帧到显示内容的归类，chat 两个表面与 run 共用）、`surface-cards.ts`（确认卡/问题卡的选项、裁决行与自动应答行文案正本，readline 表面、ink 卡片与 run 渲染共用）、`color.ts`（颜色判定与第三方颜色库的环境变量）、`client.ts`（KclawClient 与订阅辅助）、`daemon-ctl.ts`（daemon 检测/启动/停止）、`slash.ts`（slash 命令实现）、`session-list.ts`（`kclaw session list` 表格）、`text-width.ts`（终端显示宽度）、`mime.ts`（附件 MIME 推断）、`usage-error.ts`（用法错误）、`wizard.ts`（首次配置 wizard，经由 daemon 检测与保存）、`web-cmd.ts`（`kclaw web` 子命令）。
 
-**web**（入口 `packages/web/src/main.tsx`）：十一个视图（chat/cron/audit/usage/trash/memory/skills/permissions/mcp/model/channel）加 DirectoryPicker（目录选择器）、离线外壳（`sw.js`/manifest/OfflineBanner）、`ws.ts`（WS 客户端）、`token.ts`（token 引导）。
+**web**（入口 `packages/web/src/main.tsx`）：十一个视图（chat/cron/audit/usage/trash/memory/skills/permissions/mcp/model/channel）加 `chat/`（对话视图：消息视图状态机、工具卡/UI 卡渲染、composer 都在这里）、`sessions/`（侧栏会话列表、回收站视图、目录选择器 DirectoryPicker）、`changes/`（改动抽屉）、`ui/`（IconButton 等通用小组件）、共享层 `api.ts`（HTTP 客户端）、`daemon-clients.ts`（api/ws 工厂与会话级拉取骨架）、`ws.ts`（WS 客户端与重连）、`token.ts`（token 引导）、`toast.tsx`（全局通知浮层）、`theme.ts` + `themes/`（主题注册表，见 [themes](./web/themes.md)）、`events.ts`（跨视图窗口事件名）、离线外壳（`sw.js`/manifest/`offlineBanner.tsx`）。
 
 ---
 
@@ -78,7 +78,8 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 │  127.0.0.1:<port>  （port 写入 <home>/daemon.json）            │
 │  HTTP: /health /status /sessions* /attachments* /cron*         │
 │        /memory* /permissions /skills /hooks /config            │
-│        /fs/browse /usage /mcp /mcp/servers*（Bearer）           │
+│        /providers* /channel* /fs/browse /usage /search         │
+│        /mcp /mcp/servers*（Bearer）                             │
 │  WS:   /ws（首帧 auth 或 ?token=；subscribe + 命令 + 事件流）   │
 │  常驻: RunManager（会话串行 run）· scheduler tick（默认 30s）   │
 │        · 记忆调度器（定时 + 跟随，默认 60s 扫）                 │
@@ -101,7 +102,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 **如何停止。** 收到 SIGTERM/SIGINT 后走有界 stop（每一步默认 60 秒超时）；stop 失败时保留 daemon.json：进程还在运行，pid 文件必须如实反映。
 
-**状态全部在 `<home>`。** `<home>` 指 `KCLAW_HOME` 环境变量指定的目录，未设置时为 `~/.kclaw`（`resolvePaths`，`packages/core/src/storage/paths.ts`）。里面有：`config.json`、`credentials.json`（provider apiKey 与 tavily key 的实际存放处，0600，见 [storage](./core/storage.md)）、`AGENTS.md`、`token`、`daemon.json`、`permissions.yaml`（全局的已保存权限规则，见 [permissions](./core/permissions.md)）、`mcp.json`（**全局组**的 MCP server 配置；各项目自己的在 `<项目>/.kclaw/mcp.json`，见 [mcp](./core/mcp.md)）、`feishu.json` 与 `feishu-state.json`（飞书频道的配置与绑定状态，见 [feishu-channel](./server/feishu-channel.md)）、`sessions/`、`memory/`（记忆库：`global/`（persona/wiki/rule 三类认知文件）+ `projects/<id>/`（主题线文件），各带 `vectors.db` 检索索引，见 [memory](./core/memory.md)）、`skills/`（全局技能目录，项目级技能在工作区 `.kclaw/skills/`，见 [skills](./core/skills.md)）、`hooks/`（用户 hook 目录，每个 run 重新扫描，见 [hooks](./core/hooks.md)）、`cron.db`、`usage.db`、`attachments/`、`spill/`（工具输出被截断时的全量副本，`fs_read` 可直接读取）、`commands/`、`logs/`。
+**状态全部在 `<home>`。** `<home>` 指 `KCLAW_HOME` 环境变量指定的目录，未设置时为 `~/.kclaw`（`resolvePaths`，`packages/core/src/storage/paths.ts`）。里面有：`config.json`、`credentials.json`（provider apiKey 与 tavily key 的实际存放处，0600，见 [storage](./core/storage.md)）、`AGENTS.md`、`token`、`daemon.json`、`permissions.yaml`（全局的已保存权限规则，见 [permissions](./core/permissions.md)）、`mcp.json`（**全局组**的 MCP server 配置；各项目自己的在 `<项目>/.kclaw/mcp.json`，见 [mcp](./core/mcp.md)）、`feishu.json` 与 `feishu-state.json`（飞书频道的配置与绑定状态，见 [feishu-channel](./server/feishu-channel.md)）、`sessions/`、`memory/`（记忆库：`global/`（persona/wiki/rule 三类认知文件）+ `projects/<id>/`（主题线文件），各带 `vectors.db` 检索索引，见 [memory](./core/memory.md)）、`skills/`（全局技能目录，项目级技能在工作区 `.kclaw/skills/`，见 [skills](./core/skills.md)）、`hooks/`（用户 hook 目录，每个 run 重新扫描，见 [hooks](./core/hooks.md)）、`cron.db`、`usage.db`、`search.db`（跨会话消息全文索引，`history_search` 与 `GET /search` 的数据来源）、`process-notices.jsonl`（后台进程的运行记录与尚未送达的结束通知）、`attachments/`、`spill/`（工具输出被截断时的全量副本，`fs_read` 可直接读取）、`commands/`、`logs/`。
 
 ---
 

@@ -15,6 +15,8 @@
 export interface SandboxConfig {          // config.json 的 sandbox 节
   enabled: boolean                        // 整体开关，默认 true
   writeRoots: string[]                    // 追加写白名单（realpath 形态），默认 []
+  network?: "allow" | "deny"              // 沙箱内网络开关，默认 "allow"；deny 时 bash 子进程
+                                          // 不可建出站/入站连接（web 工具在 daemon 进程内执行、不受影响）
 }
 
 export interface BashSandboxSpawn {      // spawn 契约；组首不变量写在 interface 文档里

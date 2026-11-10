@@ -49,7 +49,8 @@ export function loadOrCreateToken(home: string): string
 // token 跨重启复用。
 
 export function tokenEquals(actual: string, expected: string): boolean
-// 恒时比较（timingSafeEqual：耗时与内容长度无关、与具体字节无关），
+// 恒时比较（长度相等才进 timingSafeEqual：长度不等立即失败——内容字节
+// 测不出来，但长度可以；等长部分的耗时与具体字节无关），
 // 防止攻击者靠响应快慢逐字符猜 token。
 
 export function bearerMatches(header: string | undefined, token: string): boolean
@@ -187,7 +188,12 @@ new RunManager({...})               注入 usageStore、recordChoreUsage（后�
                                     现包重试的按条目客户端，重试事件归属当次 run）；见 run-manager。
                                     权限模式没有 daemon 级开关：它是会话级的状态（meta.mode），
                                     run 组装每 run 从会话 meta 读出（见 permissions/run-manager）
-createApp({home, token, stores, bus, run, mcp, mainWorkspace, configNotifier, attachmentsDir, usage, webDist, memory, skillsEvolution, goal, sessionFork, historySearch})
+createFeishuManager({home, run, sessions, bus, wireChannel, log})
+                                    飞书频道管理器（见 feishu-channel）：恒定组装，feishu.json
+                                    未启用时只上报未启用、无开销；wireChannel 回调让频道每次
+                                    换实例（启动或热重启）都落到这里，后台 subagent 的完成
+                                    转发始终跟随当前频道实例
+createApp({home, token, stores, bus, run, cancelBackgroundForParent（见上）, team: teamHost（团队路由与面板的宿主，见 agent-team）, mcp, mainWorkspace, channel: feishuManager（「IM Channel」页与管理接口的后端，见 feishu-channel）, configNotifier, attachmentsDir, usage, webDist, memory, skillsEvolution, goal, sessionFork, historySearch})
                                     Fastify 应用（见 http-api）；attachmentsDir/usage 传入时
                                     对应的附件与用量路由才注册，mcp 提供 /mcp 的分组快照，mainWorkspace
                                     随快照回显（新增条目的默认目标组），memory 供 /memory 路由族，

@@ -166,7 +166,7 @@ token 的处理：页面获取 token 后存入浏览器本地存储并从地址�
 | 用量 | token 用量与费用统计：按天、按会话、按类型三张表，可导出 JSON；会话表只统计主对话调用（后台任务看按类型表），带缓存读/写列与命中率（明细口径见 [storage](./core/storage.md)） |
 | 回收站 | 被删除的会话，可恢复或彻底删除 |
 | 记忆 | 记忆系统管理：项目情节 / 全局认知的查看与整文件编辑 |
-| 技能 | 已装技能的清单与 SKILL.md 正文（只读） |
+| 技能 | 已装技能的清单与 SKILL.md 正文（正文只读）；从其他 agent（Claude Code、Codex 等）的技能目录复用技能并设置可见档位；审阅技能提案：采纳、驳回、回退（机制见 [skills](./core/skills.md)） |
 | 权限 | 沉淀下来的权限规则（全局档与项目档）的查看与删除 |
 | MCP | 已配置的 MCP 服务器管理：按项目分组展示、连接状态、启停、手动连接/重试、增删改与跨组移动（机制见 [mcp](./core/mcp.md)） |
 | Model | 模型服务管理：多个 API 端点条目、默认条目切换、连通验证（机制见 [provider](./core/provider.md)） |
@@ -176,22 +176,30 @@ token 的处理：页面获取 token 后存入浏览器本地存储并从地址�
 
 ## 8. 数据位置与停止方式
 
-全部数据都在 `~/.kclaw/` 一个目录里：
+全部数据都在 `~/.kclaw/` 一个目录里。下表列出其中会出现的文件和目录，一部分要等第一次用到对应功能时才创建（例如没有配置过飞书就没有 `feishu.json`）：
 
-```text
-~/.kclaw/
-├── config.json      # 模型配置（wizard 写的就是它）
-├── AGENTS.md        # agent 人设，会注入系统提示词
-├── token            # 访问凭证
-├── daemon.json      # daemon 运行信息（端口、pid）
-├── sessions/        # 每个会话一个目录：events.jsonl 完整事件流（权威数据）+ meta.json 投影 + queue.jsonl 排队
-├── memory/          # 记忆系统：global/（全局认知）+ projects/<项目id>/（项目情节），含 vectors.db 检索索引
-├── cron.db          # 定时任务
-├── usage.db         # token 用量记录
-├── attachments/     # 附件（WebUI/CLI 上传的文件保存在这里）
-├── commands/        # 自定义 slash 命令（*.md）
-└── logs/            # 日志
-```
+| 文件或目录 | 内容 |
+|-----------|------|
+| `config.json` | 配置文件：模型条目、权限、会话参数等（wizard 保存的模型配置在这里，API key 除外） |
+| `credentials.json` | API key 与 web 检索的 tavily key（权限 0600，wizard 保存的 API key 在这里） |
+| `AGENTS.md` | agent 人设，会注入系统提示词 |
+| `token` | 访问凭证 |
+| `daemon.json` | daemon 运行信息（端口、pid） |
+| `permissions.yaml` | 全局的已保存权限规则 |
+| `mcp.json` | 全局的 MCP 服务器配置 |
+| `feishu.json`、`feishu-state.json` | 飞书频道的配置与绑定状态 |
+| `sessions/` | 每个会话一个目录：events.jsonl 完整事件流（权威数据）+ meta.json 投影 + queue.jsonl 排队 |
+| `memory/` | 记忆系统：global/（全局认知）+ projects/<项目id>/（项目情节），含 vectors.db 检索索引 |
+| `skills/` | 全局技能目录 |
+| `hooks/` | 用户 hook 目录 |
+| `cron.db` | 定时任务 |
+| `usage.db` | token 用量记录 |
+| `search.db` | 跨会话消息的全文索引 |
+| `process-notices.jsonl` | 后台进程的运行记录与尚未送达的结束通知 |
+| `attachments/` | 附件（WebUI/CLI 上传的文件保存在这里） |
+| `spill/` | 工具输出被截断时的完整副本 |
+| `commands/` | 自定义 slash 命令（*.md） |
+| `logs/` | 日志 |
 
 > [!TIP]
 > 备份或搬家时，复制这个目录即可。搬完想确认会话文件没有缺损或被改动，运行 `kclaw session verify --all`：每个会话打印一行校验结论，有断裂的会话以 `✗` 开头并给出行号（机制见 [storage](./core/storage.md) 的「事件流哈希链」）。

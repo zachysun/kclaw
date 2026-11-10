@@ -36,7 +36,7 @@ role 与块的事实约定（由 agent 循环维护，非类型强制）见 [ref
 
 ## Block（`blocks.ts`）
 
-六种类型（`text` / `thinking` / `tool_call` / `tool_result` / `note` / `attachment`）的逐字段陈列、note 的五种 kind 与附件的三种 source 见 [reference/blocks](../reference/blocks.md)。
+六种类型（`text` / `thinking` / `tool_call` / `tool_result` / `note` / `attachment`）的逐字段陈列、note 的九种 kind（其中机器来源说明占五种）与附件的三种 source 见 [reference/blocks](../reference/blocks.md)。
 
 note 是"系统写入对话的信息"（记忆注入、cron 触发、迭代截断、权限拒绝/超时），属于对话内容、模型可读。类型守卫 `isBlockType(t, v)` 与 `newBlockId()` 也在此文件。
 

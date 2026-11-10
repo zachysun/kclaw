@@ -16,9 +16,9 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 ## 参数约定
 
-模型看到的参数定义（JSON Schema：类型、必填、描述）在各工具模块的 entries 工厂里声明；执行器收到参数后再做一轮运行时校验（`tools/shared.ts`）。全部工具共用四条约定：
+模型看到的参数定义（JSON Schema：类型、必填、描述）在各工具模块的 entries 工厂里声明；执行器收到参数后再做一轮运行时校验（`tools/shared.ts`）。四条通用约定：
 
-- 必填参数缺失或类型不对，返回 `args.<key> must be ...` 形式的错误结果。
+- 必填参数缺失或类型不对，返回错误结果：shared 校验器产出 `args.<key> must be ...` 形式的文案，个别工具自持文案（如 subagent 两工具的 `invalid args: ...` 前缀、todo_list_write 与 history_search 的中文提示）。
 - 字符串参数拒绝空串与纯空白；少数正文类参数允许空串，在各自条目里标明。
 - 整数参数只收整数，超出范围按上下限截取、不报错，不传取条目标注的默认值。
 - 模型多传的未知字段一律忽略。
@@ -29,7 +29,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 | 名称 | 一句话 | risk | concurrency |
 |------|--------|------|-------------|
-| `bash` | 在工作目录执行 shell 命令（stdout/stderr 合并，超长截断保头尾） | sensitive | serial |
+| `bash` | 在工作目录执行 shell 命令（stdout/stderr 合并，超长时保留头部、丢弃其余并标注丢弃字节数） | sensitive | serial |
 | `fs_read` | 读工作目录内 UTF-8 文本文件（≤ 1 MiB） | safe | parallel |
 | `fs_list` | 列目录（子目录带尾斜杠，文件带字节数） | safe | parallel |
 | `fs_write` | 新建或覆写文件（自动建父目录） | sensitive | serial |
@@ -297,7 +297,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 注意：bash 的模型侧 JSON Schema 目前只声明 `command` 一个参数；上表两个参数由执行器直接接受并生效，但没有写进 schema，模型无法从工具清单得知它们的存在，需要在对话里明确告知参数名才能用上。
 
 - 后台输出流式写入 spill 文件（`<home>/spill/proc-<id>.txt`），文件字节偏移就是读游标，内存不积压；输出封顶 10 MiB（与前台 spill 上限同量级），到达后停止记录并追加一行上限说明，进程照常运行。
-- 完成自动通知：进程结束后经队列以 `trigger:"process"` 的 run 投递到属主会话（note kind `process`），忙会话排队、闲会话唤醒；工具描述明确写有"不要轮询或 sleep 等待"。
+- 完成自动通知：进程结束后经队列以 `trigger:"process"` 的 run 投递到属主会话（note kind `process`），忙会话排队、闲会话唤醒；后台启动的返回结果写明"完成后会自动通知，不要轮询或 sleep 等待"，`process_output` 的工具描述也写有 "do not poll"。
 - 通知持久化在 `<home>/process-notices.jsonl`：进程注册时先记一条 running 行，结算后追加结果行，投递成功才删行；daemon 重启时按进程去重收编：running 行对应进程还活着的重新进入注册表继续跟踪，已终止的补发一条退出码未知的合成通知，结算行照常补发。
 - 单会话并发后台进程上限 8；注册表按会话隔离，3 个 process 工具只看得到本会话的进程。
 - 沙箱可用时后台命令同样在沙箱内运行（与前台同一条 spawn 路径）。
@@ -310,13 +310,13 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 ### goal 工具（3 个）
 
-模型侧的 goal 控制分 create/get/update 三个动作，与参照的两个同类实现相同。3 个工具都调用 GoalLoopHost 的方法，与 `/goal` 命令走同一条路径；run 边界的独立判定器是终态的唯一写入者（ADR-0003）。`create_goal`/`update_goal` **sensitive**：审批卡就是用户明确同意的方式；`get_goal` safe。仅根会话注册（subagent 不能设目标）；已有活跃目标时 create 拒绝（单目标，防嵌套）。
+模型侧的 goal 控制分 create/get/update 三个动作，与参照的两个同类实现相同。3 个工具都调用 GoalLoopHost 的方法：设定、暂停、恢复、停止与 `/goal` 命令调用的是同一组方法（`set`/`pause`/`resume`/`userStop`），`update_goal` 的 complete 另调 `requestCheck`（请求立即判定），`get_goal` 读 `view`；run 边界的独立判定器是终态的唯一写入者（ADR-0003）。`create_goal`/`update_goal` **sensitive**：审批卡就是用户明确同意的方式；`get_goal` safe。仅根会话注册（subagent 不能设目标）；已有活跃目标时 create 拒绝（单目标，防嵌套）。
 
 | 工具 | 参数 | 说明 |
 |------|------|------|
 | `create_goal` | `text` 必填；`acceptance?`（字符串数组） | 调用 `GoalLoopHost.set`（armed + 首轮入队），与 `/goal <text> verify:` 同路径；带验收命令时沿用沙箱 fail-closed 检查 |
 | `get_goal` | 无参 | 当前目标视图：状态、轮位、budget 消耗、最近判定意见、验收命令、armed |
-| `update_goal` | `action`（complete/pause/resume/stop）必填；`note?` | **complete 只请求立即判定**（判定器裁决 met 才进入终态，not_met 带意见续轮，模型永不自行判定完成）；pause=去 armed；resume=重新 armed+立即检查；stop=映射 userStop（中止活跃 run、清空队列） |
+| `update_goal` | `action`（complete/pause/resume/stop）必填；`note?` | **complete 只请求立即判定**（判定器裁决 met 或 impossible 才进入终态，not_met 带意见续轮，模型永不自行判定完成）；pause=去 armed；resume=重新 armed+立即检查；stop=映射 userStop（中止活跃 run、清空队列） |
 
 ### todo 工具（2 个）
 
@@ -358,7 +358,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `tools` | string[] | 否 | 工具白名单：只保留列出的工具（内置与 MCP 适配器工具都会被过滤，白名单外的名字忽略），只能减少不能增加；不传继承全部 |
 | `run_in_background` | boolean | 否 | true = 立即返回子会话 id，完成后有通知、用 subagent_collect 取结果；不传取 false（阻塞等结题） |
 
-- 子会话不能回话、不能提问、不能再派 subagent（单层委派）。
+- 子会话不能中途给主对话回话，也不能再派 subagent（单层委派），结题答复是主对话收到的全部内容。子会话照常注册 `ask_user_questions`（run 组装给每个 run 都注入），提问卡与确认卡一样转发到父会话的频道并标注来自哪个 subagent；但子会话的系统提示词要求它不要反问，`subagent_run` 的工具描述也告诉主模型子会话不能提问。
 - 阻塞式派发绑定父 run 的中止信号（父 run 停，子也停）；后台派发的生命周期绑定父会话（父 run 结束不取消后台子会话）。
 - 结题答复与阻塞结果一样做保头保尾截断。
 
@@ -490,7 +490,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | 场景 | 裁剪 |
 |------|------|
 | subagent 的 run（`childRun`） | 删 `memory_save`（记忆是主线的职责）；永不带 `subagent_run`（单层委派） |
-| readonly 权限模式 | 删全部 sensitive 工具（`bash` / `fs_write` / `fs_edit`）；可见范围缩小，但权限判定仍是边界 |
+| readonly 权限模式 | 删全部 risk 为 sensitive 的工具：内置的 `bash` / `fs_write` / `fs_edit` / `cron_create` / `cron_update` / `cron_delete` / `create_goal` / `update_goal` 共 8 个，加上全部 MCP 工具（`run-assembly.ts` 里裁剪发生在 MCP 工具注入之后）；可见范围缩小，但权限判定仍是边界 |
 
 团队工具的注册条件按身份分化：`lead` 身份（含未建队的主线会话，即"预备组长"，见 [agent-team](../core/agent-team.md)）注册全部七个；`member` 身份注册 `send_message` / `list_agents` / `task_*` 五个（不含建队/添加）；不在团队里的会话（cron 会话、非组员的 subagent 会话）一个都没有。
 

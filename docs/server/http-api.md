@@ -15,7 +15,7 @@
 
 ## 路由清单
 
-通用约定：除 `/health` 外全部需要 `Authorization: Bearer <token>`；请求体缺失时按"字段全缺"处理；下表"响应"列均为 200/201 的 body。
+通用约定：除 `/health` 与 `/ws` 外全部需要 `Authorization: Bearer <token>`（静态外壳不经这个 hook）；请求体缺失时按"字段全缺"处理；下表"响应"列均为 200/201 的 body。
 
 ### 健康与状态
 
@@ -35,7 +35,7 @@
 | DELETE | `/sessions/:id` | 软删除（移入回收站，标记 `deleted`/`deletedAt`）；**先停掉该会话自己的 run（中止执行中的、丢弃排队的，并有界等待被中止 run 的收尾写完）**：不停的话 run 会继续向一个客户端已不可见的会话追加事件，重启恢复还会跳过已删会话的队列文件，那些条目会永久留在磁盘上；**再取消该会话仍在执行的后台 subagent 与团队组员 run**，然后级联软删其全部 subagent 会话（不留残留会话，见 [subagents](../core/subagents.md)、[agent-team](../core/agent-team.md)）；若本会话是组长，团队目录随之一并归档（见 agent-team） | — | `SessionMeta` |
 | POST | `/sessions/:id/restore` | 从回收站恢复（清除 `deleted`/`deletedAt`） | — | `SessionMeta` |
 | POST | `/sessions/:id/purge` | 永久删除（整个会话目录删除）；**先停掉该会话自己的 run 并有界等待它结束**（与 DELETE 同参数的 `stopAndClear` + `awaitSettle`；purge 特有的风险：abort 是协作式信号，如果不等待 run 结束，被中止 run 的收尾追加会在目录删除后经 mkdirSync 重新建出这个目录，形成一个不完整的会话：没有 `session.created` 事件、标题为空；等待有上限，超时照常继续删除）；**再取消该会话仍在执行的后台 subagent 与团队组员 run**，然后级联永久删除其全部 subagent 会话；团队目录同样归档 | — | `{ok: true}` |
-| POST | `/sessions/:id/model` | 会话级模型切换（只影响此会话**之后**的 run，历史不动） | `{model?}`：provider 条目名（entry key，见 [run-manager](./run-manager.md) 的模型解析）或裸模型名；`""`/默认清空回退到默认；类型不对 400 `model must be a string`，条目不存在 400 `model not found: <name>` | `SessionMeta` |
+| POST | `/sessions/:id/model` | 会话级模型切换（只影响此会话**之后**的 run，历史不动） | `{model?}`：provider 条目名（entry key，见 [run-manager](./run-manager.md) 的模型解析）；`""`/默认清空回退到默认；类型不对 400 `model must be a string`，条目不存在 400 `model not found: <name>` | `SessionMeta` |
 | POST | `/sessions/:id/mode` | 会话级权限模式切换（只影响此会话**之后**的 run，历史不动；机制见 [permissions](../core/permissions.md)） | `{mode: "readonly"\|"default"\|"acceptEdits"\|"trusted"\|"auto"}` 必填；非法值 400 `mode must be one of readonly \| default \| acceptEdits \| trusted \| auto` | `SessionMeta` |
 | GET | `/sessions/:id/team` | agent 团队面板数据（机制见 [agent-team](../core/agent-team.md)） | — | `{team, identity: "lead"\|"member", members, tasks}`（团队、本会话身份、组员名单含忙闲与当前任务、任务板快照）；会话不在任何团队 404 |
 | GET | `/sessions/:id/messages` | 读全部消息（对话/断线恢复的数据源，ChatPanel 用） | — | `Message[]`（事件流投影视图：`readMessages` 从 events.jsonl 过滤 `message` 事件按事件序返回；**排队未执行的消息不在其中**，见 `/queue`） |
@@ -80,8 +80,11 @@ interface SessionMeta {
                               // fork 血缘（session.forked 事件投影，单边：只有 fork 出的新会话带）；
                               // messageId 是用户所点的分叉点，省略 = 复制全部历史。fork 出的会话是
                               // 完全独立的普通会话：删除互不级联，与 parentSessionId 语义无关
+  todo?: TodoItem[]          // 会话级 todo 清单（todo.written 事件投影，后写胜出）
   systemBaseline?: { stable: { text: string; frozenAt: string }; live?: { text: string; frozenAt: string } }
                               // 冻结的系统提示词基线（缓存冻结策略，system 事件投影 / compaction 事件清除，见 hooks.md）
+  chainHead?: string         // 事件流哈希链锚定（integrity.ts）：最新一行原文的 SHA-256
+  chainLength?: number       // 事件流文件总行数（含未起链的旧前缀）；两者都由写入路径维护
   goal?: GoalSnapshot        // 会话级目标快照（/goal；goal.set 全量替换、goal.cleared 删除，见 goal.md）
 }
 ```
@@ -149,7 +152,7 @@ interface Cron {
 | POST | `/providers/models` | 模型列表检测（兼作连接验证） | 请求 `{name}`（用存量条目的真实密钥检测，`format`/`baseUrl`/`apiKey` 可逐项覆盖：覆盖值合法或非空才生效，否则回退到存量条目，用于编辑表单的草稿值检测）或 `{format, baseUrl, apiKey?}`（新建表单直接检测，`format` 非法或 `baseUrl` 为空 400）；成功 `{ok: true, models: string[]}`，检测失败（端点不可达、密钥错误、响应形状不对等一律）502 `{ok: false, error}` |
 | POST | `/providers/probe` | 连通测试：向待测端点发 1 token 补全，验证 URL、密钥和模型名都可用（模型列表验证不了模型名）；首次配置向导使用，不保存任何内容 | 请求 `{format, baseUrl, apiKey?, model}`（`format` 非法、`baseUrl` 或 `model` 为空 400）；响应恒为 200 `{status, body}`：`status` 是端点返回的状态码，`null` 表示请求没有到达，`body` 取响应前 200 字符；如何判断结果由调用方决定 |
 
-所有变更路由直接改 daemon 的内存配置（**下一个 run 即热生效**：持久化后经 ConfigNotifier 发布 `providers` 变更，daemon 的客户端解析器整体清空缓存；条目签名检查保留为优化）并经 `saveConfig` 持久化：每次写都是 config.json 的整文件原子重写（0600，密钥明文只保存在磁盘上；MCP server 不经此写入，mcp.json 是唯一管理源）；持久化失败只记日志不回滚，但变更通知照常发出：内存里的改动已经生效，缓存不能停留在旧值上，下次写入时会再次尝试。条目改名（PATCH 带 `name`）经 `renameProviderEntry` 统一迁移键名并改写配置级引用（默认指针与记忆提取/embedding 条目）。没有审计事件（属于全局配置，与 MCP 管理同理）。使用方是 WebUI 的 Model 页。
+所有变更路由直接改 daemon 的内存配置（**下一个 run 即热生效**：持久化后经 ConfigNotifier 发布 `providers` 变更，daemon 的客户端解析器整体清空缓存；条目签名检查保留为优化）并经 `saveConfig` 持久化：每次写都是 config.json 的整文件原子重写（0600，密钥明文只保存在磁盘上；MCP server 不经此写入，mcp.json 是唯一管理源）；持久化失败只记日志不回滚，但变更通知照常发出：内存里的改动已经生效，缓存不能停留在旧值上，下次写入时会再次尝试。条目改名（PATCH 带 `name`）经 `renameProviderEntry` 统一迁移键名并改写配置级引用（默认指针、记忆提取模型、embedding 模型与 goal 判定器四处）。没有审计事件（属于全局配置，与 MCP 管理同理）。使用方是 WebUI 的 Model 页。
 
 ### 记忆（routes/memory.ts，底层 `MemorySystem`）
 
@@ -287,7 +290,7 @@ interface Cron {
 - `message.retry`：`{sessionId, fromMessageId, text, attachments?}`，编辑重试/重新生成的服务端入口（机制见 [run-manager](./run-manager.md)）：校验通过后先持久化并广播 `message.truncated {fromMessageId}`（从该消息起退出对话视图），再走普通用户消息路径提交；回 `message.retry_ack {sessionId, messageId, queued}`（与 send_message 同步决策的形状一致）。同步失败为 error 帧：`只能从最后一条用户消息重试`（fromMessageId 指向的消息不是最后一条 user 消息）、`会话忙：等当前运行和压缩结束、清空队列后再重试`、`重试内容为空（无文本也无附件）`、subagent 会话只读拒绝。
 - 三个新事件：`message.queued {messageId, disposition, position?}`（消息入队/入缓冲区时；position 是 wait/interrupt 的队列序位，steer 不适用；降级按实际处置报告）、`message.steered {messageId}`（steer 注入当前 run 的时刻，事件级 `runId` 标识注入的 run）、`message.queue_cancelled {messageId}`（单条取消）或 `{all:true, messageIds}`（清空，messageIds 是实际撤回条目的 id 列表）。出队执行与注入仍用既有 `run.started` + `message.created` 表达，消息 id 与排队时相同，前端气泡原地升级，无需替换。
 
-**记忆写入事件 `memory.written`**：记忆写入 pipeline 每次实际写入磁盘时经总线广播，帧为 `memory.written {path, kind, topic?, scope?}`：`kind` 是 `"episode"`（项目情节，带 `topic` 线名）或 `"cognition"`（全局认知，带 `scope`），`path` 是写入文件的绝对路径；不带 `sessionId`（项目级事务）。它只作"已写入"的轻提示：CLI 用暗色一行显示 `已写入记忆: <path>`，web 在通知条显示同文案，都不驱动任何状态机。事件不带"记忆内容"，要看内容走上面的 `/memory` 路由。payload 定义见 [protocol](../core/protocol.md)。
+**记忆写入事件 `memory.written`**：记忆写入 pipeline 每次实际写入磁盘时经总线广播，帧为 `memory.written {path, kind, topic?, scope?, trigger?}`：`kind` 是 `"episode"`（项目情节，带 `topic` 线名）或 `"cognition"`（全局认知，带 `scope`），`path` 是写入文件的绝对路径，`trigger?` 是写入的触发原因（与持久化 memory 事件的口径相同）；不带 `sessionId`（项目级事务）。它只作"已写入"的轻提示：CLI 用暗色一行显示 `已写入记忆: <path>`，web 在通知条显示同文案，都不驱动任何状态机。事件不带"记忆内容"，要看内容走上面的 `/memory` 路由。payload 定义见 [protocol](../core/protocol.md)。
 
 ## 审计的读取方式
 

@@ -2,7 +2,7 @@
 
 ## 职责
 
-`MemorySystem`（`packages/core/src/memory/system.ts`）是记忆系统的唯一服务端入口（单类不拆；30 个公共方法按四类使用方拆成四个窄接口 `MemoryQuery`/`MemoryTriggers`/`MemoryScheduleBook`/`MemoryAdmin`，共 29 个，另有接口外的 `stop()`，调用方按需依赖其中一个接口），它把三类文件级能力组装在一起：**L1 项目情节**（按项目分目录的主题线文件）、**L2 全局认知**（跨项目的画像/知识/规则文件）、以及两套**派生检索索引**（SQLite FTS5 全文索引 + 可选的向量索引）。一条记忆就是一份 markdown 文件，用户可以直接打开查看、修改、删除；索引永远只是派生物，删掉可以重建。
+`MemorySystem`（`packages/core/src/memory/system.ts`）是记忆系统的唯一服务端入口（单类不拆；31 个公共方法按四类使用方拆成四个窄接口 `MemoryQuery`/`MemoryTriggers`/`MemoryScheduleBook`/`MemoryAdmin`，共 29 个，另有接口外的 `stop()` 与 fork 播种用的 `seedWatermarksForFork()`，调用方按需依赖其中一个接口），它把三类文件级能力组装在一起：**L1 项目情节**（按项目分目录的主题线文件）、**L2 全局认知**（跨项目的画像/知识/规则文件）、以及两套**派生检索索引**（SQLite FTS5 全文索引 + 可选的向量索引）。一条记忆就是一份 markdown 文件，用户可以直接打开查看、修改、删除；索引永远只是派生物，删掉可以重建。
 
 模型通过 `memory_save` / `memory_search` 两个工具读写（`packages/core/src/tools/memory.ts`）；run 组装（core `executeRun`）在每次 run 时做两级注入：L2 认知常驻系统提示、L1 情节作为 note 附到用户消息上（见下文"检索与注入"）。daemon 的 `MemorySystem` 组装与 embedding 判定链都在 `packages/server/src/daemon.ts`。
 

@@ -55,7 +55,8 @@ export function createBuiltinTools(opts: {
   // run 组装对每个 run 都注入，主线与 subagent 一样（subagent 的问题卡与确认卡同样转发到父会话频道）
   team?: { facade: TeamFacade; identity: TeamIdentity }
                                      // 团队工具（七个）：组装先经团队 host 解析出身份（lead 或具名组员）再传入；
-                                     // cron 会话与任何团队外的会话没有这个选项，七个工具一个都不注册；
+                                     // cron 会话与 subagent run（childRun）不传这个选项，七个工具一个都不注册；
+                                     // 尚未建队的主线会话拿"预备组长"身份（role 仍 lead、teamId 为空串），全套照常注册（见 agent-team.md）；
                                      // 组员身份永不带 create_team / spawn_teammate（createTeamToolEntries 内部强制，见 agent-team.md）
   childRun?: boolean                 // 本 run 自身是 subagent（meta.parentSessionId 派生）：裁掉 memory_save 与 subagent_run
   fetchImpl?: typeof fetch
@@ -89,7 +90,7 @@ export function makeTool<N extends string>(
 
 完整清单（名称、一句话职责、risk / concurrency、条件注册与工具清单收缩规则）陈列在 [reference/tools](../reference/tools.md)：常驻 16 个（bash、fs 4、grep/glob 检索 2、web 2、memory 2、session_search、history_search、skill 2、ui_render）+ 条件注册 24 个（subagent 2、skill_create 1、后台进程 3、cron 4、goal 3、会话 todo 2、团队 7、提问 1、tool_search 1）；披露分层见该篇的"工具披露分层"节：全量层 name+description+schema、目录层 name+description、检索层只列 name。下面按实现文件分组说明各组工具的机制。
 
-前 16 个**常驻注册**（注册与否不随会话状态变化；可见性例外有两个：readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型可见工具清单，见 [permissions](./permissions.md)；subagent run 会裁掉 `memory_save`，见 [subagents](./subagents.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 组装了 subagent 派发后端时注册（subagent 自己的 run 两者都不注册，单层委派、不能再派下一级 subagent）；`skill_create` 仅在 daemon 组装了技能进化系统时注册（`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案，机制见 [skills](./skills.md)）；`ask_user_questions` 每个 run 都注册；七个团队工具只在会话属于某个团队时注册，且**工具清单按身份收缩**：组长拿全套，组员没有 `create_team`/`spawn_teammate`（见下文与 [agent-team](./agent-team.md)）。
+前 16 个**常驻注册**（注册与否不随会话状态变化；可见性例外有两个：readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型可见工具清单，见 [permissions](./permissions.md)；subagent run 会裁掉 `memory_save`，见 [subagents](./subagents.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 组装了 subagent 派发后端时注册（subagent 自己的 run 两者都不注册，单层委派、不能再派下一级 subagent）；`skill_create` 仅在 daemon 组装了技能进化系统时注册（`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案，机制见 [skills](./skills.md)）；`ask_user_questions` 每个 run 都注册；七个团队工具只在组装了团队 host 的主线会话注册（cron 会话与 subagent run 一个都没有；尚未建队的主线会话以"预备组长"身份注册全套），且**工具清单按身份收缩**：组长拿全套，组员没有 `create_team`/`spawn_teammate`（见下文与 [agent-team](./agent-team.md)）。
 
 ### bash（`tools/bash.ts`）
 
@@ -97,7 +98,7 @@ export function makeTool<N extends string>(
 
 - **沙箱注入**：构造参数可选带 `sandbox`（`BashSandboxSpawn`，一个 `spawn(command, {cwd, env?}) → ChildProcess`）。注入时命令改经沙箱包装器运行（其内部负责再经 `/bin/sh -c` 与进程组语义，见 [sandbox](./sandbox.md)）；默认无沙箱直接执行。run 组装只在沙箱可用时注入，与权限引擎的 `sandboxedTools` 同源。
 
-- **超时**：默认 `timeoutMs = 300_000`（`config.json` 的 `bash.timeoutMs` 同为 300s 默认值）。超时先 `process.kill(-pid, "SIGKILL")` 终止整个进程组（连带 shell 的子进程，如 `sleep`；Windows 无进程组，退回只终止直接子进程），然后返回 `{status:"error", output: "command timed out after 300000ms\n<部分输出>"}`，已产生的输出仍然返回。SIGKILL 之后留 2 秒宽限（`EXEC_TIMEOUT_GRACE_MS`）等 close 事件：子进程的退出信息与管道里已缓冲的尾部输出收集完才收尾，宽限到点仍按超时返回：超时返回的是带已产生输出的错误结果，输出不会被静默丢弃。
+- **超时**：默认 `timeoutMs = 300_000`（`config.json` 的 `bash.timeoutMs` 同为 300s 默认值）。超时先 `process.kill(-pid, "SIGKILL")` 终止整个进程组（连带 shell 的子进程，如 `sleep`；Windows 无进程组，退回只终止直接子进程），然后返回 `{status:"error", output: "command timed out after 300000ms\n<部分输出>"}`，已产生的输出仍然返回。SIGKILL 之后留 2 秒宽限（`TIMEOUT_GRACE_MS`）等 close 事件：子进程的退出信息与管道里已缓冲的尾部输出收集完才收尾，宽限到点仍按超时返回：超时返回的是带已产生输出的错误结果，输出不会被静默丢弃。
 - **取消（run 中止）**：run 的取消信号在命令执行中触发时，同样先 `SIGKILL` 整个进程组再收尾，返回 `{status:"error", output: "command aborted\n<部分输出>"}`（`data.exitCode` 为 `null`），宽限收尾与超时共用同一套逻辑。没有这一步时，被取消的 run 留下的命令会继续执行到自然结束：进程组泄漏到 run 生命周期之外，长命令（如启动本地服务）会一直运行。
 - **环境变量**：每次执行注入 `KCLAW_SESSION_ID`（会话 id）与 `KCLAW_WORKSPACE`（工作目录），其余环境继承 daemon 进程；沙箱包装器经 spawn 的 env 参数拿到同一份完整环境后透传。命令行工具可据此自识别所在会话。
 - **输出截断**：流式累计到 `maxOutputBytes`（默认 512 KiB，即 `512 * 1024`）即停止积累：头部保留，之后的 chunk 只计字节数不再转发；到达上限那一刻发一条截断提示 delta（`...[output truncated, further output dropped]...`），结束时在尾部附 `...[dropped N bytes]...` 字节数标记。`truncateMiddle` 只对头部超出上限 ≤1 chunk 的部分微裁剪（插 `\n...[truncated N bytes]...\n` 标记）。按 UTF-8 字节计数，多字节字符在切点被拆开会解码成 U+FFFD 替换字符，属可接受损失。
@@ -176,7 +177,7 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项：server 每 ru
 
 ### team 工具（`tools/team.ts`）
 
-七个工具都只做转发：校验参数类型 → 调 facade → 把返回值整形为工具结果，协作机制本身（目录、收信箱、任务板、投递）见 [agent-team](./agent-team.md)。**`create_team`** 建队并使本会话成为组长（一个会话只属一个队，重复建队是 error 结果）；**`spawn_teammate`** `{name, task, role?, model?}` 添加组员：名字 `[a-z][a-z0-9-]{0,31}`、保留名 `lead`，`task` 是必填的初始任务，建持久子会话并固化模型快照；**`send_message`** `{to?, text}` 写信（组员的默认目标是组长、可不填 `to`；组长必须显式指名收件人），超长/超限是明确的 error 结果；**`list_agents`** 列名单；**`task_create` / `task_update` / `task_list`** 操作任务板，`task_update` 必须回传 `expected_revision` 做比对再交换（CAS），认领未认领任务时自动填自己的名字。全部 `risk: "safe"`：动作只写团队目录，不改动工作区；改状态类（建队/添加/建任务/改任务）是 `serial`（同一批调用里不与别的工具重叠）。注册**条件性且按身份收缩**：不在团队里的会话（cron 会话、非组员的 subagent 会话）一个都没有；组员的清单不含 `create_team`/`spawn_teammate`（不能建队、不能添加，团队不递归）。
+七个工具都只做转发：校验参数类型 → 调 facade → 把返回值整形为工具结果，协作机制本身（目录、收信箱、任务板、投递）见 [agent-team](./agent-team.md)。**`create_team`** 建队并使本会话成为组长（一个会话只属一个队，重复建队是 error 结果）；**`spawn_teammate`** `{name, task, role?, model?}` 添加组员：名字 `[a-z][a-z0-9-]{0,31}`、保留名 `lead`，`task` 是必填的初始任务，建持久子会话并固化模型快照；**`send_message`** `{to?, text}` 写信（组员的默认目标是组长、可不填 `to`；组长必须显式指名收件人），超长/超限是明确的 error 结果；**`list_agents`** 列名单；**`task_create` / `task_update` / `task_list`** 操作任务板，`task_update` 必须回传 `expected_revision` 做比对再交换（CAS），认领未认领任务时自动填自己的名字。全部 `risk: "safe"`：动作只写团队目录，不改动工作区；改状态类（建队/添加/建任务/改任务）是 `serial`（同一批调用里不与别的工具重叠）。注册**条件性且按身份收缩**：cron 会话与 subagent run 一个都没有；尚未建队的主线会话以"预备组长"身份注册全套（建队之外的调用被 facade 的冲突报错拒绝）；组员的清单不含 `create_team`/`spawn_teammate`（不能建队、不能添加，团队不递归）。
 
 ### UI 卡工具（`tools/ui-render.ts`）
 
@@ -198,7 +199,7 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项：server 每 ru
 ## output 与 data 的分流
 
 - **进模型上下文的只有 `output`**：`toProviderMessages` 把 `tool_result` 转成 `{role:"tool", toolCallId, content: output}`（error 结果加 `[error] ` 前缀）；`data` 字段在这个转换里不存在。
-- **`data` 只随块持久化、仅供渲染**：循环在结果完成时 `block.data = res.data`（`packages/core/src/agent/loop.ts`），JSONL 会话日志与事件流附带它，前端按结构渲染。现有三处读取：web_search 的原始结果三元组、bash 的结构化退出码 `{exitCode}`（工具卡的 exit 徽标）、ui_render 的整张 UI 卡（`data` 通道让 UI 卡不占用任何 token：卡片本体只在渲染端使用）。这使模型上下文保持纯文本、大小可控，渲染需要的信息也不丢。
+- **`data` 只随块持久化、仅供渲染**：循环在结果完成时 `block.data = res.data`（`packages/core/src/agent/loop.ts`），JSONL 会话日志与事件流附带它，前端按结构渲染。web 聊天页的读取点：bash 的结构化退出码 `{exitCode}`（工具卡的 exit 徽标）、todo_list_write 的 `{count, remaining}`、cron_create/cron_update 的任务卡字段、create_goal/update_goal 的快照卡字段、subagent_run 的 `{childSessionId}`（渲染"查看 subagent 审计"链接）、ui_render 的整张 UI 卡（`data` 通道让 UI 卡不占用任何 token：卡片本体只在渲染端使用）。这使模型上下文保持纯文本、大小可控，渲染需要的信息也不丢。
 
 ---
 

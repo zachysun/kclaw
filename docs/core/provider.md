@@ -55,6 +55,12 @@ export interface LlmRequest {
   temperature?: number          // 采样温度透传：交互 run 不带（走 provider 默认）；
                                 // /goal 判定器固定 0（见 goal.md）；两种适配器都
                                 // 只在有值时才带进请求体
+  promptCache?: { key?: string } // 缓存路由键：anthropic 据此摆 cache_control 断点、
+                                // openai 兼容据此发 prompt_cache_key；条目配置
+                                // promptCache:"off" 时以配置为准
+  signal?: AbortSignal          // 取消信号（run 的 abort）：取消立即断开底层 HTTP
+                                // 连接；一次性辅助调用（压缩摘要、goal 判定、
+                                // autoname）可不传
 }
 
 export type LlmStreamEvent =

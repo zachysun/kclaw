@@ -156,7 +156,7 @@ GoalStopReason（快照 `stoppedReason` 字段；permission → blocked，其余
 | 前缀 | 用途 | 生成点 |
 |------|------|--------|
 | `msg` | 消息 id | newMessage；入队时预分配的 messageId 同前缀 |
-| `ses` | 会话 id | SessionStore.create |
+| `ses` | 会话 id | SessionStore.create；forkSession（fork 生成的新会话 id） |
 | `blk` | 块 id | newBlockId |
 | `call` | 工具调用 id（已声明） | 无生成点：callId 由 provider 原样传入（缺失时合成 `call_idx_<n>`） |
 | `evt` | 总线事件 id | makeEvent |

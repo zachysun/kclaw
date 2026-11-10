@@ -247,7 +247,7 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID：按时间递
   - **auto 模式归纳在组装层（不在 WS 入口）**：run 组装（core `run-assembly.ts`）的 `resolveConfirmation` wrapper 能看到**每一种**裁决结果（`once`/`reject` 经网关、**超时**在共享的等待计时内自行到期），这是 WS 命令分发层做不到的（超时永不产生 resolve 帧）。当裁决所属会话的模式是 `auto`（用 run 启动时的快照，避免 resolve 时刻切换模式造成的竞态）时：`once` 裁决先交给 `AutoLearnCounter`（core 纯内存类，键 = `sessionId + 收紧键`，按会话隔离，见第 5 节 auto 档），跨过阈值即保存一条 `source:"auto"` 的项目档规则（尽力而为，写失败只记日志不打断 run）；`reject` **或超时**清零该键计数；abort（run 取消）不算拒绝，不改动计数。同一个包装里，`once` 裁决还会把收紧规则写入**本次 run 的授权存储**（`grants.grant`，见第 11 节）（auto 模式下 gate 不查询它，这次写入不起作用，也没有副作用；判定链对 auto 只做一件事：跳过会话授权，见第 11 节）。归纳发生在裁决侧，规则保存后由已有的沉淀规则机制生效。WS 入口不参与归纳。
   - broker **不发事件、不设内部超时**：事件由循环负责，计时由循环与组装侧共用的同一套计时机制负责；两处用同一超时值计时，保证视图一致。
   - 超时/取消后 run 组装（core `executeRun`）的 `resolveConfirmation` 调用 `expire` 把条目标记失效，迟到的裁决只会收到 unknown confirmation，不会确认一个已无人等待的动作。
-- deny 的 `user_denied` / `timeout` 两个 reason 由循环产生：循环把人工拒绝/超时转成 error result 时用它们作语义标记（note 块的 `kind`）；gate 只产生 `blacklist` / `readonly` / `mode` 三种拒绝（规则命中黑名单、只读会话禁写/bash、trusted 档的越界或无法沙箱化）。
+- 人工拒绝/超时由循环直接落结果：循环把人工拒绝/超时转成 error result，note 块的 `kind` 分别为 `denied` / `timeout`（deny reason 里的 `user_denied` / `timeout` 目前运行时不会产生）；gate 只产生 `blacklist` / `readonly` / `mode` 三种拒绝（规则命中黑名单、只读会话禁写/bash、trusted 档的越界或无法沙箱化）。
 
 ### 9. 沉淀规则（decided rules）
 
