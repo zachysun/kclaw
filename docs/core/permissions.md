@@ -180,7 +180,7 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
   - *auto*：判定链与 default 相同，额外叠加**规则归纳**：auto 会话里同一个操作（同一收紧键）被连续 `once` 批准 N 次（`config.permissions.autoLearnThreshold`，默认 3，0 关闭）后，自动把该操作保存为一条 `source:"auto"` 的项目档规则（保存位置与手动"总是允许"相同，下个 run 起生效）；任何一次 `reject` **或超时**清零该键的计数："拒绝"（含沉默的超时拒绝）是明确信号，不许被更早的放行覆盖。计数在进程内、**键按会话隔离**（跨会话的批准互不叠加；daemon 重启即清零，跨会话持久化是文档化后续项）；`project`/`global` 裁决不参与计数（那是显式的"总是允许"，无需归纳）；沙箱自动放行的调用也从不计数。归纳只针对人工裁决。**auto 模式不处理 run 级会话授权**（见第 11 节）：run 级免询会省掉同一 run 内的重复确认、让归纳看不见连续的人工放行，所以即使 sessionGrants 开启、授权存储已就位，auto 会话仍逐次确认直到归纳完成。auto 模式本身不自动放行任何东西，它只是把反复的人工批准变成规则。
   - 切换入口：CLI 的 Shift+Tab 循环与 `/mode` 命令、WebUI 的常驻选择器，最终都调用 `POST /sessions/:id/mode`（事件溯源写入：追加一条 `session.set` 事件进会话事件流并合并进 meta 投影，`GET /sessions/:id/events` 可见，不做 WS 广播）；下一次 run 起生效。
   - 模式是会话级事实：daemon 不设宿主级全局上限。
-- **readRoots**：额外可读根列表。**safe 的路径参数工具**（按「带 `path` 参数且非 sensitive」派生，目前为 `fs_read`/`fs_list`）的目标落在其中任一根之内时不算越界（免确认）；写类工具永不豁免。daemon 组装传 `[<home>/attachments, <home>/spill]`，上传的附件对会话而言就是"工作区的一部分"；spill 目录（工具输出被截断时的完整副本存放处）加入后，模型按截断标记里的 `fs_read` 提示读取完整输出时同样无需逐次人工放行。
+- **readRoots**：额外可读根列表。**safe 的路径参数工具**（按「带 `path` 参数且非 sensitive」派生，目前为 `fs_read`/`fs_list`）的目标落在其中任一根之内时不算越界（免确认）；写类工具永不豁免。daemon 组装传 `[<home>/attachments, <home>/spill]`，上传的附件就按"工作区的一部分"对待；spill 目录（工具输出被截断时的完整副本存放处）加入后，模型按截断标记里的 `fs_read` 提示读取完整输出时同样无需逐次人工放行。
 
 ### 6. 工具的处理方式怎么派生（引擎不持名单）
 
