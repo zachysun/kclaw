@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/tools/` 实现 40 个内置工具（16 个常驻 + 24 个按组装条件注册），并把它们组装成两份相互对应的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
+`packages/core/src/tools/` 实现 41 个内置工具（17 个常驻 + 24 个按组装条件注册），并把它们组装成两份相互对应的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
 
 ---
 
@@ -86,11 +86,11 @@ export function makeTool<N extends string>(
 
 ---
 
-## 40 个内置工具
+## 41 个内置工具
 
-完整清单（名称、一句话职责、risk / concurrency、条件注册与工具清单收缩规则）陈列在 [reference/tools](../reference/tools.md)：常驻 16 个（bash、fs 4、grep/glob 检索 2、web 2、memory 2、session_search、history_search、skill 2、ui_render）+ 条件注册 24 个（subagent 2、skill_create 1、后台进程 3、cron 4、goal 3、会话 todo 2、团队 7、提问 1、tool_search 1）；披露分层见该篇的"工具披露分层"节：全量层 name+description+schema、目录层 name+description、检索层只列 name。下面按实现文件分组说明各组工具的机制。
+完整清单（名称、一句话职责、risk / concurrency、条件注册与工具清单收缩规则）陈列在 [reference/tools](../reference/tools.md)：常驻 17 个（bash、fs 4、grep/glob 检索 2、web 2、memory 2、session_search、history_search、skill 2、ui_render、ui_read）+ 条件注册 24 个（subagent 2、skill_create 1、后台进程 3、cron 4、goal 3、会话 todo 2、团队 7、提问 1、tool_search 1）；披露分层见该篇的"工具披露分层"节：全量层 name+description+schema、目录层 name+description、检索层只列 name。下面按实现文件分组说明各组工具的机制。
 
-前 16 个**常驻注册**（注册与否不随会话状态变化；可见性例外有两个：readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型可见工具清单，见 [permissions](./permissions.md)；subagent run 会裁掉 `memory_save`，见 [subagents](./subagents.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 组装了 subagent 派发后端时注册（subagent 自己的 run 两者都不注册，单层委派、不能再派下一级 subagent）；`skill_create` 仅在 daemon 组装了技能进化系统时注册（`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案，机制见 [skills](./skills.md)）；`ask_user_questions` 每个 run 都注册；七个团队工具只在组装了团队 host 的主线会话注册（cron 会话与 subagent run 一个都没有；尚未建队的主线会话以"预备组长"身份注册全套），且**工具清单按身份收缩**：组长拿全套，组员没有 `create_team`/`spawn_teammate`（见下文与 [agent-team](./agent-team.md)）。
+前 17 个**常驻注册**（注册与否不随会话状态变化；可见性例外有两个：readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型可见工具清单，见 [permissions](./permissions.md)；subagent run 会裁掉 `memory_save`，见 [subagents](./subagents.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 组装了 subagent 派发后端时注册（subagent 自己的 run 两者都不注册，单层委派、不能再派下一级 subagent）；`skill_create` 仅在 daemon 组装了技能进化系统时注册（`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案，机制见 [skills](./skills.md)）；`ask_user_questions` 每个 run 都注册；七个团队工具只在组装了团队 host 的主线会话注册（cron 会话与 subagent run 一个都没有；尚未建队的主线会话以"预备组长"身份注册全套），且**工具清单按身份收缩**：组长拿全套，组员没有 `create_team`/`spawn_teammate`（见下文与 [agent-team](./agent-team.md)）。
 
 ### bash（`tools/bash.ts`）
 
@@ -179,9 +179,11 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项：server 每 ru
 
 七个工具都只做转发：校验参数类型 → 调 facade → 把返回值整形为工具结果，协作机制本身（目录、收信箱、任务板、投递）见 [agent-team](./agent-team.md)。**`create_team`** 建队并使本会话成为组长（一个会话只属一个队，重复建队是 error 结果）；**`spawn_teammate`** `{name, task, role?, model?}` 添加组员：名字 `[a-z][a-z0-9-]{0,31}`、保留名 `lead`，`task` 是必填的初始任务，建持久子会话并固化模型快照；**`send_message`** `{to?, text}` 写信（组员的默认目标是组长、可不填 `to`；组长必须显式指名收件人），超长/超限是明确的 error 结果；**`list_agents`** 列名单；**`task_create` / `task_update` / `task_list`** 操作任务板，`task_update` 必须回传 `expected_revision` 做比对再交换（CAS），认领未认领任务时自动填自己的名字。全部 `risk: "safe"`：动作只写团队目录，不改动工作区；改状态类（建队/添加/建任务/改任务）是 `serial`（同一批调用里不与别的工具重叠）。注册**条件性且按身份收缩**：cron 会话与 subagent run 一个都没有；尚未建队的主线会话以"预备组长"身份注册全套（建队之外的调用被 facade 的冲突报错拒绝）；组员的清单不含 `create_team`/`spawn_teammate`（不能建队、不能添加，团队不递归）。
 
-### UI 卡工具（`tools/ui-render.ts`）
+### UI 卡工具（`tools/ui-render.ts`、`tools/ui-read.ts`）
 
-**ui_render** `{card}`：为用户产出一张交互式 UI 卡（25 种组件：12 种展示组件、5 种容器、8 种表单字段，类型正本在 `packages/core/src/protocol/ui-cards.ts`）。执行器只做一件事：运行时校验后把整张卡原样放进结果的 `data` 字段：卡片随块持久化、由 web 聊天页渲染成可交互组件，**不进模型上下文**（进入上下文的只有一行文字回执，如"已渲染表格《xx》（3 行）"；回执由各组件的 receiptFor 生成）。护栏：文本 ≤500 字符、标题 ≤100、表格 ≤50 行 8 列、树 ≤200 节点、轮播 ≤10 页、表单 ≤20 字段、选项 ≤8 项、单卡 ≤32 KB（按 UTF-8 字节计）；校验逐字段报错，错误信息带字段路径（如 `card.fields[0].min: 必须小于 max`），失败时提示改用 Markdown。容器里不能再嵌容器：类型层把 children 声明为只收展示组件，运行时校验再检查一次。`risk: "safe"`、`concurrency: "parallel"`（只生成数据，不访问任何资源）；`exposure: directory`（完整 schema 数千 token，不进每请求，经 tool_search 取）。按钮点击与表单提交在 web 侧格式化成用户消息走普通发送链路，发送帧的 `uiAction` 字段标记来源卡（见 [messages](../reference/messages.md)）；模型上下文里它就是一条普通用户消息。卡组件的类型契约与渲染端降级（未知 kind 与渲染抛出错误都退回折叠条，渲染器只增加支持、不破坏已有渲染）见 [webui](../web/webui.md)。
+**ui_render** `{card}`：为用户产出一张交互式 UI 卡（26 种组件：13 种展示组件、5 种容器、8 种表单字段，类型正本在 `packages/core/src/protocol/ui-cards.ts`）。chart 支持 `chartType: "bar"（默认，数值对比）| "line"（时间趋势，web 渲染成折线图、每个点可点击追问）`；stat 是大数字指标卡（label/value/unit/delta）。执行器只做一件事：运行时校验后把整张卡原样放进结果的 `data` 字段：卡片随块持久化、由 web 聊天页渲染成可交互组件，**不进模型上下文**（进入上下文的只有一行文字回执，如"已渲染表格《xx》（3 行）"；回执由各组件的 receiptFor 生成）。护栏：文本 ≤500 字符、标题 ≤100、表格 ≤50 行 8 列、树 ≤200 节点、轮播 ≤10 页、表单 ≤20 字段、选项 ≤8 项、单卡 ≤32 KB（按 UTF-8 字节计）；校验逐字段报错，错误信息带字段路径（如 `card.fields[0].min: 必须小于 max`），失败时提示改用 Markdown。容器里不能再嵌容器：类型层把 children 声明为只收展示组件，运行时校验再检查一次。`risk: "safe"`、`concurrency: "parallel"`（只生成数据，不访问任何资源）；`exposure: directory`（完整 schema 数千 token，不进每请求，经 tool_search 取）。按钮点击、表单提交与折线图点位点击在 web 侧按统一模板 `[UI 卡] 标题：动作` 格式化成用户消息走普通发送链路，发送帧的 `uiAction` 字段标记来源卡（见 [messages](../reference/messages.md)）；模型上下文里它就是一条普通用户消息。按钮与表单是一次性决策（拍板后置灰、计入待拍板计数），折线图点位是提问（可重复点击、不置灰、不计入）。卡组件的类型契约与渲染端降级（未知 kind 与渲染抛出错误都退回折叠条，渲染器只增加支持、不破坏已有渲染）见 [webui](../web/webui.md)。
+
+**ui_read** `{callId?}`：取回本会话已产出的 UI 卡。ui_render 的卡片数据不进上下文，压缩之后模型上下文里已经没有早前图表、表格的数据，用户追问"表格第三行是什么"时用它把原始卡 JSON 读回来。不带参数列出最近的卡片清单（callId · 类型 · 标题 · 所在消息，最多 10 张）；带 callId 返回该卡的完整组件描述 JSON，可直接作为 ui_render 的 card 参数重渲染。实现上只读会话消息投影（`readMessages`），卡识别走协议正本的 `isUiCardData`，与 session_search 同类的 safe/parallel；`exposure: deferred`（低频，只列名字，经 tool_search 取回 schema 后调用）。
 
 ---
 

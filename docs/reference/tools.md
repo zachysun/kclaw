@@ -23,7 +23,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 - 整数参数只收整数，超出范围按上下限截取、不报错，不传取条目标注的默认值。
 - 模型多传的未知字段一律忽略。
 
-## 常驻工具（16 个）
+## 常驻工具（17 个）
 
 每个 run 都注册（childRun 例外见下）：
 
@@ -44,7 +44,8 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `history_search` | 全文检索全部历史会话的原始消息（含未压缩部分） | safe | parallel |
 | `skill_read` | 按名字加载一个技能的完整规程正文 | safe | parallel |
 | `skill_list` | 列出模型可见的技能（可按关键词过滤） | safe | parallel |
-| `ui_render` | 为用户产出一张交互式 UI 卡（25 种组件，经结果 data 通道渲染、不进上下文） | safe | parallel |
+| `ui_render` | 为用户产出一张交互式 UI 卡（26 种组件，经结果 data 通道渲染、不进上下文） | safe | parallel |
+| `ui_read` | 取回本会话已产出的 UI 卡（压缩后引用图表/表格等已渲染数据用） | safe | parallel |
 
 ### bash
 
@@ -242,17 +243,28 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 ### ui_render
 
-`safe` · `parallel`。为用户产出一张交互式 UI 卡（表格、条形图、按钮、表单、时间轴、树、折叠面板等 25 种组件），卡片经工具结果的 `data` 字段随块持久化、由 web 聊天页渲染成可交互组件，**不占模型上下文**（进入上下文的只有一行文字回执）。适合呈现结构化结果（对照表、进度、选项菜单）与收集参数的表单；纯文本能说清的内容不必用它。
+`safe` · `parallel`。为用户产出一张交互式 UI 卡（表格、条形图、折线图、指标卡、按钮、表单、时间轴、树、折叠面板等 26 种组件），卡片经工具结果的 `data` 字段随块持久化、由 web 聊天页渲染成可交互组件，**不占模型上下文**（进入上下文的只有一行文字回执）。适合呈现结构化结果（对照表、进度、选项菜单、趋势与关键指标）与收集参数的表单；纯文本能说清的内容不必用它。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `card` | object | 是 | 组件描述，`kind` 字段判别 25 种组件 |
+| `card` | object | 是 | 组件描述，`kind` 字段判别 26 种组件 |
 
-- 25 种组件分三层：**展示组件** 12 种（button、link、table、list、tag、badge、timeline、tree、quote、icon、chart、form）可单独成卡；**容器组件** 5 种（card/tabs/collapse/drawer/carousel）把展示组件组合出布局（标签页、折叠、抽屉、轮播），容器里不能再嵌套容器（类型定义层面就不允许，运行时校验再做一次拦截）；**表单字段** 8 种（input、textarea、radio、checkbox、segmented、slider、date、time）位于 form 组件的 `fields` 里。
+- 26 种组件分三层：**展示组件** 13 种（button、link、table、list、tag、badge、timeline、tree、quote、icon、chart、stat、form）可单独成卡；**容器组件** 5 种（card/tabs/collapse/drawer/carousel）把展示组件组合出布局（标签页、折叠、抽屉、轮播），容器里不能再嵌套容器（类型定义层面就不允许，运行时校验再做一次拦截）；**表单字段** 8 种（input、textarea、radio、checkbox、segmented、slider、date、time）位于 form 组件的 `fields` 里。chart 的 `chartType` 取 bar（默认，数值对比）或 line（时间趋势，items 按横轴顺序，web 渲染成折线图，每个点可点击追问）；stat 是大数字指标卡（label/value/unit/delta，delta 以正负号决定涨跌配色）。
 - 运行时校验逐字段报错，错误信息带字段路径（如 `card.fields[0].min: 必须小于 max`）；护栏：文本 ≤500 字符、标题 ≤100、表格 ≤50 行 8 列、树 ≤200 节点、轮播 ≤10 页、表单 ≤20 字段、选项 ≤8 项、单卡 ≤32 KB（按 UTF-8 字节计）。
-- 校验通过返回一行回执（如"已渲染表格《xx》（3 行）"）作为工具结果进入上下文；失败返回错误并提示改用 Markdown。
-- 交互回传：按钮点击与表单提交格式化成用户消息走普通发送链路（排队、中止、审计语义全部继承），发送帧带 `uiAction` 来源标记（见 [messages](./messages.md) 与 [wire](./wire.md)）；web 据此在卡上渲染持久已选态（刷新、重进会话都不复活）。
-- `exposure: directory`（见下节）：25 组件的完整 schema 有数千 token，不适合进每个请求：目录节一行描述教何时用，`tool_search` 返回完整 schema 教怎么写，校验错误回执教怎么改。
+- 校验通过返回一行回执（如"已渲染表格《xx》（3 行）"）作为工具结果进入上下文；失败返回错误并提示改用 Markdown。工具描述内含一份选型映射（时间趋势→chart line、关键指标→stat）与决策卡的写法（请用户拍板时：多方案对比→carousel 每屏方案要点配 radio form，请示批准→card 内列影响与回滚方式配 radio，草稿确认→textarea 预填草稿配提交）。
+- 交互回传：按钮点击、表单提交与折线图点位点击都格式化成用户消息走普通发送链路（排队、中止、审计语义全部继承），统一以 `[UI 卡] 标题：动作` 为正文模板（容器无标题时退化为 `[UI 卡] 动作`），发送帧带 `uiAction` 来源标记（见 [messages](./messages.md) 与 [wire](./wire.md)）；web 据此在卡上渲染持久已选态（刷新、重进会话都不复活）。按钮与表单是一次性决策：拍板后置灰、进 web 的待拍板计数；折线图点位是提问：可重复点击、不置灰、不计入待拍板。
+- `exposure: directory`（见下节）：26 组件的完整 schema 有数千 token，不适合进每个请求：目录节一行描述教何时用，`tool_search` 返回完整 schema 教怎么写，校验错误回执教怎么改。
+
+### ui_read
+
+`safe` · `parallel`。取回本会话已产出的 UI 卡。`ui_render` 只把一行回执放进上下文，卡片数据本身不进上下文；压缩之后模型上下文里已经没有早前图表、表格的数据，用户追问"表格第三行是什么"时用这个工具把原始卡 JSON 读回来。只读会话消息投影，与 session_search 同类。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `callId` | string | 否 | 要取回的卡片 callId；不传时列出最近的卡片清单（callId · 类型 · 标题 · 所在消息，最多列最近 10 张，更早的省略） |
+
+- 带 `callId` 返回该卡的完整组件描述 JSON（可直接作为 `ui_render` 的 `card` 参数重渲染或改后重发）；callId 不存在时报错并附最近卡片清单。
+- `exposure: deferred`（见下节）：低频工具，只列名字，需要时经 `tool_search` 取回 schema 再调用。
 
 ## 条件注册工具（24 个）
 
@@ -476,7 +488,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 |----|------|--------|
 | **full** | 完整 schema 进每请求的 tools 数组 | bash、fs 4 个、grep/glob、ask、skill 2 个、todo 2 个、tool_search 本体 |
 | **directory** | 系统提示词"工具目录"节：名字+一行描述；**可直接调用**（运行时参数校验保底），参数拿不准用 tool_search 查 | web 2 个、memory 2 个、session/history 检索、subagent 2 个、process 3 个、cron 4 个、goal 3 个、skill_create、ui_render |
-| **deferred** | **只列名字**：内置低频工具的名字进系统提示词目录节的一行名单（稳定文本）；MCP 工具名字列在 `tool_search` 自己的描述里（设计好的唯一缓存断点）。描述与 schema 一律不给，经 `tool_search` 查询后调用 | 团队 7 个 + **全部 MCP 工具**（连接增删不影响 tools 数组与稳定提示段，前缀缓存全程稳定） |
+| **deferred** | **只列名字**：内置低频工具的名字进系统提示词目录节的一行名单（稳定文本）；MCP 工具名字列在 `tool_search` 自己的描述里（设计好的唯一缓存断点）。描述与 schema 一律不给，经 `tool_search` 查询后调用 | 团队 7 个、ui_read + **全部 MCP 工具**（连接增删不影响 tools 数组与稳定提示段，前缀缓存全程稳定） |
 
 - **tool_search**（safe/parallel）：Okapi BM25（k1 1.2/b 0.75）索引=名字拆词+描述+顶层参数名（schema 正文不算）；精确名直配第一；稀有词门+长查询覆盖率门防误召回；CJK 二元切分（中文友好）。返回完整工具卡（名字+描述+全参 schema+来源）。
 - **真提升**：命中的 defs 经执行器上下文的 promote 接口注入本 run 活跃集，下一次请求的 tools 数组就带上它们，模型直呼、可并行、逐调用审计照旧（不经中转工具转发）。

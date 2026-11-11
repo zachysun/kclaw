@@ -186,6 +186,7 @@ export function readJsonl(file: string): unknown[]
 | `dispositionOverride?` | 会话级发送处置覆盖（`"steer" \| "wait" \| "interrupt"`），优先于 `sessions.defaultDisposition`。服务端路由接受三个值的写入；Web 与 CLI 的 interrupt 都是一次性动作、不写会话级覆盖（见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)） |
 | `goal?` | 会话级目标快照（`/goal`，`GoalSnapshot` 全量：目标文本、验收命令、状态机、轮数与 token 计数、最近判定摘要），由 `goal.set` 事件全量替换、`goal.cleared` 删除（见 [goal](./goal.md)）。计数字段是检查时刻的展示缓存，权威数据在事件流 |
 | `todo?` | 会话级 todo 清单（`todo_list_write` 写入的最新快照，`TodoItem[]`：`content` + `status`），由 `todo.written` 事件全量替换、后写的生效；跨 run 保留，压缩后可经 `todo_list_read` 读回；不推进 `updatedAt`（见 [tools](./tools.md)） |
+| `uiPending?` | 待拍板 UI 卡清单（`{cardCallId, messageId}[]`，web 会话列表角标的计数来源）：`message` 事件折叠维护——tool 消息里带按钮/表单节点的 UI 卡按 callId 登记（chart 是提问类，不登记），user 消息带决策类 `uiAction`（`decision: true`，按钮点击/表单提交）时按 cardCallId 移除对应条目（折线点位追问是提问类，不影响投影）；`message.truncated` 按 `messageId`（消息 id 是 `msg_` 前缀的单调 ULID，字典序即时间序）清理越界条目，清空即删字段。与会话列表刷新的联动见 [webui](../web/webui.md) |
 | `chainHead?` / `chainLength?` | 事件流哈希链锚定（见下文「事件流哈希链」）：最新一行原文的 SHA-256 与文件总行数。写入路径维护；崩溃窗口允许暂时落后（事件已写、meta 未写），校验不视其为断裂，下次追加时补齐 |
 | `deleted?` / `deletedAt?` | 软删除标记（`session.deleted` / `session.restored` 事件投影，回收站与恢复都落在这一对字段上） |
 | `systemBaseline?` | 冻结的系统提示词基线，双段独立 `{ stable: {text, frozenAt}, live?: {text, frozenAt} }`。作用：每 run 两段都重新计算，再与基线逐段比对，哪段文本变了就重冻结哪段（`frozenAt` 记录这份文本成为基线的时刻），没变的沿用基线；`system-before` 链每 run 都执行，`system-after` 链只在至少一段变化时才执行（提示词缓存的稳定性策略，详见 [hooks](./hooks.md)）。推导规则：`system` 事件按段 upsert、`compaction` 事件清除（压缩改写了消息历史，缓存必然全部失效，正是基线重置的时机），都不推进 `updatedAt` |

@@ -33,8 +33,8 @@ export type SessionEvent =
 
 | 类型 | 字段 |
 |------|------|
-| `message` | Message 全量（`{ type: "message" } & Message`） |
-| `message.truncated` | `at`、`fromMessageId`（从它起的消息退出对话视图；读取端投影过滤） |
+| `message` | Message 全量（`{ type: "message" } & Message`）。折叠进 `meta.uiPending`：tool 消息里带按钮/表单节点的 UI 卡按 callId 登记，user 消息带决策类 `uiAction`（`decision: true`，即按钮点击/表单提交）时移除对应条目——折线点位追问是提问类，不移除（见 [storage](../core/storage.md) 的 meta 字段表） |
+| `message.truncated` | `at`、`fromMessageId`（从它起的消息退出对话视图；读取端投影过滤）。`meta.uiPending` 同步清理 `messageId` 越界的条目（消息 id 是 `msg_` 前缀的单调 ULID，字符串比较即先后） |
 | `compaction` | `at`、`trigger`（manual/in-run/auto）、`emergency?`、`focus?`、`from`、`upto`、`messages`、`segmentSummary`、`top`、`tokensBefore?`、`tokensAfter?`（压缩前/后上下文 token，口径见 [compaction](../core/compaction.md)；旧记录无此二字段） |
 | `system` | `at`、`stable`、`live?`（双段系统提示词记录，每 run 一条） |
 | `sandbox.checked` | `at`、`enabled`、`available`、`unavailableReason?`（每 run 一条，不进投影） |

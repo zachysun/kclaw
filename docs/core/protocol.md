@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/core/src/protocol/` 定义贯穿全系统的数据模型，按粒度分层：核心生命周期 `messages.ts`（持久化单位；持久化 = 写入磁盘长期保存，另带 `mergeUsage`，即 run 内 usage 折叠的单一出处）、`blocks.ts`（消息内结构化片段）、`events.ts`（瞬时广播）、`wire.ts`（WS 指令帧与应答帧）、`session-events.ts`（会话事件流的持久化事件类型）、`ids.ts`（ID 体系），领域形状 `team.ts`（团队域）、`mcp.ts`（MCP 快照）、`skills.ts`（技能提案）、`goal.ts`（/goal 视图）、`usage.ts`（`GET /usage` 的响应形状）、`ui-cards.ts`（UI 卡 DSL：`ui_render` 工具结果 `data` 通道里的卡片形状，web 渲染与 core 校验共用）、`changes.ts`（改动抽屉：`GET /sessions/:id/changes` 按文件聚合的改动记录与 `/changes/file` 的当前全文回包）。三层按生命周期划分：
+`packages/core/src/protocol/` 定义贯穿全系统的数据模型，按粒度分层：核心生命周期 `messages.ts`（持久化单位；持久化 = 写入磁盘长期保存，另带 `mergeUsage`，即 run 内 usage 折叠的单一出处）、`blocks.ts`（消息内结构化片段）、`events.ts`（瞬时广播）、`wire.ts`（WS 指令帧与应答帧）、`session-events.ts`（会话事件流的持久化事件类型）、`ids.ts`（ID 体系），领域形状 `team.ts`（团队域）、`mcp.ts`（MCP 快照）、`skills.ts`（技能提案）、`goal.ts`（/goal 视图）、`usage.ts`（`GET /usage` 的响应形状）、`ui-cards.ts`（UI 卡 DSL：`ui_render` 工具结果 `data` 通道里的卡片形状，web 渲染与 core 校验共用；另含两个共用判定——`isUiCardData` 判别一段 data 是不是卡、`cardInteractiveNodes` 数卡内的按钮/表单节点，meta 待拍板投影、`ui_read` 与 web 待拍板条都走它们）、`changes.ts`（改动抽屉：`GET /sessions/:id/changes` 按文件聚合的改动记录与 `/changes/file` 的当前全文回包）。三层按生命周期划分：
 
 ```
 Event（瞬时，不持久化）──记录为──▶ Message（持久化单位）──内含──▶ Block（结构化片段）
