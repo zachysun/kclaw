@@ -81,6 +81,9 @@ interface SessionMeta {
                               // messageId 是用户所点的分叉点，省略 = 复制全部历史。fork 出的会话是
                               // 完全独立的普通会话：删除互不级联，与 parentSessionId 语义无关
   todo?: TodoItem[]          // 会话级 todo 清单（todo.written 事件投影，后写胜出）
+  uiPending?: { cardCallId: string; messageId: string }[]
+                              // 待拍板 UI 卡（message 事件折叠投影）：web 会话列表角标的计数来源，
+                              // 卡被拍板（uiAction 回传）或截断清理后条目移除，见 webui.md
   systemBaseline?: { stable: { text: string; frozenAt: string }; live?: { text: string; frozenAt: string } }
                               // 冻结的系统提示词基线（缓存冻结策略，system 事件投影 / compaction 事件清除，见 hooks.md）
   chainHead?: string         // 事件流哈希链锚定（integrity.ts）：最新一行原文的 SHA-256

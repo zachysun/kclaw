@@ -1430,3 +1430,154 @@ describe("ChatPanel file mention source", () => {
     }
   })
 })
+
+describe("ChatPanel pending cards", () => {
+  beforeEach(() => {
+    localStorage.clear()
+    history.replaceState({}, "", "/")
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  /** 一张按钮决策卡加一张折线提问卡，同一次 ui_render 往返。 */
+  function uiMessages(): Message[] {
+    return [
+      { id: "m1", sessionId: "s1", role: "assistant", createdAt: "2026-11-11T00:00:00.000Z", blocks: [
+        { id: "b1", type: "tool_call", callId: "c1", name: "ui_render", args: {}, argsJson: "{}" },
+        { id: "b2", type: "tool_call", callId: "c2", name: "ui_render", args: {}, argsJson: "{}" },
+      ] },
+      { id: "m2", sessionId: "s1", role: "tool", createdAt: "2026-11-11T00:00:01.000Z", blocks: [
+        { id: "b3", type: "tool_result", callId: "c1", status: "ok", output: "ok", durationMs: 5,
+          data: { kind: "card", title: "发布方案", body: [{ kind: "button", label: "批准" }, { kind: "button", label: "否决" }] } },
+        { id: "b4", type: "tool_result", callId: "c2", status: "ok", output: "ok", durationMs: 5,
+          data: { kind: "chart", chartType: "line", title: "趋势", items: [{ label: "周一", value: 1 }] } },
+      ] },
+    ]
+  }
+
+  it("a titleless top-level button card falls back to its label in the bar", async () => {
+    const messages: Message[] = [
+      { id: "m1", sessionId: "s1", role: "assistant", createdAt: "2026-11-11T00:00:00.000Z", blocks: [
+        { id: "b1", type: "tool_call", callId: "c1", name: "ui_render", args: {}, argsJson: "{}" },
+      ] },
+      { id: "m2", sessionId: "s1", role: "tool", createdAt: "2026-11-11T00:00:01.000Z", blocks: [
+        { id: "b2", type: "tool_result", callId: "c1", status: "ok", output: "ok", durationMs: 5,
+          data: { kind: "button", label: "立即重启" } },
+      ] },
+    ]
+    const h = await mount({ initialMessages: messages })
+    try {
+      const item = h.container.querySelector('[data-testid="pending-item"]')
+      expect(item?.textContent).toContain("立即重启")
+      expect(item?.textContent).toContain("按钮 ×1")
+    } finally {
+      h.unmount()
+    }
+  })
+
+  it("collects unresolved decision cards and answers with a uiAction frame", async () => {
+    const h = await mount({ initialMessages: uiMessages() })
+    try {
+      const strip = h.container.querySelector('[data-testid="pending-bar"]')
+      expect(strip).not.toBeNull()
+      expect(strip?.textContent).toContain("待你拍板 · 1 项")
+      expect(strip?.textContent).toContain("发布方案")
+      // chart 是提问卡：可点追问，但决策计数不含它。
+      expect(strip?.textContent).not.toContain("趋势")
+
+      // 点卡片上的"批准"：帧带 uiAction 来源与统一前缀模板；本地立即置灰，
+      // 聚合条随之消失（无需等 message.created）。
+      const btn = [...h.container.querySelectorAll('[data-testid="blk-ui-card"] button')]
+        .find((b) => b.textContent === "批准") as HTMLButtonElement
+      await drive(() => btn.click())
+      const frame = h.sockets[0]!.sent.map((s) => JSON.parse(s) as Record<string, unknown>)
+        .find((f) => f.type === "send_message")!
+      expect(frame.text).toBe("[UI 卡] 发布方案：选择 批准")
+      expect(frame.uiAction).toEqual({ cardCallId: "c1", optionId: "批准", decision: true })
+      expect(h.container.querySelector('[data-testid="pending-bar"]')).toBeNull()
+      expect(btn.disabled).toBe(true)
+    } finally {
+      h.unmount()
+    }
+  })
+
+  it("a chart-point question sends uiAction without decision and keeps the decision open", async () => {
+    // 混合卡：容器同卡装按钮与折线——提问回传不得清掉按钮的待决投影。
+    const messages: Message[] = [
+      { id: "m1", sessionId: "s1", role: "assistant", createdAt: "2026-11-11T00:00:00.000Z", blocks: [
+        { id: "b1", type: "tool_call", callId: "c1", name: "ui_render", args: {}, argsJson: "{}" },
+      ] },
+      { id: "m2", sessionId: "s1", role: "tool", createdAt: "2026-11-11T00:00:01.000Z", blocks: [
+        { id: "b2", type: "tool_result", callId: "c1", status: "ok", output: "ok", durationMs: 5,
+          data: { kind: "card", title: "发布", body: [
+            { kind: "button", label: "批准" },
+            { kind: "chart", chartType: "line", title: "趋势", items: [{ label: "周三", value: 200 }] },
+          ] } },
+      ] },
+    ]
+    const h = await mount({ initialMessages: messages })
+    try {
+      // 点位是提问：帧带 uiAction 但无 decision；按钮保持可点、聚合条仍在。
+      const point = h.container.querySelector('[data-testid="ui-line-point"]') as HTMLButtonElement
+      await drive(() => point.click())
+      const frame = h.sockets[0]!.sent.map((s) => JSON.parse(s) as Record<string, unknown>)
+        .find((f) => f.type === "send_message")!
+      expect(frame.uiAction).toEqual({ cardCallId: "c1", optionId: "周三" })
+      const btn = [...h.container.querySelectorAll('[data-testid="blk-ui-card"] button')]
+        .find((b) => b.textContent === "批准") as HTMLButtonElement
+      expect(btn.disabled).toBe(false)
+      expect(h.container.querySelector('[data-testid="pending-bar"]')).not.toBeNull()
+      // 随后的批准走决策路径：置位 decision，聚合条消失。
+      await drive(() => btn.click())
+      const lastFrame = h.sockets[0]!.sent.map((s) => JSON.parse(s) as Record<string, unknown>)
+        .filter((f) => f.type === "send_message").at(-1)!
+      expect(lastFrame.uiAction).toEqual({ cardCallId: "c1", optionId: "批准", decision: true })
+      expect(h.container.querySelector('[data-testid="pending-bar"]')).toBeNull()
+    } finally {
+      h.unmount()
+    }
+  })
+
+  it("an error frame rolls the local pick back (button re-enables, bar returns)", async () => {
+    const h = await mount({ initialMessages: uiMessages() })
+    try {
+      const btn = [...h.container.querySelectorAll('[data-testid="blk-ui-card"] button')]
+        .find((b) => b.textContent === "批准") as HTMLButtonElement
+      await drive(() => btn.click())
+      expect(btn.disabled).toBe(true)
+      expect(h.container.querySelector('[data-testid="pending-bar"]')).toBeNull()
+      // daemon 拒绝（子会话只读、队列满等）：错误帧回滚乐观气泡的同时清掉
+      // 本地已选态——卡片恢复可点，聚合条恢复显示。
+      pushFrame(h.sockets[0]!, { type: "error", message: "子会话只读，拒绝用户消息" })
+      await flush()
+      const btnAfter = [...h.container.querySelectorAll('[data-testid="blk-ui-card"] button')]
+        .find((b) => b.textContent === "批准") as HTMLButtonElement
+      expect(btnAfter.disabled).toBe(false)
+      expect(h.container.querySelector('[data-testid="pending-bar"]')).not.toBeNull()
+      expect(h.container.querySelector('[data-testid="chat-error"]')?.textContent).toContain("子会话只读")
+    } finally {
+      h.unmount()
+    }
+  })
+
+  it("a click on a dead socket rolls the pick back and surfaces the notice", async () => {
+    const h = await mount({ initialMessages: uiMessages() })
+    try {
+      // socket 已关而客户端尚未感知（opened 置位后 send 直通浏览器句柄，
+      // CLOSING/CLOSED 态抛 InvalidStateError）：决策点击必须回滚并通知，
+      // 不能停在"已选择"的假拍板态。
+      h.sockets[0]!._open = false
+      const btn = [...h.container.querySelectorAll('[data-testid="blk-ui-card"] button')]
+        .find((b) => b.textContent === "批准") as HTMLButtonElement
+      await drive(() => btn.click())
+      expect(btn.disabled).toBe(false)
+      expect(h.container.querySelector('[data-testid="pending-bar"]')).not.toBeNull()
+      expect(h.container.querySelector('[data-testid="chat-notice"]')?.textContent).toContain("连接不可用")
+      expect(h.sockets[0]!.sent.some((s) => s.includes("send_message"))).toBe(false)
+    } finally {
+      h.unmount()
+    }
+  })
+})

@@ -30,7 +30,7 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 const ALL_TOOLS = [
   "bash", "fs_read", "fs_list", "fs_write", "fs_edit", "grep", "glob",
   "web_search", "web_fetch", "memory_save", "memory_search",
-  "session_search", "history_search", "skill_read", "skill_list", "ui_render",
+  "session_search", "history_search", "skill_read", "skill_list", "ui_render", "ui_read",
 ]
 
 /** required arrays per tool (task brief); checked as sets. */
@@ -51,6 +51,7 @@ const REQUIRED: Record<string, string[]> = {
   skill_read: ["name"],
   skill_list: [],
   ui_render: ["card"],
+  ui_read: [],
 }
 
 describe("builtin tool registry", () => {

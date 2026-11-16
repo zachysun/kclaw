@@ -17,6 +17,7 @@ import { MessageBubble, firstRenderedText } from "./MessageBubble.js"
 import { ConfirmationCardView, QuestionCardView } from "./Cards.js"
 import { AuditContextNote, compactionBars, type CompactionRecordView } from "./CompactionBars.js"
 import { Composer } from "./Composer.js"
+import { PendingBar, type PendingCardItem } from "./PendingBar.js"
 import { useFollowTail } from "./useFollowTail.js"
 import { TeamPanelCard } from "./TeamPanel.js"
 import { GoalPanelCard } from "./GoalPanel.js"
@@ -99,6 +100,8 @@ export interface ChatViewProps {
   onUiAction?: (callId: string, action: UiCardAction) => void
   /** callId → 已发生的卡动作（持久已选态反查）。 */
   uiPicks?: Map<string, UiCardAction>
+  /** 未决卡清单（待拍板聚合条）：空数组/undefined 不渲染。 */
+  pendingCards?: PendingCardItem[]
   /** Cancel the in-flight automatic compaction (the indicator's cancel button, compaction.cancel). */
   onCancelCompaction?: () => void
   /** Stop the active run (the run indicator's stop button; the run.cancel frame). */
@@ -177,7 +180,7 @@ export interface ChatViewProps {
   changesSlot?: ReactNode
 }
 
-export function ChatView({ sessionId, view, onSend, onUiAction, uiPicks, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDismissNotice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, onFork, forkPending, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal, usage, changesSlot }: ChatViewProps) {
+export function ChatView({ sessionId, view, onSend, onUiAction, uiPicks, pendingCards, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDismissNotice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, onFork, forkPending, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal, usage, changesSlot }: ChatViewProps) {
   // In-place editor state of edit & retry, keyed by the bubble being edited;
   // both confirm and Esc clear it.
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
@@ -215,6 +218,16 @@ export function ChatView({ sessionId, view, onSend, onUiAction, uiPicks, onResol
   const lastAssistantIdx = findLastIdx(view.messages, (m) => m.role === "assistant")
 
   const openHelp = useCallback((): void => setHelpOpen(true), [])
+
+  /** 待拍板条的定位：滚动到卡片挂载点并短暂高亮（回答仍在卡片本体完成）。
+   * jsdom 无 scrollIntoView，可选调用保证测试环境直接跳过。 */
+  const locateCard = useCallback((callId: string): void => {
+    const el = document.querySelector(`[data-ui-callid="${CSS.escape(callId)}"]`)
+    if (el === null) return
+    el.scrollIntoView?.({ behavior: "smooth", block: "center" })
+    el.classList.add("ui-flash")
+    window.setTimeout(() => el.classList.remove("ui-flash"), 1200)
+  }, [])
 
   /** Edit confirm: an empty text does not submit (same rule as the composer). */
   const confirmEdit = (): void => {
@@ -333,7 +346,10 @@ export function ChatView({ sessionId, view, onSend, onUiAction, uiPicks, onResol
                 <MessageBubble
                   message={message}
                   onOpenAudit={onOpenAudit}
-                  onUiAction={onUiAction}
+                  // 只读子会话的卡面退化为纯展示：与 PendingBar、composer
+                  // 同一规则——只读语义覆盖每一个交互面（daemon 对子会话的
+                  // 用户消息一律拒绝，可点必失败）。
+                  onUiAction={readOnly ? undefined : onUiAction}
                   uiPicks={uiPicks}
                   toolPairing={toolPairing}
                   canEdit={canRetry && idx === lastUserIdx}
@@ -495,6 +511,9 @@ export function ChatView({ sessionId, view, onSend, onUiAction, uiPicks, onResol
             </div>
           ))}
         </div>
+      )}
+      {pendingCards !== undefined && pendingCards.length > 0 && !readOnly && (
+        <PendingBar items={pendingCards} onLocate={locateCard} />
       )}
       {readOnly ? (
         // Child sessions are read-only (spec pin: treat the subagent as a

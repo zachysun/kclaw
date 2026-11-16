@@ -533,6 +533,19 @@ select:focus {
   vertical-align: 1px;
 }
 
+/* 未决 UI 卡角标（跨会话待拍板计数）：实底色与 fork 徽标区分开 */
+.session-pending-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 16px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  vertical-align: 1px;
+}
+
 /* one meta line: where (tail-ellipsized) · when (right-aligned).
    padding-right reserves the slot the hover actions chip drops into, so the
    chip never covers meta text either. */

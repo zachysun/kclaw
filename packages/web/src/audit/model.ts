@@ -13,7 +13,7 @@ import type {
   SessionRestoredEvent, SessionSetEvent, SkillEvent, SystemEvent, TeamAuditEvent, ToolGrantReason, Usage,
   GoalEvent, GoalSetEvent, GoalCheckedEvent, GoalSnapshot, TodoItem, TodoWrittenEvent, UiActionRef,
 } from "../types.js"
-import { isUiCard } from "../chat/UiCard.js"
+import { isUiCardData } from "@kclaw/core/protocol"
 
 export type SessionMetaEvent = SessionCreatedEvent | SessionRenamedEvent | SessionDeletedEvent | SessionRestoredEvent | SessionForkedEvent | SessionSetEvent
 
@@ -698,7 +698,7 @@ function blockFullContent(block: Block): string {
     case "tool_result":
       // ui_render's card body lives in `data` (never in output): the audit
       // row's expanded view appends the raw DSL JSON.
-      return isUiCard(block.data) ? `${block.output}\n${JSON.stringify(block.data, null, 2)}` : block.output
+      return isUiCardData(block.data) ? `${block.output}\n${JSON.stringify(block.data, null, 2)}` : block.output
     case "attachment":
       return JSON.stringify(block.source, null, 2)
   }

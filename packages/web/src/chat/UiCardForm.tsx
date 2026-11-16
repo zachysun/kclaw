@@ -13,11 +13,24 @@ export interface UiCardAction {
   optionId?: string
   /** Form submits: field name → reported (label-form) value. */
   values?: Record<string, string>
-  /** The user-facing text this action submits as (the send_message payload):
-   * `选择：<label>` for buttons, a titled line-per-field block for forms.
+  /** True for one-shot decisions (button pick / form submit): the card grays
+   * out and its pending entry settles. Chart-point questions are repeatable
+   * and omit it — no settled state, no pending-bar removal. */
+  decision?: boolean
+  /** The user-facing text this action submits as (the send_message payload).
    * Always present on fresh interactions; absent on persisted picks (the
    * reverse-lookup view never re-sends). */
   text?: string
+}
+
+/**
+ * The one message template for every UI-card interaction (button pick, form
+ * submit, chart-point question): a `[UI 卡]` prefix plus the nearest card
+ * title, so the model can tell WHICH card the answer belongs to when several
+ * share a turn. No title in scope → the bare `[UI 卡] <动作>` form.
+ */
+export function uiCardText(title: string | undefined, action: string): string {
+  return title !== undefined && title !== "" ? `[UI 卡] ${title}：${action}` : `[UI 卡] ${action}`
 }
 
 type Draft = Record<string, string | string[]>
@@ -33,21 +46,18 @@ function draftValueOf(field: UIField): string | string[] {
   }
 }
 
-/** Human-readable value of one field for the snapshot view. */
-function displayValue(field: UIField, value: string | string[] | undefined): string {
-  if (value === undefined || value === "" || (Array.isArray(value) && value.length === 0)) return "（未填）"
-  if (Array.isArray(value)) return value.join("、")
-  return value
-}
-
 export function UiCardForm({
   card,
   onAction,
   picked,
+  contextTitle,
 }: {
   card: UIFormCard
   onAction?: (action: UiCardAction) => void
   picked?: UiCardAction | null
+  /** Nearest enclosing card title (containers thread theirs down); the
+   * form's own title wins when it has one. */
+  contextTitle?: string
 }) {
   const [draft, setDraft] = useState<Draft>(() =>
     Object.fromEntries(card.fields.map((f) => [f.name, draftValueOf(f)])),
@@ -89,12 +99,12 @@ export function UiCardForm({
         .filter((x): x is [string, string] => x !== null),
     )
     if (Object.keys(filled).length === 0) return // 空表单不允许提交
-    // The submit text IS the user message: titled, one line per field, values
-    // in label form — the same strings the snapshot view shows.
+    // The submit text IS the user message: card-context header, one line per
+    // field, values in label form — the same strings the snapshot view shows.
     const fieldLabels = new Map(card.fields.map((f) => [f.name, f.label]))
     const lines = Object.entries(filled).map(([name, v]) => `${fieldLabels.get(name) ?? name}: ${v}`)
-    const text = `[表单]${card.title !== undefined ? ` ${card.title}` : ""}\n${lines.map((l) => `- ${l}`).join("\n")}`
-    onAction({ values: filled, text })
+    const text = `${uiCardText(card.title ?? contextTitle, "表单提交")}\n${lines.map((l) => `- ${l}`).join("\n")}`
+    onAction({ values: filled, text, decision: true })
   }
 
   return (

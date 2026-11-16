@@ -842,40 +842,43 @@ describe("dropEarliestPendingSend（错误帧回滚乐观发送）", () => {
     let s = appendOptimisticUser(initChat([]), "第一条")
     s = appendOptimisticUser(s, "第二条")
     const firstId = s.messages[0]!.id
-    const rolled = dropEarliestPendingSend(s)
+    const { state: rolled, droppedText } = dropEarliestPendingSend(s)
     expect(rolled.messages.map((m) => m.id)).toEqual([s.messages[1]!.id])
     expect(rolled.messages[0]!.id).not.toBe(firstId)
+    expect(droppedText).toBe("第一条")
   })
 
   it("忙会话发送失败：无待确认气泡时回滚最早的 local- 排队行", () => {
     let s = appendPendingQueueRow(initChat([]), "排队一", "wait")
     s = appendPendingQueueRow(s, "排队二", "steer")
     const firstRowId = s.queue[0]!.messageId
-    const rolled = dropEarliestPendingSend(s)
+    const { state: rolled, droppedText } = dropEarliestPendingSend(s)
     expect(rolled.queue.map((e) => e.messageId)).toEqual([s.queue[1]!.messageId])
     expect(rolled.queue[0]!.messageId).not.toBe(firstRowId)
+    expect(droppedText).toBe("排队一")
   })
 
   it("气泡先于排队行发送：优先回滚气泡（发送序即帧序，与 adoptQueuedId 对称）", () => {
     let s = appendOptimisticUser(initChat([]), "先发的")
     s = appendPendingQueueRow(s, "后排队的", "wait")
-    const rolled = dropEarliestPendingSend(s)
+    const { state: rolled, droppedText } = dropEarliestPendingSend(s)
     expect(rolled.messages).toHaveLength(0)
     expect(rolled.queue.map((e) => e.text)).toEqual(["后排队的"])
+    expect(droppedText).toBe("先发的")
   })
 
   it("已确认（服务端 id）的行与气泡一律不动", () => {
     let s = appendOptimisticUser(initChat([]), "已确认")
     s = adoptQueuedId(s, "m-server")
     const before = s
-    expect(dropEarliestPendingSend(s)).toBe(before)
+    expect(dropEarliestPendingSend(s)).toEqual({ state: before, droppedText: null })
     const q = appendPendingQueueRow(initChat([]), "已确认行", "wait")
     const acked = adoptQueuedId(q, "m-row")
-    expect(dropEarliestPendingSend(acked)).toBe(acked)
+    expect(dropEarliestPendingSend(acked)).toEqual({ state: acked, droppedText: null })
   })
 
   it("没有任何待确认项时原样返回（不新建引用）", () => {
     const s = initChat([])
-    expect(dropEarliestPendingSend(s)).toBe(s)
+    expect(dropEarliestPendingSend(s)).toEqual({ state: s, droppedText: null })
   })
 })

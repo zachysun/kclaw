@@ -198,6 +198,16 @@ describe("checkCommandFrame — send_message", () => {
       kind: "error",
       message: "send_message uiAction.values must be an object of string → string",
     })
+    // decision 标记（决策 vs 提问）：布尔透传，非布尔拒绝。
+    const decisionAction = { cardCallId: "call_3", optionId: "批准", decision: true }
+    expect(checkCommandFrame(sendFrame({ uiAction: decisionAction }), deps())).toEqual({
+      kind: "command",
+      command: { type: "send_message", sessionId: SESSION, text: "hi", uiAction: decisionAction },
+    })
+    expect(checkCommandFrame(sendFrame({ uiAction: { cardCallId: "call_1", decision: "yes" } }), deps())).toEqual({
+      kind: "error",
+      message: "send_message uiAction.decision must be a boolean",
+    })
   })
 
   it("answers session not found before attachment checks", () => {

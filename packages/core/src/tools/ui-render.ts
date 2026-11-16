@@ -22,6 +22,7 @@ import type {
   UIButtonTone,
   UICard,
   UIOption,
+  UIStatCard,
   UITableCard,
   UITone,
   UITreeCard,
@@ -32,8 +33,9 @@ import { ToolError, def, type ToolEntry } from "./shared.js"
 /** First sentence = the tool-directory line (directory tier); the rest rides
  * the tool_search card. The do/don't split mirrors the validator exactly. */
 export const UI_RENDER_DESCRIPTION =
-  "为用户产出交互式 UI 卡（表格/条形图/按钮/表单/时间轴/树/折叠面板等 25 种组件）。" +
-  "仅在明显优于 Markdown 时调用：方案对比→table、数值对比→chart、用户点选→button、收集参数→form、步骤层级→timeline/tree；" +
+  "为用户产出交互式 UI 卡（表格/图表/按钮/表单/时间轴/树/折叠面板等 26 种组件）。" +
+  "仅在明显优于 Markdown 时调用：方案对比→table、数值对比→chart、时间趋势→chart(line)、关键指标→stat、用户点选→button、收集参数→form、步骤层级→timeline/tree；" +
+  "请用户拍板时拼成完整决策卡：多方案对比→carousel 每屏方案要点配 radio form，请示批准→card 内列影响与回滚方式配 radio（批准/要求修改），草稿确认→textarea 预填草稿配提交；" +
   "普通解释、代码块、单条结论一律用正文，不要调用本工具。" +
   "一次调用产出一个组件；文本按纯文本渲染（不支持 HTML/Markdown 语法）。"
 
@@ -60,7 +62,7 @@ const CONTAINER_KINDS: ReadonlySet<string> = new Set(["card", "tabs", "collapse"
 const KIND_LABELS: Record<string, string> = {
   button: "按钮", link: "链接", table: "表格", list: "列表", card: "卡片", tag: "标签",
   badge: "徽标", tabs: "标签页", collapse: "折叠面板", timeline: "时间轴", tree: "树",
-  carousel: "走马灯", quote: "引用", icon: "图标", chart: "图表", drawer: "抽屉", form: "表单",
+  carousel: "走马灯", quote: "引用", icon: "图标", chart: "图表", stat: "指标", drawer: "抽屉", form: "表单",
 }
 
 // --- small path-carrying validators (error messages are model-facing) -------
@@ -234,7 +236,9 @@ function validateChart(o: Record<string, unknown>, path: string): UIChartCard {
   // Absent chartType stays absent in `data` (the payload mirrors what the
   // model wrote; the web treats undefined as "bar") — validation only.
   const chartType = optStr(o, "chartType", path, 20) ?? "bar"
-  if (chartType !== "bar") throw new ToolError(`${path}.chartType: v1 只支持 "bar"`)
+  if (chartType !== "bar" && chartType !== "line") {
+    throw new ToolError(`${path}.chartType: 只支持 "bar"（条形）或 "line"（折线，items 按横轴顺序）`)
+  }
   const items = reqArr(o, "items", path, 1, MAX_ITEMS).map((raw, i) => {
     const item = reqObj(raw, `${path}.items[${i}]`)
     if (typeof item.value !== "number" || !Number.isFinite(item.value)) {
@@ -245,9 +249,22 @@ function validateChart(o: Record<string, unknown>, path: string): UIChartCard {
   const unit = optStr(o, "unit", path, 20)
   return {
     kind: "chart", items,
-    ...(o.chartType !== undefined ? { chartType: "bar" as const } : {}),
+    ...(o.chartType !== undefined ? { chartType: chartType as "bar" | "line" } : {}),
     ...(o.title !== undefined ? { title: optStr(o, "title", path, MAX_TITLE) } : {}),
     ...(unit !== undefined ? { unit } : {}),
+  }
+}
+
+function validateStat(o: Record<string, unknown>, path: string): UIStatCard {
+  const unit = optStr(o, "unit", path, 20)
+  const delta = optStr(o, "delta", path, MAX_TITLE)
+  return {
+    kind: "stat",
+    label: reqStr(o, "label", path, MAX_TITLE),
+    value: reqStr(o, "value", path, MAX_TITLE),
+    ...(o.title !== undefined ? { title: optStr(o, "title", path, MAX_TITLE) } : {}),
+    ...(unit !== undefined ? { unit } : {}),
+    ...(delta !== undefined ? { delta } : {}),
   }
 }
 
@@ -364,10 +381,12 @@ function validateCard(raw: unknown, path: string, opts: { insideContainer?: bool
     }
     case "chart":
       return validateChart(o, path)
+    case "stat":
+      return validateStat(o, path)
     case "form":
       return validateForm(o, path)
     default:
-      throw new ToolError(`${path}.kind: "${kind}" 不是合法的组件类型（button/link/table/list/card/tag/badge/tabs/collapse/timeline/tree/carousel/quote/icon/chart/drawer/form）`)
+      throw new ToolError(`${path}.kind: "${kind}" 不是合法的组件类型（button/link/table/list/card/tag/badge/tabs/collapse/timeline/tree/carousel/quote/icon/chart/stat/drawer/form）`)
   }
 }
 
@@ -380,6 +399,7 @@ function receiptFor(card: UICard): string {
     : card.kind === "form" ? `（${card.fields.length} 个字段）`
     : card.kind === "chart" ? `（${card.items.length} 项）`
     : card.kind === "list" || card.kind === "timeline" ? `（${card.items.length} 项）`
+    : card.kind === "stat" ? `（${card.value}${card.unit !== undefined ? ` ${card.unit}` : ""}）`
     : ""
   return `已渲染${label}${titled}${count}。用户界面上已展示，正文无需复述全部内容。`
 }
@@ -410,7 +430,7 @@ export function createUiRenderTool(): ToolExecutor & { name: "ui_render" } {
   }
 }
 
-// --- provider-facing schema (oneOf over the 25 kinds) ------------------------
+// --- provider-facing schema (oneOf over the 26 kinds) ------------------------
 
 const enumOf = (values: readonly string[]) => ({ type: "string", enum: [...values] })
 const strF = (max: number, description = "纯文本") => ({ type: "string", maxLength: max, description })
@@ -471,7 +491,7 @@ function branch(kind: string, description: string, properties: Record<string, un
 }
 
 const UIDisplayKindList = [
-  "button", "link", "table", "list", "tag", "badge", "timeline", "tree", "quote", "icon", "chart", "form",
+  "button", "link", "table", "list", "tag", "badge", "timeline", "tree", "quote", "icon", "chart", "stat", "form",
 ] as const
 
 const displayChildren = (description: string) => ({
@@ -494,7 +514,8 @@ const BRANCHES = [
   branch("carousel", "走马灯：容器，分屏轮播", { title: strF(MAX_TITLE), slides: { type: "array", minItems: 1, maxItems: MAX_SLIDES, items: displayChildren("该屏子组件") } }, ["slides"]),
   branch("quote", "引用：醒目引文", { text: strF(MAX_TEXT), source: strF(MAX_TITLE, "出处") }, ["text"]),
   branch("icon", "图标：emoji 点缀", { value: strF(16, "emoji 字符") }, ["value"]),
-  branch("chart", "图表：v1 仅条形图（数值对比）", { title: strF(MAX_TITLE), chartType: enumOf(["bar"]), unit: strF(20, "数值单位"), items: { type: "array", minItems: 1, maxItems: MAX_ITEMS, items: { type: "object", properties: { label: strF(MAX_TITLE), value: { type: "number" } }, required: ["label", "value"], additionalProperties: false } } }, ["items"]),
+  branch("chart", "图表：bar 条形（数值对比）/ line 折线（时间趋势，items 按横轴顺序；每个点可点击追问）", { title: strF(MAX_TITLE), chartType: enumOf(["bar", "line"]), unit: strF(20, "数值单位"), items: { type: "array", minItems: 1, maxItems: MAX_ITEMS, items: { type: "object", properties: { label: strF(MAX_TITLE), value: { type: "number" } }, required: ["label", "value"], additionalProperties: false } } }, ["items"]),
+  branch("stat", "指标：大数字展示（label 说明 + value 带格式数值 + 可选 unit/delta 趋势）", { title: strF(MAX_TITLE), label: strF(MAX_TITLE, "指标名"), value: strF(MAX_TITLE, "展示值（可带格式，如 1,204 / 3.2s）"), unit: strF(20, "数值单位"), delta: strF(MAX_TITLE, "趋势（如 +12%，按正负着色）") }, ["label", "value"]),
   branch("drawer", "抽屉：容器，默认收起只显触发条", { title: strF(MAX_TITLE, "触发条标题（必填）"), children: displayChildren("展开内容") }, ["title", "children"]),
   branch("form", "表单：收集参数，用户提交后整体回传", { title: strF(MAX_TITLE), fields: { type: "array", items: fieldEntry, minItems: 1, maxItems: MAX_FIELDS }, submitLabel: strF(MAX_TITLE, "提交按钮文本") }, ["fields"]),
 ]
@@ -508,7 +529,7 @@ export function createUiRenderToolEntries(): ToolEntry[] {
       def: def(
         "ui_render",
         UI_RENDER_DESCRIPTION,
-        { card: { oneOf: BRANCHES, description: "组件描述（kind 判别 25 种，见各分支）" } },
+        { card: { oneOf: BRANCHES, description: "组件描述（kind 判别 26 种，见各分支）" } },
         ["card"],
       ),
     },

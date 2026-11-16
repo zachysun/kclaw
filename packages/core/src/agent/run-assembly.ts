@@ -530,6 +530,7 @@ export async function executeRun(engine: RunEngine, handoff: RunHandoff): Promis
     },
     web: { timeoutMs: config.web.timeoutMs, allowPrivateNetworks: config.web.allowPrivateNetworks, spillDir: paths.spillDir },
     sessionSearch: buildSessionSearch(engine.deps, sessionId),
+    uiCards: () => engine.deps.sessions.readMessages(sessionId),
     ...(engine.deps.historySearch === undefined ? {} : { historySearch: engine.deps.historySearch }),
     ...(engine.deps.processes === undefined ? {} : { processes: engine.deps.processes }),
     ...(engine.deps.cronScheduler === undefined

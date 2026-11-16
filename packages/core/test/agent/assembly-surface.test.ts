@@ -113,16 +113,17 @@ describe("executeRun deps → surface forwarding (tiered disclosure)", () => {
     expect(names).not.toContain("cron_list")
     expect(names).not.toContain("subagent_run")
     expect(names).not.toContain("create_goal")
+    // deferred tier rides the pool too — ui_read joins tool_search, never the request
+    expect(names).not.toContain("ui_read")
     const system = captured[0]!.system as string
     expect(system).toContain("工具目录")
     expect(system).toContain("process_list")
     expect(system).toContain("cron_create")
     expect(system).toContain("create_goal")
-    // this engine wires no team host, so the deferred tier is empty here —
-    // its NAME-ONLY line is covered by the registry exposure tests; what
-    // this seam pins is that a listed tool always carries its description
-    // format and the deferred line never appears without deferred tools.
-    expect(system).not.toContain("低频工具（只列名字")
+    // this engine wires no team host, but ui_read is a deferred builtin — the
+    // name-only low-frequency line lists it (and nothing MCP-shaped)
+    expect(system).toContain("低频工具（只列名字")
+    expect(system).toContain("ui_read")
   })
 
   it("a cron-fired run loses the cron WRITE tools everywhere (anti-recursion survives tiering)", async () => {

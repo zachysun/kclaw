@@ -171,10 +171,23 @@ export interface UIBarItem {
 export interface UIChartCard {
   kind: "chart"
   title?: string
-  /** v1 renders "bar" only; the field reserves the extension slot. */
-  chartType?: "bar"
+  /** "bar" renders horizontal bars; "line" renders a time-series polyline
+   * whose points report back on click (question semantics — never disabled). */
+  chartType?: "bar" | "line"
   unit?: string
   items: UIBarItem[]
+}
+
+/** One headline number (KPI): label caption, display value, optional trend.
+ * `value` is a display string so the model can hand over formatted figures
+ * ("1,204", "3.2s"); `delta` gets its color from its leading sign at render. */
+export interface UIStatCard {
+  kind: "stat"
+  title?: string
+  label: string
+  value: string
+  unit?: string
+  delta?: string
 }
 
 /** A form is itself display-level: containers may embed it, model may emit it standalone. */
@@ -197,6 +210,7 @@ export type UIDisplayCard =
   | UIQuoteCard
   | UIIconCard
   | UIChartCard
+  | UIStatCard
   | UIFormCard
 
 export interface UICardBodyCard {
@@ -245,6 +259,45 @@ export type UIContainerCard =
 
 export type UICard = UIDisplayCard | UIContainerCard
 
+// ---- structural sniffing (pure, browser-safe) --------------------------------
+// Single-canon helpers: the web pending bar, the ui_read tool, and the meta
+// projection all decide "is this data a card / does it ask the user something"
+// through these two functions — no module hand-rolls its own kind list.
+
+const CARD_KINDS: ReadonlySet<string> = new Set([
+  "button", "link", "table", "list", "card", "tag", "badge", "tabs", "collapse",
+  "timeline", "tree", "carousel", "quote", "icon", "chart", "stat", "drawer", "form",
+])
+
+/** Structural sniff, not a validator: cards were validated at emit time — this
+ * only decides whether some executor's `data` payload is a card at all. */
+export function isUiCardData(data: unknown): data is UICard {
+  return (
+    typeof data === "object" && data !== null && !Array.isArray(data) &&
+    typeof (data as { kind?: unknown }).kind === "string" &&
+    CARD_KINDS.has((data as { kind: string }).kind)
+  )
+}
+
+/** Counts the interactive (decision-shaped) nodes inside a card tree: button
+ * and form cards, including ones nested in containers. Chart points are
+ * question semantics, not decisions, and are deliberately not counted — the
+ * pending-decision surfaces (web bar, session badge) aggregate on this. */
+export function cardInteractiveNodes(card: UICard): { buttons: number; forms: number } {
+  let buttons = 0
+  let forms = 0
+  const walk = (c: UICard): void => {
+    if (c.kind === "button") buttons++
+    else if (c.kind === "form") forms++
+    else if (c.kind === "card") c.body.forEach(walk)
+    else if (c.kind === "tabs") c.tabs.forEach((t) => t.content.forEach(walk))
+    else if (c.kind === "collapse" || c.kind === "drawer") c.children.forEach(walk)
+    else if (c.kind === "carousel") c.slides.forEach((s) => s.forEach(walk))
+  }
+  walk(card)
+  return { buttons, forms }
+}
+
 /**
  * Where a user message came from when it was a UI Card interaction: the
  * triggering card's tool callId, the picked button's label, or a form's
@@ -258,4 +311,23 @@ export interface UiActionRef {
   optionId?: string
   /** Form submits: field name → reported (label-form) value. */
   values?: Record<string, string>
+  /** True when the action settles a decision (button pick / form submit):
+   * only decision actions leave the meta.uiPending set and pin the settled
+   * state. Chart-point questions are repeatable by design — a card may hold
+   * a button AND a chart, and asking about a point must keep the button's
+   * decision open. */
+  decision?: boolean
+}
+
+/**
+ * One unresolved decision card in a session's meta projection (uiPending):
+ * the card's tool callId plus the message that carries it (message ids are
+ * monotonic ULIDs, so edit-and-retry truncation prunes by string compare).
+ * Entries leave the set when a user message reports a matching decision
+ * action (`decision: true`) — the set only ever holds still-unanswered cards,
+ * keeping meta.json light.
+ */
+export interface UiPendingRef {
+  cardCallId: string
+  messageId: string
 }

@@ -74,7 +74,7 @@ subagent run（`childRun`）的派生跳过：`memory-inject` 不检索、`auton
 | `position` | HookPosition | 挂载位置 |
 | `description?` | string | 描述（管理页显示） |
 | `enabled` | boolean | 是否启用 |
-| `order` | number | 同位置内升序执行；用户 hook 默认 1000（落在内置 10–99 之后） |
+| `order` | number | 同位置内升序执行；用户 hook 默认 1000（落在内置 5–40 之后） |
 | `failure` | `"fatal" \| "skip" \| "deny"` | 失败策略（见下） |
 | `origin` | `"builtin" \| "user"` | 来源 |
 | `timeoutMs?` | number | 条目级超时覆盖；默认 = 链默认（config `hooks.timeoutMs`，5000ms）；Infinity = 不限时 |

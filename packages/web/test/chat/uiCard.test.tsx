@@ -7,10 +7,10 @@
 import { describe, it, expect, vi } from "vitest"
 import { createRoot, type Root } from "react-dom/client"
 import { act } from "react"
-import { UiCardView, isUiCard } from "../../src/chat/UiCard.js"
-import type { UICard } from "@kclaw/core/protocol"
+import { UiCardView } from "../../src/chat/UiCard.js"
+import { isUiCardData, type UICard } from "@kclaw/core/protocol"
 
-function mount(card: UICard, props: { onAction?: (a: unknown) => void; picked?: unknown } = {}) {
+function mount(card: UICard, props: { onAction?: (a: unknown) => void; picked?: unknown; contextTitle?: string } = {}) {
   const container = document.createElement("div")
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -20,23 +20,25 @@ function mount(card: UICard, props: { onAction?: (a: unknown) => void; picked?: 
         card={card}
         onAction={props.onAction as never}
         picked={props.picked as never}
+        contextTitle={props.contextTitle}
       />,
     )
   })
   return { container, unmount: () => act(() => root.unmount()) }
 }
 
-describe("isUiCard gate", () => {
+describe("isUiCardData gate", () => {
   it("accepts objects whose kind is a known card kind", () => {
-    expect(isUiCard({ kind: "table" })).toBe(true)
-    expect(isUiCard({ kind: "form", fields: [] })).toBe(true)
+    expect(isUiCardData({ kind: "table" })).toBe(true)
+    expect(isUiCardData({ kind: "form", fields: [] })).toBe(true)
+    expect(isUiCardData({ kind: "stat", label: "q", value: "1" })).toBe(true)
   })
   it("rejects non-objects, arrays and unknown kinds", () => {
-    expect(isUiCard(undefined)).toBe(false)
-    expect(isUiCard("table")).toBe(false)
-    expect(isUiCard({ childSessionId: "ses_1" })).toBe(false)
-    expect(isUiCard({ kind: "widget" })).toBe(false)
-    expect(isUiCard([{ kind: "table" }])).toBe(false)
+    expect(isUiCardData(undefined)).toBe(false)
+    expect(isUiCardData("table")).toBe(false)
+    expect(isUiCardData({ childSessionId: "ses_1" })).toBe(false)
+    expect(isUiCardData({ kind: "widget" })).toBe(false)
+    expect(isUiCardData([{ kind: "table" }])).toBe(false)
   })
 })
 
@@ -64,6 +66,64 @@ describe("display kinds", () => {
     expect(fills[0].style.width).toBe("100%")
     expect(container.querySelectorAll(".ui-bar-row")[1].textContent).toContain("419 条")
     unmount()
+  })
+
+  it("line charts render points as repeatable questions", () => {
+    const onAction = vi.fn()
+    const { container, unmount } = mount(
+      {
+        kind: "chart", chartType: "line", title: "耗时趋势", unit: "ms",
+        items: [{ label: "周一", value: 120 }, { label: "周二", value: 80 }, { label: "周三", value: 200 }],
+      },
+      { onAction },
+    )
+    expect(container.querySelector('[data-testid="ui-line-chart"]')).not.toBeNull()
+    expect(container.querySelector("polyline")).not.toBeNull()
+    const points = container.querySelectorAll<HTMLButtonElement>('[data-testid="ui-line-point"]')
+    expect(points).toHaveLength(3)
+    unmount()
+    // 默认 chartType 仍是 bar：同一数据不写 chartType 时不出现折线。
+    const { container: barBox, unmount: unBar } = mount({
+      kind: "chart", unit: "ms",
+      items: [{ label: "周一", value: 120 }, { label: "周二", value: 80 }],
+    })
+    expect(barBox.querySelector('[data-testid="ui-line-chart"]')).toBeNull()
+    expect(barBox.querySelectorAll(".ui-bar-row")).toHaveLength(2)
+    unBar()
+
+    // 点位是提问语义：可重复点击、永不置灰。
+    const { container: clickBox, unmount: unClick } = mount(
+      {
+        kind: "chart", chartType: "line", title: "耗时趋势",
+        items: [{ label: "周三", value: 200 }],
+      },
+      { onAction },
+    )
+    // 单点序列画短平线（polyline 单点不渲染线段）。
+    expect(clickBox.querySelector("svg line.ui-line-path")).not.toBeNull()
+    expect(clickBox.querySelector("polyline")).toBeNull()
+    const point = clickBox.querySelector<HTMLButtonElement>('[data-testid="ui-line-point"]')!
+    act(() => point.click())
+    act(() => point.click())
+    expect(point.disabled).toBe(false)
+    expect(onAction).toHaveBeenCalledTimes(2)
+    expect(onAction).toHaveBeenLastCalledWith({ optionId: "周三", text: "[UI 卡] 耗时趋势：询问 周三 这个点的详情" })
+    unClick()
+  })
+
+  it("stat renders label/value/unit with sign-driven delta color", () => {
+    const { container, unmount } = mount(
+      { kind: "stat", label: "测试通过率", value: "98.2", unit: "%", delta: "+1.4pp" },
+    )
+    expect(container.querySelector('[data-testid="ui-stat"]')?.textContent).toContain("98.2 %")
+    expect(container.querySelector(".ui-stat-delta")?.textContent).toBe("+1.4pp")
+    expect(container.querySelector(".ui-stat-delta")?.className).toContain("ui-stat-up")
+    unmount()
+    const { container: downBox, unmount: unDown } = mount(
+      { kind: "stat", label: "构建耗时", value: "42", unit: "s", delta: "-3s" },
+    )
+    expect(downBox.querySelector(".ui-stat-delta")?.className).toContain("ui-stat-down")
+    unDown()
   })
 
   it("timeline, tree, quote, icon, list, tag, badge, link render their shapes", () => {
@@ -125,13 +185,29 @@ describe("display kinds", () => {
 })
 
 describe("button card", () => {
-  it("clicks report the label through onAction", () => {
+  it("clicks report the label through onAction with the unified prefix", () => {
     const onAction = vi.fn()
     const { container, unmount } = mount({ kind: "button", label: "先做 core" }, { onAction })
     act(() => {
       ;(container.querySelector("button") as HTMLButtonElement).click()
     })
-    expect(onAction).toHaveBeenCalledWith({ optionId: "先做 core", text: "选择：先做 core" })
+    expect(onAction).toHaveBeenCalledWith({ optionId: "先做 core", text: "[UI 卡] 选择 先做 core", decision: true })
+    unmount()
+  })
+
+  it("the nearest container title rides the action text", () => {
+    const onAction = vi.fn()
+    const { container, unmount } = mount(
+      {
+        kind: "card", title: "发布方案",
+        body: [{ kind: "button", label: "批准" }],
+      },
+      { onAction },
+    )
+    act(() => {
+      ;(container.querySelector(".ui-card button") as HTMLButtonElement).click()
+    })
+    expect(onAction).toHaveBeenCalledWith({ optionId: "批准", text: "[UI 卡] 发布方案：选择 批准", decision: true })
     unmount()
   })
 

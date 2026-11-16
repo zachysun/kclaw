@@ -108,7 +108,7 @@ export type AnyAgentEvent = { [T in EventType]: AgentEvent<T> }[EventType]
 | `message.queued` | `messageId`、`disposition`（steer/wait/interrupt）、`position?`（wait/interrupt 的队列序位） |
 | `message.steered` | `messageId`（事件级 runId 标识注入的 run） |
 | `message.queue_cancelled` | `messageId?`、`all?`、`messageIds?`（`all` 时列出实际撤回的条目） |
-| `compaction.started` | `phase`（in-run/post-run/manual）、`trigger`（auto/manual/in-run） |
+| `compaction.started` | `phase`（in-run/post-run/manual）、`trigger?`（auto/manual/in-run） |
 | `compaction.completed` | `segments`、`kept`、`phase`、`result`（ok/failed/cancelled；非 ok 时前两值为 0）、`trigger`（auto/manual/in-run；非 ok 不带）、`emergency?`（急救压缩且成功时为 true） |
 | `hook.failed` | `hook`、`position`、`error`、`phase`（load/run） |
 

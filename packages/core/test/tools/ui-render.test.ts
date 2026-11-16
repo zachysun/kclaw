@@ -135,4 +135,34 @@ describe("ui_render tool", () => {
     expect(r.status).toBe("error")
     expect(r.output).toContain("args.card")
   })
+
+  it("chart line 保留显式 chartType，缺省仍视为 bar", async () => {
+    const line = await call({ card: card({ kind: "chart", title: "近四周趋势", chartType: "line", unit: "次", items: [{ label: "10-20", value: 3 }, { label: "10-27", value: 7 }] }) })
+    expect(line.status).toBe("ok")
+    expect(line.data).toEqual({ kind: "chart", title: "近四周趋势", chartType: "line", unit: "次", items: [{ label: "10-20", value: 3 }, { label: "10-27", value: 7 }] })
+    const bare = await call({ card: card({ kind: "chart", items: [{ label: "a", value: 1 }] }) })
+    expect(bare.data).toEqual({ kind: "chart", items: [{ label: "a", value: 1 }] })
+    const explicitBar = await call({ card: card({ kind: "chart", chartType: "bar", items: [{ label: "a", value: 1 }] }) })
+    expect(explicitBar.data).toEqual({ kind: "chart", chartType: "bar", items: [{ label: "a", value: 1 }] })
+  })
+
+  it("stat 合法样例进 data，回执带值；非法样例按字段路径报错", async () => {
+    const ok = await call({ card: card({ kind: "stat", title: "本周", label: "运行次数", value: "1,204", unit: "次", delta: "+12%" }) })
+    expect(ok.status).toBe("ok")
+    expect(ok.data).toEqual({ kind: "stat", title: "本周", label: "运行次数", value: "1,204", unit: "次", delta: "+12%" })
+    expect(ok.output).toContain("1,204 次")
+    const missingValue = await call({ card: card({ kind: "stat", label: "只有名字" }) })
+    expect(missingValue.status).toBe("error")
+    expect(missingValue.output).toContain("card.value")
+    const overLong = await call({ card: card({ kind: "stat", label: "L", value: "x".repeat(501) }) })
+    expect(overLong.status).toBe("error")
+    expect(overLong.output).toContain("上限")
+  })
+
+  it("description 的选型映射与配方句覆盖本批新增能力", () => {
+    expect(UI_RENDER_DESCRIPTION).toContain("chart(line)")
+    expect(UI_RENDER_DESCRIPTION).toContain("stat")
+    expect(UI_RENDER_DESCRIPTION).toContain("请示批准")
+    expect(UI_RENDER_DESCRIPTION).toContain("26 种组件")
+  })
 })
