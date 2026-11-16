@@ -188,7 +188,7 @@ gate 的两个 daemon 侧输入（都来自 `ConfigPermissionGateOptions`）：
 
 | 处理方式 | 派生规则 | 当前成员 |
 |------|----------|------------|
-| safeTools 自动放行 | `risk === "safe"` | 全部 `risk === "safe"` 的内置工具（目前 32 个，清单见下节按 risk 推导） |
+| safeTools 自动放行 | `risk === "safe"` | 全部 `risk === "safe"` 的内置工具（目前 33 个，清单见下节按 risk 推导） |
 | readonly 无条件拒绝（且不进入只读 run 的模型工具清单） | `risk === "sensitive"` | bash、fs_write、fs_edit、cron_create、cron_update、cron_delete、create_goal、update_goal |
 | 路径规范化双匹配（防拼写绕过） | 带 `path` 参数且 sensitive | fs_write、fs_edit |
 | 工作目录边界检查 | 带 `path` 参数 | fs_read、fs_list、fs_write、fs_edit |

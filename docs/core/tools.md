@@ -44,6 +44,7 @@ export function createBuiltinTools(opts: {
   web?: Partial<{ timeoutMs: number; allowPrivateNetworks: boolean; spillDir: string }>
   sessionSearch?: SessionSearchFn    // session_search 的检索后端（server 每 run 注入）；缺失时工具仍注册、返回"(无可检索内容)"
   historySearch?: HistorySearchFn    // history_search 的检索后端（server 每 run 注入，跨会话原始消息）；缺失时工具仍注册、返回固定不可用文案
+  uiCards?: UiCardsFn                // ui_read 的数据源（本会话消息投影的惰性读取）；组装恒传，裸引擎测试省略
   skills?: SkillRecord[]             // 技能目录扫描结果：skill_read 按名加载正文（见 skills.md）
   recordSkillUse?: (name: string, origin: "global" | "project") => void
                                      // skill_read 使用记录（供 curator 管理技能生命周期，见 skills.md）；缺失时不记录

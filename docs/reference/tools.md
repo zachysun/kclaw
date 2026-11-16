@@ -1,4 +1,4 @@
-# tools — 内置工具清单（40 个）
+# tools — 内置工具清单（41 个）
 
 > 权威来源：`packages/core/src/tools/` 下各工具模块（每个模块的 `createXxxToolEntries` 工厂把执行器与模型侧 JSON Schema 成对打包，参数校验与行为同居一处）与 `packages/core/src/tools/index.ts`（注册表组装：路由组装参数、汇成 entries 列表）。机制见 [tools](../core/tools.md)，权限判定链见 [permissions](../core/permissions.md)。
 

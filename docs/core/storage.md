@@ -88,6 +88,8 @@ export function resolvePaths(home?: string): KclawPaths
 | `team.maxActive` | `4` | 同时运行的组员上限；满员时新信在收信箱排队，等有组员空闲时投递 |
 | `team.mailbox.maxUnreadPerTarget` / `maxMessageBytes` | `64` / `65536` | 单个收信箱未读上限 / 单条信字节上限，超限投递方收到 error 结果 |
 | `team.taskBoard.maxTasks` | `64` | 任务板总量上限（含终态任务），超限建任务报错 |
+| `skills.evolution.{enabled, idleMinutes}` | `true` / `10` | 技能进化（提案制自改进）的总开关与空闲窗口（见 [skills](./skills.md)）：`false` 时功能整体关闭（run 收尾不排提炼检查、调度器不处理、`skill_create` 返回固定关闭文案，已有提案文件照常可列出）；`idleMinutes` 是 run 结束后到提炼检查可触发的空闲分钟数（与 `memory.write.idleMinutes` 相互独立，`0` 关闭延迟补查，只剩 `skill_create` 一条提案路径）。加载时逐字段校验：`enabled` 非布尔值回退 `false` 并告警，`idleMinutes` 负数/非整数回退 `10` 并告警 |
+| `skills.curator.{enabled, staleDays, archiveDays, hour}` | `true` / `14` / `30` / `4` | 技能 curator（学习循环的生命周期半场，见 [skills](./skills.md)）：按使用遥测对「AI 自建」的全局技能做陈旧标记（连续未使用 `staleDays` 天）与归档（连续未使用 `archiveDays` 天后整目录移入 `<skillsDir>/.archive/`，移动不是删除，可随时移回；用户手写技能、pin 技能与复用链接豁免）；`hour` 是每日巡检的本地小时（过了该点且今天未运行过则执行，负值关闭）。加载时逐字段校验，非法值回退默认并告警 |
 | `goals.judge` | `""` | `/goal` 判定器使用的 provider 条目名（见 [goal](./goal.md)），空 = 回退会话模型线（会话级 model → 默认条目）；循环的硬性上限（轮数/token budget 等）是代码内常量，不进 config |
 | `server.port` | 无（临时端口） | daemon 的固定监听端口（1-65535）：固定后 WebUI 地址跨重启稳定，不配则每次启动由操作系统分配临时端口。bin 的 `--port` 旗标优先于此字段；固定端口被占用是硬错误（报一行原因后退出，绝不静默换端口：固定端口就是为了让地址不变），非法值回退到临时端口并告警。见 [daemon](../server/daemon.md) |
 | `notify.channels` | `[]` | 定时任务终态通知渠道列表；为空即关闭（零开销）。条目 `{ name?, type, url, template? }`，`type` 三种：`bark`（POST JSON `{title, body}`）、`serverchan`（POST 表单 `title`+`desp`）、`webhook`（POST JSON，正文含 title/body 及全部 cron 字段）。`template` 占位符：`{{cron}}` `{{statusText}}` `{{status}}` `{{summary}}` `{{sessionId}}` `{{sessionUrl}}`，未知占位符渲染为空串 |
