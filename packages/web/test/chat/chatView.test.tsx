@@ -12,6 +12,7 @@ import { ChatView, type Disposition } from "../../src/chat/ChatView.js"
 import { availableSlashMenuMaxHeight } from "../../src/chat/Composer.js"
 import { compactionBars, type CompactionRecordView } from "../../src/chat/CompactionBars.js"
 import { initChat, type ChatState, type Message } from "../../src/chat/model.js"
+import type { PendingCardItem } from "../../src/chat/PendingBar.js"
 
 /** Optional props/view overrides for the new disposition/queue scenarios. */
 interface ViewOpts {
@@ -34,6 +35,11 @@ interface ViewOpts {
   onRetry?: (fromMessageId: string, text: string) => void
   onFork?: (messageId: string) => void
   forkPending?: boolean
+  /** 待拍板条数据（ChatPanel 计算）；undefined = 不渲染该条。 */
+  pendingCards?: PendingCardItem[]
+  /** UI 卡动作上报（ChatPanel 的 handleUiAction）。 */
+  onUiAction?: (callId: string, action: { optionId?: string; text?: string; decision?: boolean }) => void
+  readOnly?: boolean
 }
 
 function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
@@ -66,6 +72,9 @@ function mountView(messages: Message[] = [], opts: ViewOpts = {}) {
         noticeAction={opts.noticeAction}
         onDismissNotice={opts.onDismissNotice}
         mentionFiles={opts.mentionFiles}
+        pendingCards={opts.pendingCards}
+        onUiAction={opts.onUiAction}
+        readOnly={opts.readOnly}
       />,
     )
   })
@@ -793,5 +802,65 @@ describe("ChatView file mention suggestions", () => {
     type(h.input(), "@")
     expect(h.container.querySelector('[data-testid="slash-menu"]')).toBeNull()
     h.unmount()
+  })
+})
+
+describe("ChatView pending bar", () => {
+  const bar: PendingCardItem[] = [{ callId: "c1", messageId: "m2", title: "发布方案", summary: "按钮 ×1" }]
+
+  /** 一张已渲染的 UI 卡：assistant 发起 ui_render 调用，tool 结果带卡数据。 */
+  const uiMessages: Message[] = [
+    { id: "m1", sessionId: "s1", role: "assistant", createdAt: "2026-11-11T00:00:00.000Z", blocks: [
+      { id: "b1", type: "tool_call", callId: "c1", name: "ui_render", args: {}, argsJson: "{}" },
+    ] },
+    { id: "m2", sessionId: "s1", role: "tool", createdAt: "2026-11-11T00:00:01.000Z", blocks: [
+      { id: "b2", type: "tool_result", callId: "c1", status: "ok", output: "ok", durationMs: 5,
+        data: { kind: "card", title: "发布方案", body: [{ kind: "button", label: "批准" }] } },
+    ] },
+  ]
+
+  it("renders the strip above the composer and locates the card with a flash", () => {
+    const scrollIntoView = vi.fn()
+    Element.prototype.scrollIntoView = scrollIntoView
+    const h = mountView(uiMessages, { pendingCards: bar })
+    const strip = h.container.querySelector('[data-testid="pending-bar"]')
+    expect(strip).not.toBeNull()
+    expect(strip?.textContent).toContain("待你拍板 · 1 项")
+    // 点击条目：滚动目标由 data-ui-callid 反查，命中的卡短暂加 ui-flash
+    // （1200ms 后由真定时器移除，测试不等它）。
+    act(() => {
+      ;(h.container.querySelector('[data-testid="pending-item"]') as HTMLButtonElement).click()
+    })
+    expect(scrollIntoView).toHaveBeenCalled()
+    const card = document.querySelector('[data-ui-callid="c1"]')
+    expect(card?.className).toContain("ui-flash")
+    h.unmount()
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+  })
+
+  it("hides the strip for read-only views and when the list is empty", () => {
+    const h = mountView(uiMessages, { pendingCards: bar, readOnly: true })
+    expect(h.container.querySelector('[data-testid="pending-bar"]')).toBeNull()
+    h.unmount()
+    const empty = mountView([], { pendingCards: [] })
+    expect(empty.container.querySelector('[data-testid="pending-bar"]')).toBeNull()
+    empty.unmount()
+  })
+
+  it("keeps UI cards inert for read-only views", () => {
+    const onUiAction = vi.fn()
+    const h = mountView(uiMessages, { onUiAction, readOnly: true })
+    const btn = [...h.container.querySelectorAll('[data-testid="blk-ui-card"] button')]
+      .find((b) => b.textContent === "批准") as HTMLButtonElement
+    act(() => btn.click())
+    expect(onUiAction).not.toHaveBeenCalled()
+    h.unmount()
+    // 同一张卡在可写会话照常上报（只读语义只差 readOnly 一项）。
+    const live = mountView(uiMessages, { onUiAction })
+    const liveBtn = [...live.container.querySelectorAll('[data-testid="blk-ui-card"] button')]
+      .find((b) => b.textContent === "批准") as HTMLButtonElement
+    act(() => liveBtn.click())
+    expect(onUiAction).toHaveBeenCalledWith("c1", expect.objectContaining({ optionId: "批准", decision: true }))
+    live.unmount()
   })
 })

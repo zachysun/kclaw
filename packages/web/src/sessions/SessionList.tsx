@@ -347,6 +347,11 @@ export function SessionList({
                               fork
                             </span>
                           )}
+                          {meta.deleted !== true && (meta.uiPending?.length ?? 0) > 0 && (
+                            <span className="session-pending-badge" data-testid={`session-pending-badge-${meta.id}`} title={`${meta.uiPending!.length} 项待拍板`}>
+                              {meta.uiPending!.length}
+                            </span>
+                          )}
                         </span>
                         <span className="session-meta">
                           {meta.workdir !== undefined && (

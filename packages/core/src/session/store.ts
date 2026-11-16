@@ -74,6 +74,13 @@ export interface SessionMeta {
    * 还在但不会自动继续运行（ADR-0002）。
    */
   goal?: GoalSnapshot
+  /**
+   * 未决 UI 卡（待用户拍板的按钮/表单卡）：message 事件追加（ui_render 结果
+   * 含交互节点时）、带 uiAction 的用户消息移除、message.truncated 按 messageId
+   * 清理（id 单调 ULID，字符串比较即创建顺序）。只存未决条目，已决即删，
+   * meta.json 体量不随之增长。会话列表接口原样携带，供侧栏角标计数。
+   */
+  uiPending?: import("../protocol/ui-cards.js").UiPendingRef[]
 }
 
 const META_FILE = "meta.json"

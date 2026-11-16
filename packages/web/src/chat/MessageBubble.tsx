@@ -8,9 +8,10 @@
  * render-stable (the owner passes ids instead of per-message closures).
  */
 import { memo } from "react"
+import { isUiCardData } from "@kclaw/core/protocol"
 import { MarkdownText } from "./Markdown.js"
 import { parseTeamMail, type RenderedBlock, type RenderedMessage, type ToolPairing } from "./model.js"
-import { isUiCard, UiCardBoundary, UiCardView } from "./UiCard.js"
+import { UiCardBoundary, UiCardView } from "./UiCard.js"
 import type { UiCardAction } from "./UiCardForm.js"
 import { TOOL_CARDS, oneLine } from "./ToolCards.js"
 import { IconButton } from "../ui/IconButton.js"
@@ -210,9 +211,10 @@ function BlockView({ block, markdown, onOpenAudit, onUiAction, uiPicks, toolPair
       // A UI Card rides `data`: render the interactive component instead of
       // the plain collapse row. Anything unparsable keeps the fallback view;
       // a renderer that throws degrades to the raw JSON row (never a blank).
-      if (block.status === "ok" && isUiCard(block.data)) {
+      if (block.status === "ok" && isUiCardData(block.data)) {
         return (
-          <div className="blk-ui-card" data-testid="blk-ui-card">
+          // data-ui-callid is the pending bar's scroll target (locate & flash).
+          <div className="blk-ui-card" data-testid="blk-ui-card" data-ui-callid={block.callId}>
             <UiCardBoundary
               fallback={
                 <details className="blk-tool-result" data-testid="blk-ui-card-raw">

@@ -43,6 +43,7 @@ import { createSubagentToolEntries } from "./subagent.js"
 import { createTeamToolEntries } from "./team.js"
 import { createAskToolEntries } from "./ask.js"
 import { createUiRenderToolEntries } from "./ui-render.js"
+import { createUiReadToolEntries, type UiCardsFn } from "./ui-read.js"
 
 export { createAskUserQuestionsTool, createAskToolEntries, ASK_USER_QUESTIONS_DESCRIPTION, type QuestionEventEmitter } from "./ask.js"
 export { createBashTool, createBashToolEntries, truncateMiddle } from "./bash.js"
@@ -61,6 +62,7 @@ export { createSessionTools, createSessionToolEntries, type SessionSearchFn } fr
 export { createHistoryTool, createHistoryToolEntries, HISTORY_SEARCH_DESCRIPTION, HISTORY_SEARCH_MAX_LIMIT, type HistorySearchFn } from "./history.js"
 export { searchSessionEvents, type SessionHit } from "./session-search.js"
 export { createSkillTools, createSkillToolEntries, SKILL_READ_DESCRIPTION } from "./skills.js"
+export { createUiReadToolEntries, type UiCardsFn } from "./ui-read.js"
 export { createSubagentTool, createSubagentCollectTool, createSubagentToolEntries, SUBAGENT_RUN_DESCRIPTION, SUBAGENT_COLLECT_DESCRIPTION } from "./subagent.js"
 export { createTeamToolEntries, CREATE_TEAM_DESCRIPTION, SPAWN_TEAMMATE_DESCRIPTION } from "./team.js"
 export { createWebTools, createWebToolEntries } from "./web.js"
@@ -80,6 +82,8 @@ export function createBuiltinTools(opts: {
   sessionSearch?: SessionSearchFn
   /** 跨会话原始消息检索（history_search 的数据源）；默认返回固定不可用文案。 */
   historySearch?: HistorySearchFn
+  /** ui_read 的数据源（本会话消息投影的惰性读取）；组装恒传，裸引擎测试省略。 */
+  uiCards?: UiCardsFn
   /** Skills scanned for this run (progressive disclosure's on-demand half). */
   skills?: SkillRecord[]
   /** skill_read 使用遥测（curator 生命数据）；默认不记。 */
@@ -191,8 +195,11 @@ export function createBuiltinTools(opts: {
     // skill_read/skill_list 位置无感知（进的是排序后的数组）。
     ...createSkillToolEntries(opts.skills ?? [], opts.skillCreate, opts.recordSkillUse),
     // ui_render 无条件注册（safe 展示面，主线程与子会话同享）；directory 档，
-    // 完整 schema 经 tool_search 取回（25 分支不进每请求基线）。
+    // 完整 schema 经 tool_search 取回（26 分支不进每请求基线）。
     ...createUiRenderToolEntries(),
+    // ui_read 同享 ui_render 的展示面（deferred 档：零常驻成本，经 tool_search
+    // 提升；压缩后按 callId 回捞已渲染卡的数据源）。数据源缺席时得到固定文案。
+    ...createUiReadToolEntries(opts.uiCards),
   ]
 
   // Subagent surface rules (issue #16): a child run drops memory_save (memory

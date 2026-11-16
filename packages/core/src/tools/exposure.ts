@@ -56,7 +56,7 @@ export const TOOL_EXPOSURE: Record<string, Exposure> = {
   create_goal: "directory",
   get_goal: "directory",
   update_goal: "directory",
-  // 25-branch card schema is far too heavy to ride every request (4-8k tokens);
+  // 26-branch card schema is far too heavy to ride every request (4-8k tokens);
   // the directory line keeps the capability visible, tool_search fetches the
   // full card on demand, and the runtime validator catches stale schemas.
   ui_render: "directory",
@@ -68,4 +68,6 @@ export const TOOL_EXPOSURE: Record<string, Exposure> = {
   task_create: "deferred",
   task_update: "deferred",
   task_list: "deferred",
+  // 压缩后的低频追问路径：按 callId 回捞已渲染卡的 DSL（平时零常驻成本）
+  ui_read: "deferred",
 }

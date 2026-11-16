@@ -16,7 +16,8 @@ import { parseSlashInput, skillCommandMeta } from "@kclaw/core/commands"
 import { isPermissionMode, type PermissionMode } from "@kclaw/core/permission-modes"
 import type { ConfirmationDecision, UiActionRef } from "@kclaw/core/protocol"
 import { ApiError, type ApiClient } from "../api.js"
-import { OPEN_CHANGES, PROVIDERS_CHANGED, SKILLS_CHANGED } from "../events.js"
+import { OPEN_CHANGES, PROVIDERS_CHANGED, SESSIONS_CHANGED, SKILLS_CHANGED, emitSessionsChanged } from "../events.js"
+import { cardInteractiveNodes, isUiCardData } from "@kclaw/core/protocol"
 import { ChangesPanel, type ChangesFocus } from "../changes/ChangesPanel.js"
 import { WsAuthError, type WsClient } from "../ws.js"
 import {
@@ -139,6 +140,22 @@ function localId(): string {
 function errorFrameMessage(frame: unknown): string | null {
   const message = (frame as { message?: unknown }).message
   return typeof message === "string" ? message : null
+}
+
+/** localPicks updater：删除提交文本等于给定文本的决策条目（错误帧回滚用，
+ * 文本是决策的唯一客户端可见标识）。没有匹配条目时保持原引用。 */
+function dropLocalPick(text: string): (prev: Map<string, UiCardAction>) => Map<string, UiCardAction> {
+  return (prev) => {
+    let changed = false
+    const next = new Map(prev)
+    for (const [callId, action] of prev) {
+      if (action.text === text) {
+        next.delete(callId)
+        changed = true
+      }
+    }
+    return changed ? next : prev
+  }
 }
 
 export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten, onOpenAudit, onOpenMcp, onReturnToParent, onForked, onConnectionState }: ChatPanelProps) {
@@ -401,7 +418,16 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
                 // 没有任何服务端事件会来认领它，不回滚就永远停在"待确认"态。
                 // 帧按线序到达，ack 先于任何后续帧，已确认的发送不受影响——
                 // 与 ack 采纳（adoptQueuedId）对称。无待确认发送时是空操作。
-                updateView((v) => ({ ...dropEarliestPendingSend(v), error: message }))
+                let droppedText: string | null = null
+                updateView((v) => {
+                  const rolled = dropEarliestPendingSend(v)
+                  droppedText = rolled.droppedText
+                  return { ...rolled.state, error: message }
+                })
+                // 被拒的是 UI 卡决策时同步清掉本地已选态：卡片恢复可点、
+                // 聚合条恢复显示（决策文案按行文本反查——同一张卡的决策
+                // 文案唯一）。
+                if (droppedText !== null) setLocalPicks(dropLocalPick(droppedText))
               }
             }
           } catch (err) {
@@ -643,21 +669,46 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
   const [localPicks, setLocalPicks] = useState<Map<string, UiCardAction>>(() => new Map())
   const handleUiAction = useCallback((callId: string, action: UiCardAction) => {
     if (action.text === undefined || action.text === "") return
-    setLocalPicks((prev) => new Map(prev).set(callId, action))
-    sendMessageRaw(action.text, undefined, [], null, {
-      cardCallId: callId,
-      ...(action.optionId !== undefined ? { optionId: action.optionId } : {}),
-      ...(action.values !== undefined ? { values: action.values } : {}),
-    })
+    // 决策类点击立即写已选态（乐观置灰：乐观回显尚未变成带 uiAction 的
+    // 持久消息之前按钮就已禁用，连点不会重复提交）；提问类（折线点位
+    // 追问）可重复，不写已选态。
+    if (action.decision === true) setLocalPicks((prev) => new Map(prev).set(callId, action))
+    try {
+      sendMessageRaw(action.text, undefined, [], null, {
+        cardCallId: callId,
+        ...(action.optionId !== undefined ? { optionId: action.optionId } : {}),
+        ...(action.values !== undefined ? { values: action.values } : {}),
+        ...(action.decision === true ? { decision: true } : {}),
+      })
+    } catch {
+      // 断连时 socket.send 直接抛错：决策的乐观已选态必须回滚（按钮恢复
+      // 可点），否则按钮停在假拍板（已选择）而消息从未离开本机。
+      if (action.decision === true) {
+        setLocalPicks((prev) => {
+          const next = new Map(prev)
+          next.delete(callId)
+          return next
+        })
+      }
+      setNotice("连接不可用，请稍后重试")
+      return
+    }
+    // 本端拍板即刷侧栏（meta 投影里 uiPending 的移除要等下一次 /sessions 拉取；
+    // 事件让角标即时消失，其他设备走既有 10s 轮询收敛）。提问类动作不改
+    // meta 投影，这次刷新对它是幂等空转。
+    emitSessionsChanged()
   }, [sendMessageRaw])
 
   /** callId → 已发生的卡动作（反查持久已选态：按钮禁用、表单快照）。
-   * 持久消息优先，本地点击补位（窗口期：发送后 message.created 到达前）。 */
+   * 持久消息优先，本地点击补位（窗口期：发送后 message.created 到达前）。
+   * 只认决策类动作：提问类回传（折线点位追问）不产生已选态——混合卡
+   * （按钮与折线同卡）上追问一个点，按钮的决策保持未决。 */
   const uiPicks = useMemo(() => {
     const picks = new Map(localPicks)
     for (const m of view.messages) {
       if (m.role !== "user" || m.uiAction === undefined) continue
       const a = m.uiAction
+      if (a.decision !== true) continue
       picks.set(a.cardCallId, {
         ...(a.optionId !== undefined ? { optionId: a.optionId } : {}),
         ...(a.values !== undefined ? { values: a.values } : {}),
@@ -665,6 +716,30 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
     }
     return picks
   }, [localPicks, view.messages])
+
+  /** 未决卡清单（待拍板聚合条的数据源）：带按钮/表单节点的 UI 卡，其 callId
+   * 尚无任何动作回传。chart 是提问类，不计入。新在上。 */
+  const pendingCards = useMemo(() => {
+    const picked = new Set(uiPicks.keys())
+    const out: Array<{ callId: string; messageId: string; title?: string; summary: string }> = []
+    for (const m of view.messages) {
+      if (m.role !== "tool") continue
+      for (const b of m.blocks) {
+        if (b.kind !== "tool_result" || b.status !== "ok" || b.data === undefined) continue
+        if (!isUiCardData(b.data)) continue
+        const { buttons, forms } = cardInteractiveNodes(b.data)
+        if (buttons === 0 && forms === 0) continue
+        if (picked.has(b.callId)) continue
+        // 条目标题：卡标题优先；顶层裸按钮卡没有 title 字段，退到它的 label。
+        const title = "title" in b.data && typeof b.data.title === "string" && b.data.title !== ""
+          ? b.data.title
+          : b.data.kind === "button" && b.data.label !== "" ? b.data.label : undefined
+        const summary = forms > 0 ? (buttons > 0 ? `按钮 ×${buttons} · 表单` : "表单") : `按钮 ×${buttons}`
+        out.push({ callId: b.callId, messageId: m.id, title, summary })
+      }
+    }
+    return out.reverse()
+  }, [view.messages, uiPicks])
 
   /**
    * 提交一条消息，返回是否被接受：composer 依据它决定清不清草稿（false =
@@ -918,6 +993,7 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           onSend={handleSend}
           onUiAction={handleUiAction}
           uiPicks={uiPicks}
+          pendingCards={pendingCards}
           onResolveConfirmation={handleResolveConfirmation}
           onAnswerQuestion={handleAnswerQuestion}
           pendingAttachments={pendingAttachments}

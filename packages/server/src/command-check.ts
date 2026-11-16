@@ -152,12 +152,15 @@ export function checkCommandFrame(frame: object, deps: CheckDeps): FrameCheck {
       // UI Card provenance: shape-checked here, trusted as display-only downstream.
       const { uiAction } = msg
       if (uiAction !== undefined) {
-        const a = uiAction as { cardCallId?: unknown; optionId?: unknown; values?: unknown }
+        const a = uiAction as { cardCallId?: unknown; optionId?: unknown; values?: unknown; decision?: unknown }
         if (typeof a.cardCallId !== "string" || a.cardCallId.length === 0) {
           return { kind: "error", message: "send_message uiAction requires a non-empty string cardCallId" }
         }
         if (a.optionId !== undefined && (typeof a.optionId !== "string" || a.optionId.length === 0)) {
           return { kind: "error", message: "send_message uiAction.optionId must be a non-empty string" }
+        }
+        if (a.decision !== undefined && typeof a.decision !== "boolean") {
+          return { kind: "error", message: "send_message uiAction.decision must be a boolean" }
         }
         if (a.values !== undefined) {
           if (typeof a.values !== "object" || a.values === null || Array.isArray(a.values)) {

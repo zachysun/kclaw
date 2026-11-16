@@ -5,6 +5,8 @@
  * THIS file are the REST response shapes the web UI models itself (the
  * UI-relevant subset of what the HTTP routes return).
  */
+import type { UiPendingRef } from "@kclaw/core/protocol"
+
 export type {
   AgentEvent, AttachmentBlock, AttachmentSource, Block, Message, NoteBlock, NoteKind, Role,
   TextBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock, ToolStatus, Usage,
@@ -14,7 +16,7 @@ export type {
   TeamAuditEvent, TeamCreatedEvent, TeamMemberProvisionedEvent, TeamMemberSettledEvent,
   TeamMessageDeliveredEvent, TeamMessageQueuedEvent, TeamTaskCreatedEvent, TeamTaskUpdatedEvent,
   GoalEvent, GoalSetEvent, GoalClearedEvent, GoalCheckedEvent, TodoItem, TodoWrittenEvent,
-  UiActionRef,
+  UiActionRef, UiPendingRef,
 } from "@kclaw/core/protocol"
 export type { GoalGateOutcome, GoalJudgeResult, GoalSnapshot, GoalState, GoalStopReason, GoalVerdict } from "@kclaw/core/protocol"
 // The core canon names this GrantedBy; the web UI's historical name stays.
@@ -33,6 +35,8 @@ export interface SessionMeta {
   deletedAt?: string
   /** fork 血缘（单边：只有 fork 出的新会话带）；sessionId = 来源会话。 */
   forkedFrom?: { sessionId: string; messageId?: string }
+  /** 未决 UI 卡（待拍板的按钮/表单卡，事件折叠投影）：侧栏角标的计数来源。 */
+  uiPending?: UiPendingRef[]
 }
 
 /** Wire shape of `GET /fs/browse` (the workdir picker's directory listing). */

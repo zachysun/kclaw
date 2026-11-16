@@ -4,6 +4,7 @@ import type {
   HookEvent, SessionRenamedEvent, SessionRestoredEvent, SessionSetEvent, SessionEvent, SkillEvent, SystemEvent, TeamAuditEvent,
   GoalCheckedEvent, GoalClearedEvent, GoalSetEvent, TodoWrittenEvent,
 } from "../protocol/session-events.js"
+import { cardInteractiveNodes, isUiCardData } from "../protocol/ui-cards.js"
 import type { SessionMeta } from "./store.js"
 
 // The event types live in protocol/session-events.ts (the browser-safe
@@ -74,7 +75,37 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
       next.updatedAt = event.at
       break
     }
-    case "message": next.updatedAt = event.createdAt; break
+    case "message": {
+      next.updatedAt = event.createdAt
+      // uiPending fold: interactive cards join the pending set, actions on
+      // them leave it. One tool message may carry several ui_render blocks —
+      // each interactive card registers under its own callId (dedup makes a
+      // replayed/resent message idempotent). Pure projection — the event
+      // stream stays the authority.
+      if (event.role === "tool") {
+        for (const b of event.blocks) {
+          if (b.type !== "tool_result" || b.data === undefined) continue
+          if (!isUiCardData(b.data)) continue
+          const { buttons, forms } = cardInteractiveNodes(b.data)
+          if (buttons === 0 && forms === 0) continue
+          const pending = next.uiPending ?? []
+          if (pending.some((p) => p.cardCallId === b.callId)) continue
+          next.uiPending = [...pending, { cardCallId: b.callId, messageId: event.id }]
+        }
+      } else if (event.role === "user" && event.uiAction?.decision === true) {
+        // Only decision actions settle a card (registration and removal share
+        // the same criterion): chart-point questions are repeatable and a
+        // mixed card's button stays pending after one.
+        const action = event.uiAction
+        const pending = next.uiPending
+        if (pending !== undefined) {
+          const rest = pending.filter((p) => p.cardCallId !== action.cardCallId)
+          if (rest.length === 0) delete next.uiPending
+          else if (rest.length !== pending.length) next.uiPending = rest
+        }
+      }
+      break
+    }
     case "message.truncated": {
       // Truncation (edit & retry / regenerate) is a user-visible session
       // action and advances updatedAt. When the start id crosses the
@@ -87,6 +118,13 @@ export function applyEvent(meta: SessionMeta, event: SessionEvent): SessionMeta 
       const anchor = next.compaction?.upto
       if (anchor !== undefined && event.fromMessageId <= anchor) {
         delete next.compaction
+      }
+      // Pending cards living in the truncated range leave the projection with
+      // their messages — no decision surface for a card the chat no longer shows.
+      if (next.uiPending !== undefined) {
+        const rest = next.uiPending.filter((p) => p.messageId < event.fromMessageId)
+        if (rest.length === 0) delete next.uiPending
+        else next.uiPending = rest
       }
       next.updatedAt = event.at
       break

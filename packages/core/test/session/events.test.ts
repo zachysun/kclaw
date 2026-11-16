@@ -173,3 +173,75 @@ describe("isSystemEvent", () => {
     for (const e of events) expect(isSystemEvent(e)).toBe(false)
   })
 })
+
+// ---- uiPending 折叠（未决 UI 卡投影） -----------------------------------------
+
+const buttonCard = { kind: "button", label: "批准" }
+const chartCard = { kind: "chart", items: [{ label: "a", value: 1 }] }
+
+/** tool 消息事件：一条 tool_result 块携带给定 data。 */
+const toolEvent = (id: string, callId: string, data: unknown): SessionEvent => ({
+  type: "message", id, sessionId: "ses_1", role: "tool", createdAt: "2026-01-02T00:00:00.000Z",
+  blocks: [{ id: `blk_${id}`, type: "tool_result", callId, status: "ok", output: "ok", data, durationMs: 1 }],
+})
+const userPick = (callId: string): SessionEvent => ({
+  type: "message", id: `msg_pick_${callId}`, sessionId: "ses_1", role: "user", createdAt: "2026-01-03T00:00:00.000Z",
+  blocks: [], uiAction: { cardCallId: callId, optionId: "批准", decision: true },
+})
+
+describe("applyEvent uiPending fold", () => {
+  it("tool 消息的交互卡进 uiPending；展示卡（chart）不进", () => {
+    const withCard = applyEvent(base, toolEvent("msg_1", "call_1", buttonCard))
+    expect(withCard.uiPending).toEqual([{ cardCallId: "call_1", messageId: "msg_1" }])
+    const withChart = applyEvent(base, toolEvent("msg_1", "call_1", chartCard))
+    expect(withChart.uiPending).toBeUndefined()
+  })
+
+  it("同一条 tool 消息多张交互卡逐块登记；重复事件按 callId 幂等", () => {
+    const two: SessionEvent = {
+      type: "message", id: "msg_1", sessionId: "ses_1", role: "tool", createdAt: "t",
+      blocks: [
+        { id: "b1", type: "tool_result", callId: "call_1", status: "ok", output: "ok", data: buttonCard, durationMs: 1 },
+        { id: "b2", type: "tool_result", callId: "call_2", status: "ok", output: "ok", data: { kind: "form", title: "f", fields: [{ kind: "input", name: "a", label: "A" }] }, durationMs: 1 },
+      ],
+    }
+    const both = applyEvent(base, two)
+    expect(both.uiPending).toEqual([{ cardCallId: "call_1", messageId: "msg_1" }, { cardCallId: "call_2", messageId: "msg_1" }])
+    const replayed = applyEvent(both, two)
+    expect(replayed.uiPending).toEqual(both.uiPending)
+  })
+
+  it("带 decision 的用户消息移除对应条目；清空后删除字段", () => {
+    const two = applyEvent(applyEvent(base, toolEvent("msg_1", "call_1", buttonCard)), toolEvent("msg_2", "call_2", buttonCard))
+    const oneLeft = applyEvent(two, userPick("call_1"))
+    expect(oneLeft.uiPending).toEqual([{ cardCallId: "call_2", messageId: "msg_2" }])
+    const noneLeft = applyEvent(oneLeft, { ...userPick("call_2"), id: "msg_pick_2" })
+    expect(noneLeft.uiPending).toBeUndefined()
+    // 摘除不存在的 callId：数组保持原样（引用不换）
+    const untouched = applyEvent(two, userPick("call_x"))
+    expect(untouched.uiPending).toBe(two.uiPending)
+  })
+
+  it("提问类回传（无 decision）不移除条目：混合卡上追问折线点位，按钮决策保持未决", () => {
+    // 混合卡：容器同卡装按钮与折线（登记判据认按钮），点位追问是提问语义。
+    const mixedCard = {
+      kind: "card", title: "发布",
+      body: [buttonCard, { kind: "chart", chartType: "line", items: [{ label: "周三", value: 200 }] }],
+    }
+    const withMixed = applyEvent(base, toolEvent("msg_1", "call_1", mixedCard))
+    expect(withMixed.uiPending).toEqual([{ cardCallId: "call_1", messageId: "msg_1" }])
+    const question: SessionEvent = {
+      type: "message", id: "msg_q1", sessionId: "ses_1", role: "user", createdAt: "t",
+      blocks: [], uiAction: { cardCallId: "call_1", optionId: "周三" },
+    }
+    expect(applyEvent(withMixed, question).uiPending).toEqual(withMixed.uiPending)
+  })
+
+  it("message.truncated 按 messageId 清理截断区间内的条目", () => {
+    const two = applyEvent(applyEvent(base, toolEvent("msg_a1", "call_1", buttonCard)), toolEvent("msg_b2", "call_2", buttonCard))
+    const cut = applyEvent(two, { type: "message.truncated", at: "t", fromMessageId: "msg_b2" })
+    expect(cut.uiPending).toEqual([{ cardCallId: "call_1", messageId: "msg_a1" }])
+    const allGone = applyEvent(cut, { type: "message.truncated", at: "t", fromMessageId: "msg_a1" })
+    expect(allGone.uiPending).toBeUndefined()
+  })
+})

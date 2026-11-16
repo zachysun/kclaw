@@ -321,4 +321,19 @@ describe("SessionList", () => {
     expect(container.querySelector('[data-testid="group-count-/ws/project"]')?.textContent).toBe("1")
     unmount(root, container)
   })
+
+  it("shows the pending-decision badge with the count and omits it elsewhere", () => {
+    const pending = { ...session("s1", "待拍板会话", "t"), uiPending: [{ cardCallId: "c1", messageId: "m1" }, { cardCallId: "c2", messageId: "m2" }] }
+    const plain = session("s2", "普通会话", "t")
+    const gone = { ...session("s3", "已删除会话", "t"), deleted: true, uiPending: [{ cardCallId: "c3", messageId: "m3" }] }
+    const { container, root } = mount({ sessions: [pending, plain, gone] })
+    const badge = container.querySelector('[data-testid="session-pending-badge-s1"]')
+    expect(badge).not.toBeNull()
+    expect(badge?.textContent).toBe("2")
+    expect(badge?.getAttribute("title")).toBe("2 项待拍板")
+    expect(container.querySelector('[data-testid="session-pending-badge-s2"]')).toBeNull()
+    // 删除会话整行都不可见，角标自然不存在。
+    expect(container.querySelector('[data-testid="session-pending-badge-s3"]')).toBeNull()
+    unmount(root, container)
+  })
 })

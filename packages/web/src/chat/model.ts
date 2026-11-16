@@ -295,17 +295,22 @@ export function dropLocalPending(state: ChatState, texts: string[]): ChatState {
  * any still-pending row), so "earliest bubble, else earliest row" walks send
  * order. The server rejected the retry WITHOUT truncating anything, so the
  * original message and its edit entry stay — only the phantom echo goes.
+ * The rolled row's text rides along (`droppedText`, null = nothing to roll)
+ * so callers can undo related client-local state (UI-card local picks).
  */
-export function dropEarliestPendingSend(state: ChatState): ChatState {
+export function dropEarliestPendingSend(state: ChatState): { state: ChatState; droppedText: string | null } {
   const bubbleIdx = earliestPendingLocalIdx(state.messages)
   if (bubbleIdx !== -1) {
-    return { ...state, messages: state.messages.filter((_, i) => i !== bubbleIdx) }
+    return {
+      state: { ...state, messages: state.messages.filter((_, i) => i !== bubbleIdx) },
+      droppedText: firstRenderedUserText(state.messages[bubbleIdx]),
+    }
   }
   const rowIdx = earliestPendingLocalRowIdx(state.queue)
   if (rowIdx !== -1) {
-    return { ...state, queue: state.queue.filter((_, i) => i !== rowIdx) }
+    return { state: { ...state, queue: state.queue.filter((_, i) => i !== rowIdx) }, droppedText: state.queue[rowIdx].text }
   }
-  return state
+  return { state, droppedText: null }
 }
 
 /** Narrow a wire disposition string to the view union ("wait" as the fallback). */
