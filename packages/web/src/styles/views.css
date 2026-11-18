@@ -763,6 +763,23 @@
   gap: var(--space-3);
 }
 
+.daily-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.daily-empty .pane-placeholder {
+  margin: 0;
+}
+
+.daily-main .form-error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
 .daily-card {
   border: 1px solid var(--border);
   border-radius: var(--radius);

@@ -186,7 +186,7 @@ describe("DailyView", () => {
       expect(c1.container.textContent).toContain("还没有项目日报")
     } finally { c1.root.unmount(); c1.container.remove() }
 
-    // 项目还没有任何日报
+    // 项目还没有任何日报：空态带"立即生成今天"入口（今天无文件象限的 UI 路径）
     const noReports = fakeApi({
       get: vi.fn(async (path: string) => {
         if (path === "/memory/daily/projects") return [{ id: "kclaw-a3f2c9", workdir: "/w/kclaw", latest: "" }]
@@ -194,10 +194,22 @@ describe("DailyView", () => {
         if (path === "/config") return { daily: { hour: 8, intervalDays: 1 } }
         throw new Error(`unexpected ${path}`)
       }),
+      post: vi.fn(async (path: string, body: { date: string }) => {
+        if (path === "/memory/daily/kclaw-a3f2c9/regenerate") {
+          expect(body.date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+          return { report: REPORT }
+        }
+        throw new Error(`unexpected ${path}`)
+      }),
     })
     const c2 = await mount(noReports)
     try {
       expect(c2.container.querySelector('[data-testid="daily-empty-project"]')).not.toBeNull()
+      await act(async () => {
+        ;(c2.container.querySelector('[data-testid="daily-generate-today"]') as HTMLButtonElement).click()
+      })
+      await flush()
+      expect(noReports.post).toHaveBeenCalled()
     } finally { c2.root.unmount(); c2.container.remove() }
 
     // 当天报告没有卡片
@@ -214,5 +226,79 @@ describe("DailyView", () => {
     try {
       expect(c3.container.querySelector('[data-testid="daily-no-cards"]')).not.toBeNull()
     } finally { c3.root.unmount(); c3.container.remove() }
+  })
+
+  it("distinguishes an index load failure from the empty state, with a retry", async () => {
+    const failing = fakeApi({
+      get: vi.fn(async (path: string) => {
+        if (path === "/memory/daily/projects") return [{ id: "kclaw-a3f2c9", workdir: "/w/kclaw", latest: "" }]
+        if (path === "/memory/daily/kclaw-a3f2c9") throw new Error("memory unavailable")
+        if (path === "/config") return { daily: { hour: 8, intervalDays: 1 } }
+        throw new Error(`unexpected ${path}`)
+      }),
+    })
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    const notices: string[] = []
+    const notice = (t: string): void => { notices.push(t) }
+    try {
+      await act(async () => {
+        root.render(<DailyView api={failing} notice={notice} onContinue={async () => {}} />)
+      })
+      await flush()
+      await flush()
+      // 索引失败是错误态，不得伪装成"还没有日报"空态
+      expect(container.querySelector('[data-testid="daily-dates-error"]')).not.toBeNull()
+      expect(container.querySelector('[data-testid="daily-empty-project"]')).toBeNull()
+      expect(notices.some((n) => n.includes("加载日报索引失败"))).toBe(true)
+      // 重试：失败一次后恢复 → 正常进入空态/日期流
+      ;(failing.get as ReturnType<typeof vi.fn>).mockImplementation(async (path: string) => {
+        if (path === "/memory/daily/projects") return [{ id: "kclaw-a3f2c9", workdir: "/w/kclaw", latest: "2026-11-19" }]
+        if (path === "/memory/daily/kclaw-a3f2c9") return { dates: ["2026-11-19"] }
+        if (path === "/memory/daily/kclaw-a3f2c9/2026-11-19") return REPORT
+        if (path === "/config") return { daily: { hour: 8, intervalDays: 1 } }
+        throw new Error(`unexpected ${path}`)
+      })
+      await act(async () => {
+        ;(container.querySelector('[data-testid="daily-dates-retry"]') as HTMLButtonElement).click()
+      })
+      await flush()
+      await flush()
+      expect(container.querySelector('[data-testid="daily-dates-error"]')).toBeNull()
+      expect(container.querySelector('[data-testid="daily-date"]')!.textContent).toBe("2026-11-19")
+    } finally {
+      root.unmount()
+      container.remove()
+    }
+  })
+
+  it("a report read failure renders an error with a retry that refetches", async () => {
+    let fail = true
+    const api = fakeApi({
+      get: vi.fn(async (path: string) => {
+        if (path === "/memory/daily/projects") return [{ id: "kclaw-a3f2c9", workdir: "/w/kclaw", latest: "2026-11-19" }]
+        if (path === "/memory/daily/kclaw-a3f2c9") return { dates: ["2026-11-19"] }
+        if (path === "/memory/daily/kclaw-a3f2c9/2026-11-19") {
+          if (fail) { fail = false; throw new Error("boom") }
+          return REPORT
+        }
+        if (path === "/config") return { daily: { hour: 8, intervalDays: 1 } }
+        throw new Error(`unexpected ${path}`)
+      }),
+    })
+    const { container, root } = await mount(api)
+    try {
+      expect(container.querySelector('[data-testid="daily-report-error"]')).not.toBeNull()
+      await act(async () => {
+        ;(container.querySelector('[data-testid="daily-report-retry"]') as HTMLButtonElement).click()
+      })
+      await flush()
+      expect(container.querySelector('[data-testid="daily-report-error"]')).toBeNull()
+      expect(container.querySelector('[data-testid="daily-cards"]')).not.toBeNull()
+    } finally {
+      root.unmount()
+      container.remove()
+    }
   })
 })

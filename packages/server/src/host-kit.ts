@@ -15,11 +15,13 @@
  * 的 nightlyLastRun 是有意的两处存储）。
  */
 
-/** 本地日期 YYYY-MM-DD（每日一次判定的判重键；与触发判定同用本地时间）。 */
-export function localDate(d: Date): string {
-  const p = (n: number): string => String(n).padStart(2, "0")
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
+import { localDateOf } from "@kclaw/core"
+
+// 本地日期 YYYY-MM-DD（每日一次判定的判重键；与触发判定同用本地时间）。
+// 单一出处收敛到 core 的 localDateOf——日报的窗锚与调度判重是同一个键，
+// 两端各留一份实现会单边漂移。skill-curator 与记忆调度器继续从本模块 import。
+const localDate = localDateOf
+export { localDate }
 
 /**
  * 每日一次判定（纯函数）：本地时刻过了 hour 且今天（本地日期）未运行 → due。

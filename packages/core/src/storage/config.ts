@@ -457,11 +457,22 @@ function parseConfig(raw: string, path: string): KclawConfig {
   return merged
 }
 
+/** daily.hour 的合法域：不超 23 的整数（负整数是合法的关闭表达，consolidateHour 同语义）。
+ *  与 routes/config.ts 的 PATCH 白名单共用——合法域只有这一份，改两处自动一致。 */
+export function isValidDailyHour(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value <= 23
+}
+
+/** daily.intervalDays 的合法域：正整数。与 routes/config.ts 的 PATCH 白名单共用。 */
+export function isValidDailyIntervalDays(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && (value as number) >= 1
+}
+
 /**
  * Daily section validation (team style): a non-mapping section falls back
- * wholesale; an hour outside 0-23 (negative integers are the legal "off"
- * expression, consolidateHour semantics) or a non-positive/non-integer
- * intervalDays falls back per field, each with one warning. Never throws.
+ * wholesale; an illegal hour or intervalDays falls back per field (the legal
+ * domains live in isValidDailyHour / isValidDailyIntervalDays), each with one
+ * warning. Never throws.
  */
 function validateDailyConfig(merged: KclawConfig): void {
   const daily = merged.daily
@@ -470,12 +481,11 @@ function validateDailyConfig(merged: KclawConfig): void {
     merged.daily = structuredClone(defaultConfig.daily)
     return
   }
-  // 负整数是合法的关闭表达（consolidateHour 同语义），只有超出 23 或非整数才非法。
-  if (!(typeof daily.hour === "number" && Number.isInteger(daily.hour) && daily.hour <= 23)) {
+  if (!isValidDailyHour(daily.hour)) {
     console.warn(`kclaw config: daily.hour ${String(daily.hour)} is invalid; falling back to 8`)
     daily.hour = 8
   }
-  if (!(typeof daily.intervalDays === "number" && Number.isInteger(daily.intervalDays) && daily.intervalDays >= 1)) {
+  if (!isValidDailyIntervalDays(daily.intervalDays)) {
     console.warn(`kclaw config: daily.intervalDays ${String(daily.intervalDays)} is invalid; falling back to 1`)
     daily.intervalDays = 1
   }

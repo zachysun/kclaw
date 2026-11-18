@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify"
-import { saveConfig, type KclawConfig, type KclawPaths } from "@kclaw/core"
+import { isValidDailyHour, isValidDailyIntervalDays, saveConfig, type KclawConfig, type KclawPaths } from "@kclaw/core"
 
 /** Store dependencies for the config route (injected by createApp). */
 export interface ConfigStores {
@@ -50,12 +50,12 @@ export function registerConfigRoutes(app: FastifyInstance, stores: ConfigStores)
       return reply.code(400).send({ error: "body must be { daily: { hour, intervalDays } }" })
     }
     const daily = body.daily as { hour?: unknown; intervalDays?: unknown }
-    // 与 core 的 validateDailyConfig 同一合法域：hour 负整数 = 关闭，0-23 整数
-    // = 时刻；intervalDays 正整数。
-    if (!(typeof daily.hour === "number" && Number.isInteger(daily.hour) && daily.hour <= 23)) {
+    // 合法域的单一出处在 core（isValidDailyHour/isValidDailyIntervalDays）：
+    // hour 负整数 = 关闭、不超 23 的整数 = 时刻；intervalDays 正整数。
+    if (!isValidDailyHour(daily.hour)) {
       return reply.code(400).send({ error: "hour must be an integer (0-23, negative disables daily)" })
     }
-    if (!(typeof daily.intervalDays === "number" && Number.isInteger(daily.intervalDays) && daily.intervalDays >= 1)) {
+    if (!isValidDailyIntervalDays(daily.intervalDays)) {
       return reply.code(400).send({ error: "intervalDays must be a positive integer" })
     }
     stores.config.daily = { hour: daily.hour, intervalDays: daily.intervalDays }

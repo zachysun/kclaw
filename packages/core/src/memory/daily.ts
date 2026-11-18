@@ -74,6 +74,9 @@ export function dailyFilePath(projectDir: string, date: string): string {
  * 日报卡片解析（宽容原则，同提取/沉淀）：剥代码围栏 + JSON.parse + 逐卡
  * 字段校验，非法卡丢弃记日志；超出上限的卡截断。整体不合法返回空数组。
  * 字段名与 DAILY_SYSTEM_PROMPT 的约定逐字一致。
+ * 围栏剥离与 JSON.parse 的前奏与提取/沉淀两处同形（第三份）：三处共用的
+ * 只有这两行，后面的逐条校验各管各的字段域，抽共享 helper 的扩散面大于
+ * 收益，故保留重复（AGENTS 原则 7）。
  */
 export function parseDailyCards(raw: string, log: (m: string) => void): DailyCard[] {
   let text = raw.trim()

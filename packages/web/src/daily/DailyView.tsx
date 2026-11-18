@@ -32,9 +32,12 @@ export function DailyView({ api, notice, onContinue }: {
   const [projects, setProjects] = useState<DailyProjectRow[] | null>(null)
   const [projectId, setProjectId] = useState<string | null>(null)
   const [dates, setDates] = useState<string[] | null>(null)
+  const [datesError, setDatesError] = useState(false)
   const [date, setDate] = useState<string | null>(null)
   const [report, setReport] = useState<DailyReport | null>(null)
   const [reportError, setReportError] = useState(false)
+  /** 错误态的重试驱动：自增触发报告 effect 重拉。 */
+  const [reportReloadTick, setReportReloadTick] = useState(0)
   const [settings, setSettings] = useState<DailySettings | null>(null)
   const [hourDraft, setHourDraft] = useState("")
   const [intervalDraft, setIntervalDraft] = useState("")
@@ -64,13 +67,14 @@ export function DailyView({ api, notice, onContinue }: {
 
   const openProject = useCallback(async (id: string): Promise<void> => {
     setProjectId(id)
-    setDates(null); setDate(null); setReport(null); setReportError(false)
+    setDates(null); setDatesError(false); setDate(null); setReport(null); setReportError(false)
     try {
       const { dates: ds } = await api.get<{ dates: string[] }>(`/memory/daily/${encodeURIComponent(id)}`)
       setDates(ds)
       if (ds.length > 0) setDate(ds[0]!)
     } catch (e) {
-      setDates([]); setReportError(true)
+      // 索引加载失败是错误态：不落"还没有日报"空态（空与错必须区分）。
+      setDatesError(true)
       notice(`加载日报索引失败: ${String(e)}`, "error")
     }
   }, [api, notice])
@@ -88,7 +92,7 @@ export function DailyView({ api, notice, onContinue }: {
       .then((r) => { if (!cancelled) setReport(r) })
       .catch(() => { if (!cancelled) setReportError(true) })
     return () => { cancelled = true }
-  }, [api, projectId, date])
+  }, [api, projectId, date, reportReloadTick])
 
   const saveSettings = (event: FormEvent): void => {
     event.preventDefault()
@@ -113,6 +117,23 @@ export function DailyView({ api, notice, onContinue }: {
     api.post<{ report: DailyReport }>(`/memory/daily/${encodeURIComponent(projectId)}/regenerate`, { date })
       .then((r) => { setReport(r.report); notice("已重新生成") })
       .catch((e) => notice(`重新生成失败: ${e instanceof Error ? e.message : String(e)}`, "error"))
+      .finally(() => setRegenerating(false))
+  }
+
+  /** "今天无文件"象限的 UI 入口：项目还没有日报（或今天缺报）时立即生成今天。 */
+  const generateToday = (): void => {
+    if (projectId === null) return
+    const d = new Date()
+    const p = (n: number): string => String(n).padStart(2, "0")
+    const today = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+    setRegenerating(true)
+    api.post<{ report: DailyReport }>(`/memory/daily/${encodeURIComponent(projectId)}/regenerate`, { date: today })
+      .then(() => {
+        notice("已生成今天的日报")
+        // 重新打开项目：索引里今天已就位，自动选中最新一天。
+        return openProject(projectId)
+      })
+      .catch((e) => notice(`生成失败: ${e instanceof Error ? e.message : String(e)}`, "error"))
       .finally(() => setRegenerating(false))
   }
 
@@ -165,10 +186,20 @@ export function DailyView({ api, notice, onContinue }: {
         </form>
         {project === null ? (
           <p className="pane-placeholder muted">选择一个项目查看日报</p>
+        ) : datesError ? (
+          <p className="form-error" data-testid="daily-dates-error">
+            加载日报索引失败
+            <button type="button" data-testid="daily-dates-retry" onClick={() => { if (projectId !== null) void openProject(projectId) }}>重试</button>
+          </p>
         ) : dates === null ? (
           <p className="muted">加载中…</p>
         ) : dates.length === 0 ? (
-          <p className="pane-placeholder muted" data-testid="daily-empty-project">这个项目还没有日报——到点后自动生成，或到当天再点「重新生成」立即生成</p>
+          <div className="daily-empty" data-testid="daily-empty-project">
+            <p className="pane-placeholder muted">这个项目还没有日报——到点后自动生成，也可以现在立即生成今天</p>
+            <button
+              type="button" data-testid="daily-generate-today" onClick={generateToday} disabled={regenerating}
+            >{regenerating ? "生成中…" : "立即生成今天"}</button>
+          </div>
         ) : date === null ? (
           <p className="pane-placeholder muted">该日没有日报</p>
         ) : (
@@ -184,7 +215,10 @@ export function DailyView({ api, notice, onContinue }: {
             </div>
             {report === null ? (
               reportError ? (
-                <p className="form-error" data-testid="daily-report-error">读取日报失败，请重试</p>
+                <p className="form-error" data-testid="daily-report-error">
+                  读取日报失败
+                  <button type="button" data-testid="daily-report-retry" onClick={() => setReportReloadTick((t) => t + 1)}>重试</button>
+                </p>
               ) : <p className="muted">加载中…</p>
             ) : report.cards.length === 0 ? (
               <p className="pane-placeholder muted" data-testid="daily-no-cards">这一天没有生成卡片</p>
