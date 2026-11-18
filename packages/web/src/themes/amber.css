@@ -1,38 +1,63 @@
 /* ============================================================
-   amber — the classic warm near-black look: same structure, softer
-   palette and corners. Values not declared here (code well, row
-   stripes, code highlights, shadows, overlays) are inherited from
-   the dark baseline in the default theme's :root.
+   amber — the warm dark theme: soft warm charcoal, amber accent
+   for the agent signal, muted salmon danger (red-orange stays with
+   the agent). Same corner, glass and shadow language as the other
+   themes; the derived surfaces are the dark baseline values,
+   declared here (not inherited) because the default theme's
+   :root is the light paper palette.
    ============================================================ */
 
 html[data-theme="amber"] {
   color-scheme: dark;
 
-  --bg: #131518;
-  --surface: #1a1d22;
-  --surface-2: #21252c;
-  --surface-3: #2a2f37;
-  --border: #2a2f37;
-  --border-strong: #3a4048;
-  --border-hover: #4a515c;
-  --text: #e6e6e6;
-  --text-dim: #b7bcc4;
-  --muted: #8a9099;
-  --accent: #e0a44e;
-  --accent-strong: #f0b45f;
-  --accent-ink: #3a2c14;
-  --accent-dim: rgba(224, 164, 78, 0.13);
-  --accent-border: rgba(224, 164, 78, 0.4);
-  --accent-dim-strong: rgba(224, 164, 78, 0.22);
+  --bg: #15161a;
+  --surface: #1c1d23;
+  --surface-2: #232429;
+  --surface-3: #2c2e35;
+  --border: #2c2e35;
+  --border-strong: #3c3e46;
+  --border-hover: #4e525b;
+  --text: #e5e3df;
+  --text-dim: #b5b3ae;
+  --muted: #8c8a84;
+  --accent: #d29a4e;
+  --accent-strong: #e0ab5f;
+  --accent-ink: #2b2014;
+  --accent-dim: rgba(210, 154, 78, 0.12);
+  --accent-border: rgba(210, 154, 78, 0.38);
+  --accent-dim-strong: rgba(210, 154, 78, 0.2);
   --success: #7cb876;
   --success-dim: rgba(124, 184, 118, 0.12);
-  --danger: #e07a6d;
-  --danger-dim: rgba(224, 122, 109, 0.12);
-  --danger-ink: #1a0d0b;
+  --danger: #dd8577;
+  --danger-ink: #1c0f0c;
+  --danger-dim: rgba(221, 133, 119, 0.11);
   --warn: #d8a657;
 
-  --radius: 8px;
-  --radius-sm: 5px;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-lg: 16px;
 
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-strong);
+
+  --page-bg: linear-gradient(180deg, #17181d, #131418);
+
+  --btn-grad: linear-gradient(180deg, #33343c, #272831);
+  --btn-grad-hover: linear-gradient(180deg, #393a42, #2d2e37);
+  --accent-grad: linear-gradient(180deg, #dba55c, #c68f42);
+
+  /* layered soft shadows, warm-tinted like the palette */
+  --shadow-rgb: 16, 12, 6;
+  --shadow-1: 0 1px 2px rgba(16, 12, 6, 0.24), 0 2px 8px rgba(16, 12, 6, 0.16);
+  --shadow-2: 0 1px 2px rgba(16, 12, 6, 0.3), 0 8px 24px rgba(16, 12, 6, 0.34);
+  --shadow-3: 0 2px 6px rgba(16, 12, 6, 0.34), 0 20px 48px rgba(16, 12, 6, 0.5);
+
+  --glass-bg: rgba(28, 29, 35, 0.85);
+
+  --code-well-bg: #1c1d23;     /* fenced code / inline code: a well one step above the canvas */
+  --row-stripe: rgba(255, 255, 255, 0.018);
+  --hljs-name: #6db4ff;
+  --hljs-attr: #c9a8ef;
+  --success-ink: #101a0c;
+  --overlay: rgba(0, 0, 0, 0.55);
+  --overlay-soft: rgba(0, 0, 0, 0.4);
 }

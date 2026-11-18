@@ -23,6 +23,7 @@
   border-radius: var(--radius);
   padding: var(--space-3);
   background: var(--surface);
+  box-shadow: var(--shadow-1);
 }
 
 .skills-list ul {
@@ -47,9 +48,10 @@
   padding: var(--space-2);
   cursor: pointer;
   font: inherit;
+  box-shadow: none;
 }
 
-.skills-list .skill-item:hover {
+.skills-list button.skill-item:hover {
   border-color: var(--border);
 }
 
@@ -80,6 +82,7 @@
   border-radius: var(--radius);
   padding: var(--space-3);
   background: var(--surface);
+  box-shadow: var(--shadow-1);
 }
 
 .skills-body pre {
@@ -127,11 +130,12 @@
   font-size: 12px;
   color: var(--muted);
   cursor: pointer;
+  box-shadow: none;
 }
 
 .skills-subtabs button.active {
-  background: var(--accent);
-  color: var(--accent-ink);
+  background: var(--accent-dim);
+  color: var(--accent-strong);
 }
 
 .skills-panes {
@@ -219,6 +223,7 @@
   border-radius: var(--radius);
   margin-bottom: var(--space-2);
   background: var(--surface);
+  box-shadow: var(--shadow-1);
 }
 
 .discover-group > summary {
@@ -303,6 +308,7 @@
   border-radius: var(--radius);
   padding: var(--space-2) var(--space-3);
   background: var(--surface);
+  box-shadow: var(--shadow-1);
 }
 
 .skills-links .skills-seg-title {
@@ -355,6 +361,7 @@
   font-size: 12px;
   line-height: 1;
   padding: 0 2px;
+  box-shadow: none;
 }
 
 .skills-source-add {
@@ -410,6 +417,7 @@
   border-radius: var(--radius);
   padding: var(--space-3);
   background: var(--surface);
+  box-shadow: var(--shadow-1);
 }
 
 .perm-scope h3 {
@@ -463,7 +471,7 @@
 /* The "auto-learned" marker on a decided rule (batch C). */
 .perm-source {
   font-style: normal;
-  color: var(--accent);
+  color: var(--text-dim);
   margin-right: 6px;
 }
 
@@ -506,6 +514,7 @@
   cursor: pointer;
   text-align: left;
   font-size: 13px;
+  box-shadow: none;
 }
 
 .mcp-fold-mark {
@@ -538,6 +547,7 @@
   border-radius: var(--radius);
   padding: var(--space-3);
   background: var(--surface);
+  box-shadow: var(--shadow-1);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -593,6 +603,7 @@
   border-radius: var(--radius);
   padding: var(--space-3);
   background: var(--surface);
+  box-shadow: var(--shadow-1);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -629,17 +640,21 @@
   gap: 0;
 }
 
+.mcp-form-type button {
+  box-shadow: none;
+}
+
 .mcp-form-type button.active {
   color: var(--accent);
   border-color: var(--accent);
 }
 
 .mcp-form-type button:first-child {
-  border-radius: var(--radius) 0 0 var(--radius);
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
 }
 
 .mcp-form-type button:last-child {
-  border-radius: 0 var(--radius) var(--radius) 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
 .mcp-kv {
@@ -763,6 +778,7 @@
   border-radius: var(--radius);
   padding: var(--space-3);
   background: var(--surface);
+  box-shadow: var(--shadow-1);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -835,6 +851,7 @@
   border-radius: var(--radius);
   padding: var(--space-3);
   background: var(--surface);
+  box-shadow: var(--shadow-1);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -875,17 +892,21 @@
   gap: 0;
 }
 
+.model-form-source button {
+  box-shadow: none;
+}
+
 .model-form-source button.active {
   color: var(--accent);
   border-color: var(--accent);
 }
 
 .model-form-source button:first-child {
-  border-radius: var(--radius) 0 0 var(--radius);
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
 }
 
 .model-form-source button:last-child {
-  border-radius: 0 var(--radius) var(--radius) 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
 .model-advanced {
@@ -953,6 +974,7 @@
   border-radius: var(--radius);
   padding: var(--space-3);
   background: var(--surface);
+  box-shadow: var(--shadow-1);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -1030,6 +1052,7 @@
   cursor: pointer;
   font-size: 14px;
   padding: 0 4px;
+  box-shadow: none;
 }
 
 .channel-tag button:hover {
@@ -1071,6 +1094,7 @@
   border-radius: var(--radius);
   padding: var(--space-3);
   background: var(--surface);
+  box-shadow: var(--shadow-1);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);

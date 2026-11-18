@@ -40,7 +40,7 @@
   align-items: center;
   gap: 8px;
   border: 1px solid var(--border-strong);
-  background: var(--surface-2);
+  background: var(--surface);
   border-radius: var(--radius);
   padding: 6px 12px;
   color: var(--text-dim);
@@ -65,6 +65,7 @@
   line-height: 1;
   padding: 0;
   color: var(--muted);
+  box-shadow: none;
 }
 
 .chat-notice-close:hover {
@@ -78,7 +79,7 @@
    示——独立于 .chat-notice 渲染，不随输入清除。 */
 .queue-list {
   border: 1px solid var(--border-strong);
-  background: var(--surface-2);
+  background: var(--surface);
   border-radius: var(--radius);
   padding: 6px 12px;
   color: var(--text-dim);
@@ -112,9 +113,9 @@
   flex: none;
   padding: 1px 6px;
   font-size: 11px;
-  color: var(--accent);
-  background: var(--accent-dim);
-  border: 1px solid var(--accent-border);
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
 
@@ -134,6 +135,7 @@
   color: var(--danger);
   background: none;
   border-color: var(--border);
+  box-shadow: none;
 }
 
 .queue-cancel:hover:not(:disabled) {
@@ -153,6 +155,7 @@
   color: var(--muted);
   background: none;
   border-color: var(--border);
+  box-shadow: none;
 }
 
 .disposition-trio button:hover:not(:disabled) {
@@ -160,9 +163,9 @@
 }
 
 .disposition-trio button[aria-checked="true"] {
-  color: var(--accent-ink);
-  background: var(--accent);
-  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
   font-weight: 600;
 }
 
@@ -202,9 +205,11 @@
   padding: 6px 12px;
   border-radius: 999px;
   border: 1px solid var(--border-strong);
-  background: var(--surface);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
   color: var(--text);
-  box-shadow: 0 4px 16px rgba(var(--shadow-rgb), 0.35);
+  box-shadow: var(--shadow-2);
 }
 
 .chat-jump:hover {
@@ -238,30 +243,30 @@
 .message {
   position: relative;
   max-width: 85%;
-  border-radius: var(--radius);
-  padding: 8px 12px;
   line-height: 1.55;
   overflow-wrap: break-word;
-  border: 1px solid transparent;
-  /* Newly mounted bubbles (streamed replies, sent messages, a switched-to
+  /* Newly mounted messages (streamed replies, sent messages, a switched-to
      session) rise in; the initial mount plays for the whole log at once,
-     which reads as one soft entrance rather than per-bubble noise. */
+     which reads as one soft entrance rather than per-message noise. */
   animation: rise-in var(--ease);
 }
 
+/* 只有用户输入是气泡：淡信号底 + 一角收窄。assistant / tool 输出直接
+   渲染在画布上，与消息流融为一体，块级元素（代码井、note、工具卡）
+   自带各自的边界 */
 .message-user {
   align-self: flex-end;
   background: var(--accent-dim);
-  border-color: var(--accent-border);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius);
   border-bottom-right-radius: 2px;
+  padding: 8px 12px;
 }
 
 .message-assistant,
 .message-tool {
   align-self: flex-start;
-  background: var(--surface);
-  border-color: var(--border);
-  border-bottom-left-radius: 2px;
+  padding: 4px 2px;
 }
 
 .msg-pending {
@@ -347,7 +352,7 @@
 .md blockquote {
   margin: 0.5em 0;
   padding: 0.1em 0 0.1em 0.9em;
-  border-left: 2px solid var(--accent);
+  border-left: 2px solid var(--accent-border);
   color: var(--text-dim);
 }
 
@@ -388,7 +393,7 @@
 }
 
 .md th {
-  background: var(--surface-2);
+  background: var(--surface);
   font-weight: 600;
 }
 
@@ -504,20 +509,50 @@
   color: var(--text-dim);
 }
 
-.blk-note,
+/* 检索注入的 note：默认折叠条（<details>），点开看全文 */
+.blk-note {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+  margin-top: 6px;
+}
+
+.blk-note summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  user-select: none;
+}
+
+.blk-note[open] summary {
+  margin-bottom: 2px;
+}
+
+.blk-note pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* 合并后的多条 note 之间留一行呼吸 */
+.blk-note pre + pre {
+  margin-top: 6px;
+}
+
 .blk-attachment {
   display: block;
   font-size: 12px;
   color: var(--muted);
-  background: var(--surface-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 2px 8px;
   margin-top: 6px;
-}
-
-.blk-note::before {
-  content: "· ";
-  color: var(--accent);
 }
 
 .blk-thinking {
@@ -532,7 +567,7 @@
 
 .blk-thinking summary::before {
   content: "▸ ";
-  color: var(--accent);
+  color: var(--muted);
 }
 
 .blk-thinking pre {
@@ -540,8 +575,12 @@
   white-space: pre-wrap;
   font-size: 12px;
   font-family: var(--font-mono);
-  border-left: 2px solid var(--border);
-  padding-left: var(--space-2);
+  max-height: 240px;
+  overflow: auto;
+  background: var(--code-well-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
 }
 
 /* Collapsed compaction context shown above the user message it belongs to. */
@@ -551,7 +590,7 @@
   margin-bottom: 4px;
   font-size: 12px;
   color: var(--muted);
-  background: var(--surface-2);
+  background: var(--surface);
   border: 1px dashed var(--border);
   border-radius: var(--radius-sm);
   padding: 4px 10px;
@@ -564,7 +603,7 @@
 
 .ctx-note summary::before {
   content: "▸ ";
-  color: var(--accent);
+  color: var(--muted);
 }
 
 .ctx-note[open] summary::before {
@@ -584,7 +623,7 @@
 }
 
 .ctx-note-kept-head {
-  color: var(--accent);
+  color: var(--text-dim);
 }
 
 .ctx-note-kept-line {
@@ -596,7 +635,7 @@
 .blk-tool-call {
   margin: 4px 0;
   font-size: 13px;
-  color: var(--warn);
+  color: var(--text-dim);
   font-family: var(--font-mono);
 }
 
@@ -609,22 +648,28 @@
   padding: 0;
 }
 
-/* 展开后的完整参数：滚动限高，整文件写入也不能撑爆聊天页 */
+/* 展开后的完整参数：一个井，滚动限高，整文件写入也不能撑爆聊天页 */
 .blk-tool-call-args {
   display: block;
   max-height: 240px;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-all;
+  background: var(--code-well-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin-top: 4px;
 }
 
 /* ---- 团队来信（agent 一侧折叠条，不占用户气泡） ---- */
 
 .message-mail {
   align-self: flex-start;
-  background: var(--surface-2);
-  border-color: var(--border-strong);
-  border-bottom-left-radius: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 6px 12px;
 }
 
 .msg-team-mail {
@@ -633,7 +678,7 @@
 
 .msg-team-mail summary {
   cursor: pointer;
-  color: var(--accent);
+  color: var(--text-dim);
 }
 
 .mail-entry {
@@ -641,7 +686,7 @@
 }
 
 .mail-from {
-  color: var(--accent);
+  color: var(--text-dim);
   font-size: 12px;
 }
 
@@ -659,7 +704,7 @@
 
 .blk-tool-result summary {
   cursor: pointer;
-  color: var(--accent);
+  color: var(--muted);
   font-family: var(--font-mono);
 }
 
@@ -695,8 +740,10 @@
   font-family: var(--font-mono);
   max-height: 240px;
   overflow: auto;
-  border-left: 2px solid var(--border);
-  padding-left: var(--space-2);
+  background: var(--code-well-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
 }
 
 /* the live agent: a pulsing accent line with a terminal cursor block */
@@ -734,6 +781,7 @@
   color: var(--danger);
   background: none;
   border-color: var(--border);
+  box-shadow: none;
 }
 
 .compaction-cancel:hover:not(:disabled) {
@@ -750,6 +798,7 @@
   color: var(--danger);
   background: none;
   border-color: var(--border);
+  box-shadow: none;
 }
 
 .run-stop:hover:not(:disabled) {
@@ -764,9 +813,12 @@
   display: flex;
   gap: 4px;
   padding: 2px 4px;
-  background: var(--surface);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-1);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--ease);
@@ -847,6 +899,7 @@
   border: 1px solid var(--warn);
   background: var(--danger-dim);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
   animation: rise-in var(--ease);
   padding: 10px 12px;
   font-size: 13px;
@@ -940,9 +993,10 @@
    card), a per-question mode chip, picked options filled with a check. */
 .question-card {
   border: 1px solid var(--border-strong);
-  border-left: 3px solid var(--accent);
-  background: var(--surface-2);
+  border-left: 3px solid var(--accent-border);
+  background: var(--surface);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
   animation: rise-in var(--ease);
   padding: 10px 12px;
   font-size: 13px;
@@ -1002,8 +1056,9 @@
 }
 
 .question-mode.multi {
-  color: var(--accent-ink);
-  background: var(--accent);
+  color: var(--accent-strong);
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-border);
   font-weight: 600;
 }
 
@@ -1013,18 +1068,18 @@
   gap: 6px;
 }
 
-/* 选中态用实底：全局 button:hover 优先级更高，必须连 hover 一起钉住 */
+/* 选中态用淡底 + 描边：全局 button:hover 优先级更高，必须连 hover 一起钉住 */
 .question-options .question-picked {
-  background: var(--accent);
-  color: var(--accent-ink);
-  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent-strong);
+  border-color: var(--accent-border);
   font-weight: 600;
 }
 
 .question-options .question-picked:hover:not(:disabled) {
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
-  color: var(--accent-ink);
+  background: var(--accent-dim-strong);
+  border-color: var(--accent-border);
+  color: var(--accent-strong);
 }
 
 .question-options .question-picked::before {
@@ -1099,6 +1154,7 @@
   line-height: 1;
   padding: 0;
   color: var(--muted);
+  box-shadow: none;
 }
 
 .attachment-chip button:hover {
@@ -1137,8 +1193,10 @@
   max-width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: 0 4px 16px rgba(var(--shadow-rgb), 0.35);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
+  box-shadow: var(--shadow-2);
 }
 
 .team-panel[open] {
@@ -1173,7 +1231,7 @@
 
 .goal-panel-head::before {
   content: "▸";
-  color: var(--accent);
+  color: var(--muted);
   margin-right: 6px;
 }
 
@@ -1231,7 +1289,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  border-left: 3px solid var(--accent);
+  border-left: 3px solid var(--accent-border);
   padding-left: var(--space-2);
 }
 
@@ -1302,7 +1360,7 @@
 
 .team-panel-head::before {
   content: "▸";
-  color: var(--accent);
+  color: var(--muted);
   margin-right: 6px;
 }
 
@@ -1413,18 +1471,18 @@
 }
 
 .team-talk.active {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--accent-ink);
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--accent-strong);
   font-weight: 600;
 }
 
-.team-stop:hover {
+.team-stop:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent-strong);
 }
 
-.team-trail:hover {
+.team-trail:hover:not(:disabled) {
   border-color: var(--border-hover);
   color: var(--text);
 }
@@ -1519,13 +1577,15 @@
   line-height: 1;
   padding: 0;
   color: var(--accent-strong);
+  box-shadow: none;
 }
 
 .team-target-chip button:hover {
   color: var(--text);
 }
 
-/* composer — the prompt line: amber ❯ then the input */
+/* composer — the prompt line: signal-colored ❯ then the input; a raised
+   card at rest, gathering a soft accent glow while focused */
 .chat-composer {
   position: relative;
   display: flex;
@@ -1535,6 +1595,7 @@
   border-radius: var(--radius);
   background: var(--surface);
   padding: 6px 10px;
+  box-shadow: var(--shadow-1);
 }
 
 /* 会话用量状态条：输入框下方一行灰色小字（in/out 累计 + cache 命中率）。
@@ -1549,6 +1610,7 @@
 
 .chat-composer:focus-within {
   border-color: var(--accent);
+  box-shadow: var(--shadow-1), 0 0 0 3px var(--accent-dim);
 }
 
 .composer-prompt {
@@ -1572,14 +1634,16 @@
 
 .chat-composer button[type="submit"] {
   border-color: var(--accent);
-  background: var(--accent);
+  background: var(--accent-grad);
   color: var(--accent-ink);
   font-weight: 600;
+  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.16);
 }
 
 .chat-composer button[type="submit"]:hover:not(:disabled) {
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
+  background: var(--accent-grad);
+  border-color: var(--accent);
+  filter: brightness(1.06);
 }
 
 /* Slash-command suggestions float above the composer (which is the
@@ -1593,10 +1657,12 @@
   list-style: none;
   margin: 0;
   padding: var(--space-1);
-  background: var(--surface-2);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
-  box-shadow: 0 8px 24px rgba(var(--shadow-rgb), 0.4);
+  box-shadow: var(--shadow-2);
   max-height: 280px;
   overflow-y: auto;
 }
@@ -1612,6 +1678,7 @@
   border-radius: var(--radius-sm);
   padding: 6px 8px;
   color: var(--text-dim);
+  box-shadow: none;
 }
 
 .slash-option button:hover:not(:disabled) {
@@ -1653,7 +1720,7 @@
 /* /help command panel — same card language as .chat-notice. */
 .slash-help {
   border: 1px solid var(--border-strong);
-  background: var(--surface-2);
+  background: var(--surface);
   border-radius: var(--radius);
   padding: var(--space-3);
   margin-bottom: var(--space-2);
@@ -1688,7 +1755,7 @@
 }
 
 .slash-help li code {
-  color: var(--accent);
+  color: var(--text);
   font-family: var(--font-mono);
   font-size: 12px;
 }
@@ -1706,9 +1773,10 @@
 }
 
 .ui-card {
-  background: var(--surface-2);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-1);
   padding: var(--space-3);
   display: flex;
   flex-direction: column;
@@ -1733,18 +1801,21 @@
   margin: 2px 0;
 }
 
-/* 按钮 */
+/* 按钮：与全局按钮同一材质（渐变 + 分层阴影），UI 卡里独立声明是因为
+   .ui-btn 的边框与悬停语义（悬停转强调色）是卡片自己的 */
 .ui-btn {
   border: 1px solid var(--border-strong);
-  background: transparent;
+  background: var(--btn-grad);
   color: var(--text);
   border-radius: var(--radius-sm);
   padding: 4px 14px;
   font-size: 13px;
   cursor: pointer;
+  box-shadow: var(--shadow-1);
 }
 
 .ui-btn:hover:not(:disabled) {
+  background: var(--btn-grad-hover);
   border-color: var(--accent);
   color: var(--accent-strong);
 }
@@ -1755,14 +1826,17 @@
 }
 
 .ui-btn-primary {
-  background: var(--accent);
+  background: var(--accent-grad);
   border-color: var(--accent);
   color: var(--accent-ink);
+  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.16);
 }
 
 .ui-btn-primary:hover:not(:disabled) {
   color: var(--accent-ink);
-  background: var(--accent-strong);
+  background: var(--accent-grad);
+  border-color: var(--accent);
+  filter: brightness(1.06);
 }
 
 .ui-btn-danger {
@@ -1901,12 +1975,12 @@
 
 /* 引用 */
 .ui-quote {
-  border-left: 3px solid var(--accent);
+  border-left: 3px solid var(--accent-border);
   margin: 4px 0;
   padding: 4px 12px;
   font-size: 13px;
   color: var(--text);
-  background: var(--accent-dim);
+  background: var(--surface);
 }
 
 .ui-quote-source {
@@ -2000,6 +2074,7 @@
   background: var(--surface);
   transform: translate(-50%, -50%);
   cursor: pointer;
+  box-shadow: none;
 }
 
 .ui-line-point:hover,
@@ -2071,7 +2146,7 @@
 .pending-bar {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  background: var(--surface);
   padding: 8px 10px;
   margin-bottom: 8px;
   font-size: 13px;
@@ -2105,9 +2180,10 @@
   padding: 5px 8px;
   border-radius: var(--radius-sm);
   cursor: pointer;
+  box-shadow: none;
 }
 
-.pending-item:hover {
+button.pending-item:hover {
   background: var(--surface-3, var(--surface));
 }
 
@@ -2130,6 +2206,7 @@
   padding: 4px 0 0;
   font-size: 12px;
   cursor: pointer;
+  box-shadow: none;
 }
 
 /* 聚合条定位高亮：卡片挂载点短暂闪烁 */
@@ -2158,6 +2235,7 @@
   font-size: 13px;
   cursor: pointer;
   border-bottom: 2px solid transparent;
+  box-shadow: none;
 }
 
 .ui-tab-active {
@@ -2336,12 +2414,12 @@
 
 /* ---- 工具卡（按工具名注册的专用展示；未注册工具保持折叠条） ---- */
 
+/* 工具行不画盒子：融进消息流的安静痕迹行，摘要一行（状态符 + 命令 +
+   元信息），展开的输出落进自己的井里 */
 .tool-card {
-  margin: 4px 0;
-  font-size: 13px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  margin: 2px 0;
+  font-size: 12.5px;
+  color: var(--muted);
 }
 
 .tool-card summary {
@@ -2349,7 +2427,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 10px;
+  padding: 2px 0;
+  color: var(--text-dim);
   list-style: none;
 }
 
@@ -2361,7 +2440,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 10px;
+  padding: 2px 0;
 }
 
 .tool-card-status {
@@ -2401,10 +2480,13 @@
   font-family: var(--font-mono);
 }
 
+/* 展开的输出：一个带边界的井，与摘要行之间留出空隙 */
 .tool-card-body {
-  margin: 0;
-  padding: 6px 10px;
-  border-top: 1px solid var(--border);
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--code-well-bg);
   white-space: pre-wrap;
   font-size: 12px;
   font-family: var(--font-mono);
@@ -2413,11 +2495,26 @@
   word-break: break-word;
 }
 
-/* 红绿 diff（fs_edit：old 红 / new 绿） */
+/* 红绿 diff（fs_edit：old 红 / new 绿）：井壳由外层提供，行内不再重复边框 */
 .tool-card-diff {
-  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   max-height: 240px;
   overflow: auto;
+}
+
+.tool-card-diff .diffview,
+.tool-card-diff .codeview {
+  border-top: none;
+}
+
+/* 直接落在卡里的全文/代码视图同井化 */
+.tool-card > .diffview,
+.tool-card > .codeview {
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
 }
 
 .diff-lines {
@@ -2448,7 +2545,7 @@
   max-width: 160px;
   height: 8px;
   border-radius: 999px;
-  background: var(--bg);
+  background: var(--surface-2);
   overflow: hidden;
 }
 
@@ -2465,7 +2562,7 @@
   overflow: auto;
   margin: 4px 0 0;
   padding: 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
   font-size: 12px;
   white-space: pre-wrap;
@@ -2487,6 +2584,7 @@
   color: var(--accent-strong);
   font-size: 12px;
   cursor: pointer;
+  box-shadow: none;
 }
 
 .tool-card-drawer-link:hover {
@@ -2606,12 +2704,14 @@
   pointer-events: auto;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: var(--surface);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
   color: var(--text);
   font-size: 12px;
   padding: 4px 12px;
   cursor: pointer;
-  box-shadow: 0 4px 16px rgba(var(--shadow-rgb), 0.35);
+  box-shadow: var(--shadow-2);
   white-space: nowrap;
 }
 
@@ -2632,7 +2732,7 @@
   flex-direction: column;
   background: var(--surface);
   border-left: 1px solid var(--border);
-  box-shadow: -8px 0 24px rgba(var(--shadow-rgb), 0.4);
+  box-shadow: -8px 0 40px rgba(var(--shadow-rgb), 0.35);
 }
 
 .changes-head {
@@ -2652,6 +2752,7 @@
   font-size: 16px;
   cursor: pointer;
   padding: 0 4px;
+  box-shadow: none;
 }
 
 .changes-body {
@@ -2679,9 +2780,10 @@
   cursor: pointer;
   padding: 6px 8px;
   border-radius: var(--radius-sm);
+  box-shadow: none;
 }
 
-.changes-item:hover {
+button.changes-item:hover {
   background: var(--surface-2);
 }
 
@@ -2742,6 +2844,7 @@
   border-radius: 999px;
   cursor: pointer;
   white-space: nowrap;
+  box-shadow: none;
 }
 
 .changes-tabs button.on {

@@ -10,8 +10,7 @@
    ============================================================ */
 
 :root {
-  /* type — mono is the native voice; per-theme display faces live
-     in the theme files */
+  /* type — mono is the native voice of every theme */
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --font-ui: var(--font-mono);
 
@@ -39,7 +38,10 @@ body {
   font-size: 14px;
   line-height: 1.5;
   color: var(--text);
-  background: var(--bg);
+  /* the canvas is a whisper of vertical gradient (per theme) over the
+     base color — depth without stripes */
+  background-color: var(--bg);
+  background-image: var(--page-bg);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -50,11 +52,10 @@ body {
 }
 
 ::selection {
-  background: var(--accent);
-  color: var(--accent-ink);
+  background: var(--accent-dim);
 }
 
-/* Scrollbars join the theme: hairline dark thumb, red on hover.
+/* Scrollbars join the theme: rounded hairline thumb, accent on hover.
    Firefox gets the two-property thin style; Chromium gets the webkit set. */
 * {
   scrollbar-width: thin;
@@ -72,12 +73,12 @@ body {
 
 ::-webkit-scrollbar-thumb {
   background: var(--border-strong);
-  border-radius: 0;
+  border-radius: 999px;
   border: 2px solid var(--bg);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--accent);
+  background: var(--border-hover);
 }
 
 ::-webkit-scrollbar-corner {
@@ -135,7 +136,7 @@ input[type="checkbox"] {
 }
 
 code {
-  background: var(--surface-2);
+  background: var(--code-well-bg);
   border-radius: var(--radius-sm);
   padding: 0 4px;
   font-family: var(--font-mono);

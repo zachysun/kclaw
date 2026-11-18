@@ -15,7 +15,7 @@ describe("shell theme", () => {
     localStorage.clear()
     delete document.documentElement.dataset.theme
     // The real page carries this meta; jsdom loads no HTML file.
-    document.head.innerHTML = '<meta name="theme-color" content="#0b0b0d" />'
+    document.head.innerHTML = '<meta name="theme-color" content="#f5f6f8" />'
   })
 
   it("derives the registry from the theme stylesheets (one file ↔ one entry)", () => {
@@ -31,14 +31,14 @@ describe("shell theme", () => {
     for (const option of options) expect(option.label).not.toBe("")
   })
 
-  it("defaults to phantom when nothing is stored", () => {
-    expect(DEFAULT_THEME).toBe("phantom")
-    expect(loadTheme()).toBe("phantom")
+  it("defaults to paper when nothing is stored", () => {
+    expect(DEFAULT_THEME).toBe("paper")
+    expect(loadTheme()).toBe("paper")
   })
 
   it("falls back to the default on a corrupt value", () => {
     localStorage.setItem("kclaw_theme", "neon-pink")
-    expect(loadTheme()).toBe("phantom")
+    expect(loadTheme()).toBe("paper")
     expect(isThemeName("amber")).toBe(true)
     expect(isThemeName("neon-pink")).toBe(false)
   })

@@ -16,14 +16,14 @@ const THEME_KEY = "kclaw_theme"
  *  stylesheet without an entry here (or the reverse) fails the theme unit
  *  test — the registry and the stylesheets must stay in lockstep. */
 export const THEME_META = {
-  phantom: { label: "红黑", themeColor: "#0b0b0d" },
-  amber: { label: "琥珀", themeColor: "#131518" },
-  paper: { label: "纸白", themeColor: "#edeae1" },
+  phantom: { label: "红黑", themeColor: "#101014" },
+  amber: { label: "琥珀", themeColor: "#15161a" },
+  paper: { label: "瓷白", themeColor: "#f5f6f8" },
 } as const
 
 export type ThemeName = keyof typeof THEME_META
 
-export const DEFAULT_THEME: ThemeName = "phantom"
+export const DEFAULT_THEME: ThemeName = "paper"
 
 /** Theme ids derived from the ./themes/ stylesheet filenames (build-time scan,
  *  eagerly inlined into the bundle — no extra requests). */

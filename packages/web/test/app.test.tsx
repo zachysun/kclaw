@@ -150,17 +150,17 @@ describe("App", () => {
     const labels = Array.from(select.options).map((o) => o.textContent)
     expect(labels).toContain("红黑")
     expect(labels).toContain("琥珀")
-    expect(labels).toContain("纸白")
-    expect(select.value).toBe("phantom")
+    expect(labels).toContain("瓷白")
+    expect(select.value).toBe("paper")
     // Selecting a theme applies it (attribute + persistence), like the
     // native change event would.
     const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")!.set!
     await act(async () => {
-      setter.call(select, "paper")
+      setter.call(select, "phantom")
       select.dispatchEvent(new Event("change", { bubbles: true }))
     })
-    expect(document.documentElement.dataset.theme).toBe("paper")
-    expect(localStorage.getItem("kclaw_theme")).toBe("paper")
+    expect(document.documentElement.dataset.theme).toBe("phantom")
+    expect(localStorage.getItem("kclaw_theme")).toBe("phantom")
     unmount(root, container)
   })
 })

@@ -1,19 +1,26 @@
 /* ---- shared buttons ---- */
 
+/* The base look is raised material: a light-to-dark vertical gradient
+   (per theme) over a hairline border with a layered contact shadow, so
+   an action reads as a button at a glance instead of a line of text.
+   Pressing settles it one pixel into the surface. Quiet flat buttons
+   (list rows, tab labels, bare × chips) override the background and
+   reset the shadow where they are declared. */
 button {
   font-family: var(--font-ui);
   font-size: 13px;
   color: var(--text);
-  background: var(--surface-2);
+  background: var(--btn-grad);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  padding: 6px 12px;
+  padding: 6px 14px;
   cursor: pointer;
-  transition: background var(--ease), border-color var(--ease), color var(--ease);
+  box-shadow: var(--shadow-1);
+  transition: background var(--ease), border-color var(--ease), color var(--ease), box-shadow var(--ease), transform var(--ease);
 }
 
 button:hover:not(:disabled) {
-  background: var(--surface-3);
+  background: var(--btn-grad-hover);
   border-color: var(--border-hover);
 }
 
@@ -24,18 +31,25 @@ button:active:not(:disabled) {
 button:disabled {
   opacity: 0.55;
   cursor: default;
+  box-shadow: none;
 }
 
+/* filled actions carry the signal gradient; the inset top highlight is
+   the material's light catch, kept on hover so the raise stays legible */
 button.primary {
-  background: var(--accent);
+  background: var(--accent-grad);
   border-color: var(--accent);
   color: var(--accent-ink);
   font-weight: 600;
+  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.16);
 }
 
 button.primary:hover:not(:disabled) {
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
+  background: var(--accent-grad);
+  border-color: var(--accent);
+  filter: brightness(1.06);
+  box-shadow: var(--shadow-2), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  transform: translateY(-1px);
 }
 
 button.danger {
@@ -74,6 +88,7 @@ input:focus,
 textarea:focus,
 select:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
 }
 
 /* ---- Token form ---- */
@@ -102,6 +117,20 @@ select:focus {
 
 .token-gate input {
   flex: 1;
+}
+
+/* the gate's one action speaks in the filled voice */
+.token-gate button[type="submit"] {
+  background: var(--accent-grad);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+}
+
+.token-gate button[type="submit"]:hover:not(:disabled) {
+  background: var(--accent-grad);
+  filter: brightness(1.06);
 }
 
 /* ---- Main shell ---- */
@@ -151,6 +180,7 @@ select:focus {
   background: var(--surface-3);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-1);
   transition: transform var(--ease), width var(--ease);
   pointer-events: none;
   z-index: 0;
@@ -166,6 +196,7 @@ select:focus {
   border-radius: var(--radius-sm);
   padding: 5px 14px;
   font-weight: 600;
+  box-shadow: none;
 }
 
 .tab:hover:not(:disabled) {
@@ -217,6 +248,7 @@ select:focus {
   border: none;
   padding: 4px 8px;
   font-size: 16px;
+  box-shadow: none;
 }
 
 .body {
@@ -303,7 +335,7 @@ select:focus {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: 4px;
 }
 
 .workdir-group {
@@ -339,11 +371,12 @@ select:focus {
   border-radius: var(--radius-sm);
   padding: 0;
   cursor: pointer;
+  box-shadow: none;
 }
 
 .fold-mark {
   flex-shrink: 0;
-  color: var(--accent);
+  color: var(--muted);
   transition: transform var(--ease);
 }
 
@@ -413,6 +446,7 @@ select:focus {
   height: 20px;
   padding: 0;
   flex-shrink: 0;
+  box-shadow: none;
 }
 
 .icon-btn svg {
@@ -427,18 +461,21 @@ select:focus {
 }
 
 /* the two hover bubbles: fixed-position siblings so the sidebar's scroll
-   container can't clip them; .icon-tip centers under the button,
-   .workdir-tip left-aligns under the group header (full workdir path) */
+   container can't clip them; glass material over whatever they float on.
+   .icon-tip centers under the button, .workdir-tip left-aligns under the
+   group header (full workdir path) */
 .icon-tip,
 .workdir-tip {
   position: fixed;
   z-index: 35;
-  background: var(--surface-3);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   color: var(--text);
   pointer-events: none;
-  box-shadow: 0 3px 10px rgba(var(--shadow-rgb), 0.3);
+  box-shadow: var(--shadow-2);
 }
 
 .icon-tip {
@@ -481,7 +518,7 @@ select:focus {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .session-row {
@@ -489,31 +526,32 @@ select:focus {
   position: relative;
 }
 
+/* 清单行：会话之间不画卡片边界，透明行 + 悬停浅底 + 选中淡信号底与
+   左侧细条，密度与安静都来自这里 */
 .session-item {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   width: 100%;
   gap: 3px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: inherit;
   cursor: pointer;
   text-align: left;
   font-family: var(--font-mono);
+  box-shadow: none;
 }
 
-.session-item:hover {
-  border-color: var(--border-strong);
+button.session-item:hover {
   background: var(--surface-2);
 }
 
 .session-item.selected {
-  border-color: var(--accent);
   background: var(--accent-dim);
-  box-shadow: inset 3px 0 0 var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .session-title {
@@ -533,7 +571,7 @@ select:focus {
   vertical-align: 1px;
 }
 
-/* 未决 UI 卡角标（跨会话待拍板计数）：实底色与 fork 徽标区分开 */
+/* 未决 UI 卡角标（跨会话待拍板计数）：淡信号底，与 fork 徽标区分开 */
 .session-pending-badge {
   display: inline-block;
   margin-left: 6px;
@@ -541,8 +579,9 @@ select:focus {
   border-radius: 999px;
   font-size: 10px;
   line-height: 16px;
-  background: var(--accent);
-  color: var(--accent-ink);
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-border);
+  color: var(--accent-strong);
   vertical-align: 1px;
 }
 
@@ -587,9 +626,12 @@ select:focus {
   display: flex;
   gap: 4px;
   padding: 2px 4px;
-  background: var(--surface);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-1);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--ease);
@@ -651,14 +693,16 @@ select:focus {
   align-items: flex-start;
   gap: 8px;
   border: 1px solid var(--border-strong);
-  background: var(--surface-2);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
   color: var(--text);
   font-size: 12px;
   line-height: 1.5;
   text-align: left;
   padding: 8px 8px 8px 12px;
-  border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(var(--shadow-rgb), 0.45);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-3);
   animation: toast-in 0.18s ease-out;
 }
 
@@ -670,9 +714,10 @@ select:focus {
   color: inherit;
   font: inherit;
   padding: 0 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   white-space: nowrap;
+  box-shadow: none;
 }
 
 .toast-action:hover {
@@ -688,6 +733,7 @@ select:focus {
   text-align: left;
   padding: 0;
   cursor: pointer;
+  box-shadow: none;
 }
 
 .toast-close {
@@ -700,6 +746,7 @@ select:focus {
   padding: 0 2px;
   cursor: pointer;
   opacity: 0.55;
+  box-shadow: none;
 }
 
 .toast-close:hover {
@@ -747,10 +794,12 @@ select:focus {
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-4);
-  background: var(--surface);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  box-shadow: 0 12px 32px rgba(var(--shadow-rgb), 0.45);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
 }
 
 .picker-title {
@@ -802,11 +851,12 @@ select:focus {
   text-align: left;
   cursor: pointer;
   border-radius: 0;
+  box-shadow: none;
 }
 
 .picker-item::before {
   content: "▸ ";
-  color: var(--accent);
+  color: var(--muted);
 }
 
 .picker-item:hover:not(:disabled) {

@@ -80,17 +80,22 @@ export const MessageBubble = memo(function MessageBubble({
       {mail !== null ? (
         <TeamMailView mail={mail} />
       ) : (
-        message.blocks.map((block) => (
-          <BlockView
-            key={block.blockId}
-            block={block}
-            markdown={message.role === "assistant"}
-            onOpenAudit={onOpenAudit}
-            onUiAction={onUiAction}
-            uiPicks={uiPicks}
-            toolPairing={toolPairing}
-          />
-        ))
+        <>
+          {message.blocks
+            .filter((block) => block.kind !== "note")
+            .map((block) => (
+              <BlockView
+                key={block.blockId}
+                block={block}
+                markdown={message.role === "assistant"}
+                onOpenAudit={onOpenAudit}
+                onUiAction={onUiAction}
+                uiPicks={uiPicks}
+                toolPairing={toolPairing}
+              />
+            ))}
+          <NotesView blocks={message.blocks} />
+        </>
       )}
       {message.aborted === true && (
         <span className="msg-aborted" data-testid="msg-aborted">已中断</span>
@@ -156,6 +161,21 @@ function TeamMailView({ mail }: { mail: ReturnType<typeof parseTeamMail> }) {
   )
 }
 
+/** 检索注入的 note 合并渲染：一条消息的全部 note 收进同一个「附加信息」
+ *  折叠条，位置跟在其余块之后，不逐条打断正文。 */
+function NotesView({ blocks }: { blocks: RenderedBlock[] }) {
+  const notes = blocks.filter((b): b is Extract<RenderedBlock, { kind: "note" }> => b.kind === "note")
+  if (notes.length === 0) return null
+  return (
+    <details className="blk-note" data-testid="blk-note">
+      <summary>附加信息</summary>
+      {notes.map((n) => (
+        <pre key={n.blockId}>{n.text}</pre>
+      ))}
+    </details>
+  )
+}
+
 function BlockView({ block, markdown, onOpenAudit, onUiAction, uiPicks, toolPairing }: { block: RenderedBlock; markdown: boolean; onOpenAudit?: (sessionId: string) => void; onUiAction?: (callId: string, action: UiCardAction) => void; uiPicks?: Map<string, UiCardAction>; toolPairing?: ToolPairing }) {
   switch (block.kind) {
     case "text":
@@ -173,8 +193,6 @@ function BlockView({ block, markdown, onOpenAudit, onUiAction, uiPicks, toolPair
           <pre>{block.text === "" ? "…" : block.text}</pre>
         </details>
       )
-    case "note":
-      return <span className="blk-note" data-testid="blk-note">[note] {block.text}</span>
     case "tool_call": {
       // Registry card first (bash status, fs diff/write — renders from the
       // call side with its cross-message paired result); a renderer that
