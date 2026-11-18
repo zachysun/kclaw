@@ -49,10 +49,10 @@
       ├── workdir.txt          # 人可读的目录映射（项目首次产生记忆时写入）
       ├── MEMORY.md            # 主题线索引表（派生物，机器重建）
       ├── state.json           # 提取进度标记 + 跟随检查 + 定时/夜间/日报的调度标记（见"写入 pipeline"）
-        ├── daily/                # 日报卡片（派生物，每 N 天生成一份，见"日报（daily）"节）
-        │   └── <日期>.json
-        ├── vectors.db           # L1 检索索引（FTS5 + 向量，派生物）
-        └── <topic>.md           # 主题线文件（唯一权威情节数据）
+      ├── daily/               # 日报卡片（派生物，每 N 天生成一份，见"日报（daily）"节）
+      │   └── <日期>.json
+      ├── vectors.db           # L1 检索索引（FTS5 + 向量，派生物）
+      └── <topic>.md           # 主题线文件（唯一权威情节数据）
 ```
 
 项目 id 的生成规则（`packages/core/src/memory/layout.ts` 的 `projectIdFor`）：取工作目录的绝对路径做 SHA-1，用前 6 位十六进制，再拼上目录名（目录名为空时回退到 `project`），例如 `my-repo-a1b2c3`。确定性、可读、基本唯一；但注意它依赖绝对路径，**整个工作目录移动后 id 会变化、旧项目记忆不再自动跟随**（这是已知取舍，见"边界与出错"）。
@@ -191,7 +191,7 @@ flowchart TD
 
 ## 日报（daily）
 
-日报是记忆系统的项目级派生物：调度器每 N 天在本地 H 点（`daily.hour`，默认 8；`daily.intervalDays`，默认 1；两个字段属独立的 `daily` 配置节，见 [storage](./storage.md) 的 config 表）对每个项目触发一次生成（`MemorySystem.triggerDaily`）：素材是**自上次日报以来的全部会话消息**（窗 = (上次处理时刻, 现在]，首次取当天本地 0 点；与提取同一条 `readMessages` 读取口径，子会话排除），复用提取的事件渲染器转成逐行文本，交给一次无工具 LLM 调用（`DAILY_SYSTEM_PROMPT`；模型与提取共用 `memory.extractModel` 解析链；用量记 chore `daily`、归属项目最近活动会话），产出至多 8 张卡片，覆盖写入 `projects/<id>/daily/<本地日期>.json`。窗内无消息的项目跳过不产文件。生成挂在 `MemoryPipeline` 的同一把项目级串行锁上（`runDaily` 入口，与记忆写入互斥）。
+日报是记忆系统的项目级派生物：调度器每 N 天在本地 H 点（`daily.hour`，默认 8；`daily.intervalDays`，默认 1；两个字段属独立的 `daily` 配置节，见 [storage](./storage.md) 的 config 表）对每个项目触发一次生成（`MemorySystem.triggerDaily`）：素材是**自上次日报以来的全部会话消息**（窗 = (上次处理时刻, 现在]，首次取当天本地 0 点；与提取同一条 `readMessages` 读取口径，子会话排除），取材前先做一次提纯：记忆注入附在用户消息上的 note（`kind:"memory"`，对过往情节的复述）整块剥掉，留在素材里会把旧经历包装成当天的事；cron/subagent 等来源说明类的 note 属于窗内真实发生的事，保留；剥完一块不剩的消息（纯记忆载具）整条丢弃。剩下的消息复用提取的事件渲染器转成逐行文本，交给一次无工具 LLM 调用（`DAILY_SYSTEM_PROMPT`；模型与提取共用 `memory.extractModel` 解析链；用量记 chore `daily`、归属项目最近活动会话），产出至多 8 张卡片，覆盖写入 `projects/<id>/daily/<本地日期>.json`。窗内无消息的项目跳过不产文件。生成挂在 `MemoryPipeline` 的同一把项目级串行锁上（`runDaily` 入口，与记忆写入互斥）。
 
 卡片四类（`kind`，渲染层映射中文标签）：`achievement` 成果 / `lesson` 教训 / `blocker` 卡点 / `insight` 观察；每张含一句话 `title`、一段一事的 `body`，以及 2-3 个 `options`（各含 `label` 展示名与 `opener` 开场文案全文——生成时就写好、自包含，点开续会话时预填进输入框、不自动发送）。解析宽容（`packages/core/src/memory/daily.ts` 的 `parseDailyCards`）：剥代码围栏、逐卡校验、非法卡丢弃记日志、超上限截断。与提取的负面清单相反：没走通的尝试与失败的调试是日报的素材，prompt 明确要求写出来——长期记忆不收失败，日报要讲出来。
 
