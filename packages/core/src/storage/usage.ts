@@ -22,7 +22,7 @@ export interface UsageRow {
 }
 
 /** Which background chore a usage row belongs to (the runId's prefix). */
-export type ChoreKind = "compaction" | "autoname" | "memory" | "skill"
+export type ChoreKind = "compaction" | "autoname" | "memory" | "skill" | "daily"
 
 /** Row class of a usage row: main runs vs background chores (goal judge included). */
 export type UsageKind = "run" | ChoreKind | "goal"

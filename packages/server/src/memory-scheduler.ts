@@ -14,14 +14,14 @@
  * 只剩记忆域逻辑。手动/立刻不入此调度器（memory_save 工具与 /memory save 直接触发）。
  */
 import type { KclawConfig, MemoryScheduleBook, MemoryTriggers, SessionStore } from "@kclaw/core"
-import { dailyGateDue, followGateDue, localDate, startIntervalHost } from "./host-kit.js"
+import { dailyGateDue, followGateDue, intervalGateDue, localDate, startIntervalHost } from "./host-kit.js"
 
 const DEFAULT_SCAN_MS = 60_000
 
 export interface MemorySchedulerHandle { stop(): Promise<void> }
 
 export function startMemoryScheduler(deps: {
-  system: MemoryScheduleBook & Pick<MemoryTriggers, "triggerInterval" | "triggerFollow" | "triggerNightly" | "recentSessionId">
+  system: MemoryScheduleBook & Pick<MemoryTriggers, "triggerInterval" | "triggerFollow" | "triggerNightly" | "triggerDaily" | "recentSessionId">
   /**
    * SessionStore（M-4：当前调度器不直接读会话——项目维度活动时间经
    * system.lastActivity 取；保留该字段与 brief 的宿主接口契约一致，供宿主/后续任务扩展）。
@@ -88,6 +88,19 @@ export function startMemoryScheduler(deps: {
             // （判据唯一正本在 core：system.recentSessionId）。
             host.track(deps.system.triggerNightly(workdir, deps.system.recentSessionId(workdir)).catch((e) => log(`kclaw memory nightly failed: ${String(e)}`)))
             deps.system.markNightlyRun(workdir, localDate(t))
+          }
+        }
+        // 日报（daily.hour 负值关闭）：本地时间过了 hour 且距上次调度满
+        // intervalDays 天则触发——每 N 天一次判定在 host-kit（intervalGateDue）。
+        // 判重日期（dailyLastRun）触发发起后即时推进（失败也推进，防重入优先，
+        // 失败次日再试）；窗起点时刻（dailySince）在 core 的 triggerDaily 内
+        // 成功或确认无活动才推进，失败那天的窗内容留在窗内不漏。
+        {
+          const t = now()
+          const daily = deps.config.daily
+          if (intervalGateDue(t, daily.hour, daily.intervalDays, deps.system.dailyLastRun(workdir))) {
+            host.track(deps.system.triggerDaily(workdir).catch((e) => log(`kclaw daily failed: ${String(e)}`)))
+            deps.system.markDailyRun(workdir, localDate(t))
           }
         }
       }

@@ -10,6 +10,10 @@ import { MemoryLayout, projectIdFor } from "./layout.js"
 import { WriteLedger } from "./ledger.js"
 import { MemoryPipeline, type MemoryAudit } from "./pipeline.js"
 import type { MemoryWrittenEvent } from "./pipeline.js"
+import {
+  DailyRegenerateError, listDailyDates, localDateOf, localMidnightIso, readDailyReport,
+  type DailyReport,
+} from "./daily.js"
 import type { MemoryEvent } from "../session/events.js"
 import { parseThreadFile, parseMemoryMd } from "./threads.js"
 import { parseCognitionFile, cognitionPath, writeCognitionFile } from "./cognition.js"
@@ -38,7 +42,7 @@ export interface MemoryQuery {
   searchAll(query: string, limit?: number): Promise<MemorySearchHit[]>
 }
 
-/** 触发入口：记忆写入触发（memory_save 工具 + 调度器 + 手动沉淀）。 */
+/** 触发入口：记忆写入触发（memory_save 工具 + 调度器 + 手动沉淀）+ 日报调度触发。 */
 export interface MemoryTriggers {
   triggerImmediate(sessionId: string): Promise<boolean>
   triggerManual(workdir: string, sessionId?: string): Promise<void>
@@ -46,6 +50,8 @@ export interface MemoryTriggers {
   triggerInterval(workdir: string): Promise<void>
   triggerFollow(workdir: string, sessionId?: string): Promise<void>
   triggerNightly(workdir: string, sessionId?: string): Promise<void>
+  /** 日报调度触发：窗 = 自上次处理时刻以来的全部会话消息；成功或确认无活动才推进窗起点。 */
+  triggerDaily(workdir: string): Promise<void>
   consolidate(workdir: string, topic: string): Promise<void>
   recentSessionId(workdir: string): string | undefined
 }
@@ -56,6 +62,8 @@ export interface MemoryScheduleBook {
   intervalLastRun(workdir: string): string | undefined
   markNightlyRun(workdir: string, localDate: string): void
   nightlyLastRun(workdir: string): string | undefined
+  markDailyRun(workdir: string, localDate: string): void
+  dailyLastRun(workdir: string): string | undefined
   scheduleFollowCheck(sessionId: string, endTurnAt: string): void
   clearFollowCheck(workdir: string, sessionId: string): void
   pendingFollowChecks(workdir: string): Array<{ sessionId: string; endTurnAt: string }>
@@ -74,6 +82,15 @@ export interface MemoryAdmin {
   cognitionContent(kind: CogKind, name: string): string | undefined
   writeCognition(kind: CogKind, name: string, content: string): void
   deleteCognition(kind: CogKind, name: string): void
+}
+
+/** 日报面：daily tab 路由（项目清单、日期索引、单日读取、手动重新生成）。 */
+export interface MemoryDaily {
+  dailyProjects(): Array<{ id: string; workdir: string; latest: string }>
+  dailyDates(projectId: string): string[]
+  dailyReport(projectId: string, date: string): DailyReport | undefined
+  /** 按原窗重跑覆盖（该日有文件）；当天无文件时立即按当前窗生成；其余象限抛 DailyRegenerateError。 */
+  regenerateDaily(projectId: string, date: string): Promise<DailyReport>
 }
 
 /** 超budget保留优先级：规则漏了会出错 > 画像缺一段 > wiki 少一块。 */
@@ -103,7 +120,7 @@ interface ScoredHit { key: string; topic: string; title: string; date: string; t
  * 方法面按四拨调用方分面（MemoryQuery / MemoryTriggers / MemoryScheduleBook /
  * MemoryAdmin，卡⑤）；对账（reconcile）与停机（stop）只归 daemon。
  */
-export class MemorySystem implements MemoryQuery, MemoryTriggers, MemoryScheduleBook, MemoryAdmin {
+export class MemorySystem implements MemoryQuery, MemoryTriggers, MemoryScheduleBook, MemoryAdmin, MemoryDaily {
   readonly #layout: MemoryLayout
   readonly #sessions: SessionStore
   readonly #config: KclawConfig
@@ -389,6 +406,28 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     await this.#pipeline.runNightly(workdir, sessionId ?? this.#recentSessionId(workdir))
   }
 
+  /**
+   * 日报调度触发（scheduler 按 daily.hour/intervalDays 触发）：窗 = 自上次
+   * 处理时刻（dailySince）以来的全部会话消息，首窗取当天本地 0 点。生成完成
+   * 或确认窗内无活动才把窗起点推进到本次窗终点——失败不推进，那天的窗内容
+   * 留在窗内，下次定时一并生成，不漏内容。
+   */
+  async triggerDaily(workdir: string): Promise<void> {
+    const now = this.#now()
+    const existing = this.#dailySince(workdir)
+    const start = existing ?? localMidnightIso(now)
+    if (existing === undefined) {
+      // 首次尝试即锚定窗起点：之后即便本次生成失败，失败当天窗起点之后的
+      // 内容留在窗内，下次定时一并生成，不因无标记而漏内容。
+      this.#ledgerForWrite(workdir).setDailySince(start)
+    }
+    const end = now.toISOString()
+    const result = await this.#pipeline.runDaily(workdir, { start, end, date: localDateOf(now) }, this.#recentSessionId(workdir))
+    if (result.outcome === "generated" || result.outcome === "empty") {
+      this.#ledgerForWrite(workdir).setDailySince(end)
+    }
+  }
+
   // ---- 调度记录（scheduler 调用） ----
 
   /**
@@ -426,6 +465,23 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
   /** 最近一次夜间沉淀触发的本地日期；从未触发过 → undefined。 */
   nightlyLastRun(workdir: string): string | undefined {
     return new WriteLedger(this.#ledgerPath(workdir)).getNightlyLastRun()
+  }
+
+  /** 记录最近一次日报调度的本地日期（触发发起后即时推进，防同日重入；失败次日再试）。 */
+  markDailyRun(workdir: string, localDate: string): void {
+    this.#ledgerForWrite(workdir).setDailyLastRun(localDate)
+  }
+
+  /** 最近一次日报调度的本地日期；从未触发过 → undefined。 */
+  dailyLastRun(workdir: string): string | undefined {
+    return new WriteLedger(this.#ledgerPath(workdir)).getDailyLastRun()
+  }
+
+  /** 日报窗起点时刻（读语义，不建目录）；从未处理过 → undefined（首窗 = 当天本地 0 点）。 */
+  #dailySince(workdir: string): string | undefined {
+    const path = this.#ledgerPath(workdir)
+    if (!existsSync(path)) return undefined
+    return new WriteLedger(path).getDailySince()
   }
 
   /**
@@ -583,5 +639,53 @@ export class MemorySystem implements MemoryQuery, MemoryTriggers, MemorySchedule
     rmSync(cognitionPath(this.#layout.globalDir, kind, name), { force: true })
     void this.#pipeline.reindexGlobal().catch((err) => this.#log(`kclaw memory deleteCognition reindex failed: ${String(err)}`))
     this.#audit({ trigger: "admin", kind: "cognition", op: "delete", file: `${kind}/${name}`, sessionId: this.#recentGlobalSessionId() })
+  }
+
+  // ---- 日报（routes/web 调用；调度触发在 MemoryTriggers 面） ----
+
+  /** 项目清单 + 各项目最近一份日报的日期（无日报 → 空串）。 */
+  dailyProjects(): Array<{ id: string; workdir: string; latest: string }> {
+    const out: Array<{ id: string; workdir: string; latest: string }> = []
+    for (const id of this.#layout.listProjectIds()) {
+      const dates = listDailyDates(this.#layout.projectDir(id))
+      out.push({ id, workdir: this.#layout.workdirOf(id) ?? "", latest: dates[0] ?? "" })
+    }
+    return out
+  }
+
+  /** 项目已有的日报日期清单（新到旧）。 */
+  dailyDates(projectId: string): string[] {
+    return listDailyDates(this.#layout.projectDir(projectId))
+  }
+
+  /** 读一天的日报；项目存在与否由路由经 dailyProjects 判定，这里只管文件。 */
+  dailyReport(projectId: string, date: string): DailyReport | undefined {
+    return readDailyReport(this.#layout.projectDir(projectId), date)
+  }
+
+  /**
+   * 手动重新生成：该日有文件 → 按文件记录的原窗重跑覆盖；该日是今天且无文件 →
+   * 立即按当前窗（窗起点标记至今）生成；其余（历史日期无文件、窗内无消息）抛
+   * DailyRegenerateError，路由按 status 映 404/400。不推进任何标记（调度标记
+   * 归调度路径管），到点时调度仍会按完整窗覆盖一次。
+   */
+  async regenerateDaily(projectId: string, date: string): Promise<DailyReport> {
+    const workdir = this.#layout.workdirOf(projectId)
+    if (workdir === undefined) throw new DailyRegenerateError("unknown-project", `unknown project: ${projectId}`)
+    const existing = readDailyReport(this.#layout.projectDir(projectId), date)
+    let window: { start: string; end: string; date: string }
+    if (existing !== undefined) {
+      window = { start: existing.windowStart, end: existing.windowEnd, date }
+    } else if (date === localDateOf(this.#now())) {
+      const now = this.#now()
+      window = { start: this.#dailySince(workdir) ?? localMidnightIso(now), end: now.toISOString(), date }
+    } else {
+      throw new DailyRegenerateError("no-file", `该日无日报文件，窗信息不存在，无法重新生成（${date}）`)
+    }
+    const result = await this.#pipeline.runDaily(workdir, window, this.#recentSessionId(workdir))
+    if (result.outcome === "empty") {
+      throw new DailyRegenerateError("empty-window", "该日窗内没有会话消息，无日报可生成")
+    }
+    return result.report
   }
 }

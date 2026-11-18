@@ -86,6 +86,54 @@ describe("config route", () => {
     expect(res.statusCode).toBe(401)
     expect(res.json()).toEqual({ error: "unauthorized" })
   })
+
+  it("PATCH /config updates the daily settings in place and persists them", async () => {
+    const res = await app.inject({
+      method: "PATCH", url: "/config", headers: { ...AUTH, "content-type": "application/json" },
+      payload: { daily: { hour: 22, intervalDays: 3 } },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ ok: true, daily: { hour: 22, intervalDays: 3 } })
+    // 就地生效（调度器每次扫描读 config，改动下一拍即吃到）
+    expect(config.daily).toEqual({ hour: 22, intervalDays: 3 })
+    // 持久化：重新 loadConfig 读回同值
+    const { loadConfig, resolvePaths } = await import("@kclaw/core")
+    const reloaded = loadConfig(resolvePaths(home))
+    expect(reloaded.daily).toEqual({ hour: 22, intervalDays: 3 })
+    // 凭据拆分不受影响：config.json 里 provider key 是空串占位、凭据文件持有真值
+    const { readFile } = await import("node:fs/promises")
+    const persisted = JSON.parse(await readFile(join(home, "config.json"), "utf8")) as KclawConfig
+    expect(persisted.providers.entries.main?.apiKey).toBe("")
+  })
+
+  it("PATCH /config validates the daily values and rejects anything else", async () => {
+    const bad = [
+      { hour: 24, intervalDays: 1 },
+      { hour: 8, intervalDays: 0 },
+      { hour: "eight", intervalDays: 1 },
+      { hour: 8 },
+    ]
+    for (const daily of bad) {
+      const res = await app.inject({
+        method: "PATCH", url: "/config", headers: { ...AUTH, "content-type": "application/json" },
+        payload: { daily },
+      })
+      expect(res.statusCode, JSON.stringify(daily)).toBe(400)
+    }
+    // 负 hour 是合法的关闭表达
+    const off = await app.inject({
+      method: "PATCH", url: "/config", headers: { ...AUTH, "content-type": "application/json" },
+      payload: { daily: { hour: -1, intervalDays: 2 } },
+    })
+    expect(off.statusCode).toBe(200)
+    expect(config.daily.hour).toBe(-1)
+    // 白名单外的一律拒绝
+    const alien = await app.inject({
+      method: "PATCH", url: "/config", headers: { ...AUTH, "content-type": "application/json" },
+      payload: { memory: { consolidate: false } },
+    })
+    expect(alien.statusCode).toBe(400)
+  })
 })
 
 describe("static hosting of packages/web dist", () => {

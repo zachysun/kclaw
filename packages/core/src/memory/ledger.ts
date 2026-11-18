@@ -19,6 +19,10 @@ interface LedgerState {
   nightlyBaseline?: string
   /** 最近一次夜间沉淀触发的本地日期（YYYY-MM-DD，scheduler 防同日重复触发）。 */
   nightlyLastRun?: string
+  /** 最近一次日报调度的本地日期（YYYY-MM-DD，scheduler 防同日重复触发；失败也推进）。 */
+  dailyLastRun?: string
+  /** 日报窗起点时刻（ISO）：上次"生成完成或确认无活动"推进到的时刻；生成失败不推进。 */
+  dailySince?: string
 }
 
 /** 每项目一本（<projectDir>/state.json）：防重复提取与漏提取。 */
@@ -38,6 +42,8 @@ export class WriteLedger {
           intervalLastRun: raw.intervalLastRun,
           nightlyBaseline: raw.nightlyBaseline,
           nightlyLastRun: raw.nightlyLastRun,
+          dailyLastRun: raw.dailyLastRun,
+          dailySince: raw.dailySince,
         }
       } catch {
         // 损坏的记录视作空记录：全量重扫（重复提取由合并写保底）
@@ -108,6 +114,26 @@ export class WriteLedger {
 
   setNightlyLastRun(date: string): void {
     this.#state.nightlyLastRun = date
+    this.#flush()
+  }
+
+  /** 最近一次日报调度的本地日期（YYYY-MM-DD）；从未触发过 → undefined。 */
+  getDailyLastRun(): string | undefined {
+    return this.#state.dailyLastRun
+  }
+
+  setDailyLastRun(date: string): void {
+    this.#state.dailyLastRun = date
+    this.#flush()
+  }
+
+  /** 日报窗起点时刻（ISO）；从未处理过 → undefined（首窗 = 当天本地 0 点）。 */
+  getDailySince(): string | undefined {
+    return this.#state.dailySince
+  }
+
+  setDailySince(iso: string): void {
+    this.#state.dailySince = iso
     this.#flush()
   }
 

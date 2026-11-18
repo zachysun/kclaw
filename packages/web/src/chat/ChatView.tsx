@@ -86,6 +86,9 @@ export interface ChatViewProps {
   onDismissNotice?: () => void
   /** The user typed into the composer — the owner clears the stale notice. */
   onDraftChange?: () => void
+  /** 单次预填种子（daily 展开选项）：透传给 Composer，消费一次即清。 */
+  draftSeed?: string | null
+  onSeedConsumed?: () => void
   /** The current send disposition (the trio's selection; the owner resolves it from meta/config). */
   disposition?: Disposition
   /** Select the trio — the owner writes the sticky override and carries it on sends. */
@@ -180,7 +183,7 @@ export interface ChatViewProps {
   changesSlot?: ReactNode
 }
 
-export function ChatView({ sessionId, view, onSend, onUiAction, uiPicks, pendingCards, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDismissNotice, onDraftChange, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, onFork, forkPending, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal, usage, changesSlot }: ChatViewProps) {
+export function ChatView({ sessionId, view, onSend, onUiAction, uiPicks, pendingCards, onResolveConfirmation, onAnswerQuestion, pendingAttachments, onRemoveAttachment, models, sessionModel, onSwitchModel, mode, onSwitchMode, notice, noticeAction, onDismissNotice, onDraftChange, draftSeed, onSeedConsumed, disposition, onSetDisposition, onCancelQueued, onCancelAllQueued, onOpenAudit, onCancelCompaction, onStopRun, onRetry, onFork, forkPending, compactions, extraCommands, mentionFiles, mentionTruncated, readOnly, onReturnToParent, team, goal, usage, changesSlot }: ChatViewProps) {
   // In-place editor state of edit & retry, keyed by the bubble being edited;
   // both confirm and Esc clear it.
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
@@ -535,6 +538,8 @@ export function ChatView({ sessionId, view, onSend, onUiAction, uiPicks, pending
           onHelpRequest={openHelp}
           onEscape={() => setHelpOpen(false)}
           onDraftChange={onDraftChange}
+          draftSeed={draftSeed}
+          onSeedConsumed={onSeedConsumed}
           extraCommands={extraCommands}
           mentionFiles={mentionFiles}
           mentionTruncated={mentionTruncated}

@@ -234,6 +234,17 @@ export interface KclawConfig {
     }
   }
   /**
+   * 日报（Daily）：每 N 天的本地 H 点把每个项目自上次日报以来的全部会话
+   * 消息摘要成卡片集，落项目记忆目录 daily/ 下按日期命名的 JSON。
+   * hour 负值 = 整个日报调度关闭（与 memory.consolidateHour 同语义）。
+   */
+  daily: {
+    /** 生成的本地小时（0-23；负值 = 关闭）。默认 8（早上 8 点）。 */
+    hour: number
+    /** 每 N 天生成一次；默认 1（每天）。 */
+    intervalDays: number
+  }
+  /**
    * /goal goal loop (issue #47). The ONLY knob is the judge's provider entry
    * key: empty = each goal session judges on its own session model. Loop
    * caps are code constants (goal/limits.ts), not config.
@@ -285,6 +296,7 @@ export const defaultConfig: KclawConfig = {
     taskBoard: { maxTasks: 64 },
   },
   skills: { evolution: { enabled: true, idleMinutes: 10 }, curator: { enabled: true, staleDays: 14, archiveDays: 30, hour: 4 } },
+  daily: { hour: 8, intervalDays: 1 },
   goals: { judge: "" },
   workspace: process.cwd(),
 }
@@ -441,7 +453,42 @@ function parseConfig(raw: string, path: string): KclawConfig {
   validateSkillsConfig(merged)
   validateServerConfig(merged)
   validateGoalsConfig(merged)
+  validateDailyConfig(merged)
   return merged
+}
+
+/** daily.hour 的合法域：不超 23 的整数（负整数是合法的关闭表达，consolidateHour 同语义）。
+ *  与 routes/config.ts 的 PATCH 白名单共用——合法域只有这一份，改两处自动一致。 */
+export function isValidDailyHour(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value <= 23
+}
+
+/** daily.intervalDays 的合法域：正整数。与 routes/config.ts 的 PATCH 白名单共用。 */
+export function isValidDailyIntervalDays(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && (value as number) >= 1
+}
+
+/**
+ * Daily section validation (team style): a non-mapping section falls back
+ * wholesale; an illegal hour or intervalDays falls back per field (the legal
+ * domains live in isValidDailyHour / isValidDailyIntervalDays), each with one
+ * warning. Never throws.
+ */
+function validateDailyConfig(merged: KclawConfig): void {
+  const daily = merged.daily
+  if (!isPlainObject(daily)) {
+    console.warn("kclaw config: daily section is not a mapping; falling back to defaults")
+    merged.daily = structuredClone(defaultConfig.daily)
+    return
+  }
+  if (!isValidDailyHour(daily.hour)) {
+    console.warn(`kclaw config: daily.hour ${String(daily.hour)} is invalid; falling back to 8`)
+    daily.hour = 8
+  }
+  if (!isValidDailyIntervalDays(daily.intervalDays)) {
+    console.warn(`kclaw config: daily.intervalDays ${String(daily.intervalDays)} is invalid; falling back to 1`)
+    daily.intervalDays = 1
+  }
 }
 
 /**

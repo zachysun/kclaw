@@ -15,11 +15,13 @@
  * 的 nightlyLastRun 是有意的两处存储）。
  */
 
-/** 本地日期 YYYY-MM-DD（每日一次判定的判重键；与触发判定同用本地时间）。 */
-export function localDate(d: Date): string {
-  const p = (n: number): string => String(n).padStart(2, "0")
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
+import { localDateOf } from "@kclaw/core"
+
+// 本地日期 YYYY-MM-DD（每日一次判定的判重键；与触发判定同用本地时间）。
+// 单一出处收敛到 core 的 localDateOf——日报的窗锚与调度判重是同一个键，
+// 两端各留一份实现会单边漂移。skill-curator 与记忆调度器继续从本模块 import。
+const localDate = localDateOf
+export { localDate }
 
 /**
  * 每日一次判定（纯函数）：本地时刻过了 hour 且今天（本地日期）未运行 → due。
@@ -30,6 +32,22 @@ export function dailyGateDue(now: Date, hour: number, lastRunDate: string | unde
   if (hour < 0) return false
   if (now.getHours() < hour) return false
   return lastRunDate !== localDate(now)
+}
+
+/**
+ * 每 N 天一次判定（纯函数）：本地时刻过了 hour、今天未运行、且距上次运行
+ * 满 intervalDays 天（本地日期差，lastRunDate 为 undefined 视作立刻到期）。
+ * hour < 0 = 该任务关闭。与 dailyGateDue 同风格，供日报调度用。
+ */
+export function intervalGateDue(now: Date, hour: number, intervalDays: number, lastRunDate: string | undefined): boolean {
+  if (hour < 0) return false
+  if (now.getHours() < hour) return false
+  const today = localDate(now)
+  if (lastRunDate === today) return false
+  if (lastRunDate === undefined || intervalDays <= 1) return true
+  const days = Math.floor((Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+    - Date.parse(`${lastRunDate}T00:00:00Z`)) / 86_400_000)
+  return days >= intervalDays
 }
 
 /**

@@ -92,6 +92,12 @@ export interface ChatPanelProps {
    * 不动 ws 客户端本身。
    */
   onConnectionState?: (state: "connecting" | "open" | "closed") => void
+  /**
+   * 单次预填种子（App 层 daily 卡片展开选项带入）：非空时开场文案写进
+   * Composer 草稿并回调清除；不自动发送。
+   */
+  draftSeed?: string | null
+  onSeedConsumed?: () => void
 }
 
 /** Max consecutive failed reconnects before giving up with a notice. */
@@ -158,7 +164,7 @@ function dropLocalPick(text: string): (prev: Map<string, UiCardAction>) => Map<s
   }
 }
 
-export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten, onOpenAudit, onOpenMcp, onReturnToParent, onForked, onConnectionState }: ChatPanelProps) {
+export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessionModel, onSessionRenamed, onCreateSession, onOpenSessions, workdir, onOpenMemoryWritten, onOpenAudit, onOpenMcp, onReturnToParent, onForked, onConnectionState, draftSeed, onSeedConsumed }: ChatPanelProps) {
   const [view, setViewState] = useState<ChatState>(() => initChat(initialMessages))
   const [notice, setNotice] = useState<string | null>(null)
   const [forkPending, setForkPending] = useState(false)
@@ -1007,6 +1013,8 @@ export function ChatPanel({ sessionId, api, ws, createWs, initialMessages, sessi
           noticeAction={noticeAction}
           onDismissNotice={clearNotice}
           onDraftChange={clearNotice}
+          draftSeed={draftSeed}
+          onSeedConsumed={onSeedConsumed}
           disposition={disposition}
           onSetDisposition={handleSetDisposition}
           onCancelQueued={handleCancelQueued}
