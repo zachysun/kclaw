@@ -140,6 +140,33 @@ describe("pipeline runDaily", () => {
     expect(inputs[0]).not.toContain("窗外一条")
   })
 
+  it("strips memory-injection notes from the material (旧经历不冒充当天, 真机回归 2026-11-19)", async () => {
+    const meta = sessions.create("s", undefined, WORKDIR)
+    // 用户消息带 L1 注入批注（kind "memory"）与来源说明批注（kind "cron"）：
+    // 记忆批注是对过往情节的复述，必须被剥掉；cron 来源说明是当天真实事件，保留。
+    sessions.appendMessage(meta.id, {
+      id: "msg_note", sessionId: meta.id, role: "user", createdAt: "2026-11-19T02:00:00Z",
+      blocks: [
+        { id: "blk_n1", type: "note", kind: "memory", text: "相关经历（旧事项）：昨天修好了 WebSocket 重连风暴" },
+        { id: "blk_n2", type: "note", kind: "cron", text: "cron 任务「喝水提醒」触发了这轮对话" },
+        { id: "blk_t1", type: "text", text: "今天的真实消息" },
+      ],
+    })
+    const inputs: string[] = []
+    const llm: LlmClient = {
+      async *stream(req): AsyncIterable<LlmStreamEvent> {
+        inputs.push(String((req.messages as Array<{ content: string }>)[0]?.content ?? ""))
+        yield { type: "text_delta", delta: JSON.stringify({ cards: [] }) }
+        yield { type: "message_done", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1 } }
+      },
+    }
+    const pipe = new MemoryPipeline(join(root, "memory"), sessions, { resolveLlm: () => ({ llm, model: "m" }) })
+    await pipe.runDaily(WORKDIR, { start: "2026-11-19T00:00:00Z", end: "2026-11-19T12:00:00Z", date: "2026-11-19" })
+    expect(inputs[0]).toContain("今天的真实消息")
+    expect(inputs[0]).toContain("喝水提醒")
+    expect(inputs[0]).not.toContain("WebSocket 重连风暴")
+  })
+
   it("returns empty (no file, no LLM call) when the window has no messages", async () => {
     const meta = sessions.create("s", undefined, WORKDIR)
     seed(meta.id, "2026-11-19T02:00:00Z", "窗外的历史消息")

@@ -480,7 +480,10 @@ export class MemoryPipeline {
     const startTime = Date.parse(window.start)
     const endTime = Date.parse(window.end)
     // 与提取同一条读取口径（readMessages：截断的轮次不进素材）、同一个子会话
-    // 排除规则（subagent 过程文本归主线）。
+    // 排除规则（subagent 过程文本归主线）。素材只取对话本身：L1 记忆注入的
+    // note（kind "memory"）是对过往情节的复述，留在素材里会把旧经历包装成
+    // 当天的事（真机验证 2026-11-19 发现）；其余 note 保留——cron/subagent
+    // 等来源说明本身就是窗内发生的事。过滤后无块的消息（纯记忆载具）整条丢弃。
     const parts: string[] = []
     for (const m of this.#sessions.list()) {
       if ((m.workdir ?? "") !== workdir || m.parentSessionId !== undefined) continue
@@ -489,6 +492,8 @@ export class MemoryPipeline {
           const t = Date.parse(msg.createdAt)
           return t > startTime && t <= endTime
         })
+        .map((msg) => ({ ...msg, blocks: msg.blocks.filter((b) => !(b.type === "note" && b.kind === "memory")) }))
+        .filter((msg) => msg.blocks.length > 0)
       if (rows.length === 0) continue
       parts.push(`=== 会话：${m.title === "" ? m.id : m.title}（${m.createdAt} 创建）===\n${renderSegment(rows)}`)
     }
