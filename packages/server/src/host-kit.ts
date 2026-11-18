@@ -33,6 +33,22 @@ export function dailyGateDue(now: Date, hour: number, lastRunDate: string | unde
 }
 
 /**
+ * 每 N 天一次判定（纯函数）：本地时刻过了 hour、今天未运行、且距上次运行
+ * 满 intervalDays 天（本地日期差，lastRunDate 为 undefined 视作立刻到期）。
+ * hour < 0 = 该任务关闭。与 dailyGateDue 同风格，供日报调度用。
+ */
+export function intervalGateDue(now: Date, hour: number, intervalDays: number, lastRunDate: string | undefined): boolean {
+  if (hour < 0) return false
+  if (now.getHours() < hour) return false
+  const today = localDate(now)
+  if (lastRunDate === today) return false
+  if (lastRunDate === undefined || intervalDays <= 1) return true
+  const days = Math.floor((Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+    - Date.parse(`${lastRunDate}T00:00:00Z`)) / 86_400_000)
+  return days >= intervalDays
+}
+
+/**
  * 跟随判定（纯函数）：end_turn 之后 idleMinutes 内无新活动 → due。
  * 空活动记录（无会话）视作"end_turn 即最后活动"，保证重启后可补查。
  */

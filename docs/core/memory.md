@@ -2,7 +2,7 @@
 
 ## 职责
 
-`MemorySystem`（`packages/core/src/memory/system.ts`）是记忆系统的唯一服务端入口（单类不拆；31 个公共方法按四类使用方拆成四个窄接口 `MemoryQuery`/`MemoryTriggers`/`MemoryScheduleBook`/`MemoryAdmin`，共 29 个，另有接口外的 `stop()` 与 fork 播种用的 `seedWatermarksForFork()`，调用方按需依赖其中一个接口），它把三类文件级能力组装在一起：**L1 项目情节**（按项目分目录的主题线文件）、**L2 全局认知**（跨项目的画像/知识/规则文件）、以及两套**派生检索索引**（SQLite FTS5 全文索引 + 可选的向量索引）。一条记忆就是一份 markdown 文件，用户可以直接打开查看、修改、删除；索引永远只是派生物，删掉可以重建。
+`MemorySystem`（`packages/core/src/memory/system.ts`）是记忆系统的唯一服务端入口（单类不拆；38 个公共方法按五类使用方拆成五个窄接口 `MemoryQuery`/`MemoryTriggers`/`MemoryScheduleBook`/`MemoryAdmin`/`MemoryDaily`，共 36 个，另有接口外的 `stop()` 与 fork 播种用的 `seedWatermarksForFork()`，调用方按需依赖其中一个接口），它把三类文件级能力组装在一起：**L1 项目情节**（按项目分目录的主题线文件）、**L2 全局认知**（跨项目的画像/知识/规则文件）、以及两套**派生检索索引**（SQLite FTS5 全文索引 + 可选的向量索引）。一条记忆就是一份 markdown 文件，用户可以直接打开查看、修改、删除；索引永远只是派生物，删掉可以重建。
 
 模型通过 `memory_save` / `memory_search` 两个工具读写（`packages/core/src/tools/memory.ts`）；run 组装（core `executeRun`）在每次 run 时做两级注入：L2 认知常驻系统提示、L1 情节作为 note 附到用户消息上（见下文"检索与注入"）。daemon 的 `MemorySystem` 组装与 embedding 判定链都在 `packages/server/src/daemon.ts`。
 
@@ -48,7 +48,9 @@
     └── <id>/                    # 项目 id = <目录名>-<绝对路径 SHA-1 前 6 位>
       ├── workdir.txt          # 人可读的目录映射（项目首次产生记忆时写入）
       ├── MEMORY.md            # 主题线索引表（派生物，机器重建）
-      ├── state.json           # 提取进度标记 + 跟随检查 + intervalLastRun（见"写入 pipeline"）
+      ├── state.json           # 提取进度标记 + 跟随检查 + 定时/夜间/日报的调度标记（见"写入 pipeline"）
+        ├── daily/                # 日报卡片（派生物，每 N 天生成一份，见"日报（daily）"节）
+        │   └── <日期>.json
         ├── vectors.db           # L1 检索索引（FTS5 + 向量，派生物）
         └── <topic>.md           # 主题线文件（唯一权威情节数据）
 ```
@@ -161,7 +163,9 @@ flowchart TD
   "followChecks": [ { "sessionId": "…", "endTurnAt": "…" } ],
   "intervalLastRun": "2026-08-30T00:00:00.000Z",
   "nightlyBaseline": "2026-08-30",
-  "nightlyLastRun": "2026-08-31"
+  "nightlyLastRun": "2026-08-31",
+  "dailyLastRun": "2026-08-31",
+  "dailySince": "2026-08-31T00:00:00.000Z"
 }
 ```
 
@@ -184,6 +188,16 @@ flowchart TD
 - `target:"rule"` + `name`：用户规则，门槛最高，需现有认知已记录或本次记录中反复出现的行为才能立（清单式，每条规则一个小节）。
 
 新增用 `op:"append"`/`op:"create"`，现有认知已记录、这次再次出现的不动，与这次经历不一致的改写（`op:"rewrite"`，不保留原文）；每条新认知附来源注释 `<!-- 来源：<topic>#<date> -->`。解析校验：`target` 必须是三值之一、`wiki`/`rule` 必带非空 `name`，不合法的动作在解析层丢弃并记日志（`dropping malformed cognition action (target=…)`）：`#applyCognitionAction` 用 `target` 拼目录路径，放行任意字符串会写出索引读不到的无效文件。`target:"skill"` 预留、当前未实现（解析层即丢弃，`#applyCognitionAction` 内保留防御分支）。写入门槛：只收换个项目依然成立的认知，单项目自己的设定、剧情、文档内容不进 `global`（这些归 L1 项目记忆和项目文档管）。沉淀受 `memory.consolidate` 开关（默认 true）控制（停用顺带与夜间闲时两路共用）；LLM 调用失败只打日志、不影响 run。除这两条自动路径外，`MemorySystem.consolidate(workdir, topic)` 也暴露了手动沉淀入口（目前没有路由或工具暴露这个入口）。
+
+## 日报（daily）
+
+日报是记忆系统的项目级派生物：调度器每 N 天在本地 H 点（`daily.hour`，默认 8；`daily.intervalDays`，默认 1；两个字段属独立的 `daily` 配置节，见 [storage](./storage.md) 的 config 表）对每个项目触发一次生成（`MemorySystem.triggerDaily`）：素材是**自上次日报以来的全部会话消息**（窗 = (上次处理时刻, 现在]，首次取当天本地 0 点；与提取同一条 `readMessages` 读取口径，子会话排除），复用提取的事件渲染器转成逐行文本，交给一次无工具 LLM 调用（`DAILY_SYSTEM_PROMPT`；模型与提取共用 `memory.extractModel` 解析链；用量记 chore `daily`、归属项目最近活动会话），产出至多 8 张卡片，覆盖写入 `projects/<id>/daily/<本地日期>.json`。窗内无消息的项目跳过不产文件。生成挂在 `MemoryPipeline` 的同一把项目级串行锁上（`runDaily` 入口，与记忆写入互斥）。
+
+卡片四类（`kind`，渲染层映射中文标签）：`achievement` 成果 / `lesson` 教训 / `blocker` 卡点 / `insight` 观察；每张含一句话 `title`、一段一事的 `body`，以及 2-3 个 `options`（各含 `label` 展示名与 `opener` 开场文案全文——生成时就写好、自包含，点开续会话时预填进输入框、不自动发送）。解析宽容（`packages/core/src/memory/daily.ts` 的 `parseDailyCards`）：剥代码围栏、逐卡校验、非法卡丢弃记日志、超上限截断。与提取的负面清单相反：没走通的尝试与失败的调试是日报的素材，prompt 明确要求写出来——长期记忆不收失败，日报要讲出来。
+
+两份标记都在该项目 `state.json`（`WriteLedger`）里：**判重日期** `dailyLastRun`（本地日期，调度器在触发发起后即时推进、失败也推进——防重入优先，失败次日再试）；**窗起点时刻** `dailySince`（ISO 时刻，生成完成或确认窗内无活动才推进，失败不推进——失败那天的窗内容留在窗内，下次定时一并生成不漏内容；首次尝试即把当天 0 点锚定写入，防止失败后内容因无标记而漏出窗外）。调度判定在 host-kit 的 `intervalGateDue`（时刻 + 本地日期判重 + 距上次满 N 天），`daily.hour` 负值关闭整条调度。
+
+手动重新生成（`MemorySystem.regenerateDaily`，路由见 [http-api](../server/http-api.md)）：该日有文件按文件里记录的原窗重跑、整文件覆盖；当天无文件立即按当前窗（窗起点标记至今）生成；历史日期无文件或窗内无消息抛带状态的错误、路由映 404/400。重新生成不动任何标记——到点时调度仍会按完整窗覆盖一次。Web 端 Daily tab（项目切换 + 日期翻页 + 卡片流 + 生成时间设置 + 重新生成按钮，见 [webui](../web/webui.md)）点卡片展开选项后新建该工作目录的会话并把开场文案预填进输入框。
 
 ## 检索与注入
 

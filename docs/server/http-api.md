@@ -9,7 +9,7 @@
 - **鉴权由一个 hook 统一处理**：`preHandler` 比对 `Authorization: Bearer <token>`（恒时比较），失败统一 `401 {error:"unauthorized"}`。豁免只有 `/health`、`/ws`、静态外壳三种（设计理由见 [daemon](./daemon.md) 的鉴权设计一节）。
 - **错误形状统一为 `{error: string}`**：会话/任务两个路由分组（scope）注册了 `setErrorHandler`，把 Fastify 的 body 解析错误（非法 JSON、空 body）也归一成这个形状；其余分组未注册（body 解析错误走 Fastify 默认形状 `{statusCode, error, message}`），客户端需兼容两种。客户端的共享 HTTP 模块（`@kclaw/core/client-http`）正是从这个 `error` 字段提取错误消息、取不到退回 `HTTP <status>`，见 [client-http](../core/client-http.md)。
 - **404 显式可判别**：会话/任务路由先查存在性（`sessions.meta(id)` / `crons.get(id)`），不存在返回 `404 {error:"session not found"|"cron not found"}`，不依赖异常路径。
-- **配置的读取接口只读且脱敏，写入集中在 provider 管理路由族**：`GET /config` 的 API key 永远掩码返回；改 provider 配置走 `/providers` 路由族（见下文 Provider 管理一节），改动热生效于下个 run 并持久化 `config.json`，其余配置节仍以手写配置文件为准。
+- **配置的读取接口只读且脱敏，写入面集中在 provider 管理路由族与 daily 设置**：`GET /config` 的 API key 永远掩码返回；改 provider 配置走 `/providers` 路由族（见下文 Provider 管理一节），改动热生效于下个 run 并持久化 `config.json`；日报的生成时间设置走 `PATCH /config` 的 `daily` 节白名单（见下文配置一节），调度器每拍现读 config、同样热生效；其余配置节仍以手写配置文件为准。
 - **消息审计没有专门路由，压缩审计有只读视图**：审计页（web 的 `AuditView`）没有独立 `/audit` 路由（它由 `GET /sessions/:id/events`（该会话完整事件流，`?since=` 增量游标）单源读取 + 页面私有 ws 订阅（`session.appended` 通知帧驱动增量拉取）组合而成，会话选择跟随应用侧栏的全局选中）。压缩审计不同：手动压缩刻意不产生消息，纯靠消息流看不到它的痕迹，因此 `GET /sessions/:id/compactions` 作为事件流里 `compaction` 事件的只读视图存在（见 [compaction](../core/compaction.md)）。
 - **可选能力按注入条件注册**：附件路由只在传入 `attachmentsDir` 时注册、用量路由只在传入 `UsageStore` 时注册：能力未组装就没有这些路径（不存在"路由已注册但调用报错"的状态）；MCP 组始终注册，`GET /mcp` 在 daemon 未组装 McpManager 时返回空组列表，动作端点此时回答 503。技能组与记忆组同为始终注册，但语义不同：记忆组未组装 `MemorySystem` 时降级 503，技能组没有组装依赖（技能以文件为准，每次请求重新扫描），始终正常工作。
 
@@ -140,8 +140,9 @@ interface Cron {
 | 方法 | 路径 | 用途 | 响应 |
 |------|------|------|------|
 | GET | `/config` | 读当前配置（脱敏副本） | `KclawConfig`，所有 provider 条目的 `apiKey` 与 `web.tavilyApiKey` 掩码 |
+| PATCH | `/config` | 改日报的生成时间设置（daily 节白名单写面） | 请求 `{daily: {hour, intervalDays}}` 两字段必填：`hour` 为不超 23 的整数（负整数 = 关闭日报调度）、`intervalDays` 为正整数，非法 400；合法时就地改内存 config 并经 `saveConfig` 持久化（记忆调度器每拍现读 config，改动下一拍即生效）。返回 `{ok:true, daily}`；其余配置节不在白名单内（body 缺 `daily` 或只带其他节一律 400） |
 
-脱敏规则（`sanitizeConfig` + `maskSecret`）：先 `structuredClone` 深拷贝再改（原对象保持不变），掩码为 `"***" + 末 4 字符`（不足 4 字符则纯 `"***"`，空串同）。其余字段原样返回。`GET /config` 本身只读；配置的写面在下面的 provider 管理族。
+脱敏规则（`sanitizeConfig` + `maskSecret`）：先 `structuredClone` 深拷贝再改（原对象保持不变），掩码为 `"***" + 末 4 字符`（不足 4 字符则纯 `"***"`，空串同）。其余字段原样返回。`GET /config` 本身只读；provider 配置的写面在下面的 provider 管理族，daily 节的写面在上表的 `PATCH /config`。
 
 ### Provider 管理（routes/providers.ts）
 
@@ -159,7 +160,7 @@ interface Cron {
 
 ### 记忆（routes/memory.ts，底层 `MemorySystem`）
 
-`/memory` 管理路由族：读取与整文件覆写/删除记忆系统里的项目主题线（L1）与全局认知文件（L2）。机制与文件格式见 [memory](../core/memory.md)。与附件/用量"仅注入时注册"不同，这组**始终注册**：`createApp` 未组装 `MemorySystem`（`opts.memory` 缺失，常见于测试）时，命中任何一条都返回 `503 {error:"memory system unavailable"}`，不返回 404。
+`/memory` 管理路由族：读取与整文件覆写/删除记忆系统里的项目主题线（L1）与全局认知文件（L2），以及日报卡片（daily）。机制与文件格式见 [memory](../core/memory.md)。与附件/用量"仅注入时注册"不同，这组**始终注册**：`createApp` 未组装 `MemorySystem`（`opts.memory` 缺失，常见于测试）时，命中任何一条都返回 `503 {error:"memory system unavailable"}`，不返回 404。
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
@@ -173,8 +174,12 @@ interface Cron {
 | PATCH | `/memory/global/:kind/:file` | 整文件覆写认知文件（写后重建全局索引） | `{content}` 必填、非空字符串，否则 400 `content must be a non-empty string` | `{ok:true}`；kind 非法或文件不存在 404 |
 | DELETE | `/memory/global/:kind/:file` | 删除认知文件 + 重建全局索引 | — | `{ok:true}`；kind 非法或文件不存在 404；**persona 是全局画像，不可删除，返回 400 `persona 不可删除（可清空正文）`** |
 | POST | `/memory/trigger-manual` | 手动触发当前项目的手动写入：与定时/跟随同一条 pipeline，范围 = 归属会话自上次提取位置以来的新消息（会话默认回退到项目最近活动会话） | `{workdir?, sessionId?}`：均可选，workdir 默认回退到 `config.workspace`，sessionId 默认回退到项目最近活动会话 | `{ok:true}`；`memory.write.manual=false` 时 400 `手动写入已关闭（memory.write.manual=false），可依赖定时/跟随触发`；pipeline 异常 500 |
+| GET | `/memory/daily/projects` | 日报项目列表（各项目最近一份日报的日期，无日报为空串） | — | `{id, workdir, latest}[]` |
+| GET | `/memory/daily/:project` | 某项目的日报日期索引（新到旧） | — | `{dates: string[]}`；项目不存在 404 |
+| GET | `/memory/daily/:project/:date` | 读一天的日报卡片 | — | 日报对象 `{date, windowStart, windowEnd, generatedAt, cards[]}`（卡片 `{kind, title, body, options[]}`，kind 四值 achievement/lesson/blocker/insight）；日期非 `YYYY-MM-DD` 400、文件不存在 404 |
+| POST | `/memory/daily/:project/regenerate` | 手动重新生成（同步等响应）：该日有文件按原窗重跑覆盖；当天无文件立即按当前窗生成；历史日期无文件或窗内无消息返回 400，不产零卡片文件 | `{date}` 必填（`YYYY-MM-DD`） | `{report}`（重跑后的完整日报对象）；日期非法 400；未知项目 404；`DailyRegenerateError` 的 `no-file`/`empty-window` 状态 400 带说明 |
 
-`:id`/`:project`/`:topic`/`:file` 的路径段先过白名单校验（`isSafeSegment`：段非空、非 `.`、非 `..`、不含 `/`，拦截目录穿越段；允许 CJK/空格，URL 里已 encodeURIComponent）。非法段返回 400 `invalid segment`；合法段按原样传给 `MemorySystem`，读侧宽容（找不到就 404），写侧是整文件覆写，请求体就是文件的新内容。`GET /memory/projects/:id` 的响应包装成 `{id, threads}` 是为前端取数方便（见 [memory](../core/memory.md) 的管理界面一节）。删除类的机器语义：删除的是文件，`vectors.db` 里的对应条目由随后的 reindex 清除。
+`:id`/`:project`/`:topic`/`:file` 的路径段先过白名单校验（`isSafeSegment`：段非空、非 `.`、非 `..`、不含 `/`，拦截目录穿越段；允许 CJK/空格，URL 里已 encodeURIComponent）。非法段返回 400 `invalid segment`；合法段按原样传给 `MemorySystem`，读侧宽容（找不到就 404），写侧是整文件覆写，请求体就是文件的新内容。日报路由的 `:date` 参数走形状校验（`isDailyDate`：必须是 `YYYY-MM-DD`），文件名与路径不进模型输出，穿越风险到此为止。`GET /memory/projects/:id` 的响应包装成 `{id, threads}` 是为前端取数方便（见 [memory](../core/memory.md) 的管理界面一节）。删除类的机器语义：删除的是文件，`vectors.db` 里的对应条目由随后的 reindex 清除。
 
 ### 技能（routes/skills.ts，始终注册）
 

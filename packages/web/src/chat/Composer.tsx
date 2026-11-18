@@ -6,7 +6,7 @@
  * result decides whether the draft clears: `false` (send rejected — socket
  * down, attachments still uploading) keeps the typed text for a retry.
  */
-import { useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { parseSlashInput, replaceTrailingSlashToken, slashCompletions, type SlashCommandMeta } from "@kclaw/core/commands"
 import { fileMentionCompletions, replaceTrailingMentionToken } from "@kclaw/core/mentions"
 import type { Disposition } from "./ChatView.js"
@@ -72,14 +72,28 @@ export interface ComposerProps {
    * draft changes (suggestion completion) do not fire this.
    */
   onDraftChange?: () => void
+  /**
+   * 单次预填种子（daily 卡片的展开选项点击后传入）：非空时写进草稿并回调
+   * onSeedConsumed 清除；不自动发送，用户可改可发。
+   */
+  draftSeed?: string | null
+  onSeedConsumed?: () => void
 }
 
-export function Composer({ onSend, onHelpRequest, onEscape, extraCommands, mentionFiles, mentionTruncated, running, disposition, onSetDisposition, teamTarget, onClearTeamTarget, onDraftChange }: ComposerProps) {
+export function Composer({ onSend, onHelpRequest, onEscape, extraCommands, mentionFiles, mentionTruncated, running, disposition, onSetDisposition, teamTarget, onClearTeamTarget, onDraftChange, draftSeed, onSeedConsumed }: ComposerProps) {
   // Suggestion-menu state: Escape dismisses the menu until the draft changes;
   // sel is the highlighted option, clamped whenever the candidate list shrinks.
   const [draft, setDraft] = useState("")
   const [dismissed, setDismissed] = useState(false)
   const [sel, setSel] = useState(0)
+
+  // 单次预填种子：daily 卡片的展开选项把开场文案带进新会话的输入框，
+  // 消费一次即清（onSeedConsumed 让 App 侧置 null，空值不动草稿）。
+  useEffect(() => {
+    if (draftSeed === undefined || draftSeed === null || draftSeed === "") return
+    setDraft(draftSeed)
+    onSeedConsumed?.()
+  }, [draftSeed, onSeedConsumed])
 
   // 建议菜单候选（斜杠命令与 @ 文件指定共用一个抽屉）：正在输入的最后一个词
   // 以 / 开头出命令、以 @ 开头出工作区文件，首字符互斥所以两类不同时出现。

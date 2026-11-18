@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
+import { DailyRegenerateError, isDailyDate, type DailyReport, type MemoryDaily } from "@kclaw/core"
 import type { KclawConfig, MemoryAdmin, MemoryTriggers } from "@kclaw/core"
 
 const NOT_FOUND = { error: "not found" } as const
@@ -17,8 +18,8 @@ function requireContent(body: unknown): string | undefined {
   return typeof c === "string" && c !== "" ? c : undefined
 }
 
-/** /memory 路由族：管理记忆系统（项目线文件 + global 认知文件）。 */
-export function registerMemoryRoutes(app: FastifyInstance, opts: { memory?: MemoryAdmin & Pick<MemoryTriggers, "triggerManual">; config?: KclawConfig }): void {
+/** /memory 路由族：管理记忆系统（项目线文件 + global 认知文件 + 日报）。 */
+export function registerMemoryRoutes(app: FastifyInstance, opts: { memory?: MemoryAdmin & MemoryDaily & Pick<MemoryTriggers, "triggerManual">; config?: KclawConfig }): void {
   // 无 memory 组装（createApp 未传 system）时全部 503，不注册会崩的调用。
   const unavailable = (reply: FastifyReply) => reply.code(503).send({ error: "memory system unavailable" })
   const memory = opts.memory
@@ -105,6 +106,52 @@ export function registerMemoryRoutes(app: FastifyInstance, opts: { memory?: Memo
     if (memory.cognitionContent(kind, file) === undefined) return reply.code(404).send(NOT_FOUND)
     memory.deleteCognition(kind, file)
     return { ok: true }
+  })
+
+  // ---- 日报路由族（Web daily tab 调用） ----
+
+  app.get("/memory/daily/projects", async (_req, reply) => {
+    if (memory === undefined) return unavailable(reply)
+    return memory.dailyProjects()
+  })
+
+  app.get("/memory/daily/:project", async (req, reply) => {
+    if (memory === undefined) return unavailable(reply)
+    const { project } = req.params as { project: string }
+    if (!isSafeSegment(project)) return badSegment(reply)
+    if (!memory.dailyProjects().some((p) => p.id === project)) return reply.code(404).send(NOT_FOUND)
+    return { dates: memory.dailyDates(project) }
+  })
+
+  app.get("/memory/daily/:project/:date", async (req, reply) => {
+    if (memory === undefined) return unavailable(reply)
+    const { project, date } = req.params as { project: string; date: string }
+    if (!isSafeSegment(project)) return badSegment(reply)
+    if (!isDailyDate(date)) return reply.code(400).send({ error: "date must be YYYY-MM-DD" })
+    const report: DailyReport | undefined = memory.dailyReport(project, date)
+    if (report === undefined) return reply.code(404).send(NOT_FOUND)
+    return report
+  })
+
+  // 手动重新生成（同步等响应）：该日有文件按原窗重跑覆盖；今天无文件立即按
+  // 当前窗生成；窗内无消息/历史日期无文件按 DailyRegenerateError 的 status 映 400。
+  app.post("/memory/daily/:project/regenerate", async (req, reply) => {
+    if (memory === undefined) return unavailable(reply)
+    const { project } = req.params as { project: string }
+    if (!isSafeSegment(project)) return badSegment(reply)
+    const body = req.body as { date?: unknown } | null
+    const date = typeof body === "object" && body !== null && typeof body.date === "string" ? body.date : ""
+    if (!isDailyDate(date)) return reply.code(400).send({ error: "date must be YYYY-MM-DD" })
+    try {
+      const report = await memory.regenerateDaily(project, date)
+      return { report }
+    } catch (err) {
+      if (err instanceof DailyRegenerateError) {
+        if (err.status === "unknown-project") return reply.code(404).send(NOT_FOUND)
+        return reply.code(400).send({ error: err.message })
+      }
+      return reply.code(500).send({ error: `daily regenerate failed: ${err instanceof Error ? err.message : String(err)}` })
+    }
   })
 
   // 手动写入入口：/memory save（CLI/Web）触发当前项目的

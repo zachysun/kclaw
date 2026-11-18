@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/web` 是 daemon 的浏览器前端：React 单页应用（SPA：单个 HTML 页面内完成全部交互，按需向服务器请求数据），vite 构建、产物由 daemon 静态托管，并按 PWA（渐进 Web 应用：可安装到主屏、带离线外壳）方式布置了 Service Worker 与清单文件。`src/App.tsx` 是根组件与顶层状态（tab、会话列表、选中会话）；`src/token.ts` 负责 token 引导（`?token=` 握手 → localStorage → 地址栏清除）；`src/ws.ts` 是 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）客户端；`src/api.ts` 是 HTTP 客户端（含附件上传；请求经 `@kclaw/core/client-http` 共享模块发出，由它负责 Bearer 注入、错误提取、204/空响应处理，`ApiError` 即该模块 `HttpRequestError` 的别名，见 [client-http](../core/client-http.md)）。功能与 CLI 对等并多出图形化部分（同一套 HTTP + WS API）：流式对话、确认卡片、会话（按工作目录分组）、任务、审计、用量、回收站、记忆管理、技能浏览、权限管理、MCP 管理；对话页额外有停止按钮、编辑重试/重新生成、消息级 fork、`@` 文件引用抽屉与 `/goal` 目标悬浮面板。
+`packages/web` 是 daemon 的浏览器前端：React 单页应用（SPA：单个 HTML 页面内完成全部交互，按需向服务器请求数据），vite 构建、产物由 daemon 静态托管，并按 PWA（渐进 Web 应用：可安装到主屏、带离线外壳）方式布置了 Service Worker 与清单文件。`src/App.tsx` 是根组件与顶层状态（tab、会话列表、选中会话）；`src/token.ts` 负责 token 引导（`?token=` 握手 → localStorage → 地址栏清除）；`src/ws.ts` 是 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）客户端；`src/api.ts` 是 HTTP 客户端（含附件上传；请求经 `@kclaw/core/client-http` 共享模块发出，由它负责 Bearer 注入、错误提取、204/空响应处理，`ApiError` 即该模块 `HttpRequestError` 的别名，见 [client-http](../core/client-http.md)）。功能与 CLI 对等并多出图形化部分（同一套 HTTP + WS API）：流式对话、确认卡片、会话（按工作目录分组）、任务、审计、用量、回收站、记忆管理、日报（Daily tab：左栏项目、日期翻页、卡片流；卡片带类型标签（成果/教训/卡点/观察）与展开选项，点选项新建该项目会话并把开场文案预填进输入框、不自动发送；页头带生成时间设置与"重新生成当天"）、技能浏览、权限管理、MCP 管理；对话页额外有停止按钮、编辑重试/重新生成、消息级 fork、`@` 文件引用抽屉与 `/goal` 目标悬浮面板。
 
 ## 设计决策
 

@@ -34,6 +34,7 @@ import { TrashView } from "./sessions/TrashView.js"
 import { CronView } from "./cron/CronView.js"
 import { AuditView } from "./audit/AuditView.js"
 import { MemoryView } from "./memory/MemoryView.js"
+import { DailyView } from "./daily/DailyView.js"
 import { SkillsView } from "./skills/SkillsView.js"
 import { PermissionsView } from "./permissions/PermissionsView.js"
 import { McpView } from "./mcp/McpView.js"
@@ -44,7 +45,7 @@ import type { FsBrowseResult, SessionMeta } from "./types.js"
 
 type DaemonStatus = "connecting" | "connected" | "error"
 
-const TABS = ["chat", "cron", "audit", "usage", "trash", "memory", "skills", "permissions", "mcp", "model", "channel"] as const
+const TABS = ["chat", "cron", "audit", "usage", "trash", "memory", "daily", "skills", "permissions", "mcp", "model", "channel"] as const
 type Tab = (typeof TABS)[number]
 
 /**
@@ -171,6 +172,10 @@ function MainShell({
   const { toasts, notify, dismiss } = useToasts()
   // memory.written 通知条点击后的跳转目标：切到记忆页并自动打开对应文件。
   const [memoryTarget, setMemoryTarget] = useState<MemoryWrittenInfo | null>(null)
+  // daily 卡片展开选项的单次预填种子：建好新会话后开场文案写进输入框，消费一次即清。
+  const [composerSeed, setComposerSeed] = useState<string | null>(null)
+  // 引用稳定的清除回调（ChatPanel/Composer 的 effect 依赖它，不能每渲染换引用）。
+  const clearComposerSeed = useCallback((): void => { setComposerSeed(null) }, [])
   // Mobile-only: the sidebar slides in as a drawer behind this flag (desktop
   // keeps it permanently visible).
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -415,6 +420,24 @@ function MainShell({
     [createAndSelectSession],
   )
 
+  // daily 卡片展开选项：为该项目新建会话、选中并切到 chat，开场文案预填在
+  // 输入框里（不自动发送，用户可改可发）。种子经 ChatPanel 透传给 Composer，
+  // ChatPanel 未挂载（未选会话）时种子先挂在状态里，挂载后消费一次即清。
+  const handleDailyContinue = useCallback(
+    async (workdir: string, opener: string): Promise<void> => {
+      try {
+        const meta = await api.post<SessionMeta>("/sessions", workdir === "" ? {} : { workdir })
+        setSessions((prev) => [meta, ...(prev ?? [])])
+        setSelectedId(meta.id)
+        setComposerSeed(opener)
+        switchTab("chat")
+      } catch (err) {
+        notify(err instanceof Error ? err.message : "创建会话失败", "error")
+      }
+    },
+    [api, notify, switchTab],
+  )
+
   // Session fork 完成（ChatPanel POST 成功后上抛）：新会话进侧栏并选中，
   // 全局 toast 带"返回原会话"动作——fork 的动机就是去新线做点什么，跳过去
   // 省一次点击，回来靠这个动作。
@@ -580,6 +603,14 @@ function MainShell({
           </button>
           <button
             type="button"
+            className={tab === "daily" ? "tab active" : "tab"}
+            data-testid="tab-daily"
+            onClick={() => switchTab("daily")}
+          >
+            Daily
+          </button>
+          <button
+            type="button"
             className={tab === "skills" ? "tab active" : "tab"}
             data-testid="tab-skills"
             onClick={() => switchTab("skills")}
@@ -683,6 +714,8 @@ function MainShell({
                 onReturnToParent={selectSession}
                 onForked={handleForked}
                 onOpenMcp={() => switchTab("mcp")}
+                draftSeed={composerSeed}
+                onSeedConsumed={clearComposerSeed}
               />
             </div>
           )}
@@ -744,6 +777,7 @@ function MainShell({
               <MemoryView api={api} notice={notify} openTarget={memoryTarget} onOpenConsumed={() => setMemoryTarget(null)} />
             </div>
           )}
+          {tab === "daily" && <DailyView api={api} notice={notify} onContinue={handleDailyContinue} />}
           {tab === "skills" && <SkillsView api={api} notice={notify} />}
           {tab === "permissions" && <PermissionsView api={api} notice={notify} workdir={selectedMeta?.workdir} />}
           {tab === "mcp" && <McpView api={api} notice={notify} sessionWorkdir={selectedMeta?.workdir} />}

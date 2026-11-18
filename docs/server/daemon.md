@@ -214,7 +214,7 @@ void mcpManager.start()             ← 恒定组装，恒执行；只启动空�
                                     （默认 60s 一次，连接本就为零，见 mcp.md）
 run.recoverQueues()                 崩溃恢复：queue.jsonl 整体重排，steer/interrupt 降级 wait（见 run-manager）
 startSchedulerTick({...})           立即一次检查 + 每 30s 一次（deps 附带 notifier 与 webBase=`http://127.0.0.1:<port>`，用于推送中的 `?session=` 链接）
-startMemoryScheduler({...})         记忆调度器：定时 + 跟随保底触发（默认 60s 扫一次，见 memory.md）
+startMemoryScheduler({...})         记忆调度器：定时 + 跟随保底触发 + 夜间沉淀 + 日报调度（默认 60s 扫一次，见 memory.md）
 startSkillScheduler({...})          技能调度器：跟随检查处理方（默认 60s 扫一次，成功才清检查 +
                                     连败 3 次放弃；enabled:false 或 idleMinutes:0 时 sweep 直接返回，
                                     检查停留在检查表里，功能重开后继续处理，见 skills.md）

@@ -257,7 +257,7 @@ export async function createApp(opts: AppOptions): Promise<FastifyInstance> {
   const crons = opts.stores?.crons ?? new CronScheduler(paths.cronDb)
   registerCronRoutes(app, { crons })
 
-  registerConfigRoutes(app, { config })
+  registerConfigRoutes(app, { config, paths })
   registerSearchRoutes(app, { historySearch: opts.historySearch })
   // Provider 管理接口：Model 顶栏调用（快照 + 增删改/设默认/模型连通测试热生效）。
   registerProvidersRoutes(app, { config, paths, notifier: opts.configNotifier })

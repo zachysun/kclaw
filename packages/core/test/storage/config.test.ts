@@ -227,6 +227,36 @@ describe("memory config", () => {
   })
 })
 
+describe("daily config", () => {
+  it("exposes the expected defaults", () => {
+    expect(defaultConfig.daily).toEqual({ hour: 8, intervalDays: 1 })
+  })
+
+  it("deep-merges user values over defaults", () => {
+    writeConfig({ daily: { hour: 22 } })
+    const cfg = loadConfig(resolvePaths(home))
+    expect(cfg.daily.hour).toBe(22)
+    expect(cfg.daily.intervalDays).toBe(1) // untouched default
+  })
+
+  it("keeps a negative hour (the legal off expression) and falls back on invalid values", () => {
+    writeConfig({ daily: { hour: -1, intervalDays: 99 } })
+    const cfg = loadConfig(resolvePaths(home))
+    expect(cfg.daily.hour).toBe(-1)
+    expect(cfg.daily.intervalDays).toBe(99)
+    writeConfig({ daily: { hour: 25, intervalDays: 0 } })
+    const cfg2 = loadConfig(resolvePaths(home))
+    expect(cfg2.daily.hour).toBe(8)
+    expect(cfg2.daily.intervalDays).toBe(1)
+  })
+
+  it("falls back wholesale when the section is not a mapping", () => {
+    writeFileSync(join(home, "config.json"), `{"daily": 3}`)
+    const cfg = loadConfig(resolvePaths(home))
+    expect(cfg.daily).toEqual({ hour: 8, intervalDays: 1 })
+  })
+})
+
 describe("writeFileAtomic", () => {
   it("replaces the target atomically and leaves no tmp behind", () => {
     const file = join(home, "atomic.json")

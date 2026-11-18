@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createApp } from "../../src/app.js"
-import { MemorySystem, SessionStore, defaultConfig } from "@kclaw/core"
+import { MemorySystem, SessionStore, defaultConfig, writeDailyReport } from "@kclaw/core"
 
 let home: string
 let system: MemorySystem
@@ -220,5 +220,76 @@ describe("503 fallback (no memory)", () => {
   it("GET /memory/global → 503 too", async () => {
     const res = await noMemoryApp.inject({ method: "GET", url: "/memory/global", headers: auth })
     expect(res.statusCode).toBe(503)
+  })
+})
+
+describe("daily routes", () => {
+  const writeReport = (date: string): void => {
+    writeDailyReport(join(home, "memory", "projects", "kclaw-x"), {
+      date, windowStart: "2026-11-19T00:00:00Z", windowEnd: "2026-11-19T08:00:00Z", generatedAt: "c",
+      cards: [{ kind: "achievement", title: "卡", body: "正文", options: [{ label: "继续", opener: "开场" }] }],
+    })
+  }
+
+  it("GET /memory/daily/projects lists projects with their latest date", async () => {
+    writeReport("2026-11-19")
+    const res = await app.inject({ method: "GET", url: "/memory/daily/projects", headers: auth })
+    expect(res.statusCode).toBe(200)
+    const row = res.json().find((p: { id: string }) => p.id === "kclaw-x")
+    expect(row.latest).toBe("2026-11-19")
+  })
+
+  it("GET /memory/daily/:project returns the date index; unknown project 404", async () => {
+    writeReport("2026-11-19")
+    writeReport("2026-11-18")
+    const res = await app.inject({ method: "GET", url: "/memory/daily/kclaw-x", headers: auth })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().dates).toEqual(["2026-11-19", "2026-11-18"])
+    expect((await app.inject({ method: "GET", url: "/memory/daily/nope", headers: auth })).statusCode).toBe(404)
+  })
+
+  it("GET /memory/daily/:project/:date returns the report; bad date 400; missing 404", async () => {
+    writeReport("2026-11-19")
+    const res = await app.inject({ method: "GET", url: "/memory/daily/kclaw-x/2026-11-19", headers: auth })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().cards[0].title).toBe("卡")
+    expect((await app.inject({ method: "GET", url: "/memory/daily/kclaw-x/not-a-date", headers: auth })).statusCode).toBe(400)
+    expect((await app.inject({ method: "GET", url: "/memory/daily/kclaw-x/2026-11-01", headers: auth })).statusCode).toBe(404)
+  })
+
+  it("POST regenerate: reruns the recorded window and overwrites; empty window maps to 400", async () => {
+    writeReport("2026-11-19")
+    const spy = vi.spyOn(system, "regenerateDaily")
+    try {
+      spy.mockResolvedValue({ date: "2026-11-19", windowStart: "a", windowEnd: "b", generatedAt: "c2", cards: [] })
+      const res = await app.inject({
+        method: "POST", url: "/memory/daily/kclaw-x/regenerate", headers: { ...auth, "content-type": "application/json" },
+        payload: { date: "2026-11-19" },
+      })
+      expect(res.statusCode).toBe(200)
+      expect(spy).toHaveBeenCalledWith("kclaw-x", "2026-11-19")
+      expect(res.json().report.generatedAt).toBe("c2")
+    } finally { spy.mockRestore() }
+    // 未经 mock 的真实系统：窗内无消息 → DailyRegenerateError("empty-window") → 400
+    const res2 = await app.inject({
+      method: "POST", url: "/memory/daily/kclaw-x/regenerate", headers: { ...auth, "content-type": "application/json" },
+      payload: { date: "2026-11-19" },
+    })
+    expect(res2.statusCode).toBe(400)
+    expect(String(res2.json().error)).toContain("无日报可生成")
+  })
+
+  it("POST regenerate: bad date 400; unknown project 404; no-file 400", async () => {
+    expect((await app.inject({ method: "POST", url: "/memory/daily/kclaw-x/regenerate", headers: { ...auth, "content-type": "application/json" }, payload: { date: "x" } })).statusCode).toBe(400)
+    expect((await app.inject({ method: "POST", url: "/memory/daily/no-such/regenerate", headers: { ...auth, "content-type": "application/json" }, payload: { date: "2026-11-19" } })).statusCode).toBe(404)
+    expect((await app.inject({ method: "POST", url: "/memory/daily/kclaw-x/regenerate", headers: { ...auth, "content-type": "application/json" }, payload: { date: "2026-11-01" } })).statusCode).toBe(400)
+  })
+
+  it("GET /memory/daily/projects → 503 without memory", async () => {
+    const bare = await createApp({ home: mkdtempSync(join(tmpdir(), "kclaw-bare-")), token: "t" })
+    try {
+      const res = await bare.inject({ method: "GET", url: "/memory/daily/projects", headers: auth })
+      expect(res.statusCode).toBe(503)
+    } finally { await bare.close() }
   })
 })

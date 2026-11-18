@@ -12,6 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { startMemoryScheduler } from "../src/memory-scheduler.js"
+import { intervalGateDue } from "../src/host-kit.js"
 import { SessionStore } from "@kclaw/core"
 import { defaultConfig } from "@kclaw/core"
 import type { MemorySystem } from "@kclaw/core"
@@ -32,11 +33,14 @@ function fakeSystem(over: Record<string, unknown> = {}) {
     triggerInterval: vi.fn(async () => undefined),
     triggerFollow: viFnAsync(),
     triggerNightly: viFnAsync(),
+    triggerDaily: viFnAsync(),
     recentSessionId: vi.fn(() => undefined),
     markIntervalRun: vi.fn(),
     markNightlyRun: vi.fn(),
+    markDailyRun: vi.fn(),
     intervalLastRun: vi.fn(() => undefined),
     nightlyLastRun: vi.fn(() => undefined),
+    dailyLastRun: vi.fn(() => undefined),
     pendingFollowChecks: vi.fn(() => []),
     clearFollowCheck: vi.fn(),
     lastActivity: vi.fn(() => ""),
@@ -194,5 +198,96 @@ describe("startMemoryScheduler", () => {
     await handle.stop()
     expect(sys.triggerFollow).not.toHaveBeenCalled()
     expect(sys.clearFollowCheck).not.toHaveBeenCalled()
+  })
+
+  it("daily: triggers after daily.hour when not yet run today; records the LOCAL date", async () => {
+    const now = new Date("2026-08-29T12:00:00Z") // 本地小时在常见时区（东八 = 20 点）≥ 8
+    const sys = fakeSystem()
+    const handle = startMemoryScheduler({
+      system: sys as unknown as MemorySystem, sessions,
+      config: structuredClone(defaultConfig), // daily: { hour: 8, intervalDays: 1 }
+      workdirs: () => ["/w/kclaw"],
+      intervalMs: 10, now: () => now,
+    })
+    await new Promise((r) => setTimeout(r, 30))
+    await handle.stop()
+    expect(sys.triggerDaily).toHaveBeenCalledWith("/w/kclaw")
+    const p = (n: number): string => String(n).padStart(2, "0")
+    const today = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`
+    expect(sys.markDailyRun).toHaveBeenCalledWith("/w/kclaw", today)
+  })
+
+  it("daily: already run today (local date) skips the trigger", async () => {
+    const now = new Date("2026-08-29T12:00:00Z")
+    const p = (n: number): string => String(n).padStart(2, "0")
+    const today = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`
+    const sys = fakeSystem({ dailyLastRun: vi.fn(() => today) })
+    const handle = startMemoryScheduler({
+      system: sys as unknown as MemorySystem, sessions,
+      config: structuredClone(defaultConfig),
+      workdirs: () => ["/w/kclaw"],
+      intervalMs: 10, now: () => now,
+    })
+    await new Promise((r) => setTimeout(r, 30))
+    await handle.stop()
+    expect(sys.triggerDaily).not.toHaveBeenCalled()
+    expect(sys.markDailyRun).not.toHaveBeenCalled()
+  })
+
+  it("daily: negative daily.hour disables the branch", async () => {
+    const sys = fakeSystem()
+    const cfg = structuredClone(defaultConfig)
+    cfg.daily.hour = -1
+    const handle = startMemoryScheduler({ system: sys as unknown as MemorySystem, sessions, config: cfg, workdirs: () => ["/w/kclaw"], intervalMs: 10 })
+    await new Promise((r) => setTimeout(r, 30))
+    await handle.stop()
+    expect(sys.triggerDaily).not.toHaveBeenCalled()
+    expect(sys.markDailyRun).not.toHaveBeenCalled()
+  })
+
+  it("daily: intervalDays=3 not due until the third day", async () => {
+    const sys = fakeSystem({ dailyLastRun: vi.fn(() => "2026-08-27") })
+    const cfg = structuredClone(defaultConfig)
+    cfg.daily.intervalDays = 3
+    // 8-28：距 8-27 只 1 天 → 不触发
+    const handle = startMemoryScheduler({
+      system: sys as unknown as MemorySystem, sessions,
+      config: cfg, workdirs: () => ["/w/kclaw"],
+      intervalMs: 10, now: () => new Date(2026, 7, 28, 12, 0, 0),
+    })
+    await new Promise((r) => setTimeout(r, 30))
+    await handle.stop()
+    expect(sys.triggerDaily).not.toHaveBeenCalled()
+    // 8-30：距 8-27 满 3 天 → 触发
+    const sys2 = fakeSystem({ dailyLastRun: vi.fn(() => "2026-08-27") })
+    const handle2 = startMemoryScheduler({
+      system: sys2 as unknown as MemorySystem, sessions,
+      config: structuredClone(cfg), workdirs: () => ["/w/kclaw"],
+      intervalMs: 10, now: () => new Date(2026, 7, 30, 12, 0, 0),
+    })
+    await new Promise((r) => setTimeout(r, 30))
+    await handle2.stop()
+    expect(sys2.triggerDaily).toHaveBeenCalledWith("/w/kclaw")
+  })
+})
+
+describe("intervalGateDue（每 N 天判定纯函数）", () => {
+  it("hour gate: negative hour disables; before the hour not due", () => {
+    const noon = new Date(2026, 7, 29, 12, 0, 0)
+    expect(intervalGateDue(noon, -1, 1, undefined)).toBe(false)
+    expect(intervalGateDue(new Date(2026, 7, 29, 7, 59, 0), 8, 1, undefined)).toBe(false)
+    expect(intervalGateDue(new Date(2026, 7, 29, 8, 0, 0), 8, 1, undefined)).toBe(true)
+  })
+
+  it("same-day lastRun is not due; a yesterday lastRun is due at N=1", () => {
+    const noon = new Date(2026, 7, 29, 12, 0, 0)
+    expect(intervalGateDue(noon, 8, 1, "2026-08-29")).toBe(false)
+    expect(intervalGateDue(noon, 8, 1, "2026-08-28")).toBe(true)
+  })
+
+  it("N-day gate: 2 days after is not due at N=3, 3 days after is due", () => {
+    const now = new Date(2026, 7, 30, 12, 0, 0)
+    expect(intervalGateDue(now, 8, 3, "2026-08-28")).toBe(false)
+    expect(intervalGateDue(now, 8, 3, "2026-08-27")).toBe(true)
   })
 })

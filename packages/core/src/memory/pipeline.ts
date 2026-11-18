@@ -18,8 +18,9 @@ import { VectorIndex, type IndexEntry } from "./indexer.js"
 import type { EmbeddingClient } from "./embeddings.js"
 import { writeCognitionFile, parseCognitionFile, cognitionPath, type CogKind } from "./cognition.js"
 import { writeFileAtomic } from "../storage/atomic.js"
-// 提取/沉淀的固定文案在 prompts/memory.ts；字段名与本文件的校验逐字一致，改动两端同步。
-import { CONSOLIDATE_SYSTEM_PROMPT, EXTRACT_SYSTEM_PROMPT } from "../prompts/memory.js"
+// 提取/沉淀/日报的固定文案在 prompts/memory.ts；字段名与本文件的校验逐字一致，改动两端同步。
+import { CONSOLIDATE_SYSTEM_PROMPT, EXTRACT_SYSTEM_PROMPT, DAILY_SYSTEM_PROMPT } from "../prompts/memory.js"
+import { parseDailyCards, writeDailyReport, type DailyReport } from "./daily.js"
 
 export type PipelineTrigger = "immediate" | "manual" | "interval" | "follow" | "clear"
 
@@ -32,6 +33,16 @@ export interface ExtractAction {
   status?: "active" | "inactive"                 // 提取判断的线转 inactive
   title?: string                                 // new-thread 的人可读标题
 }
+
+/** 日报窗口：素材取 (start, end] 之间的全部会话消息，date 是文件名用的本地日期。 */
+export interface DailyWindow {
+  start: string
+  end: string
+  date: string
+}
+
+/** 一次日报生成的结果：窗内无消息（不产文件）或生成完成（文件已落盘）。 */
+export type DailyRunResult = { outcome: "empty" } | { outcome: "generated"; report: DailyReport }
 
 export interface MemoryWrittenEvent {
   type: "memory.written"
@@ -452,6 +463,57 @@ export class MemoryPipeline {
       ledger.setNightlyBaseline(today)
       return due.length
     })
+  }
+
+  /**
+   * 日报生成（调度与手动重新生成共用）：素材 = 窗内该项目全部会话的消息
+   * （readMessages 口径，子会话排除），走项目级锁与记忆写入互斥。窗内无消息
+   * 返回 empty（调用方据此推进窗起点但不产文件）；LLM 调用失败抛出，窗起点
+   * 的推进由调用方在成功后才做。手动重新生成传入文件里记录的原窗即可重跑覆盖。
+   */
+  async runDaily(workdir: string, window: DailyWindow, sessionId?: string): Promise<DailyRunResult> {
+    const { id } = this.#layout.ensureProject(workdir)
+    return this.#lock(id, () => this.#runDailyLocked(id, workdir, window, sessionId))
+  }
+
+  async #runDailyLocked(projectId: string, workdir: string, window: DailyWindow, sessionId?: string): Promise<DailyRunResult> {
+    const startTime = Date.parse(window.start)
+    const endTime = Date.parse(window.end)
+    // 与提取同一条读取口径（readMessages：截断的轮次不进素材）、同一个子会话
+    // 排除规则（subagent 过程文本归主线）。
+    const parts: string[] = []
+    for (const m of this.#sessions.list()) {
+      if ((m.workdir ?? "") !== workdir || m.parentSessionId !== undefined) continue
+      const rows = this.#sessions.readMessages(m.id)
+        .filter((msg) => {
+          const t = Date.parse(msg.createdAt)
+          return t > startTime && t <= endTime
+        })
+      if (rows.length === 0) continue
+      parts.push(`=== 会话：${m.title === "" ? m.id : m.title}（${m.createdAt} 创建）===\n${renderSegment(rows)}`)
+    }
+    if (parts.length === 0) return { outcome: "empty" }
+    const { llm, model } = this.#deps.resolveLlm()
+    const dailyResult = await collectStreamResult(llm, {
+      model,
+      system: DAILY_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: `日期：${window.date}\n\n${parts.join("\n\n")}` }],
+      tools: [],
+    })
+    // 日报是项目级调用：用量归属照夜间沉淀先例记到项目最近活动会话（无归属不记）。
+    if (sessionId !== undefined) {
+      this.#deps.recordChoreUsage?.({ chore: "daily", sessionId, model, usage: dailyResult.usage })
+    }
+    const cards = parseDailyCards(dailyResult.text, this.#log.bind(this))
+    const report: DailyReport = {
+      date: window.date,
+      windowStart: window.start,
+      windowEnd: window.end,
+      generatedAt: this.#now().toISOString(),
+      cards,
+    }
+    writeDailyReport(this.#layout.projectDir(projectId), report)
+    return { outcome: "generated", report }
   }
 
   // ---- reconcile / 管理接口（MemorySystem 调用） ----
