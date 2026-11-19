@@ -182,14 +182,14 @@ export function DailyView({ api, notice, onContinue }: {
             />
             点生成（负数关闭）
           </label>
-          <button type="submit" disabled={savingSettings || settings === null}>保存设置</button>
+          <button type="submit" className="primary" disabled={savingSettings || settings === null}>保存设置</button>
         </form>
         {project === null ? (
           <p className="pane-placeholder muted">选择一个项目查看日报</p>
         ) : datesError ? (
           <p className="form-error" data-testid="daily-dates-error">
             加载日报索引失败
-            <button type="button" data-testid="daily-dates-retry" onClick={() => { if (projectId !== null) void openProject(projectId) }}>重试</button>
+            <button type="button" className="btn-quiet" data-testid="daily-dates-retry" onClick={() => { if (projectId !== null) void openProject(projectId) }}>重试</button>
           </p>
         ) : dates === null ? (
           <p className="muted">加载中…</p>
@@ -197,7 +197,7 @@ export function DailyView({ api, notice, onContinue }: {
           <div className="daily-empty" data-testid="daily-empty-project">
             <p className="pane-placeholder muted">这个项目还没有日报——到点后自动生成，也可以现在立即生成今天</p>
             <button
-              type="button" data-testid="daily-generate-today" onClick={generateToday} disabled={regenerating}
+              type="button" className="primary" data-testid="daily-generate-today" onClick={generateToday} disabled={regenerating}
             >{regenerating ? "生成中…" : "立即生成今天"}</button>
           </div>
         ) : date === null ? (
@@ -205,9 +205,9 @@ export function DailyView({ api, notice, onContinue }: {
         ) : (
           <>
             <div className="daily-datebar">
-              <button type="button" data-testid="daily-prev" onClick={() => stepDate(1)} disabled={dates[dates.indexOf(date) + 1] === undefined}>← 早一天</button>
+              <button type="button" className="btn-quiet" data-testid="daily-prev" onClick={() => stepDate(1)} disabled={dates[dates.indexOf(date) + 1] === undefined}>← 早一天</button>
               <span className="daily-date" data-testid="daily-date">{date}</span>
-              <button type="button" data-testid="daily-next" onClick={() => stepDate(-1)} disabled={dates.indexOf(date) === 0}>晚一天 →</button>
+              <button type="button" className="btn-quiet" data-testid="daily-next" onClick={() => stepDate(-1)} disabled={dates.indexOf(date) === 0}>晚一天 →</button>
               <button
                 type="button" className="daily-regen" data-testid="daily-regenerate"
                 onClick={regenerate} disabled={regenerating}
@@ -217,7 +217,7 @@ export function DailyView({ api, notice, onContinue }: {
               reportError ? (
                 <p className="form-error" data-testid="daily-report-error">
                   读取日报失败
-                  <button type="button" data-testid="daily-report-retry" onClick={() => setReportReloadTick((t) => t + 1)}>重试</button>
+                  <button type="button" className="btn-quiet" data-testid="daily-report-retry" onClick={() => setReportReloadTick((t) => t + 1)}>重试</button>
                 </p>
               ) : <p className="muted">加载中…</p>
             ) : report.cards.length === 0 ? (
@@ -225,7 +225,7 @@ export function DailyView({ api, notice, onContinue }: {
             ) : (
               <div className="daily-cards" data-testid="daily-cards">
                 {report.cards.map((card, i) => (
-                  <article key={`${i}-${card.title}`} className="daily-card" data-testid="daily-card">
+                  <article key={`${i}-${card.title}`} className={`daily-card kind-${card.kind}`} data-testid="daily-card">
                     <header>
                       <span className={`daily-kind kind-${card.kind}`}>{KIND_LABEL[card.kind]}</span>
                       <h3>{card.title}</h3>
@@ -235,7 +235,7 @@ export function DailyView({ api, notice, onContinue }: {
                       <div className="daily-options">
                         {card.options.map((opt, j) => (
                           <button
-                            key={`${i}-${j}-${opt.label}`} type="button"
+                            key={`${i}-${j}-${opt.label}`} type="button" className="primary"
                             data-testid="daily-option"
                             onClick={() => void onContinue(project.workdir, opt.opener)}
                           >{opt.label}</button>

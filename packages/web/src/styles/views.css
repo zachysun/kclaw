@@ -758,8 +758,9 @@
 }
 
 .daily-cards {
-  display: flex;
-  flex-direction: column;
+  /* 宽屏铺两列（卡片高矮随内容），窄屏自然回落单列——一列等宽的卡片墙读起来单调 */
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
   gap: var(--space-3);
 }
 
@@ -780,12 +781,41 @@
   gap: var(--space-3);
 }
 
+/* 安静扁平钮（日期翻页、错误重试）：就地覆写底色与阴影，同 shell 的
+   安静钮约定；真正的动作钮走默认抬升材质或 .primary。 */
+.daily-view .btn-quiet {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-dim);
+  box-shadow: none;
+}
+
+.daily-view .btn-quiet:hover:not(:disabled) {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 .daily-card {
   border: 1px solid var(--border);
+  /* 类型色左边条：卡片墙里一眼分清四类（与类型章同色） */
+  border-left: 3px solid var(--border-strong);
   border-radius: var(--radius);
   padding: var(--space-3) var(--space-4);
   background: var(--surface);
   box-shadow: var(--shadow-1);
+}
+
+.daily-card.kind-achievement {
+  border-left-color: var(--accent);
+}
+
+.daily-card.kind-lesson {
+  border-left-color: var(--warn);
+}
+
+.daily-card.kind-blocker {
+  border-left-color: var(--danger);
 }
 
 .daily-card header {
@@ -815,8 +845,9 @@
 }
 
 .daily-kind.kind-lesson {
-  color: var(--text);
-  background: var(--accent-dim);
+  color: var(--warn);
+  background: transparent;
+  border-color: var(--warn);
 }
 
 .daily-kind.kind-blocker {
@@ -843,19 +874,8 @@
   gap: var(--space-2);
 }
 
-.daily-options button {
-  font-size: 13px;
-  border-color: var(--accent);
-  color: var(--accent-ink);
-  background: var(--accent-grad);
-  box-shadow: var(--shadow-1);
-}
-
-.daily-options button:hover:not(:disabled) {
-  background: var(--accent-grad);
-  border-color: var(--accent);
-  filter: brightness(1.06);
-}
+/* 展开选项是每张卡的主操作：用 shell 的 button.primary 材质，
+   不再另搓一份渐变（悬停行为与全站主操作一致）。 */
 
 @media (max-width: 700px) {
   .memory-view {
