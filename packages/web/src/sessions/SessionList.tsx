@@ -18,7 +18,7 @@
  * list yet — picking a path creates the session there. Sessions without a
  * workdir (old rows, cron sessions) land in a muted "未指定工作目录" group.
  */
-import { useMemo, useState, type ChangeEvent } from "react"
+import { useMemo, useState, type ChangeEvent, type MouseEvent } from "react"
 import type { FsBrowseResult, SessionMeta } from "../types.js"
 import { formatCompactStamp } from "../usage/format.js"
 import { IconButton } from "../ui/IconButton.js"
@@ -83,6 +83,67 @@ function loadCollapsedGroups(): Set<string> {
     return Array.isArray(parsed) ? new Set(parsed.filter((x): x is string => typeof x === "string")) : new Set()
   } catch {
     return new Set()
+  }
+}
+
+/** 进行中的滚读任务（元素 → rAF id），移开时取消，WeakMap 不持有 DOM。 */
+const slideJobs = new WeakMap<HTMLElement, number>()
+
+/** 广告牌两圈文本之间的衔接间距（px），与 .session-title-run::after
+ *  的 padding-left 保持一致。 */
+const MARQUEE_GAP = 48
+
+/** 会话行的悬停滚读，电子广告牌式：进入行时把标题层切成走马灯
+ *  （正文 + ::after 的副本接尾），rAF 每帧按固定速度向左推进，
+ *  滚过一个周期（正文宽 + 衔接间距）无缝回绕，持续循环直到鼠标
+ *  移开；未溢出的标题不动。
+ *  纯 JS 逐帧写 transform——不经过 transition / @keyframes 任一过渡
+ *  机制（keyframes 里的 var() 与 hover 边缘的 transition 在部分引擎
+ *  会冻结，自驱动没有引擎差异面）；外层窗口负责裁切，内层做位移，
+ *  裁切线不跟着动。 */
+function startTitleSlide(event: MouseEvent<HTMLButtonElement>): void {
+  const el = event.currentTarget.querySelector<HTMLElement>(".session-title-text")
+  if (el === null) return
+  const staticText = el.querySelector<HTMLElement>(".session-title-static")
+  const run = el.querySelector<HTMLElement>(".session-title-run")
+  if (staticText === null || run === null) return
+  if (staticText.scrollWidth <= staticText.clientWidth) return
+  const running = slideJobs.get(el)
+  if (running !== undefined) cancelAnimationFrame(running)
+  staticText.style.display = "none"
+  run.style.display = "inline-block"
+  run.style.transform = "translateX(0px)"
+  // 周期 = 正文宽 + 衔接间距；run 宽 = 2×正文 + 间距，减掉间距的一半
+  // 再除以二即得
+  const period = run.getBoundingClientRect().width / 2 + MARQUEE_GAP / 2
+  if (period <= 0) return
+  const speed = 50 // px/s，广告牌的巡游速度
+  let offset = 0
+  let last = performance.now()
+  const tick = (now: number): void => {
+    offset = (offset + ((now - last) / 1000) * speed) % period
+    last = now
+    run.style.transform = `translateX(-${offset.toFixed(2)}px)`
+    slideJobs.set(el, requestAnimationFrame(tick))
+  }
+  slideJobs.set(el, requestAnimationFrame(tick))
+}
+
+/** 移开复位：停掉巡游，标题层切回静态省略行。 */
+function resetTitleSlide(event: MouseEvent<HTMLButtonElement>): void {
+  const el = event.currentTarget.querySelector<HTMLElement>(".session-title-text")
+  if (el === null) return
+  const running = slideJobs.get(el)
+  if (running !== undefined) {
+    cancelAnimationFrame(running)
+    slideJobs.delete(el)
+  }
+  const staticText = el.querySelector<HTMLElement>(".session-title-static")
+  const run = el.querySelector<HTMLElement>(".session-title-run")
+  if (staticText !== null) staticText.style.display = ""
+  if (run !== null) {
+    run.style.display = "none"
+    run.style.transform = ""
   }
 }
 
@@ -339,9 +400,14 @@ export function SessionList({
                         data-testid={`session-item-${meta.id}`}
                         data-selected={meta.id === selectedId}
                         onClick={() => onSelect(meta.id)}
+                        onMouseEnter={startTitleSlide}
+                        onMouseLeave={resetTitleSlide}
                       >
                         <span className="session-title">
-                          {meta.title}
+                          <span className="session-title-text">
+                            <span className="session-title-static">{meta.title}</span>
+                            <span className="session-title-run" data-title={meta.title}>{meta.title}</span>
+                          </span>
                           {meta.forkedFrom !== undefined && (
                             <span className="session-fork-badge" data-testid={`session-fork-badge-${meta.id}`} title={`fork 自 ${sessions.find((src) => src.id === meta.forkedFrom?.sessionId)?.title ?? meta.forkedFrom.sessionId}`}>
                               fork

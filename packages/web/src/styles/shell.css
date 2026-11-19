@@ -554,9 +554,47 @@ button.session-item:hover {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+/* 标题恒一行：文本超出省略，fork/待拍板徽标跟在后面不被裁掉；
+   悬停时整行向左滚把尾部读出来（溢出量由 SessionList 在 mouseEnter
+   量好写进 --title-slide，未溢出时为 0px、动画等于不动）。
+   padding-right 预留悬停动作 chip（改名/删除，absolute 悬浮在行右下）
+   的落位，滚读的尾部不会钻到按钮底下——与 .session-meta 的预留同款 */
 .session-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding-right: 60px;
   font-size: 13px;
-  overflow-wrap: anywhere;
+}
+
+/* 标题窗口：静态态显示带省略号的单行，悬停时由 SessionList 切换成
+   走马灯层（广告牌式循环滚动），移位与启停都在 JS 里 */
+.session-title-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.session-title-static {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 走马灯层：正文 + ::after 的副本接尾，两份之间留衔接间距；
+   滚动时外层窗口裁切，内层整体左移，循环回绕即无缝 */
+.session-title-run {
+  display: none;
+  white-space: nowrap;
+}
+
+.session-title-run::after {
+  content: attr(data-title);
+  display: inline-block;
+  padding-left: 48px;
 }
 
 .session-fork-badge {
