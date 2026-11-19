@@ -76,6 +76,51 @@ describe("parseDailyCards", () => {
     expect(parseDailyCards(JSON.stringify({ actions: [] }), log)).toEqual([])
     expect(logs.some((l) => l.includes("unparseable"))).toBe(true)
   })
+
+  it("keeps legal visual components, caps them at 4, and validates them via the ui-render canon", () => {
+    const raw = JSON.stringify({ cards: [{
+      kind: "lesson",
+      title: "确认超时不是写失败",
+      body: "原样重试就落盘。",
+      visual: [
+        { kind: "stat", label: "重试后写入", value: "2428", unit: "字节" },
+        { kind: "quote", text: "确认超时，操作未执行", source: "fs_write 返回" },
+        { kind: "list", items: ["超时后原样重试即可", "不需要换工具"] },
+        { kind: "chart", chartType: "bar", items: [{ label: "首次", value: 0 }, { label: "重试", value: 1 }] },
+        // 第 5 个：超限被截断
+        { kind: "icon", value: "🔒" },
+      ],
+      options: [],
+    }] })
+    const cards = parseDailyCards(raw, log)
+    expect(cards).toHaveLength(1)
+    // 封顶 4 个，前四个顺序保留
+    expect(cards[0]!.visual).toHaveLength(4)
+    expect(cards[0]!.visual![0]).toMatchObject({ kind: "stat", value: "2428", unit: "字节" })
+    expect(cards[0]!.visual![1]).toMatchObject({ kind: "quote", source: "fs_write 返回" })
+    expect(cards[0]!.visual![2]).toMatchObject({ kind: "list" })
+    expect(cards[0]!.visual![3]).toMatchObject({ kind: "chart", chartType: "bar" })
+  })
+
+  it("drops illegal or container visuals while the card body survives", () => {
+    const raw = JSON.stringify({ cards: [{
+      kind: "achievement",
+      title: "卡",
+      body: "正文",
+      visual: [
+        "不是对象",
+        { kind: "card", body: [] },          // 容器：insideContainer 规则拒绝
+        { kind: "stat", label: "缺 value" }, // 非法组件：校验器抛错
+        { kind: "quote", text: "合法引用" },  // 合法：保留
+      ],
+      options: [],
+    }] })
+    const cards = parseDailyCards(raw, log)
+    expect(cards).toHaveLength(1)
+    expect(cards[0]!.visual).toHaveLength(1)
+    expect(cards[0]!.visual![0]).toMatchObject({ kind: "quote", text: "合法引用" })
+    expect(logs.some((l) => l.includes("dropping malformed visual"))).toBe(true)
+  })
 })
 
 describe("daily 文件读写", () => {

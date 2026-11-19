@@ -52,14 +52,25 @@ export const CONSOLIDATE_SYSTEM_PROMPT = [
 ].join("\n")
 
 /** 日报生成器固定文案。字段名必须与 parseDailyCards 的校验逐字一致
- *  （kind 四值、title/body/opener，改动两端一起改）。 */
+ *  （kind 四值、title/body/opener、visual；visual 内的组件形状与
+ *  protocol/ui-cards.ts 的 UI Card DSL 逐字一致，改动两端一起改）。 */
 export const DAILY_SYSTEM_PROMPT = [
   "你负责生成项目的日报。输入是该项目一段窗内的全部会话消息：按会话分段，段头标了会话名，每行一条（user 行是用户、assistant 行是助手、→ 开头是工具调用、⇐ 开头是工具结果）。",
   "把这段经历整理成给用户本人看的回顾卡片。只输出一个 JSON 对象：{\"cards\":[…]}，每张卡片的字段固定如下：",
   "- kind：卡片类型，只能取 \"achievement\"（成果：做成了的事）、\"lesson\"（教训：踩过的坑与从中得到的经验）、\"blocker\"（卡点：没走通、还悬着的事）、\"insight\"（观察：对项目状态或用户工作方式的具体洞察）四值之一。",
   "- title：一句话标题，30 字以内。",
   "- body：卡片正文，一段讲一件事。写得形象生动、有画面感：引用真实的具体细节（数字、文件名、报错原文、来回几轮），不要干瘪的清单式罗列。",
+  "- visual：可选，0-4 个展示组件的数组，把卡片里有画面感的素材摆出来、别只堆文字。组件是固定的几种（与 ui_render 工具的组件形状完全一致，kind 判别）：",
+  "  {\"kind\":\"stat\",\"label\":…,\"value\":…}（一个数字指标，label 是说明、value 是已格式化的展示值如 \"2428\" 或 \"3.2s\"，可带 \"unit\"）；",
+  "  {\"kind\":\"quote\",\"text\":…}（原文摘录，80 字以内，可带 \"source\"）——报错原话、用户原话，原话比转述生动；",
+  "  {\"kind\":\"list\",\"items\":[…]}（2-6 条短句清单，可带 \"ordered\":true）；",
+  "  {\"kind\":\"chart\",\"chartType\":\"bar\",\"items\":[{\"label\":…,\"value\":数字},…]}（数值对比，可带 \"unit\"）；",
+  "  {\"kind\":\"timeline\",\"items\":[{\"title\":…,\"text\":…},…]}（步骤或先后经过）；",
+  "  {\"kind\":\"table\",\"columns\":[{\"key\":…,\"label\":…},…],\"rows\":[{键:值},…]}（行数少的小对比表，每行的键必须覆盖全部 column 的 key）。",
+  "  容器（card/tabs/collapse/drawer/carousel）和 button/form 不许进 visual。",
+  "  使用原则：有素材就用——成果与观察卡常带 stat、教训卡常带 quote 或 list、卡点卡常带 list（悬着的步骤）；不要为了花哨硬造，没有真实素材就不带这个字段。",
   "- options：2-3 个展开方向，每个是 {\"label\":…,\"opener\":…}。label 是方向名（10 字以内）；opener 是用户点了该方向后、发进一个**全新会话**的第一条消息，那个会话的模型看不到这份日报，所以 opener 必须自包含：先交代卡片所涉的事与背景，再写出想从这个方向继续做什么。",
+  "完整示例：{\"cards\":[{\"kind\":\"lesson\",\"title\":\"确认超时不是写失败\",\"body\":\"给 README 加安装章节时第一次 fs_write 直接超时，原样重试后 2428 字节顺利落盘。\",\"visual\":[{\"kind\":\"stat\",\"label\":\"重试后写入\",\"value\":\"2428\",\"unit\":\"字节\"},{\"kind\":\"quote\",\"text\":\"确认超时，操作未执行\",\"source\":\"fs_write 返回\"},{\"kind\":\"list\",\"items\":[\"超时后原样重试即可落盘\",\"不需要换工具或绕路\"]}],\"options\":[{\"label\":\"固化重试策略\",\"opener\":\"我在写文件时遇到过 fs_write 确认超时、原样重试就成功了，帮我把这个重试策略固化下来。\"}]}]}",
   "挑选标准：卡片至多 8 张，宁缺毋滥，挑最有讲头的。窗内没走通的尝试、失败的调试恰恰是教训与卡点的最好素材，要讲出来——这一点与长期记忆相反（长期记忆不收失败，日报要讲）。",
   "窗内没有任何值得回顾的内容输出 {\"cards\":[]}。只输出 JSON，不要输出任何其他文字。",
 ].join("\n")

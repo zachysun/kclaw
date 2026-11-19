@@ -868,6 +868,20 @@
   white-space: pre-wrap;
 }
 
+/* 展示组件容器：组件本体（数字对、引用、清单、图表等）复用 chat.css 的
+   ui-* 样式族（ui_render 同一套渲染器），这里只管在卡片内的排布——
+   数字对横排、块状组件（引用/清单）独占一行自然换行。 */
+.daily-visual {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-2);
+}
+
+.daily-visual > .ui-stat {
+  flex: 0 0 auto;
+}
+
 .daily-options {
   display: flex;
   flex-wrap: wrap;

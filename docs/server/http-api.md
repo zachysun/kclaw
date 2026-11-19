@@ -176,7 +176,7 @@ interface Cron {
 | POST | `/memory/trigger-manual` | 手动触发当前项目的手动写入：与定时/跟随同一条 pipeline，范围 = 归属会话自上次提取位置以来的新消息（会话默认回退到项目最近活动会话） | `{workdir?, sessionId?}`：均可选，workdir 默认回退到 `config.workspace`，sessionId 默认回退到项目最近活动会话 | `{ok:true}`；`memory.write.manual=false` 时 400 `手动写入已关闭（memory.write.manual=false），可依赖定时/跟随触发`；pipeline 异常 500 |
 | GET | `/memory/daily/projects` | 日报项目列表（各项目最近一份日报的日期，无日报为空串） | — | `{id, workdir, latest}[]` |
 | GET | `/memory/daily/:project` | 某项目的日报日期索引（新到旧） | — | `{dates: string[]}`；项目不存在 404 |
-| GET | `/memory/daily/:project/:date` | 读一天的日报卡片 | — | 日报对象 `{date, windowStart, windowEnd, generatedAt, cards[]}`（卡片 `{kind, title, body, options[]}`，kind 四值 achievement/lesson/blocker/insight）；日期非 `YYYY-MM-DD` 400、文件不存在 404 |
+| GET | `/memory/daily/:project/:date` | 读一天的日报卡片 | — | 日报对象 `{date, windowStart, windowEnd, generatedAt, cards[]}`（卡片 `{kind, title, body, visual?, options[]}`，kind 四值 achievement/lesson/blocker/insight；`visual` 是 UI 卡 DSL 的只读子集、至多 4 个组件，形状见 [memory](../core/memory.md) 的日报节）；日期非 `YYYY-MM-DD` 400、文件不存在 404 |
 | POST | `/memory/daily/:project/regenerate` | 手动重新生成（同步等响应）：该日有文件按原窗重跑覆盖；当天无文件立即按当前窗生成；历史日期无文件或窗内无消息返回 400，不产零卡片文件 | `{date}` 必填（`YYYY-MM-DD`） | `{report}`（重跑后的完整日报对象）；日期非法 400；未知项目 404；`DailyRegenerateError` 的 `no-file`/`empty-window` 状态 400 带说明 |
 
 `:id`/`:project`/`:topic`/`:file` 的路径段先过白名单校验（`isSafeSegment`：段非空、非 `.`、非 `..`、不含 `/`，拦截目录穿越段；允许 CJK/空格，URL 里已 encodeURIComponent）。非法段返回 400 `invalid segment`；合法段按原样传给 `MemorySystem`，读侧宽容（找不到就 404），写侧是整文件覆写，请求体就是文件的新内容。日报路由的 `:date` 参数走形状校验（`isDailyDate`：必须是 `YYYY-MM-DD`），文件名与路径不进模型输出，穿越风险到此为止。`GET /memory/projects/:id` 的响应包装成 `{id, threads}` 是为前端取数方便（见 [memory](../core/memory.md) 的管理界面一节）。删除类的机器语义：删除的是文件，`vectors.db` 里的对应条目由随后的 reindex 清除。

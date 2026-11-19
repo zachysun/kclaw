@@ -20,7 +20,21 @@ const REPORT = {
       kind: "achievement",
       title: "日报功能上线",
       body: "今天把日报生成与展示全部写完。",
+      visual: [
+        { kind: "stat", label: "测试通过", value: "569" },
+        { kind: "stat", label: "构建耗时", value: "1.4", unit: "s" },
+      ],
       options: [{ label: "聊聊下一步", opener: "关于日报功能上线，我想继续聊聊下一步怎么演进。" }],
+    },
+    {
+      kind: "lesson",
+      title: "确认超时不是写失败",
+      body: "原样重试就落盘。",
+      visual: [
+        { kind: "quote", text: "确认超时，操作未执行", source: "fs_write 返回" },
+        { kind: "list", items: ["超时后原样重试即可", "不需要换工具"] },
+      ],
+      options: [],
     },
     { kind: "blocker", title: "样式对不齐", body: "卡片流在窄屏挤压。", options: [] },
   ],
@@ -98,6 +112,30 @@ describe("DailyView", () => {
       expect(cards.textContent).toContain("日报功能上线")
       expect(cards.textContent).toContain("成果")
       expect(cards.textContent).toContain("卡点")
+    } finally {
+      root.unmount()
+      container.remove()
+    }
+  })
+
+  it("renders the visual components through the ui-render renderer (read-only)", async () => {
+    const api = fakeApi()
+    const { container, root } = await mount(api)
+    try {
+      // stat 数字对（ui_render 同一套渲染器与样式族）
+      const stats = [...container.querySelectorAll('[data-testid="ui-stat"]')]
+      expect(stats.length).toBeGreaterThanOrEqual(2)
+      expect(stats[0]!.textContent).toContain("569")
+      expect(stats[0]!.textContent).toContain("测试通过")
+      // quote 原文引用（含出处）
+      const quote = container.querySelector('[data-testid="ui-quote"]')!
+      expect(quote.textContent).toContain("确认超时，操作未执行")
+      expect(quote.textContent).toContain("fs_write 返回")
+      // list 清单
+      const list = container.querySelector('[data-testid="ui-list"]')!
+      expect(list.textContent).toContain("超时后原样重试即可")
+      // 只读：日报卡片内的 ui 组件没有回传通道，无交互按钮渲染
+      expect(container.querySelector('[data-testid="ui-button"]')).toBeNull()
     } finally {
       root.unmount()
       container.remove()

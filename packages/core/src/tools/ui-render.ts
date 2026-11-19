@@ -490,6 +490,16 @@ function branch(kind: string, description: string, properties: Record<string, un
   }
 }
 
+/**
+ * 校验单个**展示**组件（容器类被 insideContainer 规则拒绝）：日报卡片的
+ * visual 数组复用同一份校验——ui_render 的 DSL 是组件描述的单一正本，
+ * 日报只是它的一个只读消费方，两处校验合并后组件形状永不分叉。
+ * 非法输入抛 ToolError（带 field path），调用方按宽容原则丢弃。
+ */
+export function validateUiDisplayCard(raw: unknown, path: string): UIDisplayCard {
+  return validateCard(raw, path, { insideContainer: true }) as UIDisplayCard
+}
+
 const UIDisplayKindList = [
   "button", "link", "table", "list", "tag", "badge", "timeline", "tree", "quote", "icon", "chart", "stat", "form",
 ] as const

@@ -6,12 +6,21 @@
  * 定时生成的结果下次打开本页自然可见。
  */
 import { useCallback, useEffect, useState, type FormEvent } from "react"
+import type { UIDisplayCard } from "@kclaw/core/protocol"
+import { UiCardBoundary, UiCardView } from "../chat/UiCard.js"
 import type { ApiClient } from "../api.js"
 import type { NoticeFn } from "../toast.js"
 
 interface DailyProjectRow { id: string; workdir: string; latest: string }
 interface DailyCardOption { label: string; opener: string }
-interface DailyCard { kind: "achievement" | "lesson" | "blocker" | "insight"; title: string; body: string; options: DailyCardOption[] }
+interface DailyCard {
+  kind: "achievement" | "lesson" | "blocker" | "insight"
+  title: string
+  body: string
+  options: DailyCardOption[]
+  /** 展示组件（ui_render DSL 的只读子集），渲染复用 UiCardView。 */
+  visual?: UIDisplayCard[]
+}
 interface DailyReport { date: string; windowStart: string; windowEnd: string; generatedAt: string; cards: DailyCard[] }
 interface DailySettings { hour: number; intervalDays: number }
 
@@ -230,6 +239,26 @@ export function DailyView({ api, notice, onContinue }: {
                       <span className={`daily-kind kind-${card.kind}`}>{KIND_LABEL[card.kind]}</span>
                       <h3>{card.title}</h3>
                     </header>
+                    {card.visual !== undefined && card.visual.length > 0 && (
+                      // 展示组件复用 ui_render 的渲染器（UiCardView，不传
+                      // onAction 即纯只读）；单个组件渲染异常经错误边界退化
+                      // 成原始 JSON 行，不拖垮整张卡。
+                      <div className="daily-visual" data-testid="daily-visual">
+                        {card.visual.map((v, j) => (
+                          <UiCardBoundary
+                            key={`${i}-visual-${j}`}
+                            fallback={
+                              <details className="blk-tool-result" data-testid="daily-visual-raw">
+                                <summary>↳ 组件渲染失败 · 原始 JSON</summary>
+                                <pre className="blk-ui-card-raw">{JSON.stringify(v, null, 2)}</pre>
+                              </details>
+                            }
+                          >
+                            <UiCardView card={v} />
+                          </UiCardBoundary>
+                        ))}
+                      </div>
+                    )}
                     <p>{card.body}</p>
                     {card.options.length > 0 && (
                       <div className="daily-options">

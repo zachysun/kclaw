@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { writeFileAtomic } from "../storage/atomic.js"
+import { validateUiDisplayCard } from "../tools/ui-render.js"
+import type { UIDisplayCard } from "../protocol/ui-cards.js"
 
 /** 卡片类型四值（渲染层映射中文标签：成果 / 教训 / 卡点 / 观察）。 */
 export type DailyCardKind = "achievement" | "lesson" | "blocker" | "insight"
@@ -11,12 +13,16 @@ export interface DailyCardOption {
   opener: string
 }
 
-/** 一张日报卡片：一段一事，正文形象生动。 */
+/** 一张日报卡片：一段一事；visual 是可选展示块——ui_render DSL 的只读
+ *  子集（stat 数字对 / quote 原文 / list 清单 / chart / timeline / table
+ *  等，容器类不允许），复用 ui-render 的校验器，形状与工具产物永不分叉。 */
 export interface DailyCard {
   kind: DailyCardKind
   title: string
   body: string
   options: DailyCardOption[]
+  /** 展示组件，至多 4 个。 */
+  visual?: UIDisplayCard[]
 }
 
 /** 一天的日报文件（<projectDir>/daily/<日期>.json）正本。 */
@@ -34,6 +40,9 @@ export interface DailyReport {
 
 /** 卡片上限：宁缺毋滥，挑最有讲头的。 */
 export const DAILY_CARD_LIMIT = 8
+
+/** visual 上限：一张卡只摆最要紧的几个组件。 */
+const VISUAL_LIMIT = 4
 
 const KINDS = new Set<DailyCardKind>(["achievement", "lesson", "blocker", "insight"])
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -72,8 +81,10 @@ export function dailyFilePath(projectDir: string, date: string): string {
 
 /**
  * 日报卡片解析（宽容原则，同提取/沉淀）：剥代码围栏 + JSON.parse + 逐卡
- * 字段校验，非法卡丢弃记日志；超出上限的卡截断。整体不合法返回空数组。
- * 字段名与 DAILY_SYSTEM_PROMPT 的约定逐字一致。
+ * 字段校验，非法卡丢弃记日志；visual 数组逐个经 ui-render 的校验器
+ * （validateUiDisplayCard），非法组件丢弃、卡片本体照常保留。超出上限的
+ * 卡截断。整体不合法返回空数组。字段名与 DAILY_SYSTEM_PROMPT 的约定逐字
+ * 一致；visual 内的组件形状与 ui_render 的 DSL 逐字一致（单一正本）。
  * 围栏剥离与 JSON.parse 的前奏与提取/沉淀两处同形（第三份）：三处共用的
  * 只有这两行，后面的逐条校验各管各的字段域，抽共享 helper 的扩散面大于
  * 收益，故保留重复（AGENTS 原则 7）。
@@ -108,7 +119,23 @@ export function parseDailyCards(raw: string, log: (m: string) => void): DailyCar
         options.push({ label: y.label, opener: y.opener })
       }
     }
-    out.push({ kind: x.kind as DailyCardKind, title: x.title, body: x.body, options })
+    const card: DailyCard = { kind: x.kind as DailyCardKind, title: x.title, body: x.body, options }
+    // visual：逐个经 ui-render 校验器（非法抛 ToolError → 丢弃记日志），
+    // 容器类被 insideContainer 规则天然拒绝；封顶 VISUAL_LIMIT 个。
+    if (Array.isArray(x.visual)) {
+      const visual: UIDisplayCard[] = []
+      for (const v of x.visual) {
+        try {
+          visual.push(validateUiDisplayCard(v, `card.visual[${visual.length}]`))
+        } catch (err) {
+          log(`kclaw daily: dropping malformed visual: ${String(err)}`)
+          continue
+        }
+        if (visual.length >= VISUAL_LIMIT) break
+      }
+      if (visual.length > 0) card.visual = visual
+    }
+    out.push(card)
     if (out.length >= DAILY_CARD_LIMIT) break
   }
   return out
