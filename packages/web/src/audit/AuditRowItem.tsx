@@ -26,7 +26,8 @@ export const AuditRowItem = memo(function AuditRowItem({ row, expanded, onToggle
       data-testid={`${row.kind === "block" ? "audit" : row.kind}-row-${row.key}`}
       onClick={toggle}
     >
-      <span className="audit-type">{rowLabel(row)}</span>
+      {/* data-kind drives the chip's hue: one quiet color per row kind */}
+      <span className="audit-type" data-kind={row.kind}>{rowLabel(row)}</span>
       <span className="audit-summary">{rowTypeDef(row).summary(row)}</span>
       {rowBadges(row)}
       <span className="audit-meta muted">{time}</span>

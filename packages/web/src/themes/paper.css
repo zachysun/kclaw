@@ -55,11 +55,11 @@ html[data-theme="paper"] {
      shell reads as depth instead of a flat fill */
   --page-bg: linear-gradient(180deg, #f7f8fa, #f2f4f7);
 
-  /* raised material: buttons get a light-to-dark vertical gradient */
-  --btn-grad: linear-gradient(180deg, #ffffff, #eef1f4);
-  --btn-grad-hover: linear-gradient(180deg, #ffffff, #e7eaee);
+  /* raised material: buttons get a narrow-span vertical gradient */
+  --btn-grad: linear-gradient(180deg, #fdfeff, #f2f4f7);
+  --btn-grad-hover: linear-gradient(180deg, #ffffff, #eaedf1);
   /* filled actions carry the signal gradient */
-  --accent-grad: linear-gradient(180deg, #cb5b48, #b14232);
+  --accent-grad: linear-gradient(180deg, #c45341, #b94433);
 
   /* layered soft shadows: contact + ambient, cool ink tint */
   --shadow-rgb: 45, 52, 64;

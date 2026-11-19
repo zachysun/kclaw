@@ -83,7 +83,7 @@
   background: var(--accent-grad);
   color: var(--accent-ink);
   font-weight: 600;
-  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .form-actions button[type="submit"]:hover:not(:disabled) {
@@ -358,15 +358,36 @@
   border-color: var(--border-strong);
 }
 
+/* 行类型徽标：每个事件种类一个低饱和色相（--audit-hue），做成淡底 +
+   同色系描边与文字的芯片。色相是固定值，深浅由 color-mix 向当前主题
+   的文字色收敛——浅色主题下压深、暗色主题下提亮，三套主题各自动适配 */
 .audit-type {
   flex-shrink: 0;
   font-size: 11px;
   padding: 1px 6px;
   border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  color: var(--text-dim);
-  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--audit-hue, var(--muted)) 9%, transparent);
+  color: color-mix(in srgb, var(--audit-hue, var(--muted)) 72%, var(--text));
+  border: 1px solid color-mix(in srgb, var(--audit-hue, var(--muted)) 34%, transparent);
 }
+
+/* 色相表：蓝=消息块，绿=运行，靛紫=压缩，青=记忆，石板=系统提示，
+   褐=沙箱，灰=会话元数据，橙=权限裁决，赭=截断，紫=团队，玫紫=技能，
+   琥珀=目标，黄绿=清单，粉褐=钩子 */
+.audit-type[data-kind="block"] { --audit-hue: #4c7fbf; }
+.audit-type[data-kind="run"] { --audit-hue: #2f8a5c; }
+.audit-type[data-kind="compaction"] { --audit-hue: #6b63c4; }
+.audit-type[data-kind="memory"] { --audit-hue: #1e8f96; }
+.audit-type[data-kind="system"] { --audit-hue: #5c7186; }
+.audit-type[data-kind="sandbox"] { --audit-hue: #8a7250; }
+.audit-type[data-kind="session"] { --audit-hue: #7d8794; }
+.audit-type[data-kind="decision"] { --audit-hue: #b8732c; }
+.audit-type[data-kind="truncation"] { --audit-hue: #ab5340; }
+.audit-type[data-kind="team"] { --audit-hue: #8a5cc0; }
+.audit-type[data-kind="skill"] { --audit-hue: #b05a92; }
+.audit-type[data-kind="goal"] { --audit-hue: #a3801f; }
+.audit-type[data-kind="todo"] { --audit-hue: #6d8f2f; }
+.audit-type[data-kind="hook"] { --audit-hue: #a65d6b; }
 
 .audit-summary {
   flex: 1;
@@ -633,7 +654,7 @@
   background: var(--accent-grad);
   color: var(--accent-ink);
   font-weight: 600;
-  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .memory-editor-actions button:first-child:hover:not(:disabled) {

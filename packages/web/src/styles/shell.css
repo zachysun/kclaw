@@ -1,17 +1,18 @@
 /* ---- shared buttons ---- */
 
-/* The base look is raised material: a light-to-dark vertical gradient
-   (per theme) over a hairline border with a layered contact shadow, so
-   an action reads as a button at a glance instead of a line of text.
-   Pressing settles it one pixel into the surface. Quiet flat buttons
-   (list rows, tab labels, bare × chips) override the background and
-   reset the shadow where they are declared. */
+/* The base look is a quiet raised surface: a two-stop gradient with a
+   narrow span (per theme), a hairline border that stays close to the
+   canvas tone, and one soft contact shadow — enough to read as a
+   button at a glance without glossy contrast. Pressing settles it one
+   pixel into the surface. Quiet flat buttons (list rows, tab labels,
+   bare × chips) override the background and reset the shadow where
+   they are declared. */
 button {
   font-family: var(--font-ui);
   font-size: 13px;
   color: var(--text);
   background: var(--btn-grad);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 6px 14px;
   cursor: pointer;
@@ -21,7 +22,7 @@ button {
 
 button:hover:not(:disabled) {
   background: var(--btn-grad-hover);
-  border-color: var(--border-hover);
+  border-color: var(--border-strong);
 }
 
 button:active:not(:disabled) {
@@ -34,21 +35,21 @@ button:disabled {
   box-shadow: none;
 }
 
-/* filled actions carry the signal gradient; the inset top highlight is
-   the material's light catch, kept on hover so the raise stays legible */
+/* filled actions carry the signal gradient with a narrow span and a
+   faint top light catch — unmistakably primary, never a saturated slab */
 button.primary {
   background: var(--accent-grad);
-  border-color: var(--accent);
+  border-color: transparent;
   color: var(--accent-ink);
   font-weight: 600;
-  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 button.primary:hover:not(:disabled) {
   background: var(--accent-grad);
-  border-color: var(--accent);
-  filter: brightness(1.06);
-  box-shadow: var(--shadow-2), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  border-color: transparent;
+  filter: brightness(1.05);
+  box-shadow: var(--shadow-2), inset 0 1px 0 rgba(255, 255, 255, 0.1);
   transform: translateY(-1px);
 }
 
@@ -125,7 +126,7 @@ select:focus {
   border-color: var(--accent);
   color: var(--accent-ink);
   font-weight: 600;
-  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .token-gate button[type="submit"]:hover:not(:disabled) {
@@ -657,19 +658,14 @@ button.session-item:hover {
    keyboard focus within the row) instead of covering the title: the chip
    lands on .session-meta's padding, so no text ever sits underneath it.
    The chip backdrop is kept for the rare case the slot still runs short. */
+/* 悬停浮现的改名/删除钮直接浮在行上，不套外壳：两个小按钮自身的材质
+   已经够看，外面再包一层背景框只会碍眼 */
 .session-actions {
   position: absolute;
   bottom: 5px;
   right: 5px;
   display: flex;
   gap: 4px;
-  padding: 2px 4px;
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(18px) saturate(150%);
-  backdrop-filter: blur(18px) saturate(150%);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-1);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--ease);

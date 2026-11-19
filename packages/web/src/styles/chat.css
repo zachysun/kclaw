@@ -1637,7 +1637,7 @@
   background: var(--accent-grad);
   color: var(--accent-ink);
   font-weight: 600;
-  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .chat-composer button[type="submit"]:hover:not(:disabled) {
@@ -1804,7 +1804,7 @@
 /* 按钮：与全局按钮同一材质（渐变 + 分层阴影），UI 卡里独立声明是因为
    .ui-btn 的边框与悬停语义（悬停转强调色）是卡片自己的 */
 .ui-btn {
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border);
   background: var(--btn-grad);
   color: var(--text);
   border-radius: var(--radius-sm);
@@ -1829,7 +1829,7 @@
   background: var(--accent-grad);
   border-color: var(--accent);
   color: var(--accent-ink);
-  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .ui-btn-primary:hover:not(:disabled) {
