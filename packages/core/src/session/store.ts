@@ -4,7 +4,7 @@ import { newId } from "../protocol/ids.js"
 import type { Message } from "../protocol/messages.js"
 import type { CompactionRecord, CompactionState } from "./compaction.js"
 import { writeFileAtomic } from "../storage/atomic.js"
-import { appendJsonlLine, readJsonl, readJsonlFrom } from "../storage/jsonl.js"
+import { appendJsonlLine, readCompleteLines, readJsonl, readJsonlFrom } from "../storage/jsonl.js"
 import { applyEvent, isCompactionEvent, isMessageEvent, isMessageTruncatedEvent } from "./events.js"
 import { chainGenesis, lineDigest, stripChainField, verifyEventChain } from "./integrity.js"
 import type { ChainMetaAnchor, ChainVerifyResult } from "./integrity.js"
@@ -154,8 +154,9 @@ export class SessionStore {
     const current = this.meta(id)
     // 链以文件末行原文为准（不是 meta.chainHead——崩溃窗口里事件已写、
     // meta 未写，末行才是已生效的历史）。一次读取产出 prev 与规范行数
-    // （撕裂尾在读取时丢弃，与 appendJsonlLine 的修复语义一致），追加后
-    // 不再重读文件——新行原文由本次调用唯一拼装，链锚直接推算。
+    // （readCompleteLines 与 repairTornTail 共用同一撕裂判定，读取时丢弃
+    // 的正是追加时会截断的），追加后不再重读文件——新行原文取追加返回值，
+    // 写盘文本与链摘要出自同一次序列化。
     const tail = this.chainTailBeforeAppend(id)
     // 投影落后检测：meta 能解析但 chainLength 与文件行数不一致 = 上次
     // "事件先行、投影后写"的两步写死在了中间（崩溃/盘满）。链锚字段随
@@ -173,8 +174,7 @@ export class SessionStore {
         base = current
       }
     }
-    const line = JSON.stringify({ ...event, $prev: tail.prev })
-    appendJsonlLine(this.eventsPath(id), { ...event, $prev: tail.prev })
+    const line = appendJsonlLine(this.eventsPath(id), { ...event, $prev: tail.prev })
     const at = this.eventAt(event)
     const baseMeta: SessionMeta = base ?? { id, title: "", createdAt: at, updatedAt: at }
     const projection = applyEvent(baseMeta, event)
@@ -196,14 +196,14 @@ export class SessionStore {
    * 创世起新链），lineCount = 丢弃撕裂尾后的规范行数。
    */
   private chainTailBeforeAppend(id: string): { prev: string; lineCount: number } {
-    const lines = this.readChainLines(id)
+    const lines = readCompleteLines(this.eventsPath(id))
     const last = lines[lines.length - 1]
     if (last === undefined) return { prev: chainGenesis(id), lineCount: 0 }
     try {
       const prev = "$prev" in (JSON.parse(last) as object) ? lineDigest(last) : chainGenesis(id)
       return { prev, lineCount: lines.length }
     } catch {
-      // readChainLines 已丢弃撕裂尾，parse 失败只剩"末行本身损坏"一种来源：
+      // readCompleteLines 已丢弃撕裂尾，parse 失败只剩"末行本身损坏"一种来源：
       // 按旧会话首条处理起新链，损坏行留在文件里由 verifyChain 报告。
       return { prev: chainGenesis(id), lineCount: lines.length }
     }
@@ -211,26 +211,9 @@ export class SessionStore {
 
   /** 修复后文件的链尾事实：末行摘要与总行数（无文件 → 创世与 0）。rebuildMeta 用。 */
   private chainTail(id: string): { head: string; length: number } {
-    const lines = this.readChainLines(id)
+    const lines = readCompleteLines(this.eventsPath(id))
     if (lines.length === 0) return { head: chainGenesis(id), length: 0 }
     return { head: lineDigest(lines[lines.length - 1]!), length: lines.length }
-  }
-
-  /**
-   * 事件文件的完整行（原文文本）。撕裂尾规范化与 appendJsonlLine 的修复
-   * 语义一致：不以换行结尾的末行视为崩溃残迹、丢弃。
-   */
-  private readChainLines(id: string): string[] {
-    let raw: string
-    try {
-      raw = readFileSync(this.eventsPath(id), "utf8")
-    } catch {
-      return []
-    }
-    if (raw === "") return []
-    // 到最后一个换行（含）为止：撕裂尾随之丢弃，与 appendJsonlLine 的修复语义一致
-    const body = raw.slice(0, raw.lastIndexOf("\n") + 1)
-    return body === "" ? [] : body.slice(0, -1).split("\n")
   }
 
   /** Load a session's event stream oldest-first; missing file yields []. `$prev` 链字段在读取边界处删掉（不进领域模型）。 */

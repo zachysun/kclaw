@@ -149,7 +149,9 @@ export function createConfigNotifier(): ConfigNotifier
 
 // packages/core/src/storage/jsonl.ts
 export function repairTornTail(file: string): void
-export function appendJsonlLine(file: string, value: unknown): void
+export function appendJsonlLine(file: string, value: unknown): string
+export function splitLinesCanonical(raw: string): { lines: string[]; tornTail: boolean }
+export function readCompleteLines(file: string): string[]
 export function readJsonl(file: string): unknown[]
 ```
 
@@ -211,7 +213,8 @@ export function readJsonl(file: string): unknown[]
 
 - `readJsonl(file)`：文件缺失返回 `[]`；去掉末尾空行后逐行 `JSON.parse`；**最后一行**解析失败视为断尾崩溃产物，丢弃并停止；**中间任何一行**解析失败则抛出错误：崩溃不可能产生中间的坏行，出现即意味着 bug 或外部破坏，静默跳过等于掩盖问题。
 - `readJsonlFrom(file, since)`：`readJsonl` 的尾部读变体，供增量拉取（`SessionStore.readEventsFrom` / 审计页 `?since=`）。文件仍整体读入（JSONL 没有行偏移索引），但下标 `< since` 的行**不解析、不构建**，增量开销只随返回条数增长、与流的总长无关；已解析区域的损坏语义与 `readJsonl` 一致，跳过区的损坏不可见。`readJsonl` 就是 `readJsonlFrom(file, 0)`。
-- `repairTornTail(file)` + `appendJsonlLine(file, value)`：每次追加前检查文件的最后一个字节：是 `\n` 说明上次写入完整结束；否则**先截断到上一个换行再追加**。截断点按**字节偏移**找（`Buffer.lastIndexOf(0x0a)`）：UTF-8 的多字节序列内部不会出现 0x0a（续字节都 ≥ 0x80），所以单字节检测可靠；如果改用解码后字符串的 indexOf，得到的是 UTF-16 码元下标，切点可能落在多字节字符中间，反而破坏上一行。文件不存在时修复是空操作。
+- `repairTornTail(file)` + `appendJsonlLine(file, value)`：每次追加前检查文件的最后一个字节：是 `\n` 说明上次写入完整结束；否则**先截断到上一个换行再追加**。截断点按**字节偏移**找（`Buffer.lastIndexOf(0x0a)`）：UTF-8 的多字节序列内部不会出现 0x0a（续字节都 ≥ 0x80），所以单字节检测可靠；如果改用解码后字符串的 indexOf，得到的是 UTF-16 码元下标，切点可能落在多字节字符中间，反而破坏上一行。文件不存在时修复是空操作。`appendJsonlLine` 返回实际写盘的行原文——`$prev` 链摘要取这个返回值，写盘文本与摘要出自同一次 `JSON.stringify`，不存在第二个序列化来源。
+- `splitLinesCanonical(raw)` + `readCompleteLines(file)`："什么算写到一半的坏行"的唯一定义与它的行文本读取。`splitLinesCanonical` 把文件原文拆成完整行加撕裂标记（末行缺 `\n` 即撕裂），值读取（`readJsonlFrom`）、链校验（`integrity.ts` 的 `verifyEventChain`）与行读取三方共用这一份判定；对撕裂残迹各自的处理是：值读取与链校验只丢弃解析失败的那一行（可解析的末行仍算数），`readCompleteLines` 则无条件丢弃——丢弃的正是 `repairTornTail` 追加前会截断的内容，链尾读取（`SessionStore` 的追加续链与投影重建）因此与追加修复看到同一套行。
 
 会话的删除语义在 `SessionStore`：`delete()` 软删除（追加 `session.deleted` 事件，摘要置 `deleted: true, deletedAt`），`restore()` 恢复（追加 `session.restored` 事件），`purge()` 物理删除整个目录，`purgeExpired(ttlMs)` 清理过期的软删除会话（由 scheduler tick 周期调用）。
 

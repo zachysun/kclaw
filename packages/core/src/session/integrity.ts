@@ -13,6 +13,7 @@
  *   链字段允许落后（文件比记录长时按文件链验证），下一次追加即追平。
  */
 import { createHash } from "node:crypto"
+import { splitLinesCanonical } from "../storage/jsonl.js"
 
 /** 摘要算法：SHA-256 十六进制。 */
 export function lineDigest(line: string): string {
@@ -66,9 +67,8 @@ export function verifyEventChain(
   if (meta !== null && meta.id !== undefined && meta.id !== sessionId) {
     return { status: "broken", checked: 0, reason: `meta.id=${meta.id} 与会话 ${sessionId} 不符（目录内容被置换？）` }
   }
-  let lines = raw.split("\n")
-  const tornTail = lines[lines.length - 1] !== "" // 末行无换行符 = 写入中途崩溃
-  if (lines[lines.length - 1] === "") lines.pop()
+  // 撕裂判定与读取/修复共用 splitLinesCanonical；末行无换行符 = 写入中途崩溃
+  const { lines, tornTail } = splitLinesCanonical(raw)
   const parsed = lines.map(parseOrNull)
   if (tornTail && parsed[lines.length - 1] === null) {
     return { status: "torn-tail", checked: lines.length, brokenAt: lines.length, reason: "末行不完整（崩溃痕迹，追加时自动修复）" }
