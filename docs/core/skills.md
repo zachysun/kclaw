@@ -198,7 +198,7 @@ interface SkillProposal {
 }
 ```
 
-**增量进度与挂起检查**：每项目一本账 `<skillsDir>/.proposals/state/<projectId>.json`（projectId 与记忆同一套 `projectIdFor(workdir)`），复用 `WriteLedger` 原样（trigger 只用 `follow`），照记忆系统"每会话各一本增量进度、提取失败不推进"的既有语义。单个损坏的暂存条目文件跳过并记录日志，不拖垮列表。不引入 git、不用 `.bak` 文件，回滚依靠暂存条目文件内的 `snapshot`。
+**增量进度与挂起检查**：每个项目一份进度记录 `<skillsDir>/.proposals/state/<projectId>.json`（projectId 与记忆同一套 `projectIdFor(workdir)`），复用 `WriteLedger` 原样（trigger 只用 `follow`），照记忆系统"每会话各一份增量进度、提取失败不推进"的既有语义。单个损坏的暂存条目文件跳过并记录日志，不拖垮列表。不引入 git、不用 `.bak` 文件，回滚依靠暂存条目文件内的 `snapshot`。
 
 ### 治理状态机
 

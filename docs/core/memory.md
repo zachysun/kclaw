@@ -150,7 +150,7 @@ flowchart TD
 
 ### 提取进度标记与串行锁
 
-`state.json` 每项目一本（`WriteLedger`，`packages/core/src/memory/ledger.ts`）。
+`state.json` 每个项目一份（`WriteLedger`，`packages/core/src/memory/ledger.ts`）。
 
 > 读写集中在 MemorySystem 的进度文件入口（写通道 `#ledgerForWrite`/读通道 `#ledgerPath`），且**每次调用即时打开、即时读取**：WriteLedger 写时把内存状态整文件原子重写，跨调用缓存一个长期存在的实例会把别人刚写入的字段覆盖掉（最后写入的覆盖之前的），所以禁止这样做。
 
@@ -289,7 +289,7 @@ daemon 启动时做一次全库重算（`daemon.ts` 调 `memory.reconcile`）：
 
 记忆提供三套人工管理入口，细节见各自文档：
 
-- **HTTP `/memory` 路由族**（10 个，`packages/server/src/routes/memory.ts`）：项目/线/全局认知的读取、整文件覆写（PATCH）、删除（DELETE），外加手动触发 `POST /memory/trigger-manual`；persona 不可删除（400）；未组装记忆系统时全部 503。路由表见 [http-api](../server/http-api.md)。
+- **HTTP `/memory` 路由族**（14 个，`packages/server/src/routes/memory.ts`）：项目/线/全局认知的读取、整文件覆写（PATCH）、删除（DELETE），日报的项目列表/日期索引/单日读取/手动重新生成（见「日报（daily）」节），外加手动触发记忆写入的 `POST /memory/trigger-manual`；persona 不可删除（400）；未组装记忆系统时全部 503。路由表见 [http-api](../server/http-api.md)。
 - **CLI `/memory`**（`packages/cli/src/slash.ts`）：`/memory`（无参列项目）、`/memory <项目>`（列该项目的主题线）、`/memory <项目> <线>`（打印线文件原文）。只读。
 - **Web 记忆页**（tab「记忆」，`packages/web/src/memory/MemoryView.tsx`）：左列两个一级分组（全局认知常驻；项目记忆钻取——选中项目的主题线缩进展开在该项目行下方）+ 整文件编辑器；不存在会话级记忆，会话只通过 `memory_search` 检索记忆。见 [webui](../web/webui.md)。
 
