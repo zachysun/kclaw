@@ -41,8 +41,6 @@ html[data-theme="amber"] {
 
   --page-bg: linear-gradient(180deg, #17181d, #131418);
 
-  --btn-grad: linear-gradient(180deg, #2f3038, #292a32);
-  --btn-grad-hover: linear-gradient(180deg, #36373f, #2e2f37);
   --accent-grad: linear-gradient(180deg, #d79f55, #cb9449);
 
   /* layered soft shadows, warm-tinted like the palette */

@@ -42,8 +42,6 @@ html[data-theme="phantom"] {
 
   --page-bg: linear-gradient(180deg, #121318, #0e0f13);
 
-  --btn-grad: linear-gradient(180deg, #2b2d34, #26282f);
-  --btn-grad-hover: linear-gradient(180deg, #33353d, #2a2c34);
   --accent-grad: linear-gradient(180deg, #d86257, #c74f44);
 
   /* layered soft shadows: contact + ambient, deeper than light themes

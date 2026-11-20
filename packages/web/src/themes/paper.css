@@ -5,9 +5,9 @@
    alive/acting); warn/danger go deep amber / burnt sienna so they
    stay legible on light. Floating layers (toasts, menus, panels,
    drawers) are translucent glass with backdrop blur; shadows are
-   layered (a tight contact shadow plus a soft ambient one) and
-   buttons carry a subtle vertical gradient so they read as raised
-   material instead of text.
+   layered (a tight contact shadow plus a soft ambient one) and a
+   button stays bare until hovered, when a wash of the ink stands in
+   for a frame.
    The selector pair owns `:root`: this palette doubles as the
    fallback for unknown/corrupt stored themes (index.html applies
    storage as-is; an unknown value matches no theme block and
@@ -55,9 +55,6 @@ html[data-theme="paper"] {
      shell reads as depth instead of a flat fill */
   --page-bg: linear-gradient(180deg, #f7f8fa, #f2f4f7);
 
-  /* raised material: buttons get a narrow-span vertical gradient */
-  --btn-grad: linear-gradient(180deg, #fdfeff, #f2f4f7);
-  --btn-grad-hover: linear-gradient(180deg, #ffffff, #eaedf1);
   /* filled actions carry the signal gradient */
   --accent-grad: linear-gradient(180deg, #c45341, #b94433);
 

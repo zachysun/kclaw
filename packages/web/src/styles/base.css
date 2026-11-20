@@ -21,6 +21,12 @@
   --space-4: 16px;
   --space-5: 24px;
   --ease: 120ms ease;
+
+  /* interaction wash — one translucent layer of the theme's own ink, so a
+     hover/press tint and inline-code fill adapt to light and dark palettes
+     without a per-theme value */
+  --wash: color-mix(in srgb, var(--text) 7%, transparent);
+  --wash-strong: color-mix(in srgb, var(--text) 12%, transparent);
 }
 * {
   box-sizing: border-box;
@@ -135,10 +141,14 @@ input[type="checkbox"] {
   }
 }
 
+/* Inline code sits on the same quiet wash as a hovered control: a tint of the
+   theme ink reads as a token either way, while a white well on a light canvas
+   would turn every identifier into a bright brick. Fenced blocks keep their
+   own well (--code-well-bg) because they carry a whole passage. */
 code {
-  background: var(--code-well-bg);
-  border-radius: var(--radius-sm);
-  padding: 0 4px;
+  background: var(--wash);
+  border-radius: 4px;
+  padding: 1px 5px;
   font-family: var(--font-mono);
   font-size: 0.92em;
 }
