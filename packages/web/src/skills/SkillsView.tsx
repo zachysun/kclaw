@@ -80,7 +80,7 @@ const TIERS: LinkRecord["tier"][] = ["all", "user", "model", "off"]
 /** 提案行（GET /skills/proposals）：形状即 protocol 正本 SkillProposalRow
  * （完整提案字段 + applied 时的用量口径），本地不再手抄镜像。 */
 
-const PROPOSAL_STATUS_LABEL: Record<SkillProposalRow["status"], string> = { proposed: "待确认", applied: "已采纳", rejected: "已驳回", reverted: "已回退" }
+const PROPOSAL_STATUS_LABEL: Record<SkillProposalRow["status"], string> = { proposed: "待审阅", applied: "已采纳", rejected: "已驳回", reverted: "已回退" }
 const PROPOSAL_KIND_LABEL: Record<SkillProposalRow["kind"], string> = { new: "新增", revise: "修订" }
 const PROPOSAL_SCOPE_LABEL: Record<SkillProposalRow["scope"], string> = { global: "全局", project: "项目" }
 
@@ -300,7 +300,7 @@ export function SkillsView({ api, notice }: {
       const res = await api.post<{ ok: boolean; warning?: string }>(`/skills/proposals/${encodeURIComponent(p.id)}/${op}`, {})
       if (res.warning !== undefined) notice(res.warning) // 非致命提示（如全局提案被某项目同名技能覆盖）
       const verb = op === "apply" ? "已采纳" : op === "reject" ? "已驳回" : "已回退"
-      notice(`提案 ${p.name} ${verb}`)
+      notice(`暂存条目 ${p.name} ${verb}`)
       reload()
       reloadProposals()
       // apply 装技能、revert 卸技能：已装集合变了要广播；reject 只改提案
@@ -319,7 +319,7 @@ export function SkillsView({ api, notice }: {
     try {
       await api.del(`/skills/proposals/${encodeURIComponent(p.id)}`)
       setProposalId(null)
-      notice(`已删除提案 ${p.name}`)
+      notice(`已删除暂存条目 ${p.name}`)
       reloadProposals()
     } catch (e) {
       notice(`删除失败: ${String(e)}`, "error")
@@ -380,7 +380,7 @@ export function SkillsView({ api, notice }: {
             从其他 agent 复用{discoveredCount > 0 ? `（${discoveredCount}）` : ""}
           </button>
           <button type="button" role="tab" aria-selected={subTab === "proposals"} data-testid="subtab-proposals" className={subTab === "proposals" ? "active" : ""} onClick={() => { setSubTab("proposals"); setBody(null) }}>
-            提案{pendingCount > 0 ? `（${pendingCount} 待确认）` : ""}
+            暂存{pendingCount > 0 ? `（${pendingCount} 待审阅）` : ""}
           </button>
         </div>
       </div>
@@ -457,8 +457,8 @@ export function SkillsView({ api, notice }: {
             {proposalRows.length === 0 ? (
               <p className="muted">
                 {proposals !== null && (proposals ?? []).length > 0
-                  ? "没有匹配筛选条件的提案。"
-                  : "还没有提案。开启技能进化（配置 skills.evolution.enabled）后，用了技能的会话会在空闲时提炼经验形成提案；对话里模型也可通过 skill_create 主动提案。提案只是候选，未经你确认不会进入技能目录。"}
+                  ? "没有匹配筛选条件的暂存条目。"
+                  : "还没有暂存条目。开启技能进化（配置 skills.evolution.enabled）后，用了技能的会话会在空闲时提炼经验形成暂存条目；对话里模型也可通过 skill_create 主动暂存。暂存只是候选，未经你采纳不会进入技能目录。"}
               </p>
             ) : (
               <ul>
@@ -488,7 +488,7 @@ export function SkillsView({ api, notice }: {
           </div>
           <div className="skills-body">
             {selectedProposal === null ? (
-              <p className="pane-placeholder muted">选择一个提案查看详情；待确认的提案在此采纳或驳回，已采纳的可回退</p>
+              <p className="pane-placeholder muted">选择一个暂存条目查看详情；待审阅的条目在此采纳或驳回，已采纳的可回退</p>
             ) : (
               (() => {
                 const p = selectedProposal
@@ -504,8 +504,8 @@ export function SkillsView({ api, notice }: {
                       {p.title}
                       {p.status === "proposed" && (
                         <span className="section-actions">
-                          <button type="button" data-testid="proposal-apply" disabled={busy} onClick={() => void proposalAction(p, "apply")}>采纳</button>
-                          <button type="button" data-testid="proposal-reject" disabled={busy} onClick={() => void proposalAction(p, "reject")}>驳回</button>
+                          <button type="button" className="primary" data-testid="proposal-apply" disabled={busy} onClick={() => void proposalAction(p, "apply")}>采纳</button>
+                          <button type="button" className="danger" data-testid="proposal-reject" disabled={busy} onClick={() => void proposalAction(p, "reject")}>驳回</button>
                         </span>
                       )}
                       {p.status === "applied" && (
@@ -523,7 +523,7 @@ export function SkillsView({ api, notice }: {
                     <p className="muted">{metaBits.join(" · ")}</p>
                     {p.rationale !== "" && (
                       <p>
-                        <strong>为什么提案：</strong>
+                        <strong>为什么值得沉淀：</strong>
                         {p.rationale}
                       </p>
                     )}
@@ -542,7 +542,7 @@ export function SkillsView({ api, notice }: {
                       </details>
                     )}
                     <details className="proposal-content" open>
-                      <summary>提案内容（完整 SKILL.md）</summary>
+                      <summary>暂存内容（完整 SKILL.md）</summary>
                       <pre>{p.content}</pre>
                     </details>
                   </>

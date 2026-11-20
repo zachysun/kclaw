@@ -287,7 +287,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 | `tool_search` | 检索未全量列出的工具（返回完整工具卡，命中即加入本 run 可用集） | safe | parallel | 检索池非空（有目录/deferred 层工具时） |
 | `subagent_run` | 派 subagent 独立执行自包含任务（可后台） | safe | parallel | 主线 run 且组装了派发器（daemon 恒有；子会话没有） |
 | `subagent_collect` | 按子会话 id 取回后台 subagent 的结题答复 | safe | parallel | 同上，且组装了收集器 |
-| `skill_create` | 把一段经验固化为技能提案（提案制，不经确认不生效） | safe | parallel | daemon 组装了技能进化系统（恒有）；`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案 |
+| `skill_create` | 把一段经验固化为暂存的技能写入（暂存制，不经采纳不生效） | safe | parallel | daemon 组装了技能进化系统（恒有）；`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案 |
 | `create_team` | 建立本会话的 agent 团队、本会话成为组长 | safe | serial | 仅组长身份 |
 | `spawn_teammate` | 添加一个组员（持久子会话 + 模型快照） | safe | serial | 仅组长身份 |
 | `send_message` | 给组长或组员写信（经持久收信箱投递） | safe | parallel | 团队身份（组长或组员） |
@@ -386,7 +386,7 @@ makeTool(name, risk: "safe" | "sensitive", concurrency: "parallel" | "serial", f
 
 ### skill_create
 
-`safe` · `parallel`。把一段可复用经验固化为技能提案：不直接安装，提案进入待确认列表，用户在 WebUI 审阅后才可能生效。
+`safe` · `parallel`。把一段可复用经验固化为暂存的技能写入：不直接安装，先进入待审阅列表，用户在 WebUI 审阅采纳后才生效。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|

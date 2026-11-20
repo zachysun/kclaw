@@ -2,7 +2,7 @@
 
 ## 职责
 
-`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权 hook 加 87 个业务路由（健康/状态 2 个、会话 24 个、改动记录 2 个、记忆 10 个、技能 16 个、hook 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、provider 管理 7 个、目录浏览 2 个、用量 1 个、MCP 管理 6 个、IM Channel 管理 4 个、检索 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`changes.ts`、`attachments.ts`、`cron.ts`、`config.ts`、`providers.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`、`mcp.ts`、`channel.ts`、`search.ts`）；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未组装时降级 503，技能组始终注册（只读与复用管理无组装依赖；提案治理子路由族组装后才可用、未组装整体 503），hook 组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则以文件为准，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
+`packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权 hook 加 87 个业务路由（健康/状态 2 个、会话 24 个、改动记录 2 个、记忆 10 个、技能 16 个、hook 1 个、权限 2 个、附件 3 个、任务 4 个、配置 1 个、provider 管理 7 个、目录浏览 2 个、用量 1 个、MCP 管理 6 个、IM Channel 管理 4 个、检索 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`changes.ts`、`attachments.ts`、`cron.ts`、`config.ts`、`providers.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`、`mcp.ts`、`channel.ts`、`search.ts`）；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未组装时降级 503，技能组始终注册（只读与复用管理无组装依赖；暂存治理子路由族组装后才可用、未组装整体 503），hook 组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则以文件为准，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
 ## 设计决策
 
@@ -183,7 +183,7 @@ interface Cron {
 
 ### 技能（routes/skills.ts，始终注册）
 
-技能管理接口（CLI `/skill` 与 Web 技能页、技能即斜杠命令的共同后端），分为只读、复用管理与提案治理三部分。技能以文件为准：`~/.kclaw/skills/`（全局）与工作区 `.kclaw/skills/`（项目级，覆盖全局）下的每个子目录一份 `SKILL.md`；机制、字段与复用链接见 [skills](../core/skills.md)。每次请求**重新扫描**这两个作用域（与 run 时的注入使用同一套扫描规则），`?workdir=` 指定项目级作用域（默认无项目级）。
+技能管理接口（CLI `/skill` 与 Web 技能页、技能即斜杠命令的共同后端），分为只读、复用管理与暂存治理三部分。技能以文件为准：`~/.kclaw/skills/`（全局）与工作区 `.kclaw/skills/`（项目级，覆盖全局）下的每个子目录一份 `SKILL.md`；机制、字段与复用链接见 [skills](../core/skills.md)。每次请求**重新扫描**这两个作用域（与 run 时的注入使用同一套扫描规则），`?workdir=` 指定项目级作用域（默认无项目级）。
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
@@ -200,16 +200,16 @@ interface Cron {
 
 `:name` 路径段先过白名单校验（同 `/memory` 的 `isSafeSegment`），非法段 400 `invalid segment`。**`user-invocable: false` 的技能在用户侧视为不存在**：列表不显示、按名调用返回 404，且与未知名字同响应（`{error:"not found"}`，不泄露存在性）。
 
-**提案治理路由族**（技能进化，`registerSkillRoutes` 的 opts 带 `skillsEvolution` 时注册；未组装时整体 503 `skill evolution is not assembled`，不影响上面的既有路由）。治理写操作均经全局 token 鉴权中间件。机制见 [skills](../core/skills.md) 的"技能进化"一节。
+**暂存治理路由族**（技能进化，`registerSkillRoutes` 的 opts 带 `skillsEvolution` 时注册；未组装时整体 503 `skill evolution is not assembled`，不影响上面的既有路由）。治理写操作均经全局 token 鉴权中间件。机制见 [skills](../core/skills.md) 的"技能进化"一节。
 
 | 方法 | 路径 | 用途 | 请求 | 响应 |
 |------|------|------|------|------|
-| GET | `/skills/proposals?status=` | 提案列表（applied 项带用量） | `status` 可选：proposed/applied/rejected/reverted，默认返回全部 | `{proposals: [完整 SkillProposal 字段 + applied 项带 usage（采纳后 skill_read 次数）]}`；单个损坏的提案文件跳过，不影响整个列表 |
-| GET | `/skills/proposals/:id` | 单个提案详情 | — | 完整 SkillProposal（applied 带 `usage`）；不存在 404；路径段先过 `isSafeSegment` |
-| POST | `/skills/proposals/:id/apply` | 确认提案（proposed → applied） | — | `{ok:true}`，可带非致命 `warning`（修订的现正文与提案时 baseline 不一致、或全局新增遇到某项目已有同名技能、项目副本优先生效）；非法流转/同名冲突/目标是复用链接技能 409、不存在 404 |
-| POST | `/skills/proposals/:id/reject` | 驳回提案（proposed → rejected，只改状态） | — | `{ok:true}`；非法流转 409、不存在 404 |
-| POST | `/skills/proposals/:id/revert` | 回退已采纳提案（applied → reverted：修订写回快照、新增的删除技能目录） | — | `{ok:true}`；非法流转 409、不存在 404 |
-| DELETE | `/skills/proposals/:id` | 删除提案文件（仅 rejected/reverted 可删） | — | `{ok:true}`；其余状态 409、不存在 404 |
+| GET | `/skills/proposals?status=` | 暂存条目列表（applied 项带用量） | `status` 可选：proposed/applied/rejected/reverted，默认返回全部 | `{proposals: [完整 SkillProposal 字段 + applied 项带 usage（采纳后 skill_read 次数）]}`；单个损坏的暂存条目文件跳过，不影响整个列表 |
+| GET | `/skills/proposals/:id` | 单条暂存详情 | — | 完整 SkillProposal（applied 带 `usage`）；不存在 404；路径段先过 `isSafeSegment` |
+| POST | `/skills/proposals/:id/apply` | 采纳暂存条目（proposed → applied） | — | `{ok:true}`，可带非致命 `warning`（修订的现正文与暂存时 baseline 不一致、或全局新增遇到某项目已有同名技能、项目副本优先生效）；非法流转/同名冲突/目标是复用链接技能 409、不存在 404 |
+| POST | `/skills/proposals/:id/reject` | 驳回暂存条目（proposed → rejected，只改状态） | — | `{ok:true}`；非法流转 409、不存在 404 |
+| POST | `/skills/proposals/:id/revert` | 回退已采纳条目（applied → reverted：修订写回快照、新增的删除技能目录） | — | `{ok:true}`；非法流转 409、不存在 404 |
+| DELETE | `/skills/proposals/:id` | 删除暂存条目文件（仅 rejected/reverted 可删） | — | `{ok:true}`；其余状态 409、不存在 404 |
 
 ### hook（routes/hooks.ts，始终注册）
 
@@ -306,7 +306,7 @@ web 的审计页（`packages/web/src/audit/AuditView.tsx`）演示了标准用�
 
 1. 会话选择跟随应用侧栏的全局选中（也支持 `?tab=audit&session=<id>` 深链）；
 2. `GET /sessions/:id/events?since=0` 获取该会话**完整事件流**（`SessionEvent[]`，append-only、按事件序）；
-3. 客户端按流序摊平成逐行审计：`message` 事件每条消息按块（block）摊平（role + 类型标签 + 摘要，点击展开完整块；assistant 消息的最后一块行上显示 token 用量与 LLM 耗时 `latencyMs`，tool_result 行显示执行耗时 `durationMs`）、`message.truncated` 事件渲染成"截断"行（消息截断 · 从 `<起点>` 起退出对话视图，编辑重试/重新生成的记录）、`compaction` 事件渲染成"压缩"行、`memory` 事件渲染成"记忆"行、`skill` 事件渲染成"技能"行（技能提案的产生/采纳/驳回/回退/删除各一行，点击展开完整事件字段，见 [skills](../core/skills.md)）、`system` 事件渲染成"系统提示词"行（开头片段 + 字符数，点击展开全文，按稳定段/实时段两段展示；与相邻上一条文本不同标"已变化"）、`sandbox.checked` 事件渲染成"沙箱"行（可用 / 不可用（原因）/ 已关闭）、`run.started`/`run.ended` 渲染成"运行"行（触发来源 / 停止原因 + 用量，失败带错误，与消息事件夹出每轮边界）、`permission.decided` 渲染成"权限"行（裁决 + 裁决者 + 工具身份，展开看参数）、会话元数据事件（created/renamed/deleted/restored/forked/set）渲染成轻量"会话"行，`team.*` 七种事件渲染成"team"行（建团/添加/组员状态/收信/送达/任务创建/任务状态的摘要，点击展开完整内容）、`goal.*` 三种渲染成"goal"行（设定/改写/暂停/恢复/状态迁移与每轮判定的一句话摘要，点击展开完整快照）、`todo.written` 渲染成"todo"行（清单更新：N 项，未完成 X）、`hook` 事件渲染成"hook"行（钩子名 @ 位置 + 结局〔正常/失败/超时〕与耗时，展开看完整字段）。**二十八种持久化事件全部渲染成行**；
+3. 客户端按流序摊平成逐行审计：`message` 事件每条消息按块（block）摊平（role + 类型标签 + 摘要，点击展开完整块；assistant 消息的最后一块行上显示 token 用量与 LLM 耗时 `latencyMs`，tool_result 行显示执行耗时 `durationMs`）、`message.truncated` 事件渲染成"截断"行（消息截断 · 从 `<起点>` 起退出对话视图，编辑重试/重新生成的记录）、`compaction` 事件渲染成"压缩"行、`memory` 事件渲染成"记忆"行、`skill` 事件渲染成"技能"行（技能暂存条目的产生/采纳/驳回/回退/删除各一行，点击展开完整事件字段，见 [skills](../core/skills.md)）、`system` 事件渲染成"系统提示词"行（开头片段 + 字符数，点击展开全文，按稳定段/实时段两段展示；与相邻上一条文本不同标"已变化"）、`sandbox.checked` 事件渲染成"沙箱"行（可用 / 不可用（原因）/ 已关闭）、`run.started`/`run.ended` 渲染成"运行"行（触发来源 / 停止原因 + 用量，失败带错误，与消息事件夹出每轮边界）、`permission.decided` 渲染成"权限"行（裁决 + 裁决者 + 工具身份，展开看参数）、会话元数据事件（created/renamed/deleted/restored/forked/set）渲染成轻量"会话"行，`team.*` 七种事件渲染成"team"行（建团/添加/组员状态/收信/送达/任务创建/任务状态的摘要，点击展开完整内容）、`goal.*` 三种渲染成"goal"行（设定/改写/暂停/恢复/状态迁移与每轮判定的一句话摘要，点击展开完整快照）、`todo.written` 渲染成"todo"行（清单更新：N 项，未完成 X）、`hook` 事件渲染成"hook"行（钩子名 @ 位置 + 结局〔正常/失败/超时〕与耗时，展开看完整字段）。**二十八种持久化事件全部渲染成行**；
 4. 实时增量：页面私有 ws 连接订阅会话，收到 `session.appended` 通知帧（存储层写入磁盘成功后发出，先写入磁盘再广播）即 `GET /sessions/:id/events?since=<已有条数>` 增量拉取，append-only 下标做游标、断线重连后重拉补齐。
 
 只读、不修改任何状态、无独立 `/audit` 路由：事件流（`events.jsonl`，一行一个事件的 append-only 文件）是审计的唯一事实来源，HTTP 只是它的读取窗口。tool 消息上的 `grantedBy`（每个工具调用的放行原因）随 `message` 事件一起返回，是"谁批准了这个操作"的审计依据。

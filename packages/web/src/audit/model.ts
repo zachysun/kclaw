@@ -809,7 +809,7 @@ function teamFullContent(event: TeamAuditEvent): string {
 
 /** skill 事件的单行摘要（技能进化审计行：op/kind/name/scope）。 */
 function skillSummary(event: SkillEvent): string {
-  const opLabel: Record<SkillEvent["op"], string> = { proposed: "提案", applied: "采纳", rejected: "驳回", reverted: "回退", deleted: "删除" }
+  const opLabel: Record<SkillEvent["op"], string> = { proposed: "暂存", applied: "采纳", rejected: "驳回", reverted: "回退", deleted: "删除" }
   const kindLabel: Record<SkillEvent["kind"], string> = { new: "新增", revise: "修订" }
   const scopeLabel: Record<SkillEvent["scope"], string> = { global: "全局", project: "项目" }
   const sourceLabel: Record<SkillEvent["source"], string> = { follow: "空闲提炼", skill_create: "skill_create", admin: "人工操作" }

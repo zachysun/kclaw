@@ -733,7 +733,7 @@ describe("/mcp", () => {
   })
 })
 
-describe("/skill proposals（技能提案，只读）", () => {
+describe("/skill pending（暂存的技能写入，只读）", () => {
   const PROPOSALS = {
     proposals: [
       { id: "1730000000000-deploy-postmortem", status: "proposed", kind: "new", name: "deploy-postmortem", scope: "project", workdir: "/w/kclaw", title: "复盘模板", rationale: "部署后总要做复盘", content: "---\ndescription: 复盘\n---\n步骤", createdAt: "2026-09-21T00:00:00.000Z" },
@@ -753,16 +753,16 @@ describe("/skill proposals（技能提案，只读）", () => {
   it("lists proposals with status/kind/scope/usage", async () => {
     const f = fake()
     const registry = createRegistry(f.ctx)
-    await runOrHint({ command: "skill", args: "proposals" }, registry, f.ctx)
+    await runOrHint({ command: "skill", args: "pending" }, registry, f.ctx)
     const printed = f.print.mock.calls.map((c) => c[0] as string)
-    expect(printed.some((t) => t.includes("deploy-postmortem") && t.includes("待确认"))).toBe(true)
+    expect(printed.some((t) => t.includes("deploy-postmortem") && t.includes("待审阅"))).toBe(true)
     expect(printed.some((t) => t.includes("deploy-runbook") && t.includes("已采纳") && t.includes("被调用 3 次"))).toBe(true)
   })
 
   it("proposal <id> prints the full detail including content", async () => {
     const f = fake()
     const registry = createRegistry(f.ctx)
-    await runOrHint({ command: "skill", args: `proposal ${PROPOSALS.proposals[0]!.id}` }, registry, f.ctx)
+    await runOrHint({ command: "skill", args: `pending ${PROPOSALS.proposals[0]!.id}` }, registry, f.ctx)
     const printed = f.print.mock.calls.map((c) => c[0] as string)
     expect(printed.some((t) => t.includes("为什么：部署后总要做复盘") && t.includes("复盘\n---\n步骤"))).toBe(true)
   })
@@ -774,7 +774,7 @@ describe("/skill proposals（技能提案，只读）", () => {
       throw new Error(`unexpected ${path}`)
     })
     const registry = createRegistry(f.ctx)
-    await runOrHint({ command: "skill", args: "proposals" }, registry, f.ctx)
-    expect(f.print.mock.calls.some((c) => (c[0] as string).includes("还没有技能提案"))).toBe(true)
+    await runOrHint({ command: "skill", args: "pending" }, registry, f.ctx)
+    expect(f.print.mock.calls.some((c) => (c[0] as string).includes("还没有暂存的技能写入"))).toBe(true)
   })
 })

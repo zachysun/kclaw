@@ -2,7 +2,7 @@
  * SkillsView — 技能页测试。照 memoryView.test.tsx 的 fake-api 模式：
  * vi.fn 的 ApiClient，get 按路径返回裸数据。两个子页签：默认「已装技能」，
  * 「从其他 agent 复用」页签承载发现列表（搜索/分组）、已建链接表格与批量
- * 复用，「提案」页签承载技能进化的治理面（角标、按状态显隐的操作按钮、
+ * 复用，「暂存」页签承载技能进化的治理面（角标、按状态显隐的操作按钮、
  * 修订对照、warning toast）。scope 默认全局；扫描与链接数据加载失败静默
  * 降级，只有主清单失败走 notice。
  */
@@ -342,11 +342,11 @@ describe("SkillsView proposals tab（提案面）", () => {
     const api = fakeApi()
     const { container } = await mount(api)
     // 角标：仅 1 条待确认
-    expect(container.querySelector('[data-testid="subtab-proposals"]')!.textContent).toContain("（1 待确认）")
+    expect(container.querySelector('[data-testid="subtab-proposals"]')!.textContent).toContain("（1 待审阅）")
     await openProposalsTab(container)
     expect(api.get).toHaveBeenCalledWith("/skills/proposals")
     // 行内：状态 + 种类 + 项目尾段 + 创建时间 + applied 用量
-    expect(container.textContent).toContain("待确认")
+    expect(container.textContent).toContain("待审阅")
     expect(container.textContent).toContain("新增 · 项目（proj）")
     // 创建时间按本地时区展示，期望值用同一 ISO 串本地算出，不固定时区。
     const created = new Date("2026-09-21T08:30:00.000Z")
@@ -399,7 +399,7 @@ describe("SkillsView proposals tab（提案面）", () => {
     })
     await flush()
     expect(container.textContent).toContain("当前正文（对照）")
-    expect(container.textContent).toContain("提案内容（完整 SKILL.md）")
+    expect(container.textContent).toContain("暂存内容（完整 SKILL.md）")
     expect(container.textContent).toContain("V1 正文")
     expect(container.textContent).toContain("V2 正文")
     expect(container.textContent).toContain("改了第 2 步")

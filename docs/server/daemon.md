@@ -112,7 +112,7 @@ new CronScheduler(paths.cronDb)
 llm + resolveModel(config)          默认条目客户端（经共享 resolver 包装重试；注入
                                     llmFactory 的测试直用注入实现）与主模型名解析
 new SkillEvolutionSystem({skillsDir, sessions, config, resolveLlm, log})
-                                    技能进化系统（提案制，见 skills.md）：提炼模型经
+                                    技能进化系统（暂存制，见 skills.md）：提炼模型经
                                     makeExtractLlmResolver 与记忆提取走同一条解析链
                                     （extractModel 命中条目走条目端点，Model 页改动同样
                                     热生效）；构造后交给 RunManager（run 收尾钩子 +
@@ -197,7 +197,7 @@ createApp({home, token, stores, bus, run, cancelBackgroundForParent（见上）,
                                     Fastify 应用（见 http-api）；attachmentsDir/usage 传入时
                                     对应的附件与用量路由才注册，mcp 提供 /mcp 的分组快照，mainWorkspace
                                     随快照回显（新增条目的默认目标组），memory 供 /memory 路由族，
-                                    skillsEvolution 供 /skills/proposals 提案治理路由族（未组装时该族 503），
+                                    skillsEvolution 供 /skills/proposals 暂存治理路由族（未组装时该族 503），
                                     goal 供 /sessions/:id/goal 路由族（未组装时整体 503），
                                     sessionFork（现场构造的 createSessionForkHost：空闲门槛 +
                                     记忆进度播种 + 检索索引标记 + 附件拷贝）供 POST /sessions/:id/fork

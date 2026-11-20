@@ -332,7 +332,7 @@ export class SkillEvolutionSystem implements SkillEvolutionScheduleBook, SkillEv
 
   applyProposal(id: string): SkillProposalResult {
     const p = this.#store.get(id)
-    if (p === undefined) return { ok: false, error: "提案不存在" }
+    if (p === undefined) return { ok: false, error: "暂存条目不存在" }
     // 覆盖检查候选：daemon 已知的全部项目技能目录（项目副本整目录覆盖全局）。
     const shadowDirs = p.scope === "global"
       ? [...new Set(this.#sessions.list().map((m) => m.workdir).filter((w): w is string => typeof w === "string" && w !== ""))].map(projectSkillsDir)

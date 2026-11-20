@@ -530,7 +530,7 @@ const BUILTIN_HOOK_SPECS: ReadonlyArray<AnyBuiltinHookSpec> = [
     name: "skill-follow-check",
     position: "run-after",
     order: 40,
-    description: "排一个技能提炼空闲检查（提案制；未启用即跳过）",
+    description: "排一个技能提炼空闲检查（暂存制；未启用即跳过）",
     failure: "skip",
     makeHandler: (rt) => {
       const { childRun, config, skillsEvolution, skillNames, sessionId } = rt

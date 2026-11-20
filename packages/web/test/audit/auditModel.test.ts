@@ -462,7 +462,7 @@ describe("skill 审计行", () => {
     const rows = flattenAudit(events) as Extract<AuditRow, { kind: "skill" }>[]
     expect(rows).toHaveLength(2)
     expect(rows.every((r) => r.kind === "skill")).toBe(true)
-    expect(rowSearchText(rows[0]!)).toContain("技能提案：新增 deploy-postmortem（项目 · 来源 空闲提炼）")
+    expect(rowSearchText(rows[0]!)).toContain("技能暂存：新增 deploy-postmortem（项目 · 来源 空闲提炼）")
     expect(rowSearchText(rows[1]!)).toContain("技能采纳：修订 deploy-runbook（全局 · 来源 人工操作）")
   })
 

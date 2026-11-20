@@ -18,6 +18,6 @@ export const SKILL_EXTRACT_SYSTEM_PROMPT = [
   "- title：一句话短标题。rationale：为什么提这个案（从对话里看到的依据）。",
   "- changes：kind 为 revise 时必填，改了哪里、为什么（对照说明）。",
   "- content：完整的 SKILL.md 文件内容（YAML frontmatter + Markdown 正文，含 description 字段）。",
-  "只有对话里出现了明确、可复用的经验才提案；不要为凑数提案，也不要重复提案里已有的内容。",
+  "只有对话里出现了明确、可复用的经验才生成暂存条目；不要为凑数生成，也不要重复暂存列表里已有的内容。",
   "无值得提的内容输出 {\"proposals\":[]}。只输出 JSON，不要输出任何其他文字。",
 ].join("\n")

@@ -153,7 +153,7 @@ export class ProposalStore {
    */
   apply(id: string, opts: { at?: string; shadowDirs?: string[] } = {}): SkillProposalResult {
     const p = this.get(id)
-    if (p === undefined) return { ok: false, error: "提案不存在" }
+    if (p === undefined) return { ok: false, error: "暂存条目不存在" }
     if (p.status !== "proposed") return { ok: false, error: `非法流转 ${p.status} → applied`, conflict: true }
     const root = this.#resolveDir(p.scope, p.workdir)
     if (linkedSkillNames(root).includes(p.name)) {
@@ -171,7 +171,7 @@ export class ProposalStore {
       // 提案后正文已被第三方改动：不阻止 apply（决策权在用户按下的那一刻），
       // 但必须提示——覆盖的是提案内容，不是用户上次看到的那份。
       if (p.baseline !== undefined && p.baseline !== current) {
-        warnings.push("提案后正文已被改动，本次生效以提案内容覆盖")
+        warnings.push("暂存后正文已被改动，本次生效以暂存内容覆盖")
       }
       // 回滚快照 = 覆盖前的真实正文（可能与提案时的 baseline 有漂移——revert
       // 恢复的是 apply 前一刻的状态，不是提案时看到的状态）。
@@ -195,7 +195,7 @@ export class ProposalStore {
   /** proposed → rejected：只改状态，文件保留（日后可手动清理或重新捡起）。 */
   reject(id: string, opts: { at?: string } = {}): SkillProposalResult {
     const p = this.get(id)
-    if (p === undefined) return { ok: false, error: "提案不存在" }
+    if (p === undefined) return { ok: false, error: "暂存条目不存在" }
     if (p.status !== "proposed") return { ok: false, error: `非法流转 ${p.status} → rejected`, conflict: true }
     p.status = "rejected"
     p.decidedAt = opts.at ?? new Date().toISOString()
@@ -206,11 +206,11 @@ export class ProposalStore {
   /** applied → reverted：revise 把快照写回；new 删除已生效的技能目录本身。 */
   revert(id: string, opts: { at?: string } = {}): SkillProposalResult {
     const p = this.get(id)
-    if (p === undefined) return { ok: false, error: "提案不存在" }
+    if (p === undefined) return { ok: false, error: "暂存条目不存在" }
     if (p.status !== "applied") return { ok: false, error: `非法流转 ${p.status} → reverted`, conflict: true }
     const root = this.#resolveDir(p.scope, p.workdir)
     if (p.kind === "revise") {
-      if (p.snapshot === undefined) return { ok: false, error: "提案缺少回滚快照，无法回滚" }
+      if (p.snapshot === undefined) return { ok: false, error: "暂存条目缺少回滚快照，无法回滚" }
       writeFileAtomic(join(root, p.name, "SKILL.md"), p.snapshot)
     } else {
       rmSync(join(root, p.name), { recursive: true, force: true }) // 只删该技能目录本身
@@ -224,9 +224,9 @@ export class ProposalStore {
   /** 仅 rejected/reverted 可删（删提案文件）；其余状态 409 语义。 */
   remove(id: string): SkillProposalResult {
     const p = this.get(id)
-    if (p === undefined) return { ok: false, error: "提案不存在" }
+    if (p === undefined) return { ok: false, error: "暂存条目不存在" }
     if (p.status !== "rejected" && p.status !== "reverted") {
-      return { ok: false, error: `仅 rejected/reverted 提案可删除（当前 ${p.status}）`, conflict: true }
+      return { ok: false, error: `仅 rejected/reverted 的暂存条目可删除（当前 ${p.status}）`, conflict: true }
     }
     rmSync(this.#path(p.id), { force: true })
     return { ok: true, proposal: p }

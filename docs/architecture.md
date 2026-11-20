@@ -43,7 +43,7 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 | 子目录 | 内容 |
 |--------|------|
-| `protocol/` | 消息、块、事件、WS 指令帧、会话事件、ID、团队域、技能提案、UI 卡 DSL（`ui_render` 的 `data` 通道形状），以及 MCP、goal、usage 与改动记录的 REST 响应类型（GET /mcp 的 `McpSnapshotResponse`、GET /sessions/:id/goal 的 `GoalViewResponse`、GET /usage 的 `UsageBody`、GET /sessions/:id/changes 的 `ChangesView` 与 `/changes/file` 的 `ChangeFileContent`）的定义，是线上数据形状的权威来源，经 `@kclaw/core/protocol` 子路径出口供三端引用 |
+| `protocol/` | 消息、块、事件、WS 指令帧、会话事件、ID、团队域、技能暂存、UI 卡 DSL（`ui_render` 的 `data` 通道形状），以及 MCP、goal、usage 与改动记录的 REST 响应类型（GET /mcp 的 `McpSnapshotResponse`、GET /sessions/:id/goal 的 `GoalViewResponse`、GET /usage 的 `UsageBody`、GET /sessions/:id/changes 的 `ChangesView` 与 `/changes/file` 的 `ChangeFileContent`）的定义，是线上数据形状的权威来源，经 `@kclaw/core/protocol` 子路径出口供三端引用 |
 | `provider/` | OpenAI 兼容与 Anthropic Messages 两种协议的模型客户端，带重试、内置预设目录与统一的端点/模型解析（resolver，见 [provider](./core/provider.md)）；两种线格式的全部知识（类型、鉴权头、URL 规则、embeddings 能力位、探活请求形状）单源在 `formats.ts` 的 wire-format 注册表 |
 | `agent/` | agent 循环、上下文组装、工具契约、单次 run 的组装（`run-assembly.ts` 的 `executeRun`） |
 | `prompts/` | 内置提示词文本的统一存放处（系统提示词回退与注入约定、压缩摘要、goal 注入模板、团队人设、记忆提取与沉淀、技能提炼、subagent 精简模板、会话自动命名）；随附守卫测试：实现文件里再出现提示词形态的中文文本即测试失败，防止文本散落回实现文件。仅团队提示词经入口导出，其余由各使用模块直接 import |
@@ -53,8 +53,8 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 | `permissions/` | ConfigPermissionGate（权限判定）+ ConfirmationBroker（人工确认网关） |
 | `memory/` | MemorySystem：L1 项目情节 + L2 全局认知 + FTS5/向量索引（见 [memory](./core/memory.md)） |
 | `text/` | 记忆索引与会话检索索引共用的中文分词器与全文检索（FTS）辅助 |
-| `tools/` | 41 个内置工具（17 常驻，其中含 UI 卡 `ui_render` 与卡片取回 `ui_read`；24 条件注册：后台进程、定时任务、目标循环、会话 todo、工具检索、subagent 派发/取回、运行中提问、技能提案与团队工具） |
-| `skills/` | 技能解析、双作用域扫描、指定匹配、复用检测与软链接接入、提案制的技能进化（提炼 pipeline 与提案存取，见 [skills](./core/skills.md)） |
+| `tools/` | 41 个内置工具（17 常驻，其中含 UI 卡 `ui_render` 与卡片取回 `ui_read`；24 条件注册：后台进程、定时任务、目标循环、会话 todo、工具检索、subagent 派发/取回、运行中提问、技能暂存与团队工具） |
+| `skills/` | 技能解析、双作用域扫描、指定匹配、复用检测与软链接接入、暂存制的技能进化（提炼 pipeline 与暂存存取，见 [skills](./core/skills.md)） |
 | `cron/` | CronScheduler（定时任务调度） |
 | `mcp/` | MCP（Model Context Protocol：给模型接入外部工具的开放协议）客户端管理器 |
 | `team/` | agent 团队的存储（TeamStore：团队目录/收信箱/任务板）与团队工具的接口边界（`facade.ts`：身份规则在 core、实现在 server 团队宿主；见 [agent-team](./core/agent-team.md)） |
@@ -146,7 +146,7 @@ run 的组装在 core 的 `executeRun`（`packages/core/src/agent/run-assembly.t
 
 - 每条消息：`deps.onMessage` → `SessionStore.appendMessage` → events.jsonl 追加一条 message 事件，并汇入 meta.json 投影。
 - 每个事件：`deps.onEvent` → `bus.emit` → JSON 序列化 → 只发给订阅了该会话的 socket（`packages/core/src/bus.ts`）。
-- run 结束时（run-after hook 链）：往 usage.db 记一行用量（失败只写日志，不影响 run）；`memory.write.idleMinutes>0` 时排一个跟随触发的记忆检查（记忆由 memory_save 工具与定时/跟随调度器写入，见 [memory](./core/memory.md)）；`skills.evolution.enabled` 时对卷入技能的 run 排一个技能提炼的空闲检查（提案制，见 [skills](./core/skills.md)）；上下文占用到达黄线（budget 的 80%）时执行一次收尾压缩，压缩失败则本次 run 以失败收场；只有用户消息触发（trigger 为 user）的 run 才做自动命名，成功后改名并广播 session.renamed。
+- run 结束时（run-after hook 链）：往 usage.db 记一行用量（失败只写日志，不影响 run）；`memory.write.idleMinutes>0` 时排一个跟随触发的记忆检查（记忆由 memory_save 工具与定时/跟随调度器写入，见 [memory](./core/memory.md)）；`skills.evolution.enabled` 时对卷入技能的 run 排一个技能提炼的空闲检查（暂存制，见 [skills](./core/skills.md)）；上下文占用到达黄线（budget 的 80%）时执行一次收尾压缩，压缩失败则本次 run 以失败收场；只有用户消息触发（trigger 为 user）的 run 才做自动命名，成功后改名并广播 session.renamed。
 - 客户端渲染（CLI 写 stdout；WebUI 更新 React 状态），最后 run.completed 终态。
 
 两条不变量贯穿全链：
@@ -220,11 +220,11 @@ sequenceDiagram
 - [daemon](./server/daemon.md)：daemon 组装序、有界 stop、pidfile 语义
 - [run-manager](./server/run-manager.md)：服务端侧的会话串行与确认网关
 - [feishu-channel](./server/feishu-channel.md)：飞书 IM 接入（长连接、四态卡片、审批卡、命令）
-- [http-api](./server/http-api.md)：87 条业务路由清单（含附件/用量/目录浏览/MCP 管理/记忆管理/技能与复用/提案治理/hook/权限/团队面板/事件流链校验/改动记录）
+- [http-api](./server/http-api.md)：87 条业务路由清单（含附件/用量/目录浏览/MCP 管理/记忆管理/技能与复用/暂存治理/hook/权限/团队面板/事件流链校验/改动记录）
 - [mcp](./core/mcp.md)：恒定组装、惰性连接的 MCP 工具适配器（分组配置）
 - [agent-team](./core/agent-team.md)：agent 团队（组长 + 组员、收信箱投递、任务板协作）
 - [goal](./core/goal.md)：/goal 目标循环（独立判定器、验收命令、硬性上限）
-- [skills](./core/skills.md)：技能机制（渐进披露、双作用域、指定隐式包装、提案制的技能进化）
+- [skills](./core/skills.md)：技能机制（渐进披露、双作用域、指定隐式包装、暂存制的技能进化）
 - [hooks](./core/hooks.md)：hook 系统（14 位置网格、HookChain 注册接口、用户文件装载、内置 hook 清单）
 - [storage](./core/storage.md)：`<home>` 布局、config 与 usage.db 用量记录
 - [webui](./web/webui.md)：WebUI 视图、token 引导与 PWA 外壳

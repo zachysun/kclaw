@@ -61,9 +61,9 @@ export type SessionEvent =
 |------|------|
 | `memory` | `at`、`trigger`（7 种，见 [enums](./enums.md)）、`kind`（episode/cognition）、`op`（8 种，见 [enums](./enums.md)）、`topic?`、`file?`、`scope?`、`source?` |
 
-### 技能提案（1 种，SkillEvent）
+### 技能暂存（1 种，SkillEvent）
 
-技能进化（提案制）的全部写路径都各写入一条事件：提案的产生与治理状态流转各一条。只做记录，不进 meta 投影、不推进 `updatedAt`（与 memory 事件同约定），权威数据在 `<skillsDir>/.proposals/` 的提案文件。
+技能进化（暂存制）的全部写路径都各写入一条事件：暂存条目的产生与治理状态流转各一条。只做记录，不进 meta 投影、不推进 `updatedAt`（与 memory 事件同约定），权威数据在 `<skillsDir>/.proposals/` 的暂存条目文件。
 
 | 类型 | 字段 |
 |------|------|

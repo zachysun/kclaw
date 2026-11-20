@@ -117,7 +117,7 @@ type ProposalWire = Pick<
   "id" | "status" | "kind" | "name" | "scope" | "workdir" | "title" | "rationale" | "changes" | "content" | "createdAt" | "appliedAt" | "usage"
 >
 
-const PROPOSAL_STATUS: Record<ProposalWire["status"], string> = { proposed: "待确认", applied: "已采纳", rejected: "已驳回", reverted: "已回退" }
+const PROPOSAL_STATUS: Record<ProposalWire["status"], string> = { proposed: "待审阅", applied: "已采纳", rejected: "已驳回", reverted: "已回退" }
 
 /**
  * Register every installed, user-visible skill as a first-class slash command:
@@ -572,12 +572,12 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
           )
           return
         }
-        // 提案子命令（只读）：/skill proposals 列表；/skill proposal <id> 详情。
-        // 治理动作（采纳/驳回/回退/删除）只在 WebUI 技能页的「提案」页签。
-        if (name === "proposals") {
+        // 暂存子命令（只读）：/skill pending 列表；/skill pending <id> 详情。
+        // 治理动作（采纳/驳回/回退/删除）只在 WebUI 技能页的「暂存」页签。
+        if (name === "pending") {
           const { proposals } = (await ctx.client.request("GET", "/skills/proposals")) as { proposals: ProposalWire[] }
           if (proposals.length === 0) {
-            ctx.print("（还没有技能提案。开启 skills.evolution 后，用了技能的会话会在空闲时提炼经验形成提案）")
+            ctx.print("（还没有暂存的技能写入。开启 skills.evolution 后，用了技能的会话会在空闲时提炼经验形成暂存条目）")
             return
           }
           ctx.print(
@@ -587,10 +587,10 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
           )
           return
         }
-        if (name.startsWith("proposal ")) {
-          const id = name.slice("proposal ".length).trim()
+        if (name.startsWith("pending ")) {
+          const id = name.slice("pending ".length).trim()
           if (id === "") {
-            ctx.print("用法：/skill proposal <id>（id 见 /skill proposals）")
+            ctx.print("用法：/skill pending <id>（id 见 /skill pending）")
             return
           }
           const p = (await ctx.client.request("GET", `/skills/proposals/${encodeURIComponent(id)}`)) as ProposalWire
@@ -601,7 +601,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand> {
             p.rationale !== "" ? `为什么：${p.rationale}` : undefined,
             p.changes !== undefined && p.changes !== "" ? `改动：${p.changes}` : undefined,
             `创建于 ${p.createdAt}${p.appliedAt !== undefined ? ` · 采纳于 ${p.appliedAt}` : ""}${p.usage !== undefined ? ` · 采纳后被调用 ${p.usage} 次` : ""}`,
-            "—— 提案内容（完整 SKILL.md）——",
+            "—— 暂存内容（完整 SKILL.md）——",
             p.content,
           ].filter((l): l is string => l !== undefined)
           ctx.print(lines.join("\n"))

@@ -71,7 +71,7 @@ export function createBuiltinTools(opts: {
   goal?: { host: GoalToolHost; sessionId: string }
                                      // goal 工具（仅根会话注册，childRun 不注册）：create/get/update_goal 三个
   skillCreate?: { enabled: boolean; sessionId: string; propose: SkillEvolutionTriggers["propose"] }
-                                     // skill_create（提案制技能进化）：传入该选项才注册该工具；
+                                     // skill_create（暂存制技能进化）：传入该选项才注册该工具；
                                      // enabled=false 时工具仍在、调用返回固定关闭文案（见 skills.md）
 }): { tools: Map<string, ToolExecutor>; toolDefs: ToolDefinition[] }
 
@@ -158,7 +158,7 @@ grep 与 glob 共享一套文件枚举：git 仓库内 `git ls-files -z --cached
 
 工具描述里带一句软性指引：优先用系统提示词"可用技能"列表里的技能，不在列表中的（`disable-model-invocation`）只有用户明确指名时才应加载：可见性规则写在工具描述里，属于软性约束，没有硬性拦截，用户指名是隐藏档位的合法入口。
 
-**skill_create** `{name, content, rationale?}`：把一段可复用的经验当场固化为技能提案（提案制，机制见 [skills](./skills.md) 的"技能进化"一节）。safe + parallel：提案文件是 `writeFileAtomic` 原子写的独立文件，同名冲突由随机后缀化解，并发调用安全。只在 daemon 组装了技能进化系统时注册（run 组装传入 `skillCreate` 选项）；`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案（"技能提案未开启（skills.evolution.enabled=false）…"）。`name` 未通过 `isSkillDirName` 校验、`content` 超 64KB、目标是复用链接技能均报错。**kind/scope 由系统推导**（模型不给这两个参数）：项目副本命中 → `project` + 当前会话 workdir；仅全局命中 → `global`；未装 → `new` + `project`。写提案文件 + 一条 `skill` 审计事件，回复"已记录提案…待用户在 WebUI 审阅确认"，不谎报生效。
+**skill_create** `{name, content, rationale?}`：把一段可复用的经验当场固化为暂存的技能写入（暂存制，机制见 [skills](./skills.md) 的"技能进化"一节）。safe + parallel：暂存条目文件是 `writeFileAtomic` 原子写的独立文件，同名冲突由随机后缀化解，并发调用安全。只在 daemon 组装了技能进化系统时注册（run 组装传入 `skillCreate` 选项）；`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案（"技能暂存未开启（skills.evolution.enabled=false）…"）。`name` 未通过 `isSkillDirName` 校验、`content` 超 64KB、目标是复用链接技能均报错。**kind/scope 由系统推导**（模型不给这两个参数）：项目副本命中 → `project` + 当前会话 workdir；仅全局命中 → `global`；未装 → `new` + `project`。写暂存条目文件 + 一条 `skill` 审计事件，回复"技能写入已暂存…待用户在 WebUI 审阅采纳"，不谎报生效。
 
 ### 与 skill 机制的衔接
 
