@@ -43,10 +43,52 @@ export function repairTornTail(file: string): void {
   }
 }
 
-/** Append one value as a JSONL line, repairing any torn tail first. */
-export function appendJsonlLine(file: string, value: unknown): void {
+/**
+ * Append one value as a JSONL line, repairing any torn tail first. Returns
+ * the line text actually written: callers that derive from the line (the
+ * `$prev` chain digest) must take this return value, so the stored text and
+ * the derived text can never diverge into two serializations.
+ */
+export function appendJsonlLine(file: string, value: unknown): string {
   repairTornTail(file)
-  appendFileSync(file, JSON.stringify(value) + "\n", "utf8")
+  const line = JSON.stringify(value)
+  appendFileSync(file, line + "\n", "utf8")
+  return line
+}
+
+/**
+ * Split raw JSONL text into its lines plus the torn-tail flag — the single
+ * definition of "what counts as a torn line" shared by the value reader
+ * (readJsonlFrom), the chain verifier (session/integrity.ts), and the line
+ * reader (readCompleteLines). `lines` drops the trailing empty string after
+ * a complete append; `tornTail` is true when the final line lacks its "\n"
+ * (crash mid-append). Whether a torn fragment is then dropped or kept is
+ * each caller's policy: readCompleteLines drops it (matching
+ * repairTornTail's truncation), readJsonlFrom and the verifier keep a
+ * parseable one and drop only an unparseable one.
+ */
+export function splitLinesCanonical(raw: string): { lines: string[]; tornTail: boolean } {
+  const parts = raw.split("\n")
+  const tornTail = parts[parts.length - 1] !== ""
+  if (!tornTail) parts.pop()
+  return { lines: parts, tornTail }
+}
+
+/**
+ * Read the file's complete line texts (no JSON parsing), dropping a torn
+ * trailing fragment — the read-side twin of repairTornTail's truncation, so
+ * chain-tail readers see exactly the lines the next append will build on.
+ * A missing file yields [].
+ */
+export function readCompleteLines(file: string): string[] {
+  let raw: string
+  try {
+    raw = readFileSync(file, "utf8")
+  } catch {
+    return []
+  }
+  const { lines, tornTail } = splitLinesCanonical(raw)
+  return tornTail ? lines.slice(0, -1) : lines
 }
 
 /**
@@ -74,8 +116,7 @@ export function readJsonlFrom(file: string, since: number): unknown[] {
   } catch {
     return []
   }
-  const lines = raw.split("\n")
-  if (lines[lines.length - 1] === "") lines.pop() // trailing newline after a complete append
+  const { lines } = splitLinesCanonical(raw)
   const values: unknown[] = []
   for (let i = since; i < lines.length; i++) {
     const line = lines[i]
