@@ -291,7 +291,7 @@ daemon 启动时做一次全库重算（`daemon.ts` 调 `memory.reconcile`）：
 
 - **HTTP `/memory` 路由族**（10 个，`packages/server/src/routes/memory.ts`）：项目/线/全局认知的读取、整文件覆写（PATCH）、删除（DELETE），外加手动触发 `POST /memory/trigger-manual`；persona 不可删除（400）；未组装记忆系统时全部 503。路由表见 [http-api](../server/http-api.md)。
 - **CLI `/memory`**（`packages/cli/src/slash.ts`）：`/memory`（无参列项目）、`/memory <项目>`（列该项目的主题线）、`/memory <项目> <线>`（打印线文件原文）。只读。
-- **Web 记忆页**（tab「记忆」，`packages/web/src/memory/MemoryView.tsx`）：全局认知常驻（顶部）+ 项目记忆按需选择（项目 → 主题线）+ 整文件编辑器；不存在会话级记忆，会话只通过 `memory_search` 检索记忆。见 [webui](../web/webui.md)。
+- **Web 记忆页**（tab「记忆」，`packages/web/src/memory/MemoryView.tsx`）：左列两个一级分组（全局认知常驻；项目记忆钻取——选中项目的主题线缩进展开在该项目行下方）+ 整文件编辑器；不存在会话级记忆，会话只通过 `memory_search` 检索记忆。见 [webui](../web/webui.md)。
 
 ### 事件：`memory.written`
 
@@ -343,4 +343,4 @@ daemon 启动时做一次全库重算（`daemon.ts` 调 `memory.reconcile`）：
 - [protocol](./protocol.md)：`memory.written` 事件的 payload 形状
 - [run-manager](../server/run-manager.md)：L2 常驻注入与 L1 note 注入的 run 组装（core `executeRun`）、跟随检查的排期侧
 - [http-api](../server/http-api.md)：`/memory` 管理路由族
-- [webui](../web/webui.md)：记忆管理页三区块
+- [webui](../web/webui.md)：记忆管理页

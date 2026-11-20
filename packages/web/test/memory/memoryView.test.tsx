@@ -230,7 +230,7 @@ describe("MemoryView", () => {
       })
       await flush()
       expect(notices.some((n) => n.includes("加载线程失败"))).toBe(true)
-      expect(container.textContent).toContain("该主题无线程")
+      expect(container.textContent).toContain("该项目还没有主题线")
     } finally {
       root.unmount()
       container.remove()

@@ -6,7 +6,7 @@
  * 跳转按钮承接，不在本组件内重复。纯 REST 拉取 + 本地筛选；服务端 503（记忆未组装）
  * 时相应 GET 走 catch → notice 提示。
  */
-import { useCallback, useEffect, useState } from "react"
+import { Fragment, useCallback, useEffect, useState } from "react"
 import type { ApiClient } from "../api.js"
 import type { MemoryWrittenInfo } from "../chat/model.js"
 import type { NoticeFn } from "../toast.js"
@@ -29,6 +29,8 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
   const [projectId, setProjectId] = useState<string | null>(null)
   const [threads, setThreads] = useState<ThreadRow[] | null>(null)
   const [threadTopic, setThreadTopic] = useState<string | null>(null)
+  // 打开线的人类标题（列表行点击时带上；写入通知跳转只带 topic，退回显示 slug）
+  const [threadTitle, setThreadTitle] = useState<string | null>(null)
   const [draft, setDraft] = useState("")
   const [cogs, setCogs] = useState<CogRow[] | null>(null)
   const [cogTarget, setCogTarget] = useState<{ kind: CogRow["kind"]; name: string } | null>(null)
@@ -67,11 +69,11 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openTarget])
 
-  const openThread = async (pid: string, topic: string): Promise<void> => {
+  const openThread = async (pid: string, topic: string, title?: string): Promise<void> => {
     try {
       const { content } = await api.get<{ content: string }>(`/memory/threads/${encodeURIComponent(pid)}/${encodeURIComponent(topic)}`)
       setDraft(content); setDirtyPath(`/memory/threads/${encodeURIComponent(pid)}/${encodeURIComponent(topic)}`)
-      setThreadTopic(topic); setDeleteArmed(false)
+      setThreadTopic(topic); setThreadTitle(title ?? null); setCogTarget(null); setDeleteArmed(false)
     } catch (e) { notice(`读取线失败: ${String(e)}`, "error") }
   }
 
@@ -79,8 +81,14 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
     try {
       const { content } = await api.get<{ content: string }>(`/memory/global/${kind}/${encodeURIComponent(name)}`)
       setDraft(content); setDirtyPath(`/memory/global/${kind}/${encodeURIComponent(name)}`)
-      setCogTarget({ kind, name }); setDeleteArmed(false)
+      setCogTarget({ kind, name }); setThreadTopic(null); setThreadTitle(null); setDeleteArmed(false)
     } catch (e) { notice(`读取认知文件失败: ${String(e)}`, "error") }
+  }
+
+  const openProject = async (pid: string): Promise<void> => {
+    setProjectId(pid); setThreadTopic(null); setThreadTitle(null)
+    try { setThreads((await api.get<{ threads: ThreadRow[] }>(`/memory/projects/${encodeURIComponent(pid)}`)).threads) }
+    catch (e) { setThreads([]); notice(`加载线程失败: ${String(e)}`) }
   }
 
   const save = async (): Promise<void> => {
@@ -107,7 +115,7 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
     try {
       await api.del(dirtyPath)
       notice("已删除")
-      setThreadTopic(null); setCogTarget(null); setDraft(""); setDirtyPath(null)
+      setThreadTopic(null); setThreadTitle(null); setCogTarget(null); setDraft(""); setDirtyPath(null)
       reloadProjects()
       if (projectId !== null) {
         api.get<{ threads: ThreadRow[] }>(`/memory/projects/${encodeURIComponent(projectId)}`)
@@ -117,7 +125,8 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
     } catch (e) { notice(`删除失败: ${String(e)}`) }
   }
 
-  // 结构：左列 = 全局认知常驻（顶部）+ 项目/主题线按需（下方）；右列 = 编辑器。
+  // 结构：左列 = 两个一级分组（全局认知常驻，项目记忆按需钻取——选中项目的
+  // 主题线缩进展开在该项目行正下方，从属关系画在结构里），右列 = 编辑器。
   // 页头 h2 也放在这根 flex 行里，靠 .memory-view 的 wrap + 100% basis 独占一行
   //（CSS 处理），避免为了页头把整棵 JSX 重新包一层。
   return (
@@ -130,52 +139,73 @@ export function MemoryView({ api, notice, openTarget, onOpenConsumed }: {
             <ul data-testid="memory-cognitions">
               {cogs.map((c) => (
                 <li key={c.path}>
-                  <button type="button" onClick={() => void openCog(c.kind, c.name)}>{c.kind}/{c.name} · {c.updated}</button>
+                  <button
+                    type="button"
+                    className={cogTarget !== null && cogTarget.kind === c.kind && cogTarget.name === c.name ? "on" : undefined}
+                    onClick={() => void openCog(c.kind, c.name)}
+                  >
+                    <span className="memory-row-main">{c.kind}/{c.name}</span>
+                    <span className="memory-row-meta">{c.updated}</span>
+                  </button>
                 </li>
               ))}
             </ul>
           )}
         </section>
         <section>
-          <h3>项目</h3>
+          <h3>项目记忆</h3>
           {projects === null ? <p className="muted">加载中…</p> : projects.length === 0 ? <p className="muted">还没有项目记忆</p> : (
             <ul data-testid="memory-projects">
               {projects.map((p) => (
-                <li key={p.id}>
-                  <button type="button" onClick={async () => {
-                    setProjectId(p.id); setThreadTopic(null)
-                    try { setThreads((await api.get<{ threads: ThreadRow[] }>(`/memory/projects/${encodeURIComponent(p.id)}`)).threads) }
-                    catch (e) { setThreads([]); notice(`加载线程失败: ${String(e)}`) }
-                  }}>{p.id}（{p.threads} 线）</button>
-                </li>
+                <Fragment key={p.id}>
+                  <li>
+                    <button
+                      type="button"
+                      className={p.id === projectId ? "on" : undefined}
+                      onClick={() => void openProject(p.id)}
+                    >
+                      <span className="memory-row-main">{p.id}</span>
+                      <span className="memory-row-meta">{p.threads} 线</span>
+                    </button>
+                  </li>
+                  {p.id === projectId && threads !== null && (
+                    <li className="memory-thread-group">
+                      {threads.length === 0 ? <p className="muted">该项目还没有主题线</p> : (
+                        <ul data-testid="memory-threads">
+                          {threads.map((t) => (
+                            <li key={t.topic}>
+                              <button
+                                type="button"
+                                className={t.topic === threadTopic ? "on" : undefined}
+                                onClick={() => { if (projectId !== null) void openThread(projectId, t.topic, t.title) }}
+                              >
+                                <span className="memory-row-main">{t.title}</span>
+                                <span className="memory-row-meta">{t.status} · {t.updated}</span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
+                  )}
+                </Fragment>
               ))}
             </ul>
           )}
         </section>
-        {threads !== null && (
-          <section>
-            <h3>主题线</h3>
-            {threads.length === 0 ? <p className="muted">该主题无线程</p> : (
-              <ul data-testid="memory-threads">
-                {threads.map((t) => (
-                  <li key={t.topic}>
-                    <button type="button" onClick={() => { if (projectId !== null) void openThread(projectId, t.topic) }}>
-                      {t.title} · {t.status} · {t.updated}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        )}
       </div>
       <div className="memory-editor">
         {(threadTopic !== null || cogTarget !== null) ? (
           <>
-            <h3>{threadTopic ?? `${cogTarget!.kind}/${cogTarget!.name}`}</h3>
+            <div className="memory-editor-head">
+              <h3>{threadTopic !== null ? (threadTitle ?? threadTopic) : `${cogTarget!.kind}/${cogTarget!.name}`}</h3>
+              <p className="memory-editor-meta muted">
+                {threadTopic !== null ? `主题线 · ${threadTopic}` : "全局认知文件"}
+              </p>
+            </div>
             <textarea data-testid="memory-editor" value={draft} onChange={(e) => setDraft(e.target.value)} rows={24} />
             <div className="memory-editor-actions">
-              <button type="button" data-testid="memory-save" onClick={() => void save()}>保存</button>
+              <button type="button" className="primary" data-testid="memory-save" onClick={() => void save()}>保存</button>
               {deleteArmed ? (
                 <button type="button" className="danger" data-testid="memory-delete" onClick={() => void remove()}>确认删除</button>
               ) : (

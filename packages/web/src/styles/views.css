@@ -557,35 +557,52 @@
   color: var(--danger);
 }
 
-/* memory — 记忆管理页：左列清单 + 右列整文件编辑器。横排 flex 行，页头
-   h2 作为 100% basis 的行占满一行（wrap 换行），其余两列照旧。 */
-.memory-view {
+/* memory — 记忆管理页：左列两个一级分组（全局认知常驻；项目记忆钻取——
+   选中项目的主题线缩进展开在该项目行正下方，从属关系画在结构里），
+   右列整文件编辑器。与审计页同一滚动模式：.main 不滚，两列各自内部滚，
+   左列钻到多深编辑器都在视口内，看内容不需要整页滚动。grid 第一行是
+   跨两列的页头，第二行是两列（320px 清单 + 弹性编辑器）。 */
+.main:has(.memory-host:not([hidden])) {
   display: flex;
-  flex-wrap: wrap;
+  overflow: hidden;
+}
+
+.memory-host:not([hidden]) {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.memory-view {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   gap: var(--space-4);
-  align-items: flex-start;
   max-width: 1280px;
 }
 
 .memory-view > .view-title {
-  flex: 0 0 100%;
-  margin-bottom: 0; /* the row gap above the columns already separates */
+  grid-column: 1 / -1;
+  margin-bottom: 0; /* the row gap below the title already separates */
 }
 
-.memory-view h3 {
+/* 分组标题：小字弱色即可，不做 uppercase（对中文无效） */
+.memory-list h3 {
   margin: 0 0 var(--space-2);
   font-size: 13px;
+  font-weight: 600;
   color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
 }
 
 .memory-list {
-  flex: 0 0 300px;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  max-width: 40%;
 }
 
 .memory-list section {
@@ -602,31 +619,69 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
+/* 列表行：主名 + 行尾元信息分主次（名字 12.5px、元信息 11px 弱色），
+   平时只有文字（全站按钮基调），悬停一层淡底，选中行淡信号底 + 左侧
+   一条 2px 标记，当前打开的是哪条一眼可辨 */
 .memory-list li button {
-  display: block;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
   width: 100%;
   text-align: left;
   font-family: var(--font-mono);
-  font-size: 12px;
-  padding: 4px 8px;
-  border-color: var(--border);
-  background: transparent;
+  font-size: 12.5px;
+  padding: 5px 8px;
   color: var(--text-dim);
-  box-shadow: none;
+}
+
+.memory-row-main {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-row-meta {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
 }
 
 .memory-list li button:hover:not(:disabled) {
-  background: var(--accent-dim);
-  border-color: var(--accent);
+  background: var(--wash);
   color: var(--text);
 }
 
+.memory-list li button.on {
+  background: var(--accent-dim);
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* 主题线组：展开在所属项目行之下，缩进 + 左侧一条细线画出从属层级 */
+.memory-thread-group {
+  padding: 2px 0 6px 14px;
+  margin-left: 8px;
+  border-left: 2px solid var(--border);
+}
+
+.memory-thread-group ul {
+  gap: 1px;
+}
+
+.memory-thread-group li button {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
 .memory-editor {
-  flex: 1;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border);
@@ -636,42 +691,31 @@
   box-shadow: var(--shadow-1);
 }
 
+.memory-editor-head h3 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.memory-editor-meta {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+}
+
 .memory-editor textarea {
   width: 100%;
+  margin-top: var(--space-3);
   font-family: var(--font-mono);
   font-size: 13px;
   resize: vertical;
+  flex: 1;
 }
 
 .memory-editor-actions {
   display: flex;
   gap: var(--space-2);
   margin-top: var(--space-3);
-}
-
-.memory-editor-actions button:first-child {
-  border-color: var(--accent);
-  background: var(--accent-grad);
-  color: var(--accent-ink);
-  font-weight: 600;
-  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-}
-
-.memory-editor-actions button:first-child:hover:not(:disabled) {
-  background: var(--accent-grad);
-  border-color: var(--accent);
-  filter: brightness(1.06);
-}
-
-.memory-editor-actions button:last-child {
-  border-color: var(--danger);
-  color: var(--danger);
-  background: var(--danger-dim);
-}
-
-.memory-editor-actions button:last-child:hover:not(:disabled) {
-  background: var(--danger);
-  color: var(--danger-ink);
 }
 
 /* daily — 日报页：左列项目清单（复用 memory-list 的视觉节奏），右侧日期条
@@ -913,13 +957,21 @@
    不再另搓一份渐变（悬停行为与全站主操作一致）。 */
 
 @media (max-width: 700px) {
+  /* 窄屏单列堆叠：恢复整页滚动，两列都放开高度限制，随内容撑开。 */
+  .main:has(.memory-host:not([hidden])) {
+    display: block;
+    overflow-y: auto;
+  }
+
   .memory-view {
+    display: flex;
     flex-direction: column;
   }
 
-  .memory-list {
-    flex: none;
-    max-width: none;
+  .memory-list,
+  .memory-editor {
+    overflow: visible;
+    min-height: 0;
   }
 
   .daily-view {
