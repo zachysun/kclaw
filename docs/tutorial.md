@@ -217,7 +217,25 @@ kclaw daemon status   # 查看状态（kclaw status 是同一命令的别名）
 
 遇到 `command not found: kclaw`，回 [README](../README.zh-CN.md) 的「安装」一节核对步骤；页面 401 或端口对不上，多半出在 token 与 daemon.json 上，见 [daemon](./server/daemon.md) 的鉴权与端口两节。
 
-## 9. 下一步
+## 9. 常见问题
+
+**页面打不开，终端日志里 `GET /` 返回 404。** web 产物没有构建。按「安装与第一次启动」一节重新构建 web 包，然后重启 daemon。
+
+**页面一直报 401。** 浏览器里的 token 与 daemon 的不一致。用 `kclaw web` 打开会自动带上正确的 token；手动输入地址时，token 在 `~/.kclaw/token` 里。
+
+**daemon 起不来，提示端口被占用。** 固定端口被别的进程占着。daemon 遇到占用会直接报错退出，不会静默换一个端口。释放端口，或者在配置里改 `server.port`。
+
+**每一条 bash 命令都要确认。** 系统沙箱不可用，权限判定退回了逐次确认。看 daemon 日志里的平台检测原因，装好对应平台的沙箱工具后，下一个 run 自动恢复。
+
+**确认卡一直挂着。** 确认有时限，默认 300 秒，超时按拒绝处理。在对话页点「允许」或「拒绝」，这一轮就继续了。
+
+**说了「记下来」，记忆里却没有。** `memory.write.immediate` 为 false 时，`memory_save` 只返回一行提示，内容留给后台的定时或跟随触发；也可能是这一轮没有新消息可提取。
+
+**定时任务没有按时执行。** 定时任务只在 daemon 运行期间触发。`kclaw daemon status` 确认 daemon 正在运行。
+
+**升级后行为没变。** daemon 运行的是构建产物。改过源码要重新执行 `pnpm -r build`，再执行 `pnpm --filter kclaw build`，然后重启 daemon。
+
+## 10. 下一步
 
 - **配置全表**（[storage](./core/storage.md)）：`workspace` 限定文件工具的活动范围；`permissions.allow` 可以让某些命令跳过确认（如 `bash:git *`）；`bash.timeoutMs` 控制命令超时；`~/.kclaw/AGENTS.md` 定义 agent 人设。模型 provider 的配置见 [storage](./core/storage.md) 的「config.json 全量字段」一节。
 - **扩展指南**（[extending](./extending.md)）：为 kclaw 增加新功能时的切入点。

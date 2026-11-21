@@ -1,6 +1,8 @@
 # daemon — 生命周期与鉴权
 
-## 职责
+daemon 进程的唯一组装入口：按固定顺序组装各组件、开始监听，并提供有界的停止。本篇讲启动流程、鉴权设计与停止流程；CLI 侧的检测与重启见 [cli](../cli/cli.md)。
+
+## 作用
 
 `packages/server/src/daemon.ts` 的 `launchDaemon` 是 daemon 进程的唯一组装入口：把路径、配置、token、各存储、LLM 客户端、MCP 管理器、RunManager、HTTP/WS 应用、调度心跳按固定顺序组装起来并开始监听；返回的 `Daemon` 句柄提供有界的 `stop()`。配套的 `packages/server/src/auth.ts` 负责 token 的生成与校验。CLI 侧的检测/重启/停止逻辑（pid 校验、健康轮询）在 `packages/cli/src/daemon-ctl.ts`，本文同时说明两侧的契约。
 
@@ -15,7 +17,7 @@
 - **没有 provider 也能启动**：WebUI 的 Model 页和首次配置向导都要经由运行中的 daemon 完成配置，所以启动不要求 provider。未配置时 `GET /providers` 的 `configured` 为 false，run 第一次调用模型时以 `run.failed` 结束并写明缺什么（见下文 provider 解析）。
 - **MCP 恒定组装，且启动零连接**：无论配置文件里有没有 server，daemon 都构建一个 `McpManager`（空的管理器没有任何连接、开销为零，管理路由因此永远可用，从 WebUI 添加第一个 server 不需要先改配置）。配置来自全局 `~/.kclaw/mcp.json` 加**每个已知项目**的 `.kclaw/mcp.json`（项目集合 = daemon 主工作目录 + 全部会话记录里出现过的工作目录，daemon 启动时现算，运行中新建会话即时挂载；不靠任何清单文件，与技能同源，放好配置文件即生效。唯一例外：daemon 主目录嵌在某个项目里时，该项目的配置文件与全局 `mcp.json` 是同一个路径，两层无法独立存在，这样的目录不挂项目组，见 [mcp](../core/mcp.md)）。连接是惰性的：启动与配置变更都不发起连接，run 用到某项目的工具、或用户手动 connect 时才按需连接（见 [mcp](../core/mcp.md)）。连接失败只打一行日志，永远不会拖垮 daemon。
 
-## 接口
+## 数据与接口
 
 ```ts
 // packages/server/src/daemon.ts
@@ -320,16 +322,19 @@ rmSync(<home>/daemon.json)          // 只有全部成功才删
 - `ensureDaemon`（检测/重启）：daemon.json 健康（`GET /health` 可访问）→ 直接使用；文件在、health 不可访问、pid 已终止（`process.kill(pid, 0)` 抛出 ESRCH）→ 判定失效，stderr 提示 "stale daemon.json, respawning" 后 `spawnDaemon` 分叉启动（detached、stdio ignore、unref，目标 `resolveServerBin()` 解析到 `packages/server/bin/kclaw-server.mjs`）；pid 存活但不健康 → 仅在 5 秒 budget 内轮询等待（250ms 间隔），**绝不在 pid 存活时再次启动**（否则会同时出现两个 daemon）。
 - `stopDaemon`：对 daemon.json 的 pid 发 SIGTERM（ESRCH 视为已终止，继续清理）→ 轮询直到端口拒绝连接（budget 5 秒）→ budget 耗尽而 `/health` 仍应答 → 抛出 `停止失败：daemon 仍在响应端口 <port>（pid <pid>）` 且**不删除 daemon.json**（进程仍在运行，删除文件会让它从此无法被找到或停止；CLI 把错误打到 stderr、以退出码 1 结束）；否则删除文件并返回 "stopped"。
 
-## 边界与出错
+## 限制
 
-- **stop 后 token 仍在**：`<home>/token` 是 daemon 的长期身份凭证，多次启动共用同一个；重装/换 token 需手动删除该文件。
-- **stale daemon.json 在启动时自愈**：`acquireDaemonSlot` 见到已终止 pid 的残留文件即删除并重新 `wx` 认领；存活 pid 则拒绝启动。运行中失效的发现（health 检测、respawn 决策）仍在 CLI 侧（见上文 ensureDaemon/stopDaemon）。
-- **`/health` 无鉴权，因此也没有信息泄露控制**：它只返回 `{ok:true}`，不暴露版本/端口/pid；`/status`（version、uptimeSec）受鉴权保护。
-- **配置文件损坏即启动失败**：`loadConfig` 对无法解析的 JSON 直接抛出错误（静默退回默认值会丢掉用户的权限规则），daemon 不启动。
+- **stop 后 token 仍在**：`<home>/token` 是 daemon 的长期身份凭证，多次启动共用同一个；重装或换 token 需手动删除该文件。
+- **`/health` 无鉴权，也没有信息泄露控制**：它只返回 `{ok:true}`，不暴露版本、端口与 pid；`/status`（version、uptimeSec）受鉴权保护。
 - **bin 假定构建产物存在**：`kclaw-server.mjs` import 的是 `../dist/index.js`，packages/server 未构建时启动直接失败（CLI 的错误信息里提示 `pnpm -C packages/server build`）。
-- **MCP server 卡死不牵连 daemon**：连接/调用失败只进状态与日志（`kclaw mcp <name> error: …`，项目条目带组前缀 `kclaw mcp <路径> · <name> error: …`），该 server 的工具从下一次 run 起消失，其余功能不受影响（见 [mcp](../core/mcp.md)）。
 
-## 关联
+## 错误处理
+
+- **stale daemon.json 在启动时自愈**：`acquireDaemonSlot` 见到已终止 pid 的残留文件即删除并重新 `wx` 认领；存活 pid 则拒绝启动。运行中失效的发现（health 检测、respawn 决策）在 CLI 侧（见上文 ensureDaemon 与 stopDaemon）。
+- **配置文件损坏即启动失败**：`loadConfig` 对无法解析的 JSON 直接抛出错误（静默退回默认值会丢掉用户的权限规则），daemon 不启动。
+- **MCP server 卡死不牵连 daemon**：连接或调用失败只进状态与日志（`kclaw mcp <name> error: …`，项目条目带组前缀 `kclaw mcp <路径> · <name> error: …`），该 server 的工具从下一次 run 起消失，其余功能不受影响（见 [mcp](../core/mcp.md)）。
+
+## Reference
 
 - [http-api](./http-api.md)：鉴权 hook 之下的全部路由
 - [realtime](./realtime.md)：/ws 的连接鉴权与事件广播

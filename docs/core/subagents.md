@@ -1,6 +1,8 @@
 # subagents — subagent 委派
 
-## 职责
+主对话的模型自主派出的一次性执行单元：独立子会话执行完一段自包含任务，只把结题答复送回主对话。本篇讲派发方式、生命周期、隔离规则与配置；工具注册见 [tools](./tools.md)，团队组员与它的区别见 [agent-team](./agent-team.md)。
+
+## 作用
 
 subagent 是主对话的模型**自主派出**的一次性执行单元：调用 `subagent_run` 工具、给出一段自包含的任务描述，daemon 为它开一个**独立子会话**执行完整个任务，结束时把结题答复（subagent 最后一条回复的全文）作为工具结果送回主对话。过程文本（工具输出、中间思考）不进主对话的上下文，subagent 的第一动机是**上下文隔离**；同一批工具调用里发多个 `subagent_run` 即**并行**执行互不相关的任务，是第二动机。派发时可带 `role`（角色补充，拼进子会话系统提示词）与 `tools`（工具白名单）做轻量特化；预置人设库、跨会话复用的角色档案不在当前范围。长任务可以**后台派发**（`run_in_background: true`）：派发立即返回子会话 id、不阻塞父 run，subagent 完成后结题报告**自动投递回主会话**、触发新一轮分析（见下文"后台模式"）。
 
@@ -26,16 +28,14 @@ subagent 是主对话的模型**自主派出**的一次性执行单元：调用 
 
 ## 生命周期（一次派发）
 
-```
-主对话模型发起 subagent_run {task, label?, role?, tools?}
-  → spawner：查父会话 → 并发上限检查（超限直接 error，不建会话）
-  → 建子会话（标题"subagent · <label|task 头 38 字>"，继承父 workdir/mode，
-    parentSessionId 落 meta；父的会话级模型覆盖随行）
-  → 订阅子频道（状态行 + 确认转发）→ submit(task, trigger:"agent", disposition:"wait",
-    role/tools 随 EnqueueInput 全程携带)
-  → 子 run 组装：role 拼进系统提示词，tools 过滤工具清单（gate 由过滤后的清单派生）
-  → 子 run 执行完毕（正常/中止/出错）
-  → 拆订阅、清并发计数 → 结果整形回工具结果
+```mermaid
+flowchart TD
+    A["主对话模型发起 subagent_run {task, label?, role?, tools?}"] --> B["spawner：查父会话 → 并发上限检查（超限直接 error，不建会话）"]
+    B --> C["建子会话（标题 subagent · label 或 task 头 38 字，继承父 workdir 与 mode，parentSessionId 落 meta，父的会话级模型覆盖随行）"]
+    C --> D["订阅子频道（状态行 + 确认转发）→ submit(task, trigger:agent, disposition:wait)，role 与 tools 随 EnqueueInput 携带"]
+    D --> E["子 run 组装：role 拼进系统提示词，tools 过滤工具清单（权限门由过滤后的清单派生）"]
+    E --> F["子 run 执行完毕（正常、中止或出错）"]
+    F --> G["拆订阅、清并发计数 → 结果整形回工具结果"]
 ```
 
 子会话与普通会话走完全相同的存储路径（events.jsonl 唯一权威数据 + meta 投影），审计页照常能看它的全部事件。
@@ -76,7 +76,7 @@ spawner 在子频道注册一个普通 bus 订阅者（EventBus 接受任何 `{s
 | `subagents.maxConcurrent` | `10` | 每个**主会话**同时存活的**阻塞**subagent 上限（per-parent 计数，全局不设限）；超限的派发立即返回 error 结果、不建会话 |
 | `subagents.maxBackground` | `4` | 每个主会话同时存活的**后台**subagent 上限，与阻塞档分开计数；超限返回 error（提示等现有后台任务结束或改用阻塞模式） |
 
-## 关联
+## Reference
 
 - 工具注册与描述：[tools](./tools.md)；循环里工具执行与中止信号：[agent-loop](./agent-loop.md)
 - 内置 hook 与 childRun 跳过：[hooks](./hooks.md)；记忆归属与排除：[memory](./memory.md)

@@ -1,6 +1,8 @@
 # sandbox — bash 沙箱 provider
 
-## 职责
+给 bash 工具的子进程套一层操作系统沙箱：命令即使获准运行，也只能在受控范围内读写。本篇讲平台布局、可用性检测与降级行为；沙箱化是否免审归权限引擎，见 [permissions](./permissions.md)。
+
+## 作用
 
 `packages/core/src/sandbox/provider.ts` 的 `createBashSandbox` 是 bash 沙箱的专门模块：给 `bash` 工具的子进程套一层操作系统沙箱，作为权限确认之下的多层防御（一层失守还有下一层）：命令即使获准运行，也被限制在受控范围内（模型被提示词注入攻击时，人工确认无法约束命令内部的动作，由沙箱保底）。模块只做两件事：**平台可用性检测** 与 **spawn 包装**，不做任何业务判定。"沙箱化是否免审"归权限引擎（`permissions/engine.ts` 由被包装工具集推导可用性），由 run 组装（core `executeRun`）用同一次检测结果交给两个使用方：
 
@@ -9,7 +11,7 @@
 
 单一来源保证 **"sandboxed" 放行的命令必然真被沙箱包住**，反之沙箱不可用时 bash 维持人工确认（fail-closed：出问题落到更安全的一侧，绝不放行无沙箱直接执行）。
 
-## 接口
+## 数据与接口
 
 ```ts
 export interface SandboxConfig {          // config.json 的 sandbox 节
@@ -58,9 +60,11 @@ bash 工具使用的 spawn 契约（`BashSandboxSpawn`）与沙箱面（`BashSan
 
 两平台同一套检测链，每 run 组装各执行一次：
 
-```
-二进制存在且真实试运行通过 → 完整文件系统沙箱
-二进制缺失或试运行不过 → 不可用（回退到人工确认）
+```mermaid
+flowchart TD
+    A["每 run 组装时检测一次"] --> B{"二进制存在，且真实试运行通过？"}
+    B -->|"是"| C["完整文件系统沙箱"]
+    B -->|"否"| D["不可用：回退到人工确认"]
 ```
 
 - 文件存在不能说明可用：新版 macOS 镜像保留已被禁用的 `sandbox-exec`，部分 Linux 镜像的 `bwrap` 没有 user namespaces，只查文件会虚报可用。macOS 试运行 `sandbox-exec -p '(version 1)(allow default)' /bin/sh -c true`，Linux 试运行 `bwrap --die-with-parent true`，都带 5 秒超时，通过才算可用。
@@ -88,15 +92,18 @@ bash 工具使用的 spawn 契约（`BashSandboxSpawn`）与沙箱面（`BashSan
 - **注入点**：`createBashSandbox` 的 `which`/`tmpDirs` 可注入；bash 工具的沙箱参数用 fake sandbox（放行 / 失败 / 超时）驱动，`tools/bash.test.ts`。
 - **真实环境冒烟**（smoke test：用真实环境验证关键路径的慢速测试）：macOS 本机真 `sandbox-exec`（写工作区成功、写家目录被拒、读 `~/.kclaw` 被拒、网络 socket 可建；network deny 时出站 connect 得 EPERM 而文件操作照常），Linux CI ubuntu runner 真 bwrap（写工作区成功、家目录只读、`~/.kclaw` 屏蔽）。冒烟是否执行与 provider 用同一条判据（真实试运行通过），CI 镜像的沙箱残缺时自动跳过，避免检测虚报可用、冒烟强行执行后崩溃的假失败。冒烟用注入的**假 home**（tmp 或真 home 下的临时目录），不触碰真实 `~/.kclaw`。
 
-## 边界与出错
+## 限制
 
 - **沙箱不可用一律回人工确认（fail-closed）**：找不到沙箱程序、真实试运行不过、`sandbox.enabled: false` 三种情况下都不放行无沙箱直接执行：bash 回到既有判定链（逐次确认），gate 的被包装工具集为空。
-- **越界表现为命令的普通失败**：沙箱内访问放行集外路径得到 Operation not permitted / Read-only file system 之类的错误，bash 以 error result 透传；对模型来说"被沙箱拒绝"与"命令自己失败"不可区分。
 - **network deny 的已知问题**：SBPL 直接写 `(deny network*)` 连 shell 启动要用的内部操作一起拦截，进程直接无法启动，要用 `(deny network-outbound)` + `(deny network-inbound)`（见平台布局一节的实测结论）。
 - **macOS 的 sandbox-exec 被 Apple 标注 deprecated**：部分新版系统已把它禁用（文件还在、无法执行），可用性以真实试运行为准；长期迁移到 libsandbox C API 不在本文档范围。Linux 侧 Landlock 保底是后续项（纯 Node 无法发起 landlock_create_ruleset syscall），当前降级方向是"不可用 → 人工确认"，安全不降级。
 - **检测每 run 做一次**：平台可用性在每次 run 组装时重新检测，检测到不可用时该 run 回退为人工确认。
 
-## 关联
+## 错误处理
+
+- **越界表现为命令的普通失败**：沙箱内访问放行集外路径得到 Operation not permitted 或 Read-only file system 之类的错误，bash 以 error result 透传；对模型来说"被沙箱拒绝"与"命令自己失败"不可区分。
+
+## Reference
 
 - [permissions](./permissions.md)：`sandboxed` 放行的判定位置与被包装工具集
 - [tools](./tools.md)：bash 工具如何注入沙箱、超时 kill 进程组

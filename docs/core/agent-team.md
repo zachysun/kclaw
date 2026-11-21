@@ -1,6 +1,8 @@
 # agent-team — agent 团队（组长 + 组员协作）
 
-## 职责
+主会话可以建一支团队：自己是组长，组员是持久的子会话，协作围绕任务板展开。本篇讲团队目录、身份与提示词、七个团队工具、收信箱投递与停止删除规则；子会话基建见 [subagents](./subagents.md)，面板与对话目标见 [webui](../web/webui.md)。
+
+## 作用
 
 一个主会话可以调 `create_team` 把自己变成**组长**，再用 `spawn_teammate` 添加若干**组员**：每个组员是一个持久的子会话，有自己的系统提示词、自己的收信箱和自己的 run。协作以**任务板**为中心：组长拆任务，组员认领任务、汇报进展，人随时可以进入与任一成员的对话。实现分两半：`packages/core/src/team/`（存储 `TeamStore` 与团队工具的接口边界）与 `packages/server/src/team.ts`（团队宿主：身份反查、收信箱投递、自动派活、面板）；组长协议段与组员人设两份提示词模板在 `packages/core/src/prompts/team.ts`（内置提示词文本统一存放处）。
 
@@ -85,7 +87,7 @@ flowchart TD
 
 - **`GET /sessions/:id/team`**：团队面板数据（团队、身份、组员名单、任务板）。组员与组长都能取；不在任何团队 404。
 - **WS `send_message` 的 `target` 字段**：带 target 的发送定向投递给该组员（经收信箱）；消息同时写入**组长的历史**并附一条「已转发给组员 X」的 note，组长的上下文知道用户对谁说了什么。WebUI 对这条发送不做乐观回显（到达的 `message.created` 会广播回来）。反向的**组员来信**（`send_message` 写给组长）同样作为原文整条 user 消息写入组长历史，WebUI 在对话流里把它们渲染成 agent 一侧的折叠条（多条合并计数、展开才见正文）。组长的上下文保有全文，对话页不刷屏。
-- **WebUI 对话页团队面板**：建队后以悬浮面板出现在对话区右上角（不随消息流滚动，只在组长视角渲染；整块可折叠成一行，折叠偏好存 localStorage），包含成员卡（生命周期徽标、忙闲、当前任务、逐个停止、「轨迹」跳转审计页）与任务板（状态统计、依赖、认领人、尝试次数）。点组员卡「进入对话」把输入框目标切成「→ 组员名」（粘性，点组长卡或 × 切回）。
+- **WebUI 对话页团队面板**：布局、成员卡与任务板、进入对话的目标切换见 [webui](../web/webui.md) 的对话 tab 一节。
 - **确认卡 / 提问卡转发**：组员 run 里的人工确认与提问转发到组长频道，标注「来自组员 X」；在组长频道裁决，效果回到组员。
 
 ## 配置
@@ -98,7 +100,7 @@ flowchart TD
 | `team.mailbox.maxMessageBytes` | `65536` | 单条信的字节上限 |
 | `team.taskBoard.maxTasks` | `64` | 任务板总量上限（含终态任务），超限建任务报错 |
 
-## 关联
+## Reference
 
 - 协议类型（TeamRecord / MailboxEntry / TaskSnapshot / `team/*` 七事件）：[protocol](./protocol.md)；会话事件流与投影：[storage](./storage.md)
 - 工具注册与身份收缩：[tools](./tools.md)；子会话基建与 `parentSessionId`：[subagents](./subagents.md)

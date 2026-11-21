@@ -1,6 +1,8 @@
 # agent-loop — run 的运行循环
 
-## 职责
+整个系统唯一的状态机：一次 run 从用户消息进入，循环调用模型与工具，直到得到终态。本篇讲循环的接口、状态机、上下文组装、流式事件、停止原因与取消路径；宿主侧的排队与组装见 [run-manager](../server/run-manager.md)。
+
+## 作用
 
 `packages/core/src/agent/loop.ts` 的 `runAgent` 是整个系统唯一的状态机：它处理一次用户消息，循环调用 LLM、执行工具、通过权限检查，直到得到一个终态 stopReason。它不做持久化（写入磁盘长期保存，经 `onMessage` 注入）、不做网络（`llm` 注入）、不感知客户端（`onEvent` 注入）。下文把组装并驱动循环的一方称为宿主（daemon 侧就是 RunManager，见 [run-manager](../server/run-manager.md)）。
 
@@ -18,7 +20,7 @@
 
 ---
 
-## 接口
+## 数据与接口
 
 ```ts
 // packages/core/src/agent/loop.ts
@@ -70,7 +72,11 @@ export type PermissionDecision =
 
 ---
 
-## run 生命周期状态机
+## 流程
+
+一次 run 依次经过用户消息落定、若干轮模型调用与工具回合、终态收尾。下面几节按这个顺序讲。
+
+### run 生命周期状态机
 
 ```
 run.started {trigger, model?, provider?, permissionMode?}
@@ -150,7 +156,7 @@ flowchart TD
 
 ---
 
-## 消息编排（上下文组装）
+### 消息编排（上下文组装）
 
 `toProviderMessages(history, opts?)`（`packages/core/src/agent/context.ts`）是协议消息 → provider 请求的格式翻译点：
 
@@ -168,7 +174,7 @@ flowchart TD
 
 ---
 
-## 流式三段事件：created → delta → completed
+### 流式三段事件：created → delta → completed
 
 循环处理 `LlmStreamEvent`（`text_delta` / `thinking_delta` / `tool_call_started` / `tool_call_delta` / `message_done`，定义在 `packages/core/src/provider/types.ts`），转成块级三段：
 
@@ -180,7 +186,7 @@ flowchart TD
 
 ---
 
-## 停止原因归一化
+### 停止原因归一化
 
 `StopReason`（`packages/core/src/protocol/messages.ts`）共 7 个值。provider 侧映射在 `packages/core/src/provider/normalize.ts`：
 
@@ -194,7 +200,7 @@ finish_reason: stop → end_turn    length → max_tokens    tool_calls → tool
 
 ---
 
-## 取消路径：run.cancel → aborted
+### 取消路径：run.cancel → aborted
 
 daemon 侧 `RunManager.cancel(sessionId)` 调 `AbortController.abort()`，循环在 **6 个检查点** 响应 `deps.signal`：
 
@@ -209,7 +215,7 @@ daemon 侧 `RunManager.cancel(sessionId)` 调 `AbortController.abort()`，循环
 
 ---
 
-## 边界与出错
+## 错误处理
 
 - **provider 彻底失败**：`withRetry` 耗尽后 `stream()` 抛出错误 → 部分内容以 `stopReason:"error"` 持久化 → 悬空 tool_call 合成 `"llm call failed before execution"` 结果配对持久化（防止下一轮请求被 400 拒绝）→ `llm.failed` + `run.failed` → resolve（不 reject）。
 - **参数解析失败 / 未知工具**：不执行、不进入权限检查；error result（`"invalid tool args json"` / `"unknown tool: <name>"`）随 tool 消息持久化，循环继续。未知工具名会做一次相近名提示：在已注册工具名里找编辑距离 ≤2 的最近者（大小写不敏感，`closestToolName`，候选含活跃清单与检索池），命中时错误文案变为 `"unknown tool: <name> (closest available: <最近名>)"`，模型拼错工具名时下一轮可以直接改正，不必再猜一次。带检索池的 run 另有一个按层拦截未提升 deferred 名字的分支，但其判定条件恒为假（可调用集合包含了执行器表的全部键），实际不会触发：直接调用 deferred 名字会照常执行（详见 [reference/tools](../reference/tools.md) 的"工具披露分层"）。
@@ -219,7 +225,7 @@ daemon 侧 `RunManager.cancel(sessionId)` 调 `AbortController.abort()`，循环
 
 ---
 
-## 关联
+## Reference
 
 - [protocol](./protocol.md)：Message/Block/Event 的字段与事件全表
 - [compaction](./compaction.md)：上下文占用与五条阈值线（省略/预压/黄/红/目标）、五个触发点（后台预压/收尾/运行中/溢出急救/手动）、budget 驱动省略与压缩体系统管上下文长度的分工

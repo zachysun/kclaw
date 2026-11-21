@@ -1,6 +1,8 @@
 # realtime — WS 协议与事件总线
 
-## 职责
+daemon 的实时通信层：`/ws` 端点接收客户端命令并推送事件，进程内的 EventBus 按会话分发。本篇讲连接认证、订阅模型与断线恢复；帧类型的逐字段定义在 [reference/wire](../reference/wire.md)。
+
+## 作用
 
 `packages/server/src/ws.ts` 的 `registerWsRoutes` 提供 `GET /ws` 端点（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送），处理连接认证并分发 9 种客户端命令帧与各自应答（ack）。指令帧/应答帧的**类型的权威定义**在 `@kclaw/core/protocol` 的 `wire.ts`（`ClientCommand` / `ServerFrame`）；每条字段规则与报错文案的**唯一校验实现**在 `packages/server/src/command-check.ts` 的 `checkCommandFrame`（ws.ts 解析 JSON 后调用它，再按返回的合法命令分发，校验顺序与文案集中在一份代码里）。`@kclaw/core` 的 `EventBus`（`packages/core/src/bus.ts`）是进程内的事件分发器：把 agent 循环与服务端流程产生的 43 种事件按会话投递给订阅了它的连接。两者共同构成 daemon 的实时通信层。
 
@@ -129,15 +131,18 @@ export class EventBus {
 - **CLI**（`packages/cli/src/chat.ts`）：重连后观察到的事件带 120s 静默超时（`POST_RECONNECT_SILENCE_MS = 120_000`，超时内一帧未到就认定 run 已终止、放弃等待；daemon 已终止的 run 永远不会完成，REPL 不可无限等待）。**重发规则**：发送中的消息仅当观察到**零帧**（连 `send_message_ack` 都没有）才重发，零帧证明消息从未到达存活的 daemon；一旦观察到任何帧（ack 即证明服务端已入队）就绝不重发，宁可等待静默超时，避免同一消息被执行两次。
 - **为什么无回放可行**：持久化的块永远是完整终稿（见 [protocol](../core/protocol.md)），`GET /sessions/:id/messages` 拉取到的每条消息自洽；实时事件流只是"正在发生"的增量视图，丢失即丢弃，下一次全量拉取自然补齐（权威历史在 events.jsonl，需要回查可走 `GET /sessions/:id/events`）。
 
-## 边界与出错
+## 限制
 
-- **认证超时**：连接后 `authTimeoutMs`（默认 10s）内未认证即以 4002 关闭，未认证的连接不会被无限期保留。
-- **错过的 confirmation.requested 不可恢复**：确认等待有时限（300s 默认），断线期间超时的确认按拒绝处理；重连拉取全量只能看到结果（note 块），不能补答。
+- **错过的 confirmation.requested 不可恢复**：确认等待有时限（默认 300 秒），断线期间超时的确认按拒绝处理；重连拉取全量只能看到结果（note 块），不能补答。
 - **广播事件可能漏**：只 `connect` 未 `subscribe` 的连接收得到 `cron.*`，但连接尚在认证前时收不到任何事件。
 - **同 token 多连接无互斥**：两个连接订阅同一会话各自收到全部分片事件；`send_message` 会各自入队（会话内仍串行，见 [run-manager](./run-manager.md)）。
 - **帧大小无限制**：不校验单帧长度，依赖 ws 库默认行为。
 
-## 关联
+## 错误处理
+
+- **认证超时**：连接后 `authTimeoutMs`（默认 10 秒）内未认证即以 4002 关闭，未认证的连接不会被无限期保留。
+
+## Reference
 
 - [protocol](../core/protocol.md)：43 种事件与 payload 全表、帧字段
 - [run-manager](./run-manager.md)：命令帧在服务端的后续（入队/取消/确认网关）

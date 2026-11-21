@@ -1,6 +1,8 @@
 # tools — 内置工具体系与注册
 
-## 职责
+内置工具是模型能执行的动作集合，按组装条件分为常驻与条件注册两类，执行器与模型侧 schema 成对产出。本篇讲注册方式、执行契约与各组工具的机制；逐工具的清单、参数与 risk 属性在 [reference/tools](../reference/tools.md)。
+
+## 作用
 
 `packages/core/src/tools/` 实现 41 个内置工具（17 个常驻 + 24 个按组装条件注册），并把它们组装成两份相互对应的产物：`tools`（名字 → 执行器，供循环调用）与 `toolDefs`（JSON Schema 定义，传给模型）。工具只做"执行一个动作并返回结果"；参数解析时机、callId 配对、并发调度、权限检查都在循环层（见 [agent-loop](./agent-loop.md)）。
 
@@ -17,7 +19,7 @@
 
 ---
 
-## 接口
+## 数据与接口
 
 ```ts
 // packages/core/src/agent/tools.ts
@@ -87,11 +89,11 @@ export function makeTool<N extends string>(
 
 ---
 
-## 41 个内置工具
+## 内置工具
 
-完整清单（名称、一句话职责、risk / concurrency、条件注册与工具清单收缩规则）陈列在 [reference/tools](../reference/tools.md)：常驻 17 个（bash、fs 4、grep/glob 检索 2、web 2、memory 2、session_search、history_search、skill 2、ui_render、ui_read）+ 条件注册 24 个（subagent 2、skill_create 1、后台进程 3、cron 4、goal 3、会话 todo 2、团队 7、提问 1、tool_search 1）；披露分层见该篇的"工具披露分层"节：全量层 name+description+schema、目录层 name+description、检索层只列 name。下面按实现文件分组说明各组工具的机制。
+完整清单（名称、一句话职责、risk 与 concurrency、条件注册与工具清单收缩规则）陈列在 [reference/tools](../reference/tools.md)，本篇只讲分组与机制。披露分层也见该篇的"工具披露分层"节：全量层是 name、description 与 schema，目录层是 name 与 description，检索层只列 name。
 
-前 17 个**常驻注册**（注册与否不随会话状态变化；可见性例外有两个：readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型可见工具清单，见 [permissions](./permissions.md)；subagent run 会裁掉 `memory_save`，见 [subagents](./subagents.md)）；`subagent_run`/`subagent_collect` 仅在 daemon 组装了 subagent 派发后端时注册（subagent 自己的 run 两者都不注册，单层委派、不能再派下一级 subagent）；`skill_create` 仅在 daemon 组装了技能进化系统时注册（`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案，机制见 [skills](./skills.md)）；`ask_user_questions` 每个 run 都注册；七个团队工具只在组装了团队 host 的主线会话注册（cron 会话与 subagent run 一个都没有；尚未建队的主线会话以"预备组长"身份注册全套），且**工具清单按身份收缩**：组长拿全套，组员没有 `create_team`/`spawn_teammate`（见下文与 [agent-team](./agent-team.md)）。
+常驻注册的工具注册与否不随会话状态变化，可见性有两个例外：readonly 模式把 risk 为 sensitive 的工具整个移出该 run 的模型可见工具清单，见 [permissions](./permissions.md)；subagent run 会裁掉 `memory_save`，见 [subagents](./subagents.md)。条件注册的几组：`subagent_run` 与 `subagent_collect` 仅在 daemon 组装了 subagent 派发后端时注册，subagent 自己的 run 两者都不注册（单层委派）；`skill_create` 仅在 daemon 组装了技能进化系统时注册，`skills.evolution.enabled: false` 时工具仍在、调用返回固定关闭文案；`ask_user_questions` 每个 run 都注册；七个团队工具只在组装了团队 host 的主线会话注册，cron 会话与 subagent run 一个都没有，尚未建队的主线会话以"预备组长"身份注册全套，且工具清单按身份收缩：组长拿全套，组员没有 `create_team` 与 `spawn_teammate`（见下文与 [agent-team](./agent-team.md)）。
 
 ### bash（`tools/bash.ts`）
 
@@ -206,18 +208,21 @@ skill_read 的输入是 `createBuiltinTools` 的 `skills` 选项：server 每 ru
 
 ---
 
-## 边界与出错
+## 限制
 
-- **执行器永不抛出异常**：`makeTool` 把一切异常转为 `{status:"error"}`；循环对执行器抛出异常（Promise 拒绝）也统一转为 error result（保证异常也产出结果）。
-- **参数校验失败/未知工具名**：在权限检查**之前**就被拦截为 error result，不会进权限判定，也不会执行。
-- **fs_read/fs_list 仅支持 UTF-8 文本**：二进制文件的读取结果为替换字符，判断交给上层（fs_edit 有显式二进制拦截）。
-- **网络工具的失败即结果**：web_search/web_fetch 的网络错误、非 2xx、JSON 解析失败都是 error result 文本，模型可以看到并决定下一步；不带自动重试。
-- **bash 与 web 的限制都可配**：daemon 从 `config.json` 传入 `bash.timeoutMs` / `bash.maxOutputBytes` 与 `web.timeoutMs` / `web.allowPrivateNetworks`（run 组装 core `executeRun` 传入），两处默认值与工具内默认一致（300s / 512 KiB；60s / false）。
-- **私网目标默认拒绝**：web_fetch 的 SSRF 防护意味着默认抓不到 `http://127.0.0.1:*` 这类本机服务；需要时在 config 显式设置 `web.allowPrivateNetworks: true`。这是有意的两层设计：默认拒绝，显式配置才放行。
+- **fs_read 与 fs_list 仅支持 UTF-8 文本**：二进制文件的读取结果为替换字符，判断交给上层（fs_edit 有显式二进制拦截）。
+- **bash 与 web 的限制都可配**：daemon 从 `config.json` 传入 `bash.timeoutMs`、`bash.maxOutputBytes` 与 `web.timeoutMs`、`web.allowPrivateNetworks`（run 组装 core `executeRun` 传入），两处默认值与工具内默认一致（300 秒与 512 KiB；60 秒与 false）。
+- **私网目标默认拒绝**：web_fetch 的 SSRF 防护意味着默认抓不到 `http://127.0.0.1:*` 这类本机服务；需要时在 config 显式设置 `web.allowPrivateNetworks: true`。默认拒绝，显式配置才放行。
+
+## 错误处理
+
+- **执行器永不抛出异常**：`makeTool` 把一切异常转为 `{status:"error"}`；循环对执行器抛出异常（Promise 拒绝）也统一转为 error 结果，保证异常也产出结果。
+- **参数校验失败与未知工具名**：在权限检查之前就被拦截为 error result，不会进权限判定，也不会执行。
+- **网络工具的失败即结果**：web_search 与 web_fetch 的网络错误、非 2xx、JSON 解析失败都是 error result 文本，模型可以看到并决定下一步；不带自动重试。
 
 ---
 
-## 关联
+## Reference
 
 - [agent-loop](./agent-loop.md)：调用时机、并发调度与 callId 配对的执行侧
 - [permissions](./permissions.md)：`risk` 如何变成 allow/confirm 判定；ask_user_questions 与人工确认共用的三方等待网关（`racePending`）

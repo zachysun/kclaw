@@ -1,6 +1,8 @@
 # hooks — hook 系统：把 run 的行为扩展点开成固定位置
 
-## 职责
+run 的扩展点收进一组固定位置，内置行为与用户写的 hook 挂同一条链。本篇讲位置网格、执行语义、用户文件契约与内置 hook；每个位置的触发时机见 [agent-loop](./agent-loop.md)，逐位置的类型陈列见 [reference/hooks](../reference/hooks.md)。
+
+## 作用
 
 `packages/core/src/hooks/` 实现 hook 系统：`types.ts`（位置网格与每位置的 ctx/result 契约）、`runner.ts`（`HookChain`，唯一执行路径）、`loader.ts`（用户 hook 文件装载）、`registry.ts`（`HookRegistry`，daemon 级装载记录）、`builtin.ts`（引擎内置行为的 hook 化形态）、`positions.ts`（位置的运行时清单）。
 
@@ -120,15 +122,18 @@ export default async (ctx) => {
 
 ---
 
-## 边界与出错
+## 限制
 
-- **装载失败不影响 run**：损坏形态（语法错误、未知 position、缺 `hook` 导出或 default 函数、非法 failure 值）只成为一条装载失败条目，不拖垮目录里其他文件、不导致 daemon 崩溃；按"文件名 + mtime + 错误"去重后发一次 `hook.failed {phase:"load"}`，管理接口持续显示失败。
 - **用户 hook 没有 fatal 权**：声明 `failure: "fatal"` 的文件拒绝装载；引擎内置 hook 在原行为抛出错误传播的地方保留 `fatal`（如用户消息持久化），语义与 hook 化之前一致。
 - **禁用文件照常可见**：`enabled: false` 的文件载入元数据（管理接口可见）但不进执行链。
-- **超时按失败分派**：每个 handler 按 `config.hooks.timeoutMs`（默认 5000ms）计时，超时走与抛出错误同样的 fatal/skip/deny 分派；条目 `meta.timeoutMs` 可覆盖，五个内置压缩 hook 声明不限时（时长由 provider 单请求超时与 run 中止信号保底）。
 - **装载环境限制**：`.ts` hook 依赖 Node 24+ 的原生类型擦除，低版本 Node 在 import 时得到明确报错；hook 文件不解析裸说明符依赖（第三方包不支持）。
 
-## 关联
+## 错误处理
+
+- **装载失败不影响 run**：损坏形态（语法错误、未知 position、缺 `hook` 导出或 default 函数、非法 failure 值）只成为一条装载失败条目，不拖垮目录里其他文件、不导致 daemon 崩溃；按"文件名 + mtime + 错误"去重后发一次 `hook.failed {phase:"load"}`，管理接口持续显示失败。
+- **超时按失败分派**：每个 handler 按 `config.hooks.timeoutMs`（默认 5000 毫秒）计时，超时走与抛出错误同样的 fatal、skip、deny 分派；条目 `meta.timeoutMs` 可覆盖，五个内置压缩 hook 声明不限时（时长由 provider 单请求超时与 run 中止信号保底）。
+
+## Reference
 
 - [agent-loop](./agent-loop.md)：各位置在循环里的确切触发时机、每次触发的事件序、fatal 对应的错误码
 - [compaction](./compaction.md)：两个压缩决策位（compaction-check / overflow-rescue）的阈值规则

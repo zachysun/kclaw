@@ -1,8 +1,10 @@
 # memory — 记忆存储
 
-## 职责
+记忆把跨会话值得长期保留的内容写成 markdown 文件，分项目情节与全局认知两层，检索索引只是由文件派生出来的副产物。本篇讲文件格式、写入流程、检索与注入、调度与生命周期；界面入口见 [webui](../web/webui.md)。
 
-`MemorySystem`（`packages/core/src/memory/system.ts`）是记忆系统的唯一服务端入口（单类不拆；38 个公共方法按五类使用方拆成五个窄接口 `MemoryQuery`/`MemoryTriggers`/`MemoryScheduleBook`/`MemoryAdmin`/`MemoryDaily`，共 36 个，另有接口外的 `stop()` 与 fork 播种用的 `seedWatermarksForFork()`，调用方按需依赖其中一个接口），它把三类文件级能力组装在一起：**L1 项目情节**（按项目分目录的主题线文件）、**L2 全局认知**（跨项目的画像/知识/规则文件）、以及两套**派生检索索引**（SQLite FTS5 全文索引 + 可选的向量索引）。一条记忆就是一份 markdown 文件，用户可以直接打开查看、修改、删除；索引永远只是派生物，删掉可以重建。
+## 作用
+
+`MemorySystem`（`packages/core/src/memory/system.ts`）是记忆系统唯一的服务端入口。它不拆成多个类，38 个公共方法按调用方拆成五个窄接口：`MemoryQuery`、`MemoryTriggers`、`MemoryScheduleBook`、`MemoryAdmin`、`MemoryDaily`，共 36 个；接口外另有 `stop()` 与 fork 播种用的 `seedWatermarksForFork()`，调用方按需依赖其中一个接口。它把三类文件级能力组装在一起：**L1 项目情节**（按项目分目录的主题线文件）、**L2 全局认知**（跨项目的画像/知识/规则文件）、以及两套**派生检索索引**（SQLite FTS5 全文索引 + 可选的向量索引）。一条记忆就是一份 markdown 文件，用户可以直接打开查看、修改、删除；索引永远只是派生物，删掉可以重建。
 
 模型通过 `memory_save` / `memory_search` 两个工具读写（`packages/core/src/tools/memory.ts`）；run 组装（core `executeRun`）在每次 run 时做两级注入：L2 认知常驻系统提示、L1 情节作为 note 附到用户消息上（见下文"检索与注入"）。daemon 的 `MemorySystem` 组装与 embedding 判定链都在 `packages/server/src/daemon.ts`。
 
@@ -19,21 +21,17 @@
 
 记忆从"原始对话"到"可注入的长期记忆"分三层提炼：
 
-```
-         ┌──────────────────────────────────┐
-   L2    │  全局认知 global/（persona/wiki/rule） │  ← 跨项目，token budget 内整文件注入系统提示
-         ├──────────────────────────────────┤
-   L1    │  项目情节 projects/<id>/（<topic>.md）│  ← 按项目分目录，检索 top-N 以 note 注入
-         ├──────────────────────────────────┤
-   L0    │  原始对话（会话目录 events.jsonl 里的 message 事件）│  ← 不在这里，见 [compaction](./compaction.md)
-         └──────────────────────────────────┘
+```mermaid
+flowchart TD
+    L0["L0 原始对话<br/>会话目录 events.jsonl 里的 message 事件<br/>不属于记忆系统，见 compaction"] -->|提取| L1["L1 项目情节<br/>projects/&lt;id&gt;/&lt;topic&gt;.md<br/>按主题分文件，检索 top-5 以 note 注入"]
+    L1 -->|线闲置后沉淀| L2["L2 全局认知<br/>global/persona、wiki/、rule/<br/>跨项目，在 token budget 内整文件注入系统提示"]
 ```
 
 - **L0 原始对话**：每轮对话的消息历史，留在会话目录，不属于记忆系统（记忆系统只记"提取后的内容"；压缩/检索它的机制见 [compaction](./compaction.md)）。
 - **L1 项目情节**：一次 run 收尾后，pipeline 从**触发会话**的新消息里**提取**出值得长期记住的"情节"（定时保底触发则对该项目每个会话逐个补），按主题（topic）追加到该项目的主题线文件里。项目即工作目录（workdir），项目 id 由目录名与绝对路径决定（见下节）。
 - **L2 全局认知**：一条主题线被判定不再活跃（inactive）后，pipeline 把它的全部情节**沉淀**成跨项目的认知：用户画像（persona）、领域知识（wiki）、用户规则（rule）三类文件。全局认知按 `scope` 字段区分"全项目可见"与"仅某项目可见"。
 
-## 目录布局与文件格式
+## 数据与接口
 
 ```
 <home>/memory/
@@ -55,7 +53,7 @@
       └── <topic>.md           # 主题线文件（唯一权威情节数据）
 ```
 
-项目 id 的生成规则（`packages/core/src/memory/layout.ts` 的 `projectIdFor`）：取工作目录的绝对路径做 SHA-1，用前 6 位十六进制，再拼上目录名（目录名为空时回退到 `project`），例如 `my-repo-a1b2c3`。确定性、可读、基本唯一；但注意它依赖绝对路径，**整个工作目录移动后 id 会变化、旧项目记忆不再自动跟随**（这是已知取舍，见"边界与出错"）。
+项目 id 的生成规则（`packages/core/src/memory/layout.ts` 的 `projectIdFor`）：取工作目录的绝对路径做 SHA-1，用前 6 位十六进制，再拼上目录名（目录名为空时回退到 `project`），例如 `my-repo-a1b2c3`。确定性、可读、基本唯一；但它依赖绝对路径，**整个工作目录移动后 id 会变化、旧项目记忆不再自动跟随**（这是已知取舍，见"限制"）。
 
 `MEMORY.md` 是机器生成的线索引表（`renderMemoryMd`），每线一行：`| topic | 一句话 | 状态 | 最近活动 |`；它只是方便人与工具快速浏览，真正的内容在各 `<topic>.md`。
 
@@ -193,11 +191,11 @@ flowchart TD
 
 日报是记忆系统的项目级派生物：调度器每 N 天在本地 H 点（`daily.hour`，默认 8；`daily.intervalDays`，默认 1；两个字段属独立的 `daily` 配置节，见 [storage](./storage.md) 的 config 表）对每个项目触发一次生成（`MemorySystem.triggerDaily`）：素材是**自上次日报以来的全部会话消息**（窗 = (上次处理时刻, 现在]，首次取当天本地 0 点；与提取同一条 `readMessages` 读取口径，子会话排除），取材前先做一次提纯：记忆注入附在用户消息上的 note（`kind:"memory"`，对过往情节的复述）整块剥掉，留在素材里会把旧经历包装成当天的事；cron/subagent 等来源说明类的 note 属于窗内真实发生的事，保留；剥完一块不剩的消息（纯记忆载具）整条丢弃。剩下的消息复用提取的事件渲染器转成逐行文本，交给一次无工具 LLM 调用（`DAILY_SYSTEM_PROMPT`；模型与提取共用 `memory.extractModel` 解析链；用量记 chore `daily`、归属项目最近活动会话），产出至多 8 张卡片，覆盖写入 `projects/<id>/daily/<本地日期>.json`。窗内无消息的项目跳过不产文件。生成挂在 `MemoryPipeline` 的同一把项目级串行锁上（`runDaily` 入口，与记忆写入互斥）。
 
-卡片四类（`kind`，渲染层映射中文标签）：`achievement` 成果 / `lesson` 教训 / `blocker` 卡点 / `insight` 观察；每张含一句话 `title`、一段一事的 `body`、0-4 个 `visual` 展示组件、以及 2-3 个 `options`（各含 `label` 展示名与 `opener` 开场文案全文——生成时就写好、自包含，点开续会话时预填进输入框、不自动发送）。`visual` 是 UI 卡 DSL 的只读子集（`stat` 数字对 / `quote` 原文 / `list` 清单 / `chart` / `timeline` / `table`，容器与表单字段不允许）：校验复用 `ui_render` 的同一份校验器（`validateUiDisplayCard`，容器类被一层嵌套规则拒绝、表单字段类一律拒绝），Web 端复用同一个 `UiCardView` 渲染器（不传 `onAction` 即纯只读）——组件形状与渲染都只有一份正本，生成式 UI 新增的只读组件日报自动受益。解析宽容（`packages/core/src/memory/daily.ts` 的 `parseDailyCards`）：剥代码围栏、逐卡校验、非法卡丢弃记日志、非法 visual 只丢组件不丢卡、超上限截断。与提取的负面清单相反：没走通的尝试与失败的调试是日报的素材，prompt 明确要求写出来——长期记忆不收失败，日报要讲出来。
+卡片四类（`kind`，渲染层映射中文标签）：`achievement` 成果 / `lesson` 教训 / `blocker` 卡点 / `insight` 观察；每张含一句话 `title`、一段一事的 `body`、0-4 个 `visual` 展示组件、以及 2-3 个 `options`（各含 `label` 展示名与 `opener` 开场文案全文，生成时就写好、自包含，点开续会话时预填进输入框、不自动发送）。`visual` 是 UI 卡 DSL 的只读子集（`stat` 数字对 / `quote` 原文 / `list` 清单 / `chart` / `timeline` / `table`，容器与表单字段不允许）：校验复用 `ui_render` 的同一份校验器（`validateUiDisplayCard`，容器类被一层嵌套规则拒绝、表单字段类一律拒绝），Web 端复用同一个 `UiCardView` 渲染器（不传 `onAction` 即纯只读），组件形状与渲染都只有一份正本，生成式 UI 新增的只读组件日报自动受益。解析宽容（`packages/core/src/memory/daily.ts` 的 `parseDailyCards`）：剥代码围栏、逐卡校验、非法卡丢弃记日志、非法 visual 只丢组件不丢卡、超上限截断。与提取的负面清单相反：没走通的尝试与失败的调试是日报的素材，prompt 明确要求写出来——长期记忆不收失败，日报要讲出来。
 
-两份标记都在该项目 `state.json`（`WriteLedger`）里：**判重日期** `dailyLastRun`（本地日期，调度器在触发发起后即时推进、失败也推进——防重入优先，失败次日再试）；**窗起点时刻** `dailySince`（ISO 时刻，生成完成或确认窗内无活动才推进，失败不推进——失败那天的窗内容留在窗内，下次定时一并生成不漏内容；首次尝试即把当天 0 点锚定写入，防止失败后内容因无标记而漏出窗外）。调度判定在 host-kit 的 `intervalGateDue`（时刻 + 本地日期判重 + 距上次满 N 天），`daily.hour` 负值关闭整条调度。
+两份标记都在该项目 `state.json`（`WriteLedger`）里：**判重日期** `dailyLastRun`（本地日期，调度器在触发发起后即时推进、失败也推进，防重入优先，失败次日再试）；**窗起点时刻** `dailySince`（ISO 时刻，生成完成或确认窗内无活动才推进，失败不推进，失败那天的窗内容留在窗内，下次定时一并生成不漏内容；首次尝试即把当天 0 点锚定写入，防止失败后内容因无标记而漏出窗外）。调度判定在 host-kit 的 `intervalGateDue`（时刻 + 本地日期判重 + 距上次满 N 天），`daily.hour` 负值关闭整条调度。
 
-手动重新生成（`MemorySystem.regenerateDaily`，路由见 [http-api](../server/http-api.md)）：该日有文件按文件里记录的原窗重跑、整文件覆盖；当天无文件立即按当前窗（窗起点标记至今）生成；历史日期无文件或窗内无消息抛带状态的错误、路由映 404/400。重新生成不动任何标记——到点时调度仍会按完整窗覆盖一次。Web 端 Daily tab（项目切换 + 日期翻页 + 卡片流 + 生成时间设置 + 重新生成按钮，见 [webui](../web/webui.md)）点卡片展开选项后新建该工作目录的会话并把开场文案预填进输入框。
+手动重新生成（`MemorySystem.regenerateDaily`，路由见 [http-api](../server/http-api.md)）：该日有文件按文件里记录的原窗重新生成、整文件覆盖；当天无文件立即按当前窗（窗起点标记至今）生成；历史日期无文件或窗内无消息抛带状态的错误、路由映 404/400。重新生成不动任何标记，到点时调度仍会按完整窗覆盖一次。Web 端 Daily tab（项目切换 + 日期翻页 + 卡片流 + 生成时间设置 + 重新生成按钮，见 [webui](../web/webui.md)）点卡片展开选项后新建该工作目录的会话并把开场文案预填进输入框。
 
 ## 检索与注入
 
@@ -285,13 +283,11 @@ score = fused × 1/(1 + 距今天数/30)      // 时效因子：30 天衰减一�
 
 daemon 启动时做一次全库重算（`daemon.ts` 调 `memory.reconcile`）：对每个项目库重建 FTS 索引 + 后台补算向量，对全局库同样处理；单个项目/全局库处理失败只打日志跳过，不阻塞 daemon 启动。
 
-## 管理界面
+## 人工写入口
 
-记忆提供三套人工管理入口，细节见各自文档：
+HTTP `/memory` 路由族（14 个，`packages/server/src/routes/memory.ts`）提供项目、线文件与全局认知的读取、整文件覆写（PATCH）、删除（DELETE），日报的项目列表与日期索引与单日读取与手动重新生成，以及手动触发记忆写入的 `POST /memory/trigger-manual`。persona 不可删除（400）；未组装记忆系统时全部 503。路由表见 [http-api](../server/http-api.md)。
 
-- **HTTP `/memory` 路由族**（14 个，`packages/server/src/routes/memory.ts`）：项目/线/全局认知的读取、整文件覆写（PATCH）、删除（DELETE），日报的项目列表/日期索引/单日读取/手动重新生成（见「日报（daily）」节），外加手动触发记忆写入的 `POST /memory/trigger-manual`；persona 不可删除（400）；未组装记忆系统时全部 503。路由表见 [http-api](../server/http-api.md)。
-- **CLI `/memory`**（`packages/cli/src/slash.ts`）：`/memory`（无参列项目）、`/memory <项目>`（列该项目的主题线）、`/memory <项目> <线>`（打印线文件原文）。只读。
-- **Web 记忆页**（tab「记忆」，`packages/web/src/memory/MemoryView.tsx`）：左列两个一级分组（全局认知常驻；项目记忆钻取——选中项目的主题线缩进展开在该项目行下方）+ 整文件编辑器；不存在会话级记忆，会话只通过 `memory_search` 检索记忆。见 [webui](../web/webui.md)。
+CLI 的 `/memory` 只读命令见 [cli](../cli/cli.md)，Web 记忆页见 [webui](../web/webui.md)。
 
 ### 事件：`memory.written`
 
@@ -324,17 +320,21 @@ daemon 启动时做一次全库重算（`daemon.ts` 调 `memory.reconcile`）：
 - **不推进投影 `updatedAt`**：`applyEvent` 对 `memory` 事件不更新任何投影字段（见 [storage](./storage.md) 的 events.jsonl 一节）。
 - 可通过 `GET /sessions/:id/events` 查询某会话的完整事件流（含 memory 事件），web 审计页把它们渲染成"记忆"行（见 [http-api](../server/http-api.md) 与 [webui](../web/webui.md)）。
 
-## 边界与出错
+## 限制
 
 - **工作目录移动后项目记忆不跟随**：项目 id 依赖绝对路径的 SHA-1 前缀，`mv` 目录后 id 变化、旧项目记忆不再被检索（旧文件仍躺在 `projects/<旧id>/`）。这是确定性 id 的固有代价。
 - **单字中文查询基本无法命中**：单字查询会分词成一个单字 token，但索引里存的都是两字组合（除非正文里恰好有孤立的单字串），因此几乎不会命中。一到两字的查询本身构成合法 bigram，不受影响。这是分词策略的固有限制。
-- **索引与文件短暂不一致**：写入是"写文件、写索引"两步，中间崩溃会留下未索引的新文件；下次 `reconcile()` 补齐。反向（索引有、文件无）同样由 `reconcile()` 清除。检索命中后实时回读文件正文，命中集合最多短暂滞后。
-- **提取失败不丢消息**：LLM 调用失败提取进度不推进、下次触发重试同一范围；响应不可解析则整批放弃（只打日志），不做部分写入：宁可少记也不记错。
 - **向量路是可选加速**：embedding 未配置、provider 缺失或调用失败时检索自动退化为纯 BM25，不影响任何写入与注入流程。
-- **多进程不支持**：`vectors.db` 是 better-sqlite3 默认日志模式，单 daemon 进程同步访问下安全；多个进程并发写同一 `memory/` 目录是明确不支持的用法（与 cron.db/usage.db 同规则）。
-- **管理写入口无状态校验**：PATCH 是整文件覆写：传什么写什么，不校验 frontmatter；写后重新索引、重建 MEMORY.md，不可解析的文件会在检索里自然消失（但文件本体保留）。
+- **多进程不支持**：`vectors.db` 是 better-sqlite3 默认日志模式，单 daemon 进程同步访问下安全；多个进程并发写同一 `memory/` 目录是明确不支持的用法（与 cron.db、usage.db 同规则）。
+- **管理写入口无状态校验**：PATCH 是整文件覆写，传什么写什么，不校验 frontmatter；写后重新索引、重建 MEMORY.md，不可解析的文件会在检索里自然消失（文件本体保留）。
 
-## 关联
+## 错误处理
+
+- **索引与文件短暂不一致**：写入是"写文件、写索引"两步，中间崩溃会留下未索引的新文件，下次 `reconcile()` 补齐。反向（索引有、文件无）同样由 `reconcile()` 清除。检索命中后实时回读文件正文，命中集合最多短暂滞后。
+- **提取失败不丢消息**：LLM 调用失败时提取进度不推进，下次触发重试同一范围；响应不可解析则整批放弃（只打日志），不做部分写入，宁可少记也不记错。
+- **检索失败不阻塞 run**：情节检索抛出错误时静默跳过，run 照常进行。
+
+## Reference
 
 - [tools](./tools.md)：memory 工具在工具体系中的位置（safe/parallel 的含义）
 - [storage](./storage.md)：`KclawPaths.memoryDir` 的位置与 memory 目录布局

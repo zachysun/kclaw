@@ -1,6 +1,8 @@
 # goal — 目标循环（/goal）
 
-## 职责
+给会话设一个可验证的目标，daemon 自主多轮推进，每轮结束由独立判定器裁决是否达成。本篇讲四态状态机、判定器、验收命令与硬性上限；驱动主机的挂载见 [run-manager](../server/run-manager.md)。
+
+## 作用
 
 `packages/core/src/goal/` 是目标循环的领域模块（类型/上限/判定契约/判定器/验收命令/事件派生/轮决策，注入文本模板与判定器提示词在 `packages/core/src/prompts/goal.ts`）；`packages/server/src/goal-loop.ts` 的 `GoalLoopHost` 是 daemon 侧驱动主机，只做副作用编排：执行验收命令、调用判定器、写事件、按 core 给出的决策入队或停止。
 
@@ -96,20 +98,23 @@
 - **WebUI**：对话页右上角目标悬浮面板（状态点、轮数 `第 N/10 轮`、token 用量、判定器最近意见、验收命令清单；暂停/恢复/停止/移除/编辑表单），active 且 armed 时 5 秒轮询刷新。
 - **REST**：`GET/POST /sessions/:id/goal`、`POST …/goal/pause|resume|stop`、`DELETE …/goal`（清单见 [http-api](../server/http-api.md)）。
 
-## 边界与出错
+## 限制
+
+- **daemon 重启后循环不自动继续运行**：armed 是进程内开关，重启即收回授权；快照（`meta.goal`）还在，用户显式 resume 才重新开始运行（见 [ADR-0002](../adr/0002-goal-armed-is-process-local.md)）。
+- **验收命令 fail-closed**：设定带验收命令的目标时沙箱不可用直接拒绝（400）；检查时刻沙箱不可用按全部失败计；连续 3 轮全不过 `gate-exhausted` 停止。
+
+## 错误处理
 
 - **判定器失败不直接终止循环**：输出非法 JSON 时把错误信息传回重试一次；解析失败连续 3 次或传输失败连续 5 次熔断（`judge-failed` 停止）；未到熔断阈值时循环继续，下一轮注入"判定器不可用、请自行验收"的说明。
-- **验收命令 fail-closed**：设定带验收命令的目标时沙箱不可用直接拒绝（400）；检查时刻沙箱不可用按全部失败计；连续 3 轮全不过 `gate-exhausted` 停止。
 - **run 出错与入队失败都停**：检查 run 以 `run-error` 结束时不自动重试，等用户 resume；队列入队失败（如队列满）同样停止并说明原因。
-- **daemon 重启后循环不自动继续运行**：armed 是进程内开关，重启即收回授权；快照（`meta.goal`）还在，用户显式 resume 才重新开始运行（见 [ADR-0002](../adr/0002-goal-armed-is-process-local.md)）。
-- **判定期间的并发动作安全**：用户在判定器 await 之后 stop/pause/clear，审计事件（goal.checked）照常写入，状态机只在仍 active 时推进；检查入口互斥，不会重入。
+- **判定期间的并发动作安全**：用户在判定器 await 之后 stop、pause 或 clear，审计事件（`goal.checked`）照常写入，状态机只在仍 active 时推进；检查入口互斥，不会重入。
 - **读事件流失败不中断检查**：计数派生只负责读事件流，读流失败按空事件派生全零，检查照常走完。
 
 ## 模型可调用的 goal 工具（3 个）
 
 daemon 组装时把 GoalLoopHost（结构性接口 `GoalToolHost`）注入 run，根会话注册 `create_goal` / `get_goal` / `update_goal`（实现 `tools/goal.ts`，subagent 不注册）：create/update 为 **sensitive**（审批卡就是用户明确同意的方式：用户没有要求时，模型不得启动或操控会产生花费的目标循环），get 为 safe。`create_goal` 有单目标守卫：本会话已有未完成目标（state 非 complete）时直接报错，先 stop 才能开新目标（不嵌套）。`update_goal action=complete` 请求**立即判定**：调用 host 的 `requestCheck`（armed、state 为 active 且没有正在进行的判定时才真正发起，否则告知判定会在 run 边界自动进行），终态仍由判定器裁决：met/impossible 才进入终态，模型永远不能自行判定完成（参照的两个同类实现让模型自证完成，本仓库 ADR-0003 明确拒绝这种做法）。pause/resume/stop 直接对应 host 方法。CLI `/goal` 的帮助文本提到了这 3 个模型侧工具；决策背景见 ADR-0004 文末的更新节。
 
-## 关联
+## Reference
 
 - [http-api](../server/http-api.md)：`/goal` 路由族的协议细节
 - [session-events](../reference/session-events.md)：goal.set / goal.checked / goal.cleared 三种持久化事件

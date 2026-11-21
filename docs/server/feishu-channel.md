@@ -1,6 +1,8 @@
 # Feishu 频道（飞书 IM 接入）
 
-## 职责
+在飞书里给机器人发消息就能用 kclaw，不需要公网地址。本篇讲频道模块、入站出站与传输接入口；配置与管理页见 [webui](../web/webui.md)。
+
+## 作用
 
 `packages/server/src/feishu/` 把 kclaw 接入飞书：在飞书里给机器人发消息就能用 kclaw，不需要开电脑，也不需要公网 IP 或端口转发，出站入站都走飞书官方的长连接（WebSocket，由飞书主动把事件推给 daemon）。频道是**新的入口和出口**：入站消息走普通的 `RunManager.submit` 入口（触发器 user），出站渲染订阅现有的事件总线，权限确认走普通的确认网关，引擎本身不需要为频道做任何改动。
 
@@ -95,17 +97,17 @@ stateDiagram-v2
 
 `FeishuTransport` 是频道唯一的接入口：连接、收消息、收卡片动作、发表情、发卡片、更新卡片、流式（start/append/finish 三步）全部封装在接口之后。接口对实现有一条投递契约：每一条单聊都必须送达频道，传输层不得自行做白名单过滤，拦截统一在频道层，被拒消息要在那里记录待加白发件人（一键加白依赖这份记录），真传输把 SDK 的单聊策略设为 open 正是为此。真传输把接口翻译到官方 SDK 的 LarkChannel 类（长连接、自动重连、流式节流与超长滚动都在 SDK 内建）；频道逻辑对这些一无所知，所以能整体在假传输上测试。流式的适配点：SDK 的流式是"一次调用 + 生产者闭包"，接入口是"start 拿 id、逐段 append、finish 收尾"，真传输在两者之间放了一条内存队列，卡片 id 返回前的增量先缓冲、之后再发出。
 
-## 边界（当前不支持的范围）
+## 限制
 
 群聊、入站图片/文件/语音、多主用户推送、CLI 管理命令、引擎侧改动。飞书长连接断连期间不补发事件（飞书侧硬约束）；运行中的提问（`ask_user_questions`）没有飞书卡片入口，会在限时后按超时路径结束。
 
 ## 启用步骤
 
-推荐走 WebUI 顶栏「IM Channel」页（页面内置同样的指引）：注册飞书组织（免费）→ 开放平台建**自建应用** → 开通四项权限：收单聊消息 `im:message.p2p_msg:readonly`、发消息与卡片 `im:message:send_as_bot`、表情回执 `im:message.reactions:write_only`、卡片实体读写 `cardkit:card:write`（流式卡片必需）→ 事件与回调页把订阅方式切到**长连接模式**，并在事件订阅设置里**添加事件** `im.message.receive_v1`（开权限不等于订阅事件，两个开关缺一不可）→ **创建版本并发布**（未发布的自建应用不推送任何事件；改权限后也要发新版本才生效）→ 页面填 `app_id`/`app_secret` 保存 → 在飞书给机器人发一条消息（它不回复你），在「待加白发件人」里点「加白」→ 把「推送接收人」选成自己。
+推荐走 WebUI 顶栏「IM Channel」页（页面内置同样的指引）：注册飞书组织（不需要付费）→ 开放平台建**自建应用** → 开通四项权限：收单聊消息 `im:message.p2p_msg:readonly`、发消息与卡片 `im:message:send_as_bot`、表情回执 `im:message.reactions:write_only`、卡片实体读写 `cardkit:card:write`（流式卡片必需）→ 事件与回调页把订阅方式切到**长连接模式**，并在事件订阅设置里**添加事件** `im.message.receive_v1`（开权限不等于订阅事件，两个开关缺一不可）→ **创建版本并发布**（未发布的自建应用不推送任何事件；改权限后也要发新版本才生效）→ 页面填 `app_id`/`app_secret` 保存 → 在飞书给机器人发一条消息（它不回复你），在「待加白发件人」里点「加白」→ 把「推送接收人」选成自己。
 
 手工路径也保留：写 `~/.kclaw/feishu.json`（enabled=true）→ 重启 daemon；open_id 需在开发者后台调试台查询。
 
-## 关联
+## Reference
 
 - [run-manager](./run-manager.md)：入站 submit 的排队语义与 `/stop` 用的 stopAndClear 组合口
 - [permissions](../core/permissions.md)：审批卡裁决的确认网关与 `by:"feishu"` 的审计口径

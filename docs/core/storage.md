@@ -1,6 +1,8 @@
 # storage — 路径、配置与会话持久化
 
-## 职责
+所有写入磁盘的数据的基础：根目录解析、配置读取、JSONL 读写与会话事件流。本篇讲目录布局、config 全量字段、各类文件的位置与写入方式；会话事件的内容形状见 [protocol](./protocol.md)。
+
+## 作用
 
 `packages/core/src/storage/` 是所有持久化（把数据写入磁盘长期保存）的基础：`paths.ts` 解析 kclaw 的根目录与目录树（`KCLAW_HOME` 环境变量可整体重定向）；`config.ts` 读写 `config.json`（用户配置与默认值深合并）；`jsonl.ts` 提供 JSONL 文件（一行一个 JSON 对象的文本格式）的追加、读取与崩溃修复，是会话事件流 `events.jsonl`（唯一权威数据）与运行态队列 `queue.jsonl` 的底层。会话目录结构与 `meta.json` 由 `SessionStore`（`packages/core/src/session/store.ts`）负责；`daemon.json` 和 `token` 两个文件由 server 侧产生，本文一并说明用途。
 
@@ -106,7 +108,7 @@ export function resolvePaths(home?: string): KclawPaths
 
 ---
 
-## 接口
+## 数据与接口
 
 ```ts
 // packages/core/src/storage/paths.ts
@@ -191,7 +193,7 @@ export function readJsonl(file: string): unknown[]
 | `dispositionOverride?` | 会话级发送处置覆盖（`"steer" \| "wait" \| "interrupt"`），优先于 `sessions.defaultDisposition`。服务端路由接受三个值的写入；Web 与 CLI 的 interrupt 都是一次性动作、不写会话级覆盖（见 [webui](../web/webui.md) 与 [run-manager](../server/run-manager.md)） |
 | `goal?` | 会话级目标快照（`/goal`，`GoalSnapshot` 全量：目标文本、验收命令、状态机、轮数与 token 计数、最近判定摘要），由 `goal.set` 事件全量替换、`goal.cleared` 删除（见 [goal](./goal.md)）。计数字段是检查时刻的展示缓存，权威数据在事件流 |
 | `todo?` | 会话级 todo 清单（`todo_list_write` 写入的最新快照，`TodoItem[]`：`content` + `status`），由 `todo.written` 事件全量替换、后写的生效；跨 run 保留，压缩后可经 `todo_list_read` 读回；不推进 `updatedAt`（见 [tools](./tools.md)） |
-| `uiPending?` | 待拍板 UI 卡清单（`{cardCallId, messageId}[]`，web 会话列表角标的计数来源）：`message` 事件折叠维护——tool 消息里带按钮/表单节点的 UI 卡按 callId 登记（chart 是提问类，不登记），user 消息带决策类 `uiAction`（`decision: true`，按钮点击/表单提交）时按 cardCallId 移除对应条目（折线点位追问是提问类，不影响投影）；`message.truncated` 按 `messageId`（消息 id 是 `msg_` 前缀的单调 ULID，字典序即时间序）清理越界条目，清空即删字段。与会话列表刷新的联动见 [webui](../web/webui.md) |
+| `uiPending?` | 待拍板 UI 卡清单（`{cardCallId, messageId}[]`，web 会话列表角标的计数来源）：`message` 事件折叠维护：tool 消息里带按钮/表单节点的 UI 卡按 callId 登记（chart 是提问类，不登记），user 消息带决策类 `uiAction`（`decision: true`，按钮点击/表单提交）时按 cardCallId 移除对应条目（折线点位追问是提问类，不影响投影）；`message.truncated` 按 `messageId`（消息 id 是 `msg_` 前缀的单调 ULID，字典序即时间序）清理越界条目，清空即删字段。与会话列表刷新的联动见 [webui](../web/webui.md) |
 | `chainHead?` / `chainLength?` | 事件流哈希链锚定（见下文「事件流哈希链」）：最新一行原文的 SHA-256 与文件总行数。写入路径维护；崩溃窗口允许暂时落后（事件已写、meta 未写），校验不视其为断裂，下次追加时补齐 |
 | `deleted?` / `deletedAt?` | 软删除标记（`session.deleted` / `session.restored` 事件投影，回收站与恢复都落在这一对字段上） |
 | `systemBaseline?` | 冻结的系统提示词基线，双段独立 `{ stable: {text, frozenAt}, live?: {text, frozenAt} }`。作用：每 run 两段都重新计算，再与基线逐段比对，哪段文本变了就重冻结哪段（`frozenAt` 记录这份文本成为基线的时刻），没变的沿用基线；`system-before` 链每 run 都执行，`system-after` 链只在至少一段变化时才执行（提示词缓存的稳定性策略，详见 [hooks](./hooks.md)）。推导规则：`system` 事件按段 upsert、`compaction` 事件清除（压缩改写了消息历史，缓存必然全部失效，正是基线重置的时机），都不推进 `updatedAt` |
@@ -213,8 +215,8 @@ export function readJsonl(file: string): unknown[]
 
 - `readJsonl(file)`：文件缺失返回 `[]`；去掉末尾空行后逐行 `JSON.parse`；**最后一行**解析失败视为断尾崩溃产物，丢弃并停止；**中间任何一行**解析失败则抛出错误：崩溃不可能产生中间的坏行，出现即意味着 bug 或外部破坏，静默跳过等于掩盖问题。
 - `readJsonlFrom(file, since)`：`readJsonl` 的尾部读变体，供增量拉取（`SessionStore.readEventsFrom` / 审计页 `?since=`）。文件仍整体读入（JSONL 没有行偏移索引），但下标 `< since` 的行**不解析、不构建**，增量开销只随返回条数增长、与流的总长无关；已解析区域的损坏语义与 `readJsonl` 一致，跳过区的损坏不可见。`readJsonl` 就是 `readJsonlFrom(file, 0)`。
-- `repairTornTail(file)` + `appendJsonlLine(file, value)`：每次追加前检查文件的最后一个字节：是 `\n` 说明上次写入完整结束；否则**先截断到上一个换行再追加**。截断点按**字节偏移**找（`Buffer.lastIndexOf(0x0a)`）：UTF-8 的多字节序列内部不会出现 0x0a（续字节都 ≥ 0x80），所以单字节检测可靠；如果改用解码后字符串的 indexOf，得到的是 UTF-16 码元下标，切点可能落在多字节字符中间，反而破坏上一行。文件不存在时修复是空操作。`appendJsonlLine` 返回实际写盘的行原文——`$prev` 链摘要取这个返回值，写盘文本与摘要出自同一次 `JSON.stringify`，不存在第二个序列化来源。
-- `splitLinesCanonical(raw)` + `readCompleteLines(file)`："什么算写到一半的坏行"的唯一定义与它的行文本读取。`splitLinesCanonical` 把文件原文拆成完整行加撕裂标记（末行缺 `\n` 即撕裂），值读取（`readJsonlFrom`）、链校验（`integrity.ts` 的 `verifyEventChain`）与行读取三方共用这一份判定；对撕裂残迹各自的处理是：值读取与链校验只丢弃解析失败的那一行（可解析的末行仍算数），`readCompleteLines` 则无条件丢弃——丢弃的正是 `repairTornTail` 追加前会截断的内容，链尾读取（`SessionStore` 的追加续链与投影重建）因此与追加修复看到同一套行。
+- `repairTornTail(file)` + `appendJsonlLine(file, value)`：每次追加前检查文件的最后一个字节：是 `\n` 说明上次写入完整结束；否则**先截断到上一个换行再追加**。截断点按**字节偏移**找（`Buffer.lastIndexOf(0x0a)`）：UTF-8 的多字节序列内部不会出现 0x0a（续字节都 ≥ 0x80），所以单字节检测可靠；如果改用解码后字符串的 indexOf，得到的是 UTF-16 码元下标，切点可能落在多字节字符中间，反而破坏上一行。文件不存在时修复是空操作。`appendJsonlLine` 返回实际写盘的行原文，`$prev` 链摘要取这个返回值，写盘文本与摘要出自同一次 `JSON.stringify`，不存在第二个序列化来源。
+- `splitLinesCanonical(raw)` + `readCompleteLines(file)`："什么算写到一半的坏行"的唯一定义与它的行文本读取。`splitLinesCanonical` 把文件原文拆成完整行加撕裂标记（末行缺 `\n` 即撕裂），值读取（`readJsonlFrom`）、链校验（`integrity.ts` 的 `verifyEventChain`）与行读取三方共用这一份判定；对撕裂残迹各自的处理是：值读取与链校验只丢弃解析失败的那一行（可解析的末行仍算数），`readCompleteLines` 则无条件丢弃，丢弃的正是 `repairTornTail` 追加前会截断的内容，链尾读取（`SessionStore` 的追加续链与投影重建）因此与追加修复看到同一套行。
 
 会话的删除语义在 `SessionStore`：`delete()` 软删除（追加 `session.deleted` 事件，摘要置 `deleted: true, deletedAt`），`restore()` 恢复（追加 `session.restored` 事件），`purge()` 物理删除整个目录，`purgeExpired(ttlMs)` 清理过期的软删除会话（由 scheduler tick 周期调用）。
 
@@ -316,16 +318,17 @@ HTTP 出口与展示见 [http-api](../server/http-api.md) 的 `GET /usage` 与 [
 
 ---
 
-## 边界与出错
+## 限制
 
-- **meta.json 原子写**：`writeMeta` 经 `writeFileAtomic`（临时文件 + rename）写入，meta.json 本身不会被截断；崩溃最坏残留一个 `<meta.json>.tmp` 临时文件，不影响读取。
-- **config 按字段校验，没有整体 schema**：文件级语法错误（JSON 解析失败、根不是映射）启动即抛出错误；少数会写进事件流或影响 daemon 能否运行的字段在加载时逐字段校验（`permissions` 整节与 `defaultMode`、压缩阈值线、`providers.entries.*.promptCache`、`team.*`、skills 两节、`server.port`、`goals.judge`，非法值回退到默认并告警一行，清单见上文「config.json 全量字段」之后的读取说明）；其余字段不做结构校验，写错类型要到运行时的读取处才以意外方式失败。
-- **SQLite 未开 WAL**：cron.db、记忆的 `vectors.db`（每项目 + 全局各一个）与 usage.db 都用默认日志模式。单 daemon 进程同步访问（better-sqlite3）下安全；多进程并发写同一个 home 是明确不支持的用法。进程内的同一个 vectors.db 也只有 MemoryPipeline 一个连接（检索方借用句柄）。
+- **config 按字段校验，没有整体 schema**：文件级语法错误（JSON 解析失败、根不是映射）启动即抛出错误；少数会写进事件流或影响 daemon 能否运行的字段在加载时逐字段校验（`permissions` 整节与 `defaultMode`、压缩阈值线、`providers.entries.*.promptCache`、`team.*`、skills 两节、`server.port`、`goals.judge`，非法值回退到默认并告警一行，清单见上文"config.json 全量字段"之后的读取说明）；其余字段不做结构校验，写错类型要到运行时的读取处才以意外方式失败。
+- **SQLite 未开 WAL**：cron.db、记忆的 `vectors.db`（每项目与全局各一个）与 usage.db 都用默认日志模式。单 daemon 进程同步访问（better-sqlite3）下安全；多进程并发写同一个 home 是明确不支持的用法。进程内的同一个 vectors.db 也只有 MemoryPipeline 一个连接（检索方借用句柄）。
 - **KCLAW_HOME 只在 `resolvePaths` 读取一次**：核心层不缓存，但各调用方持有自己的解析结果；daemon 启动后改环境变量不影响已创建的路径。
 
----
+## 错误处理
 
-## 关联
+- **meta.json 原子写**：`writeMeta` 经 `writeFileAtomic`（临时文件 + rename）写入，meta.json 本身不会被截断；崩溃最坏残留一个 `<meta.json>.tmp` 临时文件，不影响读取。
+
+## Reference
 
 - [cron](./cron.md)：cron.db 的表结构与轮询
 - [compaction](./compaction.md)：压缩状态的存放位置（meta.compaction 摘要 + 事件流里的 compaction 事件）与压缩配置字段

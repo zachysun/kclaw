@@ -1,6 +1,8 @@
 # onboarding — 首次运行体验
 
-## 职责
+第一次执行 `kclaw` 到能正常聊天的整条路径：版本检查、配置向导与打开 WebUI。本篇讲三个环节的行为与失败处理；REPL 本身见 [cli](./cli.md)。
+
+## 作用
 
 `packages/cli` 的首次运行链路包含两个模块：`src/wizard.ts` 的 `runWizard` 是 30 秒配置 wizard（选模板 → 输入 key → 连通测试 → 保存为默认 provider），检测、连通测试与保存全部经由 daemon 完成；`src/web-cmd.ts` 的 `webAction` 实现 `kclaw web`（确保 daemon 在运行、附带 token 打开浏览器）。加上 `src/index.ts` 入口的 Node >= 22 版本检查，共同构成首次执行 `kclaw` 能顺利使用的全部路径。
 
@@ -113,15 +115,18 @@ if (major < 22) {
 
 放在解析前的目的是让过低的 Node 运行时在报出难懂的语法/API 错误之前就得到一行明确的提示。库引用（`import "@kclaw/cli"`）不经过这段。
 
-## 边界与出错
+## 限制
 
 - **wizard 只经 daemon 的 provider 接口保存配置**：中途任何取消点都返回 `"aborted"`，什么都不保存。
-- **非交互终端没有 wizard**：只打印一行指引，面向脚本/CI 场景（脚本/CI 场景不应出现交互式提问）。
-- **连通测试超时 20s**：`AbortSignal.timeout` 中止请求，status 记为 null → 按 network 类报错。
+- **非交互终端没有 wizard**：只打印一行指引，面向脚本与 CI 场景。
 - **`kclaw web` 无浏览器命令的平台**：Windows 等 `openCommandFor` 返回 null 的平台退化为打印 URL（token 完整可见，用户自行打开）。
 - **token 文件缺失**：`ensureDaemon` 启动的 launch 会创建 `<home>/token`，所以 `webAction` 读它时必然存在；daemon 已在运行时该文件同样存在（token 跨重启复用，见 [daemon](../server/daemon.md)）。
 
-## 关联
+## 错误处理
+
+- **连通测试超时 20 秒**：`AbortSignal.timeout` 中止请求，status 记为 null，按 network 类报错。
+
+## Reference
 
 - [cli](./cli.md)：wizard 之后的 REPL、命令树全貌
 - [provider](../core/provider.md)：配置保存后 daemon 如何用它构造 LLM 客户端、未配置时 daemon 怎样启动

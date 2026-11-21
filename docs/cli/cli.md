@@ -1,6 +1,8 @@
 # CLI — 命令、REPL 与 slash 命令
 
-## 职责
+daemon 的终端客户端：交互式对话、一次性 run 与 daemon 控制。本篇讲命令树、REPL 编排与 slash 命令；首次运行与 `kclaw web` 见 [onboarding](./onboarding.md)。
+
+## 作用
 
 `packages/cli` 是 daemon 的终端客户端。`src/index.ts` 用 commander 组命令树并做入口分发；`src/chat.ts` 的 `runChat` 是交互式对话 REPL（REPL：read-eval-print loop，逐行读取输入、处理、打印结果、再等待下一行的交互循环），它持有全部编排逻辑（建连、订阅、帧泵、重连、slash 注册表、Ctrl+C 升级），把「显示与收键」交给两个终端表面：`src/tui/` 是 ink TUI（stdin 与 stdout 都是终端时，流式追加历史 + 动态区 + 常驻输入框），`src/chat-readline.ts` 是 readline 表面（其余情况，例如 `echo hi | kclaw chat`），两者的公共接口在 `src/chat-surface.ts`；`src/run-cmd.ts` 是一次性的 `kclaw run`（提示词进、本次 run 的输出出、按结局给出退出码，供脚本与 CI 调用），由 `src/run-input.ts`（stdin 的四种状态）、`src/run-lifecycle.ts`（判定哪些帧属于本次 run、何时结束、怎样只停止自己的那一次）与 `src/run-output.ts`（三种输出格式）组成；`src/frame-view.ts` 把每种 daemon 帧归类为一种显示内容，chat 的两个表面与 run 各自按这份归类输出；确认卡与问题卡跨表面共享的文案（选项标签、裁决行、自动应答行）另有唯一正本 `src/surface-cards.ts`，两个表面、run 渲染与 `--yes`/`--no` 自动应答都从这里取；`src/color.ts` 统一判定是否输出颜色；`src/slash.ts` 是 REPL 内 `/` 命令的注册表机制（含 `<home>/commands/*.md` 的自定义命令加载与"已装技能即斜杠命令"的动态注册）；`src/client.ts` 的 `KclawClient` 封装对 daemon 的 HTTP 与 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）两种调用。首次运行判定、配置 wizard 与 `kclaw web` 见 [onboarding](./onboarding.md)。消息里的 `@路径` 引用由 daemon 统一处理（见 [file-mentions](../core/file-mentions.md)），CLI 只发送原文。CLI 不持有业务状态，随时退出，daemon 不受影响。
 
@@ -92,7 +94,7 @@ json 两种格式在任何情况下都不输出颜色。
 
 收到 SIGINT、SIGTERM、SIGHUP 或 EPIPE 时只停止自己的那一次：消息还在排队时发 `queue.cancel{messageId}` 撤回，没有 run 执行；已经开始执行，或撤回时恰好出队开始执行（daemon 回复 `not found`）时，发 `run.cancel{messageId}`：daemon 只在活动 run 执行的正是这条消息时才中止，取消请求到达时自己的 run 已经结束的话，排在后面的别人的 run 不受影响。回执到达之前收到信号时先记下，回执到达后再按上面处理。等到结束帧、照常输出已积累的内容后，按信号对应的退出码退出，结局本身是什么都不影响退出码；EPIPE 之后不再写 stdout。第二次收到信号立即退出。daemon 不会因为客户端断开而停止 run，SIGKILL 又无法捕获：`kclaw run` 被 SIGKILL 结束时，daemon 里的 run 会继续执行到结束。
 
-## 接口
+## 数据与接口
 
 ```ts
 // packages/cli/src/client.ts
@@ -111,7 +113,7 @@ export class KclawClient {
   // 打开已认证 WS：首帧发送 {type:"auth", token}；frames 是解析好的异步帧迭代器
 }
 export function openSubscribed(client: KclawClient, sessionId: string): Promise<WsHandle>
-// 开 WS 并订阅会话，等到 subscribed 回执才返回（chat 与 run 共用，见下文边界与出错）
+// 开 WS 并订阅会话，等到 subscribed 回执才返回（chat 与 run 共用，见"错误处理"）
 
 // packages/cli/src/chat.ts
 export interface ChatOptions {
@@ -161,7 +163,11 @@ export async function runOrHint(parsed, registry, ctx): Promise<boolean>
 export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 ```
 
-## REPL 核心流程（packages/cli/src/chat.ts）
+## 流程
+
+REPL 的编排与 slash 命令的解析都在 `src/chat.ts` 与 `src/slash.ts` 里。
+
+### REPL 流程（packages/cli/src/chat.ts）
 
 **表面分流**：`runChat` 在建连并确定会话后判定一次 `stdin.isTTY && stdout.isTTY`：两者都是终端时走 ink TUI（`tui/`，ink 要把 stdin 切进 raw mode，管道做不到），否则走 readline 表面。两个表面实现同一对接口（`chat-surface.ts`）：`ChatSurface` 承接编排器的输出（行、确认卡、问题卡、单选器、模式/忙闲变化），`ChatController` 承接输入（提交行、Ctrl+C、Esc 停止、Shift+Tab、补全清单）。帧泵、渲染代际接管、重连、四发送路径终点判定这些帧级逻辑只在编排器里写一份（表面的增减不改动这部分逻辑），表面只做帧的接收与呈现。
 
@@ -204,7 +210,7 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 - **终端标题**：随运行状态变化（空闲 `kclaw · <会话标题>` / 运行中 `kclaw ▶ 运行中 · …`），切换窗口时也能判断是否忙碌。标题内容含会话名与会话标题（可能含模型输出），写入前先清洗：剔除控制字符、剔除双向与不可见格式码点（Trojan Source 一类注入手法）、空白归一、240 字上限；GNU Screen（`STY` 已设）下整体降级为可打印 ASCII。终端没有可移植的方式读取原标题，kclaw 不读取、不恢复，只在每次退出路径（正常关闭与 Ctrl+C 第三段）清除自己写过的标题。
 - **视觉**：色板四档：正文默认色、系统事件暗色、错误红、工具行琥珀（与 WebUI amber 主题呼应）；颜色开关由 `color.ts` 统一判定后经 ink 使用的 chalk 生效，组件不各自判断。转录视图的文本按终端宽度换行（`text-width.ts` 的 East Asian Width 显示宽度计算，与 `session list` 的表格对齐共用）；状态行是普通 ink 文本组合，不做宽度计算。
 
-## slash 命令机制（packages/cli/src/slash.ts）
+### slash 命令机制（packages/cli/src/slash.ts）
 
 - 注册表是 `createRegistry(ctx)` 返回的 `Map<string, SlashCommand>`；命令的名称/用法/描述读自 `@kclaw/core/commands` 的共享清单 `SLASH_COMMANDS`（WebUI 读同一份，保证两端文案一致，见 [webui](../web/webui.md)）；解析（`dispatch`，委托 core 的 `parseSlashInput`）与查表执行（`runOrHint`）分离，未注册的命令打印一行 `没有这个命令，/help 看看`（未命中路径可单独测试）。
 - **补全**：两个表面共用同一候选清单与插入函数。readline 表面是 readline 的 completer（`createSlashCompleter`，Tab 触发）：**输入的最后一段空白分隔块**以 `/` 开头且还没打空格时，按共享清单给出前缀候选：内置命令在前、动态注册的技能命令在后（与内置重名的技能命令被共享补全器排除），唯一命中直接补全命令名，多个命中补全公共前缀并列出清单；普通文本、带参数的输入（`/new 标题` 这种已打空格的）、未知前缀都不做任何操作。TUI 的菜单自动弹出：`/` 起头的末段开命令菜单、`@` 起头的末段开文件引用菜单（候选排序与插入沿用 WebUI 输入框同一套 `slashCompletions`/`fileMentionCompletions`/replaceTrailing 函数，候选来自 `GET /fs/files`，失败静默隐藏；含空白字符的路径不进候选：键盘菜单无法把它们标灰并跳过），↑↓ 选择、Tab/Enter 接受、Esc 关闭。自定义命令不参与联想，仍靠 `/help` 发现。
@@ -234,16 +240,19 @@ export function createRegistry(ctx: SlashCtx): Map<string, SlashCommand>
 - 自定义命令：`ctx.commandsDir`（chat 用 `--home` 指定的目录拼成 `<home>/commands`，见 `chat.ts`）目录下的每个 `*.md` 文件注册成一个命令：文件名就是命令名，文件内容是一段提示词模板；执行命令时，模板里的 `{{args}}` 替换成命令参数，然后经 `ctx.send(text)` 作为普通消息发出。与内置命令重名的文件不生效，打印一行警告。
 - `switchSession` 在**同一 socket** 上发 `unsubscribe`（旧会话）+ `subscribe`（新会话），同时清空待发附件（附件是会话级的，换会话不带走）；`SlashCtx` 的 `client`/`sessionId` 是 getter，命令执行时看到的总是重连/切换后的当前值。
 
-## 边界与出错
+## 限制
 
-- **订阅确认失败即失败**：`openSubscribed`（`client.ts`，chat 与 run 共用）5s（`SUBSCRIBE_ACK_MS`）等不到 `subscribed` 或收到 error 帧即抛出错误并关闭 socket，不会把消息发往一条还没完成订阅（总线尚未登记分发）的连接。
-- **确认应答发送失败被忽略**：`confirmation.resolve` 发送抛出错误只忽略（socket 正在断开），交给重连路径接管。
 - **管道 stdin 的 EOF**：stdin 关闭时 readline 触发 close，readline 表面循环自然退出；`rlClosed` 标志让迟到的 `prompt()` 变成空操作，不再抛出 "readline was closed"（缓冲行仍会经异步迭代器到达）。EOF 属于 readline 表面：TUI 的 stdin 是 raw mode 终端，不存在这条路径。
 - **重连后不回放**：重连只拉取全量数据用于更新本地状态但不渲染，错过的事件不做补偿；持久化消息自洽，下次进入 REPL 重新拉取全量即可（协议规则见 [protocol](../core/protocol.md)）。
 - **cron 表格无分页**：`GET /cron` 全量返回，任务多时表格整体打印。
 - **自定义命令是提示词模板**：它只做一件事，把模板里的 `{{args}}` 替换成命令参数后作为普通消息发送，没有任何执行 shell 命令的能力；与内置命令重名的文件直接忽略。
 
-## 关联
+## 错误处理
+
+- **订阅确认失败即失败**：`openSubscribed`（`client.ts`，chat 与 run 共用）5 秒（`SUBSCRIBE_ACK_MS`）等不到 `subscribed` 或收到 error 帧即抛出错误并关闭 socket，不会把消息发往一条还没完成订阅的连接。
+- **确认应答发送失败被忽略**：`confirmation.resolve` 发送抛出错误只忽略（socket 正在断开），交给重连路径接管。
+
+## Reference
 
 - [onboarding](./onboarding.md)：首次运行判定、配置 wizard、`kclaw web`、Node 版本检查
 - [file-mentions](../core/file-mentions.md)：`@路径` 引用在 daemon 侧的识别与模型侧说明

@@ -1,6 +1,8 @@
 # cron — 定时任务调度
 
-## 职责
+让 kclaw 在指定时刻自动发起一次会话并执行任务。本篇讲调度器的存储、认领与触发流程，以及模型可调用的四个 cron 工具；执行本身交给 [run-manager](../server/run-manager.md)。
+
+## 作用
 
 让 kclaw 在指定时刻自动发起会话并执行任务：`CronScheduler`（`packages/core/src/cron/scheduler.ts`）把"cron 表达式 + 一段 prompt"作为一条 cron 记录持久化在 SQLite；daemon 侧的 `startSchedulerTick`（`packages/server/src/scheduler-tick.ts`）周期轮询这张表，将到期的 cron 转换为一次真实的 agent 运行，并将结果记录回 cron 行。边界：调度器仅负责"何时触发、结果如何记录"；执行本身交给 RunManager（见 [run-manager](../server/run-manager.md)）；cron 的增删改查 HTTP 接口在 `packages/server/src/routes/cron.ts`。
 
@@ -18,7 +20,7 @@
 
 ---
 
-## 数据模型
+## 数据与接口
 
 ```ts
 // packages/core/src/cron/scheduler.ts
@@ -58,7 +60,7 @@ SQLite 表结构与之一一对应（`enabled` 存 0/1，驼峰字段转下划�
 
 ---
 
-## 核心流程
+## 流程
 
 ### tick 轮询（`packages/server/src/scheduler-tick.ts`）
 
@@ -100,13 +102,16 @@ tick 的第二步 `sessions.purgeExpired(purgeTtlMs)`：把 `deletedAt` 距今 �
 
 ---
 
-## 边界与出错
+## 限制
 
-- **无效 cron**：`create`/`update` 时 cron-parser 抛出错误，HTTP 层转 400；已存进表里的 cron 不会再解析 cron，除非 `claimDue`。若通过直接修改数据库写入了无效 cron，`claimDue` 的重算会抛出错误，被 tick 的守卫捕获记日志。
-- **触发期间 cron 被删**：`markRun` 对不存在的 id 是 no-op，运行照常完成，只是无处记录。
-- **停机与进行中的运行**：`stop()` 清除 interval 并 `Promise.allSettled` 等待所有进行中的 cron 运行结束（有界：已结束的 promise 自动从追踪列表移除）。daemon 若在运行途中崩溃，该次触发认领时已推进 `nextRunAt`，被终止的这一次不会重放，cron 在下个调度点照常触发。
 - **单 daemon 假设**：`claimDue` 的 CAS 认领让两个句柄同时 tick 也无法重复认领同一次触发，但调度层之外并无互斥；设计前提是单机单 daemon（daemon.json 的 wx 独占认领即为此服务，见 [daemon](../server/daemon.md)）。
 - **CLI 功能面较窄**：`kclaw cron list` 只读列表（`packages/cli/src/index.ts`）；增删改目前走 HTTP。
+
+## 错误处理
+
+- **无效 cron**：`create` 与 `update` 时 cron-parser 抛出错误，HTTP 层转 400；已存进表里的 cron 不会再解析，除非 `claimDue`。若通过直接修改数据库写入了无效 cron，`claimDue` 的重算会抛出错误，被 tick 的守卫捕获记日志。
+- **触发期间 cron 被删**：`markRun` 对不存在的 id 是 no-op，运行照常完成，只是无处记录。
+- **停机与进行中的运行**：`stop()` 清除 interval 并 `Promise.allSettled` 等待所有进行中的 cron 运行结束（有界：已结束的 promise 自动从追踪列表移除）。daemon 若在运行途中崩溃，该次触发认领时已推进 `nextRunAt`，被终止的这一次不会重放，cron 在下个调度点照常触发。
 
 ---
 
@@ -114,7 +119,7 @@ tick 的第二步 `sessions.purgeExpired(purgeTtlMs)`：把 `deletedAt` 距今 �
 
 daemon 组装时把同一个 `CronScheduler` 注入 run（engine deps `cronScheduler`），注册表追加 `cron_create` / `cron_list` / `cron_update` / `cron_delete`（实现 `tools/cron.ts`）：三个写入工具 sensitive/serial、`cron_list` safe/parallel；与 HTTP `/cron` 同域同表，不新建存储。防递归：`trigger:"cron"` 的 run 组装时 `writeTools:false`，只有 `cron_list` 注册。create 的触发表达二选一：`cron`（5 段表达式）或 `delayMinutes`（一次性相对触发，模型传入值钳制到 [1, 525600]，越界取边界不报错，这是整数参数的全局约定），调度表为此带有 `kind`（cron/delay）与 `delay_minutes` 两列（旧库经 ALTER 补上），delay 行在 `claimDue` 认领时置 `enabled=0`，不推进 `next_run_at`（触发一次、记录保留）；`update` 改 `cron` 转 cron 形态、改 `delayMinutes` 转 delay 形态并从现在重算。模型可调用的工具不带 `model` 参数（用哪个模型是花钱的事，归用户决定）。
 
-## 关联
+## Reference
 
 - [agent-loop](./agent-loop.md)：cron 触发的运行最终进入的循环
 - [storage](./storage.md)：`cron.db` 所在的目录树与 `recycleBinTtlMs` 配置

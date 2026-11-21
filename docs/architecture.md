@@ -1,18 +1,10 @@
 # architecture — 架构总览
 
-## kclaw 是什么，本文讲什么
-
-kclaw 是一个运行在本机的个人 AI 助手（agent）。整套系统只有一个承担实际工作的进程：daemon（守护进程，常驻后台的程序）。会话、定时任务、记忆、配置全部由 daemon 一手保管；终端里的 CLI 和浏览器里的 WebUI 只是它的两个客户端，负责输入和显示，自己不保存任何业务数据。
-
-本文是全部技术文档的入口：先给出模块地图与进程模型，再沿一条用户消息从进入到回复的完整流转把数据流走一遍，最后交代边界情况下的行为。各子系统的细节见 `core/`、`server/`、`cli/`、`web/` 下的分篇；枚举与清单的逐值陈列见 [reference](./reference/README.md)。
-
----
-
-## 设计决策
+## Key Point
 
 五个决定塑造了整个系统的形状。
 
-**单 daemon，多客户端。** CLI 随时可以退出，daemon 不受影响；定时任务在没有客户端连接时照常执行。daemon 是唯一保存状态的地方，客户端不持久化（写入磁盘长期保存）任何业务状态。
+**单 daemon，多客户端。** kclaw 是运行在本机的个人 AI 助手（agent）。整套系统只有一个承担实际工作的进程：daemon（守护进程，常驻后台的程序）。会话、定时任务、记忆、配置全部由 daemon 一手保管；终端里的 CLI 和浏览器里的 WebUI 只是它的两个客户端，负责输入和显示，自己不保存任何业务数据。CLI 随时可以退出，daemon 不受影响；定时任务在没有客户端连接时照常执行。
 
 **core 是纯库。** `@kclaw/core` 不依赖 fastify、ws、commander 中的任何一个框架，也不知道 HTTP 和 WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）的存在。它需要的外部能力全部由调用方注入：模型调用（`deps.llm`）、工具执行、事件出口（`deps.onEvent`）、持久化（`deps.onMessage`）。因此整个 agent 循环可以用假的依赖（mock）离线测试。
 
@@ -24,15 +16,18 @@ kclaw 是一个运行在本机的个人 AI 助手（agent）。整套系统只�
 
 ---
 
-## 模块地图
+## 组成
 
-```
-kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js）
- │
- ├── @kclaw/core     纯库，agent 引擎（run 组装/压缩引擎/事件总线/确认网关都在这里；server 与 cli 都依赖它）
- ├── @kclaw/server   daemon：Fastify app + RunManager 队列状态机（依赖 core）
- ├── @kclaw/cli      客户端：对话 REPL（ink TUI / readline 两个表面）、kclaw run 与 daemon 控制（依赖 core、ws、commander、@clack/prompts、ink + react、string-width）
- └── @kclaw/web      客户端：React SPA（依赖 core 的 commands/protocol 等子路径出口与 react-virtuoso 等前端库，vite 独立构建）
+### 模块地图
+
+```mermaid
+graph TD
+    K["kclaw 发布包<br/>构建期把 cli、server、web 的产物打包到一起"] --> CLI["@kclaw/cli<br/>对话 REPL、kclaw run、daemon 控制"]
+    K --> SRV["@kclaw/server<br/>daemon：Fastify app + RunManager"]
+    K --> WEB["@kclaw/web<br/>React SPA，vite 独立构建"]
+    CLI --> CORE["@kclaw/core<br/>纯库：agent 引擎"]
+    SRV --> CORE
+    WEB -->|"子路径出口：commands / protocol / mentions / client-http / permission-modes / provider-formats"| CORE
 ```
 
 依赖方向唯一：core ← server、core ← cli。web 只依赖 core 的几个子路径出口（`commands`/`protocol`/`mentions`/`client-http`/`permission-modes`/`provider-formats`，纯数据/纯类型，不含 agent 引擎）、react-virtuoso、react-markdown 及其插件（remark-gfm、rehype-highlight），以及改动抽屉使用的 diff 与 highlight.js；发布包 kclaw 只在构建期把 cli、server、web 的产物打包到一起。
@@ -69,27 +64,17 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 **web**（入口 `packages/web/src/main.tsx`）：十二个视图（chat/cron/audit/usage/trash/memory/daily/skills/permissions/mcp/model/channel）加 `chat/`（对话视图：消息视图状态机、工具卡/UI 卡渲染、composer 都在这里）、`sessions/`（侧栏会话列表、回收站视图、目录选择器 DirectoryPicker）、`changes/`（改动抽屉）、`daily/`（日报视图）、`ui/`（IconButton 等通用小组件）、共享层 `api.ts`（HTTP 客户端）、`daemon-clients.ts`（api/ws 工厂与会话级拉取骨架）、`ws.ts`（WS 客户端与重连）、`token.ts`（token 引导）、`toast.tsx`（全局通知浮层）、`theme.ts` + `themes/`（主题注册表，见 [themes](./web/themes.md)）、`events.ts`（跨视图窗口事件名）、离线外壳（`sw.js`/manifest/`offlineBanner.tsx`）。
 
----
+### 进程模型
 
-## 进程模型
-
-```
-┌─ kclaw daemon（常驻进程，唯一状态权威）───────────────────────┐
-│  127.0.0.1:<port>  （port 写入 <home>/daemon.json）            │
-│  HTTP: /health /status /sessions* /attachments* /cron*         │
-│        /memory* /permissions /skills /hooks /config            │
-│        /providers* /channel* /fs/browse /usage /search         │
-│        /mcp /mcp/servers*（Bearer）                             │
-│  WS:   /ws（首帧 auth 或 ?token=；subscribe + 命令 + 事件流）   │
-│  常驻: RunManager（会话串行 run）· scheduler tick（默认 30s）   │
-│        · 记忆调度器（定时 + 跟随，默认 60s 扫）                 │
-│        · McpManager（恒定组装，惰性连接；分组配置：全局+各项目）│
-└────────────┬────────────────────────┬────────────────────────┘
-             │ HTTP+WS                │ HTTP+WS
-      ┌──────┴──────┐          ┌──────┴──────┐
-      │ kclaw CLI   │          │ 浏览器 WebUI │
-      │ (REPL, 可退出)│         │ (daemon 托管)│
-      └─────────────┘          └─────────────┘
+```mermaid
+graph TD
+    CLIC["kclaw CLI<br/>REPL，可退出"] -->|HTTP + WS| D
+    WEBC["浏览器 WebUI<br/>daemon 托管"] -->|HTTP + WS| D
+    subgraph D["kclaw daemon：127.0.0.1:port，唯一状态权威"]
+        HTTP["HTTP：/health /status /sessions* /attachments* /cron* /memory* /permissions /skills /hooks /config /providers* /channel* /fs/browse /usage /search /mcp（Bearer）"]
+        WS["WS /ws：首帧 auth 或 ?token=；subscribe + 命令 + 事件流"]
+        RM["常驻：RunManager（会话串行 run）· scheduler tick（默认 30s）· 记忆调度器（定时 + 跟随，默认 60s 扫）· McpManager（恒定组装，惰性连接）"]
+    end
 ```
 
 **客户端如何启动 daemon。** 任何客户端命令都先经 `KclawClient.connect()` → `ensureDaemon()`（`packages/cli/src/daemon-ctl.ts`），按检测结果分三种情况处理：
@@ -106,11 +91,11 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 
 ---
 
-## 数据流总览
+## 端到端流程
 
-一条用户消息（含工具调用与人工确认）从输入到持久化、广播、渲染，分三步走。
+一条用户消息从输入到回复，沿 agent 循环走完下面这些环节。每个环节带出它用到的子系统，细节在对应分篇。
 
-### 第一步：发送与排队（server 侧）
+### 1. 发送与排队
 
 用户在 CLI 或 WebUI 输入文本，客户端经已认证的 WS 连接发一帧 `{type:"send_message", sessionId, text, disposition?, attachments?}`（`packages/server/src/ws.ts`）。服务端先做两项简单检查（确认这个会话存在、核对附件引用），然后立刻回一帧 `send_message_ack {messageId, queued}`，不等回复生成完，长任务不会堵住命令通道。
 
@@ -121,42 +106,83 @@ kclaw（发布包：esbuild 打包 cli+server+web 产物，bin: app/cli/cli.js�
 - **wait（排队）**：排在队尾，当前 run 结束后出队执行。
 - **interrupt（中断）**：先中止当前 run，再把这条消息插到队首。
 
-后三种都会广播 message.queued 事件。
+后三种都会广播 message.queued 事件。队列条目持久化在会话目录的 queue.jsonl 里（见 [run-manager](./server/run-manager.md)）。
 
-### 第二步：一次 run 的内部（core 侧）
+### 2. run 组装
 
-run 的组装在 core 的 `executeRun`（`packages/core/src/agent/run-assembly.ts`），依次做：
+出队之后，core 的 `executeRun`（`packages/core/src/agent/run-assembly.ts`）把一次 run 需要的全部东西准备好：
 
 1. 附件引用挂载为 attachment 块（多模态、内联文本、fs_read 提示三种形态）。
-2. 确定模型：`input.model` → 会话 meta → 默认配置，三级依次回退；条目名翻译成线上模型名。
+2. 确定模型：`input.model` → 会话 meta → 默认配置，三级依次回退；条目名翻译成线上模型名。provider 的两套协议与端点解析见 [provider](./core/provider.md)。
 3. 记忆检索：拿用户文本的前 200 字符搜项目情节，取前 5 条，作为 note 块注入用户消息；另把 L2 全局认知拼进系统提示（见 [memory](./core/memory.md)）。
-4. 扫描技能目录（全局 `<home>/skills` + 工作区 `.kclaw/skills`），把可用技能清单追加进系统提示。此时系统提示分两段组装：**stable**（人设基础文本 + 注入约定，缓存冻结面）在前，**live**（全局认知 + 技能清单，低频变化面）在后；若消息里出现 `/技能名` 或 `@路径`（任意位置，仅用户消息），把两者的包装文本合并成一份改写后的模型视图文本（见 [skills](./core/skills.md) 与 [file-mentions](./core/file-mentions.md)）。
-5. 读会话历史（在读之后才追加新用户消息）→ `createBuiltinTools`（含 skill_read）+ extraTools（MCP 工具）→ `ConfigPermissionGate`（readRoots 为附件目录与 spill 目录；权限模式与已保存规则每个 run 都从会话 meta 和磁盘现读）。
-6. 进入 agent 循环 `runAgent(...)`（`packages/core/src/agent/loop.ts`）：
-   - `llm.stream(await buildMessages())`：`toProviderMessages(history)` 负责把全量历史组装成发往模型的请求（`agent/context.ts`，上下文长度由压缩体系统一管）；llm-before hook 链只能修改模型看到的输入（技能与 `@` 文件指定的合并包装就是内置的 skill-wrap hook，用 `withLastUserText` 按内容锚定本轮 user 消息，steer 插话不会被误改写）。
-   - 模型流式返回 text / thinking / tool_call（各自经历 created → delta → …）。
-   - 模型要求调用工具（`stopReason:"tool_use"`）→ 权限检查 `check(toolCall)`（`permissions/engine.ts`）。需要人工确认时，发出 confirmation.requested 事件，客户端弹确认框；用户的选择经 WS 帧 `{type:"confirmation.resolve", confirmationId, decision}` 回来，`ConfirmationBroker.resolve` 收到后循环继续（`core/src/permissions/broker.ts`）。
-   - 执行工具：parallel 组并发、serial 组串行，产出 tool_result 块。
-   - turn-boundary hook 链（内置 steering-drain）取走引导缓冲里的消息逐条注入：message.created → onMessage 持久化 → message.completed → message.steered。
-   - 回到下一轮模型调用，直到模型输出 end_turn。
+4. 扫描技能目录（全局 `<home>/skills` + 工作区 `.kclaw/skills`），把可用技能清单追加进系统提示。系统提示分两段组装：**stable**（人设基础文本 + 注入约定，缓存冻结面）在前，**live**（全局认知 + 技能清单，低频变化面）在后；若消息里出现 `/技能名` 或 `@路径`（任意位置，仅用户消息），把两者的包装文本合并成一份改写后的模型视图文本（见 [skills](./core/skills.md) 与 [file-mentions](./core/file-mentions.md)）。
+5. 读会话历史（在读之后才追加新用户消息）→ `createBuiltinTools`（含 skill_read）+ extraTools（MCP 工具，见 [mcp](./core/mcp.md)）→ `ConfigPermissionGate`（readRoots 为附件目录与 spill 目录；权限模式与已保存规则每个 run 都从会话 meta 和磁盘现读，见 [permissions](./core/permissions.md)）。
+6. 进入 agent 循环 `runAgent(...)`（`packages/core/src/agent/loop.ts`），下面 3 到 6 步都在这个循环里。
 
-系统提示词的全量记录发生在进入模型循环之前：引擎拼装好系统提示词后调用 `SessionStore.appendSystem`，往 events.jsonl 追加一条 system 事件（按 stable/live 两段记录），每 run 恰好一条，不并入 meta 投影、不上事件总线，写失败则本次 run 直接失败。run 的边界（`run.started` / `run.ended`）与人工确认的裁决（`permission.decided`）也在此层写入会话档案，三者构成审计页的"每轮发生了什么"（见 [run-manager](./server/run-manager.md) 与 [webui](./web/webui.md)）。
+### 3. 进入循环：hook 机制
 
-### 第三步：收尾与广播
+agent 循环本身只认位置，不认具体行为。用户消息增强、引导注入、压缩判定、模型视图改写这些职责各异的扩展点，统一收进 14 个固定位置；内置逻辑与用户自己写的 hook 挂同一条链，按 `order` 排序执行。位置网格、每个位置的输入输出契约、内置 hook 清单见 [hooks](./core/hooks.md) 与 [reference/hooks](./reference/hooks.md)。
 
-- 每条消息：`deps.onMessage` → `SessionStore.appendMessage` → events.jsonl 追加一条 message 事件，并汇入 meta.json 投影。
-- 每个事件：`deps.onEvent` → `bus.emit` → JSON 序列化 → 只发给订阅了该会话的 socket（`packages/core/src/bus.ts`）。
-- run 结束时（run-after hook 链）：往 usage.db 记一行用量（失败只写日志，不影响 run）；`memory.write.idleMinutes>0` 时排一个跟随触发的记忆检查（记忆由 memory_save 工具与定时/跟随调度器写入，见 [memory](./core/memory.md)）；`skills.evolution.enabled` 时对卷入技能的 run 排一个技能提炼的空闲检查（暂存制，见 [skills](./core/skills.md)）；上下文占用到达黄线（budget 的 80%）时执行一次收尾压缩，压缩失败则本次 run 以失败收场；只有用户消息触发（trigger 为 user）的 run 才做自动命名，成功后改名并广播 session.renamed。
-- 客户端渲染（CLI 写 stdout；WebUI 更新 React 状态），最后 run.completed 终态。
+循环开始：
 
-两条不变量贯穿全链：
+1. 发 `run.started {trigger, model, provider, permissionMode}`。
+2. 建用户消息骨架，发 `message.created`。
+3. 跑 `run-before` hook 链：内置 hook 做记忆注入、持久化、会话自动命名；用户 hook 可以改写用户消息。
+4. `onMessage` 持久化 → `message.completed`。这一步之后，用户消息进入 events.jsonl。
 
-- **先持久化后广播**：客户端收到的事件，反映的一定是已经写入磁盘的状态。
-- **ack 与 run 解耦**：send_message 的确认帧在 run.started 之前就返回。
+循环体内每一轮模型调用前后各有一组位置：`llm-before` 改写模型视图，`llm-after` 观察调用结果，`llm-retry` 让重试过程可见。工具执行前后是 `tool-before` / `tool-after`，一轮工具批次结束、下一次调用之前是 `turn-boundary`（引导消息从这里注入）。收尾有 `run-after`。压缩相关的三个位置（`compaction-check`、`overflow-rescue`、`compaction-after`）在下一节讲。系统提示词的两个位置（`system-before` / `system-after`）在组装阶段执行，不在循环里。
 
----
+hook 的失败处理由 hook 自己声明：默认跳过并发出 `hook.failed` 事件，声明 `failure:"deny"` 的 hook 失败时否决所在环节（`tool-before` 上该工具不执行）。内置 hook 之外，用户 hook 放在 `~/.kclaw/hooks/`，每个 run 重新扫描。
 
-## 端到端示例：一条会改文件的消息
+### 4. 调用模型：上下文组装与 provider
+
+`llm.stream(await buildMessages())` 是循环里真正发出请求的地方，前面有三层处理：
+
+**上下文组装**（`toProviderMessages`，`packages/core/src/agent/context.ts`）把会话历史翻译成 provider 请求：
+
+- 全量历史直发，不按条数截断。上下文长度由压缩体系统一管理。
+- 压缩生效时，把 `upto`（含）之前的原文排除在发送范围外，并在数组最前面注入一条压缩摘要项（交接声明 + `<compacted-summary>` 包装的摘要 + session_search 检索提示）。模型看到的顺序是 persona → 压缩摘要 → 对话（见 [compaction](./core/compaction.md)）。
+- 工具输出省略：budget 不够时从最新往回保留工具结果原文，装不下的换成一行占位文字，只影响发出的请求。
+- 无配对的 tool 消息丢弃、无配对的 tool_call 剔除，避免 provider 以 400 拒绝。
+- 块级转换：text 拼接、note 转 `<system-reminder>` 行、tool 结果按条转换、附件按内容分三种转法。
+- 包装标记重放：技能指名与 `@` 文件引用的包装文本记在消息的 `llmText` 字段里，之后每次组装按原字节重放，避免同一条历史在不同 run 组装出不同字节。
+
+**hook 改写**：组装结果交给 `llm-before` 链，链的返回值为最终发送内容。内置的 `skill-wrap` 用 `withLastUserText` 按内容锚定本轮消息，steer 插话不会被误改写。
+
+**provider 适配**：请求带 `promptCache: { key: sessionId }`，OpenAI 兼容协议与 Anthropic Messages 协议各自加缓存标记；瞬时错误在 provider 层 `withRetry` 内部重试 3 次。两种协议的类型、鉴权头、URL 规则都在 `packages/core/src/provider/formats.ts` 的注册表里，见 [provider](./core/provider.md)。
+
+流式返回转成块级三段事件：`created`（块容器）、`delta`（增量字符串）、`completed`（全量块校准）。流结束后才解析工具参数。`llm.completed` 带上 usage、stopReason、延迟与缓存未命中原因。
+
+**循环内压缩**：每轮工具批次之后，`compaction-check` 位置判定要不要中途压缩；上下文超限时 `overflow-rescue` 给它换一个更短的视图整次重发；压缩完成后 `compaction-after` 对外可见。压缩引擎、四条阈值线、分段摘要与后台预压缩见 [compaction](./core/compaction.md)。
+
+### 5. 工具回合：权限、沙箱、确认
+
+`stopReason` 是 `tool_use` 且有调用时进入工具回合（`runToolTurn`）：
+
+1. 建 `role:"tool"` 消息骨架，发 `message.created`。
+2. 每个调用先过 `tool-before` hook 检查；声明 `deny` 的 hook 失败时该调用被拒绝，run 继续。
+3. 权限裁决（`permissions/engine.ts`）：`allow` 记录放行原因直接执行；`deny` 转成 error 结果加 note 块；`confirm` 发出 `confirmation.requested`，进入三方竞争：人工裁决、确认超时（默认 300 秒）、run 的 abort 信号，谁先到算谁。人工裁决有四个选项：允许本次、本项目内总是允许、全局总是允许、拒绝。后两档会写入 `.kclaw/permissions.yaml`（见 [permissions](./core/permissions.md)）。
+4. 调度执行：`concurrency:"parallel"` 的调用并发执行，`"serial"` 的在并行组结束后逐个执行。bash 可以在操作系统级沙箱里运行（工作区与临时目录可写、家目录只读、`~/.kclaw` 被屏蔽），见 [sandbox](./core/sandbox.md)。长命令有超时、输出截断与全量副本存盘（spill）；取消信号传进执行器，bash 会终止整个进程组。
+5. 结果按模型给定的顺序组成一条 tool 消息，发三段事件，`onMessage` 持久化 → `message.completed`。同一个工具名加同一组参数连续重复到上限（默认 5 次）时，结果里附一行换策略提醒。
+6. 跑 `turn-boundary` 链，把引导缓冲里的消息逐条注入（`message.steered`），然后回到循环顶部。
+
+工具清单与每个工具的 risk、并发属性见 [reference/tools](./reference/tools.md)。
+
+### 6. 收尾
+
+模型输出 `end_turn`、触发上限、被取消或出错时，run 以 `run.completed` 或 `run.failed` 结束。终态保证在 `run.started` 之后必定到达，调用方不需要处理没有终态的 run。
+
+`run-after` 链做收尾：
+
+- 往 usage.db 记一行用量（失败只写日志，不影响 run）。
+- `memory.write.idleMinutes>0` 时排一个跟随触发的记忆检查。
+- `skills.evolution.enabled` 时对卷入技能的 run 排一个技能提炼的空闲检查。
+- 上下文占用到黄线（budget 的 80%）时执行一次收尾压缩。
+- 只有用户消息触发的 run 才做自动命名，成功后广播 session.renamed。
+
+每条消息经 `SessionStore.appendMessage` 写入 events.jsonl 并汇入 meta.json 投影；每个事件经 EventBus 序列化后只发给订阅了该会话的 socket。客户端渲染终态，daemon 继续常驻，等待下一条消息或 30 秒一次的调度 tick。
+
+### 一条会改文件的消息
 
 设用户在 CLI 输入：`把 src 里的 TODO 改成 FIXME`。会话 `ses_…` 已存在。整段流转的时序如下：
 
@@ -199,9 +225,14 @@ sequenceDiagram
 7. **第二轮模型调用**：带上完整的工具结果再次调用；模型输出文本总结 → `end_turn` → assistant 消息持久化、message.completed → `run.completed {stopReason:"end_turn", usage:{…累计…}}`。
 8. **渲染收尾**：CLI 渲染完终态事件后回到输入（readline 表面回到提示符，TUI 回到输入框）；WebUI 同样只依赖这一串事件。daemon 继续常驻，等待下一条消息或 30 秒一次的调度 tick。
 
+两条不变量贯穿全链：
+
+- **先持久化后广播**：客户端收到的事件，反映的一定是已经写入磁盘的状态。
+- **ack 与 run 解耦**：send_message 的确认帧在 run.started 之前就返回。
+
 ---
 
-## 边界与出错
+## 故障与限制
 
 **daemon 崩溃。** JSONL 文件兼容尾部残缺行（进程在写入中途终止、只写了一半的行：`repairTornTail`/`readJsonl`，`packages/core/src/storage/jsonl.ts`）。崩溃时进行中的定时任务触发，其下一次执行时间（`next_run_at`）已在认领（`claimDue`）时推进，被终止的这一次不会重放，任务在下个调度点照常触发。「认领即把下次执行时间推进到 now 之后」的语义保证了不会重放积压。
 
@@ -213,7 +244,9 @@ sequenceDiagram
 
 ---
 
-## 关联
+## Reference
+
+想用起来看 [tutorial](./tutorial.md)；想加功能看 [extending](./extending.md)；想查枚举、字段、清单看 [reference](./reference/README.md)。
 
 - [protocol](./core/protocol.md)：Message/Block/Event 三层协议与 ID 体系
 - [agent-loop](./core/agent-loop.md)：run 生命周期状态机与工具回合

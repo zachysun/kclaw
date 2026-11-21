@@ -1,6 +1,8 @@
 # run-manager — 会话串行 run、消息队列与确认网关（服务端侧）
 
-## 职责
+`send_message` 之后服务端的队列状态机：消息去向的三档决策、每会话一条队列、出队执行与取消。本篇讲队列、出队组装与确认网关；循环本身见 [agent-loop](../core/agent-loop.md)。
+
+## 作用
 
 `packages/server/src/run.ts` 的 `RunManager` 是 `send_message` 之后服务端的**队列状态机**：消息去向的三处置决策（引导/等待/中断，见下文 submit）、每会话一条显式排队队列与其驱动循环、入队执行（把出队条目连同 AbortController 与 steer 取走回调交接给引擎）、run 取消、排队取消、手动压缩入口与崩溃恢复。单条 run 的**组装**：附件挂载、模型解析、记忆注入（L2 认知常驻系统提示 + L1 情节 note，见组装第 4 步）、技能目录扫描与隐式包装（见组装第 6 步）、系统提示（双段冻结基线或拼装，每 run 一条 `system` 事件按 stable/live 记录，见组装第 11 步）、工具与权限组装、事件发送到总线、run 边界与裁决记录（`run.started`/`run.ended`/`permission.decided` 三事件）、消息持久化、token 用量记录，在 core 的 `executeRun`（`packages/core/src/agent/run-assembly.ts`，引擎侧）完成，经 `RunEngine`/`RunHandoff` 两个形状与队列交接。确认网关 `ConfirmationBroker`（`packages/core/src/permissions/broker.ts`）是人工裁决的服务端半边：等待中的裁决经 WS/CLI 的 `confirmation.resolve` 命令、等待中的问题经 `question.resolve` 命令在此完成（同一个对象、两类等待中的条目）。`packages/core/src/session/autoname.ts` 的 `scheduleAutoname` 在首条用户消息后异步生成会话标题并把更名广播为 `session.renamed` 事件。调度心跳（`scheduler-tick.ts`）触发的 cron run 也使用同一个入口。
 
@@ -30,7 +32,7 @@
   - `Compactor.auto`（core `session/compactor.ts`）是收尾/中途/超限三路的共用组装：为每次压缩建独立 AbortController 并登记在一张"正在进行中"的表里（后台预压也登记同一张表，`waitForSettled` 供同步路径等待），run 的中止信号联动过去（run 中止时顺带取消同步压缩），run 结束时清理；压缩自身的摘要调用经 `collectStreamResult` 带 `{ signal }`，取消信号触发时抛出 → `Compactor.compact` 走 cancelled 分支。`cancelCompaction`（WebUI 指示行取消按钮 → WS 帧 `compaction.cancel`）写会话级取消标记并取消正在进行的压缩（含后台预压）；标记在每次 run 组装（`executeRun`）开头清除，只压制本次运行内的自动压缩。
   - `Compactor.compact` 内部：按 `SessionMeta.compaction.upto` 切出 active 历史（标记在历史里找不到视为无标记），上下文占用过线后由 `chooseBoundary` 选出分界：从最新往回累加到 budget × `compactTargetRatio`（默认 0.33）为止，起点再退到最近的用户消息（保证段与保留部分都是完整轮次）。压缩是两次 `collectStreamResult` 调用（复用本轮 `runLlm` 与解析出的 model，`Compactor.auto` 内 await；返回文本与 `message_done` 的真实用量）：段摘要默认复用主 run 的 system、工具定义与缓存键（被压段原文直进请求，`renderSegment` 不参与）；手动 /compact、摘要模型换条目时的回退形状与第二次归并调用才是不带 tools 的独立请求。段摘要与旧总摘要归并出新总摘要，两种形状详见 [compaction](../core/compaction.md) 的"第一次调用"一节。**两次全部成功后**追加一条 `compaction` 事件（这是 `meta.compaction` 与压缩审计的唯一写入点，事件投影据此维护 `{ segments, top, upto }`，`trigger` 按 `manual`/`in-run`/`auto` 三值、超限急救带 `emergency`；审计记录另带 `tokensBefore`/`tokensAfter` 压缩前后上下文 token，口径见 [compaction](../core/compaction.md) 的"token 统计口径"）。事件：上下文占用过线且边界已定先发 `compaction.started {phase}`，之后无论成败/取消必发 `compaction.completed {segments, kept, phase, result}`（失败/取消时 segments/kept 为 0）；占用未过线则两个事件都不发。摘要调用或事件写入失败时 `Compactor.compact` 记一行 `kclaw compaction (<阶段>) failed:` 日志并以 failed 结果回答（`Compactor.auto` 把结果原样转发给触发 hook）。运行照常继续，下一次过线重新触发。总摘要不带 note，经循环的压缩视图以压缩摘要项进请求（见 [compaction](../core/compaction.md) 的"注入"）。
 
-## 接口
+## 数据与接口
 
 ```ts
 // packages/server/src/run.ts（RunManagerDeps 从引擎的 RunEngineDeps 派生：字段语义
@@ -141,7 +143,7 @@ export class ConfirmationBroker {
 
 关键常量（`MEMORY_QUERY_CHARS` 与 `MEMORY_LIMIT` 在 core `hooks/builtin.ts`，其余在 `agent/run-assembly.ts`；`DEFAULT_SYSTEM_PROMPT` 与两个压缩提示词在内置提示词文本的统一存放处 `prompts/` 目录，分别位于 `prompts/system.ts` 与 `prompts/compaction.ts`）：`MEMORY_QUERY_CHARS = 200`（用户文本前 200 字符做 L1 情节检索）、`MEMORY_LIMIT = 5`（最多注入 5 条情节 note）、`DEFAULT_SYSTEM_PROMPT = "你是 kclaw，一个务实的个人助理。"`（AGENTS.md 缺失/为空时的回退提示）；附件挂载的 `TEXT_INLINE_MAX_BYTES = 64KiB`、`TEXT_INLINE_MAX_CHARS = 8192`、`IMAGE_INLINE_MAX_BYTES = 5MiB`。两个固化系统提示词（压缩用）：`SEGMENT_SUMMARY_PROMPT`（段摘要：固定五栏 markdown、不超过 800 字）、`MERGE_SUMMARY_PROMPT`（总摘要归并：同样五栏、保留新版本并注明被取代的旧版本）；主前缀复用形状末尾的摘要指令常量 `SEGMENT_TASK_INSTRUCTION`（正文与独立提示词同口径）与它们同在 `prompts/compaction.ts`。记忆提取与沉淀的提示词（`EXTRACT_SYSTEM_PROMPT`、`CONSOLIDATE_SYSTEM_PROMPT`）在同一目录的 `prompts/memory.ts`（机制见 [memory](../core/memory.md)）。压缩触发的五个比例不在 defaultConfig 里（`sessions` 段的 `contextTokens`/`compactPackRatio`/`compactAheadRatio`/`compactAtRatio`/`compactPanicRatio`/`compactTargetRatio`/`toolResultKeep` 均可选），五条默认值集中定义在 core `session/waterlines.ts` 的 `WATERLINE_DEFAULTS`（省略线 0.70 / 预压线 0.75 / 黄线 0.80 / 红线 0.90 / 目标 0.33），由 `resolveWaterlines` 按 budget 解析成一次 run 的完整阈值表：`executeRun` 在每个 run 开始时解析一次，压缩内置 hook 与压缩引擎 `Compactor` 使用的都是解析结果，各个读取处不单独写默认值。上下文 budget 的 128000 回退值在 `resolveContextTokens`（core `storage/config.ts`）。确认超时来自 `config.permissions.confirmTimeoutMs`，默认 `300_000`（300 秒，`packages/core/src/storage/config.ts` 的 defaultConfig）。
 
-## 核心流程
+## 流程
 
 ### submit：三处置同步决策
 
@@ -190,7 +192,7 @@ retry(sessionId, fromMessageId, text, attachments?)
         → 出队队首（queue.jsonl 同步删除，整文件重写）→ #executeEntry 执行 → 继续
 ```
 
-出队执行的条目在 `#executeEntry` 里登记活动 controller（在任何 await 之前完成，取消所需的登记永远不晚于出队），并把本 run 的 outcome 记为 `#activeOutcomes`（steer 的参考 outcome 与降级时序依赖它）。出队阶段的意外失败（queue.jsonl 写入失败，如会话被删、磁盘已满）不允许出现两种故障形态：会话永久停滞（残留的驱动器登记让后续 submit 全部幂等返回，队列无人处理），或循环 promise 直接以异常结束、无人处理。处理方式：已出队条目的 outcome 以该错误拒绝，条目本身**放回队首**。写入抛出错误意味着 queue.jsonl 也没有写成，放回后内存与磁盘重新一致，条目留在队列等待下一次出队重试，不会被此后任何一次成功的持久化悄悄覆盖掉；同时补发条目级失败事件 `run.failed {error.code:"queue_entry_failed"}`（见"边界与出错"）；`#drivers` 同步删除（下一次 submit 重新启动驱动器，自动恢复），错误日志只打印一次（`kclaw run queue driver … crashed:`）。
+出队执行的条目在 `#executeEntry` 里登记活动 controller（在任何 await 之前完成，取消所需的登记永远不晚于出队），并把本 run 的 outcome 记为 `#activeOutcomes`（steer 的参考 outcome 与降级时序依赖它）。出队阶段的意外失败（queue.jsonl 写入失败，如会话被删、磁盘已满）不允许出现两种故障形态：会话永久停滞（残留的驱动器登记让后续 submit 全部幂等返回，队列无人处理），或循环 promise 直接以异常结束、无人处理。处理方式：已出队条目的 outcome 以该错误拒绝，条目本身**放回队首**。写入抛出错误意味着 queue.jsonl 也没有写成，放回后内存与磁盘重新一致，条目留在队列等待下一次出队重试，不会被此后任何一次成功的持久化悄悄覆盖掉；同时补发条目级失败事件 `run.failed {error.code:"queue_entry_failed"}`（见"错误处理"）；`#drivers` 同步删除（下一次 submit 重新启动驱动器，自动恢复），错误日志只打印一次（`kclaw run queue driver … crashed:`）。
 
 ### #executeEntry → executeRun（core）：一次 run 的组装
 
@@ -292,19 +294,22 @@ daemon 启动时对每个 queue.jsonl 非空的会话调用：整体重排为内
 3. 写回：`title.trim().slice(0, 30)`，空串放弃；**写回前重新读取 meta**：生成期间用户可能已手动改名，此时标题已经变成 `"新会话"` 以外的值，就放弃写回。
 4. 更名成功才 `emit(makeEvent("session.renamed", { title, source: "auto" }, { sessionId }))`（注入的是 `busEmit`）；失败静默（catch 空处理，保持默认标题）；不阻塞 run（`void scheduleAutoname(...)`，不 await）。
 
-## 边界与出错
+## 限制
 
-- **enqueue 的 promise 对 provider 错误不 reject**（`runAgent` 内部转换为 `run.failed` + `RunOutcome.stopReason:"error"`）。**错误帧只用于同步失败**：`submit` 抛出错误（队列满 / 会话不存在 / subagent 只读 / 唤醒 budget 耗尽）发生在 ack 之前，ws 层当场返回 error 帧、无 ack；处置字段非法在更早的 ws 帧校验就被拒掉，同样是同步 error 帧。ack 之后，ws 层不等待 `submit().outcome`（发出即返回），run 级与持久化级的**迟到失败不发迟到帧**，经总线事件到达订阅客户端：run 级失败走循环的 `run.failed`；出队持久化失败与条目执行失败（循环的 `run.failed` 覆盖不到的两类）走 RunManager 补发的 `run.failed {error:{code:"queue_entry_failed", message 含 messageId 与原因}}`。
-- **队列已满是同步拒绝**：`submit` 在入队前检查上限（排队 + steer 缓冲合计 10），超限直接抛出 `队列已满（10 条）`，ws 层返回 error 帧、无 ack，被拒绝的消息不会留在队列里。上限不分池：steer 与 wait 共用同一个名额池，steer 占满名额的风险由"steer 注入前可单条删除"解决（排队气泡可见、可删）。
-- **排队取消是三态的**：命中删除 / `injected`（近期已注入，已写入 JSONL，系统不删除历史）/ `not_found`（无此条目，或它的注入记录已从有界集合中移出）。判定依赖 `#injectedIds`：全部会话共用的一个有界集合，注入时登记，超过 `QUEUE_LIMIT×2`（20 条）时移除最早的记录；重启后集合清空，恢复条目尚未注入前取消仍是合法的。
-- **附件路径的第二道检查会终止整条 run**：正常情况下 ws 帧层已经在入队之前拒绝越界的附件引用；如果有越界路径绕过了帧层到达 `mountAttachments`（比如直接调用 enqueue 的代码没做检查），这里抛出的错误让本次 run 以异常结束：await 该 outcome 的调用方看到 reject，订阅客户端经 `queue_entry_failed` 事件看到失败（见下一条）。steer 注入走的是另一条失败路径：`#drainSteer` 先构建后变更，任一条构建失败即整批留在缓冲区、没有一部分先进入历史（异常沿 hook 链传播，run 以 `run.failed "steering_failed"` 按正常流程失败，调用方拿到的 outcome 正常 resolve、stopReason 为 `error`），缓冲区里的条目仍可取消、可重试注入；注入前 run 先结束的，残余条目降级入队后走到同一出队执行路径，组装段同步抛出错误时同样补发 `queue_entry_failed`。
-- **条目级失败有可见性事件（`queue_entry_failed`）**：两类失败发生时循环的 `run.failed` 覆盖不到：出队持久化失败（run 还没开始）与条目执行在组装段同步抛出的错误（如降级后的坏附件，`mountAttachments`/读历史在 `runAgent` 之前就抛出错误；进入模型循环前的系统提示词审计写入 `appendSystem` 同属此类，写入失败即本次 run 失败，与消息写入失败的处理一致，不会被静默忽略）。驱动器在这两条路径上补发 `run.failed {error:{code:"queue_entry_failed", message}, messageId}`（message 含 `messageId` 与原因，sessionId 级事件；run 没有开始，事件不带 runId，等待结果的发送方根据 payload 的 `messageId` 识别这次失败），已 ack `queued:true` 的消息不会悄无声息地消失；出队持久化失败还伴随条目退回队首（内存与 queue.jsonl 保持一致，等待重试）。
-- **确认裁决不进入任何队列**：`broker.resolve` 对已出结果/已过期的条目返回 false 并回复 `unknown confirmation`，不记录"迟到的意见"。确认卡等待期间 steer 照常入缓冲区；run 在等确认期间不迭代，注入发生在确认解决后的下一个迭代边界，没有特殊路径。
+- **确认裁决不进入任何队列**：`broker.resolve` 对已出结果或已过期的条目返回 false 并回复 `unknown confirmation`，不记录迟到的意见。确认卡等待期间 steer 照常入缓冲区；run 在等确认期间不迭代，注入发生在确认解决后的下一个迭代边界。
 - **自动命名没有去重锁**：同一会话两次快速入队理论上可能并发两次命名，写回前重新读取并校验，保证只有第一次生效（后到的一次发现标题已经改成默认值以外的内容，就放弃）。
 - **`resolveConfirmation` 测试注入点优先于 broker**：设置后 broker 只负责登记；生产环境不设置这个注入点。
+
+## 错误处理
+
+- **enqueue 的 promise 对 provider 错误不 reject**（`runAgent` 内部转换为 `run.failed` 与 `stopReason:"error"`）。**错误帧只用于同步失败**：`submit` 抛出错误（队列满、会话不存在、subagent 只读、唤醒 budget 耗尽）发生在 ack 之前，ws 层当场返回 error 帧、无 ack；处置字段非法在更早的 ws 帧校验就被拒掉，同样是同步 error 帧。ack 之后，ws 层不等待 `submit().outcome`（发出即返回），run 级与持久化级的迟到失败不发迟到帧，经总线事件到达订阅客户端：run 级失败走循环的 `run.failed`；出队持久化失败与条目执行失败（循环的 `run.failed` 覆盖不到的两类）走 RunManager 补发的 `run.failed {error:{code:"queue_entry_failed", message 含 messageId 与原因}}`。
+- **队列已满是同步拒绝**：`submit` 在入队前检查上限（排队与 steer 缓冲合计 10），超限直接抛出 `队列已满（10 条）`，ws 层返回 error 帧、无 ack，被拒绝的消息不会留在队列里。上限不分池：steer 与 wait 共用同一个名额池，steer 占满名额的风险由"steer 注入前可单条删除"解决（排队气泡可见、可删）。
+- **排队取消是三态的**：命中删除、`injected`（近期已注入，已写入 JSONL，系统不删除历史）、`not_found`（无此条目，或它的注入记录已从有界集合中移出）。判定依赖 `#injectedIds`：全部会话共用的一个有界集合，注入时登记，超过 `QUEUE_LIMIT×2`（20 条）时移除最早的记录；重启后集合清空，恢复条目尚未注入前取消仍是合法的。
+- **附件路径的第二道检查会终止整条 run**：正常情况下 ws 帧层已经在入队之前拒绝越界的附件引用；如果有越界路径绕过了帧层到达 `mountAttachments`，这里抛出的错误让本次 run 以异常结束：await 该 outcome 的调用方看到 reject，订阅客户端经 `queue_entry_failed` 事件看到失败。steer 注入走的是另一条失败路径：`#drainSteer` 先构建后变更，任一条构建失败即整批留在缓冲区、没有一部分先进入历史（异常沿 hook 链传播，run 以 `run.failed "steering_failed"` 按正常流程失败），缓冲区里的条目仍可取消、可重试注入；注入前 run 先结束的，残余条目降级入队后走到同一出队执行路径，组装段同步抛出错误时同样补发 `queue_entry_failed`。
+- **条目级失败有可见性事件（`queue_entry_failed`）**：两类失败发生时循环的 `run.failed` 覆盖不到：出队持久化失败（run 还没开始）与条目执行在组装段同步抛出的错误（如降级后的坏附件，`mountAttachments` 与读历史在 `runAgent` 之前就抛出错误；进入模型循环前的系统提示词审计写入 `appendSystem` 同属此类）。驱动器在这两条路径上补发 `run.failed {error:{code:"queue_entry_failed", message}, messageId}`（sessionId 级事件；run 没有开始，事件不带 runId，等待结果的发送方根据 payload 的 `messageId` 识别这次失败），已 ack `queued:true` 的消息不会悄无声息地消失；出队持久化失败还伴随条目退回队首（内存与 queue.jsonl 保持一致，等待重试）。
 - **压缩与用量记录失败都不影响 run 的结果**：自动压缩的摘要调用或 meta 写入失败时以 failed 结果返回、运行照常继续（事件 `completed {result:"failed"}`；`kclaw compaction (<阶段>) failed:` 日志）；段索引写入与审计追加失败只留一行日志、压缩照常生效；用量记录失败只留一行日志（`kclaw usage record failed:`）；跟随检查排期失败静默（不打印、不阻塞）。以上任何一种失败 run 都照常返回 outcome。
 
-## 关联
+## Reference
 
 - [agent-loop](../core/agent-loop.md)：runAgent 状态机、确认的循环侧超时等待、6 个 abort 检查点、attachment 块进模型视图的转换
 - [permissions](../core/permissions.md)：ConfigPermissionGate 的判定链与 `conf_*` id 的签发；mode/decidedRules/readRoots 三处组装输入

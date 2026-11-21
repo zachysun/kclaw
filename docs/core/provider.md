@@ -1,6 +1,8 @@
 # provider — LLM 接入层（OpenAI 兼容与 Anthropic Messages 两种线上协议）
 
-## 职责
+把调用一个大语言模型收敛成一个最小接口：输入一次对话请求，输出一串流式事件。本篇讲两种线上协议的适配、流式解析、超时与重试；请求的上下文组装见 [agent-loop](./agent-loop.md)。
+
+## 作用
 
 `packages/core/src/provider/` 把"调用一个大语言模型"收敛为一个最小接口 `LlmClient`：输入一次对话请求，输出一串流式事件。它只做这几件事：
 
@@ -29,7 +31,7 @@
 
 ---
 
-## 接口
+## 数据与接口
 
 ```ts
 // packages/core/src/provider/types.ts
@@ -128,7 +130,7 @@ export function createProviderResolver(cfg: KclawConfig, fetchImpl?: typeof fetc
 
 ---
 
-## 核心流程
+## 流程
 
 一次 `stream()` 调用（经 `withRetry` 包装）从请求构造到 `message_done` 的完整路径，1–5 节分别展开各环节：
 
@@ -283,16 +285,17 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 
 ---
 
-## 边界与出错
+## 限制
 
-- **重试耗尽**：`stream()` 抛出最后一个错误 → 循环把部分内容以 `stopReason:"error"` 持久化并发 `run.failed`；`runAgent` 对 provider 错误永不 reject（见 [agent-loop](./agent-loop.md)）。
-- **流中断在工具调用中间**：已发过 `tool_call_started` 但流中断 → 循环为悬空调用合成 error result，保证历史里 tool_call 永远有配对结果（OpenAI 兼容 API 对无配对 tool_call 的下轮请求回 400）。
-- **错误体读失败的双重处理**：超时后的读失败按超时报告；超时前的读失败忽略，以保住状态行分类（见上表）。
 - **已知限制**：SSE 只处理 `data:` 行（注释行、事件名行忽略）；`finish_reason` 出现在非末 chunk 时以最后见到的一次为准；重试不重放 HTTP 请求体（每次都是全新请求）。
 
----
+## 错误处理
 
-## 关联
+- **重试耗尽**：`stream()` 抛出最后一个错误，循环把部分内容以 `stopReason:"error"` 持久化并发 `run.failed`；`runAgent` 对 provider 错误永不 reject（见 [agent-loop](./agent-loop.md)）。
+- **流中断在工具调用中间**：已发过 `tool_call_started` 但流中断，循环为悬空调用合成 error result，保证历史里 tool_call 永远有配对结果（OpenAI 兼容 API 对无配对 tool_call 的下轮请求回 400）。
+- **错误体读失败的双重处理**：超时后的读失败按超时报告；超时前的读失败忽略，以保住状态行分类（见上表）。
+
+## Reference
 
 - [agent-loop](./agent-loop.md)：处理 `LlmStreamEvent` 的一侧
 - [tools](./tools.md)：`ToolDefinition` 的生产方与 `argsJson` 的最终解析方

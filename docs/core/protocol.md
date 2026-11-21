@@ -1,12 +1,10 @@
 # protocol — 消息 / 内容块 / 事件 / 指令帧协议
 
-## 职责
+全系统共用的一套数据形状：消息、内容块、总线事件、WS 指令帧、会话事件与 ID 体系。本篇讲三层协议的分工与持久化规则；逐类型的字段陈列在 [reference](../reference/README.md)。
 
-`packages/core/src/protocol/` 定义贯穿全系统的数据模型，按粒度分层：核心生命周期 `messages.ts`（持久化单位；持久化 = 写入磁盘长期保存，另带 `mergeUsage`，即 run 内 usage 折叠的单一出处）、`blocks.ts`（消息内结构化片段）、`events.ts`（瞬时广播）、`wire.ts`（WS 指令帧与应答帧）、`session-events.ts`（会话事件流的持久化事件类型）、`ids.ts`（ID 体系），领域形状 `team.ts`（团队域）、`mcp.ts`（MCP 快照）、`skills.ts`（技能暂存）、`goal.ts`（/goal 视图）、`usage.ts`（`GET /usage` 的响应形状）、`ui-cards.ts`（UI 卡 DSL：`ui_render` 工具结果 `data` 通道里的卡片形状，web 渲染与 core 校验共用；另含两个共用判定——`isUiCardData` 判别一段 data 是不是卡、`cardInteractiveNodes` 数卡内的按钮/表单节点，meta 待拍板投影、`ui_read` 与 web 待拍板条都走它们）、`changes.ts`（改动抽屉：`GET /sessions/:id/changes` 按文件聚合的改动记录与 `/changes/file` 的当前全文回包）。三层按生命周期划分：
+## 作用
 
-```
-Event（瞬时，不持久化）──记录为──▶ Message（持久化单位）──内含──▶ Block（结构化片段）
-```
+`packages/core/src/protocol/` 定义贯穿全系统的数据模型，按粒度分层：核心生命周期 `messages.ts`（持久化单位；持久化 = 写入磁盘长期保存，另带 `mergeUsage`，即 run 内 usage 折叠的单一出处）、`blocks.ts`（消息内结构化片段）、`events.ts`（瞬时广播）、`wire.ts`（WS 指令帧与应答帧）、`session-events.ts`（会话事件流的持久化事件类型）、`ids.ts`（ID 体系），领域形状 `team.ts`（团队域）、`mcp.ts`（MCP 快照）、`skills.ts`（技能暂存）、`goal.ts`（/goal 视图）、`usage.ts`（`GET /usage` 的响应形状）、`ui-cards.ts`（UI 卡 DSL：`ui_render` 工具结果 `data` 通道里的卡片形状，web 渲染与 core 校验共用；另含两个共用判定：`isUiCardData` 判别一段 data 是不是卡、`cardInteractiveNodes` 数卡内的按钮/表单节点，meta 待拍板投影、`ui_read` 与 web 待拍板条都走它们）、`changes.ts`（改动抽屉：`GET /sessions/:id/changes` 按文件聚合的改动记录与 `/changes/file` 的当前全文回包）。三层按生命周期划分：Event 是瞬时广播，不持久化；Message 是持久化单位；Block 是消息内部的结构化片段。事件可以记录成一条 Message，Message 又由若干 Block 组成。
 
 server 与 CLI/WebUI 之间传输的就是这些类型：JSONL（每行一条 JSON 的文本文件）里每行一条 `Message`，WS（WebSocket：建立后可双向收发消息的长连接，服务器能主动推送）事件流里每帧一个 `AgentEvent`，daemon 不翻译、不改写。
 
@@ -101,16 +99,14 @@ export function newId(prefix: IdPrefix): string {
 
 ---
 
-## 边界与出错
+## 限制
 
-- 实时事件无 ack、无重发：客户端错过的增量事件不补发，靠「HTTP 拉全量 + 只订阅新事件」补齐，实时通道不做回放（回放由 events.jsonl 这份唯一权威数据承担，`GET /sessions/:id/events` 可按会话回查整条事件流）。
-- `message.created` 之后消息可能永远不 `completed`（空 assistant 被丢弃、宿主 hook 抛出错误），客户端不能假设 created 必有 completed 配对。
-- `AgentEvent.sessionId` 缺失即广播语义（`EventBus.emit` 发给全部已连接 socket），客户端不应把它当异常。
-- `attachment` 的 `file` source 指向 `<home>/attachments/<session-id>/`：客户端先把文件传到该目录（HTTP `POST /sessions/:id/attachments`），发起消息时引用路径、由服务端挂载为块（见 [run-manager](../server/run-manager.md)）；大文件不进 JSONL，JSONL 里只有指向磁盘的元数据。
+- **实时事件无 ack、无重发**：客户端错过的增量事件不补发，靠"HTTP 拉全量 + 只订阅新事件"补齐，实时通道不做回放（回放由 events.jsonl 这份权威数据承担，`GET /sessions/:id/events` 可按会话回查整条事件流）。
+- **`message.created` 之后可能永远不 `completed`**：空 assistant 被丢弃、宿主 hook 抛出错误时都会这样，客户端不能假设 created 必有 completed 配对。
+- **`AgentEvent.sessionId` 缺失即广播语义**：`EventBus.emit` 发给全部已连接 socket，客户端不应把它当异常。
+- **附件正文不进 JSONL**：`attachment` 的 `file` source 指向 `<home>/attachments/<session-id>/`，客户端先把文件传到该目录（HTTP `POST /sessions/:id/attachments`），发起消息时引用路径、由服务端挂载为块（见 [run-manager](../server/run-manager.md)）；JSONL 里只有指向磁盘的元数据。
 
----
-
-## 关联
+## Reference
 
 - [agent-loop](./agent-loop.md)：谁在什么时机发这些事件
 - [reference](../reference/README.md)：全部枚举与清单的陈列

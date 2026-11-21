@@ -1,6 +1,8 @@
 # client-http — 客户端共享的 HTTP 请求模块
 
-## 职责
+CLI 与 WebUI 连 daemon 用的同一份 HTTP 请求实现，负责携带 token、序列化请求体、提取错误。本篇讲它的接口与四条行为约定；两个客户端各自的请求入口见 [cli](../cli/cli.md) 与 [webui](../web/webui.md)。
+
+## 作用
 
 `packages/core/src/client-http.ts` 是所有 daemon 客户端（CLI 的 `KclawClient`、WebUI 的 `api.ts`）共用的 HTTP 请求模块，经 `@kclaw/core/client-http` 子路径出口对外发布。它把每处客户端都要重复写的同一套请求逻辑收敛成一份：Bearer 注入、JSON body 序列化、非 2xx 的错误提取、401 hook、204/空响应解析。
 
@@ -13,7 +15,7 @@
 - **token 每次请求重取**：`getToken` 在每次请求时重新求值，所以 401 后重新输入、token 轮换立即对下一次请求生效，不需要重建客户端；返回 `null` 就不发 `Authorization` 头。
 - **contentType 是"原样透传"开关**：设置它时 body 不 JSON 序列化、按原始字节流发送，附件上传（CLI 的 `uploadAttachment`、WebUI 的 `upload`）用它传文件本体。
 
-## 接口
+## 数据与接口
 
 ```ts
 // packages/core/src/client-http.ts
@@ -39,12 +41,15 @@ export async function httpRequest(url: string, init: HttpRequestInit): Promise<u
 - **CLI**（`packages/cli/src/client.ts`）：`request()` 与 `uploadAttachment()` 都经 `httpRequest` 实现：前者发 JSON、后者带 `contentType` 发原始字节流。CLI 不传 `onUnauthorized`（没有 401 重入流程），`getToken` 恒返回 `<home>/token` 读到的 token。
 - **WebUI**（`packages/web/src/api.ts`）：`createApi` 的 `get/post/patch/del/upload` 全部经 `httpRequest`。URL 解析（空 base = 同源，daemon 自己托管 SPA）与 401 重入 hook（App 清除 token、回 token 输入页）是 web 本地逻辑，留在 `api.ts` 里；`ApiError` 现在就是 `HttpRequestError` 的别名导出（同一个构造函数，`instanceof` 判断不变）。
 
-## 边界与出错
+## 限制
 
-- **错误消息优先服务端文案**：响应体是合法 JSON 且 `error` 字段是字符串时用它；否则（如网关层返回的非 JSON 页面）退回 `HTTP <status>`。
 - **浏览器安全是硬约束**：本模块不允许出现 `node:*` import，否则 WebUI 打包会失败。
 
-## 关联
+## 错误处理
+
+- **错误消息优先服务端文案**：响应体是合法 JSON 且 `error` 字段是字符串时用它；否则（如网关层返回的非 JSON 页面）退回 `HTTP <status>`。
+
+## Reference
 
 - [http-api](../server/http-api.md)：服务端路由与统一错误形状 `{error: string}`（本模块提取的来源）
 - [protocol](./protocol.md)：与 protocol 相同的「权威类型 + 子路径出口」模式

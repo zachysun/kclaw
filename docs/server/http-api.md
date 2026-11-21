@@ -1,6 +1,8 @@
 # http-api — HTTP 路由
 
-## 职责
+daemon 对外暴露的全部 HTTP 接口，统一走一个鉴权钩子。本篇逐组列出方法、路径与请求响应要点；WS 端点的帧协议见 [realtime](./realtime.md)，客户端共用的请求模块见 [client-http](../core/client-http.md)。
+
+## 作用
 
 `packages/server/src/app.ts` 的 `createApp` 组装 daemon 的 Fastify 应用：一个全局鉴权 hook 加 92 个业务路由（健康/状态 2 个、会话 24 个、改动记录 2 个、记忆 14 个、技能 16 个、hook 1 个、权限 2 个、附件 3 个、任务 4 个、配置 2 个、provider 管理 7 个、目录浏览 2 个、用量 1 个、MCP 管理 6 个、IM Channel 管理 4 个、检索 1 个、WS 1 个）与可选的静态托管。路由实现分在 `packages/server/src/routes/`（`sessions.ts`、`changes.ts`、`attachments.ts`、`cron.ts`、`config.ts`、`providers.ts`、`fs.ts`、`usage.ts`、`memory.ts`、`skills.ts`、`hooks.ts`、`permissions.ts`、`mcp.ts`、`channel.ts`、`search.ts`）；附件与用量两组仅在对应能力注入时才注册（见下文各自小节），记忆组始终注册、未组装时降级 503，技能组始终注册（只读与复用管理无组装依赖；暂存治理子路由族组装后才可用、未组装整体 503），hook 组在未注入 `HookRegistry` 时返回空用户侧，权限组始终注册（已保存的规则以文件为准，见 [permissions](../core/permissions.md)）。本文逐个列出方法、路径、用途与请求/响应关键字段；WS 端点的帧协议见 [realtime](./realtime.md)。
 
@@ -177,7 +179,7 @@ interface Cron {
 | GET | `/memory/daily/projects` | 日报项目列表（各项目最近一份日报的日期，无日报为空串） | — | `{id, workdir, latest}[]` |
 | GET | `/memory/daily/:project` | 某项目的日报日期索引（新到旧） | — | `{dates: string[]}`；项目不存在 404 |
 | GET | `/memory/daily/:project/:date` | 读一天的日报卡片 | — | 日报对象 `{date, windowStart, windowEnd, generatedAt, cards[]}`（卡片 `{kind, title, body, visual?, options[]}`，kind 四值 achievement/lesson/blocker/insight；`visual` 是 UI 卡 DSL 的只读子集、至多 4 个组件，形状见 [memory](../core/memory.md) 的日报节）；日期非 `YYYY-MM-DD` 400、文件不存在 404 |
-| POST | `/memory/daily/:project/regenerate` | 手动重新生成（同步等响应）：该日有文件按原窗重跑覆盖；当天无文件立即按当前窗生成；历史日期无文件或窗内无消息返回 400，不产零卡片文件 | `{date}` 必填（`YYYY-MM-DD`） | `{report}`（重跑后的完整日报对象）；日期非法 400；未知项目 404；`DailyRegenerateError` 的 `no-file`/`empty-window` 状态 400 带说明 |
+| POST | `/memory/daily/:project/regenerate` | 手动重新生成（同步等响应）：该日有文件按原窗重新生成覆盖；当天无文件立即按当前窗生成；历史日期无文件或窗内无消息返回 400，不产零卡片文件 | `{date}` 必填（`YYYY-MM-DD`） | `{report}`（重跑后的完整日报对象）；日期非法 400；未知项目 404；`DailyRegenerateError` 的 `no-file`/`empty-window` 状态 400 带说明 |
 
 `:id`/`:project`/`:topic`/`:file` 的路径段先过白名单校验（`isSafeSegment`：段非空、非 `.`、非 `..`、不含 `/`，拦截目录穿越段；允许 CJK/空格，URL 里已 encodeURIComponent）。非法段返回 400 `invalid segment`；合法段按原样传给 `MemorySystem`，读侧宽容（找不到就 404），写侧是整文件覆写，请求体就是文件的新内容。日报路由的 `:date` 参数走形状校验（`isDailyDate`：必须是 `YYYY-MM-DD`），文件名与路径不进模型输出，穿越风险到此为止。`GET /memory/projects/:id` 的响应包装成 `{id, threads}` 是为前端取数方便（见 [memory](../core/memory.md) 的管理界面一节）。删除类的机器语义：删除的是文件，`vectors.db` 里的对应条目由随后的 reindex 清除。
 
@@ -331,16 +333,16 @@ app.addHook("preHandler", async (request, reply) => {
 - token 错误/缺失一律 `401 {error:"unauthorized"}`，不区分"未附带"与"附带错误"（不向检测者提供信息）。
 - 会话/任务两个分组注册的 `setErrorHandler` 只处理 body 解析类错误（`error.statusCode ?? 500`），不影响鉴权 hook：hook 先于 handler 运行。
 
-## 边界与出错
+## 限制
 
-- **无分页，只有增量**：`GET /sessions` 与 `GET /sessions/:id/messages` 全量返回；`GET /sessions/:id/events` 全量返回但支持 `?since=` 增量游标（append-only 下标）。个人使用规模下接受；审计页的列表渲染在客户端用虚拟滚动（只渲染可视行）承载大会话。
-- **软删除的会话不在默认列表**：`GET /sessions` 默认过滤 `deleted:true`；要操作回收站必须显式 `?deleted=true`（恢复/永久删除路由不区分列表，直接按 id 操作）。
+- **无分页，只有增量**：`GET /sessions` 与 `GET /sessions/:id/messages` 全量返回；`GET /sessions/:id/events` 全量返回但支持 `?since=` 增量游标（append-only 下标）。个人使用规模下接受；审计页的列表渲染在客户端用虚拟滚动承载大会话。
+- **软删除的会话不在默认列表**：`GET /sessions` 默认过滤 `deleted:true`；要操作回收站必须显式 `?deleted=true`（恢复与永久删除路由不区分列表，直接按 id 操作）。
 - **PATCH `/sessions/:id` 的 workdir 是解析但未生效的字段**（源码只把 title 传给 `updateMeta`），API 调用方不应依赖它。
 - **`POST /cron` 的 cron 校验依赖 cron-parser 的报错文本**，客户端展示的是原始英文错误。
-- **并发写无版本控制**：两个客户端同时 PATCH 同一资源是"后写的覆盖先写的"，没有乐观锁（加版本号防并发覆盖的机制）。
-- **上传 ≠ 挂载**：附件这三个路由只负责把字节写到磁盘、列举和下载。附件要真正进入对话，还需要客户端在下一条 send_message 帧里带上这些文件的路径，由 run 的挂载步骤转成模型能读的内容，详见 [realtime](./realtime.md) 与 [run-manager](./run-manager.md)。
+- **并发写无版本控制**：两个客户端同时 PATCH 同一资源是"后写的覆盖先写的"，没有乐观锁。
+- **上传不等于挂载**：附件这三个路由只负责把字节写到磁盘、列举和下载。附件要真正进入对话，还需要客户端在下一条 send_message 帧里带上这些文件的路径，由 run 的挂载步骤转成模型能读的内容，详见 [realtime](./realtime.md) 与 [run-manager](./run-manager.md)。
 
-## 关联
+## Reference
 
 - [daemon](./daemon.md)：鉴权豁免的设计理由、静态托管的配置来源
 - [realtime](./realtime.md)：`/ws` 端点的帧协议
