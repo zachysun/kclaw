@@ -274,7 +274,7 @@ interface SkillEvent {
 
 ### 前端入口
 
-- **WebUI 技能页「暂存」页签**（`SkillsView.tsx`，第三个页签，带待审阅数角标）：列表行 = 名字、种类徽标（新增/修订）、状态徽标、落点（全局 / 项目路径尾段）、创建时间、理由单行截断；状态筛选由服务端 `?status=` 完成，种类筛选在本地完成。详情右栏：title / rationale / changes；修订类把 `baseline` 与 `content` 上下两块对照展示（标注"当前正文（对照） / 暂存内容（完整 SKILL.md）"，不引入 diff 依赖）。操作按钮按状态显隐：采纳（`primary` 填充材质）/ 驳回（`danger` 材质）（proposed）、回退（applied，并显示"采纳后被调用 N 次"）、删除（rejected/reverted）；apply 响应带 `warning` 时用 toast 提示；
+- **WebUI 技能页「暂存」页签**（`SkillsView.tsx`，第三个页签，带待审阅数角标）：列表行 = 名字、种类徽标（新增/修订）、状态徽标、落点（全局 / 项目路径尾段）、创建时间、理由单行截断；状态筛选由服务端 `?status=` 完成，种类筛选在本地完成。详情右栏：title / rationale / changes；修订类把 `baseline` 与 `content` 上下两块对照展示（标注"当前正文（对照） / 暂存内容（完整 SKILL.md）"，不引入 diff 依赖；已采纳的条目左侧换成 `snapshot` 回退快照，即采纳前一刻的正文）。操作按钮按状态显隐：采纳（`primary` 填充材质）/ 驳回（`danger` 材质）（proposed）、回退（applied，并显示"采纳后被调用 N 次"）、删除（rejected/reverted）；apply 响应带 `warning` 时用 toast 提示；
 - **CLI `/skill` 命令族**（`slash.ts`）：只读子命令 `/skill pending`（列表，带状态标记与采纳后调用次数）与 `/skill pending <id>`（详情与完整暂存内容）；治理操作只在 WebUI。
 
 ## 数据与接口
