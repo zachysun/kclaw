@@ -54,7 +54,7 @@ run 的扩展点收进一组固定位置，内置行为与用户写的 hook 挂�
 - **排序**：`meta.order` 升序，同序按名字稳定排序（改写链依赖确定性）。
 - **真链式改写**：改写位置的返回值回填进 ctx 的改写字段（`run-before` 的 `message`、`llm-before` 的 `messages`、`system-after` 的 `system`），下一个 handler 看到的是改写后的值。这保证"用户改写在前、内置持久化在后"时，持久化写入的是改写后的消息。回填只发生在链内部，调用方传入的 ctx 对象本身不被改动。
 - **追加型位置**：`system-before` 的返回值是段落**数组**，多个 hook 的段落依次拼接，互不覆盖。
-- **执行审计**：每条实际执行的钩子（正常返回、抛出错误、超时三种结果都记）写入一条 `hook` 持久化事件（`name` / `position` / `origin` / `outcome` / `durationMs` / `runId?`，由 runner 的 `onExecuted` 回调交给 `SessionStore.appendHook` 写入；回调自身抛出错误不影响链继续执行），与 `hook.failed` 总线事件分工：总线是实时通道（仅失败），事件流是权威记录（全量）。见 [storage](./storage.md) 的钩子审计一节。
+- **执行审计**：每条实际执行的钩子（正常返回、抛出错误、超时三种结果都记）写入一条 `hook` 持久化事件（`name` / `position` / `origin` / `outcome` / `durationMs` / `runId?`，由 runner 的 `onExecuted` 回调交给 `SessionStore.appendHook` 写入；回调自身抛出错误不影响链继续执行），与 `hook.failed` 总线事件分工：总线是实时通道（仅失败），事件流是权威记录（全量）。见 [storage](./storage.md)「会话目录与 events.jsonl」里的事件清单。
 - **失败分派**：抛出错误/超时按 `meta.failure` 分派。`fatal` 让整次 `run()` 拒绝（循环既有的各位置 catch 路径接管，错误码保持原样：`user_message_failed`、`steering_failed` 等）；`skip` 发 `hook.failed {phase:"run"}` 后继续下一个 handler；`deny` 同样发事件并继续执行完链（后面的观察者不丢），但经 `runGate` 出口把首个失败记为**否决**：`tool-before` 位置上循环据此给该工具写拒绝结果（错误结果 + `denied` note，工具不执行，run 继续）。
 - **超时**：每个 handler 都按 `config.hooks.timeoutMs`（默认 5000ms）计时，超时即算失败，走同样的 fatal/skip/deny 分派。条目可用 `meta.timeoutMs` 覆盖链 budget（`Infinity` = 不限时）：五个内置压缩 hook（background-precompact / mid-run-panic / overflow-emergency / manual-compact-flush / post-run-compaction）声明了不限时：它们的函数体是两次 provider 调用，时长由 LLM 决定；时长上限由 provider 单请求超时与 run 中止信号保底。
 - **空位置零开销**：没有注册任何 handler 的位置同步短路返回 `undefined`，`has()` 为 false（循环据此判断要不要走进某个分支，如 overflow-rescue）。

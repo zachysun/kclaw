@@ -317,7 +317,7 @@ CLI 的 `/memory` 只读命令见 [cli](../cli/cli.md)，Web 记忆页见 [webui
 - **归属规则**：memory 事件归属**触发会话**的目录：immediate（`memory_save` 工具）显式带会话；manual（`/memory save` 或 `POST /memory/trigger-manual`，HTTP 路由可选 `sessionId` 覆盖、CLI/web 命令不传）与 nightly 默认**回退到该项目最近活动会话**（`recentSessionId`，不选 subagent 会话）；interval **无显式归属**：pipeline 对全部会话（不含 subagent 会话）逐个补增量，各批次的 memory 事件归属**各自来源会话**；clear 归属**创建新会话前的项目最近活动会话**（即用户刚离开的旧会话，`POST /sessions` 路由在创建前取好传入）；follow 归属**发起该检查的会话**（check.sessionId；subagent run 不安排检查）；admin（记忆页的覆写/删除）归属"最近活动会话"：线文件操作归属该项目最近活动会话、全局认知操作归属**全局**最近活动会话。找不到归属会话时跳过（不写事件）。
 - **subagent 会话完全隔离**（设计原则：把 subagent 当成工具对待）：meta 带 `parentSessionId` 的会话不进任何提取路径，interval 扫描不列它、`recentSessionId`/`recentGlobalSessionId` 回退到不选它、follow-check 不为它安排检查（run 组装的 hook 直接跳过，见 [hooks](./hooks.md)）；subagent 的工具清单里也没有 `memory_save`。subagent 的过程不写入长期记忆（见 [subagents](./subagents.md)）。
 - **事件体不带 `sessionId` 字段**：会话由事件所在目录决定，payload 里没有它。
-- **不推进投影 `updatedAt`**：`applyEvent` 对 `memory` 事件不更新任何投影字段（见 [storage](./storage.md) 的 events.jsonl 一节）。
+- **不推进投影 `updatedAt`**：`applyEvent` 对 `memory` 事件不更新任何投影字段（见 [storage](./storage.md)「会话目录与 events.jsonl」一节）。
 - 可通过 `GET /sessions/:id/events` 查询某会话的完整事件流（含 memory 事件），web 审计页把它们渲染成"记忆"行（见 [http-api](../server/http-api.md) 与 [webui](../web/webui.md)）。
 
 ## 限制

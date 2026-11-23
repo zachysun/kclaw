@@ -281,7 +281,7 @@ anthropic 格式的 `stop_reason` 本就是协议取值（`end_turn` / `max_toke
 | `maxOutput` | 单次回复的输出上限（token 数）。声明后随每次请求作为 `max_tokens` 下发，模型单轮最多产出这么多 | 无（不随请求下发） |
 | `promptCache` | 提示词缓存标记开关：`auto` 按请求的 `promptCache` 字段加缓存标记，`off` 即使请求带也不加（对陌生字段回 400 的端点由此显式关闭）；标记位置见上文 1/1b 节，端点回 400 的自动退避见 2b 节。配置值不属于这两个枚举时告警并按 `auto` 处理 | `auto` |
 
-有效 budget 的解析集中在 `resolveContextTokens`（`packages/core/src/storage/config.ts`）一处：压缩的触发线、压缩器与组装时的省略 budget 全部经它取值，某个模型窗口更紧时会一起收紧，不会出现"压缩按 128000 算、模型实际只有 8 万"的错位。模型行解析分两层（同上文件）：`resolveRunModelLine` 收拢优先级链（显式 run 模型 → 会话模型 → 默认条目当前模型 → daemon 启动时解析的模型），`resolveRunModel` 负责条目解析并返回 `{model, entryKey, budget, maxOutput?}`：`model` 是发往 provider 的线上模型名（条目名 → 条目的 `.model`，匹配不到条目的名字原样通过），`budget` 即上述有效budget，`maxOutput` 有才带；两个调用方（run 组装与手动压缩路径）都走 `resolveRunModelLine`，优先级与 budget 口径不可能分叉。模型条目解析的优先级与回退链见 [architecture](../architecture.md) 的数据流一节。
+有效 budget 的解析集中在 `resolveContextTokens`（`packages/core/src/storage/config.ts`）一处：压缩的触发线、压缩器与组装时的省略 budget 全部经它取值，某个模型窗口更紧时会一起收紧，不会出现"压缩按 128000 算、模型实际只有 8 万"的错位。模型行解析分两层（同上文件）：`resolveRunModelLine` 收拢优先级链（显式 run 模型 → 会话模型 → 默认条目当前模型 → daemon 启动时解析的模型），`resolveRunModel` 负责条目解析并返回 `{model, entryKey, budget, maxOutput?}`：`model` 是发往 provider 的线上模型名（条目名 → 条目的 `.model`，匹配不到条目的名字原样通过），`budget` 即上述有效budget，`maxOutput` 有才带；两个调用方（run 组装与手动压缩路径）都走 `resolveRunModelLine`，优先级与 budget 口径不可能分叉。模型条目解析的优先级与回退链见 [architecture](../architecture.md) 的端到端流程第 2 步。
 
 ---
 

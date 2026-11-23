@@ -238,7 +238,7 @@ steer 条目被 `submit` 放进 `#steerBuf` 后，目标 run 在**迭代边界**
       │      ws.ts 回 confirmation.resolved_ack；循环发 confirmation.resolved
       │      （裁决的全部后果：project/global 的沉淀规则写文件、写审计记录、once 授权、
       │      auto 归纳，都集中在 run 组装的 resolveConfirmation 一处，见
-      │      [permissions](../core/permissions.md) 的确认网关一节；once/reject/未知 id 不写文件）
+      │      [permissions](../core/permissions.md) 的「人工确认流程」一节；once/reject/未知 id 不写文件）
       ├─ 300s 超时：循环按拒绝处理（note「确认超时，操作未执行」）；
       │    引擎侧同超时 → broker.expire → 条目作废
       └─ run.cancel 的 abort：循环不发 confirmation.resolved（取消≠超时拒绝），

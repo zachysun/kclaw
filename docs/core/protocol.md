@@ -112,4 +112,4 @@ export function newId(prefix: IdPrefix): string {
 - [reference](../reference/README.md)：全部枚举与清单的陈列
 - [storage](./storage.md)：JSONL 崩溃安全与路径布局
 - [realtime](../server/realtime.md)：EventBus 的订阅与广播实现
-- [architecture](../architecture.md)：三层协议在全局数据流中的位置
+- [architecture](../architecture.md)：三层协议在端到端流程中的位置
