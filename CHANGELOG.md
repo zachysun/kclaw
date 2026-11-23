@@ -5,6 +5,103 @@ All notable changes to kclaw are documented in this file. The format is based on
 [semantic versioning](https://semver.org/) — note that the 0.x series makes no
 compatibility promises.
 
+## [0.8.0] - 2026-11-23
+
+### Added
+
+- **Terminal chat surface** — `kclaw chat` now renders through ink when both
+  stdin and stdout are terminals: pinned history, a live area for streaming
+  text, thinking and running tools, a persistent input editor with slash and
+  file-mention completion, history search, confirmation/question/choice
+  cards, a transcript overlay fetched from the daemon, a status line and a
+  run-aware terminal title. Pipes and partial TTYs keep the readline
+  surface, so scripts see the same behaviour as before.
+- **`kclaw run` and `kclaw session list`** — the scriptable one-shot surface:
+  `kclaw run [prompt...]` reads a prompt from arguments, a bare pipe or `-`,
+  rides a piped attachment alongside a prompt, picks the session with
+  `--session` / `--continue` / `--fork` / a new workdir session, writes
+  `--cwd` / `--attach` / `--model` / `--mode` before sending and emits text,
+  `json` or `stream-json`. Exit codes are 0/1/2 plus 128+signal, and
+  SIGINT/SIGTERM/SIGHUP/EPIPE stop only its own message. `session list
+  --json` prints sessions aligned by display width with control characters
+  neutralized.
+- **Daily reports** — a scheduled per-project digest: core gains a daily
+  module (card types, lenient parse, report files), the memory scheduler
+  runs it on the project lock with `config.daily.{hour,intervalDays}`, and
+  the web app gets a Daily tab with project list, date paging, card feed,
+  option-click to create a seeded session, settings and regenerate controls.
+- **Richer UI cards** — generative UI round two: a deferred `ui_read` tool
+  hands the model back the cards a session already produced (compaction
+  cannot strand a "what was on row three" question any more), decision
+  answers carry a `decision` flag and a `[UI Card]` text prefix, unresolved
+  cards project through `meta.uiPending` into a session badge and a
+  pending bar pinned above the composer, and the card DSL grows line charts
+  and stat tiles.
+- **Provider setup through a live daemon** — the daemon starts without a
+  provider, so the Model tab and the first-run wizard configure it against a
+  running instance. `GET /providers` reports `configured`, and
+  `POST /providers/probe` runs the probe from the daemon.
+- **Team provenance notes** — every team dispatch (mailbox, task, resume
+  nudge, lead inbox) carries a `kind:"team"` note, matching the cron,
+  process, subagent and goal runs, so clients can tell machine-sent from
+  user-typed messages.
+- **Memory page hierarchy** — projects expand their topic threads indented
+  under their own row, rows separate name from metadata, the editor headline
+  shows the human title over the topic slug, and the page scrolls in-pane
+  like the audit page.
+- **Soft-light visual redesign** — paper becomes the default light theme;
+  phantom and amber follow the same language. Shared tokens cover layered
+  soft shadows, glass backgrounds, button gradients and larger radii;
+  assistant and tool output render flush on the canvas, sidebar sessions
+  become a plain list, and agent activity owns the accent red.
+- **Smaller interface work** — audit rows take one low-saturation hue per
+  event kind, buttons rest bare and wash in on hover, sidebar titles scroll
+  as an LED marquee when the row overflows, daily cards may carry read-only
+  visual components borrowed from the UI Card DSL (stat, quote, list, chart,
+  timeline, table) and get a kind-colored edge, and the skills page calls
+  proposals staged writes with real adopt/reject buttons.
+
+### Changed
+
+- **Prompts live in `src/prompts/`** — every built-in LLM prompt text moved
+  out of implementation files into one file per domain, byte-identical and
+  verified at runtime.
+- **One source per JSONL rule** — line text and torn-tail semantics now come
+  from one module instead of three implementations kept in agreement by
+  comments.
+- **Confirmation cards share one semantics source** across CLI surfaces, the
+  attachment size cap moved into the wire protocol so every client checks
+  it, and the aggregate CLI bundle is split so colour libraries load lazily.
+- **Wording pass** — colloquial and AI-flavored vocabulary purged from
+  docs, comments, copy, prompts and tests.
+
+### Fixed
+
+- **Runtime robustness** — a cancelled `bash` run now SIGKILLs the child
+  process group, background output files are capped with a marker line, MCP
+  tool calls get a 120s default timeout and a 512 KiB output cap, and
+  crash-recovery repairs follow from prototype verification of each risk.
+- **Session teardown** — delete and purge stop the session's own live run
+  and queued entries first, then wait (bounded 5s) before touching disk, so
+  an aborted run can no longer leave a ghost directory or appends into a
+  hidden session.
+- **Uncaught exceptions exit** — the server logs the stack and exits 1
+  instead of continuing in an undefined state.
+- **Cancel targets one message** — `run.cancel` accepts a `messageId` and
+  stops the active run only when it executes that message, and a sender can
+  claim failures of its own queued entry.
+- **CLI reconnects within a budget** — reconnects retry every 500ms for 15s
+  instead of one attempt, which a slow daemon restart used to defeat.
+- **TUI review fixes** — one card at a time by priority, `/exit` no longer
+  accepts input while draining, queued-message rows track their lifecycle.
+- **Daily correctness** — memory-injection notes are stripped from the
+  digest material (real-machine verification caught yesterday's episodes
+  arriving as today's work), config domains are shared between the route and
+  core, and error, empty and retry states are distinguished.
+- **Truncated attachments name their file** — the cut marker points at the
+  path and `fs_read`, so the model can reach the rest of a long text.
+- The Shift+Tab help row lists all five permission modes.
+
 ## [0.7.0] - 2026-11-02
 
 ### Added
